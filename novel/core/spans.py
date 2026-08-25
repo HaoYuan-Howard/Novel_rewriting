@@ -35,8 +35,6 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from contracts.invariants import SPAN_RECOVERY
-
 #: 汉字/字母/数字；标点与空白都不算内容。⚠ 见模块 docstring：**别拿它去换 `text.norm`**。
 CONTENT = re.compile(r'\w')
 
@@ -149,7 +147,7 @@ def locate_unique_span(text: str, locator: str) \
 
 
 def exact_span(source: Any, text: str, after: int = 0) -> tuple[int, int, str | None]:
-    """验证正式 source span 的偏移、原文字节、规范化值和恢复方式。"""
+    """验证正式 source span 的偏移与原文字节。"""
     if not isinstance(source, dict):
         return 0, 0, 'missing exact source span'
     start, end = source.get('start'), source.get('end')
@@ -163,12 +161,6 @@ def exact_span(source: Any, text: str, after: int = 0) -> tuple[int, int, str | 
     normalized = content_only(raw)
     if not normalized:
         return 0, 0, 'source span has no content characters'
-    if source.get('normalized') != normalized:
-        return 0, 0, 'source span normalized text does not match'
-    # ⚠ 取值面从**契约**取，不在这里手抄一份：`SourceSpan.recovery` 的 `Literal`
-    #   收窄过一次（`lcs` 随最长公共子串救回装置一并下线），手抄的那份不会跟着改。
-    if source.get('recovery') not in SPAN_RECOVERY:
-        return 0, 0, 'source span recovery is invalid'
     return start, end, None
 
 

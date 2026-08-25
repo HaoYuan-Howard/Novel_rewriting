@@ -120,7 +120,6 @@ def project_blueprints_for_planner(
     for bp in (blueprints.get('blueprints') or []):
         rows.append({
             'chapter_ordinal': bp.get('chapter_ordinal'),
-            'summary': bp.get('summary'),
             'chapter_function': bp.get('chapter_function'),
             'fact_atoms': [{
                 'fact_id': atom.get('fact_id'), 'claim': atom.get('claim'),
@@ -133,7 +132,7 @@ def project_blueprints_for_planner(
             'ending_state_refs': bp.get('ending_state_refs') or [],
             'materials': [{
                 'material_id': hinge.get('hinge_id'), 'kind': hinge.get('kind'),
-                'source_beat_ref': hinge.get('source_beat_ref'),
+                'source_beat_ref': beat.get('beat_id'),
             } for beat in (bp.get('beats') or [])
                 for hinge in (beat.get('hinges') or [])],
             'stages': [{

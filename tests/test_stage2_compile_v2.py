@@ -6,8 +6,8 @@ test_stage2_compile_v2.py —— extraction IR 族（含 v2 引用式响应）�
 覆盖四族差别（`novel/stages/stage2/compile_v2.py` 模块头）：
 ① 游标分割与全部非法形（稳定 finding 措辞，不抛裸异常）；
 ② hinge 拍区间内唯一定位（exact / normalized / 多处命中 / 他处 / 编的 / cascade）；
-③ place 判别三态与相邻同层继承（链头落账）；
-④ summary 由 fact atom claims 确定性投影，不接受第二份模型转述。
+③ nullable 地点字面与原文探针；
+④ 原子事实与关闭式人物引用不产生显示字段副本。
 外加 round-trip：`compile(project(artifact)) == artifact`（对 compile_v2 自己产的
 artifact 成立——`canonical_ir_projection` 不是逆函数，方向不能反）。
 """
@@ -63,8 +63,9 @@ def _beat(end_para, *, layer='T_PRESENT', place=None, names=(), event='一件事
     return {
         'end_para': end_para,
         'time_layer': layer,
-        'place': place or {'mode': 'P_UNKNOWN'},
-        'present_names': list(names),
+        'place': place,
+        'present_char_ids': [
+            {'李宝珠': 'char_001', '母亲': 'char_002'}[name] for name in names],
         'fact_atoms': [{
             'atom_key': 'pending', 'claim': event, 'kind': 'event',
             'obligation': 'land', 'evidence_phrase': evidence,
@@ -75,23 +76,27 @@ def _beat(end_para, *, layer='T_PRESENT', place=None, names=(), event='一件事
 
 
 def _narration() -> dict:
-    return {'grammatical_person': 'third', 'narrator_name': None,
-            'focalizer_name': None, 'pronoun_surfaces': []}
+    return {'grammatical_person': 'third', 'narrator_char_id': None,
+            'focalizer_char_id': None, 'pronoun_surfaces': []}
 
 
 def _data(*beats: dict, ordinal: int = 1) -> dict:
+    return {'blueprints': [_chapter(list(beats), ordinal)]}
+
+
+def _chapter(beats: list[dict], ordinal: int) -> dict:
     for index, beat in enumerate(beats, 1):
         for atom_index, atom in enumerate(beat.get('fact_atoms') or [], 1):
             atom['atom_key'] = f'a{index:02d}_{atom_index:02d}'
-    return {'blueprints': [{
+    return {
         'chapter_ordinal': ordinal,
         'chapter_function': '完成本章的事实与状态变化',
-        'beats': list(beats),
+        'beats': beats,
         'causal_edges': [],
         'entry_state_refs': [],
         'ending_state_refs': [],
         'narration': [_narration()],
-    }]}
+    }
 
 
 def _atom(key: str, claim: str, evidence: str, ids=()) -> dict:
@@ -107,14 +112,14 @@ def _compile(data: dict, text: str = CH1):
 
 def _clean_data() -> dict:
     return _data(
-        _beat(2, place={'mode': 'P_EXPLICIT', 'name': '院子'},
+        _beat(2, place='院子',
               names=['李宝珠', '母亲'],
               event='母亲宣布第一课是挑水',
               hinges=[{'kind': '要害台词', 'phrase': '今天的第一课'}]),
-        _beat(4, place={'mode': 'P_INHERIT'}, names=['李宝珠', '母亲'],
+        _beat(4, place='院子', names=['李宝珠', '母亲'],
               event='她挑了两担水，母亲点评',
               hinges=[{'kind': '硬数字', 'phrase': '两担水'}]),
-        _beat(5, layer='T_RECALL', place={'mode': 'P_INHERIT'}, names=['李宝珠'],
+        _beat(5, layer='T_RECALL', place=None, names=['李宝珠'],
               event='她想起桌上那三十文钱',
               hinges=[{'kind': '硬数字', 'phrase': '三十文'}]),
     )
@@ -137,30 +142,27 @@ def test_the_clean_v2_response_compiles_with_zero_failures():
     assert beats[2]['span']['end'] == len(CH1)
     for b in beats:
         s = b['span']
-        assert CH1[s['start']:s['end']] == s['text'] and s['recovery'] == 'exact'
+        assert CH1[s['start']:s['end']] == s['text']
+        assert set(s) == {'text', 'start', 'end'}
         assert 'end_para' not in b, '响应形的键不许留在产物上'
 
     # ② time_layer 前缀枚举映射回产物值。
     assert [b['time_layer'] for b in beats] == ['present', 'present', 'recall']
 
-    # ③ place：EXPLICIT 取名；相邻同层 INHERIT 继承；跨层 INHERIT 落 null + 账。
+    # ③ place：响应直接交 nullable 字面，不另存继承模式。
     assert [b['place'] for b in beats] == ['院子', '院子', None]
-    assert acc['place_inherit_without_base'] == ['b01_03']
 
     # ④ hinge 全部唯一命中，字节精确（逗号不是句末闭合标点，不被扩展吞入）。
     assert [h['source']['text'] for b in beats for h in b['hinges']] == \
         ['今天的第一课', '两担水', '三十文']
 
-    # 人物解析照走（与 v3 同一份 resolve_character_refs）。
+    # 人物引用保持模型从闭集选出的 id。
     assert beats[0]['present_char_ids'] == ['char_001', 'char_002']
 
 
-def test_summary_is_a_deterministic_projection_of_fact_atoms():
-    first, _ = _compile(_clean_data())
-    second, _ = _compile(_clean_data())
-    summary = first['blueprints'][0]['summary']
-    assert summary == second['blueprints'][0]['summary']
-    assert summary.startswith('本章事实：') and '两担水' in summary
+def test_compile_does_not_create_a_duplicate_summary():
+    artifact, _ = _compile(_clean_data())
+    assert 'summary' not in artifact['blueprints'][0]
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -196,9 +198,10 @@ def test_visible_refs_do_not_grant_a_future_owner_of_an_already_seen_surface():
     assert visible[2]['char_003'] == ['后来者', '母亲']
 
 
-def test_v2_refs_keeps_selected_ids_authoritative_and_projects_readable_names():
+def test_v2_refs_keeps_selected_ids_authoritative_without_display_name_copies():
     raw = {'blueprints': [{
         'chapter_ordinal': 1,
+        'chapter_function': '完成挑水',
         'beats': [{
             'end_para': 5,
             'time_layer': 'T_PRESENT',
@@ -213,15 +216,15 @@ def test_v2_refs_keeps_selected_ids_authoritative_and_projects_readable_names():
     data, accounting = compile_v2_refs(raw, _main_text(), CHARACTERS)
     beat = data['blueprints'][0]['beats'][0]
     assert beat['present_char_ids'] == ['char_002', 'char_001']
-    assert beat['present_names'] == ['母亲', '李宝珠']
+    assert 'present_names' not in beat
     assert beat['place'] == '井边'
-    assert accounting['char_refs']['invented'] == 0
-    assert accounting['char_refs']['pronoun'] == 0
+    assert 'char_refs' not in accounting
 
 
 def test_v2_refs_rejects_an_id_outside_the_visible_closed_set():
     raw = {'blueprints': [{
         'chapter_ordinal': 1,
+        'chapter_function': '非法引用样本',
         'beats': [{
             'end_para': 5, 'time_layer': 'T_PRESENT', 'place': None,
             'present_char_ids': ['char_999'],
@@ -240,6 +243,7 @@ def test_v31_candidate_ids_compile_to_exact_sources_and_closed_narration_refs():
                        if row['source']['text'] == '两担')
     raw = {'blueprints': [{
         'chapter_ordinal': 1,
+        'chapter_function': '完成挑水并收钱',
         'micro_events': [
             {'end_para': 3, 'cue': '母亲布置挑水，李宝珠完成'},
             {'end_para': 5, 'cue': '她把钱放到桌上'},
@@ -275,7 +279,7 @@ def test_v31_candidate_ids_compile_to_exact_sources_and_closed_narration_refs():
     narration = blueprint['narration'][0]
     assert narration['narrator_char_id'] == 'char_001'
     assert narration['focalizer_char_id'] == 'char_001'
-    assert narration['narrator_name'] == '李宝珠'
+    assert 'narrator_name' not in narration
     assert accounting['verbatim_failures'] == []
 
 
@@ -323,6 +327,7 @@ def test_v31_candidate_budget_is_stratified_by_family_and_chapter_position():
 def test_v31_rejects_a_candidate_from_outside_its_beat_even_without_call_gate():
     raw = {'blueprints': [{
         'chapter_ordinal': 1,
+        'chapter_function': '完成开课与收钱',
         'micro_events': [{'end_para': 2, 'cue': '开课'},
                          {'end_para': 5, 'cue': '收钱'}],
         'beats': [{
@@ -349,6 +354,7 @@ def test_v31_projection_is_a_valid_repair_baseline_and_round_trips():
     compiled, _ = compile_v31_refs({
         'blueprints': [{
             'chapter_ordinal': 1,
+            'chapter_function': '完成挑水',
             'micro_events': [{'end_para': 5, 'cue': '完成挑水'}],
             'beats': [{
                 'end_para': 5, 'time_layer': 'T_PRESENT', 'place': '井边',
@@ -400,7 +406,6 @@ def test_a_last_beat_that_stops_far_short_keeps_its_span_but_reddens_the_ledger(
     """差得超过帽子（这里差 3 段）⇒ 那是真的切错了，照旧判 HARD 走整章。"""
     data, acc = _compile(_data(_beat(1), _beat(2)))
     assert '末拍没有到达本章最后一段' in _span_causes(acc)
-    assert acc['boundary_nudges'] == []
     # span 本身可定位 ⇒ 不抹掉（信息无罪）；失败态由账承载（HARD 按行数判）。
     assert data['blueprints'][0]['beats'][1]['span'] is not None
 
@@ -421,8 +426,6 @@ def test_a_boundary_one_paragraph_short_of_its_own_hinge_is_nudged_not_failed():
         _beat(5),
     ))
     assert acc['verbatim_failures'] == [], '能算出来的整数，不该去买一次整章重生成'
-    assert acc['boundary_nudges'] == [
-        ('b01_01', 2, 3, '止段没盖住本拍自己的 hinge')]
     beats = data['blueprints'][0]['beats']
     assert beats[0]['hinges'][0]['source']['text'] == '两担水'
     # 外扩改的是**两拍**：下一拍的起点跟着挪，且两拍仍然首尾相接。
@@ -432,8 +435,6 @@ def test_a_boundary_one_paragraph_short_of_its_own_hinge_is_nudged_not_failed():
 def test_a_tail_one_paragraph_short_is_nudged_to_the_last_paragraph():
     data, acc = _compile(_data(_beat(2), _beat(4)))
     assert _span_causes(acc) == []
-    assert acc['boundary_nudges'] == [
-        ('b01_02', 4, 5, '末拍没有到达本章最后一段')]
     assert data['blueprints'][0]['beats'][-1]['span']['end'] == len(CH1)
 
 
@@ -444,7 +445,6 @@ def test_a_nudge_that_would_starve_the_next_beat_is_refused():
         _beat(3),                                                    # 下一拍只有第 3 段
         _beat(5),
     ))
-    assert acc['boundary_nudges'] == []
     assert _hinge_rows(acc)['b01_01'] == '短语不在它所属拍的区间里，而出现在别处'
 
 
@@ -455,7 +455,6 @@ def test_a_nudge_that_would_steal_the_next_beats_own_anchor_is_refused():
         _beat(4, hinges=[{'kind': '硬数字', 'phrase': '两担水'}]),   # 它自己也压在第 3 段
         _beat(5),
     ))
-    assert acc['boundary_nudges'] == []
     assert _hinge_rows(acc)['b01_01'] == '短语不在它所属拍的区间里，而出现在别处'
 
 
@@ -464,7 +463,6 @@ def test_an_ambiguous_phrase_is_never_fixed_by_moving_a_boundary():
     text = '她把纸鸢递过去。\n他接过纸鸢看了半天。\n收场白。'
     _, acc = _compile(_data(_beat(2, hinges=[{'kind': '物件', 'phrase': '纸鸢'}]),
                             _beat(3)), text=text)
-    assert acc['boundary_nudges'] == []
     assert acc['hinge_ambiguous_pending'] == [('b01_01', '物件', '纸鸢')]
 
 
@@ -473,7 +471,6 @@ def test_a_nudge_that_would_create_ambiguity_is_refused():
     text = '开场白。\n她把纸鸢递过去，他又把纸鸢还回来。\n收场白。'
     _, acc = _compile(_data(_beat(1, hinges=[{'kind': '物件', 'phrase': '纸鸢'}]),
                             _beat(3)), text=text)
-    assert acc['boundary_nudges'] == []
     assert _hinge_rows(acc)['b01_01'] == '短语不在它所属拍的区间里，而出现在别处'
 
 
@@ -483,7 +480,7 @@ def test_a_chapter_with_an_illegal_end_para_is_never_nudged():
         _beat(99, hinges=[{'kind': '硬数字', 'phrase': '两担水'}]),
         _beat(5),
     ))
-    assert acc['boundary_nudges'] == []
+    assert '段号越界' in _span_causes(acc)
 
 
 def test_every_cause_this_compiler_emits_is_registered():
@@ -501,14 +498,14 @@ def _hinge_rows(acc) -> dict[str, str]:
     return {row[0]: row[2] for row in acc['verbatim_failures'] if row[1] == 'hinge'}
 
 
-def test_a_byte_mismatched_phrase_is_recovered_in_content_space_with_a_ledger_row():
+def test_a_byte_mismatched_phrase_is_recovered_in_content_space():
     data, acc = _compile(_data(_beat(5, hinges=[
         {'kind': '要害台词', 'phrase': '今天的第一课,'},   # 半角逗号，原文是全角
     ])))
     hinge = data['blueprints'][0]['beats'][0]['hinges'][0]
-    assert hinge['source']['recovery'] == 'normalized'
-    assert ('b01_01', 'hinge.phrase', '今天的第一课,', hinge['source']['text']) \
-        in acc['verbatim_rewrites']
+    assert set(hinge['source']) == {'text', 'start', 'end'}
+    assert hinge['source']['text'] == '今天的第一课'
+    assert acc['verbatim_failures'] == []
 
 
 def test_an_ambiguous_phrase_is_blanked_and_parked_for_candidate_selection():
@@ -544,8 +541,7 @@ def test_hinges_of_a_failed_beat_are_blanked_without_their_own_cause_rows():
     ))
     assert _hinge_rows(acc) == {}, 'span 自己没定位成功 ⇒ cascade，不逐条记 hinge 根因'
     assert data['blueprints'][0]['beats'][0]['hinges'] == [{
-        'hinge_id': 'h01_001', 'kind': '物件',
-        'source_beat_ref': 'b01_01', 'source': None,
+        'hinge_id': 'h01_001', 'kind': '物件', 'source': None,
     }]
 
 
@@ -563,8 +559,7 @@ def test_projection_then_compile_reproduces_the_artifact_byte_for_byte():
     assert acc['verbatim_failures'] == []
     got = recompiled['blueprints'][0]
 
-    # ⚠ P_INHERIT 已坍缩：投影只能给 P_EXPLICIT(同名)/P_UNKNOWN ⇒ place 值不变，
-    #   但 place_inherit_without_base 账不会复现——round-trip 断言的是**产物**相等。
+    # nullable 地点字面与人物 id 均可直接往返，不需要显示字段或继承模式。
     assert got == blueprint
 
 
@@ -577,113 +572,13 @@ def test_projection_is_honest_about_failed_hinges():
         [{'kind': '物件', 'phrase': None}], '失败的 hinge 不许把 phrase 兜底成别的'
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# 五、`place_explicit_unlocatable`：保留契约共用的地点字面探针
-# ─────────────────────────────────────────────────────────────────────────────
-#
-# 【它在防什么】ir1.1 把 `P_EXPLICIT` 从「三选一」提回「首选档」，为的是救回地点
-# 填充率（ir1 相对 v3 掉 −59%，两个模型上都掉 ⇒ 契约的责任）。加压时模型会找最省力
-# 的出路，而 place 是**单字段**、没有别的字段可牺牲 ⇒ 唯一的规避路径是**编一个地点**。
-#
-# ⚠⚠ 【匹配面是「截止本章正文」，这一族测试的核心就是钉住它】三个面在盘上
-#     （Pro×v3 无情道，132 个有地点的拍）实测：本拍区间 **78%** 找不到 ·
-#     本章全文 42% · 截止本章正文 **13%**。按本拍区间判等于让噪声淹死信号。
-# ⚠ 全族**只断言账，不断言产物被改**——它是 INFO，不改产物是它定义的一部分。
-
-
-def test_a_place_written_in_the_source_is_not_flagged():
-    """地点名在截止本章的正文里找得到 ⇒ 不记账。"""
-    _, prov = _compile(_data(_beat(2, place={'mode': 'P_EXPLICIT', 'name': '井边'}),
-                             _beat(5)))
-    assert prov['place_explicit_unlocatable'] == []
-
-
-def test_a_place_outside_its_own_beat_is_still_not_flagged():
-    """⚠⚠ **本族最重要的一条**：地点写在**别的拍**里照样算找得到。
-
-    「三十文」只在第 5 段出现，而第一拍只盖 1–2 段。按「本拍区间」判会把它报成
-    找不到——那正是 78% 假阳率的来源，也正是这条探针曾经的错误设计。
-    """
-    _, prov = _compile(_data(_beat(2, place={'mode': 'P_EXPLICIT', 'name': '三十文'}),
-                             _beat(5)))
-    assert prov['place_explicit_unlocatable'] == [], \
-        '匹配面退回「本拍区间」了——合法的上文地点会被整批误报'
-
-
-def test_a_place_absent_from_the_source_is_flagged_but_left_in_the_artifact():
-    """原文里根本没有那个说法 ⇒ 记一笔，**产物照留**。"""
-    artifact, prov = _compile(_data(
-        _beat(2, place={'mode': 'P_EXPLICIT', 'name': '雁门关'}), _beat(5)))
-    assert prov['place_explicit_unlocatable'] == [('b01_01', '雁门关')]
-    assert artifact['blueprints'][0]['beats'][0]['place'] == '雁门关', \
-        'INFO 探针不许改产物——报出来是给人读的，不是拿来兜底的'
-
-
-def test_a_repeated_place_still_counts_as_found():
-    """多处命中算找得到：地点名重复出现正常，它不像 hinge 需要唯一。"""
-    assert CH1.count('母亲') >= 2, '这条测试的前提是该字面出现 ≥2 次'
-    _, prov = _compile(_data(_beat(5, place={'mode': 'P_EXPLICIT', 'name': '母亲'})))
-    assert prov['place_explicit_unlocatable'] == []
-
-
-def test_the_scope_stops_at_the_current_chapter():
-    """只在**后文**出现的说法算找不到——那本身就是后见之明。
-
-    两章：`雁门关` 只在第 2 章。第 1 章的拍引用它 ⇒ 记账；第 2 章的拍 ⇒ 不记。
-    """
-    ch2 = '他们一路向北，终于望见雁门关的城楼。\n关下风沙很大。'
-    mt = [{'chapter_ordinal': 1, 'text': CH1}, {'chapter_ordinal': 2, 'text': ch2}]
-    data = {'blueprints': [
-        {'chapter_ordinal': 1, 'beats': [_beat(5, place={'mode': 'P_EXPLICIT',
-                                                         'name': '雁门关'})],
-         'narration': [_narration()]},
-        {'chapter_ordinal': 2, 'beats': [_beat(2, place={'mode': 'P_EXPLICIT',
-                                                         'name': '雁门关'})],
-         'narration': [_narration()]},
-    ]}
-    _, prov = compile_v2(data, mt, CHARACTERS)
-    assert [b for b, _n in prov['place_explicit_unlocatable']] == ['b01_01'], \
-        '「截止本章」这条界线没生效：要么整本都能引，要么第 2 章自己也被误报'
-
-
-def test_the_scope_is_built_from_main_text_not_from_the_compiled_batch():
-    """⚠ 只编译第 2 章时，第 1 章的正文仍要算进匹配面。
-
-    定向重生成（`--chapters`）只把几章带进 `blueprints`，而 `main_text` 恒是全书。
-    从 batch 累积会让前面的章凭空消失，于是「原文里有没有」被算成「这一批里有没有」。
-    """
-    ch2 = '她又回到那口井边，水汽照旧。'
-    mt = [{'chapter_ordinal': 1, 'text': CH1}, {'chapter_ordinal': 2, 'text': ch2}]
-    only_ch2 = {'blueprints': [
-        {'chapter_ordinal': 2, 'beats': [_beat(1, place={'mode': 'P_EXPLICIT',
-                                                         'name': '肩膀'})],
-         'narration': [_narration()]}]}
-    _, prov = compile_v2(only_ch2, mt, CHARACTERS)
-    assert '肩膀' in CH1 and '肩膀' not in ch2, '前提：该字面只在第 1 章'
-    assert prov['place_explicit_unlocatable'] == [], \
-        '匹配面是从 blueprints 累积的——定向重生成会把上游章当成不存在'
-
-
-def test_inherited_and_unknown_places_never_reach_the_probe():
-    """只有 `P_EXPLICIT` 走探针。
-
-    ⚠ 继承来的地点即使在原文里找不到也不记账：`P_INHERIT` 的语义本来就是
-    「这一拍没写、延续上一拍」，拿字面去判它等于判它的定义违规。
-    """
-    data = _data(_beat(2, place={'mode': 'P_EXPLICIT', 'name': '井边'}),
-                 _beat(4, place={'mode': 'P_INHERIT'}),
-                 _beat(5, place={'mode': 'P_UNKNOWN'}))
+def test_places_are_normalized_without_a_display_only_probe():
+    data = _data(_beat(2, place='井边'), _beat(4), _beat(5))
     artifact, prov = _compile(data)
-    assert prov['place_explicit_unlocatable'] == []
     assert [b['place'] for b in artifact['blueprints'][0]['beats']] == \
-        ['井边', '井边', None], '继承链本身没被这次改动动过'
-
-
-def test_the_probe_key_is_always_present_even_when_empty():
-    """键**恒在**（空表也写）：`bounded-fidelity-v3` 缺键报「不适用」，
-    而 ir1 系产物空表是「查过、没有」——两者在报告上必须分得开。"""
-    _, prov = _compile(_clean_data())
-    assert 'place_explicit_unlocatable' in prov
+        ['井边', None, None]
+    assert set(prov) == {
+        'verbatim_failures', 'fact_atom_failures', 'hinge_ambiguous_pending'}
 
 
 # ── 关闭式候选集：分不开的人不下发 ────────────────────────────────────────

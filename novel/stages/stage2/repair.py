@@ -13,7 +13,7 @@ repair.py —— IR 系契约的字段级修复（`stage2.blueprint --patch`，5
     「该拍 span 原文 + kind」重给一条能在拍内原样唯一找到的短语（validator 当场验）。
 
 【修复 = 改 IR → `compile_v2` 全量重编译 → 全量判据 → 落盘】不原位改 artifact：
-`P_INHERIT` 等信息在产物里已坍缩，原位改等于绕开编译器的全部一致性。
+原位改会绕开段落定位、闭集引用与稳定 ID 的编译一致性。
 未修的章经 `canonical_ir_projection` 精确往返（重放已逐字节证明）。
 
 【拒绝面】以下情况显式终态、不发一次请求：
@@ -36,7 +36,6 @@ from contracts.schema.stage2 import (
     BlueprintProvenance, ChapterBlueprints, GlobalGrounding,
     HingePhraseResponse, HingeSelectResponse,
 )
-from novel import prov
 from novel.core.spans import content_index, content_only
 from novel.errors import GateBlocked, ProvenanceRefused, TerminalState, UpstreamMissing
 from novel.llm.client import LlmClient
@@ -183,7 +182,7 @@ def run_field_patches(ctx: RunContext, client: LlmClient) -> Any:
     from novel.stages.stage2 import prompts
     from novel.stages.stage2.contract import CONTRACTS, contract_for
     from novel.stages.stage2.extract import (
-        BLUEPRINT_REL, GLOBAL_REL, _INVALID, _Both, _blueprint_metrics,
+        BLUEPRINT_REL, GLOBAL_REL, _INVALID, _Both,
         _hard_hits, _judge_candidate, _note_adopted, _read_main_text, _report,
         _write_formal, _write_invalid,
     )
@@ -250,11 +249,7 @@ def run_field_patches(ctx: RunContext, client: LlmClient) -> Any:
         ir_by_ordinal[ordinal] = spec.projection_fn(
             copy.deepcopy(bp), text_of.get(ordinal, ''))
 
-    repair_rows: list[dict[str, Any]] = []
     prompt_keys: dict[str, str] = {}
-    before_metrics = {
-        int(bp.get('chapter_ordinal') or 0): _blueprint_metrics(bp)
-        for bp in previous_raw['blueprints']}
     beat_index_of = {
         str(beat.get('beat_id') or ''): index
         for bp in previous_raw['blueprints']
@@ -321,33 +316,12 @@ def run_field_patches(ctx: RunContext, client: LlmClient) -> Any:
                 f'{action.beat_id} 已返回字段修复，但没有 accepted model；'
                 '拒绝按主模型配置估算')
         ir_beats[target]['hinges'][action.hinge_index]['phrase'] = new_phrase
-        repair_rows.append({
-            'chapter_ordinal': action.chapter,
-            'failure_items': ['hinge_ambiguous'
-                              if action.route == 'candidate_select'
-                              else 'hinge_anchor_void'],
-            'failure_evidence': prov.projection_fingerprint(
-                {'beat_id': action.beat_id, 'hinge_index': action.hinge_index,
-                 'route': action.route}),
-            'user_prompt': prov.fingerprint(user),
-            'output': prov.projection_fingerprint({'phrase': new_phrase}),
-            'model': accepted_model,
-            'cache_policy': ctx.cache.name,
-            'fields': [f'beats[{action.beat_id}]'
-                       f'.hinges[{action.hinge_index}].phrase'],
-            'before_metrics': before_metrics[action.chapter],
-            'after_metrics': before_metrics[action.chapter],   # 结构未变，账在下面重算
-        })
 
     # ── 改完 IR → 全量重编译 → 全量判据 ──────────────────────────────────
     ordinals = sorted(ir_by_ordinal)
     data, accounting = spec.compile_fn(
         {'blueprints': [ir_by_ordinal[o] for o in ordinals]},
         main_text, global_raw['entities']['characters'])
-    for row in repair_rows:
-        row['after_metrics'] = _blueprint_metrics(
-            next(bp for bp in data['blueprints']
-                 if int(bp.get('chapter_ordinal') or 0) == row['chapter_ordinal']))
     # ⚠ `llm_provenance` 自己给 prompts 值算指纹 ⇒ delta 只喂**新臂的完整字节**，
     #   旧键（已是指纹）在最终合并时并入——把旧指纹再喂回去会被二次指纹。
     delta = ctx.llm_provenance(
@@ -356,10 +330,7 @@ def run_field_patches(ctx: RunContext, client: LlmClient) -> Any:
         model=client.model,
         adopted_models=client.accepted_models(),
         scope_violations=list(old_prov.scope_violations),
-        batches=[list(batch) for batch in old_prov.batches],
         context=old_prov.context.model_dump(),
-        partial_regen_chapters=list(old_prov.partial_regen_chapters),
-        repairs=[row.model_dump() for row in old_prov.repairs] + repair_rows,
         **accounting,
     )
     provenance = BlueprintProvenance.model_validate({

@@ -24,7 +24,8 @@ import os
 from contracts.schema.api import (
     ArcTrackLine, GlobalAddressLine, GlobalArcView, GlobalCharacterLine,
     GlobalKnowledgeEventLine, GlobalRelationLine, GlobalSecretLine, GlobalView, NameRef,
-    ReadingBeatLine, ReadingHinge, ReadingNarrationLine, ReadingSegment, ReadingView,
+    ReadingBeatLine, ReadingFactLine, ReadingHinge, ReadingNarrationLine,
+    ReadingSegment, ReadingView,
 )
 from contracts.schema.stage1 import MainText
 from contracts.schema.stage2 import Blueprint, ChapterBlueprints, GlobalGrounding
@@ -107,7 +108,6 @@ def global_view(base: str | os.PathLike[str], sid: str) -> GlobalView:
     secrets = [
         GlobalSecretLine(
             secret_id=s.secret_id, fact=s.fact, fact_evidence=s.fact_evidence,
-            group_id=s.group_id,
             knowledge_events=[GlobalKnowledgeEventLine(
                 subject_kind=e.subject.kind,
                 subject=knowledge_subject(e),
@@ -116,14 +116,12 @@ def global_view(base: str | os.PathLike[str], sid: str) -> GlobalView:
             ) for e in s.knowledge_events],
             setup_kind=s.setup.kind,
             setup_chapters=list(getattr(s.setup, 'chapters', None) or []),
-            first_reveal_chapter=s.first_reveal,
-            reader_reveal_chapters=[e.chapter for e in s.reader_reveal_events])
+            first_reveal_chapter=s.first_reveal_chapter)
         for s in art.canon.secrets]
     arc = GlobalArcView(
         conflict_stages=art.arc.conflict_stages,
         climax=art.arc.climax, ending=art.arc.ending,
-        arc_tracks=[ArcTrackLine(subject=ref(t.subject), dimension=t.dimension,
-                                 change_type=t.change_type, trajectory=t.trajectory,
+        arc_tracks=[ArcTrackLine(subject=ref(t.subject), trajectory=t.trajectory,
                                  trajectory_evidence=t.trajectory_evidence)
                     for t in art.arc.arc_tracks])
 
@@ -189,21 +187,34 @@ def reading_view(base: str | os.PathLike[str], sid: str, ordinal: int) -> Readin
         ReadingSegment(start=s, end=e, chars=e - s, text=text[s:e], beat_id=bid,
                        flagged=bid is None and e - s >= HOLE_MIN_CHARS)
         for bid, s, e in walk_segments(len(text), spans)]
+    facts_by_beat: dict[str, list[ReadingFactLine]] = {}
+    for atom in (bp.fact_atoms if bp is not None else []):
+        facts_by_beat.setdefault(atom.source_beat_ref, []).append(ReadingFactLine(
+            fact_id=atom.fact_id,
+            claim=atom.claim,
+            kind=atom.kind,
+            obligation=atom.obligation,
+            evidence_text=atom.source.text if atom.source is not None else None,
+            participant_char_ids=list(atom.participant_char_ids),
+        ))
     beats = [
         ReadingBeatLine(
             beat_id=b.beat_id, located=b.span is not None,
             start=b.span.start if b.span is not None else None,
             end=b.span.end if b.span is not None else None,
-            time_layer=b.time_layer, place=b.place, present=list(b.present_names),
-            event=b.event,
+            time_layer=b.time_layer, place=b.place,
+            present_char_ids=list(b.present_char_ids),
+            fact_atoms=facts_by_beat.get(b.beat_id, []),
             hinges=[ReadingHinge(kind=h.kind,
                                  text=h.source.text if h.source is not None else None)
                     for h in b.hinges])
         for b in (bp.beats if bp is not None else [])]
     narration = [
         ReadingNarrationLine(
-            grammatical_person=n.grammatical_person, narrator=n.narrator_name,
-            focalizer=n.focalizer_name, pronoun_surfaces=list(n.pronoun_surfaces))
+            grammatical_person=n.grammatical_person,
+            narrator_char_id=n.narrator_char_id,
+            focalizer_char_id=n.focalizer_char_id,
+            pronoun_surfaces=list(n.pronoun_surfaces))
         for n in (bp.narration if bp is not None else [])]
 
     return ReadingView(
@@ -212,7 +223,6 @@ def reading_view(base: str | os.PathLike[str], sid: str, ordinal: int) -> Readin
         chapter_ordinal=ordinal,
         text_chars=len(text),
         blueprint=bp is not None,
-        summary=bp.summary if bp is not None else None,
         segments=segments,
         beats=beats,
         narration=narration,

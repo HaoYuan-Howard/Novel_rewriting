@@ -39,7 +39,7 @@ def _atom(chapter: int, index: int, claim: str, *, participants: list[str]) -> d
         'source_beat_ref': f'b{chapter:02d}_{index:02d}',
         'source': {
             'text': f'SOURCE-ONLY-{chapter}-{index}', 'start': index,
-            'end': index + 1, 'normalized': claim, 'recovery': 'exact',
+            'end': index + 1,
         },
         'participant_char_ids': participants,
     }
@@ -50,19 +50,17 @@ def _beat(chapter: int, index: int, participants: list[str], *, hinge: bool) -> 
         'beat_id': f'b{chapter:02d}_{index:02d}',
         'span': {
             'text': f'BODY-ONLY-{chapter}-{index}', 'start': index,
-            'end': index + 1, 'normalized': f'段{index}', 'recovery': 'exact',
+            'end': index + 1,
         },
         'time_layer': 'present',
         'place': f'地点{index}',
-        'present_names': [f'人物{index}'],
         'present_char_ids': participants,
         'hinges': ([{
             'hinge_id': f'h{chapter:02d}_{index:03d}',
             'kind': '要害台词',
-            'source_beat_ref': f'b{chapter:02d}_{index:02d}',
             'source': {
                 'text': f'MATERIAL-ONLY-{chapter}-{index}', 'start': index,
-                'end': index + 1, 'normalized': f'材料{index}', 'recovery': 'exact',
+                'end': index + 1,
             },
         }] if hinge else []),
     }
@@ -73,7 +71,6 @@ def _blueprints() -> dict:
         'blueprints': [
             {
                 'chapter_ordinal': 1,
-                'summary': 'SOURCE-SUMMARY-ONE：邀请、拒绝、留下。',
                 'chapter_function': '建立入住冲突并完成主角入局',
                 'fact_atoms': [
                     _atom(1, 1, '甲收到入住邀请', participants=['char_001']),
@@ -95,7 +92,6 @@ def _blueprints() -> dict:
             },
             {
                 'chapter_ordinal': 2,
-                'summary': 'SOURCE-SUMMARY-TWO：丙来访。',
                 'chapter_function': '引入访客并扩大冲突',
                 'fact_atoms': [
                     _atom(2, 1, '丙突然来访', participants=['char_003']),

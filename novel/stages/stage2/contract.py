@@ -71,13 +71,8 @@ class ContractSpec:
     boundary_system: str | None = None
     boundary_sys_name: str | None = None
     boundary_response_model: type[BaseModel] | None = None
-    #: 细节响应里的在场者是否从本章可见 `char_id` 集合选择；调用方据此
-    #: 给 user 注入关闭式候选集，并在本地 validator 再验一次。
-    uses_character_refs: bool = False
-
-    #: v3.1 的两个进一步收窄面；调用方按能力分派，不按架构名字猜。
+    #: v3.1 的进一步收窄面；调用方按能力分派，不按架构名字猜。
     uses_hinge_candidates: bool = False
-    uses_narration_refs: bool = False
 
     #: v3.1 的同请求 A/B 观察到救回稿会把一章过切为 15 拍且地点全 unknown，
     #: 正常正文重采则为 10 拍且地点全明确；但两本空缓存整跑又观察到全拒救回稿
@@ -102,7 +97,6 @@ _V2 = ContractSpec(
         prompts.BOUNDARY_SYS_V2, prompts.BOUNDARY_HINT_V2),
     boundary_sys_name='BOUNDARY_SYS_V2',
     boundary_response_model=ChapterBoundariesResponse,
-    uses_character_refs=True,
 )
 
 CONTRACTS: dict[str, ContractSpec] = {
@@ -124,9 +118,7 @@ CONTRACTS: dict[str, ContractSpec] = {
         projection_fn=canonical_ir_projection_v31,
         supports_field_patch=True,
         topology='scaffolded_single',
-        uses_character_refs=True,
         uses_hinge_candidates=True,
-        uses_narration_refs=True,
         prefers_content_over_reasoning_salvage=True,
     ),
 }

@@ -4,8 +4,8 @@
 test_stage2.py —— Stage 2 当前判据。
 
 ⚠⚠ **本文件的主体是「盘上 0 命中的 HARD 各配一份会让它红的样本」**（2026-08-12 用户裁决）。
-43 条 HARD 里盘上只有 **4 条**有真反例（`address_bare_pronoun` 1 本 · `role_leaks_fate` 2 本 ·
-`hedge_words` 2 本 · `hinge_in_hole` 1 本）——**其余 39 条盘上 0 命中，那不是「干净」，
+40 条 HARD 里盘上只有 **4 条**有真反例（`address_bare_pronoun` 1 本 · `role_leaks_fate` 2 本 ·
+`hedge_words` 2 本 · `hinge_in_hole` 1 本）——**其余 37 条盘上 0 命中，那不是「干净」，
 是那种失效模式在这三本上一次都没发生过**。一条从没见过反例的判据与一条不存在的判据，
 在报告上长得一模一样。
 
@@ -15,7 +15,7 @@ test_stage2.py —— Stage 2 当前判据。
 本文件因此全程操作 dict，一次都不 `model_validate`。
 
 【干净底座是本文件的另一半】`test_the_clean_base_has_no_hard_hits` 钉住：
-**底座上 43 条 HARD 一条都不命中**。没有它，下面 39 条「改一处就红」什么也证明不了
+**底座上 40 条 HARD 一条都不命中**。没有它，下面 36 条「改一处就红」什么也证明不了
 ——一个本来就红的底座上，改什么都红。
 """
 from __future__ import annotations
@@ -92,8 +92,7 @@ def _source(text: str, a: str, b: str | None = None) -> dict[str, Any]:
     end_probe = b or a
     end = text.index(end_probe, start) + len(end_probe)
     raw = text[start:end]
-    return {'text': raw, 'start': start, 'end': end,
-            'normalized': content_only(raw), 'recovery': 'exact'}
+    return {'text': raw, 'start': start, 'end': end}
 
 
 def _evidence(chapter: int, a: str, b: str | None = None) -> dict[str, Any]:
@@ -103,12 +102,12 @@ def _evidence(chapter: int, a: str, b: str | None = None) -> dict[str, Any]:
 
 
 def _beat(bid: str, a: str, b: str, *, event: str, place: str,
-          names: list[str], ids: list[str], hinges: list[dict] | None = None,
+          ids: list[str], hinges: list[dict] | None = None,
           layer: str = 'present') -> dict[str, Any]:
     chapter = {'01': CH1, '02': CH2, '03': CH3}[bid[1:3]]
     current_hinges = [
         {'hinge_id': f'h{bid[1:3]}_{int(bid[-2:]) * 10 + index:03d}',
-         'kind': hinge['kind'], 'source_beat_ref': bid,
+         'kind': hinge['kind'],
          'source': _source(chapter, hinge['starts_with'], hinge['ends_with'])}
         for index, hinge in enumerate((hinges or []), 1)
     ]
@@ -116,7 +115,7 @@ def _beat(bid: str, a: str, b: str, *, event: str, place: str,
     fact_id = f'f{bid[1:3]}_{int(bid[-2:]):03d}'
     return {'beat_id': bid, 'span': atom_source,
             'time_layer': layer, 'place': place,
-            'present_names': list(names), 'present_char_ids': list(ids),
+            'present_char_ids': list(ids),
             'hinges': current_hinges,
             '_fact_atom': {
                 'fact_id': fact_id, 'claim': event, 'kind': 'event',
@@ -125,9 +124,8 @@ def _beat(bid: str, a: str, b: str, *, event: str, place: str,
             }}
 
 
-def _narration(focalizer: str | None = '李宝珠', cid: str | None = 'char_001') -> list[dict]:
-    return [{'grammatical_person': 'third', 'narrator_name': None,
-             'focalizer_name': focalizer, 'narrator_char_id': None,
+def _narration(cid: str | None = 'char_001') -> list[dict]:
+    return [{'grammatical_person': 'third', 'narrator_char_id': None,
              'focalizer_char_id': cid, 'pronoun_surfaces': []}]
 
 
@@ -190,25 +188,19 @@ def global_grounding() -> dict[str, Any]:
                               'evidence': _evidence(2, '其实母亲早就知道那封信的事。')},
                          ],
                          'setup': {'kind': 'foreshadowed', 'chapters': [1]},
-                         'reader_reveal_events': [{'chapter': 2}]}],
+                         'first_reveal_chapter': 2}],
         },
         'arc': {
             'conflict_stages': [{'stage': '家事初起', 'chapters': [1, 2, 3]}],
             'climax': '账册上的窟窿被当众翻出来的那一刻',
             'ending': '她替父亲把这笔烂账认了下来',
-            'arc_tracks': [{'subject': 'char_001', 'dimension': '处境',
-                            'change_type': 'development',
+            'arc_tracks': [{'subject': 'char_001',
                             'trajectory': '从被瞒着到自己扛下这件事',
                             'trajectory_evidence': _evidence(
                                 3, '她忽然想起父亲从前也这样翻账。')}],
         },
         '_provenance': {
-            'address_by_fallback': 0,
-            'address_surface_rewrites': [],
-            'address_from_chapter_raised': [],
-            'canonical_distinguishers_stripped': [],
             'setup_chapters_pruned': [],
-            'evidence_locator_rewrites': [],
             'evidence_locator_failures': [],
         },
     }
@@ -217,90 +209,83 @@ def global_grounding() -> dict[str, Any]:
 def blueprints() -> dict[str, Any]:
     doc = {
         'blueprints': [
-            {'chapter_ordinal': 1, 'summary': '李宝珠在廊下看落花，想起昨夜那封说父亲回城的信',
+            {'chapter_ordinal': 1,
+             'chapter_function': '李宝珠在廊下看落花，想起昨夜那封说父亲回城的信',
              'narration': _narration(),
              'beats': [
                  _beat('b01_01', '春风吹过老宅', '看着落花。',
                        event='李宝珠站在廊下看落花', place='老宅廊下',
-                       names=['李宝珠'], ids=['char_001'],
+                       ids=['char_001'],
                        hinges=[{'kind': '物件', 'starts_with': '院墙',
                                 'ends_with': '院墙', 'text': '院墙'}]),
                  _beat('b01_02', '她想起了昨夜', '梆子声。',
                        event='她读过信后把信收进袖中', place='老宅廊下',
-                       names=['李宝珠'], ids=['char_001'],
+                       ids=['char_001'],
                        hinges=[{'kind': '因果前提', 'starts_with': '信上说',
                                 'ends_with': '已经回城。', 'text': '信上说父亲已经回城。'}]),
              ]},
-            {'chapter_ordinal': 2, 'summary': '李宝珠一早出门买包子，回来撞见母亲在门口等她',
+            {'chapter_ordinal': 2,
+             'chapter_function': '李宝珠一早出门买包子，回来撞见母亲在门口等她',
              'narration': _narration(),
              'beats': [
                  _beat('b02_01', '第二日清晨', '往外走。',
                        event='天亮后李宝珠推门出去', place='老宅院门',
-                       names=['李宝珠'], ids=['char_001']),
+                       ids=['char_001']),
                  # ⚠ 这两条 hinge 都挂在 b02_02 上而不是分给两拍：`hinge_drift` 判的是
                  #   「text 落在**本拍**的 span 原文内」，而「她买了两个…包子」在原文里
                  #   位于 b02_02 的区间里。挂错拍就是 `hinge_drift` 要抓的东西之一
                  #   ——底座在这里被它抓过一次（写这份底座时真红了）。
                  _beat('b02_02', '街上已经有', '那封信的事。',
                        event='她回来时母亲已经在门口等着', place='老宅院门',
-                       names=['李宝珠', '母亲'], ids=['char_001', 'char_002'],
+                       ids=['char_001', 'char_002'],
                        hinges=[{'kind': '硬数字', 'starts_with': '她买了两个',
                                 'ends_with': '包子。', 'text': '她买了两个热腾腾的包子。'},
                                {'kind': '要害台词', 'starts_with': '其实母亲',
                                 'ends_with': '那封信的事。',
                                 'text': '其实母亲早就知道那封信的事。'}]),
              ]},
-            {'chapter_ordinal': 3, 'summary': '李宝珠翻账册，管家来回米价，母亲给她添了一盏茶',
+            {'chapter_ordinal': 3,
+             'chapter_function': '李宝珠翻账册，管家来回米价，母亲给她添了一盏茶',
              'narration': _narration(),
              'beats': [
                  _beat('b03_01', '午后的日头', '一页页翻。',
                        event='午后李宝珠摊开账册翻看', place='老宅书房',
-                       names=['李宝珠'], ids=['char_001']),
+                       ids=['char_001']),
                  _beat('b03_02', '管家在门外', '米价又涨了。',
                        event='管家隔着门回话说米价涨了', place='老宅书房',
-                       names=['李宝珠'], ids=['char_001'],
+                       ids=['char_001'],
                        hinges=[{'kind': '因果前提', 'starts_with': '米价',
                                 'ends_with': '又涨了。', 'text': '米价又涨了。'}]),
                  _beat('b03_03', '她皱着眉', '问问别家。',
                        event='她让管家去别家问价', place='老宅书房',
-                       names=['李宝珠'], ids=['char_001']),
+                       ids=['char_001']),
                  _beat('b03_04', '窗外的槐树', '一地碎叶。',
                        event='窗外槐树落了一地叶子', place='老宅书房',
-                       names=[], ids=[]),
+                       ids=[]),
                  _beat('b03_05', '她忽然想起', '够不着桌子。',
                        event='她想起父亲从前也这样翻账', place='老宅书房',
-                       names=['李宝珠'], ids=['char_001'], layer='recall'),
+                       ids=['char_001'], layer='recall'),
                  _beat('b03_06', '母亲进来给她', '没有喝。',
                        event='母亲进来添茶，她端起来没喝', place='老宅书房',
-                       names=['李宝珠', '母亲'], ids=['char_001', 'char_002']),
+                       ids=['char_001', 'char_002']),
              ]},
         ],
         '_provenance': {
             'scope_violations': [],
-            'batches': [[1], [2], [3]],
             'context': {
                 # ⚠ 取契约那一份，别手抄字面：升架构时手抄的这一份不会跟着改，
                 #   而 `context_scope` 是 metric ⇒ 它会**静默**地一直报「不符合约定」。
                 'architecture': BLUEPRINT_ARCHITECTURE,
-                'batch_size': 1,
                 'stable_prefix': '0123456789',
-                'current_chapter_full': True,
-                'future_visible': False,
                 'past_neighbor_chars_max': 4000,
                 'continuity_chars_max': 1600,
                 'past_names_chars_max': 600,
             },
-            'char_refs': {'resolved': 12, 'pronoun_ok': 0, 'ambiguous': 0, 'late': 0,
-                          'unknown': 0, 'invented': 0, 'no_names': 1, 'pronoun': 0},
-            'verbatim_rewrites': [],
             'verbatim_failures': [],
             'fact_atom_failures': [],
-            'partial_regen_chapters': [],
-            'repairs': [],
         },
     }
     for chapter in doc['blueprints']:
-        chapter['chapter_function'] = chapter['summary']
         chapter['fact_atoms'] = [beat.pop('_fact_atom') for beat in chapter['beats']]
         chapter['causal_edges'] = []
         chapter['entry_state_refs'] = []
@@ -324,7 +309,7 @@ def _hard_hits(gg: dict | None, bp: dict | None, mt: list | None) -> set[str]:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def test_the_clean_base_has_no_hard_hits():
-    """⭐ **下面 39 条全部建立在这一条上。**
+    """⭐ **下面 37 条全部建立在这一条上。**
 
     一个本来就红的底座上，「改一处就红」什么也证明不了。
     """
@@ -350,7 +335,7 @@ def test_conflict_stage_coverage_reports_duplicate_and_out_of_range_memberships(
 @pytest.mark.parametrize(('branch', 'expected'), [
     ('world_rule', 'wr_01.versions.effective_from_chapter=99'),
     ('setup', 'secret_01.setup.chapters=98'),
-    ('reveal', 'secret_01.reader_reveal_events.chapter=99'),
+    ('reveal', 'secret_01.first_reveal_chapter=99'),
 ])
 def test_canon_chapter_refs_reject_all_three_out_of_book_timelines(branch, expected):
     gg = global_grounding()
@@ -361,49 +346,12 @@ def test_canon_chapter_refs_reject_all_three_out_of_book_timelines(branch, expec
             'kind': 'foreshadowed', 'chapters': [98],
         }
     else:
-        gg['canon']['secrets'][0]['reader_reveal_events'][0]['chapter'] = 99
+        gg['canon']['secrets'][0]['first_reveal_chapter'] = 99
     outcome = next(o for o in checks.check(
         global_g=gg, blueprints=blueprints(), main_text=main_text())
         if o.rule == 'canon_chapter_refs_dangling')
     assert outcome.findings
     assert expected in outcome.findings[0].evidence
-
-
-@pytest.mark.parametrize('architecture', [
-    'extraction-ir-v2',
-    'extraction-ir-v3.1',
-])
-def test_closed_present_character_id_is_not_reclassified_as_an_ambiguous_name(
-        architecture):
-    """关闭式契约的人读字面可以歧义，但模型选择的 char_id 已把引用定死。"""
-    gg, bp, mt = global_grounding(), blueprints(), main_text()
-    gg['entities']['characters']['char_001']['address'].append({
-        'surface': '母亲', 'by': 'narration',
-        'context': 'reference', 'from_chapter': 1})
-    bp['_provenance']['context']['architecture'] = architecture
-    outcomes = {o.rule: o for o in checks.check(
-        global_g=gg, blueprints=bp, main_text=mt)}
-    ambiguity = outcomes['present_names_ambiguous']
-    assert ambiguity.findings and ambiguity.findings[0].detail.startswith('0/')
-
-
-def test_v31_closed_narration_id_is_not_reclassified_as_an_ambiguous_name():
-    """v3.1 的 narrator/focalizer 也由关闭式 char_id 定义，不能反解人读投影。"""
-    gg, bp, mt = global_grounding(), blueprints(), main_text()
-    gg['entities']['characters']['char_001']['address'].append({
-        'surface': '母亲', 'by': 'narration',
-        'context': 'reference', 'from_chapter': 1})
-    bp['_provenance']['context']['architecture'] = 'extraction-ir-v3.1'
-    for blueprint in bp['blueprints']:
-        blueprint['narration'] = [{
-            'grammatical_person': 'third',
-            'narrator_name': '母亲', 'narrator_char_id': 'char_001',
-            'focalizer_name': '母亲', 'focalizer_char_id': 'char_001',
-            'pronoun_surfaces': [],
-        }]
-    outcomes = {o.rule: o for o in checks.check(
-        global_g=gg, blueprints=bp, main_text=mt)}
-    assert outcomes['present_names_ambiguous'].findings[0].detail.startswith('0/')
 
 
 def test_real_stage2_report_separates_instance_detail_from_stable_rule_notes():
@@ -465,7 +413,7 @@ def test_hedge_words_does_not_treat_factual_or_as_uncertainty():
 def test_the_clean_base_leaves_no_rule_unimplemented():
     """**注册了而没有实现调用它 ⇒ `skipped`，徽章至少 amber。**
 
-    这一条盯的是 `checks.check()` 恰好产 77 个 `Outcome`——
+    这一条盯的是 `checks.check()` 恰好覆盖全部现役 `Outcome`——
     报告是由**判据注册表**生成的，不是由实现的输出生成的，
     所以漏实现一条不会让它从报告里消失，只会让它挂一行「实现未被调用」。
     """
@@ -473,7 +421,7 @@ def test_the_clean_base_leaves_no_rule_unimplemented():
                         main_text=main_text())
     want = {r.rule for r in REGISTRY.all() if r.stage == 'stage2'}
     assert {o.rule for o in outs} == want
-    assert len(outs) == len(want) == 77
+    assert len(outs) == len(want) == 67
 
 
 def test_global_field_failures_route_to_the_dedicated_resample_action():
@@ -507,7 +455,7 @@ def test_the_two_unver_rules_always_speak():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 三、39 条盘上 0 命中的 HARD —— 各配一份会让它红的样本
+# 三、37 条盘上 0 命中的 HARD —— 各配一份会让它红的样本
 # ─────────────────────────────────────────────────────────────────────────────
 
 Mutator = Callable[[dict, dict, list], Any]
@@ -536,7 +484,7 @@ def _ch(bp: dict, o: int) -> dict:
     return next(x for x in bp['blueprints'] if x['chapter_ordinal'] == o)
 
 
-#: `(判据 id, 改哪一处, 为什么这一处会让它红)`。**一行一条**，39 条。
+#: `(判据 id, 改哪一处, 为什么这一处会让它红)`。**一行一条**，37 条。
 CASES: list[tuple[str, Mutator, str]] = [
     # ── 一、产物完整性与章对齐 ──────────────────────────────────────────
     ('upstream_missing', lambda g, b, m: (None, b, m),
@@ -687,10 +635,6 @@ CASES: list[tuple[str, Mutator, str]] = [
      _m(lambda g, b, m: _ch(b, 1)['beats'][0].__setitem__('present_char_ids', ['char_999'])),
      '⚠⚠ 这是**解析器的后置条件**：present_char_ids 是代码解析出来的，'
      '违反它 ＝ 代码坏了，不是数据坏了'),
-    ('present_names_invented',
-     _m(lambda g, b, m: _ch(b, 1)['beats'][0].__setitem__('present_names', ['王二麻子'])),
-     '全书原文里都找不到这个称呼 ⇒ 模型凭空造了一个人。'
-     '⚠ 五分里唯一一条判 HARD 的——另四种去向各有一条度量'),
     ('scope_violation',
      _m(lambda g, b, m: b['_provenance'].__setitem__(
          'scope_violations', ['批 1 被要求产 ch1，实际产了 ch1 与 ch5'])),
@@ -698,15 +642,6 @@ CASES: list[tuple[str, Mutator, str]] = [
     ('fact_atom_empty',
      _m(lambda g, b, m: _ch(b, 1)['fact_atoms'][0].__setitem__('claim', '')),
      '⚠ **判在本层不判 stage4**：留在下游意味着要先付掉一次规划调用才发现这一层产坏了'),
-    ('summary_empty',
-     _m(lambda g, b, m: _ch(b, 1).__setitem__('summary', '')),
-     '契约说了它必填，而这一层没有任何东西在执行那句话'),
-    ('repair_cache_policy',
-     _m(lambda g, b, m: b['_provenance'].__setitem__('repairs', [{
-         'chapter_ordinal': 2, 'cache_policy': 'default', 'fields': ['*'],
-         'failure_items': ['span_unlocatable']}])),
-     '⚠ 定向重生成的 prompt 与整跑时那一批**逐字相同** ⇒ 缓存必然命中 ⇒ '
-     '一个字都没重新生成，而它照样打印「已重生成」'),
 ]
 
 
@@ -729,7 +664,7 @@ def test_a_sample_that_makes_this_hard_rule_red(rule, mutate, why):
 def test_every_hard_rule_without_a_disk_counterexample_has_a_synthetic_one():
     """⭐⭐ **守卫的守卫：这张清单不许悄悄变短。**
 
-    43 条 HARD 里盘上只有 4 条有真反例；本文件要为**其余每一条**配一份。
+    40 条 HARD 里盘上只有 4 条有真反例；本文件要为**其余每一条**配一份。
     加一条 HARD 而不配样本，这条测试当场点名——
     否则那条新判据就又回到「从没见过反例」那一档，而它与一条不存在的判据长得一样。
     """
@@ -738,7 +673,7 @@ def test_every_hard_rule_without_a_disk_counterexample_has_a_synthetic_one():
     on_disk = {'address_bare_pronoun', 'role_leaks_fate', 'hedge_words', 'hinge_in_hole'}
     hard = {r.rule for r in REGISTRY.all() if r.stage == 'stage2' and r.sev == 'hard'}
     covered = {c[0] for c in CASES}
-    assert len(hard) == 43, f'HARD 条数变了（{len(hard)}）——本条与 §5.1 的账要一起改'
+    assert len(hard) == 40, f'HARD 条数变了（{len(hard)}）——本条与 §5.1 的账要一起改'
     assert covered <= hard, f'CASES 里有不是 HARD 的：{sorted(covered - hard)}'
     assert not (missing := sorted(hard - on_disk - covered)), (
         f'这几条 HARD 既没有盘上反例、也没有合成样本：{missing}\n'

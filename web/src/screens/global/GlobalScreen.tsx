@@ -33,7 +33,7 @@ function EvidenceLine({ evidence }: { evidence: GlobalFactEvidence | null }) {
   return (
     <span
       className="prose-cn text-mini text-ink-5"
-      title={`原文 ${evidence.source.start}–${evidence.source.end} · ${evidence.source.recovery}`}
+      title={`原文 ${evidence.source.start}–${evidence.source.end}`}
     >
       证据 ch{evidence.chapter_ordinal} · “{evidence.source.text}”
     </span>
@@ -335,21 +335,10 @@ export function GlobalScreen() {
                             </div>
                             <span className="text-tag text-ink-4">
                               读者第 {s.first_reveal_chapter} 章首次揭示
-                              {/* 后续 confirm 单独说：闸门只按首次揭示开，两者不是一回事 */}
-                              {s.reader_reveal_chapters.filter(
-                                (c) => c !== s.first_reveal_chapter,
-                              ).length
-                                ? '（第 ' +
-                                  s.reader_reveal_chapters
-                                    .filter((c) => c !== s.first_reveal_chapter)
-                                    .join('、') +
-                                  ' 章再确认）'
-                                : ''}
                               {/* cold 是模型显式声明的答案，不是「这一格空着」——照它说的显示 */}
                               {s.setup_kind === 'foreshadowed'
                                 ? ' · 埋点 ch' + s.setup_chapters.join('/')
                                 : ' · 冷揭示（无埋点）'}
-                              {s.group_id ? ' · 归组 ' + s.group_id : ''}
                             </span>
                           </div>
                         )}
@@ -401,13 +390,12 @@ export function GlobalScreen() {
                       <div
                         key={i}
                         className="grid items-baseline gap-12"
-                        style={{ gridTemplateColumns: '86px 76px 1fr' }}
+                        style={{ gridTemplateColumns: '86px 1fr' }}
                       >
                         <span className="text-body font-semibold">{t.subject.display}</span>
-                        <span className="text-tag text-ink-4">{t.dimension}</span>
                         <span className="flex min-w-0 flex-col gap-2">
                           <span className="prose-cn text-section text-ink-2">
-                            {t.change_type} · {t.trajectory}
+                            {t.trajectory}
                           </span>
                           <EvidenceLine evidence={t.trajectory_evidence} />
                         </span>

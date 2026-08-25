@@ -10,7 +10,7 @@ Stage4 的正式路径不是“让一个模型看着原文改顺序”，而是�
                                                  │
                          A + B ── 代码编译 ───────┴─ plan_chapters v3
                                                           │
-                                      stage4.context（免费）─ writer_context v2
+                                      stage4.context（免费）─ writer_context v3
 ```
 
 两个付费相是两个独立节点、两个独立逻辑调用，分别进入付费预览与 `--yes`；A 落盘不自动连跑 B。
@@ -25,8 +25,8 @@ Stage4 的正式路径不是“让一个模型看着原文改顺序”，而是�
 | `stage4/evidence_binding.json` | `EvidenceBinding` v1 | `stage4.plan` | 付费 | 保存 B 对冻结候选的完整证据绑定，或 typed `infeasible` 终态 | 码·契 |
 | `stage4/plan_chapters.json` | `PlanChapters` v3 | `stage4.plan` 的确定性编译段 | 0 次额外调用 | 合并 A 的结构决策与 B 的证据引用，注入不可变语义契约、slot、预算和结构复算向量 | 码·契 |
 | `stage4/plan_edit.json` | `PlanEdit` v3 | 人工输入 | 0 LLM | 人工整份替换计划的 typed 入口 | 码·契 |
-| `stage4/writer_context.json` | `WriterContext` v2 | `stage4.context` | 0 LLM | 把计划引用确定性解析成人话，成为 Stage5 唯一写作输入 | 三源 |
-| `stage4/writer_context.identity.json` | `WriterContext` v2 | `stage4.plan --identity` | 0 LLM | 显式恒等基线，不冒充重构候选 | 码·契 |
+| `stage4/writer_context.json` | `WriterContext` v3 | `stage4.context` | 0 LLM | 把计划引用确定性解析成人话，成为 Stage5 唯一写作输入 | 三源 |
+| `stage4/writer_context.identity.json` | `WriterContext` v3 | `stage4.plan --identity` | 0 LLM | 显式恒等基线，不冒充重构候选 | 码·契 |
 
 旧 `plan_chapters.json` / `plan_edit.json` v2 没有章级结构决定，也不能证明来自隔离的 A/B 两相，
 因此关闭式拒读、不迁移、不手补字段。正式计划从 `stage4.design` → `stage4.plan` 重建；人工稿按
@@ -241,7 +241,7 @@ expired。通用 `/api/approvals/gate/s4` 关闭式拒绝，只有 `/api/approva
 Stage5 付费写作在首个 LLM 调用前必须同时持有当前 s4 accepted 与独立 writing 授权。免费 check、
 revalidate、apply-edit、阅读与审批材料仍可进入，否则人会被闸在修复证据之外。
 
-## 七、`writer_context.json` v2
+## 七、`writer_context.json` v3
 
 `WriterContext` 顶层只有 `world_facts`、`chapters` 与免费 `_provenance`；不含全书
 `reconstruction_strategy`。每章含同号身份、三个已解析 `CtxGoal`、人话

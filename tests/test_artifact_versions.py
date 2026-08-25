@@ -88,7 +88,7 @@ _SHAPE_BREAKS: dict[str, tuple[int, str, str]] = {
         '同 `stage1/main_text.json`：`stage1.partition` 免费重跑',
     ),
     'stage2/global_grounding.json': (
-        3,
+        4,
         '两次破坏。v2（2026-08-23）secret 时间线三刀：① `setup_chapters: list[int]` 换成 `setup` '
         '判别联合（`{"kind":"cold"}` / `{"kind":"foreshadowed","chapters":[…]}`）'
         '——v1 的 `[]` 同时表示「声明冷揭示」与「模型压根没想过」，而这一格是两道'
@@ -101,32 +101,36 @@ _SHAPE_BREAKS: dict[str, tuple[int, str, str]] = {
         '的 `knowledge_events`；③ role/fate、relation predicate、setting、rule desc、secret fact、'
         'knowledge event、arc trajectory 新增代码按“指定章 + 短 locator”唯一回取的正式证据，'
         '失败态 source=null；'
-        '④ `valid_to_chapter` 改名 `valid_through_chapter`，把原本即包含式的端点语义写进字段名',
+        '④ `valid_to_chapter` 改名 `valid_through_chapter`，把原本即包含式的端点语义写进字段名。'
+        'v4（2026-08-26）删除 SourceSpan.normalized/recovery、secret group_id/确认事件，'
+        '把唯一消费的首次揭示收成 first_reveal_chapter 标量，并删除 arc dimension/change_type',
         '`stage2.global` 整跑（**付费**）；`.INVALID` 与 `_rounds/` 一律作废，'
         'v1/v2 都不手补字段冒充当前产地。重建后 review 按 claim+evidence 新 hash 重新 pending；'
         '这是形状破坏的真实人工成本，不能靠迁移伪装成旧决定仍有效。',
     ),
     'stage2/global_edit.json': (
-        2,
+        3,
         '2026-08-24：secret patch/replacement 从 `character_known_by` 换成带 locator 的 '
         '`knowledge_events`，并新增 relation visibility、setting、fate、arc 与全部自由事实证据的 '
         'typed patch/replacement；旧 v1 决策文件不能表达知情时点或证据',
-        '它是人产决策集，不由模型重建：人工按当前 `GlobalEdit` v2 重写书内 JSON。'
+        'v3（2026-08-26）随 GlobalGrounding v4 删除同批冗余字段。'
+        '它是人产决策集，不由模型重建：人工按当前 `GlobalEdit` v3 重写书内 JSON。'
         '不根据旧 known_by 猜 known_from_chapter，不为旧 claim 伪造 locator；盘上 v1 字节原样保留'
         '只能作为历史输入，当前运行时关闭式拒读',
     ),
     'stage2/chapter_blueprints.json': (
-        5,
+        6,
         '四次破坏。2026-08-19 bounded-fidelity-v2 → v3：beat 的区间改由段号'
         '算出，SourceSpan.recovery 去掉 lcs，BlueprintProvenance.verbatim_recovered '
         '删除。2026-08-23：BlueprintContext.architecture 从七值收窄为 '
         'extraction-ir-v1.1 / v2 / v3.1 三值，退役 bounded-fidelity-v3、v1、v2.1、v3。'
         '2026-08-24：再收窄为 v2 / v3.1 两值，退役 v1.1。2026-08-25：删除复合 '
         '`Beat.event` 事实源，新增章级 `chapter_function`、`fact_atoms`、`causal_edges`、'
-        '`entry_state_refs` 与 `ending_state_refs`；hinge 新增稳定 id 与所属 beat 引用',
+        '`entry_state_refs` 与 `ending_state_refs`；hinge 新增稳定 id。2026-08-26 v6 删除'
+        'summary、present_names、叙述显示名、hinge 重复父键与无消费者 provenance 账',
         'stage2.blueprint 整跑（付费）；.INVALID 与 _rounds/ 一律作废，'
         '不手补字段冒充当前产地。仓内没有迁移机制，任何 v3 信封'
-        '都必须由 producer 重建为当前 v5',
+        '都必须由 producer 重建为当前 v6',
     ),
     'stage4/plan_chapters.json': (
         3,
@@ -143,15 +147,17 @@ _SHAPE_BREAKS: dict[str, tuple[int, str, str]] = {
         '旧人工编辑集不能凭空推造 retain/reconstruct 意图；需要时由人按当前 PlanEdit v3 重写',
     ),
     'stage4/writer_context.json': (
-        2,
+        3,
         '2026-08-25 删除写手面的 `CtxBeat.events[]`，新增 chapter_rewrite_brief、'
         '四类 delta 在内的人话 semantic_contract 与可直接执行的 CtxScene',
-        '`stage4.context` 从当前 Stage2 v5 + Stage4 plan v3 免费重建；下游 Stage5/6 按消费投影判 stale',
+        'v3 随 Stage2 ArcTrack 删除 dimension/change_type；`stage4.context` 从当前 Stage2 v6 + '
+        'Stage4 plan v3 免费重建；下游 Stage5/6 按消费投影判 stale',
     ),
     'stage4/writer_context.identity.json': (
-        2,
+        3,
         '2026-08-25 恒等基线与正式 writer_context 同形切换为语义契约 + CtxScene',
-        '`stage4.plan --identity` 从当前 Stage1/Stage2 免费重建，不读取或迁移旧基线',
+        'v3 同步删除 ArcTrack 分类标签；`stage4.plan --identity` 从当前 Stage1/Stage2 '
+        '免费重建，不读取或迁移旧基线',
     ),
     'stage3/style_grounding.json': (
         2,

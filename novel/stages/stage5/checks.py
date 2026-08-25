@@ -1114,8 +1114,8 @@ def book_findings(book: M.Book, *, rows: list[dict[str, Any]], bodies: dict[int,
         kws = [k for k in secret_keywords(s.get('fact')) if norm(k)]
         seen = [o for o, b in sorted(bodies.items())
                 if any(secret_contains(k, b) for k in kws)]
-        reveal = sorted({e.get('chapter') for e in (s.get('reader_reveal_events') or [])
-                         if e.get('chapter')})
+        reveal_at = s.get('first_reveal_chapter')
+        reveal = [reveal_at] if isinstance(reveal_at, int) else []
         blind = bool(reveal) and not (set(seen) & set(reveal))
         fs.append(finding(
             'secret_timeline',

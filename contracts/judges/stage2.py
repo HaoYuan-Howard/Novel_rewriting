@@ -3,7 +3,7 @@
 """
 stage2.py —— 抽取那一层的判据行。源是 `docs/schema/stage2.md` §5.1（**唯一落点**）。
 
-**77 条现役：43 HARD · 16 INFO · 16 度量 · 2 查不了。**
+**67 条现役：40 HARD · 14 INFO · 11 度量 · 2 查不了。**
 权威恒在本模块的注册表与 `BACKEND_CONTRACT.md` §反向覆盖率；2026-08-23 新增的
 `conflict_stage_coverage` HARD 把冲突阶段的逐章覆盖关在 Stage2 产地。
 
@@ -18,8 +18,8 @@ stage2.py —— 抽取那一层的判据行。源是 `docs/schema/stage2.md` §
 
 【本层特有的四条，与前七层都不同】
 
-**① 这是第一个用 `Rule.fix` 的层。** 38 条带机器可读的修复路由：
-`blueprint --chapters` 17 · `blueprint --patch` 1 · `blueprint --renormalize` 1 ·
+**① 这是第一个用 `Rule.fix` 的层。** 修复路由使用机器可读的节点与 flag：
+`blueprint --chapters` · `blueprint --patch` ·
 `global --resample` 17 ·
 `global --purge-role` / `--renormalize` 各 1。注册期第 ⑧ 条会查节点与 flag 都真实存在——**写歪一个当场炸**，
 而写进 `note` 的散文里拼错一个 flag 名不会有任何东西出声（LESSONS 第 11 条）。
@@ -41,7 +41,6 @@ STAGE = 'stage2'
 #: 17 条判据指着同一条 `blueprint --chapters`，散着写就是 17 份会各自漂的拷贝。
 FIX_REGEN = ('stage2.blueprint', '--chapters')      # 定向重生成那几章（**付费**）
 FIX_REGEN_ARGS = ('--chapters',)                    # 值由本次 finding 的机器证据给
-FIX_RENORMALIZE_BP = ('stage2.blueprint', '--renormalize')  # 确定性归一，0 成本
 FIX_RENORMALIZE_G = ('stage2.global', '--renormalize')      # 同上，全书那一份
 FIX_PURGE_ROLE = ('stage2.global', '--purge-role')  # 语义判官臂重划 role/fate（**付费**）
 FIX_RESAMPLE = ('stage2.global', '--resample')  # 绕过问题缓存重采整份 global（**付费**）
@@ -68,8 +67,7 @@ def _metric(rule: str, item: str, requirement: str, **kw) -> Rule:
     """度量：**无条件报出**，`owner=None`（它不是一条结论，没有「根因第一嫌疑层」）。
 
     本层有一批与告警配对的无条件度量
-    （`present_names_*` 五分 · `time_layer_mix` · `narration_voices` · `batch_density` ·
-    `span_coverage_per_chapter`）。它们与告警的分界线是
+    （`time_layer_mix` · `narration_voices` · `span_coverage_per_chapter`）。它们与告警的分界线是
     **有没有前件**：无条件产出的是度量，挂在 `if 违规` 上的是告警（判据 21）。
     """
     return REGISTRY.register(Rule(rule=rule, stage=STAGE, item=item, sev='metric',
@@ -132,7 +130,7 @@ _hard('address_by_unresolved', '「谁在这么叫」解析得出来', 'R-2.4', 
       note='取值是 registry 里的 `char_id`，或 `narration` / `public`。'
            '⚠ 载体那边的 `AddressBy` 只管**形状**（`^(char_\\d+|narration|public)$`），'
            '「这个 `char_001` 在不在 registry 里」是**跨产物**的，只能是判据。'
-           '⚠ 群体名一律压成 `public`（落盘前兜底，账记在 `_provenance.address_by_fallback`）'
+           '⚠ 群体名一律在落盘前压成 `public`'
            '——这个字段的用途是**派发键**，一个解析不出人的串对派发毫无用处。'
            '盘上 0/3（27 / 47 / 82 条）')
 
@@ -144,8 +142,8 @@ _hard('address_from_too_early', '「从第几章起可用」不早于该字面�
       fix=FIX_RESAMPLE,
       note='⚠ **单边判定**：早于字面首现一定错（读者还不知道这个叫法）；晚于合法'
            '（作者可以先用别的叫法）。反过来判就会把一大批正当的谨慎标注报成违规。'
-           '⚠ 落盘前会**只往后抬**，账记在 `_provenance.address_from_chapter_raised`'
-           '（盘上共 7 处）⇒ 本条在成品上恒 0 是**预期**，它守的是抬升逻辑本身没坏。'
+           '⚠ 落盘前会**只往后抬** ⇒ 本条在成品上恒 0 是**预期**，'
+           '它守的是抬升逻辑本身没坏。'
            '盘上 0/3')
 
 _hard('address_bare_pronoun', '称谓整条不是代词', 'R-2.3', fix=FIX_RESAMPLE,
@@ -178,8 +176,7 @@ _info('address_missing', '每个角色至少有一条称呼', 'R-2.5b',
 _info('address_unlocatable', '每条叫法都能在原文里原样找到', 'R-2.2',
       note='⚠ **逐条**查，与 `character_unattested`（至少有一个）是同一条需求的两级。'
            '判 INFO 不判 HARD：绰号 / 转述里的叫法确实可能改过一两个字，'
-           '而落盘前的最长子串回取已经修掉一批（账在 `_provenance.address_surface_rewrites`，'
-           '盘上 0 / 2 / 8 条）。盘上 0/3')
+           '而落盘前的最长子串回取会先确定性修正。盘上 0/3')
 
 # ═══ 三、身份与结局（5 HARD · 1 度量 · 1 查不了）══════════════════════════
 
@@ -214,10 +211,7 @@ _hard('hedge_words', '身份 / 结局 / 显示名里没有模棱语', 'R-2.6', w
 _hard('distinguisher_lonely', '带区分词的显示名真有同名对象', 'R-2.6b',
       fix=FIX_RESAMPLE,
       note='没有重名就没有消歧可言，而**区分词会被写手原样写进正文**'
-           '（「李宝珠（丫鬟）掀开帘子」）。⚠ 落盘前会剥区分词，账记在'
-           '`_provenance.canonical_distinguishers_stripped`——**盘上 3/3 本恒空**，'
-           '而那正是「空也要报」那条形式要求的教科书：空就不打印的话，'
-           '这个键从落地到今天一次都不会出现在任何报告里。盘上 0/3')
+           '（「李宝珠（丫鬟）掀开帘子」）。落盘前会确定性剥除无必要区分词。盘上 0/3')
 
 _unver('role_fate_unverifiable', '改写式结局泄漏有确定性防线', 'R-2.6',
        note='⚠⚠ **本仓改成无条件产出**（同 F4-6 对 `name_surface_survey` 的处置）。'
@@ -248,7 +242,7 @@ _hard('world_rule_no_desc', '每条规则至少有一个带正文的版本', 'R-
 _hard('canon_chapter_refs_dangling', '规则版本与 secret 时间线章号都在正文集合内', 'R-2.21',
       fix=FIX_RESAMPLE,
       note='覆盖 world_rules[].versions[].effective_from_chapter、secret setup.chapters 与 '
-           'reader_reveal_events[].chapter。它们都直接决定逐章下发；越界值会让一条事实'
+           'first_reveal_chapter。它们都直接决定逐章下发；越界值会让一条事实'
            '永不生效/永不揭示。relation、knowledge、address、evidence 与 conflict stage '
            '各由自己的专门规则守，不在这里重报。人工可用 GlobalEdit v2 0 LLM 修复')
 
@@ -364,8 +358,8 @@ _hard('verbatim_failed', '落盘前的原文回取没有锚不到的', 'R-3.18',
 _hard('edge_hole', '章首章尾被第一 / 最后一拍覆盖', 'R-3.8', fix=FIX_REGEN,
       note='判的是 ≥30 字的未覆盖原文**不得落在第一拍之前或最后一拍之后**'
            '（中段的空隙合法——过渡句、环境交代）。'
-           '⚠⚠ **prompt 侧已经明说了这一条**（`novel/stages/stage2/prompts.py::BLUEPRINT_SYS` '
-           '里「但空隙只能在中间，两头不许留」，原型 2026-08-08 补的，正为那 5 处章首漏抓）'
+           '⚠⚠ **prompt 侧已经明说了这一条**（`novel/stages/stage2/prompts.py::BOUNDARY_SYS_V2` '
+           '里要求两张表都从第 1 段起步并到达最后一段）'
            '**而那 5 处是在它明说之后发生的** ⇒ 「写进 prompt」没有遵守率保证，'
            '守它的只能是本条。**别照旧措辞再往 prompt 里补一句。**盘上 0/3')
 
@@ -405,8 +399,7 @@ _hard('hinge_in_hole', '保真材料的锚点落在某一拍覆盖到的区间�
            '（把空档补进某条 span），不是去改这条 hinge。'
            '⚠ `bounded-fidelity-v3` 起「空档」是**段级**的：hinge 指的那一段不属于任何一拍。'
            '同时消失的是「在多个 beat 里都命中、归属不唯一」那一档——段区间由游标单调'
-           '保证互不重叠 ⇒ 归属恒唯一，`normalize` 直接按段号把材料改判给正确的拍'
-           '（留痕在 `_provenance.verbatim_rewrites` 的 `hinge.owner` 行）')
+           '保证互不重叠 ⇒ 归属恒唯一，`normalize` 直接按段号把材料改判给正确的拍')
 
 _hard('hinge_anchor_void', '保真材料的锚点在本章原文里找得到', 'R-3.5', fix=FIX_REGEN,
       note='**是转述或编的**——四分流里唯一一条根因在模型身上的。'
@@ -432,7 +425,7 @@ _info('hinge_cascade', '锚不到不是因为本拍的 span 自己就没定位�
            '⇒ 判 INFO 且**不给 fix**：修上游那条 span 就好。盘上 0/3')
 
 _hard('hinge_drift', '保真材料的正文落在本拍 span 的原文范围内', 'R-3.5', fix=FIX_REGEN,
-      note='正式产物联合核对 hinge `SourceSpan` 的 offset/text/normalized，并要求其区间完整'
+      note='正式产物联合核对 hinge `SourceSpan` 的 offset/text，并要求其区间完整'
            '落在所属 beat.span 内；因此能区分「原文字节不一致」与「材料归错拍」。'
            '不满足时说明材料字节或归属不可信。'
            '盘上 0/3（113 / 66 / 103 条全中）')
@@ -453,18 +446,10 @@ _hard('time_layer_no_present', '全书不得 0 条「现场」层', 'R-3.6c', fi
            '（回顾式叙述的主线本身就是现场）。前件 `n >= 10` 才判——'
            '章数太少时全是回忆是可能的。盘上 0/3（present 95% / 100% / 92%）')
 
-_hard('present_ids_dangling', '在场人物 id 都在 registry 里', 'R-3.7', fix=FIX_RENORMALIZE_BP,
-      note='⚠⚠ **这是解析器的后置条件，不是数据判据**：`present_char_ids` 是'
-           '**代码从 `present_names` 解析出来的**，模型不写它 ⇒ '
-           '违反它 ＝ **代码坏了，不是数据坏了**。'
-           '⇒ 修法是 `--renormalize`（重跑一遍确定性解析，0 成本），不是重生成。'
-           '盘上 0/3（130 / 148 / 173 个）')
-
-_hard('present_names_invented', '在场者的称呼在全书原文里找得到', 'R-3.7b', fix=FIX_REGEN,
-      note='找不到 ＝ 模型**凭空造了一个人**，没有合法情况 ⇒ 五分里唯一一条判 HARD 的。'
-           '⚠ 另四种去向（唯一命中 / 歧义 / 名册漏收 / 代词）**处置完全不同，'
-           '绝不合成一个「无据」**——它们各有一条度量。'
-           '盘上 0/3（177 / 176 / 216 个，`invented` 恒 0）')
+_hard('present_ids_dangling', '在场人物 id 都在本章可见人物闭集与 registry 里', 'R-3.7b',
+      fix=FIX_REGEN,
+      note='`present_char_ids` 由模型从逐章下发的可见人物闭集中选择，调用点与正式产物'
+           '复检都关闭式校验。悬空引用说明该章响应不可用，须定向重生成。')
 
 _info('present_continuity', '相邻拍同地同层时在场集连续', 'R-3.7c',
       note='⚠⚠ **不判阻断**：按它去修数据会让另一半更差——「内心剖析某人」时'
@@ -517,24 +502,6 @@ _hard('fact_atom_empty', '每章都有非空、可引用的事实原子', 'R-3.1
       note='Stage2 v5 的正式事实源。拍只保存原文舞台区间；事实缺失必须在付费规划前阻断，'
            '不能让 Stage4 用摘要或空串补出第二份真相。')
 
-_hard('summary_empty', '每一章都有非空摘要', 'R-3.13', fix=FIX_REGEN,
-      note='✚ 同上。⚠ `summary` **0 确定性消费方**，唯一消费方是计划节点的 prompt'
-           '——而规划节点手里**有全书原文** ⇒ 留着它是因为「帮它快速理解本章、无害」，'
-           '**不是因为不可替代**。判它非空是因为**契约说了它必填**，'
-           '而这一层没有任何东西在执行那句话。盘上 0/3（31/31）')
-
-_hard('repair_cache_policy', '定向重生成配的是「不读缓存」', 'R-3.11',
-      note='✚ **原型没有这条**——`R-3.11` 索要它，而它是本层最反直觉的一条：'
-           '定向重生成的 prompt 与整跑时该章那一批**逐字相同** ⇒ **缓存必然命中** ⇒ '
-           '**一个字都没重新生成，而它照样打印「已重生成」**。'
-           '⇒ `repairs[]` 里 `fields == ["*"]`（整章重生成）的行 `cache_policy` '
-           '必须是 `refresh-write`。'
-           '⚠ **字段级修复（`--patch`，fields 记具体路径）豁免**：它发的是新 prompt，'
-           '缓存里没有坏响应可读，默认策略反而是「中断恢复不重复付费」的正确语义'
-           '（refresh-write = 明确要新采样，不是「这是修复调用」）。'
-           '⚠ **不给 fix**：修法是下一次跑的时候带对 flag，不是拿一条命令去改这份产物。'
-           '盘上 0/3（3 条 `repairs` 恒 `refresh-write`）')
-
 # ═══ 九、度量（16 条，无条件报出，`owner=None`）════════════════════════════
 #
 # ⚠⚠ 这一节整节的判准是原型注释里那句「**判据 21：一出问题就不许知道现状**」——
@@ -555,72 +522,15 @@ _metric('place_moves', '转场点数', 'R-3.17',
              '⚠ 它作为**下发给写手的舞台信息**是对的，不改；'
              '但**凡引用这个数的地方都要带上这一句**。盘上 23 / 22 / 39 处')
 
-_info('place_inherit_without_base', '「延续上一拍地点」有可继承的基', 'R-3.17',
-      note='`extraction-ir-v1` 专属：模型交 `P_INHERIT` 而链上没有基'
-           '（首拍、或上一相邻拍不同 time_layer）⇒ compiler 落 `place=null` 并记'
-           '`_provenance.place_inherit_without_base`。'
-           '⚠ **产物侧的 `place=null` 分不出「无从知道」与「指错了继承」**，'
-           '这笔账是两者唯一的分界——无声转换就是把模型的错吞掉。'
-           '判 INFO 不判 HARD：链头 INHERIT 语义上等于 UNKNOWN，产物无害，'
-           '报出来是给「模型在多大程度上乱用 INHERIT」一个读数。'
-           '`bounded-fidelity-v3` 产物无此账 ⇒ 报「不适用」空行，不是绿灯')
-
-_info('place_explicit_unlocatable', '`P_EXPLICIT` 的地点名在截止本章的正文里找得到',
-      'R-3.17',
-      note='`extraction-ir-v1` 系专属，且**是 ir1.1 的配套探针不是违约判定**：'
-           'ir1.1 把 `P_EXPLICIT` 从「三选一」提回「首选档」以救回地点填充率'
-           '（ir1 相对 v3 掉 −59%，§十一 实测两个模型上都掉 ⇒ 契约的责任不是模型的）。'
-           '加压时模型会找最省力的出路，而 place 是**单字段**、没有别的字段可牺牲 ⇒ '
-           '**唯一的规避路径是编一个地点**，这条就是那条路径上的探针：'
-           '**填充率涨了而这条同步涨，涨的就是幻觉不是覆盖**。'
-           '⚠⚠ **匹配面是「截止本章正文」不是「本拍区间」**——三个面在盘上'
-           '（Pro×v3 无情道 132 个有地点的拍）实测：本拍区间 **78%** 找不到 · '
-           '本章全文 42% · 截止本章正文 **13%**。地点本来就常写在上文'
-           '（那正是 `P_INHERIT` 存在的理由），「合欢宗」「擂台」「灵网」这类场景名'
-           '更不会在某一拍里再出现一次 ⇒ 按本拍区间判等于让噪声淹死信号。'
-           '取的是与 `present_names_invented` 同源的面；用「截止本章」而不是「全书」'
-           '还有一层语义：只在后文出现的说法本身就是后见之明。'
-           '⚠⚠ **判 INFO 且不该升 HARD**：就算在这个面上，那 13% 也**不是幻觉**——'
-           '盘上 17 条逐条看全是**用原文成分组合**出来的（「武场外」「黎玄的洞府」'
-           '「前往秘境的路上」「合欢宗门口」），一条凭空编的都没有。'
-           '⇒ 读法是**相对基线的变化**，不是「命中即违规」；基线记在实验手册。'
-           '⚠ 多处命中算找得到（地点名重复出现正常，它不像 hinge 需要唯一）。'
-           '`bounded-fidelity-v3` 产物无此账 ⇒ 报「不适用」空行，不是绿灯')
-
-_metric('present_names_ambiguous', '称呼在名册里挂着不止一个人', 'R-3.7b',
-        note='⚠ **原文自己的歧义，重跑一百次也一样** ⇒ **不猜、不判阻断**：'
-             '三条候选消歧规则实测 **0/9 有效**，判 HARD 只会得到一盏永远红着的灯。'
-             '盘上 **1** / 0 / 0')
-
-_metric('present_names_unlisted', '原文里真有、只是名册没收它', 'R-3.7b',
-        note='⚠ **这是全书级抽取该修的，不是本层违约** —— 所以它是读数不是告警。'
-             '盘上 **14 / 14 / 24**（五分里最大的一格）')
-
-_metric('present_names_pronoun', '在场者写成了代词', 'R-3.7b',
-        note='⚠⚠ **代词按设计永远不在名册里**（`address[].surface` 按设计不收代词）'
-             '⇒ 它**既不是自造也不是漏收**，是两条契约在这里对不上。'
-             '第一人称书里模型会照原文写「我」——那是**对的**。'
-             '词表同 `address_bare_pronoun`（`invariants.BARE_PRONOUNS`）。'
-             '盘上 **15**（5 项定人成功 / 10 项定不了）/ 0 / 0')
-
-_metric('present_names_late', '称呼要到本章之后才出现 → 已拦下', 'R-3.7d',
-        note='⚠ **这是收益不是违约**：拦下来的正是后见之明标注那条剧透旁路。'
-             '报它是为了让「这道闸拦了几条」可见。盘上 0 / 0 / 0')
-
 _metric('present_broad', '事件文本点名了某角色而本拍未列它', 'R-3.7c',
         note='宽筛。⚠ **精度约 1/4**，且**分子分母不同量纲**（拍×角色 vs 拍）'
              '⇒ 只能是读数。⚠ 它带 `len>=2` 的名字过滤，'
              '**`present_ungrounded` 不许复用这一份**。盘上 45 / 74 / 69 处')
 
-_metric('batch_density', '按一次调用分组的抽取量', 'R-3.16b',
-        note='⚠ **必须常驻报出**：逐章产物上它说明的是「批与章是同一个东西」'
-             '（`_provenance.batches` 恒 `[[1],[2],…]`），'
-             '并让调用次数与章覆盖可以直接核对。')
-
 _metric('context_scope', '逐章抽取采用哪版上下文、边界与窗口', 'R-3.16b',
         note='⚠⚠ **必须常驻打印**：不打印它，读的人会把「这次没报跨章引用」'
              '当成模型学乖了，而其实只是没抽到。'
-             '报告 architecture、稳定前缀指纹、当前章全文、未来可见性及三个过去窗口。')
+             '报告 architecture、稳定前缀指纹与三个过去窗口上限。')
 
 _metric('span_coverage', '区间定位成功条数 / 覆盖率 / 每条字数分位', 'R-3.2',
         note='`span_unlocatable` 那一维的样本量与基线。盘上 98% / 98% / 97%')

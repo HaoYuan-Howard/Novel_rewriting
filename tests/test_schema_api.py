@@ -32,6 +32,7 @@ from contracts.schema.api import (
     Stage4View, Stage5View, Stage6View, Stage7View, StyleView, UploadResult,
 )
 from contracts.schema.api import ReadingBeatLine
+from contracts.schema.report import CheckReport
 from contracts.schema.stage5 import ChapterSegment
 from contracts.schema.stage3 import (
     ChapterCharStats, Measurable, MeasurableBlock, MeasurableBody, PerChapterSentence,
@@ -51,6 +52,9 @@ def test_active_global_fixture_is_a_v3_view_and_every_located_span_matches_chapt
         'character', 'group'}
 
     reading = json.loads((fixtures / 'reading_ch3.json').read_text(encoding='utf-8'))
+    ReadingView.model_validate(reading)
+    check = json.loads((fixtures / 'check_stage2.json').read_text(encoding='utf-8'))
+    CheckReport.model_validate(check)
     chapter = ''.join(segment['text'] for segment in reading['segments'])
     pending: list[object] = [raw]
     located = 0
@@ -109,11 +113,11 @@ def test_stage1_continuous_view_and_chapter_index_reject_gaps():
 def test_reading_present_is_always_an_array_not_nullable():
     base = dict(
         beat_id='b1', located=False, start=None, end=None,
-        time_layer='present', place=None, event='空院里没有别人。', hinges=[],
+        time_layer='present', place=None, fact_atoms=[], hinges=[],
     )
-    assert ReadingBeatLine(**base, present=[]).present == []
+    assert ReadingBeatLine(**base, present_char_ids=[]).present_char_ids == []
     with pytest.raises(ValidationError):
-        ReadingBeatLine(**base, present=None)
+        ReadingBeatLine(**base, present_char_ids=None)
 
 
 def test_anchor_coverage_warning_is_a_server_decision():

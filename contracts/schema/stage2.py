@@ -32,12 +32,11 @@ from typing import Annotated, Literal
 from pydantic import Field, StringConstraints, model_validator
 
 from contracts.invariants import (
-    ADDRESS_BY, ADDRESS_CONTEXT, BLUEPRINT_ARCHITECTURES, CACHE_POLICY,
+    ADDRESS_BY, ADDRESS_CONTEXT, BLUEPRINT_ARCHITECTURES,
     FACT_ATOM_KINDS, FACT_ATOM_OBLIGATIONS, HINGE_KINDS,
-    KNOWLEDGE_SUBJECT_KINDS, RELATION_VISIBILITY_KINDS,
-    REVEAL_EVENT_KINDS, SECRET_SETUP_KINDS,
+    KNOWLEDGE_SUBJECT_KINDS, RELATION_VISIBILITY_KINDS, SECRET_SETUP_KINDS,
     NAME_DISTINCTIVENESS, NARRATIVE_PERSON, RESPONSE_TIME_LAYERS,
-    SPAN_RECOVERY, TIME_LAYERS, WORLD_RULE_KINDS,
+    TIME_LAYERS, WORLD_RULE_KINDS,
 )
 from contracts.schema.base import Fp10, StrictModel
 from contracts.schema.common import LlmProvenance
@@ -53,13 +52,11 @@ assert set(ADDRESS_BY) == {'char_id', 'narration', 'public'}, \
 
 
 class SourceSpan(StrictModel):
-    """正式制品里的原文引用；模型 locator 只存在于响应归一边界。"""
+    """正式制品里的原文引用；只保存当前可验证的原文字节与坐标。"""
 
     text: str = Field(min_length=1)
     start: int = Field(ge=0)
     end: int = Field(gt=0)
-    normalized: str = Field(min_length=1)
-    recovery: Literal[SPAN_RECOVERY]
 
     @model_validator(mode='after')
     def _end_is_after_start(self) -> SourceSpan:
@@ -145,7 +142,7 @@ class Address(StrictModel):
 
     #: 长度 1~10。**[HARD] 整条不许是代词**（`R-2.3`）：代词相对说话人，
     #: 收了它下游必然取到「我妈」这种说法。**[INFO] 必须在原文里原样搜得到**（`R-2.2`）。
-    #: ⚠ 落盘前会被**最长子串回取**改写，改写清单记进 `_provenance.address_surface_rewrites`。
+    #: ⚠ 落盘前会被**最长子串回取**改写；成功改写不重复持久化展示账。
     surface: str = Field(min_length=1)
 
     #: **闭合**。盘上 `narration` 86 · `char_id` 52 · `public` 18。
@@ -164,7 +161,7 @@ class Address(StrictModel):
     context: Literal[ADDRESS_CONTEXT]
 
     #: ≥1 且在全书章范围内。**[HARD] 不早于该 `surface` 在原文里首次出现的章**——
-    #: **单边**（`R-2.5`）。⚠ 落盘前会被**只往后抬**，记进 `_provenance.address_from_chapter_raised`。
+    #: **单边**（`R-2.5`）。⚠ 落盘前会被**只往后抬**。
     from_chapter: ChapterOrdinal
 
 
@@ -224,7 +221,8 @@ class Relation(StrictModel):
     #: ⚠⚠ **它是【世内生效时点】，不是【读者知情时点】。** 秘密类关系上两者系统性错位，
     #: 于是 relations 是 secrets 之外的**第二条剧透通道**。
     #: **不加字段**（同一语义两个落点必然漂移），在**下发侧**解决：两端人名都在某条
-    #: secret 的 `fact` 里、且 `valid_from` 落在隐瞒窗口内的关系，改按 `reader_reveal_events` 闸门。
+    #: secret 的 `fact` 里、且 `valid_from` 落在隐瞒窗口内的关系，改按
+    #: `first_reveal_chapter` 闸门。
     #: ⚠ 那条闸门的前件是 `setup_chapters`（冷揭示的 secret 没有隐瞒窗口，不参与）。
     #: ⚠⚠ **旧注释写的「盘上 20/21 是空数组 ⇒ 等于没开」是已删语料时代的读数，已作废**
     #: （2026-08-21 复核）。当前盘上是 **6/22 冷揭示**，且**逐模型分布很不一样**：
@@ -310,21 +308,6 @@ class WorldRule(StrictModel):
         return self
 
 
-class ReaderRevealEvent(StrictModel):
-    """读者第几章被揭示——**逐章剧透闸门的依据**（`secrets` 与 `relations` 两条通道都按它闸）。"""
-
-    chapter: ChapterOrdinal
-
-    #: `first` = 这条秘密**第一次**对读者点破；`confirm` = 后续复述 / 加深 / 再确认。
-    #:
-    #: ⚠⚠ **它不是装饰，是下发闸门的判据**（2026-08-23 v2 加）。此前
-    #: `stage4.context` 判「读者到本章知道了没」用的是 `any(chapter <= o)`
-    #: ——**任意**一次揭示落在本章之前就整份下发 `fact`。一条秘密分两次揭示时，
-    #: 写第一次那一章的写手会连第二次才点破的那半段一起读到。
-    #: ⇒ 闸门只认 `first`，`confirm` 不参与「读者知道了没」的判定。
-    kind: Literal[REVEAL_EVENT_KINDS] = 'first'
-
-
 class SecretSetupCold(StrictModel):
     """冷揭示：这条秘密**没有埋点**，读者在揭示那一章才第一次接触到它。"""
 
@@ -361,10 +344,8 @@ SecretSetup = Annotated[
 class Secret(StrictModel):
     """一条秘密。**一条只承载一个原子事实。**
 
-    ⚠ 「原子」这件事 schema 只能保证一半：`_exactly_one_first_reveal` 逼着
-    每条恰有一个 `first`，于是「一个复合事实分两次点破」在载体上就写不出来了
-    （只能拆成两条、用 `group_id` 归组）。另一半——「这一条的 `fact` 里会不会
-    还是塞了两件事」——是判据与人工复核的事，载体查不了。
+    首次揭示时点是单值，因此一条秘密不能借事件数组混装多个揭示阶段；`fact`
+    是否仍塞了多个原子事实由人工复核判断。
     """
 
     secret_id: str = Field(pattern=r'^secret_\d{2}$')
@@ -373,11 +354,6 @@ class Secret(StrictModel):
     fact: str = Field(min_length=1)
     fact_evidence: FactEvidence
 
-    #: 同一个复合真相被拆成多条时的归组键；独立的秘密填 `null`。
-    #: ⚠ **它只用来归组，不参与任何闸门**：下发按每条自己的 `first` 章判，
-    #: 否则整组会被最早那一条拉平——那正是拆分要修的东西。
-    group_id: str | None = Field(default=None, pattern=r'^sgrp_\d{2}$')
-
     #: 世界内知情人时间线。具名人物是 registry 外键；无名群体保留自由文本 label。
     #: 旧 `character_known_by` 没有时间维，不能回答“第几章起知道”，已随 v3 退役。
     knowledge_events: list[KnowledgeEvent] = Field(min_length=1)
@@ -385,35 +361,12 @@ class Secret(StrictModel):
     #: 埋点。取值面与「为什么是判别联合」见 `SecretSetup`。
     setup: SecretSetup
 
-    #: 分几次揭示记几条；**恰有一条 `kind='first'`**。
-    reader_reveal_events: list[ReaderRevealEvent] = Field(min_length=1)
+    #: 这条原子秘密第一次对读者点破的阅读序章号；逐章剧透闸门只消费这一格。
+    first_reveal_chapter: ChapterOrdinal
 
     @model_validator(mode='after')
-    def _exactly_one_first_reveal(self) -> Secret:
-        """恰一个首次揭示，且没有事件早于它。
-
-        ⚠ 这两条**必须在载体上**：`stage4.context` 的下发闸门直接按 `first` 那一章
-        算，拿到零个或两个 `first` 时它没有可退的默认值——而「没有可退的默认值」
-        正是应该在载体上拒收的形状。两条都不被落盘前的归一改写 ⇒ 断言它们的值
-        不是一条永远为真的判定。
-
-        ⚠⚠ **「埋点章严格早于首次揭示章」故意不放在这里**（`R-2.9`）。那一条被
-        `_prune_setups` 在落盘前改写过，在载体上断言它就永远为真；更要紧的是，
-        改成载体拒收会把现有的恢复路（裁剪 + 记账 + 判据报告）换成硬拒收，
-        而那是一道**没有同批 0 成本恢复路**的新闸门。它仍由
-        `secret_setup_order` 断言 `_provenance.setup_chapters_pruned` 那个计数。
-        """
-        firsts = [event for event in self.reader_reveal_events if event.kind == 'first']
-        if len(firsts) != 1:
-            raise ValueError(
-                f'{self.secret_id}: 恰需一条 kind="first" 的揭示事件，实得 {len(firsts)}'
-                '——复合真相请拆成多条 secret 并用 group_id 归组')
-        first = firsts[0].chapter
-        late = [event.chapter for event in self.reader_reveal_events
-                if event.chapter < first]
-        if late:
-            raise ValueError(
-                f'{self.secret_id}: 揭示事件 {late} 早于首次揭示章 {first}')
+    def _knowledge_subjects_are_unique(self) -> Secret:
+        """同一个世界内主体只保留最早知情时点。"""
         subjects = [
             (event.subject.kind,
              getattr(event.subject, 'char_id', None),
@@ -423,19 +376,6 @@ class Secret(StrictModel):
         if len(subjects) != len(set(subjects)):
             raise ValueError(f'{self.secret_id}: duplicate knowledge subject')
         return self
-
-    @property
-    def first_reveal(self) -> int:
-        """首次对读者揭示的章。**model 侧的唯一落点。**
-
-        ⚠ dict 侧另有一个（`novel.core.facts.first_reveal_chapter`），两份是刻意的：
-        归一跑在载体校验**之前**，那边读到的可能还没有 `kind`、可能一条 `first`
-        都没有，必须容错并能回答「不知道」；这边有 `_exactly_one_first_reveal`
-        兜着，取值恒存在。合成一个函数就得让 model 侧也接受「不知道」，
-        而那正是它不该有的返回值。
-        """
-        return next(event.chapter for event in self.reader_reveal_events
-                    if event.kind == 'first')
 
 
 class ConflictStage(StrictModel):
@@ -461,20 +401,7 @@ class ArcTrack(StrictModel):
     #: 直接进了写作 prompt。**有确定性消费方 ≠ 那条链路接通了。**
     subject: str = Field(min_length=1)
 
-    #: **自由短词**（处境／权力／立场／认知／关系亲疏…）。盘上 11 个互不相同。
-    dimension: str = Field(min_length=1)
-
-    #: ⚠⚠ **开放枚举，故意不做成 `Literal`。**
-    #: `stage2.md` §1.6 写的是 `stable｜development｜revelation｜deterioration｜reversal｜…`
-    #: ——**末尾那个 `…` 是语义的一部分**。把它闭合会在下一本书上拒收一份合法产物。
-    #: ⚠ 与 `WORLD_RULE_KINDS`（闭合 7 值）恰好相反，两者不许互相类比。
-    #: **无守卫 → `B-08`**；盘上只见 3 个。
-    change_type: str = Field(min_length=1)
-
     #: 长度 16~38。要说清**从什么变到什么**，不能只写「有成长」。**无守卫 → `B-08`**。
-    #: ⚠ `dimension` / `change_type` **只在与它捆在一起时才携带信息**——
-    #: 剥掉 `trajectory` 之后剩下的 `{char_001, 道德底线, deterioration}` 对写手是零信息。
-    #: **别把它们当成三个独立的信号。**
     trajectory: str = Field(min_length=1)
     trajectory_evidence: FactEvidence
 
@@ -533,40 +460,13 @@ class Entities(StrictModel):
 
 
 class GlobalProvenance(LlmProvenance):
-    """`global_grounding._provenance` —— 全局确定性归一记账键。
-
-    ⚠ **记账不是终点，报出来才是**（`Q-1`）：这五个键各有**指定出口**
-    （断言计数 / 逐条列出），细则见 `stage2.md` §3.3。三条形式要求：
-    **空也要报**（报成 `0 处`）· 一行常驻非空才展开 · 出口在校验报告不在 stdout。
-
-    ⚠ **已裁撤**：`changed`。它是一个**进程内**的开关（「什么都没改时不落盘」），
-    确定性重归一那条路径 `pop` 掉它、正常产出那条路径忘了 pop，于是它落了盘——
-    盘上 3/3 恒 `True`，**没有任何人读它**。进程内那个开关照旧。
-    """
-
-    #: `by` 兜底成 `public` 的次数。**校验器断言这个计数**——
-    #: 兜底跑在落盘前，再断言字段值就是一条永远为真的判定。
-    address_by_fallback: int = Field(ge=0)
-
-    #: `(char_id, 原值, 回取值)`。盘上 0 / 2 / 8 条。出口：**逐条列出给人扫**。
-    address_surface_rewrites: list[tuple[str, str, str]]
-
-    #: `(char_id, surface, 原章, 抬到的章)`。盘上共 7 条。出口：**逐条列出**。
-    address_from_chapter_raised: list[tuple[str, str, int, int]]
-
-    #: `(char_id, 原值, 剥完的值)`。**盘上 3/3 本为空**。
-    #: ⚠ 正因为恒空，它是「**空也要报**」那条形式要求的教科书：如果空就不打印，
-    #: 这个键从落地到今天**一次都不会出现在任何报告里**，与不存在毫无区别。
-    canonical_distinguishers_stripped: list[tuple[str, str, str]]
+    """`global_grounding._provenance` —— 只保留会驱动闸门或恢复的归一账。"""
 
     #: `(secret_id, 原埋点章, 裁完的)`。**校验器断言的是它，不是字段值。**
     #: 空列表 = 这一趟没裁过；**键不在 = 「不知道」，不发绿灯**。
     #: ⚠ 裁完为 `[]` 的那一条在产物里**降级成 `{"kind": "cold"}`**，与真·冷揭示同形
     #: ——v2 的判别联合消除的是「模型意图」那层歧义，这一层仍然只有这个账说得清。
     setup_chapters_pruned: list[tuple[str, list[int], list[int]]]
-
-    #: `(claim_path, locator, 回取的原文字节)`；只有 normalized 恢复才入账。
-    evidence_locator_rewrites: list[tuple[str, str, str]]
 
     #: `(claim_path, chapter, locator, reason)`；非空时正式证据为 `source=None`，
     #: 由 `global_evidence_unlocated` HARD 拦到可恢复的 `.INVALID`。
@@ -676,19 +576,12 @@ class SecretResponse(StrictModel):
     secret_id: str = Field(pattern=r'^secret_\d{2}$')
     fact: str = Field(min_length=1)
     fact_evidence: EvidenceLocator
-    group_id: str | None = Field(default=None, pattern=r'^sgrp_\d{2}$')
     knowledge_events: list[KnowledgeEventResponse] = Field(min_length=1)
     setup: SecretSetup
-    reader_reveal_events: list[ReaderRevealEvent] = Field(min_length=1)
+    first_reveal_chapter: ChapterOrdinal
 
     @model_validator(mode='after')
-    def _exactly_one_first_reveal(self) -> SecretResponse:
-        firsts = [event for event in self.reader_reveal_events if event.kind == 'first']
-        if len(firsts) != 1:
-            raise ValueError(f'{self.secret_id}: 恰需一条 kind="first" 的揭示事件')
-        first = firsts[0].chapter
-        if any(event.chapter < first for event in self.reader_reveal_events):
-            raise ValueError(f'{self.secret_id}: 有揭示事件早于首次揭示章')
+    def _knowledge_subjects_are_unique(self) -> SecretResponse:
         subjects = [
             (event.subject.kind,
              getattr(event.subject, 'char_id', None),
@@ -718,8 +611,6 @@ class CanonResponse(StrictModel):
 
 class ArcTrackResponse(StrictModel):
     subject: str = Field(min_length=1)
-    dimension: str = Field(min_length=1)
-    change_type: str = Field(min_length=1)
     trajectory: str = Field(min_length=1)
     trajectory_evidence: EvidenceLocator
 
@@ -768,34 +659,23 @@ class SecretPatch(StrictModel):
     secret_id: str = Field(pattern=r'^secret_\d{2}$')
     fact: str | None = Field(default=None, min_length=1)
     fact_evidence: EvidenceLocator | None = None
-    group_id: str | None = Field(default=None, pattern=r'^sgrp_\d{2}$')
     knowledge_events: list[KnowledgeEventResponse] | None = Field(
         default=None, min_length=1)
     setup: SecretSetup | None = None
-    reader_reveal_events: list[ReaderRevealEvent] | None = Field(default=None, min_length=1)
+    first_reveal_chapter: ChapterOrdinal | None = None
 
     @model_validator(mode='after')
     def _valid_patch(self) -> SecretPatch:
         changed = self.model_fields_set - {'secret_id'}
         if not changed:
             raise ValueError(f'{self.secret_id}: empty secret patch')
-        for field in ('fact', 'knowledge_events', 'setup', 'reader_reveal_events'):
+        for field in ('fact', 'knowledge_events', 'setup', 'first_reveal_chapter'):
             if field in changed and getattr(self, field) is None:
                 raise ValueError(f'{self.secret_id}: {field} 不能显式置空')
         if 'fact' in changed and 'fact_evidence' not in changed:
             raise ValueError(f'{self.secret_id}: 修改 fact 必须同交 fact_evidence locator')
         if 'fact_evidence' in changed and self.fact_evidence is None:
             raise ValueError(f'{self.secret_id}: fact_evidence 不能显式置空')
-        if self.reader_reveal_events is not None:
-            firsts = [event for event in self.reader_reveal_events
-                      if event.kind == 'first']
-            if len(firsts) != 1:
-                raise ValueError(
-                    f'{self.secret_id}: 恰需一条 kind="first" 的揭示事件，'
-                    f'实得 {len(firsts)}')
-            first = firsts[0].chapter
-            if any(event.chapter < first for event in self.reader_reveal_events):
-                raise ValueError(f'{self.secret_id}: 有揭示事件早于首次揭示章')
         if self.knowledge_events is not None:
             subjects = [
                 (event.subject.kind,
@@ -861,9 +741,6 @@ class GlobalCharacterPatch(StrictModel):
         return self
 
 
-CharacterEnumPatch = GlobalCharacterPatch
-
-
 class RelationPatch(StrictModel):
     relation_id: str = Field(pattern=r'^rel_\d{2}$')
     subject_id: str | None = Field(default=None, min_length=1)
@@ -917,8 +794,6 @@ class SettingPatch(StrictModel):
 class ArcTrackPatch(StrictModel):
     track_index: int = Field(ge=0)
     subject: str | None = Field(default=None, min_length=1)
-    dimension: str | None = Field(default=None, min_length=1)
-    change_type: str | None = Field(default=None, min_length=1)
     trajectory: str | None = Field(default=None, min_length=1)
     trajectory_evidence: EvidenceLocator | None = None
 
@@ -927,7 +802,7 @@ class ArcTrackPatch(StrictModel):
         changed = self.model_fields_set - {'track_index'}
         if not changed:
             raise ValueError(f'arc track {self.track_index}: empty patch')
-        for field in ('subject', 'dimension', 'change_type', 'trajectory'):
+        for field in ('subject', 'trajectory'):
             if field in changed and getattr(self, field) is None:
                 raise ValueError(f'arc track {self.track_index}: {field} 不能显式置空')
         if 'trajectory' in changed and 'trajectory_evidence' not in changed:
@@ -1026,7 +901,6 @@ class Hinge(StrictModel):
 
     hinge_id: str = Field(pattern=HINGE_ID_PATTERN)
     kind: Literal[HINGE_KINDS]
-    source_beat_ref: str = Field(pattern=r'^b\d{2}_\d{2}$')
     source: SourceSpan | None
 
 
@@ -1041,7 +915,6 @@ class Beat(StrictModel):
     span: SourceSpan | None
     time_layer: Literal[TIME_LAYERS]
     place: str | None
-    present_names: list[str]
     present_char_ids: list[str]
     hinges: list[Hinge]
 
@@ -1088,12 +961,7 @@ class Narration(StrictModel):
     #: 视点贴近程度与语法人称仍可能被混淆，这个已知能力缺口归 `B-09`。
     grammatical_person: Literal[NARRATIVE_PERSON]
 
-    #: **模型写的决策**，与 `present_names` 同一条规矩（用原文里的叫法，叫不出填 `null`）。
-    #: 盘上各 4/31 为 `null`（键恒在）。
-    narrator_name: str | None
-    focalizer_name: str | None
-
-    #: **代码解析出来的。[HARD] 在 registry 或 `null`。**
+    #: 模型从本章可见人物闭集里选择；`null` 表示原文没有足够信息。
     narrator_char_id: str | None
     focalizer_char_id: str | None
 
@@ -1112,11 +980,6 @@ class Blueprint(StrictModel):
     #: 全链的章唯一键。**[HARD] 覆盖度 / 顺序 / 不得出现 `section_id`。**
     chapter_ordinal: int = Field(ge=1)
 
-    #: 长度 81~329。**[HARD] 存在且非空**（`R-3.13`）。
-    #: ⚠ **0 确定性消费方**，唯一消费方是计划节点的 prompt——而规划节点手里**有全书原文**，
-    #: 所以它是一层**摘要**而不是唯一的章级线索：留着是因为「帮它快速理解本章、无害」，
-    #: **不是因为不可替代**。
-    summary: str = Field(min_length=1)
     chapter_function: str = Field(min_length=1)
 
     #: 长度 5~16，盘上共 251 条。
@@ -1159,43 +1022,6 @@ class Blueprint(StrictModel):
         return self
 
 
-class AnchorLocatorResponse(StrictModel):
-    """模型只交**段号区间**；正式 source span 由代码按段落表回取并验证。
-
-    ⚠⚠ **这里曾是 `starts_with` / `ends_with` 两个逐字原文片段**（2026-08-19 改）。
-    换掉的理由不是形状不好看，是成本：那种形状要模型每章做约 38 次
-    「原样照抄、必须能在本章原文一字不差找到」的转写核对，而本节点的 reasoning
-    占它自己 completion 的 88.0%、占全书生成侧的 45.5%。段号是模型**读得出**、
-    不需要转写的东西 ⇒ 同一件事不再需要深想。
-    ⚠ 段号是**闭区间、1-based、逐章独立**，口径的唯一落点是
-    `novel/stages/stage2/paragraphs.py`——那里同时负责下发时的编号，两边不许各切一次。
-    """
-
-    start_para: int = Field(ge=1)
-    end_para: int = Field(ge=1)
-
-    @model_validator(mode='after')
-    def _end_para_is_not_before_start(self) -> AnchorLocatorResponse:
-        if self.end_para < self.start_para:
-            raise ValueError('end_para must not be before start_para')
-        return self
-
-
-class HingeResponse(StrictModel):
-    """一条保真材料的定位：**哪一段 + 段内的哪几个字**。
-
-    ⚠ **不做成纯段号**：hinge 指的是「一句要害台词 / 一个硬数字」，而本仓语料均段
-    只有约 21 字——退成整段会把「我今年九岁」这种两三个字的硬数字连着整段吞下去，
-    下游 `stage5` 的 `must_appear` 材料跟着变粗。
-    ⚠ **也不做成段区间**：短语只需在**那一段之内**可定位，搜索面就从整章缩到约 21 字，
-    转写核对的成本基本归零，而精度一点没丢。
-    """
-
-    kind: Literal[HINGE_KINDS]
-    para: int = Field(ge=1)
-    phrase: str = Field(min_length=1)
-
-
 class FactAtomResponse(StrictModel):
     """模型交局部引用与证据短语；正式 fact_id/source 由编译器产生。"""
 
@@ -1210,57 +1036,6 @@ class FactAtomResponse(StrictModel):
 class CausalEdgeResponse(StrictModel):
     before: str = Field(pattern=ATOM_KEY_PATTERN)
     after: str = Field(pattern=ATOM_KEY_PATTERN)
-
-
-class BeatResponse(StrictModel):
-    """模型的拍；beat_id 会归一，char_id 不允许模型猜。"""
-
-    beat_id: str = Field(min_length=1)
-    span: AnchorLocatorResponse
-    time_layer: Literal[TIME_LAYERS]
-    place: str | None
-    present_names: list[str]
-    fact_atoms: list[FactAtomResponse] = Field(min_length=1)
-    hinges: list[HingeResponse]
-
-
-class NarrationResponse(StrictModel):
-    grammatical_person: Literal[NARRATIVE_PERSON]
-    narrator_name: str | None
-    focalizer_name: str | None
-    pronoun_surfaces: list[str]
-
-
-class BlueprintResponse(StrictModel):
-    chapter_ordinal: int = Field(ge=1)
-    chapter_function: str = Field(min_length=1)
-    summary: str = Field(min_length=1)
-    beats: list[BeatResponse] = Field(min_length=1)
-    causal_edges: list[CausalEdgeResponse]
-    entry_state_refs: list[str]
-    ending_state_refs: list[str]
-    narration: list[NarrationResponse] = Field(min_length=1)
-
-
-class ChapterBlueprintsResponse(StrictModel):
-    """一次调用原则上只产一章；越界章仍需先接住并记账。"""
-
-    blueprints: list[BlueprintResponse] = Field(min_length=1)
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# 二·b、`extraction-ir-v1` 的响应契约（`Stage2_improvement.md` 改造）
-#
-# 与 v3 的差别只有四族，全部朝同一个方向：**模型只做不可避免的局部语义判断，
-# 定位/编号/一致性归代码**（compiler：`novel/stages/stage2/compile_v2.py`）。
-#   ① beat 只交 `end_para`（起点=上一拍止段+1，首拍起 1，末拍必须到底）
-#      ⇒ 重叠/倒序/漏头尾在结构上不可产生；
-#   ② hinge 去掉 `para`（交接实测 10 个 verbatim_failed 里 9 个短语对、段号错），
-#      改在**所属拍区间内**唯一匹配，多处命中走候选选择修复；
-#   ③ place 从自由文本改成判别三态（`P_EXPLICIT`/`P_INHERIT`/`P_UNKNOWN`）；
-#   ④ summary 不再由抽取响应携带（由代码从 fact atoms 确定性投影）。
-# 产物模型一个不动——这里只是响应边界，编译后仍落现有 `ChapterBlueprints`。
-# ─────────────────────────────────────────────────────────────────────────────
 
 
 class HingeResponseV2(StrictModel):
@@ -1316,6 +1091,15 @@ class BeatResponseV2Refs(StrictModel):
     hinges: list[HingeResponseV2]
 
 
+class NarrationResponseRefs(StrictModel):
+    """叙述身份从本章可见人物闭集选择。"""
+
+    grammatical_person: Literal[NARRATIVE_PERSON]
+    narrator_char_id: str | None
+    focalizer_char_id: str | None
+    pronoun_surfaces: list[str]
+
+
 class BlueprintResponseV2Refs(StrictModel):
     chapter_ordinal: int = Field(ge=1)
     chapter_function: str = Field(min_length=1)
@@ -1323,7 +1107,7 @@ class BlueprintResponseV2Refs(StrictModel):
     causal_edges: list[CausalEdgeResponse]
     entry_state_refs: list[str]
     ending_state_refs: list[str]
-    narration: list[NarrationResponse] = Field(min_length=1)
+    narration: list[NarrationResponseRefs] = Field(min_length=1)
 
 
 class ChapterBlueprintsResponseV2Refs(StrictModel):
@@ -1331,13 +1115,12 @@ class ChapterBlueprintsResponseV2Refs(StrictModel):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 二·d、`extraction-ir-v3 / v3.1` 的单调用召回脚手架
+# 二·d、`extraction-ir-v3.1` 的单调用召回脚手架
 #
-# v2 的边界相与细节相都要求模型重新读同一章、重新建立一遍任务状态。v3 把两相合回
+# v2 的边界相与细节相都要求模型重新读同一章、重新建立一遍任务状态。v3.1 把两相合回
 # 一次响应，但**不撤召回脚手架**：模型先列细粒度 cue，再只从这些止段里选最终拍。
-# `micro_events` 在编译前即丢弃；正式产物仍只有 `beats[].event` 一份语义真相。
-# v3.1 再把叙述者收成关闭式人物引用，并允许 hinge 优先选择代码枚举的原文候选。
-# 两套都只是响应边界，最终仍编译成既有 `ChapterBlueprints`。
+# `micro_events` 在编译前即丢弃；叙述者走关闭式人物引用，hinge 优先选择代码
+# 枚举的原文候选。它只是响应边界，最终仍编译成 `ChapterBlueprints`。
 # ─────────────────────────────────────────────────────────────────────────────
 
 
@@ -1346,17 +1129,6 @@ class MicroEventResponse(StrictModel):
 
     end_para: int = Field(ge=1)
     cue: str = Field(min_length=1)
-
-
-class ScaffoldedBlueprintResponseV3(StrictModel):
-    chapter_ordinal: int = Field(ge=1)
-    micro_events: list[MicroEventResponse] = Field(min_length=1)
-    beats: list[BeatResponseV2Refs] = Field(min_length=1)
-    narration: list[NarrationResponse] = Field(min_length=1)
-
-
-class ChapterBlueprintsResponseV3(StrictModel):
-    blueprints: list[ScaffoldedBlueprintResponseV3] = Field(min_length=1)
 
 
 class HingeCandidateResponse(StrictModel):
@@ -1370,15 +1142,6 @@ class HingeCandidateResponse(StrictModel):
 # 增加模型输出。provider 不做 constrained decoding，本地 Pydantic 仍会关闭式拒收
 # “两键都给 / 两键都不给 / 多余键”。
 HingeResponseV31 = HingeCandidateResponse | HingeResponseV2
-
-
-class NarrationResponseRefs(StrictModel):
-    """叙述身份也走本章可见人物引用；名字由代码投影回正式产物。"""
-
-    grammatical_person: Literal[NARRATIVE_PERSON]
-    narrator_char_id: str | None
-    focalizer_char_id: str | None
-    pronoun_surfaces: list[str]
 
 
 class BeatResponseV31Refs(StrictModel):
@@ -1437,69 +1200,10 @@ class BlueprintContext(StrictModel):
     """
 
     architecture: Literal[BLUEPRINT_ARCHITECTURES]
-    batch_size: Literal[1]
     stable_prefix: Fp10
-    current_chapter_full: Literal[True]
-    future_visible: Literal[False]
     past_neighbor_chars_max: int = Field(ge=0)
     continuity_chars_max: int = Field(ge=0)
     past_names_chars_max: int = Field(ge=0)
-
-
-class CharRefs(StrictModel):
-    """称呼解析的八个计数。
-
-    **解析是可重跑的确定性步骤**，不记这几个数，「这份产物解析时有几条没解出来」
-    在下一次重算之后就**永远失去答案**。
-
-    ⚠ 五分的**处置完全不同，绝不合成一个「无据」**（分母 569 = 515 个 `present_names`
-    + 54 个非 `null` 的 narrator/focalizer 名）：
-    唯一命中 501 · 代词 15（5 成功 / 10 定不了）· 歧义 1 · 后见之明 0 · 漏收 52 · 自造 0。
-    ⚠ **歧义不判 HARD**：那是**原文自己的歧义**，重跑一百次也一样，
-    判 HARD 只会得到一盏永远红着的灯。三条候选消歧规则实测 **0/9 有效**，
-    所以**没有**消歧逻辑。
-    """
-
-    resolved: int = Field(ge=0)
-    pronoun_ok: int = Field(ge=0)
-    ambiguous: int = Field(ge=0)
-    late: int = Field(ge=0)
-    unknown: int = Field(ge=0)
-    invented: int = Field(ge=0)
-    no_names: int = Field(ge=0)
-    pronoun: int = Field(ge=0)
-
-
-class RepairMetrics(StrictModel):
-    """定向重生成前后的三个计数。"""
-
-    beats: int = Field(ge=0)
-    fact_atoms: int = Field(ge=0)
-    hinges: int = Field(ge=0)
-    present_names: int = Field(ge=0)
-
-
-class Repair(StrictModel):
-    """一次定向重生成。盘上 2/3 本、共 3 条。
-
-    ⚠ `cache_policy` 盘上恒 `refresh-write` —— **定向重生成必须配「不读缓存」**（`R-3.11`）：
-    它的 prompt 与整跑时该章那一批**逐字相同**，缓存必然命中，
-    于是**一个字都没重新生成而它照样打印「已重生成」**。
-    """
-
-    chapter_ordinal: int = Field(ge=1)
-    failure_items: list[str] = Field(min_length=1)
-    failure_evidence: Fp10
-    user_prompt: Fp10
-    output: Fp10
-    model: str = Field(min_length=1)
-    cache_policy: Literal[CACHE_POLICY]
-
-    #: 重生成了哪几个字段。盘上恒 `['*']`（整章重产）。
-    fields: list[str] = Field(min_length=1)
-
-    before_metrics: RepairMetrics
-    after_metrics: RepairMetrics
 
 
 class BlueprintProvenance(LlmProvenance):
@@ -1510,11 +1214,7 @@ class BlueprintProvenance(LlmProvenance):
     #: 产地无条件写这个键（没越界写空列表）。
     scope_violations: list[str]
 
-    #: 恒 `[[1],[2],…]`，记录每次逐章调用的范围。
-    batches: list[list[int]]
-
     context: BlueprintContext
-    char_refs: CharRefs
 
     # ── verbatim 回取的两笔独立账 ─────────────────────────────────────────────
     # 两个量纲的修复方式不同，因此分别记录，报告可准确指出需要处理的环节。
@@ -1525,13 +1225,6 @@ class BlueprintProvenance(LlmProvenance):
     # （`novel/core/spans.py` 模块头：救回来的「玉镯」是一个**语义已经变了**的片段）。
     # ⇒ 那个键在新架构下**结构性恒空**，留着就是一盏永远不亮的灯；
     # 它唯一的消费方 `anchor_not_verbatim` 同批裁撤。
-
-    #: `(beat_id, 位置, 原值, 回取值)`。**精确回取**：模型给的字节与原文有出入，
-    #: 按它指的位置换成原文的那一份。
-    #: ⚠ 新架构下只剩 `hinge.phrase` 一个来源——beat 的区间是段号算出来的，
-    #: 模型根本没写过那段字节，也就无从「改写」。
-    #: 出口：**逐条列出**（形态照 `address_surface_rewrites`）。
-    verbatim_rewrites: list[tuple[str, str, str, str]]
 
     #: `(beat_id, 位置, 根因)`。**锚不到。[HARD] 非空即失败态。**
     #:
@@ -1552,37 +1245,6 @@ class BlueprintProvenance(LlmProvenance):
     #: 不允许 Stage4 把无证据的模型转述当作章级真相继续编译。
     fact_atom_failures: list[tuple[str, str, str]]
 
-    #: 定向重生成过哪几章（累积）。
-    #: 出口：合并成一行「哪几章是定向重生成过的」。
-    partial_regen_chapters: list[int]
-
-    #: 定向重生成的历史。出口：上一行展开「各修了什么」。
-    repairs: list[Repair]
-
-    #: 链头 `P_INHERIT` 的拍（`extraction-ir-v1` 专属账）：模型说「延续上一拍地点」
-    #: 而链上没有可继承的基（首拍、或上一相邻拍不同 `time_layer`）⇒ 产物 `place=null`。
-    #: ⚠ **不许无声吞掉**：`place=null` 本身分不出「模型判无从知道」与「模型指错了继承」，
-    #: 这笔账是两者唯一的分界。出口：INFO 判据 `place_inherit_without_base` 逐条列出。
-    #: 默认空列表：`bounded-fidelity-v3` 的产地没有这个概念，旧字节缺键照常读入。
-    place_inherit_without_base: list[str] = Field(default_factory=list)
-
-    #: `(beat_id, name)`：模型写了地点，
-    #: 而那个说法在**截止本章的正文**里一个字节都找不到。
-    #: ⚠ **它是地点幻觉的配套探针，不是违约判定。** 该账最初为 v1.1
-    #: 实验建立；保留的 v2 / v3.1 同样产地点字面，因此读数仍属现役。
-    #: 给模型加压时它会找最省力的出路，而 place 是单字段、没有别的字段可牺牲，
-    #: **唯一的规避路径就是编一个地点**——这笔账就是那条路径上的探针：
-    #: 填充率涨了而这笔账同步涨，涨的是幻觉不是覆盖。
-    #: ⚠⚠ **匹配面是「截止本章正文」**：三个面在盘上（Pro×v3 无情道 132 个有地点的拍）
-    #: 实测为 本拍区间 **78%** / 本章全文 42% / 截止本章正文 **13%** 找不到
-    #: ——按本拍区间判等于让噪声淹死信号（地点常写在上文，那正是 `P_INHERIT` 的理由）。
-    #: 取与 `present_names_invented` 同源的面；「截止本章」而非「全书」是因为
-    #: 只在后文出现的说法本身就是后见之明。
-    #: ⚠⚠ **判 INFO 且不该升 HARD**：那 13% 逐条看全是**用原文成分组合**出来的
-    #: （「武场外」「黎玄的洞府」），一条凭空编的都没有 ⇒ 读法是**相对基线的变化**。
-    #: 出口：INFO 判据 `place_explicit_unlocatable` 逐条列出。
-    place_explicit_unlocatable: list[tuple[str, str]] = Field(default_factory=list)
-
     #: `(beat_id, kind, phrase)`（`extraction-ir-v1` 专属账）：短语在所属拍区间内
     #: **多处命中**、被打回失败态的那几条 hinge 的原始短语。
     #: ⚠ 失败态的 hinge 只剩 `{kind, source: null}`——**短语本身不在产物里**，
@@ -1590,16 +1252,6 @@ class BlueprintProvenance(LlmProvenance):
     #: 的输入正是这个短语。不落这笔账，字段级修复就只剩「回 LLM cache 捞原始响应」
     #: 一条路，而缓存是可驱逐的。候选**位置**不落盘：由短语+区间确定性重算，零成本。
     hinge_ambiguous_pending: list[tuple[str, str, str]] = Field(default_factory=list)
-
-    #: `(beat_id, 原止段, 新止段, 根因)`（`extraction-ir-v1` 专属账）：
-    #: 层0 确定性边界外扩改过哪几拍的止段。
-    #: ⚠⚠ **这是编译器改写了模型的分段主张**——盘上那份 `span` 不是模型给的那个数。
-    #: 不落这笔账，「模型切得准」与「模型差 1 段、代码补上了」在产物里长得一模一样，
-    #: 而 A/B 要回答的恰恰是前者。护栏与帽子见
-    #: `novel/stages/stage2/compile_v2.py::BOUNDARY_NUDGE_MAX_PARAS`。
-    #: 出口：断言计数 + 逐条列出（`novel/report/accounting.py`）。
-    boundary_nudges: list[tuple[str, int, int, str]] = Field(default_factory=list)
-
 
 class ChapterBlueprints(StrictModel):
     """`stage2/chapter_blueprints.json` —— 顶层 2 个键。

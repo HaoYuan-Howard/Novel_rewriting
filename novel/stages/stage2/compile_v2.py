@@ -1,12 +1,11 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-compile_v2.py —— `extraction-ir-v1` 的确定性编译器（`Stage2_improvement.md` 的本体）。
+compile_v2.py —— `extraction-ir-v2` / `extraction-ir-v3.1` 的确定性编译器。
 
 【它与 `normalize.py` 的关系】同一个职责（模型响应 → 正式产物形状）在两种响应契约上的
-两份实现，**出入口逐键同构**（产物形 blueprints + `char_refs` / `verbatim_rewrites` /
-`verbatim_failures` 账），复用同一批底座（段落表、`resolve_character_refs`、
-`normalize_beat_ids`、短语两段式定位）。不合并进 normalize.py：v3 与 ir1 要在 A/B 期间
+两份实现，**出入口逐键同构**（产物形 blueprints + 定位失败账），
+复用段落表、闭集 ID 校验、`normalize_beat_ids` 与短语定位。不合并进 normalize.py：两种响应拓扑
 **并存**，caller 按契约 dispatch（`novel/stages/stage2/contract.py`），
 合并成一个带分支的函数会让「改 ir1 顺手动了 v3」这类事故没有结构性防线。
 
@@ -17,11 +16,8 @@ compile_v2.py —— `extraction-ir-v1` 的确定性编译器（`Stage2_improvem
   ② hinge 只交 `kind + phrase`：在**所属拍区间内**定位（先原样字节、后内容空间，
      无 LCS——纪律与 `normalize._locate_phrase` 相同），**唯一命中才接受**；
      多处命中 → `hinge_ambiguous`（短语进 `hinge_ambiguous_pending` 账，供候选选择修复）。
-  ③ place 判别三态：`P_EXPLICIT` 取名、`P_UNKNOWN` 落 null、`P_INHERIT` 由代码继承
-     **上一相邻拍**（仅同 time_layer；链头落 null + `place_inherit_without_base` 账）。
-  ④ summary 不在响应里：由代码把本章 `fact_atoms[].claim` 按证据序投影成
-     人读索引。它不再调用第二个模型，也不构成第二份事实源；Stage4 的权威输入始终
-     是原子事实、因果边和章级状态引用。
+  ③ place 直接交字面或 `null`，不保存无消费方的中间模式。
+  ④ 在场人物和叙述身份只交关闭式 ID；事实只以 `fact_atoms` 落盘。
 
 ⚠ 失败一律走**稳定 finding 措辞**（`contracts/invariants.py::SPAN_FAILURE_CAUSES` /
 `HINGE_FAILURE_ROUTE`），不抛裸异常：数据的病归 `.INVALID` + 修复路由，
@@ -37,22 +33,12 @@ from novel.core.naming import strip_distinguisher
 from novel.core.spans import content_only, locate_unique_span
 from novel.core.text import norm
 from novel.stages.stage2.normalize import (
-    _source, normalize_beat_ids, resolve_character_refs,
+    _source, normalize_beat_ids,
 )
 from novel.stages.stage2.paragraphs import (
     ParagraphIndexError, paragraph_range_of, paragraph_spans, span_of,
 )
 from novel.stages.stage2.references import hinge_candidates_by_chapter
-
-
-def _derive_summary(claims: list[str]) -> str:
-    """把权威原子事实确定性投影为人读摘要，不再制造第二份事实源。
-
-    顺序沿用 atom 的证据序；任何消费者需要判断事实、因果或状态时，都必须读取
-    `fact_atoms` / `causal_edges` / 状态 refs，而不能反向解析这一格。
-    """
-    return '本章事实：' + '；'.join(claim.strip() for claim in claims
-                                   if claim.strip())
 
 
 #: 护栏式边界外扩的两个帽子（层0 确定性恢复，7A 实测立的）。
@@ -68,8 +54,8 @@ def _derive_summary(claims: list[str]) -> str:
 #:   ② 外扩后短语在新区间内**唯一**命中——修不好就不改，编译器不做无效改写；
 #:   ③ 不越过下一拍的止段（下一拍必须仍非空），且幅度 ≤ 帽子；
 #:   ④ 下一拍**自己**原本定得住的锚点，外扩后仍然定得住。
-#: 每一次外扩逐条落 `boundary_nudges` 账（前值/后值/根因）⇒ 它是**看得见的**改写，
-#: 不是静默兜底。超帽子的照旧判 HARD 走整章——那才是真的切错了。
+#: 外扩结果直接进入正式 span；成功恢复不参与闸门或后续恢复，因此不再重复落展示账。
+#: 超帽子的照旧判 HARD 走整章——那才是真的切错了。
 BOUNDARY_NUDGE_MAX_PARAS = 2
 TAIL_NUDGE_MAX_PARAS = 2
 
@@ -122,8 +108,7 @@ def _locatable(text: str, start_para: int, end_para: int,
 
 
 def _nudge_boundaries(beats: list[dict[str, Any]], ends: list[int], table: list,
-                      text: str,
-                      nudges: list[tuple[str, int, int, str]]) -> None:
+                      text: str) -> None:
     """护栏式边界外扩。只在 `ends` 全部合法时被调用（见 `_compile_beats`）。"""
     for i, beat in enumerate(beats):
         start_para = (ends[i - 1] + 1) if i else 1
@@ -144,58 +129,18 @@ def _nudge_boundaries(beats: list[dict[str, Any]], ends: list[int], table: list,
             after = _locatable(text, want + 1, ends[i + 1], phrases)
             if any(b and not a for b, a in zip(before, after)):
                 continue
-        nudges.append((str(beat.get('beat_id') or ''), ends[i], want,
-                       '止段没盖住本拍自己的 hinge'))
         ends[i] = want
 
     # 末拍到底：契约要求末拍必须到本章最后一段，模型少给几段是同一个病。
     if (beats and ends[-1] != len(table)
             and tail_end_is_recoverable(ends[-1], len(table))):
-        nudges.append((str(beats[-1].get('beat_id') or ''), ends[-1], len(table),
-                       '末拍没有到达本章最后一段'))
         ends[-1] = len(table)
 
 
-def _note_unlocatable_place(beat: dict[str, Any], name: str | None, upto: str,
-                            place_unlocatable: list[tuple[str, str]]) -> None:
-    """`P_EXPLICIT` 的地点名在**截止本章的正文**里一个字节都找不到时记一笔。
-
-    【这条读数要回答什么】给模型加压填地点时，它最省力的规避路径是
-    **编一个地点**。该账最初为 v1.1 实验建立，对保留的 v2 / v3.1 同样适用。
-    这一笔就是那条路径上的探针：填充率涨了，但如果它同步涨，涨的是幻觉不是覆盖。
-
-    ⚠⚠ **匹配面是「截止本章正文」，不是「本拍区间」。** 这不是随手选的——
-    三个面在盘上（Pro×v3 无情道，132 个有地点的拍）实测下来是：
-        本拍区间 **78%** 找不到 · 本章全文 42% · 截止本章正文 **13%**。
-    按本拍区间判，78% 的基线等于信号被噪声淹死：地点本来就常常写在上文
-    （那正是 `P_INHERIT` 存在的理由），「合欢宗」「擂台」「灵网」这类场景名
-    更是整章都不会在某一拍里再出现一次。⇒ 取与 `present_names_invented`
-    同源的面（那条判的是「称呼在原文里找得到」，盘上 `invented` 恒 0）。
-    用「截止本章」而不是「全书」还有一层语义：只在后文出现的说法本身就是后见之明。
-
-    ⚠⚠ **只记账，不判失败、不改产物。** 就算在这个面上，13% 那一档也**不是幻觉**：
-    盘上那 17 条逐条看全是**用原文成分组合**出来的（「武场外」「黎玄的洞府」
-    「前往秘境的路上」「合欢宗门口」），一条凭空编的都没有。
-    ⇒ 这条**判 INFO 且永远不该升 HARD**，它的读法是**相对基线的变化**，
-    不是「命中即违规」。基线记在 `docs/stage2_contract_experiment.md`。
-
-    ⚠ **多处命中算找得到**：`locate_unique_span` 返回 `int` 是「≥2 处」，
-    地点名重复出现完全正常——它不像 hinge 那样需要唯一定位。只有 `None` 才记。
-    """
-    if not name or not upto:
-        return
-    if locate_unique_span(upto, name) is None:
-        place_unlocatable.append((str(beat.get('beat_id') or ''), name))
-
-
-def _compile_beats(blueprint: dict[str, Any], text: str, upto: str,
-                   rewrites: list[tuple[str, str, str, str]],
+def _compile_beats(blueprint: dict[str, Any], text: str,
                    failures: list[tuple[str, str, str]],
-                   place_orphans: list[str],
-                   place_unlocatable: list[tuple[str, str]],
-                   ambiguous_pending: list[tuple[str, str, str]],
-                   nudges: list[tuple[str, int, int, str]]) -> None:
-    """单章：读止段 → 边界外扩 → span → time_layer → place 继承 → hinge 定位。原地改形。"""
+                   ambiguous_pending: list[tuple[str, str, str]]) -> None:
+    """单章：读止段 → 边界外扩 → span → time_layer → place → hinge 定位。原地改形。"""
     table = paragraph_spans(text)
     beats = list(blueprint.get('beats') or [])
 
@@ -230,7 +175,7 @@ def _compile_beats(blueprint: dict[str, Any], text: str, upto: str,
     # ⚠ 只在**整章止段序列全部合法**时做：已经有一拍的段号是坏的，这一章的分段
     #   主张就不成立了，在坏序列上推边界只会把错误摊得更均匀。
     if beats and table and all(end is not None for end in ends):
-        _nudge_boundaries(beats, ends, table, text, nudges)  # type: ignore[arg-type]
+        _nudge_boundaries(beats, ends, table, text)  # type: ignore[arg-type]
 
     # ── ③ 落 span ────────────────────────────────────────────────────────
     cursor = 0
@@ -243,7 +188,7 @@ def _compile_beats(blueprint: dict[str, Any], text: str, upto: str,
         except ParagraphIndexError as exc:      # 上面已逐项验过，这里只可能是代码病
             failures.append((str(beat.get('beat_id') or ''), 'span', str(exc)))
             continue
-        beat['span'] = _source(text, start, end, 'exact')
+        beat['span'] = _source(text, start, end)
         located.append((beat, start, end))
         cursor = end_para
     if beats and table and cursor and cursor != len(table):
@@ -260,26 +205,11 @@ def _compile_beats(blueprint: dict[str, Any], text: str, upto: str,
             beat['time_layer'] = RESPONSE_TIME_LAYERS[layer]
         # 已是产物值（重放输入、`--renormalize`）就原样过——schema 闸在两端各守各的。
 
-    # ── ③ place：判别三态 → str | None（继承由代码做）─────────────────────
-    prev: dict[str, Any] | None = None
+    # ── ③ place：现役响应只接受 str | None ───────────────────────────────
     for beat in beats:
-        ref = beat.get('place')
-        if isinstance(ref, dict):
-            mode = ref.get('mode')
-            if mode == 'P_EXPLICIT':
-                name = str(ref.get('name') or '') or None
-                beat['place'] = name
-                _note_unlocatable_place(beat, name, upto, place_unlocatable)
-            elif mode == 'P_INHERIT':
-                # 只继承**上一相邻拍**且同 time_layer；不跨层去找「最近同类」。
-                if prev is not None and prev.get('time_layer') == beat.get('time_layer'):
-                    beat['place'] = prev.get('place')
-                else:
-                    beat['place'] = None
-                    place_orphans.append(str(beat.get('beat_id') or ''))
-            else:                                # P_UNKNOWN
-                beat['place'] = None
-        prev = beat
+        raw_place = beat.get('place')
+        name = raw_place.strip() if isinstance(raw_place, str) else None
+        beat['place'] = name or None
 
     # ── ④ hinge：kind + phrase → 拍区间内唯一定位 ────────────────────────
     for beat, start, end in located:
@@ -295,13 +225,10 @@ def _compile_beats(blueprint: dict[str, Any], text: str, upto: str,
             phrase = str(hinge.get('phrase') or '')
             got = locate_unique_span(seg, phrase)
             if isinstance(got, tuple):
-                offset, tail, method = got
+                offset, tail, _method = got
                 h_start, h_end = start + offset, start + tail
-                raw_source = text[h_start:h_end]
-                if method != 'exact':
-                    rewrites.append((beat_id, 'hinge.phrase', phrase, raw_source))
                 fresh.append(
-                    {'kind': kind, 'source': _source(text, h_start, h_end, method)})
+                    {'kind': kind, 'source': _source(text, h_start, h_end)})
                 continue
             if isinstance(got, int):
                 failures.append((beat_id, 'hinge', '短语在本拍区间内多处命中'))
@@ -326,7 +253,6 @@ def _compile_beats(blueprint: dict[str, Any], text: str, upto: str,
 def _compile_semantic_contract(
     blueprint: dict[str, Any],
     text: str,
-    rewrites: list[tuple[str, str, str, str]],
     fact_failures: list[tuple[str, str, str]],
 ) -> None:
     """把拍内临时 atom_key 编译成章级稳定事实契约，并给 hinge 分配稳定 id。"""
@@ -355,13 +281,9 @@ def _compile_semantic_contract(
             if type(seg_start) is int and type(seg_end) is int:
                 got = locate_unique_span(text[seg_start:seg_end], phrase)
                 if isinstance(got, tuple):
-                    offset, tail, method = got
+                    offset, tail, _method = got
                     start, end = seg_start + offset, seg_start + tail
-                    raw_source = text[start:end]
-                    if method != 'exact':
-                        rewrites.append(
-                            (fact_id, 'fact_atom.evidence_phrase', phrase, raw_source))
-                    source = _source(text, start, end, method)
+                    source = _source(text, start, end)
                 elif isinstance(got, int):
                     fact_failures.append((fact_id, beat_id, '证据短语在所属拍内多处命中'))
                 elif content_only(phrase) and content_only(phrase) in content_only(text):
@@ -387,7 +309,6 @@ def _compile_semantic_contract(
             fresh_hinges.append({
                 'hinge_id': f'h{ordinal:02d}_{hinge_seq:03d}',
                 'kind': hinge.get('kind'),
-                'source_beat_ref': beat_id,
                 'source': hinge.get('source'),
             })
         beat['hinges'] = fresh_hinges
@@ -414,57 +335,30 @@ def compile_v2(data: dict[str, Any], main_text: list[dict[str, Any]],
         -> tuple[dict[str, Any], dict[str, Any]]:
     """把已收窄的逐章 IR 编译成正式产物形状；v2 / v3.1 编译器共用。
 
-    与 `normalize.normalize_blueprints` 出入口逐键同构；多出的三笔账
-    （`place_inherit_without_base` / `place_explicit_unlocatable` /
-    `hinge_ambiguous_pending`）是 ir1 系专属。
-    `summary` 只由本章 fact atom claims 确定性派生，不接收模型转述注入。
+    与 `normalize.normalize_blueprints` 共用正式产物口；只额外保留会驱动阻断或
+    字段级恢复的失败账。
     """
     blueprints = list(data.get('blueprints') or [])
     data['blueprints'] = blueprints
     normalize_beat_ids(blueprints)
-    char_refs = resolve_character_refs(blueprints, main_text, characters)
     text_of = {int(section.get('chapter_ordinal') or 0): str(section.get('text') or '')
                for section in main_text}
-    # 【截止本章正文】给 place 探针用。⚠ 从 **main_text**（全书）累积而不是从
-    # `blueprints` 累积：定向重生成只带几章进来，按 blueprints 累积会让前面的章
-    # 凭空消失，于是「原文里有没有这个说法」被算成「这一批里有没有」。
-    upto_of: dict[int, str] = {}
-    _acc: list[str] = []
-    for _o in sorted(text_of):
-        _acc.append(text_of[_o])
-        upto_of[_o] = ''.join(_acc)
-
-    rewrites: list[tuple[str, str, str, str]] = []
     failures: list[tuple[str, str, str]] = []
     fact_failures: list[tuple[str, str, str]] = []
-    place_orphans: list[str] = []
-    place_unlocatable: list[tuple[str, str]] = []
     ambiguous_pending: list[tuple[str, str, str]] = []
-    nudges: list[tuple[str, int, int, str]] = []
     for blueprint in blueprints:
         ordinal = int(blueprint.get('chapter_ordinal') or 0)
-        _compile_beats(blueprint, text_of.get(ordinal, ''), upto_of.get(ordinal, ''),
-                       rewrites, failures, place_orphans, place_unlocatable,
-                       ambiguous_pending, nudges)
+        _compile_beats(blueprint, text_of.get(ordinal, ''), failures,
+                       ambiguous_pending)
         _compile_semantic_contract(
-            blueprint, text_of.get(ordinal, ''), rewrites, fact_failures)
-        blueprint['summary'] = _derive_summary([
-            str(atom.get('claim') or '')
-            for atom in (blueprint.get('fact_atoms') or [])
-        ])
+            blueprint, text_of.get(ordinal, ''), fact_failures)
         if not str(blueprint.get('chapter_function') or '').strip():
-            # 仅服务旧问题稿重放/诊断；现役响应 schema 要求模型明确交这一格。
-            blueprint['chapter_function'] = str(blueprint.get('summary') or '').strip()
+            raise ValueError('chapter_function must not be empty')
 
     return data, {
-        'char_refs': char_refs,
-        'verbatim_rewrites': rewrites,
         'verbatim_failures': failures,
         'fact_atom_failures': fact_failures,
-        'place_inherit_without_base': place_orphans,
-        'place_explicit_unlocatable': place_unlocatable,
         'hinge_ambiguous_pending': ambiguous_pending,
-        'boundary_nudges': nudges,
     }
 
 
@@ -472,9 +366,8 @@ def canonical_ir_projection(blueprint: dict[str, Any],
                             chapter_text: str) -> dict[str, Any]:
     """正式蓝图 → 不含代码派生字段的 ir1 响应形状（修复基线 / 重放输入）。
 
-    ⚠⚠ **它不是逆函数**：`P_INHERIT` 编译后已坍缩成具体地点，投影只能给出
-    `P_EXPLICIT`（同名）或 `P_UNKNOWN`——所以它叫 canonical projection 不叫
-    inverse。round-trip 的正确断言方向是 `compile(project(artifact)) == artifact`
+    ⚠⚠ **它不是逆函数**。round-trip 的正确断言方向是
+    `compile(project(artifact)) == artifact`
     （对 compile_v2 自己产的 artifact 成立），不是 `project(compile(ir)) == ir`。
     ⚠ 与 `normalize.response_shape` 同一条纪律：定位反投影要章正文（段落表），
     失败的 hinge `phrase` 如实交 `None`，不兜底。
@@ -513,7 +406,6 @@ def canonical_ir_projection(blueprint: dict[str, Any],
                     chapter_text, span['start'], span['end'])[1]
             except ParagraphIndexError:
                 end_para = None
-        place = beat.get('place')
         hinges = []
         for hinge in (beat.get('hinges') or []):
             source = hinge.get('source')
@@ -526,9 +418,8 @@ def canonical_ir_projection(blueprint: dict[str, Any],
             'time_layer': next(
                 (k for k, v in RESPONSE_TIME_LAYERS.items()
                  if v == beat.get('time_layer')), beat.get('time_layer')),
-            'place': ({'mode': 'P_EXPLICIT', 'name': str(place)}
-                      if place else {'mode': 'P_UNKNOWN'}),
-            'present_names': list(beat.get('present_names') or []),
+            'place': beat.get('place'),
+            'present_char_ids': list(beat.get('present_char_ids') or []),
             'fact_atoms': atoms_by_beat.get(str(beat.get('beat_id') or ''), []),
             'hinges': hinges,
         })
@@ -544,8 +435,8 @@ def canonical_ir_projection(blueprint: dict[str, Any],
     for narration in (blueprint.get('narration') or []):
         out['narration'].append({
             'grammatical_person': narration.get('grammatical_person'),
-            'narrator_name': narration.get('narrator_name'),
-            'focalizer_name': narration.get('focalizer_name'),
+            'narrator_char_id': narration.get('narrator_char_id'),
+            'focalizer_char_id': narration.get('focalizer_char_id'),
             'pronoun_surfaces': list(narration.get('pronoun_surfaces') or []),
         })
     return out
@@ -648,48 +539,22 @@ def visible_character_refs_with_drops(
     return out, dropped
 
 
-def _surface_for_ref(surfaces: list[str], beat_text: str,
-                     chapter_text: str, upto_text: str) -> str:
-    """把权威 char_id 投影回产物的人读字面；优先取本拍里实际出现的叫法。"""
-    for hay in (beat_text, chapter_text, upto_text):
-        raw_hits = [(hay.find(surface), -len(surface), surface)
-                    for surface in surfaces if surface and surface in hay]
-        if raw_hits:
-            return min(raw_hits)[2]
-        body = norm(hay)
-        normalized = [(body.find(norm(surface)), -len(norm(surface)), surface)
-                      for surface in surfaces if norm(surface) in body]
-        if normalized:
-            return min(normalized)[2]
-    raise ValueError('可见人物引用没有可投影的已出现字面')
-
-
 def compile_v2_refs(data: dict[str, Any], main_text: list[dict[str, Any]],
                     characters: dict[str, dict[str, Any]]) \
         -> tuple[dict[str, Any], dict[str, Any]]:
-    """两段式 v2 响应 → 现役产物；char_id 是权威，在场字面仅作可读投影。"""
+    """两段式 v2 响应 → 现役产物；人物身份全程只保留关闭式 char_id。"""
     work = copy.deepcopy(data)
-    text_of = {int(s.get('chapter_ordinal') or 0): str(s.get('text') or '')
-               for s in main_text}
     visible = visible_character_refs(characters, main_text)
-    upto_of: dict[int, str] = {}
-    acc: list[str] = []
-    for ordinal in sorted(text_of):
-        acc.append(text_of[ordinal])
-        upto_of[ordinal] = ''.join(acc)
-
-    direct: dict[tuple[int, int], list[str]] = {}
     for blueprint in (work.get('blueprints') or []):
         ordinal = int(blueprint.get('chapter_ordinal') or 0)
-        chapter = text_of.get(ordinal, '')
-        cursor = 1
         allowed = visible.get(ordinal, {})
-        for index, beat in enumerate(blueprint.get('beats') or []):
+        for beat in (blueprint.get('beats') or []):
             ids = list(dict.fromkeys(str(cid) for cid in
-                                     (beat.pop('present_char_ids', None) or [])))
+                                     (beat.get('present_char_ids') or [])))
             invalid = [cid for cid in ids if cid not in allowed]
             if invalid:
                 raise ValueError(f'ch{ordinal} 在场者引用不在本章可见集合：{invalid}')
+            beat['present_char_ids'] = ids
             atom_ids = list(dict.fromkeys(
                 str(cid) for atom in (beat.get('fact_atoms') or [])
                 for cid in (atom.get('participant_char_ids') or [])))
@@ -697,46 +562,24 @@ def compile_v2_refs(data: dict[str, Any], main_text: list[dict[str, Any]],
             if invalid_atoms:
                 raise ValueError(
                     f'ch{ordinal} fact atom 参与者引用不在本章可见集合：{invalid_atoms}')
-            end_para = beat.get('end_para')
-            try:
-                seg = _seg_of(chapter, cursor, int(end_para))
-                cursor = int(end_para) + 1
-            except (ParagraphIndexError, TypeError, ValueError):
-                seg = ''
-            beat['present_names'] = [
-                _surface_for_ref(allowed[cid], seg, chapter, upto_of.get(ordinal, ''))
-                for cid in ids
+        for narration in (blueprint.get('narration') or []):
+            invalid = [
+                cid for cid in (
+                    narration.get('narrator_char_id'),
+                    narration.get('focalizer_char_id'),
+                ) if cid is not None and cid not in allowed
             ]
-            place = beat.get('place')
-            beat['place'] = ({'mode': 'P_EXPLICIT', 'name': place}
-                             if isinstance(place, str) and place.strip()
-                             else {'mode': 'P_UNKNOWN'})
-            direct[(ordinal, index)] = ids
+            if invalid:
+                raise ValueError(
+                    f'ch{ordinal} 叙述身份引用不在本章可见集合：{invalid}')
 
-    compiled, accounting = compile_v2(work, main_text, characters)
-    compiled_count = 0
-    direct_count = 0
-    for blueprint in (compiled.get('blueprints') or []):
-        ordinal = int(blueprint.get('chapter_ordinal') or 0)
-        for index, beat in enumerate(blueprint.get('beats') or []):
-            compiled_count += len(beat.get('present_char_ids') or [])
-            ids = direct.get((ordinal, index), [])
-            beat['present_char_ids'] = ids
-            direct_count += len(ids)
-    accounting['char_refs']['resolved'] += direct_count - compiled_count
-    return compiled, accounting
+    return compile_v2(work, main_text, characters)
 
 
 def canonical_ir_projection_refs(blueprint: dict[str, Any],
                                  chapter_text: str) -> dict[str, Any]:
     """正式蓝图 → 两段式 v2 的细节响应形状（定向修复基线）。"""
-    out = canonical_ir_projection(blueprint, chapter_text)
-    for source, projected in zip(blueprint.get('beats') or [], out['beats']):
-        place = source.get('place')
-        projected['place'] = str(place) if place else None
-        projected['present_char_ids'] = list(source.get('present_char_ids') or [])
-        projected.pop('present_names', None)
-    return out
+    return canonical_ir_projection(blueprint, chapter_text)
 
 
 def _without_scaffold(data: dict[str, Any]) -> dict[str, Any]:
@@ -745,15 +588,6 @@ def _without_scaffold(data: dict[str, Any]) -> dict[str, Any]:
     for blueprint in (work.get('blueprints') or []):
         blueprint.pop('micro_events', None)
     return work
-
-
-def compile_v3_scaffold(
-    data: dict[str, Any],
-    main_text: list[dict[str, Any]],
-    characters: dict[str, dict[str, Any]],
-) -> tuple[dict[str, Any], dict[str, Any]]:
-    """v3 单调用脚手架 → 既有蓝图；细节形状与 v2 第二相逐键同构。"""
-    return compile_v2_refs(_without_scaffold(data), main_text, characters)
 
 
 def canonical_ir_projection_v3(
@@ -778,26 +612,12 @@ def compile_v31_refs(
     """v3.1 关闭引用响应 → 既有蓝图。
 
     candidate_id 直接换成代码掌握的精确 SourceSpan；自由 phrase 仍走 v2 的唯一
-    定位兜底。叙述者 id 是权威，名字只是为既有产物的人读字段做确定性投影。
+    定位兜底。叙述身份与在场人物一样只保留关闭式 char_id。
     """
     work = _without_scaffold(data)
-    text_of = {
-        int(section.get('chapter_ordinal') or 0): str(section.get('text') or '')
-        for section in main_text
-    }
-    visible = visible_character_refs(characters, main_text)
     candidate_rows = hinge_candidates_by_chapter(main_text)
-    upto_of: dict[int, str] = {}
-    acc: list[str] = []
-    for ordinal in sorted(text_of):
-        acc.append(text_of[ordinal])
-        upto_of[ordinal] = ''.join(acc)
-
-    direct_narration: dict[tuple[int, int], tuple[str | None, str | None]] = {}
     for blueprint in (work.get('blueprints') or []):
         ordinal = int(blueprint.get('chapter_ordinal') or 0)
-        chapter = text_of.get(ordinal, '')
-        allowed = visible.get(ordinal, {})
         candidates = {
             str(row['candidate_id']): row
             for row in candidate_rows.get(ordinal, [])
@@ -831,50 +651,11 @@ def compile_v31_refs(
             beat['hinges'] = fresh_hinges
             cursor = end_para + 1
 
-        for index, narration in enumerate(blueprint.get('narration') or []):
-            narrator = narration.pop('narrator_char_id', None)
-            focalizer = narration.pop('focalizer_char_id', None)
-            invalid = [cid for cid in (narrator, focalizer)
-                       if cid is not None and cid not in allowed]
-            if invalid:
-                raise ValueError(
-                    f'ch{ordinal} 叙述身份引用不在本章可见集合：{invalid}')
-            narration['narrator_name'] = (
-                _surface_for_ref(allowed[narrator], chapter, chapter,
-                                 upto_of.get(ordinal, ''))
-                if narrator is not None else None)
-            narration['focalizer_name'] = (
-                _surface_for_ref(allowed[focalizer], chapter, chapter,
-                                 upto_of.get(ordinal, ''))
-                if focalizer is not None else None)
-            direct_narration[(ordinal, index)] = (narrator, focalizer)
-
-    compiled, accounting = compile_v2_refs(work, main_text, characters)
-    before = 0
-    direct = 0
-    for blueprint in (compiled.get('blueprints') or []):
-        ordinal = int(blueprint.get('chapter_ordinal') or 0)
-        for index, narration in enumerate(blueprint.get('narration') or []):
-            before += int(narration.get('narrator_char_id') is not None)
-            before += int(narration.get('focalizer_char_id') is not None)
-            narrator, focalizer = direct_narration[(ordinal, index)]
-            narration['narrator_char_id'] = narrator
-            narration['focalizer_char_id'] = focalizer
-            direct += int(narrator is not None) + int(focalizer is not None)
-    accounting['char_refs']['resolved'] += direct - before
-    return compiled, accounting
+    return compile_v2_refs(work, main_text, characters)
 
 
 def canonical_ir_projection_v31(
     blueprint: dict[str, Any], chapter_text: str,
 ) -> dict[str, Any]:
     """正式蓝图 → v3.1 修复基线；持久 source 以 phrase 兜底形状回放。"""
-    out = canonical_ir_projection_v3(blueprint, chapter_text)
-    for source, projected in zip(
-        blueprint.get('narration') or [], out.get('narration') or [],
-    ):
-        projected['narrator_char_id'] = source.get('narrator_char_id')
-        projected['focalizer_char_id'] = source.get('focalizer_char_id')
-        projected.pop('narrator_name', None)
-        projected.pop('focalizer_name', None)
-    return out
+    return canonical_ir_projection_v3(blueprint, chapter_text)

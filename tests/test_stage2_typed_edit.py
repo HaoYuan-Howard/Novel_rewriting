@@ -16,7 +16,6 @@ def _locator(chapter: int = 1, text: str = '证据原文') -> dict:
 def _formal_evidence(chapter: int = 1, text: str = '证据原文') -> dict:
     return {'chapter_ordinal': chapter, 'source': {
         'text': text, 'start': 0, 'end': len(text),
-        'normalized': text, 'recovery': 'exact',
     }}
 
 
@@ -55,7 +54,7 @@ def _grounding() -> dict:
                 'fact_evidence': _formal_evidence(),
                 'knowledge_events': _knowledge(response=False),
                 'setup': {'kind': 'cold'},
-                'reader_reveal_events': [{'chapter': 2}],
+                'first_reveal_chapter': 2,
             }],
             'world_rules': [{
                 'rule_id': 'wr_01', 'kind': 'social_norm',
@@ -169,13 +168,13 @@ def test_complete_replacements_can_split_secrets_replace_rules_and_rebuild_addre
             'secret_id': 'secret_01', 'fact': '第一段事实',
             'fact_evidence': _locator(),
             'knowledge_events': _knowledge(), 'setup': {'kind': 'cold'},
-            'reader_reveal_events': [{'chapter': 1}],
+            'first_reveal_chapter': 1,
         }, {
             'secret_id': 'secret_02', 'fact': '第二段事实',
             'fact_evidence': _locator(2),
             'knowledge_events': _knowledge(chapter=2, char_id=None, group='在场众人'),
             'setup': {'kind': 'foreshadowed', 'chapters': [1]},
-            'reader_reveal_events': [{'chapter': 2}],
+            'first_reveal_chapter': 2,
         }],
         'world_rules_replace': [{
             'rule_id': 'wr_02', 'kind': 'institution',
@@ -221,17 +220,17 @@ def test_an_explicit_empty_complete_set_deletes_the_subject(key, subject):
     assert data['canon'][subject] == []
 
 
-def test_old_global_edit_v1_is_closed_off_after_the_v2_shape_break():
+def test_old_global_edit_v1_is_closed_off_after_the_current_shape_break():
     legacy_payload = {'secrets': [{
         'secret_id': 'secret_01', 'fact': '旧 v1 决策仍然有效',
     }], 'characters': [{
         'char_id': 'char_001', 'name_distinctiveness': 'medium',
     }]}
     current = encode_artifact('stage2/global_edit.json', legacy_payload)
-    assert current['_schema_version'] == 2
+    assert current['_schema_version'] == 3
     legacy = {**current, '_schema_version': 1}
 
-    with pytest.raises(ArtifactVersionError, match=r'schema v1.*当前 v2'):
+    with pytest.raises(ArtifactVersionError, match=r'schema v1.*当前 v3'):
         decode_artifact('stage2/global_edit.json', legacy)
 
 
@@ -267,12 +266,12 @@ def test_complete_replacements_reject_an_order_dependent_patch_conflict(payload,
         'secret_id': 'secret_01', 'fact': 'A',
         'fact_evidence': _locator(), 'knowledge_events': _knowledge(),
         'setup': {'kind': 'cold'},
-        'reader_reveal_events': [{'chapter': 1}],
+        'first_reveal_chapter': 1,
     }, {
         'secret_id': 'secret_01', 'fact': 'B',
         'fact_evidence': _locator(2), 'knowledge_events': _knowledge(chapter=2),
         'setup': {'kind': 'cold'},
-        'reader_reveal_events': [{'chapter': 2}],
+        'first_reveal_chapter': 2,
     }], 'duplicate secret ids'),
     ('world_rules_replace', [{
         'rule_id': 'wr_01', 'kind': 'institution',
@@ -291,9 +290,8 @@ def test_complete_replacements_require_unique_stable_ids(key, rows, match):
 
 @pytest.mark.parametrize('payload,match', [
     ({'secrets': [{
-        'secret_id': 'secret_01',
-        'reader_reveal_events': [{'chapter': 1}, {'chapter': 2}],
-    }]}, '实得 2'),
+        'secret_id': 'secret_01', 'first_reveal_chapter': 0,
+    }]}, 'greater than or equal to 1'),
     ({'secrets': [{
         'secret_id': 'secret_01',
         'knowledge_events': _knowledge() + _knowledge(),
@@ -323,7 +321,7 @@ def test_partial_patches_preserve_their_complete_collection_invariants(payload, 
         'fact_evidence': _locator(),
         'knowledge_events': _knowledge(char_id='char_999'),
         'setup': {'kind': 'cold'},
-        'reader_reveal_events': [{'chapter': 1}],
+        'first_reveal_chapter': 1,
     }]}, 'char_id'),
     ({'addresses_replace': [{
         'char_id': 'char_001', 'address': [{
@@ -396,58 +394,31 @@ def test_fate_evidence_only_cannot_attach_to_an_empty_fate_or_mutate_the_caller(
     assert repr(data) == before
 
 
-# ── 载体：一条 secret 只承载一个原子事实（`R-2.18`）─────────────────────────
+# ── 载体：secret 只保留真正参与下发的首次揭示章 ──────────────────
 
-@pytest.mark.parametrize(('events', 'why'), [
-    ([{'chapter': 4, 'kind': 'first'}, {'chapter': 7, 'kind': 'first'}],
-     '恰需一条'),
-    ([{'chapter': 4, 'kind': 'confirm'}], '恰需一条'),
-    ([{'chapter': 7, 'kind': 'first'}, {'chapter': 4, 'kind': 'confirm'}],
-     '早于首次揭示章'),
-])
-def test_a_secret_cannot_carry_two_first_reveals(events, why):
-    """⭐ 复合真相在载体上**写不出来**——这才是那条泄底路径的修复。
-
-    v1 里「穿女装（ch4 点破）+ 为什么（ch7 点破）」只能塞进一条 `fact`，
-    而闸门按「任意一次揭示 ≤ 本章」判 ⇒ 写 ch4 的写手连成因一起拿到。
-    v2 逼着每条恰有一个「读者第一次吃惊」的时刻，那种写法从此拒收，
-    只能拆成两条、`group_id` 归组，各自按自己的 `first` 下发。
-
-    ⚠ 第三格测的是另一半：`confirm` 不许早于 `first`。没有它，
-    「把最早那次标成 confirm」就成了一个绕过闸门的写法——
-    闸门只认 `first`，而 `first` 被标到了后面。
-    """
-    from pydantic import ValidationError
-
+def test_secret_accepts_one_scalar_first_reveal_chapter():
     from contracts.schema.stage2 import Secret
 
-    with pytest.raises(ValidationError, match=why):
-        Secret.model_validate({
-            'secret_id': 'secret_01', 'fact': '一条复合真相', 'group_id': None,
-            'fact_evidence': _formal_evidence(),
-            'knowledge_events': _knowledge(response=False), 'setup': {'kind': 'cold'},
-            'reader_reveal_events': events,
-        })
+    secret = Secret.model_validate({
+        'secret_id': 'secret_01', 'fact': '他私下穿女装',
+        'fact_evidence': _formal_evidence(),
+        'knowledge_events': _knowledge(response=False),
+        'setup': {'kind': 'foreshadowed', 'chapters': [2]},
+        'first_reveal_chapter': 4,
+    })
+    assert secret.first_reveal_chapter == 4
 
 
-def test_a_split_pair_with_one_first_each_is_accepted():
-    """拆开之后两条都合法，且 `group_id` 把它们认回同一个真相。"""
+@pytest.mark.parametrize('obsolete', ['group_id', 'reader_reveal_events'])
+def test_secret_rejects_removed_display_and_history_fields(obsolete):
     from contracts.schema.stage2 import Secret
 
-    rows = [
-        Secret.model_validate({
-            'secret_id': 'secret_01', 'fact': '他私下穿女装', 'group_id': 'sgrp_01',
-            'fact_evidence': _formal_evidence(),
-            'knowledge_events': _knowledge(response=False),
-            'setup': {'kind': 'foreshadowed', 'chapters': [2]},
-            'reader_reveal_events': [{'chapter': 4, 'kind': 'first'},
-                                     {'chapter': 9, 'kind': 'confirm'}]}),
-        Secret.model_validate({
-            'secret_id': 'secret_02', 'fact': '成因是中学那次羞辱', 'group_id': 'sgrp_01',
-            'fact_evidence': _formal_evidence(),
-            'knowledge_events': _knowledge(response=False), 'setup': {'kind': 'cold'},
-            'reader_reveal_events': [{'chapter': 7, 'kind': 'first'}]}),
-    ]
-    assert [row.first_reveal for row in rows] == [4, 7], \
-        '各按自己的首次揭示章下发——按 group 拉平就回到了拆分前'
-    assert {row.group_id for row in rows} == {'sgrp_01'}
+    payload = {
+        'secret_id': 'secret_01', 'fact': '他私下穿女装',
+        'fact_evidence': _formal_evidence(),
+        'knowledge_events': _knowledge(response=False),
+        'setup': {'kind': 'cold'}, 'first_reveal_chapter': 4,
+        obsolete: None,
+    }
+    with pytest.raises(ValidationError):
+        Secret.model_validate(payload)

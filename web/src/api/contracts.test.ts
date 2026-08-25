@@ -7,7 +7,7 @@ import type { GlobalFactEvidence, Stage2Global } from '@/types/stages'
 function evidence(text: string): GlobalFactEvidence {
   return {
     chapter_ordinal: 2,
-    source: { text, start: 3, end: 3 + text.length, normalized: text, recovery: 'exact' },
+    source: { text, start: 3, end: 3 + text.length },
   }
 }
 
@@ -41,11 +41,9 @@ function globalFixture(): Stage2Global {
         fact: '真实秘密',
         fact_evidence: evidence('真实秘密证据'),
         knowledge_events: [],
-        group_id: null,
         setup_kind: 'foreshadowed',
         setup_chapters: [1],
         first_reveal_chapter: 4,
-        reader_reveal_chapters: [4],
       },
     ],
     arc: {
@@ -55,8 +53,6 @@ function globalFixture(): Stage2Global {
       arc_tracks: [
         {
           subject: { raw: 'c1', display: '甲', resolved: true },
-          dimension: '处境',
-          change_type: 'development',
           trajectory: '真实弧线',
           trajectory_evidence: evidence('真实弧线证据'),
         },
@@ -161,7 +157,6 @@ describe('display-only spoiler projection', () => {
     const hidden = projectGlobalSpoilers(raw, false)
     expect(hidden.characters[0]?.fate).toBe(SPOILER_PLACEHOLDER)
     expect(hidden.characters[0]?.fate_evidence?.source?.text).toBe(SPOILER_PLACEHOLDER)
-    expect(hidden.characters[0]?.fate_evidence?.source?.normalized).toBe(SPOILER_PLACEHOLDER)
     expect(hidden.secrets).toHaveLength(1)
     expect(hidden.secrets[0]?.fact).toBe(SPOILER_PLACEHOLDER)
     expect(hidden.arc.climax).toBe(SPOILER_PLACEHOLDER)

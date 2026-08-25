@@ -25,8 +25,8 @@ from pydantic import BaseModel
 
 from contracts.invariants import (
     ADDRESS_BY, ADDRESS_CONTEXT, BARE_PRONOUNS,
-    BOOK_BAND, CHANGE_TYPES_ENUM, HINGE_KINDS, INVENT_ALLOW,
-    INVENT_FORBID, INVENT_PRINCIPLE, NAME_DISTINCTIVENESS, PLACE_MODES,
+    BOOK_BAND, HINGE_KINDS, INVENT_ALLOW,
+    INVENT_FORBID, INVENT_PRINCIPLE, NAME_DISTINCTIVENESS,
     PLAN_BUDGET_BAND, RESPONSE_CHAPTER_WEIGHTS,
     RESPONSE_DELIVERY_MODES, RESPONSE_GOAL_INTENTS, RESPONSE_STRUCTURAL_ROLES,
     RESPONSE_TEMPORAL_LINKS, RESPONSE_TIME_LAYERS, RESPONSE_UNIT_WEIGHTS,
@@ -47,21 +47,15 @@ ENUM_BLOCKS: Final[dict[str, str]] = {
     # stage2 逐章抽取
     'KINDS': '|'.join(HINGE_KINDS),
     'LAYERS': '|'.join(TIME_LAYERS),
-    # `extraction-ir-v1` 响应侧的前缀枚举（产物侧取值面不动，映射在 compiler）。
+    # Stage2 响应侧的叙述层前缀枚举（产物侧取值面不动，映射在 compiler）。
     'T_LAYERS': '|'.join(RESPONSE_TIME_LAYERS),
-    'PLACE_MODES': '|'.join(PLACE_MODES),
     # stage2 全书级抽取
     'RULE_KINDS': '|'.join(WORLD_RULE_KINDS),
     'NAME_DISTINCT': '|'.join(NAME_DISTINCTIVENESS),
     'CONTEXTS': '／'.join(f'`"{c}"`' for c in ADDRESS_CONTEXT),
     'BY_SPECIAL': '／'.join(f'`"{b}"`' for b in _BY_SPECIAL),
-    # `PRONOUNS` 来自 `BARE_PRONOUNS`，它有**三个**消费方
-    #     （本块 · 判据 `address_bare_pronoun`/`address_has_pronoun` · 度量
-    # `present_names_pronoun`），所以必须在契约层而不是 prompt 里。
-    # `CHANGE_TYPES` 是**开放**枚举，末尾那个 `…` 是语义的一部分，因此在 invariants
-    #     里就是一整串字符串（`CHANGE_TYPES_ENUM`），不是元组 join 出来的。
+    # `PRONOUNS` 来自 `BARE_PRONOUNS`，由本块与 address 判据共用。
     'PRONOUNS': '／'.join(f'「{p}」' for p in BARE_PRONOUNS),
-    'CHANGE_TYPES': CHANGE_TYPES_ENUM,
     # Stage4 预算编译器的确定性取值；A/B 模型都不直接决定整数预算。
     'BANDS': '{:g}~{:g}×'.format(*PLAN_BUDGET_BAND),
     'BOOK_BANDS': '{:g}~{:g}×'.format(*BOOK_BAND),

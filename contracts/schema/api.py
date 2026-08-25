@@ -38,6 +38,8 @@ from contracts.invariants import (
     APPROVAL_SEEN,
     CHAPTER_LABEL_ANOMALY,
     DELIVERY_MODES,
+    FACT_ATOM_KINDS,
+    FACT_ATOM_OBLIGATIONS,
     HINGE_KINDS,
     HOOK_APPROACHES,
     HOOK_SLOTS,
@@ -928,9 +930,6 @@ class GlobalSecretLine(FrozenModel):
     fact: str = Field(min_length=1)
     fact_evidence: FactEvidence
 
-    #: 同一个复合真相被拆成多条时的归组键；独立的秘密是 `null`。
-    group_id: str | None = None
-
     knowledge_events: list[GlobalKnowledgeEventLine] = Field(min_length=1)
 
     #: ⚠ **必须连 `setup_kind` 一起读。** `cold`（声明没有埋点）与
@@ -939,21 +938,14 @@ class GlobalSecretLine(FrozenModel):
     setup_kind: Literal[SECRET_SETUP_KINDS]
     setup_chapters: list[int]
 
-    #: **逐章剧透闸门按它开**，不是按 `reader_reveal_chapters` 的最小值。
-    #: 两者在合法产物上取值相同（载体不许有事件早于首次揭示），但语义不同：
-    #: 界面要说「读者第几章知道这件事」时，说的是这一格。
+    #: **逐章剧透闸门按它开**。
     first_reveal_chapter: int = Field(ge=1)
-
-    #: 全部揭示章（含后续 `confirm`）。
-    reader_reveal_chapters: list[int] = Field(min_length=1)
 
 
 class ArcTrackLine(FrozenModel):
     """一条人物弧线（`subject` 已解引用；`char_id` / `reader` / `relation_id` 三类）。"""
 
     subject: NameRef
-    dimension: str = Field(min_length=1)
-    change_type: str = Field(min_length=1)
     trajectory: str = Field(min_length=1)
     trajectory_evidence: FactEvidence
 
@@ -1248,6 +1240,17 @@ class ReadingHinge(FrozenModel):
     text: str | None
 
 
+class ReadingFactLine(FrozenModel):
+    """所属拍内的一条原子事实；证据字节只作阅读对照。"""
+
+    fact_id: str = Field(min_length=1)
+    claim: str = Field(min_length=1)
+    kind: Literal[FACT_ATOM_KINDS]
+    obligation: Literal[FACT_ATOM_OBLIGATIONS]
+    evidence_text: str | None
+    participant_char_ids: list[str]
+
+
 class ReadingBeatLine(FrozenModel):
     """一拍。`located=false` 时坐标为 `null`（定位失败不编区间）。"""
 
@@ -1257,8 +1260,8 @@ class ReadingBeatLine(FrozenModel):
     end: int | None
     time_layer: Literal[TIME_LAYERS]
     place: str | None
-    present: list[str]
-    event: str = Field(min_length=1)
+    present_char_ids: list[str]
+    fact_atoms: list[ReadingFactLine]
     hinges: list[ReadingHinge]
 
     @model_validator(mode='after')
@@ -1270,8 +1273,8 @@ class ReadingBeatLine(FrozenModel):
 
 class ReadingNarrationLine(FrozenModel):
     grammatical_person: Literal[NARRATIVE_PERSON]
-    narrator: str | None
-    focalizer: str | None
+    narrator_char_id: str | None
+    focalizer_char_id: str | None
     pronoun_surfaces: list[str]
 
 
@@ -1290,9 +1293,6 @@ class ReadingView(StrictModel):
     chapter_ordinal: int = Field(ge=1)
     text_chars: int = Field(ge=1)
     blueprint: bool
-    #: `blueprint=false` ⇒ `null`（没有蓝图就没有摘要，不编一句）。
-    summary: str | None
-
     segments: list[ReadingSegment] = Field(min_length=1)
     beats: list[ReadingBeatLine]
     narration: list[ReadingNarrationLine]
@@ -1316,7 +1316,7 @@ class ReadingView(StrictModel):
             if left.end != right.start:
                 raise ValueError('分区必须按顺序首尾连续')
         if not self.blueprint:
-            if self.beats or self.summary is not None or self.provenance is not None:
+            if self.beats or self.provenance is not None:
                 raise ValueError('blueprint=false 时右半边必须整块缺席——那份内容是从哪儿来的？')
             if any(s.beat_id is not None for s in self.segments):
                 raise ValueError('blueprint=false 时不该有 beat 分区')

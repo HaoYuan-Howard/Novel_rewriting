@@ -51,8 +51,6 @@ def _candidate_source(text: str, start: int, end: int) -> dict[str, Any]:
         'start': start,
         'end': end,
         'text': text[start:end],
-        'normalized': content_only(text[start:end]),
-        'recovery': 'exact',
     }
 
 

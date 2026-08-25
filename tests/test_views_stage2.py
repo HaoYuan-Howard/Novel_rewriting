@@ -153,6 +153,8 @@ def test_reading_beats_carry_their_located_spans(rbox):
     v = reading_view(rbox.root, rbox.sid, 1)
     located = [b for b in v.beats if b.located]
     assert located, '这一章一条 beat 都没定位成功——语料多半坏了'
+    assert any(b.fact_atoms for b in v.beats), \
+        '阅读视图必须传递真正的事实原子，不再伪造 event 摘要'
     seg_beats = {s.beat_id for s in v.segments if s.beat_id is not None}
     assert seg_beats <= {b.beat_id for b in located}
 
@@ -161,7 +163,7 @@ def test_reading_without_a_blueprint_keeps_the_left_half(rbox):
     """stage2 没跑 ⇒ 200 形态：整章一个 hole，右半边整块缺席。"""
     (rbox.dir / 'stage2' / 'chapter_blueprints.json').unlink()
     v = reading_view(rbox.root, rbox.sid, 1)
-    assert not v.blueprint and v.beats == [] and v.summary is None
+    assert not v.blueprint and v.beats == []
     assert len(v.segments) == 1 and v.segments[0].beat_id is None
     assert v.loose == v.text_chars
     assert v.blueprint_state.exists is False

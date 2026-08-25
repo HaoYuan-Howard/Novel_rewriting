@@ -61,11 +61,12 @@ schema 路由与 stage 真实读写均引用该目录。路径模板由 `artifac
 模型同样不接受旧字段别名或双形状，需要保留的输入从产地按当前契约重新生成。
 
 **没有迁移机制。** 版本号是“**这个产物的形状被破坏过几次**”的计数器，不是家族标签。
-`stage2/chapter_blueprints.json` 已破坏四次：2026-08-19 锚点从逐字转写改成段落索引，升 v2；
+`stage2/chapter_blueprints.json` 已破坏五次：2026-08-19 锚点从逐字转写改成段落索引，升 v2；
 2026-08-23 architecture 从七值收窄为 v1.1/v2/v3.1，升 v3；2026-08-24 再收为
-v2/v3.1，升 v4；2026-08-25 以原子事实契约替换旧 event 形状，升 v5。Stage4
+v2/v3.1，升 v4；2026-08-25 以原子事实契约替换旧 event 形状，升 v5；
+2026-08-26 删除摘要、展示名、重复父键与无消费来源账，升 v6。Stage4
 `blind_candidate.json` / `evidence_binding.json` 为 v1，`plan_chapters.json` / `plan_edit.json` 为 v3，
-writer context 与 identity 为 v2；旧 Stage4 v2 计划不迁移，先跑 `stage4.design`、再跑
+writer context 与 identity 为 v3；旧 Stage4 v2 计划不迁移，先跑 `stage4.design`、再跑
 `stage4.plan` 重建。Stage5 canonical 章、Review 与
 trim 两类产物也在 2026-08-24 单臂折平时升到 v2：旧 `stage5/deep|shallow/` 只读保留，
 `stage5.write` 付费重建正文、`stage5.review` 免费重建报告，不迁移也不搬文件冒充 current。

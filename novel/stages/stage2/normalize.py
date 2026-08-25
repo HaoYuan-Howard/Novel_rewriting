@@ -2,21 +2,17 @@
 # -*- coding: utf-8 -*-
 """Stage 2 落盘前的确定性归一。
 
-模型只负责语义判断；能由原文或 registry 唯一推出的字段都在这里生成。所有破坏性
-改写同时返回结构化账目，供 ``_provenance`` 与校验报告使用。
+模型只负责语义判断；能由原文或 registry 唯一推出的字段都在这里生成。只有会驱动
+闸门或恢复的失败态才进入 ``_provenance``，成功改写不重复留展示账。
 """
 from __future__ import annotations
 
 import copy
 from typing import Any
 
-from contracts.invariants import BARE_PRONOUNS
 from novel.core.evidence import iter_global_evidence_slots
 from novel.core.facts import first_reveal_chapter, setup_chapters_of
-from novel.core.naming import (
-    classify_unattested, resolve_present_names, strip_distinguisher,
-    surface_owner_since, surface_owners,
-)
+from novel.core.naming import strip_distinguisher
 from novel.core.spans import (
     content_index, content_only, exact_span, extend_terminal_punct, locate_unique_span,
 )
@@ -26,8 +22,7 @@ from novel.stages.stage2.paragraphs import (
 )
 
 
-def _normalize_distinguishers(characters: dict[str, dict[str, Any]]) \
-        -> list[tuple[str, str, str]]:
+def _normalize_distinguishers(characters: dict[str, dict[str, Any]]) -> None:
     canons = [(cid, str((char or {}).get('canonical') or ''))
               for cid, char in characters.items()]
     counts: dict[str, int] = {}
@@ -36,20 +31,15 @@ def _normalize_distinguishers(characters: dict[str, dict[str, Any]]) \
         if base:
             counts[base] = counts.get(base, 0) + 1
 
-    changed: list[tuple[str, str, str]] = []
     for cid, canonical in canons:
         base = strip_distinguisher(canonical)
         if canonical and base and base != canonical and counts.get(base, 0) < 2:
             characters[cid]['canonical'] = base
-            changed.append((cid, canonical, base))
-    return changed
 
 
-def _normalize_address_surfaces(characters: dict[str, dict[str, Any]], whole: str) \
-        -> list[tuple[str, str, str]]:
+def _normalize_address_surfaces(characters: dict[str, dict[str, Any]], whole: str) -> None:
     """回取原文中出现的最长连续子串；同长时取靠后的中文中心语。"""
-    changed: list[tuple[str, str, str]] = []
-    for cid, char in characters.items():
+    for char in characters.values():
         for address in (char.get('address') or []):
             raw = str(address.get('surface') or '')
             if not raw or raw in whole:
@@ -64,8 +54,6 @@ def _normalize_address_surfaces(characters: dict[str, dict[str, Any]], whole: st
                         break
             if best:
                 address['surface'] = best
-                changed.append((cid, raw, best))
-    return changed
 
 
 def _dedupe_addresses(characters: dict[str, dict[str, Any]]) -> None:
@@ -87,11 +75,9 @@ def _dedupe_addresses(characters: dict[str, dict[str, Any]]) -> None:
 
 
 def _normalize_from_chapter(characters: dict[str, dict[str, Any]],
-                            chapters: list[tuple[int, str]]) \
-        -> list[tuple[str, str, int, int]]:
+                            chapters: list[tuple[int, str]]) -> None:
     first_seen: dict[str, int | None] = {}
-    changed: list[tuple[str, str, int, int]] = []
-    for cid, char in characters.items():
+    for char in characters.values():
         for address in (char.get('address') or []):
             surface = str(address.get('surface') or '').strip()
             old = address.get('from_chapter')
@@ -102,11 +88,9 @@ def _normalize_from_chapter(characters: dict[str, dict[str, Any]],
             first = first_seen[surface]
             if first is not None and old < first:
                 address['from_chapter'] = first
-                changed.append((cid, surface, old, first))
-    return changed
 
 
-def _resolve_address_by(characters: dict[str, dict[str, Any]]) -> int:
+def _resolve_address_by(characters: dict[str, dict[str, Any]]) -> None:
     by_canonical: dict[str, list[str]] = {}
     by_surface: dict[str, set[str]] = {}
     for cid, char in characters.items():
@@ -121,7 +105,6 @@ def _resolve_address_by(characters: dict[str, dict[str, Any]]) -> int:
     unique_surface = {name: next(iter(ids)) for name, ids in by_surface.items()
                       if len(ids) == 1}
 
-    fallback = 0
     for char in characters.values():
         for address in (char.get('address') or []):
             raw = address.get('by')
@@ -132,8 +115,6 @@ def _resolve_address_by(characters: dict[str, dict[str, Any]]) -> int:
                 address['by'] = hit
             else:
                 address['by'] = 'public'
-                fallback += 1
-    return fallback
 
 
 def _prune_setups(data: dict[str, Any]) -> list[tuple[str, list[int], list[int]]]:
@@ -163,7 +144,7 @@ def _prune_setups(data: dict[str, Any]) -> list[tuple[str, list[int], list[int]]
 
 def _normalize_global_evidence(
     data: dict[str, Any], main_text: list[dict[str, Any]],
-) -> tuple[list[tuple[str, str, str]], list[tuple[str, int, str, str]]]:
+) -> list[tuple[str, int, str, str]]:
     """把所有响应/人工 locator 回取成正式 ``FactEvidence``。
 
     指定章内必须唯一命中；零命中、多命中、错章与既有正式 span 漂移都写正向失败账，
@@ -175,7 +156,6 @@ def _normalize_global_evidence(
         for section in main_text
     }
     fallback_chapter = min(text_of) if text_of else 1
-    rewrites: list[tuple[str, str, str]] = []
     failures: list[tuple[str, int, str, str]] = []
 
     for path, owner, field in iter_global_evidence_slots(data):
@@ -196,16 +176,14 @@ def _normalize_global_evidence(
         if 'locator' in evidence:
             got = locate_unique_span(chapter_text, locator)
             if isinstance(got, tuple):
-                start, end, recovery = got
-                source = _source(chapter_text, start, end, recovery)
+                start, end, _recovery = got
+                source = _source(chapter_text, start, end)
                 _start, _end, problem = exact_span(source, chapter_text)
                 if problem:
                     owner[field] = {'chapter_ordinal': chapter, 'source': None}
                     failures.append((path, chapter, locator, problem))
                     continue
                 owner[field] = {'chapter_ordinal': chapter, 'source': source}
-                if recovery != 'exact':
-                    rewrites.append((path, locator, source['text']))
                 continue
             owner[field] = {'chapter_ordinal': chapter, 'source': None}
             reason = (f'locator 在指定章内多处命中（{got} 处）'
@@ -226,7 +204,7 @@ def _normalize_global_evidence(
         # 已是正式产物形：只验证，不按字面重搜，不把重复原文误判成漂移。
         owner[field] = {'chapter_ordinal': chapter, 'source': copy.deepcopy(source)}
 
-    return rewrites, failures
+    return failures
 
 
 def normalize_global(data: dict[str, Any], main_text: list[dict[str, Any]]) \
@@ -237,20 +215,15 @@ def normalize_global(data: dict[str, Any], main_text: list[dict[str, Any]]) \
     chapters = [(int(section.get('chapter_ordinal') or 0), str(section.get('text') or ''))
                 for section in main_text]
 
-    distinguishers = _normalize_distinguishers(characters)
-    surfaces = _normalize_address_surfaces(characters, whole)
+    _normalize_distinguishers(characters)
+    _normalize_address_surfaces(characters, whole)
     _dedupe_addresses(characters)
-    raised = _normalize_from_chapter(characters, chapters)
-    fallback = _resolve_address_by(characters)
+    _normalize_from_chapter(characters, chapters)
+    _resolve_address_by(characters)
     pruned = _prune_setups(data)
-    evidence_rewrites, evidence_failures = _normalize_global_evidence(data, main_text)
+    evidence_failures = _normalize_global_evidence(data, main_text)
     return data, {
-        'address_by_fallback': fallback,
-        'address_surface_rewrites': surfaces,
-        'address_from_chapter_raised': raised,
-        'canonical_distinguishers_stripped': distinguishers,
         'setup_chapters_pruned': pruned,
-        'evidence_locator_rewrites': evidence_rewrites,
         'evidence_locator_failures': evidence_failures,
     }
 
@@ -260,21 +233,6 @@ def normalize_beat_ids(blueprints: list[dict[str, Any]]) -> None:
         ordinal = int(blueprint.get('chapter_ordinal') or 0)
         for index, beat in enumerate(blueprint.get('beats') or [], 1):
             beat['beat_id'] = f'b{ordinal:02d}_{index:02d}'
-
-
-def _cumulative_text(main_text: list[dict[str, Any]]) \
-        -> tuple[dict[int, str], dict[int, str], str]:
-    text_of = {int(section.get('chapter_ordinal') or 0): str(section.get('text') or '')
-               for section in main_text}
-    cumulative: dict[int, str] = {}
-    acc: list[str] = []
-    for section in main_text:
-        ordinal = int(section.get('chapter_ordinal') or 0)
-        acc.append(text_of.get(ordinal, ''))
-        cumulative[ordinal] = '\n'.join(acc)
-    whole = cumulative.get(int(main_text[-1].get('chapter_ordinal') or 0), '') \
-        if main_text else ''
-    return text_of, cumulative, whole
 
 
 def past_attested_surfaces(characters: dict[str, dict[str, Any]] | None,
@@ -314,81 +272,6 @@ def past_attested_surfaces(characters: dict[str, dict[str, Any]] | None,
     return out
 
 
-def resolve_character_refs(blueprints: list[dict[str, Any]],
-                           main_text: list[dict[str, Any]],
-                           characters: dict[str, dict[str, Any]]) -> dict[str, int]:
-    """把原文称呼解析为 char_id；歧义与无据项不猜。"""
-    _text_of, cumulative, whole = _cumulative_text(main_text)
-    owners = surface_owners(characters)
-    since = surface_owner_since(characters)
-    pronouns = set(BARE_PRONOUNS)
-    stats: dict[str, Any] = {
-        'resolved': 0, 'pronoun_ok': 0, 'ambiguous': [], 'late': [],
-        'unknown': [], 'invented': [], 'no_names': [], 'pronoun': [],
-    }
-
-    def classify(ordinal: int, where: str, raw: str) -> None:
-        bucket = classify_unattested(raw, cumulative.get(ordinal, ''), whole)
-        stats[bucket].append(f'ch{ordinal} {where} {raw!r}')
-
-    for blueprint in blueprints:
-        ordinal = int(blueprint.get('chapter_ordinal') or 0)
-        upto = cumulative.get(ordinal, '')
-        narrators: list[str | None] = []
-        for narration in (blueprint.get('narration') or []):
-            for name_key, id_key in (('narrator_name', 'narrator_char_id'),
-                                     ('focalizer_name', 'focalizer_char_id')):
-                name = narration.get(name_key)
-                if name and norm(str(name)) in pronouns:
-                    narration[id_key] = None
-                    stats['pronoun'].append(
-                        f'ch{ordinal} narration.{name_key} {name!r}（代词不能唯一反解人物）')
-                    if name_key == 'narrator_name':
-                        narrators.append(None)
-                    continue
-                ids, ambiguous, unattested = resolve_present_names(
-                    [str(name)] if name else [], upto, owners, since, ordinal)
-                narration[id_key] = ids[0] if ids else None
-                stats['resolved'] += len(ids)
-                if name_key == 'narrator_name':
-                    narrators.append(ids[0] if ids else None)
-                for surface, candidates in ambiguous:
-                    stats['ambiguous'].append(
-                        f'ch{ordinal} narration.{name_key} {surface!r} → {candidates}')
-                for raw in unattested:
-                    classify(ordinal, f'narration.{name_key}', raw)
-
-        sole_narrator = narrators[0] if len(narrators) == 1 else None
-        for beat in (blueprint.get('beats') or []):
-            names = beat.get('present_names')
-            if names is None:
-                beat['present_char_ids'] = []
-                stats['no_names'].append(f'ch{ordinal} {beat.get("beat_id")}')
-                continue
-            pronoun_names = [str(name) for name in names if norm(str(name)) in pronouns]
-            other_names = [str(name) for name in names if norm(str(name)) not in pronouns]
-            ids, ambiguous, unattested = resolve_present_names(
-                other_names, upto, owners, since, ordinal)
-            if pronoun_names:
-                if sole_narrator:
-                    if sole_narrator not in ids:
-                        ids.append(sole_narrator)
-                    stats['pronoun_ok'] += len(pronoun_names)
-                else:
-                    stats['pronoun'].append(
-                        f'ch{ordinal} {beat.get("beat_id")} {pronoun_names!r}（本章无唯一具名叙述者）')
-            beat['present_char_ids'] = ids
-            stats['resolved'] += len(ids)
-            for surface, candidates in ambiguous:
-                stats['ambiguous'].append(
-                    f'ch{ordinal} {beat.get("beat_id")} {surface!r} → {candidates}')
-            for raw in unattested:
-                classify(ordinal, str(beat.get('beat_id')), raw)
-
-    return {key: value if isinstance(value, int) else len(value)
-            for key, value in stats.items()}
-
-
 def _locate_phrase(para_text: str, phrase: str) -> tuple[int, int, str] | None:
     """在**一段之内**定位 hinge 的短语，返回 `(起, 止, recovery)`；找不到返回 `None`。
 
@@ -422,14 +305,12 @@ def _locate_phrase(para_text: str, phrase: str) -> tuple[int, int, str] | None:
         'normalized'
 
 
-def _source(text: str, start: int, end: int, recovery: str) -> dict[str, Any]:
+def _source(text: str, start: int, end: int) -> dict[str, Any]:
     raw = text[start:end]
     return {
         'text': raw,
         'start': start,
         'end': end,
-        'normalized': content_only(raw),
-        'recovery': recovery,
     }
 
 
@@ -457,7 +338,7 @@ def _beat_span(text: str, span: dict[str, Any], cursor: int,
     这一条同时表达了「区间重叠」与「顺序倒置」两件事——与旧实现「`starts_with` 只在上一条
     终点之后找」是同一个机制，只是现在它是一次整数比较而不是一次字符串搜索。
     """
-    if any(key in span for key in ('start', 'end', 'text', 'normalized')):
+    if any(key in span for key in ('start', 'end', 'text')):
         start, end, problem = exact_span(span, text, 0 if cursor <= 0 else table[cursor - 1][1])
         if problem:
             return 0, 0, cursor, '已落盘的精确区间与原文对不上'
@@ -484,14 +365,13 @@ def _beat_span(text: str, span: dict[str, Any], cursor: int,
 
 def normalize_verbatim(blueprints: list[dict[str, Any]],
                        text_of: dict[int, str]) -> dict[str, list[tuple[Any, ...]]]:
-    """把模型交的**段号**回取成正式 `SourceSpan`，并记录改写与失败。
+    """把模型交的**段号**回取成正式 `SourceSpan`，只记录会阻断的失败。
 
     ⚠⚠ **这里曾经是「在原文里搜模型逐字抄回来的锚点」**（`bounded-fidelity-v2`）。
     换成段号之后，beat 的区间是一次整数查表 ⇒ `recovery` 恒 `exact`、
     「锚点不是原文字节」这件事在 beat 这一侧**结构上不存在**了。
     模型仍要转写的只剩 `hinge.phrase`，而它只需要在**一段之内**可定位。
     """
-    rewrites: list[tuple[str, str, str, str]] = []
     failures: list[tuple[str, str, str]] = []
     #: `ordinal -> [(beat, 起, 止, 起段, 止段)]`，只装定位成功的。
     located: dict[int, list[tuple[dict[str, Any], int, int, int, int]]] = {}
@@ -512,7 +392,7 @@ def normalize_verbatim(blueprints: list[dict[str, Any]],
                     _blank_hinge(hinge)
                 continue
             first, last = paragraph_range_of(text, start, end)
-            beat['span'] = _source(text, start, end, 'exact')
+            beat['span'] = _source(text, start, end)
             located.setdefault(ordinal, []).append((beat, start, end, first, last))
 
     for ordinal, items in located.items():
@@ -571,94 +451,25 @@ def normalize_verbatim(blueprints: list[dict[str, Any]],
                                      else '短语不在本章原文里'))
                     continue
 
-                offset, tail, method = hit
+                offset, tail, _method = hit
                 h_start, h_end = p_start + offset, p_start + tail
-                if owner != beat_id:
-                    # 段号决定归属：模型把材料挂错了拍，但它指的位置是明确的。
-                    rewrites.append((beat_id, 'hinge.owner', beat_id, owner))
-                raw_source = chapter_text[h_start:h_end]
-                if method != 'exact':
-                    rewrites.append((owner, 'hinge.phrase', phrase, raw_source))
                 _blank_hinge(hinge)
-                hinge['source'] = _source(chapter_text, h_start, h_end, method)
+                hinge['source'] = _source(chapter_text, h_start, h_end)
                 fresh[owner].append(hinge)
 
         for beat, *_rest in items:
             beat['hinges'] = fresh[str(beat.get('beat_id') or '')]
 
-    return {
-        'verbatim_rewrites': rewrites,
-        'verbatim_failures': failures,
-    }
+    return {'verbatim_failures': failures}
 
 
-def _para_or_none(text: str, source: dict[str, Any] | None) -> int | None:
-    """正式区间 → 它落在第几段；区间缺失或反投影不出来时如实交 `None`。
-
-    ⚠ **不许兜底成 1**：那会把「上一版这条没定位成功」伪装成「它在第一段」，
-    而这份基线正是要告诉模型「上一版哪里是坏的」。
-    """
-    if not isinstance(source, dict):
-        return None
-    start, end = source.get('start'), source.get('end')
-    if type(start) is not int or type(end) is not int:
-        return None
-    try:
-        return paragraph_range_of(text, start, end)[0]
-    except ParagraphIndexError:
-        return None
-
-
-def response_shape(blueprint: dict[str, Any], chapter_text: str) -> dict[str, Any]:
-    """正式蓝图转回不含代码派生字段的模型响应形状，供定向重生成使用。
-
-    ⚠⚠ **它需要章正文**（`bounded-fidelity-v3` 起）：响应形状里的定位是**段号**，
-    而段号只能从原文的段落表反算。这是本函数与 `normalize_verbatim` 的**同一张表**——
-    反投影用别的切法，反喂给模型的基线就指向别的段落，而它不会报错。
-    ⚠ 反投影按**相交**算（`paragraph_range_of`）：正式区间的两端可能落在段内，
-    按包含算会把首尾两段丢掉，而这份基线的用途正是「不许删除或合并已有事件拍」。
-    """
-    out = copy.deepcopy(blueprint)
-    out['beats'] = []
-    for beat in (blueprint.get('beats') or []):
-        copied = dict(beat)
-        span = beat.get('span')
-        if not isinstance(span, dict) or 'start_para' not in span:
-            first = _para_or_none(chapter_text, span)
-            last = None
-            if first is not None and isinstance(span, dict):
-                last = paragraph_range_of(chapter_text, span['start'], span['end'])[1]
-            copied['span'] = {'start_para': first, 'end_para': last}
-        copied.pop('present_char_ids', None)
-        copied['hinges'] = []
-        for hinge in (beat.get('hinges') or []):
-            h = dict(hinge)
-            if 'para' not in h:
-                source = hinge.get('source')
-                h = {
-                    'kind': h.get('kind'),
-                    'para': _para_or_none(chapter_text, source),
-                    'phrase': (source or {}).get('text') if isinstance(source, dict) else None,
-                }
-            else:
-                h.pop('source', None)
-            copied['hinges'].append(h)
-        out['beats'].append(copied)
-    for narration in (out.get('narration') or []):
-        narration.pop('narrator_char_id', None)
-        narration.pop('focalizer_char_id', None)
-    return out
-
-
-def normalize_blueprints(data: dict[str, Any], main_text: list[dict[str, Any]],
-                         characters: dict[str, dict[str, Any]]) \
+def normalize_blueprints(data: dict[str, Any], main_text: list[dict[str, Any]]) \
         -> tuple[dict[str, Any], dict[str, Any]]:
-    """把一次或多次 ``ChapterBlueprintsResponse`` 合并结果变成最终字段。"""
+    """重验正式蓝图中的证据区间；人物 id 不做第二次名字反解。"""
     blueprints = list(data.get('blueprints') or [])
     data['blueprints'] = blueprints
     normalize_beat_ids(blueprints)
-    char_refs = resolve_character_refs(blueprints, main_text, characters)
     text_of = {int(section.get('chapter_ordinal') or 0): str(section.get('text') or '')
                for section in main_text}
     verbatim = normalize_verbatim(blueprints, text_of)
-    return data, {'char_refs': char_refs, **verbatim}
+    return data, verbatim

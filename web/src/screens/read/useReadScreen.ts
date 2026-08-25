@@ -27,8 +27,8 @@ export interface BeatView {
   place: string
   located: boolean
   span: string
-  present: { name: string; resolved: boolean }[]
-  event: string
+  presentCharIds: string[]
+  facts: { id: string; claim: string; meta: string; evidence: string | null }[]
   hinges: { kind: string; text: string }[]
   selected: boolean
 }
@@ -90,9 +90,13 @@ export function useReadScreen() {
     place: b.place || '—',
     located: b.located,
     span: b.located ? b.start + '–' + b.end : '未定位',
-    // 服务端已把 present 解成人名（叫不出名字的本章剔除，不发裸 id）
-    present: b.present.map((p) => ({ name: p, resolved: true })),
-    event: b.event,
+    presentCharIds: b.present_char_ids,
+    facts: b.fact_atoms.map((fact) => ({
+      id: fact.fact_id,
+      claim: fact.claim,
+      meta: fact.kind + ' · ' + fact.obligation,
+      evidence: fact.evidence_text,
+    })),
     hinges: b.hinges.map((h) => ({
       kind: h.kind,
       text: h.text ?? '（未定位——这条保真材料没有原文可引）',
@@ -115,7 +119,6 @@ export function useReadScreen() {
     selBeat,
     toggleBeat: (id: string) => setSelBeat((cur) => (cur === id ? null : id)),
     clearSel: () => setSelBeat(null),
-    summary: d?.summary ?? '',
     looseLabel:
       loose === 0 ? '没有漏下的原文（loose 0 字）' : '漏下 ' + loose + ' 字没被任何 beat 覆盖',
     looseColor: loose === 0 ? FRESH.fresh.color : FRESH.stale.color,
@@ -124,7 +127,7 @@ export function useReadScreen() {
     narration: nar
       ? (nar.grammatical_person === 'first' ? '第一人称' : nar.grammatical_person) +
         ' · ' +
-        (nar.narrator ?? '（叙述者本章还叫不出名字）') +
+        (nar.narrator_char_id ?? '（叙述者未知）') +
         ' · 「' +
         nar.pronoun_surfaces.join('/') +
         '」'

@@ -128,7 +128,6 @@ def test_the_two_phase_v2_contract_has_distinct_closed_shapes():
         prompts.BOUNDARY_SYS_V2, prompts.BOUNDARY_HINT_V2)
     assert spec.system == with_json_shape(
         prompts.BLUEPRINT_SYS_V2_REFS, prompts.BLUEPRINT_HINT_V2_REFS)
-    assert spec.uses_character_refs
     assert set(prompts.BOUNDARY_HINT_V2['blueprints'][0]) == \
         {'chapter_ordinal', 'micro_events', 'beats'}
     assert set(prompts.BOUNDARY_HINT_V2['blueprints'][0]['micro_events'][0]) == \
@@ -149,7 +148,6 @@ def test_the_v31_scaffolded_contract_has_closed_references():
     v31 = CONTRACTS['extraction-ir-v3.1']
     assert v31.topology == 'scaffolded_single'
     assert v31.boundary_system is None
-    assert v31.uses_character_refs and v31.uses_narration_refs
     assert v31.uses_hinge_candidates
     assert set(prompts.BLUEPRINT_HINT_V31['blueprints'][0]) == {
         'chapter_ordinal', 'chapter_function', 'micro_events', 'beats',
@@ -182,13 +180,11 @@ def _ir2_responses() -> dict[int, dict]:
     }
 
 
-def _scaffolded_responses(*, closed: bool) -> dict[int, dict]:
+def _scaffolded_responses() -> dict[int, dict]:
     texts = {section['chapter_ordinal']: section['text']
              for section in main_text()}
-    projection = (canonical_ir_projection_v31
-                  if closed else canonical_ir_projection_v3)
     return {
-        blueprint['chapter_ordinal']: projection(
+        blueprint['chapter_ordinal']: canonical_ir_projection_v31(
             blueprint, texts[blueprint['chapter_ordinal']])
         for blueprint in copy.deepcopy(blueprints())['blueprints']
     }
@@ -234,11 +230,8 @@ def test_the_ir2_chain_freezes_boundaries_and_lands_closed_character_refs(
     report = extract.run_blueprint(ctx, client)
 
     assert report.passed
-    density = next(line for line in report.rules if line.rule == 'batch_density')
-    assert density.scanned.endswith('× 2 相')
-    assert density.findings and '两段式逐章抽取' in density.findings[0].detail
     assert len(transport.calls) == len(ordinals) * 2, \
-        '边界 N 次 + 冻结边界细节 N 次；summary 不再调用模型'
+        '边界 N 次 + 冻结边界细节 N 次'
     boundary_system = with_json_shape(
         prompts.BOUNDARY_SYS_V2, prompts.BOUNDARY_HINT_V2)
     assert transport.calls[0].system == boundary_system
@@ -258,15 +251,13 @@ def test_the_ir2_chain_freezes_boundaries_and_lands_closed_character_refs(
         expected = by_ordinal[blueprint.chapter_ordinal]
         assert [beat.present_char_ids for beat in blueprint.beats] == \
             [beat['present_char_ids'] for beat in expected['beats']]
-        assert all('我' not in beat.present_names and '他' not in beat.present_names
-                   and '她' not in beat.present_names
+        assert all('present_names' not in beat.model_dump()
                    for beat in blueprint.beats)
 
 
 def test_scaffolded_single_chains_use_one_high_shape_per_chapter_and_land(
         monkeypatch):
-    architecture, closed, system_name = (
-        'extraction-ir-v3.1', True, 'BLUEPRINT_SYS_V31')
+    architecture, system_name = 'extraction-ir-v3.1', 'BLUEPRINT_SYS_V31'
     monkeypatch.setenv(_ENV_KEY, architecture)
     book = Path(tempfile.mkdtemp()) / f'{architecture}_126'
     book.mkdir(parents=True)
@@ -277,15 +268,14 @@ def test_scaffolded_single_chains_use_one_high_shape_per_chapter_and_land(
         global_ctx, lambda _req, _index: _ok(_response_global()))
     extract.run_global(global_ctx, global_client)
 
-    by_ordinal = _scaffolded_responses(closed=closed)
+    by_ordinal = _scaffolded_responses()
     ordinals = sorted(by_ordinal)
 
     def respond(req, _index):
         found = re.findall(r'阅读序第(\d+)章', req.user)
         assert '本章可选人物引用（代码派生、关闭式）' in req.user
         assert '已冻结的事件边界（代码校验）' not in req.user
-        if closed:
-            assert '本章 hinge 原文候选（代码派生、按需选择）' in req.user
+        assert '本章 hinge 原文候选（代码派生、按需选择）' in req.user
         return _ok({'blueprints': [by_ordinal[int(found[-1])]]})
 
     ctx = _ctx(book, 'stage2.blueprint')
@@ -294,14 +284,14 @@ def test_scaffolded_single_chains_use_one_high_shape_per_chapter_and_land(
 
     assert report.passed
     assert len(transport.calls) == len(ordinals), \
-        '每章一次 scaffolded 响应；summary 由 atoms 确定性投影'
+        '每章一次 scaffolded 响应'
     boundary_system = with_json_shape(
         prompts.BOUNDARY_SYS_V2, prompts.BOUNDARY_HINT_V2)
     assert all(call.system != boundary_system for call in transport.calls)
     stored = ArtifactStore(ctx).read(ChapterBlueprints, extract.BLUEPRINT_REL)
     assert stored.provenance.context.architecture == architecture
     assert set(stored.provenance.prompts) == {system_name}
-    assert all(blueprint.summary.startswith('本章事实：')
+    assert all('summary' not in blueprint.model_dump()
                for blueprint in stored.blueprints)
 
 
@@ -311,7 +301,7 @@ def test_ir31_resamples_reasoning_only_blueprints(monkeypatch):
     这里走 `request_blueprints` 的真实 validator 接线，防止只在注册表加了一格、
     首轮或定向修复却忘记消费；调用数只统计目标章本身。
     """
-    architecture, closed = 'extraction-ir-v3.1', True
+    architecture = 'extraction-ir-v3.1'
     monkeypatch.setenv(_ENV_KEY, architecture)
     book = Path(tempfile.mkdtemp()) / f'{architecture}_救回策略_128'
     book.mkdir(parents=True)
@@ -322,7 +312,7 @@ def test_ir31_resamples_reasoning_only_blueprints(monkeypatch):
         global_ctx, lambda _req, _index: _ok(_response_global()))
     extract.run_global(global_ctx, global_client)
 
-    by_ordinal = _scaffolded_responses(closed=closed)
+    by_ordinal = _scaffolded_responses()
     ordinal = min(by_ordinal)
     salvaged = copy.deepcopy(by_ordinal[ordinal])
     normal = copy.deepcopy(by_ordinal[ordinal])
@@ -364,7 +354,7 @@ def test_scaffolded_gate_reuses_the_compilers_tail_nudge_cap(monkeypatch):
         global_ctx, lambda _req, _index: _ok(_response_global()))
     grounding = extract.run_global(global_ctx, global_client)
 
-    rows = _scaffolded_responses(closed=True)
+    rows = _scaffolded_responses()
     texts = {row['chapter_ordinal']: row['text'] for row in main_text()}
     eligible = [
         ordinal for ordinal, row in rows.items()
@@ -396,8 +386,6 @@ def test_scaffolded_gate_reuses_the_compilers_tail_nudge_cap(monkeypatch):
         grounding.model_dump(by_alias=True)['entities']['characters'],
     )
     assert accounting['verbatim_failures'] == []
-    assert accounting['boundary_nudges'][-1][1:] == (
-        paragraph_count - 1, paragraph_count, '末拍没有到达本章最后一段')
     assert compiled['blueprints'][0]['beats'][-1]['span']['end'] == \
         paragraph_spans(texts[ordinal])[-1][1]
 
@@ -419,7 +407,7 @@ def test_missing_chapter_repair_uses_the_initial_shape_without_a_fake_baseline(
     spec = CONTRACTS[architecture]
     by_ordinal = (_ir2_responses()
                   if spec.topology == 'boundary_then_detail'
-                  else _scaffolded_responses(closed=True))
+                  else _scaffolded_responses())
     ordinals = sorted(by_ordinal)
 
     def chapter_response(req, ordinal):
@@ -479,12 +467,7 @@ def test_missing_chapter_repair_uses_the_initial_shape_without_a_fake_baseline(
     assert len(repair_transport.calls) == expected_calls
     stored = store.read(ChapterBlueprints, extract.BLUEPRINT_REL)
     assert [row.chapter_ordinal for row in stored.blueprints] == ordinals
-    assert stored.provenance.partial_regen_chapters == [missing]
-    repair = stored.provenance.repairs[-1]
-    assert repair.failure_items == ['chapter_coverage']
-    assert repair.before_metrics.model_dump() == {
-        'beats': 0, 'fact_atoms': 0, 'hinges': 0, 'present_names': 0}
-    assert repair.after_metrics.beats > 0
+    assert 'repairs' not in stored.provenance.model_dump()
     assert not store.exists(extract._INVALID)
 
 
@@ -500,7 +483,7 @@ def test_ir31_hard_gate_lands_invalid_without_extra_calls(monkeypatch):
         global_ctx, lambda _req, _index: _ok(_response_global()))
     extract.run_global(global_ctx, global_client)
 
-    by_ordinal = _scaffolded_responses(closed=True)
+    by_ordinal = _scaffolded_responses()
     broken_ordinal = min(by_ordinal)
     for beat in by_ordinal[broken_ordinal]['beats']:
         beat['hinges'] = []
@@ -520,7 +503,7 @@ def test_ir31_hard_gate_lands_invalid_without_extra_calls(monkeypatch):
     assert set(invalid.provenance.prompts) == {'BLUEPRINT_SYS_V31'}
     assert invalid.provenance.usage.calls_made == len(by_ordinal)
 
-    repaired_by = _scaffolded_responses(closed=True)
+    repaired_by = _scaffolded_responses()
 
     def repair_respond(req, _index):
         ordinal = int(re.findall(r'阅读序第(\d+)章', req.user)[-1])
@@ -536,7 +519,7 @@ def test_ir31_hard_gate_lands_invalid_without_extra_calls(monkeypatch):
     formal = ArtifactStore(repair_ctx).read(
         ChapterBlueprints, extract.BLUEPRINT_REL)
     assert set(formal.provenance.prompts) == {'BLUEPRINT_SYS_V31'}
-    assert all(bp.summary.startswith('本章事实：') for bp in formal.blueprints)
+    assert all('summary' not in bp.model_dump() for bp in formal.blueprints)
 
 
 def _land_ir31_invalid(book, by_ordinal):
@@ -565,7 +548,7 @@ def test_the_repair_path_blocks_after_only_the_target_chapter_call(monkeypatch):
     monkeypatch.setenv(_ENV_KEY, 'extraction-ir-v3.1')
     book = Path(tempfile.mkdtemp()) / 'ir31修复摘要前闸_128'
     book.mkdir(parents=True)
-    by_ordinal = _scaffolded_responses(closed=True)
+    by_ordinal = _scaffolded_responses()
     broken_ordinal = min(by_ordinal)
     for beat in by_ordinal[broken_ordinal]['beats']:
         beat['hinges'] = []
@@ -589,22 +572,17 @@ def test_the_repair_path_blocks_after_only_the_target_chapter_call(monkeypatch):
 
 
 def test_v31_repair_keeps_the_model_chosen_narration_identity(monkeypatch):
-    """⭐ **v3.1 的叙述身份是模型从关闭式候选集直选的权威值，不能反解覆盖。**
-
-    合并修复稿时按 `narrator_name` 再解析一遍，名字一歧义 `resolve_present_names`
-    就交空 ⇒ 一个**正确的 id 被覆盖成 `None`**，而这一格只进 metric、不阻断落盘。
-    这里把反解整个打成 `None` 来放大它：权威值必须原样活到产物里。
-    """
+    """叙述身份只保留关闭式 ID，定向修复后必须原样落盘。"""
     monkeypatch.setenv(_ENV_KEY, 'extraction-ir-v3.1')
     book = Path(tempfile.mkdtemp()) / 'ir31叙述身份_129'
     book.mkdir(parents=True)
-    by_ordinal = _scaffolded_responses(closed=True)
+    by_ordinal = _scaffolded_responses()
     broken_ordinal = min(by_ordinal)
     for beat in by_ordinal[broken_ordinal]['beats']:
         beat['hinges'] = []
     _land_ir31_invalid(book, by_ordinal)
 
-    repaired_by = _scaffolded_responses(closed=True)
+    repaired_by = _scaffolded_responses()
     expected = {
         ordinal: [(n.get('narrator_char_id'), n.get('focalizer_char_id'))
                   for n in blueprint.get('narration') or []]
@@ -613,20 +591,6 @@ def test_v31_repair_keeps_the_model_chosen_narration_identity(monkeypatch):
     assert any(any(pair != (None, None) for pair in pairs)
                for pairs in expected.values()), \
         '这批响应根本没给叙述身份，用例证明不了任何事'
-
-    real_resolve = extract.resolve_character_refs
-
-    def resolve_that_gives_up_on_names(blueprints, main, characters):
-        """模拟「名字有歧义 ⇒ 反解交空」——正确 id 会被它抹成 None。"""
-        stats = real_resolve(blueprints, main, characters)
-        for blueprint in blueprints:
-            for narration in blueprint.get('narration') or []:
-                narration['narrator_char_id'] = None
-                narration['focalizer_char_id'] = None
-        return stats
-
-    monkeypatch.setattr(
-        extract, 'resolve_character_refs', resolve_that_gives_up_on_names)
 
     def repair_respond(req, _index):
         ordinal = int(re.findall(r'阅读序第(\d+)章', req.user)[-1])

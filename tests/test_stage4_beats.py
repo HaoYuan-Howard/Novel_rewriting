@@ -21,14 +21,13 @@ TEXT = '甲收到入住邀请。\n乙在门口拒绝甲。\n甲决定留下。'
 
 def _source(fragment: str) -> dict:
     start = TEXT.index(fragment)
-    return {'text': fragment, 'start': start, 'end': start + len(fragment),
-            'normalized': fragment.rstrip('。'), 'recovery': 'exact'}
+    return {'text': fragment, 'start': start, 'end': start + len(fragment)}
 
 
 def _blueprints() -> dict:
     spans = [_source('甲收到入住邀请。'), _source('乙在门口拒绝甲。'), _source('甲决定留下。')]
     return {'blueprints': [{
-        'chapter_ordinal': 1, 'summary': '甲收到邀请、遭到拒绝，最后决定留下。',
+        'chapter_ordinal': 1,
         'chapter_function': '建立入住冲突并完成主角入局',
         'fact_atoms': [
             {'fact_id': 'f01_001', 'claim': '甲收到入住邀请', 'kind': 'information',
@@ -45,15 +44,14 @@ def _blueprints() -> dict:
         'entry_state_refs': [], 'ending_state_refs': ['f01_003'],
         'beats': [
             {'beat_id': 'b01_01', 'span': spans[0], 'time_layer': 'present',
-             'place': '门外', 'present_names': ['甲'], 'present_char_ids': ['char_001'],
+             'place': '门外', 'present_char_ids': ['char_001'],
              'hinges': []},
             {'beat_id': 'b01_02', 'span': spans[1], 'time_layer': 'present',
-             'place': '门口', 'present_names': ['甲', '乙'],
-             'present_char_ids': ['char_001', 'char_002'],
+             'place': '门口', 'present_char_ids': ['char_001', 'char_002'],
              'hinges': [{'hinge_id': 'h01_001', 'kind': '要害台词',
-                         'source_beat_ref': 'b01_02', 'source': _source('拒绝甲')}]},
+                         'source': _source('拒绝甲')}]},
             {'beat_id': 'b01_03', 'span': spans[2], 'time_layer': 'present',
-             'place': '门口', 'present_names': ['甲'], 'present_char_ids': ['char_001'],
+             'place': '门口', 'present_char_ids': ['char_001'],
              'hinges': []},
         ],
         'narration': [],
@@ -124,7 +122,7 @@ def test_beat_index_is_evidence_only_and_has_no_event_payload():
 
 def test_cross_paragraph_material_is_split_without_changing_its_words():
     pieces, unknown = verbatim_pieces([{
-        'hinge_id': 'h01_001', 'kind': '要害台词', 'source_beat_ref': 'b01_01',
+        'hinge_id': 'h01_001', 'kind': '要害台词',
         'source': {'text': '第一句。\n\n第二句。'},
     }])
     assert pieces['verbatim'] == ['第一句。', '第二句。'] and unknown == []

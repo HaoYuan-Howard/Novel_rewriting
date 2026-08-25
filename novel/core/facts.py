@@ -146,32 +146,11 @@ def num_unit_keys(text: str | None) -> dict[tuple[object, str], str]:
 # 载体拒收的形状悄悄补成合法的。
 
 def first_reveal_chapter(secret: dict | None) -> int | None:
-    """这条 secret 对读者的**首次**揭示章；`confirm` 事件不参与。
-
-    ⚠⚠ **别把它当成那条泄底路径的修复本身。** 病根是「一条 secret 装了两个原子
-    事实、分两次点破」（盘上某本 `secret_01` 揭示在 ch4 与 ch7，`fact` 第三个分句是
-    ch7 才点破的成因，而写 ch4 的写手整份都拿到了）。真正堵住它的是**载体**：
-    `Secret._exactly_one_first_reveal` 逼着每条恰有一个 `first`，于是那种复合写法
-    在契约上写不出来，只能拆成两条、各自按自己的 `first` 下发（`R-2.18`）。
-
-    ⚠ **在合法产物上，本函数与 `min(所有揭示章)` 恒等**——载体不许有事件早于
-    `first`。所以立这个落点买到的不是「换了个基准」，是：① 三处（归一 / 下发闸门 /
-    判据）不再各写一份式子，下次改判向不会漏掉其中一处；② 读代码的人一眼看见
-    闸门问的是「读者**第一次**知道」而不是「有没有哪次揭示落在本章前」。
-
-    ⚠ 缺 `kind` 时按 `first` 算（与载体默认值一致：模型没写这一格就是首次）。
-    一条 `first` 都没有时返回 `None` —— **不要退回 min(全部)**：那种形状本该被
-    载体拒，兜一个值只会让它悄悄过去。多于一条时取最小，同样让载体去拒。
-    """
+    """这条 secret 对读者的首次揭示章；未校验 dict 缺值时如实返回未知。"""
     if not isinstance(secret, dict):
         return None
-    chapters = [
-        event.get('chapter')
-        for event in (secret.get('reader_reveal_events') or [])
-        if isinstance(event, dict) and isinstance(event.get('chapter'), int)
-        and (event.get('kind') or 'first') == 'first'
-    ]
-    return min(chapters) if chapters else None
+    value = secret.get('first_reveal_chapter')
+    return value if type(value) is int else None
 
 
 def setup_chapters_of(secret: dict | None) -> list[int]:

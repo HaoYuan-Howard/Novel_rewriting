@@ -127,7 +127,7 @@ def test_relation_fact_refs_share_explicit_visibility_and_inclusive_endpoints():
         },
         'canon': {'secrets': [{
             'secret_id': 'secret_01',
-            'reader_reveal_events': [{'chapter': 4, 'kind': 'first'}],
+            'first_reveal_chapter': 4,
         }]},
     }
     refs = catalog(

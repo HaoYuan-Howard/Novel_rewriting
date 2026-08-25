@@ -354,23 +354,21 @@ def test_stage4_blueprint_projection_tracks_exact_material_and_ignores_provenanc
     assert plan_project is not None and context_project is not None
     base = {
         'blueprints': [{
-            'chapter_ordinal': 1, 'summary': '摘要',
+            'chapter_ordinal': 1, 'chapter_function': '建立冲突',
             'narration': [{
                 'grammatical_person': 'third', 'narrator_char_id': None,
                 'focalizer_char_id': 'char_001', 'pronoun_surfaces': [],
             }],
             'beats': [{
-                'beat_id': 'b01_01', 'event': '事件', 'time_layer': 'present',
+                'beat_id': 'b01_01', 'time_layer': 'present',
                 'place': '庭院', 'present_char_ids': ['char_001'],
                 'span': {
                     'text': '原文区间。', 'start': 0, 'end': 5,
-                    'normalized': '原文区间', 'recovery': 'exact',
                 },
                 'hinges': [{
                     'kind': '要害台词',
                     'source': {
                         'text': '原话。', 'start': 0, 'end': 3,
-                        'normalized': '原话', 'recovery': 'exact',
                     },
                 }],
             }],
@@ -384,11 +382,6 @@ def test_stage4_blueprint_projection_tracks_exact_material_and_ignores_provenanc
     changed['blueprints'][0]['beats'][0]['hinges'][0]['source']['text'] = '改过。'
     assert plan_project(base) != plan_project(changed)
     assert context_project(base) != context_project(changed)
-
-    changed_summary = copy.deepcopy(base)
-    changed_summary['blueprints'][0]['summary'] = '新摘要'
-    assert plan_project(base) != plan_project(changed_summary)
-    assert context_project(base) == context_project(changed_summary)
 
     changed_narration = copy.deepcopy(base)
     changed_narration['blueprints'][0]['narration'][0]['grammatical_person'] = 'first'
@@ -404,8 +397,6 @@ def _stage4_grounding_payload() -> dict:
                 'text': text,
                 'start': start,
                 'end': start + len(text),
-                'normalized': text.rstrip('。'),
-                'recovery': 'exact',
             },
         }
 
@@ -446,14 +437,13 @@ def _stage4_grounding_payload() -> dict:
             'secrets': [{
                 'secret_id': 'secret_01', 'fact': '真相',
                 'fact_evidence': evidence(1, '甲早已知道那件旧事的真相。', 62),
-                'group_id': None,
                 'knowledge_events': [{
                     'subject': {'kind': 'character', 'char_id': 'char_001'},
                     'known_from_chapter': 1,
                     'evidence': evidence(1, '甲把旧信重新收进柜底。', 75),
                 }],
                 'setup': {'kind': 'foreshadowed', 'chapters': [1]},
-                'reader_reveal_events': [{'chapter': 2, 'kind': 'first'}],
+                'first_reveal_chapter': 2,
             }],
             'world_rules': [{
                 'rule_id': 'wr_01', 'kind': 'legal_rule',
@@ -469,8 +459,6 @@ def _stage4_grounding_payload() -> dict:
             'ending': '甲守住了铺子也说清了旧事',
             'arc_tracks': [{
                 'subject': 'char_001',
-                'dimension': '处境',
-                'change_type': 'development',
                 'trajectory': '从独自隐瞒到公开承担',
                 'trajectory_evidence': evidence(2, '甲当众展开旧信并认下责任。', 100),
             }],
@@ -600,8 +588,6 @@ def test_downstream_grounding_freshness_ignores_every_evidence_only_edit(
                 'text': marker,
                 'start': start,
                 'end': start + len(marker),
-                'normalized': f'NORMALIZED_{index}',
-                'recovery': 'normalized',
             },
         }
     _write_payload(base / '书名_123', STAGE2_GLOBAL_GROUNDING, grounding)
@@ -615,7 +601,7 @@ def test_downstream_grounding_freshness_ignores_every_evidence_only_edit(
 
 
 @pytest.mark.parametrize('edited', (
-    'secret_fact', 'setup', 'reveal_events', 'knowledge_events', 'role', 'fate',
+    'secret_fact', 'setup', 'first_reveal', 'knowledge_events', 'role', 'fate',
     'relations', 'setting', 'arc', 'world_rules',
     'name_distinctiveness', 'address_context', 'address_by', 'address_from_chapter',
 ))
@@ -644,8 +630,8 @@ def test_blueprint_grounding_projection_only_tracks_attested_names(edited: str):
         secret['fact'] = '另一个真相'
     elif edited == 'setup':
         secret['setup'] = {'kind': 'cold'}
-    elif edited == 'reveal_events':
-        secret['reader_reveal_events'] = [{'chapter': 9}]
+    elif edited == 'first_reveal':
+        secret['first_reveal_chapter'] = 9
     elif edited == 'knowledge_events':
         secret['knowledge_events'][0]['subject'] = {
             'kind': 'group', 'label': '在场众人'}

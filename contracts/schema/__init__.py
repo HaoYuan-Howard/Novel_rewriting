@@ -133,11 +133,11 @@ from contracts.schema.stage0 import (
 from contracts.schema.stage1 import HookCopy, MainText, MainTextSection
 from contracts.schema.stage2 import (
     Address, AddressContextPatch, Arc, ArcTrack, ArcTrackPatch, Beat, Blueprint, Canon,
-    ChapterBlueprints, ChapterBlueprintsResponse, Character, CharacterEnumPatch,
+    ChapterBlueprints, Character,
     CharacterAddressReplacement, CharacterRef, ConflictStage, Entities, EvidenceLocator,
     CausalEdge, FactAtom, FactEvidence, GlobalEdit, GlobalGrounding, GlobalCharacterPatch,
     GlobalGroundingResponse, GroupRef, Hinge, KnowledgeEvent, KnowledgeEventResponse,
-    Narration, ReaderRevealEvent, Relation, RelationPatch, RelationVisibility,
+    Narration, Relation, RelationPatch, RelationVisibility,
     RoleSplitResponse, Secret, SecretPatch, Setting, SettingPatch, SourceSpan, WorldRule,
     WorldRulePatch, WorldRuleVersion,
 )
@@ -192,7 +192,7 @@ class ArtifactSpec:
     ⚠ 这里曾有第三格 `migrations`（低版本 → 当前版本的迁移链）。删除的理由见模块头
     【版本】那一段：它保护的不是存量产物，是**没人重建过的**存量产物。
     `current_version` 保留为可写，是因为它仍要承担「这个形状破坏过几次」这件事——
-    `stage2/chapter_blueprints.json` 已破坏过两次（2026-08-19、2026-08-23，见版本账）。
+    `stage2/chapter_blueprints.json` 已多次破坏形状（见版本账）。
     """
 
     model: type[BaseModel]
@@ -231,18 +231,16 @@ ARTIFACT_SPECS: dict[str, ArtifactSpec] = {
     # Stage0～7 减法完成后，两本现役书统一从头重建，不做迁移或手补字段。
     STAGE1_MAIN_TEXT: ArtifactSpec(MainText, 3),
     STAGE1_HOOK_COPY: ArtifactSpec(HookCopy, 2),
-    # ⚠ 两次形状破坏：v2 是 secret 原子时间线；v3 是显式 relation visibility、
-    #   knowledge_events、代码回取事实证据与 valid_through 改名。破坏与重建责任登记在
-    #   `tests/test_artifact_versions.py::_SHAPE_BREAKS`。
-    STAGE2_GLOBAL_GROUNDING: ArtifactSpec(GlobalGrounding, 3),
+    # ⚠ v4 删除无下游作用的 span 恢复账、secret 分组/确认事件与 arc 分类标签；存量
+    #   只能由 `stage2.global` 付费重建。完整版本账见 artifact version 守卫。
+    STAGE2_GLOBAL_GROUNDING: ArtifactSpec(GlobalGrounding, 4),
     STAGE2_GLOBAL_REVIEW: ArtifactSpec(GlobalReview),
     STAGE2_GLOBAL_REVIEW_DECISIONS: ArtifactSpec(GlobalReviewDecisionSet),
     # ⚠ 人产的 Stage2 typed 订正决策集（`stage2.global --apply-edit` 吃它）——
     #   与下面三份 `*_edit.json` 同一类：不是节点产的，但落在产物目录、
     #   被 `store.read` 当上游边记账 ⇒ 形状同样是契约。
-    # ⚠ v2：人工决策随 GlobalGrounding v3 改成 locator/knowledge/visibility typed 面；
-    #   旧 v1 决策不能推断知情时点或证据，必须由人按新契约重写，不做迁移。
-    STAGE2_GLOBAL_EDIT: ArtifactSpec(GlobalEdit, 2),
+    # ⚠ v3：随 GlobalGrounding v4 删除同一批冗余字段；由人按当前 typed 契约重写。
+    STAGE2_GLOBAL_EDIT: ArtifactSpec(GlobalEdit, 3),
     # ⚠⚠ 2026-08-19 首次破坏：beat 区间改由**段号**算出，升 v2。
     #   2026-08-23 第二次破坏：`BlueprintContext.architecture` 从七值收窄为
     #   v1.1/v2/v3.1 三值，升 v3；2026-08-24 再收成 v2/v3.1 两值，升 v4。
@@ -250,7 +248,9 @@ ARTIFACT_SPECS: dict[str, ArtifactSpec] = {
     #   **存量产物由谁重建：`stage2.blueprint` 整跑（付费）**；`.INVALID` 与 `_rounds/`
     #   一律作废，不手补字段冒充当前产地。取值与升版记录见
     #   `contracts/invariants.py::BLUEPRINT_ARCHITECTURE`。
-    STAGE2_CHAPTER_BLUEPRINTS: ArtifactSpec(ChapterBlueprints, 5),
+    # v6 删除摘要、人物显示名、重复父键与无消费者 provenance 账；由
+    # `stage2.blueprint` 整跑（付费）重建，不迁移或手补。
+    STAGE2_CHAPTER_BLUEPRINTS: ArtifactSpec(ChapterBlueprints, 6),
     # 2026-08-24 Stage3 定性包整批退役：顶层只留 measurable + 免费 provenance。
     # v1 不迁移；普通旧书由免费 producer 重建，已用于实验的两本按归档清单保留历史字节。
     STAGE3_STYLE_GROUNDING: ArtifactSpec(StyleGrounding, 2),
@@ -258,14 +258,15 @@ ARTIFACT_SPECS: dict[str, ArtifactSpec] = {
     STAGE4_EVIDENCE_BINDING: ArtifactSpec(EvidenceBinding),
     STAGE4_PLAN_CHAPTERS: ArtifactSpec(PlanChapters, 3),
     STAGE4_PLAN_EDIT: ArtifactSpec(PlanEdit, 3),
-    STAGE4_WRITER_CONTEXT: ArtifactSpec(WriterContext, 2),
+    # v3 随 Stage2 ArcTrack 删除无消费分类标签；由 `stage4.context` 免费重建。
+    STAGE4_WRITER_CONTEXT: ArtifactSpec(WriterContext, 3),
     # ⚠ **恒等基线是一份【产物】不是一次 print**（2026-08-12，F3-4）。
     #   `stage4.plan --identity` 必须让「跑过且写手手里有这些」与
     #   「从没跑过」在盘上长得一模一样（`Q-2`）。stage6/stage7 在同一道工序上都做对了。
     #   ⚠ 它与正式那份**同一个模型**：形状完全一样，差别只在三个 goal 是显式标记
     #   ——**换一个模型就等于说它是另一种东西**，而它恰恰要回答
     #   「计划什么都不改时，写手手里到底有什么」。
-    STAGE4_WRITER_CONTEXT_IDENTITY: ArtifactSpec(WriterContext, 2),
+    STAGE4_WRITER_CONTEXT_IDENTITY: ArtifactSpec(WriterContext, 3),
     # ⚠ 2026-08-24 单臂折平：删除 `mode`，路径改为
     #   `stage5/chNN.json`。存量双臂稿是只读历史证据，不做迁移；
     #   current 产物由 `stage5.write` 重建。
@@ -431,15 +432,15 @@ __all__ = [
     'Stage0Current', 'Stage0DismissedCandidate',
     'MainText', 'MainTextSection', 'HookCopy',
     'GlobalGrounding', 'Entities', 'Character', 'Address', 'Relation', 'Canon',
-    'Setting', 'WorldRule', 'WorldRuleVersion', 'Secret', 'ReaderRevealEvent',
+    'Setting', 'WorldRule', 'WorldRuleVersion', 'Secret',
     'EvidenceLocator', 'FactEvidence', 'CharacterRef', 'GroupRef', 'KnowledgeEvent',
     'KnowledgeEventResponse', 'RelationVisibility',
     'GlobalEdit', 'SecretPatch', 'WorldRulePatch', 'RelationPatch', 'SettingPatch',
-    'ArcTrackPatch', 'GlobalCharacterPatch', 'CharacterEnumPatch',
+    'ArcTrackPatch', 'GlobalCharacterPatch',
     'AddressContextPatch', 'CharacterAddressReplacement', 'Arc', 'ConflictStage',
     'ArcTrack', 'ChapterBlueprints', 'Blueprint', 'Beat', 'FactAtom', 'CausalEdge',
     'SourceSpan', 'Hinge', 'Narration',
-    'GlobalGroundingResponse', 'ChapterBlueprintsResponse', 'RoleSplitResponse',
+    'GlobalGroundingResponse', 'RoleSplitResponse',
     'StyleGrounding', 'StyleProvenance', 'Measurable',
     'BlindCandidate', 'EvidenceBinding',
     'PlanChapters', 'PlanChapter', 'PlanScene', 'FactRef', 'PlanGoal', 'PlanEdit',

@@ -156,15 +156,15 @@ def test_a_wrong_reveal_chapter_is_corrected_and_the_downstream_turns_stale():
             '底座还没动，下游就已经 stale？那这条测试后面什么也证明不了'
 
         _write_edit(book, {'secrets': [
-            {'secret_id': 'secret_01', 'reader_reveal_events': [{'chapter': 3}]}]})
+            {'secret_id': 'secret_01', 'first_reveal_chapter': 3}]})
         artifact, report = _apply(book)
 
         # ① 改真的落进产物
         secret = artifact.canon.secrets[0]
-        assert [event.chapter for event in secret.reader_reveal_events] == [3]
+        assert secret.first_reveal_chapter == 3
         reloaded = ArtifactStore(_ctx(book, 'stage2.global', paid=False)).read(
             GlobalGrounding, extract.GLOBAL_REL)
-        assert [e.chapter for e in reloaded.canon.secrets[0].reader_reveal_events] == [3]
+        assert reloaded.canon.secrets[0].first_reveal_chapter == 3
 
         # ② 重走归一：埋点章 1 < 新揭示章 3 ⇒ 不该被裁掉
         assert secret.setup.chapters == [1]
@@ -207,7 +207,7 @@ def test_correcting_the_reveal_chapter_backwards_reprunes_and_then_hits_the_same
         _seed(book)
         before = (book / extract.GLOBAL_REL).read_bytes()
         _write_edit(book, {'secrets': [
-            {'secret_id': 'secret_01', 'reader_reveal_events': [{'chapter': 1}]}]})
+            {'secret_id': 'secret_01', 'first_reveal_chapter': 1}]})
 
         with pytest.raises(GateBlocked, match='secret_setup_order'):
             _apply(book)
@@ -221,7 +221,7 @@ def test_correcting_the_reveal_chapter_backwards_reprunes_and_then_hits_the_same
         assert report.passed
         stored = ArtifactStore(_ctx(book, 'stage2.global', paid=False)).read(
             GlobalGrounding, extract.GLOBAL_REL)
-        assert [e.chapter for e in stored.canon.secrets[0].reader_reveal_events] == [1]
+        assert stored.canon.secrets[0].first_reveal_chapter == 1
         assert stored.canon.secrets[0].setup.kind == 'cold'
         assert stored.provenance.setup_chapters_pruned == []
         assert not (book / extract._GLOBAL_INVALID).exists()
@@ -250,7 +250,7 @@ def test_fact_and_typed_knowledge_timeline_land_together():
             'character', 'group']
         assert [event.known_from_chapter for event in secret.knowledge_events] == [1, 2]
         # 没给的字段一个都不许动
-        assert [e.chapter for e in secret.reader_reveal_events] == [2]
+        assert secret.first_reveal_chapter == 2
     finally:
         shutil.rmtree(root, ignore_errors=True)
 
@@ -442,14 +442,14 @@ def test_complete_typed_surfaces_reach_disk_and_rebuild_the_human_review():
                 'fact_evidence': _fact_locator(),
                 'knowledge_events': [_knowledge_character('char_002', 2)],
                 'setup': {'kind': 'foreshadowed', 'chapters': [1]},
-                'reader_reveal_events': [{'chapter': 3}],
+                'first_reveal_chapter': 3,
             }, {
                 'secret_id': 'secret_02',
                 'fact': '母亲早就知道那封信的事',
                 'fact_evidence': _locator(2, '其实母亲早就知道那封信的事。'),
                 'knowledge_events': [_knowledge_character('char_001', 1)],
                 'setup': {'kind': 'cold'},
-                'reader_reveal_events': [{'chapter': 2}],
+                'first_reveal_chapter': 2,
             }],
             'world_rules_replace': [{
                 'rule_id': 'wr_02',
@@ -595,7 +595,7 @@ def test_an_unknown_field_is_refused_by_the_carrier():
     那会让「我改过了」与「什么都没改」在盘上同形。"""
     with pytest.raises(ValidationError):
         GlobalEdit.model_validate({'secrets': [
-            {'secret_id': 'secret_01', 'reveal_chapter': 3}]})           # 正确的是 reader_reveal_events
+            {'secret_id': 'secret_01', 'reveal_chapter': 3}]})           # 正确的是 first_reveal_chapter
     with pytest.raises(ValidationError):
         GlobalEdit.model_validate({'secret': [{'secret_id': 'secret_01', 'fact': 'x'}]})
 
@@ -619,7 +619,7 @@ def test_two_patches_for_one_secret_are_refused():
 
 
 @pytest.mark.parametrize('payload,why', [
-    ({'secrets': [{'secret_id': 'secret_01', 'reader_reveal_events': [{'chapter': 9}]}]},
+    ({'secrets': [{'secret_id': 'secret_01', 'first_reveal_chapter': 9}]},
      '揭示章越界'),
     ({'secrets': [{'secret_id': 'secret_01', 'setup': {'kind': 'foreshadowed', 'chapters': [7]}}]},
      '埋点章越界'),
@@ -819,7 +819,7 @@ def test_the_patch_does_not_touch_anything_outside_the_named_secret():
         store = ArtifactStore(_ctx(book, 'stage2.global', paid=False))
         _artifact_before, before = store.read_own(GlobalGrounding, extract.GLOBAL_REL)
         _write_edit(book, {'secrets': [
-            {'secret_id': 'secret_01', 'reader_reveal_events': [{'chapter': 3}]}]})
+            {'secret_id': 'secret_01', 'first_reveal_chapter': 3}]})
         _apply(book)
         _artifact_after, after = ArtifactStore(
             _ctx(book, 'stage2.global', paid=False)).read_own(
@@ -828,8 +828,7 @@ def test_the_patch_does_not_touch_anything_outside_the_named_secret():
         expected = copy.deepcopy(before)
         # ⚠ 决策集里没写 `kind`，落盘那一格仍然要带上它（载体默认 `first`）：
         #   这里跟着写全，才是「这一格整格被替换」而不是「少写一个键也算没溢出」。
-        expected['canon']['secrets'][0]['reader_reveal_events'] = [
-            {'chapter': 3, 'kind': 'first'}]
+        expected['canon']['secrets'][0]['first_reveal_chapter'] = 3
         expected.pop('_provenance')
         got = copy.deepcopy(after)
         got.pop('_provenance')

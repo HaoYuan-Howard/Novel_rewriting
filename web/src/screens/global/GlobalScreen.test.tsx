@@ -20,7 +20,7 @@ const disclosure = {
 function evidence(text: string): GlobalFactEvidence {
   return {
     chapter_ordinal: 3,
-    source: { text, start: 10, end: 10 + text.length, normalized: text, recovery: 'exact' },
+    source: { text, start: 10, end: 10 + text.length },
   }
 }
 
@@ -65,7 +65,6 @@ function globalView(): Stage2Global {
         secret_id: 'secret_01',
         fact: '一条秘密',
         fact_evidence: evidence('秘密证据'),
-        group_id: null,
         knowledge_events: [
           {
             subject_kind: 'group',
@@ -77,7 +76,6 @@ function globalView(): Stage2Global {
         setup_kind: 'cold',
         setup_chapters: [],
         first_reveal_chapter: 3,
-        reader_reveal_chapters: [3],
       },
     ],
     arc: {
@@ -87,8 +85,6 @@ function globalView(): Stage2Global {
       arc_tracks: [
         {
           subject: name,
-          dimension: '处境',
-          change_type: 'development',
           trajectory: '从受困到反击',
           trajectory_evidence: evidence('弧线证据'),
         },

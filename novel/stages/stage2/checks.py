@@ -1,24 +1,22 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-checks.py —— 77 条判据的**实现**。行在 `contracts/judges/stage2.py`（`Q-12`）。
+checks.py —— Stage2 判据的**实现**。行在 `contracts/judges/stage2.py`（`Q-12`）。
 
 ⚠⚠ **唯一的判定落点。** 两个节点的落盘闸门 / `--check-only` / `--renormalize` 之后的复检
 走的都是 `check()` 这一个函数，保证生成、重算与复检使用同一把尺子。
 
 ⚠⚠ **本模块吃 `dict` 不吃模型。** 一旦判据跑在已经过了 Pydantic 的对象上，
 「必填齐全」那一类（`role_missing` / `address_missing` / `world_rule_no_desc` /
-`fact_atom_empty` / `summary_empty`）在**结构上构造不出会红的样本**
+`fact_atom_empty`）在**结构上构造不出会红的样本**
 ——它们必然全绿。纯函数保留 dict 输入面，是为了让当前候选在写入前能产出带规则 id、
 证据与修复路由的完整报告；正式读取仍只接受当前 Pydantic schema。
 
 【一张表，两个节点共用】`stage2.global` 判 R-2 那一族、`stage2.blueprint` 判 R-3 那一族，
 而**复检相两份产物一起读**（判 `canonical_unique` 要 global，判 `present_ids_dangling`
-要 registry）⇒ `check()` 一次产全部 77 条。缺哪一份，那一族落 `unver` **不是「通过」**。
+要 registry）⇒ `check()` 一次产全部判据。缺哪一份，那一族落 `unver` **不是「通过」**。
 
-【判据与产地必须用同一把尺子】本模块一处都不自己写解析：
-`surface_owners` / `surface_owner_since` / `resolve_present_names` / `classify_unattested`
-全部来自 `novel/core/naming.py`，正式区间读取来自 `novel/core/spans.py`。
+【判据与产地必须用同一把尺子】人物称名与正式区间都从公共模块读取。
 原型为此吃过两次亏——校验器手抄了一版「只比 canonical」，而下游比的是 display_name，
 **两份都漏掉了别名，且没有任何东西会出声**。
 
@@ -44,12 +42,11 @@ from contracts.schema.report import finding as _finding
 from novel.core.evidence import iter_global_evidence_slots
 from novel.core.facts import heuristic_relation_gates, relation_visibility_gates
 from novel.core.naming import (
-    classify_unattested, person_naming_surfaces, resolve_present_names, rule_names_a_person,
-    strip_distinguisher, surface_first_chapter, surface_owner_since, surface_owners,
+    person_naming_surfaces, rule_names_a_person, strip_distinguisher,
+    surface_first_chapter,
 )
 from novel.core.spans import content_only, exact_span, locate_spans
 from novel.stages.stage2.coverage import hole_intervals
-from novel.stages.stage2.contract import CONTRACTS
 from novel.core.text import norm
 from novel.report.findings import Outcome, ran, unverifiable
 
@@ -88,7 +85,7 @@ def finding(rule: str, *, detail: str, evidence: list[str], **kwargs) -> Finding
 #   那张表收的是「**同时**进 prompt 与判据」的枚举，而这三份只有判据一个消费方。
 #   放进去就是给它们造第二个家。
 #   ⚠ **`BARE_PRONOUNS` 是反例**：它有三个消费方（`GLOBAL_SYS` 的禁令 ·
-#   `address_bare_pronoun`/`address_has_pronoun` · 度量 `present_names_pronoun`）
+#   `address_bare_pronoun`/`address_has_pronoun`）
 #   ⇒ 它在 `invariants` 里，本模块 import 它、**不手抄子集**。
 
 #: `role` / `fate` / `canonical` 里的模棱语。
@@ -197,18 +194,13 @@ class _Ctx:
         self.world_rules: list[dict] = canon.get('world_rules') or []
         self.secrets: list[dict] = canon.get('secrets') or []
 
-        # 【到第 N 章为止的正文】`resolve_present_names` 的 `text_upto` 与
-        # 「原文首次出现在第几章」两处共用它。⚠ 是**累积**不是本章——
-        # 收窄到「只本章」会把合法情况一起排除（详见 `resolve_present_names` 的 docstring）。
+        # 【到第 N 章为止的正文】供「原文首次出现在第几章」读取。
         self.cum: dict[Any, str] = {}
         acc: list[str] = []
         for o in self.ords:
             acc.append(self.text_of.get(o, ''))
             self.cum[o] = '\n'.join(acc)
         self.whole: str = self.cum.get(self.ords[-1], '') if self.ords else ''
-
-        self.owners = surface_owners(self.chars)
-        self.since = surface_owner_since(self.chars)
 
         self.spans: dict[Any, list[tuple[str, int, int]]] = {}
         self.span_problems: list[tuple[Any, str]] = []
@@ -646,10 +638,10 @@ def _canon(c: _Ctx) -> list[Outcome]:
             bad_canon_chapters.extend(
                 f'{sid}.setup.chapters={chapter!r}'
                 for chapter in (setup.get('chapters') or []) if chapter not in c.ords)
-            bad_canon_chapters.extend(
-                f'{sid}.reader_reveal_events.chapter={(event or {}).get("chapter")!r}'
-                for event in (secret.get('reader_reveal_events') or [])
-                if (event or {}).get('chapter') not in c.ords)
+            reveal = secret.get('first_reveal_chapter')
+            if reveal not in c.ords:
+                bad_canon_chapters.append(
+                    f'{sid}.first_reveal_chapter={reveal!r}')
         out.append(ran(
             'canon_chapter_refs_dangling',
             [finding(
@@ -659,7 +651,7 @@ def _canon(c: _Ctx) -> list[Outcome]:
                 evidence=sorted(bad_canon_chapters),
             )] if bad_canon_chapters else [],
             scanned=(f'{sum(len(r.get("versions") or []) for r in c.world_rules)} 个规则版本 + '
-                     f'{sum(len(((s.get("setup") or {}).get("chapters") or [])) + len(s.get("reader_reveal_events") or []) for s in secs)} 个 secret 时间点'),
+                     f'{sum(len(((s.get("setup") or {}).get("chapters") or [])) + 1 for s in secs)} 个 secret 时间点'),
         ))
 
     # `secrets_absent`：**永远输出**（`sev='unver'`）。
@@ -740,14 +732,13 @@ def _canon(c: _Ctx) -> list[Outcome]:
     else:
         unmarked, n_pairs = [], 0
         for s in secs:
-            for e in (s.get('reader_reveal_events') or []):
-                ch = (e or {}).get('chapter')
-                body = c.text_of.get(ch, '')
-                if ch is None or not body:
-                    continue
-                n_pairs += 1
-                if not any(m in body for m in REVEAL_MARKS):
-                    unmarked.append(f'{s.get("secret_id")}@ch{ch}({len(body)}字)')
+            ch = s.get('first_reveal_chapter')
+            body = c.text_of.get(ch, '')
+            if ch is None or not body:
+                continue
+            n_pairs += 1
+            if not any(m in body for m in REVEAL_MARKS):
+                unmarked.append(f'{s.get("secret_id")}@ch{ch}({len(body)}字)')
         out.append(ran('reveal_unmarked',
                        [finding('reveal_unmarked',
                                 detail=f'{len(unmarked)}/{n_pairs} 组「秘密→揭示章」的那一章里'
@@ -896,14 +887,13 @@ def _arc(c: _Ctx) -> list[Outcome]:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 六、拍与区间（7 HARD · 2 INFO）+ 相关度量
+# 六、拍与区间（7 HARD · 1 INFO）+ 相关度量
 # ─────────────────────────────────────────────────────────────────────────────
 
 _BEAT_RULES = ('beat_id_unique', 'beat_id_format', 'span_unlocatable',
                'verbatim_failed', 'edge_hole', 'beats_collapsed',
                'beats_coarse', 'span_coverage', 'span_coverage_per_chapter',
-               'uncovered_holes', 'place_inherit_without_base',
-               'place_explicit_unlocatable')
+               'uncovered_holes')
 
 
 def _beats(c: _Ctx) -> list[Outcome]:
@@ -950,7 +940,6 @@ def _beats(c: _Ctx) -> list[Outcome]:
                     'uncovered_holes'):
             out.append(unverifiable(rid, _NO_MAIN_TEXT))
         out += _verbatim(c)
-        out += _place_inherit(c)
         out += _place_unlocatable(c)
         return out
 
@@ -1045,49 +1034,7 @@ def _beats(c: _Ctx) -> list[Outcome]:
                            f'最粗 {max((r for _o, r in ratios), default=0):.0f}）'))
 
     out += _verbatim(c)
-    out += _place_inherit(c)
-    out += _place_unlocatable(c)
     return out
-
-
-def _place_inherit(c: _Ctx) -> list[Outcome]:
-    """`place_inherit_without_base`（INFO）：链头 `P_INHERIT` 的账。
-
-    与 `_verbatim` 同族——断言的是 `_provenance` 里的账，不是字段值
-    （产物侧 `place=null` 分不出「无从知道」与「指错了继承」）。
-    ⚠ `bounded-fidelity-v3` 的产地没有这个概念，键不在/为空 ⇒ 空行不是绿灯，
-    是该失效模式在旧架构下结构性不存在；`extraction-ir-v1` 的 compiler
-    恒写这个键（没有链头也写空表）。
-    """
-    rows = [str(x) for x in (c.prov.get('place_inherit_without_base') or [])]
-    return [ran('place_inherit_without_base',
-                [finding('place_inherit_without_base',
-                         detail=f'{len(rows)} 拍声称延续上一拍地点但链上没有基'
-                                f'（已落 place=null）：{_cut(rows)}',
-                         evidence=sorted(rows))] if rows else [],
-                scanned=f'{len(rows)} 条链头 P_INHERIT 记录')]
-
-
-def _place_unlocatable(c: _Ctx) -> list[Outcome]:
-    """`place_explicit_unlocatable`（INFO）：`P_EXPLICIT` 的地点名在截止本章正文里找不到。
-
-    与 `_place_inherit` 同族——断言 `_provenance` 里的账，不是字段值。
-    ⚠ **这是地点幻觉的配套探针，不是违约判定**：读数最初为 v1.1
-    实验建立，对保留的 v2 / v3.1 地点字面同样适用。
-    读法是**对比着读**——`有地点的拍` 涨而这条同步涨，涨的是幻觉不是覆盖。
-    ⚠⚠ **命中不等于违规**：盘上基线（Pro×v3 无情道）是 17/132 ≈ 13%，
-    而那 17 条逐条看全是**用原文成分组合**出来的（「武场外」「黎玄的洞府」）。
-    ⇒ 判 INFO，且读的是**相对基线的变化**，不是绝对值。
-    """
-    rows = [f'{beat_id}:{name}' for beat_id, name in
-            ((str(r[0]), str(r[1])) for r in
-             (c.prov.get('place_explicit_unlocatable') or []) if len(r) >= 2)]
-    return [ran('place_explicit_unlocatable',
-                [finding('place_explicit_unlocatable',
-                         detail=f'{len(rows)} 拍的 P_EXPLICIT 地点名在截止本章的正文里'
-                                f'找不到：{_cut(rows)}',
-                         evidence=sorted(rows))] if rows else [],
-                scanned=f'{len(rows)} 条 P_EXPLICIT 无字面依据记录')]
 
 
 def _uncovered(c: _Ctx, min_chars: int) -> list[tuple[Any, int, int, int, str, str]]:
@@ -1295,35 +1242,28 @@ def _hinges(c: _Ctx) -> list[Outcome]:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 八、在场与叙述（8 HARD · 6 INFO）+ 度量
+# 八、在场与叙述 + 度量
 # ─────────────────────────────────────────────────────────────────────────────
 
 _PRESENT_RULES = (
     'time_layer_no_present', 'present_ids_dangling',
-    'present_names_invented', 'present_continuity', 'present_ungrounded',
+    'present_continuity', 'present_ungrounded',
     'present_early_named', 'event_early_name', 'pronoun_surface_unattested',
-    'narration_multi', 'scope_violation', 'fact_atom_empty', 'summary_empty',
-    'repair_cache_policy', 'narration_voices', 'time_layer_mix', 'place_moves',
-    'present_names_ambiguous', 'present_names_unlisted', 'present_names_pronoun',
-    'present_names_late', 'present_broad', 'batch_density', 'context_scope')
+    'narration_multi', 'scope_violation', 'fact_atom_empty',
+    'narration_voices', 'time_layer_mix', 'place_moves',
+    'present_broad', 'context_scope')
 
 
 def _context_observation(context: dict[str, Any]) -> tuple[str, list[str]]:
     architecture = context.get('architecture')
-    batch_size = context.get('batch_size')
-    current_full = context.get('current_chapter_full')
-    future_visible = context.get('future_visible')
     # ⚠ 当前架构标识从**契约**取，不在判据里手抄一份字面：产地
     #   （`extract.blueprint_context`）与这里此前各写一份 `'bounded-fidelity-v2'`，
     #   升版时改一处忘一处，就得到「产物明明是新架构、判据说不符合约定」的假红。
     #   2026-08-20 起取值面是双值（`extraction-ir-v1` 与 v3 并存），成员判断即约定。
-    ok = (architecture in BLUEPRINT_ARCHITECTURES and batch_size == 1
-          and current_full is True and future_visible is False)
-    verdict = '当前章全文保留、未来正文不可见' if ok else '⚠ 模型可见边界不符合约定'
+    ok = architecture in BLUEPRINT_ARCHITECTURES
+    verdict = '现役有界上下文架构' if ok else '⚠ 未登记的上下文架构'
     detail = (
-        f'architecture={architecture} · batch_size={batch_size} · '
-        f'stable_prefix={context.get("stable_prefix")} · current_full={current_full} · '
-        f'future_visible={future_visible} · '
+        f'architecture={architecture} · stable_prefix={context.get("stable_prefix")} · '
         f'past_neighbor≤{context.get("past_neighbor_chars_max")} 字 · '
         f'continuity≤{context.get("continuity_chars_max")} 字 · '
         f'past_names≤{context.get("past_names_chars_max")} 字 —— {verdict}'
@@ -1331,8 +1271,6 @@ def _context_observation(context: dict[str, Any]) -> tuple[str, list[str]]:
     evidence = [
         str(architecture),
         f'stable={context.get("stable_prefix")}',
-        f'current_full={current_full}',
-        f'future_visible={future_visible}',
         f'past_neighbor={context.get("past_neighbor_chars_max")}',
         f'continuity={context.get("continuity_chars_max")}',
         f'past_names={context.get("past_names_chars_max")}',
@@ -1415,90 +1353,6 @@ def _present(c: _Ctx) -> list[Outcome]:
                                 detail=f'{len(bad_pc)} 个 present_char_ids 不在 registry 里：{_cut(bad_pc)}',
                                 evidence=sorted(bad_pc))] if bad_pc else [],
                        scanned=f'{n_pc} 个引用 / registry {len(c.chars)} 人'))
-
-    # ── 五分：自造（HARD）+ 歧义/漏收/代词/时点（4 条度量）────────────────
-    five = ('present_names_invented', 'present_names_ambiguous', 'present_names_unlisted',
-            'present_names_pronoun', 'present_names_late')
-    if not (c.has_gg and c.has_mt):
-        why = _NO_GLOBAL if not c.has_gg else _NO_MAIN_TEXT
-        out += [unverifiable(r, why) for r in five]
-    else:
-        pron = set(BARE_PRONOUNS)
-        invented, late, amb, pron_hit, unlisted = [], [], [], [], []
-        n_pn = 0
-        architecture = str(
-            (c.prov.get('context') or {}).get('architecture') or '')
-        spec = CONTRACTS.get(architecture)
-        direct_present_refs = bool(spec and spec.uses_character_refs)
-        direct_narration_refs = bool(spec and spec.uses_narration_refs)
-        for x in c.bps:
-            o = x.get('chapter_ordinal')
-            upto = c.cum.get(o, '')
-            slots: list[tuple[str, list[str], list[str] | None]] = [
-                (str(be.get('beat_id')), list(be.get('present_names') or []),
-                 list(be.get('present_char_ids') or [])
-                 if direct_present_refs else None)
-                for be in (x.get('beats') or [])]
-            slots += [
-                (f'narration.{name_key}',
-                 [seg[name_key]] if seg.get(name_key) else [],
-                 ([str(seg[id_key])] if seg.get(id_key) else [])
-                 if direct_narration_refs else None)
-                for seg in (x.get('narration') or [])
-                for name_key, id_key in (
-                    ('narrator_name', 'narrator_char_id'),
-                    ('focalizer_name', 'focalizer_char_id'),
-                )
-                if name_key in seg
-            ]
-            for where, names, direct_ids in slots:
-                n_pn += len(names)
-                unresolved: list[str] = []
-                for index, raw in enumerate(names):
-                    cid = (direct_ids[index]
-                           if direct_ids is not None and index < len(direct_ids)
-                           else None)
-                    key = norm(raw)
-                    # ContractSpec 声明为关闭式的 char_id 是模型直接从可见集合里选的
-                    # 权威引用；人读 name 只是编译器的确定性投影。同一个「师尊」即使
-                    # 挂两个人，只要投影字面确实属于所选 id，就不能再报「歧义」——
-                    # 那会把确定引用翻回开放字面，再制造一条守卫假红。能力从注册表
-                    # 派生，不能把某一时点的默认架构名钉成永久边界；v2/v3.1 都关闭
-                    # present 引用，v3.1 还关闭 narration 引用。
-                    if cid is not None and key in norm(upto) \
-                            and cid in c.owners.get(key, frozenset()) \
-                            and (c.since.get(key) or {}).get(cid, 1) <= o:
-                        continue
-                    unresolved.append(raw)
-                # 【代词先分出去，别混进「自造」】`address[].surface` 按设计**永不收代词**
-                # ⇒ 第一人称书里的「我」永远解析不出来——那不是模型编了一个人，
-                # 是两条契约在这里对不上。
-                pron_hit += [f'ch{o} {where} {n!r}'
-                             for n in unresolved if norm(n) in pron]
-                rest = [n for n in unresolved if norm(n) not in pron]
-                _ids, ambs, un = resolve_present_names(rest, upto, c.owners, c.since, o)
-                amb += [f'ch{o} {where} {s!r}→{cs}' for s, cs in ambs]
-                for raw in un:
-                    kind = classify_unattested(raw, upto, c.whole)
-                    target = {'late': late, 'unknown': unlisted}.get(kind, invented)
-                    target.append(f'ch{o} {where} {raw!r}')
-        out.append(ran('present_names_invented',
-                       [finding('present_names_invented',
-                                detail=f'{len(invented)}/{n_pn} 个在场者称呼在全书原文里'
-                                       f'都找不到：{_cut(invented)}',
-                                evidence=sorted(invented))] if invented else [],
-                       scanned=f'{n_pn} 个在场者称呼'))
-        for rid, got in (
-            ('present_names_ambiguous', amb),
-            ('present_names_unlisted', unlisted),
-            ('present_names_pronoun', pron_hit),
-            ('present_names_late', late),
-        ):
-            out.append(ran(rid, [
-                finding(rid, detail=f'{len(got)}/{n_pn}'
-                                    + (f'：{_cut(got, 6)}' if got else ''),
-                        evidence=[f'{len(got)}/{n_pn}'])],
-                scanned=f'{n_pn} 个在场者称呼'))
 
     # ── 松紧与连续性（宽筛度量 + 窄筛 INFO）───────────────────────────────
     if not c.has_gg:
@@ -1644,7 +1498,7 @@ def _present(c: _Ctx) -> list[Outcome]:
             o = x.get('chapter_ordinal')
             if not o:
                 continue
-            body = (x.get('summary') or '') + ' ' + ' '.join(
+            body = ' '.join(
                 str(atom.get('claim') or '') for atom in (x.get('fact_atoms') or []))
             for nm in sorted(canon_first):
                 f = c.first_seen([nm])
@@ -1653,7 +1507,7 @@ def _present(c: _Ctx) -> list[Outcome]:
                 early_txt.append(f'ch{o} 「{nm}」(原文首现=ch{f})')
         out.append(ran('event_early_name',
                        [finding('event_early_name',
-                                detail=f'{len(early_txt)} 处 event/summary 里写出了本章尚未指名的'
+                                 detail=f'{len(early_txt)} 处事实 claim 写出了本章尚未指名的'
                                        f'角色名：{_cut(early_txt)}',
                                 evidence=sorted(early_txt))] if early_txt else [],
                        scanned=f'{len(canon_first)} 个 canonical（已排除通名）× {len(c.bps)} 章'))
@@ -1678,7 +1532,7 @@ def _present(c: _Ctx) -> list[Outcome]:
                                 evidence=sorted(bad_pron))] if bad_pron else [],
                        scanned=f'{n_pron} 个自称字面（第三人称交空数组合法）'))
 
-    # ── `scope_violation` / `batch_density` / `context_scope`（`R-3.16b`）─
+    # ── `scope_violation` / `context_scope`（`R-3.16b`）──────────────────
     scope = c.prov.get('scope_violations')
     if scope is None:
         out.append(unverifiable(
@@ -1693,31 +1547,6 @@ def _present(c: _Ctx) -> list[Outcome]:
                                        f'产出）：{_cut(list(scope))}',
                                 evidence=[str(x) for x in scope])] if scope else [],
                        scanned='`_provenance.scope_violations`'))
-
-    batches = c.prov.get('batches')
-    if batches is None:
-        out.append(unverifiable(
-            'batch_density',
-            '这份 blueprint 没记 `_provenance.batches` —— **无从判断哪几章出自同一次调用**。'
-            '无法核对逐章调用次数与章覆盖'))
-    else:
-        per_call = [len(b or []) for b in batches]
-        architecture = (c.prov.get('context') or {}).get('architecture')
-        spec = CONTRACTS.get(str(architecture))
-        phases = 2 if spec is not None and spec.topology == 'boundary_then_detail' else 1
-        call_count = len(batches) * phases
-        shape = (
-            f'两段式逐章抽取（{len(batches)} 章 = {call_count} 次逐章调用）'
-            if phases == 2 and per_call and max(per_call) == 1 else
-            f'逐章抽取（{len(batches)} 章 = {call_count} 次调用）'
-            if per_call and max(per_call) == 1 else
-            f'{len(batches)} 次调用，每次 {per_call} 章'
-        )
-        out.append(ran('batch_density', [
-            finding('batch_density',
-                    detail=shape,
-                    evidence=[f'{len(batches)}', f'{per_call}'])],
-            scanned=f'{len(batches)} 章 × {phases} 相'))
 
     cctx = c.prov.get('context')
     if cctx is None:
@@ -1734,7 +1563,7 @@ def _present(c: _Ctx) -> list[Outcome]:
                     evidence=evidence)],
             scanned='`_provenance.context`'))
 
-    # ── 三条 ✚（原型没有）─────────────────────────────────────────────────
+    # ── 结构事实与修复账 ──────────────────────────────────────────────────
     all_atoms = [(x.get('chapter_ordinal'), atom) for x in c.bps
                  for atom in (x.get('fact_atoms') or [])]
     empty_atoms = [f'ch{o}:{atom.get("fact_id")}' for o, atom in all_atoms
@@ -1749,30 +1578,6 @@ def _present(c: _Ctx) -> list[Outcome]:
                             evidence=sorted(atom_failures))] if atom_failures else [],
                    scanned=f'{len(all_atoms)} 条事实原子 / {len(c.bps)} 章'))
 
-    empty_sum = [f'ch{x.get("chapter_ordinal")}' for x in c.bps
-                 if not (x.get('summary') or '').strip()]
-    out.append(ran('summary_empty',
-                   [finding('summary_empty',
-                            detail=f'{len(empty_sum)}/{len(c.bps)} 章的 summary 是空的：'
-                                   f'{_cut(empty_sum)}',
-                            evidence=sorted(empty_sum))] if empty_sum else [],
-                   scanned=f'{len(c.bps)} 章'))
-
-    repairs = c.prov.get('repairs') or []
-    # ⚠ refresh-write 的纪律**只压整章重生成**（`fields == ['*']`）：那条路重发的是
-    #   与基线同键的请求，不刷新就会读回同一份坏缓存。字段级修复（`--patch`，
-    #   fields 记具体路径）发的是**新 prompt**——缓存里没有坏响应可读，默认策略
-    #   反而是「中断恢复不重复付费」的正确语义（refresh-write = 明确要新采样，
-    #   不是「这是修复调用」）。
-    bad_cache = [f'ch{r.get("chapter_ordinal")}:{r.get("cache_policy")!r}' for r in repairs
-                 if r.get('fields') == ['*']
-                 and r.get('cache_policy') != 'refresh-write']
-    out.append(ran('repair_cache_policy',
-                   [finding('repair_cache_policy',
-                            detail=f'{len(bad_cache)} 次定向重生成的 cache_policy '
-                                   f'不是 refresh-write：{_cut(bad_cache)}',
-                            evidence=sorted(bad_cache))] if bad_cache else [],
-                   scanned=f'{len(repairs)} 次修复（整章级才压 refresh-write）'))
     return out
 
 

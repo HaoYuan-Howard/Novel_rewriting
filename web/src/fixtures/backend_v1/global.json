@@ -13,9 +13,7 @@
       "source": {
         "text": "有懂拳脚的侍卫巡场",
         "start": 314,
-        "end": 323,
-        "normalized": "有懂拳脚的侍卫巡场",
-        "recovery": "exact"
+        "end": 323
       }
     }
   },
@@ -30,9 +28,7 @@
         "source": {
           "text": "特聘教习师",
           "start": 91,
-          "end": 96,
-          "normalized": "特聘教习师",
-          "recovery": "exact"
+          "end": 96
         }
       },
       "fate": "后来成为怡红院主理人。",
@@ -63,9 +59,7 @@
         "source": {
           "text": "我夫君",
           "start": 33,
-          "end": 36,
-          "normalized": "我夫君",
-          "recovery": "exact"
+          "end": 36
         }
       },
       "fate": null,
@@ -93,9 +87,7 @@
         "source": {
           "text": "白月光青梅杜婉儿",
           "start": 599,
-          "end": 607,
-          "normalized": "白月光青梅杜婉儿",
-          "recovery": "exact"
+          "end": 607
         }
       },
       "fate": null,
@@ -123,9 +115,7 @@
         "source": {
           "text": "弟弟杜玉闲",
           "start": 1390,
-          "end": 1395,
-          "normalized": "弟弟杜玉闲",
-          "recovery": "exact"
+          "end": 1395
         }
       },
       "fate": null,
@@ -158,9 +148,7 @@
         "source": {
           "text": "我夫君",
           "start": 33,
-          "end": 36,
-          "normalized": "我夫君",
-          "recovery": "exact"
+          "end": 36
         }
       },
       "object": {
@@ -188,9 +176,7 @@
         "source": {
           "text": "我们早已认定对方",
           "start": 938,
-          "end": 946,
-          "normalized": "我们早已认定对方",
-          "recovery": "exact"
+          "end": 946
         }
       },
       "object": {
@@ -218,9 +204,7 @@
         "source": {
           "text": "弟弟杜玉闲",
           "start": 1390,
-          "end": 1395,
-          "normalized": "弟弟杜玉闲",
-          "recovery": "exact"
+          "end": 1395
         }
       },
       "object": {
@@ -249,9 +233,7 @@
             "source": {
               "text": "苏府女眷可不止我一个",
               "start": 1431,
-              "end": 1441,
-              "normalized": "苏府女眷可不止我一个",
-              "recovery": "exact"
+              "end": 1441
             }
           }
         }
@@ -267,12 +249,9 @@
         "source": {
           "text": "原来，那二人竟已同仇敌忾",
           "start": 1363,
-          "end": 1375,
-          "normalized": "原来，那二人竟已同仇敌忾",
-          "recovery": "exact"
+          "end": 1375
         }
       },
-      "group_id": null,
       "knowledge_events": [
         {
           "subject_kind": "character",
@@ -287,9 +266,7 @@
             "source": {
               "text": "密信给我看",
               "start": 1355,
-              "end": 1360,
-              "normalized": "密信给我看",
-              "recovery": "exact"
+              "end": 1360
             }
           }
         },
@@ -306,9 +283,7 @@
             "source": {
               "text": "找人替他与杜婉儿鸿雁传书",
               "start": 1305,
-              "end": 1317,
-              "normalized": "找人替他与杜婉儿鸿雁传书",
-              "recovery": "exact"
+              "end": 1317
             }
           }
         },
@@ -325,9 +300,7 @@
             "source": {
               "text": "我们早已认定对方",
               "start": 938,
-              "end": 946,
-              "normalized": "我们早已认定对方",
-              "recovery": "exact"
+              "end": 946
             }
           }
         },
@@ -344,19 +317,14 @@
             "source": {
               "text": "龟公神神秘秘地把二人的密信给我看",
               "start": 1344,
-              "end": 1360,
-              "normalized": "龟公神神秘秘地把二人的密信给我看",
-              "recovery": "exact"
+              "end": 1360
             }
           }
         }
       ],
       "setup_kind": "cold",
       "setup_chapters": [],
-      "first_reveal_chapter": 3,
-      "reader_reveal_chapters": [
-        3
-      ]
+      "first_reveal_chapter": 3
     }
   ],
   "arc": {
@@ -389,17 +357,13 @@
           "display": "李宝珠",
           "resolved": true
         },
-        "dimension": "处境",
-        "change_type": "development",
         "trajectory": "从受夫家压迫的媳妇到掌握怡红院实权的主理人。",
         "trajectory_evidence": {
           "chapter_ordinal": 3,
           "source": {
             "text": "特聘教习师",
             "start": 91,
-            "end": 96,
-            "normalized": "特聘教习师",
-            "recovery": "exact"
+            "end": 96
           }
         }
       },
@@ -409,17 +373,13 @@
           "display": "苏子瑜与杜婉儿的关系（与对方相恋）",
           "resolved": true
         },
-        "dimension": "隐秘关系",
-        "change_type": "revelation",
         "trajectory": "从暗中通信到合谋对付李宝珠。",
         "trajectory_evidence": {
           "chapter_ordinal": 3,
           "source": {
             "text": "原来，那二人竟已同仇敌忾",
             "start": 1363,
-            "end": 1375,
-            "normalized": "原来，那二人竟已同仇敌忾",
-            "recovery": "exact"
+            "end": 1375
           }
         }
       }
@@ -449,12 +409,7 @@
       "GLOBAL_SYS": "85b87d7b87"
     },
     "model": "deepseek-v4-pro",
-    "address_by_fallback": 0,
-    "address_surface_rewrites": [],
-    "address_from_chapter_raised": [],
-    "canonical_distinguishers_stripped": [],
     "setup_chapters_pruned": [],
-    "evidence_locator_rewrites": [],
     "evidence_locator_failures": [
       [
         "entities.characters.char_001.fate",

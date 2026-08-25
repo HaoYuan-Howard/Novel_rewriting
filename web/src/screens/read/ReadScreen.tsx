@@ -80,13 +80,6 @@ export function ReadScreen() {
               </div>
             </header>
 
-            <div className="px-30 pt-14">
-              <Panel className="flex items-start gap-16 px-18 py-13">
-                <span className="flex-none text-sm2 text-ink-4">章摘要</span>
-                <span className="prose-cn text-section text-ink-2">{vm.summary}</span>
-              </Panel>
-            </div>
-
             <ComparePanes
               className="px-30 pt-14 pb-8"
               left={
@@ -222,31 +215,26 @@ function Beat({ b, onClick }: { b: BeatView; onClick: () => void }) {
       </div>
 
       <div className="flex flex-wrap gap-6">
-        {b.present.map((p, i) => (
+        {b.presentCharIds.map((charId) => (
           <span
-            key={i}
-            className={cx(
-              'rounded-[11px] border px-8 py-2 text-tag',
-              p.resolved && 'border-line-2 bg-inset text-ink-2',
-            )}
-            style={
-              p.resolved
-                ? undefined
-                : {
-                    background: SEV.unver.bg,
-                    color: SEV.unver.color,
-                    borderColor: SEV.unver.border,
-                    borderStyle: 'dashed',
-                  }
-            }
-            title={p.resolved ? undefined : '这个称呼没解析到人物 —— 查不了，不是「没问题」'}
+            key={charId}
+            className="rounded-[11px] border border-line-2 bg-inset px-8 py-2 text-tag text-ink-2"
           >
-            {p.name}
+            {charId}
           </span>
         ))}
       </div>
 
-      <div className="prose-cn text-section text-ink-2">{b.event}</div>
+      {b.facts.map((fact) => (
+        <div key={fact.id} className="rounded-btn bg-sunken-2 px-12 py-8">
+          <div className="flex gap-8 text-micro text-ink-4">
+            <Mono>{fact.id}</Mono>
+            <span>{fact.meta}</span>
+          </div>
+          <div className="prose-cn text-section text-ink-2">{fact.claim}</div>
+          {fact.evidence ? <div className="prose-cn text-tag text-ink-4">证据：{fact.evidence}</div> : null}
+        </div>
+      ))}
 
       {b.hinges.map((h, i) => (
         <div key={i} className="rounded-r-btn border-l-3 border-l-hinge bg-hinge-bg px-12 py-8">

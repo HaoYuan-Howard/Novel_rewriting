@@ -4,16 +4,15 @@ Stage 2 产出三份严格 JSON，另收两份人产的决策集：
 
 | 路径 | 模型 | 生产节点 | 内容 |
 |---|---|---|---|
-| `stage2/global_grounding.json` | `GlobalGrounding` v3 | `stage2.global` | 全书人物、关系、设定、规则、秘密、弧线及代码回取证据 |
-| `stage2/chapter_blueprints.json` | `ChapterBlueprints` v5 | `stage2.blueprint` | 逐章语义功能、原子事实/因果/状态契约、精确证据区间、保真材料、舞台与叙述信息 |
+| `stage2/global_grounding.json` | `GlobalGrounding` v4 | `stage2.global` | 全书人物、关系、设定、规则、秘密、弧线及代码回取证据 |
+| `stage2/chapter_blueprints.json` | `ChapterBlueprints` v6 | `stage2.blueprint` | 逐章语义功能、原子事实/因果/状态契约、精确证据区间、保真材料、舞台与叙述信息 |
 | `stage2/global_review.json` | `GlobalReview` | `stage2.global` | 由当前全局底座确定性枚举的逐项人工复核；详见 `docs/schema/evaluation.md` |
 | `stage2/global_review_decisions.json` | `GlobalReviewDecisionSet` | 人工输入 | actor、理由、证据及 subject hash 乐观锁；也可经同形 API 提交 |
-| `stage2/global_edit.json` | `GlobalEdit` v2 | 人工输入 | Stage2 typed 订正决策集（`stage2.global --apply-edit` 吃它） |
+| `stage2/global_edit.json` | `GlobalEdit` v3 | 人工输入 | Stage2 typed 订正决策集（`stage2.global --apply-edit` 吃它） |
 
 三份正式产物与两份人工决策集都使用当前 Pydantic `StrictModel`，未知字段拒收。运行时不升级旧形状，也不为
-缺失字段补默认值；需要保留的输入必须先按本文件的当前 schema 重新生成。GlobalGrounding
-v1/v2 由 `stage2.global` 付费重建；GlobalEdit v1 里的旧知情形状没有时点、旧自由事实没有
-locator，代码无法安全推断，必须由人按 v2 重写，不能手补默认值冒充当前产地。
+缺失字段补默认值；需要保留的输入必须先按本文件的当前 schema 重新生成。旧
+GlobalGrounding / ChapterBlueprints 由各自 producer 重建；旧 GlobalEdit 由人按 v3 重写。
 
 ## 一、`global_grounding.json`
 
@@ -55,8 +54,8 @@ Stage4 下发只认这格；旧的人名/埋点启发式只作 INFO 对账。
 - `Setting` 含必填的 `era` / `era_evidence` 与 `worldview` / `worldview_evidence`。
 - `WorldRule` 含 `rule_id`、闭合枚举 `kind` 与非空 `versions[]`；正文唯一落点是
   `WorldRuleVersion.desc`，每个版本带 `effective_from_chapter` 与 `desc_evidence`。
-- `Secret` 含 `secret_id`、`fact` / `fact_evidence`、可空 `group_id`、
-  `knowledge_events[]`、`setup` 与 `reader_reveal_events[]`。
+- `Secret` 含 `secret_id`、`fact` / `fact_evidence`、`knowledge_events[]`、`setup` 与
+  `first_reveal_chapter`。
 - 每条 `knowledge_events[]` 含 `known_from_chapter`、`evidence` 与 typed `subject`：
   `{"kind":"character","char_id":"char_XXX"}` 或
   `{"kind":"group","label":"自由群体名"}`。前者是人物外键，后者保留无名群体；
@@ -66,22 +65,21 @@ Stage4 下发只认这格；旧的人名/埋点启发式只作 INFO 对账。
   「声明冷揭示」与「模型没想过」，而这一格是两道下发闸门的前件。
   ⚠ **裁空降级成 `cold` 的那条与真·冷揭示同形**，只有来源账
   `setup_chapters_pruned` 分得开——v2 消除的是「模型意图」那层歧义，不是这一层。
-- 每个揭示事件含 `chapter` 与 `kind`（`first` | `confirm`，默认 `first`）。
-  载体强制**恰有一条 `first`** 且没有事件早于它；复合真相拆成多条、`group_id` 归组
-  （`R-2.18`）。逐章下发闸门与全部下游读数以 `first` 为基准，`confirm` 不参与。
-- `foreshadowed.chapters` 必须严格早于 `first` 揭示章；落盘前的裁剪记录在来源账中
+- `first_reveal_chapter` 是这条原子秘密首次对读者点破的章号，是下发闸门的唯一时点。
+  复合真相必须拆成多条 secret，不再保存对下发无作用的分组与确认事件。
+- `foreshadowed.chapters` 必须严格早于 `first_reveal_chapter`；落盘前的裁剪记录在来源账中
   ——判据断言那份账，不断言字段值（`R-2.9`）。
 
 ### 1.3 弧线
 
 - `ConflictStage`：`stage` + `chapters[]`；`chapters` 是逐章显式枚举，不是区间端点，
   全部阶段合起来必须让 Stage1 的每个阅读序章号恰好出现一次（`R-2.14`）。
-- `ArcTrack`：`subject`、`dimension`、`change_type`、`trajectory`、`trajectory_evidence`。
+- `ArcTrack`：`subject`、`trajectory`、`trajectory_evidence`。
 - `Arc` 的 `climax` 与 `ending` 均为必填非空文本。
 
 ### 1.4 自由事实证据：locator 只在入口，SourceSpan 只在正式产物
 
-模型响应与 `GlobalEdit` v2 对自由事实只交 `EvidenceLocator`：
+模型响应与 `GlobalEdit` v3 对自由事实只交 `EvidenceLocator`：
 
 | 字段 | 类型 | 约束 |
 |---|---|---|
@@ -114,7 +112,6 @@ Stage4/5/6 的实际材料与节点 freshness 投影共用代码剥掉全部 evi
 | 字段 | 类型 | 约束 |
 |---|---|---|
 | `chapter_ordinal` | `int` | 与 Stage 1 正文章序一一对应 |
-| `summary` | `str` | 非空；由代码按证据序从 `fact_atoms[].claim` 确定性投影，只作人读索引，不是第二份事实源 |
 | `chapter_function` | `str` | 本章对全书推进的语义功能；Stage4 只读，不得重写 |
 | `beats` | `Beat[]` | 非空并按原文证据顺序排列；只承担区间、舞台与材料归属 |
 | `fact_atoms` | `FactAtom[]` | 非空；本章唯一事实源 |
@@ -131,8 +128,7 @@ Stage4/5/6 的实际材料与节点 freshness 投影共用代码剥掉全部 evi
 | `span` | `SourceSpan｜null` | 成功态必须为精确区间；`null` 只表示回取失败 |
 | `time_layer` | `present｜recall｜hearsay` | 闭合枚举 |
 | `place` | `str｜null` | 场所 |
-| `present_names` | `str[]` | 模型给出的在场称呼 |
-| `present_char_ids` | `str[]` | 代码按当前人物表确定性解析 |
+| `present_char_ids` | `str[]` | 模型从截止本章可见人物闭集中选择 |
 | `hinges` | `Hinge[]` | 保真材料 |
 
 `FactAtom`：
@@ -158,18 +154,13 @@ Stage4/5/6 的实际材料与节点 freshness 投影共用代码剥掉全部 evi
 |---|---|---|
 | `text` | `str` | 严格等于 `main_text[chapter][start:end]` |
 | `start` / `end` | `int` | `0 ≤ start < end ≤ len(chapter)` |
-| `normalized` | `str` | 严格等于 `content_only(text)` |
-| `recovery` | `exact｜normalized` | 本次回取方式（取值面：`contracts/invariants.py::SPAN_RECOVERY`） |
 
 相邻 beat 的区间不得回退；第一拍覆盖章首、最后一拍覆盖章尾。Stage4 只把 beat 当作舞台和
 证据目录，不把区间顺序变成写作骨架。
 
-`recovery` 的两档各自的来源（`bounded-fidelity-v3`）：**beat 的区间恒 `exact`**——
-它由段号查表算出，模型根本没写过那段字节；`normalized` 只可能出自 `hinge.phrase`
-（模型把半角标点写成全角、或压掉了换行）。⚠ 曾经有第三档 `lcs`（按最长公共子串把被改掉
-一两个字的锚点救回来），随 v3 一并下线：新架构下它**结构性不可产生**。
+SourceSpan 只保留可直接复验的字节和坐标。内容空间定位是编译过程，不是下游契约。
 
-`Hinge` 含 `hinge_id`、`kind`、`source_beat_ref` 与 `source`。正式 id 形如
+`Hinge` 含 `hinge_id`、`kind` 与 `source`。所属 beat 由父级 `Beat.hinges[]` 唯一表达，不重复存外键。正式 id 形如
 `h<章:02d>_<序:03d>`，由代码编号；`kind` 取值为 `硬数字｜要害台词｜物件｜因果前提`；
 成功态的 `source` 必须完整落在所属 beat 的 `span` 内。`source=null` 会进入失败账并阻断晋升。
 
@@ -178,7 +169,6 @@ Stage4/5/6 的实际材料与节点 freshness 投影共用代码剥掉全部 evi
 `Narration` 的以下字段全部必填：
 
 - `grammatical_person`: `first｜second｜third`；
-- `narrator_name`、`focalizer_name`: `str｜null`；
 - `narrator_char_id`、`focalizer_char_id`: `str｜null`；
 - `pronoun_surfaces`: `str[]`。
 
@@ -190,12 +180,7 @@ Stage4/5/6 的实际材料与节点 freshness 投影共用代码剥掉全部 evi
 
 | 字段 | 类型 | 内容 |
 |---|---|---|
-| `address_by_fallback` | `int` | `by` 确定性兜底次数 |
-| `address_surface_rewrites` | `(char_id, old, new)[]` | 叫法回取改写明细 |
-| `address_from_chapter_raised` | `(char_id, surface, old, new)[]` | 首现章抬升明细 |
-| `canonical_distinguishers_stripped` | `(char_id, old, new)[]` | 区分词剥离明细 |
 | `setup_chapters_pruned` | `(secret_id, old[], new[])[]` | 秘密埋点裁剪明细。⚠ `new` 为空 ⇒ 那条 `setup` 已降级成 `cold`，与声明的冷揭示同形，只有本账分得开 |
-| `evidence_locator_rewrites` | `(claim_path, locator, source_text)[]` | locator 经 normalized 回取后实际绑定的原文字节；空也必须写 |
 | `evidence_locator_failures` | `(claim_path, chapter, locator, cause)[]` | 0 命中、多命中、错章或 formal span 漂移；非空由 `global_evidence_unlocated` HARD 阻断 |
 
 ### 3.2 `BlueprintProvenance`
@@ -203,18 +188,13 @@ Stage4/5/6 的实际材料与节点 freshness 投影共用代码剥掉全部 evi
 | 字段 | 类型 | 内容 |
 |---|---|---|
 | `scope_violations` | `str[]` | 逐章请求越出任务范围；空也必须写 |
-| `batches` | `int[][]` | 恒为 `[[1], [2], …]` |
 | `context` | `BlueprintContext` | 逐章上下文架构与边界 |
-| `char_refs` | `CharRefs` | 八类人物引用解析计数 |
-| `verbatim_rewrites` | `(beat_id, position, old, new)[]` | 归一命中明细。v3 起只剩 `hinge.phrase` 与 `hinge.owner` 两种来源 |
 | `verbatim_failures` | `(beat_id, position, cause)[]` | 回取失败；非空阻断晋升。`position ∈ span｜hinge`，根因取值面见下 |
 | `fact_atom_failures` | `(fact_id, evidence_phrase, cause)[]` | 原子证据在所属 beat 内 0/多命中或越界；非空阻断晋升 |
-| `partial_regen_chapters` | `int[]` | 定向重生成章节，空也必须写 |
-| `repairs` | `Repair[]` | 定向重生成账，空也必须写 |
-| `place_inherit_without_base` | `beat_id[]` | IR 三态地点声称继承、但链上无基；空也必须写 |
-| `place_explicit_unlocatable` | `(beat_id, name)[]` | 显式地点在截止本章正文中找不到的 INFO 探针；v2 nullable 字面同样记账 |
 | `hinge_ambiguous_pending` | `(beat_id, kind, phrase)[]` | 拍区间内多处命中的原短语，供 `--patch` 确定性枚举候选 |
-| `boundary_nudges` | `(beat_id, old_end, new_end, cause)[]` | IR 编译器护栏式外扩止段的明细；空也必须写 |
+
+成功归一、边界外扩、地点实验读数与修复历史不再重复落盘：它们只供展示或与 ledger/运行时前置条件
+重复，既不驱动闸门，也不提供恢复输入。来源账只保留会阻断或能直接驱动零成本恢复的正面失败态。
 
 `verbatim_failures` 的根因是**闭合取值面**，不是自由文本：
 `position == 'span'` 那一族见 `contracts/invariants.py::SPAN_FAILURE_CAUSES`，
@@ -231,18 +211,12 @@ hinge 那一侧的 LCS 兜底本来就是禁的 ⇒ 那笔账**结构性恒空**
   `extraction-ir-v2`、`extraction-ir-v3.1`；当前默认由同文件
   `BLUEPRINT_ARCHITECTURE` 唯一指定为 v3.1；
   定向修复按基线产物的架构选契约，不把存量产物伪装成当前默认；
-- `batch_size = 1`；
-- `current_chapter_full = true`；
-- `future_visible = false`；
 - 必填 `stable_prefix`、`past_neighbor_chars_max`、`continuity_chars_max`、
   `past_names_chars_max`。
 
-`CharRefs` 的八个必填非负计数为 `resolved`、`pronoun_ok`、`ambiguous`、`late`、
-`unknown`、`invented`、`no_names`、`pronoun`。
-
 每条 `Repair` 必填：`chapter_ordinal`、`failure_items[]`、`failure_evidence`、`user_prompt`、
 `output`、`model`、`cache_policy`、`fields[]`、`before_metrics`、`after_metrics`；其中指标均为
-`beats`、`fact_atoms`、`hinges`、`present_names` 四个计数。
+`beats`、`fact_atoms`、`hinges` 三个计数。
 
 ## 三之二、`global_edit.json`（Stage2 typed 事实的 0 成本人工订正）
 
@@ -253,7 +227,7 @@ hinge 那一侧的 LCS 兜底本来就是禁的 ⇒ 那笔账**结构性恒空**
 
 | 键 | 类型 | 语义 |
 |---|---|---|
-| `secrets` | `SecretPatch[]` | 按已有 `secret_id` 改 fact+locator、group、knowledge events、setup 或 reveal timeline |
+| `secrets` | `SecretPatch[]` | 按已有 `secret_id` 改 fact+locator、knowledge events、setup 或 `first_reveal_chapter` |
 | `world_rules` | `WorldRulePatch[]` | 按已有 `rule_id` 改 kind 或带 locator 的完整 versions |
 | `characters` | `GlobalCharacterPatch[]` | 按 `char_id` 改枚举、role+locator、fate+locator；显式 `fate=null` 同步清空证据 |
 | `relations` | `RelationPatch[]` | 按 `relation_id` 改端点、predicate+locator、visibility 或有效窗口 |
@@ -296,9 +270,8 @@ hinge 那一侧的 LCS 兜底本来就是禁的 ⇒ 那笔账**结构性恒空**
 `item_id + kind + subject_path + subject_sha256` 四者均未变时继承；拆分 secret、新增规则或重建
 address 后的新 subject 一律回到 `pending`，旧复合事实的 PASS 不能跟随到新时间线。
 
-`global_edit.json` 当前为 schema v2。它内嵌的 secret/world-rule/character 形状已增加时点与
-locator，属于破坏性变更；本仓没有迁移器。旧 v1 决策集必须由人按当前正文核对后重写，代码不能
-从无时间的 `character_known_by` 推出知情起章，也不能从一段自由 claim 猜一处唯一原文证据。
+`global_edit.json` 当前为 schema v3。它与 GlobalGrounding v4 一样只保留
+`first_reveal_chapter` 和无标签弧线；本仓没有迁移器，旧决策集必须由人核对后重写。
 
 ⚠ 把揭示章往前改到埋点章之前时，`_prune_setups` 会裁掉埋点章，而 `secret_setup_order`
 （HARD）断言的正是那个裁剪计数 ⇒ **照样进 `.INVALID`**，0 成本出路是 `--renormalize`。
@@ -323,12 +296,13 @@ locator，属于破坏性变更；本仓没有迁移器。旧 v1 决策集必须
   每章发两相请求：第一相同时列 `micro_events`（完整回忆层）与 `beats`（因果拍压缩层），
   两列止段严格递增且落到章尾，beat 止段必须取自 micro-event 止段；第二相只能在代码冻结的
   beat 边界上填 time layer、地点、hinge、叙述信息与可见 `char_id`。`--chapters` 定向付费
-  重生成；`--renormalize` 重算当前 schema 的原文定位与人物引用；`--check-only` 联合读取两份
+  重生成；`--renormalize` 重算当前 schema 的原文定位，不会在无显示名时猜测人物 ID；
+  `--check-only` 联合读取两份
   产物复检。两种现役契约的拓扑显式登记在 `ContractSpec.topology`，预览、整跑与定向修复共用
   该分派，不从可空 system 字段猜。
 - 正式写入前先跑严格载体校验与联合 HARD 闸门；失败响应进入 `.INVALID`，不会覆盖正式产物。
-- 本层没有旧 schema 迁移入口、字段别名或双形状读取路径。GlobalGrounding v1/v2 只由
-  `stage2.global` 付费重建；GlobalEdit v1 只由人重写为 v2。
+- 本层没有旧 schema 迁移入口、字段别名或双形状读取路径。旧生成产物由 producer 重建，
+  旧 GlobalEdit 只由人重写为 v3。
 
 `--resample` 必须单独执行，并使用 `refresh-write`：不读同参数缓存，但合格的新响应仍写回缓存，
 避免下一次正常运行再次付费。请求或响应契约失败发生在写盘前，当前正式稿与问题稿都不动；新候选
@@ -337,14 +311,8 @@ locator，属于破坏性变更；本仓没有迁移器。旧 v1 决策集必须
 
 ## 五、现行判据
 
-当前注册表共 **77 条**：**43 hard、16 info、16 metric、2 unver**。两个 Stage 2 节点共用
-同一张注册表。（2026-08-20 随 `extraction-ir-v1` 契约新增 `hinge_ambiguous`（HARD）与
-`place_inherit_without_base`（INFO）；2026-08-21 随 `extraction-ir-v1.1` 再增
-`place_explicit_unlocatable`（INFO）。三条在 `bounded-fidelity-v3` 产物上结构性不产出，
-空行是「不适用」不是绿灯。2026-08-23 的 v2 没有增删判据：它收窄的是响应契约与调用拓扑，
-最终产物仍走同一张表。2026-08-24 的 GlobalGrounding v3 新增
-`relation_visibility_mismatch`（INFO）、`global_evidence_unlocated` 与
-`canon_chapter_refs_dangling`（HARD）。）
+当前注册表共 **67 条**：**40 hard、14 info、11 metric、2 unver**。两个 Stage 2 节点共用
+同一张注册表。本次契约收缩同步删除只服务展示名、摘要、批次和已退役地点模式的判据。
 
 | 分组 | 当前规则 id |
 |---|---|
@@ -352,17 +320,16 @@ locator，属于破坏性变更；本仓没有迁移器。旧 v1 决策集必须
 | 人物与称谓 | `canonical_unique` · `character_unattested` · `address_by_unresolved` · `address_from_out_of_range` · `address_from_too_early` · `address_bare_pronoun` · `address_all_pronoun` · `address_has_pronoun` · `address_selfref` · `address_missing` · `address_unlocatable` |
 | 身份与结局 | `role_missing` · `role_leaks_fate` · `role_repeats_name` · `hedge_words` · `distinguisher_lonely` · `role_fate_unverifiable` · `fate_report` |
 | 规则、秘密、关系与弧线 | `world_rule_no_desc` · `canon_chapter_refs_dangling` · `world_rule_names_person` · `secret_setup_order` · `secret_cold_reveal` · `secret_known_by_dangling` · `reveal_unmarked` · `secrets_absent` · `relation_dangling` · `relation_visibility_mismatch` · `global_evidence_unlocated` · `conflict_stage_coverage` |
-| 拍与区间 | `beat_id_unique` · `beat_id_format` · `span_unlocatable` · `verbatim_failed` · `edge_hole` · `beats_collapsed` · `beats_coarse` · `place_inherit_without_base` · `place_explicit_unlocatable` |
+| 拍与区间 | `beat_id_unique` · `beat_id_format` · `span_unlocatable` · `verbatim_failed` · `edge_hole` · `beats_collapsed` · `beats_coarse` |
 | 保真材料 | `hinge_cross_chapter` · `hinge_in_hole` · `hinge_anchor_void` · `hinge_ambiguous` · `hinge_cascade` · `hinge_drift` · `chapter_no_hinge` |
-| 在场与叙述 | `time_layer_no_present` · `present_ids_dangling` · `present_names_invented` · `present_continuity` · `present_ungrounded` · `present_early_named` · `event_early_name` · `pronoun_surface_unattested` · `narration_multi` |
-| 范围、必填与返工 | `scope_violation` · `fact_atom_empty` · `summary_empty` · `repair_cache_policy` |
-| 无条件读数 | `narration_voices` · `time_layer_mix` · `place_moves` · `present_names_ambiguous` · `present_names_unlisted` · `present_names_pronoun` · `present_names_late` · `present_broad` · `batch_density` · `context_scope` · `span_coverage` · `span_coverage_per_chapter` · `uncovered_holes` · `hinge_density` |
+| 在场与叙述 | `time_layer_no_present` · `present_ids_dangling` · `present_continuity` · `present_ungrounded` · `present_early_named` · `event_early_name` · `pronoun_surface_unattested` · `narration_multi` |
+| 范围与必填 | `scope_violation` · `fact_atom_empty` |
+| 无条件读数 | `narration_voices` · `time_layer_mix` · `place_moves` · `present_broad` · `context_scope` · `span_coverage` · `span_coverage_per_chapter` · `uncovered_holes` · `hinge_density` |
 
-机器可读修复路由共 **38 条**：
+机器可读修复路由共 **36 条**：
 
-- `stage2.blueprint --chapters`: 17 条；
+- `stage2.blueprint --chapters`: 16 条；
 - `stage2.blueprint --patch`: 1 条（`hinge_ambiguous`——字段级候选选择，量级是条不是章）；
-- `stage2.blueprint --renormalize`: 1 条；
 - `stage2.global --resample`: 17 条；
 - `stage2.global --purge-role`: 1 条；
 - `stage2.global --renormalize`: 1 条。

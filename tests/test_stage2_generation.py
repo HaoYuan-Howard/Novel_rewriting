@@ -20,7 +20,8 @@ from contracts.schema import encode_artifact
 from contracts.schema.evaluation import GlobalReview
 from contracts.schema.stage1 import MainText
 from contracts.schema.stage2 import (
-    ChapterBlueprints, GlobalGrounding, GlobalGroundingResponse,
+    ChapterBlueprints, ChapterBlueprintsResponseV31,
+    GlobalGrounding, GlobalGroundingResponse,
 )
 from novel import prov
 from novel.errors import (
@@ -40,7 +41,7 @@ from novel.stages.stage2 import extract
 from novel.stages.stage2.compile_v2 import canonical_ir_projection_v31
 from novel.stages.stage3 import style
 from contracts.invariants import HINGE_FAILURE_ROUTE
-from novel.stages.stage2.normalize import normalize_global, normalize_verbatim, response_shape
+from novel.stages.stage2.normalize import normalize_global, normalize_verbatim
 from novel.stages.stage2.paragraphs import paragraph_spans
 from novel.store import ArtifactStore
 from tests.test_stage2 import blueprints, global_grounding, main_text
@@ -76,7 +77,8 @@ def test_parallel_chapter_requests_report_batch_positions_without_schema_changes
         observe=lambda event, **fields: events.append({'event': event, **fields}),
     )
     requests = [(4, 'sys4', 'user4'), (9, 'sys9', 'user9')]
-    results, violations, errors = extract._run_chapter_requests(ctx, Client(), requests)
+    results, violations, errors = extract._run_chapter_requests(
+        ctx, Client(), requests, model_cls=ChapterBlueprintsResponseV31)
 
     assert [result['chapter_ordinal'] for result in results] == [4, 9]
     assert violations == [] and errors == []
@@ -115,7 +117,8 @@ def test_one_llmfailed_chapter_does_not_abort_other_blueprint_chapters():
         observe=lambda event, **fields: events.append({'event': event, **fields}),
     )
     requests = [(4, 'sys4', 'user4'), (9, 'sys9', 'user9')]
-    results, violations, errors = extract._run_chapter_requests(ctx, Client(), requests)
+    results, violations, errors = extract._run_chapter_requests(
+        ctx, Client(), requests, model_cls=ChapterBlueprintsResponseV31)
 
     assert sorted(calls) == [4, 9]
     assert results == [{'chapter_ordinal': 9}] and violations == []
@@ -152,7 +155,8 @@ def test_response_repair_waits_for_other_blueprint_chapters_then_stops_before_co
     ctx = SimpleNamespace(
         node='stage2.blueprint', observe=lambda *_args, **_kwargs: None)
     results, violations, errors = extract._run_chapter_requests(
-        ctx, Client(), [(4, 's4', 'u4'), (9, 's9', 'u9')])
+        ctx, Client(), [(4, 's4', 'u4'), (9, 's9', 'u9')],
+        model_cls=ChapterBlueprintsResponseV31)
 
     assert sorted(calls) == [4, 9]
     assert results == [{'chapter_ordinal': 9}] and violations == []
@@ -192,7 +196,8 @@ def test_stage2_uses_one_concurrent_call_per_chapter_up_to_32(chapters, expected
 
     ctx = SimpleNamespace(node='stage2.blueprint', observe=lambda *_a, **_kw: None)
     requests = [(n, 'SYS', f'USER {n}') for n in range(1, chapters + 1)]
-    results, violations, errors = extract._run_chapter_requests(ctx, Client(), requests)
+    results, violations, errors = extract._run_chapter_requests(
+        ctx, Client(), requests, model_cls=ChapterBlueprintsResponseV31)
     assert len(results) == chapters
     assert violations == [] and errors == []
     assert peak == expected_peak
@@ -233,7 +238,7 @@ def test_global_and_free_stage3_run_in_parallel_then_blueprint_waits(monkeypatch
 
 
 def _response_global() -> dict:
-    """正式 v3 fixture → 模型响应形；自由事实证据只交章号 + 短 locator。"""
+    """正式 v4 fixture → 模型响应形；自由事实证据只交章号 + 短 locator。"""
     data = copy.deepcopy(global_grounding())
     data.pop('_provenance')
     for _path, owner, field in iter_global_evidence_slots(data):
@@ -337,11 +342,9 @@ def test_global_evidence_locator_is_unique_within_its_named_chapter(
     assert evidence['chapter_ordinal'] == chapter
     if recovery is not None:
         assert evidence['source']['text'] == '信上说父亲已经回城。'
-        assert evidence['source']['recovery'] == recovery
+        assert set(evidence['source']) == {'text', 'start', 'end'}
         assert meta['evidence_locator_failures'] == []
-        if recovery == 'normalized':
-            assert meta['evidence_locator_rewrites'] == [
-                ('canon.secrets.secret_01.fact', locator, '信上说父亲已经回城。')]
+        assert 'evidence_locator_rewrites' not in meta
     else:
         assert evidence['source'] is None
         assert len(meta['evidence_locator_failures']) == 1
@@ -352,7 +355,7 @@ def test_global_evidence_locator_is_unique_within_its_named_chapter(
 
 
 def test_punctuation_only_evidence_locator_becomes_a_recoverable_failure():
-    """唯一命中的纯标点也不能先造出 schema 拒收的空 normalized span。"""
+    """唯一命中的纯标点也不能先造出没有内容字符的 span。"""
     response = _response_global()
     path = 'canon.secrets.secret_01.fact'
     response['canon']['secrets'][0]['fact_evidence'] = {
@@ -518,8 +521,6 @@ def test_stage2_generation_reaches_a_reloadable_jointly_checked_artifact():
         from novel.stages.stage2.contract import active_contract
         assert context.architecture == active_contract().architecture
         assert context.architecture == 'extraction-ir-v3.1'
-        assert context.current_chapter_full is True
-        assert context.future_visible is False
         assert context.stable_prefix
         for blueprint in stored.blueprints:
             for beat in blueprint.beats:
@@ -1020,7 +1021,7 @@ def test_stage2_global_renormalize_promotes_deterministically_pruned_invalid():
             extract.MAIN_TEXT, MainText.model_validate(main_text()))
         response = _response_global()
         secret = response['canon']['secrets'][0]
-        reveal = secret['reader_reveal_events'][0]['chapter']
+        reveal = secret['first_reveal_chapter']
         secret['setup'] = {'kind': 'foreshadowed', 'chapters': [reveal]}
         client, transport = _client(ctx, lambda _req, _index: _ok(response))
 
@@ -1048,7 +1049,7 @@ def test_stage2_global_renormalize_promotes_deterministically_pruned_invalid():
         shutil.rmtree(root, ignore_errors=True)
 
 
-def test_stage2_blueprint_renormalize_rebuilds_code_derived_character_refs():
+def test_stage2_blueprint_renormalize_does_not_invent_character_refs():
     root = Path(tempfile.mkdtemp())
     book = root / '蓝图重归一测试_458'
     book.mkdir()
@@ -1081,12 +1082,11 @@ def test_stage2_blueprint_renormalize_rebuilds_code_derived_character_refs():
         report = extract.run_renormalize(
             _ctx(book, 'stage2.blueprint', paid=False))
 
-        assert report.passed
+        assert not report.passed
         assert len(blueprint_transport.calls) == calls_before
-        stored = ArtifactStore(blueprint_ctx).read(
-            ChapterBlueprints, extract.BLUEPRINT_REL)
-        assert 'char_999' not in stored.blueprints[0].beats[0].present_char_ids
-        assert stored.provenance.partial_rewrite == '--renormalize'
+        dangling = next(line for line in report.rules
+                        if line.rule == 'present_ids_dangling')
+        assert dangling.findings, '没有显示名时不得凭空修复人物 ID'
     finally:
         shutil.rmtree(root, ignore_errors=True)
 
@@ -1274,7 +1274,6 @@ def test_blueprint_context_keeps_current_full_hides_future_and_bounds_past():
     assert len(short_continuity) <= extract.CONTINUITY_CHARS_MAX
     context = extract.blueprint_context('边界测试', sections)
     assert context['stable_prefix'] == extract.prov.fingerprint(prefix)
-    assert context['future_visible'] is False
     assert context['past_names_chars_max'] == extract.PAST_NAMES_CHARS_MAX
 
 
@@ -1311,7 +1310,8 @@ def test_stage2_renormalize_rejects_locator_shaped_formal_artifact():
         path = book / extract.BLUEPRINT_REL
         raw = json.loads(path.read_text(encoding='utf-8'))
         texts = {section['chapter_ordinal']: section['text'] for section in main_text()}
-        raw['blueprints'] = [response_shape(bp, texts[bp['chapter_ordinal']])
+        raw['blueprints'] = [canonical_ir_projection_v31(
+            bp, texts[bp['chapter_ordinal']])
                              for bp in raw['blueprints']]
         path.write_text(
             json.dumps(raw, ensure_ascii=False, indent=2) + '\n',
@@ -1377,11 +1377,7 @@ def test_stage2_targeted_regeneration_refreshes_one_chapter_and_merges_book():
         assert len(_blueprint_transport.calls) == len(main_text())
         stored = store.read(ChapterBlueprints, extract.BLUEPRINT_REL)
         assert [bp.chapter_ordinal for bp in stored.blueprints] == [1, 2, 3]
-        assert stored.provenance.partial_regen_chapters == [1]
-        assert stored.provenance.repairs is not None
-        assert stored.provenance.repairs[-1].cache_policy == 'refresh-write'
-        assert stored.provenance.repairs[-1].failure_items == [
-            'hinge_anchor_void', 'verbatim_failed']
+        assert 'repairs' not in stored.provenance.model_dump()
         assert stored.provenance.usage is not None
         assert stored.provenance.usage.calls_made == 4
         assert not (book / extract._INVALID).exists()

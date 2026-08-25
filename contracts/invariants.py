@@ -505,19 +505,6 @@ BLUEPRINT_ARCHITECTURES: Final = ('extraction-ir-v2', 'extraction-ir-v3.1')
 BLUEPRINT_ARCHITECTURE: Final = 'extraction-ir-v3.1'
 assert BLUEPRINT_ARCHITECTURE in BLUEPRINT_ARCHITECTURES
 
-#: `SourceSpan.recovery` 的取值面：这个区间是怎么对上原文的。
-#:
-#: · `exact`      —— 字节逐字命中。beat 的区间**恒是它**（段号查表算出来的，
-#:                   模型根本没写过那段字节）；hinge 抄对时也是它。
-#: · `normalized` —— 只在**内容字符空间**命中：模型把半角标点写成全角、或把换行压掉了。
-#:                   `bounded-fidelity-v3` 起只可能出自 `hinge.phrase`。
-#:
-#: ⚠⚠ **这里曾经还有第三档 `lcs`**（按最长公共子串把被改掉一两个字的锚点救回来），
-#: 随 `bounded-fidelity-v3` 一并下线：beat 不再有可改的锚点，而 hinge 那一侧的 LCS 兜底
-#: 本来就是禁的（实测「传家玉镯」→「家传玉镯」救回来的是**语义已经变了**的片段）。
-#: ⇒ 它在新架构下**结构性不可产生**，留在取值面里就是一个永远读不到的分支。
-SPAN_RECOVERY: Final = ('exact', 'normalized')
-
 #: `_provenance.verbatim_failures` 里 `位置 == 'span'` 那一族的根因取值面。
 #: 判据 `verbatim_failed` 只按根因**计数**，不按根因分流，所以这一张表存在的意义是
 #: 「产地只许说这几句话」——措辞漂了，报告上同一种病会分裂成两行。
@@ -610,14 +597,6 @@ assert tuple(RESPONSE_TIME_LAYERS.values()) == TIME_LAYERS, \
 assert len(set(RESPONSE_TIME_LAYERS)) == len(set(RESPONSE_TIME_LAYERS.values())), \
     '响应侧叙述层映射不是双射'
 
-#: `extraction-ir-v1` 响应侧 place 的三态（判别联合的 discriminator 取值面）。
-#:   · `P_EXPLICIT` —— 原文明写（或延续中可辨认），必带 `name`；
-#:   · `P_INHERIT`  —— 延续**上一相邻拍**的地点（仅同 `time_layer` 且相邻才许，
-#:                     代码做继承；链头 INHERIT 落 `place_inherit_without_base` 账）；
-#:   · `P_UNKNOWN`  —— 确实无从判断 ⇒ 产物侧 `place=null`。
-#: 不确定性是**受约束的状态**，不是自由文本（`Stage2_improvement.md` §三.2）。
-PLACE_MODES: Final = ('P_EXPLICIT', 'P_INHERIT', 'P_UNKNOWN')
-
 #: 逐字原话允许被一处提示语切开时，插入部分的内容字数上限。
 #: 形态必须在原文字节上长成「收引号 + ≤N 内容字 + 开引号」；
 #: 改词、插动作描写、只写半句照旧判缺失。
@@ -644,11 +623,6 @@ ADDRESS_CONTEXT: Final = ('address', 'reference')
 #: v1 时代这一格是 `list[int]`，空数组同时表示「声明没有埋点」与「模型没想过」，
 #: 而它是关系闸门隐瞒窗口与 secret 闸门第②臂**两道下发闸门的前件**。
 SECRET_SETUP_KINDS: Final = ('cold', 'foreshadowed')
-
-#: 一次读者揭示是**首次点破**还是**后续确认**。
-#: ⚠ 逐章下发闸门**只认 `first`**：旧闸门按「任意一次揭示 ≤ 本章」判，
-#: 分两次揭示的秘密在第一次之后就把整份 `fact` 泄给了写前面章节的写手。
-REVEAL_EVENT_KINDS: Final = ('first', 'confirm')
 
 #: relation 的**读者可见**时点与世内成立时点正交：公开事实直接给起章，
 #: 秘密关系引用一条 secret 的首次揭示章。两臂是闭合判别联合。
@@ -689,22 +663,10 @@ NARRATIVE_PERSON: Final = ('first', 'second', 'third')
 #: 世界规则的类别（`canon.world_rules[].kind`）。**七个，闭合。**
 #: ⚠ 盘上只见 **4** 个（`social_norm`×4 · `supernatural_rule`×3 · `legal_rule`×3 ·
 #: `ability_system`×1），**另三个零样本**——取值面从代码来，不是从盘上量出来的。
-#: ⚠ 与 `arc_tracks[].change_type` 恰好相反：那一个是**开放**枚举
-#: （`stage2.md` §1.6 明写「末尾的 `…` 是语义的一部分」），所以它**不许**做成 `Literal`。
 WORLD_RULE_KINDS: Final = (
     'social_norm', 'institution', 'legal_rule', 'ability_system',
     'supernatural_rule', 'technology_rule', 'physical_constraint',
 )
-
-#: `arc_tracks[].change_type` 的取值面。⚠⚠ **开放枚举，末尾那个 `…` 是语义的一部分**
-#: （`stage2.md` §1.6 明写）⇒ 它**不许**做成 `Literal`，也不许拆成元组再 `join`
-#: ——拆开就把「还可以有别的」这件事丢了，而那正是它与 `WORLD_RULE_KINDS`（七个，闭合）
-#: 相反的地方。整串下发给模型，本仓不校验它。
-#:
-#: 【为什么它是字符串不是元组】这一格答的是「发给模型的那句话长什么样」。
-#: 做成元组的唯一用途是拿去 `'|'.join(...)`，而那样就得在末尾**手工补一个 `…`**
-#: ——那是第二个落点，而且补漏了不会有任何东西出声。
-CHANGE_TYPES_ENUM: Final = 'stable|development|revelation|deterioration|reversal|…'
 
 #: 裸代词。**`address[].surface` 里一个都不许出现，连在别的字上也不行**（`R-2.3`）。
 #:

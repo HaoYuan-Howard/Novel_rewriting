@@ -652,16 +652,14 @@ class CtxArcTrack(StrictModel):
     """
 
     subject: str = Field(min_length=1)
-    dimension: str = Field(min_length=1)
-    change_type: str = Field(min_length=1)
     trajectory: str = Field(min_length=1)
 
 
 class CtxArc(StrictModel):
     """非末章只有 `current_stage`；**末章**另加三样。盘上 3/31 章是末章。
 
-    ⚠ **非末章一律不发 `arc_tracks`**：剥掉 `trajectory` 剩下的
-    `{char_001, 道德底线, deterioration}` 对写手是零信息，不剥就是结局。
+    ⚠ **非末章一律不发 `arc_tracks`**：剥掉 `trajectory` 只剩主体，对写手是零信息，
+    不剥就是结局。
     两头不讨好，所以整块不发。
     """
 

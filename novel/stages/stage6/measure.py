@@ -63,14 +63,14 @@ def hidden_secrets(secrets: list[dict], upto: int) -> tuple[list[dict], list[str
     返回 `(还没揭示的 secret 列表, 说不出揭示时点的 secret_id 列表)`。
     口径与逐章闸门一致：**揭示章 ≤ upto 即为已揭示**。
 
-    ⚠ 没有 `reader_reveal_events` 的那些**按未揭示处理并单独报出来**——
+    ⚠ 没有合法 `first_reveal_chapter` 的那些**按未揭示处理并单独报出来**——
     「不知道什么时候揭示」不是「已经揭示了」，倒向安全的一边，**但要出声**。
     """
     hid: list[dict] = []
     no_time: list[str] = []
     for s in secrets or []:
         # ⚠ **首次**揭示章，与逐章下发闸门同一个函数（`first_reveal_chapter`）。
-        #   说不出首次揭示时点的（一条 `kind='first'` 都没有）走 `no_time` 那条：
+        #   说不出首次揭示时点的走 `no_time` 那条：
         #   「不知道什么时候揭示」不是「已经揭示了」。
         first = first_reveal_chapter(s)
         if first is None:

@@ -241,6 +241,15 @@ export interface ReadingHinge {
   text: string | null
 }
 
+export interface ReadingFact {
+  fact_id: string
+  claim: string
+  kind: string
+  obligation: string
+  evidence_text: string | null
+  participant_char_ids: string[]
+}
+
 export interface ReadingBeat {
   beat_id: string
   located: boolean
@@ -248,15 +257,15 @@ export interface ReadingBeat {
   end: number | null
   time_layer: string
   place: string | null
-  present: string[]
-  event: string
+  present_char_ids: string[]
+  fact_atoms: ReadingFact[]
   hinges: ReadingHinge[]
 }
 
 export interface ReadingNarration {
   grammatical_person: string
-  narrator: string | null
-  focalizer: string | null
+  narrator_char_id: string | null
+  focalizer_char_id: string | null
   pronoun_surfaces: string[]
 }
 
@@ -267,7 +276,6 @@ export interface ReadingResponse {
   text_chars: number
   /** false = stage2 没跑（或蓝图里没有这一章 / 读不回）。左半边仍是 stage1 的原文。 */
   blueprint: boolean
-  summary: string | null
   segments: ReadingSegment[]
   beats: ReadingBeat[]
   narration: ReadingNarration[]
@@ -285,8 +293,6 @@ export interface GlobalSourceSpan {
   text: string
   start: number
   end: number
-  normalized: string
-  recovery: 'exact' | 'normalized'
 }
 
 export interface GlobalFactEvidence {
@@ -350,16 +356,12 @@ export interface GlobalSecret {
   secret_id: string
   fact: string
   fact_evidence: GlobalFactEvidence
-  /** 同一个复合真相被拆成多条时的归组键；独立的秘密是 null */
-  group_id: string | null
   knowledge_events: GlobalKnowledgeEvent[]
   /** ⚠ 必须连它一起读：cold 与「foreshadowed 但章号被裁空」在 setup_chapters 上同形 */
   setup_kind: 'cold' | 'foreshadowed'
   setup_chapters: number[]
-  /** 逐章剧透闸门按它开，不是按 reader_reveal_chapters 的最小值 */
+  /** 逐章剧透闸门按它开 */
   first_reveal_chapter: number
-  /** 全部揭示章，含后续 confirm */
-  reader_reveal_chapters: number[]
 }
 
 export interface Stage2Global {
@@ -382,8 +384,6 @@ export interface Stage2Global {
     ending: string
     arc_tracks: {
       subject: NameRef
-      dimension: string
-      change_type: string
       trajectory: string
       trajectory_evidence: GlobalFactEvidence
     }[]

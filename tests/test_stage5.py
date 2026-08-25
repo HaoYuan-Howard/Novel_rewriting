@@ -625,7 +625,7 @@ def test_secret_leak_goes_red_and_the_evidence_is_the_drafts_own_bytes(book, ent
                source_text=book.source_text,
                secrets=[{'secret_id': 'secret_x', 'fact': fact,
                          'knowledge_events': [], 'setup': {'kind': 'cold'},
-                         'reader_reveal_events': [{'chapter': 9}]}])
+                         'first_reveal_chapter': 9}])
     e = dict(entry, must_not_reveal=['secret_x'])
     body = _clean_body(book, entry) + fact + '。'
     fs = checks.chapter_findings(body, e, b, given='')
@@ -644,7 +644,7 @@ def test_secret_literal_leak_uses_the_authoritative_reveal_timeline(book, entry)
         secrets=[{
             'secret_id': 'secret_x', 'fact': fact,
             'knowledge_events': [], 'setup': {'kind': 'cold'},
-            'reader_reveal_events': [{'chapter': 9}],
+            'first_reveal_chapter': 9,
         }],
     )
     before = dict(entry, output_ordinal=1, must_not_reveal=[])
@@ -658,7 +658,7 @@ def test_secret_timeline_uses_the_same_number_ruler(book):
     """揭示章原样写出带数字的 fact 时，不得误报「连揭示章都没命中」。"""
     fact = '她其实一直都知道他是三皇子'
     secret = {'secret_id': 'secret_x', 'fact': fact, 'knowledge_events': [],
-              'setup': {'kind': 'cold'}, 'reader_reveal_events': [{'chapter': 9}]}
+              'setup': {'kind': 'cold'}, 'first_reveal_chapter': 9}
     synthetic = M.Book(title=book.title, ctx=book.ctx, measurable=book.measurable,
                        source_text=book.source_text, secrets=[secret])
     fs = checks.book_findings(synthetic, rows=[], bodies={9: fact},
@@ -836,11 +836,9 @@ def test_paid_writer_prompt_excludes_global_source_spans(monkeypatch, tmp_path):
                 'text': marker,
                 'start': start,
                 'end': start + len(marker),
-                'normalized': f'STAGE5_NORMALIZED_ONLY_{index}',
-                'recovery': 'normalized',
             },
         }
-        markers.extend((marker, f'STAGE5_NORMALIZED_ONLY_{index}'))
+        markers.append(marker)
         coordinates.extend((start, start + len(marker)))
 
     class Dumped:

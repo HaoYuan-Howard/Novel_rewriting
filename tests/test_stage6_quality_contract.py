@@ -134,7 +134,7 @@ def test_hook_secret_literal_uses_the_shared_number_ruler_and_own_bytes():
         secrets=[{
             'secret_id': 'secret_x',
             'fact': fact,
-            'reader_reveal_events': [{'chapter': 9}],
+            'first_reveal_chapter': 9,
         }],
         arc=None,
         characters={},

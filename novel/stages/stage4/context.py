@@ -458,19 +458,9 @@ def _project_facts(global_g: dict[str, Any], o: int, is_last: bool, disp: dict[s
          **但当时读来是别的意思**，此时给 `reader_knows_by_now=false`，意思是「要埋，不要点破」。
          没有②，写 ch3 那只茶盏时不知道它是主角安排的，ch9 的回收就没有铺垫。
 
-    ⚠⚠ **这一格 v2 修的是什么，说准了才有用。** 病根不是式子，是**一条 secret 装了
-    两个原子事实、分两次点破**：盘上某本 `secret_01` 揭示在 ch4 与 ch7，而 `fact`
-    第三个分句正是 ch7 才点破的成因——旧式子 `any(event.chapter <= o)` 在 ch4 就把
-    **整份 `fact`** 下发，那半段跟着泄给了写 ch4 的写手。
-    真正堵住它的是**载体**：`Secret._exactly_one_first_reveal` 逼着每条恰有一个
-    `first`，那种复合写法在契约上写不出来，只能拆成两条、`group_id` 归组，
-    各自按自己的 `first` 章下发（`R-2.18`）。
-    ⚠ **式子本身在合法产物上没换判**：载体不许有事件早于 `first` ⇒
-    `first_reveal_chapter(s)` 与旧的 `min(全部揭示章)` 恒等。改写它买到的是
-    「三处同一个基准、下次改判向不会漏掉一处」，不是一次行为变化——
-    别把它当成修复本身写进验收。
-    ⚠⚠ **下发不许按 `group_id` 拉平**：那会让整组回到「最早那条一揭示就全放」，
-    正是拆分要修的东西。
+    ⚠ 一条 secret 只承载一个原子事实，并直接保存唯一的 `first_reveal_chapter`。
+    分步点破的复合真相必须拆成多条 secret，各自按自己的首次揭示章下发；不另存确认
+    事件或分组标签，因为它们不参与任何下游判定。
 
     ⚠⚠ `knowledge_events` 有时间维，但它只回答**世内谁到本章已经知道**，用于裁剪
     `known_by`；它仍然不能替代读者的揭示时点来放行 secret。第一人称主角先知道真相，
@@ -517,9 +507,7 @@ def _project_facts(global_g: dict[str, Any], o: int, is_last: bool, disp: dict[s
                  or r.get('valid_through_chapter') >= o)]
 
     # `arc_tracks` 的 `trajectory` 写的是「从什么变到什么」——**终点就是结局**。
-    # 保留维度与变化类型、去掉终点？**剥掉 trajectory 之后剩下的
-    # `{char_001, 道德底线, deterioration}` 对写手是零信息**：它既不知道从哪变到哪，
-    # 也不知道本章处在轨迹的哪一段。而 trajectory 本身终点即结局，截断不了。
+    # 去掉终点后只剩主体，是零信息；trajectory 本身终点即结局，截断不了。
     # **两头不讨好，所以非末章一律不发 `arc_tracks`。**
     a: dict[str, Any] = {}
     stages = arc.get('conflict_stages') or []
@@ -551,8 +539,10 @@ def _project_facts(global_g: dict[str, Any], o: int, is_last: bool, disp: dict[s
         a['current_stage'] = {k: stage.get(k) for k in ('stage', 'chapters')}
     if is_last:
         rl = _relation_labels(ents, disp)
-        a['arc_tracks'] = [dict(t, subject=_arc_subject(t.get('subject'), disp, rl))
-                           for t in (arc.get('arc_tracks') or [])]
+        a['arc_tracks'] = [
+            {'subject': _arc_subject(t.get('subject'), disp, rl),
+             'trajectory': t.get('trajectory')}
+            for t in (arc.get('arc_tracks') or [])]
         a['climax'], a['ending'] = arc.get('climax'), arc.get('ending')
 
     # 称谓表按起点投影：把全书的叫法一股脑给写手，第 3 章就会写出第 20 章才该有的称呼
@@ -683,11 +673,8 @@ def build_writer_context(plan: dict[str, Any], global_g: dict[str, Any],
                          blueprints: dict[str, Any], main_text: list[dict[str, Any]]) -> Assembly:
     """把【写作节点该看到的东西】确定性地组装成 `stage4/writer_context.json`。
 
-    ⚠ stage2 的 `summary` / `end_hook` **不下发**，两条理由：
-      ① 写手已从计划拿到 `open_hook_goal` / `end_hook_goal`，而且那份说的是【重构后】
-         该怎么起收；stage2 那份说的是【原章】怎么起收——一个语义只留一个落点，留对的那个。
-      ② `end_hook.hook_function` 实测确实在泄漏原文（某本 ch2 14 字 / ch3 12 字 /
-         ch4 12 字 / ch8 8 字，逐字重合）。（`summary` 实测 0 泄漏，屏蔽它靠的是理由①。）
+    ⚠ 写手只从计划读取【重构后】的开收目标；历史 Stage2 章摘要与 end_hook 均已裁撤，
+    不再保留一份对原章起收方式的重复描述。
 
     【剧透面已全部关闭】曾经有四条旁路把同一批事实绕过 `must_not_reveal` 泄给写手，逐条堵掉：
     `characters[].identity` 写着结局 → 契约拆成 role/fate，只发 role ·

@@ -22,7 +22,7 @@
 采纳与否是人看完读数之后的另一件事，本工具不代做。
 
 【分批纪律】付费调用一次一批、一律前台（本机后台句柄会静默终止且报假 exit 0）。
-Stage2 v5 的摘要由原子事实确定性投影，不再需要书级模型调用。
+Stage2 v6 只保留原子事实，不再生成或持久化章摘要。
 
 用法：
     # 0 成本预览：摊开将要发的请求与逐字节同构核对，一个请求都不发
@@ -57,9 +57,6 @@ from novel.llm.ledger import audit_path, ledger_path              # noqa: E402
 from novel.run import RunContext                                  # noqa: E402
 from novel.stages.stage2 import extract                           # noqa: E402
 from novel.stages.stage2.contract import active_contract, contract_for  # noqa: E402
-from novel.stages.stage2.normalize import (                       # noqa: E402
-    resolve_character_refs,
-)
 
 #: 白名单从现役契约面显式钉住，拿错契约在第一行就停住。
 #:
@@ -134,8 +131,7 @@ def _hits(outcomes: list[Any]) -> dict[str, dict[str, Any]]:
 # ── 合并稿：未动章沿用 v3 正式稿，目标章换成本次 ir1 编译结果 ──────────────────
 
 def _merged_candidate(baseline: dict[str, Any], compiled: list[dict[str, Any]],
-                      accounting: dict[str, Any], main_text: list[dict[str, Any]],
-                      characters: dict[str, dict[str, Any]],
+                      accounting: dict[str, Any],
                       architecture: str) -> dict[str, Any]:
     """只活在内存里的合并稿——**判据要在全书上跑**，否则「覆盖缺失」那一族
     会被本次只跑 6 章这件事本身点亮，读数全被噪声盖住。
@@ -148,29 +144,22 @@ def _merged_candidate(baseline: dict[str, Any], compiled: list[dict[str, Any]],
     merged = [new_by.get(int(bp.get('chapter_ordinal') or 0), bp)
               for bp in (baseline.get('blueprints') or [])]
     old_prov = dict(baseline.get('_provenance') or {})
-    keep = [list(row) for row in (old_prov.get('verbatim_rewrites') or [])
-            if _chapter_of(row[0] if row else '') not in targets]
     keep_fail = [list(row) for row in (old_prov.get('verbatim_failures') or [])
                  if _chapter_of(row[0] if row else '') not in targets]
-    if contract_for(architecture).uses_character_refs:
-        resolved_copy = copy.deepcopy(merged)
-        char_refs = resolve_character_refs(resolved_copy, main_text, characters)
-        inferred = sum(len(beat.get('present_char_ids') or [])
-                       for bp in resolved_copy for beat in (bp.get('beats') or []))
-        direct = sum(len(beat.get('present_char_ids') or [])
-                     for bp in merged for beat in (bp.get('beats') or []))
-        char_refs['resolved'] += direct - inferred
-    else:
-        char_refs = resolve_character_refs(merged, main_text, characters)
+    keep_fact_fail = [list(row) for row in (old_prov.get('fact_atom_failures') or [])
+                      if _chapter_of(row[0] if row else '') not in targets]
+    keep_pending = [list(row) for row in (old_prov.get('hinge_ambiguous_pending') or [])
+                    if _chapter_of(row[0] if row else '') not in targets]
     return {
         'blueprints': merged,
         '_provenance': {
             **old_prov,
-            'char_refs': char_refs,
-            'verbatim_rewrites': keep + [list(r) for r
-                                         in accounting['verbatim_rewrites']],
             'verbatim_failures': keep_fail + [list(r) for r
                                               in accounting['verbatim_failures']],
+            'fact_atom_failures': keep_fact_fail + [list(r) for r
+                                                     in accounting['fact_atom_failures']],
+            'hinge_ambiguous_pending': keep_pending + [list(r) for r in
+                                                        accounting['hinge_ambiguous_pending']],
             # ⚠ 盖**本次实际跑的**那一臂，不是写死的 ir1：判据按 architecture 分流，
             #   盖错戳读数就归错臂。
             'context': {**(old_prov.get('context') or {}),
@@ -253,7 +242,7 @@ def build_report(*, sid: str, targets: tuple[int, ...], spec: Any, model: str,
                  compiled: list[dict[str, Any]], accounting: dict[str, Any],
                  baseline: dict[str, Any], raw_ir: list[dict[str, Any]],
                  old_hits: dict[str, Any], new_hits: dict[str, Any],
-                 summary_mode: str, scope_violations: list[str],
+                 scope_violations: list[str],
                  errors: list[str], cost: dict[str, Any],
                  baseline_cost: dict[str, Any],
                  gate_rows: list[dict[str, Any]]) -> dict[str, Any]:
@@ -261,20 +250,16 @@ def build_report(*, sid: str, targets: tuple[int, ...], spec: Any, model: str,
     for beat_id, _where, cause in accounting['verbatim_failures']:
         bucket = causes.setdefault(_chapter_of(beat_id), {})
         bucket[cause] = bucket.get(cause, 0) + 1
+    for fact_id, _beat_id, cause in accounting['fact_atom_failures']:
+        bucket = causes.setdefault(_chapter_of(fact_id), {})
+        bucket[cause] = bucket.get(cause, 0) + 1
     old_by = {int(bp.get('chapter_ordinal') or 0): bp
               for bp in (baseline.get('blueprints') or [])}
-    ir_by = {int(bp.get('chapter_ordinal') or 0): bp for bp in raw_ir}
     per_chapter = []
     for blueprint in compiled:
         ordinal = int(blueprint.get('chapter_ordinal') or 0)
-        modes: dict[str, int] = {}
-        for beat in ((ir_by.get(ordinal) or {}).get('beats') or []):
-            ref = beat.get('place')
-            key = (str(ref.get('mode')) if isinstance(ref, dict)
-                   else 'P_EXPLICIT' if isinstance(ref, str) and ref.strip()
-                   else 'P_UNKNOWN' if ref is None else f'非法:{ref!r}')
-            modes[key] = modes.get(key, 0) + 1
         beats = list(blueprint.get('beats') or [])
+        facts = list(blueprint.get('fact_atoms') or [])
         hinges = [h for beat in beats for h in (beat.get('hinges') or [])]
         located = [h for h in hinges if isinstance(h.get('source'), dict)]
         old_beats = list((old_by.get(ordinal) or {}).get('beats') or [])
@@ -283,20 +268,15 @@ def build_report(*, sid: str, targets: tuple[int, ...], spec: Any, model: str,
             'beats': len(beats),
             'beats_baseline': len(old_beats),
             'place_named_baseline': sum(1 for b in old_beats if b.get('place')),
+            'facts': len(facts),
+            'facts_baseline': len((old_by.get(ordinal) or {}).get('fact_atoms') or []),
+            'facts_located': sum(1 for fact in facts if isinstance(fact.get('source'), dict)),
             'hinges': len(hinges),
             'hinges_baseline': sum(len(b.get('hinges') or []) for b in old_beats),
             'hinges_located': len(located),
-            'hinges_exact': sum(1 for h in located
-                                if h['source'].get('recovery') == 'exact'),
-            'hinges_normalized': sum(1 for h in located
-                                     if h['source'].get('recovery') == 'normalized'),
             'beats_without_span': sum(1 for b in beats if not b.get('span')),
             'place_named': sum(1 for b in beats if b.get('place')),
-            'place_modes': modes,
             'time_layers': _tally(b.get('time_layer') for b in beats),
-            'summary_chars': len(str(blueprint.get('summary') or '')),
-            'summary_chars_baseline': len(
-                str((old_by.get(ordinal) or {}).get('summary') or '')),
             'failure_causes': causes.get(ordinal, {}),
         })
     new_rules = {rule: row for rule, row in new_hits.items() if rule not in old_hits}
@@ -314,15 +294,11 @@ def build_report(*, sid: str, targets: tuple[int, ...], spec: Any, model: str,
         'schema_mode': spec.schema_mode,
         'model': model,
         'effort': NODES[NODE].effort,
-        'summary_mode': summary_mode,
         'per_chapter': per_chapter,
         'hinge_ambiguous_pending': [list(r) for r
                                     in accounting['hinge_ambiguous_pending']],
-        'boundary_nudges': [list(r) for r
-                            in (accounting.get('boundary_nudges') or [])],
-        'place_inherit_without_base': list(accounting['place_inherit_without_base']),
-        'verbatim_rewrites': [list(r) for r in accounting['verbatim_rewrites']],
         'verbatim_failures': [list(r) for r in accounting['verbatim_failures']],
+        'fact_atom_failures': [list(r) for r in accounting['fact_atom_failures']],
         'scope_violations': scope_violations,
         'call_errors': errors,
         'baseline_hard': sorted(r for r, v in old_hits.items() if v['sev'] == 'hard'),
@@ -343,29 +319,25 @@ def render_md(report: dict[str, Any]) -> str:
         f"# stage2 `{report['contract']}` 高难包付费冒烟（7A）", '',
         f"书 `{report['sid']}` · 目标章 {targets} · 模型 `{report['model']}`"
         f" · effort `{report['effort']}` · schema_mode `{report['schema_mode']}`"
-        f" · summary `{report['summary_mode']}`", '',
         '## 一、逐章编译读数（括号内 = 盘上基线同章读数）', '',
-        '| 章 | 拍 | 无 span 的拍 | hinge | 定位 | exact | normalized | '
-        '有地点的拍 | 摘要字数 | 失败根因 |',
-        '|--:|--:|--:|--:|--:|--:|--:|--:|--:|---|',
+        '| 章 | 拍 | 无 span 的拍 | 原子事实 | 有证据事实 | hinge | 已定位 hinge | '
+        '有地点的拍 | 失败根因 |',
+        '|--:|--:|--:|--:|--:|--:|--:|--:|---|',
     ]
     for row in report['per_chapter']:
         causes = '、'.join(f'{k}×{v}' for k, v in row['failure_causes'].items()) or '无'
         lines.append(
             f"| {row['chapter_ordinal']} | {row['beats']}（{row['beats_baseline']}） "
             f"| {row['beats_without_span']} "
+            f"| {row['facts']}（{row['facts_baseline']}） | {row['facts_located']} "
             f"| {row['hinges']}（{row['hinges_baseline']}） "
-            f"| {row['hinges_located']} | {row['hinges_exact']} "
-            f"| {row['hinges_normalized']} "
+            f"| {row['hinges_located']} "
             f"| {row['place_named']}（{row['place_named_baseline']}） "
-            f"| {row['summary_chars']}（{row['summary_chars_baseline']}） "
             f"| {causes} |")
-    lines += ['', '响应侧枚举分布（原始 IR，未经编译）：', '']
+    lines += ['', '叙述时间层分布：', '']
     for row in report['per_chapter']:
-        places = '、'.join(f'{k}×{v}' for k, v in sorted(row['place_modes'].items()))
         layers = '、'.join(f'{k}×{v}' for k, v in sorted(row['time_layers'].items()))
-        lines.append(f"- ch{row['chapter_ordinal']}：place {places} · "
-                     f"time_layer {layers}")
+        lines.append(f"- ch{row['chapter_ordinal']}：{layers}")
     lines += ['', '## 二、判据差集（合并稿 vs 盘上基线）', '',
               '⚠ **本节只对「逐章绝对判据」有效**（hinge/span/覆盖/枚举那一族）。'
               f"以本书自身为尺子的判据——{'、'.join(sorted(BOOK_RELATIVE_RULES))}"
@@ -387,22 +359,19 @@ def render_md(report: dict[str, Any]) -> str:
         lines += ['', '命中数变多的判据：']
         lines += [f"- `{rule}`（{row['sev']}）{row['was']} → {row['now']}"
                   for rule, row in sorted(report['worse_rules'].items())]
-    lines += ['', '## 三、层0 改写与层1 可修条目', '']
-    lines.append(f"层0 边界外扩（编译器改了模型给的止段）：{len(report['boundary_nudges'])}")
-    lines += [f'- `{bid}` 止段 {before} → {after}（{cause}）'
-              for bid, before, after, cause in report['boundary_nudges']]
-    lines.append('')
+    lines += ['', '## 三、失败与可修条目', '']
     lines.append('hinge 多处命中（候选选择可修）：'
                  + (str(len(report['hinge_ambiguous_pending'])) or '0'))
     lines += [f'- `{bid}` [{kind}] {phrase!r}'
               for bid, kind, phrase in report['hinge_ambiguous_pending']]
     lines.append('')
-    lines.append('place 继承链头（SOFT 账）：'
-                 + ('、'.join(report['place_inherit_without_base']) or '无'))
-    lines.append('')
-    lines.append('全部失败根因行：')
+    lines.append('hinge/span 失败根因行：')
     lines += [f'- `{bid}` {where}：{cause}'
               for bid, where, cause in report['verbatim_failures']] or ['- 无']
+    lines.append('')
+    lines.append('原子事实证据失败根因行：')
+    lines += [f'- `{fact_id}`（{beat_id}）：{cause}'
+              for fact_id, beat_id, cause in report['fact_atom_failures']] or ['- 无']
     cost, base = report['cost'], report['baseline_cost']
     lines += ['', '## 四、本次账（ledger 追加行）', '',
               f"调用 {cost['calls_total']}（付费 {cost['calls_paid']} / 缓存 "
@@ -589,12 +558,11 @@ def main(argv: list[str] | None = None) -> int:
     compiled, accounting = spec.compile_fn(
         {'blueprints': raw_blueprints}, main_text, characters)
 
-    summary_mode = 'fact_atoms 确定性投影（0 次额外调用）'
 
     baseline = store_both.blueprints or {'blueprints': []}
     old_hits = _hits(extract._judge_candidate(global_raw, baseline, main_text))
     merged = _merged_candidate(baseline, compiled['blueprints'], accounting,
-                               main_text, characters, spec.architecture)
+                               spec.architecture)
     new_hits = _hits(extract._judge_candidate(global_raw, merged, main_text))
 
     ledger_rows, _ = _tail_rows(ledger_path(base), ledger_at)
@@ -603,7 +571,7 @@ def main(argv: list[str] | None = None) -> int:
         sid=a.sid, targets=targets, spec=spec, model=client.model,
         compiled=compiled['blueprints'], accounting=accounting,
         baseline=baseline,
-        old_hits=old_hits, new_hits=new_hits, summary_mode=summary_mode,
+        old_hits=old_hits, new_hits=new_hits,
         scope_violations=list(batch['scope_violations']), errors=errors,
         raw_ir=raw_ir,
         cost=_cost_rows(ledger_rows),

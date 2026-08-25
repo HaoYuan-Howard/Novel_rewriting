@@ -243,7 +243,7 @@ def test_relation_valid_through_chapter_includes_the_named_chapter_only():
 # ── 二·五、secret 的下发时点（`R-2.18`）───────────────────────────────────
 
 def _split_secrets_grounding() -> dict:
-    """一个复合真相拆成两条、`group_id` 归组的合成底座。
+    """一个复合真相拆成两条原子 secret 的合成底座。
 
     这正是盘上那本书 `secret_01` 的形状：穿女装的行为在 ch4 点破，而「为什么」
     要到 ch7 才点破。v1 只能把两件事写进一条 `fact`，于是 ch4 的写手整份都拿到。
@@ -258,7 +258,7 @@ def _split_secrets_grounding() -> dict:
             'setting': {'时代背景': '当代', '世界观': '偶像公寓'},
             'world_rules': [],
             'secrets': [
-                {'secret_id': 'secret_01', 'group_id': 'sgrp_01',
+                {'secret_id': 'secret_01',
                  'fact': '江尽夏私下会穿女装打扮自己',
                  'knowledge_events': [{
                      'subject': {'kind': 'character', 'char_id': 'char_001'},
@@ -266,9 +266,8 @@ def _split_secrets_grounding() -> dict:
                      'evidence': {'chapter_ordinal': 1, 'source': None},
                  }],
                  'setup': {'kind': 'foreshadowed', 'chapters': [2]},
-                 'reader_reveal_events': [{'chapter': 4, 'kind': 'first'},
-                                          {'chapter': 9, 'kind': 'confirm'}]},
-                {'secret_id': 'secret_02', 'group_id': 'sgrp_01',
+                 'first_reveal_chapter': 4},
+                {'secret_id': 'secret_02',
                  'fact': '他这么做是因为中学时穿裙子被舅舅剃了头',
                  'knowledge_events': [{
                      'subject': {'kind': 'character', 'char_id': 'char_001'},
@@ -276,7 +275,7 @@ def _split_secrets_grounding() -> dict:
                      'evidence': {'chapter_ordinal': 1, 'source': None},
                  }],
                  'setup': {'kind': 'cold'},
-                 'reader_reveal_events': [{'chapter': 7, 'kind': 'first'}]},
+                 'first_reveal_chapter': 7},
             ],
         },
         # ⚠ 阶段必须逐章覆盖全书（`R-2.14`）：`_project_facts` 对定不出章级阶段的
@@ -323,7 +322,7 @@ def _explicit_visibility_grounding() -> dict:
         'secret_id': 'secret_03',
         'fact': '公寓里的人会轮流替江尽夏保管钥匙',
         'setup': {'kind': 'cold'},
-        'reader_reveal_events': [{'chapter': 1, 'kind': 'first'}],
+        'first_reveal_chapter': 1,
         'knowledge_events': [
             {
                 'subject': {'kind': 'character', 'char_id': 'char_001'},
@@ -408,11 +407,9 @@ def test_writer_context_excludes_every_global_source_span_byte():
                 'text': marker,
                 'start': start,
                 'end': start + len(marker),
-                'normalized': f'CONTEXT_NORMALIZED_ONLY_{index}',
-                'recovery': 'normalized',
             },
         }
-        markers.extend((marker, f'CONTEXT_NORMALIZED_ONLY_{index}'))
+        markers.append(marker)
         coordinates.extend((start, start + len(marker)))
 
     goal = {'intent': 'advance', 'fact_refs': [{
@@ -465,12 +462,11 @@ def test_writer_context_excludes_every_global_source_span_byte():
 def test_a_split_secret_group_is_released_per_member_not_per_group(
     ordinal: int, visible: list[str], hidden: list[str],
 ):
-    """⭐ `R-2.18`：拆开的两条各按**自己的** `first` 章下发，不按 `group_id` 拉平。
+    """⭐ `R-2.18`：拆开的两条各按**自己的**首次揭示章下发。
 
     这是 v2 那次改动真正修掉的东西。v1 里这两件事只能写进一条 `fact`，
     而闸门按「任意一次揭示 ≤ 本章」判 ⇒ 写 ch4 的写手连 ch7 才点破的成因一起拿到。
-    ⚠ 如果哪天有人「顺手」按 group 下发（同组一条揭示就全放），本条会红——
-    那正是把刚拆开的两件事又粘回去。
+    载体不再保留对下发无作用的分组和确认事件。
     """
     facts, must_not_reveal, _held, _cut = _project_facts(
         _split_secrets_grounding(), ordinal, False, {'char_001': '江尽夏'})
@@ -494,19 +490,12 @@ def test_a_setup_chapter_releases_the_fact_but_marks_the_reader_as_unaware():
     assert 'secret_02' in must_not_reveal, '另一条既没埋点也没揭示 ⇒ 只能留 id'
 
 
-def test_a_confirm_event_alone_never_opens_the_gate():
-    """⚠ `confirm` 不参与「读者知道了没」。
-
-    把 `first` 那条去掉、只留 `confirm`，闸门必须**关着**——旧式子
-    `any(chapter <= o)` 在这里会开闸，而那正是被换掉的判定。
-    ⚠ 这个形状载体是拒收的（恰一个 `first`）；这里直接喂 `_project_facts` 的
-    dict，测的是**闸门自己**在拿到坏形状时倒向安全的一边，不是测载体。
-    """
+def test_a_missing_first_reveal_chapter_never_opens_the_gate():
+    """未校验 dict 缺少首次揭示章时，下发闸门安全地保持关闭。"""
     grounding = _split_secrets_grounding()
     grounding['canon']['secrets'] = [{
-        'secret_id': 'secret_01', 'group_id': None, 'fact': '只有后续确认的坏形状',
+        'secret_id': 'secret_01', 'fact': '缺少揭示章的坏形状',
         'character_known_by': ['char_001'], 'setup': {'kind': 'cold'},
-        'reader_reveal_events': [{'chapter': 4, 'kind': 'confirm'}],
     }]
     facts, must_not_reveal, _held, _cut = _project_facts(
         grounding, 9, False, {'char_001': '江尽夏'})

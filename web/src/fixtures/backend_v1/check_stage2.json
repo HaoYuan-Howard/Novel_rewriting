@@ -38,8 +38,14 @@
    "item": "一个角色有据的叫法不得全都含代词",
    "requirement": "R-2.3",
    "check_kind": "mechanical",
-   "remediation": "human",
-   "fix": null,
+   "remediation": "llm",
+   "fix": {
+    "node": "stage2.global",
+    "flags": [
+     "--resample"
+    ],
+    "paid": true
+   },
    "findings": [],
    "why": null,
    "scanned": "15 个角色",
@@ -52,8 +58,14 @@
    "item": "称谓整条不是代词",
    "requirement": "R-2.3",
    "check_kind": "mechanical",
-   "remediation": "human",
-   "fix": null,
+   "remediation": "llm",
+   "fix": {
+    "node": "stage2.global",
+    "flags": [
+     "--resample"
+    ],
+    "paid": true
+   },
    "findings": [],
    "why": null,
    "scanned": "47 条称呼 · 词表 ('我', '你', '他', '她', '它', '咱')",
@@ -66,8 +78,14 @@
    "item": "「谁在这么叫」解析得出来",
    "requirement": "R-2.4",
    "check_kind": "mechanical",
-   "remediation": "human",
-   "fix": null,
+   "remediation": "llm",
+   "fix": {
+    "node": "stage2.global",
+    "flags": [
+     "--resample"
+    ],
+    "paid": true
+   },
    "findings": [],
    "why": null,
    "scanned": "47 条称呼（其中 narration 视角 21 条）",
@@ -80,8 +98,14 @@
    "item": "「从第几章起可用」在全书章范围内",
    "requirement": "R-2.5",
    "check_kind": "mechanical",
-   "remediation": "human",
-   "fix": null,
+   "remediation": "llm",
+   "fix": {
+    "node": "stage2.global",
+    "flags": [
+     "--resample"
+    ],
+    "paid": true
+   },
    "findings": [],
    "why": null,
    "scanned": "47 条称呼 / 全书 8 章",
@@ -94,8 +118,14 @@
    "item": "「从第几章起可用」不早于该字面在原文里首次出现的章",
    "requirement": "R-2.5",
    "check_kind": "mechanical",
-   "remediation": "human",
-   "fix": null,
+   "remediation": "llm",
+   "fix": {
+    "node": "stage2.global",
+    "flags": [
+     "--resample"
+    ],
+    "paid": true
+   },
    "findings": [],
    "why": null,
    "scanned": "47 个有据的叫法",
@@ -155,111 +185,6 @@
    "findings": [],
    "why": null,
    "scanned": "62 个字面",
-   "baseline": null
-  },
-  {
-   "rule": "anchor_ambiguous",
-   "sev": "hard",
-   "status": "ok",
-   "item": "响应或旧制品的 locator 在待搜索区间内只匹配到一处",
-   "requirement": "R-3.2b",
-   "check_kind": "mechanical",
-   "remediation": "llm",
-   "fix": {
-    "node": "stage2.blueprint",
-    "flags": [
-     "--chapters"
-    ],
-    "paid": true
-   },
-   "findings": [],
-   "why": null,
-   "scanned": "0 个定位成功的 starts_with 锚点",
-   "baseline": null
-  },
-  {
-   "rule": "anchor_not_verbatim",
-   "sev": "info",
-   "status": "ok",
-   "item": "锚点是原文字节",
-   "requirement": "R-3.18",
-   "check_kind": "mechanical",
-   "remediation": "deterministic",
-   "fix": {
-    "node": "stage2.blueprint",
-    "flags": [
-     "--migrate"
-    ],
-    "paid": false
-   },
-   "findings": [],
-   "why": null,
-   "scanned": "0 条救回记录",
-   "baseline": null
-  },
-  {
-   "rule": "anchor_short",
-   "sev": "metric",
-   "status": "ok",
-   "item": "旧 locator 中内容字符 <6 的锚点计数",
-   "requirement": "R-3.2b",
-   "check_kind": "mechanical",
-   "remediation": "none",
-   "fix": null,
-   "findings": [
-    {
-     "rule": "anchor_short",
-     "sev": "metric",
-     "item": "旧 locator 中内容字符 <6 的锚点计数",
-     "detail": "0/0 个锚点内容字符 <6（最短 0）—— ⚠ 契约的「照抄 8~30 字」是**生成期指导**不是产物不变量（回取会两头改长度），**此处只报计数不判违约**。⚠⚠ 而产地按 8~30 要求、校验侧承认做不到，中间那段差额会被模型用**编造**填上：[]",
-     "evidence": [
-      "0/0"
-     ],
-     "evidence_key": "0/0",
-     "owner": null,
-     "actionable": false,
-     "identity_hit": false,
-     "identity_dead": null,
-     "converge": "new",
-     "unresolved_rounds": 0,
-     "wontfix": null
-    }
-   ],
-   "why": null,
-   "scanned": "0 个锚点",
-   "baseline": null
-  },
-  {
-   "rule": "batch_density",
-   "sev": "metric",
-   "status": "ok",
-   "item": "按一次调用分组的抽取量",
-   "requirement": "R-3.16b",
-   "check_kind": "mechanical",
-   "remediation": "none",
-   "fix": null,
-   "findings": [
-    {
-     "rule": "batch_density",
-     "sev": "metric",
-     "item": "按一次调用分组的抽取量",
-     "detail": "逐章抽取（8 章 = 8 次调用） —— 逐章产物上它说明的是「批与章是同一个东西」，⚠ 而**旧产物记的是别的值**",
-     "evidence": [
-      "8",
-      "[1, 1, 1, 1, 1, 1, 1, 1]"
-     ],
-     "evidence_key": "8|[1, 1, 1, 1, 1, 1, 1, 1]",
-     "owner": null,
-     "actionable": false,
-     "identity_hit": false,
-     "identity_dead": null,
-     "converge": "new",
-     "unresolved_rounds": 0,
-     "wontfix": null
-    }
-   ],
-   "why": null,
-   "scanned": "8 批",
    "baseline": null
   },
   {
@@ -331,14 +256,40 @@
    "baseline": null
   },
   {
+   "rule": "canon_chapter_refs_dangling",
+   "sev": "hard",
+   "status": "skipped",
+   "item": "规则版本与 secret 时间线章号都在正文集合内",
+   "requirement": "R-2.21",
+   "check_kind": "mechanical",
+   "remediation": "llm",
+   "fix": {
+    "node": "stage2.global",
+    "flags": [
+     "--resample"
+    ],
+    "paid": true
+   },
+   "findings": [],
+   "why": "现役 fixture 没有这条新增判据的历史运行结果",
+   "scanned": null,
+   "baseline": null
+  },
+  {
    "rule": "canonical_unique",
    "sev": "hard",
    "status": "ok",
    "item": "一个显示名只挂一个 char_id",
    "requirement": "R-2.1",
    "check_kind": "mechanical",
-   "remediation": "human",
-   "fix": null,
+   "remediation": "llm",
+   "fix": {
+    "node": "stage2.global",
+    "flags": [
+     "--resample"
+    ],
+    "paid": true
+   },
    "findings": [],
    "why": null,
    "scanned": "15 个显示名 / 15 个角色",
@@ -411,11 +362,37 @@
    "item": "每个角色至少有一个叫法在原文里搜得到",
    "requirement": "R-2.2",
    "check_kind": "mechanical",
-   "remediation": "human",
-   "fix": null,
+   "remediation": "llm",
+   "fix": {
+    "node": "stage2.global",
+    "flags": [
+     "--resample"
+    ],
+    "paid": true
+   },
    "findings": [],
    "why": null,
    "scanned": "15 个角色 / 62 个字面",
+   "baseline": null
+  },
+  {
+   "rule": "conflict_stage_coverage",
+   "sev": "hard",
+   "status": "skipped",
+   "item": "冲突阶段逐章显式枚举且恰好覆盖全书一次",
+   "requirement": "R-2.14",
+   "check_kind": "mechanical",
+   "remediation": "llm",
+   "fix": {
+    "node": "stage2.global",
+    "flags": [
+     "--resample"
+    ],
+    "paid": true
+   },
+   "findings": [],
+   "why": "现役 fixture 没有这条新增判据的历史运行结果",
+   "scanned": null,
    "baseline": null
   },
   {
@@ -462,8 +439,14 @@
    "item": "带区分词的显示名真有同名对象",
    "requirement": "R-2.6b",
    "check_kind": "mechanical",
-   "remediation": "human",
-   "fix": null,
+   "remediation": "llm",
+   "fix": {
+    "node": "stage2.global",
+    "flags": [
+     "--resample"
+    ],
+    "paid": true
+   },
    "findings": [],
    "why": null,
    "scanned": "15 个 canonical",
@@ -562,14 +545,40 @@
    "baseline": null
   },
   {
+   "rule": "global_evidence_unlocated",
+   "sev": "hard",
+   "status": "skipped",
+   "item": "自由事实证据能在指定章唯一回取为精确 SourceSpan",
+   "requirement": "R-2.20",
+   "check_kind": "mechanical",
+   "remediation": "llm",
+   "fix": {
+    "node": "stage2.global",
+    "flags": [
+     "--resample"
+    ],
+    "paid": true
+   },
+   "findings": [],
+   "why": "现役 fixture 没有这条新增判据的历史运行结果",
+   "scanned": null,
+   "baseline": null
+  },
+  {
    "rule": "hedge_words",
    "sev": "hard",
    "status": "hit",
    "item": "身份 / 结局 / 显示名里没有模棱语",
    "requirement": "R-2.6",
    "check_kind": "mechanical",
-   "remediation": "human",
-   "fix": null,
+   "remediation": "llm",
+   "fix": {
+    "node": "stage2.global",
+    "flags": [
+     "--resample"
+    ],
+    "paid": true
+   },
    "findings": [
     {
      "rule": "hedge_words",
@@ -592,6 +601,26 @@
    "why": null,
    "scanned": "15 个角色 × 3 个字段 · 词表 ('可能', '似乎', '大约', '应该是', '疑似', '也许', '或许', '之类')",
    "baseline": "⭐ **盘上 2/3 命中**（成年人 1 · 头牌 1），⚠ **两处都在 `fate`**——而 `fate` 一概不下发给写手 ⇒ 这两处的实际危害低于它的严重度，但**不降级**：同一把尺子量 `role` 时它是真阻断，按命中位置分级会让这条判据说不清自己在查什么"
+  },
+  {
+   "rule": "hinge_ambiguous",
+   "sev": "hard",
+   "status": "skipped",
+   "item": "保真材料的短语在所属拍的区间内唯一命中",
+   "requirement": "R-3.5",
+   "check_kind": "mechanical",
+   "remediation": "llm",
+   "fix": {
+    "node": "stage2.blueprint",
+    "flags": [
+     "--patch"
+    ],
+    "paid": true
+   },
+   "findings": [],
+   "why": "现役 fixture 没有这条新增判据的历史运行结果",
+   "scanned": null,
+   "baseline": null
   },
   {
    "rule": "hinge_anchor_void",
@@ -715,20 +744,6 @@
     ],
     "paid": true
    },
-   "findings": [],
-   "why": null,
-   "scanned": "66 条保真材料",
-   "baseline": null
-  },
-  {
-   "rule": "hinge_unanchored",
-   "sev": "hard",
-   "status": "ok",
-   "item": "每条保真材料都带精确 source（旧制品至少带完整 locator）",
-   "requirement": "R-3.5",
-   "check_kind": "mechanical",
-   "remediation": "human",
-   "fix": null,
    "findings": [],
    "why": null,
    "scanned": "66 条保真材料",
@@ -901,188 +916,20 @@
    "rule": "present_ids_dangling",
    "sev": "hard",
    "status": "ok",
-   "item": "在场人物 id 都在 registry 里",
-   "requirement": "R-3.7",
+   "item": "在场人物 id 都在本章可见人物闭集与 registry 里",
+   "requirement": "R-3.7b",
    "check_kind": "mechanical",
-   "remediation": "deterministic",
+   "remediation": "llm",
    "fix": {
     "node": "stage2.blueprint",
     "flags": [
-     "--migrate"
+     "--chapters"
     ],
-    "paid": false
+    "paid": true
    },
    "findings": [],
    "why": null,
    "scanned": "148 个引用 / registry 15 人",
-   "baseline": null
-  },
-  {
-   "rule": "present_names_ambiguous",
-   "sev": "metric",
-   "status": "ok",
-   "item": "称呼在名册里挂着不止一个人",
-   "requirement": "R-3.7b",
-   "check_kind": "mechanical",
-   "remediation": "none",
-   "fix": null,
-   "findings": [
-    {
-     "rule": "present_names_ambiguous",
-     "sev": "metric",
-     "item": "称呼在名册里挂着不止一个人",
-     "detail": "0/176 —— ⚠ 这多半是**原文自己的歧义**（同一个叫法真的指两个人），不是数据错误；**不猜**——三条候选消歧规则实测 0/9 有效，判 HARD 只会得到一盏永远红着的灯",
-     "evidence": [
-      "0/176"
-     ],
-     "evidence_key": "0/176",
-     "owner": null,
-     "actionable": false,
-     "identity_hit": false,
-     "identity_dead": null,
-     "converge": "new",
-     "unresolved_rounds": 0,
-     "wontfix": null
-    }
-   ],
-   "why": null,
-   "scanned": "176 个在场者称呼",
-   "baseline": null
-  },
-  {
-   "rule": "present_names_invented",
-   "sev": "hard",
-   "status": "ok",
-   "item": "在场者的称呼在全书原文里找得到",
-   "requirement": "R-3.7b",
-   "check_kind": "mechanical",
-   "remediation": "llm",
-   "fix": {
-    "node": "stage2.blueprint",
-    "flags": [
-     "--chapters"
-    ],
-    "paid": true
-   },
-   "findings": [],
-   "why": null,
-   "scanned": "176 个在场者称呼",
-   "baseline": null
-  },
-  {
-   "rule": "present_names_late",
-   "sev": "metric",
-   "status": "ok",
-   "item": "称呼要到本章之后才出现 → 已拦下",
-   "requirement": "R-3.7d",
-   "check_kind": "mechanical",
-   "remediation": "none",
-   "fix": null,
-   "findings": [
-    {
-     "rule": "present_names_late",
-     "sev": "metric",
-     "item": "称呼要到本章之后才出现 → 已拦下",
-     "detail": "0/176 —— ⚠ **这是收益不是违约**：拦下来的正是「写手在角色登场前就拿到名字」那条剧透旁路。非 0 说明模型仍在用后面的章",
-     "evidence": [
-      "0/176"
-     ],
-     "evidence_key": "0/176",
-     "owner": null,
-     "actionable": false,
-     "identity_hit": false,
-     "identity_dead": null,
-     "converge": "new",
-     "unresolved_rounds": 0,
-     "wontfix": null
-    }
-   ],
-   "why": null,
-   "scanned": "176 个在场者称呼",
-   "baseline": null
-  },
-  {
-   "rule": "present_names_partial",
-   "sev": "hard",
-   "status": "ok",
-   "item": "不许一部分拍给了在场称呼而另一部分没给",
-   "requirement": "R-3.7b",
-   "check_kind": "mechanical",
-   "remediation": "llm",
-   "fix": {
-    "node": "stage2.blueprint",
-    "flags": [
-     "--chapters"
-    ],
-    "paid": true
-   },
-   "findings": [],
-   "why": null,
-   "scanned": "67 拍",
-   "baseline": null
-  },
-  {
-   "rule": "present_names_pronoun",
-   "sev": "metric",
-   "status": "ok",
-   "item": "在场者写成了代词",
-   "requirement": "R-3.7b",
-   "check_kind": "mechanical",
-   "remediation": "none",
-   "fix": null,
-   "findings": [
-    {
-     "rule": "present_names_pronoun",
-     "sev": "metric",
-     "item": "在场者写成了代词",
-     "detail": "0/176 —— ⚠⚠ **代词按设计永远不在 registry 里** ⇒ 它们**既不是自造也不是漏收**，是两条契约在这里对不上。第一人称书里模型照原文写「我」——那是对的",
-     "evidence": [
-      "0/176"
-     ],
-     "evidence_key": "0/176",
-     "owner": null,
-     "actionable": false,
-     "identity_hit": false,
-     "identity_dead": null,
-     "converge": "new",
-     "unresolved_rounds": 0,
-     "wontfix": null
-    }
-   ],
-   "why": null,
-   "scanned": "176 个在场者称呼",
-   "baseline": null
-  },
-  {
-   "rule": "present_names_unlisted",
-   "sev": "metric",
-   "status": "ok",
-   "item": "原文里真有、只是名册没收它",
-   "requirement": "R-3.7b",
-   "check_kind": "mechanical",
-   "remediation": "none",
-   "fix": null,
-   "findings": [
-    {
-     "rule": "present_names_unlisted",
-     "sev": "metric",
-     "item": "原文里真有、只是名册没收它",
-     "detail": "14/176 —— ⚠ **这是全书级抽取该修的，不是本层违约**（`address` 漏收了原文在用的叫法）。代价在写手侧——这一拍少了一个在场者：[\"ch2 b02_01 '姑娘们'\", \"ch2 b02_02 '婆婆'\", \"ch2 b02_03 '高个子龟公'\", \"ch2 b02_04 '下人'\", \"ch2 b02_05 '婆婆'\", \"ch2 b02_06 '婆婆'\"] …另 8 条",
-     "evidence": [
-      "14/176"
-     ],
-     "evidence_key": "14/176",
-     "owner": null,
-     "actionable": false,
-     "identity_hit": false,
-     "identity_dead": null,
-     "converge": "new",
-     "unresolved_rounds": 0,
-     "wontfix": null
-    }
-   ],
-   "why": null,
-   "scanned": "176 个在场者称呼",
    "baseline": null
   },
   {
@@ -1115,30 +962,36 @@
   },
   {
    "rule": "relation_dangling",
-   "sev": "info",
+   "sev": "hard",
    "status": "ok",
-   "item": "关系两端都是 registry 里的 char_id",
+   "item": "关系两端、世内窗口与读者 visibility 都关闭式有效",
    "requirement": "R-2.8",
    "check_kind": "mechanical",
-   "remediation": "human",
-   "fix": null,
+   "remediation": "llm",
+   "fix": {
+    "node": "stage2.global",
+    "flags": [
+     "--resample"
+    ],
+    "paid": true
+   },
    "findings": [],
    "why": null,
    "scanned": "15 条关系 / 30 端",
    "baseline": null
   },
   {
-   "rule": "repair_cache_policy",
-   "sev": "hard",
-   "status": "ok",
-   "item": "定向重生成配的是「不读缓存」",
-   "requirement": "R-3.11",
+   "rule": "relation_visibility_mismatch",
+   "sev": "info",
+   "status": "skipped",
+   "item": "显式 relation visibility 与旧启发式交叉对账",
+   "requirement": "R-2.19",
    "check_kind": "mechanical",
    "remediation": "human",
    "fix": null,
    "findings": [],
-   "why": null,
-   "scanned": "0 次定向重生成",
+   "why": "现役 fixture 没有这条新增判据的历史运行结果",
+   "scanned": null,
    "baseline": null
   },
   {
@@ -1148,14 +1001,8 @@
    "item": "声称点破的那一章里有点破痕迹",
    "requirement": "R-2.9d",
    "check_kind": "mechanical",
-   "remediation": "deterministic",
-   "fix": {
-    "node": "stage2.global",
-    "flags": [
-     "--drop"
-    ],
-    "paid": false
-   },
+   "remediation": "human",
+   "fix": null,
    "findings": [
     {
      "rule": "reveal_unmarked",
@@ -1241,8 +1088,14 @@
    "item": "每个角色都有静态身份描述",
    "requirement": "R-2.6",
    "check_kind": "mechanical",
-   "remediation": "human",
-   "fix": null,
+   "remediation": "llm",
+   "fix": {
+    "node": "stage2.global",
+    "flags": [
+     "--resample"
+    ],
+    "paid": true
+   },
    "findings": [],
    "why": null,
    "scanned": "15 个角色",
@@ -1255,8 +1108,14 @@
    "item": "静态身份不与显示名完全同字",
    "requirement": "R-2.6",
    "check_kind": "mechanical",
-   "remediation": "human",
-   "fix": null,
+   "remediation": "llm",
+   "fix": {
+    "node": "stage2.global",
+    "flags": [
+     "--resample"
+    ],
+    "paid": true
+   },
    "findings": [],
    "why": null,
    "scanned": "15 个角色",
@@ -1312,11 +1171,17 @@
    "rule": "secret_known_by_dangling",
    "sev": "hard",
    "status": "ok",
-   "item": "「谁知情」里的保留形都解析得出来",
+   "item": "知情事件的 typed 主体与起章都有效",
    "requirement": "R-2.9c",
    "check_kind": "mechanical",
-   "remediation": "human",
-   "fix": null,
+   "remediation": "llm",
+   "fix": {
+    "node": "stage2.global",
+    "flags": [
+     "--resample"
+    ],
+    "paid": true
+   },
    "findings": [],
    "why": null,
    "scanned": "24 项（其中 0 项是自由文本，按形状放行）",
@@ -1333,7 +1198,7 @@
    "fix": {
     "node": "stage2.global",
     "flags": [
-     "--migrate"
+     "--renormalize"
     ],
     "paid": false
    },
@@ -1460,26 +1325,6 @@
    "findings": [],
    "why": null,
    "scanned": "67/67 条 beat 定位成功",
-   "baseline": null
-  },
-  {
-   "rule": "summary_empty",
-   "sev": "hard",
-   "status": "ok",
-   "item": "每一章都有非空摘要",
-   "requirement": "R-3.13",
-   "check_kind": "mechanical",
-   "remediation": "llm",
-   "fix": {
-    "node": "stage2.blueprint",
-    "flags": [
-     "--chapters"
-    ],
-    "paid": true
-   },
-   "findings": [],
-   "why": null,
-   "scanned": "8 章",
    "baseline": null
   },
   {
@@ -1642,8 +1487,14 @@
    "item": "每条规则至少有一个带正文的版本",
    "requirement": "R-2.11b",
    "check_kind": "mechanical",
-   "remediation": "human",
-   "fix": null,
+   "remediation": "llm",
+   "fix": {
+    "node": "stage2.global",
+    "flags": [
+     "--resample"
+    ],
+    "paid": true
+   },
    "findings": [],
    "why": null,
    "scanned": "6 条规则",
@@ -1652,43 +1503,6 @@
  ],
  "accounting": [
   {
-   "key": "address_by_fallback",
-   "item": "`by` 兜底成 `public` 几次？（判据断言这个计数）",
-   "recorded": true,
-   "count": 0,
-   "detail": []
-  },
-  {
-   "key": "address_surface_rewrites",
-   "item": "哪几条称呼被最长子串回取改写过？",
-   "recorded": true,
-   "count": 2,
-   "detail": [
-    "['char_006', '杜姑娘', '姑娘']",
-    "['char_008', '谢大人', '大人']"
-   ]
-  },
-  {
-   "key": "address_from_chapter_raised",
-   "item": "哪几条称呼的可用章被往后抬过？",
-   "recorded": true,
-   "count": 5,
-   "detail": [
-    "['char_001', '宝珠', 1, 2]",
-    "['char_001', '李宝珠', 1, 2]",
-    "['char_002', '李将军', 7, 8]",
-    "['char_008', '谢兄弟', 5, 7]",
-    "['char_013', '异族男子', 5, 6]"
-   ]
-  },
-  {
-   "key": "canonical_distinguishers_stripped",
-   "item": "哪几个显示名被剥掉了消歧区分词？",
-   "recorded": true,
-   "count": 0,
-   "detail": []
-  },
-  {
    "key": "setup_chapters_pruned",
    "item": "哪几条秘密的埋点章被裁掉了？（「冷揭示」与「被裁空」只能靠它分开）",
    "recorded": true,
@@ -1696,92 +1510,40 @@
    "detail": []
   },
   {
-   "key": "human_adjudicated",
-   "item": "人裁掉过什么？理由是什么？",
+   "key": "evidence_locator_failures",
+   "item": "哪些事实 locator 因错章、零命中、多命中或正式 span 漂移而失败？（非空即 GlobalGrounding 失败态）",
    "recorded": false,
-   "count": 0,
-   "detail": []
-  },
-  {
-   "key": "verbatim_rewrites",
-   "item": "哪几个锚点被**精确回取**过？（一个字都没动）",
-   "recorded": true,
-   "count": 0,
-   "detail": []
-  },
-  {
-   "key": "verbatim_recovered",
-   "item": "哪几个锚点是**按最长公共子串救回来的**？（它们本来就不是原文字节）",
-   "recorded": true,
    "count": 0,
    "detail": []
   },
   {
    "key": "verbatim_failures",
-   "item": "哪几个锚点**锚不到**？（非空即失败态，按三种根因分）",
+   "item": "哪几处**锚不到**？（非空即失败态，按根因分）",
    "recorded": true,
    "count": 0,
    "detail": []
   },
   {
-   "key": "partial_regen_chapters",
-   "item": "哪几章是定向重生成过的？",
+   "key": "fact_atom_failures",
+   "item": "哪几个事实原子的证据短语无法在所属证据拍内唯一回取？（与 hinge 失败共同进入 `verbatim_failed`）",
    "recorded": false,
    "count": 0,
    "detail": []
   },
   {
-   "key": "repairs",
-   "item": "那几次定向重生成各修了什么？（`failure_items` + 前后三个计数）",
+   "key": "hinge_ambiguous_pending",
+   "item": "哪几条 hinge 的短语在拍区间内多处命中、等着候选选择修复？（`extraction-ir-v1` 专属；失败态 hinge 不带短语，这笔账是字段级修复唯一不依赖 LLM cache 的输入）",
    "recorded": false,
    "count": 0,
    "detail": []
-  }
- ],
- "retired": [
-  {
-   "rule": "address_table_absent",
-   "why": "原型判的是「这份产物根本没有称谓表」（旧契约的 `aliases`/`titles` 两个平表）。新契约 `Character.address` 是**必填且 `min_length=1`** ⇒ 前件恒不成立。⚠ 它守的那件事没有消失，只是换了执行者：由载体在**拒收**那一刻挡住，而不是在校验那一刻报出来。"
-  },
-  {
-   "rule": "batch_dispersion",
-   "why": "原型判「批间 拍/千字 的 max/min > 2×」。**分批机制已随 F-100 整个删除**，`BlueprintContext.batch_size` 在新产物上恒 1 ⇒ 只有一批，离散度无从谈起。⚠⚠ **原型自己就写着这句话**：「一条恒不触发的 HARD 和一条恒亮的绿灯是同一个病」——它是本仓「退役而不删」这条纪律的出处之一。"
-  },
-  {
-   "rule": "beat_new_fields",
-   "why": "原型判的是 `time_layer` / `place` / `present_char_ids` **整体缺失**（旧世代产物没有这三个键）。三者在 `Beat` 上今天都是**必填**（`place` 可为 `null` 但键必须在）⇒ 前件恒不成立。"
-  },
-  {
-   "rule": "beat_span_absent",
-   "why": "原型判的是「这份产物的拍上根本没有 `span`」（旧契约无此字段）。`Beat.span` 今天**必填** ⇒ 前件恒不成立。⚠ 与 `span_unlocatable` 不是一回事：那一条判「有 span 但定位不到」，现役。"
-  },
-  {
-   "rule": "cross_batch_refs",
-   "why": "原型这一条挂着**两件事**：① `end_hook.pays_to_chapter` 残留 —— `end_hook` 整字段已删；② 「产物无跨章引用」—— 那是一句**恒真陈述**，不是判定（逐章抽取只吃到本章为止，现已是默认且无旋钮）。⚠ 第二支正是 `docs/schema/stage2.md` §六 记的三条「查不了」之一：`event` 是抽象概括、没有可锚定的原文区间，两种通用检测都已证伪，**只能从输入侧解**。把一句恒真陈述留在表里，会让人以为有一道闸在拦它。"
-  },
-  {
-   "rule": "dead_fields",
-   "why": "原型逐条点名四张 `DEAD*` 表 + 七条 `DEAD_G` 点号路径（`address.to_chapter` …）。本仓由 `StrictModel` 的 `extra='forbid'` 在结构上收走——**一条判据管不了「还没被想到的那个死字段」，而 `extra='forbid'` 管得了**。⚠ 存量产物那一侧由 `tests/corpus.py::CUT` 逐条钉着，两边都没掉在地上。"
-  },
-  {
-   "rule": "narration_last_beat_zero_consumers",
-   "why": "原型另立一条判据，专门声明「`last_beat_id` 没有任何消费方」。字段已不在 ⇒ 这条声明也没有服务对象了。⚠ 它退役的是**声明**不是**规矩**：「零消费方的字段不许留在契约里」仍然成立，只是它不该由某一个字段的判据来表达。"
-  },
-  {
-   "rule": "narration_segments",
-   "why": "原型三条判据都建立在 `narration[].last_beat_id`（章内段界）上，而**该字段已裁撤**（`CUT['stage2/chapter_blueprints.json']`）：零消费方 + 零样本——「一章内换叙述者」在全语料 163 本 + 盘上 31 章里**一个正样本都没有**，真实发生的是**章之间**换人称，由 `grammatical_person` 逐章存承担。它唯一的读者 `segment_sizes` 随 split 一起退役。⚠ 「本章有几个叙述声音」这件事**没有掉**：`narration` 保持数组，由 `narration_multi` 与 `narration_voices` 两条接住。"
-  },
-  {
-   "rule": "role_fate_absent",
-   "why": "原型判的是「characters 仍是旧的 identity 单字段」（role/fate 还没拆开）。`Character.role` / `.fate` 今天都是**必填键**（`fate` 可为 `null`）⇒ 前件恒不成立。⚠ 拆开之后真正要守的是「结局别漏回 role」，那由 `role_leaks_fate` 与 `role_fate_unverifiable` 两条接住。"
   }
  ],
  "badge": "fail",
  "passed": false,
  "counts": {
-  "ok": 67,
-  "hit": 5,
+  "ok": 54,
+  "skipped": 5,
   "unver": 3,
-  "skipped": 0
+  "hit": 5
  }
 }

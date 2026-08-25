@@ -502,42 +502,22 @@ def test_the_anchor_rescue_apparatus_stays_gone():
     assert callable(spans.lcs), '`lcs` 被顺手删了 —— stage5/stage6 还在用它'
 
 
-def test_lcs_recovery_is_no_longer_an_accepted_span_provenance():
-    """`recovery` 的取值面收窄到两档，`lcs` 不再被接受。
-
-    ⚠ 断言的是**契约**那一份（`SPAN_RECOVERY`），不在这里手抄一遍取值——
-    手抄的那份哪天与契约分家，本条会继续绿着。
-    """
-    from contracts.invariants import SPAN_RECOVERY
-
-    assert SPAN_RECOVERY == ('exact', 'normalized')
+def test_source_span_has_no_recovery_provenance_surface():
+    """SourceSpan 只记可校验的原文坐标，不记展示/过程字段。"""
     raw = '甲说：“原样材料。”乙离开。'
     start, end = raw.index('原样材料'), raw.index('”') + 1
-    source = {
-        'text': raw[start:end], 'start': start, 'end': end,
-        'normalized': content_only(raw[start:end]), 'recovery': 'lcs',
-    }
-    assert exact_span(source, raw)[2] == 'source span recovery is invalid'
-    for good in SPAN_RECOVERY:
-        assert exact_span({**source, 'recovery': good}, raw)[2] is None
+    source = {'text': raw[start:end], 'start': start, 'end': end}
+    assert exact_span(source, raw) == (start, end, None)
 
 
-def test_exact_source_span_checks_offsets_text_normalization_and_order():
+def test_exact_source_span_checks_offsets_text_and_order():
     raw = '甲说：“原样材料。”乙离开。'
     start = raw.index('原样材料')
     end = raw.index('”', start) + 1
-    source = {
-        'text': raw[start:end],
-        'start': start,
-        'end': end,
-        'normalized': content_only(raw[start:end]),
-        'recovery': 'exact',
-    }
+    source = {'text': raw[start:end], 'start': start, 'end': end}
     assert exact_span(source, raw) == (start, end, None)
     assert (exact_span({**source, 'text': '被改过'}, raw)[2]
             == 'source span text does not match offsets')
-    assert (exact_span({**source, 'normalized': '被改过'}, raw)[2]
-            == 'source span normalized text does not match')
     assert 'after' in exact_span(source, raw, after=start + 1)[2]
 
 

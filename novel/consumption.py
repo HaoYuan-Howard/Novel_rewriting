@@ -115,8 +115,7 @@ def stage3_hook_copy(data: object) -> object:
 def _stage2_source(source: object) -> object:
     if not isinstance(source, dict):
         return None
-    return (source.get('text'), source.get('start'), source.get('end'),
-            source.get('normalized'), source.get('recovery'))
+    return source.get('text'), source.get('start'), source.get('end')
 
 
 def _stage2_hinge(hinge: object) -> object:
@@ -124,7 +123,7 @@ def _stage2_hinge(hinge: object) -> object:
         return None
     source = hinge.get('source')
     text = source.get('text') if isinstance(source, dict) else None
-    return hinge.get('hinge_id'), hinge.get('kind'), hinge.get('source_beat_ref'), text
+    return hinge.get('hinge_id'), hinge.get('kind'), text
 
 
 def _stage4_stages(blueprint: dict) -> tuple:
@@ -158,16 +157,16 @@ def _stage4_contract(blueprint: dict) -> tuple:
 
 
 def stage4_plan_blueprints(data: object) -> object:
-    """规划消费章摘要、原子事实契约与舞台；叙述人称由 context 消费。"""
+    """规划消费原子事实契约与舞台；叙述人称由 context 消费。"""
     if not isinstance(data, dict):
         return None
     return sorted(
-        (b.get('chapter_ordinal'), b.get('summary'), _stage4_contract(b), _stage4_stages(b))
+        (b.get('chapter_ordinal'), _stage4_contract(b), _stage4_stages(b))
         for b in (data.get('blueprints') or []) if isinstance(b, dict))
 
 
 def stage4_design_blueprints(data: object) -> object:
-    """盲设计只消费去序真相图；不消费源位置、舞台、材料、摘要或数组顺序。"""
+    """盲设计只消费去序真相图；不消费源位置、舞台、材料或数组顺序。"""
     if not isinstance(data, dict):
         return None
     rows = []
@@ -193,7 +192,7 @@ def stage4_design_blueprints(data: object) -> object:
 
 
 def stage4_context_blueprints(data: object) -> object:
-    """写作上下文消费叙述信息、原子事实契约与舞台；摘要明确不下发。"""
+    """写作上下文消费叙述信息、原子事实契约与舞台。"""
     if not isinstance(data, dict):
         return None
     return sorted(
@@ -282,22 +281,29 @@ def stage4_grounding(data: object) -> object:
             for r in (ent.get('relations') or [])),
         # ⚠ `setup` 整格进投影（不只是章号）：`{"kind":"cold"}` 与
         #   `{"kind":"foreshadowed","chapters":[]}` 在「章号集合」上同形而语义不同。
-        #   揭示事件同理连 `kind` 一起收——改 first/confirm 会移动下发边界。
+        #   首次揭示章直接决定下发边界。
         'secrets': sorted(
-            ((s or {}).get('secret_id'), (s or {}).get('fact'), (s or {}).get('group_id'),
-             _knowledge_events_key((s or {}).get('knowledge_events')),
-             _secret_setup_key((s or {}).get('setup')),
-             tuple(sorted((str(e.get('chapter')), str(e.get('kind') or 'first'))
-                          for e in ((s or {}).get('reader_reveal_events') or []))))
-            for s in (canon.get('secrets') or [])),
+            ((s or {}).get('secret_id'), (s or {}).get('fact'),
+              _knowledge_events_key((s or {}).get('knowledge_events')),
+              _secret_setup_key((s or {}).get('setup')),
+              (s or {}).get('first_reveal_chapter'))
+             for s in (canon.get('secrets') or [])),
         'setting': sorted((canon.get('setting') or {}).items()),
         'world_rules': sorted(
             ((r or {}).get('rule_id'), (r or {}).get('kind'),
              tuple(sorted((str(v.get('effective_from_chapter')), v.get('desc'))
                           for v in ((r or {}).get('versions') or []))))
             for r in (canon.get('world_rules') or [])),
-        'arc': sorted(((data.get('arc') or {}).get('conflict_stages') or []),
-                      key=lambda st: str(st.get('stage'))),
+        'arc': {
+            'conflict_stages': tuple(
+                ((stage or {}).get('stage'), tuple((stage or {}).get('chapters') or []))
+                for stage in ((data.get('arc') or {}).get('conflict_stages') or [])),
+            'climax': (data.get('arc') or {}).get('climax'),
+            'ending': (data.get('arc') or {}).get('ending'),
+            'arc_tracks': tuple(
+                ((track or {}).get('subject'), (track or {}).get('trajectory'))
+                for track in ((data.get('arc') or {}).get('arc_tracks') or [])),
+        },
     }
 
 

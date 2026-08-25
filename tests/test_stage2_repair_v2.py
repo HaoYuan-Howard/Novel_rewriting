@@ -142,8 +142,7 @@ def _land_broken_ir_book(monkeypatch, architecture: str) -> tuple[Path, dict]:
     if spec.topology == 'boundary_then_detail':
         by_ordinal = _ir2_responses()
     elif spec.topology == 'scaffolded_single':
-        by_ordinal = _scaffolded_responses(
-            closed=spec.uses_narration_refs)
+        by_ordinal = _scaffolded_responses()
     ordinals = sorted(by_ordinal)
     texts = {s['chapter_ordinal']: s['text'] for s in main_text()}
     beat_index, seg, dup = _pick_ambiguous_site(
@@ -231,10 +230,7 @@ def test_patch_repairs_ambiguous_and_void_then_lands_formally(monkeypatch, archi
     new_prov = raw['_provenance']
     assert new_prov['verbatim_failures'] == []
     assert new_prov['hinge_ambiguous_pending'] == []
-    fields = [row['fields'] for row in new_prov['repairs']]
-    assert fields == [[f'beats[{bid}].hinges[{base}].phrase'],
-                      [f'beats[{bid}].hinges[{base + 1}].phrase']], \
-        'Repair.fields 必须记具体路径，不再恒 ["*"]'
+    assert 'repairs' not in new_prov
     assert {'HINGE_SELECT_SYS', 'HINGE_PHRASE_SYS'} <= set(new_prov['prompts'])
     adoption = [row for row in ctx.ledger.audit_events
                 if row['kind'] == 'artifact_adoption']

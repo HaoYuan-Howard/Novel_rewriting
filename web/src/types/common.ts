@@ -114,7 +114,7 @@ export interface Facts {
     current_stage: { stage: string; chapters: number[] }
     /** 只有末章才有；非末章恒 null（发了就是泄结局）。 */
     arc_tracks:
-      | { subject: string; dimension: string; change_type: string; trajectory: string }[]
+      | { subject: string; trajectory: string }[]
       | null
     climax: string | null
     ending: string | null

@@ -171,8 +171,9 @@ def enumerate_required(global_grounding: dict[str, Any]) -> list[GlobalReviewIte
         # `_provenance.setup_chapters_pruned` 分得开）⇒ 判据看不出来，人必须看。
         rows.append(_item(
             'secret_setup', f'canon.secrets.{sid}.setup', secret.get('setup')))
-        for ei, event in enumerate(secret.get('reader_reveal_events') or []):
-            rows.append(_item('reveal', f'canon.secrets.{sid}.reader_reveal_events.{ei}', event))
+        rows.append(_item(
+            'reveal', f'canon.secrets.{sid}.first_reveal_chapter',
+            secret.get('first_reveal_chapter')))
 
     # 解读层分组两项。`conflict_stages` 的**覆盖性**已由 `R-2.14` 机械查（逐章显式
     # 枚举、恰好覆盖全书一次），这里人工只判「这个划分本身合不合理、阶段名能不能定位」。

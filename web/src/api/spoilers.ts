@@ -16,7 +16,6 @@ function maskEvidence<T extends GlobalFactEvidence | null>(evidence: T): T {
     source: {
       ...evidence.source,
       text: SPOILER_PLACEHOLDER,
-      normalized: SPOILER_PLACEHOLDER,
     },
   } as T
 }
@@ -35,12 +34,10 @@ export function projectGlobalSpoilers(raw: Stage2Global, reveal: boolean): Stage
         secret_id: MASKED_SECRET_ID,
         fact: SPOILER_PLACEHOLDER,
         fact_evidence: { chapter_ordinal: 1, source: null },
-        group_id: null,
         knowledge_events: [],
         setup_kind: 'cold',
         setup_chapters: [],
-        first_reveal_chapter: 0,
-        reader_reveal_chapters: [],
+        first_reveal_chapter: 1,
       },
     ],
     arc: {

@@ -4,7 +4,6 @@
  "chapter_ordinal": 3,
  "text_chars": 1461,
  "blueprint": true,
- "summary": "在我的大力举荐下，公爹也下海成为头牌，我与夫君同榜。我升任特聘教习师，每日传授男德，苏家父子对我怨恨。婆母偷偷观望丈夫儿子，以泪洗面，逢人咒骂我。我对夫君公爹照料周到，远超当初我在苏家待遇，一心想靠夫君过好日子。然而夫君被磋磨得日渐萎靡，我急得嘴上起泡，他诅咒我早死。为讨好他，我花银子找来他的白月光杜婉儿，向她谎称喜帕造假、夫君心里唯有她，希望她劝慰夫君。我带杜婉儿去练功房，不巧撞见苏子瑜在接客，杜婉儿目睹后崩溃跑走。客人走后苏子瑜与我吵闹，威胁报复。不料他暗中与杜婉儿通信，精神恢复，二人合谋让杜婉儿弟弟来怡红院点名找我这个苏府女眷过夜。我从龟公处得知密谋后冷笑，盘算将婆母顶替出去，因为苏府女眷不止我一个。",
  "segments": [
   {
    "start": 0,
@@ -167,11 +166,22 @@
    "end": 145,
    "time_layer": "present",
    "place": "怡红院",
-   "present": [
-    "李宝珠"
+   "hinges": [],
+   "present_char_ids": [
+    "char_001"
    ],
-   "event": "公爹在我的大力举荐下也下海了，与夫君一同霸榜怡绿院贵客首选第一梯队。我的职级从杂役丫鬟升为钮钴禄·特聘教习师，每日钻研男德知识并向公爹和夫君传道授业解惑，收获苏家男人成吨的仇恨目光。",
-   "hinges": []
+   "fact_atoms": [
+    {
+     "fact_id": "f03_001",
+     "claim": "公爹在我的大力举荐下也下海了，与夫君一同霸榜怡绿院贵客首选第一梯队。我的职级从杂役丫鬟升为钮钴禄·特聘教习师，每日钻研男德知识并向公爹和夫君传道授业解惑，收获苏家男人成吨的仇恨目光。",
+     "kind": "event",
+     "obligation": "land",
+     "evidence_text": "儿子英雄爹好汉。",
+     "participant_char_ids": [
+      "char_001"
+     ]
+    }
+   ]
   },
   {
    "beat_id": "b03_02",
@@ -180,13 +190,22 @@
    "end": 301,
    "time_layer": "present",
    "place": "上房",
-   "present": [
-    "婆母",
-    "夫君",
-    "公爹"
+   "hinges": [],
+   "present_char_ids": [
+    "char_003"
    ],
-   "event": "婆母偷偷来上房远远观望自己的夫君和爱子，眼看他们日渐阴柔、阳刚不再，整日以泪洗面，逢人便说遇见我这般儿媳是造孽，并当我的面怒骂我爹不保亲家，全然忘了公爹曾三番五次欲置我爹于死地。",
-   "hinges": []
+   "fact_atoms": [
+    {
+     "fact_id": "f03_002",
+     "claim": "婆母偷偷来上房远远观望自己的夫君和爱子，眼看他们日渐阴柔、阳刚不再，整日以泪洗面，逢人便说遇见我这般儿媳是造孽，并当我的面怒骂我爹不保亲家，全然忘了公爹曾三番五次欲置我爹于死地。",
+     "kind": "event",
+     "obligation": "land",
+     "evidence_text": "婆母偷偷来上房，远远地观望自己的夫君和爱子。",
+     "participant_char_ids": [
+      "char_003"
+     ]
+    }
+   ]
   },
   {
    "beat_id": "b03_03",
@@ -195,17 +214,27 @@
    "end": 446,
    "time_layer": "present",
    "place": "教习课堂",
-   "present": [
-    "李宝珠",
-    "夫君",
-    "公爹",
-    "侍卫"
-   ],
-   "event": "我的教习课堂上有侍卫巡场，我对夫君和公爹事必躬亲，梳妆课程总拿他们当榜样，衣食住行安排得妥帖，远比当初我在苏家做儿媳时的待遇好千倍百倍。我清楚夫君好才是真的好，我靠他过好日子。",
    "hinges": [
     {
      "kind": "因果前提",
      "text": "我心里门儿清：夫君好，才是真的好。\n\n我还要靠我夫君过好日子呢。"
+    }
+   ],
+   "present_char_ids": [
+    "char_001",
+    "char_003"
+   ],
+   "fact_atoms": [
+    {
+     "fact_id": "f03_003",
+     "claim": "我的教习课堂上有侍卫巡场，我对夫君和公爹事必躬亲，梳妆课程总拿他们当榜样，衣食住行安排得妥帖，远比当初我在苏家做儿媳时的待遇好千倍百倍。我清楚夫君好才是真的好，我靠他过好日子。",
+     "kind": "event",
+     "obligation": "land",
+     "evidence_text": "如今，在我教习课堂上，有懂拳脚的侍卫巡场。",
+     "participant_char_ids": [
+      "char_001",
+      "char_003"
+     ]
     }
    ]
   },
@@ -216,15 +245,27 @@
    "end": 625,
    "time_layer": "present",
    "place": "怡红院",
-   "present": [
-    "李宝珠",
-    "夫君"
-   ],
-   "event": "夫君被磋磨过度，整日萎靡不振，水灵大打折扣，我急得嘴上起了燎泡。我关心他身体，他却诅咒我早死，每日营业不情不愿全靠龟公上手段。我心急如焚，为讨好他，花银子托人寻来他的白月光青梅杜婉儿，希望给她一些精神鼓励。",
    "hinges": [
     {
      "kind": "要害台词",
      "text": "李宝珠，你这阴损毒妇怎么还不死！"
+    }
+   ],
+   "present_char_ids": [
+    "char_001",
+    "char_003"
+   ],
+   "fact_atoms": [
+    {
+     "fact_id": "f03_004",
+     "claim": "夫君被磋磨过度，整日萎靡不振，水灵大打折扣，我急得嘴上起了燎泡。我关心他身体，他却诅咒我早死，每日营业不情不愿全靠龟公上手段。我心急如焚，为讨好他，花银子托人寻来他的白月光青梅杜婉儿，希望给她一些精神鼓励。",
+     "kind": "event",
+     "obligation": "land",
+     "evidence_text": "然而，夫君大抵是被磋磨过度。",
+     "participant_char_ids": [
+      "char_001",
+      "char_003"
+     ]
     }
    ]
   },
@@ -235,15 +276,27 @@
    "end": 1001,
    "time_layer": "present",
    "place": "怡红院",
-   "present": [
-    "李宝珠",
-    "杜婉儿"
-   ],
-   "event": "我向杜婉儿起誓称当初成婚夫君心里就没我、次日喜帕是我造假、他心里只有她一人，并说如今情形不久便能赎身，届时公婆不会反对。杜婉儿半信半疑，我解释称夫君为新婚夜逼死我，我当时不承认是为离间二人，如今请她劝慰夫君。杜婉儿认定是我从中作梗，我连连致歉，计划将她带进练功房。",
    "hinges": [
     {
      "kind": "因果前提",
      "text": "次日喜帕是我造假。"
+    }
+   ],
+   "present_char_ids": [
+    "char_001",
+    "char_006"
+   ],
+   "fact_atoms": [
+    {
+     "fact_id": "f03_005",
+     "claim": "我向杜婉儿起誓称当初成婚夫君心里就没我、次日喜帕是我造假、他心里只有她一人，并说如今情形不久便能赎身，届时公婆不会反对。杜婉儿半信半疑，我解释称夫君为新婚夜逼死我，我当时不承认是为离间二人，如今请她劝慰夫君。杜婉儿认定是我从中作梗，我连连致歉，计划将她带进练功房。",
+     "kind": "event",
+     "obligation": "land",
+     "evidence_text": "我握拳向杜婉儿起誓：",
+     "participant_char_ids": [
+      "char_001",
+      "char_006"
+     ]
     }
    ]
   },
@@ -254,13 +307,6 @@
    "end": 1189,
    "time_layer": "present",
    "place": "练功房",
-   "present": [
-    "李宝珠",
-    "杜婉儿",
-    "苏子瑜",
-    "贵客"
-   ],
-   "event": "往常午间苏子瑜在此练琴箫，不料今日行程有变无人知会。推门时我与杜婉儿撞见苏子瑜正在“挨打”，贵客怒骂一声滚，我火速带神色恍惚的杜婉儿离开。杜婉儿暴风哭泣，质问苏子瑜自甘下贱，怀疑是我安排并出卖夫君，随后捂着手帕跑走。",
    "hinges": [
     {
      "kind": "要害台词",
@@ -269,6 +315,25 @@
     {
      "kind": "因果前提",
      "text": "哪知他今日行程有了变动，竟无人知会我。"
+    }
+   ],
+   "present_char_ids": [
+    "char_001",
+    "char_006",
+    "char_003"
+   ],
+   "fact_atoms": [
+    {
+     "fact_id": "f03_006",
+     "claim": "往常午间苏子瑜在此练琴箫，不料今日行程有变无人知会。推门时我与杜婉儿撞见苏子瑜正在“挨打”，贵客怒骂一声滚，我火速带神色恍惚的杜婉儿离开。杜婉儿暴风哭泣，质问苏子瑜自甘下贱，怀疑是我安排并出卖夫君，随后捂着手帕跑走。",
+     "kind": "event",
+     "obligation": "land",
+     "evidence_text": "往常午间这时段，是苏子瑜练琴练箫的地方。",
+     "participant_char_ids": [
+      "char_001",
+      "char_006",
+      "char_003"
+     ]
     }
    ]
   },
@@ -279,15 +344,27 @@
    "end": 1288,
    "time_layer": "present",
    "place": "怡红院房间",
-   "present": [
-    "李宝珠",
-    "苏子瑜"
-   ],
-   "event": "苏子瑜待客人走后与我吵闹，怪我让婉儿看到害他失去最后念想，威胁自己已是头牌不怕报复，豁出命也绝不饶我。我自觉理亏，丧眉耷眼地没话说。",
    "hinges": [
     {
      "kind": "要害台词",
      "text": "你就不怕我报复？”\n\n“你给我等着！我豁出去这条命也绝不饶你！"
+    }
+   ],
+   "present_char_ids": [
+    "char_001",
+    "char_003"
+   ],
+   "fact_atoms": [
+    {
+     "fact_id": "f03_007",
+     "claim": "苏子瑜待客人走后与我吵闹，怪我让婉儿看到害他失去最后念想，威胁自己已是头牌不怕报复，豁出命也绝不饶我。我自觉理亏，丧眉耷眼地没话说。",
+     "kind": "event",
+     "obligation": "land",
+     "evidence_text": "苏子瑜待客人走后，跟我吵闹：",
+     "participant_char_ids": [
+      "char_001",
+      "char_003"
+     ]
     }
    ]
   },
@@ -298,9 +375,18 @@
    "end": 1337,
    "time_layer": "present",
    "place": "怡红院",
-   "present": [],
-   "event": "苏子瑜找人替他与杜婉儿鸿雁传书，精神头竟一日赛过一日的好了起来。",
-   "hinges": []
+   "hinges": [],
+   "present_char_ids": [],
+   "fact_atoms": [
+    {
+     "fact_id": "f03_008",
+     "claim": "苏子瑜找人替他与杜婉儿鸿雁传书，精神头竟一日赛过一日的好了起来。",
+     "kind": "event",
+     "obligation": "land",
+     "evidence_text": "哪知苏子瑜是有点子心机的。",
+     "participant_char_ids": []
+    }
+   ]
   },
   {
    "beat_id": "b03_09",
@@ -309,15 +395,25 @@
    "end": 1459,
    "time_layer": "present",
    "place": "怡红院",
-   "present": [
-    "李宝珠",
-    "龟公"
-   ],
-   "event": "龟公神神秘秘地把苏子瑜和杜婉儿的密信给我看，原来二人已同仇敌忾，计划让杜婉儿的弟弟杜玉闲来怡红院点名找我这个苏府女眷过夜。我看完冷笑，盘算让婆母顶替，因为苏府女眷不止我一个。",
    "hinges": [
     {
      "kind": "物件",
      "text": "密信"
+    }
+   ],
+   "present_char_ids": [
+    "char_001"
+   ],
+   "fact_atoms": [
+    {
+     "fact_id": "f03_009",
+     "claim": "龟公神神秘秘地把苏子瑜和杜婉儿的密信给我看，原来二人已同仇敌忾，计划让杜婉儿的弟弟杜玉闲来怡红院点名找我这个苏府女眷过夜。我看完冷笑，盘算让婆母顶替，因为苏府女眷不止我一个。",
+     "kind": "event",
+     "obligation": "land",
+     "evidence_text": "直到有天，龟公神神秘秘地把二人的密信给我看。",
+     "participant_char_ids": [
+      "char_001"
+     ]
     }
    ]
   }
@@ -325,11 +421,11 @@
  "narration": [
   {
    "grammatical_person": "first",
-   "narrator": "李宝珠",
-   "focalizer": "李宝珠",
    "pronoun_surfaces": [
     "我"
-   ]
+   ],
+   "narrator_char_id": "char_001",
+   "focalizer_char_id": "char_001"
   }
  ],
  "loose": 19,
@@ -340,13 +436,16 @@
   "bytes": 105760,
   "mtime": 1786693806,
   "freshness": "stale",
+  "display_freshness": "stale",
   "reason": "file_changed",
   "ghosts": [],
   "invalid": false,
-  "readable": true
+  "readable": true,
+  "condition": "ready"
  },
  "_provenance": {
   "code": "b371244",
+  "root_clean_sha1": "0000000000000000000000000000000000000000",
   "inputs": {
    "stage1/main_text.json": {
     "file": "b8eb890096",
@@ -364,59 +463,19 @@
   "input_basis": null,
   "partial_rewrite": null,
   "prompts": {
-   "BLUEPRINT_SYS": "222a884d46"
+   "BLUEPRINT_SYS_V31": "222a884d46"
   },
   "model": "deepseek-v4-pro",
   "scope_violations": [],
-  "batches": [
-   [
-    1
-   ],
-   [
-    2
-   ],
-   [
-    3
-   ],
-   [
-    4
-   ],
-   [
-    5
-   ],
-   [
-    6
-   ],
-   [
-    7
-   ],
-   [
-    8
-   ]
-  ],
   "context": {
-   "architecture": "cumulative-past-v1",
-   "batch_size": 1,
-   "stable_prefix": null,
-   "current_chapter_full": true,
-   "future_visible": false,
-   "past_neighbor_chars_max": null,
-   "continuity_chars_max": null
+   "architecture": "extraction-ir-v3.1",
+   "stable_prefix": "0000000000",
+   "past_neighbor_chars_max": 4000,
+   "continuity_chars_max": 1600,
+   "past_names_chars_max": 600
   },
-  "char_refs": {
-   "resolved": 162,
-   "pronoun_ok": 0,
-   "ambiguous": 0,
-   "late": 0,
-   "unknown": 14,
-   "invented": 0,
-   "no_names": 0,
-   "pronoun": 0
-  },
-  "verbatim_rewrites": [],
-  "verbatim_recovered": [],
   "verbatim_failures": [],
-  "partial_regen_chapters": null,
-  "repairs": null
+  "fact_atom_failures": [],
+  "hinge_ambiguous_pending": []
  }
 }

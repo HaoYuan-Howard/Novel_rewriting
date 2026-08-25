@@ -28,7 +28,7 @@ from contracts.schema.report import CheckReport
 from contracts.schema.evaluation import GlobalReview
 from contracts.schema.stage1 import MainText
 from contracts.schema.stage2 import (
-    BlueprintProvenance, ChapterBlueprints, ChapterBlueprintsResponse,
+    BlueprintProvenance, ChapterBlueprints,
     GlobalEdit, GlobalGrounding, GlobalGroundingResponse, GlobalProvenance,
     RoleSplitResponse,
 )
@@ -50,7 +50,6 @@ from novel.run import RunContext
 from novel.stages.stage2 import checks
 from novel.stages.stage2.normalize import (
     normalize_blueprints, normalize_global, past_attested_surfaces,
-    resolve_character_refs, response_shape,
 )
 from novel.stages.stage2.paragraphs import paragraph_spans, render_numbered
 from novel.stages.stage2.references import (
@@ -151,16 +150,9 @@ def _read_main_text(store: ArtifactStore) -> list[dict[str, Any]] | None:
 
 #: 两份产物的记账键 → 报告的记账节。⚠ **只放产物里真有的键**：
 #: 键不在 ⇒ 报告打「未记录」，那与「记了 0 次」不是一回事（`Q-2` 的三态）。
-_GLOBAL_KEYS = ('address_by_fallback', 'address_surface_rewrites',
-                 'address_from_chapter_raised', 'canonical_distinguishers_stripped',
-                 'setup_chapters_pruned', 'evidence_locator_rewrites',
-                 'evidence_locator_failures')
-#: ⚠ ir1 的三笔专属账也要在这里列出来才有出口：`ACCOUNTING` 里有、这里没有
-#: ⇒ 报告打「[????] 未记录」，而产物里明明记着——那是三态里最坏的一种（说假话）。
-_BLUEPRINT_KEYS = ('verbatim_rewrites', 'verbatim_failures', 'fact_atom_failures',
-                   'partial_regen_chapters', 'repairs',
-                   'place_inherit_without_base', 'hinge_ambiguous_pending',
-                   'boundary_nudges')
+_GLOBAL_KEYS = ('setup_chapters_pruned', 'evidence_locator_failures')
+_BLUEPRINT_KEYS = ('verbatim_failures', 'fact_atom_failures',
+                   'hinge_ambiguous_pending')
 
 
 def _accounting_of(both: _Both) -> dict[str, Any]:
@@ -290,8 +282,7 @@ def run_revalidate(
     artifact, raw = store.read_own(ChapterBlueprints, _INVALID)
     data = copy.deepcopy(raw)
     data.pop('_provenance', None)
-    data, accounting = normalize_blueprints(
-        data, main_text, global_raw['entities']['characters'])
+    data, accounting = normalize_blueprints(data, main_text)
     rebuilt = ChapterBlueprints.model_validate({
         **data,
         '_provenance': BlueprintProvenance.model_validate({
@@ -346,7 +337,7 @@ def build_prompts(
         raise RuntimeError(f'{spec.architecture} 的调用拓扑没有登记 system')
     visible: dict[int, dict[str, list[str]]] = {}
     candidates: dict[int, list[dict[str, Any]]] = {}
-    if spec.topology == 'scaffolded_single' and spec.uses_character_refs:
+    if spec.topology == 'scaffolded_single':
         from novel.stages.stage2.compile_v2 import visible_character_refs_with_drops
         visible, dropped_refs = visible_character_refs_with_drops(characters, mt)
         _observe_indistinguishable_refs(ctx, dropped_refs)
@@ -359,8 +350,7 @@ def build_prompts(
             (o,),
             characters=characters,
             character_refs=(visible.get(o, {})
-                            if spec.topology == 'scaffolded_single'
-                            and spec.uses_character_refs else None),
+                            if spec.topology == 'scaffolded_single' else None),
             hinge_candidates=(candidates.get(o, [])
                               if spec.topology == 'scaffolded_single'
                               and spec.uses_hinge_candidates else None),
@@ -537,10 +527,7 @@ def blueprint_context(title: str, main_text: list[dict[str, Any]],
     """
     return {
         'architecture': architecture,
-        'batch_size': 1,
         'stable_prefix': prov.fingerprint(_blueprint_stable_prefix(title, main_text)),
-        'current_chapter_full': True,
-        'future_visible': False,
         'past_neighbor_chars_max': PAST_NEIGHBOR_CHARS_MAX,
         'continuity_chars_max': CONTINUITY_CHARS_MAX,
         'past_names_chars_max': PAST_NAMES_CHARS_MAX,
@@ -612,7 +599,7 @@ def build_blueprint_user(title: str, main_text: list[dict[str, Any]],
         parts.append(
             '── 上一版结构基线 ──\n'
             '这是局部修订基线。除失败证据直接要求改动之处，不得删除或合并已有事件拍，'
-            '不得减少 hinges / present_names；仍须交回一份完整章节结构。正文与证据优先。\n'
+            '不得减少 hinges / fact_atoms；仍须交回一份完整章节结构。正文与证据优先。\n'
             + json.dumps(repair_baseline, ensure_ascii=False, separators=(',', ':')))
     if repair_findings:
         evidence = '\n'.join(
@@ -848,10 +835,8 @@ def _role_split_user(global_raw: dict[str, Any]) -> str:
     characters = ((global_raw.get('entities') or {}).get('characters') or {})
     secrets = []
     for secret in ((global_raw.get('canon') or {}).get('secrets') or []):
-        reveals = [e.get('chapter') for e in secret.get('reader_reveal_events') or []
-                   if isinstance(e.get('chapter'), int)]
         secrets.append({
-            '第几章揭示': min(reveals) if reveals else None,
+            '第几章揭示': secret.get('first_reveal_chapter'),
             '秘密': secret.get('fact'),
         })
     payload = {
@@ -978,7 +963,7 @@ def _run_chapter_requests(
     client: LlmClient,
     requests: list[tuple[int | None, str, str]],
     *,
-    model_cls: type = ChapterBlueprintsResponse,
+    model_cls: type,
     purpose_of: Callable[[int], str] | None = None,
     validator_of: Callable[[int], Callable[[Any, Any], str | None] | None]
     | None = None,
@@ -1216,33 +1201,12 @@ def _scaffolded_validator(
     return validate
 
 
-def _blueprint_metrics(blueprint: dict[str, Any]) -> dict[str, int]:
-    beats = list(blueprint.get('beats') or [])
-    return {
-        'beats': len(beats),
-        'fact_atoms': len(blueprint.get('fact_atoms') or []),
-        'hinges': sum(len(beat.get('hinges') or []) for beat in beats),
-        'present_names': sum(len(beat.get('present_names') or []) for beat in beats),
-    }
-
-
-def _narration_ref_count(blueprints: list[dict[str, Any]]) -> int:
-    """已定下叙述身份的引用条数（narrator + focalizer）。account 两侧共用一份。"""
-    return sum(
-        int(narration.get(key) is not None)
-        for blueprint in blueprints
-        for narration in (blueprint.get('narration') or [])
-        for key in ('narrator_char_id', 'focalizer_char_id')
-    )
-
-
 def _repair_baseline(blueprint: dict[str, Any],
                      main_text: list[dict[str, Any]],
-                     *, projection: Any = response_shape) -> dict[str, Any]:
+                     *, projection: Any) -> dict[str, Any]:
     """最终产物 → 模型响应形状；代码派生字段不反喂给模型。
 
-    `projection` 按契约传（v3=`normalize.response_shape`，
-    ir1=`compile_v2.canonical_ir_projection`）——基线形状必须与本次请求的响应
+    `projection` 必须按契约显式传入——基线形状必须与本次请求的响应
     契约同构，否则模型收到的「上一版」长得跟它要交的东西不是一回事。
     ⚠ 要章正文才反投影得出定位（段号）——**取的必须是这条蓝图自己那一章**，
     拿错章反算出来的段号一样是整数、一样不会报错。
@@ -1381,11 +1345,10 @@ def _run_blueprint_repair(
     boundary_requests: list[tuple[int | None, str, str]] = []
     visible: dict[int, dict[str, list[str]]] = {}
     candidate_rows: dict[int, list[dict[str, Any]]] = {}
-    if spec.uses_character_refs:
-        from novel.stages.stage2.compile_v2 import visible_character_refs_with_drops
-        visible, dropped_refs = visible_character_refs_with_drops(
-            global_raw['entities']['characters'], main_text)
-        _observe_indistinguishable_refs(ctx, dropped_refs)
+    from novel.stages.stage2.compile_v2 import visible_character_refs_with_drops
+    visible, dropped_refs = visible_character_refs_with_drops(
+        global_raw['entities']['characters'], main_text)
+    _observe_indistinguishable_refs(ctx, dropped_refs)
     if spec.uses_hinge_candidates:
         candidate_rows = hinge_candidates_by_chapter(main_text)
     for ordinal in chapters:
@@ -1477,8 +1440,7 @@ def _run_blueprint_repair(
             repair_findings=(None if ordinal in missing_baselines
                              else findings_of[ordinal]),
             repair_baseline=baselines.get(ordinal),
-            character_refs=(visible.get(ordinal, {})
-                            if spec.uses_character_refs else None),
+            character_refs=visible.get(ordinal, {}),
             hinge_candidates=(candidate_rows.get(ordinal, [])
                               if spec.uses_hinge_candidates else None),
             frozen_boundaries=(frozen[ordinal]
@@ -1495,7 +1457,7 @@ def _run_blueprint_repair(
         for section in main_text
     }
     validator_of = None
-    if spec.topology == 'boundary_then_detail' and spec.uses_character_refs:
+    if spec.topology == 'boundary_then_detail':
         validator_of = lambda ordinal: _detail_validator(
             ordinal, frozen[ordinal], set(visible.get(ordinal, {})))
     elif spec.topology == 'scaffolded_single':
@@ -1504,7 +1466,7 @@ def _run_blueprint_repair(
             paragraph_count[ordinal],
             set(visible.get(ordinal, {})),
             candidate_rows=candidate_rows.get(ordinal, []),
-            narration_refs=spec.uses_narration_refs,
+            narration_refs=True,
         )
     returned, detail_scope, detail_errors = _run_chapter_requests(
         ctx,
@@ -1523,10 +1485,6 @@ def _run_blueprint_repair(
             raise errors[0]
         raise TerminalState('定向重生成没有任何目标章返回可接纳的响应')
 
-    raw_by = {
-        int(blueprint.get('chapter_ordinal') or 0): blueprint
-        for blueprint in returned
-    }
     target_data, target_accounting = spec.compile_fn(
         {'blueprints': returned},
         main_text,
@@ -1542,45 +1500,9 @@ def _run_blueprint_repair(
     merged_by = copy.deepcopy(old_by)
     merged_by.update(normalized_by)
     merged = [merged_by[ordinal] for ordinal in ordinals if ordinal in merged_by]
-    if spec.uses_character_refs:
-        # 在场 char_id 是模型从关闭式候选集直接选择的权威值；不能在合并修复稿时
-        # 又从人读 `present_names` 反解一遍把它覆盖。
-        resolved_copy = copy.deepcopy(merged)
-        char_refs = resolve_character_refs(
-            resolved_copy, main_text, global_raw['entities']['characters'])
-        inferred = sum(len(beat.get('present_char_ids') or [])
-                       for bp in resolved_copy for beat in (bp.get('beats') or []))
-        direct = sum(len(beat.get('present_char_ids') or [])
-                     for bp in merged for beat in (bp.get('beats') or []))
-        char_refs['resolved'] += direct - inferred
-        if spec.uses_narration_refs:
-            # ⚠⚠ **v3.1 的叙述身份也是模型从关闭式候选集直接选的权威值**
-            #   （`compile_v31_refs` 明写「叙述者 id 是权威，名字只是人读投影」）。
-            #   照 v2 那样按 `narrator_name` 再反解一遍，会在**名字有歧义**时
-            #   `resolve_present_names` 交空 ⇒ 一个**正确的 id 被覆盖成 `None``，
-            #   而这一格只进 metric、不阻断落盘：错误的叙述身份就这样静默进蓝图。
-            #   ⇒ 保留权威值，只把反解算出来的那几笔从 `resolved` 里换回去
-            #   （与 `compile_v31_refs` 的 `direct - before` 同一条算法）。
-            narration_direct = _narration_ref_count(merged)
-            narration_inferred = _narration_ref_count(resolved_copy)
-            char_refs['resolved'] += narration_direct - narration_inferred
-        else:
-            for target_bp, resolved_bp in zip(merged, resolved_copy):
-                for target_n, resolved_n in zip(
-                        target_bp.get('narration') or [],
-                        resolved_bp.get('narration') or []):
-                    target_n['narrator_char_id'] = resolved_n.get('narrator_char_id')
-                    target_n['focalizer_char_id'] = resolved_n.get('focalizer_char_id')
-    else:
-        char_refs = resolve_character_refs(
-            merged, main_text, global_raw['entities']['characters'])
 
     targets = set(chapters)
     old_prov = previous.provenance
-    old_rewrites = [
-        list(row) for row in old_prov.verbatim_rewrites
-        if not _record_is_targeted(row, targets)
-    ]
     old_failures = [
         list(row) for row in old_prov.verbatim_failures
         if not _record_is_targeted(row, targets)
@@ -1589,56 +1511,27 @@ def _run_blueprint_repair(
         list(row) for row in old_prov.fact_atom_failures
         if not _record_is_targeted(row, targets)
     ]
-    rewrites = old_rewrites + list(target_accounting['verbatim_rewrites'])
     failures = old_failures + list(target_accounting['verbatim_failures'])
     fact_failures = old_fact_failures + list(
         target_accounting.get('fact_atom_failures') or [])
 
     repaired_ordinals = sorted(normalized_by)
-    repair_history = [row.model_dump() for row in old_prov.repairs]
     for ordinal in repaired_ordinals:
-        user, findings = prompt_rows[ordinal]
         accepted_model = client.accepted_model(f'{ctx.node}:ch{ordinal}')
         if accepted_model is None:
             raise ProvenanceRefused(
                 f'第 {ordinal} 章已经返回蓝图，但没有 accepted model；'
                 '拒绝按主模型配置估算')
-        repair_history.append({
-            'chapter_ordinal': ordinal,
-            'failure_items': sorted({row['rule'] for row in findings}),
-            'failure_evidence': prov.projection_fingerprint(findings),
-            'user_prompt': prov.fingerprint(user),
-            'output': prov.projection_fingerprint(raw_by[ordinal]),
-            'model': accepted_model,
-            'cache_policy': ctx.cache.name,
-            'fields': ['*'],
-            'before_metrics': (_blueprint_metrics(old_by[ordinal])
-                               if ordinal in old_by
-                               else {'beats': 0, 'fact_atoms': 0,
-                                     'hinges': 0, 'present_names': 0}),
-            'after_metrics': _blueprint_metrics(normalized_by[ordinal]),
-        })
 
     old_scope = [
         row for row in old_prov.scope_violations
         if _keep_scope_violation(row, targets)
     ]
-    partial = sorted(set(old_prov.partial_regen_chapters)
-                     | set(repaired_ordinals))
-    # ir1 的两笔专属账与 verbatim 同一条合并纪律：旧账剔除目标章的行，接上新行。
-    place_rows = [
-        row for row in old_prov.place_inherit_without_base
-        if not _record_is_targeted([row], targets)
-    ] + list(target_accounting.get('place_inherit_without_base') or [])
     pending_rows = [
         list(row) for row in old_prov.hinge_ambiguous_pending
         if not _record_is_targeted(row, targets)
     ] + [list(row) for row
          in (target_accounting.get('hinge_ambiguous_pending') or [])]
-    nudge_rows = [
-        list(row) for row in old_prov.boundary_nudges
-        if not _record_is_targeted(row, targets)
-    ] + [list(row) for row in (target_accounting.get('boundary_nudges') or [])]
     repair_purposes: dict[str, int | None] = {
         f'{ctx.node}:ch{o}': o for o in repaired_ordinals}
     resegmented = {int(ordinal) for ordinal, _system, _user
@@ -1649,7 +1542,7 @@ def _run_blueprint_repair(
     })
 
     def current_artifact(*, settle: bool = True) -> ChapterBlueprints:
-        """把这一刻的 `merged` 铸成产物。summary 已随 atom 编译确定性更新。"""
+        """把这一刻的 `merged` 铸成产物。"""
         keys = {spec.sys_name: system}
         if spec.boundary_sys_name and spec.boundary_system:
             keys[spec.boundary_sys_name] = spec.boundary_system
@@ -1659,17 +1552,10 @@ def _run_blueprint_repair(
             model=client.model,
             adopted_models=client.accepted_models(*repair_purposes),
             scope_violations=old_scope + new_scope,
-            batches=[list(batch) for batch in old_prov.batches],
             context=old_prov.context.model_dump(),
-            char_refs=char_refs,
-            verbatim_rewrites=rewrites,
             verbatim_failures=failures,
             fact_atom_failures=fact_failures,
-            partial_regen_chapters=partial,
-            repairs=repair_history,
-            place_inherit_without_base=place_rows,
             hinge_ambiguous_pending=pending_rows,
-            boundary_nudges=nudge_rows,
             settle=settle,
         )
         provenance = BlueprintProvenance.model_validate({
@@ -1751,7 +1637,7 @@ def request_blueprints(ctx: RunContext, client: LlmClient, *,
                 paragraph_count[ordinal],
                 set(visible.get(ordinal, {})),
                 candidate_rows=candidate_rows.get(ordinal, []),
-                narration_refs=spec.uses_narration_refs,
+                narration_refs=True,
             )
         raw, violations, errors = _run_chapter_requests(
             ctx, client, requests, model_cls=spec.response_model,
@@ -1885,11 +1771,8 @@ def finish_blueprints(
             model=client.model,
             adopted_models=client.accepted_models(*purposes),
             scope_violations=scope_violations,
-            batches=[[ordinal] for ordinal in ordinals],
             context=blueprint_context(ctx.title, main_text,
                                       architecture=spec.architecture),
-            partial_regen_chapters=[],
-            repairs=[],
             settle=settle,
             **accounting,
         )
@@ -2011,8 +1894,7 @@ def run_renormalize(ctx: RunContext) -> CheckReport:
     previous_provenance = previous.provenance
     data = copy.deepcopy(raw)
     data.pop('_provenance', None)
-    data, accounting = normalize_blueprints(
-        data, main_text, global_raw['entities']['characters'])
+    data, accounting = normalize_blueprints(data, main_text)
     rewritten = ctx.rewrite_provenance(
         previous_provenance, by='--renormalize')
     provenance = BlueprintProvenance.model_validate({
@@ -2194,8 +2076,7 @@ def _apply_secret_patches(data: dict[str, Any], edit: GlobalEdit,
         setup = secret.get('setup') or {}
         for value in (setup.get('chapters') or []):
             chapter(f'{sid}.setup.chapters', value)
-        for event in (secret.get('reader_reveal_events') or []):
-            chapter(f'{sid}.reader_reveal_events', event.get('chapter'))
+        chapter(f'{sid}.first_reveal_chapter', secret.get('first_reveal_chapter'))
         for event in (secret.get('knowledge_events') or []):
             chapter(f'{sid}.knowledge_events.known_from_chapter',
                     event.get('known_from_chapter'))
@@ -2292,7 +2173,7 @@ def run_apply_edit(ctx: RunContext, edit_path: str = '') -> tuple[GlobalGroundin
         artifact = GlobalGrounding.model_validate({**data, '_provenance': provenance})
     except ValidationError as exc:
         raise TerminalState(
-            f'人工 GlobalEdit 应用后的完整候选不符合当前 GlobalGrounding v3：{exc}'
+            f'人工 GlobalEdit 应用后的完整候选不符合当前 GlobalGrounding v4：{exc}'
         ) from exc
 
     candidate = artifact.model_dump(by_alias=True)

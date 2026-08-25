@@ -27,7 +27,6 @@ def _evidence(text: str = '原文证据', chapter: int = 1) -> dict:
         'chapter_ordinal': chapter,
         'source': {
             'text': text, 'start': 0, 'end': len(text),
-            'normalized': text, 'recovery': 'exact',
         },
     }
 
@@ -107,7 +106,7 @@ def _global():
                              'evidence': _evidence('知情'),
                          }],
                          'setup': {'kind': 'cold'},
-                         'reader_reveal_events': [{'chapter': 2}]}],
+                         'first_reveal_chapter': 2}],
         },
     }
 
@@ -207,7 +206,7 @@ def _full_global():
                      'evidence': _evidence('掌柜自己知道'),
                  }],
                  'setup': {'kind': 'foreshadowed', 'chapters': [1, 2]},
-                 'reader_reveal_events': [{'chapter': 5}]},
+                 'first_reveal_chapter': 5},
                 # 冷揭示：显式声明没有埋点。⚠ 它与「归一裁空后降级成 cold」
                 # 在字段值上仍然同形，分得开的只有 `setup_chapters_pruned` 那份账。
                 {'secret_id': 'secret_02', 'fact': '账房识得那枚印',
@@ -222,7 +221,7 @@ def _full_global():
                      'evidence': _evidence('众人当场看见', 3),
                  }],
                  'setup': {'kind': 'cold'},
-                 'reader_reveal_events': [{'chapter': 3}]},
+                 'first_reveal_chapter': 3},
             ],
         },
         'arc': {
@@ -230,8 +229,7 @@ def _full_global():
             'climax': '第五章对质',
             'ending': '掌柜远走',
             'arc_tracks': [{
-                'subject': 'char_001', 'dimension': '身份',
-                'change_type': 'development', 'trajectory': '由藏到认',
+                'subject': 'char_001', 'trajectory': '由藏到认',
                 'trajectory_evidence': _evidence('由藏到认', 5),
             }],
         },

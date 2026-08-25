@@ -49,39 +49,19 @@ ACCOUNTING: dict[str, tuple[AccountingSpec, ...]] = {
     # ⚠ 这里曾经是 11 个出口，`verbatim_recovered` 随 `bounded-fidelity-v3` 删掉了
     #    （beat 的区间改由段号算出 ⇒ 「按最长公共子串救回来的锚点」结构性不存在），
     #    它唯一的消费方 `anchor_not_verbatim` 同批裁撤。
-    # ⚠ `partial_regen_chapters` / `repairs` 即使为空也必须落盘并报告：
-    #    「记了 0 次」与「压根没记」不是一回事（`Q-2` 的三态）。
     'stage2': (
-        AccountingSpec('address_by_fallback', '`by` 兜底成 `public` 几次？（判据断言这个计数）'),
-        AccountingSpec('address_surface_rewrites', '哪几条称呼被最长子串回取改写过？'),
-        AccountingSpec('address_from_chapter_raised', '哪几条称呼的可用章被往后抬过？'),
-        AccountingSpec('canonical_distinguishers_stripped', '哪几个显示名被剥掉了消歧区分词？'),
         AccountingSpec('setup_chapters_pruned', '哪几条秘密的埋点章被裁掉了？'
                                                 '（「冷揭示」与「被裁空」只能靠它分开）'),
-        AccountingSpec('evidence_locator_rewrites',
-                       '哪些事实 locator 经内容字符归一后才唯一回取到正式原文字节？'),
         AccountingSpec('evidence_locator_failures',
                        '哪些事实 locator 因错章、零命中、多命中或正式 span 漂移而失败？'
                        '（非空即 GlobalGrounding 失败态）'),
-        AccountingSpec('verbatim_rewrites', '哪几条 hinge 的短语被**回取**改过字节、'
-                                            '或被段号改判给了别的拍？'),
         AccountingSpec('verbatim_failures', '哪几处**锚不到**？（非空即失败态，按根因分）'),
         AccountingSpec('fact_atom_failures', '哪几个事实原子的证据短语无法在所属证据拍内唯一回取？'
                                              '（与 hinge 失败共同进入 `verbatim_failed`）'),
-        AccountingSpec('partial_regen_chapters', '哪几章是定向重生成过的？'),
-        AccountingSpec('repairs', '那几次定向重生成各修了什么？（`failure_items` + 前后三个计数）'),
-        AccountingSpec('place_inherit_without_base',
-                       '哪几拍声称延续上一拍地点而链上没有基？'
-                       '（`extraction-ir-v1` 专属；产物侧 place=null 分不出'
-                       '「无从知道」与「指错了继承」，只有这笔账分得出）'),
         AccountingSpec('hinge_ambiguous_pending',
                        '哪几条 hinge 的短语在拍区间内多处命中、等着候选选择修复？'
                        '（`extraction-ir-v1` 专属；失败态 hinge 不带短语，'
                        '这笔账是字段级修复唯一不依赖 LLM cache 的输入）'),
-        AccountingSpec('boundary_nudges',
-                       '哪几拍的止段被层0 外扩过？（`extraction-ir-v1` 专属；'
-                       '盘上的 span 不是模型给的那个数，'
-                       '「模型切得准」与「差 1 段、代码补上了」只有这笔账分得开）'),
     ),
     # Stage3 v2 无 LLM attempt、repair、INVALID 提升或人工编辑账；空元组是显式声明。
     'stage3': (),
