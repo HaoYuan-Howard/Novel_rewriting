@@ -21,6 +21,7 @@
 
 - stage0 剔除审阅：<agent 已代批结论>
 - Stage2 全局逐项复核：<current + PASS/FAIL/UNVER 分母；只有全 PASS 才可交付>
+- Stage4 结构审批：<current subject + accept/request_replan 分母；只有逐章全 accept 才可写作>
 - stage6 开篇文案选择：<所选候选与理由>
 - stage7 人名映射审阅：<agent 已代批结论>
 
@@ -62,6 +63,15 @@
 - 核验材料：<workpack 路径/命令、精确命中分母与集合完整性反查>
 - typed 决策：<actor、逐项理由、subject SHA-256 乐观锁结果>
 - 结论：<all PASS / stopped；FAIL/UNVER 不得作为披露放行>
+
+### Stage4 structure approval
+
+- 结构主体：<当前完整 subject SHA-256 + plan 文件 SHA-256>
+- 逐章决定：<retain/reconstruct 分母；accept/request_replan 分母>
+- 结构证据：<分区、披露顺序、非连续重组、首尾锚点与 eligible 分母>
+- 批准凭据：<actor + 总理由 + 恰好覆盖全部章的逐章理由>
+- A/B 隔离：<B 只绑定证据、未修改 A 结构；或正式拒绝证据>
+- 结论与恢复：<all accept / request_replan；后者给出独立 `stage4.design --replan` preview>
 
 ### stage6.approve
 

@@ -1,281 +1,162 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Stage4 ``--chapters`` 的目标范围、合并与来源账。"""
+"""Stage4 v3 只保留整书 A/B 生成与 0 成本人工恢复。"""
 from __future__ import annotations
 
-import copy
-import json
-import shutil
-import tempfile
-from pathlib import Path
-from unittest.mock import patch
+from contextlib import nullcontext
+from types import SimpleNamespace
 
 import pytest
+from pydantic import ValidationError
 
-from contracts.schema import Usage
-from contracts.schema.report import finding
-from contracts.schema.stage1 import MainText
-from contracts.schema.stage4 import PlanChapters, PlanProvenance
-from novel.errors import GateBlocked, TerminalState
-from novel.llm.cache import CachePolicy
-from novel.llm.client import MAX_SAMPLES_PER_RUNG
-from novel.report.findings import ran
-from novel.stages.stage2 import extract
+from contracts.invariants import STRUCTURE_METRIC_CONTRACT
+from contracts.schema.stage4 import PlanProvenance
+from novel.errors import TerminalState
 from novel.stages.stage4 import plan
-from novel.stages.stage4.measure import identity_plan
-from novel.store import ArtifactStore
-from tests.test_stage2 import main_text
-from tests.test_stage2_generation import (
-    _client, _ctx, _ok, _respond_blueprints, _response_blueprints,
-    _response_global,
-)
 
 
-#: 通用 Stage4 底座固定在默认 v3.1；契约特有拓扑由 dispatch 测试覆盖。
-@pytest.fixture(autouse=True)
-def _pin_ir31_arm(monkeypatch):
-    monkeypatch.setenv('NOVEL_STAGE2_BLUEPRINT_CONTRACT', 'extraction-ir-v3.1')
+def _provenance(*, origin: str = 'human', **extra: object) -> dict:
+    return {
+        'code': 'fixture-code',
+        'root_clean_sha1': '1' * 40,
+        'inputs': {},
+        'params': {
+            'compiler': 'atomic-scenes-v2',
+            'fact_atoms': 1,
+            'source_stages': 1,
+            'structure_metric_contract': STRUCTURE_METRIC_CONTRACT,
+        },
+        'origin': origin,
+        'blind_candidate_sha256': None if origin == 'human' else '2' * 64,
+        'evidence_binding_sha256': None if origin == 'human' else '3' * 64,
+        **extra,
+    }
 
 
-def _prepare(book):
-    global_ctx = _ctx(book, 'stage2.global')
-    ArtifactStore(global_ctx).write(extract.MAIN_TEXT, MainText.model_validate(main_text()))
-    global_client, _ = _client(
-        global_ctx, lambda _request, _index: _ok(_response_global()))
-    # Stage4 不消费 global_review；隔离这份确定性旁产物，避免测试被它的产地 ctx 牵连。
-    with patch.object(extract, '_refresh_global_review', lambda *_args: None):
-        extract.run_global(global_ctx, global_client)
+@pytest.mark.parametrize('entry', [plan.run_plan, plan.build_prompt])
+def test_stage4_v3_refuses_chapter_scoped_paid_replanning_before_transport(entry):
+    """结构变更只能整书重走 A→B，旧 ``--chapters`` 不能暗中恢复。"""
+    client = SimpleNamespace(
+        ask_json=lambda *_args, **_kwargs: pytest.fail('不应进入付费 transport'))
+    kwargs = {'chapters': (2,)}
+    if entry is plan.run_plan:
+        kwargs['client'] = client
 
-    by_ordinal = _response_blueprints()
-
-    def blueprint_response(request, _index):
-        return _respond_blueprints(request, by_ordinal)
-
-    blueprint_ctx = _ctx(book, 'stage2.blueprint')
-    blueprint_client, _ = _client(blueprint_ctx, blueprint_response)
-    assert extract.run_blueprint(blueprint_ctx, blueprint_client).passed
-
-    ctx = _ctx(book, 'stage4.plan')
-    store = ArtifactStore(ctx)
-    upstreams = plan._Upstreams(ctx, store)
-    raw = identity_plan(upstreams.blueprints, upstreams.main_text, upstreams.bidx)
-    provenance = ctx.llm_provenance(
-        PlanProvenance,
-        prompts={'PLAN_SYS': plan.prompts.plan_system()},
-        model='test-model', adopted_models=['test-model'],
-        params=plan._params(upstreams),
-        partial_regen_chapters=[], repairs=[])
-    artifact = PlanChapters.model_validate({**raw, '_provenance': provenance})
-    store.write(plan.REL, artifact)
-    ctx.cache = CachePolicy.refresh()
-    return ctx, store, upstreams, artifact.model_dump(by_alias=True)
+    with pytest.raises(TerminalState, match='Stage4 v3 不接受 --chapters'):
+        entry(object(), **kwargs)
 
 
-def _target_response(before, ordinal):
-    """把盘上目标章投影回场景规划响应；slot/预算/语义契约由 producer 重建。"""
-    return plan._response_baseline(plan._chapter_by(before)[ordinal])
+def test_plan_provenance_has_no_legacy_paid_chapter_repair_surface():
+    human = PlanProvenance.model_validate(_provenance())
+    assert human.origin == 'human'
+    assert 'model' not in type(human).model_fields
+
+    for legacy in ('partial_regen_chapters', 'repairs'):
+        with pytest.raises(ValidationError, match=legacy):
+            PlanProvenance.model_validate(_provenance(**{legacy: []}))
+
+    compiled = PlanProvenance.model_validate(_provenance(origin='compiled'))
+    assert compiled.blind_candidate_sha256 == '2' * 64
+    assert compiled.evidence_binding_sha256 == '3' * 64
 
 
-def test_targeted_plan_repair_merges_only_the_requested_chapter_and_records_history(monkeypatch):
-    root = Path(tempfile.mkdtemp())
-    book = root / '规划定向合并测试_611'
-    book.mkdir()
-    try:
-        ctx, _store, upstreams, before = _prepare(book)
-        target = _target_response(before, 2)
-        preview_system, preview_user = plan.build_prompt(ctx, chapters=(2,))
-        client, transport = _client(ctx, lambda _request, _index: _ok(target))
-        captured = {}
+def test_apply_edit_is_a_free_human_round_and_clears_a_b_lineage(monkeypatch):
+    """人工修订吃 v3 业务形；同闸重判，不伪造一次模型修复。"""
+    edit = SimpleNamespace(model_dump=lambda **_kwargs: {'edited': True})
 
-        def capture(_ctx, _store, data, _up, *, provenance, archive=False):
-            captured.update(data=data, provenance=provenance, archive=archive)
-            return 'captured'
+    class Store:
+        @staticmethod
+        def exists(rel: str) -> bool:
+            return rel in {'stage4/plan_edit.json', plan.REL}
 
-        monkeypatch.setattr(plan, '_gate_and_write', capture)
-        assert plan.run_plan(ctx, client, chapters=(2,)) == 'captured'
+        @staticmethod
+        def read(_model, rel: str):
+            assert rel == 'stage4/plan_edit.json'
+            return edit
 
-        after = captured['data']
-        before_by = plan._chapter_by(before)
-        after_by = plan._chapter_by(after)
-        assert after['reconstruction_strategy'] == before['reconstruction_strategy']
-        assert after_by[1] == before_by[1] and after_by[3] == before_by[3]
-        assert captured['archive'] is True
-        provenance = captured['provenance']
-        assert provenance.partial_regen_chapters == [2]
-        assert len(provenance.repairs) == 1
-        repair = provenance.repairs[0]
-        assert repair.chapter_ordinal == 2
-        assert repair.cache_policy == 'refresh-write'
-        assert repair.before and repair.after and repair.user_prompt and repair.output
-        assert repair.before_hard >= 0 and repair.after_hard >= 0
-        assert len(transport.calls) == 1
-        assert transport.calls[0].system == preview_system
-        assert transport.calls[0].user == preview_user
-        assert '===== [阅读序第2章' in transport.calls[0].user
-        assert '===== [阅读序第1章' not in transport.calls[0].user
-        assert '===== [阅读序第3章' not in transport.calls[0].user
-    finally:
-        shutil.rmtree(root, ignore_errors=True)
+        @staticmethod
+        def read_own(_model, rel: str):
+            assert rel == plan.REL
+            return object(), {}
 
+    captured: dict[str, object] = {}
 
-def test_targeted_plan_repair_rejects_wrong_chapter_without_overwriting_formal():
-    root = Path(tempfile.mkdtemp())
-    book = root / '规划越界响应测试_612'
-    book.mkdir()
-    try:
-        ctx, store, upstreams, before = _prepare(book)
-        wrong = _target_response(before, 1)
-        client, transport = _client(ctx, lambda _request, _index: _ok(wrong))
-        original = store.path(plan.REL).read_bytes()
+    class Ctx:
+        novel_dir = SimpleNamespace()
 
-        with pytest.raises(TerminalState, match='响应却是'):
-            plan.run_plan(ctx, client, chapters=(2,))
+        @staticmethod
+        def free_provenance(model_cls, **kwargs):
+            captured['model_cls'] = model_cls
+            captured['free_kwargs'] = kwargs
+            return 'FREE-PROVENANCE'
 
-        # ⚠⚠ 越界响应与 schema 拒同型，仍先同档重采一次；本测试显式使用 test-model，
-        # 不在 Flash→Pro 产品兜底链内，第二采仍失败即终态。
-        #   同型（模型没按契约产出），而「除截断外每一种拒绝都先走有界同档重采」是本仓已经
-        #   付过学费的默认处置（`0e2492a`：那 47.7% 白花的根因）。判词一个字没改，
-        #   只是从 `_run_plan_repair` 搬到了 `_scene_compiler_validator` 上。
-        #   ⚠ 承重的两条在下面：**正式产物一个字节没动**、**不落 `.INVALID`**。
-        assert len(transport.calls) == MAX_SAMPLES_PER_RUNG, \
-            '越界响应没有完成首发 + 一次同档重采'
-        assert store.path(plan.REL).read_bytes() == original
-        assert not store.exists(plan._INVALID)
-    finally:
-        shutil.rmtree(root, ignore_errors=True)
-
-
-def test_targeted_plan_repair_refuses_a_duplicate_baseline_before_transport():
-    root = Path(tempfile.mkdtemp())
-    book = root / '规划重复章基线测试_613'
-    book.mkdir()
-    try:
-        ctx, store, _upstreams, before = _prepare(book)
-        malformed = copy.deepcopy(before)
-        malformed['output_chapters'].append(
-            copy.deepcopy(malformed['output_chapters'][0]))
-        store.write(plan.REL, PlanChapters.model_validate(malformed))
-        client, transport = _client(ctx, lambda _request, _index: pytest.fail(
-            '基线全局形状不合法时不应发出任何付费请求'))
-
-        with pytest.raises(TerminalState, match='缺章、重复章或乱序'):
-            plan.run_plan(ctx, client, chapters=(2,))
-
-        assert transport.calls == []
-    finally:
-        shutil.rmtree(root, ignore_errors=True)
-
-
-def test_targeted_failure_routing_never_parses_chapter_numbers_from_detail_prose():
-    prose_mentions_two = finding(
-        'style_words',
-        detail='这段给人读的说明提到了输出章 2，但机器凭据明确属于第一章',
-        evidence=['out1:张力'],
+    monkeypatch.setattr(plan, 'ArtifactStore', lambda _ctx: Store())
+    monkeypatch.setattr(plan.paths, 'edit_rel', lambda *_args: 'stage4/plan_edit.json')
+    monkeypatch.setattr(plan, '_Upstreams', lambda *_args: object())
+    monkeypatch.setattr(
+        plan, '_params',
+        lambda _up: {
+            'compiler': 'atomic-scenes-v2', 'fact_atoms': 1, 'source_stages': 1,
+            'structure_metric_contract': STRUCTURE_METRIC_CONTRACT,
+        },
     )
-    outcome = ran('style_words', [prose_mentions_two], scanned='1 条')
 
-    target_two = plan._repair_findings([outcome], 2)
-    target_one = plan._repair_findings([outcome], 1)
+    def gate(_ctx, _store, data, _up, *, provenance, archive=False):
+        captured.update(data=data, provenance=provenance, archive=archive)
+        return 'REPORT'
 
-    assert [row['rule'] for row in target_two] == ['manual_regeneration']
-    assert [row['rule'] for row in target_one] == ['style_words']
+    monkeypatch.setattr(plan, '_gate_and_write', gate)
 
-
-def test_targeted_plan_repair_prefers_live_invalid_as_its_merge_baseline():
-    root = Path(tempfile.mkdtemp())
-    book = root / '规划问题稿优先测试_614'
-    book.mkdir()
-    try:
-        ctx, store, _upstreams, before = _prepare(book)
-        invalid = copy.deepcopy(before)
-        invalid['output_chapters'][1]['chapter_goal']['rationale'] = '只存在于问题稿的基线标记'
-        store.write_invalid(
-            plan.REL, PlanChapters.model_validate(invalid), gates_skipped=[])
-
-        _system, user = plan.build_prompt(ctx, chapters=(2,))
-
-        baseline_block = user.split(plan.prompts.BLOCK_REPAIR_BASELINE + '\n', 1)[1] \
-            .split('\n\n' + plan.prompts.BLOCK_INDEX, 1)[0]
-        assert json.loads(baseline_block)['chapter_goal']['rationale'] \
-            == '只存在于问题稿的基线标记'
-    finally:
-        shutil.rmtree(root, ignore_errors=True)
+    assert plan.run_apply_edit(Ctx()) == 'REPORT'
+    assert captured['model_cls'] is PlanProvenance
+    assert captured['free_kwargs'] == {
+        'params': {
+            'compiler': 'atomic-scenes-v2', 'fact_atoms': 1, 'source_stages': 1,
+            'structure_metric_contract': STRUCTURE_METRIC_CONTRACT,
+        },
+        'origin': 'human',
+        'blind_candidate_sha256': None,
+        'evidence_binding_sha256': None,
+    }
+    assert captured['provenance'] == 'FREE-PROVENANCE'
+    assert captured['archive'] is True
 
 
-def test_targeted_plan_repair_refuses_book_strategy_hard_before_transport():
-    root = Path(tempfile.mkdtemp())
-    book = root / '规划书级策略预检测试_615'
-    book.mkdir()
-    try:
-        ctx, store, _upstreams, before = _prepare(book)
-        malformed = copy.deepcopy(before)
-        malformed['reconstruction_strategy'] = '全书统一追求张力'
-        store.write(plan.REL, PlanChapters.model_validate(malformed))
-        client, transport = _client(ctx, lambda _request, _index: pytest.fail(
-            '书级策略 HARD 不能交给单章 transport'))
+def test_revalidate_promotes_the_current_invalid_without_any_llm_client(monkeypatch):
+    """HARD 问题稿的恢复口是当前判据 + hash-bound 人工提升。"""
+    provenance = SimpleNamespace(model_dump=lambda **_kwargs: {'origin': 'compiled'})
+    artifact = SimpleNamespace(provenance=provenance)
+    promoted: list[tuple[str, object, str, str, object]] = []
 
-        with pytest.raises(TerminalState, match='reconstruction_strategy'):
-            plan.run_plan(ctx, client, chapters=(2,))
+    class Store:
+        @staticmethod
+        def exists(rel: str) -> bool:
+            return rel == plan._INVALID
 
-        assert transport.calls == []
-    finally:
-        shutil.rmtree(root, ignore_errors=True)
+        @staticmethod
+        def read_own(_model, rel: str):
+            assert rel in {plan._INVALID, plan.REL}
+            return artifact, {'candidate': True}
 
+        @staticmethod
+        def history_transaction(*_rels: str):
+            assert _rels == (plan.REL, plan.CTX_REL)
+            return nullcontext()
 
-def test_targeted_plan_repair_failure_writes_invalid_without_overwriting_formal():
-    root = Path(tempfile.mkdtemp())
-    book = root / '规划局修失败闸门测试_616'
-    book.mkdir()
-    try:
-        ctx, store, upstreams, before = _prepare(book)
-        target = _target_response(before, 2)
-        target['chapter_rewrite_brief'] = '仍然只说需要张力'
-        client, _transport = _client(ctx, lambda _request, _index: _ok(target))
-        formal_before = store.path(plan.REL).read_bytes()
+        @staticmethod
+        def promote_invalid(rel, model, *, actor, reason, artifact_override):
+            promoted.append((rel, model, actor, reason, artifact_override))
 
-        with pytest.raises(GateBlocked):
-            plan.run_plan(ctx, client, chapters=(2,))
+    ctx = object()
+    monkeypatch.setattr(plan, 'ArtifactStore', lambda _ctx: Store())
+    monkeypatch.setattr(plan, '_Upstreams', lambda *_args: object())
+    monkeypatch.setattr(plan, '_judge', lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(plan, 'run_context', lambda got: None)
+    monkeypatch.setattr(plan, 'run_check_only', lambda got: 'CURRENT-REPORT')
 
-        assert store.path(plan.REL).read_bytes() == formal_before
-        assert store.exists(plan._INVALID)
-        rejected = store.read_own(PlanChapters, plan._INVALID)[0]
-        assert rejected.provenance.repairs[-1].chapter_ordinal == 2
-        assert (rejected.provenance.repairs[-1].before_hard,
-                rejected.provenance.repairs[-1].after_hard) == (0, 1)
-    finally:
-        shutil.rmtree(root, ignore_errors=True)
-
-
-def test_targeted_plan_repair_accumulates_usage_and_rebuilds_context(monkeypatch):
-    root = Path(tempfile.mkdtemp())
-    book = root / '规划局修成本与上下文测试_617'
-    book.mkdir()
-    try:
-        ctx, store, upstreams, before = _prepare(book)
-        previous = PlanChapters.model_validate(before)
-        old_usage = Usage(
-            calls_made=2, calls_cached=0,
-            prompt_tokens=100, completion_tokens=200, reasoning_tokens=50)
-        previous = previous.model_copy(update={
-            'provenance': previous.provenance.model_copy(update={'usage': old_usage}),
-        })
-        store.write(plan.REL, previous)
-        target = _target_response(before, 2)
-        client, transport = _client(ctx, lambda _request, _index: _ok(target))
-        rebuilt = []
-        monkeypatch.setattr(plan, '_judge', lambda *_args, **_kwargs: [])
-        monkeypatch.setattr(plan, 'run_context', lambda got_ctx: rebuilt.append(got_ctx))
-
-        plan.run_plan(ctx, client, chapters=(2,))
-
-        assert len(transport.calls) == 1 and rebuilt == [ctx]
-        current = store.read_own(PlanChapters, plan.REL)[0]
-        usage = current.provenance.usage
-        assert usage is not None
-        assert (usage.calls_made, usage.calls_cached) == (3, 0)
-        assert (usage.prompt_tokens, usage.completion_tokens, usage.reasoning_tokens) \
-            == (110, 220, 55)
-        repair = current.provenance.repairs[-1]
-        assert (repair.before_hard, repair.after_hard) == (0, 0)
-    finally:
-        shutil.rmtree(root, ignore_errors=True)
+    assert plan.run_revalidate(
+        ctx, actor='reviewer', reason='修正了闭合失败',
+    ) == 'CURRENT-REPORT'
+    assert promoted == [(
+        plan.REL, plan.PlanChapters, 'reviewer', '修正了闭合失败', artifact,
+    )]

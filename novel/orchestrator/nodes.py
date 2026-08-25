@@ -51,14 +51,17 @@ CLI_MODULE = 'novel.cli'
 #: ⇒ 凡是写盘的付费节点，跑完自动追一次复检，两个结论并排显示。
 FOLLOW_CHECK_NOTE = '自动追跑：退出码 0 也可能是残缺产物'
 
-#: Stage5 两个节点各自的“主操作”。其余 ``--chapters`` / ``--actor`` /
-#: ``--reason`` 都只是这些操作的参数，不参与互斥。
+#: 各节点的“主操作”。其余 ``--chapters`` / ``--actor`` /
+#: ``--reason`` 都只是这些操作的参数，不参与互斥。Stage4A
+#: 的 ``--replan`` 是一次真重采，与只预览的 ``--dry-run`` 不可同时成立。
 #:
-#: ⚠ 顺序不是装饰：``novel.cli.main::_run_stage5`` 正是按这些 flag 的分支优先级
-#: 派发。若一次允许两个主操作，CLI 只执行排在前面的那个，而 ``write_effect``
+#: ⚠ 顺序不是装饰：``novel.cli.main::_run_stage4`` / ``::_run_stage5``
+#: 正是按这些 flag 的分支优先级派发。若一次允许两个主操作，CLI 只执行
+#: 排在前面的那个，而 ``write_effect``
 #: 可能被排在后面的 ``--dry-run`` / ``--check-only`` 盖成“不写盘”，preview 就会
 #: 对实际写盘说假话。这里关闭式拒收，展示与执行共用同一道门。
-_STAGE5_PRIMARY_OPERATIONS = {
+_PRIMARY_OPERATIONS = {
+    'stage4.design': frozenset({'--dry-run', '--replan'}),
     'stage5.write': frozenset({
         '--rebuild-draft', '--dry-run', '--recheck', '--revalidate',
         '--apply-edit', '--revise',
@@ -163,7 +166,7 @@ def validate_run(node: str, flags: Sequence[str] = (), *,
             f'⚠ 如果这条跑法**现役后端真的在跑**，那就是节点表漏登记了——'
             f'补进 `NODES[{node!r}].flags`，别在这里绕过去')
 
-    primary = sorted(set(tokens) & _STAGE5_PRIMARY_OPERATIONS.get(node, frozenset()))
+    primary = sorted(set(tokens) & _PRIMARY_OPERATIONS.get(node, frozenset()))
     if len(primary) > 1:
         raise UnsupportedRunMode(
             f'{node} 主操作互斥，一次只能选择一个，不能同时使用 {primary}')

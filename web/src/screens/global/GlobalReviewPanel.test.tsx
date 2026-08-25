@@ -61,6 +61,10 @@ const enums: EnumsResponse = {
   style_words: [],
   invent: { allow: [], forbid: [], principle: '' },
   job_kinds: { 'stage2.global': { label: 'stage2', paid: true } },
+  structure_modes: [],
+  structure_change_kinds: [],
+  structure_approval_decisions: [],
+  structure_approval_states: [],
   actions: [{
     kind: 'stage2.global',
     label: '提交全局复核',

@@ -42,7 +42,8 @@ from pydantic import BaseModel, ValidationError
 from contracts.artifacts import (
     STAGE0_CLEAN_TEXT, STAGE0_REVISIONS,
     STAGE1_HOOK_COPY, STAGE1_MAIN_TEXT,
-    STAGE2_GLOBAL_GROUNDING, STAGE2_GLOBAL_REVIEW, STAGE4_WRITER_CONTEXT,
+    STAGE2_GLOBAL_GROUNDING, STAGE2_GLOBAL_REVIEW,
+    STAGE4_PLAN_CHAPTERS, STAGE4_WRITER_CONTEXT,
     STAGE5_BOOK_DRAFT,
     STAGE7_NAME_MAP,
 )
@@ -51,7 +52,9 @@ from contracts.schema import (
     artifact_spec, decode_artifact, encode_artifact,
 )
 from novel import paths, prov
-from novel.consumption import producer_node, projection_for, render_stage5_draft
+from novel.consumption import (
+    canonical_rel, producer_node, projection_for, render_stage5_draft,
+)
 from novel.errors import (
     ApprovalRequired, ArtifactUnreadable, ByteFormRefused, PathRefused,
     ProvenanceRefused, UpstreamMissing, UpstreamStale,
@@ -183,6 +186,22 @@ class ArtifactStore:
 
     def exists(self, rel: str) -> bool:
         return _path_exists(self.path(rel))
+
+    def full_sha256_or_none(self, rel: str) -> str | None:
+        """一份两级盘上产物的完整字节 SHA-256；缺席返回 ``None``。
+
+        这是 hash-bound 决策的只读复核口，不产生普通 provenance 输入边。调用者若
+        真正消费产物，仍必须走 ``read`` / ``read_with_sha256`` 完成 schema 校验与记账。
+        """
+        key = paths.check_rel(rel)
+        try:
+            raw = _read_file_bytes(self.path(key))
+        except FileNotFoundError:
+            return None
+        except OSError as exc:
+            raise ArtifactUnreadable(
+                f'{self.ctx.node}: 读不了 {key} 的完整字节指纹：{exc!r}') from exc
+        return hashlib.sha256(raw).hexdigest()
 
     # ── 读 ────────────────────────────────────────────────────────────────
 
@@ -808,11 +827,13 @@ class ArtifactStore:
            造出的正是盘上那条幽灵边：另一份产物的 `inputs` 还指着它。
            **删一个还被别人指着的文件，会同时制造两个问题。**
 
-        ③ **已有的正式稿也要归档，不许被覆盖掉。** 落正式稿走的是原子替换，
+        ③ **已有的当前正式稿也要归档，不许被覆盖掉。** 落正式稿走的是原子替换，
            而原子替换是**无条件**的：盘上那份**花过钱**的正式稿原地消失，
            `_rounds/` 里连一份副本都没有。原来只归档 `.INVALID` 那一条历史。
            对 stage5 这直接违反「上一轮正式稿进入 `_rounds`」；对别的层，
            它违反的是本模块自己那句「**归档是出事之后唯一能回去的那一份**」。
+           唯一例外是注册表已显式登记的低版本 shape-break 正式稿：它不是当前业务
+           轮次，按版本契约应由 producer 重建且不得污染 current `_rounds`。
 
         ``artifact_override`` 只承载调用方按 live INVALID 重建的确定性派生字段。
         人工改动审计仍严格比较「不可变基线 vs live INVALID」，而最终来源账强制使用
@@ -822,6 +843,19 @@ class ArtifactStore:
         inv_rel = paths.invalid_of(official_rel)
         if not self.exists(inv_rel):
             raise UpstreamMissing(f'{self.ctx.node}: 没有 {inv_rel} 可提升')
+
+        spec = artifact_spec(official_rel)
+        formal_version = self.schema_version_of(official_rel)
+        if (spec is not None and formal_version is not None
+                and formal_version > spec.current_version):
+            raise ArtifactUnreadable(
+                f'{official_rel} 是未来 schema v{formal_version}，当前仅 v{spec.current_version}；'
+                '拒绝用当前 INVALID 覆盖')
+        discard_shape_break_formal = bool(
+            spec is not None
+            and formal_version is not None
+            and formal_version < spec.current_version
+        )
 
         live_artifact, src, audit = self._revalidation_material(
             official_rel, model, actor=actor, reason=reason)
@@ -867,7 +901,8 @@ class ArtifactStore:
         invalid_archive: Path | None = None
         replacement_attempted = False
         try:
-            if official_before is not None and official_before != data:
+            if (official_before is not None and official_before != data
+                    and not discard_shape_break_formal):
                 official_archive = self.archive_round(official_rel)
             os.makedirs(_filesystem_path(p.parent), exist_ok=True)
             replacement_attempted = True
@@ -1089,7 +1124,10 @@ class ArtifactStore:
             recorded = (block or {}).get('inputs') if isinstance(block, dict) else None
             if block is not None and recorded is None:
                 recorded = {}                # 有来源账但没有 `inputs` ⇒ `no_inputs`，不是 `no_provenance`
-        return self.freshness_of_inputs(rel, recorded)
+        report = self.freshness_of_inputs(rel, recorded)
+        if canonical_rel(rel) == STAGE4_PLAN_CHAPTERS and isinstance(data, dict):
+            return self._stage4_plan_phase_freshness(data, report)
+        return report
 
     def freshness_of_inputs(self, rel: str, recorded: dict | None) -> FreshnessReport:
         """同 `freshness`，但**来源账由调用方给**——用于还没落盘的那一份。
@@ -1110,6 +1148,48 @@ class ArtifactStore:
             file_now=self._file_fp_of_key,
             consumed_now=lambda key: self._consumed_fp_of_key(node, key),
         )
+
+    def _stage4_plan_phase_freshness(
+        self, plan: dict[str, Any], ordinary: FreshnessReport,
+    ) -> FreshnessReport:
+        """把 A/B 完整字节绑定叠加到普通业务投影 freshness。
+
+        普通边仍保留 ``recorded_consumed/now_consumed``，但 ``compiled`` 计划不能因
+        业务投影相同就忽略版本化文件的字节变化。完整 SHA 不符时，用同一个真实产物
+        key 覆盖该边的文件判定；human 计划没有 A/B 编译身份，原样返回普通报告。
+        """
+        # 动态 import 避免 store 初始化反向牵入整个 Stage4 producer；纯比较函数本身
+        # 不读盘，check 与写盘后置条件也调用同一份实现。
+        from novel.stages.stage4.phase_binding import verify_plan_phase_artifacts
+
+        links = verify_plan_phase_artifacts(
+            plan, sha256_now=self.full_sha256_or_none)
+        if not links:
+            return ordinary
+
+        edges = list(ordinary.edges)
+        positions = {edge.key: index for index, edge in enumerate(edges)}
+        for link in links:
+            if link.state == 'match':
+                continue
+            current = edges[positions[link.key]] if link.key in positions else None
+            reason = 'ghost' if link.state == 'ghost' else 'file_changed'
+            state = 'unknown' if reason == 'ghost' else 'stale'
+            exact = prov.EdgeVerdict(
+                key=link.key,
+                state=state,
+                reason=reason,
+                recorded_file=link.expected_sha256,
+                now_file=link.now_sha256,
+                recorded_consumed=(current.recorded_consumed if current else None),
+                now_consumed=(current.now_consumed if current else None),
+            )
+            if current is None:
+                positions[link.key] = len(edges)
+                edges.append(exact)
+            else:
+                edges[positions[link.key]] = exact
+        return self._content_report(tuple(edges)) if edges else ordinary
 
     def _deterministic_freshness(self, rel: str) -> FreshnessReport | None:
         """没有通用来源块的产物，用其既有确定性指纹回答同一个问题。

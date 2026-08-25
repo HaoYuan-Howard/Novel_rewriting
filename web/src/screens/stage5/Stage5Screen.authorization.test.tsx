@@ -57,12 +57,24 @@ describe('Stage5 部分写作授权链', () => {
       mockApi.getReview(SAMPLE_SID, 3),
       mockApi.getEnums(),
     ])
+    const subject = 'a'.repeat(64)
+    const structureDecision = {
+      subject_sha256: subject,
+      actor: 'reviewer',
+      reason: '已核对全书结构',
+      chapters: [{ output_ordinal: 3, decision: 'accept', reason: '第 3 章可执行' }],
+      decided_at: '2026-08-25T00:00:00+00:00',
+    }
     const approvals: ApprovalDoc = {
-      v: 2,
+      v: 3,
       sid: SAMPLE_SID,
       gate: { s0: true, s1: true, s2: true, s3: true, s4: true, s5: false, s6: false, s7: false },
       seen: { read: true, global: true },
       writing: false,
+      structure: {
+        state: 'accepted', current_subject_sha256: subject,
+        current_decision: structureDecision, history: [structureDecision],
+      },
       spawns: {},
     }
     const order: string[] = []

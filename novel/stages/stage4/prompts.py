@@ -8,71 +8,97 @@ from typing import Any
 from contracts.invariants import (
     RESPONSE_CHAPTER_WEIGHTS, RESPONSE_DELIVERY_MODES, RESPONSE_GOAL_INTENTS,
     RESPONSE_STRUCTURAL_ROLES, RESPONSE_TEMPORAL_LINKS, RESPONSE_UNIT_WEIGHTS,
-    STYLE_WORDS,
+    STRUCTURE_CHANGE_KINDS, STYLE_WORDS,
 )
 from novel.llm.prompts import with_json_shape
 
-PLAN_MAX_TOKENS = 96_000
+BLIND_DESIGN_MAX_TOKENS = 96_000
+EVIDENCE_BIND_MAX_TOKENS = 48_000
 
-PLAN_SYS = """\
-你是全书结构规划器。每个输出章必须与同号源章一一对应；不可合章、拆章、删章或跨章取材。
 
-这次不是按源事件清单改写。Stage2 已给出本章不可改变的原子事实契约；你要重新设计场景，
-`scenes[]` 的数组顺序就是新章的写作顺序。可以把不相邻事实放进同一场、把同一源舞台的事实
-拆到不同场，或从后果/冲突切入再披露前因，但必须满足：
+BLIND_DESIGN_SYS = """\
+你是 Stage4A 盲结构设计器。你只能看到去序的事实真相图：事实与人物都用无顺序含义的 opaque
+alias，数组顺序也由确定性散列打乱。不要从 alias 字面、数组位置或章内编号猜原文叙述顺序；
+你没有原文、源舞台、source_beat_ref 或逐字材料。
 
-- 每个 obligation=land 的 fact_id 恰好进入一个 `land_fact_refs`；context 原子只进
-  `context_fact_refs`，可按需复用；不产 `coverage`，覆盖由代码复算；
-- `causal_edges` 是故事因果，不等于披露顺序。场景顺序可打破源相邻关系，但不能让结果在其
-  因果前提尚未成立时发生；entry/exit state 必须闭合到章级 ending state；
-- 每条保真 material_id 有明确场景落点；turn_fact_ref 必须是本场 land_fact_refs 中真正改变局面的
-  一条；stage_refs 只选本章舞台，participant_refs 只选本章人物；
-- `chapter_function` 已由 Stage2 冻结，不在响应里重写；`purpose`、`chapter_rewrite_brief`
-  只能谈本章已经给出的事实，不泄露后文。brief 必须具体说明入口、场景重组与章尾状态，
-  不能只写“增强张力/优化节奏”。
+每个输出章与同号输入章一一对应。先按事实因果、人物状态和读者信息设计场景分组与披露顺序，
+再选择结构决定：
+- retain：本章适合直接、线性的真相推进，不主动声明结构变化；declared_change_kinds 必须为空；
+- reconstruct：本章有真实重构空间，必须声明至少两类变化。可选值只有：$CHANGE_KINDS。
 
-三个 goal 使用 typed fact_refs；章首/章尾 goal 应指向新 scenes 首尾真正承载的事实。
-weight/role/delivery/transition 使用结构提示中的前缀枚举。第一场 transition 必须 T_START。
-这里只做结构，不指定文风；目标文本中不得写这些纯写法词：$STYLE_WORDS。
-只输出 JSON。""".replace('$STYLE_WORDS', '、'.join(f'「{word}」' for word in STYLE_WORDS))
+每个 land alias 恰好落入一场；context alias 只作上下文；turn 必须属于本场 land；状态输入输出要
+承接。三个 goal 只能引用本章 fact alias，并分别落在章目标、首场和末场。场景数组就是新披露顺序。
+weight/role/delivery/transition 使用响应契约里的前缀枚举，首场 transition 必须 X_START。
+只谈事实组织，不指定文风，不写纯写法词：$STYLE_WORDS。只输出 JSON。""" \
+    .replace('$CHANGE_KINDS', '、'.join(STRUCTURE_CHANGE_KINDS)) \
+    .replace('$STYLE_WORDS', '、'.join(f'「{word}」' for word in STYLE_WORDS))
 
-_FACT_REF_HINT = {'kind': 'fact_atom', 'ref': 'f01_001', 'chapter': 1}
-_GOAL_HINT = {'intent': '|'.join(RESPONSE_GOAL_INTENTS),
-              'fact_refs': [_FACT_REF_HINT], 'rationale': 'str|null'}
-_SCENE_HINT = {
+_BLIND_GOAL_HINT = {
+    'intent': '|'.join(RESPONSE_GOAL_INTENTS),
+    'fact_aliases': ['a_0123456789abcdef'], 'rationale': '结构理由|null',
+}
+_BLIND_SCENE_HINT = {
     'weight': '|'.join(RESPONSE_UNIT_WEIGHTS),
-    'purpose': '本场要完成的局面变化',
+    'purpose': '本场要完成的事实局面变化',
     'role': '|'.join(RESPONSE_STRUCTURAL_ROLES),
     'delivery': '|'.join(RESPONSE_DELIVERY_MODES),
     'transition': '|'.join(RESPONSE_TEMPORAL_LINKS),
-    'land_fact_refs': ['f01_001'], 'context_fact_refs': ['f01_002'],
-    'material_refs': ['h01_001'], 'turn_fact_ref': 'f01_001',
-    'entry_state_refs': ['f01_002'], 'exit_state_refs': ['f01_003'],
-    'participant_refs': ['char_001'], 'stage_refs': ['b01_01'],
+    'land_fact_aliases': ['a_0123456789abcdef'],
+    'context_fact_aliases': ['a_fedcba9876543210'],
+    'turn_fact_alias': 'a_0123456789abcdef',
+    'entry_state_aliases': [], 'exit_state_aliases': ['a_0123456789abcdef'],
 }
-PLAN_HINT: dict[str, Any] = {
-    'reconstruction_strategy': '全书重构意图',
+BLIND_DESIGN_HINT: dict[str, Any] = {
+    'reconstruction_strategy': '只基于真相图的全书结构意图',
     'output_chapters': [{
-        'output_ordinal': 1, 'from_source_ordinals': [1],
-        'chapter_goal': _GOAL_HINT, 'open_hook_goal': _GOAL_HINT,
-        'end_hook_goal': _GOAL_HINT,
+        'output_ordinal': 1,
+        'structure_decision': {
+            'mode': 'retain|reconstruct', 'reason': '本章选择理由',
+            'declared_change_kinds': ['entry_anchor', 'fact_grouping'],
+        },
+        'chapter_goal': _BLIND_GOAL_HINT,
+        'open_hook_goal': _BLIND_GOAL_HINT,
+        'end_hook_goal': _BLIND_GOAL_HINT,
         'weight': '|'.join(RESPONSE_CHAPTER_WEIGHTS),
-        'chapter_rewrite_brief': '只含本章安全信息的场景重构简报',
-        'scenes': [_SCENE_HINT],
+        'chapter_rewrite_brief': '入口、事实组合与收束的可执行简报',
+        'scenes': [_BLIND_SCENE_HINT],
     }],
 }
-PLAN_REPAIR_OVERRIDE = """\
-本次只返回指定章的完整新对象，不返回 patch，也不修改全书 reconstruction_strategy。
-修复仍须重新核对全部 land 事实、材料、因果与状态闭合。"""
-PLAN_REPAIR_HINT = dict(PLAN_HINT['output_chapters'][0])
+
+EVIDENCE_BIND_SYS = """\
+你是 Stage4B 证据绑定器。盲设计候选已经冻结；你现在看到原文证据、源舞台、人物与必须材料，
+只能为每个 candidate_scene_id 绑定 stage_refs、participant_refs、material_refs。不得改变候选的章序、
+场景顺序、事实分组、goal、retain/reconstruct、变化声明、purpose、role、delivery、transition 或 weight。
+
+candidate_sha256 必须逐字回显。若全部候选场都能在本章证据内执行，返回 status=bound，并且每个候选场
+恰好绑定一次、每条必须材料恰好落一次、stage/人物引用都来自本章关闭式目录。若任何一场无法在不改
+候选结构的前提下成立，返回 status=infeasible，给出关闭式 reason_kind、具体理由和非空 evidence_refs；
+不得返回一份悄悄重规划或只绑定一半的候选。只输出 JSON。"""
+
+EVIDENCE_BIND_HINT: dict[str, Any] = {
+    'status': 'bound|infeasible',
+    'candidate_sha256': '64位小写sha256',
+    'chapters': [{
+        'output_ordinal': 1,
+        'scenes': [{
+            'candidate_scene_id': 'c01s01',
+            'material_refs': ['h01_001'],
+            'participant_refs': ['char_001'],
+            'stage_refs': ['b01_01'],
+        }],
+    }],
+    'reason_kind': 'causal_conflict|stage_conflict|material_conflict|future_leak|insufficient_evidence|null',
+    'reason': '不可行理由|null',
+    'evidence_refs': ['b01_01'] ,
+}
 
 
-def plan_system() -> str:
-    return with_json_shape(PLAN_SYS, PLAN_HINT)
+def blind_design_system() -> str:
+    return with_json_shape(BLIND_DESIGN_SYS, BLIND_DESIGN_HINT)
 
 
-def plan_repair_system() -> str:
-    return with_json_shape(PLAN_SYS + '\n' + PLAN_REPAIR_OVERRIDE, PLAN_REPAIR_HINT)
+def evidence_bind_system() -> str:
+    return with_json_shape(EVIDENCE_BIND_SYS, EVIDENCE_BIND_HINT)
 
 
 BLOCK_INDEX = '── 章节索引（阅读序）──'
@@ -80,10 +106,10 @@ BLOCK_FACT_REFS = '── 可引用事实目录（goal.fact_refs 只能从这里
 BLOCK_SKELETON = '── Stage2 原子事实契约与舞台目录（只作场景重组输入）──'
 BLOCK_SIZES = '── 章级源字数与原子数（预算整数由代码计算）──'
 BLOCK_BODY = '── 全书原文正文（不可变原文，按阅读序章号分块）──'
-BLOCK_REPAIR_SCOPE = '── 本次定向修复范围（只能返回这一章）──'
-BLOCK_REPAIR_FAILURES = '── 当前确定性 HARD 失败（逐条修复）──'
-BLOCK_REPAIR_BASELINE = '── 目标章现有场景计划（仅作修复基线）──'
-BLOCK_REPAIR_STRATEGY = '── 全书重构意图（不可修改，不要在响应中返回）──'
+BLOCK_BLIND_TRUTH = '── 去序真相图（opaque alias 无顺序含义）──'
+BLOCK_CANDIDATE = '── 已冻结的 Stage4A 盲设计候选（不得修改）──'
+BLOCK_CANDIDATE_HASH = '── 候选完整 SHA-256（必须回显）──'
+BLOCK_EVIDENCE = '── Stage2 证据层与关闭式引用目录（只用于绑定）──'
 
 
 def project_blueprints_for_planner(

@@ -157,6 +157,7 @@ export function useStage4Screen() {
     ordinal,
     chapters: d?.chapters ?? [ordinal],
     identity,
+    structureSubject: d?.structure_subject_sha256 ?? null,
     ctxMissing: !!d && !identity && ctx === null,
     selScene,
     toggleScene: (i: number) => setSelScene((cur) => cur === i ? null : i),
@@ -174,6 +175,7 @@ export function useStage4Screen() {
         ' 字 → 预算 ' + (budgetTotal || '—') + ' 字'
       : '',
     strategy: d?.reconstruction_strategy ?? '',
+    structureRows: d?.index ?? [],
     index: (d?.index ?? []).map((row) => ({
       no: chNo(row.output_ordinal),
       ordinal: row.output_ordinal,

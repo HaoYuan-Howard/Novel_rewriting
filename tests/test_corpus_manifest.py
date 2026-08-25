@@ -13,6 +13,7 @@ import pytest
 from pydantic import ValidationError
 
 from contracts.artifacts import ARTIFACT_PATHS
+from contracts.invariants import NODES
 from contracts.schema import (
     CorpusArtifactEntry, CorpusLedgerSummary, CorpusManifest,
     CorpusSkipExpectation, LedgerTokenSummary, artifact_spec, encode_artifact,
@@ -119,6 +120,49 @@ def _manifest_raw() -> dict:
         'books': books,
         'skip_allowlist': [],
     }
+
+
+def test_current_corpus_tracks_both_paid_stage4_phases_and_their_outputs():
+    paid_nodes = tuple(node for node, spec in NODES.items() if spec.paid)
+    assert CURRENT_CORPUS_PAID_NODES == paid_nodes
+    assert tuple(
+        node for node in CURRENT_CORPUS_PAID_NODES if NODES[node].stage == 'stage4'
+    ) == ('stage4.design', 'stage4.plan')
+    assert len(CURRENT_CORPUS_BOOKS) * len(CURRENT_CORPUS_PAID_NODES) == 16
+
+    stage4_paid_outputs = {
+        rel
+        for node in ('stage4.design', 'stage4.plan')
+        for rel in NODES[node].produces
+    }
+    assert stage4_paid_outputs == {
+        ARTIFACT_PATHS['stage4.blind_candidate'],
+        ARTIFACT_PATHS['stage4.evidence_binding'],
+        ARTIFACT_PATHS['stage4.plan_chapters'],
+    }
+    for _sid, chapters in CURRENT_CORPUS_BOOKS:
+        assert stage4_paid_outputs <= required_current_corpus_artifacts(chapters)
+
+
+@pytest.mark.parametrize('rel', [
+    ARTIFACT_PATHS['stage4.blind_candidate'],
+    ARTIFACT_PATHS['stage4.evidence_binding'],
+])
+def test_manifest_rejects_a_missing_stage4_intermediate(rel):
+    raw = _manifest_raw()
+    artifacts = raw['books'][0]['artifacts']
+    raw['books'][0]['artifacts'] = [item for item in artifacts if item['rel'] != rel]
+    assert len(raw['books'][0]['artifacts']) == len(artifacts) - 1
+    with pytest.raises(ValidationError, match='required artifacts'):
+        CorpusManifest.model_validate(raw)
+
+
+def test_manifest_does_not_let_stage4_plan_ledger_rows_replace_design():
+    raw = _manifest_raw()
+    nodes = raw['books'][0]['ledger']['nodes']
+    nodes['stage4.plan'] += nodes.pop('stage4.design')
+    with pytest.raises(ValidationError, match='ledger.nodes'):
+        CorpusManifest.model_validate(raw)
 
 
 def test_ledger_summary_preserves_zero_vs_null_and_closes_provider_cache():
@@ -622,7 +666,7 @@ def test_default_collection_keeps_schema_gates_and_carrier_regressions(
         'test_preview_run_and_check_all_use_the_same_numbers',
         'test_system_prompt_contains_every_current_style_word',
         'test_clean_compiled_plan_closes_all_new_scene_hard_rules',
-        'test_targeted_plan_repair_failure_writes_invalid_without_overwriting_formal',
+        'test_revalidate_promotes_the_current_invalid_without_any_llm_client',
         'test_synthetic_stage6_gate_blocks_only_when_every_candidate_is_dirty',
         'test_synthetic_semantic_finding_can_be_marked_without_current_corpus',
         'test_the_current_system_prompt_is_the_rendered_prompt',

@@ -62,14 +62,7 @@ ENUM_BLOCKS: Final[dict[str, str]] = {
     #     里就是一整串字符串（`CHANGE_TYPES_ENUM`），不是元组 join 出来的。
     'PRONOUNS': '／'.join(f'「{p}」' for p in BARE_PRONOUNS),
     'CHANGE_TYPES': CHANGE_TYPES_ENUM,
-    # stage4 计划
-    # ⚠⚠ **这是一对数，两个都必须发下去。** `BANDS` 是**单章**允许的浮动区间、
-    #   `BOOK_BANDS` 是**全书**必须落进的总量带，而它们各自对应一条 HARD
-    #   （`budget_band` / `plan_book_band`）。只发其中一个的下场是确定的：
-    #   只发 `BANDS` ⇒ 模型不知道全书还有一道闸，把每章都顶到 1.2 就整本超；
-    #   只发 `BOOK_BANDS` ⇒ 模型不知道单章的天花板在哪。
-    #   ⚠ 「详略靠单章浮动表达、总量由全书带守住」这句话本身在 `PLAN_SYS` 的篇幅段里，
-    #   两个数在那里必须**同时出现**——测试 `test_plan_prompt_gives_both_bands...` 钉着。
+    # Stage4 预算编译器的确定性取值；A/B 模型都不直接决定整数预算。
     'BANDS': '{:g}~{:g}×'.format(*PLAN_BUDGET_BAND),
     'BOOK_BANDS': '{:g}~{:g}×'.format(*BOOK_BAND),
     # ⚠⚠ **stage4 响应侧的四张表渲染的是【带前缀的键】，不是产物取值。**

@@ -20,7 +20,15 @@ import type {
   AgentRunRequest,
   AgentRunsResponse,
 } from '@/types/agent'
-import { GATE_KEYS, type ActionRef, type ApprovalDoc, type GateKey, type SeenKey } from '@/types/approvals'
+import {
+  GATE_KEYS,
+  type ActionRef,
+  type ApprovalDoc,
+  type GateKey,
+  type SeenKey,
+  type StructureApprovalDecision,
+  type StructureApprovalRequest,
+} from '@/types/approvals'
 import type { EnumsResponse } from '@/types/enums'
 import type { Job, JobLogResponse, JobPreview, JobRequest, JobsResponse } from '@/types/jobs'
 import type { Artifact, NovelOverview, NovelsResponse } from '@/types/novels'
@@ -385,13 +393,43 @@ function lsWrite(key: string, v: unknown): void {
 
 /* ------------------------------------------------------------ 验收记录 */
 
+const MOCK_STRUCTURE_SUBJECT = 'f'.repeat(64)
+
+function enumAt(values: string[], index: number, label: string): string {
+  const value = values[index]
+  if (!value) throw new ApiError('malformed', '/fixtures/enums.json', {
+    message: label + ' 取值面缺少第 ' + (index + 1) + ' 项',
+  })
+  return value
+}
+
+function seededStructureDecision(): StructureApprovalDecision {
+  return {
+    subject_sha256: MOCK_STRUCTURE_SUBJECT,
+    actor: 'mock-reviewer',
+    reason: 'mock 样本已核对全书结构',
+    chapters: [{
+      output_ordinal: SAMPLE_ORDINAL,
+      decision: enumAt(enums().structure_approval_decisions, 0, '结构审批决定'),
+      reason: 'mock 第 3 章结构已核对',
+    }],
+    decided_at: '2026-08-25T00:00:00+00:00',
+  }
+}
+
 function freshDoc(sid: string): ApprovalDoc {
   return {
-    v: 2,
+    v: 3,
     sid,
     gate: { s0: false, s1: false, s2: false, s3: false, s4: false, s5: false, s6: false, s7: false },
     seen: { read: false, global: false },
     writing: false,
+    structure: {
+      state: enumAt(enums().structure_approval_states, 0, '结构审批状态'),
+      current_subject_sha256: null,
+      current_decision: null,
+      history: [],
+    },
     spawns: SPAWN_ON_APPROVE,
   }
 }
@@ -402,12 +440,19 @@ function freshDoc(sid: string): ApprovalDoc {
  *
  */
 function seededDoc(sid: string): ApprovalDoc {
+  const decision = seededStructureDecision()
   return {
-    v: 2,
+    v: 3,
     sid,
     gate: { s0: true, s1: true, s2: true, s3: true, s4: true, s5: true, s6: false, s7: false },
     seen: { read: true, global: true },
     writing: true,
+    structure: {
+      state: enumAt(enums().structure_approval_states, 2, '结构审批状态'),
+      current_subject_sha256: MOCK_STRUCTURE_SUBJECT,
+      current_decision: decision,
+      history: [decision],
+    },
     spawns: SPAWN_ON_APPROVE,
   }
 }
@@ -415,7 +460,7 @@ function seededDoc(sid: string): ApprovalDoc {
 function loadDoc(sid: string): ApprovalDoc {
   const got = lsRead<ApprovalDoc>('approvals.' + sid)
   // spawns 是服务端的事，存盘的旧记录一律用当前这份覆盖
-  if (got && got.v === 2) return { ...got, spawns: SPAWN_ON_APPROVE }
+  if (got && got.v === 3) return { ...got, spawns: SPAWN_ON_APPROVE }
   const seed = sid === SAMPLE_SID ? seededDoc(sid) : freshDoc(sid)
   lsWrite('approvals.' + sid, seed)
   return seed
@@ -1300,18 +1345,73 @@ export const mockApi: Api = {
   getApprovals: (sid) => later(loadDoc(sid)),
 
   approveGate: (sid, key: GateKey) => {
+    if (key === 's4') {
+      return fail(new ApiError('server', '/novels/' + sid + '/approvals/gate/s4', {
+        message: 'Stage4 只接受带完整 subject 与逐章理由的专用结构裁决',
+      }))
+    }
     const doc = loadDoc(sid)
     return later(saveDoc({ ...doc, gate: { ...doc.gate, [key]: true } }))
   },
 
+  approveStructure: (sid, request: StructureApprovalRequest) => {
+    const doc = loadDoc(sid)
+    const subject = doc.structure.current_subject_sha256
+    const expectedChapters = doc.structure.current_decision?.chapters
+      .map((row) => row.output_ordinal) ?? [SAMPLE_ORDINAL]
+    const submittedChapters = request.chapters.map((row) => row.output_ordinal)
+    if (subject === null || request.subject_sha256 !== subject) {
+      return fail(new ApiError('server', '/novels/' + sid + '/approvals/structure', {
+        message: 'Stage4 结构审批对象已变化；请刷新后重审',
+      }))
+    }
+    if (JSON.stringify(submittedChapters) !== JSON.stringify(expectedChapters)) {
+      return fail(new ApiError('server', '/novels/' + sid + '/approvals/structure', {
+        message: '结构裁决章集必须精确等于当前计划',
+      }))
+    }
+    const accepted = enumAt(enums().structure_approval_decisions, 0, '结构审批决定')
+    const allAccepted = request.chapters.every((row) => row.decision === accepted)
+    const decision: StructureApprovalDecision = {
+      ...request,
+      chapters: request.chapters.map((row) => ({ ...row })),
+      decided_at: new Date().toISOString(),
+    }
+    const gate = { ...doc.gate, s4: allAccepted }
+    if (!allAccepted) {
+      gate.s5 = false
+      gate.s6 = false
+      gate.s7 = false
+    }
+    return later(saveDoc({
+      ...doc,
+      gate,
+      writing: allAccepted ? doc.writing : false,
+      structure: {
+        state: enumAt(
+          enums().structure_approval_states,
+          allAccepted ? 2 : 3,
+          '结构审批状态',
+        ),
+        current_subject_sha256: subject,
+        current_decision: decision,
+        history: [...doc.structure.history, decision],
+      },
+    }))
+  },
+
   backfillApprovals: (sid) => {
     const doc = loadDoc(sid)
-    const backfilled = GATE_KEYS.filter((key) => !doc.gate[key])
+    const backfillable = GATE_KEYS.slice(0, 4)
+    const backfilled = backfillable.filter((key) => !doc.gate[key])
     const approvals = saveDoc({
       ...doc,
-      gate: Object.fromEntries(GATE_KEYS.map((key) => [key, true])) as ApprovalDoc['gate'],
+      gate: {
+        ...doc.gate,
+        ...Object.fromEntries(backfillable.map((key) => [key, true])),
+      },
       seen: { read: true, global: true },
-      writing: true,
+      writing: doc.gate.s4 ? doc.writing : false,
     })
     return later({ approvals, backfilled })
   },

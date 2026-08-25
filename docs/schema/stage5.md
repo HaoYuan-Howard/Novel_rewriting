@@ -154,21 +154,24 @@ Stage6、Stage7 与最终交付的共同闸。旧报告不得驱动新付费动�
 章集合上零成本重跑 `stage5.review`。旧 Review v1 仍含
 `mode/mode_dir`；现役 v2 删除这两格，由 producer 免费重建，不做迁移。
 
-## 四、审批服务记录：HTTP v2，盘上 v3
+## 四、审批服务记录：HTTP v3，盘上 v4
 
-`ApprovalDoc.v=2` 是 HTTP 公共视图版本，字段为 `sid`、完整 `gate`、完整 `seen`、
-`writing` 与 `spawns`；它不再暴露 `deep`。`POST .../approvals/deep` 路由和
-`DeepSelectionRequest` 已退役，写作授权只表达“允许当前 canonical 全书写作”。
+`ApprovalDoc.v=3` 是 HTTP 公共视图版本，字段为 `sid`、完整 `gate`、完整 `seen`、
+`writing`、typed `structure` 与 `spawns`；它不再暴露 `deep`。`structure` 明示当前结构主体、
+逐章 `accept / request_replan` 决定、历史与五态，且 `gate.s4=true` 只可能来自当前主体的
+全章 `accept`。`POST .../approvals/deep` 路由和 `DeepSelectionRequest` 已退役；结构批准与
+writing 授权是两个独立目的、两份 proof，后者只表达“允许当前 canonical 全书写作”。
 
 `<base>/_service/approvals/<sid>.json` 不是产物，现役内部记录是
-`_ApprovalRecordV3(v=3)`：完整 gate / seen、`writing` 及各自 current-subject proof。
-proof 绑定根 `clean_text` SHA-1、正式主体完整 SHA-256 与决定面规范 SHA-256；bool 必须与 proof
-是否存在逐格一致。
+`_ApprovalRecordV4(v=4)`：完整 gate / seen、typed 结构决定与历史、`writing` 及各自
+current-subject proof。proof 绑定根 `clean_text` SHA-1、正式主体完整 SHA-256 与决定面规范
+SHA-256；bool 必须与 proof 是否存在逐格一致。结构 subject 或计划完整字节变化都会使 s4
+即时失效，writing 与下游 gate 随之关闭。
 
-旧 `_ApprovalRecordV2Legacy` 只供显式 backfill 读取，普通 GET / 启动绝不静默迁移。只有旧
-`deep` 恰等于当前全部计划章、旧 deep/writing proof 与当前盘面完全相符、前置 gate current
-时，backfill 才把它收敛成 v3 的无选臂 writing 授权；含 shallow 分配就清空 writing 与 s5
-以后决定。v1 或损坏记录只能显式 reset/backfill；已有 Stage5 工作时 reset 受保护。
+旧 `_ApprovalRecordV2Legacy` / `_ApprovalRecordV3Legacy` 只供显式 backfill 读取，普通 GET /
+启动绝不静默迁移。v3 没有 typed Stage4 结构裁决，最多保留能按当前盘面对证的 s0～s3；不得
+凭旧 s4 或 writing 推造逐章决定，s4、writing 与 s5～s7 一律清空。v2 同样只迁移能对证的
+前置 gate；v1 或损坏记录只能显式 reset/backfill，已有 Stage5 工作时 reset 受保护。
 
 ## 五、其余产物与 `draft.md`
 

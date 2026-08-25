@@ -9,6 +9,7 @@ import { ChapterStrip } from '@/components/ui/ChapterStrip'
 import { Mono } from '@/components/ui/Mono'
 import { Panel, PaneHeader } from '@/components/ui/Panel'
 import { cx } from '@/lib/cx'
+import { StructureApprovalPanel } from './StructureApprovalPanel'
 import { useStage4Screen, type PlanSceneView } from './useStage4Screen'
 
 /**
@@ -22,18 +23,23 @@ export function Stage4Screen() {
   const { hasSample } = useSampleCoverage()
 
   return (
-    <ScreenFrame screen="stage4" onJumpChapter={(n) => nav('/n/' + vm.sid + '/stage4/' + n)}>
-      <QueryStates
-        q={vm.query}
-        loadingLabel="读重构计划"
-        missing={{
-          title: '计划 ↔ 写作上下文',
-          chapters: vm.chapters,
-          ordinal: vm.ordinal,
-          path: 'stage4',
-        }}
+    <>
+      <ScreenFrame
+        screen="stage4"
+        showGate={false}
+        onJumpChapter={(n) => nav('/n/' + vm.sid + '/stage4/' + n)}
       >
-        {() => (
+        <QueryStates
+          q={vm.query}
+          loadingLabel="读重构计划"
+          missing={{
+            title: '计划 ↔ 写作上下文',
+            chapters: vm.chapters,
+            ordinal: vm.ordinal,
+            path: 'stage4',
+          }}
+        >
+          {() => (
           <section className="flex flex-col">
             <header className="sticky top-0 z-10 flex flex-col gap-12 border-b border-line bg-sunken-3 px-30 pt-20 pb-14">
               <div className="flex items-end justify-between gap-24">
@@ -191,9 +197,18 @@ export function Stage4Screen() {
               }
             />
           </section>
-        )}
-      </QueryStates>
-    </ScreenFrame>
+          )}
+        </QueryStates>
+      </ScreenFrame>
+      {vm.query.data ? (
+        <StructureApprovalPanel
+          rows={vm.structureRows}
+          identity={vm.identity}
+          viewSubject={vm.structureSubject}
+          onRefreshView={vm.query.refetch}
+        />
+      ) : null}
+    </>
   )
 }
 

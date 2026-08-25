@@ -167,12 +167,37 @@ def _ctx4(plan: dict) -> dict:
     }]}
 
 
+def _phase_links4(*, mismatch: bool = False) -> tuple:
+    from contracts.artifacts import STAGE4_BLIND_CANDIDATE, STAGE4_EVIDENCE_BINDING
+    from novel.stages.stage4.phase_binding import PhaseArtifactLink
+
+    expected = 'a' * 64
+    return (
+        PhaseArtifactLink(
+            provenance_field='blind_candidate_sha256',
+            key=STAGE4_BLIND_CANDIDATE,
+            expected_sha256=expected,
+            now_sha256=('b' * 64 if mismatch else expected),
+            state=('mismatch' if mismatch else 'match'),
+        ),
+        PhaseArtifactLink(
+            provenance_field='evidence_binding_sha256',
+            key=STAGE4_EVIDENCE_BINDING,
+            expected_sha256=expected,
+            now_sha256=expected,
+            state='match',
+        ),
+    )
+
+
 def _find4(plan: dict, *, ctx: dict | None = None,
-           ctx_link: tuple[str, str] = ('ok', 'same plan')) -> list:
+           ctx_link: tuple[str, str] = ('ok', 'same plan'),
+           phase_links: tuple | None = None) -> list:
     from novel.stages.stage4 import checks
     outcomes = checks.check(
         plan, blueprints=_BPS4, main_text=_MAIN4,
-        ctx=_ctx4(plan) if ctx is None else ctx, ctx_link=ctx_link)
+        ctx=_ctx4(plan) if ctx is None else ctx, ctx_link=ctx_link,
+        phase_links=_phase_links4() if phase_links is None else phase_links)
     return [finding_ for outcome in outcomes for finding_ in outcome.findings]
 
 
@@ -217,6 +242,8 @@ def _bad_plan4(rule: str) -> list:
     elif rule == 'plan_book_band':
         base = sum(scene['budget_chars'] for scene in scenes)
         scenes[-1]['budget_chars'] += round(base * 1.15) - base
+    elif rule == 'structure_vector':
+        chapter['structure_decision']['computed_change_kinds'] = ['entry_anchor']
     elif rule == 'style_words':
         plan['reconstruction_strategy'] = '用张力强化整章'
     else:
@@ -290,10 +317,12 @@ CASES: dict[str, Case] = {
         'one_to_one', 'ordinal_seq', 'empty_chapter', 'semantic_contract',
         'fact_ref', 'fact_coverage', 'causal_closure', 'state_closure',
         'material_coverage', 'scene_transition', 'goal_landing', 'budget_int',
-        'budget_band', 'plan_book_band', 'style_words',
+        'budget_band', 'plan_book_band', 'structure_vector', 'style_words',
     )},
     'context_link': Case('stage4', lambda: _find4(
         _clean_plan4(), ctx_link=('stale', '上下文照的是另一版计划'))),
+    'phase_artifact_link': Case('stage4', lambda: _find4(
+        _clean_plan4(), phase_links=_phase_links4(mismatch=True))),
     **{rule: Case('stage4', lambda rule=rule: _bad_context4(rule)) for rule in (
         'ctx_facts_exact', 'ctx_name_attested', 'ctx_secret_gate',
         'ctx_stage_explicit', 'ctx_hinge_delivered',

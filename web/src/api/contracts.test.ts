@@ -1,6 +1,6 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { qk } from './queryKeys'
-import { adaptNovel, splitLog } from './endpoints'
+import { adaptNovel, realApi, splitLog } from './endpoints'
 import { projectGlobalSpoilers, SPOILER_PLACEHOLDER } from './spoilers'
 import type { GlobalFactEvidence, Stage2Global } from '@/types/stages'
 
@@ -72,6 +72,45 @@ function globalFixture(): Stage2Global {
 }
 
 describe('request-shaped cache and diagnostics', () => {
+  it('sends the full typed Stage4 decision through the one real HTTP seam', async () => {
+    const subject = 'a'.repeat(64)
+    const request = {
+      subject_sha256: subject,
+      actor: 'reviewer-a',
+      reason: '已逐章核对结构',
+      chapters: [{ output_ordinal: 1, decision: 'accept', reason: '本章可执行' }],
+    }
+    const response = {
+      v: 3,
+      sid: 'book /1',
+      gate: {
+        s0: true, s1: true, s2: true, s3: true,
+        s4: false, s5: false, s6: false, s7: false,
+      },
+      seen: { read: true, global: true },
+      writing: false,
+      structure: {
+        state: 'missing', current_subject_sha256: subject,
+        current_decision: null, history: [],
+      },
+      spawns: {},
+    }
+    const send = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(
+      JSON.stringify(response),
+      { status: 200, headers: { 'Content-Type': 'application/json' } },
+    ))
+
+    await expect(realApi.approveStructure('book /1', request)).resolves.toEqual(response)
+    expect(send).toHaveBeenCalledWith(
+      '/api/novels/book%20%2F1/approvals/structure',
+      expect.objectContaining({
+        method: 'POST',
+        headers: expect.objectContaining({ 'X-Novel-UI': '1' }),
+        body: JSON.stringify(request),
+      }),
+    )
+  })
+
   it('includes runtime chapter args in preview cache identity', () => {
     const base = { kind: 'stage5.write', label: '写', extra: null, sid: 's' }
     expect(qk.jobPreview({ ...base, args: ['--chapters', '1'] })).not.toEqual(

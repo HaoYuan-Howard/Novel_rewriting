@@ -125,6 +125,7 @@ Stage 3/5 各只有一条生产 prompt 路径，前端和调用方无需也不�
 | `GET /api/novels/:sid/approvals` | `ApprovalDoc` | 新 |
 | `POST /api/novels/:sid/approvals/gate/:key` | `ApprovalDoc` | 新 |
 | `POST /api/novels/:sid/approvals/seen/:key` | `ApprovalDoc` | 新 |
+| `POST /api/novels/:sid/approvals/structure` | `ApprovalDoc`（请求体 `StructureApprovalRequest`：完整结构 subject SHA-256、actor、总理由与恰好覆盖全书的逐章 `accept / request_replan`） | 新；typed Stage4 结构裁决，提交本身不启动作业 |
 | `POST /api/novels/:sid/approvals/writing` | `ApprovalDoc` | 新 |
 | `POST /api/novels/:sid/approvals/reset` | `ApprovalDoc` | 新 |
 | `POST /api/novels/:sid/approvals/backfill` | `ApprovalBackfillResult`（按盘面显式补录，不在 GET 时静默发生） | 新 |
@@ -266,7 +267,7 @@ v2 正式产物存在且可读时才同时出现；半块在没有合法 produce
 | `NovelList` | `base` · `novels[]`（`NovelOverview`） | 抓包 `novels.json` 的顶层就是 `{base, novels}`。⚠ **复用 `NovelOverview`，不另造一张轻量清单**——原型 `Web/novels.py` 那张第二清单的代价是 stage5 被迫整个排除在外，于是「有没有陈旧产物」那个徽章不覆盖成稿 |
 | `TrashNovelResult` | `sid` · `title` · `trash_id` · `trash_rel` | `novel/orchestrator/trash.py` 的 CLI 子进程完成同盘移动后返回；`trash_rel` 是可恢复位置，不把“从语料库消失”偷换成“字节已永久销毁” |
 | `ApprovalBackfillResult` | `approvals` · `backfilled[]` | `backfilled` 是本次**按正式盘面补录**的 gate id，空数组表示无事可补；界面必须明确这些不是用户逐屏点过的验收记录 |
-| `ApprovalDoc` | `v=2` · `sid` · `gate` · `seen` · `writing` · `spawns` | HTTP v2 不等于 `_service/approvals/<sid>.json` 的盘上 v3；公共视图不再含 `deep`，writing 只授权 current canonical 全书写作。旧 v2 内部记录仅由显式 backfill 收敛，普通 GET 不迁移 |
+| `ApprovalDoc` | `v=3` · `sid` · `gate` · `seen` · `writing` · `structure` · `spawns` | HTTP v3 不等于 `_service/approvals/<sid>.json` 的盘上 v4。`structure` 给出 current subject、typed 当前裁决、历史与 `unavailable / missing / accepted / replan_requested / expired` 状态；`gate.s4=true` 只可能来自当前 `accepted` 裁决。公共视图不再含 `deep`，writing 只授权 current canonical 全书写作。旧 v2/v3 内部记录仅由显式 backfill 收敛，普通 GET 不迁移 |
 | `JobList` | `jobs[]`（`JobRecord`） | 抓包 `jobs.json` 就是 `{"jobs":[]}`——**一个样本都没有**，所以元素形状只能从 `_orchestration.md` 来 |
 | `LogChunk` | `text` · `next_byte` | 按**字节**续读。⚠ 中文一字跨 3 字节，**只在读的一侧解码**（写的一侧按字节追加，见 `_orchestration.md`）。`next_byte` 原样回传给下一次 `?offset=` |
 | `LogStreamEvent` | `text` · `next_byte` · `done` · `state` | SSE 的 `id` 与 `next_byte` 相同；普通 `log` 事件为 `done=false,state=null`，唯一的 `end` 事件为 `done=true,state=ok|landed_red|failed|unknown` 并随即释放连接。断线时浏览器用 `Last-Event-ID` 续读；显式 query offset 与它取较大者，避免刷新倒退 |
@@ -330,26 +331,27 @@ S-08（ctx 不在仍 200，`materials=null`）。
 
 ## 五d、`Stage4View` —— S-07 计划 ↔ 写作上下文
 
-⚠ **没跑过 stage4 时本屏也有内容**（`04_delivery.md:133`）：`identity_plan=true`，
+⚠ **没跑过 stage4 时本屏也有内容**（`web/DELIVERY.md` §3）：`identity_plan=true`，
 计划与上下文都是**本次现算的恒等基线**（不落盘）——「如果计划什么都不改，
-写手手里会有什么」。恒等基线没有落盘来源账 ⇒ `_provenance` / `_ctx_provenance`
-必须为 `null`（后置条件）。计划在而 ctx 不在 ⇒ 200 且 `ctx_chapter=null`
+写手手里会有什么」。恒等基线没有可审批的正式主体 ⇒ `structure_subject_sha256`、
+`_provenance` / `_ctx_provenance` 必须为 `null`（后置条件）。计划在而 ctx 不在 ⇒ 200 且 `ctx_chapter=null`
 （右半边缺席，`ctx_state` 说明处境）。
 
 | 字段 | 类型 | 必填 | 说明 |
 |---|---|---|---|
 | `identity_plan` | 布尔 | 是 | `true` = 本屏是恒等基线。此时计划侧三个 typed goal 的 `intent` / `fact_refs[]` 指向恒等事实，**不是真决策** |
+| `structure_subject_sha256` | SHA-256 或 null | 是 | 正式计划时由**本次读出的同一个 `PlanChapters` 对象**计算，并与 `index[]` / `plan_chapter` 同快照；恒等基线只能为 null。它标识完整 canonical subject，但本 view **不是该 subject 的逐字段序列化**。前端只有在它与 `ApprovalDoc.structure.current_subject_sha256` 完全相同时才可提交结构裁决，避免看 A 行却给 B 主体签字 |
 | `reconstruction_strategy` / `chapters` / `ordinal` | | 是 | `ordinal ∈ chapters`（后置条件） |
-| `index[]` | 数组 | 是 | 章索引；每行带 `chapter_goal`，供深/浅选章一次看全，不额外发 N 次请求。⚠ **没有 `in_band` / `style_hits`**——那是判据结论，唯一来源 `/check/stage4`（`R-11.4`），要并排显示就去 join 那份报告。`hidden=null` = ctx 不在盘上**判不了**，不编 0 |
-| `plan_chapter` | 对象 | 是 | 三个 goal 为 `{intent,fact_refs[],rationale?}`；`beats[]` 是盘上 `segments[]` 的展示投影，并保留 producer-owned `slot`。`budget_chars=null` 只出现在恒等基线上：算不出源字数的拍**不估算、不拿邻居补** |
-| `ctx_chapter` | 对象 或 null | 是 | 写手实际拿到的任务书。内容顺序以 `segments[]` / `segments[].slot` 为准；typed goal 下发时剥掉 `prompt_private` 的 `rationale`，只发送 `intent` 与可复算 `fact_refs[]` |
+| `index[]` | 数组 | 是 | 章索引；每行带 `chapter_goal`、完整 `structure_decision`、预算、场数与隐藏材料数，供一次提交时核对全章集合与逐章裁决，不额外发 N 次请求；它**不是**完整 canonical subject 的公开展开。⚠ **没有 `in_band` / `style_hits`**——那是判据结论，唯一来源 `/check/stage4`（`R-11.4`），要并排显示就去 join 那份报告。`hidden=null` = ctx 不在盘上**判不了**，不编 0 |
+| `plan_chapter` | 对象 | 是 | 章级三个 typed goal、`retain/reconstruct` 决定、语义契约、改写 brief 与有序 `scenes[]`；每场只展示公开模型实际下发的 purpose/role/delivery/transition、land/context/turn facts、state refs 与预算。已解析的 stage/material/participant 执行证据在 `ctx_chapter` 可用时从上下文查看，不虚构计划 view 不存在的字段 |
+| `ctx_chapter` | 对象 或 null | 是 | 写手实际拿到的任务书。场景顺序以 `scenes[]` / `scenes[].slot` 为准；只下发执行所需事实、状态与证据，不给 Stage5 重新规划权 |
 | `writer_target` | 二元组 或 null | 是 | 写手被要求的篇幅区间，**与写手同一把尺子**（`prompts.target_band`）；`null` ⇔ `ctx_chapter=null`（同进同出，后置条件） |
 | `plan_state` / `ctx_state` | 对象 | 是 | 两份产物各自的 `ArtifactState` |
 | `_provenance` / `_ctx_provenance` | 对象 或 null | 是 | 两份来源账分两个键出，不合并 |
 
 ## 五e、`Stage5View` —— S-08 成稿 ↔ 材料
 
-⚠ `ctx_exists=false` ⇒ `materials=null`：**不发假材料**（`04_delivery.md:134`，
+⚠ `ctx_exists=false` ⇒ `materials=null`：**不发假材料**（`web/DELIVERY.md` §3，
 后置条件焊死），给「先跑 stage4」——左半边缺席、右半边照常列已有成稿。
 某章无 canonical 稿 ⇒ 200 且 `drafts=[]`（「还没写」不是错误）。
 `planned=null` = 计划读不回来，「该有几章」判不了——与 0 是两件事。
@@ -475,7 +477,7 @@ HTTP 进程只写 `_service/`（一次性人工稿）。
 | `hint` | 串 或 null | 是 | 下一步该做什么 |
 
 ⚠ **`kind` 用类名不用措辞**：前端的四态要求区分「后端没起来 / 这本书没有 / 这一步还没跑」
-（`04_delivery.md` §每屏四态），靠句子前缀去认，一次措辞改动就静默断掉。
+（`web/DELIVERY.md` §5「每屏四态」），靠句子前缀去认，一次措辞改动就静默断掉。
 
 状态码表的唯一落点是 `novel/api/errors.py::STATUS`：**按类精确匹配再沿 MRO 上溯，没有默认格**
 ——`novel/errors.py` 开头写着「不设默认异常」，本表是它在 HTTP 侧的同一条纪律。

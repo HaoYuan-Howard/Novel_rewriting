@@ -39,6 +39,7 @@ from contracts.artifacts import (
     STAGE2_CHAPTER_BLUEPRINTS, STAGE2_GLOBAL_EDIT,
     STAGE2_GLOBAL_GROUNDING, STAGE2_GLOBAL_REVIEW, STAGE2_GLOBAL_REVIEW_DECISIONS,
     STAGE3_STYLE_GROUNDING,
+    STAGE4_BLIND_CANDIDATE, STAGE4_EVIDENCE_BINDING,
     STAGE4_PLAN_CHAPTERS, STAGE4_PLAN_EDIT, STAGE4_WRITER_CONTEXT,
     STAGE4_WRITER_CONTEXT_IDENTITY, STAGE5_CHAPTER, STAGE5_REJECTED_REVISION,
     STAGE5_REVIEW, STAGE5_TRIM_AUDIT, STAGE5_TRIM_RESOLUTION,
@@ -142,8 +143,9 @@ from contracts.schema.stage2 import (
 )
 from contracts.schema.stage3 import Measurable, StyleGrounding, StyleProvenance
 from contracts.schema.stage4 import (
-    BookCharacter, CtxChapter, CtxFacts, CtxGoal, CtxScene, FactRef, PlanChapter,
-    PlanChapters, PlanEdit, PlanGoal, PlanScene, WriterContext,
+    BlindCandidate, BookCharacter, CtxChapter, CtxFacts, CtxGoal, CtxScene,
+    EvidenceBinding, FactRef, PlanChapter, PlanChapters, PlanEdit, PlanGoal,
+    PlanScene, WriterContext,
 )
 from contracts.schema.stage5 import (
     Chapter, ChapterResponse, ChapterSegment, DraftConsumed, GeneratedSegment,
@@ -252,8 +254,10 @@ ARTIFACT_SPECS: dict[str, ArtifactSpec] = {
     # 2026-08-24 Stage3 定性包整批退役：顶层只留 measurable + 免费 provenance。
     # v1 不迁移；普通旧书由免费 producer 重建，已用于实验的两本按归档清单保留历史字节。
     STAGE3_STYLE_GROUNDING: ArtifactSpec(StyleGrounding, 2),
-    STAGE4_PLAN_CHAPTERS: ArtifactSpec(PlanChapters, 2),
-    STAGE4_PLAN_EDIT: ArtifactSpec(PlanEdit, 2),
+    STAGE4_BLIND_CANDIDATE: ArtifactSpec(BlindCandidate),
+    STAGE4_EVIDENCE_BINDING: ArtifactSpec(EvidenceBinding),
+    STAGE4_PLAN_CHAPTERS: ArtifactSpec(PlanChapters, 3),
+    STAGE4_PLAN_EDIT: ArtifactSpec(PlanEdit, 3),
     STAGE4_WRITER_CONTEXT: ArtifactSpec(WriterContext, 2),
     # ⚠ **恒等基线是一份【产物】不是一次 print**（2026-08-12，F3-4）。
     #   `stage4.plan --identity` 必须让「跑过且写手手里有这些」与
@@ -437,6 +441,7 @@ __all__ = [
     'SourceSpan', 'Hinge', 'Narration',
     'GlobalGroundingResponse', 'ChapterBlueprintsResponse', 'RoleSplitResponse',
     'StyleGrounding', 'StyleProvenance', 'Measurable',
+    'BlindCandidate', 'EvidenceBinding',
     'PlanChapters', 'PlanChapter', 'PlanScene', 'FactRef', 'PlanGoal', 'PlanEdit',
     'WriterContext', 'BookCharacter',
     'CtxChapter', 'CtxScene', 'CtxFacts', 'CtxGoal',

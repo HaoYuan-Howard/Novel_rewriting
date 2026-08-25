@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from collections import Counter
+import json
 from typing import Any
 
 from contracts.invariants import (
@@ -14,8 +15,10 @@ from contracts.schema.report import finding
 from novel.report.findings import Outcome, ran, unverifiable
 from novel.stages.stage4.beats import beat_index, verbatim_pieces
 from novel.stages.stage4.measure import (
-    chapter_source_chars, semantic_contract_of, verbatim_share_stats,
+    chapter_source_chars, computed_structure_change_kinds, semantic_contract_of,
+    structure_metrics_of, verbatim_share_stats,
 )
+from novel.stages.stage4.phase_binding import PhaseArtifactLink
 
 _NO_CTX = ('writer_context 不在场或读不回来；这是查不了，不是通过。跑 stage4.context 0 成本重建。')
 _HINGE_FIELDS = tuple(dict.fromkeys(HINGE_GROUPS.values()))
@@ -24,7 +27,9 @@ _HINGE_FIELDS = tuple(dict.fromkeys(HINGE_GROUPS.values()))
 def check(plan: dict[str, Any], *, blueprints: dict[str, Any],
           main_text: list[dict[str, Any]], global_g: dict[str, Any] | None = None,
           ctx: dict[str, Any] | None = None,
+          expected_ctx: dict[str, Any] | None = None,
           ctx_link: tuple[str, str] | None = None, ctx_source: str | None = None,
+          phase_links: tuple[PhaseArtifactLink, ...] | None = None,
           bidx: dict[str, dict[str, Any]] | None = None) -> list[Outcome]:
     if bidx is None:
         bidx = beat_index(blueprints, main_text)
@@ -66,11 +71,8 @@ def check(plan: dict[str, Any], *, blueprints: dict[str, Any],
     goal_bad: list[str] = []
     budget_bad: list[str] = []
     disclosure_reversed: list[str] = []
-    adjacency_total = adjacency_kept = 0
-    nonadjacent_pairs = regrouped_nonadjacent = 0
-    boundary_changed = 0
-    entry_changed = 0
-    redistribution: list[str] = []
+    structure_rows: list[dict[str, Any]] = []
+    structure_vector_bad: list[str] = []
     source_chars, source_cov = chapter_source_chars(main_text, bidx)
     chapter_budget_bad: list[str] = []
 
@@ -166,21 +168,14 @@ def check(plan: dict[str, Any], *, blueprints: dict[str, Any],
             if not math_is_between(total, base * lo, base * hi):
                 chapter_budget_bad.append(f'ch{ordinal}:{total}/{base}')
 
-        source_order = [str(atom.get('fact_id')) for atom in (bp.get('fact_atoms') or [])
-                        if atom.get('obligation') == 'land']
-        for left, right in zip(source_order, source_order[1:]):
-            adjacency_total += 1
-            if left in scene_of and right in scene_of and abs(scene_of[left] - scene_of[right]) <= 1:
-                adjacency_kept += 1
-        for i, left in enumerate(source_order):
-            for right in source_order[i + 2:]:
-                nonadjacent_pairs += 1
-                if scene_of.get(left) == scene_of.get(right):
-                    regrouped_nonadjacent += 1
-        boundary_changed += int(len(scenes) != len(bp.get('beats') or []))
-        if source_order and scenes:
-            entry_changed += int(source_order[0] not in set(scenes[0].get('land_fact_refs') or []))
-        redistribution.append(f'ch{ordinal}:{len(source_order)} facts->{len(scenes)} scenes')
+        structure = structure_metrics_of(bp, chapter)
+        structure_rows.append(structure)
+        expected_vector = computed_structure_change_kinds(structure)
+        got_vector = list(
+            ((chapter.get('structure_decision') or {}).get('computed_change_kinds') or []))
+        if got_vector != expected_vector:
+            structure_vector_bad.append(
+                f'ch{ordinal}:computed={got_vector},expected={expected_vector}')
         for edge in (bp.get('causal_edges') or []):
             before, after = str(edge.get('before')), str(edge.get('after'))
             if before in scene_of and after in scene_of and scene_of[after] < scene_of[before]:
@@ -200,6 +195,7 @@ def check(plan: dict[str, Any], *, blueprints: dict[str, Any],
         ('goal_landing', goal_bad, '首尾目标未落场'),
         ('budget_int', budget_bad, '预算不是正整数'),
         ('budget_band', chapter_budget_bad, '章预算出带'),
+        ('structure_vector', structure_vector_bad, '代码复算结构向量漂移'),
     ):
         outcomes.append(outcome(rule, rows(bad, label), f'{len(chapters)} 章'))
 
@@ -227,6 +223,22 @@ def check(plan: dict[str, Any], *, blueprints: dict[str, Any],
                 style_hits.append(f'ch{chapter.get("output_ordinal")}:{word}')
     outcomes.append(outcome('style_words', rows(style_hits, '纯写法词命中'),
                             f'{len(chapters)} 章策略/brief/purpose'))
+    if phase_links is None:
+        outcomes.append(unverifiable(
+            'phase_artifact_link',
+            '这条调用没有提供 A/B 当前完整字节复核；不能把“未核”报成通过'))
+    else:
+        phase_bad = [
+            (f'{link.key} 的完整 SHA-256 绑定为 {link.state}：'
+             f'expected={link.expected_sha256}, now={link.now_sha256}', [
+                 link.key, link.provenance_field, link.state,
+                 str(link.expected_sha256), str(link.now_sha256),
+             ])
+            for link in phase_links if link.state != 'match'
+        ]
+        scan = ('human origin：不声明 A/B 编译身份，0 条完整字节边'
+                if not phase_links else f'{len(phase_links)} 条 A/B 完整字节边')
+        outcomes.append(outcome('phase_artifact_link', phase_bad, scan))
     if ctx_link is None:
         outcomes.append(unverifiable('context_link', '候选计划尚未组装 context，本趟不判对应关系'))
     else:
@@ -234,13 +246,42 @@ def check(plan: dict[str, Any], *, blueprints: dict[str, Any],
         outcomes.append(outcome('context_link', [] if state == 'ok' else [(detail, [state])],
                                 'plan→writer_context 来源边'))
 
-    outcomes.extend(_context_outcomes(ctx, chapters, bp_of, bidx))
+    outcomes.extend(_context_outcomes(
+        ctx, chapters, bp_of, bidx, expected_ctx=expected_ctx,
+    ))
     stats, over = verbatim_share_stats(plan, bidx)
     outcomes.append(outcome('verbatim_starved', rows(
         [f'ch{o}.scene{i}:{vb}/{budget}' for o, i, vb, budget in over], '逐字材料挤占预算'),
         f'{stats["n"] if stats else 0} 个带逐字材料的场景'))
     outcomes.append(outcome('causal_disclosure', rows(disclosure_reversed, '披露逆因果'),
                             f'{sum(len(bp.get("causal_edges") or []) for bp in bp_of.values())} 条因果边'))
+
+    def metric_rows(section: str) -> str:
+        return json.dumps([
+            {
+                'chapter_ordinal': row.get('chapter_ordinal'),
+                section: row.get(section),
+            }
+            for row in structure_rows
+        ], ensure_ascii=False, sort_keys=True, separators=(',', ':'))
+
+    alignments = []
+    chapter_by = {
+        int(chapter.get('output_ordinal') or 0): chapter for chapter in chapters
+    }
+    for row in structure_rows:
+        ordinal = int(row.get('chapter_ordinal') or 0)
+        decision = (chapter_by.get(ordinal) or {}).get('structure_decision') or {}
+        declared = list(decision.get('declared_change_kinds') or [])
+        computed = computed_structure_change_kinds(row)
+        alignments.append({
+            'chapter_ordinal': ordinal,
+            'mode': decision.get('mode'),
+            'declared_change_kinds': declared,
+            'computed_change_kinds': computed,
+            'unrealized_declared': [value for value in declared if value not in computed],
+            'undeclared_actual': [value for value in computed if value not in declared],
+        })
 
     metrics = {
         'scene_budget_distribution': '；'.join(
@@ -251,11 +292,13 @@ def check(plan: dict[str, Any], *, blueprints: dict[str, Any],
             'n': 0, 'median': None, 'p90': None, 'max': None,
             'threshold': round(1 / VERBATIM_BUDGET_FACTOR, 3),
         }),
-        'adjacency_retention': f'{adjacency_kept}/{adjacency_total}',
-        'nonadjacent_regroup': f'{regrouped_nonadjacent}/{nonadjacent_pairs}',
-        'scene_boundary_change': f'{boundary_changed}/{len(chapters)} 章',
-        'entry_rebuilt': f'{entry_changed}/{len(chapters)} 章',
-        'fact_redistribution': '；'.join(redistribution),
+        'partition_change': metric_rows('partition'),
+        'disclosure_order': metric_rows('order'),
+        'noncontiguous_regroup': metric_rows('noncontiguous'),
+        'anchor_migration': metric_rows('anchors'),
+        'structure_eligibility': metric_rows('eligibility'),
+        'structure_alignment': json.dumps(
+            alignments, ensure_ascii=False, sort_keys=True, separators=(',', ':')),
         'semantic_closure_reading': (
             f'fact={len(coverage_bad)} bad · causal={len(causal_bad)} bad · '
             f'state={len(state_bad)} bad · material={len(material_bad)} bad'),
@@ -273,12 +316,17 @@ def math_is_between(value: float, lo: float, hi: float) -> bool:
 
 def _context_outcomes(ctx: dict[str, Any] | None, plan_chapters: list[dict[str, Any]],
                       bp_of: dict[int, dict[str, Any]],
-                      bidx: dict[str, dict[str, Any]]) -> list[Outcome]:
+                      bidx: dict[str, dict[str, Any]], *,
+                      expected_ctx: dict[str, Any] | None = None) -> list[Outcome]:
     rules = ('ctx_facts_exact', 'ctx_name_attested', 'ctx_secret_gate',
              'ctx_stage_explicit', 'ctx_hinge_delivered')
     if ctx is None:
         return [unverifiable(rule, _NO_CTX) for rule in rules]
     ctx_by = {int(ch.get('output_ordinal') or 0): ch for ch in (ctx.get('chapters') or [])}
+    expected_by = {
+        int(ch.get('output_ordinal') or 0): ch
+        for ch in ((expected_ctx or {}).get('chapters') or [])
+    }
     facts_bad: list[str] = []
     stage_bad: list[str] = []
     secret_bad: list[str] = []
@@ -304,18 +352,34 @@ def _context_outcomes(ctx: dict[str, Any] | None, plan_chapters: list[dict[str, 
                  for atom in (bp.get('fact_atoms') or [])}
         cscenes = list(cch.get('scenes') or [])
         pscenes = list(plan_ch.get('scenes') or [])
+        escenes = list((expected_by.get(ordinal) or {}).get('scenes') or [])
         if len(cscenes) != len(pscenes):
             facts_bad.append(f'ch{ordinal}:scene_count')
             continue
-        for pscene, cscene in zip(pscenes, cscenes):
-            required = [atoms.get(str(ref)) for ref in pscene.get('land_fact_refs') or []]
-            context = [atoms.get(str(ref)) for ref in pscene.get('context_fact_refs') or []]
+        if expected_ctx is not None and len(escenes) != len(pscenes):
+            facts_bad.append(f'ch{ordinal}:expected_scene_count')
+            stage_bad.append(f'ch{ordinal}:expected_scene_count')
+            continue
+        for index, (pscene, cscene) in enumerate(zip(pscenes, cscenes)):
+            expected_scene = escenes[index] if expected_ctx is not None else None
+            # writer_context 的产地会在整棵下发树上把无据 canonical 标签替换成人话。
+            # 守卫必须对照同一产地投影，不能拿替换前 atom.claim 制造假漂移。
+            required = (expected_scene.get('required_facts') if expected_scene is not None else
+                        [atoms.get(str(ref)) for ref in pscene.get('land_fact_refs') or []])
+            context = (expected_scene.get('context_facts') if expected_scene is not None else
+                       [atoms.get(str(ref)) for ref in pscene.get('context_fact_refs') or []])
             if cscene.get('required_facts') != required or cscene.get('context_facts') != context:
                 facts_bad.append(f'ch{ordinal}.{pscene.get("slot")}:facts')
-            stages = [bidx[str(ref)] for ref in pscene.get('stage_refs') or []
-                      if str(ref) in bidx]
-            expected = [{'time_layer': row.get('time_layer'), 'place': row.get('place')}
-                        for row in stages]
+            if expected_scene is not None:
+                expected = [
+                    {'time_layer': row.get('time_layer'), 'place': row.get('place')}
+                    for row in (expected_scene.get('stages') or [])
+                ]
+            else:
+                stages = [bidx[str(ref)] for ref in pscene.get('stage_refs') or []
+                          if str(ref) in bidx]
+                expected = [{'time_layer': row.get('time_layer'), 'place': row.get('place')}
+                            for row in stages]
             got = [{'time_layer': row.get('time_layer'), 'place': row.get('place')}
                    for row in (cscene.get('stages') or [])]
             if got != expected:

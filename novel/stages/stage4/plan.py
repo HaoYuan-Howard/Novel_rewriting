@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-plan.py —— stage4 的两个节点。**一个 stage 两份产物、两个节点、两节需求。**
+plan.py —— Stage4 v3 的三个节点。**两次付费调用、一次确定性上下文组装。**
 
-  · `stage4.plan`（付费，`R-5`）  → `stage4/plan_chapters.json`
+  · `stage4.design`（付费，`R-5`）→ `stage4/blind_candidate.json`
+  · `stage4.plan`（付费，`R-5`）  → `stage4/evidence_binding.json` + 编译计划
   · `stage4.context`（0 成本，`R-6`）→ `stage4/writer_context.json`
 
 【落盘闸门照 stage3 不照 stage6】本层一次产**一份** ⇒ **任何一条 hard 就 `.INVALID`**。
@@ -18,41 +19,57 @@ plan.py —— stage4 的两个节点。**一个 stage 两份产物、两个节�
 """
 from __future__ import annotations
 
-import copy
 import json
-import re
 
 from contracts.artifacts import (
     STAGE1_MAIN_TEXT, STAGE2_CHAPTER_BLUEPRINTS, STAGE2_GLOBAL_GROUNDING,
-    STAGE4_PLAN_CHAPTERS, STAGE4_PLAN_EDIT, STAGE4_WRITER_CONTEXT,
-    STAGE4_WRITER_CONTEXT_IDENTITY,
+    STAGE4_BLIND_CANDIDATE, STAGE4_EVIDENCE_BINDING, STAGE4_PLAN_CHAPTERS,
+    STAGE4_PLAN_EDIT, STAGE4_WRITER_CONTEXT, STAGE4_WRITER_CONTEXT_IDENTITY,
 )
 
 from typing import Any
 
+from contracts.invariants import (
+    BLIND_ALIAS_ALGORITHM, RESPONSE_TEMPORAL_LINKS, STRUCTURE_METRIC_CONTRACT,
+    STYLE_WORDS,
+)
+from contracts.schema import artifact_spec
 from contracts.schema.report import CheckReport
 from contracts.schema.stage1 import MainText
 from contracts.schema.stage2 import ChapterBlueprints, GlobalGrounding
-from contracts.schema.stage4 import CtxProvenance, PlanChapters, PlanEdit, WriterContext
+from contracts.schema.stage4 import (
+    BlindCandidate, BlindCandidateProvenance, BlindPlanResponse,
+    CtxProvenance, EvidenceBinding, EvidenceBindingProvenance,
+    EvidenceBindingResponse, PlanChapters, PlanEdit, PlanProvenance, WriterContext,
+)
 from novel import paths, prov
 from novel.errors import (
-    GateBlocked, ProvenanceRefused, RefusedByStructure, TerminalState, UpstreamMissing,
+    ArtifactUnreadable, GateBlocked, RefusedByStructure, TerminalState,
+    UpstreamMissing,
 )
-from novel.llm.ledger import combine_usage
 from novel.report import build
 from novel.report.findings import Outcome
 from novel.run import RunContext
 from novel.stages.stage4 import checks, prompts
+from novel.stages.stage4.blind import (
+    BlindPlanError, build_blind_projection,
+    build_evidence_catalog, candidate_subject_sha256,
+    compile_blind_candidate, merge_evidence_bindings,
+    validate_infeasible_binding,
+)
 from novel.stages.stage4.beats import beat_index
 from novel.stages.stage4.context import build_writer_context, display_names_at
 from novel.stages.stage4.fact_refs import catalog as fact_catalog, validate_plan_refs
 from novel.stages.stage4.measure import (
-    adopt_plan_response, budget_basis, encode_plan_baseline, identity_plan,
-    source_chars_table,
+    adopt_plan_response, budget_basis, identity_plan, source_chars_table,
 )
+from novel.stages.stage4.phase_binding import verify_plan_phase_artifacts
+from novel.stages.stage4.phase_state import current_infeasible_binding
 from novel.store import ArtifactStore
 
 REL = STAGE4_PLAN_CHAPTERS
+CANDIDATE_REL = STAGE4_BLIND_CANDIDATE
+BINDING_REL = STAGE4_EVIDENCE_BINDING
 CTX_REL = STAGE4_WRITER_CONTEXT
 
 #: 写作上下文的**产地节点**。`consumption.producer_node(CTX_REL)` 复算 freshness 时
@@ -107,6 +124,22 @@ class _Upstreams:
         self.bidx = beat_index(self.blueprints, self.main_text)
 
 
+class _DesignUpstream:
+    """Stage4A 的唯一上游边：冻结的 Stage2 真相图。
+
+    这个类故意与 ``_Upstreams`` 分开。只要 A 的构造路径实例化后者，正文、源 beat、
+    材料或 grounding 就已经在进入 prompt 之前被读进了同一运行上下文，来源账也会
+    说出一条过宽的边；“提示词里不用它”无法恢复真正的隔离。
+    """
+
+    def __init__(self, ctx: RunContext, store: ArtifactStore):
+        if not store.exists(BLUEPRINTS):
+            raise UpstreamMissing(
+                f'{BLUEPRINTS} 不在盘上——stage4.design 只消费冻结的 Stage2 真相图')
+        self.blueprints = store.read(
+            ChapterBlueprints, BLUEPRINTS).model_dump(by_alias=True)
+
+
 # ── 判定与报告 ──────────────────────────────────────────────────────────────
 
 def _ctx_link(store: ArtifactStore, plan_raw: dict[str, Any]) -> tuple[str, str]:
@@ -144,10 +177,40 @@ def _ctx_source_line(store: ArtifactStore) -> str:
     """
     if not store.exists(CTX_REL):
         return f'{CTX_REL} 不在盘上 —— 它的来源账无从谈起'
-    fr = store.freshness(CTX_REL)
+    try:
+        fr = store.freshness(CTX_REL)
+    except ArtifactUnreadable as exc:
+        return f'{CTX_REL} 的来源账读不回来（{exc}）'
     ghosts = (f'；⚠ 其中 {len(fr.ghosts)} 条指向已不在盘上的文件：{list(fr.ghosts)}'
               if fr.ghosts else '')
     return (f'{CTX_REL}：{len(fr.edges)} 条上游边，判定 `{fr.state}`（{fr.reason}）{ghosts}')
+
+
+def _write_producer_artifact(
+    store: ArtifactStore,
+    rel: str,
+    artifact: PlanChapters | WriterContext,
+) -> Any:
+    """Stage4 producer 按 live schema 状态选择正式写入口。
+
+    已登记的 shape break（当前正式计划为 v3）：低版本字节不是当前业务轮次，不能经普通
+    ``write`` 把旧 INVALID 归进 current ``_rounds``。只有 live 正式稿/INVALID
+    全为旧版本时才走专用替换口；全为 current 时保留普通写语义。混版表示已有
+    current 问题稿或盘面被部分改写，必须先走对应恢复口，不能由一次 producer
+    重跑静默抹掉审计。
+    """
+    spec = artifact_spec(rel)
+    assert spec is not None
+    invalid_rel = paths.invalid_of(rel)
+    versions = (store.schema_version_of(rel), store.schema_version_of(invalid_rel))
+    present = tuple(version for version in versions if version is not None)
+    if present and all(version < spec.current_version for version in present):
+        return store.replace_shape_break(rel, artifact)
+    if any(version != spec.current_version for version in present):
+        raise ArtifactUnreadable(
+            f'{rel} 的 live 正式稿/INVALID 版本混杂或来自未来：{versions}；'
+            '拒绝覆盖，请先按活动 INVALID 的恢复入口收口')
+    return store.write(rel, artifact)
 
 
 def _judge(store: ArtifactStore, plan_raw: dict[str, Any], up: _Upstreams, *,
@@ -161,15 +224,26 @@ def _judge(store: ArtifactStore, plan_raw: dict[str, Any], up: _Upstreams, *,
     如实走 ``unver``，候选落稳并重建 context 后再以 ``with_ctx_link=True`` 跑后置条件。
     """
     ctx_raw: dict[str, Any] | None = None
+    expected_ctx: dict[str, Any] | None = None
     if with_ctx_link and store.exists(CTX_REL):
         try:
             ctx_art, ctx_raw = store.read_own(WriterContext, CTX_REL)
         except Exception:                                    # noqa: BLE001
             ctx_raw = None                                   # 读不回来 ⇒ 那四条走 `unver`
+        if ctx_raw is not None:
+            assert up.global_g is not None
+            expected_ctx = build_writer_context(
+                plan_raw, up.global_g, up.blueprints, up.main_text,
+            ).ctx
     return checks.check(
         plan_raw, blueprints=up.blueprints, main_text=up.main_text, global_g=up.global_g,
-        ctx=ctx_raw, ctx_link=_ctx_link(store, plan_raw) if with_ctx_link else None,
-        ctx_source=_ctx_source_line(store), bidx=up.bidx)
+        ctx=ctx_raw, expected_ctx=expected_ctx,
+        ctx_link=_ctx_link(store, plan_raw) if with_ctx_link else None,
+        ctx_source=(_ctx_source_line(store) if with_ctx_link
+                    else '前置计划闸门按契约不读取旧 writer_context 来源账'),
+        phase_links=verify_plan_phase_artifacts(
+            plan_raw, sha256_now=lambda rel: store.full_sha256_or_none(rel)),
+        bidx=up.bidx)
 
 
 def _accounting_of(prov_d: dict) -> dict:
@@ -181,7 +255,7 @@ def _accounting_of(prov_d: dict) -> dict:
     声明一个结构上永远记不上的键，只会让报告上恒挂一行「未记录」。
     """
     return {k: prov_d[k] for k in (
-        'params', 'partial_regen_chapters', 'repairs', 'revalidated', 'gates_skipped'
+        'params', 'revalidated', 'gates_skipped'
     ) if k in prov_d}
 
 
@@ -204,11 +278,12 @@ def _report(ctx: RunContext, store: ArtifactStore, outcomes: list[Outcome],
 
 def _params(up: _Upstreams) -> dict[str, Any]:
     return {
-        'compiler': 'atomic-scenes-v1',
+        'compiler': 'atomic-scenes-v2',
         'fact_atoms': sum(len(bp.get('fact_atoms') or [])
                           for bp in (up.blueprints.get('blueprints') or [])),
         'source_stages': sum(len(bp.get('beats') or [])
                              for bp in (up.blueprints.get('blueprints') or [])),
+        'structure_metric_contract': STRUCTURE_METRIC_CONTRACT,
     }
 
 
@@ -238,30 +313,129 @@ def run_check_only(ctx: RunContext) -> CheckReport:
                    art.provenance.model_dump(by_alias=True), judged_rel=judged)
 
 
-def build_prompt(ctx: RunContext, *, chapters: tuple[int, ...] = ()) -> tuple[str, str]:
-    """`--dry-run`：把这次**要发出去的** `(system, user)` 原样交出来。
-
-    ⚠ 它与真跑**共用同一个构造入口**（`R-11.8`）——否则「预览里看到的」与
-    「真发出去的」是两件事，而那种分家没有任何东西会报错。
-    """
+def _design_request(
+    ctx: RunContext,
+) -> tuple[str, str, ArtifactStore, _DesignUpstream, dict[str, Any], dict[str, Any]]:
+    """Stage4A 预览与真发共用的唯一构造口。"""
     store = ArtifactStore(ctx)
-    up = _Upstreams(ctx, store, need_grounding=True)
+    up = _DesignUpstream(ctx, store)
+    truth, mapping = build_blind_projection(
+        up.blueprints, root_clean_sha1=ctx.root_clean_sha1)
+    system = prompts.blind_design_system()
+    user = prompts.BLOCK_BLIND_TRUTH + '\n' + json.dumps(
+        truth, ensure_ascii=False, sort_keys=True, separators=(',', ':'))
+    return system, user, store, up, truth, mapping
+
+
+def build_design_prompt(ctx: RunContext) -> tuple[str, str]:
+    """`stage4.design --dry-run`：只摊开真正会外发的去序真相图。"""
+    system, user, _store, _up, _truth, _mapping = _design_request(ctx)
+    return system, user
+
+
+def _blind_candidate_problem(
+    compiled: dict[str, Any], truth: dict[str, Any],
+) -> str | None:
+    """A 响应的闭合后置条件；只用 A 已看见的真相图，不偷读证据层。"""
+    expected = {
+        int(chapter.get('chapter_ordinal') or 0): chapter
+        for chapter in (truth.get('chapters') or [])
+    }
+    actual = {
+        int(chapter.get('output_ordinal') or 0): chapter
+        for chapter in (compiled.get('output_chapters') or [])
+    }
+    start_transition = next(
+        key for key, value in RESPONSE_TEMPORAL_LINKS.items() if value == 'start')
+    problems: list[str] = []
+    if sorted(actual) != sorted(expected) or len(actual) != len(
+            compiled.get('output_chapters') or []):
+        problems.append(
+            f'章集不闭合：expected={sorted(expected)},actual={sorted(actual)}')
+    style_texts = [str(compiled.get('reconstruction_strategy') or '')]
+    for ordinal, source in expected.items():
+        chapter = actual.get(ordinal)
+        if chapter is None:
+            continue
+        facts = {
+            str(row.get('fact_alias')): str(row.get('obligation'))
+            for row in (source.get('facts') or [])
+        }
+        land = {alias for alias, obligation in facts.items() if obligation == 'land'}
+        context = {alias for alias, obligation in facts.items() if obligation == 'context'}
+        scenes = list(chapter.get('scenes') or [])
+        landed = [str(alias) for scene in scenes
+                  for alias in (scene.get('land_fact_aliases') or [])]
+        if sorted(landed) != sorted(land):
+            problems.append(
+                f'ch{ordinal} land 必须恰落一次：expected={sorted(land)},got={sorted(landed)}')
+        for index, scene in enumerate(scenes):
+            prefix = f'ch{ordinal}.scene{index + 1}'
+            crefs = set(scene.get('context_fact_aliases') or [])
+            if crefs - context:
+                problems.append(f'{prefix} context 越界：{sorted(crefs - context)}')
+            state_refs = set(scene.get('entry_state_aliases') or []) | set(
+                scene.get('exit_state_aliases') or [])
+            if state_refs - set(facts):
+                problems.append(f'{prefix} state 越界：{sorted(state_refs - set(facts))}')
+            want = start_transition if index == 0 else None
+            transition = scene.get('transition')
+            if (want is not None and transition != want) or (
+                    index > 0 and transition == start_transition):
+                problems.append(f'{prefix} transition={transition}')
+            if index and not set(scene.get('entry_state_aliases') or []).issuperset(
+                    set(scenes[index - 1].get('exit_state_aliases') or [])):
+                problems.append(f'{prefix} 未承接上一场 exit state')
+            style_texts.append(str(scene.get('purpose') or ''))
+        if scenes:
+            if not set(scenes[0].get('entry_state_aliases') or []).issuperset(
+                    set(source.get('entry_state_aliases') or [])):
+                problems.append(f'ch{ordinal} 首场未承接章首状态')
+            if not set(scenes[-1].get('exit_state_aliases') or []).issuperset(
+                    set(source.get('ending_state_aliases') or [])):
+                problems.append(f'ch{ordinal} 末场未闭合章尾状态')
+            for label, scene in (
+                ('open_hook_goal', scenes[0]), ('end_hook_goal', scenes[-1]),
+            ):
+                refs = set((chapter.get(label) or {}).get('fact_aliases') or [])
+                if not refs.intersection(scene.get('land_fact_aliases') or []):
+                    problems.append(f'ch{ordinal}.{label} 没有落到对应首/末场')
+        for label in ('chapter_goal', 'open_hook_goal', 'end_hook_goal'):
+            refs = set((chapter.get(label) or {}).get('fact_aliases') or [])
+            if refs - set(facts):
+                problems.append(f'ch{ordinal}.{label} 越界：{sorted(refs - set(facts))}')
+        style_texts.append(str(chapter.get('chapter_rewrite_brief') or ''))
+    hits = sorted({word for word in STYLE_WORDS
+                   if any(word in text for text in style_texts)})
+    if hits:
+        problems.append(f'盲设计自由文本命中纯写法词：{hits}')
+    return '；'.join(problems[:16]) if problems else None
+
+
+def _blind_validator(truth: dict[str, Any], mapping: dict[str, Any]) -> Any:
+    def validate(response: BlindPlanResponse, _wire: Any) -> str | None:
+        try:
+            compiled = compile_blind_candidate(
+                response.model_dump(by_alias=True), mapping)
+        except BlindPlanError as exc:
+            return str(exc)
+        return _blind_candidate_problem(compiled, truth)
+    return validate
+
+
+def build_prompt(ctx: RunContext, *, chapters: tuple[int, ...] = ()) -> tuple[str, str]:
+    """`stage4.plan --dry-run`：摊开 Stage4B 的冻结候选与证据层。
+
+    v3 第一版不开放定向模型重规划；结构要变必须显式重走 design→plan，人工修订
+    则继续使用 0 成本 ``--apply-edit``。保留参数只为给旧调用点一句清楚的终态。
+    """
     if chapters:
-        _previous, previous_raw = _repair_baseline_artifact(store)
-        targets = _validated_targets(up, chapters)
-        previous_by = _repair_chapter_map(previous_raw, up)
-        outcomes = _judge(store, previous_raw, up, with_ctx_link=False)
-        if strategy_failures := _strategy_hard_findings(outcomes):
-            raise TerminalState(
-                '当前 HARD 命中 reconstruction_strategy，但 --chapters 的单章响应不许改书级策略；'
-                f'请整跑或人工修复策略。命中={strategy_failures[:3]}')
-        ordinal = targets[0]
-        return (prompts.plan_repair_system(),
-                _build_repair_user(ctx, up, ordinal,
-                                   _repair_findings(outcomes, ordinal),
-                                   previous_by[ordinal],
-                                   strategy=previous_raw['reconstruction_strategy']))
-    return prompts.plan_system(), _build_user(ctx, up)
+        raise TerminalState(
+            'Stage4 v3 不接受 --chapters：模型结构修改必须整书重走 '
+            'stage4.design → stage4.plan；人工 v3 计划可用 --apply-edit')
+    system, user, _store, _up, _candidate, _candidate_raw, _candidate_file_sha, \
+        _subject, _catalog = _binding_request(ctx)
+    return system, user
 
 
 def _build_user(ctx: RunContext, up: _Upstreams) -> str:
@@ -282,11 +456,86 @@ def _build_user(ctx: RunContext, up: _Upstreams) -> str:
         prompts.BLOCK_SKELETON + '\n' + bs,
     ]
     # ⚠ `book_total=True` **只在整跑这一路**：它在表底多印一行全书合计与全书目标区间，
-    #   而定向修复那一路只发目标章那一格，同一行在那里会是假的（见 `source_chars_table`）。
+    #   B 相拿到的是整书候选与整书证据，因此这里按整书口径下发。
     if (tbl := source_chars_table(up.blueprints, up.bidx, book_total=True)):
         parts.append(prompts.BLOCK_SIZES + '\n' + tbl)
     parts.append(prompts.BLOCK_BODY + '\n' + book_text)
     return '\n\n'.join(parts)
+
+
+def _candidate_business(candidate: BlindCandidate) -> dict[str, Any]:
+    return candidate.model_dump(by_alias=True, mode='json', exclude={'provenance'})
+
+
+def _build_binding_user(
+    ctx: RunContext, up: _Upstreams, candidate: dict[str, Any], subject: str,
+) -> str:
+    """B 只在冻结候选之外追加证据；候选自身不经任何重排或再投影。"""
+    return '\n\n'.join((
+        prompts.BLOCK_CANDIDATE + '\n' + json.dumps(
+            candidate, ensure_ascii=False, sort_keys=True, separators=(',', ':')),
+        prompts.BLOCK_CANDIDATE_HASH + '\n' + subject,
+        prompts.BLOCK_EVIDENCE + '\n' + _build_user(ctx, up),
+    ))
+
+
+def _binding_request(
+    ctx: RunContext,
+) -> tuple[
+    str, str, ArtifactStore, _Upstreams, BlindCandidate, dict[str, Any], str,
+    str, dict[int, dict[str, frozenset[str]]],
+]:
+    """Stage4B 预览与真发共用的唯一构造口。"""
+    store = ArtifactStore(ctx)
+    if not store.exists(CANDIDATE_REL):
+        raise UpstreamMissing(
+            f'{CANDIDATE_REL} 不在盘上——先单独预览并批准 stage4.design')
+    candidate = store.read(BlindCandidate, CANDIDATE_REL)
+    # 完整 SHA-256 与普通 consumed edge 必须绑定同一份盘上字节；第二次只读不会
+    # 产生第二条来源边（同键覆盖成同值），却保留 ``read`` 的 stale 拒绝语义。
+    _same, candidate_file_sha = store.read_with_sha256(
+        BlindCandidate, CANDIDATE_REL)
+    candidate_raw = _candidate_business(candidate)
+    subject = candidate_subject_sha256(candidate_raw)
+    up = _Upstreams(ctx, store, need_grounding=True)
+    _assert_budget_basis(up)
+    catalog = build_evidence_catalog(up.blueprints)
+    system = prompts.evidence_bind_system()
+    user = _build_binding_user(ctx, up, candidate_raw, subject)
+    return (
+        system, user, store, up, candidate, candidate_raw, candidate_file_sha,
+        subject, catalog,
+    )
+
+
+def _binding_validator(
+    *, candidate: dict[str, Any], subject: str,
+    catalog: dict[int, dict[str, frozenset[str]]], up: _Upstreams,
+    store: ArtifactStore,
+) -> Any:
+    def validate(response: EvidenceBindingResponse, _wire: Any) -> str | None:
+        raw = response.model_dump(by_alias=True)
+        if raw.get('candidate_sha256') != subject:
+            return (
+                f'candidate_sha256 必须回显冻结候选 {subject}，'
+                f'实得 {raw.get("candidate_sha256")}')
+        if response.status == 'infeasible':
+            try:
+                validate_infeasible_binding(candidate, raw, catalog)
+            except BlindPlanError as exc:
+                return str(exc)
+            return None
+        try:
+            data = merge_evidence_bindings(candidate, raw, catalog)
+            adopt_plan_response(data, up.blueprints, up.bidx)
+            assert up.global_g is not None
+            validate_plan_refs(
+                data, fact_catalog(up.global_g, up.blueprints, up.main_text))
+            hard = _hard_hits(_judge(store, data, up, with_ctx_link=False))
+        except (BlindPlanError, RefusedByStructure) as exc:
+            return str(exc)
+        return f'绑定后计划仍有阻断项：{hard}' if hard else None
+    return validate
 
 
 def _assert_budget_basis(up: _Upstreams) -> None:
@@ -305,112 +554,6 @@ def _assert_budget_basis(up: _Upstreams) -> None:
             f'第 {sorted(gaps)} 章一个源内容单元的字数都算不出来（`beat.span` 全部锚不到）'
             f'⇒ 预算没有基准可分。先修 stage2 的锚点（`stage2.blueprint`），'
             f'再回来跑 stage4.plan。尚未调用 LLM')
-
-
-def _chapter_by(plan_raw: dict[str, Any]) -> dict[int, dict[str, Any]]:
-    return {
-        int(chapter.get('output_ordinal') or 0): chapter
-        for chapter in (plan_raw.get('output_chapters') or [])
-    }
-
-
-def _repair_chapter_map(
-    plan_raw: dict[str, Any], up: _Upstreams,
-) -> dict[int, dict[str, Any]]:
-    """定向合并前先证明基线确实一章一格，不能顺手修掉非目标章的全局形状。"""
-    expected = [int(row.get('chapter_ordinal') or 0) for row in up.main_text]
-    rows = list(plan_raw.get('output_chapters') or [])
-    actual = [int(row.get('output_ordinal') or 0) for row in rows]
-    if actual != expected:
-        raise TerminalState(
-            '定向重规划只允许替换目标章，不能顺手把基线的缺章、重复章或乱序修掉；'
-            f'期望章序={expected}，基线章序={actual}。请先整跑或人工修复全书形状；'
-            '尚未调用 LLM')
-    return dict(zip(expected, rows, strict=True))
-
-
-def _validated_targets(up: _Upstreams, chapters: tuple[int, ...]) -> tuple[int, ...]:
-    available = {int(row.get('chapter_ordinal') or 0) for row in up.main_text}
-    missing = sorted(set(chapters) - available)
-    if missing:
-        raise TerminalState(f'--chapters 不在正文阅读序里：{missing}')
-    return tuple(sorted(set(chapters)))
-
-
-def _repair_baseline_artifact(
-    store: ArtifactStore,
-) -> tuple[PlanChapters, dict[str, Any]]:
-    """问题稿优先；两者都不存在时，定向重规划没有可安全合并的全书基线。"""
-    source_rel = _INVALID if store.exists(_INVALID) else REL
-    if not store.exists(source_rel):
-        raise UpstreamMissing(f'{REL} 与 {_INVALID} 都不在盘上——定向重规划没有全书基线')
-    return store.read_own(PlanChapters, source_rel, require_current=True)
-
-
-def _response_baseline(chapter: dict[str, Any]) -> dict[str, Any]:
-    """落盘章 → 单章场景响应形状；语义契约、slot 与预算均由 producer 重建。"""
-    baseline = copy.deepcopy(chapter)
-    encode_plan_baseline(baseline)
-    return baseline
-
-
-def _chapter_total(chapter: dict[str, Any]) -> int:
-    """一个落盘章的预算合计。**定向修复要钉死的就是这个数。**"""
-    return sum(int(scene.get('budget_chars') or 0)
-               for scene in (chapter.get('scenes') or []))
-
-
-def _repair_refs(up: _Upstreams, ordinal: int) -> dict[str, Any]:
-    assert up.global_g is not None
-    refs = fact_catalog(up.global_g, up.blueprints, up.main_text)
-    atoms = {key: value for key, value in refs['fact_atoms'].items()
-             if value.get('chapter') == ordinal}
-    return {
-        **refs,
-        'chapters': [ordinal],
-        'fact_atoms': atoms,
-        'stages': {key: value for key, value in refs['stages'].items()
-                   if value == ordinal},
-        'materials': {key: value for key, value in refs['materials'].items()
-                      if value == ordinal},
-    }
-
-
-def _build_repair_user(ctx: RunContext, up: _Upstreams, ordinal: int,
-                       findings: list[dict[str, Any]], baseline: dict[str, Any], *,
-                       strategy: str) -> str:
-    """只下发目标章正文、骨架、量纲、事实引用与现有章，不暴露其他章节正文。"""
-    row = next(item for item in up.main_text
-               if int(item.get('chapter_ordinal') or 0) == ordinal)
-    projected = prompts.project_blueprints_for_planner(
-        up.blueprints)
-    projected['blueprints'] = [
-        item for item in projected['blueprints']
-        if int(item.get('chapter_ordinal') or 0) == ordinal
-    ]
-    index = f'阅读序第{ordinal}章'
-    body = f'===== [阅读序第{ordinal}章] =====\n{row.get("text") or ""}'
-    parts = [
-        f'《{ctx.title}》',
-        prompts.BLOCK_REPAIR_SCOPE + f'\n阅读序第 {ordinal} 章',
-        prompts.BLOCK_REPAIR_STRATEGY + '\n' + strategy,
-        prompts.BLOCK_REPAIR_FAILURES + '\n'
-        + json.dumps(findings, ensure_ascii=False, separators=(',', ':')),
-        prompts.BLOCK_REPAIR_BASELINE + '\n'
-        + json.dumps(_response_baseline(baseline),
-                     ensure_ascii=False, separators=(',', ':')),
-        prompts.BLOCK_INDEX + '\n' + index,
-        prompts.BLOCK_FACT_REFS + '\n'
-        + json.dumps(_repair_refs(up, ordinal), ensure_ascii=False, separators=(',', ':')),
-        prompts.BLOCK_SKELETON + '\n'
-        + json.dumps(projected, ensure_ascii=False, separators=(',', ':')),
-    ]
-    scoped_blueprints = {'blueprints': [bp for bp in up.blueprints.get('blueprints') or []
-                                       if bp.get('chapter_ordinal') == ordinal]}
-    if (table := source_chars_table(scoped_blueprints, up.bidx)):
-        parts.append(prompts.BLOCK_SIZES + '\n' + table)
-    parts.append(prompts.BLOCK_BODY.replace('全书', '目标章') + '\n' + body)
-    return '\n\n'.join(parts)
 
 
 def context_ctx(ctx: RunContext) -> RunContext:
@@ -453,7 +596,7 @@ def run_context(ctx: RunContext) -> CheckReport:
     #   这一层的来源账**没有 `prompts` 也没有 `model`**（确定性组装，无 LLM 参与）。
     art = WriterContext.model_validate(
         {**asm.ctx, '_provenance': ctx.free_provenance(CtxProvenance)})
-    store.write(CTX_REL, art)
+    _write_producer_artifact(store, CTX_REL, art)
     return _report(ctx, store, _judge(store, plan_raw, up, with_ctx_link=True),
                    plan.provenance.model_dump(by_alias=True))
 
@@ -474,7 +617,13 @@ def run_revalidate(
     up = _Upstreams(ctx, store)
     outcomes = _judge(store, raw, up, with_ctx_link=False)
     if _hard_hits(outcomes):
-        return _report(ctx, store, outcomes, art.provenance.model_dump(by_alias=True))
+        # 复验判的是活动 INVALID；盘上即使还留着 shape-break 前的旧正式稿，
+        # 报告 freshness 也不能回头绑定那份旧稿，否则真正的内容 findings 会被
+        # ArtifactVersionError 覆盖，0 成本恢复路等于没有诊断出口。
+        return _report(
+            ctx, store, outcomes, art.provenance.model_dump(by_alias=True),
+            judged_rel=_INVALID,
+        )
     try:
         with store.history_transaction(REL, CTX_REL):
             store.promote_invalid(
@@ -504,134 +653,6 @@ def _hard_hits(outcomes: list[Outcome]) -> list[str]:
     from contracts.rules import REGISTRY
     return sorted(o.rule for o in outcomes
                   if o.findings and o.unver_why is None and REGISTRY.get(o.rule).sev == 'hard')
-
-
-def _evidence_plan_chapter(value: str) -> int | None:
-    """只解析机器凭据 ID；报告 detail 是给人读的散文，绝不能拿来做修复路由。"""
-    token = value.strip()
-    for pattern in (
-        r'^(?:out|ch|src)0*(\d+)(?:$|[:#_])',
-        r'^[pb]0*(\d+)_',
-    ):
-        if match := re.match(pattern, token, re.IGNORECASE):
-            return int(match.group(1))
-    return None
-
-
-def _target_hard_findings(outcomes: list[Outcome], ordinal: int) -> list[Any]:
-    """目标章 HARD：优先显式 ``output_ordinal``，否则只认结构化 evidence ID。"""
-    from contracts.rules import REGISTRY
-
-    rows = []
-    for outcome in outcomes:
-        if REGISTRY.get(outcome.rule).sev != 'hard':
-            continue
-        for item in outcome.findings:
-            belongs = (
-                item.output_ordinal == ordinal
-                if item.output_ordinal is not None
-                else ordinal in {
-                    chapter for value in item.evidence
-                    if (chapter := _evidence_plan_chapter(str(value))) is not None
-                }
-            )
-            if belongs:
-                rows.append((outcome, item))
-    return rows
-
-
-def _strategy_hard_findings(outcomes: list[Outcome]) -> list[str]:
-    """书级 reconstruction_strategy 不能由单章响应修改，transport 前必须拒绝。"""
-    from contracts.rules import REGISTRY
-
-    return [
-        f'{outcome.rule}:{item.detail}'
-        for outcome in outcomes if REGISTRY.get(outcome.rule).sev == 'hard'
-        for item in outcome.findings
-        if any(str(value).startswith('strategy:') for value in item.evidence)
-    ]
-
-
-def _repair_findings(outcomes: list[Outcome], ordinal: int) -> list[dict[str, Any]]:
-    """只下发目标章自己的 HARD 失败原文与凭据；全书其他章不进入修复 prompt。"""
-    from contracts.rules import REGISTRY
-
-    rows: list[dict[str, Any]] = []
-    for outcome, item in _target_hard_findings(outcomes, ordinal):
-        rows.append({
-            'rule': outcome.rule,
-            'item': REGISTRY.get(outcome.rule).item,
-            'detail': item.detail,
-            'evidence': list(item.evidence),
-        })
-    if not rows:
-        rows.append({
-            'rule': 'manual_regeneration',
-            'item': '人工指定定向重规划',
-            'detail': f'用户明确要求重新规划阅读序第 {ordinal} 章；只改本章。',
-            'evidence': [f'ch{ordinal}'],
-        })
-    return rows
-
-
-def _scene_compiler_validator(up: _Upstreams, *, ordinal: int | None = None,
-                              chapter_total: int | None = None) -> Any:
-    """把场景编译与引用复算接到 `ask_json(validator=)`；拒绝时仍可走响应恢复链。
-
-    历史上内容响应通过 schema 后才在确定性编译阶段失败，整轮 token 因此成为终态废稿。
-    这里让编译拒绝与 schema 拒绝同型（`gate='validator'`）：evict、同档重采、必要时由 Pro 兜底。
-
-    ⚠ 两道闸都是**纯确定性**的（场景编译 + 事实引用复算），跑在副本上没有副作用。
-    ⚠⚠ **写盘那一侧的同两道闸一格都没撤**：`--apply-edit` / `--revalidate` 不经过本函数，
-    那两条路的输入是人工稿与盘上产物。**两处调的是同一份代码，不是两份逻辑**——
-    改判据只有 `measure.py` / `fact_refs.py` 一个落点。
-
-    ⚠ 归族随之变了，这是有意的：走完恢复链仍不合格 ⇒ `LlmFailed`（`TerminalState`，
-    exit 2、不打栈），而不是从前的「结构性拒绝（是 bug，exit 70 + 栈）」。
-    **模型填错编号从来不是本仓的 bug**；写盘那一侧仍归 `RefusedByStructure`，
-    因为那一侧的输入是代码派生的或人手写的——那里出现编号错，才真的是 bug。
-
-    `ordinal` 给定 ⇒ 校验 `--chapters` 那条路的单章响应，与 `_run_plan_repair`
-    随后的场景编译逐字同参。
-    ⚠ `chapter_total` 同理：批 4 起 `adopt_plan_response` 连预算一起算，而定向修复那一路
-    把本章总量钉死在基线上。这里不一并传，校验跑的就**不是**随后真跑的那条路——
-    「校验过了、真跑却炸」正是这个函数存在的理由要消灭的那件事。
-    """
-    refs: dict[str, Any] = {}
-
-    def _check(response: Any, _resp: Any) -> str | None:
-        # `model_dump` 每次都新建嵌套容器 ⇒ 下面的就地展开碰不到调用方那一份。
-        raw = response.model_dump(by_alias=True)
-        if ordinal is None:
-            plan = raw
-        else:
-            # ⚠⚠ **「响应是别的章」也在这里判，而不是等 `ask_json` 返回之后。**
-            #   它从前是 `_run_plan_repair` 里一句 `TerminalState`：一次越界响应
-            #   直接报废整轮，而这一类恰恰是重采就可能救回来的。放在这里，
-            #   判词一个字不改（`LlmFailed` 会把它逐条带出来），但走的是响应恢复链。
-            if (raw.get('output_ordinal') != ordinal
-                    or list(raw.get('from_source_ordinals') or []) != [ordinal]):
-                return (f'定向重规划请求第 {ordinal} 章，响应却是 '
-                        f'output_ordinal={raw.get("output_ordinal")} / '
-                        f'from_source_ordinals={raw.get("from_source_ordinals")}。'
-                        f'拒绝把越界响应静默合并')
-            # ⚠ 只包 `output_chapters` 一层：这两道闸都不读 `reconstruction_strategy`，
-            #   给它编一个占位值等于在校验路上放一份假数据。
-            plan = {'output_chapters': [raw]}
-        try:
-            adopt_plan_response(
-                plan, up.blueprints, up.bidx,
-                chapter_totals=(None if chapter_total is None
-                                else {ordinal: chapter_total}))
-            assert up.global_g is not None
-            if not refs:
-                refs.update(fact_catalog(up.global_g, up.blueprints, up.main_text))
-            validate_plan_refs(plan, refs)
-        except RefusedByStructure as e:
-            return str(e)
-        return None
-
-    return _check
 
 
 def write_plan(ctx: RunContext, store: ArtifactStore, data: dict[str, Any], up: _Upstreams, *,
@@ -675,7 +696,7 @@ def _gate_and_write(ctx: RunContext, store: ArtifactStore, data: dict[str, Any],
             if archive:
                 store.write_round(REL, art)
             else:
-                store.write(REL, art)
+                _write_producer_artifact(store, REL, art)
             run_context(ctx)
             final_outcomes = _judge(
                 store, art.model_dump(by_alias=True), up, with_ctx_link=True)
@@ -697,162 +718,111 @@ def _gate_and_write(ctx: RunContext, store: ArtifactStore, data: dict[str, Any],
         ctx, store, final_outcomes, art.provenance.model_dump(by_alias=True))
 
 
-def _run_plan_repair(ctx: RunContext, client: Any, *,
-                     chapters: tuple[int, ...]) -> CheckReport:
-    """逐章重新请求、合并未动章，再用全书判据一次性验收。"""
-    from contracts.schema.stage4 import PlanChapterResponse, PlanProvenance
-    from novel.llm.cache import CachePolicy
+def _note_adoption(
+    ctx: RunContext, client: Any, *, purpose: str, rel: str, artifact: Any,
+) -> None:
+    attempt_id = client.accepted_attempt(purpose)
+    if attempt_id is None:
+        return
+    ctx.ledger.note_adoption(
+        sid=ctx.sid, node=ctx.node, purpose=purpose, attempt_id=attempt_id,
+        artifact=rel,
+        artifact_fingerprint=prov.projection_fingerprint(
+            artifact.model_dump(by_alias=True, mode='json')),
+    )
 
-    if ctx.cache.name != 'refresh-write':
-        raise TerminalState(
-            'stage4.plan --chapters 必须使用 refresh-write：定向重规划不得读回旧请求缓存')
-    store = ArtifactStore(ctx)
-    up = _Upstreams(ctx, store)
-    targets = _validated_targets(up, chapters)
-    previous, previous_raw = _repair_baseline_artifact(store)
-    old_prov = previous.provenance
-    params = _params(up)
-    if old_prov.model != client.model:
-        raise TerminalState(
-            '定向重规划不能把不同主模型配置的结果混成一份来源账；'
-            f'原稿 model={old_prov.model!r}，本次={client.model!r}。尚未调用 LLM')
-    if old_prov.params.model_dump() != params:
-        raise TerminalState(
-            '定向重规划不能把不同 grouping/beat_min_chars 的章混成一份计划；'
-            '请先整跑 stage4.plan。尚未调用 LLM')
-    base_system = prompts.plan_system()
-    if old_prov.prompts.get('PLAN_SYS') != prov.fingerprint(base_system):
-        raise TerminalState(
-            '定向重规划的 PLAN_SYS 与基线产物不同，而当前 provenance 没有表达'
-            '“部分章节使用另一版全书规划契约”的槽位；尚未调用 LLM')
-    repair_system = prompts.plan_repair_system()
-    old_repair_system = old_prov.prompts.get('PLAN_REPAIR_SYS')
-    if (old_repair_system is not None
-            and old_repair_system != prov.fingerprint(repair_system)):
-        raise TerminalState(
-            '基线计划已有定向重规划章节，但 PLAN_REPAIR_SYS 与当前版本不同；'
-            '继续会把两版单章契约混在同一份 provenance 里。请整跑 stage4.plan；'
-            '尚未调用 LLM')
 
-    _assert_budget_basis(up)
-    old_by = _repair_chapter_map(previous_raw, up)
-    before_outcomes = _judge(store, previous_raw, up, with_ctx_link=False)
-    if strategy_failures := _strategy_hard_findings(before_outcomes):
-        raise TerminalState(
-            '当前 HARD 命中 reconstruction_strategy，但 --chapters 的单章响应按契约不许改书级策略；'
-            f'请整跑 stage4.plan 或人工修复策略。命中={strategy_failures[:3]}。尚未调用 LLM')
-    merged_by = copy.deepcopy(old_by)
-    history = [row.model_dump() for row in old_prov.repairs]
-
-    for ordinal in targets:
-        before_hard = len(_target_hard_findings(before_outcomes, ordinal))
-        failures = _repair_findings(before_outcomes, ordinal)
-        user = _build_repair_user(
-            ctx, up, ordinal, failures, old_by[ordinal],
-            strategy=previous_raw['reconstruction_strategy'])
-        response = client.ask_json(
-            repair_system, user, model_cls=PlanChapterResponse,
-            purpose=f'{ctx.node}:repair:ch{ordinal}',
-            max_tokens=prompts.PLAN_MAX_TOKENS,
-            validator=_scene_compiler_validator(
-                up, ordinal=ordinal, chapter_total=_chapter_total(old_by[ordinal])),
-            cache_policy=CachePolicy.refresh())
-        accepted_model = client.accepted_model(f'{ctx.node}:repair:ch{ordinal}')
-        if accepted_model is None:
-            raise ProvenanceRefused(
-                f'第 {ordinal} 章已经返回规划，但没有 accepted model；拒绝按主模型估算')
-        # ⚠ 「响应是不是这一章」已经在 `_scene_compiler_validator` 里判过了（拒了会重采、
-        #   走完同配置采样/模型兜底才 `LlmFailed`）。这里再判一次就是一条永不触发的分支，
-        #   而永不触发的分支会让下一个人以为它还在守着什么。
-        raw_response = response.model_dump(by_alias=True)
-        expanded = {
-            'reconstruction_strategy': previous_raw['reconstruction_strategy'],
-            'output_chapters': [copy.deepcopy(raw_response)],
-        }
-        # ⚠⚠ **本章总量钉死在基线的既有合计上**：这一次只看得见一章，全书归一化无从谈起。
-        #   从前这条是 `PLAN_REPAIR_OVERRIDE` 里对模型的一句叮嘱（「不要动本章总量」），
-        #   现在是代码保证的 ⇒ 定向修复不可能再把 `plan_book_band` 顶出带外。
-        adopt_plan_response(expanded, up.blueprints, up.bidx,
-                            chapter_totals={ordinal: _chapter_total(old_by[ordinal])})
-        after = expanded['output_chapters'][0]
-        merged_by[ordinal] = after
-        interim = {
-            'reconstruction_strategy': previous_raw['reconstruction_strategy'],
-            'output_chapters': [merged_by[chapter] for chapter in old_by],
-            '_provenance': previous_raw['_provenance'],
-        }
-        after_hard = len(_target_hard_findings(
-            _judge(store, interim, up, with_ctx_link=False), ordinal))
-        history.append({
-            'chapter_ordinal': ordinal,
-            'failure_items': sorted({str(row['rule']) for row in failures}),
-            'failure_evidence': prov.projection_fingerprint(failures),
-            'user_prompt': prov.fingerprint(user),
-            'output': prov.projection_fingerprint(raw_response),
-            'before': prov.projection_fingerprint(old_by[ordinal]),
-            'after': prov.projection_fingerprint(after),
-            'before_hard': before_hard,
-            'after_hard': after_hard,
-            'model': accepted_model,
-            'cache_policy': ctx.cache.name,
-        })
-
-    ordinals = [int(row.get('chapter_ordinal') or 0) for row in up.main_text]
-    merged = {
-        'reconstruction_strategy': previous_raw['reconstruction_strategy'],
-        'output_chapters': [merged_by[ordinal] for ordinal in ordinals],
-    }
-    partial = sorted(set(old_prov.partial_regen_chapters) | set(targets))
-    delta = ctx.llm_provenance(
-        PlanProvenance,
-        prompts={'PLAN_SYS': base_system, 'PLAN_REPAIR_SYS': repair_system},
-        model=client.model, adopted_models=client.accepted_models(), params=params,
-        partial_regen_chapters=partial, repairs=history)
-    provenance = PlanProvenance.model_validate({
-        **delta.model_dump(),
-        'prompts': {**old_prov.prompts, **delta.prompts},
-        'adopted_models': sorted(set(old_prov.adopted_model_ids())
-                                 | set(delta.adopted_model_ids())),
-        'usage': combine_usage(old_prov.usage, delta.usage),
-        'partial_rewrite': old_prov.partial_rewrite,
+def run_design(ctx: RunContext, client: Any) -> BlindCandidate:
+    """Stage4A：只消费去序 Stage2 真相图，落一份可恢复的盲候选。"""
+    system, user, store, _up, truth, mapping = _design_request(ctx)
+    response = client.ask_json(
+        system, user, model_cls=BlindPlanResponse, purpose=ctx.node,
+        max_tokens=prompts.BLIND_DESIGN_MAX_TOKENS,
+        validator=_blind_validator(truth, mapping),
+    )
+    business = compile_blind_candidate(
+        response.model_dump(by_alias=True), mapping)
+    truth_sha256 = str(mapping['truth_sha256'])
+    provenance = ctx.llm_provenance(
+        BlindCandidateProvenance,
+        prompts={'BLIND_DESIGN_SYS': system},
+        model=client.model,
+        adopted_models=client.accepted_models(ctx.node),
+        alias_algorithm=BLIND_ALIAS_ALGORITHM,
+        truth_sha256=truth_sha256,
+    )
+    artifact = BlindCandidate.model_validate({
+        **business, '_provenance': provenance,
     })
-    # 目标章已在上面展开，未动章来自合法基线；这里直接进入全书引用/判据闸。
-    return _gate_and_write(ctx, store, merged, up,
-                           provenance=provenance, archive=True)
+    store.write(CANDIDATE_REL, artifact)
+    _note_adoption(
+        ctx, client, purpose=ctx.node, rel=CANDIDATE_REL, artifact=artifact)
+    return artifact
 
 
 def run_plan(ctx: RunContext, client: Any, *,
-             chapters: tuple[int, ...] = ()) -> CheckReport:
-    """付费规划：缺省全书一次调用；``chapters`` 非空时逐章调用并安全合并。
+             chapters: tuple[int, ...] = ()) -> CheckReport | EvidenceBinding:
+    """Stage4B：冻结 A 候选，只绑定证据并由代码编译 v3 计划。
 
-    ⚠⚠ **本仓最贵的一次请求**（`max_tokens=96000`，user 里带着全书原文）。
-    **写好了，但在人点头之前一次都不许真跑。** 先 `--dry-run`：`build_prompt()` 是 0 成本的。
-    定向路强制 refresh-write，并在任何调用前拒绝混合 model / system / 分组参数。
+    ``infeasible`` 也是一份已落盘、可审计的正式结论，所以返回该
+    ``EvidenceBinding`` 交给 CLI 报 landed-red；它不是“什么都没
+    产生”的 ``TerminalState``，也绝不会编译或覆盖最终计划。
     """
-    from contracts.schema.stage4 import PlanProvenance, PlanResponse
-
     if chapters:
-        return _run_plan_repair(ctx, client, chapters=chapters)
+        raise TerminalState(
+            'Stage4 v3 不接受 --chapters；重规划须整书重走 stage4.design → stage4.plan')
+    # B 的 typed infeasible 是当前候选的正式负结论，不是 missing。再次把同一个 A
+    # 发给 B 只会复用同一结论；必须先由人显式确认 ``stage4.design --replan``，
+    # 让候选字节变化后才重新开放 B。放在任何 prompt/transport 构造之前，保证 0 wire。
+    if current_infeasible_binding(ArtifactStore(ctx)) is not None:
+        raise TerminalState(
+            'Stage4B 已对当前 Stage4A 候选落盘 fresh typed infeasible 结论；'
+            '不得重复执行同一 B（本次尚未调用 LLM）。请另行预览并批准 '
+            '`stage4.design --replan`，新候选落盘后再单独确认 stage4.plan')
+    (
+        system, user, store, up, _candidate_art, candidate_raw,
+        candidate_file_sha, subject, catalog,
+    ) = _binding_request(ctx)
+    response = client.ask_json(
+        system, user, model_cls=EvidenceBindingResponse, purpose=ctx.node,
+        max_tokens=prompts.EVIDENCE_BIND_MAX_TOKENS,
+        validator=_binding_validator(
+            candidate=candidate_raw, subject=subject, catalog=catalog,
+            up=up, store=store),
+    )
+    raw = response.model_dump(by_alias=True)
+    binding_provenance = ctx.llm_provenance(
+        EvidenceBindingProvenance,
+        prompts={'EVIDENCE_BIND_SYS': system},
+        model=client.model,
+        adopted_models=client.accepted_models(ctx.node),
+        candidate_sha256=subject,
+    )
+    binding = EvidenceBinding.model_validate({
+        **raw, '_provenance': binding_provenance,
+    })
+    store.write(BINDING_REL, binding)
+    _note_adoption(
+        ctx, client, purpose=ctx.node, rel=BINDING_REL, artifact=binding)
+    if binding.status == 'infeasible':
+        return binding
 
-    store = ArtifactStore(ctx)
-    up = _Upstreams(ctx, store)
-    _assert_budget_basis(up)
-    # ⚠ **不显式传 `require`**：它从 `PlanResponse` 派生，恰好是
-    #   `reconstruction_strategy` · `output_chapters` 两个——手写一份等于给
-    #   「漏一个不报错」留一道门。
-    system = prompts.plan_system()
-    resp = client.ask_json(system, _build_user(ctx, up),
-                           model_cls=PlanResponse, purpose=ctx.node,
-                           max_tokens=prompts.PLAN_MAX_TOKENS,
-                           validator=_scene_compiler_validator(up))
+    # 最终计划是编译物：把刚落盘的 B 产物作为真实输入边读回，再铸 0 成本 provenance。
+    store.read(EvidenceBinding, BINDING_REL)
+    _same_binding, binding_file_sha = store.read_with_sha256(
+        EvidenceBinding, BINDING_REL)
+    data = merge_evidence_bindings(candidate_raw, raw, catalog)
     params = _params(up)
     ctx.account('params', params)
-    return write_plan(ctx, store, resp.model_dump(by_alias=True), up,
-                      provenance=ctx.llm_provenance(
-                          PlanProvenance, prompts={'PLAN_SYS': system},
-                          model=client.model,
-                          adopted_models=client.accepted_models(ctx.node),
-                          params=params))
+    compiled_provenance = ctx.free_provenance(
+        PlanProvenance,
+        params=params,
+        origin='compiled',
+        blind_candidate_sha256=candidate_file_sha,
+        evidence_binding_sha256=binding_file_sha,
+    )
+    return write_plan(
+        ctx, store, data, up, provenance=compiled_provenance)
 
 
 def run_identity(ctx: RunContext) -> tuple[int, CheckReport]:
@@ -881,7 +851,7 @@ def run_identity(ctx: RunContext) -> tuple[int, CheckReport]:
     store.write(IDENTITY_CTX_REL, art)
     outcomes = checks.check(
         base, blueprints=up.blueprints, main_text=up.main_text, global_g=up.global_g,
-        ctx=asm.ctx, ctx_link=None,
+        ctx=asm.ctx, expected_ctx=asm.ctx, ctx_link=None,
         ctx_source=f'{IDENTITY_CTX_REL}：本次现算的恒等基线，不比来源', bidx=up.bidx)
     return (sum(len(c['scenes']) for c in base['output_chapters']),
             _report(ctx, store, outcomes, {}))
@@ -927,9 +897,9 @@ def run_apply_edit(ctx: RunContext, edit_path: str = '') -> CheckReport:
     正式稿；合格 ⇒ 旧轮进 `_rounds/`、落盘、**同批重建写作上下文**（`run_context`
     在 `_gate_and_write` 里，`context_link` 不会红）。
 
-    来源账走 `rewrite_provenance(prev, by='--apply-edit')`：继承 `prompts`/`model`、
-    换 `inputs`、标 `partial_rewrite`——**不走 `to_human_edit()`**（它返回裸
-    `FreeProvenance`，会被本层收窄成 `PlanProvenance` 的载体当场拒收，BE-05 实况）。
+    v3 计划本身是 A+B 的确定性编译物，不能让人工改过结构的计划继续绑定旧候选并
+    冒充编译结果。人工路因此铸一份 ``origin=human`` 的免费来源账，明确清空 A/B hash；
+    typed edit、当前 Stage1/2 与旧计划仍由普通输入边如实记录。
     ⚠ **无前稿（正式或 `.INVALID` 皆无）⇒ 显式终态**：这是修订路，不是生成路。
     """
     store = ArtifactStore(ctx)
@@ -946,12 +916,15 @@ def run_apply_edit(ctx: RunContext, edit_path: str = '') -> CheckReport:
         raise TerminalState(
             '盘上既无正式计划也无 `.INVALID` 问题稿——`--apply-edit` 是修订路，'
             '不是生成路；先跑一次 stage4.plan（付费）')
-    prev, _raw = store.read_own(PlanChapters, prev_rel)
+    store.read_own(PlanChapters, prev_rel)
 
     up = _Upstreams(ctx, store)
     data = edit.model_dump(by_alias=True)
     report = _gate_and_write(
         ctx, store, data, up,
-        provenance=ctx.rewrite_provenance(prev.provenance, by='--apply-edit'),
+        provenance=ctx.free_provenance(
+            PlanProvenance, params=_params(up), origin='human',
+            blind_candidate_sha256=None, evidence_binding_sha256=None,
+        ),
         archive=True)
     return report

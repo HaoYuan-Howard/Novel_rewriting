@@ -120,6 +120,10 @@ describe('GlobalScreen disclosure', () => {
       style_words: [],
       invent: { allow: [], forbid: [], principle: '' },
       job_kinds: {},
+      structure_modes: [],
+      structure_change_kinds: [],
+      structure_approval_decisions: [],
+      structure_approval_states: [],
       actions: [],
       spoiler_disclosure: disclosure,
     })
@@ -144,6 +148,10 @@ describe('GlobalScreen disclosure', () => {
       style_words: [],
       invent: { allow: [], forbid: [], principle: '' },
       job_kinds: {},
+      structure_modes: [],
+      structure_change_kinds: [],
+      structure_approval_decisions: [],
+      structure_approval_states: [],
       actions: [],
       spoiler_disclosure: disclosure,
     })
@@ -164,6 +172,10 @@ describe('GlobalScreen disclosure', () => {
       style_words: [],
       invent: { allow: [], forbid: [], principle: '' },
       job_kinds: {},
+      structure_modes: [],
+      structure_change_kinds: [],
+      structure_approval_decisions: [],
+      structure_approval_states: [],
       actions: [],
       spoiler_disclosure: disclosure,
     })

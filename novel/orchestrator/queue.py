@@ -48,6 +48,7 @@ from novel.cli.exit_codes import CRASH
 from novel.errors import ApprovalRequired, ArtifactUnreadable, QueueConflict, UpstreamMissing
 from novel.orchestrator import approvals, jobs, state as st
 from novel.orchestrator.nodes import build_steps, flag_value, shell_line
+from novel.stages.stage4.phase_state import current_infeasible_binding
 from novel.store import ArtifactStore
 
 #: 人做的那几个动作。**队列永不自动排它们**——`stage6.approve` 换一条候选、
@@ -63,6 +64,8 @@ OPTIONAL_HUMAN_NODES: frozenset[str] = frozenset({'stage0.edit'})
 
 #: 待人工清单非空时挡队列的那个理由（`INBOX_KIND` 的 `invalid`）。
 WAITING_ON_INBOX = 'inbox:invalid'
+WAITING_ON_STAGE4_PHASE_APPROVAL = 'approval:stage4-bind'
+WAITING_ON_STAGE4_REPLAN = 'approval:stage4-replan'
 WAITING_ON_WRITING_APPROVAL = 'approval:stage5-writing'
 WAITING_ON_REVIEW = 'stage5:review-currentness'
 WAITING_ON_LEGACY = 'legacy_incompatible'
@@ -167,6 +170,14 @@ def _human_gate_satisfied(base: str | os.PathLike[str], sid: str, node: str) -> 
     return artifact.approved is not None
 
 
+def _stage4_replan_required(base: str | os.PathLike[str], sid: str) -> bool:
+    """B 已对当前 A 落下 fresh 负结论时，队列只能停给显式 A 重规划。"""
+    novel_dir = paths.resolve_novel_dir(base, sid)
+    store = ArtifactStore(st.readonly_ctx(
+        novel_dir, 'stage4.plan', prov.code_version()))
+    return current_infeasible_binding(store) is not None
+
+
 def plan_book(base: str | os.PathLike[str], sid: str, *, until_stage: str,
               follow_check: bool = True) -> tuple[list[QueueItem], list[QueueItem]]:
     """一本书的 `(要跑的, 被挡住的)`。**纯函数**（只读盘，不写、不发请求）。"""
@@ -194,6 +205,19 @@ def plan_book(base: str | os.PathLike[str], sid: str, *, until_stage: str,
                 why_blocked = WAITING_ON_INBOX
 
         verdict, why = st.resume_verdict(ov, node)
+        if why_blocked is None and node == 'stage4.plan':
+            if _stage4_replan_required(base, sid):
+                # B 的负结论已经是正式终态；这份队列不得继续暴露同一个 B argv，
+                # 更不能把旧的一次性授权解释成重采 A。恢复须另行 preview/confirm。
+                why_blocked = WAITING_ON_STAGE4_REPLAN
+            else:
+                design_verdict, _design_why = st.resume_verdict(ov, 'stage4.design')
+            if (why_blocked is None
+                    and design_verdict != st.RESUME_SKIP):
+                # A 还没有一份当前候选时，本次队列只能确认并执行 A。
+                # B 必须等 A 落盘、人看过候选后重新 plan/preview/--yes；
+                # 否则“队列一次确认”会偷偷合并产品明定的两次付费决定。
+                why_blocked = WAITING_ON_STAGE4_PHASE_APPROVAL
         if why_blocked is None and verdict == st.RESUME_SKIP:
             continue                                 # 已存在即跳过
 
@@ -215,6 +239,13 @@ def plan_book(base: str | os.PathLike[str], sid: str, *, until_stage: str,
                 if why_blocked is None:
                     why_blocked = WAITING_ON_REVIEW
                 steps = []
+
+        if why_blocked in (
+            WAITING_ON_STAGE4_PHASE_APPROVAL, WAITING_ON_STAGE4_REPLAN,
+        ):
+            # 当前队列快照里不放 B 的付费 argv。A 成功后也不得把这份
+            # 旧快照重解释为新授权；下一次队列会按当前候选重新展示 B。
+            steps = []
 
         if verdict == st.RESUME_LEGACY:
             steps = []
@@ -257,6 +288,17 @@ def _blocked_why(waiting_on: str, verdict_why: str) -> str:
     if waiting_on == WAITING_ON_WRITING_APPROVAL:
         return ('还没有当前 Stage5 全书闭卷写作授权；先在 Stage5 空状态明确授权，'
                 f'队列不会从默认路径反推同意花钱；{verdict_why}')
+    if waiting_on == WAITING_ON_STAGE4_PHASE_APPROVAL:
+        return (
+            'Stage4A 尚未产生可人工检查的当前盲候选；本次队列只能跑 A。'
+            'A 落盘后请先审阅，再重新预览并明确批准付费 Stage4B；'
+            f'{verdict_why}')
+    if waiting_on == WAITING_ON_STAGE4_REPLAN:
+        return (
+            'Stage4B 已对当前 Stage4A 候选落盘 fresh typed infeasible 结论；'
+            '队列不会再次暴露或执行同一个 B。请另行预览并批准 '
+            '`stage4.design --replan`，新候选落盘后再单独确认 B；'
+            f'{verdict_why}')
     if waiting_on == WAITING_ON_REVIEW:
         return ('Stage5 Review 不是 fresh，旧结论不得驱动付费作业；'
                 f'先零成本运行 `stage5.review`；{verdict_why}')
@@ -772,17 +814,18 @@ def _recover_running(base: str | os.PathLike[str], run: QueueRun,
 def _stop_reason(failed: QueueEntry) -> str:
     """停下的那一句话。**必须说出上一项到底是哪一种失败**——处置是相反的。
 
-    ⚠⚠ exit 1（产物已落盘、报告有红行）与 exit 2/3/70（压根没跑成）在
+    ⚠⚠ exit 1（正式结果已落盘、结论不通过）与 exit 2/3/70（压根没跑成）在
     `JOB_STATE` 里已分成 `landed_red` / `failed`。人拿到「第 9 项后停下」
     这句话时要做的事，
-    前者是**去看报告并裁决**，后者是**修完重跑**——不说清就等于让人先去猜。
+    前者是**查看负结论并裁决**，后者是**修完重跑**——不说清就等于让人先去猜。
     实测：`stage6.hook` exit 1，`hook.json` 好好地在盘上，后三项被记成
     `not_run`，日志上与一次真崩一模一样。
     """
     if X.landed_but_red(failed.exit_code):
-        return (f'同书第 {failed.index} 项（{failed.item.node}）**产物已落盘**、'
-                f'但校验报告有阻断级红行（exit 1）；按 `R-13.4` 队列停在这里等人裁决，'
-                f'本项没有启动。⚠ 这不是「没跑成」——先看那一层的屏，多半不必重跑')
+        return (f'同书第 {failed.index} 项（{failed.item.node}）**正式产物已落盘**、'
+                f'但结论不通过（exit 1）；按 `R-13.4` 队列停在这里等人裁决，'
+                f'本项没有启动。⚠ 这不是「没跑成」——先看那一层的屏与恢复指引，'
+                f'不要当进程失败盲目重跑')
     return (f'同书第 {failed.index} 项（{failed.item.node}）没跑成'
             f'（exit {failed.exit_code}）；本项没有启动')
 
@@ -1113,6 +1156,7 @@ def resume_incomplete(base: str | os.PathLike[str], *,
 
 __all__ = [
     'HUMAN_NODES', 'OPTIONAL_HUMAN_NODES', 'WAITING_ON_INBOX',
+    'WAITING_ON_STAGE4_PHASE_APPROVAL',
     'WAITING_ON_WRITING_APPROVAL', 'WAITING_ON_REVIEW', 'WAITING_ON_LEGACY',
     'WAITING_ON_RESTART_CONFIRMATION', 'WAITING_ON_REPLAN',
     'QueueRegistry', 'append_event', 'cancel', 'confirm', 'create', 'fold',

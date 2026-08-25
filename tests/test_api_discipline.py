@@ -369,6 +369,7 @@ def test_job_conflict_maps_and_returns_409():
         '/api/novels/{sid}/approvals/gate/{key}',
         '/api/novels/{sid}/approvals/backfill',
         '/api/novels/{sid}/approvals/seen/{key}',
+        '/api/novels/{sid}/approvals/structure',
         '/api/novels/{sid}/approvals/writing',
         '/api/novels/{sid}/approvals/reset',
         '/api/upload',

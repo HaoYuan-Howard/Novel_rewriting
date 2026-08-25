@@ -327,7 +327,8 @@ def test_unknown_must_say_why(base):
 def test_landed_but_red_is_not_the_same_failure_as_did_not_run(base):
     """⭐ **回归**：`failed` 装着两种处置完全相反的情况，其中一种必须当场说出来。
 
-    exit 1 = 产物**已经落盘**、报告有红行 ⇒ 去看报告并裁决。
+    exit 1 = 正式产物**已经落盘**、结论不通过 ⇒ 去看负结论并裁决。
+    它通常是报告硬红，也可以是 Stage4B typed `infeasible`。
     exit 2/3/70 = 压根没跑成 ⇒ 修完重跑。
     实测：一次 8 分钟的付费批量在 `stage6.hook` exit 1 上整条停下，而
     `hook.json` 好好地在盘上（三条候选只有一条命中 HARD），
@@ -343,6 +344,7 @@ def test_landed_but_red_is_not_the_same_failure_as_did_not_run(base):
     assert dead.state == 'failed'
     assert red.exit_code == 1 and dead.exit_code == 2
     assert red.note and '已经落盘' in red.note, '落盘了这件事必须说出来'
+    assert '结论不通过' in red.note, '不得把 exit 1 写死成必有 CheckReport'
     assert not dead.note, '「压根没跑成」是 failed 的常态，不另加一句'
 
 

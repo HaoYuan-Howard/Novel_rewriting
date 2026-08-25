@@ -575,12 +575,21 @@ export interface PlanScene {
   exit_state_refs: string[]
 }
 
+/** 最终计划里由代码复算闭合的章级结构决定；取值域均由 `/api/enums` 发布。 */
+export interface StructurePlanDecision {
+  mode: string
+  reason: string
+  declared_change_kinds: string[]
+  computed_change_kinds: string[]
+}
+
 export interface PlanChapterLine {
   output_ordinal: number
   from_source_ordinals: number[]
   chapter_goal: PlanGoal
   open_hook_goal: PlanGoal
   end_hook_goal: PlanGoal
+  structure_decision: StructurePlanDecision
   semantic_contract: SemanticContract
   chapter_rewrite_brief: string
   scenes: PlanScene[]
@@ -590,6 +599,7 @@ export interface PlanChapterLine {
 export interface Stage4IndexRow {
   output_ordinal: number
   chapter_goal: string
+  structure_decision: StructurePlanDecision
   budget_chars: number | null
   span_chars: number | null
   scenes: number
@@ -655,6 +665,8 @@ export interface Stage4Response {
   title: string
   /** true = 恒等基线（没跑过 stage4，现算的「如果什么都不改」），不是真计划 */
   identity_plan: boolean
+  /** 与 index / plan_chapter 同一份正式 plan 的结构主体；恒等基线为 null */
+  structure_subject_sha256: string | null
   reconstruction_strategy: string
   chapters: number[]
   ordinal: number

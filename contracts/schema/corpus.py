@@ -26,6 +26,7 @@ CURRENT_CORPUS_BOOKS: tuple[tuple[str, int], ...] = (
 CURRENT_CORPUS_PAID_NODES: tuple[str, ...] = (
     'stage2.global',
     'stage2.blueprint',
+    'stage4.design',
     'stage4.plan',
     'stage5.write',
     'stage6.hook',
@@ -48,6 +49,8 @@ def required_current_corpus_artifacts(chapters: int) -> frozenset[str]:
         'stage2/global_review.json',
         'stage2/global_review_decisions.json',
         'stage3/style_grounding.json',
+        'stage4/blind_candidate.json',
+        'stage4/evidence_binding.json',
         'stage4/plan_chapters.json',
         'stage4/writer_context.json',
         'stage5/draft.md',

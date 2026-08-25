@@ -34,7 +34,7 @@ from novel.errors import ArtifactUnreadable, UpstreamMissing
 from novel.orchestrator.state import artifact_state, readonly_ctx
 from novel.stages.stage4.beats import beat_index
 from novel.stages.stage4.context import build_writer_context
-from novel.stages.stage4.measure import identity_plan
+from novel.stages.stage4.measure import identity_plan, structure_subject_sha256
 from novel.stages.stage5.prompts import target_band
 from novel.store import ArtifactStore
 
@@ -57,12 +57,17 @@ def stage4_view(base: str | os.PathLike[str], sid: str, ordinal: int) -> Stage4V
     if plan_state.exists:
         # 在而读不回 ⇒ `ArtifactUnreadable` 一路上抛成 409——「坏了」不是「没跑」。
         plan_art, _raw = store.read_own(PlanChapters, PLAN_REL)
+        # rows / 章详情 / subject 必须由同一个已读入的 plan 快照派生。
+        # 不另读一次路径，否则计划在两次读之间被替换时，
+        # 屏幕会把旧 rows 冒充成新 subject 的审批表面。
+        structure_subject = structure_subject_sha256(plan_art)
         plan_raw = plan_art.model_dump(by_alias=True)
         identity = False
         plan_prov = plan_art.provenance
         ctx_chapters, ctx_prov = _ctx_from_disk(store)
     else:
         plan_raw, ctx_chapters = _identity(store)
+        structure_subject = None
         identity = True
         plan_prov = None
         ctx_prov = None
@@ -85,6 +90,7 @@ def stage4_view(base: str | os.PathLike[str], sid: str, ordinal: int) -> Stage4V
         sid=paths.derive_source_meta(novel_dir.name)[0],
         title=paths.title_of(novel_dir),
         identity_plan=identity,
+        structure_subject_sha256=structure_subject,
         reconstruction_strategy=plan_raw['reconstruction_strategy'],
         chapters=chapters,
         ordinal=ordinal,
@@ -95,6 +101,7 @@ def stage4_view(base: str | os.PathLike[str], sid: str, ordinal: int) -> Stage4V
             chapter_goal=pc['chapter_goal'],
             open_hook_goal=pc['open_hook_goal'],
             end_hook_goal=pc['end_hook_goal'],
+            structure_decision=pc['structure_decision'],
             semantic_contract=pc['semantic_contract'],
             chapter_rewrite_brief=pc['chapter_rewrite_brief'],
             scenes=[PlanSceneLine(
@@ -162,6 +169,7 @@ def _index_row(pc: dict, ctx_entry: CtxChapter | None) -> Stage4IndexRow:
     return Stage4IndexRow(
         output_ordinal=int(pc['output_ordinal']),
         chapter_goal=_goal_label(pc['chapter_goal']),
+        structure_decision=pc['structure_decision'],
         budget_chars=sum(b for b in budgets if b is not None) or None,
         span_chars=span,
         scenes=len(pc['scenes']),

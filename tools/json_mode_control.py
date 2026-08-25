@@ -2,7 +2,8 @@
 # -*- coding: utf-8 -*-
 """json_mode_control.py —— 「flash@high 的空正文」是模型边界，还是 `json_object` 的交互？
 
-历史裁决与实付读数见 `docs/BACKEND_CONTRACT.md` §十 2026-08-22。**0 改动对照**：同一份 `stage4.plan` 提示词、
+历史裁决与实付读数见 `docs/BACKEND_CONTRACT.md` §十 2026-08-22。现役对照面是
+``stage4.design`` 的 ``BlindPlanResponse``：同一份去序提示词、
 同一组参数（`deepseek-v4-flash` / `reasoning_effort=high` / `thinking=True` /
 `max_tokens=96000`），**只翻 `json_mode` 一位**，重复采样 N 次。
 
@@ -41,8 +42,8 @@ from novel.llm.transport import (                                     # noqa: E4
     ChatRequest, ChatResponse, DeepSeekTransport, Transport,
 )
 from novel.run import RunContext                                      # noqa: E402
+from contracts.schema.stage4 import BlindPlanResponse                 # noqa: E402
 from novel.stages.stage4 import plan as planmod, prompts              # noqa: E402
-from novel.store import ArtifactStore                                 # noqa: E402
 
 #: 被测臂钉死单档；client 构造时另显式关闭模型兜底。
 ARM_RUNGS = (('high', True),)
@@ -75,7 +76,7 @@ class RecordingTransport:
 
 
 def _measure(seq: int, req: ChatRequest, resp: ChatResponse) -> dict[str, Any]:
-    """一次 wire 的读数。**主结局是「正文空不空」**，次结局是「还拿不拿得到合法计划」。"""
+    """一次 wire 的读数。**主结局是「正文空不空」**，次结局是「还拿不拿得到合法盲设计」。"""
     content = _strip_fences(resp.content)
     parsed: Any = None
     parse_error: str | None = None
@@ -85,9 +86,8 @@ def _measure(seq: int, req: ChatRequest, resp: ChatResponse) -> dict[str, Any]:
         parse_error = f'{type(exc).__name__}: {exc}'
     shape_error: str | None = None
     if parse_error is None:
-        from contracts.schema.stage4 import PlanResponse
         try:
-            PlanResponse.model_validate(parsed)
+            BlindPlanResponse.model_validate(parsed)
         except Exception as exc:                       # noqa: BLE001 —— 只记形状
             shape_error = f'{type(exc).__name__}: {str(exc)[:200]}'
     u = resp.usage or {}
@@ -110,10 +110,10 @@ def _measure(seq: int, req: ChatRequest, resp: ChatResponse) -> dict[str, Any]:
         # 主结局。⚠ 与 `client._answer_lost` 同一把尺子：空**且**非截断才是「答案流丢失」。
         'empty_body': not (resp.content or '').strip(),
         'truncated': resp.finish_reason == 'length',
-        # 次结局：不开 json_object，还拿不拿得到合法 JSON / 合法 PlanResponse。
+        # 次结局：不开 json_object，还拿不拿得到合法 JSON / 合法盲设计。
         'parses_as_json': parse_error is None,
         'parse_error': parse_error,
-        'validates_as_plan': parse_error is None and shape_error is None,
+        'validates_as_blind_design': parse_error is None and shape_error is None,
         'shape_error': shape_error,
     }
 
@@ -121,8 +121,8 @@ def _measure(seq: int, req: ChatRequest, resp: ChatResponse) -> dict[str, Any]:
 def _verdict(row: dict[str, Any]) -> str:
     if row['empty_body']:
         return '截断且空' if row['truncated'] else '空正文（答案流丢失）'
-    if row['validates_as_plan']:
-        return '合法计划'
+    if row['validates_as_blind_design']:
+        return '合法盲设计'
     return 'JSON 但不合契约' if row['parses_as_json'] else '非 JSON'
 
 
@@ -154,12 +154,9 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     cfg = load_config()
-    ctx = RunContext.open(Path(args.base), args.sid, 'stage4.plan', paid=True,
+    ctx = RunContext.open(Path(args.base), args.sid, 'stage4.design', paid=True,
                           cache=CachePolicy.refresh())
-    store = ArtifactStore(ctx)
-    up = planmod._Upstreams(ctx, store)
-    system = prompts.plan_system()
-    user = planmod._build_user(ctx, up)
+    system, user = planmod.build_design_prompt(ctx)
 
     rec = RecordingTransport(DeepSeekTransport(cfg), limit=args.max_wire)
     client = LlmClient(ctx, rec, cache=ResponseCache(Path(args.cache_dir)),
@@ -168,7 +165,7 @@ def main(argv: list[str] | None = None) -> int:
                        concurrency=1, enable_model_fallback=False)
 
     print(f'臂：json_mode={args.json_mode} · model={cfg.model} · 显式配置={ARM_RUNGS} '
-          f'· max_tokens={prompts.PLAN_MAX_TOKENS}')
+          f'· max_tokens={prompts.BLIND_DESIGN_MAX_TOKENS}')
     print(f'system {len(system)} 字 / user {len(user)} 字 · 目标 {args.samples} 样本 '
           f'· wire 硬上限 {args.max_wire}', flush=True)
 
@@ -178,12 +175,11 @@ def main(argv: list[str] | None = None) -> int:
            and len(rec.rows) + MAX_SAMPLES_PER_RUNG <= args.max_wire):
         kw: dict[str, Any] = dict(
             purpose=f'{ctx.node}:json_mode_control',
-            max_tokens=prompts.PLAN_MAX_TOKENS, rungs=ARM_RUNGS,
+            max_tokens=prompts.BLIND_DESIGN_MAX_TOKENS, rungs=ARM_RUNGS,
             cache_policy=CachePolicy.refresh())
         try:
             if args.json_mode == 'on':
-                from contracts.schema.stage4 import PlanResponse
-                client.ask_json(system, user, model_cls=PlanResponse, **kw)
+                client.ask_json(system, user, model_cls=BlindPlanResponse, **kw)
             else:
                 client.ask_text(system, user, **kw)
         except LlmFailed as exc:
@@ -199,7 +195,7 @@ def main(argv: list[str] | None = None) -> int:
         'arm': f'json_mode={args.json_mode}',
         'model': cfg.model,
         'rungs': [list(r) for r in ARM_RUNGS],
-        'max_tokens': prompts.PLAN_MAX_TOKENS,
+        'max_tokens': prompts.BLIND_DESIGN_MAX_TOKENS,
         'sid': args.sid,
         'base': str(args.base),
         'system_chars': len(system),
@@ -207,7 +203,8 @@ def main(argv: list[str] | None = None) -> int:
         'samples': len(rows),
         'empty_bodies': len(empty),
         'parses_as_json': sum(1 for r in rows if r['parses_as_json']),
-        'validates_as_plan': sum(1 for r in rows if r['validates_as_plan']),
+        'validates_as_blind_design': sum(
+            1 for r in rows if r['validates_as_blind_design']),
         'prompt_tokens_total': sum(r['prompt_tokens'] or 0 for r in rows),
         'completion_tokens_total': sum(r['completion_tokens'] or 0 for r in rows),
         'reasoning_tokens_total': sum(r['reasoning_tokens'] or 0 for r in rows),
@@ -223,7 +220,8 @@ def main(argv: list[str] | None = None) -> int:
     if n:
         print(f'  样本 {n} · 空正文 {len(empty)}（{len(empty) / n * 100:.0f}%）')
         print(f'  解析得动 JSON {summary["parses_as_json"]}/{n}'
-              f' · 合 PlanResponse 契约 {summary["validates_as_plan"]}/{n}')
+              f' · 合 BlindPlanResponse 契约 '
+              f'{summary["validates_as_blind_design"]}/{n}')
     else:
         print('  样本 0（一次都没发出去）')
     print(f'  报告 → {out}')

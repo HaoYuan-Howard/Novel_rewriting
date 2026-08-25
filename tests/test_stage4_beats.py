@@ -3,17 +3,15 @@
 """Stage4 原子事实场景编译器的确定性单元测试。"""
 from __future__ import annotations
 
-import copy
-
 import pytest
 from pydantic import ValidationError
 
-from contracts.schema.stage4 import PlanResponse
+from contracts.schema.stage4 import BlindSceneResponse
 from novel.errors import RefusedByStructure
 from novel.stages.stage4 import checks
 from novel.stages.stage4.beats import beat_index, verbatim_pieces
 from novel.stages.stage4.measure import (
-    adopt_plan_response, encode_plan_baseline, identity_plan, semantic_contract_of,
+    adopt_plan_response, identity_plan, semantic_contract_of,
     source_chars_table,
 )
 
@@ -80,6 +78,11 @@ def _response() -> dict:
             'chapter_goal': _goal('G_ADVANCE', 'f01_003'),
             'open_hook_goal': _goal('G_OPEN', 'f01_002'),
             'end_hook_goal': _goal('G_CLOSE', 'f01_003'),
+            'structure_decision': {
+                'mode': 'reconstruct',
+                'reason': '从拒绝切入并重组邀请与选择。',
+                'declared_change_kinds': ['entry_anchor', 'fact_grouping'],
+            },
             'weight': 'CH_EVEN',
             'chapter_rewrite_brief': '从门口拒绝切入，再补足邀请原因，最后让甲决定留下。',
             'scenes': [
@@ -101,7 +104,7 @@ def _response() -> dict:
 
 
 def _compiled() -> dict:
-    plan = PlanResponse.model_validate(_response()).model_dump(mode='json')
+    plan = _response()
     bps = _blueprints()
     adopt_plan_response(plan, bps, beat_index(bps, _main()))
     return plan
@@ -128,13 +131,20 @@ def test_cross_paragraph_material_is_split_without_changing_its_words():
 
 
 def test_plan_response_rejects_every_retired_skeleton_key():
+    alias = 'a_0123456789abcdef'
+    scene = {
+        'weight': 'W_STRONG', 'purpose': '让拒绝立即发生',
+        'role': 'R_COLD_OPEN', 'delivery': 'D_SCENE', 'transition': 'X_START',
+        'land_fact_aliases': [alias], 'context_fact_aliases': [],
+        'turn_fact_alias': alias, 'entry_state_aliases': [],
+        'exit_state_aliases': [alias],
+    }
     for key, value in (
         ('events', ['旧事件']), ('from_beats', ['b01_01']), ('end_beat', 'b01_01'),
     ):
-        raw = _response()
-        raw['output_chapters'][0]['scenes'][0][key] = value
+        raw = {**scene, key: value}
         with pytest.raises(ValidationError, match=key):
-            PlanResponse.model_validate(raw)
+            BlindSceneResponse.model_validate(raw)
 
 
 def test_scene_compiler_decodes_enums_allocates_slots_and_injects_stage2_contract():
@@ -159,7 +169,7 @@ def test_compiled_scene_order_is_the_new_order_not_the_source_atom_order():
 
 def test_scene_compiler_refuses_missing_or_duplicate_land_atoms():
     for mutate in ('missing', 'duplicate'):
-        raw = PlanResponse.model_validate(_response()).model_dump(mode='json')
+        raw = _response()
         if mutate == 'missing':
             raw['output_chapters'][0]['scenes'][1]['land_fact_refs'].remove('f01_001')
         else:
@@ -169,7 +179,7 @@ def test_scene_compiler_refuses_missing_or_duplicate_land_atoms():
 
 
 def test_scene_compiler_refuses_unknown_stage_refs():
-    raw = PlanResponse.model_validate(_response()).model_dump(mode='json')
+    raw = _response()
     raw['output_chapters'][0]['scenes'][0]['stage_refs'] = ['b02_01']
     with pytest.raises(RefusedByStructure, match='stage_refs'):
         adopt_plan_response(raw, _blueprints(), beat_index(_blueprints(), _main()))
@@ -184,13 +194,13 @@ def test_identity_plan_is_an_explicit_source_order_baseline_but_uses_scenes():
                    for key in ('events', 'from_beats', 'end_beat'))
 
 
-def test_repair_baseline_removes_producer_fields_and_round_trips_enums():
-    wire = encode_plan_baseline(copy.deepcopy(_compiled()['output_chapters'][0]))
-    assert wire['weight'] == 'CH_EVEN'
-    assert wire['scenes'][0]['weight'] == 'W_STRONG'
-    assert wire['scenes'][0]['role'] == 'R_COLD_OPEN'
-    assert 'slot' not in wire['scenes'][0] and 'budget_chars' not in wire['scenes'][0]
-    assert 'semantic_contract' not in wire
+def test_scene_compiler_injects_computed_structure_dimensions_after_a_and_b():
+    decision = _compiled()['output_chapters'][0]['structure_decision']
+    assert decision['declared_change_kinds'] == ['entry_anchor', 'fact_grouping']
+    assert decision['computed_change_kinds'] == [
+        'entry_anchor', 'fact_grouping', 'disclosure_order',
+        'noncontiguous_regroup',
+    ]
 
 
 def test_source_size_table_reports_atoms_not_source_event_units():
@@ -227,7 +237,8 @@ def test_reconstruction_metrics_are_always_reported_without_a_threshold():
     findings = _findings(_compiled())
     for rule in (
         'scene_budget_distribution', 'verbatim_share',
-        'adjacency_retention', 'nonadjacent_regroup', 'scene_boundary_change',
-        'entry_rebuilt', 'fact_redistribution', 'semantic_closure_reading',
+        'partition_change', 'disclosure_order', 'noncontiguous_regroup',
+        'anchor_migration', 'structure_eligibility', 'structure_alignment',
+        'semantic_closure_reading',
     ):
         assert findings[rule], f'{rule} 应常驻给读数，不应设自动放行阈值'

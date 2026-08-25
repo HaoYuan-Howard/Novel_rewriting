@@ -863,8 +863,10 @@ def test_stage2_global_over_limit_stops_before_transport_cache_ledger_or_artifac
         shutil.rmtree(root, ignore_errors=True)
 
 
-def test_stage4_plan_over_limit_stops_before_transport_or_any_stage4_artifact():
+def test_stage4_plan_over_limit_with_candidate_stops_before_b_transport_or_outputs():
     from novel.stages.stage4 import plan as stage4_plan
+    from novel.stages.stage4.blind import build_blind_projection
+    from tests.test_stage4_v3_integration import _retain_a_response
 
     root = Path(tempfile.mkdtemp())
     book = root / '规划超限测试_123'
@@ -887,9 +889,30 @@ def test_stage4_plan_over_limit_stops_before_transport_or_any_stage4_artifact():
         blueprint_client, _ = _client(blueprint_ctx, respond)
         assert extract.run_blueprint(blueprint_ctx, blueprint_client).passed
 
+        # v3 的 B 相只接受已经正式落盘的冻结 A 候选。先单独走 A producer，
+        # 否则这个用例只会在预算闸之前因缺 candidate 终止，根本没测到 B 的预算前置。
+        design_ctx = _ctx(book, 'stage4.design')
+        design_store = ArtifactStore(design_ctx)
+        produced_blueprints = design_store.read(
+            ChapterBlueprints, stage4_plan.BLUEPRINTS)
+        _truth, mapping = build_blind_projection(
+            produced_blueprints.model_dump(by_alias=True, mode='json'),
+            root_clean_sha1=design_ctx.root_clean_sha1,
+        )
+        design_response = _retain_a_response(
+            produced_blueprints.model_dump(by_alias=True, mode='json'), mapping)
+        design_client, design_transport = _client(
+            design_ctx, lambda _request, _index: _ok(design_response))
+        stage4_plan.run_design(design_ctx, design_client)
+        assert len(design_transport.calls) == 1
+        candidate_before = (book / stage4_plan.CANDIDATE_REL).read_bytes()
+
         ctx = _ctx(book, 'stage4.plan')
         transport = FakeTransport.always(ChatResponse(content='{}'))
-        checker = partial(enforce_request_budget, counter=lambda _request: 904_001)
+        # Stage4B 当前声明 48k 输出；952001 + 48000 = 1000001，恰越过
+        # DeepSeek V4 的 1M context。不能沿用 Stage2 global 的 904001，后者配
+        # global 的 96k 输出才越线，放到 B 已经是合法预算。
+        checker = partial(enforce_request_budget, counter=lambda _request: 952_001)
         client = LlmClient(ctx, transport, cache=ResponseCache(root / 'cache'),
                            model='deepseek-v4-pro', max_retries=0,
                            budget_checker=checker)
@@ -898,6 +921,9 @@ def test_stage4_plan_over_limit_stops_before_transport_or_any_stage4_artifact():
             stage4_plan.run_plan(ctx, client)
 
         store = ArtifactStore(ctx)
+        assert store.exists(stage4_plan.CANDIDATE_REL)
+        assert (book / stage4_plan.CANDIDATE_REL).read_bytes() == candidate_before
+        assert not store.exists(stage4_plan.BINDING_REL)
         assert not store.exists(stage4_plan.REL)
         assert not store.exists(stage4_plan._INVALID)
         assert not store.exists(stage4_plan.CTX_REL)

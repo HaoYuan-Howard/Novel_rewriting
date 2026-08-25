@@ -160,6 +160,28 @@
   "read",
   "global"
  ],
+ "structure_modes": [
+  "retain",
+  "reconstruct"
+ ],
+ "structure_change_kinds": [
+  "entry_anchor",
+  "ending_anchor",
+  "fact_grouping",
+  "disclosure_order",
+  "noncontiguous_regroup"
+ ],
+ "structure_approval_decisions": [
+  "accept",
+  "request_replan"
+ ],
+ "structure_approval_states": [
+  "unavailable",
+  "missing",
+  "accepted",
+  "replan_requested",
+  "expired"
+ ],
  "source_encodings": [
   "utf-8-sig",
   "utf-32",
@@ -542,6 +564,7 @@
   "--revise": "stage5 的修订式反哺——把可反哺的结论连同上一轮成稿发回写手",
   "--purge-role": "stage2 的语义判官臂——把 role/fate 双向重划分一遍，它要再调一次模型",
   "--resample": "stage2 全书响应被闸门拦下后，绕过同参数问题缓存重新采样整份响应",
+  "--replan": "Stage4B 返回 infeasible 或人工结构审批 request_replan 后，绕过同参数缓存重新采样整书 Stage4A；不会自动串行 Stage4B",
   "--patch": "stage2 逐章蓝图 extraction IR 族的字段级修复——逐条失败各调一次模型，量级是条不是章"
  },
  "partial_rewrite_flags": [
@@ -632,6 +655,7 @@
   "stage2.global",
   "stage2.blueprint",
   "stage3.style",
+  "stage4.design",
   "stage4.plan",
   "stage4.context",
   "stage5.write",
@@ -817,8 +841,22 @@
     "stage3/style_grounding.json"
    ]
   },
+  "stage4.design": {
+   "label": "stage4 盲场景设计",
+   "paid": true,
+   "stage": "stage4",
+   "section": "R-5",
+   "flags": [
+    "--dry-run",
+    "--replan",
+    "--response-repair"
+   ],
+   "produces": [
+    "stage4/blind_candidate.json"
+   ]
+  },
   "stage4.plan": {
-   "label": "stage4 重构计划",
+   "label": "stage4 证据绑定与计划编译",
    "paid": true,
    "stage": "stage4",
    "section": "R-5",
@@ -829,12 +867,12 @@
     "--names-only",
     "--identity",
     "--apply-edit",
-    "--chapters",
     "--actor",
     "--reason",
     "--response-repair"
    ],
    "produces": [
+    "stage4/evidence_binding.json",
     "stage4/plan_chapters.json"
    ]
   },
@@ -1437,19 +1475,69 @@
    "required_inputs": []
   },
   {
-   "kind": "stage4.plan",
-   "label": "stage4 重构计划",
+   "kind": "stage4.design",
+   "label": "stage4 盲场景设计",
    "extra": null,
    "paid": true,
    "free_flag": null,
-   "writes": "stage4/plan_chapters.json",
+   "writes": "stage4/blind_candidate.json",
+   "writes_disk": true,
+   "needs_value": null,
+   "required_inputs": []
+  },
+  {
+   "kind": "stage4.design",
+   "label": "stage4 盲场景设计 --dry-run",
+   "extra": [
+    "--dry-run"
+   ],
+   "paid": false,
+   "free_flag": "--dry-run",
+   "writes": "",
+   "writes_disk": false,
+   "needs_value": null,
+   "required_inputs": []
+  },
+  {
+   "kind": "stage4.design",
+   "label": "stage4 盲场景设计 --replan",
+   "extra": [
+    "--replan"
+   ],
+   "paid": true,
+   "free_flag": null,
+   "writes": "stage4/blind_candidate.json",
+   "writes_disk": true,
+   "needs_value": null,
+   "required_inputs": []
+  },
+  {
+   "kind": "stage4.design",
+   "label": "stage4 盲场景设计 --response-repair",
+   "extra": [
+    "--response-repair"
+   ],
+   "paid": true,
+   "free_flag": null,
+   "writes": "stage4/blind_candidate.json",
+   "writes_disk": true,
+   "needs_value": "结构化拒绝响应恢复模式；当前只接受 `agent`。可修复响应先隔离并停给外层受托 agent，同闸复验失败才继续采样",
+   "required_inputs": []
+  },
+  {
+   "kind": "stage4.plan",
+   "label": "stage4 证据绑定与计划编译",
+   "extra": null,
+   "paid": true,
+   "free_flag": null,
+   "writes": "stage4/evidence_binding.json · stage4/plan_chapters.json",
    "writes_disk": true,
    "needs_value": null,
    "required_inputs": []
   },
   {
    "kind": "stage4.plan",
-   "label": "stage4 重构计划 --dry-run",
+   "label": "stage4 证据绑定与计划编译 --dry-run",
    "extra": [
     "--dry-run"
    ],
@@ -1462,7 +1550,7 @@
   },
   {
    "kind": "stage4.plan",
-   "label": "stage4 重构计划 --check-only",
+   "label": "stage4 证据绑定与计划编译 --check-only",
    "extra": [
     "--check-only"
    ],
@@ -1475,7 +1563,7 @@
   },
   {
    "kind": "stage4.plan",
-   "label": "stage4 重构计划 --revalidate",
+   "label": "stage4 证据绑定与计划编译 --revalidate",
    "extra": [
     "--revalidate"
    ],
@@ -1497,7 +1585,7 @@
   },
   {
    "kind": "stage4.plan",
-   "label": "stage4 重构计划 --names-only",
+   "label": "stage4 证据绑定与计划编译 --names-only",
    "extra": [
     "--names-only"
    ],
@@ -1510,7 +1598,7 @@
   },
   {
    "kind": "stage4.plan",
-   "label": "stage4 重构计划 --identity",
+   "label": "stage4 证据绑定与计划编译 --identity",
    "extra": [
     "--identity"
    ],
@@ -1523,7 +1611,7 @@
   },
   {
    "kind": "stage4.plan",
-   "label": "stage4 重构计划 --apply-edit",
+   "label": "stage4 证据绑定与计划编译 --apply-edit",
    "extra": [
     "--apply-edit"
    ],
@@ -1536,26 +1624,13 @@
   },
   {
    "kind": "stage4.plan",
-   "label": "stage4 重构计划 --chapters",
-   "extra": [
-    "--chapters"
-   ],
-   "paid": true,
-   "free_flag": null,
-   "writes": "stage4/plan_chapters.json",
-   "writes_disk": true,
-   "needs_value": "只写这几个输出章（逗号分隔，如 `2,14`）；不给就补写所有缺的章",
-   "required_inputs": []
-  },
-  {
-   "kind": "stage4.plan",
-   "label": "stage4 重构计划 --response-repair",
+   "label": "stage4 证据绑定与计划编译 --response-repair",
    "extra": [
     "--response-repair"
    ],
    "paid": true,
    "free_flag": null,
-   "writes": "stage4/plan_chapters.json",
+   "writes": "stage4/evidence_binding.json · stage4/plan_chapters.json",
    "writes_disk": true,
    "needs_value": "结构化拒绝响应恢复模式；当前只接受 `agent`。可修复响应先隔离并停给外层受托 agent，同闸复验失败才继续采样",
    "required_inputs": []

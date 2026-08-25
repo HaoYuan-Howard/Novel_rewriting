@@ -33,6 +33,9 @@ export function GateBar({
   if (!doc) return null
   const view = resolveGate(screen, doc)
   if (!view) return null
+  // s4 不是一个 bool 按钮：它必须携带完整 plan subject、actor/reason 与全章 typed
+  // 决定。专用入口在 Stage4Screen；通用 GateBar 不得退回 `/gate/s4` 绕过它。
+  if (view.key === 's4') return null
 
   const spawns = doc.spawns[view.key] ?? []
   const resolved = spawns.map((s) => lookupAction(enums.data, s))
@@ -58,7 +61,12 @@ export function GateBar({
       ? resolved.some((a) => a?.writes_disk)
       : undefined
 
-  const off = view.done || view.blocked || approve.isPending || spawns.length > 1
+  // A/B 两相各自确认：第一次确认 s2 后，A 会立即启动；A 落盘后服务端仍在
+  // 已完成的 s2 下发唯一的 B。此时按钮是“继续下一步”，不能因 gate.done 被锁死，
+  // 也不能再次调用 approveGate 冒充第二次人工批准。
+  const continueNext = view.done && spawns.length === 1
+  const off = (view.done && !continueNext)
+    || view.blocked || approve.isPending || spawns.length > 1
 
   const actionButton = (
     <ActionButton
@@ -75,7 +83,7 @@ export function GateBar({
       disabled={off}
       disabledReason={
         view.blocked ? view.blockedReason
-          : view.done ? '已经确认过了'
+          : view.done && !continueNext ? '已经确认过了'
             : spawns.length > 1 ? '服务端返回了多个作业，需合并成一个可预览动作' : ''
       }
       onClick={() => {
@@ -97,13 +105,15 @@ export function GateBar({
           },
           undefined,
           async () => {
-            await approve.mutateAsync(view.key)
-            notify('闸门已确认：' + view.title)
+            if (!view.done) {
+              await approve.mutateAsync(view.key)
+              notify('闸门已确认：' + view.title)
+            }
           },
         )
       }}
     >
-      {view.btn}
+      {continueNext ? '继续下一步' : view.btn}
     </ActionButton>
   )
 

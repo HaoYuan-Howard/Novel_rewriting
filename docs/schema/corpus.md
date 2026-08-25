@@ -47,7 +47,7 @@ conda run -n novel_refactor python -m tests.corpus_manifest verify `
 
 所有节点（包括 `stage5.write` 与 `stage6.semantic`）的冻结 flags 都恰为 `--base --yes`；
 `stage5.write` 不再带 `--deep` / `--shallow-rest` / `--mode`，`stage5.semantic` 已退役。
-两书 × 七个付费节点 = 当前 14 条 dispatch，但校验器按两个 current 元组现算条数与顺序，
+两书 × 八个付费节点 = 当前 16 条 dispatch，但校验器按两个 current 元组现算条数与顺序，
 不信本文数字。`preview`、`mark` 或缺少 `run` 的展示命令不能冒充 production dispatch。
 
 最终硬验收显式指定**盘面与 manifest 两个身份**：
@@ -64,16 +64,19 @@ conda run -n novel_refactor python -m pytest --require-corpus
 corpus 还要求 local cache hit 为 0、每个 dispatch 节点均有非零 wire 行；每个 token 列分别记录
 reported/null 行数，分母不闭合就失败。
 
-manifest 的 `commands` 字段必须是 `-m novel.cli run <node> <sid> ... --yes` 的 14 条真实
-付费 production dispatch：每书各一条 Stage2 global/blueprint、Stage4、Stage5 write、
-Stage6 hook/semantic、Stage7 rename；Stage3 v2 是免费机械节点，不进入付费 dispatch，
+manifest 的 `commands` 字段必须是 `-m novel.cli run <node> <sid> ... --yes` 的 16 条真实
+付费 production dispatch：每书各一条 Stage2 global/blueprint、Stage4 A `design`、
+Stage4 B `plan`、Stage5 write、Stage6 hook/semantic、Stage7 rename；Stage3 v2 是免费机械节点，
+不进入付费 dispatch，
 但仍须在 required artifacts 中存在 current v2。`stage6.semantic` 只带 `--base --yes`
 （`--advisory` 已随自动放行门一并删除）；canonical `stage5.write` 也只带 `--base --yes`，
 默认补齐当前计划的全部缺章。
-ledger 必须对两书、七个付费节点逐一有非零记录并与这 14 条命令对账。
-⚠ 这里的 14 = 2 书 × 7 付费节点，**现算不写死**——它曾因 Stage5 semantic 退役从 18
-降为 16，又因 Stage3 v2 免费化降为 14。条数以 `contracts/schema/corpus.py` 的
-`CURRENT_CORPUS_BOOKS × CURRENT_CORPUS_PAID_NODES` 为准。`preview`、`mark` 或缺 `run` 的展示命令不能冒充生产 dispatch。
+ledger 必须对两书、八个付费节点逐一有非零记录并与这 16 条命令对账；Stage4 A/B 是两次
+独立付费 dispatch，不能用 B 相的一行账或最终计划替代 A 相的调用与中间产物。
+⚠ 这里的 16 = 2 书 × 8 付费节点，**现算不写死**——它曾因 Stage5 semantic 退役从 18
+降为 16、又因 Stage3 v2 免费化降为 14，Stage4 拆成独立 A/B 后回到 16。条数以
+`contracts/schema/corpus.py` 的 `CURRENT_CORPUS_BOOKS × CURRENT_CORPUS_PAID_NODES` 为准。
+`preview`、`mark` 或缺 `run` 的展示命令不能冒充生产 dispatch。
 
 finalise manifest 时可用 `--record-corpus-skips <path>` 收集候选 allowlist；普通测试不自动记录。
 allowlist 禁止掩盖 missing corpus、未设 `NOVEL_OUTPUT` 或 0 collected，xfail 也不能静默改记为

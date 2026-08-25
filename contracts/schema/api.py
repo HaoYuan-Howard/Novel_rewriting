@@ -28,7 +28,7 @@ from __future__ import annotations
 
 from typing import Annotated, Literal
 
-from pydantic import Field, model_validator
+from pydantic import Field, field_validator, model_validator
 
 from contracts.invariants import (
     ADDRESS_CONTEXT,
@@ -56,6 +56,8 @@ from contracts.invariants import (
     SEVERITY,
     STAGES,
     STAGE5_REVIEW_STATE,
+    STRUCTURE_APPROVAL_DECISIONS,
+    STRUCTURE_APPROVAL_STATES,
     STRUCTURAL_ROLES,
     STAGE0_SEGMENT_KINDS,
     STAGE1_SEGMENT_KINDS,
@@ -77,6 +79,7 @@ from contracts.schema.stage2 import (
 from contracts.schema.stage3 import Measurable, StyleProvenance
 from contracts.schema.stage4 import (
     CtxChapter, CtxProvenance, PlanGoal, PlanProvenance, SemanticContract,
+    StructureDecision,
 )
 from contracts.schema.stage5 import (
     ChapterSegment, JudgedDraft, ReviewProvenance, ReviewSources,
@@ -107,6 +110,8 @@ InboxAttention = Literal[INBOX_ATTENTION]
 InboxDeliveryEffect = Literal[INBOX_DELIVERY_EFFECT]
 AnchorCoverageState = Literal[ANCHOR_COVERAGE_STATE]
 Stage5ReviewState = Literal[STAGE5_REVIEW_STATE]
+StructureApprovalDecisionKind = Literal[STRUCTURE_APPROVAL_DECISIONS]
+StructureApprovalState = Literal[STRUCTURE_APPROVAL_STATES]
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -664,12 +669,85 @@ class ApprovalAction(FrozenModel):
     extra: list[str] | None = None
 
 
+class StructureChapterDecision(FrozenModel):
+    """人对当前 Stage4 计划中一章作出的结构裁决。"""
+
+    output_ordinal: int = Field(ge=1)
+    decision: StructureApprovalDecisionKind
+    reason: str = Field(min_length=1)
+
+    @field_validator('reason')
+    @classmethod
+    def _reason_is_not_blank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError('逐章结构裁决理由不能只含空白')
+        return value
+
+
+class StructureApprovalRequest(HashBoundHumanApproval):
+    """一次原子的全书 Stage4 结构裁决；章集必须由服务端再与当前计划精确对账。"""
+
+    chapters: list[StructureChapterDecision] = Field(min_length=1)
+
+    @model_validator(mode='after')
+    def _chapters_are_sorted_unique(self) -> StructureApprovalRequest:
+        ordinals = [row.output_ordinal for row in self.chapters]
+        if ordinals != sorted(set(ordinals)):
+            raise ValueError('结构裁决章号必须升序、去重')
+        return self
+
+
+class StructureApprovalDecision(StructureApprovalRequest):
+    """服务端已落盘的一次结构裁决；时间由服务端生成，不接受客户端代填。"""
+
+    decided_at: str = Field(min_length=1)
+
+
+class StructureApprovalView(FrozenModel):
+    """当前结构裁决及其历史；失效不删除旧的人类决定。"""
+
+    state: StructureApprovalState
+    current_subject_sha256: str | None = Field(
+        default=None, pattern=r'^[0-9a-f]{64}$')
+    current_decision: StructureApprovalDecision | None = None
+    history: list[StructureApprovalDecision] = Field(default_factory=list)
+
+    @model_validator(mode='after')
+    def _state_matches_the_decision(self) -> StructureApprovalView:
+        if self.state == 'unavailable' and self.current_subject_sha256 is not None:
+            raise ValueError('unavailable 结构态不能声称存在当前 subject')
+        if self.state in ('missing', 'accepted', 'replan_requested') \
+                and self.current_subject_sha256 is None:
+            raise ValueError(f'{self.state} 结构态必须带当前 subject')
+        if self.state in ('accepted', 'replan_requested'):
+            if self.current_decision is None:
+                raise ValueError(f'{self.state} 结构态必须带当前 typed decision')
+            if self.current_decision.subject_sha256 != self.current_subject_sha256:
+                raise ValueError('当前结构裁决必须绑定当前 subject')
+            wants_replan = any(
+                row.decision == 'request_replan'
+                for row in self.current_decision.chapters)
+            if (self.state == 'replan_requested') != wants_replan:
+                raise ValueError('结构态必须与逐章 request_replan 裁决一致')
+        elif self.current_decision is not None:
+            raise ValueError(f'{self.state} 结构态不得把旧裁决冒充当前裁决')
+        if self.current_decision is not None:
+            if not self.history or self.current_decision != self.history[-1]:
+                raise ValueError('current_decision 必须是 history 最后一项')
+        if self.state == 'missing' and self.history:
+            raise ValueError('已有旧裁决但不再绑定当前 subject 时应为 expired，不是 missing')
+        if self.state == 'expired' and not self.history:
+            raise ValueError('没有历史裁决时不能声称 expired')
+        return self
+
+
 class ApprovalDoc(StrictModel):
-    v: Literal[2] = 2
+    v: Literal[3] = 3
     sid: str = Field(min_length=1)
     gate: dict[GateKey, bool]
     seen: dict[SeenKey, bool]
     writing: bool = False
+    structure: StructureApprovalView
     spawns: dict[GateKey, list[ApprovalAction]] = Field(default_factory=dict)
 
     @model_validator(mode='after')
@@ -678,6 +756,8 @@ class ApprovalDoc(StrictModel):
             raise ValueError('gate must contain exactly s0..s7')
         if set(self.seen) != set(APPROVAL_SEEN):
             raise ValueError('seen must contain exactly read/global')
+        if self.gate['s4'] and self.structure.state != 'accepted':
+            raise ValueError('s4 gate 只能由当前 accepted 的 typed 结构裁决打开')
         return self
 
 
@@ -1275,6 +1355,7 @@ class PlanChapterLine(StrictModel):
     chapter_goal: PlanGoal
     open_hook_goal: PlanGoal
     end_hook_goal: PlanGoal
+    structure_decision: StructureDecision
     semantic_contract: SemanticContract
     chapter_rewrite_brief: str = Field(min_length=1)
     scenes: list[PlanSceneLine] = Field(min_length=1)
@@ -1288,6 +1369,7 @@ class Stage4IndexRow(FrozenModel):
     #: 章级阅读/写作导航的主要目标。来自同一份 `plan_chapters.json`，随索引一次下发，
     #: 不让前端为了 N 章再发 N 次章级请求。
     chapter_goal: str = Field(min_length=1)
+    structure_decision: StructureDecision
     budget_chars: int | None
     span_chars: int | None
     scenes: int = Field(ge=1)
@@ -1308,6 +1390,10 @@ class Stage4View(StrictModel):
     title: str = Field(min_length=1)
 
     identity_plan: bool
+    #: 这一屏 `index` / `plan_chapter` 所来自的**同一份正式计划**的结构主体。
+    #: 恒等基线不是盘上可审批对象，因此只能是 `null`；正式计划则必须给完整 SHA-256，
+    #: 供前端与审批服务的 `structure.current_subject_sha256` 关闭式对齐。
+    structure_subject_sha256: str | None = Field(pattern=r'^[0-9a-f]{64}$')
     reconstruction_strategy: str = Field(min_length=1)
     chapters: list[int] = Field(min_length=1)
     ordinal: int = Field(ge=1)
@@ -1338,6 +1424,9 @@ class Stage4View(StrictModel):
             raise ValueError(f'ordinal={self.ordinal} 不在 chapters={self.chapters} 里')
         if self.identity_plan and self.plan_provenance is not None:
             raise ValueError('恒等基线是现算的，没有落盘来源账可发')
+        if self.identity_plan != (self.structure_subject_sha256 is None):
+            raise ValueError(
+                '恒等基线不是可审批主体；正式计划必须带同份计划的完整结构 SHA-256')
         if (self.writer_target is None) != (self.ctx_chapter is None):
             raise ValueError('writer_target 与 ctx_chapter 必须同进同出（同一份任务书）')
         return self

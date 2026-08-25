@@ -2,6 +2,7 @@
   "sid": "7615069877019300633",
   "title": "雨夜账册",
   "identity_plan": false,
+  "structure_subject_sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
   "reconstruction_strategy": "先让账册异常爆发，再补足核账处境。",
   "chapters": [3],
   "ordinal": 3,
@@ -9,6 +10,12 @@
     {
       "output_ordinal": 3,
       "chapter_goal": "advance · fact_atom:f03_001",
+      "structure_decision": {
+        "mode": "reconstruct",
+        "reason": "从账册异常结果切入，再回补雨夜核账处境。",
+        "declared_change_kinds": ["entry_anchor", "disclosure_order"],
+        "computed_change_kinds": ["entry_anchor", "disclosure_order"]
+      },
       "budget_chars": 748,
       "span_chars": 748,
       "scenes": 1,
@@ -32,6 +39,12 @@
       "intent": "close",
       "fact_refs": [{"kind": "fact_atom", "ref": "f03_001", "chapter": 3}],
       "rationale": "落到秘密追查"
+    },
+    "structure_decision": {
+      "mode": "reconstruct",
+      "reason": "从账册异常结果切入，再回补雨夜核账处境。",
+      "declared_change_kinds": ["entry_anchor", "disclosure_order"],
+      "computed_change_kinds": ["entry_anchor", "disclosure_order"]
     },
     "semantic_contract": {
       "chapter_function": "发现账册异常并决定秘密追查",

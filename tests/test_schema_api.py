@@ -446,6 +446,36 @@ def test_a_name_ref_that_failed_to_resolve_keeps_the_raw_id():
         NameRef(raw='', display='x', resolved=True)
 
 
+def test_stage4_review_surface_subject_exists_exactly_for_a_formal_plan():
+    """rows 的 subject 不是可选装饰：正式计划必须绑，恒等基线不许绑。
+
+    用 ``model_construct`` 只运行待测后置条件，不为这条守卫复制整份读屏夹具。
+    """
+    common = {
+        'ordinal': 1,
+        'chapters': [1],
+        'plan_provenance': None,
+        'writer_target': None,
+        'ctx_chapter': None,
+    }
+    for identity, subject in ((True, None), (False, 'a' * 64)):
+        view = Stage4View.model_construct(
+            **common,
+            identity_plan=identity,
+            structure_subject_sha256=subject,
+        )
+        Stage4View._postconditions(view)
+
+    for identity, subject in ((True, 'a' * 64), (False, None)):
+        view = Stage4View.model_construct(
+            **common,
+            identity_plan=identity,
+            structure_subject_sha256=subject,
+        )
+        with pytest.raises(ValueError, match='\u5ba1\u6279\u4e3b\u4f53|\u7ed3\u6784 SHA-256'):
+            Stage4View._postconditions(view)
+
+
 def test_stage7_chapter_block_is_all_or_nothing():
     """`ordinal` 与 `rows` 同进同出——「问了 :o」与「书级」不许混出一个半吊子。
 

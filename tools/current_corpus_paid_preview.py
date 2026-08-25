@@ -5,7 +5,7 @@
 （output base 必须不存在或为空），也可以是已经落稳且已批准的当前 schema Stage0/1
 （Stage2～7 必须完全为空）。它会：
 
-* 用生产 ``build_argv`` 展开每本七条付费 CLI dispatch；Stage3 v2 免费机械测量不计入；
+* 用生产 ``build_argv`` 展开每本八条付费 CLI dispatch；Stage3 v2 免费机械测量不计入；
 * 固定当前模型/思考模式、独立空 cache 与 ``DEEPSEEK_MAX_RETRIES=0``；
 * 从真实节点 ladder 复算基础、语义审判和条件调用的 wire 可达上限；
 * 只对在上游生成前已经可知的 Stage2 global prompt 做精确 tokenizer 计数；
@@ -41,6 +41,7 @@ from contracts.artifacts import (  # noqa: E402
 )
 from contracts.invariants import HOOK_SLOTS, NODES  # noqa: E402
 from contracts.schema import artifact_spec, decode_artifact  # noqa: E402
+from contracts.schema.corpus import CURRENT_CORPUS_PAID_NODES  # noqa: E402
 from contracts.schema.stage0 import Stage0Revisions  # noqa: E402
 from contracts.schema.stage1 import HookCopy, MainText  # noqa: E402
 from novel import config, paths, prov  # noqa: E402
@@ -64,7 +65,10 @@ from novel.stages.stage1.audit import audit_surface  # noqa: E402
 from novel.stages.stage2 import extract as stage2_extract  # noqa: E402
 from novel.stages.stage2.contract import active_contract  # noqa: E402
 from novel.stages.stage2 import prompts as stage2_prompts  # noqa: E402
-from novel.stages.stage4.prompts import PLAN_MAX_TOKENS  # noqa: E402
+from novel.stages.stage4.prompts import (  # noqa: E402
+    BLIND_DESIGN_MAX_TOKENS,
+    EVIDENCE_BIND_MAX_TOKENS,
+)
 from novel.stages.stage5 import write as stage5_write  # noqa: E402
 from novel.stages.stage6.hook import (  # noqa: E402
     CANDIDATE_RETRY_LIMIT as HOOK_RETRY_LIMIT,
@@ -75,15 +79,8 @@ from novel.stages.stage6.hook import (  # noqa: E402
 from novel.stages.stage7.rename import MAX_TOKENS as RENAME_MAX_TOKENS  # noqa: E402
 
 
-PAID_NODES = (
-    'stage2.global',
-    'stage2.blueprint',
-    'stage4.plan',
-    'stage5.write',
-    'stage6.hook',
-    'stage6.semantic',
-    'stage7.rename',
-)
+# current corpus 的付费拓扑只有这一份；预览不得再手抄一张会独立漂移的表。
+PAID_NODES = CURRENT_CORPUS_PAID_NODES
 EXPECTED_CHAPTERS = (17, 25)
 FIXED_MODEL = config.DEFAULT_MODEL
 FIXED_THINKING = config.DEFAULT_THINKING_MODE
@@ -121,9 +118,13 @@ PREREQUISITES = {
         f'v{artifact_spec(STAGE2_GLOBAL_GROUNDING).current_version} 产物。',
         '逐章输入范围由当前 Stage1 的 17/25 章复算，不使用旧 corpus 章表。',
     ),
-    'stage4.plan': (
-        'Stage2 global + blueprint 必须 fresh；Stage3 v2 是独立的免费机械支路。',
+    'stage4.design': (
+        'Stage2 blueprint 必须 fresh，去序真相图投影可完整闭合。',
         'stage2/global_review.json 必须经 typed 人工 decisions 达到全项 PASS，打开 s2 gate。',
+    ),
+    'stage4.plan': (
+        'Stage4 blind_candidate 必须 fresh；Stage2 global + blueprint 证据层必须 fresh。',
+        'A 相候选已单独预览与批准；B 相只做证据绑定，不重规划。',
     ),
     'stage5.write': (
         'Stage3 v2 机械基线与 Stage4 plan/context 必须 fresh，且 s3/s4 已人工确认；'
@@ -369,7 +370,8 @@ def _request_envelopes(node: str, models: tuple[str, ...],
     normal_max = {
         'stage2.global': stage2_extract.GLOBAL_MAX_TOKENS,
         'stage2.blueprint': stage2_extract.BLUEPRINT_MAX_TOKENS,
-        'stage4.plan': PLAN_MAX_TOKENS,
+        'stage4.design': BLIND_DESIGN_MAX_TOKENS,
+        'stage4.plan': EVIDENCE_BIND_MAX_TOKENS,
         'stage5.write': stage5_write.MAX_TOKENS,
         'stage6.hook': HOOK_MAX_TOKENS,
         'stage6.semantic': 64_000,

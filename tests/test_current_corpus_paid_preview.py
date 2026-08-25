@@ -13,13 +13,14 @@ from tools import current_corpus_paid_preview as P
 
 #: 阶梯档数。**从生产落点取，不写死。**
 #: wire 上限恒是「逻辑请求数 × 档数 × 每档采样数」，于是这些期望值里被钉住的是
-#: **逻辑请求数**（92 / 4 / 6 …），而两个乘数只是已知乘数。
+#: **逻辑请求数**（94 / 4 / 6 …），而两个乘数只是已知乘数。
 #: ⚠⚠ 2026-08-24：Stage3 v2 变成免费机械节点后，基础逻辑请求数从 180
 #: 收到 **136**；那 44 次是两本书原先的逐章定性抽取，不得继续计入付费范围。随后
 #: `stage2.blueprint` 默认从每章两相的 v2 翻到每章一相的 v3.1，17+25 章再少 42 个
 #: 逻辑请求，基础数成为 94。Stage2 v5 又把摘要改为 fact atoms 的确定性投影，
-#: 双书各少一次书级摘要调用，基础数成为 **92**。`_logical_topology` 从
-#: `active_contract()` 的 `topology` 派生；这里钉 92 是在守当前默认真实 consumer，
+#: 双书各少一次书级摘要调用，当时基础数成为 92。2026-08-25
+#: Stage4 拆为 design + plan 两次独立调用，双书新增 2 次，现役基础数为 **94**。
+#: `_logical_topology` 从 `active_contract()` 的 `topology` 派生；这里钉 94 是在守当前默认真实 consumer，
 #: 翻默认时要随生产拓扑一起改，不能把预算预览留在旧臂。
 #: ⚠ 2026-08-18 阶梯由 4 档降到 3 档（删掉被服务端静默映射回 `high` 的 `medium`，
 #: 见 `novel/llm/client.py::LADDER`）⇒ 全部 wire 上限跟着降 1/4，**那是正确结果不是回归**。
@@ -31,14 +32,14 @@ _RUNGS = len(DEFAULT_RUNGS)
 _FLASH_MODELS = len(P.models_for(P.config.DEFAULT_MODEL))
 _PRO_MODELS = len(P.models_for(PRO_FALLBACK_MODEL))
 
-# 92 条非语义逻辑请求里，双书 `stage4.plan` 共 2 条钉死 Pro；其余 90 条
+# 94 条非语义逻辑请求里，双书 Stage4 A/B 共 4 条钉死 Pro；其余 90 条
 # 默认 Flash 并各带一次 Pro 兜底。语义判官 4 条全部钉死 Pro。
-_BASE_WIRE = ((92 - 2) * _FLASH_MODELS + 2 * _PRO_MODELS) \
+_BASE_WIRE = ((94 - 4) * _FLASH_MODELS + 4 * _PRO_MODELS) \
     * _RUNGS * MAX_SAMPLES_PER_RUNG
 _SEMANTIC_WIRE = 4 * _PRO_MODELS * _RUNGS * MAX_SAMPLES_PER_RUNG
 _HOOK_RETRY_WIRE = 6 * _FLASH_MODELS * MAX_SAMPLES_PER_RUNG
 
-#: 当前语料范围的 wire 硬上限：(基础 92 + 语义 4) × 档数 ×
+#: 当前语料范围的 wire 硬上限：(基础 94 + 语义 4) × 档数 ×
 #: 每档采样数，再加 6 条 stage6 定向重试 × 采样数（它们走**单档**
 #: `HOOK_RETRY_RUNGS`，只乘采样数不乘档数）。⚠ 并列的 `external_hard_limit=588`
 #: 是**已有实验**的历史边界，不随当前阶梯变。
@@ -122,19 +123,19 @@ def test_real_current_corpus_has_the_frozen_17_and_25_chapter_shape(tmp_path):
     ]
 
 
-def test_final_topology_lists_14_dispatches_and_real_conditional_limits(tmp_path):
+def test_final_topology_lists_16_dispatches_and_real_conditional_limits(tmp_path):
     plan = P.build_plan(_spec(tmp_path), token_counter=lambda _request: 123)
     aggregate = plan['aggregate']
     assert aggregate == {
-        'production_cli_dispatches': 14,
-        'base_nonsemantic_logical_requests': 92,
+        'production_cli_dispatches': 16,
+        'base_nonsemantic_logical_requests': 94,
         'base_nonsemantic_ladder_wire_hard_limit': _BASE_WIRE,
         'semantic_logical': 4,
         'semantic_wire_hard_limit': _SEMANTIC_WIRE,
         'stage6_conditional_candidate_retry_logical': 6,
         'stage6_conditional_candidate_retry_wire_hard_limit':
             _HOOK_RETRY_WIRE,
-        'full_conditional_logical_hard_limit': 102,
+        'full_conditional_logical_hard_limit': 104,
         'full_conditional_wire_hard_limit': _FULL_WIRE,
         'full_conditional_context_token_hard_ceiling': _FULL_WIRE * 1_000_000,
     }
@@ -182,7 +183,7 @@ def test_commands_use_production_builder_and_freeze_env_without_execution(tmp_pa
     plan = P.build_plan(_spec(tmp_path), token_counter=lambda _request: 1)
     assert plan['read_only'] is True and plan['has_execution_entry'] is False
     assert plan['authorization'].startswith('not_granted')
-    assert len(plan['dispatches']) == 14
+    assert len(plan['dispatches']) == 16
     caches = set()
     for row in plan['dispatches']:
         argv = row['production_cli_argv']
@@ -196,7 +197,7 @@ def test_commands_use_production_builder_and_freeze_env_without_execution(tmp_pa
         assert env['DEEPSEEK_MODEL'] == P.config.DEFAULT_MODEL
         assert env['DEEPSEEK_THINKING'] == 'on'
         assert env['DEEPSEEK_MAX_RETRIES'] == '0'
-        if row['node'] in {'stage4.plan', 'stage6.semantic'}:
+        if row['node'] in {'stage4.design', 'stage4.plan', 'stage6.semantic'}:
             assert row['models'] == [PRO_FALLBACK_MODEL]
         else:
             assert row['models'] == [P.config.DEFAULT_MODEL, PRO_FALLBACK_MODEL]
@@ -274,13 +275,16 @@ def test_book_specs_still_reject_same_sid_and_ancestor_bases(tmp_path):
 
 def test_profiles_and_human_gates_are_explicit_before_semantic_calls(tmp_path):
     plan = P.build_plan(_spec(tmp_path), token_counter=lambda _request: 1)
-    by_node = {row['node']: row for row in plan['dispatches'][:7]}
+    by_node = {
+        row['node']: row
+        for row in plan['dispatches'][:len(P.PAID_NODES)]
+    }
     assert by_node['stage6.semantic']['semantic_ability'] == 'reference_boundary'
     assert 'UNVER' in by_node['stage6.semantic']['semantic_gate_behavior']
     assert '没有自动放行门' in by_node['stage6.semantic']['semantic_gate_behavior']
     # `stage5.semantic` 于 2026-08-17 整节点下线 ⇒ 付费面上只剩 stage6 一条语义 dispatch。
     assert 'stage5.semantic' not in by_node
-    assert any('全项 PASS' in line for line in by_node['stage4.plan']['human_gate_dependencies'])
+    assert any('全项 PASS' in line for line in by_node['stage4.design']['human_gate_dependencies'])
     assert any('actor/reason' in line for line in by_node['stage2.global']['human_gate_dependencies'])
     assert any('approve' in line for line in by_node['stage7.rename']['human_gate_dependencies'])
     global_version = P.artifact_spec(P.STAGE2_GLOBAL_GROUNDING).current_version
@@ -385,12 +389,12 @@ def test_dirty_source_base_or_wrong_input_scope_is_rejected(tmp_path):
 
 def test_render_says_upper_bound_unknown_price_and_no_execution(tmp_path):
     text = P.render(P.build_plan(_spec(tmp_path), token_counter=lambda _request: 1))
-    assert '[14/14]' in text
+    assert '[16/16]' in text
     # 6 条定向重试 × 单档 × 每档采样数（重采对单档臂一样适用）。
     hook_retry_wire = (6 * _FLASH_MODELS * len(P.HOOK_RETRY_RUNGS)
                        * MAX_SAMPLES_PER_RUNG)
     assert f'Stage6 条件候选定向重试：logical=6 / wire 上限={hook_retry_wire}' in text
-    assert f'全条件硬上限：logical=102 / wire={_FULL_WIRE}' in text
+    assert f'全条件硬上限：logical=104 / wire={_FULL_WIRE}' in text
     assert '可达硬上限，不是预计实付' in text
     assert '已有 FC08/12/13：10 CLI run' in text
     assert '那场战役不会发生' in text

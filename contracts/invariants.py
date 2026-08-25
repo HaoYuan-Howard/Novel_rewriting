@@ -292,6 +292,20 @@ APPROVAL_STATE: Final = ('pending', 'approved')
 APPROVAL_GATES: Final = ('s0', 's1', 's2', 's3', 's4', 's5', 's6', 's7')
 APPROVAL_SEEN: Final = ('read', 'global')
 
+#: Stage4 v3 的章级结构决定。`retain` 是一次显式设计决定，不是“模型忘了改”；
+#: `reconstruct` 只声明要改变哪些可复算结构维度，实际变化仍由代码从最终计划重算。
+STRUCTURE_MODES: Final = ('retain', 'reconstruct')
+STRUCTURE_CHANGE_KINDS: Final = (
+    'entry_anchor', 'ending_anchor', 'fact_grouping',
+    'disclosure_order', 'noncontiguous_regroup',
+)
+STRUCTURE_METRIC_CONTRACT: Final = 'atomic-structure-v2'
+BLIND_ALIAS_ALGORITHM: Final = 'hmac-sha256-v1'
+STRUCTURE_APPROVAL_DECISIONS: Final = ('accept', 'request_replan')
+STRUCTURE_APPROVAL_STATES: Final = (
+    'unavailable', 'missing', 'accepted', 'replan_requested', 'expired',
+)
+
 #: 原始 txt 的编码候选，**按尝试顺序**。取值面只能从代码来：
 #: 全语料 163 本**只出现过 `utf-8`，另四个零样本**——样本再多也补不出没发生过的分支。
 SOURCE_ENCODINGS: Final = ('utf-8-sig', 'utf-32', 'utf-16', 'utf-8', 'gb18030')
@@ -848,8 +862,8 @@ RESPONSE_GOAL_INTENTS: Final = {
 #: ⇒ 这三条从「模型的责任」变成 `novel/stages/stage4/measure.py::allocate_budgets`
 #: 的**后置条件**，而模型只表达它真正该表达的那件事：**哪一章重、章里哪一场重**。
 #:
-#: 【为什么是两级而不是一级】它们是**两层不同的问题**，`PLAN_SYS` 的篇幅段里一直是
-#: 两条并列的规则：「哪一章重要」只有章级倍率能表达，「本章里哪里重要」只有场景级分配能表达。
+#: 【为什么是两级而不是一级】它们是**两层不同的问题**：
+#: 「哪一章重要」只有章级倍率能表达，「本章里哪里重要」只有场景级分配能表达。
 #: 压成一级就等于宣布其中一层不存在。
 #:
 #: 【两张表的取值面刻意零重词】前缀 `CH_` / `W_` 不重叠，**十个词干也两两不同**
@@ -885,8 +899,8 @@ CHAPTER_WEIGHT_RATIO: Final = {
 #: 单元档位 → **本章内的相对权重**。分配式是 `预算_i ∝ 源字数_i × 权重_i`
 #: ⇒ 「预算/源」相对本章均值的倍数恰好等于 `权重_i ÷ 权重的源字数加权均值`。
 #:
-#: ⚠ 两个端点值不是新发明的：`PLAN_SYS` 一直写着「重头场给到本章均值的 2~3 倍、
-#: 快速带过的给到均值的一半以下」，`peak=2.6` / `brush=0.38` 就是那句话的取值面化。
+#: ⚠ 两个端点值沿用既有标定：重头场约为本章均值的 2~3 倍，
+#: 快速带过场低于均值一半；`peak=2.6` / `brush=0.38` 是它们的取值面化。
 #: ⚠ **它同时决定 `structure_reshaped`（`R-5.19`）那条读数的分辨率**：那条读数问的是
 #: 「本章有没有哪一场的相对倍率冲出 `PLAN_BUDGET_BAND`」，而 2.6 与 0.38 都在带外
 #: ⇒ 模型一旦真的标出重头场或一带而过的场，那条读数就会成立。这是有意的。
@@ -1296,6 +1310,8 @@ PAID_FLAGS: Final = {
     #   同 `stage5.write` 的 `--revise`，理由见 `NODES` 里那一格上方的注释。
     '--purge-role': 'stage2 的语义判官臂——把 role/fate 双向重划分一遍，它要再调一次模型',
     '--resample': 'stage2 全书响应被闸门拦下后，绕过同参数问题缓存重新采样整份响应',
+    '--replan': ('Stage4B 返回 infeasible 或人工结构审批 request_replan 后，'
+                 '绕过同参数缓存重新采样整书 Stage4A；不会自动串行 Stage4B'),
     '--patch': 'stage2 逐章蓝图 extraction IR 族的字段级修复——逐条失败各调一次模型，'
                '量级是条不是章',
 }
@@ -1513,9 +1529,8 @@ class NodeSpec(NamedTuple):
     #   flash 判官，账本事后才看得出来。
     # ⚠⚠ **现有两个钉死值，而它们的理由不是同一个**，不许互相援引：
     #   · `stage6.semantic` = **判官给不出有区分度的证据**（质量死刑，2026-08-20）。
-    #   · `stage4.plan`     = **重采粒度**（2026-08-22）：它是全链唯一一个全书一次
-    #     调用的生成节点，一次 `answer_lost` 重采就是整本书。逐章节点有同档重采
-    #     这张便宜的网（实测 4/4 第二个样本就过、一次没掉档），它没有。
+    #   · `stage4.design` / `stage4.plan` = **重采粒度**（2026-08-22）：两相各是
+    #     一次全书调用，一次 `answer_lost` 重采就是整本书；逐章节点的便宜恢复网不适用。
     #   两条实测依据都在 `docs/BACKEND_CONTRACT.md` §十。
     model: str = ''
 
@@ -1606,9 +1621,9 @@ NODES: Final[dict[str, NodeSpec]] = {
     'stage3.style':     NodeSpec('stage3', 'R-4',  False, 'stage3 机械基线',
                                   flags=('--check-only', '--measure-only'),
                                  produces=(artifact_paths.STAGE3_STYLE_GROUNDING,)),
-    # ⚠⚠ `model` 钉死 `deepseek-v4-pro`（2026-08-22 用户裁决，第二个钉死值）。
-    #   理由**不是**「flash 在这里更容易空」，是**重采粒度**：本节点是全链唯一一个
-    #   全书一次调用的生成节点 ⇒ 一次 `answer_lost` 的重采代价是整本书，而逐章节点
+    # ⚠⚠ Stage4 两个付费相都钉死 `deepseek-v4-pro`（2026-08-22 用户裁决沿用）。
+    #   理由**不是**「flash 在这里更容易空」，是**重采粒度**：每相都是
+    #   全书一次调用 ⇒ 一次 `answer_lost` 的重采代价是整本书，而逐章节点
     #   重采一章 ≈ 5.7k output。跨 4 份账本的严格口径（正文空 **且** `finish=stop`）：
     #   `stage4.plan` flash@high **13/30 = 43.3%**（blueprint 22.9% / write 12.1% /
     #   style 7.9%），pro@high **0/6**、全表 pro **0/249**。
@@ -1620,13 +1635,18 @@ NODES: Final[dict[str, NodeSpec]] = {
     #   产自降档档位（pro 对照 0/23）。
     #   ⚠ 治本仍在别处：本节点的毛病（空正文率最高、失败最贵、全书级判据难守）根因
     #   同一个——**全书一次调用这个粒度**。钉 pro 是治标的那一手。
-    'stage4.plan':      NodeSpec('stage4', 'R-5',  True,  'stage4 重构计划',
-                                 flags=('--dry-run', '--check-only',
-                                        '--revalidate', '--names-only', '--identity',
-                                        '--apply-edit', '--chapters', '--actor', '--reason',
-                                        '--response-repair'),
-                                 produces=(artifact_paths.STAGE4_PLAN_CHAPTERS,),
-                                 model='deepseek-v4-pro'),
+    'stage4.design':    NodeSpec('stage4', 'R-5',  True,  'stage4 盲场景设计',
+                                  flags=('--dry-run', '--replan', '--response-repair'),
+                                  produces=(artifact_paths.STAGE4_BLIND_CANDIDATE,),
+                                  model='deepseek-v4-pro'),
+    'stage4.plan':      NodeSpec('stage4', 'R-5',  True,  'stage4 证据绑定与计划编译',
+                                  flags=('--dry-run', '--check-only',
+                                         '--revalidate', '--names-only', '--identity',
+                                         '--apply-edit', '--actor', '--reason',
+                                         '--response-repair'),
+                                  produces=(artifact_paths.STAGE4_EVIDENCE_BINDING,
+                                            artifact_paths.STAGE4_PLAN_CHAPTERS),
+                                  model='deepseek-v4-pro'),
     # ⚠ `flags=()` 在这一格是【终态】不是待定：本节点**本身**就是那个动作
     #   `stage4.context` 本身就是该动作，因此不再另设同义 flag。
     'stage4.context':   NodeSpec('stage4', 'R-6',  False, 'stage4 写作上下文组装',

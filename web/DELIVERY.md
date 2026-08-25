@@ -131,7 +131,7 @@ export const api: Api = USE_MOCK ? mockApi : realApi
 | 状态 | 家 |
 |---|---|
 | 20 份响应 | TanStack Query |
-| **`gate` / `seen` / `writing`** | 一份 v2 `ApprovalDoc`，也走 Query（`['approvals', sid]`）；`writing` 独立记录全书闭卷写作授权 |
+| **`gate` / `seen` / `structure` / `writing`** | 一份 v3 `ApprovalDoc`，也走 Query（`['approvals', sid]`）；`structure` 保存绑定完整 Stage4 plan subject 的逐章 typed 裁决，`writing` 仍独立记录全书闭卷写作授权 |
 | `job` / `jobLog` | Query + `refetchInterval`（由服务端下发的 `running` 决定） |
 | 确认框里的 argv | Query（`api.previewJob`） |
 | `sid` / 章号 / 当前屏 | React Router 路径 |
@@ -139,8 +139,10 @@ export const api: Api = USE_MOCK ? mockApi : realApi
 | 选中的判据 / 剧透开关 / tab / 编辑中的文本 | 屏内 `useState` |
 
 **gate 走 Query 而不是 reducer**：它在真产品里是服务端的人工验收记录。
-`approveGate` 是「POST …/approve」，换实现只改 `src/api/` 一个目录，
-`src/screens/**` 与 `src/components/**` 不感知。
+普通闸门经 `approveGate`；s4 刻意不走通用 bool 路由，而由 Stage4 专用表单一次提交
+完整 subject SHA-256、actor/reason 与全章 `accept|request_replan + reason`。
+任一章要求重规划只关闭 s4、保存决定，不自动发起付费作业。换实现仍只改 `src/api/`
+这一道传输缝，屏与组件不直接 fetch。
 
 **「闸门不能是全局的」是结构性保证**，不是约定：
 `sid` 来自 `useParams()` → 进 query key → 进持久化 key。
@@ -163,7 +165,7 @@ export const api: Api = USE_MOCK ? mockApi : realApi
 | `/n/:sid/read/:o` | 原文与 stage2 骨架对照 |
 | `/n/:sid/global` | stage2 全局人物、关系、规则、秘密 |
 | `/n/:sid/style` | stage3 存量机械基线与当前免费重算对照 |
-| `/n/:sid/stage4/:o` | 计划与写作上下文逐拍对照 |
+| `/n/:sid/stage4/:o` | 计划与写作上下文逐场景对照；常驻展示完整结构 subject SHA-256、全章 `retain/reconstruct` 与声明/复算变化，选中章再展示计划/上下文细节，并经专用 typed 表单原子提交全章结构裁决。结构批准不等于 Stage5 写作授权 |
 | `/n/:sid/stage5/:o` | canonical 成稿、材料、验收 finding 与修订的合并工作面；空状态在付费确认前先写入全书闭卷授权；current TrimAudit 在本屏经专用 retain-pretrim 路由留 actor/reason 销账，fresh Review 的章级/书级 finding 可按完整 evidence identity 提交 wontfix |
 | `/n/:sid/inbox` | 八类待办的全书路由器，不提供第二个编辑面（校验下沉到各阶段屏的面板） |
 | `/n/:sid/stage6` | 三候选文案与人工定稿 |
@@ -191,6 +193,11 @@ components/
   gate/   GateBar        check/  CheckPanel        job/  JobDrawer  ConfirmDialog
   agent/  AgentBatchDialog  AgentRunDialog
 ```
+
+Stage4 屏另有 `screens/stage4/StructureApprovalPanel`：它替代通用 `GateBar(s4)`，因为
+通用按钮装不下 hash-bound 全章裁决。表单选项只消费 `/api/enums` 的
+`structure_approval_decisions`；`request_replan` 不顺手拉起重规划，写作授权仍只在 Stage5
+的付费确认流中单独授予。
 
 notice 槽与快捷键不属于任何一屏：`useChrome().notify(text)` 推一条瞬态通知
 （写回成功 / 已复制之类的一句话反馈），AppShell 在右下角渲染，约 3s 自消、最多堆 3 条；
@@ -221,11 +228,13 @@ stage5 的「三栏」= `ComparePanes(sticky=left)` 的右栏里装 `CompareRows
 
 - **动作分类以服务端下发的 `writes_disk: boolean` 为准。** `constants/actions.ts` 的精确集合
   只给不带该字段的历史 mock 兜底。
-- **`null` 与 `[]` 在两层之间不一致，前端要写两套判空**：
-  - `stage4.chapter.beats[]`：`keep_value` / `must_appear` / `must_hold` 缺省是 `[]`；
-    但 `time_layer` / `place` 会是 `null`
-  - `stage5.chapter.materials.beats[]`：**同名字段缺省是 `null`**，
-    而且 `time_layer` / `place` / `present` 三个也会是 `null`
+- **Stage4 计划/上下文按场景槽对齐**：`plan_chapter.scenes[]`
+  恒非空；`ctx_chapter=null` 表示上下文缺席，非空时再按 `scenes[].slot` 对齐。
+- **Stage5 `materials` 是对象或 `null`**：非空时以 `blocks[]` 为唯一下发面。前端分别处理
+  对象缺席与对象内列表，不能把 `null` 洗成空列表。
+- **Stage4 结构决定与人工裁决是两层**：`stage4.index[].structure_decision` 展示计划自己的
+  `retain/reconstruct + declared/computed_change_kinds`；`ApprovalDoc.structure` 展示人对当前
+  完整 subject 的 `accept/request_replan`。前端不把前者自动翻译成后者。
 - **`/api/jobs` 的元素是嵌套 `JobRecord`**。`api/endpoints.ts` 在唯一数据缝把它适配成抽屉
   使用的扁平 `Job`，五态（`running / ok / landed_red / failed / unknown`）从服务端原样适配；
   `landed_red` 表示产物已落盘但报告有阻断红行，不折进 `ok` 或 `failed`。抽屉只画概览，
@@ -274,7 +283,7 @@ stage5 的「三栏」= `ComparePanes(sticky=left)` 的右栏里装 `CompareRows
 | U-08 第三类：免费但写盘 | ✅ | 深色 + `写盘` 角标 + 第四种「未标注」。分类**只查表不判定**：`writes_disk` 由服务端 `novel/api/enums.py::would_write` 逐动作下发，`constants/actions.ts` 缺格即画 `unclassified`——「不知道它会不会写盘」和「它只读」是两回事 |
 | U-09 确认框显示完整命令 | ✅ | argv 来自 `POST /api/jobs/preview`；取不到就不让发起 |
 | U-10 不显示预估花费 / 次数 | ✅ | 全屏搜不到 |
-| U-11 前端不做判定 | ✅ | `badge`/`paid`/`freshness`/`sev`/`passed` 全部照画。设计稿原有的两处显示阈值已经收干净，而**两处的收法不同型**：<br>· 锚点覆盖率 —— 服务端下发 `coverage_threshold` + `coverage_state`（阈值来自 `ANCHOR_COVERAGE_WARN`，state 由 validator 反推），前端只消费 state；<br>· 拍级 `预算/源文` —— **服务端刻意没有拍级判定**：出档是章级判据（`sum(budget_chars)` vs `sum(span)`，`/check/stage4` 的 `budget_band`）。前端因此只显示比值读数与对比条，判定指向本屏底部的 stage4 校验。⚠ 章级的 `in_band` 服务端**也没有**（`contracts/schema/api.py::Stage4IndexRow` 明写）——那是判据结论，要并排显示就去 join 报告。<br>两条各有守卫：`tests/test_api_discipline.py` 的 `test_frontend_does_not_rejudge_anchor_coverage` 与 `test_frontend_does_not_rejudge_beat_budget_band`。<br>唯一剩下的例外是闸门 DAG——它是 brief 自己画的**流程图**，不是对服务端结论的再判定 |
+| U-11 前端不做判定 | ✅ | `badge`/`paid`/`freshness`/`sev`/`passed` 全部照画。设计稿原有的两处显示阈值已经收干净，而**两处的收法不同型**：<br>· 锚点覆盖率 —— 服务端下发 `coverage_threshold` + `coverage_state`（阈值来自 `ANCHOR_COVERAGE_WARN`，state 由 validator 反推），前端只消费 state；<br>· 场景级 `预算/源舞台` —— **服务端刻意没有场景级判定**：出档是章级判据（`sum(budget_chars)` vs `sum(span)`，`/check/stage4` 的 `budget_band`）。前端因此只显示比值读数与对比条，判定指向本屏底部的 stage4 校验。⚠ 章级的 `in_band` 服务端**也没有**（`contracts/schema/api.py::Stage4IndexRow` 明写）——那是判据结论，要并排显示就去 join 报告。<br>两条各有守卫：`tests/test_api_discipline.py` 的 `test_frontend_does_not_rejudge_anchor_coverage` 与 `test_frontend_does_not_rejudge_scene_budget_band`。<br>唯一剩下的例外是闸门 DAG——它是 brief 自己画的**流程图**，不是对服务端结论的再判定 |
 | U-12 不从文案正则抠结构 | ✅ | `chapters` / `fix` 全部读服务端字段；证据高亮只做 `indexOf`，且一处没命中时明说 |
 | U-13 不按下标切字符串 | ✅ | `HighlightedText` 的 props 里**没有 start/end**，类型上就踩不进去 |
 | U-14 中文阅读界面 | ✅ | 中文优先字体栈；行高 2.05–2.15；不 justify；段落用间距分隔；并排两栏共用一个 `measure` |

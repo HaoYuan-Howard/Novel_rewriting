@@ -41,6 +41,11 @@ export interface EnumsResponse {
   invent: { allow: string[]; forbid: string[]; principle: string }
   job_kinds: Record<string, EnumJobKind>
   actions: EnumAction[]
+  /** Stage4 计划的实例值仍随计划下发；这里仅提供表单/展示需要的运行时取值面。 */
+  structure_modes: string[]
+  structure_change_kinds: string[]
+  structure_approval_decisions: string[]
+  structure_approval_states: string[]
   /**
    * This is an honest display boundary, not an access-control boundary: the server still
    * sends the complete stage2 document and the adapter projects it before a Screen sees it.

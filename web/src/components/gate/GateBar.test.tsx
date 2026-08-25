@@ -2,9 +2,10 @@ import { api } from '@/api/endpoints'
 import { ApiError } from '@/api/errors'
 import type { ApprovalDoc } from '@/types/approvals'
 import type { EnumsResponse } from '@/types/enums'
-import { fireEvent, screen } from '@testing-library/react'
+import { fireEvent, screen, waitFor } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import { renderRoute } from '@/test/render'
+import { ConfirmDialog } from '@/components/job/ConfirmDialog'
 import { GateBar } from './GateBar'
 
 /**
@@ -18,11 +19,17 @@ import { GateBar } from './GateBar'
  */
 
 const doc: ApprovalDoc = {
-  v: 2,
+  v: 3,
   sid: 'book-1',
   gate: { s0: true, s1: true, s2: true, s3: false, s4: false, s5: false, s6: false, s7: false },
   seen: { read: true, global: true },
   writing: false,
+  structure: {
+    state: 'missing',
+    current_subject_sha256: 'a'.repeat(64),
+    current_decision: null,
+    history: [],
+  },
   spawns: {
     s4: [{ kind: 'stage5.write', label: '写作', extra: null }],
   },
@@ -57,7 +64,7 @@ const enums = {
   },
 } as unknown as EnumsResponse
 
-function mount(screenName: 'style' | 'stage4') {
+function mount(screenName: 'style' | 'stage4' | 'global') {
   vi.spyOn(api, 'getEnums').mockResolvedValue(enums)
   vi.spyOn(api, 'getApprovals').mockResolvedValue(doc)
   vi.spyOn(api, 'getJobs').mockResolvedValue({ jobs: [], running: null })
@@ -72,12 +79,61 @@ describe('GateBar 的动作分类', () => {
     expect(button.textContent).not.toContain('写盘')
   })
 
-  it('有付费 spawn 的闸门照旧标成花钱', async () => {
+  it('Stage4 不渲染会调用通用 gate/s4 的匿名确认按钮', async () => {
+    const approve = vi.spyOn(api, 'approveGate')
     mount('stage4')
-    const button = await screen.findByRole('button', { name: /确认计划/ })
-    // 付费优先于写盘：paid 命中就不再看 writes_disk
-    expect(button.textContent).not.toContain('未标注')
-    expect(screen.getByText(/花钱/)).toBeVisible()
+    await waitFor(() => expect(api.getApprovals).toHaveBeenCalled())
+    expect(screen.queryByRole('button', { name: /确认计划/ })).not.toBeInTheDocument()
+    expect(approve).not.toHaveBeenCalled()
+  })
+
+  it('s2 已确认后只续跑服务端下发的下一相，不重复 approveGate', async () => {
+    const next = { kind: 'stage4.plan', label: 'Stage4B 证据绑定与计划编译', extra: null }
+    const done: ApprovalDoc = {
+      ...doc,
+      gate: { ...doc.gate, s2: true },
+      spawns: { s2: [next] },
+    }
+    const liveEnums = {
+      ...enums,
+      job_kinds: { 'stage4.plan': { paid: true } },
+      actions: [{
+        kind: 'stage4.plan', label: next.label, extra: null,
+        paid: true, free_flag: null, writes_disk: true,
+      }],
+    } as unknown as EnumsResponse
+    vi.spyOn(api, 'getEnums').mockResolvedValue(liveEnums)
+    vi.spyOn(api, 'getApprovals').mockResolvedValue(done)
+    vi.spyOn(api, 'getJobs').mockResolvedValue({ jobs: [], running: null })
+    const approve = vi.spyOn(api, 'approveGate')
+    vi.spyOn(api, 'previewJob').mockResolvedValue({
+      argv: 'python -m novel.cli run book-1 stage4.plan --yes',
+      paid: true,
+      label: next.label,
+      kind: next.kind,
+      steps: [{
+        label: next.label,
+        paid: true,
+        writes: 'stage4/evidence_binding.json · stage4/plan_chapters.json',
+        argv: 'python -m novel.cli run book-1 stage4.plan --yes',
+      }],
+    })
+    const start = vi.spyOn(api, 'startJob').mockResolvedValue({
+      id: 'stage4b-job', kind: next.kind, label: next.label,
+      argv: 'python -m novel.cli run book-1 stage4.plan --yes',
+      state: 'running', paid: true, started: 1, finished: null,
+      sid: 'book-1', ordinal: null,
+    })
+
+    renderRoute(<><GateBar screen="global" /><ConfirmDialog /></>)
+    fireEvent.click(await screen.findByRole('button', { name: '继续下一步' }))
+    expect(await screen.findByText(/stage4\.plan --yes/)).toBeVisible()
+    expect(approve).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', { name: '确认发起（花钱）' }))
+    await waitFor(() => expect(start).toHaveBeenCalledWith({
+      ...next, required_inputs: undefined, sid: 'book-1', ordinal: null,
+    }))
+    expect(approve).not.toHaveBeenCalled()
   })
 
   it('actionOnly 失败态展示服务端给出的恢复命令', async () => {

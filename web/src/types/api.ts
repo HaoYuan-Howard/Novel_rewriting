@@ -5,7 +5,13 @@
  * 所以两条路径同型是 **tsc 强制**的，不是口头约定。
  * 组件与屏从不 fetch，只经 hooks → api.*。
  */
-import type { ApprovalBackfillResult, ApprovalDoc, GateKey, SeenKey } from './approvals'
+import type {
+  ApprovalBackfillResult,
+  ApprovalDoc,
+  GateKey,
+  SeenKey,
+  StructureApprovalRequest,
+} from './approvals'
 import type {
   AgentBatchRequest,
   AgentQueueView,
@@ -124,6 +130,8 @@ export interface Api {
   /* 人工验收记录 */
   getApprovals(sid: string): Promise<ApprovalDoc>
   approveGate(sid: string, key: GateKey): Promise<ApprovalDoc>
+  /** Stage4 的专用全书 typed 裁决；只写审批记录，不启动重规划作业。 */
+  approveStructure(sid: string, request: StructureApprovalRequest): Promise<ApprovalDoc>
   backfillApprovals(sid: string): Promise<ApprovalBackfillResult>
   markSeen(sid: string, key: SeenKey): Promise<ApprovalDoc>
   startWriting(sid: string): Promise<ApprovalDoc>

@@ -25,13 +25,13 @@ from pydantic import BaseModel, Field, RootModel
 from contracts.artifacts import (
     STAGE0_REVISIONS, STAGE1_HOOK_COPY, STAGE1_MAIN_TEXT,
     STAGE2_CHAPTER_BLUEPRINTS, STAGE2_GLOBAL_GROUNDING,
-    STAGE2_GLOBAL_REVIEW,
+    STAGE2_GLOBAL_REVIEW, STAGE4_BLIND_CANDIDATE, STAGE4_EVIDENCE_BINDING,
 )
 from contracts.schema import (
     ArtifactVersionError, InputEdge, LlmProvenance, StyleGrounding, Usage, artifact_spec,
     decode_artifact, encode_artifact,
 )
-from contracts.invariants import STAGE3_MEASUREMENT_CONTRACT
+from contracts.invariants import STAGE3_MEASUREMENT_CONTRACT, STRUCTURE_METRIC_CONTRACT
 from contracts.schema.stage3 import StyleProvenance
 from contracts.schema.stage4 import PlanChapters, PlanProvenance
 from novel.consumption import CONSUMED_PROJECTIONS, producer_node, projection_for
@@ -118,7 +118,8 @@ def _plan_ctx(base: Path, sid: str = '123', *, paid: bool = True) -> RunContext:
     return _ctx(base, sid, node='stage4.plan', paid=paid)
 
 
-def _plan(ctx: RunContext, *, marker: str = '计划一') -> PlanChapters:
+def _plan(ctx: RunContext, *, marker: str = '计划一',
+          compiled: bool = False) -> PlanChapters:
     """一份最小合法 Stage4 计划；``marker`` 是各事务测试的内容哨兵。"""
     goal = {
         'intent': 'advance',
@@ -127,16 +128,23 @@ def _plan(ctx: RunContext, *, marker: str = '计划一') -> PlanChapters:
         }],
         'rationale': '测试事务与来源账，不测试规划质量。',
     }
-    provenance = ctx.llm_provenance(
+    store = ArtifactStore(ctx)
+    candidate_sha = store.full_sha256_or_none(STAGE4_BLIND_CANDIDATE) if compiled else None
+    binding_sha = store.full_sha256_or_none(STAGE4_EVIDENCE_BINDING) if compiled else None
+    if compiled:
+        assert candidate_sha is not None and binding_sha is not None, \
+            'compiled 测试夹具必须先落两份 A/B 字节'
+    provenance = ctx.free_provenance(
         PlanProvenance,
-        prompts={'PLAN_SYS': '测试用计划提示词'},
-        model='fixture-model',
-        adopted_models=['fixture-model'],
         params={
-            'compiler': 'atomic-scenes-v1',
+            'compiler': 'atomic-scenes-v2',
             'fact_atoms': 1,
             'source_stages': 1,
+            'structure_metric_contract': STRUCTURE_METRIC_CONTRACT,
         },
+        origin='compiled' if compiled else 'human',
+        blind_candidate_sha256=candidate_sha,
+        evidence_binding_sha256=binding_sha,
     )
     return PlanChapters(
         reconstruction_strategy=marker,
@@ -147,6 +155,12 @@ def _plan(ctx: RunContext, *, marker: str = '计划一') -> PlanChapters:
             'open_hook_goal': {**goal, 'intent': 'open'},
             'end_hook_goal': {**goal, 'intent': 'close'},
             'weight': 'even',
+            'structure_decision': {
+                'mode': 'retain',
+                'reason': '本夹具只验证事务与来源账，不声明结构变化。',
+                'declared_change_kinds': [],
+                'computed_change_kinds': [],
+            },
             'semantic_contract': {
                 'chapter_function': '测试事务与来源账',
                 'information_delta': ['f01_001'],
@@ -170,6 +184,16 @@ def _plan(ctx: RunContext, *, marker: str = '计划一') -> PlanChapters:
         }],
         _provenance=provenance,
     )
+
+
+def _seed_phase_bytes(store: ArtifactStore) -> None:
+    for rel, payload in (
+        (STAGE4_BLIND_CANDIDATE, b'test blind candidate bytes\n'),
+        (STAGE4_EVIDENCE_BINDING, b'test evidence binding bytes\n'),
+    ):
+        path = store.path(rel)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(payload)
 
 
 def _prov_on_disk(p: Path) -> dict:
@@ -1069,9 +1093,11 @@ def test_three_state_keys_are_absent_on_disk_not_null():
     ctx = _plan_ctx(_book())
     st = ArtifactStore(ctx)
     st.read(Loose, UPSTREAM)
-    d = _prov_on_disk(st.write(PLAN_REL, _plan(ctx)))
-    for k in ('revalidated', 'gates_skipped', 'origin', 'input_basis', 'usage'):
+    _seed_phase_bytes(st)
+    d = _prov_on_disk(st.write(PLAN_REL, _plan(ctx, compiled=True)))
+    for k in ('revalidated', 'gates_skipped', 'input_basis', 'usage'):
         assert k not in d, f'{k} 是 None，不该出现在盘上'
+    assert d['origin'] == 'compiled'
 
 
 def test_the_write_gate_refuses_prompts_without_inputs():
@@ -1740,11 +1766,15 @@ def test_a_non_utf8_json_artifact_still_says_it_is_not_utf8_not_bad_json():
 # 五、`.INVALID`、`gates_skipped`、提升路
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _write_invalid(base: Path, gates: list[str], *, marker: str = '计划一') -> tuple[RunContext, Path]:
+def _write_invalid(base: Path, gates: list[str], *, marker: str = '计划一',
+                   compiled: bool = False) -> tuple[RunContext, Path]:
     ctx = _plan_ctx(base)
     st = ArtifactStore(ctx)
     st.read(Loose, UPSTREAM)
-    return ctx, st.write_invalid(PLAN_REL, _plan(ctx, marker=marker), gates_skipped=gates)
+    if compiled:
+        _seed_phase_bytes(st)
+    return ctx, st.write_invalid(
+        PLAN_REL, _plan(ctx, marker=marker, compiled=compiled), gates_skipped=gates)
 
 
 def test_gates_skipped_is_written_even_when_empty():
@@ -1934,16 +1964,16 @@ def test_retiring_the_invalid_sibling_is_a_no_op_when_there_is_none():
         '没有问题稿就不该凭空造一个归档目录'
 
 
-def test_promotion_keeps_the_original_prompts_and_archives_the_invalid():
+def test_promotion_keeps_the_original_phase_bindings_and_archives_the_invalid():
     """⭐⭐ 提升路两件事，各对应一次实测损失。
 
-    ① **不许伪造**：原型的 `--revalidate` 盖上当前 SYS 指纹 + 当前 model + 当前 inputs，
-       `round` 还 +1，而**没有任何一次新落笔发生过**。
+    ① **不许伪造**：`--revalidate` 不得改写 A/B 完整字节绑定或当前 inputs，
+       `round` 也不该凭空 +1，因为**没有任何一次新规划发生过**。
     ② **不许删**（`Q-8`）：原型「读完问题稿就把它删了」造出的正是盘上那条幽灵边
        ——另一份产物的 `inputs` 还指着它。**删一个还被别人指着的文件，会同时制造两个问题。**
     """
     base = _book()
-    ctx, inv = _write_invalid(base, ['name_leak'])
+    ctx, inv = _write_invalid(base, ['name_leak'], compiled=True)
     was = _prov_on_disk(inv)
 
     # 提升走的是一次 **0 成本**的跑（`--revalidate` 在 `FREE_ENTRIES` 里）
@@ -1952,8 +1982,10 @@ def test_promotion_keeps_the_original_prompts_and_archives_the_invalid():
         PLAN_REL, PlanChapters, **REVALIDATION)
     now = _prov_on_disk(out)
 
-    assert now['prompts'] == was['prompts'], '盖上了当前的 SYS 指纹 —— 这就是伪造'
-    assert now['model'] == was['model']
+    assert now.get('prompts') == was.get('prompts')
+    assert 'model' not in now and 'model' not in was, '确定性编译计划不得冒充第三次模型调用'
+    assert now['blind_candidate_sha256'] == was['blind_candidate_sha256']
+    assert now['evidence_binding_sha256'] == was['evidence_binding_sha256']
     assert now['inputs'] == was['inputs']
     assert now['revalidated'] is True
     assert now['revalidation_audit']['actor'] == REVALIDATION['actor']
@@ -1961,7 +1993,7 @@ def test_promotion_keeps_the_original_prompts_and_archives_the_invalid():
     assert now['revalidation_audit']['content_changed'] is False
     assert now['revalidation_audit']['edited_by_human'] is False
     assert now['revalidation_audit']['changed_json_pointers'] == []
-    assert 'origin' not in now, 'origin=human 专属 --apply-edit 新一轮；INVALID 改动由 audit 留痕'
+    assert now['origin'] == was['origin'] == 'compiled', '提升不得伪造成 human 新规划'
     assert 'gates_skipped' not in now, '提升上来的是正式产物，不该再挂缺料记录'
     assert now['code'] == ctx2.code, 'code 必须记本次重判真正使用的代码版本'
 
@@ -1969,6 +2001,22 @@ def test_promotion_keeps_the_original_prompts_and_archives_the_invalid():
     archived = sorted(p.name for p in (base / '书名_123' / 'stage4' / '_rounds').iterdir())
     assert archived == ['plan_chapters.INVALID.r1.json'], \
         '⚠ 原型归档叫 `*.INVALID.superseded.json`（**没有编号**），第二次会静默覆盖第一次'
+
+
+def test_promotion_discards_a_registered_legacy_formal_without_polluting_rounds():
+    """shape-break 旧正式稿不是 current 业务轮次，提升时原位重建而不归档。"""
+    base = _book()
+    _ctx_, inv = _write_invalid(base, [], marker='当前 v3 问题稿')
+    formal = inv.with_name('plan_chapters.json')
+    formal.write_bytes(b'{"_schema_version":1,"legacy":"retired plan"}\n')
+
+    out = ArtifactStore(_plan_ctx(base, paid=False)).promote_invalid(
+        PLAN_REL, PlanChapters, **REVALIDATION)
+
+    assert json.loads(out.read_text(encoding='utf-8'))['_schema_version'] == 3
+    assert not inv.exists()
+    archived = sorted(p.name for p in (formal.parent / paths.ROUNDS_DIRNAME).iterdir())
+    assert archived == ['plan_chapters.INVALID.r1.json']
 
 
 def test_revalidation_records_immutable_baseline_hashes_and_json_pointer_diff():

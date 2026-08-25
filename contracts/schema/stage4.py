@@ -4,7 +4,9 @@
 stage4.py —— 对应 `docs/schema/stage4.md`。重构计划 + 写作上下文。**两份产物，形状完全不同。**
 
 ```
-plan_chapters.json    LLM 产，全书一次调用 —— 只存决策与引用，一个字内容都不经它
+blind_candidate.json  Stage4A 盲设计 —— 只见去序真相图与 opaque alias
+evidence_binding.json Stage4B 证据绑定 —— 只可给候选场安放舞台、人物与材料
+plan_chapters.json    代码编译 A+B —— 只存决策与引用，一个字内容都不经它
 writer_context.json   确定性组装（非 LLM）—— 写作节点的唯一输入，可 0 成本重建
 ```
 
@@ -38,15 +40,16 @@ from typing import Literal
 from pydantic import Field, model_validator
 
 from contracts.invariants import (
-    CACHE_POLICY,
+    BLIND_ALIAS_ALGORITHM,
     ADDRESS_CONTEXT, CHAPTER_WEIGHTS, DELIVERY_MODES, GOAL_INTENTS,
     NAME_DISTINCTIVENESS, NARRATIVE_PERSON, RESPONSE_CHAPTER_WEIGHTS,
     RESPONSE_DELIVERY_MODES, RESPONSE_GOAL_INTENTS, RESPONSE_STRUCTURAL_ROLES,
     RESPONSE_TEMPORAL_LINKS, RESPONSE_UNIT_WEIGHTS, STRUCTURAL_ROLES,
+    STRUCTURE_CHANGE_KINDS, STRUCTURE_METRIC_CONTRACT, STRUCTURE_MODES,
     TEMPORAL_LINKS, TIME_LAYERS, UNIT_WEIGHTS, WORLD_RULE_KINDS,
 )
-from contracts.schema.base import Fp10, StrictModel
-from contracts.schema.common import FreeProvenance, LlmProvenance
+from contracts.schema.base import StrictModel
+from contracts.schema.common import FreeProvenance, LlmProvenance, Sha256
 
 from contracts.schema.stage2 import (
     BEAT_ID_PATTERN, FACT_ID_PATTERN, HINGE_ID_PATTERN, CausalEdge,
@@ -56,6 +59,54 @@ from contracts.schema.stage2 import (
 # ─────────────────────────────────────────────────────────────────────────────
 # 一、`plan_chapters.json`
 # ─────────────────────────────────────────────────────────────────────────────
+
+_BLIND_ALIAS_PATTERN = r'^a_[0-9a-f]{16,64}$'
+_CANDIDATE_SCENE_PATTERN = r'^c\d{2,}s\d{2,}$'
+
+
+class StructureDecision(StrictModel):
+    """章级结构选择；声明与代码复算分开存，供人工结构门对证。"""
+
+    mode: Literal[STRUCTURE_MODES]
+    reason: str = Field(min_length=1)
+    declared_change_kinds: list[Literal[STRUCTURE_CHANGE_KINDS]]
+    computed_change_kinds: list[Literal[STRUCTURE_CHANGE_KINDS]]
+
+    @model_validator(mode='after')
+    def _decision_is_canonical(self) -> StructureDecision:
+        order = {name: index for index, name in enumerate(STRUCTURE_CHANGE_KINDS)}
+        for label, values in (
+            ('declared_change_kinds', self.declared_change_kinds),
+            ('computed_change_kinds', self.computed_change_kinds),
+        ):
+            if values != sorted(set(values), key=order.__getitem__):
+                raise ValueError(f'{label} 必须去重并按契约顺序排列')
+        if self.mode == 'retain' and self.declared_change_kinds:
+            raise ValueError('retain 不得声称主动改变结构维度')
+        if self.mode == 'reconstruct' and len(self.declared_change_kinds) < 2:
+            raise ValueError('reconstruct 必须声明至少两类结构变化')
+        return self
+
+
+class BlindStructureDecision(StrictModel):
+    """Stage4A 只声明意图；`computed_change_kinds` 由最终编译器填写。"""
+
+    mode: Literal[STRUCTURE_MODES]
+    reason: str = Field(min_length=1)
+    declared_change_kinds: list[Literal[STRUCTURE_CHANGE_KINDS]]
+
+    @model_validator(mode='after')
+    def _declared_decision_is_canonical(self) -> BlindStructureDecision:
+        order = {name: index for index, name in enumerate(STRUCTURE_CHANGE_KINDS)}
+        if self.declared_change_kinds != sorted(
+            set(self.declared_change_kinds), key=order.__getitem__,
+        ):
+            raise ValueError('declared_change_kinds 必须去重并按契约顺序排列')
+        if self.mode == 'retain' and self.declared_change_kinds:
+            raise ValueError('retain 不得声称主动改变结构维度')
+        if self.mode == 'reconstruct' and len(self.declared_change_kinds) < 2:
+            raise ValueError('reconstruct 必须声明至少两类结构变化')
+        return self
 
 class PlanScene(StrictModel):
     """Stage4 新设计的一场；引用事实契约，不引用源事件清单。"""
@@ -121,10 +172,9 @@ class FactRef(StrictModel):
 class PlanGoal(StrictModel):
     """Typed goal; rationale is retained for audit but never sent to the writer.
 
-    ⚠ **模型不直接产这个形状**：响应侧是 `PlanGoalResponse`（`intent` 带 `G_` 前缀），
-    `decode_plan_response` 是唯一的映射落点。理由见
-    `contracts/invariants.py::RESPONSE_GOAL_INTENTS`——`intent='turn'` 那次
-    6 次 wire 全灭是拿真钱买的。
+    Stage4A 响应先用 opaque alias 表达目标；A+B 编译器解出正式
+    ``FactRef`` 后，``decode_plan_response`` 在唯一落点把 ``G_`` 前缀枚举
+    转为产物取值。
     """
 
     intent: Literal[GOAL_INTENTS]
@@ -179,6 +229,7 @@ class PlanChapter(StrictModel):
     chapter_goal: PlanGoal
     open_hook_goal: PlanGoal
     end_hook_goal: PlanGoal
+    structure_decision: StructureDecision
 
     #: **本章在全书里的分量档**（`None` = 这份计划没记档位）。
     #:
@@ -186,7 +237,7 @@ class PlanChapter(StrictModel):
     #: 排出章间轻重，再归一化到全书目标并把冲出 `PLAN_BUDGET_BAND` 的章钳回带内。
     #: ⚠ **它与 `PlanScene.weight` 是两层，不是同一个决策的粗细两版**：
     #: 前者答「哪一章重要」（唯一表达处是章级倍率），后者答「本章里哪一场重要」。
-    #: `PLAN_SYS` 的篇幅段里这两条一直是并列的两句话。
+    #: A 相只选档位，编译器再结合全书源字数算整数预算。
     weight: Literal[CHAPTER_WEIGHTS] | None = None
     semantic_contract: SemanticContract
     chapter_rewrite_brief: str = Field(min_length=1)
@@ -213,32 +264,17 @@ class PlanChapter(StrictModel):
 class PlanParams(StrictModel):
     """场景编译器版本与输入规模；不再登记源拍吸收阈值。"""
 
-    compiler: Literal['atomic-scenes-v1']
+    compiler: Literal['atomic-scenes-v2']
     fact_atoms: int = Field(ge=1)
     source_stages: int = Field(ge=1)
+    structure_metric_contract: Literal[STRUCTURE_METRIC_CONTRACT]
 
 
-class PlanRepair(StrictModel):
-    """一次按阅读序章号执行的付费定向重规划。"""
+class PlanProvenance(FreeProvenance):
+    """`plan_chapters._provenance`：A+B 的确定性编译账，不复制任何一相的 LLM usage。
 
-    chapter_ordinal: int = Field(ge=1)
-    failure_items: list[str] = Field(min_length=1)
-    failure_evidence: Fp10
-    user_prompt: Fp10
-    output: Fp10
-    before: Fp10
-    after: Fp10
-    before_hard: int = Field(ge=0)
-    after_hard: int = Field(ge=0)
-    model: str = Field(min_length=1)
-    cache_policy: Literal[CACHE_POLICY]
-
-
-class PlanProvenance(LlmProvenance):
-    """`plan_chapters._provenance`。
-
-    `inputs` 恒三条：`stage1/main_text.json` · `stage2/global_grounding.json` ·
-    `stage2/chapter_blueprints.json`。
+    `inputs` 精确绑定 blind candidate、evidence binding 与编译器实际读取的 Stage1/2
+    证据；两次模型调用各自只在自己的中间产物上记账。
 
     `revalidated` 继承自 `Provenance`（`_common.md` §五），不在这里重定义。
     它是 `bool`：**`False` 与「键不在」不是一回事**。
@@ -246,20 +282,26 @@ class PlanProvenance(LlmProvenance):
 
     params: PlanParams
 
-    #: 定向重规划过哪些章（累积）。默认空 = **这份计划没有定向重规划过**，
-    #: 是产地不写这一格时的中性值，不是「不知道」。（曾写作「兼容存量产物」，
-    #: 而迁移机制已整批删除，那个理由不再成立。）
-    partial_regen_chapters: list[int] = Field(default_factory=list)
+    origin: Literal['compiled', 'human'] = 'compiled'
+    blind_candidate_sha256: Sha256 | None = None
+    evidence_binding_sha256: Sha256 | None = None
 
-    #: 每一次定向重规划的输入、响应与前后章指纹。
-    repairs: list[PlanRepair] = Field(default_factory=list)
+    @model_validator(mode='after')
+    def _phase_links_match_origin(self) -> PlanProvenance:
+        if self.origin == 'compiled':
+            if self.blind_candidate_sha256 is None or self.evidence_binding_sha256 is None:
+                raise ValueError('compiled 计划必须绑定 A/B 两份完整 SHA-256')
+        elif self.blind_candidate_sha256 is not None or self.evidence_binding_sha256 is not None:
+            raise ValueError('human 计划不得继续冒充旧 A/B 候选的确定性编译结果')
+        return self
 
 
 class PlanChapters(StrictModel):
-    """`stage4/plan_chapters.json` —— 顶层 3 个键；整跑或按章付费修复后合并。
+    """`stage4/plan_chapters.json` —— A+B 整书编译物。
 
-    结构化调用点声明的必需顶层键 = `reconstruction_strategy` · `output_chapters`
-    ——**这是完整的**（`_provenance` 是代码写的，不归调用点管）。
+    两个付费响应分别由 ``BlindPlanResponse`` 与
+    ``EvidenceBindingResponse`` 收口；本模型只承载代码编译后的业务形状与
+    0 成本 provenance，不再存在单次规划或按章响应形。
     """
 
     #: 全书重构意图，一段话。盘上长度 80~238。
@@ -275,69 +317,185 @@ class PlanChapters(StrictModel):
     provenance: PlanProvenance = Field(alias='_provenance')
 
 
-class PlanSceneResponse(StrictModel):
-    """模型响应里的一场；slot 与整数预算由编译器生成。"""
 
+
+
+
+
+
+
+
+# ── Stage4A：盲设计响应与中间产物 ────────────────────────────────────────────
+
+class BlindGoalResponse(StrictModel):
+    intent: Literal[tuple(RESPONSE_GOAL_INTENTS)]
+    fact_aliases: list[str] = Field(min_length=1)
+    rationale: str | None = Field(default=None, min_length=1)
+
+    @model_validator(mode='after')
+    def _aliases_are_unique(self) -> BlindGoalResponse:
+        if len(self.fact_aliases) != len(set(self.fact_aliases)):
+            raise ValueError('goal.fact_aliases 不能重复')
+        if any(not re.match(_BLIND_ALIAS_PATTERN, alias) for alias in self.fact_aliases):
+            raise ValueError('goal.fact_aliases 存在非法 opaque alias')
+        return self
+
+
+class BlindSceneResponse(StrictModel):
     weight: Literal[tuple(RESPONSE_UNIT_WEIGHTS)]
     purpose: str = Field(min_length=1)
     role: Literal[tuple(RESPONSE_STRUCTURAL_ROLES)]
     delivery: Literal[tuple(RESPONSE_DELIVERY_MODES)]
     transition: Literal[tuple(RESPONSE_TEMPORAL_LINKS)]
-    land_fact_refs: list[str] = Field(min_length=1)
-    context_fact_refs: list[str]
+    land_fact_aliases: list[str] = Field(min_length=1)
+    context_fact_aliases: list[str]
+    turn_fact_alias: str = Field(pattern=_BLIND_ALIAS_PATTERN)
+    entry_state_aliases: list[str]
+    exit_state_aliases: list[str]
+
+    @model_validator(mode='after')
+    def _alias_sets_are_coherent(self) -> BlindSceneResponse:
+        for label, values in (
+            ('land_fact_aliases', self.land_fact_aliases),
+            ('context_fact_aliases', self.context_fact_aliases),
+            ('entry_state_aliases', self.entry_state_aliases),
+            ('exit_state_aliases', self.exit_state_aliases),
+        ):
+            if len(values) != len(set(values)):
+                raise ValueError(f'{label} 不能重复')
+            if any(not re.match(_BLIND_ALIAS_PATTERN, alias) for alias in values):
+                raise ValueError(f'{label} 存在非法 opaque alias')
+        if self.turn_fact_alias not in self.land_fact_aliases:
+            raise ValueError('turn_fact_alias 必须属于 land_fact_aliases')
+        return self
+
+
+class BlindChapterResponse(StrictModel):
+    output_ordinal: int = Field(ge=1)
+    structure_decision: BlindStructureDecision
+    chapter_goal: BlindGoalResponse
+    open_hook_goal: BlindGoalResponse
+    end_hook_goal: BlindGoalResponse
+    weight: Literal[tuple(RESPONSE_CHAPTER_WEIGHTS)]
+    chapter_rewrite_brief: str = Field(min_length=1)
+    scenes: list[BlindSceneResponse] = Field(min_length=1)
+
+
+class BlindPlanResponse(StrictModel):
+    reconstruction_strategy: str = Field(min_length=1)
+    output_chapters: list[BlindChapterResponse] = Field(min_length=1)
+
+
+class BlindCandidateScene(BlindSceneResponse):
+    candidate_scene_id: str = Field(pattern=_CANDIDATE_SCENE_PATTERN)
+
+
+class BlindCandidateChapter(BlindChapterResponse):
+    scenes: list[BlindCandidateScene] = Field(min_length=1)
+
+    @model_validator(mode='after')
+    def _candidate_scene_ids_are_unique(self) -> BlindCandidateChapter:
+        ids = [scene.candidate_scene_id for scene in self.scenes]
+        if len(ids) != len(set(ids)):
+            raise ValueError('candidate_scene_id 不能重复')
+        return self
+
+
+class BlindCandidateProvenance(LlmProvenance):
+    alias_algorithm: Literal[BLIND_ALIAS_ALGORITHM]
+    truth_sha256: Sha256
+
+
+class BlindCandidate(StrictModel):
+    alias_algorithm: Literal[BLIND_ALIAS_ALGORITHM]
+    truth_sha256: Sha256
+    fact_aliases: dict[str, str] = Field(min_length=1)
+    participant_aliases: dict[str, str]
+    reconstruction_strategy: str = Field(min_length=1)
+    output_chapters: list[BlindCandidateChapter] = Field(min_length=1)
+    provenance: BlindCandidateProvenance = Field(alias='_provenance')
+
+    @model_validator(mode='after')
+    def _alias_maps_are_bijective(self) -> BlindCandidate:
+        for label, table in (
+            ('fact_aliases', self.fact_aliases),
+            ('participant_aliases', self.participant_aliases),
+        ):
+            if any(not re.match(_BLIND_ALIAS_PATTERN, alias) for alias in table):
+                raise ValueError(f'{label} 的键必须是 opaque alias')
+            if len(table.values()) != len(set(table.values())):
+                raise ValueError(f'{label} 的正式引用必须一一对应')
+        return self
+
+
+# ── Stage4B：证据绑定响应与中间产物 ──────────────────────────────────────────
+
+class EvidenceSceneBinding(StrictModel):
+    candidate_scene_id: str = Field(pattern=_CANDIDATE_SCENE_PATTERN)
     material_refs: list[str]
-    turn_fact_ref: str = Field(pattern=FACT_ID_PATTERN)
-    entry_state_refs: list[str]
-    exit_state_refs: list[str]
     participant_refs: list[str]
     stage_refs: list[str] = Field(min_length=1)
 
+    @model_validator(mode='after')
+    def _binding_refs_are_unique(self) -> EvidenceSceneBinding:
+        for label, values, pattern in (
+            ('material_refs', self.material_refs, HINGE_ID_PATTERN),
+            ('participant_refs', self.participant_refs, None),
+            ('stage_refs', self.stage_refs, BEAT_ID_PATTERN),
+        ):
+            if len(values) != len(set(values)):
+                raise ValueError(f'{self.candidate_scene_id}.{label} 不能重复')
+            if pattern is not None and any(not re.match(pattern, value) for value in values):
+                raise ValueError(f'{self.candidate_scene_id}.{label} 存在非法引用')
+            if label == 'participant_refs' and any(not value for value in values):
+                raise ValueError(f'{self.candidate_scene_id}.participant_refs 存在空引用')
+        return self
 
-class PlanGoalResponse(StrictModel):
-    """**模型响应里**的 typed goal。与 `PlanGoal` 只差 `intent` 的取值面（带 `G_` 前缀）。
 
-    ⚠ 其余两个字段刻意**共用** `PlanGoal` 的定义（`FactRef` 原样复用）：
-    响应侧与产物侧只在「哪些字段被前缀化」这一点上分家，多分一寸就是第二份形状。
-    """
-
-    intent: Literal[tuple(RESPONSE_GOAL_INTENTS)]
-    fact_refs: list[FactRef] = Field(min_length=1)
-    rationale: str | None = Field(
-        default=None, min_length=1, json_schema_extra={'prompt_private': True})
-
-
-class PlanChapterResponse(StrictModel):
-    """**模型响应里**的一个输出章。
-
-    ⚠ **这里刻意没有那条「`output_ordinal` 恒等于源章号」的 `model_validator`**：
-    落盘那一侧（`PlanChapter`）有它，因为那时它是**代码写的**那一侧的后置条件；
-    而这一侧是**模型写的**，违约的代价是「人手改一行 + 0 成本重判」——
-    归载体就等于把它换成一次付费重试。判据 `one_to_one` 在盘上那份 dict 上判它。
-    """
-
+class EvidenceChapterBinding(StrictModel):
     output_ordinal: int = Field(ge=1)
-    from_source_ordinals: list[int] = Field(min_length=1)
-    chapter_goal: PlanGoalResponse
-    open_hook_goal: PlanGoalResponse
-    end_hook_goal: PlanGoalResponse
+    scenes: list[EvidenceSceneBinding] = Field(min_length=1)
 
-    #: **本章在全书里的分量档**。本章预算总量由它算出来（见 `PlanChapter.weight`）。
-    #: ⚠ 它刻意排在三个 goal 之后、`segments` 之前：与单元级那一格**隔着整个 segments 数组**，
-    #: 两张表在响应 JSON 里不相邻，串表的形状本身就成立不了。
-    weight: Literal[tuple(RESPONSE_CHAPTER_WEIGHTS)]
-    chapter_rewrite_brief: str = Field(min_length=1)
-    scenes: list[PlanSceneResponse] = Field(min_length=1)
+    @model_validator(mode='after')
+    def _scene_bindings_are_unique(self) -> EvidenceChapterBinding:
+        ids = [scene.candidate_scene_id for scene in self.scenes]
+        if len(ids) != len(set(ids)):
+            raise ValueError('同章 candidate_scene_id 不能重复绑定')
+        return self
 
 
-class PlanResponse(StrictModel):
-    """规划那一次调用**收回来的东西**。`ask_json(model_cls=…)` 用它。
+class EvidenceBindingResponse(StrictModel):
+    status: Literal['bound', 'infeasible']
+    candidate_sha256: Sha256
+    chapters: list[EvidenceChapterBinding] | None = None
+    reason_kind: Literal[
+        'causal_conflict', 'stage_conflict', 'material_conflict',
+        'future_leak', 'insufficient_evidence',
+    ] | None = None
+    reason: str | None = Field(default=None, min_length=1)
+    evidence_refs: list[str] | None = None
 
-    结构化调用的 `require` 从本模型字段派生：`reconstruction_strategy` 与
-    `output_chapters` 都必须返回。继承的 `extra='forbid'` 拒收任何未声明字段。
-    """
+    @model_validator(mode='after')
+    def _status_has_exact_payload(self) -> EvidenceBindingResponse:
+        if self.status == 'bound':
+            if not self.chapters:
+                raise ValueError('bound 必须返回非空 chapters')
+            if self.reason_kind is not None or self.reason is not None or self.evidence_refs is not None:
+                raise ValueError('bound 不得夹带 infeasible 理由')
+        else:
+            if self.chapters is not None:
+                raise ValueError('infeasible 不得返回部分绑定冒充可编译结果')
+            if self.reason_kind is None or self.reason is None or not self.evidence_refs:
+                raise ValueError('infeasible 必须给 typed reason 与非空 evidence_refs')
+        return self
 
-    reconstruction_strategy: str = Field(min_length=1)
-    output_chapters: list[PlanChapterResponse] = Field(min_length=1)
+
+class EvidenceBindingProvenance(LlmProvenance):
+    candidate_sha256: Sha256
+
+
+class EvidenceBinding(EvidenceBindingResponse):
+    provenance: EvidenceBindingProvenance = Field(alias='_provenance')
 
 
 class PlanEdit(StrictModel):

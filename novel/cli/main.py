@@ -206,8 +206,9 @@ def _llm_client(ctx: RunContext):
     from novel.llm.transport import DeepSeekTransport
 
     cfg = load_config()
-    # ⚠ 节点钉死的模型优先于全局配置：`NodeSpec.model` 是那两条例外的形状落点
-    #   （`stage6.semantic` 的证据力、`stage4.plan` 的重采粒度；`DEEPSEEK_MODEL` /
+    # ⚠ 节点钉死的模型优先于全局配置：`NodeSpec.model` 是两类例外的形状落点
+    #   （`stage6.semantic` 的证据力、Stage4 A/B 两个全书节点的重采粒度；
+    #   `DEEPSEEK_MODEL` /
     #   `DEFAULT_MODEL` 换不掉它们），其余节点 '' = 跟随全局默认。
     return LlmClient(
         ctx,
@@ -605,10 +606,10 @@ def _report_exit(report: object) -> int:
 
 
 def _run_stage4(ctx: RunContext, flags: list[str]) -> int:
-    """stage4 的六条路。**五条 0 成本，一条付费。**
+    """Stage4 v3：两个独立付费相 + 一条 0 成本上下文组装路。
 
-    ⚠ **一个 stage 两个节点**（`stage4.plan` 付费 / `stage4.context` 0 成本），
-    形态同 stage7 那次：派发按 **stage** 分，节点由 `ctx.node` 带着 ⇒ 先按节点分岔。
+    `stage4.design` 与 `stage4.plan` 必须由人分别批准执行；前者成功只落盲候选，
+    不在同一命令里静默触发后者。派发按 **stage** 分，先按 node 分岔。
     ⚠ `stage4.context` 的 `flags=()` 是终态：它本身就是那个动作。
     """
     from novel.stages.stage4 import plan
@@ -621,15 +622,31 @@ def _run_stage4(ctx: RunContext, flags: list[str]) -> int:
         print(render(report))
         return X.OK if report.passed else X.CHECK_FAILED
 
+    if ctx.node == 'stage4.design':
+        if '--dry-run' in tokens:
+            system, user = plan.build_design_prompt(ctx)
+            print(f'── system（{len(system)} 字）──\n{system}')
+            print(f'\n── user（{len(user)} 字；不含原文/源序/beat/材料）──\n{user}')
+            return X.OK
+        if '--replan' in tokens:
+            # B 已证明当前 A 不可绑定时，默认缓存会精确复用
+            # 同一候选。只在人显式选择付费 ``--replan`` 时刷新；
+            # 这条命令仍只产 A，不在后面偷跑 B。
+            from novel.llm.cache import CachePolicy
+            ctx.cache = CachePolicy.refresh()
+        artifact = plan.run_design(ctx, _llm_client(ctx))
+        action = '已强制重采并落盘' if '--replan' in tokens else '已落盘'
+        print(f'  ✓ Stage4A 盲结构候选{action}：{len(artifact.output_chapters)} 章。'
+              '下一步请先人工检查候选，再单独预览并批准 stage4.plan')
+        return X.OK
+
     if '--check-only' in tokens:
         report = plan.run_check_only(ctx)
         print(render(report))
         return X.OK if report.passed else X.CHECK_FAILED
 
-    chapters = _chapters_of(_valued(flags, '--chapters'))
-
     if '--dry-run' in tokens:
-        system, user = plan.build_prompt(ctx, chapters=chapters)
+        system, user = plan.build_prompt(ctx)
         print(f'── system（{len(system)} 字）──\n{system}')
         print(f'\n── user（{len(user)} 字）──\n{user}')
         return X.OK
@@ -668,13 +685,26 @@ def _run_stage4(ctx: RunContext, flags: list[str]) -> int:
         print('  ✓ 人工计划修订已落为新一轮，写作上下文已同批重建')
         return X.OK if report.passed else X.CHECK_FAILED
 
-    # 付费路。⚠ **本仓最贵的一次请求**（全书一次调用，user 里带着全书原文）。
-    if chapters:
-        from novel.llm.cache import CachePolicy
-        ctx.cache = CachePolicy.refresh()
+    # Stage4B 付费路：只绑定已经冻结的 A 候选，不能重规划。
     client = _llm_client(ctx)
-    report = plan.run_plan(ctx, client, chapters=chapters)
-    print('  ✓ stage4 重构计划已落盘，写作上下文已同批重建')
+    outcome = plan.run_plan(ctx, client)
+    # B 的 ``infeasible`` 是一份已落盘、可审计的 typed 负结论，
+    # 不是“命令没跑成”。因此返回 exit 1（landed_red），不伪造
+    # CheckReport；exit 2 会与 ``exit_codes.landed`` 的唯一口径相反。
+    from contracts.schema.stage4 import EvidenceBinding
+    if isinstance(outcome, EvidenceBinding):
+        if outcome.status != 'infeasible':
+            raise RefusedByStructure(
+                'stage4.plan 返回了未编译的 bound EvidenceBinding')
+        print('  ✗ Stage4B 已落盘 typed infeasible 证据结论，'
+              '未生成或覆盖正式计划')
+        print(f'    {outcome.reason_kind} · {outcome.reason}')
+        print('  → 人工审阅后显式预览并批准 '
+              '`stage4.design --replan`；系统不会自动生成第二候选')
+        return X.CHECK_FAILED
+    report = outcome
+    print('  ✓ Stage4B 证据绑定、v3 计划编译与写作上下文重建已完成；'
+          'Stage5 仍需独立结构审批与 writing 授权')
     print(render(report))
     return X.OK if report.passed else X.CHECK_FAILED
 
@@ -941,6 +971,17 @@ def _cmd_run(a: argparse.Namespace) -> int:
             or a.node == 'stage7.assemble'):
         from novel.stages.stage2 import global_review
         global_review.require_approved(ctx)
+    # API 的 prepare 只做早反馈；手敲 CLI 也必须经过同一座权威门，且要在
+    # `_dispatch` 构造任何 LLM 请求之前同时证明：当前结构逐章已接受、writing
+    # 已独立授权、选章没有越过当前计划。0 成本恢复 flag 的 ``paid=False`` 不进来。
+    if paid and a.node == 'stage5.write':
+        from novel.orchestrator import approvals
+        approvals.authorize_writing(
+            a.base,
+            a.sid,
+            list(_chapters_of(_valued(flags, '--chapters'))) or None,
+            requires_fresh_review='--revise' in N.flag_tokens(flags),
+        )
     return _dispatch(a.node, ctx, flags)
 
 

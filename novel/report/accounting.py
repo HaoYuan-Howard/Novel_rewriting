@@ -91,8 +91,6 @@ ACCOUNTING: dict[str, tuple[AccountingSpec, ...]] = {
     #    声明一个结构上永远记不上的键，只会让报告上恒挂一行「未记录」。
     'stage4': (
         AccountingSpec('params', '这份计划由哪版场景编译器、多少事实原子编译？'),
-        AccountingSpec('partial_regen_chapters', '哪几章是按章定向重规划过的？'),
-        AccountingSpec('repairs', '各次定向重规划修了哪些 HARD，前后数量与章节指纹是什么？'),
         AccountingSpec('revalidated', '这份稿是跑出来的，还是被重判提升上来的？'),
         AccountingSpec('gates_skipped', '哪几条阻断级判据当时【没跑成】？'),
     ),

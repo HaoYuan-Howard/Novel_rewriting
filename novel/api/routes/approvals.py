@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends
 
 from contracts.schema.api import (
     ApprovalBackfillResult, ApprovalDoc, GateKey, SeenKey,
+    StructureApprovalRequest,
 )
 from novel.api.deps import checked_sid, get_base
 from novel.orchestrator import approvals
@@ -24,6 +25,16 @@ def approve_gate(
     key: GateKey, sid: str = Depends(checked_sid), base: str = Depends(get_base),
 ) -> ApprovalDoc:
     return approvals.approve_gate(base, sid, key)
+
+
+@router.post('/structure', response_model=ApprovalDoc)
+def approve_structure(
+    request: StructureApprovalRequest,
+    sid: str = Depends(checked_sid),
+    base: str = Depends(get_base),
+) -> ApprovalDoc:
+    """保存 hash-bound 逐章结构裁决；不在服务进程触发任何重规划作业。"""
+    return approvals.approve_structure(base, sid, request)
 
 
 @router.post('/backfill', response_model=ApprovalBackfillResult)

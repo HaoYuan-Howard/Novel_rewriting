@@ -514,21 +514,21 @@ Output/_service/approvals/<sid>.json 人工闸门、已阅状态与 canonical �
 > B 进程紧接着写的完整行**顶到中间**，于是读侧对一次正常的并行跑开火，
 > 且是**所有书**的视图一起失效。锁补齐之后那条容忍才真正成立。
 
-`approvals/<sid>.json` 的盘上服务记录当前为 **v3**；HTTP 投影 `ApprovalDoc.v=2` 是另一条
-版本轴，不能据同一个数字互推。每个已盖 gate、已阅状态和 writing 授权都必须带一份
-current-subject proof：当前 `stage0/clean_text.txt` 的完整 SHA-1、所裁决正式产物的主体
-SHA-256，以及决定本身的规范 JSON SHA-256。读取时必须重新走当前 schema、typed 人工决定与
-freshness 校验并逐字节比对；根变化、上游变化、正式产物被换字、损坏、出现 `.INVALID` 或
-发现旧 Stage5 双臂布局，都会让对应决定及依赖它的下游决定在有效视图中失效。
+`approvals/<sid>.json` 的盘上服务记录当前为 **v4**；HTTP 投影 `ApprovalDoc.v=3` 是另一条
+版本轴，不能据同一个数字互推。每个已盖 gate、已阅状态、typed Stage4 结构裁决和 writing 授权
+都必须带一份 current-subject proof：当前 `stage0/clean_text.txt` 的完整 SHA-1、所裁决正式
+产物的完整 SHA-256，以及决定本身的规范 JSON SHA-256。读取时必须重新走当前 schema、typed
+人工决定与 freshness 校验并逐字节比对；根变化、上游变化、正式产物被换字、损坏、出现
+`.INVALID` 或发现旧 Stage5 双臂布局，都会让对应决定及依赖它的下游决定在有效视图中失效。
 普通产物主体是正式文件字节；`s7` 是有意的窄主体：当前
 `surname_map + characters + extra_subs` 决策面与完整 typed `ApprovedNameMap` 的规范摘要。
 因此 `stage7.assemble` 写回 `book_txt` 交付账不会自废 s7，而决策面、actor/reason/origin
 或 subject hash 变化仍会失效；读取还必须先证明 approval 存在且 subject 与当前决策面一致。
-旧 v2 内部记录还含 `deep/deep_proof`，只为**显式** backfill 解码；普通 GET / 作业启动绝不
-静默迁移。只有旧 deep 集合恰等于当前全部计划章、旧 proof 与当前盘面一致时，才能收敛为 v3
-的无选臂 writing 授权；含 shallow 分配时清空 writing 与 s5 以后 gate。旧 v1、损坏记录或
-不满足上述条件的记录只能显式 reset/backfill，不能猜。队列在一把锁内读取 current writing
-授权与盘面；不得先查文件、再另读授权，从而留下两次读取之间主体变化仍生成付费命令的窗口。
+旧 v2 内部记录还含 `deep/deep_proof`，旧 v3 则没有 typed Stage4 结构裁决；两者只为**显式**
+backfill 解码，普通 GET / 作业启动绝不静默迁移。旧记录最多保留按当前盘面逐项对证的 s0～s3；
+不得凭旧 s4/writing 反造逐章结构决定，s4、writing 与 s5～s7 必须清空。旧 v1、损坏记录或
+不满足上述条件的记录只能显式 reset/backfill，不能猜。队列在一把锁内读取 current 结构裁决、
+writing 授权与盘面；不得先查文件、再另读授权，从而留下两次读取之间主体变化仍生成付费命令的窗口。
 
 ⚠ 契约收窄时必须同步更新需求与 schema 文档；运行时只保留收窄后的当前规则。
 

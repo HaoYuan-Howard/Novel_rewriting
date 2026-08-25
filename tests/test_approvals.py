@@ -7,6 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from contracts.schema.api import StructureApprovalRequest
 from contracts.schema.stage7 import ApprovedNameMap
 from novel.errors import ApprovalRequired, GateBlocked, HumanEditProtected, UpstreamMissing
 from novel.orchestrator import approvals, jobs, state
@@ -34,6 +35,7 @@ BASE_RELS = (
     'stage2/global_grounding.json', 'stage2/chapter_blueprints.json',
     'stage2/global_review.json',
     'stage3/style_grounding.json',
+    'stage4/blind_candidate.json', 'stage4/evidence_binding.json',
     'stage4/plan_chapters.json', 'stage4/writer_context.json',
 )
 
@@ -118,7 +120,21 @@ def _approve_for_writing(box: sandbox.Sandbox) -> None:
     approvals.mark_seen(box.root, box.sid, 'read')
     approvals.approve_gate(box.root, box.sid, 's2')
     approvals.approve_gate(box.root, box.sid, 's3')
-    approvals.approve_gate(box.root, box.sid, 's4')
+    subject, chapters = approvals._current_structure_subject_and_chapters(box.dir)
+    approvals.approve_structure(
+        box.root,
+        box.sid,
+        StructureApprovalRequest(
+            actor='corpus-approval-test',
+            reason='逐章核对 current Stage4 结构主体后批准写作前提',
+            subject_sha256=subject,
+            chapters=[{
+                'output_ordinal': ordinal,
+                'decision': 'accept',
+                'reason': f'第 {ordinal} 章当前结构已核对',
+            } for ordinal in chapters],
+        ),
+    )
 
 
 def _approved_name_artifact():
@@ -198,12 +214,12 @@ def test_s7_service_proof_revokes_changed_typed_approval_or_decision(
 
 
 @_corpus_test
-def test_get_exposes_public_v2_without_retired_depth_and_is_read_only():
-    """GET 只公开 v2 审批面，且不落服务状态。"""
+def test_get_exposes_public_v3_without_retired_depth_and_is_read_only():
+    """GET 只公开 v3 审批面，且不落服务状态。"""
     box = _box()
     try:
         doc = approvals.get(box.root, box.sid)
-        assert doc.v == 2
+        assert doc.v == 3
         assert 'deep' not in doc.model_dump() and 'deep_proof' not in doc.model_dump()
         assert doc.writing is False
         assert not (box.root / '_service').exists(), 'GET must not persist service state'
@@ -229,7 +245,7 @@ def test_get_exposes_public_v2_without_retired_depth_and_is_read_only():
 
 
 @_corpus_test
-def test_writing_approval_is_independent_and_persists_as_internal_v3():
+def test_writing_approval_is_independent_and_persists_as_internal_v4():
     box = _box()
     try:
         _approve_for_writing(box)
@@ -237,7 +253,7 @@ def test_writing_approval_is_independent_and_persists_as_internal_v3():
         doc = approvals.begin_writing(box.root, box.sid)
         assert doc.writing and approvals.writing_is_current(box.root, box.sid)
         raw = approvals._path(box.root, box.sid).read_text(encoding='utf-8')
-        assert '"v": 3' in raw and '"deep"' not in raw and 'deep_proof' not in raw
+        assert '"v": 4' in raw and '"deep"' not in raw and 'deep_proof' not in raw
     finally:
         box.close()
 

@@ -17,6 +17,7 @@ import type {
   ApprovalDoc,
   GateKey,
   SeenKey,
+  StructureApprovalRequest,
 } from '@/types/approvals'
 import type { EnumsResponse } from '@/types/enums'
 import type {
@@ -460,6 +461,8 @@ export const realApi: Api = {
 
   getApprovals: (sid) => get<ApprovalDoc>(n(sid) + '/approvals'),
   approveGate: (sid, key: GateKey) => post<ApprovalDoc>(n(sid) + '/approvals/gate/' + key),
+  approveStructure: (sid, request: StructureApprovalRequest) =>
+    post<ApprovalDoc>(n(sid) + '/approvals/structure', request),
   backfillApprovals: (sid) =>
     post<ApprovalBackfillResult>(n(sid) + '/approvals/backfill'),
   markSeen: (sid, key: SeenKey) => post<ApprovalDoc>(n(sid) + '/approvals/seen/' + key),

@@ -14,6 +14,7 @@ export function ActorReasonFields({
   reason,
   onActor,
   onReason,
+  reasonPlaceholder,
   note,
   actions,
 }: {
@@ -22,6 +23,7 @@ export function ActorReasonFields({
   reason?: string
   onActor: (v: string) => void
   onReason?: (v: string) => void
+  reasonPlaceholder?: string
   /** 各屏自己的审计说明（这次定稿绑定哪份 SHA-256 之类），跟在固定说明后面 */
   note?: ReactNode
   /** 依赖 actor/reason 的按钮放进表单卡片里，别和输入隔着一个 header */
@@ -66,7 +68,7 @@ export function ActorReasonFields({
           <input
             value={reason ?? ''}
             onChange={(event) => onReason(event.target.value)}
-            placeholder="说明核对了什么，以及为什么接受本次正文"
+            placeholder={reasonPlaceholder ?? '说明核对了什么，以及为什么接受本次正文'}
             className="rounded-btn border border-line-btn bg-card px-10 py-8 text-body font-normal text-ink"
           />
         </label>

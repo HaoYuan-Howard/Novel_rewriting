@@ -40,8 +40,8 @@ description: 作为受托终审代理，使用本仓 novel.cli 将单本中文�
 
 开始任何跑书或续跑前，完整读取：
 
-- [工作流契约](references/workflow.md)：现行命令协议、17 个主节点、成败判定与断点续跑。
-- [代批与终审契约](references/delegated-review.md)：三个闸门的判据、成书对账与终审包要求。
+- [工作流契约](references/workflow.md)：现行命令协议、主节点顺序、成败判定与断点续跑。
+- [代批与终审契约](references/delegated-review.md)：标准人工闸门的判据、成书对账与终审包要求。
 - [运行环境](references/runtime-profiles.md)：只读取与当前宿主相符的交互式或 headless 小节。
 
 遇到非 happy path 时再读取：
@@ -86,7 +86,7 @@ description: 作为受托终审代理，使用本仓 novel.cli 将单本中文�
 - `inbox.delivery_counts.blocking == 0`；`attention_counts` 区分“尚待处理”与“已裁决但记录保留”，不得拿总数冒充失败数。披露项逐类记录。
 - `inbox.counts` 的八类余额必须逐类披露：`invalid`、`rejected`、`repairable`、`human_only`、`verification`、`upstream`、`stalled`、`approval`；类别总数不直接等于阻塞数，阻塞性只读 `delivery_effect`。
 - 活动目录不存在未解释的 `.INVALID`、`.rejected` 或 `.stalled`；历史 `_rounds/` 不计入活动余额。
-- 三次代批均有可追溯依据；所选 stage6 候选和 stage7 人名表均通过各自定稿条件。
+- 全部代批均有可追溯依据；Stage4 结构逐章接受，所选 stage6 候选和 stage7 人名表均通过各自定稿条件。
 - 成书通过 [代批与终审契约](references/delegated-review.md) 的逐字对账，终审包中的统计与盘上事实一致。
 - 终审包的退出序列与成本账按 `<STARTED_AT>` 切出本次会话；同 SID 历史只作累计审计，不能混进本轮数字；起止代码指纹逐字一致。
 

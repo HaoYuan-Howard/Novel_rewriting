@@ -23,7 +23,8 @@ from typing import Any, Callable, Final
 from contracts.artifacts import (
     STAGE0_CLEAN_TEXT, STAGE0_REVISIONS, STAGE1_HOOK_COPY, STAGE1_MAIN_TEXT,
     STAGE2_CHAPTER_BLUEPRINTS, STAGE2_GLOBAL_EDIT, STAGE2_GLOBAL_GROUNDING,
-    STAGE3_STYLE_GROUNDING, STAGE4_PLAN_CHAPTERS, STAGE4_PLAN_EDIT,
+    STAGE3_STYLE_GROUNDING, STAGE4_BLIND_CANDIDATE, STAGE4_EVIDENCE_BINDING,
+    STAGE4_PLAN_CHAPTERS, STAGE4_PLAN_EDIT,
     STAGE4_WRITER_CONTEXT, STAGE5_REVIEW, STAGE5_TRIM_AUDIT,
     STAGE6_HOOK, STAGE6_HOOK_EDIT,
     STAGE7_NAME_MAP_EDIT,
@@ -163,6 +164,32 @@ def stage4_plan_blueprints(data: object) -> object:
     return sorted(
         (b.get('chapter_ordinal'), b.get('summary'), _stage4_contract(b), _stage4_stages(b))
         for b in (data.get('blueprints') or []) if isinstance(b, dict))
+
+
+def stage4_design_blueprints(data: object) -> object:
+    """盲设计只消费去序真相图；不消费源位置、舞台、材料、摘要或数组顺序。"""
+    if not isinstance(data, dict):
+        return None
+    rows = []
+    for blueprint in (data.get('blueprints') or []):
+        if not isinstance(blueprint, dict):
+            continue
+        atoms = sorted(
+            (atom.get('fact_id'), atom.get('claim'), atom.get('kind'),
+             atom.get('obligation'), tuple(sorted(atom.get('participant_char_ids') or [])))
+            for atom in (blueprint.get('fact_atoms') or []) if isinstance(atom, dict)
+        )
+        edges = sorted(
+            (edge.get('before'), edge.get('after'))
+            for edge in (blueprint.get('causal_edges') or []) if isinstance(edge, dict)
+        )
+        rows.append((
+            blueprint.get('chapter_ordinal'), blueprint.get('chapter_function'),
+            tuple(atoms), tuple(edges),
+            tuple(sorted(blueprint.get('entry_state_refs') or [])),
+            tuple(sorted(blueprint.get('ending_state_refs') or [])),
+        ))
+    return sorted(rows)
 
 
 def stage4_context_blueprints(data: object) -> object:
@@ -555,10 +582,18 @@ CONSUMED_PROJECTIONS: Final[dict[str, dict[str, Projection]]] = {
         STAGE1_MAIN_TEXT: stage3_main_text,
         STAGE1_HOOK_COPY: stage3_hook_copy,
     },
+    'stage4.design': {
+        STAGE2_CHAPTER_BLUEPRINTS: stage4_design_blueprints,
+    },
     'stage4.plan': {
         STAGE1_MAIN_TEXT: stage4_main_text,
         STAGE2_CHAPTER_BLUEPRINTS: stage4_plan_blueprints,
         STAGE2_GLOBAL_GROUNDING: stage4_grounding,
+        STAGE4_BLIND_CANDIDATE: artifact_payload,
+        # B 的正式 binding 是最终 v3 计划的直接编译输入；不登记这一边，producer
+        # 虽然会如实把它写进 provenance，刚写完的 freshness 却只能报
+        # ``consumed_undeclared`` 并回滚整份计划。
+        STAGE4_EVIDENCE_BINDING: artifact_payload,
         STAGE4_PLAN_EDIT: artifact_payload,
     },
     'stage4.context': {

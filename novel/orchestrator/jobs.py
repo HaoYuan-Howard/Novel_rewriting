@@ -365,11 +365,13 @@ def fold(events: Iterable[JobEvent], *, live: set[str] | None = None) -> list[Jo
 
 RECONCILE_NOTE = '服务重启前这个作业还在跑；它是跑完了还是被一起杀掉了，无从判断'
 
-#: `landed_red` 的人读处置：它不是「命令没跑成」，而是「产物已落盘、
-#: 报告有阻断红行」。与 `failed` 分态后仍保留这句人读指引。
+#: `landed_red` 的人读处置：它不是「命令没跑成」，而是「正式结果已落盘、
+#: 结论不通过」。多数是报告硬红，也可以是 Stage4B typed `infeasible`；
+#: 与 `failed` 分态后仍保留这句人读指引。
 LANDED_RED_NOTE = (
-    '产物**已经落盘**，但校验报告有阻断级红行（exit 1）。'
-    '⚠ 这不是「没跑成」：该做的是打开对应层的屏看红行并裁决，不是修完重跑')
+    '正式结果**已经落盘**，但结论不通过（exit 1）。'
+    '⚠ 这不是「没跑成」：该做的是打开对应层的屏查看负结论并按'
+    '它给出的恢复路裁决，不是把它当成进程失败盲目重跑')
 
 
 def _default_note(state: str, code: int | None) -> str | None:

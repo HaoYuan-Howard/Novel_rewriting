@@ -135,19 +135,21 @@ def test_unmeasured_nodes_keep_the_default_high_effort():
     assert inv.NODES['stage7.rename'].effort is None
 
 
-def test_the_two_pinned_models_are_exactly_the_two_decided_exceptions():
+def test_the_three_pinned_models_are_exactly_the_decided_exceptions():
     """⚠ `NodeSpec.model` 是「除例外外全链 flash」这个裁决的**形状**落点。
 
-    钉死两个，**理由不是同一个**（不许互相援引，见 `NodeSpec.model` 的注释）：
+    Stage4 v3 把原来的全书规划拆成两次独立、可恢复调用；两相都继承原节点的
+    pro 裁决，另一个例外仍是 Stage6 判官：
       · `stage6.semantic`（2026-08-19/20）——flash 判官给不出有区分度的证据。
-      · `stage4.plan`（2026-08-22）——**重采粒度**：全链唯一一个全书一次调用的
-        生成节点，一次 `answer_lost` 重采就是整本书（flash@high 实测 43.3%）。
+      · `stage4.design` / `stage4.plan`——分别承担盲结构设计与证据绑定，均是全书级
+        独立调用；一次失败仍需重采完整相位（原 stage4.plan flash@high 实测 43.3%）。
     其余节点必须保持 `''` = 跟随全局默认——多一个钉死值就少一个 A/B 换臂的口，
     那一格只许给产品裁决过的例外用。
     """
     pinned = {node: spec.model for node, spec in inv.NODES.items() if spec.model}
     assert pinned == {
         'stage6.semantic': 'deepseek-v4-pro',
+        'stage4.design': 'deepseek-v4-pro',
         'stage4.plan': 'deepseek-v4-pro',
     }
 
@@ -190,6 +192,15 @@ def test_paid_flags_are_registered_and_accepted_by_their_node():
     for node, spec in inv.NODES.items():
         assert set(spec.paid_flags) <= set(inv.PAID_FLAGS), node
         assert set(spec.paid_flags) <= set(spec.flags), node
+
+
+def test_stage4_replan_is_an_explicit_paid_design_action_only():
+    assert '--replan' in inv.PAID_FLAGS
+    accepting = {
+        node for node, spec in inv.NODES.items() if '--replan' in spec.flags
+    }
+    assert accepting == {'stage4.design'}
+    assert '--replan' not in inv.FREE_ENTRIES
 
 
 def test_every_registered_flag_is_reachable():

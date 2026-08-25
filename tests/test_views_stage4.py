@@ -16,7 +16,7 @@ import os
 import pytest
 
 from novel.errors import UpstreamMissing
-from novel.stages.stage4.measure import IDENTITY_GOAL
+from novel.stages.stage4.measure import IDENTITY_GOAL, structure_subject_sha256
 from novel.stages.stage5.prompts import target_band
 from novel.views.stage4 import stage4_view
 from tests import corpus, sandbox
@@ -63,6 +63,8 @@ def test_the_real_plan_forwards_goals_and_sums_budgets(box):
     o = plan['output_chapters'][0]['output_ordinal']
     v = stage4_view(box.root, box.sid, o)
     assert not v.identity_plan
+    assert v.structure_subject_sha256 == structure_subject_sha256(plan), \
+        'rows 与 subject 必须来自同一份 plan，不许在 view 里二次读盘'
     pc = plan['output_chapters'][0]
     assert v.plan_chapter.chapter_goal.model_dump(mode='json') == pc['chapter_goal']
     assert [scene.land_fact_refs for scene in v.plan_chapter.scenes] == \
@@ -90,6 +92,7 @@ def test_without_a_plan_the_screen_shows_the_identity_baseline(box):
     before = _tree(box.root)
     v = stage4_view(box.root, box.sid, 1)
     assert v.identity_plan
+    assert v.structure_subject_sha256 is None, '现算恒等基线不是可审批主体'
     assert v.reconstruction_strategy == IDENTITY_GOAL
     assert v.plan_chapter.chapter_goal.rationale == IDENTITY_GOAL, \
         '恒等的 goal 是显式标记，不是真决策'
@@ -117,6 +120,69 @@ def test_an_ordinal_outside_the_plan_is_a_terminal_state(box):
 def test_stage4_view_rejects_an_unknown_synthetic_book(tmp_path):
     with pytest.raises(UpstreamMissing):
         stage4_view(tmp_path, '9999999999999999999', 1)
+
+
+def test_formal_review_surface_hashes_the_single_plan_snapshot(monkeypatch):
+    """review rows 与 subject 只读一次 plan；不给 TOCTOU 留二次读缝。"""
+    import novel.views.stage4 as view_module
+    from pathlib import Path
+    from contracts.invariants import STRUCTURE_METRIC_CONTRACT
+    from contracts.schema.orchestration import ArtifactState
+    from contracts.schema.stage4 import PlanChapters
+    from tests.hard_cases import _clean_plan4
+
+    raw = _clean_plan4()
+    raw['_provenance'] = {
+        'code': 'test',
+        'root_clean_sha1': 'c' * 40,
+        'inputs': {},
+        'params': {
+            'compiler': 'atomic-scenes-v2',
+            'fact_atoms': 3,
+            'source_stages': 3,
+            'structure_metric_contract': STRUCTURE_METRIC_CONTRACT,
+        },
+        'origin': 'compiled',
+        'blind_candidate_sha256': 'a' * 64,
+        'evidence_binding_sha256': 'b' * 64,
+    }
+    snapshot = PlanChapters.model_validate(raw)
+    plan_reads = 0
+
+    class FakeStore:
+        def __init__(self, _ctx):
+            pass
+
+        def read_own(self, _model, rel):
+            nonlocal plan_reads
+            if rel == view_module.PLAN_REL:
+                plan_reads += 1
+                return snapshot, b'plan-snapshot'
+            raise UpstreamMissing(rel)
+
+    def state(_store, rel):
+        if rel == view_module.PLAN_REL:
+            return ArtifactState(
+                rel=rel, exists=True, bytes=1, mtime=1,
+                freshness='fresh', display_freshness='fresh', reason='match',
+                condition='ready',
+            )
+        return ArtifactState(
+            rel=rel, exists=False, bytes=None, mtime=None,
+            freshness='unknown', display_freshness='missing',
+            reason='no_provenance', condition='missing',
+        )
+
+    monkeypatch.setattr(view_module.paths, 'resolve_novel_dir',
+                        lambda _base, _sid: Path('测试_123'))
+    monkeypatch.setattr(view_module, 'readonly_ctx', lambda *_args: object())
+    monkeypatch.setattr(view_module, 'ArtifactStore', FakeStore)
+    monkeypatch.setattr(view_module, 'artifact_state', state)
+
+    got = stage4_view('unused', '123', 1)
+    assert plan_reads == 1, 'subject 不许为了算 hash 重读 plan'
+    assert got.structure_subject_sha256 == structure_subject_sha256(snapshot)
+    assert got.plan_chapter.structure_decision == snapshot.output_chapters[0].structure_decision
 
 
 def test_the_view_writes_nothing(box):

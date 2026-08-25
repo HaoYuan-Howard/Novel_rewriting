@@ -50,7 +50,8 @@ with code in this repository. **`CLAUDE.md` 是指向本文件的链接——要
 `stage0`~`stage7` **只做产物层**（目录 / schema / `Rule.stage` / 校验报告路由），永不用作作业 id。
 作业 id 是 `<stage>.<动词>`（`stage2.global`、`stage5.write`、`stage7.assemble` …），
 唯一落点 `contracts/invariants.py::NODES`，label 从 NODES 派生不手写。两者**不是 1:1**：
-stage2 两个节点、stage5 写作与验收两相、stage0 三个人参与的动作。
+stage2 两个节点、stage4 三个节点（两个付费相共属结构设计、一个 0 成本上下文组装）、
+stage5 写作与验收两相、stage0 三个人参与的动作。
 
 三条容易踩的推论：**没有 `check` 节点**（复检一律是 `--check-only` flag，作业 kind 是
 `(node, flags)` 二元组）；**Stage5 只有一条 canonical 闭卷写作路**（默认补齐计划中的全部缺章，
@@ -99,9 +100,10 @@ builder、完成度不偷看作业记录、loopback、无 CORS、同书 409。�
 付费跑法必须 `--yes`。成本的唯一权威源是 `<base>/_service/ledger.jsonl`，不与产物 `usage` 或日志混加；
 缓存命中（`.llm_cache/`）单独记账，不能写成"没有执行过"。
 **付费授权与正文外发授权是两件独立的事**，任一缺失时仍可跑 0 成本的 `state`/`inbox`/`preview`。
-审批服务的盘上 `_service/approvals/<sid>.json` 是 **v3**（Stage5 只有
-`writing/writing_proof`），公开 API `ApprovalDoc` 仍是 **v2**；两个版本面独立。旧盘上 v2 只能经显式
-`backfill_from_disk` 且 proofs 仍绑当前主体时迁移，普通 GET 不得静默迁移。
+审批服务的盘上 `_service/approvals/<sid>.json` 是 **v4**（Stage4 新增 hash-bound typed
+`structure_decision/history`，Stage5 的 `writing/writing_proof` 仍与它独立），公开 API
+`ApprovalDoc` 是 **v3**；两个版本面独立。旧盘上 v2/v3 只能经显式 `backfill_from_disk` 且 proofs
+仍绑当前主体时保守收进 v4；旧记录没有 typed 结构决定，普通 GET 不得静默迁移或代开 s4。
 
 ### 修复路由与恢复路
 
@@ -126,9 +128,10 @@ provenance 的口相同。
 版本**，无标记/低版本/高版本都明确拒读——**本仓没有迁移机制**（仍以注册表为准，
 破坏形状就 `current_version` +1 并同批回答「存量产物由谁重建」，并在
 `tests/test_artifact_versions.py::_SHAPE_BREAKS` 里显式登记那一次破坏）。
-现役 `stage2/chapter_blueprints.json` 为 v4（2026-08-19 锚点改段落索引升 v2；
-2026-08-23 architecture 收窄为 v1.1/v2/v3.1 升 v3；2026-08-24 再收为 v2/v3.1 升 v4）；
-Stage5 canonical 章稿、Review、
+现役 `stage2/chapter_blueprints.json` 为 v5（前三次破坏到 v4；2026-08-25 原子事实契约替换旧
+event 形状升 v5）。Stage4 `blind_candidate.json` / `evidence_binding.json` 为 v1，
+`plan_chapters.json` / `plan_edit.json` 为 v3，writer context 与 identity 为 v2；旧 Stage4 v2 计划
+不迁移，必须先跑 `stage4.design`、再跑 `stage4.plan` 重建。Stage5 canonical 章稿、Review、
 trim audit/resolution 均为 v2。旧 `stage5/deep|shallow/` 只作历史证据，读模型必须明确报
 `legacy_incompatible`，不允许原地选臂、迁移或触发付费重建；其余产物版本以注册表为准；
 旧产物**不手补字段冒充当前产地**，要从 producer 重建。

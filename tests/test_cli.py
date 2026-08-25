@@ -27,7 +27,7 @@ from contracts.schema.evaluation import GlobalReview, GlobalReviewDecisionSet
 from contracts.schema.stage7 import NameMapEdit
 from novel.cli import exit_codes as X
 from novel.cli.main import main
-from novel.errors import ApprovalRequired
+from novel.errors import ApprovalRequired, TerminalState
 from novel.orchestrator import nodes as N
 from novel.orchestrator import queue as Q
 from tests import sandbox
@@ -339,31 +339,252 @@ def test_build_argv_already_carries_the_yes_for_a_paid_run():
     assert '--yes' not in N.build_argv('stage6.hook', 'sid1', ['--check-only'], base='.')
 
 
-def test_stage4_chapters_cli_forces_refresh_and_forwards_sorted_targets(monkeypatch):
-    """真实 CLI 分派不能把 ``--chapters`` 吃掉，也不能退回可读旧缓存的口径。"""
+def test_stage4_design_and_plan_are_two_independent_paid_dispatches(monkeypatch):
+    """Stage4A 成功只落盲候选；同一命令不得顺手触发 Stage4B。"""
+    from novel.cli import main as M
+    from novel.stages.stage4 import plan
+
+    events: list[tuple[str, str]] = []
+    design_ctx = SimpleNamespace(node='stage4.design')
+    plan_ctx = SimpleNamespace(node='stage4.plan')
+
+    def run_design(got_ctx, client):
+        events.append(('design', f'{got_ctx.node}:{client}'))
+        return SimpleNamespace(output_chapters=[object(), object()])
+
+    def run_plan(got_ctx, client):
+        events.append(('plan', f'{got_ctx.node}:{client}'))
+        return SimpleNamespace(passed=True)
+
+    monkeypatch.setattr(M, '_llm_client', lambda ctx: f'client:{ctx.node}')
+    monkeypatch.setattr(M, 'render', lambda _report: 'report')
+    monkeypatch.setattr(plan, 'run_design', run_design)
+    monkeypatch.setattr(plan, 'run_plan', run_plan)
+
+    assert M._run_stage4(design_ctx, []) == X.OK
+    assert events == [('design', 'stage4.design:client:stage4.design')]
+
+    events.clear()
+    assert M._run_stage4(plan_ctx, []) == X.OK
+    assert events == [('plan', 'stage4.plan:client:stage4.plan')]
+
+
+def test_stage4_two_dry_runs_preview_only_their_own_prompt(monkeypatch):
+    """两次付费调用要分别 preview；dry-run 不构造 client，更不串行下一相。"""
+    from novel.cli import main as M
+    from novel.stages.stage4 import plan
+
+    calls: list[str] = []
+    monkeypatch.setattr(
+        M, '_llm_client',
+        lambda _ctx: pytest.fail('dry-run 不应构造 LLM client'))
+    monkeypatch.setattr(
+        plan, 'build_design_prompt',
+        lambda _ctx: (calls.append('design') or ('design-system', 'design-user')))
+    monkeypatch.setattr(
+        plan, 'build_prompt',
+        lambda _ctx: (calls.append('plan') or ('plan-system', 'plan-user')))
+
+    assert M._run_stage4(
+        SimpleNamespace(node='stage4.design'), ['--dry-run']) == X.OK
+    assert calls == ['design']
+    calls.clear()
+    assert M._run_stage4(
+        SimpleNamespace(node='stage4.plan'), ['--dry-run']) == X.OK
+    assert calls == ['plan']
+
+
+def test_stage4_replan_refreshes_only_a_and_remains_an_explicit_paid_run(monkeypatch):
+    """B 说不可绑定后，只有显式付费 replan 才绕过旧 A 缓存。"""
     from novel.cli import main as M
     from novel.llm.cache import CachePolicy
     from novel.stages.stage4 import plan
 
-    ctx = SimpleNamespace(node='stage4.plan', cache=CachePolicy.default())
-    observed = {}
+    ctx = SimpleNamespace(node='stage4.design', cache=CachePolicy.default())
+    events: list[tuple[str, str]] = []
 
-    def run_plan(got_ctx, client, *, chapters=()):
-        observed.update(ctx=got_ctx, client=client, chapters=chapters,
-                        cache=got_ctx.cache.name)
-        return SimpleNamespace(passed=True)
+    def run_design(got_ctx, client):
+        events.append((got_ctx.cache.name, client))
+        return SimpleNamespace(output_chapters=[object()])
 
-    monkeypatch.setattr(M, '_llm_client', lambda _ctx: 'fake-client')
-    monkeypatch.setattr(M, 'render', lambda _report: 'report')
-    monkeypatch.setattr(plan, 'run_plan', run_plan)
+    monkeypatch.setattr(M, '_llm_client', lambda _ctx: 'design-client')
+    monkeypatch.setattr(plan, 'run_design', run_design)
+    monkeypatch.setattr(
+        plan, 'run_plan',
+        lambda *_args, **_kwargs: pytest.fail('replan 只产 A，不得自动串 B'))
 
-    assert M._run_stage4(ctx, ['--chapters', '5,2,5']) == X.OK
-    assert observed == {
-        'ctx': ctx,
-        'client': 'fake-client',
-        'chapters': (2, 5),
-        'cache': 'refresh-write',
-    }
+    assert N.is_paid('stage4.design', ['--replan']) is True
+    assert M._run_stage4(ctx, ['--replan']) == X.OK
+    assert events == [('refresh-write', 'design-client')]
+
+
+def test_stage4_replan_and_dry_run_are_mutually_exclusive_before_costing(
+        tmp_path, monkeypatch, capsys):
+    """“只看”与“付费重采”不能同时成立，也不能被免费白名单洗价。"""
+    from novel.cli import main as M
+
+    assert '--yes' in N.build_argv(
+        'stage4.design', '123', ['--replan'], base=tmp_path)
+    dispatched: list[str] = []
+    monkeypatch.setattr(
+        M, '_dispatch',
+        lambda node, _ctx, _flags: dispatched.append(node) or X.OK)
+
+    rc = _run(
+        'run', 'stage4.design', '123', '--dry-run', '--replan',
+        '--base', str(tmp_path))
+
+    assert rc == X.TERMINAL_STATE and dispatched == []
+    err = capsys.readouterr().err
+    assert '主操作互斥' in err and '--dry-run' in err and '--replan' in err
+    assert '加 `--yes`' not in err, '必须先拒绝自相矛盾的跑法，不得先误报费用'
+
+
+def test_stage4_typed_infeasible_is_landed_red_without_a_fake_report(
+        monkeypatch, capsys):
+    """B 负结论已落 evidence_binding：exit 1 记 landed，不伪造 CheckReport。"""
+    from contracts.schema.stage4 import EvidenceBinding
+    from novel.cli import main as M
+    from novel.stages.stage4 import plan
+
+    binding = EvidenceBinding.model_construct(
+        status='infeasible', candidate_sha256='a' * 64,
+        chapters=None, reason_kind='future_leak',
+        reason='候选场景只能靠未来章证据成立。',
+        evidence_refs=['f02_001'])
+    monkeypatch.setattr(M, '_llm_client', lambda _ctx: 'binding-client')
+    monkeypatch.setattr(plan, 'run_plan', lambda _ctx, _client: binding)
+    monkeypatch.setattr(
+        M, 'render', lambda _report: pytest.fail('typed negative 不得伪造 CheckReport'))
+
+    rc = M._run_stage4(SimpleNamespace(node='stage4.plan'), [])
+
+    assert rc == X.CHECK_FAILED and X.landed(rc)
+    out = capsys.readouterr().out
+    assert 'typed infeasible' in out and 'future_leak' in out
+    assert 'stage4.design --replan' in out
+
+
+def test_stage4_cli_handler_refuses_repeating_current_infeasible_without_wire(
+        monkeypatch):
+    """手敲 paid B 也必须落到 producer 的同一前置，而不是只靠浏览器隐藏。"""
+    from novel.cli import main as M
+    from novel.stages.stage4 import plan
+
+    store = object()
+    monkeypatch.setattr(plan, 'ArtifactStore', lambda _ctx: store)
+    monkeypatch.setattr(
+        plan, 'current_infeasible_binding',
+        lambda got: SimpleNamespace(status='infeasible') if got is store else None)
+
+    class NoWireClient:
+        def ask_json(self, *_args, **_kwargs):
+            pytest.fail('CLI 不得为同一 current infeasible 再发 B wire')
+
+    monkeypatch.setattr(M, '_llm_client', lambda _ctx: NoWireClient())
+    with pytest.raises(TerminalState, match=r'stage4\.design --replan'):
+        M._run_stage4(SimpleNamespace(node='stage4.plan'), [])
+
+
+def test_stage4_cli_rejects_retired_chapters_before_dispatch(
+        tmp_path, monkeypatch, capsys):
+    """v3 只允许整书 A/B；旧 ``--chapters`` 不得被吃掉后默认跑整书。"""
+    from novel.cli import main as M
+
+    dispatched: list[str] = []
+    monkeypatch.setattr(
+        M, '_dispatch',
+        lambda node, _ctx, _flags: dispatched.append(node) or X.OK)
+    monkeypatch.setattr(
+        M, '_llm_client',
+        lambda _ctx: pytest.fail('非法旧参数不得走到 LLM'))
+
+    rc = _run(
+        'run', 'stage4.plan', 'retired-stage4-chapters',
+        '--chapters', '5,2,5', '--yes', '--base', str(tmp_path))
+
+    assert rc == X.TERMINAL_STATE
+    assert dispatched == []
+    err = capsys.readouterr().err
+    assert 'stage4.plan' in err and '不接受' in err and '--chapters' in err
+
+
+@pytest.mark.parametrize(('extra', 'chapters', 'fresh_review'), [
+    ([], None, False),
+    (['--chapters', '5,2,5'], [2, 5], False),
+    (['--revise'], None, True),
+])
+def test_every_paid_stage5_cli_path_authorizes_before_dispatch(
+        tmp_path, monkeypatch, extra, chapters, fresh_review):
+    """手敲 CLI 与 API 共用写作授权；拒绝必须发生在任何 LLM 前。"""
+    from novel.cli import main as M
+    from novel.orchestrator import approvals
+    from novel.stages.stage2 import global_review
+
+    ctx = SimpleNamespace(node='stage5.write')
+    authorized: list[tuple[list[int] | None, bool]] = []
+    dispatched: list[str] = []
+    monkeypatch.setattr(
+        M, 'RunContext', SimpleNamespace(open=lambda *_args, **_kwargs: ctx))
+    monkeypatch.setattr(global_review, 'require_approved', lambda _ctx: None)
+
+    def refuse(_base, _sid, selected, *, requires_fresh_review=False):
+        authorized.append((selected, requires_fresh_review))
+        raise ApprovalRequired('合成授权拒绝')
+
+    monkeypatch.setattr(approvals, 'authorize_writing', refuse)
+    monkeypatch.setattr(
+        M, '_dispatch',
+        lambda node, _ctx, _flags: dispatched.append(node) or X.OK)
+    monkeypatch.setattr(
+        M, '_llm_client',
+        lambda _ctx: pytest.fail('授权拒绝后不得构造 LLM client'))
+
+    rc = _run(
+        'run', 'stage5.write', '123', *extra,
+        '--yes', '--base', str(tmp_path))
+
+    assert rc == X.TERMINAL_STATE
+    assert authorized == [(chapters, fresh_review)]
+    assert dispatched == []
+
+
+@pytest.mark.parametrize('extra', [
+    ['--dry-run'],
+    ['--recheck'],
+    ['--revalidate', '--actor', 'operator', '--reason', '按当前判据提升'],
+    ['--rebuild-draft'],
+    ['--apply-edit', 'stage5/chapter_edit.json'],
+])
+def test_zero_cost_stage5_recovery_paths_are_not_blocked_by_paid_authorization(
+        tmp_path, monkeypatch, extra):
+    """结构闸或 writing proof 未开时，人仍必须能进入零调用恢复路。"""
+    from novel.cli import main as M
+    from novel.orchestrator import approvals
+    from novel.stages.stage2 import global_review
+
+    ctx = SimpleNamespace(node='stage5.write')
+    dispatched: list[tuple[str, list[str]]] = []
+    monkeypatch.setattr(
+        M, 'RunContext', SimpleNamespace(open=lambda *_args, **_kwargs: ctx))
+    monkeypatch.setattr(
+        global_review, 'require_approved',
+        lambda _ctx: pytest.fail('零成本恢复路不应被 Stage2 付费闸拦住'))
+    monkeypatch.setattr(
+        approvals, 'authorize_writing',
+        lambda *_args, **_kwargs: pytest.fail(
+            '零成本恢复路不应要求 structure/writing 授权'))
+    monkeypatch.setattr(
+        M, '_dispatch',
+        lambda node, _ctx, flags: dispatched.append((node, flags)) or X.OK)
+
+    rc = _run(
+        'run', 'stage5.write', '123', *extra,
+        '--base', str(tmp_path))
+
+    assert rc == X.OK
+    assert len(dispatched) == 1 and dispatched[0][0] == 'stage5.write'
+    assert N.is_paid('stage5.write', dispatched[0][1]) is False
 
 
 # ───────────────────── 退出码只有一张表 ─────────────────────
@@ -511,10 +732,10 @@ def test_a_model_ladder_that_runs_out_is_a_terminal_state_not_a_crash(
 def test_the_pinned_nodes_keep_their_model_over_the_global_default(monkeypatch):
     """⭐ `_llm_client` 是全链唯一的 client 构造口：`NodeSpec.model` 在这里生效。
 
-    「除例外外全链 flash」必须长成形状而不是纪律：两个钉死节点 ⇒ `DEEPSEEK_MODEL` /
+    「除例外外全链 flash」必须长成形状而不是纪律：三个钉死节点 ⇒ `DEEPSEEK_MODEL` /
     全局默认 flash 都换不掉它们；其余节点 `''` = 跟随全局默认（flash）。
-    ⚠ 两个钉死值的理由不同（判官是证据力、`stage4.plan` 是重采粒度），
-    但**接线只有这一条**——所以这里一次断三个节点，不给第二条通路留缝。
+    ⚠ Stage4 A/B 两相共用 pro 的全书重采风险，判官则是证据力；
+    但**接线只有这一条**——所以这里一次断四个节点，不给第二条通路留缝。
     """
     import tempfile
     from pathlib import Path
@@ -531,12 +752,15 @@ def test_the_pinned_nodes_keep_their_model_over_the_global_default(monkeypatch):
 
     judge = M._llm_client(RunContext.open(
         base, '123', 'stage6.semantic', paid=True, write_ledger=False))
+    design = M._llm_client(RunContext.open(
+        base, '123', 'stage4.design', paid=True, write_ledger=False))
     plan = M._llm_client(RunContext.open(
         base, '123', 'stage4.plan', paid=True, write_ledger=False))
     other = M._llm_client(RunContext.open(
         base, '123', 'stage2.global', paid=True, write_ledger=False))
 
     assert judge.model == 'deepseek-v4-pro', '判官的 pro 是钉死的，环境变量换不掉'
+    assert design.model == 'deepseek-v4-pro', 'stage4.design 的 pro 是钉死的'
     assert plan.model == 'deepseek-v4-pro', 'stage4.plan 的 pro 是钉死的，环境变量换不掉'
     assert other.model == 'deepseek-v4-flash' == config.DEFAULT_MODEL
 

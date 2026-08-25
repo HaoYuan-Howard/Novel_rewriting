@@ -8,7 +8,8 @@ from types import SimpleNamespace
 import pytest
 
 from contracts.schema import encode_artifact
-from contracts.invariants import STAGE3_MEASUREMENT_CONTRACT
+from contracts.schema.api import StructureApprovalRequest
+from contracts.invariants import STAGE3_MEASUREMENT_CONTRACT, STRUCTURE_METRIC_CONTRACT
 from contracts.schema.stage1 import HookCopy, MainText
 from contracts.schema.stage3 import StyleGrounding, StyleProvenance
 from contracts.schema.stage4 import PlanChapters, PlanProvenance
@@ -63,13 +64,16 @@ def _plan(ctx: RunContext, *, strategy: str = '按原章次序推进。') -> Pla
         }],
         'rationale': 'fixture audit rationale',
     }
-    provenance = ctx.llm_provenance(
+    provenance = ctx.free_provenance(
         PlanProvenance,
-        prompts={'PLAN_SYS': 'fixture current plan prompt'},
-        model='fixture-model',
-        adopted_models=['fixture-model'],
-        params={'compiler': 'atomic-scenes-v1', 'fact_atoms': 1,
-                'source_stages': 1},
+        params={
+            'compiler': 'atomic-scenes-v2', 'fact_atoms': 1,
+            'source_stages': 1,
+            'structure_metric_contract': STRUCTURE_METRIC_CONTRACT,
+        },
+        origin='human',
+        blind_candidate_sha256=None,
+        evidence_binding_sha256=None,
     )
     return PlanChapters(
         reconstruction_strategy=strategy,
@@ -78,6 +82,12 @@ def _plan(ctx: RunContext, *, strategy: str = '按原章次序推进。') -> Pla
             'chapter_goal': goal('advance'),
             'open_hook_goal': goal('open'),
             'end_hook_goal': goal('close'),
+            'structure_decision': {
+                'mode': 'retain',
+                'reason': '本夹具只核对当前审批主体。',
+                'declared_change_kinds': [],
+                'computed_change_kinds': [],
+            },
             'weight': 'even',
             'semantic_contract': {
                 'chapter_function': '核对当前计划',
@@ -154,7 +164,22 @@ def isolated_stage34(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def _approve_spending_surface(base: Path) -> None:
     approvals.approve_gate(base, SID, 's3')
-    approvals.approve_gate(base, SID, 's4')
+    novel_dir = approvals.paths.resolve_novel_dir(base, SID)
+    subject, chapters = approvals._current_structure_subject_and_chapters(novel_dir)
+    approvals.approve_structure(
+        base,
+        SID,
+        StructureApprovalRequest(
+            actor='freshness-reviewer',
+            reason='核对当前结构主体与精确章集',
+            subject_sha256=subject,
+            chapters=[{
+                'output_ordinal': ordinal,
+                'decision': 'accept',
+                'reason': f'第 {ordinal} 章结构已逐项核对',
+            } for ordinal in chapters],
+        ),
+    )
     approvals.begin_writing(base, SID)
 
 
@@ -173,7 +198,7 @@ def test_fresh_proofs_authorize_canonical_whole_book_queue_plan(
     _approve_spending_surface(base)
 
     raw = json.loads(approvals._path(base, SID).read_text(encoding='utf-8'))
-    assert raw['v'] == 3
+    assert raw['v'] == 4
     assert raw['gate_proofs']['s3']['root_clean_sha1']
     assert raw['gate_proofs']['s4']['artifacts'][PLAN_REL]
     assert raw['writing_proof']['artifacts'] == {
@@ -250,13 +275,24 @@ def test_writing_cannot_be_authorized_without_current_s3_s4_approval(
     assert todo == [] and blocked[0].steps == []
 
 
-def test_backfill_uses_the_same_current_proofs_and_rejects_invalid(
+def test_backfill_never_manufactures_typed_s4_and_invalid_revokes_explicit_decision(
     current_book, isolated_stage34, monkeypatch,
 ):
     base, book = current_book
     monkeypatch.setattr(approvals, '_GATE_ORDER', ('s3', 's4'))
     first = approvals.backfill_from_disk(base, SID)
-    assert first.backfilled == ['s3', 's4']
+    assert first.backfilled == ['s3']
+    assert not first.approvals.gate['s4']
+    novel_dir = approvals.paths.resolve_novel_dir(base, SID)
+    subject, chapters = approvals._current_structure_subject_and_chapters(novel_dir)
+    approvals.approve_structure(base, SID, StructureApprovalRequest(
+        actor='backfill-reviewer', reason='旧记录不能代造结构裁决，现逐章补审',
+        subject_sha256=subject,
+        chapters=[{
+            'output_ordinal': ordinal, 'decision': 'accept',
+            'reason': f'第 {ordinal} 章当前结构已核对',
+        } for ordinal in chapters],
+    ))
     approvals.begin_writing(base, SID)
     assert approvals.has_record(base, SID)
 
@@ -331,7 +367,7 @@ def _write_legacy_v2(base: Path, book: Path, *, deep: list[int]) -> None:
     }, ensure_ascii=False), encoding='utf-8')
 
 
-def test_explicit_v2_backfill_resigns_writing_only_when_old_selection_was_all_deep(
+def test_explicit_v2_backfill_never_resigns_s4_or_writing_even_when_all_deep(
     current_book, isolated_stage34, monkeypatch,
 ):
     base, book = current_book
@@ -339,14 +375,14 @@ def test_explicit_v2_backfill_resigns_writing_only_when_old_selection_was_all_de
     _write_legacy_v2(base, book, deep=[1])
 
     result = approvals.backfill_from_disk(base, SID)
-    assert result.approvals.writing is True
-    assert result.approvals.gate['s3'] and result.approvals.gate['s4']
+    assert result.approvals.writing is False
+    assert result.approvals.gate['s3'] and not result.approvals.gate['s4']
     assert not any(result.approvals.gate[f's{i}'] for i in range(5, 8))
     raw = json.loads(approvals._path(base, SID).read_text(encoding='utf-8'))
-    assert raw['v'] == 3 and 'deep' not in raw and 'deep_proof' not in raw
+    assert raw['v'] == 4 and 'deep' not in raw and 'deep_proof' not in raw
 
 
-def test_explicit_v2_backfill_clears_writing_when_any_chapter_was_shallow(
+def test_explicit_v2_backfill_also_clears_s4_when_any_chapter_was_shallow(
     current_book, isolated_stage34, monkeypatch,
 ):
     base, book = current_book
@@ -355,5 +391,5 @@ def test_explicit_v2_backfill_clears_writing_when_any_chapter_was_shallow(
 
     result = approvals.backfill_from_disk(base, SID)
     assert result.approvals.writing is False
-    assert result.approvals.gate['s3'] and result.approvals.gate['s4']
+    assert result.approvals.gate['s3'] and not result.approvals.gate['s4']
     assert not any(result.approvals.gate[f's{i}'] for i in range(5, 8))

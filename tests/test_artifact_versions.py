@@ -129,22 +129,24 @@ _SHAPE_BREAKS: dict[str, tuple[int, str, str]] = {
         '都必须由 producer 重建为当前 v5',
     ),
     'stage4/plan_chapters.json': (
-        2,
-        '2026-08-25 Stage4 场景编译器替换：删除 `PlanBeat`/`segments`/`from_beats`，'
-        '新增 Stage2 派生的四类 delta `semantic_contract` 与真正可重组的 `scenes`',
-        '`stage4.plan` 在当前 Stage2 v5 上整跑（付费）；旧计划不迁移。'
-        '由它驱动的 Stage5 canonical 章稿写作任务已改变，freshness 必须判 stale 后全书重写',
+        3,
+        '两次破坏。2026-08-25 v2 删除 `PlanBeat`/`segments`/`from_beats`，改为原子事实 '
+        '`semantic_contract` + `scenes`。2026-08-25 v3 把源序可见的一次规划拆成 '
+        '`stage4.design` 盲设计与 `stage4.plan` 证据绑定，逐章新增 retain/reconstruct '
+        '决定与声明/代码复算变化；计划 provenance 改为 A+B 的确定性编译账，不复制任一相 usage',
+        '依次付费重跑 `stage4.design` 与 `stage4.plan`；旧 v2 不迁移、不补字段。'
+        '`stage4.context` 随后免费重建；Stage5 canonical 因消费计划改变而全书重写',
     ),
     'stage4/plan_edit.json': (
-        2,
-        '2026-08-25 与正式计划同批从旧 `PlanBeat` 整份替换为语义契约 + scenes',
-        '旧人工编辑集不能表达事实覆盖与状态闭合，原样作废；需要时由人按当前 PlanEdit v2 重写',
+        3,
+        '两次破坏：v2 改为语义契约 + scenes；v3 与正式计划同步新增章级结构决定及代码复算变化',
+        '旧人工编辑集不能凭空推造 retain/reconstruct 意图；需要时由人按当前 PlanEdit v3 重写',
     ),
     'stage4/writer_context.json': (
         2,
         '2026-08-25 删除写手面的 `CtxBeat.events[]`，新增 chapter_rewrite_brief、'
         '四类 delta 在内的人话 semantic_contract 与可直接执行的 CtxScene',
-        '`stage4.context` 从当前 Stage2 v5 + Stage4 plan v2 免费重建；下游 Stage5/6 按消费投影判 stale',
+        '`stage4.context` 从当前 Stage2 v5 + Stage4 plan v3 免费重建；下游 Stage5/6 按消费投影判 stale',
     ),
     'stage4/writer_context.identity.json': (
         2,

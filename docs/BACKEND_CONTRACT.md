@@ -87,8 +87,9 @@
 
 ### 编号
 
-- **`R-0` ~ `R-12`** — 功能需求，**按节点编排不按 stage 编排**（stage2 有两个节点 = `R-2`/`R-3`，
-  stage4 有两份产物 = `R-5`/`R-6`，stage5 有两相 = `R-7`/`R-8`）。
+- **`R-0` ~ `R-12`** — 功能需求，**按节点职责编排，不按 stage 号码机械映射**；同一职责节可以覆盖
+  多个独立节点（stage2 两个节点 = `R-2`/`R-3`；stage4 三个节点中 design/plan 共属 `R-5`、
+  context 属 `R-6`；stage5 两相 = `R-7`/`R-8`）。
   **1:1 重建**：形态可以变，能力与守卫不许缩水
 - **`R-13` ~ `R-14`** — **相对原型新增的两项能力**（批量队列 · 断点续跑），用户裁决
 - **`Q-1` ~ `Q-12`** — 工程约束，跨阶段成立
@@ -126,8 +127,8 @@
 > ### 命名体系：**两层**（`stage` 与 `node` 是两个正交的轴）
 >
 > `stage` 是产物目录 + schema 层 + 需求节的归属；`node` 是可跑的作业单元。
-> **两者不是 1:1**——stage2 有两个节点、stage5 有写作与验收两相、
-> stage4 的上下文组装是 0 成本节点、stage0 有三个人参与的动作。
+> **两者不是 1:1**——stage2 有两个节点；stage4 有两个付费相与一个 0 成本上下文节点；
+> stage5 有写作与验收两相；stage0 有三个人参与的动作。
 > 原型的 `n1`~`n9` 是**节点轴用 stage 编号命名**的产物，于是它必然跳号、重号、缺号，
 > 而且 label 是手写的会说谎（`n1_partition` 的 label 写着「摄入+分章」，而摄入早已搬去 stage0）。
 > **`n1..n9` 整套退役。** 五条规则：
@@ -149,8 +150,8 @@
 >    `tests/test_invariants.py::test_enum_matches_live_backend` **正在逐值比对**其中 6 个，
 >    前端也是运行时取（不许硬编码）。`job_kinds` / `actions` 的**形状不变，只有 `kind` 的取值变**。
 >
-> ⚠ **R 节的编排轴因此是【节点】不是 stage**（`R-2`/`R-3` 是 stage2 的两个节点、
-> `R-5`/`R-6` 是 stage4 的、`R-7`/`R-8` 是 stage5 的两相）。
+> ⚠ **R 节的编排轴因此是【节点职责】不是 stage**（`R-2`/`R-3` 是 stage2 的两个节点；
+> stage4 的 design/plan 两节点共用 `R-5`，context 节点用 `R-6`；`R-7`/`R-8` 是 stage5 的两相）。
 > 正向覆盖率**不许**写成 `'R-' + stage.removeprefix('stage')`——那个式子只在 stage0/stage1 上对，
 > `stage3` 会拿到 stage2 逐章抽取的需求。`STAGE_SECTIONS` 从 `NODES` 派生，
 > 且 `tests/test_coverage.py::test_stage_sections_is_not_the_naive_stage_number` 专盯「有人把它改回去」。
@@ -475,7 +476,7 @@
 
 ---
 
-### R-5 · 重构计划（stage4 · 一次调用）
+### R-5 · 盲场景设计与证据绑定（stage4 · 两次独立付费调用）
 
 **只存决策，一个字内容都不经它。**
 
@@ -487,29 +488,32 @@
 | R-5.3b | 逐章预算之和落在源字数的 **±20%**（`PLAN_BUDGET_BAND`），**无豁免**（原型在带之外又乘了一次 ±10%，那第二层已裁掉）。⚠ 2026-08-22 从 ±10% 放宽：这是把「哪一章厚、哪一章薄」这个自由度还给 stage4，治的是「成稿只改了措辞」；**放宽的对价是同批的 `R-5.3c`**——不配它，全书总量从此无人守。⚠⚠ **2026-08-22（批 4）起它是代码的后置条件**：模型给章级档位（`CHAPTER_WEIGHTS`），整数由 `novel/stages/stage4/measure.py::allocate_budgets` 归一化 + 钳带算出 ⇒ 生成路上这条判据恒绿。**判据不撤**：`--apply-edit` 的人工稿与 `--revalidate` 的存量产物不经过那个函数，在那两条路上它仍然是真守卫 | `HARD` |
 | R-5.3c | **全书**预算之和落在全书 span 合计的 `BOOK_BAND`（0.90~1.10）内。逐章带一放宽，「章章 ±10% ⇒ 全书必然 ±10%」这条蕴含就断了，而总量是对用户的产品承诺。⚠ `unver` 臂比 `R-5.3b` 严：**缺一章就不判**（少一章分子分母同时缺一块，得出的倍率既不能说合格也不能说不合格）。⚠ finding 必须打出**逐章倍率明细**，否则本层那条 0 成本恢复路名存实亡。⚠⚠ **2026-08-22（批 4）起同样是代码的后置条件**（同 `R-5.3b`）：全书总量恒等于全书 span 合计（带的中心 1.0），逐章档位只决定它**怎么分**。定向修复那一路把本章总量钉死在基线合计上，因此也顶不出带外——而从前它可以 | `HARD` |
 | R-5.4 | 全书策略、三个 goal、`chapter_rewrite_brief` 与场景 `purpose` 只说**写什么与怎样组场**，不许用风格套话代替结构决策；Stage2 冻结的 `chapter_function` 只读、不由 Stage4 改写 | `HARD`（`style_words`） |
-| R-5.5 | Stage2 `Beat` 只承担证据区间、舞台与保真材料归属；**事实守恒的最小单位是 `fact_atom`**。Stage4 不得把 beat 编号、源相邻关系或复合摘要重新编译成写作骨架 | `结构`（`novel/stages/stage4/prompts.py::project_blueprints_for_planner` 只发原子契约与舞台目录；`contracts/schema/stage4.py::PlanScene` 没有源拍分组字段） |
+| R-5.5 | Stage4 正式生产拆成两个**独立付费节点/逻辑调用**：`stage4.design` 只把冻结的 Stage2 v5 真相图设计成 `blind_candidate.json`；`stage4.plan` 只把该候选绑定证据并确定性编译为计划。两步分别进入付费预览/`--yes`，A 完成不得静默连跑 B；批量队列也只能在首次快照中确认 A，A 落盘且人审阅后必须重新 plan/preview/confirm 才能得到 B 的付费 argv。传输或内容重采仍可能产生额外 wire，必须逐条进 ledger。A 的 prompt 不得出现原文、SourceSpan、`source_beat_ref`、beat/stage、材料、带源序含义的 id 或事实数组顺序，只见稳定散列去序的 opaque alias、事实语义、因果图与首尾状态；因果偏序是事实真相，不是原叙述顺序 | `结构`（`contracts/invariants.py::NODES` 的 `stage4.design` / `stage4.plan` + `novel/stages/stage4/prompts.py::blind_design_system` + `novel/orchestrator/queue.py::plan_book`） |
 | R-5.6 | 每章 `semantic_contract` 必须逐字段等于同号 Stage2：`chapter_function`、land/context 原子、因果边、章首/章尾状态与保真材料。每个 land 原子和 material 恰落一个新场景；context 可复用；引用只限同章；首尾 goal 落在新首尾场景；章首输入与章尾输出闭合 | `HARD`（`semantic_contract` / `fact_ref` / `fact_coverage` / `causal_closure` / `state_closure` / `material_coverage` / `goal_landing`） |
-| R-5.7 | Stage4 LLM 只产全书策略、三个 typed goal、章/场分量档、`chapter_rewrite_brief` 与非空 `scenes[]`。每场给 `purpose/role/delivery/transition`、land/context/material/turn/state/participant/stage refs；`slot`、整数预算与 immutable `semantic_contract` 由代码编译。响应枚举与产物枚举仍由 `decode_plan_response` 唯一映射 | `HARD`（`empty_chapter` / `scene_transition` / `budget_int`）+ strict schema |
-| R-5.8 | 场景只可使用本章关闭式人物、事实、舞台与材料目录；Stage4 自由文本不得泄露后文。确定性引用闭合已守，自由文本改写式泄漏仍无真值 | 引用面见 `R-5.6`；自由文本风险 **无守卫 → `B-06`** |
-| R-5.9 | 场景详略由章级与场级 `weight` 决定，整数预算由代码分配；“多少场算过多、何种详略最好”没有 ground truth，不设审美阈值 | **`人`**；预算硬门见 `R-5.3b/c`，分布见 `R-5.9b`；旧盲区见 `B-17` |
+| R-5.7 | Stage4A 只产全书策略、逐章 `retain/reconstruct` 决定、三个 alias goal、章/场 weight、brief 与按新披露序排列的非空候选 `scenes[]`；代码注入稳定 `candidate_scene_id` 并保存 A 自己的 LLM provenance。候选没有 material/participant/stage refs，不能冒充最终计划 | `HARD`（`empty_chapter` / `budget_int`）+ strict schema（`contracts/schema/stage4.py::BlindCandidate`） |
+| R-5.8 | Stage4B 才看原文证据、源舞台、人物与必须材料；它只能按 `candidate_scene_id` 回填 `stage_refs` / `participant_refs` / `material_refs`，并回显冻结候选完整 SHA-256。B 不得改变 A 的章/场顺序、事实分组、首尾锚点、goal、`retain/reconstruct`、purpose/role/delivery/transition 或 weight；能绑定则返回完整 `bound`，不能绑定则返回 typed `infeasible` 与非空证据引用。负结论的引用也只能来自本次下发的候选 scene/opaque alias/关闭式 stage·material·participant 目录，不得交任意 token、部分绑定或静默重规划 | `结构`（`contracts/schema/stage4.py::EvidenceBinding` + `novel/stages/stage4/prompts.py::evidence_bind_system` + `novel/stages/stage4/blind.py::validate_infeasible_binding`）；引用闭合见 `R-5.6`，自由文本泄漏风险仍 **无守卫 → `B-06`** |
+| R-5.9 | 场景详略由章级与场级 `weight` 决定，整数预算由代码分配；“多少场算过多、何种详略最好、哪一种顺序更好”没有 ground truth，不设自动审美阈值 | **`人`**；预算硬门见 `R-5.3b/c`，分布见 `R-5.9b`；旧盲区见 `B-17` |
 | R-5.9b | 场景预算与原文舞台 span 的分布、章内轻重必须常驻报出；读数不自动升级为质量结论 | `度量`（`scene_budget_distribution`） |
-| R-5.10 | **计划的来源账要活过 0 成本提升路**：问题稿与被提升的稿同样带来源；`_provenance` 缺失记「不知道」；`inputs` 里取不到指纹的条目（上游文件已不在盘上）要报出来，不许静默跳过 | `结构`（`novel/store.py::write_invalid` 落 `.INVALID` 时照样带来源账；`novel/prov.py::FreshnessReport` 的 `ghosts` 把取不到指纹的边逐条点名） |
+| R-5.10 | A 与 B 各只在自己的 v1 中间产物记录 `LlmProvenance`、实际调用与 usage；最终 `plan_chapters.json` 是代码编译产物，只记 `FreeProvenance(origin=compiled)`，同时绑定 A/B 完整 SHA-256 与实际 consumed inputs，**不得复制 B 的模型/usage 冒充计划自身调用**。人工整份替换记 `origin=human`，不得继续冒充旧 A/B 编译结果。问题稿与 0 成本提升稿同样带来源，ghost input 必须显式报出 | `结构`（`BlindCandidateProvenance` / `EvidenceBindingProvenance` / `PlanProvenance` + `novel/prov.py::FreshnessReport`） |
 | R-5.10b | **写作上下文照的必须是盘上这份计划**：两处各存一份 goals，手改计划而不重建上下文就会分家。四态分开报——对得上 / 照的是另一版 / 没记这条边 / 上下文不在场 | `HARD` |
 | R-5.10c | 校验器要为**两份产物各报一行来源**：报告第一节只覆盖被复检的那一份，另一份的来源结论要另有一行常驻（空也要报） | `度量` |
-| R-5.11 | 场景编译器版本、fact atom 数与源舞台数进入 `PlanParams`，并常驻报出；旧分组算法版本不再是当前参数面 | `度量`（`plan_params`） |
-| R-5.11b | v2 计划不得与旧 `PlanBeat` 比“同尺结构变化”；旧产物由 schema version 关闭式拒读并从 producer 重建，不做跨版本伪比较 | `载体`（artifact v2 + `_SHAPE_BREAKS`） |
+| R-5.10d | `origin=compiled` 的计划在 freshness、Stage4 全判据复检和正式写盘后置条件中，都必须把 provenance 保存的两枚完整 SHA-256 与盘上**当前 A/B 版本化文件的原始字节**逐一比较；缺失或不符即关闭式阻断，不得因 `artifact_payload` / `inputs[].consumed` 的业务投影仍相同而放行。`origin=human` 不声明 A/B 编译身份，跳过这两条 exact 边但仍走普通 provenance freshness | `HARD`（`phase_artifact_link` + `novel/stages/stage4/phase_binding.py::verify_plan_phase_artifacts`） |
+| R-5.11 | 场景编译器版本、结构度量契约、fact atom 数与源舞台数进入 `PlanParams` 并常驻报出；现役结构口径为 `atomic-structure-v2`，字段由 `contracts/schema/stage4.py::PlanParams` 关闭取值，不得用旧算法读数与新计划混算 | `度量`（`plan_params`） |
+| R-5.11b | `blind_candidate.json` / `evidence_binding.json` 为 v1；`plan_chapters.json` / `plan_edit.json` 因新增结构决定与 A/B 编译来源升为 v3；writer context 仍为 v2。旧 plan/edit v2 关闭式拒读、不迁移、不手补字段：正式计划由 `stage4.design` → `stage4.plan` 重建，writer context 再由 `stage4.context` 免费重建；人工恢复须提交当前 v3 `plan_edit.json` 后走同一 schema、判据、归档与来源口 | `载体`（`ARTIFACT_SPECS` + `tests/test_artifact_versions.py::_SHAPE_BREAKS`） |
 | R-5.12 | land 原子不得重复落场或漏场；同一个复合源 beat 可以拆成多个原子分给不同场，场景也可合并不相邻原子 | `HARD`（`fact_coverage`） |
 | R-5.13 | 一场的预算不许被必须逐字写入的原话挤满：低于 2 倍只提示，不自动改场或改事实 | `INFO`（`verbatim_starved`） |
 | R-5.14 | 原话占场景预算的分布要无条件报出；阈值没有独立质量真值，读数不作放行门 | `度量`（`verbatim_share`） |
-| R-5.15 | 原相邻事实保留率、非相邻事实重新组场比例必须逐章常驻报出；**不立即设强制阈值**，顺叙可以是正确设计 | `度量`（`adjacency_retention` / `nonadjacent_regroup`） |
+| R-5.15 | 结构变化必须从同一个逐章函数复算且带分子、分母与 `unver`：事实→场景分区用全部 land-fact pair 的 split/merge 距离；披露顺序只比较 SourceSpan 严格可排序的 fact pair，并把同场 tie 与逆序分开；非连续重组按同一新场覆盖多少段互不相邻 source locus 计算。事实映射不闭合、SourceSpan 不可判或分母为零时不得产漂亮比例 | `度量`（`partition_change` / `disclosure_order` / `noncontiguous_regroup`，唯一数学落点 `novel/stages/stage4/measure.py::structure_metrics_of`） |
 | R-5.16 | `causal_edges` 约束故事成立顺序，不等于披露顺序；披露先于因果前提可能是合法倒叙，必须报逆序读数但不自动阻断 | `INFO`（`causal_disclosure`） |
 | R-5.17 | 场景 `transition` 必须是关闭式可执行标签，首场必须 `start`；回溯/返回的审美是否合适无 ground truth | `HARD`（`scene_transition`）+ 人工盲读 |
-| R-5.18 | 场景边界变化与入口是否重建必须无条件报出，不以“合并相邻 beat”或字面低重合冒充完成重构 | `度量`（`scene_boundary_change` / `entry_rebuilt`） |
-| R-5.19 | 事实在新场景中的重新分布、章级事实/状态/因果闭合必须无条件报出；闭合由 HARD 守，重构程度只读数 | `度量`（`fact_redistribution` / `semantic_closure_reading`） |
+| R-5.18 | 首尾锚点必须同时报 typed goal 相对源首尾 locus 的迁移，以及首/末新场 payload 是否仍含源首/尾 locus；另单报每章 source locus/源分组数、跨组可比较事实对、因果传递闭包约束/不可比对与非连续重组机会，作为“本章是否有重构空间”的保守分母。它们不以场景数量变化、合并两个相邻场或字面低重合冒充重构，也不自动判优劣 | `度量`（`anchor_migration` / `structure_eligibility`） |
+| R-5.19 | 每章必须显式记 `structure_decision`：`retain` 的声明变化为空；`reconstruct` 必须从 `entry_anchor / ending_anchor / fact_grouping / disclosure_order / noncontiguous_regroup` 中声明至少两类。最终编译器从计划重新计算 `computed_change_kinds`，盘上向量与复算不一致即拒收；声明已实现、未实现或出现未声明变化则常驻对证，但**不把“至少两项实际变化”或整书距离写成未经标定的自动美学门**。事实/状态/因果闭合仍由原 HARD 守 | `HARD`（`structure_vector`）+ `度量`（`structure_alignment` / `semantic_closure_reading`） |
+| R-5.20 | Stage4 计划进入 Stage5 前必须经过独立 typed 结构审批：服务端给出当前完整结构决策面的 SHA-256，人提交 actor、总理由以及**恰好覆盖当前全部章**的 `accept / request_replan` 与逐章理由。全部 accept 才打开 s4；任一 request_replan 只保存决定并保持 s4 关闭，绝不自动启动或付费重规划。浏览器可以据该 typed 决定另行展示 `stage4.design --replan` 的付费预览动作，但提交审批本身不得启动作业，新 A 后的 B 仍须再次独立预览和批准。通用 `/gate/s4` 必须拒绝；决定同时绑定结构 subject 与当前计划完整字节，计划变化后即时 expired。Stage5 的任何付费写作在首个 LLM 调用前必须同时验证当前 s4 结构批准和独立 writing 授权；0 成本 check/revalidate/apply-edit/阅读面不得被挡 | **`人`** + `结构`（`contracts/schema/api.py::StructureApprovalRequest` + `novel/orchestrator/approvals.py::approve_structure` + `novel/cli/main.py::_cmd_run`）；没有自动审美阈值 |
 
 > **2026-08-25 替换边界**：旧 `end_beat → from_beats → events[]` 链已整体退休，
-> 不是在 `PlanBeat` 上加字段。Stage2 v5 是事实唯一源；Stage4 v2 只编译场景。
-> 旧的拍合并率、`structure_changed` 与预算 reshape 实验保留在 Git 历史，不再构成现役契约或阈值依据。
+> 不是在 `PlanBeat` 上加字段。Stage2 v5 是事实唯一源；Stage4A 先脱离源序设计，Stage4B
+> 只能给冻结候选安放证据，最终 v3 计划由代码编译。旧的拍合并率、`structure_changed`、
+> 预算 reshape 与 v2 那五个失真的结构读数保留在 Git 历史，不再构成现役契约或阈值依据。
 
 ---
 
@@ -532,9 +536,9 @@
 
 > **`R-6.1`~`R-6.4` 为什么各配一条【后置条件】判据，而不是四行一起改 `结构`。**
 > 组装器带着**六道逐章闸**、比分组函数大一个数量级，而它一条报告行都不产
-> ——改坏了没有任何东西会出声。本文档自己有先例：`structure_units` / `structure_changed`
-> 同样是分组函数与正式计划的后置条件而不是只给模型的叮嘱，留在判据表里的理由写得清清楚楚
-> （**「改坏 `group_beats` 时要有人出声」**）。同一条理由在这里更强，不是更弱。
+> ——改坏了没有任何东西会出声。本文档自己有现役先例：`fact_coverage` / `material_coverage`
+> 对缺失与重复引用分别出声，`state_closure` 对相邻场景状态链断裂出声；它们都是正式场景计划的
+> 后置条件，不是只给模型的叮嘱。同一条理由在这里更强，不是更弱。
 >
 > ⚠ 而 `R-6.5` / `R-6.6` **不补**：前者的判别力已被 `R-6.7` 量死（字面子串包含，命中 0/8
 > 含一条**已知真泄漏**）——给它一条判据就是造第二盏说不清的灯；后者说的是一条**盘点方法**，
@@ -548,7 +552,7 @@
 | # | 要求 | 谁在查 |
 |---|---|---|
 | R-7.1 | 全书只有一条 canonical **闭卷**写作路：写手收到写作上下文与保真材料，源章原文只供确定性校验、绝不进入 prompt；每章正式产物唯一落 `stage5/chNN.json`，正文由 producer-owned `segments` 按计划 slot 顺序确定性拼出 | `结构`（`novel/stages/stage5/prompts.py::build_material` / `write_system` + `novel/stages/stage5/write.py::_rel` / `_ordered_segments`） |
-| R-7.2 | 人只批准「按当前 Stage3/Stage4 主体启动全书闭卷写作」，不再逐章选择写作臂。授权落 `_service/approvals/<sid>.json` 的 `writing/writing_proof`，不是小说产物、不进 provenance；默认按全书计划补齐所有缺章，已有章不重写，`--chapters` 才明确指定要重写的章 | `结构`（`novel/orchestrator/approvals.py::begin_writing` / `authorize_writing` + `novel/stages/stage5/write.py::_chapters_of`）+ **`人`**（是否授权本轮付费写作，见 `B-19`） |
+| R-7.2 | 人只批准「按当前 Stage3/Stage4 主体启动全书闭卷写作」，不再逐章选择写作臂。授权落 `_service/approvals/<sid>.json` 的 `writing/writing_proof`，不是小说产物、不进 provenance，且不能替代 `R-5.20` 的当前 typed s4 结构批准；任何 Stage5 付费写作在首个 LLM 调用前必须两证齐全。默认按全书计划补齐所有缺章，已有章不重写，`--chapters` 才明确指定要重写的章 | `结构`（`novel/orchestrator/approvals.py::begin_writing` / `authorize_writing` + Stage5 付费最低边界 + `novel/stages/stage5/write.py::_chapters_of`）+ **`人`**（是否授权本轮付费写作，见 `B-19`） |
 | R-7.2b | 目标章在一个并发池内逐章起跑，硬上限 32；一章失败不取消其他已经起跑的章，结果仍按阅读序落盘和报告。`ResponseRepairRequired` 是该章停在下一采之前，不是全批网络故障：不得取消尚待起跑的其他章，同批成功章先落 canonical 与当前 draft，再把修复终态交给外层 agent。40 章时同时在途峰值只能是 32 | `结构`（`novel/stages/stage5/write.py::_run_group_parallel`）+ 并发、失败隔离、修复暂停与顺序回归测试 |
 | R-7.3 | 必须逐字写入的原话，逐条回写校验 | `闸门` |
 | R-7.3b | 原话允许**被一处提示语切开**（`「…，」我说，「…」`）——中文小说的标准写法。插入必须在原文字节上长成「收引号 + ≤12 内容字 + 开引号」；改词、插动作描写、只写半句照旧判缺失。放行单独留痕 | `闸门` + `INFO` |
@@ -587,10 +591,10 @@
 | R-7.26 | fresh 只代表 Review 结论仍绑定当前主体，不代表当前主体可以正式下游消费。s5 审批、Stage6、Stage7 与最终交付必须再要求 accepted Review：无活动 `.INVALID`、计划章均有正式稿、当前 Review 无 HARD | `结构`（唯一出口 `novel/stages/stage5/review.py::require_accepted_review`；`novel/orchestrator/approvals.py::_stage5_subject_rels`、`novel/stages/stage6/hook.py::_Upstreams`、`novel/stages/stage7/rename.py::_Upstreams` 共用）+ 回归测试 |
 
 > **审批版本边界**：`_service/approvals/<sid>.json` 的现役盘上形状是
-> `_ApprovalRecordV3`（`v=3`），不再有逐章写作臂选择，且 `writing` 必须与当前主体的
-> `writing_proof` 成对。对外 `ApprovalDoc` **仍是 v2**；这是 API 响应版本，不是盘上版本的别名。
-> 旧盘上 v2 普通 GET/启动一律拒读，只有显式 `backfill_from_disk` 可在 proofs 仍绑当前主体时迁到 v3；
-> 历史写作授权还要满足旧选择覆盖当前全计划章，不猬测、不静默迁移。
+> `_ApprovalRecordV4`（`v=4`）：`writing` 必须与当前主体的 `writing_proof` 成对，Stage4 另有
+> typed `structure_decision/history`，两项授权不能互相推出。对外 `ApprovalDoc` 是 **v3**；这是
+> API 响应版本，不是盘上版本的别名。旧盘上 v2/v3 普通 GET/启动一律拒读，只有显式
+> `backfill_from_disk` 可保守收进 v4；旧记录没有 typed 结构决定，故不得迁移 s4、writing 或其后证明。
 
 > **历史证据（旧双路径，现已不可执行）——R-7.6 在 2026-08-10 当时的裁决**：
 > 旧闭卷路径只定上界，旧开卷路径不定线。
@@ -798,7 +802,7 @@
 | R-11.2 | localhost 也要防 CSRF：变更类路由要求自定义头 + 校验来源。**一个花钱的端点开在本机上，浏览器里任何页面都够得着它** | `HARD` |
 | R-11.3 | **服务进程绝不落【产物】盘**，产物变更一律走 CLI 子进程；它只写 `_service/` 中的上传、一次性编辑计划、作业事件/日志与人工审批状态。上述都不是小说产物。⚠ 这一条经过带标注的收窄，但没有放宽产物写口，见下方那个框 | `HARD`（测试钉死） |
 | R-11.4 | **界面不重算任何已经在校验器/闸门里的判据**，只呈现或链接。造第二个判官就是造第二个落点 | `HARD` |
-| R-11.5 | **七**个核心对照视图：**原文↔切分（`R-1.8` 的唯一闸门）** · 原文↔骨架 · 计划↔写作上下文（逐拍）· 成稿↔材料（含原文↔重构稿按锚点切块）· 结论↔可编辑成稿 · 三候选文案 · 新旧人名表 | `不适用`（这是一份**清单**，不是一条可判定的约束；每个视图各自的纪律在 `R-11.9`/`R-11.13` 等条里） |
+| R-11.5 | **七**个核心对照视图：**原文↔切分（`R-1.8` 的唯一闸门）** · 原文↔骨架 · 计划↔写作上下文（逐场景）· 成稿↔材料（含原文↔重构稿按锚点切块）· 结论↔可编辑成稿 · 三候选文案 · 新旧人名表 | `不适用`（这是一份**清单**，不是一条可判定的约束；每个视图各自的纪律在 `R-11.9`/`R-11.13` 等条里） |
 | R-11.6 | 产物新鲜度**三态**（新 / 陈旧 / **不知道**）；校验徽章**三态**（通过 / 通过但有查不了的 / 失败） | `HARD` |
 | R-11.7 | 付费与 0 成本动作在界面上分色，且**贵贱只有一处算**（服务端），前端一行判贵贱的代码都没有 | `HARD` |
 | R-11.8 | 付费入口一律经二次确认，并把**将要执行的那条命令**摊开显示（展示与执行共用同一个构造函数） | `HARD` |
@@ -857,7 +861,7 @@
 | R-12.3 | 子进程环境三件套（UTF-8 相关）缺一不可：缺了它，任何打印 `✓` 的节点进管道就非零退出——而一次**成功的付费跑**会被报成失败 | `HARD`（回归测试） |
 | R-12.4 | 缓存三条语义：关缓存是**同时关读写** · 参数不变的「重跑」什么都没跑 · 被打断的跑可几乎免费续 | `HARD` |
 | R-12.5 | **发出去的 prompt 里不许出现内部结构名**（拍号 `bNN_NN` / 人物 id `char_001` / 规则 id `wr_01` / 内部枚举名 / 节点名）。每层只说自己的语言：prompt 只讲任务，不提节点名、不提消费方、不提归属 | **无守卫 → `B-05`** |
-| R-12.6 | **整本请求先过精确上下文预算，再碰缓存、外部请求、ledger 或正常产物。** `stage2.global` 与 `stage4.plan`（以及所有统一 `LlmClient` 调用）按最终 system、user 与官方消息 framing 精确计 input tokens；Flash 主模型必须把 R-12.2 登记的 Pro 兜底请求也同批预检，任一项拒绝即全链 0 副作用。`deepseek-v4-pro` / `deepseek-v4-flash` 的保守有效上下文上限固定为 1,000,000，单次输出上限 384,000，且要求 `input_tokens + max_tokens <= 1,000,000`。tokenizer 固定为 DeepSeek V4 官方 revision `0e1a0e5e52aea73055f50fef6f2423db370265b6`，资源 SHA-256 `8f9f37ca37fdc4f5fd36d5cf4d3b0e8392edb4e894fd10cc0d70b4957c8633cf`；未知模型、依赖/资源不可用或 hash 不符全部关闭式拒绝，不用字符比例猜测。产品路径是**限制书长**：不截断、不分块聚合；预算拒绝本身不触发模型兜底。错误必须给出模型、tokenizer 版本、输入、声明输出、合计、两项上限及缩减正文的行动建议 | `结构`（`novel/llm/budget.py` + `novel/llm/client.py::_preflight`）+ 边界/副作用/Stage2/Stage4/CLI 回归测试 |
+| R-12.6 | **整本请求先过精确上下文预算，再碰缓存、外部请求、ledger 或正常产物。** `stage2.global`、`stage4.design` 与 `stage4.plan`（以及所有统一 `LlmClient` 调用）各按本次最终 system、user 与官方消息 framing 精确计 input tokens；Flash 主模型必须把 R-12.2 登记的 Pro 兜底请求也同批预检，任一项拒绝即该逻辑调用 0 副作用。`deepseek-v4-pro` / `deepseek-v4-flash` 的保守有效上下文上限固定为 1,000,000，单次输出上限 384,000，且要求 `input_tokens + max_tokens <= 1,000,000`。tokenizer 固定为 DeepSeek V4 官方 revision `0e1a0e5e52aea73055f50fef6f2423db370265b6`，资源 SHA-256 `8f9f37ca37fdc4f5fd36d5cf4d3b0e8392edb4e894fd10cc0d70b4957c8633cf`；未知模型、依赖/资源不可用或 hash 不符全部关闭式拒绝，不用字符比例猜测。产品路径是**限制书长**：不截断、不分块聚合；预算拒绝本身不触发模型兜底。错误必须给出模型、tokenizer 版本、输入、声明输出、合计、两项上限及缩减正文的行动建议 | `结构`（`novel/llm/budget.py` + `novel/llm/client.py::_preflight`）+ 边界/副作用/Stage2/Stage4/CLI 回归测试 |
 
 > **R-12.5 的守卫开在错的门上。** 现有的泄漏扫描扫的是**模型的产物**，
 > 而这条约束管的是**我们发出去的 prompt**——两者是两扇不同的门，而现在只有前一扇有守卫。
@@ -888,7 +892,7 @@
 | R-13.1 | 队列以「书 × 目标阶段」为单位，可排入、可取消**尚未开始**的项 | **`结构`**（`novel/orchestrator/queue.py::create` 冻结 `QueueStart` 并追加 `queues.jsonl`；`novel/orchestrator/queue.py::cancel` 只接收 `pending/blocked`，运行中明确拒绝）+ API/CLI 行为回归 |
 | R-13.2 | **一本书同时只跑一个作业**这条不变，Stage5 也没有书内互斥例外；队列只决定顺序，不放宽互斥 | **`结构`**（互斥键唯一落点 `novel/orchestrator/jobs.py::active_key`；队列不碰它） |
 | R-13.3 | **花钱的项必须一次性预先确认**，不能因为「排进队列了」就变成静默扣费。确认时摊开的仍是**将要执行的那些命令**；服务重启是新的执行轮次，不复用几小时前的 `--yes` 静默启动剩余付费项。恢复会重新逐字展示创建时冻结的剩余付费命令，并且只有 CLI `queue-resume --yes` / API `{"confirmed":true}` 才能移除持久的 restart-confirmation block；调用底层 runner 本身不构成授权 | **`结构`**（`novel/orchestrator/queue.py::confirm` / `_confirm_resume` 落 `ApprovalRequired`；`QueueStart` 拒收未确认的付费计划；`resume_incomplete` 对剩余付费快照落 `queue:restart-confirmation`）+ **`人`**（创建与每次付费恢复各完成当轮确认，见 `B-19`） |
-| R-13.4 | 任一项未绿 → **同书停在那里**，不跳过、不继续往下扣费；另一书继续。exit 1 单列为 `landed_red`（产物已经落盘、报告有阻断红行），不能误报成命令没跑成的 `failed`，但它与 `failed` 一样会停住该书 lane，并把后续项记 `not_run` 等人处理；四类计数不得合并 | **`结构`**（`novel/orchestrator/queue.py::_run_lane`；`QueueLaneCounts` 分列 done / landed_red / failed / not_run）+ 两书一红一成与一败一成回归 |
+| R-13.4 | 任一项未绿 → **同书停在那里**，不跳过、不继续往下扣费；另一书继续。exit 1 单列为 `landed_red`：正式产物已经落盘，但本次 typed 结论不通过（包括报告阻断红行与 Stage4B `infeasible`），不能误报成命令没跑成或没有落盘的 `failed`。它与 `failed` 一样会停住该书 lane，并把后续项记 `not_run` 等人处理；四类计数不得合并 | **`结构`**（`novel/cli/exit_codes.py::landed` + `novel/orchestrator/queue.py::_run_lane`；`QueueLaneCounts` 分列 done / landed_red / failed / not_run）+ 两书一红一成与一败一成回归 |
 | R-13.5 | 需要人裁决的闸门（stage0 批准 / Stage5 全书写作授权 / 文案定稿 / 人名表定稿 / 待人工非空）**会挡住队列**，并明确说出在等谁；没有当前 `writing/writing_proof` 时不拿只读默认值猜成已授权 | **`结构`**（每项前 `novel/orchestrator/queue.py::plan_book` 重读盘面；`novel/orchestrator/approvals.py::has_record` 区分已有记录与只读默认；`novel/orchestrator/queue.py::_human_gate_satisfied` 识别已有批准；`stage0.edit` 明确是可选能力而非必经闸） |
 | R-13.6 | 队列本身**不产生新的判定**，也不放宽任何落盘闸门 | **`结构`**（`tests/test_layering.py::test_the_queue_cannot_reach_the_judgement_layer`：`queue.py` 够不到 `novel.report`，连「顺手判一下」都做不到） |
 | R-13.7 | 不同小说的作业可以并行执行；互斥范围只落在各自 `sid`。每个后台作业独立启动 CLI 子进程，一本书失败或阻塞不占用另一本书的键 | `结构`（`novel/orchestrator/queue.py::_execute` 每书一个线程，调用 `novel/orchestrator/jobs.py::start`；互斥仍唯一落在 `novel/orchestrator/jobs.py::active_key`）+ barrier 证明两本书同时进入子进程的回归 |
@@ -1106,16 +1110,16 @@ RFC 6901 改动路径、自报 actor/reason 与 `edited_by_human`，合格才提
 | # | 约束 | 现状 | 建议处置 |
 |---|---|---|---|
 | **B-01** ★ | **发明越界七项里的五项**：新事件 · 新地点 · 新道具 · 新因果 · 新时间跳跃 | **零校验。** 只有「新数字」有探针、「新人物」有部分探针（召回有缺口：用本书没出现过的姓造人、不带称谓后缀的光名字都抓不到）。地名后缀是普通名词、无硬左锚，实测 82 条候选几乎全假 | **已裁决（2026-08-10）：不补，直到有 ground truth。** 三条理由都有实测：① gate1 在抽象层做语义判定时**护栏自己成了发明源**，已整节退役；② **唯一 `full` 的那一项自己就零判别力**——`invented_number` 在 3 本里有 2 本被书级恒等闸门判死（头牌 2/8 vs 源章 2/8；三岁 1/9 vs 源章 **2/9**）；③ 修复回环**实测会诱发**自造内容而当轮判定一条都指不出它。<br>⇒ 七项的身份是**给人核对的料**（同 `name_surface_survey`），不是关卡。**「探针报 0 条 ≠ 约束生效」必须写在报告里** |
-| **B-02** | **拍的顺序就是落笔的顺序** | 没有。「事件有没有落点」只查有无，不查顺序 | 补判据（拍的落点位置单调）**或**接受不查并写明 |
+| **B-02** | **旧事件拍的落笔顺序** | **现役暴露面已关闭。** 旧 event/beat 写作骨架已经退役；Stage4A 决定新场景披露顺序，Stage5 响应由 `novel/stages/stage5/write.py::_ordered_segments` 按计划 slot 确定性归位，不能临场另排一套。至于 A 选出的顺序是否更好没有 ground truth，留在 `B-17` 的结构读数 + 人工裁决面 | 不恢复“源拍位置单调”判据；那会把已去序的规划重新锁回源顺序。执行顺序由 `R-7.1` 的结构口关闭，审美优劣按 `R-5.20` 交人 |
 | **B-03** | **旧开卷路径的重合度没有阈值** | **历史闭环记录，现役暴露面为空。** 旧盘面逐章重算：旧闭卷 0.0~2.4%，旧开卷 0.9%~96.8%，不存在可标定的开卷一刀切线 | **2026-08-24 以收走能力关闭，不是以发明阈值关闭。** 现役只有 canonical 闭卷 `stage5/chNN.json`，上界为 `SOURCE_OVERLAP_MAX = 10%`（`INFO`）；旧目录只读保留并报 `legacy_incompatible`，CLI 没有可恢复旧能力的入口 |
 | **B-04** | **「必须成立、不必写在纸面上」那一组** | 机械层没有，且对应判据明确标为「查不了」；历史 Stage5 书级语义节点已退役，不再是现役覆盖 | 机械层继续诚实标注 `unver`；没有 ground truth 时不为了消掉盲区恢复一个自动语义门 |
-| **B-05** | **prompt 不许泄漏内部结构名** | 没有。现有的泄漏扫描扫的是**模型的产物**，不是我们发出去的 prompt。而拍号 / 人物 id / 规则 id / 内部枚举名正从多处**发出去** | **补一条 prompt 侧的守卫**。守卫开在错的门上，覆盖率 95% 而漏掉的正是主通道 |
+| **B-05** | **Stage4A prompt 不许泄漏源序或正式内部 id** | **本缺口已按 A 相边界关闭。** `build_blind_projection` 是唯一构造口，正式外发面只含去序 opaque alias、事实语义、因果与状态；生产集成测试直接检查真发 prompt 不含 fact/source beat/stage/material/人物正式 id、原文或源区间。B 相在结构冻结后才有意接收 candidate scene id 与关闭式证据目录，不能把它反推成 A 的输入 | 维持 `R-5.5` 的 prompt 侧隔离守卫；不要把“B 为绑定证据而看正式引用”误报成泄漏，也不要把其它节点的 typed id 需要偷换成 Stage4A 的源序暴露 |
 
 ### 4.2 其余（按节点分组，逐条已核实「谁在查 = 没有」）
 
 | # | 节点 | 无守卫的约束 |
 |---|---|---|
-| **B-06** | 计划 | 不发明人物/事件/设定 · 重头要稀缺（一章一到两拍）· 结尾钩子不提前泄底。<br>⚠ 另有一条**故意的**口径差异要保留：prompt 说「重头 2~3× 均值 / 带过拍 < 0.5× 均值」而代码判的是 `max/min < 2`——基准与倍数都不同，理由是「一章允许有一到两个重头，第二个会把均值抬上去，按均值判会把有轻重的章误报成平」。**不是漂移，但 prompt 那句确实没人在查** |
+| **B-06** | 计划 | A/B 的 strategy、goal intent、brief、purpose/reason 与 infeasible reason 等自由文本仍可能发明人物、事件或设定，也可能提前泄底。typed fact/stage/material/participant 引用能守引用闭合，却不能证明这些自由文本的语义忠实 |
 | **B-07** | 逐章抽取 | 不为首尾相接拉伸区间 · 主谓宾必须明确不许省略施受关系 · 别把「靠什么成立」摘要掉 · 硬数字必须原样进事件文本 · 原文自相矛盾时如实记录矛盾 · 不许照抄例子里的名字 · 摘要不照抄原文措辞 |
 | **B-08** | 全书抽取 | 只收结构性规则 · 规则描述必须连「怎么运作」一起写 · 秘密的四类收录判据 · 冲突阶段名要能定位 · 弧线两个字段的形状。**另加五个枚举**（人名区分度 / 规则类型 / 称谓场合 / 弧线变化类型〔开放枚举〕/ 叙述人称）——已有常量、两处 prompt 已插值，**但仍无任何校验**。<br>⚠ `叙述人称` 的取值面 2026-08-10 收正成 `first｜second｜third`：原型写的是 `first｜third_limited｜omniscient`，**把人称与限知/全知两个轴塞进了一个字段**，而且表达不了第二人称（语料里有一本真的第二人称小说）。Stage3 v2 已删除 `narrative_distance` / `interiority`，所以限知/全知当前是明确缺口，不得继续声称有现役载体 |
 | **B-09** | 叙述视点与退役文风 | Stage3 v1 的“可迁移、逐章可见、可执行规则、素材分区”等定性质量面已随字段和消费方整体退役，**不再是待补守卫**。仍存在的缺口只有限知/全知与语法人称可能混淆（见 `R-2.10`）；它没有现役独立载体，不得以此为由静默复活 Stage3 定性 schema |
@@ -1131,7 +1135,7 @@ RFC 6901 改动路径、自报 actor/reason 与 `edited_by_human`，合格才提
 | **B-14** | 身份描述里的结局 / 未揭示秘密 | **没有确定性防线。** 词表命中 0/17 而人读真违规 6/17（另一本 2/40）。处置不能是加词、也不能按章收窄（会掏空写作节点对角色的认知）。结局字段本身是对的，病在身份描述把它又讲了一遍，而两者的最长公共子串只对 1/3 强，**做不成可靠探测器** |
 | **B-15** | 改写式泄底 | **历史闭环记录。** 曾以 secret-blind claims → secret alignment 两相付费审判接线；2026-08-17 根据实跑证据转授到 Stage2 后见之明与交付对账，旧 Stage5 节点、产物和判据全部下线 | 现役处置见 `R-3.7d` / `R-7.18b` / `R-7.18c`；不得把历史实验描述成当前 Stage5 能力 |
 | **B-16** | 设定块的剧透闸门 | 字面子串包含，**命中 0/8，包括一条已知真泄漏**。真根因在产地：设定块里装着情节，修法是收紧抽取判据——那要重跑（付费） |
-| **B-17** | 计划的「轻重」两条 warn | **量出来了，然后没有下文**：「各拍字数几乎一样平」三本各 5/20 · 4/11 · 3/15；「有 >300 字的拍」4/20 · 2/11 · 3/15。**没有任何判据、也不进任何回环** |
+| **B-17** | 计划的场景轻重与顺序 | 场景数量、章/场 `weight`、预算分布与披露顺序哪种更好没有 ground truth。现役 `scene_budget_distribution`、逐字占比与结构度量只常驻报读数，不自动升成审美阈值；收口依赖 hash-bound typed 人工结构裁决 |
 | **B-18** | 定向修复被驳回之后 | **没有下一条路。** 回归护栏会正确地驳回一次「顺手少了一条 hinge」的重生成并保留旧稿，但这一层**没有**写作层那套「换一次采样再试一次」⇒ 一次付费调用白花、那一章仍是红的。**同一个问题形状在写作层有解、在抽取层没有** |
 
 ### 4.4 按设计就没有判据的（`人` 是正确答案，但必须写明）
@@ -1160,8 +1164,8 @@ RFC 6901 改动路径、自报 actor/reason 与 `edited_by_human`，合格才提
 | 分章校验器（`stage1`，**9 条现役**） | `R-1.1` ~ `R-1.15` |
 | 抽取的判据表（`stage2`，**77 条现役**，**两个节点共用一张**） | `R-2.1` ~ `R-2.9`、**`R-2.5b`**、**`R-2.6b`**、**`R-2.9b`** ~ **`R-2.9d`**、**`R-2.11b`**、**`R-2.14`**、**`R-2.19`** ~ **`R-2.21`**、`R-3.1`、`R-3.2`、**`R-3.2b`**、`R-3.5`、**`R-3.6b`**、**`R-3.6c`**、`R-3.7`、**`R-3.7b`** ~ **`R-3.7d`**、`R-3.8`、`R-3.9`、`R-3.11`、`R-3.13`、`R-3.14`、**`R-3.14b`**、**`R-3.16`**、**`R-3.16b`**、**`R-3.17`**、**`R-3.18`**<br>（`R-3.6` 归 `载体`、`R-2.10`/`R-2.11` 无守卫 → `B-08`、`R-2.12` 无守卫 → `B-14`、`R-3.10` 无守卫 → `B-07`、`R-3.12` 无守卫 → `B-18`；`R-3.15` 由 Stage 2 `SourceSpan` 载体守住） |
 | 机械基线漂移闸（`stage3`，**1 条现役**） | `R-4.1` |
-| 计划的判据表（`stage4`，**33 条现役**，两份产物共用一张） | `R-5.1` / `R-5.2`、**`R-5.3b` / `R-5.3c`**、`R-5.4` ~ `R-5.7`、**`R-5.9b`**、**`R-5.10b` / `R-5.10c`**、**`R-5.11` / `R-5.11b`**、**`R-5.12` ~ `R-5.15`**、**`R-5.16` ~ `R-5.19`**（`R-5.3` 归 `载体`、`R-5.5` / `R-5.10` 归 `结构`、`R-5.8` 无守卫 → `B-06`、`R-5.9` 由人结合读数判断，旧缺口 `B-17` 已收口） |
-| 上下文组装的后置条件（**同属上面 `stage4` 那 30 条，不另计**） | `R-6.1` ~ `R-6.4`，另加一条**跨层**的 **`R-3.3b`**（`ctx_hinge_delivered`：抽到的保真点必须条条出现在下发面上——它守的是 stage2 与 stage4 之间那一步，因此挂在 `R-3` 而实现在本层）（`R-6.5` / `R-6.6` 归 `结构`、`R-6.9` / `R-6.10` 归 `载体`、`R-6.7` 无守卫 → `B-16`、`R-6.8` 无守卫 → `B-01`，六行都没有判据） |
+| 计划的判据表（`stage4`，**36 条现役**，计划与上下文共用一张） | `R-5.1` / `R-5.2`、**`R-5.3b` / `R-5.3c`**、`R-5.4`、`R-5.6` / `R-5.7`、**`R-5.9b`**、**`R-5.10b` / `R-5.10c` / `R-5.10d`**、**`R-5.11`**、**`R-5.12` ~ `R-5.19`**（`R-5.3` / `R-5.11b` 归 `载体`；`R-5.5` / `R-5.8` / `R-5.10` 归 `结构`；`R-5.9` 与 `R-5.20` 由人结合无阈值读数判断，旧自由文本缺口仍见 `B-06`） |
+| 上下文组装的后置条件（**同属上面 `stage4` 那 36 条，不另计**） | `R-6.1` ~ `R-6.4`，另加一条**跨层**的 **`R-3.3b`**（`ctx_hinge_delivered`：抽到的保真点必须条条出现在下发面上——它守的是 stage2 与 stage4 之间那一步，因此挂在 `R-3` 而实现在本层）（`R-6.5` / `R-6.6` 归 `结构`、`R-6.9` / `R-6.10` 归 `载体`、`R-6.7` 无守卫 → `B-16`、`R-6.8` 无守卫 → `B-01`，六行都没有判据） |
 | 写作与验收的判据表（`stage5`，**51 条现役**，全为机械判据） | 严重度实算为 **hard 7 / info 27 / metric 12 / unver 5**；`repair` 实算为 **UNIQUE 12 / FREE 12 / NONE 27**。对应 `R-7.3` / `R-7.3b`、`R-7.4` ~ `R-7.9`、`R-7.11`、`R-7.15` ~ `R-7.18`、`R-7.20` ~ `R-7.25`、`R-8.1b`、`R-8.3b`、`R-8.9b`、`R-8.11`，另加上游账 `R-6.3`。Stage5 不接收 Stage3 定性块；`R-7.18b` / `R-7.18c` 的旧 Stage5 语义节点已转授；`R-7.19` 的旧判据已随非 canonical 路径退役。`R-7.1` / `R-7.12` / `R-7.24` / `R-7.26` / `R-8.1` / `R-8.4` ~ `R-8.6` / `R-8.7b` / `R-8.9` / `R-8.13` ~ `R-8.16` 归 `结构`，`R-8.2` / `R-8.3` / `R-8.7` / `R-8.12` 归 `载体`，`R-7.2` / `R-7.11` 是人，`R-7.5b` / `R-7.9b` / `R-7.10` 仍是明示盲区。<br>⚠ 本层不再有现役语义判据池；结构/载体行说的是机制，不是另加一条产物判据 |
 | 文案的判据表（`stage6`，**23 条现役**，机械判据与语义审判共用一张注册表） | `R-9.3`、**`R-9.3b`**、`R-9.4` ~ `R-9.6`、**`R-9.9` ~ `R-9.21`**、**`R-9.23`**（`R-9.1`/`R-9.2`/`R-9.22`/**`R-9.24`** 归 `结构`、`R-9.7` 见 `R-9.19`、`R-9.8` 见 `R-9.20`） |
 | 人名替换与成书的判据表（`stage7`，**35 条现役**） | `R-10.2b`、**`R-10.3b` ~ `R-10.3d`**、`R-10.4` / `R-10.5`、**`R-10.6c`**、**`R-10.7` / `R-10.7b`**、`R-10.9`、`R-10.11`、**`R-10.12b`**、**`R-10.13` ~ `R-10.14b`**、**`R-10.16` ~ `R-10.18`**、**`R-10.20`**（`R-10.1`/`R-10.2`/`R-10.3`/`R-10.6`/`R-10.6b`/`R-10.8`/`R-10.15`/`R-10.19` 归 `结构`，`R-10.10` 无守卫 → `B-21`、`R-10.12` 仅余语感与跨名关系无守卫 → `B-12`） |
@@ -1275,11 +1279,10 @@ HARD / INFO / 闸门 / 度量的 R 必须被注册 Rule 覆盖；每条 Rule 必
 - semantic 判据只在 stage6，且必须非空（`stage5.semantic` 于 2026-08-17 整节点下线）。
 - stage4/6/7 每条 HARD 在 `tests/hard_cases.py` 有真实会红的反例；stage0/1 的 warning、编码、kind、
   新增 HARD 与阈值带由 `tests/test_ingest_fixtures.py` 双向覆盖。
-- ⚠ **一条 HARD 有多个判定分支时，「红过一次」不等于每一支都红过。** `structure_units` 的四支里
-  `tests/hard_cases.py` 只覆盖「重复引用」，另两支（源内容单元被拆到两个写作单元 / 组内换序）
-  在原样本上**结构性地构造不出来**（那份蓝图的 beat 不带 span ⇒ 每拍独立成组，而单元素组
-  永远连续、永远同段）。定向反例与它们的靶子自检、绿对照一并放在
-  `tests/test_hard_counterexamples.py`；靶子一旦因阈值变动而散掉，自检当场红。
+- ⚠ **一条 HARD 有多个判定分支时，「红过一次」不等于每一支都红过。** Stage4 现役定向反例覆盖
+  `fact_coverage` 的缺失/重复事实、`material_coverage` 的缺失/重复材料，以及 `state_closure` 中前一场
+  exit state 未被后一场 entry state 消费；靶子自检与绿对照一并放在
+  `tests/test_hard_counterexamples.py`，靶子一旦因契约变动而散掉，自检当场红。
 
 ### 9.4 架构与前端 seam
 

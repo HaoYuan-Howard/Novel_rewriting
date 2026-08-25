@@ -4,9 +4,11 @@
 
 【本层与前三层的四处形状差异，都是承重的】
 
-**① 一个 stage 两份产物、两个节点、两节需求。**
-`stage4.plan`（付费，`R-5`）产 `plan_chapters.json`；`stage4.context`（0 成本，`R-6`）产
-`writer_context.json`。判据表只有**一张**，两份产物共用（`docs/schema/stage4.md` §四）。
+**① 一个 stage 四份产物、三个节点、两节需求。**
+`stage4.design`（付费，`R-5`）产盲候选；`stage4.plan`（付费，`R-5`）只绑定证据并
+确定性编译 `plan_chapters.json`；`stage4.context`（0 成本，`R-6`）产
+`writer_context.json`。判据表只有**一张**，正式计划与上下文共用
+（`docs/schema/stage4.md` §四）。
 正向覆盖率按 stage 取 `R-5 ∪ R-6`，因此两份产物必须作为同一层共同验证。
 
 **② LLM 在这一层设计场景，不重述事实。**

@@ -100,6 +100,95 @@ def test_human_nodes_are_exactly_the_ones_a_person_does():
                              'stage6.approve', 'stage7.approve'}
 
 
+def test_stage4_queue_requires_a_new_preview_after_blind_design(
+        queue_base, monkeypatch):
+    """同一份队列授权不能把 A 成功静默解释成 B 也获批。"""
+    monkeypatch.setattr(
+        Q, 'nodes_up_to', lambda _until: ['stage4.design', 'stage4.plan'])
+    monkeypatch.setattr(
+        Q.st, 'overview', lambda _base, _sid: SimpleNamespace(stages=[]))
+    monkeypatch.setattr(
+        Q.st, 'resume_verdict',
+        lambda _overview, node: (Q.st.RESUME_RUN, f'{node} 产物缺失'))
+    monkeypatch.setattr(Q, '_stage4_replan_required', lambda _base, _sid: False)
+
+    todo, blocked = Q.plan_book(
+        queue_base, 'book-a', until_stage='stage4', follow_check=False)
+
+    assert [item.node for item in todo] == ['stage4.design']
+    assert [item.node for item in blocked] == ['stage4.plan']
+    assert blocked[0].waiting_on == Q.WAITING_ON_STAGE4_PHASE_APPROVAL
+    assert blocked[0].steps == []
+    plan = QueuePlan(
+        items=todo, blocked=blocked,
+        paid_items=sum(any(step.paid for step in item.steps)
+                       for item in todo + blocked),
+    )
+    with pytest.raises(ApprovalRequired) as exc:
+        Q.confirm(plan, yes=False)
+    message = str(exc.value)
+    assert 'stage4.design' in message
+    assert 'stage4.plan' not in message, '尚未看见 A 时不得预先授权 B'
+
+
+def test_stage4_queue_offers_b_only_after_a_is_current(
+        queue_base, monkeypatch):
+    """A 已落盘后的下一次 plan 才摊开并确认 Stage4B。"""
+    monkeypatch.setattr(
+        Q, 'nodes_up_to', lambda _until: ['stage4.design', 'stage4.plan'])
+    monkeypatch.setattr(
+        Q.st, 'overview', lambda _base, _sid: SimpleNamespace(stages=[]))
+
+    def verdict(_overview, node):
+        return ((Q.st.RESUME_SKIP, 'blind candidate 当前有效')
+                if node == 'stage4.design'
+                else (Q.st.RESUME_RUN, 'evidence binding 缺失'))
+
+    monkeypatch.setattr(Q.st, 'resume_verdict', verdict)
+    monkeypatch.setattr(Q, '_stage4_replan_required', lambda _base, _sid: False)
+
+    todo, blocked = Q.plan_book(
+        queue_base, 'book-a', until_stage='stage4', follow_check=False)
+
+    assert blocked == [] and [item.node for item in todo] == ['stage4.plan']
+    assert todo[0].steps and all(step.paid for step in todo[0].steps)
+    plan = QueuePlan(items=todo, blocked=[], paid_items=1)
+    with pytest.raises(ApprovalRequired) as exc:
+        Q.confirm(plan, yes=False)
+    message = str(exc.value)
+    assert 'stage4.plan' in message and 'stage4.design' not in message
+
+
+def test_stage4_queue_hides_repeated_b_after_current_infeasible(
+        queue_base, monkeypatch):
+    """typed 负结论后的队列只给恢复指引，不冻结/启动同一个 B argv。"""
+    monkeypatch.setattr(
+        Q, 'nodes_up_to', lambda _until: ['stage4.design', 'stage4.plan'])
+    monkeypatch.setattr(
+        Q.st, 'overview', lambda _base, _sid: SimpleNamespace(stages=[]))
+
+    def verdict(_overview, node):
+        return ((Q.st.RESUME_SKIP, 'blind candidate 当前有效')
+                if node == 'stage4.design'
+                else (Q.st.RESUME_RUN, '正式计划缺失'))
+
+    monkeypatch.setattr(Q.st, 'resume_verdict', verdict)
+    monkeypatch.setattr(Q, '_stage4_replan_required', lambda _base, _sid: True)
+
+    todo, blocked = Q.plan_book(
+        queue_base, 'book-a', until_stage='stage4', follow_check=False)
+
+    assert todo == [] and [item.node for item in blocked] == ['stage4.plan']
+    item = blocked[0]
+    assert item.waiting_on == Q.WAITING_ON_STAGE4_REPLAN
+    assert item.steps == []
+    assert 'stage4.design --replan' in item.why
+    assert '不会再次暴露或执行同一个 B' in item.why
+    # 没有 B 命令就没有可被一次 queue --yes 偷偷复用的付费面。
+    planned = QueuePlan(items=[], blocked=blocked, paid_items=0)
+    Q.confirm(planned, yes=False)
+
+
 def test_stage5_plan_uses_one_authorized_whole_book_command(
         queue_base, monkeypatch):
     monkeypatch.setattr(Q, 'nodes_up_to', lambda _until: ['stage5.write'])
@@ -266,7 +355,8 @@ def test_items_that_did_not_run_must_have_a_reason():
 def test_the_stop_reason_says_which_kind_of_failure_stopped_the_lane():
     """⭐ **回归**：「第 N 项失败后停下」在两种相反的处置上是同一句话。
 
-    exit 1 = 产物已落盘、报告有红行 ⇒ 去看那一层的屏并裁决（多半不必重跑）。
+    exit 1 = 产物已落盘、结论不通过 ⇒ 去看那一层的屏并裁决。
+    结论可以是报告硬红，也可以是 Stage4B typed `infeasible`。
     exit 2/3/70 = 压根没跑成 ⇒ 修完重跑。
     实测：`stage6.hook` exit 1 停掉了整条 lane，而 `hook.json` 好好地在盘上。
     """
@@ -277,6 +367,7 @@ def test_the_stop_reason_says_which_kind_of_failure_stopped_the_lane():
     red = Q._stop_reason(_entry(1))
     dead = Q._stop_reason(_entry(2))
     assert '产物已落盘' in red and '不是「没跑成」' in red
+    assert '结论不通过' in red, '不得把 landed_red 限死成必有 CheckReport'
     assert '没跑成' in dead and '产物已落盘' not in dead
     assert red != dead
     for reason in (red, dead):
@@ -620,6 +711,30 @@ def test_changed_command_surface_blocks_instead_of_substituting_a_new_command(
     assert disposition[0] == 'blocked'
     assert disposition[1] == Q.WAITING_ON_REPLAN
     assert '命令与队列创建时确认的快照不同' in disposition[2]
+
+
+def test_frozen_stage4_b_never_starts_after_current_infeasible_appears(
+        queue_base, monkeypatch):
+    """旧队列虽冻结过 B argv，启动前重判仍须把它关成无命令恢复面。"""
+    frozen = _item('book-a', 'stage4.plan', 'must-not-repeat-b', paid=True)
+    _seed(queue_base, 'q-stage4-infeasible', [frozen])
+    recovery = QueueItem(
+        sid='book-a', node='stage4.plan', flags=[], steps=[],
+        why='当前 B 已 infeasible；另行 stage4.design --replan',
+        waiting_on=Q.WAITING_ON_STAGE4_REPLAN,
+    )
+    monkeypatch.setattr(
+        Q, 'plan_book', lambda *_args, **_kwargs: ([], [recovery]))
+    calls: list[list[str]] = []
+
+    run = Q.run(
+        queue_base, 'q-stage4-infeasible',
+        spawn=lambda argv, _cwd, _env, _log: calls.append(list(argv)) or 0,
+        registry=Q.QueueRegistry(), job_registry=J.JobRegistry())
+
+    assert run.state == 'blocked'
+    assert run.entries[0].waiting_on == Q.WAITING_ON_REPLAN
+    assert calls == [], 'current infeasible 出现后，冻结过的同一 B 也不得启动'
 
 
 def test_restart_detects_a_new_required_node_not_present_in_the_snapshot(

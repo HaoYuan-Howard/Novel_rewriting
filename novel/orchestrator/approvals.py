@@ -4,7 +4,8 @@ from __future__ import annotations
 from contracts.artifacts import (
     STAGE0_CLEAN_TEXT, STAGE0_REVISIONS, STAGE1_HOOK_COPY, STAGE1_MAIN_TEXT,
     STAGE2_CHAPTER_BLUEPRINTS,
-    STAGE2_GLOBAL_GROUNDING, STAGE2_GLOBAL_REVIEW, STAGE3_STYLE_GROUNDING, STAGE4_PLAN_CHAPTERS,
+    STAGE2_GLOBAL_GROUNDING, STAGE2_GLOBAL_REVIEW, STAGE3_STYLE_GROUNDING,
+    STAGE4_PLAN_CHAPTERS,
     STAGE5_BOOK_DRAFT, STAGE6_HOOK, STAGE7_NAME_MAP, artifact_rel,
 )
 
@@ -14,6 +15,7 @@ import os
 import threading
 from collections.abc import Iterator
 from contextlib import contextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal
 
@@ -21,11 +23,15 @@ from pydantic import Field, ValidationError, model_validator
 
 from contracts.invariants import APPROVAL_GATES, APPROVAL_SEEN
 from contracts.schema import artifact_spec
-from contracts.schema.api import ApprovalAction, ApprovalBackfillResult, ApprovalDoc
+from contracts.schema.api import (
+    ApprovalAction, ApprovalBackfillResult, ApprovalDoc,
+    StructureApprovalDecision, StructureApprovalRequest, StructureApprovalView,
+)
 from contracts.schema.evaluation import GlobalReview
 from contracts.schema.stage0 import Stage0Revisions
 from contracts.schema.stage1 import HookCopy, MainText
 from contracts.schema.stage2 import GlobalGrounding
+from contracts.schema.stage4 import PlanChapters
 from contracts.schema.stage6 import Hook
 from contracts.schema.stage7 import NameMap
 from contracts.schema.base import StrictModel
@@ -39,6 +45,7 @@ from novel.quality.global_review import (
     review_status as global_review_status,
     subject_sha256 as global_subject_sha256,
 )
+from novel.stages.stage4.phase_state import current_infeasible_binding
 from novel.store import ArtifactStore
 
 APPROVALS_DIRNAME = 'approvals'
@@ -132,15 +139,10 @@ class _ApprovalRecordV2Legacy(StrictModel):
         return self
 
 
-class _ApprovalRecordV3(StrictModel):
-    """On-disk approval record; writing is independent from the retired arm choice.
+class _ApprovalRecordV3Legacy(StrictModel):
+    """只为显式 backfill 读取的旧 v3；它没有 typed Stage4 结构裁决。"""
 
-    A bare boolean cannot prove which artifact was approved.  Reading a v1
-    record as if it referred to today's files would invent that fact, so v3 is
-    a hard boundary: reset/backfill is explicit and both paths create proofs.
-    """
-
-    v: Literal[3] = 3
+    v: Literal[3]
     sid: str = Field(min_length=1)
     gate: dict[str, bool]
     seen: dict[str, bool]
@@ -150,7 +152,7 @@ class _ApprovalRecordV3(StrictModel):
     writing_proof: _ApprovalProof | None = None
 
     @model_validator(mode='after')
-    def _record_is_complete_and_proved(self) -> _ApprovalRecordV3:
+    def _record_is_complete_and_proved(self) -> _ApprovalRecordV3Legacy:
         if set(self.gate) != set(APPROVAL_GATES):
             raise ValueError('gate must contain exactly s0..s7')
         if set(self.seen) != set(APPROVAL_SEEN):
@@ -170,6 +172,60 @@ class _ApprovalRecordV3(StrictModel):
         return self
 
 
+class _StoredStructureDecision(StructureApprovalDecision):
+    """一项服务审批历史：公开 typed 决定 + 当前主体完整字节 proof。"""
+
+    proof: _ApprovalProof
+
+
+class _ApprovalRecordV4(StrictModel):
+    """盘上审批记录 v4；Stage4 只认 hash-bound typed 结构裁决。"""
+
+    v: Literal[4] = 4
+    sid: str = Field(min_length=1)
+    gate: dict[str, bool]
+    seen: dict[str, bool]
+    writing: bool = False
+    gate_proofs: dict[str, _ApprovalProof | None]
+    seen_proofs: dict[str, _ApprovalProof | None]
+    writing_proof: _ApprovalProof | None = None
+    structure_history: list[_StoredStructureDecision] = Field(default_factory=list)
+    structure_decision: _StoredStructureDecision | None = None
+
+    @model_validator(mode='after')
+    def _record_is_complete_and_proved(self) -> _ApprovalRecordV4:
+        if set(self.gate) != set(APPROVAL_GATES):
+            raise ValueError('gate must contain exactly s0..s7')
+        if set(self.seen) != set(APPROVAL_SEEN):
+            raise ValueError('seen must contain exactly read/global')
+        if set(self.gate_proofs) != set(APPROVAL_GATES):
+            raise ValueError('gate_proofs must contain exactly s0..s7')
+        if set(self.seen_proofs) != set(APPROVAL_SEEN):
+            raise ValueError('seen_proofs must contain exactly read/global')
+        for key, approved in self.gate.items():
+            if approved != (self.gate_proofs[key] is not None):
+                raise ValueError(f'gate {key} and its current-subject proof must agree')
+        for key, seen in self.seen.items():
+            if seen != (self.seen_proofs[key] is not None):
+                raise ValueError(f'seen {key} and its current-subject proof must agree')
+        if self.writing != (self.writing_proof is not None):
+            raise ValueError('writing and writing_proof must agree')
+        if (self.structure_decision is None) != (not self.structure_history):
+            raise ValueError('structure_decision 与非空 structure_history 必须同进同出')
+        if (self.structure_decision is not None
+                and self.structure_decision != self.structure_history[-1]):
+            raise ValueError('structure_decision 必须是 structure_history 最后一项')
+        if self.gate['s4']:
+            decision = self.structure_decision
+            if decision is None or any(
+                row.decision != 'accept' for row in decision.chapters
+            ):
+                raise ValueError('s4 gate 只能由逐章全 accept 的 typed 结构裁决打开')
+            if self.gate_proofs['s4'] != decision.proof:
+                raise ValueError('s4 gate proof 必须等于当前 typed 结构裁决 proof')
+        return self
+
+
 def _path(base: str | os.PathLike[str], sid: str) -> Path:
     return Path(os.fspath(base)) / '_service' / APPROVALS_DIRNAME / f'{sid}.json'
 
@@ -185,8 +241,6 @@ def _spawns(base: str | os.PathLike[str], sid: str) -> dict[str, list[ApprovalAc
     candidates = {
         's1': [ApprovalAction(
             kind='stage2.global', label='生成 stage2 全局底座；完成后逐项人工复核')],
-        's2': [ApprovalAction(
-            kind='stage4.plan', label='\u751f\u6210\u91cd\u6784\u8ba1\u5212')],
         's5': [ApprovalAction(
             kind='stage6.hook', label='\u751f\u6210\u5f00\u7bc7\u6587\u6848')],
         's6': [ApprovalAction(
@@ -195,16 +249,28 @@ def _spawns(base: str | os.PathLike[str], sid: str) -> dict[str, list[ApprovalAc
             kind='stage7.assemble', label='\u62fc\u88c5\u6700\u7ec8\u6210\u4e66')],
     }
     overview = state.overview(base, sid)
-    return {
+    spawns = {
         gate: [action for action in actions
                if state.resume_verdict(overview, action.kind)[0] != state.RESUME_SKIP]
         for gate, actions in candidates.items()
     }
+    # Stage4 是两次互相独立的付费确认，不是一个按钮里塞两项作业。A 尚未完成时
+    # 只能展示 A；A 已落盘后才展示 B。这样服务端给 GateBar 的永远是一条可预览
+    # 动作，浏览器不猜阶段，也不会在一次确认里自动串行两次调用。
+    design = ApprovalAction(kind='stage4.design', label='Stage4A 盲结构设计')
+    binding = ApprovalAction(kind='stage4.plan', label='Stage4B 证据绑定与计划编译')
+    if state.resume_verdict(overview, design.kind)[0] != state.RESUME_SKIP:
+        spawns['s2'] = [design]
+    elif state.resume_verdict(overview, binding.kind)[0] != state.RESUME_SKIP:
+        spawns['s2'] = [binding]
+    else:
+        spawns['s2'] = []
+    return spawns
 
 
-def _fresh_record(sid: str, planned: list[int] | None = None) -> _ApprovalRecordV3:
-    del planned  # 兼容旧调用缝；v3 授权不再携带选章决定
-    return _ApprovalRecordV3(
+def _fresh_record(sid: str, planned: list[int] | None = None) -> _ApprovalRecordV4:
+    del planned  # 兼容旧调用缝；结构章集只从当前正式计划读取
+    return _ApprovalRecordV4(
         sid=sid,
         gate={key: False for key in APPROVAL_GATES},
         seen={key: False for key in APPROVAL_SEEN},
@@ -214,13 +280,37 @@ def _fresh_record(sid: str, planned: list[int] | None = None) -> _ApprovalRecord
 
 
 def _view(
-    base: str | os.PathLike[str], record: _ApprovalRecordV3,
+    base: str | os.PathLike[str], record: _ApprovalRecordV4,
 ) -> ApprovalDoc:
-    """服务记录的唯一公开投影；public v2 不再暴露 deep。"""
+    """服务记录的唯一公开投影；public v3 明示结构裁决的五态。"""
+    novel_dir = paths.resolve_novel_dir(base, record.sid)
+    structure = _structure_view(novel_dir, record)
+    spawns = _spawns(base, record.sid)
+    replan_cause = _stage4_replan_cause(novel_dir, structure)
+    if replan_cause is not None:
+        # 保存 typed request_replan 或 B 落下 fresh infeasible 都不自动发作业；
+        # 付费重规划必须由人另点一次，走正常 preview/confirm。显式 --replan
+        # 绕过当前 fresh A 的 skip，且只重跑 A。此时不得再把会复用同一份
+        # infeasible 的 B 暴露在 s2 下，避免给人一条必然原地返回的假恢复路。
+        label = (
+            'Stage4B 证据不可行，重新生成 Stage4A 盲候选'
+            if replan_cause == 'evidence_infeasible'
+            else '按结构裁决重新生成 Stage4A 盲候选'
+        )
+        spawns = {
+            **spawns,
+            's2': [],
+            's4': [ApprovalAction(
+                kind='stage4.design',
+                label=label,
+                extra=['--replan'],
+            )],
+        }
     return ApprovalDoc(
         sid=record.sid, gate=record.gate, seen=record.seen,
         writing=record.writing,
-        spawns=_spawns(base, record.sid),
+        structure=structure,
+        spawns=spawns,
     )
 
 
@@ -230,23 +320,24 @@ def _planned(base: str | os.PathLike[str], sid: str) -> list[int] | None:
     return state.planned_chapters(ArtifactStore(ctx))
 
 
-def _read_raw(base: str | os.PathLike[str], sid: str) -> _ApprovalRecordV3:
+def _read_raw(base: str | os.PathLike[str], sid: str) -> _ApprovalRecordV4:
     paths.resolve_novel_dir(base, sid)
     p = _path(base, sid)
     if not p.is_file():
         return _fresh_record(sid, _planned(base, sid))
     try:
-        record = _ApprovalRecordV3.model_validate_json(p.read_text(encoding='utf-8'))
+        record = _ApprovalRecordV4.model_validate_json(p.read_text(encoding='utf-8'))
     except (OSError, UnicodeDecodeError, ValidationError) as exc:
         raise HumanEditProtected(
-            f'approval record is corrupt or is unsupported v1/v2; reset/backfill explicitly: {exc}') from exc
+            f'approval record is corrupt or is unsupported v1/v2/v3; '
+            f'reset/backfill explicitly: {exc}') from exc
     if record.sid != sid:
         raise HumanEditProtected(
             f'approval state belongs to {record.sid!r}, not requested novel {sid!r}')
     return record
 
 
-def _read_current(base: str | os.PathLike[str], sid: str) -> _ApprovalRecordV3:
+def _read_current(base: str | os.PathLike[str], sid: str) -> _ApprovalRecordV4:
     record = _read_raw(base, sid)
     if not _path(base, sid).is_file():
         return record
@@ -255,10 +346,10 @@ def _read_current(base: str | os.PathLike[str], sid: str) -> _ApprovalRecordV3:
 
 
 def _write(
-    base: str | os.PathLike[str], record: _ApprovalRecordV3,
+    base: str | os.PathLike[str], record: _ApprovalRecordV4,
 ) -> ApprovalDoc:
     """审批落盘的**唯一落点**；冻结检查因此也只装在这里。"""
-    record = _ApprovalRecordV3.model_validate(record.model_dump())
+    record = _ApprovalRecordV4.model_validate(record.model_dump())
     _refuse_if_frozen(record.sid)
     p = _path(base, record.sid)
     p.parent.mkdir(parents=True, exist_ok=True)
@@ -449,6 +540,130 @@ def _make_proof(
     )
 
 
+def _structure_decision_payload(
+    decision: StructureApprovalRequest | StructureApprovalDecision,
+) -> dict[str, Any]:
+    """Typed 结构裁决的唯一 proof 投影；服务时间不改写人作出的决定。"""
+    return {
+        'kind': 'stage4_structure',
+        'subject_sha256': decision.subject_sha256,
+        'actor': decision.actor,
+        'reason': decision.reason,
+        'chapters': [row.model_dump(mode='json') for row in decision.chapters],
+    }
+
+
+def _public_structure_decision(
+    decision: _StoredStructureDecision,
+) -> StructureApprovalDecision:
+    return StructureApprovalDecision.model_validate(
+        decision.model_dump(mode='json', exclude={'proof'}))
+
+
+def _current_structure_subject_and_chapters(
+    novel_dir: Path,
+) -> tuple[str, list[int]]:
+    """读取当前正式计划并计算人真正审阅的结构决策面 hash。"""
+    store = _store_for(novel_dir)
+    _require_fresh_json(store, STAGE4_PLAN_CHAPTERS)
+    plan, _raw = store.read_own(PlanChapters, STAGE4_PLAN_CHAPTERS)
+    try:
+        from novel.stages.stage4.measure import structure_subject_sha256
+    except ImportError as exc:
+        raise ArtifactUnreadable(
+            'stage4 structure subject helper is unavailable') from exc
+    subject = structure_subject_sha256(plan)
+    if (
+        not isinstance(subject, str) or len(subject) != 64
+        or any(char not in '0123456789abcdef' for char in subject)
+    ):
+        raise ArtifactUnreadable(
+            'stage4 structure subject helper did not return a full lowercase SHA-256')
+    chapters = [row.output_ordinal for row in plan.output_chapters]
+    if chapters != sorted(set(chapters)) or any(value < 1 for value in chapters):
+        raise ArtifactUnreadable(
+            'stage4 structure subject has a non-canonical output chapter set')
+    return subject, chapters
+
+
+def _proof_for_structure(
+    novel_dir: Path,
+    decision: StructureApprovalRequest | StructureApprovalDecision,
+) -> _ApprovalProof:
+    """同时绑定正文根、完整计划字节与逐章 typed 决定。"""
+    return _make_proof(
+        novel_dir, (STAGE4_PLAN_CHAPTERS,),
+        _structure_decision_payload(decision),
+    )
+
+
+def _structure_view(
+    novel_dir: Path, record: _ApprovalRecordV4,
+) -> StructureApprovalView:
+    """即时投影当前结构态；失效只影响有效性，不擦掉历史决定。"""
+    history = [
+        _public_structure_decision(decision)
+        for decision in record.structure_history
+    ]
+    latest = record.structure_decision
+    try:
+        current_subject, _chapters = _current_structure_subject_and_chapters(novel_dir)
+    except NovelError:
+        return StructureApprovalView(
+            state='expired' if history else 'unavailable',
+            current_subject_sha256=None,
+            current_decision=None,
+            history=history,
+        )
+    if latest is None:
+        return StructureApprovalView(
+            state='missing', current_subject_sha256=current_subject,
+            current_decision=None, history=[],
+        )
+    public = _public_structure_decision(latest)
+    try:
+        current_proof = _proof_for_structure(novel_dir, public)
+    except NovelError:
+        current_proof = None
+    if (
+        latest.subject_sha256 != current_subject
+        or current_proof is None
+        or not _same_proof(latest.proof, current_proof)
+    ):
+        return StructureApprovalView(
+            state='expired', current_subject_sha256=current_subject,
+            current_decision=None, history=history,
+        )
+    state = (
+        'replan_requested'
+        if any(row.decision == 'request_replan' for row in public.chapters)
+        else 'accepted'
+    )
+    return StructureApprovalView(
+        state=state, current_subject_sha256=current_subject,
+        current_decision=public, history=history,
+    )
+
+
+def _stage4_replan_cause(
+    novel_dir: Path, structure: StructureApprovalView,
+) -> Literal['structure_decision', 'evidence_infeasible'] | None:
+    """Stage4 付费重规划入口的唯一生产判定。
+
+    人工逐章裁决与 Stage4B typed 负结论来自两张不同的决策面，但它们的下一步
+    相同：另行确认重跑 A，绝不自动串 B。B 只有在完整产物可读且 provenance
+    明确 fresh 时才有权给出这条恢复路；旧/坏/陈旧 binding 不能借 status 冒充
+    当前结论。
+    """
+    if structure.state == 'replan_requested':
+        return 'structure_decision'
+    return (
+        'evidence_infeasible'
+        if current_infeasible_binding(_store_for(novel_dir)) is not None
+        else None
+    )
+
+
 def _require_typed_gate_decision(store: ArtifactStore, gate: str) -> str | None:
     if gate == 's0':
         from novel.stages.stage0 import revisions as stage0_revisions
@@ -532,7 +747,7 @@ def _proof_for_writing(novel_dir: Path) -> _ApprovalProof:
 
 
 def _stage5_subject_rels(
-    base: str | os.PathLike[str], sid: str, record: _ApprovalRecordV3,
+    base: str | os.PathLike[str], sid: str, record: _ApprovalRecordV4,
 ) -> list[str]:
     _require_stage5_complete(base, sid, record)
     planned = _planned(base, sid)
@@ -548,8 +763,22 @@ def _stage5_subject_rels(
 
 
 def _proof_for_gate(
-    novel_dir: Path, gate: str, record: _ApprovalRecordV3,
+    novel_dir: Path, gate: str, record: _ApprovalRecordV4,
 ) -> _ApprovalProof:
+    if gate == 's4':
+        decision = record.structure_decision
+        if decision is None or any(
+            row.decision != 'accept' for row in decision.chapters
+        ):
+            raise ApprovalRequired(
+                'stage4 requires a current typed structure decision with every chapter accepted')
+        current_subject, chapters = _current_structure_subject_and_chapters(novel_dir)
+        decided_chapters = [row.output_ordinal for row in decision.chapters]
+        if decision.subject_sha256 != current_subject or decided_chapters != chapters:
+            raise ApprovalRequired(
+                'stage4 typed structure decision is bound to an older plan subject')
+        return _proof_for_structure(
+            novel_dir, _public_structure_decision(decision))
     store = _store_for(novel_dir)
     typed_subject = _require_typed_gate_decision(store, gate)
     if gate == 's7':
@@ -579,7 +808,7 @@ def _same_proof(expected: _ApprovalProof | None, current: _ApprovalProof) -> boo
     return expected is not None and expected == current
 
 
-def _effective_record(novel_dir: Path, record: _ApprovalRecordV3) -> _ApprovalRecordV3:
+def _effective_record(novel_dir: Path, record: _ApprovalRecordV4) -> _ApprovalRecordV4:
     """Return the effective current projection without rewriting audit history."""
     seen = dict(record.seen)
     seen_proofs = dict(record.seen_proofs)
@@ -668,14 +897,14 @@ def _effective_record(novel_dir: Path, record: _ApprovalRecordV3) -> _ApprovalRe
 
 def _require_artifacts(
     base: str | os.PathLike[str], sid: str, gate: str,
-    record: _ApprovalRecordV3,
+    record: _ApprovalRecordV4,
 ) -> _ApprovalProof:
     novel_dir = paths.resolve_novel_dir(base, sid)
     return _proof_for_gate(novel_dir, gate, record)
 
 
 def _require_stage5_complete(
-    base: str | os.PathLike[str], sid: str, record: _ApprovalRecordV3,
+    base: str | os.PathLike[str], sid: str, record: _ApprovalRecordV4,
 ) -> None:
     planned = _planned(base, sid)
     if planned is None:
@@ -704,9 +933,93 @@ def _require_stage5_complete(
                  'or --apply-edit to fix those chapters first (both cost nothing)')
 
 
+def _now() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec='seconds')
+
+
+def approve_structure(
+    base: str | os.PathLike[str], sid: str, request: StructureApprovalRequest,
+) -> ApprovalDoc:
+    """保存一次原子的全书结构裁决；本函数不启动任何作业。"""
+    with _LOCK:
+        record = _read_current(base, sid)
+        if missing := [
+            key for key in _GATE_REQUIREMENTS['s4'] if not record.gate[key]
+        ]:
+            raise ApprovalRequired(
+                f's4 structure decision requires prior approvals: {missing}')
+        novel_dir = paths.resolve_novel_dir(base, sid)
+        current_subject, planned = _current_structure_subject_and_chapters(novel_dir)
+        if request.subject_sha256 != current_subject:
+            raise HumanEditProtected(
+                'Stage4 结构审批对象已变化：'
+                f'提交 {request.subject_sha256}，当前 {current_subject}；请刷新后重审')
+        decided = [row.output_ordinal for row in request.chapters]
+        if decided != planned:
+            raise HumanEditProtected(
+                f'结构裁决章集必须精确等于当前计划：提交 {decided}，当前 {planned}')
+
+        proof = _proof_for_structure(novel_dir, request)
+        # proof 会重新读取完整计划字节；再看一遍语义 subject 与章集，避免计划在两次读取
+        # 之间变化却把 A 的 subject 与 B 的字节 proof 拼成一份立即过期的假批准。
+        after_subject, after_planned = _current_structure_subject_and_chapters(novel_dir)
+        after_proof = _proof_for_structure(novel_dir, request)
+        if (
+            (after_subject, after_planned) != (current_subject, planned)
+            or after_proof != proof
+        ):
+            raise HumanEditProtected('Stage4 计划在结构裁决提交期间发生变化；请刷新后重审')
+
+        latest = record.structure_decision
+        if (
+            latest is not None
+            and _structure_decision_payload(
+                _public_structure_decision(latest)) == _structure_decision_payload(request)
+            and _same_proof(latest.proof, proof)
+        ):
+            return _view(base, record)
+
+        public = StructureApprovalDecision(
+            actor=request.actor,
+            reason=request.reason,
+            subject_sha256=request.subject_sha256,
+            chapters=request.chapters,
+            decided_at=_now(),
+        )
+        stored = _StoredStructureDecision(
+            **public.model_dump(mode='json'), proof=proof)
+        history = [*record.structure_history, stored]
+        gates = dict(record.gate)
+        gate_proofs = dict(record.gate_proofs)
+        all_accepted = all(
+            row.decision == 'accept' for row in request.chapters)
+        gates['s4'] = all_accepted
+        gate_proofs['s4'] = proof if all_accepted else None
+        writing = record.writing
+        writing_proof = record.writing_proof
+        if not all_accepted:
+            writing = False
+            writing_proof = None
+            for gate in _GATE_ORDER[5:]:
+                gates[gate] = False
+                gate_proofs[gate] = None
+        return _write(base, record.model_copy(update={
+            'gate': gates,
+            'gate_proofs': gate_proofs,
+            'writing': writing,
+            'writing_proof': writing_proof,
+            'structure_history': history,
+            'structure_decision': stored,
+        }))
+
+
 def approve_gate(base: str | os.PathLike[str], sid: str, gate: str) -> ApprovalDoc:
     if gate not in APPROVAL_GATES:
         raise ApprovalRequired(f'unknown approval gate: {gate}')
+    if gate == 's4':
+        raise ApprovalRequired(
+            's4 不接受匿名通用盖章；请提交带 subject hash、actor/reason 与逐章决定的 '
+            'Stage4 structure approval')
     with _LOCK:
         record = _read_current(base, sid)
         if missing := [
@@ -741,11 +1054,11 @@ def _legacy_gate_proof(novel_dir: Path, gate: str) -> _ApprovalProof:
 
 def _migrate_legacy_v2(
     base: str | os.PathLike[str], sid: str, legacy: _ApprovalRecordV2Legacy,
-) -> tuple[_ApprovalRecordV3, list[str]]:
+) -> tuple[_ApprovalRecordV4, list[str]]:
     """保守重签 v2。
 
-    只有能对上当前原文/产物的 proof 才保留。writing 另外要求旧决定确为
-    全书 deep；含 shallow 分配时清空 writing 与 s5 以后，绝不自动放行。
+    只有能对上当前原文/产物的 s0～s3 proof 才保留。旧记录没有逐章 typed
+    结构裁决，绝不据一个 s4 bool 推造 actor/reason/决定；s4、writing 与下游全清。
     """
     if legacy.sid != sid:
         raise HumanEditProtected(
@@ -768,7 +1081,7 @@ def _migrate_legacy_v2(
     gates = dict(record.gate)
     gate_proofs = dict(record.gate_proofs)
     backfilled: list[str] = []
-    for gate in _GATE_ORDER[:5]:
+    for gate in _GATE_ORDER[:4]:
         if not legacy.gate.get(gate):
             continue
         if any(not gates[key] for key in _GATE_REQUIREMENTS.get(gate, ())):
@@ -781,45 +1094,76 @@ def _migrate_legacy_v2(
             continue
         if not _same_proof(legacy.gate_proofs.get(gate), current):
             continue
-        # 落盘的是 v3 proof：旧 digest 只用来证明那次决定确实绑定当前主体。
+        # 落盘的是 v4 proof：旧 digest 只用来证明那次决定确实绑定当前主体。
         working = record.model_copy(update={
             'gate': gates, 'gate_proofs': gate_proofs,
             'seen': seen, 'seen_proofs': seen_proofs,
         })
         try:
-            current_v3 = _proof_for_gate(novel_dir, gate, working)
+            current_v4 = _proof_for_gate(novel_dir, gate, working)
         except NovelError:
             continue
         gates[gate] = True
-        gate_proofs[gate] = current_v3
+        gate_proofs[gate] = current_v4
         backfilled.append(gate)
-
-    writing = False
-    writing_proof = None
-    planned = _planned(base, sid)
-    if (
-        legacy.writing
-        and planned is not None
-        and legacy.deep == planned
-        and gates['s3'] and gates['s4']
-        and legacy.deep_proof is not None
-        and legacy.writing_proof is not None
-    ):
-        try:
-            depth_now = _proof_for_legacy_depth(novel_dir, legacy.deep)
-            writing_now = _proof_for_legacy_writing(novel_dir, legacy.deep)
-        except NovelError:
-            pass
-        else:
-            if (_same_proof(legacy.deep_proof, depth_now)
-                    and _same_proof(legacy.writing_proof, writing_now)):
-                writing = True
-                writing_proof = _proof_for_writing(novel_dir)
 
     return record.model_copy(update={
         'gate': gates, 'gate_proofs': gate_proofs,
         'seen': seen, 'seen_proofs': seen_proofs,
-        'writing': writing, 'writing_proof': writing_proof,
+    }), backfilled
+
+
+def _migrate_legacy_v3(
+    base: str | os.PathLike[str], sid: str, legacy: _ApprovalRecordV3Legacy,
+) -> tuple[_ApprovalRecordV4, list[str]]:
+    """显式把旧 v3 收成 v4；只能保留能对证的 s0～s3。"""
+    if legacy.sid != sid:
+        raise HumanEditProtected(
+            f'approval state belongs to {legacy.sid!r}, not requested novel {sid!r}')
+    novel_dir = paths.resolve_novel_dir(base, sid)
+    record = _fresh_record(sid)
+    seen = dict(record.seen)
+    seen_proofs = dict(record.seen_proofs)
+    for key in APPROVAL_SEEN:
+        if not legacy.seen.get(key):
+            continue
+        try:
+            current = _proof_for_seen(novel_dir, key)
+        except NovelError:
+            continue
+        if _same_proof(legacy.seen_proofs.get(key), current):
+            seen[key] = True
+            seen_proofs[key] = current
+
+    gates = dict(record.gate)
+    gate_proofs = dict(record.gate_proofs)
+    backfilled: list[str] = []
+    for gate in _GATE_ORDER[:4]:
+        if not legacy.gate.get(gate):
+            continue
+        if any(not gates[key] for key in _GATE_REQUIREMENTS.get(gate, ())):
+            continue
+        if gate == 's2' and not all(seen.values()):
+            continue
+        working = record.model_copy(update={
+            'gate': gates, 'gate_proofs': gate_proofs,
+            'seen': seen, 'seen_proofs': seen_proofs,
+        })
+        try:
+            current = _proof_for_gate(novel_dir, gate, working)
+        except NovelError:
+            continue
+        if not _same_proof(legacy.gate_proofs.get(gate), current):
+            continue
+        gates[gate] = True
+        gate_proofs[gate] = current
+        backfilled.append(gate)
+
+    return record.model_copy(update={
+        'gate': gates, 'gate_proofs': gate_proofs,
+        'seen': seen, 'seen_proofs': seen_proofs,
+        # 旧 v3 的 s4/writing/s5～s7 没有 typed 结构决定，刻意不迁。
+        'writing': False, 'writing_proof': None,
     }), backfilled
 
 
@@ -840,12 +1184,22 @@ def backfill_from_disk(
         except HumanEditProtected:
             path = _path(base, sid)
             try:
-                legacy = _ApprovalRecordV2Legacy.model_validate_json(
-                    path.read_text(encoding='utf-8'))
+                raw = path.read_text(encoding='utf-8')
             except (OSError, UnicodeDecodeError, ValidationError) as exc:
                 raise HumanEditProtected(
-                    f'approval record cannot be explicitly backfilled as v2: {exc}') from exc
-            record, migrated_gates = _migrate_legacy_v2(base, sid, legacy)
+                    f'approval record cannot be read for explicit backfill: {exc}') from exc
+            try:
+                legacy_v3 = _ApprovalRecordV3Legacy.model_validate_json(raw)
+            except ValidationError:
+                try:
+                    legacy_v2 = _ApprovalRecordV2Legacy.model_validate_json(raw)
+                except ValidationError as exc:
+                    raise HumanEditProtected(
+                        'approval record cannot be explicitly backfilled as v2/v3: '
+                        f'{exc}') from exc
+                record, migrated_gates = _migrate_legacy_v2(base, sid, legacy_v2)
+            else:
+                record, migrated_gates = _migrate_legacy_v3(base, sid, legacy_v3)
             migrated = True
         novel_dir = paths.resolve_novel_dir(base, sid)
         gates = dict(record.gate)
@@ -858,6 +1212,10 @@ def backfill_from_disk(
 
         for gate in _GATE_ORDER:
             if gates[gate]:
+                continue
+            # Stage4 不能从「盘上有一份计划」推成人已经逐章审过；只有
+            # ``approve_structure`` 能生成 actor/reason/subject-bound typed 决定。
+            if gate == 's4':
                 continue
             if any(not gates[key] for key in _GATE_REQUIREMENTS.get(gate, ())):
                 continue
@@ -968,7 +1326,15 @@ def authorize_writing(
         novel_dir = paths.resolve_novel_dir(base, sid)
         store, current_review = _require_stage5_contract_compatible(
             novel_dir, action='触发新付费作业')
-        if not record.writing:
+        # ``_read_current`` 已把旧 subject / 旧计划 / 旧代码下的 proof
+        # 折成无效态；这里仍将两张独立通行证逐张点名。
+        # 只查 ``writing`` 会把“结构尚未逐章接受”误报成普通
+        # 写作授权缺失，也会让未来一条不经 effective projection 的
+        # 调用缝只靠隐式约定防绕过。
+        if not record.gate['s4'] or record.structure_decision is None:
+            raise ApprovalRequired(
+                '请先逐章接受当前且新鲜的 typed Stage4 结构决定')
+        if not record.writing or record.writing_proof is None:
             raise ApprovalRequired('authorize current Stage5 whole-book writing first')
         planned = _planned(base, sid)
         if planned is None:

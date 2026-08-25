@@ -1,7 +1,12 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/api/endpoints'
 import { qk } from '@/api/queryKeys'
-import type { ApprovalDoc, GateKey, SeenKey } from '@/types/approvals'
+import type {
+  ApprovalDoc,
+  GateKey,
+  SeenKey,
+  StructureApprovalRequest,
+} from '@/types/approvals'
 import { useSid } from './useRouteParams'
 
 /**
@@ -21,8 +26,12 @@ export function useApprovals(sidOverride?: string) {
     staleTime: Infinity,
   })
 
-  const put = (doc: ApprovalDoc) => {
+  const cache = (doc: ApprovalDoc) => {
     qc.setQueryData(qk.approvals(sid), doc)
+  }
+
+  const put = (doc: ApprovalDoc) => {
+    cache(doc)
     // 确认会发起下游作业 —— 让抽屉立刻看得见
     void qc.invalidateQueries({ queryKey: qk.jobs(sid) })
   }
@@ -34,6 +43,14 @@ export function useApprovals(sidOverride?: string) {
   const backfill = useMutation({
     mutationFn: () => api.backfillApprovals(sid),
     onSuccess: (result) => put(result.approvals),
+  })
+  const approveStructure = useMutation({
+    mutationFn: (request: StructureApprovalRequest) => api.approveStructure(sid, request),
+    onSuccess: (doc) => {
+      // 专用结构裁决只写 `_service/approvals`，明确不触发作业。
+      cache(doc)
+      void qc.invalidateQueries({ queryKey: qk.inbox(sid) })
+    },
   })
   const markSeen = useMutation({
     mutationFn: (key: SeenKey) => api.markSeen(sid, key),
@@ -48,7 +65,11 @@ export function useApprovals(sidOverride?: string) {
     sid,
     doc: q.data ?? null,
     isLoading: q.isLoading,
+    isError: q.isError,
+    error: q.error,
+    refetch: q.refetch,
     approve,
+    approveStructure,
     backfill,
     markSeen,
     startWriting,
