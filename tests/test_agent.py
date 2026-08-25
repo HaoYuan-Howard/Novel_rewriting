@@ -39,6 +39,20 @@ def base(tmp_path):
     return str(tmp_path)
 
 
+@pytest.fixture(autouse=True)
+def stable_code_version(monkeypatch):
+    """本文件测 agent 编排，不重复执行 Git 指纹集成。
+
+    ``agent.start`` 在启动与交付终验各问一次代码指纹；宿主 Git 不可用时每次查询会按
+    关闭式语义等满 5 秒，几十条存储/并发用例因此看起来像每条都慢。代码指纹算法及
+    「每个 run 重新读取」由 ``tests/test_prov.py`` 独立覆盖，这里固定一个非 unknown
+    身份，既保留事件账的真实落盘链，也不把外部 Git 状态混进编排测试。
+    """
+    from novel import prov
+
+    monkeypatch.setattr(prov, 'code_version', lambda: 'test-code-version')
+
+
 def _start(sid='42', argv=('claude', '-p', 'x'), authorized=True,
            egress_authorized=True):
     return AgentRunStart(sid=sid, argv=list(argv), prompt='提示词',
