@@ -108,6 +108,19 @@ def _artifact_inventory(book: Path) -> tuple[list[CorpusArtifactEntry], dict[str
                     codes.add(code)
                 if isinstance(provenance, dict) and isinstance(provenance.get('code'), str):
                     codes.add(provenance['code'])
+                if rel == 'stage0/revisions.json':
+                    current = payload.get('current')
+                    current_id = current.get('revision_id') if isinstance(current, dict) else None
+                    revisions = payload.get('revisions')
+                    if isinstance(revisions, list) and isinstance(current_id, str):
+                        current_revision = next(
+                            (item for item in revisions
+                             if isinstance(item, dict)
+                             and item.get('revision_id') == current_id), None)
+                        current_code = current_revision.get('code') \
+                            if isinstance(current_revision, dict) else None
+                        if isinstance(current_code, str) and current_code:
+                            codes.add(current_code)
     for disk_rel, manifest_rel in _byte_artifacts(book):
         path = book / Path(disk_rel)
         if path.is_file():
@@ -206,16 +219,18 @@ def observe(base: str | Path) -> tuple[list[CorpusBookEntry], str, str]:
     for book in _book_dirs(root):
         sid, _title, _platform = derive_source_meta(book.name)
         artifacts, payloads, codes = _artifact_inventory(book)
-        report = payloads.get('stage0/removal_report.json')
+        stage0 = payloads.get('stage0/revisions.json')
         main = payloads.get('stage1/main_text.json')
-        if not isinstance(report, dict) or not isinstance(report.get('normalized_source_sha1'), str):
-            raise ValueError(f'{book.name}: 缺 current stage0/removal_report.json normalized_source_sha1')
+        source = stage0.get('source') if isinstance(stage0, dict) else None
+        if not isinstance(source, dict) or not isinstance(
+                source.get('normalized_source_sha1'), str):
+            raise ValueError(f'{book.name}: 缺 current stage0/revisions.json source identity')
         if not isinstance(main, list) or not main:
             raise ValueError(f'{book.name}: 缺 current stage1/main_text.json 章节')
         all_codes.update(codes)
         books.append(CorpusBookEntry(
             sid=sid,
-            normalized_source_sha1=report['normalized_source_sha1'],
+            normalized_source_sha1=source['normalized_source_sha1'],
             chapters=len(main),
             artifacts=artifacts,
             ledger=_ledger_summary(ledger, sid),

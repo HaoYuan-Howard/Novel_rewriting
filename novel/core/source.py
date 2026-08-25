@@ -2,12 +2,11 @@
 # -*- coding: utf-8 -*-
 """从产物记下来的那条来源引用，找回**此刻真正能读的那份原文**——唯一落点。
 
-`stage0/removal_report.json::source_ref` 是一个**判别联合**，两支的处置必须相反：
+`stage0/revisions.json::source.source_ref` 是一个**判别联合**，两支的处置必须相反：
 
   ① **外部语料**（`external_file`，如 `Test_data/xxx.txt`）：被删被移就是
-     **世界真的变了**，答「不在」是正确答案，契约有意接受这个代价——补偿是报告里的
-     `head_preview`/`tail_preview` 残片（`contracts/schema/stage0.py`：「丢了就没有
-     第二次机会」）。**不许在这里"救"它**：多认一种形状就是把一条真信号洗成好消息。
+     **世界真的变了**，答「不在」是正确答案。**不许在这里"救"它**：多认一种
+     形状就是把一条真信号洗成好消息。
 
   ② **界面上传的书**（`managed_upload`）：原文住在
      `<base>/_service/uploads/<blob_sha256>/<filename>`，那是**服务自己的目录**、
@@ -75,6 +74,13 @@ def describe_source(ref: SourceRef) -> str:
     if ref.kind == 'external_file':
         return ref.absolute_path
     return f'上传原文 {ref.filename}（内容地址 {ref.blob_sha256[:12]}…）'
+
+
+def source_filename(ref: SourceRef) -> str:
+    """来源引用里的原始文件名；展示与目录回环共用这一处派生。"""
+    if ref.kind == 'external_file':
+        return Path(ref.absolute_path).name
+    return ref.filename
 
 
 def resolve_recorded_source(

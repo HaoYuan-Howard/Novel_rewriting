@@ -23,7 +23,7 @@ import pytest
 from pydantic import BaseModel, Field, RootModel
 
 from contracts.artifacts import (
-    STAGE0_REMOVAL_REPORT, STAGE1_HOOK_COPY, STAGE1_MAIN_TEXT,
+    STAGE0_REVISIONS, STAGE1_HOOK_COPY, STAGE1_MAIN_TEXT,
     STAGE1_PARTITION_REPORT, STAGE2_CHAPTER_BLUEPRINTS, STAGE2_GLOBAL_GROUNDING,
     STAGE2_GLOBAL_REVIEW,
 )
@@ -1170,8 +1170,8 @@ def test_deterministic_self_fresh_policy_only_guards_artifacts_that_can_self_pro
     assert STAGE2_GLOBAL_REVIEW in SELF_FRESH_DETERMINISTIC
     assert STAGE1_MAIN_TEXT not in SELF_FRESH_DETERMINISTIC
     assert STAGE1_HOOK_COPY not in SELF_FRESH_DETERMINISTIC
-    assert STAGE0_REMOVAL_REPORT not in SELF_FRESH_DETERMINISTIC, \
-        'reject-new-source 会故意保留旧 clean；该 report 合法地把新 source 显示为 stale'
+    assert STAGE0_REVISIONS not in SELF_FRESH_DETERMINISTIC, \
+        'revision 链只按根 source 身份判 freshness，不用写后自证策略'
 
 
 def test_global_review_pending_decisions_are_fresh_when_required_surface_is_exact():
@@ -1270,27 +1270,28 @@ def test_json_artifacts_are_written_without_cr():
 
 def _stage0_on_disk(book: Path, source: Path, source_bytes: bytes, clean_bytes: bytes,
                     *, revision_id: str = 'a' * 64) -> None:
-    """stage0 的权威格 + 两份物化投影。**freshness 读原始 dict，所以只给它要的那几格。**"""
+    """stage0 的权威 revision 链 + 唯一 clean 投影。"""
     (book / 'stage0').mkdir(exist_ok=True)
     (book / 'stage0' / 'clean_text.txt').write_bytes(clean_bytes)
-    identity = {
+    source_identity = {
         'source_ref': {'kind': 'external_file',
                        'absolute_path': str(source.resolve())},
         'normalized_source_sha1': prov.content_sha1(source_bytes),
-        'clean_sha1': prov.content_sha1(clean_bytes),
+        'total_code_points': len(source_bytes.decode('utf-8')),
     }
     _write_payload(book, 'stage0/revisions.json', {
+        'source': source_identity,
         'revisions': [{'revision_id': revision_id, 'parent_revision_id': None,
-                       'origin': 'machine', 'content': dict(identity)}],
+                       'origin': 'machine',
+                       'content': {'clean_text': clean_bytes.decode('utf-8'), 'removed': []}}],
         'current': {'revision_id': revision_id, 'approval': {'status': 'pending'}},
         'candidate_revision_id': None,
         'dismissed': [],
     })
-    _write_payload(book, 'stage0/removal_report.json', dict(identity))
 
 
 def test_deterministic_artifacts_use_their_existing_content_fingerprints_for_freshness():
-    """stage0×3、stage1×3 与成书不再结构性 `unknown`。
+    """stage0×2、stage1×3 与成书不再结构性 `unknown`。
 
     这些载体没有通用 `_provenance`，但其 companion 已经记着同一条 HARD 判据使用的
     40 位身份。完成度必须复用那份事实，并在上游变化时给出 stale。
@@ -1321,7 +1322,7 @@ def test_deterministic_artifacts_use_their_existing_content_fingerprints_for_fre
     store = ArtifactStore(_ctx(base, paid=False))
     formerly_unknown = (
         'stage0/revisions.json',
-        'stage0/clean_text.txt', 'stage0/removal_report.json',
+        'stage0/clean_text.txt',
         'stage1/main_text.json', 'stage1/hook_copy.json',
         'stage1/partition_report.json', book_rel,
     )
@@ -1329,12 +1330,12 @@ def test_deterministic_artifacts_use_their_existing_content_fingerprints_for_fre
         rel: 'fresh' for rel in formerly_unknown}
 
     (book / 'stage0' / 'clean_text.txt').write_bytes(clean_bytes + b'changed\n')
-    for rel in formerly_unknown[1:6]:
+    for rel in formerly_unknown[1:5]:
         assert store.freshness(rel).state == 'stale', rel
     assert store.freshness(book_rel).state == 'fresh'
     # ⚠ **权威格不跟着投影动。** `clean_text.txt` 是 `revisions.json` 的物化投影，
     #   在它**下游**：投影被人动了不代表这条链不是照盘上那份原文建的。
-    #   「两份 live 还是不是 `current` 的投影」由判据 `s0_revision_chain` 回答；
+    #   「clean live 还是不是 `current` 的投影」由判据 `s0_revision_chain` 回答；
     #   若在这里也判 stale，等于让权威格拿自己的影子自证，那条边永远没有判别力。
     assert store.freshness('stage0/revisions.json').state == 'fresh'
 
@@ -1372,36 +1373,29 @@ def test_the_revision_chain_goes_stale_when_the_original_novel_changes():
         '原文没了是「不知道」，不是「不匹配」——两者对人的下一步是相反的指示'
 
 
-def test_the_chain_identity_comes_from_the_current_pointer_not_the_first_revision():
-    """身份取 `current` 指向的那一版，不是碰巧排在第一条的那一版。
-
-    链上每条 revision 的 `normalized_source_sha1` 由 schema 保证相同，但
-    `source_ref` 没有这条约束（人工编辑那一版可以带别的 locator）。读错指针的后果
-    不是崩，是**拿一份不生效的旧身份去判新鲜度**——一条永远自洽的假答案。
-    """
+def test_the_chain_identity_comes_from_the_single_root_source():
+    """源身份只在链根保存一次，不随 revision 复制或漂移。"""
     base = _book(with_clean=False)
     book = base / '书名_123'
     source_bytes = '开篇。\n\n1\n第一章。\n'.encode('utf-8')
-    stale_source = base / 'moved_away.txt'
     live_source = base / 'source.txt'
     live_source.write_bytes(source_bytes)
-    identity = {
+    source_identity = {
+        'source_ref': {'kind': 'external_file',
+                       'absolute_path': str(live_source.resolve())},
         'normalized_source_sha1': prov.content_sha1(source_bytes),
-        'clean_sha1': prov.content_sha1(source_bytes),
+        'total_code_points': len(source_bytes.decode('utf-8')),
     }
     (book / 'stage0').mkdir()
     (book / 'stage0' / 'clean_text.txt').write_bytes(source_bytes)
     _write_payload(book, 'stage0/revisions.json', {
+        'source': source_identity,
         'revisions': [
             {'revision_id': 'b' * 64, 'parent_revision_id': None, 'origin': 'machine',
-             'content': dict(identity, source_ref={
-                 'kind': 'external_file',
-                 'absolute_path': str(stale_source.resolve())})},
+             'content': {'clean_text': source_bytes.decode('utf-8'), 'removed': []}},
             {'revision_id': 'c' * 64, 'parent_revision_id': 'b' * 64,
-             'origin': 'human_edit',
-             'content': dict(identity, source_ref={
-                 'kind': 'external_file',
-                 'absolute_path': str(live_source.resolve())})},
+              'origin': 'human_edit',
+              'content': {'clean_text': source_bytes.decode('utf-8'), 'removed': []}},
         ],
         'current': {'revision_id': 'c' * 64, 'approval': {'status': 'pending'}},
         'candidate_revision_id': None,
@@ -1410,8 +1404,7 @@ def test_the_chain_identity_comes_from_the_current_pointer_not_the_first_revisio
     store = ArtifactStore(_ctx(base, paid=False))
     report = store.freshness('stage0/revisions.json')
     assert (report.state, report.reason) == ('fresh', 'match')
-    assert [edge.key for edge in report.edges] == [str(live_source.resolve())], \
-        '读的是链上第一条而不是 current —— 那条 locator 根本不在盘上'
+    assert [edge.key for edge in report.edges] == [str(live_source.resolve())]
 
 
 def test_every_produced_artifact_without_provenance_reaches_the_deterministic_bridge():
@@ -1508,8 +1501,8 @@ _SOURCE_BYTES = '开篇。\n\n1\n第一章。\n\n2\n第二章。\n'.encode('utf-
 
 
 def _stage0_book(recorded_source: Path,
-                 base: Path | None = None) -> tuple[Path, ArtifactStore]:
-    """一本只有 stage0 的书，报告里的 `source_ref` 按 `recorded_source` 的形状写。
+                  base: Path | None = None) -> tuple[Path, ArtifactStore]:
+    """一本只有 stage0 的书，revision 根的 `source_ref` 按 `recorded_source` 的形状写。
 
     ⚠ 产地那一刻的判定走**唯一落点** `source_ref_for`，不在这里手拼分支——
     手拼一份就是「上传路径长什么样」的第二个定义，而它必然与产地漂开。
@@ -1523,18 +1516,28 @@ def _stage0_book(recorded_source: Path,
     clean_bytes = _SOURCE_BYTES
     (book / 'stage0').mkdir()
     (book / 'stage0' / 'clean_text.txt').write_bytes(clean_bytes)
-    _write_payload(book, STAGE0_REMOVAL_REPORT, {
-        'source_ref': source_ref_for(recorded_source).model_dump(mode='json'),
-        'normalized_source_sha1': decode_source_bytes(_SOURCE_BYTES).normalized_source_sha1,
-        'clean_sha1': prov.content_sha1(clean_bytes),
+    _write_payload(book, STAGE0_REVISIONS, {
+        'source': {
+            'source_ref': source_ref_for(recorded_source).model_dump(mode='json'),
+            'normalized_source_sha1': decode_source_bytes(_SOURCE_BYTES).normalized_source_sha1,
+            'total_code_points': len(_SOURCE_BYTES.decode('utf-8')),
+        },
+        'revisions': [{
+            'revision_id': 'a' * 64,
+            'parent_revision_id': None,
+            'origin': 'machine',
+            'content': {'clean_text': clean_bytes.decode('utf-8'), 'removed': []},
+        }],
+        'current': {'revision_id': 'a' * 64, 'approval': {'status': 'pending'}},
+        'candidate_revision_id': None,
+        'dismissed': [],
     })
     return base, ArtifactStore(_ctx(base, paid=False))
 
 
 def _source_edge(store: ArtifactStore):
-    """源那一条边（另一条是 `clean_text`），按 key 认。"""
-    edges = [e for e in store.freshness(STAGE0_REMOVAL_REPORT).edges
-             if e.key != 'stage0/clean_text.txt']
+    """revision 权威链唯一的原文上游边。"""
+    edges = list(store.freshness(STAGE0_REVISIONS).edges)
     assert len(edges) == 1, [e.key for e in edges]
     return edges[0]
 
@@ -1565,7 +1568,7 @@ def test_stage0_source_edge_survives_moving_the_output_root():
     edge = _source_edge(store)
     assert (edge.state, edge.reason) == ('fresh', 'match')
     assert edge.key == str(current)
-    assert store.freshness(STAGE0_REMOVAL_REPORT).state == 'fresh'
+    assert store.freshness(STAGE0_REVISIONS).state == 'fresh'
 
 
 def test_stage0_source_edge_refuses_a_reanchored_file_that_fails_its_content_address():
@@ -1589,14 +1592,14 @@ def test_stage0_source_edge_refuses_a_reanchored_file_that_fails_its_content_add
     # ⚠ 认不下来时点名的是**记录里那条引用**。上传那一支不记绝对路径（它跟着 base
     #   走），所以点的是「内容地址 + 文件名」——那才是产物真正说过的话。
     assert '内容地址' in edge.key and '书名_123.txt' in edge.key
-    assert store.freshness(STAGE0_REMOVAL_REPORT).state == 'unknown'
+    assert store.freshness(STAGE0_REVISIONS).state == 'unknown'
 
 
 def test_stage0_source_edge_still_goes_ghost_for_an_external_corpus_that_is_gone():
     """外部语料被删就是**世界真的变了**：`ghost` 是正确答案，不许"救"。
 
     ⚠ 契约有意接受这个代价（`docs/schema/stage0.md`：文件被移走时是「不知道」，
-      不是「不匹配」），补偿是报告里的 `head_preview`/`tail_preview` 残片。
+      不是「不匹配」）。被剔正文仍由外部原始 txt 保存，Stage0 不复制第二份。
       重锚只认 `_service/uploads/<内容地址>/` 这一种形状——**多认一种就是把一条
       真信号洗成好消息**，而这正是本仓最贵的那条纪律（三态不许互相冒充）。
     """
@@ -2549,7 +2552,7 @@ def only_the_unknown_half_of_the_freshness_postcondition_is_waived(monkeypatch):
 
     ⚠ **先调生产那一个落点再判**，不复制那条「没有 `_provenance` 且不在
     `SELF_FRESH_DETERMINISTIC` 里就早退」的判断。复制一份的代价是具体的：
-    `stage0/removal_report.json` 走 `_stage0_freshness()`，它会去 resolve 真实源文件
+    `stage0/revisions.json` 走 `_stage0_revisions_freshness()`，它会 resolve 真实源文件
     （reject-new-source 那条路会合法地把新 source 显示为 stale），而生产**根本不检查它**
     ——自己算就会造出一条生产没有的红。
     """

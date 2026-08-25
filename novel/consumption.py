@@ -21,7 +21,7 @@ from collections.abc import Iterable, Mapping
 from typing import Any, Callable, Final
 
 from contracts.artifacts import (
-    STAGE0_CLEAN_TEXT, STAGE0_REMOVAL_REPORT, STAGE1_HOOK_COPY, STAGE1_MAIN_TEXT,
+    STAGE0_CLEAN_TEXT, STAGE0_REVISIONS, STAGE1_HOOK_COPY, STAGE1_MAIN_TEXT,
     STAGE2_CHAPTER_BLUEPRINTS, STAGE2_GLOBAL_EDIT, STAGE2_GLOBAL_GROUNDING,
     STAGE3_STYLE_GROUNDING, STAGE4_PLAN_CHAPTERS, STAGE4_PLAN_EDIT,
     STAGE4_WRITER_CONTEXT, STAGE5_REVIEW, STAGE5_TRIM_AUDIT,
@@ -42,6 +42,16 @@ def artifact_payload(data: object) -> object:
 
 
 # ── stage2.blueprint ─────────────────────────────────────────────────────────
+
+
+def stage1_stage0_source(data: object) -> object:
+    """Stage1 只继承原文身份；正文是独立的 clean_text 字节边。"""
+    if not isinstance(data, dict):
+        return None
+    source = data.get('source')
+    if not isinstance(source, dict):
+        return None
+    return source.get('normalized_source_sha1')
 
 def stage2_blueprint_grounding(data: object) -> object:
     """逐章抽取只消费**已现称名表**要用的两个字段，不消费 global 的其余部分。
@@ -514,7 +524,7 @@ def stage7_hook(data: object) -> object:
 # 每一格的键都是 ArtifactStore 写进 ``_provenance.inputs`` 的两级相对路径。
 CONSUMED_PROJECTIONS: Final[dict[str, dict[str, Projection]]] = {
     'stage1.partition': {
-        STAGE0_REMOVAL_REPORT: artifact_payload,
+        STAGE0_REVISIONS: stage1_stage0_source,
         STAGE0_CLEAN_TEXT: artifact_payload,
     },
     'stage2.global': {

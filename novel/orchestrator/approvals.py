@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from contracts.artifacts import (
-    STAGE0_CLEAN_TEXT, STAGE0_REMOVAL_REPORT, STAGE1_MAIN_TEXT, STAGE2_CHAPTER_BLUEPRINTS,
+    STAGE0_CLEAN_TEXT, STAGE0_REVISIONS, STAGE1_MAIN_TEXT, STAGE2_CHAPTER_BLUEPRINTS,
     STAGE2_GLOBAL_GROUNDING, STAGE2_GLOBAL_REVIEW, STAGE3_STYLE_GROUNDING, STAGE4_PLAN_CHAPTERS,
     STAGE5_BOOK_DRAFT, STAGE6_HOOK, STAGE7_NAME_MAP, artifact_rel,
 )
@@ -22,7 +22,7 @@ from contracts.invariants import APPROVAL_GATES, APPROVAL_SEEN
 from contracts.schema import artifact_spec
 from contracts.schema.api import ApprovalAction, ApprovalBackfillResult, ApprovalDoc
 from contracts.schema.evaluation import GlobalReview
-from contracts.schema.stage0 import RemovalReport
+from contracts.schema.stage0 import Stage0Revisions
 from contracts.schema.stage2 import GlobalGrounding
 from contracts.schema.stage6 import Hook
 from contracts.schema.stage7 import NameMap
@@ -289,7 +289,7 @@ def has_record(base: str | os.PathLike[str], sid: str) -> bool:
 
 
 _GATE_ARTIFACTS = {
-    's0': (STAGE0_REMOVAL_REPORT,),
+    's0': (STAGE0_REVISIONS,),
     's1': (STAGE1_MAIN_TEXT,),
     's2': (STAGE2_GLOBAL_GROUNDING, STAGE2_CHAPTER_BLUEPRINTS, STAGE2_GLOBAL_REVIEW),
     's3': (STAGE3_STYLE_GROUNDING,),
@@ -449,7 +449,10 @@ def _make_proof(
 
 def _require_typed_gate_decision(store: ArtifactStore, gate: str) -> str | None:
     if gate == 's0':
-        report, _ = store.read_own(RemovalReport, STAGE0_REMOVAL_REPORT)
+        from novel.stages.stage0 import revisions as stage0_revisions
+        revisions, _ = store.read_own(Stage0Revisions, STAGE0_REVISIONS)
+        stage0_revisions.verify_chain(revisions)
+        report = stage0_revisions.snapshot_of(revisions)
         # 付费防线与 stage1 启动闸用同一个谓词（eligibility 是唯一落点），
         # 不在这里复述批准条件——stage2 是第一个花钱的层，漏一处就是绕过闸门花钱。
         from novel.stages.stage0.eligibility import is_stage0_executable

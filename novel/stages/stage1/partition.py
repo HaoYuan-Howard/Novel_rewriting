@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 from contracts.artifacts import (
-    STAGE0_CLEAN_TEXT, STAGE0_REMOVAL_REPORT, STAGE1_HOOK_COPY,
+    STAGE0_CLEAN_TEXT, STAGE0_REVISIONS, STAGE1_HOOK_COPY,
     STAGE1_MAIN_TEXT, STAGE1_PARTITION_REPORT,
 )
 
@@ -13,7 +13,7 @@ from dataclasses import dataclass
 
 from contracts.invariants import BODY_RATIO_MIN, MIN_CHAPTERS, NOISY_DUPLICATE_MIN
 from contracts.schema.report import CheckReport
-from contracts.schema.stage0 import RemovalReport
+from contracts.schema.stage0 import Stage0Revisions
 from contracts.schema.stage1 import (
     HookCopy,
     MainText,
@@ -35,7 +35,7 @@ from novel.errors import (
 from novel.run import RunContext
 from novel.store import ArtifactStore
 
-STAGE0_REPORT = STAGE0_REMOVAL_REPORT
+STAGE0_STATE = STAGE0_REVISIONS
 CLEAN_TEXT = STAGE0_CLEAN_TEXT
 MAIN_TEXT = STAGE1_MAIN_TEXT
 HOOK_COPY = STAGE1_HOOK_COPY
@@ -128,7 +128,10 @@ def run_partition(
 ) -> tuple[PartitionResult, CheckReport | None]:
     '''读取 stage0 的批准轮，分章并落三份产物。'''
     store = ArtifactStore(ctx)
-    stage0 = store.read(RemovalReport, STAGE0_REPORT)
+    from novel.stages.stage0 import revisions as stage0_revisions
+    stage0_log = store.read(Stage0Revisions, STAGE0_STATE)
+    stage0_revisions.verify_chain(stage0_log)
+    stage0 = stage0_revisions.snapshot_of(stage0_log)
     clean_text = store.read_text(CLEAN_TEXT)
     from novel.stages.stage0.eligibility import is_stage0_executable
     if not is_stage0_executable(stage0):

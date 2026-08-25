@@ -22,7 +22,7 @@ queue.py —— 批量队列（`R-13`）。**一次排入多本书，人只在�
 """
 from __future__ import annotations
 
-from contracts.artifacts import STAGE0_REMOVAL_REPORT, STAGE6_HOOK, STAGE7_NAME_MAP
+from contracts.artifacts import STAGE0_REVISIONS, STAGE6_HOOK, STAGE7_NAME_MAP
 
 import json
 import os
@@ -38,7 +38,7 @@ from contracts.schema.orchestration import (
     QueueCounts, QueueEntry, QueueEvent, QueueItem, QueueLaneCounts, QueuePlan,
     QueueRun, QueueStart,
 )
-from contracts.schema.stage0 import RemovalReport
+from contracts.schema.stage0 import Stage0Revisions
 from contracts.schema.stage6 import Hook
 from contracts.schema.stage7 import NameMap
 from novel import paths, prov
@@ -144,7 +144,7 @@ def _human_gate_satisfied(base: str | os.PathLike[str], sid: str, node: str) -> 
     already approved book while still leaving the actual decision to a human.
     """
     model_rel = {
-        'stage0.approve': (RemovalReport, STAGE0_REMOVAL_REPORT),
+        'stage0.approve': (Stage0Revisions, STAGE0_REVISIONS),
         'stage6.approve': (Hook, STAGE6_HOOK),
         'stage7.approve': (NameMap, STAGE7_NAME_MAP),
     }.get(node)
@@ -161,7 +161,9 @@ def _human_gate_satisfied(base: str | os.PathLike[str], sid: str, node: str) -> 
         # 唯一落点在 eligibility，队列不自己复述批准条件；不具执行资格
         # 在这里等于「闸门未过」——队列会继续说出在等 stage0.approve。
         from novel.stages.stage0.eligibility import is_stage0_executable
-        return is_stage0_executable(artifact)
+        from novel.stages.stage0 import revisions as stage0_revisions
+        stage0_revisions.verify_chain(artifact)
+        return is_stage0_executable(stage0_revisions.snapshot_of(artifact))
     return artifact.approved is not None
 
 

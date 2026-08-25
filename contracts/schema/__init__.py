@@ -35,7 +35,7 @@ from typing import Any
 from pydantic import BaseModel
 
 from contracts.artifacts import (
-    STAGE0_REMOVAL_REPORT, STAGE0_REVISIONS, STAGE1_HOOK_COPY, STAGE1_MAIN_TEXT,
+    STAGE0_REVISIONS, STAGE1_HOOK_COPY, STAGE1_MAIN_TEXT,
     STAGE1_PARTITION_REPORT, STAGE2_CHAPTER_BLUEPRINTS, STAGE2_GLOBAL_EDIT,
     STAGE2_GLOBAL_GROUNDING, STAGE2_GLOBAL_REVIEW, STAGE2_GLOBAL_REVIEW_DECISIONS,
     STAGE3_STYLE_GROUNDING,
@@ -67,6 +67,7 @@ from contracts.schema.api import (
     Stage0Report,
     Stage0WarningView,
     Stage0CandidateDecisionRequest,
+    Stage0CandidateRevisionView,
     Stage0CandidateView,
     Stage0Segment,
     Stage0Segments,
@@ -126,7 +127,7 @@ from contracts.schema.stage0 import (
     ApprovedApproval, DropRatioWarning, EarlyCutWarning, ExternalFileRef,
     LongMarkerWarning, ManagedUploadRef, PendingApproval, SourceRef,
     Stage0Approval,
-    RemovalReport, RemovedSegment, RequestedRemoval,
+    RemovedSegment, RequestedRemoval, Stage0Snapshot, Stage0Source,
     Stage0CandidatePlan, Stage0Current, Stage0DismissedCandidate,
     Stage0EditPlan, Stage0Revision, Stage0RevisionContent, Stage0Revisions,
     Stage0Warning,
@@ -226,12 +227,9 @@ class DecodedArtifact:
 #: `STAGE2_CHAPTER_BLUEPRINTS`（2026-08-19、2026-08-23）与 2026-08-22 阶段 B 那一批。
 #: **升版的正确形态就是这样**——在表里显式登记，而不是加一条迁移把旧字节读成新形状。
 ARTIFACT_SPECS: dict[str, ArtifactSpec] = {
-    # ⚠ 2026-08-22 阶段 C 新增：本层唯一可变的那一格（不可变 revision 链 + current
-    #   指针 + 待裁决候选 + 审批）。它是**新产物**因而恒 v1——盘上没有它的存量。
-    STAGE0_REVISIONS: ArtifactSpec(Stage0Revisions),
-    # ⚠ 2026-08-22 阶段 B（warnings/审批/source_ref）与阶段 C（身份六格换成
-    #   revision_id + revision_origin）两次形状破坏，理由逐条在 `_SHAPE_BREAKS` 里。
-    STAGE0_REMOVAL_REPORT: ArtifactSpec(RemovalReport, 3),
+    # v2（2026-08-25）：原文身份提到根部；revision 只留正文与最小剔除账。
+    # 存量由 `stage0.remove` 免费重建并人工重批，不做迁移。
+    STAGE0_REVISIONS: ArtifactSpec(Stage0Revisions, 2),
     # ⚠ 2026-08-22 阶段 B 形状破坏：`section_id` 删除、`source_chapter_label: str`
     #   改名改型为 `source_chapter_no: int` ⇒ 存量 v1 读不进来。
     #   **存量产物由谁重建：`stage1.partition` 免费重跑**（纯函数、零 LLM）；
@@ -422,6 +420,7 @@ __all__ = [
     'StyleView', 'DriftItem',
     'Stage0Segment', 'Stage0Segments', 'Stage0EditRequest',
     'Stage0ApprovalRequest', 'Stage0CandidateDecisionRequest', 'Stage0CandidateView',
+    'Stage0CandidateRevisionView',
     'Stage1Segment', 'Stage1Segments', 'Stage1ChapterRow', 'Stage1Chapters',
     'HookCopyView', 'UploadResult',
     'NovelList', 'JobList', 'LogChunk', 'LogStreamEvent', 'PreviewRequest', 'ErrorBody',
@@ -429,7 +428,7 @@ __all__ = [
     'InboxItem', 'InboxView', 'TrimResolutionRequest', 'NameMapApproveRequest',
     'ResidualAdoptionRequest',
     # 八层
-    'RemovalReport', 'RemovedSegment', 'RequestedRemoval', 'Stage0EditPlan',
+    'Stage0Snapshot', 'Stage0Source', 'RemovedSegment', 'RequestedRemoval', 'Stage0EditPlan',
     'Stage0CandidatePlan', 'Stage0Warning',
     'EarlyCutWarning', 'DropRatioWarning', 'LongMarkerWarning',
     'Stage0Approval', 'PendingApproval', 'ApprovedApproval',

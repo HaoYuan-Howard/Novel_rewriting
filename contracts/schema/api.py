@@ -70,7 +70,7 @@ from contracts.schema.orchestration import (
     JobRecord, JobState, NovelOverview, QueueRun,
 )
 from contracts.schema.stage1 import HookCopy
-from contracts.schema.stage0 import RemovalReport, Stage0Revision, Stage0Warning
+from contracts.schema.stage0 import Stage0RevisionOrigin, Stage0Warning
 from contracts.schema.stage2 import (
     BlueprintProvenance, ConflictStage, FactEvidence, GlobalProvenance,
     RelationVisibility, Setting, WorldRule,
@@ -130,13 +130,11 @@ class Stage0WarningView(StrictModel):
     message: str = Field(min_length=1)
 
 
-class Stage0Report(RemovalReport):
-    """`GET /api/novels/:sid/stage0/report` 的那一份 = 产物 + 渲染好的告警 + 执行资格。
+class Stage0Report(StrictModel):
+    """S-00 真正消费的窄视图；不暴露 revision 持久化形状。"""
 
-    ⚠ 它**继承**产物模型而不是抄一份：22 个字段抄第二遍就是 22 个会分家的字段。
-    只覆盖 `warnings` 一格、外加两格视图专有的投影。
-    """
-
+    original_filename: str = Field(min_length=1)
+    total_code_points: int = Field(ge=1)
     warnings: list[Stage0WarningView]
 
     #: 这份报告**此刻能不能放行 stage1 与付费链**。
@@ -156,6 +154,8 @@ class Stage0Report(RemovalReport):
     #: ——当年那条 `_verdict_and_reason_are_one_state` 校验器校的正是这件事，
     #: 而**一个 bit 只该有一个投影**。要再有第二种「批了却跑不得」的理由时整格加回来。
     executable: bool
+    revision_id: Annotated[str, Field(pattern=r'^[0-9a-f]{64}$')]
+    revision_origin: Stage0RevisionOrigin
 
 
 class Stage0Segment(FrozenModel):
@@ -198,7 +198,6 @@ class Stage0Segment(FrozenModel):
 class Stage0Segments(StrictModel):
     '''S-00 连续原文。原文件移走时返回显式 unavailable，而不是假装没有剔除项。'''
 
-    normalized_source_sha1: Sha1
     available: bool
     reason: Annotated[str, Field(min_length=1)] | None
     segments: list[Stage0Segment] = Field(default_factory=list)
@@ -231,7 +230,6 @@ class Stage0EditRequest(StrictModel):
     '''
 
     expected_revision_id: Annotated[str, Field(pattern=r'^[0-9a-f]{64}$')]
-    expected_normalized_source_sha1: Sha1
     removed_segment_ids: list[str] = Field(default_factory=list)
     actor: str = Field(min_length=1)
     reason: str = Field(min_length=1)
@@ -265,6 +263,14 @@ class Stage0CandidateDecisionRequest(StrictModel):
     reason: str = Field(min_length=1)
 
 
+class Stage0CandidateRevisionView(StrictModel):
+    revision_id: Annotated[str, Field(pattern=r'^[0-9a-f]{64}$')]
+    origin: Stage0RevisionOrigin
+    clean_text: str
+    body_code_points: int = Field(ge=0)
+    removed_count: int = Field(ge=0)
+
+
 class Stage0CandidateView(StrictModel):
     """`GET /api/novels/:sid/stage0/candidate` 的那一份：**当前稿与候选并排**。
 
@@ -272,7 +278,7 @@ class Stage0CandidateView(StrictModel):
     唯一诚实的答案是逐版对比正文长度与剔除条数，而那是服务端已经有的事实。
     """
 
-    candidate: Stage0Revision
+    candidate: Stage0CandidateRevisionView
     current_revision_id: Annotated[str, Field(pattern=r'^[0-9a-f]{64}$')]
     current_body_code_points: int = Field(ge=0)
     current_removed_count: int = Field(ge=0)

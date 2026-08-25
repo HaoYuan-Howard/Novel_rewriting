@@ -96,7 +96,7 @@ runner 在构建 Step 前、每一步执行前后逐字核对 `<START_CODE>`；�
 | # | 节点 | 主跑参数 | 放行证据 |
 |---:|---|---|---|
 | 1 | `stage0.remove` | 新书：`--source <txt>`，省略 sid | 摄入完成；追跑 check 除待批准项外无 HARD。批准前仅 `s0_approval=pending` 导致 exit 1 是预期状态 |
-| 2 | `stage0.approve` | `--actor <ACTOR> --reason <text>` | 按代批契约审阅剔除报告后批准，批准状态落盘。**每本书都要过这一步**——首跑恒 pending，零剔除的书也一样（见下） |
+| 2 | `stage0.approve` | `--actor <ACTOR> --reason <text>` | 按代批契约审阅 Stage0 check 与剔除视图后批准，批准状态写入 revision 链。**每本书都要过这一步**——首跑恒 pending，零剔除的书也一样（见下） |
 | 3 | `stage0.edit` | 仅当代批发现剔除错误时用 typed edit/edit-plan；无修改则 `state` 跳过 | 人工修订经同一 Stage0 闸门重判，不直改正式文本 |
 | 4 | `stage1.partition` | 无 | 追跑 check 无 HARD；章节 ordinal 唯一且覆盖 `1..N` |
 | 5 | `stage2.global` | `--response-repair agent` | global 正式落盘；随即生成 review workpack，逐项核验并提交 typed 决策；只有 current 且全部 PASS 才继续 |
@@ -125,8 +125,8 @@ Stage2 的顺序硬约束是：global 落盘 → `--emit-review-workpack` 辅助
 人工防线对它失效。
 
 ⚠ **不存在「历史自动批」这种状态**：记录它的取值与配套的稳定理由码都已删除。
-存量自动批产物停在旧 schema 版本上，而 `stage0/removal_report.json` 已经破坏过形状、
-本仓又不迁移旧产物 ⇒ 它们连读都读不进来。遇到读不进来的旧 stage0，
+存量自动批产物停在旧 schema 版本上，而现役权威已收成 `stage0/revisions.json`、
+本仓又不迁移旧产物。遇到读不进来的旧 stage0，
 处置是**免费重跑 `stage0.remove` 再人工批**，不是找兼容路。
 
 代批责任在剔除分母为零时换方向：没有"被误删的段"可审，改做**反向漏剔**抽查，

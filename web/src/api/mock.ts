@@ -788,42 +788,16 @@ function mockStage0Segments(sid: string): Stage0Segments {
       marker_line: initial ? piece.marker : null,
     }
   })
-  return { normalized_source_sha1: data.normalized_source_sha1, available: true, reason: null, segments }
+  return { available: true, reason: null, segments }
 }
 
 function mockStage0Report(sid: string): Stage0Report {
   const data = raw<Stage0Extras>('stage0_extras.json')
-  const segments = mockStage0Segments(sid).segments.filter((segment) => segment.kind === 'remove')
   const approved = loadDoc(sid).gate.s0
   return {
     original_filename: data.original_filename,
-    source_ref: { kind: 'external_file' as const,
-                  absolute_path: '/mock/' + data.original_filename },
-    code: 'mock',
-    normalized_source_sha1: data.normalized_source_sha1,
-    clean_sha1: data.normalized_source_sha1,
-    source_encoding: data.source_encoding,
-    text_norm: 'v1:bom+crlf',
-    removed: segments.map((segment, index) => ({
-      kind: segment.removed_kind ?? 'extra',
-      marker_line: segment.marker_line ?? '人工选择',
-      line_no: index + 1,
-      span: [segment.start, segment.end],
-      code_points: segment.chars,
-      head_preview: segment.text.slice(0, 80),
-      tail_preview: segment.text.slice(-40),
-      origin: segment.origin ?? 'human',
-    })),
     total_code_points: data.total_code_points,
-    body_code_points: Math.max(
-      0,
-      data.total_code_points - segments.reduce((sum, segment) => sum + segment.chars, 0),
-    ),
     warnings: [],
-    approval: approved
-      ? { status: 'approved' as const,
-          at: new Date().toISOString(), by: 'mock-reviewer', reason: 'mock 批准' }
-      : { status: 'pending' as const },
     executable: approved,
     revision_id: (lsRead<Stage0EditRequest>('stage0.selection.' + sid) ? 'b' : 'a').repeat(64),
     revision_origin: lsRead<Stage0EditRequest>('stage0.selection.' + sid)

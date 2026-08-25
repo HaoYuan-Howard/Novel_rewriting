@@ -3,19 +3,16 @@
 """Stage0 的不可变 revision 链与原子发布。全程零 LLM。
 
 【这个模块替掉了什么】2026-08-22 阶段 C 之前，本层用四套机制去保证
-`clean_text.txt` 与 `removal_report.json` 同进同出：不可覆盖审计链（同时充当 WAL）、
+`clean_text.txt` 与旧 `removal_report.json` 同进同出：不可覆盖审计链（同时充当 WAL）、
 `_rounds/` 逐轮归档、`machine_snapshot.json`、`merge_candidate.json` + 码点级 diff3。
 它们守的是**同一个洞**——文件系统只保证单文件原子，而正式稿是两份文件。
 
-⇒ 现在只有一份可变文件：`stage0/revisions.json`。写它一次 = 提交一次。
-   两份 live 产物退成它的**物化投影**（`materialize`，幂等纯函数）：
+⇒ 现在只有一份 JSON 权威：`stage0/revisions.json`。写它一次 = 提交一次。
+   `clean_text.txt` 是它唯一的**物化投影**（`materialize`，幂等纯函数）：
    崩在写完 revisions 之后、物化完成之前，下一条写路径重新物化一次即可自愈，
    不需要 WAL、不需要「唯一可恢复条目」、不需要崩溃重放状态机。
 
-⚠ **物化只从 revisions.json 算，不掺 `RunContext`**：`report.code` 取的是**产出这一版
-内容的那次运行**的 code（`revision.code`），不是此刻的 code。否则升一次代码版本、
-重物化一次就会写出不同字节，而「同一条 revision 物化出来恒是同一份报告」正是
-自愈可信的全部依据。
+运行时报告由 `snapshot_of()` 现算，不落盘；它的 code 仍取产出 current 内容的 revision。
 """
 from __future__ import annotations
 
@@ -23,11 +20,9 @@ import hashlib
 import json
 from datetime import datetime, timezone
 
-from contracts.artifacts import (
-    STAGE0_CLEAN_TEXT, STAGE0_REMOVAL_REPORT, STAGE0_REVISIONS,
-)
+from contracts.artifacts import STAGE0_CLEAN_TEXT, STAGE0_REVISIONS
 from contracts.schema.stage0 import (
-    RemovalReport,
+    Stage0Snapshot,
     Stage0Current,
     Stage0Revision,
     Stage0RevisionContent,
@@ -35,12 +30,13 @@ from contracts.schema.stage0 import (
     Stage0Revisions,
 )
 from novel import prov
+from novel.core.source import source_filename
+from novel.core.warnings import stage0_warnings
 from novel.errors import ArtifactUnreadable, HumanEditProtected
 from novel.store import ArtifactStore
 
 REVISIONS_REL = STAGE0_REVISIONS
 CLEAN_REL = STAGE0_CLEAN_TEXT
-REPORT_REL = STAGE0_REMOVAL_REPORT
 
 
 def now_iso() -> str:
@@ -50,7 +46,7 @@ def now_iso() -> str:
 def _digest(value: object) -> str:
     """本仓统一的前像口径：UTF-8 · sort_keys · 紧凑分隔符 · 不做 NFC · SHA-256。
 
-    ⚠ 与 `docs/schema/stage0.md` §2.5 的前像定义表逐字对应，golden vector 钉在
+    ⚠ 与 `docs/schema/stage0.md` §2.3 的身份定义对应，golden vector 钉在
     `tests/test_stage0_revisions.py::test_revision_digest_golden_vector_pins_the_preimage`。
     """
     raw = json.dumps(
@@ -144,43 +140,36 @@ def read(store: ArtifactStore) -> Stage0Revisions | None:
     return revisions
 
 
-def report_of(revisions: Stage0Revisions) -> RemovalReport:
-    """`current` 的物化投影。**纯函数**：同一条链恒得到同一份报告。"""
+def snapshot_of(revisions: Stage0Revisions) -> Stage0Snapshot:
+    """`current` 的运行时投影。**纯函数**，不落盘。"""
     revision = current_revision(revisions)
     content = revision.content
-    return RemovalReport(
-        original_filename=content.original_filename,
-        source_ref=content.source_ref,
+    source = revisions.source
+    clean_sha1 = prov.content_sha1(content.clean_text.encode('utf-8'))
+    body_code_points = len(content.clean_text)
+    return Stage0Snapshot(
+        original_filename=source_filename(source.source_ref),
+        source_ref=source.source_ref,
         code=revision.code,
-        normalized_source_sha1=content.normalized_source_sha1,
-        clean_sha1=content.clean_sha1,
-        source_encoding=content.source_encoding,
-        text_norm=content.text_norm,
+        normalized_source_sha1=source.normalized_source_sha1,
+        clean_sha1=clean_sha1,
         removed=content.removed,
-        total_code_points=content.total_code_points,
-        body_code_points=content.body_code_points,
-        warnings=content.warnings,
+        total_code_points=source.total_code_points,
+        body_code_points=body_code_points,
+        warnings=stage0_warnings(source.total_code_points, body_code_points, content.removed),
         revision_id=revision.revision_id,
         revision_origin=revision.origin,
         approval=revisions.current.approval,
     )
 
 
-def materialize(store: ArtifactStore, revisions: Stage0Revisions) -> RemovalReport:
-    """把 `current` 投影成盘上那两份 live 产物。**幂等**。
-
-    ⚠ 顺序是 clean 先、report 后，与 freshness 的读法一致：报告记着
-    `clean_sha1`，反过来写会让中间态出现「报告说的那份正文还没落盘」。
-    两次写各自原子，而**它们之间崩了也不要紧**——链才是权威，
-    下一条写路径重新物化一次就回到一致，这正是删掉 WAL 的依据。
-    """
-    report = report_of(revisions)
+def materialize(store: ArtifactStore, revisions: Stage0Revisions) -> Stage0Snapshot:
+    """把 `current.clean_text` 物化到唯一的正文路径。**幂等**。"""
     store.write_text(CLEAN_REL, current_revision(revisions).content.clean_text)
-    store.write(REPORT_REL, report)
-    return report
+    return snapshot_of(revisions)
 
 
-def commit(store: ArtifactStore, revisions: Stage0Revisions) -> RemovalReport:
+def commit(store: ArtifactStore, revisions: Stage0Revisions) -> Stage0Snapshot:
     """一次提交：原子写链，然后物化。**`revisions.json` 落稳的那一刻就是提交点。**"""
     verify_chain(revisions)
     store.write(REVISIONS_REL, revisions)
@@ -204,7 +193,10 @@ def ensure_materialized(store: ArtifactStore) -> Stage0Revisions | None:
         return None
     if store.exists(CLEAN_REL):
         live = prov.content_sha1(store.read_own_text(CLEAN_REL).encode('utf-8'))
-        known = {item.content.clean_sha1 for item in revisions.revisions}
+        known = {
+            prov.content_sha1(item.content.clean_text.encode('utf-8'))
+            for item in revisions.revisions
+        }
         if live not in known:
             raise HumanEditProtected(
                 '盘上 stage0/clean_text.txt 的字节不是链上任何一版：有人绕过 '
@@ -233,6 +225,7 @@ def published(
     if revision.revision_id not in existing:
         entries.append(revision)
     return Stage0Revisions(
+        source=revisions.source,
         revisions=entries,
         current=Stage0Current(
             revision_id=revision.revision_id, approval=PendingApproval(status='pending')),

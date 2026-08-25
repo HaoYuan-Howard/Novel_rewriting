@@ -29,7 +29,7 @@ def _corpus_test(fn):
 
 
 BASE_RELS = (
-    'stage0/removal_report.json',
+    'stage0/revisions.json',
     'stage1/main_text.json', 'stage1/hook_copy.json',
     'stage1/partition_report.json',
     'stage2/global_grounding.json', 'stage2/chapter_blueprints.json',
@@ -67,7 +67,7 @@ def _approvable_book(rel: str) -> str:
     ok.sort(key=lambda b: not corpus.is_current(b, 'stage5/ch01.json'))
     corpus.declared_dependency(
         bool(ok),
-        needs=(f'一本 `stage0/removal_report.json` 记的源路径仍在盘上的书'
+        needs=(f'一本 `stage0/revisions.json` 链根记的源路径仍在盘上的书'
                f'（{len(books)} 本候选里 0 本满足；其余书的源要靠 `<base>/_service/uploads/` '
                f'重锚，而沙箱的 base 里没有那一层）'),
         produced_by='stage0.ingest', cost='0 成本')

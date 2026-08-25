@@ -258,7 +258,7 @@ def test_the_warning_unions_cover_their_value_domain_exactly():
     samples = [
         ('early_cut', {'body_code_points': 30, 'total_code_points': 100}),
         ('drop_ratio', {'removed_code_points': 40, 'total_code_points': 100}),
-        ('long_marker', {'line_no': 7, 'marker_core_code_points': 25}),
+        ('long_marker', {'span_start': 7, 'marker_core_code_points': 25}),
         ('noisy_duplicate', {'source_chapter_no': 1, 'count': 17}),
     ]
     assert {kind for kind, _ in samples} ==         set(inv.STAGE0_WARNINGS) | set(inv.STAGE1_WARNINGS),         '本条自己的样本面也要覆盖全取值面，否则漏的那一类照样没人查'

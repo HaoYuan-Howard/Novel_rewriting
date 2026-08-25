@@ -108,8 +108,8 @@ def decide_global_review(box: 'Sandbox', *, actor: str = 'reviewer',
 def source_resolves_in_a_sandbox(book: str) -> bool:
     """这本书的 `stage0` 新鲜度在**沙箱里**答得出吗（记录的源路径自己还在盘上）。
 
-    ⚠⚠ `stage0/removal_report.json` 的新鲜度**不走通用来源账**：它拿记录里的
-    `source_ref` 去比 `normalized_source_sha1`（`novel/store.py::_stage0_freshness`）。
+    ⚠⚠ `stage0/revisions.json` 的新鲜度**不走通用来源账**：它拿链根记录的
+    `source_ref` 去比 `normalized_source_sha1`（`novel/store.py::_stage0_revisions_freshness`）。
     那条路径失效时才由 `novel/core/source.py::resolve_recorded_source` 按
     `<base>/_service/uploads/<sha256>/<name>` 回落重锚——**而沙箱的 base 里没有那一层**
     ⇒ 该产物判 `unknown/ghost`，`novel/orchestrator/approvals.py::_proof_for_seen`
@@ -137,13 +137,13 @@ def source_resolves_in_a_sandbox(book: str) -> bool:
     from contracts.schema import ARTIFACTS
     from novel.core.source import resolve_recorded_source
 
-    rel = 'stage0/removal_report.json'
+    rel = 'stage0/revisions.json'
     payload = current(book, rel)
     if payload is None:
         return False
     #: `base=None` = 只问记录的那条路径本身，不猜——沙箱里能读到的正是这一支。
     typed = ARTIFACTS[rel].model_validate(payload)
-    return resolve_recorded_source(typed.source_ref, None) is not None
+    return resolve_recorded_source(typed.source.source_ref, None) is not None
 
 
 class Sandbox:

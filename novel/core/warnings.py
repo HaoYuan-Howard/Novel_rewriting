@@ -4,7 +4,7 @@
 warnings.py —— 一条可疑项**读给人听是什么样**，唯一落点。
 
 【为什么措辞要单独有个家】
-2026-08-22 起 stage0 / stage1 的 warning 产物**只记证据不记措辞**
+Stage0 的 warning 是 current revision 的运行时派生，Stage1 的 warning 产物只记证据不记措辞
 （`contracts/schema/stage0.py` 的「可疑项」那一段写了三条理由）。措辞总得有人生成，
 而它有两个出口：S-13 校验报告的 `info` 级结论，和 S-00 审阅屏上那一行黄字。
 两个出口各写一份，就是同一句话的第二个落点 —— 那正是本仓反复付学费的形状。
@@ -18,12 +18,13 @@ warnings.py —— 一条可疑项**读给人听是什么样**，唯一落点。
 ⇒ 阈值改了以后**旧产物的措辞跟着变才是对的**：这句话说的是
 「按今天的判准，当时那份数据长这样」，而不是「当时的人看到过这句话」。
 
-⚠ 本模块**只 import contracts**。它同时被 `novel/stages/*/checks.py`（判据层）与
-  `novel/views/*`（视图层）用，依赖必须压到最轻，也不能反向依赖任何一侧。
+⚠ 本模块只依赖 contracts 与 `novel.core.ingest` 的标记归一函数，不反向依赖 stage 或 view。
 ⚠ **认告警一律用 `kind`，不许拿这里产出的字符串去认**。这条纪律没变——恰恰是因为
   措辞现在更自由了（随阈值变），拿它做分支比以前更危险。
 """
 from __future__ import annotations
+
+from collections.abc import Sequence
 
 from contracts.invariants import (
     BODY_RATIO_MIN,
@@ -31,8 +32,33 @@ from contracts.invariants import (
     NOISY_DUPLICATE_MIN,
     NONBODY_MARKER_WARN_CP,
 )
-from contracts.schema.stage0 import Stage0Warning
+from contracts.schema.stage0 import (
+    DropRatioWarning, EarlyCutWarning, LongMarkerWarning, RemovedSegment, Stage0Warning,
+)
 from contracts.schema.stage1 import Stage1Warning
+from novel.core.ingest import marker_core
+
+
+def stage0_warnings(total: int, body: int,
+                    removed: Sequence[RemovedSegment]) -> list[Stage0Warning]:
+    """按 current 内容现算 Stage0 可疑项；不参与 revision 身份。"""
+    out: list[Stage0Warning] = []
+    ratio = body / total if total else 0.0
+    removed_points = sum(segment.span[1] - segment.span[0] for segment in removed)
+    if ratio < BODY_RATIO_MIN:
+        out.append(EarlyCutWarning(
+            kind='early_cut', body_code_points=body, total_code_points=total))
+    if total and removed_points / total > DROP_RATIO_MAX:
+        out.append(DropRatioWarning(
+            kind='drop_ratio', removed_code_points=removed_points,
+            total_code_points=total))
+    for segment in removed:
+        length = len(marker_core(segment.marker_line))
+        if length > NONBODY_MARKER_WARN_CP:
+            out.append(LongMarkerWarning(
+                kind='long_marker', span_start=segment.span[0],
+                marker_core_code_points=length))
+    return out
 
 
 def describe(warning: Stage0Warning | Stage1Warning) -> str:
@@ -54,7 +80,7 @@ def describe(warning: Stage0Warning | Stage1Warning) -> str:
                 f'{warning.removed_code_points}/{warning.total_code_points} 码点），'
                 f'高于 {DROP_RATIO_MAX:.0%}')
     if kind == 'long_marker':
-        return (f'第 {warning.line_no} 行标记 core 长 '
+        return (f'原文偏移 {warning.span_start} 处标记 core 长 '
                 f'{warning.marker_core_code_points}，'
                 f'超过实测真标记上限 {NONBODY_MARKER_WARN_CP}')
     if kind == 'noisy_duplicate':

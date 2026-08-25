@@ -341,13 +341,13 @@ def test_an_upstream_invalid_draft_blocks_the_queue_and_names_the_inbox():
     books = sandbox.books_with_stage3()
     if not books:
         pytest.skip('盘上没有语料——本条**没在查**，不是「查过没事」')
-    # ⚠ 必须带上 `stage0/removal_report.json`：它是 `stage0.approve` 这道**人工闸**的
+    # ⚠ 必须带上 `stage0/revisions.json`：它是 `stage0.approve` 这道**人工闸**的
     #   typed 凭据（`queue._human_gate_satisfied` 读 `approved == 'approved'`）。
     #   沙箱不带 ⇒ 那道闸永远不满足 ⇒ 队列从它开始就 `blocked`，而
     #   `plan_book` 的 `stuck` 会把其后每一项的 `waiting_on` 都改写成 `stage0.approve`
     #   ⇒ 本条要观测的 inbox 阻塞被更靠前的人工闸盖住。真实跑到 stage3 的书本来就有这一份。
     box = sandbox.Sandbox(
-        books[0], sandbox.STAGE3_INPUTS + ('stage0/removal_report.json',))
+        books[0], sandbox.STAGE3_INPUTS + ('stage0/revisions.json',))
     try:
         inv = box.dir / 'stage2' / 'global_grounding.INVALID.json'
         inv.write_text((box.dir / 'stage2' / 'global_grounding.json')

@@ -717,7 +717,6 @@
    ],
    "produces": [
     "stage0/revisions.json",
-    "stage0/removal_report.json",
     "stage0/clean_text.txt"
    ]
   },
@@ -731,8 +730,7 @@
     "--reason"
    ],
    "produces": [
-    "stage0/revisions.json",
-    "stage0/removal_report.json"
+    "stage0/revisions.json"
    ]
   },
   "stage0.edit": {
@@ -749,7 +747,6 @@
    ],
    "produces": [
     "stage0/revisions.json",
-    "stage0/removal_report.json",
     "stage0/clean_text.txt"
    ]
   },
@@ -998,7 +995,7 @@
    "extra": null,
    "paid": false,
    "free_flag": null,
-   "writes": "stage0/revisions.json · stage0/removal_report.json · stage0/clean_text.txt",
+   "writes": "stage0/revisions.json · stage0/clean_text.txt",
    "writes_disk": true,
    "needs_value": null,
    "required_inputs": []
@@ -1011,7 +1008,7 @@
    ],
    "paid": false,
    "free_flag": null,
-   "writes": "stage0/revisions.json · stage0/removal_report.json · stage0/clean_text.txt",
+   "writes": "stage0/revisions.json · stage0/clean_text.txt",
    "writes_disk": true,
    "needs_value": "要摄入的原始小说 txt/md 路径；新书在目录产生前没有 sid",
    "required_inputs": []
@@ -1048,7 +1045,7 @@
    "extra": null,
    "paid": false,
    "free_flag": null,
-   "writes": "stage0/revisions.json · stage0/removal_report.json",
+   "writes": "stage0/revisions.json",
    "writes_disk": true,
    "needs_value": null,
    "required_inputs": [
@@ -1068,7 +1065,7 @@
    "extra": null,
    "paid": false,
    "free_flag": null,
-   "writes": "stage0/revisions.json · stage0/removal_report.json · stage0/clean_text.txt",
+   "writes": "stage0/revisions.json · stage0/clean_text.txt",
    "writes_disk": true,
    "needs_value": null,
    "required_inputs": []
@@ -1103,7 +1100,7 @@
    ],
    "paid": false,
    "free_flag": null,
-   "writes": "stage0/revisions.json · stage0/removal_report.json · stage0/clean_text.txt",
+   "writes": "stage0/revisions.json · stage0/clean_text.txt",
    "writes_disk": true,
    "needs_value": "审校台生成的 stage0 编辑计划路径（正文 + 剔除账 + 乐观锁）",
    "required_inputs": []
@@ -1116,7 +1113,7 @@
    ],
    "paid": false,
    "free_flag": null,
-   "writes": "stage0/revisions.json · stage0/removal_report.json · stage0/clean_text.txt",
+   "writes": "stage0/revisions.json · stage0/clean_text.txt",
    "writes_disk": true,
    "needs_value": "审校台生成的 stage0 候选裁决（采纳 / 否掉整版 + 乐观锁）",
    "required_inputs": []

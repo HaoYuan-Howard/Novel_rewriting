@@ -255,7 +255,7 @@ def _run_stage0_source(
 
 def _run_stage0(ctx: RunContext, flags: list[str]) -> int:
     '''stage0 三个人工/机器动作。只有 remove 承担本层复检入口。'''
-    from contracts.schema.stage0 import RemovalReport
+    from contracts.schema.stage0 import Stage0Revisions
     from novel.stages.stage0 import checks, removal
     from novel.store import ArtifactStore
 
@@ -302,7 +302,10 @@ def _run_stage0(ctx: RunContext, flags: list[str]) -> int:
     source = _valued(flags, '--source')
     if source is None:
         store = ArtifactStore(ctx)
-        previous, _raw = store.read_own(RemovalReport, removal.REPORT_REL)
+        from novel.stages.stage0 import revisions as stage0_revisions
+        log, _raw = store.read_own(Stage0Revisions, removal.REVISIONS_REL)
+        stage0_revisions.verify_chain(log)
+        previous = stage0_revisions.snapshot_of(log)
         # ⚠ 两支处置相反，而 `source_ref` 让它们在类型上就分得开：`managed_upload`
         #   跟着 base 走（Output 根搬家不影响它），`external_file` 找不到就是世界
         #   真的变了。找不到时**照旧把记录里那条路径传下去**——让 `run_source` 给出

@@ -15,17 +15,6 @@ import type {
 
 /* ---------------------------------------------------------------- stage0 */
 
-export interface Stage0Removed {
-  kind: string
-  marker_line: string
-  line_no: number
-  span: [number, number]
-  code_points: number
-  head_preview: string
-  tail_preview: string
-  origin: 'machine' | 'human'
-}
-
 /**
  * 一条可疑项 = 产物里的**结构化证据** + 服务端现渲染的那句话。
  *
@@ -41,41 +30,10 @@ export interface Stage0Warning {
 
 export interface Stage0Report {
   original_filename: string
-  /**
-   * 原文此刻该去哪儿找。**两支处置相反**（2026-08-22 从 `original_path: string`
-   * 换成判别联合）：external_file 找不到 = 世界真的变了；managed_upload 跟着
-   * base 走、位置由后端现算，前端不拼路径也不猜。
-   * ⚠ 展示位置用 `original_filename`（它就是为展示留的）。
-   */
-  source_ref:
-    | { kind: 'external_file'; absolute_path: string }
-    | { kind: 'managed_upload'; blob_sha256: string; filename: string }
-  code: string
-  normalized_source_sha1: string
-  clean_sha1: string
-  source_encoding: string
-  text_norm: string
-  removed: Stage0Removed[]
   total_code_points: number
-  body_code_points: number
   warnings: Stage0Warning[]
   /**
-   * 审阅闸门。**两个分支，不是四个可空字段**（2026-08-22）。
-   * ⚠ `pending` 分支一个字段都没有：「没批」说不出批准时间、来源、批准人。
-   * ⚠ 批准只有人一种来源，因此 `approved` 分支的 `by` / `reason` 恒必填
-   *   （`origin` 那一格随停产取值 `auto_zero_hit` 于 2026-08-22 一并删除）。
-   */
-  approval:
-    | { status: 'pending' }
-    | {
-        status: 'approved'
-        at: string
-        by: string
-        /** 批准理由。审计链折叠进 revision 之后，批准是唯一不产生新版本的人工决定 */
-        reason: string
-      }
-  /**
-   * 这份报告此刻能不能放行 stage1 与付费链。**后端唯一落点的投影，前端不重算。**
+   * 当前 Stage0 此刻能不能放行 stage1 与付费链。**后端唯一落点的投影，前端不重算。**
    * ⚠ 别再从 `approval` 自己推：后端谓词收紧时改一处就够，两处各写一遍迟早漏一处，
    *   而漏掉的那处就是绕过闸门的复活口。
    * ⚠ 配套的 `block_reason` 已于 2026-08-22 删除：理由码只剩一个取值之后，
@@ -114,7 +72,6 @@ export interface Stage0Segment {
 }
 
 export interface Stage0Segments {
-  normalized_source_sha1: string
   available: boolean
   reason: string | null
   segments: Stage0Segment[]
@@ -151,7 +108,6 @@ export interface Stage0PartitionPreview {
 export interface Stage0EditRequest {
   /** 乐观锁：页面看到的那一版（阶段 C 起取代 round + clean_sha1 两格） */
   expected_revision_id: string
-  expected_normalized_source_sha1: string
   removed_segment_ids: string[]
   actor: string
   reason: string
@@ -185,26 +141,12 @@ export interface TrimResolution {
  * 链上不可变的一版。**内容整团一起变**——聚合根不是 `clean_text` 一个字段
  * （外部评审 P0-3：只对正文做 diff3 保证不了整个聚合一致）。
  */
-export interface Stage0Revision {
+export interface Stage0CandidateRevision {
   revision_id: string
-  parent_revision_id: string | null
   origin: Stage0RevisionOrigin
-  actor: string | null
-  reason: string | null
-  at: string
-  code: string
-  content: {
-    original_filename: string
-    normalized_source_sha1: string
-    source_encoding: string
-    text_norm: string
-    total_code_points: number
-    clean_text: string
-    clean_sha1: string
-    body_code_points: number
-    removed: Stage0Removed[]
-    warnings: { kind: string; [evidence: string]: unknown }[]
-  }
+  clean_text: string
+  body_code_points: number
+  removed_count: number
 }
 
 /**
@@ -215,7 +157,7 @@ export interface Stage0Revision {
  * （diff3 与 typed 冲突已整份下线），而是**整版留哪一版**。
  */
 export interface Stage0CandidateView {
-  candidate: Stage0Revision
+  candidate: Stage0CandidateRevision
   current_revision_id: string
   current_body_code_points: number
   current_removed_count: number

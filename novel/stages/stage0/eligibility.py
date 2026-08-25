@@ -29,11 +29,11 @@
 '''
 from __future__ import annotations
 
-from contracts.schema.stage0 import RemovalReport
+from contracts.schema.stage0 import Stage0Snapshot
 
 
-def is_stage0_executable(report: RemovalReport) -> bool:
-    """这份报告是否**当前**具备放行 stage1 与付费链的资格。
+def is_stage0_executable(report: Stage0Snapshot) -> bool:
+    """当前 Stage0 快照是否具备放行 stage1 与付费链的资格。
 
     批准只有人一种诚实来源：`approval.status == 'approved'`。
     「这一段到底是不是番外」没有结构不变量可查（`R-0.7`），

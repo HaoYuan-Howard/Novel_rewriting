@@ -14,6 +14,7 @@ from dataclasses import dataclass
 
 from contracts.schema.api import (
     HookCopyView,
+    Stage0CandidateRevisionView,
     Stage0CandidateView,
     Stage0EditRequest,
     Stage0PartitionPreview,
@@ -26,9 +27,7 @@ from contracts.schema.api import (
     Stage1Segment,
     Stage1Segments,
 )
-from contracts.schema.stage0 import (
-    RemovalReport, RequestedRemoval, Stage0EditPlan,
-)
+from contracts.schema.stage0 import RequestedRemoval, Stage0EditPlan, Stage0Snapshot
 from contracts.schema.stage1 import HookCopy, MainText, MainTextSection, PartitionReport
 from novel import paths, prov
 from novel.core.ingest import (
@@ -70,10 +69,17 @@ def stage0_candidate(
     if log is None or log.candidate_revision_id is None:
         raise UpstreamMissing('stage0 当前没有待裁决的机器候选')
     current = rev.current_revision(log)
+    candidate = rev.by_id(log, log.candidate_revision_id)
     return Stage0CandidateView(
-        candidate=rev.by_id(log, log.candidate_revision_id),
+        candidate=Stage0CandidateRevisionView(
+            revision_id=candidate.revision_id,
+            origin=candidate.origin,
+            clean_text=candidate.content.clean_text,
+            body_code_points=len(candidate.content.clean_text),
+            removed_count=len(candidate.content.removed),
+        ),
         current_revision_id=current.revision_id,
-        current_body_code_points=current.content.body_code_points,
+        current_body_code_points=len(current.content.clean_text),
         current_removed_count=len(current.content.removed),
         current_origin=current.origin,
     )
@@ -89,26 +95,30 @@ def _store(base: str | os.PathLike[str], sid: str, node: str) -> ArtifactStore:
 
 
 def stage0_report(base: str | os.PathLike[str], sid: str) -> Stage0Report:
-    """S-00 的那份报告。**产物照读，告警措辞在这一层现渲染。**
+    """S-00 的窄视图。状态从 revision 链派生，告警措辞在这一层现渲染。
 
-    ⚠ 返回的不是产物模型本身而是它的子类，多两类视图专有的投影：
-      ① 渲染好的告警措辞（产物只记证据，措辞唯一落点是 `novel/core/warnings.py`）；
-      ② **执行资格**（唯一落点 `stage0/eligibility.py`）。两者都是同一个道理——
-        前端自己拼就是第二个落点，而资格那一处漏了就是自动绕过的复活口。
+    只返回页面实际消费的字段；告警证据和执行资格由后端唯一落点计算。
     """
     from novel.stages.stage0.eligibility import is_stage0_executable
     store = _store(base, sid, STAGE0_NODE)
-    report = store.read_own(RemovalReport, removal.REPORT_REL)[0]
+    from novel.stages.stage0 import revisions as rev
+    log = rev.read(store)
+    if log is None:
+        raise UpstreamMissing('stage0 还没跑，盘上没有 revision 链')
+    report = rev.snapshot_of(log)
     return Stage0Report.model_validate({
-        **report.model_dump(mode='json'),
+        'original_filename': report.original_filename,
+        'total_code_points': report.total_code_points,
         'warnings': [{'warning': warning.model_dump(mode='json'),
                       'message': describe(warning)}
                      for warning in report.warnings],
         'executable': is_stage0_executable(report),
+        'revision_id': report.revision_id,
+        'revision_origin': report.revision_origin,
     })
 
 
-def _original(report: RemovalReport,
+def _original(report: Stage0Snapshot,
               base: str | os.PathLike[str]) -> tuple[str | None, str | None]:
     """审阅屏要的那份原文。**取不到就明说不可用，绝不从别处变出一份。**
 
@@ -133,13 +143,13 @@ def _original(report: RemovalReport,
     if decoded.normalized_source_sha1 != report.normalized_source_sha1:
         return (
             None,
-            f'原始文件内容已变化：报告 {report.normalized_source_sha1[:10]}，'
+            f'原始文件内容已变化：链根 {report.normalized_source_sha1[:10]}，'
             f'当前 {decoded.normalized_source_sha1[:10]}',
         )
     if len(decoded.text) != report.total_code_points:
         return (
             None,
-            f'原始文件长度已变化：报告 {report.total_code_points}，当前 {len(decoded.text)}',
+            f'原始文件长度已变化：链根 {report.total_code_points}，当前 {len(decoded.text)}',
         )
     return decoded.text, None
 
@@ -195,11 +205,11 @@ def _gap_segments(
     return out
 
 
-def _stage0_segments(report: RemovalReport, text: str, clean: str) -> list[Stage0Segment]:
+def _stage0_segments(report: Stage0Snapshot, text: str, clean: str) -> list[Stage0Segment]:
     actual_clean = prov.content_sha1(clean.encode('utf-8'))
     if actual_clean != report.clean_sha1:
         raise HumanEditProtected(
-            f'clean_text 实际 sha1={actual_clean}，报告登记的是 {report.clean_sha1}；'
+            f'clean_text 实际 sha1={actual_clean}，current 派生的是 {report.clean_sha1}；'
             '不能拿两轮内容拼成审校页面')
 
     out: list[Stage0Segment] = []
@@ -214,9 +224,6 @@ def _stage0_segments(report: RemovalReport, text: str, clean: str) -> list[Stage
         out.extend(_gap_segments(text, cursor, lo, scan))
         reconstructed.append(text[cursor:lo])
         value = text[lo:hi]
-        if len(value) != removed.code_points:
-            raise ArtifactUnreadable(
-                f'removed span={removed.span} 实际长 {len(value)}，报告记 {removed.code_points}')
         out.append(Stage0Segment(
             id=f's0:{lo}:{hi}',
             kind='remove',
@@ -239,7 +246,7 @@ def _stage0_segments(report: RemovalReport, text: str, clean: str) -> list[Stage
             # 新的剔除选择仍应基于一次明确的合并/编辑计划，不能猜坐标迁移。
             return _gap_segments(clean, 0, len(clean), scan_text(clean))
         raise ArtifactUnreadable(
-            '原文减去 removal_report.removed[] 后不能逐字节重建 clean_text')
+            '原文减去 current revision 的 removed[] 后不能逐字节重建 clean_text')
     if out:
         if out[0].start != 0 or out[-1].end != len(text):
             raise ArtifactUnreadable('stage0 分区没有覆盖完整原文')
@@ -252,17 +259,19 @@ def _stage0_segments(report: RemovalReport, text: str, clean: str) -> list[Stage
 
 def stage0_segments(base: str | os.PathLike[str], sid: str) -> Stage0Segments:
     store = _store(base, sid, STAGE0_NODE)
-    report = store.read_own(RemovalReport, removal.REPORT_REL)[0]
+    from novel.stages.stage0 import revisions as rev
+    log = rev.read(store)
+    if log is None:
+        raise UpstreamMissing('stage0 还没跑，盘上没有 revision 链')
+    report = rev.snapshot_of(log)
     text, reason = _original(report, base)
     if text is None:
         return Stage0Segments(
-            normalized_source_sha1=report.normalized_source_sha1,
             available=False,
             reason=reason,
         )
     clean = store.read_text(removal.CLEAN_REL)
     return Stage0Segments(
-        normalized_source_sha1=report.normalized_source_sha1,
         available=True,
         reason=None,
         segments=_stage0_segments(report, text, clean),
@@ -313,7 +322,11 @@ def stage0_partition_preview(
     正式 stage1 产物那条路（`partition.run_partition`）的闸门一个字没动。
     """
     store = _store(base, sid, STAGE0_NODE)
-    report = store.read_own(RemovalReport, removal.REPORT_REL)[0]
+    from novel.stages.stage0 import revisions as rev
+    log = rev.read(store)
+    if log is None:
+        raise UpstreamMissing('stage0 还没跑，盘上没有 revision 链')
+    report = rev.snapshot_of(log)
     clean = store.read_text(removal.CLEAN_REL)
     input_sha1 = prov.content_sha1(clean.encode('utf-8'))
     try:
@@ -343,13 +356,7 @@ def stage0_partition_preview(
 
 
 def _requested_removal(segment: Stage0Segment) -> RequestedRemoval:
-    """页面上的一个分区选择 → 一条**意图**（TODO-36：命令 DTO 与产物分家）。
-
-    ⚠ 这里此前造的是产物模型 `RemovedSegment`，于是视图层要把 `line_no` / 两条预览 /
-    `origin` 全都算一遍——而服务端在 `removal.verified_removals` 里**必然会再算一遍**
-    并以自己那份为准。两个落点算同一件事、只有一个说了算 ⇒ 视图那一份纯属摆设，
-    还让人误以为页面能决定 `origin`。现在它只说得出人真正选了什么。
-    """
+    """页面分区选择只产生 ``kind``/``span`` 意图；事实字段由 CLI 复算。"""
     first = next((line.strip() for line in segment.text.splitlines() if line.strip()), '')
     marker_line = segment.marker_line or first or '人工剔除'
     return RequestedRemoval(
@@ -370,8 +377,6 @@ def stage0_edit_plan(
         stale.append(
             f'revision 页面={request.expected_revision_id[:12]}… '
             f'当前={report.revision_id[:12]}…')
-    if request.expected_normalized_source_sha1 != report.normalized_source_sha1:
-        stale.append('normalized_source_sha1 已变化')
     if stale:
         raise HumanEditProtected('Stage 0 页面已过期，请刷新后重选：' + '；'.join(stale))
 
@@ -389,14 +394,8 @@ def stage0_edit_plan(
         raise HumanEditProtected('完结标记属于保留正文，不能在 Stage 0 作为剔除段选择')
 
     ordered = [segment for segment in view.segments if segment.id in selected]
-    clean = ''.join(
-        segment.text for segment in view.segments if segment.id not in selected)
     return Stage0EditPlan(
         expected_revision_id=report.revision_id,
-        expected_normalized_source_sha1=report.normalized_source_sha1,
-        expected_total_code_points=report.total_code_points,
-        clean_text=clean,
-        clean_sha1=prov.content_sha1(clean.encode('utf-8')),
         removed=[_requested_removal(segment) for segment in ordered],
         actor=request.actor,
         reason=request.reason,
@@ -406,7 +405,7 @@ def stage0_edit_plan(
 @dataclass(frozen=True)
 class _Stage1Material:
     clean: str
-    stage0: RemovalReport
+    stage0: Stage0Snapshot
     report: PartitionReport
     main: MainText
     hook: HookCopy
@@ -414,7 +413,11 @@ class _Stage1Material:
 
 def _stage1_material(base: str | os.PathLike[str], sid: str) -> _Stage1Material:
     store = _store(base, sid, STAGE1_NODE)
-    stage0 = store.read_own(RemovalReport, partition.STAGE0_REPORT)[0]
+    from novel.stages.stage0 import revisions as rev
+    log = rev.read(store)
+    if log is None:
+        raise UpstreamMissing('stage0 还没跑，盘上没有 revision 链')
+    stage0 = rev.snapshot_of(log)
     from novel.stages.stage0.eligibility import is_stage0_executable
     if not is_stage0_executable(stage0):
         raise ApprovalRequired(

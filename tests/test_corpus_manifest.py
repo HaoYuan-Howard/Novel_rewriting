@@ -287,7 +287,9 @@ def test_observe_is_text_free_and_verification_detects_any_inventory_or_ledger_d
         sid: {
             'artifacts': _artifacts(chapters),
             'payloads': {
-                'stage0/removal_report.json': {'normalized_source_sha1': 'b' * 40},
+                'stage0/revisions.json': {
+                    'source': {'normalized_source_sha1': 'b' * 40},
+                },
                 'stage1/main_text.json': [
                     {'chapter_ordinal': ordinal}
                     for ordinal in range(1, chapters + 1)
@@ -349,7 +351,7 @@ def test_observe_is_text_free_and_verification_detects_any_inventory_or_ledger_d
     #   而全表归零到 v1 之后「改成 1」等于没改 ⇒ 用例安静地不再制造漂移。
     state[sid]['artifacts'] = [
         item.model_copy(update={'schema_version': item.schema_version + 1})
-        if item.rel == 'stage0/removal_report.json' else item
+        if item.rel == 'stage0/revisions.json' else item
         for item in artifacts
     ]
     with pytest.raises(ValueError, match='inventory hash 漂移'):
@@ -368,10 +370,10 @@ def test_observe_is_text_free_and_verification_detects_any_inventory_or_ledger_d
         corpus_manifest.verify(tmp_path, manifest)
     state[sid]['artifacts'] = artifacts
 
-    state[sid]['payloads']['stage0/removal_report.json']['normalized_source_sha1'] = 'c' * 40
+    state[sid]['payloads']['stage0/revisions.json']['source']['normalized_source_sha1'] = 'c' * 40
     with pytest.raises(ValueError, match='inventory hash 漂移'):
         corpus_manifest.verify(tmp_path, manifest)
-    state[sid]['payloads']['stage0/removal_report.json']['normalized_source_sha1'] = 'b' * 40
+    state[sid]['payloads']['stage0/revisions.json']['source']['normalized_source_sha1'] = 'b' * 40
 
     state[sid]['payloads']['stage1/main_text.json'].append({'chapter_ordinal': 18})
     with pytest.raises(ValidationError, match='17/25'):

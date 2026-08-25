@@ -11,7 +11,7 @@ import pytest
 
 from contracts.schema.api import PreviewRequest
 from contracts.schema.stage0 import (
-    PendingApproval, RemovalReport, RemovedSegment,
+    PendingApproval, RemovedSegment,
 )
 from contracts.schema.stage1 import MainText
 from novel import paths as novel_paths
@@ -33,7 +33,6 @@ from novel.stages.stage0 import checks as stage0_checks
 from novel.stages.stage0 import removal as stage0_removal
 from novel.stages.stage0.removal import (
     CLEAN_REL,
-    REPORT_REL,
     _context,
     remove_bytes,
     run_approve as _run_approve,
@@ -93,19 +92,19 @@ def test_stage01_packages_are_in_the_explicit_wheel_manifest():
     assert '"novel.stages.stage1"' in pyproject
 
 
-def test_materializing_writes_clean_first_then_the_report_once_each():
-    """物化的顺序是契约：报告记着 `clean_sha1`，反过来写会出现「报告说的那份正文
-    还没落盘」的中间态，而 freshness 正是按这个顺序读的。"""
+def test_materializing_writes_the_single_clean_projection_once():
+    """revision 链是 JSON 权威；物化只写唯一的正文投影。"""
     from contracts.schema.stage0 import Stage0Current, Stage0Revisions
     from novel.stages.stage0 import revisions as rev
 
-    content, _scan = stage0_removal.machine_content(
+    source_state, content, _scan = stage0_removal.machine_content(
         decode_source_bytes(_case('enc_utf8_sig').to_bytes()),
         original_path='FQ_once_101.txt')
     revision = rev.make_revision(
         parent_revision_id=None, origin='machine', actor=None, reason=None,
         code='test', content=content)
     log = Stage0Revisions(
+        source=source_state,
         revisions=[revision],
         current=Stage0Current(revision_id=revision.revision_id,
                               approval=PendingApproval(status='pending')),
@@ -116,15 +115,9 @@ def test_materializing_writes_clean_first_then_the_report_once_each():
         def write_text(self, rel, value):
             calls.append(('text', rel, value))
 
-        def write(self, rel, value):
-            calls.append(('json', rel, value))
-
     rev.materialize(RecordingStore(), log)
 
-    assert calls == [
-        ('text', CLEAN_REL, content.clean_text),
-        ('json', REPORT_REL, rev.report_of(log)),
-    ]
+    assert calls == [('text', CLEAN_REL, content.clean_text)]
 
 
 def test_first_zero_hit_dry_run_previews_pending_without_writing(work):
@@ -205,7 +198,6 @@ def test_disk_path_blocks_before_approval_then_writes_current_bytes(work):
 def test_human_approval_refuses_when_the_source_moved(work):
     source = _source(work, 'FQ_approval_race_124.txt', 'end_marker_then_fanwai')
     novel_dir, removal, _initial = run_source(source, work / 'Output')
-    before_report = (novel_dir / REPORT_REL).read_bytes()
     before_log = (novel_dir / stage0_removal.REVISIONS_REL).read_bytes()
 
     source.write_bytes(source.read_bytes() + b'\nsource changed after review\n')
@@ -216,7 +208,6 @@ def test_human_approval_refuses_when_the_source_moved(work):
             approved_at='2026-08-12T00:00:00+00:00',
         )
 
-    assert (novel_dir / REPORT_REL).read_bytes() == before_report
     assert (novel_dir / stage0_removal.REVISIONS_REL).read_bytes() == before_log
 
 
@@ -283,13 +274,13 @@ def test_human_edit_lands_a_revision_and_the_same_machine_rerun_preserves_it(wor
         _context(novel_dir, 'stage0.approve'),
         approved_at='2026-08-12T01:00:00+00:00',
     )
-    approved_bytes = (novel_dir / REPORT_REL).read_bytes()
+    approved_bytes = (novel_dir / stage0_removal.REVISIONS_REL).read_bytes()
     again, _again_report = run_approve(
         _context(novel_dir, 'stage0.approve'),
         approved_at='2099-01-01T00:00:00+00:00',
     )
     assert again.approval.at == approved.approval.at
-    assert (novel_dir / REPORT_REL).read_bytes() == approved_bytes
+    assert (novel_dir / stage0_removal.REVISIONS_REL).read_bytes() == approved_bytes
 
 
 def test_stage0_edit_refuses_a_hand_edited_live_clean_text(work):
@@ -488,24 +479,24 @@ def test_a_tampered_source_chapter_no_is_a_finding_not_a_checker_crash():
     assert labels.findings
 
 
-def test_stage0_checker_recomputes_warning_kinds():
+def test_stage0_checker_derives_warning_kinds_without_persisted_state():
     case = _case('drop_ratio_only')
     removed = remove_bytes(
         case.to_bytes(),
         original_path='FQ_warning_891.txt',
         code='test',
     )
-    bad_report = removed.report.model_copy(update={'warnings': []})
-
     outcomes = stage0_checks.check(
-        bad_report,
+        removed.report,
         removed.clean_text,
         source=decode_source_bytes(case.to_bytes()),
     )
 
     warnings = next(outcome for outcome in outcomes if outcome.rule == 's0_warnings')
-    assert warnings.findings
-    assert 'drop_ratio' in warnings.findings[-1].detail
+    assert len(warnings.findings) == 1
+    assert '剔除段占全文' in warnings.findings[0].detail
+    assert '现算 1 条' in warnings.scanned
+    assert [warning.kind for warning in removed.report.warnings] == ['drop_ratio']
 
 
 def test_stage0_checker_rejects_overlapping_human_and_machine_spans():
@@ -532,7 +523,7 @@ def test_stage0_checker_rejects_overlapping_human_and_machine_spans():
     assert any('重叠' in finding.detail for finding in ledger.findings)
 
 
-def test_stage0_checker_recomputes_machine_kind_and_both_previews():
+def test_stage0_checker_recomputes_machine_kind_and_marker_membership():
     case = _case('end_marker_then_fanwai')
     removed = remove_bytes(
         case.to_bytes(),
@@ -541,8 +532,7 @@ def test_stage0_checker_recomputes_machine_kind_and_both_previews():
     )
     segment = removed.report.removed[0].model_copy(update={
         'kind': '后记',
-        'head_preview': '被篡改的头部',
-        'tail_preview': '被篡改的尾部',
+        'marker_line': '被篡改的标记行',
     })
     bad_report = removed.report.model_copy(update={'removed': [segment]})
 
@@ -555,8 +545,7 @@ def test_stage0_checker_recomputes_machine_kind_and_both_previews():
     shared = next(outcome for outcome in outcomes if outcome.rule == 's0_nonbody_shared')
     ledger = next(outcome for outcome in outcomes if outcome.rule == 's0_removal_ledger')
     assert any('共用判据复算' in finding.detail for finding in shared.findings)
-    assert any('head_preview' in finding.detail for finding in ledger.findings)
-    assert any('tail_preview' in finding.detail for finding in ledger.findings)
+    assert any('marker_line' in finding.detail for finding in ledger.findings)
 
 
 def test_two_line_fanwai_rolls_back_the_numeric_pseudo_chapter():
@@ -693,7 +682,7 @@ def test_real_test_data_runs_through_both_deterministic_layers(source: Path, wor
     assert not partitioned.scan.nonbody
 
 
-def test_no_artifact_holds_the_extra_body_beyond_its_mandated_preview(work):
+def test_no_artifact_holds_the_removed_extra_body(work):
     """`R-0.2` 后半句：**番外体不进产物目录**——把机械可判的那一半钉死。
 
     ⚠⚠ 存在的直接原因：曾有一版实现新增 `stage0/source.txt` 存解码归一后的**完整原文**，
@@ -705,11 +694,11 @@ def test_no_artifact_holds_the_extra_body_beyond_its_mandated_preview(work):
     ⚠ 判据刻意**不是**「任何产物的 `content_sha1` 不得等于 `normalized_source_sha1`」：
       零 removed 的干净书**合法地**满足 `clean_sha1 == normalized_source_sha1`（首跑零命中正是这个
       形状，2026-08-21 起它同样停在人工闸门前）⇒ 那样写是假红。
-      这里查番外正文本身，且取**预览窗口之外**的那一段：`head_preview`/`tail_preview`
-      恒 80/40 码点，是 `R-0.2` 明文要求的残片（「丢了就没有第二次机会」），不是副本。
+      这里直接查番外正文本身。Stage0 只保存其 span、类型与标记行，正文仍以外部原始 txt
+      为唯一证据源，不在产物目录复制。
     """
-    lead = '番外正文铺垫。' * 20          # 140 码点 > head_preview 的 80
-    trail = '番外正文收束。' * 40         # 280 码点 > tail_preview 取样的末 120
+    lead = '番外正文铺垫。' * 20
+    trail = '番外正文收束。' * 40
     unique = '此句只在番外正文的正中间出现。'
     main = '\n\n'.join(f'{n}\n\n' + '正文一句，她走进门里没有回头。' * 20
                        for n in (1, 2, 3))
@@ -723,9 +712,6 @@ def test_no_artifact_holds_the_extra_body_beyond_its_mandated_preview(work):
     # 守卫的守卫①：番外确实被剔掉了，否则下面那条断言是空的。
     assert result.report.removed, '这份样本根本没触发剔除，本用例什么都没在查'
     assert unique not in result.clean_text
-    # 守卫的守卫②：预览残片仍在（`R-0.2` 要求的记账没被这条守卫顺手禁掉）。
-    assert any(segment.head_preview for segment in result.report.removed)
-
     holders = [
         p for p in novel_dir.rglob('*')
         if p.is_file() and unique in p.read_bytes().decode('utf-8', 'replace')
@@ -855,7 +841,6 @@ def _selection_plan(work, sid: str, removal):
     manual = next(item.id for item in view.segments if item.kind == 'keep')
     request = Stage0EditRequest(
         expected_revision_id=removal.report.revision_id,
-        expected_normalized_source_sha1=removal.report.normalized_source_sha1,
         removed_segment_ids=[*machine, manual],
         actor='planner', reason='人工补圈一段',
     )
@@ -870,8 +855,8 @@ def test_edit_plan_cannot_even_express_forged_provenance():
     """TODO-36：命令 DTO 与产物 DTO 分家之后，伪造 provenance **构造不出来**。
 
     此前 `Stage0EditPlan.removed` 直接复用产物的 `RemovedSegment`，客户端可以提交
-    `origin='machine'`、任意 `line_no` 与任意预览；服务端 2026-08-21 起会重新落定
-    这些字段（伪造无效），但**类型上看不出这是意图还是事实**。现在它只有两格。
+    `origin='machine'` 或任意标记行；服务端会重新落定这些字段（伪造无效），
+    但**类型上看不出这是意图还是事实**。现在它只有两格。
     """
     import pydantic
     from contracts.schema.stage0 import RequestedRemoval, Stage0EditPlan
@@ -886,7 +871,7 @@ def test_edit_plan_cannot_even_express_forged_provenance():
 
 
 def test_edit_plan_recomputes_provenance_server_side(work):
-    """恢复出口收口：origin/行号/标记行/预览一律服务端落定。
+    """恢复出口收口：origin/标记行一律服务端落定。
 
     两条规则一起验：与当前版本机器段 span 完全一致的条目**原样保留**（origin 仍是
     machine，人只是确认了机器的圈选）；新的人工 span 按 ledger 同一口径复算、
@@ -911,8 +896,8 @@ def test_edit_plan_recomputes_provenance_server_side(work):
         else:
             assert segment.origin == 'human', '人工新圈的段必须落 origin=human'
             human_origins += 1
-        lo, _hi = segment.span
-        assert segment.line_no == text.count(chr(10), 0, lo) + 1
+        lo, hi = segment.span
+        assert segment.marker_line in text[lo:hi]
     assert human_origins >= 1, '必须至少有一条人工新圈段'
 
 

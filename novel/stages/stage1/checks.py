@@ -7,7 +7,7 @@ from collections import Counter
 
 from contracts.invariants import MIN_CHAPTERS, NOISY_DUPLICATE_MIN
 from contracts.schema.report import CheckReport, finding
-from contracts.schema.stage0 import RemovalReport
+from contracts.schema.stage0 import Stage0Snapshot, Stage0Revisions
 from contracts.schema.stage1 import HookCopy, MainText, PartitionReport
 from novel import prov
 from novel.core.ingest import chapter_number, scan_text, tail_is_only_end_marker
@@ -22,7 +22,7 @@ from novel.stages.stage1.partition import (
     HOOK_COPY,
     MAIN_TEXT,
     REPORT,
-    STAGE0_REPORT,
+    STAGE0_STATE,
 )
 
 
@@ -36,7 +36,7 @@ def check(
     hook_copy: HookCopy,
     *,
     clean_text: str,
-    stage0: RemovalReport,
+    stage0: Stage0Snapshot,
 ) -> list[Outcome]:
     '''跨四份产物重算分章；报告字段不能拿自己给自己作证。'''
     out: list[Outcome] = []
@@ -272,7 +272,10 @@ def check(
 def run_check_only(ctx: RunContext) -> CheckReport:
     '''复检盘上 stage1 三份产物及当前 stage0 输入，不写盘。'''
     store = ArtifactStore(ctx)
-    stage0 = store.read(RemovalReport, STAGE0_REPORT)
+    from novel.stages.stage0 import revisions as stage0_revisions
+    stage0_log = store.read(Stage0Revisions, STAGE0_STATE)
+    stage0_revisions.verify_chain(stage0_log)
+    stage0 = stage0_revisions.snapshot_of(stage0_log)
     clean_text = store.read_text(CLEAN_TEXT)
     main_text, _main_raw = store.read_own(MainText, MAIN_TEXT)
     hook_copy, _hook_raw = store.read_own(HookCopy, HOOK_COPY)

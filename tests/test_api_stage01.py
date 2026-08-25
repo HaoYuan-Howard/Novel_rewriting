@@ -73,7 +73,7 @@ def test_real_http_flow_from_upload_through_stage1(client: TestClient, root: Pat
     report = report_response.json()
     view = segments_response.json()
     assert report['total_code_points'] == len(TEXT)
-    assert report['approval'] == {'status': 'pending'}
+    assert report['executable'] is False
     assert view['available'] is True and view['reason'] is None
     assert ''.join(segment['text'] for segment in view['segments']) == TEXT
 
@@ -83,7 +83,6 @@ def test_real_http_flow_from_upload_through_stage1(client: TestClient, root: Pat
         if segment['kind'] == 'keep' and '第二句文案' in segment['text'])
     request = {
         'expected_revision_id': report['revision_id'],
-        'expected_normalized_source_sha1': report['normalized_source_sha1'],
         'removed_segment_ids': [*machine, manual],
         'actor': 'api-stage01-test',
         'reason': 'exercise audited edit route',
@@ -96,8 +95,9 @@ def test_real_http_flow_from_upload_through_stage1(client: TestClient, root: Pat
     edited = client.get(f'/api/novels/{sid}/stage0/report').json()
     assert edited['revision_id'] != report['revision_id']
     assert edited['revision_origin'] == 'human_edit'
-    assert edited['approval'] == {'status': 'pending'}
-    assert any(segment['origin'] == 'human' for segment in edited['removed'])
+    assert edited['executable'] is False
+    edited_segments = client.get(f'/api/novels/{sid}/stage0/segments').json()['segments']
+    assert any(segment['origin'] == 'human' for segment in edited_segments)
 
     stale = client.post(f'/api/novels/{sid}/stage0/edit', json=request, headers=UI)
     assert stale.status_code == 409
@@ -154,7 +154,8 @@ def test_pre_approval_partition_preview_is_reachable_before_anyone_approves(
     sid = response.json()['sid']
 
     report = client.get(f'/api/novels/{sid}/stage0/report').json()
-    assert report['approval'] == {'status': 'pending'} and report['removed'] == []
+    segments = client.get(f'/api/novels/{sid}/stage0/segments').json()['segments']
+    assert not [segment for segment in segments if segment['kind'] == 'remove']
     # ⚠ 执行资格是**后端算好投影下来的**，不是前端自己从 approval 推的
     #   （评审点名的第五处消费方，2026-08-22 收口）。
     assert report['executable'] is False
@@ -204,10 +205,9 @@ def test_stage0_refuses_to_remove_the_end_marker(client: TestClient):
         f'/api/novels/{sid}/stage0/edit',
         json={
             'expected_revision_id': report['revision_id'],
-            'expected_normalized_source_sha1': report['normalized_source_sha1'],
-                'removed_segment_ids': selected,
-                'actor': 'api-stage01-test',
-                'reason': 'negative end-marker test',
+            'removed_segment_ids': selected,
+            'actor': 'api-stage01-test',
+            'reason': 'negative end-marker test',
         },
         headers=UI,
     )
@@ -221,19 +221,16 @@ def test_missing_original_is_explicitly_unavailable(client: TestClient, root: Pa
     ⚠ 上传那一支不记绝对路径（它跟着 base 走），所以这里按**内容地址**定位那份 blob
     再删掉它——那正是产物说的那份东西没了。
     """
-    from novel import paths as novel_paths
-
     sid = _upload(client)['sid']
-    report = client.get(f'/api/novels/{sid}/stage0/report').json()
-    ref = report['source_ref']
-    assert ref['kind'] == 'managed_upload', '界面上传必须写成上传那一支'
-    (novel_paths.uploads_dir(root) / ref['blob_sha256'] / ref['filename']).unlink()
+    blobs = list((root / '_service' / 'uploads').glob(f'*/{FILENAME}'))
+    assert len(blobs) == 1, '界面上传必须落进唯一内容地址目录'
+    blobs[0].unlink()
 
     response = client.get(f'/api/novels/{sid}/stage0/segments')
     assert response.status_code == 200
     assert response.json()['available'] is False
     assert response.json()['segments'] == []
-    assert ref['filename'] in response.json()['reason']
+    assert FILENAME in response.json()['reason']
 
 
 def test_original_survives_moving_the_output_root(client: TestClient, root: Path):
@@ -261,7 +258,6 @@ def test_original_survives_moving_the_output_root(client: TestClient, root: Path
         with TestClient(create_app(moved)) as moved_client:
             after = moved_client.get(f'/api/novels/{sid}/stage0/segments').json()
         assert after['available'] is True, after.get('reason')
-        assert after['normalized_source_sha1'] == before['normalized_source_sha1']
         assert [segment['text'] for segment in after['segments']] == \
             [segment['text'] for segment in before['segments']]
     finally:

@@ -28,13 +28,13 @@
 实例：`stage1/partition_report.json` 里能由 `main_text.json` / `hook_copy.json` /
 目录名 / 原文现算的字段都不落盘。
 留下来的判准是**不可再生**：`normalized_source_sha1`（没有记录值就没法判「有人换过原文」）、
-剔除记账（记的是一段已经被丢弃、盘上不留副本的文本，见 `stage0.md` §2.2）。
+剔除决定（尤其人工圈选无法从 clean 反推，见 `stage0.md` §2.5）。
 
 ## 目录
 
 | 文件 | 覆盖 |
 |---|---|
-| `stage0.md` | `clean_text.txt` · `removal_report.json` |
+| `stage0.md` | `revisions.json` · `clean_text.txt` |
 | `stage1.md` | `main_text.json` · `hook_copy.json` · `partition_report.json` |
 | `stage2.md` | `global_grounding.json` · `chapter_blueprints.json`　**全链第一个调 LLM 的层** |
 | `stage3.md` | `style_grounding.json`　v2 免费机械基线、测量契约与下游最小投影 |

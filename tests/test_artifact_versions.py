@@ -72,20 +72,15 @@ _SHAPE_BREAKS: dict[str, tuple[int, str, str]] = {
         '成书 txt 不是注册产物不受影响（用户 2026-08-22 裁定 stale 无害）；'
         '「四人成行」卡在 stage2、同日裁定作废 ⇒ 本次存量代价为零，形状破坏趁这个窗口',
     ),
-    'stage0/removal_report.json': (
-        3,
-        '2026-08-22 两次破坏。阶段 B（三刀）：① `warnings[]` 从 `{kind, message}` '
-        '换成按 kind 判别的结构化证据；② 顶层四个平铺可空审批字段收成 '
-        '`approval` 判别联合；③ `original_path: str` 换成 `source_ref` 判别联合。'
-        '阶段 C：本份产物退成 `stage0/revisions.json` 中 `current` 的**物化投影**，'
-        '身份六格（`round` · 三格 `machine_*` · 两格 `audit_*`）换成 '
-        '`revision_id` + `revision_origin`，`edited_by_human` 随之出局'
-        '（它是 `origin == human_edit` 的同义反复，且说不出「人采纳了机器新结果」）',
-        '`stage0.remove --source <原文>` 免费重跑（零 LLM）。'
-        '⚠ 重建后审批回到 `pending`，必须人工重批才具执行资格。'
-        '⚠ 同批整份下线三份产物：`stage0/machine_snapshot.json`、'
-        '`stage0/merge_candidate.json`、`stage0/_audit/edit_{n}.json`——'
-        '它们守的事全部由 revision 链本身承担，存量一律作废不迁移',
+    'stage0/revisions.json': (
+        2,
+        '2026-08-25 Stage0 减法：原文身份提升到根部；revision content 删除 '
+        '`original_filename/source_ref/normalized_source_sha1/source_encoding/text_norm/'
+        'total_code_points/clean_sha1/body_code_points/warnings` 派生或链级字段；'
+        '`removed[]` 删除 line_no/code_points/head_preview/tail_preview；'
+        '`removal_report.json` 整份下线，运行时 snapshot 现算',
+        '`stage0.remove --source <原文>` 免费重跑（零 LLM），随后人工重批。'
+        '用户已明确现有两本书留到 Stage0～7 减法完成后统一重建',
     ),
     'stage1/partition_report.json': (
         2,
@@ -244,7 +239,7 @@ _SHAPE_BREAKS: dict[str, tuple[int, str, str]] = {
         '它要变 current 本来就得付费重跑一次。'
         '⚠ `outputs/_ab/flash/` 那两份 v1 快照不在此列——它们已由同表 '
         '`stage6/hook.json` 那一条明确退役为**只读历史实验证据**，且本批之前就读不进来'
-        '（`stage0/removal_report.json` v1 而当前 v3、`stage1/*` v1 而当前 v2，'
+        '（`stage0/removal_report.json` v1 而现役已下线、`stage1/*` v1 而当前 v2，'
         '还带着阶段 C 已下线的 `stage0/_audit/edit_1.json`）',
     ),
 }

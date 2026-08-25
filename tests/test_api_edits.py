@@ -30,7 +30,7 @@ from novel.run import RunContext                    # noqa: E402
 from novel.stages.stage7 import assemble, rename    # noqa: E402
 from tests import corpus, sandbox                  # noqa: E402
 
-INPUTS = ('stage0/removal_report.json',
+INPUTS = ('stage0/revisions.json',
           'stage1/main_text.json', 'stage1/hook_copy.json',
           'stage1/partition_report.json',
           'stage2/global_grounding.json', 'stage2/chapter_blueprints.json',

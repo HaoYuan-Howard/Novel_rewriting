@@ -9,7 +9,6 @@
 """
 from __future__ import annotations
 
-import hashlib
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -29,9 +28,7 @@ from novel.orchestrator import uploads
 from novel.stages.stage0 import checks as stage0_checks
 from novel.stages.stage0 import removal
 from novel.stages.stage0 import revisions as rev
-from novel.stages.stage0.removal import (
-    CLEAN_REL, REPORT_REL, _context, run_edit, run_source,
-)
+from novel.stages.stage0.removal import CLEAN_REL, _context, run_edit, run_source
 
 
 def _source(tmp_path: Path, sid: str = '900') -> Path:
@@ -118,7 +115,7 @@ def test_first_run_writes_one_machine_root_and_materializes_the_live_pair(tmp_pa
 
     # 两份 live 产物就是 current 的物化投影，逐字。
     assert (novel_dir / CLEAN_REL).read_text(encoding='utf-8') == root.content.clean_text
-    assert result.report == rev.report_of(log)
+    assert result.report == rev.snapshot_of(log)
     assert result.report.revision_id == root.revision_id
     assert result.report.revision_origin == 'machine'
     # 零命中首跑照样停在人工闸前（2026-08-21 停产自动批）。
@@ -145,8 +142,6 @@ def test_revision_id_recomputes_from_its_preimage_and_tampering_is_refused(tmp_p
     forged = '被改过的正文。'
     content = raw['revisions'][0]['content']
     content['clean_text'] = forged
-    content['clean_sha1'] = hashlib.sha1(forged.encode('utf-8')).hexdigest()
-    content['body_code_points'] = len(forged)
     path.write_text(json.dumps(raw, ensure_ascii=False), encoding='utf-8', newline='')
 
     with pytest.raises(ArtifactUnreadable, match='id 与内容对不上'):
@@ -205,29 +200,25 @@ def test_revision_id_ignores_time_and_code_so_a_dismissed_candidate_stays_dismis
 # ── ② 物化投影：可自愈，但手改会被拦住 ──────────────────────────────────────
 
 
-def test_interrupted_materialization_heals_on_the_next_write_path(tmp_path, monkeypatch):
-    """崩在两次 write 之间 ⇒ 下一条写路径按链重新物化。**这就是删掉 WAL 的依据。**"""
+def test_stale_materialization_heals_on_the_next_write_path(tmp_path, monkeypatch):
+    """正文投影停在链上旧版 ⇒ 下一条写路径按 current 重新物化。"""
     source = _source(tmp_path, '920')
     novel_dir, _first, _ = run_source(source, tmp_path / 'Output')
     stale_clean = (novel_dir / CLEAN_REL).read_bytes()
-    stale_report = (novel_dir / REPORT_REL).read_bytes()
 
     _machine_learns_new_extra(monkeypatch)
     run_source(source, tmp_path / 'Output')          # 当前稿是机器且 pending ⇒ 直接替换
     fresh_clean = (novel_dir / CLEAN_REL).read_bytes()
-    fresh_report = (novel_dir / REPORT_REL).read_bytes()
     assert fresh_clean != stale_clean
 
     # 手工把盘面退回「物化只完成一半」的样子：live 是**链上另一版**的正文。
     (novel_dir / CLEAN_REL).write_bytes(stale_clean)
-    (novel_dir / REPORT_REL).write_bytes(stale_report)
     drifted = stage0_checks.run_check_only(_context(novel_dir, 'stage0.remove'))
     chain = next(line for line in drifted.rules if line.rule == 's0_revision_chain')
     assert chain.status == 'hit'
 
     run_source(source, tmp_path / 'Output')
     assert (novel_dir / CLEAN_REL).read_bytes() == fresh_clean
-    assert (novel_dir / REPORT_REL).read_bytes() == fresh_report
 
 
 def test_bypassing_the_entry_point_to_edit_clean_text_is_refused_not_overwritten(
@@ -255,7 +246,7 @@ def test_same_machine_result_changes_nothing_on_disk(tmp_path):
     source = _source(tmp_path, '930')
     novel_dir, _first, _ = run_source(source, tmp_path / 'Output')
     before = {rel: (novel_dir / rel).read_bytes()
-              for rel in (CLEAN_REL, REPORT_REL, rev.REVISIONS_REL)}
+              for rel in (CLEAN_REL, rev.REVISIONS_REL)}
 
     run_source(source, tmp_path / 'Output')
 
@@ -291,7 +282,6 @@ def test_machine_rerun_only_proposes_a_candidate_when_something_could_be_lost(
     else:
         _edit(novel_dir, tmp_path, first.clean_text + '人工补记一行。\n')
     before_clean = (novel_dir / CLEAN_REL).read_bytes()
-    before_report = (novel_dir / REPORT_REL).read_bytes()
 
     _machine_learns_new_extra(monkeypatch)
     run_source(source, tmp_path / 'Output')
@@ -302,7 +292,6 @@ def test_machine_rerun_only_proposes_a_candidate_when_something_could_be_lost(
     assert candidate.origin == 'machine'
     # 正式稿一个字不动：候选只是链上一条还没被指向的 revision。
     assert (novel_dir / CLEAN_REL).read_bytes() == before_clean
-    assert (novel_dir / REPORT_REL).read_bytes() == before_report
 
 
 def test_a_changed_source_is_refused_before_anything_is_written(tmp_path):
@@ -429,7 +418,6 @@ def test_approval_rolls_back_to_pending_when_the_source_moves_mid_commit(
     source = _source(tmp_path, '950')
     novel_dir, _first, _ = run_source(source, tmp_path / 'Output')
     before = (novel_dir / rev.REVISIONS_REL).read_bytes()
-    before_report = (novel_dir / REPORT_REL).read_bytes()
     original_write = removal.ArtifactStore.write
 
     def write_then_move_source(self, rel, artifact):
@@ -444,7 +432,6 @@ def test_approval_rolls_back_to_pending_when_the_source_moves_mid_commit(
         _approve(novel_dir)
 
     assert (novel_dir / rev.REVISIONS_REL).read_bytes() == before
-    assert (novel_dir / REPORT_REL).read_bytes() == before_report
 
 
 def test_approving_moves_only_the_gate_and_never_forks_the_chain(tmp_path):
@@ -459,7 +446,7 @@ def test_approving_moves_only_the_gate_and_never_forks_the_chain(tmp_path):
     novel_dir, _first, _ = run_source(_source(tmp_path, '961'), tmp_path / 'Output')
     before_clean = (novel_dir / CLEAN_REL).read_bytes()
     before = _log(novel_dir).current.revision_id
-    assert not is_stage0_executable(rev.report_of(_log(novel_dir)))
+    assert not is_stage0_executable(rev.snapshot_of(_log(novel_dir)))
 
     approved = _approve(novel_dir)
 

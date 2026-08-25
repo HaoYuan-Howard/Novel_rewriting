@@ -34,7 +34,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from contracts.artifacts import (  # noqa: E402
     STAGE0_CLEAN_TEXT,
-    STAGE0_REMOVAL_REPORT,
+    STAGE0_REVISIONS,
     STAGE1_HOOK_COPY,
     STAGE1_MAIN_TEXT,
     STAGE1_PARTITION_REPORT,
@@ -42,7 +42,7 @@ from contracts.artifacts import (  # noqa: E402
 )
 from contracts.invariants import HOOK_SLOTS, NODES  # noqa: E402
 from contracts.schema import artifact_spec, decode_artifact  # noqa: E402
-from contracts.schema.stage0 import RemovalReport  # noqa: E402
+from contracts.schema.stage0 import Stage0Revisions  # noqa: E402
 from contracts.schema.stage1 import HookCopy, MainText, PartitionReport  # noqa: E402
 from novel import config, paths, prov  # noqa: E402
 from novel.llm.budget import (  # noqa: E402
@@ -59,6 +59,7 @@ from novel.llm.prompts import with_json_shape  # noqa: E402
 from novel.llm.transport import ChatRequest  # noqa: E402
 from novel.orchestrator.nodes import build_argv  # noqa: E402
 from novel.stages.stage0.removal import remove_bytes  # noqa: E402
+from novel.stages.stage0 import revisions as stage0_revisions  # noqa: E402
 from novel.stages.stage1.partition import partition_text  # noqa: E402
 from novel.stages.stage2 import extract as stage2_extract  # noqa: E402
 from novel.stages.stage2.contract import active_contract  # noqa: E402
@@ -242,9 +243,11 @@ def _stage1_book(book: BookSpec) -> dict[str, Any]:
     if unexpected:
         raise ValueError(
             f'{novel_dir} 必须只含 stage0/1；发现下游或未知目录/文件 {unexpected}')
-    report = _read_current(
-        STAGE0_REMOVAL_REPORT, novel_dir / STAGE0_REMOVAL_REPORT, RemovalReport)
-    assert isinstance(report, RemovalReport)
+    revisions = _read_current(
+        STAGE0_REVISIONS, novel_dir / STAGE0_REVISIONS, Stage0Revisions)
+    assert isinstance(revisions, Stage0Revisions)
+    stage0_revisions.verify_chain(revisions)
+    report = stage0_revisions.snapshot_of(revisions)
     if report.approval.status != 'approved':
         raise ValueError(
             f'{novel_dir}: Stage0 状态 {report.approval.status!r}，不允许预览付费重建')
@@ -255,7 +258,7 @@ def _stage1_book(book: BookSpec) -> dict[str, Any]:
         raise ValueError(f'{clean_path} 不可读：{exc}') from exc
     clean_sha1 = prov.content_sha1(clean.encode('utf-8'))
     if clean_sha1 != report.clean_sha1:
-        raise ValueError('Stage0 clean_text 与已批准 removal_report.clean_sha1 不一致')
+        raise ValueError('Stage0 clean_text 与已批准 current revision 不一致')
     main = _read_current(STAGE1_MAIN_TEXT, novel_dir / STAGE1_MAIN_TEXT, MainText)
     hook = _read_current(STAGE1_HOOK_COPY, novel_dir / STAGE1_HOOK_COPY, HookCopy)
     partition = _read_current(

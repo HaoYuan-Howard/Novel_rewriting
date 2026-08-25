@@ -71,7 +71,7 @@ Flash 内容采样或可重试传输耗尽后可能由 Pro 兜底；若只记 `m
 
 ### 1.4 `root_clean_sha1` —— 全链根正文身份
 
-所有带 `_provenance` 的 artifact 与 `RemovalReport` 必填完整 40 位根哈希。
+所有带 `_provenance` 的 artifact 必填完整 40 位根哈希。
 中间 `inputs` 全都看似 fresh 也不能替代这条：Stage0 正文换过而 Stage1 尚未重建时，只有根身份
 能立即把 Stage1~7 及其字节产物标为 stale。`RunContext` 从当前已批准的 Stage0 正文建立根身份；
 一次运行内读到不同根、或写入来源账声明另一根，均在写盘前显式拒绝。旧 v1 不手补、不猜迁移。
@@ -87,7 +87,7 @@ Flash 内容采样或可重试传输耗尽后可能由 Pro 兜底；若只记 `m
 
 | 类型 | 宽度 | 用在哪 | 为什么是这个宽度 |
 |---|---|---|---|
-| **内容身份** | 40 | `stage0.normalized_source_sha1` / `clean_sha1` · `stage7.book_txt` 的指纹 | 它回答「**有人换过原文吗**」，人可能手工复核。截断买不到任何东西。⚠ `normalized_source_sha1` 算的是**归一化之后那段文本**，`sha1sum 原文.txt` 对不上是正常的——名字 2026-08-22 从 `source_sha1` 改成现在这个，就是为了不再诱导那种复核 |
+| **内容身份** | 40 | `stage0/revisions.json::source.normalized_source_sha1`、运行时 clean 指纹、`stage7.book_txt` 的指纹 | 它回答「**有人换过原文或正文吗**」，人可能手工复核。截断买不到任何东西。⚠ `normalized_source_sha1` 算的是归一化文本，不是原文件字节 digest |
 | **来源指纹** | 10 | `inputs` 的两格 · `prompts.*` · `draft_sha1` · `judged[].sha1` | 40 bit。本项目量级（一本书几十份产物）碰撞概率约 1e-6，而它天天出现在报告里，短一点可读 |
 
 **让两把尺子安全的规则只有一条：10 位永不与 40 位比较。**

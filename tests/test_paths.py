@@ -442,9 +442,7 @@ _TAIL_CASES = [
 def test_only_an_uploaded_source_tail_can_be_reanchored(recorded, expected):
     """`<任意 base>/_service/uploads/<内容地址>/<文件名>` **只有这一种形状**认得回来。
 
-    存在的理由：`stage0/removal_report.json::original_path` 记的是绝对路径，
-    Output 根一搬家就断，而界面上传的原文跟着 base 走、一个字节没变
-    ⇒ 拿这条尾巴 + 当前 base 就能重新锚回去（`novel/core/source.py`）。
+    管理上传以内容地址相对当前 base 定位；Output 根搬家时文件仍能按同一尾巴解析。
 
     ⚠⚠ **多认一种形状 = 把一条真信号洗成好消息。** 外部语料没了就是没了，
       那是契约有意接受的代价（`docs/schema/stage0.md`：文件被移走时是「不知道」，

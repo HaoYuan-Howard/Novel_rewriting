@@ -272,7 +272,7 @@ STAGE0_WARNINGS: Final = ('early_cut', 'drop_ratio', 'long_marker')
 #: 人工审阅闸门的状态。**两态，不是 `bool`**（2026-08-21 裁决，见 `docs/schema/stage0.md` §2.4）。
 #:
 #: 【历史】原型曾按「没跑过 · 跑了没批 · 批了」定成三态。其中 `not_run` 是**死值**：
-#: 一份合法的 `RemovalReport` 一旦存在，机器摄入必然已经跑过（它自己就带着机器指纹），
+#: 一份合法的 `Stage0Revisions` 一旦存在，机器摄入必然已经跑过，
 #: 「没跑过」在产物内不可诚实表达——全仓也从未有过写入方（preflight 存量扫描 0 实例，
 #: 2026-08-21）。「没跑 / 崩了 / 阻断」是**执行状态**，由「产物不存在 + JobState」表达。
 #: 【为什么不能是 `bool`】「跑了没批」与「批了」必须分开，与 `FRESHNESS` / `JOB_STATE` /
@@ -281,14 +281,14 @@ STAGE0_WARNINGS: Final = ('early_cut', 'drop_ratio', 'long_marker')
 #: `novel/stages/stage0/eligibility.py::is_stage0_executable`，消费方不许复述条件。
 #: ⚠ `ApprovedApproval` 曾有第三格 `origin: 'auto_zero_hit' | 'human'`，
 #: 2026-08-22 与 `not_run` 同一判据删除：产地 2026-08-21 已停产，而真正带着它的
-#: 存量产物是 v1，本产物现为 v3 且本仓不迁移 ⇒ 那些产物连 decode 都过不去，
+#: 存量产物是旧版且本仓不迁移 ⇒ 那些产物连 decode 都过不去，
 #: 该取值在盘上**结构不可达**（实测报 `schema v1 不是当前 v3`）。
 #: ⚠ 2026-08-22 起 `approved` 那四个平铺字段收成一格判别联合（`Stage0Approval`），
 #: 本元组仍是 `status` 那一格的取值面；两者的对账在 `tests/test_invariants.py`。
 APPROVAL_STATE: Final = ('pending', 'approved')
 
 # Human workflow checkpoints kept under Output/_service. These are service
-# state, not artifact approval fields such as stage0 RemovalReport.approved.
+# state, not Stage0 current approval fields.
 APPROVAL_GATES: Final = ('s0', 's1', 's2', 's3', 's4', 's5', 's6', 's7')
 APPROVAL_SEEN: Final = ('read', 'global')
 
@@ -1573,25 +1573,20 @@ class NodeSpec(NamedTuple):
 #: ⚠ 同一份产物可以被两个节点写（`stage6.hook` 产候选、`stage6.approve` 落定稿），
 #: 这不是重复登记：**一层要哪几份**取的是本层各节点的并集。
 NODES: Final[dict[str, NodeSpec]] = {
-    # ⚠ 2026-08-22 阶段 C：三个节点都先写 `stage0/revisions.json`（唯一可变格、
-    #   一次原子写就是提交），再把 `current` 物化成另外两份。三份都登记 ——
-    #   `produces` 回答的是「跑完这一步盘上该有哪几份」，物化投影同样在其中。
+    # Stage0 只有一个 JSON 权威和一个正文投影；运行时报告不落盘。
     'stage0.remove':    NodeSpec('stage0', 'R-0',  False, 'stage0 非正文剔除',
-                                 flags=('--source', '--dry-run', '--check-only'),
-                                 produces=(artifact_paths.STAGE0_REVISIONS,
-                                           artifact_paths.STAGE0_REMOVAL_REPORT,
-                                           artifact_paths.STAGE0_CLEAN_TEXT)),
+                                  flags=('--source', '--dry-run', '--check-only'),
+                                  produces=(artifact_paths.STAGE0_REVISIONS,
+                                            artifact_paths.STAGE0_CLEAN_TEXT)),
     'stage0.approve':   NodeSpec('stage0', 'R-0',  False, 'stage0 人工批准',
                                   flags=('--actor', '--reason'),
                                   required_flags=('--actor', '--reason'),
-                                  produces=(artifact_paths.STAGE0_REVISIONS,
-                                            artifact_paths.STAGE0_REMOVAL_REPORT)),
+                                   produces=(artifact_paths.STAGE0_REVISIONS,)),
     'stage0.edit':      NodeSpec('stage0', 'R-0',  False, 'stage0 人工编辑',
                                   flags=('--apply-edit', '--apply-edit-plan',
                                          '--apply-candidate-plan', '--actor', '--reason'),
-                                 produces=(artifact_paths.STAGE0_REVISIONS,
-                                           artifact_paths.STAGE0_REMOVAL_REPORT,
-                                           artifact_paths.STAGE0_CLEAN_TEXT)),
+                                  produces=(artifact_paths.STAGE0_REVISIONS,
+                                            artifact_paths.STAGE0_CLEAN_TEXT)),
     'stage1.partition': NodeSpec('stage1', 'R-1',  False, 'stage1 分章',
                                  flags=('--dry-run', '--check-only'),
                                  produces=(artifact_paths.STAGE1_MAIN_TEXT,

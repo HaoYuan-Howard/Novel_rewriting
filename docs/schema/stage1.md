@@ -142,7 +142,7 @@ stage1/partition_report.json  {…9 个字段…}                ← 见 §三
 | 谁 | 读什么 | 干什么 |
 |---|---|---|
 | **校验器** | 全部 | `R-1.3` / `R-1.5` / `R-1.12` / `R-1.13` / `R-1.14` 的判据 |
-| **S-03 原文↔切分对照屏** | `hook_span` · `chapter_spans` · `input_sha1` | 在 `clean_text` 上把「文案 / 各章」标出来。<br>**被剔除段的高亮来自 `stage0/removal_report.json` 的 `removed[].span`**，画在原始 txt 上 |
+| **S-03 原文↔切分对照屏** | `hook_span` · `chapter_spans` · `input_sha1` | 在 `clean_text` 上把「文案 / 各章」标出来。<br>被剔除段从 `stage0/revisions.json` 的 current `removed[].span` 读取，画在原始 txt 上 |
 
 **报告的字段本身不上屏**——上屏的是它记的那些**区间**。
 `warnings[]` 的落点是 S-13 校验报告的 `stage1` 那一份（`info` 级结论）。
@@ -160,8 +160,8 @@ stage1/partition_report.json  {…9 个字段…}                ← 见 §三
 **这两个是 `R-0.6` 的下半段。** 只记一个，「有人换过原始小说」和「有人改过 stage0 的剔除结果」
 就分不开了，而这两件事的处置完全相反（前者从头重跑，后者**是人有意为之、必须保住**）。
 
-⚠ 摄入元数据（`original_filename` / `source_ref` / `source_encoding` / `text_norm`）
-记在 `stage0/removal_report.json`，不在这里——**谁读原始 txt，谁记它的元数据**。
+⚠ 原文定位符与归一化源身份记在 `stage0/revisions.json::source`，不在这里重复；
+编码与归一化策略是 producer 行为，不再作为长期字段保存。
 
 ### 3.2 规模与分章
 

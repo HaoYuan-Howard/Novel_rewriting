@@ -113,7 +113,7 @@ Stage 3/5 各只有一条生产 prompt 路径，前端和调用方无需也不�
 | `POST /api/queues/:id/items/:index/cancel` | `QueueRun`（只取消尚未开始项） | **复用** `_orchestration.md` |
 | `POST /api/upload?filename=` | `UploadResult`（请求体为原始字节） | 新 |
 | `POST /api/novels/:sid/trash` | `TrashNovelResult`（请求体 `TrashNovelRequest.expected_title`；整本项目移入 `_service/trash/`） | 新 |
-| `GET /api/novels/:sid/stage0/report` | `Stage0Report` | **继承** `stage0.md` 的 `RemovalReport`，多三格视图投影，见下 |
+| `GET /api/novels/:sid/stage0/report` | `Stage0Report` | 从 `stage0/revisions.json` 派生的窄视图，见下 |
 | `GET /api/novels/:sid/stage0/segments` | `Stage0Segments` | 新 |
 | `GET /api/novels/:sid/stage0/partition-preview` | `Stage0PartitionPreview`（批准前的只读分章推演；**不写产物、不查审批状态**，见 `stage0.md` §2.4） | 新 |
 | `POST /api/novels/:sid/stage0/edit` | `JobRecord`（请求体 `Stage0EditRequest`） | 新 |
@@ -154,26 +154,19 @@ Stage 3/5 各只有一条生产 prompt 路径，前端和调用方无需也不�
 | `POST /api/novels/:sid/stage6/approve` | `JobRecord`（请求体 `HookApproveRequest`） | 新 |
 | `POST /api/novels/:sid/stage7/approve` | `JobRecord`（无请求体） | 新 |
 
-> #### `Stage0Report` 比产物多的那三格（2026-08-22 阶段 B）
+> #### `Stage0Report` 是窄视图
 >
-> 它**继承** `RemovalReport` 而不是抄一份——22 个字段抄第二遍就是 22 个会分家的字段。
-> 只覆盖 `warnings` 一格，另加一格投影：
+> 它不继承产物模型，只返回 Stage0 页面实际消费的六格：
 >
 > | 字段 | 说明 |
 > |---|---|
-> | `warnings[]` | `{warning, message}`：产物里的**结构化证据** + 服务端现渲染的那句话。产物只记证据（`stage0.md` §2.3），措辞唯一落点是 `novel/core/warnings.py`。⚠ 前端**不许自己拼措辞**，也不许拿 `message` 做分支（认告警仍然一律用 `warning.kind`） |
-> | `executable` | 这份报告**此刻能不能放行 stage1 与付费链**。它是唯一那个判官（`novel/stages/stage0/eligibility.py::is_stage0_executable`）的投影 |
+> | `original_filename` / `total_code_points` | 审校页标题与规模读数 |
+> | `warnings[]` | 运行时证据 + `novel/core/warnings.py::describe` 的措辞；前端不拼措辞 |
+> | `executable` | `novel/stages/stage0/eligibility.py::is_stage0_executable` 的投影；前端不从审批字段重算 |
+> | `revision_id` / `revision_origin` | 当前版乐观锁与来源展示 |
 >
-> ⚠ 这里曾有配套的第二格 `block_reason`（稳定理由码 `pending` ｜
-> `legacy_auto_approval_requires_review`），2026-08-22 随停产取值 `auto_zero_hit`
-> 一并删除：理由码只剩一个取值之后，它与 `executable` 表达的是同一个 bit，
-> 而**一个 bit 只留一个投影**。要再有第二种「批了却跑不得」的理由时整格加回来。
->
-> ⚠ **这不违反本文档纪律 ②（视图不许自己算判定）**：禁的是视图**自己算**一个判定。
-> 这一格恰恰相反——此前前端自己拼 `approved === 'approved' && origin === 'human'`，
-> 那才是第二个判官，而且是外部评审点名要收口的第五处消费方。
-> ⚠ 前端**不许**再从 `approval` 自己推资格：历史自动批显示「已批准」却跑不得，
-> 两处各写一遍迟早漏一处，而漏掉的那处就是自动绕过的复活口。
+> source ref、源/clean 指纹、removed、approval、producer code 均留在后端权威链或专用分区视图，
+> 不因“可能有用”复制到这个响应。
 
 ⚠ **preview 直接返回 `JobStart` 是有意的**，不是图省事：那个模型自带后置条件
 `paid == 任一步 paid` / `writes == 任一步 writes`，于是「整份贵贱是逐步折叠出来的」

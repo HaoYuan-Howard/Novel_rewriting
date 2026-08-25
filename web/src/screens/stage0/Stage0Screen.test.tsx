@@ -14,27 +14,13 @@ describe('Stage0Screen 新书起跑入口', () => {
   it('审批操作栏可以直接交给 Agent，同时保留人工 Stage0 操作', async () => {
     vi.spyOn(api, 'getStage0Report').mockResolvedValue({
       original_filename: 'book.txt',
-      source_ref: {
-        kind: 'managed_upload' as const,
-        blob_sha256: 'f'.repeat(64),
-        filename: 'book.txt',
-      },
-      code: 'code',
-      normalized_source_sha1: 'source',
-      clean_sha1: 'clean',
-      source_encoding: 'utf-8',
-      text_norm: 'NFC+LF',
-      removed: [],
       total_code_points: 300,
-      body_code_points: 300,
       warnings: [],
-      approval: { status: 'pending' as const },
       executable: false,
       revision_id: 'a'.repeat(64),
       revision_origin: 'machine' as const,
     })
     vi.spyOn(api, 'getStage0Segments').mockResolvedValue({
-      normalized_source_sha1: 'source',
       available: true,
       reason: null,
       segments: [],
@@ -73,23 +59,13 @@ describe('Stage0Screen 新书起跑入口', () => {
   it('人工批准无需填写表单，并按动作写入默认审计值', async () => {
     vi.spyOn(api, 'getStage0Report').mockResolvedValue({
       original_filename: 'book.txt',
-      source_ref: { kind: 'external_file' as const, absolute_path: 'book.txt' },
-      code: 'code',
-      normalized_source_sha1: 'source',
-      clean_sha1: 'clean',
-      source_encoding: 'utf-8',
-      text_norm: 'NFC+LF',
-      removed: [],
       total_code_points: 300,
-      body_code_points: 300,
       warnings: [],
-      approval: { status: 'pending' as const },
       executable: false,
       revision_id: 'a'.repeat(64),
       revision_origin: 'machine' as const,
     })
     vi.spyOn(api, 'getStage0Segments').mockResolvedValue({
-      normalized_source_sha1: 'source',
       available: true,
       reason: null,
       segments: [],
@@ -158,23 +134,13 @@ describe('Stage0Screen 原文审阅', () => {
     }))
     vi.spyOn(api, 'getStage0Report').mockResolvedValue({
       original_filename: 'book.txt',
-      source_ref: { kind: 'external_file' as const, absolute_path: 'book.txt' },
-      code: 'code',
-      normalized_source_sha1: 'source',
-      clean_sha1: 'clean',
-      source_encoding: 'utf-8',
-      text_norm: 'NFC+LF',
-      removed: [],
       total_code_points: 6220,
-      body_code_points: 6220,
       warnings: [],
-      approval: { status: 'pending' as const },
       executable: false,
       revision_id: 'a'.repeat(64),
       revision_origin: 'machine' as const,
     })
     vi.spyOn(api, 'getStage0Segments').mockResolvedValue({
-      normalized_source_sha1: 'source',
       available: true,
       reason: null,
       segments: rows,
@@ -216,24 +182,13 @@ describe('Stage0Screen 原文审阅', () => {
     //   只对正文做 diff3 保证不了整个聚合一致）——而是**整版留哪一版**。
     vi.spyOn(api, 'getStage0Report').mockResolvedValue({
       original_filename: 'book.txt',
-      source_ref: { kind: 'external_file' as const, absolute_path: 'book.txt' },
-      code: 'code',
-      normalized_source_sha1: '1111111111111111111111111111111111111111',
-      clean_sha1: '2222222222222222222222222222222222222222',
-      source_encoding: 'utf-8',
-      text_norm: 'NFC+LF',
-      removed: [],
       total_code_points: 10,
-      body_code_points: 10,
       warnings: [],
-      approval: { status: 'approved' as const,
-                  at: 'now', by: 'tester', reason: '看过了' },
       executable: true,
       revision_id: 'c'.repeat(64),
       revision_origin: 'human_edit' as const,
     })
     vi.spyOn(api, 'getStage0Segments').mockResolvedValue({
-      normalized_source_sha1: '1111111111111111111111111111111111111111',
       available: true,
       reason: null,
       segments: [],
@@ -241,24 +196,10 @@ describe('Stage0Screen 原文审阅', () => {
     vi.spyOn(api, 'getStage0Candidate').mockResolvedValue({
       candidate: {
         revision_id: 'd'.repeat(64),
-        parent_revision_id: 'c'.repeat(64),
         origin: 'machine' as const,
-        actor: null,
-        reason: null,
-        at: 'now',
-        code: 'code',
-        content: {
-          original_filename: 'book.txt',
-          normalized_source_sha1: '1'.repeat(40),
-          source_encoding: 'utf-8',
-          text_norm: 'NFC+LF',
-          total_code_points: 10,
-          clean_text: '机器新版正文',
-          clean_sha1: '6'.repeat(40),
-          body_code_points: 6,
-          removed: [],
-          warnings: [],
-        },
+        clean_text: '机器新版正文',
+        body_code_points: 6,
+        removed_count: 0,
       },
       current_revision_id: 'c'.repeat(64),
       current_body_code_points: 10,

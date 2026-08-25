@@ -39,9 +39,8 @@ def required_current_corpus_artifacts(chapters: int) -> frozenset[str]:
     fixed = {
         'stage0/clean_text.txt',
         # ⚠ 2026-08-22 阶段 C：`machine_snapshot.json` 整份下线，`revisions.json`
-        #   接替它成为本层的权威（另外两份退成它的物化投影）。
+        #   接替它成为本层的唯一 JSON 权威；clean_text 是正文投影。
         'stage0/revisions.json',
-        'stage0/removal_report.json',
         'stage1/hook_copy.json',
         'stage1/main_text.json',
         'stage1/partition_report.json',

@@ -124,7 +124,6 @@ export function Stage0Screen() {
       if (!sameIds(picked, initial)) {
         const request: Stage0EditRequest = {
           expected_revision_id: current.revision_id,
-          expected_normalized_source_sha1: current.normalized_source_sha1,
           removed_segment_ids: [...picked],
           actor: HUMAN_ACTOR,
           reason: HUMAN_REASON.edit,
@@ -248,8 +247,8 @@ export function Stage0Screen() {
                             key: 'candidate',
                             label: '机器新版（采纳它）',
                             revision: candidate.data.candidate.revision_id,
-                            chars: candidate.data.candidate.content.body_code_points,
-                            removed: candidate.data.candidate.content.removed.length,
+                            chars: candidate.data.candidate.body_code_points,
+                            removed: candidate.data.candidate.removed_count,
                             origin: candidate.data.candidate.origin,
                           },
                         ].map((side) => (
@@ -266,7 +265,7 @@ export function Stage0Screen() {
                       <details className="rounded-btn border border-line-soft bg-sunken-2 px-12 py-9">
                         <summary className="cursor-pointer text-body font-semibold">查看机器新版的完整正文</summary>
                         <pre className="m-0 mt-8 max-h-[360px] overflow-auto border-t border-line-soft pt-8 font-sans text-body whitespace-pre-wrap text-ink-2">
-                          {candidate.data.candidate.content.clean_text}
+                          {candidate.data.candidate.clean_text}
                         </pre>
                       </details>
                       <p className="prose-cn m-0 text-tag text-ink-4">

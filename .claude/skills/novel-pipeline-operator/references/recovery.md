@@ -117,7 +117,7 @@ schema version 写），不按记忆手抄。
 
 | 节点 | 0 成本写盘入口 | 需要 agent 自己写的输入 | 约束 |
 |---|---|---|---|
-| `stage0.edit` | `--apply-edit` · `--apply-edit-plan` · `--apply-candidate-plan` | 正式 edit / edit-plan / candidate-plan 形状 | 不直接覆盖 `clean_text.txt` 或 removal report——三者都只往 revision 链上追加一版，再由链物化成那两份产物。`--apply-candidate-plan` 是机器重跑候选的三选一裁决（`adopt` 采纳整版 / `dismiss` 保留当前版），与 edit-plan 同样带乐观锁（`expected_revision_id`）。⚠ 「采纳后再编辑」不是第三个动作，是 adopt 之后照常走 `--apply-edit-plan` |
+| `stage0.edit` | `--apply-edit` · `--apply-edit-plan` · `--apply-candidate-plan` | 正式 edit / edit-plan / candidate-plan 形状 | 不直接覆盖 `clean_text.txt`：三者都只向 `revisions.json` 追加一版，再由链物化唯一 clean 投影。`--apply-candidate-plan` 裁决机器候选（`adopt` / `dismiss`），与 edit-plan 同样带 `expected_revision_id` 乐观锁。⚠ 「采纳后再编辑」不是第三个动作，是 adopt 后照常走 `--apply-edit-plan` |
 | `stage2.global` | `--apply-edit` · `--review-decisions` · `--renormalize` · `--revalidate` | typed 修订（如 `reader_reveal_events` 时线）；`stage2/global_review_decisions.json` | 本层**有**通用 `--apply-edit`（见 [经验库](field-notes.md) FN-007）。先用只读 `--emit-review-template` 取得当前 item hash/evidence；模板默认全 `UNVER`，原样应用不会开闸。`--review-decisions` 按 `actor + 理由 + subject_sha256` 提交 PASS/FAIL/UNVER，subject hash 变更后旧决策被拒收 |
 | `stage2.blueprint` | `--renormalize` · `--revalidate` | finding 明确允许时编辑活动 `.INVALID` | 本层确实没有 `--apply-edit`；逐章内容的修正走 `--chapters <N>` 定向重生成（**付费**）或回上游 `stage2.global`。只改证据指向字段，不改生成轮次与来源账 |
 | `stage3.style` | 默认生产（无 flag） | 无 | 从当前 Stage1 完整重建机械基线；旧形状 formal/INVALID 走 shape-break 替换且不进入 `_rounds/`。`--measure-only` 与 `--check-only` 都只读 |

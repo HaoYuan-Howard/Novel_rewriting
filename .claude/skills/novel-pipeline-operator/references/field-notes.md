@@ -51,8 +51,8 @@ rg -n "stage6|hook_para_sep|exit 70" .claude/skills/novel-pipeline-operator/refe
   `pending`，这条红灯照常出现，`stage0.approve` 照常要跑。剔除分母为零时代批责任掉转方向做
   **反向漏剔**抽查，判据见[代批与终审契约](delegated-review.md#stage0-代批)。
 - ⚠ **不存在「历史自动批」这种状态**：记录它的取值与配套理由码都已删除。
-  存量自动批产物停在旧 schema 版本上，而 `stage0/removal_report.json` 已经破坏过形状、
-  本仓又不迁移旧产物 ⇒ 那些产物连读都读不进来。盘上遇到读不进来的旧 stage0，
+  存量自动批产物停在旧 schema 版本上，而现役权威已收成 `stage0/revisions.json`、
+  本仓又不迁移旧产物。盘上遇到读不进来的旧 stage0，
   正确处置是**免费重跑 `stage0.remove` 再人工批**，不是找一条兼容路。
 - 依据：`novel/stages/stage0/checks.py::check` 的 `s0_approval` 分支（批准状态非 approved 即命中）；
   `contracts/judges/stage0.py` 那一行的 sev 与 requirement；

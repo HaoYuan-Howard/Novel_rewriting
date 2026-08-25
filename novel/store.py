@@ -40,7 +40,7 @@ from typing import Any, Callable, Iterable, Iterator, TypeVar
 from pydantic import BaseModel, ValidationError
 
 from contracts.artifacts import (
-    STAGE0_CLEAN_TEXT, STAGE0_REMOVAL_REPORT, STAGE0_REVISIONS,
+    STAGE0_CLEAN_TEXT, STAGE0_REVISIONS,
     STAGE1_HOOK_COPY, STAGE1_MAIN_TEXT, STAGE1_PARTITION_REPORT,
     STAGE2_GLOBAL_GROUNDING, STAGE2_GLOBAL_REVIEW, STAGE4_WRITER_CONTEXT,
     STAGE5_BOOK_DRAFT,
@@ -68,9 +68,9 @@ REVALIDATION_DIRNAME = '_revalidation'
 
 # These no-provenance artifacts have a deterministic freshness bridge and are
 # written only after the companion facts needed by that bridge are available.
-# stage0 clean_text and stage1 main/hook are deliberately absent: each is the
-# first half of a multi-file write and cannot self-prove until the report lands.
-# ⚠ **stage0 整层都不在这里**（`revisions.json` 与 `removal_report.json` 一并），
+# stage0 clean_text and stage1 main/hook are deliberately absent: their freshness
+# depends on companion authority and, for Stage0, the external source edge.
+# ⚠ **stage0 整层都不在这里**（`revisions.json` 与 `clean_text.txt` 一并），
 #   那是有理由的、不是又漏了一条：它们的确定性边要去 resolve 真实原文，而
 #   「换了一份原文」在 stage0 是一条**合法的、由判据去拒**的路（`R-0.14`），
 #   写盘口再拒一次就把它变成写不进去。判别力落在判据那一侧，不在这道后置条件。
@@ -157,7 +157,7 @@ def _json_pointer_diff(before: Any, after: Any, pointer: str = '') -> tuple[str,
 def provenance_field(model: type[BaseModel]) -> str | None:
     """这个模型里哪个字段是来源账。没有就返回 `None`。
 
-    ⚠ **五份产物按契约就没有来源账**（stage0 的剔除报告 · stage1 的三份 ·
+    ⚠ **五份产物按契约就没有通用来源账**（stage0 revision 链 · stage1 的三份 ·
     `name_map_edit.json` 那份**人产的输入**）。那不是漏，别替它们补一份
     ——补出来的是一条没人验证过的记录。
     """
@@ -999,56 +999,11 @@ class ArtifactStore:
             os.replace(_filesystem_path(src), _filesystem_path(dest))
         return dest
 
-    def archive_bytes(self, rel: str, destination: str, *, keep: bool = False) -> Path:
-        '''把任意字节形态产物归档到显式目标；绝不覆盖已有目标。
-
-        stage0 的一轮由 removal_report.json 与 clean_text.txt 两种后缀组成，通用
-        archive_round 固定的 json 命名无法表达后者。目标名由 stage0 唯一函数构造，
-        此处只负责不覆盖、原子复制或移动。复制式归档遇到相同字节可幂等重放，
-        供多文件轮次从两次复制之间的中断恢复；移动式归档仍拒绝重放，避免制造幻影轮。
-        '''
-        source_rel = paths.check_rel_deep(rel)
-        destination_rel = paths.check_rel_deep(destination)
-        source = self.path(source_rel)
-        dest = self.path(destination_rel)
-        if not source.is_file():
-            raise UpstreamMissing(f'{self.ctx.node}: 要归档的 {source_rel} 不在盘上')
-        source_data = self._read_bytes(source_rel)
-        # Explicit byte archives are late-bound just like numbered JSON
-        # rounds.  An outer multi-artifact transaction cannot infer their
-        # destination from ``rel`` (stage0 uses custom suffixes; stage7 uses a
-        # content digest), so register both exact paths before the first
-        # mutation.  Outside a transaction this is deliberately a no-op.
-        self._track_history_path(source)
-        self._track_history_path(dest)
-        if _path_exists(dest):
-            try:
-                same = _is_file(dest) and _read_file_bytes(dest) == source_data
-            except OSError as exc:
-                raise ArtifactUnreadable(f'{self.ctx.node}: 读不了归档目标 {dest}：{exc!r}') from exc
-            if same:
-                if keep:
-                    # 中断可能发生在一轮多文件归档的两次复制之间。已经复制成功的那一份
-                    # 必须可安全重放，否则“重跑一次自愈”会被自己的归档位挡住。
-                    return dest
-                raise PathRefused(
-                    f'归档目标已存在且字节相同：{dest}。移动式归档不重放，'
-                    '否则会把同一版再记成一轮')
-            raise PathRefused(f'归档目标已存在且字节不同：{dest}。上一版不许被静默覆盖')
-        os.makedirs(_filesystem_path(dest.parent), exist_ok=True)
-        if keep:
-            self._replace_atomically(dest, source_data)
-        else:
-            os.replace(_filesystem_path(source), _filesystem_path(dest))
-        return dest
-
     def retire_bytes(self, rel: str, destination: str) -> Path:
         """Move live bytes to an immutable, content-addressed archive idempotently.
 
-        Unlike ``archive_bytes(..., keep=False)``, this operation deliberately
-        accepts an already-existing destination only when its bytes are exactly
-        identical.  That shape is needed when an interrupted/repeated invalidation
-        is retiring a derived live product, not recording a new logical round.
+        An already-existing destination is accepted only when its bytes are exactly
+        identical. This supports interrupted/repeated retirement of derived products.
         """
         source_rel = paths.check_rel_deep(rel)
         destination_rel = paths.check_rel_deep(destination)
@@ -1160,8 +1115,8 @@ class ArtifactStore:
     def _deterministic_freshness(self, rel: str) -> FreshnessReport | None:
         """没有通用来源块的产物，用其既有确定性指纹回答同一个问题。
 
-        stage0 的权威格 `revisions.json` 用 `current` 那一版自己的原文身份；同层两份
-        物化投影共用 removal report 的 source/clean 身份；stage1 三份共用 partition
+        stage0 的权威格 `revisions.json` 用根部原文身份；唯一物化正文从 current revision
+        取 clean_text；stage1 三份共用 partition
         report 的 input 身份；成书（`stage7/<书名>_rewriting.txt`）的身份由
         name_map.book_txt 承载。
         这些本来就是对应关卡使用的权威比对，完成度只复用，不另造一份账。
@@ -1173,8 +1128,8 @@ class ArtifactStore:
         """
         if rel == STAGE0_REVISIONS:
             return self._stage0_revisions_freshness()
-        if rel in (STAGE0_CLEAN_TEXT, STAGE0_REMOVAL_REPORT):
-            return self._stage0_freshness()
+        if rel == STAGE0_CLEAN_TEXT:
+            return self._stage0_clean_freshness()
         if rel in (STAGE1_MAIN_TEXT, STAGE1_HOOK_COPY, STAGE1_PARTITION_REPORT):
             return self._stage1_freshness()
         if rel == STAGE2_GLOBAL_REVIEW:
@@ -1192,51 +1147,51 @@ class ArtifactStore:
         """`stage0/revisions.json`：这条链是照盘上**现在这份原文**建的吗？
 
         ⚠ **不给它补 `_provenance`。** 本层是全链源头、`inputs` 恒空，「这份产物照什么
-        产的」由 `source_ref` / `normalized_source_sha1` 答完（理由写在
-        `contracts/schema/stage0.py` 模块头，同层另外两份产物也没有）。
+        产的」由链根 `source_ref` / `normalized_source_sha1` 答完（理由写在
+        `contracts/schema/stage0.py` 模块头）。
         补一个 `inputs` 恒空的来源块只是为了让通用那条路走通，等于给同一件事记第二本账。
 
-        ⚠⚠ **只有原文这一条上游边。** `clean_text.txt` 与 `removal_report.json` 是本格的
-        **物化投影**，在它下游——把投影当成自己的上游，就是让权威格拿自己的影子自证新鲜，
-        那种边永远 match，判别力是零。「两份 live 是不是 `current` 的投影」由判据
+        ⚠⚠ **只有原文这一条上游边。** `clean_text.txt` 是本格的物化投影，
+        在它下游——把投影当成自己的上游，就是让权威格拿自己的影子自证新鲜，
+        那种边永远 match，判别力是零。「clean live 是不是 `current` 的投影」由判据
         `s0_revision_chain`（`R-0.5`）逐条复算，完成度只读它、不另造一份。
 
-        身份取 `current` 指向的那一版：链的 well-formed 校验保证全链同一份原文，
-        但**读的是权威指针那一版**，不是碰巧排在第一条的那一版。
+        原文身份只在链根保存一次，不从任一 revision 反推。
         """
         chain = self._freshness_payload(STAGE0_REVISIONS)
         if chain is None:
             return FreshnessReport('unknown', 'no_provenance')
-        current = chain.get('current')
-        current_id = current.get('revision_id') if isinstance(current, dict) else None
-        revisions = chain.get('revisions')
-        if not isinstance(revisions, list) or not isinstance(current_id, str):
-            return FreshnessReport('unknown', 'no_provenance')
-        content = next(
-            (item.get('content') for item in revisions
-             if isinstance(item, dict) and item.get('revision_id') == current_id),
-            None)
-        if not isinstance(content, dict):
+        source = chain.get('source')
+        if not isinstance(source, dict):
             return FreshnessReport('unknown', 'no_provenance')
         edge = self._stage0_source_edge(
-            content.get('source_ref'), content.get('normalized_source_sha1'))
+            source.get('source_ref'), source.get('normalized_source_sha1'))
         if edge is None:
             return FreshnessReport('unknown', 'no_provenance')
         return self._content_report((edge,))
 
-    def _stage0_freshness(self) -> FreshnessReport:
-        report = self._freshness_payload(STAGE0_REMOVAL_REPORT)
-        if report is None:
+    def _stage0_clean_freshness(self) -> FreshnessReport:
+        chain = self._freshness_payload(STAGE0_REVISIONS)
+        if chain is None:
             return FreshnessReport('unknown', 'no_provenance')
-        clean_was = report.get('clean_sha1')
-        if not isinstance(clean_was, str) or not clean_was:
+        source = chain.get('source')
+        current = chain.get('current')
+        revisions = chain.get('revisions')
+        current_id = current.get('revision_id') if isinstance(current, dict) else None
+        if not isinstance(source, dict) or not isinstance(revisions, list) \
+                or not isinstance(current_id, str):
             return FreshnessReport('unknown', 'no_provenance')
-
+        content = next(
+            (item.get('content') for item in revisions
+             if isinstance(item, dict) and item.get('revision_id') == current_id), None)
+        clean_text = content.get('clean_text') if isinstance(content, dict) else None
+        if not isinstance(clean_text, str):
+            return FreshnessReport('unknown', 'no_provenance')
+        clean_was = prov.content_sha1(clean_text.encode('utf-8'))
         clean_now = self._content_sha1_or_none(STAGE0_CLEAN_TEXT)
         clean_edge = self._content_edge(STAGE0_CLEAN_TEXT, clean_was, clean_now)
-
         source_edge = self._stage0_source_edge(
-            report.get('source_ref'), report.get('normalized_source_sha1'))
+            source.get('source_ref'), source.get('normalized_source_sha1'))
         if source_edge is None:
             return FreshnessReport('unknown', 'no_provenance')
         return self._content_report((source_edge, clean_edge))
