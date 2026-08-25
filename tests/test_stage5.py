@@ -3,7 +3,7 @@
 """
 test_stage5.py —— 逐章写作 + 全书验收。
 
-⭐ **这一份里最值钱的是那 6 条 HARD 的反例样本。**
+⭐ **这一份里最值钱的是那 7 条 HARD 的反例样本。**
 盘上历史成稿对这些 HARD 是 **0 命中**，而「见过它通过」不是证据，「见过它红一次」才是
 （LESSONS 第 3 条）。stage4 / stage6 / stage7 合计 36 条 HARD 至今 0 反例样本——
 本层不再往那个数上加。
@@ -89,7 +89,8 @@ def _fire(text: str, entry: dict, book: M.Book) -> set[str]:
 def _clean_body(book: M.Book, entry: dict) -> str:
     name = sorted(book.names)[0] if book.names else '她'
     line = f'{name}把杯子放下，没有说话。窗外的雨敲在玻璃上，一下，又一下。'
-    return (line * 8)
+    lo, _hi = M.target_paragraphs(entry, book)
+    return '\n\n'.join(line for _ in range(lo))
 
 
 def _with_source_material(book: M.Book, entry: dict, *materials: str) -> M.Book:
@@ -102,17 +103,17 @@ def _with_source_material(book: M.Book, entry: dict, *materials: str) -> M.Book:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 一、⭐⭐ 6 条 HARD，**每条一份会让它红的样本**
+# 一、⭐⭐ 7 条 HARD，**每条一份会让它红的样本**
 # ─────────────────────────────────────────────────────────────────────────────
 
-def test_the_six_hard_judges_are_exactly_the_ones_we_have_samples_for():
+def test_the_seven_hard_judges_are_exactly_the_ones_we_have_samples_for():
     """守卫的守卫：**本层的 HARD 判据集合改了，下面样本就要跟着改。**
 
     多一条 HARD 而这里没有对应的反例，就又回到了「36 条 HARD 盘上 0 反例样本」那个欠账。
     """
     hard = {r.rule for r in REGISTRY.of_stage('stage5') if r.sev == 'hard'}
     assert hard == {'draft_too_short', 'draft_truncated', 'meta_leak', 'verbatim_missing',
-                    'keep_value_missing', 'secret_leak'}, (
+                    'keep_value_missing', 'secret_leak', 'paragraph_budget_missed'}, (
         f'stage5 的 HARD 集合变成了 {sorted(hard)}——'
         f'每新加一条 HARD 就要有一份会让它红的样本（LESSONS 第 3 条）')
 
@@ -126,6 +127,22 @@ def test_draft_too_short_goes_red_and_swallows_everything_else(book, entry):
     fs = checks.chapter_findings('太短了。', entry, book, given='')
     assert [f.rule for f in fs] == ['draft_too_short'], (
         '早退没生效——短稿上跑出了别的判据，那些数全是噪声')
+
+
+def test_paragraph_budget_has_an_exact_shared_boundary_and_a_red_counterexample(
+        book, entry):
+    """⭐ prompt 与判据共用同一目标；区间内不拦，少一段/多一段都明确变红。"""
+    assert prompts.target_paragraphs(entry, book) == M.target_paragraphs(entry, book)
+    lo, hi = M.target_paragraphs(entry, book)
+    line = '沈青合上账册，确认门外无人，才把最后一页重新摊开检查。'
+
+    for count in (lo, hi):
+        fs = checks._paragraph_budget('\n\n'.join([line] * count), entry, book)
+        assert [f.rule for f in fs] == ['paragraph_count_report']
+    for count in (lo - 1, hi + 1):
+        fs = checks._paragraph_budget('\n\n'.join([line] * count), entry, book)
+        assert [f.rule for f in fs] == [
+            'paragraph_count_report', 'paragraph_budget_missed']
 
 
 # ────────── 事件原子：「提不出」与「提错了」是两个层的账 ──────────
@@ -689,7 +706,7 @@ def test_the_two_phases_read_one_and_the_same_rule_table():
 
 
 def test_every_registered_rule_has_exactly_one_producer():
-    """⭐ 49 条判据**一条不多一条不少**地被实现覆盖。
+    """⭐ 51 条判据**一条不多一条不少**地被实现覆盖。
 
     ⚠ 少列一条，那一条在报告上就变 `skipped`——而 `skipped`（实现未被调用）与
     「跑了没命中」是**两种颜色**；多列一条，`builder` 会抛（那是「注册了没实现」的镜像病）。
@@ -699,9 +716,8 @@ def test_every_registered_rule_has_exactly_one_producer():
     assert len(mine) == len(set(mine)), '同一条判据被列了两次'
     assert set(mine) == reg, (f'注册了没实现：{sorted(reg - set(mine))}；'
                               f'实现了没注册：{sorted(set(mine) - reg)}')
-    # main 的 canonical 单臂注册表原有 50 条；Stage5 停止消费定性画像后，
-    # 删除前提已不可达的 `style_block_carries_plot`，其余现役规则完整保留。
-    assert len(reg) == 49
+    # canonical 单臂原有 49 条；新增段落目标的独立读数与硬结论后共 51 条。
+    assert len(reg) == 51
 
 
 def test_every_unver_rule_must_say_why_it_cannot_check():

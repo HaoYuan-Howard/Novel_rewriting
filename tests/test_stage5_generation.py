@@ -44,6 +44,51 @@ def test_length_capped_nonempty_draft_is_not_usable():
     assert write._reject_length_capped(complete.text, complete) is None
 
 
+def test_apply_edit_cannot_formalize_a_paragraph_budget_hard(tmp_path, monkeypatch):
+    """人工入口与模型入口共用段落硬闸；拒绝时原编辑文件与盘上正式稿都不变。"""
+    edit = tmp_path / 'ch01.json'
+    original = '{"segments":[{"slot":"s01","text":"第一段。"}]}'
+    edit.write_text(original, encoding='utf-8')
+    entry = {
+        'output_ordinal': 1, 'from_source_ordinals': [1],
+        'source_chars': 100, 'budget_chars': 100,
+        'segments': [{'slot': 's01'}],
+    }
+    book = SimpleNamespace(chapters={1: entry})
+
+    class Store:
+        writes = []
+
+        @staticmethod
+        def exists(_rel):
+            return False
+
+        @staticmethod
+        def next_round(_rel):
+            return 1
+
+    store = Store()
+    ctx = SimpleNamespace(free_provenance=lambda *_args, **_kwargs: object())
+    monkeypatch.setattr(write, 'ArtifactStore', lambda _ctx: store)
+    monkeypatch.setattr(write, 'require_canonical_layout', lambda _store: None)
+    monkeypatch.setattr(write.review, 'load_book', lambda *_args: book)
+    monkeypatch.setattr(
+        write, '_normalize_segments',
+        lambda segments, _book: (segments, write.M.NormalizeAccount()))
+    monkeypatch.setattr(
+        write.prompts, 'build_material',
+        lambda *_args, **_kwargs: SimpleNamespace(given='given'))
+    hit = SimpleNamespace(
+        rule='paragraph_budget_missed',
+        detail='自然段数量未命中明确目标：1 段，不在 3~4 段内')
+    monkeypatch.setattr(write, '_judge', lambda *_args, **_kwargs: ([hit], ['hard'], []))
+
+    with pytest.raises(TerminalState, match='段落数硬闸'):
+        write.run_apply_edit(ctx, str(edit))
+    assert edit.read_text(encoding='utf-8') == original
+    assert store.writes == []
+
+
 def test_over_length_chapter_keeps_pretrim_and_records_why(monkeypatch):
     """超上限 ⇒ 正文原样、落一条说得出理由的 audit。收缩臂已整臂下线，没有候选可采用。"""
     original = '甲' * 1200 + '。'

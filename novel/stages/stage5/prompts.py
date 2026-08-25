@@ -246,21 +246,8 @@ def target_band(entry: dict[str, Any]) -> tuple[int, int]:
 
 
 def target_paragraphs(entry: dict[str, Any], book: M.Book) -> tuple[int, int]:
-    """把字数目标换算成**段落数**目标。
-
-    ⚠ 实测（55 章全量闭卷）：只给字数目标时 **49/55 章超上限**、均段长从原书 15.5 胖到 28.2
-    ——模型对「字数」几乎没有感知，但对**段落数**很准。段落数同时锁住两个膨胀源
-    （段落变胖 + 段落变多）。
-
-    ⚠⚠ **两个口径必须先对齐，否则这个除法本身就是错的**：`avg_paragraph_chars` 数的是
-    **段内**字符（`measure()` 把行 strip 过、换行不计），而 `budget_chars` 是
-    `len(整章文本)`、**含段落分隔符**。直接相除等于拿含分隔符的总量去除不含分隔符的单价，
-    段数目标被系统性抬高 ~14%。⇒ 分母要加上每段的分隔符开销。
-    """
-    lo, hi = target_band(entry)
-    ap = book.measurable.get('avg_paragraph_chars') or 20
-    sep = book.sep_chars
-    return max(round(lo / (ap + sep)), 3), max(round(hi / (ap + sep)), 4)
+    """发给写手的段落目标；公式只在 `measure.target_paragraphs` 留一份。"""
+    return M.target_paragraphs(entry, book)
 
 
 def prev_context(entry: dict[str, Any], book: M.Book) -> str | None:

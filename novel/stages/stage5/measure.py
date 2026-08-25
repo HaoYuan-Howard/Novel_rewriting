@@ -281,6 +281,21 @@ def target_range(entry: dict[str, Any]) -> tuple[int, int]:
     return round(budget * lo), round(budget * hi)
 
 
+def target_paragraphs(entry: dict[str, Any], book: Book) -> tuple[int, int]:
+    """把篇幅带换算成段落数带，供下发面与落盘判据共同消费。
+
+    `avg_paragraph_chars` 是段内字符，而篇幅预算含段落分隔符；分母必须把两者相加，
+    否则目标段数会被系统性抬高。下限至少 3 段、上限至少 4 段，与既有下发契约一致。
+    """
+    lo, hi = target_range(entry)
+    avg_paragraph_chars = book.measurable.get('avg_paragraph_chars') or 20
+    paragraph_cost = float(avg_paragraph_chars) + book.sep_chars
+    if paragraph_cost <= 0:
+        raise ValueError('段均字数与段落分隔符开销之和必须为正数')
+    return (max(round(lo / paragraph_cost), 3),
+            max(round(hi / paragraph_cost), 4))
+
+
 def book_range(source_total: int) -> tuple[int, int]:
     """全书篇幅带。
 

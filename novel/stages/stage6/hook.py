@@ -73,6 +73,8 @@ class _Upstreams:
     """四份上游 + 从它们算出来的下发材料。**装载与判定分开，两条路共用这一份。**"""
 
     def __init__(self, ctx: RunContext, store: ArtifactStore) -> None:
+        from novel.stages.stage5.review import require_accepted_review
+        require_accepted_review(ctx, store)
         for rel in (GLOBAL_GROUNDING, STYLE_GROUNDING, WRITER_CONTEXT):
             if not store.exists(rel):
                 raise UpstreamMissing(f'{rel} 不在盘上——先跑 {rel.split("/")[0]}')

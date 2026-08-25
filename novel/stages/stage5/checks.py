@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-checks.py —— 49 条机械判据的实现。**行在 `contracts/judges/stage5.py`，这里只负责执行。**
+checks.py —— 51 条机械判据的实现。**行在 `contracts/judges/stage5.py`，这里只负责执行。**
 
 【本层与前四层最大的形状差异：机械表由写作闸门与全书验收共用】
 落盘闸门（写作相，逐章）与全书验收相**调同一个 `chapter_findings`**。
@@ -89,7 +89,8 @@ META_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
 #: `overlap_report` 拿源文与自己比恒等于 100%。
 #: 在源文上命中说明的是**计划**，不是判据。
 #: 章尾语义交付按定义是 UNVER，字面原子只作为 metric，不参与恒等基线。
-IDENTITY_NA = frozenset({'length_over', 'length_under', 'length_report', 'overlap_report',
+IDENTITY_NA = frozenset({'length_over', 'length_under', 'length_report',
+                         'paragraph_count_report', 'paragraph_budget_missed', 'overlap_report',
                          'source_overlap_high', 'end_hook_surface_report', 'end_hook_unver'})
 
 #: 这几条判的是「成稿有没有守住**从源文切出来的**材料」。源文当然守得住 ⇒
@@ -428,6 +429,30 @@ def _para_len_drift(body: str, book: M.Book) -> list[Finding]:
                                f'{got.avg_paragraph_chars} 字（{r:.2f}×），{which}',
                         evidence=[f'{base}->{got.avg_paragraph_chars}'])]
     return []
+
+
+def _paragraph_budget(body: str, entry: dict[str, Any], book: M.Book) -> list[Finding]:
+    """报告自然段数量，并对未命中下发目标给出独立 HARD。
+
+    目标公式与 prompt 共用 `measure.target_paragraphs`；这里不重新拼预算口径。
+    """
+    got = measure(body)
+    if got is None:
+        return []
+    lo, hi = M.target_paragraphs(entry, book)
+    count = got.paragraphs
+    out = [finding(
+        'paragraph_count_report',
+        detail=f'自然段：{count} 段（目标 {lo}~{hi} 段）',
+        evidence=[str(count), str(lo), str(hi)],
+    )]
+    if not lo <= count <= hi:
+        out.append(finding(
+            'paragraph_budget_missed',
+            detail=f'自然段数量未命中明确目标：{count} 段，不在 {lo}~{hi} 段内',
+            evidence=[f'{count} not in {lo}~{hi}'],
+        ))
+    return out
 
 
 _INLINE_CUE = re.compile(r'[：:]\s*[“「『"]')
@@ -814,6 +839,8 @@ def chapter_findings(text: str, entry: dict[str, Any], book: M.Book, *,
             detail=f'篇幅低于目标下限：{len(body)} 字 < {lo} 字',
             evidence=[f'{len(body)}<{lo}']))
 
+    fs += _paragraph_budget(body, entry, book)
+
     # ── 重合度：度量无条件出；**闭卷才有上界** ──────────────────────────────
     ov = M.overlap_ratio(body, entry, book.source_text)
     if ov is not None:
@@ -870,7 +897,7 @@ def blocking(fs: Iterable[Finding]) -> list[str]:
 def warnings_of(fs: Iterable[Finding]) -> list[str]:
     """`chNN.json.warns` —— 提示级判定的**字符串投影**。
 
-    ⚠ **恒非空**：4 条 metric（篇幅 / 重合度 / 破折号 / 连续短段）无条件产出
+    ⚠ **恒非空**：5 条 metric（篇幅 / 段落数 / 重合度 / 破折号 / 连续短段）无条件产出
     ⇒「有 warns」不携带任何信息，只有**读它是哪几条**才有。
     """
     return [f'[{f.rule}] {f.detail}' for f in fs if REGISTRY.get(f.rule).sev != 'hard']
@@ -1228,6 +1255,7 @@ _FROM_CHAPTER: tuple[str, ...] = (
     'must_appear_missing', 'secret_leak', 'secret_unknown',
     'invented_number', 'invented_name',
     'length_report', 'length_over', 'length_under',
+    'paragraph_count_report', 'paragraph_budget_missed',
     'overlap_report', 'source_overlap_high',
     'dialogue_report', 'dialogue_fewer', 'dialogue_broken',
     'dialogue_ratio_drift', 'quotes_in_unquoted_corpus',

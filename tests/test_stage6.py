@@ -628,6 +628,7 @@ def test_paid_hook_prompt_excludes_global_source_spans(monkeypatch):
     from types import SimpleNamespace
 
     from novel.core.evidence import iter_global_evidence_slots
+    from novel.stages.stage5 import review as stage5_review
     from tests import factories
     from tests.test_stage2 import global_grounding
 
@@ -677,6 +678,8 @@ def test_paid_hook_prompt_excludes_global_source_spans(monkeypatch):
             return stored[rel]
 
     monkeypatch.setattr(hook, 'ArtifactStore', lambda _ctx: Store())
+    # 本例只验证已获准主体的付费 prompt 投影；accepted Review 边界另有专门回归。
+    monkeypatch.setattr(stage5_review, 'require_accepted_review', lambda *_args: None)
     monkeypatch.setattr(
         hook, 'lead_drafts',
         lambda _store, _upto: (

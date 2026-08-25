@@ -67,7 +67,8 @@ slot 必须非空、唯一，并与 producer-owned 计划 slot 集合恰好相�
 顺序，不信模型数组顺序。默认写作在 transport 前检查 prompt-private 字段，响应到达后先闭合
 slot、逐槽归一，再跑内容判据。缺槽、重槽、多槽、未知键是显式终态；内容 HARD 不上移成
 响应拒收，而是保留已付费正文并落 `.INVALID`，让 `--revalidate` / `--apply-edit` 提供 0 成本
-恢复路。
+恢复路。段落目标也遵守这条边界：完整响应不因段落数越界而被 transport 重采并丢弃，
+而是在归一后由 `paragraph_budget_missed` 拦成 `.INVALID`。
 
 正式 `Chapter` 的字段如下；`segments[]` 是唯一正文权威，整章 `text` 只在运行时 / API
 由 `"\n\n".join(segment.text.strip())` 确定性投影，不再序列化第二份可漂移正文。
@@ -82,7 +83,7 @@ slot、逐槽归一，再跑内容判据。缺槽、重槽、多槽、未知键�
 | `overlap_excl_verbatim` | float / null | 是 | 20 字窗口重合率，扣除契约要求逐字保留的片段；短于窗口为 `null`，不是 0 | **契·码** |
 | `segments` | `ChapterSegment[]` | 是 | `{slot,text}`；slot 匹配 `^s\\d{2,4}$`、章内唯一 | **契·码** |
 | `warns` | str[] | 是 | finding 的人读字符串投影；metric 常驻，非空本身不代表异常 | **契·码** |
-| `errs` | str[] / 键不在 | 否 | `.INVALID` 中为阻断原因；人工正式稿允许带空或非空 errs，判定只报不拦 | **契·码** |
+| `errs` | str[] / 键不在 | 否 | `.INVALID` 中为阻断原因；人工正式稿可带其他 HARD 供 Review / wontfix 收口，但 `paragraph_budget_missed` 不得由 `--apply-edit` 正式化，正式下游拒绝任何当前 HARD | **契·码** |
 | `_provenance` | object | 是 | LLM 轮次账或人工 `RoundFreeProvenance` | **契·码** |
 
 v1 → v2 是破坏形状：删除 `mode`，路径从 `stage5/{mode}/chNN.json` 折平为
@@ -95,6 +96,10 @@ v1 → v2 是破坏形状：删除 `mode`，路径从 `stage5/{mode}/chNN.json` 
 
 逐章目标带 `DRAFT_BAND=0.80~1.20`（相对本章预算），全书带
 `BOOK_BAND=0.90~1.10`（相对全书源字数）。两把尺子回答不同问题，不得合并。
+自然段目标由 `measure.target_paragraphs` 把逐章篇幅带除以
+`avg_paragraph_chars + paragraph_sep_chars` 得出；prompt 与判据共用该函数。实际段数
+由 `paragraph_count_report` 无条件报出，未落入明确区间由 `paragraph_budget_missed` HARD
+拦截；`para_len_drift` / `band_drift` 仍只回答风格漂移，保持 INFO。
 超上限不触发模型自动裁剪：正文原样保留，落 identity `TrimAudit`，由人工
 `retain_pretrim` 或整章 `--apply-edit` 收口。
 
@@ -128,8 +133,10 @@ currentness 出口。状态取值：
 | `missing` | 盘上没有 Review；首轮写作可继续，`--revise` / 豁免 / s5 审批不可据此继续 |
 | `legacy_incompatible` | 发现旧 deep/shallow 布局，或最新 Review / live trim 低于当前 schema |
 
-`require_fresh_review` 关闭式守住付费 `--revise`、wontfix 与审批。旧报告不得驱动新付费动作；
-恢复命令是先在 canonical 章集合上零成本重跑 `stage5.review`。旧 Review v1 仍含
+`require_fresh_review` 关闭式守住付费 `--revise` 与 wontfix；它只回答“这份结论是否当前”。
+`require_accepted_review` 在此之上拒绝活动 `.INVALID`、缺正式章和任何当前 HARD，是 s5 审批、
+Stage6、Stage7 与最终交付的共同闸。旧报告不得驱动新付费动作；恢复命令是先在 canonical
+章集合上零成本重跑 `stage5.review`。旧 Review v1 仍含
 `mode/mode_dir`；现役 v2 删除这两格，由 producer 免费重建，不做迁移。
 
 ## 四、审批服务记录：HTTP v2，盘上 v3
@@ -178,8 +185,8 @@ proof 绑定根 `clean_text` SHA-1、正式主体完整 SHA-256 与决定面规�
 
 ## 六、判据注册表
 
-当前注册表共 **49 条**：**6 hard、27 info、11 metric、5 unver**。
-repair 分桶为 **12 UNIQUE、11 FREE、26 NONE**；repair 不是 severity，只有 UNIQUE 才能在
+当前注册表共 **51 条**：**7 hard、27 info、12 metric、5 unver**。
+repair 分桶为 **12 UNIQUE、12 FREE、27 NONE**；repair 不是 severity，只有 UNIQUE 才能在
 `unresolved_rounds < 2` 时进入付费 `--revise`，FREE / NONE 不得被包装成自动修复。
 
 | 判据 | sev | repair | 需求 |
@@ -201,6 +208,7 @@ repair 分桶为 **12 UNIQUE、11 FREE、26 NONE**；repair 不是 severity，�
 | `invented_name` | info | UNIQUE | `R-7.10` |
 | `length_over` | info | FREE | `R-7.8` |
 | `length_under` | info | FREE | `R-7.8` |
+| `paragraph_budget_missed` | hard | FREE | `R-7.25` |
 | `book_length` | info | NONE | `R-7.8` |
 | `source_overlap_high` | info | NONE | `R-7.6` |
 | `dialogue_fewer` | info | FREE | `R-7.20` |
@@ -218,6 +226,7 @@ repair 分桶为 **12 UNIQUE、11 FREE、26 NONE**；repair 不是 severity，�
 | `cross_chapter_number` | info | UNIQUE | `R-7.23` |
 | `quote_unbalanced` | info | NONE | `R-7.7` |
 | `length_report` | metric | NONE | `R-8.1b` |
+| `paragraph_count_report` | metric | NONE | `R-7.25` |
 | `overlap_report` | metric | NONE | `R-8.1b` |
 | `book_length_report` | metric | NONE | `R-8.1b` |
 | `dash_report` | metric | NONE | `R-7.21b` |
@@ -258,9 +267,9 @@ repair 分桶为 **12 UNIQUE、11 FREE、26 NONE**；repair 不是 severity，�
 旧双臂盘面曾有 31 章（deep 11 / shallow 20），并留下逐章带极值 0.814 / 1.206、全书比值
 0.949 / 1.022 / 0.980、旧规则命中与对白差异等读数。这些数字只用于解释阈值来历和识别
 判据退化，是 **v1 旧布局历史基线**；它们不是 canonical v2 current-schema corpus，不能用于
-宣称现役 Stage5 通过率、当前 HARD“0 命中”或当前 49 条判据的质量结论。
+宣称现役 Stage5 通过率、当前 HARD“0 命中”或当前 51 条判据的质量结论。
 
-canonical v2 产物、单臂入口、freshness、恢复路与 49 条判据的工程可靠性已经由定向及
+canonical v2 产物、单臂入口、freshness、恢复路与 51 条判据的工程可靠性已经由定向及
 非 corpus 回归验证。现役 beat-material 写作契约在设计上改为按 beat / material 组织闭卷材料，
 但原计划与旧 event-list 契约进行的受控双书付费 A/B 已在开跑前取消：没有实验正文、盲评结果
 或无正文 manifest。因此不得宣称 beat-material 在质量、成本或速度上胜出。

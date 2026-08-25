@@ -22,12 +22,12 @@ stage5/draft.md                  canonical 章产物的纯投影（字节形态�
 
   ② **判据 vs 载体在本层几乎全部倒向判据**：拒收 = 整章响应作废 = **再花一次高推理调用**
      （本层最贵的一次重试），而判据拦下 = 落 `.INVALID` + 人手改 / 重判 = **0 成本**。
-     ⇒ 现役 49 条判据**一条都不该上移**；少数够得着的（`from_source_ordinals` 长度恒 1）
+     ⇒ 现役 51 条判据**一条都不该上移**；少数够得着的（`from_source_ordinals` 长度恒 1）
      **本来就没有判据**，归载体是原样承认现状，不是收权。
      Stage5 的 `ask_json` 只在响应侧校验 segment 形状与 slot 闭合；保真等内容判据仍在
      落盘前完整执行，失败落 `.INVALID`，不把一次可恢复的付费正文当场丢掉。
 
-  ③ **现役 49 条：6 hard、27 info、11 metric、5 unver。**
+  ③ **现役 51 条：7 hard、27 info、12 metric、5 unver。**
      每条 HARD 都必须有最小反例走生产判据入口；新 canonical corpus 尚未跑完前，
      不拿旧双臂的命中数冒充当前质量基线。**「见过它通过」不是证据，
      「见过它红一次」才是。**
@@ -141,7 +141,7 @@ class Chapter(StrictModel):
 
     #: 提示级判定的**字符串投影**。盘上长度 4~9，共 187 条。
     #:
-    #: ⚠ **恒非空**：4 条 metric（篇幅 / 重合度 / 破折号密度 / 连续短段）无条件产出
+    #: ⚠ **恒非空**：5 条 metric（篇幅 / 段落数 / 重合度 / 破折号密度 / 连续短段）无条件产出
     #: ⇒ **「有 warns」不携带任何信息**，只有读它是哪几条才有。
     warns: list[str]
 
@@ -155,9 +155,9 @@ class Chapter(StrictModel):
     #:
     #: ⇒ 「状态只由文件名与 `errs` 区分」这句话**不再成立**：一份正式稿也可以带 `errs`，
     #: 甚至带非空的。今天靠 `_provenance.origin=human` 还分得开，**但那是第二个落点**。
-    #: ⚠ **非空 `errs` 的正式稿会一路进成书，没有一行报告会说**——
-    #: stage7 只排除 `.INVALID.json`，不看正式稿里的 `errs`。
-    #: 盘上零样本。**这是裁决的后果，不是 bug——但要写进契约。**
+    #: 非空 `errs` 的正式稿会进入下一轮 Review，供人工修复 / wontfix 收口；
+    #: `review.require_accepted_review` 会在审批、Stage6、Stage7 前拒绝当前 HARD，
+    #: 不再允许它静默进入成书。盘上零样本。
     errs: list[str] | None = None
 
     #: ⚠ **全链唯一带轮次账的产物。** 两种形状：模型产的那一份（`RoundLlmProvenance`）·

@@ -45,7 +45,10 @@ from contracts.schema.stage5 import (
 from novel import prov, wontfix
 from novel.consumption import stage5_style
 from novel.core.evidence import without_global_evidence
-from novel.errors import ArtifactUnreadable, TerminalState, UpstreamMissing
+from novel.errors import (
+    ArtifactUnreadable, BlockingFindingsUnresolved, GateBlocked, TerminalState,
+    UpstreamMissing,
+)
 from novel.report.builder import build
 from novel.run import RunContext
 from novel.stages.stage5 import checks
@@ -309,6 +312,38 @@ def require_fresh_review(ctx: RunContext, store: ArtifactStore | None = None) ->
     raise TerminalState(
         f'Stage5 Review 当前状态是 {status.state}：{reason}。'
         '旧结论不得驱动豁免、付费返工或审批；请先零成本运行 `stage5.review` 重算当前报告')
+
+
+def require_accepted_review(ctx: RunContext, store: ArtifactStore | None = None) -> ReviewStatus:
+    """正式下游的共同闸：Review 不仅 fresh，而且当前 Stage5 主体可接受。"""
+    store = store or ArtifactStore(ctx)
+    status = require_fresh_review(ctx, store)
+    assert status.review is not None
+
+    invalids = sorted(glob.glob(os.path.join(store.path('stage5'), 'ch*.INVALID.json')))
+    if invalids:
+        raise GateBlocked(
+            f'Stage5 仍有 {len(invalids)} 份 `.INVALID` 未裁决，不能进入正式下游',
+            invalid_path=str(store.path('stage5')),
+            hint='stage5.write --revalidate --actor <id> --reason <why>（0 成本提升），'
+                 '或 stage5.write --apply-edit <chNN.json 路径> 继续人工修复')
+
+    missing = [row.output_ordinal for row in status.review.chapters if row.relpath is None]
+    if missing:
+        raise UpstreamMissing(
+            f'Stage5 Review 仍缺正式章稿：{missing}',
+            hint='先用 stage5.write 补齐计划中的缺章，再零成本重跑 stage5.review')
+
+    findings = [f for row in status.review.chapters for f in row.findings]
+    findings.extend(status.review.book)
+    hard = sorted({f.rule for f in findings if f.sev == 'hard'})
+    if hard:
+        raise BlockingFindingsUnresolved(
+            f'Stage5 当前 Review 仍有阻断级判定 {hard}，不能批准、组装或交付',
+            rules=hard,
+            hint='按 Review 定位后用 stage5.write --apply-edit <chNN.json 路径> 修复，'
+                 '或定向重写该章；随后零成本重跑 stage5.review')
+    return status
 
 
 def load_wontfix(store: ArtifactStore) -> dict[str, WontFixEntry]:

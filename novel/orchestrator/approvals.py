@@ -514,8 +514,8 @@ def _stage5_subject_rels(
     planned = _planned(base, sid)
     assert planned is not None
     store = _store_for(paths.resolve_novel_dir(base, sid))
-    from novel.stages.stage5.review import require_fresh_review
-    review = require_fresh_review(store.ctx, store)
+    from novel.stages.stage5.review import require_accepted_review
+    review = require_accepted_review(store.ctx, store)
     assert review.review_rel is not None
     return [
         artifact_rel('stage5.chapter', nn=ordinal)

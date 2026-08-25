@@ -830,11 +830,9 @@ def run_apply_edit(ctx: RunContext, edit_path: str) -> CheckReport:
       · 上一轮 `inputs` 为空时**记下这次真实读过的那份并打上 `input_basis`**，
         明说它不是对历史的追认——**不知道不能记成匹配**。
 
-    ⚠ **人工稿仍有 `errs` 时只报不拦**（用户裁决：人手动改往往正是为了机器修不动的地方）。
-    判定落进 `errs`/`warns`，界面照常红着。
-    ⚠⚠ 而**下游没有第二道**：stage7 只排除 `.INVALID.json`，**不看正式稿里的 `errs`**
-    ⇒ 一份带阻断级判定的人工稿会一路进成书，没有一行报告会说。
-    这是裁决的后果不是 bug——**但要写进契约**（`stage5.md` §七）。
+    人工稿仍可带一般 `errs` 落为正式轮次，以便 Review / wontfix 看见并收口；但
+    `paragraph_budget_missed` 是写手与人工入口共用的明确结构契约，未命中时拒绝正式化。
+    下游另由 `review.require_accepted_review` 统一拒绝任何尚未消除的 HARD。
     """
     store = ArtifactStore(ctx)
     require_canonical_layout(store)
@@ -885,6 +883,11 @@ def run_apply_edit(ctx: RunContext, edit_path: str) -> CheckReport:
     fs, errs, warns = _judge(
         text, entry, book, mat=mat, account=acc,
         segments=segments)
+    paragraph_hard = [f for f in fs if f.rule == 'paragraph_budget_missed']
+    if paragraph_hard:
+        raise TerminalState(
+            f'人工稿仍未满足段落数硬闸：{paragraph_hard[0].detail}。'
+            f'文件未落盘，请继续编辑原文件 {p}')
     art = _chapter_record(entry, segments, book, warns=warns, errs=errs, # 空也写
                           provenance=provenance)
     trim_audit_rel = artifact_rel('stage5.trim_audit', nn=o)
@@ -893,8 +896,8 @@ def run_apply_edit(ctx: RunContext, edit_path: str) -> CheckReport:
         if store.exists(rel):
             _retire_trim_state(store, o)
         where = store.write_round(rel, art)
-    note = ([f'⚠ 人工稿仍有 {len(errs)} 条阻断级判定，**只报不拦**：{errs[0]}'
-             f'　⚠⚠ 下游没有第二道——stage7 只排除 `.INVALID`，这一份会一路进成书']
+    note = ([f'⚠ 人工稿仍有 {len(errs)} 条阻断级判定，已落盘供 Review / wontfix 收口：'
+             f'{errs[0]}；正式下游会由 accepted Review 闸阻断']
             if errs else [])
     assemble_book(ctx, store, book)
     return _report(ctx, store, written=[f'第 {o} 章 → {where}'], blocked=note,

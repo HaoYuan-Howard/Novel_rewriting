@@ -14,8 +14,9 @@ from contracts.schema import artifact_spec
 from contracts.schema.stage5 import (
     Chapter, ChapterSegment, JudgedDraft, Review, ReviewChapter,
 )
+from contracts.schema.report import finding
 from novel import prov
-from novel.errors import TerminalState
+from novel.errors import BlockingFindingsUnresolved, GateBlocked, TerminalState
 from novel.prov import FreshnessReport
 from novel.stages.stage5 import measure as M, review, write
 from tests import factories
@@ -160,6 +161,65 @@ def test_review_status_fresh_baseline_binds_the_complete_canonical_subject(statu
     status = review.review_status(status_rig.ctx, status_rig.store)
     assert status.state == 'fresh' and status.reasons == ()
     assert status.review_rel == 'stage5/review_1.json' and status.seq == 1
+
+
+def test_accepted_review_is_stricter_than_fresh_and_rejects_current_hard(
+        status_rig, monkeypatch):
+    """fresh 只回答“结论是否当前”；正式下游还必须回答“当前结论是否可接受”。"""
+    hit = finding(
+        'paragraph_budget_missed',
+        detail='自然段数量未命中明确目标：2 段，不在 31~46 段内',
+        evidence=['2 not in 31~46'],
+    ).model_copy(update={'output_ordinal': 1})
+    assert status_rig.store.review is not None
+    row = status_rig.store.review.chapters[0].model_copy(update={'findings': [hit]})
+    status_rig.store.review = status_rig.store.review.model_copy(
+        update={'chapters': [row]})
+
+    assert review.require_fresh_review(status_rig.ctx, status_rig.store).fresh
+    with pytest.raises(BlockingFindingsUnresolved) as caught:
+        review.require_accepted_review(status_rig.ctx, status_rig.store)
+    assert caught.value.rules == ('paragraph_budget_missed',)
+
+    from novel.orchestrator import approvals
+    monkeypatch.setattr(approvals, '_require_stage5_complete', lambda *_args: None)
+    monkeypatch.setattr(approvals, '_planned', lambda *_args: [1])
+    monkeypatch.setattr(approvals, '_store_for', lambda _novel_dir: status_rig.store)
+    monkeypatch.setattr(approvals.paths, 'resolve_novel_dir',
+                        lambda *_args: status_rig.store.root)
+    with pytest.raises(BlockingFindingsUnresolved):
+        approvals._stage5_subject_rels(
+            status_rig.store.root.parent, 'test-sid',
+            approvals._fresh_record('test-sid'))
+
+
+def test_accepted_review_rejects_an_unresolved_invalid_even_when_review_is_fresh(
+        status_rig):
+    status_rig.store.path('stage5/ch02.INVALID.json').write_text('{}', encoding='utf-8')
+    assert review.require_fresh_review(status_rig.ctx, status_rig.store).fresh
+    with pytest.raises(GateBlocked) as caught:
+        review.require_accepted_review(status_rig.ctx, status_rig.store)
+    assert caught.value.invalid_path == str(status_rig.store.path('stage5'))
+
+
+@pytest.mark.parametrize('consumer', ['stage6', 'stage7'])
+def test_formal_downstreams_call_the_accepted_review_guard_before_loading_inputs(
+        status_rig, monkeypatch, consumer):
+    """Stage6/7 不能各自退化成只看“有章稿”；共同 accepted 闸必须是首个动作。"""
+    class GuardReached(Exception):
+        pass
+
+    monkeypatch.setattr(
+        review, 'require_accepted_review',
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(GuardReached()))
+    if consumer == 'stage6':
+        from novel.stages.stage6 import hook
+        constructor = hook._Upstreams
+    else:
+        from novel.stages.stage7 import rename
+        constructor = rename._Upstreams
+    with pytest.raises(GuardReached):
+        constructor(status_rig.ctx, status_rig.store)
 
 
 @pytest.mark.parametrize(('mutation', 'reason'), [
