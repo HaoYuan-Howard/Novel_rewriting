@@ -10,6 +10,15 @@
 ⚠ `src/mocks/` 那 20 份是**冻结的证据基线**（与 design_handoff 逐字节一致，
 check-seams 钉着），本目录才是 mock 现役消费的数据源；两边不许互相覆盖。
 
+## ⚠ Stage4/Stage5 场景契约示例（2026-08-25）
+
+Stage2 原子事实契约与 Stage4 场景编译器替换后，旧 Stage4/Stage5 产物没有迁移路径。
+`stage4_ch3.json` 改为结构有效的现役小示例；`check_stage4.json` 由当前判据注册表生成，
+明确呈现「没有可重判的现役 Stage4 产物」的 `skipped` 状态。Stage5 夹具只保留展示用途，
+事实落点名称与现役 `fact_landing` 契约对齐；它们都不代表新链已做付费实证。
+原 `check_stage2.json` 抓包早于 v5，其中原子事实必填行因此明确标作 `unver`，不拿旧事件拍
+冒充 current-schema 的 fact atom 验收。
+
 ## ⚠⚠ `global.json` 是结构有效的 v3 示例，不是新抓包（2026-08-24）
 
 原抓包书已不在盘上，无法付费重建 `GlobalGrounding` v3。本文件因此收成一份小而完整的

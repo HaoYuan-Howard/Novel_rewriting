@@ -12,7 +12,7 @@ stage4.py —— S-07「计划 ↔ 写作上下文」那一屏（`GET /api/novel
   · 恒等也算不出（stage1/stage2 缺）⇒ 404（`UpstreamMissing`）。
 
 【判定不在这里】`in_band` / `style_hits` 是判据结论，唯一来源是 `/check/stage4`
-（`R-11.4`）。本屏只摆事实：预算、跨度、拍、材料。
+（`R-11.4`）。本屏只摆事实：语义契约、预算、新场景与写手任务。
 """
 from __future__ import annotations
 
@@ -24,7 +24,7 @@ from contracts.artifacts import (
 import os
 
 from contracts.schema.api import (
-    PlanBeatLine, PlanChapterLine, Stage4IndexRow, Stage4View,
+    PlanChapterLine, PlanSceneLine, Stage4IndexRow, Stage4View,
 )
 from contracts.schema.stage1 import MainText
 from contracts.schema.stage2 import ChapterBlueprints, GlobalGrounding
@@ -32,7 +32,7 @@ from contracts.schema.stage4 import CtxChapter, PlanChapters, WriterContext
 from novel import paths, prov
 from novel.errors import ArtifactUnreadable, UpstreamMissing
 from novel.orchestrator.state import artifact_state, readonly_ctx
-from novel.stages.stage4.beats import beat_index, group_beats
+from novel.stages.stage4.beats import beat_index
 from novel.stages.stage4.context import build_writer_context
 from novel.stages.stage4.measure import identity_plan
 from novel.stages.stage5.prompts import target_band
@@ -95,17 +95,22 @@ def stage4_view(base: str | os.PathLike[str], sid: str, ordinal: int) -> Stage4V
             chapter_goal=pc['chapter_goal'],
             open_hook_goal=pc['open_hook_goal'],
             end_hook_goal=pc['end_hook_goal'],
-            beats=[PlanBeatLine(i=i, slot=str(b['slot']), from_beats=list(b['from_beats']),
-                                budget_chars=b.get('budget_chars'),
-                                narrative_role=b.get('narrative_role') or 'bridge',
-                                delivery=b.get('delivery') or 'scene',
-                                transition=b.get('transition') or
-                                           ('start' if i == 1 else 'continue'),
-                                # ⚠ **不给 `or` 默认值**：`None` 是「没做过主次决策」的
-                                #   合法态（恒等基线），补一个 1 会让审阅的人以为
-                                #   这份计划挑过主干。旁边那三个的 `or` 是给存量载体读的。
-                                spine=b.get('spine'))
-                   for i, b in enumerate(pc['segments'], start=1)]),
+            semantic_contract=pc['semantic_contract'],
+            chapter_rewrite_brief=pc['chapter_rewrite_brief'],
+            scenes=[PlanSceneLine(
+                i=i,
+                slot=str(scene['slot']),
+                budget_chars=int(scene['budget_chars']),
+                purpose=str(scene['purpose']),
+                role=scene['role'],
+                delivery=scene['delivery'],
+                transition=scene['transition'],
+                land_fact_refs=list(scene['land_fact_refs']),
+                context_fact_refs=list(scene.get('context_fact_refs') or []),
+                turn_fact_ref=str(scene['turn_fact_ref']),
+                entry_state_refs=list(scene.get('entry_state_refs') or []),
+                exit_state_refs=list(scene.get('exit_state_refs') or []),
+            ) for i, scene in enumerate(pc['scenes'], start=1)]),
         ctx_chapter=ctx_entry,
         writer_target=target,
         plan_state=plan_state,
@@ -139,19 +144,19 @@ def _identity(store: ArtifactStore):
     bp_raw = store.read(ChapterBlueprints, BLUEPRINTS).model_dump(by_alias=True)
     gg_raw = store.read(GlobalGrounding, GLOBAL_GROUNDING).model_dump(by_alias=True)
     bidx = beat_index(bp_raw, main_raw)
-    groups = group_beats(bp_raw, main_raw, bidx)
-    plan_raw = identity_plan(bp_raw, main_raw, bidx, groups)
+    plan_raw = identity_plan(bp_raw, main_raw, bidx)
     asm = build_writer_context(plan_raw, gg_raw, bp_raw, main_raw)
     chapters = [CtxChapter.model_validate(c) for c in (asm.ctx.get('chapters') or [])]
     return plan_raw, chapters
 
 
 def _index_row(pc: dict, ctx_entry: CtxChapter | None) -> Stage4IndexRow:
-    budgets = [b.get('budget_chars') for b in pc['segments']]
+    budgets = [scene.get('budget_chars') for scene in pc['scenes']]
     span = None
     hidden = None
     if ctx_entry is not None:
-        chars = [b.source_chars for b in ctx_entry.segments if b.source_chars is not None]
+        chars = [scene.source_chars for scene in ctx_entry.scenes
+                 if scene.source_chars is not None]
         span = sum(chars) if chars else None
         hidden = len(ctx_entry.must_not_reveal)
     return Stage4IndexRow(
@@ -159,7 +164,7 @@ def _index_row(pc: dict, ctx_entry: CtxChapter | None) -> Stage4IndexRow:
         chapter_goal=_goal_label(pc['chapter_goal']),
         budget_chars=sum(b for b in budgets if b is not None) or None,
         span_chars=span,
-        beats=len(pc['segments']),
+        scenes=len(pc['scenes']),
         hidden=hidden)
 
 

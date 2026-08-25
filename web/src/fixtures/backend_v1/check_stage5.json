@@ -674,10 +674,10 @@
    "baseline": null
   },
   {
-   "rule": "event_landing",
+   "rule": "fact_landing",
    "sev": "info",
    "status": "ok",
-   "item": "每一拍的事件在成稿里都留下了落点",
+   "item": "每个必落事实在所属新场景里留下了落点",
    "requirement": "R-7.22",
    "check_kind": "mechanical",
    "remediation": "human",
@@ -688,16 +688,16 @@
    "baseline": null
   },
   {
-   "rule": "event_landing_unver",
+   "rule": "fact_landing_unver",
    "sev": "unver",
    "status": "unver",
-   "item": "每一拍都提得出可回查的原子",
+   "item": "每个必落事实都提得出可回查的表面原子",
    "requirement": "R-7.22",
    "check_kind": "mechanical",
    "remediation": "human",
    "fix": null,
    "findings": [],
-   "why": "1 拍提不出可回查的原子、0 拍的原子连源章原文里都找不到（原子提错了，不是成稿的账）—— 这些拍**没有被检查**",
+   "why": "1 个必落事实提不出可回查的表面原子、0 个事实的原子连源章原文里都找不到（原子提错了，不是成稿的账）——这些事实没有被检查",
    "scanned": "8/8 章有成稿",
    "baseline": null
   },

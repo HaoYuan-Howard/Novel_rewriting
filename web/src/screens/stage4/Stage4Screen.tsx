@@ -9,11 +9,11 @@ import { ChapterStrip } from '@/components/ui/ChapterStrip'
 import { Mono } from '@/components/ui/Mono'
 import { Panel, PaneHeader } from '@/components/ui/Panel'
 import { cx } from '@/lib/cx'
-import { useStage4Screen, type PlanBeatView } from './useStage4Screen'
+import { useStage4Screen, type PlanSceneView } from './useStage4Screen'
 
 /**
  * 计划 ↔ 写作上下文。
- * 左边是「这一拍打算怎么写」，右边是「写手真正拿得到的材料」——
+ * 左边是「Stage4 新设计了哪些场景」，右边是「写手真正拿得到的材料」——
  * 计划里想到的东西如果没进材料，写手就看不到。
  */
 export function Stage4Screen() {
@@ -42,7 +42,7 @@ export function Stage4Screen() {
                     计划 ↔ 写作上下文 · 第 {vm.ordinal} 章
                   </h1>
                   <div className="text-body text-ink-3">
-                    左「这一拍打算怎么写」，右「写手手里实际会有什么」。
+                    左「新场景怎样承载章级语义契约」，右「写手手里实际会有什么」。
                   </div>
                 </div>
                 <ChapterStrip
@@ -94,7 +94,7 @@ export function Stage4Screen() {
                     <>
                       <Mono className="text-mini">{i.no}</Mono>
                       <Mono className="text-micro text-ink-5">{i.budget}</Mono>
-                      <Mono className="text-micro text-ink-5">{i.beats} 拍</Mono>
+                      <Mono className="text-micro text-ink-5">{i.scenes} 场</Mono>
                       {i.hidden ? (
                         <Mono className="text-micro text-ink-5">瞒 {i.hidden}</Mono>
                       ) : null}
@@ -117,6 +117,11 @@ export function Stage4Screen() {
                 ))}
               </div>
 
+              <Panel className="flex flex-col gap-6 px-16 py-13">
+                <span className="text-tag text-ink-4">章级语义契约 · {vm.chapterFunction}</span>
+                <span className="prose-cn text-section text-ink-2">{vm.rewriteBrief}</span>
+              </Panel>
+
               <div className="grid gap-1 overflow-hidden rounded-block-lg border border-line bg-line-2" style={{ gridTemplateColumns: 'repeat(4,1fr)' }}>
                 {vm.budgets.map((b) => (
                   <div key={b.k} className="flex flex-col gap-3 bg-card px-14 py-12">
@@ -132,14 +137,14 @@ export function Stage4Screen() {
               ratio="1.15fr 0.85fr"
               left={
                 <Panel>
-                  <PaneHeader title="逐拍计划" meta={vm.beats.length + ' 拍'} sticky />
+                  <PaneHeader title="Stage4 新场景设计" meta={vm.scenes.length + ' 场'} sticky />
                   <div className="flex flex-col">
-                    {vm.beats.map((b) => (
-                      <PlanBeatRow
-                        key={b.i}
-                        b={b}
-                        selected={vm.selBeat === b.i}
-                        onClick={() => vm.toggleBeat(b.i)}
+                    {vm.scenes.map((scene) => (
+                      <PlanSceneRow
+                        key={scene.i}
+                        scene={scene}
+                        selected={vm.selScene === scene.i}
+                        onClick={() => vm.toggleScene(scene.i)}
                       />
                     ))}
                   </div>
@@ -179,7 +184,7 @@ export function Stage4Screen() {
                       must_not_reveal 等只服务回写校验，不进写手 prompt——写手看不到内容才不会写出来。
                     </div>
                     <div className="prose-cn text-micro text-ink-5">
-                      计划这一侧真正由 LLM 决定的只剩逐章目标 + 逐拍预算；拍怎么切是代码定的。在不在档的判定见本屏底部的 stage4 校验。
+                      语义契约来自 Stage2；场景目的、边界、顺序与事实重新分布由 Stage4 编译。校验结论仍只来自 stage4 报告。
                     </div>
                   </PaneScroll>
                 </Panel>
@@ -192,12 +197,12 @@ export function Stage4Screen() {
   )
 }
 
-function PlanBeatRow({
-  b,
+function PlanSceneRow({
+  scene,
   selected,
   onClick,
 }: {
-  b: PlanBeatView
+  scene: PlanSceneView
   selected: boolean
   onClick: () => void
 }) {
@@ -211,83 +216,92 @@ function PlanBeatRow({
     >
       <div className="flex flex-wrap items-center gap-8">
         <Mono className="rounded-tag bg-inset px-7 py-1 text-mini">
-          第 {b.i} 拍 · {b.slot}
+          第 {scene.i} 场 · {scene.slot}
         </Mono>
-        <Mono className="text-micro text-ink-5">源拍 {b.fromBeats}</Mono>
-        <span
-          className={cx('rounded-tag px-7 py-1 text-mini', !b.layerUnknown && (
-            b.layerPresent ? 'bg-inset text-ink-3' : 'bg-recall-bg text-recall'
-          ))}
-          style={
-            b.layerUnknown
-              ? { color: SEV.unver.color, background: SEV.unver.bg, border: '1px dashed ' + SEV.unver.border }
-              : undefined
-          }
-        >
-          {b.layer}
-        </span>
-        <span className="text-tag text-ink-3">{b.place}</span>
+        <span className="rounded-tag bg-inset px-7 py-1 text-mini text-ink-3">{scene.role}</span>
+        <span className="rounded-tag bg-inset px-7 py-1 text-mini text-ink-3">{scene.delivery}</span>
+        <span className="rounded-tag bg-inset px-7 py-1 text-mini text-ink-3">{scene.transition}</span>
         <span className="ml-auto flex items-center gap-8">
           <Mono className="text-micro text-ink-4">
-            预算 {b.budget} / 源文 {b.source}
+            预算 {scene.budget} / 源文 {scene.source ?? '—'}
           </Mono>
-          <Mono className="rounded-tag px-6 py-1 text-micro">{b.ratio}</Mono>
+          <Mono className="rounded-tag px-6 py-1 text-micro">{scene.ratio}</Mono>
         </span>
       </div>
 
-      {/* 唯一需要数字对比条的地方：预算 / 源文 */}
       <div className="relative h-6 overflow-hidden rounded-nub bg-inset">
         <span
           className="absolute top-0 bottom-0 left-0"
-          style={{ width: b.pct + '%', background: 'var(--color-accent-bar)' }}
+          style={{ width: scene.pct + '%', background: 'var(--color-accent-bar)' }}
         />
       </div>
 
+      <div className="prose-cn text-section text-ink-2">
+        <span className="text-tag text-ink-4">场景目的　</span>{scene.purpose}
+      </div>
+
       <div className="flex flex-wrap gap-6">
-        {b.present.map((p) => (
-          <span key={p} className="rounded-[11px] border border-line-2 bg-inset px-8 py-2 text-tag text-ink-2">
-            {p}
+        {scene.participants.map((person) => (
+          <span key={person} className="rounded-[11px] border border-line-2 bg-inset px-8 py-2 text-tag text-ink-2">
+            {person}
           </span>
         ))}
       </div>
 
       <ul className="m-0 flex list-none flex-col gap-4">
-        {b.events.map((e, i) => (
+        {scene.requiredFacts.map((fact, i) => (
           <li key={i} className="prose-cn text-section text-ink-2">
-            {e}
+            <span className="text-tag text-ink-4">必须成立　</span>{fact}
           </li>
         ))}
       </ul>
 
-      {b.verbatim.map((v, i) => (
+      <div className="prose-cn rounded-btn bg-inset px-10 py-8 text-sm2 text-ink-2">
+        <span className="text-tag text-ink-4">转折　</span>{scene.turnFact}
+      </div>
+
+      {scene.entryState.length || scene.exitState.length ? (
+        <div className="grid gap-6 text-sm2" style={{ gridTemplateColumns: '1fr 1fr' }}>
+          <div><span className="text-tag text-ink-4">进入状态　</span>{scene.entryState.join('；') || '—'}</div>
+          <div><span className="text-tag text-ink-4">退出状态　</span>{scene.exitState.join('；') || '—'}</div>
+        </div>
+      ) : null}
+
+      {scene.contextFacts.length ? (
+        <div className="prose-cn text-sm2 text-ink-4">
+          上下文事实（不重复宣告）：{scene.contextFacts.join('；')}
+        </div>
+      ) : null}
+
+      {scene.verbatim.map((v, i) => (
         <div key={i} className="rounded-r-btn border-l-3 border-l-hinge bg-hinge-bg px-12 py-8">
-          <div className="text-micro text-hook-ink">必须逐字写进去（{b.verbatimChars} 字）</div>
+          <div className="text-micro text-hook-ink">必须逐字写进去（{scene.verbatimChars} 字）</div>
           <div className="prose-cn text-sm2 text-ink-2">{v}</div>
         </div>
       ))}
 
-      {b.holds.map((h, i) => (
+      {scene.holds.map((h, i) => (
         <div key={i} className="flex items-baseline gap-8 text-sm2">
           <span className="flex-none rounded-tag bg-inset px-6 py-1 text-micro text-ink-4">{h.k}</span>
           <span className="prose-cn text-ink-2">{h.v}</span>
         </div>
       ))}
 
-      {b.segments.length ? (
+      {scene.stages.length ? (
         <div className="flex flex-col gap-4 rounded-btn border border-dashed border-line-btn px-10 py-8">
-          <span className="text-micro text-ink-5">这一拍内部还要分段（时间层 / 地点会变）</span>
-          {b.segments.map((s, i) => (
+          <span className="text-micro text-ink-5">场景舞台（跨时空时按这里分段）</span>
+          {scene.stages.map((stage, i) => (
             <div key={i} className="flex items-center gap-7 text-tag text-ink-3">
               <span
                 className={cx(
                   'rounded-tag px-6 py-1 text-micro',
-                  s.layerPresent ? 'bg-inset text-ink-3' : 'bg-recall-bg text-recall',
+                  stage.layerPresent ? 'bg-inset text-ink-3' : 'bg-recall-bg text-recall',
                 )}
               >
-                {s.layer}
+                {stage.layer}
               </span>
-              <span>{s.place}</span>
-              <span className="text-ink-4">{s.present}</span>
+              <span>{stage.place}</span>
+              <span className="text-ink-4">{stage.present}</span>
             </div>
           ))}
         </div>

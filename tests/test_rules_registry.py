@@ -61,7 +61,7 @@ def test_every_registered_rule_id_need_is_satisfied_by_its_prompt_surface():
         assert set(rule.needs_id_spaces) <= set(surface.provides_id_spaces)
 
 
-def test_stage4_event_ids_join_to_the_same_plan_unit_space_the_model_receives():
+def test_stage4_fact_atom_ids_are_the_same_space_the_scene_planner_receives():
     from contracts.rules import REGISTRY
     from novel.stages.stage4.fact_refs import catalog
 
@@ -70,16 +70,18 @@ def test_stage4_event_ids_join_to_the_same_plan_unit_space_the_model_receives():
          'canon': {'world_rules': [], 'secrets': []}},
         {'blueprints': [{
             'chapter_ordinal': 1,
-            'beats': [{'beat_id': 'b01_01', 'event': '甲推门'}],
+            'fact_atoms': [{
+                'fact_id': 'f01_01', 'claim': '甲推门', 'kind': 'event',
+                'obligation': 'land', 'source_beat_ref': 'b01_01',
+            }],
+            'beats': [{'beat_id': 'b01_01'}],
         }]},
         [{'chapter_ordinal': 1, 'text': '甲推门。'}],
-        plan_units={1: [['b01_01']]},
     )
-    goal = REGISTRY.get('goal_landing')
-    surface = REGISTRY.prompt_surface(goal.prompt_surface or '')
-    assert {'events', 'event_units', 'plan_beats'} <= set(surface.provides_id_spaces)
-    assert refs['events'] == {'b01_01': 1}
-    assert refs['event_units'] == {'b01_01': 'p01_01'}
+    surface = REGISTRY.prompt_surface('stage4.plan')
+    assert {'fact_atoms', 'source_stages'} <= set(surface.provides_id_spaces)
+    assert refs['fact_atoms']['f01_01']['chapter'] == 1
+    assert refs['fact_atoms']['f01_01']['source_beat_ref'] == 'b01_01'
 
 
 def test_bad_severity_raises():

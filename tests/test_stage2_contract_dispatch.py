@@ -6,7 +6,7 @@ test_stage2_contract_dispatch.py —— Stage2 多响应契约注册表与接线
 三件事：
 ① 注册表与取值面/配置口互相咬合（分家当场红）；
 ② v2 / v3.1 两份现役契约都能从配置入口到达真实请求路径；
-③ 两套 prompt/hint 形状、调用拓扑、编译与摘要批落盘闭环。
+③ 两套 prompt/hint 形状、调用拓扑与原子事实编译落盘闭环。
 """
 from __future__ import annotations
 
@@ -137,7 +137,10 @@ def test_the_two_phase_v2_contract_has_distinct_closed_shapes():
         {'end_para', 'event'}
     detail = prompts.BLUEPRINT_HINT_V2_REFS['blueprints'][0]['beats'][0]
     assert set(detail) == {'end_para', 'time_layer', 'place',
-                           'present_char_ids', 'event', 'hinges'}
+                           'present_char_ids', 'fact_atoms', 'hinges'}
+    assert set(detail['fact_atoms'][0]) == {
+        'atom_key', 'claim', 'kind', 'obligation', 'evidence_phrase',
+        'participant_char_ids'}
     assert detail['place'] == 'str|null'
     assert 'present_names' not in str(prompts.BLUEPRINT_HINT_V2_REFS)
 
@@ -149,38 +152,24 @@ def test_the_v31_scaffolded_contract_has_closed_references():
     assert v31.uses_character_refs and v31.uses_narration_refs
     assert v31.uses_hinge_candidates
     assert set(prompts.BLUEPRINT_HINT_V31['blueprints'][0]) == {
-        'chapter_ordinal', 'micro_events', 'beats', 'narration'}
+        'chapter_ordinal', 'chapter_function', 'micro_events', 'beats',
+        'causal_edges', 'entry_state_refs', 'ending_state_refs', 'narration'}
     assert set(prompts.BLUEPRINT_HINT_V31['blueprints'][0]['micro_events'][0]) == {
         'end_para', 'cue'}
     narration = prompts.BLUEPRINT_HINT_V31['blueprints'][0]['narration'][0]
     assert 'narrator_char_id' in narration and 'narrator_name' not in narration
     assert 'candidate_id' in str(prompts.BLUEPRINT_HINT_V31)
-    assert '候选不是预筛' in prompts.BLUEPRINT_SYS_V31
-    assert '整句台词与它内部的数字/短句不能同时交' in prompts.BLUEPRINT_SYS_V31
-    assert '要害台词不是“随便一句对白”' in prompts.BLUEPRINT_SYS_V31
-    assert '反批量不等于少交' in prompts.BLUEPRINT_SYS_V31
-    assert '笑点最后一击' in prompts.BLUEPRINT_SYS_V31
-    assert '不得退回 1~3 条' in prompts.BLUEPRINT_SYS_V31
-    assert '关系或立场\n  反转' in prompts.BLUEPRINT_SYS_V31
-    assert '不得从「第二天 / 下一秒」中截出「二天 / 一秒」' \
+    assert '不要再写一条复合 event 摘要' in prompts.BLUEPRINT_SYS_V31
+    assert '一个动作、决定、结果、揭示或状态变化各自拆开' \
+        in prompts.BLUEPRINT_SYS_V31
+    assert '事实原子的数组位置是证据位置，不是未来写作顺序' \
         in prompts.BLUEPRINT_SYS_V31
     assert '$' not in prompts.BLUEPRINT_SYS_V31
-
-
-def test_the_summary_batch_arm_declares_its_bounds():
-    assert '100~220' in prompts.SUMMARY_BATCH_SYS
-    assert set(prompts.SUMMARY_BATCH_HINT['chapters'][0]) == \
-        {'chapter_ordinal', 'summary'}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 四、保留契约零成本全链
 # ─────────────────────────────────────────────────────────────────────────────
-
-def _summary_for(ordinal: int) -> str:
-    base = (f'第{ordinal}章从人物照常起居开始，随后一件事引出另一件事，'
-            f'各方的立场在对话与动作里逐步亮明，前面埋下的细节被再次动用，')
-    return (base + '章末事态收在一个新的位置上，为下一章留出直接的因果接口。')
 
 
 def _ir2_responses() -> dict[int, dict]:
@@ -222,15 +211,13 @@ def test_the_ir2_chain_freezes_boundaries_and_lands_closed_character_refs(
     ordinals = sorted(by_ordinal)
 
     def respond(req, _index):
-        if '逐章事件清单' in req.user:
-            return _ok({'chapters': [
-                {'chapter_ordinal': o, 'summary': _summary_for(o)}
-                for o in ordinals]})
         found = re.findall(r'阅读序第(\d+)章', req.user)
         ordinal = int(found[-1])
         if '第一张表 `micro_events`' in req.system:
             boundary_beats = [
-                {'end_para': beat['end_para'], 'event': beat['event']}
+                {'end_para': beat['end_para'],
+                 'event': '；'.join(atom['claim']
+                                    for atom in beat['fact_atoms'])}
                 for beat in by_ordinal[ordinal]['beats']]
             return _ok({'blueprints': [{
                 'chapter_ordinal': ordinal,
@@ -250,27 +237,23 @@ def test_the_ir2_chain_freezes_boundaries_and_lands_closed_character_refs(
     density = next(line for line in report.rules if line.rule == 'batch_density')
     assert density.scanned.endswith('× 2 相')
     assert density.findings and '两段式逐章抽取' in density.findings[0].detail
-    assert len(transport.calls) == len(ordinals) * 2 + 1, \
-        '边界 N 次 + 冻结边界细节 N 次 + 摘要批 1 次'
+    assert len(transport.calls) == len(ordinals) * 2, \
+        '边界 N 次 + 冻结边界细节 N 次；summary 不再调用模型'
     boundary_system = with_json_shape(
         prompts.BOUNDARY_SYS_V2, prompts.BOUNDARY_HINT_V2)
     assert transport.calls[0].system == boundary_system
-    summary_calls = [call for call in transport.calls if '逐章事件清单' in call.user]
     boundary_calls = [call for call in transport.calls if call.system == boundary_system]
     detail_calls = [call for call in transport.calls
-                    if call not in summary_calls and call not in boundary_calls]
+                    if call not in boundary_calls]
     assert len(boundary_calls) == len(detail_calls) == len(ordinals)
-    assert len(summary_calls) == 1
     assert {(call.reasoning_effort, call.thinking) for call in boundary_calls} == {
         ('high', True)}
     assert {(call.reasoning_effort, call.thinking) for call in detail_calls} == {
         ('high', True)}
-    assert {(call.reasoning_effort, call.thinking) for call in summary_calls} == {
-        ('high', True)}
     stored = ArtifactStore(ctx).read(ChapterBlueprints, extract.BLUEPRINT_REL)
     assert stored.provenance.context.architecture == architecture
     assert set(stored.provenance.prompts) == {
-        'BOUNDARY_SYS_V2', 'BLUEPRINT_SYS_V2_REFS', 'SUMMARY_BATCH_SYS'}
+        'BOUNDARY_SYS_V2', 'BLUEPRINT_SYS_V2_REFS'}
     for blueprint in stored.blueprints:
         expected = by_ordinal[blueprint.chapter_ordinal]
         assert [beat.present_char_ids for beat in blueprint.beats] == \
@@ -298,10 +281,6 @@ def test_scaffolded_single_chains_use_one_high_shape_per_chapter_and_land(
     ordinals = sorted(by_ordinal)
 
     def respond(req, _index):
-        if '逐章事件清单' in req.user:
-            return _ok({'chapters': [
-                {'chapter_ordinal': o, 'summary': _summary_for(o)}
-                for o in ordinals]})
         found = re.findall(r'阅读序第(\d+)章', req.user)
         assert '本章可选人物引用（代码派生、关闭式）' in req.user
         assert '已冻结的事件边界（代码校验）' not in req.user
@@ -314,15 +293,15 @@ def test_scaffolded_single_chains_use_one_high_shape_per_chapter_and_land(
     report = extract.run_blueprint(ctx, client)
 
     assert report.passed
-    assert len(transport.calls) == len(ordinals) + 1, \
-        '每章一次 scaffolded 响应 + 全书摘要批一次'
+    assert len(transport.calls) == len(ordinals), \
+        '每章一次 scaffolded 响应；summary 由 atoms 确定性投影'
     boundary_system = with_json_shape(
         prompts.BOUNDARY_SYS_V2, prompts.BOUNDARY_HINT_V2)
     assert all(call.system != boundary_system for call in transport.calls)
     stored = ArtifactStore(ctx).read(ChapterBlueprints, extract.BLUEPRINT_REL)
     assert stored.provenance.context.architecture == architecture
-    assert set(stored.provenance.prompts) == {system_name, 'SUMMARY_BATCH_SYS'}
-    assert all(blueprint.summary == _summary_for(blueprint.chapter_ordinal)
+    assert set(stored.provenance.prompts) == {system_name}
+    assert all(blueprint.summary.startswith('本章事实：')
                for blueprint in stored.blueprints)
 
 
@@ -330,7 +309,7 @@ def test_ir31_resamples_reasoning_only_blueprints(monkeypatch):
     """合法 reasoning 救回稿留作后备，并优先取同档正常正文。
 
     这里走 `request_blueprints` 的真实 validator 接线，防止只在注册表加了一格、
-    首轮或定向修复却忘记消费；不跑摘要批，调用数只统计目标章本身。
+    首轮或定向修复却忘记消费；调用数只统计目标章本身。
     """
     architecture, closed = 'extraction-ir-v3.1', True
     monkeypatch.setenv(_ENV_KEY, architecture)
@@ -347,8 +326,8 @@ def test_ir31_resamples_reasoning_only_blueprints(monkeypatch):
     ordinal = min(by_ordinal)
     salvaged = copy.deepcopy(by_ordinal[ordinal])
     normal = copy.deepcopy(by_ordinal[ordinal])
-    salvaged['beats'][0]['event'] = '救回稿事件'
-    normal['beats'][0]['event'] = '正文稿事件'
+    salvaged['beats'][0]['fact_atoms'][0]['claim'] = '救回稿事实'
+    normal['beats'][0]['fact_atoms'][0]['claim'] = '正文稿事实'
 
     def respond(_req, index):
         payload = {'blueprints': [salvaged if index == 0 else normal]}
@@ -369,7 +348,8 @@ def test_ir31_resamples_reasoning_only_blueprints(monkeypatch):
 
     assert batch['errors'] == [] and batch['scope_violations'] == []
     assert len(transport.calls) == 2
-    assert batch['raw_blueprints'][0]['beats'][0]['event'] == '正文稿事件'
+    assert batch['raw_blueprints'][0]['beats'][0]['fact_atoms'][0]['claim'] == \
+        '正文稿事实'
 
 
 def test_scaffolded_gate_reuses_the_compilers_tail_nudge_cap(monkeypatch):
@@ -414,7 +394,6 @@ def test_scaffolded_gate_reuses_the_compilers_tail_nudge_cap(monkeypatch):
         {'blueprints': batch['raw_blueprints']},
         main_text(),
         grounding.model_dump(by_alias=True)['entities']['characters'],
-        summaries={ordinal: _summary_for(ordinal)},
     )
     assert accounting['verbatim_failures'] == []
     assert accounting['boundary_nudges'][-1][1:] == (
@@ -446,7 +425,9 @@ def test_missing_chapter_repair_uses_the_initial_shape_without_a_fake_baseline(
     def chapter_response(req, ordinal):
         if req.system == spec.boundary_system:
             boundary_beats = [
-                {'end_para': beat['end_para'], 'event': beat['event']}
+                {'end_para': beat['end_para'],
+                 'event': '；'.join(atom['claim']
+                                    for atom in beat['fact_atoms'])}
                 for beat in by_ordinal[ordinal]['beats']]
             return _ok({'blueprints': [{
                 'chapter_ordinal': ordinal,
@@ -456,10 +437,6 @@ def test_missing_chapter_repair_uses_the_initial_shape_without_a_fake_baseline(
         return _ok({'blueprints': [by_ordinal[ordinal]]})
 
     def initial_respond(req, _index):
-        if '逐章事件清单' in req.user:
-            return _ok({'chapters': [
-                {'chapter_ordinal': o, 'summary': _summary_for(o)}
-                for o in ordinals]})
         ordinal = int(re.findall(r'阅读序第(\d+)章', req.user)[-1])
         return chapter_response(req, ordinal)
 
@@ -475,7 +452,6 @@ def test_missing_chapter_repair_uses_the_initial_shape_without_a_fake_baseline(
         row for row in broken['blueprints']
         if row['chapter_ordinal'] != missing
     ]
-    broken['_provenance']['prompts'].pop('SUMMARY_BATCH_SYS')
     store.write_invalid(
         extract.BLUEPRINT_REL,
         ChapterBlueprints.model_validate(broken),
@@ -488,12 +464,6 @@ def test_missing_chapter_repair_uses_the_initial_shape_without_a_fake_baseline(
         repair_ctx, chapters=(missing,))[0][2]
 
     def repair_respond(req, _index):
-        if '逐章事件清单' in req.user:
-            assert all(f'"chapter_ordinal":{o}' in req.user for o in ordinals), \
-                '首轮没做摘要时，补章成功后必须一次补全书摘要'
-            return _ok({'chapters': [
-                {'chapter_ordinal': o, 'summary': _summary_for(o)}
-                for o in ordinals]})
         ordinal = int(re.findall(r'阅读序第(\d+)章', req.user)[-1])
         if req.system == spec.boundary_system or spec.boundary_system is None:
             assert req.user == expected_user, '缺章边界相必须复用首轮 user 字节'
@@ -505,7 +475,7 @@ def test_missing_chapter_repair_uses_the_initial_shape_without_a_fake_baseline(
         repair_ctx, repair_client, chapters=(missing,))
 
     assert report.passed
-    expected_calls = 3 if spec.topology == 'boundary_then_detail' else 2
+    expected_calls = 2 if spec.topology == 'boundary_then_detail' else 1
     assert len(repair_transport.calls) == expected_calls
     stored = store.read(ChapterBlueprints, extract.BLUEPRINT_REL)
     assert [row.chapter_ordinal for row in stored.blueprints] == ordinals
@@ -513,13 +483,13 @@ def test_missing_chapter_repair_uses_the_initial_shape_without_a_fake_baseline(
     repair = stored.provenance.repairs[-1]
     assert repair.failure_items == ['chapter_coverage']
     assert repair.before_metrics.model_dump() == {
-        'beats': 0, 'hinges': 0, 'present_names': 0}
+        'beats': 0, 'fact_atoms': 0, 'hinges': 0, 'present_names': 0}
     assert repair.after_metrics.beats > 0
     assert not store.exists(extract._INVALID)
 
 
-def test_ir31_hard_preflight_blocks_before_the_paid_summary_batch(monkeypatch):
-    """摘要改不了 HARD；先付摘要再发现零 hinge，会把失败拓扑平白多一调。"""
+def test_ir31_hard_gate_lands_invalid_without_extra_calls(monkeypatch):
+    """逐章原子契约命中 HARD 后直接留问题稿，不存在后置摘要调用。"""
     monkeypatch.setenv(_ENV_KEY, 'extraction-ir-v3.1')
     book = Path(tempfile.mkdtemp()) / 'ir31摘要前闸_127'
     book.mkdir(parents=True)
@@ -536,17 +506,16 @@ def test_ir31_hard_preflight_blocks_before_the_paid_summary_batch(monkeypatch):
         beat['hinges'] = []
 
     def respond(req, _index):
-        assert '逐章事件清单' not in req.user, 'HARD 命中后不该已经发出摘要调用'
         ordinal = int(re.findall(r'阅读序第(\d+)章', req.user)[-1])
         return _ok({'blueprints': [by_ordinal[ordinal]]})
 
     ctx = _ctx(book, 'stage2.blueprint')
     client, transport = _client(ctx, respond)
     from novel.errors import GateBlocked
-    with pytest.raises(GateBlocked, match='摘要批之前'):
+    with pytest.raises(GateBlocked):
         extract.run_blueprint(ctx, client)
 
-    assert len(transport.calls) == len(by_ordinal), '只有逐章 N 调，没有摘要 +1'
+    assert len(transport.calls) == len(by_ordinal), '只有逐章 N 调'
     invalid = ArtifactStore(ctx).read(ChapterBlueprints, extract._INVALID)
     assert set(invalid.provenance.prompts) == {'BLUEPRINT_SYS_V31'}
     assert invalid.provenance.usage.calls_made == len(by_ordinal)
@@ -554,13 +523,6 @@ def test_ir31_hard_preflight_blocks_before_the_paid_summary_batch(monkeypatch):
     repaired_by = _scaffolded_responses(closed=True)
 
     def repair_respond(req, _index):
-        if '逐章事件清单' in req.user:
-            assert all(f'"chapter_ordinal":{ordinal}' in req.user
-                       for ordinal in sorted(repaired_by)), \
-                '首轮摘要未跑时，修复成功后必须一次补全书摘要'
-            return _ok({'chapters': [
-                {'chapter_ordinal': ordinal, 'summary': _summary_for(ordinal)}
-                for ordinal in sorted(repaired_by)]})
         ordinal = int(re.findall(r'阅读序第(\d+)章', req.user)[-1])
         return _ok({'blueprints': [repaired_by[ordinal]]})
 
@@ -570,17 +532,15 @@ def test_ir31_hard_preflight_blocks_before_the_paid_summary_batch(monkeypatch):
     report = extract.run_blueprint(
         repair_ctx, repair_client, chapters=(broken_ordinal,))
     assert report.passed
-    assert len(repair_transport.calls) == 2, '目标章 k=1 + 全书摘要 1'
+    assert len(repair_transport.calls) == 1, '只重生成目标章 k=1'
     formal = ArtifactStore(repair_ctx).read(
         ChapterBlueprints, extract.BLUEPRINT_REL)
-    assert set(formal.provenance.prompts) == {
-        'BLUEPRINT_SYS_V31', 'SUMMARY_BATCH_SYS'}
-    assert all(bp.summary == _summary_for(bp.chapter_ordinal)
-               for bp in formal.blueprints)
+    assert set(formal.provenance.prompts) == {'BLUEPRINT_SYS_V31'}
+    assert all(bp.summary.startswith('本章事实：') for bp in formal.blueprints)
 
 
 def _land_ir31_invalid(book, by_ordinal):
-    """把一份 ch1 零 hinge 的 `.INVALID` 落到盘上（摘要批还没买过）。"""
+    """把一份 ch1 零 hinge 的 `.INVALID` 落到盘上。"""
     global_ctx = _ctx(book, 'stage2.global')
     ArtifactStore(global_ctx).write(
         extract.MAIN_TEXT, MainText.model_validate(main_text()))
@@ -600,12 +560,8 @@ def _land_ir31_invalid(book, by_ordinal):
     return ctx
 
 
-def test_the_repair_path_also_blocks_before_the_paid_summary_batch(monkeypatch):
-    """⭐ **修复路少了首轮那道摘要前闸。**
-
-    首轮已经「先拦再摘要」，而定向修复没有：一次注定 `GateBlocked` 的修复仍会先
-    为**整本书**买一次摘要批。任何 HARD 都不可能被摘要改好，这笔钱是纯白付。
-    """
+def test_the_repair_path_blocks_after_only_the_target_chapter_call(monkeypatch):
+    """定向修复仍命中 HARD 时，只发生目标章调用并保留问题稿。"""
     monkeypatch.setenv(_ENV_KEY, 'extraction-ir-v3.1')
     book = Path(tempfile.mkdtemp()) / 'ir31修复摘要前闸_128'
     book.mkdir(parents=True)
@@ -616,8 +572,6 @@ def test_the_repair_path_also_blocks_before_the_paid_summary_batch(monkeypatch):
     _land_ir31_invalid(book, by_ordinal)
 
     def repair_respond(req, _index):
-        assert '逐章事件清单' not in req.user, (
-            '修复后仍命中 HARD，却已经为全书摘要付过一次钱')
         ordinal = int(re.findall(r'阅读序第(\d+)章', req.user)[-1])
         return _ok({'blueprints': [by_ordinal[ordinal]]})   # 修完还是零 hinge
 
@@ -625,15 +579,13 @@ def test_the_repair_path_also_blocks_before_the_paid_summary_batch(monkeypatch):
     repair_ctx.cache = extract.CachePolicy.refresh()
     repair_client, repair_transport = _client(repair_ctx, repair_respond)
     from novel.errors import GateBlocked
-    with pytest.raises(GateBlocked, match='摘要批之前'):
+    with pytest.raises(GateBlocked):
         extract.run_blueprint(repair_ctx, repair_client,
                               chapters=(broken_ordinal,))
 
-    assert len(repair_transport.calls) == 1, '目标章 1 调，摘要批一次都不该发'
+    assert len(repair_transport.calls) == 1, '目标章 1 调'
     invalid = ArtifactStore(repair_ctx).read(ChapterBlueprints, extract._INVALID)
-    assert set(invalid.provenance.prompts) == {'BLUEPRINT_SYS_V31'}, (
-        '问题稿的 prompts 里出现了 SUMMARY_BATCH_SYS —— '
-        '下一轮修复会据此以为摘要已经买过')
+    assert set(invalid.provenance.prompts) == {'BLUEPRINT_SYS_V31'}
 
 
 def test_v31_repair_keeps_the_model_chosen_narration_identity(monkeypatch):
@@ -677,10 +629,6 @@ def test_v31_repair_keeps_the_model_chosen_narration_identity(monkeypatch):
         extract, 'resolve_character_refs', resolve_that_gives_up_on_names)
 
     def repair_respond(req, _index):
-        if '逐章事件清单' in req.user:
-            return _ok({'chapters': [
-                {'chapter_ordinal': ordinal, 'summary': _summary_for(ordinal)}
-                for ordinal in sorted(repaired_by)]})
         ordinal = int(re.findall(r'阅读序第(\d+)章', req.user)[-1])
         return _ok({'blueprints': [repaired_by[ordinal]]})
 
@@ -721,17 +669,12 @@ def test_a_v2_baseline_beat_that_cannot_be_located_is_resegmented(monkeypatch):
     by_ordinal = _ir2_responses()
 
     def respond(req, _index):
-        if '逐章事件清单' in req.user:
-            # 摘要批的目标章集**由请求决定**：修复路只为重生成的那几章补摘要。
-            wanted = sorted({int(value) for value in re.findall(
-                r'"chapter_ordinal":(\d+)', req.user)})
-            return _ok({'chapters': [
-                {'chapter_ordinal': ordinal, 'summary': _summary_for(ordinal)}
-                for ordinal in wanted]})
         ordinal = int(re.findall(r'阅读序第(\d+)章', req.user)[-1])
         if '第一张表 `micro_events`' in req.system:
             boundary_beats = [
-                {'end_para': beat['end_para'], 'event': beat['event']}
+                {'end_para': beat['end_para'],
+                 'event': '；'.join(atom['claim']
+                                    for atom in beat['fact_atoms'])}
                 for beat in by_ordinal[ordinal]['beats']]
             return _ok({'blueprints': [{
                 'chapter_ordinal': ordinal,
@@ -771,36 +714,4 @@ def test_a_v2_baseline_beat_that_cannot_be_located_is_resegmented(monkeypatch):
     assert any(call.system == boundary_system
                for call in repair_transport.calls), \
         '基线定位不到，却没有为这一章重发边界相'
-
-
-def test_an_ir31_summary_batch_that_misses_a_chapter_is_rejected_by_the_gate(
-        monkeypatch):
-    """validator 硬校验「目标章集恰好覆盖」——少一章必须被闸拒，不许静默放行。"""
-    monkeypatch.setenv(_ENV_KEY, 'extraction-ir-v3.1')
-    book = Path(tempfile.mkdtemp()) / 'ir31缺章_123'
-    book.mkdir(parents=True)
-    global_ctx = _ctx(book, 'stage2.global')
-    ArtifactStore(global_ctx).write(
-        extract.MAIN_TEXT, MainText.model_validate(main_text()))
-    global_client, _t = _client(
-        global_ctx, lambda _req, _index: _ok(_response_global()))
-    extract.run_global(global_ctx, global_client)
-
-    by_ordinal = _scaffolded_responses(closed=True)
-    ordinals = sorted(by_ordinal)
-
-    def respond(req, _index):
-        if '逐章事件清单' in req.user:
-            return _ok({'chapters': [                 # 漏掉最后一章
-                {'chapter_ordinal': o, 'summary': _summary_for(o)}
-                for o in ordinals[:-1]]})
-        found = re.findall(r'阅读序第(\d+)章', req.user)
-        return _ok({'blueprints': [by_ordinal[int(found[-1])]]})
-
-    ctx = _ctx(book, 'stage2.blueprint')
-    client, _transport = _client(ctx, respond)
-    from novel.llm.client import LlmFailed
-    with pytest.raises(LlmFailed, match='章集不齐'):
-        extract.run_blueprint(ctx, client)
-    assert not ArtifactStore(ctx).exists(extract.BLUEPRINT_REL), \
-        '摘要批被拒时不许有半份产物落盘'
+    assert len(repair_transport.calls) == 2, '只重切边界并重抽细节，不再有摘要调用'

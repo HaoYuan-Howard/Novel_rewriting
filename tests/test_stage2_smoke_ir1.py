@@ -21,9 +21,7 @@ from novel.stages.stage2 import extract
 from novel.stages.stage2.contract import contract_for
 from novel.store import ArtifactStore
 from tests.test_stage2 import main_text
-from tests.test_stage2_contract_dispatch import (
-    _scaffolded_responses, _summary_for,
-)
+from tests.test_stage2_contract_dispatch import _scaffolded_responses
 from tests.test_stage2_generation import (
     _client, _ctx, _ok, _response_global,
 )
@@ -68,13 +66,9 @@ def _ir31_responder(ordinals: list[int]):
     by_ordinal = _scaffolded_responses(closed=True)
 
     def respond(req, _index):
-        if '逐章事件清单' in req.user:
-            payload = json.loads(req.user.split('\n', 1)[1])
-            got = [c['chapter_ordinal'] for c in payload['chapters']]
-            assert got == sorted(ordinals), '摘要批只该带本次目标章'
-            return _ok({'chapters': [{'chapter_ordinal': o,
-                                      'summary': _summary_for(o)} for o in got]})
-        return _ok({'blueprints': [by_ordinal[_target_of(req.user)]]})
+        ordinal = _target_of(req.user)
+        assert ordinal in ordinals
+        return _ok({'blueprints': [by_ordinal[ordinal]]})
 
     return respond
 
@@ -109,14 +103,14 @@ def test_the_smoke_pays_only_for_the_targets_and_leaves_the_book_untouched(
                    '--md-out', str(tmp_path / 'r.md')])
 
     assert code == 0
-    assert len(calls[0].calls) == 2, '一章 + 一次摘要批'
+    assert len(calls[0].calls) == 1, '只发目标章；summary 不再单独调用模型'
     assert S._dir_fingerprint(book) == before, '冒烟工具不许改书目录一个字节'
 
     report = json.loads((tmp_path / 'r.json').read_text(encoding='utf-8'))
     assert report['contract'] == 'extraction-ir-v3.1'
     assert [row['chapter_ordinal'] for row in report['per_chapter']] == [2]
-    assert report['summary_mode'].startswith('summary-batch')
-    assert report['cost']['calls_paid'] == 2
+    assert report['summary_mode'].startswith('fact_atoms 确定性投影')
+    assert report['cost']['calls_paid'] == 1
     assert '高难包付费冒烟' in (tmp_path / 'r.md').read_text(encoding='utf-8')
 
 
@@ -131,8 +125,7 @@ def test_the_merged_candidate_keeps_untouched_chapters_byte_identical(
 
     compiled, accounting = contract_for('extraction-ir-v3.1').compile_fn(
         {'blueprints': [_scaffolded_responses(closed=True)[2]]},
-        both.main_text, characters,
-        summaries={2: '合并稿测试用摘要'})
+        both.main_text, characters)
     merged = S._merged_candidate(baseline, compiled['blueprints'], accounting,
                                  both.main_text, characters, 'extraction-ir-v3.1')
 
@@ -142,7 +135,7 @@ def test_the_merged_candidate_keeps_untouched_chapters_byte_identical(
         assert by_ordinal[untouched] == next(
             bp for bp in baseline['blueprints']
             if bp['chapter_ordinal'] == untouched)
-    assert by_ordinal[2]['summary'] == '合并稿测试用摘要'
+    assert by_ordinal[2]['summary'].startswith('本章事实：')
     assert merged['_provenance']['context']['architecture'] == 'extraction-ir-v3.1'
     # 目标章的逐字账**整段换新**：旧账里属于第 2 章的行不许混进来。
     for key in ('verbatim_rewrites', 'verbatim_failures'):

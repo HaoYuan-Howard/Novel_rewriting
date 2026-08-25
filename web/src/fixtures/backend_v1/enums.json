@@ -211,6 +211,17 @@
   "物件",
   "因果前提"
  ],
+ "fact_atom_kinds": [
+  "event",
+  "information",
+  "character_state",
+  "relationship",
+  "reader_knowledge"
+ ],
+ "fact_atom_obligations": [
+  "land",
+  "context"
+ ],
  "hinge_groups": {
   "要害台词": "verbatim",
   "硬数字": "keep_value",
@@ -268,7 +279,6 @@
   "low",
   "adequate"
  ],
- "uncovered_min_chars": 30,
  "address_by": [
   "char_id",
   "narration",

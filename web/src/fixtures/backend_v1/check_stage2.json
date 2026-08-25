@@ -510,10 +510,10 @@
    "baseline": null
   },
   {
-   "rule": "event_empty",
+   "rule": "fact_atom_empty",
    "sev": "hard",
-   "status": "ok",
-   "item": "每一拍都有非空事件文本",
+   "status": "unver",
+   "item": "每章都有非空、可引用的事实原子",
    "requirement": "R-3.13",
    "check_kind": "mechanical",
    "remediation": "llm",
@@ -525,8 +525,8 @@
     "paid": true
    },
    "findings": [],
-   "why": null,
-   "scanned": "67 拍",
+   "why": "原抓包早于 Stage2 v5，没有 current-schema fact_atoms，不能把旧事件拍冒充原子事实验收",
+   "scanned": "8 章旧抓包",
    "baseline": null
   },
   {
@@ -1779,9 +1779,9 @@
  "badge": "fail",
  "passed": false,
  "counts": {
-  "ok": 68,
+  "ok": 67,
   "hit": 5,
-  "unver": 2,
+  "unver": 3,
   "skipped": 0
  }
 }

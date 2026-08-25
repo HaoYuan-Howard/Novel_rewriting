@@ -8,7 +8,7 @@ checks.py —— 77 条判据的**实现**。行在 `contracts/judges/stage2.py`
 
 ⚠⚠ **本模块吃 `dict` 不吃模型。** 一旦判据跑在已经过了 Pydantic 的对象上，
 「必填齐全」那一类（`role_missing` / `address_missing` / `world_rule_no_desc` /
-`event_empty` / `summary_empty`）在**结构上构造不出会红的样本**
+`fact_atom_empty` / `summary_empty`）在**结构上构造不出会红的样本**
 ——它们必然全绿。纯函数保留 dict 输入面，是为了让当前候选在写入前能产出带规则 id、
 证据与修复路由的完整报告；正式读取仍只接受当前 Pydantic schema。
 
@@ -1135,25 +1135,27 @@ def _verbatim(c: _Ctx) -> list[Outcome]:
     out: list[Outcome] = []
 
     failures = c.prov.get('verbatim_failures')
-    if failures is None:
+    fact_failures = c.prov.get('fact_atom_failures')
+    if failures is None or fact_failures is None:
         out.append(unverifiable(
             'verbatim_failed',
-            '这份产物的 `_provenance` 里**没有 `verbatim_failures` 这个键** ⇒ '
+            '这份产物的 `_provenance` 里缺 `verbatim_failures` 或 `fact_atom_failures` ⇒ '
             '「这次回取有没有锚不到的」不知道。⚠⚠ 它替掉的是那条「靠 `hinges[].text` 的'
             '**缺席**去反推失败态」——键不在时，失败态**又只剩那条反推**，'
             '所以这里落 `unver` 而不是绿灯（盘上 3/3 本都没有这个键）'))
     else:
+        all_failures = list(failures) + list(fact_failures)
         by_cause: dict[str, int] = {}
-        for r in failures:
+        for r in all_failures:
             if len(r) >= 3:
                 by_cause[str(r[2])] = by_cause.get(str(r[2]), 0) + 1
-        rows = [f'{r[0]}.{r[1]}: {r[2]}' for r in failures if len(r) >= 3]
+        rows = [f'{r[0]}.{r[1]}: {r[2]}' for r in all_failures if len(r) >= 3]
         out.append(ran('verbatim_failed',
                        [finding('verbatim_failed',
                                 detail=f'落盘前的原文回取有 {len(rows)} 处锚不到；'
                                        f'原因计数 {by_cause}：{_cut(rows, 6)}',
                                 evidence=sorted(rows))] if rows else [],
-                       scanned=f'{len(failures)} 条失败记录'))
+                       scanned=f'{len(all_failures)} 条事实/材料证据失败记录'))
     return out
 
 
@@ -1300,7 +1302,7 @@ _PRESENT_RULES = (
     'time_layer_no_present', 'present_ids_dangling',
     'present_names_invented', 'present_continuity', 'present_ungrounded',
     'present_early_named', 'event_early_name', 'pronoun_surface_unattested',
-    'narration_multi', 'scope_violation', 'event_empty', 'summary_empty',
+    'narration_multi', 'scope_violation', 'fact_atom_empty', 'summary_empty',
     'repair_cache_policy', 'narration_voices', 'time_layer_mix', 'place_moves',
     'present_names_ambiguous', 'present_names_unlisted', 'present_names_pronoun',
     'present_names_late', 'present_broad', 'batch_density', 'context_scope')
@@ -1511,14 +1513,18 @@ def _present(c: _Ctx) -> list[Outcome]:
                       + [(a or {}).get('surface') or '' for a in ((v or {}).get('address') or [])]):
                 if s and len(s) >= 2:
                     name_owners.setdefault(s, set()).add(cid)
-        broad, narrow, n_ev = 0, [], 0
+        broad, narrow, n_atoms = 0, [], 0
         for x in c.bps:
             beats = x.get('beats') or []
+            atoms_by_beat: dict[str, list[dict[str, Any]]] = {}
+            for atom in (x.get('fact_atoms') or []):
+                atoms_by_beat.setdefault(str(atom.get('source_beat_ref') or ''), []).append(atom)
             for i, be in enumerate(beats):
-                ev = be.get('event') or ''
-                if not ev:
+                atoms = atoms_by_beat.get(str(be.get('beat_id') or ''), [])
+                claims = ' '.join(str(atom.get('claim') or '') for atom in atoms)
+                if not claims:
                     continue
-                n_ev += 1
+                n_atoms += len(atoms)
                 pres = set(be.get('present_char_ids') or [])
                 nearby: set[str] = set()
                 for j in (i - 1, i + 1):
@@ -1529,7 +1535,7 @@ def _present(c: _Ctx) -> list[Outcome]:
                 for nm, owners in name_owners.items():
                     key = frozenset(owners)
                     # 【按角色去重，不按名字】「慧贵妃」和「姨母」是同一个人，报两遍是虚高。
-                    if nm not in ev or (owners & pres) or key in seen:
+                    if nm not in claims or (owners & pres) or key in seen:
                         continue
                     seen.add(key)
                     broad += 1
@@ -1537,16 +1543,16 @@ def _present(c: _Ctx) -> list[Outcome]:
                         narrow.append(f'{be.get("beat_id")}:{nm}')
         out.append(ran('present_broad', [
             finding('present_broad',
-                    detail=f'{broad} 处（拍×角色）event 点名某角色而本拍未列；'
-                           f'涉及 {n_ev} 条有 event 的拍',
-                    evidence=[f'{broad}', f'{n_ev}'])],
-            scanned=f'{n_ev} 条有 event 的拍 × {len(name_owners)} 个叫法'))
+                    detail=f'{broad} 处（拍×角色）fact atom 点名某角色而本拍未列；'
+                           f'涉及 {n_atoms} 条事实原子',
+                    evidence=[f'{broad}', f'{n_atoms}'])],
+            scanned=f'{n_atoms} 条事实原子 × {len(name_owners)} 个叫法'))
         out.append(ran('present_continuity',
                        [finding('present_continuity',
                                 detail=f'{len(narrow)} 处「相邻拍同地同层在场、本拍被点名却未列」'
                                        f'：{_cut(narrow)}',
                                 evidence=sorted(narrow))] if narrow else [],
-                       scanned=f'{n_ev} 条有 event 的拍'))
+                       scanned=f'{n_atoms} 条事实原子'))
 
     # ── `present_ungrounded` ──────────────────────────────────────────────
     if not (c.has_gg and c.has_mt):
@@ -1639,7 +1645,7 @@ def _present(c: _Ctx) -> list[Outcome]:
             if not o:
                 continue
             body = (x.get('summary') or '') + ' ' + ' '.join(
-                (be.get('event') or '') for be in (x.get('beats') or []))
+                str(atom.get('claim') or '') for atom in (x.get('fact_atoms') or []))
             for nm in sorted(canon_first):
                 f = c.first_seen([nm])
                 if nm not in body or f is None or f <= o:
@@ -1729,13 +1735,19 @@ def _present(c: _Ctx) -> list[Outcome]:
             scanned='`_provenance.context`'))
 
     # ── 三条 ✚（原型没有）─────────────────────────────────────────────────
-    empty_ev = [f'ch{o}:{be.get("beat_id")}' for o, be in all_beats
-                if not (be.get('event') or '').strip()]
-    out.append(ran('event_empty',
-                   [finding('event_empty',
-                            detail=f'{len(empty_ev)}/{len(all_beats)} 拍的 event 是空的：{_cut(empty_ev)}',
-                            evidence=sorted(empty_ev))] if empty_ev else [],
-                   scanned=f'{len(all_beats)} 拍'))
+    all_atoms = [(x.get('chapter_ordinal'), atom) for x in c.bps
+                 for atom in (x.get('fact_atoms') or [])]
+    empty_atoms = [f'ch{o}:{atom.get("fact_id")}' for o, atom in all_atoms
+                   if not (atom.get('claim') or '').strip()]
+    chapters_without_atoms = [f'ch{x.get("chapter_ordinal")}' for x in c.bps
+                              if not (x.get('fact_atoms') or [])]
+    atom_failures = empty_atoms + chapters_without_atoms
+    out.append(ran('fact_atom_empty',
+                   [finding('fact_atom_empty',
+                            detail=f'{len(atom_failures)} 处事实原子缺失或 claim 为空：'
+                                   f'{_cut(atom_failures)}',
+                            evidence=sorted(atom_failures))] if atom_failures else [],
+                   scanned=f'{len(all_atoms)} 条事实原子 / {len(c.bps)} 章'))
 
     empty_sum = [f'ch{x.get("chapter_ordinal")}' for x in c.bps
                  if not (x.get('summary') or '').strip()]

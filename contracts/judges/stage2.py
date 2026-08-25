@@ -326,8 +326,8 @@ _hard('conflict_stage_coverage', '冲突阶段逐章显式枚举且恰好覆盖�
 # ═══ 六、拍与区间（8 HARD · 1 INFO）═══════════════════════════════════════
 
 _hard('beat_id_unique', '全书 beat_id 不重复', 'R-3.1',
-      note='`beat_id` 是下游引用一拍的**唯一**键（`stage4` 的 `beat_ref` · '
-           '`stage5` 的材料回查都按它 join）。重号 ⇒ 每一次 join 都可能取错拍。'
+      note='`beat_id` 是下游回取舞台与保真材料的**唯一**键（Stage4 `stage_refs` · '
+           'Stage5 材料回查都按它 join）。重号 ⇒ 每一次 join 都可能取错舞台。'
            '盘上 0/3（93 / 67 / 91 个）')
 
 _hard('beat_id_format', 'beat_id 形如 b<章:02d>_<序:02d> 且章内序连续', 'R-3.1',
@@ -513,11 +513,9 @@ _hard('scope_violation', '没有某一批越出「本次任务范围」产出', 
       note='断言 `_provenance.scope_violations` 非空即失败。'
            '**产地无条件写这个键**（没越界写空列表）；本条同时守住逐章调用的范围。')
 
-_hard('event_empty', '每一拍都有非空事件文本', 'R-3.13', fix=FIX_REGEN,
-      note='✚ **原型没有这条**——`R-3.13` 索要它。'
-           '⚠⚠ **判在本层不判 stage4**：留在 stage4 意味着要**先付掉一次规划调用**'
-           '才发现这一层产坏了。这一层每个字段都是 LLM 写的，而产地只校验顶层键，'
-           '少写一个 `event` 下游一路 `or \'\'` 不出声。盘上 0/3（251/251）')
+_hard('fact_atom_empty', '每章都有非空、可引用的事实原子', 'R-3.13', fix=FIX_REGEN,
+      note='Stage2 v5 的正式事实源。拍只保存原文舞台区间；事实缺失必须在付费规划前阻断，'
+           '不能让 Stage4 用摘要或空串补出第二份真相。')
 
 _hard('summary_empty', '每一章都有非空摘要', 'R-3.13', fix=FIX_REGEN,
       note='✚ 同上。⚠ `summary` **0 确定性消费方**，唯一消费方是计划节点的 prompt'

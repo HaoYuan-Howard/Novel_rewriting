@@ -379,18 +379,7 @@ def _response_blueprints() -> dict[int, dict]:
     return out
 
 
-def _summary_text(ordinal: int) -> str:
-    return f'第{ordinal}章摘要：' + '事件按原叙述顺序推进，人物行动、因果转折与关键材料均保持一致。' * 2
-
-
 def _respond_blueprints(req: ChatRequest, by_ordinal: dict[int, dict]) -> ChatResponse:
-    if '逐章事件清单' in req.user:
-        ordinals = sorted({int(value) for value in re.findall(
-            r'"chapter_ordinal":(\d+)', req.user)})
-        return _ok({'chapters': [
-            {'chapter_ordinal': ordinal, 'summary': _summary_text(ordinal)}
-            for ordinal in ordinals
-        ]})
     ordinals = re.findall(r'阅读序第(\d+)章', req.user)
     assert ordinals, '单章 user prompt 没有任务范围'
     return _ok({'blueprints': [by_ordinal[int(ordinals[-1])]]})
@@ -492,12 +481,12 @@ def test_stage2_generation_reaches_a_reloadable_jointly_checked_artifact():
         report = extract.run_blueprint(blueprint_ctx, blueprint_client)
 
         assert report.passed
-        assert len(blueprint_transport.calls) == len(main_text()) + 1
+        assert len(blueprint_transport.calls) == len(main_text())
         stored = ArtifactStore(blueprint_ctx).read(
             ChapterBlueprints, extract.BLUEPRINT_REL)
         assert [bp.chapter_ordinal for bp in stored.blueprints] == [1, 2, 3]
         assert stored.provenance.usage is not None
-        assert stored.provenance.usage.calls_made == 4
+        assert stored.provenance.usage.calls_made == 3
         context = stored.provenance.context
         # 产地必须如实记下本次运行选中的契约。
         from novel.stages.stage2.contract import active_contract
@@ -1330,11 +1319,11 @@ def test_stage2_targeted_regeneration_refreshes_one_chapter_and_merges_book():
             repair_ctx, repair_client, chapters=(1,))
 
         assert report.passed
-        assert len(repair_transport.calls) == 2
+        assert len(repair_transport.calls) == 1
         assert '上一版结构基线' in repair_transport.calls[0].user
         assert '上一版必须修正的问题' in repair_transport.calls[0].user
         assert 'b01_01' in repair_transport.calls[0].user
-        assert len(_blueprint_transport.calls) == len(main_text()) + 1
+        assert len(_blueprint_transport.calls) == len(main_text())
         stored = store.read(ChapterBlueprints, extract.BLUEPRINT_REL)
         assert [bp.chapter_ordinal for bp in stored.blueprints] == [1, 2, 3]
         assert stored.provenance.partial_regen_chapters == [1]
@@ -1343,7 +1332,7 @@ def test_stage2_targeted_regeneration_refreshes_one_chapter_and_merges_book():
         assert stored.provenance.repairs[-1].failure_items == [
             'hinge_anchor_void', 'verbatim_failed']
         assert stored.provenance.usage is not None
-        assert stored.provenance.usage.calls_made == 6
+        assert stored.provenance.usage.calls_made == 4
         assert not (book / extract._INVALID).exists()
         assert previous.provenance.usage is not None
     finally:

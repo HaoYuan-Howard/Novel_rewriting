@@ -10,7 +10,7 @@ test_stage2.py —— Stage 2 当前判据。
 在报告上长得一模一样。
 
 ⚠ **反例配得出来的前提是判据吃 `dict` 不吃模型**（`novel/stages/stage2/checks.py` 文件头）：
-一旦跑在已过 Pydantic 的对象上，`role_missing` / `event_empty`
+一旦跑在已过 Pydantic 的对象上，`role_missing` / `fact_atom_empty`
 那一类在**结构上就构造不出反例**——`min_length=1` 会先把样本拒掉。
 本文件因此全程操作 dict，一次都不 `model_validate`。
 
@@ -107,14 +107,22 @@ def _beat(bid: str, a: str, b: str, *, event: str, place: str,
           layer: str = 'present') -> dict[str, Any]:
     chapter = {'01': CH1, '02': CH2, '03': CH3}[bid[1:3]]
     current_hinges = [
-        {'kind': hinge['kind'],
+        {'hinge_id': f'h{bid[1:3]}_{int(bid[-2:]) * 10 + index:03d}',
+         'kind': hinge['kind'], 'source_beat_ref': bid,
          'source': _source(chapter, hinge['starts_with'], hinge['ends_with'])}
-        for hinge in (hinges or [])
+        for index, hinge in enumerate((hinges or []), 1)
     ]
-    return {'beat_id': bid, 'span': _source(chapter, a, b),
+    atom_source = _source(chapter, a, b)
+    fact_id = f'f{bid[1:3]}_{int(bid[-2:]):03d}'
+    return {'beat_id': bid, 'span': atom_source,
             'time_layer': layer, 'place': place,
             'present_names': list(names), 'present_char_ids': list(ids),
-            'event': event, 'hinges': current_hinges}
+            'hinges': current_hinges,
+            '_fact_atom': {
+                'fact_id': fact_id, 'claim': event, 'kind': 'event',
+                'obligation': 'land', 'source_beat_ref': bid, 'source': atom_source,
+                'participant_char_ids': list(ids),
+            }}
 
 
 def _narration(focalizer: str | None = '李宝珠', cid: str | None = 'char_001') -> list[dict]:
@@ -207,7 +215,7 @@ def global_grounding() -> dict[str, Any]:
 
 
 def blueprints() -> dict[str, Any]:
-    return {
+    doc = {
         'blueprints': [
             {'chapter_ordinal': 1, 'summary': '李宝珠在廊下看落花，想起昨夜那封说父亲回城的信',
              'narration': _narration(),
@@ -286,10 +294,18 @@ def blueprints() -> dict[str, Any]:
                           'unknown': 0, 'invented': 0, 'no_names': 1, 'pronoun': 0},
             'verbatim_rewrites': [],
             'verbatim_failures': [],
+            'fact_atom_failures': [],
             'partial_regen_chapters': [],
             'repairs': [],
         },
     }
+    for chapter in doc['blueprints']:
+        chapter['chapter_function'] = chapter['summary']
+        chapter['fact_atoms'] = [beat.pop('_fact_atom') for beat in chapter['beats']]
+        chapter['causal_edges'] = []
+        chapter['entry_state_refs'] = []
+        chapter['ending_state_refs'] = []
+    return doc
 
 
 def _hard_hits(gg: dict | None, bp: dict | None, mt: list | None) -> set[str]:
@@ -679,8 +695,8 @@ CASES: list[tuple[str, Mutator, str]] = [
      _m(lambda g, b, m: b['_provenance'].__setitem__(
          'scope_violations', ['批 1 被要求产 ch1，实际产了 ch1 与 ch5'])),
      '非空即失败；产地必须无条件写这个键，没越界时写空列表'),
-    ('event_empty',
-     _m(lambda g, b, m: _ch(b, 1)['beats'][0].__setitem__('event', '')),
+    ('fact_atom_empty',
+     _m(lambda g, b, m: _ch(b, 1)['fact_atoms'][0].__setitem__('claim', '')),
      '⚠ **判在本层不判 stage4**：留在下游意味着要先付掉一次规划调用才发现这一层产坏了'),
     ('summary_empty',
      _m(lambda g, b, m: _ch(b, 1).__setitem__('summary', '')),

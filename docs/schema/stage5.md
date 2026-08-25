@@ -53,6 +53,21 @@ stage5/draft.md                  canonical 章集合的 UTF-8 纯投影
 `surface_habits`、`chapter_styles` 或 `hook_style`，prompt 也不能接收整份 Stage3 包。
 Stage2 的 secrets 仍从剥除原文 evidence 的全局事实投影读取，不因收窄 Stage3 消费面而缩小检查面。
 
+### 1.2 Stage4 → Stage5：只执行新场景设计
+
+写手收到 `CtxChapter.semantic_contract`、`chapter_rewrite_brief` 与按 slot 排列的 `scenes[]`。
+章级契约把 `information_delta`、`character_state_delta`、`relationship_delta` 与
+`reader_knowledge_delta` 分栏下发，并同时给出完整 must-land/context、因果边和章首/章尾状态；
+这些都是 Stage2 atom 的确定性人话投影，不由 Stage4/5 转述出第二份真相。
+每场明确 purpose、进入/退出态、required/context facts、turn、舞台、人物、材料和预算；不接收
+fact_id/beat_id/hinge_id，也不接收旧源序 `events[]`。slot 顺序是唯一硬顺序，场内事实数组没有
+源文先后含义。
+
+允许写手发明不改变持久状态的舞台表面：动作、走位、即时反应、符合身份且不新增信息的对白措辞、
+感官/心理/场景调度和不会被后文引用的承接细节。禁止新增因果、决定、结果、关系、知识、往事、
+秘密、规则及可被后文引用的新人物、地点、道具或事件。判准是写完后人物/关系/知识/世界状态是否
+产生契约外变化，不是“原文没写的动作一律禁止”。
+
 ## 二、`stage5/chNN.json`（schema v2）
 
 ### 2.1 模型响应与正式产物不是同一个形状
@@ -221,8 +236,8 @@ repair 分桶为 **12 UNIQUE、12 FREE、27 NONE**；repair 不是 severity，�
 | `simile_drift` | info | FREE | `R-7.21` |
 | `xinli_drift` | info | FREE | `R-7.21` |
 | `dash_drift` | info | NONE | `R-7.21` |
-| `event_landing` | info | FREE | `R-7.22` |
-| `event_landing_unver` | unver | NONE | `R-7.22` |
+| `fact_landing` | info | FREE | `R-7.22` |
+| `fact_landing_unver` | unver | NONE | `R-7.22` |
 | `cross_chapter_number` | info | UNIQUE | `R-7.23` |
 | `quote_unbalanced` | info | NONE | `R-7.7` |
 | `length_report` | metric | NONE | `R-8.1b` |
@@ -230,7 +245,7 @@ repair 分桶为 **12 UNIQUE、12 FREE、27 NONE**；repair 不是 severity，�
 | `overlap_report` | metric | NONE | `R-8.1b` |
 | `book_length_report` | metric | NONE | `R-8.1b` |
 | `dash_report` | metric | NONE | `R-7.21b` |
-| `event_atom_unattested` | info | NONE | `R-7.22b` |
+| `fact_atom_unattested` | info | NONE | `R-7.22b` |
 | `material_anchor_unattested` | info | NONE | `R-7.22b` |
 | `end_hook_surface_report` | metric | NONE | `R-7.9` |
 | `end_hook_unver` | unver | NONE | `R-7.9` |

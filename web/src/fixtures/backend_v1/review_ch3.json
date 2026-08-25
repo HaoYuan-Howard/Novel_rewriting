@@ -30,7 +30,7 @@
   "dialogue_ratio_drift": "5/8",
   "draft_too_short": "0/8",
   "draft_truncated": "0/8",
-  "event_landing": "0/8",
+  "fact_landing": "0/8",
   "invented_name": "0/8",
   "invented_number": "2/8",
   "keep_value_missing": "0/8",
@@ -50,7 +50,7 @@
   "verbatim_split": "0/8",
   "verbatim_typo": "0/8",
   "xinli_drift": "1/8",
-  "_beat_event_landing": "56/56 拍有落点（另 1 拍提不出原子、0 拍原子提错，均未检查）"
+  "_fact_landing": "56/56 事实有落点（另 1 事实提不出原子、0 事实原子提错，均未检查）"
  },
  "baselines_identity": {
   "band_drift": "0/8",
@@ -63,7 +63,7 @@
   "dialogue_ratio_drift": "2/8",
   "draft_too_short": "0/8",
   "draft_truncated": "0/8",
-  "event_landing": "0/8",
+  "fact_landing": "0/8",
   "invented_name": "0/8",
   "invented_number": "2/8",
   "keep_value_missing": "0/8",

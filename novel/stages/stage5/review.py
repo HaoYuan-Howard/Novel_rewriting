@@ -559,9 +559,9 @@ def build_review(ctx: RunContext, store: ArtifactStore, book: M.Book) -> Review:
     # 句型漂移又有段型漂移时会产两条 `band_drift`；按条数会报出 20/15 章。
     hits = collections.Counter(rule for row in rows for rule in {f.rule for f in row.findings})
     baselines = {r_: f'{hits.get(r_, 0)}/{nch}' for r_ in conclusive}
-    baselines['_beat_event_landing'] = (
-        f"{land['ok']}/{land['ok'] + land['missed']} 拍有落点"
-        f"（另 {land['noatom']} 拍提不出原子、{land['ident']} 拍原子提错，均未检查）")
+    baselines['_fact_landing'] = (
+        f"{land['ok']}/{land['ok'] + land['missed']} 事实有落点"
+        f"（另 {land['noatom']} 事实提不出原子、{land['ident']} 事实原子提错，均未检查）")
     baselines_identity = {r_: f'{ident_hits.get(r_, 0)}/{nch}' for r_ in conclusive}
 
     counts: collections.Counter = collections.Counter()
@@ -693,13 +693,13 @@ def _outcomes(rev: Review, book: M.Book | None) -> list:
     nch = len([r for r in rev.chapters if r.relpath])
     scanned = {r_: f'{rev.baselines.get(r_, "")} 章（恒等基线 '
                    f'{rev.baselines_identity.get(r_, "?")}）'
-               for r_ in rev.baselines if r_ != '_beat_event_landing'}
-    scanned['_beat_event_landing'] = rev.baselines['_beat_event_landing']
+               for r_ in rev.baselines if r_ != '_fact_landing'}
+    scanned['_fact_landing'] = rev.baselines['_fact_landing']
     for r_ in ('secret_timeline', 'no_secrets_in_book'):
         scanned[r_] = f'{len(book.secrets) if book else "?"} 条 secret'
     for r_ in ('draft_missing', 'book_length', 'book_length_report',
                'convergence_report', 'name_surface_survey', 'must_hold_unver',
-               'event_landing', 'event_landing_unver', 'end_hook_surface_report',
+               'fact_landing', 'fact_landing_unver', 'end_hook_surface_report',
                'end_hook_unver',
                'cross_chapter_number'):
         scanned.setdefault(r_, f'{nch}/{len(rev.chapters)} 章有成稿')
@@ -760,7 +760,7 @@ def _outcomes(rev: Review, book: M.Book | None) -> list:
             'no_secrets_in_book': (f'这本书有 {len(book.secrets)} 条 secret'
                                    if book and book.secrets else '这本书没有可查的秘密'),
             'must_hold_unver': '这本书没有【必须成立】那一组材料',
-            'event_landing_unver': '每一拍都提得出可回查的原子',
+            'fact_landing_unver': '每个必落事实都提得出可回查的原子',
             'end_hook_unver': '没有成稿章节可供人工复核章尾语义交付',
         },
         blind=blind)

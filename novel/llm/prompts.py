@@ -24,10 +24,10 @@ from typing import Any, Final
 from pydantic import BaseModel
 
 from contracts.invariants import (
-    ADDRESS_BY, ADDRESS_CONTEXT, BARE_PRONOUNS, BEAT_MIN_CHARS, BEAT_NATURAL_MAX,
+    ADDRESS_BY, ADDRESS_CONTEXT, BARE_PRONOUNS,
     BOOK_BAND, CHANGE_TYPES_ENUM, HINGE_KINDS, INVENT_ALLOW,
     INVENT_FORBID, INVENT_PRINCIPLE, NAME_DISTINCTIVENESS, PLACE_MODES,
-    PLAN_BUDGET_BAND, PLAN_RECONSTRUCT_MIN_UNITS, RESPONSE_CHAPTER_WEIGHTS,
+    PLAN_BUDGET_BAND, RESPONSE_CHAPTER_WEIGHTS,
     RESPONSE_DELIVERY_MODES, RESPONSE_GOAL_INTENTS, RESPONSE_STRUCTURAL_ROLES,
     RESPONSE_TEMPORAL_LINKS, RESPONSE_TIME_LAYERS, RESPONSE_UNIT_WEIGHTS,
     STYLE_WORDS, TIME_LAYERS, VERBATIM_BUDGET_FACTOR, WORLD_RULE_KINDS,
@@ -72,8 +72,6 @@ ENUM_BLOCKS: Final[dict[str, str]] = {
     #   两个数在那里必须**同时出现**——测试 `test_plan_prompt_gives_both_bands...` 钉着。
     'BANDS': '{:g}~{:g}×'.format(*PLAN_BUDGET_BAND),
     'BOOK_BANDS': '{:g}~{:g}×'.format(*BOOK_BAND),
-    'BEAT_MIN': str(BEAT_MIN_CHARS),
-    'RECONSTRUCT_MIN': str(PLAN_RECONSTRUCT_MIN_UNITS),
     # ⚠⚠ **stage4 响应侧的四张表渲染的是【带前缀的键】，不是产物取值。**
     #   产物侧 `STRUCTURAL_ROLES` / `DELIVERY_MODES` / `TEMPORAL_LINKS` / `GOAL_INTENTS`
     #   在这里**没有块**——它们一个字都不该出现在下发面上，出现了模型就会照抄，
@@ -90,11 +88,8 @@ ENUM_BLOCKS: Final[dict[str, str]] = {
     #   一个字都不该出现在下发面上——理由同上面那四张。
     'CH_WEIGHTS': '|'.join(RESPONSE_CHAPTER_WEIGHTS),
     'W_WEIGHTS': '|'.join(RESPONSE_UNIT_WEIGHTS),
-    # 这两项必须从常量渲染，避免 prompt 与判据使用不同数值。
-    #   ⚠ `BEAT_NATURAL` 是**一对**（下界恒等于 `BEAT_MIN_CHARS`——拍就是按它切的），
-    #   与判据那一侧的报警线 `BEAT_ALERT_MIN/MAX` 是**故意的两对数**，别混。
+    # 逐字材料预算因子必须从常量渲染，避免 prompt 与判据使用不同数值。
     'VERBATIM_FACTOR': '{:g}'.format(VERBATIM_BUDGET_FACTOR),
-    'BEAT_NATURAL': f'{BEAT_MIN_CHARS}~{BEAT_NATURAL_MAX}',
     # ⚠ **这 15 个词必须整份插值，不许手抄一个子集**。
     'STYLE_WORDS': '、'.join(f'「{w}」' for w in STYLE_WORDS),
     # 同一张表的第二种渲染。

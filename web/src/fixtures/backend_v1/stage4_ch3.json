@@ -1,848 +1,171 @@
 {
- "sid": "7615069877019300633",
- "title": "我把夫君捧成头牌后，全家悔疯了",
- "identity_plan": false,
- "reconstruction_strategy": "强化女主从被动受辱到主动算计的递进感，压缩过渡叙述，突出每章结尾的强钩子，使爽感节奏更密集；在人物弧上，强调女主对前夫的报复层层升级，最终达成掌控怡红院的蜕变。",
- "chapters": [
-  1,
-  2,
-  3,
-  4,
-  5,
-  6,
-  7,
-  8
- ],
- "ordinal": 3,
- "index": [
-  {
-   "output_ordinal": 1,
-   "chapter_goal": "女主在新婚受辱后识破苏家嘴脸，立住反击动机。",
-   "budget_chars": 1120,
-   "span_chars": 1197,
-   "beats": 8,
-   "hidden": 7
-  },
-  {
-   "output_ordinal": 2,
-   "chapter_goal": "女主把苏家父子送入怡红院，完成第一轮身份反转。",
-   "budget_chars": 1400,
-   "span_chars": 1458,
-   "beats": 6,
-   "hidden": 7
-  },
-  {
-   "output_ordinal": 3,
-   "chapter_goal": "女主升任教习师，借杜婉儿刺激苏子瑜，并识破密谋，展现其将计就计的狠辣。",
-   "budget_chars": 1360,
-   "span_chars": 1442,
-   "beats": 8,
-   "hidden": 6
-  },
-  {
-   "output_ordinal": 4,
-   "chapter_goal": "女主借对手的圈套反制苏家女眷，让报复继续升级。",
-   "budget_chars": 1050,
-   "span_chars": 1154,
-   "beats": 5,
-   "hidden": 4
-  },
-  {
-   "output_ordinal": 5,
-   "chapter_goal": "苏家内乱扩大，女主掌握更多主动权与证据。",
-   "budget_chars": 1280,
-   "span_chars": 1321,
-   "beats": 9,
-   "hidden": 2
-  },
-  {
-   "output_ordinal": 6,
-   "chapter_goal": "旧秘密集中揭开，推动苏家败局进入不可逆阶段。",
-   "budget_chars": 1140,
-   "span_chars": 1217,
-   "beats": 6,
-   "hidden": 0
-  },
-  {
-   "output_ordinal": 7,
-   "chapter_goal": "朝堂与外族线汇合，女主把私人复仇推向最终清算。",
-   "budget_chars": 1500,
-   "span_chars": 1551,
-   "beats": 8,
-   "hidden": 0
-  },
-  {
-   "output_ordinal": 8,
-   "chapter_goal": "完成苏家清算与女主蜕变，收束人物命运。",
-   "budget_chars": 1120,
-   "span_chars": 1165,
-   "beats": 7,
-   "hidden": 0
-  }
- ],
- "plan_chapter": {
-  "output_ordinal": 3,
-  "from_source_ordinals": [
-   3
+  "sid": "7615069877019300633",
+  "title": "雨夜账册",
+  "identity_plan": false,
+  "reconstruction_strategy": "先让账册异常爆发，再补足核账处境。",
+  "chapters": [3],
+  "ordinal": 3,
+  "index": [
+    {
+      "output_ordinal": 3,
+      "chapter_goal": "advance · fact_atom:f03_001",
+      "budget_chars": 748,
+      "span_chars": 748,
+      "scenes": 1,
+      "hidden": 0
+    }
   ],
-  "chapter_goal": {
-   "intent": "advance",
-   "fact_refs": [
-    {
-     "kind": "event",
-     "ref": "b03_01..b03_09",
-     "chapter": 3
-    }
-   ],
-   "rationale": "女主升任教习师，借杜婉儿刺激苏子瑜，并识破密谋，展现其将计就计的狠辣。"
-  },
-  "open_hook_goal": {
-   "intent": "open",
-   "fact_refs": [
-    {
-     "kind": "event",
-     "ref": "b03_01",
-     "chapter": 3
-    }
-   ],
-   "rationale": "以公爹下海、女主职级上升开场，突出局势变化。"
-  },
-  "end_hook_goal": {
-   "intent": "close",
-   "fact_refs": [
-    {
-     "kind": "event",
-     "ref": "b03_09",
-     "chapter": 3
-    }
-   ],
-   "rationale": "女主冷笑盘算让婆母顶替，埋下反击伏笔。"
-  },
-  "beats": [
-   {
-    "i": 1,
-    "slot": "s01",
-    "from_beats": [
-     "b03_01"
-    ],
-    "budget_chars": 130
-   },
-   {
-    "i": 2,
-    "slot": "s02",
-    "from_beats": [
-     "b03_02"
-    ],
-    "budget_chars": 140
-   },
-   {
-    "i": 3,
-    "slot": "s03",
-    "from_beats": [
-     "b03_03"
-    ],
-    "budget_chars": 130
-   },
-   {
-    "i": 4,
-    "slot": "s04",
-    "from_beats": [
-     "b03_04"
-    ],
-    "budget_chars": 160
-   },
-   {
-    "i": 5,
-    "slot": "s05",
-    "from_beats": [
-     "b03_05"
-    ],
-    "budget_chars": 280
-   },
-   {
-    "i": 6,
-    "slot": "s06",
-    "from_beats": [
-     "b03_06"
-    ],
-    "budget_chars": 160
-   },
-   {
-    "i": 7,
-    "slot": "s07",
-    "from_beats": [
-     "b03_07",
-     "b03_08"
-    ],
-    "budget_chars": 200
-   },
-   {
-    "i": 8,
-    "slot": "s08",
-    "from_beats": [
-     "b03_09"
-    ],
-    "budget_chars": 160
-   }
-  ]
- },
- "ctx_chapter": {
-  "output_ordinal": 3,
-  "from_source_ordinals": [
-   3
-  ],
-  "chapter_goal": {
-   "intent": "advance",
-   "fact_refs": [
-    {
-     "kind": "event",
-     "ref": "b03_01..b03_09",
-     "chapter": 3
-    }
-   ],
-   "rationale": "女主升任教习师，借杜婉儿刺激苏子瑜，并识破密谋，展现其将计就计的狠辣。"
-  },
-  "open_hook_goal": {
-   "intent": "open",
-   "fact_refs": [
-    {
-     "kind": "event",
-     "ref": "b03_01",
-     "chapter": 3
-    }
-   ],
-   "rationale": "以公爹下海、女主职级上升开场，突出局势变化。"
-  },
-  "end_hook_goal": {
-   "intent": "close",
-   "fact_refs": [
-    {
-     "kind": "event",
-     "ref": "b03_09",
-     "chapter": 3
-    }
-   ],
-   "rationale": "女主冷笑盘算让婆母顶替，埋下反击伏笔。"
-  },
-  "budget_chars": 1360,
-  "source_chars": 1461,
-  "segments": [
-   {
-    "slot": "s01",
-    "events": [
-     "公爹在我的大力举荐下也下海了，与夫君一同霸榜怡绿院贵客首选第一梯队。我的职级从杂役丫鬟升为钮钴禄·特聘教习师，每日钻研男德知识并向公爹和夫君传道授业解惑，收获苏家男人成吨的仇恨目光。"
-    ],
-    "budget_chars": 130,
-    "source_chars": 144,
-    "time_layer": "present",
-    "place": "怡红院",
-    "present": [
-     "李宝珠"
-    ],
-    "segments": null,
-    "verbatim": null,
-    "keep_value": null,
-    "must_appear": null,
-    "must_hold": null
-   },
-   {
-    "slot": "s02",
-    "events": [
-     "婆母偷偷来上房远远观望自己的夫君和爱子，眼看他们日渐阴柔、阳刚不再，整日以泪洗面，逢人便说遇见我这般儿媳是造孽，并当我的面怒骂我爹不保亲家，全然忘了公爹曾三番五次欲置我爹于死地。"
-    ],
-    "budget_chars": 140,
-    "source_chars": 154,
-    "time_layer": "present",
-    "place": "上房",
-    "present": [
-     "婆母",
-     "苏子瑜",
-     "苏照庭"
-    ],
-    "segments": null,
-    "verbatim": null,
-    "keep_value": null,
-    "must_appear": null,
-    "must_hold": null
-   },
-   {
-    "slot": "s03",
-    "events": [
-     "我的教习课堂上有侍卫巡场，我对夫君和公爹事必躬亲，梳妆课程总拿他们当榜样，衣食住行安排得妥帖，远比当初我在苏家做儿媳时的待遇好千倍百倍。我清楚夫君好才是真的好，我靠他过好日子。"
-    ],
-    "budget_chars": 130,
-    "source_chars": 143,
-    "time_layer": "present",
-    "place": "教习课堂",
-    "present": [
-     "李宝珠",
-     "苏子瑜",
-     "苏照庭"
-    ],
-    "segments": null,
-    "verbatim": null,
-    "keep_value": null,
-    "must_appear": null,
-    "must_hold": [
-     "我心里门儿清：夫君好，才是真的好。",
-     "我还要靠我夫君过好日子呢。"
+  "plan_chapter": {
+    "output_ordinal": 3,
+    "from_source_ordinals": [3],
+    "chapter_goal": {
+      "intent": "advance",
+      "fact_refs": [{"kind": "fact_atom", "ref": "f03_001", "chapter": 3}],
+      "rationale": "推进账册异常"
+    },
+    "open_hook_goal": {
+      "intent": "open",
+      "fact_refs": [{"kind": "fact_atom", "ref": "f03_001", "chapter": 3}],
+      "rationale": "从雨夜核账切入"
+    },
+    "end_hook_goal": {
+      "intent": "close",
+      "fact_refs": [{"kind": "fact_atom", "ref": "f03_001", "chapter": 3}],
+      "rationale": "落到秘密追查"
+    },
+    "semantic_contract": {
+      "chapter_function": "发现账册异常并决定秘密追查",
+      "information_delta": ["f03_001"],
+      "character_state_delta": [],
+      "relationship_delta": [],
+      "reader_knowledge_delta": [],
+      "must_land_fact_refs": ["f03_001"],
+      "context_fact_refs": [],
+      "causal_edges": [],
+      "entry_state_refs": [],
+      "ending_state_refs": ["f03_001"],
+      "material_refs": []
+    },
+    "chapter_rewrite_brief": "从雨夜核账切入，让墨迹异常成为本场转折，章尾落到秘密追查。",
+    "scenes": [
+      {
+        "i": 1,
+        "slot": "s01",
+        "budget_chars": 748,
+        "purpose": "让墨迹异常在核账过程中暴露",
+        "role": "setup",
+        "delivery": "scene",
+        "transition": "start",
+        "land_fact_refs": ["f03_001"],
+        "context_fact_refs": [],
+        "turn_fact_ref": "f03_001",
+        "entry_state_refs": [],
+        "exit_state_refs": ["f03_001"]
+      }
     ]
-   },
-   {
-    "slot": "s04",
-    "events": [
-     "夫君被磋磨过度，整日萎靡不振，水灵大打折扣，我急得嘴上起了燎泡。我关心他身体，他却诅咒我早死，每日营业不情不愿全靠龟公上手段。我心急如焚，为讨好他，花银子托人寻来他的白月光青梅杜婉儿，希望给她一些精神鼓励。"
-    ],
-    "budget_chars": 160,
-    "source_chars": 177,
-    "time_layer": "present",
-    "place": "怡红院",
-    "present": [
-     "李宝珠",
-     "苏子瑜"
-    ],
-    "segments": null,
-    "verbatim": [
-     "李宝珠，你这阴损毒妇怎么还不死！”"
-    ],
-    "keep_value": null,
-    "must_appear": null,
-    "must_hold": null
-   },
-   {
-    "slot": "s05",
-    "events": [
-     "我向杜婉儿起誓称当初成婚夫君心里就没我、次日喜帕是我造假、他心里只有她一人，并说如今情形不久便能赎身，届时公婆不会反对。杜婉儿半信半疑，我解释称夫君为新婚夜逼死我，我当时不承认是为离间二人，如今请她劝慰夫君。杜婉儿认定是我从中作梗，我连连致歉，计划将她带进练功房。"
-    ],
-    "budget_chars": 280,
-    "source_chars": 374,
-    "time_layer": "present",
-    "place": "怡红院",
-    "present": [
-     "李宝珠",
-     "杜婉儿"
-    ],
-    "segments": null,
-    "verbatim": null,
-    "keep_value": null,
-    "must_appear": null,
-    "must_hold": [
-     "次日喜帕是我造假。”"
-    ]
-   },
-   {
-    "slot": "s06",
-    "events": [
-     "往常午间苏子瑜在此练琴箫，不料今日行程有变无人知会。推门时我与杜婉儿撞见苏子瑜正在“挨打”，贵客怒骂一声滚，我火速带神色恍惚的杜婉儿离开。杜婉儿暴风哭泣，质问苏子瑜自甘下贱，怀疑是我安排并出卖夫君，随后捂着手帕跑走。"
-    ],
-    "budget_chars": 160,
-    "source_chars": 186,
-    "time_layer": "present",
-    "place": "练功房",
-    "present": [
-     "李宝珠",
-     "杜婉儿",
-     "苏子瑜",
-     "贵客"
-    ],
-    "segments": null,
-    "verbatim": [
-     "怒骂一声滚。"
-    ],
-    "keep_value": null,
-    "must_appear": null,
-    "must_hold": [
-     "哪知他今日行程有了变动，竟无人知会我。"
-    ]
-   },
-   {
-    "slot": "s07",
-    "events": [
-     "苏子瑜待客人走后与我吵闹，怪我让婉儿看到害他失去最后念想，威胁自己已是头牌不怕报复，豁出命也绝不饶我。我自觉理亏，丧眉耷眼地没话说。",
-     "苏子瑜找人替他与杜婉儿鸿雁传书，精神头竟一日赛过一日的好了起来。"
-    ],
-    "budget_chars": 200,
-    "source_chars": 144,
-    "time_layer": null,
-    "place": null,
-    "present": null,
-    "segments": [
-     {
-      "time_layer": "present",
-      "place": "怡红院房间",
-      "present": [
-       "李宝珠",
-       "苏子瑜"
-      ]
-     },
-     {
-      "time_layer": "present",
-      "place": "怡红院",
-      "present": []
-     }
-    ],
-    "verbatim": [
-     "你就不怕我报复？”",
-     "“你给我等着！我豁出去这条命也绝不饶你！”"
-    ],
-    "keep_value": null,
-    "must_appear": null,
-    "must_hold": null
-   },
-   {
-    "slot": "s08",
-    "events": [
-     "龟公神神秘秘地把苏子瑜和杜婉儿的密信给我看，原来二人已同仇敌忾，计划让杜婉儿的弟弟杜玉闲来怡红院点名找我这个苏府女眷过夜。我看完冷笑，盘算让婆母顶替，因为苏府女眷不止我一个。"
-    ],
-    "budget_chars": 160,
-    "source_chars": 120,
-    "time_layer": "present",
-    "place": "怡红院",
-    "present": [
-     "李宝珠",
-     "龟公"
-    ],
-    "segments": null,
-    "verbatim": null,
-    "keep_value": null,
-    "must_appear": [
-     "密信"
-    ],
-    "must_hold": null
-   }
-  ],
-  "characters": {
-   "char_001": {
-    "display_name": "李宝珠",
-    "role": "李将军独女，新婚遭夫家磋磨，后利用怡红院环境报复苏家，最终成为怡红院主理人，并为国家刺探情报"
-   },
-   "char_002": {
-    "display_name": "爹",
-    "role": "武将，李宝珠之父，与苏照庭是政敌，支持三皇子登基，后成为新朝重臣"
-   },
-   "char_003": {
-    "display_name": "苏子瑜",
-    "role": "苏照庭独子，李宝珠夫君，后沦为怡红院头牌，勾结外族叛国"
-   },
-   "char_004": {
-    "display_name": "苏照庭",
-    "role": "官员，与李将军政敌，苏子瑜之父，后贬入怡红院刷恭桶，又下海接客，勾结外族"
-   },
-   "char_005": {
-    "display_name": "婆母",
-    "role": "苏照庭之妻，苏子瑜之母，后与杜玉闲有染并产子，脱离苏家"
-   },
-   "char_006": {
-    "display_name": "杜婉儿",
-    "role": "苏子瑜的青梅竹马，后嫁给富商为妾"
-   },
-   "char_007": {
-    "display_name": "杜玉闲",
-    "role": "杜婉儿之弟，赌徒，使苏夫人怀孕，后冷落她"
-   },
-   "char_008": {
-    "display_name": "龟公",
-    "role": "表面是怡红院龟公，实乃百晓生，皇帝安插在怡红院的眼线，后成为李宝珠的副手"
-   },
-   "char_009": {
-    "display_name": "嬷嬷",
-    "role": "怡红院管事嬷嬷，善于经营，管理青楼和绿院"
-   },
-   "char_010": {
-    "display_name": "新帝",
-    "role": "皇帝，先为三皇子，与李将军结盟，登基后贬苏家，派谢允监控怡红院"
-   },
-   "char_011": {
-    "display_name": "老皇帝",
-    "role": "先帝，赐婚李宝珠与苏子瑜"
-   },
-   "char_013": {
-    "display_name": "贵客",
-    "role": "外族势力首领，与苏家父子勾结叛国"
-   },
-   "char_015": {
-    "display_name": "暗卫",
-    "role": "李宝珠的暗卫，执行打晕苏子瑜和取血的任务"
-   }
   },
-  "narration": [
-   {
-    "segment": "全章",
-    "grammatical_person": "first",
-    "narrator": "李宝珠",
-    "focalizer": null,
-    "pronoun_surfaces": [
-     "我"
-    ]
-   }
-  ],
-  "facts": {
-   "setting": {
-    "时代背景": "古代架空王朝，存在皇帝赐婚、贱籍制度、青楼文化，有外族边境冲突。",
-    "世界观": "无奇幻元素，现实向古代世界，主角有暗卫、朝堂斗争、情报间谍等活动。"
-   },
-   "relations": [
-    {
-     "subject": "李宝珠",
-     "predicate": "是妻子",
-     "object": "苏子瑜"
+  "ctx_chapter": {
+    "output_ordinal": 3,
+    "from_source_ordinals": [3],
+    "chapter_goal": {
+      "intent": "advance",
+      "facts": ["本章事实：沈青发现账册末页的墨迹被人换过。"]
     },
-    {
-     "subject": "苏子瑜",
-     "predicate": "与...是恋人",
-     "object": "杜婉儿"
+    "open_hook_goal": {"intent": "open", "facts": ["第 3 章开篇"]},
+    "end_hook_goal": {"intent": "close", "facts": ["第 3 章结尾"]},
+    "semantic_contract": {
+      "chapter_function": "发现账册异常并决定秘密追查",
+      "information_delta": ["沈青发现账册末页的墨迹被人换过。"],
+      "character_state_delta": [],
+      "relationship_delta": [],
+      "reader_knowledge_delta": [],
+      "must_land_facts": ["沈青发现账册末页的墨迹被人换过。"],
+      "context_facts": [],
+      "causal_edges": [],
+      "entry_state": [],
+      "ending_state": ["沈青决定暂不惊动旁人。"]
     },
-    {
-     "subject": "苏照庭",
-     "predicate": "是丈夫",
-     "object": "婆母"
+    "chapter_rewrite_brief": "从雨夜核账切入，让墨迹异常成为本场转折，章尾落到秘密追查。",
+    "budget_chars": 748,
+    "source_chars": 748,
+    "scenes": [
+      {
+        "slot": "s01",
+        "purpose": "让墨迹异常在核账过程中暴露",
+        "role": "setup",
+        "delivery": "scene",
+        "transition": "start",
+        "budget_chars": 748,
+        "required_facts": ["沈青发现账册末页的墨迹被人换过。"],
+        "context_facts": [],
+        "turn_fact": "沈青发现账册末页的墨迹被人换过。",
+        "entry_state": [],
+        "exit_state": ["沈青决定暂不惊动旁人。"],
+        "participants": ["沈青", "周衡"],
+        "stages": [
+          {"time_layer": "present", "place": "茶馆", "present": ["沈青", "周衡"]}
+        ],
+        "source_chars": 748,
+        "verbatim": [],
+        "keep_value": [],
+        "must_appear": [],
+        "must_hold": []
+      }
+    ],
+    "characters": {
+      "char_001": {"display_name": "沈青", "role": "茶馆掌柜"}
     },
-    {
-     "subject": "李宝珠",
-     "predicate": "是女儿",
-     "object": "爹"
+    "narration": [
+      {
+        "segment": "全章",
+        "grammatical_person": "third",
+        "narrator": "沈青",
+        "focalizer": null,
+        "pronoun_surfaces": null
+      }
+    ],
+    "facts": {
+      "setting": {"时代背景": "架空旧城", "世界观": "故事发生在临河茶馆及其旧城商路。"},
+      "relations": [],
+      "secrets": [],
+      "world_rules": [],
+      "arc": {
+        "current_stage": {"stage": "查账", "chapters": [3]},
+        "arc_tracks": null,
+        "climax": null,
+        "ending": null
+      },
+      "address": []
     },
-    {
-     "subject": "苏子瑜",
-     "predicate": "是儿子",
-     "object": "苏照庭"
-    },
-    {
-     "subject": "苏子瑜",
-     "predicate": "是儿子",
-     "object": "婆母"
-    },
-    {
-     "subject": "杜婉儿",
-     "predicate": "是姐姐",
-     "object": "杜玉闲"
-    },
-    {
-     "subject": "新帝",
-     "predicate": "是君主",
-     "object": "龟公"
-    },
-    {
-     "subject": "李宝珠",
-     "predicate": "是儿媳",
-     "object": "苏照庭"
-    },
-    {
-     "subject": "李宝珠",
-     "predicate": "是儿媳",
-     "object": "婆母"
-    },
-    {
-     "subject": "李宝珠",
-     "predicate": "有暗卫",
-     "object": "暗卫"
-    }
-   ],
-   "secrets": [
-    {
-     "secret_id": "secret_01",
-     "fact": "苏子瑜与杜婉儿密谋，让杜玉闲到怡红院点李宝珠过夜，以污她清白，且苏夫人提供了秘药。",
-     "known_by": [
-      "李宝珠",
-      "苏子瑜",
-      "杜婉儿",
-      "婆母"
-     ],
-     "reader_knows_by_now": true
-    }
-   ],
-   "world_rules": [
-    {
-     "rule_id": "wr_01",
-     "kind": "legal_rule",
-     "description": "皇帝可以赐婚，被赐婚者必须遵从，抗旨会有严重后果。"
-    },
-    {
-     "rule_id": "wr_02",
-     "kind": "social_norm",
-     "description": "女子婚前必须保持贞洁，新婚夜需有落红证明；若失贞，夫家有权休妻或处以私刑。"
-    },
-    {
-     "rule_id": "wr_03",
-     "kind": "legal_rule",
-     "description": "犯罪官员家属可被贬为贱籍，送入青楼等场所服役，无法自主脱籍。"
-    },
-    {
-     "rule_id": "wr_04",
-     "kind": "social_norm",
-     "description": "青楼中的人员需按照管事安排接客，可被拍卖，客人的要求通常不得拒绝。"
-    },
-    {
-     "rule_id": "wr_05",
-     "kind": "legal_rule",
-     "description": "与外族勾结叛国者，一旦查实将被处死或严厉惩罚。"
-    },
-    {
-     "rule_id": "wr_06",
-     "kind": "social_norm",
-     "description": "女子应遵守三从四德，嫁人后需全心侍奉公婆和夫君，忍受不公对待。"
-    }
-   ],
-   "arc": {
-    "current_stage": {
-     "stage": "复仇升级与苏家内乱",
-     "chapters": [
-      3,
-      4
-     ]
-    },
-    "arc_tracks": null,
-    "climax": null,
-    "ending": null
-   },
-   "address": [
-    {
-     "who": "李宝珠",
-     "surface": "闺女",
-     "by": "爹",
-     "context": "address"
-    },
-    {
-     "who": "李宝珠",
-     "surface": "宝珠",
-     "by": "爹",
-     "context": "address"
-    },
-    {
-     "who": "李宝珠",
-     "surface": "李宝珠",
-     "by": "public",
-     "context": "reference"
-    },
-    {
-     "who": "爹",
-     "surface": "爹",
-     "by": "李宝珠",
-     "context": "address"
-    },
-    {
-     "who": "苏子瑜",
-     "surface": "夫君",
-     "by": "李宝珠",
-     "context": "address"
-    },
-    {
-     "who": "苏子瑜",
-     "surface": "苏子瑜",
-     "by": "narration",
-     "context": "reference"
-    },
-    {
-     "who": "苏子瑜",
-     "surface": "苏子瑜",
-     "by": "public",
-     "context": "reference"
-    },
-    {
-     "who": "苏子瑜",
-     "surface": "苏头牌",
-     "by": "public",
-     "context": "reference"
-    },
-    {
-     "who": "苏子瑜",
-     "surface": "七郎",
-     "by": "public",
-     "context": "reference"
-    },
-    {
-     "who": "苏子瑜",
-     "surface": "苏哥哥",
-     "by": "杜婉儿",
-     "context": "address"
-    },
-    {
-     "who": "苏照庭",
-     "surface": "公爹",
-     "by": "李宝珠",
-     "context": "address"
-    },
-    {
-     "who": "苏照庭",
-     "surface": "苏照庭",
-     "by": "narration",
-     "context": "reference"
-    },
-    {
-     "who": "苏照庭",
-     "surface": "苏老爹",
-     "by": "public",
-     "context": "reference"
-    },
-    {
-     "who": "婆母",
-     "surface": "婆母",
-     "by": "narration",
-     "context": "reference"
-    },
-    {
-     "who": "婆母",
-     "surface": "娘",
-     "by": "苏子瑜",
-     "context": "address"
-    },
-    {
-     "who": "杜婉儿",
-     "surface": "婉儿",
-     "by": "苏子瑜",
-     "context": "address"
-    },
-    {
-     "who": "杜婉儿",
-     "surface": "杜婉儿",
-     "by": "narration",
-     "context": "reference"
-    },
-    {
-     "who": "杜婉儿",
-     "surface": "姑娘",
-     "by": "public",
-     "context": "reference"
-    },
-    {
-     "who": "杜玉闲",
-     "surface": "杜玉闲",
-     "by": "narration",
-     "context": "reference"
-    },
-    {
-     "who": "嬷嬷",
-     "surface": "嬷嬷",
-     "by": "李宝珠",
-     "context": "address"
-    },
-    {
-     "who": "嬷嬷",
-     "surface": "管事嬷嬷",
-     "by": "narration",
-     "context": "reference"
-    },
-    {
-     "who": "新帝",
-     "surface": "新帝",
-     "by": "narration",
-     "context": "reference"
-    },
-    {
-     "who": "老皇帝",
-     "surface": "皇帝",
-     "by": "narration",
-     "context": "reference"
-    },
-    {
-     "who": "老皇帝",
-     "surface": "老皇帝",
-     "by": "narration",
-     "context": "reference"
-    },
-    {
-     "who": "暗卫",
-     "surface": "暗卫",
-     "by": "narration",
-     "context": "reference"
-    }
-   ]
+    "must_not_reveal": []
   },
-  "must_not_reveal": [
-   "secret_02",
-   "secret_03",
-   "secret_04",
-   "secret_05",
-   "secret_06",
-   "secret_07"
-  ]
- },
- "writer_target": [
-  1224,
-  1496
- ],
- "plan_state": {
-  "rel": "stage4/plan_chapters.json",
-  "exists": true,
-  "bytes": 6622,
-  "mtime": 1786693806,
-  "freshness": "stale",
-  "reason": "file_changed",
-  "ghosts": [],
-  "invalid": false,
-  "readable": true
- },
- "ctx_state": {
-  "rel": "stage4/writer_context.json",
-  "exists": true,
-  "bytes": 93200,
-  "mtime": 1786693806,
-  "freshness": "stale",
-  "reason": "file_changed",
-  "ghosts": [],
-  "invalid": false,
-  "readable": true
- },
- "_provenance": {
-  "code": "b371244",
-  "root_clean_sha1": "0000000000000000000000000000000000000000",
-  "inputs": {
-   "stage1/main_text.json": {
-    "file": "b8eb890096",
-    "consumed": null
-   },
-   "stage2/global_grounding.json": {
-    "file": "ad1e9a0db7",
-    "consumed": null
-   },
-   "stage2/chapter_blueprints.json": {
-    "file": "3a2a0ffe10",
-    "consumed": null
-   }
+  "writer_target": [598, 897],
+  "plan_state": {
+    "rel": "stage4/plan_chapters.json",
+    "exists": true,
+    "bytes": 2048,
+    "mtime": 1,
+    "freshness": "fresh",
+    "display_freshness": "fresh",
+    "reason": "match",
+    "ghosts": [],
+    "invalid": false,
+    "readable": true,
+    "condition": "ready"
   },
-  "usage": null,
-  "revalidated": null,
-  "gates_skipped": null,
-  "origin": null,
-  "input_basis": null,
-  "partial_rewrite": null,
-  "prompts": {
-   "N4_SYS": "5b36f8179e"
+  "ctx_state": {
+    "rel": "stage4/writer_context.json",
+    "exists": true,
+    "bytes": 2048,
+    "mtime": 1,
+    "freshness": "fresh",
+    "display_freshness": "fresh",
+    "reason": "match",
+    "ghosts": [],
+    "invalid": false,
+    "readable": true,
+    "condition": "ready"
   },
-  "model": "deepseek-v4-pro",
-  "params": {
-   "grouping": "absorb-small-v1",
-   "beat_min_chars": 80,
-   "plan_beats": 57
-  }
- },
- "_ctx_provenance": {
-  "code": "b371244",
-  "root_clean_sha1": "0000000000000000000000000000000000000000",
-  "inputs": {
-   "stage1/main_text.json": {
-    "file": "b8eb890096",
-    "consumed": null
-   },
-   "stage2/global_grounding.json": {
-    "file": "ad1e9a0db7",
-    "consumed": null
-   },
-   "stage2/chapter_blueprints.json": {
-    "file": "3a2a0ffe10",
-    "consumed": null
-   },
-   "stage4/plan_chapters.json": {
-    "file": "a0d9407f3a",
-    "consumed": null
-   }
-  },
-  "usage": null,
-  "revalidated": null,
-  "gates_skipped": null,
-  "origin": null,
-  "input_basis": null,
-  "partial_rewrite": null,
-  "prompts": null
- }
+  "_provenance": null,
+  "_ctx_provenance": null
 }

@@ -6,8 +6,8 @@ context.py —— `writer_context.json` 的**确定性组装**。
 【契约】写作节点只吃 stage3（风格）+ 本文件这一份。本模块是**按引用取值 + 按章投影**，
 不是「把计划给的东西转抄一遍」——四件事都由代码做：
 
-  · 每一拍按 `from_beats` 去 stage2 取【要写的内容】（`events`）、【原文字节】（`verbatim`）
-    与【真实字数】（`source_chars`）——计划本身只存决策，**一个字的内容都不经它的笔**；
+  · 每个新场景按 `fact_refs` 去 stage2 取事实原子，再由原子的 `source_beat_ref` 回取
+    【原文字节】与【舞台条件】；场景计划只存编排决策，不复制第二份事实源；
   · 下发的人名一律换成【原文里有据】的叫法（`canonical` 可能是模型自造的记账标签）；
   · 全书事实按「本章为止」裁剪（未揭示的 secret / 结局 / 人物弧终点不下发）；
   · 叙述视角原样透传，`char_id` 换成本名，段界描述换成**位置标签**。
@@ -240,96 +240,53 @@ def _name_narration(seg: dict[str, Any], disp: dict[str, str], idx: int, total: 
     return out
 
 
-def _resolve_beats(out_ch: dict[str, Any], bidx: dict[str, dict[str, Any]], disp: dict[str, str]
-                   ) -> tuple[list[dict[str, Any]], list[tuple[Any, str]], list[str]]:
-    """把计划里的每一拍解析成写手能直接用的形式：内容之外，再给它原文里的那几个【点】与舞台。
-
-    【为什么不让模型把这些字节写进计划】**凡是让 LLM 转抄的地方都会长出一个新的漂移源。**
-    早先规划器会把所引源拍的 `event` 改写成一句合并好的散文，实测 106 拍与 stage2 原件的
-    相似度中位 0.84、最低 0.44，**两个方向都在漂**：
-      · **造事实**——「早知【江随野身边人】难缠」被压成「早知【江家丫头】难缠」，
-        而那个人是另一家的、此时婚约还没成。闭卷写手无从发现，**直接进了成品**；
-      · **丢内容**——某章把「与下人偷情性质不同」「街头巷尾人人议论」整段丢掉（0.44）。
-    ⇒ 改为**按 `from_beats` 把 stage2 的 `event` 原件逐条取来**（`events[]`，顺序同 `from_beats`）：
-    写手要的从来不是一段合并好的散文——两句分开列反而更清楚哪些是必须写的两件事。
-
-    ⚠ 一个源 beat 可以被几拍共同引用。此时**保真材料只挂在第一个引用它的拍上**：
-    重复挂等于叫写手把同一句要害台词写三遍，字数也会被重复计。
-    （`events` **不做**这个去重——那样后几拍就没有内容可写了；重复由 `beat_reuse` 出提示。）
-
-    返回 `(beats, dropped, withheld)`：两份都**必须由调用方报出来**——
-    `dropped` 是被丢弃的未知 kind（悄悄少发一组保真材料，与悄悄多发一条假的逐字要求同样坏）；
-    `withheld` 是本章还叫不出名字、因而被剔出在场者名单的 `char_id`
-    （剔除是对的，但**剔了多少必须看得见**，否则「没人在场」与「没人有名字」无法区分）。
-    """
-    seen: set[str] = set()
-    beats: list[dict[str, Any]] = []
+def _resolve_scenes(
+    out_ch: dict[str, Any], bidx: dict[str, dict[str, Any]],
+    atoms: dict[str, dict[str, Any]], disp: dict[str, str],
+) -> tuple[list[dict[str, Any]], list[tuple[Any, str]], list[str]]:
+    """把 typed 场景引用编译成人话；writer context 不保留任何内部 id。"""
+    materials = {str(hinge.get('hinge_id')): hinge for beat in bidx.values()
+                 for hinge in (beat.get('hinges') or [])}
+    scenes: list[dict[str, Any]] = []
     dropped: list[tuple[Any, str]] = []
-    withheld_all: list[str] = []
-    for be in (out_ch.get('segments') or []):
-        cited = [b for b in (be.get('from_beats') or []) if b in bidx]
-        refs = [bidx[b] for b in cited if b not in seen]
-        seen.update(cited)
-        # ⚠ **不按「有没有 event」过滤**：`events` 与下面的 `segments` 都按 `cited` 顺序展开，
-        #   一过滤下标就会错位——那正好会把某一段的舞台安到另一段的内容上，
-        #   而这一类「张冠李戴」正是本层要根除的东西。
-        #   缺 event 是 stage2 的契约违约，该由落盘那一步响亮失败，不在这里悄悄补位。
-        # ⚠ `spine` **原样投影、不给默认值**：`None` 是「计划没做过主次决策」的合法态
-        #   （恒等基线就是它），而 `narrative_role` 那三个的 `or` 默认是给存量载体读的。
-        #   给 `spine` 补一个 1 等于替计划做了它没做的决策，下发面会照着演。
-        #   上界（`spine ≤ len(events)`）由 `CtxBeat` 的载体侧 validator 守——
-        #   这一层**同时**持有 events 与 spine，是全链唯一能把那条不等式写成类型的地方。
-        w: dict[str, Any] = {'slot': be.get('slot'),
-                             'events': [bidx[b].get('event') or '' for b in cited],
-                             'budget_chars': be.get('budget_chars'),
-                             'narrative_role': be.get('narrative_role') or 'bridge',
-                             'delivery': be.get('delivery') or 'scene',
-                             'transition': be.get('transition') or 'continue',
-                             'spine': be.get('spine')}
+    withheld: list[str] = []
 
-        # 舞台信息取自【所引的全部】源 beat（**不做 `seen` 去重**）：一拍写在哪儿、谁在场、
-        # 是不是回忆，跟这拍是不是第一个引用该 beat 无关，漏了写手就得靠猜。
-        all_refs = [bidx[b] for b in cited]
-        # ⚠ **本章还叫不出名字的在场者，剔除而不是兜底**：`disp` 是章级的，
-        #   叫不出名字的角色不在键里。旧写法 `disp.get(c, c)` 会把 `char_003` 这种内部编号
-        #   原样写进写手 prompt 的「在场：」——兜底就是给违约数据发通行证。
-        #   剔除的代价（写手不知道场上还有一个人）由 `events` 文本承担，
-        #   而给他一个本章还不存在的名字，代价是**直接剧透**。
-        for r in all_refs:
-            withheld_all += [c for c in r['present_char_ids'] if c not in disp]
-        stage = [(r['time_layer'], r['place'],
-                  [disp[c] for c in r['present_char_ids'] if c in disp])
-                 for r in all_refs]
-        uniform = len({(tl, pl) for tl, pl, _ in stage}) <= 1
-        if uniform and stage:
-            tl, pl, pres = stage[0]
-            if tl:
-                w['time_layer'] = tl
-            if pl:
-                w['place'] = pl
-            # 适用但无人 = []；null 专门表示顶层不适用、改走 segments。
-            w['present'] = pres
-        elif stage:
-            # ⚠⚠ **跨层/跨地合并必须保留子结构，不能压平。** 压平会产生两种害处：
-            #   ① `time_layer` 变成取值面外的 `"present+recall"`，写手无从判断这拍是现场还是回忆；
-            #   ② `present` **取并集** —— 实测某拍把【只在前世出现的那个人】列进了现世街头的
-            #      在场者，而这是闭卷写手唯一能依据的在场信息，它很可能就把人写进错的场。
-            w['segments'] = [{'time_layer': tl, 'place': pl, 'present': pres}
-                             for tl, pl, pres in stage]
+    def claims(refs: list[Any]) -> list[str]:
+        return [str(atoms[str(ref)].get('claim')) for ref in refs if str(ref) in atoms]
 
-        # 【逐字下发的唯一通道】写手闭卷、看不到原文，靠转述必然丢掉「改一个字就废」的东西。
-        # **只发离散的点**，不发连续段落——点无法被模仿成文风，只能被放进去或不放进去；
-        # 连续段落会让写手沿着原文的句序和节奏走。
-        # 按 kind 分组下发：四种 kind 要守住的是【不同的维度】，混在一起写手会一律理解成「逐字照抄」。
-        groups, unk = verbatim_pieces([h for r in refs for h in r['hinges']])
-        for g, pieces in groups.items():
-            w.setdefault(g, []).extend(pieces)
-        dropped.extend(unk)
-
-        sizes = [r['source_chars'] for r in refs]
-        w['source_chars'] = sum(sizes) if sizes and all(s is not None for s in sizes) else None
-        beats.append(w)
-    return beats, dropped, withheld_all
+    for scene in (out_ch.get('scenes') or []):
+        stages = [bidx[str(ref)] for ref in (scene.get('stage_refs') or [])
+                  if str(ref) in bidx]
+        for row in stages:
+            withheld += [cid for cid in row.get('present_char_ids') or [] if cid not in disp]
+        participants = [disp[cid] for cid in (scene.get('participant_refs') or []) if cid in disp]
+        stage_rows = [{
+            'time_layer': row.get('time_layer'), 'place': row.get('place'),
+            'present': [disp[cid] for cid in (row.get('present_char_ids') or []) if cid in disp],
+        } for row in stages]
+        land_refs = list(scene.get('land_fact_refs') or [])
+        context_refs = list(scene.get('context_fact_refs') or [])
+        w: dict[str, Any] = {
+            'slot': scene.get('slot'), 'purpose': scene.get('purpose'),
+            'role': scene.get('role'), 'delivery': scene.get('delivery'),
+            'transition': scene.get('transition'), 'budget_chars': scene.get('budget_chars'),
+            'required_facts': claims(land_refs), 'context_facts': claims(context_refs),
+            'turn_fact': str(atoms[str(scene.get('turn_fact_ref'))].get('claim')),
+            'entry_state': claims(list(scene.get('entry_state_refs') or [])),
+            'exit_state': claims(list(scene.get('exit_state_refs') or [])),
+            'participants': list(dict.fromkeys(participants)), 'stages': stage_rows,
+        }
+        selected = [materials[str(ref)] for ref in (scene.get('material_refs') or [])
+                    if str(ref) in materials]
+        groups, unknown = verbatim_pieces(selected)
+        for group, pieces in groups.items():
+            if pieces:
+                w[group] = pieces
+        dropped.extend(unknown)
+        sizes = [row.get('source_chars') for row in stages]
+        w['source_chars'] = sum(sizes) if sizes and all(size is not None for size in sizes) else None
+        scenes.append(w)
+    return scenes, dropped, withheld
 
 
 def _plot_free_rules(canon: dict[str, Any], o: int, naming: dict[str, str], avail: dict[str, int]
@@ -628,7 +585,7 @@ def _project_facts(global_g: dict[str, Any], o: int, is_last: bool, disp: dict[s
 
 
 def _resolve_goal(goal: dict[str, Any], *, ordinal: int,
-                  bidx: dict[str, dict[str, Any]], disp: dict[str, str],
+                  atoms: dict[str, dict[str, Any]], disp: dict[str, str],
                   facts: dict[str, Any], global_g: dict[str, Any]) -> dict[str, Any]:
     """Project a durable ``PlanGoal`` into a writer-safe, human-readable goal.
 
@@ -661,10 +618,10 @@ def _resolve_goal(goal: dict[str, Any], *, ordinal: int,
     for ref in goal.get('fact_refs') or []:
         kind, key = ref.get('kind'), ref.get('ref')
         value: str | None = None
-        if kind == 'event':
-            value = (bidx.get(key) or {}).get('event')
+        if kind == 'fact_atom':
+            value = (atoms.get(str(key)) or {}).get('claim')
             if value:
-                value = f'事件：{value}'
+                value = f'本章事实：{value}'
         elif kind == 'character':
             if disp.get(key):
                 value = f'人物：{disp[key]}'
@@ -787,6 +744,9 @@ def build_writer_context(plan: dict[str, Any], global_g: dict[str, Any],
             f'relation_id 要两端都能解析成人名才有标签可发')
 
     bidx = beat_index(blueprints, main_text)
+    atom_index = {str(atom.get('fact_id')): atom
+                  for blueprint in (blueprints.get('blueprints') or [])
+                  for atom in (blueprint.get('fact_atoms') or [])}
     asm = Assembly(subs=subs, collisions=name_collisions(disp, chars))
 
     # 【到本章为止的原文】章级名字表的输入。累积一次，循环里按源章号取。
@@ -815,7 +775,7 @@ def build_writer_context(plan: dict[str, Any], global_g: dict[str, Any],
         if not any((facts.get('setting') or {}).values()) and (global_g.get('canon') or {}).get('setting'):
             asm.setting_emptied.append(oo)
         asm.held_rules |= {(oo,) + hh for hh in held}
-        beats, unk_kinds, withheld = _resolve_beats(o, bidx, disp_o)
+        scenes, unk_kinds, withheld = _resolve_scenes(o, bidx, atom_index, disp_o)
         asm.withheld += [(oo, c) for c in withheld]
         # ⚠⚠ **章级表会造出书级表没有的撞名，必须出声**：书级表判有据用全书正文，
         #   于是某角色拿到 canonical、不撞名；而在 ch2 原文还没写出那个本名，
@@ -824,21 +784,53 @@ def build_writer_context(plan: dict[str, Any], global_g: dict[str, Any],
         #   新增了撞名**，静默发生就等于我们自己制造了歧义还不告诉人。
         asm.chapter_collisions += [(oo, n, ids) for n, ids, _c in name_collisions(disp_o, chars)]
         asm.dropped_hinges += [(oo,) + u for u in unk_kinds]
+        contract = o.get('semantic_contract') or {}
+
+        def contract_claims(refs: list[Any]) -> list[str]:
+            return [str(atom_index[str(ref)].get('claim')) for ref in refs
+                    if str(ref) in atom_index]
+
+        semantic_contract = {
+            'chapter_function': contract.get('chapter_function'),
+            'information_delta': contract_claims(
+                list(contract.get('information_delta') or [])),
+            'character_state_delta': contract_claims(
+                list(contract.get('character_state_delta') or [])),
+            'relationship_delta': contract_claims(
+                list(contract.get('relationship_delta') or [])),
+            'reader_knowledge_delta': contract_claims(
+                list(contract.get('reader_knowledge_delta') or [])),
+            'must_land_facts': contract_claims(
+                list(contract.get('must_land_fact_refs') or [])),
+            'context_facts': contract_claims(
+                list(contract.get('context_fact_refs') or [])),
+            'causal_edges': [{
+                'before': contract_claims([edge.get('before')])[0],
+                'after': contract_claims([edge.get('after')])[0],
+            } for edge in (contract.get('causal_edges') or [])
+                if contract_claims([edge.get('before')])
+                and contract_claims([edge.get('after')])],
+            'entry_state': contract_claims(
+                list(contract.get('entry_state_refs') or [])),
+            'ending_state': contract_claims(
+                list(contract.get('ending_state_refs') or [])),
+        }
         chapters.append({
             'output_ordinal': oo,
             'from_source_ordinals': srcs,
             'chapter_goal': _resolve_goal(
-                o.get('chapter_goal') or {}, ordinal=oo, bidx=bidx, disp=disp_o,
+                o.get('chapter_goal') or {}, ordinal=oo, atoms=atom_index, disp=disp_o,
                 facts=facts, global_g=global_g),
             'open_hook_goal': _resolve_goal(
-                o.get('open_hook_goal') or {}, ordinal=oo, bidx=bidx, disp=disp_o,
+                o.get('open_hook_goal') or {}, ordinal=oo, atoms=atom_index, disp=disp_o,
                 facts=facts, global_g=global_g),
             'end_hook_goal': _resolve_goal(
-                o.get('end_hook_goal') or {}, ordinal=oo, bidx=bidx, disp=disp_o,
+                o.get('end_hook_goal') or {}, ordinal=oo, atoms=atom_index, disp=disp_o,
                 facts=facts, global_g=global_g),
-            # 章级汇总：写手不必自己把各拍加起来；计划载体保证每拍预算为正。
-            'budget_chars': sum(b['budget_chars'] for b in beats),
-            'segments': beats,
+            'semantic_contract': semantic_contract,
+            'chapter_rewrite_brief': o.get('chapter_rewrite_brief'),
+            'budget_chars': sum(scene['budget_chars'] for scene in scenes),
+            'scenes': scenes,
             'narration': narration,
             'source_chars': n_chars,
             # 【本章可用的人物名册】书级那份留在 `world_facts.characters` 给确定性代码用；

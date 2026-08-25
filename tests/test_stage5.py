@@ -145,12 +145,12 @@ def test_paragraph_budget_has_an_exact_shared_boundary_and_a_red_counterexample(
             'paragraph_count_report', 'paragraph_budget_missed']
 
 
-# ────────── 事件原子：「提不出」与「提错了」是两个层的账 ──────────
+# ────────── 事实原子：「提不出」与「提错了」是两个层的账 ──────────
 
 def test_a_bad_upstream_atom_is_reported_as_stage2s_bill_not_as_ours():
     """⭐ **反例样本**：原子在**源章原文**里都找不到 ⇒ 抽取那一步错了。
 
-    ⚠ 它此前与「提不出原子」合并成一条 `event_landing_unver`、`owner` 记 stage5
+    ⚠ 它此前与「提不出原子」混成一条下游结论、`owner` 记 stage5
     ⇒ 一个 stage2 的 bug 被报成「stage5 这一维够不着」，
     `novel/report/builder.py::remediation_of` 的修复路由因此指向错的层。
     ⚠ 两桶的**措辞也必须分开**：一个说「事件是概括句，提不出可回查的原子」，
@@ -159,14 +159,14 @@ def test_a_bad_upstream_atom_is_reported_as_stage2s_bill_not_as_ours():
     entry = {'output_ordinal': 1,
              'characters': {'c1': {'display_name': '顾堇'}},
              'narration': [{'segment': '全章', 'grammatical_person': 'third'}],
-             'segments': [{'slot': 's01', 'events': ['顾堇打翻了茶盏']}]}
+             'scenes': [{'slot': 's01', 'required_facts': ['顾堇打翻了茶盏']}]}
     book = M.Book(title='t', ctx={'chapters': [entry]}, measurable={},
                   source_text={1: '这一章原文里根本没有那个人。'}, secrets=[])
     entry['from_source_ordinals'] = [1]
     fs, land = checks.review_chapter_findings('成稿正文。', entry, book)
-    assert [f.rule for f in fs] == ['event_atom_unattested']
+    assert [f.rule for f in fs] == ['fact_atom_unattested']
     assert land['ident'] == 1 and land['ok'] == 0 and land['missed'] == 0
-    assert REGISTRY.get('event_atom_unattested').owner == 'stage2',         '这条账记的是上游；owner 一改回 stage5，修复路由就又指错层了'
+    assert REGISTRY.get('fact_atom_unattested').owner == 'stage2',         '这条账记的是上游；owner 一改回 stage5，修复路由就又指错层了'
 
 
 # ───────────── band_drift：翻档与真漂移必须在报告上分得开 ─────────────
@@ -205,7 +205,7 @@ def _hook_book(facts, *, slots=('s01', 's02')):
         'output_ordinal': 1,
         'narration': [{'segment': '全章', 'grammatical_person': 'third'}],
         'characters': {'c1': {'display_name': '顾堇'}},
-        'segments': [{'slot': sl, 'events': ['e']} for sl in slots],
+        'scenes': [{'slot': sl} for sl in slots],
         'end_hook_goal': {'intent': 'open', 'facts': list(facts)},
     }
     book = M.Book(title='t', ctx={'chapters': [entry]}, measurable={},
@@ -412,7 +412,7 @@ def test_meta_leak_goes_red_on_narrative_shell(book, entry, shell):
 def test_verbatim_missing_goes_red_when_the_mandated_line_is_gone(book, entry):
     """⭐ 【原样写入】那一组**要求逐字**，改一个字就废。"""
     line = '这句话一个字都不能改，写手必须原样放回去。'
-    e = dict(entry, segments=[{**(entry['segments'][0]), 'verbatim': [line]}])
+    e = dict(entry, scenes=[{**(entry['scenes'][0]), 'verbatim': [line]}])
     anchored = _with_source_material(book, e, line)
     body = _clean_body(book, entry)
     assert 'verbatim_missing' in _fire(body, e, anchored)
@@ -431,7 +431,7 @@ def test_verbatim_typo_is_a_separate_conclusion_not_a_miss(
     ——那是**纠正**不是改写。要求它复现原文的错别字是荒谬的。
     """
     line = '这为公子的伤口已经溃烂了整整三日无人问津。'
-    e = dict(entry, segments=[{**(entry['segments'][0]), 'verbatim': [line]}])
+    e = dict(entry, scenes=[{**(entry['scenes'][0]), 'verbatim': [line]}])
     anchored = _with_source_material(book, e, line)
     fired = _fire(_clean_body(book, entry) + rewritten, e, anchored)
     assert 'verbatim_typo' in fired and 'verbatim_missing' not in fired
@@ -440,7 +440,7 @@ def test_verbatim_typo_is_a_separate_conclusion_not_a_miss(
 def test_verbatim_three_character_rewrite_is_still_missing(book, entry):
     """三字及以上已经不是局部错别字修正，仍须走 missing。"""
     line = '这为工子的伤口已经溃烂了整整三日无人问津。'
-    e = dict(entry, segments=[{**(entry['segments'][0]), 'verbatim': [line]}])
+    e = dict(entry, scenes=[{**(entry['scenes'][0]), 'verbatim': [line]}])
     rewritten = '这位年轻人的伤口已经溃烂了整整三日无人问津。'
     anchored = _with_source_material(book, e, line)
     fired = _fire(_clean_body(book, entry) + rewritten, e, anchored)
@@ -453,7 +453,7 @@ def test_verbatim_split_by_a_speech_tag_is_allowed_but_still_recorded(book, entr
     但「一个字都没动」与「切成两截后逐字出现」不是同一件事，**不能都走 `[OK]`**。
     """
     line = '「你要是真的想走，那就走吧，我不拦着你，一次都不会。」'
-    e = dict(entry, segments=[{**(entry['segments'][0]), 'verbatim': [line]}])
+    e = dict(entry, scenes=[{**(entry['scenes'][0]), 'verbatim': [line]}])
     split = '「你要是真的想走，」他说，「那就走吧，我不拦着你，一次都不会。」'
     anchored = _with_source_material(book, e, line)
     fired = _fire(_clean_body(book, entry) + split, e, anchored)
@@ -468,7 +468,7 @@ def test_real_stage5_report_keeps_verbatim_caveat_in_note_only(book, entry):
     from novel.report import build, render
 
     line = '「你要是真的想走，那就走吧，我不拦着你，一次都不会。」'
-    e = dict(entry, segments=[{**entry['segments'][0], 'verbatim': [line]}])
+    e = dict(entry, scenes=[{**entry['scenes'][0], 'verbatim': [line]}])
     split = '「你要是真的想走，」他说，「那就走吧，我不拦着你，一次都不会。」'
     anchored = _with_source_material(book, e, line)
     findings = checks.chapter_findings(
@@ -519,7 +519,7 @@ def test_stage5_check_report_aggregates_band_drift_without_losing_chapter_state(
             SimpleNamespace(output_ordinal=7, relpath='stage5/ch07.json', findings=[second]),
         ],
         book=[],
-        baselines={'band_drift': '2/2', '_beat_event_landing': '0/0 拍有落点'},
+        baselines={'band_drift': '2/2', '_fact_landing': '0/0 事实有落点'},
         baselines_identity={'band_drift': '0/2'},
     )
     report = build(
@@ -552,7 +552,7 @@ def test_check_only_overlays_a_wontfix_written_after_the_latest_review(monkeypat
     from novel.stages.stage5 import review
 
     hit = checks.with_output_ordinal([finding(
-        'event_landing', detail='第 2 拍没有落点', evidence=['b02'],
+        'fact_landing', detail='一个必落事实没有落点', evidence=['事实摘要'],
         converge='same_draft', unresolved_rounds=0,
     )], 6)[0]
     row = ReviewChapter(
@@ -563,7 +563,7 @@ def test_check_only_overlays_a_wontfix_written_after_the_latest_review(monkeypat
     )
     artifact = Review.model_construct(
         sources=None, judged={}, chapters=[row], book=[],
-        baselines={'_beat_event_landing': '0/1 拍有落点'},
+        baselines={'_fact_landing': '0/1 事实有落点'},
         baselines_identity={}, counts={}, provenance=None,
     )
     entry = WontFixEntry(
@@ -580,7 +580,7 @@ def test_check_only_overlays_a_wontfix_written_after_the_latest_review(monkeypat
 
     report = review._report_of_review(ctx, store, artifact)
 
-    finding_row = next(item for item in report.rules if item.rule == 'event_landing')
+    finding_row = next(item for item in report.rules if item.rule == 'fact_landing')
     assert finding_row.findings[0].wontfix is not None
     assert finding_row.findings[0].wontfix.why == '故意保留留白'
     assert finding_row.findings[0].actionable is False
@@ -593,7 +593,7 @@ def test_keep_value_missing_compares_the_value_not_the_literal(book, entry):
     ——而契约发给写手的原话是「数字必须保住，**措辞随你**」，写手做的正是它让做的事。
     """
     material = '她今年30岁了。'
-    e = dict(entry, segments=[{**(entry['segments'][0]), 'keep_value': [material]}])
+    e = dict(entry, scenes=[{**(entry['scenes'][0]), 'keep_value': [material]}])
     anchored = _with_source_material(book, e, material)
     body = _clean_body(book, entry)
     assert 'keep_value_missing' in _fire(body, e, anchored)
@@ -605,7 +605,7 @@ def test_keep_value_missing_compares_the_value_not_the_literal(book, entry):
 def test_unattested_material_is_stage2s_bill_and_never_a_stage5_missing_target(book, entry):
     """源文不存在的锚不能沿 UNIQUE 路由付费塞进正文。"""
     fake = '源章从未出现过的伪造原话。'
-    e = dict(entry, segments=[{**entry['segments'][0], 'verbatim': [fake]}])
+    e = dict(entry, scenes=[{**entry['scenes'][0], 'verbatim': [fake]}])
     fired = _fire(_clean_body(book, entry), e, book)
     assert 'material_anchor_unattested' in fired
     assert 'verbatim_missing' not in fired
@@ -956,7 +956,7 @@ def test_the_review_runs_on_a_current_book_and_reports_all_baselines(box):
     assert len(rev['baselines']) == len(mechanical) + 1
     nch = len([c for c in rev['chapters'] if c.get('relpath')])
     for rule, baseline in rev['baselines'].items():
-        if rule == '_beat_event_landing':
+        if rule == '_fact_landing':
             continue
         hits, total = map(int, baseline.split('/'))
         assert total == nch and hits <= total, \

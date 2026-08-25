@@ -103,12 +103,12 @@ def _stage2_hinge(hinge: object) -> object:
         return None
     source = hinge.get('source')
     text = source.get('text') if isinstance(source, dict) else None
-    return hinge.get('kind'), text
+    return hinge.get('hinge_id'), hinge.get('kind'), hinge.get('source_beat_ref'), text
 
 
-def _stage4_beats(blueprint: dict) -> tuple:
+def _stage4_stages(blueprint: dict) -> tuple:
     return tuple(
-        (be.get('beat_id'), be.get('event'), be.get('time_layer'),
+        (be.get('beat_id'), be.get('time_layer'),
          be.get('place'), tuple(be.get('present_char_ids') or []),
          _stage2_source(be.get('span')),
          tuple(_stage2_hinge(h) for h in (be.get('hinges') or [])))
@@ -116,17 +116,37 @@ def _stage4_beats(blueprint: dict) -> tuple:
     )
 
 
+def _stage4_atoms(blueprint: dict) -> tuple:
+    return tuple(
+        (atom.get('fact_id'), atom.get('claim'), atom.get('kind'), atom.get('obligation'),
+         atom.get('source_beat_ref'), _stage2_source(atom.get('source')),
+         tuple(atom.get('participant_char_ids') or []))
+        for atom in (blueprint.get('fact_atoms') or []) if isinstance(atom, dict)
+    )
+
+
+def _stage4_contract(blueprint: dict) -> tuple:
+    return (
+        blueprint.get('chapter_function'),
+        _stage4_atoms(blueprint),
+        tuple((edge.get('before'), edge.get('after'))
+              for edge in (blueprint.get('causal_edges') or []) if isinstance(edge, dict)),
+        tuple(blueprint.get('entry_state_refs') or []),
+        tuple(blueprint.get('ending_state_refs') or []),
+    )
+
+
 def stage4_plan_blueprints(data: object) -> object:
-    """规划消费章摘要与拍；叙述人称只在写作上下文组装时消费。"""
+    """规划消费章摘要、原子事实契约与舞台；叙述人称由 context 消费。"""
     if not isinstance(data, dict):
         return None
     return sorted(
-        (b.get('chapter_ordinal'), b.get('summary'), _stage4_beats(b))
+        (b.get('chapter_ordinal'), b.get('summary'), _stage4_contract(b), _stage4_stages(b))
         for b in (data.get('blueprints') or []) if isinstance(b, dict))
 
 
 def stage4_context_blueprints(data: object) -> object:
-    """写作上下文消费叙述信息与拍；原章摘要明确不下发。"""
+    """写作上下文消费叙述信息、原子事实契约与舞台；摘要明确不下发。"""
     if not isinstance(data, dict):
         return None
     return sorted(
@@ -134,7 +154,7 @@ def stage4_context_blueprints(data: object) -> object:
          tuple((n.get('grammatical_person'), n.get('narrator_char_id'),
                 n.get('focalizer_char_id'), tuple(n.get('pronoun_surfaces') or []))
                for n in (b.get('narration') or []) if isinstance(n, dict)),
-         _stage4_beats(b))
+          _stage4_contract(b), _stage4_stages(b))
         for b in (data.get('blueprints') or []) if isinstance(b, dict))
 
 
@@ -398,21 +418,26 @@ def stage6_context(data: object) -> object:
     def public_goal(value: object) -> object:
         if not isinstance(value, dict):
             return value
-        return {key: value.get(key) for key in ('intent', 'fact_refs')}
+        return {key: value.get(key) for key in ('intent', 'facts')}
 
     return [
         {
             'output_ordinal': chapter.get('output_ordinal'),
             'from_source_ordinals': chapter.get('from_source_ordinals'),
+            'semantic_contract': chapter.get('semantic_contract'),
+            'chapter_rewrite_brief': chapter.get('chapter_rewrite_brief'),
             'chapter_goal': public_goal(chapter.get('chapter_goal')),
             'open_hook_goal': public_goal(chapter.get('open_hook_goal')),
-            'segments': [
+            'scenes': [
                 {
-                    'slot': segment.get('slot'),
-                    'events': list(segment.get('events') or []),
+                    'slot': scene.get('slot'),
+                    'purpose': scene.get('purpose'),
+                    'required_facts': list(scene.get('required_facts') or []),
+                    'turn_fact': scene.get('turn_fact'),
+                    'exit_state': list(scene.get('exit_state') or []),
                 }
-                for segment in (chapter.get('segments') or [])
-                if isinstance(segment, dict)
+                for scene in (chapter.get('scenes') or [])
+                if isinstance(scene, dict)
             ],
             'end_hook_goal': public_goal(chapter.get('end_hook_goal')),
         }

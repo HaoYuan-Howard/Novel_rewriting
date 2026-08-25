@@ -31,8 +31,8 @@ def _entry() -> tuple[dict, object]:
 
 def test_writer_response_slots_are_complete_unique_and_canonicalised():
     entry, _book = _entry()
-    second = {**entry['segments'][0], 'slot': 's02'}
-    entry = {**entry, 'segments': [entry['segments'][0], second]}
+    second = {**entry['scenes'][0], 'slot': 's02'}
+    entry = {**entry, 'scenes': [entry['scenes'][0], second]}
     response = ChapterResponse.model_validate({
         'segments': [
             {'slot': 's02', 'text': '后段。'},
@@ -56,9 +56,9 @@ def test_writer_response_slots_are_complete_unique_and_canonicalised():
 def test_writing_gate_requires_fidelity_material_in_its_declared_segment():
     entry, book = _entry()
     required = '这句必须留在第一幕，一个字也不能挪。'
-    first = {**entry['segments'][0], 'verbatim': [required]}
-    second = {**entry['segments'][0], 'slot': 's02', 'verbatim': []}
-    entry = {**entry, 'segments': [first, second]}
+    first = {**entry['scenes'][0], 'verbatim': [required]}
+    second = {**entry['scenes'][0], 'slot': 's02', 'verbatim': []}
+    entry = {**entry, 'scenes': [first, second]}
     source = dict(book.source_text)
     source_ordinal = int(entry['from_source_ordinals'][0])
     source[source_ordinal] += '\n' + required
@@ -80,7 +80,7 @@ def test_writing_gate_requires_fidelity_material_in_its_declared_segment():
     assert hits and {hit.output_ordinal for hit in hits} == {entry['output_ordinal']}
 
 
-def test_segment_event_order_is_proved_or_explicitly_unverifiable():
+def test_segment_facts_are_checked_in_their_declared_scene_without_source_order():
     entry, book = _entry()
     entry = {
         **entry,
@@ -88,34 +88,36 @@ def test_segment_event_order_is_proved_or_explicitly_unverifiable():
             **entry['characters'],
             'char_002': {'display_name': '周衡', 'role': '账房'},
         },
-        'segments': [{
-            **entry['segments'][0],
-            'events': ['沈青先查看账册。', '周衡随后关门。'],
+        'scenes': [{
+            **entry['scenes'][0],
+            'required_facts': ['沈青查看账册。', '周衡关门。'],
+            'turn_fact': '周衡关门。',
         }],
     }
-    reversed_hits = checks.segment_event_findings(
+    reordered_hits = checks.segment_fact_findings(
         [{'slot': 's01', 'text': '周衡随后关门。沈青才查看账册。'}],
         entry, book)
-    assert any(hit.rule == 'event_landing' and '顺序' in hit.detail
-               for hit in reversed_hits)
+    assert not any(hit.rule == 'fact_landing' for hit in reordered_hits)
 
     unver_entry = {
         **entry,
-        'segments': [{**entry['segments'][0], 'events': ['风声变紧，局势更危险。']}],
+        'scenes': [{**entry['scenes'][0],
+                    'required_facts': ['风声变紧，局势更危险。'],
+                    'turn_fact': '风声变紧，局势更危险。'}],
     }
-    unver_hits = checks.segment_event_findings(
+    unver_hits = checks.segment_fact_findings(
         [{'slot': 's01', 'text': '风更紧了。'}], unver_entry, book)
-    assert any(hit.rule == 'event_landing_unver' for hit in unver_hits)
+    assert any(hit.rule == 'fact_landing_unver' for hit in unver_hits)
 
 
 def test_prompt_private_values_are_derived_from_schema_metadata_recursively():
     goal = PlanGoal(
         intent='advance',
-        fact_refs=[FactRef(kind='event', ref='b01_01', chapter=1)],
+        fact_refs=[FactRef(kind='fact_atom', ref='f01_01', chapter=1)],
         rationale='这是只供审计、绝不能下发的自由理由',
     )
     assert [(token.path, token.value) for token in private_tokens(goal)] == [
-        ('fact_refs[0].ref', 'b01_01'),
+        ('fact_refs[0].ref', 'f01_01'),
         ('rationale', '这是只供审计、绝不能下发的自由理由'),
     ]
     with pytest.raises(PromptPrivateLeak, match='rationale'):
@@ -173,8 +175,8 @@ def test_writer_goal_uses_resolved_facts_and_never_internal_plan_ids():
     entry, book = _entry()
     material = prompts.build_material(entry, book)
     user = prompts.build_user(material)
-    assert '事件：沈青发现账册末页的墨迹被人换过。' in user
-    assert 'b01_01' not in user
+    assert '本章事实：沈青发现账册末页的墨迹被人换过。' in user
+    assert 'f01_01' not in user
     assert 'chapter:1:start' not in user
     assert 'fact_refs' not in user
 
@@ -183,23 +185,23 @@ def test_context_resolves_goal_ids_after_chapter_gates():
     goal = {
         'intent': 'advance',
         'fact_refs': [
-            {'kind': 'event', 'ref': 'b01_01', 'chapter': 1},
+            {'kind': 'fact_atom', 'ref': 'f01_01', 'chapter': 1},
             {'kind': 'character', 'ref': 'char_001', 'chapter': 1},
         ],
     }
     resolved = stage4_context._resolve_goal(
         goal, ordinal=1,
-        bidx={'b01_01': {'event': '沈青发现账册墨迹被换过。'}},
+        atoms={'f01_01': {'claim': '沈青发现账册墨迹被换过。'}},
         disp={'char_001': '沈青'},
         facts={'relations': [], 'world_rules': [], 'secrets': [], 'setting': {}},
         global_g={'entities': {'relations': []}},
     )
     assert resolved == {
         'intent': 'advance',
-        'facts': ['事件：沈青发现账册墨迹被换过。', '人物：沈青'],
+        'facts': ['本章事实：沈青发现账册墨迹被换过。', '人物：沈青'],
     }
     assert not any(token in json.dumps(resolved, ensure_ascii=False)
-                   for token in ('b01_01', 'char_001', 'fact_refs'))
+                   for token in ('f01_01', 'char_001', 'fact_refs'))
 
 
 def test_context_refuses_goal_that_would_bypass_a_chapter_gate():
@@ -207,7 +209,7 @@ def test_context_refuses_goal_that_would_bypass_a_chapter_gate():
         stage4_context._resolve_goal(
             {'intent': 'advance', 'fact_refs': [
                 {'kind': 'world_rule', 'ref': 'wr_09', 'chapter': 1}]},
-            ordinal=1, bidx={}, disp={},
+            ordinal=1, atoms={}, disp={},
             facts={'relations': [], 'world_rules': [], 'secrets': [], 'setting': {}},
             global_g={'entities': {'relations': []}},
         )
@@ -217,7 +219,7 @@ def test_hidden_secret_withhold_goal_does_not_disclose_identity_or_fact():
     resolved = stage4_context._resolve_goal(
         {'intent': 'withhold', 'fact_refs': [
             {'kind': 'secret', 'ref': 'secret_09', 'chapter': 1}]},
-        ordinal=1, bidx={}, disp={},
+        ordinal=1, atoms={}, disp={},
         facts={'relations': [], 'world_rules': [], 'secrets': [], 'setting': {}},
         global_g={'entities': {'relations': []}},
     )
@@ -244,7 +246,7 @@ def _trim_case():
         '沈青在茶馆核对账册。随后，她确认墨迹被人换过，却没有仓促下结论。'
         '窗外雨声渐紧，她把账册收好，决定天亮后再查。')
     entry['budget_chars'] = len(candidate)
-    entry['segments'][0]['budget_chars'] = len(candidate)
+    entry['scenes'][0]['budget_chars'] = len(candidate)
     original = candidate + '这段解释重复了同一个意思。' * 8
     return entry, book, [{'slot': 's01', 'text': original}]
 

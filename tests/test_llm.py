@@ -949,8 +949,8 @@ def test_a_legal_but_structurally_empty_json_is_rejected_like_a_parse_failure():
 
     实测：某次规划调用拿回 `{"reconstruction_strategy": "…"}`——**0 个输出章**、
     正常结束、4477 token 里推理占 4317。它是合法 JSON，于是一路放行**并进了缓存**；
-    下游把它摊成 **74 条**「这一拍没有给预算」，还附一句「说明 prompt 漂了」。
-    **74 条派生症状盖住了一句话能说清的事实。**
+    旧下游把它摊成 **74 条**派生症状，还附一句「说明 prompt 漂了」，
+    盖住了「规划结果为空」这一句真正的事实。
     """
     shell = ChatResponse(content='{"voice": {"a": 1}}', finish_reason='stop', usage=None)
     t = FakeTransport(responder=lambda _r, i: shell if i < 1 else OK_JSON)

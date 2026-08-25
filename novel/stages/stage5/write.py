@@ -234,7 +234,7 @@ def _reject_length_capped(_text: str, response: ChatResponse) -> str | None:
 
 
 def _expected_slots(entry: dict[str, Any]) -> tuple[str, ...]:
-    return tuple(str(segment.get('slot') or '') for segment in (entry.get('segments') or []))
+    return tuple(str(scene.get('slot') or '') for scene in (entry.get('scenes') or []))
 
 
 def _response_problem(

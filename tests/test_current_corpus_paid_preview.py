@@ -13,12 +13,13 @@ from tools import current_corpus_paid_preview as P
 
 #: 阶梯档数。**从生产落点取，不写死。**
 #: wire 上限恒是「逻辑请求数 × 档数 × 每档采样数」，于是这些期望值里被钉住的是
-#: **逻辑请求数**（94 / 4 / 6 …），而两个乘数只是已知乘数。
+#: **逻辑请求数**（92 / 4 / 6 …），而两个乘数只是已知乘数。
 #: ⚠⚠ 2026-08-24：Stage3 v2 变成免费机械节点后，基础逻辑请求数从 180
 #: 收到 **136**；那 44 次是两本书原先的逐章定性抽取，不得继续计入付费范围。随后
 #: `stage2.blueprint` 默认从每章两相的 v2 翻到每章一相的 v3.1，17+25 章再少 42 个
-#: 逻辑请求，基础数成为 **94**。`_logical_topology` 从 `active_contract()` 的
-#: `topology` / `needs_summary_batch` 派生；这里钉 94 是在守当前默认真实 consumer，
+#: 逻辑请求，基础数成为 94。Stage2 v5 又把摘要改为 fact atoms 的确定性投影，
+#: 双书各少一次书级摘要调用，基础数成为 **92**。`_logical_topology` 从
+#: `active_contract()` 的 `topology` 派生；这里钉 92 是在守当前默认真实 consumer，
 #: 翻默认时要随生产拓扑一起改，不能把预算预览留在旧臂。
 #: ⚠ 2026-08-18 阶梯由 4 档降到 3 档（删掉被服务端静默映射回 `high` 的 `medium`，
 #: 见 `novel/llm/client.py::LADDER`）⇒ 全部 wire 上限跟着降 1/4，**那是正确结果不是回归**。
@@ -30,14 +31,14 @@ _RUNGS = len(DEFAULT_RUNGS)
 _FLASH_MODELS = len(P.models_for(P.config.DEFAULT_MODEL))
 _PRO_MODELS = len(P.models_for(PRO_FALLBACK_MODEL))
 
-# 94 条非语义逻辑请求里，双书 `stage4.plan` 共 2 条钉死 Pro；其余 92 条
+# 92 条非语义逻辑请求里，双书 `stage4.plan` 共 2 条钉死 Pro；其余 90 条
 # 默认 Flash 并各带一次 Pro 兜底。语义判官 4 条全部钉死 Pro。
-_BASE_WIRE = ((94 - 2) * _FLASH_MODELS + 2 * _PRO_MODELS) \
+_BASE_WIRE = ((92 - 2) * _FLASH_MODELS + 2 * _PRO_MODELS) \
     * _RUNGS * MAX_SAMPLES_PER_RUNG
 _SEMANTIC_WIRE = 4 * _PRO_MODELS * _RUNGS * MAX_SAMPLES_PER_RUNG
 _HOOK_RETRY_WIRE = 6 * _FLASH_MODELS * MAX_SAMPLES_PER_RUNG
 
-#: 当前语料范围的 wire 硬上限：(基础 94 + 语义 4) × 档数 ×
+#: 当前语料范围的 wire 硬上限：(基础 92 + 语义 4) × 档数 ×
 #: 每档采样数，再加 6 条 stage6 定向重试 × 采样数（它们走**单档**
 #: `HOOK_RETRY_RUNGS`，只乘采样数不乘档数）。⚠ 并列的 `external_hard_limit=588`
 #: 是**已有实验**的历史边界，不随当前阶梯变。
@@ -126,14 +127,14 @@ def test_final_topology_lists_14_dispatches_and_real_conditional_limits(tmp_path
     aggregate = plan['aggregate']
     assert aggregate == {
         'production_cli_dispatches': 14,
-        'base_nonsemantic_logical_requests': 94,
+        'base_nonsemantic_logical_requests': 92,
         'base_nonsemantic_ladder_wire_hard_limit': _BASE_WIRE,
         'semantic_logical': 4,
         'semantic_wire_hard_limit': _SEMANTIC_WIRE,
         'stage6_conditional_candidate_retry_logical': 6,
         'stage6_conditional_candidate_retry_wire_hard_limit':
             _HOOK_RETRY_WIRE,
-        'full_conditional_logical_hard_limit': 104,
+        'full_conditional_logical_hard_limit': 102,
         'full_conditional_wire_hard_limit': _FULL_WIRE,
         'full_conditional_context_token_hard_ceiling': _FULL_WIRE * 1_000_000,
     }
@@ -143,12 +144,12 @@ def test_final_topology_lists_14_dispatches_and_real_conditional_limits(tmp_path
 
     blueprints = [row for row in plan['dispatches']
                   if row['node'] == 'stage2.blueprint']
-    assert sorted(row['base_logical_requests'] for row in blueprints) == [18, 26]
+    assert sorted(row['base_logical_requests'] for row in blueprints) == [17, 25]
     assert all(
         [item['kind'] for item in row['request_envelopes']]
-        == ['default', 'book_summary_batch']
+        == ['default']
         for row in blueprints
-    ), '默认 v3.1 必须是每章一相 + 一次书级摘要，不得残留 v2 边界相'
+    ), '默认 v3.1 必须是每章一相；summary 由 fact atoms 确定性投影'
 
     hooks = [row for row in plan['dispatches'] if row['node'] == 'stage6.hook']
     assert all('low/no-thinking' in row['conditional_reason'] for row in hooks)
@@ -389,7 +390,7 @@ def test_render_says_upper_bound_unknown_price_and_no_execution(tmp_path):
     hook_retry_wire = (6 * _FLASH_MODELS * len(P.HOOK_RETRY_RUNGS)
                        * MAX_SAMPLES_PER_RUNG)
     assert f'Stage6 条件候选定向重试：logical=6 / wire 上限={hook_retry_wire}' in text
-    assert f'全条件硬上限：logical=104 / wire={_FULL_WIRE}' in text
+    assert f'全条件硬上限：logical=102 / wire={_FULL_WIRE}' in text
     assert '可达硬上限，不是预计实付' in text
     assert '已有 FC08/12/13：10 CLI run' in text
     assert '那场战役不会发生' in text

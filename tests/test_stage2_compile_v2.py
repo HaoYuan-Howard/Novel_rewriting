@@ -7,7 +7,7 @@ test_stage2_compile_v2.py —— extraction IR 族（含 v2 引用式响应）�
 ① 游标分割与全部非法形（稳定 finding 措辞，不抛裸异常）；
 ② hinge 拍区间内唯一定位（exact / normalized / 多处命中 / 他处 / 编的 / cascade）；
 ③ place 判别三态与相邻同层继承（链头落账）；
-④ summary 注入与 debug 拼接。
+④ summary 由 fact atom claims 确定性投影，不接受第二份模型转述。
 外加 round-trip：`compile(project(artifact)) == artifact`（对 compile_v2 自己产的
 artifact 成立——`canonical_ir_projection` 不是逆函数，方向不能反）。
 """
@@ -57,13 +57,20 @@ CHARACTERS = {
 
 def _beat(end_para, *, layer='T_PRESENT', place=None, names=(), event='一件事',
           hinges=()) -> dict:
+    copied_hinges = [dict(h) for h in hinges]
+    evidence = next((str(h.get('phrase') or '') for h in copied_hinges
+                     if str(h.get('phrase') or '').strip()), event)
     return {
         'end_para': end_para,
         'time_layer': layer,
         'place': place or {'mode': 'P_UNKNOWN'},
         'present_names': list(names),
-        'event': event,
-        'hinges': [dict(h) for h in hinges],
+        'fact_atoms': [{
+            'atom_key': 'pending', 'claim': event, 'kind': 'event',
+            'obligation': 'land', 'evidence_phrase': evidence,
+            'participant_char_ids': [],
+        }],
+        'hinges': copied_hinges,
     }
 
 
@@ -73,15 +80,29 @@ def _narration() -> dict:
 
 
 def _data(*beats: dict, ordinal: int = 1) -> dict:
+    for index, beat in enumerate(beats, 1):
+        for atom_index, atom in enumerate(beat.get('fact_atoms') or [], 1):
+            atom['atom_key'] = f'a{index:02d}_{atom_index:02d}'
     return {'blueprints': [{
         'chapter_ordinal': ordinal,
+        'chapter_function': '完成本章的事实与状态变化',
         'beats': list(beats),
+        'causal_edges': [],
+        'entry_state_refs': [],
+        'ending_state_refs': [],
         'narration': [_narration()],
     }]}
 
 
-def _compile(data: dict, text: str = CH1, **kw):
-    return compile_v2(data, _main_text(text), CHARACTERS, **kw)
+def _atom(key: str, claim: str, evidence: str, ids=()) -> dict:
+    return {
+        'atom_key': key, 'claim': claim, 'kind': 'event', 'obligation': 'land',
+        'evidence_phrase': evidence, 'participant_char_ids': list(ids),
+    }
+
+
+def _compile(data: dict, text: str = CH1):
+    return compile_v2(data, _main_text(text), CHARACTERS)
 
 
 def _clean_data() -> dict:
@@ -134,13 +155,12 @@ def test_the_clean_v2_response_compiles_with_zero_failures():
     assert beats[0]['present_char_ids'] == ['char_001', 'char_002']
 
 
-def test_summaries_are_injected_and_debug_join_is_clearly_debug():
-    injected, _ = _compile(_clean_data(), summaries={1: '这是摘要批给的。'})
-    assert injected['blueprints'][0]['summary'] == '这是摘要批给的。'
-
-    joined, _ = _compile(_clean_data())
-    summary = joined['blueprints'][0]['summary']
-    assert summary.startswith('本章依次：') and '两担水' in summary
+def test_summary_is_a_deterministic_projection_of_fact_atoms():
+    first, _ = _compile(_clean_data())
+    second, _ = _compile(_clean_data())
+    summary = first['blueprints'][0]['summary']
+    assert summary == second['blueprints'][0]['summary']
+    assert summary.startswith('本章事实：') and '两担水' in summary
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -184,13 +204,13 @@ def test_v2_refs_keeps_selected_ids_authoritative_and_projects_readable_names():
             'time_layer': 'T_PRESENT',
             'place': '井边',
             'present_char_ids': ['char_002', 'char_001', 'char_002'],
-            'event': '母亲让李宝珠挑水',
+            'fact_atoms': [_atom('a01', '母亲让李宝珠挑水', '今天的第一课',
+                                 ['char_002', 'char_001'])],
             'hinges': [{'kind': '硬数字', 'phrase': '两担水'}],
         }],
         'narration': [_narration()],
     }]}
-    data, accounting = compile_v2_refs(
-        raw, _main_text(), CHARACTERS, summaries={1: '母亲让李宝珠挑水。'})
+    data, accounting = compile_v2_refs(raw, _main_text(), CHARACTERS)
     beat = data['blueprints'][0]['beats'][0]
     assert beat['present_char_ids'] == ['char_002', 'char_001']
     assert beat['present_names'] == ['母亲', '李宝珠']
@@ -204,12 +224,14 @@ def test_v2_refs_rejects_an_id_outside_the_visible_closed_set():
         'chapter_ordinal': 1,
         'beats': [{
             'end_para': 5, 'time_layer': 'T_PRESENT', 'place': None,
-            'present_char_ids': ['char_999'], 'event': '一件事', 'hinges': [],
+            'present_char_ids': ['char_999'],
+            'fact_atoms': [_atom('a01', '一件事', '李宝珠', ['char_999'])],
+            'hinges': [],
         }],
         'narration': [_narration()],
     }]}
     with pytest.raises(ValueError, match='不在本章可见集合'):
-        compile_v2_refs(raw, _main_text(), CHARACTERS, summaries={1: '摘要。'})
+        compile_v2_refs(raw, _main_text(), CHARACTERS)
 
 
 def test_v31_candidate_ids_compile_to_exact_sources_and_closed_narration_refs():
@@ -225,13 +247,15 @@ def test_v31_candidate_ids_compile_to_exact_sources_and_closed_narration_refs():
         'beats': [{
             'end_para': 3, 'time_layer': 'T_PRESENT', 'place': '井边',
             'present_char_ids': ['char_001', 'char_002'],
-            'event': '母亲让李宝珠挑水，李宝珠完成两担',
+            'fact_atoms': [_atom('a01', '母亲让李宝珠挑水，李宝珠完成两担',
+                                 '两担水', ['char_001', 'char_002'])],
             'hinges': [{'kind': '硬数字',
                         'candidate_id': hard_number['candidate_id']}],
         }, {
             'end_para': 5, 'time_layer': 'T_PRESENT', 'place': '屋内',
             'present_char_ids': ['char_001'],
-            'event': '李宝珠把三十文钱放在桌上',
+            'fact_atoms': [_atom('a02', '李宝珠把三十文钱放在桌上',
+                                 '三十文钱', ['char_001'])],
             'hinges': [{'kind': '硬数字', 'phrase': '三十文'}],
         }],
         'narration': [{
@@ -241,8 +265,7 @@ def test_v31_candidate_ids_compile_to_exact_sources_and_closed_narration_refs():
             'pronoun_surfaces': [],
         }],
     }]}
-    data, accounting = compile_v31_refs(
-        raw, _main_text(), CHARACTERS, summaries={1: '本章完成挑水并收好钱。'})
+    data, accounting = compile_v31_refs(raw, _main_text(), CHARACTERS)
     blueprint = data['blueprints'][0]
     assert 'micro_events' not in blueprint, '召回脚手架不得泄漏到正式产物'
     candidate_hinge = blueprint['beats'][0]['hinges'][0]
@@ -304,12 +327,14 @@ def test_v31_rejects_a_candidate_from_outside_its_beat_even_without_call_gate():
                          {'end_para': 5, 'cue': '收钱'}],
         'beats': [{
             'end_para': 2, 'time_layer': 'T_PRESENT', 'place': None,
-            'present_char_ids': [], 'event': '母亲开课',
+            'present_char_ids': [],
+            'fact_atoms': [_atom('a01', '母亲开课', '今天的第一课')],
             # h004 在第 5 段，不能挂到止于第 2 段的拍。
             'hinges': [{'kind': '硬数字', 'candidate_id': 'h004'}],
         }, {
             'end_para': 5, 'time_layer': 'T_PRESENT', 'place': None,
-            'present_char_ids': [], 'event': '事情收束', 'hinges': [],
+            'present_char_ids': [],
+            'fact_atoms': [_atom('a02', '事情收束', '三十文钱')], 'hinges': [],
         }],
         'narration': [{
             'grammatical_person': 'third', 'narrator_char_id': None,
@@ -317,7 +342,7 @@ def test_v31_rejects_a_candidate_from_outside_its_beat_even_without_call_gate():
         }],
     }]}
     with pytest.raises(ValueError, match='不在所属拍'):
-        compile_v31_refs(raw, _main_text(), CHARACTERS, summaries={1: '摘要。'})
+        compile_v31_refs(raw, _main_text(), CHARACTERS)
 
 
 def test_v31_projection_is_a_valid_repair_baseline_and_round_trips():
@@ -327,7 +352,8 @@ def test_v31_projection_is_a_valid_repair_baseline_and_round_trips():
             'micro_events': [{'end_para': 5, 'cue': '完成挑水'}],
             'beats': [{
                 'end_para': 5, 'time_layer': 'T_PRESENT', 'place': '井边',
-                'present_char_ids': ['char_001'], 'event': '李宝珠完成挑水',
+                'present_char_ids': ['char_001'],
+                'fact_atoms': [_atom('a01', '李宝珠完成挑水', '两担水', ['char_001'])],
                 'hinges': [{'kind': '硬数字', 'candidate_id': 'h003'}],
             }],
             'narration': [{
@@ -335,16 +361,15 @@ def test_v31_projection_is_a_valid_repair_baseline_and_round_trips():
                 'focalizer_char_id': 'char_001', 'pronoun_surfaces': [],
             }],
         }],
-    }, _main_text(), CHARACTERS, summaries={1: '李宝珠完成挑水。'})
+    }, _main_text(), CHARACTERS)
     artifact = compiled['blueprints'][0]
     projected = canonical_ir_projection_v31(artifact, CH1)
-    assert projected['micro_events'][0]['cue'] == artifact['beats'][0]['event']
+    assert projected['micro_events'][0]['cue'] == artifact['fact_atoms'][0]['claim']
     assert set(projected['narration'][0]) == {
         'grammatical_person', 'narrator_char_id', 'focalizer_char_id',
         'pronoun_surfaces'}
     replayed, _ = compile_v31_refs(
-        {'blueprints': [projected]}, _main_text(), CHARACTERS,
-        summaries={1: artifact['summary']})
+        {'blueprints': [projected]}, _main_text(), CHARACTERS)
     assert replayed['blueprints'][0] == artifact
 
 
@@ -518,8 +543,10 @@ def test_hinges_of_a_failed_beat_are_blanked_without_their_own_cause_rows():
         _beat(99, hinges=[{'kind': '物件', 'phrase': '两担水'}]),
     ))
     assert _hinge_rows(acc) == {}, 'span 自己没定位成功 ⇒ cascade，不逐条记 hinge 根因'
-    assert data['blueprints'][0]['beats'][0]['hinges'] == \
-        [{'kind': '物件', 'source': None}]
+    assert data['blueprints'][0]['beats'][0]['hinges'] == [{
+        'hinge_id': 'h01_001', 'kind': '物件',
+        'source_beat_ref': 'b01_01', 'source': None,
+    }]
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -527,13 +554,12 @@ def test_hinges_of_a_failed_beat_are_blanked_without_their_own_cause_rows():
 # ─────────────────────────────────────────────────────────────────────────────
 
 def test_projection_then_compile_reproduces_the_artifact_byte_for_byte():
-    artifact, _ = _compile(_clean_data(), summaries={1: '一段摘要。'})
+    artifact, _ = _compile(_clean_data())
     blueprint = artifact['blueprints'][0]
 
     projected = canonical_ir_projection(copy.deepcopy(blueprint), CH1)
     assert 'summary' not in projected
-    recompiled, acc = _compile({'blueprints': [projected]},
-                               summaries={1: '一段摘要。'})
+    recompiled, acc = _compile({'blueprints': [projected]})
     assert acc['verbatim_failures'] == []
     got = recompiled['blueprints'][0]
 
@@ -615,7 +641,7 @@ def test_the_scope_stops_at_the_current_chapter():
                                                          'name': '雁门关'})],
          'narration': [_narration()]},
     ]}
-    _, prov = compile_v2(data, mt, CHARACTERS, summaries={1: '甲。', 2: '乙。'})
+    _, prov = compile_v2(data, mt, CHARACTERS)
     assert [b for b, _n in prov['place_explicit_unlocatable']] == ['b01_01'], \
         '「截止本章」这条界线没生效：要么整本都能引，要么第 2 章自己也被误报'
 
@@ -632,7 +658,7 @@ def test_the_scope_is_built_from_main_text_not_from_the_compiled_batch():
         {'chapter_ordinal': 2, 'beats': [_beat(1, place={'mode': 'P_EXPLICIT',
                                                          'name': '肩膀'})],
          'narration': [_narration()]}]}
-    _, prov = compile_v2(only_ch2, mt, CHARACTERS, summaries={2: '乙。'})
+    _, prov = compile_v2(only_ch2, mt, CHARACTERS)
     assert '肩膀' in CH1 and '肩膀' not in ch2, '前提：该字面只在第 1 章'
     assert prov['place_explicit_unlocatable'] == [], \
         '匹配面是从 blueprints 累积的——定向重生成会把上游章当成不存在'

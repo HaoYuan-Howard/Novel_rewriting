@@ -32,6 +32,8 @@ export interface EnumJobKind {
 
 export interface EnumsResponse {
   hinge_kinds: string[]
+  fact_atom_kinds: string[]
+  fact_atom_obligations: string[]
   nonbody_kinds: string[]
   time_layers: string[]
   hinge_groups: Record<string, string>
@@ -39,7 +41,6 @@ export interface EnumsResponse {
   invent: { allow: string[]; forbid: string[]; principle: string }
   job_kinds: Record<string, EnumJobKind>
   actions: EnumAction[]
-  uncovered_min_chars: number
   /**
    * This is an honest display boundary, not an access-control boundary: the server still
    * sends the complete stage2 document and the adapter projects it before a Screen sees it.

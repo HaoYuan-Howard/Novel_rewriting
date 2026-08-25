@@ -4,7 +4,7 @@
 
 ⚠ 跑哪一臂由 `NOVEL_STAGE2_BLUEPRINT_CONTRACT` 决定（取值面见
 `SMOKE_CONTRACTS`），工具与 `extract.build_prompts` **同源**地取 spec。
-它用少量高难章先检查拍边界、hinge 定位、人物引用与摘要批，
+它用少量高难章先检查拍边界、hinge 定位、人物引用与原子事实编译，
 再决定是否花全书的钱跑整链。
 
 【为什么不是 CLI 的一个 flag】`stage2.blueprint` 只有两条路：整跑（全书，太贵）
@@ -22,8 +22,7 @@
 采纳与否是人看完读数之后的另一件事，本工具不代做。
 
 【分批纪律】付费调用一次一批、一律前台（本机后台句柄会静默终止且报假 exit 0）。
-推荐：每次 2 章 `--skip-summary-batch`，最后一次给全部 6 章（章响应全部命中缓存
-= 0 元）再让摘要批那一次调用真发。
+Stage2 v5 的摘要由原子事实确定性投影，不再需要书级模型调用。
 
 用法：
     # 0 成本预览：摊开将要发的请求与逐字节同构核对，一个请求都不发
@@ -32,7 +31,7 @@
 
     # 真发（付费）。--execute 是本工具这一层的显式闸
     python -X utf8 tools/smoke_stage2_ir1.py --base <outputs> --sid <id> \
-        --chapters 6,15 --execute --skip-summary-batch
+        --chapters 6,15 --execute
 """
 from __future__ import annotations
 
@@ -454,10 +453,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument('--chapters', required=True, help='逗号分隔的阅读序章号')
     ap.add_argument('--execute', action='store_true',
                     help='真发请求（付费）。不给时只摊开将发的请求，一个都不发')
-    ap.add_argument('--skip-summary-batch', action='store_true',
-                    help='只发章请求，不发摘要批（分批付费时给前几批用）')
     ap.add_argument('--boundary-only', action='store_true',
-                    help='只跑两段式契约的边界相，用最低成本先验拍数；不发细节与摘要')
+                    help='只跑两段式契约的边界相，用最低成本先验拍数；不发细节')
     ap.add_argument('--json-out')
     ap.add_argument('--md-out')
     a = ap.parse_args(argv)
@@ -500,9 +497,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f'  ch{ordinal}: user {len(user)} 字')
     phases = (1 if a.boundary_only else
               2 if spec.boundary_system is not None else 1)
-    print(f'  将发 {len(requests) * phases} 次章调用'
-          f'{"" if a.skip_summary_batch else " + 1 次摘要批"}'
-          f'（命中缓存的不再计费）')
+    print(f'  将发 {len(requests) * phases} 次章调用（命中缓存的不再计费）')
     if not a.execute:
         print('  真跑：否（0 成本预览；加 --execute）')
         return 0
@@ -592,14 +587,9 @@ def main(argv: list[str] | None = None) -> int:
     #   而它长得一样合理——正是 7A 第一版报告踩过的坑。
     raw_ir = copy.deepcopy(raw_blueprints)
     compiled, accounting = spec.compile_fn(
-        {'blueprints': raw_blueprints}, main_text, characters, summaries=None)
+        {'blueprints': raw_blueprints}, main_text, characters)
 
-    summary_mode = 'events_join_debug（未发摘要批）'
-    if not a.skip_summary_batch:
-        summaries = extract._run_summary_batch(ctx, client, compiled['blueprints'])
-        for blueprint in compiled['blueprints']:
-            blueprint['summary'] = summaries[int(blueprint['chapter_ordinal'])]
-        summary_mode = 'summary-batch（本次目标章一次调用）'
+    summary_mode = 'fact_atoms 确定性投影（0 次额外调用）'
 
     baseline = store_both.blueprints or {'blueprints': []}
     old_hits = _hits(extract._judge_candidate(global_raw, baseline, main_text))

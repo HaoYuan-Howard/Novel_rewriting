@@ -65,11 +65,13 @@ def test_the_real_plan_forwards_goals_and_sums_budgets(box):
     assert not v.identity_plan
     pc = plan['output_chapters'][0]
     assert v.plan_chapter.chapter_goal.model_dump(mode='json') == pc['chapter_goal']
-    assert [b.from_beats for b in v.plan_chapter.beats] == \
-        [b['from_beats'] for b in pc['segments']]
-    assert [b.slot for b in v.plan_chapter.beats] == [b['slot'] for b in pc['segments']]
+    assert [scene.land_fact_refs for scene in v.plan_chapter.scenes] == \
+        [scene['land_fact_refs'] for scene in pc['scenes']]
+    assert [scene.slot for scene in v.plan_chapter.scenes] == \
+        [scene['slot'] for scene in pc['scenes']]
     row = next(r for r in v.index if r.output_ordinal == o)
-    want = sum(b['budget_chars'] for b in pc['segments'] if b.get('budget_chars'))
+    want = sum(scene['budget_chars'] for scene in pc['scenes']
+               if scene.get('budget_chars'))
     assert row.budget_chars == (want or None)
 
 
@@ -91,7 +93,7 @@ def test_without_a_plan_the_screen_shows_the_identity_baseline(box):
     assert v.reconstruction_strategy == IDENTITY_GOAL
     assert v.plan_chapter.chapter_goal.rationale == IDENTITY_GOAL, \
         '恒等的 goal 是显式标记，不是真决策'
-    assert v.plan_chapter.beats and v.ctx_chapter is not None
+    assert v.plan_chapter.scenes and v.ctx_chapter is not None
     assert v.plan_provenance is None and v.ctx_provenance is None
     assert _tree(box.root) == before, '恒等基线把东西写到盘上了（那是 --identity 的事）'
 
@@ -100,7 +102,7 @@ def test_a_missing_ctx_does_not_take_the_plan_down(box):
     """计划在而 ctx 不在 ⇒ 右半边 `null`，左半边照常（两半各自失败）。"""
     (box.dir / 'stage4' / 'writer_context.json').unlink()
     v = stage4_view(box.root, box.sid, 1)
-    assert not v.identity_plan and v.plan_chapter.beats
+    assert not v.identity_plan and v.plan_chapter.scenes
     assert v.ctx_chapter is None and v.writer_target is None
     assert v.ctx_state.exists is False
     row = v.index[0]

@@ -28,24 +28,8 @@
    "kind": "human_only",
    "stage": "stage4",
    "chapter": null,
-   "rule": "beat_size",
-   "what": "输出章 [2, 4] 有 >300 字的拍——一拍塞不下，写手会注水或漏写，该拆成两拍",
-   "how": "0 成本人工路：`--apply-edit` 改内容 / `--wontfix` 记「不修」的裁决"
-  },
-  {
-   "kind": "human_only",
-   "stage": "stage4",
-   "chapter": null,
    "rule": "context_link",
    "what": "stage4/writer_context.json 照的是**另一版**计划（它记的是 `a0d9407f3a`，盘上这份是 `2d9ec765bb`）⇒ 两处各存一份 goals 已经分家。跑 `stage4.context` 重建，0 成本",
-   "how": "0 成本人工路：`--apply-edit` 改内容 / `--wontfix` 记「不修」的裁决"
-  },
-  {
-   "kind": "human_only",
-   "stage": "stage4",
-   "chapter": null,
-   "rule": "flat_chapter",
-   "what": "输出章 [8] 各拍字数几乎一样平（最长拍不到最短拍的 2 倍）——本章没有重头，读起来会是梗概不是章节",
    "how": "0 成本人工路：`--apply-edit` 改内容 / `--wontfix` 记「不修」的裁决"
   },
   {
@@ -222,11 +206,11 @@
   "rejected": 0,
   "stalled": 0,
   "repairable": 0,
-  "human_only": 27,
+  "human_only": 25,
   "verification": 0,
   "upstream": 0,
   "approval": 0
  },
- "total": 27,
+ "total": 25,
  "wontfix": 0
 }
