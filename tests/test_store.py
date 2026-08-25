@@ -204,6 +204,35 @@ def test_edges_are_a_snapshot_not_the_live_dict():
     assert set(ctx.edges) == {UPSTREAM}
 
 
+def test_validation_reads_restore_every_source_ledger_even_when_the_guard_raises():
+    """前置闸可以深读上游，但不得把校验材料写进后续 producer 的来源账。
+
+    真实故障形状是 Stage6 的 accepted-Review 闸读了 ``main_text`` 与 ``draft.md``，
+    ``--recheck`` 随后把它们铸进 hook provenance；注册表正确地不知道这两条假依赖，
+    于是正式写回被 ``consumed_undeclared`` 回滚。这里直接守 RunContext 那一个生产
+    作用域，并覆盖异常退出——关闭式闸抛错也不能留下半张账。
+    """
+    ctx = _ctx(_book(), node='stage6.hook')
+    original_edge = InputEdge(file='1' * 10, consumed='2' * 10)
+    ctx.record_edge('stage1/hook_copy.json', original_edge)
+    ctx.record_judged('stage5/ch01.json', '3' * 10)
+    ctx.record_artifact_root('stage2/global_grounding.json', ctx.root_clean_sha1)
+
+    with pytest.raises(RuntimeError, match='guard stopped'):
+        with ctx.validation_reads():
+            ctx.record_edge('stage1/main_text.json', InputEdge(file='4' * 10, consumed=None))
+            ctx.record_edge('stage5/draft.md', InputEdge(file='5' * 10, consumed=None))
+            ctx.record_judged('stage5/ch02.json', '6' * 10)
+            ctx.record_artifact_root('stage5/review_1.json', '7' * 40)
+            raise RuntimeError('guard stopped')
+
+    assert ctx.edges == {'stage1/hook_copy.json': original_edge}
+    assert ctx.judged == {'stage5/ch01.json': '3' * 10}
+    assert ctx._observed_roots == {
+        'stage2/global_grounding.json': ctx.root_clean_sha1,
+    }
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # 二、读：记账在结构上不可能漏
 # ─────────────────────────────────────────────────────────────────────────────

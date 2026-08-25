@@ -22,9 +22,10 @@ run.py —— 一次跑的上下文。**它存在的头号理由是杀掉进程�
 from __future__ import annotations
 
 import os
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Iterable, TypeVar
+from typing import Any, Callable, Iterable, Iterator, TypeVar
 
 from contracts.invariants import NODES
 from contracts.schema import InputEdge, Provenance
@@ -135,6 +136,34 @@ class RunContext:
     def record_artifact_root(self, rel: str, root_clean_sha1: str | None) -> None:
         if root_clean_sha1 is not None:
             self._observed_roots[rel] = root_clean_sha1
+
+    @contextmanager
+    def validation_reads(self) -> Iterator[None]:
+        """隔离只用于**前置校验**的读取，不让它们冒充产物的实质输入。
+
+        正式 producer 的 ``inputs`` / ``judged`` 只应回答“构造这份产物时实际用了
+        什么”。关闭式前置闸为了证明一份上游可消费，可能继续读取那份上游自己的
+        正文、字节投影与 judged 主体；这些读取决定“能不能继续”，却没有进入本节点
+        的 prompt、归一或派生字段。若与 producer 共用同一账，它们会泄漏成
+        ``consumed_undeclared`` 的假依赖，刚写完的正式产物随即被 freshness 后置条件
+        回滚。
+
+        这里只保存并恢复三张**来源事实**；成本、观测事件与 accounting 不在隔离面内。
+        调用方若把校验期间读到的载荷带出作用域参与产物构造，就是误用——那份读取应
+        回到普通 ``ArtifactStore.read`` 路，由注册表如实记账。
+        """
+        edges = dict(self._edges)
+        judged = dict(self._judged)
+        observed_roots = dict(self._observed_roots)
+        try:
+            yield
+        finally:
+            self._edges.clear()
+            self._edges.update(edges)
+            self._judged.clear()
+            self._judged.update(judged)
+            self._observed_roots.clear()
+            self._observed_roots.update(observed_roots)
 
     @property
     def root_clean_sha1(self) -> str:

@@ -4,13 +4,14 @@
 from __future__ import annotations
 
 import importlib
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
-from contracts.schema import artifact_spec
+from contracts.schema import InputEdge, artifact_spec
 from contracts.schema.stage5 import (
     Chapter, ChapterSegment, JudgedDraft, Review, ReviewChapter,
 )
@@ -18,6 +19,7 @@ from contracts.schema.report import finding
 from novel import prov
 from novel.errors import BlockingFindingsUnresolved, GateBlocked, TerminalState
 from novel.prov import FreshnessReport
+from novel.run import RunContext
 from novel.stages.stage5 import measure as M, review, write
 from tests import factories
 
@@ -30,7 +32,7 @@ class _StatusStore:
         self.book = book
         self.chapters = {'stage5/ch01.json': chapter}
         self.review: Review | None = None
-        self.ctx = SimpleNamespace(title=book.title, novel_dir=root)
+        self.ctx = _StatusContext(title=book.title, novel_dir=root)
         (root / 'stage5').mkdir(parents=True)
         (root / 'stage5' / 'ch01.json').write_text('{}', encoding='utf-8')
         (root / 'stage5' / 'review_1.json').write_text('{}', encoding='utf-8')
@@ -68,6 +70,14 @@ class _StatusStore:
     @staticmethod
     def seen_rounds(_rel: str) -> list[int]:
         return [1]
+
+
+class _StatusContext(SimpleNamespace):
+    """状态算法测试的最小上下文；生产的账隔离另有真实 RunContext 回归。"""
+
+    @contextmanager
+    def validation_reads(self):
+        yield
 
 
 @dataclass
@@ -161,6 +171,33 @@ def test_review_status_fresh_baseline_binds_the_complete_canonical_subject(statu
     status = review.review_status(status_rig.ctx, status_rig.store)
     assert status.state == 'fresh' and status.reasons == ()
     assert status.review_rel == 'stage5/review_1.json' and status.seq == 1
+
+
+def test_fresh_review_guard_does_not_leak_probe_reads_into_downstream_sources(
+        tmp_path, monkeypatch):
+    """统一 Review 闸必须使用 RunContext 的生产隔离口，而不是靠下游清理假边。"""
+    book = tmp_path / '隔离校验_123'
+    (book / 'stage0').mkdir(parents=True)
+    (book / 'stage0' / 'clean_text.txt').write_text('测试根。\n', encoding='utf-8')
+    ctx = RunContext.open(
+        tmp_path, '123', 'stage6.hook', paid=False, write_ledger=False)
+    kept = InputEdge(file='1' * 10, consumed='2' * 10)
+    ctx.record_edge('stage1/hook_copy.json', kept)
+
+    expected = review.ReviewStatus('fresh', ())
+
+    def probe(actual_ctx, _store):
+        actual_ctx.record_edge(
+            'stage1/main_text.json', InputEdge(file='3' * 10, consumed=None))
+        actual_ctx.record_edge(
+            'stage5/draft.md', InputEdge(file='4' * 10, consumed=None))
+        actual_ctx.record_judged('stage5/ch99.json', '5' * 10)
+        return expected
+
+    monkeypatch.setattr(review, 'review_status', probe)
+    assert review.require_fresh_review(ctx, object()) is expected
+    assert ctx.edges == {'stage1/hook_copy.json': kept}
+    assert ctx.judged == {}
 
 
 def test_accepted_review_is_stricter_than_fresh_and_rejects_current_hard(

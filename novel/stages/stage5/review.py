@@ -304,8 +304,14 @@ def review_status(ctx: RunContext, store: ArtifactStore | None = None) -> Review
 
 
 def require_fresh_review(ctx: RunContext, store: ArtifactStore | None = None) -> ReviewStatus:
-    """付费返工、豁免、审批等消费入口的共同关闭式闸。"""
-    status = review_status(ctx, store)
+    """付费返工、豁免、审批等消费入口的共同关闭式闸。
+
+    ``review_status`` 为验证 Review 会读完整 canonical 主体与 ``draft.md``；它们是
+    **这道闸的校验材料**，不是下游 producer 的正文输入。隔离作用域防止这些读取
+    泄漏进 Stage6/7 的来源账；真正构造产物时读到的上游仍由各节点照常自动记账。
+    """
+    with ctx.validation_reads():
+        status = review_status(ctx, store)
     if status.fresh:
         return status
     reason = '；'.join(status.reasons[:6]) or status.state
