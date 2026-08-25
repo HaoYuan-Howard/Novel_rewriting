@@ -9,11 +9,9 @@
 `writer_context.json`。判据表只有**一张**，两份产物共用（`docs/schema/stage4.md` §四）。
 正向覆盖率按 stage 取 `R-5 ∪ R-6`，因此两份产物必须作为同一层共同验证。
 
-**② LLM 在这一层只产三样东西，其余全是代码写的。**
-`reconstruction_strategy` · 逐章三个 goal · **逐拍 `budget_chars`**。
-拍怎么切、怎么排、怎么并**不是模型的决定**（`beats.group_beats` 按源文切，只吸收碎拍），
-整份 `writer_context` 更是**一个字都不经模型**。
-⇒ 读本层的 schema 时**不要套用 stage2 那边「每一个字段都是模型写的」的怀疑口径**。
+**② LLM 在这一层设计场景，不重述事实。**
+`reconstruction_strategy` · 逐章安全 brief · 按新叙事顺序排列的 `scenes[]` 与权重由模型产生；
+事实真值、因果边、状态增量由 Stage2 冻结，`writer_context` 再按引用确定性组装。
 
 **③ 确定性核心一律吃 `dict`，不吃模型。**
 节点走 `store.read(...)` 拿模型（那是载体的活：`PathRefused` + 拒收 + 记上游边），

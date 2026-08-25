@@ -625,7 +625,7 @@ export interface Stage3Style {
 export interface FactRef {
   kind:
     | 'character'
-    | 'event'
+    | 'fact_atom'
     | 'world_rule'
     | 'secret'
     | 'relation'
@@ -648,13 +648,33 @@ export interface CtxGoal {
   facts: string[]
 }
 
-export interface PlanBeat {
+export interface SemanticContract {
+  chapter_function: string
+  information_delta: string[]
+  character_state_delta: string[]
+  relationship_delta: string[]
+  reader_knowledge_delta: string[]
+  must_land_fact_refs: string[]
+  context_fact_refs: string[]
+  causal_edges: { before: string; after: string }[]
+  entry_state_refs: string[]
+  ending_state_refs: string[]
+}
+
+export interface PlanScene {
   i: number
   /** producer-owned 稳定槽位；模型不得重排或自造。 */
   slot: string
-  from_beats: string[]
-  /** null 只出现在恒等基线上（算不出源字数的拍，不估算） */
-  budget_chars: number | null
+  budget_chars: number
+  purpose: string
+  role: string
+  delivery: string
+  transition: string
+  land_fact_refs: string[]
+  context_fact_refs: string[]
+  turn_fact_ref: string
+  entry_state_refs: string[]
+  exit_state_refs: string[]
 }
 
 export interface PlanChapterLine {
@@ -663,7 +683,9 @@ export interface PlanChapterLine {
   chapter_goal: PlanGoal
   open_hook_goal: PlanGoal
   end_hook_goal: PlanGoal
-  beats: PlanBeat[]
+  semantic_contract: SemanticContract
+  chapter_rewrite_brief: string
+  scenes: PlanScene[]
 }
 
 /** 章索引一行。⚠ 没有 in_band/style_hits —— 那是判据结论，去 join /check/stage4。 */
@@ -672,21 +694,40 @@ export interface Stage4IndexRow {
   chapter_goal: string
   budget_chars: number | null
   span_chars: number | null
-  beats: number
+  scenes: number
   /** 本章不许泄的 secret 数；null = ctx 不在盘上，判不了 */
   hidden: number | null
 }
 
-/** 写手一拍的任务（`CtxBeat`）。 */
-export interface CtxBeat {
+export interface CtxSemanticContract {
+  chapter_function: string
+  information_delta: string[]
+  character_state_delta: string[]
+  relationship_delta: string[]
+  reader_knowledge_delta: string[]
+  must_land_facts: string[]
+  context_facts: string[]
+  causal_edges: { before: string; after: string }[]
+  entry_state: string[]
+  ending_state: string[]
+}
+
+/** 写手直接执行的新场景任务（`CtxScene`）。 */
+export interface CtxScene {
   slot: string
-  events: string[]
+  purpose: string
+  role: string
+  delivery: string
+  transition: string
   budget_chars: number
   source_chars: number | null
-  time_layer?: string | null
-  place?: string | null
-  present?: string[] | null
-  segments?: { time_layer: string; place: string | null; present: string[] }[] | null
+  required_facts: string[]
+  context_facts: string[]
+  turn_fact: string
+  entry_state: string[]
+  exit_state: string[]
+  participants: string[]
+  stages: { time_layer: string; place: string | null; present: string[] }[]
   verbatim?: string[] | null
   keep_value?: string[] | null
   must_appear?: string[] | null
@@ -700,9 +741,11 @@ export interface CtxChapter {
   chapter_goal: CtxGoal
   open_hook_goal: CtxGoal
   end_hook_goal: CtxGoal
-  budget_chars: number | null
+  semantic_contract: CtxSemanticContract
+  chapter_rewrite_brief: string
+  budget_chars: number
   source_chars: number
-  segments: CtxBeat[]
+  scenes: CtxScene[]
   characters: Record<string, { display_name: string; role: string }>
   narration: PlanNarration[]
   facts: Facts

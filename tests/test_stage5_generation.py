@@ -52,7 +52,7 @@ def test_apply_edit_cannot_formalize_a_paragraph_budget_hard(tmp_path, monkeypat
     entry = {
         'output_ordinal': 1, 'from_source_ordinals': [1],
         'source_chars': 100, 'budget_chars': 100,
-        'segments': [{'slot': 's01'}],
+        'scenes': [{'slot': 's01'}],
     }
     book = SimpleNamespace(chapters={1: entry})
 
@@ -212,7 +212,7 @@ def test_revise_regression_gets_exactly_one_refresh_resample(monkeypatch):
     client = Client()
 
     got = write._generate_chapter(
-        {'output_ordinal': 1, 'segments': [{'slot': 's01'}]},
+        {'output_ordinal': 1, 'scenes': [{'slot': 's01'}]},
         SimpleNamespace(quote_style='curly', sep_chars=[]),
         client, revise={1: ('旧正式稿', [], 'review-fp')},
         system='SYS', progress=SimpleNamespace())

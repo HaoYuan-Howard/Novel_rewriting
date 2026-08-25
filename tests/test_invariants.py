@@ -97,8 +97,11 @@ def test_invent_guard_coverage_is_explicit():
     ]
 
 
-def test_beat_thresholds_stay_distinct():
-    assert inv.BEAT_ALERT_MIN < inv.BEAT_MIN_CHARS < inv.BEAT_ALERT_MAX
+def test_fact_atom_contract_has_closed_kinds_and_obligations():
+    assert set(inv.FACT_ATOM_KINDS) == {
+        'event', 'information', 'character_state', 'relationship', 'reader_knowledge',
+    }
+    assert inv.FACT_ATOM_OBLIGATIONS == ('land', 'context')
 
 
 def test_node_ids_are_stage_dot_verb():

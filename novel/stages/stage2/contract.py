@@ -52,9 +52,6 @@ class ContractSpec:
                          'prompt_plus_local_validation']
     compile_fn: Callable[..., tuple[dict[str, Any], dict[str, Any]]]
     projection_fn: Callable[[dict[str, Any], str], dict[str, Any]]
-    #: extraction IR 族：summary 不在逐章响应里，编译后要一次书级摘要批。
-    needs_summary_batch: bool
-
     #: 这套契约的失败面能不能走 `stage2.blueprint --patch`（字段级修复，量级是条不是章）。
     #:
     #: 【为什么是一格能力，不是 `--patch` 里的一个名字】历史上按
@@ -99,7 +96,6 @@ _V2 = ContractSpec(
     schema_mode='prompt_plus_local_validation',
     compile_fn=compile_v2_refs,
     projection_fn=canonical_ir_projection_refs,
-    needs_summary_batch=True,
     supports_field_patch=True,
     topology='boundary_then_detail',
     boundary_system=with_json_shape(
@@ -126,7 +122,6 @@ CONTRACTS: dict[str, ContractSpec] = {
         schema_mode='prompt_plus_local_validation',
         compile_fn=compile_v31_refs,
         projection_fn=canonical_ir_projection_v31,
-        needs_summary_batch=True,
         supports_field_patch=True,
         topology='scaffolded_single',
         uses_character_refs=True,

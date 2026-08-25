@@ -66,6 +66,8 @@ ACCOUNTING: dict[str, tuple[AccountingSpec, ...]] = {
         AccountingSpec('verbatim_rewrites', '哪几条 hinge 的短语被**回取**改过字节、'
                                             '或被段号改判给了别的拍？'),
         AccountingSpec('verbatim_failures', '哪几处**锚不到**？（非空即失败态，按根因分）'),
+        AccountingSpec('fact_atom_failures', '哪几个事实原子的证据短语无法在所属证据拍内唯一回取？'
+                                             '（与 hinge 失败共同进入 `verbatim_failed`）'),
         AccountingSpec('partial_regen_chapters', '哪几章是定向重生成过的？'),
         AccountingSpec('repairs', '那几次定向重生成各修了什么？（`failure_items` + 前后三个计数）'),
         AccountingSpec('place_inherit_without_base',
@@ -83,15 +85,12 @@ ACCOUNTING: dict[str, tuple[AccountingSpec, ...]] = {
     ),
     # Stage3 v2 无 LLM attempt、repair、INVALID 提升或人工编辑账；空元组是显式声明。
     'stage3': (),
-    # ⚠⚠ `params` 是**原型记了、而全仓没有一个读者**的那个键（`stage4.md` §3.3）：
-    #    `structure_changed` / `structure_units` 两条 HARD 拿**当前**的分组函数去量，
-    #    从不读它——**每一次都在拿新尺子量旧布**。本层给了它两个出口：
-    #    这一行（常驻）与判据 `params_drift`（两条依赖分组的判据先比它再判）。
+    # `params` 常驻报告场景编译器版本与输入原子规模，避免新旧 producer 产物被混读。
     # ⚠ **刻意不声明 `partial_rewrite`**：本层没有一条 0 成本路会把计划改成混版的
     #    （`--identity` 写的是另一份文件、`--apply-edit` 落的是新一轮）。
     #    声明一个结构上永远记不上的键，只会让报告上恒挂一行「未记录」。
     'stage4': (
-        AccountingSpec('params', '这份计划的拍是照哪一套阈值切的？'),
+        AccountingSpec('params', '这份计划由哪版场景编译器、多少事实原子编译？'),
         AccountingSpec('partial_regen_chapters', '哪几章是按章定向重规划过的？'),
         AccountingSpec('repairs', '各次定向重规划修了哪些 HARD，前后数量与章节指纹是什么？'),
         AccountingSpec('revalidated', '这份稿是跑出来的，还是被重判提升上来的？'),

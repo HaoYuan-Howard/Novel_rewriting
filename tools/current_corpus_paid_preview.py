@@ -51,7 +51,6 @@ from novel.llm.budget import (  # noqa: E402
     model_budget,
 )
 from novel.llm.client import (  # noqa: E402
-    DEFAULT_MAX_TOKENS as LLM_DEFAULT_MAX_TOKENS,
     MAX_SAMPLES_PER_RUNG,
     models_for,
     rungs_from_effort,
@@ -324,12 +323,13 @@ def _logical_topology(node: str, chapters: int, rung_count: int,
         #   而那一格会翻默认（`BLUEPRINT_ARCHITECTURE`）：
         #     · `boundary_then_detail`（显式 v2）—— 每章两相（先切边界再填细节）；
         #     · `single` / `scaffolded_single`   —— 每章一次；
-        #   再加 `needs_summary_batch` 的那一次书级摘要 ⇒ 当前默认 v3.1 是 **N+1**。
+        #   Stage2 v5 的 summary 已由 fact atoms 确定性投影，不再另发模型请求，
+        #   所以当前默认 v3.1 是 **N**。
         #   这段曾在默认 v2 时写死成 N，导致 17+25 章两本少报 44 个逻辑请求、
         #   264 个 wire 上限；而这份预览的用途正是**开跑前拿它决定花不花这笔钱**。
         spec = active_contract()
         per_chapter = 2 if spec.topology == 'boundary_then_detail' else 1
-        base = chapters * per_chapter + (1 if spec.needs_summary_batch else 0)
+        base = chapters * per_chapter
     elif node == 'stage5.write':
         # 收缩臂整臂下线后本层只剩逐章一次调用；超上限只落 audit，0 次调用。
         base = chapters
@@ -379,20 +379,12 @@ def _request_envelopes(node: str, models: tuple[str, ...],
         'rungs': [list(row) for row in rungs],
     }]
     if node == 'stage2.blueprint':
-        # 逐章细节请求之外，契约还可能发边界相与书级摘要批；它们各有自己的
-        # `max_tokens`，只列 `BLUEPRINT_MAX_TOKENS` 会漏掉当前契约实际存在的额外请求。
+        # 逐章细节请求之外，两段契约还会发边界相；它有自己的 `max_tokens`。
         spec = active_contract()
         if spec.topology == 'boundary_then_detail':
             rows.append({
                 'kind': 'boundary_phase',
                 'max_tokens': stage2_extract.BOUNDARY_MAX_TOKENS,
-                'models': list(models),
-                'rungs': [list(row) for row in rungs],
-            })
-        if spec.needs_summary_batch:
-            rows.append({
-                'kind': 'book_summary_batch',
-                'max_tokens': LLM_DEFAULT_MAX_TOKENS,
                 'models': list(models),
                 'rungs': [list(row) for row in rungs],
             })

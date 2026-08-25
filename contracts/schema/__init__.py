@@ -139,7 +139,7 @@ from contracts.schema.stage2 import (
     Address, AddressContextPatch, Arc, ArcTrack, ArcTrackPatch, Beat, Blueprint, Canon,
     ChapterBlueprints, ChapterBlueprintsResponse, Character, CharacterEnumPatch,
     CharacterAddressReplacement, CharacterRef, ConflictStage, Entities, EvidenceLocator,
-    FactEvidence, GlobalEdit, GlobalGrounding, GlobalCharacterPatch,
+    CausalEdge, FactAtom, FactEvidence, GlobalEdit, GlobalGrounding, GlobalCharacterPatch,
     GlobalGroundingResponse, GroupRef, Hinge, KnowledgeEvent, KnowledgeEventResponse,
     Narration, ReaderRevealEvent, Relation, RelationPatch, RelationVisibility,
     RoleSplitResponse, Secret, SecretPatch, Setting, SettingPatch, SourceSpan, WorldRule,
@@ -147,8 +147,8 @@ from contracts.schema.stage2 import (
 )
 from contracts.schema.stage3 import Measurable, StyleGrounding, StyleProvenance
 from contracts.schema.stage4 import (
-    BookCharacter, CtxBeat, CtxChapter, CtxFacts, CtxGoal, FactRef, PlanBeat, PlanChapter,
-    PlanChapters, PlanEdit, PlanGoal, WriterContext,
+    BookCharacter, CtxChapter, CtxFacts, CtxGoal, CtxScene, FactRef, PlanChapter,
+    PlanChapters, PlanEdit, PlanGoal, PlanScene, WriterContext,
 )
 from contracts.schema.stage5 import (
     Chapter, ChapterResponse, ChapterSegment, DraftConsumed, GeneratedSegment,
@@ -259,20 +259,20 @@ ARTIFACT_SPECS: dict[str, ArtifactSpec] = {
     #   **存量产物由谁重建：`stage2.blueprint` 整跑（付费）**；`.INVALID` 与 `_rounds/`
     #   一律作废，不手补字段冒充当前产地。取值与升版记录见
     #   `contracts/invariants.py::BLUEPRINT_ARCHITECTURE`。
-    STAGE2_CHAPTER_BLUEPRINTS: ArtifactSpec(ChapterBlueprints, 4),
+    STAGE2_CHAPTER_BLUEPRINTS: ArtifactSpec(ChapterBlueprints, 5),
     # 2026-08-24 Stage3 定性包整批退役：顶层只留 measurable + 免费 provenance。
     # v1 不迁移；普通旧书由免费 producer 重建，已用于实验的两本按归档清单保留历史字节。
     STAGE3_STYLE_GROUNDING: ArtifactSpec(StyleGrounding, 2),
-    STAGE4_PLAN_CHAPTERS: ArtifactSpec(PlanChapters),
-    STAGE4_PLAN_EDIT: ArtifactSpec(PlanEdit),
-    STAGE4_WRITER_CONTEXT: ArtifactSpec(WriterContext),
+    STAGE4_PLAN_CHAPTERS: ArtifactSpec(PlanChapters, 2),
+    STAGE4_PLAN_EDIT: ArtifactSpec(PlanEdit, 2),
+    STAGE4_WRITER_CONTEXT: ArtifactSpec(WriterContext, 2),
     # ⚠ **恒等基线是一份【产物】不是一次 print**（2026-08-12，F3-4）。
     #   `stage4.plan --identity` 必须让「跑过且写手手里有这些」与
     #   「从没跑过」在盘上长得一模一样（`Q-2`）。stage6/stage7 在同一道工序上都做对了。
     #   ⚠ 它与正式那份**同一个模型**：形状完全一样，差别只在三个 goal 是显式标记
     #   ——**换一个模型就等于说它是另一种东西**，而它恰恰要回答
     #   「计划什么都不改时，写手手里到底有什么」。
-    STAGE4_WRITER_CONTEXT_IDENTITY: ArtifactSpec(WriterContext),
+    STAGE4_WRITER_CONTEXT_IDENTITY: ArtifactSpec(WriterContext, 2),
     # ⚠ 2026-08-24 单臂折平：删除 `mode`，路径改为
     #   `stage5/chNN.json`。存量双臂稿是只读历史证据，不做迁移；
     #   current 产物由 `stage5.write` 重建。
@@ -445,12 +445,13 @@ __all__ = [
     'GlobalEdit', 'SecretPatch', 'WorldRulePatch', 'RelationPatch', 'SettingPatch',
     'ArcTrackPatch', 'GlobalCharacterPatch', 'CharacterEnumPatch',
     'AddressContextPatch', 'CharacterAddressReplacement', 'Arc', 'ConflictStage',
-    'ArcTrack', 'ChapterBlueprints', 'Blueprint', 'Beat', 'SourceSpan', 'Hinge', 'Narration',
+    'ArcTrack', 'ChapterBlueprints', 'Blueprint', 'Beat', 'FactAtom', 'CausalEdge',
+    'SourceSpan', 'Hinge', 'Narration',
     'GlobalGroundingResponse', 'ChapterBlueprintsResponse', 'RoleSplitResponse',
     'StyleGrounding', 'StyleProvenance', 'Measurable',
-    'PlanChapters', 'PlanChapter', 'PlanBeat', 'FactRef', 'PlanGoal', 'PlanEdit',
+    'PlanChapters', 'PlanChapter', 'PlanScene', 'FactRef', 'PlanGoal', 'PlanEdit',
     'WriterContext', 'BookCharacter',
-    'CtxChapter', 'CtxBeat', 'CtxFacts', 'CtxGoal',
+    'CtxChapter', 'CtxScene', 'CtxFacts', 'CtxGoal',
     'Chapter', 'GeneratedSegment', 'ChapterSegment', 'ChapterResponse',
     'RejectedAttempt', 'RejectedRevision',
     'Review', 'ReviewChapter', 'JudgedDraft', 'DraftConsumed',

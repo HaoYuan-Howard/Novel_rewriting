@@ -116,7 +116,7 @@ def fidelity_findings(body: str, entry: dict[str, Any], book: M.Book, *,
     反哺 prompt 与「两轮之间这条消没消」都按它对齐。
     """
     fs: list[Finding] = []
-    beats = entry.get('segments') or []
+    scenes = entry.get('scenes') or []
     source_norm = norm(M.chapter_source(entry, book.source_text))
 
     # ── ① 【原样写入】必须逐字出现（四组材料里唯一要求逐字的一组）───────────────
@@ -130,8 +130,8 @@ def fidelity_findings(body: str, entry: dict[str, Any], book: M.Book, *,
     miss_v: list[str] = []
     typo_v: list[str] = []
     split_v: list[tuple[str, str]] = []
-    for be in beats:
-        for t in (be.get('verbatim') or []):
+    for scene in scenes:
+        for t in (scene.get('verbatim') or []):
             for seg in re.split(r'\n+', t):
                 k = norm(seg)
                 # 伪锚属于 Stage2；Stage5 不得把源文中不存在的“原话”当 HARD 目标，
@@ -179,8 +179,8 @@ def fidelity_findings(body: str, entry: dict[str, Any], book: M.Book, *,
     body_vals = num_values(body)
     miss_n: list[tuple[str, list[str]]] = []
     miss_n_full: list[str] = []
-    for be in beats:
-        for t in (be.get('keep_value') or []):
+    for scene in scenes:
+        for t in (scene.get('keep_value') or []):
             if source_norm and norm(t) not in source_norm:
                 continue
             nums = [m.group() for m in NUM_UNIT.finditer(t or '')]
@@ -204,8 +204,8 @@ def fidelity_findings(body: str, entry: dict[str, Any], book: M.Book, *,
     # ——**判据与它自己声明的维度不一致**。改看最长公共子串：换说法能过，整个没写才报。
     miss_o: list[str] = []
     miss_o_full: list[str] = []
-    for be in beats:
-        for t in (be.get('must_appear') or []):
+    for scene in scenes:
+        for t in (scene.get('must_appear') or []):
             k = norm(t)
             if source_norm and k and k not in source_norm:
                 continue
@@ -319,14 +319,14 @@ def segment_fidelity_findings(
     scene from a correctly placed quote.  This projection reuses the same fidelity
     rules while limiting each check to its declared producer segment.
     """
-    expected = {str(row.get('slot') or ''): row for row in (entry.get('segments') or [])}
+    expected = {str(row.get('slot') or ''): row for row in (entry.get('scenes') or [])}
     out: list[Finding] = []
     for returned in segments:
         slot = str(returned.get('slot') or '')
         contract = expected.get(slot)
         if contract is None:
             continue  # the response-shape validator owns unknown/missing slots
-        isolated = {**entry, 'segments': [contract], 'must_not_reveal': []}
+        isolated = {**entry, 'scenes': [contract], 'must_not_reveal': []}
         for hit in fidelity_findings(
             str(returned.get('text') or ''), isolated, book, given=given,
         ):
@@ -568,7 +568,7 @@ def _end_hook_landing(
     """
     goal = entry.get('end_hook_goal') or {}
     facts = [f for f in (goal.get('facts') or []) if f]
-    planned = entry.get('segments') or []
+    planned = entry.get('scenes') or []
     if not facts or not planned:
         return [
             finding(
@@ -593,7 +593,7 @@ def _end_hook_landing(
         ]
     roster = {c.get('display_name') for c in (entry.get('characters') or {}).values()}
     roster = {n for n in roster if n} - _pronoun_named(entry)
-    atoms = _atoms_of_event(' '.join(facts), roster)
+    atoms = _surface_atoms(' '.join(facts), roster)
     if not atoms:
         return [
             finding(
@@ -872,11 +872,11 @@ def chapter_findings(text: str, entry: dict[str, Any], book: M.Book, *,
     fs += _dash(body, entry, book) + _short_run(body, entry, book)
     fs += (_narration_person_report(body, entry, book)
            + _narration_person(body, entry, book))
-    # `event_landing*` 不是 review-only：写作相刚拿到 producer-owned segments 时就有
+    # `fact_landing*` 不是 review-only：写作相刚拿到 producer-owned segments 时就有
     # 最完整的边界。Full Review 读同一份落盘 segments 再调用同一个函数，任何 phase
     # 都不得把缺事件/倒序覆盖成“本相判不了”。
     if segments is not None:
-        fs += segment_event_findings(segments, entry, book)
+        fs += segment_fact_findings(segments, entry, book)
     # ⚠ `segments` 两相都给得出（落盘闸门直接有，验收相走 `rec['segments']`）；
     #   给不出时本条自己落 `unver`，不静默通过。
     fs += _end_hook_landing(entry, book, segments)
@@ -907,10 +907,10 @@ def warnings_of(fs: Iterable[Finding]) -> list[str]:
 # 四、验收相的逐章增量 —— 事件落点 · 材料形态 · 恒等基线
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _atoms_of_event(text: str, roster: Iterable[str]) -> set[str]:
-    """从一条 `event` 里提取**可确定性回查的原子**：数字+单位、以及章级名册里的专名。
+def _surface_atoms(text: str, roster: Iterable[str]) -> set[str]:
+    """从一条事实 claim 提取可确定性回查的表面原子：数字+单位、章级专名。
 
-    ⚠ **只取这两类是有理由的，不是偷懒**：`event` 是概括句，除了这两样没有别的东西能在
+    ⚠ **只取这两类是有理由的，不是偷懒**：claim 是概括句，除了这两样没有别的东西能在
     成稿里做无歧义匹配——中文没有词边界，拿名词去匹配会得到一堆假阳。
     提不出原子的拍**落 `unver`**，不落「干净」。
     """
@@ -928,17 +928,17 @@ def _atoms_of_event(text: str, roster: Iterable[str]) -> set[str]:
 def _pronoun_named(entry: dict[str, Any]) -> set[str]:
     """本章里**以代词现身**的角色的 `display_name` —— 这些名字不能当落点原子。
 
-    实测抓到的假阳：`event` 写「孟青禾觉得冤枉」，而本章是**第一人称**、叙述者就是她
-    ——成稿里她通篇是「我」，名字 0 次。于是「这一拍没落点」判成立，可那一拍明明落了。
+    实测抓到的假阳：事实写「孟青禾觉得冤枉」，而本章是**第一人称**、叙述者就是她
+    ——成稿里她通篇是「我」，名字 0 次。于是「这一事实没落点」判成立，可事实明明落了。
     ⚠ **只剔叙述者，不剔 `focalizer`**：视角人物在第三人称叙述里照样有名字。
     """
     return {n['narrator'] for n in (entry.get('narration') or [])
             if n.get('grammatical_person') == 'first' and n.get('narrator')}
 
 
-def event_landing(entry: dict[str, Any], body: str, src_text: str
-                  ) -> tuple[list, list, list, list]:
-    """每一拍的事件在成稿里有没有落点 → `(落了, 没落, 提不出原子, 原子提错)`。
+def fact_landing(entry: dict[str, Any], body: str, src_text: str
+                 ) -> tuple[list, list, list, list]:
+    """每个必落事实在成稿里有没有落点 → `(落了, 没落, 提不出表面原子, 原子提错)`。
 
     ⚠ **身份基线是这条判据能不能被解读的前提**：同一套原子先拿**源章原文**跑一遍
     ——源章里都落不下的原子，说明是**抽取坏了不是成稿坏了**。
@@ -950,33 +950,29 @@ def event_landing(entry: dict[str, Any], body: str, src_text: str
     missed: list = []
     noatom: list = []
     ident_miss: list = []
-    for be in (entry.get('segments') or []):
-        text = ' '.join(be.get('events') or [])
-        atoms = _atoms_of_event(text, roster)
-        if not atoms:
-            noatom.append(text[:24])
-            continue
-        if src_text and not any(a in src_text for a in atoms):
-            # 原文里都找不到 → **原子提错了**，这一拍不参与判定（否则是拿坏尺子量）
-            ident_miss.append(text[:24])
-            continue
-        (landed if any(a in body for a in atoms) else missed).append(
-            (text[:36], sorted(atoms)[:4]))
+    for scene in (entry.get('scenes') or []):
+        for claim in (scene.get('required_facts') or []):
+            text = str(claim)
+            atoms = _surface_atoms(text, roster)
+            if not atoms:
+                noatom.append(text[:24])
+                continue
+            if src_text and not any(atom in src_text for atom in atoms):
+                # 原文里都找不到 → **事实 claim 的表面探针不可用**，不拿坏尺子量成稿。
+                ident_miss.append(text[:24])
+                continue
+            (landed if any(atom in body for atom in atoms) else missed).append(
+                (text[:36], sorted(atoms)[:4]))
     return landed, missed, noatom, ident_miss
 
 
-def segment_event_findings(
+def segment_fact_findings(
     segments: list[dict[str, str]],
     entry: dict[str, Any],
     book: M.Book,
 ) -> list[Finding]:
-    """Check event/reference order only where deterministic atoms prove it.
-
-    A prose-level semantic guess is never promoted to a pass.  Missing unique
-    atoms and a provably reversed order are findings; shared/absent atoms are
-    explicitly UNVER and enter the verification workflow.
-    """
-    contracts = {str(row.get('slot') or ''): row for row in (entry.get('segments') or [])}
+    """逐场检查必落事实；事实数组没有源序含义，因此绝不做场内顺序判定。"""
+    contracts = {str(row.get('slot') or ''): row for row in (entry.get('scenes') or [])}
     roster = {c.get('display_name') for c in (entry.get('characters') or {}).values()}
     roster = {name for name in roster if name} - _pronoun_named(entry)
     source = M.chapter_source(entry, book.source_text)
@@ -987,39 +983,25 @@ def segment_event_findings(
         if contract is None:
             continue
         body = str(returned.get('text') or '')
-        positions: list[int] = []
         missing: list[str] = []
         unver: list[str] = []
-        for event in (contract.get('events') or []):
-            atoms = sorted(_atoms_of_event(str(event), roster))
+        for claim in (contract.get('required_facts') or []):
+            atoms = sorted(_surface_atoms(str(claim), roster))
             source_atoms = [atom for atom in atoms if not source or atom in source]
-            hits = sorted(body.find(atom) for atom in source_atoms if atom in body)
             if not atoms or not source_atoms:
-                unver.append(str(event)[:36])
-            elif not hits:
-                missing.append(str(event)[:36])
-            elif len(set(hits)) != len(hits):
-                unver.append(str(event)[:36])
-            else:
-                positions.append(hits[0])
+                unver.append(str(claim)[:36])
+            elif not any(atom in body for atom in source_atoms):
+                missing.append(str(claim)[:36])
         if missing:
             out.append(finding(
-                'event_landing',
-                detail=f'slot {slot} 内 {len(missing)} 个事件缺少可回查落点：{missing[:3]}',
+                'fact_landing',
+                detail=f'slot {slot} 内 {len(missing)} 个必落事实缺少可回查落点：{missing[:3]}',
                 evidence=[slot, *missing],
-            ))
-        if len(positions) > 1 and len(set(positions)) != len(positions):
-            unver.append('多个事件只能定位到同一原子')
-        elif len(positions) > 1 and positions != sorted(positions):
-            out.append(finding(
-                'event_landing',
-                detail=f'slot {slot} 内可确定性定位的事件顺序与 producer 顺序相反',
-                evidence=[slot, 'event_order'],
             ))
         if unver:
             out.append(finding(
-                'event_landing_unver',
-                detail=f'slot {slot} 内 {len(unver)} 个事件缺少唯一确定性原子：'
+                'fact_landing_unver',
+                detail=f'slot {slot} 内 {len(unver)} 个事实缺少唯一确定性表面原子：'
                        f'{unver[:3]}',
                 evidence=[slot, str(len(unver))],
             ))
@@ -1038,9 +1020,9 @@ def material_anchor_findings(entry: dict[str, Any], book: M.Book) -> list[Findin
         return []
     source_norm = norm(source)
     missed: list[tuple[str, str]] = []
-    for segment in (entry.get('segments') or []):
+    for scene in (entry.get('scenes') or []):
         for field in ('verbatim', 'keep_value', 'must_appear'):
-            for raw in (segment.get(field) or []):
+            for raw in (scene.get(field) or []):
                 pieces = re.split(r'\n+', str(raw)) if field == 'verbatim' else [str(raw)]
                 for piece in pieces:
                     key = norm(piece)
@@ -1059,31 +1041,26 @@ def material_anchor_findings(entry: dict[str, Any], book: M.Book) -> list[Findin
 
 def review_chapter_findings(body: str, entry: dict[str, Any], book: M.Book,
                             ) -> tuple[list[Finding], collections.Counter]:
-    """验收相相对落盘闸门的逐章增量：事件落点。"""
+    """验收相相对落盘闸门的逐章增量：必落事实表面探针。"""
     fs: list[Finding] = []
     src_text = M.chapter_source(entry, book.source_text)
-    landed, missed, noatom, ident = event_landing(entry, body, src_text)
+    landed, missed, noatom, ident = fact_landing(entry, body, src_text)
     if missed:
-        fs.append(finding('event_landing',
-                          detail=f'{len(missed)} 拍的事件在成稿里找不到任何落点'
-                                 f'（这些拍提得出可回查的原子，但一个都没出现）：'
+        fs.append(finding('fact_landing',
+                          detail=f'{len(missed)} 个必落事实在成稿里找不到任何表面落点'
+                                 f'（这些事实提得出可回查原子，但一个都没出现）：'
                                  f'{[m[0] for m in missed[:3]]}',
                           evidence=[m[0] for m in missed]))
     if ident:
-        # ⚠⚠ **「原子提错」按语义是上游的账，不是成稿的账。**
-        #   原子取自 `CtxBeat.events`，而它在**源章原文里都找不到** ⇒ 抽取那一步坏了，
-        #   与 `IDENTITY_UPSTREAM` 那一桶（「锚点切出来的东西回不到原文里去」）同理。
-        #   它此前和 `noatom` 合并成一条 `event_landing_unver`、`owner` 记在 stage5 ⇒
-        #   一个 stage2 的 bug 被报成「stage5 这一维够不着」，**修复路由指向了错的层**。
-        fs.append(finding('event_atom_unattested',
-                          detail=f'{len(ident)} 拍的事件原子在**源章原文**里找不到'
-                                 f'——抽取那一步就错了，不是成稿的问题：'
+        fs.append(finding('fact_atom_unattested',
+                          detail=f'{len(ident)} 个事实 claim 的表面原子在**源章原文**里找不到'
+                                 f'——上游原子契约或名字投影有误，不是成稿的问题：'
                                  f'{[t for t in ident[:3]]}',
                           evidence=[t for t in ident]))
     if noatom:
-        fs.append(finding('event_landing_unver',
-                          detail=f'{len(noatom)} 拍提不出可回查的原子'
-                                 f'（事件是概括句，既没有数字+单位也没有章级名册专名）',
+        fs.append(finding('fact_landing_unver',
+                          detail=f'{len(noatom)} 个必落事实提不出可回查的表面原子'
+                                 f'（claim 既没有数字+单位也没有章级名册专名）',
                           evidence=[str(len(noatom))]))
     land = collections.Counter({'ok': len(landed), 'missed': len(missed),
                                 'noatom': len(noatom), 'ident': len(ident)})
@@ -1205,8 +1182,8 @@ def book_findings(book: M.Book, *, rows: list[dict[str, Any]], bodies: dict[int,
         evidence=sorted(by_surface) + sorted(collide)))
 
     # ── ⑤ `must_hold`：确定性层判不了，**必须显式说「没查」而不是让它消失** ────
-    n_hold = sum(len(be.get('must_hold') or []) for c in book.chapters.values()
-                 for be in (c.get('segments') or []))
+    n_hold = sum(len(scene.get('must_hold') or []) for c in book.chapters.values()
+                 for scene in (c.get('scenes') or []))
     fs.append(finding(
         'must_hold_unver',
         detail=f'全书 must_hold 材料 {n_hold} 条',
@@ -1264,12 +1241,12 @@ _FROM_CHAPTER: tuple[str, ...] = (
     'material_anchor_unattested',
     'narration_person_report', 'narration_person_drift',
     'end_hook_surface_report', 'end_hook_unver',
-    'event_landing', 'event_landing_unver',
+    'fact_landing', 'fact_landing_unver',
 )
 
 #: **只有全书验收相**产得出来的：单章视角看不到，或者要跨章比。
 _FROM_REVIEW: tuple[str, ...] = (
-    'event_atom_unattested', 'draft_missing',
+    'fact_atom_unattested', 'draft_missing',
     'no_secrets_in_book', 'secret_timeline', 'cross_chapter_number',
     'book_length_report', 'book_length', 'name_surface_survey',
     'must_hold_unver', 'convergence_report',
@@ -1278,7 +1255,7 @@ _FROM_REVIEW: tuple[str, ...] = (
 #: `unver` 的五条：**必须走 `unverifiable(rule, why)`**（`builder._status_of` 会拒收
 #: 一条 `sev='unver'` 却没说出「这次为什么够不着」的判据）。
 _UNVER: frozenset[str] = frozenset({
-    'must_hold_unver', 'event_landing_unver', 'draft_missing',
+    'must_hold_unver', 'fact_landing_unver', 'draft_missing',
     'no_secrets_in_book', 'end_hook_unver'})
 
 

@@ -410,7 +410,8 @@ def test_build_prompt_is_anonymous_and_carries_all_quality_references(monkeypatc
         lead=({'output_ordinal': 1, 'text': '这是重写后的第一章。'},),
         story_truth={'entities': {'characters': {'c1': {'canonical': '她'}}},
                      'canon': {'secrets': []}, 'arc': {'ending': '真结局'}},
-        story_map=({'chapter': 1, 'events': ['她收到匿名信']},),
+        story_map=({'chapter': 1, 'scenes': [{
+            'slot': 's01', 'required_facts': ['她收到匿名信']} ]},),
         hook_mechanical={'chars': 100},
     )
     upstream = SimpleNamespace(src_hook='原作文案金句。', mat=mat)
@@ -435,7 +436,7 @@ def test_build_prompt_is_anonymous_and_carries_all_quality_references(monkeypatc
     assert payload['source_reference'] == '原作文案金句。'
     assert payload['rewritten_opening'][0]['text'] == '这是重写后的第一章。'
     assert payload['story_truth']['arc']['ending'] == '真结局'
-    assert payload['whole_story_map'][0]['events'] == ['她收到匿名信']
+    assert payload['whole_story_map'][0]['scenes'][0]['required_facts'] == ['她收到匿名信']
     assert 'style' not in payload
     assert 'hook_mechanical' not in payload
     assert 'source_hook_mechanical' not in payload

@@ -68,8 +68,8 @@ def _plan(ctx: RunContext, *, strategy: str = '按原章次序推进。') -> Pla
         prompts={'PLAN_SYS': 'fixture current plan prompt'},
         model='fixture-model',
         adopted_models=['fixture-model'],
-        params={'grouping': 'absorb-small-v1', 'beat_min_chars': 80,
-                'plan_beats': 1},
+        params={'compiler': 'atomic-scenes-v1', 'fact_atoms': 1,
+                'source_stages': 1},
     )
     return PlanChapters(
         reconstruction_strategy=strategy,
@@ -78,9 +78,25 @@ def _plan(ctx: RunContext, *, strategy: str = '按原章次序推进。') -> Pla
             'chapter_goal': goal('advance'),
             'open_hook_goal': goal('open'),
             'end_hook_goal': goal('close'),
-            'segments': [{
+            'weight': 'even',
+            'semantic_contract': {
+                'chapter_function': '核对当前计划',
+                'information_delta': ['f01_001'],
+                'character_state_delta': [], 'relationship_delta': [],
+                'reader_knowledge_delta': [],
+                'must_land_fact_refs': ['f01_001'], 'context_fact_refs': [],
+                'causal_edges': [], 'entry_state_refs': [],
+                'ending_state_refs': [], 'material_refs': [],
+            },
+            'chapter_rewrite_brief': '用一场核对完成本章。',
+            'scenes': [{
                 'slot': 's01', 'budget_chars': 20,
-                'from_beats': ['b01_01'],
+                'weight': 'mid', 'purpose': '核对当前计划',
+                'role': 'setup', 'delivery': 'scene', 'transition': 'start',
+                'land_fact_refs': ['f01_001'], 'context_fact_refs': [],
+                'material_refs': [], 'turn_fact_ref': 'f01_001',
+                'entry_state_refs': [], 'exit_state_refs': [],
+                'participant_refs': [], 'stage_refs': ['b01_01'],
             }],
         }],
         _provenance=provenance,

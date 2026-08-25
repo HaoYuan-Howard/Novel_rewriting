@@ -148,7 +148,7 @@ def test_hook_secret_literal_uses_the_shared_number_ruler_and_own_bytes():
     assert all(piece in text for piece in literal.evidence)
 
 
-def test_story_map_consumes_segments_keeps_slots_and_strips_private_rationale():
+def test_story_map_consumes_scenes_keeps_slots_and_strips_private_rationale():
     goal = {
         'intent': 'advance',
         # Stage6 consumes the writer-facing CtxGoal.  Typed PlanGoal IDs have
@@ -162,15 +162,22 @@ def test_story_map_consumes_segments_keeps_slots_and_strips_private_rationale():
         'chapter_goal': goal,
         'open_hook_goal': goal,
         'end_hook_goal': goal,
-        'segments': [
-            {'slot': 's01', 'events': ['事件一']},
-            {'slot': 's02', 'events': ['事件二']},
+        'semantic_contract': {'chapter_function': '建立匿名信冲突'},
+        'chapter_rewrite_brief': '先显露匿名信，再完成反应。',
+        'scenes': [
+            {'slot': 's01', 'purpose': '显露匿名信',
+             'required_facts': ['事实一'], 'turn_fact': '事实一', 'exit_state': []},
+            {'slot': 's02', 'purpose': '完成反应',
+             'required_facts': ['事实二'], 'turn_fact': '事实二', 'exit_state': ['她决定追查']},
         ],
     }]})
-    assert rows[0]['events'] == ['事件一', '事件二']
-    assert rows[0]['segments'] == [
-        {'slot': 's01', 'events': ['事件一']},
-        {'slot': 's02', 'events': ['事件二']},
+    assert rows[0]['semantic_contract'] == {'chapter_function': '建立匿名信冲突'}
+    assert rows[0]['chapter_rewrite_brief'] == '先显露匿名信，再完成反应。'
+    assert rows[0]['scenes'] == [
+        {'slot': 's01', 'purpose': '显露匿名信', 'required_facts': ['事实一'],
+         'turn_fact': '事实一', 'exit_state': []},
+        {'slot': 's02', 'purpose': '完成反应', 'required_facts': ['事实二'],
+         'turn_fact': '事实二', 'exit_state': ['她决定追查']},
     ]
     for key in ('chapter_goal', 'open_hook_goal', 'end_hook_goal'):
         assert rows[0][key] == {
@@ -189,9 +196,12 @@ def test_material_carries_source_full_truth_story_map_and_minimal_hook_mechanica
                 'chapter_goal': {'intent': 'advance', 'facts': ['事件：收到信。']},
                 'open_hook_goal': {'intent': 'open', 'facts': ['事件：从匿名信开场。']},
                 'end_hook_goal': {'intent': 'close', 'facts': ['事件：发现落款。']},
-                'segments': [{
-                    'slot': 's01',
-                    'events': ['她在枕下发现匿名信。', '信的落款是仇人的名字。'],
+                'semantic_contract': {'chapter_function': '发现匿名信与落款'},
+                'chapter_rewrite_brief': '从匿名信切入，再揭示落款。',
+                'scenes': [{
+                    'slot': 's01', 'purpose': '发现匿名信',
+                    'required_facts': ['她在枕下发现匿名信。', '信的落款是仇人的名字。'],
+                    'turn_fact': '信的落款是仇人的名字。', 'exit_state': [],
                 }],
             },
             {
@@ -200,7 +210,11 @@ def test_material_carries_source_full_truth_story_map_and_minimal_hook_mechanica
                 'chapter_goal': {'intent': 'advance', 'facts': ['事件：追查写信者。']},
                 'open_hook_goal': {'intent': 'open', 'facts': ['事件：当面对质。']},
                 'end_hook_goal': {'intent': 'close', 'facts': ['事件：对方承认一半。']},
-                'segments': [{'slot': 's01', 'events': ['她去城门找人。']}],
+                'semantic_contract': {'chapter_function': '追查写信者'},
+                'chapter_rewrite_brief': '在城门完成追查。',
+                'scenes': [{'slot': 's01', 'purpose': '找到写信者',
+                            'required_facts': ['她去城门找人。'],
+                            'turn_fact': '她去城门找人。', 'exit_state': []}],
             },
         ],
     }
@@ -247,8 +261,8 @@ def test_material_carries_source_full_truth_story_map_and_minimal_hook_mechanica
     packet = json.loads(user.split('\n\n', 1)[1])
     assert packet['source_hook'].startswith('原作文案')
     assert packet['story_truth'] == grounding
-    assert packet['whole_story_map'][1]['events'] == ['她去城门找人。']
-    assert packet['whole_story_map'][0]['segments'][0]['slot'] == 's01'
+    assert packet['whole_story_map'][1]['scenes'][0]['required_facts'] == ['她去城门找人。']
+    assert packet['whole_story_map'][0]['scenes'][0]['slot'] == 's01'
     assert packet['whole_story_map'][0]['chapter_goal'] == {
         'intent': 'advance',
         'facts': ['事件：收到信。'],
@@ -334,7 +348,8 @@ def test_weak_fact_attribution_metric_compares_gift_phrase_to_story_map():
         story_truth={'entities': {'characters': {
             'c1': {'canonical': '阿宁', 'address': []},
         }}},
-        story_map=({'chapter': 1, 'events': ['阿宁送给小禾玉佩。']},),
+        story_map=({'chapter': 1, 'scenes': [{
+            'slot': 's01', 'required_facts': ['阿宁送给小禾玉佩。']} ]},),
     )
     outcomes = checks.check(
         texts=[('候选', '阿宁送给小禾玉佩。', [])],

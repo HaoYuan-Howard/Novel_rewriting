@@ -53,6 +53,8 @@ const review: GlobalReviewResponse = {
 
 const enums: EnumsResponse = {
   hinge_kinds: [],
+  fact_atom_kinds: [],
+  fact_atom_obligations: [],
   nonbody_kinds: [],
   time_layers: [],
   hinge_groups: {},
@@ -67,7 +69,6 @@ const enums: EnumsResponse = {
     free_flag: '--review-decisions',
     writes_disk: true,
   }],
-  uncovered_min_chars: 0,
   spoiler_disclosure: {
     mode: 'display_only',
     security_boundary: false,

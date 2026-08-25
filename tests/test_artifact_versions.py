@@ -126,15 +126,40 @@ _SHAPE_BREAKS: dict[str, tuple[int, str, str]] = {
         '只能作为历史输入，当前运行时关闭式拒读',
     ),
     'stage2/chapter_blueprints.json': (
-        4,
-        '三次破坏。2026-08-19 bounded-fidelity-v2 → v3：beat 的区间改由段号'
+        5,
+        '四次破坏。2026-08-19 bounded-fidelity-v2 → v3：beat 的区间改由段号'
         '算出，SourceSpan.recovery 去掉 lcs，BlueprintProvenance.verbatim_recovered '
         '删除。2026-08-23：BlueprintContext.architecture 从七值收窄为 '
         'extraction-ir-v1.1 / v2 / v3.1 三值，退役 bounded-fidelity-v3、v1、v2.1、v3。'
-        '2026-08-24：再收窄为 v2 / v3.1 两值，退役 v1.1',
+        '2026-08-24：再收窄为 v2 / v3.1 两值，退役 v1.1。2026-08-25：删除复合 '
+        '`Beat.event` 事实源，新增章级 `chapter_function`、`fact_atoms`、`causal_edges`、'
+        '`entry_state_refs` 与 `ending_state_refs`；hinge 新增稳定 id 与所属 beat 引用',
         'stage2.blueprint 整跑（付费）；.INVALID 与 _rounds/ 一律作废，'
         '不手补字段冒充当前产地。仓内没有迁移机制，任何 v3 信封'
-        '都必须由 producer 重建为 v4',
+        '都必须由 producer 重建为当前 v5',
+    ),
+    'stage4/plan_chapters.json': (
+        2,
+        '2026-08-25 Stage4 场景编译器替换：删除 `PlanBeat`/`segments`/`from_beats`，'
+        '新增 Stage2 派生的四类 delta `semantic_contract` 与真正可重组的 `scenes`',
+        '`stage4.plan` 在当前 Stage2 v5 上整跑（付费）；旧计划不迁移。'
+        '由它驱动的 Stage5 canonical 章稿写作任务已改变，freshness 必须判 stale 后全书重写',
+    ),
+    'stage4/plan_edit.json': (
+        2,
+        '2026-08-25 与正式计划同批从旧 `PlanBeat` 整份替换为语义契约 + scenes',
+        '旧人工编辑集不能表达事实覆盖与状态闭合，原样作废；需要时由人按当前 PlanEdit v2 重写',
+    ),
+    'stage4/writer_context.json': (
+        2,
+        '2026-08-25 删除写手面的 `CtxBeat.events[]`，新增 chapter_rewrite_brief、'
+        '四类 delta 在内的人话 semantic_contract 与可直接执行的 CtxScene',
+        '`stage4.context` 从当前 Stage2 v5 + Stage4 plan v2 免费重建；下游 Stage5/6 按消费投影判 stale',
+    ),
+    'stage4/writer_context.identity.json': (
+        2,
+        '2026-08-25 恒等基线与正式 writer_context 同形切换为语义契约 + CtxScene',
+        '`stage4.plan --identity` 从当前 Stage1/Stage2 免费重建，不读取或迁移旧基线',
     ),
     'stage3/style_grounding.json': (
         2,

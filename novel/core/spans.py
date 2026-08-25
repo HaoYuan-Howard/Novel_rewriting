@@ -4,8 +4,8 @@
 spans.py —— 正式 `SourceSpan` 的**校验与读取**，以及内容字符空间那把尺子。
 
 【它为什么在 `novel/core/` 而不是某一层里】产地是 stage2，而**第一个消费方是 stage4**：
-逐拍 `source_chars` 由这里的区间长度算出来，`group_beats` 判「够不够 `BEAT_MIN_CHARS`」、
-喂给规划器的量纲表、写手实际收到的字节，**全走这一份**（判据 25）。
+证据 beat 的 `source_chars`、事实原子的证据定位以及写手实际收到的原文字节，
+**全走这一份**（判据 25）。
 
 ⚠⚠ **本模块的 `content_only` 与 `novel/core/text.py::norm` 长得几乎一样，而它们【不是】
 同一个东西——合并会静默改动定位结果。** 两者的取值面：

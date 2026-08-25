@@ -112,6 +112,8 @@ describe('GlobalScreen disclosure', () => {
   it('is present while stage2 is loading', async () => {
     vi.spyOn(api, 'getEnums').mockResolvedValue({
       hinge_kinds: [],
+      fact_atom_kinds: [],
+      fact_atom_obligations: [],
       nonbody_kinds: [],
       time_layers: [],
       hinge_groups: {},
@@ -119,7 +121,6 @@ describe('GlobalScreen disclosure', () => {
       invent: { allow: [], forbid: [], principle: '' },
       job_kinds: {},
       actions: [],
-      uncovered_min_chars: 0,
       spoiler_disclosure: disclosure,
     })
     vi.spyOn(api, 'getGlobal').mockImplementation(() => new Promise(() => undefined))
@@ -135,6 +136,8 @@ describe('GlobalScreen disclosure', () => {
   ])('remains present in the %s state', async (_label, error) => {
     vi.spyOn(api, 'getEnums').mockResolvedValue({
       hinge_kinds: [],
+      fact_atom_kinds: [],
+      fact_atom_obligations: [],
       nonbody_kinds: [],
       time_layers: [],
       hinge_groups: {},
@@ -142,7 +145,6 @@ describe('GlobalScreen disclosure', () => {
       invent: { allow: [], forbid: [], principle: '' },
       job_kinds: {},
       actions: [],
-      uncovered_min_chars: 0,
       spoiler_disclosure: disclosure,
     })
     vi.spyOn(api, 'getGlobal').mockRejectedValue(error)
@@ -154,6 +156,8 @@ describe('GlobalScreen disclosure', () => {
   it('shows formal evidence failures, explicit relation visibility, and timed group knowledge', async () => {
     vi.spyOn(api, 'getEnums').mockResolvedValue({
       hinge_kinds: [],
+      fact_atom_kinds: [],
+      fact_atom_obligations: [],
       nonbody_kinds: [],
       time_layers: [],
       hinge_groups: {},
@@ -161,7 +165,6 @@ describe('GlobalScreen disclosure', () => {
       invent: { allow: [], forbid: [], principle: '' },
       job_kinds: {},
       actions: [],
-      uncovered_min_chars: 0,
       spoiler_disclosure: disclosure,
     })
     vi.spyOn(api, 'getGlobal').mockResolvedValue(globalView())

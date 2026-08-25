@@ -43,7 +43,7 @@ from novel.report import build
 from novel.report.findings import Outcome
 from novel.run import RunContext
 from novel.stages.stage4 import checks, prompts
-from novel.stages.stage4.beats import beat_index, group_beats
+from novel.stages.stage4.beats import beat_index
 from novel.stages.stage4.context import build_writer_context, display_names_at
 from novel.stages.stage4.fact_refs import catalog as fact_catalog, validate_plan_refs
 from novel.stages.stage4.measure import (
@@ -105,7 +105,6 @@ class _Upstreams:
             self.global_g = store.read(
                 GlobalGrounding, GLOBAL_GROUNDING).model_dump(by_alias=True)
         self.bidx = beat_index(self.blueprints, self.main_text)
-        self.groups = group_beats(self.blueprints, self.main_text, self.bidx)
 
 
 # ── 判定与报告 ──────────────────────────────────────────────────────────────
@@ -157,7 +156,7 @@ def _judge(store: ArtifactStore, plan_raw: dict[str, Any], up: _Upstreams, *,
 
     ``with_ctx_link=False`` 是 writer context **尚未按候选计划重建**的前置闸门；
     这一趟不能读取盘上的旧 context。否则 Stage2 或计划更新后，旧 context 的
-    ``ctx_events_verbatim`` / ``ctx_hinge_delivered`` 会被错配到新候选上，
+    ``ctx_facts_exact`` / ``ctx_hinge_delivered`` 会被错配到新候选上，
     ``--revalidate`` 也会在提升并重建之前被永久挡住。前置闸门让五条 ctx 判据
     如实走 ``unver``，候选落稳并重建 context 后再以 ``with_ctx_link=True`` 跑后置条件。
     """
@@ -204,14 +203,13 @@ def _report(ctx: RunContext, store: ArtifactStore, outcomes: list[Outcome],
 
 
 def _params(up: _Upstreams) -> dict[str, Any]:
-    """`_provenance.params` —— 「这份计划的拍是照哪一套切的」。
-
-    ⚠ 原型记了它而**全仓没有一个读者**。本层给了它两个：
-    `plan_params`（一行常驻）与 `params_drift`（两条依赖分组的判据先比它再判）。
-    """
-    from contracts.invariants import BEAT_MIN_CHARS, GROUPING_VERSION
-    return {'grouping': GROUPING_VERSION, 'beat_min_chars': BEAT_MIN_CHARS,
-            'plan_beats': sum(len(g) for g in up.groups.values())}
+    return {
+        'compiler': 'atomic-scenes-v1',
+        'fact_atoms': sum(len(bp.get('fact_atoms') or [])
+                          for bp in (up.blueprints.get('blueprints') or [])),
+        'source_stages': sum(len(bp.get('beats') or [])
+                             for bp in (up.blueprints.get('blueprints') or [])),
+    }
 
 
 # ── 七条路 ──────────────────────────────────────────────────────────────────
@@ -270,9 +268,9 @@ def _build_user(ctx: RunContext, up: _Upstreams) -> str:
     from novel.core.text import render_book
     mt = MainText.model_validate(up.main_text)
     book_text, secidx = render_book(mt)
-    projected = prompts.project_blueprints_for_planner(up.blueprints, up.groups)
+    projected = prompts.project_blueprints_for_planner(up.blueprints)
     assert up.global_g is not None
-    refs = fact_catalog(up.global_g, up.blueprints, up.main_text, plan_units=up.groups)
+    refs = fact_catalog(up.global_g, up.blueprints, up.main_text)
     # ⚠ 与原型的 `compact()` 同形：**最紧的 JSON**（无空格）——
     #   规划的 user 里带着全书原文，骨架那一段每一个空格都在挤原文的预算。
     bs = json.dumps(projected, ensure_ascii=False, separators=(',', ':'))
@@ -285,7 +283,7 @@ def _build_user(ctx: RunContext, up: _Upstreams) -> str:
     ]
     # ⚠ `book_total=True` **只在整跑这一路**：它在表底多印一行全书合计与全书目标区间，
     #   而定向修复那一路只发目标章那一格，同一行在那里会是假的（见 `source_chars_table`）。
-    if (tbl := source_chars_table(up.groups, up.bidx, book_total=True)):
+    if (tbl := source_chars_table(up.blueprints, up.bidx, book_total=True)):
         parts.append(prompts.BLOCK_SIZES + '\n' + tbl)
     parts.append(prompts.BLOCK_BODY + '\n' + book_text)
     return '\n\n'.join(parts)
@@ -301,7 +299,7 @@ def _assert_budget_basis(up: _Upstreams) -> None:
     于是同配置重采与模型兜底都会走到底、每一次都必然失败——**一次纯粹的付费空转**。
     判词指向真根因，并明确说「尚未调用 LLM」（同本文件其余几处前置检查）。
     """
-    _chars, _units, gaps = budget_basis(up.groups, up.bidx)
+    _chars, _units, gaps = budget_basis(up.blueprints, up.bidx)
     if gaps:
         raise TerminalState(
             f'第 {sorted(gaps)} 章一个源内容单元的字数都算不出来（`beat.span` 全部锚不到）'
@@ -349,60 +347,32 @@ def _repair_baseline_artifact(
     return store.read_own(PlanChapters, source_rel, require_current=True)
 
 
-def _response_baseline(chapter: dict[str, Any], groups: dict[Any, list[list[str]]],
-                       ordinal: int) -> dict[str, Any]:
-    """落盘章 → 单章响应形状，避免把代码派生的字段反喂成输出字段。
-
-    ⚠⚠ **基线块与响应契约必须逐格同形**，否则同一份 user 里 system 要一个东西、
-    基线印着另一个，模型照基线抄就被 schema 当场拒——而那一拒要花一次钱才看得见。
-    批 4 之后要对齐的有四格：`from_beats` → `end_beat`（不是 `plan_beats` 了）、
-    `budget_chars` **整个删掉**（模型不再产它）、两个 `weight` 回编码成带前缀的档位、
-    `spine` 从下标翻回 `beat_id`。前三格在这里，后两格在 `encode_plan_baseline`。
-    """
-    unit_of = {
-        beat_id: (index, f'p{ordinal:02d}_{index:02d}')
-        for index, members in enumerate(groups.get(ordinal) or [], 1)
-        for beat_id in members
-    }
+def _response_baseline(chapter: dict[str, Any]) -> dict[str, Any]:
+    """落盘章 → 单章场景响应形状；语义契约、slot 与预算均由 producer 重建。"""
     baseline = copy.deepcopy(chapter)
-    # ⚠⚠ **它必须跑在下面那个 pop 之前**：`spine` 从下标翻回 `beat_id` 用的就是同一行的
-    #   `from_beats`，pop 掉之后那份换算就没有来源了（而缺了它，基线块里会印一个
-    #   数字给一个只收编号的字段——同一格的错，只不过错的是类型）。
     encode_plan_baseline(baseline)
-    for segment in baseline.get('segments') or []:
-        segment.pop('slot', None)
-        # ⚠ **预算不进基线块**：它已经不是响应字段了（`extra='forbid'` 会拒收），
-        #   而本章总量由 `allocate_budgets` 从基线钉死（`chapter_totals`）⇒
-        #   印出来既没人收、又会让模型以为它还能动那个数。
-        segment.pop('budget_chars', None)
-        source = list(segment.pop('from_beats', []) or [])
-        unknown = [beat_id for beat_id in source if beat_id not in unit_of]
-        if unknown:
-            raise TerminalState(
-                f'第 {ordinal} 章现有计划引用了当前分组里不存在的 beat：{unknown[:6]}')
-        # ⚠ 取**源序上最靠后**的那个单元，不是 `from_beats` 的最后一项：存量计划
-        #   （批 4 之前的契约）允许单元内换序，那时最后一项未必是源序的末尾。
-        segment['end_beat'] = max(
-            (unit_of[beat_id] for beat_id in source), default=(0, ''))[1]
     return baseline
 
 
 def _chapter_total(chapter: dict[str, Any]) -> int:
     """一个落盘章的预算合计。**定向修复要钉死的就是这个数。**"""
-    return sum(int(segment.get('budget_chars') or 0)
-               for segment in (chapter.get('segments') or []))
+    return sum(int(scene.get('budget_chars') or 0)
+               for scene in (chapter.get('scenes') or []))
 
 
 def _repair_refs(up: _Upstreams, ordinal: int) -> dict[str, Any]:
     assert up.global_g is not None
-    refs = fact_catalog(up.global_g, up.blueprints, up.main_text, plan_units=up.groups)
-    events = {key: value for key, value in refs['events'].items() if value == ordinal}
+    refs = fact_catalog(up.global_g, up.blueprints, up.main_text)
+    atoms = {key: value for key, value in refs['fact_atoms'].items()
+             if value.get('chapter') == ordinal}
     return {
         **refs,
         'chapters': [ordinal],
-        'events': events,
-        'event_units': {key: value for key, value in refs['event_units'].items()
-                        if key in events},
+        'fact_atoms': atoms,
+        'stages': {key: value for key, value in refs['stages'].items()
+                   if value == ordinal},
+        'materials': {key: value for key, value in refs['materials'].items()
+                      if value == ordinal},
     }
 
 
@@ -413,7 +383,7 @@ def _build_repair_user(ctx: RunContext, up: _Upstreams, ordinal: int,
     row = next(item for item in up.main_text
                if int(item.get('chapter_ordinal') or 0) == ordinal)
     projected = prompts.project_blueprints_for_planner(
-        up.blueprints, {ordinal: up.groups.get(ordinal) or []})
+        up.blueprints)
     projected['blueprints'] = [
         item for item in projected['blueprints']
         if int(item.get('chapter_ordinal') or 0) == ordinal
@@ -428,7 +398,7 @@ def _build_repair_user(ctx: RunContext, up: _Upstreams, ordinal: int,
         prompts.BLOCK_REPAIR_FAILURES + '\n'
         + json.dumps(findings, ensure_ascii=False, separators=(',', ':')),
         prompts.BLOCK_REPAIR_BASELINE + '\n'
-        + json.dumps(_response_baseline(baseline, up.groups, ordinal),
+        + json.dumps(_response_baseline(baseline),
                      ensure_ascii=False, separators=(',', ':')),
         prompts.BLOCK_INDEX + '\n' + index,
         prompts.BLOCK_FACT_REFS + '\n'
@@ -436,8 +406,9 @@ def _build_repair_user(ctx: RunContext, up: _Upstreams, ordinal: int,
         prompts.BLOCK_SKELETON + '\n'
         + json.dumps(projected, ensure_ascii=False, separators=(',', ':')),
     ]
-    if (table := source_chars_table(
-            {ordinal: up.groups.get(ordinal) or []}, up.bidx)):
+    scoped_blueprints = {'blueprints': [bp for bp in up.blueprints.get('blueprints') or []
+                                       if bp.get('chapter_ordinal') == ordinal]}
+    if (table := source_chars_table(scoped_blueprints, up.bidx)):
         parts.append(prompts.BLOCK_SIZES + '\n' + table)
     parts.append(prompts.BLOCK_BODY.replace('全书', '目标章') + '\n' + body)
     return '\n\n'.join(parts)
@@ -604,17 +575,14 @@ def _repair_findings(outcomes: list[Outcome], ordinal: int) -> list[dict[str, An
     return rows
 
 
-def _expansion_validator(up: _Upstreams, *, ordinal: int | None = None,
-                         chapter_total: int | None = None) -> Any:
-    """把**确定性展开**那两道闸接到 `ask_json(validator=)` 上——拒了同档重采，不再是终态。
+def _scene_compiler_validator(up: _Upstreams, *, ordinal: int | None = None,
+                              chapter_total: int | None = None) -> Any:
+    """把场景编译与引用复算接到 `ask_json(validator=)`；拒绝时仍可走响应恢复链。
 
-    ⚠⚠ **这一条是 2026-08-22 花 59 720 completion 买回来的。** 那一次的响应过了内容闸
-    （schema 合法、`decision=accepted`），却倒在 `expand_plan_beats`：10 处 `spine`
-    对不上号。而那时旧恢复链已经走完 ⇒ `RefusedByStructure` 是**终态**，重采与模型兜底都够不着它，
-    一份其余全都合格的计划连同整轮 token 一起报废，坏响应还留在缓存里等着被读回。
-    接到这里之后，这一拒与 schema 拒同型（`gate='validator'`）：evict、同档重采、必要时由 Pro 兜底。
+    历史上内容响应通过 schema 后才在确定性编译阶段失败，整轮 token 因此成为终态废稿。
+    这里让编译拒绝与 schema 拒绝同型（`gate='validator'`）：evict、同档重采、必要时由 Pro 兜底。
 
-    ⚠ 两道闸都是**纯确定性**的（编号展开 + 事实引用复算），跑在副本上没有副作用。
+    ⚠ 两道闸都是**纯确定性**的（场景编译 + 事实引用复算），跑在副本上没有副作用。
     ⚠⚠ **写盘那一侧的同两道闸一格都没撤**：`--apply-edit` / `--revalidate` 不经过本函数，
     那两条路的输入是人工稿与盘上产物。**两处调的是同一份代码，不是两份逻辑**——
     改判据只有 `measure.py` / `fact_refs.py` 一个落点。
@@ -624,8 +592,8 @@ def _expansion_validator(up: _Upstreams, *, ordinal: int | None = None,
     **模型填错编号从来不是本仓的 bug**；写盘那一侧仍归 `RefusedByStructure`，
     因为那一侧的输入是代码派生的或人手写的——那里出现编号错，才真的是 bug。
 
-    `ordinal` 给定 ⇒ 校验 `--chapters` 那条路的单章响应（分组也只给那一章，
-    与 `_run_plan_repair` 随后那次展开逐字同参）。
+    `ordinal` 给定 ⇒ 校验 `--chapters` 那条路的单章响应，与 `_run_plan_repair`
+    随后的场景编译逐字同参。
     ⚠ `chapter_total` 同理：批 4 起 `adopt_plan_response` 连预算一起算，而定向修复那一路
     把本章总量钉死在基线上。这里不一并传，校验跑的就**不是**随后真跑的那条路——
     「校验过了、真跑却炸」正是这个函数存在的理由要消灭的那件事。
@@ -636,7 +604,7 @@ def _expansion_validator(up: _Upstreams, *, ordinal: int | None = None,
         # `model_dump` 每次都新建嵌套容器 ⇒ 下面的就地展开碰不到调用方那一份。
         raw = response.model_dump(by_alias=True)
         if ordinal is None:
-            plan, groups = raw, up.groups
+            plan = raw
         else:
             # ⚠⚠ **「响应是别的章」也在这里判，而不是等 `ask_json` 返回之后。**
             #   它从前是 `_run_plan_repair` 里一句 `TerminalState`：一次越界响应
@@ -651,16 +619,14 @@ def _expansion_validator(up: _Upstreams, *, ordinal: int | None = None,
             # ⚠ 只包 `output_chapters` 一层：这两道闸都不读 `reconstruction_strategy`，
             #   给它编一个占位值等于在校验路上放一份假数据。
             plan = {'output_chapters': [raw]}
-            groups = {ordinal: up.groups.get(ordinal) or []}
         try:
             adopt_plan_response(
-                plan, groups, up.bidx,
+                plan, up.blueprints, up.bidx,
                 chapter_totals=(None if chapter_total is None
                                 else {ordinal: chapter_total}))
             assert up.global_g is not None
             if not refs:
-                refs.update(fact_catalog(up.global_g, up.blueprints, up.main_text,
-                                         plan_units=up.groups))
+                refs.update(fact_catalog(up.global_g, up.blueprints, up.main_text))
             validate_plan_refs(plan, refs)
         except RefusedByStructure as e:
             return str(e)
@@ -675,24 +641,23 @@ def write_plan(ctx: RunContext, store: ArtifactStore, data: dict[str, Any], up: 
 
     照 stage3 不照 stage6：本层一次产**一份** ⇒ **任何一条 hard 就 `.INVALID`**。
     """
-    adopt_plan_response(data, up.groups, up.bidx)   # 解前缀 + 展开编号；对不上就在这里停
+    adopt_plan_response(data, up.blueprints, up.bidx)
     return _gate_and_write(ctx, store, data, up, provenance=provenance)
 
 
 def _gate_and_write(ctx: RunContext, store: ArtifactStore, data: dict[str, Any],
                     up: _Upstreams, *, provenance: Any, archive: bool = False) -> CheckReport:
-    """`write_plan` 的展开之后那一半——`--apply-edit` 直接从这里进。
+    """`write_plan` 的场景编译之后那一半——`--apply-edit` 直接从这里进。
 
-    人编辑的是盘上那份**已展开**的计划（`plan_beat` 落盘时已 pop，人产不出它），
-    再过一次 `expand_plan_beats` 会把合法的人工稿判成编号违约 ⇒ 两条路在
-    展开点分岔，在**闸门与写盘**上合流（同一把尺子）。
+    人编辑的是盘上那份**已经编译完成**的正式计划，带 producer-owned 的语义契约、slot
+    与整数预算；它不是模型响应形，不能再走一次响应编译。两条路在编译点分岔，在
+    **闸门与写盘**上合流（同一把尺子）。
     `archive=True`：写盘前把旧正式稿归档进 `_rounds/`（人工修订「落成新的一轮」）。
     """
     data.pop('_provenance', None)
     assert up.global_g is not None
     validate_plan_refs(
-        data, fact_catalog(up.global_g, up.blueprints, up.main_text,
-                           plan_units=up.groups))
+        data, fact_catalog(up.global_g, up.blueprints, up.main_text))
     art = PlanChapters.model_validate({**data, '_provenance': provenance})
     outcomes = _judge(store, {**data, '_provenance': provenance.model_dump(by_alias=True)},
                       up, with_ctx_link=False)
@@ -790,14 +755,14 @@ def _run_plan_repair(ctx: RunContext, client: Any, *,
             repair_system, user, model_cls=PlanChapterResponse,
             purpose=f'{ctx.node}:repair:ch{ordinal}',
             max_tokens=prompts.PLAN_MAX_TOKENS,
-            validator=_expansion_validator(
+            validator=_scene_compiler_validator(
                 up, ordinal=ordinal, chapter_total=_chapter_total(old_by[ordinal])),
             cache_policy=CachePolicy.refresh())
         accepted_model = client.accepted_model(f'{ctx.node}:repair:ch{ordinal}')
         if accepted_model is None:
             raise ProvenanceRefused(
                 f'第 {ordinal} 章已经返回规划，但没有 accepted model；拒绝按主模型估算')
-        # ⚠ 「响应是不是这一章」已经在 `_expansion_validator` 里判过了（拒了会重采、
+        # ⚠ 「响应是不是这一章」已经在 `_scene_compiler_validator` 里判过了（拒了会重采、
         #   走完同配置采样/模型兜底才 `LlmFailed`）。这里再判一次就是一条永不触发的分支，
         #   而永不触发的分支会让下一个人以为它还在守着什么。
         raw_response = response.model_dump(by_alias=True)
@@ -808,7 +773,7 @@ def _run_plan_repair(ctx: RunContext, client: Any, *,
         # ⚠⚠ **本章总量钉死在基线的既有合计上**：这一次只看得见一章，全书归一化无从谈起。
         #   从前这条是 `PLAN_REPAIR_OVERRIDE` 里对模型的一句叮嘱（「不要动本章总量」），
         #   现在是代码保证的 ⇒ 定向修复不可能再把 `plan_book_band` 顶出带外。
-        adopt_plan_response(expanded, {ordinal: up.groups.get(ordinal) or []}, up.bidx,
+        adopt_plan_response(expanded, up.blueprints, up.bidx,
                             chapter_totals={ordinal: _chapter_total(old_by[ordinal])})
         after = expanded['output_chapters'][0]
         merged_by[ordinal] = after
@@ -880,7 +845,7 @@ def run_plan(ctx: RunContext, client: Any, *,
     resp = client.ask_json(system, _build_user(ctx, up),
                            model_cls=PlanResponse, purpose=ctx.node,
                            max_tokens=prompts.PLAN_MAX_TOKENS,
-                           validator=_expansion_validator(up))
+                           validator=_scene_compiler_validator(up))
     params = _params(up)
     ctx.account('params', params)
     return write_plan(ctx, store, resp.model_dump(by_alias=True), up,
@@ -910,7 +875,7 @@ def run_identity(ctx: RunContext) -> tuple[int, CheckReport]:
     store = ArtifactStore(ctx)
     up = _Upstreams(ctx, store)
     assert up.global_g is not None
-    base = identity_plan(up.blueprints, up.main_text, up.bidx, up.groups)
+    base = identity_plan(up.blueprints, up.main_text, up.bidx)
     asm = build_writer_context(base, up.global_g, up.blueprints, up.main_text)
     art = WriterContext.model_validate(
         {**asm.ctx, '_provenance': ctx.free_provenance(CtxProvenance)})
@@ -919,7 +884,7 @@ def run_identity(ctx: RunContext) -> tuple[int, CheckReport]:
         base, blueprints=up.blueprints, main_text=up.main_text, global_g=up.global_g,
         ctx=asm.ctx, ctx_link=None,
         ctx_source=f'{IDENTITY_CTX_REL}：本次现算的恒等基线，不比来源', bidx=up.bidx)
-    return (sum(len(c['segments']) for c in base['output_chapters']),
+    return (sum(len(c['scenes']) for c in base['output_chapters']),
             _report(ctx, store, outcomes, {}))
 
 

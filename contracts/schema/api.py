@@ -76,7 +76,9 @@ from contracts.schema.stage2 import (
     RelationVisibility, Setting, WorldRule,
 )
 from contracts.schema.stage3 import Measurable, StyleProvenance
-from contracts.schema.stage4 import CtxChapter, CtxProvenance, PlanGoal, PlanProvenance
+from contracts.schema.stage4 import (
+    CtxChapter, CtxProvenance, PlanGoal, PlanProvenance, SemanticContract,
+)
 from contracts.schema.stage5 import (
     ChapterSegment, JudgedDraft, ReviewProvenance, ReviewSources,
     RoundFreeProvenance, RoundLlmProvenance,
@@ -1334,34 +1336,34 @@ class ReadingView(StrictModel):
 # 二g、S-07 计划 ↔ 写作上下文（`GET /api/novels/:sid/stage4/:o`）
 # ─────────────────────────────────────────────────────────────────────────────
 
-class PlanBeatLine(FrozenModel):
-    """计划的一拍。`budget_chars=null` 只出现在恒等基线上（算不出源字数的拍，
-    **不估算、不拿邻居补**）。"""
+class PlanSceneLine(FrozenModel):
+    """Stage4 编译出的一场：UI 展示决策与 typed 覆盖，不回退成源 beat 清单。"""
 
     i: int = Field(ge=1)
     slot: str = Field(pattern=r'^s\d{2,4}$')
-    from_beats: list[str] = Field(min_length=1)
-    budget_chars: int | None
-    narrative_role: Literal[STRUCTURAL_ROLES]
+    budget_chars: int = Field(gt=0)
+    purpose: str = Field(min_length=1)
+    role: Literal[STRUCTURAL_ROLES]
     delivery: Literal[DELIVERY_MODES]
     transition: Literal[TEMPORAL_LINKS]
-
-    #: 本拍的主干是 `events[]` 里的第几条。`null` = 这份计划没做过主次决策
-    #: （恒等基线就是它，与 `budget_chars=null` 同一种「基线什么都没决定」）。
-    #: ⚠ 它与上面三个枚举是**同一批东西**——模型在拍这一层做的决策。
-    #: 那三个在这里而它不在，等于让审阅面与决策面分家。
-    spine: int | None = Field(default=None, ge=1)
+    land_fact_refs: list[str] = Field(min_length=1)
+    context_fact_refs: list[str]
+    turn_fact_ref: str = Field(min_length=1)
+    entry_state_refs: list[str]
+    exit_state_refs: list[str]
 
 
 class PlanChapterLine(StrictModel):
-    """计划侧的一章。恒等基线时三个 goal 是显式标记（`IDENTITY_GOAL`），不是真决策。"""
+    """计划侧的一章：章级不可变语义契约 + 可变的新场景设计。"""
 
     output_ordinal: int = Field(ge=1)
     from_source_ordinals: list[int] = Field(min_length=1, max_length=1)
     chapter_goal: PlanGoal
     open_hook_goal: PlanGoal
     end_hook_goal: PlanGoal
-    beats: list[PlanBeatLine] = Field(min_length=1)
+    semantic_contract: SemanticContract
+    chapter_rewrite_brief: str = Field(min_length=1)
+    scenes: list[PlanSceneLine] = Field(min_length=1)
 
 
 class Stage4IndexRow(FrozenModel):
@@ -1374,7 +1376,7 @@ class Stage4IndexRow(FrozenModel):
     chapter_goal: str = Field(min_length=1)
     budget_chars: int | None
     span_chars: int | None
-    beats: int = Field(ge=1)
+    scenes: int = Field(ge=1)
     #: 本章不许泄的 secret 数。`null` = ctx 不在盘上，**判不了**（不编 0）。
     hidden: int | None
 
@@ -1405,7 +1407,7 @@ class Stage4View(StrictModel):
     #:
     #: ⚠ 此处**没有** `writer_target_estimated`：那个布尔曾用于区分「按 `budget_chars`
     #: 算的实数带」与「`budget_chars` 缺席时按 `source_chars` 估的带」，而
-    #: `CtxBeat.budget_chars` / `CtxChapter.budget_chars` 现在都是 `Field(gt=0)` 必填，
+    #: `CtxScene.budget_chars` / `CtxChapter.budget_chars` 都是 `Field(gt=0)` 必填，
     #: 估算那条路已随 `08240cf` 一并退役 ⇒ 它只会是 `false`。
     #: **一个永远不会为真的布尔比没有这个字段更坏**：它让下一个人以为这里真能区分两者。
     writer_target: tuple[int, int] | None

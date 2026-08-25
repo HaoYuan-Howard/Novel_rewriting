@@ -380,7 +380,7 @@ def test_stage4_without_a_plan_is_200_identity_baseline(client, box):
     assert r.status_code == 200, r.text[:200]
     body = r.json()
     assert body['identity_plan'] is True
-    assert body['plan_chapter']['beats'], '恒等基线也要有拍（写手实际会拿到的形状）'
+    assert body['plan_chapter']['scenes'], '恒等基线也要有场景（写手实际会拿到的形状）'
     assert body['ctx_chapter'] is not None and body['writer_target'] is not None
     assert body['_provenance'] is None, '现算的基线没有落盘来源账可发'
     assert body['plan_state']['exists'] is False

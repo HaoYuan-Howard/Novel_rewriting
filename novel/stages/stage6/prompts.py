@@ -141,7 +141,7 @@ class Material:
 
 
 def story_map(ctx: dict) -> list[dict]:
-    """全书 writer_context → 无禁写标记、但有完整事件与钩子目标的故事地图。"""
+    """全书 writer_context → 章级语义契约与 Stage4 新场景地图。"""
     def goal(value: dict | None) -> dict:
         # CtxGoal 已在 Stage4 把 typed refs 解析成人话；文案与 Stage5
         # 共用它，既不接触内部 id，也不接触 PlanGoal.rationale。
@@ -150,23 +150,24 @@ def story_map(ctx: dict) -> list[dict]:
 
     out: list[dict] = []
     for chapter in ctx.get('chapters') or []:
-        events: list[str] = []
-        segments: list[dict] = []
-        for segment in chapter.get('segments') or []:
-            segment_events = [
-                str(event) for event in (segment.get('events') or []) if str(event).strip()
-            ]
-            events.extend(segment_events)
-            # `slot` 是 producer-owned 的稳定身份；文案层可以投影舞台与
-            # 禁写标记，但不能把段身份也压平掉。
-            segments.append({'slot': segment.get('slot'), 'events': segment_events})
+        scenes = [
+            {
+                'slot': scene.get('slot'),
+                'purpose': scene.get('purpose'),
+                'required_facts': scene.get('required_facts') or [],
+                'turn_fact': scene.get('turn_fact'),
+                'exit_state': scene.get('exit_state') or [],
+            }
+            for scene in (chapter.get('scenes') or [])
+        ]
         out.append({
             'chapter': chapter.get('output_ordinal'),
             'from_source_ordinals': chapter.get('from_source_ordinals') or [],
+            'semantic_contract': chapter.get('semantic_contract') or {},
+            'chapter_rewrite_brief': chapter.get('chapter_rewrite_brief'),
             'chapter_goal': goal(chapter.get('chapter_goal')),
             'open_hook_goal': goal(chapter.get('open_hook_goal')),
-            'events': events,
-            'segments': segments,
+            'scenes': scenes,
             'end_hook_goal': goal(chapter.get('end_hook_goal')),
         })
     return out

@@ -1,17 +1,16 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Stage 4 源内容单元的确定性切分与模型计划展开。
+"""Stage 4 对 Stage2 证据材料的确定性索引。
 
-代码按源 beat 顺序切分，只吸收相邻、同时间层的碎拍；这些组是不可再拆的事实守恒边界，
-不是最终写作顺序。模型可以重排并合并源内容单元，`expand_plan_beats` 再把编号展开回
-`from_beats`。纯函数接收 dict，以便生成、复检与反例测试共用同一实现。
+Stage2 beat 只保留为原文 span、舞台条件与保真片段的证据容器；它不再被切分、合并或
+展开成写作骨架。Stage4 的写作顺序只来自场景编译器生成的 `scenes[]`。
 """
 from __future__ import annotations
 
 import re
 from typing import Any
 
-from contracts.invariants import BEAT_MIN_CHARS, HINGE_GROUPS
+from contracts.invariants import HINGE_GROUPS
 from novel.core.spans import locate_spans
 
 #: 一条 hinge 拆成「点」时的段落边界。⚠ **按段落拆，不按句子拆**：见 `verbatim_pieces`。
@@ -51,7 +50,7 @@ def beat_index(blueprints: dict[str, Any],
       下发通道当场断掉且无人出声（详见 `_hinge_text` 的注释）。
       ⇒ 形态只留两种：**stage2 产物形态**（本函数搬运的）与**下发的点**
       （`verbatim_pieces` 的产出）。中间不再有第三种。
-    · 另外三样是「写手落笔时必须知道、而 `event` 文字本身不承载」的：
+    · 舞台三样是事实 claim 之外仍需单独提供的执行条件：
       一段转述若不标出来会被写成当场发生的戏；地点与在场者同理，闭卷时无从推断。
     """
     text = {m.get('chapter_ordinal'): (m.get('text') or '') for m in main_text}
@@ -64,8 +63,6 @@ def beat_index(blueprints: dict[str, Any],
         for be in (b.get('beats') or []):
             idx[be.get('beat_id')] = {
                 'ord': o,
-                # 【写手要写的内容本身也走引用】不再由规划器转述一遍，见 `context._resolve_beats`
-                'event': be.get('event'),
                 'source_chars': size.get(be.get('beat_id')),
                 'hinges': [h for h in (be.get('hinges') or []) if _hinge_text(h).strip()],
                 'time_layer': be.get('time_layer'),
@@ -73,90 +70,6 @@ def beat_index(blueprints: dict[str, Any],
                 'present_char_ids': be.get('present_char_ids') or [],
             }
     return idx
-
-
-def group_chars(group: list[str], bidx: dict[str, dict[str, Any]]) -> int | None:
-    """一拍的源字数 = 组内各源 beat 之和；**任一条未知就整组未知**（不拿已知的那几条充数）。
-
-    ⚠⚠ **唯一一份口径**（判据 14）：`group_beats` 判「够不够 `BEAT_MIN_CHARS`」、
-    恒等基线给预算、量纲表报给规划器的数，**全走这一个函数**。
-    三处各写一遍的话，喂给模型的基准就会与代码判它时用的基准分家，
-    **而错的往往是那个跨口径的运算**。
-    """
-    ns = [(bidx.get(x) or {}).get('source_chars') for x in group]
-    return None if (not ns or any(n is None for n in ns)) else sum(ns)
-
-
-def plan_beat_id(chapter_ordinal: Any, seq: int) -> str:
-    """规划侧的拍编号。**`p` 前缀与 stage2 的 `b` 分开**——
-
-    同名不同义是最好的漂移温床，而这两个东西恰恰长得很像：
-    一个是**源 beat**，一个是**由若干源 beat 组成的拍**。
-    """
-    return f'p{int(chapter_ordinal):02d}_{int(seq):02d}'
-
-
-def group_beats(blueprints: dict[str, Any], main_text: list[dict[str, Any]],
-                bidx: dict[str, dict[str, Any]] | None = None) -> dict[Any, list[list[str]]]:
-    """把每章的源 beat 确定性地分成【拍】→ `{chapter_ordinal: [[beat_id, …], …]}`。
-
-    规则只有一条：**只吸收碎拍**。低于 `BEAT_MIN_CHARS` 的组并进它**同叙述层的、
-    较小的那一侧**邻居（同大取左，保证确定），重复到没有可并的为止。
-    **够大的拍一条不动**——这样保住了原文自己的轻重，不会把一章削成一排等长的拍。
-
-    三条性质只约束【源内容单元内部】，不是最终计划的章内顺序：
-      · 顺序恒等于源序——只在相邻位置合并，从不换位；
-      · 只并相邻——组永远是源序上的一段**连续区间**；
-      · 只并同层——`time_layer` 不同的两组**永不相邻合并**。
-
-    ⚠⚠ **`source_chars` 未知的拍独立成组，绝不被吸收**：span 锚不到时它的字数是
-    **「不知道」，不是 0**。把它并进邻居会让组预算看起来正常，于是
-    「stage2 那一拍锚点坏了」这个真信号**被一次合并悄悄掩盖掉**。
-    留它独立，`budget_int` 会照常红出来。
-    ⚠ 它**也不参与「哪一侧更小」的比较**——未知不能拿去比大小。
-    """
-    if bidx is None:
-        bidx = beat_index(blueprints, main_text)
-
-    def size(g: list[str]) -> int | None:
-        return group_chars(g, bidx)
-
-    out: dict[Any, list[list[str]]] = {}
-    for b in (blueprints.get('blueprints') or []):
-        beats = b.get('beats') or []
-        layer = {be.get('beat_id'): be.get('time_layer') for be in beats}
-        groups: list[list[str]] = [[be.get('beat_id')] for be in beats]   # 先各自成组
-        while len(groups) > 1:
-            for i, g in enumerate(groups):
-                n = size(g)
-                if n is None or n >= BEAT_MIN_CHARS:
-                    continue
-                # 组内叙述层恒定（只并同层是不变量），取任一成员即可代表整组
-                lo = groups[i - 1] if i > 0 and layer.get(groups[i - 1][0]) == layer.get(g[0]) else None
-                hi = (groups[i + 1] if i + 1 < len(groups)
-                      and layer.get(groups[i + 1][0]) == layer.get(g[0]) else None)
-                if lo is not None and size(lo) is None:
-                    lo = None
-                if hi is not None and size(hi) is None:
-                    hi = None
-                if lo is None and hi is None:
-                    continue                                   # 没有同层邻居：保持独立
-                if hi is None or (lo is not None and size(lo) <= size(hi)):   # type: ignore[operator]
-                    groups[i - 1] = lo + g                     # type: ignore[operator]
-                else:
-                    groups[i + 1] = g + hi
-                groups.pop(i)
-                break                                          # 每轮只合一次，重新从头扫
-            else:
-                break                                          # 一轮下来没并动：收敛
-        out[b.get('chapter_ordinal')] = groups
-    return out
-
-
-def group_map(groups: dict[Any, list[list[str]]]) -> dict[str, list[str]]:
-    """`{chapter_ordinal: [[bid,…],…]}` → `{plan_beat_id: [bid,…]}`（全书唯一键）。"""
-    return {plan_beat_id(o, i): g
-            for o, gs in groups.items() for i, g in enumerate(gs, 1)}
 
 
 def verbatim_pieces(hinges: list[dict[str, Any]]) -> tuple[dict[str, list[str]], list[tuple[Any, str]]]:

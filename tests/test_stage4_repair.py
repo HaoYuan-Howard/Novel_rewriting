@@ -22,7 +22,6 @@ from novel.llm.client import MAX_SAMPLES_PER_RUNG
 from novel.report.findings import ran
 from novel.stages.stage2 import extract
 from novel.stages.stage4 import plan
-from novel.stages.stage4.beats import plan_beat_id
 from novel.stages.stage4.measure import identity_plan
 from novel.store import ArtifactStore
 from tests.test_stage2 import main_text
@@ -59,8 +58,7 @@ def _prepare(book):
     ctx = _ctx(book, 'stage4.plan')
     store = ArtifactStore(ctx)
     upstreams = plan._Upstreams(ctx, store)
-    raw = identity_plan(
-        upstreams.blueprints, upstreams.main_text, upstreams.bidx, upstreams.groups)
+    raw = identity_plan(upstreams.blueprints, upstreams.main_text, upstreams.bidx)
     provenance = ctx.llm_provenance(
         PlanProvenance,
         prompts={'PLAN_SYS': plan.prompts.plan_system()},
@@ -73,29 +71,9 @@ def _prepare(book):
     return ctx, store, upstreams, artifact.model_dump(by_alias=True)
 
 
-def _target_response(before, groups, ordinal):
-    """把盘上那一章翻成一份**模型会返回的**响应。
-
-    ⚠ 基线块与响应**不是同一样东西**，而这个装置正踩在两者的差上：
-    `_response_baseline` 产的是发给模型的**基线**，三个「产物侧可以没有、响应侧必填」的
-    字段（`spine` 与两级 `weight`）为 `None` 时它把那一格整个删掉
-    （产物侧允许「没做过这个决策」，恒等基线就是——而本文件的盘面正是恒等基线）；
-    模型**返回**的响应里它们却是必填的。补上这三格，模拟的才是一份合法响应；
-    不补就等于让装置去验证「模型漏填必填字段会被拒」，而那是另一条测试的事。
-    """
-    chapter = plan._response_baseline(plan._chapter_by(before)[ordinal], groups, ordinal)
-    # ⚠ 章级档位在定向修复那一路**不起作用**（本章总量由代码钉死在基线合计上），
-    #   但它仍是必填字段 —— 契约与「这一次它管不管用」是两件事。
-    chapter['weight'] = 'CH_EVEN'
-    members = {plan_beat_id(ordinal, index): group
-               for index, group in enumerate(groups.get(ordinal) or [], 1)}
-    for segment in (chapter.get('segments') or []):
-        segment['weight'] = 'W_MID'
-        # ⚠ 补的是**本单元里一个 event 的编号**，不是数字：响应侧 `spine` 从 2026-08-22
-        #   起收 `beat_id`（模型引用可靠、数数不可靠），填个 1 会被载体当场拒。
-        #   ⚠ 恒等基线一个源内容单元一个写作单元 ⇒ `end_beat` 指的就是它自己那一格。
-        segment['spine'] = members[segment['end_beat']][0]
-    return chapter
+def _target_response(before, ordinal):
+    """把盘上目标章投影回场景规划响应；slot/预算/语义契约由 producer 重建。"""
+    return plan._response_baseline(plan._chapter_by(before)[ordinal])
 
 
 def test_targeted_plan_repair_merges_only_the_requested_chapter_and_records_history(monkeypatch):
@@ -104,7 +82,7 @@ def test_targeted_plan_repair_merges_only_the_requested_chapter_and_records_hist
     book.mkdir()
     try:
         ctx, _store, upstreams, before = _prepare(book)
-        target = _target_response(before, upstreams.groups, 2)
+        target = _target_response(before, 2)
         preview_system, preview_user = plan.build_prompt(ctx, chapters=(2,))
         client, transport = _client(ctx, lambda _request, _index: _ok(target))
         captured = {}
@@ -146,7 +124,7 @@ def test_targeted_plan_repair_rejects_wrong_chapter_without_overwriting_formal()
     book.mkdir()
     try:
         ctx, store, upstreams, before = _prepare(book)
-        wrong = _target_response(before, upstreams.groups, 1)
+        wrong = _target_response(before, 1)
         client, transport = _client(ctx, lambda _request, _index: _ok(wrong))
         original = store.path(plan.REL).read_bytes()
 
@@ -157,7 +135,7 @@ def test_targeted_plan_repair_rejects_wrong_chapter_without_overwriting_formal()
         # 不在 Flash→Pro 产品兜底链内，第二采仍失败即终态。
         #   同型（模型没按契约产出），而「除截断外每一种拒绝都先走有界同档重采」是本仓已经
         #   付过学费的默认处置（`0e2492a`：那 47.7% 白花的根因）。判词一个字没改，
-        #   只是从 `_run_plan_repair` 搬到了 `_expansion_validator` 上。
+        #   只是从 `_run_plan_repair` 搬到了 `_scene_compiler_validator` 上。
         #   ⚠ 承重的两条在下面：**正式产物一个字节没动**、**不落 `.INVALID`**。
         assert len(transport.calls) == MAX_SAMPLES_PER_RUNG, \
             '越界响应没有完成首发 + 一次同档重采'
@@ -250,8 +228,8 @@ def test_targeted_plan_repair_failure_writes_invalid_without_overwriting_formal(
     book.mkdir()
     try:
         ctx, store, upstreams, before = _prepare(book)
-        target = _target_response(before, upstreams.groups, 2)
-        target['chapter_goal']['rationale'] = '仍然写着需要张力'
+        target = _target_response(before, 2)
+        target['chapter_rewrite_brief'] = '仍然只说需要张力'
         client, _transport = _client(ctx, lambda _request, _index: _ok(target))
         formal_before = store.path(plan.REL).read_bytes()
 
@@ -282,7 +260,7 @@ def test_targeted_plan_repair_accumulates_usage_and_rebuilds_context(monkeypatch
             'provenance': previous.provenance.model_copy(update={'usage': old_usage}),
         })
         store.write(plan.REL, previous)
-        target = _target_response(before, upstreams.groups, 2)
+        target = _target_response(before, 2)
         client, transport = _client(ctx, lambda _request, _index: _ok(target))
         rebuilt = []
         monkeypatch.setattr(plan, '_judge', lambda *_args, **_kwargs: [])

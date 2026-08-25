@@ -25,7 +25,8 @@ from __future__ import annotations
 from typing import Any
 
 from contracts.invariants import (
-    ADDRESS_BY, ADDRESS_CONTEXT, CHANGE_TYPES_ENUM, HINGE_KINDS, NAME_DISTINCTIVENESS,
+    ADDRESS_BY, ADDRESS_CONTEXT, CHANGE_TYPES_ENUM, FACT_ATOM_KINDS,
+    FACT_ATOM_OBLIGATIONS, HINGE_KINDS, NAME_DISTINCTIVENESS,
     KNOWLEDGE_SUBJECT_KINDS, NARRATIVE_PERSON,
     RELATION_VISIBILITY_KINDS, RESPONSE_TIME_LAYERS, TIME_LAYERS, WORLD_RULE_KINDS,
 )
@@ -399,7 +400,7 @@ _BLUEPRINT_TPL = """\
 #:   ① beat 只交 `end_para`（起点、编号由代码推导，首拍起 1、末拍必须到底）；
 #:   ② hinge 去段号（`kind + phrase`，在本条 beat 范围内原样且唯一）；
 #:   ③ `time_layer` 用带前缀的 `$T_LAYERS`，`place` 用判别三态 `$PLACE_MODES`；
-#:   ④ 没有 `summary`、没有 `beat_id`（前者归书级摘要批，后者归代码编号）。
+#:   ④ 没有 `summary`、没有 `beat_id`（前者由 atoms 确定性投影，后者归代码编号）。
 #: ⚠ **v3 模板一个字节不动**：缓存键含全部 messages，动旧模板 = 老臂缓存全 miss，
 #:   每一次 miss 都是真钱。
 #:
@@ -708,23 +709,6 @@ _BOUNDARY_FROZEN_NOTE = """\
 本次只在这些固定区间内填写 time_layer、place、present_char_ids、event 与 hinges。"""
 
 
-#: 书级摘要批的 system（`extraction-ir-v1` 专属，独立小臂）。
-#: 输入已是压缩事实（各章 beat events），**不重读原章**——所以没有 `RULES_V2` 前缀
-#: （那是对着原文抽取时的规矩）。
-#: ⚠ 「不引入 events 外新事实」查不了文面（模型手里本来就只有 events），
-#:   这一条归付费冒烟的人工抽查；validator 硬校验的是覆盖与长度界。
-_SUMMARY_BATCH_TPL = """\
-你会收到一本小说【逐章的事件清单】（每章一组，按叙述顺序）。为每一章写一段客观摘要。
-
-- 每章 100~220 字，一段话；
-- 必须覆盖：本章从什么开始、关键转折在哪、到什么收束；
-- 【只许用事件清单里已有的事实】不引入清单外的新人物、新动机、新因果——
-  你手里没有原文，清单没写的就是你不知道的；
-- 描述功能与语义，不照抄清单措辞、不写评价、不写「改写时应如何处理」之类的指令；
-- 【覆盖全部给出的章，一章一条】chapter_ordinal 原样返回，不多不少。
-
-只输出 JSON，不要额外解释文字。"""
-
 #: `--patch` 的两条小臂（`extraction-ir-v1` 字段级修复）。均无 `RULES_V2` 前缀——
 #: 它们不是抽取，是对一条已知失败的**受限**修复；user 里只有该拍原文与失败上下文。
 _HINGE_SELECT_TPL = """\
@@ -789,9 +773,6 @@ BLUEPRINT_SYS_V3 = RULES_V2 + fill(
     _SCAFFOLD_SINGLE_NOTE + '\n\n' + _BLUEPRINT_TPL_V2_REFS)
 BLUEPRINT_SYS_V31 = RULES_V2 + fill(
     _SCAFFOLD_SINGLE_NOTE + '\n\n' + _BLUEPRINT_TPL_V31_REFS)
-
-#: 书级摘要批（extraction IR 族共用，付费，一书一调）。
-SUMMARY_BATCH_SYS = fill(_SUMMARY_BATCH_TPL)
 
 #: `--patch` 字段级修复的两条小臂（付费，逐条失败一调）。
 HINGE_SELECT_SYS = fill(_HINGE_SELECT_TPL)
@@ -953,11 +934,6 @@ BLUEPRINT_HINT_V31: dict[str, Any] = {
     }],
 }
 
-#: 书级摘要批的结构提示。
-SUMMARY_BATCH_HINT: dict[str, Any] = {
-    'chapters': [{'chapter_ordinal': 1, 'summary': 'str(100~220字，一段话)'}],
-}
-
 #: `--patch` 两条小臂的结构提示。
 HINGE_SELECT_HINT: dict[str, Any] = {'candidate_id': 'c0'}
 HINGE_PHRASE_HINT: dict[str, Any] = {'phrase': '原样照抄的那几个字'}
@@ -966,3 +942,96 @@ HINGE_PHRASE_HINT: dict[str, Any] = {'phrase': '原样照抄的那几个字'}
 #: ⚠ 它**只回这两栏 + char_id**：那条臂的契约是「只搬不改、char_id 原样返回」。
 ROLE_SPLIT_HINT: dict[str, Any] = {'characters': {'char_001': {'role': 'str',
                                                                'fate': 'str|null'}}}
+
+
+# ── Stage2 v5：原子事实响应面 ───────────────────────────────────────────────
+# 旧模板仍作为历史实验说明留在本文件，但现役 contract 只读取下面重绑定后的四个名字。
+# 这不是兼容分支：正式响应里 `beats.event` 已被 schema 关闭式拒绝。
+_ATOMIC_FACT_RULE = """\
+【原子事实契约】`beats` 只划定原文舞台区间；不要再写一条复合 event 摘要。每拍填写
+`fact_atoms[]`，每项包含：
+- `atom_key`：章内临时引用，按全文出现顺序写 a01、a02……，不得重复或跳号；
+- `claim`：一个可独立判断真假的最小命题。一个动作、决定、结果、揭示或状态变化各自拆开，
+  不得把“甲说服乙、乙决定留下、关系缓和”塞进同一条；
+- `kind`：$FACT_KINDS；`obligation`：$FACT_OBLIGATIONS。`land` 是本章新增且改写必须落地的
+  信息，`context` 是本章进入时已经成立、只供场景读取的状态；
+  kind 的口径：动作/决定/结果归 event，新获知的客观信息归 information，人物内在或处境变化
+  归 character_state，关系变化归 relationship，读者认知变化归 reader_knowledge；
+- `evidence_phrase`：该拍区间内能直接支持 claim 的原文原样短语，必须唯一命中；
+- `participant_char_ids`：只从 user 的本章可选人物引用复制，不写姓名或清单外编号。
+
+章级另交 `chapter_function`，用一句话说明本章对全书推进的语义功能；再交
+`causal_edges[{before,after}]`，只记录颠倒后会改变剧情的因果，不把普通相邻都连边；
+`entry_state_refs[]` 只能引用 context 原子，`ending_state_refs[]` 只能引用 land 原子。
+这些引用只用 atom_key。因果图不得自环或成环。事实原子的数组位置是证据位置，不是未来写作顺序。
+"""
+
+_ATOMIC_DETAIL_V2 = """\
+你只抽取 user 指定的一章。边界已经冻结：必须恰好返回同样多的 beats，并逐项原样返回
+end_para。每拍填写 time_layer、place、present_char_ids、fact_atoms 与 hinges。
+
+hinges 每项为 `{kind, phrase}`；phrase 必须在所属拍内原样且唯一。kind 只能取 $KINDS。
+`narration` 每项填写 grammatical_person、narrator_name、focalizer_name、pronoun_surfaces。
+
+$ATOMIC
+只输出 JSON，不要解释。"""
+
+_ATOMIC_DETAIL_V31 = """\
+你只抽取 user 指定的一章。先用 micro_events 逐段召回推进，再将相邻推进归入 beats；两组
+end_para 都严格递增并到章尾，beats 的边界必须来自 micro_events。每拍填写 time_layer、place、
+present_char_ids、fact_atoms 与 hinges。
+
+hinges 优先从 user 的候选表复制 `{kind,candidate_id}`；没有合适候选时才写
+`{kind,phrase}`，phrase 必须在所属拍内原样且唯一。`narration` 使用
+narrator_char_id/focalizer_char_id，只能引用本章可选人物或 null。
+
+$ATOMIC
+只输出 JSON，不要解释。"""
+
+_atomic = _ATOMIC_FACT_RULE.replace('$FACT_KINDS', '|'.join(FACT_ATOM_KINDS)) \
+    .replace('$FACT_OBLIGATIONS', '|'.join(FACT_ATOM_OBLIGATIONS))
+BLUEPRINT_SYS_V2_REFS = RULES_V2 + fill(
+    _ATOMIC_DETAIL_V2.replace('$ATOMIC', _atomic))
+BLUEPRINT_SYS_V31 = RULES_V2 + fill(
+    _ATOMIC_DETAIL_V31.replace('$ATOMIC', _atomic))
+_ATOM_HINT = {
+    'atom_key': 'a01', 'claim': '一个最小事实命题',
+    'kind': '|'.join(FACT_ATOM_KINDS),
+    'obligation': '|'.join(FACT_ATOM_OBLIGATIONS),
+    'evidence_phrase': '所属拍内原样且唯一的证据短语',
+    'participant_char_ids': ['char_001'],
+}
+BLUEPRINT_HINT_V2_REFS = {
+    'blueprints': [{
+        'chapter_ordinal': 1,
+        'chapter_function': '本章建立或改变了什么局面',
+        'beats': [{'end_para': '冻结的结束段号(整数)',
+                   'time_layer': '|'.join(RESPONSE_TIME_LAYERS),
+                   'place': 'str|null', 'present_char_ids': ['char_001'],
+                   'fact_atoms': [_ATOM_HINT],
+                   'hinges': [{'kind': '|'.join(HINGE_KINDS),
+                               'phrase': '本拍内原样且唯一的字'}]}],
+        'causal_edges': [{'before': 'a01', 'after': 'a02'}],
+        'entry_state_refs': [], 'ending_state_refs': ['a02'],
+        'narration': [{'grammatical_person': NARRATIVE_PERSON[0],
+                       'narrator_name': '原文里的叫法|null',
+                       'focalizer_name': '原文里的叫法|null',
+                       'pronoun_surfaces': ['我']}],
+    }],
+}
+BLUEPRINT_HINT_V31 = {
+    'blueprints': [{
+        'chapter_ordinal': 1,
+        'chapter_function': '本章建立或改变了什么局面',
+        'micro_events': [{'end_para': '结束段号(整数)', 'cue': '一项新推进'}],
+        'beats': [{**BLUEPRINT_HINT_V2_REFS['blueprints'][0]['beats'][0],
+                   'hinges': [{'kind': '|'.join(HINGE_KINDS),
+                               'candidate_id': 'h001'}]}],
+        'causal_edges': [{'before': 'a01', 'after': 'a02'}],
+        'entry_state_refs': [], 'ending_state_refs': ['a02'],
+        'narration': [{'grammatical_person': NARRATIVE_PERSON[0],
+                       'narrator_char_id': 'char_001|null',
+                       'focalizer_char_id': 'char_001|null',
+                       'pronoun_surfaces': ['我']}],
+    }],
+}

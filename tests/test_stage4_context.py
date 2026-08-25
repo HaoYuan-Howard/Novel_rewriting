@@ -8,11 +8,11 @@ from typing import get_origin, get_type_hints
 
 import pytest
 
-from contracts.schema.stage4 import CtxBeat, WriterContext
+from contracts.schema.stage4 import CtxScene, WriterContext
 from novel.core.facts import heuristic_relation_gates
 from novel.errors import RefusedByStructure
 from novel.stages.stage4.context import (
-    Assembly, _gate_setting, _name_narration, _project_facts, _resolve_beats,
+    Assembly, _gate_setting, _name_narration, _project_facts, _resolve_scenes,
     build_writer_context,
     display_names, display_names_at, name_collisions, rename_all,
 )
@@ -59,131 +59,69 @@ def needs_corpus(test):
 _GENERATED_TOP = frozenset({'_provenance'})
 
 
-def test_flat_and_segmented_present_have_distinct_serialized_meanings():
-    flat = CtxBeat.model_validate({
-        'slot': 's01',
-        'events': ['空院里没有别人。'], 'budget_chars': 80, 'source_chars': 20,
-        'time_layer': 'present', 'place': '空院', 'present': [],
-    })
-    assert flat.present == []
-    assert flat.model_dump(mode='json')['present'] == []
-
-    segmented = CtxBeat.model_validate({
-        'slot': 's01',
-        'events': ['先在空院。', '后转入回忆。'], 'budget_chars': 100, 'source_chars': 30,
-        'segments': [
-            {'time_layer': 'present', 'place': '空院', 'present': []},
-            {'time_layer': 'recall', 'place': None, 'present': ['阿青']},
-        ],
-    })
-    dumped = segmented.model_dump(mode='json')
-    assert dumped['present'] is None and dumped['segments'][0]['present'] == []
-
-    with pytest.raises(ValueError, match='present'):
-        CtxBeat.model_validate({
-            'slot': 's01',
-            'events': ['空院里没有别人。'], 'budget_chars': 80, 'source_chars': 20,
-            'time_layer': 'present', 'place': '空院', 'present': None,
-        })
-
-    with pytest.raises(ValueError, match='只在 segments'):
-        CtxBeat.model_validate({
-            'slot': 's01',
-            'events': ['跨场。'], 'budget_chars': 80, 'source_chars': 20,
-            'present': [],
-            'segments': [{'time_layer': 'present', 'place': None, 'present': []}],
-        })
+def _ctx_scene(**overrides):
+    base = {
+        'slot': 's01', 'purpose': '让拒绝当场爆发', 'role': 'setup',
+        'delivery': 'scene', 'transition': 'start', 'budget_chars': 120,
+        'required_facts': ['三位住客拒绝接受主角'], 'context_facts': [],
+        'turn_fact': '三位住客拒绝接受主角', 'entry_state': [], 'exit_state': [],
+        'participants': ['主角'],
+        'stages': [{'time_layer': 'present', 'place': '公寓', 'present': ['主角']}],
+        'source_chars': 80,
+    }
+    return {**base, **overrides}
 
 
-def _diffs(mine: object, disk: object, path: str = '', out: list[str] | None = None) -> list[str]:
-    """逐字段比对。⚠ **不做「宽松相等」**：多一个键、少一个键、值差一个字都要报出来。"""
-    if out is None:
-        out = []
-    if isinstance(mine, dict) and isinstance(disk, dict):
-        for k in sorted(set(mine) | set(disk)):
-            if path == '' and k in _GENERATED_TOP:
-                continue
-            if k not in mine:
-                out.append(f'{path}.{k} 只在盘上有：{str(disk[k])[:60]}')
-            elif k not in disk:
-                out.append(f'{path}.{k} 只在算出来的里有：{str(mine[k])[:60]}')
-            else:
-                _diffs(mine[k], disk[k], f'{path}.{k}', out)
-    elif isinstance(mine, list) and isinstance(disk, list):
-        if len(mine) != len(disk):
-            out.append(f'{path} 长度 {len(mine)} vs {len(disk)}')
-        for i, (x, y) in enumerate(zip(mine, disk)):
-            _diffs(x, y, f'{path}[{i}]', out)
-    elif mine != disk:
-        out.append(f'{path}: 算={str(mine)[:70]!r} 盘={str(disk)[:70]!r}')
-    return out
+def test_ctx_scene_preserves_each_selected_stage_instead_of_flattening_them():
+    scene = CtxScene.model_validate(_ctx_scene(stages=[
+        {'time_layer': 'present', 'place': '公寓', 'present': []},
+        {'time_layer': 'recall', 'place': '车站', 'present': ['主角']},
+    ]))
+    dumped = scene.model_dump(mode='json')
+    assert dumped['stages'][0]['present'] == []
+    assert dumped['stages'][1]['time_layer'] == 'recall'
 
 
-def _through_the_carrier(ctx: dict[str, object], provenance: object) -> dict[str, object]:
-    """组装形态 → **落盘形态**，走的是 `store.write` 用的同一个载体。
-
-    盘上那份的来源账由写盘口生成，纯组装器产不出它 ⇒ 借盘上那份把模型填满，
-    随后 `_GENERATED_TOP` 会在比对时把它排除；这里给它只是为了过必填校验。
-    """
-    return WriterContext.model_validate(
-        {**ctx, '_provenance': provenance}).model_dump(by_alias=True, mode='json')
+def test_ctx_scene_rejects_every_retired_writing_skeleton_key():
+    for key, value in (
+        ('events', ['旧复合事件']), ('from_beats', ['b01_01']), ('end_beat', 'b01_01'),
+    ):
+        with pytest.raises(ValueError, match=key):
+            CtxScene.model_validate({**_ctx_scene(), key: value})
 
 
-# ── ⭐ 一、ctx 重组 == 存盘 ───────────────────────────────────────────────
-
-# ─────────────────────────────────────────────────────────────────────────────
-# `spine`：拍内主次（2026-08-22，批 3）
-# ─────────────────────────────────────────────────────────────────────────────
-
-def _bidx_spine() -> dict[str, dict[str, object]]:
-    return {f'b01_0{i}': {
-        'ord': 1, 'event': f'第{i}件事。', 'source_chars': 50, 'hinges': [],
-        'time_layer': 'present', 'place': '茶馆', 'present_char_ids': [],
-    } for i in (1, 2, 3)}
+def test_ctx_scene_turn_must_be_one_of_its_required_facts():
+    with pytest.raises(ValueError, match='turn_fact'):
+        CtxScene.model_validate(_ctx_scene(turn_fact='本场没有承载的事实'))
 
 
-@pytest.mark.parametrize('given', [2, None])
-def test_the_spine_reaches_the_context_exactly_as_the_plan_left_it(given):
-    """⭐ **原样投影，两个方向都不许加工。** 有值就带值，`None` 就留 `None`。
-
-    ⚠ 旁边那三个（`narrative_role`/`delivery`/`transition`）带 `or` 默认值，是给存量载体读的；
-    `spine` **不能**照抄那个写法——补一个 1 等于替计划做了它没做过的决策，
-    而下发面会照着演（`stage5/prompts.py::_unit_rule`）。
-    """
-    beats, _dropped, _withheld = _resolve_beats(
-        {'segments': [{'slot': 's01', 'from_beats': ['b01_01', 'b01_02'],
-                       'budget_chars': 120, 'spine': given}]},
-        _bidx_spine(), {})
-    assert beats[0]['spine'] == given
-    assert 'spine' in beats[0], '键必须恒在——「没做过这个决策」与「这一格丢了」不能同形'
-
-
-def test_a_spine_that_points_past_the_last_event_dies_on_the_carrier():
-    """⭐⭐ **全链只有 `CtxBeat` 能把 `spine ≤ len(events)` 写成类型**——它同时持有两者。
-
-    ⚠ 这不是把判据搬上载体：上游那两侧各缺一半（响应侧 `plan_beats[]` 还没展开、
-    产物侧 `from_beats[]` 是 id 不是内容），这条不等式在这一层**第一次**可表达。
-    ⚠ 它也是 `--apply-edit` 那一路**唯一**的守卫：人工稿不过 `expand_plan_beats`。
-    """
-    base = {'slot': 's03', 'events': ['甲。', '乙。'], 'budget_chars': 80,
-            'source_chars': 40, 'time_layer': 'present', 'place': '空院', 'present': []}
-    assert CtxBeat.model_validate({**base, 'spine': 2}).spine == 2
-    with pytest.raises(ValueError, match='只有 2 件'):
-        CtxBeat.model_validate({**base, 'spine': 3})
-
-
-def test_an_empty_event_string_dies_on_the_carrier_because_it_shifts_the_spine():
-    """⭐ 空 event 会让下发面的 ①②③ 与 `spine` **差一格**，所以它在载体上就死。
-
-    ⚠ 下发面渲染时**过滤**空串（`stage5/prompts.py::chapter_facts` 的 `evs`），
-    而 `spine` 数的是 `events[]` 的下标——留一个空串在里面，主干就指向另一件事。
-    `_resolve_beats` 那句 `bidx[b].get('event') or ''` 产出的正是这个必然被拒的值：
-    它不是兜底，是把上游违约原样端上来让这道闸拒掉。
-    """
-    with pytest.raises(ValueError, match='空条目'):
-        CtxBeat.model_validate({
-            'slot': 's01', 'events': ['甲。', ''], 'budget_chars': 80, 'source_chars': 40,
-            'time_layer': 'present', 'place': '空院', 'present': []})
+def test_scene_resolution_uses_atom_claims_and_keeps_stage_boundaries():
+    scenes, dropped, withheld = _resolve_scenes(
+        {'scenes': [{
+            'slot': 's01', 'purpose': '先给结果再追原因', 'role': 'setup',
+            'delivery': 'scene', 'transition': 'start', 'budget_chars': 120,
+            'land_fact_refs': ['f01_002'], 'context_fact_refs': ['f01_001'],
+            'material_refs': [], 'turn_fact_ref': 'f01_002',
+            'entry_state_refs': [], 'exit_state_refs': [],
+            'participant_refs': ['char_001'], 'stage_refs': ['b01_02', 'b01_01'],
+        }]},
+        {
+            'b01_01': {'source_chars': 30, 'time_layer': 'present', 'place': '门口',
+                       'present_char_ids': ['char_001'], 'hinges': []},
+            'b01_02': {'source_chars': 50, 'time_layer': 'recall', 'place': '车站',
+                       'present_char_ids': ['char_001'], 'hinges': []},
+        },
+        {
+            'f01_001': {'claim': '主角此前收到邀请'},
+            'f01_002': {'claim': '住客当面拒绝主角'},
+        },
+        {'char_001': '阿青'},
+    )
+    assert dropped == [] and withheld == []
+    assert scenes[0]['required_facts'] == ['住客当面拒绝主角']
+    assert scenes[0]['context_facts'] == ['主角此前收到邀请']
+    assert [stage['place'] for stage in scenes[0]['stages']] == ['车站', '门口']
+    assert scenes[0]['source_chars'] == 80
 
 
 @needs_corpus
@@ -199,7 +137,7 @@ def test_the_assembler_reproduces_every_context_on_disk():
     ⚠⚠ **两边必须先过同一个载体再比。** `build_writer_context` 交出来的是**组装形态**
     （可选键不给就是不在），盘上那份是 `store.write` 落的**落盘形态**
     （`model_dump` 把可选键显式写成 `null`）。直接拿裸 dict 比，
-    `CtxBeat` 的六个可选键会在**每一拍上**各报一处「只在盘上有：None」——
+    场景载体的可选键会在**每一场上**各报一处「只在盘上有：None」——
     实测一本 530 处，而组装器一个字都没错。
     ⚠ 那种红最坏的地方是**它长得和真回归一模一样**：一列「只在盘上有」，
     看不出是形态差还是丢字段。⇒ 过一次 `WriterContext` 把两边归到同一形态，
@@ -486,14 +424,26 @@ def test_writer_context_excludes_every_global_source_span_byte():
         'chapter_goal': goal,
         'open_hook_goal': goal,
         'end_hook_goal': goal,
-        'segments': [{
+        'semantic_contract': {
+            'chapter_function': '翻账并作出选择',
+            'information_delta': [f'f03_{index:03d}' for index in range(1, 7)],
+            'character_state_delta': [], 'relationship_delta': [],
+            'reader_knowledge_delta': [],
+            'must_land_fact_refs': [f'f03_{index:03d}' for index in range(1, 7)],
+            'context_fact_refs': [], 'causal_edges': [],
+            'entry_state_refs': [], 'ending_state_refs': [], 'material_refs': [],
+        },
+        'chapter_rewrite_brief': '重新设计翻账场景，但保持章尾选择不变。',
+        'scenes': [{
             'slot': 's01',
-            'from_beats': [f'b03_{index:02d}' for index in range(1, 7)],
+            'purpose': '把六项事实汇入一次翻账冲突',
+            'land_fact_refs': [f'f03_{index:03d}' for index in range(1, 7)],
+            'context_fact_refs': [], 'material_refs': [],
+            'turn_fact_ref': 'f03_006', 'entry_state_refs': [], 'exit_state_refs': [],
+            'participant_refs': ['char_001', 'char_002'],
+            'stage_refs': [f'b03_{index:02d}' for index in range(1, 7)],
             'budget_chars': 900,
-            'narrative_role': 'setup',
-            'delivery': 'scene',
-            'transition': 'start',
-            'spine': 1,
+            'role': 'setup', 'delivery': 'scene', 'transition': 'start',
         }],
     }]}
     assembled = build_writer_context(
@@ -660,7 +610,15 @@ def _elided_plan(ordinal: int = 4) -> dict:
     return {'output_chapters': [{
         'output_ordinal': ordinal, 'from_source_ordinals': [ordinal],
         'chapter_goal': goal, 'open_hook_goal': goal, 'end_hook_goal': goal,
-        'segments': [],
+        'semantic_contract': {
+            'chapter_function': '测试冲突阶段投影',
+            'information_delta': [], 'character_state_delta': [],
+            'relationship_delta': [], 'reader_knowledge_delta': [],
+            'must_land_fact_refs': [],
+            'context_fact_refs': [], 'causal_edges': [], 'entry_state_refs': [],
+            'ending_state_refs': [], 'material_refs': [],
+        },
+        'chapter_rewrite_brief': '只测试全书事实投影。', 'scenes': [],
     }]}
 
 

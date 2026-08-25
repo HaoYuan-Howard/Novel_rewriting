@@ -10,17 +10,15 @@ writer_context.json   确定性组装（非 LLM）—— 写作节点的唯一�
 
 【五条贯穿本层的事实】
 
-  ① **LLM 只产三样东西**：`reconstruction_strategy` · 逐章三个 goal · **逐拍 `budget_chars`**。
-     拍怎么切、怎么排、怎么并**不是 LLM 的决定**（`group_beats` 按源文切）。
-     ⇒ 本层 schema 的绝大部分字段，取值面**不来自模型、来自代码**——
-     这与 stage2「每一个字段都是模型写的」正好相反，**读表时不要套用那边的怀疑口径**。
+  ① **LLM 产场景设计**：`reconstruction_strategy`、逐章安全 brief、按新叙事顺序排列的
+     `scenes[]` 与权重。事实真值、因果边和状态增量来自 Stage2，不由 Stage4 重写。
 
   ② **`writer_context` 是全链的收口点**：叫法时点 / 秘密揭示章 / 规则放行章 /
      关系剧透闸门 / 弧线终点 / setting 逐章闸门——**前三层所有逐章闸门最后都汇到它一份上**。
      ⇒ 改任何一条闸门，唯一能看到效果的地方是这份产物。
 
-  ③ **`plan ⊊ ctx`，但 goal 是安全投影，不是原样透传**：计划保留可复算 id 与审计理由，
-     context 只保留解析后的人话事实。手改 plan 而不重建 ctx 仍会分家——那正是
+  ③ **`plan ⊊ ctx`，但 brief 是安全投影，不是全文策略原样透传**：计划保留可复算 id 与审计理由，
+     context 只保留本章可知的事实原子。手改 plan 而不重建 ctx 仍会分家——那正是
      `context_link`（HARD）在盯的事。
 
   ④ **先校验后落盘**：`_provenance` 是必填契约；失败响应只允许进入 `.INVALID`，
@@ -34,6 +32,7 @@ writer_context.json   确定性组装（非 LLM）—— 写作节点的唯一�
 """
 from __future__ import annotations
 
+import re
 from typing import Literal
 
 from pydantic import Field, model_validator
@@ -49,107 +48,67 @@ from contracts.invariants import (
 from contracts.schema.base import Fp10, StrictModel
 from contracts.schema.common import FreeProvenance, LlmProvenance
 
-from contracts.schema.stage2 import BEAT_ID_PATTERN
-
-#: 源内容单元编号 `pNN_NN` 的形状。**`p` 前缀与 stage2 的 `b` 分开**——
-#: 一个是源 beat、一个是由若干源 beat 组成的拍，同名不同义是最好的漂移温床
-#: （理由的落点在 `novel/stages/stage4/beats.py::plan_beat_id`）。
-#:
-#: ⚠ **两位宽是下限不是上限**（`\d{2,}`）：`plan_beat_id` 用 `:02d` 格式化，
-#: 三位数的章号会自然溢出宽度而不是被截断——写死 `\d{2}` 会让一本 100 章以上的书
-#: 在**响应载体**上被拒，而那是一次已经付过钱的响应。
-#: ⚠ 它与那个生产函数的恒等由 `tests/test_stage4.py` 钉着，不在这里 import novel/。
-PLAN_BEAT_ID_PATTERN = r'^p\d{2,}_\d{2,}$'
+from contracts.schema.stage2 import (
+    BEAT_ID_PATTERN, FACT_ID_PATTERN, HINGE_ID_PATTERN, CausalEdge,
+)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 一、`plan_chapters.json`
 # ─────────────────────────────────────────────────────────────────────────────
 
-class PlanBeat(StrictModel):
-    """计划里的一拍。**2 个键。**
+class PlanScene(StrictModel):
+    """Stage4 新设计的一场；引用事实契约，不引用源事件清单。"""
 
-    模型响应用 `plan_beat` 标识骨架拍；`expand_plan_beats` 验证编号后把它确定性展开为
-    正式产物的 `from_beats`。正式产物只保存下游实际消费的引用与预算。
-    """
-
-    #: Producer-owned stable response slot.  It is assigned after the model
-    #: response is matched back to the deterministic Stage2 beat groups.
     slot: str = Field(pattern=r'^s\d{2,4}$')
-
-    #: **[HARD] 正整数**。盘上 15~720。
-    #:
-    #: ⚠⚠ **2026-08-22 批 4 起它不再是模型产的**：模型给的是 `weight` 这个档位，
-    #: 整数由 `novel/stages/stage4/measure.py::allocate_budgets` 算
-    #: ⇒ `budget_int` / `budget_band` / `plan_book_band` 三条 HARD 从「模型的责任」
-    #: 变成**代码的后置条件**。响应侧 `PlanBeatResponse` 里已经没有这个字段了。
-    #:
-    #: ⚠ 判据侧那三条**一条都没撤**：`--apply-edit` 的人工稿与 `--revalidate` 的存量
-    #: 产物不经过 `allocate_budgets`，那两条路上它们仍然是真守卫。
-    #: 这里的 `gt=0` 是同一条约束的载体侧镜像，而不是把判据搬上来——判据仍要报出
-    #: 「哪一拍、原值是多少」，那是类型给不了的。
     budget_chars: int = Field(gt=0)
+    weight: Literal[UNIT_WEIGHTS]
+    purpose: str = Field(min_length=1)
+    role: Literal[STRUCTURAL_ROLES]
+    delivery: Literal[DELIVERY_MODES]
+    transition: Literal[TEMPORAL_LINKS]
+    land_fact_refs: list[str] = Field(min_length=1)
+    context_fact_refs: list[str]
+    material_refs: list[str]
+    turn_fact_ref: str = Field(pattern=FACT_ID_PATTERN)
+    entry_state_refs: list[str]
+    exit_state_refs: list[str]
+    participant_refs: list[str]
+    stage_refs: list[str] = Field(min_length=1)
 
-    #: **这一写作单元在本章里的分量档**（`None` = 这份计划没记档位）。
-    #:
-    #: 它是 `budget_chars` 的**来源**：`预算_i ∝ 源字数_i × UNIT_WEIGHT_FACTOR[weight_i]`。
-    #: ⚠⚠ **两个字段都存是刻意的，不是冗余**：档位是**决策**、字数是**派生量**，
-    #: 与 `spine`（决策）/`from_beats`（派生）那一对同型。不存档位，
-    #: ①「模型到底判了哪一拍是重头」在产物上就不可复原；
-    #: ② 定向修复的基线块（`encode_plan_baseline`）没有东西可以回编码，
-    #: 而响应侧这一格是必填的——同一份 user 里 system 要档位、基线印着字数。
-    #: ⚠ `None` 是存量计划与恒等基线的态（`identity_plan` 显式给 `None`：
-    #: 「一个决策都没做过」，同 `spine`）。
-    weight: Literal[UNIT_WEIGHTS] | None = None
-
-    #: 这一写作单元在重构后章节里的叙事功能。它只决定结构，不指定文风。
-    narrative_role: Literal[STRUCTURAL_ROLES] = 'bridge'
-
-    #: `scene` 要把该单元作为可见可听的场面承载；`summary` 用最少篇幅交代事实。
-    delivery: Literal[DELIVERY_MODES] = 'scene'
-
-    #: 与前一个写作单元的时间关系；第一单元必须是 `start`，由 Stage4 判据检查。
-    transition: Literal[TEMPORAL_LINKS] = 'continue'
-
-    #: 引用 stage2 的 `beat_id`。长度 1~3。
-    #: **代码写的**：`expand_plan_beats` 按模型给的 `plan_beat` 换回，模型不产它。
-    #:
-    #: ⚠ 它上面挂着结构级 [HARD]，不是只靠 prompt 叮嘱：
-    #: `beat_ref`（引用存在且属本章）· `beat_coverage`（每个源 beat 都被覆盖——
-    #: 压缩靠调低预算，不靠丢内容）· `structure_units`（源内容单元不可拆）以及
-    #: `structure_changed`（够大的章必须做过一次结构决策——**保持源序不违规**，
-    #: 与恒等基线逐格相同才违规）· `structure_transition`（衔接标记可执行）以及
-    #: `transition_direction`（标签宣称的方向要与源叙述序对得上，只在现场层接缝上判）。
-    from_beats: list[str] = Field(min_length=1)
-
-    #: **这一写作单元的主干是 `events[]` 里的第几条**（1-based，`None` = 没做过这个决策）。
-    #:
-    #: 它是模型在拍这一层的**第二样**产出（第一样是 `budget_chars`），
-    #: 治的是「一拍 N 条材料被写成 N 句平权的话」——批 1 把句子单位从 event 上移到拍之后，
-    #: 拍**内部**仍然是一张平权清单，而平权清单最省力的写法就是逐条对译。
-    #: `spine` 说的是**主次**：主干那条演开，其余几条是它的条件、后果或背景。
-    #:
-    #: ⚠⚠ **只标主次，不标顺序。** 拍内 event 的落笔先后仍恒等于源序——
-    #: `stage5/checks.py::segment_event_findings` 有一条拍内顺序臂把逆序判成 `event_landing`，
-    #: 而本批**一行都不动它**。授权拍内重排是另一次单独的、要带读数的裁决。
-    #:
-    #: ⚠ `int | None` 而不是必填：`identity_plan` 的恒等基线**没有做过**这个决策，
-    #: 给它 1 会让基线看起来做过（而基线正是 `structure_changed` 的反例来源）。
-    #: 响应侧那一份（`PlanBeatResponse.spine`）是**必填**的——两边的分工与
-    #: `from_beats`/`plan_beats` 完全同型：产物侧要能表达「没有」，响应侧不许省。
-    #:
-    #: ⚠⚠ **两边的类型也不同型，这是有意的**：响应侧收 `beat_id`（引用），
-    #: 这一侧存下标——`expand_plan_beats` 把编号换算成 `from_beats` 里的位置，
-    #: 与它把 `plan_beats` 换算成 `from_beats` 是同一次动作、同一条出口。
-    #: 理由（模型会数错、但不会引用错）写在 `PlanBeatResponse.spine` 上。
-    spine: int | None = Field(default=None, ge=1)
+    @model_validator(mode='after')
+    def _scene_refs_are_coherent(self) -> PlanScene:
+        for label, refs in (
+            ('land_fact_refs', self.land_fact_refs),
+            ('context_fact_refs', self.context_fact_refs),
+            ('material_refs', self.material_refs),
+            ('entry_state_refs', self.entry_state_refs),
+            ('exit_state_refs', self.exit_state_refs),
+            ('participant_refs', self.participant_refs),
+            ('stage_refs', self.stage_refs),
+        ):
+            if len(refs) != len(set(refs)):
+                raise ValueError(f'{self.slot}.{label} 不能重复引用')
+        if self.turn_fact_ref not in self.land_fact_refs:
+            raise ValueError(f'{self.slot}.turn_fact_ref 必须属于 land_fact_refs')
+        if any(not re.match(FACT_ID_PATTERN, ref)
+               for ref in self.land_fact_refs + self.context_fact_refs
+               + self.entry_state_refs + self.exit_state_refs):
+            raise ValueError(f'{self.slot} 存在非法 fact_id')
+        if any(not re.match(HINGE_ID_PATTERN, ref)
+               for ref in self.material_refs):
+            raise ValueError(f'{self.slot} 存在非法 hinge_id')
+        if any(not re.match(BEAT_ID_PATTERN, ref)
+               for ref in self.stage_refs):
+            raise ValueError(f'{self.slot} 存在非法 stage beat 引用')
+        return self
 
 
 class FactRef(StrictModel):
     """A recomputable Stage1/2 fact reference, not a free-text justification."""
 
     kind: Literal[
-        'character', 'event', 'world_rule', 'secret', 'relation',
+        'character', 'fact_atom', 'world_rule', 'secret', 'relation',
         'setting', 'chapter_boundary',
     ]
     # Internal joins are valid in the planning artifact, but they are never a
@@ -187,6 +146,22 @@ class CtxGoal(StrictModel):
     facts: list[str] = Field(min_length=1)
 
 
+class SemanticContract(StrictModel):
+    """由 Stage2 确定性投影的不可改章级真相；规划模型不能重写它。"""
+
+    chapter_function: str = Field(min_length=1)
+    information_delta: list[str]
+    character_state_delta: list[str]
+    relationship_delta: list[str]
+    reader_knowledge_delta: list[str]
+    must_land_fact_refs: list[str] = Field(min_length=1)
+    context_fact_refs: list[str]
+    causal_edges: list[CausalEdge]
+    entry_state_refs: list[str]
+    ending_state_refs: list[str]
+    material_refs: list[str]
+
+
 class PlanChapter(StrictModel):
     """一个输出章。"""
 
@@ -209,13 +184,13 @@ class PlanChapter(StrictModel):
     #:
     #: 它是本章预算总量的**来源**：`allocate_budgets` 先按 `CHAPTER_WEIGHT_RATIO`
     #: 排出章间轻重，再归一化到全书目标并把冲出 `PLAN_BUDGET_BAND` 的章钳回带内。
-    #: ⚠ **它与 `PlanBeat.weight` 是两层，不是同一个决策的粗细两版**：
-    #: 前者答「哪一章重要」（唯一表达处是章级倍率），后者答「本章里哪里重要」。
+    #: ⚠ **它与 `PlanScene.weight` 是两层，不是同一个决策的粗细两版**：
+    #: 前者答「哪一章重要」（唯一表达处是章级倍率），后者答「本章里哪一场重要」。
     #: `PLAN_SYS` 的篇幅段里这两条一直是并列的两句话。
     weight: Literal[CHAPTER_WEIGHTS] | None = None
-
-    #: **[HARD] 非空**。长度 3~13，条数与顺序照骨架切好的拍。
-    segments: list[PlanBeat] = Field(min_length=1)
+    semantic_contract: SemanticContract
+    chapter_rewrite_brief: str = Field(min_length=1)
+    scenes: list[PlanScene] = Field(min_length=1)
 
     @model_validator(mode='after')
     def _output_ordinal_equals_its_only_source(self) -> PlanChapter:
@@ -227,21 +202,20 @@ class PlanChapter(StrictModel):
             )
         return self
 
+    @model_validator(mode='after')
+    def _scene_slots_are_unique(self) -> PlanChapter:
+        slots = [scene.slot for scene in self.scenes]
+        if len(slots) != len(set(slots)):
+            raise ValueError('scene slots must be unique')
+        return self
+
 
 class PlanParams(StrictModel):
-    """这份计划的拍是照哪一套阈值切的。盘上恒 `{absorb-small-v1, 80, 57~73}`。
+    """场景编译器版本与输入规模；不再登记源拍吸收阈值。"""
 
-    ⚠⚠ **它记了，但原型没有一个读者**——而 `structure_changed` / `structure_units`
-    两条 HARD 是拿**当前**的 `group_beats` 去量的。
-    若不读取这里，这两条判据就会**每一次都在「拿新尺子量旧布」**，
-    而这个字段本来就是为了让人发现这件事才存在的。
-    ⇒ `R-5.11`：两条结构判据在开跑前先比一次 `params`；对不上就先说
-    「这是跨版本比较」，再报判定。**参数缺失记作「不知道」，不是「匹配」。**
-    """
-
-    grouping: str = Field(min_length=1)
-    beat_min_chars: int = Field(ge=1)
-    plan_beats: int = Field(ge=1)
+    compiler: Literal['atomic-scenes-v1']
+    fact_atoms: int = Field(ge=1)
+    source_stages: int = Field(ge=1)
 
 
 class PlanRepair(StrictModel):
@@ -293,77 +267,30 @@ class PlanChapters(StrictModel):
 
     #: 长度 = 源章数（8~14）。
     #: ⚠ **产地的一条后置条件**：它为空时**先单独说一句**「这份计划里一个输出章都没有」，
-    #: **不摊成 N 条「这一拍没有给预算」**——实测那一次 74 条派生症状盖住了一句话就能说清的
+    #: **不摊成 N 条「这一场没有给预算」**——旧计划实测那一次 74 条派生症状
+    #: 盖住了一句话就能说清的
     #: 事实，而症状的文案指向的是**另一个根因**。
     output_chapters: list[PlanChapter] = Field(min_length=1)
 
     provenance: PlanProvenance = Field(alias='_provenance')
 
 
-class PlanBeatResponse(StrictModel):
-    """**模型响应里**的一拍。⚠ 与落盘那份（`PlanBeat`）**不是同一个形状**。
+class PlanSceneResponse(StrictModel):
+    """模型响应里的一场；slot 与整数预算由编译器生成。"""
 
-    模型给的是**本单元的结束拍**、结构决定与两个档位；`from_beats` 与 `budget_chars`
-    都由 `expand_plan_beats` / `allocate_budgets` **算出来**，模型不产它们。
-    `segments[]` 的数组顺序就是重构后的叙述顺序，允许不同于源序。
-    """
-
-    #: **本写作单元在源序上到哪一个源内容单元为止**（`pNN_NN`）。
-    #:
-    #: ⚠⚠ **它 2026-08-22 批 4 取代了 `plan_beats: list[str]`**（模型逐条列出本单元
-    #: 用到的每一个编号、全章恰好覆盖一次）。换掉的理由是把三条 HARD 变成恒等式：
-    #: 一章内所有 `end_beat` 按源位置排序就是**切分点**，起点 = 前一个切分点 +1
-    #: ⇒ `beat_coverage`（全覆盖）· `beat_ref`（引用有效且属本章）·
-    #: `structure_units`（源内容单元不可拆、内部不换序）三条**按构造成立**，
-    #: 模型只剩三件便宜的事：编号存在 · 互不重复 · 最大的那个是本章最后一个单元。
-    #:
-    #: ⚠⚠ **「重排」这条自由度一格没丢**：`segments[]` 的数组顺序仍然是**成稿顺序**，
-    #: 切分点则由排序恢复 ⇒ 入口移位（`axis_entry`）、`cold_open`、现场层接缝上的
-    #: `earlier`/`return` 全都照样表达得出来。丢掉的只有「把**不相邻**的两个源单元
-    #: 并进同一个写作单元」——盘上 5 份计划 272 个写作单元里**只有 2 个**用过它（0.7%）。
-    #:
-    #: ⚠ 载体只判**形状**。「编号是不是本章的、有没有重复、末单元有没有到底」要先经
-    #: `gmap` 才知道，与 `spine` 的归属违约同一段、同一条出口
-    #: （`measure.py::expand_plan_beats`，挂在 `ask_json(validator=)` 上 ⇒ 拒了是同档重采）。
-    end_beat: str = Field(pattern=PLAN_BEAT_ID_PATTERN)
-
-    #: **这一写作单元在本章里的分量档**。产物侧的 `budget_chars` 由它算出来。
-    #: ⚠ 模型不再给整数：理由与那三条算术 HARD 的账见
-    #: `contracts/invariants.py::RESPONSE_UNIT_WEIGHTS`。
     weight: Literal[tuple(RESPONSE_UNIT_WEIGHTS)]
-
-    #: ⚠⚠ **这三个 + `PlanGoalResponse.intent` + 两个 `weight` 是【带前缀的响应侧取值】，
-    #: 不是产物值。** 六张表在响应 JSON 里串行相邻且语义两两邻近，模型会串表——而串出来的值
-    #: **在另一张表里是合法的**，于是 schema 闸只能在整份响应收完之后才发现。
-    #: 实测代价：2026-08-22 一次全书规划 6 次 wire 全被内容闸拒、86 150 completion 全白花。
-    #: 前缀化之后串表当场死在 schema 上（手法与读数见
-    #: `contracts/invariants.py::RESPONSE_STRUCTURAL_ROLES`）。
-    #: 映射唯一落点：`novel/stages/stage4/measure.py::decode_plan_response`。
-    narrative_role: Literal[tuple(RESPONSE_STRUCTURAL_ROLES)]
+    purpose: str = Field(min_length=1)
+    role: Literal[tuple(RESPONSE_STRUCTURAL_ROLES)]
     delivery: Literal[tuple(RESPONSE_DELIVERY_MODES)]
     transition: Literal[tuple(RESPONSE_TEMPORAL_LINKS)]
-
-    #: **本单元的主干是哪一件事**——一个 Stage2 `beat_id`，从下发骨架里那张
-    #: `events{}`（`beat_id → 这件事`）逐字抄。产物侧 `PlanBeat.spine` 是**下标**，
-    #: 编号→下标的换算由 `novel/stages/stage4/measure.py::expand_plan_beats` 做。
-    #:
-    #: ⚠⚠ **它曾经是下标本身**（`int`，1-based，跨 `plan_beats[]` 展开后连续编号），
-    #: 2026-08-22 两次整跑把那个形状否掉：要填对下标，模型得把本单元几个源内容单元的
-    #: events 摊平累加，而那个数**代码本来就精确知道**。实测一份 schema 合法的响应里
-    #: 60 个写作单元错 10 个，**9 个是「本单元只有 1 件事、却填了 2 或 3」**——
-    #: prompt 白纸黑字写着「只有一件事时填 1」。同一份响应里 `plan_beats` 的编号引用
-    #: **一个都没错**。⇒ **让模型引用可靠，让它数数不可靠**，能引用就不要它数。
-    #:
-    #: ⚠ 载体只判**形状**（`bNN_NN`，与 `Beat.beat_id` 同一份正则），**归属不在载体上**：
-    #: 「这个编号是不是落在本单元 `plan_beats[]` 引的那几个源内容单元里」要先经 `gmap`
-    #: 展开才知道，由 `expand_plan_beats` 与三种编号违约同一段、同一条出口判
-    #: ——而那一段现在挂在 `ask_json(validator=)` 上（`plan.py::_plan_expansion_validator`）：
-    #: 拒了是**同档重采**，不再是一份其余都合格的计划连同整轮 token 一起报废。
-    #:
-    #: ⚠ 它**刻意排在三个枚举之后**：批 2 那次 6 次 wire 全灭是四张相邻枚举表串出来的，
-    #: 新字段插进那一串中间等于把已经用三轮实付验过的字段序重新洗一遍。
-    #: 追加在末尾、且取值面是 `bNN_NN`（与三张 `X_` 前缀表不同型），串不进去。
-    spine: str = Field(pattern=BEAT_ID_PATTERN)
+    land_fact_refs: list[str] = Field(min_length=1)
+    context_fact_refs: list[str]
+    material_refs: list[str]
+    turn_fact_ref: str = Field(pattern=FACT_ID_PATTERN)
+    entry_state_refs: list[str]
+    exit_state_refs: list[str]
+    participant_refs: list[str]
+    stage_refs: list[str] = Field(min_length=1)
 
 
 class PlanGoalResponse(StrictModel):
@@ -398,8 +325,8 @@ class PlanChapterResponse(StrictModel):
     #: ⚠ 它刻意排在三个 goal 之后、`segments` 之前：与单元级那一格**隔着整个 segments 数组**，
     #: 两张表在响应 JSON 里不相邻，串表的形状本身就成立不了。
     weight: Literal[tuple(RESPONSE_CHAPTER_WEIGHTS)]
-
-    segments: list[PlanBeatResponse] = Field(min_length=1)
+    chapter_rewrite_brief: str = Field(min_length=1)
+    scenes: list[PlanSceneResponse] = Field(min_length=1)
 
 
 class PlanResponse(StrictModel):
@@ -416,11 +343,8 @@ class PlanResponse(StrictModel):
 class PlanEdit(StrictModel):
     """`stage4/plan_edit.json` —— 人手改好的计划（`--apply-edit` 的决策集）。
 
-    **v1 收整份替换**：章与写作单元互相引用（`beat_coverage` / `structure_changed` 都是全书性质），
-    补丁式局部替换会造出半坏计划还说不清坏在哪。
-    ⚠ 形状是**落盘产物**的两个业务键（`PlanChapter`，`from_beats` 已展开）——
-    人编辑的就是盘上那份 `plan_chapters.json`；`plan_beat` 编号是发给模型的抓手，
-    落盘时已 pop，人产不出它，所以本路**不过** `expand_plan_beats`。
+    收整份替换：章级语义契约、事实覆盖与场景状态互相引用；补丁式局部替换会造出
+    半坏计划还说不清坏在哪。人工编辑正式 `PlanChapter`，同样经过完整场景校验。
     """
 
     reconstruction_strategy: str = Field(min_length=1)
@@ -459,128 +383,58 @@ class WorldFacts(StrictModel):
     characters: dict[str, BookCharacter]
 
 
-class BeatSegment(StrictModel):
-    """跨地时的子结构。**不取并集。** 盘上 28/197 拍有，长度 2~3。"""
+class CtxStage(StrictModel):
+    """一个可执行舞台；多个源区间可以合成同一新场，也可以被拆到不同新场。"""
 
     time_layer: Literal[TIME_LAYERS]
     place: str | None
     present: list[str]
 
 
-class CtxBeat(StrictModel):
-    """写手真正落笔的单位。盘上 197 拍。
+class CtxCausalEdge(StrictModel):
+    before: str = Field(min_length=1)
+    after: str = Field(min_length=1)
 
-    ⚠ **四组保真材料守的是不同的维度，不是「守多少」的四档。**
-    全塞进一个叫 `verbatim` 的数组，写手会把「因果前提」也当成必须逐字出现的句子，
-    硬塞背景交代。映射表 `HINGE_GROUPS` 的 key **必须与 stage2 的 `HINGE_KINDS`
-    逐字一致**（模块加载时断言）。
-    ⚠ **未知 kind 丢弃 + 告警，不许兜底**：曾经是 `HINGE_GROUP.get(kind, 'verbatim')`，
-    于是模型自造的 kind（「行动描述」）被升级成「原样写入、一个字不能改」——
-    而那是一句叙述文。
 
-    ⚠ **跨段落的 hinge 必须按段落边界拆成独立的点**：一条 55 字、跨 `\\n\\n` 捆着两三句的
-    「要害台词」**就是一个段**——写手要么连原文段落结构一起复现、要么整组放弃，
-    实测它选后者（某章 4 条跨段 verbatim 一条不剩地全丢）。
-    """
+class CtxSemanticContract(StrictModel):
+    chapter_function: str = Field(min_length=1)
+    information_delta: list[str]
+    character_state_delta: list[str]
+    relationship_delta: list[str]
+    reader_knowledge_delta: list[str]
+    must_land_facts: list[str] = Field(min_length=1)
+    context_facts: list[str]
+    causal_edges: list[CtxCausalEdge]
+    entry_state: list[str]
+    ending_state: list[str]
 
-    #: Producer-owned response slot; Stage5 must return it exactly once.
+
+class CtxScene(StrictModel):
+    """写手真正执行的场景任务；不携带源 beat/event 编号。"""
+
     slot: str = Field(pattern=r'^s\d{2,4}$')
-
-    #: **按 `from_beats` 逐条取 stage2 的 `event` 原件**，顺序同 `from_beats`，
-    #: **不合并成散文**。长度 1~3，单条 13~175 字。
-    #: ⚠ **一条 event 都解析不出 ⇒ 显式终态、不落盘。**
-    events: list[str] = Field(min_length=1)
-
-    #: 透传自 plan（`budget_int` HARD 保证是正整数）。盘上 15~720。
+    purpose: str = Field(min_length=1)
+    role: Literal[STRUCTURAL_ROLES]
+    delivery: Literal[DELIVERY_MODES]
+    transition: Literal[TEMPORAL_LINKS]
     budget_chars: int = Field(gt=0)
-
-    #: Stage4 已决定的叙事架构。默认值只让旧的恒等基线与存量测试载体可读；新规划响应
-    #: 三项均必填，正式写作上下文会显式落盘。
-    narrative_role: Literal[STRUCTURAL_ROLES] = 'bridge'
-    delivery: Literal[DELIVERY_MODES] = 'scene'
-    transition: Literal[TEMPORAL_LINKS] = 'continue'
-
-    #: **主干是 `events[]` 里的第几条**（1-based，`None` = 计划没做过这个决策 ⇒ 下发面不提）。
-    #: 从 `PlanBeat.spine` 原样投影，与 `events[]` **同下标空间**——
-    #: 两边都按 `from_beats` 顺序展开、都不过滤，那条恒等式由 `expand_plan_beats`
-    #: 的计数断言守着（下发给规划者的骨架**过滤**空 event，写手这一侧**不过滤**，
-    #: 口径一旦分家 `spine` 就指错人）。
-    #:
-    #: ⚠ 它是**主次**不是**顺序**：写手仍按编号先后落笔，只是主干那条演开、其余交代过去。
-    spine: int | None = Field(default=None, ge=1)
-
-    #: 所引源 beat 的 span 字数之和。**算不出保持 `null`，不估算、不拿邻居补**（键恒在）。
-    #: 盘上 197/197 有值。
+    required_facts: list[str] = Field(min_length=1)
+    context_facts: list[str]
+    turn_fact: str = Field(min_length=1)
+    entry_state: list[str]
+    exit_state: list[str]
+    participants: list[str]
+    stages: list[CtxStage] = Field(min_length=1)
     source_chars: int | None
-
-    # ── 以下八个是可选的（**同层同地时才平铺，否则走 `segments`**） ──────────
-
-    time_layer: Literal[TIME_LAYERS] | None = None
-    place: str | None = None
-
-    #: 在场者**人名**（不是 char_id）。本章还叫不出名字的**剔除而不兜底**。
-    present: list[str] | None = None
-
-    segments: list[BeatSegment] | None = None
-
-    #: 原文原话，**逐字写入**。旧语料上 137/197 拍、共 177 条、单条 3~65 字（那批语料已删）；
-    #: 现语料五本合计 554 条（另 keep_value 139 · must_hold 140 · must_appear 88，共 921 个点）。
-    #:
-    #: ⚠⚠ **这四个字段一起为空过整整一批书，而当时没有任何judge出声。**
-    #:   `beat_index` 曾把 hinge 归一成 `{'kind','text'}` 再交给 `verbatim_pieces`，
-    #:   而那个 `text` 键与已废弃的旧 stage2 契约同名，一次「清理遗留兼容」把读它的分支
-    #:   删掉之后，这四个字段在盘上 328 个 segment 里**全部为空**——
-    #:   上游 `R-3.6b` 看 stage2 产物（hinge 齐的）、下游 `R-3.3` 看函数（还在），
-    #:   stage5 那三条 HARD 又因分母同时归零而报绿。
-    #:   ⇒ 现在由 `ctx_hinge_delivered`（stage4）比两边条数守着。
-    #:   **读这四个字段的盘上数字时，先确认那一行是绿的**——否则你看到的空不是"这本书没有"。
     verbatim: list[str] | None = None
-
-    #: 硬数字，**值必须保住、措辞可动**（下发「30岁」、成稿「三十岁」= 满足）。
     keep_value: list[str] | None = None
-
-    #: 物件，**必须在场并起作用、描写可变**。
     must_appear: list[str] | None = None
-
-    #: 因果前提，**命题必须成立、不必出现在文面**——按定义查不了文面，恒 `unver`。
     must_hold: list[str] | None = None
 
     @model_validator(mode='after')
-    def _flat_or_segmented_stage(self) -> CtxBeat:
-        if self.segments is None:
-            if self.time_layer is None or self.present is None:
-                raise ValueError(
-                    '平铺拍必须带 time_layer 与 present；无人时 present=[]，不能用 null')
-        else:
-            if not self.segments:
-                raise ValueError('分段拍的 segments 不能为空')
-            if len(self.segments) != len(self.events):
-                raise ValueError('分段载体的 events 与 segments 必须逐项等长')
-            if self.time_layer is not None or self.place is not None or self.present is not None:
-                raise ValueError(
-                    '分段拍的顶层 time_layer/place/present 必须为 null；舞台信息只在 segments')
-        # ⚠⚠ **`spine` 的上界只有这一层能写成类型**：全链只有 `CtxBeat` 同时持有
-        #   `events[]` 与指向它的 `spine`。上游那两侧各自都缺一半——响应侧的
-        #   `plan_beats[]` 还没展开、产物侧的 `from_beats[]` 是 id 不是内容。
-        #   ⇒ 这不是把判据搬上载体，是这条不等式**第一次**有了可表达它的地方。
-        # ⚠⚠ **空 events 元素在这里就死**，理由同样是 `spine` 的下标口径：
-        #   stage5 下发面渲染 ①②③ 时**过滤**空串（`stage5/prompts.py::chapter_facts`），
-        #   而 `spine` 数的是 `events[]` 的下标——留一个空串在里面，两边就差一格。
-        #   docstring 早已写着「一条 event 都解析不出 ⇒ 显式终态、不落盘」，
-        #   `_resolve_beats` 那句 `bidx[b].get('event') or ''` 产出的正是这个必然被拒的值：
-        #   **它不是兜底，是把上游违约原样端上来让这道闸拒掉**。
-        if any(not (e or '').strip() for e in self.events):
-            raise ValueError(
-                f'{self.slot}：events 里有空条目（{self.events}）。'
-                f'stage2 契约保证 `event` 非空 ⇒ 空的只可能来自解析失败；'
-                f'留着它，下发面的 ①②③ 与 `spine` 会差一格')
-        #   ⇒ 下面这条同时是 `--apply-edit` 那一路唯一的守卫：人工稿不过 `expand_plan_beats`
-        #     （`plan_beat` 落盘时已 pop，人产不出它），所以计划层那道 spine 校验够不着它。
-        if self.spine is not None and self.spine > len(self.events):
-            raise ValueError(
-                f'{self.slot}：spine={self.spine} 指向第 {self.spine} 件事，而这一拍只有 '
-                f'{len(self.events)} 件。**下发面会照它演**——主干指空等于叫写手自己挑一件。'
-                f'根因在计划那一份的同名 slot 上（`plan_chapters.json`），不在这里')
+    def _turn_is_a_required_fact(self) -> CtxScene:
+        if self.turn_fact not in self.required_facts:
+            raise ValueError(f'{self.slot}.turn_fact 必须属于 required_facts')
         return self
 
 
@@ -748,6 +602,8 @@ class CtxChapter(StrictModel):
     chapter_goal: CtxGoal
     open_hook_goal: CtxGoal
     end_hook_goal: CtxGoal
+    semantic_contract: CtxSemanticContract
+    chapter_rewrite_brief: str = Field(min_length=1)
 
     #: 本章各拍预算之和（写手不必自己加）。
     budget_chars: int = Field(gt=0)
@@ -762,7 +618,7 @@ class CtxChapter(StrictModel):
     #: 而规划器拿到的是 span 合计，于是一份合格的计划被判 `INVALID`。
     source_chars: int = Field(ge=0)
 
-    segments: list[CtxBeat] = Field(min_length=1)
+    scenes: list[CtxScene] = Field(min_length=1)
 
     #: **章级收窄**。
     characters: dict[str, ChapterCharacter] = Field(
@@ -777,7 +633,7 @@ class CtxChapter(StrictModel):
 
     @model_validator(mode='after')
     def _ctx_slots_are_unique(self) -> CtxChapter:
-        slots = [segment.slot for segment in self.segments]
+        slots = [scene.slot for scene in self.scenes]
         if len(slots) != len(set(slots)):
             raise ValueError('writer-context segment slots must be unique')
         return self
@@ -799,8 +655,9 @@ class WriterContext(StrictModel):
     """`stage4/writer_context.json`：确定性组装的当前写作输入。
 
     顶层只保存下游实际消费的全书人物投影、逐章上下文和来源账。组装结果由
-    `ctx_events_verbatim`、`ctx_name_attested`、`ctx_secret_gate` 与 `ctx_layer_flat`
-    四条后置条件规则验证；未知字段由 `StrictModel.extra='forbid'` 拒收。
+    `ctx_facts_exact`、`ctx_name_attested`、`ctx_secret_gate`、`ctx_stage_explicit`
+    与 `ctx_hinge_delivered` 五条后置条件规则验证；未知字段由
+    `StrictModel.extra='forbid'` 拒收。
     """
 
     world_facts: WorldFacts

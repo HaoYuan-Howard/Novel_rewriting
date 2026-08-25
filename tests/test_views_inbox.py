@@ -181,12 +181,12 @@ def test_approval_lists_the_unapproved_hook_gate(box):
     assert '--pick' in gates[0].how
 
 
-def test_plan_weight_warnings_route_to_human_and_thus_into_the_inbox():
-    """UG-11 的锚：轻重告警的处置是「归人判断」——remediation 恒 `human`，
+def test_plan_info_warnings_route_to_human_and_thus_into_the_inbox():
+    """Stage4 INFO 的处置是「归人判断」——remediation 恒 `human`，
     而 `_report_items` 把任何 `human` 命中收进清单（上一条已验）。两半合起来即回环。"""
     from contracts.rules import REGISTRY
     from novel.report.builder import remediation_of
-    for rule_id in ('flat_chapter', 'beat_size'):
+    for rule_id in ('causal_disclosure', 'verbatim_starved'):
         rule = REGISTRY.get(rule_id)          # 改名会在这里当场说话
         assert rule.sev == 'info'
         assert remediation_of(rule) == 'human'

@@ -245,12 +245,10 @@ def run_field_patches(ctx: RunContext, client: LlmClient) -> Any:
 
     # ── 投影出全书 IR（未动章精确往返），逐条问模型、改 IR ────────────────
     ir_by_ordinal: dict[int, dict[str, Any]] = {}
-    summaries: dict[int, str] = {}
     for bp in previous_raw['blueprints']:
         ordinal = int(bp.get('chapter_ordinal') or 0)
         ir_by_ordinal[ordinal] = spec.projection_fn(
             copy.deepcopy(bp), text_of.get(ordinal, ''))
-        summaries[ordinal] = str(bp.get('summary') or '')
 
     repair_rows: list[dict[str, Any]] = []
     prompt_keys: dict[str, str] = {}
@@ -345,7 +343,7 @@ def run_field_patches(ctx: RunContext, client: LlmClient) -> Any:
     ordinals = sorted(ir_by_ordinal)
     data, accounting = spec.compile_fn(
         {'blueprints': [ir_by_ordinal[o] for o in ordinals]},
-        main_text, global_raw['entities']['characters'], summaries=summaries)
+        main_text, global_raw['entities']['characters'])
     for row in repair_rows:
         row['after_metrics'] = _blueprint_metrics(
             next(bp for bp in data['blueprints']

@@ -5,7 +5,7 @@ Stage 2 产出三份严格 JSON，另收两份人产的决策集：
 | 路径 | 模型 | 生产节点 | 内容 |
 |---|---|---|---|
 | `stage2/global_grounding.json` | `GlobalGrounding` v3 | `stage2.global` | 全书人物、关系、设定、规则、秘密、弧线及代码回取证据 |
-| `stage2/chapter_blueprints.json` | `ChapterBlueprints` | `stage2.blueprint` | 逐章摘要、精确原文区间、事件、保真材料与叙述信息 |
+| `stage2/chapter_blueprints.json` | `ChapterBlueprints` v5 | `stage2.blueprint` | 逐章语义功能、原子事实/因果/状态契约、精确证据区间、保真材料、舞台与叙述信息 |
 | `stage2/global_review.json` | `GlobalReview` | `stage2.global` | 由当前全局底座确定性枚举的逐项人工复核；详见 `docs/schema/evaluation.md` |
 | `stage2/global_review_decisions.json` | `GlobalReviewDecisionSet` | 人工输入 | actor、理由、证据及 subject hash 乐观锁；也可经同形 API 提交 |
 | `stage2/global_edit.json` | `GlobalEdit` v2 | 人工输入 | Stage2 typed 订正决策集（`stage2.global --apply-edit` 吃它） |
@@ -107,15 +107,20 @@ Stage4/5/6 的实际材料与节点 freshness 投影共用代码剥掉全部 evi
 
 顶层只含必填的 `blueprints[]` 与 `_provenance`。
 
-### 2.1 章节与拍
+### 2.1 章节、原子事实契约与舞台拍
 
 `Blueprint`：
 
 | 字段 | 类型 | 约束 |
 |---|---|---|
 | `chapter_ordinal` | `int` | 与 Stage 1 正文章序一一对应 |
-| `summary` | `str` | 非空 |
-| `beats` | `Beat[]` | 非空并按原文顺序排列 |
+| `summary` | `str` | 非空；由代码按证据序从 `fact_atoms[].claim` 确定性投影，只作人读索引，不是第二份事实源 |
+| `chapter_function` | `str` | 本章对全书推进的语义功能；Stage4 只读，不得重写 |
+| `beats` | `Beat[]` | 非空并按原文证据顺序排列；只承担区间、舞台与材料归属 |
+| `fact_atoms` | `FactAtom[]` | 非空；本章唯一事实源 |
+| `causal_edges` | `CausalEdge[]` | 颠倒会改变剧情的因果边；引用闭合、无自环/环 |
+| `entry_state_refs` | `fact_id[]` | 只能引用 `obligation=context` |
+| `ending_state_refs` | `fact_id[]` | 只能引用 `obligation=land` |
 | `narration` | `Narration[]` | 至少一项 |
 
 `Beat`：
@@ -128,8 +133,22 @@ Stage4/5/6 的实际材料与节点 freshness 投影共用代码剥掉全部 evi
 | `place` | `str｜null` | 场所 |
 | `present_names` | `str[]` | 模型给出的在场称呼 |
 | `present_char_ids` | `str[]` | 代码按当前人物表确定性解析 |
-| `event` | `str` | 非空事件文本 |
 | `hinges` | `Hinge[]` | 保真材料 |
+
+`FactAtom`：
+
+| 字段 | 类型 | 约束 |
+|---|---|---|
+| `fact_id` | `str` | `f<章:02d>_<序:03d>`，由代码按证据位置编号 |
+| `claim` | `str` | 一个可独立判真假的最小命题，不把动作/决定/结果揉成复合 event |
+| `kind` | `event｜information｜character_state｜relationship｜reader_knowledge` | 闭合枚举；供章级 delta 确定性投影 |
+| `obligation` | `land｜context` | 本章新增必须落地 / 章首已成立只供承接 |
+| `source_beat_ref` | `beat_id` | 必须指向同章舞台拍 |
+| `source` | `SourceSpan` | claim 的原文证据；由代码在所属拍内回取 |
+| `participant_char_ids` | `char_id[]` | 只引用本章可见人物 |
+
+`CausalEdge` 只有 `before` 与 `after` 两个 fact_id。数组顺序只记录证据位置，**不是 Stage4/5
+的写作顺序**；同一源 beat 可拆成多个 atom 分到不同新场景，不相邻 atom 也可在 Stage4 合成一场。
 
 ### 2.2 精确原文区间
 
@@ -142,15 +161,16 @@ Stage4/5/6 的实际材料与节点 freshness 投影共用代码剥掉全部 evi
 | `normalized` | `str` | 严格等于 `content_only(text)` |
 | `recovery` | `exact｜normalized` | 本次回取方式（取值面：`contracts/invariants.py::SPAN_RECOVERY`） |
 
-相邻 beat 的区间不得回退；第一拍覆盖章首、最后一拍覆盖章尾。Stage 4 直接消费该区间，
-不再搜索自由文本锚点。
+相邻 beat 的区间不得回退；第一拍覆盖章首、最后一拍覆盖章尾。Stage4 只把 beat 当作舞台和
+证据目录，不把区间顺序变成写作骨架。
 
 `recovery` 的两档各自的来源（`bounded-fidelity-v3`）：**beat 的区间恒 `exact`**——
 它由段号查表算出，模型根本没写过那段字节；`normalized` 只可能出自 `hinge.phrase`
 （模型把半角标点写成全角、或压掉了换行）。⚠ 曾经有第三档 `lcs`（按最长公共子串把被改掉
 一两个字的锚点救回来），随 v3 一并下线：新架构下它**结构性不可产生**。
 
-`Hinge` 只含 `kind` 与 `source`。`kind` 取值为 `硬数字｜要害台词｜物件｜因果前提`；
+`Hinge` 含 `hinge_id`、`kind`、`source_beat_ref` 与 `source`。正式 id 形如
+`h<章:02d>_<序:03d>`，由代码编号；`kind` 取值为 `硬数字｜要害台词｜物件｜因果前提`；
 成功态的 `source` 必须完整落在所属 beat 的 `span` 内。`source=null` 会进入失败账并阻断晋升。
 
 ### 2.3 叙述
@@ -188,6 +208,7 @@ Stage4/5/6 的实际材料与节点 freshness 投影共用代码剥掉全部 evi
 | `char_refs` | `CharRefs` | 八类人物引用解析计数 |
 | `verbatim_rewrites` | `(beat_id, position, old, new)[]` | 归一命中明细。v3 起只剩 `hinge.phrase` 与 `hinge.owner` 两种来源 |
 | `verbatim_failures` | `(beat_id, position, cause)[]` | 回取失败；非空阻断晋升。`position ∈ span｜hinge`，根因取值面见下 |
+| `fact_atom_failures` | `(fact_id, evidence_phrase, cause)[]` | 原子证据在所属 beat 内 0/多命中或越界；非空阻断晋升 |
 | `partial_regen_chapters` | `int[]` | 定向重生成章节，空也必须写 |
 | `repairs` | `Repair[]` | 定向重生成账，空也必须写 |
 | `place_inherit_without_base` | `beat_id[]` | IR 三态地点声称继承、但链上无基；空也必须写 |
@@ -221,7 +242,7 @@ hinge 那一侧的 LCS 兜底本来就是禁的 ⇒ 那笔账**结构性恒空**
 
 每条 `Repair` 必填：`chapter_ordinal`、`failure_items[]`、`failure_evidence`、`user_prompt`、
 `output`、`model`、`cache_policy`、`fields[]`、`before_metrics`、`after_metrics`；其中指标均为
-`beats`、`hinges`、`present_names` 三个计数。
+`beats`、`fact_atoms`、`hinges`、`present_names` 四个计数。
 
 ## 三之二、`global_edit.json`（Stage2 typed 事实的 0 成本人工订正）
 
@@ -334,7 +355,7 @@ locator，属于破坏性变更；本仓没有迁移器。旧 v1 决策集必须
 | 拍与区间 | `beat_id_unique` · `beat_id_format` · `span_unlocatable` · `verbatim_failed` · `edge_hole` · `beats_collapsed` · `beats_coarse` · `place_inherit_without_base` · `place_explicit_unlocatable` |
 | 保真材料 | `hinge_cross_chapter` · `hinge_in_hole` · `hinge_anchor_void` · `hinge_ambiguous` · `hinge_cascade` · `hinge_drift` · `chapter_no_hinge` |
 | 在场与叙述 | `time_layer_no_present` · `present_ids_dangling` · `present_names_invented` · `present_continuity` · `present_ungrounded` · `present_early_named` · `event_early_name` · `pronoun_surface_unattested` · `narration_multi` |
-| 范围、必填与返工 | `scope_violation` · `event_empty` · `summary_empty` · `repair_cache_policy` |
+| 范围、必填与返工 | `scope_violation` · `fact_atom_empty` · `summary_empty` · `repair_cache_policy` |
 | 无条件读数 | `narration_voices` · `time_layer_mix` · `place_moves` · `present_names_ambiguous` · `present_names_unlisted` · `present_names_pronoun` · `present_names_late` · `present_broad` · `batch_density` · `context_scope` · `span_coverage` · `span_coverage_per_chapter` · `uncovered_holes` · `hinge_density` |
 
 机器可读修复路由共 **38 条**：

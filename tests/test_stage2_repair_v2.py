@@ -28,7 +28,6 @@ from novel.store import ArtifactStore
 from tests.test_stage2 import main_text
 from tests.test_stage2_contract_dispatch import (
     _ENV_KEY, _ir2_responses, _scaffolded_responses,
-    _summary_for,
 )
 from tests.test_stage2_generation import _client, _ctx, _ok, _response_global
 
@@ -157,15 +156,13 @@ def _land_broken_ir_book(monkeypatch, architecture: str) -> tuple[Path, dict]:
     ]
 
     def respond(req, _index):
-        if '逐章事件清单' in req.user:
-            return _ok({'chapters': [
-                {'chapter_ordinal': o, 'summary': _summary_for(o)}
-                for o in ordinals]})
         found = re.findall(r'阅读序第(\d+)章', req.user)
         ordinal = int(found[-1])
         if '第一张表 `micro_events`' in req.system:
             boundary_beats = [
-                {'end_para': beat['end_para'], 'event': beat['event']}
+                {'end_para': beat['end_para'],
+                 'event': '；'.join(atom['claim']
+                                    for atom in beat['fact_atoms'])}
                 for beat in by_ordinal[ordinal]['beats']]
             return _ok({'blueprints': [{
                 'chapter_ordinal': ordinal,

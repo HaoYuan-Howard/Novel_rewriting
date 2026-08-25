@@ -359,7 +359,7 @@ class Review(StrictModel):
 
     #: `{rule: 'k/N'}`，**每条 hard/info 判据在多少章上命中**。
     #: ⚠ 它是「一条判据有没有判别力」唯一的读数——**没有基线数字的判据，
-    #: 等于不知道自己在说什么**。含一条 `_beat_event_landing`。
+    #: 等于不知道自己在说什么**。含一条 `_fact_landing`。
     baselines: dict[str, str]
 
     #: 同一把尺子量**源章原文**的命中率。**「判据把合法情况排除在外了吗」的可执行形式。**

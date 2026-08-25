@@ -249,8 +249,8 @@ def chapter_source(entry: dict[str, Any], source_text: dict[int, str]) -> str:
 
 def mandated_verbatim(entry: dict[str, Any]) -> str:
     """本章**被契约要求逐字复现**的全部句子拼起来——重合度要扣掉的那部分。"""
-    return ''.join(v for be in (entry.get('segments') or [])
-                   for v in (be.get('verbatim') or []))
+    return ''.join(v for scene in (entry.get('scenes') or [])
+                   for v in (scene.get('verbatim') or []))
 
 
 def overlap_ratio(text: str, entry: dict[str, Any],

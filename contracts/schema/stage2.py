@@ -23,7 +23,7 @@ stage2.py —— 对应 `docs/schema/stage2.md`。抽取。**全链第一个调 
 【判据 vs 载体的分界线（`stage4.md` §四立的规矩）：按失败成本划】
 本层的取值面枚举（`time_layer` / `hinges[].kind` / `address[].context` …）归**载体**：
 它们要么是代码写的（拒收＝代码 bug），要么整份响应本来就坏了（prompt 漂了，
-而且要在生成下一章之前就停住）。跨产物的那些（`beat_ref` / `beat_coverage`）归判据。
+而且要在生成下一章之前就停住）。跨产物的那些（`fact_ref` / `fact_coverage`）归 Stage4 判据。
 """
 from __future__ import annotations
 
@@ -32,7 +32,8 @@ from typing import Annotated, Literal
 from pydantic import Field, StringConstraints, model_validator
 
 from contracts.invariants import (
-    ADDRESS_BY, ADDRESS_CONTEXT, BLUEPRINT_ARCHITECTURES, CACHE_POLICY, HINGE_KINDS,
+    ADDRESS_BY, ADDRESS_CONTEXT, BLUEPRINT_ARCHITECTURES, CACHE_POLICY,
+    FACT_ATOM_KINDS, FACT_ATOM_OBLIGATIONS, HINGE_KINDS,
     KNOWLEDGE_SUBJECT_KINDS, RELATION_VISIBILITY_KINDS,
     REVEAL_EVENT_KINDS, SECRET_SETUP_KINDS,
     NAME_DISTINCTIVENESS, NARRATIVE_PERSON, RESPONSE_TIME_LAYERS,
@@ -1015,21 +1016,26 @@ class GlobalEdit(StrictModel):
 
 
 
-class Hinge(StrictModel):
-    """一条保真材料；source 为空只表示需要重生成的 INVALID 状态。"""
+FACT_ID_PATTERN = r'^f\d{2,}_\d{3,}$'
+HINGE_ID_PATTERN = r'^h\d{2,}_\d{3,}$'
+ATOM_KEY_PATTERN = r'^a\d{2,}$'
 
+
+class Hinge(StrictModel):
+    """一条有稳定引用的保真材料；`source=None` 是明确的 INVALID 状态。"""
+
+    hinge_id: str = Field(pattern=HINGE_ID_PATTERN)
     kind: Literal[HINGE_KINDS]
+    source_beat_ref: str = Field(pattern=r'^b\d{2}_\d{2}$')
     source: SourceSpan | None
 
 
-#: 源 beat 编号的形状。**这里是唯一一份**——Stage4 的响应侧 `PlanBeatResponse.spine`
-#: 收的也是一个 `beat_id`（2026-08-22 起：主干从「第几件事」改成「哪一件事」），
-#: 两处各写一遍正则，改宽度时就会有一处不跟着改。
+#: 源 beat 编号的形状。这里只用于证据定位；Stage4 场景响应不再引用源 beat 编号。
 BEAT_ID_PATTERN = r'^b\d{2}_\d{2}$'
 
 
 class Beat(StrictModel):
-    """一拍及其经过原文一致性验证的精确覆盖区间。"""
+    """源章的舞台区间；它不再兼任写作事实清单。"""
 
     beat_id: str = Field(pattern=BEAT_ID_PATTERN)
     span: SourceSpan | None
@@ -1037,8 +1043,26 @@ class Beat(StrictModel):
     place: str | None
     present_names: list[str]
     present_char_ids: list[str]
-    event: str = Field(min_length=1)
     hinges: list[Hinge]
+
+
+class FactAtom(StrictModel):
+    """章级保真的最小单位；claim 与证据只有这一份正式落点。"""
+
+    fact_id: str = Field(pattern=FACT_ID_PATTERN)
+    claim: str = Field(min_length=1)
+    kind: Literal[FACT_ATOM_KINDS]
+    obligation: Literal[FACT_ATOM_OBLIGATIONS]
+    source_beat_ref: str = Field(pattern=BEAT_ID_PATTERN)
+    source: SourceSpan | None
+    participant_char_ids: list[str]
+
+
+class CausalEdge(StrictModel):
+    """同章事实之间不可颠倒的故事因果；不是 Stage4 的披露顺序。"""
+
+    before: str = Field(pattern=FACT_ID_PATTERN)
+    after: str = Field(pattern=FACT_ID_PATTERN)
 
 
 class Narration(StrictModel):
@@ -1093,12 +1117,46 @@ class Blueprint(StrictModel):
     #: 所以它是一层**摘要**而不是唯一的章级线索：留着是因为「帮它快速理解本章、无害」，
     #: **不是因为不可替代**。
     summary: str = Field(min_length=1)
+    chapter_function: str = Field(min_length=1)
 
     #: 长度 5~16，盘上共 251 条。
     beats: list[Beat] = Field(min_length=1)
 
+    #: 章级语义真相。`land` 原子必须在 Stage4 恰落一个场景，`context` 原子可复用。
+    fact_atoms: list[FactAtom] = Field(min_length=1)
+    causal_edges: list[CausalEdge]
+    entry_state_refs: list[str]
+    ending_state_refs: list[str]
+
     #: **盘上恒长度 1**（31/31）。
     narration: list[Narration] = Field(min_length=1)
+
+    @model_validator(mode='after')
+    def _semantic_refs_are_closed(self) -> Blueprint:
+        fact_ids = [fact.fact_id for fact in self.fact_atoms]
+        if len(fact_ids) != len(set(fact_ids)):
+            raise ValueError('fact_atom.fact_id 必须在章内唯一')
+        beat_ids = {beat.beat_id for beat in self.beats}
+        bad_beats = [fact.fact_id for fact in self.fact_atoms
+                     if fact.source_beat_ref not in beat_ids]
+        if bad_beats:
+            raise ValueError(f'fact_atom 引用了本章外或不存在的 beat：{bad_beats}')
+        refs = set(fact_ids)
+        used = [ref for edge in self.causal_edges for ref in (edge.before, edge.after)]
+        used += list(self.entry_state_refs) + list(self.ending_state_refs)
+        missing = sorted(set(used) - refs)
+        if missing:
+            raise ValueError(f'章级语义引用不存在：{missing}')
+        if any(edge.before == edge.after for edge in self.causal_edges):
+            raise ValueError('causal_edge 不能自环')
+        entry = set(self.entry_state_refs)
+        ending = set(self.ending_state_refs)
+        obligation = {fact.fact_id: fact.obligation for fact in self.fact_atoms}
+        if any(obligation[ref] != 'context' for ref in entry):
+            raise ValueError('entry_state_refs 只能引用 context 原子')
+        if any(obligation[ref] != 'land' for ref in ending):
+            raise ValueError('ending_state_refs 只能引用 land 原子')
+        return self
 
 
 class AnchorLocatorResponse(StrictModel):
@@ -1138,6 +1196,22 @@ class HingeResponse(StrictModel):
     phrase: str = Field(min_length=1)
 
 
+class FactAtomResponse(StrictModel):
+    """模型交局部引用与证据短语；正式 fact_id/source 由编译器产生。"""
+
+    atom_key: str = Field(pattern=ATOM_KEY_PATTERN)
+    claim: str = Field(min_length=1)
+    kind: Literal[FACT_ATOM_KINDS]
+    obligation: Literal[FACT_ATOM_OBLIGATIONS]
+    evidence_phrase: str = Field(min_length=1)
+    participant_char_ids: list[str]
+
+
+class CausalEdgeResponse(StrictModel):
+    before: str = Field(pattern=ATOM_KEY_PATTERN)
+    after: str = Field(pattern=ATOM_KEY_PATTERN)
+
+
 class BeatResponse(StrictModel):
     """模型的拍；beat_id 会归一，char_id 不允许模型猜。"""
 
@@ -1146,7 +1220,7 @@ class BeatResponse(StrictModel):
     time_layer: Literal[TIME_LAYERS]
     place: str | None
     present_names: list[str]
-    event: str = Field(min_length=1)
+    fact_atoms: list[FactAtomResponse] = Field(min_length=1)
     hinges: list[HingeResponse]
 
 
@@ -1159,8 +1233,12 @@ class NarrationResponse(StrictModel):
 
 class BlueprintResponse(StrictModel):
     chapter_ordinal: int = Field(ge=1)
+    chapter_function: str = Field(min_length=1)
     summary: str = Field(min_length=1)
     beats: list[BeatResponse] = Field(min_length=1)
+    causal_edges: list[CausalEdgeResponse]
+    entry_state_refs: list[str]
+    ending_state_refs: list[str]
     narration: list[NarrationResponse] = Field(min_length=1)
 
 
@@ -1180,7 +1258,7 @@ class ChapterBlueprintsResponse(StrictModel):
 #   ② hinge 去掉 `para`（交接实测 10 个 verbatim_failed 里 9 个短语对、段号错），
 #      改在**所属拍区间内**唯一匹配，多处命中走候选选择修复；
 #   ③ place 从自由文本改成判别三态（`P_EXPLICIT`/`P_INHERIT`/`P_UNKNOWN`）；
-#   ④ summary 不再由抽取响应携带（书级摘要批独立生成，events 是唯一语义源）。
+#   ④ summary 不再由抽取响应携带（由代码从 fact atoms 确定性投影）。
 # 产物模型一个不动——这里只是响应边界，编译后仍落现有 `ChapterBlueprints`。
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -1234,13 +1312,17 @@ class BeatResponseV2Refs(StrictModel):
     time_layer: Literal[tuple(RESPONSE_TIME_LAYERS)]
     place: str | None
     present_char_ids: list[str]
-    event: str = Field(min_length=1)
+    fact_atoms: list[FactAtomResponse] = Field(min_length=1)
     hinges: list[HingeResponseV2]
 
 
 class BlueprintResponseV2Refs(StrictModel):
     chapter_ordinal: int = Field(ge=1)
+    chapter_function: str = Field(min_length=1)
     beats: list[BeatResponseV2Refs] = Field(min_length=1)
+    causal_edges: list[CausalEdgeResponse]
+    entry_state_refs: list[str]
+    ending_state_refs: list[str]
     narration: list[NarrationResponse] = Field(min_length=1)
 
 
@@ -1304,14 +1386,18 @@ class BeatResponseV31Refs(StrictModel):
     time_layer: Literal[tuple(RESPONSE_TIME_LAYERS)]
     place: str | None
     present_char_ids: list[str]
-    event: str = Field(min_length=1)
+    fact_atoms: list[FactAtomResponse] = Field(min_length=1)
     hinges: list[HingeResponseV31]
 
 
 class ScaffoldedBlueprintResponseV31(StrictModel):
     chapter_ordinal: int = Field(ge=1)
+    chapter_function: str = Field(min_length=1)
     micro_events: list[MicroEventResponse] = Field(min_length=1)
     beats: list[BeatResponseV31Refs] = Field(min_length=1)
+    causal_edges: list[CausalEdgeResponse]
+    entry_state_refs: list[str]
+    ending_state_refs: list[str]
     narration: list[NarrationResponseRefs] = Field(min_length=1)
 
 
@@ -1334,23 +1420,6 @@ class HingePhraseResponse(StrictModel):
     原文重给一条；「拍内原样唯一」由 validator 当场验，不唯一就换样本。"""
 
     phrase: str = Field(min_length=1)
-
-
-class SummaryChapterResponse(StrictModel):
-    chapter_ordinal: int = Field(ge=1)
-    summary: str = Field(min_length=1)
-
-
-class SummaryBatchResponse(StrictModel):
-    """书级摘要批：全部章 blueprint 完成后**一次调用**按 events 产全书摘要。
-
-    输入已是压缩事实（各章 beat events），不重读原章。validator 硬校验
-    目标章集恰好覆盖与长度界；「不引入 events 外新事实」查不了文面，
-    归付费冒烟的人工抽查。⚠ 直接拼接 events 当 summary 被否决：
-    实测拼接体积是人写摘要的 2.38 倍，会反向放大 stage4.plan 的输入。
-    """
-
-    chapters: list[SummaryChapterResponse] = Field(min_length=1)
 
 
 
@@ -1405,6 +1474,7 @@ class RepairMetrics(StrictModel):
     """定向重生成前后的三个计数。"""
 
     beats: int = Field(ge=0)
+    fact_atoms: int = Field(ge=0)
     hinges: int = Field(ge=0)
     present_names: int = Field(ge=0)
 
@@ -1478,6 +1548,10 @@ class BlueprintProvenance(LlmProvenance):
     #: 出口：**断言计数 + 逐条列出**，按根因分开。
     verbatim_failures: list[tuple[str, str, str]]
 
+    #: `(fact_id, source_beat_ref, 根因)`。事实 claim 仍保留，但证据为空并使产物 INVALID；
+    #: 不允许 Stage4 把无证据的模型转述当作章级真相继续编译。
+    fact_atom_failures: list[tuple[str, str, str]]
+
     #: 定向重生成过哪几章（累积）。
     #: 出口：合并成一行「哪几章是定向重生成过的」。
     partial_regen_chapters: list[int]
@@ -1550,7 +1624,7 @@ class ChapterBlueprints(StrictModel):
     def _chapter_ordinals_are_unique(self) -> ChapterBlueprints:
         """`chapter_ordinal` 是全链的章唯一键——重号会让下游按它做的每一次 join 取错章。
 
-        ⚠ 这里**只查唯一性，不查连续性**：`beat_coverage` / 覆盖度那几条是判据
+        ⚠ 这里**只查唯一性，不查连续性**：章覆盖与事实覆盖是跨产物判据
         （跨产物、要拿 `main_text` 比），归 stage2 的判据表，不归载体。
         """
         got = [b.chapter_ordinal for b in self.blueprints]
