@@ -16,7 +16,7 @@ contract.py —— `stage2.blueprint` 的响应契约注册表。
 ⚠ 2026-08-22 曾把 `json_object` 关掉又当天改回（`novel/llm/client.py::JSON_OBJECT_MODE`）——
 两种口径都**不改变本标签**：它说的本来就是「靠 prompt + 本地校验」，
 而 `json_object` 从来只保证「是合法 JSON」、一格 schema 都不保证
-（TODO-40 实测两臂都出越界枚举）。把它写成字段是为了让实验结论没法把
+（2026-08-22 json-mode 对照实测两臂都出越界枚举）。把它写成字段是为了让实验结论没法把
 「枚举前缀带来的改善」误归因给 decoder 约束。
 """
 from __future__ import annotations

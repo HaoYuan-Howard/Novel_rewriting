@@ -42,7 +42,7 @@ python tools/regen_web_enums_fixture.py          # 写盘（--check 只报差异
 对账守卫：`tests/test_api_enums.py::test_the_web_enums_fixture_is_the_same_payload`
 （比解析后的对象，不比字节——本目录不在 `.gitattributes` 的 `-text` 名单里）。
 
-### 2026-08-22 的一次逐键销账（TODO-38）
+### 2026-08-22 的一次逐键收口
 
 守卫落地之前，这份夹具相对 `payload()` 已静默分家两个月：
 **新增 18 键 · 消失 5 键 · 内容变化 14 键**。病不在「json 旧了」，在**没有守卫**

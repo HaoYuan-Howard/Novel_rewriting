@@ -8,7 +8,7 @@ client.py —— `ask_text` / `ask_json`。**重采与 Flash→Pro 兜底只有�
   ① **答案流丢了。** DeepSeek 会把整段答案写进 `reasoning_content` 而 `content` 返回**空串**，
      `finish_reason='stop'`——**不是截断**。实测：模型把整章正文写进了推理里。
      ⚠⚠ **2026-08-22 起 `ask_json` 这一侧会把它接住**（`SALVAGE_ANSWER_FROM_REASONING`，
-       用户裁决，TODO-40 落地）：`content` 空而 `reasoning` 那段**整体过得了同一套闸**
+       用户裁决，历史见 `docs/BACKEND_CONTRACT.md` §十 2026-08-22）：`content` 空而 `reasoning` 那段**整体过得了同一套闸**
        （`json.loads` → `require` → `model_validate` → 调用点 `validator`）时**采纳它**，
        不再重采一次。依据是留证 5/5 份横跨两个 `json_mode` 臂——推理通道里那段整体就是
        一份合法 JSON，23 章齐全、括号配平、一个字推敲过程都没混进去，其中 1 份完全合
@@ -127,14 +127,14 @@ def models_for(model: str) -> tuple[str, ...]:
 #: ⚠ **下面这两条读数仍然成立，别连着一起撤回**：
 #: · `json_object` **只保证「是合法 JSON」，不保证合乎 schema**——两臂都在同一种
 #:   enum 越界上翻车（`G_TURN` / `R_SCENE` / 多出 `rationale_note`）。那是
-#:   `docs/REQUIREMENTS.md` TODO-38 与批 4 前缀化的地盘，与这一位无关。
+#:   2026-08-22 内容闸拒因审计与批 4 前缀化的地盘，与这一位无关。
 #: · 「答案写完了写进推理通道」**不是 `json_object` 的产物**：5 份留证横跨两个臂，
-#:   5/5 都是完整 JSON、零推敲过程（TODO-40）。
+#:   5/5 都是完整 JSON、零推敲过程（`docs/BACKEND_CONTRACT.md` §十 2026-08-22）。
 #:
 #: ⇒ 要再关，先补足样本（两臂各 n≈8 才判得到 p<0.05），别再拿 n=4 那组数当依据。
 JSON_OBJECT_MODE: Final = True
 
-#: 正文空、而**推理通道里那一份整体过得了同一套闸**时，采不采纳它。**采纳**（TODO-40）。
+#: 正文空、而**推理通道里那一份整体过得了同一套闸**时，采不采纳它。**采纳**（2026-08-22 裁决）。
 #:
 #: ⚠⚠ **2026-08-22 之前这里的规矩是「不抠」，而那条规矩的理由已经被自己的留证推翻。**
 #: 老理由是「reasoning 里混着推敲过程，救回来是半成品」——留证 **5/5 份横跨两个
@@ -376,7 +376,7 @@ def _loc_path(loc: tuple[Any, ...]) -> str:
 
     `output_chapters.9.…` 与 `output_chapters.11.…` 是**同一个字段**的两次命中，
     分开记就答不了「是不是同一种错」——而那正是这份摘要唯一的用途
-    （`docs/REQUIREMENTS.md` TODO-38：「按字段分的内容闸拒分布」）。
+    （历史依据见 `docs/BACKEND_CONTRACT.md` §十 2026-08-22 的内容闸拒因审计）。
     """
     out = ''
     for part in loc:
@@ -838,8 +838,8 @@ class LlmClient:
             ⚠⚠ 第五个是**结构化拒因摘要**，进审计账（`gate_decision.reject_detail`）。
             它与 `why` 的分工是承重的：`why` 只进 stdout 事件，而 stdout **会随进程
             一起没**——2026-08-22 那次整跑被超时杀掉之后，账上只剩 `gate: schema`
-            四个字，两次拒到底拒在哪个字段**再也查不出来**（`docs/REQUIREMENTS.md`
-            TODO-38 记的正是这个洞，那天现场咬了一口）。⇒ 能机器数的那一半必须落账。
+            四个字，两次拒到底拒在哪个字段**再也查不出来**（2026-08-22 的内容闸拒因
+            审计记的正是这个洞）。⇒ 能机器数的那一半必须落账。
 
             ⚠⚠ 第六个是 `salvaged`：**这一份正文是从推理通道里捞回来的**
             （`SALVAGE_ANSWER_FROM_REASONING`）。它一路带到 `_settle_gate` 与留证，
@@ -1489,7 +1489,7 @@ class LlmClient:
         ⚠⚠ **`detail` 是「拒在哪个字段」那一半，它必须在这里而不是只在事件里。**
         2026-08-22 那次整跑被超时杀掉之后，stdout 连同 `why` 一起没了，账上只剩
         `gate: schema` 四个字——两次拒到底拒在哪个字段**再也查不出来**
-        （`docs/REQUIREMENTS.md` TODO-38）。⇒ 能机器数的那一半落账，人读的那一半留给事件。
+        （历史见 `docs/BACKEND_CONTRACT.md` §十 2026-08-22）。⇒ 能机器数的那一半落账，人读的那一半留给事件。
         ⚠ 它**只带 `loc` + `type` + 计数**，不带模型正文（见 `_schema_detail`）。
 
         ⚠⚠ **`salvaged` 说的是这份正文的来路**（`SALVAGE_ANSWER_FROM_REASONING`）：

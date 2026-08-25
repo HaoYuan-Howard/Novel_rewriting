@@ -543,7 +543,7 @@ def test_a_resource_interruption_that_never_recovers_is_terminal_and_says_it_was
     assert t.rungs == [LADDER[0]] * 3
 
 
-# ── TODO-40：答案写进推理通道时，过得了同一套闸就采纳 ────────────────────────
+# ── 答案写进推理通道时，过得了同一套闸就采纳 ────────────────────────────────
 
 _SALVAGEABLE = json.dumps({'voice': {'a': 1}, 'surface_habits': ['h']}, ensure_ascii=False)
 
@@ -557,7 +557,7 @@ def _lost(reasoning: str, finish: str = 'stop') -> ChatResponse:
 
 
 def test_an_answer_written_into_the_reasoning_channel_is_salvaged_instead_of_resampled():
-    """⭐ TODO-40：`content` 空而 `reasoning` 整体过得了同一套闸 ⇒ **采纳，不重采**。
+    """⭐ `content` 空而 `reasoning` 整体过得了同一套闸 ⇒ **采纳，不重采**。
 
     ⚠⚠ 推翻的是「救回来是半成品」那句老理由：留证 5/5 份横跨两个 `json_mode` 臂，
     推理通道里那段**整体就是一份合法 JSON**、一个字推敲过程都没混进去，

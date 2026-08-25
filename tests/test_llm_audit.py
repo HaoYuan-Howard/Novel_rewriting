@@ -322,7 +322,7 @@ def test_a_schema_rejection_says_which_field_and_never_leaks_the_body():
 
     ⚠⚠ 它补的洞是 2026-08-22 现场咬过的那一口：拒因只进 stdout 事件，而 stdout
     **随进程一起没**——那次整跑被超时杀掉之后，账上只剩 `gate: schema` 四个字，
-    两次拒到底拒在哪个字段再也查不出来（`docs/REQUIREMENTS.md` TODO-38）。
+    两次拒到底拒在哪个字段再也查不出来（历史见 `docs/BACKEND_CONTRACT.md` §十 2026-08-22）。
     ⇒ 能机器数的那一半必须落账。
 
     ⚠ **下标压成 `[]`**：`beats.0.role` 与 `beats.1.role` 是同一个字段的两次，

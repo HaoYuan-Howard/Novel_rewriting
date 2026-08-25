@@ -465,7 +465,7 @@ class CostLedger:
         与中断恢复下都不可靠。⇒ `decision=accepted/rejected` 在这里显式落账，
         `attempt_id` 指回成本账的那一行。
 
-        ⚠⚠ **`reject_detail` 答的是「拒在哪个字段」**（`docs/REQUIREMENTS.md` TODO-38）：
+        ⚠⚠ **`reject_detail` 答的是「拒在哪个字段」**（历史见 `docs/BACKEND_CONTRACT.md` §十 2026-08-22）：
         `[{loc, type, count}, …]`，按 (字段路径, 错误类型) 去重、下标压成 `[]`。
         在它之前，这一行只有 `gate` 四个字，而拒因只进 stdout 事件——
         2026-08-22 一次整跑被超时杀掉之后，两次 `schema` 拒**再也查不出拒在哪**。

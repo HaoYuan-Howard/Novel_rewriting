@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """json_mode_control.py —— 「flash@high 的空正文」是模型边界，还是 `json_object` 的交互？
 
-见 `docs/REQUIREMENTS.md` TODO-40。**0 改动对照**：同一份 `stage4.plan` 提示词、
+历史裁决与实付读数见 `docs/BACKEND_CONTRACT.md` §十 2026-08-22。**0 改动对照**：同一份 `stage4.plan` 提示词、
 同一组参数（`deepseek-v4-flash` / `reasoning_effort=high` / `thinking=True` /
 `max_tokens=96000`），**只翻 `json_mode` 一位**，重复采样 N 次。
 
