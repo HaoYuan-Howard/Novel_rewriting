@@ -115,16 +115,13 @@ Stage 3/5 各只有一条生产 prompt 路径，前端和调用方无需也不�
 | `POST /api/novels/:sid/trash` | `TrashNovelResult`（请求体 `TrashNovelRequest.expected_title`；整本项目移入 `_service/trash/`） | 新 |
 | `GET /api/novels/:sid/stage0/report` | `Stage0Report` | 从 `stage0/revisions.json` 派生的窄视图，见下 |
 | `GET /api/novels/:sid/stage0/segments` | `Stage0Segments` | 新 |
-| `GET /api/novels/:sid/stage0/partition-preview` | `Stage0PartitionPreview`（批准前的只读分章推演；**不写产物、不查审批状态**，见 `stage0.md` §2.4） | 新 |
 | `POST /api/novels/:sid/stage0/edit` | `JobRecord`（请求体 `Stage0EditRequest`） | 新 |
 | `POST /api/novels/:sid/stage0/approve` | `JobRecord`（请求体 `Stage0ApprovalRequest`：自报 `actor` + `reason`） | 新 |
 | `GET /api/novels/:sid/stage0/candidate` | `Stage0CandidateView`（待裁决的那条机器 revision + **当前稿的读数**） | 新 |
 | `POST /api/novels/:sid/stage0/candidate/adopt` | `JobRecord`（请求体 `Stage0CandidateDecisionRequest`） | 新 |
 | `POST /api/novels/:sid/stage0/candidate/dismiss` | `JobRecord`（同一请求体） | 新 |
 | `POST /api/novels/:sid/stage1/partition` | `JobRecord` | 新 |
-| `GET /api/novels/:sid/stage1/segments` | `Stage1Segments` | 新 |
-| `GET /api/novels/:sid/stage1/chapters` | `Stage1Chapters`（正式章表 + 后端同源计算的 `label_delta` / `anomaly` / `anomaly_count`，供 Stage1 显式呈现重号、缺号与倒退） | 新 |
-| `GET /api/novels/:sid/stage1/hook_copy` | `HookCopyView` | 新 |
+| `GET /api/novels/:sid/stage1` | `Stage1View`（一次返回连续分区、原文章号诊断与 `anomaly_count`；全部由当前 clean 复扫） | 新 |
 | `GET /api/novels/:sid/approvals` | `ApprovalDoc` | 新 |
 | `POST /api/novels/:sid/approvals/gate/:key` | `ApprovalDoc` | 新 |
 | `POST /api/novels/:sid/approvals/seen/:key` | `ApprovalDoc` | 新 |
@@ -139,7 +136,7 @@ Stage 3/5 各只有一条生产 prompt 路径，前端和调用方无需也不�
 | `GET /api/novels/:sid/stage5/:o` | `Stage5View` | 新 |
 | `GET /api/novels/:sid/review/:o` | `ReviewView` | 新 |
 | `GET /api/novels/:sid/inbox` | `InboxView` | 新 |
-| `GET /api/novels/:sid/stage6` | `Stage6View` | 新 |
+| `GET /api/novels/:sid/stage6` | `Stage6View`（同响应带 `source_hook_text`，Stage6 页不再另发 Stage1 请求） | 新 |
 | `GET /api/novels/:sid/stage7` | `Stage7View` | 新 |
 | `GET /api/novels/:sid/stage7/book.txt?download=` | 仅在 Stage7 人物表已批准、输入/正文/文案均 current/fresh 且组装账闭合时返回 UTF-8 纯文本（`download=true` 时为附件）；旧文件仅存在不构成交付资格。⚠ **URL 字面与盘上文件名是两件事**：盘上那份叫 `stage7/<书名>_rewriting.txt`，这条 URL 是稳定的 API 标识符、不随书名变；另存名由 `Content-Disposition` 给出（`filename*=UTF-8''…` 带书名，`filename=` 留 ASCII 回退） | 新 |
 | `GET /api/novels/:sid/stage7/:o` | `Stage7View` | 新 |

@@ -41,6 +41,16 @@ def artifact_payload(data: object) -> object:
     return data
 
 
+def stage2_main_text(data: object) -> object:
+    """Stage2 只消费阅读序和正文；不继承 Stage1 的诊断展示字段。"""
+    if not isinstance(data, list):
+        return None
+    return [
+        (row.get('chapter_ordinal'), row.get('text'))
+        for row in data if isinstance(row, dict)
+    ]
+
+
 # ── stage2.blueprint ─────────────────────────────────────────────────────────
 
 
@@ -528,7 +538,7 @@ CONSUMED_PROJECTIONS: Final[dict[str, dict[str, Projection]]] = {
         STAGE0_CLEAN_TEXT: artifact_payload,
     },
     'stage2.global': {
-        STAGE1_MAIN_TEXT: artifact_payload,
+        STAGE1_MAIN_TEXT: stage2_main_text,
         # ``--apply-edit`` consumes the typed human decision set as a real
         # provenance edge.  Without this projection a just-written grounding
         # is ``consumed_undeclared`` and the formal-write postcondition must
@@ -536,7 +546,7 @@ CONSUMED_PROJECTIONS: Final[dict[str, dict[str, Projection]]] = {
         STAGE2_GLOBAL_EDIT: artifact_payload,
     },
     'stage2.blueprint': {
-        STAGE1_MAIN_TEXT: artifact_payload,
+        STAGE1_MAIN_TEXT: stage2_main_text,
         # ⚠ 收窄到称名两字段（2026-08-23）。此前是 `artifact_payload` ⇒ global 里
         # 任何一格改动都让全书 blueprint 判 stale，而这一层是全链最贵的付费节点。
         STAGE2_GLOBAL_GROUNDING: stage2_blueprint_grounding,

@@ -44,9 +44,9 @@ def _book(tmp_path):
         '第一章\n原稿正文。\n', encoding='utf-8', newline='\n')
     main_rel = 'stage1/main_text.json'
     main = MainText.model_validate([
-        {'chapter_ordinal': 1, 'source_chapter_no': 1, 'text': '前章。'},
-        {'chapter_ordinal': 2, 'source_chapter_no': 2, 'text': '次章。'},
-        {'chapter_ordinal': 3, 'source_chapter_no': 3, 'text': PRETRIM_TEXT},
+        {'chapter_ordinal': 1, 'text': '前章。'},
+        {'chapter_ordinal': 2, 'text': '次章。'},
+        {'chapter_ordinal': 3, 'text': PRETRIM_TEXT},
     ])
     (book / 'stage1').mkdir()
     (book / main_rel).write_text(json.dumps(encode_artifact(

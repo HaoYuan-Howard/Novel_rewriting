@@ -34,7 +34,7 @@ from pydantic import BaseModel, ConfigDict, StringConstraints
 # 两把尺子 —— 故意的两把，规则只有一条：**10 位永不与 40 位比较**
 # ─────────────────────────────────────────────────────────────────────────────
 #
-# 盘上实测：`stage1/partition_report.json` 的 `normalized_source_sha1` 是 40 位全宽，
+# 盘上实测：Stage0 的 ``normalized_source_sha1`` 是 40 位全宽，
 # 而 `_provenance.inputs` / `draft_sha1` / `judged[].sha1` 是 10 位。
 # 详细论证见 `docs/schema/_common.md` §二。
 #

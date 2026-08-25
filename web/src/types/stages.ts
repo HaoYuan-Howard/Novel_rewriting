@@ -80,31 +80,6 @@ export interface Stage0Segments {
 /** 批准前分章预览里逐章原始章号的异常分类（`contracts/invariants.py::CHAPTER_LABEL_ANOMALY`）。 */
 export type ChapterLabelAnomaly = 'reset' | 'gap' | 'repeat'
 
-export interface Stage0PreviewChapter {
-  chapter_ordinal: number
-  source_chapter_no: number
-  chars: number
-  preview: string
-  label_delta: number | null
-  anomaly: ChapterLabelAnomaly | null
-}
-
-/**
- * S-00 批准前的只读分章预览。**不写 stage1 产物**——它存在的理由是纯数字番外：
- * 那种书机器零命中、零 warning，只看原文与删除高亮的审批页对它是盲的。
- */
-export interface Stage0PartitionPreview {
-  input_sha1: string
-  available: boolean
-  reason: string | null
-  hook_chars: number
-  hook_preview: string
-  chapters: Stage0PreviewChapter[]
-  tail_chars: number
-  anomaly_count: number
-  note: string
-}
-
 export interface Stage0EditRequest {
   /** 乐观锁：页面看到的那一版（阶段 C 起取代 round + clean_sha1 两格） */
   expected_revision_id: string
@@ -219,35 +194,16 @@ export interface Stage1Segment {
   start: number
   end: number
   chars: number
-  flagged: boolean
   text: string
   chapter_ordinal: number | null
   source_chapter_no: number | null
-}
-
-export interface Stage1Segments {
-  input_sha1: string
-  segments: Stage1Segment[]
-}
-
-
-export interface Stage1Chapter {
-  chapter_ordinal: number
-  source_chapter_no: number
-  chars: number
-  preview: string
   label_delta: number | null
   anomaly: ChapterLabelAnomaly | null
 }
 
-export interface Stage1Chapters {
-  chapters: Stage1Chapter[]
+export interface Stage1View {
+  segments: Stage1Segment[]
   anomaly_count: number
-}
-
-export interface Stage1HookCopy {
-  hook_copy: { text: string }
-  note: string
 }
 
 /* ------------------------------------------------- 产物处境（六格一次拿全） */
@@ -950,6 +906,7 @@ export interface JudgedDraft {
 export interface Stage6Response {
   sid: string
   title: string
+  source_hook_text: string
   lead_upto: number
   rationale: string
   candidates: HookCandidate[]

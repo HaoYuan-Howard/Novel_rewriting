@@ -4,8 +4,8 @@
 warnings.py —— 一条可疑项**读给人听是什么样**，唯一落点。
 
 【为什么措辞要单独有个家】
-Stage0 的 warning 是 current revision 的运行时派生，Stage1 的 warning 产物只记证据不记措辞
-（`contracts/schema/stage0.py` 的「可疑项」那一段写了三条理由）。措辞总得有人生成，
+Stage0 的 warning 是 current revision 的运行时派生；Stage1 的重复章号告警也由当前原文
+复扫后直接渲染，不再经过中间产物。措辞总得有人生成，
 而它有两个出口：S-13 校验报告的 `info` 级结论，和 S-00 审阅屏上那一行黄字。
 两个出口各写一份，就是同一句话的第二个落点 —— 那正是本仓反复付学费的形状。
 ⇒ 都从这里取。**前端不再自己拼措辞**：HTTP 层把渲染好的那句话随响应一起发下去
@@ -35,7 +35,6 @@ from contracts.invariants import (
 from contracts.schema.stage0 import (
     DropRatioWarning, EarlyCutWarning, LongMarkerWarning, RemovedSegment, Stage0Warning,
 )
-from contracts.schema.stage1 import Stage1Warning
 from novel.core.ingest import marker_core
 
 
@@ -61,7 +60,7 @@ def stage0_warnings(total: int, body: int,
     return out
 
 
-def describe(warning: Stage0Warning | Stage1Warning) -> str:
+def describe(warning: Stage0Warning) -> str:
     """一条可疑项读给人听的那句话。**穷举 `kind`，不留 else 兜底。**
 
     没有兜底分支是有意的：新增一类 warning 而忘了给它措辞时，这里当场
@@ -83,10 +82,13 @@ def describe(warning: Stage0Warning | Stage1Warning) -> str:
         return (f'原文偏移 {warning.span_start} 处标记 core 长 '
                 f'{warning.marker_core_code_points}，'
                 f'超过实测真标记上限 {NONBODY_MARKER_WARN_CP}')
-    if kind == 'noisy_duplicate':
-        return (f'chapter_no={warning.source_chapter_no} 出现 {warning.count} 次'
-                f'（≥{NOISY_DUPLICATE_MIN}），疑似固定标记被误判成章节号，'
-                f'请人工核对原文标记规律')
     raise ValueError(
         f'可疑项 kind={kind!r} 没有措辞——新增取值面时必须同批在这里给它一句话，'
         f'否则界面上会出现一条读不懂的告警')
+
+
+def describe_noisy_duplicate(source_chapter_no: int, count: int) -> str:
+    """Stage1 当前复扫得到的重复章号读给人听。"""
+    return (f'chapter_no={source_chapter_no} 出现 {count} 次'
+            f'（≥{NOISY_DUPLICATE_MIN}），疑似固定标记被误判成章节号，'
+            f'请人工核对原文标记规律')

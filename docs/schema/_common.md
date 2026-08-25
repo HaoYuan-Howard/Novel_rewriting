@@ -80,8 +80,9 @@ Flash 内容采样或可重试传输耗尽后可能由 Pro 兜底；若只记 `m
 
 ## 二、两把尺子：40 位与 10 位，**故意的**
 
-盘上实测：`stage1/partition_report.json` 的 `normalized_source_sha1` 是 **40 位全宽**，
-而 `_provenance.inputs` / `draft_sha1` / `judged[].sha1` 是 **10 位**。
+盘上内容身份：`stage0/revisions.json::source.normalized_source_sha1`
+与 revision 内的 `clean_sha1` 是 **40 位全宽**，而 `_provenance.inputs` /
+`draft_sha1` / `judged[].sha1` 是 **10 位**。Stage1 不再为这些身份抄写第二份记录。
 
 **裁决：不统一成一个宽度，统一成两个类型。**
 

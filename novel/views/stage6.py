@@ -19,13 +19,14 @@ stage6.py —— S-11「开篇文案」那一屏（`GET /api/novels/:sid/stage6`
 """
 from __future__ import annotations
 
-from contracts.artifacts import STAGE6_HOOK
+from contracts.artifacts import STAGE1_HOOK_COPY, STAGE6_HOOK
 
 import os
 
 from contracts.invariants import HOOK_SLOTS, slot_of
 from contracts.schema.api import HookApprovedLine, HookCandidateLine, Stage6View
 from contracts.schema.stage6 import Hook
+from contracts.schema.stage1 import HookCopy
 from novel import paths, prov
 from novel.core.measure import measure
 from novel.errors import HumanEditProtected
@@ -58,6 +59,7 @@ def stage6_view(base: str | os.PathLike[str], sid: str) -> Stage6View:
         )
     st = artifact_state(store, REL)
     art, _raw = store.read_own(Hook, REL)
+    source_hook, _ = store.read_own(HookCopy, STAGE1_HOOK_COPY)
     legacy = sorted(rel for rel in art.judged if is_legacy_stage5_rel(rel))
     if legacy:
         raise HumanEditProtected(
@@ -100,6 +102,7 @@ def stage6_view(base: str | os.PathLike[str], sid: str) -> Stage6View:
     return Stage6View(
         sid=paths.derive_source_meta(novel_dir.name)[0],
         title=paths.title_of(novel_dir),
+        source_hook_text=source_hook.text,
         lead_upto=art.lead_upto,
         rationale=art.rationale,
         candidates=candidates,

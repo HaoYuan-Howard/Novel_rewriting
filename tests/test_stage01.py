@@ -3,6 +3,7 @@
 '''F6/F7：摄入、批准、人工编辑、分章与真实小说的端到端回归。'''
 from __future__ import annotations
 
+import json
 import shutil
 import tempfile
 from pathlib import Path
@@ -10,6 +11,7 @@ from pathlib import Path
 import pytest
 
 from contracts.schema.api import PreviewRequest
+from contracts.schema import encode_artifact
 from contracts.schema.stage0 import (
     PendingApproval, RemovedSegment,
 )
@@ -24,8 +26,10 @@ from novel.errors import (
     SourceConflict,
     SourcePathRejected,
     Stage0BodyRejected,
+    TooFewChapters,
 )
 from novel.orchestrator.jobs import plan_start
+from novel.orchestrator import approvals
 from novel.orchestrator.nodes import build_steps
 from novel.store import ArtifactStore
 from novel.views import ingest as ingest_views
@@ -43,10 +47,10 @@ from novel.stages.stage1 import checks as stage1_checks
 from novel.stages.stage1.partition import (
     HOOK_COPY,
     MAIN_TEXT,
-    REPORT,
     partition_text,
     run_partition,
 )
+from novel.stages.stage1.audit import audit_surface, scan_partition
 from tests.fixtures_ingest import CASES
 
 
@@ -192,7 +196,7 @@ def test_disk_path_blocks_before_approval_then_writes_current_bytes(work):
     for rel in (MAIN_TEXT, HOOK_COPY):
         raw = (novel_dir / rel).read_bytes()
         assert b'\r' not in raw and raw.endswith(b'\n')
-    assert (novel_dir / REPORT).is_file()
+    assert not (novel_dir / 'stage1/partition_report.json').exists()
 
 
 def test_human_approval_refuses_when_the_source_moved(work):
@@ -223,7 +227,7 @@ def test_r114_writes_all_artifacts_and_then_reports_failure(work):
 
     assert report is not None and not report.passed
     assert _line(report, 's1_tail').status == 'hit'
-    assert all((novel_dir / rel).is_file() for rel in (MAIN_TEXT, HOOK_COPY, REPORT))
+    assert all((novel_dir / rel).is_file() for rel in (MAIN_TEXT, HOOK_COPY))
 
 
 def test_stage1_cli_propagates_a_written_check_failure(work, capsys):
@@ -243,7 +247,31 @@ def test_stage1_cli_propagates_a_written_check_failure(work, capsys):
 
     assert exit_code != 0
     assert 's1_tail' in capsys.readouterr().out
-    assert all((novel_dir / rel).is_file() for rel in (MAIN_TEXT, HOOK_COPY, REPORT))
+    assert all((novel_dir / rel).is_file() for rel in (MAIN_TEXT, HOOK_COPY))
+
+
+def test_s1_approval_binds_main_and_hook_and_hook_tampering_revokes_it(work):
+    """s1 人工决定绑定两份材料；只改 hook 也必须立刻撤销。"""
+    source = _source(work, 'FQ_s1_proof_9901.txt', 'end_marker_then_fanwai')
+    base = work / 'Output'
+    novel_dir, _removal, _initial = run_source(source, base)
+    run_approve(_context(novel_dir, 'stage0.approve'))
+    approvals.approve_gate(base, '9901', 's0')
+    run_partition(_context(novel_dir, 'stage1.partition'))
+
+    approvals.approve_gate(base, '9901', 's1')
+    current = approvals.get(base, '9901')
+    assert current.gate['s1']
+    raw_record = json.loads(approvals._path(base, '9901').read_text(encoding='utf-8'))
+    assert set(raw_record['gate_proofs']['s1']['artifacts']) == {MAIN_TEXT, HOOK_COPY}
+
+    hook_path = novel_dir / HOOK_COPY
+    hook_payload = json.loads(hook_path.read_text(encoding='utf-8'))['text'] + '篡改'
+    hook_path.write_text(
+        json.dumps(encode_artifact(HOOK_COPY, {'text': hook_payload}), ensure_ascii=False),
+        encoding='utf-8', newline='',
+    )
+    assert not approvals.get(base, '9901').gate['s1']
 
 
 def test_human_edit_lands_a_revision_and_the_same_machine_rerun_preserves_it(work):
@@ -392,91 +420,43 @@ def test_new_book_plan_has_null_sid_then_a_derived_sid_check(work):
     assert '789' in follow.argv and '--check-only' in follow.argv
 
 
-def test_the_int_chapter_no_renders_prompt_bytes_identical_to_the_old_string():
-    """⭐⭐ `source_chapter_label: str` → `source_chapter_no: int` 是**零字节改动**。
-
-    这是阶段 B 唯一一处能变成真钱的风险点：`BLUEPRINT_SYS` 逐字节冻结，而 LLM
-    缓存键含全部 messages ⇒ prompt 动一个字节就是全书重付。改型之所以安全，
-    全部依据只有一句 `f'{1}' == f'{chr(34)}1{chr(34)}'`——**这句话必须有人钉住**，
-    否则哪天有人给这个字段加个补零或千分位格式，红的地方会是账单不是测试。
-
-    三处逐字进 prompt 的渲染一起钉（`docs/schema/stage1.md` §一）：
-      · `novel/core/text.py::render_book` —— stage2.global 的全书正文块与章节索引
-      · `novel/stages/stage2/extract.py::_chapter_index` —— blueprint 的稳定前缀
-      · `novel/stages/stage4/plan.py::_build_repair_user` —— 单章 index / body
-    ⚠ 参照系不是「上一版的输出快照」，是**照旧代码的写法当场重算一遍**
-      （`str(no)` 那一版）：快照会随夹具漂，重算不会。
-    """
+def test_prompts_only_expose_the_reading_ordinal():
+    """原文章号是 Stage1 人工诊断，不进入任何模型输入。"""
     from novel.core.text import render_book
     from novel.stages.stage2.extract import _book_text, _chapter_index
 
-    numbers = [1, 2, 7, 0, 16, 16]          # 含重号、含 0、含跨号
     main = MainText.model_validate([
-        {'chapter_ordinal': i + 1, 'source_chapter_no': no, 'text': f'第{no}段正文。'}
-        for i, no in enumerate(numbers)
+        {'chapter_ordinal': i + 1, 'text': f'第{i + 1}段正文。'}
+        for i in range(3)
     ])
     raw = main.model_dump(mode='json')
-
-    # ── 旧写法：字段是 str(no)，渲染处一个字都不改 ────────────────────────────
-    old_rows = [dict(row, source_chapter_label=str(row['source_chapter_no']))
-                for row in raw]
-    want_body = '\n\n'.join(
-        f'===== [阅读序第{r["chapter_ordinal"]}章 | '
-        f'原文标号={r["source_chapter_label"]}] =====\n{r["text"]}'
-        for r in old_rows)
-    want_index = '\n'.join(
-        f'阅读序第{r["chapter_ordinal"]}章  '
-        f'原文标号(参考,不可信)={r["source_chapter_label"]}' for r in old_rows)
-    want_chapter_index = '\n'.join(
-        f'第{r["chapter_ordinal"]}章（原文标号 {r["source_chapter_label"]}）'
-        f' {len(r["text"])} 字' for r in old_rows)
-    want_book_text = '\n\n'.join(
-        f'【第{r["chapter_ordinal"]}章】\n{r["text"]}' for r in old_rows)
-
     body, index = render_book(main)
-    assert body == want_body
-    assert index == want_index
-    assert _chapter_index(raw) == want_chapter_index
-    assert _book_text(raw) == want_book_text          # 不含标号，一并守住没被改到
-
-    # stage4 单章修复那两串（`_build_repair_user` 里逐字拼的同一对格式）。
-    row = raw[4]
-    ordinal, no = row['chapter_ordinal'], row['source_chapter_no']
-    assert f'阅读序第{ordinal}章  原文标号(参考,不可信)={no}' ==         f'阅读序第{ordinal}章  原文标号(参考,不可信)={str(no)}'
-    assert f'===== [阅读序第{ordinal}章 | 原文标号={no}] =====' ==         f'===== [阅读序第{ordinal}章 | 原文标号={str(no)}] ====='
+    rendered = '\n'.join((body, index, _chapter_index(raw), _book_text(raw)))
+    assert '原文标号' not in rendered and '原文标记' not in rendered
+    assert all(f'阅读序第{i}章' in rendered for i in range(1, 4))
 
 
-def test_a_tampered_source_chapter_no_is_a_finding_not_a_checker_crash():
-    """章表记的原始章号与原文复扫不一致 ⇒ `s1_chapter_labels` 报 finding。
-
-    ⚠ 这条曾经篡改的是 `source_chapter_label='not-a-number'`，测的是「判据遇到
-    非数字章号不炸」。`source_chapter_no` 2026-08-22 改型成 `int` 之后，**载体自己
-    保证了它是数字**，那个分支结构上不可达 ⇒ 继续钉它就是钉一条永不可能红的路。
-    换成仍然真实存在的那种篡改：值是合法 int、但**跟原文对不上**。
-    """
+def test_a_tampered_main_text_is_a_finding_not_a_checker_crash():
+    """schema-valid 正文篡改由当前材料审计报红。"""
     removed = remove_bytes(
         _case('noisy_duplicate').to_bytes(),
         original_path='FQ_labels_890.txt',
         code='test',
     )
-    partitioned = partition_text(
-        removed.clean_text,
-        normalized_source_sha1=removed.report.normalized_source_sha1,
-    )
+    partitioned = partition_text(removed.clean_text)
     sections = list(partitioned.main_text.root)
-    sections[0] = sections[0].model_copy(update={'source_chapter_no': 4242})
+    sections[0] = sections[0].model_copy(update={'text': sections[0].text + '篡改'})
     bad_main = partitioned.main_text.model_copy(update={'root': sections})
 
     outcomes = stage1_checks.check(
-        partitioned.report,
         bad_main,
         partitioned.hook_copy,
         clean_text=removed.clean_text,
         stage0=removed.report,
     )
 
-    labels = next(outcome for outcome in outcomes if outcome.rule == 's1_chapter_labels')
-    assert labels.findings
+    count = next(outcome for outcome in outcomes if outcome.rule == 's1_chapter_count')
+    assert count.findings and '当前切片不同' in count.findings[0].detail
 
 
 def test_stage0_checker_derives_warning_kinds_without_persisted_state():
@@ -553,10 +533,7 @@ def test_two_line_fanwai_rolls_back_the_numeric_pseudo_chapter():
     raw = (prefix + '4\n\n番外\n\n番外体内容。\n').encode('utf-8')
 
     removed = remove_bytes(raw, original_path='FQ_two_line_894.txt', code='test')
-    partitioned = partition_text(
-        removed.clean_text,
-        normalized_source_sha1=removed.report.normalized_source_sha1,
-    )
+    partitioned = partition_text(removed.clean_text)
 
     assert removed.clean_text == prefix
     assert len(partitioned.main_text.root) == 3
@@ -564,7 +541,7 @@ def test_two_line_fanwai_rolls_back_the_numeric_pseudo_chapter():
     assert decode_source_bytes(raw).text[lo:hi].startswith('4\n\n番外\n')
 
 
-# ── TODO-34：批准前的只读分章预览 ────────────────────────────────────────────
+# ── Stage1 当前原文复扫诊断 ─────────────────────────────────────────────────
 
 
 #: 纯数字番外的标准形态：章标记只是一个数字，正文里**一个非正文关键词都没有**。
@@ -573,14 +550,8 @@ def test_two_line_fanwai_rolls_back_the_numeric_pseudo_chapter():
 NUMERIC_FANWAI_TAIL = '1\n\n十年后他们在旧城重逢，她终于说出那句话。她终于说出那句话。\n'
 
 
-def test_numeric_only_fanwai_becomes_visible_in_the_pre_approval_preview(work):
-    """人工闸门要真的兜住纯数字番外，人在点批准之前必须**看得见**它。
-
-    这本书恰好是盲区的标准形态：机器一段都没剔、零 warning、`clean == source`。
-    停产自动批准（2026-08-21）之后它必须由人点批准——但只看「原文 + 删除高亮 +
-    warnings」的审批页对它仍然是**全黑**的：那三样里没有任何东西不一样。
-    这一屏是人点批准之前唯一能看见「第 4 章的原始章号退回了 1」的地方。
-    """
+def test_numeric_only_fanwai_is_visible_in_the_stage1_view(work):
+    """正式 Stage1 对照页从当前原文复扫章号，不从 main_text 读诊断副本。"""
     source = work / 'FQ_numeric_fanwai_777.txt'
     source.write_bytes((_case('enc_utf8_sig').text + NUMERIC_FANWAI_TAIL).encode('utf-8'))
     base = work / 'Output'
@@ -591,29 +562,25 @@ def test_numeric_only_fanwai_becomes_visible_in_the_pre_approval_preview(work):
     assert removed.report.approval == PendingApproval(status='pending')
     assert initial is not None and _line(initial, 's0_approval').status == 'hit'
 
-    preview = ingest_views.stage0_partition_preview(base, novel_dir.name)
-    assert preview.available and preview.reason is None
+    run_approve(_context(novel_dir, 'stage0.approve'))
+    run_partition(_context(novel_dir, 'stage1.partition'))
+    view = ingest_views.stage1_view(base, novel_dir.name)
+    chapters = [segment for segment in view.segments if segment.kind == 'chapter']
     assert [
         (row.chapter_ordinal, row.source_chapter_no, row.label_delta, row.anomaly)
-        for row in preview.chapters
+        for row in chapters
     ] == [
         (1, 1, None, 'repeat'),     # 章号 1 在全书出现两次
         (2, 2, 1, None),
         (3, 3, 1, None),
         (4, 1, -2, 'reset'),        # ← 番外：章号退回去了
     ]
-    assert preview.anomaly_count == 2
-    assert preview.chapters[-1].preview.startswith('十年后他们在旧城重逢')
-    assert preview.hook_chars and preview.tail_chars == 0
-
-    # ⭐ 预览不承重：一份 stage1 产物都不许落，闸门形状一个字没动。
-    assert not (novel_dir / 'stage1').exists()
-    with pytest.raises(ApprovalRequired):
-        run_partition(_context(novel_dir, 'stage1.partition'))
-    assert not (novel_dir / 'stage1').exists()
+    assert view.anomaly_count == 2
+    assert '十年后他们在旧城重逢' in chapters[-1].text
+    assert not (novel_dir / 'stage1/partition_report.json').exists()
 
 
-def test_a_serially_numbered_book_flags_nothing_in_the_preview(work):
+def test_a_serially_numbered_book_flags_nothing_in_the_stage1_view(work):
     """守卫的守卫：处处报异常等于没报。
 
     同一份样本去掉那条番外尾巴就是一本连号书——它必须**一条都不亮**，
@@ -623,29 +590,26 @@ def test_a_serially_numbered_book_flags_nothing_in_the_preview(work):
     base = work / 'Output'
     novel_dir, _removed, _initial = run_source(source, base)
 
-    preview = ingest_views.stage0_partition_preview(base, novel_dir.name)
-    assert preview.available
-    assert [row.source_chapter_no for row in preview.chapters] == [1, 2, 3]
-    assert all(row.anomaly is None for row in preview.chapters)
-    assert preview.anomaly_count == 0
+    run_approve(_context(novel_dir, 'stage0.approve'))
+    run_partition(_context(novel_dir, 'stage1.partition'))
+    view = ingest_views.stage1_view(base, novel_dir.name)
+    chapters = [segment for segment in view.segments if segment.kind == 'chapter']
+    assert [row.source_chapter_no for row in chapters] == [1, 2, 3]
+    assert all(row.anomaly is None for row in chapters)
+    assert view.anomaly_count == 0
 
 
-def test_preview_reports_an_unpartitionable_book_instead_of_raising(work):
-    """「按当前剔除结果分不出章」正是应当在批准**之前**知道的事。
-
-    它走 `available=False` 那条路，而不是把异常抛到审批页上——审阅的人要读到的是
-    「先修剔除」，不是一行 500。
-    """
+def test_unpartitionable_book_is_an_explicit_stage1_terminal(work):
     source = work / 'FQ_no_marker_779.txt'
     body = '她把药碗端到他面前，看着他一口一口喝完。' * 8
     source.write_bytes(f'开篇钩子。\n\n{body}\n'.encode('utf-8'))
     base = work / 'Output'
     novel_dir, _removed, _initial = run_source(source, base)
 
-    preview = ingest_views.stage0_partition_preview(base, novel_dir.name)
-    assert preview.available is False
-    assert preview.reason and preview.chapters == []
-    assert preview.hook_chars == 0 and preview.anomaly_count == 0
+    run_approve(_context(novel_dir, 'stage0.approve'))
+    with pytest.raises(TooFewChapters, match='少于最低要求'):
+        run_partition(_context(novel_dir, 'stage1.partition'))
+    assert not (novel_dir / 'stage1').exists()
 
 
 REAL_NOVELS = sorted(Path('Test_data').glob('*.txt'))
@@ -679,7 +643,7 @@ def test_real_test_data_runs_through_both_deterministic_layers(source: Path, wor
     assert partition_report is not None and partition_report.passed
     assert removed.body_ratio >= 0.60
     assert len(partitioned.main_text.root) >= 1
-    assert not partitioned.scan.nonbody
+    assert not scan_partition(removed.clean_text).scan.nonbody
 
 
 def test_no_artifact_holds_the_removed_extra_body(work):
@@ -917,15 +881,8 @@ def test_edit_plan_refuses_when_source_hash_drifts(work):
 # ── 2026-08-21 R-1.15 源文本覆盖不变量：schema-valid 定向反例 ────────────────
 
 
-def test_r115_decomposition_reddens_on_a_schema_valid_doctored_report(work):
-    """R-1.15 的最小反例：篡改稿必须**能过 Pydantic decode**、并让分解不变量红。
-
-    真实产地（纯函数）构造不出分解违例——span 与账本是同一次游走产的；
-    所以这里走定向篡改：把**整条第一章标记行吞进 hook**（hook_span 止于章正文
-    前一字符）。游走到第一章时分隔区只剩一个换行——标记行凭空消失，
-    「未记账」以「没有章标记行」的形状显形。其它判据同时红（判据网本来就密），
-    本用例只认领 `s1_decomposition` 那一条。
-    """
+def test_r115_decomposition_is_derived_from_the_current_clean_text(work):
+    """R-1.15 不再信任可篡改 span 报表；覆盖账只由当前原文复扫。"""
     source = _source(work, 'FQ_r115_9701.txt', 'end_marker_then_fanwai')
     novel_dir, removal, _initial = run_source(source, work / 'Output')
     run_approve(
@@ -935,30 +892,18 @@ def test_r115_decomposition_reddens_on_a_schema_valid_doctored_report(work):
     partitioned, report = run_partition(_context(novel_dir, 'stage1.partition'))
     assert report is not None and report.passed, '九条判据应全绿打底'
 
-    from contracts.schema.stage1 import PartitionReport
-
     store = ArtifactStore(_context(novel_dir, 'stage1.partition'))
     clean = store.read_text(stage0_removal.CLEAN_REL)
-    doctored = partitioned.report.model_copy(update={
-        'hook_span': (0, partitioned.report.chapter_spans[0][0] - 1),
-    })
-    # schema-valid 的证明：载体层全部约束（有序/不重叠/不越界/覆盖）都过得去。
-    PartitionReport.model_validate(doctored.model_dump(mode='json'))
-
-    outcomes = stage1_checks.check(
-        doctored, partitioned.main_text, partitioned.hook_copy,
-        clean_text=clean, stage0=removal.report)
-    line = next(outcome for outcome in outcomes if outcome.rule == 's1_decomposition')
-    assert line.findings, '未记账字节必须让 s1_decomposition 红'
-    assert any(
-        '章标记行' in finding.detail or '分隔区' in finding.detail or '未记账' in finding.detail
-        for finding in line.findings), [f.detail for f in line.findings]
-    # 对照：未篡改的原始报告在同一条判据上是绿的（同一条用例里见过红与绿）。
-    green = stage1_checks.check(
-        partitioned.report, partitioned.main_text, partitioned.hook_copy,
-        clean_text=clean, stage0=removal.report)
-    assert not next(
-        outcome for outcome in green if outcome.rule == 's1_decomposition').findings
+    audit = audit_surface(
+        clean_text=clean,
+        stage0=removal.report,
+        main_text=partitioned.main_text,
+        hook_copy=partitioned.hook_copy,
+    )
+    assert not audit.lines['s1_decomposition'].findings
+    assert audit.expected_main == tuple(
+        section.model_dump() for section in partitioned.main_text.root)
+    assert not (novel_dir / 'stage1/partition_report.json').exists()
 
 
 # ── 2026-08-21 Unicode 码点 seam：含 emoji/扩展区字符的端到端切片一致性 ──────
@@ -995,10 +940,10 @@ def test_emoji_and_extension_chars_keep_code_point_spans_honest(work):
     assert all(
         section.text == clean_slice for section, clean_slice in zip(
             partitioned.main_text.root,
-            [text[lo:hi] for lo, hi in partitioned.report.chapter_spans],
+            [text[lo:hi] for lo, hi in scan_partition(text).chapter_spans],
         ))
 
-    from novel.views.ingest import stage0_segments as s0_view, stage1_segments as s1_view
+    from novel.views.ingest import stage0_segments as s0_view, stage1_view as s1_view
 
     s0 = s0_view(work / 'Output', '9801')
     assert s0.available and ''.join(item.text for item in s0.segments) == text

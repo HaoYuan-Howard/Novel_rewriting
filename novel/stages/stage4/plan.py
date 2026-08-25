@@ -388,9 +388,8 @@ def _build_repair_user(ctx: RunContext, up: _Upstreams, ordinal: int,
         item for item in projected['blueprints']
         if int(item.get('chapter_ordinal') or 0) == ordinal
     ]
-    source_label = row.get('source_chapter_no')
-    index = f'阅读序第{ordinal}章  原文标号(参考,不可信)={source_label}'
-    body = f'===== [阅读序第{ordinal}章 | 原文标号={source_label}] =====\n{row.get("text") or ""}'
+    index = f'阅读序第{ordinal}章'
+    body = f'===== [阅读序第{ordinal}章] =====\n{row.get("text") or ""}'
     parts = [
         f'《{ctx.title}》',
         prompts.BLOCK_REPAIR_SCOPE + f'\n阅读序第 {ordinal} 章',

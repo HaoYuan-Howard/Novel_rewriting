@@ -190,7 +190,7 @@
 |---|---|---|
 | R-0.1 | 自动剔除用的是 `R-1.7` 的同一套判据与同一张 `NONBODY_KINDS`——**只有一份** | `HARD` |
 | R-0.2 | 剔除逐段只记不可再生的决定与最小定位证据：类型、标记行、原文码点区间、来源。行号、字数与预览从原文和 span 现算；**番外体不进产物目录** | `HARD` |
-| R-0.3a | **人工批准这个动作本身**——「这一段到底是不是番外」没有结构不变量可查，只能人看。**批准的唯一来源是人**：`POST /stage0/approve` 是唯一入口。审批页显示完整原文、删除高亮、运行时 warnings 与只读分章预演；预演不写 Stage1 产物 | **`人`**，见 `B-20` |
+| R-0.3a | **人工批准这个动作本身**——「这一段到底是不是番外」没有结构不变量可查，只能人看。**批准的唯一来源是人**：`POST /stage0/approve` 是唯一入口。审批页显示完整原文、删除高亮与运行时 warnings；正式分章对照在免费 Stage1 落盘后进行 | **`人`**，见 `B-20` |
 | R-0.3b | **未获人工批准的书，stage1 必须拒绝启动**；执行资格的唯一落点是 `novel/stages/stage0/eligibility.py::is_stage0_executable`，六处消费方（含前端，只读响应里的 `executable`）一律 import、**不许复述条件**；队列要明确说出在等谁（同 `R-13.5`）。⚠ 2026-08-22 删掉 `auto_zero_hit` 之后该谓词恰好等于 `approval.status == 'approved'`——**唯一落点这条纪律不随之失效**：条件越像废话越容易被顺手抄进消费方，而下一次收紧时漏掉的就是那一处 | `HARD` |
 | R-0.4 | 人可以**直接编辑**待剔除的范围，也可以直接改正文——判据漏掉的那类只能这么修 | **`人`** |
 | R-0.5 | 人工编辑记 `origin=human`，上一版**不可覆盖地留在 revision 链上**（`stage0/revisions.json`；判据 `s0_revision_chain` 逐条复算 `revision_id`，并要求 `clean_text.txt` 是 `current` 的唯一物化投影） | `HARD` |
@@ -230,7 +230,7 @@
 > **② 闸门的吞吐成本。** 实测 163 本里只有 **27 本**有能被判据检出的非正文，**136 本是干净的**。
 > 「全量审阅」能覆盖盲区但要 163 次人工；「只审检出的」吞吐高，但**盲区①（检出数为 0）
 > 永远不会进队列**——而防它正是加这一层的理由之一。
-> ⇒ 现役策略是**每本都停在人工闸门**，零命中也不自动批准；只读分章预演用于暴露纯数字番外盲区。
+> ⇒ 现役策略是**每本都停在人工闸门**，零命中也不自动批准；Stage0 审批只回答剔除是否正确，分章与章号异常由随后的 Stage1 对照页回答。
 
 ---
 
@@ -245,19 +245,19 @@
 |---|---|---|
 | R-1.1 | ~~解码~~ → **已移交 `R-0.11`**。本层的输入是 `stage0/clean_text.txt`，**恒 utf-8 / `\n`，没有编码可猜** | 见 `R-0.11` |
 | R-1.2 | ~~归一化~~ → **已移交 `R-0.12`**。同上：输入已经是归一化过的 | 见 `R-0.12` |
-| R-1.3 | 记录**输入** sha1（= stage0 的 `clean_sha1`）；对不上即阻断。**同时透传 `normalized_source_sha1` 供追溯**——两个指纹的分工见 `R-0.6` | `HARD` |
-| R-1.4 | 章号连续性：断号 / 重号 / 是否严格递增，逐项记账 | `HARD` |
-| R-1.5 | **章数必须等于章表长度**（两行式番外最容易在这里造出一个被跳过的空章） | `HARD` |
+| R-1.3 | 当前 `clean_text` 的全宽 sha1 必须等于 Stage0 当前批准 revision 的 `clean_sha1`；对不上即阻断。Stage1 不再透传源身份或落盘第二份指纹 | `HARD` |
+| R-1.4 | 原文章号的断号 / 重号 / 倒退由当前 `clean_text` 复扫，只在 Stage1 对照视图与校验报告里显示；不复制进 `main_text` | `HARD` |
+| R-1.5 | 复扫得到的章标记数必须等于 `main_text` 长度，且每一章 `text` 必须与当前 clean 切片逐字相等 | `HARD` |
 | R-1.6 | ~~正文占比 < 0.60 判失败~~ → **已移交 `R-0.9`**。本层不再剔除，切点只由完结标记决定，`body_ratio` 恒 ≈1.0——**留在这里就是一盏保证会亮的绿灯** | 见 `R-0.9` |
 | R-1.7 | **降级成断言**：在 stage0 已批准的文本里若还认出非正文标记 → **显式终态**（说明 stage0 漏了）。<br>**本层一个字都不切。** 判据与词表仍与 `R-0.1` 同源——只有一份 | `HARD` |
 | R-1.8 | ~~剔除的正确性~~ → **已移交 `R-0.7`**。本层不再做剔除，也就不再有这条 | 见 `R-0.7` |
-| R-1.9 | 可疑但不算错的情况进显式 `warnings[]`，**不静默、不自动修正、不硬报错**。<br>本层只剩 `noisy_duplicate` 一类（`STAGE1_WARNINGS`），另三类随剔除移交 `R-0.10` | `INFO` |
+| R-1.9 | 同一原文章号重复达 `NOISY_DUPLICATE_MIN` 时产生 `s1_warnings` 的 `INFO` finding；证据从当前 clean 复扫，**不落盘、不静默、不自动修正、不阻断** | `INFO` |
 | R-1.10 | ~~目录寻址~~ → **已移交 `R-0.13`**（谁读原始 txt 谁负责寻址） | 见 `R-0.13` |
 | R-1.11 | ~~同目录不同正文~~ → **已移交 `R-0.14`** | 见 `R-0.14` |
 | R-1.12 | **认不出开篇文案段 → 显式终态**：不写任何产物、后续 stage 一步都不跑。文案段不是可选的 | `HARD` |
 | R-1.13 | **正文章数 < 2 → 显式终态**：只有一章的「书」不接受重构。**不带字数阈值** | `HARD` |
 | R-1.14 | 切点与第一个非正文标记之间那一段，**要么为空，要么只有一个完结标记行**——正文里不许漏进第三种东西 | `HARD` |
-| R-1.15 | **源文本覆盖不变量**：`[0, total_code_points)` 必须完整分解为 hook + 逐章标记行 + 章正文 + tail——无未记账字节、无重复覆盖；标记行须通过章标记文法解析且与 `source_chapter_no` 对上。判据走覆盖游走 + 文法解析，**不与分章产物自证**（2026-08-21 新增；字段 2026-08-22 从 `source_chapter_label` 改名改型） | `HARD` |
+| R-1.15 | **源文本覆盖不变量**：`[0, total_code_points)` 必须完整分解为 hook + 逐章标记行 + 章正文 + tail——无未记账码点、无重复覆盖；每条标记行须通过章标记文法解析，并与同一次 clean 复扫得到的标号相等。判据走覆盖游走 + 文法解析，**不与分章产物自证** | `HARD` |
 
 **剔除判据已按 161 本语料标定**：命中 27 本 / 34 条标记 / 0 假阳，切点全落在 75.9%~99.3%。
 判据细节（它们各自都是踩出来的，重写要连着搬）：
@@ -1309,6 +1309,7 @@ npm --prefix web run build
 
 | 日期 | 范围 | 可继续引用的结论 |
 |---|---|---|
+| 2026-08-25 | **Stage1 减法：两份承重材料 + 一个当前审计面**（用户裁决；0 成本工程改动，无真实 LLM/语料实证） | 下游消费审计表明 `partition_report.json` 零下游输入，其章号、坐标、计数、指纹与 warning 全部可从当前 Stage0 + clean + 两份 Stage1 材料重算，因此整份下线；`main_text.json` 只留 `(chapter_ordinal, text)`，删除下游不读也不应信任的 `source_chapter_no`，v2→v3。原文章号只在当前 clean 复扫的 Stage1 对照视图显示；Stage2 消费投影与 prompt 同步收窄到阅读序 + 正文。`novel/stages/stage1/audit.py::audit_surface` 成为 check、视图、freshness 与 s1 审批的唯一当前事实口；main/hook 任一单独篡改都会 stale，s1 proof 同时绑两份。HTTP 从 3 个 Stage1 GET 合为 `GET /stage1`，删除重复的 Stage0 分章预演；Stage6 响应自带 `source_hook_text`，前端少一次请求。旧产物不迁移、不手补；当前两本书按用户裁决，待 Stage0–7 减法结束后一并从 producer 重建。验证：完整非 corpus 后端回归 exit 0（仅 3 条仓内既有语料依赖 skip）；前端 86 tests、typecheck、104 文件 seams 与 build 均通过。当前 corpus manifest 仍未生成，故不称真实语料全绿。 |
 | 2026-08-25 | **活动待办生命周期清理**（只改文档，无代码、语料或付费调用） | `docs/REQUIREMENTS.md` 只保留仍有现役缺口和可执行验收的 TODO-21 / 28 / 30。销账依据：TODO-29 只追踪供应商输入前缀缓存的低杠杆读数，既无法隔离首发闸贡献，也没有读数对应的产品动作；TODO-32 指向已删除且非 current-schema 的旧 Flash 实验臂，本节 2026-08-23 已裁定不补终审包、不批量盖章；TODO-38 的结构化 `reject_detail` 与防正文泄漏守卫已经落地，按字段聚合是拿到真实账本后的分析动作，不是缺失能力；TODO-40 已由 `JSON_OBJECT_MODE=True`、同配置重采、合约内 reasoning salvage、Stage4 固定 Pro 与 Flash→Pro 同配置兜底闭合，继续扩大旧 json-mode 样本不会改变现役处置。FC-08 的旧密度对照已被 Stage2 v5 / Stage4 v2 / canonical Stage5 整体换约，无法再作单变量归因；FC-13 的现役异常降档已退役，Stage3 effort 面消失、Stage2/5 low 被否、Stage7 保持 high，已无生产候选。历史实验结论留在本节与 Git，不再占活动清单。 |
 | 2026-08-25 | **Stage5 段落目标从 prompt 约束闭合为正式落盘与交付契约**（0 成本工程改动，无付费/语料实证） | 根因不是单一 reasoning 档位，而是模型可不遵守明确段落目标、`para_len_drift` / `band_drift` 又只作 INFO，导致问题稿仍可正式交付。现把段落公式收口到 `measure.target_paragraphs`，prompt 与判据同算；新增常驻读数 `paragraph_count_report` 与 HARD `paragraph_budget_missed`。完整付费响应仍保留并落 `.INVALID`，不在 transport 层触发高成本重采；`--apply-edit` 不得绕过该 HARD。`review_status` 继续只回答 freshness，新增 `require_accepted_review` 统一要求无活动 `.INVALID`、无缺章、无当前 HARD，并接到 s5 审批、Stage6、Stage7 / 最终交付。Stage5 注册表现为 **51（7 HARD / 27 INFO / 12 metric / 5 unver；repair 12 UNIQUE / 12 FREE / 27 NONE）**。Finding / Review 载体形状未变，故 artifact schema 不升版；RULES 指纹会让旧 Review stale，存量章须零成本重跑 Review 后按新 HARD 修复，已存在的交付 txt 不自动删除或改写。本批没有真实 LLM 调用，也没有 current-schema corpus 验收，不能据此宣称三份问题稿已被自动修好或模型遵约率提高。 |
 | 2026-08-15 | 模型×思考 A/B | pro+thinking 保留；flash 未达到质量门；no-thinking 在 stage2.global 稳定失败。模型选择先过质量门，再比较速度与价格；生成与评审能力分开评价 |

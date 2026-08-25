@@ -41,7 +41,7 @@ from pydantic import BaseModel, ValidationError
 
 from contracts.artifacts import (
     STAGE0_CLEAN_TEXT, STAGE0_REVISIONS,
-    STAGE1_HOOK_COPY, STAGE1_MAIN_TEXT, STAGE1_PARTITION_REPORT,
+    STAGE1_HOOK_COPY, STAGE1_MAIN_TEXT,
     STAGE2_GLOBAL_GROUNDING, STAGE2_GLOBAL_REVIEW, STAGE4_WRITER_CONTEXT,
     STAGE5_BOOK_DRAFT,
     STAGE7_NAME_MAP,
@@ -75,7 +75,6 @@ REVALIDATION_DIRNAME = '_revalidation'
 #   「换了一份原文」在 stage0 是一条**合法的、由判据去拒**的路（`R-0.14`），
 #   写盘口再拒一次就把它变成写不进去。判别力落在判据那一侧，不在这道后置条件。
 SELF_FRESH_DETERMINISTIC = frozenset({
-    STAGE1_PARTITION_REPORT,
     STAGE2_GLOBAL_REVIEW,
 })
 
@@ -1116,8 +1115,8 @@ class ArtifactStore:
         """没有通用来源块的产物，用其既有确定性指纹回答同一个问题。
 
         stage0 的权威格 `revisions.json` 用根部原文身份；唯一物化正文从 current revision
-        取 clean_text；stage1 三份共用 partition
-        report 的 input 身份；成书（`stage7/<书名>_rewriting.txt`）的身份由
+        取 clean_text；Stage1 两份材料与当前 clean_text 的确定性复扫结果逐字对账；
+        成书（`stage7/<书名>_rewriting.txt`）的身份由
         name_map.book_txt 承载。
         这些本来就是对应关卡使用的权威比对，完成度只复用，不另造一份账。
 
@@ -1130,8 +1129,8 @@ class ArtifactStore:
             return self._stage0_revisions_freshness()
         if rel == STAGE0_CLEAN_TEXT:
             return self._stage0_clean_freshness()
-        if rel in (STAGE1_MAIN_TEXT, STAGE1_HOOK_COPY, STAGE1_PARTITION_REPORT):
-            return self._stage1_freshness()
+        if rel in (STAGE1_MAIN_TEXT, STAGE1_HOOK_COPY):
+            return self._stage1_freshness(rel)
         if rel == STAGE2_GLOBAL_REVIEW:
             return self._global_review_freshness()
         if rel == STAGE5_BOOK_DRAFT:
@@ -1231,14 +1230,61 @@ class ArtifactStore:
         #   会把人送去找一个并不存在的问题。
         return self._content_edge(str(source), source_was, source_now)
 
-    def _stage1_freshness(self) -> FreshnessReport:
-        report = self._freshness_payload(STAGE1_PARTITION_REPORT)
-        expected = report.get('input_sha1') if report is not None else None
-        if not isinstance(expected, str) or not expected:
+    def _stage1_freshness(self, rel: str) -> FreshnessReport:
+        """Stage1 材料必须逐字等于当前 clean_text 的确定性投影。
+
+        旧实现只核 ``partition_report.input_sha1``，所以 main/hook 被单独篡改后仍会
+        显示 fresh。现在 freshness 与复检、页面、审批共用 Stage1 唯一审计口。
+        """
+        from contracts.schema.stage0 import Stage0Revisions
+        from contracts.schema.stage1 import HookCopy, MainText
+        from novel.stages.stage0 import revisions as stage0_revisions
+        from novel.stages.stage1.audit import audit_surface
+
+        try:
+            revisions, _ = self.read_own(Stage0Revisions, STAGE0_REVISIONS)
+            stage0_revisions.verify_chain(revisions)
+            stage0 = stage0_revisions.snapshot_of(revisions)
+            clean_text = self.read_own_text(STAGE0_CLEAN_TEXT)
+            main_text = self.read_own(MainText, rel)[0] if rel == STAGE1_MAIN_TEXT else None
+            hook_copy = self.read_own(HookCopy, rel)[0] if rel == STAGE1_HOOK_COPY else None
+        except (UpstreamMissing, ArtifactUnreadable, ValidationError, ValueError):
             return FreshnessReport('unknown', 'no_provenance')
-        edge = self._content_edge(
-            STAGE0_CLEAN_TEXT, expected, self._content_sha1_or_none(STAGE0_CLEAN_TEXT))
-        return self._content_report((edge,))
+
+        audit = audit_surface(
+            clean_text=clean_text,
+            stage0=stage0,
+            main_text=main_text,
+            hook_copy=hook_copy,
+        )
+        actual_clean_sha1 = prov.content_sha1(clean_text.encode('utf-8'))
+        if not audit.input_current:
+            edge = self._content_edge(
+                STAGE0_CLEAN_TEXT, stage0.clean_sha1, actual_clean_sha1)
+            return FreshnessReport(edge.state, edge.reason, (edge,))
+
+        if rel == STAGE1_MAIN_TEXT:
+            assert main_text is not None
+            current = bool(audit.main_current)
+            actual = [section.model_dump() for section in main_text.root]
+            expected: object = list(audit.expected_main)
+        else:
+            assert hook_copy is not None
+            current = bool(audit.hook_current)
+            actual = hook_copy.model_dump()
+            expected = audit.expected_hook
+        reason = 'match' if current else 'consumed_changed'
+        state = 'fresh' if current else 'stale'
+        edge = prov.EdgeVerdict(
+            key=STAGE0_CLEAN_TEXT,
+            state=state,
+            reason=reason,
+            recorded_file=stage0.clean_sha1,
+            now_file=actual_clean_sha1,
+            recorded_consumed=prov.projection_fingerprint(actual),
+            now_consumed=prov.projection_fingerprint(expected),
+        )
+        return FreshnessReport(state, reason, (edge,))
 
     def _global_review_freshness(self) -> FreshnessReport:
         """Exact Stage2 review surface freshness, independent of approval state."""

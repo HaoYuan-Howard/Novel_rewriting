@@ -29,12 +29,12 @@ from dataclasses import dataclass, field
 
 from contracts.invariants import (
     BODY_RATIO_MIN, DROP_RATIO_MAX, MIN_CHAPTERS, NONBODY_HEAD_MAX_CP,
-    NONBODY_MARKER_WARN_CP, NOISY_DUPLICATE_MIN, STAGE0_WARNINGS, STAGE1_WARNINGS,
+    NONBODY_MARKER_WARN_CP, NOISY_DUPLICATE_MIN, STAGE0_WARNINGS,
 )
 
 #: 每一层各自的告警取值域。样本声明的告警必须落在**它自己那一层**的域里——
 #: 写错层不会有任何自然后果，所以这里显式盯着。
-WARNINGS_BY_OWNER = {'stage0': STAGE0_WARNINGS, 'stage1': STAGE1_WARNINGS}
+WARNINGS_BY_OWNER = {'stage0': STAGE0_WARNINGS, 'stage1': ('noisy_duplicate',)}
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 构件

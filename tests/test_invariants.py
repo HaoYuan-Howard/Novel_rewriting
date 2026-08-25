@@ -224,12 +224,12 @@ def test_partial_rewrite_flags_are_current_free_paths():
     assert '--apply-edit' in inv.PARTIAL_REWRITE_FLAGS
 
 
-def test_the_warning_unions_cover_their_value_domain_exactly():
+def test_the_stage0_warning_union_covers_its_value_domain_exactly():
     """⭐⭐ 判别联合里那几个 `Literal` **不许**变成取值面的第二落点。
 
     2026-08-22 warning 从 `{kind, message}` 换成按 kind 判别的结构化证据之后，
     每一类各有一个模型、各写一个 `Literal['xxx']`。那几个字面量与
-    `STAGE0_WARNINGS` / `STAGE1_WARNINGS` 之间没有任何语言级联系——加一类却忘了
+    `STAGE0_WARNINGS` 与模型之间没有任何语言级联系——加一类却忘了
     进元组（或反过来）不会有任何东西出声，而 `/api/enums` 发的是元组那一份 ⇒
     前端画的选项与后端产的告警就此分家。这条测试是它们唯一的连接。
 
@@ -239,11 +239,10 @@ def test_the_warning_unions_cover_their_value_domain_exactly():
     import typing
 
     from contracts.schema.stage0 import Stage0Warning
-    from contracts.schema.stage1 import Stage1Warning
     from novel.core.warnings import describe
 
     def members(alias) -> tuple:
-        # 只有一类时别名就是那个模型本身（stage1 现状）；多类时是
+        # 只有一类时别名就是那个模型本身；多类时是
         # `Annotated[A | B, Field(discriminator=...)]`。两种形态都要认。
         args = typing.get_args(alias)
         return typing.get_args(args[0]) if args else (alias,)
@@ -253,18 +252,16 @@ def test_the_warning_unions_cover_their_value_domain_exactly():
         return value
 
     assert {kind_of(m) for m in members(Stage0Warning)} == set(inv.STAGE0_WARNINGS)
-    assert {kind_of(m) for m in members(Stage1Warning)} == set(inv.STAGE1_WARNINGS)
 
     samples = [
         ('early_cut', {'body_code_points': 30, 'total_code_points': 100}),
         ('drop_ratio', {'removed_code_points': 40, 'total_code_points': 100}),
         ('long_marker', {'span_start': 7, 'marker_core_code_points': 25}),
-        ('noisy_duplicate', {'source_chapter_no': 1, 'count': 17}),
     ]
-    assert {kind for kind, _ in samples} ==         set(inv.STAGE0_WARNINGS) | set(inv.STAGE1_WARNINGS),         '本条自己的样本面也要覆盖全取值面，否则漏的那一类照样没人查'
+    assert {kind for kind, _ in samples} == set(inv.STAGE0_WARNINGS), \
+        '本条自己的样本面也要覆盖全取值面，否则漏的那一类照样没人查'
     for kind, fields in samples:
-        alias = Stage1Warning if kind in inv.STAGE1_WARNINGS else Stage0Warning
-        model = next(m for m in members(alias) if kind_of(m) == kind)
+        model = next(m for m in members(Stage0Warning) if kind_of(m) == kind)
         assert describe(model(kind=kind, **fields)).strip()
 
 

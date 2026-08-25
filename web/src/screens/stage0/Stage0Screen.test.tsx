@@ -26,7 +26,6 @@ describe('Stage0Screen 新书起跑入口', () => {
       segments: [],
     })
     vi.spyOn(api, 'getStage0Candidate').mockResolvedValue(null)
-    const partitionPreview = vi.spyOn(api, 'getStage0PartitionPreview')
     const preview = vi.spyOn(api, 'previewAgentRun').mockResolvedValue({
       argv: ['claude', '-p', 'prompt'],
       prompt: '从当前盘面续跑',
@@ -42,7 +41,6 @@ describe('Stage0Screen 新书起跑入口', () => {
     expect(screen.queryByText(/rev .*sha1/)).not.toBeInTheDocument()
     expect(screen.queryByLabelText('自报身份 actor')).not.toBeInTheDocument()
     expect(screen.queryByLabelText('本次批准 / 编辑理由 reason')).not.toBeInTheDocument()
-    expect(partitionPreview).not.toHaveBeenCalled()
 
     fireEvent.click(screen.getByRole('button', { name: 'Agent 代跑' }))
 

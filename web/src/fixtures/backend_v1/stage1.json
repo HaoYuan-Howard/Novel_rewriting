@@ -1,0 +1,113 @@
+{
+ "segments": [
+  {
+   "id": "hook",
+   "kind": "hook",
+   "start": 0,
+   "end": 155,
+   "chars": 155,
+   "text": "全家被贬为奴籍发配青楼。\n\n夫君警告我：“别瞎反抗，你好好干，多赚点咱们才能翻盘！”\n\n我惶恐无比。\n\n谁知当晚他被按进浴桶，前后无死角洗白白。\n\n龟公说：“贵客就好良家妇男，你夫君要火啦！”\n\n夫君吓得凶猛挣扎，却被灌足迷药。\n\n我哭着劝说：\n\n“夫君莫要逞强，反抗不了就享受！你放心，我不会嫌你脏的！”\n\n",
+   "chapter_ordinal": null,
+   "source_chapter_no": null,
+   "label_delta": null,
+   "anomaly": null
+  },
+  {
+   "id": "chapter-1",
+   "kind": "chapter",
+   "start": 155,
+   "end": 207,
+   "chars": 52,
+   "text": "1\n皇帝一喝酒就要赐婚。  我被许给我爹死对头苏照庭的独苗，苏子瑜。  我爹气得吐血，恨不得重回壮年\n\n",
+   "chapter_ordinal": 1,
+   "source_chapter_no": 1,
+   "label_delta": null,
+   "anomaly": null
+  },
+  {
+   "id": "chapter-2",
+   "kind": "chapter",
+   "start": 207,
+   "end": 259,
+   "chars": 52,
+   "text": "2\n嬷嬷见我机灵，安排我给他梳洗装扮。  真的，没有人比我更懂得突出我夫君的美。  我为他扑了薄粉润\n\n",
+   "chapter_ordinal": 2,
+   "source_chapter_no": 2,
+   "label_delta": 1,
+   "anomaly": null
+  },
+  {
+   "id": "chapter-3",
+   "kind": "chapter",
+   "start": 259,
+   "end": 311,
+   "chars": 52,
+   "text": "3\n儿子英雄爹好汉。  因此，在我的大力举荐下，公爹下海了。  他与我夫君霸榜怡绿院贵客首选第一梯队\n\n",
+   "chapter_ordinal": 3,
+   "source_chapter_no": 3,
+   "label_delta": 1,
+   "anomaly": null
+  },
+  {
+   "id": "chapter-4",
+   "kind": "chapter",
+   "start": 311,
+   "end": 363,
+   "chars": 52,
+   "text": "4\n这事离不了婆母的推波助澜。  信中提及，她从别处弄到秘药。  一颗，能保我睡如死猪。  婆婆特意\n\n",
+   "chapter_ordinal": 4,
+   "source_chapter_no": 4,
+   "label_delta": 1,
+   "anomaly": null
+  },
+  {
+   "id": "chapter-5",
+   "kind": "chapter",
+   "start": 363,
+   "end": 415,
+   "chars": 52,
+   "text": "5\n我急的抓耳挠腮。  趁夜半无人注意，悄悄爬上外墙。  用指头沾了口水戳破窗户纸后。  朦朦胧胧能\n\n",
+   "chapter_ordinal": 5,
+   "source_chapter_no": 5,
+   "label_delta": 1,
+   "anomaly": null
+  },
+  {
+   "id": "chapter-6",
+   "kind": "chapter",
+   "start": 415,
+   "end": 467,
+   "chars": 52,
+   "text": "6\n监视那对父子的重任交给了谢允后。  我每日沉迷花魁排行榜，致力于为我前夫君打榜宣传。  苏子瑜实\n\n",
+   "chapter_ordinal": 6,
+   "source_chapter_no": 6,
+   "label_delta": 1,
+   "anomaly": null
+  },
+  {
+   "id": "chapter-7",
+   "kind": "chapter",
+   "start": 467,
+   "end": 519,
+   "chars": 52,
+   "text": "7\n苏夫人，不，现在是杜夫人了。  我前婆母无名无分跟着杜玉闲，过上了安稳日子。  像是铁了心要在杜\n\n",
+   "chapter_ordinal": 7,
+   "source_chapter_no": 7,
+   "label_delta": 1,
+   "anomaly": null
+  },
+  {
+   "id": "chapter-8",
+   "kind": "chapter",
+   "start": 519,
+   "end": 571,
+   "chars": 52,
+   "text": "8\n我爹生无可恋，面色苍白。  谢允嘴里的御赐好酒喷了二丈远。  其他几位重臣互换眼神，虽鸦雀无声。\n\n",
+   "chapter_ordinal": 8,
+   "source_chapter_no": 8,
+   "label_delta": 1,
+   "anomaly": null
+  }
+ ],
+ "anomaly_count": 0
+}

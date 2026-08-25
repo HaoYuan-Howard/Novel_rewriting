@@ -32,7 +32,6 @@ from tests import corpus, sandbox                  # noqa: E402
 
 INPUTS = ('stage0/revisions.json',
           'stage1/main_text.json', 'stage1/hook_copy.json',
-          'stage1/partition_report.json',
           'stage2/global_grounding.json', 'stage2/chapter_blueprints.json',
           'stage2/global_review.json',
           'stage3/style_grounding.json',

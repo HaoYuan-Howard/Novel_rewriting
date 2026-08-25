@@ -80,6 +80,7 @@ python tools/regen_web_enums_fixture.py          # 写盘（--check 只报差异
 | `inbox.json` | `/api/novels/7615069877019300633/inbox` |
 | `reading_ch3.json` | `/api/novels/7615069877019300633/reading/3` |
 | `review_ch3.json` | `/api/novels/7615069877019300633/review/3` |
+| `stage1.json` | `/api/novels/7615069877019300633/stage1` |
 | `stage4_ch3.json` | `/api/novels/7615069877019300633/stage4/3` |
 | `stage5_ch3.json` | `/api/novels/7615069877019300633/stage5/3` |
 | `stage6.json` | `/api/novels/7615069877019300633/stage6` |

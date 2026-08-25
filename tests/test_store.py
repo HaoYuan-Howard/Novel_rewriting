@@ -24,7 +24,7 @@ from pydantic import BaseModel, Field, RootModel
 
 from contracts.artifacts import (
     STAGE0_REVISIONS, STAGE1_HOOK_COPY, STAGE1_MAIN_TEXT,
-    STAGE1_PARTITION_REPORT, STAGE2_CHAPTER_BLUEPRINTS, STAGE2_GLOBAL_GROUNDING,
+    STAGE2_CHAPTER_BLUEPRINTS, STAGE2_GLOBAL_GROUNDING,
     STAGE2_GLOBAL_REVIEW,
 )
 from contracts.schema import (
@@ -48,6 +48,7 @@ from novel.run import RunContext
 from novel.store import (
     ArtifactStore, SELF_FRESH_DETERMINISTIC, _json_pointer_diff,
 )
+from novel.stages.stage1.partition import partition_text
 from tests import corpus, sandbox
 
 STYLE_REL = 'stage3/style_grounding.json'
@@ -276,7 +277,7 @@ def test_reading_with_a_projection_fingerprints_the_projection_not_the_whole_fil
     一条只查「非 None」的断言在这里等于没查。
     """
     payload = json.dumps([
-        {'chapter_ordinal': 1, 'text': '真正读的正文', 'source_chapter_no': 7},
+        {'chapter_ordinal': 1, 'text': '真正读的正文', 'diagnostic_note': '不消费'},
     ], ensure_ascii=False).encode('utf-8')
     base = _book('123', '书名', payload)
     ctx = _ctx(base)
@@ -294,7 +295,7 @@ def test_reading_with_a_projection_fingerprints_the_projection_not_the_whole_fil
 
 def test_freshness_reuses_the_registered_projection_that_wrote_the_edge():
     payload = [
-        {'chapter_ordinal': 1, 'text': '正文不变', 'source_chapter_no': 1},
+        {'chapter_ordinal': 1, 'text': '正文不变', 'diagnostic_note': '原值'},
     ]
     base = _book(
         payload=json.dumps(payload, ensure_ascii=False).encode('utf-8'))
@@ -306,7 +307,7 @@ def test_freshness_reuses_the_registered_projection_that_wrote_the_edge():
     upstream = base / '书名_123' / UPSTREAM
     assert st.freshness(STYLE_REL).state == 'fresh'
 
-    payload[0]['source_chapter_no'] = 99      # 标号改了，但本节点不读它
+    payload[0]['diagnostic_note'] = '新值'      # 非消费字段改了
     upstream.write_text(
         json.dumps(encode_artifact(UPSTREAM, payload), ensure_ascii=False),
         encoding='utf-8',
@@ -1166,7 +1167,6 @@ def test_retiring_invalid_failure_rolls_the_formal_write_back(monkeypatch):
 
 
 def test_deterministic_self_fresh_policy_only_guards_artifacts_that_can_self_prove_now():
-    assert STAGE1_PARTITION_REPORT in SELF_FRESH_DETERMINISTIC
     assert STAGE2_GLOBAL_REVIEW in SELF_FRESH_DETERMINISTIC
     assert STAGE1_MAIN_TEXT not in SELF_FRESH_DETERMINISTIC
     assert STAGE1_HOOK_COPY not in SELF_FRESH_DETERMINISTIC
@@ -1268,8 +1268,7 @@ def test_json_artifacts_are_written_without_cr():
 # 四、字节形态产物：成书无 `\r`、无 BOM
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _stage0_on_disk(book: Path, source: Path, source_bytes: bytes, clean_bytes: bytes,
-                    *, revision_id: str = 'a' * 64) -> None:
+def _stage0_on_disk(book: Path, source: Path, source_bytes: bytes, clean_bytes: bytes) -> None:
     """stage0 的权威 revision 链 + 唯一 clean 投影。"""
     (book / 'stage0').mkdir(exist_ok=True)
     (book / 'stage0' / 'clean_text.txt').write_bytes(clean_bytes)
@@ -1279,19 +1278,24 @@ def _stage0_on_disk(book: Path, source: Path, source_bytes: bytes, clean_bytes: 
         'normalized_source_sha1': prov.content_sha1(source_bytes),
         'total_code_points': len(source_bytes.decode('utf-8')),
     }
+    from contracts.schema.stage0 import Stage0RevisionContent
+    from novel.stages.stage0.revisions import make_revision
+    content = Stage0RevisionContent(clean_text=clean_bytes.decode('utf-8'), removed=[])
+    revision = make_revision(
+        parent_revision_id=None, origin='machine', actor=None, reason=None,
+        code='test-store', content=content,
+    )
     _write_payload(book, 'stage0/revisions.json', {
         'source': source_identity,
-        'revisions': [{'revision_id': revision_id, 'parent_revision_id': None,
-                       'origin': 'machine',
-                       'content': {'clean_text': clean_bytes.decode('utf-8'), 'removed': []}}],
-        'current': {'revision_id': revision_id, 'approval': {'status': 'pending'}},
+        'revisions': [revision.model_dump(mode='json')],
+        'current': {'revision_id': revision.revision_id, 'approval': {'status': 'pending'}},
         'candidate_revision_id': None,
         'dismissed': [],
     })
 
 
 def test_deterministic_artifacts_use_their_existing_content_fingerprints_for_freshness():
-    """stage0×2、stage1×3 与成书不再结构性 `unknown`。
+    """stage0×2、Stage1 两份材料与成书不再结构性 `unknown`。
 
     这些载体没有通用 `_provenance`，但其 companion 已经记着同一条 HARD 判据使用的
     40 位身份。完成度必须复用那份事实，并在上游变化时给出 stale。
@@ -1304,9 +1308,11 @@ def test_deterministic_artifacts_use_their_existing_content_fingerprints_for_fre
     source.write_bytes(source_bytes)
     _stage0_on_disk(book, source, source_bytes, clean_bytes)
 
-    input_sha1 = prov.content_sha1(clean_bytes)
-    _write_payload(book, 'stage1/hook_copy.json', {'hook': '开篇。'})
-    _write_payload(book, 'stage1/partition_report.json', {'input_sha1': input_sha1})
+    partitioned = partition_text(clean_bytes.decode('utf-8'))
+    _write_payload(
+        book, 'stage1/main_text.json', partitioned.main_text.model_dump(mode='json'))
+    _write_payload(
+        book, 'stage1/hook_copy.json', partitioned.hook_copy.model_dump(mode='json'))
 
     book_bytes = '1\n第一章。\n\n2\n第二章。\n'.encode('utf-8')
     # 成书按书名命名 ⇒ 取生产那一个落点。⚠ 手写 `stage7/book.txt` 的后果**不是红**：
@@ -1324,13 +1330,24 @@ def test_deterministic_artifacts_use_their_existing_content_fingerprints_for_fre
         'stage0/revisions.json',
         'stage0/clean_text.txt',
         'stage1/main_text.json', 'stage1/hook_copy.json',
-        'stage1/partition_report.json', book_rel,
+        book_rel,
     )
     assert {rel: store.freshness(rel).state for rel in formerly_unknown} == {
         rel: 'fresh' for rel in formerly_unknown}
 
+    _write_payload(book, 'stage1/hook_copy.json', {'text': partitioned.hook_copy.text + '篡改'})
+    assert store.freshness('stage1/hook_copy.json').state == 'stale'
+    _write_payload(
+        book, 'stage1/hook_copy.json', partitioned.hook_copy.model_dump(mode='json'))
+    changed_main = partitioned.main_text.model_dump(mode='json')
+    changed_main[0]['text'] += '篡改'
+    _write_payload(book, 'stage1/main_text.json', changed_main)
+    assert store.freshness('stage1/main_text.json').state == 'stale'
+    _write_payload(
+        book, 'stage1/main_text.json', partitioned.main_text.model_dump(mode='json'))
+
     (book / 'stage0' / 'clean_text.txt').write_bytes(clean_bytes + b'changed\n')
-    for rel in formerly_unknown[1:5]:
+    for rel in formerly_unknown[1:4]:
         assert store.freshness(rel).state == 'stale', rel
     assert store.freshness(book_rel).state == 'fresh'
     # ⚠ **权威格不跟着投影动。** `clean_text.txt` 是 `revisions.json` 的物化投影，

@@ -29,7 +29,6 @@ from tests.markers import corpus_params             # noqa: E402
 
 #: 九个读屏一次全要的产物（stage7 的 rows 与 stage5 屏还要成稿与验收）。
 INPUTS = ('stage1/main_text.json', 'stage1/hook_copy.json',
-          'stage1/partition_report.json',
           'stage2/global_grounding.json', 'stage2/chapter_blueprints.json',
           'stage3/style_grounding.json',
           'stage4/plan_chapters.json', 'stage4/writer_context.json',
@@ -110,7 +109,6 @@ def mechanical_client(tmp_path):
     main = [
         {
             'chapter_ordinal': ordinal,
-            'source_chapter_no': ordinal,
             'text': text,
         }
         for ordinal, text in sorted(source.source_text.items())
@@ -303,8 +301,9 @@ def test_a_fully_written_book_survives_the_overview(client, box):
     st5 = next(s for s in body.json()['stages'] if s['stage'] == 'stage5')
     assert st5['done'] is True, (
         f'沙箱书每章都有稿而 done={st5["done"]}——逐章折叠多半又被载体拦了')
-    stage1 = client.get(f'/api/novels/{box.sid}/stage1/chapters').json()
-    assert body.json()['chapters'] == len(stage1['chapters'])
+    stage1 = client.get(f'/api/novels/{box.sid}/stage1').json()
+    assert body.json()['chapters'] == len([
+        segment for segment in stage1['segments'] if segment['kind'] == 'chapter'])
     novels = client.get('/api/novels').json()['novels']
     assert any(n['sid'] == box.sid for n in novels), '语料库把这本书整本吞了'
 

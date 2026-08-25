@@ -636,7 +636,7 @@ class NovelOverview(StrictModel):
     dirname: str = Field(min_length=1)
 
     #: stage1 主正文一落盘即可确定的总章数；还没分章 / 读不回时为 `None`。
-    #: 语料库列表复用本模型，因此不用对每本书再发一次 `/stage1/chapters`。
+    #: 语料库列表复用本模型，因此不用对每本书再发一次 `/stage1`。
     chapters: int | None = Field(default=None, ge=1)
 
     stages: list[StageState] = Field(default_factory=list)

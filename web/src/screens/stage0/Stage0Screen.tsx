@@ -134,7 +134,7 @@ export function Stage0Screen() {
         actor: HUMAN_ACTOR,
         reason: HUMAN_REASON.approve,
       }))
-      // landed_red = Stage1 三份产物已经落盘，只是校验有硬红。红项审阅面就在
+      // landed_red = Stage1 两份材料已经落盘，只是校验有硬红。红项审阅面就在
       // Stage1；把它挡在 Stage0 会让用户反而进不了唯一的恢复入口。
       requireLanded(await api.partitionStage1(sid))
       return currentSegments
@@ -144,9 +144,7 @@ export function Stage0Screen() {
       await Promise.all([
         qc.invalidateQueries({ queryKey: qk.stage0Report(sid) }),
         qc.invalidateQueries({ queryKey: qk.stage0Segments(sid) }),
-        qc.invalidateQueries({ queryKey: qk.s1segments(sid) }),
-        qc.invalidateQueries({ queryKey: qk.s1chapters(sid) }),
-        qc.invalidateQueries({ queryKey: qk.s1hook(sid) }),
+        qc.invalidateQueries({ queryKey: qk.stage1(sid) }),
         qc.invalidateQueries({ queryKey: qk.jobs(sid) }),
         qc.invalidateQueries({ queryKey: qk.approvals(sid) }),
         qc.invalidateQueries({ queryKey: qk.novel(sid) }),

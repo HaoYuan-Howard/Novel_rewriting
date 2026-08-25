@@ -62,14 +62,13 @@ from contracts.invariants import (
     TIME_LAYERS,
     TEMPORAL_LINKS,
 )
-from contracts.schema.base import FrozenModel, Sha1, StrictModel
+from contracts.schema.base import FrozenModel, StrictModel
 from contracts.schema.common import Finding, HashBoundHumanApproval
 from contracts.schema.evaluation import GlobalReviewItem
 from contracts.schema.orchestration import (
     AgentRunRecord, ArtifactCondition, ArtifactState, Freshness, FreshnessReason,
     JobRecord, JobState, NovelOverview, QueueRun,
 )
-from contracts.schema.stage1 import HookCopy
 from contracts.schema.stage0 import Stage0RevisionOrigin, Stage0Warning
 from contracts.schema.stage2 import (
     BlueprintProvenance, ConflictStage, FactEvidence, GlobalProvenance,
@@ -293,10 +292,11 @@ class Stage1Segment(FrozenModel):
     start: int = Field(ge=0)
     end: int = Field(ge=1)
     chars: int = Field(ge=1)
-    flagged: bool
     text: str = Field(min_length=1)
     chapter_ordinal: int | None = Field(default=None, ge=1)
     source_chapter_no: int | None = Field(default=None, ge=0)
+    label_delta: int | None = None
+    anomaly: ChapterLabelAnomaly | None = None
 
     @model_validator(mode='after')
     def _interval_and_chapter_metadata_agree(self) -> Stage1Segment:
@@ -309,17 +309,21 @@ class Stage1Segment(FrozenModel):
             raise ValueError('只有 chapter 分区带 chapter_ordinal')
         if is_chapter != (self.source_chapter_no is not None):
             raise ValueError('只有 chapter 分区带 source_chapter_no')
-        if self.flagged != (self.kind == 'hole'):
-            raise ValueError('stage1 只有 hole 分区 flagged=true')
+        if not is_chapter and (self.label_delta is not None or self.anomaly is not None):
+            raise ValueError('只有 chapter 分区带章号诊断')
+        if is_chapter and (self.chapter_ordinal == 1) != (self.label_delta is None):
+            raise ValueError('有且只有第一章没有 label_delta')
         return self
 
 
-class Stage1Segments(StrictModel):
-    input_sha1: Sha1
+class Stage1View(StrictModel):
+    """Stage1 页面的一次完整读取；连续原文与章号诊断不再分两个 API。"""
+
     segments: list[Stage1Segment] = Field(min_length=1)
+    anomaly_count: int = Field(default=0, ge=0)
 
     @model_validator(mode='after')
-    def _segments_are_one_continuous_document(self) -> Stage1Segments:
+    def _segments_are_one_continuous_document(self) -> Stage1View:
         if self.segments[0].start != 0:
             raise ValueError('stage1 分区必须从 clean_text 坐标 0 开始')
         for left, right in zip(self.segments, self.segments[1:]):
@@ -328,111 +332,14 @@ class Stage1Segments(StrictModel):
         ids = [segment.id for segment in self.segments]
         if len(ids) != len(set(ids)):
             raise ValueError('stage1 分区 id 不得重复')
-        return self
-
-
-class Stage1ChapterRow(FrozenModel):
-    chapter_ordinal: int = Field(ge=1)
-    source_chapter_no: int = Field(ge=0)
-    chars: int = Field(ge=0)
-    preview: str
-    #: 正式 Stage1 章表也携带章号诊断；否则重号/缺号/倒退只藏在校验行的
-    #: ``scanned`` 字符串里，界面会把那条规则折进「查过、没问题」。
-    label_delta: int | None = None
-    anomaly: ChapterLabelAnomaly | None = None
-
-    @model_validator(mode='after')
-    def _delta_exists_exactly_when_it_is_computable(self) -> Stage1ChapterRow:
-        if (self.chapter_ordinal == 1) != (self.label_delta is None):
-            raise ValueError('有且只有第一章没有 label_delta')
-        return self
-
-
-class Stage1Chapters(StrictModel):
-    chapters: list[Stage1ChapterRow] = Field(default_factory=list)
-    anomaly_count: int = Field(default=0, ge=0)
-
-    @model_validator(mode='after')
-    def _ordinals_are_contiguous(self) -> Stage1Chapters:
-        got = [chapter.chapter_ordinal for chapter in self.chapters]
-        if got != list(range(1, len(got) + 1)):
-            raise ValueError('stage1 章节索引必须从 1 起连续有序')
-        hit = sum(1 for chapter in self.chapters if chapter.anomaly is not None)
-        if hit != self.anomaly_count:
-            raise ValueError(f'anomaly_count={self.anomaly_count} 与逐章实际命中 {hit} 不符')
-        return self
-
-
-class Stage0PreviewChapter(FrozenModel):
-    """S-00 批准前分章预览里的一章。**诊断用，不承重。**
-
-    与 `Stage1ChapterRow` 刻意不共用一个模型：那一份是**已批准之后**的正式章表，
-    这一份是**批准之前**的一次性推演。两份都显示同源的章号诊断，但不能因此
-    合成一个模型——那会让「已验证事实」与「尚未批准的推演」在类型上分不开
-    （同 `TODO-36` 要拆 command DTO 的那条理由）。
-    """
-
-    chapter_ordinal: int = Field(ge=1)
-    source_chapter_no: int = Field(ge=0)
-    chars: int = Field(ge=0)
-    preview: str
-    #: 本章原始章号 − 上一章原始章号。**只有第一章为 `None`**（没有上一章）。
-    #: ⚠ 曾经还有第二种缺席理由「两章任一不是数字章号」。`source_chapter_no` 改型成
-    #: `int` 之后那种情形不存在了，`non_numeric` 一档也随之出局。
-    label_delta: int | None = None
-    anomaly: ChapterLabelAnomaly | None = None
-
-    @model_validator(mode='after')
-    def _delta_exists_exactly_when_it_is_computable(self) -> Stage0PreviewChapter:
-        if (self.chapter_ordinal == 1) != (self.label_delta is None):
-            raise ValueError(
-                '有且只有第一章没有 label_delta——第一章没有上一章，'
-                '而其余每一章的落差都算得出来（两个章号都是 int）')
-        return self
-
-
-class Stage0PartitionPreview(StrictModel):
-    """S-00 批准前的**只读**分章预览：不写 `stage1/`，不改变任何产物。
-
-    【为什么闸门形状没变】正式 stage1 产物仍然只来自已批准的 stage0（`R-0.3b`），
-    变的只是**人批之前能看见什么**：审批页多一屏 hook / 逐章 outline / tail，
-    而分章本身是零成本纯函数，重算一次不欠任何账。
-
-    ⚠ `available=False` 不是错误页：它说的是「按当前剔除结果根本分不出章」——
-    那正是应当在批准**之前**知道的事，不是等 stage1 跑起来才炸。
-    """
-
-    #: 预览基于哪一份 clean_text。人看完预览再批准，批的是同一份字节。
-    input_sha1: Sha1
-    available: bool
-    reason: Annotated[str, Field(min_length=1)] | None
-    hook_chars: int = Field(default=0, ge=0)
-    hook_preview: str = ''
-    chapters: list[Stage0PreviewChapter] = Field(default_factory=list)
-    tail_chars: int = Field(default=0, ge=0)
-    anomaly_count: int = Field(default=0, ge=0)
-    note: str = Field(min_length=1)
-
-    @model_validator(mode='after')
-    def _availability_is_explicit(self) -> Stage0PartitionPreview:
-        if self.available != (self.reason is None):
-            raise ValueError('available 与 reason 必须恰好表达同一状态')
-        if not self.available:
-            if self.chapters or self.hook_chars or self.tail_chars or self.anomaly_count:
-                raise ValueError('分不出章时不得发一份看似完整的 outline')
-            return self
-        ordinals = [chapter.chapter_ordinal for chapter in self.chapters]
+        chapters = [segment for segment in self.segments if segment.kind == 'chapter']
+        ordinals = [chapter.chapter_ordinal for chapter in chapters]
         if ordinals != list(range(1, len(ordinals) + 1)):
-            raise ValueError('预览章节索引必须从 1 起连续有序')
-        hit = sum(1 for chapter in self.chapters if chapter.anomaly is not None)
+            raise ValueError('stage1 章节索引必须从 1 起连续有序')
+        hit = sum(1 for chapter in chapters if chapter.anomaly is not None)
         if hit != self.anomaly_count:
             raise ValueError(f'anomaly_count={self.anomaly_count} 与逐章实际命中 {hit} 不符')
         return self
-
-
-class HookCopyView(StrictModel):
-    hook_copy: HookCopy
-    note: str = Field(min_length=1)
 
 
 class UploadResult(StrictModel):
@@ -1092,6 +999,7 @@ class Stage6View(StrictModel):
 
     sid: str = Field(min_length=1)
     title: str = Field(min_length=1)
+    source_hook_text: str = Field(min_length=1)
 
     lead_upto: int = Field(ge=1)
     rationale: str = Field(min_length=1)

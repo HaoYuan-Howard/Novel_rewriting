@@ -2,7 +2,8 @@
 from __future__ import annotations
 
 from contracts.artifacts import (
-    STAGE0_CLEAN_TEXT, STAGE0_REVISIONS, STAGE1_MAIN_TEXT, STAGE2_CHAPTER_BLUEPRINTS,
+    STAGE0_CLEAN_TEXT, STAGE0_REVISIONS, STAGE1_HOOK_COPY, STAGE1_MAIN_TEXT,
+    STAGE2_CHAPTER_BLUEPRINTS,
     STAGE2_GLOBAL_GROUNDING, STAGE2_GLOBAL_REVIEW, STAGE3_STYLE_GROUNDING, STAGE4_PLAN_CHAPTERS,
     STAGE5_BOOK_DRAFT, STAGE6_HOOK, STAGE7_NAME_MAP, artifact_rel,
 )
@@ -23,6 +24,7 @@ from contracts.schema import artifact_spec
 from contracts.schema.api import ApprovalAction, ApprovalBackfillResult, ApprovalDoc
 from contracts.schema.evaluation import GlobalReview
 from contracts.schema.stage0 import Stage0Revisions
+from contracts.schema.stage1 import HookCopy, MainText
 from contracts.schema.stage2 import GlobalGrounding
 from contracts.schema.stage6 import Hook
 from contracts.schema.stage7 import NameMap
@@ -290,7 +292,7 @@ def has_record(base: str | os.PathLike[str], sid: str) -> bool:
 
 _GATE_ARTIFACTS = {
     's0': (STAGE0_REVISIONS,),
-    's1': (STAGE1_MAIN_TEXT,),
+    's1': (STAGE1_MAIN_TEXT, STAGE1_HOOK_COPY),
     's2': (STAGE2_GLOBAL_GROUNDING, STAGE2_CHAPTER_BLUEPRINTS, STAGE2_GLOBAL_REVIEW),
     's3': (STAGE3_STYLE_GROUNDING,),
     's4': (STAGE4_PLAN_CHAPTERS,),
@@ -459,6 +461,25 @@ def _require_typed_gate_decision(store: ArtifactStore, gate: str) -> str | None:
         if not is_stage0_executable(report):
             raise ApprovalRequired(
                 'stage0 removal report has not actually been approved')
+    elif gate == 's1':
+        from novel.stages.stage0 import revisions as stage0_revisions
+        from novel.stages.stage1.audit import audit_surface
+
+        revisions, _ = store.read_own(Stage0Revisions, STAGE0_REVISIONS)
+        stage0_revisions.verify_chain(revisions)
+        stage0 = stage0_revisions.snapshot_of(revisions)
+        clean_text = store.read_own_text(STAGE0_CLEAN_TEXT)
+        main_text, _ = store.read_own(MainText, STAGE1_MAIN_TEXT)
+        hook_copy, _ = store.read_own(HookCopy, STAGE1_HOOK_COPY)
+        audit = audit_surface(
+            clean_text=clean_text,
+            stage0=stage0,
+            main_text=main_text,
+            hook_copy=hook_copy,
+        )
+        if audit.hard_findings:
+            details = '；'.join(item.detail for item in audit.hard_findings[:6])
+            raise ApprovalRequired(f'stage1 当前材料未通过 HARD 审计：{details}')
     elif gate == 's2':
         review, _ = store.read_own(GlobalReview, STAGE2_GLOBAL_REVIEW)
         grounding, _ = store.read_own(GlobalGrounding, STAGE2_GLOBAL_GROUNDING)

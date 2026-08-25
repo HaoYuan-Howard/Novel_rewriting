@@ -41,12 +41,9 @@ import type {
   Stage0ApprovalRequest,
   Stage0CandidateDecisionRequest,
   Stage0CandidateView,
-  Stage0PartitionPreview,
   Stage0Report,
   Stage0Segments,
-  Stage1Chapters,
-  Stage1HookCopy,
-  Stage1Segments,
+  Stage1View,
   Stage2Global,
   Stage3Style,
   Stage4Response,
@@ -66,16 +63,13 @@ export interface Api {
 
   getStage0Report(sid: string): Promise<Stage0Report>
   getStage0Segments(sid: string): Promise<Stage0Segments>
-  getStage0PartitionPreview(sid: string): Promise<Stage0PartitionPreview>
   editStage0(sid: string, request: Stage0EditRequest): Promise<Job>
   approveStage0(sid: string, request: Stage0ApprovalRequest): Promise<Job>
   getStage0Candidate(sid: string): Promise<Stage0CandidateView | null>
   adoptStage0Candidate(sid: string, request: Stage0CandidateDecisionRequest): Promise<Job>
   dismissStage0Candidate(sid: string, request: Stage0CandidateDecisionRequest): Promise<Job>
   partitionStage1(sid: string): Promise<Job>
-  getStage1Segments(sid: string): Promise<Stage1Segments>
-  getStage1Chapters(sid: string): Promise<Stage1Chapters>
-  getStage1HookCopy(sid: string): Promise<Stage1HookCopy>
+  getStage1(sid: string): Promise<Stage1View>
   getReading(sid: string, ordinal: number): Promise<ReadingResponse>
   getGlobal(sid: string, revealSpoilers?: boolean): Promise<Stage2Global>
   getGlobalReview(sid: string): Promise<GlobalReviewResponse>

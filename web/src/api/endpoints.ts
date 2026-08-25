@@ -45,11 +45,8 @@ import type {
   ReviewResponse,
   Stage0Report,
   Stage0CandidateView,
-  Stage0PartitionPreview,
   Stage0Segments,
-  Stage1Chapters,
-  Stage1HookCopy,
-  Stage1Segments,
+  Stage1View,
   Stage2Global,
   Stage3Style,
   Stage4Response,
@@ -335,8 +332,6 @@ export const realApi: Api = {
 
   getStage0Report: (sid) => get<Stage0Report>(n(sid) + '/stage0/report'),
   getStage0Segments: (sid) => get<Stage0Segments>(n(sid) + '/stage0/segments'),
-  getStage0PartitionPreview: (sid) =>
-    get<Stage0PartitionPreview>(n(sid) + '/stage0/partition-preview'),
   editStage0: async (sid, request) =>
     adaptJob(await post<BackendJobRecord>(n(sid) + '/stage0/edit', request)),
   approveStage0: async (sid, request) =>
@@ -355,9 +350,7 @@ export const realApi: Api = {
     adaptJob(await post<BackendJobRecord>(n(sid) + '/stage0/candidate/dismiss', request)),
   partitionStage1: async (sid) =>
     adaptJob(await post<BackendJobRecord>(n(sid) + '/stage1/partition')),
-  getStage1Segments: (sid) => get<Stage1Segments>(n(sid) + '/stage1/segments'),
-  getStage1Chapters: (sid) => get<Stage1Chapters>(n(sid) + '/stage1/chapters'),
-  getStage1HookCopy: (sid) => get<Stage1HookCopy>(n(sid) + '/stage1/hook_copy'),
+  getStage1: (sid) => get<Stage1View>(n(sid) + '/stage1'),
   getReading: (sid, o) => get<ReadingResponse>(n(sid) + '/reading/' + o),
   getGlobal: async (sid, revealSpoilers = false) =>
     projectGlobalSpoilers(await get<Stage2Global>(n(sid) + '/stage2/global'), revealSpoilers),

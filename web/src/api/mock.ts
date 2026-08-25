@@ -35,12 +35,9 @@ import type {
   ReviewResponse,
   Stage0EditRequest,
   Stage0Extras,
-  Stage0PartitionPreview,
   Stage0Report,
   Stage0Segments,
-  Stage1Chapters,
-  Stage1HookCopy,
-  Stage1Segments,
+  Stage1View,
   Stage2Global,
   Stage3Style,
   Stage4Response,
@@ -806,40 +803,8 @@ function mockStage0Report(sid: string): Stage0Report {
   }
 }
 
-function mockStage1Segments(): Stage1Segments {
-  const source = raw<Stage0Extras>('stage0_extras.json')
-  const hook = raw<Stage1HookCopy>('stage1_hook_copy.json')
-  const chapters = raw<Stage1Chapters>('stage1_chapters.json')
-  const pieces = [
-    {
-      id: 'hook',
-      kind: 'hook' as const,
-      text: hook.hook_copy.text + '\n\n',
-      chapter_ordinal: null,
-      source_chapter_no: null,
-    },
-    ...chapters.chapters.map((chapter) => ({
-      id: 'chapter-' + chapter.chapter_ordinal,
-      kind: 'chapter' as const,
-      text: chapter.source_chapter_no + '\n' + chapter.preview + '\n\n',
-      chapter_ordinal: chapter.chapter_ordinal,
-      source_chapter_no: chapter.source_chapter_no,
-    })),
-  ]
-  let offset = 0
-  const segments = pieces.map((piece) => {
-    const chars = codePoints(piece.text)
-    const start = offset
-    offset += chars
-    return {
-      ...piece,
-      start,
-      end: offset,
-      chars,
-      flagged: false,
-    }
-  })
-  return { input_sha1: source.normalized_source_sha1, segments }
+function mockStage1View(): Stage1View {
+  return fx<Stage1View>('stage1.json')
 }
 
 /* ---------------------------------------------------------- 跑书进度样例 */
@@ -981,11 +946,6 @@ export const mockApi: Api = {
   getStage0Segments: (sid) =>
     bookOnly(sid, `/novels/${sid}/stage0/segments`, () => mockStage0Segments(sid)),
 
-  // 夹具样本刻意是**纯数字番外**（机器零命中）：mock 模式下这一屏天然演示那个盲区。
-  getStage0PartitionPreview: (sid) =>
-    bookOnly(sid, `/novels/${sid}/stage0/partition-preview`, () =>
-      fx<Stage0PartitionPreview>('stage0_partition_preview.json')),
-
   editStage0: (sid, request) => {
     lsWrite('stage0.selection.' + sid, request)
     return later(finish({
@@ -1043,18 +1003,7 @@ export const mockApi: Api = {
       ordinal: null,
     })),
 
-  getStage1Segments: (sid) =>
-    bookOnly(sid, `/novels/${sid}/stage1/segments`, mockStage1Segments),
-
-  getStage1Chapters: (sid) =>
-    bookOnly(sid, `/novels/${sid}/stage1/chapters`, () =>
-      raw<Stage1Chapters>('stage1_chapters.json'),
-    ),
-
-  getStage1HookCopy: (sid) =>
-    bookOnly(sid, `/novels/${sid}/stage1/hook_copy`, () =>
-      raw<Stage1HookCopy>('stage1_hook_copy.json'),
-    ),
+  getStage1: (sid) => bookOnly(sid, `/novels/${sid}/stage1`, mockStage1View),
 
   getReading: (sid, o) =>
     chapterOnly(sid, o, `/novels/${sid}/reading/${o}`, () => fx<ReadingResponse>('reading_ch3.json')),

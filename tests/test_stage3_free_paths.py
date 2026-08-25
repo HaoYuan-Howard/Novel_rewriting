@@ -21,7 +21,6 @@ def _ctx(tmp_path: Path, sid: str = '707') -> RunContext:
     main = [
         {
             'chapter_ordinal': ordinal,
-            'source_chapter_no': ordinal,
             'text': text,
         }
         for ordinal, text in sorted(source.source_text.items())

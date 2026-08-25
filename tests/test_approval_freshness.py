@@ -112,11 +112,11 @@ def current_book(tmp_path: Path) -> tuple[Path, Path]:
     main = MainText.model_validate([
         {
             'chapter_ordinal': 1,
-            'source_chapter_no': 1, 'text': '她核对了当前计划。',
+            'text': '她核对了当前计划。',
         },
         {
             'chapter_ordinal': 2,
-            'source_chapter_no': 2, 'text': '另一章保持不变。',
+            'text': '另一章保持不变。',
         },
     ])
     _disk_json(book, MAIN_REL, main.model_dump(mode='json'))
@@ -203,11 +203,11 @@ def test_stale_or_changed_subject_revokes_spending_and_queue_emits_no_paid_plan(
         main = MainText.model_validate([
             {
                 'chapter_ordinal': 1,
-                'source_chapter_no': 1, 'text': '上游正文已经变化。',
+                'text': '上游正文已经变化。',
             },
             {
                 'chapter_ordinal': 2,
-                'source_chapter_no': 2, 'text': '另一章保持不变。',
+                'text': '另一章保持不变。',
             },
         ])
         _disk_json(book, MAIN_REL, main.model_dump(mode='json'))

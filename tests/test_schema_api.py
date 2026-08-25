@@ -23,12 +23,12 @@ from pydantic import ValidationError
 
 from contracts.invariants import STAGE3_MEASUREMENT_CONTRACT
 from contracts.schema.api import (
-    DraftAlignView, DraftView, DriftItem, ErrorBody, GlobalView, HookCopyView, JobList,
+    DraftAlignView, DraftView, DriftItem, ErrorBody, GlobalView, JobList,
     LogChunk, LogStreamEvent, NovelList,
     PreviewRequest, ReadingView, ReviewView,
     ReviewChapterView,
     Stage0EditRequest, Stage0Segment, Stage0Segments,
-    Stage1ChapterRow, Stage1Chapters, Stage1Segment, Stage1Segments,
+    Stage1Segment, Stage1View,
     Stage4View, Stage5View, Stage6View, Stage7View, StyleView, UploadResult,
 )
 from contracts.schema.api import ReadingBeatLine
@@ -94,23 +94,16 @@ def test_stage0_continuous_view_rejects_a_gap_and_duplicate_ids():
 
 def test_stage1_continuous_view_and_chapter_index_reject_gaps():
     first = Stage1Segment(
-        id='hook', kind='hook', start=0, end=1, chars=1, flagged=False, text='甲')
+        id='hook', kind='hook', start=0, end=1, chars=1, text='甲')
     gap = Stage1Segment(
-        id='ch2', kind='chapter', start=2, end=3, chars=1, flagged=False, text='乙',
-        chapter_ordinal=2, source_chapter_no=2,
+        id='ch2', kind='chapter', start=2, end=3, chars=1, text='乙',
+        chapter_ordinal=2, source_chapter_no=2, label_delta=1,
     )
     with pytest.raises(ValidationError, match='连续'):
-        Stage1Segments(input_sha1='0' * 40, segments=[first, gap])
+        Stage1View(segments=[first, gap])
+    contiguous = gap.model_copy(update={'start': 1, 'end': 2})
     with pytest.raises(ValidationError, match='连续有序'):
-        Stage1Chapters(chapters=[
-            Stage1ChapterRow(
-                chapter_ordinal=2,
-                source_chapter_no=2,
-                chars=1,
-                preview='乙',
-                label_delta=1,
-            ),
-        ])
+        Stage1View(segments=[first, contiguous])
 
 
 def test_reading_present_is_always_an_array_not_nullable():
@@ -358,8 +351,7 @@ def test_the_api_models_never_carry_a_verdict():
     verdicts = {'badge', 'passed', 'counts', 'hard_count', 'unver_count'}
     for model in (
         StyleView, NovelList, JobList, LogChunk, LogStreamEvent, PreviewRequest, ErrorBody,
-        Stage0Segment, Stage0Segments, Stage1Segment, Stage1Segments,
-        Stage1ChapterRow, Stage1Chapters, HookCopyView, UploadResult,
+        Stage0Segment, Stage0Segments, Stage1Segment, Stage1View, UploadResult,
         GlobalView, Stage6View, Stage7View,
         ReadingView, Stage4View, Stage5View, ReviewView,
     ):
@@ -436,8 +428,8 @@ def test_every_response_model_forbids_extra_fields():
     for model in (
         StyleView, NovelList, JobList, LogChunk, LogStreamEvent, PreviewRequest, ErrorBody,
         Stage0Segment, Stage0Segments, Stage0EditRequest,
-        Stage1Segment, Stage1Segments, Stage1ChapterRow, Stage1Chapters,
-        HookCopyView, UploadResult, GlobalView, Stage6View, Stage7View,
+        Stage1Segment, Stage1View,
+        UploadResult, GlobalView, Stage6View, Stage7View,
         ReadingView, Stage4View, Stage5View, ReviewView,
     ):
         assert model.model_config['extra'] == 'forbid', model.__name__

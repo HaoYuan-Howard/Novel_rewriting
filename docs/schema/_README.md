@@ -25,17 +25,18 @@
 ⚠ **反过来也成立：「盘上有」不等于「该落盘」。** 定完取值面还要再问一句
 **「这条信息能不能 0 成本重新算出来」**——能现算的字段落盘只是抄第二份，
 而两份同源数据哪天不一致时，没人知道该信谁。
-实例：`stage1/partition_report.json` 里能由 `main_text.json` / `hook_copy.json` /
-目录名 / 原文现算的字段都不落盘。
-留下来的判准是**不可再生**：`normalized_source_sha1`（没有记录值就没法判「有人换过原文」）、
-剔除决定（尤其人工圈选无法从 clean 反推，见 `stage0.md` §2.5）。
+实例：Stage1 的原文章号、切片区间、章节计数与异常都能从当前
+`stage0/clean_text.txt` 确定性复扫，因此不落盘第二份。Stage1 只留下下游真正消费的
+`main_text.json` 与 `hook_copy.json`；它们还必须与当前 clean 的确定性切片逐字相等。
+不可再生的信息才落盘：如 Stage0 revision 里的源身份与人工剔除决定
+（人工圈选无法从 clean 反推，见 `stage0.md` §2.5）。
 
 ## 目录
 
 | 文件 | 覆盖 |
 |---|---|
 | `stage0.md` | `revisions.json` · `clean_text.txt` |
-| `stage1.md` | `main_text.json` · `hook_copy.json` · `partition_report.json` |
+| `stage1.md` | `main_text.json` · `hook_copy.json`；章号诊断与校验是当前内容的运行时视图 |
 | `stage2.md` | `global_grounding.json` · `chapter_blueprints.json`　**全链第一个调 LLM 的层** |
 | `stage3.md` | `style_grounding.json`　v2 免费机械基线、测量契约与下游最小投影 |
 | `stage4.md` | `plan_chapters.json` · `writer_context.json`　**两份产物：一份 LLM 产、一份确定性组装**；<br>也是**全链的收口点**——前三层所有逐章闸门最后都汇到 `writer_context` 这一份上 |

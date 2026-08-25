@@ -233,14 +233,8 @@ def min_hamming(needle: str, hay: str, cap: int = 2) -> int:
 def render_book(main_text: object) -> tuple[str, str]:
     """正文列表 → `(按阅读序分块的全书正文, 章节索引)`。**只含正文，绝不含文案段。**
 
-    ⚠ 章的唯一句柄是 `chapter_ordinal`（**修正后的阅读序**）；
-    `source_chapter_no` 是原文标号，**参考、不可信**——全语料 28/163 本有重号、
-    12/163 本有缺号，所以它只能标成「参考」发下去，不能当句柄。
-    ⚠ 它 2026-08-22 从 `source_chapter_label: str` 改型成 `int`，而**渲染字节一个没变**：
-      两处都是 `f'…={x}'`，`str(1) == '1'` ⇒ f-string 出来的字节完全相同。
-      这不是「大概不会变」，`tests/test_stage01.py` 有一条专门钉它的用例。
-    ⚠ 上游曾有第二个机器身份 `section_id`（只在 stage1、不进语义层）。它已随
-      「一份产物只留一个系统主身份」删除，全链的章唯一键从此只有 `chapter_ordinal`。
+    章的唯一句柄是 ``chapter_ordinal``（修正后的阅读序）。原文章号只用于 Stage1
+    人工对照，不持久化，也不进入任何 prompt；模型没有理由看到一份不可信的第二章号。
 
     ⚠⚠ **这两个串逐字进 prompt**，所以它们的措辞是契约的一部分：
     改一个字，全部存量产物的 `_provenance.prompts` 指纹当场对不上、被报成 stale
@@ -248,7 +242,7 @@ def render_book(main_text: object) -> tuple[str, str]:
     """
     parts, idx = [], []
     for m in main_text.root:            # type: ignore[attr-defined]
-        ordi, lbl = m.chapter_ordinal, m.source_chapter_no
-        idx.append(f'阅读序第{ordi}章  原文标号(参考,不可信)={lbl}')
-        parts.append(f'===== [阅读序第{ordi}章 | 原文标号={lbl}] =====\n{m.text}')
+        ordinal = m.chapter_ordinal
+        idx.append(f'阅读序第{ordinal}章')
+        parts.append(f'===== [阅读序第{ordinal}章] =====\n{m.text}')
     return '\n\n'.join(parts), '\n'.join(idx)

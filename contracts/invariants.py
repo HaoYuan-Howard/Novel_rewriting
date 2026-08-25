@@ -305,27 +305,18 @@ REMOVED_ORIGIN: Final = ('machine', 'human')
 STAGE0_SEGMENT_KINDS: Final = ('keep', 'remove', 'end_marker')
 STAGE1_SEGMENT_KINDS: Final = ('hook', 'chapter', 'end_marker', 'hole')
 
-#: **分章**的可疑项分类，属于 stage1。原型有 6 类，两轮裁决后只剩 1 类：
-#:   · `仅识别到 ≤1 章却很长`  → 升级成显式终态 `R-1.13`
-#:   · `完结标记之后还有内容`  → 被 `R-1.14` 的 HARD 判据接管
-#:   · `early_cut` / `drop_ratio` / `long_marker` → 随剔除一起搬去 stage0
-#: ⚠ **只剩一条不等于这一层变安全了**——是别的三条换了位置、两条换了严重度。
-STAGE1_WARNINGS: Final = ('noisy_duplicate',)
-
-#: 批准前分章预览里，逐章**原始章号**相对上一章的异常分类。
+#: Stage1 对照页里，逐章**原始章号**相对上一章的异常分类。
 #: 【为什么要有它】纯数字番外与正常数字章节在机器结构上没有区别——零 removed、
-#: 零 warning、`clean == source`——只看「原文 + 删除高亮 + warnings」的审批页对它是盲的。
-#: 人工闸门要真的兜住这个盲区，人在点批准之前必须**看得见**章号序列断在哪里。
+#: 零 warning、`clean == source`——只看「原文 + 删除高亮 + warnings」的 Stage0 审批页
+#: 对它是盲的。现役流程在 Stage0 批准后免费落 Stage1，再由独立的 s1 人工闸门检查
+#: 章号序列与逐章正文；异常必须在这个正式对照页显式呈现。
 #: 三类互斥，判定优先级即本元组顺序：`reset` > `gap` > `repeat`。
 #: ⚠ 这是**诊断不是判据**：命中不拦任何东西，也不进任何产物，只在审批页上标出来给人看。
 #: 番外若接着正文往下编号（50 → 51），三类一条都不命中——那种形态机器看不出来，
 #: 只能靠同屏的逐章首行预览让人读出来。**别把它宣传成番外检测器。**
 #:
-#: ⚠ 这里曾有第四类 `non_numeric`（原始章号解析不出数字）。2026-08-22 随
-#: `MainTextSection.source_chapter_no` 从 `str` 改型成 `int` 一并删除：**载体自己
-#: 保证了它是数字**，这一档从此结构上不可达，留着就是第二个 `not_run`——一个从来
-#: 不会被写出来的取值，让取值面看起来比实际宽。产地那一路也从没产生过它：
-#: `ChapterMarker.chapter_no` 恒由 `CHAPTER_RE` 匹配出的数字行解析得到。
+#: 原文章号不落盘，由 ``scan_text`` 当前复扫；``ChapterMarker.chapter_no`` 恒由
+#: ``CHAPTER_RE`` 匹配出的数字行解析得到，因此没有 ``non_numeric`` 分支。
 CHAPTER_LABEL_ANOMALY: Final = ('reset', 'gap', 'repeat')
 
 
@@ -1590,8 +1581,7 @@ NODES: Final[dict[str, NodeSpec]] = {
     'stage1.partition': NodeSpec('stage1', 'R-1',  False, 'stage1 分章',
                                  flags=('--dry-run', '--check-only'),
                                  produces=(artifact_paths.STAGE1_MAIN_TEXT,
-                                           artifact_paths.STAGE1_HOOK_COPY,
-                                           artifact_paths.STAGE1_PARTITION_REPORT)),
+                                           artifact_paths.STAGE1_HOOK_COPY)),
     # ⚠ `--apply-edit` 是 TODO-05 补的，而它补的是一个**契约内的空洞**：
     #   `reader_reveal_events` / 知情人 / secret 事实抽错时，此前唯一的路是手改产物
     #   ——没有 schema 管形状，来源账上也留不下「这是人改的」。

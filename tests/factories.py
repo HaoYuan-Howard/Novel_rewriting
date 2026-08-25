@@ -21,8 +21,8 @@ def stage5_book() -> Book:
     source_one = '\n\n'.join(scene + f'这是第{i}次核对，她仍没有仓促下结论。' for i in range(1, 7))
     source_two = '\n\n'.join(scene + f'天色又暗了一层，线索在第{i}次比对后逐渐清楚。' for i in range(1, 5))
     main = MainText.model_validate([
-        {'chapter_ordinal': 1, 'source_chapter_no': 1, 'text': source_one},
-        {'chapter_ordinal': 2, 'source_chapter_no': 2, 'text': source_two},
+        {'chapter_ordinal': 1, 'text': source_one},
+        {'chapter_ordinal': 2, 'text': source_two},
     ])
     measurable = measure_all(
         main,
@@ -105,7 +105,7 @@ def stage3_artifact() -> dict:
     """Return a current Stage3 v2 mechanical payload."""
     book = stage5_book()
     main = MainText.model_validate([
-        {'chapter_ordinal': ordinal, 'source_chapter_no': ordinal, 'text': text}
+        {'chapter_ordinal': ordinal, 'text': text}
         for ordinal, text in sorted(book.source_text.items())
     ])
     measurable = measure_all(

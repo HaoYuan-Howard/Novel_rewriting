@@ -182,9 +182,6 @@
   "end_marker",
   "hole"
  ],
- "stage1_warnings": [
-  "noisy_duplicate"
- ],
  "chapter_label_anomaly": [
   "reset",
   "gap",
@@ -761,8 +758,7 @@
    ],
    "produces": [
     "stage1/main_text.json",
-    "stage1/hook_copy.json",
-    "stage1/partition_report.json"
+    "stage1/hook_copy.json"
    ]
   },
   "stage2.global": {
@@ -1124,7 +1120,7 @@
    "extra": null,
    "paid": false,
    "free_flag": null,
-   "writes": "stage1/main_text.json · stage1/hook_copy.json · stage1/partition_report.json",
+   "writes": "stage1/main_text.json · stage1/hook_copy.json",
    "writes_disk": true,
    "needs_value": null,
    "required_inputs": []

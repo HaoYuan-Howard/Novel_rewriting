@@ -33,12 +33,6 @@ export function Stage6Screen() {
   const [reason, setReason] = useState('')
 
   const q = useQuery({ queryKey: qk.stage6(sid), queryFn: () => api.getStage6(sid), retry: false })
-  const s1hook = useQuery({
-    queryKey: qk.s1hook(sid),
-    queryFn: () => api.getStage1HookCopy(sid),
-    retry: false,
-  })
-
   const approve = useMutation({
     mutationFn: (req: {
       pick: number
@@ -96,7 +90,7 @@ export function Stage6Screen() {
           const cand = d.candidates.find((c) => c.index === picked) ?? d.candidates[0]
           const finalPhase = !!d.approved && !reopened
           const body = d.approved?.text ?? cand?.text ?? ''
-          const origText = s1hook.data?.hook_copy.text ?? ''
+          const origText = d.source_hook_text
           const approvedSource = d.approved
             ? d.approved.slot === null
               ? '人手写（无候选前身）'

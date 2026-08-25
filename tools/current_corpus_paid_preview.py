@@ -37,13 +37,12 @@ from contracts.artifacts import (  # noqa: E402
     STAGE0_REVISIONS,
     STAGE1_HOOK_COPY,
     STAGE1_MAIN_TEXT,
-    STAGE1_PARTITION_REPORT,
     STAGE2_GLOBAL_GROUNDING,
 )
 from contracts.invariants import HOOK_SLOTS, NODES  # noqa: E402
 from contracts.schema import artifact_spec, decode_artifact  # noqa: E402
 from contracts.schema.stage0 import Stage0Revisions  # noqa: E402
-from contracts.schema.stage1 import HookCopy, MainText, PartitionReport  # noqa: E402
+from contracts.schema.stage1 import HookCopy, MainText  # noqa: E402
 from novel import config, paths, prov  # noqa: E402
 from novel.llm.budget import (  # noqa: E402
     TOKENIZER_LABEL,
@@ -61,6 +60,7 @@ from novel.orchestrator.nodes import build_argv  # noqa: E402
 from novel.stages.stage0.removal import remove_bytes  # noqa: E402
 from novel.stages.stage0 import revisions as stage0_revisions  # noqa: E402
 from novel.stages.stage1.partition import partition_text  # noqa: E402
+from novel.stages.stage1.audit import audit_surface  # noqa: E402
 from novel.stages.stage2 import extract as stage2_extract  # noqa: E402
 from novel.stages.stage2.contract import active_contract  # noqa: E402
 from novel.stages.stage2 import prompts as stage2_prompts  # noqa: E402
@@ -210,8 +210,7 @@ def _source_book(book: BookSpec) -> dict[str, Any]:
     if base.exists() and (not base.is_dir() or any(base.iterdir())):
         raise ValueError(f'source-only 隔离 base 必须不存在或为空：{base}')
     removal = remove_bytes(source.read_bytes(), original_path=str(source), code='preview000')
-    partition = partition_text(
-        removal.clean_text, normalized_source_sha1=removal.report.normalized_source_sha1)
+    partition = partition_text(removal.clean_text)
     novel_dir = base / paths.novel_dirname(title, sid)
     return {
         'sid': sid,
@@ -261,18 +260,19 @@ def _stage1_book(book: BookSpec) -> dict[str, Any]:
         raise ValueError('Stage0 clean_text 与已批准 current revision 不一致')
     main = _read_current(STAGE1_MAIN_TEXT, novel_dir / STAGE1_MAIN_TEXT, MainText)
     hook = _read_current(STAGE1_HOOK_COPY, novel_dir / STAGE1_HOOK_COPY, HookCopy)
-    partition = _read_current(
-        STAGE1_PARTITION_REPORT,
-        novel_dir / STAGE1_PARTITION_REPORT,
-        PartitionReport,
-    )
     assert isinstance(main, MainText)
     assert isinstance(hook, HookCopy)
-    assert isinstance(partition, PartitionReport)
-    if partition.input_sha1 != clean_sha1 or partition.normalized_source_sha1 != report.normalized_source_sha1:
-        raise ValueError('Stage1 partition_report 不是当前已批准 Stage0 正文的分章账')
-    if partition.detected_chapter_marker_count != len(main.root):
-        raise ValueError('Stage1 detected_chapter_marker_count 与 main_text 条目数不一致')
+    audit = audit_surface(
+        clean_text=clean,
+        stage0=report,
+        main_text=main,
+        hook_copy=hook,
+    )
+    if not audit.input_current or not audit.main_current or not audit.hook_current:
+        raise ValueError('Stage1 两份材料不是当前已批准 Stage0 正文的确定性分章结果')
+    if audit.hard_findings:
+        raise ValueError('Stage1 当前材料未通过 HARD 审计：' +
+                         '；'.join(item.detail for item in audit.hard_findings[:6]))
     return {
         'sid': book.sid,
         'title': paths.title_of(novel_dir),

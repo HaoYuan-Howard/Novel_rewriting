@@ -389,15 +389,11 @@ def build_prompt(ctx: RunContext, *, chapters: tuple[int, ...] = ()) -> tuple[st
 
 
 def _chapter_index(main_text: list[dict[str, Any]]) -> str:
-    """章节索引 —— **一切对章的引用用阅读序章号**。
-
-    ⚠ 已登记的分家：`BLUEPRINT_SYS`（prompts.py，字节冻结）说索引里有
-    「阅读序第N章」字样，而这里产的是「第N章（原文标号 X）」——该字样实际由
-    「本次任务范围」块承载（`build_blueprint_user` 的 scope 行），fake transport
-    也解析的是那一处。SYS 逐字节钉死不修；改这条格式前先读 prompts.py 头部警告。
-    """
-    return '\n'.join(f'第{s.get("chapter_ordinal")}章（原文标号 {s.get("source_chapter_no")}）'
-                     f' {len(s.get("text") or "")} 字' for s in main_text)
+    """章节索引；一切对章的引用只用阅读序章号。"""
+    return '\n'.join(
+        f'阅读序第{s.get("chapter_ordinal")}章 {len(s.get("text") or "")} 字'
+        for s in main_text
+    )
 
 
 def _book_text(main_text: list[dict[str, Any]]) -> str:

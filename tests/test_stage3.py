@@ -41,7 +41,6 @@ def _book(tmp_path: Path, sid: str = '303') -> tuple[Path, str]:
     main = [
         {
             'chapter_ordinal': ordinal,
-            'source_chapter_no': ordinal,
             'text': text,
         }
         for ordinal, text in sorted(stage5_book.source_text.items())
@@ -125,7 +124,6 @@ def test_body_and_hook_are_measured_independently():
     main = MainText.model_validate([
         {
             'chapter_ordinal': ordinal,
-            'source_chapter_no': ordinal,
             'text': text,
         }
         for ordinal, text in sorted(book.source_text.items())

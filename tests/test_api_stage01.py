@@ -111,20 +111,19 @@ def test_real_http_flow_from_upload_through_stage1(client: TestClient, root: Pat
     partitioned = client.post(f'/api/novels/{sid}/stage1/partition', headers=UI)
     assert partitioned.status_code == 200 and partitioned.json()['state'] == 'ok'
 
-    segments = client.get(f'/api/novels/{sid}/stage1/segments')
-    chapters = client.get(f'/api/novels/{sid}/stage1/chapters')
-    hook = client.get(f'/api/novels/{sid}/stage1/hook_copy')
-    assert segments.status_code == chapters.status_code == hook.status_code == 200
-    stage1 = segments.json()['segments']
+    response = client.get(f'/api/novels/{sid}/stage1')
+    assert response.status_code == 200
+    body = response.json()
+    stage1 = body['segments']
     assert [segment['kind'] for segment in stage1] == [
         'hook', 'chapter', 'chapter', 'end_marker']
     assert ''.join(segment['text'] for segment in stage1) == (
         TEXT.replace('第二句文案。\n\n', '').split('番外', 1)[0])
-    chapter_body = chapters.json()
-    assert [row['source_chapter_no'] for row in chapter_body['chapters']] == [1, 2]
-    assert chapter_body['anomaly_count'] == 0
-    assert all(row['anomaly'] is None for row in chapter_body['chapters'])
-    assert hook.json()['hook_copy']['text'] == '开篇钩子。\n\n'
+    chapter_rows = [row for row in stage1 if row['kind'] == 'chapter']
+    assert [row['source_chapter_no'] for row in chapter_rows] == [1, 2]
+    assert body['anomaly_count'] == 0
+    assert all(row['anomaly'] is None for row in chapter_rows)
+    assert stage1[0]['text'] == '开篇钩子。\n\n'
 
 
 #: 纯数字番外：章标记只是一个数字，正文里一个非正文关键词都没有 ⇒ 机器认不出。
@@ -136,14 +135,10 @@ NUMERIC_FANWAI = (
 )
 
 
-def test_pre_approval_partition_preview_is_reachable_before_anyone_approves(
+def test_stage1_is_the_only_partition_diagnostic_surface(
     client: TestClient,
 ):
-    """批准前的分章预览要走得通**真实 HTTP**，且一份 stage1 产物都不落。
-
-    机器对这本书零命中（`removed` 空、无 warning），审批页原有的三样看不出异常；
-    章 outline 里第 3 章的原始章号退回 1，才是人能看见的那一处。
-    """
+    """Stage0 不重复提供分章预演；正式 Stage1 一次响应给出全部诊断。"""
     response = client.post(
         '/api/upload',
         params={'filename': 'FQ_纯数字番外_9002.txt'},
@@ -163,22 +158,14 @@ def test_pre_approval_partition_preview_is_reachable_before_anyone_approves(
     #   取值之后它与 `executable` 是同一个 bit，一个 bit 只留一个投影。
     assert 'block_reason' not in report
 
-    preview = client.get(f'/api/novels/{sid}/stage0/partition-preview')
-    assert preview.status_code == 200, preview.text
-    body = preview.json()
-    assert body['available'] is True and body['reason'] is None
-    assert [
-        (row['chapter_ordinal'], row['source_chapter_no'],
-         row['label_delta'], row['anomaly'])
-        for row in body['chapters']
-    ] == [(1, 1, None, 'repeat'), (2, 2, 1, None), (3, 1, -1, 'reset')]
-    assert body['anomaly_count'] == 2
+    assert client.get(f'/api/novels/{sid}/stage0/partition-preview').status_code == 404
+    assert client.get(f'/api/novels/{sid}/stage1').status_code == 409
 
     # 只读：预览不建 stage1 目录，stage1 仍然只能由已批准的 stage0 启动。
     partition = client.post(f'/api/novels/{sid}/stage1/partition')
     assert partition.status_code != 200 or partition.json()['state'] != 'ok'
 
-    # 人批准并正式切分后，同一份诊断归 Stage1 章表承接，不能随 Stage0 预览 UI 一起消失。
+    # 人批准并正式切分后，唯一 Stage1 响应同时给连续原文和章号诊断。
     approved = client.post(
         f'/api/novels/{sid}/stage0/approve', headers=UI,
         json={'actor': 'api-stage01-test', 'reason': '核对章号异常后批准'},
@@ -186,12 +173,13 @@ def test_pre_approval_partition_preview_is_reachable_before_anyone_approves(
     assert approved.status_code == 200 and approved.json()['state'] == 'ok'
     partition = client.post(f'/api/novels/{sid}/stage1/partition', headers=UI)
     assert partition.status_code == 200
-    chapters = client.get(f'/api/novels/{sid}/stage1/chapters').json()
+    body = client.get(f'/api/novels/{sid}/stage1').json()
+    chapters = [row for row in body['segments'] if row['kind'] == 'chapter']
     assert [
         (row['source_chapter_no'], row['label_delta'], row['anomaly'])
-        for row in chapters['chapters']
+        for row in chapters
     ] == [(1, None, 'repeat'), (2, 1, None), (1, -1, 'reset')]
-    assert chapters['anomaly_count'] == 2
+    assert body['anomaly_count'] == 2
 
 
 def test_stage0_refuses_to_remove_the_end_marker(client: TestClient):

@@ -404,9 +404,9 @@ def test_root_model_artifact_version_is_decoded_from_envelope(tmp_path):
     target = book / 'stage1' / 'main_text.json'
     target.parent.mkdir(parents=True)
     main = MainText.model_validate([{
-        'chapter_ordinal': 1, 'source_chapter_no': 1, 'text': '正文。',
+        'chapter_ordinal': 1, 'text': '正文。',
     }, {
-        'chapter_ordinal': 2, 'source_chapter_no': 2, 'text': '续文。',
+        'chapter_ordinal': 2, 'text': '续文。',
     }])
     target.write_text(json.dumps(encode_artifact(
         'stage1/main_text.json', main.model_dump(mode='json'))), encoding='utf-8')

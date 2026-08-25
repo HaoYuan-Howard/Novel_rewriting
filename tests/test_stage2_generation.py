@@ -434,16 +434,42 @@ def test_stage2_refuses_stale_stage1_before_the_client_can_be_called(tmp_path):
     book = tmp_path / '旧上游_123'
     book.mkdir()
     ctx = _ctx(book, 'stage2.global')
-    store = ArtifactStore(ctx)
-    store.write(extract.MAIN_TEXT, MainText.model_validate(main_text()))
+    from contracts.schema.stage0 import Stage0RevisionContent
+    from novel.stages.stage0.revisions import make_revision
+    from novel.stages.stage1.partition import partition_text
+
+    clean_text = (
+        '开篇文案。\n\n'
+        + '\n\n'.join(
+            f'{row["chapter_ordinal"]}\n{row["text"]}' for row in main_text())
+        + '\n'
+    )
     clean = book / 'stage0/clean_text.txt'
-    old_root = prov.content_sha1(clean.read_bytes())
-    partition = book / 'stage1/partition_report.json'
-    partition.write_text(
-        json.dumps(encode_artifact(
-            'stage1/partition_report.json', {'input_sha1': old_root}), ensure_ascii=False),
+    clean.write_text(clean_text, encoding='utf-8', newline='')
+    source = tmp_path / 'FQ_旧上游_123.txt'
+    source.write_text(clean_text, encoding='utf-8', newline='')
+    content = Stage0RevisionContent(clean_text=clean_text, removed=[])
+    revision = make_revision(
+        parent_revision_id=None, origin='machine', actor=None, reason=None,
+        code='test-stage2-generation', content=content,
+    )
+    revisions = {
+        'source': {
+            'source_ref': {'kind': 'external_file', 'absolute_path': str(source.resolve())},
+            'normalized_source_sha1': prov.content_sha1(clean_text.encode('utf-8')),
+            'total_code_points': len(clean_text),
+        },
+        'revisions': [revision.model_dump(mode='json')],
+        'current': {'revision_id': revision.revision_id, 'approval': {'status': 'pending'}},
+        'candidate_revision_id': None,
+        'dismissed': [],
+    }
+    (book / 'stage0/revisions.json').write_text(
+        json.dumps(encode_artifact('stage0/revisions.json', revisions), ensure_ascii=False),
         encoding='utf-8', newline='',
     )
+    store = ArtifactStore(ctx)
+    store.write(extract.MAIN_TEXT, partition_text(clean_text).main_text)
     clean.write_text('新的 stage0 根\n', encoding='utf-8', newline='')
     client, transport = _client(
         ctx, lambda *_args: pytest.fail('stale 上游不应触达 transport'))
@@ -1183,7 +1209,6 @@ def test_blueprint_context_keeps_current_full_hides_future_and_bounds_past():
             text = '丙丁掀帘进来。' + text
         sections.append({
             'chapter_ordinal': ordinal,
-            'source_chapter_no': ordinal,
             'text': text,
         })
     characters = {

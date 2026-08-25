@@ -20,7 +20,6 @@ ARTIFACT_PATHS: Final[dict[str, str]] = {
     'stage0.clean_text': 'stage0/clean_text.txt',
     'stage1.main_text': 'stage1/main_text.json',
     'stage1.hook_copy': 'stage1/hook_copy.json',
-    'stage1.partition_report': 'stage1/partition_report.json',
     'stage2.global_grounding': 'stage2/global_grounding.json',
     'stage2.global_review': 'stage2/global_review.json',
     'stage2.global_review_decisions': 'stage2/global_review_decisions.json',
@@ -89,7 +88,6 @@ STAGE0_REVISIONS = artifact_rel('stage0.revisions')
 STAGE0_CLEAN_TEXT = artifact_rel('stage0.clean_text')
 STAGE1_MAIN_TEXT = artifact_rel('stage1.main_text')
 STAGE1_HOOK_COPY = artifact_rel('stage1.hook_copy')
-STAGE1_PARTITION_REPORT = artifact_rel('stage1.partition_report')
 STAGE2_GLOBAL_GROUNDING = artifact_rel('stage2.global_grounding')
 STAGE2_GLOBAL_REVIEW = artifact_rel('stage2.global_review')
 STAGE2_GLOBAL_REVIEW_DECISIONS = artifact_rel('stage2.global_review_decisions')

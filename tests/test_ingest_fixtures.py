@@ -16,7 +16,7 @@ import pytest
 
 from contracts.invariants import (
     BODY_RATIO_MIN, DROP_RATIO_MAX, NONBODY_HEAD_MAX_CP, NONBODY_KINDS,
-    NONBODY_MARKER_WARN_CP, STAGE0_WARNINGS, STAGE1_WARNINGS,
+    NONBODY_MARKER_WARN_CP, STAGE0_WARNINGS,
 )
 from tests.fixtures_ingest import (
     CASES, COVERS, WARNINGS_BY_OWNER, Case, marker_of_length, write_all,
@@ -139,12 +139,6 @@ def test_every_warning_id_has_a_sample(owner, domain):
     assert not missing, f'{owner} 的这些告警没有任何样本会触发它：{missing}'
 
 
-def test_the_two_warning_domains_do_not_overlap():
-    """一个告警 id 只能属于一层。两层都认，「这条是谁报的」就说不清了。"""
-    both = set(STAGE0_WARNINGS) & set(STAGE1_WARNINGS)
-    assert not both, f'{both} 同时在两层的取值域里'
-
-
 def test_every_nonbody_kind_is_accounted_for():
     """四类 `kind` 要么有合成样本，要么有真实语料样本——**不许两头都没有**。"""
     synthetic = {k for c in CASES for k in c.removed_kinds}
@@ -262,8 +256,7 @@ def test_case_behaves_as_declared(case: Case):
             original_path=f'{case.name}.txt',
             code='test',
         )
-        partitioned = partition_text(
-            removed.clean_text, normalized_source_sha1=removed.report.normalized_source_sha1)
+        partitioned = partition_text(removed.clean_text)
         return removed, partitioned
 
     if case.terminal is not None:
@@ -273,10 +266,16 @@ def test_case_behaves_as_declared(case: Case):
         return
 
     removed, partitioned = exercise()
-    warnings = (
-        tuple(w.kind for w in removed.report.warnings)
-        if case.owner == 'stage0'
-        else tuple(w.kind for w in partitioned.report.warnings)
+    stage1_outcomes = checks1.check(
+        partitioned.main_text,
+        partitioned.hook_copy,
+        clean_text=removed.clean_text,
+        stage0=removed.report,
+    )
+    warnings = tuple(w.kind for w in removed.report.warnings) if case.owner == 'stage0' else tuple(
+        finding.evidence[0]
+        for outcome in stage1_outcomes if outcome.rule == 's1_warnings'
+        for finding in outcome.findings
     )
     assert len(partitioned.main_text.root) == case.num_chapters
     assert warnings == case.warnings
@@ -299,13 +298,7 @@ def test_case_behaves_as_declared(case: Case):
             source=decode_source_bytes(case.to_bytes()),
         )
     else:
-        outcomes = checks1.check(
-            partitioned.report,
-            partitioned.main_text,
-            partitioned.hook_copy,
-            clean_text=removed.clean_text,
-            stage0=removed.report,
-        )
+        outcomes = stage1_outcomes
     failed = {
         REGISTRY.get(outcome.rule).requirement
         for outcome in outcomes

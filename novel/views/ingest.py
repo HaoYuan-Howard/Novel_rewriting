@@ -13,22 +13,17 @@ from collections import Counter
 from dataclasses import dataclass
 
 from contracts.schema.api import (
-    HookCopyView,
     Stage0CandidateRevisionView,
     Stage0CandidateView,
     Stage0EditRequest,
-    Stage0PartitionPreview,
-    Stage0PreviewChapter,
     Stage0Report,
     Stage0Segment,
     Stage0Segments,
-    Stage1ChapterRow,
-    Stage1Chapters,
     Stage1Segment,
-    Stage1Segments,
+    Stage1View,
 )
 from contracts.schema.stage0 import RequestedRemoval, Stage0EditPlan, Stage0Snapshot
-from contracts.schema.stage1 import HookCopy, MainText, MainTextSection, PartitionReport
+from contracts.schema.stage1 import HookCopy, MainText
 from novel import paths, prov
 from novel.core.ingest import (
     DecodeProblem, ScanResult, decode_source_bytes, nonbody_kind, scan_text,
@@ -38,18 +33,16 @@ from novel.core.warnings import describe
 from novel.errors import (
     ApprovalRequired,
     ArtifactUnreadable,
-    HookCopyMissing,
     HumanEditProtected,
     PartitionChapterMismatch,
     PartitionInputMismatch,
-    ResidualNonbody,
     SourceConflict,
-    TooFewChapters,
     UpstreamMissing,
 )
 from novel.orchestrator.state import readonly_ctx
 from novel.stages.stage0 import removal
 from novel.stages.stage1 import partition
+from novel.stages.stage1.audit import Stage1Audit, audit_surface
 from novel.store import ArtifactStore
 
 STAGE0_NODE = 'stage0.remove'
@@ -278,83 +271,6 @@ def stage0_segments(base: str | os.PathLike[str], sid: str) -> Stage0Segments:
     )
 
 
-def _preview_chapters(sections: list[MainTextSection]) -> list[Stage0PreviewChapter]:
-    """逐章算出原始章号的落差与异常分类。判定优先级即 `CHAPTER_LABEL_ANOMALY` 的顺序。
-
-    ⚠ `repeat` 放在最后**不是**因为它最不重要，而是因为「回退到一个用过的号」
-    同时满足 reset 与 repeat——番外重新编号是回退，报 `reset` 才说得出发生了什么。
-    """
-    numbers = [section.source_chapter_no for section in sections]
-    counts = Counter(numbers)
-
-    out: list[Stage0PreviewChapter] = []
-    for index, section in enumerate(sections):
-        number = numbers[index]
-        # ⚠ 这里曾有一圈 `int(label)` 解析和 `non_numeric` 一档。`source_chapter_no`
-        #   改型成 int 之后两者都不可达（载体自己保证是数字），随取值面一并删除。
-        delta = None if index == 0 else number - numbers[index - 1]
-        if delta is not None and delta <= 0:
-            anomaly = 'reset'
-        elif delta is not None and delta > 1:
-            anomaly = 'gap'
-        elif counts[number] > 1:
-            anomaly = 'repeat'
-        else:
-            anomaly = None
-        out.append(Stage0PreviewChapter(
-            chapter_ordinal=section.chapter_ordinal,
-            source_chapter_no=number,
-            chars=len(section.text),
-            preview=removal.preview_text(section.text, 80),
-            label_delta=delta,
-            anomaly=anomaly,
-        ))
-    return out
-
-
-def stage0_partition_preview(
-    base: str | os.PathLike[str],
-    sid: str,
-) -> Stage0PartitionPreview:
-    """在批准之前跑一次 stage1 纯函数，只为把分章结果摆到人眼前。**不落任何产物。**
-
-    这一条**刻意不查审批状态**：它存在的全部理由就是「人还没批」的那一刻要能看。
-    正式 stage1 产物那条路（`partition.run_partition`）的闸门一个字没动。
-    """
-    store = _store(base, sid, STAGE0_NODE)
-    from novel.stages.stage0 import revisions as rev
-    log = rev.read(store)
-    if log is None:
-        raise UpstreamMissing('stage0 还没跑，盘上没有 revision 链')
-    report = rev.snapshot_of(log)
-    clean = store.read_text(removal.CLEAN_REL)
-    input_sha1 = prov.content_sha1(clean.encode('utf-8'))
-    try:
-        result = partition.partition_text(clean, normalized_source_sha1=report.normalized_source_sha1)
-    except (ResidualNonbody, HookCopyMissing, TooFewChapters,
-            PartitionChapterMismatch) as exc:
-        # 分不出章本身就是审阅要看的结论——先修剔除，而不是等 stage1 跑起来才炸。
-        return Stage0PartitionPreview(
-            input_sha1=input_sha1,
-            available=False,
-            reason=str(exc),
-            note='按当前剔除结果分不出章。这一屏不写任何产物，改完剔除再看一次。',
-        )
-    chapters = _preview_chapters(list(result.main_text.root))
-    return Stage0PartitionPreview(
-        input_sha1=input_sha1,
-        available=True,
-        reason=None,
-        hook_chars=len(result.hook_copy.text),
-        hook_preview=removal.preview_text(result.hook_copy.text, 120),
-        chapters=chapters,
-        tail_chars=len(result.tail),
-        anomaly_count=sum(1 for chapter in chapters if chapter.anomaly is not None),
-        note='批准前的只读预览：分章是零成本纯函数，这一屏不写 stage1 产物。'
-             '章号异常只是提示，要判「这一章是不是正文」仍然只能靠人读。',
-    )
-
-
 def _requested_removal(segment: Stage0Segment) -> RequestedRemoval:
     """页面分区选择只产生 ``kind``/``span`` 意图；事实字段由 CLI 复算。"""
     first = next((line.strip() for line in segment.text.splitlines() if line.strip()), '')
@@ -406,9 +322,9 @@ def stage0_edit_plan(
 class _Stage1Material:
     clean: str
     stage0: Stage0Snapshot
-    report: PartitionReport
     main: MainText
     hook: HookCopy
+    audit: Stage1Audit
 
 
 def _stage1_material(base: str | os.PathLike[str], sid: str) -> _Stage1Material:
@@ -427,31 +343,27 @@ def _stage1_material(base: str | os.PathLike[str], sid: str) -> _Stage1Material:
     if actual != stage0.clean_sha1:
         raise PartitionInputMismatch(
             f'clean_text 实际 sha1={actual}，stage0 批准的是 {stage0.clean_sha1}')
-    report = store.read_own(PartitionReport, partition.REPORT)[0]
-    if report.input_sha1 != actual:
-        raise PartitionInputMismatch(
-            f'partition_report 输入={report.input_sha1}，当前 clean_text={actual}；区间已失效')
-    if report.total_code_points != len(clean):
-        raise PartitionInputMismatch(
-            f'partition_report 长度={report.total_code_points}，当前 clean_text={len(clean)}')
     main = store.read_own(MainText, partition.MAIN_TEXT)[0]
     hook = store.read_own(HookCopy, partition.HOOK_COPY)[0]
-    return _Stage1Material(clean, stage0, report, main, hook)
+    audit = audit_surface(
+        clean_text=clean,
+        stage0=stage0,
+        main_text=main,
+        hook_copy=hook,
+    )
+    if not audit.main_current or not audit.hook_current:
+        raise PartitionChapterMismatch('Stage1 两份材料与当前 clean_text 的确定性切片不一致')
+    return _Stage1Material(clean, stage0, main, hook, audit)
 
 
 def _stage1_intervals(material: _Stage1Material) -> list[Stage1Segment]:
     text = material.clean
-    report = material.report
-    scan = scan_text(text)
-    body_limit = scan.end_marker if scan.end_marker is not None else len(text)
-    markers = [marker for marker in scan.chapters if marker.line_start < body_limit]
-    if len(markers) != len(material.main.root) or len(markers) != report.detected_chapter_marker_count:
-        raise PartitionChapterMismatch(
-            f'当前识别 {len(markers)} 个章节标记，main_text 有 {len(material.main.root)} 章，'
-            f'partition_report 记 {report.detected_chapter_marker_count} 章')
-    first_marker = markers[0].line_start if markers else body_limit
-    if report.hook_span != (0, first_marker) or material.hook.text != text[:first_marker]:
-        raise PartitionChapterMismatch('hook_copy 与 partition_report.hook_span / clean_text 对不上')
+    parsed = material.audit.partition
+    body_limit = parsed.body_limit
+    markers = parsed.markers
+    first_marker = parsed.first_marker
+    numbers = [marker.chapter_no for marker in markers]
+    counts = Counter(numbers)
 
     out: list[Stage1Segment] = []
     if first_marker:
@@ -461,31 +373,30 @@ def _stage1_intervals(material: _Stage1Material) -> list[Stage1Segment]:
             start=0,
             end=first_marker,
             chars=first_marker,
-            flagged=False,
             text=text[:first_marker],
         ))
-    for index, (marker, section, stored_span) in enumerate(
-        zip(markers, material.main.root, report.chapter_spans)
-    ):
+    for index, (marker, section) in enumerate(zip(markers, material.main.root)):
         end = markers[index + 1].line_start if index + 1 < len(markers) else body_limit
-        expected_span = (marker.content_start, end)
-        if stored_span != expected_span or text[marker.content_start:end] != section.text:
-            raise PartitionChapterMismatch(
-                f'第 {index + 1} 章的落盘 span / 正文与当前 clean_text 对不上')
-        if section.source_chapter_no != marker.chapter_no:
-            raise PartitionChapterMismatch(
-                f'第 {index + 1} 章原标号落盘为 {section.source_chapter_no}，'
-                f'当前识别为 {marker.chapter_no}')
+        delta = None if index == 0 else marker.chapter_no - markers[index - 1].chapter_no
+        if delta is not None and delta <= 0:
+            anomaly = 'reset'
+        elif delta is not None and delta > 1:
+            anomaly = 'gap'
+        elif counts[marker.chapter_no] > 1:
+            anomaly = 'repeat'
+        else:
+            anomaly = None
         out.append(Stage1Segment(
             id=f's1:chapter:{section.chapter_ordinal}:{marker.line_start}:{end}',
             kind='chapter',
             start=marker.line_start,
             end=end,
             chars=end - marker.line_start,
-            flagged=False,
             text=text[marker.line_start:end],
             chapter_ordinal=section.chapter_ordinal,
-            source_chapter_no=section.source_chapter_no,
+            source_chapter_no=marker.chapter_no,
+            label_delta=delta,
+            anomaly=anomaly,
         ))
 
     if body_limit < len(text):
@@ -498,7 +409,6 @@ def _stage1_intervals(material: _Stage1Material) -> list[Stage1Segment]:
             start=body_limit,
             end=end,
             chars=end - body_limit,
-            flagged=False,
             text=text[body_limit:end],
         ))
         if end < len(text):
@@ -508,7 +418,6 @@ def _stage1_intervals(material: _Stage1Material) -> list[Stage1Segment]:
                 start=end,
                 end=len(text),
                 chars=len(text) - end,
-                flagged=True,
                 text=text[end:],
             ))
 
@@ -522,33 +431,13 @@ def _stage1_intervals(material: _Stage1Material) -> list[Stage1Segment]:
     return out
 
 
-def stage1_segments(base: str | os.PathLike[str], sid: str) -> Stage1Segments:
+def stage1_view(base: str | os.PathLike[str], sid: str) -> Stage1View:
     material = _stage1_material(base, sid)
-    return Stage1Segments(
-        input_sha1=material.report.input_sha1,
-        segments=_stage1_intervals(material),
-    )
-
-
-def stage1_chapters(base: str | os.PathLike[str], sid: str) -> Stage1Chapters:
-    material = _stage1_material(base, sid)
-    diagnosed = _preview_chapters(list(material.main.root))
-    return Stage1Chapters(chapters=[
-        Stage1ChapterRow(
-            chapter_ordinal=section.chapter_ordinal,
-            source_chapter_no=section.source_chapter_no,
-            chars=len(section.text),
-            preview=removal.preview_text(section.text, 80),
-            label_delta=fact.label_delta,
-            anomaly=fact.anomaly,
-        )
-        for section, fact in zip(material.main.root, diagnosed)
-    ], anomaly_count=sum(1 for fact in diagnosed if fact.anomaly is not None))
-
-
-def stage1_hook_copy(base: str | os.PathLike[str], sid: str) -> HookCopyView:
-    material = _stage1_material(base, sid)
-    return HookCopyView(
-        hook_copy=material.hook,
-        note='文案段（钩子）。stage2 从不消费它——只在这里给人核对分章边界。',
+    segments = _stage1_intervals(material)
+    return Stage1View(
+        segments=segments,
+        anomaly_count=sum(
+            1 for segment in segments
+            if segment.kind == 'chapter' and segment.anomaly is not None
+        ),
     )

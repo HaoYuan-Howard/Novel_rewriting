@@ -30,9 +30,6 @@ describe('Stage6Screen audited approval', () => {
           : { ...row, approved: false },
       ),
     })
-    vi.spyOn(api, 'getStage1HookCopy').mockResolvedValue(
-      await mockApi.getStage1HookCopy(SAMPLE_SID),
-    )
     vi.spyOn(api, 'getJobs').mockResolvedValue({ jobs: [], running: null })
 
     renderRoute(<Stage6Screen />, `/n/${SAMPLE_SID}/stage6`)
@@ -59,9 +56,6 @@ describe('Stage6Screen audited approval', () => {
       approved: null,
       candidates: fixture.candidates.map((row) => ({ ...row, approved: false })),
     })
-    vi.spyOn(api, 'getStage1HookCopy').mockResolvedValue(
-      await mockApi.getStage1HookCopy(SAMPLE_SID),
-    )
     vi.spyOn(api, 'getJobs').mockResolvedValue({ jobs: [], running: null })
     const preview = vi.spyOn(api, 'previewJob').mockImplementation(async (req) => ({
       argv: `python -m novel.cli ${req.kind} ${req.extra?.join(' ')}`,
@@ -123,9 +117,6 @@ describe('Stage6Screen audited approval', () => {
         approved: index === 2,
       })),
     })
-    vi.spyOn(api, 'getStage1HookCopy').mockResolvedValue(
-      await mockApi.getStage1HookCopy(SAMPLE_SID),
-    )
     vi.spyOn(api, 'getJobs').mockResolvedValue({ jobs: [], running: null })
 
     renderRoute(<Stage6Screen />, `/n/${SAMPLE_SID}/stage6`)

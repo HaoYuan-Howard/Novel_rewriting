@@ -132,7 +132,7 @@ def _narration(focalizer: str | None = '李宝珠', cid: str | None = 'char_001'
 
 
 def main_text() -> list[dict[str, Any]]:
-    return [{'chapter_ordinal': i, 'source_chapter_no': i, 'text': t}
+    return [{'chapter_ordinal': i, 'text': t}
             for i, t in enumerate((CH1, CH2, CH3), start=1)]
 
 

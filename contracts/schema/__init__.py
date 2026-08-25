@@ -36,7 +36,7 @@ from pydantic import BaseModel
 
 from contracts.artifacts import (
     STAGE0_REVISIONS, STAGE1_HOOK_COPY, STAGE1_MAIN_TEXT,
-    STAGE1_PARTITION_REPORT, STAGE2_CHAPTER_BLUEPRINTS, STAGE2_GLOBAL_EDIT,
+    STAGE2_CHAPTER_BLUEPRINTS, STAGE2_GLOBAL_EDIT,
     STAGE2_GLOBAL_GROUNDING, STAGE2_GLOBAL_REVIEW, STAGE2_GLOBAL_REVIEW_DECISIONS,
     STAGE3_STYLE_GROUNDING,
     STAGE4_PLAN_CHAPTERS, STAGE4_PLAN_EDIT, STAGE4_WRITER_CONTEXT,
@@ -53,7 +53,6 @@ from contracts.schema.api import (
     ApprovalDoc,
     DriftItem,
     ErrorBody,
-    HookCopyView,
     InboxItem,
     InboxView,
     JobList,
@@ -71,10 +70,8 @@ from contracts.schema.api import (
     Stage0CandidateView,
     Stage0Segment,
     Stage0Segments,
-    Stage1ChapterRow,
-    Stage1Chapters,
     Stage1Segment,
-    Stage1Segments,
+    Stage1View,
     StyleView,
     ResidualAdoptionRequest,
     TrimResolutionRequest,
@@ -132,10 +129,7 @@ from contracts.schema.stage0 import (
     Stage0EditPlan, Stage0Revision, Stage0RevisionContent, Stage0Revisions,
     Stage0Warning,
 )
-from contracts.schema.stage1 import (
-    HookCopy, MainText, MainTextSection, NoisyDuplicateWarning, PartitionReport,
-    Stage1Warning,
-)
+from contracts.schema.stage1 import HookCopy, MainText, MainTextSection
 from contracts.schema.stage2 import (
     Address, AddressContextPatch, Arc, ArcTrack, ArcTrackPatch, Beat, Blueprint, Canon,
     ChapterBlueprints, ChapterBlueprintsResponse, Character, CharacterEnumPatch,
@@ -230,14 +224,11 @@ ARTIFACT_SPECS: dict[str, ArtifactSpec] = {
     # v2（2026-08-25）：原文身份提到根部；revision 只留正文与最小剔除账。
     # 存量由 `stage0.remove` 免费重建并人工重批，不做迁移。
     STAGE0_REVISIONS: ArtifactSpec(Stage0Revisions, 2),
-    # ⚠ 2026-08-22 阶段 B 形状破坏：`section_id` 删除、`source_chapter_label: str`
-    #   改名改型为 `source_chapter_no: int` ⇒ 存量 v1 读不进来。
-    #   **存量产物由谁重建：`stage1.partition` 免费重跑**（纯函数、零 LLM）；
-    #   ⚠ 这两份是**承重产物**，重建会让 stage2+ 全部下游被判 stale——那是这次破坏
-    #   真正的代价，已在 `tests/test_artifact_versions.py::_SHAPE_BREAKS` 里逐条答过。
-    STAGE1_MAIN_TEXT: ArtifactSpec(MainText, 2),
+    # v3（2026-08-25）：删除下游不应信任的 ``source_chapter_no``；原文章号由当前
+    # clean_text 复扫，只在对照页显示。存量由 ``stage1.partition`` 免费重建；本次
+    # Stage0～7 减法完成后，两本现役书统一从头重建，不做迁移或手补字段。
+    STAGE1_MAIN_TEXT: ArtifactSpec(MainText, 3),
     STAGE1_HOOK_COPY: ArtifactSpec(HookCopy, 2),
-    STAGE1_PARTITION_REPORT: ArtifactSpec(PartitionReport, 2),
     # ⚠ 两次形状破坏：v2 是 secret 原子时间线；v3 是显式 relation visibility、
     #   knowledge_events、代码回取事实证据与 valid_through 改名。破坏与重建责任登记在
     #   `tests/test_artifact_versions.py::_SHAPE_BREAKS`。
@@ -421,8 +412,7 @@ __all__ = [
     'Stage0Segment', 'Stage0Segments', 'Stage0EditRequest',
     'Stage0ApprovalRequest', 'Stage0CandidateDecisionRequest', 'Stage0CandidateView',
     'Stage0CandidateRevisionView',
-    'Stage1Segment', 'Stage1Segments', 'Stage1ChapterRow', 'Stage1Chapters',
-    'HookCopyView', 'UploadResult',
+    'Stage1Segment', 'Stage1View', 'UploadResult',
     'NovelList', 'JobList', 'LogChunk', 'LogStreamEvent', 'PreviewRequest', 'ErrorBody',
     'ApprovalAction', 'ApprovalBackfillResult', 'ApprovalDoc',
     'InboxItem', 'InboxView', 'TrimResolutionRequest', 'NameMapApproveRequest',
@@ -435,8 +425,7 @@ __all__ = [
     'SourceRef', 'ExternalFileRef', 'ManagedUploadRef',
     'Stage0Revisions', 'Stage0Revision', 'Stage0RevisionContent',
     'Stage0Current', 'Stage0DismissedCandidate',
-    'MainText', 'MainTextSection', 'HookCopy', 'PartitionReport', 'Stage1Warning',
-    'NoisyDuplicateWarning',
+    'MainText', 'MainTextSection', 'HookCopy',
     'GlobalGrounding', 'Entities', 'Character', 'Address', 'Relation', 'Canon',
     'Setting', 'WorldRule', 'WorldRuleVersion', 'Secret', 'ReaderRevealEvent',
     'EvidenceLocator', 'FactEvidence', 'CharacterRef', 'GroupRef', 'KnowledgeEvent',

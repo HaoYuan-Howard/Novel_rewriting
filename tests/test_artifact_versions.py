@@ -28,8 +28,8 @@ from novel.views.inbox import inbox_view
 from novel.views.stage3 import style_view
 
 MAIN_TEXT = [
-    {'chapter_ordinal': 1, 'source_chapter_no': 1, 'text': '甲推门进屋。'},
-    {'chapter_ordinal': 2, 'source_chapter_no': 2, 'text': '乙随后离开。'},
+    {'chapter_ordinal': 1, 'text': '甲推门进屋。'},
+    {'chapter_ordinal': 2, 'text': '乙随后离开。'},
 ]
 
 
@@ -64,13 +64,13 @@ def test_schema_model_map_is_derived_from_the_current_registry():
 #: 「存量产物由谁重建」。答不出来的破坏不许落。
 _SHAPE_BREAKS: dict[str, tuple[int, str, str]] = {
     'stage1/main_text.json': (
-        2,
-        '2026-08-22 阶段 B：`section_id` 删除（一份产物只留一个系统主身份）、'
-        '`source_chapter_label: str` 改名改型为 `source_chapter_no: int`',
-        '`stage1.partition` 免费重跑（纯函数、零 LLM），前置是 stage0 已批准。'
-        '⚠ 它是承重产物 ⇒ 重建后 stage2+ 全部下游判 stale：盘上「无情道」已到 stage7、'
-        '成书 txt 不是注册产物不受影响（用户 2026-08-22 裁定 stale 无害）；'
-        '「四人成行」卡在 stage2、同日裁定作废 ⇒ 本次存量代价为零，形状破坏趁这个窗口',
+        3,
+        '两次破坏。v2（2026-08-22）：`section_id` 删除，`source_chapter_label: str` '
+        '改为 `source_chapter_no: int`。v3（2026-08-25）：删除下游不应信任的 '
+        '`source_chapter_no`；原文章号只由当前 clean_text 复扫并用于 Stage1 对照页',
+        '`stage1.partition` 免费重跑（纯函数、零 LLM），前置是 Stage0 已批准。'
+        '它是承重产物，重建会让 Stage2+ 全部下游判 stale；用户已明确现有两本书在 '
+        'Stage0～7 减法完成后统一从头重建，不做迁移或手补字段',
     ),
     'stage0/revisions.json': (
         2,
@@ -81,11 +81,6 @@ _SHAPE_BREAKS: dict[str, tuple[int, str, str]] = {
         '`removal_report.json` 整份下线，运行时 snapshot 现算',
         '`stage0.remove --source <原文>` 免费重跑（零 LLM），随后人工重批。'
         '用户已明确现有两本书留到 Stage0～7 减法完成后统一重建',
-    ),
-    'stage1/partition_report.json': (
-        2,
-        '2026-08-22 阶段 B：`warnings[]` 同上换成结构化证据',
-        '`stage1.partition` 免费重跑（纯函数、零 LLM）',
     ),
     'stage1/hook_copy.json': (
         2,

@@ -349,8 +349,6 @@ def _run_stage1(ctx: RunContext, flags: list[str]) -> int:
         f'  ✓ stage1 {action} {len(result.main_text.root)} 章；'
         f'文案 {len(result.hook_copy.text)} 码点；tail {len(result.tail)} 码点',
     )
-    if result.report.warnings:
-        print('  ⚠ 可疑项：' + '、'.join(w.kind for w in result.report.warnings))
     if report is not None:
         print(render(report))
         return X.OK if report.passed else X.CHECK_FAILED

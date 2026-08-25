@@ -40,7 +40,6 @@ def box():
     main = [
         {
             'chapter_ordinal': ordinal,
-            'source_chapter_no': ordinal,
             'text': text,
         }
         for ordinal, text in sorted(source.source_text.items())

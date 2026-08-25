@@ -13,16 +13,13 @@ from fastapi import APIRouter, Depends, Query, Request
 from fastapi.concurrency import run_in_threadpool
 
 from contracts.schema.api import (
-    HookCopyView,
     Stage0ApprovalRequest,
     Stage0CandidateDecisionRequest,
     Stage0CandidateView,
     Stage0EditRequest,
-    Stage0PartitionPreview,
     Stage0Report,
     Stage0Segments,
-    Stage1Chapters,
-    Stage1Segments,
+    Stage1View,
     UploadResult,
 )
 from contracts.schema.orchestration import JobRecord
@@ -49,16 +46,6 @@ def get_stage0_segments(
     base: str = Depends(get_base),
 ) -> Stage0Segments:
     return ingest.stage0_segments(base, sid)
-
-
-@router.get('/novels/{sid}/stage0/partition-preview',
-            response_model=Stage0PartitionPreview)
-def get_stage0_partition_preview(
-    sid: str = Depends(checked_sid),
-    base: str = Depends(get_base),
-) -> Stage0PartitionPreview:
-    """批准前的只读分章预览。**GET，不写盘**——它不经 jobs.run，也不起 CLI 子进程。"""
-    return ingest.stage0_partition_preview(base, sid)
 
 
 @router.post('/novels/{sid}/stage0/edit', response_model=JobRecord)
@@ -167,28 +154,12 @@ def partition_stage1(
     return jobs.run(base, 'stage1.partition', sid)
 
 
-@router.get('/novels/{sid}/stage1/segments', response_model=Stage1Segments)
-def get_stage1_segments(
+@router.get('/novels/{sid}/stage1', response_model=Stage1View)
+def get_stage1_view(
     sid: str = Depends(checked_sid),
     base: str = Depends(get_base),
-) -> Stage1Segments:
-    return ingest.stage1_segments(base, sid)
-
-
-@router.get('/novels/{sid}/stage1/chapters', response_model=Stage1Chapters)
-def get_stage1_chapters(
-    sid: str = Depends(checked_sid),
-    base: str = Depends(get_base),
-) -> Stage1Chapters:
-    return ingest.stage1_chapters(base, sid)
-
-
-@router.get('/novels/{sid}/stage1/hook_copy', response_model=HookCopyView)
-def get_stage1_hook_copy(
-    sid: str = Depends(checked_sid),
-    base: str = Depends(get_base),
-) -> HookCopyView:
-    return ingest.stage1_hook_copy(base, sid)
+) -> Stage1View:
+    return ingest.stage1_view(base, sid)
 
 
 @router.post('/upload', response_model=UploadResult)
