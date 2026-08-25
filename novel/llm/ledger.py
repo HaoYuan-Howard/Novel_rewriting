@@ -457,6 +457,8 @@ class CostLedger:
                   resample: bool = False,
                   reject_detail: list[dict[str, object]] | None = None,
                   salvaged: bool = False,
+                  request_mode: str = 'original',
+                  recovery_from_attempts: Iterable[str] = (),
                   chapter: int | None = None) -> None:
         """内容闸对**一次已获取的响应**（wire 或缓存）的判定，各记一行。
 
@@ -478,6 +480,10 @@ class CostLedger:
         是空的、这一份是从 `reasoning` 里捞回来并过了同一套闸的。
         它与 `gate` 正交：捞成功的那一行是 `decision=accepted` + `gate=None` +
         `salvaged=True`。**不落这一位，「有几章的产物不是走正常通道产出的」事后就答不了。**
+
+        `request_mode` / `recovery_from_attempts` 回答另一根轴：本次请求是原始采样、
+        定向修复还是约束重建，以及它显式消费了哪些失败 attempt。只留策略与联结键，
+        不把动态 prompt 或失败正文复制进 `_service/` 审计账。
         """
         self._append_audit({
             'kind': 'gate_decision',
@@ -492,6 +498,9 @@ class CostLedger:
             'rung_index': rung_index,
             'sample': sample,
             'resample': resample,
+            # 后继请求是否显式消费了前序失败证据；只记策略与联结键，不记 prompt/正文。
+            'request_mode': request_mode,
+            'recovery_from_attempts': list(recovery_from_attempts),
             'reject_detail': reject_detail,   # [{loc, type, count}, …]；accepted 时 None
             'salvaged': salvaged,              # True = 正文捞自推理通道，不是 content
             'chapter': chapter,

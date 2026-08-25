@@ -306,10 +306,12 @@ def test_only_global_prompt_is_exact_before_upstream_generation(tmp_path):
     assert set(estimates) == {
         '2019402867061048656', '1668963766200045568'}
     for estimate in estimates.values():
-        assert estimate['status'] == 'exact_for_current_source_or_stage1'
+        assert estimate['status'] == 'exact_first_request_dynamic_recovery_bounded'
         assert estimate['first_success_input_tokens'] == 321
         assert estimate['exhausted_ladder_input_tokens'] == (
-            _FLASH_MODELS * _RUNGS * MAX_SAMPLES_PER_RUNG * 321)
+            'unknown_dynamic_recovery_prompts')
+        assert estimate['exhausted_ladder_input_token_hard_ceiling'] == (
+            _FLASH_MODELS * _RUNGS * MAX_SAMPLES_PER_RUNG * (1_000_000 - 96_000))
         assert estimate['completion_tokens_ladder_upper_bound'] == (
             _FLASH_MODELS * _RUNGS * MAX_SAMPLES_PER_RUNG * 96_000)
         assert estimate['completion_includes_reasoning'] is True

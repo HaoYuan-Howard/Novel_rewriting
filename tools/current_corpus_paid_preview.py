@@ -480,20 +480,25 @@ def _global_token_estimate(
             'prompt_sha256': hashlib.sha256(
                 (system + '\0' + user).encode('utf-8')).hexdigest(),
         }
+    wire_count = len(models) * len(rungs) * MAX_SAMPLES_PER_RUNG
     return {
-        'status': 'exact_for_current_source_or_stage1',
+        'status': 'exact_first_request_dynamic_recovery_bounded',
         'tokenizer': TOKENIZER_LABEL,
         'prompt_sha256': hashlib.sha256(
             (system + '\0' + user).encode('utf-8')).hexdigest(),
         'input_tokens_by_rung': counts,
         'first_success_input_tokens': counts[0]['input_tokens'],
-        # 旧输出键保留兼容；新语义是 Flash/Pro 每个显式配置的采样都烧完。
-        'exhausted_ladder_input_tokens':
-            sum(row['input_tokens'] for row in counts) * MAX_SAMPLES_PER_RUNG,
+        # agent 路径的后三采会消费运行时才知道的失败候选/诊断，开跑前不能把
+        # 「原 prompt × wire」冒充精确输入。旧键保留，但诚实写 unknown；硬上限
+        # 由每个 wire 的上下文闸给出，仍可用于付费边界确认。
+        'exhausted_ladder_input_tokens': 'unknown_dynamic_recovery_prompts',
+        'exhausted_ladder_input_token_hard_ceiling': sum(
+            model_budget(model).context_limit - stage2_extract.GLOBAL_MAX_TOKENS
+            for model in models for _rung in rungs
+        ) * MAX_SAMPLES_PER_RUNG,
         'completion_tokens_lower_bound': 0,
         'completion_tokens_ladder_upper_bound': (
-            len(models) * len(rungs) * MAX_SAMPLES_PER_RUNG
-            * stage2_extract.GLOBAL_MAX_TOKENS),
+            wire_count * stage2_extract.GLOBAL_MAX_TOKENS),
         'completion_includes_reasoning': True,
     }
 
@@ -759,6 +764,7 @@ def render(plan: dict[str, Any]) -> str:
             lines.append(
                 f'- {sid}/stage2.global：首档 input={estimate["first_success_input_tokens"]}；'
                 f'走完整模型恢复链 input={estimate["exhausted_ladder_input_tokens"]}；'
+                f'input hard ceiling={estimate["exhausted_ladder_input_token_hard_ceiling"]}；'
                 f'completion=0..{estimate["completion_tokens_ladder_upper_bound"]} '
                 '（已含 reasoning）')
         else:
