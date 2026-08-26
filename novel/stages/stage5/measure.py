@@ -385,6 +385,8 @@ class Book:
     #: 从各章 `facts.secrets` 取并集会让一条全书从未下发的 secret 的泄漏检查**永远不执行**，
     #: 而判据照常输出一个「没报违规」。
     secrets: list[dict[str, Any]]
+    #: 从当前 Stage2 人物表与 Stage1 全书正文按 Stage4 同一名字投影现场派生。
+    characters: dict[str, dict[str, Any]] = field(default_factory=dict)
     _cache: dict[str, Any] = field(default_factory=dict)
 
     @property
@@ -394,12 +396,6 @@ class Book:
             self._cache['chapters'] = {int(c['output_ordinal']): c
                                        for c in (self.ctx.get('chapters') or [])}
         return self._cache['chapters']
-
-    @property
-    def characters(self) -> dict[str, dict[str, Any]]:
-        """书级人物表。⚠ **下发给写手的是章级那一份**（`entry['characters']`）——
-        书级这一份只给确定性代码当名表用。"""
-        return (self.ctx.get('world_facts') or {}).get('characters') or {}
 
     @property
     def band_of(self) -> dict[str, str]:

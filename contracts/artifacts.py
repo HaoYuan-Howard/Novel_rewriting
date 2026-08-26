@@ -31,7 +31,6 @@ ARTIFACT_PATHS: Final[dict[str, str]] = {
     'stage4.plan_chapters': 'stage4/plan_chapters.json',
     'stage4.plan_edit': 'stage4/plan_edit.json',
     'stage4.writer_context': 'stage4/writer_context.json',
-    'stage4.writer_context_identity': 'stage4/writer_context.identity.json',
     'stage5.chapter': 'stage5/ch{nn}.json',
     'stage5.rejected_revision': 'stage5/ch{nn}.rejected.json',
     'stage5.review': 'stage5/review_{n}.json',
@@ -101,7 +100,6 @@ STAGE4_EVIDENCE_BINDING = artifact_rel('stage4.evidence_binding')
 STAGE4_PLAN_CHAPTERS = artifact_rel('stage4.plan_chapters')
 STAGE4_PLAN_EDIT = artifact_rel('stage4.plan_edit')
 STAGE4_WRITER_CONTEXT = artifact_rel('stage4.writer_context')
-STAGE4_WRITER_CONTEXT_IDENTITY = artifact_rel('stage4.writer_context_identity')
 STAGE5_CHAPTER = artifact_rel('stage5.chapter')
 STAGE5_REJECTED_REVISION = artifact_rel('stage5.rejected_revision')
 STAGE5_REVIEW = artifact_rel('stage5.review')

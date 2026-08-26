@@ -64,11 +64,9 @@ def validate_plan_refs(plan: dict[str, Any], refs: dict[str, Any]) -> None:
             goal = chapter.get(goal_name) or {}
             intent = goal.get('intent')
             for ref in goal.get('fact_refs') or []:
-                kind, key, at = ref.get('kind'), ref.get('ref'), ref.get('chapter')
+                kind, key = ref.get('kind'), ref.get('ref')
                 prefix = f'ch{ordinal}.{goal_name}:{kind}:{key}'
-                if at != ordinal:
-                    errors.append(f'{prefix}: ref.chapter={at}, expected {ordinal}')
-                elif kind == 'fact_atom':
+                if kind == 'fact_atom':
                     atom = refs['fact_atoms'].get(key)
                     if not atom or atom['chapter'] != ordinal:
                         errors.append(f'{prefix}: fact atom absent or belongs elsewhere')

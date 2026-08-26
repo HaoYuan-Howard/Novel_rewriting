@@ -190,6 +190,98 @@ def strip_distinguisher(canonical: str | None) -> str:
     return _DISTINGUISHER.sub('', canonical or '').strip()
 
 
+def display_names(characters: dict[str, dict] | None, book_text: str
+                  ) -> tuple[dict[str, str], dict[str, str], list[tuple[str, object]]]:
+    """从当前人物表派生全书有据称呼；不给自造 registry 标签兜底。"""
+
+    display: dict[str, str] = {}
+    substitutions: dict[str, str] = {}
+    unattested: list[tuple[str, object]] = []
+    for char_id, character in (characters or {}).items():
+        raw = (character or {}).get('canonical') or ''
+        canonical = strip_distinguisher(raw)
+        if canonical and canonical in book_text:
+            display[char_id] = canonical
+            continue
+        surfaces = {
+            (address.get('surface') or '').strip()
+            for address in ((character or {}).get('address') or [])
+        }
+        best = max(
+            ((book_text.count(surface), len(surface), surface)
+             for surface in surfaces if surface),
+            default=(0, 0, ''),
+        )
+        if best[0] > 0:
+            display[char_id] = best[2]
+            for form in (raw, canonical):
+                if form and form != best[2]:
+                    substitutions[form] = best[2]
+        else:
+            display[char_id] = canonical or char_id
+            unattested.append((char_id, raw))
+    return display, substitutions, unattested
+
+
+def project_character_names(
+    characters: dict[str, dict] | None,
+    book_text: str,
+) -> tuple[dict[str, dict[str, object]], dict[str, str], list[tuple[str, object]]]:
+    """Stage4/5 共用的全书名称检测基线。
+
+    `display_name` 与 `name_distinctiveness` 从同一份当前人物表一起投影；
+    Stage4 用显示名组装逐章任务，Stage5 用两者建立残留名字探针。拆成两套
+    组装口，会让“写手收到的名字”和“验收认得的名字”悄悄分叉。
+    """
+    display, substitutions, unattested = display_names(characters, book_text)
+    projected = {
+        char_id: {
+            'display_name': name,
+            'name_distinctiveness': ((characters or {}).get(char_id) or {}).get(
+                'name_distinctiveness'),
+        }
+        for char_id, name in display.items()
+    }
+    return projected, substitutions, unattested
+
+
+def display_names_at(characters: dict[str, dict] | None, text_upto: str) -> dict[str, str]:
+    """全书投影的章级版本；本章尚无有据称呼的人不进入结果。"""
+
+    display: dict[str, str] = {}
+    for char_id, character in (characters or {}).items():
+        canonical = strip_distinguisher((character or {}).get('canonical') or '')
+        if canonical and canonical in text_upto:
+            display[char_id] = canonical
+            continue
+        surfaces = {
+            (address.get('surface') or '').strip()
+            for address in ((character or {}).get('address') or [])
+        }
+        best = max(
+            ((text_upto.count(surface), len(surface), surface)
+             for surface in surfaces if surface),
+            default=(0, 0, ''),
+        )
+        if best[0] > 0:
+            display[char_id] = best[2]
+    return display
+
+
+def name_collisions(display: dict[str, str], characters: dict[str, dict] | None
+                    ) -> list[tuple[str, list[str], list[object]]]:
+    """返回派生称呼撞名及其原始 canonical，供调用方显式报告。"""
+
+    seen: dict[str, list[str]] = {}
+    for char_id, name in (display or {}).items():
+        seen.setdefault(name, []).append(char_id)
+    return [
+        (name, ids, [((characters or {}).get(char_id) or {}).get('canonical')
+                     for char_id in ids])
+        for name, ids in seen.items() if len(ids) > 1
+    ]
+
+
 def rename_semantic_markers(surface: str | None) -> tuple[str, ...]:
     """改名前后必须保持的数字、排行、辈分、关系与官职标记。
 
@@ -248,7 +340,7 @@ def person_naming_surfaces(characters: dict[str, dict] | None) -> dict[str, str]
     `wr_06`「怡红院…**实为百晓生所有**…**龟公等人员可能是卧底**」——那正是
     `secret_01`（揭示章 ch8）的全部内容，而那个角色的 `canonical` 是「谢允」，
     规则正文里一次都没出现。于是这条规则逐字发给了 ch1~ch7 的写手，
-    **同一份上下文里 `must_not_reveal` 还写着 `secret_01`**。
+    **同一份上下文的其余投影还在尝试拦这条 secret**。
     **剧透是信息的属性，不是字段的属性**——探测器只认一个字段，信息就从另一个字段走。
     """
     out: dict[str, str] = {}

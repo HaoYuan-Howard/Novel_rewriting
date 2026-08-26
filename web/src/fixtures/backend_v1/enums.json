@@ -289,11 +289,6 @@
   "T_RECALL": "recall",
   "T_HEARSAY": "hearsay"
  },
- "place_modes": [
-  "P_EXPLICIT",
-  "P_INHERIT",
-  "P_UNKNOWN"
- ],
  "anchor_coverage_state": [
   "low",
   "adequate"
@@ -310,10 +305,6 @@
  "secret_setup_kinds": [
   "cold",
   "foreshadowed"
- ],
- "reveal_event_kinds": [
-  "first",
-  "confirm"
  ],
  "relation_visibility_kinds": [
   "public",
@@ -1604,8 +1595,8 @@
    ],
    "paid": false,
    "free_flag": "--identity",
-   "writes": "stage4/writer_context.identity.json",
-   "writes_disk": true,
+   "writes": "",
+   "writes_disk": false,
    "needs_value": null,
    "required_inputs": []
   },

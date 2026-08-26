@@ -171,10 +171,6 @@ _hard('secret_leak', '没有提前点破本章不该揭示的事', 'R-7.18',
            '⚠ **不降级 sev**：它命中时是真泄底，降级会让唯一一道防线更弱。'
            '一本书盲区 100% 时落 `unver` 而不是沉默（头牌那本 7/7 就是这种情况）')
 
-_info('secret_unknown', 'must_not_reveal 点到的都查得到', 'R-6.3', owner='stage4',
-      note='下发面里点名「本章不许揭示」的 secret_id，在 `facts.secrets` 里找不到 ⇒ '
-           '**这一条根本没法查**。根因在 ctx 组装那一侧，不是写手的账')
-
 _unver('no_secrets_in_book', '这本书有可查的秘密', 'R-7.18',
        note='**这本书一条 secret 都没有** ⇒ `secret_leak` 这一次没有判别力样本。'
             '⚠ 它与「查过、没泄」必须分得开——盘上三本都有 secrets，这一支零样本')

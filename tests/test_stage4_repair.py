@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Stage4 v3 只保留整书 A/B 生成与 0 成本人工恢复。"""
+"""Stage4 v4 只保留整书 A/B 生成与 0 成本人工恢复。"""
 from __future__ import annotations
 
 from contextlib import nullcontext
@@ -9,7 +9,6 @@ from types import SimpleNamespace
 import pytest
 from pydantic import ValidationError
 
-from contracts.invariants import STRUCTURE_METRIC_CONTRACT
 from contracts.schema.stage4 import PlanProvenance
 from novel.errors import TerminalState
 from novel.stages.stage4 import plan
@@ -20,12 +19,6 @@ def _provenance(*, origin: str = 'human', **extra: object) -> dict:
         'code': 'fixture-code',
         'root_clean_sha1': '1' * 40,
         'inputs': {},
-        'params': {
-            'compiler': 'atomic-scenes-v2',
-            'fact_atoms': 1,
-            'source_stages': 1,
-            'structure_metric_contract': STRUCTURE_METRIC_CONTRACT,
-        },
         'origin': origin,
         'blind_candidate_sha256': None if origin == 'human' else '2' * 64,
         'evidence_binding_sha256': None if origin == 'human' else '3' * 64,
@@ -34,7 +27,7 @@ def _provenance(*, origin: str = 'human', **extra: object) -> dict:
 
 
 @pytest.mark.parametrize('entry', [plan.run_plan, plan.build_prompt])
-def test_stage4_v3_refuses_chapter_scoped_paid_replanning_before_transport(entry):
+def test_stage4_v4_refuses_chapter_scoped_paid_replanning_before_transport(entry):
     """结构变更只能整书重走 A→B，旧 ``--chapters`` 不能暗中恢复。"""
     client = SimpleNamespace(
         ask_json=lambda *_args, **_kwargs: pytest.fail('不应进入付费 transport'))
@@ -42,7 +35,7 @@ def test_stage4_v3_refuses_chapter_scoped_paid_replanning_before_transport(entry
     if entry is plan.run_plan:
         kwargs['client'] = client
 
-    with pytest.raises(TerminalState, match='Stage4 v3 不接受 --chapters'):
+    with pytest.raises(TerminalState, match='Stage4 v4 不接受 --chapters'):
         entry(object(), **kwargs)
 
 
@@ -61,7 +54,7 @@ def test_plan_provenance_has_no_legacy_paid_chapter_repair_surface():
 
 
 def test_apply_edit_is_a_free_human_round_and_clears_a_b_lineage(monkeypatch):
-    """人工修订吃 v3 业务形；同闸重判，不伪造一次模型修复。"""
+    """人工修订吃 v4 业务形；同闸重判，不伪造一次模型修复。"""
     edit = SimpleNamespace(model_dump=lambda **_kwargs: {'edited': True})
 
     class Store:
@@ -93,13 +86,6 @@ def test_apply_edit_is_a_free_human_round_and_clears_a_b_lineage(monkeypatch):
     monkeypatch.setattr(plan, 'ArtifactStore', lambda _ctx: Store())
     monkeypatch.setattr(plan.paths, 'edit_rel', lambda *_args: 'stage4/plan_edit.json')
     monkeypatch.setattr(plan, '_Upstreams', lambda *_args: object())
-    monkeypatch.setattr(
-        plan, '_params',
-        lambda _up: {
-            'compiler': 'atomic-scenes-v2', 'fact_atoms': 1, 'source_stages': 1,
-            'structure_metric_contract': STRUCTURE_METRIC_CONTRACT,
-        },
-    )
 
     def gate(_ctx, _store, data, _up, *, provenance, archive=False):
         captured.update(data=data, provenance=provenance, archive=archive)
@@ -110,10 +96,6 @@ def test_apply_edit_is_a_free_human_round_and_clears_a_b_lineage(monkeypatch):
     assert plan.run_apply_edit(Ctx()) == 'REPORT'
     assert captured['model_cls'] is PlanProvenance
     assert captured['free_kwargs'] == {
-        'params': {
-            'compiler': 'atomic-scenes-v2', 'fact_atoms': 1, 'source_stages': 1,
-            'structure_metric_contract': STRUCTURE_METRIC_CONTRACT,
-        },
         'origin': 'human',
         'blind_candidate_sha256': None,
         'evidence_binding_sha256': None,

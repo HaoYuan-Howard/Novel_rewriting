@@ -101,13 +101,9 @@ export function Stage4Screen() {
                       <Mono className="text-mini">{i.no}</Mono>
                       <Mono className="text-micro text-ink-5">{i.budget}</Mono>
                       <Mono className="text-micro text-ink-5">{i.scenes} 场</Mono>
-                      {i.hidden ? (
-                        <Mono className="text-micro text-ink-5">瞒 {i.hidden}</Mono>
-                      ) : null}
                     </>
                   )}
                 </ChapterGrid>
-                <div className="prose-cn text-body text-ink-2">{vm.strategy}</div>
               </Panel>
 
               <div className="grid gap-14" style={{ gridTemplateColumns: 'repeat(3, minmax(0,1fr))' }}>
@@ -186,11 +182,8 @@ export function Stage4Screen() {
                       </div>
                     ))}
 
-                    <div className="prose-cn rounded-btn-lg border border-dashed border-line-btn bg-page px-12 py-10 text-sm2 text-ink-4">
-                      must_not_reveal 等只服务回写校验，不进写手 prompt——写手看不到内容才不会写出来。
-                    </div>
                     <div className="prose-cn text-micro text-ink-5">
-                      语义契约来自 Stage2；场景目的、边界、顺序与事实重新分布由 Stage4 编译。校验结论仍只来自 stage4 报告。
+                      语义契约与秘密时间线来自 Stage2；场景目的、边界、顺序与事实重新分布由 Stage4 编译。校验结论仍只来自 stage4 报告。
                     </div>
                   </PaneScroll>
                 </Panel>
@@ -237,30 +230,12 @@ function PlanSceneRow({
         <span className="rounded-tag bg-inset px-7 py-1 text-mini text-ink-3">{scene.delivery}</span>
         <span className="rounded-tag bg-inset px-7 py-1 text-mini text-ink-3">{scene.transition}</span>
         <span className="ml-auto flex items-center gap-8">
-          <Mono className="text-micro text-ink-4">
-            预算 {scene.budget} / 源文 {scene.source ?? '—'}
-          </Mono>
-          <Mono className="rounded-tag px-6 py-1 text-micro">{scene.ratio}</Mono>
+          <Mono className="text-micro text-ink-4">预算 {scene.budget}</Mono>
         </span>
-      </div>
-
-      <div className="relative h-6 overflow-hidden rounded-nub bg-inset">
-        <span
-          className="absolute top-0 bottom-0 left-0"
-          style={{ width: scene.pct + '%', background: 'var(--color-accent-bar)' }}
-        />
       </div>
 
       <div className="prose-cn text-section text-ink-2">
         <span className="text-tag text-ink-4">场景目的　</span>{scene.purpose}
-      </div>
-
-      <div className="flex flex-wrap gap-6">
-        {scene.participants.map((person) => (
-          <span key={person} className="rounded-[11px] border border-line-2 bg-inset px-8 py-2 text-tag text-ink-2">
-            {person}
-          </span>
-        ))}
       </div>
 
       <ul className="m-0 flex list-none flex-col gap-4">

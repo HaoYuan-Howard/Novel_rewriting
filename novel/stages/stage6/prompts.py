@@ -144,7 +144,7 @@ def story_map(ctx: dict) -> list[dict]:
     """全书 writer_context → 章级语义契约与 Stage4 新场景地图。"""
     def goal(value: dict | None) -> dict:
         # CtxGoal 已在 Stage4 把 typed refs 解析成人话；文案与 Stage5
-        # 共用它，既不接触内部 id，也不接触 PlanGoal.rationale。
+        # 共用它，不接触内部 id，也不另造一份目标解释。
         raw = value or {}
         return {'intent': raw.get('intent'), 'facts': raw.get('facts') or []}
 

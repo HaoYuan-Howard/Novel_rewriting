@@ -31,7 +31,7 @@ from contracts.schema import (
     ArtifactVersionError, InputEdge, LlmProvenance, StyleGrounding, Usage, artifact_spec,
     decode_artifact, encode_artifact,
 )
-from contracts.invariants import STAGE3_MEASUREMENT_CONTRACT, STRUCTURE_METRIC_CONTRACT
+from contracts.invariants import STAGE3_MEASUREMENT_CONTRACT
 from contracts.schema.stage3 import StyleProvenance
 from contracts.schema.stage4 import PlanChapters, PlanProvenance
 from novel.consumption import CONSUMED_PROJECTIONS, producer_node, projection_for
@@ -124,9 +124,8 @@ def _plan(ctx: RunContext, *, marker: str = '计划一',
     goal = {
         'intent': 'advance',
         'fact_refs': [{
-            'kind': 'chapter_boundary', 'ref': 'chapter:1', 'chapter': 1,
+            'kind': 'chapter_boundary', 'ref': 'chapter:1',
         }],
-        'rationale': '测试事务与来源账，不测试规划质量。',
     }
     store = ArtifactStore(ctx)
     candidate_sha = store.full_sha256_or_none(STAGE4_BLIND_CANDIDATE) if compiled else None
@@ -136,50 +135,32 @@ def _plan(ctx: RunContext, *, marker: str = '计划一',
             'compiled 测试夹具必须先落两份 A/B 字节'
     provenance = ctx.free_provenance(
         PlanProvenance,
-        params={
-            'compiler': 'atomic-scenes-v2',
-            'fact_atoms': 1,
-            'source_stages': 1,
-            'structure_metric_contract': STRUCTURE_METRIC_CONTRACT,
-        },
         origin='compiled' if compiled else 'human',
         blind_candidate_sha256=candidate_sha,
         evidence_binding_sha256=binding_sha,
     )
     return PlanChapters(
-        reconstruction_strategy=marker,
         output_chapters=[{
             'output_ordinal': 1,
             'from_source_ordinals': [1],
             'chapter_goal': goal,
             'open_hook_goal': {**goal, 'intent': 'open'},
             'end_hook_goal': {**goal, 'intent': 'close'},
-            'weight': 'even',
             'structure_decision': {
                 'mode': 'retain',
                 'reason': '本夹具只验证事务与来源账，不声明结构变化。',
                 'declared_change_kinds': [],
-                'computed_change_kinds': [],
             },
-            'semantic_contract': {
-                'chapter_function': '测试事务与来源账',
-                'information_delta': ['f01_001'],
-                'character_state_delta': [], 'relationship_delta': [],
-                'reader_knowledge_delta': [],
-                'must_land_fact_refs': ['f01_001'], 'context_fact_refs': [],
-                'causal_edges': [], 'entry_state_refs': [],
-                'ending_state_refs': [], 'material_refs': [],
-            },
-            'chapter_rewrite_brief': '用一个场景承载测试事实。',
+            'chapter_rewrite_brief': marker,
             'scenes': [{
                 'slot': 's01',
                 'budget_chars': 20,
-                'weight': 'mid', 'purpose': '承载测试事实',
+                'purpose': '承载测试事实',
                 'role': 'setup', 'delivery': 'scene', 'transition': 'start',
                 'land_fact_refs': ['f01_001'], 'context_fact_refs': [],
                 'material_refs': [], 'turn_fact_ref': 'f01_001',
                 'entry_state_refs': [], 'exit_state_refs': [],
-                'participant_refs': [], 'stage_refs': ['b01_01'],
+                'stage_refs': ['b01_01'],
             }],
         }],
         _provenance=provenance,
@@ -1992,14 +1973,14 @@ def test_promotion_keeps_the_original_phase_bindings_and_archives_the_invalid():
 def test_promotion_discards_a_registered_legacy_formal_without_polluting_rounds():
     """shape-break 旧正式稿不是 current 业务轮次，提升时原位重建而不归档。"""
     base = _book()
-    _ctx_, inv = _write_invalid(base, [], marker='当前 v3 问题稿')
+    _ctx_, inv = _write_invalid(base, [], marker='当前 v4 问题稿')
     formal = inv.with_name('plan_chapters.json')
     formal.write_bytes(b'{"_schema_version":1,"legacy":"retired plan"}\n')
 
     out = ArtifactStore(_plan_ctx(base, paid=False)).promote_invalid(
         PLAN_REL, PlanChapters, **REVALIDATION)
 
-    assert json.loads(out.read_text(encoding='utf-8'))['_schema_version'] == 3
+    assert json.loads(out.read_text(encoding='utf-8'))['_schema_version'] == 4
     assert not inv.exists()
     archived = sorted(p.name for p in (formal.parent / paths.ROUNDS_DIRNAME).iterdir())
     assert archived == ['plan_chapters.INVALID.r1.json']
@@ -2017,7 +1998,7 @@ def test_revalidation_records_immutable_baseline_hashes_and_json_pointer_diff():
     assert baseline_before == inv.read_bytes(), '基线不是 INVALID 创建时的完整原始字节'
 
     edited = json.loads(inv.read_text(encoding='utf-8'))
-    edited['reconstruction_strategy'] = '人工修正'
+    edited['output_chapters'][0]['chapter_rewrite_brief'] = '人工修正'
     inv.write_text(json.dumps(edited, ensure_ascii=False, indent=4) + '\n', encoding='utf-8')
 
     store = ArtifactStore(_plan_ctx(base, paid=False))
@@ -2025,7 +2006,7 @@ def test_revalidation_records_immutable_baseline_hashes_and_json_pointer_diff():
         PLAN_REL, PlanChapters, **REVALIDATION)
     assert audit.raw_changed is True and audit.content_changed is True
     assert audit.edited_by_human is True
-    assert audit.changed_json_pointers == ('/reconstruction_strategy',)
+    assert audit.changed_json_pointers == ('/output_chapters/0/chapter_rewrite_brief',)
     assert audit.baseline_raw_sha256 != audit.candidate_raw_sha256
     assert audit.baseline_canonical_sha256 != audit.candidate_canonical_sha256
 
@@ -2056,15 +2037,16 @@ def test_promotion_override_rebuilds_derived_fields_but_cannot_replace_live_audi
     _ctx_, inv = _write_invalid(base, [], marker='机器原稿')
     baseline_source = _prov_on_disk(inv)
     current = json.loads(inv.read_text(encoding='utf-8'))
-    current['reconstruction_strategy'] = '人工提交'
+    current['output_chapters'][0]['chapter_rewrite_brief'] = '人工提交'
     inv.write_text(json.dumps(current, ensure_ascii=False, indent=2) + '\n',
                    encoding='utf-8')
     live = PlanChapters.model_validate(decode_artifact(PLAN_REL, current).payload)
     fake_source = live.provenance.model_copy(update={'code': 'fake-override-code', 'inputs': {}})
-    rebuilt = live.model_copy(update={
-        'reconstruction_strategy': '确定性派生字段已重建',
-        'provenance': fake_source,
-    })
+    rebuilt_payload = live.model_dump(by_alias=True, mode='json')
+    rebuilt_payload['output_chapters'][0][
+        'chapter_rewrite_brief'] = '确定性派生字段已重建'
+    rebuilt_payload['_provenance'] = fake_source.model_dump(by_alias=True, mode='json')
+    rebuilt = PlanChapters.model_validate(rebuilt_payload)
 
     store = ArtifactStore(_plan_ctx(base, paid=False))
     live_audit = store.revalidation_audit(
@@ -2074,10 +2056,11 @@ def test_promotion_override_rebuilds_derived_fields_but_cannot_replace_live_audi
     disk = json.loads(out.read_text(encoding='utf-8'))
     source = disk['_provenance']
 
-    assert disk['reconstruction_strategy'] == '确定性派生字段已重建'
+    assert disk['output_chapters'][0][
+        'chapter_rewrite_brief'] == '确定性派生字段已重建'
     assert source['revalidation_audit'] == live_audit.model_dump(mode='json')
     assert source['revalidation_audit']['changed_json_pointers'] == [
-        '/reconstruction_strategy']
+        '/output_chapters/0/chapter_rewrite_brief']
     assert source['inputs'] == baseline_source['inputs'], 'override 自带的假来源账被信任了'
     assert source['code'] != 'fake-override-code'
 
@@ -2101,7 +2084,7 @@ def test_revalidation_refuses_a_tampered_immutable_baseline_before_writing():
     locator = _prov_on_disk(inv)['invalid_baseline_sha256']
     baseline = next((inv.parent / '_revalidation').glob(f'*.{locator}.snapshot'))
     damaged = json.loads(baseline.read_text(encoding='utf-8'))
-    damaged['reconstruction_strategy'] = '基线被改'
+    damaged['output_chapters'][0]['chapter_rewrite_brief'] = '基线被改'
     baseline.write_text(json.dumps(damaged, ensure_ascii=False, indent=2) + '\n',
                         encoding='utf-8')
 
@@ -2265,7 +2248,7 @@ def test_promotion_archives_the_paid_official_instead_of_destroying_it():
         '旧正式稿被原子替换销毁了，而 `_rounds/` 里没有任何副本'
     assert (rounds / 'plan_chapters.INVALID.r1.json').exists(), '`.INVALID` 那条历史也要归档'
     assert json.loads(out.read_text(encoding='utf-8'))[
-        'reconstruction_strategy'] == '被拦下的那一版'
+        'output_chapters'][0]['chapter_rewrite_brief'] == '被拦下的那一版'
     assert _prov_on_disk(out)['revalidated'] is True
 
 

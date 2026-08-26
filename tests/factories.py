@@ -57,12 +57,10 @@ def stage5_book() -> Book:
             'purpose': '让墨迹异常在核账过程中暴露',
             'role': 'setup', 'delivery': 'scene', 'transition': 'start',
             'budget_chars': len(source_one),
-            'source_chars': len(source_one),
             'required_facts': ['沈青发现账册末页的墨迹被人换过。'],
             'context_facts': [],
             'turn_fact': '沈青发现账册末页的墨迹被人换过。',
             'entry_state': [], 'exit_state': ['沈青决定暂不惊动旁人。'],
-            'participants': ['沈青', '周衡'],
             'stages': [{'time_layer': 'present', 'place': '茶馆',
                         'present': ['沈青', '周衡']}],
             'verbatim': [],
@@ -70,8 +68,8 @@ def stage5_book() -> Book:
             'must_appear': [],
             'must_hold': [],
         }],
-        'characters': {'char_001': {
-            'display_name': character['display_name'], 'role': character['role']}},
+        'characters': [{'char_id': 'char_001',
+                        'display_name': character['display_name'], 'role': character['role']}],
         'narration': [{
             'segment': '全章',
             'grammatical_person': 'third',
@@ -85,19 +83,16 @@ def stage5_book() -> Book:
             'arc': {'current_stage': {'stage': '查账', 'chapters': [1]}},
             'address': [],
         },
-        'must_not_reveal': [],
     }
     projected = stage5_style({'measurable': measurable})
     assert isinstance(projected, dict) and isinstance(projected.get('body'), dict)
     return Book(
         title='雨夜账册',
-        ctx={
-            'world_facts': {'characters': {'char_001': character}},
-            'chapters': [entry],
-        },
+        ctx={'chapters': [entry]},
         measurable=projected['body'],
         source_text={1: source_one, 2: source_two},
         secrets=[],
+        characters={'char_001': character},
     )
 
 

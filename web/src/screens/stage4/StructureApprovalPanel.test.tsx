@@ -22,9 +22,7 @@ const rows: Stage4IndexRow[] = [
       computed_change_kinds: [],
     },
     budget_chars: 500,
-    span_chars: 500,
     scenes: 1,
-    hidden: 0,
   },
   {
     output_ordinal: 2,
@@ -36,9 +34,7 @@ const rows: Stage4IndexRow[] = [
       computed_change_kinds: ['entry_anchor', 'noncontiguous_regroup'],
     },
     budget_chars: 800,
-    span_chars: 760,
     scenes: 2,
-    hidden: 1,
   },
 ]
 

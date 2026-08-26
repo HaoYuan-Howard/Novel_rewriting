@@ -33,7 +33,7 @@ _A_CHAPTER_KEYS: Final = frozenset({
     'chapter_goal', 'open_hook_goal', 'end_hook_goal',
     'weight', 'chapter_rewrite_brief', 'scenes',
 })
-_A_GOAL_KEYS: Final = frozenset({'intent', 'fact_aliases', 'rationale'})
+_A_GOAL_KEYS: Final = frozenset({'intent', 'fact_aliases'})
 _A_SCENE_KEYS: Final = frozenset({
     'weight', 'purpose', 'role', 'delivery', 'transition',
     'land_fact_aliases', 'context_fact_aliases', 'turn_fact_alias',
@@ -51,9 +51,9 @@ _B_TOP_KEYS: Final = frozenset({
 })
 _B_CHAPTER_KEYS: Final = frozenset({'output_ordinal', 'scenes'})
 _B_SCENE_KEYS: Final = frozenset({
-    'candidate_scene_id', 'material_refs', 'participant_refs', 'stage_refs',
+    'candidate_scene_id', 'material_refs', 'stage_refs',
 })
-_EVIDENCE_FIELDS: Final = ('material_refs', 'participant_refs', 'stage_refs')
+_EVIDENCE_FIELDS: Final = ('material_refs', 'stage_refs')
 
 
 class BlindPlanError(ValueError):
@@ -357,15 +357,12 @@ def _compile_blind_goal(
 ) -> dict[str, Any]:
     goal = _mapping(value, where)
     _exact_keys(goal, _A_GOAL_KEYS, where, required={'intent', 'fact_aliases'})
-    out = {
+    return {
         'intent': copy.deepcopy(goal.get('intent')),
         'fact_aliases': _fact_alias_list(
             goal.get('fact_aliases'), fact_aliases=fact_aliases,
             chapter=chapter, where=f'{where}.fact_aliases', nonempty=True),
     }
-    if 'rationale' in goal:
-        out['rationale'] = copy.deepcopy(goal.get('rationale'))
-    return out
 
 
 def compile_blind_candidate(
@@ -501,13 +498,6 @@ def build_evidence_catalog(blueprints: object) -> dict[int, dict[str, frozenset[
             raise BlindPlanError(f'chapter_ordinal 重号：{chapter}')
         stages: set[str] = set()
         materials: set[str] = set()
-        participants: set[str] = set()
-        for atom_index, raw_atom in enumerate(_list(
-                raw_chapter.get('fact_atoms'), f'ch{chapter}.fact_atoms')):
-            atom = _mapping(raw_atom, f'ch{chapter}.fact_atoms[{atom_index}]')
-            participants.update(_unique_strings(
-                atom.get('participant_char_ids', []),
-                f'ch{chapter}.fact_atoms[{atom_index}].participant_char_ids'))
         for beat_index, raw_beat in enumerate(_list(
                 raw_chapter.get('beats'), f'ch{chapter}.beats')):
             beat = _mapping(raw_beat, f'ch{chapter}.beats[{beat_index}]')
@@ -516,9 +506,6 @@ def build_evidence_catalog(blueprints: object) -> dict[int, dict[str, frozenset[
                 raise BlindPlanError(f'beat_id 重号：{beat_id}')
             global_stages.add(beat_id)
             stages.add(beat_id)
-            participants.update(_unique_strings(
-                beat.get('present_char_ids', []),
-                f'ch{chapter}.beats[{beat_index}].present_char_ids'))
             for hinge_index, raw_hinge in enumerate(_list(
                     beat.get('hinges', []),
                     f'ch{chapter}.beats[{beat_index}].hinges')):
@@ -536,7 +523,6 @@ def build_evidence_catalog(blueprints: object) -> dict[int, dict[str, frozenset[
         catalog[chapter] = {
             'stage_refs': frozenset(stages),
             'material_refs': frozenset(materials),
-            'participant_refs': frozenset(participants),
         }
     return catalog
 
@@ -563,16 +549,13 @@ def _formal_goal(
     aliases = _fact_alias_list(
         goal.get('fact_aliases'), fact_aliases=fact_aliases,
         chapter=chapter, where=f'{where}.fact_aliases', nonempty=True)
-    out: dict[str, Any] = {
+    return {
         'intent': copy.deepcopy(goal.get('intent')),
         'fact_refs': [
-            {'kind': 'fact_atom', 'ref': fact_aliases[alias][0], 'chapter': chapter}
+            {'kind': 'fact_atom', 'ref': fact_aliases[alias][0]}
             for alias in aliases
         ],
     }
-    if 'rationale' in goal:
-        out['rationale'] = copy.deepcopy(goal.get('rationale'))
-    return out
 
 
 def validate_infeasible_binding(
@@ -648,9 +631,8 @@ def merge_evidence_bindings(
     """把 ``EvidenceBindingResponse.model_dump()`` 合成正式计划骨架。
 
     B 的嵌套 ``chapters[].scenes`` 只负责证据 join；最终章/场顺序始终取 A 候选。
-    返回场景已改成正式 fact/stage/material/participant 引用并补一章一章映射；
-    ``structure_decision`` 仍是 A 声明形，后续结构度量编译器再填写
-    ``computed_change_kinds``，本函数不伪造测量结果。
+    返回场景已改成正式 fact/stage/material 引用并补一章一章映射；
+    ``structure_decision`` 仍只保存 A 的人工声明，实际变化由检查器现场复算。
     """
     candidate = _mapping(compiled_candidate, 'compiled_candidate')
     _exact_keys(candidate, _CANDIDATE_KEYS, 'compiled_candidate', required=_CANDIDATE_KEYS)
@@ -796,7 +778,6 @@ def merge_evidence_bindings(
                 'turn_fact_ref': fact_aliases[turn_alias][0],
                 'entry_state_refs': [fact_aliases[alias][0] for alias in entry_aliases],
                 'exit_state_refs': [fact_aliases[alias][0] for alias in exit_aliases],
-                'participant_refs': copy.deepcopy(bound[scene_id]['participant_refs']),
                 'stage_refs': copy.deepcopy(bound[scene_id]['stage_refs']),
             })
         formal_chapters.append({
@@ -821,10 +802,7 @@ def merge_evidence_bindings(
             'scenes': formal_scenes,
         })
 
-    result = {
-        'reconstruction_strategy': copy.deepcopy(candidate.get('reconstruction_strategy')),
-        'output_chapters': formal_chapters,
-    }
+    result = {'output_chapters': formal_chapters}
     _canonical_bytes(result)
     return result
 

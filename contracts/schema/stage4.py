@@ -12,8 +12,9 @@ writer_context.json   确定性组装（非 LLM）—— 写作节点的唯一�
 
 【五条贯穿本层的事实】
 
-  ① **LLM 产场景设计**：`reconstruction_strategy`、逐章安全 brief、按新叙事顺序排列的
-     `scenes[]` 与权重。事实真值、因果边和状态增量来自 Stage2，不由 Stage4 重写。
+  ① **LLM 产场景设计**：A 相的 `reconstruction_strategy`、逐章安全 brief、按新叙事顺序排列的
+     `scenes[]` 与预算权重。策略和权重只作规划/编译脚手架，不进入正式计划；事实真值、
+     因果边和状态增量来自 Stage2，不由 Stage4 重写。
 
   ② **`writer_context` 是全链的收口点**：叫法时点 / 秘密揭示章 / 规则放行章 /
      关系剧透闸门 / 弧线终点 / setting 逐章闸门——**前三层所有逐章闸门最后都汇到它一份上**。
@@ -41,12 +42,12 @@ from pydantic import Field, model_validator
 
 from contracts.invariants import (
     BLIND_ALIAS_ALGORITHM,
-    ADDRESS_CONTEXT, CHAPTER_WEIGHTS, DELIVERY_MODES, GOAL_INTENTS,
-    NAME_DISTINCTIVENESS, NARRATIVE_PERSON, RESPONSE_CHAPTER_WEIGHTS,
+    ADDRESS_CONTEXT, DELIVERY_MODES, GOAL_INTENTS,
+    NARRATIVE_PERSON, RESPONSE_CHAPTER_WEIGHTS,
     RESPONSE_DELIVERY_MODES, RESPONSE_GOAL_INTENTS, RESPONSE_STRUCTURAL_ROLES,
     RESPONSE_TEMPORAL_LINKS, RESPONSE_UNIT_WEIGHTS, STRUCTURAL_ROLES,
-    STRUCTURE_CHANGE_KINDS, STRUCTURE_METRIC_CONTRACT, STRUCTURE_MODES,
-    TEMPORAL_LINKS, TIME_LAYERS, UNIT_WEIGHTS, WORLD_RULE_KINDS,
+    STRUCTURE_CHANGE_KINDS, STRUCTURE_MODES,
+    TEMPORAL_LINKS, TIME_LAYERS, WORLD_RULE_KINDS,
 )
 from contracts.schema.base import StrictModel
 from contracts.schema.common import FreeProvenance, LlmProvenance, Sha256
@@ -65,22 +66,18 @@ _CANDIDATE_SCENE_PATTERN = r'^c\d{2,}s\d{2,}$'
 
 
 class StructureDecision(StrictModel):
-    """章级结构选择；声明与代码复算分开存，供人工结构门对证。"""
+    """章级人工结构选择；实际变化由当前计划现场复算，不重复落盘。"""
 
     mode: Literal[STRUCTURE_MODES]
     reason: str = Field(min_length=1)
     declared_change_kinds: list[Literal[STRUCTURE_CHANGE_KINDS]]
-    computed_change_kinds: list[Literal[STRUCTURE_CHANGE_KINDS]]
 
     @model_validator(mode='after')
     def _decision_is_canonical(self) -> StructureDecision:
         order = {name: index for index, name in enumerate(STRUCTURE_CHANGE_KINDS)}
-        for label, values in (
-            ('declared_change_kinds', self.declared_change_kinds),
-            ('computed_change_kinds', self.computed_change_kinds),
-        ):
-            if values != sorted(set(values), key=order.__getitem__):
-                raise ValueError(f'{label} 必须去重并按契约顺序排列')
+        values = self.declared_change_kinds
+        if values != sorted(set(values), key=order.__getitem__):
+            raise ValueError('declared_change_kinds 必须去重并按契约顺序排列')
         if self.mode == 'retain' and self.declared_change_kinds:
             raise ValueError('retain 不得声称主动改变结构维度')
         if self.mode == 'reconstruct' and len(self.declared_change_kinds) < 2:
@@ -89,7 +86,7 @@ class StructureDecision(StrictModel):
 
 
 class BlindStructureDecision(StrictModel):
-    """Stage4A 只声明意图；`computed_change_kinds` 由最终编译器填写。"""
+    """Stage4A 只声明意图；实际变化由最终计划现场复算。"""
 
     mode: Literal[STRUCTURE_MODES]
     reason: str = Field(min_length=1)
@@ -113,7 +110,6 @@ class PlanScene(StrictModel):
 
     slot: str = Field(pattern=r'^s\d{2,4}$')
     budget_chars: int = Field(gt=0)
-    weight: Literal[UNIT_WEIGHTS]
     purpose: str = Field(min_length=1)
     role: Literal[STRUCTURAL_ROLES]
     delivery: Literal[DELIVERY_MODES]
@@ -124,7 +120,6 @@ class PlanScene(StrictModel):
     turn_fact_ref: str = Field(pattern=FACT_ID_PATTERN)
     entry_state_refs: list[str]
     exit_state_refs: list[str]
-    participant_refs: list[str]
     stage_refs: list[str] = Field(min_length=1)
 
     @model_validator(mode='after')
@@ -135,7 +130,6 @@ class PlanScene(StrictModel):
             ('material_refs', self.material_refs),
             ('entry_state_refs', self.entry_state_refs),
             ('exit_state_refs', self.exit_state_refs),
-            ('participant_refs', self.participant_refs),
             ('stage_refs', self.stage_refs),
         ):
             if len(refs) != len(set(refs)):
@@ -166,21 +160,13 @@ class FactRef(StrictModel):
     # writer-facing language.  Marking the value private makes the final-message
     # guard catch any future shortcut that sends PlanGoal itself to Stage5/6.
     ref: str = Field(min_length=1, json_schema_extra={'prompt_private': True})
-    chapter: int = Field(ge=1)
 
 
 class PlanGoal(StrictModel):
-    """Typed goal; rationale is retained for audit but never sent to the writer.
-
-    Stage4A 响应先用 opaque alias 表达目标；A+B 编译器解出正式
-    ``FactRef`` 后，``decode_plan_response`` 在唯一落点把 ``G_`` 前缀枚举
-    转为产物取值。
-    """
+    """Stage4A 的 opaque alias 经 A+B 编译后得到的 typed goal。"""
 
     intent: Literal[GOAL_INTENTS]
     fact_refs: list[FactRef] = Field(min_length=1)
-    rationale: str | None = Field(
-        default=None, min_length=1, json_schema_extra={'prompt_private': True})
 
 
 class CtxGoal(StrictModel):
@@ -188,8 +174,7 @@ class CtxGoal(StrictModel):
 
     ``PlanGoal`` is the durable audit decision and therefore keeps typed IDs.
     ``CtxGoal`` is a deterministic projection: it carries only human-readable,
-    chapter-safe facts, so neither IDs nor the planner's free rationale can leak
-    into a writer or hook prompt.
+    chapter-safe facts, so internal IDs cannot leak into a writer or hook prompt.
     """
 
     intent: Literal[GOAL_INTENTS]
@@ -230,16 +215,6 @@ class PlanChapter(StrictModel):
     open_hook_goal: PlanGoal
     end_hook_goal: PlanGoal
     structure_decision: StructureDecision
-
-    #: **本章在全书里的分量档**（`None` = 这份计划没记档位）。
-    #:
-    #: 它是本章预算总量的**来源**：`allocate_budgets` 先按 `CHAPTER_WEIGHT_RATIO`
-    #: 排出章间轻重，再归一化到全书目标并把冲出 `PLAN_BUDGET_BAND` 的章钳回带内。
-    #: ⚠ **它与 `PlanScene.weight` 是两层，不是同一个决策的粗细两版**：
-    #: 前者答「哪一章重要」（唯一表达处是章级倍率），后者答「本章里哪一场重要」。
-    #: A 相只选档位，编译器再结合全书源字数算整数预算。
-    weight: Literal[CHAPTER_WEIGHTS] | None = None
-    semantic_contract: SemanticContract
     chapter_rewrite_brief: str = Field(min_length=1)
     scenes: list[PlanScene] = Field(min_length=1)
 
@@ -261,15 +236,6 @@ class PlanChapter(StrictModel):
         return self
 
 
-class PlanParams(StrictModel):
-    """场景编译器版本与输入规模；不再登记源拍吸收阈值。"""
-
-    compiler: Literal['atomic-scenes-v2']
-    fact_atoms: int = Field(ge=1)
-    source_stages: int = Field(ge=1)
-    structure_metric_contract: Literal[STRUCTURE_METRIC_CONTRACT]
-
-
 class PlanProvenance(FreeProvenance):
     """`plan_chapters._provenance`：A+B 的确定性编译账，不复制任何一相的 LLM usage。
 
@@ -279,8 +245,6 @@ class PlanProvenance(FreeProvenance):
     `revalidated` 继承自 `Provenance`（`_common.md` §五），不在这里重定义。
     它是 `bool`：**`False` 与「键不在」不是一回事**。
     """
-
-    params: PlanParams
 
     origin: Literal['compiled', 'human'] = 'compiled'
     blind_candidate_sha256: Sha256 | None = None
@@ -303,9 +267,6 @@ class PlanChapters(StrictModel):
     ``EvidenceBindingResponse`` 收口；本模型只承载代码编译后的业务形状与
     0 成本 provenance，不再存在单次规划或按章响应形。
     """
-
-    #: 全书重构意图，一段话。盘上长度 80~238。
-    reconstruction_strategy: str = Field(min_length=1)
 
     #: 长度 = 源章数（8~14）。
     #: ⚠ **产地的一条后置条件**：它为空时**先单独说一句**「这份计划里一个输出章都没有」，
@@ -330,7 +291,6 @@ class PlanChapters(StrictModel):
 class BlindGoalResponse(StrictModel):
     intent: Literal[tuple(RESPONSE_GOAL_INTENTS)]
     fact_aliases: list[str] = Field(min_length=1)
-    rationale: str | None = Field(default=None, min_length=1)
 
     @model_validator(mode='after')
     def _aliases_are_unique(self) -> BlindGoalResponse:
@@ -433,22 +393,18 @@ class BlindCandidate(StrictModel):
 class EvidenceSceneBinding(StrictModel):
     candidate_scene_id: str = Field(pattern=_CANDIDATE_SCENE_PATTERN)
     material_refs: list[str]
-    participant_refs: list[str]
     stage_refs: list[str] = Field(min_length=1)
 
     @model_validator(mode='after')
     def _binding_refs_are_unique(self) -> EvidenceSceneBinding:
         for label, values, pattern in (
             ('material_refs', self.material_refs, HINGE_ID_PATTERN),
-            ('participant_refs', self.participant_refs, None),
             ('stage_refs', self.stage_refs, BEAT_ID_PATTERN),
         ):
             if len(values) != len(set(values)):
                 raise ValueError(f'{self.candidate_scene_id}.{label} 不能重复')
             if pattern is not None and any(not re.match(pattern, value) for value in values):
                 raise ValueError(f'{self.candidate_scene_id}.{label} 存在非法引用')
-            if label == 'participant_refs' and any(not value for value in values):
-                raise ValueError(f'{self.candidate_scene_id}.participant_refs 存在空引用')
         return self
 
 
@@ -505,41 +461,12 @@ class PlanEdit(StrictModel):
     半坏计划还说不清坏在哪。人工编辑正式 `PlanChapter`，同样经过完整场景校验。
     """
 
-    reconstruction_strategy: str = Field(min_length=1)
     output_chapters: list[PlanChapter] = Field(min_length=1)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 二、`writer_context.json`
 # ─────────────────────────────────────────────────────────────────────────────
-
-class BookCharacter(StrictModel):
-    """`world_facts.characters` 的一个人 —— **书级名册，给确定性代码用**。
-    盘上 75 个（= stage2 registry 全量，不做章级收窄）。
-
-    ⚠ **它与 `chapters[].characters` 的分工是「同一批人物，书级这份给代码、章级那份给模型」。**
-    「避免逐章复制 20+ 人的名册」这条老理由在章级投影之后**不成立了**——
-    实测某本 ch1 投影后只剩 2 人，**比全书 12 人更小**。
-    它现在存在的理由只剩「代码要全量」。
-    """
-
-    #: **原文里有据**的叫法。`canonical` 查不到就退回出现最多的 `address.surface`；
-    #: 一个都没有则**显式终态**——不许把 registry 的记账标签当人名发。盘上长度 1~8。
-    display_name: str = Field(min_length=1)
-
-    #: 静态身份。⚠ **`fate` 一概不下发**（写手提前知道谁最后会死，第 1 章的伏笔就写过明）。
-    role: str = Field(min_length=1)
-
-    #: **只给确定性代码**（成稿人名检查的左锚 / stage3 专名过滤），
-    #: 由组 prompt 时投影掉。
-    name_distinctiveness: Literal[NAME_DISTINCTIVENESS]
-
-
-class WorldFacts(StrictModel):
-    """**只剩这一个键**——`setting` 已收编进逐章、`license` 已归位 prompt 层。"""
-
-    characters: dict[str, BookCharacter]
-
 
 class CtxStage(StrictModel):
     """一个可执行舞台；多个源区间可以合成同一新场，也可以被拆到不同新场。"""
@@ -581,9 +508,7 @@ class CtxScene(StrictModel):
     turn_fact: str = Field(min_length=1)
     entry_state: list[str]
     exit_state: list[str]
-    participants: list[str]
     stages: list[CtxStage] = Field(min_length=1)
-    source_chars: int | None
     verbatim: list[str] | None = None
     keep_value: list[str] | None = None
     must_appear: list[str] | None = None
@@ -601,6 +526,7 @@ class ChapterCharacter(StrictModel):
     消费方：stage5 写手 + stage6 文案 roster。
     """
 
+    char_id: str = Field(min_length=1, json_schema_extra={'prompt_private': True})
     display_name: str = Field(min_length=1)
     role: str = Field(min_length=1)
 
@@ -616,7 +542,6 @@ class CtxRelation(StrictModel):
 class CtxSecret(StrictModel):
     """逐章投影后的一条秘密。盘上共 114 条。"""
 
-    secret_id: str = Field(min_length=1, json_schema_extra={'prompt_private': True})
     fact: str = Field(min_length=1)
     known_by: list[str]
 
@@ -632,7 +557,6 @@ class CtxWorldRule(StrictModel):
     **无兜底，缺失即显式终态**（`or description` 那个兜底就是漏洞本身）。
     """
 
-    rule_id: str = Field(min_length=1, json_schema_extra={'prompt_private': True})
     kind: Literal[WORLD_RULE_KINDS]
     description: str = Field(min_length=1)
 
@@ -752,7 +676,7 @@ class CtxChapter(StrictModel):
     """一个输出章的完整任务书。"""
 
     #: 章号与来源章原样透传；三个目标由 PlanGoal 的 typed refs 确定性解析为
-    #: CtxGoal，不携带内部 id 或审计 rationale。
+    #: CtxGoal，不携带内部 id。
     output_ordinal: int = Field(ge=1)
     from_source_ordinals: list[int] = Field(min_length=1, max_length=1)
     chapter_goal: CtxGoal
@@ -777,15 +701,10 @@ class CtxChapter(StrictModel):
     scenes: list[CtxScene] = Field(min_length=1)
 
     #: **章级收窄**。
-    characters: dict[str, ChapterCharacter] = Field(
-        json_schema_extra={'prompt_private_keys': True})
+    characters: list[ChapterCharacter]
 
     narration: list[CtxNarration] = Field(min_length=1)
     facts: CtxFacts
-
-    #: 本章不许泄的 `secret_id`。**只给 id 不给内容**——写手看不到内容才不会写出来；
-    #: 它服务的是**回写校验**，组 prompt 时不下发。盘上 0~8。
-    must_not_reveal: list[str] = Field(json_schema_extra={'prompt_private': True})
 
     @model_validator(mode='after')
     def _ctx_slots_are_unique(self) -> CtxChapter:
@@ -810,12 +729,11 @@ class CtxProvenance(FreeProvenance):
 class WriterContext(StrictModel):
     """`stage4/writer_context.json`：确定性组装的当前写作输入。
 
-    顶层只保存下游实际消费的全书人物投影、逐章上下文和来源账。组装结果由
-    `ctx_facts_exact`、`ctx_name_attested`、`ctx_secret_gate`、`ctx_stage_explicit`
-    与 `ctx_hinge_delivered` 五条后置条件规则验证；未知字段由
+    顶层只保存逐章上下文和来源账。组装结果由 `ctx_facts_exact`、
+    `ctx_name_attested`、`ctx_stage_explicit` 与 `ctx_hinge_delivered`
+    四条后置条件规则验证；未知字段由
     `StrictModel.extra='forbid'` 拒收。
     """
 
-    world_facts: WorldFacts
     chapters: list[CtxChapter] = Field(min_length=1)
     provenance: CtxProvenance = Field(alias='_provenance')

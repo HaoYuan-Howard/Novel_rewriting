@@ -24,7 +24,7 @@ from types import SimpleNamespace
 import pytest
 
 from contracts.invariants import slot_of
-from novel.errors import GateBlocked, TerminalState
+from novel.errors import ArtifactUnreadable, TerminalState
 from novel.run import RunContext
 from tests import corpus, sandbox
 
@@ -116,26 +116,21 @@ def box6(request):
 
 def _plan_edit_of(box4) -> dict:
     raw = box4.read('stage4/plan_chapters.json')
-    return {'reconstruction_strategy': raw['reconstruction_strategy'],
-            'output_chapters': raw['output_chapters']}
+    return {'output_chapters': raw['output_chapters']}
 
 
 def test_stage4_apply_edit_lands_a_round_and_rebuilds_context(box4):
     from novel.stages.stage4 import plan
 
     edit = _plan_edit_of(box4)
-    # ⚠ `rationale` 的取值面是「非空串或 `null`」：本来就是 `null` 的那些书上 `+=` 会当场
-    #   `TypeError`——**测试自己炸了**，而它想验的那条人工修订路一次都没跑到。
-    #   同一个坑在 `tests/test_stage4.py::_synthetic_response` 与 `:429` 都写过说明，只有这里漏了。
-    goal = edit['output_chapters'][0]['chapter_goal']
-    goal['rationale'] = (goal.get('rationale') or '') + '（人工微调）'
+    edit['output_chapters'][0]['chapter_rewrite_brief'] += '（人工微调）'
     box4.write('stage4/plan_edit.json', edit)
 
     ctx = RunContext.open(str(box4.root), box4.sid, 'stage4.plan', paid=False)
     report = plan.run_apply_edit(ctx)
 
     after = box4.read('stage4/plan_chapters.json')
-    assert after['output_chapters'][0]['chapter_goal']['rationale'].endswith('（人工微调）')
+    assert after['output_chapters'][0]['chapter_rewrite_brief'].endswith('（人工微调）')
     assert after['_provenance'].get('partial_rewrite') == '--apply-edit'
     assert (box4.dir / 'stage4' / 'writer_context.json').exists(), '写作上下文没有同批重建'
     assert list((box4.dir / 'stage4' / '_rounds').glob('plan_chapters.r*.json'))
@@ -148,8 +143,7 @@ def test_stage4_plan_and_context_failure_restores_the_complete_byte_set(box4, mo
     from novel.stages.stage4 import plan
 
     edit = _plan_edit_of(box4)
-    goal = edit['output_chapters'][0]['chapter_goal']
-    goal['rationale'] = (goal.get('rationale') or '') + '（事务故障注入）'
+    edit['output_chapters'][0]['chapter_rewrite_brief'] += '（事务故障注入）'
     box4.write('stage4/plan_edit.json', edit)
     stage = box4.dir / 'stage4'
     before = {
@@ -174,20 +168,20 @@ def test_stage4_plan_and_context_failure_restores_the_complete_byte_set(box4, mo
     assert after == before
 
 
-def test_stage4_apply_edit_with_hard_goes_to_invalid_not_formal(box4):
-    """goal 里混进写法词（STYLE_WORDS）是本层 HARD——人工稿同样被拦。"""
+def test_stage4_apply_edit_rejects_retired_goal_rationale(box4):
+    """人工 v4 计划也不得夹带已经退役的展示字段。"""
     from novel.stages.stage4 import plan
 
     before = (box4.dir / 'stage4' / 'plan_chapters.json').read_bytes()
     edit = _plan_edit_of(box4)
-    edit['output_chapters'][0]['chapter_goal']['rationale'] = '把本章的张力拉到最满'
+    edit['output_chapters'][0]['chapter_goal']['rationale'] = '已退役字段'
     box4.write('stage4/plan_edit.json', edit)
 
     ctx = RunContext.open(str(box4.root), box4.sid, 'stage4.plan', paid=False)
-    with pytest.raises(GateBlocked, match='阻断级'):
+    with pytest.raises(ArtifactUnreadable, match='rationale'):
         plan.run_apply_edit(ctx)
     assert (box4.dir / 'stage4' / 'plan_chapters.json').read_bytes() == before
-    assert (box4.dir / 'stage4' / 'plan_chapters.INVALID.json').exists()
+    assert not (box4.dir / 'stage4' / 'plan_chapters.INVALID.json').exists()
 
 
 def test_stage4_apply_edit_requires_a_previous_artifact(box4):

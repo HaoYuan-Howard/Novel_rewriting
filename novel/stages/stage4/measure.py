@@ -30,8 +30,8 @@ _SCENE_ENUMS = {
 
 def identity_goal(chapter: int, intent: str = 'advance') -> dict[str, Any]:
     return {'intent': intent, 'fact_refs': [{
-        'kind': 'chapter_boundary', 'ref': f'chapter:{chapter}', 'chapter': chapter,
-    }], 'rationale': IDENTITY_GOAL}
+        'kind': 'chapter_boundary', 'ref': f'chapter:{chapter}',
+    }]}
 
 
 def semantic_contract_of(blueprint: dict[str, Any]) -> dict[str, Any]:
@@ -238,23 +238,18 @@ def structure_subject(plan: Any) -> dict[str, Any]:
             'chapter_goal': goal(chapter.get('chapter_goal')),
             'open_hook_goal': goal(chapter.get('open_hook_goal')),
             'end_hook_goal': goal(chapter.get('end_hook_goal')),
-            'weight': chapter.get('weight'),
             'chapter_rewrite_brief': chapter.get('chapter_rewrite_brief'),
             'scenes': [
                 {key: scene.get(key) for key in (
-                    'slot', 'budget_chars', 'weight', 'purpose', 'role', 'delivery',
+                    'slot', 'budget_chars', 'purpose', 'role', 'delivery',
                     'transition', 'land_fact_refs', 'context_fact_refs', 'material_refs',
                     'turn_fact_ref', 'entry_state_refs', 'exit_state_refs',
-                    'participant_refs', 'stage_refs',
+                    'stage_refs',
                 )}
                 for scene in (chapter.get('scenes') or [])
             ],
         })
-    return {
-        'contract': STRUCTURE_METRIC_CONTRACT,
-        'reconstruction_strategy': raw.get('reconstruction_strategy'),
-        'output_chapters': chapters,
-    }
+    return {'output_chapters': chapters}
 
 
 def structure_subject_sha256(plan: Any) -> str:
@@ -782,7 +777,8 @@ def allocate_budgets(plan: dict[str, Any], blueprints: dict[str, Any],
         for index, (scene, budget) in enumerate(zip(scenes, budgets), 1):
             scene['slot'] = f's{index:02d}'
             scene['budget_chars'] = budget
-        chapter['semantic_contract'] = semantic_contract_of(blueprint)
+            scene.pop('weight', None)
+        chapter.pop('weight', None)
 
 
 def adopt_plan_response(plan: dict[str, Any], blueprints: dict[str, Any],
@@ -790,17 +786,6 @@ def adopt_plan_response(plan: dict[str, Any], blueprints: dict[str, Any],
                         chapter_totals: dict[Any, int] | None = None) -> int:
     decode_plan_response(plan)
     allocate_budgets(plan, blueprints, bidx, chapter_totals=chapter_totals)
-    bp_of = {
-        int(bp.get('chapter_ordinal') or 0): bp
-        for bp in (blueprints.get('blueprints') or [])
-    }
-    for chapter in (plan.get('output_chapters') or []):
-        decision = chapter.get('structure_decision')
-        if not isinstance(decision, dict):
-            continue
-        ordinal = int(chapter.get('output_ordinal') or 0)
-        metrics = structure_metrics_of(bp_of.get(ordinal) or {}, chapter)
-        decision['computed_change_kinds'] = computed_structure_change_kinds(metrics)
     return sum(len(ch.get('scenes') or []) for ch in (plan.get('output_chapters') or []))
 
 
@@ -832,10 +817,6 @@ def identity_plan(blueprints: dict[str, Any], main_text: list[dict[str, Any]],
                                      for h in (beat.get('hinges') or []))
             if not land:
                 continue
-            participants = list(dict.fromkeys(
-                list(beat.get('present_char_ids') or [])
-                + [str(cid) for atom in beat_atoms
-                   for cid in (atom.get('participant_char_ids') or [])]))
             scenes.append({
                 'weight': 'mid', 'purpose': IDENTITY_GOAL, 'role': 'bridge',
                 'delivery': 'scene', 'transition': 'start' if not scenes else 'continue',
@@ -843,7 +824,6 @@ def identity_plan(blueprints: dict[str, Any], main_text: list[dict[str, Any]],
                 'material_refs': list(dict.fromkeys(pending_materials)),
                 'turn_fact_ref': land[-1], 'entry_state_refs': [],
                 'exit_state_refs': [],
-                'participant_refs': participants,
                 'stage_refs': list(dict.fromkeys(pending_stages)),
             })
             pending_context, pending_stages, pending_materials = [], [], []
@@ -865,11 +845,11 @@ def identity_plan(blueprints: dict[str, Any], main_text: list[dict[str, Any]],
             'end_hook_goal': identity_goal(ordinal, 'close'),
             'structure_decision': {
                 'mode': 'retain', 'reason': IDENTITY_GOAL,
-                'declared_change_kinds': [], 'computed_change_kinds': [],
+                'declared_change_kinds': [],
             },
             'weight': 'even', 'chapter_rewrite_brief': IDENTITY_GOAL, 'scenes': scenes,
         })
-    plan = {'reconstruction_strategy': IDENTITY_GOAL, 'output_chapters': output}
+    plan = {'output_chapters': output}
     adopt_plan_response(plan, blueprints, bidx)
     return plan
 

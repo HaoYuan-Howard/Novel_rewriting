@@ -230,6 +230,9 @@ stage5 的「三栏」= `ComparePanes(sticky=left)` 的右栏里装 `CompareRows
   只给不带该字段的历史 mock 兜底。
 - **Stage4 计划/上下文按场景槽对齐**：`plan_chapter.scenes[]`
   恒非空；`ctx_chapter=null` 表示上下文缺席，非空时再按 `scenes[].slot` 对齐。
+- **Stage4 view 不照抄派生字段**：计划不持久化 `semantic_contract` 或
+  `computed_change_kinds`；API 用当前 blueprint 与实际计划现场派生后再返回。Context 的
+  `characters` 是带 `char_id` 的数组，界面不显示内部 id，也不重复展示舞台已有的 participants。
 - **Stage5 `materials` 是对象或 `null`**：非空时以 `blocks[]` 为唯一下发面。前端分别处理
   对象缺席与对象内列表，不能把 `null` 洗成空列表。
 - **Stage4 结构决定与人工裁决是两层**：`stage4.index[].structure_decision` 展示计划自己的
@@ -283,7 +286,7 @@ stage5 的「三栏」= `ComparePanes(sticky=left)` 的右栏里装 `CompareRows
 | U-08 第三类：免费但写盘 | ✅ | 深色 + `写盘` 角标 + 第四种「未标注」。分类**只查表不判定**：`writes_disk` 由服务端 `novel/api/enums.py::would_write` 逐动作下发，`constants/actions.ts` 缺格即画 `unclassified`——「不知道它会不会写盘」和「它只读」是两回事 |
 | U-09 确认框显示完整命令 | ✅ | argv 来自 `POST /api/jobs/preview`；取不到就不让发起 |
 | U-10 不显示预估花费 / 次数 | ✅ | 全屏搜不到 |
-| U-11 前端不做判定 | ✅ | `badge`/`paid`/`freshness`/`sev`/`passed` 全部照画。设计稿原有的两处显示阈值已经收干净，而**两处的收法不同型**：<br>· 锚点覆盖率 —— 服务端下发 `coverage_threshold` + `coverage_state`（阈值来自 `ANCHOR_COVERAGE_WARN`，state 由 validator 反推），前端只消费 state；<br>· 场景级 `预算/源舞台` —— **服务端刻意没有场景级判定**：出档是章级判据（`sum(budget_chars)` vs `sum(span)`，`/check/stage4` 的 `budget_band`）。前端因此只显示比值读数与对比条，判定指向本屏底部的 stage4 校验。⚠ 章级的 `in_band` 服务端**也没有**（`contracts/schema/api.py::Stage4IndexRow` 明写）——那是判据结论，要并排显示就去 join 报告。<br>两条各有守卫：`tests/test_api_discipline.py` 的 `test_frontend_does_not_rejudge_anchor_coverage` 与 `test_frontend_does_not_rejudge_scene_budget_band`。<br>唯一剩下的例外是闸门 DAG——它是 brief 自己画的**流程图**，不是对服务端结论的再判定 |
+| U-11 前端不做判定 | ✅ | `badge`/`paid`/`freshness`/`sev`/`passed` 全部照画。锚点覆盖率由服务端下发 `coverage_threshold` + `coverage_state`，前端只消费 state；Stage4 场景不再展示无独立下游作用的逐场源字数比较，章级预算是否出档只读 `/check/stage4` 的 `budget_band`。派生结构向量由 API view 给出，前端不复算、不写回计划。唯一例外是闸门 DAG——它是 brief 自己画的流程图，不是对服务端结论的再判定 |
 | U-12 不从文案正则抠结构 | ✅ | `chapters` / `fix` 全部读服务端字段；证据高亮只做 `indexOf`，且一处没命中时明说 |
 | U-13 不按下标切字符串 | ✅ | `HighlightedText` 的 props 里**没有 start/end**，类型上就踩不进去 |
 | U-14 中文阅读界面 | ✅ | 中文优先字体栈；行高 2.05–2.15；不 justify；段落用间距分隔；并排两栏共用一个 `measure` |

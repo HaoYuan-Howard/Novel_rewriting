@@ -13,9 +13,9 @@ from novel.core.facts import heuristic_relation_gates
 from novel.errors import RefusedByStructure
 from novel.stages.stage4.context import (
     Assembly, _gate_setting, _name_narration, _project_facts, _resolve_scenes,
-    build_writer_context,
-    display_names, display_names_at, name_collisions, rename_all,
+    build_writer_context, rename_all,
 )
+from novel.core.naming import display_names, display_names_at, name_collisions
 from tests import corpus
 
 
@@ -65,9 +65,7 @@ def _ctx_scene(**overrides):
         'delivery': 'scene', 'transition': 'start', 'budget_chars': 120,
         'required_facts': ['三位住客拒绝接受主角'], 'context_facts': [],
         'turn_fact': '三位住客拒绝接受主角', 'entry_state': [], 'exit_state': [],
-        'participants': ['主角'],
         'stages': [{'time_layer': 'present', 'place': '公寓', 'present': ['主角']}],
-        'source_chars': 80,
     }
     return {**base, **overrides}
 
@@ -85,6 +83,7 @@ def test_ctx_scene_preserves_each_selected_stage_instead_of_flattening_them():
 def test_ctx_scene_rejects_every_retired_writing_skeleton_key():
     for key, value in (
         ('events', ['旧复合事件']), ('from_beats', ['b01_01']), ('end_beat', 'b01_01'),
+        ('source_chars', 100), ('participants', ['主角']),
     ):
         with pytest.raises(ValueError, match=key):
             CtxScene.model_validate({**_ctx_scene(), key: value})
@@ -103,7 +102,7 @@ def test_scene_resolution_uses_atom_claims_and_keeps_stage_boundaries():
             'land_fact_refs': ['f01_002'], 'context_fact_refs': ['f01_001'],
             'material_refs': [], 'turn_fact_ref': 'f01_002',
             'entry_state_refs': [], 'exit_state_refs': [],
-            'participant_refs': ['char_001'], 'stage_refs': ['b01_02', 'b01_01'],
+            'stage_refs': ['b01_02', 'b01_01'],
         }]},
         {
             'b01_01': {'source_chars': 30, 'time_layer': 'present', 'place': '门口',
@@ -121,7 +120,8 @@ def test_scene_resolution_uses_atom_claims_and_keeps_stage_boundaries():
     assert scenes[0]['required_facts'] == ['住客当面拒绝主角']
     assert scenes[0]['context_facts'] == ['主角此前收到邀请']
     assert [stage['place'] for stage in scenes[0]['stages']] == ['车站', '门口']
-    assert scenes[0]['source_chars'] == 80
+    assert 'source_chars' not in scenes[0]
+    assert 'participants' not in scenes[0]
 
 
 @needs_corpus
@@ -413,7 +413,7 @@ def test_writer_context_excludes_every_global_source_span_byte():
         coordinates.extend((start, start + len(marker)))
 
     goal = {'intent': 'advance', 'fact_refs': [{
-        'kind': 'chapter_boundary', 'ref': 'chapter:3', 'chapter': 3,
+        'kind': 'chapter_boundary', 'ref': 'chapter:3',
     }]}
     plan_raw = {'output_chapters': [{
         'output_ordinal': 3,
@@ -421,15 +421,6 @@ def test_writer_context_excludes_every_global_source_span_byte():
         'chapter_goal': goal,
         'open_hook_goal': goal,
         'end_hook_goal': goal,
-        'semantic_contract': {
-            'chapter_function': '翻账并作出选择',
-            'information_delta': [f'f03_{index:03d}' for index in range(1, 7)],
-            'character_state_delta': [], 'relationship_delta': [],
-            'reader_knowledge_delta': [],
-            'must_land_fact_refs': [f'f03_{index:03d}' for index in range(1, 7)],
-            'context_fact_refs': [], 'causal_edges': [],
-            'entry_state_refs': [], 'ending_state_refs': [], 'material_refs': [],
-        },
         'chapter_rewrite_brief': '重新设计翻账场景，但保持章尾选择不变。',
         'scenes': [{
             'slot': 's01',
@@ -437,7 +428,6 @@ def test_writer_context_excludes_every_global_source_span_byte():
             'land_fact_refs': [f'f03_{index:03d}' for index in range(1, 7)],
             'context_fact_refs': [], 'material_refs': [],
             'turn_fact_ref': 'f03_006', 'entry_state_refs': [], 'exit_state_refs': [],
-            'participant_refs': ['char_001', 'char_002'],
             'stage_refs': [f'b03_{index:02d}' for index in range(1, 7)],
             'budget_chars': 900,
             'role': 'setup', 'delivery': 'scene', 'transition': 'start',
@@ -452,15 +442,15 @@ def test_writer_context_excludes_every_global_source_span_byte():
         'SourceSpan 的 start/end 坐标进了 writer_context'
 
 
-@pytest.mark.parametrize(('ordinal', 'visible', 'hidden'), [
+@pytest.mark.parametrize(('ordinal', 'visible'), [
     # ch2 是 secret_01 的埋点章 ⇒ 事实要摆出来（但 reader_knows_by_now=False）
-    (2, ['secret_01'], ['secret_02']),
-    (4, ['secret_01'], ['secret_02']),
-    (6, ['secret_01'], ['secret_02']),
-    (7, ['secret_01', 'secret_02'], []),
+    (2, ['secret_01']),
+    (4, ['secret_01']),
+    (6, ['secret_01']),
+    (7, ['secret_01', 'secret_02']),
 ])
 def test_a_split_secret_group_is_released_per_member_not_per_group(
-    ordinal: int, visible: list[str], hidden: list[str],
+    ordinal: int, visible: list[str],
 ):
     """⭐ `R-2.18`：拆开的两条各按**自己的**首次揭示章下发。
 
@@ -468,11 +458,10 @@ def test_a_split_secret_group_is_released_per_member_not_per_group(
     而闸门按「任意一次揭示 ≤ 本章」判 ⇒ 写 ch4 的写手连 ch7 才点破的成因一起拿到。
     载体不再保留对下发无作用的分组和确认事件。
     """
-    facts, must_not_reveal, _held, _cut = _project_facts(
+    facts, _held, _cut = _project_facts(
         _split_secrets_grounding(), ordinal, False, {'char_001': '江尽夏'})
     got = [row['secret_id'] for row in facts['secrets']]
-    assert [sid for sid in got if sid in visible] == visible
-    assert sorted(must_not_reveal) == sorted(hidden)
+    assert got == visible
     # 已下发的那些必须同时说清「读者到本章知不知道」——ch2 是埋点章的那一条例外。
     for row in facts['secrets']:
         assert isinstance(row['reader_knows_by_now'], bool)
@@ -483,11 +472,11 @@ def test_a_setup_chapter_releases_the_fact_but_marks_the_reader_as_unaware():
 
     没有这一格，写 ch2 那件事时不知道它后面会被回收，ch4 的点破就没有铺垫。
     """
-    facts, must_not_reveal, _held, _cut = _project_facts(
+    facts, _held, _cut = _project_facts(
         _split_secrets_grounding(), 2, False, {'char_001': '江尽夏'})
     row = next(r for r in facts['secrets'] if r['secret_id'] == 'secret_01')
     assert row['reader_knows_by_now'] is False, '埋点章不是「读者已经知道」'
-    assert 'secret_02' in must_not_reveal, '另一条既没埋点也没揭示 ⇒ 只能留 id'
+    assert all(r['secret_id'] != 'secret_02' for r in facts['secrets'])
 
 
 def test_a_missing_first_reveal_chapter_never_opens_the_gate():
@@ -497,10 +486,9 @@ def test_a_missing_first_reveal_chapter_never_opens_the_gate():
         'secret_id': 'secret_01', 'fact': '缺少揭示章的坏形状',
         'character_known_by': ['char_001'], 'setup': {'kind': 'cold'},
     }]
-    facts, must_not_reveal, _held, _cut = _project_facts(
+    facts, _held, _cut = _project_facts(
         grounding, 9, False, {'char_001': '江尽夏'})
     assert facts['secrets'] == []
-    assert must_not_reveal == ['secret_01']
 
 
 # ── 三、名字表的三个方向 ─────────────────────────────────────────────────
@@ -595,18 +583,10 @@ def test_an_arc_subject_that_is_not_human_readable_is_a_terminal_state():
 def _elided_plan(ordinal: int = 4) -> dict:
     """一个只够走通组装的最小输出章：三个 goal 都用可零成本解析的 chapter_boundary。"""
     goal = {'intent': 'advance', 'fact_refs': [
-        {'kind': 'chapter_boundary', 'ref': f'ch{ordinal}:start', 'chapter': ordinal}]}
+        {'kind': 'chapter_boundary', 'ref': f'ch{ordinal}:start'}]}
     return {'output_chapters': [{
         'output_ordinal': ordinal, 'from_source_ordinals': [ordinal],
         'chapter_goal': goal, 'open_hook_goal': goal, 'end_hook_goal': goal,
-        'semantic_contract': {
-            'chapter_function': '测试冲突阶段投影',
-            'information_delta': [], 'character_state_delta': [],
-            'relationship_delta': [], 'reader_knowledge_delta': [],
-            'must_land_fact_refs': [],
-            'context_fact_refs': [], 'causal_edges': [], 'entry_state_refs': [],
-            'ending_state_refs': [], 'material_refs': [],
-        },
         'chapter_rewrite_brief': '只测试全书事实投影。', 'scenes': [],
     }]}
 

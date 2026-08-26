@@ -18,7 +18,7 @@ context.py —— `writer_context.json` 的**确定性组装**。
 | 闸门 | 挡什么 | 落点 |
 |---|---|---|
 | 叫法时点 | 本章原文里还叫不出名字的人 → 整个人不下发 | `display_names_at` |
-| 秘密揭示章 | 未揭示且非埋点章的 secret → 只留 id 进 `must_not_reveal` | `_project_facts` |
+| 秘密揭示章 | 未揭示且非埋点章的 secret → 整条不下发 | `_project_facts` |
 | 规则放行章 | 规则点到的人本章还没被指名 → 暂不下发 | `_plot_free_rules` |
 | 关系剧透闸门 | relation 的显式 `visibility` 决定读者可见章 | `relation_visibility_gates` |
 | 弧线终点 | `arc_tracks` / `climax` / `ending` **只在末章下发** | `_project_facts` |
@@ -37,7 +37,8 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from novel.core.naming import (
-    person_naming_surfaces, rule_names_a_person, strip_distinguisher, surface_first_chapter,
+    display_names_at, name_collisions, person_naming_surfaces,
+    project_character_names, rule_names_a_person, surface_first_chapter,
 )
 from novel.core.facts import (
     first_reveal_chapter, relation_visibility_gates, secret_contains, secret_keywords,
@@ -46,6 +47,7 @@ from novel.core.facts import (
 from novel.core.evidence import without_global_evidence
 from novel.errors import RefusedByStructure
 from novel.stages.stage4.beats import beat_index, verbatim_pieces
+from novel.stages.stage4.measure import semantic_contract_of
 
 #: `char_id` 的保留形。**按形状分流**：`char_\d+` 解析不出名字就不写，
 #: 其余（`narration` / `public` / 「在场士兵」这类无名群体）是自由文本，原样留。
@@ -82,105 +84,7 @@ class Assembly:
     setting_emptied: list[Any] = field(default_factory=list)
 
 
-# ── 一、名字：三张表，方向各不相同 ────────────────────────────────────────
-
-def display_names(characters: dict[str, dict] | None, book_text: str
-                  ) -> tuple[dict[str, str], dict[str, str], list[tuple[str, Any]]]:
-    """`char_id` → 【可以直接写进正文的称呼】。判据只有一条：**它必须是原文里真有的叫法。**
-
-    `canonical` 同时担着两个职责：registry 的唯一键、以及写手可用的名字。
-    为消重名加的区分词满足了前者、**破坏了后者**——写手拿到「在场：小宫女(打翻茶盏)」，
-    它没有别的名字可用，就会原样写进正文（实测 registry 里 4 个带括号的**全部**出现在
-    `present` 里）。
-
-    ⚠⚠ 去掉括号后缀只修好了一半：**整个 `canonical` 都是模型自造**的那些没人管——
-    实测某本 5 个角色的 canonical 在原文里出现 **0 次**（`苏父` `苏母` `赵家小厮(车夫)`
-    `赵家次子` `春江阁女子`），其中 3 个已经写进了成品。
-    **原文里从没有人管他叫「苏父」**，那是 registry 的记账标签，不是这本书的语言。
-
-    ⇒ 判据从「去掉区分词」升级成「**有据**」：canonical 在原文里查不到，
-    就退回这个角色**在原文里真正被叫过**的称呼（`address[].surface` 已经把它们抽出来了），
-    取原文出现次数最多的那个；同次数取较长的（更具体，歧义更小）。
-    一个有据的都没有 → 交给调用方入显式终态，**不许静默下发一个自造标签**。
-
-    返回 `(disp, subs, unattested)`：
-      · `subs` = `{原 canonical: 换成的称呼}`，供整棵下发树做同样的确定性替换（最后一条通道）；
-      · `unattested` = 一个有据称呼都找不到的角色。
-    """
-    disp: dict[str, str] = {}
-    subs: dict[str, str] = {}
-    unattested: list[tuple[str, Any]] = []
-    for cid, v in (characters or {}).items():
-        raw = (v or {}).get('canonical') or ''
-        canon = strip_distinguisher(raw)      # 与判据侧共用同一份剥法
-        if canon and canon in book_text:
-            disp[cid] = canon
-            continue
-        cands = {(a.get('surface') or '').strip() for a in ((v or {}).get('address') or [])}
-        best = max(((book_text.count(s), len(s), s) for s in cands if s), default=(0, 0, ''))
-        if best[0] > 0:
-            disp[cid] = best[2]
-            for form in (raw, canon):                 # 带括号的与去括号的都要能换掉
-                if form and form != best[2]:
-                    subs[form] = best[2]
-        else:
-            disp[cid] = canon or cid
-            unattested.append((cid, raw))
-    return disp, subs, unattested
-
-
-def display_names_at(characters: dict[str, dict] | None, text_upto: str) -> dict[str, str]:
-    """`display_names` 的**章级**版：判据一个字不改，只把「全书原文」换成「到本章为止的原文」。
-
-    ⚠⚠ **为什么必须有这一版**：书级那份用全书正文判有据，于是一个到第 4 章才被指名的人，
-    **在第 1 章就有了一个「有据」的名字**。实测某本 **10/12 人**的 display_name 在 ch1
-    尚未出现，而书级名册是全书下发——第 1 章的写手拿到了全书名册。
-    最刺眼的一例：某个角色原文 ch4 才指名，却出现在 ch1 的在场者里，
-    而「新婚夜的男人是谁」正是那一章的悬念。
-
-    【这不是新机制】称谓表早就在用 `from_chapter <= o` 开闸，闸门一直在，
-    只是**没接到「人物」这一族上**——在场者与书级名册两条通道无闸门直达。
-    要屏蔽一条信息，就得问它**还能从哪儿说出来**。
-
-    【为什么用 `in text_upto` 而不是 `from_chapter <= o`】两者等价，但前者是**直接测量**，
-    不依赖那个存下来的值是否正确，而且它让本函数成为书级版的**纯粹外推**（换一个语料而已）。
-
-    **返回部分字典**：本章还叫不出名字的角色**不在键里**。调用方必须把它们从下发面剔除，
-    **不是兜底成 `char_id`**（那会把内部编号写进写手 prompt），也不是造一个占位名。
-    原文在这一章里就是不给他名字，写手也不该有——「场上还有个没点名的人」这件事
-    `events` 文本自己承载着。
-    """
-    disp: dict[str, str] = {}
-    for cid, v in (characters or {}).items():
-        canon = strip_distinguisher((v or {}).get('canonical') or '')
-        if canon and canon in text_upto:
-            disp[cid] = canon
-            continue
-        cands = {(a.get('surface') or '').strip() for a in ((v or {}).get('address') or [])}
-        best = max(((text_upto.count(s), len(s), s) for s in cands if s), default=(0, 0, ''))
-        if best[0] > 0:
-            disp[cid] = best[2]
-    return disp
-
-
-def name_collisions(disp: dict[str, str], characters: dict[str, dict] | None
-                    ) -> list[tuple[str, list[str], list[Any]]]:
-    """两个 `char_id` 派生出了同一个 `display_name` —— **下发给写手的名字无声地指向了两个人**。
-
-    【为什么 registry 那条 HARD 拦不住】`canonical 全书唯一` 守的是**注册键**，
-    而写手拿到的是它的派生值（剥掉区分词，查不到时再退回 address surface）。
-    **区分词恰恰是为消歧加的，这里又把它剥回去**——实测两本各有一对双双派生成同一个名字。
-    一个字段同时服务「机器要唯一」和「人要可读」，为满足前者做的修改被后者的派生原样撤销，
-    **而两边的检查各自都是绿的**。
-
-    ⚠ **不在这里替它选一个**：原文如果本来就管两个人都叫「李嬷嬷」，改写照样叫才是保真的，
-    强行造一个区分名就是自造标签。这里只负责让它**可见**。
-    """
-    seen: dict[str, list[str]] = {}
-    for cid, n in (disp or {}).items():
-        seen.setdefault(n, []).append(cid)
-    return [(n, ids, [((characters or {}).get(i) or {}).get('canonical') for i in ids])
-            for n, ids in seen.items() if len(ids) > 1]
+# ── 一、名字：投影算法唯一落点在 `novel.core.naming` ─────────────────────
 
 
 def rename_all(obj: Any, subs: dict[str, str]) -> Any:
@@ -259,7 +163,6 @@ def _resolve_scenes(
                   if str(ref) in bidx]
         for row in stages:
             withheld += [cid for cid in row.get('present_char_ids') or [] if cid not in disp]
-        participants = [disp[cid] for cid in (scene.get('participant_refs') or []) if cid in disp]
         stage_rows = [{
             'time_layer': row.get('time_layer'), 'place': row.get('place'),
             'present': [disp[cid] for cid in (row.get('present_char_ids') or []) if cid in disp],
@@ -274,7 +177,7 @@ def _resolve_scenes(
             'turn_fact': str(atoms[str(scene.get('turn_fact_ref'))].get('claim')),
             'entry_state': claims(list(scene.get('entry_state_refs') or [])),
             'exit_state': claims(list(scene.get('exit_state_refs') or [])),
-            'participants': list(dict.fromkeys(participants)), 'stages': stage_rows,
+            'stages': stage_rows,
         }
         selected = [materials[str(ref)] for ref in (scene.get('material_refs') or [])
                     if str(ref) in materials]
@@ -283,8 +186,6 @@ def _resolve_scenes(
             if pieces:
                 w[group] = pieces
         dropped.extend(unknown)
-        sizes = [row.get('source_chars') for row in stages]
-        w['source_chars'] = sum(sizes) if sizes and all(size is not None for size in sizes) else None
         scenes.append(w)
     return scenes, dropped, withheld
 
@@ -437,7 +338,7 @@ def _known_by_at(secret: dict[str, Any], ordinal: int, disp: dict[str, str]) -> 
 
 
 def _project_facts(global_g: dict[str, Any], o: int, is_last: bool, disp: dict[str, str]
-                   ) -> tuple[dict[str, Any], list[Any], list[tuple[Any, tuple[str, ...]]],
+                   ) -> tuple[dict[str, Any], list[tuple[Any, tuple[str, ...]]],
                               list[tuple[str, str]]]:
     """把全书事实裁剪到【本章为止】——闭卷防的是**文风**泄漏，全量下发泄的是**剧情**。
 
@@ -571,7 +472,7 @@ def _project_facts(global_g: dict[str, Any], o: int, is_last: bool, disp: dict[s
     setting, set_cut = _gate_setting(canon.get('setting') or {},
                                      canon.get('secrets') or [], hidden)
     return ({'setting': setting, 'relations': rels, 'secrets': secrets, 'world_rules': rules,
-             'arc': a, 'address': address}, hidden, held, set_cut)
+             'arc': a, 'address': address}, held, set_cut)
 
 
 def _resolve_goal(goal: dict[str, Any], *, ordinal: int,
@@ -676,7 +577,7 @@ def build_writer_context(plan: dict[str, Any], global_g: dict[str, Any],
     ⚠ 写手只从计划读取【重构后】的开收目标；历史 Stage2 章摘要与 end_hook 均已裁撤，
     不再保留一份对原章起收方式的重复描述。
 
-    【剧透面已全部关闭】曾经有四条旁路把同一批事实绕过 `must_not_reveal` 泄给写手，逐条堵掉：
+    【剧透面已全部关闭】曾经有四条旁路把未揭示事实泄给写手，逐条堵掉：
     `characters[].identity` 写着结局 → 契约拆成 role/fate，只发 role ·
     `world_rules` 里混着情节与结局 → 按叫法时点扣住 ·
     `core_conflict`（「…最终走向自由」）→ 该字段随后从 stage2 契约整个删除 ·
@@ -693,7 +594,12 @@ def build_writer_context(plan: dict[str, Any], global_g: dict[str, Any],
     bp = {b.get('chapter_ordinal'): b for b in (blueprints.get('blueprints') or [])}
     text = {m.get('chapter_ordinal'): (m.get('text') or '') for m in main_text}
     chars = ((global_g.get('entities') or {}).get('characters') or {})
-    disp, subs, unattested = display_names(chars, '\n'.join(text.values()))
+    name_registry, subs, unattested = project_character_names(
+        chars, '\n'.join(text.values()))
+    disp = {
+        char_id: str(row['display_name'])
+        for char_id, row in name_registry.items()
+    }
     if unattested:
         # 【显式终态·勿静默】原文里查不到、`address` 里也没有一个有据叫法的角色。
         # 静默下发等于把 registry 的记账标签当人名发给写手，**它没有别的可用就会写进正文**。
@@ -756,7 +662,7 @@ def build_writer_context(plan: dict[str, Any], global_g: dict[str, Any],
             segs = b.get('narration') or []
             n_chars += len(text.get(s, ''))
             narration += [_name_narration(g, disp_o, i, len(segs)) for i, g in enumerate(segs)]
-        facts, hidden, held, set_cut = _project_facts(global_g, o_src, oi == len(outs) - 1, disp_o)
+        facts, held, set_cut = _project_facts(global_g, o_src, oi == len(outs) - 1, disp_o)
         oo = o.get('output_ordinal')
         asm.setting_cut += [(oo,) + c for c in set_cut]
         if not any((facts.get('setting') or {}).values()) and (global_g.get('canon') or {}).get('setting'):
@@ -771,7 +677,7 @@ def build_writer_context(plan: dict[str, Any], global_g: dict[str, Any],
         #   新增了撞名**，静默发生就等于我们自己制造了歧义还不告诉人。
         asm.chapter_collisions += [(oo, n, ids) for n, ids, _c in name_collisions(disp_o, chars)]
         asm.dropped_hinges += [(oo,) + u for u in unk_kinds]
-        contract = o.get('semantic_contract') or {}
+        contract = semantic_contract_of(bp.get(oo) or {})
 
         def contract_claims(refs: list[Any]) -> list[str]:
             return [str(atom_index[str(ref)].get('claim')) for ref in refs
@@ -802,43 +708,44 @@ def build_writer_context(plan: dict[str, Any], global_g: dict[str, Any],
             'ending_state': contract_claims(
                 list(contract.get('ending_state_refs') or [])),
         }
+        chapter_goal = _resolve_goal(
+            o.get('chapter_goal') or {}, ordinal=oo, atoms=atom_index, disp=disp_o,
+            facts=facts, global_g=global_g)
+        open_hook_goal = _resolve_goal(
+            o.get('open_hook_goal') or {}, ordinal=oo, atoms=atom_index, disp=disp_o,
+            facts=facts, global_g=global_g)
+        end_hook_goal = _resolve_goal(
+            o.get('end_hook_goal') or {}, ordinal=oo, atoms=atom_index, disp=disp_o,
+            facts=facts, global_g=global_g)
+
+        # rule_id / secret_id 只用于上面的确定性 join；写手和持久化上下文都不消费。
+        for row in facts.get('world_rules') or []:
+            row.pop('rule_id', None)
+        for row in facts.get('secrets') or []:
+            row.pop('secret_id', None)
+
         chapters.append({
             'output_ordinal': oo,
             'from_source_ordinals': srcs,
-            'chapter_goal': _resolve_goal(
-                o.get('chapter_goal') or {}, ordinal=oo, atoms=atom_index, disp=disp_o,
-                facts=facts, global_g=global_g),
-            'open_hook_goal': _resolve_goal(
-                o.get('open_hook_goal') or {}, ordinal=oo, atoms=atom_index, disp=disp_o,
-                facts=facts, global_g=global_g),
-            'end_hook_goal': _resolve_goal(
-                o.get('end_hook_goal') or {}, ordinal=oo, atoms=atom_index, disp=disp_o,
-                facts=facts, global_g=global_g),
+            'chapter_goal': chapter_goal,
+            'open_hook_goal': open_hook_goal,
+            'end_hook_goal': end_hook_goal,
             'semantic_contract': semantic_contract,
             'chapter_rewrite_brief': o.get('chapter_rewrite_brief'),
             'budget_chars': sum(scene['budget_chars'] for scene in scenes),
             'scenes': scenes,
             'narration': narration,
             'source_chars': n_chars,
-            # 【本章可用的人物名册】书级那份留在 `world_facts.characters` 给确定性代码用；
-            # 写手拿的是这一份。「避免逐章复制 20+ 人的名册」这条老理由在投影之后不成立了：
-            # 实测某本 ch1 投影后**只剩 2 人**，比全书 12 人**更小**。
-            'characters': {cid: {'display_name': nm, 'role': (chars.get(cid) or {}).get('role')}
-                           for cid, nm in sorted(disp_o.items())},
+            'characters': [
+                {'char_id': cid, 'display_name': nm,
+                 'role': (chars.get(cid) or {}).get('role')}
+                for cid, nm in sorted(disp_o.items())
+            ],
             'facts': facts,
-            # **只给 id 不给内容**：写手看不到内容才不会写出来。这一条是给【回写校验】用的，
-            # 组装写作 prompt 时不下发。
-            'must_not_reveal': hidden,
         })
 
     # 【自造标签的收口只此一处】对整棵下发树做一遍确定性替换——**按信息收口，不按字段收口**，
     # 否则每加一个含散文的字段就多一条漏网通道。放在最后：此前所有分支
     # （events / role / chapter_goal / world_rules / secrets…）都已汇入这棵树。
-    asm.ctx = rename_all({
-        'world_facts': {'characters': {cid: {'display_name': disp.get(cid, cid),
-                                             'role': v.get('role'),
-                                             'name_distinctiveness': v.get('name_distinctiveness')}
-                                       for cid, v in chars.items()}},
-        'chapters': chapters,
-    }, subs)
+    asm.ctx = rename_all({'chapters': chapters}, subs)
     return asm

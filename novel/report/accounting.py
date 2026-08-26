@@ -65,12 +65,10 @@ ACCOUNTING: dict[str, tuple[AccountingSpec, ...]] = {
     ),
     # Stage3 v2 无 LLM attempt、repair、INVALID 提升或人工编辑账；空元组是显式声明。
     'stage3': (),
-    # `params` 常驻报告场景编译器版本与输入原子规模，避免新旧 producer 产物被混读。
     # ⚠ **刻意不声明 `partial_rewrite`**：本层没有一条 0 成本路会把计划改成混版的
     #    （`--identity` 写的是另一份文件、`--apply-edit` 落的是新一轮）。
     #    声明一个结构上永远记不上的键，只会让报告上恒挂一行「未记录」。
     'stage4': (
-        AccountingSpec('params', '这份计划由哪版场景编译器、多少事实原子编译？'),
         AccountingSpec('revalidated', '这份稿是跑出来的，还是被重判提升上来的？'),
         AccountingSpec('gates_skipped', '哪几条阻断级判据当时【没跑成】？'),
     ),

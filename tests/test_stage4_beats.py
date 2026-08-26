@@ -3,16 +3,18 @@
 """Stage4 原子事实场景编译器的确定性单元测试。"""
 from __future__ import annotations
 
+import copy
+
 import pytest
 from pydantic import ValidationError
 
-from contracts.schema.stage4 import BlindSceneResponse
+from contracts.schema.stage4 import BlindSceneResponse, PlanChapters
 from novel.errors import RefusedByStructure
 from novel.stages.stage4 import checks
 from novel.stages.stage4.beats import beat_index, verbatim_pieces
 from novel.stages.stage4.measure import (
-    adopt_plan_response, identity_plan, semantic_contract_of,
-    source_chars_table,
+    adopt_plan_response, computed_structure_change_kinds, identity_plan,
+    semantic_contract_of, source_chars_table, structure_metrics_of,
 )
 
 
@@ -64,8 +66,7 @@ def _main() -> list[dict]:
 
 def _goal(intent: str, ref: str) -> dict:
     return {'intent': intent,
-            'fact_refs': [{'kind': 'fact_atom', 'ref': ref, 'chapter': 1}],
-            'rationale': '测试场景目标'}
+            'fact_refs': [{'kind': 'fact_atom', 'ref': ref}]}
 
 
 def _response() -> dict:
@@ -89,13 +90,13 @@ def _response() -> dict:
                  'land_fact_refs': ['f01_002'], 'context_fact_refs': [],
                  'material_refs': ['h01_001'], 'turn_fact_ref': 'f01_002',
                  'entry_state_refs': [], 'exit_state_refs': ['f01_002'],
-                 'participant_refs': ['char_001', 'char_002'], 'stage_refs': ['b01_02']},
+                 'stage_refs': ['b01_02']},
                 {'weight': 'W_PEAK', 'purpose': '补出邀请并完成留下的选择',
                  'role': 'R_PAYOFF', 'delivery': 'D_SCENE', 'transition': 'X_EARLIER',
                  'land_fact_refs': ['f01_001', 'f01_003'], 'context_fact_refs': [],
                  'material_refs': [], 'turn_fact_ref': 'f01_003',
                  'entry_state_refs': ['f01_002'], 'exit_state_refs': ['f01_003'],
-                 'participant_refs': ['char_001'], 'stage_refs': ['b01_01', 'b01_03']},
+                 'stage_refs': ['b01_01', 'b01_03']},
             ],
         }],
     }
@@ -145,18 +146,18 @@ def test_plan_response_rejects_every_retired_skeleton_key():
             BlindSceneResponse.model_validate(raw)
 
 
-def test_scene_compiler_decodes_enums_allocates_slots_and_injects_stage2_contract():
+def test_scene_compiler_decodes_enums_allocates_slots_and_strips_budget_scaffolding():
     chapter = _compiled()['output_chapters'][0]
-    assert chapter['weight'] == 'even'
+    assert 'weight' not in chapter
     assert [scene['slot'] for scene in chapter['scenes']] == ['s01', 's02']
+    assert all('weight' not in scene for scene in chapter['scenes'])
     assert [scene['transition'] for scene in chapter['scenes']] == ['start', 'earlier']
     assert sum(scene['budget_chars'] for scene in chapter['scenes']) == sum(
         len(row) for row in ('甲收到入住邀请。', '乙在门口拒绝甲。', '甲决定留下。'))
-    assert chapter['semantic_contract'] == semantic_contract_of(_blueprints()['blueprints'][0])
-    assert chapter['semantic_contract']['information_delta'] == ['f01_001']
-    assert chapter['semantic_contract']['character_state_delta'] == ['f01_003']
-    assert chapter['semantic_contract']['relationship_delta'] == []
-    assert chapter['semantic_contract']['reader_knowledge_delta'] == []
+    assert 'semantic_contract' not in chapter
+    derived = semantic_contract_of(_blueprints()['blueprints'][0])
+    assert derived['information_delta'] == ['f01_001']
+    assert derived['character_state_delta'] == ['f01_003']
 
 
 def test_compiled_scene_order_is_the_new_order_not_the_source_atom_order():
@@ -192,13 +193,49 @@ def test_identity_plan_is_an_explicit_source_order_baseline_but_uses_scenes():
                    for key in ('events', 'from_beats', 'end_beat'))
 
 
-def test_scene_compiler_injects_computed_structure_dimensions_after_a_and_b():
-    decision = _compiled()['output_chapters'][0]['structure_decision']
+def test_structure_dimensions_are_computed_from_the_current_plan_not_persisted():
+    chapter = _compiled()['output_chapters'][0]
+    before = copy.deepcopy(chapter)
+    decision = chapter['structure_decision']
     assert decision['declared_change_kinds'] == ['entry_anchor', 'fact_grouping']
-    assert decision['computed_change_kinds'] == [
+    assert 'computed_change_kinds' not in decision
+    metrics = structure_metrics_of(_blueprints()['blueprints'][0], chapter)
+    assert computed_structure_change_kinds(metrics) == [
         'entry_anchor', 'fact_grouping', 'disclosure_order',
         'noncontiguous_regroup',
     ]
+    assert chapter == before, '现场结构读数不得反向修改计划业务字节'
+
+
+@pytest.mark.parametrize('retired,mutate', [
+    ('reconstruction_strategy', lambda p: p.__setitem__(
+        'reconstruction_strategy', '旧策略副本')),
+    ('chapter.weight', lambda p: p['output_chapters'][0].__setitem__('weight', 'even')),
+    ('semantic_contract', lambda p: p['output_chapters'][0].__setitem__(
+        'semantic_contract', {})),
+    ('computed_change_kinds', lambda p: p['output_chapters'][0][
+        'structure_decision'].__setitem__('computed_change_kinds', [])),
+    ('scene.weight', lambda p: p['output_chapters'][0]['scenes'][0].__setitem__(
+        'weight', 'mid')),
+    ('participant_refs', lambda p: p['output_chapters'][0]['scenes'][0].__setitem__(
+        'participant_refs', [])),
+    ('FactRef.chapter', lambda p: p['output_chapters'][0]['chapter_goal'][
+        'fact_refs'][0].__setitem__('chapter', 1)),
+    ('goal.rationale', lambda p: p['output_chapters'][0]['chapter_goal'].__setitem__(
+        'rationale', '旧展示理由')),
+    ('provenance.params', lambda p: p['_provenance'].__setitem__('params', {})),
+])
+def test_plan_v4_rejects_every_retired_persistent_field(retired, mutate):
+    payload = copy.deepcopy(_compiled())
+    payload.pop('reconstruction_strategy')
+    payload['_provenance'] = {
+        'code': 'test', 'root_clean_sha1': '1' * 40, 'inputs': {},
+        'origin': 'human', 'blind_candidate_sha256': None,
+        'evidence_binding_sha256': None,
+    }
+    mutate(payload)
+    with pytest.raises(ValidationError, match=retired.rsplit('.', 1)[-1]):
+        PlanChapters.model_validate(payload)
 
 
 def test_source_size_table_reports_atoms_not_source_event_units():
@@ -210,17 +247,11 @@ def test_source_size_table_reports_atoms_not_source_event_units():
 def test_clean_compiled_plan_closes_all_new_scene_hard_rules():
     findings = _findings(_compiled())
     for rule in (
-        'one_to_one', 'semantic_contract', 'fact_ref', 'fact_coverage',
+        'one_to_one', 'fact_ref', 'fact_coverage',
         'causal_closure', 'state_closure', 'material_coverage', 'scene_transition',
         'goal_landing', 'budget_int', 'budget_band', 'plan_book_band', 'style_words',
     ):
         assert findings[rule] == [], f'{rule}: {findings[rule]}'
-
-
-def test_semantic_contract_drift_is_a_hard_finding():
-    plan = _compiled()
-    plan['output_chapters'][0]['semantic_contract']['chapter_function'] = '改写后的新剧情功能'
-    assert _findings(plan)['semantic_contract']
 
 
 def test_fact_coverage_and_state_closure_fail_independently():

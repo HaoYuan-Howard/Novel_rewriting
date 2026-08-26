@@ -16,15 +16,11 @@ export interface PlanSceneView {
   delivery: string
   transition: string
   budget: number
-  source: number | null
-  ratio: string
-  pct: number
   requiredFacts: string[]
   contextFacts: string[]
   turnFact: string
   entryState: string[]
   exitState: string[]
-  participants: string[]
   verbatimChars: number
   verbatim: string[]
   holds: { k: string; v: string }[]
@@ -53,8 +49,6 @@ function sceneView(plan: PlanScene, ctx: CtxScene | undefined): PlanSceneView {
   values(ctx?.keep_value).forEach((v) => holds.push({ k: '硬数字', v }))
   values(ctx?.must_appear).forEach((v) => holds.push({ k: '必须出现', v }))
   values(ctx?.must_hold).forEach((v) => holds.push({ k: '必须保持', v }))
-  const source = ctx?.source_chars ?? null
-  const raw = source ? plan.budget_chars / source : null
   const verbatim = values(ctx?.verbatim)
   return {
     i: plan.i,
@@ -64,15 +58,11 @@ function sceneView(plan: PlanScene, ctx: CtxScene | undefined): PlanSceneView {
     delivery: plan.delivery,
     transition: plan.transition,
     budget: plan.budget_chars,
-    source,
-    ratio: raw === null ? '—' : Math.round(raw * 100) / 100 + '×',
-    pct: raw === null ? 0 : Math.min(100, Math.round(raw * 100)),
     requiredFacts: ctx?.required_facts ?? plan.land_fact_refs,
     contextFacts: ctx?.context_facts ?? plan.context_fact_refs,
     turnFact: ctx?.turn_fact ?? plan.turn_fact_ref,
     entryState: ctx?.entry_state ?? plan.entry_state_refs,
     exitState: ctx?.exit_state ?? plan.exit_state_refs,
-    participants: ctx?.participants ?? [],
     verbatimChars: verbatim.reduce((n, v) => n + [...v].length, 0),
     verbatim,
     holds,
@@ -105,18 +95,18 @@ export function useStage4Screen() {
     sceneView(scene, ctxBySlot.get(scene.slot)),
   )
 
-  const charKeys = Object.keys(ctx?.characters ?? {})
+  const characters = ctx?.characters ?? []
   const factCards: FactCard[] = ctx
     ? [
         {
           title: '人物名册',
-          count: charKeys.length + ' 人',
-          lines: charKeys.slice(0, 5).map((key) => {
-            const role = ctx.characters[key].role
-            return ctx.characters[key].display_name + ' — ' +
+          count: characters.length + ' 人',
+          lines: characters.slice(0, 5).map((character) => {
+            const role = character.role
+            return character.display_name + ' — ' +
               (role.length > 22 ? role.slice(0, 22) + '…' : role)
           }),
-          more: '其余 ' + Math.max(0, charKeys.length - 5) + ' 人同样下发',
+          more: '其余 ' + Math.max(0, characters.length - 5) + ' 人同样下发',
         },
         {
           title: '关系',
@@ -137,19 +127,16 @@ export function useStage4Screen() {
         },
         {
           title: '秘密',
-          count: (facts?.secrets.length ?? 0) + ' 条下发 / ' +
-            ctx.must_not_reveal.length + ' 条只留 id',
+          count: (facts?.secrets.length ?? 0) + ' 条下发',
           lines: (facts?.secrets ?? []).map((secret) =>
-            secret.secret_id + '：' +
             (secret.fact.length > 30 ? secret.fact.slice(0, 30) + '…' : secret.fact) +
             '（读者此时' + (secret.reader_knows_by_now ? '已知' : '未知') + '）'),
-          more: 'must_not_reveal 只有裸 id：' + ctx.must_not_reveal.join(' '),
+          more: '',
         },
       ]
     : []
 
   const budgetTotal = (d?.index ?? []).reduce((n, row) => n + (row.budget_chars ?? 0), 0)
-  const spanTotal = (d?.index ?? []).reduce((n, row) => n + (row.span_chars ?? 0), 0)
 
   return {
     query: q,
@@ -171,17 +158,14 @@ export function useStage4Screen() {
       ? '源章 ' + plan.from_source_ordinals.join(',') + ' · ' + plan.scenes.length + ' 场'
       : '',
     bookMeta: d
-      ? d.chapters.length + ' 章 · 原文跨度 ' + (spanTotal || '—') +
-        ' 字 → 预算 ' + (budgetTotal || '—') + ' 字'
+      ? d.chapters.length + ' 章 · 预算 ' + (budgetTotal || '—') + ' 字'
       : '',
-    strategy: d?.reconstruction_strategy ?? '',
     structureRows: d?.index ?? [],
     index: (d?.index ?? []).map((row) => ({
       no: chNo(row.output_ordinal),
       ordinal: row.output_ordinal,
       budget: row.budget_chars === null ? '—' : row.budget_chars + '字',
       scenes: row.scenes,
-      hidden: row.hidden,
       active: row.output_ordinal === ordinal,
     })),
     goal: goalLabel(plan?.chapter_goal),
@@ -198,9 +182,9 @@ export function useStage4Screen() {
       : [],
     scenes,
     factsMeta: ctx
-      ? '人物 ' + charKeys.length + ' · 关系 ' + (facts?.relations.length ?? 0) +
+      ? '人物 ' + characters.length + ' · 关系 ' + (facts?.relations.length ?? 0) +
         ' · 世界规则 ' + (facts?.world_rules.length ?? 0) + ' · 称呼 ' +
-        (facts?.address.length ?? 0) + ' · must_not_reveal ' + ctx.must_not_reveal.length
+        (facts?.address.length ?? 0)
       : '',
     factCards,
   }

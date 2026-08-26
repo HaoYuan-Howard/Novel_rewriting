@@ -5,7 +5,7 @@ test_views_stage4.py —— S-07「计划 ↔ 写作上下文」那一屏的组�
 
 本文件盯三件事：①真计划与恒等基线**两态都有内容**（`04_delivery.md:133`）；
 ②`writer_target` 与写手**同一把尺子**（`prompts.target_band`）；
-③恒等基线**现算不落盘**（`run_identity` 那条 CLI 路会写盘，view 不许）。
+③恒等基线**现算不落盘**（view 与 `run_identity` 都只做内存诊断）。
 
 ⚠ 沙箱一律 `tempfile.mkdtemp()`；**原语料一个字节都不许动**。
 """
@@ -16,7 +16,7 @@ import os
 import pytest
 
 from novel.errors import UpstreamMissing
-from novel.stages.stage4.measure import IDENTITY_GOAL, structure_subject_sha256
+from novel.stages.stage4.measure import structure_subject_sha256
 from novel.stages.stage5.prompts import target_band
 from novel.views.stage4 import stage4_view
 from tests import corpus, sandbox
@@ -93,9 +93,7 @@ def test_without_a_plan_the_screen_shows_the_identity_baseline(box):
     v = stage4_view(box.root, box.sid, 1)
     assert v.identity_plan
     assert v.structure_subject_sha256 is None, '现算恒等基线不是可审批主体'
-    assert v.reconstruction_strategy == IDENTITY_GOAL
-    assert v.plan_chapter.chapter_goal.rationale == IDENTITY_GOAL, \
-        '恒等的 goal 是显式标记，不是真决策'
+    assert v.plan_chapter.structure_decision.mode == 'retain'
     assert v.plan_chapter.scenes and v.ctx_chapter is not None
     assert v.plan_provenance is None and v.ctx_provenance is None
     assert _tree(box.root) == before, '恒等基线把东西写到盘上了（那是 --identity 的事）'
@@ -108,8 +106,7 @@ def test_a_missing_ctx_does_not_take_the_plan_down(box):
     assert not v.identity_plan and v.plan_chapter.scenes
     assert v.ctx_chapter is None and v.writer_target is None
     assert v.ctx_state.exists is False
-    row = v.index[0]
-    assert row.span_chars is None and row.hidden is None, 'ctx 不在还给出了 ctx 侧的数'
+    assert v.index[0].scenes >= 1
 
 
 def test_an_ordinal_outside_the_plan_is_a_terminal_state(box):
@@ -126,22 +123,15 @@ def test_formal_review_surface_hashes_the_single_plan_snapshot(monkeypatch):
     """review rows 与 subject 只读一次 plan；不给 TOCTOU 留二次读缝。"""
     import novel.views.stage4 as view_module
     from pathlib import Path
-    from contracts.invariants import STRUCTURE_METRIC_CONTRACT
     from contracts.schema.orchestration import ArtifactState
     from contracts.schema.stage4 import PlanChapters
-    from tests.hard_cases import _clean_plan4
+    from tests.hard_cases import _BPS4, _clean_plan4
 
     raw = _clean_plan4()
     raw['_provenance'] = {
         'code': 'test',
         'root_clean_sha1': 'c' * 40,
         'inputs': {},
-        'params': {
-            'compiler': 'atomic-scenes-v2',
-            'fact_atoms': 3,
-            'source_stages': 3,
-            'structure_metric_contract': STRUCTURE_METRIC_CONTRACT,
-        },
         'origin': 'compiled',
         'blind_candidate_sha256': 'a' * 64,
         'evidence_binding_sha256': 'b' * 64,
@@ -158,6 +148,13 @@ def test_formal_review_surface_hashes_the_single_plan_snapshot(monkeypatch):
             if rel == view_module.PLAN_REL:
                 plan_reads += 1
                 return snapshot, b'plan-snapshot'
+            raise UpstreamMissing(rel)
+
+        def read(self, _model, rel):
+            if rel == view_module.BLUEPRINTS:
+                return type('Dumped', (), {
+                    'model_dump': lambda self, **_kwargs: _BPS4,
+                })()
             raise UpstreamMissing(rel)
 
     def state(_store, rel):
@@ -182,7 +179,9 @@ def test_formal_review_surface_hashes_the_single_plan_snapshot(monkeypatch):
     got = stage4_view('unused', '123', 1)
     assert plan_reads == 1, 'subject 不许为了算 hash 重读 plan'
     assert got.structure_subject_sha256 == structure_subject_sha256(snapshot)
-    assert got.plan_chapter.structure_decision == snapshot.output_chapters[0].structure_decision
+    assert got.plan_chapter.structure_decision.mode == \
+        snapshot.output_chapters[0].structure_decision.mode
+    assert got.plan_chapter.structure_decision.computed_change_kinds == []
 
 
 def test_the_view_writes_nothing(box):

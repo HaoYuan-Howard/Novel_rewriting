@@ -95,7 +95,6 @@ def _span4(fragment: str) -> dict:
 _MAIN4 = [{'chapter_ordinal': 1, 'text': _TEXT4}]
 _BPS4 = {'blueprints': [{
     'chapter_ordinal': 1,
-    'summary': '甲收到邀请、遭拒后决定留下。',
     'chapter_function': '建立入住冲突并完成主角入局',
     'fact_atoms': [
         {'fact_id': 'f01_001', 'claim': '甲收到入住邀请', 'kind': 'information',
@@ -156,14 +155,14 @@ def _ctx4(plan: dict) -> dict:
             'context_facts': [atoms[ref]
                               for ref in planned.get('context_fact_refs') or []],
             'stages': [{'time_layer': bidx[ref].get('time_layer'),
-                        'place': bidx[ref].get('place')}
+                        'place': bidx[ref].get('place'),
+                        'present': []}
                        for ref in planned.get('stage_refs') or []],
             **materials,
         })
     return {'chapters': [{
         'output_ordinal': 1, 'from_source_ordinals': [1], 'scenes': scenes,
-        'characters': {}, 'narration': [], 'facts': {'secrets': []},
-        'must_not_reveal': [],
+        'characters': [], 'narration': [], 'facts': {'secrets': []},
     }]}
 
 
@@ -212,14 +211,13 @@ def _bad_plan4(rule: str) -> list:
         chapter['output_ordinal'] = 2
     elif rule == 'empty_chapter':
         chapter['scenes'] = []
-    elif rule == 'semantic_contract':
-        chapter['semantic_contract']['chapter_function'] = '改成另一段剧情'
     elif rule == 'fact_ref':
         scenes[0]['context_fact_refs'] = ['f01_999']
     elif rule == 'fact_coverage':
         scenes[0]['land_fact_refs'] = []
     elif rule == 'causal_closure':
-        chapter['semantic_contract']['causal_edges'] = []
+        scenes[-1]['land_fact_refs'] = [
+            ref for ref in scenes[-1]['land_fact_refs'] if ref != 'f01_003']
     elif rule == 'state_closure':
         scenes[0]['entry_state_refs'] = []
         scenes[-1]['exit_state_refs'] = []
@@ -231,8 +229,7 @@ def _bad_plan4(rule: str) -> list:
     elif rule == 'goal_landing':
         chapter['open_hook_goal'] = {
             'intent': 'open',
-            'fact_refs': [{'kind': 'fact_atom', 'ref': 'f01_002', 'chapter': 1}],
-            'rationale': '故意把开篇目标指到第二场',
+            'fact_refs': [{'kind': 'fact_atom', 'ref': 'f01_002'}],
         }
     elif rule == 'budget_int':
         scenes[0]['budget_chars'] = 0
@@ -242,10 +239,8 @@ def _bad_plan4(rule: str) -> list:
     elif rule == 'plan_book_band':
         base = sum(scene['budget_chars'] for scene in scenes)
         scenes[-1]['budget_chars'] += round(base * 1.15) - base
-    elif rule == 'structure_vector':
-        chapter['structure_decision']['computed_change_kinds'] = ['entry_anchor']
     elif rule == 'style_words':
-        plan['reconstruction_strategy'] = '用张力强化整章'
+        chapter['chapter_rewrite_brief'] = '用张力强化整章'
     else:
         raise AssertionError(rule)
     return _find4(plan, ctx=clean_ctx)
@@ -258,10 +253,8 @@ def _bad_context4(rule: str) -> list:
     if rule == 'ctx_facts_exact':
         chapter['scenes'][0]['required_facts'] = ['被中间层改写过的事实']
     elif rule == 'ctx_name_attested':
-        chapter['characters'] = {'char_999': {'display_name': 'char_999'}}
-    elif rule == 'ctx_secret_gate':
-        chapter['must_not_reveal'] = ['secret_01']
-        chapter['facts']['secrets'] = [{'secret_id': 'secret_01'}]
+        chapter['characters'] = [
+            {'char_id': 'char_999', 'display_name': 'char_999', 'role': '未知'}]
     elif rule == 'ctx_stage_explicit':
         chapter['scenes'][0]['stages'][0]['place'] = '错误地点'
     elif rule == 'ctx_hinge_delivered':
@@ -314,17 +307,17 @@ CASES: dict[str, Case] = {
     'rn_txt_stale': Case('stage7', _rn_txt_stale),
 
     **{rule: Case('stage4', lambda rule=rule: _bad_plan4(rule)) for rule in (
-        'one_to_one', 'ordinal_seq', 'empty_chapter', 'semantic_contract',
+        'one_to_one', 'ordinal_seq', 'empty_chapter',
         'fact_ref', 'fact_coverage', 'causal_closure', 'state_closure',
         'material_coverage', 'scene_transition', 'goal_landing', 'budget_int',
-        'budget_band', 'plan_book_band', 'structure_vector', 'style_words',
+        'budget_band', 'plan_book_band', 'style_words',
     )},
     'context_link': Case('stage4', lambda: _find4(
         _clean_plan4(), ctx_link=('stale', '上下文照的是另一版计划'))),
     'phase_artifact_link': Case('stage4', lambda: _find4(
         _clean_plan4(), phase_links=_phase_links4(mismatch=True))),
     **{rule: Case('stage4', lambda rule=rule: _bad_context4(rule)) for rule in (
-        'ctx_facts_exact', 'ctx_name_attested', 'ctx_secret_gate',
-        'ctx_stage_explicit', 'ctx_hinge_delivered',
+        'ctx_facts_exact', 'ctx_name_attested', 'ctx_stage_explicit',
+        'ctx_hinge_delivered',
     )},
 }

@@ -138,7 +138,7 @@ def test_unmeasured_nodes_keep_the_default_high_effort():
 def test_the_three_pinned_models_are_exactly_the_decided_exceptions():
     """⚠ `NodeSpec.model` 是「除例外外全链 flash」这个裁决的**形状**落点。
 
-    Stage4 v3 把原来的全书规划拆成两次独立、可恢复调用；两相都继承原节点的
+    Stage4 两相把原来的全书规划拆成两次独立、可恢复调用；两相都继承原节点的
     pro 裁决，另一个例外仍是 Stage6 判官：
       · `stage6.semantic`（2026-08-19/20）——flash 判官给不出有区分度的证据。
       · `stage4.design` / `stage4.plan`——分别承担盲结构设计与证据绑定，均是全书级

@@ -35,7 +35,7 @@ weight/role/delivery/transition 使用响应契约里的前缀枚举，首场 tr
 
 _BLIND_GOAL_HINT = {
     'intent': '|'.join(RESPONSE_GOAL_INTENTS),
-    'fact_aliases': ['a_0123456789abcdef'], 'rationale': '结构理由|null',
+    'fact_aliases': ['a_0123456789abcdef'],
 }
 _BLIND_SCENE_HINT = {
     'weight': '|'.join(RESPONSE_UNIT_WEIGHTS),
@@ -66,12 +66,13 @@ BLIND_DESIGN_HINT: dict[str, Any] = {
 }
 
 EVIDENCE_BIND_SYS = """\
-你是 Stage4B 证据绑定器。盲设计候选已经冻结；你现在看到原文证据、源舞台、人物与必须材料，
-只能为每个 candidate_scene_id 绑定 stage_refs、participant_refs、material_refs。不得改变候选的章序、
+你是 Stage4B 证据绑定器。盲设计候选已经冻结；你现在看到原文证据、源舞台与必须材料，
+只能为每个 candidate_scene_id 绑定 stage_refs、material_refs。人物到场由所绑舞台的 present 唯一确定。
+不得改变候选的章序、
 场景顺序、事实分组、goal、retain/reconstruct、变化声明、purpose、role、delivery、transition 或 weight。
 
 candidate_sha256 必须逐字回显。若全部候选场都能在本章证据内执行，返回 status=bound，并且每个候选场
-恰好绑定一次、每条必须材料恰好落一次、stage/人物引用都来自本章关闭式目录。若任何一场无法在不改
+恰好绑定一次、每条必须材料恰好落一次、stage 引用来自本章关闭式目录。若任何一场无法在不改
 候选结构的前提下成立，返回 status=infeasible，给出关闭式 reason_kind、具体理由和非空 evidence_refs；
 不得返回一份悄悄重规划或只绑定一半的候选。只输出 JSON。"""
 
@@ -83,7 +84,6 @@ EVIDENCE_BIND_HINT: dict[str, Any] = {
         'scenes': [{
             'candidate_scene_id': 'c01s01',
             'material_refs': ['h01_001'],
-            'participant_refs': ['char_001'],
             'stage_refs': ['b01_01'],
         }],
     }],

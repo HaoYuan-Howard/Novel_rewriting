@@ -13,11 +13,11 @@
  },
  "rules": [
   {
-   "rule": "adjacency_retention",
+   "rule": "anchor_migration",
    "sev": "metric",
    "status": "skipped",
-   "item": "原相邻事实仍相邻的比例",
-   "requirement": "R-5.15",
+   "item": "开场与结尾锚点及首尾场 payload 迁移",
+   "requirement": "R-5.18",
    "check_kind": "mechanical",
    "remediation": "none",
    "fix": null,
@@ -61,7 +61,7 @@
    "rule": "causal_closure",
    "sev": "hard",
    "status": "skipped",
-   "item": "Stage2 因果边没有被删除、增加或改写",
+   "item": "Stage2 因果边两端事实都落入实际场景",
    "requirement": "R-5.6",
    "check_kind": "mechanical",
    "remediation": "human",
@@ -148,21 +148,6 @@
    "note": "人工可改 .INVALID 后用 --revalidate --actor <id> --reason <why> 0 LLM 重判；writer context 用 stage4.context 0 成本重建。"
   },
   {
-   "rule": "ctx_secret_gate",
-   "sev": "hard",
-   "status": "skipped",
-   "item": "下发秘密没有越过读者知情闸",
-   "requirement": "R-6.3",
-   "check_kind": "mechanical",
-   "remediation": "human",
-   "fix": null,
-   "findings": [],
-   "why": "实现未被调用（这一次没有任何代码执行过它）",
-   "scanned": null,
-   "baseline": null,
-   "note": "人工可改 .INVALID 后用 --revalidate --actor <id> --reason <why> 0 LLM 重判；writer context 用 stage4.context 0 成本重建。"
-  },
-  {
    "rule": "ctx_source",
    "sev": "metric",
    "status": "skipped",
@@ -193,6 +178,21 @@
    "note": "人工可改 .INVALID 后用 --revalidate --actor <id> --reason <why> 0 LLM 重判；writer context 用 stage4.context 0 成本重建。"
   },
   {
+   "rule": "disclosure_order",
+   "sev": "metric",
+   "status": "skipped",
+   "item": "严格可比较事实对的披露顺序变化",
+   "requirement": "R-5.15",
+   "check_kind": "mechanical",
+   "remediation": "none",
+   "fix": null,
+   "findings": [],
+   "why": "实现未被调用（这一次没有任何代码执行过它）",
+   "scanned": null,
+   "baseline": null,
+   "note": null
+  },
+  {
    "rule": "empty_chapter",
    "sev": "hard",
    "status": "skipped",
@@ -206,21 +206,6 @@
    "scanned": null,
    "baseline": null,
    "note": "人工可改 .INVALID 后用 --revalidate --actor <id> --reason <why> 0 LLM 重判；writer context 用 stage4.context 0 成本重建。"
-  },
-  {
-   "rule": "entry_rebuilt",
-   "sev": "metric",
-   "status": "skipped",
-   "item": "新入口是否从非首源事实切入",
-   "requirement": "R-5.18",
-   "check_kind": "mechanical",
-   "remediation": "none",
-   "fix": null,
-   "findings": [],
-   "why": "实现未被调用（这一次没有任何代码执行过它）",
-   "scanned": null,
-   "baseline": null,
-   "note": null
   },
   {
    "rule": "fact_coverage",
@@ -238,25 +223,10 @@
    "note": "人工可改 .INVALID 后用 --revalidate --actor <id> --reason <why> 0 LLM 重判；writer context 用 stage4.context 0 成本重建。"
   },
   {
-   "rule": "fact_redistribution",
-   "sev": "metric",
-   "status": "skipped",
-   "item": "事实在新场景中的重新分布",
-   "requirement": "R-5.19",
-   "check_kind": "mechanical",
-   "remediation": "none",
-   "fix": null,
-   "findings": [],
-   "why": "实现未被调用（这一次没有任何代码执行过它）",
-   "scanned": null,
-   "baseline": null,
-   "note": null
-  },
-  {
    "rule": "fact_ref",
    "sev": "hard",
    "status": "skipped",
-   "item": "场景事实/舞台/人物引用只来自同章关闭式目录",
+   "item": "场景事实/舞台引用只来自同章关闭式目录",
    "requirement": "R-5.6",
    "check_kind": "mechanical",
    "remediation": "human",
@@ -298,10 +268,10 @@
    "note": "人工可改 .INVALID 后用 --revalidate --actor <id> --reason <why> 0 LLM 重判；writer context 用 stage4.context 0 成本重建。"
   },
   {
-   "rule": "nonadjacent_regroup",
+   "rule": "noncontiguous_regroup",
    "sev": "metric",
    "status": "skipped",
-   "item": "非相邻事实被重新组场的比例",
+   "item": "跨源区间的真正非连续组场",
    "requirement": "R-5.15",
    "check_kind": "mechanical",
    "remediation": "none",
@@ -343,6 +313,36 @@
    "note": "人工可改 .INVALID 后用 --revalidate --actor <id> --reason <why> 0 LLM 重判；writer context 用 stage4.context 0 成本重建。"
   },
   {
+   "rule": "partition_change",
+   "sev": "metric",
+   "status": "skipped",
+   "item": "事实到场景分区相对源舞台分区的变化",
+   "requirement": "R-5.15",
+   "check_kind": "mechanical",
+   "remediation": "none",
+   "fix": null,
+   "findings": [],
+   "why": "实现未被调用（这一次没有任何代码执行过它）",
+   "scanned": null,
+   "baseline": null,
+   "note": null
+  },
+  {
+   "rule": "phase_artifact_link",
+   "sev": "hard",
+   "status": "skipped",
+   "item": "compiled 计划完整绑定盘上当前 A/B 两份版本化字节",
+   "requirement": "R-5.10d",
+   "check_kind": "mechanical",
+   "remediation": "human",
+   "fix": null,
+   "findings": [],
+   "why": "实现未被调用（这一次没有任何代码执行过它）",
+   "scanned": null,
+   "baseline": null,
+   "note": "人工可改 .INVALID 后用 --revalidate --actor <id> --reason <why> 0 LLM 重判；writer context 用 stage4.context 0 成本重建。"
+  },
+  {
    "rule": "plan_book_band",
    "sev": "hard",
    "status": "skipped",
@@ -356,36 +356,6 @@
    "scanned": null,
    "baseline": null,
    "note": "人工可改 .INVALID 后用 --revalidate --actor <id> --reason <why> 0 LLM 重判；writer context 用 stage4.context 0 成本重建。"
-  },
-  {
-   "rule": "plan_params",
-   "sev": "metric",
-   "status": "skipped",
-   "item": "场景编译器版本与输入规模",
-   "requirement": "R-5.11",
-   "check_kind": "mechanical",
-   "remediation": "none",
-   "fix": null,
-   "findings": [],
-   "why": "实现未被调用（这一次没有任何代码执行过它）",
-   "scanned": null,
-   "baseline": null,
-   "note": null
-  },
-  {
-   "rule": "scene_boundary_change",
-   "sev": "metric",
-   "status": "skipped",
-   "item": "新场景边界相对源舞台边界的变化",
-   "requirement": "R-5.18",
-   "check_kind": "mechanical",
-   "remediation": "none",
-   "fix": null,
-   "findings": [],
-   "why": "实现未被调用（这一次没有任何代码执行过它）",
-   "scanned": null,
-   "baseline": null,
-   "note": null
   },
   {
    "rule": "scene_budget_distribution",
@@ -433,21 +403,6 @@
    "note": null
   },
   {
-   "rule": "semantic_contract",
-   "sev": "hard",
-   "status": "skipped",
-   "item": "计划中的章级语义契约逐字段等于 Stage2",
-   "requirement": "R-5.6",
-   "check_kind": "mechanical",
-   "remediation": "human",
-   "fix": null,
-   "findings": [],
-   "why": "实现未被调用（这一次没有任何代码执行过它）",
-   "scanned": null,
-   "baseline": null,
-   "note": "人工可改 .INVALID 后用 --revalidate --actor <id> --reason <why> 0 LLM 重判；writer context 用 stage4.context 0 成本重建。"
-  },
-  {
    "rule": "state_closure",
    "sev": "hard",
    "status": "skipped",
@@ -463,10 +418,40 @@
    "note": "人工可改 .INVALID 后用 --revalidate --actor <id> --reason <why> 0 LLM 重判；writer context 用 stage4.context 0 成本重建。"
   },
   {
+   "rule": "structure_alignment",
+   "sev": "metric",
+   "status": "skipped",
+   "item": "retain/reconstruct 声明与代码复算变化对齐",
+   "requirement": "R-5.19",
+   "check_kind": "mechanical",
+   "remediation": "none",
+   "fix": null,
+   "findings": [],
+   "why": "实现未被调用（这一次没有任何代码执行过它）",
+   "scanned": null,
+   "baseline": null,
+   "note": null
+  },
+  {
+   "rule": "structure_eligibility",
+   "sev": "metric",
+   "status": "skipped",
+   "item": "逐章可测量与保守可重排机会分母",
+   "requirement": "R-5.18",
+   "check_kind": "mechanical",
+   "remediation": "none",
+   "fix": null,
+   "findings": [],
+   "why": "实现未被调用（这一次没有任何代码执行过它）",
+   "scanned": null,
+   "baseline": null,
+   "note": null
+  },
+  {
    "rule": "style_words",
    "sev": "hard",
    "status": "skipped",
-   "item": "策略/brief/purpose 只说写什么，不用纯写法词代替设计",
+   "item": "brief/purpose 只说写什么，不用纯写法词代替设计",
    "requirement": "R-5.4",
    "check_kind": "mechanical",
    "remediation": "human",
@@ -510,27 +495,6 @@
  ],
  "accounting": [
   {
-   "key": "params",
-   "item": "这份计划由哪版场景编译器、多少事实原子编译？",
-   "recorded": false,
-   "count": 0,
-   "detail": []
-  },
-  {
-   "key": "partial_regen_chapters",
-   "item": "哪几章是按章定向重规划过的？",
-   "recorded": false,
-   "count": 0,
-   "detail": []
-  },
-  {
-   "key": "repairs",
-   "item": "各次定向重规划修了哪些 HARD，前后数量与章节指纹是什么？",
-   "recorded": false,
-   "count": 0,
-   "detail": []
-  },
-  {
    "key": "revalidated",
    "item": "这份稿是跑出来的，还是被重判提升上来的？",
    "recorded": false,
@@ -551,6 +515,6 @@
   "ok": 0,
   "hit": 0,
   "unver": 0,
-  "skipped": 33
+  "skipped": 32
  }
 }

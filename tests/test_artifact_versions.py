@@ -133,31 +133,39 @@ _SHAPE_BREAKS: dict[str, tuple[int, str, str]] = {
         '都必须由 producer 重建为当前 v6',
     ),
     'stage4/plan_chapters.json': (
-        3,
-        '两次破坏。2026-08-25 v2 删除 `PlanBeat`/`segments`/`from_beats`，改为原子事实 '
+        4,
+        '三次破坏。2026-08-25 v2 删除 `PlanBeat`/`segments`/`from_beats`，改为原子事实 '
         '`semantic_contract` + `scenes`。2026-08-25 v3 把源序可见的一次规划拆成 '
         '`stage4.design` 盲设计与 `stage4.plan` 证据绑定，逐章新增 retain/reconstruct '
-        '决定与声明/代码复算变化；计划 provenance 改为 A+B 的确定性编译账，不复制任一相 usage',
-        '依次付费重跑 `stage4.design` 与 `stage4.plan`；旧 v2 不迁移、不补字段。'
+        '决定与声明/代码复算变化；2026-08-26 v4 删除展示/过程/派生字段：goal rationale、'
+        '权重、reconstruction_strategy、semantic_contract、FactRef.chapter、PlanParams、'
+        'provenance params 与持久化 computed_change_kinds',
+        '依次付费重跑 `stage4.design` 与 `stage4.plan`；旧 v2/v3 不迁移、不补字段。'
         '`stage4.context` 随后免费重建；Stage5 canonical 因消费计划改变而全书重写',
     ),
     'stage4/plan_edit.json': (
-        3,
-        '两次破坏：v2 改为语义契约 + scenes；v3 与正式计划同步新增章级结构决定及代码复算变化',
-        '旧人工编辑集不能凭空推造 retain/reconstruct 意图；需要时由人按当前 PlanEdit v3 重写',
+        4,
+        '三次破坏：v2 改为语义契约 + scenes；v3 与正式计划同步新增章级结构决定及代码复算变化；'
+        'v4 与正式计划同步删除展示/过程/派生字段',
+        '旧人工编辑集不能凭空推造当前结构；需要时由人按当前 PlanEdit v4 重写',
+    ),
+    'stage4/blind_candidate.json': (
+        2,
+        '2026-08-26 删除三个 goal 的 rationale；reconstruction_strategy 只保留为 A 相规划脚手架',
+        '`stage4.design` 付费重跑；旧 v1 不迁移、不手补版本号',
+    ),
+    'stage4/evidence_binding.json': (
+        2,
+        '2026-08-26 删除 participant_refs；人物到场统一读取绑定舞台的 present',
+        '`stage4.plan` 付费重跑 B 相；旧 v1 不迁移、不手补版本号',
     ),
     'stage4/writer_context.json': (
-        3,
+        4,
         '2026-08-25 删除写手面的 `CtxBeat.events[]`，新增 chapter_rewrite_brief、'
-        '四类 delta 在内的人话 semantic_contract 与可直接执行的 CtxScene',
-        'v3 随 Stage2 ArcTrack 删除 dimension/change_type；`stage4.context` 从当前 Stage2 v6 + '
-        'Stage4 plan v3 免费重建；下游 Stage5/6 按消费投影判 stale',
-    ),
-    'stage4/writer_context.identity.json': (
-        3,
-        '2026-08-25 恒等基线与正式 writer_context 同形切换为语义契约 + CtxScene',
-        'v3 同步删除 ArcTrack 分类标签；`stage4.plan --identity` 从当前 Stage1/Stage2 '
-        '免费重建，不读取或迁移旧基线',
+        '四类 delta 在内的人话 semantic_contract 与可直接执行的 CtxScene；v3 随 Stage2 '
+        'ArcTrack 删除 dimension/change_type；2026-08-26 v4 删除 world_facts、逐场源字数/参与者、'
+        '秘密与规则内部 id、must_not_reveal，并把 characters 改为带 char_id 的数组',
+        '`stage4.context` 从当前 Stage2 v6 + Stage4 plan v4 免费重建；下游 Stage5/6 按消费投影判 stale',
     ),
     'stage3/style_grounding.json': (
         2,
@@ -424,6 +432,13 @@ def test_runtime_and_corpus_share_the_same_path_router(rel: str, key: str):
     'stage5/_rounds/review_4.invalid_metadata_convergence.json',
 ])
 def test_retired_archive_aliases_are_not_current_artifact_paths(rel: str):
+    assert artifact_key(rel) is None
+
+
+def test_retired_stage4_identity_artifact_is_not_discovered_or_registered():
+    rel = 'stage4/writer_context.identity.json'
+    assert rel not in ARTIFACT_PATHS.values()
+    assert rel not in ARTIFACT_SPECS
     assert artifact_key(rel) is None
 
 

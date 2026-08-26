@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-plan.py —— Stage4 v3 的三个节点。**两次付费调用、一次确定性上下文组装。**
+plan.py —— Stage4 v4 的三个节点。**两次付费调用、一次确定性上下文组装。**
 
   · `stage4.design`（付费，`R-5`）→ `stage4/blind_candidate.json`
   · `stage4.plan`（付费，`R-5`）  → `stage4/evidence_binding.json` + 编译计划
@@ -24,14 +24,13 @@ import json
 from contracts.artifacts import (
     STAGE1_MAIN_TEXT, STAGE2_CHAPTER_BLUEPRINTS, STAGE2_GLOBAL_GROUNDING,
     STAGE4_BLIND_CANDIDATE, STAGE4_EVIDENCE_BINDING, STAGE4_PLAN_CHAPTERS,
-    STAGE4_PLAN_EDIT, STAGE4_WRITER_CONTEXT, STAGE4_WRITER_CONTEXT_IDENTITY,
+    STAGE4_PLAN_EDIT, STAGE4_WRITER_CONTEXT,
 )
 
 from typing import Any
 
 from contracts.invariants import (
-    BLIND_ALIAS_ALGORITHM, RESPONSE_TEMPORAL_LINKS, STRUCTURE_METRIC_CONTRACT,
-    STYLE_WORDS,
+    BLIND_ALIAS_ALGORITHM, RESPONSE_TEMPORAL_LINKS, STYLE_WORDS,
 )
 from contracts.schema import artifact_spec
 from contracts.schema.report import CheckReport
@@ -50,6 +49,7 @@ from novel.errors import (
 from novel.report import build
 from novel.report.findings import Outcome
 from novel.run import RunContext
+from novel.core.naming import display_names_at
 from novel.stages.stage4 import checks, prompts
 from novel.stages.stage4.blind import (
     BlindPlanError, build_blind_projection,
@@ -58,7 +58,7 @@ from novel.stages.stage4.blind import (
     validate_infeasible_binding,
 )
 from novel.stages.stage4.beats import beat_index
-from novel.stages.stage4.context import build_writer_context, display_names_at
+from novel.stages.stage4.context import build_writer_context
 from novel.stages.stage4.fact_refs import catalog as fact_catalog, validate_plan_refs
 from novel.stages.stage4.measure import (
     adopt_plan_response, budget_basis, identity_plan, source_chars_table,
@@ -76,9 +76,6 @@ CTX_REL = STAGE4_WRITER_CONTEXT
 #: 取的就是它 ⇒ 写它的那一次跑必须也用这个节点记账（见 `context_ctx`）。
 CTX_NODE = 'stage4.context'
 
-#: 恒等基线那一份。⚠ **另一个文件名，不覆盖正式那份**——
-#: 「计划什么都不改时写手手里有什么」与「这一版计划下写手手里有什么」是两个问题。
-IDENTITY_CTX_REL = STAGE4_WRITER_CONTEXT_IDENTITY
 MAIN_TEXT = STAGE1_MAIN_TEXT
 GLOBAL_GROUNDING = STAGE2_GLOBAL_GROUNDING
 BLUEPRINTS = STAGE2_CHAPTER_BLUEPRINTS
@@ -232,9 +229,15 @@ def _judge(store: ArtifactStore, plan_raw: dict[str, Any], up: _Upstreams, *,
             ctx_raw = None                                   # 读不回来 ⇒ 那四条走 `unver`
         if ctx_raw is not None:
             assert up.global_g is not None
-            expected_ctx = build_writer_context(
+            expected_unvalidated = build_writer_context(
                 plan_raw, up.global_g, up.blueprints, up.main_text,
             ).ctx
+            # 盘上载体已经经过 Pydantic 的默认值归一；期望树也必须走同一
+            # 个生产 schema，否则可选字段的 absent/None 差异会让守卫假红。
+            expected_ctx = WriterContext.model_validate({
+                **expected_unvalidated,
+                '_provenance': ctx_art.provenance.model_dump(by_alias=True),
+            }).model_dump(by_alias=True, mode='json')
     return checks.check(
         plan_raw, blueprints=up.blueprints, main_text=up.main_text, global_g=up.global_g,
         ctx=ctx_raw, expected_ctx=expected_ctx,
@@ -254,9 +257,7 @@ def _accounting_of(prov_d: dict) -> dict:
     （`--identity` 写的是另一份文件、`--apply-edit` 落的是新一轮）。
     声明一个结构上永远记不上的键，只会让报告上恒挂一行「未记录」。
     """
-    return {k: prov_d[k] for k in (
-        'params', 'revalidated', 'gates_skipped'
-    ) if k in prov_d}
+    return {k: prov_d[k] for k in ('revalidated', 'gates_skipped') if k in prov_d}
 
 
 def _report(ctx: RunContext, store: ArtifactStore, outcomes: list[Outcome],
@@ -274,17 +275,6 @@ def _report(ctx: RunContext, store: ArtifactStore, outcomes: list[Outcome],
         outcomes=outcomes, accounting=_accounting_of(prov_d),
         invalid=store.exists(_INVALID),
         revalidated=prov_d.get('revalidated'), origin=prov_d.get('origin'))
-
-
-def _params(up: _Upstreams) -> dict[str, Any]:
-    return {
-        'compiler': 'atomic-scenes-v2',
-        'fact_atoms': sum(len(bp.get('fact_atoms') or [])
-                          for bp in (up.blueprints.get('blueprints') or [])),
-        'source_stages': sum(len(bp.get('beats') or [])
-                             for bp in (up.blueprints.get('blueprints') or [])),
-        'structure_metric_contract': STRUCTURE_METRIC_CONTRACT,
-    }
 
 
 # ── 七条路 ──────────────────────────────────────────────────────────────────
@@ -431,8 +421,8 @@ def build_prompt(ctx: RunContext, *, chapters: tuple[int, ...] = ()) -> tuple[st
     """
     if chapters:
         raise TerminalState(
-            'Stage4 v3 不接受 --chapters：模型结构修改必须整书重走 '
-            'stage4.design → stage4.plan；人工 v3 计划可用 --apply-edit')
+            'Stage4 v4 不接受 --chapters：模型结构修改必须整书重走 '
+            'stage4.design → stage4.plan；人工 v4 计划可用 --apply-edit')
     system, user, _store, _up, _candidate, _candidate_raw, _candidate_file_sha, \
         _subject, _catalog = _binding_request(ctx)
     return system, user
@@ -762,7 +752,7 @@ def run_design(ctx: RunContext, client: Any) -> BlindCandidate:
 
 def run_plan(ctx: RunContext, client: Any, *,
              chapters: tuple[int, ...] = ()) -> CheckReport | EvidenceBinding:
-    """Stage4B：冻结 A 候选，只绑定证据并由代码编译 v3 计划。
+    """Stage4B：冻结 A 候选，只绑定证据并由代码编译 v4 计划。
 
     ``infeasible`` 也是一份已落盘、可审计的正式结论，所以返回该
     ``EvidenceBinding`` 交给 CLI 报 landed-red；它不是“什么都没
@@ -770,7 +760,7 @@ def run_plan(ctx: RunContext, client: Any, *,
     """
     if chapters:
         raise TerminalState(
-            'Stage4 v3 不接受 --chapters；重规划须整书重走 stage4.design → stage4.plan')
+            'Stage4 v4 不接受 --chapters；重规划须整书重走 stage4.design → stage4.plan')
     # B 的 typed infeasible 是当前候选的正式负结论，不是 missing。再次把同一个 A
     # 发给 B 只会复用同一结论；必须先由人显式确认 ``stage4.design --replan``，
     # 让候选字节变化后才重新开放 B。放在任何 prompt/transport 构造之前，保证 0 wire。
@@ -812,11 +802,8 @@ def run_plan(ctx: RunContext, client: Any, *,
     _same_binding, binding_file_sha = store.read_with_sha256(
         EvidenceBinding, BINDING_REL)
     data = merge_evidence_bindings(candidate_raw, raw, catalog)
-    params = _params(up)
-    ctx.account('params', params)
     compiled_provenance = ctx.free_provenance(
         PlanProvenance,
-        params=params,
         origin='compiled',
         blind_candidate_sha256=candidate_file_sha,
         evidence_binding_sha256=binding_file_sha,
@@ -833,11 +820,7 @@ def run_identity(ctx: RunContext) -> tuple[int, CheckReport]:
     （每拍照源字数给预算），组一份上下文，然后**跑同一张判据表**。
     红了先怀疑判据，不是先怀疑数据。
 
-    ⚠⚠ **它落盘**，写 `stage4/writer_context.identity.json`（已进 `ARTIFACTS`）。
-    原型这条路整个输出是 `print` + 返回码 ⇒「跑过且写手手里有这些」与「从没跑过」
-    **在盘上长得一模一样**（`Q-2`）。stage6/stage7 在同一道工序上都做对了。
-    ⚠ **它写的是另一份文件**，不碰正式那份 ⇒ 它不是「局部改写」，
-    也就不该标 `partial_rewrite`（本层的 `ACCOUNTING` 因此没有那个键）。
+    这是可重复的 0 成本诊断：完整构造并过 strict schema 与同一组判据，但不落盘。
 
     返回 `(拍数, 报告)`。
     """
@@ -846,15 +829,17 @@ def run_identity(ctx: RunContext) -> tuple[int, CheckReport]:
     assert up.global_g is not None
     base = identity_plan(up.blueprints, up.main_text, up.bidx)
     asm = build_writer_context(base, up.global_g, up.blueprints, up.main_text)
-    art = WriterContext.model_validate(
+    WriterContext.model_validate(
         {**asm.ctx, '_provenance': ctx.free_provenance(CtxProvenance)})
-    store.write(IDENTITY_CTX_REL, art)
     outcomes = checks.check(
         base, blueprints=up.blueprints, main_text=up.main_text, global_g=up.global_g,
         ctx=asm.ctx, expected_ctx=asm.ctx, ctx_link=None,
-        ctx_source=f'{IDENTITY_CTX_REL}：本次现算的恒等基线，不比来源', bidx=up.bidx)
+        ctx_source='本次内存现算的恒等基线，不比来源', bidx=up.bidx)
     return (sum(len(c['scenes']) for c in base['output_chapters']),
-            _report(ctx, store, outcomes, {}))
+            build(
+                sid=ctx.sid, node=ctx.node,
+                freshness=prov.FreshnessReport('unknown', 'no_provenance'),
+                outcomes=outcomes, accounting={}))
 
 
 def run_names_only(ctx: RunContext) -> list[tuple[int, dict[str, str], list[str]]]:
@@ -897,7 +882,7 @@ def run_apply_edit(ctx: RunContext, edit_path: str = '') -> CheckReport:
     正式稿；合格 ⇒ 旧轮进 `_rounds/`、落盘、**同批重建写作上下文**（`run_context`
     在 `_gate_and_write` 里，`context_link` 不会红）。
 
-    v3 计划本身是 A+B 的确定性编译物，不能让人工改过结构的计划继续绑定旧候选并
+    v4 计划本身是 A+B 的确定性编译物，不能让人工改过结构的计划继续绑定旧候选并
     冒充编译结果。人工路因此铸一份 ``origin=human`` 的免费来源账，明确清空 A/B hash；
     typed edit、当前 Stage1/2 与旧计划仍由普通输入边如实记录。
     ⚠ **无前稿（正式或 `.INVALID` 皆无）⇒ 显式终态**：这是修订路，不是生成路。
@@ -907,7 +892,7 @@ def run_apply_edit(ctx: RunContext, edit_path: str = '') -> CheckReport:
     if not store.exists(rel):
         raise TerminalState(
             f'{rel} 不在盘上。⚠ `--apply-edit` 吃的是**人写的决策集**（整份计划替换，'
-            f'形状 = 盘上 `plan_chapters.json` 的两个业务键），把它放到这本书的 '
+            f'形状 = 盘上 `plan_chapters.json` 的 `output_chapters` 业务键），把它放到这本书的 '
             f'`stage4/` 下（缺省文件名 `plan_edit.json`）')
     edit = store.read(PlanEdit, rel)
 
@@ -923,7 +908,7 @@ def run_apply_edit(ctx: RunContext, edit_path: str = '') -> CheckReport:
     report = _gate_and_write(
         ctx, store, data, up,
         provenance=ctx.free_provenance(
-            PlanProvenance, params=_params(up), origin='human',
+            PlanProvenance, origin='human',
             blind_candidate_sha256=None, evidence_binding_sha256=None,
         ),
         archive=True)

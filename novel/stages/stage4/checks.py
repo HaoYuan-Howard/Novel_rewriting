@@ -15,7 +15,7 @@ from contracts.schema.report import finding
 from novel.report.findings import Outcome, ran, unverifiable
 from novel.stages.stage4.beats import beat_index, verbatim_pieces
 from novel.stages.stage4.measure import (
-    chapter_source_chars, computed_structure_change_kinds, semantic_contract_of,
+    chapter_source_chars, computed_structure_change_kinds,
     structure_metrics_of, verbatim_share_stats,
 )
 from novel.stages.stage4.phase_binding import PhaseArtifactLink
@@ -61,7 +61,6 @@ def check(plan: dict[str, Any], *, blueprints: dict[str, Any],
         (f'{len(empty)} 章没有场景：{empty}', empty)
     ] if empty else [], f'{len(chapters)} 章'))
 
-    contract_bad: list[str] = []
     ref_bad: list[str] = []
     coverage_bad: list[str] = []
     causal_bad: list[str] = []
@@ -72,7 +71,6 @@ def check(plan: dict[str, Any], *, blueprints: dict[str, Any],
     budget_bad: list[str] = []
     disclosure_reversed: list[str] = []
     structure_rows: list[dict[str, Any]] = []
-    structure_vector_bad: list[str] = []
     source_chars, source_cov = chapter_source_chars(main_text, bidx)
     chapter_budget_bad: list[str] = []
 
@@ -83,19 +81,9 @@ def check(plan: dict[str, Any], *, blueprints: dict[str, Any],
         land = {fid for fid, atom in atoms.items() if atom.get('obligation') == 'land'}
         context = set(atoms) - land
         beats = {str(beat.get('beat_id')) for beat in (bp.get('beats') or [])}
-        chars = {str(cid) for atom in atoms.values()
-                 for cid in (atom.get('participant_char_ids') or [])}
-        chars |= {str(cid) for beat in (bp.get('beats') or [])
-                  for cid in (beat.get('present_char_ids') or [])}
         materials = {str(hinge.get('hinge_id'))
                      for beat in (bp.get('beats') or [])
                      for hinge in (beat.get('hinges') or [])}
-        expected_contract = semantic_contract_of(bp)
-        if chapter.get('semantic_contract') != expected_contract:
-            contract_bad.append(f'ch{ordinal}:semantic_contract')
-        if (chapter.get('semantic_contract') or {}).get('causal_edges') != bp.get('causal_edges'):
-            causal_bad.append(f'ch{ordinal}:causal_edges')
-
         scenes = list(chapter.get('scenes') or [])
         landed: list[str] = []
         assigned_materials: list[str] = []
@@ -115,8 +103,6 @@ def check(plan: dict[str, Any], *, blueprints: dict[str, Any],
                 ref_bad.append(f'{prefix}:material')
             if set(scene.get('stage_refs') or []) - beats:
                 ref_bad.append(f'{prefix}:stage')
-            if set(scene.get('participant_refs') or []) - chars:
-                ref_bad.append(f'{prefix}:participant')
             state_refs = set(scene.get('entry_state_refs') or []) | set(scene.get('exit_state_refs') or [])
             if state_refs - set(atoms):
                 ref_bad.append(f'{prefix}:state={sorted(state_refs - set(atoms))}')
@@ -145,8 +131,8 @@ def check(plan: dict[str, Any], *, blueprints: dict[str, Any],
         mdup = sorted(ref for ref, count in mcounts.items() if count != 1)
         if mmissing or mdup:
             material_bad.append(f'ch{ordinal}:missing={mmissing},duplicate={mdup}')
-        entry = set((expected_contract.get('entry_state_refs') or []))
-        ending = set((expected_contract.get('ending_state_refs') or []))
+        entry = set(bp.get('entry_state_refs') or [])
+        ending = set(bp.get('ending_state_refs') or [])
         if scenes and not set(scenes[0].get('entry_state_refs') or []).issuperset(entry):
             state_bad.append(f'ch{ordinal}:首场未承接 entry_state')
         if scenes and not set(scenes[-1].get('exit_state_refs') or []).issuperset(ending):
@@ -170,14 +156,11 @@ def check(plan: dict[str, Any], *, blueprints: dict[str, Any],
 
         structure = structure_metrics_of(bp, chapter)
         structure_rows.append(structure)
-        expected_vector = computed_structure_change_kinds(structure)
-        got_vector = list(
-            ((chapter.get('structure_decision') or {}).get('computed_change_kinds') or []))
-        if got_vector != expected_vector:
-            structure_vector_bad.append(
-                f'ch{ordinal}:computed={got_vector},expected={expected_vector}')
         for edge in (bp.get('causal_edges') or []):
             before, after = str(edge.get('before')), str(edge.get('after'))
+            if before not in scene_of or after not in scene_of:
+                causal_bad.append(f'ch{ordinal}:{before}>{after}:未落入场景')
+                continue
             if before in scene_of and after in scene_of and scene_of[after] < scene_of[before]:
                 disclosure_reversed.append(f'ch{ordinal}:{before}>{after}')
 
@@ -185,7 +168,6 @@ def check(plan: dict[str, Any], *, blueprints: dict[str, Any],
         return [(f'{len(rule_bad)} 处{label}：{rule_bad[:8]}', rule_bad)] if rule_bad else []
 
     for rule, bad, label in (
-        ('semantic_contract', contract_bad, '章级契约漂移'),
         ('fact_ref', ref_bad, '场景引用越界'),
         ('fact_coverage', coverage_bad, 'land 事实未恰好落一次'),
         ('causal_closure', causal_bad, '因果边漂移'),
@@ -195,7 +177,6 @@ def check(plan: dict[str, Any], *, blueprints: dict[str, Any],
         ('goal_landing', goal_bad, '首尾目标未落场'),
         ('budget_int', budget_bad, '预算不是正整数'),
         ('budget_band', chapter_budget_bad, '章预算出带'),
-        ('structure_vector', structure_vector_bad, '代码复算结构向量漂移'),
     ):
         outcomes.append(outcome(rule, rows(bad, label), f'{len(chapters)} 章'))
 
@@ -213,8 +194,7 @@ def check(plan: dict[str, Any], *, blueprints: dict[str, Any],
     else:
         outcomes.append(unverifiable('plan_book_band', 'Stage2 span 覆盖不全，基准未知'))
 
-    style_hits = [f'strategy:{word}' for word in STYLE_WORDS
-                  if word in str(plan.get('reconstruction_strategy') or '')]
+    style_hits: list[str] = []
     for chapter in chapters:
         texts = [chapter.get('chapter_rewrite_brief') or '']
         texts += [scene.get('purpose') or '' for scene in (chapter.get('scenes') or [])]
@@ -222,7 +202,7 @@ def check(plan: dict[str, Any], *, blueprints: dict[str, Any],
             if any(word in text for text in texts):
                 style_hits.append(f'ch{chapter.get("output_ordinal")}:{word}')
     outcomes.append(outcome('style_words', rows(style_hits, '纯写法词命中'),
-                            f'{len(chapters)} 章策略/brief/purpose'))
+                            f'{len(chapters)} 章 brief/purpose'))
     if phase_links is None:
         outcomes.append(unverifiable(
             'phase_artifact_link',
@@ -302,7 +282,6 @@ def check(plan: dict[str, Any], *, blueprints: dict[str, Any],
         'semantic_closure_reading': (
             f'fact={len(coverage_bad)} bad · causal={len(causal_bad)} bad · '
             f'state={len(state_bad)} bad · material={len(material_bad)} bad'),
-        'plan_params': str((plan.get('_provenance') or {}).get('params')),
         'ctx_source': ctx_source or '未提供 writer_context 来源账',
     }
     for rule, detail in metrics.items():
@@ -318,7 +297,7 @@ def _context_outcomes(ctx: dict[str, Any] | None, plan_chapters: list[dict[str, 
                       bp_of: dict[int, dict[str, Any]],
                       bidx: dict[str, dict[str, Any]], *,
                       expected_ctx: dict[str, Any] | None = None) -> list[Outcome]:
-    rules = ('ctx_facts_exact', 'ctx_name_attested', 'ctx_secret_gate',
+    rules = ('ctx_facts_exact', 'ctx_name_attested',
              'ctx_stage_explicit', 'ctx_hinge_delivered')
     if ctx is None:
         return [unverifiable(rule, _NO_CTX) for rule in rules]
@@ -329,7 +308,6 @@ def _context_outcomes(ctx: dict[str, Any] | None, plan_chapters: list[dict[str, 
     }
     facts_bad: list[str] = []
     stage_bad: list[str] = []
-    secret_bad: list[str] = []
     name_bad: list[str] = []
     forbidden = {'events', 'from_beats', 'end_beat'}
 
@@ -347,12 +325,17 @@ def _context_outcomes(ctx: dict[str, Any] | None, plan_chapters: list[dict[str, 
     for plan_ch in plan_chapters:
         ordinal = int(plan_ch.get('output_ordinal') or 0)
         cch = ctx_by.get(ordinal) or {}
+        expected_chapter = expected_by.get(ordinal) or {}
         bp = bp_of.get(ordinal) or {}
         atoms = {str(atom.get('fact_id')): str(atom.get('claim'))
                  for atom in (bp.get('fact_atoms') or [])}
         cscenes = list(cch.get('scenes') or [])
         pscenes = list(plan_ch.get('scenes') or [])
-        escenes = list((expected_by.get(ordinal) or {}).get('scenes') or [])
+        escenes = list(expected_chapter.get('scenes') or [])
+        if expected_ctx is not None:
+            for field in ('semantic_contract', 'facts'):
+                if cch.get(field) != expected_chapter.get(field):
+                    facts_bad.append(f'ch{ordinal}:{field}')
         if len(cscenes) != len(pscenes):
             facts_bad.append(f'ch{ordinal}:scene_count')
             continue
@@ -384,13 +367,9 @@ def _context_outcomes(ctx: dict[str, Any] | None, plan_chapters: list[dict[str, 
                    for row in (cscene.get('stages') or [])]
             if got != expected:
                 stage_bad.append(f'ch{ordinal}.{pscene.get("slot")}:stages')
-        hidden = set(cch.get('must_not_reveal') or [])
-        secret_bad += [f'ch{ordinal}:{row.get("secret_id")}'
-                       for row in ((cch.get('facts') or {}).get('secrets') or [])
-                       if row.get('secret_id') in hidden]
         # display_name 的证据面由 context 产地负责；这里至少拒绝内部 id 泄漏。
         name_bad += [f'ch{ordinal}:{name}' for name in (
-            row.get('display_name') for row in (cch.get('characters') or {}).values())
+            row.get('display_name') for row in (cch.get('characters') or []))
             if not name or str(name).startswith('char_')]
 
     def made(rule: str, bad: list[str], label: str) -> Outcome:
@@ -406,7 +385,6 @@ def _context_outcomes(ctx: dict[str, Any] | None, plan_chapters: list[dict[str, 
     return [
         made('ctx_facts_exact', facts_bad, '事实解析或旧骨架键'),
         made('ctx_name_attested', name_bad, '人名为空或内部 id'),
-        made('ctx_secret_gate', secret_bad, '秘密既扣住又下发'),
         made('ctx_stage_explicit', stage_bad, '舞台投影漂移'),
         made('ctx_hinge_delivered', hinge_bad, '材料数量不闭合'),
     ]

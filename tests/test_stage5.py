@@ -157,7 +157,7 @@ def test_a_bad_upstream_atom_is_reported_as_stage2s_bill_not_as_ours():
     另一个说「原子提错了」——合成一句就没人知道该去修谁。
     """
     entry = {'output_ordinal': 1,
-             'characters': {'c1': {'display_name': '顾堇'}},
+             'characters': [{'char_id': 'c1', 'display_name': '顾堇', 'role': '主角'}],
              'narration': [{'segment': '全章', 'grammatical_person': 'third'}],
              'scenes': [{'slot': 's01', 'required_facts': ['顾堇打翻了茶盏']}]}
     book = M.Book(title='t', ctx={'chapters': [entry]}, measurable={},
@@ -204,7 +204,7 @@ def _hook_book(facts, *, slots=('s01', 's02')):
     entry = {
         'output_ordinal': 1,
         'narration': [{'segment': '全章', 'grammatical_person': 'third'}],
-        'characters': {'c1': {'display_name': '顾堇'}},
+        'characters': [{'char_id': 'c1', 'display_name': '顾堇', 'role': '主角'}],
         'scenes': [{'slot': sl} for sl in slots],
         'end_hook_goal': {'intent': 'open', 'facts': list(facts)},
     }
@@ -670,9 +670,8 @@ def test_secret_leak_goes_red_and_the_evidence_is_the_drafts_own_bytes(book, ent
                secrets=[{'secret_id': 'secret_x', 'fact': fact,
                          'knowledge_events': [], 'setup': {'kind': 'cold'},
                          'first_reveal_chapter': 9}])
-    e = dict(entry, must_not_reveal=['secret_x'])
     body = _clean_body(book, entry) + fact + '。'
-    fs = checks.chapter_findings(body, e, b, given='')
+    fs = checks.chapter_findings(body, entry, b, given='')
     leak = [f for f in fs if f.rule == 'secret_leak']
     assert leak, 'secret_leak 没红——转抄式泄底是它唯一挡得住的那一类'
     assert all(ev in body for ev in leak[0].evidence), (
@@ -680,7 +679,7 @@ def test_secret_leak_goes_red_and_the_evidence_is_the_drafts_own_bytes(book, ent
 
 
 def test_secret_literal_leak_uses_the_authoritative_reveal_timeline(book, entry):
-    """ctx 漏投 must_not_reveal 时，显式 reveal timeline 仍能拦截揭示章之前的字面泄密。"""
+    """只靠权威 reveal timeline 拦截揭示章之前的字面泄密。"""
     fact = '她其实一直都知道那三笔钱是从公司账上挪出来的'
     synthetic = M.Book(
         title=book.title, ctx=book.ctx, measurable=book.measurable,
@@ -691,8 +690,8 @@ def test_secret_literal_leak_uses_the_authoritative_reveal_timeline(book, entry)
             'first_reveal_chapter': 9,
         }],
     )
-    before = dict(entry, output_ordinal=1, must_not_reveal=[])
-    at_reveal = dict(entry, output_ordinal=9, must_not_reveal=[])
+    before = dict(entry, output_ordinal=1)
+    at_reveal = dict(entry, output_ordinal=9)
     body = _clean_body(book, entry) + fact + '。'
     assert 'secret_leak' in _fire(body, before, synthetic)
     assert 'secret_leak' not in _fire(body, at_reveal, synthetic)
@@ -710,13 +709,6 @@ def test_secret_timeline_uses_the_same_number_ruler(book):
     timeline = next(f for f in fs if f.rule == 'secret_timeline')
     assert '出现于 [9]' in timeline.detail
     assert '没有判别力' not in timeline.detail
-
-
-def test_secret_unknown_says_it_could_not_check_instead_of_passing(book, entry):
-    """⚠ `must_not_reveal` 点了一条 secret 而全书 secrets 里没有它
-    ⇒ **根本没得查**，不是「查过、没泄漏」。"""
-    e = dict(entry, must_not_reveal=['secret_不存在'])
-    assert 'secret_unknown' in _fire(_clean_body(book, entry), e, book)
 
 
 def test_dialogue_loss_is_single_arm_information_not_a_hard_gate(book, entry):
@@ -750,7 +742,7 @@ def test_the_two_phases_read_one_and_the_same_rule_table():
 
 
 def test_every_registered_rule_has_exactly_one_producer():
-    """⭐ 51 条判据**一条不多一条不少**地被实现覆盖。
+    """⭐ 50 条判据**一条不多一条不少**地被实现覆盖。
 
     ⚠ 少列一条，那一条在报告上就变 `skipped`——而 `skipped`（实现未被调用）与
     「跑了没命中」是**两种颜色**；多列一条，`builder` 会抛（那是「注册了没实现」的镜像病）。
@@ -760,8 +752,8 @@ def test_every_registered_rule_has_exactly_one_producer():
     assert len(mine) == len(set(mine)), '同一条判据被列了两次'
     assert set(mine) == reg, (f'注册了没实现：{sorted(reg - set(mine))}；'
                               f'实现了没注册：{sorted(set(mine) - reg)}')
-    # canonical 单臂原有 49 条；新增段落目标的独立读数与硬结论后共 51 条。
-    assert len(reg) == 51
+    # secret_unknown 随重复 must_not_reveal 清单退役，现役共 50 条。
+    assert len(reg) == 50
 
 
 def test_every_unver_rule_must_say_why_it_cannot_check():
@@ -849,11 +841,10 @@ def test_the_downsend_band_is_the_very_one_the_judges_use(book, entry):
 
 
 def test_the_secret_ids_never_reach_the_writer(book, entry):
-    """⚠ `must_not_reveal` 只有裸 id、对写手**无从执行**——真正的保护是那些 secret
-    **根本不下发**。把 id 发过去只会让它去猜。"""
-    e = dict(entry, must_not_reveal=['secret_01', 'secret_02'])
-    given = prompts.build_material(e, book).given
-    assert 'must_not_reveal' not in given and 'secret_01' not in given
+    """秘密边界由 Stage2 时间线执行；写手面只接收已开闸的人话事实。"""
+    given = prompts.build_material(entry, book).given
+    assert 'must_not_reveal' not in given
+    assert all(str(secret['secret_id']) not in given for secret in book.secrets)
 
 
 def test_paid_writer_prompt_excludes_global_source_spans(monkeypatch, tmp_path):
@@ -892,9 +883,15 @@ def test_paid_writer_prompt_excludes_global_source_spans(monkeypatch, tmp_path):
         def model_dump(self, **_kwargs):
             return copy.deepcopy(self.value)
 
+    attested = ' '.join(
+        str(row.get('canonical') or '')
+        for row in ((grounding.get('entities') or {}).get('characters') or {}).values())
     stored = {
         review.MAIN_TEXT: SimpleNamespace(root=[
-            SimpleNamespace(chapter_ordinal=ordinal, text=text)
+            SimpleNamespace(
+                chapter_ordinal=ordinal,
+                text=text + ('\n' + attested if ordinal == 1 else ''),
+            )
             for ordinal, text in seed.source_text.items()
         ]),
         review.GLOBAL_GROUNDING: Dumped(grounding),

@@ -45,6 +45,7 @@ from contracts.schema.stage5 import (
 from novel import prov, wontfix
 from novel.consumption import stage5_style
 from novel.core.evidence import without_global_evidence
+from novel.core.naming import project_character_names
 from novel.errors import (
     ArtifactUnreadable, BlockingFindingsUnresolved, GateBlocked, TerminalState,
     UpstreamMissing,
@@ -91,12 +92,21 @@ def load_book(ctx: RunContext, store: ArtifactStore) -> M.Book:
         raise RuntimeError('stage5_style 没有产出正文机械基线——投影实现与 typed 上游脱节')
     global_projected = without_global_evidence(gg.model_dump(by_alias=True))
     assert isinstance(global_projected, dict)
+    source_text = {s.chapter_ordinal: (s.text or '') for s in main.root}
+    characters = ((global_projected.get('entities') or {}).get('characters') or {})
+    name_registry, _substitutions, unattested = project_character_names(
+        characters, '\n'.join(source_text.values()))
+    if unattested:
+        raise TerminalState(
+            f'Stage5 无法从当前 Stage1/2 派生有据名字基线：{unattested[:8]}。'
+            '先修正 Stage2 人物称呼并免费重建 stage4.context。')
     return M.Book(
         title=ctx.title,
         ctx=wc.model_dump(by_alias=True),
         measurable=style_projected['body'],
-        source_text={s.chapter_ordinal: (s.text or '') for s in main.root},
+        source_text=source_text,
         secrets=((global_projected.get('canon') or {}).get('secrets') or []),
+        characters=name_registry,
     )
 
 

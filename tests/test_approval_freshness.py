@@ -9,7 +9,7 @@ import pytest
 
 from contracts.schema import encode_artifact
 from contracts.schema.api import StructureApprovalRequest
-from contracts.invariants import STAGE3_MEASUREMENT_CONTRACT, STRUCTURE_METRIC_CONTRACT
+from contracts.invariants import STAGE3_MEASUREMENT_CONTRACT
 from contracts.schema.stage1 import HookCopy, MainText
 from contracts.schema.stage3 import StyleGrounding, StyleProvenance
 from contracts.schema.stage4 import PlanChapters, PlanProvenance
@@ -56,27 +56,20 @@ def _style(ctx: RunContext) -> StyleGrounding:
     )
 
 
-def _plan(ctx: RunContext, *, strategy: str = '按原章次序推进。') -> PlanChapters:
+def _plan(ctx: RunContext) -> PlanChapters:
     goal = lambda intent: {
         'intent': intent,
         'fact_refs': [{
-            'kind': 'chapter_boundary', 'ref': 'chapter:1', 'chapter': 1,
+            'kind': 'chapter_boundary', 'ref': 'chapter:1',
         }],
-        'rationale': 'fixture audit rationale',
     }
     provenance = ctx.free_provenance(
         PlanProvenance,
-        params={
-            'compiler': 'atomic-scenes-v2', 'fact_atoms': 1,
-            'source_stages': 1,
-            'structure_metric_contract': STRUCTURE_METRIC_CONTRACT,
-        },
         origin='human',
         blind_candidate_sha256=None,
         evidence_binding_sha256=None,
     )
     return PlanChapters(
-        reconstruction_strategy=strategy,
         output_chapters=[{
             'output_ordinal': 1, 'from_source_ordinals': [1],
             'chapter_goal': goal('advance'),
@@ -86,27 +79,16 @@ def _plan(ctx: RunContext, *, strategy: str = '按原章次序推进。') -> Pla
                 'mode': 'retain',
                 'reason': '本夹具只核对当前审批主体。',
                 'declared_change_kinds': [],
-                'computed_change_kinds': [],
-            },
-            'weight': 'even',
-            'semantic_contract': {
-                'chapter_function': '核对当前计划',
-                'information_delta': ['f01_001'],
-                'character_state_delta': [], 'relationship_delta': [],
-                'reader_knowledge_delta': [],
-                'must_land_fact_refs': ['f01_001'], 'context_fact_refs': [],
-                'causal_edges': [], 'entry_state_refs': [],
-                'ending_state_refs': [], 'material_refs': [],
             },
             'chapter_rewrite_brief': '用一场核对完成本章。',
             'scenes': [{
                 'slot': 's01', 'budget_chars': 20,
-                'weight': 'mid', 'purpose': '核对当前计划',
+                'purpose': '核对当前计划',
                 'role': 'setup', 'delivery': 'scene', 'transition': 'start',
                 'land_fact_refs': ['f01_001'], 'context_fact_refs': [],
                 'material_refs': [], 'turn_fact_ref': 'f01_001',
                 'entry_state_refs': [], 'exit_state_refs': [],
-                'participant_refs': [], 'stage_refs': ['b01_01'],
+                'stage_refs': ['b01_01'],
             }],
         }],
         _provenance=provenance,
@@ -239,7 +221,7 @@ def test_stale_or_changed_subject_revokes_spending_and_queue_emits_no_paid_plan(
     elif mutation == 'subject':
         path = book / PLAN_REL
         data = json.loads(path.read_text(encoding='utf-8'))
-        data['reconstruction_strategy'] = '当前计划字节已由人改动。'
+        data['output_chapters'][0]['chapter_rewrite_brief'] = '当前计划字节已由人改动。'
         path.write_text(json.dumps(data, ensure_ascii=False), encoding='utf-8', newline='')
     elif mutation == 'invalid':
         path = book / 'stage4' / 'plan_chapters.INVALID.json'

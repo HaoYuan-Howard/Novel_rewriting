@@ -3,7 +3,6 @@
   "title": "雨夜账册",
   "identity_plan": false,
   "structure_subject_sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
-  "reconstruction_strategy": "先让账册异常爆发，再补足核账处境。",
   "chapters": [3],
   "ordinal": 3,
   "index": [
@@ -17,9 +16,7 @@
         "computed_change_kinds": ["entry_anchor", "disclosure_order"]
       },
       "budget_chars": 748,
-      "span_chars": 748,
-      "scenes": 1,
-      "hidden": 0
+      "scenes": 1
     }
   ],
   "plan_chapter": {
@@ -27,18 +24,15 @@
     "from_source_ordinals": [3],
     "chapter_goal": {
       "intent": "advance",
-      "fact_refs": [{"kind": "fact_atom", "ref": "f03_001", "chapter": 3}],
-      "rationale": "推进账册异常"
+      "fact_refs": [{"kind": "fact_atom", "ref": "f03_001"}]
     },
     "open_hook_goal": {
       "intent": "open",
-      "fact_refs": [{"kind": "fact_atom", "ref": "f03_001", "chapter": 3}],
-      "rationale": "从雨夜核账切入"
+      "fact_refs": [{"kind": "fact_atom", "ref": "f03_001"}]
     },
     "end_hook_goal": {
       "intent": "close",
-      "fact_refs": [{"kind": "fact_atom", "ref": "f03_001", "chapter": 3}],
-      "rationale": "落到秘密追查"
+      "fact_refs": [{"kind": "fact_atom", "ref": "f03_001"}]
     },
     "structure_decision": {
       "mode": "reconstruct",
@@ -114,20 +108,18 @@
         "turn_fact": "沈青发现账册末页的墨迹被人换过。",
         "entry_state": [],
         "exit_state": ["沈青决定暂不惊动旁人。"],
-        "participants": ["沈青", "周衡"],
         "stages": [
           {"time_layer": "present", "place": "茶馆", "present": ["沈青", "周衡"]}
         ],
-        "source_chars": 748,
         "verbatim": [],
         "keep_value": [],
         "must_appear": [],
         "must_hold": []
       }
     ],
-    "characters": {
-      "char_001": {"display_name": "沈青", "role": "茶馆掌柜"}
-    },
+    "characters": [
+      {"char_id": "char_001", "display_name": "沈青", "role": "茶馆掌柜"}
+    ],
     "narration": [
       {
         "segment": "全章",
@@ -149,8 +141,7 @@
         "ending": null
       },
       "address": []
-    },
-    "must_not_reveal": []
+    }
   },
   "writer_target": [598, 897],
   "plan_state": {

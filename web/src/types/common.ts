@@ -103,13 +103,12 @@ export interface Facts {
   setting: Record<string, string>
   relations: { subject: string; predicate: string; object: string }[]
   secrets: {
-    secret_id: string
     fact: string
     known_by: string[]
     reader_knows_by_now: boolean
   }[]
   /** 键名是 `description` 不是 `desc` —— 照抄后端。 */
-  world_rules: { rule_id: string; kind: string; description: string }[]
+  world_rules: { kind: string; description: string }[]
   arc: {
     current_stage: { stage: string; chapters: number[] }
     /** 只有末章才有；非末章恒 null（发了就是泄结局）。 */

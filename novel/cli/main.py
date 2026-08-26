@@ -606,7 +606,7 @@ def _report_exit(report: object) -> int:
 
 
 def _run_stage4(ctx: RunContext, flags: list[str]) -> int:
-    """Stage4 v3：两个独立付费相 + 一条 0 成本上下文组装路。
+    """Stage4 v4：两个独立付费相 + 一条 0 成本上下文组装路。
 
     `stage4.design` 与 `stage4.plan` 必须由人分别批准执行；前者成功只落盲候选，
     不在同一命令里静默触发后者。派发按 **stage** 分，先按 node 分岔。
@@ -654,7 +654,7 @@ def _run_stage4(ctx: RunContext, flags: list[str]) -> int:
     if '--identity' in tokens:
         n_beats, report = plan.run_identity(ctx)
         print(f'── 恒等基线 ── 每源章一输出章、每拍照源字数给预算，共 {n_beats} 拍；'
-              f'已落 {plan.IDENTITY_CTX_REL}')
+              '仅内存诊断，不写盘')
         print(render(report))
         # ⚠ **不拿 badge 当退出码**：它量的是「判据有没有把合法情况排除在外」，
         #   红了先怀疑判据、不是先怀疑数据。跑完了就是 0。

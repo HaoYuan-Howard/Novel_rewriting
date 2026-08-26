@@ -34,7 +34,10 @@ from novel.errors import ArtifactUnreadable, UpstreamMissing
 from novel.orchestrator.state import artifact_state, readonly_ctx
 from novel.stages.stage4.beats import beat_index
 from novel.stages.stage4.context import build_writer_context
-from novel.stages.stage4.measure import identity_plan, structure_subject_sha256
+from novel.stages.stage4.measure import (
+    computed_structure_change_kinds, identity_plan, semantic_contract_of,
+    structure_metrics_of, structure_subject_sha256,
+)
 from novel.stages.stage5.prompts import target_band
 from novel.store import ArtifactStore
 
@@ -53,6 +56,11 @@ def stage4_view(base: str | os.PathLike[str], sid: str, ordinal: int) -> Stage4V
 
     plan_state = artifact_state(store, PLAN_REL)
     ctx_state = artifact_state(store, CTX_REL)
+    blueprints = store.read(ChapterBlueprints, BLUEPRINTS).model_dump(by_alias=True)
+    blueprint_by_ordinal = {
+        int(row['chapter_ordinal']): row
+        for row in blueprints['blueprints']
+    }
 
     if plan_state.exists:
         # 在而读不回 ⇒ `ArtifactUnreadable` 一路上抛成 409——「坏了」不是「没跑」。
@@ -66,7 +74,7 @@ def stage4_view(base: str | os.PathLike[str], sid: str, ordinal: int) -> Stage4V
         plan_prov = plan_art.provenance
         ctx_chapters, ctx_prov = _ctx_from_disk(store)
     else:
-        plan_raw, ctx_chapters = _identity(store)
+        plan_raw, ctx_chapters = _identity(store, blueprints)
         structure_subject = None
         identity = True
         plan_prov = None
@@ -77,8 +85,10 @@ def stage4_view(base: str | os.PathLike[str], sid: str, ordinal: int) -> Stage4V
         raise UpstreamMissing(f'第 {ordinal} 章不在计划的输出章集里（{chapters}）')
 
     by_ord = {c.output_ordinal: c for c in (ctx_chapters or [])}
-    index = [_index_row(pc, by_ord.get(int(pc['output_ordinal'])))
-             for pc in plan_raw['output_chapters']]
+    index = [
+        _index_row(pc, blueprint_by_ordinal[int(pc['output_ordinal'])])
+        for pc in plan_raw['output_chapters']
+    ]
 
     pc = next(c for c in plan_raw['output_chapters'] if int(c['output_ordinal']) == ordinal)
     ctx_entry = by_ord.get(ordinal)
@@ -91,7 +101,6 @@ def stage4_view(base: str | os.PathLike[str], sid: str, ordinal: int) -> Stage4V
         title=paths.title_of(novel_dir),
         identity_plan=identity,
         structure_subject_sha256=structure_subject,
-        reconstruction_strategy=plan_raw['reconstruction_strategy'],
         chapters=chapters,
         ordinal=ordinal,
         index=index,
@@ -101,8 +110,10 @@ def stage4_view(base: str | os.PathLike[str], sid: str, ordinal: int) -> Stage4V
             chapter_goal=pc['chapter_goal'],
             open_hook_goal=pc['open_hook_goal'],
             end_hook_goal=pc['end_hook_goal'],
-            structure_decision=pc['structure_decision'],
-            semantic_contract=pc['semantic_contract'],
+            structure_decision=_decision_view(
+                pc, blueprint_by_ordinal[int(pc['output_ordinal'])]),
+            semantic_contract=semantic_contract_of(
+                blueprint_by_ordinal[int(pc['output_ordinal'])]),
             chapter_rewrite_brief=pc['chapter_rewrite_brief'],
             scenes=[PlanSceneLine(
                 i=i,
@@ -137,7 +148,7 @@ def _ctx_from_disk(store: ArtifactStore):
     return list(art.chapters), art.provenance
 
 
-def _identity(store: ArtifactStore):
+def _identity(store: ArtifactStore, blueprints: dict):
     """恒等基线：与 `run_identity` 同一对纯函数，**现算不落盘**。
 
     stage1/stage2 缺席 ⇒ `UpstreamMissing`（连基线都算不出，这一屏真的没有内容）。
@@ -148,36 +159,36 @@ def _identity(store: ArtifactStore):
                 f'{rel} 不在盘上——没跑过 stage4 时本屏显示恒等基线，'
                 f'而基线也要吃 stage1 与 stage2 的产出')
     main_raw = store.read(MainText, MAIN_TEXT).model_dump(by_alias=True)
-    bp_raw = store.read(ChapterBlueprints, BLUEPRINTS).model_dump(by_alias=True)
     gg_raw = store.read(GlobalGrounding, GLOBAL_GROUNDING).model_dump(by_alias=True)
-    bidx = beat_index(bp_raw, main_raw)
-    plan_raw = identity_plan(bp_raw, main_raw, bidx)
-    asm = build_writer_context(plan_raw, gg_raw, bp_raw, main_raw)
+    bidx = beat_index(blueprints, main_raw)
+    plan_raw = identity_plan(blueprints, main_raw, bidx)
+    asm = build_writer_context(plan_raw, gg_raw, blueprints, main_raw)
     chapters = [CtxChapter.model_validate(c) for c in (asm.ctx.get('chapters') or [])]
     return plan_raw, chapters
 
 
-def _index_row(pc: dict, ctx_entry: CtxChapter | None) -> Stage4IndexRow:
+def _index_row(pc: dict, blueprint: dict) -> Stage4IndexRow:
     budgets = [scene.get('budget_chars') for scene in pc['scenes']]
-    span = None
-    hidden = None
-    if ctx_entry is not None:
-        chars = [scene.source_chars for scene in ctx_entry.scenes
-                 if scene.source_chars is not None]
-        span = sum(chars) if chars else None
-        hidden = len(ctx_entry.must_not_reveal)
     return Stage4IndexRow(
         output_ordinal=int(pc['output_ordinal']),
         chapter_goal=_goal_label(pc['chapter_goal']),
-        structure_decision=pc['structure_decision'],
+        structure_decision=_decision_view(pc, blueprint),
         budget_chars=sum(b for b in budgets if b is not None) or None,
-        span_chars=span,
         scenes=len(pc['scenes']),
-        hidden=hidden)
+    )
+
+
+def _decision_view(chapter: dict, blueprint: dict) -> dict:
+    """把算法读数放在 API 视图，不污染人工决定或计划字节。"""
+    metrics = structure_metrics_of(blueprint, chapter)
+    return {
+        **chapter['structure_decision'],
+        'computed_change_kinds': computed_structure_change_kinds(metrics),
+    }
 
 
 def _goal_label(goal: object) -> str:
-    """Typed goal -> stable display line; audit-only rationale is never the UI authority."""
+    """Typed goal → 稳定展示行；界面不另存展示性解释。"""
     if not isinstance(goal, dict):
         return str(goal)
     intent = str(goal.get('intent') or '')

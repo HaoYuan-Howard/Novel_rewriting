@@ -246,12 +246,10 @@ def test_retired_depth_screen_and_public_fields_do_not_survive():
 
 
 def test_frontend_does_not_rejudge_scene_budget_band():
-    """`R-11.4` 的第二处：场级「预算/源文」只是读数，出档判定在 `/check/stage4`。
+    """`R-11.4` 的第二处：前端只展示预算，出档判定在 `/check/stage4`。
 
-    ⚠⚠ **这一条与上面那条不同型，别照抄。** 锚点覆盖率那边服务端下发了
-    `coverage_threshold` + `coverage_state`，前端删掉阈值即可；这边**服务端刻意就没有
-        场级判定**——预算是否出带是章级判据（`sum(budget_chars)` vs `sum(span)`）。
-    所以正确的守法是两件事一起钉：前端不许自己算一个，服务端也不许悄悄长出一个。
+    Stage4 v4 已删除逐场源字数，场级 API 既没有分母也没有判定；章级预算带仍由
+    后端按当前 Stage2 输入计算。守卫同时钉住「不重算」与「逐场分母不复活」。
     """
     import re
 
@@ -271,15 +269,18 @@ def test_frontend_does_not_rejudge_scene_budget_band():
         assert not re.search(r'\braw\s*[<>]|\bratio\s*[<>]', source), \
             f'{name} 在对预算/源文比值做比较——那是判定，不是显示'
 
-    # ② 守卫的守卫：确认它确实还在看算比值那一段，否则 ① 恒绿
-    assert 'plan.budget_chars / source' in hook, '这条守卫已经不在看比值那一段了'
+    # ② 守卫的守卫：预算展示仍在；被删的是逐场分母与比较，不是预算本身。
+    assert 'budget_chars' in hook, 'Stage4 页面已不再消费预算，守卫失去服务对象'
+    assert 'plan.budget_chars /' not in hook and '/ source' not in hook
 
-    # ③ 反向——**问生产落点**，不重拼一份信念：判定在服务端，而且只在章级
+    # ③ 反向——**问生产落点**，不重拼一份信念：判定在服务端，而且只在章级。
     from contracts.rules import REGISTRY
     from contracts.schema.api import PlanSceneLine, Stage4IndexRow
 
     assert 'in_band' not in Stage4IndexRow.model_fields
     assert 'in_band' not in PlanSceneLine.model_fields
+    assert 'source_chars' not in PlanSceneLine.model_fields
+    assert 'span_chars' not in PlanSceneLine.model_fields
     assert REGISTRY.get('budget_band').stage == 'stage4'
 
 

@@ -341,10 +341,10 @@ S-08（ctx 不在仍 200，`materials=null`）。
 |---|---|---|---|
 | `identity_plan` | 布尔 | 是 | `true` = 本屏是恒等基线。此时计划侧三个 typed goal 的 `intent` / `fact_refs[]` 指向恒等事实，**不是真决策** |
 | `structure_subject_sha256` | SHA-256 或 null | 是 | 正式计划时由**本次读出的同一个 `PlanChapters` 对象**计算，并与 `index[]` / `plan_chapter` 同快照；恒等基线只能为 null。它标识完整 canonical subject，但本 view **不是该 subject 的逐字段序列化**。前端只有在它与 `ApprovalDoc.structure.current_subject_sha256` 完全相同时才可提交结构裁决，避免看 A 行却给 B 主体签字 |
-| `reconstruction_strategy` / `chapters` / `ordinal` | | 是 | `ordinal ∈ chapters`（后置条件） |
-| `index[]` | 数组 | 是 | 章索引；每行带 `chapter_goal`、完整 `structure_decision`、预算、场数与隐藏材料数，供一次提交时核对全章集合与逐章裁决，不额外发 N 次请求；它**不是**完整 canonical subject 的公开展开。⚠ **没有 `in_band` / `style_hits`**——那是判据结论，唯一来源 `/check/stage4`（`R-11.4`），要并排显示就去 join 那份报告。`hidden=null` = ctx 不在盘上**判不了**，不编 0 |
-| `plan_chapter` | 对象 | 是 | 章级三个 typed goal、`retain/reconstruct` 决定、语义契约、改写 brief 与有序 `scenes[]`；每场只展示公开模型实际下发的 purpose/role/delivery/transition、land/context/turn facts、state refs 与预算。已解析的 stage/material/participant 执行证据在 `ctx_chapter` 可用时从上下文查看，不虚构计划 view 不存在的字段 |
-| `ctx_chapter` | 对象 或 null | 是 | 写手实际拿到的任务书。场景顺序以 `scenes[]` / `scenes[].slot` 为准；只下发执行所需事实、状态与证据，不给 Stage5 重新规划权 |
+| `chapters` / `ordinal` | | 是 | `ordinal ∈ chapters`（后置条件） |
+| `index[]` | 数组 | 是 | 章索引；每行带 `chapter_goal`、完整 `structure_decision`、预算与场数，供一次提交时核对全章集合与逐章裁决，不额外发 N 次请求；它**不是**完整 canonical subject 的公开展开。⚠ **没有 `in_band` / `style_hits` / `span_chars` / `hidden`**；判据结论只来自 `/check/stage4`，派生结构向量由服务端 view 现场计算 |
+| `plan_chapter` | 对象 | 是 | 章级三个 typed goal、`retain/reconstruct` 声明、从当前 blueprint 派生的语义契约、改写 brief 与有序 `scenes[]`；`computed_change_kinds` 同样只在 API view 派生，不写回计划。每场只展示 purpose/role/delivery/transition、land/context/turn facts、state refs 与预算 |
+| `ctx_chapter` | 对象 或 null | 是 | 写手实际拿到的任务书。场景顺序以 `scenes[]` / `scenes[].slot` 为准；人物到场只在 `stages[].present`，`characters` 是带 `char_id` 的数组；不重复下发逐场源字数、participants、秘密/规则内部 id 或 must-not 清单 |
 | `writer_target` | 二元组 或 null | 是 | 写手被要求的篇幅区间，**与写手同一把尺子**（`prompts.target_band`）；`null` ⇔ `ctx_chapter=null`（同进同出，后置条件） |
 | `plan_state` / `ctx_state` | 对象 | 是 | 两份产物各自的 `ArtifactState` |
 | `_provenance` / `_ctx_provenance` | 对象 或 null | 是 | 两份来源账分两个键出，不合并 |

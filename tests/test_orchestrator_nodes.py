@@ -158,14 +158,13 @@ def test_an_unrecorded_flag_is_assumed_to_write():
 
 
 def test_node_specific_write_effects_keep_all_three_identity_behaviors_distinct():
-    """stage4 写专用基线、stage6 只打印、stage7 写回正式人物表。"""
+    """stage4/stage6 只诊断，stage7 写回正式人物表。"""
     assert NODE_WRITE_EFFECTS == {
-        ('stage4.plan', '--identity'): 'stage4/writer_context.identity.json',
+        ('stage4.plan', '--identity'): '',
         ('stage6.hook', '--identity'): '',
         ('stage7.rename', '--identity'): 'stage7/name_map.json',
     }
-    assert N.write_effect('stage4.plan', ['--identity']) == \
-        'stage4/writer_context.identity.json'
+    assert N.write_effect('stage4.plan', ['--identity']) == ''
     assert N.write_effect('stage4.plan', ['--identity', '--dry-run']) == ''
     assert N.write_effect('stage7.rename', ['--identity']) == 'stage7/name_map.json'
     assert N.write_effect('stage6.hook', ['--identity']) == ''

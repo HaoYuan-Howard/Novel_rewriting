@@ -11,7 +11,7 @@ import pytest
 from pydantic import ValidationError
 
 from contracts.schema.evaluation import TrimAudit
-from contracts.schema.stage4 import CtxChapter, FactRef, PlanGoal
+from contracts.schema.stage4 import CtxChapter, FactRef, PlanGoal, WriterContext
 from contracts.schema.stage5 import ChapterResponse
 from novel.errors import RefusedByStructure
 from novel.llm.privacy import (
@@ -84,10 +84,10 @@ def test_segment_facts_are_checked_in_their_declared_scene_without_source_order(
     entry, book = _entry()
     entry = {
         **entry,
-        'characters': {
-            **entry['characters'],
-            'char_002': {'display_name': '周衡', 'role': '账房'},
-        },
+        'characters': [
+            *entry['characters'],
+            {'char_id': 'char_002', 'display_name': '周衡', 'role': '账房'},
+        ],
         'scenes': [{
             **entry['scenes'][0],
             'required_facts': ['沈青查看账册。', '周衡关门。'],
@@ -113,44 +113,64 @@ def test_segment_facts_are_checked_in_their_declared_scene_without_source_order(
 def test_prompt_private_values_are_derived_from_schema_metadata_recursively():
     goal = PlanGoal(
         intent='advance',
-        fact_refs=[FactRef(kind='fact_atom', ref='f01_01', chapter=1)],
-        rationale='这是只供审计、绝不能下发的自由理由',
+        fact_refs=[FactRef(kind='fact_atom', ref='f01_01')],
     )
     assert [(token.path, token.value) for token in private_tokens(goal)] == [
         ('fact_refs[0].ref', 'f01_01'),
-        ('rationale', '这是只供审计、绝不能下发的自由理由'),
     ]
-    with pytest.raises(PromptPrivateLeak, match='rationale'):
+    with pytest.raises(PromptPrivateLeak, match='fact_refs'):
         assert_prompt_private_absent(
-            goal, system='系统', user='意外包含：这是只供审计、绝不能下发的自由理由')
+            goal, system='系统', user='意外包含：f01_01')
 
 
-def test_final_writer_messages_do_not_contain_private_secret_ids():
+def test_context_schema_rejects_retired_must_not_reveal():
     entry, book = _entry()
     entry = {**entry, 'must_not_reveal': ['secret_never_send_987']}
-    typed = CtxChapter.model_validate(entry)
-    material = prompts.build_material(entry, book)
-    system, user = prompts.write_system(), prompts.build_user(material)
-    assert 'secret_never_send_987' not in system + user
-    assert_prompt_private_absent(typed, system=system, user=user)
+    with pytest.raises(ValidationError, match='must_not_reveal'):
+        CtxChapter.model_validate(entry)
 
 
-def test_final_writer_messages_project_character_rule_and_secret_ids_to_human_facts():
+@pytest.mark.parametrize('retired,mutate', [
+    ('world_facts', lambda p: p.__setitem__('world_facts', {})),
+    ('characters map', lambda p: p['chapters'][0].__setitem__('characters', {})),
+    ('secret_id', lambda p: p['chapters'][0]['facts']['secrets'][0].__setitem__(
+        'secret_id', 'secret_01')),
+    ('rule_id', lambda p: p['chapters'][0]['facts']['world_rules'][0].__setitem__(
+        'rule_id', 'wr_01')),
+])
+def test_writer_context_v4_rejects_retired_duplicate_fields(retired, mutate):
+    entry, _book = _entry()
+    payload = {
+        'chapters': [deepcopy(entry)],
+        '_provenance': {
+            'code': 'test', 'root_clean_sha1': '1' * 40, 'inputs': {},
+        },
+    }
+    if retired == 'secret_id' and not payload['chapters'][0]['facts']['secrets']:
+        payload['chapters'][0]['facts']['secrets'] = [{
+            'fact': '秘密事实', 'known_by': [], 'reader_knows_by_now': True,
+        }]
+    if retired == 'rule_id' and not payload['chapters'][0]['facts']['world_rules']:
+        payload['chapters'][0]['facts']['world_rules'] = [{
+            'kind': 'legal_rule', 'description': '规则正文',
+        }]
+    mutate(payload)
+    with pytest.raises(ValidationError):
+        WriterContext.model_validate(payload)
+
+
+def test_final_writer_messages_project_character_id_and_human_facts():
     entry, book = _entry()
     entry = deepcopy(entry)
     char_id = 'char_never_send_987'
-    rule_id = 'wr_never_send_987'
-    secret_id = 'secret_never_send_987'
-    entry['characters'] = {
-        char_id: {'display_name': '周衡', 'role': '账房'},
-    }
+    entry['characters'] = [{
+        'char_id': char_id, 'display_name': '周衡', 'role': '账房',
+    }]
     entry['facts']['world_rules'] = [{
-        'rule_id': rule_id,
         'kind': 'legal_rule',
         'description': '旧城账册必须由掌柜与账房共同封存。',
     }]
     entry['facts']['secrets'] = [{
-        'secret_id': secret_id,
         'fact': '周衡已经调换账册末页。',
         'known_by': ['周衡'],
         'reader_knows_by_now': True,
@@ -158,14 +178,12 @@ def test_final_writer_messages_project_character_rule_and_secret_ids_to_human_fa
     typed = CtxChapter.model_validate(entry)
 
     private = {(token.path, token.value) for token in private_tokens(typed)}
-    assert ('characters[key]', char_id) in private
-    assert ('facts.world_rules[0].rule_id', rule_id) in private
-    assert ('facts.secrets[0].secret_id', secret_id) in private
+    assert ('characters[0].char_id', char_id) in private
 
     material = prompts.build_material(entry, book)
     system, user = prompts.write_system(), prompts.build_user(material)
     rendered = system + user
-    assert all(token not in rendered for token in (char_id, rule_id, secret_id))
+    assert char_id not in rendered
     for human_fact in ('周衡', '账房', '共同封存', '调换账册末页'):
         assert human_fact in user
     assert_prompt_private_absent(typed, system=system, user=user)
@@ -185,8 +203,8 @@ def test_context_resolves_goal_ids_after_chapter_gates():
     goal = {
         'intent': 'advance',
         'fact_refs': [
-            {'kind': 'fact_atom', 'ref': 'f01_01', 'chapter': 1},
-            {'kind': 'character', 'ref': 'char_001', 'chapter': 1},
+            {'kind': 'fact_atom', 'ref': 'f01_01'},
+            {'kind': 'character', 'ref': 'char_001'},
         ],
     }
     resolved = stage4_context._resolve_goal(
@@ -208,7 +226,7 @@ def test_context_refuses_goal_that_would_bypass_a_chapter_gate():
     with pytest.raises(RefusedByStructure, match='无法在本章安全解析'):
         stage4_context._resolve_goal(
             {'intent': 'advance', 'fact_refs': [
-                {'kind': 'world_rule', 'ref': 'wr_09', 'chapter': 1}]},
+                {'kind': 'world_rule', 'ref': 'wr_09'}]},
             ordinal=1, atoms={}, disp={},
             facts={'relations': [], 'world_rules': [], 'secrets': [], 'setting': {}},
             global_g={'entities': {'relations': []}},
@@ -218,7 +236,7 @@ def test_context_refuses_goal_that_would_bypass_a_chapter_gate():
 def test_hidden_secret_withhold_goal_does_not_disclose_identity_or_fact():
     resolved = stage4_context._resolve_goal(
         {'intent': 'withhold', 'fact_refs': [
-            {'kind': 'secret', 'ref': 'secret_09', 'chapter': 1}]},
+            {'kind': 'secret', 'ref': 'secret_09'}]},
         ordinal=1, atoms={}, disp={},
         facts={'relations': [], 'world_rules': [], 'secrets': [], 'setting': {}},
         global_g={'entities': {'relations': []}},

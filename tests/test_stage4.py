@@ -53,9 +53,7 @@ def test_evidence_binding_prompt_cannot_modify_the_frozen_candidate():
     assert '盲设计候选已经冻结' in system
     assert '不得改变候选' in system
     scene = prompts.EVIDENCE_BIND_HINT['chapters'][0]['scenes'][0]
-    assert set(scene) == {
-        'candidate_scene_id', 'material_refs', 'participant_refs', 'stage_refs',
-    }
+    assert set(scene) == {'candidate_scene_id', 'material_refs', 'stage_refs'}
 
 
 def test_planner_projection_contains_claims_but_excludes_source_span_bytes():
@@ -143,7 +141,7 @@ def test_relation_fact_refs_share_explicit_visibility_and_inclusive_endpoints():
         return {'output_chapters': [{
             'output_ordinal': ordinal,
             'chapter_goal': {'intent': 'advance', 'fact_refs': [{
-                'kind': 'relation', 'ref': relation_id, 'chapter': ordinal,
+                'kind': 'relation', 'ref': relation_id,
             }]},
         }]}
 
@@ -256,7 +254,7 @@ def test_context_guard_compares_the_producer_projection_after_name_replacement()
                 'required_facts': ['父亲来到公寓'], 'context_facts': [],
                 'stages': [],
             }],
-            'characters': {}, 'must_not_reveal': [], 'facts': {'secrets': []},
+            'characters': [], 'facts': {'secrets': []},
         }],
     }
 
@@ -267,15 +265,15 @@ def test_context_guard_compares_the_producer_projection_after_name_replacement()
     assert not facts.findings
 
 
-def test_identity_action_reports_the_file_it_really_writes():
+def test_identity_action_explicitly_reports_that_it_writes_nothing():
     from contracts.invariants import NODE_WRITE_EFFECTS, WRITE_EFFECTS
     from novel.api.enums import payload
 
     assert '--identity' not in WRITE_EFFECTS
-    assert NODE_WRITE_EFFECTS[('stage4.plan', '--identity')] == plan.IDENTITY_CTX_REL
+    assert NODE_WRITE_EFFECTS[('stage4.plan', '--identity')] == ''
     action = next(row for row in payload()['actions']
                   if row['kind'] == 'stage4.plan' and row['extra'] == ['--identity'])
-    assert action['writes_disk'] is True and action['writes'] == plan.IDENTITY_CTX_REL
+    assert action['writes_disk'] is False and action['writes'] == ''
 
 
 def test_stage4_has_two_paid_phases_plus_one_free_context_node():

@@ -292,7 +292,7 @@ APPROVAL_STATE: Final = ('pending', 'approved')
 APPROVAL_GATES: Final = ('s0', 's1', 's2', 's3', 's4', 's5', 's6', 's7')
 APPROVAL_SEEN: Final = ('read', 'global')
 
-#: Stage4 v3 的章级结构决定。`retain` 是一次显式设计决定，不是“模型忘了改”；
+#: Stage4 v4 的章级结构决定。`retain` 是一次显式设计决定，不是“模型忘了改”；
 #: `reconstruct` 只声明要改变哪些可复算结构维度，实际变化仍由代码从最终计划重算。
 STRUCTURE_MODES: Final = ('retain', 'reconstruct')
 STRUCTURE_CHANGE_KINDS: Final = (
@@ -1436,11 +1436,9 @@ WRITE_EFFECTS: Final = {
 #: 在不同节点不同形」且已核实的例外；值的口径与 `WRITE_EFFECTS`
 #: 一样，空串 = 不写盘。普通情形仍由 `WRITE_EFFECTS` 和 `NodeSpec.produces` 派生。
 #:
-#: `stage4.plan --identity` 不覆盖正式计划，它把恒等基线单独落在
-#: `writer_context.identity.json`。此前因为只有 flag 维度，API 会误报
-#: `stage4/plan_chapters.json`；方向虽保守，文件名却会误导人的覆盖决策。
+#: `stage4.plan --identity` 与 Stage6 一样只做内存诊断；Stage7 仍写正式人物表。
 NODE_WRITE_EFFECTS: Final = {
-    ('stage4.plan', '--identity'): artifact_paths.STAGE4_WRITER_CONTEXT_IDENTITY,
+    ('stage4.plan', '--identity'): '',
     ('stage6.hook', '--identity'): '',
     ('stage7.rename', '--identity'): artifact_paths.STAGE7_NAME_MAP,
 }

@@ -41,7 +41,7 @@ from contracts.artifacts import (
     STAGE3_STYLE_GROUNDING,
     STAGE4_BLIND_CANDIDATE, STAGE4_EVIDENCE_BINDING,
     STAGE4_PLAN_CHAPTERS, STAGE4_PLAN_EDIT, STAGE4_WRITER_CONTEXT,
-    STAGE4_WRITER_CONTEXT_IDENTITY, STAGE5_CHAPTER, STAGE5_REJECTED_REVISION,
+    STAGE5_CHAPTER, STAGE5_REJECTED_REVISION,
     STAGE5_REVIEW, STAGE5_TRIM_AUDIT, STAGE5_TRIM_RESOLUTION,
     STAGE5_WONTFIX, STAGE6_HOOK,
     STAGE6_HOOK_EDIT, STAGE6_SEMANTIC, STAGE6_WONTFIX, STAGE7_NAME_MAP,
@@ -143,7 +143,7 @@ from contracts.schema.stage2 import (
 )
 from contracts.schema.stage3 import Measurable, StyleGrounding, StyleProvenance
 from contracts.schema.stage4 import (
-    BlindCandidate, BookCharacter, CtxChapter, CtxFacts, CtxGoal, CtxScene,
+    BlindCandidate, CtxChapter, CtxFacts, CtxGoal, CtxScene,
     EvidenceBinding, FactRef, PlanChapter, PlanChapters, PlanEdit, PlanGoal,
     PlanScene, WriterContext,
 )
@@ -254,19 +254,15 @@ ARTIFACT_SPECS: dict[str, ArtifactSpec] = {
     # 2026-08-24 Stage3 定性包整批退役：顶层只留 measurable + 免费 provenance。
     # v1 不迁移；普通旧书由免费 producer 重建，已用于实验的两本按归档清单保留历史字节。
     STAGE3_STYLE_GROUNDING: ArtifactSpec(StyleGrounding, 2),
-    STAGE4_BLIND_CANDIDATE: ArtifactSpec(BlindCandidate),
-    STAGE4_EVIDENCE_BINDING: ArtifactSpec(EvidenceBinding),
-    STAGE4_PLAN_CHAPTERS: ArtifactSpec(PlanChapters, 3),
-    STAGE4_PLAN_EDIT: ArtifactSpec(PlanEdit, 3),
-    # v3 随 Stage2 ArcTrack 删除无消费分类标签；由 `stage4.context` 免费重建。
-    STAGE4_WRITER_CONTEXT: ArtifactSpec(WriterContext, 3),
-    # ⚠ **恒等基线是一份【产物】不是一次 print**（2026-08-12，F3-4）。
-    #   `stage4.plan --identity` 必须让「跑过且写手手里有这些」与
-    #   「从没跑过」在盘上长得一模一样（`Q-2`）。stage6/stage7 在同一道工序上都做对了。
-    #   ⚠ 它与正式那份**同一个模型**：形状完全一样，差别只在三个 goal 是显式标记
-    #   ——**换一个模型就等于说它是另一种东西**，而它恰恰要回答
-    #   「计划什么都不改时，写手手里到底有什么」。
-    STAGE4_WRITER_CONTEXT_IDENTITY: ArtifactSpec(WriterContext, 3),
+    # v2 删除 goal rationale；A 仍保留重构策略与预算权重，供 B/编译器消费。
+    STAGE4_BLIND_CANDIDATE: ArtifactSpec(BlindCandidate, 2),
+    # v2 删除可由绑定舞台 present 唯一推出的 participant_refs。
+    STAGE4_EVIDENCE_BINDING: ArtifactSpec(EvidenceBinding, 2),
+    # v4 删除 A 相过程字段、Stage2 重复契约、派生结构向量与编译参数快照。
+    STAGE4_PLAN_CHAPTERS: ArtifactSpec(PlanChapters, 4),
+    STAGE4_PLAN_EDIT: ArtifactSpec(PlanEdit, 4),
+    # v4 删除全书名册、私有 id/秘密清单及逐场展示字段；由免费 context 节点重建。
+    STAGE4_WRITER_CONTEXT: ArtifactSpec(WriterContext, 4),
     # ⚠ 2026-08-24 单臂折平：删除 `mode`，路径改为
     #   `stage5/chNN.json`。存量双臂稿是只读历史证据，不做迁移；
     #   current 产物由 `stage5.write` 重建。
@@ -444,7 +440,7 @@ __all__ = [
     'StyleGrounding', 'StyleProvenance', 'Measurable',
     'BlindCandidate', 'EvidenceBinding',
     'PlanChapters', 'PlanChapter', 'PlanScene', 'FactRef', 'PlanGoal', 'PlanEdit',
-    'WriterContext', 'BookCharacter',
+    'WriterContext',
     'CtxChapter', 'CtxScene', 'CtxFacts', 'CtxGoal',
     'Chapter', 'GeneratedSegment', 'ChapterSegment', 'ChapterResponse',
     'RejectedAttempt', 'RejectedRevision',

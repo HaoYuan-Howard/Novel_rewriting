@@ -203,7 +203,7 @@ SHA-256；bool 必须与 proof 是否存在逐格一致。结构 subject 或计�
 
 ## 六、判据注册表
 
-当前注册表共 **51 条**：**7 hard、27 info、12 metric、5 unver**。
+当前注册表共 **50 条**：**7 hard、26 info、12 metric、5 unver**。
 repair 分桶为 **12 UNIQUE、12 FREE、27 NONE**；repair 不是 severity，只有 UNIQUE 才能在
 `unresolved_rounds < 2` 时进入付费 `--revise`，FREE / NONE 不得被包装成自动修复。
 

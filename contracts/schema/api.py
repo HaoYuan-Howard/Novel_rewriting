@@ -60,6 +60,7 @@ from contracts.invariants import (
     STAGE5_REVIEW_STATE,
     STRUCTURE_APPROVAL_DECISIONS,
     STRUCTURE_APPROVAL_STATES,
+    STRUCTURE_CHANGE_KINDS,
     STRUCTURAL_ROLES,
     STAGE0_SEGMENT_KINDS,
     STAGE1_SEGMENT_KINDS,
@@ -1347,15 +1348,21 @@ class PlanSceneLine(FrozenModel):
     exit_state_refs: list[str]
 
 
+class StructureDecisionView(StructureDecision):
+    """持久化人工声明 + 当前算法从实际计划现场复算的只读向量。"""
+
+    computed_change_kinds: list[Literal[STRUCTURE_CHANGE_KINDS]]
+
+
 class PlanChapterLine(StrictModel):
-    """计划侧的一章：章级不可变语义契约 + 可变的新场景设计。"""
+    """计划侧的一章：当前 blueprint 派生语义 + 持久化的新场景设计。"""
 
     output_ordinal: int = Field(ge=1)
     from_source_ordinals: list[int] = Field(min_length=1, max_length=1)
     chapter_goal: PlanGoal
     open_hook_goal: PlanGoal
     end_hook_goal: PlanGoal
-    structure_decision: StructureDecision
+    structure_decision: StructureDecisionView
     semantic_contract: SemanticContract
     chapter_rewrite_brief: str = Field(min_length=1)
     scenes: list[PlanSceneLine] = Field(min_length=1)
@@ -1369,12 +1376,9 @@ class Stage4IndexRow(FrozenModel):
     #: 章级阅读/写作导航的主要目标。来自同一份 `plan_chapters.json`，随索引一次下发，
     #: 不让前端为了 N 章再发 N 次章级请求。
     chapter_goal: str = Field(min_length=1)
-    structure_decision: StructureDecision
+    structure_decision: StructureDecisionView
     budget_chars: int | None
-    span_chars: int | None
     scenes: int = Field(ge=1)
-    #: 本章不许泄的 secret 数。`null` = ctx 不在盘上，**判不了**（不编 0）。
-    hidden: int | None
 
 
 class Stage4View(StrictModel):
@@ -1394,7 +1398,6 @@ class Stage4View(StrictModel):
     #: 恒等基线不是盘上可审批对象，因此只能是 `null`；正式计划则必须给完整 SHA-256，
     #: 供前端与审批服务的 `structure.current_subject_sha256` 关闭式对齐。
     structure_subject_sha256: str | None = Field(pattern=r'^[0-9a-f]{64}$')
-    reconstruction_strategy: str = Field(min_length=1)
     chapters: list[int] = Field(min_length=1)
     ordinal: int = Field(ge=1)
     index: list[Stage4IndexRow] = Field(min_length=1)

@@ -221,11 +221,8 @@ def fidelity_findings(body: str, entry: dict[str, Any], book: M.Book, *,
     #   它由书级那条 `must_hold_unver` 显式说「没查」。
 
     # ── ④ 本章不该点破的秘密 ────────────────────────────────────────────────
-    # ``must_not_reveal`` is the writer-facing projection.  The review-side
-    # deterministic gate must also be able to recover the same boundary from
-    # the authoritative Stage2 reveal timeline: otherwise one omitted ctx id
-    # turns a checkable verbatim leak into a silent pass.  This remains the
-    # narrow literal detector; paraphrased leaks stay with the semantic judge.
+    # 秘密边界只认 Stage2 权威揭示时间线；WriterContext 不再复制一份 id 清单。
+    # 这仍只是字面探针，改写式泄漏继续显式留给语义层。
     ordinal = int(entry.get('output_ordinal') or 0)
     timeline_hidden = []
     if ordinal:
@@ -236,21 +233,14 @@ def fidelity_findings(body: str, entry: dict[str, Any], book: M.Book, *,
             first = first_reveal_chapter(secret)
             if first is not None and ordinal < first:
                 timeline_hidden.append(secret.get('secret_id'))
-    hid = list(dict.fromkeys([
-        *(entry.get('must_not_reveal') or []),
-        *(sid for sid in timeline_hidden if sid),
-    ]))
+    hid = list(dict.fromkeys(sid for sid in timeline_hidden if sid))
     if hid:
         table = {s['secret_id']: s for s in book.secrets}
         leak: list[tuple[str, list[str]]] = []
-        unknown: list[str] = []
         leak_spans: list[str] = []
         for sid in hid:
             s = table.get(sid)
             if s is None:
-                # 【不静默】`must_not_reveal` 点了一条 secret，而全书 secrets 里没有它——
-                # 那不是「查过、没泄漏」，是**根本没得查**。
-                unknown.append(sid)
                 continue
             # 两侧共用 secret 口径：fact 侧剥数字，成稿侧也剥；数字不是
             # 泄密与否的身份键。但这仍只是转抄式探针，改写式盲区继续由
@@ -269,12 +259,6 @@ def fidelity_findings(body: str, entry: dict[str, Any], book: M.Book, *,
             fs.append(finding('secret_leak',
                               detail=f'成稿疑似提前点破了本章不该揭示的秘密：{leak[:4]}',
                               evidence=leak_spans or [sid for sid, _h in leak]))
-        if unknown:
-            fs.append(finding(
-                'secret_unknown',
-                detail=f'{len(unknown)} 条 must_not_reveal 在 stage2 的 secrets 里找不到'
-                       f'：{unknown[:4]}',
-                evidence=unknown))
 
     # ── ⑤ 发明越界的两个探针 ────────────────────────────────────────────────
     #
@@ -326,7 +310,7 @@ def segment_fidelity_findings(
         contract = expected.get(slot)
         if contract is None:
             continue  # the response-shape validator owns unknown/missing slots
-        isolated = {**entry, 'scenes': [contract], 'must_not_reveal': []}
+        isolated = {**entry, 'scenes': [contract]}
         for hit in fidelity_findings(
             str(returned.get('text') or ''), isolated, book, given=given,
         ):
@@ -591,7 +575,7 @@ def _end_hook_landing(
                 detail='拿不到成稿分段，章尾语义交付**未判**',
                 evidence=['no_segments']),
         ]
-    roster = {c.get('display_name') for c in (entry.get('characters') or {}).values()}
+    roster = {c.get('display_name') for c in (entry.get('characters') or [])}
     roster = {n for n in roster if n} - _pronoun_named(entry)
     atoms = _surface_atoms(' '.join(facts), roster)
     if not atoms:
@@ -944,7 +928,7 @@ def fact_landing(entry: dict[str, Any], body: str, src_text: str
     ——源章里都落不下的原子，说明是**抽取坏了不是成稿坏了**。
     没有这个对照，「落点率 70%」这个数没有任何可解读性。
     """
-    roster = {c.get('display_name') for c in (entry.get('characters') or {}).values()}
+    roster = {c.get('display_name') for c in (entry.get('characters') or [])}
     roster = {n for n in roster if n} - _pronoun_named(entry)
     landed: list = []
     missed: list = []
@@ -973,7 +957,7 @@ def segment_fact_findings(
 ) -> list[Finding]:
     """逐场检查必落事实；事实数组没有源序含义，因此绝不做场内顺序判定。"""
     contracts = {str(row.get('slot') or ''): row for row in (entry.get('scenes') or [])}
-    roster = {c.get('display_name') for c in (entry.get('characters') or {}).values()}
+    roster = {c.get('display_name') for c in (entry.get('characters') or [])}
     roster = {name for name in roster if name} - _pronoun_named(entry)
     source = M.chapter_source(entry, book.source_text)
     out: list[Finding] = []
@@ -1229,7 +1213,7 @@ def trim_regressions(prev: str, new: str, entry: dict[str, Any], book: M.Book) -
 _FROM_CHAPTER: tuple[str, ...] = (
     'draft_too_short', 'draft_truncated', 'meta_leak', 'names_absent',
     'verbatim_missing', 'verbatim_typo', 'verbatim_split', 'keep_value_missing',
-    'must_appear_missing', 'secret_leak', 'secret_unknown',
+    'must_appear_missing', 'secret_leak',
     'invented_number', 'invented_name',
     'length_report', 'length_over', 'length_under',
     'paragraph_count_report', 'paragraph_budget_missed',

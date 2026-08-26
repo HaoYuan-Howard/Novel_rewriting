@@ -65,7 +65,6 @@ def _goal(alias: str, intent: str) -> dict:
     return {
         'intent': intent,
         'fact_aliases': [alias],
-        'rationale': '用冻结事实约束这一处结构目标。',
     }
 
 
@@ -163,10 +162,8 @@ def _seed_candidate(
 def _fact_goal(fact_id: str, chapter: int, intent: str) -> dict:
     return {
         'intent': intent,
-        'fact_refs': [{
-            'kind': 'fact_atom', 'ref': fact_id, 'chapter': chapter,
-        }],
-        'rationale': '以冻结事实约束结构目标。',
+        # 盲评工具的 control 是特意冻结的历史 Stage4 v2，不是当前正式 schema。
+        'fact_refs': [{'kind': 'fact_atom', 'ref': fact_id, 'chapter': chapter}],
     }
 
 
@@ -193,7 +190,6 @@ def _seed_control(
                 'turn_fact_ref': atom.fact_id,
                 'entry_state_refs': [],
                 'exit_state_refs': [],
-                'participant_refs': [],
                 'stage_refs': [atom.source_beat_ref],
             })
         chapters.append({

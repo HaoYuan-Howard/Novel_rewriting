@@ -34,7 +34,7 @@ skip、缺书、缺产物或版本漂移。命令与失败口径只引用 `tests
 ### TODO-28 · backend_v1 fixture 与真实 API 响应契约闭环
 
 **缺口**：`web/src/fixtures/backend_v1/*.json` 是 mock 的现役数据源，但当前只有少数文件被
-Pydantic 响应模型直接校验。Stage2 v5、Stage4 v3、Stage5 与 Stage7 的形状变化已经让部分 fixture
+Pydantic 响应模型直接校验。Stage2 v6、Stage4 v4、Stage5 与 Stage7 的形状变化已经让部分 fixture
 无法通过对应的 `contracts/schema` 模型，而前端 seam 只检查“谁能读取”，检查不到载荷漂移。
 
 **工作**：
@@ -51,27 +51,18 @@ Pydantic 响应模型直接校验。Stage2 v5、Stage4 v3、Stage5 与 Stage7 �
 
 ### TODO-30 · 盲规划、结构读数与独立人工批准闭环
 
-**缺口**：Stage4 v2 虽把旧源拍写作骨架替换为 fact atom → scene 编译，但规划调用仍同时看见
-源序 fact id、`source_beat_ref`、舞台序列与全书原文；当前五个结构读数又分别存在逆序算保留、
-连续大场算非相邻重组、只比场数冒充边界变化、只看首事实冒充入口判断、只报 facts→scenes 数量
-而不报分组的问题。结果是事实闭合与低文字重合都能成立，整书结构仍可接近恒等映射，而 Stage5
-只会忠实执行这份计划。结构质量没有 ground truth，不能用未经标定的自动阈值掩盖这个缺口。
+**缺口**：Stage4 已完成 fact atom → scene、隔离 A/B、可复算结构读数、hash-bound 人工结构门和
+v4 减法契约；尚缺的是用 current-schema 真实书证明「A 的去序隔离确实带来可辨认且不伤事实安全的
+结构重建」。结构质量没有 ground truth，不能用非 corpus 测试或未经标定的自动阈值代替人工盲评。
 
 **工作（按顺序完成，不跨步宣称收口）**：
 
-- 先把指标改成逐章、带分子分母与 `unver` 的可复算定义：事实分组的 pairwise partition delta、
-  严格源区间上的披露顺序与同场 tie、真实边界增删、非连续源事实组场、首尾 goal/场景锚点迁移，
-  并单报可测章、源舞台数、因果不可比事实对等输入侧分母；映射不闭合时不得拿残缺数据算比例。
-- 冻结同一份 Stage2 v5，在不覆盖正式产物的实验面做旧规划与盲规划 A/B。A 只见去序、无源位置信息
-  的事实真相图和 opaque alias；B 才见证据层，只能绑定舞台、人物与保真材料，不能静默改变 A 的
-  场景顺序、事实分组、首尾锚点或 retain/reconstruct 决定。
+- 冻结同一份 Stage2 v6，在不覆盖正式产物的实验面做旧规划与当前盲规划 A/B。A 只见去序、无源位置信息
+  的事实真相图和 opaque alias；B 才见证据层，只能绑定舞台与保真材料，不能静默改变 A 的
+  场景顺序、事实分组、首尾锚点或 retain/reconstruct 决定；人物到场只从绑定舞台推导。
 - 把两臂、书名、版本和生成顺序遮蔽后做逐章人工盲评，至少区分：顺叙本来合理、入口/分组/披露确有
-  重建、只改措辞、为追指标强行重排。标签必须绑定章节与证据；盲评证明去序有效后，才把正式
-  `stage4.plan` 改成两次独立 wire，并将 `plan_chapters.json` / `plan_edit.json` 升 v3。
-- 上线独立、hash-bound 的结构批准动作：逐章接受或请求重规划，带 actor/reason 与完整结构主体
-  SHA-256；任何请求重规划都不得自动花钱。Stage5 的所有付费写作入口在调用 LLM 前同时验证当前
-  结构批准与独立 writing 授权，0 成本复检、人工编辑与恢复路保持可进。
-- 最后与 TODO-21 共用两书 current-schema 全链验收，保存 Stage2 冻结主体、A/B 中间证据、Stage4 v3、
+  重建、只改措辞、为追指标强行重排。标签必须绑定章节与证据，并与现役可复算指标逐项对照。
+- 最后与 TODO-21 共用两书 current-schema 全链验收，保存 Stage2 冻结主体、A/B 中间证据、Stage4 v4、
   结构报告与人工决定、Stage5 canonical 的逐章读数；不得另拿旧 prompt 或旧 schema 产物充数。
 
 **验收**：两书事实、因果、人物状态、材料闭合与低文字重合仍成立；每章明确记

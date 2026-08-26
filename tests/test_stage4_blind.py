@@ -12,9 +12,9 @@ from pydantic import ValidationError
 
 from contracts.invariants import BLIND_ALIAS_ALGORITHM
 from contracts.schema.stage4 import (
-    BlindCandidateChapter,
+    BlindCandidateChapter, BlindGoalResponse,
     BlindPlanResponse,
-    EvidenceBindingResponse,
+    EvidenceBindingResponse, EvidenceSceneBinding,
 )
 from novel.stages.stage4.blind import (
     BlindPlanError,
@@ -28,6 +28,21 @@ from novel.stages.stage4.blind import (
 
 ROOT = '1f' * 20
 ALIAS_RE = re.compile(r'^a_[0-9a-f]{16,64}$')
+
+
+def test_phase_v2_schemas_reject_retired_display_and_participant_fields():
+    alias = 'a_0123456789abcdef'
+    with pytest.raises(ValidationError, match='rationale'):
+        BlindGoalResponse.model_validate({
+            'intent': 'G_ADVANCE', 'fact_aliases': [alias],
+            'rationale': '旧展示理由',
+        })
+    with pytest.raises(ValidationError, match='participant_refs'):
+        EvidenceSceneBinding.model_validate({
+            'candidate_scene_id': 'c01s01',
+            'material_refs': [], 'stage_refs': ['b01_01'],
+            'participant_refs': ['char_001'],
+        })
 
 
 def _atom(chapter: int, index: int, claim: str, *, participants: list[str]) -> dict:
@@ -144,7 +159,6 @@ def _goal(alias: str, intent: str) -> dict:
     return {
         'intent': intent,
         'fact_aliases': [alias],
-        'rationale': '用事实目标约束场景',
     }
 
 
@@ -236,7 +250,6 @@ def _raw_bindings(compiled: dict) -> dict:
                 'scenes': [{
                     'candidate_scene_id': scene_ids[2][0],
                     'material_refs': ['h02_001'],
-                    'participant_refs': ['char_003', 'char_001'],
                     'stage_refs': ['b02_01', 'b02_02'],
                 }],
             },
@@ -246,13 +259,11 @@ def _raw_bindings(compiled: dict) -> dict:
                     {
                         'candidate_scene_id': scene_ids[1][1],
                         'material_refs': [],
-                        'participant_refs': ['char_001'],
                         'stage_refs': ['b01_01', 'b01_03'],
                     },
                     {
                         'candidate_scene_id': scene_ids[1][0],
                         'material_refs': ['h01_002'],
-                        'participant_refs': ['char_001', 'char_002'],
                         'stage_refs': ['b01_02'],
                     },
                 ],
@@ -455,7 +466,6 @@ def test_b_cannot_move_a_scene_to_another_chapter():
     # b02_01 是存在的正式引用，但属于另一章；不能只做全书集合 membership。
     ('stage_refs', 'b02_01'),
     ('material_refs', 'h01_999'),
-    ('participant_refs', 'char_999'),
 ])
 def test_b_unknown_or_cross_chapter_evidence_refs_are_closed(field: str, unknown: str):
     compiled, _mapping, catalog = _compiled()

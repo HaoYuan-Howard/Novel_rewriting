@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Stage4 v3 的真实 producer 链：Fake transport，零正文外发、零真实费用。
+"""Stage4 v4 的真实 producer 链：Fake transport，零正文外发、零真实费用。
 
 这里刻意不 monkeypatch ``run_design`` / ``run_plan`` / ``ArtifactStore``。测试跨过
 ``LlmClient → 响应 schema/validator → producer → 当前版本产物 → context`` 这条缝，
@@ -141,7 +141,6 @@ def _retain_a_response(blueprints_raw: dict[str, Any], mapping: dict[str, Any]) 
             return {
                 'intent': intent,
                 'fact_aliases': [alias],
-                'rationale': '以冻结事实约束目标',
             }
 
         scenes = []
@@ -202,19 +201,9 @@ def _bound_b_response(
                 for stage_ref in stage_refs
                 for hinge in beats[stage_ref]['hinges']
             ]
-            participant_refs = sorted({
-                ref
-                for fact_id in fact_ids
-                for ref in atoms[fact_id]['participant_char_ids']
-            } | {
-                ref
-                for stage_ref in stage_refs
-                for ref in beats[stage_ref]['present_char_ids']
-            })
             scene_rows.append({
                 'candidate_scene_id': scene.candidate_scene_id,
                 'material_refs': material_refs,
-                'participant_refs': participant_refs,
                 'stage_refs': stage_refs,
             })
         chapters.append({
@@ -247,10 +236,8 @@ def _infeasible_b_response(candidate: BlindCandidate) -> dict:
         'evidence_refs': [
             first_scene.candidate_scene_id,
             first_scene.land_fact_aliases[0],
-            next(iter(candidate.participant_aliases)),
             'b01_01',
             'h01_011',
-            'char_001',
         ],
     }
 
@@ -365,7 +352,7 @@ def test_run_design_is_blind_and_lands_a_reproducible_current_candidate(designed
     assert len(subject) == 64
 
 
-def test_run_plan_binds_evidence_then_compiles_plan_v3_and_context(designed):
+def test_run_plan_binds_evidence_then_compiles_plan_v4_and_context(designed):
     book, blueprints_artifact, packed = designed
     _design_ctx, _design_client, _design_transport, candidate, _truth, _mapping = packed
     ctx = _ctx(book, 'stage4.plan')
@@ -383,7 +370,7 @@ def test_run_plan_binds_evidence_then_compiles_plan_v3_and_context(designed):
     context = store.read_own(WriterContext, plan.CTX_REL)[0]
     assert binding.status == 'bound'
     assert context.chapters
-    assert json.loads((book / plan.REL).read_text(encoding='utf-8'))['_schema_version'] == 3
+    assert json.loads((book / plan.REL).read_text(encoding='utf-8'))['_schema_version'] == 4
 
     binding_inputs = {
         plan.CANDIDATE_REL,

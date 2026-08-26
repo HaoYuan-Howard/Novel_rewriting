@@ -20,8 +20,8 @@ from novel.core.facts import (
 )
 from novel.core.naming import (
     attested_surname, family_groups, invented_names, is_generic_appellation,
-    name_stems, person_naming_surfaces, rename_semantic_markers, rule_names_a_person,
-    strip_distinguisher,
+    name_stems, person_naming_surfaces, project_character_names,
+    rename_semantic_markers, rule_names_a_person, strip_distinguisher,
     surface_first_chapter, surface_owners,
 )
 from novel.core.normalize import (
@@ -290,6 +290,37 @@ _CHARS = {
     'char_002': {'display_name': '我娘', 'name_distinctiveness': 'high'},
     'char_003': {'display_name': '掌柜', 'name_distinctiveness': 'common'},
 }
+
+
+def test_character_name_projection_keeps_display_and_distinctiveness_together():
+    """Stage4 下发与 Stage5 名称检查共用同一份角色名称投影。"""
+    registry = {
+        'char_001': {
+            'canonical': '苏清杳',
+            'name_distinctiveness': 'high',
+            'address': [],
+        },
+        'char_002': {
+            'canonical': '模型标签',
+            'name_distinctiveness': 'common',
+            'address': [{'surface': '掌柜'}],
+        },
+    }
+    projected, substitutions, unattested = project_character_names(
+        registry, '苏清杳和掌柜都在。')
+
+    assert projected == {
+        'char_001': {
+            'display_name': '苏清杳',
+            'name_distinctiveness': 'high',
+        },
+        'char_002': {
+            'display_name': '掌柜',
+            'name_distinctiveness': 'common',
+        },
+    }
+    assert substitutions == {'模型标签': '掌柜'}
+    assert unattested == []
 
 
 def test_name_stems_takes_first_chars_of_real_names_only():

@@ -530,14 +530,11 @@ export interface FactRef {
     | 'setting'
     | 'chapter_boundary'
   ref: string
-  chapter: number
 }
 
 export interface PlanGoal {
   intent: 'establish' | 'advance' | 'open' | 'close' | 'withhold' | 'resolve'
   fact_refs: FactRef[]
-  /** 审计理由；写手 prompt 会在进入模型前剥掉。 */
-  rationale?: string | null
 }
 
 /** Writer-facing goal: every planning ID has already been resolved by Stage4. */
@@ -575,7 +572,7 @@ export interface PlanScene {
   exit_state_refs: string[]
 }
 
-/** 最终计划里由代码复算闭合的章级结构决定；取值域均由 `/api/enums` 发布。 */
+/** 持久化声明 + API 从当前计划现场复算的只读向量；取值域由 `/api/enums` 发布。 */
 export interface StructurePlanDecision {
   mode: string
   reason: string
@@ -601,10 +598,7 @@ export interface Stage4IndexRow {
   chapter_goal: string
   structure_decision: StructurePlanDecision
   budget_chars: number | null
-  span_chars: number | null
   scenes: number
-  /** 本章不许泄的 secret 数；null = ctx 不在盘上，判不了 */
-  hidden: number | null
 }
 
 export interface CtxSemanticContract {
@@ -628,13 +622,11 @@ export interface CtxScene {
   delivery: string
   transition: string
   budget_chars: number
-  source_chars: number | null
   required_facts: string[]
   context_facts: string[]
   turn_fact: string
   entry_state: string[]
   exit_state: string[]
-  participants: string[]
   stages: { time_layer: string; place: string | null; present: string[] }[]
   verbatim?: string[] | null
   keep_value?: string[] | null
@@ -654,10 +646,9 @@ export interface CtxChapter {
   budget_chars: number
   source_chars: number
   scenes: CtxScene[]
-  characters: Record<string, { display_name: string; role: string }>
+  characters: { char_id: string; display_name: string; role: string }[]
   narration: PlanNarration[]
   facts: Facts
-  must_not_reveal: string[]
 }
 
 export interface Stage4Response {
@@ -667,7 +658,6 @@ export interface Stage4Response {
   identity_plan: boolean
   /** 与 index / plan_chapter 同一份正式 plan 的结构主体；恒等基线为 null */
   structure_subject_sha256: string | null
-  reconstruction_strategy: string
   chapters: number[]
   ordinal: number
   index: Stage4IndexRow[]

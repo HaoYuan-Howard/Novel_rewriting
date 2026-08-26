@@ -130,9 +130,9 @@ provenance 的口相同。
 `tests/test_artifact_versions.py::_SHAPE_BREAKS` 里显式登记那一次破坏）。
 现役 `stage2/global_grounding.json` / `global_edit.json` 为 v4 / v3，
 `stage2/chapter_blueprints.json` 为 v6（2026-08-26 删除无下游作用的展示/过程字段）。
-Stage4 `blind_candidate.json` / `evidence_binding.json` 为 v1，
-`plan_chapters.json` / `plan_edit.json` 为 v3，writer context 与 identity 为 v3；旧 Stage4 v2 计划
-不迁移，必须先跑 `stage4.design`、再跑 `stage4.plan` 重建。Stage5 canonical 章稿、Review、
+Stage4 `blind_candidate.json` / `evidence_binding.json` 为 v2，
+`plan_chapters.json` / `plan_edit.json` 与 writer context 为 v4；identity artifact 已退役。旧 Stage4
+计划不迁移，必须先跑 `stage4.design`、再跑 `stage4.plan` 重建。Stage5 canonical 章稿、Review、
 trim audit/resolution 均为 v2。旧 `stage5/deep|shallow/` 只作历史证据，读模型必须明确报
 `legacy_incompatible`，不允许原地选臂、迁移或触发付费重建；其余产物版本以注册表为准；
 旧产物**不手补字段冒充当前产地**，要从 producer 重建。

@@ -491,7 +491,11 @@ def test_inventory_refuses_a_raw_non_current_version(tmp_path):
         **global_grounding(),
     }, ensure_ascii=False), encoding='utf-8')
 
-    with pytest.raises(ValueError, match=r'raw _schema_version=2.*current v3.*从 producer 重跑'):
+    spec = artifact_spec('stage2/global_grounding.json')
+    assert spec is not None
+    with pytest.raises(
+            ValueError,
+            match=rf'raw _schema_version=2.*current v{spec.current_version}.*从 producer 重跑'):
         corpus_manifest._artifact_inventory(book)
 
 

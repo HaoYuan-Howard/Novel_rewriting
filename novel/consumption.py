@@ -367,13 +367,10 @@ def stage5_style(data: object) -> object:
 
 
 def stage5_context(data: object) -> object:
-    """写作消费逐章材料和书级人物表，不消费 context 自己的 provenance。"""
+    """写作只消费逐章材料；书级名字基线从 Stage2 + Stage1 现场派生。"""
     if not isinstance(data, dict):
         return None
-    return {
-        'chapters': data.get('chapters'),
-        'characters': ((data.get('world_facts') or {}).get('characters')),
-    }
+    return {'chapters': data.get('chapters')}
 
 
 def stage5_review_context(data: object) -> object:

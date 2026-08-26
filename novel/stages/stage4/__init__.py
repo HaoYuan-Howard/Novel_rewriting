@@ -12,7 +12,8 @@
 正向覆盖率按 stage 取 `R-5 ∪ R-6`，因此两份产物必须作为同一层共同验证。
 
 **② LLM 在这一层设计场景，不重述事实。**
-`reconstruction_strategy` · 逐章安全 brief · 按新叙事顺序排列的 `scenes[]` 与权重由模型产生；
+`reconstruction_strategy` 只在 A 相作规划脚手架；逐章安全 brief、按新叙事顺序排列的
+`scenes[]` 与权重由模型产生，权重在预算编译后即丢弃；
 事实真值、因果边、状态增量由 Stage2 冻结，`writer_context` 再按引用确定性组装。
 
 **③ 确定性核心一律吃 `dict`，不吃模型。**
@@ -23,6 +24,6 @@ Pydantic 当前 schema 的产物。
 
 **④ 本层的徽章【可以】是 `pass`，而 stage6/stage7 结构上永远不可能。**
 判据表里**没有一条 `sev='unver'`**：`budget_band` 的基准残缺、`context_link` 的
-`unknown`/`missing`、`params_drift` 的参数缺失都是**产出层的 `unver` 臂**，
+`unknown`/`missing` 都是**产出层的 `unver` 臂**，
 不是判据的级别。⇒ 基准齐、边对得上的那几本，徽章就是绿的。
 """

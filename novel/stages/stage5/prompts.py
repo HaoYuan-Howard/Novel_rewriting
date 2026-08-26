@@ -341,7 +341,7 @@ _GOAL_INTENT = {
 
 
 def _goal_directive(goal: Any) -> str:
-    """Render only resolved writer facts; IDs and planner rationale never arrive here."""
+    """只渲染已解析的人话目标；内部引用不会进入写手面。"""
     if not isinstance(goal, dict):
         return str(goal or '')
     intent = _GOAL_INTENT.get(str(goal.get('intent') or ''), str(goal.get('intent') or ''))
@@ -447,10 +447,10 @@ def writer_chars(entry: dict[str, Any], book: M.Book) -> list[dict[str, str]]:
     登场或尚未揭名的人物提前下发给写手。
     """
     chars = entry['characters']
-    # dict 的键是内部 char_id。改成有序的人类字段列表，保留产地顺序且不把编号下发。
+    # char_id 只用于确定性关联；投影时丢弃，不进入写手 prompt。
     return [
         {key: value[key] for key in ('display_name', 'role') if (value or {}).get(key)}
-        for value in chars.values()
+        for value in chars
     ]
 
 
@@ -510,11 +510,8 @@ def build_material(entry: dict[str, Any], book: M.Book) -> Material:
     ⚠⚠ **闭卷模式下这里一个字节的源章原文都不碰**——那份原文只供校验器算重合度。
     「闭卷」这件事是由**这个函数**保证的，不是由 system prompt 里那句话保证的。
 
-    ⚠ **`reconstruction_strategy` 不下发，那是一条剧透旁路**：它是一段全书级自由文本，
-    任务就是描述「这本书整体怎么重构」，于是**必然携带弧线终点**（实测某本写着
-    「…最终接受…摊牌…系统揭秘…」）。而它是**逐章**下发的：写 ch1 的闭卷写手因此
-    已经知道结局与揭示点。字段**保留在 `writer_context` 里**（验收相与界面仍读它），
-    只是不进写手 prompt——按消费方投影，不是删。
+    全书级重构策略只存在于 Stage4A 的规划脚手架中；正式计划和写作上下文都不保存，
+    因而这里没有任何策略文本可误发给闭卷写手。
     """
     lo, hi = target_band(entry)
     plo, phi = target_paragraphs(entry, book)
@@ -553,8 +550,7 @@ def build_material(entry: dict[str, Any], book: M.Book) -> Material:
         # ⚠ **逐章投影，不是书级**：`setting` 曾是唯一一个书级直发、无闸门的事实块，
         #   而实测某本的 setting 里就写着 ch14 才揭示的那条 secret 的全部内容。
         '── 世界设定 ──\n' + _compact((entry.get('facts') or {}).get('setting') or {}),
-        # 逐章投影：只给到本章为止该知道的。⚠ **`must_not_reveal` 不在这里**——
-        # 它只有裸 id、对写手无从执行，真正的保护是那些 secret **根本不下发**。
+        # 逐章投影：只给到本章为止该知道的；未揭示秘密根本不进入上下文。
         facts_block(entry),
         shape_block(book),
     ]
