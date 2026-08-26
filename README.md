@@ -127,6 +127,13 @@ conda run -n novel_refactor python -m novel.api --base <Output目录>
 conda run -n novel_refactor python -X utf8 -u -m novel.cli inbox <sid> --base <Output目录>   # 八类待办清单（0 成本）
 ```
 
+pytest 默认复用仓根 `.test_runtime` 与 `.test_cache`，不会随运行次数新增目录。agent 执行时必须
+绕开文件系统沙箱；不要为每次运行另造带测试名或时间戳的 `--basetemp`。若 Windows 路径预算不足，
+固定使用同一个仓外短路径（如 `--basetemp=E:\_tr`），pytest 会在下一次启动时自行清空并复用它。
+正常退出时测试钩子会趁创建者仍有权限恢复普通用户 ACL。若进程被强杀、钩子没机会执行，应先以
+管理员权限修复并删除那一份临时目录，再回到固定路径；继续换目录名只会积累垃圾，并使代码快照
+扫描撞上不可读目录。
+
 API 只监听 `127.0.0.1:8765`。前端默认配置位于 `web/.env`；真实联调时应为
 `VITE_USE_MOCK=false`。前端开发命令（`npm ci` / `typecheck` / `seams` / `build` / `dev`）
 的唯一落点是 `web/DELIVERY.md`。

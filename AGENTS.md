@@ -27,9 +27,13 @@ with code in this repository. **`CLAUDE.md` 是指向本文件的链接——要
 
 跑 pytest 的三个坑：
 
-- **必须绕开 Claude Code 沙箱**（`dangerouslyDisableSandbox`）。沙箱会把 `.test_runtime` 的 ACL
-  写坏，且非管理员修不回来。救急可改 `--basetemp`，但**必须是短路径**——`tests/conftest.py`
-  按 Stage0 最长归档路径预检 `MAX_PATH`，深目录会给出 `pytest.UsageError` 这种假红。
+- **必须绕开 agent 沙箱**。沙箱会把 `.test_runtime` / `.test_cache` 的 ACL 写坏，且非管理员
+  修不回来。默认直接复用 `pyproject.toml` 登记的这两个固定目录；**不许**按批次、测试名或时间戳
+  另造 `.rt_*` / `pt_*`。只有仓库路径过长时才显式改用固定的仓外短路径
+  `--basetemp=E:\_tr`，后续每次仍复用同一个名字——pytest 会在开跑时清空它，无须加新后缀。
+  正常退出时 `tests/conftest.py::pytest_unconfigure` 会在创建者进程仍有权限时恢复普通用户 ACL；
+  进程若被强杀，遗留目录仍须一次性提权修 ACL 后删除，不能靠继续换名字回避。同文件会按 Stage0
+  最长归档路径预检 `MAX_PATH`，深目录会给出 `pytest.UsageError` 这种假红。
 - **汇总行到不了工具输出**，要核 passed/skipped 就数进度点，别指望抓 `N passed`。
 - **语料用例有两道闸**：`addopts` 默认 `-m "not corpus"` 会整批 deselect；即使加 `-m corpus`，
   不设 `NOVEL_OUTPUT` 还会整批 skip。最终硬验收是

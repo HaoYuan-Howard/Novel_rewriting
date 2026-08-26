@@ -627,6 +627,52 @@ def test_long_path_probe_measures_the_host_and_leaves_nothing_behind():
     assert set(Path(tempfile.gettempdir()).glob('lp-*')) == before
 
 
+def test_pytest_temp_paths_are_reused_and_windows_acl_is_restored(tmp_path):
+    """默认两目录只有一份；ACL 修复只点名配置路径，不扫描或删除别处。"""
+    from tests import conftest as hooks
+
+    class Config:
+        rootpath = tmp_path
+        option = SimpleNamespace(basetemp='.test_runtime')
+
+        @staticmethod
+        def getini(name):
+            assert name == 'cache_dir'
+            return '.test_cache'
+
+    runtime, cache = hooks._configured_pytest_temp_dirs(Config())
+    assert (runtime, cache) == (
+        tmp_path / '.test_runtime', tmp_path / '.test_cache')
+    runtime.mkdir()
+    cache.mkdir()
+
+    calls = []
+
+    def runner(argv, **kwargs):
+        calls.append((argv, kwargs))
+        return SimpleNamespace(returncode=0)
+
+    assert hooks._restore_windows_test_acls(
+        (runtime, cache),
+        os_name='nt',
+        env={'USERDOMAIN': 'DOMAIN', 'USERNAME': 'reader'},
+        runner=runner,
+    ) == []
+    assert [call[0][1] for call in calls] == [str(runtime), str(cache)]
+    for argv, kwargs in calls:
+        assert argv[0] == 'icacls.exe'
+        assert argv[2:] == [
+            '/inheritance:e', '/grant:r', 'DOMAIN\\reader:(OI)(CI)F',
+            '/T', '/C', '/Q',
+        ]
+        assert kwargs['check'] is False and kwargs['cwd'] == hooks._ROOT
+
+    calls.clear()
+    assert hooks._restore_windows_test_acls(
+        (runtime,), os_name='posix', runner=runner) == []
+    assert calls == []
+
+
 def test_default_collection_keeps_schema_gates_and_carrier_regressions(
         tmp_path_factory):
     """防止以后再用整文件 ``corpus`` 把可合成验证的契约静默排除。"""

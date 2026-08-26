@@ -5,7 +5,10 @@ from __future__ import annotations
 import functools
 import json
 import os
+import subprocess
 import tempfile
+import warnings
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -131,6 +134,85 @@ def _windows_basetemp_problem(
     )
 
 
+def _configured_pytest_temp_dirs(config: pytest.Config) -> tuple[Path, ...]:
+    """返回本次 pytest 真正使用的 basetemp/cache 路径，不另造第三个落点。"""
+    root = Path(getattr(config, 'rootpath', _ROOT))
+    option = getattr(config, 'option', None)
+    raw_values: list[str | os.PathLike[str] | None] = [
+        getattr(option, 'basetemp', None),
+    ]
+    try:
+        raw_values.append(config.getini('cache_dir'))
+    except (AttributeError, ValueError):
+        pass
+
+    paths: list[Path] = []
+    for raw in raw_values:
+        if raw is None:
+            continue
+        expanded = os.path.expandvars(os.path.expanduser(str(raw)))
+        path = Path(expanded)
+        if not path.is_absolute():
+            path = root / path
+        path = Path(os.path.abspath(path))
+        if path not in paths:
+            paths.append(path)
+    return tuple(paths)
+
+
+def _restore_windows_test_acls(
+    paths: tuple[Path, ...],
+    *,
+    os_name: str = os.name,
+    env: Mapping[str, str] | None = None,
+    runner=subprocess.run,
+) -> list[str]:
+    """在创建者进程退出前恢复 pytest 临时目录的普通用户 ACL。
+
+    agent 文件沙箱会给新目录写入只对沙箱 SID 可用的显式 ACL。等进程退出后，普通用户
+    已无权修它，只能 UAC ``takeown``；但创建目录的这个进程仍是 owner，可以在收尾时
+    开启父目录继承并把当前登录用户写回。只处理 pytest 已配置的两个路径，不扫描目录，
+    也不删除文件；异常退出仍须按 AGENTS.md 的一次性管理员恢复说明处理。
+    """
+    if os_name != 'nt':
+        return []
+    environment = os.environ if env is None else env
+    username = environment.get('USERNAME', '').strip()
+    domain = environment.get('USERDOMAIN', '').strip()
+    if not username:
+        return [str(path) for path in paths]
+    principal = f'{domain}\\{username}' if domain else username
+
+    failed: list[str] = []
+    for path in paths:
+        try:
+            path.stat()
+        except FileNotFoundError:
+            continue
+        except OSError:
+            # 正是待修的 ACL 可能让 stat 失败；仍交给 icacls 尝试。
+            pass
+        try:
+            result = runner(
+                [
+                    'icacls.exe', str(path), '/inheritance:e',
+                    '/grant:r', f'{principal}:(OI)(CI)F', '/T', '/C', '/Q',
+                ],
+                cwd=_ROOT,
+                capture_output=True,
+                text=True,
+                encoding='utf-8',
+                errors='replace',
+                check=False,
+            )
+        except OSError:
+            failed.append(str(path))
+            continue
+        if result.returncode != 0:
+            failed.append(str(path))
+    return failed
+
+
 def pytest_addoption(parser: pytest.Parser) -> None:
     group = parser.getgroup('current corpus')
     group.addoption(
@@ -241,3 +323,13 @@ def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
     if terminal is not None:
         terminal.write_sep('=', message, red=True)
     session.exitstatus = pytest.ExitCode.TESTS_FAILED
+
+
+@pytest.hookimpl(trylast=True)
+def pytest_unconfigure(config: pytest.Config) -> None:
+    """pytest 正常退出时，把沙箱创建者 ACL 还原为登录用户可维护的目录。"""
+    failed = _restore_windows_test_acls(_configured_pytest_temp_dirs(config))
+    if failed:
+        warnings.warn(pytest.PytestWarning(
+            'pytest 临时目录 ACL 未能自动恢复：'
+            f'{failed}；若当前进程曾被强制终止，请按 AGENTS.md 用 UAC 一次性清理'))

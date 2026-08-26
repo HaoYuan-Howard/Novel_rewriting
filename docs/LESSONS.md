@@ -408,3 +408,16 @@ v1.1 保留为显式快速路径，没有因为 v2 翻默认就当场删除。20
 
 落点：`novel/stages/stage5/review.py::_report_of_review`、
 `novel/wontfix.py::applied`、`tests/test_stage5.py::test_check_only_overlays_a_wontfix_written_after_the_latest_review`。
+
+## 31. 测试临时目录要有固定身份，创建者退出前必须把 ACL 还给普通用户
+
+Windows agent 沙箱可能给新目录写入只对沙箱 SID 有效的显式 ACL。目录创建者还活着时能够修复；
+进程一旦退出，普通用户连枚举都做不到，只能 UAC `takeown`。用新的 `--basetemp` 名字绕过去会把
+一次权限故障变成无限累积，还会让 Git/代码快照在扫描未忽略目录时失败。
+
+因此 pytest 只复用 `pyproject.toml` 的 `.test_runtime` / `.test_cache`；路径预算不足时也只固定复用
+一个仓外短根，不按批次或时间戳另起名字。正常退出由
+`tests/conftest.py::_restore_windows_test_acls` 在创建者仍有权限时恢复继承和当前登录用户权限；
+只有进程被强杀、收尾钩子未执行时，才需要管理员一次性接管并删除遗留目录。回归既要钉辅助函数，
+也要真跑两次同一路径后从普通进程读取 ACL 和执行代码快照——“函数拼出了 icacls argv”不能证明
+退出时序正确。
