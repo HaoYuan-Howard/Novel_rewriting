@@ -38,7 +38,6 @@
 | `stage0.md` | `revisions.json` · `clean_text.txt` |
 | `stage1.md` | `main_text.json` · `hook_copy.json`；章号诊断与校验是当前内容的运行时视图 |
 | `stage2.md` | `global_grounding.json` · `chapter_blueprints.json`　**全链第一个调 LLM 的层** |
-| `stage3.md` | `style_grounding.json`　v2 免费机械基线、测量契约与下游最小投影 |
 | `stage4.md` | `blind_candidate.json` · `evidence_binding.json` · `plan_chapters.json` / `plan_edit.json` · `writer_context.json`　A/B 两相各自产一份 LLM 中间产物，计划由代码编译，写作上下文再确定性组装；`--identity` 只作内存诊断；<br>也是**全链的收口点**——前三层所有逐章闸门最后都汇到 `writer_context` 这一份上 |
 | `stage5.md` | `chNN.json`（含 `.INVALID`）· `review_<n>.json` · `wontfix.json` · trim / `_rounds/`<br>**全链唯一产出正文的层**，也是**唯一带 LLM 返工回路**的层；现役为 canonical 闭卷单臂，机械验收 0 成本，书级 `stage5.semantic` 与展示投影 `draft.md` 已下线 |
 | `stage6.md` | `hook.json` · `_rounds/hook.rN.json`　**全书级单次产出**（不是逐章），三候选经人定稿后才进入下游；<br>判据表分两半的边界是**产物类**（文案＝全文改写 ⇒ 连续文本探针结构性失效），不是判据质量 |

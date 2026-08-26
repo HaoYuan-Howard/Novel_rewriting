@@ -31,15 +31,15 @@ from novel.report import builder as report_builder
 from novel.report import build, render
 from novel.report.findings import ran, unverifiable
 
-NODE = 'stage3.style'
-STAGE = 'stage3'
+NODE = 'stage2.blueprint'
+STAGE = 'stage2'
 
 
 # ───────────────────────── 脚手架 ─────────────────────────
 
 def _rule(**kw) -> Rule:
     base = dict(rule='r_demo', stage=STAGE, item='示例判据', sev='hard',
-                who_checks='HARD', requirement='R-4.5', owner='stage3')
+                who_checks='HARD', requirement='R-4.5', owner='stage2')
     base.update(kw)
     return Rule(**base)
 
@@ -415,11 +415,17 @@ def test_an_empty_value_still_prints_its_line(monkeypatch):
 
 
 def test_a_stage_missing_from_the_table_raises(monkeypatch):
-    """八层都要有一行：「这层没有记账键」是空元组，与「这层没被声明过」不是一回事。"""
+    """当前七层都要有一行：「没有记账键」与「没被声明过」不是一回事。"""
     monkeypatch.delitem(acc.ACCOUNTING, STAGE)
     with pytest.raises(AccountingKeyUnregistered, match='没有一行'):
         build(sid='s', node=NODE, freshness=_fresh(),
               outcomes=[ran('a')], registry=_registry(_rule(rule='a', sev='info')))
+
+
+def test_accounting_covers_exactly_the_current_stages():
+    """退役层不得靠空行继续伪装成现役；声明面与 STAGES 必须逐值闭合。"""
+    from contracts.invariants import STAGES
+    assert set(acc.ACCOUNTING) == set(STAGES)
 
 
 def test_a_recorded_zero_is_not_the_same_as_unrecorded(monkeypatch):

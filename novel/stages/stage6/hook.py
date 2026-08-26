@@ -20,7 +20,7 @@ hook.py —— `stage6.hook` 与 `stage6.approve` 的节点函数。
 from __future__ import annotations
 
 from contracts.artifacts import (
-    STAGE1_HOOK_COPY, STAGE2_GLOBAL_GROUNDING, STAGE3_STYLE_GROUNDING,
+    STAGE1_HOOK_COPY, STAGE2_GLOBAL_GROUNDING,
     STAGE4_WRITER_CONTEXT, STAGE6_HOOK, STAGE6_HOOK_EDIT,
 )
 
@@ -30,7 +30,6 @@ from contracts.rules import REGISTRY
 from contracts.schema.common import Finding
 from contracts.schema.report import CheckReport
 from contracts.schema.stage2 import GlobalGrounding
-from contracts.schema.stage3 import StyleGrounding
 from contracts.schema.stage4 import WriterContext
 from contracts.schema.stage5 import ContextSource
 from contracts.schema.stage6 import (
@@ -39,7 +38,8 @@ from contracts.schema.stage6 import (
 )
 from novel import paths, prov, wontfix
 from novel.core.evidence import without_global_evidence
-from novel.errors import GateBlocked, TerminalState, UpstreamMissing
+from novel.core.measure import hook_style_metrics, measure
+from novel.errors import ArtifactUnreadable, GateBlocked, TerminalState, UpstreamMissing
 from novel.llm.cache import CachePolicy
 from novel.llm.client import LlmClient
 from novel.llm.transport import TransportError
@@ -57,7 +57,6 @@ REL = STAGE6_HOOK
 EDIT = STAGE6_HOOK_EDIT
 HOOK_COPY = STAGE1_HOOK_COPY
 GLOBAL_GROUNDING = STAGE2_GLOBAL_GROUNDING
-STYLE_GROUNDING = STAGE3_STYLE_GROUNDING
 WRITER_CONTEXT = STAGE4_WRITER_CONTEXT
 
 #: 被闸门拦下的那一份。**从 `REL` 派生，不手写第二个字符串。**
@@ -70,16 +69,15 @@ _INVALID = paths.invalid_of(REL)
 # ── 上游 ────────────────────────────────────────────────────────────────────
 
 class _Upstreams:
-    """四份上游 + 从它们算出来的下发材料。**装载与判定分开，两条路共用这一份。**"""
+    """三份上游 + 从它们算出来的下发材料。**装载与判定分开，两条路共用这一份。**"""
 
     def __init__(self, ctx: RunContext, store: ArtifactStore) -> None:
         from novel.stages.stage5.review import require_accepted_review
         require_accepted_review(ctx, store)
-        for rel in (GLOBAL_GROUNDING, STYLE_GROUNDING, WRITER_CONTEXT):
+        for rel in (GLOBAL_GROUNDING, WRITER_CONTEXT):
             if not store.exists(rel):
                 raise UpstreamMissing(f'{rel} 不在盘上——先跑 {rel.split("/")[0]}')
         gg = store.read(GlobalGrounding, GLOBAL_GROUNDING)
-        style = store.read(StyleGrounding, STYLE_GROUNDING)
         wc = store.read(WriterContext, WRITER_CONTEXT)
         # ⚠ 原作文案段**允许缺**吗？`R-1.12` 已把无文案段的书挡在 stage1 ⇒ 走不到。
         # 但它是**上游产物**不是本层的不变量，缺了就是显式终态而不是一句兜底。
@@ -89,12 +87,15 @@ class _Upstreams:
                 f'`R-1.12` 已经把那种书挡在 stage1 了，所以走到这里说明上游缺了一份')
         hook_copy = store.read(paths_hook_copy_model(), HOOK_COPY)
 
-        self.gg, self.style, self.wc = gg, style, wc
+        self.gg, self.wc = gg, wc
         self.src_hook: str = (hook_copy.text or '').strip()
+        mechanical = hook_style_metrics(measure(self.src_hook))
+        if not mechanical:
+            raise ArtifactUnreadable(
+                f'{HOOK_COPY} 的正文为空，无法即时计算文案机械基线')
         projected = without_global_evidence(gg.model_dump(by_alias=True))
         assert isinstance(projected, dict)
         self.grounding_raw: dict = projected
-        self.style_raw: dict = style.model_dump(by_alias=True)
         self.arc: dict = projected.get('arc') or {}
         self.secrets: list[dict] = ((projected.get('canon') or {}).get('secrets') or [])
         self.characters: dict = (
@@ -102,7 +103,8 @@ class _Upstreams:
         self.upto: int = lead_upto(self.arc)
         lead, missing, self.judged = lead_drafts(store, self.upto)
         self.mat = prompts.build_material(
-            title=ctx.title, ctx=wc.model_dump(by_alias=True), style=self.style_raw,
+            title=ctx.title, ctx=wc.model_dump(by_alias=True),
+            hook_mechanical=mechanical,
             grounding=self.grounding_raw, source_hook=self.src_hook,
             lead=lead, missing=missing, upto=self.upto)
 

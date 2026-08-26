@@ -118,8 +118,8 @@ _WITHHELD: dict[str, str] = {
     'SOURCE_OVERLAP_MAX': '判据阈值（canonical 成稿与原文的重合度上限）',
     'STOP_REWRITE_AFTER': '返工护栏的轮次上限。它是**编排**参数，不是给人看的取值面',
     'REVALIDATE_ONLY_NEW_ERRORS': '一个 bool 开关，说的是重算路怎么判。前端不参与那次判定',
-    'STAGE3_MEASUREMENT_CONTRACT': 'Stage3 机械测量算法的当前版本；产物已在来源账记录实际版本，'
-                                   'freshness 由后端消费投影判断。发给前端会诱导第二个过期判官',
+    'STYLE_MEASUREMENT_CONTRACT': '即时机械测量算法的当前版本；Stage5/6 已把它并入 Stage1 '
+                                  '消费投影。发给前端会诱导第二个过期判官',
     'STRUCTURE_METRIC_CONTRACT': 'Stage4 结构指标算法版本；实例值已随计划来源账与结构审批主体落盘，'
                                  '前端只展示当前计划的决定与审批态，不自行判断算法新旧',
     'BLIND_ALIAS_ALGORITHM': 'Stage4A 审计用的 opaque alias 算法身份；前端既不生成 alias，'
@@ -248,7 +248,7 @@ def _spoiler_disclosure() -> dict[str, Any]:
 
 
 def job_kinds() -> dict[str, dict[str, Any]]:
-    """作业单元表。**键是节点 id**（`stage3.style`），不是原型那 12 个 `n1..n9`。
+    """作业单元表。**键是节点 id**（如 `stage5.write`），不是原型那 12 个 `n1..n9`。
 
     ⚠ **键名保持 `job_kinds` 不改成 `nodes`**：抓包那 14 个键是契约的一部分，
     改键名是一次前端可见的破坏性变更，而 `docs/BACKEND_CONTRACT.md` §一「命名体系」第 5 条说的是

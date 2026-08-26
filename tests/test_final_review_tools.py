@@ -18,6 +18,11 @@ import collect_final_evidence as collector  # noqa: E402
 import sync_review_evidence as synchronizer  # noqa: E402
 
 
+CURRENT_QUALITY_STAGES = (
+    'stage0', 'stage1', 'stage2', 'stage4', 'stage5', 'stage6', 'stage7',
+)
+
+
 def _facts() -> dict:
     counts = {kind: 0 for kind in (
         'invalid', 'rejected', 'stalled', 'repairable', 'human_only',
@@ -43,9 +48,9 @@ def _facts() -> dict:
         },
     }
     rows = [
-        f'| stage{stage}.check | fresh/match | 0/1 | 0/1 | 1 | 1 | 0 | '
+        f'| {stage}.check | fresh/match | 0/1 | 0/1 | 1 | 1 | 0 | '
         'badge=amber; passed=true |'
-        for stage in range(8)
+        for stage in CURRENT_QUALITY_STAGES
     ]
     empty_ledger = {
         'path': 'E:\\outputs\\_service\\ledger.jsonl',
@@ -91,6 +96,21 @@ def _review(facts: dict, status: str = 'ready') -> str:
 def test_review_validator_accepts_an_exact_current_instance():
     facts = _facts()
     assert validator.validate(_review(facts), facts) == []
+
+
+def test_review_validator_uses_seven_current_stages_and_keeps_stage3_retired():
+    assert tuple(collector.STAGES) == CURRENT_QUALITY_STAGES
+    assert tuple(validator.QUALITY_STAGES) == CURRENT_QUALITY_STAGES
+    assert 'stage3' not in validator.QUALITY_STAGES
+
+    facts = _facts()
+    assert len(facts['quality_table_rows']) == 7
+    assert all('stage3' not in row for row in facts['quality_table_rows'])
+
+    without_stage4 = _review(facts).replace(facts['quality_table_rows'][3], '')
+    errors = validator.validate(without_stage4, facts)
+    assert any('质量表缺 stage4 当前报告行' in error for error in errors)
+    assert not any('质量表缺 stage3 当前报告行' in error for error in errors)
 
 
 def test_review_validator_rejects_a_stale_anchor_and_missing_metric_column():

@@ -88,7 +88,7 @@
 3. `UNVER`：证据不足以安全判断；如实保留并以 `stopped` 结束。Agent 代批权限不包括把未知改写成已通过。
 
 提交 `--review-decisions` 后重新读取当前 review：只有评测面 current 且每一项都是 PASS，
-才能运行 `stage2.blueprint`、`stage3.style` 以及后续付费节点。CLI、组装与下载都会重复执行同一道硬闸；
+才能运行 `stage2.blueprint` 以及后续付费节点。CLI、组装与下载都会重复执行同一道硬闸；
 外层 Agent `exit 0` 不会覆盖该结论。
 
 ## Stage4 结构代批

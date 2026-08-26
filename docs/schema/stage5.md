@@ -41,15 +41,17 @@ stage5/wontfix.json              人工豁免账（v1）
 `novel/orchestrator/nodes.py` 在预览与真跑共用的命令构造口关闭式拒绝 `mode`，CLI/API
 也不再提供“选深度章”入口。
 
-### 1.1 Stage3 → Stage5 只投影正文九叶机械基线
+### 1.1 Stage5 从 Stage1 即时计算正文机械基线
 
-`novel/consumption.py::stage5_style` 是唯一消费入口。它从 Stage3 v2 的
-`measurable.body` 精确保留：`avg_sentence_chars`、`avg_paragraph_chars`、
-`paragraph_sep_chars`、`dialogue_ratio_applicable`、`dialogue_ratio`、`quote_styles`、
+`novel/stages/stage5/review.py::load_book` 读取完整 Stage1 正文后调用
+`novel/core/measure.py::measure_body`，再由 `body_style_metrics` 精确保留：
+`avg_sentence_chars`、`avg_paragraph_chars`、`paragraph_sep_chars`、`dialogue_ratio`、`quote_styles`、
 `chapter_chars.avg`、`per_chapter_avg_sentence.min`、`per_chapter_avg_sentence.max`。
 `review.load_book` 只把这九个叶子放进 `Book.measurable`；结构上没有 `voice`、
 `surface_habits`、`chapter_styles` 或 `hook_style`，prompt 也不能接收整份 Stage3 包。
-Stage2 的 secrets 仍从剥除原文 evidence 的全局事实投影读取，不因收窄 Stage3 消费面而缩小检查面。
+对白适用性由 `dialogue_ratio is not None` 推出，不再保存一格重复布尔值。测量算法版本进入
+`novel/consumption.py::stage5_main_text`，所以正文或算法任一变化都会让 Stage5 来源账自然 stale。
+Stage2 的 secrets 仍从剥除原文 evidence 的全局事实投影读取，不因退役 Stage3 而缩小检查面。
 写作投影保持 secrets-only，以免人物展示信息变化让既有付费正文整体 stale；Review 另绑定
 `char_id/canonical/address[].surface/name_distinctiveness`，因为旧名、发明名和专名探针会实际读取
 这些叶子。人物 evidence-only 定位不进入消费指纹。
@@ -163,24 +165,24 @@ Stage6、Stage7 与最终交付的共同闸。旧报告不得驱动新付费动�
 章集合上零成本重跑 `stage5.review`。旧 Review v1 仍含
 `mode/mode_dir`；现役 v2 删除这两格，由 producer 免费重建，不做迁移。
 
-## 四、审批服务记录：HTTP v3，盘上 v4
+## 四、审批服务记录：HTTP v4，盘上 v5
 
-`ApprovalDoc.v=3` 是 HTTP 公共视图版本，字段为 `sid`、完整 `gate`、完整 `seen`、
+`ApprovalDoc.v=4` 是 HTTP 公共视图版本，字段为 `sid`、完整 `gate`、完整 `seen`、
 `writing`、typed `structure` 与 `spawns`；它不再暴露 `deep`。`structure` 明示当前结构主体、
 逐章 `accept / request_replan` 决定、历史与五态，且 `gate.s4=true` 只可能来自当前主体的
 全章 `accept`。`POST .../approvals/deep` 路由和 `DeepSelectionRequest` 已退役；结构批准与
 writing 授权是两个独立目的、两份 proof，后者只表达“允许当前 canonical 全书写作”。
 
 `<base>/_service/approvals/<sid>.json` 不是产物，现役内部记录是
-`_ApprovalRecordV4(v=4)`：完整 gate / seen、typed 结构决定与历史、`writing` 及各自
+`_ApprovalRecordV5(v=5)`：无 s3 的完整 gate / seen、typed 结构决定与历史、`writing` 及各自
 current-subject proof。proof 绑定根 `clean_text` SHA-1、正式主体完整 SHA-256 与决定面规范
 SHA-256；bool 必须与 proof 是否存在逐格一致。结构 subject 或计划完整字节变化都会使 s4
 即时失效，writing 与下游 gate 随之关闭。
 
-旧 `_ApprovalRecordV2Legacy` / `_ApprovalRecordV3Legacy` 只供显式 backfill 读取，普通 GET /
-启动绝不静默迁移。v3 没有 typed Stage4 结构裁决，最多保留能按当前盘面对证的 s0～s3；不得
-凭旧 s4 或 writing 推造逐章决定，s4、writing 与 s5～s7 一律清空。v2 同样只迁移能对证的
-前置 gate；v1 或损坏记录只能显式 reset/backfill，已有 Stage5 工作时 reset 受保护。
+旧 `_ApprovalRecordV4Legacy` 只供显式 backfill 读取，普通 GET / 启动绝不静默迁移。旧 s3 proof
+必须先对冻结 Stage3 v2 字节、Stage1 主体与当前测量契约逐项核验，才可用来证明旧 writing
+决定的上下文；新记录本身不再保留 s3。v2/v3 没有 typed Stage4 结构裁决，最多迁移仍能按当前
+盘面对证的前置 gate；不得凭旧 s4 或 writing 推造逐章决定。v1 或损坏记录只能显式 reset/backfill。
 
 ## 五、其余产物与退役投影
 
@@ -292,6 +294,6 @@ canonical v2 产物、单臂入口、freshness、恢复路与 50 条判据的工
 或无正文 manifest。因此不得宣称 beat-material 在质量、成本或速度上胜出。
 
 TODO-21 的隔离双书重跑、current-schema manifest 与 `--require-corpus` 是另一件事：它只建立
-现役全链语料基线。Stage5 消费 Stage1～4 的事实、机械基线、计划与 writer context，上游质量会
+现役全链语料基线。Stage5 消费 Stage1/2/4 的事实、即时机械基线、计划与 writer context，上游质量会
 显著改变成稿；即使 TODO-21 通过，也不能把全链读数因果归到 Stage5 写作契约。在它完成前，
 单元 / 非 corpus 回归只能证明工程守卫通过，不能证明现役语料全量绿。

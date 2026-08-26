@@ -8,7 +8,8 @@ with code in this repository. **`CLAUDE.md` 是指向本文件的链接——要
 
 ## 这个系统是什么
 
-把一本中文网络小说经 stage0～stage7 处理成**一本新书**：情节骨架保留、文字全部重写、
+把一本中文网络小说经 stage0、stage1、stage2、stage4～stage7 七个现役层处理成**一本新书**
+（Stage3 编号保留为空洞）：情节骨架保留、文字全部重写、
 人名全部替换，交付 `stage7/<书名>_rewriting.txt`（交付物按书名命名；路径落点唯一在
 `novel/paths.py::book_txt_rel`）。产品边界、处理链与成本见 `README.md`。
 
@@ -104,10 +105,11 @@ builder、完成度不偷看作业记录、loopback、无 CORS、同书 409。�
 付费跑法必须 `--yes`。成本的唯一权威源是 `<base>/_service/ledger.jsonl`，不与产物 `usage` 或日志混加；
 缓存命中（`.llm_cache/`）单独记账，不能写成"没有执行过"。
 **付费授权与正文外发授权是两件独立的事**，任一缺失时仍可跑 0 成本的 `state`/`inbox`/`preview`。
-审批服务的盘上 `_service/approvals/<sid>.json` 是 **v4**（Stage4 新增 hash-bound typed
+审批服务的盘上 `_service/approvals/<sid>.json` 是 **v5**（Stage3 整层退役；Stage4 保留 hash-bound typed
 `structure_decision/history`，Stage5 的 `writing/writing_proof` 仍与它独立），公开 API
-`ApprovalDoc` 是 **v3**；两个版本面独立。旧盘上 v2/v3 只能经显式 `backfill_from_disk` 且 proofs
-仍绑当前主体时保守收进 v4；旧记录没有 typed 结构决定，普通 GET 不得静默迁移或代开 s4。
+`ApprovalDoc` 是 **v4**；两个版本面独立。旧盘上 v4 只能经显式 `backfill_from_disk` 且旧 Stage3、
+Stage1、Stage4 proofs 仍绑当前主体时保守收进 v5；更早记录最多恢复可逐项对证的闸，普通 GET 不得
+静默迁移或代开 s4。
 
 ### 修复路由与恢复路
 

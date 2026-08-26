@@ -4,7 +4,6 @@
 contracts.schema —— 产物 schema 的机器形态。
 
 **`docs/schema/*.md` 是源，这里的模型照它写。方向别搞反。**
-文件名一一对应：`docs/schema/stage3.md` ↔ `contracts/schema/stage3.py`，
 `docs/schema/_common.md` ↔ `contracts/schema/common.py`。
 
 除便利 re-export 外，本包只在产物 IO 边界做路径路由与当前 schema version 编解码；
@@ -38,7 +37,6 @@ from contracts.artifacts import (
     STAGE0_REVISIONS, STAGE1_HOOK_COPY, STAGE1_MAIN_TEXT,
     STAGE2_CHAPTER_BLUEPRINTS, STAGE2_GLOBAL_EDIT,
     STAGE2_GLOBAL_GROUNDING, STAGE2_GLOBAL_REVIEW, STAGE2_GLOBAL_REVIEW_DECISIONS,
-    STAGE3_STYLE_GROUNDING,
     STAGE4_BLIND_CANDIDATE, STAGE4_EVIDENCE_BINDING,
     STAGE4_PLAN_CHAPTERS, STAGE4_PLAN_EDIT, STAGE4_WRITER_CONTEXT,
     STAGE5_CHAPTER, STAGE5_REJECTED_REVISION,
@@ -52,7 +50,6 @@ from contracts.schema.api import (
     ApprovalAction,
     ApprovalBackfillResult,
     ApprovalDoc,
-    DriftItem,
     ErrorBody,
     InboxItem,
     InboxView,
@@ -73,7 +70,6 @@ from contracts.schema.api import (
     Stage0Segments,
     Stage1Segment,
     Stage1View,
-    StyleView,
     ResidualAdoptionRequest,
     TrimResolutionRequest,
     UploadResult,
@@ -141,7 +137,6 @@ from contracts.schema.stage2 import (
     RoleSplitResponse, Secret, SecretPatch, Setting, SettingPatch, SourceSpan, WorldRule,
     WorldRulePatch, WorldRuleVersion,
 )
-from contracts.schema.stage3 import Measurable, StyleGrounding, StyleProvenance
 from contracts.schema.stage4 import (
     BlindCandidate, CtxChapter, CtxFacts, CtxGoal, CtxScene,
     EvidenceBinding, FactRef, PlanChapter, PlanChapters, PlanEdit, PlanGoal,
@@ -251,9 +246,6 @@ ARTIFACT_SPECS: dict[str, ArtifactSpec] = {
     # v6 删除摘要、人物显示名、重复父键与无消费者 provenance 账；由
     # `stage2.blueprint` 整跑（付费）重建，不迁移或手补。
     STAGE2_CHAPTER_BLUEPRINTS: ArtifactSpec(ChapterBlueprints, 6),
-    # 2026-08-24 Stage3 定性包整批退役：顶层只留 measurable + 免费 provenance。
-    # v1 不迁移；普通旧书由免费 producer 重建，已用于实验的两本按归档清单保留历史字节。
-    STAGE3_STYLE_GROUNDING: ArtifactSpec(StyleGrounding, 2),
     # v2 删除 goal rationale；A 仍保留重构策略与预算权重，供 B/编译器消费。
     STAGE4_BLIND_CANDIDATE: ArtifactSpec(BlindCandidate, 2),
     # v2 删除可由绑定舞台 present 唯一推出的 participant_refs。
@@ -409,7 +401,6 @@ __all__ = [
     'CheckKind', 'Remediation', 'FixRoute',
     'AccountingLine', 'StatusCounts', 'Status', 'Badge', 'finding', 'badge_of',
     # HTTP 响应（`_api.md`）——同样**不是产物**。它是前三份的视图，不产生新事实
-    'StyleView', 'DriftItem',
     'Stage0Segment', 'Stage0Segments', 'Stage0EditRequest',
     'Stage0ApprovalRequest', 'Stage0CandidateDecisionRequest', 'Stage0CandidateView',
     'Stage0CandidateRevisionView',
@@ -418,7 +409,7 @@ __all__ = [
     'ApprovalAction', 'ApprovalBackfillResult', 'ApprovalDoc',
     'InboxItem', 'InboxView', 'TrimResolutionRequest', 'NameMapApproveRequest',
     'ResidualAdoptionRequest',
-    # 八层
+    # 七个现役层（Stage3 已退役）
     'Stage0Snapshot', 'Stage0Source', 'RemovedSegment', 'RequestedRemoval', 'Stage0EditPlan',
     'Stage0CandidatePlan', 'Stage0Warning',
     'EarlyCutWarning', 'DropRatioWarning', 'LongMarkerWarning',
@@ -437,7 +428,6 @@ __all__ = [
     'ArcTrack', 'ChapterBlueprints', 'Blueprint', 'Beat', 'FactAtom', 'CausalEdge',
     'SourceSpan', 'Hinge', 'Narration',
     'GlobalGroundingResponse', 'RoleSplitResponse',
-    'StyleGrounding', 'StyleProvenance', 'Measurable',
     'BlindCandidate', 'EvidenceBinding',
     'PlanChapters', 'PlanChapter', 'PlanScene', 'FactRef', 'PlanGoal', 'PlanEdit',
     'WriterContext',

@@ -98,7 +98,7 @@ class FixRoute(FrozenModel):
     """前端可直接执行的修复路由；贵贱仍只由服务端计算。"""
 
     node: str = Field(min_length=1)
-    # 免费节点的默认入口本身可以是一条确定性修复路（Stage3 v2 机械漂移即如此）；
+    # 免费节点的默认入口本身可以是一条确定性修复路；
     # `contracts.rules.Registry` 已拒绝付费节点的无 flag 默认重跑，因此这里必须能
     # 如实序列化 `flags=[]`，不能逼生产伪造一个没有产品含义的参数。
     flags: list[str] = Field(default_factory=list)

@@ -69,7 +69,7 @@ def isolated(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
         approvals, '_read_current', lambda _base, _sid: state['record'])
 
     def write(base, record):
-        record = approvals._ApprovalRecordV4.model_validate(record.model_dump())
+        record = approvals._ApprovalRecordV5.model_validate(record.model_dump())
         state['record'] = record
         return approvals._view(base, record)
 
@@ -111,14 +111,14 @@ def test_structure_proof_binds_the_full_plan_path_and_exact_typed_decision(monke
     assert captured['decision']['chapters'][1]['decision'] == 'request_replan'
 
 
-def test_all_accept_opens_s4_persists_v4_history_and_is_idempotent(isolated):
+def test_all_accept_opens_s4_persists_v5_history_and_is_idempotent(isolated):
     base, _book, state = isolated
     request = _request('accept', 'accept')
     first = approvals.approve_structure(base, SID, request)
-    assert first.v == 3 and first.gate['s4']
+    assert first.v == 4 and first.gate['s4']
     assert first.structure.state == 'accepted'
     assert first.structure.current_decision is not None
-    assert state['record'].v == 4
+    assert state['record'].v == 5
     assert len(state['record'].structure_history) == 1
     assert state['record'].gate_proofs['s4'] == state['record'].structure_decision.proof
 
@@ -257,14 +257,14 @@ def test_generic_s4_gate_can_no_longer_bypass_the_typed_decision():
         approvals.approve_gate('unused', SID, 's4')
 
 
-def test_explicit_v3_migration_preserves_at_most_s0_through_s3(
+def test_explicit_v3_migration_preserves_at_most_s0_through_s2(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
 ):
     book = tmp_path / f'旧审批_{SID}'
     book.mkdir()
     proof = _proof(_request('accept', 'accept'))
-    gates = {key: False for key in APPROVAL_GATES}
-    gate_proofs = {key: None for key in APPROVAL_GATES}
+    gates = {key: False for key in approvals._LEGACY_APPROVAL_GATES}
+    gate_proofs = {key: None for key in approvals._LEGACY_APPROVAL_GATES}
     for gate in ('s3', 's4', 's5', 's6', 's7'):
         gates[gate] = True
         gate_proofs[gate] = proof
@@ -276,14 +276,13 @@ def test_explicit_v3_migration_preserves_at_most_s0_through_s3(
     )
     monkeypatch.setattr(
         approvals.paths, 'resolve_novel_dir', lambda _base, _sid: book)
-    monkeypatch.setitem(approvals._GATE_REQUIREMENTS, 's3', ())
     monkeypatch.setattr(
         approvals, '_proof_for_gate',
-        lambda _novel_dir, gate, _record: proof if gate == 's3' else proof)
+        lambda _novel_dir, gate, _record: proof)
 
     migrated, backfilled = approvals._migrate_legacy_v3(tmp_path, SID, legacy)
-    assert migrated.v == 4 and backfilled == ['s3']
-    assert migrated.gate['s3']
+    assert migrated.v == 5 and backfilled == []
+    assert 's3' not in migrated.gate
     assert not any(migrated.gate[gate] for gate in ('s4', 's5', 's6', 's7'))
     assert not migrated.writing
     assert migrated.structure_history == [] and migrated.structure_decision is None
@@ -318,6 +317,6 @@ def test_structure_route_accepts_the_typed_body(monkeypatch, tmp_path):
             json=_request('accept', 'accept').model_dump(mode='json'),
         )
     assert got.status_code == 200, got.text
-    assert got.json()['v'] == 3
+    assert got.json()['v'] == 4
     assert captured['sid'] == SID
     assert isinstance(captured['request'], StructureApprovalRequest)

@@ -82,7 +82,7 @@ def _retry_branch(_monkeypatch) -> None:
 
     base = Path(tempfile.mkdtemp(prefix='fixture-retry-'))
     (base / '合成书_1' / 'stage1').mkdir(parents=True)
-    ctx = RunContext.open(base, '1', 'stage3.style', paid=True, write_ledger=False)
+    ctx = RunContext.open(base, '1', 'stage6.hook', paid=True, write_ledger=False)
     sleeps: list[float] = []
     transport = FakeTransport(responder=respond)
     client = LlmClient(

@@ -411,7 +411,7 @@ def test_phase_two_verifies_real_long_snapshot_without_leaking_extended_path(
     tmp_path, monkeypatch,
 ):
     paths = _experiment(tmp_path)
-    book = tmp_path / ('long-root-' + 'x' * 96) / 'book_303'
+    book = tmp_path / ('long-root-' + 'x' * 112) / 'book_303'
     for stage in range(6):
         os.makedirs(R._io_path(book / f'stage{stage}'), exist_ok=True)
     rel = (

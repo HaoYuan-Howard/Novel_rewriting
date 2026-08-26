@@ -49,7 +49,6 @@ import type {
   Stage0Segments,
   Stage1View,
   Stage2Global,
-  Stage3Style,
   Stage4Response,
   Stage5Response,
   Stage6Response,
@@ -359,7 +358,6 @@ export const realApi: Api = {
     get<GlobalReviewResponse>(n(sid) + '/stage2/global-review'),
   decideGlobalReview: async (sid, request: GlobalReviewDecisionSet) =>
     adaptJob(await post<BackendJobRecord>(n(sid) + '/stage2/global-review', request)),
-  getStyle: (sid) => get<Stage3Style>(n(sid) + '/stage3/style'),
   getStage4: (sid, o) => get<Stage4Response>(n(sid) + '/stage4/' + o),
   getStage5: (sid, o) => get<Stage5Response>(n(sid) + '/stage5/' + o),
   getReview: (sid, o) => get<ReviewResponse>(n(sid) + '/review/' + o),

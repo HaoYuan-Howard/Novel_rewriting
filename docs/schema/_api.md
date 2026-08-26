@@ -46,7 +46,7 @@
 `_provenance` 是 alias 字段（模型里叫 `provenance`）。FastAPI 的
 `response_model_by_alias` 一旦被关掉，响应里那个键会**静悄悄**变成 `provenance`，
 而前端读 `_provenance` 拿到 `undefined`——不报错，只是那一格空了。
-⇒ 配一条测试：S-06 的响应 JSON 里必须有字面量 `_provenance` 这个键。
+⇒ 配一条测试：凡是模型声明该 alias，响应 JSON 里必须有字面量 `_provenance` 这个键。
 
 **③ 措辞不是契约，id 才是（`Q-6`）。**
 凡是「为什么」类的格子一律出 **id**（异常类名 / `FRESHNESS_REASON` / 判据 id），
@@ -70,7 +70,7 @@
 **这一行写在这里，是为了下一个人不会来「补齐」它。**
 
 Prompt 选型完成后，`prompt_variants`、`prompt_defaults` 与 `--prompt-variant` 已从公开契约删除；
-Stage 3/5 各只有一条生产 prompt 路径，前端和调用方无需也不能选择实验臂。
+现役生产节点各只有一条 prompt 路径，前端和调用方无需也不能选择实验臂。
 
 三个合成键与抓包的关系：
 
@@ -97,7 +97,6 @@ Stage 3/5 各只有一条生产 prompt 路径，前端和调用方无需也不�
 | `GET /api/enums` | 无模型（见 §二） | 新 |
 | `GET /api/novels` | `NovelList` | 新 |
 | `GET /api/novels/:sid` | `NovelOverview` | **复用** `_orchestration.md` |
-| `GET /api/novels/:sid/stage3/style` | `StyleView` | 新 |
 | `GET /api/novels/:sid/check/:kind` | `CheckReport` | **复用** `_report.md` |
 | `GET /api/jobs?sid=` | `JobList` | 新 |
 | `GET /api/jobs/:id` | `JobRecord` | **复用** `_orchestration.md` |
@@ -197,77 +196,14 @@ current writing 授权、Review 状态与旧布局，不存在另一个按臂的
 
 ---
 
-## 四、`StyleView` —— S-06 Stage3 机械基线
-
-`web/src/mocks/stage3_style.json` 是 v1 定性画像的冻结历史抓包，保留原字节与哈希但**不是现役
-API 形状**；假后端在 `web/src/api/mock.ts::currentMockStyle` 只投影 v2 仍存在的字段。
-
-⚠ **它是视图，不是产物。** 盘上的 `stage3/style_grounding.json` v2 提供存量机械基线；
-当前代码同时读取 Stage1 免费重算。因此 `exists=false` 时仍可展示 `measured_now`，旧 v1 或坏
-v2 则表现为 `exists=true, readable=false`，不能洗成“没运行”。
-
-| 字段 | 类型 | 必填 | 取值面 / 说明 | 证据 |
-|---|---|---|---|---|
-| `sid` / `title` | 串 | 是 | **由 `novel/paths.py` 从目录名派生** | `派生` |
-| `exists` | 布尔 | 是 | 盘上有没有那份产物 | `抓包` |
-| `invalid_exists` | 布尔 | 是 | 有没有一份 `.INVALID` 在等人处理 | `抓包` |
-| `readable` | 布尔 或 null | 是 | 当前 schema 可读；产物不存在时为 null | `设计` |
-| `hook_copy_text` | 串 或 null | 是 | 开篇文案段原文（来自 stage1，与本层产物无关） | `抓包` |
-| `measurable_stored` / `measured_now` | 对象 或 null | 是 | `Measurable`。前者来自产物，后者**现算** | `抓包` |
-| `bands_stored` / `bands_now` | 对象 或 null | 是 | 由对应机械数字即时派生的展示档位，**不落盘** | `设计` |
-| `measure_error` | 串 或 null | 是 | 量不出来时的**人话**。与 `measured_now` **恰好一个非空** | `抓包` |
-| `measure_error_kind` | 串 或 null | 是 | **异常类名**（`UpstreamMissing` / `ArtifactUnreadable`） | `设计` |
-| `drift` | 数组 **或 null** | 是 | 存/现两份实测的逐项差异 | `抓包`（形状）+ `设计`（三态） |
-| `freshness` / `reason` / `ghosts` | 串 / 串 / 串数组 | 是 | `FRESHNESS` / `FRESHNESS_REASON` / 幽灵边**点名** | `设计` |
-| `_provenance` | 对象 或 null | 是 | 产物里那一份，原样 | `抓包` |
-
-### v2 形状裁决
-
-**① 定性字段整体删除。** 当前响应没有 `voice`、`voice_extra`、`surface_habits` 或
-`hook_style`。它们既不在 v2 产物，也不以空数组占位；空占位会让消费者误以为字段仍是契约的一部分。
-
-**② 算不出来时不 404、不抛，填槽。** 三态由后置条件焊死：
-`measured_now` 与 `measure_error` **恰好一个非空**，
-同空或同非空一律炸。
-⚠ 另出一格 `measure_error_kind`（**id 不是措辞**）：
-「stage1 还没跑」与「stage1 的产物坏了」对人的下一步是**相反**的指示。
-
-**③ `drift` 是 `数组 | null`，不是 `数组`。**
-`[]` = 「两份实测比过了，没有漂移」；`null` = 「有一边算不出来，**无从比**」。
-抓包里是 `[]`，把两者压成一个 `[]` 就回到本项目一路在防的那个病
-（`Q-2`：「不知道」与「没问题」必须能区分）。
-
-**④ `bands_error` 删除。**
-`novel/core/bands.py::bands()` 在一个**合法的** `Measurable` 上是**全函数**
-（每一项都是纯算术与查表，没有失败支）。⇒ `bands_now` 为 null 当且仅当
-`measured_now` 为 null，而那件事已经由 `measure_error` 说过了。
-一个只可能与另一格说同一件事的格子，就是**同一条信息的第二个落点**。
-⇒ 载体上改成两条后置条件：`bands_now` 与 `measured_now` 同进同出、
-`bands_stored` 与 `measurable_stored` 同进同出。
-
-**⑤ `readable` 是三态（`是 / 否 / null`），不是布尔。**
-`null` ⟺ 产物不在盘上——「不在盘上的东西读不读得回来」是个没有意义的问题。
-⚠ `readable=false` 与 `exists=false` **必须分开**：盘上真有一份读不回来的产物
-（`成年人不做选择` 那本的 `stage4/plan_chapters.json` 根本没有 `_provenance`），
-折成「不存在」会让界面说「还没跑」——**而它跑过，只是那次把来源账丢了**。
-
-**⑥ 存量区三格同进同出。** `measurable_stored`、`bands_stored`、`_provenance` 只有在
-v2 正式产物存在且可读时才同时出现；半块在没有合法 producer 来源。
-
-**⑦ 本视图不带 `badge` / `passed` / `counts`。** 那一屏的结论只能来自
-`/api/novels/:sid/check/stage3`。视图给的是「两份数字并排放着让人自己看」
-（`R-11` 节首语的原话），判定给的是「合不合格」——**混在一格里就是第二个判官**（`R-11.4`）。
-
----
-
-## 五、四个小模型
+## 四、四个小模型
 
 | 模型 | 字段 | 说明 |
 |---|---|---|
 | `NovelList` | `base` · `novels[]`（`NovelOverview`） | 抓包 `novels.json` 的顶层就是 `{base, novels}`。⚠ **复用 `NovelOverview`，不另造一张轻量清单**——原型 `Web/novels.py` 那张第二清单的代价是 stage5 被迫整个排除在外，于是「有没有陈旧产物」那个徽章不覆盖成稿 |
 | `TrashNovelResult` | `sid` · `title` · `trash_id` · `trash_rel` | `novel/orchestrator/trash.py` 的 CLI 子进程完成同盘移动后返回；`trash_rel` 是可恢复位置，不把“从语料库消失”偷换成“字节已永久销毁” |
 | `ApprovalBackfillResult` | `approvals` · `backfilled[]` | `backfilled` 是本次**按正式盘面补录**的 gate id，空数组表示无事可补；界面必须明确这些不是用户逐屏点过的验收记录 |
-| `ApprovalDoc` | `v=3` · `sid` · `gate` · `seen` · `writing` · `structure` · `spawns` | HTTP v3 不等于 `_service/approvals/<sid>.json` 的盘上 v4。`structure` 给出 current subject、typed 当前裁决、历史与 `unavailable / missing / accepted / replan_requested / expired` 状态；`gate.s4=true` 只可能来自当前 `accepted` 裁决。公共视图不再含 `deep`，writing 只授权 current canonical 全书写作。旧 v2/v3 内部记录仅由显式 backfill 收敛，普通 GET 不迁移 |
+| `ApprovalDoc` | `v=4` · `sid` · `gate` · `seen` · `writing` · `structure` · `spawns` | HTTP v4 不等于 `_service/approvals/<sid>.json` 的盘上 v5。公开 gate 没有 s3；`structure` 给出 current subject、typed 当前裁决、历史与 `unavailable / missing / accepted / replan_requested / expired` 状态；`gate.s4=true` 只可能来自当前 `accepted` 裁决。writing 绑定 Stage1 正文、Stage4 计划与测量契约。旧内部记录仅由显式 backfill 收敛，普通 GET 不迁移 |
 | `JobList` | `jobs[]`（`JobRecord`） | 抓包 `jobs.json` 就是 `{"jobs":[]}`——**一个样本都没有**，所以元素形状只能从 `_orchestration.md` 来 |
 | `LogChunk` | `text` · `next_byte` | 按**字节**续读。⚠ 中文一字跨 3 字节，**只在读的一侧解码**（写的一侧按字节追加，见 `_orchestration.md`）。`next_byte` 原样回传给下一次 `?offset=` |
 | `LogStreamEvent` | `text` · `next_byte` · `done` · `state` | SSE 的 `id` 与 `next_byte` 相同；普通 `log` 事件为 `done=false,state=null`，唯一的 `end` 事件为 `done=true,state=ok|landed_red|failed|unknown` 并随即释放连接。断线时浏览器用 `Last-Event-ID` 续读；显式 query offset 与它取较大者，避免刷新倒退 |
@@ -471,7 +407,7 @@ HTTP 进程只写 `_service/`（一次性人工稿）。
 |---|---|---|---|
 | `kind` | 串 | 是 | **异常类名**。取值面 = `novel/errors.py` 的类名集合，由测试闭合 |
 | `message` | 串 | 是 | 人话 |
-| `missing` | 串 或 null | 是 | 缺的是**哪一个**（`'novel'` / `'stage3/style_grounding.json'`） |
+| `missing` | 串 或 null | 是 | 缺的是**哪一个**（例如 `'novel'` 或某个现役 artifact 路径） |
 | `hint` | 串 或 null | 是 | 下一步该做什么 |
 
 ⚠ **`kind` 用类名不用措辞**：前端的四态要求区分「后端没起来 / 这本书没有 / 这一步还没跑」

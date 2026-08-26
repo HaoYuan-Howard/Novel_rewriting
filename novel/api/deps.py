@@ -45,15 +45,15 @@ def checked_sid(sid: str) -> str:
 def checked_kind(kind: str) -> str:
     """校验报告的 `:kind`。**取值面 = `invariants.STAGES`，不手写第二份清单。**
 
-    ⚠ 八个 kind 里第六个原来叫 `stage5_review`（原型脚本名泄漏进契约），
+    ⚠ 退役 Stage3 前的八个 kind 里，第六个原来叫 `stage5_review`（原型脚本名泄漏进契约），
     E 期已改名为 `stage5`——于是这一列与 `STAGES` 逐值相等、可以直接派生。
     改名的账记在 `docs/schema/_api.md` §七 与仓根 `README.md`。
 
-    ⚠ **不在八个里 ⇒ 400 并把八个列出来**，而不是 404：
+    ⚠ **不在七个现役值里 ⇒ 400 并把七个列出来**，而不是 404：
     404 是「这本书没有」，400 是「你给的这个层名不存在」，两件事。
     """
     if kind not in STAGES:
         raise HTTPException(
             status_code=BAD_REQUEST,
-            detail=f'未知的校验层 {kind!r}。八个取值：{list(STAGES)}')
+            detail=f'未知的校验层 {kind!r}。七个取值：{list(STAGES)}')
     return kind

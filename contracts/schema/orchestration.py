@@ -28,7 +28,7 @@ from contracts.invariants import (
     AGENT_DELIVERY_OUTCOME,
     AGENT_RUN_EVENT_KINDS, ARTIFACT_CONDITION, ARTIFACT_DISPLAY, BEACON_STATES,
     FRESHNESS, FRESHNESS_REASON, JOB_EVENT_KINDS, JOB_STATE, NODES,
-    OVERVIEW_VERDICT, PROGRESS_PHASES, STAGES,
+    OVERVIEW_VERDICT, PROGRESS_PHASES, RETIRED_NODES, RETIRED_STAGES, STAGES,
 )
 from contracts.schema.base import FrozenModel, StrictModel
 
@@ -117,9 +117,9 @@ class JobStart(StrictModel):
 
     @model_validator(mode='after')
     def _postconditions(self) -> JobStart:
-        if self.node not in NODES:
+        if self.node not in NODES and self.node not in RETIRED_NODES:
             raise ValueError(
-                f'未知节点 {self.node!r}。取值面的唯一落点是 `contracts.invariants.NODES`')
+                f'未知节点 {self.node!r}。当前取值面在 NODES，历史只读面在 RETIRED_NODES')
         # 整份的贵贱 / 写不写，是逐步折叠出来的：第二处算就必然分家（`R-11.7`）。
         if self.paid != any(s.paid for s in self.steps):
             raise ValueError(f'paid={self.paid} 与逐步折叠出来的对不上')
@@ -534,8 +534,8 @@ class StageState(StrictModel):
     #:
     #: ⚠ **`.INVALID` 不计入已完成**，它进 inbox（`INBOX_KIND` 已有 `invalid` 这个值）。
     #: ⚠ 普通具名产物的 **`freshness == 'unknown'` 计入已完成**，这不是漏判：
-    #: 八层今天仍有一批旧产物是 `unknown`
-    #: （`consumed` 投影只有 stage3 声明过三条），把它当未完成会让整条链永远跑不出第一步。
+    #: 当前七层仍可能读到缺少 `consumed` 投影的早期产物；把它当未完成会让整条链
+    #: 永远跑不出第一步。
     #: 「不知道它新不新」与「它是旧的」是两件事——**后者才该挡路**。
     #: Stage5 是例外：它的 `done=True` 会直接让付费写作 SKIP，且退役 `draft.md`
     #: 后 canonical 章就是唯一证据，因此必须逐章达到 `fresh`；未知不能冒充当前。
@@ -781,7 +781,7 @@ class QueueStart(FrozenModel):
     def _valid_target_and_confirmation(self) -> QueueStart:
         if self.sids != list(dict.fromkeys(self.sids)):
             raise ValueError('queue sids must be non-empty and unique in requested order')
-        if self.until_stage not in STAGES:
+        if self.until_stage not in STAGES and self.until_stage not in RETIRED_STAGES:
             raise ValueError(f'unknown queue target stage {self.until_stage!r}')
         planned = {item.sid for item in self.plan.items + self.plan.blocked}
         if not planned <= set(self.sids):

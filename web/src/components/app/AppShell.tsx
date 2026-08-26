@@ -15,7 +15,6 @@ const SCREENS = new Set<string>([
   'stage1',
   'read',
   'global',
-  'style',
   'stage4',
   'stage5',
   'stage6',

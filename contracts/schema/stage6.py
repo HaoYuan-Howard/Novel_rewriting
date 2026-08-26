@@ -240,8 +240,8 @@ class HookCandidateRetry(StrictModel):
 class HookProvenance(LlmProvenance):
     """`hook.json._provenance`。
 
-    `inputs` 恒四条：`stage1/hook_copy.json` · `stage2/global_grounding.json` ·
-    `stage3/style_grounding.json` · `stage4/writer_context.json`。
+    `inputs` 恒三条：`stage1/hook_copy.json` · `stage2/global_grounding.json` ·
+    `stage4/writer_context.json`；测量契约并入第一条的 consumed 指纹。
     ⚠ `inputs` 里**没有成稿**——它们在 `judged` 里。
 
     ⚠ `prompts` 常驻 `HOOK_SYS`（**插值之后**）与 `RULES`；发生脏候选重试时再有

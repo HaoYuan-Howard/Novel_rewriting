@@ -5,7 +5,7 @@
 （output base 必须不存在或为空），也可以是已经落稳且已批准的当前 schema Stage0/1
 （Stage2～7 必须完全为空）。它会：
 
-* 用生产 ``build_argv`` 展开每本八条付费 CLI dispatch；Stage3 v2 免费机械测量不计入；
+* 用生产 ``build_argv`` 展开每本八条付费 CLI dispatch；即时机械测量不是独立 dispatch；
 * 固定当前模型/思考模式、独立空 cache 与 ``DEEPSEEK_MAX_RETRIES=0``；
 * 从真实节点 ladder 复算基础、语义审判和条件调用的 wire 可达上限；
 * 只对在上游生成前已经可知的 Stage2 global prompt 做精确 tokenizer 计数；
@@ -127,7 +127,7 @@ PREREQUISITES = {
         'A 相候选已单独预览与批准；B 相只做证据绑定，不重规划。',
     ),
     'stage5.write': (
-        'Stage3 v2 机械基线与 Stage4 plan/context 必须 fresh，且 s3/s4 已人工确认；'
+        'Stage1 主体与 Stage4 plan/context 必须 fresh，且 s4 已人工确认；'
         'writing 已明确授权全部计划章的单一闭卷写作。',
         '超上限章零调用保留 pretrim 并转人工：本仓没有自动收缩路径，'
         '这一层不存在第二条付费回路。',

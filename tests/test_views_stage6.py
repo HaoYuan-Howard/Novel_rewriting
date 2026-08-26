@@ -22,7 +22,7 @@ from tests.markers import corpus_params
 
 #: 组装这一屏只要产物自己；上游缺席只影响 freshness（ghosts 点名），不拦读。
 INPUTS = ('stage1/hook_copy.json', 'stage2/global_grounding.json',
-          'stage3/style_grounding.json', 'stage4/writer_context.json',
+          'stage4/writer_context.json',
           'stage6/hook.json')
 
 

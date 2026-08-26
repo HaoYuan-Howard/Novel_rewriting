@@ -58,7 +58,7 @@ from novel.orchestrator.jobs import JobConflict
 #: 登记在这里是为了让「本服务会发哪些状态码」只有一张表。
 CSRF_REFUSED = 403
 
-#: 路径参数本身不合法（`:kind` 不在八个里 / `:sid` 过不了 `paths.check_sid`）。
+#: 路径参数本身不合法（`:kind` 不在七个现役值里 / `:sid` 过不了 `paths.check_sid`）。
 BAD_REQUEST = 400
 
 #: 异常 → 状态码。**按类精确匹配，再沿 MRO 上溯；没有默认格。**

@@ -3,8 +3,8 @@
 """Stage 6 开篇文案生成 prompt 与唯一的材料投影。
 
 本模块把原作文案作为创作金标准，把全书事实/故事地图作为真实性边界，把重写开篇
-作为正文声线参照。Stage3 只提供文案段的五叶机械基线；定性 voice、surface habits、
-逐章风格和 hook style 均不再消费。剧透不再是违规；真正的边界是不能改变人物身份、
+作为正文声线参照。文案段的五叶机械基线由 Stage1 原文即时测量；不消费定性 voice、
+surface habits、逐章风格或 hook style。剧透不再是违规；真正的边界是不能改变人物身份、
 关系、关键因果或结果。
 
 ``Material.given`` 仍是机械词面探针的唯一「给过什么」全集。prompt 与探针必须消费
@@ -20,7 +20,6 @@ from collections import Counter
 from contracts.invariants import (
     HOOK_APPROACH_NOTES, HOOK_CURRENT_APPROACHES, HOOK_RECIPE, slot_of,)
 from novel.core.bands import ending_shape, hook_shape_band, sep_band_of_text
-from novel.consumption import stage6_style
 from novel.llm.prompts import fill, with_json_shape
 
 
@@ -173,26 +172,17 @@ def story_map(ctx: dict) -> list[dict]:
     return out
 
 
-def hook_mechanical(style: dict) -> dict:
-    """取出与 provenance/freshness 完全同型的五叶文案机械基线。"""
-    projected = stage6_style(style)
-    if not isinstance(projected, dict):
-        return {}
-    hook = projected.get('hook')
-    return dict(hook) if isinstance(hook, dict) else {}
-
-
-def build_material(*, title: str, ctx: dict, style: dict, grounding: dict,
+def build_material(*, title: str, ctx: dict, hook_mechanical: dict, grounding: dict,
                    source_hook: str, lead: list[dict], missing: list[int],
                    upto: int) -> Material:
-    """组装不含 Stage3 定性画像的完整创作包。"""
+    """组装从 Stage1 文案即时测量的完整创作包。"""
     truth = {
         'entities': grounding.get('entities'),
         'canon': grounding.get('canon'),
         'arc': grounding.get('arc'),
     }
     full_map = story_map(ctx)
-    mechanical = hook_mechanical(style)
+    mechanical = dict(hook_mechanical)
     packet = {
         'title': title,
         'source_hook': source_hook,

@@ -102,7 +102,6 @@
   "stage0",
   "stage1",
   "stage2",
-  "stage3",
   "stage4",
   "stage5",
   "stage6",
@@ -150,7 +149,6 @@
   "s0",
   "s1",
   "s2",
-  "s3",
   "s4",
   "s5",
   "s6",
@@ -536,7 +534,6 @@
   "--check-only": "按当前判据复检存量产物，纯读不写盘；报 FAIL 退出码非零",
   "--recheck": "按当前判据重判存量产物并写回指标",
   "--revalidate": "按当前判据对 .INVALID 稿做 0 LLM 同轮重判，必填 actor/reason 并留不可变审计，合格才提升",
-  "--measure-only": "只跑确定性实测并报出来，不写盘；写回直接免费重跑节点默认路径",
   "--renormalize": "按当前契约重算代码派生字段与原文定位",
   "--names-only": "只产逐章可用名册（stage4），不产计划",
   "--identity": "恒等基线：拿原作自己的东西跑整套判据，看判据有没有把合法情况排除在外",
@@ -583,7 +580,6 @@
  "write_effects": {
   "--dry-run": "",
   "--check-only": "",
-  "--measure-only": "",
   "--names-only": "",
   "--emit-edit-template": "",
   "--validate-edit": "",
@@ -601,11 +597,16 @@
   "stage0",
   "stage1",
   "stage2",
-  "stage3",
   "stage4",
   "stage5",
   "stage6",
   "stage7"
+ ],
+ "retired_nodes": [
+  "stage3.style"
+ ],
+ "retired_stages": [
+  "stage3"
  ],
  "stage_sections": {
   "stage0": [
@@ -617,9 +618,6 @@
   "stage2": [
    "R-2",
    "R-3"
-  ],
-  "stage3": [
-   "R-4"
   ],
   "stage4": [
    "R-5",
@@ -643,7 +641,6 @@
   "stage1.partition",
   "stage2.global",
   "stage2.blueprint",
-  "stage3.style",
   "stage4.design",
   "stage4.plan",
   "stage4.context",
@@ -815,19 +812,6 @@
    ],
    "produces": [
     "stage2/chapter_blueprints.json"
-   ]
-  },
-  "stage3.style": {
-   "label": "stage3 机械基线",
-   "paid": false,
-   "stage": "stage3",
-   "section": "R-4",
-   "flags": [
-    "--check-only",
-    "--measure-only"
-   ],
-   "produces": [
-    "stage3/style_grounding.json"
    ]
   },
   "stage4.design": {
@@ -1422,43 +1406,6 @@
    "writes": "stage2/chapter_blueprints.json",
    "writes_disk": true,
    "needs_value": "结构化拒绝响应恢复模式；当前只接受 `agent`。可修复响应先隔离并停给外层受托 agent，同闸复验失败才继续采样",
-   "required_inputs": []
-  },
-  {
-   "kind": "stage3.style",
-   "label": "stage3 机械基线",
-   "extra": null,
-   "paid": false,
-   "free_flag": null,
-   "writes": "stage3/style_grounding.json",
-   "writes_disk": true,
-   "needs_value": null,
-   "required_inputs": []
-  },
-  {
-   "kind": "stage3.style",
-   "label": "stage3 机械基线 --check-only",
-   "extra": [
-    "--check-only"
-   ],
-   "paid": false,
-   "free_flag": "--check-only",
-   "writes": "",
-   "writes_disk": false,
-   "needs_value": null,
-   "required_inputs": []
-  },
-  {
-   "kind": "stage3.style",
-   "label": "stage3 机械基线 --measure-only",
-   "extra": [
-    "--measure-only"
-   ],
-   "paid": false,
-   "free_flag": "--measure-only",
-   "writes": "",
-   "writes_disk": false,
-   "needs_value": null,
    "required_inputs": []
   },
   {

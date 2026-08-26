@@ -470,7 +470,7 @@ class Book:
 
     title: str
     ctx: dict[str, Any]
-    #: Stage3 的九叶正文机械投影；Book 结构上没有定性画像或文案实测入口。
+    #: Stage1 正文即时计算的九叶机械投影；Book 结构上没有定性画像或文案实测入口。
     measurable: dict[str, Any]
     source_text: dict[int, str]
     #: stage2 的**全量** secrets（含一次都没下发过的）。⚠ **收窄下发面是修复，收窄检测器是削弱**：

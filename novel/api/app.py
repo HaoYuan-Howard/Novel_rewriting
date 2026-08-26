@@ -67,7 +67,7 @@ UI_DIST = os.path.join(
     'web', 'dist')
 
 #: SPA 的入口文档。前端是 `BrowserRouter`（`web/src/main.tsx`），所以深链接刷新时
-#: 服务器收到的是 `/novels/<sid>/stage3` 这种路径——磁盘上没有对应文件，
+#: 服务器收到的是 `/novels/<sid>/stage5` 这种路径——磁盘上没有对应文件，
 #: 必须把它交回同一份 `index.html`，由前端路由自己解析。
 UI_INDEX = 'index.html'
 

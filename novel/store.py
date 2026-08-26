@@ -43,6 +43,7 @@ from contracts.artifacts import (
     STAGE0_CLEAN_TEXT, STAGE0_REVISIONS,
     STAGE1_HOOK_COPY, STAGE1_MAIN_TEXT,
     STAGE2_GLOBAL_GROUNDING, STAGE2_GLOBAL_REVIEW,
+    RETIRED_STAGE3_STYLE_GROUNDING,
     STAGE4_PLAN_CHAPTERS, STAGE4_WRITER_CONTEXT,
     STAGE7_NAME_MAP,
 )
@@ -50,8 +51,11 @@ from contracts.schema import (
     ArtifactVersionError, HumanApproval, InputEdge, Provenance, RevalidationAudit,
     artifact_spec, decode_artifact, encode_artifact,
 )
+from contracts.schema.legacy_stage3 import LegacyStyleGrounding, decode_legacy_stage3_v2
 from novel import paths, prov
-from novel.consumption import canonical_rel, producer_node, projection_for
+from novel.consumption import (
+    canonical_rel, legacy_stage3_projection_for, producer_node, projection_for,
+)
 from novel.errors import (
     ApprovalRequired, ArtifactUnreadable, ByteFormRefused, PathRefused,
     ProvenanceRefused, UpstreamMissing, UpstreamStale,
@@ -306,10 +310,9 @@ class ArtifactStore:
         少的只有 `record_edge` 那一行。原型这里是**裸 `json.load`**，
         于是解码与校验那两道也一起绕过去了。
 
-        ⚠ **同时返回原始 dict** 是有用的：判据跑在**模型之前**的那份 dict 上
-        （新契约把八维做成了 `Field(min_length=1)`，模型化之后 `required` 必然全绿，
-        而按「判据 vs 载体按失败成本划」它该留在判据侧——载体拒收要再花一次钱，
-        判据拦下是 0 成本自救）。见 `novel/stages/stage3/checks.py` 开头那段。
+        ⚠ **同时返回原始 dict** 是有用的：模型化会填入默认值、归一化容器，抹平
+        「盘上缺字段」与「字段显式取默认值」的差别；需要检查原始落盘形状的调用方
+        必须拿这里返回的 payload，而不能从模型再 dump 一份冒充原字节形状。
 
         ``replaced_input_keys`` 只服务 typed 人工修订：问题稿会把**上一份**编辑决策集
         记成输入，而人的下一步恰恰是修改同一个文件。此时只放行被明确替换的那条边；
@@ -337,6 +340,14 @@ class ArtifactStore:
             return None
         marker = data.get('_schema_version')
         return marker if isinstance(marker, int) and not isinstance(marker, bool) else None
+
+    def read_legacy_stage3_v2(self, rel: str) -> LegacyStyleGrounding:
+        """通过唯一 JSON 读路解码退役 Stage3 v2，不把它注册成当前 artifact。"""
+        data = self._loads(rel, self._read_bytes(rel))
+        try:
+            return decode_legacy_stage3_v2(data)
+        except (ValidationError, ValueError) as exc:
+            raise ArtifactUnreadable(f'{rel} 不是可读的冻结 v2：{exc}') from exc
 
     def read_external(self, model: type[M], contract_rel: str,
                       path: str | os.PathLike[str]) -> M:
@@ -1192,10 +1203,19 @@ class ArtifactStore:
         **不读它的字节**。
         """
         node = producer_node(rel, fallback=self.ctx.node)
+        legacy_stage3 = (
+            node == 'stage3.style'
+            or (
+                isinstance(recorded, dict)
+                and RETIRED_STAGE3_STYLE_GROUNDING in recorded
+                and node in {'stage5.write', 'stage5.review', 'stage6.hook', 'stage6.semantic'}
+            )
+        )
+        lookup = legacy_stage3_projection_for if legacy_stage3 else projection_for
         return prov.freshness(
             recorded,
             file_now=self._file_fp_of_key,
-            consumed_now=lambda key: self._consumed_fp_of_key(node, key),
+            consumed_now=lambda key: self._consumed_fp_of_key(node, key, lookup),
         )
 
     def _stage4_plan_phase_freshness(
@@ -1688,8 +1708,13 @@ class ArtifactStore:
             f'{report.state}/{report.reason}（{edges}）。正式路径已回滚；'
             '这通常表示写盘方 ctx 与真正产地方不一致，或来源投影没有登记')
 
-    def _consumed_fp_of_key(self, node: str | None, key: str) -> str | None:
-        if node is None or (project := projection_for(node, key)) is None:
+    def _consumed_fp_of_key(
+        self,
+        node: str | None,
+        key: str,
+        lookup: Callable[[str, str], Callable[[Any], Any] | None] = projection_for,
+    ) -> str | None:
+        if node is None or (project := lookup(node, key)) is None:
             return None
         return self._project_current(key, project)
 
@@ -1700,8 +1725,15 @@ class ArtifactStore:
         p = self.ctx.novel_dir.joinpath(*parts)
         try:
             raw = p.read_bytes()
-            data: object = (decode_artifact(key, json.loads(raw.decode('utf-8'))).payload
-                            if p.suffix.lower() == '.json' else raw.decode('utf-8'))
+            if p.suffix.lower() == '.json':
+                decoded_json = json.loads(raw.decode('utf-8'))
+                data: object = (
+                    decode_legacy_stage3_v2(decoded_json).model_dump(by_alias=True)
+                    if key == RETIRED_STAGE3_STYLE_GROUNDING
+                    else decode_artifact(key, decoded_json).payload
+                )
+            else:
+                data = raw.decode('utf-8')
             return prov.projection_fingerprint(project(data))
         except (OSError, UnicodeDecodeError, json.JSONDecodeError,
                 AttributeError, KeyError, IndexError, TypeError, ValueError,

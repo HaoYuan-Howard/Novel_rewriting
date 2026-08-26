@@ -143,8 +143,8 @@ describe('RunScreen check composition', () => {
 
     renderRoute(<RunScreen />, `/n/${SAMPLE_SID}/run`)
 
-    expect(await screen.findAllByText('有阻断')).toHaveLength(7)
-    expect(screen.getAllByText('hard 1 · info 1 · unver 3')).toHaveLength(7)
+    expect(await screen.findAllByText('有阻断')).toHaveLength(6)
+    expect(screen.getAllByText('hard 1 · info 1 · unver 3')).toHaveLength(6)
     expect(screen.getByText('? 校验未知')).toBeInTheDocument()
     expect(screen.getByText(/badge 与计数来自各层 CheckReport/)).toBeInTheDocument()
   })
@@ -169,7 +169,7 @@ describe('RunScreen check composition', () => {
     })
 
     const { queryClient } = renderRoute(<RunScreen />, `/n/${SAMPLE_SID}/run`)
-    expect(await screen.findAllByText('通过')).toHaveLength(8)
+    expect(await screen.findAllByText('通过')).toHaveLength(7)
 
     act(() => {
       void queryClient.invalidateQueries({ queryKey: qk.check(SAMPLE_SID, 'stage1') })
@@ -181,13 +181,13 @@ describe('RunScreen check composition', () => {
       )
     })
     expect(screen.queryByText('? 校验未知')).not.toBeInTheDocument()
-    expect(screen.getAllByText('通过')).toHaveLength(8)
+    expect(screen.getAllByText('通过')).toHaveLength(7)
 
     // 这次是真的取不到了——才显示未知
     act(() => rejectRefresh(new Error('current check unavailable')))
     await waitFor(() => {
       expect(screen.getByText('? 校验未知')).toBeInTheDocument()
-      expect(screen.getAllByText('通过')).toHaveLength(7)
+      expect(screen.getAllByText('通过')).toHaveLength(6)
     })
   })
 })

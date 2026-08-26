@@ -15,6 +15,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from collect_final_evidence import collect  # noqa: E402
+from contracts.invariants import STAGES  # noqa: E402
 from novel import paths  # noqa: E402
 
 
@@ -24,6 +25,7 @@ REQUIRED_HEADINGS = (
     '## 6. 调用与耗时账本', '## 7. 恢复路径与证据指针',
 )
 QUALITY_HEADER = '| 节点/报告 | freshness | HARD | info | metric | unver | skipped | 结论/处置 |'
+QUALITY_STAGES = STAGES
 ANCHOR_RE = re.compile(r'<!-- novel-final-evidence:(\{[^\n]*\}) -->')
 
 
@@ -34,9 +36,9 @@ def validate(text: str, facts: dict[str, Any], *, template_text: str = '') -> li
             errors.append(f'缺少必需章节：{heading}')
     if QUALITY_HEADER not in text:
         errors.append('各层质量表表头不合模板（metric/skipped 不能省略）')
-    for stage in range(8):
-        if not re.search(rf'^\|\s*stage{stage}(?:\.|\s|\|)', text, flags=re.MULTILINE):
-            errors.append(f'质量表缺 stage{stage} 当前报告行')
+    for stage in QUALITY_STAGES:
+        if not re.search(rf'^\|\s*{stage}(?:\.|\s|\|)', text, flags=re.MULTILINE):
+            errors.append(f'质量表缺 {stage} 当前报告行')
     for row in facts.get('quality_table_rows', []):
         if row not in text:
             errors.append(f'质量表与当前 check 不一致：{row}')

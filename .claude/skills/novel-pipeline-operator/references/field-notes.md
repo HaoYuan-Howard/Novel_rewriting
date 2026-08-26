@@ -71,15 +71,15 @@ rg -n "stage6|hook_para_sep|exit 70" .claude/skills/novel-pipeline-operator/refe
 ### FN-003 · 旧并发首跑留下部分完成盘面
 
 - 状态：`contract-confirmed`
-- 触发：存量盘面来自已下线的并发首跑，global/style/blueprint 只有部分正式落盘。
+- 触发：存量盘面来自已下线的并发首跑，global/旧 style/blueprint 只有部分正式落盘。
 - 判断：组合命令不是原子事务；已经正式落盘的上游不应为补齐下游而重复付费。
-  已观测到的一种形态：`stage2.global` 与 `stage3.style` **都正式落盘**，只有逐章蓝图被拦成
+  已观测到的一种历史形态：global 与现已退役的 style 产物都正式落盘，只有逐章蓝图被拦成
   `.INVALID`，而它的逐章生成事件全部 `succeeded`、`failed` 为零。
   ⇒ **逐章生成成功不等于落盘**：闸门是在合并落盘那一步判的，
   所以"每章都绿"与"整条命令 exit 2"完全可以同时成立，别据前者推断产物已就位。
 - 处置：先 `state` 看清哪几份已 fresh；先把 current Stage2 全局复核逐项收成 PASS，
-  再按 finding 修复活动失败并分别 preview 缺失的 `stage2.blueprint`、`stage3.style`。
-- 验证：两份 follow-check 都 fresh 且无 HARD，`state` 显示 stage2/stage3 完成。
+  再按 finding 修复活动失败并 preview 缺失的 `stage2.blueprint`。旧 style 不补跑、不迁移。
+- 验证：Stage2 follow-check fresh 且无 HARD，`state` 显示当前节点完成。
 - 依据：当前 CLI 的 Stage2 全局硬闸与产物存在性；并发入口已经从注册表删除。
 
 ### FN-004 · blueprint 锚点失败要先判原字节
@@ -215,7 +215,7 @@ rg -n "stage6|hook_para_sep|exit 70" .claude/skills/novel-pipeline-operator/refe
 - 触发：任一层被落盘闸拦下返回 exit 2，需要知道“错在哪几条”而不只是终态里的 rule id。
 - 判断：`--check-only` 面对活动 `.INVALID` 的取值面**逐层不同**，不要按单一心智模型推断：
   stage2 问题稿优先（有 `.INVALID` 就判它，理由是它是更新的一次尝试）；
-  stage3 / stage4 正式稿优先，正式稿不在盘上时才回落判 `.INVALID`；
+  stage4 正式稿优先，正式稿不在盘上时才回落判 `.INVALID`；
   两者都会在报告第一节标注「⚠ 判的这一份是 .INVALID 稿」，不会把它冒充成正式结论。
   stage6 只读正式产物，候选级 finding 在 `hook.INVALID.json` 的 `candidates[].findings` 里（见 FN-008）；
   stage7 也只读正式产物。**stage4 的 `.INVALID` 不带 findings**（schema 无此字段），
@@ -228,7 +228,7 @@ rg -n "stage6|hook_para_sep|exit 70" .claude/skills/novel-pipeline-operator/refe
   不要因为终态只给了 rule id 就盲改、自行复算判据或停机。
 - 验证：`--revalidate` 打印的完整报告里该 rule 归零，`state` 判该层完成，活动 `.INVALID` 已归档。
 - 依据：`novel/stages/stage2/extract.py::_read_raw` 的问题稿优先；
-  `novel/stages/stage3/style.py::run_check_only` 与 `novel/stages/stage4/plan.py::run_check_only`
+  `novel/stages/stage4/plan.py::run_check_only`
   的 `judged` 回落；`novel/stages/stage6/hook.py::run_check_only` 与
   `novel/stages/stage7/rename.py::run_check_only` 只读正式产物；`novel/report/render.py` 的 invalid 标注行。
 
@@ -237,14 +237,14 @@ rg -n "stage6|hook_para_sep|exit 70" .claude/skills/novel-pipeline-operator/refe
 - 状态：`contract-confirmed`
 - 触发：`--apply-edit <路径>` 返回 exit 2，原文含“落在这本书的产物目录之外”；或反过来，
   按“一律传绝对路径”的老办法把稿子放在书目录**外**，某些层却收下了。
-- 判断：**没有统一口径，不要拿一层的行为推另一层。** `stage3.style` / `stage4.plan` /
+- 判断：**没有统一口径，不要拿一层的行为推另一层。** `stage4.plan` /
   `stage6.hook` / `stage7.rename` 共用 `edit_rel`：相对路径按**书目录**解释（不是进程 cwd），
   绝对路径只要落在书目录内也收，目录外与 `..` 穿越算平后一律关闭式拒绝。
   `stage5.write` 与 `stage0.edit` **刻意不走这条**，路径语义是“任意路径”——服务进程把人工改稿
   放在书目录之外的 `<base>/_service/edits/` 再喂给 `stage5.write --apply-edit`，那条现役 HTTP
   改稿路依赖它（服务进程只写 `_service/`，产物变更一律经 CLI 子进程）。
   `stage2.global --review-decisions` 与前一组同规矩。
-- 处置：走 `edit_rel` 那四层时把 `--apply-edit` 的编辑文件写进书目录内（`<novel-dir>/<stage>/..._edit.json`），
+- 处置：走 `edit_rel` 的现役层时把 `--apply-edit` 的编辑文件写进书目录内（`<novel-dir>/<stage>/..._edit.json`），
   传相对书目录的路径或书目录内的绝对路径都可以。被拒时先读报错里算出来的那个绝对路径，
   它才是代码真正解释成的位置；不要靠加 `..` 或换 cwd 绕过去。
   ⚠⚠ **反过来，`stage5.write` / `stage0.edit` 的改稿要写进 `<base>/_service/edits/`，
@@ -273,7 +273,7 @@ rg -n "stage6|hook_para_sep|exit 70" .claude/skills/novel-pipeline-operator/refe
   如果误跑 `--revise` 命中“没有可自救的条目”，先确认 ledger 没有新增调用，再回到上述分流。
   ⚠ 代笔整章正文是**授权范围内**的，但这条路**没有任何守卫替你兜**：文风、保真材料与在场集
   的一致性都不在任何判据的扫描面内，改坏了不会红。所以代笔前先取三样依据——该章 blueprint
-  的拍子、`stage3` 正文机械基线、该章在场角色集——写完逐项自查并把方法与结论写进
+  的拍子、由 Stage1 正文即时计算的机械基线、该章在场角色集——写完逐项自查并把方法与结论写进
   终审包。取不到这三样依据时选 `--wontfix` 留一条明确裁决，而不是凭手感改正文。
 - 验证旧豁免：`wontfix` 绑的是 `(章, rule, evidence_key)`，不是“这章从此免检”。
   `--apply-edit` 改正文后必须先重跑 `stage5.review`；证据键变化的新 finding 会自动重新进入

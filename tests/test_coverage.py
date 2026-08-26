@@ -334,10 +334,10 @@ def test_no_rule_claims_a_non_judge_requirement():
 
 @pytest.mark.parametrize('stage', sorted(STAGES))
 def test_every_stage_has_rules_for_every_guarded_requirement(stage):
-    """当前八层的正向覆盖率。"""
+    """当前七个产物层的正向覆盖率。"""
     # ⚠ **不许写成 `'R-' + stage.removeprefix('stage')`。** 那个式子只在 stage0/stage1 上对：
     # R 节的编排轴是**节点**，不是 stage（R-2/R-3 是 stage2 的两个节点、R-5/R-6 是 stage4 的、
-    # R-7/R-8 是 stage5 的两相），于是 `stage3` 会拿到 **stage2 逐章抽取**的需求。
+    # R-7/R-8 是 stage5 的两相）；R-4 是无产物的跨层测量契约，不由节点认领。
     sections = STAGE_SECTIONS[stage]
     # 用 `expects_rule` 而不是 `claims_guard`：**度量也必须有一条注册判据**。
     # 度量不是门，但「这条度量无条件报出」与「根本没人算它」必须分得开（判据 21）。
@@ -371,8 +371,9 @@ def test_every_pipeline_requirement_section_is_claimed_by_a_node():
     按设计不在这张表里——它们的守卫在别处，不该靠这条测试。
     """
     claimed = {spec.section for spec in NODES.values()}
-    pipeline = {f'R-{i}' for i in range(0, 11)}
+    pipeline = {f'R-{i}' for i in range(0, 11)} - {'R-4'}
     assert pipeline <= claimed, f'这些需求节没有任何节点认领：{sorted(pipeline - claimed)}'
+    assert 'R-4' not in claimed, 'R-4 是 Stage5/6 即时测量契约，不得复活 Stage3 节点'
 
 
 def test_stage_sections_is_not_the_naive_stage_number():
@@ -383,7 +384,7 @@ def test_stage_sections_is_not_the_naive_stage_number():
     下面这几个字面值是分歧点，写死在这里，改坏了当场红：
     """
     assert STAGE_SECTIONS['stage2'] == ('R-2', 'R-3'), 'stage2 有两个节点（全书 / 逐章）'
-    assert STAGE_SECTIONS['stage3'] == ('R-4',), 'stage3 是 R-4，不是 R-3——R-3 是 stage2 逐章抽取'
+    assert 'stage3' not in STAGE_SECTIONS, 'Stage3 已整层退役，R-4 不再映射到产物层'
     assert STAGE_SECTIONS['stage4'] == ('R-5', 'R-6'), 'stage4 有两份产物（计划 / 上下文组装）'
     assert STAGE_SECTIONS['stage5'] == ('R-7', 'R-8'), 'stage5 有两相（写作 / 全书验收）'
     assert STAGE_SECTIONS['stage7'] == ('R-10',)
@@ -396,7 +397,7 @@ def test_stage_sections_is_not_the_naive_stage_number():
 
 
 def test_every_stage_has_at_least_one_node():
-    """八个 stage 一个都不许没有节点。
+    """七个现役 stage 一个都不许没有节点。
 
     ⚠ stage0 在原型里**一个 action 都没有**，而它是唯一那道人工闸门（`R-0.3a`）——
     「这一层没有作业」与「这一层不需要作业」在界面上长得一样。
@@ -464,9 +465,9 @@ def test_every_stage_with_rules_appears_in_the_reverse_coverage_table():
 def test_the_reverse_coverage_scan_actually_finds_something():
     """守卫的守卫：正则失配时上面两条会全绿，而那正是最坏的情况。"""
     claims = _reverse_coverage_claims()
-    assert len(claims) >= 8, (
+    assert len(claims) >= 7, (
         f'只从 §五 扫到 {len(claims)} 层的条数登记——正则多半失配了。'
-        f'当前 stage0~stage7 每层都有判据，八层都该被扫到'
+        f'当前七个产物层都有判据，七层都该被扫到'
     )
 
 
@@ -475,7 +476,7 @@ def test_the_reverse_coverage_scan_actually_finds_something():
 # 【为什么单开一组】上面那三条只扫 `docs/BACKEND_CONTRACT.md` §五。而 `docs/schema/*.md`
 # 里同样逐层写着「当前注册表共 N 条」，**那些数字此前无人对账** —— 实测漂到过
 # stage5 写 48（实为 46）、stage6 写 21 条 / 6-8-4-3（实为 22 条 / 5-8-5-4），
-# 而 stage0 / stage1 / stage3 压根没写。
+# 而 stage0 / stage1 / 当时的 stage3 压根没写。
 # ⚠ 只查「写了的对不对」会放过「压根没写」，所以下面第二条是**必需的另一半**。
 
 #: `当前注册表共 **N 条**：**a hard、b info、c metric、d unver**。`（零值桶省略）
@@ -495,8 +496,8 @@ def _documented_stages() -> tuple[str, ...]:
     ⚠ 分母只能有一份。三条各自重拼一遍时，将来给某层加/挪 schema 文档只改到其中两处，
     漏掉的那一处失效方式**不是红，是绿**——而这组守卫存在的理由，正是 stage0/1/3
     曾经就这样长期漏网。
-    ⚠ `exists()` 放在收敛之后：注册表有 229 条判据、只有 8 个层，写成逐条过滤
-    等于把同一个文件 stat 几十遍（`stage2` 一家就 71 次）。
+    ⚠ `exists()` 放在收敛之后：注册表有 229 条判据、只有 7 个现役层，写成逐条过滤
+    等于把同一个文件 stat 几十遍（`stage2` 一家就 67 次）。
     """
     return tuple(sorted(
         stage for stage in {r.stage for r in REGISTRY.all()}
@@ -508,7 +509,7 @@ def _schema_count_claims() -> dict[str, tuple[int, dict[str, int]]]:
     """逐层扫出 `docs/schema/<stage>.md` 宣称的条数与 sev 分布。
 
     ⚠ 缓存的是**仓内静态文档**的扫描结果，三条用例读到的必然是同一份：不加缓存时
-    这批 md（八层合计数百 KB）在一次 pytest 里被整整读三遍。
+    这批 md（七层合计数百 KB）在一次 pytest 里被整整读三遍。
     """
     claims: dict[str, tuple[int, dict[str, int]]] = {}
     for stage in _documented_stages():
@@ -563,7 +564,7 @@ def test_schema_docs_declare_the_live_rule_counts():
 def test_every_stage_with_rules_declares_its_count_in_the_schema_doc():
     """**漏网的另一半**：有判据的层，一层都不许在 `docs/schema/` 里不写条数。
 
-    ⚠ 只查「写了的对不对」会放过「压根没写」——stage0 / stage1 / stage3 正是这样
+    ⚠ 只查「写了的对不对」会放过「压根没写」——stage0 / stage1 / 退役前的 stage3 正是这样
     长期没有任何条数声明，而上面那条对它们一句话都说不出来。
     """
     missing = sorted(set(_documented_stages()) - set(_schema_count_claims()))

@@ -1,15 +1,13 @@
 # stage3 封口记录（2026-08-23）
 
-> **生命周期提示（2026-08-24）：本文是 Stage5 专项的历史封口，现役消费边界已 superseded。**
-> Stage5 现只消费 Stage3 的精确机械投影，不再接收本文所述定性 `style_block`；
-> Stage3 → Stage6 的双书定性消融按预注册统计门仍为**未决**；产品所有者随后按
-> “B 臂至少一条可用且事实通过”标准明确覆盖裁决为删除。Stage3 已收窄为 v2 免费机械基线，
-> Stage6 只消费五叶 hook 机械投影。text-free 冻结证据、偏离说明与两层结论见
-> `docs/stage3-stage6-style-ab-result.md`。
-> 下文历史实验叙述与当时数字不回写。
+> **生命周期提示（2026-08-26）：本文是 Stage5 专项的历史封口，现役消费边界已再次 superseded。**
+> Stage3 现已整层退役；Stage5/6 从 Stage1 文本即时测量所需机械读数，不再读取持久化
+> `style_grounding.json`。下文保留 2026-08-23～24 从定性包收窄到 v2 免费机械基线时的
+> 历史实验叙述与当时数字，不代表当前仍有 Stage3 节点或产物。text-free 冻结证据、
+> 偏离说明与当时两层结论见 `docs/stage3-stage6-style-ab-result.md`。
 >
 > **一句话：stage3 的 LLM 画像对最终成稿没有可检测影响；后续 Stage6 真实消融也证明
-> 无定性包仍持续产出可用候选，产品所有者已授权删除，现役只保留机械基线。**
+> 无定性包仍持续产出可用候选，产品所有者已授权删除；机械读数后来进一步折叠为消费时即时测量。**
 >
 > 本文只保留**结论与依据**，防止半年后（包括作者本人）重新提出这些已被证伪的方案、
 > 再走一遍。完整过程、实验脚本与 5 份读数文档（约 4,400 行）在
@@ -41,9 +39,9 @@
    `book_surface_habits` / `opening_chapter_styles` / `hook_style`，且自带 A/B 依据
    （「A/B 表明问题恰恰在文案与正文执行感不一致」）。上面那四条证据**全部只针对
    stage5**——文案是短文本、无闭卷约束，是另一个消费场景。
-2. **删除面不可逆。** `contracts/schema/api.py` 的 `VOICE_KEYS` 逐键校验 + 5 条判据
+2. **删除面不可逆。** 当时的 API 逐键校验 + 5 条判据
    （`schema_shape` / `habit_quote` 两条 HARD）+ `run_repair_surface_habits`
-   + `novel/consumption.py` 两处 + `novel/views/stage3.py`。
+   + 两处消费投影 + Stage3 视图（均已删除，见 Git 历史）。
    而仓里**没有迁移机制** ⇒ 改 schema 形状 = 存量产物经 `store.read_own` 当场拒读。
 3. **想省钱那条路的代价不对。** 实测 `upto: int = 1` ⇒ stage6 只要**开篇 1 章**的
    逐章画像，23 次逐章调用里 22 次纯为 stage5 服务。但要走通得拆掉

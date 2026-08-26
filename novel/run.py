@@ -47,7 +47,7 @@ class RunContext:
     ⚠ `paid` **不是从 `NODES[node].paid` 推出来的**，它由调用方传进来。
     理由是 `R-11.7`：**贵贱只有一处算**，而那一处是 `is_paid(node, flags)`
     （`novel/orchestrator/nodes.py`，Phase D）——因为真正的贵贱是 `(node, flags)` 二元组
-    决定的：`stage3.style --check-only` 是 0 成本，`stage5.review --revise` 是付费。
+    决定的：`stage5.review --check-only` 是 0 成本，`stage5.review --revise` 是付费。
     在这里给一个「默认从 NODES 取」会让同一个问题有第二个答案，而两个答案必然分家。
     """
 

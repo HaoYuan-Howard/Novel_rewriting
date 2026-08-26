@@ -62,6 +62,7 @@ from contracts.schema.stage6 import Hook  # noqa: E402
 from novel import paths, prov  # noqa: E402
 from novel.cli import exit_codes as X  # noqa: E402
 from novel.config import Config, load_config  # noqa: E402
+from novel.consumption import legacy_stage6_style  # noqa: E402
 from novel.core.bands import ending_shape, hook_shape_band, sep_band_of_text  # noqa: E402
 from novel.llm.client import NOTHINK_RUNGS, rungs_from_effort  # noqa: E402
 from novel.llm.ledger import ledger_path  # noqa: E402
@@ -621,7 +622,7 @@ def _legacy_build_material(*, arm: str, title: str, ctx: dict, style: dict,
         source_hook=source_hook,
         story_truth=truth,
         story_map=tuple(full_map),
-        hook_mechanical=prompts.hook_mechanical(style),
+        hook_mechanical=legacy_stage6_style(style)['hook'],
     )
 
 

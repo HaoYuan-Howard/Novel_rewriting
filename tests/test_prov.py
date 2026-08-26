@@ -106,7 +106,7 @@ def test_consumed_null_is_unknown_not_fresh():
     """**「没声明读了什么」不是「读的东西没变」。**
 
     `consumed=null` 的含义是「本节点没有声明自己读了哪些字段」——
-    **建槽位，不填槽位**：八层逐步补投影，在补上之前这条边诚实地是 `unknown`。
+    **建槽位，不填槽位**：七个现役层逐步补投影，在补上之前这条边诚实地是 `unknown`。
     """
     r = _fresh(_edge(consumed=None), now=FP_V1)
     assert (r.state, r.reason) == ('unknown', 'consumed_undeclared')

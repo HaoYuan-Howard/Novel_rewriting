@@ -73,7 +73,6 @@ python tools/regen_web_enums_fixture.py          # 写盘（--check 只报差异
 | fixture | 端点 |
 |---|---|
 | `check_stage2.json` | `/api/novels/7615069877019300633/check/stage2` |
-| `check_stage3.json` | `/api/novels/7615069877019300633/check/stage3` |
 | `check_stage4.json` | `/api/novels/7615069877019300633/check/stage4` |
 | `check_stage5.json` | `/api/novels/7615069877019300633/check/stage5` |
 | `check_stage6.json` | `/api/novels/7615069877019300633/check/stage6` |
@@ -89,4 +88,8 @@ python tools/regen_web_enums_fixture.py          # 写盘（--check 只报差异
 | `stage6.json` | `/api/novels/7615069877019300633/stage6` |
 | `stage7.json` | `/api/novels/7615069877019300633/stage7` |
 | `stage7_ch3.json` | `/api/novels/7615069877019300633/stage7/3` |
-| `style.json` | `/api/novels/7615069877019300633/stage3/style` |
+
+`style.json` 不是现役端点抓包：它是 `docs/REQUIREMENTS.md` TODO-28 明确保留的
+legacy adapter 例外，等 fixture 最终收口时一并删除。Stage3 check 没有这个例外，
+因此 `check_stage3.json` 随整层退役删除。其余 fixture 中出现的旧 Stage3 provenance
+只用于验证历史解码，不表示当前仍可运行或复检 Stage3。

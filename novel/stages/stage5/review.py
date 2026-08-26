@@ -19,7 +19,7 @@ review.py —— `stage5.review`：**全书验收**（0 成本，不调 LLM）�
 from __future__ import annotations
 
 from contracts.artifacts import (
-    STAGE1_MAIN_TEXT, STAGE2_GLOBAL_GROUNDING, STAGE3_STYLE_GROUNDING,
+    STAGE1_MAIN_TEXT, STAGE2_GLOBAL_GROUNDING,
     STAGE4_WRITER_CONTEXT, STAGE5_REVIEW, artifact_rel,
 )
 from contracts.schema import artifact_spec
@@ -36,15 +36,14 @@ from contracts.rules import REGISTRY
 from contracts.schema.common import Finding, WontFixEntry, WontFixNote
 from contracts.schema.report import CheckReport, finding
 from contracts.schema.stage2 import GlobalGrounding
-from contracts.schema.stage3 import StyleGrounding
 from contracts.schema.stage4 import WriterContext
 from contracts.schema.stage5 import (
     ContextSource, ContextSourceDetail, DraftSources, Review, ReviewChapter, ReviewProvenance,
     ReviewSources,
 )
 from novel import prov, wontfix
-from novel.consumption import stage5_style
 from novel.core.evidence import without_global_evidence
+from novel.core.measure import body_style_metrics, measure_body
 from novel.core.naming import project_character_names
 from novel.errors import (
     ArtifactUnreadable, BlockingFindingsUnresolved, GateBlocked, TerminalState,
@@ -58,7 +57,6 @@ from novel.store import ArtifactStore
 
 MAIN_TEXT = STAGE1_MAIN_TEXT
 GLOBAL_GROUNDING = STAGE2_GLOBAL_GROUNDING
-STYLE_GROUNDING = STAGE3_STYLE_GROUNDING
 WRITER_CONTEXT = STAGE4_WRITER_CONTEXT
 #: ⚠ 从 `novel/wontfix.py` 派生，不手写第二个字符串——两层共用同一张模板。
 WONTFIX = wontfix.rel_of('stage5')
@@ -73,23 +71,20 @@ _REVIEW_RX = re.compile(r'^review_(\d+)\.json$')
 # ─────────────────────────────────────────────────────────────────────────────
 
 def load_book(ctx: RunContext, store: ArtifactStore) -> M.Book:
-    """四份上游 → `Book`。**写作相与验收相共用这一个入口。**
+    """三份上游 → `Book`。**写作相与验收相共用这一个入口。**
 
     ⚠⚠ **secrets 直接读 stage2 全量，不从各章 `facts.secrets` 取并集**：
     并集的成员资格恰好等于「至少被某一章下发过」，于是一条**全书从未下发**的 secret 会让
     `secret_leak` 的关键片段成空列表 ⇒ **这条 secret 的泄漏检查从此永远不执行**，
     而判据照常输出一个「没报违规」。**收窄下发面是修复，收窄检测器是削弱。**
     """
-    for rel in (MAIN_TEXT, GLOBAL_GROUNDING, STYLE_GROUNDING, WRITER_CONTEXT):
+    for rel in (MAIN_TEXT, GLOBAL_GROUNDING, WRITER_CONTEXT):
         if not store.exists(rel):
             raise UpstreamMissing(f'{rel} 不在盘上——先跑 {rel.split("/")[0]}')
     main = store.read(_main_text_model(), MAIN_TEXT)
     gg = store.read(GlobalGrounding, GLOBAL_GROUNDING)
-    style = store.read(StyleGrounding, STYLE_GROUNDING)
     wc = store.read(WriterContext, WRITER_CONTEXT)
-    style_projected = stage5_style(style.model_dump(by_alias=True))
-    if not isinstance(style_projected, dict) or not isinstance(style_projected.get('body'), dict):
-        raise RuntimeError('stage5_style 没有产出正文机械基线——投影实现与 typed 上游脱节')
+    measurable = body_style_metrics(measure_body(main))
     global_projected = without_global_evidence(gg.model_dump(by_alias=True))
     assert isinstance(global_projected, dict)
     source_text = {s.chapter_ordinal: (s.text or '') for s in main.root}
@@ -111,7 +106,7 @@ def load_book(ctx: RunContext, store: ArtifactStore) -> M.Book:
     return M.Book(
         title=ctx.title,
         ctx=context_payload,
-        measurable=style_projected['body'],
+        measurable=measurable,
         source_text=source_text,
         secrets=((global_projected.get('canon') or {}).get('secrets') or []),
         characters=name_registry,

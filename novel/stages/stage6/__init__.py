@@ -14,7 +14,7 @@ stage6 是七层里最便宜的一层——生成仍是**单次 LLM 调用** ·
   · `novel/core/bands.py::hook_shape_band()` 骨架 C 期就给它预留着，**至今零消费方**；
   · `stage6.approve` 是 D 期建了 `HUMAN_NODES` / `waiting_on` 却**从没有真消费方**的
     那条人工闸门；
-  · 落盘闸门第一次遇到**一次产三份**的产物——stage3 那套「任何 hard ⇒ `.INVALID`」
+  · 落盘闸门第一次遇到**一次产三份**的产物——退役 Stage3 那套「任何 hard ⇒ `.INVALID`」
     在这里会因为一条候选红而废掉另外两条。
 
 【本层与 stage3 的两处形状差异，都是产物形状逼出来的】

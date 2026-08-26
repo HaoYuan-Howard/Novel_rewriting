@@ -4,49 +4,42 @@
 test_schema_api.py —— HTTP 响应模型的载体层守卫（`docs/schema/_api.md` ↔ `contracts/schema/api.py`）。
 
 【本文件盯三件事】
-  ① `StyleView` 那五条后置条件，**每条配一个会红的反例**——
-     一条只有正例的后置条件，与一条被注释掉的后置条件在测试结果上长得一样。
+  ① 现役读屏模型的后置条件必须配会红的反例；Stage3 ``StyleView`` 已随整层退役。
   ② **契约层不许手抄取值面**（`Literal['a','b']`）：取值面的唯一落点是 `invariants`。
   ③ **契约层不许背上 web 栈**：离线产 TS 类型的脚本一行 HTTP 都不发。
 
-⚠ 本文件**不需要 fastapi**。
+⚠ 本文件**不需要 fastapi**。ApprovalDoc v4 还须关闭式拒绝退役的 s3 gate。
 """
 from __future__ import annotations
 
 import ast
 import json
-import os
 from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
 
 import contracts.judges.stage5  # noqa: F401  # 注册现役 Stage5 判据供 fixture 对账
-from contracts.invariants import STAGE3_MEASUREMENT_CONTRACT
+from contracts.invariants import APPROVAL_GATES
 from contracts.rules import REGISTRY
 from contracts.schema.api import (
-    DraftAlignView, DraftView, DriftItem, ErrorBody, GlobalView, JobList,
-    LogChunk, LogStreamEvent, NovelList,
-    PreviewRequest, ReadingView, ReviewView,
-    ReviewChapterView,
-    Stage0EditRequest, Stage0Segment, Stage0Segments,
-    Stage1Segment, Stage1View,
-    Stage4View, Stage5View, Stage6View, Stage7View, StyleView, UploadResult,
+    ApprovalDoc, DraftAlignView, DraftView, ErrorBody, GlobalView, JobList,
+    LogChunk, LogStreamEvent, NovelList, PreviewRequest, ReadingView,
+    ReviewChapterView, ReviewView,
+    Stage0EditRequest, Stage0Segment, Stage0Segments, Stage1Segment, Stage1View,
+    Stage4View, Stage5View, Stage6View, Stage7View, UploadResult,
 )
 from contracts.schema.api import ReadingBeatLine
 from contracts.schema.report import CheckReport
 from contracts.schema.stage5 import ChapterSegment
-from contracts.schema.stage3 import (
-    ChapterCharStats, Measurable, MeasurableBlock, MeasurableBody, PerChapterSentence,
-    StyleProvenance,
-)
 
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-API_PY = os.path.join(ROOT, 'contracts', 'schema', 'api.py')
+
+ROOT = Path(__file__).parents[1]
+API_PY = ROOT / 'contracts' / 'schema' / 'api.py'
 
 
 def test_active_global_fixture_is_a_v3_view_and_every_located_span_matches_chapter_text():
-    fixtures = Path(ROOT) / 'web' / 'src' / 'fixtures' / 'backend_v1'
+    fixtures = ROOT / 'web' / 'src' / 'fixtures' / 'backend_v1'
     raw = json.loads((fixtures / 'global.json').read_text(encoding='utf-8'))
     view = GlobalView.model_validate(raw)
     assert {r.visibility.kind for r in view.relations} == {'public', 'via_secret'}
@@ -74,7 +67,7 @@ def test_active_global_fixture_is_a_v3_view_and_every_located_span_matches_chapt
 
 
 def test_active_stage5_fixtures_are_exact_slim_http_views():
-    fixtures = Path(ROOT) / 'web' / 'src' / 'fixtures' / 'backend_v1'
+    fixtures = ROOT / 'web' / 'src' / 'fixtures' / 'backend_v1'
     stage5 = Stage5View.model_validate_json(
         (fixtures / 'stage5_ch3.json').read_text(encoding='utf-8'))
     review = ReviewView.model_validate_json(
@@ -185,163 +178,6 @@ def test_stage5_views_keep_draft_segments_as_the_only_text_carrier():
             'output_ordinal': 1, 'findings': [], 'segments': segments})
 
 
-# ───────────────────────── 造两份最小的合法视图 ─────────────────────────
-#
-# ⚠ **合成，不读盘。** 本文件测的是**载体层**的后置条件，而载体层的正确性
-#   不该取决于「这台机器上有没有那三本语料」——那样它会在没有语料时静静地 skip，
-#   而 skip 掉的东西看起来像绿的。盘上语料的体检在 `tests/test_views_stage3.py`。
-
-_BLOCK = dict(chars=139, paragraphs=8, sentences=9, avg_paragraph_chars=17.4,
-              paragraph_sep_chars=1.75, avg_sentence_chars=15.4,
-              dialogue_ratio=0.496, dialogue_ratio_applicable=True, quote_styles=['“”'])
-
-
-def _measurable() -> Measurable:
-    return Measurable(
-        body=MeasurableBody(**{**_BLOCK, 'chars': 9516,
-                               'chapter_chars': ChapterCharStats(min=1053, max=1391, avg=1189.5),
-                               'per_chapter_avg_sentence': PerChapterSentence(min=16.6, max=18.4)}),
-        hook=MeasurableBlock(**_BLOCK))
-
-
-def _empty_view(**over):
-    """产物不在盘上、而左半边也量不出来的那一态。**九个端点里最常见的一态。**"""
-    base = dict(
-        sid='7615069877019300633', title='某本书',
-        exists=False, condition='missing', invalid_exists=False, readable=None,
-        measurable_stored=None, bands_stored=None, _provenance=None,
-        hook_copy_text=None,
-        measured_now=None, bands_now=None,
-        measure_error='stage1/main_text.json 不在盘上——先跑 stage1',
-        measure_error_kind='UpstreamMissing',
-        drift=None,
-        freshness='unknown', reason='no_provenance',
-    )
-    base.update(over)
-    return StyleView(**base)
-
-
-def _loaded_view(**over):
-    """产物读回来了、左半边也量到了的那一态（**全部字段都在**）。"""
-    meas = _measurable()
-    base = dict(
-        sid='7615069877019300633', title='某本书',
-        exists=True, condition='ready', invalid_exists=False, readable=True,
-        measurable_stored=meas, bands_stored={'句子形态': '短句'},
-        _provenance=StyleProvenance(
-            code='b371244',
-            root_clean_sha1='0' * 40,
-            inputs={'stage1/main_text.json': {'file': 'b8eb890096', 'consumed': None}},
-            measurement_contract=STAGE3_MEASUREMENT_CONTRACT,
-        ),
-        hook_copy_text='全家被贬为奴籍发配青楼。',
-        measured_now=meas, bands_now={'句子形态': '短句'},
-        measure_error=None, measure_error_kind=None,
-        drift=[],
-        freshness='fresh', reason='match',
-    )
-    base.update(over)
-    return StyleView(**base)
-
-
-def test_both_baseline_views_are_legal():
-    """守卫的守卫：两个底座本身要能构造出来。
-
-    否则下面每一条反例都会「因为别的原因」红，而一条**为了错的理由而红**的反例，
-    与一条根本没在查的反例，在测试结果上长得一模一样。
-    """
-    empty, loaded = _empty_view(), _loaded_view()
-    assert empty.exists is False and empty.readable is None and empty.drift is None
-    assert loaded.exists is True and loaded.drift == [] and loaded.provenance is not None
-
-
-# ───────────────────────── ① 五条后置条件，各配一个反例 ─────────────────────────
-
-def test_readable_is_none_exactly_when_the_artifact_is_absent():
-    """三态：`readable=None` ⟺ 产物不在盘上。
-
-    ⚠ `readable=False` 与 `exists=False` **必须分开**：盘上真有一份读不回来的产物
-    （`成年人不做选择` 那本的 `stage4/plan_chapters.json` 根本没有 `_provenance`），
-    折成「不存在」会让界面说「还没跑」——**而它跑过，只是那次把来源账丢了**。
-    """
-    with pytest.raises(ValidationError, match='readable'):
-        _empty_view(readable=False)          # 不在盘上却宣称「读不回来」
-    with pytest.raises(ValidationError, match='readable'):
-        _empty_view(exists=True, readable=None)
-
-
-def test_the_right_half_is_all_or_nothing():
-    """产物没读回来，存量机械基线就不许有内容——**那份内容是从哪儿来的？**"""
-    with pytest.raises(ValidationError, match='存量基线'):
-        _empty_view(measurable_stored=_measurable())
-    with pytest.raises(ValidationError, match='存量基线'):
-        _empty_view(bands_stored={'句子形态': '短句'})
-
-
-def test_measured_and_measure_error_are_exactly_one():
-    """「量到了」与「量不了，原因是 X」**恰好一个**成立。
-
-    同空 = 什么都没说；同非空 = 说了两件互相矛盾的事。
-    ⚠ 这一条与 `FRESHNESS` 的 `unknown`、`JOB_STATE` 的 `unknown` 是同一条纪律
-    在这一屏上的样子：**「不知道」必须说得出为什么**。
-    """
-    with pytest.raises(ValidationError, match='恰好一个'):
-        _empty_view(measure_error=None, measure_error_kind=None)   # 两边都空
-    with pytest.raises(ValidationError, match='同进同出'):
-        _empty_view(measure_error='量不了', measure_error_kind=None)
-
-
-def test_bands_track_the_numbers_they_are_computed_from():
-    """档位词是 `bands()` 从实测数字**现算**的纯函数结果 ⇒ 它有没有完全由实测决定。
-
-    ⚠ 抓包里另有一个 `bands_error`，**本模型刻意不要它**：`bands()` 在一个合法的
-    `Measurable` 上是全函数，那个格子只可能与 `measure_error` 说同一件事。
-    """
-    with pytest.raises(ValidationError, match='bands_now'):
-        _empty_view(bands_now={'句子形态': '短句'})
-
-
-def test_drift_null_and_empty_are_two_different_things():
-    """⭐ `[]` = 「比过了，没有漂移」；`null` = 「有一边算不出来，**无从比**」。
-
-    压成一个 `[]` 就回到 `Q-2` 那个病——本项目一路在防的那一个。
-    """
-    with pytest.raises(ValidationError, match='drift'):
-        _empty_view(drift=[])                # 两份实测一份都没有，却宣称「比过了」
-
-
-@pytest.mark.parametrize('retired', ['voice', 'surface_habits', 'hook_style', 'chapter_styles'])
-def test_style_view_rejects_retired_qualitative_fields(retired: str):
-    """Stage3 v2 的 HTTP 载体不保留定性字段的兼容口。
-
-    冻结 mock 的投影只允许存在于 ``web/src/api/mock.ts`` 的适配边界；真实响应多发一格
-    必须由 ``extra='forbid'`` 当场拒绝，否则旧字段会重新变成现役 API。
-    """
-    with pytest.raises(ValidationError, match='Extra inputs are not permitted'):
-        _loaded_view(**{retired: []})
-
-
-def test_a_loaded_view_cannot_hide_an_empty_right_half():
-    """反方向：产物读回来了，存量机械基线就不许有空格子。"""
-    with pytest.raises(ValidationError, match='机械基线'):
-        _loaded_view(measurable_stored=None)
-    with pytest.raises(ValidationError, match='机械基线'):
-        _loaded_view(_provenance=None)
-
-
-def test_drift_is_required_once_both_sides_are_there():
-    """两份实测都在 ⇒ **必须给出比较结果**，`null` 不许再出现。
-
-    ⚠ 这是 `test_drift_null_and_empty_are_two_different_things` 的另一半：
-    只查一个方向的话，一个恒为 `null` 的 `drift` 会永远绿——
-    而那正是「比过了没漂移」被静默说成「无从比」的形态。
-    """
-    with pytest.raises(ValidationError, match='drift'):
-        _loaded_view(drift=None)
-
-
-# ───────────────────────── ② 契约层不许手抄取值面 ─────────────────────────
-
 def test_the_api_models_never_spell_out_a_value_domain():
     """⭐ `contracts/schema/api.py` 里不许出现 `Literal['a', 'b']` 这种**字面量**取值面。
 
@@ -349,7 +185,7 @@ def test_the_api_models_never_spell_out_a_value_domain():
     就是那份取值面的第 N 个落点——而本仓每一处 `Literal[XXX]`（大写的名字，不是字符串）
     都是在说同一件事：**取值面从表里来**。
     """
-    tree = ast.parse(open(API_PY, encoding='utf-8').read(), filename=API_PY)
+    tree = ast.parse(API_PY.read_text(encoding='utf-8'), filename=str(API_PY))
     bad = []
     for node in ast.walk(tree):
         if not (isinstance(node, ast.Subscript)
@@ -377,7 +213,7 @@ def test_the_api_models_never_carry_a_verdict():
     """
     verdicts = {'badge', 'passed', 'counts', 'hard_count', 'unver_count'}
     for model in (
-        StyleView, NovelList, JobList, LogChunk, LogStreamEvent, PreviewRequest, ErrorBody,
+        NovelList, JobList, LogChunk, LogStreamEvent, PreviewRequest, ErrorBody,
         Stage0Segment, Stage0Segments, Stage1Segment, Stage1View, UploadResult,
         GlobalView, Stage6View, Stage7View,
         ReadingView, Stage4View, Stage5View, ReviewView,
@@ -386,15 +222,13 @@ def test_the_api_models_never_carry_a_verdict():
         assert not leaked, f'{model.__name__} 带着判定字段 {leaked}——那是第二个判官'
 
 
-# ───────────────────────── ③ 契约层不许背上 web 栈 ─────────────────────────
-
 def test_the_contract_layer_never_imports_the_web_stack():
     """离线产前端 TS 类型的脚本要 import 契约层，而它一行 HTTP 都不发。
 
     ⚠ 这条与 `tests/test_layering.py` 那份是**一对**：那边扫整个 `contracts/`，
     这边只盯新增的 `api.py`（它是最容易顺手写进 `from fastapi import ...` 的那一个）。
     """
-    tree = ast.parse(open(API_PY, encoding='utf-8').read(), filename=API_PY)
+    tree = ast.parse(API_PY.read_text(encoding='utf-8'), filename=str(API_PY))
     mods = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
@@ -406,7 +240,27 @@ def test_the_contract_layer_never_imports_the_web_stack():
     assert 'pydantic' in mods, 'pydantic 都没 import 到——AST 多半解析错了'
 
 
-# ───────────────────────── 四、小模型 ─────────────────────────
+def test_approval_doc_v4_has_exactly_the_current_seven_gates():
+    payload = {
+        'v': 4,
+        'sid': '123',
+        'gate': {gate: False for gate in APPROVAL_GATES},
+        'seen': {'read': False, 'global': False},
+        'writing': False,
+        'structure': {
+            'state': 'unavailable', 'current_subject_sha256': None,
+            'current_decision': None, 'history': [],
+        },
+        'spawns': {},
+    }
+    doc = ApprovalDoc.model_validate(payload)
+    assert set(doc.gate) == {'s0', 's1', 's2', 's4', 's5', 's6', 's7'}
+    with pytest.raises(ValidationError):
+        ApprovalDoc.model_validate({
+            **payload,
+            'gate': {**payload['gate'], 's3': False},
+        })
+
 
 def test_log_chunk_counts_bytes_not_characters():
     """`next_byte` 是**字节**偏移。
@@ -431,12 +285,6 @@ def test_log_stream_event_has_an_explicit_terminal_shape():
         LogStreamEvent(text='', next_byte=6, done=True, state='running')
 
 
-def test_drift_item_is_a_named_object_not_a_triple():
-    """具名对象，不是位置数组——理由同 `/api/enums` 拒收 `NamedTuple` 的那一条。"""
-    d = DriftItem(key='body.chars', stored=9516, now='（缺）')
-    assert set(d.model_dump()) == {'key', 'stored', 'now'}
-
-
 def test_error_body_carries_an_id_not_a_phrase():
     """`kind` 是异常类名。前端的四态靠它分「后端没起来 / 这本书没有 / 这一步还没跑」。"""
     e = ErrorBody(kind='UpstreamMissing', message='这本书不在 Output 下', missing='novel')
@@ -453,7 +301,7 @@ def test_every_response_model_forbids_extra_fields():
     前端会开始依赖那个字段，而 `_api.md` 不知道它存在。
     """
     for model in (
-        StyleView, NovelList, JobList, LogChunk, LogStreamEvent, PreviewRequest, ErrorBody,
+        NovelList, JobList, LogChunk, LogStreamEvent, PreviewRequest, ErrorBody,
         Stage0Segment, Stage0Segments, Stage0EditRequest,
         Stage1Segment, Stage1View,
         UploadResult, GlobalView, Stage6View, Stage7View,
@@ -461,8 +309,6 @@ def test_every_response_model_forbids_extra_fields():
     ):
         assert model.model_config['extra'] == 'forbid', model.__name__
 
-
-# ───────────────────────── 五、三个新读屏模型的后置条件 ─────────────────────────
 
 def test_a_name_ref_that_failed_to_resolve_keeps_the_raw_id():
     """view 不编名字：解析不动时 `display == raw`，且 `resolved=False` 看得见。"""
@@ -499,7 +345,7 @@ def test_stage4_review_surface_subject_exists_exactly_for_a_formal_plan():
             identity_plan=identity,
             structure_subject_sha256=subject,
         )
-        with pytest.raises(ValueError, match='\u5ba1\u6279\u4e3b\u4f53|\u7ed3\u6784 SHA-256'):
+        with pytest.raises(ValueError, match='审批主体|结构 SHA-256'):
             Stage4View._postconditions(view)
 
 

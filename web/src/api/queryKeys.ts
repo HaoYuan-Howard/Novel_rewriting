@@ -19,7 +19,6 @@ export const qk = {
   reading: (sid: string, o: number) => ['reading', sid, o] as const,
   global: (sid: string, spoilers = false) => ['global', sid, spoilers] as const,
   globalReview: (sid: string) => ['globalReview', sid] as const,
-  style: (sid: string) => ['style', sid] as const,
   stage4: (sid: string, o: number) => ['stage4', sid, o] as const,
   stage5: (sid: string, o: number) => ['stage5', sid, o] as const,
   review: (sid: string, o: number) => ['review', sid, o] as const,

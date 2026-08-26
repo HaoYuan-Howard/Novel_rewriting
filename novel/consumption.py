@@ -22,13 +22,13 @@ from typing import Any, Callable, Final
 from contracts.artifacts import (
     STAGE0_CLEAN_TEXT, STAGE0_REVISIONS, STAGE1_HOOK_COPY, STAGE1_MAIN_TEXT,
     STAGE2_CHAPTER_BLUEPRINTS, STAGE2_GLOBAL_EDIT, STAGE2_GLOBAL_GROUNDING,
-    STAGE3_STYLE_GROUNDING, STAGE4_BLIND_CANDIDATE, STAGE4_EVIDENCE_BINDING,
+    RETIRED_STAGE3_STYLE_GROUNDING, STAGE4_BLIND_CANDIDATE, STAGE4_EVIDENCE_BINDING,
     STAGE4_PLAN_CHAPTERS, STAGE4_PLAN_EDIT,
     STAGE4_WRITER_CONTEXT, STAGE5_REVIEW, STAGE5_TRIM_AUDIT,
     STAGE6_HOOK, STAGE6_HOOK_EDIT,
     STAGE7_NAME_MAP_EDIT,
 )
-from contracts.invariants import NODES, STAGE3_MEASUREMENT_CONTRACT
+from contracts.invariants import NODES, STYLE_MEASUREMENT_CONTRACT
 from novel.core.evidence import without_global_evidence
 
 Projection = Callable[[object], object]
@@ -94,17 +94,17 @@ def stage2_blueprint_grounding(data: object) -> object:
         for cid, c in chars.items() if isinstance(c, dict))
 
 
-# ── stage3.style ─────────────────────────────────────────────────────────────
+# ── 退役 Stage3 v2 的冻结投影 ───────────────────────────────────────────────
 
-def stage3_main_text(data: object) -> object:
+def legacy_stage3_main_text(data: object) -> object:
     """正文文本与测量契约共同决定机械基线的新鲜度。"""
     return {
-        'measurement_contract': STAGE3_MEASUREMENT_CONTRACT,
+        'measurement_contract': STYLE_MEASUREMENT_CONTRACT,
         'texts': [s.get('text') for s in data] if isinstance(data, list) else None,
     }
 
 
-def stage3_hook_copy(data: object) -> object:
+def legacy_stage3_hook_copy(data: object) -> object:
     """原作文案段只消费正文。"""
     return (data or {}).get('text') if isinstance(data, dict) else None
 
@@ -308,12 +308,20 @@ def stage4_grounding(data: object) -> object:
 
 # ── stage5.write / stage5.review ─────────────────────────────────────────────
 
-def stage5_main_text(data: object) -> object:
-    """写作与验收按章消费原文正文，不消费源章显示标签。"""
+def legacy_stage5_main_text(data: object) -> object:
+    """退役 Stage3 边存在时，复算旧 Stage5 的 Stage1 consumed 形状。"""
     if not isinstance(data, list):
         return None
     return [{'chapter_ordinal': s.get('chapter_ordinal'), 'text': s.get('text')}
             for s in data if isinstance(s, dict)]
+
+
+def stage5_main_text(data: object) -> object:
+    """正文与即时测量契约共同决定 Stage5 新鲜度。"""
+    return {
+        'measurement_contract': STYLE_MEASUREMENT_CONTRACT,
+        'chapters': legacy_stage5_main_text(data),
+    }
 
 
 def stage5_grounding(data: object) -> object:
@@ -374,8 +382,8 @@ def stage5_review_grounding(data: object) -> object:
     }
 
 
-def stage5_style(data: object) -> object:
-    """写作与验收真正读取的正文机械基线。
+def legacy_stage5_style(data: object) -> object:
+    """旧写作/验收 provenance 真正读取的正文机械基线。
 
     ⚠ 这条投影同时供来源账写入与 freshness 重算，输入可能是一份已经不合当前
     schema 的旧 raw dict；因此逐层判 ``dict``、缺格投影成 ``None``，不能在这里
@@ -433,9 +441,17 @@ def stage5_review_context(data: object) -> object:
 
 # ── stage6.hook ───────────────────────────────────────────────────────────────
 
-def stage6_hook_copy(data: object) -> object:
-    """原作文案同时是生成的结构金标准与非抄写判据基准。"""
+def legacy_stage6_hook_copy(data: object) -> object:
+    """退役 Stage3 边存在时，复算旧 Stage6 的 Stage1 consumed 形状。"""
     return (data or {}).get('text') if isinstance(data, dict) else None
+
+
+def stage6_hook_copy(data: object) -> object:
+    """原作文案与即时测量契约共同决定 Stage6 新鲜度。"""
+    return {
+        'measurement_contract': STYLE_MEASUREMENT_CONTRACT,
+        'text': legacy_stage6_hook_copy(data),
+    }
 
 
 def stage6_grounding(data: object) -> object:
@@ -449,8 +465,8 @@ def stage6_grounding(data: object) -> object:
     })
 
 
-def stage6_style(data: object) -> object:
-    """Stage6 对 Stage3 的唯一消费面：文案段五叶机械基线。
+def legacy_stage6_style(data: object) -> object:
+    """旧 Stage6 provenance 对 Stage3 的文案段五叶机械基线。
 
     生成、机械复检与 freshness 共用这一投影。正文机械面以及已经退役的定性画像
     即使变化，也不应让既有文案或语义复核误报过期。输入可能是已经不合当前
@@ -596,10 +612,6 @@ CONSUMED_PROJECTIONS: Final[dict[str, dict[str, Projection]]] = {
         # 任何一格改动都让全书 blueprint 判 stale，而这一层是全链最贵的付费节点。
         STAGE2_GLOBAL_GROUNDING: stage2_blueprint_grounding,
     },
-    'stage3.style': {
-        STAGE1_MAIN_TEXT: stage3_main_text,
-        STAGE1_HOOK_COPY: stage3_hook_copy,
-    },
     'stage4.design': {
         STAGE2_CHAPTER_BLUEPRINTS: stage4_design_blueprints,
     },
@@ -623,13 +635,11 @@ CONSUMED_PROJECTIONS: Final[dict[str, dict[str, Projection]]] = {
     'stage5.write': {
         STAGE1_MAIN_TEXT: stage5_main_text,
         STAGE2_GLOBAL_GROUNDING: stage5_grounding,
-        STAGE3_STYLE_GROUNDING: stage5_style,
         STAGE4_WRITER_CONTEXT: stage5_context,
     },
     'stage5.review': {
         STAGE1_MAIN_TEXT: stage5_main_text,
         STAGE2_GLOBAL_GROUNDING: stage5_review_grounding,
-        STAGE3_STYLE_GROUNDING: stage5_style,
         STAGE4_WRITER_CONTEXT: stage5_review_context,
         # retain_pretrim 的人工裁决绑定完整 audit bytes；任一审计事实变化都应过期。
         STAGE5_TRIM_AUDIT: artifact_payload,
@@ -637,14 +647,12 @@ CONSUMED_PROJECTIONS: Final[dict[str, dict[str, Projection]]] = {
     'stage6.hook': {
         STAGE1_HOOK_COPY: stage6_hook_copy,
         STAGE2_GLOBAL_GROUNDING: stage6_grounding,
-        STAGE3_STYLE_GROUNDING: stage6_style,
         STAGE4_WRITER_CONTEXT: stage6_context,
         STAGE6_HOOK_EDIT: artifact_payload,
     },
     'stage6.semantic': {
         STAGE1_HOOK_COPY: stage6_hook_copy,
         STAGE2_GLOBAL_GROUNDING: stage6_grounding,
-        STAGE3_STYLE_GROUNDING: stage6_style,
         STAGE4_WRITER_CONTEXT: stage6_context,
         STAGE6_HOOK: stage6_semantic_hook,
     },
@@ -655,6 +663,32 @@ CONSUMED_PROJECTIONS: Final[dict[str, dict[str, Projection]]] = {
         STAGE4_WRITER_CONTEXT: stage7_context,
         STAGE6_HOOK: stage7_hook,
         STAGE7_NAME_MAP_EDIT: artifact_payload,
+    },
+}
+
+# 已落盘 Stage5/6 产物可能仍记录退役的 Stage3 边。只要那条边还在来源账里，
+# freshness 就必须按旧投影复算整组输入；否则给 Stage1 投影加入测量契约会把旧付费
+# 产物无差别判 stale。新运行永远不会查到本表，也不会重新产生 Stage3 边。
+LEGACY_STAGE3_PROJECTIONS: Final[dict[str, dict[str, Projection]]] = {
+    'stage3.style': {
+        STAGE1_MAIN_TEXT: legacy_stage3_main_text,
+        STAGE1_HOOK_COPY: legacy_stage3_hook_copy,
+    },
+    'stage5.write': {
+        STAGE1_MAIN_TEXT: legacy_stage5_main_text,
+        RETIRED_STAGE3_STYLE_GROUNDING: legacy_stage5_style,
+    },
+    'stage5.review': {
+        STAGE1_MAIN_TEXT: legacy_stage5_main_text,
+        RETIRED_STAGE3_STYLE_GROUNDING: legacy_stage5_style,
+    },
+    'stage6.hook': {
+        STAGE1_HOOK_COPY: legacy_stage6_hook_copy,
+        RETIRED_STAGE3_STYLE_GROUNDING: legacy_stage6_style,
+    },
+    'stage6.semantic': {
+        STAGE1_HOOK_COPY: legacy_stage6_hook_copy,
+        RETIRED_STAGE3_STYLE_GROUNDING: legacy_stage6_style,
     },
 }
 
@@ -675,6 +709,18 @@ def projection_for(node: str, rel: str) -> Projection | None:
     return next((project for template, project in table.items() if _matches(template, rel)), None)
 
 
+def legacy_stage3_projection_for(node: str, rel: str) -> Projection | None:
+    """旧 provenance 的 Stage1/Stage3 投影；其余边回落到当前契约。"""
+    rel = canonical_rel(rel)
+    table = LEGACY_STAGE3_PROJECTIONS.get(node, {})
+    direct = table.get(rel)
+    if direct is not None:
+        return direct
+    matched = next(
+        (project for template, project in table.items() if _matches(template, rel)), None)
+    return matched or projection_for(node, rel)
+
+
 def _matches(template: str, rel: str) -> bool:
     pattern = re.escape(template)
     pattern = re.sub(r'\\\{[^}]+\\\}', r'[^/]+', pattern)
@@ -688,6 +734,8 @@ def producer_node(rel: str, *, fallback: str | None = None) -> str | None:
     consumed 契约。找不到（如动态历史轮次）时使用调用方的运行节点。
     """
     rel = canonical_rel(rel)
+    if rel == RETIRED_STAGE3_STYLE_GROUNDING:
+        return 'stage3.style'
     for node, spec in NODES.items():
         if any(_matches(template, rel) for template in spec.produces):
             return node
@@ -695,6 +743,7 @@ def producer_node(rel: str, *, fallback: str | None = None) -> str | None:
 
 
 __all__ = [
-    'CONSUMED_PROJECTIONS', 'Projection', 'artifact_payload', 'canonical_rel',
+    'CONSUMED_PROJECTIONS', 'LEGACY_STAGE3_PROJECTIONS', 'Projection',
+    'artifact_payload', 'canonical_rel', 'legacy_stage3_projection_for',
     'producer_node', 'projection_for',
 ]

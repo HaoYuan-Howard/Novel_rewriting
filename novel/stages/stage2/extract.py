@@ -2119,7 +2119,7 @@ def run_apply_edit(ctx: RunContext, edit_path: str = '') -> tuple[GlobalGroundin
     world-rule 和单个人物的 address 集合，从而表达新增、删除与复合时间线拆分；所有字段
     仍由同一严格 schema 收口，来源账明确记录这是人工 partial rewrite。
 
-    四条纪律（与 stage3/4/6/7 的人工路同款）：
+    四条纪律（与 stage4/6/7 的现役人工路同款）：
       · **同一归一落点**（`normalize_global`）——人改完的埋点章照样过 `_prune_setups`，
         人工稿与生成稿不许有两套归一；
       · **同一判定落点**（`_judge_candidate`）——没有免检写口；
@@ -2132,7 +2132,7 @@ def run_apply_edit(ctx: RunContext, edit_path: str = '') -> tuple[GlobalGroundin
         被改的 typed facts 是**现在**由人给的）。
 
     ⚠ **下游 stale 是由构造保证的，不额外做一件事**：这一份的字节变了 ⇒
-    `stage2/chapter_blueprints.json` / stage3 / stage4 记的 `inputs[].file` 全部失配；
+    `stage2/chapter_blueprints.json` / stage4 及更下游记的 `inputs[].file` 全部失配；
     按字段投影算的 `consumed` 也跟着失配（其中 `R-6.3` 的逐章剧透闸门直接消费
     secrets；规则与 address 也各有下游消费投影）。
 

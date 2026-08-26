@@ -13,12 +13,11 @@ import { Panel, PaneHeader } from '@/components/ui/Panel'
 import { CheckBadge, CheckMark } from '@/components/vocab/Badges'
 import { isNoSample } from '@/api/errors'
 
-/** 八层校验器分别落在哪一屏 —— 待办只路由，不提供编辑 */
+/** 七层校验器分别落在哪一屏 —— 待办只路由，不提供编辑 */
 const LAYERS: { kind: CheckKind; where: string; screen: string; chaptered?: boolean }[] = [
   { kind: 'stage0', where: '剔除审阅', screen: 'stage0' },
   { kind: 'stage1', where: '分章报告', screen: 'stage1' },
   { kind: 'stage2', where: '全局设定', screen: 'global' },
-  { kind: 'stage3', where: '机械基线', screen: 'style' },
   { kind: 'stage4', where: '计划屏', screen: 'stage4', chaptered: true },
   { kind: 'stage5', where: '成稿屏', screen: 'stage5', chaptered: true },
   { kind: 'stage6', where: '文案屏', screen: 'stage6' },
@@ -96,10 +95,10 @@ export function InboxScreen() {
         </div>
       </header>
 
-      {/* 八层校验器状态 */}
+      {/* 七层校验器状态 */}
       <Panel>
-        <PaneHeader title="八层校验器" meta="点一层跳到它的阶段屏" />
-        <div className="grid gap-1 bg-line-2" style={{ gridTemplateColumns: 'repeat(8,1fr)' }}>
+        <PaneHeader title="七层校验器" meta="点一层跳到它的阶段屏" />
+        <div className="grid gap-1 bg-line-2" style={{ gridTemplateColumns: 'repeat(7,1fr)' }}>
           {LAYERS.map((l, i) => {
             const r = checks[i]
             const rep = (r?.data ?? null) as CheckReport | null

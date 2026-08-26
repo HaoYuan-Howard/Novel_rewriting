@@ -47,7 +47,6 @@ ARTIFACTS = [
     ('stage1/hook_copy.json',        'stage1/hook_copy.json'),
     ('stage2/global_grounding.json', 'stage2/global_grounding.json'),
     ('stage2/chapter_blueprints.json', 'stage2/chapter_blueprints.json'),
-    ('stage3/style_grounding.json',  'stage3/style_grounding.json'),
     ('stage4/plan_chapters.json',    'stage4/plan_chapters.json'),
     ('stage4/writer_context.json',   'stage4/writer_context.json'),
     # 章号至少补齐两位，但可以超过 99；末尾再钉一位数字，避免把形状不同的

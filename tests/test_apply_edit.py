@@ -31,7 +31,7 @@ from tests import corpus, sandbox
 STAGE4_INPUTS = ('stage1/main_text.json', 'stage2/global_grounding.json',
                  'stage2/chapter_blueprints.json', 'stage4/plan_chapters.json')
 STAGE6_INPUTS = ('stage1/hook_copy.json', 'stage2/global_grounding.json',
-                 'stage3/style_grounding.json', 'stage4/writer_context.json',
+                 'stage4/writer_context.json',
                  'stage6/hook.json')
 
 

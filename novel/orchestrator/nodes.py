@@ -256,9 +256,9 @@ def write_effect(node: str, flags: Iterable[str] = ()) -> str:
     if any(WRITE_EFFECTS.get(f, '未登记') == '' for f in tokens):
         return ''
     # 同一 flag 在不同节点可以写不同文件。节点维度的覆盖优先：
-    # stage4 `--identity` 实际写的是基线专用文件，不是本节点
-    # `produces` 里的正式计划。「只看不动」仍在它之前，与 CLI 分支
-    # 优先级一致：`--identity --dry-run` 只预览，不写盘。
+    # stage4 / stage6 `--identity` 只作内存诊断，stage7 的同名 flag 才写正式人物表。
+    # 「只看不动」仍在节点覆盖之前，与 CLI 分支优先级一致：
+    # `--identity --dry-run` 只预览，不写盘。
     overrides = [NODE_WRITE_EFFECTS[(node, f)] for f in tokens
                  if (node, f) in NODE_WRITE_EFFECTS]
     if overrides:
@@ -267,8 +267,8 @@ def write_effect(node: str, flags: Iterable[str] = ()) -> str:
     if said:
         return ' · '.join(said)
     # 默认路径：**说出那几份产物的路径**，不说「本层产物」。
-    # 人是拿这句话去决定要不要点确认的，而「会覆盖 stage3/style_grounding.json」
-    # 与「会写点什么」在那一刻不是同一条信息。
+    # 人是拿这句话去决定要不要点确认的，具体产物路径与「会写点什么」
+    # 在那一刻不是同一条信息。
     return ' · '.join(spec.produces) if spec and spec.produces else f'{node} 的产物'
 
 
@@ -281,7 +281,7 @@ def check_nodes(stage: str) -> tuple[str, ...]:
     """这一层里**接受 `--check-only`** 的那些节点。从 `NODES` 派生，不手抄清单。
 
     【它给谁用】校验报告的路由 `GET /api/novels/:sid/check/:kind`——
-    `:kind` 是**层**（八个，取值面 = `STAGES`），而复检是**节点**上的一条跑法。
+    `:kind` 是**层**（七个现役值，取值面 = `STAGES`），而复检是**节点**上的一条跑法。
     这个函数就是那两轴之间唯一的那座桥。
 
     F7 已把 stage0 的旧地雷拆掉：只有 `stage0.remove` 接受 `--check-only`，
@@ -420,8 +420,8 @@ def step_label(node: str, flags: Sequence[str] = ()) -> str:
     """这一步的人话。**`_step()` 与 `/api/enums` 的 `actions[]` 共用这一个函数。**
 
     ⚠ 与 `build_argv` 同一条纪律（`R-11.8`）：**界面上那个按钮的名字，与作业记录里
-    那一步的名字，必须是同一个函数产的**。分成两处的具体后果是人点了
-    「stage3 · 只跑确定性实测」而作业记录里写着别的——两边都不出声。
+    那一步的名字，必须是同一个函数产的**。分成两处会让人点击的动作与
+    作业记录显示的动作分家，而两边都不出声。
 
     ⚠ **一个字都不许手写。** 原型那 36 条 action 的 label 是手抄的，于是
     `n1_partition` 的 label 写着「stage1 摄入+分章」，而「摄入」早已搬到 stage0

@@ -77,10 +77,10 @@ describe('request-shaped cache and diagnostics', () => {
       chapters: [{ output_ordinal: 1, decision: 'accept', reason: '本章可执行' }],
     }
     const response = {
-      v: 3,
+      v: 4,
       sid: 'book /1',
       gate: {
-        s0: true, s1: true, s2: true, s3: true,
+        s0: true, s1: true, s2: true,
         s4: false, s5: false, s6: false, s7: false,
       },
       seen: { read: true, global: true },

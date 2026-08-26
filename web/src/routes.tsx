@@ -6,7 +6,6 @@ import { Stage0Screen } from '@/screens/stage0/Stage0Screen'
 import { Stage1Screen } from '@/screens/stage1/Stage1Screen'
 import { ReadScreen } from '@/screens/read/ReadScreen'
 import { GlobalScreen } from '@/screens/global/GlobalScreen'
-import { StyleScreen } from '@/screens/style/StyleScreen'
 import { Stage4Screen } from '@/screens/stage4/Stage4Screen'
 import { Stage5Screen } from '@/screens/stage5/Stage5Screen'
 import { Stage6Screen } from '@/screens/stage6/Stage6Screen'
@@ -58,7 +57,6 @@ export function AppRoutes() {
           <Route path="stage0" element={<Stage0Screen />} />
           <Route path="stage1" element={<Stage1Screen />} />
           <Route path="global" element={<GlobalScreen />} />
-          <Route path="style" element={<StyleScreen />} />
           <Route path="stage6" element={<Stage6Screen />} />
           <Route path="inbox" element={<InboxScreen />} />
 

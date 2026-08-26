@@ -233,7 +233,6 @@ def test_the_free_flag_scan_covers_every_pair_not_one_per_flag():
         f'是删了节点/flag，还是有人又把它改回「每个 flag 取一个代表」？')
     # `--dry-run` 是漂移最容易藏身的那一族：它是**唯一**逐层各写一段
     # 「怎么把 prompt 打出来」的分支，而那段代码直接调 stage 模块的函数签名。
-    # Stage3 v2 没有 prompt，预览改走专属 `--measure-only`，所以现役覆盖面是 8 对。
     assert sum(1 for f, _ in _FREE_CASES if f == '--dry-run') >= 8, \
         '`--dry-run` 的覆盖面缩水了——CLI 与 stage 模块的 API 漂移正是从这里漏的'
 
@@ -588,23 +587,6 @@ def test_zero_cost_stage5_recovery_paths_are_not_blocked_by_paid_authorization(
 
 # ───────────────────── 退出码只有一张表 ─────────────────────
 
-@pytest.mark.corpus
-def test_check_only_returns_nonzero_when_the_report_fails(box):
-    """`FREE_ENTRIES['--check-only']` 自己写着「**报 FAIL 退出码非零**」。"""
-    data = box.read('stage3/style_grounding.json')
-    data['measurable']['body']['avg_sentence_chars'] += 1
-    box.write('stage3/style_grounding.json', data)
-
-    assert _run('run', 'stage3.style', box.sid, '--check-only',
-                '--base', str(box.root)) == X.CHECK_FAILED
-
-
-@pytest.mark.corpus
-def test_check_only_returns_zero_on_a_clean_book(box):
-    assert _run('run', 'stage3.style', box.sid, '--check-only',
-                '--base', str(box.root)) == X.OK
-
-
 def test_the_exit_code_table_keeps_its_five_meanings_apart():
     """⚠ `1` 与 `2` 必须分开：「跑成了，结论是不合格」与「压根没跑成」。
 
@@ -794,8 +776,8 @@ def test_inbox_on_an_unknown_sid_is_a_terminal_state_not_a_stack(box, capsys):
 def test_a_terminal_state_prints_no_stack(box, capsys):
     """**不是 bug，所以不打栈。** 打一段栈会让人以为程序坏了，
     而它说的其实是「按设计这一步走不下去」。"""
-    (box.dir / 'stage3' / 'style_grounding.json').unlink()
-    assert _run('run', 'stage3.style', box.sid, '--check-only',
+    (box.dir / 'stage2' / 'global_grounding.json').unlink()
+    assert _run('run', 'stage2.blueprint', box.sid, '--check-only',
                 '--base', str(box.root)) == X.TERMINAL_STATE
     err = capsys.readouterr().err
     assert '显式终态' in err and 'Traceback' not in err
@@ -810,10 +792,10 @@ def test_preview_prints_exactly_the_command_that_would_run(box, capsys):
     ⚠ 原型有一处裂缝别抄：前端用 `argv.slice(4)` 硬编码切掉解释器前缀来渲染，
     `build_argv` 的前缀长度一变它就**静默错位**。渲染也只许有一个落点。
     """
-    assert _run('preview', 'stage3.style', box.sid, '--check-only',
+    assert _run('preview', 'stage1.partition', box.sid, '--check-only',
                 '--base', str(box.root)) == X.OK
     printed = capsys.readouterr().out
-    want = N.shell_line(N.build_argv('stage3.style', box.sid, ['--check-only'],
+    want = N.shell_line(N.build_argv('stage1.partition', box.sid, ['--check-only'],
                                      base=str(box.root)))
     assert want in printed, printed
 
@@ -835,17 +817,17 @@ def test_preview_quotes_values_that_a_shell_would_otherwise_split():
 
 def test_shell_line_leaves_plain_tokens_bare():
     """引号只加在真需要的地方——整行全引会让人读不出哪一段是取值。"""
-    assert N.shell_line(['run', 'stage3.style', '--check-only']) == \
-        'run stage3.style --check-only'
+    assert N.shell_line(['run', 'stage1.partition', '--check-only']) == \
+        'run stage1.partition --check-only'
 
 
 @pytest.mark.corpus
 def test_preview_says_both_whether_it_costs_and_whether_it_writes(box, capsys):
     """**「0 成本」不等于「不写盘」** —— 两个维度都要摆出来。"""
-    _run('preview', 'stage3.style', box.sid, '--base', str(box.root))
+    _run('preview', 'stage1.partition', box.sid, '--base', str(box.root))
     out = capsys.readouterr().out
     assert '花钱   : 否' in out
-    assert '写盘   : stage3/style_grounding.json' in out, out
+    assert '写盘   : stage1/main_text.json + stage1/hook_copy.json' in out, out
 
 
 # ───────────────────── 其余两个子命令 ─────────────────────
@@ -900,7 +882,7 @@ def test_state_marks_an_unavailable_check_as_unknown_instead_of_looking_green(
 def test_state_prints_the_three_state_marks(box, capsys):
     assert _run('state', box.sid, '--base', str(box.root)) == X.OK
     out = capsys.readouterr().out
-    assert 'stage3' in out and 'style_grounding.json' in out
+    assert 'stage3' not in out and 'stage4' in out
 
 
 @pytest.mark.corpus
@@ -913,7 +895,7 @@ def test_queue_prints_a_plan_and_never_runs_anything(box, capsys):
 
 @pytest.mark.corpus
 def test_queue_refuses_paid_items_without_yes(box):
-    rc = _run('queue', box.sid, '--base', str(box.root), '--until', 'stage3')
+    rc = _run('queue', box.sid, '--base', str(box.root), '--until', 'stage4')
     assert rc == X.TERMINAL_STATE, '含付费项而没给 --yes，该落 ApprovalRequired'
 
 

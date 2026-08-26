@@ -688,8 +688,7 @@ def test_default_collection_keeps_schema_gates_and_carrier_regressions(
         [
             sys.executable, '-m', 'pytest', '--collect-only', '-vv',
             '-m', 'not corpus', '--basetemp', str(short_base),
-            'tests/test_stage3_free_paths.py',
-            'tests/test_stage4.py',
+                'tests/test_stage4.py',
             'tests/test_stage4_beats.py',
             'tests/test_stage4_repair.py',
             'tests/test_stage6.py',
@@ -698,7 +697,6 @@ def test_default_collection_keeps_schema_gates_and_carrier_regressions(
             'tests/test_api_edits.py',
             'tests/test_api_screens.py',
             'tests/test_views_stage2.py',
-            'tests/test_views_stage3.py',
             'tests/test_views_stage4.py',
             'tests/test_views_stage5.py',
             'tests/test_views_stage6.py',
@@ -713,7 +711,6 @@ def test_default_collection_keeps_schema_gates_and_carrier_regressions(
     )
     assert result.returncode == 0, result.stdout + result.stderr
     default_nodes = (
-        'test_preview_run_and_check_all_use_the_same_numbers',
         'test_system_prompt_contains_every_current_style_word',
         'test_clean_compiled_plan_closes_all_new_scene_hard_rules',
         'test_revalidate_promotes_the_current_invalid_without_any_llm_client',
@@ -727,7 +724,6 @@ def test_default_collection_keeps_schema_gates_and_carrier_regressions(
         'test_an_illegal_sid_is_400_because_the_client_sent_it',
         'test_a_non_integer_ordinal_is_422_from_the_carrier',
         'test_stage2_view_rejects_an_unknown_synthetic_book',
-        'test_stage3_view_rejects_an_unknown_synthetic_book',
         'test_stage4_view_rejects_an_unknown_synthetic_book',
         'test_stage5_views_reject_an_unknown_synthetic_book',
         'test_stage6_view_rejects_an_unknown_synthetic_book',

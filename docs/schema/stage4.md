@@ -179,7 +179,8 @@ Stage5 prompt 不接收 fact/beat/hinge/secret/rule id、alias、A 策略、结�
 阈值。`causal_closure` 直接依据 Stage2 因果边检查事实是否落入实际场景；事实、状态、材料和上下文
 精确性仍由 HARD 守卫关闭。
 
-公开 `ApprovalDoc` 是 v3；服务盘上 `_service/approvals/<sid>.json` 是 v4。一次结构决定必须提交当前
+公开 `ApprovalDoc` 是 v4；服务盘上 `_service/approvals/<sid>.json` 是 v5。旧 v4 只经显式
+`backfill_from_disk` 逐项对证，普通 GET / 启动不静默迁移，迁移结果也不保留退役 s3。一次结构决定必须提交当前
 subject SHA-256、actor、全书理由及与计划章集精确相等的逐章 accept/request_replan。全章 accept 才
 打开 s4；任何 request_replan 都关闭 s4、保留 typed 决定并撤销旧 writing/下游证明，但不自动启动
 付费 A/B。计划变化后旧决定进入 history，当前态变 expired。

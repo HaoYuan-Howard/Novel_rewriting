@@ -11,7 +11,7 @@ import { GateBar } from './GateBar'
 /**
  * 闸门按钮的动作分类。
  *
- * ⭐ 主守卫是「s3 这种没有 spawn 的闸门**不许**画成『未标注』」：
+ * ⭐ 主守卫是「s4 这种没有 spawn 的闸门**不许**画成『未标注』」：
  * 「未标注」在这套词汇里的意思是**不知道它会不会写产物盘**（U-08），
  * 而没有 spawn 的确认我们完全知道——它只写 `_service/` 下的人工审批记录，
  * 产物盘归 CLI 独占（`R-11.3`）。把一个已知免费、不动产物的动作说成「不知道」，
@@ -19,9 +19,9 @@ import { GateBar } from './GateBar'
  */
 
 const doc: ApprovalDoc = {
-  v: 3,
+  v: 4,
   sid: 'book-1',
-  gate: { s0: true, s1: true, s2: true, s3: false, s4: false, s5: false, s6: false, s7: false },
+  gate: { s0: true, s1: true, s2: true, s4: false, s5: false, s6: false, s7: false },
   seen: { read: true, global: true },
   writing: false,
   structure: {
@@ -64,17 +64,21 @@ const enums = {
   },
 } as unknown as EnumsResponse
 
-function mount(screenName: 'style' | 'stage4' | 'global') {
+function mount(screenName: 'stage5' | 'stage4' | 'global', approval: ApprovalDoc = doc) {
   vi.spyOn(api, 'getEnums').mockResolvedValue(enums)
-  vi.spyOn(api, 'getApprovals').mockResolvedValue(doc)
+  vi.spyOn(api, 'getApprovals').mockResolvedValue(approval)
   vi.spyOn(api, 'getJobs').mockResolvedValue({ jobs: [], running: null })
   renderRoute(<GateBar screen={screenName} />)
 }
 
 describe('GateBar 的动作分类', () => {
   it('没有 spawn 的闸门不画成「未标注」——它只写 _service 的审批记录', async () => {
-    mount('style')
-    const button = await screen.findByRole('button', { name: /确认机械基线/ })
+    mount('stage5', {
+      ...doc,
+      gate: { ...doc.gate, s4: true },
+      writing: true,
+    })
+    const button = await screen.findByRole('button', { name: /确认成稿/ })
     expect(button.textContent).not.toContain('未标注')
     expect(button.textContent).not.toContain('写盘')
   })
@@ -138,11 +142,15 @@ describe('GateBar 的动作分类', () => {
 
   it('actionOnly 失败态展示服务端给出的恢复命令', async () => {
     vi.spyOn(api, 'getEnums').mockResolvedValue(enums)
-    vi.spyOn(api, 'getApprovals').mockResolvedValue(doc)
+    vi.spyOn(api, 'getApprovals').mockResolvedValue({
+      ...doc,
+      gate: { ...doc.gate, s4: true },
+      writing: true,
+    })
     vi.spyOn(api, 'getJobs').mockResolvedValue({ jobs: [], running: null })
     vi.spyOn(api, 'approveGate').mockRejectedValue(new ApiError(
       'server',
-      '/novels/book-1/approvals/gate/s3',
+      '/novels/book-1/approvals/gate/s5',
       {
         status: 409,
         message: '盘面需要先恢复',
@@ -150,8 +158,8 @@ describe('GateBar 的动作分类', () => {
       },
     ))
 
-    renderRoute(<GateBar screen="style" actionOnly />)
-    fireEvent.click(await screen.findByRole('button', { name: /确认机械基线/ }))
+    renderRoute(<GateBar screen="stage5" actionOnly />)
+    fireEvent.click(await screen.findByRole('button', { name: /确认成稿/ }))
 
     expect(await screen.findByText('python -m novel.cli state book-1')).toBeVisible()
     expect(screen.getByText(/确认失败：盘面需要先恢复/)).toBeVisible()

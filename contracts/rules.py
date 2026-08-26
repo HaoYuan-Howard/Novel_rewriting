@@ -11,7 +11,7 @@ rules.py —— 判据注册表。**判据表只有一张**，key 重复当场�
 
 【注册期就校验，不等到跑的时候】九条，每条都对应一次已发生的损失，见 `_validate`。
 
-Stage0–Stage7 均已实现；注册表必须完整覆盖当前八层。
+Stage3 已整层退役；注册表必须完整覆盖其余七个现役层。
 """
 from __future__ import annotations
 

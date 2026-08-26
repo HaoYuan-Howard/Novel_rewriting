@@ -1,7 +1,7 @@
 # 审校台前端 · 交付说明
 
 产品与界面规格的现役落点就是本文件（§1 技术与数据缝 · §3 路由与屏幕职责 · §6 UI 硬规则），
-产品边界与八阶段的人类任务见仓根 `README.md`。**当前处于真实模式**：
+产品边界与七个现役阶段的人类任务见仓根 `README.md`。**当前处于真实模式**：
 `web/.env` 为 `VITE_USE_MOCK=false`，数据走 `127.0.0.1:8765` 的真实服务。
 `src/mocks/` 那 20 份是冻结的证据基线（字节与哈希登记在 `scripts/mock-baseline.json`，
 来历见统一契约 §8.1，`npm run seams` 钉着），mock 路径仅作离线开发用。
@@ -131,7 +131,7 @@ export const api: Api = USE_MOCK ? mockApi : realApi
 | 状态 | 家 |
 |---|---|
 | 20 份响应 | TanStack Query |
-| **`gate` / `seen` / `structure` / `writing`** | 一份 v3 `ApprovalDoc`，也走 Query（`['approvals', sid]`）；`structure` 保存绑定完整 Stage4 plan subject 的逐章 typed 裁决，`writing` 仍独立记录全书闭卷写作授权 |
+| **`gate` / `seen` / `structure` / `writing`** | 一份 v4 `ApprovalDoc`，也走 Query（`['approvals', sid]`）；`structure` 保存绑定完整 Stage4 plan subject 的逐章 typed 裁决，`writing` 仍独立记录全书闭卷写作授权 |
 | `job` / `jobLog` | Query + `refetchInterval`（由服务端下发的 `running` 决定） |
 | 确认框里的 argv | Query（`api.previewJob`） |
 | `sid` / 章号 / 当前屏 | React Router 路径 |
@@ -164,7 +164,6 @@ export const api: Api = USE_MOCK ? mockApi : realApi
 | `/n/:sid/stage1` | 顶部合并展示校验结论与切分确认，且不依赖正文查询成功；下方是章节索引和原文切分结果，只读，开篇文案只展示一次，重号/缺号/倒退按服务端章号诊断逐章显式提示 |
 | `/n/:sid/read/:o` | 原文与 stage2 骨架对照 |
 | `/n/:sid/global` | stage2 全局人物、关系、规则、秘密 |
-| `/n/:sid/style` | stage3 存量机械基线与当前免费重算对照 |
 | `/n/:sid/stage4/:o` | 计划与写作上下文逐场景对照；常驻展示完整结构 subject SHA-256、全章 `retain/reconstruct` 与声明/复算变化，选中章再展示计划/上下文细节，并经专用 typed 表单原子提交全章结构裁决。结构批准不等于 Stage5 写作授权 |
 | `/n/:sid/stage5/:o` | canonical 成稿、材料、验收 finding 与修订的合并工作面；空状态在付费确认前先写入全书闭卷授权；current TrimAudit 在本屏经专用 retain-pretrim 路由留 actor/reason 销账，fresh Review 的章级/书级 finding 可按完整 evidence identity 提交 wontfix |
 | `/n/:sid/inbox` | 八类待办的全书路由器，不提供第二个编辑面（校验下沉到各阶段屏的面板） |

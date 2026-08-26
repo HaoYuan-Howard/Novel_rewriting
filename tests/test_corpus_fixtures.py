@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""对显式配置的当前 Stage0–Stage7 产物做严格 schema 体检。"""
+"""对显式配置的七个现役层产物做严格 schema 体检。"""
 from __future__ import annotations
 
 import pytest
@@ -24,7 +24,7 @@ def _ids(items: list[Artifact]) -> list[str]:
 
 
 def test_current_corpus_contains_registered_artifacts():
-    assert ARTIFACTS, f'{corpus.CORPUS_ENV} 中没有发现 Stage0–Stage7 JSON 产物'
+    assert ARTIFACTS, f'{corpus.CORPUS_ENV} 中没有发现现役层 JSON 产物'
 
 
 @pytest.mark.parametrize('artifact', ARTIFACTS, ids=_ids(ARTIFACTS))

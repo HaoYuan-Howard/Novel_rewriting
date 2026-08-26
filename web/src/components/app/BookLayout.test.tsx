@@ -7,9 +7,9 @@ import { Rail } from './Rail'
 import type { ApprovalDoc } from '@/types/approvals'
 
 const pending: ApprovalDoc = {
-  v: 3,
+  v: 4,
   sid: 'book-1',
-  gate: { s0: false, s1: false, s2: false, s3: false, s4: false, s5: false, s6: false, s7: false },
+  gate: { s0: false, s1: false, s2: false, s4: false, s5: false, s6: false, s7: false },
   seen: { read: false, global: false },
   writing: false,
   structure: {

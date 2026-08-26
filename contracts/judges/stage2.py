@@ -16,7 +16,7 @@ stage2.py —— 抽取那一层的判据行。源是 `docs/schema/stage2.md` §
 【判据 id 一律照抄文档，不加 stage 前缀】它们是与 `wontfix.json` 的键、
 与 `_provenance.fixes` 的引用之间的契约。
 
-【本层特有的四条，与前七层都不同】
+【本层特有的四条，与其余六个现役层都不同】
 
 **① 这是第一个用 `Rule.fix` 的层。** 修复路由使用机器可读的节点与 flag：
 `blueprint --chapters` · `blueprint --patch` ·

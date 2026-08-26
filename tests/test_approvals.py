@@ -34,7 +34,6 @@ BASE_RELS = (
     'stage1/main_text.json', 'stage1/hook_copy.json',
     'stage2/global_grounding.json', 'stage2/chapter_blueprints.json',
     'stage2/global_review.json',
-    'stage3/style_grounding.json',
     'stage4/blind_candidate.json', 'stage4/evidence_binding.json',
     'stage4/plan_chapters.json', 'stage4/writer_context.json',
 )
@@ -118,7 +117,6 @@ def _approve_for_writing(box: sandbox.Sandbox) -> None:
     approvals.mark_seen(box.root, box.sid, 'global')
     approvals.mark_seen(box.root, box.sid, 'read')
     approvals.approve_gate(box.root, box.sid, 's2')
-    approvals.approve_gate(box.root, box.sid, 's3')
     subject, chapters = approvals._current_structure_subject_and_chapters(box.dir)
     approvals.approve_structure(
         box.root,
@@ -213,16 +211,16 @@ def test_s7_service_proof_revokes_changed_typed_approval_or_decision(
 
 
 @_corpus_test
-def test_get_exposes_public_v3_without_retired_depth_and_is_read_only():
-    """GET 只公开 v3 审批面，且不落服务状态。"""
+def test_get_exposes_public_v4_without_retired_depth_and_is_read_only():
+    """GET 只公开 v4 审批面，且不落服务状态。"""
     box = _box()
     try:
         doc = approvals.get(box.root, box.sid)
-        assert doc.v == 3
+        assert doc.v == 4
         assert 'deep' not in doc.model_dump() and 'deep_proof' not in doc.model_dump()
         assert doc.writing is False
         assert not (box.root / '_service').exists(), 'GET must not persist service state'
-        assert set(doc.gate) == {f's{i}' for i in range(8)}
+        assert set(doc.gate) == set(approvals.APPROVAL_GATES)
 
         # ⚠⚠ **`spawns` 不是一张常量表**：它按 `state.resume_verdict` 过滤，
         #   已经跑完的节点**不再被提议**——`_spawns` 的 docstring 记着为什么：
@@ -244,7 +242,7 @@ def test_get_exposes_public_v3_without_retired_depth_and_is_read_only():
 
 
 @_corpus_test
-def test_writing_approval_is_independent_and_persists_as_internal_v4():
+def test_writing_approval_is_independent_and_persists_as_internal_v5():
     box = _box()
     try:
         _approve_for_writing(box)
@@ -252,7 +250,7 @@ def test_writing_approval_is_independent_and_persists_as_internal_v4():
         doc = approvals.begin_writing(box.root, box.sid)
         assert doc.writing and approvals.writing_is_current(box.root, box.sid)
         raw = approvals._path(box.root, box.sid).read_text(encoding='utf-8')
-        assert '"v": 4' in raw and '"deep"' not in raw and 'deep_proof' not in raw
+        assert '"v": 5' in raw and '"deep"' not in raw and 'deep_proof' not in raw
     finally:
         box.close()
 
@@ -274,10 +272,10 @@ def test_current_writing_approval_authorizes_whole_book_or_plan_subset_only():
 
 
 @_corpus_test
-def test_writing_approval_requires_current_s3_s4_and_is_idempotent():
+def test_writing_approval_requires_current_s4_and_is_idempotent():
     box = _box()
     try:
-        with pytest.raises(ApprovalRequired, match='style and stage4'):
+        with pytest.raises(ApprovalRequired, match='stage4 plan'):
             approvals.begin_writing(box.root, box.sid)
         assert not approvals.get(box.root, box.sid).writing
         _approve_for_writing(box)
@@ -383,7 +381,7 @@ def test_retired_draft_in_old_s5_proof_revokes_s5_and_downstream(
         decided_at='2026-08-26T00:00:00+00:00',
         proof=stored_gate_proofs['s4'],
     )
-    record = approvals._ApprovalRecordV4(
+    record = approvals._ApprovalRecordV5(
         sid='123',
         gate={gate: True for gate in approvals._GATE_ORDER},
         seen={key: True for key in seen_proofs},
@@ -409,7 +407,7 @@ def test_retired_draft_in_old_s5_proof_revokes_s5_and_downstream(
 
     assert 'stage5/draft.md' in record.gate_proofs['s5'].artifacts
     assert 'stage5/draft.md' not in current_gate_proofs['s5'].artifacts
-    assert all(effective.gate[gate] for gate in ('s0', 's1', 's2', 's3', 's4'))
+    assert all(effective.gate[gate] for gate in ('s0', 's1', 's2', 's4'))
     assert all(not effective.gate[gate] for gate in ('s5', 's6', 's7'))
     assert all(effective.gate_proofs[gate] is None for gate in ('s5', 's6', 's7'))
 

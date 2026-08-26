@@ -184,7 +184,7 @@ def _flags_of(a: argparse.Namespace) -> list[str]:
 def _runners() -> dict[str, Callable[[RunContext, list[str]], int]]:
     """`stage` → 跑法派发。`_dispatch` 与 `runnable_stages` 共用这一张当前表。"""
     return {'stage0': _run_stage0, 'stage1': _run_stage1, 'stage2': _run_stage2,
-            'stage3': _run_stage3, 'stage4': _run_stage4, 'stage5': _run_stage5,
+            'stage4': _run_stage4, 'stage5': _run_stage5,
             'stage6': _run_stage6, 'stage7': _run_stage7}
 
 
@@ -353,28 +353,6 @@ def _run_stage1(ctx: RunContext, flags: list[str]) -> int:
     if report is not None:
         print(render(report))
         return X.OK if report.passed else X.CHECK_FAILED
-    return X.OK
-
-
-def _run_stage3(ctx: RunContext, flags: list[str]) -> int:
-    """Stage3 v2：默认免费落盘、测量预览或复检。"""
-    from novel.stages.stage3 import style
-
-    tokens = set(N.flag_tokens(flags))
-
-    if '--check-only' in tokens:
-        report = style.run_check_only(ctx)
-        print(render(report))
-        # `FREE_ENTRIES['--check-only']` 自己写着「报 FAIL 退出码非零」。
-        return X.OK if report.passed else X.CHECK_FAILED
-
-    if '--measure-only' in tokens:
-        meas = style.run_measure_only(ctx)
-        print(meas.model_dump_json(indent=2))
-        return X.OK
-
-    style.run_style(ctx)
-    print('  ✓ stage3 v2 机械基线已免费落盘')
     return X.OK
 
 

@@ -66,15 +66,14 @@ reported/null 行数，分母不闭合就失败。
 
 manifest 的 `commands` 字段必须是 `-m novel.cli run <node> <sid> ... --yes` 的 16 条真实
 付费 production dispatch：每书各一条 Stage2 global/blueprint、Stage4 A `design`、
-Stage4 B `plan`、Stage5 write、Stage6 hook/semantic、Stage7 rename；Stage3 v2 是免费机械节点，
-不进入付费 dispatch，
-但仍须在 required artifacts 中存在 current v2。`stage6.semantic` 只带 `--base --yes`
+Stage4 B `plan`、Stage5 write、Stage6 hook/semantic、Stage7 rename。机械测量由 Stage5/6 从
+Stage1 即时执行，不是 dispatch，也不在 required artifacts 中。`stage6.semantic` 只带 `--base --yes`
 （`--advisory` 已随自动放行门一并删除）；canonical `stage5.write` 也只带 `--base --yes`，
 默认补齐当前计划的全部缺章。
 ledger 必须对两书、八个付费节点逐一有非零记录并与这 16 条命令对账；Stage4 A/B 是两次
 独立付费 dispatch，不能用 B 相的一行账或最终计划替代 A 相的调用与中间产物。
 ⚠ 这里的 16 = 2 书 × 8 付费节点，**现算不写死**——它曾因 Stage5 semantic 退役从 18
-降为 16、又因 Stage3 v2 免费化降为 14，Stage4 拆成独立 A/B 后回到 16。条数以
+降为 16、历史 Stage3 免费化不改变付费数，Stage4 拆成独立 A/B 后仍为 16。条数以
 `contracts/schema/corpus.py` 的 `CURRENT_CORPUS_BOOKS × CURRENT_CORPUS_PAID_NODES` 为准。
 `preview`、`mark` 或缺 `run` 的展示命令不能冒充生产 dispatch。
 

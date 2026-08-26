@@ -3,10 +3,8 @@
 """Small, deterministic builders for tests that do not need the local corpus."""
 from __future__ import annotations
 
-from contracts.invariants import STAGE3_MEASUREMENT_CONTRACT
-from contracts.schema.stage1 import HookCopy, MainText
-from novel.consumption import stage5_style
-from novel.stages.stage3.measure import measure_all
+from contracts.schema.stage1 import MainText
+from novel.core.measure import body_style_metrics, measure_body
 from novel.stages.stage5.measure import Book
 
 
@@ -24,10 +22,6 @@ def stage5_book() -> Book:
         {'chapter_ordinal': 1, 'text': source_one},
         {'chapter_ordinal': 2, 'text': source_two},
     ])
-    measurable = measure_all(
-        main,
-        HookCopy(text='一把银匙，一本被调换的账册，足以让旧日秘密重新开口。'),
-    ).model_dump()
     character = {
         'display_name': '沈青',
         'role': '茶馆掌柜',
@@ -84,35 +78,12 @@ def stage5_book() -> Book:
             'address': [],
         },
     }
-    projected = stage5_style({'measurable': measurable})
-    assert isinstance(projected, dict) and isinstance(projected.get('body'), dict)
+    projected = body_style_metrics(measure_body(main))
     return Book(
         title='雨夜账册',
         ctx={'chapters': [entry]},
-        measurable=projected['body'],
+        measurable=projected,
         source_text={1: source_one, 2: source_two},
         secrets=[],
         characters={'char_001': character},
     )
-
-
-def stage3_artifact() -> dict:
-    """Return a current Stage3 v2 mechanical payload."""
-    book = stage5_book()
-    main = MainText.model_validate([
-        {'chapter_ordinal': ordinal, 'text': text}
-        for ordinal, text in sorted(book.source_text.items())
-    ])
-    measurable = measure_all(
-        main,
-        HookCopy(text='一把银匙，一本被调换的账册，足以让旧日秘密重新开口。'),
-    ).model_dump()
-    return {
-        'measurable': measurable,
-        '_provenance': {
-            'code': 'fixture',
-            'root_clean_sha1': '0' * 40,
-            'inputs': {},
-            'measurement_contract': STAGE3_MEASUREMENT_CONTRACT,
-        },
-    }

@@ -28,13 +28,15 @@ from contracts.artifacts import (
     STAGE2_GLOBAL_REVIEW, STAGE4_BLIND_CANDIDATE, STAGE4_EVIDENCE_BINDING,
 )
 from contracts.schema import (
-    ArtifactVersionError, InputEdge, LlmProvenance, StyleGrounding, Usage, artifact_spec,
+    ArtifactVersionError, InputEdge, LlmProvenance, Usage, artifact_spec,
     decode_artifact, encode_artifact,
 )
-from contracts.invariants import STAGE3_MEASUREMENT_CONTRACT
-from contracts.schema.stage3 import StyleProvenance
+from contracts.invariants import STYLE_MEASUREMENT_CONTRACT, STRUCTURE_METRIC_CONTRACT
 from contracts.schema.stage4 import PlanChapters, PlanProvenance
-from novel.consumption import CONSUMED_PROJECTIONS, producer_node, projection_for
+from novel.consumption import (
+    CONSUMED_PROJECTIONS, legacy_stage3_projection_for, legacy_stage5_style,
+    producer_node, projection_for,
+)
 from novel.errors import (
     ApprovalRequired, ArtifactUnreadable, ByteFormRefused, PathRefused,
     ProvenanceRefused, UpstreamMissing,
@@ -51,7 +53,6 @@ from novel.store import (
 from novel.stages.stage1.partition import partition_text
 from tests import corpus, sandbox
 
-STYLE_REL = 'stage3/style_grounding.json'
 PLAN_REL = 'stage4/plan_chapters.json'
 UPSTREAM = 'stage1/main_text.json'
 REVALIDATION = {'actor': 'test-reviewer', 'reason': '逐项复核当前判据'}
@@ -90,27 +91,9 @@ def _book(sid: str = '123', title: str = '书名', payload: bytes = b'{"sections
     return base
 
 
-def _ctx(base: Path, sid: str = '123', node: str = 'stage3.style', *, paid: bool = False,
+def _ctx(base: Path, sid: str = '123', node: str = 'stage4.context', *, paid: bool = False,
          write_ledger: bool = False) -> RunContext:
     return RunContext.open(base, sid, node, paid=paid, write_ledger=write_ledger)
-
-
-def _style(ctx: RunContext, *, habit: str = '习惯一') -> StyleGrounding:
-    """一份最小的合法 Stage3 v2；变化哨兵借 ``quote_styles`` 承载。"""
-    blk = dict(chars=1, paragraphs=1, sentences=1, avg_paragraph_chars=1.0,
-               paragraph_sep_chars=1.0, avg_sentence_chars=1.0, dialogue_ratio=None,
-               dialogue_ratio_applicable=True, quote_styles=[habit])
-    body = dict(blk, chapter_chars=dict(min=1, max=2, avg=1.5),
-                per_chapter_avg_sentence=dict(min=1.0, max=2.0))
-    prov = ctx.free_provenance(
-        StyleProvenance,
-        prompts={'RULES': '测试用确定性尺子'},
-        measurement_contract=STAGE3_MEASUREMENT_CONTRACT,
-    )
-    return StyleGrounding(
-        measurable=dict(body=body, hook=blk),
-        _provenance=prov,
-    )
 
 
 def _plan_ctx(base: Path, sid: str = '123', *, paid: bool = True) -> RunContext:
@@ -285,13 +268,13 @@ def test_reading_with_a_projection_fingerprints_the_projection_not_the_whole_fil
         {'chapter_ordinal': 1, 'text': '真正读的正文', 'diagnostic_note': '不消费'},
     ], ensure_ascii=False).encode('utf-8')
     base = _book('123', '书名', payload)
-    ctx = _ctx(base)
+    ctx = _ctx(base, node='stage5.write', paid=True)
     ArtifactStore(ctx).read(MainTextLoose, UPSTREAM)
 
     from novel.prov import projection_fingerprint
     assert ctx.edges[UPSTREAM].consumed == projection_fingerprint({
-        'measurement_contract': STAGE3_MEASUREMENT_CONTRACT,
-        'texts': ['真正读的正文'],
+        'measurement_contract': STYLE_MEASUREMENT_CONTRACT,
+        'chapters': [{'chapter_ordinal': 1, 'text': '真正读的正文'}],
     })
     assert ctx.edges[UPSTREAM].consumed != projection_fingerprint(
         json.loads((base / '书名_123' / 'stage1' / 'main_text.json').read_text('utf-8'))), \
@@ -304,20 +287,20 @@ def test_freshness_reuses_the_registered_projection_that_wrote_the_edge():
     ]
     base = _book(
         payload=json.dumps(payload, ensure_ascii=False).encode('utf-8'))
-    ctx = _ctx(base)
+    ctx = _plan_ctx(base)
     st = ArtifactStore(ctx)
     st.read(MainTextLoose, UPSTREAM)
-    st.write(STYLE_REL, _style(ctx))
+    st.write(PLAN_REL, _plan(ctx))
 
     upstream = base / '书名_123' / UPSTREAM
-    assert st.freshness(STYLE_REL).state == 'fresh'
+    assert st.freshness(PLAN_REL).state == 'fresh'
 
     payload[0]['diagnostic_note'] = '新值'      # 非消费字段改了
     upstream.write_text(
         json.dumps(encode_artifact(UPSTREAM, payload), ensure_ascii=False),
         encoding='utf-8',
     )
-    same = st.freshness(STYLE_REL)
+    same = st.freshness(PLAN_REL)
     assert (same.state, same.reason) == ('fresh', 'match')
 
     payload[0]['text'] = '真正消费的正文改了'
@@ -325,7 +308,7 @@ def test_freshness_reuses_the_registered_projection_that_wrote_the_edge():
         json.dumps(encode_artifact(UPSTREAM, payload), ensure_ascii=False),
         encoding='utf-8',
     )
-    changed = st.freshness(STYLE_REL)
+    changed = st.freshness(PLAN_REL)
     assert (changed.state, changed.reason) == ('stale', 'consumed_changed')
 
 
@@ -783,9 +766,10 @@ def test_projection_registry_resolves_dynamic_and_invalid_artifact_paths():
         'stage2/global_grounding.json',
         'stage4/plan_chapters.json',
     }
-    assert projection_for(
+    assert projection_for('stage3.style', UPSTREAM) is None
+    assert legacy_stage3_projection_for(
         'stage3.style', 'stage1/main_text.INVALID.json'
-    ) is projection_for('stage3.style', UPSTREAM)
+    ) is legacy_stage3_projection_for('stage3.style', UPSTREAM)
 
 
 def test_stage5_review_tracks_context_code_without_overinvalidating_writing():
@@ -802,10 +786,12 @@ def test_stage5_review_tracks_context_code_without_overinvalidating_writing():
     assert review_projection(before) != review_projection(after)
 
 
-def test_stage5_style_projection_is_exactly_the_nine_body_mechanical_leaves():
-    write_projection = projection_for('stage5.write', STYLE_REL)
-    review_projection = projection_for('stage5.review', STYLE_REL)
-    assert write_projection is review_projection and write_projection is not None
+def test_legacy_stage5_style_projection_is_exactly_the_nine_body_mechanical_leaves():
+    write_projection = legacy_stage3_projection_for(
+        'stage5.write', 'stage3/style_grounding.json')
+    review_projection = legacy_stage3_projection_for(
+        'stage5.review', 'stage3/style_grounding.json')
+    assert write_projection is review_projection is legacy_stage5_style
     source = {
         'voice': {'narrative_distance': '定性哨兵'},
         'surface_habits': ['习惯哨兵'],
@@ -867,9 +853,10 @@ def test_stage5_style_projection_is_exactly_the_nine_body_mechanical_leaves():
         assert write_projection(edited) != expected, path
 
 
-def test_stage5_style_projection_tolerates_malformed_raw_nested_shapes():
-    project = projection_for('stage5.write', STYLE_REL)
-    assert project is not None
+def test_legacy_stage5_style_projection_tolerates_malformed_raw_nested_shapes():
+    project = legacy_stage3_projection_for(
+        'stage5.write', 'stage3/style_grounding.json')
+    assert project is legacy_stage5_style
     assert project({'measurable': '旧坏形状'}) == {'body': {
         'avg_sentence_chars': None,
         'avg_paragraph_chars': None,
@@ -965,7 +952,7 @@ def test_a_tampered_schema_version_is_refused_on_the_real_read_path():
     同一个场景的正确结论是**拒读**。
 
     ⚠ 与 `tests/test_artifact_versions.py` 那两条参数化的分界线：那边拿合成 dict 扫
-    30 份产物的分母，这边走 `ArtifactStore.write` → 真文件 → `read_own` 的整条路，
+    注册表全部产物的分母，这边走 `ArtifactStore.write` → 真文件 → `read_own` 的整条路，
     查的是「闸真的装在读盘口上」而不是只装在解码函数里。
 
     ⚠ 版本号**从注册表现算**：本条查的是「篡改版本号就读不回来」，与当前是第几版无关。
@@ -973,17 +960,17 @@ def test_a_tampered_schema_version_is_refused_on_the_real_read_path():
     该红的只有 `tests/test_artifact_versions.py` 里那条「全表恒 v1」的反向守卫。
     """
     base = _book()
-    ctx = _ctx(base)
+    ctx = _plan_ctx(base)
     store = ArtifactStore(ctx)
     store.read(Loose, UPSTREAM)
-    official = store.write(STYLE_REL, _style(ctx))
-    current = artifact_spec(STYLE_REL).current_version
+    official = store.write(PLAN_REL, _plan(ctx))
+    current = artifact_spec(PLAN_REL).current_version
     encoded = json.loads(official.read_text(encoding='utf-8'))
     assert encoded['_schema_version'] == current, '写盘口吐的不是当前版本'
 
     # 先证明原样能读回来——否则下面那条拒读证明不了是版本号造成的。
-    assert ArtifactStore(_ctx(base)).read_own(
-        StyleGrounding, STYLE_REL)[0].measurable.hook.quote_styles == ['习惯一']
+    assert ArtifactStore(_plan_ctx(base)).read_own(
+        PlanChapters, PLAN_REL)[0].output_chapters[0].chapter_rewrite_brief == '计划一'
 
     encoded['_schema_version'] = current + 1
     official.write_text(
@@ -992,7 +979,7 @@ def test_a_tampered_schema_version_is_refused_on_the_real_read_path():
     )
     with pytest.raises(ArtifactUnreadable,
                        match=f'schema v{current + 1} 不是当前 v{current}'):
-        ArtifactStore(_ctx(base)).read_own(StyleGrounding, STYLE_REL)
+        ArtifactStore(_plan_ctx(base)).read_own(PlanChapters, PLAN_REL)
 
 
 def _spend(ctx: RunContext, **tokens) -> None:
@@ -2654,17 +2641,17 @@ def test_the_context_takes_its_identity_from_the_directory():
     ctx = _ctx(_book('7581413687886353176', '成年人不做选择，姐全都要'), '7581413687886353176')
     assert ctx.sid == '7581413687886353176'
     assert ctx.title == '成年人不做选择，姐全都要'
-    assert ctx.stage == 'stage3'
+    assert ctx.stage == 'stage4'
 
 
 def test_opening_a_book_that_is_not_there_is_a_terminal_state():
     with pytest.raises(UpstreamMissing, match='先跑 stage1'):
-        RunContext.open(Path(tempfile.mkdtemp()), '没有这本书', 'stage3.style',
+        RunContext.open(Path(tempfile.mkdtemp()), '没有这本书', 'stage4.context',
                         paid=False, write_ledger=False)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 十、⭐ 盘上 92 份真实产物走一遍**落盘往返** —— 八层一次全过，0 成本
+# 十、⭐ 当前 manifest 全部真实产物走一遍**落盘往返** —— 七个现役层一次全过，0 成本
 # ─────────────────────────────────────────────────────────────────────────────
 
 _CORPUS = list(corpus.iter_artifacts()) if corpus.corpus_root() else []
@@ -2768,7 +2755,7 @@ def test_every_corpus_artifact_survives_a_write_read_round_trip(
     `Provenance.to_disk()` 曾经用 `model_dump(exclude_none=True)`，
     而 `exclude_none` 是**全局**的 ⇒ 它连着剥掉两处**必填但可为 `null`** 的键
     （`inputs[].consumed` 与 `usage.*_tokens`）⇒ **落下去的产物读不回来**。
-    加载体检 92 份全绿，而第一份真落盘就会炸。
+    加载体检全绿，而第一份真落盘就会炸。
 
     当前语料只读；往返副本写进 `mkdtemp()`，跑完即删。
 

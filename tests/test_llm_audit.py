@@ -53,7 +53,7 @@ def _book() -> Path:
 
 def _ledgered_ctx() -> tuple[RunContext, Path]:
     d = Path(tempfile.mkdtemp())
-    ctx = RunContext.open(_book(), '123', 'stage3.style', paid=True,
+    ctx = RunContext.open(_book(), '123', 'stage6.hook', paid=True,
                           ledger=CostLedger(path=d / 'ledger.jsonl'))
     return ctx, d
 
@@ -169,7 +169,7 @@ def test_cache_hits_settle_gates_and_are_adoptable_too():
 
 def test_audit_events_survive_in_memory_when_there_is_no_ledger_file():
     """`--dry-run` / 测试（`write_ledger=False`）没有盘上账本，判定仍要能被断言。"""
-    ctx = RunContext.open(_book(), '123', 'stage3.style', paid=True,
+    ctx = RunContext.open(_book(), '123', 'stage6.hook', paid=True,
                           write_ledger=False)
     transport = FakeTransport.always(OK_JSON)
     client = LlmClient(ctx, transport, sleep=lambda _s: None)

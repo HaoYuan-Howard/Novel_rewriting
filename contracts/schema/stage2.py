@@ -175,7 +175,7 @@ class Character(StrictModel):
     address: list[Address] = Field(min_length=1)
 
     #: **无守卫 → `B-08`**（`R-2.10`）。它**不下发给写作节点**——
-    #: 只给确定性代码用（成稿人名检查的左锚 / stage3 专名过滤）。
+    #: 只给确定性代码用（Stage5 成稿人名检查与专名过滤 / Stage7 残留探针）。
     name_distinctiveness: Literal[NAME_DISTINCTIVENESS]
 
     #: 静态身份，长度 12~106。**[HARD] 非空 · 不含结局词 · 不含模棱语 ·

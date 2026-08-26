@@ -33,7 +33,9 @@ import uuid
 from collections.abc import Iterable, Sequence
 from pathlib import Path
 
-from contracts.invariants import LEGACY_STAGE5_MODES, NODES, STAGES
+from contracts.invariants import (
+    LEGACY_STAGE5_MODES, NODES, RETIRED_NODES, RETIRED_STAGES, STAGES,
+)
 from contracts.schema.orchestration import (
     QueueCounts, QueueEntry, QueueEvent, QueueItem, QueueLaneCounts, QueuePlan,
     QueueRun, QueueStart,
@@ -114,14 +116,11 @@ def _upstream_invalid(ov, stage: str) -> list[str]:
     ⚠ 只看上游不看本层：本层自己的 `.INVALID` 是**本节点该处理的事**
     （0 成本提升路 `--revalidate`），不是挡住它自己的理由。
 
-    Stage3 v2 是从 Stage1 分出的免费机械支路，不消费 Stage2。按纯 stage 序号把
-    Stage2 INVALID 算成它的上游，会把本应并行的支路重新串行化。
+    当前节点都沿主链消费前序层；Stage3 已退役，编号空洞不改变依赖顺序。
     """
-    upstream_stages = (
-        {'stage0', 'stage1'}
-        if stage == 'stage3'
-        else {name for name in STAGES if _stage_index(name) < _stage_index(stage)}
-    )
+    upstream_stages = {
+        name for name in STAGES if _stage_index(name) < _stage_index(stage)
+    }
     return [a.rel for s in ov.stages if s.stage in upstream_stages
             for a in s.artifacts if a.invalid]
 
@@ -729,6 +728,8 @@ def _command_surface(item: QueueItem) -> tuple[object, ...]:
 
 def _current_plan_items(base: str | os.PathLike[str], start: QueueStart) -> list[QueueItem]:
     """Rebuild the currently required command surface in lane/node order."""
+    if start.until_stage in RETIRED_STAGES:
+        return []
     rank = {node: index for index, node in enumerate(NODES)}
     out: list[QueueItem] = []
     for sid in start.sids:
@@ -740,6 +741,12 @@ def _current_plan_items(base: str | os.PathLike[str], start: QueueStart) -> list
 def _live_disposition(base: str | os.PathLike[str], run: QueueRun,
                       entry: QueueEntry) -> tuple[str, str | None, str]:
     """Recheck disk state before launch; return state/waiting_on/reason."""
+    if run.start.until_stage in RETIRED_STAGES or entry.item.node in RETIRED_NODES:
+        return (
+            'blocked', WAITING_ON_REPLAN,
+            '该队列快照包含已经退役的 Stage3 节点；历史仍可读，但不会重新调度，'
+            '请按当前节点面重新预览并创建队列',
+        )
     todo, blocked = plan_book(
         base, entry.item.sid, until_stage=run.start.until_stage)
     same_node = [item for item in todo + blocked if item.node == entry.item.node]

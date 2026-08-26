@@ -12,7 +12,10 @@ from contracts.invariants import (
     HOOK_APPROACHES, HOOK_CURRENT_APPROACHES, HOOK_RECIPE, HOOK_RETIRED_APPROACHES,
     HOOK_SLOTS,)
 from contracts.schema.stage6 import HookResponse
-from novel.consumption import projection_for, stage6_style
+from contracts.invariants import STYLE_MEASUREMENT_CONTRACT
+from novel.consumption import (
+    legacy_stage3_projection_for, legacy_stage6_style, projection_for,
+)
 from novel.stages.stage6 import checks, prompts
 
 
@@ -218,29 +221,12 @@ def test_material_carries_source_full_truth_story_map_and_minimal_hook_mechanica
             },
         ],
     }
-    style = {
-        'hook_style': {'relation_to_body': '更高浓度'},
-        'voice': {'pace': '快', 'mode_variation': {'danger': '句子更短'}},
-        'surface_habits': ['绝不能进入提示词的定性哨兵'],
-        'chapter_styles': [
-            {'source_ordinal': 2, 'voice': {'stance': '冷'}},
-            {'source_ordinal': 3, 'voice': {'stance': '急'}},
-            {'source_ordinal': 9, 'voice': {'stance': '远期'}},
-        ],
-        'measurable': {
-            'hook': {
-                'chars': 100,
-                'paragraphs': 8,
-                'sentences': 10,
-                'avg_sentence_chars': 10,
-                'avg_paragraph_chars': 12,
-                'paragraph_sep_chars': 2,
-                'dialogue_ratio': 0.2,
-                'dialogue_ratio_applicable': True,
-                'quote_styles': ['“”'],
-            },
-            'body': {'avg_sentence_chars': 99, 'quote_styles': ['定性哨兵']},
-        },
+    hook_mechanical = {
+        'chars': 100,
+        'avg_sentence_chars': 10,
+        'avg_paragraph_chars': 12,
+        'dialogue_ratio': 0.2,
+        'quote_styles': ['“”'],
     }
     grounding = {
         'entities': {'characters': {'c1': {'canonical': '阿宁'}}},
@@ -250,7 +236,7 @@ def test_material_carries_source_full_truth_story_map_and_minimal_hook_mechanica
     material = prompts.build_material(
         title='匿名信',
         ctx=ctx,
-        style=style,
+        hook_mechanical=hook_mechanical,
         grounding=grounding,
         source_hook='原作文案先抛匿名信，再用仇人落款收尾。',
         lead=[{'output_ordinal': 1, 'text': '重写后的第一章正文。'}],
@@ -286,7 +272,7 @@ def test_material_carries_source_full_truth_story_map_and_minimal_hook_mechanica
     assert packet['rewritten_opening'][0]['text'] == '重写后的第一章正文。'
 
 
-def test_stage6_style_projection_is_exactly_the_five_hook_mechanical_leaves():
+def test_legacy_stage6_projection_is_exactly_the_five_hook_mechanical_leaves():
     source = {
         'voice': {'register_tone': '定性哨兵'},
         'surface_habits': ['定性哨兵'],
@@ -315,19 +301,19 @@ def test_stage6_style_projection_is_exactly_the_five_hook_mechanical_leaves():
         'quote_styles': ['“”'],
         'dialogue_ratio': 0.2,
     }}
-    assert stage6_style(source) == expected
+    assert legacy_stage6_style(source) == expected
 
     for key in ('voice', 'surface_habits', 'chapter_styles', 'hook_style',
                 '_provenance'):
         edited = json.loads(json.dumps(source, ensure_ascii=False))
         edited[key] = {'任意': '变化'}
-        assert stage6_style(edited) == expected, key
+        assert legacy_stage6_style(edited) == expected, key
     for key in expected['hook']:
         edited = json.loads(json.dumps(source, ensure_ascii=False))
         edited['measurable']['hook'][key] = 'changed'
-        assert stage6_style(edited) != expected, key
+        assert legacy_stage6_style(edited) != expected, key
 
-    assert stage6_style({'measurable': '旧坏形状'}) == {'hook': {
+    assert legacy_stage6_style({'measurable': '旧坏形状'}) == {'hook': {
         'chars': None,
         'avg_sentence_chars': None,
         'avg_paragraph_chars': None,
@@ -336,10 +322,21 @@ def test_stage6_style_projection_is_exactly_the_five_hook_mechanical_leaves():
     }}
 
 
-def test_stage6_hook_and_semantic_freshness_share_the_same_minimal_projection():
-    hook_project = projection_for('stage6.hook', 'stage3/style_grounding.json')
-    semantic_project = projection_for('stage6.semantic', 'stage3/style_grounding.json')
-    assert hook_project is semantic_project is stage6_style
+def test_current_stage6_freshness_binds_source_hook_and_measurement_contract():
+    for node in ('stage6.hook', 'stage6.semantic'):
+        project = projection_for(node, 'stage1/hook_copy.json')
+        assert project is not None
+        assert project({'text': '原作文案'}) == {
+            'measurement_contract': STYLE_MEASUREMENT_CONTRACT,
+            'text': '原作文案',
+        }
+        assert projection_for(node, 'stage3/style_grounding.json') is None
+
+
+def test_old_stage6_provenance_still_uses_the_frozen_stage3_projection():
+    for node in ('stage6.hook', 'stage6.semantic'):
+        assert legacy_stage3_projection_for(
+            node, 'stage3/style_grounding.json') is legacy_stage6_style
 
 
 def test_weak_fact_attribution_metric_compares_gift_phrase_to_story_map():

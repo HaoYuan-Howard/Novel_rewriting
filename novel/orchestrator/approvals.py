@@ -4,7 +4,7 @@ from __future__ import annotations
 from contracts.artifacts import (
     STAGE0_CLEAN_TEXT, STAGE0_REVISIONS, STAGE1_HOOK_COPY, STAGE1_MAIN_TEXT,
     STAGE2_CHAPTER_BLUEPRINTS,
-    STAGE2_GLOBAL_GROUNDING, STAGE2_GLOBAL_REVIEW, STAGE3_STYLE_GROUNDING,
+    RETIRED_STAGE3_STYLE_GROUNDING, STAGE2_GLOBAL_GROUNDING, STAGE2_GLOBAL_REVIEW,
     STAGE4_PLAN_CHAPTERS,
     STAGE6_HOOK, STAGE7_NAME_MAP, artifact_rel,
 )
@@ -21,7 +21,7 @@ from typing import Any, Literal
 
 from pydantic import Field, ValidationError, model_validator
 
-from contracts.invariants import APPROVAL_GATES, APPROVAL_SEEN
+from contracts.invariants import APPROVAL_GATES, APPROVAL_SEEN, STYLE_MEASUREMENT_CONTRACT
 from contracts.schema import artifact_spec
 from contracts.schema.api import (
     ApprovalAction, ApprovalBackfillResult, ApprovalDoc,
@@ -50,6 +50,7 @@ from novel.store import ArtifactStore
 
 APPROVALS_DIRNAME = 'approvals'
 _LOCK = threading.RLock()
+_LEGACY_APPROVAL_GATES = ('s0', 's1', 's2', 's3', 's4', 's5', 's6', 's7')
 
 #: 正在被移入回收站的书。**`_LOCK` 保护它**，与审批写入同一把锁——
 #: 这样「冻结」与「写一份审批」之间没有缝，两者要么先后、要么其中一个明确 409。
@@ -130,7 +131,8 @@ class _ApprovalRecordV2Legacy(StrictModel):
 
     @model_validator(mode='after')
     def _legacy_record_is_complete(self) -> _ApprovalRecordV2Legacy:
-        if set(self.gate) != set(APPROVAL_GATES) or set(self.gate_proofs) != set(APPROVAL_GATES):
+        if (set(self.gate) != set(_LEGACY_APPROVAL_GATES)
+                or set(self.gate_proofs) != set(_LEGACY_APPROVAL_GATES)):
             raise ValueError('legacy gate/proofs must contain exactly s0..s7')
         if set(self.seen) != set(APPROVAL_SEEN) or set(self.seen_proofs) != set(APPROVAL_SEEN):
             raise ValueError('legacy seen/proofs must contain exactly read/global')
@@ -153,11 +155,11 @@ class _ApprovalRecordV3Legacy(StrictModel):
 
     @model_validator(mode='after')
     def _record_is_complete_and_proved(self) -> _ApprovalRecordV3Legacy:
-        if set(self.gate) != set(APPROVAL_GATES):
+        if set(self.gate) != set(_LEGACY_APPROVAL_GATES):
             raise ValueError('gate must contain exactly s0..s7')
         if set(self.seen) != set(APPROVAL_SEEN):
             raise ValueError('seen must contain exactly read/global')
-        if set(self.gate_proofs) != set(APPROVAL_GATES):
+        if set(self.gate_proofs) != set(_LEGACY_APPROVAL_GATES):
             raise ValueError('gate_proofs must contain exactly s0..s7')
         if set(self.seen_proofs) != set(APPROVAL_SEEN):
             raise ValueError('seen_proofs must contain exactly read/global')
@@ -178,8 +180,8 @@ class _StoredStructureDecision(StructureApprovalDecision):
     proof: _ApprovalProof
 
 
-class _ApprovalRecordV4(StrictModel):
-    """盘上审批记录 v4；Stage4 只认 hash-bound typed 结构裁决。"""
+class _ApprovalRecordV4Legacy(StrictModel):
+    """只为显式 backfill 读取的旧 v4；它仍含退役的 s3 闸门。"""
 
     v: Literal[4] = 4
     sid: str = Field(min_length=1)
@@ -193,13 +195,61 @@ class _ApprovalRecordV4(StrictModel):
     structure_decision: _StoredStructureDecision | None = None
 
     @model_validator(mode='after')
-    def _record_is_complete_and_proved(self) -> _ApprovalRecordV4:
-        if set(self.gate) != set(APPROVAL_GATES):
+    def _record_is_complete_and_proved(self) -> _ApprovalRecordV4Legacy:
+        if set(self.gate) != set(_LEGACY_APPROVAL_GATES):
             raise ValueError('gate must contain exactly s0..s7')
         if set(self.seen) != set(APPROVAL_SEEN):
             raise ValueError('seen must contain exactly read/global')
-        if set(self.gate_proofs) != set(APPROVAL_GATES):
+        if set(self.gate_proofs) != set(_LEGACY_APPROVAL_GATES):
             raise ValueError('gate_proofs must contain exactly s0..s7')
+        if set(self.seen_proofs) != set(APPROVAL_SEEN):
+            raise ValueError('seen_proofs must contain exactly read/global')
+        for key, approved in self.gate.items():
+            if approved != (self.gate_proofs[key] is not None):
+                raise ValueError(f'gate {key} and its current-subject proof must agree')
+        for key, seen in self.seen.items():
+            if seen != (self.seen_proofs[key] is not None):
+                raise ValueError(f'seen {key} and its current-subject proof must agree')
+        if self.writing != (self.writing_proof is not None):
+            raise ValueError('writing and writing_proof must agree')
+        if (self.structure_decision is None) != (not self.structure_history):
+            raise ValueError('structure_decision 与非空 structure_history 必须同进同出')
+        if (self.structure_decision is not None
+                and self.structure_decision != self.structure_history[-1]):
+            raise ValueError('structure_decision 必须是 structure_history 最后一项')
+        if self.gate['s4']:
+            decision = self.structure_decision
+            if decision is None or any(
+                row.decision != 'accept' for row in decision.chapters
+            ):
+                raise ValueError('s4 gate 只能由逐章全 accept 的 typed 结构裁决打开')
+            if self.gate_proofs['s4'] != decision.proof:
+                raise ValueError('s4 gate proof 必须等于当前 typed 结构裁决 proof')
+        return self
+
+
+class _ApprovalRecordV5(StrictModel):
+    """盘上审批记录 v5；无 s3，写作授权直接绑定 Stage1 正文、Stage4 计划与测量契约。"""
+
+    v: Literal[5] = 5
+    sid: str = Field(min_length=1)
+    gate: dict[str, bool]
+    seen: dict[str, bool]
+    writing: bool = False
+    gate_proofs: dict[str, _ApprovalProof | None]
+    seen_proofs: dict[str, _ApprovalProof | None]
+    writing_proof: _ApprovalProof | None = None
+    structure_history: list[_StoredStructureDecision] = Field(default_factory=list)
+    structure_decision: _StoredStructureDecision | None = None
+
+    @model_validator(mode='after')
+    def _record_is_complete_and_proved(self) -> _ApprovalRecordV5:
+        if set(self.gate) != set(APPROVAL_GATES):
+            raise ValueError('gate must contain exactly s0,s1,s2,s4,s5,s6,s7')
+        if set(self.seen) != set(APPROVAL_SEEN):
+            raise ValueError('seen must contain exactly read/global')
+        if set(self.gate_proofs) != set(APPROVAL_GATES):
+            raise ValueError('gate_proofs must contain exactly s0,s1,s2,s4,s5,s6,s7')
         if set(self.seen_proofs) != set(APPROVAL_SEEN):
             raise ValueError('seen_proofs must contain exactly read/global')
         for key, approved in self.gate.items():
@@ -268,9 +318,9 @@ def _spawns(base: str | os.PathLike[str], sid: str) -> dict[str, list[ApprovalAc
     return spawns
 
 
-def _fresh_record(sid: str, planned: list[int] | None = None) -> _ApprovalRecordV4:
+def _fresh_record(sid: str, planned: list[int] | None = None) -> _ApprovalRecordV5:
     del planned  # 兼容旧调用缝；结构章集只从当前正式计划读取
-    return _ApprovalRecordV4(
+    return _ApprovalRecordV5(
         sid=sid,
         gate={key: False for key in APPROVAL_GATES},
         seen={key: False for key in APPROVAL_SEEN},
@@ -280,9 +330,9 @@ def _fresh_record(sid: str, planned: list[int] | None = None) -> _ApprovalRecord
 
 
 def _view(
-    base: str | os.PathLike[str], record: _ApprovalRecordV4,
+    base: str | os.PathLike[str], record: _ApprovalRecordV5,
 ) -> ApprovalDoc:
-    """服务记录的唯一公开投影；public v3 明示结构裁决的五态。"""
+    """服务记录的唯一公开投影；public v4 明示结构裁决的五态。"""
     novel_dir = paths.resolve_novel_dir(base, record.sid)
     structure = _structure_view(novel_dir, record)
     spawns = _spawns(base, record.sid)
@@ -320,16 +370,16 @@ def _planned(base: str | os.PathLike[str], sid: str) -> list[int] | None:
     return state.planned_chapters(ArtifactStore(ctx))
 
 
-def _read_raw(base: str | os.PathLike[str], sid: str) -> _ApprovalRecordV4:
+def _read_raw(base: str | os.PathLike[str], sid: str) -> _ApprovalRecordV5:
     paths.resolve_novel_dir(base, sid)
     p = _path(base, sid)
     if not p.is_file():
         return _fresh_record(sid, _planned(base, sid))
     try:
-        record = _ApprovalRecordV4.model_validate_json(p.read_text(encoding='utf-8'))
+        record = _ApprovalRecordV5.model_validate_json(p.read_text(encoding='utf-8'))
     except (OSError, UnicodeDecodeError, ValidationError) as exc:
         raise HumanEditProtected(
-            f'approval record is corrupt or is unsupported v1/v2/v3; '
+            f'approval record is corrupt or is unsupported v1/v2/v3/v4; '
             f'reset/backfill explicitly: {exc}') from exc
     if record.sid != sid:
         raise HumanEditProtected(
@@ -337,7 +387,7 @@ def _read_raw(base: str | os.PathLike[str], sid: str) -> _ApprovalRecordV4:
     return record
 
 
-def _read_current(base: str | os.PathLike[str], sid: str) -> _ApprovalRecordV4:
+def _read_current(base: str | os.PathLike[str], sid: str) -> _ApprovalRecordV5:
     record = _read_raw(base, sid)
     if not _path(base, sid).is_file():
         return record
@@ -346,10 +396,10 @@ def _read_current(base: str | os.PathLike[str], sid: str) -> _ApprovalRecordV4:
 
 
 def _write(
-    base: str | os.PathLike[str], record: _ApprovalRecordV4,
+    base: str | os.PathLike[str], record: _ApprovalRecordV5,
 ) -> ApprovalDoc:
     """审批落盘的**唯一落点**；冻结检查因此也只装在这里。"""
-    record = _ApprovalRecordV4.model_validate(record.model_dump())
+    record = _ApprovalRecordV5.model_validate(record.model_dump())
     _refuse_if_frozen(record.sid)
     p = _path(base, record.sid)
     p.parent.mkdir(parents=True, exist_ok=True)
@@ -365,7 +415,7 @@ def get(base: str | os.PathLike[str], sid: str) -> ApprovalDoc:
 
 
 def writing_is_current(base: str | os.PathLike[str], sid: str) -> bool:
-    """是否有一份绑定当前 Stage3 机械基线与 Stage4 计划的 Stage5 写作授权。"""
+    """是否有一份绑定当前 Stage1 正文、Stage4 计划与测量契约的写作授权。"""
     with _LOCK:
         try:
             if not _path(base, sid).is_file():
@@ -374,7 +424,7 @@ def writing_is_current(base: str | os.PathLike[str], sid: str) -> bool:
             record = _read_current(base, sid)
         except (NovelError, OSError, UnicodeDecodeError, ValidationError):
             return False
-        return bool(record.writing and record.gate['s3'] and record.gate['s4'])
+        return bool(record.writing and record.gate['s4'])
 
 
 def has_record(base: str | os.PathLike[str], sid: str) -> bool:
@@ -385,17 +435,22 @@ _GATE_ARTIFACTS = {
     's0': (STAGE0_REVISIONS,),
     's1': (STAGE1_MAIN_TEXT, STAGE1_HOOK_COPY),
     's2': (STAGE2_GLOBAL_GROUNDING, STAGE2_CHAPTER_BLUEPRINTS, STAGE2_GLOBAL_REVIEW),
-    's3': (STAGE3_STYLE_GROUNDING,),
     's4': (STAGE4_PLAN_CHAPTERS,),
     's6': (STAGE6_HOOK,),
     's7': (STAGE7_NAME_MAP,),
 }
 
-_GATE_ORDER = ('s0', 's1', 's2', 's3', 's4', 's5', 's6', 's7')
+_GATE_ORDER = APPROVAL_GATES
+_PRE_WRITING_GATES = ('s0', 's1', 's2', 's4')
+_POST_WRITING_GATES = ('s5', 's6', 's7')
+_LEGACY_GATE_ARTIFACTS = {
+    **_GATE_ARTIFACTS,
+    's3': (RETIRED_STAGE3_STYLE_GROUNDING,),
+}
 
 _GATE_REQUIREMENTS = {
-    's1': ('s0',), 's2': ('s1',), 's3': ('s1',), 's4': ('s2',),
-    's5': ('s3', 's4'), 's6': ('s5',), 's7': ('s6',),
+    's1': ('s0',), 's2': ('s1',), 's4': ('s2',),
+    's5': ('s4',), 's6': ('s5',), 's7': ('s6',),
 }
 
 _SEEN_ARTIFACTS = {
@@ -597,7 +652,7 @@ def _proof_for_structure(
 
 
 def _structure_view(
-    novel_dir: Path, record: _ApprovalRecordV4,
+    novel_dir: Path, record: _ApprovalRecordV5,
 ) -> StructureApprovalView:
     """即时投影当前结构态；失效只影响有效性，不擦掉历史决定。"""
     history = [
@@ -731,22 +786,59 @@ def _proof_for_legacy_depth(novel_dir: Path, deep: list[int]) -> _ApprovalProof:
     )
 
 
+def _require_legacy_stage3_fresh(novel_dir: Path) -> None:
+    """冻结 v2 只读解码 + 旧 consumed 复核；不把退役文件重新注册为当前产物。"""
+    store = _store_for(novel_dir)
+    rel = RETIRED_STAGE3_STYLE_GROUNDING
+    invalid = store.path(paths.invalid_of(rel))
+    if invalid.is_file():
+        raise GateBlocked(
+            f'{rel} 有未裁决的历史 INVALID 孪生，旧审批不能迁移',
+            invalid_path=str(invalid),
+            hint='保留历史证据；按当前流程重新审 Stage4 并授权写作',
+        )
+    try:
+        legacy = store.read_legacy_stage3_v2(rel)
+    except UpstreamMissing:
+        raise UpstreamMissing(f'{rel} 已不在盘上，旧 v4 写作授权不能对证迁移') from None
+    report = store.freshness_of_inputs(rel, legacy.provenance.inputs)
+    if report.state != 'fresh':
+        details = ', '.join(f'{edge.key}:{edge.reason}' for edge in report.edges)
+        raise ApprovalRequired(
+            f'{rel} 的旧来源已不是 fresh（{report.reason}；{details}），不能迁移写作授权')
+
+
 def _proof_for_legacy_writing(novel_dir: Path, deep: list[int]) -> _ApprovalProof:
+    _require_legacy_stage3_fresh(novel_dir)
     return _make_proof(
-        novel_dir, (STAGE3_STYLE_GROUNDING, STAGE4_PLAN_CHAPTERS),
+        novel_dir, (RETIRED_STAGE3_STYLE_GROUNDING, STAGE4_PLAN_CHAPTERS),
         {'kind': 'writing', 'deep': deep},
     )
 
 
 def _proof_for_writing(novel_dir: Path) -> _ApprovalProof:
     return _make_proof(
-        novel_dir, (STAGE3_STYLE_GROUNDING, STAGE4_PLAN_CHAPTERS),
+        novel_dir, (STAGE1_MAIN_TEXT, STAGE4_PLAN_CHAPTERS),
+        {
+            'kind': 'writing',
+            'scope': 'all_planned_chapters',
+            'contract': 'stage5-v3',
+            'measurement_contract': STYLE_MEASUREMENT_CONTRACT,
+        },
+    )
+
+
+def _proof_for_v4_writing(novel_dir: Path) -> _ApprovalProof:
+    """显式迁移时复核旧 v4 写作授权；现役路径不得再依赖 Stage3。"""
+    _require_legacy_stage3_fresh(novel_dir)
+    return _make_proof(
+        novel_dir, (RETIRED_STAGE3_STYLE_GROUNDING, STAGE4_PLAN_CHAPTERS),
         {'kind': 'writing', 'scope': 'all_planned_chapters', 'contract': 'stage5-v2'},
     )
 
 
 def _stage5_subject_rels(
-    base: str | os.PathLike[str], sid: str, record: _ApprovalRecordV4,
+    base: str | os.PathLike[str], sid: str, record: _ApprovalRecordV5,
 ) -> list[str]:
     _require_stage5_complete(base, sid, record)
     planned = _planned(base, sid)
@@ -762,7 +854,7 @@ def _stage5_subject_rels(
 
 
 def _proof_for_gate(
-    novel_dir: Path, gate: str, record: _ApprovalRecordV4,
+    novel_dir: Path, gate: str, record: _ApprovalRecordV5,
 ) -> _ApprovalProof:
     if gate == 's4':
         decision = record.structure_decision
@@ -807,7 +899,7 @@ def _same_proof(expected: _ApprovalProof | None, current: _ApprovalProof) -> boo
     return expected is not None and expected == current
 
 
-def _effective_record(novel_dir: Path, record: _ApprovalRecordV4) -> _ApprovalRecordV4:
+def _effective_record(novel_dir: Path, record: _ApprovalRecordV5) -> _ApprovalRecordV5:
     """Return the effective current projection without rewriting audit history."""
     seen = dict(record.seen)
     seen_proofs = dict(record.seen_proofs)
@@ -844,7 +936,7 @@ def _effective_record(novel_dir: Path, record: _ApprovalRecordV4) -> _ApprovalRe
             gates[gate] = False
             gate_proofs[gate] = None
 
-    for gate in _GATE_ORDER[:5]:
+    for gate in _PRE_WRITING_GATES:
         validate_gate(gate)
 
     writing = record.writing
@@ -857,7 +949,6 @@ def _effective_record(novel_dir: Path, record: _ApprovalRecordV4) -> _ApprovalRe
         if (
             current_writing is None
             or not _same_proof(writing_proof, current_writing)
-            or not gates['s3']
             or not gates['s4']
         ):
             writing = False
@@ -870,7 +961,7 @@ def _effective_record(novel_dir: Path, record: _ApprovalRecordV4) -> _ApprovalRe
         'gate_proofs': gate_proofs, 'seen_proofs': seen_proofs,
         'writing': writing, 'writing_proof': writing_proof,
     })
-    for gate in _GATE_ORDER[5:]:
+    for gate in _POST_WRITING_GATES:
         if not gates[gate]:
             continue
         if any(not gates[key] for key in _GATE_REQUIREMENTS.get(gate, ())):
@@ -896,14 +987,14 @@ def _effective_record(novel_dir: Path, record: _ApprovalRecordV4) -> _ApprovalRe
 
 def _require_artifacts(
     base: str | os.PathLike[str], sid: str, gate: str,
-    record: _ApprovalRecordV4,
+    record: _ApprovalRecordV5,
 ) -> _ApprovalProof:
     novel_dir = paths.resolve_novel_dir(base, sid)
     return _proof_for_gate(novel_dir, gate, record)
 
 
 def _require_stage5_complete(
-    base: str | os.PathLike[str], sid: str, record: _ApprovalRecordV4,
+    base: str | os.PathLike[str], sid: str, record: _ApprovalRecordV5,
 ) -> None:
     planned = _planned(base, sid)
     if planned is None:
@@ -999,7 +1090,7 @@ def approve_structure(
         if not all_accepted:
             writing = False
             writing_proof = None
-            for gate in _GATE_ORDER[5:]:
+            for gate in _POST_WRITING_GATES:
                 gates[gate] = False
                 gate_proofs[gate] = None
         return _write(base, record.model_copy(update={
@@ -1044,19 +1135,21 @@ def approve_gate(base: str | os.PathLike[str], sid: str, gate: str) -> ApprovalD
 def _legacy_gate_proof(novel_dir: Path, gate: str) -> _ApprovalProof:
     """用 v2 当年的 decision digest 重算 s0..s4，只给显式 backfill 对证。"""
     store = _store_for(novel_dir)
+    if gate == 's3':
+        _require_legacy_stage3_fresh(novel_dir)
     _require_typed_gate_decision(store, gate)
     return _make_proof(
-        novel_dir, list(_GATE_ARTIFACTS[gate]),
+        novel_dir, list(_LEGACY_GATE_ARTIFACTS[gate]),
         {'kind': 'gate', 'gate': gate, 'deep': None},
     )
 
 
 def _migrate_legacy_v2(
     base: str | os.PathLike[str], sid: str, legacy: _ApprovalRecordV2Legacy,
-) -> tuple[_ApprovalRecordV4, list[str]]:
+) -> tuple[_ApprovalRecordV5, list[str]]:
     """保守重签 v2。
 
-    只有能对上当前原文/产物的 s0～s3 proof 才保留。旧记录没有逐章 typed
+    只有能对上当前原文/产物的 s0～s2 proof 才保留。旧记录没有逐章 typed
     结构裁决，绝不据一个 s4 bool 推造 actor/reason/决定；s4、writing 与下游全清。
     """
     if legacy.sid != sid:
@@ -1080,7 +1173,7 @@ def _migrate_legacy_v2(
     gates = dict(record.gate)
     gate_proofs = dict(record.gate_proofs)
     backfilled: list[str] = []
-    for gate in _GATE_ORDER[:4]:
+    for gate in ('s0', 's1', 's2'):
         if not legacy.gate.get(gate):
             continue
         if any(not gates[key] for key in _GATE_REQUIREMENTS.get(gate, ())):
@@ -1114,8 +1207,8 @@ def _migrate_legacy_v2(
 
 def _migrate_legacy_v3(
     base: str | os.PathLike[str], sid: str, legacy: _ApprovalRecordV3Legacy,
-) -> tuple[_ApprovalRecordV4, list[str]]:
-    """显式把旧 v3 收成 v4；只能保留能对证的 s0～s3。"""
+) -> tuple[_ApprovalRecordV5, list[str]]:
+    """显式把旧 v3 收成 v5；只能保留能对证的 s0～s2。"""
     if legacy.sid != sid:
         raise HumanEditProtected(
             f'approval state belongs to {legacy.sid!r}, not requested novel {sid!r}')
@@ -1137,7 +1230,7 @@ def _migrate_legacy_v3(
     gates = dict(record.gate)
     gate_proofs = dict(record.gate_proofs)
     backfilled: list[str] = []
-    for gate in _GATE_ORDER[:4]:
+    for gate in ('s0', 's1', 's2'):
         if not legacy.gate.get(gate):
             continue
         if any(not gates[key] for key in _GATE_REQUIREMENTS.get(gate, ())):
@@ -1166,6 +1259,115 @@ def _migrate_legacy_v3(
     }), backfilled
 
 
+def _migrate_legacy_v4(
+    base: str | os.PathLike[str], sid: str, legacy: _ApprovalRecordV4Legacy,
+) -> tuple[_ApprovalRecordV5, list[str]]:
+    """显式把 v4 收成 v5；丢弃 s3，但保守重签仍绑定当前主体的决定。"""
+    if legacy.sid != sid:
+        raise HumanEditProtected(
+            f'approval state belongs to {legacy.sid!r}, not requested novel {sid!r}')
+    novel_dir = paths.resolve_novel_dir(base, sid)
+    record = _fresh_record(sid).model_copy(update={
+        'structure_history': legacy.structure_history,
+        'structure_decision': legacy.structure_decision,
+    })
+
+    seen = dict(record.seen)
+    seen_proofs = dict(record.seen_proofs)
+    for key in APPROVAL_SEEN:
+        if not legacy.seen.get(key):
+            continue
+        try:
+            current = _proof_for_seen(novel_dir, key)
+        except NovelError:
+            continue
+        if _same_proof(legacy.seen_proofs.get(key), current):
+            seen[key] = True
+            seen_proofs[key] = current
+
+    gates = dict(record.gate)
+    gate_proofs = dict(record.gate_proofs)
+    backfilled: list[str] = []
+    for gate in ('s0', 's1', 's2'):
+        if not legacy.gate.get(gate):
+            continue
+        if any(not gates[key] for key in _GATE_REQUIREMENTS.get(gate, ())):
+            continue
+        if gate == 's2' and not all(seen.values()):
+            continue
+        working = record.model_copy(update={
+            'gate': gates, 'gate_proofs': gate_proofs,
+            'seen': seen, 'seen_proofs': seen_proofs,
+        })
+        try:
+            current = _proof_for_gate(novel_dir, gate, working)
+        except NovelError:
+            continue
+        if _same_proof(legacy.gate_proofs.get(gate), current):
+            gates[gate] = True
+            gate_proofs[gate] = current
+            backfilled.append(gate)
+
+    if legacy.gate.get('s4') and gates['s2'] and legacy.structure_decision is not None:
+        try:
+            current_s4 = _proof_for_structure(
+                novel_dir, _public_structure_decision(legacy.structure_decision))
+        except NovelError:
+            current_s4 = None
+        if current_s4 is not None and _same_proof(legacy.gate_proofs.get('s4'), current_s4):
+            gates['s4'] = True
+            gate_proofs['s4'] = current_s4
+            backfilled.append('s4')
+
+    writing = False
+    writing_proof = None
+    if legacy.writing and gates['s4'] and legacy.gate.get('s3'):
+        try:
+            current_s3 = _legacy_gate_proof(novel_dir, 's3')
+            old_writing = _proof_for_v4_writing(novel_dir)
+        except NovelError:
+            current_s3 = old_writing = None
+        if (
+            current_s3 is not None
+            and old_writing is not None
+            and _same_proof(legacy.gate_proofs.get('s3'), current_s3)
+            and _same_proof(legacy.writing_proof, old_writing)
+        ):
+            writing = True
+            writing_proof = _proof_for_writing(novel_dir)
+
+    working = record.model_copy(update={
+        'gate': gates, 'gate_proofs': gate_proofs,
+        'seen': seen, 'seen_proofs': seen_proofs,
+        'writing': writing, 'writing_proof': writing_proof,
+    })
+    for gate in _POST_WRITING_GATES:
+        if not legacy.gate.get(gate):
+            continue
+        if any(not gates[key] for key in _GATE_REQUIREMENTS.get(gate, ())):
+            continue
+        if gate == 's5' and not writing:
+            continue
+        try:
+            current = _proof_for_gate(novel_dir, gate, working)
+        except NovelError:
+            continue
+        if not _same_proof(legacy.gate_proofs.get(gate), current):
+            continue
+        gates[gate] = True
+        gate_proofs[gate] = current
+        backfilled.append(gate)
+        working = working.model_copy(update={
+            'gate': gates, 'gate_proofs': gate_proofs,
+        })
+
+    return record.model_copy(update={
+        'gate': gates, 'gate_proofs': gate_proofs,
+        'seen': seen, 'seen_proofs': seen_proofs,
+        'writing': writing, 'writing_proof': writing_proof,
+    }), backfilled
+
+
 def backfill_from_disk(
     base: str | os.PathLike[str], sid: str,
 ) -> ApprovalBackfillResult:
@@ -1188,17 +1390,22 @@ def backfill_from_disk(
                 raise HumanEditProtected(
                     f'approval record cannot be read for explicit backfill: {exc}') from exc
             try:
-                legacy_v3 = _ApprovalRecordV3Legacy.model_validate_json(raw)
+                legacy_v4 = _ApprovalRecordV4Legacy.model_validate_json(raw)
             except ValidationError:
                 try:
-                    legacy_v2 = _ApprovalRecordV2Legacy.model_validate_json(raw)
-                except ValidationError as exc:
-                    raise HumanEditProtected(
-                        'approval record cannot be explicitly backfilled as v2/v3: '
-                        f'{exc}') from exc
-                record, migrated_gates = _migrate_legacy_v2(base, sid, legacy_v2)
+                    legacy_v3 = _ApprovalRecordV3Legacy.model_validate_json(raw)
+                except ValidationError:
+                    try:
+                        legacy_v2 = _ApprovalRecordV2Legacy.model_validate_json(raw)
+                    except ValidationError as exc:
+                        raise HumanEditProtected(
+                            'approval record cannot be explicitly backfilled as v2/v3/v4: '
+                            f'{exc}') from exc
+                    record, migrated_gates = _migrate_legacy_v2(base, sid, legacy_v2)
+                else:
+                    record, migrated_gates = _migrate_legacy_v3(base, sid, legacy_v3)
             else:
-                record, migrated_gates = _migrate_legacy_v3(base, sid, legacy_v3)
+                record, migrated_gates = _migrate_legacy_v4(base, sid, legacy_v4)
             migrated = True
         novel_dir = paths.resolve_novel_dir(base, sid)
         gates = dict(record.gate)
@@ -1295,9 +1502,8 @@ def begin_writing(
         record = _read_current(base, sid)
         novel_dir = paths.resolve_novel_dir(base, sid)
         _require_stage5_contract_compatible(novel_dir, action='授权新作业')
-        if not record.gate['s3'] or not record.gate['s4']:
-            raise ApprovalRequired(
-                'stage3 mechanical baseline and stage4 plan must be approved first')
+        if not record.gate['s4']:
+            raise ApprovalRequired('current typed stage4 plan must be approved first')
         planned = _planned(base, sid)
         if planned is None:
             raise UpstreamMissing(f'{STAGE4_PLAN_CHAPTERS} is required before writing')

@@ -3,8 +3,8 @@
 """
 stage2.py —— S-05「全局设定」那一屏（`GET /api/novels/:sid/stage2/global`）。
 
-【与 S-06（`views/stage3.py`）的分界】那一屏有「左半边」（实测量的是 stage1，
-产物在不在都算得出来）⇒ 产物缺席是 `exists=False` 的 200。
+【与已退役机械基线页的历史分界】旧页曾有「左半边」（实测量的是 stage1，
+产物在不在都算得出来）；当前机械测量已归 Stage5/6 即时计算。
 **本屏没有左半边**：stage2 没跑就没有任何东西可看 ⇒ 产物不在盘上是 **404**
 （`UpstreamMissing`），读不回来是 409（`ArtifactUnreadable`）。
 
@@ -234,7 +234,7 @@ def reading_view(base: str | os.PathLike[str], sid: str, ordinal: int) -> Readin
 
 
 def _blueprint_of(store: ArtifactStore, ordinal: int):
-    """这一章的蓝图条目与整份来源账。**仍然 `try`**（TOCTOU，同 `views/stage3._load`）。
+    """这一章的蓝图条目与整份来源账。**仍然 `try`**（防 TOCTOU：同一请求中盘面可能变化）。
 
     返回 `(Blueprint|None, BlueprintProvenance|None)`——条目不在时来源账也不发
     （半份产物比没有更误导）。

@@ -77,8 +77,8 @@
 有效调用永久锁死。恢复路必须按当前判据重算派生结论，通过后再提升；不能直接把旧结论换个
 文件名，也不能覆盖仍可用的正式稿。
 
-落点：`novel/store.py` 以及 stage2、stage4、stage6、stage7 的提升路径。Stage3 v2 已改为
-免费全量重建，不再生产 `.INVALID`，因此不再属于本条的现役提升面。
+落点：`novel/store.py` 以及 stage2、stage4、stage6、stage7 的提升路径。机械测量现已折叠进
+Stage5/6 的即时消费，不写 artifact，因此不属于本条的现役提升面。
 
 ## 10. 生成、归一化、人工写回和提升必须共享同一把尺子
 
@@ -211,7 +211,7 @@ TypeScript 可以约束 mock 与 real 实现满足同一接口，却不能证明
 实测过一次代价：静态读代码把 `tests/test_wontfix_semantic.py` 那 11 条判成「沙箱缺料」，
 而真实异常是 `UpstreamStale`（语料链条过期），两者的修法完全不同。
 
-落点：`novel/stages/stage3/style.py::judge_with`、`tests/corpus.py::requires_current`、
+落点：`novel/store.py::_project_current`、`tests/corpus.py::requires_current`、
 `tests/test_stage5_measure.py`。
 
 ## 22. 同一份数据的两种形态是一处静默失效点，而两侧的判据会一起变绿
@@ -260,7 +260,7 @@ TypeScript 可以约束 mock 与 real 实现满足同一接口，却不能证明
 自己也要有一条守卫**：它错了的后果不是红，是整批用例一起失去判别力。
 
 落点：`contracts/schema/__init__.py::decode_artifact` 与模块头【版本】、
-`tests/test_artifact_versions.py`（`_concrete` 与它的前提守卫、30 份产物 × 8 种非法标记）。
+`tests/test_artifact_versions.py`（`_concrete` 与它的前提守卫、注册表全部产物 × 8 种非法标记）。
 
 ## 24. 用替身测「组装」时，「送达」就没有人测了
 

@@ -463,61 +463,6 @@ export interface GlobalReviewDecisionSet {
   decisions: GlobalReviewDecision[]
 }
 
-/* ---------------------------------------------------------------- stage3 */
-
-export interface StyleBodyMetrics {
-  chars: number
-  paragraphs: number
-  sentences: number
-  avg_paragraph_chars: number
-  paragraph_sep_chars: number
-  avg_sentence_chars: number
-  dialogue_ratio: number | null
-  dialogue_ratio_applicable: boolean
-  quote_styles: string[]
-  chapter_chars?: { min: number; max: number; avg: number } | null
-  per_chapter_avg_sentence?: { min: number; max: number } | null
-  [k: string]: unknown
-}
-
-export interface StyleMeasured {
-  body: StyleBodyMetrics
-  hook: StyleBodyMetrics
-}
-
-/** 一项实测漂移（具名对象，不是三元组）。`（缺）` 是特殊值：少一个键也算漂移。 */
-export interface DriftItem {
-  key: string
-  stored: number | string | string[] | null
-  now: number | string | string[] | null
-}
-
-export interface Stage3Style {
-  sid: string
-  title: string
-  /** false = stage3 还没跑。左半边（实测）仍然有内容。 */
-  exists: boolean
-  /** 后端已经折叠好优先级；界面不从下面三个原始事实再判一次。 */
-  condition: 'missing' | 'ready' | 'invalid' | 'unreadable'
-  invalid_exists: boolean
-  /** 三态：null = 产物不在盘上，「读不读得回来」无从谈起 */
-  readable: boolean | null
-  measurable_stored: StyleMeasured | null
-  bands_stored: Record<string, string> | null
-  _provenance: Provenance | null
-  hook_copy_text: string | null
-  measured_now: StyleMeasured | null
-  bands_now: Record<string, string> | null
-  measure_error: string | null
-  /** 异常类名（id 不是措辞）：UpstreamMissing = 先跑 stage1；ArtifactUnreadable = 去看那份产物 */
-  measure_error_kind: string | null
-  /** `[]` = 比过了没漂移；`null` = 有一边算不出来，无从比 */
-  drift: DriftItem[] | null
-  freshness: Freshness
-  reason: string
-  ghosts: string[]
-}
-
 /* ---------------------------------------------------------------- stage4 */
 
 export interface FactRef {
@@ -1059,12 +1004,11 @@ export interface CheckReport {
   counts: { ok: number; hit: number; unver: number; skipped: number }
 }
 
-/** 与服务端 `STAGES` 逐值相等（stage0~stage7）。 */
+/** 与服务端 `STAGES` 逐值相等；Stage3 已退役，编号保留空洞。 */
 export type CheckKind =
   | 'stage0'
   | 'stage1'
   | 'stage2'
-  | 'stage3'
   | 'stage4'
   | 'stage5'
   | 'stage6'
@@ -1074,7 +1018,6 @@ export const CHECK_KINDS: CheckKind[] = [
   'stage0',
   'stage1',
   'stage2',
-  'stage3',
   'stage4',
   'stage5',
   'stage6',

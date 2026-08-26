@@ -502,9 +502,8 @@ def test_the_service_process_cannot_spend_money():
 
     ⚠ 这也是 `novel/api/errors.py` 里 `UNREACHABLE_OVER_HTTP` 那张表成立的前提：
     LLM 那一族异常越不过 HTTP 边界，因为它们只在子进程里抛。
-    ⚠ 查的是**直接** import：`novel/views/stage3.py` 经 `novel.stages.stage3.style`
-    传递地够得到 `novel.llm.client`（那个模块要它跑付费路）。传递闭包这条守不住，
-    而**主保证是调用面**——E 期没有一条端点会构造 `LlmClient`。
+    ⚠ 查的是**直接** import；传递闭包会把共享的运行时工具一并算进来，无法准确表达
+    “服务能否发起付费请求”。**主保证是调用面**——没有一条端点会构造 `LlmClient`。
     """
     bad = []
     for p in _api_files() + _view_files():
@@ -517,13 +516,9 @@ def test_the_service_process_cannot_spend_money():
 def test_the_view_layer_cannot_reach_the_judgement_layer():
     """⭐ `R-11.4` 的第二道：视图层够不到判官，于是**顺手 `build()` 一份报告**做不到。
 
-    ⚠⚠ **说清这道守卫的边界，免得读的人高估它**：`novel/views/stage3.py`
-    import 了 `novel.stages.stage3.style`，而那个模块自己 import 了 `novel.report`
-    ——所以「够不到」在**传递闭包**上并不成立，本条查的是**直接** import。
-    ⇒ `R-11.4` 在这一层的**主保证是类型**：`contracts/schema/api.py::StyleView`
-    里根本没有 `badge` / `passed` / `counts` 这几个格子
-    （`test_schema_api.py::test_the_api_models_never_carry_a_verdict` 钉着），
-    **视图没有地方放一个判定**。
+    ⚠⚠ **说清这道守卫的边界，免得读的人高估它**：本条只查**直接** import，
+    因为共享运行时工具可能传递地接触报告层。`R-11.4` 的另一道保证是 API 类型中
+    不为普通视图提供 `badge` / `passed` / `counts`（由 schema API 回归钉住）。
     """
     judge = ('novel.report', 'contracts.judges')
     bad = [(_rel(p), sorted(m for m in _full_imports(p) if m.startswith(judge)))
@@ -780,7 +775,7 @@ def test_the_cli_drift_scan_actually_finds_something():
         f'只扫到 {len(refs)} 个「CLI 点名 stage 模块符号」的配对（曾实测 66）——'
         f'`_stage_aliases` 多半没认出 CLI 现在的 import 写法')
     fns = {fn for _, _, _, fn in refs}
-    assert len(fns) >= 9, f'只覆盖到 {sorted(fns)}——八层派发函数应该都在里面'
+    assert len(fns) >= 8, f'只覆盖到 {sorted(fns)}——七个现役层的派发函数应该都在里面'
 
 
 # ───────────────── 跨模块「返回元数」漂移 ─────────────────

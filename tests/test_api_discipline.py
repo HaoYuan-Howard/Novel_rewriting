@@ -170,10 +170,10 @@ def test_no_read_only_response_carries_a_verdict():
     box = sandbox.Sandbox(sandbox.books_with_stage3()[0])
     try:
         with TestClient(create_app(box.root)) as c:
-            style = c.get(f'/api/novels/{box.sid}/stage3/style').json()
-            assert not ({'badge', 'passed', 'counts'} & set(style)), \
-                'S-06 那一屏带上了判定——那是第二个判官'
-            report = c.get(f'/api/novels/{box.sid}/check/stage3').json()
+            view = c.get(f'/api/novels/{box.sid}/stage2/global').json()
+            assert not ({'badge', 'passed', 'counts'} & set(view)), \
+                'Stage2 读屏带上了判定——那是第二个判官'
+            report = c.get(f'/api/novels/{box.sid}/check/stage2').json()
             assert {'badge', 'passed', 'counts'} <= set(report), \
                 '守卫的守卫：判定该出现的那一份里也没有，说明本条在查一个空响应'
     finally:

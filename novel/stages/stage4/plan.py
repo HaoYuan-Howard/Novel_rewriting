@@ -7,7 +7,7 @@ plan.py —— Stage4 v4 的三个节点。**两次付费调用、一次确定�
   · `stage4.plan`（付费，`R-5`）  → `stage4/evidence_binding.json` + 编译计划
   · `stage4.context`（0 成本，`R-6`）→ `stage4/writer_context.json`
 
-【落盘闸门照 stage3 不照 stage6】本层一次产**一份** ⇒ **任何一条 hard 就 `.INVALID`**。
+【落盘闸门照退役 Stage3 的成例，不照 stage6】本层一次产**一份** ⇒ **任何一条 hard 就 `.INVALID`**。
 （stage6 一次产三条候选，拦的是「一条干净候选都没有」。）配套 `--revalidate`。
 
 ⚠⚠ **`writer_context._provenance.inputs` 里那条 `stage4/plan_chapters.json` 是全仓
@@ -286,7 +286,7 @@ def run_check_only(ctx: RunContext) -> CheckReport:
     它的 `plan_chapters.json` 根本没有 `_provenance`，因为 0 成本提升路把来源账整个丢了。
     **不许静默降级成一份「PASS」**：那份产物存在的意义就是提醒人这条路会丢账。
 
-    ⚠⚠ **正式稿不在时判活动 `.INVALID`**（照 stage3 的成例）。首跑就被落盘闸拦下时
+    ⚠⚠ **正式稿不在时判活动 `.INVALID`**（照退役 Stage3 的成例）。首跑就被落盘闸拦下时
     盘上只有 `.INVALID`，而本层的 `.INVALID` **不带 findings**（schema 里没有这个字段）
     ⇒ 此前那一刻全链没有任何只读入口能拿到「错在哪几条」：终态只给 rule id，
     `--check-only` 直接 exit 2，人只能回去读 `checks.py` 自己复算判据。

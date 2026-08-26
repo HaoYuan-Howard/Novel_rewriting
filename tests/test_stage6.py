@@ -8,7 +8,7 @@ import pytest
 from contracts.invariants import slot_of
 from contracts.rules import REGISTRY
 from contracts.schema.stage6 import ApprovedHook, Hook
-from novel.core.measure import measure
+from novel.core.measure import hook_style_metrics, measure
 from novel.run import RunContext
 from novel.stages.stage6 import checks, hook, prompts
 from novel.store import ArtifactStore
@@ -18,7 +18,7 @@ from tests.markers import corpus_params
 
 #: 一条 stage6 纵切跑起来要的五份。
 STAGE6_INPUTS = ('stage1/hook_copy.json', 'stage2/global_grounding.json',
-                 'stage3/style_grounding.json', 'stage4/writer_context.json',
+                 'stage4/writer_context.json',
                  'stage6/hook.json')
 
 
@@ -605,17 +605,13 @@ def test_prompt_carries_source_full_story_and_minimal_hook_mechanical(box):
     packet = _packet_of(user)
     source = sandbox.cut(box.book, 'stage1/hook_copy.json')
     gg = sandbox.cut(box.book, 'stage2/global_grounding.json')
-    style = sandbox.cut(box.book, 'stage3/style_grounding.json')
     assert packet['source_hook'] == source['text'].strip()
     assert mat.source_hook == source['text'].strip()
     assert gg['arc'] == mat.story_truth['arc'] == packet['story_truth']['arc']
     for value in (gg['arc'].get('climax'), gg['arc'].get('ending')):
         if value:
             assert value in user, '全书兑现没有真正下发，payoff_preview 仍会闭卷写作'
-    hook_meas = style['measurable']['hook']
-    expected = {key: hook_meas.get(key) for key in (
-        'chars', 'avg_sentence_chars', 'avg_paragraph_chars',
-        'quote_styles', 'dialogue_ratio')}
+    expected = hook_style_metrics(measure(source['text'].strip()))
     assert packet['source_hook_mechanical'] == mat.hook_mechanical == expected
     assert 'style' not in packet and 'measurable' not in packet
     assert packet['whole_story_map'] == list(mat.story_map) and len(mat.story_map) >= 1
@@ -663,7 +659,6 @@ def test_paid_hook_prompt_excludes_global_source_spans(monkeypatch):
 
     stored = {
         hook.GLOBAL_GROUNDING: Dumped(grounding),
-        hook.STYLE_GROUNDING: Dumped(factories.stage3_artifact()),
         hook.WRITER_CONTEXT: Dumped(seed.ctx),
         hook.HOOK_COPY: SimpleNamespace(text='原作开篇文案。'),
     }

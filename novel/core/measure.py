@@ -3,18 +3,19 @@
 """
 measure.py —— 机械层：一段文本的可测风格数字。**确定性，0 成本。**
 
-【`R-4.1`：形态数字由代码算，不是 LLM 产】Stage3 v2 免费保存完整测量；Stage5/6
-各自只消费精确机械投影，`bands()` 仅提供纯派生的人读/提示档位。
+【`R-4.1`：形态数字由代码算，不是 LLM 产】Stage5/6 从各自已经读取的 Stage1
+文本即时计算精确机械投影；`bands()` 仅提供纯派生的人读/提示档位。
 
-⚠ 本模块的每一个 `round()` 都是契约的一部分：`--check-only` 拿「照盘上 stage1 重算」
-与产物里存的逐项比，两边走同一个 `round()` 所以**直接判等，不需要容差**。
-改一处小数位就是一次测量契约改版；旧 v2 仍可读，但 freshness 会判 stale，
-复检也会报 `measurable_drift`。
+⚠ 本模块的每一个 `round()` 都是契约的一部分。改一处小数位就是一次测量契约
+改版；`STYLE_MEASUREMENT_CONTRACT` 必须同步变化，让 Stage5/6 的 Stage1 消费边
+诚实地判 stale。
 """
 from __future__ import annotations
 
 from contracts.schema.stage1 import MainText
-from contracts.schema.stage3 import ChapterCharStats, MeasurableBlock, MeasurableBody, PerChapterSentence
+from contracts.schema.measurement import (
+    ChapterCharStats, MeasurableBlock, MeasurableBody, PerChapterSentence,
+)
 from novel.core.text import QUOTE_STYLES, SENT_END
 from novel.errors import ArtifactUnreadable
 
@@ -49,7 +50,6 @@ def measure(text: str | None) -> MeasurableBlock | None:
         avg_sentence_chars=round(n_chars / n_sent, 1),
         # 无引号对白体（大鱼/温意那类）对话比**不可信** → 标 `None`，不进任何一致性判断。
         dialogue_ratio=(round(dialogue_chars / n_chars, 3) if styles else None),
-        dialogue_ratio_applicable=bool(styles),
         quote_styles=styles,
     )
 
@@ -81,34 +81,35 @@ def measure_body(main_text: MainText) -> MeasurableBody:
     )
 
 
-def flatten(block: MeasurableBlock | MeasurableBody | None) -> dict[str, object]:
-    """一个 scope 摊平成 `{键: 值}`，好逐项比。
+def body_style_metrics(body: MeasurableBody) -> dict[str, object]:
+    """Stage5 真正消费的正文机械面。
 
-    ⚠ `quote_styles` 是 list，**转成 tuple 才比得稳**（list 不可 hash、且两次读盘
-    可能给出不同的对象）。
+    ``dialogue_ratio_applicable`` 不再是可独立持久化的事实：它严格由
+    ``dialogue_ratio is not None`` 派生。保留这个运行时键只为不改变现有 prompt 与
+    判据接口；它不再可能与比例字段形成互相矛盾的合法状态。
     """
-    out: dict[str, object] = {}
+    return {
+        'avg_sentence_chars': body.avg_sentence_chars,
+        'avg_paragraph_chars': body.avg_paragraph_chars,
+        'paragraph_sep_chars': body.paragraph_sep_chars,
+        'dialogue_ratio_applicable': body.dialogue_ratio is not None,
+        'dialogue_ratio': body.dialogue_ratio,
+        'quote_styles': list(body.quote_styles),
+        'chapter_chars': {'avg': body.chapter_chars.avg},
+        'per_chapter_avg_sentence': {
+            'min': body.per_chapter_avg_sentence.min,
+            'max': body.per_chapter_avg_sentence.max,
+        },
+    }
 
-    def walk(d: dict, prefix: str = '') -> None:
-        for k, v in (d or {}).items():
-            if isinstance(v, dict):
-                walk(v, f'{prefix}{k}.')
-            else:
-                out[prefix + k] = tuple(v) if isinstance(v, list) else v
-
-    walk(block.model_dump() if block is not None else {})
-    return out
-
-
-def drift(stored: MeasurableBlock | MeasurableBody | None,
-          now: MeasurableBlock | MeasurableBody | None) -> list[tuple[str, object, object]]:
-    """`(产物里存的, 照现在的 stage1 重算的)` → `[(键, 存的, 现算的)]`。
-
-    ⚠ 两边摊平后取**并集**比：**少一个键也算漂移**——老产物缺 `paragraph_sep_chars`
-    正是 F-054 那一例（下游拿 budget 直接除以 `avg_paragraph_chars`，段落目标系统性高 14%）。
-    两边的数都走同一个 `round()`，所以直接判等即可，**不需要容差**。
-    """
-    a, b = flatten(stored), flatten(now)
-    missing = '（缺）'
-    return [(k, a.get(k, missing), b.get(k, missing))
-            for k in sorted(set(a) | set(b)) if a.get(k, missing) != b.get(k, missing)]
+def hook_style_metrics(hook: MeasurableBlock | None) -> dict[str, object]:
+    """Stage6 真正消费的文案五叶机械面。空文案返回空映射，由调用方显式终止。"""
+    if hook is None:
+        return {}
+    return {
+        'chars': hook.chars,
+        'avg_sentence_chars': hook.avg_sentence_chars,
+        'avg_paragraph_chars': hook.avg_paragraph_chars,
+        'quote_styles': list(hook.quote_styles),
+        'dialogue_ratio': hook.dialogue_ratio,
+    }

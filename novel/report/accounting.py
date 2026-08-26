@@ -4,8 +4,8 @@
 accounting.py —— 记账键的出口。**一张会炸的表。**
 
 【它存在的那一句话】`Q-1`：**记账不是终点，报出来才是。**
-历史原型 13 个记账键里曾有 6 个 0 出口；本表由那次事故建立。Stage3 v2 已删除
-LLM attempt / repair / INVALID 提升面，只留下免费机械 provenance，因此不再声明那三笔历史账。
+历史原型 13 个记账键里曾有 6 个 0 出口；本表由那次事故建立。Stage3 已整层退役，
+旧机械 provenance 只由 legacy 读取面解释，因此不在当前声明表占一行。
 
 【三条判定，各消灭一种已发生的故障】见 `docs/schema/_report.md` §六：
   · 产地记了而表里没有 ⇒ **`AccountingKeyUnregistered`**（记了一笔谁也读不到的账）
@@ -34,7 +34,7 @@ class AccountingSpec:
 #: **每层声明自己有哪些记账键。** 唯一落点。
 #:
 #: ⚠ 空元组与「这一层不在表里」**不是一回事**：前者是「这层声明过，它没有记账键」，
-#: 后者会让 `build_accounting` 把该层的任何一笔账都判成未登记。八层都要有一行。
+#: 后者会让 `build_accounting` 把该层的任何一笔账都判成未登记。当前七层都要有一行。
 ACCOUNTING: dict[str, tuple[AccountingSpec, ...]] = {
     'stage0': (),
     'stage1': (),
@@ -63,10 +63,8 @@ ACCOUNTING: dict[str, tuple[AccountingSpec, ...]] = {
                        '（`extraction-ir-v1` 专属；失败态 hinge 不带短语，'
                        '这笔账是字段级修复唯一不依赖 LLM cache 的输入）'),
     ),
-    # Stage3 v2 无 LLM attempt、repair、INVALID 提升或人工编辑账；空元组是显式声明。
-    'stage3': (),
     # ⚠ **刻意不声明 `partial_rewrite`**：本层没有一条 0 成本路会把计划改成混版的
-    #    （`--identity` 写的是另一份文件、`--apply-edit` 落的是新一轮）。
+    #    （`--identity` 只作内存诊断、`--apply-edit` 落的是新一轮）。
     #    声明一个结构上永远记不上的键，只会让报告上恒挂一行「未记录」。
     'stage4': (
         AccountingSpec('revalidated', '这份稿是跑出来的，还是被重判提升上来的？'),
@@ -139,7 +137,7 @@ def build_accounting(stage: str, recorded: dict[str, Any]) -> list[AccountingLin
     """
     if stage not in ACCOUNTING:
         raise AccountingKeyUnregistered(
-            f'{stage} 在 ACCOUNTING 里没有一行。八层都要有一行——'
+            f'{stage} 在 ACCOUNTING 里没有一行。当前七层都要有一行——'
             f'「这层没有记账键」要写成空元组，那与「这层没被声明过」不是一回事'
         )
     spec = ACCOUNTING[stage]

@@ -11,9 +11,9 @@
  * 一份文档、一次写、一个生命周期。
  */
 
-export type GateKey = 's0' | 's1' | 's2' | 's3' | 's4' | 's5' | 's6' | 's7'
+export type GateKey = 's0' | 's1' | 's2' | 's4' | 's5' | 's6' | 's7'
 
-export const GATE_KEYS: GateKey[] = ['s0', 's1', 's2', 's3', 's4', 's5', 's6', 's7']
+export const GATE_KEYS: GateKey[] = ['s0', 's1', 's2', 's4', 's5', 's6', 's7']
 
 /** stage2 有两屏，两屏都要看过才能确认 */
 export type SeenKey = 'read' | 'global'
@@ -55,7 +55,7 @@ export interface StructureApprovalView {
 }
 
 export interface ApprovalDoc {
-  v: 3
+  v: 4
   sid: string
   gate: Record<GateKey, boolean>
   seen: Record<SeenKey, boolean>

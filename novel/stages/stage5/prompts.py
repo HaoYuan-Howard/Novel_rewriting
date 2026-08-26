@@ -385,7 +385,7 @@ def chapter_directive(entry: dict[str, Any], book: M.Book) -> str:
 
 
 def shape_block(book: M.Book) -> str:
-    """Stage3 正文九叶机械投影派生的五项档位；不接定性画像与文案实测。
+    """Stage1 正文即时测量投影派生的五项档位；不接定性画像与文案实测。
 
     ⚠ 档位词来自 ``Book.band_of``，即下发面与判据共用的生产落点；这里不重算阈值。
     原始句段均值、对白比和引号体分别由篇幅块与对白块下发，避免同一个数字多份措辞。
@@ -440,7 +440,7 @@ def writer_chars(entry: dict[str, Any], book: M.Book) -> list[dict[str, str]]:
     """人物表投影：写手只需要**叫什么**和**是谁**，而且只需要**本章已经存在的那些人**。
 
     ⚠ `name_distinctiveness` 的消费方是**确定性代码**（`Book.names` / `Book.name_stems` /
-    stage3 的专名泄漏过滤），写手这边 prompt 里从没定义过这个枚举是什么意思，
+    Stage5 专名泄漏过滤），写手这边 prompt 里从没定义过这个枚举是什么意思，
     整份 JSON 发过去只是噪声 ⇒ **按消费方投影，不是删**。
 
     `entry['characters']` 是 Stage4 生成的章级可见名册；这里不读取全书名册，避免把尚未

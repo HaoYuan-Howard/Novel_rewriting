@@ -61,7 +61,7 @@ OVERVIEW_VERDICT: Final = (
 #:
 #: ⚠ `consumed_undeclared` 与 `match` 的差别是本项目最容易被顺手抹平的一条：
 #: 「本节点没声明自己读了哪些字段」**不是**「我读的东西没变」。**建槽位，不填槽位**——
-#: 八层逐步补投影，在补上之前那条边诚实地是 `unknown`。
+#: 七个现役层逐步补投影，在补上之前那条边诚实地是 `unknown`。
 FRESHNESS_REASON: Final = (
     'no_provenance',        # 这份产物根本没有来源账 ⇒ unknown（**永不 fresh**）
     'no_inputs',            # 有来源账，但 inputs 缺失或为空 ⇒ unknown
@@ -143,9 +143,9 @@ INBOX_KIND: Final = (
 )
 
 #: 结论的根因**第一嫌疑**层。`corpus` = 原文自身如此，没有可修复的流水线阶段。
-#: Stage 0~7 均可拥有本层结论；这也是 `Finding.owner` 的完整取值面。
+#: 当前产物层均可拥有本层结论；这也是 `Finding.owner` 的完整取值面。
 OWNER: Final = (
-    'stage0', 'stage1', 'stage2', 'stage3', 'stage4', 'stage5', 'stage6', 'stage7', 'corpus',
+    'stage0', 'stage1', 'stage2', 'stage4', 'stage5', 'stage6', 'stage7', 'corpus',
 )
 
 #: `docs/BACKEND_CONTRACT.md` 的「谁在查」那一列的**取值面**。
@@ -289,7 +289,7 @@ APPROVAL_STATE: Final = ('pending', 'approved')
 
 # Human workflow checkpoints kept under Output/_service. These are service
 # state, not Stage0 current approval fields.
-APPROVAL_GATES: Final = ('s0', 's1', 's2', 's3', 's4', 's5', 's6', 's7')
+APPROVAL_GATES: Final = ('s0', 's1', 's2', 's4', 's5', 's6', 's7')
 APPROVAL_SEEN: Final = ('read', 'global')
 
 #: Stage4 v4 的章级结构决定。`retain` 是一次显式设计决定，不是“模型忘了改”；
@@ -993,16 +993,15 @@ STOP_REWRITE_AFTER: Final = 2
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 七、机械基线（stage3）
+# 七、即时机械测量（不是 stage / node / 产物）
 # ─────────────────────────────────────────────────────────────────────────────
 
-#: Stage3 确定性测量算法的显式契约版本。
+#: Stage5/6 共用的确定性测量算法显式契约版本。
 #:
-#: 这不是 JSON 信封的 schema version：信封 v2 回答「字段形状破坏过几次」，本值回答
-#: 「同一形状里的数字按哪一版算法计算」。测量算法或口径变化时先升本值；
-#: `novel.consumption.stage3_main_text` 把它并入 consumed 投影，因此存量机械基线会被
-#: freshness 判 stale，而不是继续拿旧数字冒充当前测量。
-STAGE3_MEASUREMENT_CONTRACT: Final = 'stage3-measurable-v1'
+#: 它不对应 JSON 信封，只回答「这些数字按哪一版算法计算」。测量算法或口径变化
+#: 时先升本值；Stage5/6 的 Stage1 consumed 投影把它并入指纹，因此既有下游会
+#: 诚实地判 stale，而不是继续拿旧算法的数字冒充当前测量。
+STYLE_MEASUREMENT_CONTRACT: Final = 'stage3-measurable-v1'
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1232,7 +1231,6 @@ FREE_ENTRIES: Final = {
     '--check-only': '按当前判据复检存量产物，纯读不写盘；报 FAIL 退出码非零',
     '--recheck': '按当前判据重判存量产物并写回指标',
     '--revalidate': '按当前判据对 .INVALID 稿做 0 LLM 同轮重判，必填 actor/reason 并留不可变审计，合格才提升',
-    '--measure-only': '只跑确定性实测并报出来，不写盘；写回直接免费重跑节点默认路径',
     '--renormalize': '按当前契约重算代码派生字段与原文定位',
     '--names-only': '只产逐章可用名册（stage4），不产计划',
     '--identity': '恒等基线：拿原作自己的东西跑整套判据，看判据有没有把合法情况排除在外',
@@ -1296,8 +1294,8 @@ REVALIDATE_ONLY_NEW_ERRORS: Final = True
 #: ⚠ **`--revalidate` 不在这里**：提升路改的是**状态**（`.INVALID` → 正式稿），
 #: 内容一个字没动，它有自己的键 `revalidated`。两件事。
 #:
-#: ⚠ **`--identity` 只对 stage7 成立**：stage6 的 `--identity` 只打印当前恒等读数、
-#: **不写盘**。Stage3 v2 已是整份免费机械产物，不再需要局部重写标记。
+#: ⚠ **`--identity` 只对 stage7 成立**：stage4 / stage6 的 `--identity` 只打印
+#: 当前恒等读数，**不写盘**。
 #: 同一个 flag 在两层行为不同，
 #: 这条已经登记在 `WRITE_EFFECTS` 上方那段注释里——本表按 flag 索引，
 #: 而它收的是「**这条路要是写了盘，那份产物就是混版的**」，对两层都不说假话。
@@ -1393,10 +1391,9 @@ VALUED_FLAGS: Final = {
 #: 已经核实的节点特例放在下方 `NODE_WRITE_EFFECTS`；没登记的其余
 #: 节点仍由 `write_effect` 保守判为会写。
 WRITE_EFFECTS: Final = {
-    # ── 只看不动的四条（`FREE_ENTRIES` 自述「不写盘」）──
+    # ── 只看不动的入口（`FREE_ENTRIES` 自述「不写盘」）──
     '--dry-run': '',
     '--check-only': '',
-    '--measure-only': '',
     # ⚠ **它一个字节都不写**（原型只 `print` 逐章名册），而本表**默认按会写算** ⇒
     #   不登记的后果是**方向反的**：`/api/enums` 上它会被派生成
     #   「写 `stage4/plan_chapters.json`」——**那是系统在对用户说假话**
@@ -1561,7 +1558,7 @@ NODES: Final[dict[str, NodeSpec]] = {
     # ⚠ `--apply-edit` 是 TODO-05 补的，而它补的是一个**契约内的空洞**：
     #   `reader_reveal_events` / 知情人 / secret 事实抽错时，此前唯一的路是手改产物
     #   ——没有 schema 管形状，来源账上也留不下「这是人改的」。
-    #   八层里 stage0/3/4/5/6/7 六层都已有这条 0 成本人工路，本层是最后一个缺口。
+    #   当时除 Stage1 外的 stage0/3/4/5/6/7 都已有这条 0 成本人工路；Stage3 后来整层退役。
     'stage2.global':    NodeSpec('stage2', 'R-2',  True,  'stage2 全书级抽取',
                                  flags=('--renormalize', '--purge-role', '--resample',
                                          '--revalidate',
@@ -1579,9 +1576,6 @@ NODES: Final[dict[str, NodeSpec]] = {
                                         '--revalidate', '--actor', '--reason',
                                         '--response-repair'),
                                  produces=(artifact_paths.STAGE2_CHAPTER_BLUEPRINTS,)),
-    'stage3.style':     NodeSpec('stage3', 'R-4',  False, 'stage3 机械基线',
-                                  flags=('--check-only', '--measure-only'),
-                                 produces=(artifact_paths.STAGE3_STYLE_GROUNDING,)),
     # ⚠⚠ Stage4 两个付费相都钉死 `deepseek-v4-pro`（2026-08-22 用户裁决沿用）。
     #   理由**不是**「flash 在这里更容易空」，是**重采粒度**：每相都是
     #   全书一次调用 ⇒ 一次 `answer_lost` 的重采代价是整本书，而逐章节点
@@ -1739,9 +1733,14 @@ CONDITIONAL_REQUIRED_FLAGS: Final[dict[tuple[str, str], tuple[str, ...]]] = {
 # 顺带：原型 `n5_write --revalidate` 自述 0 成本，而它的 `FREE_FLAGS` 白名单里**没有它**
 # ⇒ 现役界面把一个不花钱的动作画成橙色并弹二次确认。本表已把它补进 `stage5.write.flags`。
 
-#: 八个当前产物层。**永不用作作业 id**——那一轴归 `NODES`。
+#: 七个当前产物层；编号保留 Stage3 空洞，不重排 Stage4～7。
 #: 它承重在产物目录名、schema 文档名、Pydantic 模块名、`Rule.stage` 与校验报告路由。
-STAGES: Final = tuple(f'stage{i}' for i in range(8))
+STAGES: Final = ('stage0', 'stage1', 'stage2', 'stage4', 'stage5', 'stage6', 'stage7')
+
+# 只供 append-only 作业/队列历史解码。它们不进 NODES/STAGES，因此不能 preview、
+# 调度或创建新队列；删除这两个名字会让既有 jobs.jsonl / queues.jsonl 整流不可读。
+RETIRED_NODES: Final = ('stage3.style',)
+RETIRED_STAGES: Final = ('stage3',)
 
 #: `stage` → 它的需求节。**从 `NODES` 派生，不许手抄。**
 #: ⚠ 一个 stage 可以有多节（stage2 → R-2+R-3 · stage4 → R-5+R-6 · stage5 → R-7+R-8），
@@ -1758,7 +1757,7 @@ STAGE_SECTIONS: Final[dict[str, tuple[str, ...]]] = {
 
 #: 跑书进度的节点序列。**直接从 `NODES` 派生，不维护第二张模板。**
 #:
-#: 旧实现手抄了 14 步，漏掉 `stage0.edit` / `stage2.blueprint` / `stage3.style` /
+#: 旧实现手抄了 14 步，漏掉 `stage0.edit` / `stage2.blueprint` /
 #: `stage4.context`；真实 UI 与队列跑到这些节点时，进度屏因此仍显示「还没跑到」。
 #: `NODES` 的声明顺序已经是队列与断点续跑的处理链顺序，进度屏只消费同一顺序；
 #: 修复回路仍按节点归位，不因 flags/mode 另造一步。

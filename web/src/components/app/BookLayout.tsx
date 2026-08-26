@@ -12,9 +12,8 @@ import { ErrorHint } from '@/components/state/States'
 const REQUIRED_GATE_BY_STAGE = {
   stage1: 's0',
   stage2: 's1',
-  stage3: 's1',
   stage4: 's2',
-  stage5: 's3',
+  stage5: 's4',
   stage6: 's5',
   stage7: 's6',
 } as const

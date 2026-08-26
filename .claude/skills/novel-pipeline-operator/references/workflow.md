@@ -103,18 +103,17 @@ runner 在构建 Step 前、每一步执行前后逐字核对 `<START_CODE>`；�
 | 4 | `stage1.partition` | 无 | 追跑 check 无 HARD；章节 ordinal 唯一且覆盖 `1..N` |
 | 5 | `stage2.global` | `--response-repair agent` | global 正式落盘；随即生成 review workpack，逐项核验并提交 typed 决策；只有 current 且全部 PASS 才继续 |
 | 6 | `stage2.blueprint` | `--response-repair agent`；闸开后独立 preview/run | 逐章蓝图正式落盘，check 无 HARD |
-| 7 | `stage3.style` | 无；免费机械测量，独立 preview/run | 当前机械基线正式落盘，check 无漂移；s3 机械基线确认绑定当前产物 |
-| 8 | `stage4.design` | `--response-repair agent`；需要废止旧候选时显式另跑 `--replan` | 只产生当前盲候选；本相未读取原文顺序、证据位置或必须材料，且不会顺带启动下一相 |
-| 9 | `stage4.plan` | 在 A 落盘后重新独立 preview，再以 `--response-repair agent` 运行 | B 只绑定证据；`bound` 时编译计划且 check 无 HARD，`infeasible` 时正式负结论已落盘但没有计划 |
-| 10 | `stage4.context` | 计划落盘已自动组装时 `state` 跳过；只在需重建时执行 | `stage4/writer_context.json` 与当前计划投影一致且 fresh |
-| 11 | `stage5.write` | `--response-repair agent`（不带 `--chapters` 即写全部缺少的 canonical 章） | `stage5/chNN.json` 恰好覆盖计划章集合；内部重试不等于整节点失败 |
-| 12 | `stage5.review` | 无 | 最新机械验收完成；HARD 按 remediation 收敛，info/metric/unver 保持原态 |
-| 13 | `stage6.hook` | `--response-repair agent` | 至少一条候选通过落盘闸；追跑 check 可读正式候选 |
-| 14 | `stage6.semantic` | `--response-repair agent` | 每个去重文本都有两名盲评判官的带证据结论与匿名质量排序；结论按完整 SHA-256 与当前候选对齐 |
-| 15 | `stage6.approve` | `--pick <N> --actor <ACTOR> --reason <text> --subject-sha256 <64hex>` | 所选候选满足代批判据，hash 与当前文本一致，`hook.json.approved` 与最新语义结论一致 |
-| 16 | `stage7.rename` | `--response-repair agent` | 人名表正式落盘；追跑 check 的 HARD 清零，info/unver 已人工审阅 |
-| 17 | `stage7.approve` | `--actor <ACTOR> --reason <text> --subject-sha256 <64hex>` | 映射、漏网称呼与语义标记通过代批判据，hash 与当前决策面一致，批准状态落盘 |
-| 18 | `stage7.assemble` | 无 | `stage7/<书名>_rewriting.txt` 生成并通过独立成书对账 |
+| 7 | `stage4.design` | `--response-repair agent`；需要废止旧候选时显式另跑 `--replan` | 只产生当前盲候选；本相未读取原文顺序、证据位置或必须材料，且不会顺带启动下一相 |
+| 8 | `stage4.plan` | 在 A 落盘后重新独立 preview，再以 `--response-repair agent` 运行 | B 只绑定证据；`bound` 时编译计划且 check 无 HARD，`infeasible` 时正式负结论已落盘但没有计划 |
+| 9 | `stage4.context` | 计划落盘已自动组装时 `state` 跳过；只在需重建时执行 | `stage4/writer_context.json` 与当前计划投影一致且 fresh |
+| 10 | `stage5.write` | `--response-repair agent`（不带 `--chapters` 即写全部缺少的 canonical 章） | `stage5/chNN.json` 恰好覆盖计划章集合；内部重试不等于整节点失败 |
+| 11 | `stage5.review` | 无 | 最新机械验收完成；HARD 按 remediation 收敛，info/metric/unver 保持原态 |
+| 12 | `stage6.hook` | `--response-repair agent` | 至少一条候选通过落盘闸；追跑 check 可读正式候选 |
+| 13 | `stage6.semantic` | `--response-repair agent` | 每个去重文本都有两名盲评判官的带证据结论与匿名质量排序；结论按完整 SHA-256 与当前候选对齐 |
+| 14 | `stage6.approve` | `--pick <N> --actor <ACTOR> --reason <text> --subject-sha256 <64hex>` | 所选候选满足代批判据，hash 与当前文本一致，`hook.json.approved` 与最新语义结论一致 |
+| 15 | `stage7.rename` | `--response-repair agent` | 人名表正式落盘；追跑 check 的 HARD 清零，info/unver 已人工审阅 |
+| 16 | `stage7.approve` | `--actor <ACTOR> --reason <text> --subject-sha256 <64hex>` | 映射、漏网称呼与语义标记通过代批判据，hash 与当前决策面一致，批准状态落盘 |
+| 17 | `stage7.assemble` | 无 | `stage7/<书名>_rewriting.txt` 生成并通过独立成书对账 |
 <!-- pipeline-steps:end -->
 
 Stage4 的两次付费调用不得压成一次授权或一次 runner 执行。先对 `stage4.design` 单独 preview/run；
@@ -126,7 +125,7 @@ preview `stage4.design --replan`，新 A 成功后，B 仍是另一条独立 pre
 完整逐章 typed 结构决定。通用 s4 gate 不是兼容入口；结构主体变化后旧决定立即过期。
 只有全部章 `accept`，且随后另有 current Stage5 writing 授权，才可执行 `stage5.write`。
 
-Stage2 的顺序硬约束是：global 落盘 → `--emit-review-workpack` 辅助逐项对原文 → `--emit-review-template` 取得版本化决策骨架 → 提交 `--review-decisions` → 确认全部 PASS → 才运行 blueprint。当前 Stage3 只读 Stage1、零 LLM，不受这道 Stage2 人工闸约束；初始抽取实现可让它与 global 并行，operator 按主链表顺序补跑也得到同一份机械结果。
+Stage2 的顺序硬约束是：global 落盘 → `--emit-review-workpack` 辅助逐项对原文 → `--emit-review-template` 取得版本化决策骨架 → 提交 `--review-decisions` → 确认全部 PASS → 才运行 blueprint。机械测量不是独立节点：Stage5/6 会从各自已经读取的 Stage1 文本即时计算，operator 不需要预跑、确认或修复机械缓存。
 
 ### 零剔除的书同样要过 stage0 闸门
 

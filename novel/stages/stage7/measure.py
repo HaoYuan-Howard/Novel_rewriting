@@ -84,7 +84,7 @@ _CHARACTER_PATCH_KEYS = frozenset({
 def merge_mapping_edit(rec: dict | None, edit: dict) -> tuple[dict, list[dict]]:
     """人工编辑文件 → `(model_out, extra_subs)`。
 
-    ⭐ **`character_patches` 是全链唯一把「定向返工只许改判据点名的部分」（`R-4.10`）
+    ⭐ **`character_patches` 是全链唯一把「定向返工只许改判据点名的部分」（`R-10.15`）
     做成数据结构的地方**——别处都只是 prompt 里的一句叮嘱。不在 patch 里的角色
     **在结构上改不到**。
 

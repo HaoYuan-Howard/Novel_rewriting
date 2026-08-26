@@ -62,9 +62,8 @@ def _args(flag: str, node: str | None = None) -> list[str]:
 def test_the_matrix_actually_has_rows():
     """参数化表算空时，下面几十条会**全绿**——而那正是最坏的情况。"""
     assert len(CASES) > 25, f'node × flag 只铺出 {len(CASES)} 行，节点表多半被清空了'
-    # 18 = 原 18 减去 2026-08-17 下线的 `stage5.semantic`，再加上
-    # 2026-08-25 从 `stage4.plan` 拆出的独立付费 `stage4.design`。
-    assert len(NODES) == 18, f'节点数变成 {len(NODES)} 了——是有意加的就来改这个数'
+    # 17 = 既有 18 个节点减去已折叠进 Stage5/6 的 `stage3.style`。
+    assert len(NODES) == 17, f'节点数变成 {len(NODES)} 了——是有意加的就来改这个数'
 
 
 # ───────────────────────── 贵贱（R-11.7 · Q-10） ─────────────────────────
@@ -100,7 +99,7 @@ def test_an_unknown_flag_is_paid_even_on_a_free_node():
     （`build_argv` 拒收、`is_paid` 放行）比两处都严更难查。
     """
     assert N.is_paid('stage1.partition', ['--brand-new-flag']) is True
-    assert N.is_paid('stage3.style', ['--brand-new-flag']) is True
+    assert N.is_paid('stage4.context', ['--brand-new-flag']) is True
 
 
 def test_the_value_of_a_valued_flag_is_not_mistaken_for_a_flag():
@@ -186,14 +185,14 @@ def test_argv_never_hardcodes_the_interpreter_and_carries_the_encoding_flags():
     ⚠ `-X utf8 -u` 管的是「人在终端直接粘这条命令」那一半；
     服务跑子进程那一半由 `child_env()` 管。**两道，不是一道。**
     """
-    argv = N.build_argv('stage3.style', SID, ['--check-only'], base=BASE)
+    argv = N.build_argv('stage5.review', SID, ['--check-only'], base=BASE)
     assert argv[0] == sys.executable
     assert argv[1:5] == ['-X', 'utf8', '-u', '-m']
     assert argv[5] == N.CLI_MODULE
 
 
 def test_base_is_absolute_so_the_command_does_not_depend_on_cwd():
-    argv = N.build_argv('stage3.style', SID, base='rel/Output')
+    argv = N.build_argv('stage1.partition', SID, base='rel/Output')
     assert os.path.isabs(argv[argv.index('--base') + 1])
 
 
@@ -270,7 +269,7 @@ def test_valued_flags_must_carry_a_value_and_bare_flags_must_not():
     with pytest.raises(UnsupportedRunMode, match='要一个值'):
         N.build_argv('stage4.plan', SID, ['--apply-edit'], base=BASE)
     with pytest.raises(UnsupportedRunMode, match='不带值'):
-        N.build_argv('stage3.style', SID, ['--check-only', 'oops'], base=BASE)
+        N.build_argv('stage5.review', SID, ['--check-only', 'oops'], base=BASE)
 
 
 # ───────────────────────── 必填项（2026-08-16 复盘 §六.1） ─────────────────────────
@@ -348,7 +347,7 @@ def test_preview_fills_required_flags_with_placeholders_that_never_run():
 
 def test_placeholders_do_not_change_a_command_that_needs_nothing():
     """没有必填项的节点，`placeholders=True` 与真跑必须逐字节同一条（`R-11.8`）。"""
-    for node in ('stage3.style', 'stage2.global', 'stage7.assemble'):
+    for node in ('stage1.partition', 'stage2.global', 'stage7.assemble'):
         shown = N.build_steps(node, SID, base=BASE, placeholders=True)
         assert shown[0].argv == N.build_argv(node, SID, base=BASE)
         assert shown[0].note is None
@@ -379,14 +378,14 @@ def test_preview_and_the_real_run_are_the_same_argv():
     显示的与执行的会慢慢分家，而**没有任何东西会出声**。
     ⇒ 摊开显示的那条，必须就是 `build_steps` 里的那条对象本身。
     """
-    for node in ('stage3.style', 'stage2.global', 'stage6.hook'):
+    for node in ('stage1.partition', 'stage2.global', 'stage6.hook'):
         steps = N.build_steps(node, SID, base=BASE)
         assert steps[0].argv == N.build_argv(node, SID, base=BASE)
 
 
 def test_a_writing_run_gets_a_follow_up_check():
     """**退出码 0 不等于成功**（F-087：残缺产物退出码 0）。"""
-    steps = N.build_steps('stage3.style', SID, base=BASE)
+    steps = N.build_steps('stage6.hook', SID, base=BASE)
     assert len(steps) == 2
     assert '--check-only' in steps[1].argv
     assert steps[1].note == N.FOLLOW_CHECK_NOTE
@@ -397,7 +396,7 @@ def test_a_free_but_writing_run_also_gets_a_follow_up_check():
     """⭐ **判准是「写不写盘」，不是「花不花钱」** —— 这一格是实测改过的。
 
     Stage4 的 `--revalidate` 虽然不花钱，仍会提升并重建正式产物；没有追跑就看不到
-    提升后的完整机械结论。Stage3 的免费默认写盘已由上一条单独覆盖。
+    提升后的完整机械结论。
     """
     flags = _args('--revalidate', 'stage4.plan')
     steps = N.build_steps('stage4.plan', SID, flags, base=BASE)
@@ -413,8 +412,8 @@ def test_the_follow_up_check_is_skipped_when_the_node_cannot_take_it():
 
 def test_a_non_writing_run_gets_no_follow_up():
     """只看不动的那几条没什么可复检的——它们一个字节都没改。"""
-    assert len(N.build_steps('stage3.style', SID, ['--check-only'], base=BASE)) == 1
-    assert len(N.build_steps('stage3.style', SID, ['--measure-only'], base=BASE)) == 1
+    assert len(N.build_steps('stage5.review', SID, ['--check-only'], base=BASE)) == 1
+    assert len(N.build_steps('stage4.plan', SID, ['--dry-run'], base=BASE)) == 1
 
 
 def test_steps_carry_the_cost_and_write_answers_they_were_asked_for():
@@ -465,25 +464,26 @@ def test_every_stage_has_exactly_one_check_node():
             f'{stage} 有 {len(got)} 个节点接受 `--check-only`：{got}\n'
             f'→ 0 个：忘了给它登记跑法（`NODES[...].flags`）；'
             f'→ 2 个以上：`GET /api/novels/:sid/check/{stage}` 不知道该调哪一个')
-    assert N.check_nodes('stage3') == ('stage3.style',)
+    assert N.check_nodes('stage3') == ()
 
 
 def test_the_checker_table_covers_exactly_the_current_stages():
-    """CLI 与 HTTP 共用的复检表必须覆盖当前八层。"""
+    """CLI 与 HTTP 共用的复检表必须覆盖当前七层。"""
     from novel.stages import check_only, checkable_stages
     assert checkable_stages() == set(STAGES)
-    assert check_only('stage3').__name__ == 'run_check_only'
+    with pytest.raises(KeyError):
+        check_only('stage3')
     for stage in sorted(STAGES):
         assert callable(check_only(stage)), f'{stage} 的复检落点不是一个可调用的东西'
 
 
 def test_the_runner_table_covers_exactly_the_current_stages():
-    """CLI 派发表必须覆盖当前八层。"""
+    """CLI 派发表必须覆盖当前七层。"""
     from novel.cli.main import _runners, runnable_stages
     assert runnable_stages() == set(STAGES), (
         f'`novel/cli/main.py::_runners` 覆盖 {sorted(runnable_stages())}，'
         f'而当前阶段是 {sorted(STAGES)}')
-    assert _runners()['stage3'].__name__ == '_run_stage3'
+    assert 'stage3' not in _runners()
 
 
 def test_the_flag_surface_covers_all_three_tables():

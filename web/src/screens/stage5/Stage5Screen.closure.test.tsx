@@ -118,9 +118,9 @@ async function seedScreen({
     decided_at: '2026-08-25T00:00:00+00:00',
   }
   const approvals: ApprovalDoc = {
-    v: 3,
+    v: 4,
     sid: SAMPLE_SID,
-    gate: { s0: true, s1: true, s2: true, s3: true, s4: true, s5: false, s6: false, s7: false },
+    gate: { s0: true, s1: true, s2: true, s4: true, s5: false, s6: false, s7: false },
     seen: { read: true, global: true },
     writing: true,
     structure: {

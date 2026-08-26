@@ -318,7 +318,7 @@ _FLOORS = {
     'fn_entries': 10,
     'writing_flags': 30,
     'free_writing_pairs': 20,
-    'write_surface_rows': 9,  # 九个有 0 成本写盘入口的节点
+    'write_surface_rows': 8,  # Stage3 退役后八个有 0 成本写盘入口的节点
     'fix_routes': 4,
     'cli_subcommands': 11,
     'status_marks': 4,        # _STATUS_MARK 四态

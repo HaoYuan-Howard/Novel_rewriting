@@ -48,7 +48,6 @@ def required_current_corpus_artifacts(chapters: int) -> frozenset[str]:
         'stage2/global_grounding.json',
         'stage2/global_review.json',
         'stage2/global_review_decisions.json',
-        'stage3/style_grounding.json',
         'stage4/blind_candidate.json',
         'stage4/evidence_binding.json',
         'stage4/plan_chapters.json',

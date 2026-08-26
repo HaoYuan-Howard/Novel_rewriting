@@ -8,9 +8,12 @@ import json
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
 import contracts.schema
-from contracts.artifacts import ARTIFACT_PATHS, artifact_rel
+from contracts.artifacts import (
+    ARTIFACT_PATHS, RETIRED_STAGE3_STYLE_GROUNDING, artifact_rel,
+)
 from contracts.invariants import NODES
 from contracts.schema import (
     ARTIFACTS,
@@ -22,10 +25,10 @@ from contracts.schema import (
     decode_artifact,
     encode_artifact,
 )
+from contracts.schema.legacy_stage3 import decode_legacy_stage3_v2
 from novel.consumption import CONSUMED_PROJECTIONS
 from novel.orchestrator.state import overview
 from novel.views.inbox import inbox_view
-from novel.views.stage3 import style_view
 
 MAIN_TEXT = [
     {'chapter_ordinal': 1, 'text': '甲推门进屋。'},
@@ -36,7 +39,7 @@ MAIN_TEXT = [
 def test_a_real_payload_survives_the_envelope_and_still_validates():
     """信封是**包装**不是改写：脱掉它之后模型照样认得那份 payload。
 
-    ⚠ 下面那两条参数化用合成 payload 扫全部 30 份产物（分母），这一条用一份**真的**
+    ⚠ 下面那两条参数化用合成 payload 扫注册表全部产物（分母），这一条用一份**真的**
     `MainText` 补另一半：脱信封之后它仍能过模型校验、字段仍在原位。
     """
     # ⚠ 版本号**从它自己的 spec 现算**，不写 `== 1`——与下面两条参数化同一条理由：
@@ -166,15 +169,6 @@ _SHAPE_BREAKS: dict[str, tuple[int, str, str]] = {
         'ArcTrack 删除 dimension/change_type；2026-08-26 v4 删除 world_facts、逐场源字数/参与者、'
         '秘密与规则内部 id、must_not_reveal，并把 characters 改为带 char_id 的数组',
         '`stage4.context` 从当前 Stage2 v6 + Stage4 plan v4 免费重建；下游 Stage5/6 按消费投影判 stale',
-    ),
-    'stage3/style_grounding.json': (
-        2,
-        '2026-08-24 Stage3 机械基线简化：删除 voice、surface_habits、hook_style、'
-        'chapter_styles 以及 LLM attempts/repair/revalidation 专属账；顶层只保留完整 '
-        'measurable 与带 measurement_contract 的免费 provenance',
-        '普通旧书运行 stage3.style 免费重建（纯确定性、零 LLM），v1 不迁移也不手补。'
-        '本次消融的两本目标书已按 archive manifest 事务化移出 live discovery，明确不重建；'
-        '其 v1 字节只作为可恢复历史实验档案，不进入 _rounds，也不计入 current corpus',
     ),
     'stage5/ch{nn}.json': (
         2,
@@ -344,7 +338,7 @@ def test_every_registered_artifact_round_trips_through_the_v1_envelope(rel: str)
     # ⚠ 版本号**逐条从它自己的 spec 现算**，不写 `== 1`：「全表恒 v1」只该有
     #   `test_the_whole_registry_is_on_one_scale_...` 一个守卫。写死之后，将来按文档
     #   规定的方式给某一份产物 `current_version` +1，会连带炸掉这两条参数化的
-    #   30×N 个用例——真正该红的那一条淹没在里面，而那正是本批要消灭的形状。
+    #   注册表全表 × N 个用例——真正该红的那一条淹没在里面，而那正是本批要消灭的形状。
     assert encoded['_schema_version'] == spec.current_version
     if spec.root:
         assert set(encoded) == {'_schema_version', 'payload'}, \
@@ -362,7 +356,7 @@ def test_every_registered_artifact_round_trips_through_the_v1_envelope(rel: str)
 @pytest.mark.parametrize('marker', [None, 0, 2, 3, 99, True, -1, '1'],
                          ids=['缺失', 'v0', 'v2', 'v3', 'v99', 'True', 'v-1', '字符串'])
 def test_only_the_current_version_is_read(rel: str, marker: object):
-    """**无标记 / 低版本 / 高版本 / 非法值一律拒读**，30 份产物逐个查。
+    """**无标记 / 低版本 / 高版本 / 非法值一律拒读**，注册表全部产物逐个查。
 
     ⚠ `v2` 与 `v3` 特意留在取值面里：它们正是删掉迁移梯子之前**会被放行**的那两档。
     ⚠ 报错必须同时说出文件与版本——只说「读不了」的错误，会把人推回去手补字段。
@@ -442,12 +436,60 @@ def test_retired_stage4_identity_artifact_is_not_discovered_or_registered():
     assert artifact_key(rel) is None
 
 
+def test_retired_stage3_path_is_not_a_current_artifact_or_node_output():
+    assert RETIRED_STAGE3_STYLE_GROUNDING not in ARTIFACT_SPECS
+    assert artifact_key(RETIRED_STAGE3_STYLE_GROUNDING) is None
+    assert RETIRED_STAGE3_STYLE_GROUNDING not in {
+        rel for spec in NODES.values() for rel in spec.produces
+    }
+
+
+def _legacy_stage3_v2() -> dict[str, object]:
+    block = {
+        'chars': 10, 'paragraphs': 1, 'sentences': 1,
+        'avg_paragraph_chars': 10.0, 'paragraph_sep_chars': 0.0,
+        'avg_sentence_chars': 10.0, 'dialogue_ratio': None,
+        'dialogue_ratio_applicable': False, 'quote_styles': [],
+    }
+    return {
+        '_schema_version': 2,
+        'measurable': {
+            'body': {
+                **block,
+                'chapter_chars': {'min': 10, 'max': 10, 'avg': 10.0},
+                'per_chapter_avg_sentence': {'min': 10.0, 'max': 10.0},
+            },
+            'hook': block,
+        },
+        '_provenance': {
+            'code': 'legacy-code', 'root_clean_sha1': '0' * 40, 'inputs': {},
+            'measurement_contract': 'stage3-measurable-v1',
+        },
+    }
+
+
+def test_retired_stage3_decoder_accepts_only_the_frozen_v2_shape():
+    raw = _legacy_stage3_v2()
+    assert decode_legacy_stage3_v2(raw).measurable.body.chars == 10
+
+    for marker in (None, 1, 3, 99):
+        changed = {**raw}
+        if marker is None:
+            changed.pop('_schema_version')
+        else:
+            changed['_schema_version'] = marker
+        with pytest.raises(ValueError, match='只接受 v2'):
+            decode_legacy_stage3_v2(changed)
+
+    with pytest.raises(ValidationError):
+        decode_legacy_stage3_v2({**raw, 'voice': {'historical': True}})
+
+
 def test_unreadable_current_artifacts_do_not_take_down_read_only_aggregation(tmp_path: Path):
     root = tmp_path
     book = root / '合成损坏书_123'
     (book / 'stage1').mkdir(parents=True)
-    (book / 'stage3').mkdir()
-    (book / 'stage5').mkdir()
+    (book / 'stage2').mkdir()
     (book / 'stage1' / 'main_text.json').write_text(
         json.dumps(encode_artifact('stage1/main_text.json', MAIN_TEXT), ensure_ascii=False),
         encoding='utf-8')
@@ -457,19 +499,11 @@ def test_unreadable_current_artifacts_do_not_take_down_read_only_aggregation(tmp
         }), ensure_ascii=False),
         encoding='utf-8')
     malformed = json.dumps({'_schema_version': 1}, ensure_ascii=False)
-    (book / 'stage3' / 'style_grounding.json').write_text(malformed, encoding='utf-8')
-    (book / 'stage5' / 'wontfix.json').write_text(
+    (book / 'stage2' / 'global_grounding.json').write_text(
         malformed, encoding='utf-8')
 
     ov = overview(root, '123')
-    style = style_view(root, '123')
     inbox = inbox_view(root, '123')
 
-    style_artifact = next(
-        artifact for stage in ov.stages for artifact in stage.artifacts
-        if artifact.rel == 'stage3/style_grounding.json')
-    assert style_artifact.condition == 'unreadable'
     assert ov.summary.verdict == 'broken'
-    assert style.condition == 'unreadable'
-    assert style.measured_now is not None
     assert inbox.total == len(inbox.items)

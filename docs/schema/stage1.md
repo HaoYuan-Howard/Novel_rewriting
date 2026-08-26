@@ -38,7 +38,7 @@ stage1/hook_copy.json  {text}
 |---|---|---|---|---|
 | `text` | `str` | 是 | 去空白后非空；与当前 clean 从坐标 0 到第一个正文章标记之前的切片逐字相等 | **三源** |
 
-它被 Stage3 形态度量、Stage6 文案重写与 Stage7 组装消费。Stage6 页的
+它被 Stage6 文案重写与即时形态度量、Stage7 组装消费。Stage6 页的
 `source_hook_text` 由 Stage6 视图同响应携带，前端不再为这一格额外请求 Stage1。
 
 ---

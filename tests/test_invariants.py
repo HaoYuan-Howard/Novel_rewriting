@@ -132,7 +132,7 @@ def test_unmeasured_nodes_keep_the_default_high_effort():
     #   （放行 = 允许一个「降了档、实际一档没降」的配置），`max` 是升档且还没补回官方
     #   effort 前缀。三处闸说的是同一件事，见 `novel/llm/client.py::rungs_from_effort`。
     assert all(spec.effort in (None, 'low', 'high') for spec in inv.NODES.values())
-    assert inv.NODES['stage3.style'].effort is None
+    assert 'stage3.style' not in inv.NODES
     assert inv.NODES['stage7.rename'].effort is None
 
 
@@ -159,7 +159,7 @@ def test_free_nodes_are_the_ones_without_llm():
     free = {node for node, spec in inv.NODES.items() if not spec.paid}
     assert free == {
         'stage0.remove', 'stage0.approve', 'stage0.edit',
-        'stage1.partition', 'stage3.style', 'stage4.context', 'stage5.review',
+        'stage1.partition', 'stage4.context', 'stage5.review',
         'stage6.approve', 'stage7.assemble', 'stage7.approve',
     }
 

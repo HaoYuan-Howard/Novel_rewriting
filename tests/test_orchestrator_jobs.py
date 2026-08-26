@@ -425,7 +425,7 @@ def test_a_real_subprocess_runs_the_pasted_command_and_its_output_lands_in_the_l
         pytest.skip('盘上没有语料——本条**没在查**，不是「查过没事」')
     box = sandbox.Sandbox(books[0])
     try:
-        rec = J.run(box.root, 'stage3.style', box.sid, ['--check-only'],
+        rec = J.run(box.root, 'stage1.partition', box.sid, ['--check-only'],
                     registry=J.JobRegistry())
         assert (rec.state, rec.exit_code) == ('ok', 0), rec
         text, _ = J.read_log(box.root, rec.job_id)

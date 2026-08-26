@@ -489,7 +489,7 @@ def _model_out_from_disk(box: sandbox.Sandbox, *, break_it: bool) -> dict:
 
 
 def test_the_gate_blocks_a_dirty_map_and_revalidate_promotes_it_after_the_fix(box, monkeypatch):
-    """⭐ **落盘闸门照 stage3：任何一条 hard ⇒ `.INVALID`**（本层一次只产一份）。
+    """⭐ **落盘闸门照退役 Stage3 的成例：任何一条 hard ⇒ `.INVALID`**（本层一次只产一份）。
 
     配套的 `--revalidate` 是它的**必然结果**——闸门是我们自己加的，
     不给一条 0 成本提升路，一次付费产出就被永久锁死。

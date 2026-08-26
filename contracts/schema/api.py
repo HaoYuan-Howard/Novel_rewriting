@@ -79,7 +79,6 @@ from contracts.schema.stage2 import (
     BlueprintProvenance, ConflictStage, FactEvidence, GlobalProvenance,
     RelationVisibility, Setting, WorldRule,
 )
-from contracts.schema.stage3 import Measurable, StyleProvenance
 from contracts.schema.stage4 import (
     CtxChapter, CtxProvenance, PlanGoal, PlanProvenance, SemanticContract,
     StructureDecision,
@@ -370,148 +369,6 @@ class TrashNovelResult(StrictModel):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 一、S-06 Stage3 机械基线（`_api.md` §四）
-# ─────────────────────────────────────────────────────────────────────────────
-class DriftItem(FrozenModel):
-    """一项实测漂移：`(键, 产物里存的, 照现在的 stage1 重算的)`。
-
-    ⚠ **具名对象，不是三元组。** `novel/core/measure.py::drift` 内部返回的是元组，
-    而元组一旦出线就是一个**位置数组**——前端拿到 `["body.chars", 9516, 9520]`，
-    三个格子靠下标认。全仓对位置数组的态度只有一条：不发（同 `/api/enums`
-    拒收 `NamedTuple` 的那一条）。
-
-    ⚠ `stored` / `now` 有一个特殊值 `'（缺）'`：**两边摊平后取并集比**，
-    少一个键也算漂移（F-054：老产物缺 `paragraph_sep_chars`，
-    而下游拿 budget 直接除以 `avg_paragraph_chars`，段落目标系统性高 14%）。
-    """
-
-    key: str = Field(min_length=1)
-    stored: int | float | str | list[str] | None
-    now: int | float | str | list[str] | None
-
-
-class StyleView(StrictModel):
-    """`GET /api/novels/:sid/stage3/style`。**S-06 机械基线的全部数据。**
-
-    ⚠⚠ **它是视图不是产物。** ``measurable_stored`` 来自盘上的
-    ``stage3/style_grounding.json``；``measured_now`` 由当前代码读取 Stage1 免费重算。
-    因此产物不存在时当前测量仍可呈现，存量 v2 则能与当前口径逐项比漂移。
-    """
-
-    #: **由 `novel/paths.py` 从目录名派生**——新契约已把 `title`/`source_id` 从产物里
-    #: 裁掉了（`stage3.md`：它们在本层唯一的作用是被扫描面排除掉，
-    #: 「一个字段存在的理由是记得把它从检查里排除」本身就说明它不该存在）。
-    sid: str = Field(min_length=1)
-    title: str = Field(min_length=1)
-
-    exists: bool
-
-    #: 产物整体处境的服务端结论。界面用它选提示文案，不再用
-    #: ``exists`` / ``invalid_exists`` / ``readable`` 自己重建优先级。
-    condition: ArtifactCondition
-
-    #: 盘上有一份 `.INVALID` 在等人处理。**留着不说等于静默**：
-    #: 正式稿可能是**更早**的一版，而人会以为它就是最近这次跑出来的。
-    invalid_exists: bool
-
-    #: 能不能按**当前** schema 读回来。**`None` = 产物不在盘上，无从谈起。**
-    #: ⚠ 三态而不是 `bool`：`readable=False` 与 `exists=False` 是两件事
-    #: （`ArtifactState` 已经踩过——盘上真有一份没有 `_provenance` 的产物，
-    #: 折成「不存在」会让界面说「还没跑」，而它跑过）。
-    readable: bool | None
-
-    # ── 存量基线（`exists and readable` 时才有） ──────────────────────────────
-
-    measurable_stored: Measurable | None
-    bands_stored: dict[str, str] | None
-    provenance: StyleProvenance | None = Field(alias='_provenance')
-
-    # ── 左半边：现算（与产物无关） ────────────────────────────────────────────
-
-    #: 开篇文案段原文。来自 **stage1**，与本层产物无关。
-    hook_copy_text: str | None
-
-    measured_now: Measurable | None
-    bands_now: dict[str, str] | None
-
-    #: 量不出来时的人话，与 `measured_now` **恰好一个非空**（后置条件钉死）。
-    measure_error: str | None
-    #: **用 id 不用措辞**（`Q-6`）：异常类名。
-    #: 「stage1 还没跑」（`UpstreamMissing`）与「stage1 的产物坏了」（`ArtifactUnreadable`）
-    #: 对人的下一步是**相反**的指示，靠句子前缀去认会随一次措辞改动静默断掉。
-    measure_error_kind: str | None
-
-    #: 存/现两份实测的逐项差异。
-    #: ⚠⚠ **`[]` 与 `null` 是两件事**：`[]` = 「比过了，没有漂移」，
-    #: `null` = 「有一边算不出来，**无从比**」。压成一个 `[]` 就回到
-    #: `Q-2` 那个病（「不知道」与「没问题」必须能区分）。
-    drift: list[DriftItem] | None
-
-    # ── 来源账 ────────────────────────────────────────────────────────────────
-
-    freshness: Freshness
-    reason: FreshnessReason
-    #: 指向已经不在盘上的那些边，**按名字点名**（`Q-4` 亲自点过的 bug：
-    #: 原型对取不到指纹的条目静默跳过，而盘上真有一条）。**空列表也要写。**
-    ghosts: list[str] = Field(default_factory=list)
-
-    @model_validator(mode='after')
-    def _postconditions(self) -> StyleView:
-        """五条。每一条都在挡一种「两个状态在界面上长得一样」。"""
-        want_condition = (
-            'invalid' if self.invalid_exists else
-            'missing' if not self.exists else
-            'unreadable' if not self.readable else
-            'ready'
-        )
-        if self.condition != want_condition:
-            raise ValueError(
-                f'condition={self.condition!r} 与服务端原始事实推导出的 '
-                f'{want_condition!r} 不一致')
-
-        # ① 不在盘上 ⇒ 「读不读得回来」是个没有意义的问题。
-        if (self.readable is None) != (not self.exists):
-            raise ValueError(
-                f'exists={self.exists} 而 readable={self.readable!r}：'
-                f'`readable=None` 必须恰好对应「产物不在盘上」')
-
-        # ② 存量基线要么整块在、要么整块不在。半块在没有合法的 v2 产物来源。
-        loaded = bool(self.exists and self.readable)
-        stored = (self.measurable_stored, self.bands_stored, self.provenance)
-        if loaded and not all(x is not None for x in stored):
-            raise ValueError('产物读回来了，而机械基线有空的格子——那不是合法的 v2 产物')
-        if not loaded and any(x is not None for x in stored):
-            raise ValueError(
-                f'exists={self.exists} readable={self.readable} 而存量基线有内容——'
-                f'那份内容是从哪儿来的？')
-
-        # ③ 「量到了」与「量不了，原因是 X」恰好一个成立。
-        #    同空 = 什么都没说；同非空 = 说了两件互相矛盾的事。
-        if (self.measured_now is None) == (self.measure_error is None):
-            raise ValueError(
-                'measured_now 与 measure_error 必须**恰好一个**非空：'
-                '同空是「什么都没说」，同非空是「量到了但也没量到」')
-        if (self.measure_error is None) != (self.measure_error_kind is None):
-            raise ValueError('measure_error 与 measure_error_kind 必须同进同出')
-        # 档位词是 `bands()` 从实测数字现算的纯函数结果 ⇒ 它有没有，完全由实测有没有决定。
-        # ⚠ 抓包里另有一个 `bands_error`，**本模型刻意不要它**：`bands()` 在一个合法的
-        #    `Measurable` 上是全函数，那个格子只可能与 `measure_error` 说同一件事
-        #    ——同一条信息的第二个落点。登记在 `_api.md` §四。
-        if (self.bands_now is None) != (self.measured_now is None):
-            raise ValueError('bands_now 与 measured_now 必须同进同出（档位词是现算的）')
-        if (self.bands_stored is None) != (self.measurable_stored is None):
-            raise ValueError('bands_stored 与 measurable_stored 必须同进同出')
-
-        # ④ 两边都在才比得了。`drift=[]` 是「比过了没漂移」，`None` 是「无从比」。
-        comparable = self.measurable_stored is not None and self.measured_now is not None
-        if (self.drift is not None) != comparable:
-            raise ValueError(
-                f'drift={"有" if self.drift is not None else "null"} 而两份实测'
-                f'{"都在" if comparable else "不齐"}——`[]` 是「没漂移」，`null` 是「无从比」')
-        return self
-
-
-# ─────────────────────────────────────────────────────────────────────────────
 # 二、列表与作业（`_api.md` §五）
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -744,7 +601,7 @@ class StructureApprovalView(FrozenModel):
 
 
 class ApprovalDoc(StrictModel):
-    v: Literal[3] = 3
+    v: Literal[4] = 4
     sid: str = Field(min_length=1)
     gate: dict[GateKey, bool]
     seen: dict[SeenKey, bool]
@@ -755,7 +612,7 @@ class ApprovalDoc(StrictModel):
     @model_validator(mode='after')
     def _approval_state_is_complete(self) -> ApprovalDoc:
         if set(self.gate) != set(APPROVAL_GATES):
-            raise ValueError('gate must contain exactly s0..s7')
+            raise ValueError('gate must contain exactly s0,s1,s2,s4,s5,s6,s7')
         if set(self.seen) != set(APPROVAL_SEEN):
             raise ValueError('seen must contain exactly read/global')
         if self.gate['s4'] and self.structure.state != 'accepted':
@@ -1728,7 +1585,7 @@ class ErrorBody(StrictModel):
 
     message: str = Field(min_length=1)
 
-    #: 缺的是**哪一个**（`'novel'` / `'stage3/style_grounding.json'`）。
+    #: 缺的是**哪一个**（`'novel'` / `'stage4/plan_chapters.json'`）。
     #: `None` = 这次失败与某一份具体的东西无关。
     missing: str | None = None
 

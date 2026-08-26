@@ -16,6 +16,7 @@ import hashlib
 import json
 import shutil
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -23,6 +24,7 @@ fastapi = pytest.importorskip(
     'fastapi', reason='没装 fastapi ⇒ 这一批**没在查**，不是「查过没事」')
 from fastapi.testclient import TestClient          # noqa: E402
 
+from contracts.invariants import APPROVAL_GATES   # noqa: E402
 from contracts.schema import decode_artifact      # noqa: E402
 from contracts.schema.stage7 import NameMap        # noqa: E402
 from novel.api.app import UI_HEADER, create_app    # noqa: E402
@@ -34,7 +36,6 @@ INPUTS = ('stage0/revisions.json',
           'stage1/main_text.json', 'stage1/hook_copy.json',
           'stage2/global_grounding.json', 'stage2/chapter_blueprints.json',
           'stage2/global_review.json',
-          'stage3/style_grounding.json',
           'stage4/plan_chapters.json', 'stage4/writer_context.json',
           'stage6/hook.json', 'stage7/name_map.json')
 
@@ -151,21 +152,51 @@ def _stamp_chain(box, upto: str) -> None:
     """
     from novel.orchestrator import approvals
 
-    n = int(upto[1:])
+    assert upto in APPROVAL_GATES, f'不是现役审批闸：{upto}'
+    upto_index = APPROVAL_GATES.index(upto)
+    required_gates = APPROVAL_GATES[:upto_index + 1]
     # Explicit backfill creates the same typed/root/freshness proofs as the real
     # product path.  Then trim only the checklist gates beyond the precondition
     # this test needs; never invent legacy v1 booleans against today's files.
     filled = approvals.backfill_from_disk(box.root, box.sid)
-    assert all(filled.approvals.gate[f's{i}'] for i in range(n + 1))
+    assert all(filled.approvals.gate[gate] for gate in required_gates)
     record = approvals._read_current(box.root, box.sid)
     gates = dict(record.gate)
     proofs = dict(record.gate_proofs)
-    for i in range(n + 1, 8):
-        gates[f's{i}'] = False
-        proofs[f's{i}'] = None
+    for gate in APPROVAL_GATES[upto_index + 1:]:
+        gates[gate] = False
+        proofs[gate] = None
     approvals._write(box.root, record.model_copy(update={
         'gate': gates, 'gate_proofs': proofs,
     }))
+
+
+def test_stamp_chain_follows_current_gate_order_without_touching_stage3(monkeypatch):
+    from novel.orchestrator import approvals
+
+    current_gates = {gate: True for gate in APPROVAL_GATES}
+    record = approvals._fresh_record('book-1').model_copy(update={
+        'gate': current_gates,
+        'gate_proofs': {gate: f'proof-{gate}' for gate in APPROVAL_GATES},
+    })
+    written = []
+    monkeypatch.setattr(
+        approvals, 'backfill_from_disk',
+        lambda _root, _sid: SimpleNamespace(
+            approvals=SimpleNamespace(gate=current_gates)))
+    monkeypatch.setattr(approvals, '_read_current', lambda _root, _sid: record)
+    monkeypatch.setattr(approvals, '_write', lambda _root, updated: written.append(updated))
+
+    _stamp_chain(SimpleNamespace(root=Path('unused'), sid='book-1'), 's5')
+
+    assert len(written) == 1
+    assert written[0].gate == {
+        's0': True, 's1': True, 's2': True, 's4': True,
+        's5': True, 's6': False, 's7': False,
+    }
+    assert 's3' not in written[0].gate
+    assert written[0].gate_proofs['s6'] is None
+    assert written[0].gate_proofs['s7'] is None
 
 
 # ───────────────────────── 一、章节改稿 ─────────────────────────

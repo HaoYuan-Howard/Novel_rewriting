@@ -8,6 +8,8 @@ from functools import wraps
 import pytest
 
 from contracts.invariants import SOURCE_OVERLAP_MAX
+from contracts.schema.stage1 import MainText
+from novel.core.measure import body_style_metrics, measure_body
 from novel.core.text import quote_count
 from contracts.schema.stage5 import Chapter
 from novel.stages.stage5 import measure as M
@@ -19,7 +21,7 @@ def _by_rel(rel: str) -> dict[str, object]:
 
 
 MAIN: dict[str, object] = {}
-STYLE: dict[str, object] = {}
+MEASURABLE: dict[str, object] = {}
 CTX: dict[str, object] = {}
 _READY: set[str] = set()
 DRAFTS: list[corpus.Artifact] = []
@@ -27,13 +29,16 @@ _CORPUS_LOADED = False
 
 
 def _load_corpus() -> None:
-    global MAIN, STYLE, CTX, _READY, DRAFTS, _CORPUS_LOADED
+    global MAIN, MEASURABLE, CTX, _READY, DRAFTS, _CORPUS_LOADED
     if _CORPUS_LOADED:
         return
     MAIN = _by_rel('stage1/main_text.json')
-    STYLE = _by_rel('stage3/style_grounding.json')
     CTX = _by_rel('stage4/writer_context.json')
-    _READY = set(MAIN) & set(STYLE) & set(CTX)
+    _READY = set(MAIN) & set(CTX)
+    MEASURABLE = {
+        sid: body_style_metrics(measure_body(MainText.model_validate(main)))
+        for sid, main in MAIN.items() if sid in _READY
+    }
     # 正式成稿；归档轮次不属于当前消费面。
     DRAFTS = [a for a in corpus.iter_artifacts()
               if a.pattern == 'stage5/ch{nn}.json' and '_rounds/' not in a.rel
@@ -61,12 +66,12 @@ def _source_of(sid: str) -> dict[int, str]:
 
 
 def _quote_style_of(sid: str):
-    body = ((STYLE[sid].get('measurable') or {}).get('body') or {})
-    return M.target_quote_style(body, ''.join(_source_of(sid).values()))
+    return M.target_quote_style(
+        MEASURABLE[sid], ''.join(_source_of(sid).values()))
 
 
 def _sep_of(sid: str):
-    return ((STYLE[sid].get('measurable') or {}).get('body') or {}).get('paragraph_sep_chars')
+    return MEASURABLE[sid].get('paragraph_sep_chars')
 
 
 def _chapter_text(rec: dict) -> str:

@@ -51,7 +51,6 @@ import type {
   Stage0Segments,
   Stage1View,
   Stage2Global,
-  Stage3Style,
   Stage4Response,
   Stage5Response,
   Stage6Response,
@@ -80,7 +79,6 @@ export interface Api {
   getGlobal(sid: string, revealSpoilers?: boolean): Promise<Stage2Global>
   getGlobalReview(sid: string): Promise<GlobalReviewResponse>
   decideGlobalReview(sid: string, request: GlobalReviewDecisionSet): Promise<Job>
-  getStyle(sid: string): Promise<Stage3Style>
   getStage4(sid: string, ordinal: number): Promise<Stage4Response>
   getStage5(sid: string, ordinal: number): Promise<Stage5Response>
   getReview(sid: string, ordinal: number): Promise<ReviewResponse>

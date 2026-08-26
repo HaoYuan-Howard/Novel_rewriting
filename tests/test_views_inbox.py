@@ -20,7 +20,7 @@ from novel.views.inbox import inbox_view
 from tests import corpus, sandbox
 
 STAGE6_INPUTS = ('stage1/hook_copy.json', 'stage2/global_grounding.json',
-                 'stage3/style_grounding.json', 'stage4/writer_context.json',
+                 'stage4/writer_context.json',
                  'stage6/hook.json')
 
 #: 盘上有 `hook_ending_shape` 命中（×2）的那本——对账表 `test_stage6.EXPECTED_HITS` 同源。
@@ -304,58 +304,6 @@ class _InvalidStore:
     def seen_rounds(self, rel: str) -> set[int]:
         self.seen_round_calls.append(rel)
         return {2}
-
-
-@pytest.mark.parametrize('with_formal', [False, True])
-def test_legacy_stage3_invalid_routes_to_free_default_rebuild_without_rounds(with_formal):
-    """v1 不是一次失败业务轮次：默认 producer 原位重建 v2，不能塞进 `_rounds/`。"""
-    from contracts.artifacts import STAGE3_STYLE_GROUNDING
-    from novel import paths
-    from novel.views import inbox as I
-
-    invalid = paths.invalid_of(STAGE3_STYLE_GROUNDING)
-    present = {invalid}
-    versions = {invalid: 1}
-    if with_formal:
-        present.add(STAGE3_STYLE_GROUNDING)
-        versions[STAGE3_STYLE_GROUNDING] = 1
-    store = _InvalidStore(present=present, versions=versions)
-
-    rows = I._invalid_items(store, 'stage3')
-    assert len(rows) == 1
-    row = rows[0]
-    assert row.kind == ('rejected' if with_formal else 'invalid')
-    assert row.rule == 'stage3.style' and 'Stage3 v1 shape break' in row.what
-    assert '`stage3.style` 默认路径免费重建当前 v2' in row.how
-    assert '0 LLM 调用' in row.how and '不进入 `_rounds/`' in row.how
-    assert '--revalidate' not in row.how
-    assert store.seen_round_calls == [], 'shape-break 旧字节不得伪装成历史业务轮次'
-
-
-@pytest.mark.parametrize('with_formal', [False, True])
-def test_current_stage3_invalid_has_no_fabricated_revalidate_or_rounds(with_formal):
-    """current v2 `.INVALID` 是 producer 不可达状态，只留证据，不能编恢复按钮。"""
-    from contracts.artifacts import STAGE3_STYLE_GROUNDING
-    from novel import paths
-    from novel.views import inbox as I
-
-    invalid = paths.invalid_of(STAGE3_STYLE_GROUNDING)
-    present = {invalid}
-    versions = {invalid: 2}
-    if with_formal:
-        present.add(STAGE3_STYLE_GROUNDING)
-        versions[STAGE3_STYLE_GROUNDING] = 2
-    store = _InvalidStore(present=present, versions=versions)
-
-    rows = I._invalid_items(store, 'stage3')
-    assert len(rows) == 1
-    row = rows[0]
-    assert row.kind == ('rejected' if with_formal else 'invalid')
-    assert row.rule == 'stage3.style'
-    assert 'Stage3 v2 producer 不会产生这一状态' in row.what
-    assert '不生产或提升 `.INVALID`' in row.how and '不可达的状态' in row.how
-    assert '--revalidate' not in row.how and '_rounds/' not in row.how
-    assert store.seen_round_calls == []
 
 
 def test_generic_invalid_checks_the_producer_revalidate_flag_before_schema_version():

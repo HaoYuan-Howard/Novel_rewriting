@@ -27,7 +27,7 @@ from tests import corpus, factories, sandbox
 
 _REQUIRED = {
     'stage1/main_text.json', 'stage2/global_grounding.json',
-    'stage3/style_grounding.json', 'stage4/writer_context.json',
+    'stage4/writer_context.json',
 }
 
 
@@ -924,7 +924,6 @@ def test_paid_writer_prompt_excludes_global_source_spans(monkeypatch, tmp_path):
             for ordinal, text in source_text.items()
         ]),
         review.GLOBAL_GROUNDING: Dumped(grounding),
-        review.STYLE_GROUNDING: Dumped({'measurable': {'body': seed.measurable}}),
         review.WRITER_CONTEXT: Dumped(writer_context),
     }
 

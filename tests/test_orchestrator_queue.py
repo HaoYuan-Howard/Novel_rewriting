@@ -515,50 +515,6 @@ def test_a_free_only_plan_needs_no_confirmation():
     Q.confirm(p, yes=False)
 
 
-@pytest.mark.corpus
-def test_an_upstream_invalid_draft_blocks_the_queue_and_names_the_inbox():
-    """⭐ `R-13.5` 的第三类：**待人工非空**（`INBOX_KIND` 的 `invalid`）。
-
-    上游有一份被闸门拦下的稿 ⇒ 下游一项都不许跑，且要说出在等什么。
-    ⚠ **只看严格上游，不看本层**：本层自己的 `.INVALID` 是**本节点该处理的事**
-    （0 成本提升路 `--revalidate`），不是挡住它自己的理由——
-    挡住它自己，那份稿就永远没人去提升了。
-    """
-    from tests import sandbox
-    books = sandbox.books_with_stage3()
-    if not books:
-        pytest.skip('盘上没有语料——本条**没在查**，不是「查过没事」')
-    # ⚠ 必须带上 `stage0/revisions.json`：它是 `stage0.approve` 这道**人工闸**的
-    #   typed 凭据（`queue._human_gate_satisfied` 读 `approved == 'approved'`）。
-    #   沙箱不带 ⇒ 那道闸永远不满足 ⇒ 队列从它开始就 `blocked`，而
-    #   `plan_book` 的 `stuck` 会把其后每一项的 `waiting_on` 都改写成 `stage0.approve`
-    #   ⇒ 本条要观测的 inbox 阻塞被更靠前的人工闸盖住。真实跑到 stage3 的书本来就有这一份。
-    box = sandbox.Sandbox(
-        books[0], sandbox.STAGE3_INPUTS + ('stage0/revisions.json',))
-    try:
-        inv = box.dir / 'stage2' / 'global_grounding.INVALID.json'
-        inv.write_text((box.dir / 'stage2' / 'global_grounding.json')
-                       .read_text(encoding='utf-8'), encoding='utf-8')
-
-        p = Q.plan(box.root, [box.sid], until_stage='stage3')
-        stage3 = [it for it in p.items + p.blocked if it.node == 'stage3.style']
-        assert stage3, 'stage3 那一项该在计划里（要么跑、要么被挡住）'
-        assert stage3[0].waiting_on == Q.WAITING_ON_INBOX, stage3[0].why
-        assert stage3[0] in p.blocked, '被挡住的项不许混进 `items`'
-
-        # 反方向：本层自己的 `.INVALID` 不挡它自己。
-        inv.unlink()
-        (box.dir / 'stage3' / 'style_grounding.INVALID.json').write_text(
-            (box.dir / 'stage3' / 'style_grounding.json').read_text(encoding='utf-8'),
-            encoding='utf-8')
-        p2 = Q.plan(box.root, [box.sid], until_stage='stage3')
-        mine = next(it for it in p2.items + p2.blocked if it.node == 'stage3.style')
-        assert mine.waiting_on is None, \
-            '本层自己的 .INVALID 挡住了本层——那份稿就永远没人去 --revalidate 了'
-    finally:
-        box.close()
-
-
 @_NO_CORPUS
 def test_skip_means_skip_the_queue_does_not_relist_finished_work():
     """`R-14` 的「已存在即跳过」在队列这一侧的样子：判成 `skip` 的层不进计划。"""
@@ -690,7 +646,7 @@ def test_cancel_accepts_pending_but_refuses_to_fake_cancel_a_running_call(
 
 def test_service_restart_recovers_unknown_job_from_artifact_truth_without_rerun(
         queue_base, monkeypatch):
-    item = _item('book-a', 'stage3.style', 'paid-call', paid=True)
+    item = _item('book-a', 'stage6.hook', 'paid-call', paid=True)
     _seed(queue_base, 'q-restart', [item])
     Q.append_event(queue_base, QueueEvent(
         queue_id='q-restart', kind='item_state', ts=2, item_index=0,

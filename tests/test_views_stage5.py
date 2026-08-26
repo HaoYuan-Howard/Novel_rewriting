@@ -23,7 +23,7 @@ from tests import corpus, sandbox
 from tests.markers import corpus_params
 
 INPUTS = ('stage1/main_text.json', 'stage1/hook_copy.json',
-          'stage2/global_grounding.json', 'stage3/style_grounding.json',
+          'stage2/global_grounding.json',
           'stage4/plan_chapters.json', 'stage4/writer_context.json')
 
 

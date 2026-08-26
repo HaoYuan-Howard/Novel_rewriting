@@ -25,7 +25,6 @@ ARTIFACT_PATHS: Final[dict[str, str]] = {
     'stage2.global_review_decisions': 'stage2/global_review_decisions.json',
     'stage2.global_edit': 'stage2/global_edit.json',
     'stage2.chapter_blueprints': 'stage2/chapter_blueprints.json',
-    'stage3.style_grounding': 'stage3/style_grounding.json',
     'stage4.blind_candidate': 'stage4/blind_candidate.json',
     'stage4.evidence_binding': 'stage4/evidence_binding.json',
     'stage4.plan_chapters': 'stage4/plan_chapters.json',
@@ -47,6 +46,11 @@ ARTIFACT_PATHS: Final[dict[str, str]] = {
     #   占位符由「这本书是谁」决定 ⇒ 每本书恰好解析出一份具名产物，落点唯一在
     #   `novel/paths.py::book_txt_rel`。
     'stage7.book': 'stage7/{title}_rewriting.txt',
+}
+
+# 只供旧 provenance / 审批显式迁移读取；不进入当前 artifact registry。
+RETIRED_ARTIFACT_PATHS: Final[dict[str, str]] = {
+    'stage3.style_grounding': 'stage3/style_grounding.json',
 }
 
 
@@ -93,7 +97,7 @@ STAGE2_GLOBAL_REVIEW = artifact_rel('stage2.global_review')
 STAGE2_GLOBAL_REVIEW_DECISIONS = artifact_rel('stage2.global_review_decisions')
 STAGE2_GLOBAL_EDIT = artifact_rel('stage2.global_edit')
 STAGE2_CHAPTER_BLUEPRINTS = artifact_rel('stage2.chapter_blueprints')
-STAGE3_STYLE_GROUNDING = artifact_rel('stage3.style_grounding')
+RETIRED_STAGE3_STYLE_GROUNDING = RETIRED_ARTIFACT_PATHS['stage3.style_grounding']
 STAGE4_BLIND_CANDIDATE = artifact_rel('stage4.blind_candidate')
 STAGE4_EVIDENCE_BINDING = artifact_rel('stage4.evidence_binding')
 STAGE4_PLAN_CHAPTERS = artifact_rel('stage4.plan_chapters')

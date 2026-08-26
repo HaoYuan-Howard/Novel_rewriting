@@ -244,7 +244,7 @@ def test_wordlist_rule_must_declare_its_baseline():
 
 
 def test_registry_covers_exactly_the_current_stages():
-    """当前八层必须各有判据，且不得注册不存在的阶段。"""
+    """七个现役层必须各有判据，且不得注册不存在的阶段。"""
     from contracts.invariants import STAGES
     from contracts.rules import REGISTRY
     assert {r.stage for r in REGISTRY.all()} == set(STAGES)
@@ -253,7 +253,10 @@ def test_registry_covers_exactly_the_current_stages():
 
 def test_registry_is_not_vacuously_empty():
     from contracts.rules import REGISTRY
-    assert REGISTRY.of_stage('stage3'), 'stage3 的判据行一条都没注册上'
+    assert all(REGISTRY.of_stage(stage) for stage in ('stage0', 'stage1', 'stage2',
+                                                      'stage4', 'stage5', 'stage6',
+                                                      'stage7'))
+    assert not REGISTRY.of_stage('stage3'), '退役 Stage3 不得残留现役判据'
 
 
 def test_semantic_check_kind_is_confined_to_stage6():

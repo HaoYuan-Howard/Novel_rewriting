@@ -146,7 +146,7 @@ def run_probe(
     ledger_path = output / 'ledger.jsonl'
     ledger = CostLedger(path=ledger_path)
     ctx = RunContext(
-        novel_dir=output / 'provider-rate-probe', node='stage3.style', paid=True,
+        novel_dir=output / 'provider-rate-probe', node='stage2.global', paid=True,
         code=prov.code_version(), cache=CachePolicy.disabled(), ledger=ledger,
         observer=lambda _event: None,
     )

@@ -348,7 +348,7 @@ def _dialogue_drift(body: str, book: M.Book) -> list[Finding]:
                          detail=f'本书语料无引号；成稿引号样式 {list(got.quote_styles)}',
                          evidence=list(got.quote_styles))]
                 if got.quote_styles else [])
-    if not got.dialogue_ratio_applicable:
+    if got.dialogue_ratio is None:
         return [finding('dialogue_broken',
                         detail='对白破形：原书是引号对白体，成稿一句引号对白都没有',
                         evidence=['0'])]

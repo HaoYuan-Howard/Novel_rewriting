@@ -47,7 +47,6 @@ import type {
   Stage0Segments,
   Stage1View,
   Stage2Global,
-  Stage3Style,
   Stage4Response,
   Stage5Response,
   Stage6Response,
@@ -86,14 +85,6 @@ function raw<T>(file: string): T {
 }
 
 type LegacyArtifact = Omit<Artifact, 'display_freshness' | 'condition'>
-type LegacyStyle = Omit<Stage3Style, 'condition'> & {
-  voice?: unknown
-  voice_extra?: unknown
-  surface_habits?: unknown
-  hook_style?: unknown
-  source_id?: unknown
-  bands_error?: unknown
-}
 type LegacyNovel = Omit<
   NovelOverview,
   'stages' | 'stage_done' | 'stage_reviewable' | 'chapters_done' | 'summary'
@@ -105,30 +96,9 @@ type LegacyNovel = Omit<
   stage5_modes?: string[]
 }
 
-const PIPELINE_STAGES = Array.from({ length: 8 }, (_, i) => 'stage' + i)
-
-function currentMockStyle(legacy: LegacyStyle): Stage3Style {
-  // `src/mocks` 是冻结的历史证据，不篡改原文件；假后端只投影当前 v2 对外形状。
-  const {
-    voice: _voice,
-    voice_extra: _voiceExtra,
-    surface_habits: _surfaceHabits,
-    hook_style: _hookStyle,
-    source_id: _sourceId,
-    bands_error: _bandsError,
-    ...current
-  } = legacy
-  return {
-    ...current,
-    condition: legacy.invalid_exists
-      ? 'invalid'
-      : !legacy.exists
-        ? 'missing'
-        : legacy.readable === false
-          ? 'unreadable'
-          : 'ready',
-  }
-}
+const PIPELINE_STAGES = [
+  'stage0', 'stage1', 'stage2', 'stage4', 'stage5', 'stage6', 'stage7',
+]
 
 /** Stage5 fixture 已按现役 HTTP 契约收成明确的 legacy 终态。 */
 function currentMockStage5(): Stage5Response {
@@ -366,9 +336,9 @@ function seededStructureDecision(): StructureApprovalDecision {
 
 function freshDoc(sid: string): ApprovalDoc {
   return {
-    v: 3,
+    v: 4,
     sid,
-    gate: { s0: false, s1: false, s2: false, s3: false, s4: false, s5: false, s6: false, s7: false },
+    gate: { s0: false, s1: false, s2: false, s4: false, s5: false, s6: false, s7: false },
     seen: { read: false, global: false },
     writing: false,
     structure: {
@@ -389,9 +359,9 @@ function freshDoc(sid: string): ApprovalDoc {
 function seededDoc(sid: string): ApprovalDoc {
   const decision = seededStructureDecision()
   return {
-    v: 3,
+    v: 4,
     sid,
-    gate: { s0: true, s1: true, s2: true, s3: true, s4: true, s5: true, s6: false, s7: false },
+    gate: { s0: true, s1: true, s2: true, s4: true, s5: true, s6: false, s7: false },
     seen: { read: true, global: true },
     writing: true,
     structure: {
@@ -405,9 +375,11 @@ function seededDoc(sid: string): ApprovalDoc {
 }
 
 function loadDoc(sid: string): ApprovalDoc {
-  const got = lsRead<ApprovalDoc>('approvals.' + sid)
-  // spawns 是服务端的事，存盘的旧记录一律用当前这份覆盖
-  if (got && got.v === 3) return { ...got, spawns: SPAWN_ON_APPROVE }
+  const got = lsRead<unknown>('approvals.' + sid)
+  // spawns 是服务端的事；只接受当前公开 v4，旧本地记录按当前种子重建。
+  if (got && typeof got === 'object' && (got as { v?: unknown }).v === 4) {
+    return { ...(got as ApprovalDoc), spawns: SPAWN_ON_APPROVE }
+  }
   const seed = sid === SAMPLE_SID ? seededDoc(sid) : freshDoc(sid)
   lsWrite('approvals.' + sid, seed)
   return seed
@@ -809,7 +781,6 @@ const PIPELINE_STEPS: { node: string; label: string; paid: boolean }[] = [
   { node: 'stage1.partition', label: 'stage1 分章', paid: false },
   { node: 'stage2.global', label: 'stage2 全书级抽取', paid: true },
   { node: 'stage2.blueprint', label: 'stage2 逐章抽取', paid: true },
-  { node: 'stage3.style', label: 'stage3 机械基线', paid: false },
   { node: 'stage4.plan', label: 'stage4 重构计划', paid: true },
   { node: 'stage4.context', label: 'stage4 写作上下文组装', paid: false },
   { node: 'stage5.write', label: 'stage5 逐章写作', paid: true },
@@ -840,7 +811,6 @@ function mockRunProgress(sid: string): RunProgress {
       stage0: null,
       stage1: null,
       stage2: null,
-      stage3: null,
       stage4: null,
       stage5: null,
       stage6: null,
@@ -1082,11 +1052,6 @@ export const mockApi: Api = {
     }
     return later(job)
   },
-
-  getStyle: (sid) =>
-    bookOnly(sid, `/novels/${sid}/stage3/style`, () =>
-      currentMockStyle(fx<LegacyStyle>('style.json')),
-    ),
 
   getStage4: (sid, o) =>
     chapterOnly(sid, o, `/novels/${sid}/stage4/${o}`, () => fx<Stage4Response>('stage4_ch3.json')),

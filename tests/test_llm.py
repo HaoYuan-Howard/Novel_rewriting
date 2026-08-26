@@ -65,7 +65,7 @@ def _book() -> Path:
 
 
 def _ctx(*, cache: CachePolicy | None = None, paid: bool = True) -> RunContext:
-    return RunContext.open(_book(), '123', 'stage3.style', paid=paid,
+    return RunContext.open(_book(), '123', 'stage6.hook', paid=paid,
                            cache=cache or CachePolicy.default(), write_ledger=False)
 
 
@@ -393,7 +393,7 @@ def test_a_rung_rejected_by_a_content_gate_says_which_gate_and_why(body, gate):
     # 2026-08-22 起内容闸拒的下一步是**同档重采**（`_worth_resampling`）⇒ next 指回本档。
     assert (e['next_effort'], e['next_thinking']) == LADDER[0]
     assert e['exhausted'] is False
-    assert (e['purpose'], e['node'], e['sid']) == ('p', 'stage3.style', '123')
+    assert (e['purpose'], e['node'], e['sid']) == ('p', 'stage6.hook', '123')
     assert e['finish_reason'] == 'stop'
     assert e['reason'] and not e['reason_truncated']
     assert (e['content_chars'], e['reasoning_chars']) == (len(body), len('推敲过程'))
@@ -1540,7 +1540,7 @@ def test_every_wire_attempt_gets_its_own_ledger_row():
     一次超时对面很可能已经生成并计费了。
     """
     d = Path(tempfile.mkdtemp())
-    ctx = RunContext.open(_book(), '123', 'stage3.style', paid=True,
+    ctx = RunContext.open(_book(), '123', 'stage6.hook', paid=True,
                           ledger=CostLedger(path=d / 'ledger.jsonl'))
     events = []
     ctx.observer = events.append
@@ -1575,7 +1575,7 @@ def test_every_wire_attempt_gets_its_own_ledger_row():
     assert [(event['attempt'], event['state'], event['chapter']) for event in finished] == [
         (1, 'error', 7), (2, 'error', 7), (3, 'ok', 7),
     ]
-    assert all(event['sid'] == '123' and event['node'] == 'stage3.style'
+    assert all(event['sid'] == '123' and event['node'] == 'stage6.hook'
                for event in events)
     assert ctx.ledger.calls_made == 3
 
@@ -1661,7 +1661,7 @@ def test_the_ledger_separates_real_calls_from_cache_hits():
 
 def test_provider_prompt_cache_counts_keep_null_distinct_from_zero():
     d = Path(tempfile.mkdtemp())
-    ctx = RunContext.open(_book(), '123', 'stage3.style', paid=True,
+    ctx = RunContext.open(_book(), '123', 'stage6.hook', paid=True,
                           ledger=CostLedger(path=d / 'ledger.jsonl'))
     response = ChatResponse(
         content='一段正文', finish_reason='stop', model='deepseek-v4-pro',

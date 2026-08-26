@@ -22,15 +22,12 @@ from fastapi.testclient import TestClient          # noqa: E402
 
 from contracts.schema import encode_artifact       # noqa: E402
 from novel.api.app import UI_HEADER, create_app    # noqa: E402
-from novel.run import RunContext                   # noqa: E402
-from novel.stages.stage3 import style              # noqa: E402
-from tests import corpus, factories, sandbox       # noqa: E402
+from tests import corpus, sandbox                  # noqa: E402
 from tests.markers import corpus_params             # noqa: E402
 
 #: 九个读屏一次全要的产物（stage7 的 rows 与 stage5 屏还要成稿与验收）。
 INPUTS = ('stage1/main_text.json', 'stage1/hook_copy.json',
           'stage2/global_grounding.json', 'stage2/chapter_blueprints.json',
-          'stage3/style_grounding.json',
           'stage4/plan_chapters.json', 'stage4/writer_context.json',
           'stage6/hook.json', 'stage7/name_map.json')
 
@@ -100,38 +97,6 @@ def bare_client(tmp_path):
         yield c
 
 
-@pytest.fixture
-def mechanical_client(tmp_path):
-    """经正式免费 producer 写出一份 v2，再从真实 HTTP 路由读取。"""
-    sid = '303'
-    book_dir = tmp_path / f'合成机械基线_{sid}'
-    source = factories.stage5_book()
-    main = [
-        {
-            'chapter_ordinal': ordinal,
-            'text': text,
-        }
-        for ordinal, text in sorted(source.source_text.items())
-    ]
-    (book_dir / 'stage0').mkdir(parents=True)
-    (book_dir / 'stage1').mkdir()
-    (book_dir / 'stage0' / 'clean_text.txt').write_text(
-        '\n'.join(source.source_text.values()) + '\n', encoding='utf-8')
-    for rel, payload in (
-        ('stage1/main_text.json', main),
-        ('stage1/hook_copy.json', {'text': '一本账册，让沉默多年的旧案重新开口。'}),
-    ):
-        (book_dir / rel).write_text(
-            json.dumps(encode_artifact(rel, payload), ensure_ascii=False),
-            encoding='utf-8',
-        )
-    ctx = RunContext.open(tmp_path, sid, 'stage3.style', paid=False, write_ledger=False)
-    style.run_style(ctx)
-    with TestClient(create_app(tmp_path)) as client:
-        client.headers.update({UI_HEADER: '1'})
-        yield client, sid, book_dir
-
-
 def _tree(root) -> set:
     out = set()
     for dirpath, _dirs, files in os.walk(root):
@@ -156,40 +121,6 @@ CHAPTER_SCREENS = ('reading/1', 'stage4/1', 'stage5/1', 'review/1')
 
 
 # ───────────────────────── 一、成功 200 ─────────────────────────
-
-def test_stage3_v2_is_mechanical_only_over_the_real_http_route(mechanical_client):
-    client, sid, _book_dir = mechanical_client
-    response = client.get(f'/api/novels/{sid}/stage3/style')
-    assert response.status_code == 200, response.text
-    body = response.json()
-    assert (body['exists'], body['readable'], body['condition']) == (True, True, 'ready')
-    assert body['measurable_stored'] == body['measured_now']
-    assert body['drift'] == [] and body['_provenance']['measurement_contract']
-    assert not ({'voice', 'surface_habits', 'hook_style', 'chapter_styles'} & set(body))
-
-    report = client.get(f'/api/novels/{sid}/check/stage3')
-    assert report.status_code == 200, report.text
-    assert [row['rule'] for row in report.json()['rules']] == ['measurable_drift']
-
-
-@pytest.mark.parametrize('mutation', ['v1', 'pseudo_v2'])
-def test_stage3_old_or_malformed_bytes_exist_but_are_unreadable_over_http(
-        mechanical_client, mutation):
-    client, sid, book_dir = mechanical_client
-    path = book_dir / 'stage3' / 'style_grounding.json'
-    raw = json.loads(path.read_text(encoding='utf-8'))
-    if mutation == 'v1':
-        raw['_schema_version'] = 1
-    else:
-        raw['hook_style'] = {'tone': '伪 v2 不得保留定性字段'}
-    path.write_text(json.dumps(raw, ensure_ascii=False), encoding='utf-8')
-
-    response = client.get(f'/api/novels/{sid}/stage3/style')
-    assert response.status_code == 200, response.text
-    body = response.json()
-    assert (body['exists'], body['readable'], body['condition']) == (True, False, 'unreadable')
-    assert body['measurable_stored'] is None and body['_provenance'] is None
-    assert body['measured_now'] is not None and body['drift'] is None
 
 def test_every_screen_answers_200_on_a_complete_book(client, box):
     urls = [f'/api/novels/{box.sid}/{tail}'
@@ -350,7 +281,7 @@ def test_the_inbox_skips_a_layer_it_cannot_read(client, box):
     ⇒ 打坏一层不是 409，是**少了那一层条目的 200**。这一条是 inbox 与
     三个单产物屏在「产物损坏」这一格上的**刻意分叉**。
     """
-    (box.dir / 'stage3' / 'style_grounding.json').write_text('废字节', encoding='utf-8')
+    (box.dir / 'stage2' / 'global_grounding.json').write_text('废字节', encoding='utf-8')
     r = client.get(f'/api/novels/{box.sid}/inbox')
     assert r.status_code == 200, r.text[:200]
 
@@ -491,7 +422,7 @@ def test_a_non_integer_ordinal_is_422_from_the_carrier(bare_client):
 def test_the_screens_write_nothing_at_all(client, box):
     """打完全部九个读屏（含逐章对照、恒等基线现算与 inbox 的 0 成本复检）
     ⇒ 整棵树逐字节相同。恒等基线**现算不落盘**这一条也在这里一起钉住
-    （删掉 plan 打 stage4 屏，`run_identity` 那条路是会写盘的，view 不许）。"""
+    （Stage4 CLI 的 `run_identity` 同样只作内存诊断，view 复用这条现算口）。"""
     before = _tree(box.root)
     for tail in (*SCREENS, 'inbox', *CHAPTER_SCREENS):
         client.get(f'/api/novels/{box.sid}/{tail}')

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-novels.py —— 语料库、总览、S-06 机械基线。**三个都是纯读端点。**
+novels.py —— 语料库与单书总览。**两个都是纯读端点。**
 
 ⚠ 三个响应模型里**一个 `badge` / `passed` / `counts` 都没有**（`R-11.4`）：
 这一屏的结论只能来自 `/api/novels/:sid/check/:kind`。
@@ -10,12 +10,11 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends
 
-from contracts.schema.api import NovelList, StyleView
+from contracts.schema.api import NovelList
 from contracts.schema.orchestration import NovelOverview
 from novel import paths
 from novel.api.deps import checked_sid, get_base
 from novel.orchestrator.state import overview
-from novel.views.stage3 import style_view
 
 router = APIRouter(prefix='/novels')
 
@@ -48,15 +47,3 @@ def get_novel(sid: str = Depends(checked_sid),
               base: str = Depends(get_base)) -> NovelOverview:
     """这本书跑到哪了。**产物存在性 + 来源新鲜度**，不靠进度文件（`R-14.1`）。"""
     return overview(base, sid)
-
-
-@router.get('/{sid}/stage3/style', response_model=StyleView)
-def get_stage3_style(sid: str = Depends(checked_sid),
-                     base: str = Depends(get_base)) -> StyleView:
-    """S-06 Stage3 机械基线那一屏。
-
-    ⚠ **产物不在盘上是 200 不是 404**：`04_delivery.md:123` 明写
-    「`exists: false` 时左半边（实测）仍有内容」——左半边量的是 stage1，
-    与 stage3 有没有跑过无关。404 留给「**这本书**不在」（`UpstreamMissing`）。
-    """
-    return style_view(base, sid)

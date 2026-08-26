@@ -31,7 +31,8 @@
 > （`platform` 就是这么被推错的：盘上 3/3 是 `'FQ'`，全语料 120/163 是 `null`）
 
 `NovelOverview` 那一半好一些：统一契约 §八冻结的 `novel_overview.json` 是**一本真实的书**，
-八层产物 + `_provenance` + 三态新鲜度都在里面，标 `盘·码`。
+它是 Stage3 退役前的历史抓包，八层产物 + `_provenance` + 三态新鲜度都在里面，标 `盘·码`；
+这不代表当前仍有八个现役层。
 `QueuePlan` 整个是新的（`R-13` 是本次相对原型的**新增能力**），全部标 `设计`。
 
 ## 它要消灭的那四种已发生的故障
@@ -521,7 +522,7 @@ Output/_service/approvals/<sid>.json 人工闸门、已阅状态与 canonical �
 > B 进程紧接着写的完整行**顶到中间**，于是读侧对一次正常的并行跑开火，
 > 且是**所有书**的视图一起失效。锁补齐之后那条容忍才真正成立。
 
-`approvals/<sid>.json` 的盘上服务记录当前为 **v4**；HTTP 投影 `ApprovalDoc.v=3` 是另一条
+`approvals/<sid>.json` 的盘上服务记录当前为 **v5**；HTTP 投影 `ApprovalDoc.v=4` 是另一条
 版本轴，不能据同一个数字互推。每个已盖 gate、已阅状态、typed Stage4 结构裁决和 writing 授权
 都必须带一份 current-subject proof：当前 `stage0/clean_text.txt` 的完整 SHA-1、所裁决正式
 产物的完整 SHA-256，以及决定本身的规范 JSON SHA-256。读取时必须重新走当前 schema、typed
@@ -531,9 +532,10 @@ Output/_service/approvals/<sid>.json 人工闸门、已阅状态与 canonical �
 `surname_map + characters + extra_subs` 决策面与完整 typed `ApprovedNameMap` 的规范摘要。
 因此 `stage7.assemble` 写回 `book_txt` 交付账不会自废 s7，而决策面、actor/reason/origin
 或 subject hash 变化仍会失效；读取还必须先证明 approval 存在且 subject 与当前决策面一致。
-旧 v2 内部记录还含 `deep/deep_proof`，旧 v3 则没有 typed Stage4 结构裁决；两者只为**显式**
-backfill 解码，普通 GET / 作业启动绝不静默迁移。旧记录最多保留按当前盘面逐项对证的 s0～s3；
-不得凭旧 s4/writing 反造逐章结构决定，s4、writing 与 s5～s7 必须清空。旧 v1、损坏记录或
+旧 v4 记录仍含 s3 proof，只为**显式** backfill 解码；只有旧 Stage3 v2、Stage1、Stage4 与
+测量契约全部对得上时，才保守恢复仍成立的决定，新 v5 本身不保存 s3。旧 v2/v3 没有 typed
+Stage4 结构裁决，最多保留按当前盘面逐项对证的前置 gate；不得凭旧 s4/writing 反造逐章结构决定。
+普通 GET / 作业启动绝不静默迁移。旧 v1、损坏记录或
 不满足上述条件的记录只能显式 reset/backfill，不能猜。队列在一把锁内读取 current 结构裁决、
 writing 授权与盘面；不得先查文件、再另读授权，从而留下两次读取之间主体变化仍生成付费命令的窗口。
 

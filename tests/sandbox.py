@@ -19,7 +19,6 @@ STAGE3_INPUTS = (
     'stage1/main_text.json',
     'stage1/hook_copy.json',
     'stage2/global_grounding.json',
-    'stage3/style_grounding.json',
 )
 
 

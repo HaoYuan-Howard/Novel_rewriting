@@ -223,7 +223,7 @@ def test_apply_edit_drops_prompts_and_model_but_keeps_inputs():
 def _finding(**kw):
     base = dict(rule='name_leak', sev='hard', item='描述里出现人物专名', detail='第 3 维命中「阿禾」',
                 evidence=['voice.interiority', '阿禾'], evidence_key='voice.interiority|阿禾',
-                owner='stage3', actionable=False, identity_hit=False,
+                owner='stage2', actionable=False, identity_hit=False,
                 converge='new', unresolved_rounds=0)
     return Finding(**{**base, **kw})
 
@@ -239,7 +239,7 @@ def test_owner_is_none_exactly_when_it_is_not_a_conclusion():
     """`owner is None` ⇔ `sev ∈ (metric, unver)`。这条不变量抓出过一个 sev 写错的判据。"""
     _finding(sev='metric', owner=None, actionable=False)
     with pytest.raises(ValidationError, match='owner'):
-        _finding(sev='metric', owner='stage3')      # 度量不该有 owner
+        _finding(sev='metric', owner='stage4')      # 度量不该有 owner
     with pytest.raises(ValidationError, match='owner'):
         _finding(sev='hard', owner=None)            # 结论必须有 owner
 
@@ -248,7 +248,7 @@ def test_actionable_implies_owner_is_stage5():
     """根因不在写作层的条目进反哺 = 花钱让写手去修一个它修不了的东西。"""
     _finding(owner='stage5', actionable=True)
     with pytest.raises(ValidationError, match='actionable'):
-        _finding(owner='stage3', actionable=True)
+        _finding(owner='stage4', actionable=True)
 
 
 # ───────────────────── ⑦ 枚举的唯一落点没有被绕开 ─────────────────────

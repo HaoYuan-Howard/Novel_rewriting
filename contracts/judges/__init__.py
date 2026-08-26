@@ -14,14 +14,13 @@ contracts.judges —— 判据的【行】。**与它守的契约同层**（`Q-1
 ⚠⚠ **本模块显式列出每一个 import，不 glob、不自动发现。**
 `REGISTRY` 的内容一旦取决于文件系统或 import 顺序，「装了哪些判据」就成了一个
 要去盘上查才知道的问题——而正向覆盖率、落盘闸门、报告三个消费方都在问这件事。
-八层手写一张表，加一层加一行。
+七个现役层手写一张表，加一层加一行。
 """
 from __future__ import annotations
 
 from contracts.judges import stage0  # noqa: F401  —— import 即注册，副作用就是它的全部意义
 from contracts.judges import stage1  # noqa: F401
 from contracts.judges import stage2  # noqa: F401
-from contracts.judges import stage3  # noqa: F401
 from contracts.judges import stage4  # noqa: F401
 from contracts.judges import stage5  # noqa: F401
 from contracts.judges import stage6  # noqa: F401

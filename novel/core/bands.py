@@ -2,8 +2,8 @@
 # -*- coding: utf-8 -*-
 """机械测量 → 人读档位词。
 
-原始数字只落在 Stage3 v2 ``measurable``；本模块提供纯派生展示与下游 prompt 所需的
-最小档位，不生成、保存或恢复任何定性文风画像。档位阈值是网文短篇的通用启发式，
+原始数字由消费者即时测量；本模块提供纯派生 prompt 档位，不生成、保存或恢复
+任何定性文风画像。档位阈值是网文短篇的通用启发式，
 **不针对任何一本书**。
 """
 from __future__ import annotations
@@ -13,7 +13,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from contracts.invariants import SEP_BANDS
-from contracts.schema.stage3 import Measurable, MeasurableBlock, MeasurableBody
+from contracts.schema.measurement import MeasurableBlock, MeasurableBody
 from novel.core.normalize import normalize_paragraphs as _normalize_paragraphs
 
 #: 句子/段落的档位阈值：**唯一落点**。
@@ -35,7 +35,7 @@ def band(value: float, cuts: list[tuple[int | None, str]]) -> str:
 
 
 def _field(value: MeasurableBody | Mapping[str, Any] | object, key: str) -> Any:
-    """同一把档位尺同时接 typed Stage3 body 与 Stage5 的最小 dict 投影。"""
+    """同一把档位尺同时接即时测量对象与 Stage5 的最小 dict 投影。"""
     return value.get(key) if isinstance(value, Mapping) else getattr(value, key)
 
 
@@ -67,15 +67,15 @@ def body_bands(body: MeasurableBody | Mapping[str, Any]) -> dict[str, str]:
     """
     chapter_chars = _field(body, 'chapter_chars')
     per_chapter = _field(body, 'per_chapter_avg_sentence')
-    dialogue_ratio_applicable = _field(body, 'dialogue_ratio_applicable')
+    dialogue_ratio = _field(body, 'dialogue_ratio')
     quote_styles = _field(body, 'quote_styles')
     return {
         '句子形态': band(_field(body, 'avg_sentence_chars'), SENT_BANDS),
         '段落形态': band(_field(body, 'avg_paragraph_chars'), PARA_BANDS),
         '对白形态': (
             '无引号对白体（全书不用引号，对白比无法按引号统计）'
-            if not dialogue_ratio_applicable
-            else band(_field(body, 'dialogue_ratio'), [
+            if dialogue_ratio is None
+            else band(dialogue_ratio, [
                 (0.15, '对白稀少'), (0.3, '对白中等'), (None, '对白密集')])
             + f"（引号体：{'/'.join(quote_styles)}）"),
         '章篇幅': band(_field(chapter_chars, 'avg'), [
@@ -85,17 +85,6 @@ def body_bands(body: MeasurableBody | Mapping[str, Any]) -> dict[str, str]:
             if _field(per_chapter, 'max') >= 1.5 * max(_field(per_chapter, 'min'), 1)
             else '各章句长形态接近'),
     }
-
-
-def bands(meas: Measurable) -> dict[str, str]:
-    """完整 Stage3 机械基线 → API 展示用的六项人读档位。"""
-    b, h = meas.body, meas.hook
-    out = body_bands(b)
-    if h:
-        ratio = h.avg_sentence_chars / max(b.avg_sentence_chars, 1)
-        out['文案段形态'] = (band(h.avg_sentence_chars, SENT_BANDS) + '；相对正文'
-                             + ('更长' if ratio >= 1.15 else '更短' if ratio <= 0.87 else '接近'))
-    return out
 
 
 def hook_shape_band(
@@ -136,8 +125,8 @@ def sep_band_of_text(text: str | None) -> str:
     「段间有没有空行」是一个**离散、精确**的性质；把它平均成一个浮点数再卡阈值，
     那一步才是引入 bug 的地方。
 
-    ⚠ 上游那个 off-by-one **本轮不修**：`paragraph_sep_chars` 被 Stage3/5 一路消费，
-    改分母会动到**所有书所有产物的指纹**，远超本轮范围。
+    ⚠ 上游那个 off-by-one **本轮不修**：正文 `paragraph_sep_chars` 仍被 Stage5 消费，
+    改分母属于测量契约变更，会让既有 Stage5/6 消费边诚实地判 stale。
     它的触发条件很具体：**段数 ≤ 3 的文本会被判成单换行**。
     正文章节段数都在几十以上所以现在不咬人，而**文案本来就短**——所以本层必须绕开它。
     """
@@ -158,7 +147,7 @@ def ending_shape(text: str | None) -> str | None:
     """文本最后一行的收尾形态 → `ENDING_SHAPES` 之一（没有内容行时 `None`）。
 
     生成提示和验收都从原作文案段字节量出同一个量，两边比**形态**；不经过已经
-    退役的 Stage3 定性描述（判据 11：验收判据用结构不变量，不要用关键词表）。
+    任何已退役的定性画像（判据 11：验收判据用结构不变量，不要用关键词表）。
 
     ⚠ **判定顺序是有意的**，`引号台词` 优先于 `问句`：原作里就有既是台词又以问号收尾的
     （`“不然我怎么遇到你就变坏了呢？”`），而「用一句角色台词收尾」与「用叙述者的反问收尾」
