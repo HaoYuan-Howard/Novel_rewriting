@@ -235,6 +235,9 @@ stage5 的「三栏」= `ComparePanes(sticky=left)` 的右栏里装 `CompareRows
   `characters` 是带 `char_id` 的数组，界面不显示内部 id，也不重复展示舞台已有的 participants。
 - **Stage5 `materials` 是对象或 `null`**：非空时以 `blocks[]` 为唯一下发面。前端分别处理
   对象缺席与对象内列表，不能把 `null` 洗成空列表。
+- **Stage5 正文只取 Draft `segments[]`**：Review 只发 finding 与计数，不重复正文、轮次、篇幅、
+  基线或来源账。阅读、编辑与证据高亮都拼接并行 Stage5 响应里的当前 segments，不能退回 Review
+  的历史主体或在前端重判 stale。
 - **Stage4 结构决定与人工裁决是两层**：`stage4.index[].structure_decision` 展示计划自己的
   `retain/reconstruct + declared/computed_change_kinds`；`ApprovalDoc.structure` 展示人对当前
   完整 subject 的 `accept/request_replan`。前端不把前者自动翻译成后者。

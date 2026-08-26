@@ -93,6 +93,14 @@ def load_book(ctx: RunContext, store: ArtifactStore) -> M.Book:
     global_projected = without_global_evidence(gg.model_dump(by_alias=True))
     assert isinstance(global_projected, dict)
     source_text = {s.chapter_ordinal: (s.text or '') for s in main.root}
+    context_payload = wc.model_dump(by_alias=True)
+    for entry in context_payload.get('chapters') or []:
+        try:
+            M.assert_writer_context_v4(entry, M.chapter_basis(entry, source_text))
+        except ValueError as exc:
+            raise TerminalState(
+                f'{exc}。请免费重建 stage4.context，不要继续用漂移的任务书。'
+            ) from exc
     characters = ((global_projected.get('entities') or {}).get('characters') or {})
     name_registry, _substitutions, unattested = project_character_names(
         characters, '\n'.join(source_text.values()))
@@ -102,7 +110,7 @@ def load_book(ctx: RunContext, store: ArtifactStore) -> M.Book:
             '先修正 Stage2 人物称呼并免费重建 stage4.context。')
     return M.Book(
         title=ctx.title,
-        ctx=wc.model_dump(by_alias=True),
+        ctx=context_payload,
         measurable=style_projected['body'],
         source_text=source_text,
         secrets=((global_projected.get('canon') or {}).get('secrets') or []),
@@ -151,7 +159,7 @@ class ReviewStatus:
     """当前 Review 能否代表当前 canonical Stage5 主体。
 
     ``fresh`` 的含义比通用 provenance 更完整：同一结果还核 RULES、计划章集合、当前正文
-    投影、``judged`` 键和值以及 canonical ``draft.md``。调用方只消费这一份结论，禁止
+    投影与 ``judged`` 键和值。调用方只消费这一份结论，禁止
     state/queue/wontfix/revise/approval 各自拼一套“差不多”的 freshness。
     """
 
@@ -200,7 +208,7 @@ def legacy_versioned_paths(store: ArtifactStore) -> list[str]:
 
 
 def review_status(ctx: RunContext, store: ArtifactStore | None = None) -> ReviewStatus:
-    """一次关闭式判定：旧布局、旧 schema、RULES、上游、正文和 draft 任一漂移都不 fresh。"""
+    """一次关闭式判定：旧布局、旧 schema、RULES、上游或正文漂移都不 fresh。"""
     store = store or ArtifactStore(ctx)
     legacy_layout = M.legacy_stage5_paths(store)
     seqs = review_seqs(store)
@@ -297,14 +305,6 @@ def review_status(ctx: RunContext, store: ArtifactStore | None = None) -> Review
             plan = set(book.chapters)
             if set(review_rows) != plan:
                 stale.append(f'Review 章集合与当前计划不一致：{sorted(set(review_rows) ^ plan)}')
-            try:
-                from novel.stages.stage5.write import draft_is_current
-                draft_current = draft_is_current(store, book)
-            except (ArtifactUnreadable, UpstreamMissing, TerminalState, OSError) as exc:
-                unknown.append(f'canonical draft 投影判不了：{exc}')
-            else:
-                if not draft_current:
-                    stale.append('stage5/draft.md 不是当前 canonical 章节的字节投影')
 
     if stale:
         return ReviewStatus('stale', tuple(dict.fromkeys([*stale, *unknown])), rel, seq, rev)
@@ -316,7 +316,7 @@ def review_status(ctx: RunContext, store: ArtifactStore | None = None) -> Review
 def require_fresh_review(ctx: RunContext, store: ArtifactStore | None = None) -> ReviewStatus:
     """付费返工、豁免、审批等消费入口的共同关闭式闸。
 
-    ``review_status`` 为验证 Review 会读完整 canonical 主体与 ``draft.md``；它们是
+    ``review_status`` 为验证 Review 会读完整 canonical 主体；这些读取是
     **这道闸的校验材料**，不是下游 producer 的正文输入。隔离作用域防止这些读取
     泄漏进 Stage6/7 的来源账；真正构造产物时读到的上游仍由各节点照常自动记账。
     """
@@ -370,19 +370,6 @@ def load_wontfix(store: ArtifactStore) -> dict[str, WontFixEntry]:
 wontfix_key = wontfix.key
 
 
-def _semantic_pool(ctx: RunContext, store: ArtifactStore) -> tuple[list[Finding], str | None]:
-    """本层现算的语义结论池；`stage5.semantic` 下线后恒为空。
-
-    ⚠ **保留这个函数而不是删掉它，是为了让「反查池 = 机械 ∪ 语义」这条结构留在原处。**
-    本层的语义判据随 `stage5.semantic` 节点于 2026-08-17 一并下线（用户裁决），
-    于是这一半恒空；`--wontfix` 的反查因此只在机械结论里进行，
-    而那正是本层现在全部结论的所在。
-    ⚠ 若将来恢复书级语义审判，把结论重新灌进这里即可，不必再改 `mark_wontfix`。
-    """
-    del ctx, store
-    return [], None
-
-
 def mark_wontfix(ctx: RunContext, spec: str) -> CheckReport:
     """`--wontfix`：把一条「这条我不修」记进 `stage5/wontfix.json`。**不产验收报告。**
 
@@ -399,19 +386,14 @@ def mark_wontfix(ctx: RunContext, spec: str) -> CheckReport:
     current = require_fresh_review(ctx, store)
     assert current.seq is not None and current.review is not None
     seq, rev = current.seq, current.review
-    semantic_findings, semantic_at = _semantic_pool(ctx, store)
 
     def pool_of(ordinal: int | None) -> list[Finding]:
         if ordinal is not None:
             return list(next((c.findings for c in rev.chapters
                               if c.output_ordinal == ordinal), []))
-        return list(rev.book) + semantic_findings
+        return list(rev.book)
 
-    semantic_rules = {f.rule for f in semantic_findings}
-    _head, rule, _ev, _why = wontfix.parse_spec(spec)
-    at = (f'{semantic_at or "semantic_?"}@review_{seq}'
-          if rule in semantic_rules else f'review_{seq}')
-    wontfix.mark(store, 'stage5', spec, pool_of=pool_of, at=at)
+    wontfix.mark(store, 'stage5', spec, pool_of=pool_of, at=f'review_{seq}')
     return _report_of_review(ctx, store, rev)
 
 
@@ -471,10 +453,13 @@ def build_review(ctx: RunContext, store: ArtifactStore, book: M.Book) -> Review:
     for o in sorted(book.chapters):
         entry = book.chapters[o]
         rec = by_ord.get(o)
+        basis = M.chapter_basis(entry, book.source_text)
+        assert (basis.source_ordinal is not None and basis.source_chars is not None
+                and basis.budget_chars is not None)
         base = {'output_ordinal': o,
-                'from_source_ordinals': entry['from_source_ordinals'],
-                'budget_chars': entry['budget_chars'],
-                'source_chars': entry['source_chars']}
+                'from_source_ordinals': [basis.source_ordinal],
+                'budget_chars': basis.budget_chars,
+                'source_chars': basis.source_chars}
         if rec is None:
             rows.append(ReviewChapter(**base, findings=checks.with_output_ordinal([finding(
                 'draft_missing',
@@ -613,12 +598,24 @@ def _apply_wontfix(rows: list[ReviewChapter], book_fs: list[Finding],
     只是不再进反哺、也不再算进「待人工」。**「有人看过并决定不修」与「没人看过」
     必须分得开**——那正是加这个机制的全部理由。
 
-    ⚠ 这里套的是**落进产物的那一份**（机械结论）。语义结论不进产物，
-    它们由 `_report_of_review` 在渲染时套同一份账（`novel/wontfix.py::applied_to_outcomes`）。
     """
     return ([r.model_copy(update={'findings': wontfix.applied(
                 r.findings, wf, ordinal=r.output_ordinal)}) for r in rows],
             wontfix.applied(book_fs, wf))
+
+
+def with_current_wontfix(store: ArtifactStore, rev: Review) -> Review:
+    """把当前独立 wontfix 决定账叠加到一份 Review 的只读投影。
+
+    ``stage5.review --wontfix`` 刻意只写 ``stage5/wontfix.json``，不改写也不
+    新产一轮 Review。因此报告、HTTP view 等每个读出口都必须共用这里，不能把
+    盘上 Review 自带的旧 ``Finding.wontfix`` 当成当前决定面。
+    """
+    rows, book_fs = _apply_wontfix(
+        list(rev.chapters), list(rev.book), load_wontfix(store))
+    if rows == list(rev.chapters) and book_fs == list(rev.book):
+        return rev
+    return rev.model_copy(update={'chapters': rows, 'book': book_fs})
 
 
 def _converge(rows: list[ReviewChapter], book_fs: list[Finding], prev: Review | None
@@ -727,7 +724,8 @@ def _outcomes(rev: Review, book: M.Book | None) -> list:
             blind['secret_leak'] = (
                 f'这本书 {len(book.secrets)} 条 secret 的字面探针**全部**连它自己的'
                 f'揭示章都命中不了 ⇒ 本条这一次没有判别力样本。'
-                f'「0 命中」在这里不是一个结论；改写式泄底由独立的书级语义层判定')
+                f'「0 命中」在这里不是一个结论；全链没有书级语义审判节点，'
+                f'改写式泄底由 Stage2 后见之明判据与交付前成书逐字对账复核')
 
     # ⚠⚠ **保真那三条的分母是「下发了多少条材料」，不是「命中了几章」。**
     #   `baselines` 记的是后者，而两者在报告上长得一模一样：一条材料都没下发时，
@@ -842,20 +840,13 @@ def _report_of_review(ctx: RunContext, store: ArtifactStore, rev: Review,
                       freshness_rel: str | None = None) -> CheckReport:
     """机械结论 + 已落盘豁免 → 一份验收报告。
 
-    ⚠ 历史：本层曾在这里额外合并**渲染时现算**的语义结论并单独套一次豁免
-    （机械结论落进 `review_<n>.json`，语义结论不落盘 ⇒ 两侧的豁免时机不同）。
-    `stage5.semantic` 下线后语义那一半恒空，合并因此收敛成单侧。
-    ⚠ 恢复书级语义审判时要把那一步一起恢复——豁免不套上去，
-    「有人看过并决定不修」与「没人看过」在报告上会重新同形。
     """
     # `wontfix.json` 是独立于 `review_<n>.json` 的人的决定账。`--wontfix`
     # 刻意不重算/不落一份新 Review，所以每个读出口都必须在**读时**叠加当前账；
     # 只在 `build_review` 时烘焙一次会让刚落下的决定在 check/inbox 里继续显示
     # pending，直到有人额外重跑一次 0 成本验收。重套是幂等的：匹配身份仍是
     # `(章|book, rule, evidence_key)`，已有标记只会被当前账的同一条目刷新。
-    wf = load_wontfix(store)
-    rows, book_fs = _apply_wontfix(list(rev.chapters), list(rev.book), wf)
-    current = rev.model_copy(update={'chapters': rows, 'book': book_fs})
+    current = with_current_wontfix(store, rev)
 
     seqs = review_seqs(store)
     rel = freshness_rel or (REVIEW_TPL.format(n=seqs[-1]) if seqs else WRITER_CONTEXT)

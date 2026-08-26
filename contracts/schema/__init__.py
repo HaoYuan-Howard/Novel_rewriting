@@ -148,7 +148,7 @@ from contracts.schema.stage4 import (
     PlanScene, WriterContext,
 )
 from contracts.schema.stage5 import (
-    Chapter, ChapterResponse, ChapterSegment, DraftConsumed, GeneratedSegment,
+    Chapter, ChapterResponse, ChapterSegment, DraftConsumed,
     JudgedDraft, RejectedAttempt, RejectedRevision, Review, ReviewChapter,
 )
 from contracts.schema.stage6 import (
@@ -212,7 +212,7 @@ class DecodedArtifact:
 #: **产物相对路径 → 当前契约。** 路径里的 `{n}` / `{nn}` 是占位符。
 #: 这是路径、模型与 schema version 的唯一权威表；`ARTIFACTS` 是模型投影。
 #:
-#: ⚠ 这里**不含** `stage0/clean_text.txt` / `stage5/draft.md` / 成书 `stage7/{title}_rewriting.txt`
+#: ⚠ 这里**不含** `stage0/clean_text.txt` / 成书 `stage7/{title}_rewriting.txt`
 #: ——它们不是 JSON，schema 是**字节形态**，守卫在写盘口那一层。
 #:
 #: ⚠ **一条 `migrations=` 都没有**，将来也不许有。这不是「还没来得及写」，
@@ -442,7 +442,7 @@ __all__ = [
     'PlanChapters', 'PlanChapter', 'PlanScene', 'FactRef', 'PlanGoal', 'PlanEdit',
     'WriterContext',
     'CtxChapter', 'CtxScene', 'CtxFacts', 'CtxGoal',
-    'Chapter', 'GeneratedSegment', 'ChapterSegment', 'ChapterResponse',
+    'Chapter', 'ChapterSegment', 'ChapterResponse',
     'RejectedAttempt', 'RejectedRevision',
     'Review', 'ReviewChapter', 'JudgedDraft', 'DraftConsumed',
     'Hook', 'Candidate', 'ApprovedHook', 'HookApprovalResolution', 'Mech',

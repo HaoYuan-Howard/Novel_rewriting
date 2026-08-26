@@ -10,6 +10,7 @@ from __future__ import annotations
 import shutil
 import tempfile
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -21,6 +22,7 @@ from contracts.schema.orchestration import (
 )
 from novel import paths
 from novel.orchestrator import state as S
+from novel.prov import FreshnessReport
 from tests import corpus
 
 CORPUS = corpus.corpus_root()
@@ -102,7 +104,7 @@ def test_every_json_artifact_a_node_produces_has_a_model():
 
     ⚠ 两张表分家的形态是**静默的**：`ARTIFACTS` 查不到 ⇒ `artifact_state`
     跳过模型校验 ⇒ 那份产物**永远 `readable=True`**，哪怕它根本读不回来。
-    ⚠ 字节形态那三份（`clean_text.txt` / `draft.md` / 成书）按设计不在
+    ⚠ 字节形态两份（`clean_text.txt` / 成书）按设计不在
     `ARTIFACTS` 里——它们的 schema 是字节形态，守卫在写盘口那一层。
     """
     missing = sorted({rel for spec in NODES.values() for rel in spec.produces
@@ -147,10 +149,12 @@ def test_overview_runs_on_the_real_corpus(sid):
 # ───────────────────── 逐章：只有正式稿可被数进去 ─────────────────────
 
 def test_only_canonical_formal_chapters_are_counted_as_written():
-    """⚠⚠ `chNN.json` 的存在本身就是「过了写作时的落盘闸门」这个语义。
+    """`chapters_done` 只做 canonical 文件名发现，不冒充完成度校验。
 
     把 `.INVALID.json` / `.rejected.json` 数进去就把这个语义**反过来**了：
     续跑会跳过一章**根本没写成的**稿子，而那一章的钱到时候还得花。
+    文件名命中的正式稿仍须由 ``stage_state`` 逐份校验 schema/version/freshness；
+    本用例故意写 ``{}``，只证明发现边界，不证明它完成。
     ⚠ 本机 `%TEMP%\\pytest-of-yh255` 的 ACL 坏了，`tmp_path` 一用就炸 ⇒ `mkdtemp`。
     """
     root = Path(tempfile.mkdtemp())
@@ -165,6 +169,185 @@ def test_only_canonical_formal_chapters_are_counted_as_written():
         assert S.chapters_done(root) == [1, 3]
     finally:
         shutil.rmtree(root, ignore_errors=True)
+
+
+@pytest.mark.parametrize(
+    ('planned', 'written', 'invalid_name', 'want_done'),
+    [
+        ([1], [1], 'ch02.INVALID.json', False),
+        (None, [], 'ch01.INVALID.json', None),
+        ([1], [1], 'chx.INVALID.json', False),
+    ],
+)
+def test_stage5_live_invalid_is_visible_outside_the_current_plan_set(
+        tmp_path, monkeypatch, planned, written, invalid_name, want_done):
+    """计划外、计划未知或坏命名的 live INVALID 都不能从状态/恢复入口消失。"""
+    novel_dir = tmp_path / '测试书_1'
+    stage5_dir = novel_dir / 'stage5'
+    stage5_dir.mkdir(parents=True)
+    (stage5_dir / invalid_name).write_text('{}', encoding='utf-8')
+    store = SimpleNamespace(ctx=SimpleNamespace(novel_dir=novel_dir))
+    monkeypatch.setattr(S, 'chapters_done', lambda _novel_dir: written)
+    monkeypatch.setattr(S, 'planned_chapters', lambda _store: planned)
+
+    def fake_artifact_state(_store, rel):
+        ordinal = int(''.join(ch for ch in Path(rel).stem if ch.isdigit()))
+        if ordinal in written:
+            return _chapter_state().model_copy(update={'rel': rel})
+        return _chapter_state(exists=False, invalid=True).model_copy(update={'rel': rel})
+
+    monkeypatch.setattr(S, 'artifact_state', fake_artifact_state)
+    from novel.stages.stage5 import review as stage5_review
+    monkeypatch.setattr(
+        stage5_review, 'review_status',
+        lambda _ctx, _store: SimpleNamespace(
+            state='missing', reasons=('尚无 Review',), review_rel=None),
+    )
+
+    stage = S.stage_state(store, 'stage5')
+
+    assert stage.done is want_done
+    assert stage.reviewable is True
+    assert any(row.invalid for row in stage.artifacts)
+    verdict, why = S.resume_verdict(_overview(stage), 'stage5.write')
+    assert verdict == S.RESUME_RUN and '--revalidate' in why
+
+
+@pytest.mark.parametrize('payload', ['{', '{"_schema_version": 1}'])
+def test_concrete_stage5_chapter_is_schema_checked_by_artifact_state(tmp_path, payload):
+    """动态路径也必须走注册表；坏 JSON / 低版本不能被当成 readable。"""
+    novel_dir = tmp_path / '测试书_1'
+    rel = 'stage5/ch01.json'
+    path = novel_dir / rel
+    path.parent.mkdir(parents=True)
+    path.write_text(payload, encoding='utf-8')
+
+    store = S.ArtifactStore(S.readonly_ctx(novel_dir, 'stage5.write', 'test'))
+    state = S.artifact_state(store, rel)
+
+    assert state.exists is True
+    assert state.readable is False
+    assert state.freshness == 'unknown'
+    assert state.condition == 'unreadable'
+
+
+def _chapter_state(*, freshness: str = 'fresh', exists: bool = True,
+                   readable: bool = True, invalid: bool = False) -> ArtifactState:
+    return ArtifactState(
+        rel='stage5/ch01.json', exists=exists,
+        bytes=(1 if exists else None), mtime=(1 if exists else None),
+        freshness=(freshness if exists else 'unknown'),
+        reason=('match' if freshness == 'fresh' else 'consumed_changed'
+                if freshness == 'stale' else 'no_provenance'),
+        display_freshness=(freshness if exists else 'missing'),
+        invalid=invalid, readable=readable,
+        condition=('invalid' if invalid else 'missing' if not exists else
+                   'unreadable' if not readable else 'ready'),
+    )
+
+
+@pytest.mark.parametrize(
+    ('chapter', 'done', 'verdict'),
+    [
+        (_chapter_state(), True, S.RESUME_SKIP),
+        (_chapter_state(freshness='stale'), False, S.RESUME_REDO),
+        (_chapter_state(freshness='unknown'), None, S.RESUME_UNKNOWN),
+        (_chapter_state(readable=False), False, S.RESUME_UNKNOWN),
+        (_chapter_state(exists=False), False, S.RESUME_RUN),
+    ],
+)
+def test_stage5_completion_validates_each_canonical_chapter(
+    tmp_path, monkeypatch, chapter, done, verdict,
+):
+    """文件名齐全不够：付费写作 SKIP 前必须逐章可读且 fresh。"""
+    novel_dir = tmp_path / '测试书_1'
+    novel_dir.mkdir()
+    store = SimpleNamespace(ctx=SimpleNamespace(novel_dir=novel_dir))
+    monkeypatch.setattr(S, 'chapters_done', lambda _novel_dir: [1])
+    monkeypatch.setattr(S, 'planned_chapters', lambda _store: [1])
+    monkeypatch.setattr(S, 'artifact_state', lambda _store, _rel: chapter)
+
+    from novel.stages.stage5 import review as stage5_review
+    monkeypatch.setattr(
+        stage5_review, 'review_status',
+        lambda _ctx, _store: SimpleNamespace(
+            state='missing', reasons=('尚无 Review',), review_rel=None),
+    )
+
+    stage = S.stage_state(store, 'stage5')
+    assert stage.done is done
+    assert stage.artifacts == ([] if done else [chapter])
+    assert S.resume_verdict(_overview(stage), 'stage5.write')[0] == verdict
+
+
+def test_stage5_chapter_filename_must_match_its_payload_ordinal(tmp_path):
+    """合法 Chapter 装错路径也不可冒充计划中的那一章。"""
+    rel = 'stage5/ch01.json'
+    path = tmp_path / rel
+    path.parent.mkdir(parents=True)
+    path.write_text('{}', encoding='utf-8')
+
+    class Store:
+        @staticmethod
+        def path(_rel):
+            assert _rel == rel
+            return path
+
+        @staticmethod
+        def exists(_rel):
+            return False
+
+        @staticmethod
+        def freshness(_rel):
+            return FreshnessReport('fresh', 'match')
+
+        @staticmethod
+        def read_own(_model, _rel):
+            return SimpleNamespace(output_ordinal=2), {}
+
+    state = S.artifact_state(Store(), rel)
+    assert state.exists is True
+    assert state.readable is False
+    assert state.condition == 'unreadable'
+
+
+def test_stage5_issue_rows_do_not_change_the_summary_artifact_count():
+    """章级诊断不是正式清单；问题修好后总产物数不得反向减少。"""
+    issue = _chapter_state(freshness='stale')
+    stage = StageState(
+        stage='stage5', artifacts=[issue], done=False, reviewable=True,
+        chapters_done=[1], review_state='stale', review_reasons=['正文已变'],
+    )
+    summary = S.overview_summary([stage])
+    assert summary.verdict == 'stale'
+    assert summary.artifact_count == 0
+    assert summary.latest_mtime is None
+
+
+def test_stage5_live_invalid_precedes_stale_paid_rewrite_advice():
+    """旧 canonical 已 stale 时仍先暴露可零成本重判的 live INVALID。"""
+    issue = _chapter_state(freshness='stale', invalid=True)
+    stage = StageState(
+        stage='stage5', artifacts=[issue], done=False, reviewable=True,
+        chapters_done=[1], review_state='missing', review_reasons=['尚无 Review'],
+    )
+
+    verdict, why = S.resume_verdict(_overview(stage), 'stage5.write')
+
+    assert verdict == S.RESUME_RUN
+    assert '--revalidate' in why and '0 LLM' in why
+
+
+def test_retired_stage5_draft_is_not_discovered_or_required(tmp_path):
+    """旧 ``draft.md`` 可留盘，但不再参与产物、legacy 或完成度发现。"""
+    novel_dir = tmp_path / 'FQ_测试书_42'
+    stage5 = novel_dir / 'stage5'
+    stage5.mkdir(parents=True)
+    (stage5 / 'draft.md').write_text('历史展示副本', encoding='utf-8')
+
+    assert S.required_artifacts('stage5', novel_dir=novel_dir) == ()
+    assert S.stage5_legacy_paths(novel_dir) == []
+    assert S.chapters_done(novel_dir) == []
 
 
 def test_resume_verdicts_are_a_closed_set():
@@ -189,12 +372,8 @@ def _overview(*stages: StageState) -> NovelOverview:
 def _stage5(*, chapters: list[int], rounds: dict[str, list[int]],
             review_state: str = 'missing',
             review_reasons: list[str] | None = None) -> StageState:
-    draft = ArtifactState(
-        rel='stage5/draft.md', exists=True, bytes=1, mtime=1,
-        freshness='fresh', reason='match', display_freshness='fresh',
-        invalid=False, readable=True, condition='ready')
     return StageState(
-        stage='stage5', artifacts=[draft], done=True, reviewable=True,
+        stage='stage5', artifacts=[], done=True, reviewable=True,
         chapters_done=chapters, rounds_done=rounds,
         review_state=review_state,
         review_reasons=(review_reasons if review_reasons is not None else

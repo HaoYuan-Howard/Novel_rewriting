@@ -17,8 +17,7 @@ import pytest
 from novel import prov
 from novel.cli import exit_codes as X
 from novel.errors import (
-    ArtifactUnreadable, GateBlocked, ProvenanceRefused, ResponseRepairRequired,
-    TerminalState,
+    GateBlocked, ProvenanceRefused, ResponseRepairRequired, TerminalState,
 )
 from novel.llm.cache import (
     CachePolicy, ResponseCache, cache_key, request_fingerprint,
@@ -31,6 +30,108 @@ from novel.llm.ledger import CostLedger
 from novel.llm.transport import ChatRequest, ChatResponse, FakeTransport
 from novel.stages.stage5 import write
 from tests import factories
+
+
+class _MemoryTrimStore:
+    """只承载 Stage5 正文/trim 状态机的内存盘面。"""
+
+    def __init__(self, docs=None, *, baselines=None):
+        self.docs = dict(docs or {})
+        self.baselines = dict(baselines or {})
+        self.archived = []
+        self.transactions = []
+        self.promoted = None
+        self.refreshed = []
+
+    def exists(self, rel):
+        return rel in self.docs
+
+    def path(self, rel):
+        return Path(rel)
+
+    def read_own(self, _model, rel, **_kwargs):
+        artifact = self.docs[rel]
+        raw = (artifact.model_dump(by_alias=True, mode='json')
+               if hasattr(artifact, 'model_dump') else {})
+        return artifact, raw
+
+    def read_with_sha256(self, _model, rel):
+        return self.docs[rel], 'a' * 64
+
+    def revalidation_baseline(self, rel, _model, **_kwargs):
+        invalid_rel = rel.replace('.json', '.INVALID.json')
+        return self.baselines.get(invalid_rel, self.docs[invalid_rel])
+
+    def write(self, rel, artifact):
+        self.docs[rel] = artifact
+        invalid_rel = rel.replace('.json', '.INVALID.json')
+        if invalid_rel in self.docs:
+            self.archive_round(invalid_rel)
+        return rel
+
+    def refresh_formal(self, rel, artifact):
+        assert rel in self.docs
+        self.refreshed.append(rel)
+        self.docs[rel] = artifact
+        return rel
+
+    def write_round(self, rel, artifact):
+        self.docs[rel] = artifact
+        invalid_rel = rel.replace('.json', '.INVALID.json')
+        if invalid_rel in self.docs:
+            self.archive_round(invalid_rel)
+        return rel
+
+    def write_invalid(self, rel, artifact, *, gates_skipped):
+        assert gates_skipped == []
+        invalid_rel = rel.replace('.json', '.INVALID.json')
+        self.docs[invalid_rel] = artifact
+        return invalid_rel
+
+    def promote_invalid(self, rel, _model, **kwargs):
+        invalid_rel = rel.replace('.json', '.INVALID.json')
+        assert invalid_rel in self.docs
+        self.promoted = kwargs['artifact_override']
+        self.docs[rel] = self.promoted
+        del self.docs[invalid_rel]
+        return rel
+
+    def archive_round(self, rel, *, keep=False):
+        self.archived.append(rel)
+        if not keep:
+            self.docs.pop(rel)
+        return rel
+
+    def next_round(self, _rel):
+        return 2
+
+    @contextmanager
+    def history_transaction(self, *rels):
+        self.transactions.append(rels)
+        yield
+
+
+def _stage5_chapter(*, text, budget_chars=10, errs=None, output_ordinal=1):
+    provenance = write.RoundFreeProvenance(
+        code='test-code', root_clean_sha1='a' * 40, inputs={},
+        round=7, origin='human')
+    return write.Chapter(
+        output_ordinal=output_ordinal,
+        from_source_ordinals=[9],
+        source_chars=777,
+        budget_chars=budget_chars,
+        chars=1,
+        overlap_excl_verbatim=None,
+        segments=[write.ChapterSegment(slot='s01', text=text)],
+        warns=['旧读数'],
+        errs=errs,
+        _provenance=provenance,
+    )
+
+
+def _trim_book(entry):
+    return SimpleNamespace(
+        chapters={1: entry}, source_text={}, quote_style=None, sep_chars=None)
 
 
 def test_length_capped_nonempty_draft_is_not_usable():
@@ -101,6 +202,375 @@ def test_over_length_chapter_keeps_pretrim_and_records_why(monkeypatch):
     assert audit.before_sha256 == write._sha256_text(original)
 
 
+def test_model_landing_builds_trim_audit_from_the_final_normalized_segments(
+        monkeypatch):
+    """首写/修订共用的落盘口，只能按最终 canonical 字节同步 trim。"""
+    final_text = '终稿正文已经明显超过当前预算上限。'
+    entry = {
+        'output_ordinal': 1,
+        'from_source_ordinals': [1],
+        'source_chars': 5,
+        'budget_chars': 5,
+        'scenes': [{'slot': 's01', 'budget_chars': 5}],
+    }
+    book = _trim_book(entry)
+    store = _MemoryTrimStore()
+    monkeypatch.setattr(
+        write, '_normalize_segments',
+        lambda _segments, _book: (
+            [{'slot': 's01', 'text': final_text}], write.M.NormalizeAccount()))
+    monkeypatch.setattr(write, '_judge', lambda *_args, **_kwargs: ([], [], []))
+    monkeypatch.setattr(write.M, 'overlap_ratio', lambda *_args, **_kwargs: None)
+    ctx = SimpleNamespace(accounting={}, account=lambda *_args, **_kwargs: None)
+
+    where, errors, _findings, trim_notes = write._write_chapter(
+        ctx,
+        store,
+        entry,
+        book,
+        segments=[{'slot': 's01', 'text': '归一前很短。'}],
+        mat='given',
+        account=write.M.NormalizeAccount(),
+        provenance=write.RoundFreeProvenance(
+            code='test-code', root_clean_sha1='a' * 40, inputs={},
+            round=1, origin='human'),
+    )
+
+    audit_rel = 'stage5/trim_audit_ch01.json'
+    assert where == 'stage5/ch01.json' and errors == [] and trim_notes
+    assert store.docs['stage5/ch01.json'].text == final_text
+    assert store.docs[audit_rel].before_sha256 == write._sha256_text(final_text)
+
+
+def test_apply_edit_commits_the_chapter_and_its_trim_audit_together(
+        tmp_path, monkeypatch):
+    text = '人工正文已经明显超过当前预算上限。'
+    edit = tmp_path / 'ch01.json'
+    edit.write_text(json.dumps({
+        'segments': [{'slot': 's01', 'text': text}],
+    }, ensure_ascii=False), encoding='utf-8')
+    entry = {
+        'output_ordinal': 1,
+        'from_source_ordinals': [1],
+        'source_chars': 5,
+        'budget_chars': 5,
+        'scenes': [{'slot': 's01', 'budget_chars': 5}],
+    }
+    book = _trim_book(entry)
+    store = _MemoryTrimStore()
+    ctx = SimpleNamespace(free_provenance=lambda cls, **kwargs: cls(
+        code='test-code', root_clean_sha1='a' * 40, inputs={}, **kwargs))
+    monkeypatch.setattr(write, 'ArtifactStore', lambda _ctx: store)
+    monkeypatch.setattr(write, 'require_canonical_layout', lambda _store: None)
+    monkeypatch.setattr(write.review, 'load_book', lambda *_args: book)
+    monkeypatch.setattr(
+        write, '_normalize_segments',
+        lambda segments, _book: (segments, write.M.NormalizeAccount()))
+    monkeypatch.setattr(write, '_judge', lambda *_args, **_kwargs: ([], [], ['新读数']))
+    monkeypatch.setattr(write.M, 'overlap_ratio', lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        write.prompts, 'build_material',
+        lambda *_args, **_kwargs: SimpleNamespace(given='given'))
+    monkeypatch.setattr(write, '_report', lambda *_args, **_kwargs: object())
+
+    write.run_apply_edit(ctx, str(edit))
+
+    chapter = store.docs['stage5/ch01.json']
+    audit = store.docs['stage5/trim_audit_ch01.json']
+    assert chapter.text == text
+    assert audit.before_sha256 == write._sha256_text(chapter.text)
+
+
+def test_recheck_preserves_paid_payload_and_backfills_trim_audit(monkeypatch):
+    original_text = '甲,乙。\n丙丁戊己庚辛。'
+    chapter = _stage5_chapter(
+        text=original_text, budget_chars=4, errs=['旧阻断读数'])
+    entry = {
+        'output_ordinal': 1,
+        'from_source_ordinals': [1],
+        'source_chars': 3,
+        'budget_chars': 3,
+        'scenes': [{'slot': 's01', 'budget_chars': 3}],
+    }
+    book = _trim_book(entry)
+    rel = 'stage5/ch01.json'
+    invalid_rel = 'stage5/ch01.INVALID.json'
+    invalid = _stage5_chapter(
+        text='这份问题稿仍待独立重验证。', budget_chars=4, errs=['待重验证'])
+    store = _MemoryTrimStore({rel: chapter, invalid_rel: invalid})
+    judged = {}
+    monkeypatch.setattr(write, 'ArtifactStore', lambda _ctx: store)
+    monkeypatch.setattr(write, 'require_canonical_layout', lambda _store: None)
+    monkeypatch.setattr(write.review, 'load_book', lambda *_args: book)
+    monkeypatch.setattr(
+        write, '_normalize_segments',
+        lambda _segments, _book: (
+            [{'slot': 's01', 'text': '若采用返回值就会破坏原稿。'}],
+            write.M.NormalizeAccount(punct_fixed=3, quote_problems=['只观察'])))
+    monkeypatch.setattr(
+        write, '_judge',
+        lambda text, _entry, _book, **kwargs: (
+            judged.update(text=text, segments=kwargs['segments']) or [],
+            [],
+            ['新读数'],
+        ))
+    monkeypatch.setattr(write.M, 'overlap_ratio', lambda *_args, **_kwargs: 0.25)
+    monkeypatch.setattr(
+        write.prompts, 'build_material',
+        lambda *_args, **_kwargs: SimpleNamespace(given='given'))
+    monkeypatch.setattr(write, '_report', lambda *_args, **_kwargs: object())
+
+    write.run_recheck(SimpleNamespace())
+
+    updated = store.docs[rel]
+    assert judged == {
+        'text': chapter.text,
+        'segments': [segment.model_dump() for segment in chapter.segments],
+    }
+    assert updated.segments == chapter.segments
+    assert updated.from_source_ordinals == chapter.from_source_ordinals
+    assert updated.source_chars == chapter.source_chars
+    assert updated.budget_chars == chapter.budget_chars
+    assert updated.provenance == chapter.provenance
+    assert updated.chars == write.M.chars_of(chapter.text)
+    assert updated.overlap_excl_verbatim == 0.25
+    assert updated.warns == ['新读数'] and updated.errs is None
+    assert store.refreshed == [rel]
+    assert store.docs[invalid_rel] is invalid
+    assert invalid_rel not in store.archived
+    assert store.docs['stage5/trim_audit_ch01.json'].before_sha256 == (
+        write._sha256_text(chapter.text))
+
+
+def test_revalidate_judges_and_promotes_the_live_invalid_segments_verbatim(
+        monkeypatch):
+    original_text = '甲,乙。\n丙丁戊己庚辛。'
+    invalid = _stage5_chapter(
+        text=original_text, budget_chars=4, errs=['旧阻断读数'])
+    entry = {
+        'output_ordinal': 1,
+        'from_source_ordinals': [1],
+        'source_chars': 3,
+        'budget_chars': 3,
+        'scenes': [{'slot': 's01', 'budget_chars': 3}],
+    }
+    book = _trim_book(entry)
+    inv_rel = 'stage5/ch01.INVALID.json'
+    store = _MemoryTrimStore({inv_rel: invalid})
+    judged = {}
+    monkeypatch.setattr(write, 'ArtifactStore', lambda _ctx: store)
+    monkeypatch.setattr(write, 'require_canonical_layout', lambda _store: None)
+    monkeypatch.setattr(write.review, 'load_book', lambda *_args: book)
+    monkeypatch.setattr(
+        write, '_normalize_segments',
+        lambda _segments, _book: (
+            [{'slot': 's01', 'text': '若采用返回值就不再是原 INVALID。'}],
+            write.M.NormalizeAccount(punct_fixed=3, quote_problems=['只观察'])))
+    monkeypatch.setattr(
+        write, '_judge',
+        lambda text, _entry, _book, **kwargs: (
+            judged.update(text=text, segments=kwargs['segments']) or [],
+            [],
+            ['当前判据读数'],
+        ))
+    monkeypatch.setattr(write.M, 'overlap_ratio', lambda *_args, **_kwargs: 0.5)
+    monkeypatch.setattr(
+        write.prompts, 'build_material',
+        lambda *_args, **_kwargs: SimpleNamespace(given='given'))
+    monkeypatch.setattr(write, '_report', lambda *_args, **_kwargs: object())
+
+    write.run_revalidate(
+        SimpleNamespace(), actor='tester', reason='按当前规则重判通过')
+
+    assert judged == {
+        'text': invalid.text,
+        'segments': [segment.model_dump() for segment in invalid.segments],
+    }
+    assert inv_rel not in store.docs
+    assert store.promoted.segments == invalid.segments
+    assert store.promoted.from_source_ordinals == invalid.from_source_ordinals
+    assert store.promoted.source_chars == invalid.source_chars
+    assert store.promoted.budget_chars == invalid.budget_chars
+    assert store.promoted.provenance == invalid.provenance
+    assert store.promoted.warns == ['当前判据读数']
+    assert store.promoted.errs is None
+    assert store.docs['stage5/trim_audit_ch01.json'].before_sha256 == (
+        write._sha256_text(invalid.text))
+
+
+def test_recheck_refuses_a_formal_chapter_whose_payload_ordinal_mismatches_path(
+        monkeypatch):
+    chapter = _stage5_chapter(
+        text='路径说第一章，载体却自报第二章。', output_ordinal=2)
+    entry = {
+        'output_ordinal': 1,
+        'from_source_ordinals': [1],
+        'source_chars': 3,
+        'budget_chars': 3,
+        'scenes': [{'slot': 's01', 'budget_chars': 3}],
+    }
+    book = _trim_book(entry)
+    rel = 'stage5/ch01.json'
+    store = _MemoryTrimStore({rel: chapter})
+    monkeypatch.setattr(write, 'ArtifactStore', lambda _ctx: store)
+    monkeypatch.setattr(write, 'require_canonical_layout', lambda _store: None)
+    monkeypatch.setattr(write.review, 'load_book', lambda *_args: book)
+    monkeypatch.setattr(
+        write, '_normalize_segments',
+        lambda segments, _book: (segments, write.M.NormalizeAccount()))
+    monkeypatch.setattr(write, '_judge', lambda *_args, **_kwargs: ([], [], []))
+    monkeypatch.setattr(write.M, 'overlap_ratio', lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        write.prompts, 'build_material',
+        lambda *_args, **_kwargs: SimpleNamespace(given='given'))
+
+    with pytest.raises(ProvenanceRefused, match='提交主体错配'):
+        write.run_recheck(SimpleNamespace())
+
+    assert store.docs == {rel: chapter}
+    assert store.transactions == []
+
+
+def test_revalidate_refuses_an_invalid_chapter_whose_payload_ordinal_mismatches_path(
+        monkeypatch):
+    invalid = _stage5_chapter(
+        text='问题稿路径说第一章，载体却自报第二章。', output_ordinal=2)
+    entry = {
+        'output_ordinal': 1,
+        'from_source_ordinals': [1],
+        'source_chars': 3,
+        'budget_chars': 3,
+        'scenes': [{'slot': 's01', 'budget_chars': 3}],
+    }
+    book = _trim_book(entry)
+    inv_rel = 'stage5/ch01.INVALID.json'
+    store = _MemoryTrimStore({inv_rel: invalid})
+    monkeypatch.setattr(write, 'ArtifactStore', lambda _ctx: store)
+    monkeypatch.setattr(write, 'require_canonical_layout', lambda _store: None)
+    monkeypatch.setattr(write.review, 'load_book', lambda *_args: book)
+    monkeypatch.setattr(
+        write, '_normalize_segments',
+        lambda segments, _book: (segments, write.M.NormalizeAccount()))
+    monkeypatch.setattr(write, '_judge', lambda *_args, **_kwargs: ([], [], []))
+    monkeypatch.setattr(write.M, 'overlap_ratio', lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        write.prompts, 'build_material',
+        lambda *_args, **_kwargs: SimpleNamespace(given='given'))
+
+    with pytest.raises(ProvenanceRefused, match='提交主体错配'):
+        write.run_revalidate(
+            SimpleNamespace(), actor='tester', reason='尝试重判错主体')
+
+    assert store.docs == {inv_rel: invalid}
+    assert store.promoted is None
+    assert store.transactions == []
+
+
+@pytest.mark.parametrize('slots', (
+    ('s01',),
+    ('s01', 's99'),
+    ('s02', 's01'),
+))
+def test_revalidate_refuses_an_edited_invalid_with_noncanonical_slots(
+        monkeypatch, slots):
+    invalid = _stage5_chapter(text='占位正文。').model_copy(update={
+        'segments': [
+            write.ChapterSegment(slot=slot, text=f'{slot} 正文。')
+            for slot in slots
+        ],
+    })
+    entry = {
+        'output_ordinal': 1,
+        'from_source_ordinals': [1],
+        'source_chars': 6,
+        'budget_chars': 6,
+        'scenes': [
+            {'slot': 's01', 'budget_chars': 3},
+            {'slot': 's02', 'budget_chars': 3},
+        ],
+    }
+    book = _trim_book(entry)
+    inv_rel = 'stage5/ch01.INVALID.json'
+    store = _MemoryTrimStore({inv_rel: invalid})
+    monkeypatch.setattr(write, 'ArtifactStore', lambda _ctx: store)
+    monkeypatch.setattr(write, 'require_canonical_layout', lambda _store: None)
+    monkeypatch.setattr(write.review, 'load_book', lambda *_args: book)
+    monkeypatch.setattr(
+        write.prompts, 'build_material',
+        lambda *_args, **_kwargs: SimpleNamespace(given='given'))
+
+    with pytest.raises(TerminalState, match='canonical segment 契约不成立'):
+        write.run_revalidate(
+            SimpleNamespace(), actor='tester', reason='尝试提升被改坏的 INVALID')
+
+    assert store.docs == {inv_rel: invalid}
+    assert store.promoted is None
+    assert store.transactions == []
+
+
+def test_revalidate_refuses_an_invalid_that_tampers_with_the_frozen_budget(
+        monkeypatch):
+    baseline = _stage5_chapter(text='正文保持不变。', budget_chars=3)
+    invalid = baseline.model_copy(update={'budget_chars': 3000})
+    entry = {
+        'output_ordinal': 1,
+        'from_source_ordinals': [1],
+        'source_chars': 3,
+        'budget_chars': 3,
+        'scenes': [{'slot': 's01', 'budget_chars': 3}],
+    }
+    book = _trim_book(entry)
+    inv_rel = 'stage5/ch01.INVALID.json'
+    store = _MemoryTrimStore(
+        {inv_rel: invalid}, baselines={inv_rel: baseline})
+    monkeypatch.setattr(write, 'ArtifactStore', lambda _ctx: store)
+    monkeypatch.setattr(write, 'require_canonical_layout', lambda _store: None)
+    monkeypatch.setattr(write.review, 'load_book', lambda *_args: book)
+
+    with pytest.raises(ProvenanceRefused, match='任务身份字段.*budget_chars'):
+        write.run_revalidate(
+            SimpleNamespace(), actor='tester', reason='尝试放大预算绕过 trim')
+
+    assert store.docs == {inv_rel: invalid}
+    assert store.promoted is None
+    assert store.transactions == []
+    assert 'stage5/trim_audit_ch01.json' not in store.docs
+
+
+def test_same_text_commit_keeps_the_matching_trim_resolution(monkeypatch):
+    from novel.stages.stage5 import trim_resolution
+
+    text = '同一份超长正文不会因为只刷新元数据而重开人工决定。'
+    segments = [{'slot': 's01', 'text': text}]
+    chapter = _stage5_chapter(text=text, budget_chars=3)
+    _notes, audit = write._over_length_audit(
+        segments, {'output_ordinal': 1, 'budget_chars': 3})
+    assert audit is not None
+    resolution = object()
+    store = _MemoryTrimStore({
+        'stage5/ch01.json': object(),
+        'stage5/trim_audit_ch01.json': audit,
+        'stage5/trim_resolution_ch01.json': resolution,
+    })
+    matched = []
+    monkeypatch.setattr(
+        trim_resolution, 'matches_current_audit',
+        lambda got_store, got_audit, got_sha: (
+            matched.append((got_store, got_audit, got_sha)) or True))
+
+    write._commit_canonical_chapter(
+        store,
+        chapter,
+        expected_ordinal=1,
+        commit=lambda rel, artifact: store.write_round(rel, artifact),
+    )
+
+    assert matched == [(store, audit, 'a' * 64)]
+    assert store.docs['stage5/trim_audit_ch01.json'] == audit
+    assert store.docs['stage5/trim_resolution_ch01.json'] is resolution
+    assert store.archived == []
+
+
 def test_a_successful_retry_uses_transactional_round_write_for_superseded_files(
         monkeypatch):
     class Store:
@@ -151,7 +621,12 @@ def test_a_successful_retry_uses_transactional_round_write_for_superseded_files(
     monkeypatch.setattr(
         write, '_judge',
         lambda *_a, **_kw: (['judged'], list(blocking), []))
-    monkeypatch.setattr(write, '_chapter_record', lambda *_a, **_kw: object())
+    monkeypatch.setattr(
+        write, '_chapter_record',
+        lambda entry, segments, *_a, **_kw: SimpleNamespace(
+            output_ordinal=entry['output_ordinal'], budget_chars=1,
+            segments=[write.ChapterSegment.model_validate(item) for item in segments]))
+    monkeypatch.setattr(write, '_over_length_audit', lambda *_a, **_kw: ([], None))
 
     ctx = SimpleNamespace(accounting={}, account=lambda *_a, **_kw: None)
     entry = {'output_ordinal': 5}
@@ -165,23 +640,31 @@ def test_a_successful_retry_uses_transactional_round_write_for_superseded_files(
     rel = 'stage5/ch05.json'
     invalid = 'stage5/ch05.INVALID.json'
     rejected = 'stage5/ch05.rejected.json'
-    store = Store({rel, invalid, rejected})
-    where, errors, findings = write._write_chapter(
+    audit = 'stage5/trim_audit_ch05.json'
+    resolution = 'stage5/trim_resolution_ch05.json'
+    store = Store({rel, invalid, rejected, audit, resolution})
+    where, errors, findings, trim_notes = write._write_chapter(
         ctx, store, entry, SimpleNamespace(), **kwargs)
-    assert (where, errors, findings) == (rel, [], ['judged'])
-    assert set(store.archived) == {rel, invalid, rejected}
-    assert store.transactions == [(rel, rejected), (rel,)]
+    assert (where, errors, findings, trim_notes) == (rel, [], ['judged'], [])
+    assert set(store.archived) == {rel, invalid, rejected, audit, resolution}
+    assert store.transactions == [
+        (rel, rejected),
+        (rel, 'stage5/trim_audit_ch05.json', 'stage5/trim_resolution_ch05.json'),
+        (rel,),
+    ]
     assert rel in store.live and invalid not in store.live
 
     blocking.append('still invalid')
-    store = Store({rel, invalid, rejected})
-    where, errors, findings = write._write_chapter(
+    store = Store({rel, invalid, rejected, audit, resolution})
+    where, errors, findings, trim_notes = write._write_chapter(
         ctx, store, entry, SimpleNamespace(), **kwargs)
-    assert (where, errors, findings) == (
-        invalid, ['still invalid'], ['judged'])
+    assert (where, errors, findings, trim_notes) == (
+        invalid, ['still invalid'], ['judged'], [])
     assert set(store.archived) == {invalid, rejected}
     assert store.transactions == [(rel, rejected), (invalid,)]
     assert rel in store.live, '新问题稿不能销毁上一轮正式稿'
+    assert audit in store.live and resolution in store.live, (
+        'INVALID 只记录失败候选，不能让旧 canonical 的 trim 决定失效')
 
 
 def test_revise_regression_gets_exactly_one_refresh_resample(monkeypatch):
@@ -239,7 +722,6 @@ def test_two_regressed_revisions_preserve_formal_and_write_rejected(monkeypatch)
     monkeypatch.setattr(write.prompts, 'write_system', lambda *_a, **_kw: 'SYS')
     monkeypatch.setattr(write, '_generate_chapter', lambda *_a, **_kw: {'rejected': rejected})
     monkeypatch.setattr(write, '_report', lambda *_a, **_kw: object())
-    monkeypatch.setattr(write, 'assemble_book', lambda *_a, **_kw: 'stage5/draft.md')
     root = Path(tempfile.mkdtemp(prefix='stage5-rejected-disk-'))
     try:
         formal = root / 'stage5' / 'ch01.json'
@@ -343,7 +825,8 @@ def test_legacy_stage5_discovery_is_explicit_and_canonical_is_not_legacy():
             path.write_text('{}', encoding='utf-8')
         store = SimpleNamespace(path=lambda rel: root / rel)
 
-        assert write.M.legacy_stage5_paths(store) == list(legacy)
+        assert write.M.legacy_stage5_paths(store) == [
+            'stage5/deep', 'stage5/shallow']
         assert all(write.M.is_legacy_stage5_rel(rel) for rel in legacy)
         assert write.M.is_legacy_stage5_rel(r'stage5\deep\draft.md')
         assert not write.M.is_legacy_stage5_rel('stage5/ch01.json')
@@ -361,7 +844,7 @@ def test_empty_legacy_arm_directory_is_still_incompatible():
         shutil.rmtree(root, ignore_errors=True)
 
 
-def test_paid_write_and_rebuild_refuse_legacy_before_loading_upstream(monkeypatch):
+def test_paid_write_refuses_legacy_before_loading_upstream(monkeypatch):
     root = Path(tempfile.mkdtemp(prefix='stage5-legacy-preflight-'))
     try:
         legacy = root / 'stage5' / 'deep' / 'ch01.json'
@@ -377,88 +860,17 @@ def test_paid_write_and_rebuild_refuse_legacy_before_loading_upstream(monkeypatc
         )
         with pytest.raises(TerminalState, match='legacy_incompatible'):
             write.run_write(object(), object())
-        with pytest.raises(TerminalState, match='legacy_incompatible'):
-            write.run_rebuild_draft(object())
         assert loaded == [], '旧盘面在终态前不应读取上游，更不能进入付费写作'
     finally:
         shutil.rmtree(root, ignore_errors=True)
 
 
-def test_draft_projection_and_zero_cost_rebuild_share_one_byte_ruler(monkeypatch):
-    book = SimpleNamespace(chapters={1: {}, 2: {}})
-    by_ord = {
-        1: {
-            'output_ordinal': 1, 'from_source_ordinals': [7],
-            'chars': 4, 'overlap_excl_verbatim': 0.05, 'text': '第一章。',
-        },
-        3: {
-            'output_ordinal': 3, 'from_source_ordinals': [9],
-            'chars': 4, 'overlap_excl_verbatim': None, 'text': '旧第三章。',
-        },
-    }
-    expected = write.render_book_draft(book, by_ord)
-    assert '第 [2] 章**没有 canonical 成稿**' in expected
-    assert '计划外的第 [3] 章' in expected
-    assert expected.index('## 第 1 章') < expected.index('## 第 3 章')
-
-    class Store:
-        def __init__(self):
-            self.text = expected
-            self.writes = []
-
-        def exists(self, rel):
-            return rel == 'stage5/draft.md'
-
-        def read_text(self, rel):
-            assert rel == 'stage5/draft.md'
-            return self.text
-
-        def write_text(self, rel, text):
-            self.writes.append((rel, text))
-
-        def path(self, rel):
-            return Path(tempfile.gettempdir()) / 'stage5-no-legacy-fixture' / rel
-
-    store = Store()
-    policies = []
-
-    def fake_load(_store, *, require_current=True):
-        policies.append(require_current)
-        return by_ord, [], {}
-
-    monkeypatch.setattr(write.M, 'load_drafts', fake_load)
-    assert write.draft_is_current(store, book)
-    assert policies == [False]
-
-    ctx = object()
-    monkeypatch.setattr(write, 'ArtifactStore', lambda _ctx: store)
-    monkeypatch.setattr(write.review, 'load_book', lambda *_args: book)
-    assert write.run_rebuild_draft(ctx) == 'stage5/draft.md'
-    assert store.writes == [('stage5/draft.md', expected)]
-    assert policies == [False, False]
-
-
-def test_draft_current_guard_returns_false_when_canonical_projection_is_unreadable(
-        monkeypatch):
-    store = SimpleNamespace(
-        exists=lambda _rel: True,
-        read_text=lambda _rel: '旧投影\n',
-    )
-    monkeypatch.setattr(
-        write.M, 'load_drafts',
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            ArtifactUnreadable('canonical 章坏了')),
-    )
-    assert not write.draft_is_current(store, SimpleNamespace(chapters={1: {}}))
-
-
 @pytest.mark.parametrize('write_path', [
-    'initial', 'revise', 'recheck', 'revalidate', 'apply_edit', 'partial_success',
-    'response_repair_pause',
+    'initial', 'revise', 'partial_success', 'response_repair_pause',
 ])
-def test_every_chapter_write_path_commits_the_exact_draft_bytes(
+def test_parallel_write_paths_land_each_successful_canonical_chapter(
         tmp_path, monkeypatch, write_path):
-    """六类章变更共享同一提交后置条件，而不只断言“调用过 assemble”。"""
+    """单章失败或暂停不得取消同组内其他 canonical 章的成功落盘。"""
     root = tmp_path / '书名_123'
     root.mkdir()
     entries = {
@@ -488,15 +900,12 @@ def test_every_chapter_write_path_commits_the_exact_draft_bytes(
         def __init__(self):
             self.by_ord = {}
             self.invalid = None
-            self.draft_bytes = b'\xe9\x99\x88\xe6\x97\xa7\xe6\x8a\x95\xe5\xbd\xb1\n'
             self.writes = []
 
         def path(self, rel):
             return root / rel
 
         def exists(self, rel):
-            if rel == 'stage5/draft.md':
-                return self.draft_bytes is not None
             if rel.endswith('.INVALID.json'):
                 return self.invalid is not None
             if rel.startswith('stage5/ch') and rel.endswith('.json'):
@@ -528,11 +937,6 @@ def test_every_chapter_write_path_commits_the_exact_draft_bytes(
 
         def write_round(self, rel, artifact):
             return self.write(rel, artifact)
-
-        def write_text(self, rel, text):
-            assert rel == 'stage5/draft.md'
-            self.writes.append(rel)
-            self.draft_bytes = text.encode('utf-8')
 
         def next_round(self, _rel):
             return 1
@@ -578,7 +982,7 @@ def test_every_chapter_write_path_commits_the_exact_draft_bytes(
         artifact = record(entry, segments)
         rel = f'stage5/ch{entry["output_ordinal"]:02d}.json'
         got_store.write_round(rel, artifact)
-        return rel, [], []
+        return rel, [], [], []
 
     monkeypatch.setattr(write, '_write_chapter', land)
 
@@ -596,8 +1000,7 @@ def test_every_chapter_write_path_commits_the_exact_draft_bytes(
             'entry': entry, 'ordinal': ordinal,
             'mat': SimpleNamespace(given='given'), 'user': 'USER',
             'segments': segments, 'text': write._segments_text(segments),
-            'account': write.M.NormalizeAccount(), 'trim_notes': [],
-            'trim_audit': None, 'prev_text': '旧正文。', 'fixes': [],
+            'account': write.M.NormalizeAccount(), 'prev_text': '旧正文。', 'fixes': [],
             'review_fp': 'review-fp', 'accepted_purpose': f'ch{ordinal}',
         }
 
@@ -630,69 +1033,8 @@ def test_every_chapter_write_path_commits_the_exact_draft_bytes(
                 ctx, store, book, [entries[1], entries[2]], client,
                 revise=None)
         assert 2 in store.by_ord, '一章等待修复不能取消另一章的成功落盘'
-    elif write_path == 'recheck':
-        store.by_ord[1] = record(entries[1], [{'slot': 's01', 'text': '重判正文。'}])
-        write.run_recheck(ctx)
-    elif write_path == 'revalidate':
-        store.invalid = SimpleNamespace(
-            segments=[SimpleNamespace(
-                model_dump=lambda: {'slot': 's01', 'text': '提升正文。'})],
-            provenance=object(),
-        )
-        write.run_revalidate(ctx, actor='tester', reason='current rules verified')
-    else:
-        edit = tmp_path / 'ch01.edit.json'
-        edit.write_text(
-            '{"segments":[{"slot":"s01","text":"人工正文。"}]}',
-            encoding='utf-8')
-        monkeypatch.setattr(write, '_response_problem', lambda *_args, **_kwargs: None)
-        monkeypatch.setattr(
-            write, '_ordered_segments',
-            lambda response, _entry: [segment.model_dump() for segment in response.segments])
-        write.run_apply_edit(ctx, str(edit))
-
-    expected = write.render_book_draft(book, store.by_ord).encode('utf-8')
-    assert store.draft_bytes == expected
-    assert store.writes[-1] == 'stage5/draft.md'
-
-
-def test_rebuild_draft_recovers_a_crash_stale_projection_without_changing_chapters(
-        tmp_path, monkeypatch):
-    root = tmp_path / '书名_123'
-    root.mkdir()
-    book = SimpleNamespace(chapters={1: {}, 2: {}})
-    by_ord = {
-        1: {
-            'output_ordinal': 1, 'from_source_ordinals': [1], 'chars': 5,
-            'overlap_excl_verbatim': 0.0, 'text': '崩溃前已落章。',
-        },
-    }
-
-    class Store:
-        draft = '上一次的陈旧投影\n'
-        writes = []
-
-        @staticmethod
-        def path(rel):
-            return root / rel
-
-        @classmethod
-        def write_text(cls, rel, text):
-            cls.writes.append(rel)
-            cls.draft = text
-
-    store = Store()
-    before = {ordinal: dict(row) for ordinal, row in by_ord.items()}
-    monkeypatch.setattr(write, 'ArtifactStore', lambda _ctx: store)
-    monkeypatch.setattr(write.review, 'load_book', lambda *_args: book)
-    monkeypatch.setattr(
-        write.M, 'load_drafts',
-        lambda got, *, require_current: (dict(by_ord), [], {}))
-
-    assert write.run_rebuild_draft(object()) == 'stage5/draft.md'
-    assert store.draft.encode('utf-8') == write.render_book_draft(book, by_ord).encode('utf-8')
-    assert by_ord == before
-    assert store.writes == ['stage5/draft.md']
+    assert sorted(store.by_ord) == ([1] if write_path in {'initial', 'revise'} else [1, 2])
+    assert all(rel.startswith('stage5/ch') for rel in store.writes)
 
 
 def test_one_semantically_failed_chapter_does_not_abort_the_rest(monkeypatch):
@@ -756,14 +1098,13 @@ def test_one_semantically_failed_chapter_does_not_abort_the_rest(monkeypatch):
     monkeypatch.setattr(write, 'assert_prompt_private_absent', lambda *_a, **_kw: None)
     monkeypatch.setattr(
         write, '_write_chapter',
-        lambda *_a, **_kw: ('chapter.json', [], ['judged']))
+        lambda *_a, **_kw: ('chapter.json', [], ['judged'], []))
 
     def fake_report(*_args, **kwargs):
         captured.update(kwargs)
         return report
 
     monkeypatch.setattr(write, '_report', fake_report)
-    monkeypatch.setattr(write, 'assemble_book', lambda *_a, **_kw: 'stage5/draft.md')
     ctx = SimpleNamespace(
         llm_provenance_for_chapter=lambda *_a, **_kw: object(),
         observe=lambda event, **fields: events.append({'event': event, **fields}))
@@ -843,10 +1184,9 @@ def test_production_chapter_provenance_uses_the_accepted_request(
     monkeypatch.setattr(write, 'assert_prompt_private_absent', lambda *_a, **_kw: None)
     monkeypatch.setattr(
         write, '_write_chapter',
-        lambda *_a, **_kw: ('stage5/ch01.json', [], []))
+        lambda *_a, **_kw: ('stage5/ch01.json', [], [], []))
     report = object()
     monkeypatch.setattr(write, '_report', lambda *_a, **_kw: report)
-    monkeypatch.setattr(write, 'assemble_book', lambda *_a, **_kw: 'stage5/draft.md')
 
     def provenance(chapter, cls, /, **kwargs):
         captured['provenance'] = (chapter, cls, kwargs)
@@ -984,7 +1324,6 @@ def _run_real_production_landing(monkeypatch, transport, *, cache=None):
         budget_checker=lambda *_args, **_kwargs: None,
     )
     monkeypatch.setattr(write, '_judge', lambda *_args, **_kwargs: ([], [], []))
-    monkeypatch.setattr(write, 'assemble_book', lambda *_args, **_kwargs: None)
     report = object()
     monkeypatch.setattr(write, '_report', lambda *_args, **_kwargs: report)
 
@@ -1141,12 +1480,11 @@ def test_stage5_chapters_run_together_up_to_32(
 
     def fake_write(_ctx, _store, entry, *_args, **_kwargs):
         written.append(entry['output_ordinal'])
-        return 'chapter.json', [], []
+        return 'chapter.json', [], [], []
 
     monkeypatch.setattr(write, '_write_chapter', fake_write)
     report = object()
     monkeypatch.setattr(write, '_report', lambda *_a, **_kw: report)
-    monkeypatch.setattr(write, 'assemble_book', lambda *_a, **_kw: 'stage5/draft.md')
     ctx = SimpleNamespace(
         llm_provenance_for_chapter=lambda *_a, **_kw: object(),
         observe=lambda *_a, **_kw: None)
@@ -1194,9 +1532,9 @@ def test_targeted_stage5_refreshes_cache_and_does_not_print_false_success(
     assert '仍有阻断稿' in output
 
 
-def test_targeted_free_recovery_forwards_chapters_and_book_projection_refuses_them(
+def test_targeted_free_recovery_forwards_chapters(
         monkeypatch):
-    """`--chapters` 不得被免费重判吞掉；draft 纯投影仍只许全书。"""
+    """`--chapters` 不得被免费重判吞掉。"""
     cli = importlib.import_module('novel.cli.main')
     ctx = SimpleNamespace(node='stage5.write')
     report = SimpleNamespace(passed=True)
@@ -1214,6 +1552,3 @@ def test_targeted_free_recovery_forwards_chapters_and_book_projection_refuses_th
     assert cli._run_stage5(
         ctx, ['--revalidate', '--chapters', '3', '--actor', 'A', '--reason', 'R']) == X.OK
     assert seen == {'recheck': '2,4', 'revalidate': ('A', 'R', '3')}
-
-    with pytest.raises(TerminalState, match='不接受 --chapters'):
-        cli._run_stage5(ctx, ['--rebuild-draft', '--chapters', '1'])

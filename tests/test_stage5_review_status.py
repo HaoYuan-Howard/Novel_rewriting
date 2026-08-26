@@ -12,6 +12,7 @@ from types import SimpleNamespace
 import pytest
 
 from contracts.schema import InputEdge, artifact_spec
+from contracts.schema.common import WontFix
 from contracts.schema.stage5 import (
     Chapter, ChapterSegment, JudgedDraft, Review, ReviewChapter,
 )
@@ -32,7 +33,10 @@ class _StatusStore:
         self.book = book
         self.chapters = {'stage5/ch01.json': chapter}
         self.review: Review | None = None
-        self.ctx = _StatusContext(title=book.title, novel_dir=root)
+        self.wontfix: WontFix | None = None
+        self.ctx = _StatusContext(
+            sid='synthetic', title=book.title, novel_dir=root,
+            node='stage5.review')
         (root / 'stage5').mkdir(parents=True)
         (root / 'stage5' / 'ch01.json').write_text('{}', encoding='utf-8')
         (root / 'stage5' / 'review_1.json').write_text('{}', encoding='utf-8')
@@ -46,8 +50,19 @@ class _StatusStore:
         return spec.current_version if spec is not None else None
 
     def read_own(self, _model, rel: str, **_kwargs):
+        if rel in self.chapters:
+            chapter = self.chapters[rel]
+            return chapter, chapter.model_dump(by_alias=True, exclude_none=True)
+        if rel == 'stage5/wontfix.json' and self.wontfix is not None:
+            return self.wontfix, self.wontfix.model_dump(by_alias=True)
         assert rel == 'stage5/review_1.json' and self.review is not None
         return self.review, self.review.model_dump(by_alias=True)
+
+    def write(self, rel: str, artifact):
+        assert rel == 'stage5/wontfix.json'
+        self.wontfix = WontFix.model_validate(artifact)
+        self.path(rel).write_text('{}', encoding='utf-8')
+        return self.path(rel)
 
     def read_judged(self, _model, rel: str, *, project, require_current=True):
         del require_current
@@ -62,6 +77,8 @@ class _StatusStore:
         return FreshnessReport('fresh', 'match')
 
     def exists(self, rel: str) -> bool:
+        if rel == 'stage5/wontfix.json':
+            return self.wontfix is not None
         return self.path(rel).is_file()
 
     def read_text(self, rel: str) -> str:
@@ -109,11 +126,6 @@ class _Rig:
         self.store.chapters['stage5/ch02.json'] = second
         self.store.path('stage5/ch02.json').write_text('{}', encoding='utf-8')
 
-    def corrupt_draft_projection(self) -> None:
-        self.store.path('stage5/draft.md').write_text(
-            '# 人工留下的陈旧投影\n', encoding='utf-8')
-
-
 @pytest.fixture
 def status_rig(tmp_path, monkeypatch) -> _Rig:
     book = factories.stage5_book()
@@ -135,7 +147,7 @@ def status_rig(tmp_path, monkeypatch) -> _Rig:
         },
     })
     store = _StatusStore(tmp_path / 'book', book, chapter)
-    by_ord, _invalid, judged = M.load_drafts(store, require_current=False)
+    _by_ord, _invalid, judged = M.load_drafts(store, require_current=False)
     one: JudgedDraft = judged['stage5/ch01.json']
     store.review = Review.model_validate({
         'sources': {
@@ -155,14 +167,15 @@ def status_rig(tmp_path, monkeypatch) -> _Rig:
             chars=len(text),
             findings=[],
         )],
-        'book': [], 'baselines': {}, 'baselines_identity': {}, 'counts': {},
+        'book': [],
+        'baselines': {'_fact_landing': '0/0'},
+        'baselines_identity': {},
+        'counts': {},
         '_provenance': {
             'code': 'test-code', 'root_clean_sha1': 'a' * 40, 'inputs': {},
             'prompts': {'RULES': prov.fingerprint(prov.rules_fingerprint('stage5'))},
         },
     })
-    store.path('stage5/draft.md').write_text(
-        write.render_book_draft(book, by_ord), encoding='utf-8')
     monkeypatch.setattr(review, 'load_book', lambda _ctx, current: current.book)
     return _Rig(store=store, ctx=store.ctx)
 
@@ -171,6 +184,71 @@ def test_review_status_fresh_baseline_binds_the_complete_canonical_subject(statu
     status = review.review_status(status_rig.ctx, status_rig.store)
     assert status.state == 'fresh' and status.reasons == ()
     assert status.review_rel == 'stage5/review_1.json' and status.seq == 1
+
+
+def test_review_view_refetches_wontfix_without_rewriting_review(
+        status_rig, monkeypatch):
+    """wontfix 只写决定账；同一 Review 的真实 view refetch 必须立刻叠加它。"""
+    from novel.views import stage5 as stage5_views
+
+    hit = finding(
+        'invented_name',
+        detail='成稿里出现了下发面之外的称谓「周管事」',
+        evidence=['周管事'],
+        converge='unresolved_1',
+        unresolved_rounds=1,
+    ).model_copy(update={'output_ordinal': 1})
+    book_hit = finding(
+        'book_length',
+        detail='全书篇幅没有落在契约带内',
+        evidence=['1000 not in 9000~11000'],
+    )
+    assert status_rig.store.review is not None
+    row = status_rig.store.review.chapters[0].model_copy(
+        update={'findings': [hit]})
+    status_rig.store.review = status_rig.store.review.model_copy(
+        update={'chapters': [row], 'book': [book_hit]})
+
+    monkeypatch.setattr(
+        stage5_views.paths, 'resolve_novel_dir',
+        lambda _base, _sid: status_rig.store.root)
+    monkeypatch.setattr(
+        stage5_views.paths, 'derive_source_meta',
+        lambda _name: ('synthetic', '合成书', None))
+    monkeypatch.setattr(stage5_views.paths, 'title_of', lambda _root: '合成书')
+    monkeypatch.setattr(stage5_views, 'readonly_ctx', lambda *_args: status_rig.ctx)
+    monkeypatch.setattr(
+        stage5_views, 'ArtifactStore', lambda _ctx: status_rig.store)
+    monkeypatch.setattr(review, 'ArtifactStore', lambda _ctx: status_rig.store)
+
+    before = stage5_views.review_view('unused', 'synthetic', 1)
+    assert before.chapter.findings[0].wontfix is None
+    assert before.book[0].wontfix is None
+    assert before.index[0].unresolved == 1
+    review_bytes = status_rig.store.path(
+        'stage5/review_1.json').read_bytes()
+
+    review.mark_wontfix(
+        status_rig.ctx,
+        f'1|invented_name|{hit.evidence_key}=逐字核对后接受这个称谓',
+    )
+    review.mark_wontfix(
+        status_rig.ctx,
+        f'book|book_length|{book_hit.evidence_key}=人工确认保留当前全书篇幅',
+    )
+
+    assert status_rig.store.path('stage5/review_1.json').read_bytes() == review_bytes
+    assert review.review_seqs(status_rig.store) == [1], 'wontfix 不得偷产一轮 Review'
+    after = stage5_views.review_view('unused', 'synthetic', 1)
+    marked = after.chapter.findings[0]
+    assert marked.wontfix is not None
+    assert marked.wontfix.why == '逐字核对后接受这个称谓'
+    assert marked.actionable is False
+    assert after.index[0].unresolved == 0
+    assert after.book[0].wontfix is not None
+    assert after.book[0].wontfix.why == '人工确认保留当前全书篇幅'
+    assert after.book[0].actionable is False
+    assert sum(after.finding_counts.values()) == 2
 
 
 def test_fresh_review_guard_does_not_leak_probe_reads_into_downstream_sources(
@@ -190,7 +268,7 @@ def test_fresh_review_guard_does_not_leak_probe_reads_into_downstream_sources(
         actual_ctx.record_edge(
             'stage1/main_text.json', InputEdge(file='3' * 10, consumed=None))
         actual_ctx.record_edge(
-            'stage5/draft.md', InputEdge(file='4' * 10, consumed=None))
+            'stage5/ch98.json', InputEdge(file='4' * 10, consumed=None))
         actual_ctx.record_judged('stage5/ch99.json', '5' * 10)
         return expected
 
@@ -263,7 +341,6 @@ def test_formal_downstreams_call_the_accepted_review_guard_before_loading_inputs
     ('stale_rules', 'RULES 已变'),
     ('change_body', '正文投影已变'),
     ('add_unreviewed_chapter', 'judged 主体集合已变'),
-    ('corrupt_draft_projection', 'draft.md 不是当前 canonical'),
 ])
 def test_review_status_closes_on_every_current_subject_drift(status_rig, mutation, reason):
     getattr(status_rig, mutation)()
@@ -278,7 +355,7 @@ def test_review_status_classifies_old_two_arm_layout_as_legacy(status_rig):
     legacy.write_text('{}', encoding='utf-8')
     status = review.review_status(status_rig.ctx, status_rig.store)
     assert status.state == 'legacy_incompatible'
-    assert any('stage5/deep/ch01.json' in reason for reason in status.reasons)
+    assert any('旧双臂路径:stage5/deep' in reason for reason in status.reasons)
 
 
 def test_old_review_is_not_a_convergence_baseline_but_keeps_the_next_sequence(tmp_path):
@@ -381,7 +458,6 @@ def test_state_view_and_inbox_forward_the_same_status_and_reasons(
     monkeypatch.setattr(stage5_module.paths, 'derive_source_meta',
                         lambda _name: ('test-sid', 'book'))
     monkeypatch.setattr(stage5_module.paths, 'title_of', lambda _path: '测试书')
-    monkeypatch.setattr(review, 'load_wontfix', lambda _store: {})
     view = stage5_module.review_view(status_rig.store.root.parent, 'test-sid', 1)
     assert view.review_state == status.state
     assert view.review_reasons == list(status.reasons)

@@ -81,7 +81,7 @@ argv 的形态是：
 原型只实现了前者。后者只活在注释里，而它一共出现了 **8 次**，措辞完全一致：
 
 > **`FREE_FLAGS` 只管钱不管写。**（`--apply-edit` 落新一轮 + 归档旧轮 ·
-> `--revalidate` 把 `.INVALID` 提升为正式产物 · `--recheck` 刷指标 + 重拼 `draft.md` ·
+> `--revalidate` 把 `.INVALID` 提升为正式产物 · `--recheck` 刷指标并对账 trim ·
 > `stage7.assemble` 重拼成书）
 
 一条信息在注释里重复四次以上，说明它是真的，只是**没有落点**（同 `_common.md` 立的那条判准）。
@@ -279,7 +279,10 @@ agent 代跑不是 `NODES` 中的流水线节点，不能塞进 `JobStart`；它
 > | 逐章 | `stage5/ch{nn}.json` | 计划里有哪些章 | `chapters_done` |
 > | **书级参数化** | `stage7/{title}_rewriting.txt` | **这本书是谁** | `artifacts[]`（**先解析再筛**） |
 >
-> `required_artifacts()` 收第一种与第四种，于是**中间两种在 `artifacts[]` 里没有行**。
+> `required_artifacts()` 收第一种与第四种，于是**中间两种不作为正式清单进入 `artifacts[]`**。
+> Stage5 有一个关闭式例外：逐章校验发现 missing/INVALID/unreadable/stale/unknown 时，
+> 只把这些**问题投影**临时放进 `artifacts[]`，供总览与队列消费；干净章不重复列出，
+> 问题投影也不计入 `artifact_count/latest_mtime`。
 > ⇒ `rounds_done` 就是那第三本账。判据是**存在性不是新鲜度**（轮次产物没有单份
 > 新鲜度账），这条限制写在 `resume_verdict` 返回的理由里，不藏着。
 > ⚠ 它与 `done` **刻意不联动**：`stage5.review` 跑没跑过不改变「这一层的成稿齐不齐」。
@@ -302,17 +305,19 @@ agent 代跑不是 `NODES` 中的流水线节点，不能塞进 `JobStart`；它
 是四个只看兄弟文件在不在的消费方一起说假话：语料库把已出书的书报成 `broken` ·
 续跑判定去**重跑并重新付费**一个已有新鲜正式稿的节点 · 人定稿盖不上审批章 ·
 下游整条链被 `inbox:invalid` 挡住。
-⚠ **`freshness == 'unknown'` 计入已完成**，这不是漏判：存量语料是在统一投影注册前生成的，
+⚠ 普通具名产物的 **`freshness == 'unknown'` 计入已完成**，这不是漏判：存量语料是在统一投影注册前生成的，
 大量边仍为 `consumed=null`；把 `unknown` 当未完成会让升级后的队列重跑一批可能已完成的付费层。
 「不知道它新不新」与「它是旧的」是两件事——后者才该挡路。
+Stage5 例外：`done=True` 会直接让付费写作 SKIP，且 canonical 章已是退役 `draft.md` 后的唯一证据，
+因此必须逐章达到当前 schema/version 且 `fresh`；未知会停在 `unknown`，不会冒充 current。
 
 **`NovelOverview`** 另有 `chapters` 与 `stage5_legacy_paths`。`chapters` 只从可读的
 `stage1/main_text.json` 主章表长度派生；stage1 未跑或读不回时为 `null`，语料库不为此
 逐书追加请求，也不等 stage5 才猜章数。Stage5 的粒度是**章**（`R-14.2`），逐章状态只由
-canonical `stage5/ch*.json` 给；`stage5_legacy_paths` 仅列旧 `deep/shallow` 只读证据，
+canonical `stage5/ch*.json` 给；文件名只做发现，每份仍须通过当前 schema/version/freshness。
+`stage5_legacy_paths` 仅列旧 `deep/shallow` 只读证据，
 并使该层进入 `legacy_incompatible`，绝不挑一臂折成 current。
-⚠ **必须排除 `.INVALID.json`**——原型这里踩过，`chNN.json` 的存在本身就是
-「过了写作时的落盘闸门」这个语义，把被拦下的那份数进去就把语义反过来了：
+⚠ **必须排除 `.INVALID.json`**——原型这里踩过；把被拦下的那份数进去就把语义反过来了：
 续跑会跳过一章**根本没写成的**稿子，而那一章的钱到时候还得花。
 
 ### 4.1 续跑判定（`R-14.4`）——四态，`unknown` 同样不许折进别人
@@ -322,12 +327,13 @@ canonical `stage5/ch*.json` 给；`stage5_legacy_paths` 仅列旧 `deep/shallow`
 | 结论 | 什么时候 |
 |---|---|
 | `skip` | 产物在、读得回来、不陈旧 ⇒ **已存在即跳过** |
-| `run` | 产物不在盘上，或盘上是一份被闸门拦下的 `.INVALID`（0 成本提升路是 `--revalidate`，不必重新付费） |
-| `redo` | **上游在中断期间变过**，或那一份按当前 schema 读不回来 ⇒ **这不是「续」是「重来」** |
-| `unknown` | 判不了（见上面那个框） |
+| `run` | 产物不在盘上，或盘上是一份被闸门拦下的 `.INVALID`；后者在队列里先停为 `inbox:invalid`，由人优先尝试 0 成本 `--revalidate`，不会直接重跑付费命令 |
+| `redo` | **上游在中断期间变过** ⇒ **这不是「续」是「重来」** |
+| `unknown` | 判不了；Stage5 章按当前 schema/version 读不回或 freshness 未知也停在这里，不折成付费重跑 |
 
-⚠ `redo` **不自动执行**：它是一句话，不是一个动作。重来意味着重新付费，
-那是人的决定——编排层只负责**说出来并停下**。
+⚠ `redo` / `unknown` **都不自动执行**：它们是一句话，不是一个动作。前者意味着
+可能重新付费，后者连正确动作都尚不能判定；队列统一落空 `steps` 的
+`resume:manual-decision` 阻塞项，只负责**说出来并停下**。
 
 > ⭐ **这一节在捡回一个被静默弄丢的能力。**
 > 原型退役的 `_legacy/run_book.py:14-22` 有过真正的续跑：
@@ -388,7 +394,8 @@ not_run: M  它后面那些，一步都没跑
 | 发现旧 `stage5/deep|shallow/` 布局 | `legacy_incompatible` |
 | 文案未定稿 | `stage6.approve` |
 | 人名表未定稿 | `stage7.approve` |
-| inbox 非空（`.INVALID` / 被驳回 / 连续未消） | `inbox:<kind>` |
+| inbox 非空（包括本层 current `.INVALID`、被驳回、连续未消） | `inbox:<kind>` |
+| 续跑判为 `redo` / `unknown`，不能自动构造安全命令 | `resume:manual-decision` |
 | 服务重启后旧快照仍含付费项、等人重新确认 | `queue:restart-confirmation` |
 | 当前命令面与创建时快照不同、必须重建队列 | `queue:plan-changed` |
 
@@ -583,9 +590,10 @@ UTF-8，接到**管道**时退回 cp936——而报告里满篇 `✓ ✗ ↻ ⚠
 
 | # | 哪儿 | 崩在中间会留下什么 | 怎么自愈 |
 |---|---|---|---|
-| 1 | **多文件写**：stage0 首次导入只写了 clean/report 之一；stage1 只写了 main/hook/report 的一部分；或 `chNN.json` 已写、`draft.md` 还没重拼 | 同一轮产物不齐，或拼出来的全书少一章 | stage0 明确拒绝不完整的首次产物对，确认它是中断留下的新产物后移走残件再重跑；stage1 用同一输入重跑会覆盖补齐三件；`--recheck` 会重拼全书 |
+| 1 | **多文件写**：stage0 首次导入只写了 clean/report 之一；stage1 只写了 main/hook/report 的一部分 | 同一轮产物不齐 | stage0 明确拒绝不完整的首次产物对，确认它是中断留下的新产物后移走残件再重跑；stage1 用同一输入重跑会覆盖补齐三件 |
 | 2 | **`_rounds/` 归档与新稿之间**（含 stage0 的 JSON/TXT 成对轮次） | 旧轮可能只归档了一份，或新轮只换了 `clean_text.txt`、报告仍指向旧指纹 | 相同字节的归档复制可幂等重放；stage0 用 `clean_sha1` 把半轮状态明确拒出。若已进入新轮两文件提交窗口，先从同轮归档恢复当前 JSON/TXT，再重跑 |
 | 3 | **账本行与产物之间** | **钱花了、产物还没写** | ⚠ **不自愈**。这一条是三条里唯一真会丢钱的，所以账本行先写——宁可多一条「花过但没产出」的记录，也不要一次看不见的支出 |
 | 4 | **提升路三步的中间窗口** | 归档位已占、正式稿已落、`.INVALID` 还没挪走 | **再跑一次 `--revalidate` 就自愈**。⚠ 三步的顺序是挑过的：先占归档位并检查（唯一大概率的失败）→ 落正式稿 → 挪 `.INVALID`。反过来「先归档后落稿」崩掉的话，`.INVALID` 已经从它该在的位置消失而正式稿还没写 |
+| 4b | **Stage5 canonical 章与 trim audit/resolution 的多文件提交窗口** | 普通异常会由 `history_transaction` 整组回滚；若进程被强杀，可能只换了 canonical，或 sidecar 仍绑定上一份正文 | **跑 `stage5.write --recheck` 自愈**：从当前 canonical 原文与冻结预算重建 trim 状态；正文相同且仍精确绑定的人工 resolution 保留，失配决定退休 |
 | 5 | **互斥锁是进程内内存** | 服务重启即全丢；多实例、人在终端手敲 CLI 都绕得过去 | ⚠ **不打算补。** 锁文件要有陈旧清理策略，清理策略又要有守卫，而**一把会说谎的锁比没有锁更坏**——它让人以为互斥成立。⇒ 记在这里，不假装它不存在 |
 | 5b | **agent 批量代跑的待跑队列也是进程内内存**（`agent._PENDING`） | 服务重启即清空：已经起来的 agent 是独立进程、照常跑完并留下事件流，但**排在队里还没起的那几本不会自己回来**，要重新提交 | ⚠ 与第 5 条同一条理由，且落点相同：一份**会说谎的队列**（重启后还列着其实没人会起的书）比没有队列更坏。⇒ 界面上照实写「排队只在服务进程内存里，重启不保留」 |

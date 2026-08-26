@@ -85,8 +85,7 @@ from contracts.schema.stage4 import (
     StructureDecision,
 )
 from contracts.schema.stage5 import (
-    ChapterSegment, JudgedDraft, ReviewProvenance, ReviewSources,
-    RoundFreeProvenance, RoundLlmProvenance,
+    ChapterSegment, JudgedDraft, RoundFreeProvenance, RoundLlmProvenance,
 )
 from contracts.schema.stage6 import (
     HookApprovalResolution,
@@ -1489,20 +1488,13 @@ class DraftAlignView(StrictModel):
 
 
 class DraftView(StrictModel):
-    """一份成稿卡（正式或 `.INVALID`，由 `invalid` 区分）。"""
+    """一份成稿卡。正文只发 producer-owned 的 typed 槽位。"""
 
-    relpath: str = Field(min_length=1)
-    invalid: bool
-    round: int = Field(ge=1)
-    #: `human`（`--apply-edit` 的人工稿）或 `llm`。由 `_provenance` 的载体类派生。
-    origin: str = Field(min_length=1)
     chars: int = Field(ge=0)
     budget_chars: int | None
-    source_chars: int = Field(ge=0)
     overlap_excl_verbatim: float | None
-    #: 盘上 schema v2 的唯一内容权威；`text` 只是下面的确定性整章投影。
+    #: 盘上 schema v2 的唯一内容权威；整章正文由消费者确定性投影。
     segments: list[ChapterSegment] = Field(min_length=1)
-    text: str = Field(min_length=1)
 
     #: `null` = 对齐辅助尚未由服务端提供（本章无锚可对时 rows 为空、账仍在）。
     align: DraftAlignView | None
@@ -1513,13 +1505,6 @@ class DraftView(StrictModel):
 
     provenance: RoundLlmProvenance | RoundFreeProvenance = Field(
         alias='_provenance', union_mode='left_to_right')
-
-    @model_validator(mode='after')
-    def _text_is_the_segment_projection(self) -> DraftView:
-        projected = '\n\n'.join(segment.text.strip() for segment in self.segments).strip()
-        if self.text != projected:
-            raise ValueError('draft text 必须是 segments 的确定性投影')
-        return self
 
 
 class Stage5IndexRow(FrozenModel):
@@ -1601,42 +1586,16 @@ class ReviewIndexRow(FrozenModel):
     产物侧 `Review.counts` 是稀疏的（登记过的病），出线侧修掉。"""
 
     output_ordinal: int = Field(ge=1)
-    round: int | None
-    chars: int | None
-    budget_chars: int | None
     finding_counts: dict[str, int]
     #: 有收敛账（`unresolved_rounds > 0`）且未豁免的结论条数。
     unresolved: int = Field(ge=0)
-    #: 这一章：验收判的那份与盘上当前那份还是不是同一份（整文件指纹）。
-    #: `null` = 判不了（验收后成稿被移走 / 本章当时就无稿）。
-    stale: bool | None
 
 
 class ReviewChapterView(StrictModel):
-    """一章的验收视图 + 当前正式稿正文（改稿入口要在原文旁边）。"""
+    """一章的验收结论；正文与编辑槽位由并行 Stage5 响应提供。"""
 
     output_ordinal: int = Field(ge=1)
     findings: list[Finding]
-    chars: int | None
-    budget_chars: int | None
-    round: int | None
-    origin: str | None
-    segments: list[ChapterSegment] | None
-    text: str | None
-    #: 盘上已归档的轮次号（`_rounds/`），升序。改稿历史从这里回看。
-    rounds: list[int]
-    stale: bool | None
-
-    @model_validator(mode='after')
-    def _text_is_the_nullable_segment_projection(self) -> ReviewChapterView:
-        if self.segments is None:
-            if self.text is not None:
-                raise ValueError('review chapter 无 segments 时 text 必须为 null')
-            return self
-        projected = '\n\n'.join(segment.text.strip() for segment in self.segments).strip()
-        if self.text != projected:
-            raise ValueError('review chapter text 必须是 segments 的确定性投影')
-        return self
 
 
 class ReviewView(StrictModel):
@@ -1653,21 +1612,15 @@ class ReviewView(StrictModel):
     review_seq: int = Field(ge=1)
     review_state: Stage5ReviewState
     review_reasons: list[str] = Field(default_factory=list)
-    sources: ReviewSources
     #: 全书（chapters+book 全部结论）按 sev 现数，四键恒在。
     #: ⚠ 不读产物的 `counts` 字段——那份是稀疏 Counter（`Review.counts` 的登记病）。
     finding_counts: dict[str, int]
-    baselines: dict[str, str]
-    baselines_identity: dict[str, str]
     book: list[Finding]
-    wontfix: int = Field(ge=0)
 
     chapters: list[int] = Field(min_length=1)
     ordinal: int = Field(ge=1)
     index: list[ReviewIndexRow] = Field(min_length=1)
     chapter: ReviewChapterView
-
-    provenance: ReviewProvenance = Field(alias='_provenance')
 
     @model_validator(mode='after')
     def _postconditions(self) -> ReviewView:

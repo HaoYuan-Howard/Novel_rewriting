@@ -229,7 +229,7 @@ def test_edges_are_a_snapshot_not_the_live_dict():
 def test_validation_reads_restore_every_source_ledger_even_when_the_guard_raises():
     """前置闸可以深读上游，但不得把校验材料写进后续 producer 的来源账。
 
-    真实故障形状是 Stage6 的 accepted-Review 闸读了 ``main_text`` 与 ``draft.md``，
+    真实故障形状是 Stage6 的 accepted-Review 闸深读了不属于 producer 的验证材料，
     ``--recheck`` 随后把它们铸进 hook provenance；注册表正确地不知道这两条假依赖，
     于是正式写回被 ``consumed_undeclared`` 回滚。这里直接守 RunContext 那一个生产
     作用域，并覆盖异常退出——关闭式闸抛错也不能留下半张账。
@@ -243,7 +243,7 @@ def test_validation_reads_restore_every_source_ledger_even_when_the_guard_raises
     with pytest.raises(RuntimeError, match='guard stopped'):
         with ctx.validation_reads():
             ctx.record_edge('stage1/main_text.json', InputEdge(file='4' * 10, consumed=None))
-            ctx.record_edge('stage5/draft.md', InputEdge(file='5' * 10, consumed=None))
+            ctx.record_edge('stage5/ch01.json', InputEdge(file='5' * 10, consumed=None))
             ctx.record_judged('stage5/ch02.json', '6' * 10)
             ctx.record_artifact_root('stage5/review_1.json', '7' * 40)
             raise RuntimeError('guard stopped')
@@ -579,6 +579,54 @@ def test_downstream_grounding_freshness_ignores_every_evidence_only_edit(
                 if edge.key == STAGE2_GLOBAL_GROUNDING)
     assert edge.recorded_file != edge.now_file, '证据改动必须真实落到上游字节'
     assert edge.recorded_consumed == edge.now_consumed
+
+
+@pytest.mark.parametrize('edited', (
+    'char_id', 'canonical', 'address_surface', 'name_distinctiveness',
+))
+def test_stage5_review_binds_name_baseline_without_expanding_paid_write(
+    edited: str,
+):
+    """Review 的人名判据跟随当前 Stage2；付费写作仍只绑 secrets。"""
+    grounding = _stage4_grounding_payload()
+    write_project = projection_for('stage5.write', STAGE2_GLOBAL_GROUNDING)
+    review_project = projection_for('stage5.review', STAGE2_GLOBAL_GROUNDING)
+    assert write_project is not None and review_project is not None
+    write_before = write_project(grounding)
+    review_before = review_project(grounding)
+
+    changed = copy.deepcopy(grounding)
+    character = changed['entities']['characters']['char_001']
+    if edited == 'char_id':
+        changed['entities']['characters']['char_002'] = \
+            changed['entities']['characters'].pop('char_001')
+    elif edited == 'canonical':
+        character['canonical'] = '乙'
+    elif edited == 'address_surface':
+        character['address'][0]['surface'] = '东家'
+    else:
+        character['name_distinctiveness'] = 'medium'
+
+    assert write_project(changed) == write_before, edited
+    assert review_project(changed) != review_before, edited
+
+
+def test_stage5_review_name_projection_ignores_non_name_character_metadata():
+    grounding = _stage4_grounding_payload()
+    project = projection_for('stage5.review', STAGE2_GLOBAL_GROUNDING)
+    assert project is not None
+    expected = project(grounding)
+
+    changed = copy.deepcopy(grounding)
+    character = changed['entities']['characters']['char_001']
+    character['role'] = '另一个身份'
+    character['fate'] = '另一个结局'
+    character['address'][0].update({
+        'by': 'narration', 'context': 'reference', 'from_chapter': 2,
+    })
+    # 顺序与重复 surface 不改变 project_character_names 的集合输入。
+    character['address'].append(copy.deepcopy(character['address'][0]))
+    assert project(changed) == expected
 
 
 @pytest.mark.parametrize('edited', (
@@ -1428,8 +1476,7 @@ def test_every_produced_artifact_without_provenance_reaches_the_deterministic_br
     ⚠ 作用域是「节点 `produces` 的、且真会落进完成度 `artifacts[]` 的那些」：
       · `*_edit.json` / `wontfix.json` 这类**人写的输入**不是任何节点的产出，
         它们没有来源账是本分，不该被这条逼着去造一个；
-      · `stage5/draft.md` 是无来源块的 canonical 字节投影，必须由确定性桥拿
-        当前 `writer_context` 分母与 `stage5/chNN.json` 同尺重算，不能恒 unknown。
+      · Stage5 只有带来源块的 canonical 逐章 JSON，不再登记展示投影。
     """
     from contracts.invariants import NODES
     from contracts.schema import ARTIFACT_SPECS
@@ -1459,48 +1506,6 @@ def test_every_produced_artifact_without_provenance_reaches_the_deterministic_br
     assert unreachable == [], (
         f'这些产物没有 `_provenance`，又没接进 `_deterministic_freshness`：'
         f'{unreachable}。它们在完成度里会恒 unknown/no_provenance')
-
-
-def test_stage5_draft_freshness_reuses_the_canonical_byte_renderer(
-        monkeypatch):
-    """draft 新鲜度按生产同一 renderer 的 UTF-8 字节回答，章或投影任一变更都 stale。"""
-    from novel.consumption import render_stage5_draft
-    from novel.stages.stage5 import measure as stage5_measure
-
-    base = _book()
-    book = base / '书名_123'
-    (book / 'stage5').mkdir()
-    by_ordinal = {
-        1: {
-            'output_ordinal': 1,
-            'from_source_ordinals': [1],
-            'chars': 4,
-            'overlap_excl_verbatim': 0.0,
-            'text': '第一章。',
-        },
-    }
-    expected = render_stage5_draft([1], by_ordinal).encode('utf-8')
-    (book / 'stage5' / 'draft.md').write_bytes(expected)
-    store = ArtifactStore(_ctx(base, paid=False))
-    context = type('Context', (), {
-        'chapters': [type('Chapter', (), {'output_ordinal': 1})()],
-    })()
-    monkeypatch.setattr(store, 'read_own', lambda *_args, **_kwargs: (context, {}))
-    monkeypatch.setattr(
-        stage5_measure, 'load_drafts',
-        lambda *_args, **_kwargs: (by_ordinal, [], {}),
-    )
-
-    assert store.freshness('stage5/draft.md').state == 'fresh'
-
-    by_ordinal[1]['text'] = '正文已经变化。'
-    changed = store.freshness('stage5/draft.md')
-    assert (changed.state, changed.reason) == ('stale', 'file_changed')
-
-    by_ordinal[1]['text'] = '第一章。'
-    (book / 'stage5' / 'draft.md').write_bytes(expected.replace(b'\n', b'\r\n'))
-    assert store.freshness('stage5/draft.md').state == 'stale', \
-        'CRLF 也是字节漂移，不能被文本模式归一后伪装成 fresh'
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1666,7 +1671,7 @@ def test_an_external_source_replaced_in_place_is_stale_not_ghost():
 
 
 def test_byte_form_artifacts_are_lf_only_and_have_no_bom():
-    """⚠ 三份字节形态产物（`clean_text.txt` / `draft.md` / 成书）盘上**全是 LF-only**，
+    """⚠ 两份字节形态产物（`clean_text.txt` / 成书）盘上**全是 LF-only**，
     而 Windows 上 `open(p, 'w')` 默认吐 CRLF ⇒ 同一份代码在两台机器上产出两种字节。
     """
     ctx = _ctx(_book())
@@ -1874,6 +1879,92 @@ def test_a_new_official_draft_retires_the_old_invalid_sibling():
         f'被拦下的那一份要留在 _rounds/ 里，不是删掉：{kept}'
 
 
+def test_refreshing_formal_derived_fields_preserves_the_live_invalid_sibling():
+    """recheck 刷正式稿指标不等于采用/取代一份尚待 revalidate 的问题稿。"""
+    base = _book()
+    ctx = _plan_ctx(base)
+    store = ArtifactStore(ctx)
+    store.read(Loose, UPSTREAM)
+    formal = store.write(PLAN_REL, _plan(ctx, marker='旧派生读数'))
+    invalid = store.write_invalid(
+        PLAN_REL, _plan(ctx, marker='尚待重验证的付费候选'),
+        gates_skipped=['name_leak'],
+    )
+    invalid_before = invalid.read_bytes()
+    stage_before = _byte_tree(formal.parent)
+
+    refreshed = store.refresh_formal(
+        PLAN_REL, _plan(ctx, marker='按当前判据刷新的派生读数'))
+
+    assert refreshed == formal
+    assert invalid.is_file(), 'refresh 后 live INVALID 必须仍在普通 revalidate 入口'
+    assert invalid.read_bytes() == invalid_before, 'refresh 不得改写问题稿的任何字节'
+    stage_after = _byte_tree(formal.parent)
+    changed = {
+        rel for rel in set(stage_before) | set(stage_after)
+        if stage_before.get(rel) != stage_after.get(rel)
+    }
+    assert changed == {formal.name}, (
+        f'refresh 只能改正式文件，不得归档 INVALID 或改写其审计历史：{changed}')
+    current, _raw = store.read_own(PlanChapters, PLAN_REL)
+    assert current.output_chapters[0].chapter_rewrite_brief == '按当前判据刷新的派生读数'
+
+
+def test_refresh_formal_refuses_to_create_a_missing_official():
+    """refresh 不是首写旁路；没有 formal 时不得制造 formal + INVALID 新状态。"""
+    base = _book()
+    ctx = _plan_ctx(base)
+    store = ArtifactStore(ctx)
+    store.read(Loose, UPSTREAM)
+
+    with pytest.raises(UpstreamMissing, match='plan_chapters.json'):
+        store.refresh_formal(PLAN_REL, _plan(ctx, marker='不应落盘'))
+
+    assert not store.path(PLAN_REL).exists()
+
+
+def test_refresh_formal_refuses_to_rewrite_generation_provenance():
+    """确定性复检只能继承来源账，不能借 refresh 冒充一次新生成。"""
+    base = _book()
+    ctx = _plan_ctx(base)
+    store = ArtifactStore(ctx)
+    store.read(Loose, UPSTREAM)
+    store.write(PLAN_REL, _plan(ctx, marker='原正式稿'))
+    store.write_invalid(
+        PLAN_REL, _plan(ctx, marker='尚待重验证的问题稿'), gates_skipped=[])
+    before = _byte_tree(store.path(PLAN_REL).parent)
+    candidate = _plan(ctx, marker='伪造来源账的刷新')
+    changed_src = candidate.provenance.model_copy(update={'code': 'other-code'})
+    candidate = candidate.model_copy(update={'provenance': changed_src})
+
+    with pytest.raises(ProvenanceRefused, match='逐字段继承'):
+        store.refresh_formal(PLAN_REL, candidate)
+
+    assert _byte_tree(store.path(PLAN_REL).parent) == before
+
+
+def test_refresh_formal_freshness_failure_restores_the_whole_byte_tree(monkeypatch):
+    """refresh 复用正式写盘口的 freshness 后置条件与逐字节回滚。"""
+    base = _book()
+    ctx = _plan_ctx(base)
+    store = ArtifactStore(ctx)
+    store.read(Loose, UPSTREAM)
+    store.write(PLAN_REL, _plan(ctx, marker='原正式稿'))
+    store.write_invalid(
+        PLAN_REL, _plan(ctx, marker='仍在 live 的问题稿'), gates_skipped=[])
+    stage = store.path(PLAN_REL).parent
+    before = _byte_tree(stage)
+
+    def fail_freshness(_rel, _artifact):
+        raise ProvenanceRefused('模拟 refresh freshness 失败')
+
+    monkeypatch.setattr(store, '_assert_self_fresh', fail_freshness)
+    with pytest.raises(ProvenanceRefused, match='refresh freshness 失败'):
+        store.refresh_formal(PLAN_REL, _plan(ctx, marker='不会留下的刷新'))
+
+    assert _byte_tree(stage) == before
+
+
 def test_a_rejected_official_write_does_not_retire_the_invalid_sibling(monkeypatch):
     """新内容连完整预校验都过不了时，旧问题稿必须仍留在原位。"""
     base = _book()
@@ -2038,6 +2129,15 @@ def test_promotion_override_rebuilds_derived_fields_but_cannot_replace_live_audi
     baseline_source = _prov_on_disk(inv)
     current = json.loads(inv.read_text(encoding='utf-8'))
     current['output_chapters'][0]['chapter_rewrite_brief'] = '人工提交'
+    current['output_chapters'][0]['scenes'][0]['purpose'] = '人工正文修订'
+    current_source = current['_provenance']
+    current_source['code'] = 'live-invalid-forged-code'
+    current_source['root_clean_sha1'] = '0' * 40
+    current_source['inputs'] = {
+        UPSTREAM: {'file': '0' * 10, 'consumed': None},
+    }
+    current_source['prompts'] = {'RULES': '1' * 10}
+    current_source['input_basis'] = 'live-invalid-forged-input-basis'
     inv.write_text(json.dumps(current, ensure_ascii=False, indent=2) + '\n',
                    encoding='utf-8')
     live = PlanChapters.model_validate(decode_artifact(PLAN_REL, current).payload)
@@ -2058,11 +2158,22 @@ def test_promotion_override_rebuilds_derived_fields_but_cannot_replace_live_audi
 
     assert disk['output_chapters'][0][
         'chapter_rewrite_brief'] == '确定性派生字段已重建'
+    assert disk['output_chapters'][0]['scenes'][0]['purpose'] == '人工正文修订'
     assert source['revalidation_audit'] == live_audit.model_dump(mode='json')
     assert source['revalidation_audit']['changed_json_pointers'] == [
-        '/output_chapters/0/chapter_rewrite_brief']
-    assert source['inputs'] == baseline_source['inputs'], 'override 自带的假来源账被信任了'
-    assert source['code'] != 'fake-override-code'
+        '/output_chapters/0/chapter_rewrite_brief',
+        '/output_chapters/0/scenes/0/purpose',
+    ]
+    promotion_owned = {
+        'code', 'revalidated', 'gates_skipped', 'invalid_baseline_sha256',
+        'revalidation_audit',
+    }
+    assert {
+        key: value for key, value in source.items() if key not in promotion_owned
+    } == {
+        key: value for key, value in baseline_source.items() if key not in promotion_owned
+    }, '正式产物的原始来源账没有完整继承不可变创建基线'
+    assert source['code'] not in {'live-invalid-forged-code', 'fake-override-code'}
 
 
 @pytest.mark.parametrize(('actor', 'reason'), [('', '理由'), ('人', '  ')])

@@ -52,7 +52,6 @@ describe('Stage5 dynamic chapter request', () => {
       action.extra?.some((flag) => ['--actor', '--reason'].includes(flag)),
     )).toBe(false)
     expect(actions.some((action) => action.extra?.includes('--apply-edit'))).toBe(false)
-    expect(actions.some((action) => action.extra?.includes('--rebuild-draft'))).toBe(false)
   })
 
   it('only prepares writing authorization for an unapproved paid action', async () => {

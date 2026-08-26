@@ -10,9 +10,8 @@ stage5.py —— S-08「成稿 ↔ 材料」与 S-09「验收 / 修订」两屏�
   · 原文↔成稿对齐块：分界线只由**双侧都命中的 verbatim** 定（`R-11.9`），
     无锚的拍并进相邻块；锚点覆盖率常驻；**这是对应关系，不是判定**。
 
-【S-09 发的是验收产物（历史事实）】与「现在复检一遍」（`/check/stage5`）是两件事。
-`stale` 逐章回答「验收判的那份与盘上当前那份还是不是同一份」（整文件指纹，
-与 `Review.judged` 的审计尺子同一把）。
+【S-09 发的是验收产物（历史事实）】与「现在复检一遍」（`/check/stage5`）是两件事；
+当前正文与 typed 编辑槽位只由并行 S-08 响应提供。
 
 【纪律】纯读；判定不产不抄（`R-11.4`）；成稿一律走 `load_drafts`
 （`read_judged` 那条路——`store.read` 对三级路径是 `PathRefused`，那是设计不是障碍）。
@@ -82,8 +81,8 @@ def stage5_view(base: str | os.PathLike[str], sid: str, ordinal: int) -> Stage5V
 
     source_text = text_of.get(ordinal)
     rec = by_ord.get(ordinal)
-    drafts = ([_draft_view(store, rec, invalid=False,
-                           source_text=source_text, entry=entry)] if rec is not None else [])
+    drafts = ([_draft_view(store, rec, source_text=source_text, entry=entry)]
+              if rec is not None else [])
     invalid_drafts = [v for rel in invalid_by_ord.get(ordinal, [])
                       if (v := _invalid_draft_view(store, rel, source_text, entry))
                       is not None]
@@ -171,8 +170,7 @@ def _index_row(store, o: int, primary, invalid_rels: list[str], entry) -> Stage5
         freshness=fresh)
 
 
-def _draft_view(store, rec: dict[str, Any], *, invalid: bool,
-                source_text: str | None, entry) -> DraftView:
+def _draft_view(store, rec: dict[str, Any], *, source_text: str | None, entry) -> DraftView:
     rel = rec['_relpath']
     # ⚠ `.INVALID` 稿不走 `artifact_state`（`invalid_of` 对已是 INVALID 的路径显式拒收，
     #   「有没有孪生 INVALID」这个问题对它自己没有意义）——直接问它的来源新鲜度。
@@ -184,16 +182,10 @@ def _draft_view(store, rec: dict[str, Any], *, invalid: bool,
     p = rec.get('_provenance') or {}
     align, rows = _align(source_text, rec.get('text') or '', entry)
     return DraftView(
-        relpath=rel,
-        invalid=invalid,
-        round=int(p.get('round') or 1),
-        origin=str(p.get('origin') or 'llm'),
         chars=int(rec.get('chars') or 0),
         budget_chars=rec.get('budget_chars'),
-        source_chars=int(rec.get('source_chars') or 0),
         overlap_excl_verbatim=rec.get('overlap_excl_verbatim'),
         segments=list(rec.get('segments') or []),
-        text=rec['text'],
         align=align,
         align_rows=rows,
         freshness=fresh,
@@ -214,7 +206,7 @@ def _invalid_draft_view(store, rel: str, source_text: str | None, entry) -> Draf
     rec = chapter.model_dump(by_alias=True)
     rec['text'] = chapter.text
     rec['_relpath'] = rel
-    return _draft_view(store, rec, invalid=True, source_text=source_text, entry=entry)
+    return _draft_view(store, rec, source_text=source_text, entry=entry)
 
 
 # ── 对齐：最小 verbatim 锚版 ────────────────────────────────────────────────
@@ -294,15 +286,14 @@ def review_view(base: str | os.PathLike[str], sid: str, ordinal: int) -> ReviewV
         raise TerminalState(
             f'Stage5 Review 是 {current.state}：{"；".join(current.reasons[:6])}。'
             '旧契约产物不可作为当前 Review 展示')
-    seq, rev = current.seq, current.review
+    seq = current.seq
+    rev = review.with_current_wontfix(store, current.review)
 
     chapters = [rc.output_ordinal for rc in rev.chapters]
     if ordinal not in chapters:
         raise UpstreamMissing(f'第 {ordinal} 章不在这份验收的章集里（{chapters}）')
 
-    by_ord, _invalids, judged_now = load_drafts(store)
-
-    index = [_review_index_row(rc, judged_now) for rc in rev.chapters]
+    index = [_review_index_row(rc) for rc in rev.chapters]
     rc = next(c for c in rev.chapters if c.output_ordinal == ordinal)
 
     return ReviewView(
@@ -311,18 +302,13 @@ def review_view(base: str | os.PathLike[str], sid: str, ordinal: int) -> ReviewV
         review_seq=seq,
         review_state=current.state,
         review_reasons=list(current.reasons),
-        sources=rev.sources,
         finding_counts=_dense_counts(
             [f for c in rev.chapters for f in c.findings] + list(rev.book)),
-        baselines=dict(rev.baselines),
-        baselines_identity=dict(rev.baselines_identity),
         book=rev.book,
-        wontfix=len(review.load_wontfix(store)),
         chapters=chapters,
         ordinal=ordinal,
         index=index,
-        chapter=_review_chapter(store, rc, by_ord, judged_now),
-        _provenance=rev.provenance,
+        chapter=_review_chapter(rc),
     )
 
 
@@ -336,51 +322,17 @@ def _dense_counts(findings) -> dict[str, int]:
     return out
 
 
-def _review_index_row(rc, judged_now) -> ReviewIndexRow:
+def _review_index_row(rc) -> ReviewIndexRow:
     return ReviewIndexRow(
         output_ordinal=rc.output_ordinal,
-        round=rc.draft_round,
-        chars=rc.chars,
-        budget_chars=rc.budget_chars,
         finding_counts=_dense_counts(rc.findings),
         unresolved=sum(1 for f in rc.findings
-                       if int(f.unresolved_rounds or 0) > 0 and f.wontfix is None),
-        stale=_stale_of(rc, judged_now))
+                       if int(f.unresolved_rounds or 0) > 0 and f.wontfix is None))
 
 
-def _stale_of(rc, judged_now) -> bool | None:
-    """验收判的正文投影 vs 盘上当前正文；元数据重判不制造假 stale。
-
-    `null` = 判不了：本章验收时就无稿、或验收后成稿被移走。
-    """
-    if rc.relpath is None or rc.draft_text_sha1 is None:
-        return None
-    now = judged_now.get(rc.relpath)
-    if now is None:
-        return None
-    return now.consumed.text_sha1 != rc.draft_text_sha1
-
-
-def _review_chapter(store, rc, by_ord, judged_now) -> ReviewChapterView:
-    """一章明细。`text` / `chars` / `origin` 取**当前盘上**那份稿
-    （优先验收判过的那条路径，缺了退主稿）——改稿入口要贴着现役正文。"""
-    rec = by_ord.get(rc.output_ordinal)
-    if rec is not None and rc.relpath is not None and rec.get('_relpath') != rc.relpath:
-        rec = None
-    p = (rec or {}).get('_provenance') or {}
-    rounds: list[int] = []
-    if rc.relpath is not None:
-        rounds = sorted(store.seen_rounds(rc.relpath))
+def _review_chapter(rc) -> ReviewChapterView:
+    """一章验收明细；正文和编辑槽位不在 Review 响应重复投影。"""
     return ReviewChapterView(
         output_ordinal=rc.output_ordinal,
         findings=rc.findings,
-        chars=(rec or {}).get('chars'),
-        budget_chars=rc.budget_chars,
-        round=rc.draft_round,
-        origin=(str(p.get('origin')) if p.get('origin') else
-                ('llm' if rec is not None else None)),
-        segments=(list(rec.get('segments') or []) if rec is not None else None),
-        text=(rec or {}).get('text'),
-        rounds=rounds,
-        stale=_stale_of(rc, judged_now),
     )

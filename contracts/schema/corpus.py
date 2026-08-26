@@ -53,7 +53,6 @@ def required_current_corpus_artifacts(chapters: int) -> frozenset[str]:
         'stage4/evidence_binding.json',
         'stage4/plan_chapters.json',
         'stage4/writer_context.json',
-        'stage5/draft.md',
         'stage5/review_1.json',
         # ⚠ `stage5/semantic_1.json` 随 `stage5.semantic` 节点于 2026-08-17 下线，
         #   不再是一本合格语料书的必备面。

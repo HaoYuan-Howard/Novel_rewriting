@@ -95,7 +95,6 @@ def _full_box() -> sandbox.Sandbox:
     }))
     box = sandbox.Sandbox(book, rels=rels)
     _copy_text(box, 'stage0/clean_text.txt')
-    _copy_text(box, 'stage5/draft.md')
     sandbox.decide_global_review(box)
     return box
 
@@ -302,6 +301,117 @@ def test_existing_canonical_or_legacy_stage5_work_blocks_approval_reset():
                 approvals.reset(box.root, box.sid)
         finally:
             box.close()
+
+
+def test_retired_draft_is_not_stage5_work(tmp_path):
+    novel_dir = tmp_path / '书名_123'
+    (novel_dir / 'stage5').mkdir(parents=True)
+    (novel_dir / 'stage5' / 'draft.md').write_text('历史副本', encoding='utf-8')
+    assert approvals._has_stage5_work(novel_dir) is False
+
+
+def test_stage5_approval_subject_is_canonical_chapters_plus_review(
+        tmp_path, monkeypatch):
+    from novel.stages.stage5 import review as stage5_review
+
+    novel_dir = tmp_path / '书名_123'
+    novel_dir.mkdir()
+    monkeypatch.setattr(approvals, '_require_stage5_complete', lambda *_args: None)
+    monkeypatch.setattr(approvals, '_planned', lambda *_args: [1, 2])
+    monkeypatch.setattr(approvals.paths, 'resolve_novel_dir', lambda *_args: novel_dir)
+    monkeypatch.setattr(
+        approvals, '_store_for',
+        lambda path: SimpleNamespace(ctx=SimpleNamespace(novel_dir=path)))
+    monkeypatch.setattr(
+        stage5_review, 'require_accepted_review',
+        lambda *_args: SimpleNamespace(review_rel='stage5/review_3.json'))
+
+    rels = approvals._stage5_subject_rels(
+        tmp_path, '123', approvals._fresh_record('123'))
+    assert rels == [
+        'stage5/ch01.json', 'stage5/ch02.json', 'stage5/review_3.json',
+    ]
+    assert 'stage5/draft.md' not in rels
+
+
+def test_retired_draft_in_old_s5_proof_revokes_s5_and_downstream(
+        tmp_path, monkeypatch):
+    """旧 s5 subject 多绑一份 draft 时，不得被当前较小主体误认成仍有效。"""
+    current_gate_proofs = {
+        gate: approvals._ApprovalProof(
+            root_clean_sha1='0' * 40,
+            artifacts={f'{gate}.json': 'a' * 64},
+            decision_sha256='b' * 64,
+        )
+        for gate in approvals._GATE_ORDER
+    }
+    current_gate_proofs['s5'] = current_gate_proofs['s5'].model_copy(update={
+        'artifacts': {
+            'stage5/ch01.json': 'a' * 64,
+            'stage5/review_2.json': 'b' * 64,
+        },
+    })
+    old_s5_proof = current_gate_proofs['s5'].model_copy(update={
+        'artifacts': {
+            **current_gate_proofs['s5'].artifacts,
+            'stage5/draft.md': 'c' * 64,
+        },
+    })
+    stored_gate_proofs = dict(current_gate_proofs)
+    stored_gate_proofs['s5'] = old_s5_proof
+    seen_proofs = {
+        key: approvals._ApprovalProof(
+            root_clean_sha1='0' * 40,
+            artifacts={f'{key}.json': 'd' * 64},
+            decision_sha256='e' * 64,
+        )
+        for key in approvals.APPROVAL_SEEN
+    }
+    writing_proof = approvals._ApprovalProof(
+        root_clean_sha1='0' * 40,
+        artifacts={'stage4/plan_chapters.json': 'f' * 64},
+        decision_sha256='1' * 64,
+    )
+    structure = approvals._StoredStructureDecision(
+        actor='reviewer', reason='当前结构逐章核对通过',
+        subject_sha256='2' * 64,
+        chapters=[{
+            'output_ordinal': 1,
+            'decision': 'accept',
+            'reason': '本章结构可接受',
+        }],
+        decided_at='2026-08-26T00:00:00+00:00',
+        proof=stored_gate_proofs['s4'],
+    )
+    record = approvals._ApprovalRecordV4(
+        sid='123',
+        gate={gate: True for gate in approvals._GATE_ORDER},
+        seen={key: True for key in seen_proofs},
+        writing=True,
+        gate_proofs=stored_gate_proofs,
+        seen_proofs=seen_proofs,
+        writing_proof=writing_proof,
+        structure_history=[structure],
+        structure_decision=structure,
+    )
+
+    monkeypatch.setattr(
+        approvals, '_proof_for_seen',
+        lambda _novel_dir, key: seen_proofs[key])
+    monkeypatch.setattr(
+        approvals, '_proof_for_writing',
+        lambda _novel_dir: writing_proof)
+    monkeypatch.setattr(
+        approvals, '_proof_for_gate',
+        lambda _novel_dir, gate, _record: current_gate_proofs[gate])
+
+    effective = approvals._effective_record(tmp_path, record)
+
+    assert 'stage5/draft.md' in record.gate_proofs['s5'].artifacts
+    assert 'stage5/draft.md' not in current_gate_proofs['s5'].artifacts
+    assert all(effective.gate[gate] for gate in ('s0', 's1', 's2', 's3', 's4'))
+    assert all(not effective.gate[gate] for gate in ('s5', 's6', 's7'))
+    assert all(effective.gate_proofs[gate] is None for gate in ('s5', 's6', 's7'))
 
 
 @_corpus_test

@@ -17,7 +17,6 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Iterable, Mapping
 from typing import Any, Callable, Final
 
 from contracts.artifacts import (
@@ -318,13 +317,61 @@ def stage5_main_text(data: object) -> object:
 
 
 def stage5_grounding(data: object) -> object:
-    """Stage 5 只消费 secret 语义；定位证据不进付费 freshness。"""
+    """Stage5 写作只绑定 secret 语义；定位证据不进付费 freshness。"""
     if not isinstance(data, dict):
         return None
     projected = without_global_evidence({
         'canon': {'secrets': (data.get('canon') or {}).get('secrets')},
     })
     return {'secrets': ((projected or {}).get('canon') or {}).get('secrets')}
+
+
+def stage5_review_grounding(data: object) -> object:
+    """Stage5 Review 的全书秘密与人名检测基线。
+
+    Review 与写作故意不共用这条边：写作的付费 freshness 仍只绑
+    secrets；Review 还会用 ``project_character_names`` 从当前 Stage2 人物表派生
+    ``Book.names`` / ``Book.name_stems``，所以必须绑定这个派生真正读到的四格。
+
+    ``address`` 的顺序、重复项以及 ``by/context/from_chapter`` 不影响全书
+    display-name 派生；因此只保留去空白后的唯一 surface 集。role/fate
+    与所有 evidence 也不属于这条 Review 依赖。
+    """
+    if not isinstance(data, dict):
+        return None
+    entities = data.get('entities')
+    if not isinstance(entities, dict):
+        entities = {}
+    raw_characters = entities.get('characters')
+    if not isinstance(raw_characters, dict):
+        raw_characters = {}
+
+    characters: list[dict[str, object]] = []
+    for raw_char_id, raw_character in sorted(
+        raw_characters.items(), key=lambda item: str(item[0]),
+    ):
+        character = raw_character if isinstance(raw_character, dict) else {}
+        raw_address = character.get('address')
+        if not isinstance(raw_address, list):
+            raw_address = []
+        surfaces = sorted({
+            surface.strip()
+            for row in raw_address if isinstance(row, dict)
+            for surface in [row.get('surface')]
+            if isinstance(surface, str) and surface.strip()
+        })
+        characters.append({
+            'char_id': str(raw_char_id),
+            'canonical': character.get('canonical'),
+            'address_surfaces': surfaces,
+            'name_distinctiveness': character.get('name_distinctiveness'),
+        })
+
+    secrets = stage5_grounding(data)
+    return {
+        'secrets': (secrets or {}).get('secrets') if isinstance(secrets, dict) else None,
+        'characters': characters,
+    }
 
 
 def stage5_style(data: object) -> object:
@@ -382,38 +429,6 @@ def stage5_review_context(data: object) -> object:
         **projected,
         'code': ((data.get('_provenance') or {}).get('code')),
     }
-
-
-def render_stage5_draft(
-    planned_ordinals: Iterable[int],
-    by_ordinal: Mapping[int, Mapping[str, Any]],
-) -> str:
-    """Canonical ``stage5/draft.md`` 的唯一字节投影。
-
-    renderer 与消费投影放在同一个低层模块：Stage5 producer 与
-    :class:`novel.store.ArtifactStore` 的 freshness 桥必须共用同一把字节尺。
-    若 store 独立重拼 Markdown，标题格式一改，刚写完的 draft 就会一直被第二份旧实现
-    误报 stale，直到有人碰巧想起同步它。
-    """
-    planned = sorted(set(int(ordinal) for ordinal in planned_ordinals))
-    missing = [ordinal for ordinal in planned if ordinal not in by_ordinal]
-    unexpected = sorted(set(by_ordinal) - set(planned))
-    head = [f'# 重构稿（{len(by_ordinal)}/{len(planned)} 章）']
-    if missing:
-        head.append(f'> ⚠ 计划里的第 {missing} 章**没有 canonical 成稿**')
-    if unexpected:
-        head.append(f'> ⚠ canonical 目录还有计划外的第 {unexpected} 章（待复核 stale 章集）')
-    parts = ['\n'.join(head)]
-    for ordinal in sorted(by_ordinal):
-        record = by_ordinal[ordinal]
-        overlap = record.get('overlap_excl_verbatim')
-        sources = '、'.join(
-            str(source) for source in (record.get('from_source_ordinals') or []))
-        parts.append(
-            f"## 第 {ordinal} 章（源 [{sources}] · {record.get('chars')}字"
-            + (f' · 重合(扣除逐字要求) {overlap:.3f}' if overlap is not None else '')
-            + ')\n\n' + str(record.get('text') or ''))
-    return '\n\n'.join(parts) + '\n'
 
 
 # ── stage6.hook ───────────────────────────────────────────────────────────────
@@ -613,7 +628,7 @@ CONSUMED_PROJECTIONS: Final[dict[str, dict[str, Projection]]] = {
     },
     'stage5.review': {
         STAGE1_MAIN_TEXT: stage5_main_text,
-        STAGE2_GLOBAL_GROUNDING: stage5_grounding,
+        STAGE2_GLOBAL_GROUNDING: stage5_review_grounding,
         STAGE3_STYLE_GROUNDING: stage5_style,
         STAGE4_WRITER_CONTEXT: stage5_review_context,
         # retain_pretrim 的人工裁决绑定完整 audit bytes；任一审计事实变化都应过期。
@@ -681,5 +696,5 @@ def producer_node(rel: str, *, fallback: str | None = None) -> str | None:
 
 __all__ = [
     'CONSUMED_PROJECTIONS', 'Projection', 'artifact_payload', 'canonical_rel',
-    'producer_node', 'projection_for', 'render_stage5_draft',
+    'producer_node', 'projection_for',
 ]

@@ -499,7 +499,6 @@ def _started_record(base, node, sid, flags, steps):
 
 
 @pytest.mark.parametrize('flags', [
-    ['--rebuild-draft'],
     ['--recheck', '--chapters', '1'],
     ['--revalidate', '--chapters', '1',
      '--actor', 'reviewer-a', '--reason', '同轮重判'],

@@ -37,7 +37,6 @@ ARTIFACT_PATHS: Final[dict[str, str]] = {
     'stage5.trim_audit': 'stage5/trim_audit_ch{nn}.json',
     'stage5.trim_resolution': 'stage5/trim_resolution_ch{nn}.json',
     'stage5.wontfix': 'stage5/wontfix.json',
-    'stage5.book_draft': 'stage5/draft.md',
     'stage6.hook': 'stage6/hook.json',
     'stage6.hook_edit': 'stage6/hook_edit.json',
     'stage6.semantic': 'stage6/semantic_{n}.json',
@@ -106,7 +105,6 @@ STAGE5_REVIEW = artifact_rel('stage5.review')
 STAGE5_TRIM_AUDIT = artifact_rel('stage5.trim_audit')
 STAGE5_TRIM_RESOLUTION = artifact_rel('stage5.trim_resolution')
 STAGE5_WONTFIX = artifact_rel('stage5.wontfix')
-STAGE5_BOOK_DRAFT = artifact_rel('stage5.book_draft')
 STAGE6_HOOK = artifact_rel('stage6.hook')
 STAGE6_HOOK_EDIT = artifact_rel('stage6.hook_edit')
 STAGE6_SEMANTIC = artifact_rel('stage6.semantic')

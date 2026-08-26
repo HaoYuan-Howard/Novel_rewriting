@@ -238,12 +238,9 @@ def test_stage5_default_is_full_book_and_chapters_is_the_only_subset_selector():
     assert subset[subset.index('--chapters') + 1] == '1,3'
 
 
-def test_stage5_rebuild_draft_is_a_free_writing_recovery_entry():
-    flags = ['--rebuild-draft']
-    assert N.is_paid('stage5.write', flags) is False
-    assert N.would_write('stage5.write', flags) is True
-    argv = N.build_argv('stage5.write', SID, flags, base=BASE)
-    assert '--rebuild-draft' in argv
+def test_stage5_rebuild_draft_is_retired():
+    with pytest.raises(UnsupportedRunMode, match='不接受'):
+        N.build_argv('stage5.write', SID, ['--rebuild-draft'], base=BASE)
 
 
 @pytest.mark.parametrize(('node', 'flags'), [
@@ -256,7 +253,6 @@ def test_stage5_rebuild_draft_is_a_free_writing_recovery_entry():
         '--wontfix', 'book|draft_missing=人工接受', '--retain-pretrim',
         '--chapters', '3', '--actor', '复核员', '--reason', '保留原稿',
     ]),
-    ('stage5.write', ['--rebuild-draft', '--dry-run']),
     ('stage5.write', ['--recheck', '--revise']),
     ('stage5.write', [
         '--revalidate', '--actor', '复核员', '--reason', '按当前闸门重判',

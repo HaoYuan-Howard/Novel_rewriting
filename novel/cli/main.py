@@ -765,13 +765,6 @@ def _run_stage5(ctx: RunContext, flags: list[str]) -> int:
         return X.OK if report.passed else X.CHECK_FAILED
 
     # ── 以下是 `stage5.write` ────────────────────────────────────────────────
-    if '--rebuild-draft' in tokens:
-        if chapters:
-            raise TerminalState('--rebuild-draft 是全书纯投影恢复，不接受 --chapters')
-        rel = write.run_rebuild_draft(ctx)
-        print(f'  ✓ 已从 canonical 章节零成本重建 {rel}')
-        return X.OK
-
     if '--dry-run' in tokens:
         system, user, _mat = write.build_prompt(ctx, chapters)
         print(f'── system（{len(system)} 字）──\n{system}')

@@ -710,18 +710,11 @@ export interface ChapterSegment {
 }
 
 export interface Draft {
-  relpath: string
-  invalid: boolean
-  round: number
-  /** human = --apply-edit 的人工稿；llm = 模型产的 */
-  origin: string
   chars: number
   budget_chars: number | null
-  source_chars: number
   overlap_excl_verbatim: number | null
-  /** schema-v2 disk authority; `text` below is a deterministic display projection. */
+  /** schema-v2 disk authority; consumers deterministically project whole-chapter text. */
   segments: ChapterSegment[]
-  text: string
   /** null = 本章无锚可对（对齐辅助诚实缺席，不编分界线） */
   align: DraftAlign | null
   align_rows: AlignRow[]
@@ -777,30 +770,14 @@ export interface Stage5Response {
 
 export interface ReviewIndexRow {
   output_ordinal: number
-  round: number | null
-  chars: number | null
-  budget_chars: number | null
   /** 四 sev 键恒在（0 也写） */
   finding_counts: Record<Severity, number>
   unresolved: number
-  /** 验收判的那份与盘上当前那份还是不是同一份；null = 判不了 */
-  stale: boolean | null
 }
 
 export interface ReviewChapter {
   output_ordinal: number
   findings: Finding[]
-  chars: number | null
-  budget_chars: number | null
-  round: number | null
-  origin: string | null
-  /** null = 本章当前无稿；否则是人工编辑唯一允许提交的 typed 槽位集。 */
-  segments: ChapterSegment[] | null
-  /** 当前盘上的正式稿正文（改稿入口贴着它）；null = 本章无稿 */
-  text: string | null
-  /** 已归档的轮次号（_rounds/），升序 */
-  rounds: number[]
-  stale: boolean | null
 }
 
 export interface ReviewResponse {
@@ -809,18 +786,13 @@ export interface ReviewResponse {
   review_seq: number
   review_state: 'fresh' | 'stale' | 'unknown' | 'legacy_incompatible'
   review_reasons: string[]
-  sources: Sources
   /** 全书按 sev 现数，四键恒在 —— 不读产物的稀疏 counts */
   finding_counts: Record<Severity, number>
-  baselines: Record<string, string>
-  baselines_identity: Record<string, string>
   book: Finding[]
-  wontfix: number
   chapters: number[]
   ordinal: number
   index: ReviewIndexRow[]
   chapter: ReviewChapter
-  _provenance: Provenance
 }
 
 /* ---------------------------------------------------------------- stage6 */

@@ -16,7 +16,6 @@ stage5/review_<n>.json           全书确定性验收（schema v2，0 LLM 调�
 stage5/trim_audit_chNN.json      超上限但未自动裁剪的事实（schema v2）
 stage5/trim_resolution_chNN.json 人工保留 pretrim 的 hash-bound 决定（schema v2）
 stage5/wontfix.json              人工豁免账（v1）
-stage5/draft.md                  canonical 章集合的 UTF-8 纯投影
 ```
 
 现役没有 `stage5/<mode>/...`，也没有深 / 浅两条可执行写作臂。`deep`、`shallow`、
@@ -35,7 +34,6 @@ stage5/draft.md                  canonical 章集合的 UTF-8 纯投影
 | 预览 prompt | `run stage5.write <sid> --dry-run --chapters 3 --base <base>` | 0 |
 | 重判正式章 / 问题稿 | `--recheck` / `--revalidate --actor ... --reason ...` | 0 |
 | 人工整章写回 | `--apply-edit <ChapterResponse.json>` | 0 LLM |
-| 只重建全书投影 | `--rebuild-draft` | 0 |
 | 生成最新 Review | `run stage5.review <sid> --base <base>` | 0 |
 | 读取已有 Review | `run stage5.review <sid> --check-only --base <base>` | 0 |
 
@@ -52,6 +50,9 @@ stage5/draft.md                  canonical 章集合的 UTF-8 纯投影
 `review.load_book` 只把这九个叶子放进 `Book.measurable`；结构上没有 `voice`、
 `surface_habits`、`chapter_styles` 或 `hook_style`，prompt 也不能接收整份 Stage3 包。
 Stage2 的 secrets 仍从剥除原文 evidence 的全局事实投影读取，不因收窄 Stage3 消费面而缩小检查面。
+写作投影保持 secrets-only，以免人物展示信息变化让既有付费正文整体 stale；Review 另绑定
+`char_id/canonical/address[].surface/name_distinctiveness`，因为旧名、发明名和专名探针会实际读取
+这些叶子。人物 evidence-only 定位不进入消费指纹。
 
 ### 1.2 Stage4 → Stage5：只执行新场景设计
 
@@ -118,9 +119,17 @@ v1 → v2 是破坏形状：删除 `mode`，路径从 `stage5/{mode}/chNN.json` 
 超上限不触发模型自动裁剪：正文原样保留，落 identity `TrimAudit`，由人工
 `retain_pretrim` 或整章 `--apply-edit` 收口。
 
+所有 canonical 正文落盘入口共用同一个提交口：付费生成、重采、`--apply-edit`、
+`--revalidate` 与 `--recheck` 都在章与 trim sidecar 的同一提交事务中对账。正文变化且超上限时，
+audit 绑定新正文 SHA-256、旧 resolution 失效；回到区间内时退休旧 audit/resolution；正文未变且
+二者仍匹配时保留人工决定。被闸门拦在 `.INVALID` 的候选没有替换旧 canonical，因此不得改动旧稿
+的 trim 状态。
+
 LLM 正式稿用 `RoundLlmProvenance`；人工整章写回用 `RoundFreeProvenance`，删除
 `prompts/model`、记 `origin=human` 并继承上一轮 inputs。`--revalidate` 只按当前判据重判并
-提升原问题稿，来源账继承，一个字未改就不得伪造新 prompt、模型或轮次。
+提升原问题稿，直接判 `.INVALID` 保存的原始 segments，不借重判归一或修改正文；来源账继承，
+一个字未改就不得伪造新 prompt、模型或轮次。`--recheck` 同样不归一正文、不改 segments、任务
+快照或 provenance，只刷新 v2 派生指标并补齐历史遗漏的 trim audit。
 
 ## 三、Review（schema v2）与 currentness
 
@@ -142,7 +151,7 @@ currentness 出口。状态取值：
 
 | 状态 | 含义 |
 |---|---|
-| `fresh` | schema、RULES、上游、canonical 章集与正文投影、`judged`、`draft.md` 全部相符 |
+| `fresh` | schema、RULES、上游、canonical 章集与正文投影、`judged` 全部相符 |
 | `stale` | 已知某一主体或尺子发生变化 |
 | `unknown` | 产物 / 来源账读不回或当前投影无法确定 |
 | `missing` | 盘上没有 Review；首轮写作可继续，`--revise` / 豁免 / s5 审批不可据此继续 |
@@ -173,7 +182,7 @@ SHA-256；bool 必须与 proof 是否存在逐格一致。结构 subject 或计�
 凭旧 s4 或 writing 推造逐章决定，s4、writing 与 s5～s7 一律清空。v2 同样只迁移能对证的
 前置 gate；v1 或损坏记录只能显式 reset/backfill，已有 Stage5 工作时 reset 受保护。
 
-## 五、其余产物与 `draft.md`
+## 五、其余产物与退役投影
 
 ### 5.1 rejected / trim / wontfix / 历史
 
@@ -185,26 +194,17 @@ SHA-256；bool 必须与 proof 是否存在逐格一致。结构 subject 或计�
 - `wontfix.json`（v1）按 `(stage, chapter|book, rule, evidence_key)` 绑定人工理由；豁免不删结论。
 - `_rounds/` 是审计历史，不计活动 `.INVALID` / rejected / stalled 余额；反推 schema 时仍必须读。
 
-### 5.2 `stage5/draft.md`
+### 5.2 退役的 `stage5/draft.md`
 
-它是 canonical `chNN.json` 的纯投影，不是第二份正文权威。字节形态：
-
-```markdown
-# 重构稿（M/N 章）
-> ⚠ 计划里的第 [...] 章没有 canonical 成稿
-
-## 第 1 章（源 [1] · 1234字 · 重合(扣除逐字要求) 0.012）
-
-正文……
-```
-
-章按阅读序排列；缺章和计划外章显式写横幅。`--rebuild-draft` 只从 canonical 章零成本恢复
-这份投影，不改变章产物；Review fresh 还要求盘上 draft 与当前投影逐字相同。
+`stage5/draft.md` 曾是 canonical 章集合的 Markdown 展示副本，2026-08-26 起退役。它不再登记为
+artifact、不再由节点生成，也不参与完成度、Review freshness、审批 subject 或 corpus manifest。
+旧 base 里的文件不自动删除，但运行时不发现、不读取；需要全书文本的消费者直接按阅读序拼接
+`Chapter.segments`。
 
 ## 六、判据注册表
 
 当前注册表共 **50 条**：**7 hard、26 info、12 metric、5 unver**。
-repair 分桶为 **12 UNIQUE、12 FREE、27 NONE**；repair 不是 severity，只有 UNIQUE 才能在
+repair 分桶为 **12 UNIQUE、12 FREE、26 NONE**；repair 不是 severity，只有 UNIQUE 才能在
 `unresolved_rounds < 2` 时进入付费 `--revise`，FREE / NONE 不得被包装成自动修复。
 
 | 判据 | sev | repair | 需求 |
@@ -220,7 +220,6 @@ repair 分桶为 **12 UNIQUE、12 FREE、27 NONE**；repair 不是 severity，�
 | `must_appear_missing` | info | UNIQUE | `R-7.4` |
 | `must_hold_unver` | unver | NONE | `R-7.4` |
 | `secret_leak` | hard | UNIQUE | `R-7.5` |
-| `secret_unknown` | info | NONE | `R-7.5` |
 | `no_secrets_in_book` | unver | NONE | `R-7.5` |
 | `invented_number` | info | UNIQUE | `R-7.10` |
 | `invented_name` | info | UNIQUE | `R-7.10` |
@@ -285,9 +284,9 @@ repair 分桶为 **12 UNIQUE、12 FREE、27 NONE**；repair 不是 severity，�
 旧双臂盘面曾有 31 章（deep 11 / shallow 20），并留下逐章带极值 0.814 / 1.206、全书比值
 0.949 / 1.022 / 0.980、旧规则命中与对白差异等读数。这些数字只用于解释阈值来历和识别
 判据退化，是 **v1 旧布局历史基线**；它们不是 canonical v2 current-schema corpus，不能用于
-宣称现役 Stage5 通过率、当前 HARD“0 命中”或当前 51 条判据的质量结论。
+宣称现役 Stage5 通过率、当前 HARD“0 命中”或当前 50 条判据的质量结论。
 
-canonical v2 产物、单臂入口、freshness、恢复路与 51 条判据的工程可靠性已经由定向及
+canonical v2 产物、单臂入口、freshness、恢复路与 50 条判据的工程可靠性已经由定向及
 非 corpus 回归验证。现役 beat-material 写作契约在设计上改为按 beat / material 组织闭卷材料，
 但原计划与旧 event-list 契约进行的受控双书付费 A/B 已在开跑前取消：没有实验正文、盲评结果
 或无正文 manifest。因此不得宣称 beat-material 在质量、成本或速度上胜出。

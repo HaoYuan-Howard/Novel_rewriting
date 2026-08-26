@@ -18,7 +18,7 @@ manifest 不含书名、原文、prompt 或生成正文，只记录：
 保持同一落点。
 
 Stage5 current 盘面必须恰有 `stage5/ch01.json`～`stage5/chNN.json` 与
-`stage5/draft.md`、`stage5/review_1.json`；不得出现旧 `stage5/deep|shallow/` 目录来替代
+`stage5/review_1.json`；不得出现旧 `stage5/deep|shallow/` 目录来替代
 canonical 章。正式章为 schema v2，Review 为 schema v2；版本逐份从 registry 现算，不能手补
 marker 冒充 current producer。
 

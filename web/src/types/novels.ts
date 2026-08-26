@@ -28,7 +28,7 @@ export interface NovelRow {
   dirname: string
   /** stage1 主正文一落盘即可确定；还没分章时为 null。 */
   chapters: number | null
-  /** stage0~7；Stage5 的 draft 投影进 artifacts，逐章成稿集合进 chapters_done。 */
+  /** stage0~7；Stage5 干净章只进 chapters_done，artifacts 最多携带章级问题投影。 */
   stages: Record<string, Artifact[]>
   /** 服务端折叠出的三态完成度。 */
   stage_done: Record<string, boolean | null>

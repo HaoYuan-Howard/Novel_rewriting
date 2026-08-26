@@ -47,6 +47,7 @@ function renderCorpus(novels: NovelRow[] = []) {
         <Routes>
           <Route path="/" element={<CorpusScreen />} />
           <Route path="/n/:sid/stage0" element={<div>Stage0 人工审校落点</div>} />
+          <Route path="/n/:sid/stage5/:ordinal" element={<div>Stage5 未知状态落点</div>} />
         </Routes>
       </MemoryRouter>
     </QueryClientProvider>,
@@ -148,6 +149,18 @@ describe('CorpusScreen 批量开书', () => {
     expect(await screen.findByText('canonical 2 章')).toBeVisible()
     expect(screen.queryByText('deep')).not.toBeInTheDocument()
     expect(screen.queryByText('shallow')).not.toBeInTheDocument()
+  })
+
+  it('打开时不会越过 done=null 的 Stage5', async () => {
+    const book = compactBook()
+    for (const stage of ['stage0', 'stage1', 'stage2', 'stage3', 'stage4']) {
+      book.stage_done[stage] = true
+    }
+    renderCorpus([book])
+
+    fireEvent.click(await screen.findByRole('button', { name: '测试书' }))
+
+    expect(await screen.findByText('Stage5 未知状态落点')).toBeVisible()
   })
 
   it('单本扫描成功后立即弹出 agent 确认，返回时直接进入这本书的 Stage0', async () => {

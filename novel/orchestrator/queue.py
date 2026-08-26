@@ -69,6 +69,7 @@ WAITING_ON_STAGE4_REPLAN = 'approval:stage4-replan'
 WAITING_ON_WRITING_APPROVAL = 'approval:stage5-writing'
 WAITING_ON_REVIEW = 'stage5:review-currentness'
 WAITING_ON_LEGACY = 'legacy_incompatible'
+WAITING_ON_RESUME_DECISION = 'resume:manual-decision'
 WAITING_ON_RESTART_CONFIRMATION = 'queue:restart-confirmation'
 WAITING_ON_REPLAN = 'queue:plan-changed'
 
@@ -187,6 +188,12 @@ def plan_book(base: str | os.PathLike[str], sid: str, *, until_stage: str,
     #: ⚠ **一旦挡住，其后的项一律跟着挡住**——那才叫「挡住队列」（`R-13.5`）。
     #: 只挡住那一项而让后面的照跑，等于让下游拿着一份没人签过字的上游继续走。
     stuck: str | None = None
+    # Review 的当前 freshness 只描述**建队列这一刻**的主体。
+    # 同一快照若已排入可执行 writer，它成功后 canonical 章集/正文必然改变；
+    # 此时不能拿旧主体上的 fresh 回答“写完后还要不要
+    # 验收”。这格只记本次 plan 已经真正排入的 runnable writer；
+    # blocked writer 仍由 ``stuck`` 传递，不伪装成会在本次改变主体。
+    stage5_write_will_run = False
 
     for node in nodes_up_to(until_stage):
         spec = NODES[node]
@@ -218,26 +225,56 @@ def plan_book(base: str | os.PathLike[str], sid: str, *, until_stage: str,
                 # B 必须等 A 落盘、人看过候选后重新 plan/preview/--yes；
                 # 否则“队列一次确认”会偷偷合并产品明定的两次付费决定。
                 why_blocked = WAITING_ON_STAGE4_PHASE_APPROVAL
-        if why_blocked is None and verdict == st.RESUME_SKIP:
+        review_follows_planned_write = (
+            node == 'stage5.review'
+            and stage5_write_will_run
+            and verdict == st.RESUME_SKIP)
+        if (why_blocked is None and verdict == st.RESUME_SKIP
+                and not review_follows_planned_write):
             continue                                 # 已存在即跳过
+        if why_blocked is None and review_follows_planned_write:
+            # 当前 Review 即使 fresh，前一项 writer 落盘后也必须按新主体
+            # 重算。把它显式排入零成本 step；writer 若失败，队列的
+            # “停在那里”仍会让这一项 not_run。
+            verdict = st.RESUME_RUN
+            why = 'stage5.write 已排入本次队列；落盘后必须按新 canonical 主体零成本重算 Review'
 
         if why_blocked is None and verdict == st.RESUME_LEGACY:
             why_blocked = WAITING_ON_LEGACY
+        if why_blocked is None and verdict in (st.RESUME_REDO, st.RESUME_UNKNOWN):
+            # `resume_verdict` 的这两态都明确禁止自动执行：REDO 可能重新付费，
+            # UNKNOWN 更不能被猜成 RUN。只把句子写出来却仍造 runnable argv，
+            # 等于队列在真实消费面把四态重新压回二态。
+            why_blocked = WAITING_ON_RESUME_DECISION
 
         flags: list[str] = []
         steps = None
         if node == 'stage5.write':
-            # Stage5 v2 只有一条全书 canonical 闭卷写作命令。
-            # 授权是独立人工决定；队列不从「默认全书」反推出同意花钱。
-            if not approvals.writing_is_current(base, sid):
-                if why_blocked is None:
-                    why_blocked = WAITING_ON_WRITING_APPROVAL
-                steps = []
-            review = next((stage for stage in ov.stages if stage.stage == 'stage5'), None)
-            if (review is not None
-                    and review.review_state not in (None, 'missing', 'fresh')):
-                if why_blocked is None:
-                    why_blocked = WAITING_ON_REVIEW
+            stage5_state = next(
+                (stage for stage in ov.stages if stage.stage == 'stage5'), None)
+            has_live_invalid = bool(
+                stage5_state is not None
+                and any(a.invalid for a in stage5_state.artifacts))
+            review_not_current = bool(
+                stage5_state is not None
+                and stage5_state.review_state not in (None, 'missing', 'fresh'))
+            writing_not_current = not approvals.writing_is_current(base, sid)
+
+            # 本层三个闸的顺序是恢复成本顺序：先处理 0 LLM INVALID，再免费重跑
+            # Review，最后才向人索取付费写作授权。真正的上游 stuck / legacy /
+            # REDO / UNKNOWN 已在上面先占住 why_blocked，不被本层理由覆盖。
+            if why_blocked is None and has_live_invalid:
+                # canonical 与更新的 INVALID 可并存；默认写作只补缺章，无法处理
+                # 这份候选，反而会以“没有要写的章”结束。actor/reason 又只能由
+                # 人提供，所以队列停在 0 LLM revalidate 入口，不冻结一条假命令。
+                why_blocked = WAITING_ON_INBOX
+            if why_blocked is None and review_not_current:
+                why_blocked = WAITING_ON_REVIEW
+            if why_blocked is None and writing_not_current:
+                # Stage5 v2 只有一条全书 canonical 闭卷写作命令。授权是独立人工决定；
+                # 队列不从「默认全书」反推出同意花钱。
+                why_blocked = WAITING_ON_WRITING_APPROVAL
+            if has_live_invalid or review_not_current or writing_not_current:
                 steps = []
 
         if why_blocked in (
@@ -247,7 +284,7 @@ def plan_book(base: str | os.PathLike[str], sid: str, *, until_stage: str,
             # 旧快照重解释为新授权；下一次队列会按当前候选重新展示 B。
             steps = []
 
-        if verdict == st.RESUME_LEGACY:
+        if verdict == st.RESUME_LEGACY or why_blocked == WAITING_ON_RESUME_DECISION:
             steps = []
 
         if steps is None and why_blocked == node and node in HUMAN_NODES:
@@ -274,6 +311,8 @@ def plan_book(base: str | os.PathLike[str], sid: str, *, until_stage: str,
             waiting_on=why_blocked,
         )
         (blocked if why_blocked else todo).append(item)
+        if node == 'stage5.write' and why_blocked is None:
+            stage5_write_will_run = True
         if why_blocked and stuck is None:
             stuck = why_blocked
     return todo, blocked
@@ -282,7 +321,7 @@ def plan_book(base: str | os.PathLike[str], sid: str, *, until_stage: str,
 def _blocked_why(waiting_on: str, verdict_why: str) -> str:
     if waiting_on == WAITING_ON_INBOX:
         return (
-            '上游有被闸门拦下的稿要人处理（0 LLM 提升路是 '
+            '上游或本层有被闸门拦下的稿要人处理（0 LLM 提升路是 '
             '`--revalidate --actor <id> --reason <why>`，同轮重判并留不可变审计）；'
             f'{verdict_why}')
     if waiting_on == WAITING_ON_WRITING_APPROVAL:
@@ -304,6 +343,10 @@ def _blocked_why(waiting_on: str, verdict_why: str) -> str:
                 f'先零成本运行 `stage5.review`；{verdict_why}')
     if waiting_on == WAITING_ON_LEGACY:
         return f'{verdict_why}；旧产物只读保留，必须显式重建 canonical Stage5'
+    if waiting_on == WAITING_ON_RESUME_DECISION:
+        return (
+            '续跑结论要求人工决定，队列不会把 REDO/UNKNOWN 猜成可执行命令；'
+            f'{verdict_why}')
     return f'在等 `{waiting_on}`——这一步是人做的裁决，机器替不了；{verdict_why}'
 
 
@@ -1158,7 +1201,7 @@ __all__ = [
     'HUMAN_NODES', 'OPTIONAL_HUMAN_NODES', 'WAITING_ON_INBOX',
     'WAITING_ON_STAGE4_PHASE_APPROVAL',
     'WAITING_ON_WRITING_APPROVAL', 'WAITING_ON_REVIEW', 'WAITING_ON_LEGACY',
-    'WAITING_ON_RESTART_CONFIRMATION', 'WAITING_ON_REPLAN',
+    'WAITING_ON_RESUME_DECISION', 'WAITING_ON_RESTART_CONFIRMATION', 'WAITING_ON_REPLAN',
     'QueueRegistry', 'append_event', 'cancel', 'confirm', 'create', 'fold',
     'fold_counts', 'frozen_resume_commands', 'new_queue_id', 'nodes_up_to', 'plan', 'plan_book',
     'queue_path', 'read_events', 'records', 'resume_incomplete', 'run', 'start',

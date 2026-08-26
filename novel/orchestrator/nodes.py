@@ -63,8 +63,7 @@ FOLLOW_CHECK_NOTE = '自动追跑：退出码 0 也可能是残缺产物'
 _PRIMARY_OPERATIONS = {
     'stage4.design': frozenset({'--dry-run', '--replan'}),
     'stage5.write': frozenset({
-        '--rebuild-draft', '--dry-run', '--recheck', '--revalidate',
-        '--apply-edit', '--revise',
+        '--dry-run', '--recheck', '--revalidate', '--apply-edit', '--revise',
     }),
     'stage5.review': frozenset({
         '--retain-pretrim', '--wontfix', '--check-only',

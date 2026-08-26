@@ -462,8 +462,8 @@ class ArtifactState(StrictModel):
     把它折成「不存在」会让界面说「还没跑」——而它跑过，只是那次把来源账丢了。
     """
 
-    #: `<stage>/<文件名>`。**取自 `contracts/schema/__init__.py` 的 `ARTIFACTS`**，
-    #: 不新建第二张清单（原型那张在 `Web/novels.py` 里，是第二份，且 stage5 被迫排除在外）。
+    #: `<stage>/<文件名>`。**经 `contracts/schema/__init__.py::artifact_spec` 路由**，
+    #: 动态章路径也要落回注册模板；不新建第二张清单。
     rel: str = Field(min_length=1)
 
     exists: bool
@@ -533,9 +533,12 @@ class StageState(StrictModel):
     #: 那是**真金白银**，不是一个显示问题。
     #:
     #: ⚠ **`.INVALID` 不计入已完成**，它进 inbox（`INBOX_KIND` 已有 `invalid` 这个值）。
-    #: ⚠ **`freshness == 'unknown'` 计入已完成**，这不是漏判：八层今天几乎全是 `unknown`
+    #: ⚠ 普通具名产物的 **`freshness == 'unknown'` 计入已完成**，这不是漏判：
+    #: 八层今天仍有一批旧产物是 `unknown`
     #: （`consumed` 投影只有 stage3 声明过三条），把它当未完成会让整条链永远跑不出第一步。
     #: 「不知道它新不新」与「它是旧的」是两件事——**后者才该挡路**。
+    #: Stage5 是例外：它的 `done=True` 会直接让付费写作 SKIP，且退役 `draft.md`
+    #: 后 canonical 章就是唯一证据，因此必须逐章达到 `fresh`；未知不能冒充当前。
     done: bool | None
 
     #: 逐章类的层（stage5）：canonical `stage5/chNN.json` 已落盘的章。
@@ -574,9 +577,10 @@ class StageState(StrictModel):
     def _done_matches_the_artifacts(self) -> StageState:
         """折叠规则只有一处算——**第二处必然分家**。
 
-        ⚠ 清单为空（粒度在章上的层，现役只有 stage5）时**本载体不设约束**：
-        它的完成度证据在**计划 + 逐章成稿**（`state.stage_state` 的 stage5 分支），
-        不在本模型携带的字段里——载体在这里能「重算」的东西是零，硬立一条
+        ⚠ Stage5 的 ``artifacts`` 只携带不可用或未知的 canonical 章；干净书不重复展示
+        全部章稿。它的完整完成度证据仍在**计划 + 逐章成稿**
+        （`state.stage_state` 的 stage5 分支），不在本模型携带的字段里——
+        载体在这里能「重算」的东西是零，硬立一条
         「只能是 None」就是拿结构断言一件结构看不见的事。
         这条教训是实测买来的：第一本全链跑完的书（e2e_20260813）`done=True`
         被旧断言当场拒收，`/api/novels` 对它静默跳过，**语料库屏上它整本消失**。
@@ -599,11 +603,11 @@ class StageState(StrictModel):
             if self.done is True and (
                 self.legacy_incompatible
                 or not self.chapters_done
-                or not all(a.exists and a.readable and a.freshness != 'stale' and not a.invalid
-                           for a in self.artifacts)
+                or self.artifacts
             ):
                 raise ValueError(
-                    'stage5 done=True 必须有 canonical 章稿、可用 draft 投影，且无 legacy')
+                    'stage5 done=True 必须有当前、可读的 canonical 章稿，'
+                    '且不得携带章级问题或 legacy')
             return self
         if not self.artifacts:
             return self

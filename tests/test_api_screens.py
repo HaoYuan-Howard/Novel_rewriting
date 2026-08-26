@@ -394,14 +394,15 @@ def test_stage5_without_a_ctx_shows_no_fake_materials(client, box):
     body = r.json()
     assert body['ctx_exists'] is False and body['materials'] is None
     assert body['drafts'], '材料缺席不该带走成稿那一侧'
+    assert set(body['drafts'][0]) == {
+        'chars', 'budget_chars', 'overlap_excl_verbatim', 'segments',
+        'align', 'align_rows', 'freshness', 'reason', '_provenance',
+    }
 
 
 def test_a_chapter_without_a_draft_is_200_with_empty_drafts(client, box):
-    """某章两臂皆无稿 ⇒ 200 空 drafts（「还没写」不是错误）。删掉第 1 章的稿来制造它。"""
-    for mode in ('deep', 'shallow'):
-        p = box.dir / 'stage5' / mode / 'ch01.json'
-        if p.exists():
-            p.unlink()
+    """某章没有 canonical 稿 ⇒ 200 空 drafts（「还没写」不是错误）。"""
+    (box.dir / 'stage5' / 'ch01.json').unlink()
     got = client.get(f'/api/novels/{box.sid}/stage5/1')
     assert got.status_code == 200, got.text[:200]
     body = got.json()
@@ -415,8 +416,14 @@ def test_the_review_screen_serves_dense_counts(client, box):
     r = client.get(f'/api/novels/{box.sid}/review/1')
     assert r.status_code == 200, r.text[:200]
     body = r.json()
+    assert set(body) == {
+        'sid', 'title', 'review_seq', 'review_state', 'review_reasons',
+        'finding_counts', 'book', 'chapters', 'ordinal', 'index', 'chapter',
+    }
+    assert set(body['chapter']) == {'output_ordinal', 'findings'}
     assert set(body['finding_counts']) == {'hard', 'info', 'metric', 'unver'}
     for row in body['index']:
+        assert set(row) == {'output_ordinal', 'finding_counts', 'unresolved'}
         assert set(row['finding_counts']) == {'hard', 'info', 'metric', 'unver'}
 
 

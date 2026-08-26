@@ -161,7 +161,7 @@ def test_run_step_evidence_serializes_the_same_steps_for_preview_and_execute(
     ]
     step = SimpleNamespace(
         label='stage5 全书闭卷写作', argv=step_argv, cwd=str(REPO_ROOT),
-        paid=True, writes='stage5/ch{nn}.json + stage5/draft.md',
+        paid=True, writes='stage5/ch{nn}.json',
         note='随后免费复检')
     built: list[tuple] = []
     calls: list[list[str]] = []
@@ -184,7 +184,7 @@ def test_run_step_evidence_serializes_the_same_steps_for_preview_and_execute(
         'steps': [{
             'argv': step_argv,
             'paid': True,
-            'writes': 'stage5/ch{nn}.json + stage5/draft.md',
+            'writes': 'stage5/ch{nn}.json',
             'label': 'stage5 全书闭卷写作',
             'note': '随后免费复检',
         }],

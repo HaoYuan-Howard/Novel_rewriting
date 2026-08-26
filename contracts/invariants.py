@@ -32,7 +32,7 @@ import contracts.artifacts as artifact_paths
 #: 实测代价：某次 23 章成稿与任何一版上游都配不上（匹配 1/23），配对关系永久丢失，而界面全绿。
 FRESHNESS: Final = ('fresh', 'stale', 'unknown')
 
-#: Stage5 Review 相对当前 RULES、canonical 章集/正文/draft 的完整状态。
+#: Stage5 Review 相对当前 RULES、canonical 章集与正文的完整状态。
 STAGE5_REVIEW_STATE: Final = (
     'fresh', 'stale', 'unknown', 'missing', 'legacy_incompatible',
 )
@@ -1237,7 +1237,6 @@ FREE_ENTRIES: Final = {
     '--names-only': '只产逐章可用名册（stage4），不产计划',
     '--identity': '恒等基线：拿原作自己的东西跑整套判据，看判据有没有把合法情况排除在外',
     '--apply-edit': '把人工改过的内容落成新的一轮',
-    '--rebuild-draft': '从 canonical stage5/chNN.json 重建 stage5/draft.md，0 次 LLM 调用',
     '--review-decisions': '应用带 actor、理由和 subject hash 乐观锁的 stage2 人工复核决策',
     # ⚠⚠ **它是 2026-08-15 补的，而漏它的后果正是本表开头那条**：
     #   `--wontfix` 原来只挂在 `stage5.review` 上，而那是个 `paid=False` 节点
@@ -1286,8 +1285,11 @@ REVALIDATE_ONLY_NEW_ERRORS: Final = True
 #:
 #: 【为什么是一个带值的键，不是三个布尔】这三条干的是同一件事——改掉产物的一部分，
 #: 而 LLM 写的那些字段仍出自当初那次付费产出。区别只在「哪条路」，**那是一个值不是三个键**。
-#: `--recheck` / `--renormalize` 都用同一个局部改写字段记录来源
+#: `--recheck` / `--renormalize` 通常用同一个局部改写字段记录来源
 #: ——同一件事的第三个落点（`Q-3`：同一个语义必须叫同一个名字）。见 `_common.md` §5.1b。
+#: ⚠ Stage5 的 `--recheck` 是明确例外：它保留 canonical 正文、冻结任务书与 writing
+#: provenance，只刷新同一正文的 v2 派生字段并对账 trim。这个取值表按 flag 索引，不能
+#: 表达节点维度；保留 `--recheck` 是为了其他层，不授权 Stage5 改 provenance。
 #:
 #: ⚠ 它**必须 ⊆ `FREE_ENTRIES`**（由 `tests/test_invariants.py` 钉着）：
 #: 一条会花钱的路不叫「局部改写」，那是一次新的产出，该记一份新的来源账。
@@ -1406,8 +1408,7 @@ WRITE_EFFECTS: Final = {
     '--emit-review-workpack': '',
     '--adopt-residual': '重写 stage7/name_map.json，清旧审批并退休现有成书',
     # ── 免费但**会写盘**的那些：原型那 8 条注释点名的正是它们 ──
-    '--recheck': '刷新已有成稿的指标，并重拼 draft.md',
-    '--rebuild-draft': '从 canonical stage5/chNN.json 重建 stage5/draft.md',
+    '--recheck': '按当前判据刷新已有成稿的派生指标，并对账 trim 状态',
     '--revalidate': '必填 actor/reason；0 LLM 同轮重判并留不可变审计，合格的 .INVALID 才提升，旧稿归档进 _rounds/',
     # ⚠ 本表按 flag 索引 ⇒ 这句话必须对**每一个**挂它的节点都成立。2026-08-22 阶段 C
     #   之后 stage0 的历史不再进 `_rounds/`（它在 revision 链上，且不可覆盖），
@@ -1612,20 +1613,17 @@ NODES: Final[dict[str, NodeSpec]] = {
     'stage4.context':   NodeSpec('stage4', 'R-6',  False, 'stage4 写作上下文组装',
                                  produces=(artifact_paths.STAGE4_WRITER_CONTEXT,)),
     # ⚠ `--revise` 是 F4 从 `stage5.review` **挪过来**的（用户裁决，见本表下方那段）。
-    # ⚠⚠ `stage5/draft.md` 是 canonical 章稿的字节投影，因此与逐章 JSON
-    #   一起登记在 `produces`。它单独存在不代表全书完成：`state.stage_state`
-    #   同时要求计划章集 == canonical `chapters_done` 且 draft 可用；读不回计划时
-    #   仍是 `unknown`，不得因为有一份部分投影就跳过付费写作。
+    # ⚠ Stage5 的 canonical 主体只有逐章 JSON。全书 Markdown 投影已退役；
+    #   完成度直接比较计划章集与 canonical 章集，避免让展示副本参与状态判断。
     # ⚠ `--revise` 挪过来之后**不再需要 `paid_flags`**：那一列的定义是
     #   「能把一个 **0 成本节点**变成付费的 flag」，而本节点的默认路径本来就付费。
     #   留着它是一格永远不起作用的声明——`is_paid` 早在 `spec.paid` 那一步就判完了。
     'stage5.write':     NodeSpec('stage5', 'R-7',  True,  'stage5 全书闭卷写作',
                                   flags=('--dry-run', '--recheck', '--revalidate',
-                                         '--rebuild-draft', '--apply-edit', '--revise',
+                                         '--apply-edit', '--revise',
                                          '--chapters', '--actor', '--reason',
                                          '--response-repair'),
-                                 produces=(artifact_paths.STAGE5_CHAPTER,
-                                           artifact_paths.STAGE5_BOOK_DRAFT)),
+                                 produces=(artifact_paths.STAGE5_CHAPTER,)),
     # ⚠ `--wontfix` 是**参数**不是 0 成本入口（见 `VALUED_FLAGS`），形态同 `--pick`。
     # ⚠⚠ `stage5/wontfix.json` **刻意不进 `produces`**，而它确实是本节点写的：
     #   这一列的消费方是 `state.required_artifacts`（「这一层跑完了盘上该有哪几份」），

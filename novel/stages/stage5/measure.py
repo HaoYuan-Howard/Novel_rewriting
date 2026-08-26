@@ -22,6 +22,7 @@ import glob
 import os
 import re
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Callable
 
 from contracts.invariants import BOOK_BAND, DRAFT_BAND
@@ -77,28 +78,23 @@ def is_legacy_stage5_rel(rel: str) -> bool:
     return normalized.startswith(('stage5/deep/', 'stage5/shallow/'))
 
 
-def legacy_stage5_paths(store: ArtifactStore) -> list[str]:
-    """列出旧 `stage5/deep|shallow` 布局的只读证据，不尝试迁移。
+def legacy_stage5_paths(source: ArtifactStore | Path) -> list[str]:
+    """列出旧 `stage5/deep|shallow` 布局的根，不枚举内部文件。
 
     这是 review/state/API 共用的纯发现面：旧产物必须显式说
     `legacy_incompatible`，不能因 canonical 装载器看不见它们而被说成 missing。
+    消费方只需要知道「哪一条旧臂存在」；空目录仍是旧布局证据。
     """
-    found: list[str] = []
-    for old_arm in ('deep', 'shallow'):
-        root = store.path(f'stage5/{old_arm}')
-        if not root.is_dir():
-            continue
-        arm_files = sorted(p for p in root.rglob('*') if p.is_file())
-        if not arm_files:
-            # 目录本身就是旧布局证据。只认文件会把一次中断后留下的空目录
-            # 洗成 missing，随后 state/API 可能把它排成一次新的付费首写。
-            found.append(f'stage5/{old_arm}')
-            continue
-        for path in arm_files:
-            rel = f'stage5/{old_arm}/' + path.relative_to(root).as_posix()
-            if is_legacy_stage5_rel(rel):
-                found.append(rel)
-    return found
+    path_of: Callable[[str], Path]
+    if isinstance(source, Path):
+        path_of = lambda rel: source / rel
+    else:
+        path_of = source.path
+    return [
+        f'stage5/{old_arm}'
+        for old_arm in ('deep', 'shallow')
+        if path_of(f'stage5/{old_arm}').is_dir()
+    ]
 
 
 def load_drafts(store: ArtifactStore, *, require_current: bool = True
@@ -238,13 +234,106 @@ def normalize_chapter(text: str, *, quote_style: tuple[str, str] | None,
 # 三、篇幅与重合度 —— **口径在这里，算法在 core**
 # ─────────────────────────────────────────────────────────────────────────────
 
+@dataclass(frozen=True)
+class ChapterBasis:
+    """WriterContext v4 三个冗余标量的唯一派生结果。
+
+    ``source_ordinal`` 只认 ``output_ordinal``；``source_chars`` 只认当前
+    Stage1 源章正文；``budget_chars`` 只认场景预算之和。盘上的三格仍保留，
+    避免改 WriterContext/Chapter 形状与旧写作指纹；运行时不再把它们当第二份
+    真相。
+
+    ``source_text is None`` 只服务 ``target_range`` 这类只需预算的纯函数；
+    真实 Stage5 Book 一定传源章表，并由 ``assert_writer_context_v4`` 对账。
+    """
+
+    source_ordinal: int | None
+    source_text: str | None
+    source_chars: int | None
+    budget_chars: int | None
+
+
+def chapter_basis(
+    entry: dict[str, Any],
+    source_text: dict[int, str] | None = None,
+) -> ChapterBasis:
+    """从章序、Stage1 正文与场景预算现算 Stage5 执行基准。"""
+    raw_ordinal = entry.get('output_ordinal')
+    source_ordinal = int(raw_ordinal) if raw_ordinal is not None else None
+
+    scenes = entry.get('scenes')
+    if isinstance(scenes, list) and scenes:
+        scene_budgets = [
+            scene.get('budget_chars') if isinstance(scene, dict) else None
+            for scene in scenes
+        ]
+        budget_chars = (
+            sum(int(value) for value in scene_budgets)
+            if all(value is not None for value in scene_budgets) else None
+        )
+    elif entry.get('budget_chars') is not None:
+        # 保留 target_range 对「只给一个预算」的纯函数输入的旧契约。
+        # WriterContext v4 要求 scenes 非空，真实路径不会走这条。
+        budget_chars = int(entry['budget_chars'])
+    else:
+        # 部分机械 helper 的反例夹具只构造自己所需的字段；源章派生不应
+        # 因无关的预算缺失而失败。真实 Book 在 load_book 对账时仍关闭式拒绝。
+        budget_chars = None
+
+    if source_text is None:
+        return ChapterBasis(
+            source_ordinal=source_ordinal,
+            source_text=None,
+            source_chars=None,
+            budget_chars=budget_chars,
+        )
+    if source_ordinal is None:
+        raise ValueError('output_ordinal 缺失，无法派生源章')
+    if source_ordinal not in source_text:
+        raise ValueError(f'Stage1 缺少第 {source_ordinal} 章，无法派生 Stage5 基准')
+    source = source_text[source_ordinal]
+    if not isinstance(source, str):
+        raise ValueError(f'Stage1 第 {source_ordinal} 章正文不是字符串')
+    return ChapterBasis(
+        source_ordinal=source_ordinal,
+        source_text=source,
+        source_chars=len(source),
+        budget_chars=budget_chars,
+    )
+
+
+def assert_writer_context_v4(entry: dict[str, Any], basis: ChapterBasis) -> None:
+    """断言 WriterContext v4 保留的三份副本与现算基准逐值一致。"""
+    if (basis.source_ordinal is None or basis.source_chars is None
+            or basis.budget_chars is None):
+        raise ValueError('WriterContext v4 对账必须提供完整 Stage1 源章表与场景预算')
+    expected_sources = [basis.source_ordinal]
+    mismatches: list[str] = []
+    if entry.get('from_source_ordinals') != expected_sources:
+        mismatches.append(
+            f'from_source_ordinals={entry.get("from_source_ordinals")!r},'
+            f' expected={expected_sources!r}')
+    if entry.get('source_chars') != basis.source_chars:
+        mismatches.append(
+            f'source_chars={entry.get("source_chars")!r}, expected={basis.source_chars}')
+    if entry.get('budget_chars') != basis.budget_chars:
+        mismatches.append(
+            f'budget_chars={entry.get("budget_chars")!r}, expected={basis.budget_chars}')
+    if mismatches:
+        ordinal = entry.get('output_ordinal')
+        raise ValueError(
+            f'WriterContext v4 第 {ordinal} 章派生字段漂移：' + '; '.join(mismatches))
+
+
 def chapter_source(entry: dict[str, Any], source_text: dict[int, str]) -> str:
-    """本章对应的源章原文（按 `from_source_ordinals` 拼）。
+    """本章对应的源章原文（源章序由 `output_ordinal` 唯一派生）。
 
     ⚠ **校验器读原文的唯一用途**：算重合度与源章引语数。**它永不进 prompt**——
     闭卷臂看不到原文这件事是由 `prompts.build_material` 保证的，不是由这里。
     """
-    return ''.join(source_text.get(s, '') for s in (entry.get('from_source_ordinals') or []))
+    source = chapter_basis(entry, source_text).source_text
+    assert source is not None
+    return source
 
 
 def mandated_verbatim(entry: dict[str, Any]) -> str:
@@ -274,7 +363,10 @@ def target_range(entry: dict[str, Any]) -> tuple[int, int]:
 
     **`DRAFT_BAND` 就是唯一执行带，没有第二层宽限。**
     """
-    budget = int(entry['budget_chars'])
+    budget = chapter_basis(entry).budget_chars
+    if budget is None:
+        # 保持这个纯函数原有的错误契约：缺格是 KeyError，显式 null 是 TypeError。
+        budget = int(entry['budget_chars'])
     if budget <= 0:
         raise ValueError('budget_chars 必须是正整数')
     lo, hi = DRAFT_BAND

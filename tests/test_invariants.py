@@ -122,8 +122,9 @@ def test_node_schema_has_no_modes_and_legacy_modes_are_detection_only():
     assert inv.LEGACY_STAGE5_MODES == ('deep', 'shallow')
     assert '--deep' not in _known_flags()
     assert '--shallow-rest' not in _known_flags()
-    assert '--rebuild-draft' in inv.FREE_ENTRIES
-    assert '--rebuild-draft' in inv.NODES['stage5.write'].flags
+    assert '--rebuild-draft' not in inv.FREE_ENTRIES
+    assert '--rebuild-draft' not in inv.NODES['stage5.write'].flags
+    assert 'stage5/draft.md' not in inv.NODES['stage5.write'].produces
 
 
 def test_unmeasured_nodes_keep_the_default_high_effort():

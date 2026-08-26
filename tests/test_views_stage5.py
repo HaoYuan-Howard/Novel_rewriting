@@ -6,7 +6,7 @@ test_views_stage5.py —— S-08「成稿 ↔ 材料」与 S-09「验收 / 修�
 本文件盯的三条硬语义：
 ① `materials` 与写手同一份（`build_material`，材料先于成稿存在）；
 ② 对齐块是**分区**不是摘录——两侧各自拼回去必须逐字等于原文/成稿；
-③ S-09 的 `text` 是**当前盘上**那份稿（改稿入口要贴着现役正文）。
+③ S-09 不重复正文；阅读与改稿只取并行 S-08 的 current `segments`。
 
 ⚠ 沙箱一律 `tempfile.mkdtemp()`；**原语料一个字节都不许动**。
 """
@@ -89,7 +89,8 @@ def test_align_rows_partition_both_texts(box):
         pytest.skip('这一章没有可用锚（align=null 是合法降级态）')
     for d in got:
         assert ''.join(r.l for r in d.align_rows) == v.source_text
-        assert ''.join(r.r for r in d.align_rows) == d.text
+        projected = '\n\n'.join(segment.text.strip() for segment in d.segments).strip()
+        assert ''.join(r.r for r in d.align_rows) == projected
         assert d.align is not None
         assert d.align.anchors == len(d.align_rows)
         assert 0 < d.align.coverage <= 1
@@ -105,37 +106,33 @@ def test_an_invalid_draft_shows_as_invalid_not_as_formal(box):
         json.dumps(data, ensure_ascii=False), encoding='utf-8')
     v = stage5_view(box.root, box.sid, o)
     assert v.invalid >= 1
-    assert any(d.invalid for d in v.invalid_drafts)
-    assert all(not d.invalid for d in v.drafts)
+    assert v.invalid_drafts
+    assert v.drafts
 
 
-def test_review_serves_the_current_draft_text(box):
-    """⭐ S-09 的 `text` 是**当前盘上**那份稿——改稿入口贴着现役正文。"""
+def test_review_serves_only_review_facts(box):
+    """S-09 不重复投影 S-08 的正文、轮次或来源账。"""
     rv = review_view(box.root, box.sid, 1)
     assert rv.review_seq >= 1
-    if rv.chapter.text is not None:
-        v5 = stage5_view(box.root, box.sid, 1)
-        assert rv.chapter.text in {d.text for d in v5.drafts}
     assert set(rv.finding_counts) == {'hard', 'info', 'metric', 'unver'}
+    assert set(rv.chapter.model_dump()) == {'output_ordinal', 'findings'}
+    assert all(set(row.model_dump()) == {
+        'output_ordinal', 'finding_counts', 'unresolved'} for row in rv.index)
+    assert set(rv.model_dump(by_alias=True)) == {
+        'sid', 'title', 'review_seq', 'review_state', 'review_reasons',
+        'finding_counts', 'book', 'chapters', 'ordinal', 'index', 'chapter',
+    }
 
 
-def test_review_stale_is_none_when_the_draft_is_gone(box):
-    """验收后成稿被移走 ⇒ `stale=null`（判不了），不是 `false`。"""
+def test_review_does_not_copy_current_draft_fields(box):
+    """当前稿被移走会影响顶层状态，但不会改写历史 Review 的结论形状。"""
     rv = review_view(box.root, box.sid, 1)
-    rel = None
-    for row in rv.index:
-        if row.stale is not None:
-            rel = row
-            break
-    if rel is None:
-        pytest.skip('这本书验收时一章现稿都配不上——无从制造「稿被移走」')
-    o = rel.output_ordinal
-    p = box.dir / 'stage5' / f'ch{o:02d}.json'
+    p = box.dir / 'stage5' / 'ch01.json'
     if p.exists():
         p.unlink()
     rv2 = review_view(box.root, box.sid, 1)
-    row2 = next(r for r in rv2.index if r.output_ordinal == o)
-    assert row2.stale is None
+    assert rv2.chapter == rv.chapter
+    assert rv2.index == rv.index
 
 
 def test_an_ordinal_outside_the_book_is_a_terminal_state(box):

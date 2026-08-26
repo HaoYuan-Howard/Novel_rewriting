@@ -44,7 +44,6 @@ from contracts.artifacts import (
     STAGE1_HOOK_COPY, STAGE1_MAIN_TEXT,
     STAGE2_GLOBAL_GROUNDING, STAGE2_GLOBAL_REVIEW,
     STAGE4_PLAN_CHAPTERS, STAGE4_WRITER_CONTEXT,
-    STAGE5_BOOK_DRAFT,
     STAGE7_NAME_MAP,
 )
 from contracts.schema import (
@@ -52,9 +51,7 @@ from contracts.schema import (
     artifact_spec, decode_artifact, encode_artifact,
 )
 from novel import paths, prov
-from novel.consumption import (
-    canonical_rel, producer_node, projection_for, render_stage5_draft,
-)
+from novel.consumption import canonical_rel, producer_node, projection_for
 from novel.errors import (
     ApprovalRequired, ArtifactUnreadable, ByteFormRefused, PathRefused,
     ProvenanceRefused, UpstreamMissing, UpstreamStale,
@@ -361,7 +358,7 @@ class ArtifactStore:
         return obj
 
     def read_text(self, rel: str) -> str:
-        """读一份**字节形态**产物（`clean_text.txt` / `draft.md` / 成书）。记边。
+        """读一份**字节形态**产物（`clean_text.txt` / 成书）。记边。
 
         ⚠ **按字节读再自己解码**，不用文本模式：文本模式会把 `\\r\\n` 悄悄翻成 `\\n`，
         于是「盘上那份带 CRLF」这件事在读的一侧**看不见**，
@@ -415,7 +412,7 @@ class ArtifactStore:
         except UnicodeDecodeError as e:
             raise ArtifactUnreadable(
                 f'{rel} 不是 UTF-8：{e!r}。'
-                f'⚠ 三份字节形态产物（`clean_text.txt` / `draft.md` / 成书）盘上一律 UTF-8；'
+                f'⚠ 两份字节形态产物（`clean_text.txt` / 成书）盘上一律 UTF-8；'
                 f'别把它当成「上游还没产出」——那会把一次成功的付费跑报成失败') from e
 
     @classmethod
@@ -617,6 +614,42 @@ class ArtifactStore:
         替换正式稿、freshness 后置条件、退休 `.INVALID` 视为一个事务：任何一步失败，
         正式路径恢复为调用前的逐字节内容，问题稿也恢复在原位。
         """
+        return self._write_formal(rel, artifact, retire_invalid=True)
+
+    def refresh_formal(self, rel: str, artifact: BaseModel) -> Path:
+        """只刷新一份**已经存在**的正式产物，不宣称它取代同名 ``.INVALID``。
+
+        这条窄路只服务于 ``--recheck`` 一类确定性派生字段回写：正式稿正文没有产生新轮，
+        而 live INVALID 仍是一份尚待 ``--revalidate`` 的独立候选。若复用 :meth:`write`，
+        后者会按“新正式稿已经取代问题稿”的正确常规语义退休 INVALID，反而把恢复路藏进
+        ``_rounds``。目标正式稿不存在时关闭式拒绝，避免凭这条路创造一对新的
+        formal + INVALID 并存状态。
+        """
+        key = paths.check_rel_deep(rel)
+        if paths.is_invalid(key):
+            raise PathRefused(
+                f'{key} 是 `.INVALID` 形态，不走 `refresh_formal`。'
+                f'被闸门拦下的稿走 `write_invalid`')
+        current, _raw = self.read_own(type(artifact), key, require_current=True)
+        current_src = self._provenance_of(current)
+        refreshed_src = self._provenance_of(artifact)
+        if (current_src is None or refreshed_src is None
+                or current_src.to_disk() != refreshed_src.to_disk()):
+            raise ProvenanceRefused(
+                f'{key} 的 refresh 必须逐字段继承既有正式稿来源账；'
+                '刷新派生字段不能宣称一次新的生成来源')
+        return self._write_formal(
+            key, artifact, retire_invalid=False, require_existing=True)
+
+    def _write_formal(
+        self,
+        rel: str,
+        artifact: BaseModel,
+        *,
+        retire_invalid: bool,
+        require_existing: bool = False,
+    ) -> Path:
+        """正式路径的唯一原子替换实现；公开入口决定是否终结 INVALID。"""
         rel = paths.check_rel_deep(rel)
         if paths.is_invalid(rel):
             raise PathRefused(
@@ -627,6 +660,10 @@ class ArtifactStore:
         p = self.path(rel)
         os.makedirs(_filesystem_path(p.parent), exist_ok=True)
         previous = _read_file_bytes(p) if _is_file(p) else None
+        if require_existing and previous is None:
+            raise UpstreamMissing(
+                f'{self.ctx.node}: 没有既有正式产物 {rel} 可刷新；'
+                '首次落正式稿必须走 write')
         replacement_attempted = False
         retired: Path | None = None
         try:
@@ -634,7 +671,8 @@ class ArtifactStore:
             self._replace_atomically(p, data)
             self._assert_self_fresh(rel, artifact)
             # 只有正式路径已经通过 freshness 后置条件，问题稿才算真正被取代。
-            retired = self.retire_invalid(rel)
+            if retire_invalid:
+                retired = self.retire_invalid(rel)
         except BaseException as exc:
             rollback_errors: list[BaseException] = []
             if retired is not None and _is_file(retired):
@@ -775,7 +813,7 @@ class ArtifactStore:
     def write_text(self, rel: str, text: str) -> Path:
         """落一份**字节形态**产物。**显式按字节写 `\\n`，不带 BOM。**
 
-        ⚠ 盘上三份字节形态产物（`clean_text.txt` / `draft.md` / 成书）**全是 LF-only**，
+        ⚠ 盘上两份字节形态产物（`clean_text.txt` / 成书）**全是 LF-only**，
         而 Windows 上 `open(p, 'w')` 默认吐 CRLF——同一份代码在两台机器上产出两种字节，
         而本项目有一条逐字节等价的验收线。
 
@@ -787,7 +825,7 @@ class ArtifactStore:
         if '\r' in text:
             n = text.count('\r')
             raise ByteFormRefused(
-                f'{rel}: 文本里有 {n} 个 `\\r`。三份字节形态产物盘上全是 LF-only，'
+                f'{rel}: 文本里有 {n} 个 `\\r`。两份字节形态产物盘上全是 LF-only，'
                 f'而归一属产地——请在产它的那一层先归一（并按 `_common.md` §九 判断要不要记账），'
                 f'别让写盘口替你悄悄改内容')
         p = self.path(rel)
@@ -806,9 +844,20 @@ class ArtifactStore:
         It is read-only: malformed credentials, a missing/tampered baseline, or
         an unreadable current artifact all refuse without changing one byte.
         """
-        _artifact, _src, audit = self._revalidation_material(
+        _artifact, _baseline, _src, audit = self._revalidation_material(
             rel, model, actor=actor, reason=reason)
         return audit
+
+    def revalidation_baseline(self, rel: str, model: type[M], *,
+                              actor: str, reason: str) -> M:
+        """返回并核验创建 live INVALID 时的不可变强类型主体；全程只读。
+
+        Stage-specific producer 可用它关闭那些不允许人工改写的任务身份字段；不能只看
+        live INVALID，因为后者正是允许人编辑、随后再走 ``--revalidate`` 的候选。
+        """
+        _artifact, baseline, _src, _audit = self._revalidation_material(
+            rel, model, actor=actor, reason=reason)
+        return baseline
 
     def promote_invalid(self, rel: str, model: type[M], *,
                         actor: str, reason: str,
@@ -837,7 +886,7 @@ class ArtifactStore:
 
         ``artifact_override`` 只承载调用方按 live INVALID 重建的确定性派生字段。
         人工改动审计仍严格比较「不可变基线 vs live INVALID」，而最终来源账强制使用
-        live 的 ``src.promoted(audit=...)``；override 自带的来源账永远不被信任。
+        不可变基线的 ``src.promoted(audit=...)``；live / override 自带的来源账都不被信任。
         """
         official_rel = paths.check_rel_deep(rel)
         inv_rel = paths.invalid_of(official_rel)
@@ -857,7 +906,7 @@ class ArtifactStore:
             and formal_version < spec.current_version
         )
 
-        live_artifact, src, audit = self._revalidation_material(
+        live_artifact, _baseline_artifact, src, audit = self._revalidation_material(
             official_rel, model, actor=actor, reason=reason)
         artifact = artifact_override if artifact_override is not None else live_artifact
         if not isinstance(artifact, model):
@@ -1213,8 +1262,6 @@ class ArtifactStore:
             return self._stage1_freshness(rel)
         if rel == STAGE2_GLOBAL_REVIEW:
             return self._global_review_freshness()
-        if rel == STAGE5_BOOK_DRAFT:
-            return self._stage5_draft_freshness()
         # ⚠ 成书的 rel 带书名 ⇒ **不能与 `STAGE7_BOOK` 直接比**（那是模板）。
         #   拿模板比出来的恒是 False，而后果是 `_deterministic_freshness` 返回 None
         #   ⇒ 成书的 freshness 变成「没有来源账」，那道对账**静默失效**。
@@ -1418,39 +1465,6 @@ class ArtifactStore:
         )
         return FreshnessReport(state, reason, (edge,))
 
-    def _stage5_draft_freshness(self) -> FreshnessReport:
-        """``draft.md`` 是否逐字等于当前 canonical 章集合的纯投影。
-
-        这份字节产物没有 ``_provenance`` 槽位；它的权威身份就是当前
-        ``writer_context.chapters`` 分母与 ``stage5/chNN.json`` 集合经生产同一把
-        renderer 算出的 UTF-8 字节。缺分母时只能回答 unknown，绝不把「算不了」
-        伪装成 fresh。
-        """
-        if not _is_file(self.path(STAGE5_BOOK_DRAFT)):
-            return FreshnessReport('unknown', 'no_provenance')
-
-        from contracts.schema.stage4 import WriterContext
-        try:
-            context, _raw = self.read_own(WriterContext, STAGE4_WRITER_CONTEXT)
-        except UpstreamMissing:
-            return FreshnessReport('unknown', 'no_provenance')
-
-        # 动态 import 避免 store 模块初始化时反向 import stage；运行时复用 canonical
-        # loader，不能在这里再写一份 chNN 选择/校验规则。
-        from novel.stages.stage5.measure import load_drafts
-        by_ordinal, _invalids, _judged = load_drafts(self, require_current=False)
-        expected = render_stage5_draft(
-            (chapter.output_ordinal for chapter in context.chapters), by_ordinal,
-        ).encode('utf-8')
-        current = _read_file_bytes(self.path(STAGE5_BOOK_DRAFT))
-        self._decode(STAGE5_BOOK_DRAFT, current)
-        edge = self._content_edge(
-            STAGE5_BOOK_DRAFT,
-            prov.content_sha1(expected),
-            prov.content_sha1(current),
-        )
-        return FreshnessReport(edge.state, edge.reason, (edge,))
-
     def _book_freshness(self) -> FreshnessReport:
         name_map = self._freshness_payload(STAGE7_NAME_MAP)
         book_txt = name_map.get('book_txt') if name_map is not None else None
@@ -1571,7 +1585,7 @@ class ArtifactStore:
 
     def _revalidation_material(self, rel: str, model: type[M], *,
                                actor: str, reason: str
-                               ) -> tuple[M, Provenance, RevalidationAudit]:
+                               ) -> tuple[M, M, Provenance, RevalidationAudit]:
         approval = self._approval(actor, reason)
         official_rel = paths.check_rel_deep(rel)
         inv_rel = paths.invalid_of(official_rel)
@@ -1655,7 +1669,10 @@ class ArtifactStore:
             edited_by_human=content_changed,
             changed_json_pointers=pointers,
         )
-        return artifact, src, audit
+        # live INVALID 的业务主体允许按 producer 规则编辑，但它的 provenance 不是
+        # 人工输入面。最终提升必须继承不可变创建快照，而不是信任 live 文件里一块
+        # 同样可被改写的 `_provenance`。
+        return artifact, baseline_artifact, baseline_src, audit
 
     def _assert_self_fresh(self, rel: str, artifact: BaseModel) -> None:
         """A provenance-bearing formal artifact must be fresh immediately after write."""

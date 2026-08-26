@@ -58,6 +58,14 @@ def test_production_material_is_the_scene_compiler_contract(book):
         assert retired not in system + user
 
 
+def test_material_given_is_only_the_deterministic_blocks_projection():
+    """下发全文不再存第二份可与 blocks 漂移的状态。"""
+    material = prompts.Material(blocks=['第一块', '第二块'])
+    assert list(prompts.Material.__dataclass_fields__) == ['blocks']
+    assert material.given == '第一块\n\n第二块'
+    assert prompts.build_user(material) == material.given
+
+
 @pytest.mark.parametrize('fragment', [
     'HINGE_LABEL_RULE', 'FIDELITY_RULE', 'ORDER_RULE', 'STYLE_WORD_RULE',
 ])

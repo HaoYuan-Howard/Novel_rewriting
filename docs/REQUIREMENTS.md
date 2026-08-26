@@ -72,6 +72,27 @@ A/B 原始候选、盲评标签与结构批准均可从盘上 current-schema 主
 产品裁决 / 当前不可判”之一的结论并记入 `docs/BACKEND_CONTRACT.md` §十；在完成两书付费实证前，
 任何测试通过都只能叫非 corpus 回归，不能删除本条。
 
+### TODO-31 · 下一次新 base 同批收紧 Stage4→5 盘上契约
+
+**缺口**：Stage5 已改为从当前 Stage1 / Stage4 任务书现场派生来源章号、源字数与章预算，
+Chapter/Review/trim 中也存在可由正文、findings 或绑定主体重算的展示副本。为保留现有付费正文与
+人工 trim 决定，本批只完成运行时单一落点和一致性断言，盘上破坏形状延期；不能把延期误解成这些
+字段仍有独立语义。
+
+**工作**：只在下一次创建并从 producer 完整生成的新 base 上，同批切换：
+
+- WriterContext v5 删除 `ChapterCharacter.char_id` 与章级 `from_source_ordinals/source_chars/budget_chars`；
+- Chapter v3 删除 `from_source_ordinals/chars/overlap_excl_verbatim/warns`，运行时由正文和当前任务书重算；
+- Review v3 收成当前主体绑定、findings 与确有判定用途的必要基线，不保留展示计数或重复正文面；
+- Rejected v2 改存 `segments`，不再存无法保持 slot 身份的整章 `text`；
+- TrimAudit / TrimResolution v3 删除可由绑定正文、路径或对方主体确定的重复展示与身份字段。
+
+**验收**：五次 shape break 均登记 current version 与 `tests/test_artifact_versions.py::_SHAPE_BREAKS`；
+新 base 只由现役 producer 重建，不迁移、不手补旧产物；Stage5 写作、recheck/revalidate、Review、
+trim 决定、s5 审批与 Stage6/7 消费均只读最小主体；证明删字段前后 prompt、机械 findings、正文拼接
+与审批对象语义不变。旧 base 保持关闭式拒读且不被自动改写，TODO-21 的 manifest 只接受完成切换后的
+current-schema 盘面。
+
 ## 条目生命周期
 
 1. 开工前补足可复现输入、预期最终状态、成本与受影响守卫。

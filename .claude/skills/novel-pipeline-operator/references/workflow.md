@@ -107,7 +107,7 @@ runner 在构建 Step 前、每一步执行前后逐字核对 `<START_CODE>`；�
 | 8 | `stage4.design` | `--response-repair agent`；需要废止旧候选时显式另跑 `--replan` | 只产生当前盲候选；本相未读取原文顺序、证据位置或必须材料，且不会顺带启动下一相 |
 | 9 | `stage4.plan` | 在 A 落盘后重新独立 preview，再以 `--response-repair agent` 运行 | B 只绑定证据；`bound` 时编译计划且 check 无 HARD，`infeasible` 时正式负结论已落盘但没有计划 |
 | 10 | `stage4.context` | 计划落盘已自动组装时 `state` 跳过；只在需重建时执行 | `stage4/writer_context.json` 与当前计划投影一致且 fresh |
-| 11 | `stage5.write` | `--response-repair agent`（不带 `--chapters` 即写全部缺少的 canonical 章） | `stage5/chNN.json` 恰好覆盖计划章集合，`draft.md` 是它们的当前纯投影；内部重试不等于整节点失败 |
+| 11 | `stage5.write` | `--response-repair agent`（不带 `--chapters` 即写全部缺少的 canonical 章） | `stage5/chNN.json` 恰好覆盖计划章集合；内部重试不等于整节点失败 |
 | 12 | `stage5.review` | 无 | 最新机械验收完成；HARD 按 remediation 收敛，info/metric/unver 保持原态 |
 | 13 | `stage6.hook` | `--response-repair agent` | 至少一条候选通过落盘闸；追跑 check 可读正式候选 |
 | 14 | `stage6.semantic` | `--response-repair agent` | 每个去重文本都有两名盲评判官的带证据结论与匿名质量排序；结论按完整 SHA-256 与当前候选对齐 |

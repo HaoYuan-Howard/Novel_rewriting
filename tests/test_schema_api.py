@@ -21,7 +21,9 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
+import contracts.judges.stage5  # noqa: F401  # 注册现役 Stage5 判据供 fixture 对账
 from contracts.invariants import STAGE3_MEASUREMENT_CONTRACT
+from contracts.rules import REGISTRY
 from contracts.schema.api import (
     DraftAlignView, DraftView, DriftItem, ErrorBody, GlobalView, JobList,
     LogChunk, LogStreamEvent, NovelList,
@@ -69,6 +71,26 @@ def test_active_global_fixture_is_a_v3_view_and_every_located_span_matches_chapt
         elif isinstance(item, list):
             pending.extend(item)
     assert located >= 7, '七类 evidence 没有都在 active fixture 里留下可回取正例'
+
+
+def test_active_stage5_fixtures_are_exact_slim_http_views():
+    fixtures = Path(ROOT) / 'web' / 'src' / 'fixtures' / 'backend_v1'
+    stage5 = Stage5View.model_validate_json(
+        (fixtures / 'stage5_ch3.json').read_text(encoding='utf-8'))
+    review = ReviewView.model_validate_json(
+        (fixtures / 'review_ch3.json').read_text(encoding='utf-8'))
+
+    assert stage5.legacy_incompatible is True and not stage5.drafts
+    assert review.review_state == 'legacy_incompatible'
+    assert set(review.chapter.model_dump()) == {'output_ordinal', 'findings'}
+    assert set(review.index[0].model_dump()) == {
+        'output_ordinal', 'finding_counts', 'unresolved',
+    }
+
+    check = CheckReport.model_validate_json(
+        (fixtures / 'check_stage5.json').read_text(encoding='utf-8'))
+    assert [line.rule for line in check.rules] == sorted(
+        rule.rule for rule in REGISTRY.of_stage('stage5'))
 
 
 def test_preview_sid_is_nullable_but_never_empty():
@@ -131,7 +153,7 @@ def test_anchor_coverage_warning_is_a_server_decision():
             coverage_threshold=0.6, coverage_state='adequate', note='错误地说安全')
 
 
-def test_stage5_views_only_expose_text_as_the_segment_projection():
+def test_stage5_views_keep_draft_segments_as_the_only_text_carrier():
     segments = [
         ChapterSegment(slot='s01', text='前段。'),
         ChapterSegment(slot='s02', text='后段。'),
@@ -142,24 +164,25 @@ def test_stage5_views_only_expose_text_as_the_segment_projection():
         'review': None, 'fixes': None,
     }
     draft = dict(
-        relpath='stage5/ch01.json', invalid=False,
-        round=1, origin='human', chars=8, budget_chars=8, source_chars=8,
-        overlap_excl_verbatim=0.0, segments=segments, text='前段。\n\n后段。',
+        chars=8, budget_chars=8,
+        overlap_excl_verbatim=0.0, segments=segments,
         align=None, align_rows=[], freshness='fresh', reason='match',
         _provenance=provenance,
     )
-    assert DraftView.model_validate(draft).text == '前段。\n\n后段。'
-    with pytest.raises(ValidationError, match='确定性投影'):
-        DraftView.model_validate({**draft, 'text': '另一份整章正文。'})
+    view = DraftView.model_validate(draft)
+    assert view.segments == segments
+    assert set(view.model_dump(by_alias=True)) == {
+        'chars', 'budget_chars', 'overlap_excl_verbatim', 'segments',
+        'align', 'align_rows', 'freshness', 'reason', '_provenance',
+    }
+    with pytest.raises(ValidationError, match='Extra inputs'):
+        DraftView.model_validate({**draft, 'text': '重复的整章正文。'})
 
-    review = dict(
-        output_ordinal=1, findings=[], chars=8, budget_chars=8,
-        round=1, origin='human', segments=segments, text='前段。\n\n后段。',
-        rounds=[], stale=False,
-    )
-    assert ReviewChapterView.model_validate(review).segments == segments
-    with pytest.raises(ValidationError, match='必须为 null'):
-        ReviewChapterView.model_validate({**review, 'segments': None})
+    review = ReviewChapterView(output_ordinal=1, findings=[])
+    assert set(review.model_dump()) == {'output_ordinal', 'findings'}
+    with pytest.raises(ValidationError, match='Extra inputs'):
+        ReviewChapterView.model_validate({
+            'output_ordinal': 1, 'findings': [], 'segments': segments})
 
 
 # ───────────────────────── 造两份最小的合法视图 ─────────────────────────

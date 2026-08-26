@@ -40,7 +40,7 @@
 | `stage2.md` | `global_grounding.json` · `chapter_blueprints.json`　**全链第一个调 LLM 的层** |
 | `stage3.md` | `style_grounding.json`　v2 免费机械基线、测量契约与下游最小投影 |
 | `stage4.md` | `blind_candidate.json` · `evidence_binding.json` · `plan_chapters.json` / `plan_edit.json` · `writer_context.json`　A/B 两相各自产一份 LLM 中间产物，计划由代码编译，写作上下文再确定性组装；`--identity` 只作内存诊断；<br>也是**全链的收口点**——前三层所有逐章闸门最后都汇到 `writer_context` 这一份上 |
-| `stage5.md` | `chNN.json`（含 `.INVALID`）· `review_<n>.json` · `wontfix.json` · trim / `_rounds/` · **`draft.md`（字节形态）**<br>**全链唯一产出正文的层**，也是**唯一带 LLM 返工回路**的层；现役为 canonical 闭卷单臂，机械验收 0 成本，书级 `stage5.semantic` 已下线 |
+| `stage5.md` | `chNN.json`（含 `.INVALID`）· `review_<n>.json` · `wontfix.json` · trim / `_rounds/`<br>**全链唯一产出正文的层**，也是**唯一带 LLM 返工回路**的层；现役为 canonical 闭卷单臂，机械验收 0 成本，书级 `stage5.semantic` 与展示投影 `draft.md` 已下线 |
 | `stage6.md` | `hook.json` · `_rounds/hook.rN.json`　**全书级单次产出**（不是逐章），三候选经人定稿后才进入下游；<br>判据表分两半的边界是**产物类**（文案＝全文改写 ⇒ 连续文本探针结构性失效），不是判据质量 |
 | `stage7.md` | `name_map.json` · `_rounds/name_map.rN.json` · **`name_map_edit.json`（人产的输入，也是契约）** · **成书 `<书名>_rewriting.txt`（字节形态，§四）**<br>**全链最后一层**，也是唯一产出交付物的一层；LLM 只写两个键，其余 19 个顶层键一个字都不经模型 |
 | `_common.md` | `_provenance` 的五个共有键（含必填 `root_clean_sha1`）· **两把尺子**（40 位内容身份 / 10 位来源指纹）· `inputs` 的边 `{file, consumed}` · 新鲜度三态与**幽灵边** · `.INVALID` 与提升路（**签名里没有 `prompts`/`model`/`inputs`**）· 轮次账 · `Finding` 14 字段 · `usage` · 记账键的出口规则 |

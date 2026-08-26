@@ -211,12 +211,18 @@ RFC 6901 `changed_json_pointers`。因此「判据变了、原稿原样提升」
 
 ### 5.1b `partial_rewrite` —— 混版产物要如实记来源
 
-有一类 0 成本路径**只改产物的一部分**：`--recheck` 刷指标并重拼 ·
+有一类 0 成本路径**只改产物的一部分**：`--recheck` 刷指标并重拼（Stage5 例外，见下）·
 `--renormalize` 按当前契约重算派生字段与原文定位 · `--identity` 刷新身份投影 ·
 stage7 的 `--apply-edit` 只改人工决策 patch / `extra_subs`、保留原模型人物表。
 ⚠ 同名 flag 在 stage5 落的是一整章人工新稿，那里走 `origin=human`，不是混版。
 改完之后那一份是**混版的**：LLM 写的那些字段出自当初那次付费产出，
 被改的那部分是**现在**从盘上重算的。
+
+⚠ **Stage5 的 `--recheck` 刻意不属于混版改写。** 它只按同一份 canonical
+`segments` 与冻结任务书修复 v2 的 `chars/overlap/warns/errs` 并对账 trim；正文、任务快照和
+writing provenance 全部原样保留，也不再重拼已退役的 `draft.md`。这条例外由 `R-7.24` 与
+`ArtifactStore.refresh_formal` 关闭式约束；`PARTIAL_REWRITE_FLAGS` 仍保留 `--recheck`，是因为
+其他层的同名 flag 确实会重建来源账，取值表按 flag 不能表达节点维度。
 
 ⇒ 三个键各错一半，都不能用：
 
@@ -231,7 +237,7 @@ stage7 的 `--apply-edit` 只改人工决策 patch / `extra_subs`、保留原模
 
 > #### ⚠ 为什么是**一个带值的键**，不是三个布尔
 >
-> `--recheck` / `--renormalize` / `--identity` 干的是**同一类事**
+> 除上述 Stage5 例外外，`--recheck` / `--renormalize` / `--identity` 干的是**同一类事**
 > ——局部改写一份付费产物——区别只在「哪条路」，**那是一个值，不是三个键**。
 > 分成多个布尔会制造同一语义的多个落点
 > （`Q-3`：同一个语义在不同节点上必须叫同一个名字）。

@@ -11,7 +11,6 @@ write.py —— `stage5.write`：**逐章写作**。全链唯一产出「书」�
     `--recheck`     按当前判据重判存量成稿并写回指标                0 成本
     `--revalidate`  把合格的 `.INVALID` 提升为正式产物              0 成本
     `--apply-edit`  把人工改好的那一份落成新的一轮                  0 成本
-    `--rebuild-draft` 按 canonical 逐章产物重建 `draft.md`                0 成本
 
 ⚠⚠ **本层只有闭卷这一条写作路**。源章原文只供确定性校验，
 不进 prompt，也没有可以把它加回去的 mode 参数。
@@ -36,12 +35,13 @@ Pydantic 边界被拒绝，不能形成正常或 `.INVALID` 章产物。
 """
 from __future__ import annotations
 
-from contracts.artifacts import STAGE5_BOOK_DRAFT, artifact_rel
+from contracts.artifacts import artifact_rel
 
 import glob
 import hashlib
 import os
 import re
+from collections.abc import Callable
 from concurrent.futures import CancelledError, ThreadPoolExecutor, as_completed
 from typing import Any
 
@@ -58,7 +58,6 @@ from contracts.schema.stage5 import (
     Chapter, ChapterResponse, ChapterSegment, RejectedRevision,
 )
 from novel import paths, prov
-from novel.consumption import render_stage5_draft
 from novel.errors import (
     ArtifactUnreadable, GateBlocked, ProvenanceRefused, ResponseRepairRequired,
     TerminalState, UpstreamMissing,
@@ -90,6 +89,70 @@ def _retire_trim_state(store: ArtifactStore, ordinal: int) -> None:
         rel = artifact_rel(kind, nn=ordinal)
         if store.exists(rel):
             store.archive_round(rel)
+
+
+def _commit_canonical_chapter(
+    store: ArtifactStore,
+    chapter: Chapter,
+    *,
+    expected_ordinal: int,
+    commit: Callable[[str, Chapter], Any],
+) -> tuple[Any, list[str]]:
+    """提交一份 canonical Chapter，并让 trim 状态精确描述这一份正文。
+
+    这是 Stage5 替换/提升 ``chNN.json`` 的唯一提交口。调用方必须同时交出它正在
+    处理的 ``expected_ordinal``；本函数在任何写盘前将其与载体主体闭合，再由这一个
+    章号同时推导 canonical 与两份 trim 路径。正文与冻结预算只从同一个 ``Chapter``
+    取，不能另传一份可能漂移的 segments/entry。完全匹配的 audit 刻意保留：
+    hash-bound ``retain_pretrim``
+    裁决的是正文，不是 ``warns`` 或 provenance 之类的元数据。正文/audit 一变，
+    旧 audit 与 resolution 就在正文提交的同一回滚域里退休。
+
+    ``.INVALID`` 不经过这里；失败候选不得扰动仍然在位的旧 canonical trim 状态。
+    """
+    if chapter.output_ordinal != expected_ordinal:
+        raise ProvenanceRefused(
+            f'Stage5 canonical 提交主体错配：目标是第 {expected_ordinal} 章，'
+            f'载体却自报第 {chapter.output_ordinal} 章。'
+            '不得借 recheck/revalidate 把一章写进另一章路径或更新错误的 trim 状态')
+    ordinal = expected_ordinal
+    chapter_rel = _rel(ordinal)
+    audit_rel = artifact_rel('stage5.trim_audit', nn=ordinal)
+    resolution_rel = artifact_rel('stage5.trim_resolution', nn=ordinal)
+    segments = [segment.model_dump() for segment in chapter.segments]
+    trim_notes, desired_audit = _over_length_audit(segments, {
+        'output_ordinal': ordinal,
+        'budget_chars': chapter.budget_chars,
+    })
+
+    matching_audit: tuple[TrimAudit, str] | None = None
+    if desired_audit is not None and store.exists(audit_rel):
+        try:
+            current_audit, current_sha256 = store.read_with_sha256(TrimAudit, audit_rel)
+        except ArtifactUnreadable:
+            pass
+        else:
+            if current_audit == desired_audit:
+                matching_audit = current_audit, current_sha256
+
+    with store.history_transaction(chapter_rel, audit_rel, resolution_rel):
+        if desired_audit is None or matching_audit is None:
+            _retire_trim_state(store, ordinal)
+
+        where = commit(chapter_rel, chapter)
+
+        if desired_audit is not None and matching_audit is None:
+            store.write(audit_rel, desired_audit)
+        elif matching_audit is not None and store.exists(resolution_rel):
+            # 局部 import：current hash-bound closure 的唯一判定归
+            # trim_resolution 所有，而那个模块本身依赖 Chapter。
+            from novel.stages.stage5 import trim_resolution
+            current_audit, current_sha256 = matching_audit
+            if not trim_resolution.matches_current_audit(
+                    store, current_audit, current_sha256):
+                store.archive_round(resolution_rel)
+
+    return where, trim_notes
 
 
 def _rejected_rel(ordinal: int) -> str:
@@ -172,6 +235,7 @@ def _chapter_record(entry: dict[str, Any], segments: list[dict[str, str]], book:
                     warns: list[str], errs: list[str] | None,
                     provenance: Any) -> Chapter:
     """一份成稿。**正式稿与 `.INVALID` 共用这一份章契约**——状态由文件名区分。"""
+    _require_canonical_slots(segments, entry)
     text = _segments_text(segments)
     return Chapter(
         output_ordinal=int(entry['output_ordinal']),
@@ -187,11 +251,62 @@ def _chapter_record(entry: dict[str, Any], segments: list[dict[str, str]], book:
     )
 
 
+def _inspection_account(
+    segments: list[dict[str, str]], book: M.Book,
+) -> M.NormalizeAccount:
+    """只观察依赖归一器的引号异常，不采用它返回的改写正文。"""
+    _normalized, observed = _normalize_segments(segments, book)
+    return M.NormalizeAccount(quote_problems=list(observed.quote_problems))
+
+
+def _refresh_chapter_derived(
+    chapter: Chapter,
+    entry: dict[str, Any],
+    book: M.Book,
+    *,
+    warns: list[str],
+    errs: list[str] | None,
+) -> Chapter:
+    """只刷新 Chapter v2 的确定性派生字段。
+
+    付费任务快照、producer-owned segments 与 provenance 经同一个强类型载体原样穿过。
+    recheck/revalidate 不能拿当前 context 伪造历史任务书，也不能静默对付费正文再跑一遍归一。
+    """
+    payload = chapter.model_dump(by_alias=True, mode='json')
+    payload.update({
+        'chars': M.chars_of(chapter.text),
+        'overlap_excl_verbatim': M.overlap_ratio(
+            chapter.text, entry, book.source_text),
+        'warns': list(warns),
+        'errs': list(errs) if errs else None,
+    })
+    return Chapter.model_validate(payload)
+
+
+def _require_revalidation_task_identity(
+    candidate: Chapter,
+    baseline: Chapter,
+) -> None:
+    """INVALID 可改正文，但不能借人工编辑改写冻结的付费任务身份。"""
+    fields = (
+        'output_ordinal', 'from_source_ordinals', 'source_chars', 'budget_chars',
+    )
+    changed = [
+        field for field in fields
+        if getattr(candidate, field) != getattr(baseline, field)
+    ]
+    if changed:
+        raise ProvenanceRefused(
+            'Stage5 INVALID 的任务身份字段不得人工改写：'
+            + ', '.join(changed)
+            + '。正文可通过 segments 修订；任务快照必须继承不可变创建基线')
+
+
 def _write_chapter(ctx: RunContext, store: ArtifactStore, entry: dict[str, Any],
                    book: M.Book, *, segments: list[dict[str, str]], mat: str,
                    account: M.NormalizeAccount, provenance: Any
-                   ) -> tuple[str, list[str], list]:
-    """归一 → 判据 → 闸门 → 落盘。返回 `(落到哪, errs)`。
+                   ) -> tuple[str, list[str], list, list[str]]:
+    """归一 → 判据 → 闸门 → 落盘。返回 `(落点, errs, findings, trim notes)`。
 
     ⚠⚠ **归一必须跑在收缩【之前】**（调用方保证），而**再归一一遍**在这里：链子是
     「归一 → 收缩(LLM) → 再归一 → 校验」，三道门与落盘看的是**同一份最终字节**。
@@ -218,8 +333,15 @@ def _write_chapter(ctx: RunContext, store: ArtifactStore, entry: dict[str, Any],
             # ⚠ `gates_skipped` 是**空列表也要写**的那一格：
             # 「一条都没跳过」与「没人说」是两件事。
             p = store.write_invalid(rel, art, gates_skipped=[])
-            return str(p), errs, fs
-        return str(store.write_round(rel, art)), [], fs
+            return str(p), errs, fs, []
+        where, trim_notes = _commit_canonical_chapter(
+            store,
+            art,
+            expected_ordinal=int(entry['output_ordinal']),
+            commit=lambda canonical_rel, artifact: store.write_round(
+                canonical_rel, artifact),
+        )
+        return str(where), [], fs, trim_notes
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -237,6 +359,35 @@ def _expected_slots(entry: dict[str, Any]) -> tuple[str, ...]:
     return tuple(str(scene.get('slot') or '') for scene in (entry.get('scenes') or []))
 
 
+def _slot_contract_problem(
+    segments: list[dict[str, str]] | list[ChapterSegment],
+    entry: dict[str, Any],
+    *,
+    exact_order: bool,
+) -> str | None:
+    """同一份 slot 集合尺子；是否允许 producer 归序由 ingress 明说。"""
+    expected = _expected_slots(entry)
+    actual = tuple(
+        segment.slot if isinstance(segment, ChapterSegment)
+        else str(segment.get('slot') or '')
+        for segment in segments
+    )
+    if len(actual) != len(expected) or set(actual) != set(expected):
+        return f'slot 必须恰好为 {list(expected)}，实际为 {list(actual)}'
+    if exact_order and actual != expected:
+        return f'slot 顺序必须为 {list(expected)}，实际为 {list(actual)}'
+    return None
+
+
+def _require_canonical_slots(
+    segments: list[dict[str, str]] | list[ChapterSegment],
+    entry: dict[str, Any],
+) -> None:
+    """拒绝无法在不改正文的前提下保持 producer slot 身份的 canonical 候选。"""
+    if problem := _slot_contract_problem(segments, entry, exact_order=True):
+        raise TerminalState(f'Stage5 canonical segment 契约不成立：{problem}')
+
+
 def _response_problem(
     response: ChapterResponse,
     wire: ChatResponse,
@@ -244,11 +395,8 @@ def _response_problem(
 ) -> str | None:
     if wire.finish_reason == 'length':
         return 'finish_reason=length（答案被 token 上限截断）'
-    expected = _expected_slots(entry)
-    actual = tuple(segment.slot for segment in response.segments)
-    if len(actual) != len(expected) or set(actual) != set(expected):
-        return f'slot 必须恰好为 {list(expected)}，实际为 {list(actual)}'
-    return None
+    # 模型响应可乱序：producer 会在落盘前按计划归序；这里只要求集合闭合。
+    return _slot_contract_problem(response.segments, entry, exact_order=False)
 
 
 def _ordered_segments(
@@ -372,7 +520,6 @@ def _generate_chapter(
         return {'error': str(exc).splitlines()[0]}
     segments = _ordered_segments(got, entry)
     segments, account = _normalize_segments(segments, book)
-    trim_notes, trim_audit = _over_length_audit(segments, entry)
     text = _segments_text(segments)
     if revise is not None:
         attempts = [{'chars': M.chars_of(text), 'text': text}]
@@ -401,8 +548,6 @@ def _generate_chapter(
                 }
             retry_segments = _ordered_segments(got, entry)
             retry_segments, retry_account = _normalize_segments(retry_segments, book)
-            retry_trim_notes, retry_trim_audit = _over_length_audit(
-                retry_segments, entry)
             retry_text = _segments_text(retry_segments)
             attempts.append({'chars': M.chars_of(retry_text), 'text': retry_text})
             retry_regressions = checks.trim_regressions(
@@ -417,12 +562,9 @@ def _generate_chapter(
                     },
                 }
             segments, text, account = retry_segments, retry_text, retry_account
-            trim_notes = [*trim_notes, *retry_trim_notes]
-            trim_audit = retry_trim_audit
     return {
         'entry': entry, 'ordinal': ordinal, 'mat': mat, 'user': user,
         'segments': segments, 'text': text, 'account': account,
-        'trim_notes': trim_notes, 'trim_audit': trim_audit,
         'prev_text': prev_text, 'fixes': fixes, 'review_fp': review_fp,
         'accepted_purpose': accepted_purpose,
     }
@@ -548,23 +690,11 @@ def _run_group_parallel(
                 adopted_models=[accepted_model],
                 **extra,
             )
-            trim_rel = artifact_rel('stage5.trim_audit', nn=ordinal)
-            trim_resolution_rel = artifact_rel('stage5.trim_resolution', nn=ordinal)
-            chapter_rel = _rel(ordinal)
-            # A later in-band rewrite resolves the live verification row; a
-            # later trim attempt supersedes it.  In both cases retain the old
-            # audit under `_rounds` instead of silently overwriting history.
-            with store.history_transaction(
-                    chapter_rel, trim_rel, trim_resolution_rel):
-                _retire_trim_state(store, ordinal)
-                if generated['trim_audit'] is not None:
-                    store.write(trim_rel, generated['trim_audit'])
-                where, errors, findings = _write_chapter(
-                    ctx, store, entry, book,
-                    segments=generated['segments'], mat=generated['mat'].given,
-                    account=generated['account'], provenance=provenance)
+            where, errors, findings, trim_notes = _write_chapter(
+                ctx, store, entry, book,
+                segments=generated['segments'], mat=generated['mat'].given,
+                account=generated['account'], provenance=provenance)
             judged[ordinal] = findings
-            trim_notes = generated['trim_notes']
             line = (
                 f'第 {ordinal} 章 → {where}'
                 + (f'（{len(errors)} 条阻断级）' if errors else '')
@@ -580,9 +710,6 @@ def _run_group_parallel(
 
     written = [written_by[key] for key in sorted(written_by)]
     blocked = [blocked_by[key] for key in sorted(blocked_by)]
-    # 即使同批部分失败，只要有 canonical 章发生变化，draft 也必须
-    # 是当前集合的纯投影；不能留一份「看起来像上次成功」的旧拼稿。
-    assemble_book(ctx, store, book)
     if fatal is not None:
         raise fatal
     report = _report(
@@ -707,20 +834,15 @@ def run_revise(ctx: RunContext, client: LlmClient,
 # ─────────────────────────────────────────────────────────────────────────────
 
 def run_recheck(ctx: RunContext, chapters: str | None = None) -> CheckReport:
-    """`--recheck`：按当前判据重判存量成稿并写回指标，并重拼 `draft.md`。
+    """`--recheck`：原字节重判，只刷新 Chapter v2 派生字段与 trim 状态。
 
-    ⚠⚠ **它会改写正文字节而不动来源账**，这是一处已知的潜伏故障（盘上 0 样本）：
-    它逐章重跑归一并把结果写回产物，刷新 `chars` / `overlap` / `warns`，
-    **而 `_provenance` 一个字不动**。两个后果：① 一份付费产物的正文字节被一次 0 成本操作
-    改掉，而来源账仍宣称是那次调用产出的；② `draft_text_sha1` 随之改变 ⇒ 下一份验收会把它
-    读成「写手又落笔了」——**而 `draft_text_sha1` 的存在正是为了防这件事**。
-    ⇒ 这里的处置：**改写字节时出声**（报告里逐章点名），并**用 `rewrite_provenance` 标
-    `partial_rewrite`**，让「这份产物是混版的」在盘上说得出来。
+    这条 0 成本路不再偷偷运行第二次正文归一：producer-owned ``segments``、冻结任务书与
+    ``_provenance`` 原样保留。否则一次“检查”会被收敛账误认成写手又落笔了一轮。
     """
     store = ArtifactStore(ctx)
     require_canonical_layout(store)
     book = review.load_book(ctx, store)
-    touched: list[str] = []
+    trim_notes: list[str] = []
     judged: dict[int, list] = {}
     ordinals = ([int(entry['output_ordinal'])
                  for entry in _chapters_of(store, book, chapters)]
@@ -731,35 +853,27 @@ def run_recheck(ctx: RunContext, chapters: str | None = None) -> CheckReport:
             continue
         art, _raw = store.read_own(Chapter, rel)
         entry = book.chapters[o]
-        segments, acc = _normalize_segments(
-            [segment.model_dump() for segment in art.segments], book)
-        text = _segments_text(segments)
+        segments = [segment.model_dump() for segment in art.segments]
+        _require_canonical_slots(segments, entry)
+        text = art.text
+        acc = _inspection_account(segments, book)
         mat = prompts.build_material(entry, book).given
         fs, errs, warns = _judge(
             text, entry, book, mat=mat, account=acc,
             segments=segments)
         judged[o] = fs
-        for k, v in acc.counters().items():
-            ctx.account(k, int(ctx.accounting.get(k) or 0) + v)
-        changed = text != art.text
-        if changed:
-            touched.append(f'第 {o} 章正文字节被归一改写了（{M.chars_of(art.text)} → '
-                           f'{M.chars_of(text)} 字）——**这是一次 0 成本操作改付费产物**')
-        new_prov = ctx.rewrite_provenance(
-            art.provenance, by='--recheck') if changed else art.provenance
-        updated = _chapter_record(
-            entry, segments, book, warns=warns,
-            errs=errs or None, provenance=new_prov)
-        if changed:
-            trim_audit_rel = artifact_rel('stage5.trim_audit', nn=o)
-            trim_resolution_rel = artifact_rel('stage5.trim_resolution', nn=o)
-            with store.history_transaction(rel, trim_audit_rel, trim_resolution_rel):
-                _retire_trim_state(store, o)
-                store.write(rel, updated)
-        else:
-            store.write(rel, updated)
-    assemble_book(ctx, store, book)
-    return _report(ctx, store, written=[], blocked=touched, book=book, judged=judged)
+        updated = _refresh_chapter_derived(
+            art, entry, book, warns=warns, errs=errs or None)
+        _where, notes = _commit_canonical_chapter(
+            store,
+            updated,
+            expected_ordinal=o,
+            commit=lambda canonical_rel, artifact: (
+                store.path(canonical_rel)
+                if artifact == art else store.refresh_formal(canonical_rel, artifact)),
+        )
+        trim_notes.extend(f'第 {o} 章：{note}' for note in notes)
+    return _report(ctx, store, written=[], blocked=trim_notes, book=book, judged=judged)
 
 
 def run_revalidate(
@@ -790,10 +904,16 @@ def run_revalidate(
             continue
         art, _raw = store.read_own(Chapter, inv)
         entry = book.chapters[o]
+        baseline = store.revalidation_baseline(
+            rel, Chapter, actor=actor, reason=reason)
+        _require_revalidation_task_identity(art, baseline)
         mat = prompts.build_material(entry, book).given
-        segments, account = _normalize_segments(
-            [segment.model_dump() for segment in art.segments], book)
-        text = _segments_text(segments)
+        segments = [segment.model_dump() for segment in art.segments]
+        # INVALID 可能被人在盘外编辑过。revalidate 承诺原 segments 提升，
+        # 因此不能像模型响应/--apply-edit 那样偷偷重排；集合或顺序不闭合就停。
+        _require_canonical_slots(segments, entry)
+        text = art.text
+        account = _inspection_account(segments, book)
         fs, errs, warns = _judge(
             text, entry, book, mat=mat,
             account=account, segments=segments)
@@ -801,20 +921,25 @@ def run_revalidate(
         if errs:
             still.append(f'第 {o} 章仍有 {len(errs)} 条阻断级：{errs[0]}')
             continue
-        rebuilt = _chapter_record(
-            entry, segments, book, warns=warns,
-            errs=None, provenance=art.provenance)
-        trim_audit_rel = artifact_rel('stage5.trim_audit', nn=o)
-        trim_resolution_rel = artifact_rel('stage5.trim_resolution', nn=o)
-        with store.history_transaction(rel, trim_audit_rel, trim_resolution_rel):
-            store.promote_invalid(
-                rel, Chapter, actor=actor, reason=reason,
-                artifact_override=rebuilt)
-            _retire_trim_state(store, o)
-        promoted.append(f'第 {o} 章 → {store.path(rel)}')
+        rebuilt = _refresh_chapter_derived(
+            art, entry, book, warns=warns, errs=None)
+        where, notes = _commit_canonical_chapter(
+            store,
+            rebuilt,
+            expected_ordinal=o,
+            commit=lambda canonical_rel, artifact: store.promote_invalid(
+                canonical_rel,
+                Chapter,
+                actor=actor,
+                reason=reason,
+                artifact_override=artifact,
+            ),
+        )
+        promoted.append(
+            f'第 {o} 章 → {where}'
+            + (f'　⚠ {"；".join(notes)}' if notes else ''))
     if not promoted and not still:
         raise TerminalState('盘上一份 `.INVALID` 都没有——没有可提升的稿')
-    assemble_book(ctx, store, book)
     return _report(ctx, store, written=promoted, blocked=still, book=book,
                    judged=judged)
 
@@ -890,16 +1015,17 @@ def run_apply_edit(ctx: RunContext, edit_path: str) -> CheckReport:
             f'文件未落盘，请继续编辑原文件 {p}')
     art = _chapter_record(entry, segments, book, warns=warns, errs=errs, # 空也写
                           provenance=provenance)
-    trim_audit_rel = artifact_rel('stage5.trim_audit', nn=o)
-    trim_resolution_rel = artifact_rel('stage5.trim_resolution', nn=o)
-    with store.history_transaction(rel, trim_audit_rel, trim_resolution_rel):
-        if store.exists(rel):
-            _retire_trim_state(store, o)
-        where = store.write_round(rel, art)
+    where, trim_notes = _commit_canonical_chapter(
+        store,
+        art,
+        expected_ordinal=o,
+        commit=lambda canonical_rel, artifact: store.write_round(
+            canonical_rel, artifact),
+    )
     note = ([f'⚠ 人工稿仍有 {len(errs)} 条阻断级判定，已落盘供 Review / wontfix 收口：'
              f'{errs[0]}；正式下游会由 accepted Review 闸阻断']
             if errs else [])
-    assemble_book(ctx, store, book)
+    note.extend(trim_notes)
     return _report(ctx, store, written=[f'第 {o} 章 → {where}'], blocked=note,
                    book=book, judged={o: fs})
 
@@ -923,53 +1049,7 @@ def _ordinal_of_edit(path: str, text: str) -> int:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 六、`draft.md` —— canonical 章集合的纯投影
-# ─────────────────────────────────────────────────────────────────────────────
-
-def render_book_draft(book: M.Book, by_ord: dict[int, dict[str, Any]]) -> str:
-    """Pure canonical chapter projection.  This is the sole byte ruler for `draft.md`."""
-    return render_stage5_draft(book.chapters, by_ord)
-
-
-def expected_book_draft(store: ArtifactStore, book: M.Book) -> str:
-    """从当前 canonical 章集合纯重算 `draft.md` 应有的字节。"""
-    # draft 是 formal 章字节的恢复投影，不是 freshness 判官。上游刚变、只定向
-    # 重写了部分章时，旧章仍须如实进入投影；fresh/stale 由统一 review_status 判断。
-    by_ord, _invalids, _judged = M.load_drafts(store, require_current=False)
-    return render_book_draft(book, by_ord)
-
-
-def draft_is_current(store: ArtifactStore, book: M.Book) -> bool:
-    """True only when on-disk draft bytes equal the canonical pure projection."""
-    if not store.exists(STAGE5_BOOK_DRAFT):
-        return False
-    try:
-        current = store.read_text(STAGE5_BOOK_DRAFT)
-        expected = expected_book_draft(store, book)
-    except (ArtifactUnreadable, UpstreamMissing):
-        return False
-    # `read_text` 按原始 UTF-8 字节解码且拒绝 CRLF，因而字符相等就是
-    # 本契约下的字节相等；不在这里另写一条文件读取口。
-    return current == expected
-
-
-def assemble_book(ctx: RunContext, store: ArtifactStore, book: M.Book) -> str:
-    """原子写回 canonical 章集合的纯投影；缺章横幅仍显式保留。"""
-    store.write_text(STAGE5_BOOK_DRAFT, expected_book_draft(store, book))
-    del ctx
-    return STAGE5_BOOK_DRAFT
-
-
-def run_rebuild_draft(ctx: RunContext) -> str:
-    """`--rebuild-draft`：零成本恢复 canonical 投影，不改任何章产物。"""
-    store = ArtifactStore(ctx)
-    require_canonical_layout(store)
-    book = review.load_book(ctx, store)
-    return assemble_book(ctx, store, book)
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# 七、报告
+# 六、报告
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _report(ctx: RunContext, store: ArtifactStore, *,
@@ -979,8 +1059,8 @@ def _report(ctx: RunContext, store: ArtifactStore, *,
 
     ⚠⚠ **书级/跨章那 14 条落 `unver` 而不是 `skipped`**（`checks.check(phase='write')`）。
     两者是两种颜色：`skipped` 的措辞是「实现未被调用」，用在这里是**一句假话**——
-    它们的实现在，只是这一相判不了。而一份 49 行全 `skipped` 的报告徽章是 `fail`，
-    读起来像「全查过全没过」，实际上什么都没说。**要看全书 49 行，跑 `stage5.review`。**
+    它们的实现在，只是这一相判不了。而一份 50 行全 `skipped` 的报告徽章是 `fail`，
+    读起来像「全查过全没过」，实际上什么都没说。**要看全书 50 行，跑 `stage5.review`。**
 
     ⚠ 这一次一章都没碰（比如 `--revalidate` 一份 `.INVALID` 都没有）⇒ 逐章那几条
     也落 `unver`：「这一次没有任何一章被判过」与「判过、干净」必须分得开。

@@ -307,22 +307,6 @@ export function Stage5Screen() {
                       >
                         跑全书验收
                       </ActionButton>
-                      <ActionButton
-                        size="sm"
-                        action={vm.rebuildDraftAction}
-                        onClick={() =>
-                          ask({
-                            kind: 'stage5.write',
-                            label: 'stage5 重建 canonical draft',
-                            extra: ['--rebuild-draft'],
-                            required_inputs: vm.rebuildDraftAction?.required_inputs,
-                            sid: vm.sid,
-                            ordinal: null,
-                          })
-                        }
-                      >
-                        重建 draft
-                      </ActionButton>
                     </div>
                     <div className="border-b border-line-soft px-16 py-9">
                       <SevCounts counts={vm.sevCounts} />
@@ -370,16 +354,10 @@ export function Stage5Screen() {
                               )}
                               style={{
                                 gridTemplateColumns:
-                                  'minmax(0,58px) minmax(0,62px) minmax(0,1fr) 34px 34px 38px 44px',
+                                  'minmax(0,1fr) 34px 34px 38px 44px',
                               }}
                             >
                               <Mono className="truncate text-mini" title={r.no}>{r.no}</Mono>
-                              <span className="truncate text-micro text-ink-4" title={r.roundLabel}>
-                                {r.roundLabel}
-                              </span>
-                              <Mono className="truncate text-micro text-ink-4" title={r.chars}>
-                                {r.chars}
-                              </Mono>
                               <CountCell n={r.hard} sev="hard" />
                               <CountCell n={r.info} sev="info" />
                               <CountCell n={r.unver} sev="unver" />

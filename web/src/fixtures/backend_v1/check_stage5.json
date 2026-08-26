@@ -448,20 +448,6 @@
    "baseline": null
   },
   {
-   "rule": "deep_overlap_high",
-   "sev": "info",
-   "status": "ok",
-   "item": "闭卷臂没有把源章抄回来",
-   "requirement": "R-7.6",
-   "check_kind": "mechanical",
-   "remediation": "human",
-   "fix": null,
-   "findings": [],
-   "why": null,
-   "scanned": null,
-   "baseline": null
-  },
-  {
    "rule": "dialogue_broken",
    "sev": "info",
    "status": "ok",
@@ -483,20 +469,6 @@
    "requirement": "R-7.20",
    "check_kind": "mechanical",
    "remediation": "human",
-   "fix": null,
-   "findings": [],
-   "why": null,
-   "scanned": "0/8 章（恒等基线 0/8）",
-   "baseline": null
-  },
-  {
-   "rule": "dialogue_halved",
-   "sev": "hard",
-   "status": "ok",
-   "item": "直接引语没有被腰斩",
-   "requirement": "R-7.19",
-   "check_kind": "mechanical",
-   "remediation": "llm",
    "fix": null,
    "findings": [],
    "why": null,
@@ -618,20 +590,6 @@
    "baseline": null
   },
   {
-   "rule": "draft_duplicated",
-   "sev": "unver",
-   "status": "unver",
-   "item": "同一输出章只有一份成稿",
-   "requirement": "R-8.11",
-   "check_kind": "mechanical",
-   "remediation": "human",
-   "fix": null,
-   "findings": [],
-   "why": "同一输出章没有出现在两条臂里",
-   "scanned": "8/8 章有成稿",
-   "baseline": null
-  },
-  {
    "rule": "draft_missing",
    "sev": "unver",
    "status": "unver",
@@ -672,9 +630,51 @@
    "why": null,
    "scanned": "0/8 章（恒等基线 0/8）",
    "baseline": null
-  },
-  {
-   "rule": "fact_landing",
+   },
+   {
+    "rule": "end_hook_surface_report",
+    "sev": "metric",
+    "status": "skipped",
+    "item": "〔度量〕章尾目标字面原子的落点分布",
+    "requirement": "R-7.9",
+    "check_kind": "mechanical",
+    "remediation": "none",
+    "fix": null,
+    "findings": [],
+    "why": "这份历史抓包没有 current-schema Stage5 章稿，无法重算当前判据",
+    "scanned": null,
+    "baseline": null
+   },
+   {
+    "rule": "end_hook_unver",
+    "sev": "unver",
+    "status": "skipped",
+    "item": "章尾交付这一维这一次够不着",
+    "requirement": "R-7.9",
+    "check_kind": "mechanical",
+    "remediation": "human",
+    "fix": null,
+    "findings": [],
+    "why": "这份历史抓包没有 current-schema Stage5 章稿，无法重算当前判据",
+    "scanned": null,
+    "baseline": null
+   },
+   {
+    "rule": "fact_atom_unattested",
+    "sev": "info",
+    "status": "skipped",
+    "item": "事实原子的表面探针在源章原文里找得到",
+    "requirement": "R-7.22b",
+    "check_kind": "mechanical",
+    "remediation": "human",
+    "fix": null,
+    "findings": [],
+    "why": "这份历史抓包没有 current-schema Stage5 章稿，无法重算当前判据",
+    "scanned": null,
+    "baseline": null
+   },
+   {
+    "rule": "fact_landing",
    "sev": "info",
    "status": "ok",
    "item": "每个必落事实在所属新场景里留下了落点",
@@ -988,38 +988,20 @@
    "scanned": "0/8 章（恒等基线 0/8）",
    "baseline": null
   },
-  {
-   "rule": "material_malformed",
-   "sev": "info",
-   "status": "hit",
-   "item": "下发给写手的材料都是完整的词句",
-   "requirement": "R-3.15",
-   "check_kind": "mechanical",
-   "remediation": "human",
-   "fix": null,
-   "findings": [
-    {
-     "rule": "material_malformed",
-     "sev": "info",
-     "item": "下发给写手的材料都是完整的词句",
-     "detail": "1 条下发材料两端带着标点/引号残渣（多半是 stage2 的锚点切过界）：[\"'他抄起枕下的和离书甩给我：'\"]——拿它判「在不在」会判出假阳，拿它反哺写手照办不了。发给写手时已清掉残渣，但**判定用的还是原样**：证据留着，等 stage2 修（判据 7）",
-     "evidence": [
-      "他抄起枕下的和离书甩给我："
-     ],
-     "evidence_key": "他抄起枕下的和离书甩给我：",
-     "owner": "stage2",
-     "actionable": false,
-     "identity_hit": false,
-     "identity_dead": null,
-     "converge": "same_draft",
-     "unresolved_rounds": 1,
-     "wontfix": null
-    }
-   ],
-   "why": null,
-   "scanned": "1/8 章（恒等基线 0/8）",
-   "baseline": null
-  },
+   {
+    "rule": "material_anchor_unattested",
+    "sev": "info",
+    "status": "skipped",
+    "item": "保真材料的锚点在源章原文里找得到",
+    "requirement": "R-7.22b",
+    "check_kind": "mechanical",
+    "remediation": "human",
+    "fix": null,
+    "findings": [],
+    "why": "这份历史抓包没有 current-schema Stage5 章稿，无法重算当前判据",
+    "scanned": null,
+    "baseline": null
+   },
   {
    "rule": "meta_leak",
    "sev": "hard",
@@ -1058,7 +1040,7 @@
    "remediation": "human",
    "fix": null,
    "findings": [],
-   "why": "全书 6 条【必须成立、不必写在纸面上】的材料 —— 这一组按定义就查不了文面，确定性层**没有检查它们**。要判只能上语义层（`--semantic`），在那之前别把「没报违规」读成「守住了」",
+   "why": "全书 6 条【必须成立、不必写在纸面上】的材料 —— 这一组按定义就查不了文面，确定性层**没有检查它们**。这类命题只能由人结合正文判断，在那之前别把「没报违规」读成「守住了」",
    "scanned": "8/8 章有成稿",
    "baseline": null
   },
@@ -1089,9 +1071,37 @@
    "why": null,
    "scanned": "0/8 章（恒等基线 0/8）",
    "baseline": null
-  },
-  {
-   "rule": "no_secrets_in_book",
+   },
+   {
+    "rule": "narration_person_drift",
+    "sev": "info",
+    "status": "skipped",
+    "item": "成稿的叙述人称与上游声明一致",
+    "requirement": "R-7.9",
+    "check_kind": "mechanical",
+    "remediation": "human",
+    "fix": null,
+    "findings": [],
+    "why": "这份历史抓包没有 current-schema Stage5 章稿，无法重算当前判据",
+    "scanned": null,
+    "baseline": null
+   },
+   {
+    "rule": "narration_person_report",
+    "sev": "metric",
+    "status": "skipped",
+    "item": "〔度量〕叙述人称：声明 vs 成稿实测",
+    "requirement": "R-7.9",
+    "check_kind": "mechanical",
+    "remediation": "none",
+    "fix": null,
+    "findings": [],
+    "why": "这份历史抓包没有 current-schema Stage5 章稿，无法重算当前判据",
+    "scanned": null,
+    "baseline": null
+   },
+   {
+    "rule": "no_secrets_in_book",
    "sev": "unver",
    "status": "unver",
    "item": "这本书有可查的秘密",
@@ -1268,9 +1278,37 @@
    "why": null,
    "scanned": "0/8 章（恒等基线 0/8）",
    "baseline": null
-  },
-  {
-   "rule": "quote_unbalanced",
+   },
+   {
+    "rule": "paragraph_budget_missed",
+    "sev": "hard",
+    "status": "skipped",
+    "item": "自然段数量命中本章明确目标",
+    "requirement": "R-7.25",
+    "check_kind": "mechanical",
+    "remediation": "human",
+    "fix": null,
+    "findings": [],
+    "why": "这份历史抓包没有 current-schema Stage5 章稿，无法重算当前判据",
+    "scanned": null,
+    "baseline": null
+   },
+   {
+    "rule": "paragraph_count_report",
+    "sev": "metric",
+    "status": "skipped",
+    "item": "〔度量〕自然段数量",
+    "requirement": "R-7.25",
+    "check_kind": "mechanical",
+    "remediation": "none",
+    "fix": null,
+    "findings": [],
+    "why": "这份历史抓包没有 current-schema Stage5 章稿，无法重算当前判据",
+    "scanned": null,
+    "baseline": null
+   },
+   {
+    "rule": "quote_unbalanced",
    "sev": "info",
    "status": "ok",
    "item": "引号配对正常、已归一",
@@ -1307,7 +1345,7 @@
    "remediation": "llm",
    "fix": null,
    "findings": [],
-   "why": "这本书 7 条 secret 的字面探针**全部**连它自己的揭示章都命中不了 ⇒ 本条这一次没有判别力样本。「0 命中」在这里不是一个结论；改写式泄底由独立的书级语义层判定",
+   "why": "这本书 7 条 secret 的字面探针**全部**连它自己的揭示章都命中不了 ⇒ 本条这一次没有判别力样本。「0 命中」在这里不是一个结论；全链没有书级语义审判节点，改写式泄底由 Stage2 后见之明判据与交付前成书逐字对账复核",
    "scanned": "7 条 secret，其中 7 条的字面探针零判别力",
    "baseline": null
   },
@@ -1443,48 +1481,6 @@
    ],
    "why": null,
    "scanned": "7 条 secret",
-   "baseline": null
-  },
-  {
-   "rule": "secret_unknown",
-   "sev": "info",
-   "status": "ok",
-   "item": "must_not_reveal 点到的都查得到",
-   "requirement": "R-6.3",
-   "check_kind": "mechanical",
-   "remediation": "human",
-   "fix": null,
-   "findings": [],
-   "why": null,
-   "scanned": "0/8 章（恒等基线 0/8）",
-   "baseline": null
-  },
-  {
-   "rule": "semantic_secret_coverage",
-   "sev": "info",
-   "status": "unver",
-   "item": "语义审判覆盖全部成稿与秘密",
-   "requirement": "R-7.18c",
-   "check_kind": "semantic",
-   "remediation": "human",
-   "fix": null,
-   "findings": [],
-   "why": "没有与最新机械验收及当前正文匹配的 semantic_<n>.json；这不是通过，需运行 `stage5.semantic` 或人工审阅",
-   "scanned": "0 份当前语义审判",
-   "baseline": null
-  },
-  {
-   "rule": "semantic_secret_leak",
-   "sev": "hard",
-   "status": "unver",
-   "item": "书级语义没有提前揭示后文秘密",
-   "requirement": "R-7.18b",
-   "check_kind": "semantic",
-   "remediation": "llm",
-   "fix": null,
-   "findings": [],
-   "why": "没有与最新机械验收及当前正文匹配的 semantic_<n>.json；这不是通过，需运行 `stage5.semantic` 或人工审阅",
-   "scanned": "0 份当前语义审判",
    "baseline": null
   },
   {
@@ -1686,7 +1682,21 @@
    "why": null,
    "scanned": "2/8 章（恒等基线 2/8）",
    "baseline": "盘上命中 7/31，**恒等基线 5/31**——判别力薄。词表是六个明喻标记（像/好似/如同/仿佛/似的/一样）"
-  },
+   },
+   {
+    "rule": "source_overlap_high",
+    "sev": "info",
+    "status": "skipped",
+    "item": "成稿没有把源章抄回来",
+    "requirement": "R-7.6",
+    "check_kind": "mechanical",
+    "remediation": "human",
+    "fix": null,
+    "findings": [],
+    "why": "这份历史抓包没有 current-schema Stage5 章稿，无法重算当前判据",
+    "scanned": null,
+    "baseline": null
+   },
   {
    "rule": "verbatim_missing",
    "sev": "hard",
@@ -1785,18 +1795,12 @@
    "detail": []
   }
  ],
- "retired": [
-  {
-   "rule": "upstream_ref",
-   "why": "它原来挂着两件事：本义是「上游各层对本章的既有结论」，而收敛账也借了这个名字。**一个名字下挂着两件事，读报告的人会按名字去解释数字**（判据 32）。⇒ 收敛账改叫 `convergence_report`；而本义那一半**整条撤掉**——上游各层的结论不再冻进本产物，看的时候现算，不留一份会过期的拷贝。"
-  }
- ],
- "badge": "amber",
- "passed": true,
+ "badge": "fail",
+ "passed": false,
  "counts": {
-  "ok": 33,
-  "hit": 7,
-  "unver": 8,
-  "skipped": 0
+   "ok": 30,
+   "hit": 6,
+   "unver": 5,
+   "skipped": 9
  }
 }

@@ -64,12 +64,18 @@ export const SAMPLE_SID = '7615069877019300633'
 /** 逐章响应只抓了第 3 章 */
 export const SAMPLE_ORDINAL = 3
 
-/* -------------------------------------------------------------- 20 份原样 */
+/* ------------------------------------------ 冻结原样（盘上 20 份，运行时排除 2 份） */
 
-const RAW = import.meta.glob('../mocks/*.json', { eager: true, import: 'default' }) as Record<
-  string,
-  unknown
->
+const RAW = import.meta.glob(
+  [
+    '../mocks/*.json',
+    // 两份旧 Stage5 抓包继续留作冻结证据，但现役 mock 已改读 backend_v1；
+    // 不把其中的重复正文与退役字段继续打进 eager bundle。
+    '!../mocks/stage5_ch3.json',
+    '!../mocks/review_ch3.json',
+  ],
+  { eager: true, import: 'default' },
+) as Record<string, unknown>
 
 function raw<T>(file: string): T {
   const hit = RAW['../mocks/' + file]
@@ -124,72 +130,13 @@ function currentMockStyle(legacy: LegacyStyle): Stage3Style {
   }
 }
 
-/** 冻结 Stage5 抓包是 v1 双臂布局；mock 只能把它诚实投影成明确 legacy 终态。 */
+/** Stage5 fixture 已按现役 HTTP 契约收成明确的 legacy 终态。 */
 function currentMockStage5(): Stage5Response {
-  const legacy = fx<Stage5Response>('stage5_ch3.json')
-  const legacyPaths = legacy.chapters.flatMap((ordinal) => [
-    `stage5/deep/ch${String(ordinal).padStart(2, '0')}.json`,
-    `stage5/shallow/ch${String(ordinal).padStart(2, '0')}.json`,
-  ])
-  return {
-    sid: legacy.sid,
-    title: legacy.title,
-    ctx_exists: legacy.ctx_exists,
-    planned: legacy.planned,
-    written: 0,
-    invalid: 0,
-    missing: [...legacy.chapters],
-    legacy_incompatible: true,
-    legacy_paths: legacyPaths,
-    chapters: legacy.chapters,
-    ordinal: legacy.ordinal,
-    index: legacy.chapters.map((output_ordinal) => ({
-      output_ordinal,
-      budget_chars: null,
-      has_draft: false,
-      invalid: false,
-      chars: null,
-      overlap_excl_verbatim: null,
-      freshness: null,
-    })),
-    source_text: legacy.source_text,
-    source_chars_raw: legacy.source_chars_raw,
-    materials: legacy.materials,
-    drafts: [],
-    invalid_drafts: [],
-    trim_audit: null,
-    ctx_state: legacy.ctx_state,
-  }
+  return fx<Stage5Response>('stage5_ch3.json')
 }
 
 function currentMockReview(): ReviewResponse {
-  const legacy = fx<ReviewResponse>('review_ch3.json')
-  return {
-    ...legacy,
-    review_state: 'legacy_incompatible',
-    review_reasons: ['冻结 fixture 来自 stage5/deep|shallow v1，不能驱动当前返工或批准'],
-    finding_counts: { hard: 0, info: 0, metric: 0, unver: 0 },
-    book: [],
-    index: legacy.index.map((row) => ({
-      output_ordinal: row.output_ordinal,
-      round: null,
-      chars: null,
-      budget_chars: row.budget_chars,
-      finding_counts: { hard: 0, info: 0, metric: 0, unver: 0 },
-      unresolved: 0,
-      stale: null,
-    })),
-    chapter: {
-      ...legacy.chapter,
-      findings: [],
-      chars: null,
-      round: null,
-      origin: null,
-      segments: null,
-      text: null,
-      stale: null,
-    },
-  }
+  return fx<ReviewResponse>('review_ch3.json')
 }
 
 /** 冻结 mock 的旧业务推导只准留在这个假后端；屏幕与真实数据缝不兼容旧形状。 */
@@ -1148,29 +1095,7 @@ export const mockApi: Api = {
     chapterOnly(sid, o, `/novels/${sid}/stage5/${o}`, currentMockStage5),
 
   getReview: (sid, o) =>
-    chapterOnly(sid, o, `/novels/${sid}/review/${o}`, () => {
-      const base = currentMockReview()
-      const edit = lsRead<{ segments: ReviewResponse['chapter']['segments']; at: number }>(
-        `edits.${sid}.${o}`,
-      )
-      if (!edit) return base
-      // 人改过 → 落成新的一轮，旧的一轮进 rounds。形状和后端的语义一致。
-      const prev = base.chapter.round ?? 1
-      const segments = edit.segments ?? []
-      const text = segments.map((segment) => segment.text.trim()).join('\n\n').trim()
-      return {
-        ...base,
-        chapter: {
-          ...base.chapter,
-          segments,
-          text,
-          chars: [...text].length,
-          round: prev + 1,
-          origin: 'human',
-          rounds: [...base.chapter.rounds, prev],
-        },
-      }
-    }),
+    chapterOnly(sid, o, `/novels/${sid}/review/${o}`, currentMockReview),
 
   getInbox: (sid) => bookOnly(sid, `/novels/${sid}/inbox`, mockInbox),
 

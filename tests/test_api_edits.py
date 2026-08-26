@@ -111,7 +111,7 @@ def box(request):
         book,
         INPUTS + sandbox.edits_of(book) + _stage5_rels(book) + _stage6_semantic_rels(book))
     corpus_book = corpus.corpus_root() / book
-    for rel in ('stage0/clean_text.txt', 'stage5/draft.md'):
+    for rel in ('stage0/clean_text.txt',):
         source = corpus_book / rel
         assert source.is_file(), f'{book} 少了 {rel}，审批 freshness 沙箱无法建立'
         target = s.dir / rel

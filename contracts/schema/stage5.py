@@ -10,7 +10,6 @@ stage5/chNN.INVALID.json        被落盘闸门拦下的问题稿（同一份章
 stage5/_rounds/…                三种归档：上一轮 · 被提升掉的问题稿 · 被护栏驳回的自救
 stage5/review_<n>.json           确定性验收报告（**0 成本，不调 LLM**）
 stage5/wontfix.json              人的「这条我不修」
-stage5/draft.md                  canonical 章产物的纯投影（字节形态，不在本模块）
 ```
 ⚠ 这张图上曾列着 `stage5/semantic_<n>.json`（书级语义审判）。`stage5.semantic`
 已于 2026-08-17 **整节点下线**（裁决与实跑证据见 `docs/BACKEND_CONTRACT.md` §十），
@@ -22,12 +21,12 @@ stage5/draft.md                  canonical 章产物的纯投影（字节形态�
 
   ② **判据 vs 载体在本层几乎全部倒向判据**：拒收 = 整章响应作废 = **再花一次高推理调用**
      （本层最贵的一次重试），而判据拦下 = 落 `.INVALID` + 人手改 / 重判 = **0 成本**。
-     ⇒ 现役 51 条判据**一条都不该上移**；少数够得着的（`from_source_ordinals` 长度恒 1）
+     ⇒ 现役 50 条判据**一条都不该上移**；少数够得着的（`from_source_ordinals` 长度恒 1）
      **本来就没有判据**，归载体是原样承认现状，不是收权。
      Stage5 的 `ask_json` 只在响应侧校验 segment 形状与 slot 闭合；保真等内容判据仍在
      落盘前完整执行，失败落 `.INVALID`，不把一次可恢复的付费正文当场丢掉。
 
-  ③ **现役 51 条：7 hard、27 info、12 metric、5 unver。**
+  ③ **现役 50 条：7 hard、26 info、12 metric、5 unver。**
      每条 HARD 都必须有最小反例走生产判据入口；新 canonical corpus 尚未跑完前，
      不拿旧双臂的命中数冒充当前质量基线。**「见过它通过」不是证据，
      「见过它红一次」才是。**
@@ -57,14 +56,13 @@ from contracts.schema.base import Fp10, FrozenModel, StrictModel
 from contracts.schema.common import (
     Finding, FreeProvenance, LlmProvenance, RoundFreeProvenance, RoundLlmProvenance,
 )
-from contracts.schema.evaluation import SemanticDecision
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 一、`stage5/chNN.json`
 # ─────────────────────────────────────────────────────────────────────────────
 
-class GeneratedSegment(StrictModel):
-    """One writer-returned slot.  The producer, not the model, owns ordering."""
+class ChapterSegment(StrictModel):
+    """Writer response 与正式章共用的唯一正文分段。"""
 
     slot: str = Field(pattern=r'^s\d{2,4}$')
     text: str = Field(min_length=1)
@@ -73,7 +71,7 @@ class GeneratedSegment(StrictModel):
 class ChapterResponse(StrictModel):
     """The only accepted Stage5 writer response shape (schema v2)."""
 
-    segments: list[GeneratedSegment] = Field(min_length=1)
+    segments: list[ChapterSegment] = Field(min_length=1)
 
     @model_validator(mode='after')
     def _unique_slots(self) -> 'ChapterResponse':
@@ -81,14 +79,6 @@ class ChapterResponse(StrictModel):
         if len(slots) != len(set(slots)):
             raise ValueError('writer response contains duplicate segment slots')
         return self
-
-
-class ChapterSegment(StrictModel):
-    """The sole content authority inside a formal chapter artifact."""
-
-    slot: str = Field(pattern=r'^s\d{2,4}$')
-    text: str = Field(min_length=1)
-
 
 class Chapter(StrictModel):
     """一章成稿。顶层 **10 个键**。
@@ -135,7 +125,7 @@ class Chapter(StrictModel):
     #: 书级均值会把少数高重合章平掉。
     overlap_excl_verbatim: float | None
 
-    #: **唯一内容权威**。整章正文与 `draft.md` 都由代码按 producer slot 顺序拼出；
+    #: **唯一内容权威**。整章正文由消费者按 producer slot 顺序拼出；
     #: schema v2 不再保存第二份可独立漂移的 `text`。
     segments: list[ChapterSegment] = Field(min_length=1)
 

@@ -55,7 +55,6 @@ function stage5FindingKey(
 export function stage5WriteActions(actions: readonly EnumAction[]): EnumAction[] {
   return actions.filter(
     (action) => action.kind === 'stage5.write'
-      && !action.extra?.includes('--rebuild-draft')
       && (!action.needs_value || action.extra?.includes('--chapters')),
   )
 }
@@ -261,10 +260,10 @@ export function useStage5Screen() {
     )
   }, [submittedJobState, submittedLanded, submittedWontfix])
   const firstDraft = d?.drafts[0] ?? null
-  const baseSegments = rv?.chapter.segments ?? firstDraft?.segments ?? []
+  const baseSegments = firstDraft?.segments ?? []
   const segments = draftSegments ?? baseSegments
-  const baseText = rv?.chapter.text ?? firstDraft?.text ?? ''
-  const text = segments.length ? segments.map((segment) => segment.text.trim()).join('\n\n') : baseText
+  const baseText = baseSegments.map((segment) => segment.text.trim()).join('\n\n').trim()
+  const text = segments.map((segment) => segment.text.trim()).join('\n\n').trim()
 
   // 证据在成稿里命中了几处 —— 一处都没命中要明说，不能装作高亮过
   const evHits = (active?.evidence ?? []).map((e) => {
@@ -405,13 +404,10 @@ export function useStage5Screen() {
     reviewIndex: (rv?.index ?? []).map((i) => ({
       no: chNo(i.output_ordinal),
       ordinal: i.output_ordinal,
-      roundLabel: i.round ? 'r' + i.round : '无稿',
-      chars: (i.chars ?? '—') + '/' + (i.budget_chars ?? '—'),
       hard: i.finding_counts.hard,
       info: i.finding_counts.info,
       unver: i.finding_counts.unver,
       unresolved: i.unresolved,
-      stale: i.stale,
       active: i.output_ordinal === ordinal,
     })),
     // 四级分开计数，metric 只报读数、不能画成警告
@@ -566,10 +562,6 @@ export function useStage5Screen() {
     retainPretrimAction: lookupAction(enums.data, {
       kind: 'stage5.review',
       extra: ['--retain-pretrim'],
-    }),
-    rebuildDraftAction: lookupAction(enums.data, {
-      kind: 'stage5.write',
-      extra: ['--rebuild-draft'],
     }),
   }
 }

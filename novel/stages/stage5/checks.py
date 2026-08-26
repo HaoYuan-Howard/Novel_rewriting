@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-checks.py —— 51 条机械判据的实现。**行在 `contracts/judges/stage5.py`，这里只负责执行。**
+checks.py —— 50 条机械判据的实现。**行在 `contracts/judges/stage5.py`，这里只负责执行。**
 
 【本层与前四层最大的形状差异：机械表由写作闸门与全书验收共用】
 落盘闸门（写作相，逐章）与全书验收相**调同一个 `chapter_findings`**。
@@ -222,7 +222,7 @@ def fidelity_findings(body: str, entry: dict[str, Any], book: M.Book, *,
 
     # ── ④ 本章不该点破的秘密 ────────────────────────────────────────────────
     # 秘密边界只认 Stage2 权威揭示时间线；WriterContext 不再复制一份 id 清单。
-    # 这仍只是字面探针，改写式泄漏继续显式留给语义层。
+    # 这仍只是字面探针；改写式盲区由 Stage2 后见之明判据与交付前成书逐字对账承担。
     ordinal = int(entry.get('output_ordinal') or 0)
     timeline_hidden = []
     if ordinal:
@@ -243,8 +243,8 @@ def fidelity_findings(body: str, entry: dict[str, Any], book: M.Book, *,
             if s is None:
                 continue
             # 两侧共用 secret 口径：fact 侧剥数字，成稿侧也剥；数字不是
-            # 泄密与否的身份键。但这仍只是转抄式探针，改写式盲区继续由
-            # `secret_timeline` / 语义审判显式告知用户。
+            # 泄密与否的身份键。但这仍只是转抄式探针；`secret_timeline`
+            # 负责暴露字面盲区，改写式风险由跨层后见之明判据与交付对账承担。
             kws = secret_keywords(s.get('fact'))
             hit = [k[:14] for k in kws if secret_contains(k, body)]
             if hit:
@@ -796,9 +796,11 @@ def chapter_findings(text: str, entry: dict[str, Any], book: M.Book, *,
                           evidence=sorted(names)))
 
     # ── 篇幅：度量无条件出，两条告警按 `DRAFT_BAND` 判 ──────────────────────
-    src_chars = entry['source_chars']
+    basis = M.chapter_basis(entry, book.source_text)
+    assert basis.source_chars is not None and basis.budget_chars is not None
+    src_chars = basis.source_chars
     band_range = M.target_range(entry)
-    bud = entry['budget_chars']
+    bud = basis.budget_chars
     flag = ''
     if not (band_range[0] <= len(body) <= band_range[1]):
         flag = f'  ← 超出目标 {band_range[0]}~{band_range[1]}'
@@ -1264,7 +1266,7 @@ def check(*, chapter_findings_by_rule: dict[str, list[Finding]],
 
     `phase='write'` ⇒ 这是**落盘闸门**那一相：书级/跨章那几条它够不着，落 `unver` 并说清
     「由验收相报」。⚠ **不许让它们落 `skipped`**：`skipped` 的措辞是「实现未被调用」，
-    那是一句**假话**——它们的实现在，只是这一相判不了。而一份 49 行全 `skipped` 的报告
+    那是一句**假话**——它们的实现在，只是这一相判不了。而一份 50 行全 `skipped` 的报告
     徽章是 `fail`，读起来像「全查过全没过」，实际上什么都没说。
 
     `blind[rule]` ⇒ **这一条这一次没有判别力样本**，落 `unver` 而不是打一盏绿灯。

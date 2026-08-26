@@ -85,8 +85,9 @@ function viewOf(n: NovelRow): BookView {
           ? FRESH.unknown
           : FRESH.fresh
 
-  // 「打开」落到第一个「待继续」的层（columns 按 STAGES 顺序）；没有待继续就是成了，去 stage7
-  const todo = columns.find((c) => c.done === false)
+  // 「打开」落到第一个尚未证实完成的层（columns 按 STAGES 顺序）。
+  // `null` 是 unknown，不是完成；跳过它会把人直接送到更晚的 stage，掩掉关闭式状态。
+  const todo = columns.find((c) => c.done !== true)
   const openScreen = STAGE_SCREEN[todo?.key ?? 'stage7'] ?? 'stage0'
 
   return {

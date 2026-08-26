@@ -331,8 +331,8 @@ def _behaviour_errors(
 
     # ⑤【断言 B】「允许写入面」表与 `NODES[node].flags` 双向对账。
     #   散文里的「本层没有 X」不可判定，所以把它转成「表必须覆盖 X」——
-    #   `stage2.global` 明明挂着 `--apply-edit`，文档却写「本层没有通用 --apply-edit」，
-    #   而同一 skill 的 FN-007 正在指示走这条路。只有这条断言抓得住那种否定陈述。
+    #   `stage2.global` 明明挂着 `--apply-edit`，文档却曾写「本层没有通用 --apply-edit」。
+    #   只有这条断言抓得住那种否定陈述。
     surface = {
         node: set(re.findall(r"--[a-z][a-z0-9-]*", cell))
         for node, cell in re.findall(

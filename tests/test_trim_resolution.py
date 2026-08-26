@@ -250,6 +250,7 @@ def test_revalidate_failure_restores_chapter_trim_and_all_history(tmp_path, monk
 
     synthetic = factories.stage5_book()
     synthetic.ctx['chapters'][0]['output_ordinal'] = 3
+    synthetic.source_text[3] = synthetic.source_text[1]
     monkeypatch.setattr(write.review, 'load_book', lambda *_args, **_kwargs: synthetic)
     monkeypatch.setattr(
         write, '_judge', lambda *_args, **_kwargs: ([], [], []))

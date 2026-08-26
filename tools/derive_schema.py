@@ -50,7 +50,16 @@ ARTIFACTS = [
     ('stage3/style_grounding.json',  'stage3/style_grounding.json'),
     ('stage4/plan_chapters.json',    'stage4/plan_chapters.json'),
     ('stage4/writer_context.json',   'stage4/writer_context.json'),
-    ('stage5/<mode>/chNN.json',      'stage5/*/ch*.json'),
+    # 章号至少补齐两位，但可以超过 99；末尾再钉一位数字，避免把形状不同的
+    # `.INVALID` / `.rejected` 一起吞进正式章样本。
+    ('stage5/chNN.json',             'stage5/ch[0-9]*[0-9].json'),
+    ('stage5/chNN.INVALID.json',     'stage5/ch[0-9]*[0-9].INVALID.json'),
+    # Stage5 有人工写回与付费返工，修前取值可能只留在归档。正式稿与 INVALID
+    # 是同一 Chapter schema，但分开报告；rejected 是另一份 schema，不混进来。
+    ('stage5/_rounds/chNN.rN.json',
+     'stage5/_rounds/ch[0-9]*[0-9].r[0-9]*.json'),
+    ('stage5/_rounds/chNN.INVALID.rN.json',
+     'stage5/_rounds/ch[0-9]*[0-9].INVALID.r[0-9]*.json'),
     ('stage5/review_N.json',         'stage5/review_*.json'),
     ('stage6/hook.json',             'stage6/hook.json'),
     # 归档是**整份拷贝**（与 hook.json 逐字段同形）。单列一行不是为了看它长什么样，

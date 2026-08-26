@@ -363,7 +363,7 @@ S-08（ctx 不在仍 200，`materials=null`）。
 | `chapters` / `ordinal` / `index[]` | | 是 | 章索引只取 `stage5/chNN.json`；没有成稿的章 `chars` / `overlap_excl_verbatim` / `freshness` 三格全 `null` |
 | `source_text` / `source_chars_raw` | 串/整数 或 null | 是 | 源章原文单独的落点（材料里不重复） |
 | `materials` | 对象 或 null | 是 | 写手拿到的下发面，**与 canonical 闭卷写手同一份**（`prompts.build_material(...).blocks`——`R-11.8` 在读屏上的对应物：显示的材料 = 真发出去的材料） |
-| `drafts[]` / `invalid_drafts[]` | 数组 | 是 | 正式稿与 `.INVALID` 分两个数组。`segments[]` 是盘上的唯一内容权威，保留 producer slot；`text` 必须等于代码按段顺序拼出的确定性投影，只供展示。`origin`（`human` / `llm`）由 `_provenance` 的载体类派生 |
+| `drafts[]` / `invalid_drafts[]` | 数组 | 是 | 正式稿与 `.INVALID` 分两个数组，数组归属已经表达 formal/invalid。每项只发篇幅读数、`segments[]`、对齐与 freshness/provenance；`segments[]` 是盘上的唯一内容权威，正文由消费者统一拼接，不再重复发 `text`、路径、轮次、来源字数或 origin 展示格 |
 | `trim_audit` | 对象或 null | 是 | 当前章仍绑定 current 正文、且尚未人工销账的超上限事实；对象只发 `output_ordinal/reason/context`，hash 锁由专用 retain 路由执行时从盘上重读，浏览器不代抄。`null` = 本章无待销账 trim |
 | `drafts[].align` | 对象 或 null | 是 | **可空**：`null` = 对齐辅助尚未由服务端提供（本章无锚可对时 `align_rows` 为空、账仍在）。对齐账是对应关系不是判定，`note` 常驻这句话；锚点覆盖率必须常驻显示 |
 | `drafts[].align.coverage_threshold` / `.coverage_state` | 浮点 / 串 | 是 | 阈值取自 `contracts/invariants.py::ANCHOR_COVERAGE_WARN`（0.6），`coverage_state ∈ low｜adequate` 由 `DraftAlignView` 的校验器按 `coverage` 与 threshold 反推 ⇒ **两格不可能各说各话**。前端只消费 `coverage_state`，一行阈值都不写（守卫 `tests/test_api_discipline.py::test_frontend_does_not_rejudge_anchor_coverage`） |
@@ -377,13 +377,11 @@ S-08（ctx 不在仍 200，`materials=null`）。
 
 | 字段 | 类型 | 必填 | 说明 |
 |---|---|---|---|
-| `review_seq` / `sources` / `baselines` / `baselines_identity` / `book[]` | | 是 | 最新一份全书验收的账，原样 |
+| `review_seq` / `book[]` | | 是 | 最新一份全书验收的序号与书级 findings；盘上的来源、基线与 provenance 只服务后端 currentness，不重复暴露 |
 | `review_state` / `review_reasons[]` | `Stage5ReviewState` / str[] | 是 | `fresh｜stale｜unknown｜legacy_incompatible`（`missing` 由路由 404 表达，不能伪装成视图）；只有 fresh 的 reasons 为空。结论统一取 `review.review_status`，API 不重拼第二套 freshness |
 | `finding_counts` | 对象 | 是 | 全书结论按 sev 现数，**四键恒在（0 也写）**。⚠ 不读产物的 `counts` 字段——那份是稀疏 Counter（`Review.counts` 登记过的病）；`index[]` 每行同理（后置条件逐行查） |
-| `wontfix` | 整数 | 是 | 被人豁免的条数——豁免不删结论，单独计数 |
-| `index[]` | 数组 | 是 | `unresolved` = 有收敛账（`unresolved_rounds > 0`）且未豁免的结论条数 |
-| `chapter` | 对象 | 是 | 该章明细 + 当前正式稿的 `segments[]` 与派生 `text`（改稿入口按 slot 放在原文旁边）；两者同为 `null` 表示当前正式稿缺席，非空时服务端强制 `text` 等于 segments 投影。`stale` 是三态：验收判的那份与盘上当前那份还是不是同一份（整文件指纹）；`null` = 判不了。`rounds[]` 是盘上已归档的轮次号（`_rounds/`），升序——改稿历史从这里回看 |
-| `_provenance` | 对象 | 是 | `ReviewProvenance` |
+| `index[]` | 数组 | 是 | 每行只发 `output_ordinal/finding_counts/unresolved`；索引只回答验收结论，不重复轮次、篇幅、预算或未渲染 stale 格。`unresolved` = 有收敛账（`unresolved_rounds > 0`）且未豁免的结论条数 |
+| `chapter` | 对象 | 是 | 只发 `output_ordinal/findings`。阅读、编辑与证据高亮使用并行 Stage5 响应中的当前 `Draft.segments`，避免 Review 携带另一份可能过期的正文 |
 
 ## 五g、`Stage6View` —— S-11 开篇文案
 

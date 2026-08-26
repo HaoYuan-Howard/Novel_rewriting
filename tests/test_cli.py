@@ -553,7 +553,6 @@ def test_every_paid_stage5_cli_path_authorizes_before_dispatch(
     ['--dry-run'],
     ['--recheck'],
     ['--revalidate', '--actor', 'operator', '--reason', '按当前判据提升'],
-    ['--rebuild-draft'],
     ['--apply-edit', 'stage5/chapter_edit.json'],
 ])
 def test_zero_cost_stage5_recovery_paths_are_not_blocked_by_paid_authorization(

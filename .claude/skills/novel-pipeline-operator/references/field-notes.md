@@ -23,7 +23,6 @@ rg -n "stage6|hook_para_sep|exit 70" .claude/skills/novel-pipeline-operator/refe
 | FN-004 | blueprint 锚点失败要先判原字节 | observed | `hinge_anchor_void`, `verbatim_failed` | `--chapters`（付费）或 finding 明列的免费 fix |
 | FN-005 | 钱已调用但目标产物缺失 | contract-confirmed | exit 70, 账本有调用而产物不在盘 | 完全相同参数重跑，命中 `.llm_cache` |
 | FN-006 | 语义结论按文本 sha1 绑定，不跟机械验收的轮次走 | contract-confirmed | `stage6.semantic`, `semantic_review_seq` | 文本未变就**不要**重跑；变了才重跑 |
-| FN-007 | 语义泄底可能源于上游揭示章误标 | contract-confirmed | `semantic_secret_leak` | `stage2.global --apply-edit` 或 `--wontfix` 留账 |
 | FN-008 | stage6 首轮只有 INVALID | contract-confirmed | `hook.INVALID.json`, `hook_para_sep` | `stage6.hook --apply-edit` 或 `--revalidate` |
 | FN-009 | stage6 总报告与所选候选不是同一粒度 | observed | 落选候选 HARD, 同 sha1 两轮矛盾 | 按 label+sha1 对齐，采更严格那一轮 |
 | FN-010 | stage7 人物表不是全部 surface | contract-confirmed | `rn_kept_contains_mapped`, `rn_semantic_marker_changed`, `rn_derived_alias_candidate` | `name_map_edit.json` 展开内嵌映射 |
@@ -119,20 +118,6 @@ rg -n "stage6|hook_para_sep|exit 70" .claude/skills/novel-pipeline-operator/refe
   `state` 判 stage6 完成；账本这一段没有新增实付记录。
 - 依据：`novel/stages/stage6/semantic.py::text_sha1` 与该模块按 sha1 比对
   `current_shas` / `judged_shas` 的过期判定；同文件对 `stage6/hook.json` 的 freshness 前置检查。
-
-### FN-007 · 语义泄底可能源于上游揭示章误标
-
-- 状态：`contract-confirmed`
-- 触发：`semantic_secret_leak` 的证据在该章源文中本来就存在。
-- 判断：若成稿只是保留源章已发生的揭示，根因可能是 Stage2 权威
-  `reader_reveal_events` 时线标晚，而不是写手跨章泄底。多次/分步揭示不再被压成单点。
-- 处置：逐句对照源章，不误改成稿。上游标注错误时走 typed `stage2.global --apply-edit`
-  修正 secret 时线，重跑受影响的 `stage5.review`，再让 `stage6.semantic` 对新的候选文本重新审判；确认不修时用当前 finding
-  证据键的 `stage5.review --wontfix`留账。
-- 验证：记录源文章号、逐字证据、更正后的 `reader_reveal_events` 与 fresh semantic finding
-  的对应关系；旧主体绑定结论必须过期。
-- 依据：`novel/stages/stage2/extract.py::run_apply_edit` 与 `_apply_secret_patches` 的 typed 修订路；
-  `novel/wontfix.py::mark` 与 `novel/wontfix.py::applied_to_outcomes` 的证据键收敛链。
 
 ### FN-008 · stage6 首轮只有 INVALID
 
@@ -279,7 +264,7 @@ rg -n "stage6|hook_para_sep|exit 70" .claude/skills/novel-pipeline-operator/refe
   「这一轮没有可自救的条目」，并列出被跳过的条数。
 - 判断：**这不是付费调用失败，而是修复分流在请求发出前关闭式退出。** `--revise` 只消费
   `repair == 'UNIQUE'` 且尚未超过轮次上限的条目。现役 50 条中 repair 分布为
-  **12 UNIQUE、11 FREE、27 NONE**：FREE 必须按 finding 指名的 0 成本入口修，NONE 表示满足路径
+  **12 UNIQUE、12 FREE、26 NONE**：FREE 必须按 finding 指名的 0 成本入口修，NONE 表示满足路径
   不唯一、必须人工判断。`remediation` 与 `repair` 是两格，前者说“归谁修”，后者才是付费自救
   的准入（见[修复状态机](recovery.md)）。
 - 处置：先按 Review 中的 `repair` 分桶；UNIQUE 才运行 `--revise`，FREE 跑 finding 指名的

@@ -12,7 +12,7 @@ import { ChromeProvider } from '@/hooks/useChrome'
 import type { ApprovalDoc } from '@/types/approvals'
 import type { Finding } from '@/types/common'
 import type { Job, JobPreview, JobRequest } from '@/types/jobs'
-import type { ReviewResponse, Stage5Response } from '@/types/stages'
+import type { ChapterSegment, ReviewResponse, Stage5Response } from '@/types/stages'
 import { Stage5Screen } from './Stage5Screen'
 
 vi.mock('@/components/app/ScreenFrame', () => ({
@@ -95,11 +95,13 @@ async function seedScreen({
   reviewState = 'fresh',
   chapterFindings = [],
   bookFindings = [],
+  draftSegments,
 }: {
   trimAudit?: Stage5Response['trim_audit']
   reviewState?: ReviewResponse['review_state']
   chapterFindings?: Finding[]
   bookFindings?: Finding[]
+  draftSegments?: ChapterSegment[]
 }) {
   const [stage5, review, inbox, enums] = await Promise.all([
     mockApi.getStage5(SAMPLE_SID, 3),
@@ -134,6 +136,19 @@ async function seedScreen({
     legacy_incompatible: false,
     legacy_paths: [],
     trim_audit: trimAudit,
+    drafts: draftSegments
+      ? [{
+          chars: draftSegments.reduce((n, segment) => n + [...segment.text].length, 0),
+          budget_chars: 1200,
+          overlap_excl_verbatim: 0,
+          segments: draftSegments,
+          align: null,
+          align_rows: [],
+          freshness: 'fresh',
+          reason: 'match',
+          _provenance: { root_clean_sha1: '0'.repeat(40) },
+        }]
+      : stage5.drafts,
   }
   const reviewResponse: ReviewResponse = {
     ...review,
@@ -141,8 +156,6 @@ async function seedScreen({
     review_reasons: reviewState === 'fresh' ? [] : ['RULES 指纹已变化'],
     chapter: { ...review.chapter, findings: chapterFindings },
     book: bookFindings,
-    wontfix: chapterFindings.filter((row) => row.wontfix).length
-      + bookFindings.filter((row) => row.wontfix).length,
   }
   const stage5Spy = vi.spyOn(api, 'getStage5').mockResolvedValue(stage5Response)
   const reviewSpy = vi.spyOn(api, 'getReview').mockResolvedValue(reviewResponse)
@@ -185,6 +198,28 @@ function finishedJob(request: { kind: string; label: string }, id: string): Job 
 }
 
 describe('Stage5 人工审计闭环', () => {
+  it('阅读与编辑都从并行 Stage5 Draft.segments 取得正文', async () => {
+    const highlighted = {
+      ...finding('draft_evidence', 'Draft 证据', 'draft-evidence', 3),
+      evidence: ['来自 Draft 槽位'],
+    }
+    await seedScreen({
+      chapterFindings: [highlighted],
+      draftSegments: [
+        { slot: 's01', text: '来自 Draft 槽位的第一段。' },
+        { slot: 's02', text: '来自 Draft 槽位的第二段。' },
+      ],
+    })
+    renderScreen()
+
+    expect(await screen.findByText(/在成稿里命中 2 处/)).toBeVisible()
+    fireEvent.click(screen.getByRole('button', { name: '只看成稿' }))
+    expect(screen.getAllByText('来自 Draft 槽位', { selector: 'mark' })).toHaveLength(2)
+    fireEvent.click(screen.getByRole('button', { name: '改' }))
+    expect(screen.getByDisplayValue('来自 Draft 槽位的第一段。')).toBeVisible()
+    expect(screen.getByDisplayValue('来自 Draft 槽位的第二段。')).toBeVisible()
+  })
+
   it('展示 current trim audit，并经同源 preview + 专用 retain 路由销账', async () => {
     sessionStorage.clear()
     await seedScreen({
@@ -245,7 +280,6 @@ describe('Stage5 人工审计闭环', () => {
     const landedReview: ReviewResponse = {
       ...seeded.reviewResponse,
       book: [landedFinding],
-      wontfix: 1,
     }
     let phase: 'idle' | 'running' | 'terminal' = 'idle'
     seeded.reviewSpy.mockImplementation(async () =>

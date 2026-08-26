@@ -483,8 +483,11 @@ class Material:
     """一章的下发面。**`--dry-run` 与真跑共用这一份**（`R-11.8`）。"""
 
     blocks: list[str]
-    #: 这一章的**全部下发文字**——`invented_number` / `invented_name` 的参照集从它来。
-    given: str
+
+    @property
+    def given(self) -> str:
+        """这一章的全部下发文字；只是 ``blocks`` 的确定性投影。"""
+        return '\n\n'.join(self.blocks)
 
 
 def density_guidance(book: M.Book) -> str:
@@ -513,6 +516,8 @@ def build_material(entry: dict[str, Any], book: M.Book) -> Material:
     全书级重构策略只存在于 Stage4A 的规划脚手架中；正式计划和写作上下文都不保存，
     因而这里没有任何策略文本可误发给闭卷写手。
     """
+    basis = M.chapter_basis(entry, book.source_text)
+    assert basis.source_chars is not None
     lo, hi = target_band(entry)
     plo, phi = target_paragraphs(entry, book)
     nb = len(entry.get('scenes') or [])
@@ -526,7 +531,7 @@ def build_material(entry: dict[str, Any], book: M.Book) -> Material:
         f"排版是【{book.band_of.get('段落形态', '')}】，"
         f'章与章的密度和这种排版本身就是它的风格。\n'
         f"本章目标 **{lo}~{hi} 字**（约 {plo}~{phi} 个自然段；"
-        f"原章对应部分 {entry['source_chars']} 字），这是硬性要求。"
+        f"原章对应部分 {basis.source_chars} 字），这是硬性要求。"
         # 场景预算是 Stage4 编译结果；这里只显示章内均值帮助写手检查量级。
         + (f'\n· **本章共 {nb} 场，算下来平均每场 {lo // nb}~{hi // nb} 字**。'
            f'逐场的`【约 N 字】`才是准数——高于均值的场是重头、低于的快速推进，'
@@ -557,12 +562,12 @@ def build_material(entry: dict[str, Any], book: M.Book) -> Material:
     if (prev := prev_context(entry, book)):
         blocks.append(prev)
     rendered = [b for b in blocks if b]
-    return Material(blocks=rendered, given='\n\n'.join(rendered))
+    return Material(blocks=rendered)
 
 
 def build_user(mat: Material) -> str:
     """下发面 → user 消息。**与 stage6/stage7 同形。**"""
-    return '\n\n'.join(mat.blocks)
+    return mat.given
 
 
 def revise_user(mat: Material, prev_text: str, fix_lines: list[str]) -> str:

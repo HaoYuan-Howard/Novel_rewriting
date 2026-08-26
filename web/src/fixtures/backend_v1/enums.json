@@ -541,7 +541,6 @@
   "--names-only": "只产逐章可用名册（stage4），不产计划",
   "--identity": "恒等基线：拿原作自己的东西跑整套判据，看判据有没有把合法情况排除在外",
   "--apply-edit": "把人工改过的内容落成新的一轮",
-  "--rebuild-draft": "从 canonical stage5/chNN.json 重建 stage5/draft.md，0 次 LLM 调用",
   "--review-decisions": "应用带 actor、理由和 subject hash 乐观锁的 stage2 人工复核决策",
   "--wontfix": "把一条「这条我不修」记进 <stage>/wontfix.json，纯记账、不调用",
   "--retain-pretrim": "人工确认保留当前 trim audit 对应的原稿；只写 hash-bound resolution，0 次 LLM 调用（不是 0 人工成本）",
@@ -591,8 +590,7 @@
   "--emit-review-template": "",
   "--emit-review-workpack": "",
   "--adopt-residual": "重写 stage7/name_map.json，清旧审批并退休现有成书",
-  "--recheck": "刷新已有成稿的指标，并重拼 draft.md",
-  "--rebuild-draft": "从 canonical stage5/chNN.json 重建 stage5/draft.md",
+  "--recheck": "按当前判据刷新已有成稿的派生指标，并对账 trim 状态",
   "--revalidate": "必填 actor/reason；0 LLM 同轮重判并留不可变审计，合格的 .INVALID 才提升，旧稿归档进 _rounds/",
   "--apply-edit": "把人工稿落成新的一版，上一版仍可回看（stage0 在 revision 链上，其余归档进 _rounds/）",
   "--renormalize": "按当前契约重算代码派生字段与原文定位并写回",
@@ -886,7 +884,6 @@
     "--dry-run",
     "--recheck",
     "--revalidate",
-    "--rebuild-draft",
     "--apply-edit",
     "--revise",
     "--chapters",
@@ -895,8 +892,7 @@
     "--response-repair"
    ],
    "produces": [
-    "stage5/ch{nn}.json",
-    "stage5/draft.md"
+    "stage5/ch{nn}.json"
    ]
   },
   "stage5.review": {
@@ -1643,7 +1639,7 @@
    "extra": null,
    "paid": true,
    "free_flag": null,
-   "writes": "stage5/ch{nn}.json · stage5/draft.md",
+   "writes": "stage5/ch{nn}.json",
    "writes_disk": true,
    "needs_value": null,
    "required_inputs": []
@@ -1669,7 +1665,7 @@
    ],
    "paid": false,
    "free_flag": "--recheck",
-   "writes": "刷新已有成稿的指标，并重拼 draft.md",
+   "writes": "按当前判据刷新已有成稿的派生指标，并对账 trim 状态",
    "writes_disk": true,
    "needs_value": null,
    "required_inputs": []
@@ -1698,19 +1694,6 @@
   },
   {
    "kind": "stage5.write",
-   "label": "stage5 全书闭卷写作 --rebuild-draft",
-   "extra": [
-    "--rebuild-draft"
-   ],
-   "paid": false,
-   "free_flag": "--rebuild-draft",
-   "writes": "从 canonical stage5/chNN.json 重建 stage5/draft.md",
-   "writes_disk": true,
-   "needs_value": null,
-   "required_inputs": []
-  },
-  {
-   "kind": "stage5.write",
    "label": "stage5 全书闭卷写作 --apply-edit",
    "extra": [
     "--apply-edit"
@@ -1730,7 +1713,7 @@
    ],
    "paid": true,
    "free_flag": null,
-   "writes": "stage5/ch{nn}.json · stage5/draft.md",
+   "writes": "stage5/ch{nn}.json",
    "writes_disk": true,
    "needs_value": null,
    "required_inputs": []
@@ -1743,7 +1726,7 @@
    ],
    "paid": true,
    "free_flag": null,
-   "writes": "stage5/ch{nn}.json · stage5/draft.md",
+   "writes": "stage5/ch{nn}.json",
    "writes_disk": true,
    "needs_value": "只写这几个输出章（逗号分隔，如 `2,14`）；不给就补写所有缺的章",
    "required_inputs": []
@@ -1756,7 +1739,7 @@
    ],
    "paid": true,
    "free_flag": null,
-   "writes": "stage5/ch{nn}.json · stage5/draft.md",
+   "writes": "stage5/ch{nn}.json",
    "writes_disk": true,
    "needs_value": "结构化拒绝响应恢复模式；当前只接受 `agent`。可修复响应先隔离并停给外层受托 agent，同闸复验失败才继续采样",
    "required_inputs": []
@@ -1895,7 +1878,7 @@
    ],
    "paid": false,
    "free_flag": "--recheck",
-   "writes": "刷新已有成稿的指标，并重拼 draft.md",
+   "writes": "按当前判据刷新已有成稿的派生指标，并对账 trim 状态",
    "writes_disk": true,
    "needs_value": null,
    "required_inputs": []
@@ -2110,7 +2093,7 @@
    ],
    "paid": false,
    "free_flag": "--recheck",
-   "writes": "刷新已有成稿的指标，并重拼 draft.md",
+   "writes": "按当前判据刷新已有成稿的派生指标，并对账 trim 状态",
    "writes_disk": true,
    "needs_value": null,
    "required_inputs": []

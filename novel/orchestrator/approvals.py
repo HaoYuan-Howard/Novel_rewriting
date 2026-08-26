@@ -6,7 +6,7 @@ from contracts.artifacts import (
     STAGE2_CHAPTER_BLUEPRINTS,
     STAGE2_GLOBAL_GROUNDING, STAGE2_GLOBAL_REVIEW, STAGE3_STYLE_GROUNDING,
     STAGE4_PLAN_CHAPTERS,
-    STAGE5_BOOK_DRAFT, STAGE6_HOOK, STAGE7_NAME_MAP, artifact_rel,
+    STAGE6_HOOK, STAGE7_NAME_MAP, artifact_rel,
 )
 
 import hashlib
@@ -387,7 +387,6 @@ _GATE_ARTIFACTS = {
     's2': (STAGE2_GLOBAL_GROUNDING, STAGE2_CHAPTER_BLUEPRINTS, STAGE2_GLOBAL_REVIEW),
     's3': (STAGE3_STYLE_GROUNDING,),
     's4': (STAGE4_PLAN_CHAPTERS,),
-    's5': (STAGE5_BOOK_DRAFT,),
     's6': (STAGE6_HOOK,),
     's7': (STAGE7_NAME_MAP,),
 }
@@ -759,7 +758,7 @@ def _stage5_subject_rels(
     return [
         artifact_rel('stage5.chapter', nn=ordinal)
         for ordinal in planned
-    ] + [STAGE5_BOOK_DRAFT, review.review_rel]
+    ] + [review.review_rel]
 
 
 def _proof_for_gate(
@@ -1174,7 +1173,7 @@ def backfill_from_disk(
 
     这是显式的人操作，不在 GET 时静默发生。普通逐屏验收仍走 `approve_gate`；
     本入口只在对应正式产物齐备且没有 `.INVALID` 时补章。Stage5 只认
-    canonical `stage5/chNN.json` + `draft.md` + fresh Review。
+    全部 canonical `stage5/chNN.json` + fresh Review。
     """
     with _LOCK:
         migrated = False
@@ -1284,7 +1283,6 @@ def _has_stage5_work(novel_dir: Path) -> bool:
     return bool(
         state.stage5_legacy_paths(novel_dir)
         or state.chapters_done(novel_dir)
-        or (stage5 / 'draft.md').is_file()
         or any(stage5.glob('ch*.INVALID.json'))
         or any(stage5.glob('ch*.rejected.json'))
     )

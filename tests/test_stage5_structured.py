@@ -12,7 +12,9 @@ from pydantic import ValidationError
 
 from contracts.schema.evaluation import TrimAudit
 from contracts.schema.stage4 import CtxChapter, FactRef, PlanGoal, WriterContext
-from contracts.schema.stage5 import ChapterResponse
+import contracts.schema as schema_exports
+import contracts.schema.stage5 as stage5_schema
+from contracts.schema.stage5 import ChapterResponse, ChapterSegment
 from novel.errors import RefusedByStructure
 from novel.llm.privacy import (
     PromptPrivateLeak, assert_prompt_private_absent, private_tokens,
@@ -39,6 +41,9 @@ def test_writer_response_slots_are_complete_unique_and_canonicalised():
             {'slot': 's01', 'text': '前段。'},
         ],
     })
+    assert all(isinstance(segment, ChapterSegment) for segment in response.segments)
+    assert not hasattr(stage5_schema, 'GeneratedSegment')
+    assert not hasattr(schema_exports, 'GeneratedSegment')
     assert write._response_problem(
         response, ChatResponse(content='', finish_reason='stop'), entry) is None
     assert write._ordered_segments(response, entry) == [

@@ -4,7 +4,7 @@
 book_overlap.py —— **成书**与源章原文的 20 字窗口重合率，逐章报读数。
 
 【为什么需要它：stage5 那把尺子量不到交付物】
-`stage5/<mode>/chNN.json` 里的 `overlap_excl_verbatim` 算在**换名之前**，
+`stage5/chNN.json` 里的 `overlap_excl_verbatim` 算在**换名之前**，
 而用户读到的是 `stage7/<书名>_rewriting.txt` ——**换名之后**那一份。
 两者之间隔着 `stage7.rename`，而 stage7 侧唯一带 overlap 字样的读数
 （`rn_overlap`）量的是**人名映射的字面重叠**，与文本相似度无关。

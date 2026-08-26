@@ -209,6 +209,100 @@ def test_stage5_plan_uses_one_authorized_whole_book_command(
     assert '--mode' not in argv and '--deep' not in argv and '--shallow-rest' not in argv
 
 
+def test_runnable_stage5_write_keeps_zero_cost_review_in_the_same_snapshot(
+        queue_base, monkeypatch):
+    """Review 在 writer 落盘前 fresh，不能回答落盘后的主体。"""
+    stage5 = SimpleNamespace(stage='stage5', artifacts=[], review_state='fresh')
+    monkeypatch.setattr(
+        Q, 'nodes_up_to', lambda _until: ['stage5.write', 'stage5.review'])
+    monkeypatch.setattr(
+        Q.st, 'overview', lambda _base, _sid: SimpleNamespace(stages=[stage5]))
+
+    def verdict(_overview, node):
+        if node == 'stage5.write':
+            return Q.st.RESUME_RUN, '计划仍缺 canonical 章'
+        return Q.st.RESUME_SKIP, 'Review 当前绑定旧 canonical 主体'
+
+    monkeypatch.setattr(Q.st, 'resume_verdict', verdict)
+    monkeypatch.setattr(Q.approvals, 'writing_is_current', lambda _base, _sid: True)
+
+    todo, blocked = Q.plan_book(queue_base, 'book-a', until_stage='stage5')
+
+    assert blocked == []
+    assert [item.node for item in todo] == ['stage5.write', 'stage5.review']
+    assert todo[0].steps and any(step.paid for step in todo[0].steps)
+    assert todo[1].steps and all(not step.paid for step in todo[1].steps)
+    assert '新 canonical 主体' in todo[1].why
+
+
+def test_blocked_stage5_write_keeps_review_behind_the_same_stuck_gate(
+        queue_base, monkeypatch):
+    """writer 没有付费授权时，Review 仍在同一 stuck 之后，不偷跑。"""
+    stage5 = SimpleNamespace(stage='stage5', artifacts=[], review_state='fresh')
+    monkeypatch.setattr(
+        Q, 'nodes_up_to', lambda _until: ['stage5.write', 'stage5.review'])
+    monkeypatch.setattr(
+        Q.st, 'overview', lambda _base, _sid: SimpleNamespace(stages=[stage5]))
+
+    def verdict(_overview, node):
+        if node == 'stage5.write':
+            return Q.st.RESUME_RUN, '计划仍缺 canonical 章'
+        return Q.st.RESUME_SKIP, 'Review 当前 fresh'
+
+    monkeypatch.setattr(Q.st, 'resume_verdict', verdict)
+    monkeypatch.setattr(Q.approvals, 'writing_is_current', lambda _base, _sid: False)
+
+    todo, blocked = Q.plan_book(queue_base, 'book-a', until_stage='stage5')
+
+    assert todo == []
+    assert [item.node for item in blocked] == ['stage5.write', 'stage5.review']
+    assert all(item.waiting_on == Q.WAITING_ON_WRITING_APPROVAL for item in blocked)
+
+
+@pytest.mark.parametrize('verdict', [Q.st.RESUME_REDO, Q.st.RESUME_UNKNOWN])
+def test_queue_never_turns_redo_or_unknown_into_a_runnable_paid_command(
+        queue_base, monkeypatch, verdict):
+    """状态四态必须走到队列；一句“停下”不能旁边仍带着可执行 argv。"""
+    monkeypatch.setattr(Q, 'nodes_up_to', lambda _until: ['stage5.write'])
+    monkeypatch.setattr(
+        Q.st, 'overview', lambda _base, _sid: SimpleNamespace(stages=[]))
+    monkeypatch.setattr(
+        Q.st, 'resume_verdict',
+        lambda _overview, _node: (verdict, '当前状态不能安全自动续跑'))
+    monkeypatch.setattr(Q.approvals, 'writing_is_current', lambda _base, _sid: True)
+
+    todo, blocked = Q.plan_book(queue_base, 'book-a', until_stage='stage5')
+
+    assert todo == [] and len(blocked) == 1
+    assert blocked[0].waiting_on == Q.WAITING_ON_RESUME_DECISION
+    assert blocked[0].steps == []
+    assert verdict.upper() in blocked[0].why
+
+
+@pytest.mark.parametrize('writing_current', (True, False))
+def test_stage5_live_invalid_stops_at_the_zero_cost_revalidation_entry(
+        queue_base, monkeypatch, writing_current):
+    """默认 writer 只补缺章，不能拿一条无效付费命令冒充 INVALID 恢复。"""
+    stage5 = SimpleNamespace(
+        stage='stage5', artifacts=[SimpleNamespace(invalid=True)],
+        review_state='missing')
+    monkeypatch.setattr(Q, 'nodes_up_to', lambda _until: ['stage5.write'])
+    monkeypatch.setattr(
+        Q.st, 'overview', lambda _base, _sid: SimpleNamespace(stages=[stage5]))
+    monkeypatch.setattr(
+        Q.st, 'resume_verdict',
+        lambda _overview, _node: (Q.st.RESUME_RUN, '有 live INVALID'))
+    monkeypatch.setattr(
+        Q.approvals, 'writing_is_current', lambda _base, _sid: writing_current)
+
+    todo, blocked = Q.plan_book(queue_base, 'book-a', until_stage='stage5')
+
+    assert todo == [] and len(blocked) == 1
+    assert blocked[0].waiting_on == Q.WAITING_ON_INBOX
+    assert blocked[0].steps == []
+    assert '--revalidate' in blocked[0].why
+
+
 def test_stage5_plan_blocks_without_current_writing_approval(
         queue_base, monkeypatch):
     """默认全书只是命令语义，不是花钱授权。"""
@@ -227,16 +321,18 @@ def test_stage5_plan_blocks_without_current_writing_approval(
     assert '不会从默认路径反推同意花钱' in item.why
 
 
+@pytest.mark.parametrize('writing_current', (True, False))
 def test_stage5_plan_blocks_paid_writing_when_existing_review_is_not_fresh(
-        queue_base, monkeypatch):
-    stage5 = SimpleNamespace(stage='stage5', review_state='stale')
+        queue_base, monkeypatch, writing_current):
+    stage5 = SimpleNamespace(stage='stage5', artifacts=[], review_state='stale')
     monkeypatch.setattr(Q, 'nodes_up_to', lambda _until: ['stage5.write'])
     monkeypatch.setattr(
         Q.st, 'overview', lambda _base, _sid: SimpleNamespace(stages=[stage5]))
     monkeypatch.setattr(
         Q.st, 'resume_verdict',
         lambda _overview, _node: (Q.st.RESUME_RUN, 'RULES 指纹已变'))
-    monkeypatch.setattr(Q.approvals, 'writing_is_current', lambda _base, _sid: True)
+    monkeypatch.setattr(
+        Q.approvals, 'writing_is_current', lambda _base, _sid: writing_current)
 
     todo, blocked = Q.plan_book(queue_base, 'book-a', until_stage='stage5')
     assert todo == [] and len(blocked) == 1

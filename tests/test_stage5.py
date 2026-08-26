@@ -683,7 +683,7 @@ def test_secret_literal_leak_uses_the_authoritative_reveal_timeline(book, entry)
     fact = '她其实一直都知道那三笔钱是从公司账上挪出来的'
     synthetic = M.Book(
         title=book.title, ctx=book.ctx, measurable=book.measurable,
-        source_text=book.source_text,
+        source_text={**book.source_text, 9: book.source_text[1]},
         secrets=[{
             'secret_id': 'secret_x', 'fact': fact,
             'knowledge_events': [], 'setup': {'kind': 'cold'},
@@ -691,7 +691,7 @@ def test_secret_literal_leak_uses_the_authoritative_reveal_timeline(book, entry)
         }],
     )
     before = dict(entry, output_ordinal=1)
-    at_reveal = dict(entry, output_ordinal=9)
+    at_reveal = dict(entry, output_ordinal=9, from_source_ordinals=[9])
     body = _clean_body(book, entry) + fact + '。'
     assert 'secret_leak' in _fire(body, before, synthetic)
     assert 'secret_leak' not in _fire(body, at_reveal, synthetic)
@@ -840,6 +840,28 @@ def test_the_downsend_band_is_the_very_one_the_judges_use(book, entry):
     assert f'**{lo}~{hi} 字**' in mat.given
 
 
+def test_writer_context_v4_duplicates_are_checked_against_one_derived_basis(book, entry):
+    """三格继续序列化，但运行时只认章序、Stage1 正文与场景预算。"""
+    basis = M.chapter_basis(entry, book.source_text)
+    assert basis.source_ordinal == entry['output_ordinal']
+    assert basis.source_text == book.source_text[entry['output_ordinal']]
+    assert basis.source_chars == len(book.source_text[entry['output_ordinal']])
+    assert basis.budget_chars == sum(scene['budget_chars'] for scene in entry['scenes'])
+    M.assert_writer_context_v4(entry, basis)
+
+    bad_values = {
+        'from_source_ordinals': [basis.source_ordinal + 1],
+        'source_chars': basis.source_chars + 1,
+        'budget_chars': basis.budget_chars + 1,
+    }
+    for field, bad in bad_values.items():
+        drifted = {**entry, field: bad}
+        # 派生结果不许反过来读取这三份副本，否则「对账」永远会自证相等。
+        assert M.chapter_basis(drifted, book.source_text) == basis
+        with pytest.raises(ValueError, match=field):
+            M.assert_writer_context_v4(drifted, basis)
+
+
 def test_the_secret_ids_never_reach_the_writer(book, entry):
     """秘密边界由 Stage2 时间线执行；写手面只接收已开闸的人话事实。"""
     given = prompts.build_material(entry, book).given
@@ -886,17 +908,24 @@ def test_paid_writer_prompt_excludes_global_source_spans(monkeypatch, tmp_path):
     attested = ' '.join(
         str(row.get('canonical') or '')
         for row in ((grounding.get('entities') or {}).get('characters') or {}).values())
+    source_text = {
+        ordinal: text + ('\n' + attested if ordinal == 1 else '')
+        for ordinal, text in seed.source_text.items()
+    }
+    writer_context = copy.deepcopy(seed.ctx)
+    for entry in writer_context['chapters']:
+        entry['source_chars'] = len(source_text[entry['output_ordinal']])
     stored = {
         review.MAIN_TEXT: SimpleNamespace(root=[
             SimpleNamespace(
                 chapter_ordinal=ordinal,
-                text=text + ('\n' + attested if ordinal == 1 else ''),
+                text=text,
             )
-            for ordinal, text in seed.source_text.items()
+            for ordinal, text in source_text.items()
         ]),
         review.GLOBAL_GROUNDING: Dumped(grounding),
         review.STYLE_GROUNDING: Dumped({'measurable': {'body': seed.measurable}}),
-        review.WRITER_CONTEXT: Dumped(seed.ctx),
+        review.WRITER_CONTEXT: Dumped(writer_context),
     }
 
     class Store:
