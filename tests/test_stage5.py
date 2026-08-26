@@ -586,6 +586,50 @@ def test_check_only_overlays_a_wontfix_written_after_the_latest_review(monkeypat
     assert finding_row.findings[0].actionable is False
 
 
+def test_review_material_denominators_follow_current_writer_context_scenes():
+    """全书汇总必须读 Stage4 v2 的 ``scenes``，不能退回已下线的 ``segments``。"""
+    from types import SimpleNamespace
+
+    from contracts.schema.stage5 import Review
+    from novel.stages.stage5 import review
+
+    artifact = Review.model_construct(
+        sources=None, judged={}, chapters=[], book=[],
+        baselines={
+            'verbatim_missing': '0/0',
+            'keep_value_missing': '0/0',
+            'must_appear_missing': '0/0',
+            '_fact_landing': '0/0 事实有落点',
+        },
+        baselines_identity={
+            'verbatim_missing': '0/0',
+            'keep_value_missing': '0/0',
+            'must_appear_missing': '0/0',
+        },
+    )
+    current_ctx = {
+        'chapters': [{'scenes': [{
+            'verbatim': ['逐字保留'],
+            'keep_value': ['保留 30 岁'],
+            'must_appear': ['旧钥匙'],
+        }]}],
+    }
+
+    outcomes = review._outcomes(
+        artifact, SimpleNamespace(ctx=current_ctx, secrets=[]))
+
+    by_rule = {row.rule: row for row in outcomes}
+    assert by_rule['verbatim_missing'].unver_why is None
+    assert by_rule['keep_value_missing'].unver_why is None
+    assert by_rule['must_appear_missing'].unver_why is None
+    assert not by_rule['verbatim_missing'].findings
+    assert not by_rule['keep_value_missing'].findings
+    assert not by_rule['must_appear_missing'].findings
+    assert by_rule['verbatim_missing'].scanned.startswith('1 句【原样写入】')
+    assert by_rule['keep_value_missing'].scanned.startswith('1 处【数值不得改动】')
+    assert by_rule['must_appear_missing'].scanned.startswith('1 个【必须在场】')
+
+
 def test_keep_value_missing_compares_the_value_not_the_literal(book, entry):
     """⭐⭐ **比值不比字面**：下发面「30岁」、成稿「三十岁」＝**满足**。
 

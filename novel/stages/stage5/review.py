@@ -729,9 +729,9 @@ def _outcomes(rev: Review, book: M.Book | None) -> list:
     for rule_, field_, what_ in (('verbatim_missing', 'verbatim', '句【原样写入】'),
                                  ('keep_value_missing', 'keep_value', '处【数值不得改动】'),
                                  ('must_appear_missing', 'must_appear', '个【必须在场】')):
-        n_mat = sum(len(seg.get(field_) or [])
+        n_mat = sum(len(scene.get(field_) or [])
                     for c in ((book.ctx.get('chapters') if book else None) or [])
-                    for seg in (c.get('segments') or []))
+                    for scene in (c.get('scenes') or []))
         scanned[rule_] = f'{n_mat} {what_}的材料（{scanned.get(rule_, "?")}）'
         if not n_mat:
             blind[rule_] = (
