@@ -8,7 +8,7 @@
 >
 > 本包对应成书 SHA1：`<sha1 或不适用>`
 >
-> 本次运行坐标：`started_at=<epoch 秒>`；`start_code_version=<完整指纹>`
+> 本次运行坐标：`started_at=<epoch 秒>`；`start_code_version=<完整指纹>`；`run_ids=<精确集合>`
 
 ## 1. 用户终审入口
 
@@ -117,10 +117,12 @@
 
 ## 6. 调用与耗时账本
 
-口径：`<base>/_service/ledger.jsonl` 是最终成本的**唯一权威源**。本次会话先按 sid、
-`outcome == "ok"` 与 `started_at` 切片；同 SID 的历史累计另表披露，二者不相加。
+口径：`<base>/_service/ledger.jsonl` 是最终成本的**唯一权威源**。`started_at`
+只圈定本次 beacon，再以其中的 `run_id + node` 精确选账；缺 `run_id` 的旧行标作
+`legacy/ungrouped`，不按时间窗口猜进本次。同 SID 历史累计另表披露，二者不相加。
 `cached == true` 单列缓存次数，不重复累计其携带 token；不把 `_provenance.usage`、
-日志或历史报告混加，不写金额。
+日志或历史报告混加，不写金额。所有非缓存 wire 均按 `outcome` 披露；`error` 表示
+请求已经上线，但供应商是否计费未知，必须单列，不能删掉也不能冒充确定实付。
 
 [[operator-ledger:start]]
 <由 sync_review_evidence.py 写入本次会话与同 SID 累计两张表>

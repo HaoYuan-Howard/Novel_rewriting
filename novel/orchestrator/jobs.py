@@ -39,6 +39,7 @@ from contracts.invariants import LEGACY_STAGE5_MODES
 from contracts.schema.orchestration import (
     JobEvent, JobRecord, JobStart, ProgressEvent, Step,
 )
+from novel import run_identity
 from novel.appendlog import append_line
 from novel.cli import exit_codes as X
 from novel.cli.exit_codes import CRASH
@@ -518,7 +519,9 @@ def _run_steps(base: str | os.PathLike[str], job_id: str,
     p = log_path(base, job_id)
     p.parent.mkdir(parents=True, exist_ok=True)
     rc = 0
-    env = child_env()
+    # 一个 job 里的 producer + follow-check 是同一次可恢复运行；
+    # 两步必须继承同一 job_id，且不污染长驻服务进程的环境。
+    env = run_identity.env_with_run_id(job_id, child_env())
     with open(p, 'ab') as log:
         for index, step in enumerate(plan):
             event = JobEvent(job_id=job_id, kind='step',
@@ -534,7 +537,8 @@ def _run_steps(base: str | os.PathLike[str], job_id: str,
 
 
 def _append_progress(base: str | os.PathLike[str], sid: str | None, node: str,
-                     phase: str, *, exit_code: int | None = None) -> None:
+                     phase: str, *, run_id: str,
+                     exit_code: int | None = None) -> None:
     """把 UI / 队列作业投影进与 agent CLI 共用的进度信标。
 
     局部 import 避开模块环：`beacon` 复用本模块的 `service_dir`，而作业执行器
@@ -546,7 +550,7 @@ def _append_progress(base: str | os.PathLike[str], sid: str | None, node: str,
     from novel.orchestrator import beacon
 
     beacon.append(base, ProgressEvent(
-        ts=int(time.time()), sid=sid, node=node, phase=phase,
+        ts=int(time.time()), sid=sid, run_id=run_id, node=node, phase=phase,
         exit_code=exit_code))
 
 
@@ -578,7 +582,7 @@ def run(base: str | os.PathLike[str], node: str, sid: str | None, flags: Sequenc
             job_id=job_id, kind='started', ts=int(time.time()),
             start=start_meta)
         append_event(base, start_event)
-        _append_progress(base, sid, node, 'start')
+        _append_progress(base, sid, node, 'start', run_id=job_id)
         try:
             rc = _run_steps(base, job_id, plan, spawn)
         except BaseException:
@@ -586,11 +590,12 @@ def run(base: str | os.PathLike[str], node: str, sid: str | None, flags: Sequenc
             # 停在 running，作业账也只能等服务重启后猜成 unknown。
             append_event(base, JobEvent(
                 job_id=job_id, kind='ended', ts=int(time.time()), exit_code=CRASH))
-            _append_progress(base, sid, node, 'end', exit_code=CRASH)
+            _append_progress(
+                base, sid, node, 'end', run_id=job_id, exit_code=CRASH)
             raise
         append_event(base, JobEvent(
             job_id=job_id, kind='ended', ts=int(time.time()), exit_code=rc))
-        _append_progress(base, sid, node, 'end', exit_code=rc)
+        _append_progress(base, sid, node, 'end', run_id=job_id, exit_code=rc)
         return next(r for r in fold(read_events(base)) if r.job_id == job_id)
     finally:
         registry.release(key, job_id)
@@ -645,7 +650,7 @@ def start(
             job_id=job_id, kind='started', ts=int(time.time()),
             start=start_meta)
         append_event(base, start_event)
-        _append_progress(base, sid, node, 'start')
+        _append_progress(base, sid, node, 'start', run_id=job_id)
     except Exception:
         registry.release(key, job_id)
         raise
@@ -664,7 +669,8 @@ def start(
                 append_event(base, JobEvent(
                     job_id=job_id, kind='ended', ts=int(time.time()),
                     exit_code=rc))
-                _append_progress(base, sid, node, 'end', exit_code=rc)
+                _append_progress(
+                    base, sid, node, 'end', run_id=job_id, exit_code=rc)
             finally:
                 registry.release(key, job_id)
                 # 留给 `wait()` 真正 join 后再移除。worker 自己先 pop 会制造一个
@@ -682,7 +688,8 @@ def start(
         registry.release(key, job_id)
         append_event(base, JobEvent(
             job_id=job_id, kind='ended', ts=int(time.time()), exit_code=CRASH))
-        _append_progress(base, sid, node, 'end', exit_code=CRASH)
+        _append_progress(
+            base, sid, node, 'end', run_id=job_id, exit_code=CRASH)
         raise
     return next(
         record for record in fold(read_events(base), live=registry.live())

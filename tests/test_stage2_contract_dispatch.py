@@ -25,6 +25,7 @@ from novel.config import load_config
 from novel.llm.prompts import with_json_shape
 from novel.llm.transport import ChatResponse
 from novel.stages.stage2 import extract, prompts
+from novel.stages.stage2.character_refs import blueprint_character_prompt_inventory
 from novel.stages.stage2.compile_v2 import (
     canonical_ir_projection_refs, canonical_ir_projection_v31,
 )
@@ -49,15 +50,10 @@ def test_the_registry_covers_exactly_the_declared_architectures():
             'DeepSeek V4 只支持 json_object——这不是 constrained decoding，标签要诚实'
 
 
-def test_only_ir31_prefers_normal_content_to_reasoning_channel_salvage():
-    """v3.1 只延迟采纳一次；不能为一章 A/B 反证全局关掉客户端恢复路。"""
-    assert CONTRACTS['extraction-ir-v3.1'] \
-        .prefers_content_over_reasoning_salvage
-    assert all(
-        not spec.prefers_content_over_reasoning_salvage
-        for name, spec in CONTRACTS.items()
-        if name != 'extraction-ir-v3.1'
-    )
+def test_all_stage2_contracts_adopt_valid_reasoning_salvage_immediately():
+    """Stage2 不为一份已过完整契约的答案再付一次同请求重采。"""
+    assert all(not spec.prefers_content_over_reasoning_salvage
+               for spec in CONTRACTS.values())
 
 
 def test_the_default_is_ir31_and_only_two_contracts_are_selectable():
@@ -109,11 +105,11 @@ def test_build_prompts_under_the_v31_arm_emits_the_v31_request_bytes(
     assert system == with_json_shape(prompts.BLUEPRINT_SYS_V31,
                                      prompts.BLUEPRINT_HINT_V31)
     characters = gg.model_dump(by_alias=True)['entities']['characters']
-    from novel.stages.stage2.compile_v2 import visible_character_refs
-    visible = visible_character_refs(characters, main_text())
+    inventory = blueprint_character_prompt_inventory(characters, main_text())
     assert user == extract.build_blueprint_user(
-        ctx.title, main_text(), (1,), characters=characters,
-        character_refs=visible[1],
+        ctx.title, main_text(), (1,),
+        past_names=inventory['past_attested_surfaces'][1],
+        character_refs=inventory['visible_character_refs'][1],
         hinge_candidates=extract.hinge_candidates_by_chapter(main_text())[1])
 
 
@@ -295,8 +291,8 @@ def test_scaffolded_single_chains_use_one_high_shape_per_chapter_and_land(
                for blueprint in stored.blueprints)
 
 
-def test_ir31_resamples_reasoning_only_blueprints(monkeypatch):
-    """合法 reasoning 救回稿留作后备，并优先取同档正常正文。
+def test_ir31_adopts_valid_reasoning_only_blueprint_in_one_wire(monkeypatch):
+    """合法 reasoning 救回稿立即采用，不再为正常 content 多发一次 wire。
 
     这里走 `request_blueprints` 的真实 validator 接线，防止只在注册表加了一格、
     首轮或定向修复却忘记消费；调用数只统计目标章本身。
@@ -315,31 +311,27 @@ def test_ir31_resamples_reasoning_only_blueprints(monkeypatch):
     by_ordinal = _scaffolded_responses()
     ordinal = min(by_ordinal)
     salvaged = copy.deepcopy(by_ordinal[ordinal])
-    normal = copy.deepcopy(by_ordinal[ordinal])
     salvaged['beats'][0]['fact_atoms'][0]['claim'] = '救回稿事实'
-    normal['beats'][0]['fact_atoms'][0]['claim'] = '正文稿事实'
 
-    def respond(_req, index):
-        payload = {'blueprints': [salvaged if index == 0 else normal]}
-        if index == 0:
-            return ChatResponse(
-                content='',
-                reasoning=json.dumps(payload, ensure_ascii=False),
-                finish_reason='stop',
-                usage={'prompt_tokens': 10, 'completion_tokens': 20,
-                       'reasoning_tokens': 20},
-                model='test-model',
-            )
-        return _ok(payload)
+    def respond(_req, _index):
+        return ChatResponse(
+            content='',
+            reasoning=json.dumps(
+                {'blueprints': [salvaged]}, ensure_ascii=False),
+            finish_reason='stop',
+            usage={'prompt_tokens': 10, 'completion_tokens': 20,
+                   'reasoning_tokens': 20},
+            model='test-model',
+        )
 
     ctx = _ctx(book, 'stage2.blueprint')
     client, transport = _client(ctx, respond)
     batch = extract.request_blueprints(ctx, client, chapters=(ordinal,))
 
     assert batch['errors'] == [] and batch['scope_violations'] == []
-    assert len(transport.calls) == 2
+    assert len(transport.calls) == 1
     assert batch['raw_blueprints'][0]['beats'][0]['fact_atoms'][0]['claim'] == \
-        '正文稿事实'
+        '救回稿事实'
 
 
 def test_scaffolded_gate_reuses_the_compilers_tail_nudge_cap(monkeypatch):

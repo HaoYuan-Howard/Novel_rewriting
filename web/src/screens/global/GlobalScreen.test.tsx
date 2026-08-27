@@ -4,6 +4,7 @@ import { fireEvent, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup } from '@testing-library/react'
 import { renderRoute } from '@/test/render'
+import type { ApprovalDoc } from '@/types/approvals'
 import type { GlobalFactEvidence, Stage2Global } from '@/types/stages'
 import { GlobalScreen } from './GlobalScreen'
 
@@ -105,6 +106,60 @@ afterEach(() => {
 })
 
 describe('GlobalScreen disclosure', () => {
+  it('renders the server-provided blueprint continuation while global review is pending', async () => {
+    const blueprint = {
+      kind: 'stage2.blueprint',
+      label: '生成 stage2 逐章骨架；可与全局人工复核并行',
+      extra: null,
+    }
+    const approvals: ApprovalDoc = {
+      v: 4,
+      sid: 'book-1',
+      gate: { s0: true, s1: true, s2: false, s4: false, s5: false, s6: false, s7: false },
+      seen: { read: false, global: true },
+      writing: false,
+      structure: {
+        state: 'unavailable', current_subject_sha256: null,
+        current_decision: null, history: [],
+      },
+      spawns: { s1: [blueprint] },
+    }
+    vi.spyOn(api, 'getApprovals').mockResolvedValue(approvals)
+    vi.spyOn(api, 'getGlobal').mockResolvedValue(globalView())
+    vi.spyOn(api, 'getGlobalReview').mockRejectedValue(
+      new ApiError('nosample', '/global-review', { scope: 'book' }),
+    )
+    vi.spyOn(api, 'getEnums').mockResolvedValue({
+      hinge_kinds: [],
+      fact_atom_kinds: [],
+      fact_atom_obligations: [],
+      nonbody_kinds: [],
+      time_layers: [],
+      hinge_groups: {},
+      style_words: [],
+      invent: { allow: [], forbid: [], principle: '' },
+      job_kinds: { 'stage2.blueprint': { label: blueprint.label, paid: true } },
+      structure_modes: [],
+      structure_change_kinds: [],
+      structure_approval_decisions: [],
+      structure_approval_states: [],
+      actions: [{
+        ...blueprint,
+        paid: true,
+        free_flag: null,
+        writes_disk: true,
+      }],
+      spoiler_disclosure: disclosure,
+    })
+
+    renderRoute(<GlobalScreen />, '/n/book-1/global')
+
+    const continuation = await screen.findByRole('group', { name: '逐章骨架并行生成' })
+    expect(continuation).toHaveTextContent('全局复核不再挡住逐章骨架')
+    expect(continuation).toHaveTextContent('Stage4 会等当前全局复核全部 PASS')
+    expect(screen.getByRole('button', { name: '继续下一步' })).toBeVisible()
+  })
+
   it('is present while stage2 is loading', async () => {
     vi.spyOn(api, 'getEnums').mockResolvedValue({
       hinge_kinds: [],

@@ -1,8 +1,9 @@
 /**
  * 闸门 —— 流程的核心，不是装饰。
  *
- *   stage0 剔番外 ─► stage1 切分 ─► stage2（全局设定 + 原文↔骨架，两屏都要看过）
- *                   ─► stage4 计划 ─► Stage5 写作授权 ─► stage5 ─► stage6 ─► stage7
+ *   stage0 剔番外 ─► stage1 切分 ─► stage2 global ─► blueprint
+ *                                      └─ 人工复核 ─┘ ─► stage4 计划
+ *                   ─► Stage5 写作授权 ─► stage5 ─► stage6 ─► stage7
  *
  * 文案与禁用条件源自历史原型 gateVals()，现役语义见 web/DELIVERY.md（§3 路由 / §7 UI 硬规则）。
  *
@@ -59,12 +60,12 @@ export function resolveGate(screen: ScreenName, doc: ApprovalDoc): GateView | nu
         done,
         blocked: !g.s0,
         title: done ? '切分已确认' : g.s0 ? '这一刀切对了吗？' : '番外还没剔，切了也要重切',
-        note: '确认后发起 stage2（全局设定 + 逐章骨架）。机械风格由 Stage5/6 从 Stage1 文本即时计算。',
+        note: '确认后先发起全局设定；全局产物落盘后，服务端会下发逐章骨架 continuation。人工复核可与骨架生成并行。',
         chips: [{ ok: g.s0, label: 'stage0 剔番外' }],
         btn: done ? '已确认' : g.s0 ? '确认切分' : '先过 stage0 剔除番外',
         blockedReason: 'stage0 还没确认删除范围。番外没剔就切分，切完还要重切。',
         doneNote: done
-          ? 'stage2 已发起；后续机械风格无需单独产物或人工确认。'
+          ? 'stage2 已发起；若服务端仍下发 continuation，可继续生成下一份正式产物。'
           : null,
       }
 
@@ -75,7 +76,7 @@ export function resolveGate(screen: ScreenName, doc: ApprovalDoc): GateView | nu
         done,
         blocked: !both,
         title: done ? 'stage2 已确认' : 'stage2 两屏都要过一遍',
-        note: 'stage2 = 全局设定 + 逐章骨架。确认后发起 stage4 重构计划。',
+        note: 'stage2 = 全局设定 + 逐章骨架。全局逐项复核当前且全部 PASS、两屏都看过后，才可发起 stage4。',
         chips: [
           { ok: seen.global, label: '全局设定' },
           { ok: seen.read, label: '原文↔骨架' },

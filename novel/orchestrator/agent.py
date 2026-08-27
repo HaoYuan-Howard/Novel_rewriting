@@ -50,7 +50,7 @@ from contracts.schema.orchestration import (
     AgentDeliveryOutcome, AgentPending, AgentQueueView, AgentRejected, AgentRunEvent,
     AgentRunRecord, AgentRunStart,
 )
-from novel import paths, prov
+from novel import paths, prov, run_identity
 from novel.appendlog import append_line
 from novel.cli.exit_codes import CRASH
 from novel.errors import UpstreamMissing
@@ -674,7 +674,8 @@ def start(base: str | os.PathLike[str], sid: str, *, authorized: bool,
                 fh.write(('$ ' + shell_line(argv) + '\n').encode('utf-8'))
                 fh.flush()
                 rc = (spawn or _default_spawn(run_id))(
-                    argv, str(REPO_ROOT), dict(os.environ), fh)
+                    argv, str(REPO_ROOT),
+                    run_identity.env_with_run_id(run_id, os.environ), fh)
         except BaseException:                   # noqa: BLE001 —— 崩了也要记 ended
             import traceback
             with open(run_log_path(base, run_id), 'ab') as fh:

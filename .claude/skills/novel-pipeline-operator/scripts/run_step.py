@@ -18,15 +18,25 @@ ROOT = Path(__file__).resolve().parents[4]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from novel import paths, prov  # noqa: E402
+from novel import paths, prov, run_identity  # noqa: E402
 from novel.cli import exit_codes as X  # noqa: E402
 from novel.errors import TerminalState  # noqa: E402
 from novel.orchestrator.nodes import build_steps, shell_line  # noqa: E402
 
 
-_VALUE_OPTIONS = ('--base', '--sid', '--expect-code-version', '--evidence-json')
+_VALUE_OPTIONS = (
+    '--base', '--sid', '--expect-code-version', '--evidence-json', '--run-id',
+)
 _EVIDENCE_SCHEMA = 'novel-operator-step-evidence-v1'
 _SECRET_MARKER = re.compile(r'api[_-]?key|deepseek_api_key', re.IGNORECASE)
+
+
+def _run_id_arg(value: str) -> str:
+    """在 argparse 边界拒绝坏 run_id，预览与执行使用同一把尺子。"""
+    try:
+        return run_identity.check_run_id(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(str(exc)) from exc
 
 
 def _normalize_runner_argv(argv: list[str]) -> list[str]:
@@ -97,14 +107,16 @@ def _step_identity(argv: list[str], fallback_sid: str | None) -> tuple[str, str]
 
 
 def _mark(base: str, sid: str, node: str, phase: str,
-          exit_code: int | None = None, *, note: str | None = None) -> int:
+          exit_code: int | None = None, *, note: str | None = None,
+          env: dict[str, str] | None = None) -> int:
     argv = [sys.executable, '-B', '-m', 'novel.cli', 'mark', sid,
             '--node', node, '--phase', phase, '--base', base]
     if exit_code is not None:
         argv += ['--exit', str(exit_code)]
     if note is not None:
         argv += ['--note', note]
-    return subprocess.run(argv, cwd=str(ROOT), check=False).returncode
+    return subprocess.run(
+        argv, cwd=str(ROOT), check=False, env=env).returncode
 
 
 def _evidence_bytes(steps: Sequence[Any]) -> bytes:
@@ -183,6 +195,9 @@ def main(argv: list[str] | None = None) -> int:
                         help='session_preflight.py 捕获的起始代码指纹')
     parser.add_argument('--evidence-json',
                         help='原子记录本次 build_steps 的结构化 argv/付费/写盘证据')
+    parser.add_argument(
+        '--run-id', type=_run_id_arg,
+        help='显式续用原 run_id；不作为 node flag 或缓存键')
     parser.add_argument('--execute', action='store_true')
     parser.add_argument('node')
     parser.add_argument('flags', nargs=argparse.REMAINDER,
@@ -214,18 +229,23 @@ def main(argv: list[str] | None = None) -> int:
     if not args.execute:
         return 0
 
+    effective_run_id = run_identity.resolve_run_id(args.run_id)
+    child_env = run_identity.env_with_run_id(effective_run_id)
+    print(f'operator run_id={effective_run_id}', file=sys.stderr)
     evidence_note = f'operator_evidence_sha256={evidence_sha256}'
     for step in steps:
         if not _code_is_current(args.expect_code_version, phase=f'{step.label} 执行前'):
             return X.TERMINAL_STATE
         node, sid = _step_identity(step.argv, args.sid)
-        mark_rc = _mark(args.base, sid, node, 'start', note=evidence_note)
+        mark_rc = _mark(
+            args.base, sid, node, 'start', note=evidence_note, env=child_env)
         if mark_rc != 0:
             print(f'信标 start 失败（exit {mark_rc}），为避免未记账执行而停止', file=sys.stderr)
             return mark_rc
-        rc = subprocess.run(step.argv, cwd=step.cwd, check=False).returncode
+        rc = subprocess.run(
+            step.argv, cwd=step.cwd, check=False, env=child_env).returncode
         end_rc = _mark(
-            args.base, sid, node, 'end', rc, note=evidence_note)
+            args.base, sid, node, 'end', rc, note=evidence_note, env=child_env)
         if end_rc != 0:
             print(f'节点 exit {rc}，但 end 信标失败（exit {end_rc}）', file=sys.stderr)
             return end_rc

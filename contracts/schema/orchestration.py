@@ -238,6 +238,11 @@ class ProgressEvent(FrozenModel):
     #: epoch 秒。与 `JobEvent.ts` 同理：顺序由写入顺序保证，`ts` 只给人看。
     ts: int = Field(ge=0)
     sid: str = Field(min_length=1)
+
+    #: 本条观测所属的跨进程 run。``None`` 只表示旧 JSONL 行没有这一列；
+    #: 新 jobs / agent 行由运行时写入口自动补齐，读历史时不猜。
+    run_id: str | None = Field(default=None, min_length=1)
+
     node: str = Field(min_length=1)
     phase: ProgressPhase
 

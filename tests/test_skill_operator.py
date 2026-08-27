@@ -116,7 +116,7 @@ def test_run_step_executes_the_production_argv_and_brackets_it_with_beacons(
 
     rc = runner.main([
         '--base', 'E:/outputs', '--sid', '42', '--expect-code-version', 'code-v1',
-        'stage2.global', '--execute',
+        'stage2.global', '--execute', '--run-id', 'resume-42',
     ])
 
     assert rc == 0
@@ -127,12 +127,30 @@ def test_run_step_executes_the_production_argv_and_brackets_it_with_beacons(
     assert 'mark' in calls[2][0]
     assert calls[2][0][calls[2][0].index('--phase') + 1] == 'end'
     assert calls[2][0][calls[2][0].index('--exit') + 1] == '0'
+    assert built[0][0] == ('stage2.global', '42', [])
+    assert all(
+        kwargs['env'][runner.run_identity.RUN_ID_ENV] == 'resume-42'
+        for _argv, kwargs in calls)
     expected_note = (
         'operator_evidence_sha256='
         + runner.hashlib.sha256(runner._evidence_bytes([step])).hexdigest())
     assert calls[0][0][calls[0][0].index('--note') + 1] == expected_note
     assert calls[2][0][calls[2][0].index('--note') + 1] == expected_note
     assert all('shell' not in kwargs for _argv, kwargs in calls)
+
+
+def test_run_step_rejects_an_invalid_run_id_at_the_argument_boundary(capsys):
+    """run_id 拼错不能先 build/写 evidence，更不能 traceback 成未知崩溃。"""
+    runner = _operator_script('run_step')
+
+    with pytest.raises(SystemExit) as exc:
+        runner.main([
+            '--base', 'E:/outputs', '--expect-code-version', 'code-v1',
+            '--run-id', '../cross-run', 'stage2.blueprint',
+        ])
+
+    assert exc.value.code == 2
+    assert 'run_id' in capsys.readouterr().err
 
 
 def test_run_step_stops_before_building_when_the_session_code_changed(monkeypatch):

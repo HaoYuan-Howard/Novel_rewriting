@@ -498,6 +498,7 @@ active_key(sid, node) -> str
 Output/_service/jobs.jsonl        append-only 事件流
 Output/_service/queues.jsonl      持久批量队列 append-only 事件流
 Output/_service/agent_runs.jsonl  headless agent append-only 事件流（含双授权快照）
+Output/_service/agent_progress.jsonl agent/runner 的 CLI 步骤观察轨迹
 Output/_service/logs/<job_id>.log 子进程 stdout+stderr，按字节追加
 Output/_service/ledger.jsonl      跨书逐请求成本事实
 Output/_service/*.jsonl.lock      上面五份 JSONL 各自的追加锁载体（见下）
@@ -521,6 +522,12 @@ Output/_service/approvals/<sid>.json 人工闸门、已阅状态与 canonical �
 > 而读侧「只容忍**最后一行**」的容错在并发下兜不住：A 进程的半截行会被
 > B 进程紧接着写的完整行**顶到中间**，于是读侧对一次正常的并行跑开火，
 > 且是**所有书**的视图一起失效。锁补齐之后那条容忍才真正成立。
+
+新写入的 `agent_progress.jsonl` 行带可选 `run_id`：jobs 子进程沿用
+`job_id`，headless agent 的全部 CLI 沿用 agent run ID，operator runner 则在一次
+首轮、batch repair 与唯一 resume 之间显式复用同一值。该键只用于恢复身份和观测联结，
+不进入正式 artifact provenance，也不参与 cache key。旧行没有该列时仍可读，但只能标为
+legacy / ungrouped；成本汇总不得用时间窗口把它猜进某个新 run。
 
 `approvals/<sid>.json` 的盘上服务记录当前为 **v5**；HTTP 投影 `ApprovalDoc.v=4` 是另一条
 版本轴，不能据同一个数字互推。每个已盖 gate、已阅状态、typed Stage4 结构裁决和 writing 授权

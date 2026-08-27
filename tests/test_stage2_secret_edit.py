@@ -769,35 +769,48 @@ def test_the_edit_file_is_recorded_as_an_input_edge():
 def test_stale_blueprints_are_displayable_but_not_consumable_after_base_edit():
     """人工订正后，旧蓝图可供只读诊断，但不得再进生产链或付费请求。
 
-    ⚠ 这里必须改**称名**才让蓝图 stale。2026-08-23 之前这条用例是靠改 secret
-    的揭示章把它弄 stale 的——那只在 blueprint 整份消费 global 的年代成立。
-    投影收窄之后，改 secret 不再影响 blueprint（见本文件第一条用例第④段）；
-    继续用它当手段，这条用例就会静默变成「什么都没测」：读得回来、也不抛。
+    这里不靠增删展示字段制造假 stale：先让两个 owner 共享正文里的
+    「母亲」，但把 ``char_001`` 的该称名登记为第 3 章才生效；旧蓝图
+    生成后，只把这个歧义称名的 ``from_chapter`` 提前到第 2 章。
+    它会真正改变第 2 章下发的 ``char_id -> surface`` 候选，因此旧蓝图
+    必须 stale；若仅改 ``by/context`` 或唯一称名的无效时点，则应保持 fresh。
     """
     root, book = _sandbox('下游可读_013')
     try:
-        _seed(book, with_blueprints=True)
-        before = ArtifactStore(_ctx(book, 'stage2.global', paid=False)).read(
-            GlobalGrounding, extract.GLOBAL_REL)
-        assert [row.surface for row in before.entities.characters['char_002'].address] \
-            == ['母亲']
-        _write_edit(book, {'addresses_replace': [{
+        _seed(book)
+        initial_addresses = [{
+            'char_id': 'char_001',
+            'address': [{
+                'surface': '李宝珠', 'by': 'narration', 'context': 'reference',
+                'from_chapter': 1,
+            }, {
+                'surface': '母亲', 'by': 'public', 'context': 'reference',
+                'from_chapter': 3,
+            }],
+        }, {
             'char_id': 'char_002',
             'address': [{
-                'surface': '母亲', 'by': 'public', 'context': 'address',
-                'from_chapter': 2,
-            }, {
                 'surface': '母亲', 'by': 'char_001', 'context': 'reference',
                 'from_chapter': 2,
             }],
-        }]})
+        }]
+        _write_edit(book, {'addresses_replace': initial_addresses})
+        _apply(book)
+
+        by_ordinal = _response_blueprints()
+        blueprint_ctx = _ctx(book, 'stage2.blueprint')
+        bp_client, _bp_transport = _client(
+            blueprint_ctx,
+            lambda req, _index: _respond_blueprints(req, by_ordinal),
+        )
+        extract.run_blueprint(blueprint_ctx, bp_client)
+
+        updated_addresses = copy.deepcopy(initial_addresses)
+        updated_addresses[0]['address'][1]['from_chapter'] = 2
+        _write_edit(book, {'addresses_replace': updated_addresses})
         artifact, _report = _apply(book)
-        # ⚠ 必须让**称名集合本身**变（这里从一条变两条）。只改 `by` / `context`
-        # 不够：blueprint 的投影只取 `surface`，那两格它压根不读 ⇒ 仍然 fresh，
-        # 而这条用例就会静默变成「什么都没测」。
-        assert [(row.surface, row.by) for row in
-                artifact.entities.characters['char_002'].address] == [
-            ('母亲', 'public'), ('母亲', 'char_001')]
+        shared = artifact.entities.characters['char_001'].address[1]
+        assert (shared.surface, shared.from_chapter) == ('母亲', 2)
 
         production_store = ArtifactStore(_ctx(book, 'stage2.blueprint', paid=False))
         with pytest.raises(UpstreamStale, match='已过期'):

@@ -19,6 +19,7 @@ ledger.py —— 成本账。**原型完全没有这一层。**
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import threading
 from dataclasses import dataclass, field
@@ -27,7 +28,10 @@ from pathlib import Path
 from typing import Iterable
 
 from contracts.schema import Usage
-from novel.appendlog import append_line, process_append_lock
+from novel import run_identity
+from novel.appendlog import (
+    append_line, append_line_under_process_lock, process_append_lock,
+)
 from novel.errors import ProvenanceRefused
 from novel.observability import RequestProgress
 
@@ -47,6 +51,10 @@ AUDIT_REL = ('_service', 'llm_audit.jsonl')
 #: token 三项的名字。**一处落点**——三个计数器、三个「见过几次」、`Usage` 的三个键
 #: 都从它派生，免得哪天加一项时漏掉其中一处。
 TOKEN_KINDS = ('prompt_tokens', 'completion_tokens', 'reasoning_tokens')
+
+# ``CostLedger`` 是每 run 一个实例，但同一进程可以有多本账指向
+# 同一 audit JSONL。带稳定身份事件的「查 id + 追加」必须跨实例也是一个临界区。
+_AUDIT_IDEMPOTENT_APPEND_LOCK = threading.Lock()
 
 
 def combine_usage(*parts: Usage | None) -> Usage | None:
@@ -83,6 +91,30 @@ def ledger_path(base: str | Path) -> Path:
 def audit_path(base: str | Path) -> Path:
     """`<Output>` → 采纳审计账路径。与 `ledger_path` 同目录，见 `AUDIT_REL`。"""
     return Path(base).joinpath(*AUDIT_REL)
+
+
+def _adoption_id(*, run_id: str, node: str, purpose: str, attempt_id: str,
+                 artifact: str, artifact_fingerprint: str,
+                 chapter: int | None) -> str:
+    """一次正式采纳的稳定身份；用数组避免字段分隔符义。"""
+    canonical = json.dumps(
+        [run_id, node, purpose, attempt_id, artifact,
+         artifact_fingerprint, chapter],
+        ensure_ascii=False, separators=(',', ':'))
+    return hashlib.sha256(canonical.encode('utf-8')).hexdigest()
+
+
+def _repair_event_id(
+        *, run_id: str, node: str, purpose: str, attempt_id: str,
+        action: str, decision: str, actor: str | None, gate: str | None,
+        candidate_sha256: str | None,
+) -> str:
+    """不可变 repair 终局事件身份；outcome 落盘后的 replay 可安全补账。"""
+    canonical = json.dumps(
+        [run_id, node, purpose, attempt_id, action, decision,
+         actor, gate, candidate_sha256],
+        ensure_ascii=False, separators=(',', ':'))
+    return hashlib.sha256(canonical.encode('utf-8')).hexdigest()
 
 
 @dataclass(frozen=True)
@@ -138,6 +170,10 @@ class CostLedger:
 
     path: Path | None = None            # `None` = 不落盘（测试 / `--dry-run`），仍然计数
 
+    #: 本账本实例所属的 run。自己新建时也必须有身份；RunContext
+    #: 在任何记账前再用 ``bind_run_id`` 核对，防止一本账被两次跑共用。
+    run_id: str = field(default_factory=run_identity.resolve_run_id)
+
     calls_made: int = 0                 # **真发出去**的调用数
     calls_cached: int = 0               # 命中缓存的次数（＝ 0 元）
     prompt_tokens: int = 0
@@ -183,10 +219,27 @@ class CostLedger:
     _request_purposes: dict[str, str] = field(default_factory=dict, repr=False)
     _request_chapters: dict[str, int | None] = field(default_factory=dict, repr=False)
 
+    #: checkpoint 不能只凭请求指纹反推配置：指纹是结果身份，不说明当前运行到底
+    #: 允许哪条模型链、哪档 effort/thinking。这里保留每次实际 ChatRequest 的非正文
+    #: 参数，以及供应商响应 content 的既有 SHA 联结；跨进程恢复时从原 ledger 行重建。
+    _request_specs: dict[str, dict[str, object]] = field(
+        default_factory=dict, repr=False)
+    _response_sha256s: dict[str, str | None] = field(
+        default_factory=dict, repr=False)
+
     #: Stage 2 会并发等待独立章节响应。计数更新与 JSONL 追加必须是同一个临界区，
     #: 否则两个成功回包可能互相覆盖内存计数，甚至把两行字节交错写坏。
     _lock: threading.RLock = field(default_factory=threading.RLock,
                                     repr=False, compare=False)
+
+    def bind_run_id(self, run_id: str) -> None:
+        """把账本与 RunContext 的身份钉死；已绑到另一次跑则关闭式失败。"""
+        value = run_identity.check_run_id(run_id)
+        with self._lock:
+            if self.run_id != value:
+                raise ProvenanceRefused(
+                    f'CostLedger run_id={self.run_id!r} 与 '
+                    f'RunContext run_id={value!r} 不一致；拒绝串账')
 
     def record(self, *, node: str, sid: str, model: str, code: str,
                cached: bool, cache_policy: str,
@@ -213,6 +266,7 @@ class CostLedger:
                attempt_id: str | None = None,
                request_fingerprint: str | None = None,
                response_sha256: str | None = None,
+               request_model: str | None = None,
                progress: RequestProgress | None = None) -> None:
         """记**一次上线**（或一次缓存命中）。`cached=True` 表示这一次是缓存命中（0 元）。
 
@@ -258,6 +312,26 @@ class CostLedger:
                 self._request_purposes[attempt_id] = purpose
                 self._request_chapters[attempt_id] = (
                     progress.chapter if progress is not None else None)
+                spec: dict[str, object] = {
+                    'request_model': request_model or model,
+                    'reasoning_effort': reasoning_effort,
+                    'thinking': thinking,
+                    'json_mode': json_mode,
+                    'max_tokens': max_tokens,
+                }
+                previous_spec = self._request_specs.get(attempt_id)
+                if previous_spec is not None and previous_spec != spec:
+                    raise ProvenanceRefused(
+                        f'attempt_id={attempt_id} 同时指向两份 ChatRequest 配置：'
+                        f'{previous_spec!r} / {spec!r}')
+                self._request_specs[attempt_id] = spec
+                previous_response = self._response_sha256s.get(attempt_id)
+                if (attempt_id in self._response_sha256s
+                        and previous_response != response_sha256):
+                    raise ProvenanceRefused(
+                        f'attempt_id={attempt_id} 同时指向两个 response_sha256：'
+                        f'{previous_response!r} / {response_sha256!r}')
+                self._response_sha256s[attempt_id] = response_sha256
 
             if cached:
                 self.calls_cached += 1
@@ -287,6 +361,7 @@ class CostLedger:
                 return
             row = {
                 'at': datetime.now(timezone.utc).isoformat(timespec='seconds'),
+                'run_id': self.run_id,
                 'sid': sid, 'node': node, 'model': model, 'code': code,
                 'cached': cached, 'cache_policy': cache_policy,
                 'prompt_tokens': prompt_tokens,
@@ -315,6 +390,7 @@ class CostLedger:
                 'attempt_id': attempt_id,
                 'request_fingerprint': request_fingerprint,
                 'response_sha256': response_sha256,
+                'request_model': request_model or model,
                 'chapter': progress.chapter if progress else None,
                 'chapter_index': progress.index if progress else None,
                 'chapter_total': progress.total if progress else None,
@@ -351,6 +427,31 @@ class CostLedger:
                 in self._request_fingerprints.items()
                 if fingerprint in allowed
                 and self._request_purposes.get(attempt_id) == purpose))
+
+    def attempt_ids_for_purpose(self, purpose: str) -> tuple[str, ...]:
+        """本 run 中一个逻辑 purpose 的全部 wire/cache attempts，含传输层重试。"""
+        with self._lock:
+            return tuple(sorted(
+                attempt_id for attempt_id, item_purpose
+                in self._request_purposes.items()
+                if item_purpose == purpose))
+
+    def request_identity_for_attempt(self, attempt_id: str) -> dict[str, object]:
+        """checkpoint 所需的 ledger 侧完整请求配置与响应内容身份。"""
+        with self._lock:
+            fingerprint = self._request_fingerprints.get(attempt_id)
+            model = self._request_models.get(attempt_id)
+            spec = self._request_specs.get(attempt_id)
+            if fingerprint is None or model is None or spec is None:
+                raise ProvenanceRefused(
+                    f'attempt_id={attempt_id!r} 在本 run 成本账缺请求配置联结')
+            return {
+                'attempt_id': attempt_id,
+                'request_fingerprint': fingerprint,
+                'model': model,
+                **spec,
+                'response_sha256': self._response_sha256s.get(attempt_id),
+            }
 
     def claim_prior_attempts(self, attempt_ids: Iterable[str], *, sid: str,
                              node: str, purpose: str,
@@ -400,6 +501,11 @@ class CostLedger:
 
             for attempt_id in sorted(missing):
                 row = rows[attempt_id]
+                if ('run_id' in row and row.get('run_id') != self.run_id):
+                    raise ProvenanceRefused(
+                        f'prior attempt {attempt_id} 属于 run_id='
+                        f'{row.get("run_id")!r}，当前 run_id={self.run_id!r}；'
+                        '新账只允许同 run resume，只有历史缺字段行按 legacy 放行')
                 if (row.get('sid') != sid or row.get('node') != node
                         or row.get('purpose') != purpose
                         or row.get('request_fingerprint') not in allowed_fp):
@@ -415,6 +521,16 @@ class CostLedger:
                 chapter_raw = row.get('chapter')
                 chapter = chapter_raw if isinstance(chapter_raw, int) else None
                 self._request_chapters[attempt_id] = chapter
+                self._request_specs[attempt_id] = {
+                    'request_model': str(row.get('request_model') or model),
+                    'reasoning_effort': row.get('reasoning_effort'),
+                    'thinking': row.get('thinking'),
+                    'json_mode': row.get('json_mode'),
+                    'max_tokens': row.get('max_tokens'),
+                }
+                raw_response_sha = row.get('response_sha256')
+                self._response_sha256s[attempt_id] = (
+                    str(raw_response_sha) if isinstance(raw_response_sha, str) else None)
 
                 cached = row.get('cached') is True
                 if cached:
@@ -572,7 +688,7 @@ class CostLedger:
         正文只在书内隔离目录；这行只留联结、决定与哈希。`decision=accepted` 也不把
         原 `gate_decision(rejected)` 改写成通过——通过的是 agent 候选，不是供应商原响应。
         """
-        self._append_audit({
+        row = {
             'kind': 'response_repair',
             'at': datetime.now(timezone.utc).isoformat(timespec='seconds'),
             'sid': sid, 'node': node, 'purpose': purpose,
@@ -588,7 +704,18 @@ class CostLedger:
             'rung_index': rung_index,
             'sample': sample,
             'chapter': chapter,
-        })
+        }
+        if decision in ('accepted', 'rejected', 'declined') and action in (
+                'agent', 'deterministic', 'declined'):
+            repair_event_id = _repair_event_id(
+                run_id=self.run_id, node=node, purpose=purpose,
+                attempt_id=attempt_id, action=action, decision=decision,
+                actor=actor, gate=gate, candidate_sha256=candidate_sha256)
+            row['repair_event_id'] = repair_event_id
+            self._append_audit_idempotent(
+                row, identity_key='repair_event_id')
+            return
+        self._append_audit(row)
 
     def note_adoption(self, *, sid: str, node: str, purpose: str,
                       attempt_id: str, artifact: str,
@@ -600,23 +727,64 @@ class CostLedger:
         不再从「最后一条 accepted」推测。本 run 没有采纳新响应的章
         （定向重生成合并进来的未动章）没有行——缺行即「沿用旧稿」。
         """
-        self._append_audit({
+        adoption_id = _adoption_id(
+            run_id=self.run_id, node=node, purpose=purpose,
+            attempt_id=attempt_id, artifact=artifact,
+            artifact_fingerprint=artifact_fingerprint, chapter=chapter)
+        self._append_audit_idempotent({
             'kind': 'artifact_adoption',
             'at': datetime.now(timezone.utc).isoformat(timespec='seconds'),
+            'adoption_id': adoption_id,
             'sid': sid, 'node': node, 'purpose': purpose,
             'attempt_id': attempt_id,
             'artifact': artifact,
             'artifact_fingerprint': artifact_fingerprint,
             'chapter': chapter,
-        })
+        }, identity_key='adoption_id')
+
+    def _append_audit_idempotent(self, row: dict, *, identity_key: str) -> None:
+        """带稳定身份的一次审计事件跨线程/进程只追加一行。"""
+        identity = row.get(identity_key)
+        if not isinstance(identity, str) or not identity:
+            raise ProvenanceRefused(f'幂等审计事件缺稳定 {identity_key}')
+        stamped = {'run_id': self.run_id, **row}
+        with self._lock, _AUDIT_IDEMPOTENT_APPEND_LOCK:
+            if any(event.get(identity_key) == identity
+                   for event in self.audit_events):
+                return
+            if self.path is None:
+                self.audit_events.append(stamped)
+                return
+
+            target = self.path.with_name(AUDIT_REL[-1])
+            with process_append_lock(target):
+                if target.is_file():
+                    lines = target.read_text(encoding='utf-8').splitlines()
+                    for index, line in enumerate(lines):
+                        if not line.strip():
+                            continue
+                        try:
+                            existing = json.loads(line)
+                        except json.JSONDecodeError as exc:
+                            raise ProvenanceRefused(
+                                f'LLM audit 第 {index + 1} 行损坏，'
+                                '不能在无法确认 adoption_id 时重复追加') from exc
+                        if (isinstance(existing, dict)
+                                and existing.get(identity_key) == identity):
+                            return
+                append_line_under_process_lock(
+                    target,
+                    json.dumps(stamped, ensure_ascii=False, sort_keys=True))
+            self.audit_events.append(stamped)
 
     def _append_audit(self, row: dict) -> None:
         with self._lock:
-            self.audit_events.append(row)
+            stamped = {'run_id': self.run_id, **row}
+            self.audit_events.append(stamped)
             if self.path is None:
                 return
             append_line(self.path.with_name(AUDIT_REL[-1]),
-                        json.dumps(row, ensure_ascii=False, sort_keys=True))
+                        json.dumps(stamped, ensure_ascii=False, sort_keys=True))
 
     # ── 结算：run 总量 vs **这一份** ──────────────────────────────────────
 

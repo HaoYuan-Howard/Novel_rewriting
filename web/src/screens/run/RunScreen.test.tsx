@@ -63,6 +63,7 @@ describe('RunScreen check composition', () => {
     run.events_tail = [{
       ts: 1,
       sid: SAMPLE_SID,
+      run_id: 'run-screen-test',
       node: run.steps[0].node,
       phase: 'end',
       exit_code: 1,

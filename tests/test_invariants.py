@@ -164,6 +164,27 @@ def test_free_nodes_are_the_ones_without_llm():
     }
 
 
+def test_stage2_review_policy_separates_producers_recovery_and_consumers():
+    """global/blueprint 可先生成；真正消费面才由当前逐项人审封口。"""
+    assert not inv.stage2_review_required('stage2.global', paid=True)
+    assert not inv.stage2_review_required('stage2.blueprint', paid=True)
+
+    for node in (
+        'stage4.design', 'stage4.plan', 'stage5.write',
+        'stage6.hook', 'stage6.semantic', 'stage7.rename',
+    ):
+        assert inv.stage2_review_required(node, paid=True), node
+
+    # 两个免费派生/交付动作不能借 paid=False 绕门。
+    assert inv.stage2_review_required('stage4.context', paid=False)
+    assert inv.stage2_review_required('stage7.assemble', paid=False)
+
+    # 修复、复检、人工写回的 0 成本跑法必须在闸关闭时仍可达。
+    for node in ('stage2.global', 'stage2.blueprint', 'stage4.plan',
+                 'stage5.write', 'stage6.hook', 'stage7.rename'):
+        assert not inv.stage2_review_required(node, paid=False), node
+
+
 def _known_flags() -> set[str]:
     return set(inv.FREE_ENTRIES) | set(inv.PAID_FLAGS) | set(inv.VALUED_FLAGS)
 

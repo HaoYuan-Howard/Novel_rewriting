@@ -9,6 +9,10 @@ import pytest
 from contracts.schema.evaluation import GlobalReviewDecisionSet
 from contracts.schema import decode_artifact
 from novel.api.routes import edits
+from novel.errors import (
+    ApprovalRequired, ArtifactUnreadable, BlockingFindingsUnresolved,
+    GateBlocked, UpstreamMissing, UpstreamStale, UpstreamUnproven,
+)
 from novel.orchestrator import uploads
 
 
@@ -59,6 +63,46 @@ def test_global_review_http_stamps_s2_only_after_all_pass(
             ['--review-decisions', str(decision_path)], {'follow_check': False}) in calls
     assert (('stamp', 'private', 'book-a', 's2') in calls) is stamp_expected
     assert ('discard', 'private', decision_path) in calls
+
+
+@pytest.mark.parametrize('closure_error', [
+    ApprovalRequired('stage2 global review is not all PASS'),
+    UpstreamMissing('stage2/chapter_blueprints.json is required'),
+    ArtifactUnreadable('stage2/chapter_blueprints.json has a broken envelope'),
+    GateBlocked(
+        'stage2 blueprint has an unresolved invalid sibling',
+        invalid_path='stage2/chapter_blueprints.INVALID.json'),
+    UpstreamStale('stage2/chapter_blueprints.json consumed inputs changed'),
+    UpstreamUnproven('stage2/chapter_blueprints.json provenance is unknown'),
+    BlockingFindingsUnresolved(
+        'stage2 joint HARD is not clear', rules=('synthetic_joint_hard',)),
+], ids=lambda error: type(error).__name__)
+def test_all_pass_review_lands_before_stage2_closure_without_rolling_back(
+        monkeypatch, tmp_path, closure_error):
+    """s2 proof 暂缓不得撤销已提交的逐项决定或伪装 HTTP 失败。"""
+    decision_path = tmp_path / 'decision.json'
+    landed = SimpleNamespace(exit_code=0, marker='already-landed-review')
+    discarded: list[Path] = []
+
+    monkeypatch.setattr(
+        edits.uploads, 'save_global_review_decisions',
+        lambda _base, _sid, _request: decision_path)
+    monkeypatch.setattr(
+        edits.uploads, 'discard_edit_plan',
+        lambda _base, path: discarded.append(Path(path)))
+    monkeypatch.setattr(edits.jobs, 'run', lambda *_args, **_kwargs: landed)
+
+    def stage2_not_closed(*_args, **_kwargs):
+        raise closure_error
+
+    monkeypatch.setattr(edits.approvals, 'approve_gate', stage2_not_closed)
+
+    with pytest.warns(RuntimeWarning, match='人工决定已落盘.*s2'):
+        result = edits.decide_global_review(
+            _request(), sid='book-a', base='private')
+
+    assert result is landed
+    assert discarded == [decision_path]
 
 
 def test_global_review_request_rejects_blank_self_reported_audit_fields():

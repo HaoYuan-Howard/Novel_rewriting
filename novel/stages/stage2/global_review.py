@@ -6,8 +6,8 @@ import json
 from pathlib import Path
 
 from contracts.artifacts import (
-    STAGE1_MAIN_TEXT, STAGE2_GLOBAL_GROUNDING, STAGE2_GLOBAL_REVIEW,
-    STAGE2_GLOBAL_REVIEW_DECISIONS,
+    STAGE1_MAIN_TEXT, STAGE2_CHAPTER_BLUEPRINTS, STAGE2_GLOBAL_GROUNDING,
+    STAGE2_GLOBAL_REVIEW, STAGE2_GLOBAL_REVIEW_DECISIONS,
 )
 from contracts.schema.evaluation import (
     EvidenceRef, GlobalReview, GlobalReviewDecision, GlobalReviewDecisionSet,
@@ -19,7 +19,10 @@ from contracts.schema.stage1 import MainText
 from novel import paths
 from novel.core.evidence import iter_global_evidence_slots, without_global_evidence
 from novel.core.spans import exact_span
-from novel.errors import ApprovalRequired, PathRefused, TerminalState, UpstreamMissing
+from novel.errors import (
+    ApprovalRequired, BlockingFindingsUnresolved, GateBlocked, PathRefused,
+    TerminalState, UpstreamMissing, UpstreamStale, UpstreamUnproven,
+)
 from novel.orchestrator.jobs import service_dir
 from novel.quality.global_review import apply_decision_set, require_current, review_status
 from novel.run import RunContext
@@ -379,7 +382,26 @@ def approval_status(ctx: RunContext) -> tuple[bool, bool, dict[str, int]]:
 
 
 def require_approved(ctx: RunContext) -> None:
-    """所有 Stage2 下游真实执行与成书读取共用的硬闸。"""
+    """所有 Stage2 下游真实执行与成书读取共用的完整收口闸。
+
+    人工决定只回答 global 事实是否可信；它不能替 blueprint 的存在、freshness 或
+    联合 HARD 背书。把后半段留给各下游自己碰，会让 API 先创建一个注定失败的作业，
+    也会让已有交付物在 blueprint 后来缺失/过期时只凭旧 review 继续下载。
+
+    这里不造第二座 Stage2 判官：动态导入 ``extract.run_check_only``，仍走
+    ``stage2.blueprint --check-only`` 使用的那一份完整联合判据。只另行把报告第一节
+    的 freshness/INVALID 翻成 typed 终态，因为 ``CheckReport.passed`` 按契约只回答
+    判据 badge，不会把来源当前性偷算进去。
+    """
+    store = ArtifactStore(ctx)
+    global_invalid = paths.invalid_of(STAGE2_GLOBAL_GROUNDING)
+    if store.exists(global_invalid):
+        raise GateBlocked(
+            'Stage2 global 有一份比旧正式稿更新的问题稿；'
+            '不能拿旧 review 冒充当前全局事实',
+            invalid_path=str(store.path(global_invalid)),
+            hint='stage2.global --revalidate --actor <id> --reason <why>（0 成本）')
+
     current, approved, counts = approval_status(ctx)
     if not approved:
         raise ApprovalRequired(
@@ -388,3 +410,54 @@ def require_approved(ctx: RunContext) -> None:
             hint=('先运行 `stage2.global --emit-review-template`，逐项核验后用 '
                   '`stage2.global --review-decisions <书内json>` 提交；'
                   'FAIL/UNVER 不会被 Agent 退出码覆盖'))
+
+    global_freshness = store.freshness(STAGE2_GLOBAL_GROUNDING)
+    if global_freshness.state == 'stale':
+        raise UpstreamStale(
+            f'{STAGE2_GLOBAL_GROUNDING} 已不是当前 main_text/root 上的结果；'
+            '旧 review 与它一致也不能打开下游',
+            hint='先从 producer 重建 stage2.global，再复核新的完整主体')
+    if global_freshness.state != 'fresh':
+        raise UpstreamUnproven(
+            f'{STAGE2_GLOBAL_GROUNDING} 证明不了自己来自当前 Stage2 输入'
+            f'（{global_freshness.state}/{global_freshness.reason}）',
+            hint='从 producer 重建 stage2.global')
+
+    blueprint_invalid = paths.invalid_of(STAGE2_CHAPTER_BLUEPRINTS)
+    if (not store.exists(STAGE2_CHAPTER_BLUEPRINTS)
+            and not store.exists(blueprint_invalid)):
+        raise UpstreamMissing(
+            f'{STAGE2_CHAPTER_BLUEPRINTS} 不在盘上；Stage2 尚未完成联合检查',
+            hint='stage2.blueprint（付费；可在 global 人工阅读期间先运行）')
+
+    # ``run_check_only`` 的报告 node 必须是 stage2.blueprint；下游 ctx 若直接传入，
+    # Stage4/7 的规则注册表会与 Stage2 outcomes 错配。只读子 context 不记账、不写盘。
+    from novel.orchestrator import state
+    from novel.stages.stage2 import extract
+
+    joint_ctx = state.readonly_ctx(
+        ctx.novel_dir, 'stage2.blueprint', ctx.code)
+    report = extract.run_check_only(joint_ctx)
+    if report.provenance.invalid:
+        raise GateBlocked(
+            'Stage2 逐章蓝图仍有未收口的问题稿；联合检查未通过',
+            invalid_path=str(store.path(blueprint_invalid)),
+            hint='stage2.blueprint --revalidate --actor <id> --reason <why>（0 成本）')
+    if report.provenance.freshness == 'stale':
+        raise UpstreamStale(
+            f'{STAGE2_CHAPTER_BLUEPRINTS} 已不是当前 global/main_text 上的结果；'
+            'Stage2 联合检查不能沿用旧结论',
+            hint='重跑 stage2.blueprint；若是 typed global edit，先看人物称名消费投影')
+    if report.provenance.freshness != 'fresh':
+        raise UpstreamUnproven(
+            f'{STAGE2_CHAPTER_BLUEPRINTS} 证明不了自己来自当前 Stage2 输入'
+            f'（{report.provenance.freshness}/{report.provenance.reason}）',
+            hint='从 producer 重建 stage2.blueprint')
+    if not report.passed:
+        hard = tuple(
+            row.rule for row in report.rules
+            if row.sev == 'hard' and row.status in ('hit', 'skipped'))
+        raise BlockingFindingsUnresolved(
+            'Stage2 global + blueprint 的联合 HARD 尚未通过；拒绝进入下游',
+            rules=hard or ('stage2_joint_check',),
+            hint='stage2.blueprint --check-only（0 成本）')

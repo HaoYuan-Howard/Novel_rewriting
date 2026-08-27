@@ -22,6 +22,7 @@ from pydantic import BaseModel, Field
 import pytest
 
 import novel.llm.keepsake as keepsake_mod
+from novel import run_identity
 from novel.llm.cache import (
     CachePolicy, ResponseCache, cache_key, request_fingerprint,
 )
@@ -89,6 +90,62 @@ def test_wire_rows_carry_the_attempt_identity_triplet():
     assert client.accepted_request_fingerprint('p') == row['request_fingerprint']
     assert row['response_sha256'] == hashlib.sha256(
         OK_JSON.content.encode('utf-8')).hexdigest()
+
+
+def test_one_run_id_closes_child_env_wire_gate_and_adoption_accounts(monkeypatch):
+    """子进程继承的同一身份必须逐字落进成本请求、内容闸与正式采纳三类账。"""
+    run_id = 'acceptance-run-42'
+    monkeypatch.setenv(run_identity.RUN_ID_ENV, run_id)
+    ctx = RunContext.open(_book(), '123', 'stage6.hook', paid=True)
+    client = _client(FakeTransport.always(OK_JSON), ctx)
+    client.ask_json('sys', 'usr', model_cls=Resp, purpose='p')
+    attempt_id = client.accepted_attempt('p')
+    ctx.ledger.note_adoption(
+        sid=ctx.sid, node=ctx.node, purpose='p', attempt_id=attempt_id,
+        artifact='stage2/chapter_blueprints.json', artifact_fingerprint='fp-run',
+        chapter=3)
+
+    assert ctx.ledger.path is not None
+    wire = _rows(ctx.ledger.path)
+    audit = _rows(ctx.ledger.path.with_name(AUDIT_REL[-1]))
+    assert len(wire) == 1
+    assert [row['kind'] for row in audit] == ['gate_decision', 'artifact_adoption']
+    observed = [ctx.run_id, ctx.ledger.run_id, wire[0]['run_id'],
+                *(row['run_id'] for row in audit)]
+    assert observed == [run_id] * len(observed)
+    assert wire[0]['attempt_id'] == audit[0]['attempt_id'] == audit[1]['attempt_id']
+
+
+def test_legacy_ledger_without_run_id_is_claimed_without_backfill():
+    """旧成本行可用于恢复，但读取绝不能把当前 run_id 猜写回历史字节。"""
+    d = Path(tempfile.mkdtemp())
+    path = d / 'ledger.jsonl'
+    attempt_id, fingerprint = 'legacy-attempt-01', 'a' * 64
+    legacy = {
+        'attempt_id': attempt_id,
+        'sid': '123', 'node': 'stage2.blueprint', 'purpose': 'chapter:1',
+        'request_fingerprint': fingerprint,
+        'model': 'deepseek-v4-flash', 'request_model': 'deepseek-v4-flash',
+        'cached': False,
+        'reasoning_effort': 'high', 'thinking': True, 'json_mode': True,
+        'max_tokens': 2048, 'response_sha256': 'b' * 64,
+        'chapter': 1,
+        'prompt_tokens': 10, 'completion_tokens': 5, 'reasoning_tokens': 3,
+    }
+    before = (json.dumps(legacy, ensure_ascii=False, sort_keys=True) + '\n').encode('utf-8')
+    path.write_bytes(before)
+    ledger = CostLedger(path=path, run_id='resume-run-42')
+
+    ledger.claim_prior_attempts(
+        [attempt_id], sid='123', node='stage2.blueprint', purpose='chapter:1',
+        request_fingerprints=[fingerprint])
+
+    assert ledger.attempt_ids_for_purpose('chapter:1') == (attempt_id,)
+    assert ledger.request_identity_for_attempt(attempt_id)['request_fingerprint'] == fingerprint
+    usage = ledger.usage()
+    assert usage is not None and usage.calls_made == 1 and usage.reasoning_tokens == 3
+    assert path.read_bytes() == before
+    assert 'run_id' not in json.loads(path.read_text('utf-8'))
 
 
 def test_gate_decisions_and_adoption_answer_which_model_was_finally_used():

@@ -17,7 +17,7 @@
 from __future__ import annotations
 
 import re
-from typing import Any, Callable, Final
+from typing import Any, Callable, Final, Mapping
 
 from contracts.artifacts import (
     STAGE0_CLEAN_TEXT, STAGE0_REVISIONS, STAGE1_HOOK_COPY, STAGE1_MAIN_TEXT,
@@ -30,6 +30,7 @@ from contracts.artifacts import (
 )
 from contracts.invariants import NODES, STYLE_MEASUREMENT_CONTRACT
 from novel.core.evidence import without_global_evidence
+from novel.stages.stage2.character_refs import blueprint_character_prompt_inventory
 
 Projection = Callable[[object], object]
 
@@ -63,19 +64,25 @@ def stage1_stage0_source(data: object) -> object:
         return None
     return source.get('normalized_source_sha1')
 
-def stage2_blueprint_grounding(data: object) -> object:
-    """逐章抽取只消费**已现称名表**要用的两个字段，不消费 global 的其余部分。
+def stage2_blueprint_grounding(
+    data: object, main_text: object = None,
+) -> object:
+    """逐章抽取真正下发的称名与 ``char_id`` 候选投影。
 
     【为什么不能留着 `artifact_payload`】blueprint 是全链 reasoning 占比最高的节点
-    （账本实测 40.8%，逐章付费），而它对 global 的真实依赖只有一份称名清单：
-    `stages/stage2/normalize.py::past_attested_surfaces` 只读 `canonical` 与
-    `address[].surface`，blueprint 侧那几条判据读的同样只是称名。整份消费 ⇒ 改一条
-    secret、动一次 `role`，全书 blueprint 当场判 stale 要重跑付费，**而那次改动
-    根本不影响它读到的任何一个字节**。
+    （账本实测 40.8%，逐章付费）。它对 global 的真实依赖是两个由当前
+    main_text 决定的块：``past_attested_surfaces`` 与剔除 collision 后的
+    ``visible_character_refs``。整份消费 ⇒ 改一条 secret、动一次 `role`，
+    全书 blueprint 当场判 stale 要重跑付费，而请求字节完全未变。
 
-    ⚠ **不取 `address` 的 `by` / `context` / `from_chapter`**：`past_attested_surfaces`
-    的「出现过没有」按原文子串判，与这三个字段无关；取了它们等于把一批无关改动
-    重新变回 stale。
+    ⚠ 必须同时给 ``main_text``：歧义 surface 从未出现，或时点变化仍落在
+    它的真实首现之前时，最终候选并未改变。只看 global 就把这些 clock 全投影
+    进去，仍会制造无效 stale。因此 store 会通过下方 contextual 登记在记账/
+    freshness 两侧传入同一份 current main_text；缺失或坏载体必须返回
+    ``None`` 让 consumed 落 unknown，不退回 global-only 猜测。
+
+    ⚠ `by/context` 始终不消费。唯一字面的 ``from_chapter`` 不影响候选，
+    canonical shadow 也会覆盖同字面 address 的时点。
     ⚠ 与 Stage4/5 的 grounding 投影**形状故意不同**：三个节点消费的不是同一批字段，
     合并成一个函数会让任一侧的取值面变化静默传染给其余节点。
     """
@@ -85,13 +92,14 @@ def stage2_blueprint_grounding(data: object) -> object:
     if not isinstance(entities, dict):
         return None
     chars = entities.get('characters')
-    if not isinstance(chars, dict):
+    if not isinstance(chars, dict) or not isinstance(main_text, list):
         return None
-    return sorted(
-        (cid, c.get('canonical'),
-         tuple(sorted(str(a.get('surface') or '')
-                      for a in (c.get('address') or []) if isinstance(a, dict))))
-        for cid, c in chars.items() if isinstance(c, dict))
+    try:
+        return blueprint_character_prompt_inventory(chars, main_text)
+    except (AttributeError, KeyError, IndexError, TypeError, ValueError):
+        # freshness 会拿可能已不合当前 schema 的旧载体重算。
+        # 这时结论只能是 unresolved，不能让 state 查询整个崩掉。
+        return None
 
 
 # ── 退役 Stage3 v2 的冻结投影 ───────────────────────────────────────────────
@@ -709,6 +717,44 @@ def projection_for(node: str, rel: str) -> Projection | None:
     return next((project for template, project in table.items() if _matches(template, rel)), None)
 
 
+#: 少数 consumed 投影的值由两份已登记上游共同决定。这只登记
+#: 「额外需要读哪个 current 载体」；语义仍在对应的纯投影函数里。
+#: 若 store 两侧不共用本表，一侧就会给两份书级输入各自算一份
+#: 看似合理、实际无法回放的 fingerprint。
+_CONTEXT_INPUTS: Final[dict[tuple[str, str], tuple[str, ...]]] = {
+    ('stage2.blueprint', STAGE2_GLOBAL_GROUNDING): (STAGE1_MAIN_TEXT,),
+}
+
+
+def context_inputs_for(node: str, rel: str) -> tuple[str, ...]:
+    """这条投影还需哪些 current 载体；store 记账/复算共用。"""
+    return _CONTEXT_INPUTS.get((node, canonical_rel(rel)), ())
+
+
+def project_consumed(
+    node: str,
+    rel: str,
+    data: object,
+    *,
+    related: Mapping[str, object] | None = None,
+) -> tuple[bool, object]:
+    """执行节点对一份上游的唯一 consumed 投影。
+
+    返回 ``(resolved, value)``。``resolved=False`` 同时覆盖未登记投影和
+    contextual 载体缺失/坏掉；两者在 provenance 中都必须写
+    ``consumed=null``，不能对 ``None`` 本身取指纹后伪装成可回放的结论。
+    """
+    canonical = canonical_rel(rel)
+    project = projection_for(node, canonical)
+    if project is None:
+        return False, None
+    if (node, canonical) == ('stage2.blueprint', STAGE2_GLOBAL_GROUNDING):
+        main_text = (related or {}).get(STAGE1_MAIN_TEXT)
+        value = stage2_blueprint_grounding(data, main_text)
+        return value is not None, value
+    return True, project(data)
+
+
 def legacy_stage3_projection_for(node: str, rel: str) -> Projection | None:
     """旧 provenance 的 Stage1/Stage3 投影；其余边回落到当前契约。"""
     rel = canonical_rel(rel)
@@ -744,6 +790,7 @@ def producer_node(rel: str, *, fallback: str | None = None) -> str | None:
 
 __all__ = [
     'CONSUMED_PROJECTIONS', 'LEGACY_STAGE3_PROJECTIONS', 'Projection',
-    'artifact_payload', 'canonical_rel', 'legacy_stage3_projection_for',
-    'producer_node', 'projection_for',
+    'artifact_payload', 'canonical_rel', 'context_inputs_for',
+    'legacy_stage3_projection_for', 'producer_node', 'project_consumed',
+    'projection_for',
 ]

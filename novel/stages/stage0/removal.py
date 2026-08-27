@@ -38,7 +38,7 @@ from contracts.schema.stage0 import (
     Stage0Snapshot,
     Stage0Source,
 )
-from novel import paths, prov
+from novel import paths, prov, run_identity
 from novel.core.ingest import (
     DecodeProblem,
     DecodedSource,
@@ -183,14 +183,21 @@ def inspect_source(source_path: str | Path, *, code: str) -> RemovalResult:
         content.clean_text, _provisional(source, content, code=code).report, scan)
 
 
-def _context(novel_dir: Path, node: str) -> RunContext:
+def _context(
+    novel_dir: Path,
+    node: str,
+    *,
+    run_id: str | None = None,
+) -> RunContext:
+    resolved_run_id = run_identity.resolve_run_id(run_id)
     return RunContext(
         novel_dir=novel_dir,
         node=node,
         paid=False,
         code=prov.code_version(),
         cache=CachePolicy.default(),
-        ledger=CostLedger(path=None),
+        ledger=CostLedger(path=None, run_id=resolved_run_id),
+        run_id=resolved_run_id,
     )
 
 
@@ -222,7 +229,8 @@ def _checked(ctx: RunContext, log: Stage0Revisions) -> tuple[RemovalResult, Chec
 
 
 def run_source(source_path: str | Path, base: str | Path, *, force: bool = False,
-               dry_run: bool = False, expected_sid: str | None = None) \
+               dry_run: bool = False, expected_sid: str | None = None,
+               run_id: str | None = None) \
         -> tuple[Path, RemovalResult, CheckReport | None]:
     '''真实摄入路径：源文件推导目录，保护已有人工稿，在链上落一条机器 revision。'''
     decoded_source, decoded_content, scan = inspect_content(source_path)
@@ -259,7 +267,7 @@ def run_source(source_path: str | Path, base: str | Path, *, force: bool = False
             f'id={sid!r} 已属于目录 {existing_dir.name!r}，但本次源文件名会建立 '
             f'{candidate_dir.name!r}；不能让同一本书裂成两个目录')
     novel_dir = existing_dir.resolve() if existing_dir is not None else candidate_dir
-    ctx = _context(novel_dir, 'stage0.remove')
+    ctx = _context(novel_dir, 'stage0.remove', run_id=run_id)
     store = ArtifactStore(ctx)
     log = rev.ensure_materialized(store)
 

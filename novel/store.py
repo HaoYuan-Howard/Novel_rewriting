@@ -54,7 +54,8 @@ from contracts.schema import (
 from contracts.schema.legacy_stage3 import LegacyStyleGrounding, decode_legacy_stage3_v2
 from novel import paths, prov
 from novel.consumption import (
-    canonical_rel, legacy_stage3_projection_for, producer_node, projection_for,
+    canonical_rel, context_inputs_for, legacy_stage3_projection_for,
+    producer_node, project_consumed, projection_for,
 )
 from novel.errors import (
     ApprovalRequired, ArtifactUnreadable, ByteFormRefused, PathRefused,
@@ -231,14 +232,13 @@ class ArtifactStore:
         hash-bound decision from bypassing input-edge accounting.
         """
         key = paths.input_key(rel)          # ← 两级键；三级路径在这里就被拒（见 `PathRefused`）
-        project = projection_for(self.ctx.node, key)
         raw = self._read_bytes(rel)
         data = self._loads(rel, raw)
         obj, data = self._validate_payload(model, rel, data)
         self._record_artifact_root(rel, obj)
         self.ctx.record_edge(key, InputEdge(
             file=prov.fingerprint_bytes(raw),
-            consumed=prov.projection_fingerprint(project(data)) if project else None,
+            consumed=self._consumed_fingerprint(self.ctx.node, key, data),
         ))
         return obj, hashlib.sha256(raw).hexdigest()
 
@@ -381,10 +381,9 @@ class ArtifactStore:
         key = paths.input_key(rel)
         raw = self._read_bytes(rel)
         text = self._decode(rel, raw)
-        project = projection_for(self.ctx.node, key)
         self.ctx.record_edge(key, InputEdge(
             file=prov.fingerprint_bytes(raw),
-            consumed=prov.projection_fingerprint(project(text)) if project else None,
+            consumed=self._consumed_fingerprint(self.ctx.node, key, text),
         ))
         return text
 
@@ -1714,14 +1713,35 @@ class ArtifactStore:
         key: str,
         lookup: Callable[[str, str], Callable[[Any], Any] | None] = projection_for,
     ) -> str | None:
-        if node is None or (project := lookup(node, key)) is None:
+        if node is None:
+            return None
+        if lookup is projection_for:
+            loaded, data = self._projection_payload(key)
+            return (self._consumed_fingerprint(node, key, data)
+                    if loaded else None)
+        if (project := lookup(node, key)) is None:
             return None
         return self._project_current(key, project)
 
-    def _project_current(self, key: str, project: Callable[[Any], Any]) -> str | None:
+    def _consumed_fingerprint(
+        self, node: str, key: str, data: object,
+    ) -> str | None:
+        """current 投影的唯一执行口；读边与 freshness 共用。"""
+        related: dict[str, object] = {}
+        for related_key in context_inputs_for(node, key):
+            loaded, value = self._projection_payload(related_key)
+            if not loaded:
+                return None
+            related[related_key] = value
+        resolved, value = project_consumed(
+            node, key, data, related=related)
+        return prov.projection_fingerprint(value) if resolved else None
+
+    def _projection_payload(self, key: str) -> tuple[bool, object]:
+        """为 consumed 重算读 current 载体；不记新来源边。"""
         parts = str(key).replace(chr(92), '/').split('/')
         if not parts or any(part in ('', '.', '..') for part in parts):
-            return None
+            return False, None
         p = self.ctx.novel_dir.joinpath(*parts)
         try:
             raw = p.read_bytes()
@@ -1734,10 +1754,19 @@ class ArtifactStore:
                 )
             else:
                 data = raw.decode('utf-8')
-            return prov.projection_fingerprint(project(data))
+            return True, data
         except (OSError, UnicodeDecodeError, json.JSONDecodeError,
                 AttributeError, KeyError, IndexError, TypeError, ValueError,
                 ArtifactVersionError):
+            return False, None
+
+    def _project_current(self, key: str, project: Callable[[Any], Any]) -> str | None:
+        loaded, data = self._projection_payload(key)
+        if not loaded:
+            return None
+        try:
+            return prov.projection_fingerprint(project(data))
+        except (AttributeError, KeyError, IndexError, TypeError, ValueError):
             return None
 
     @staticmethod

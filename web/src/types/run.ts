@@ -30,6 +30,8 @@ export interface RunStep {
 export interface RunEvent {
   ts: number
   sid: string
+  /** 新信标恒有；旧 agent_progress JSONL 行经后端读取时为 null。 */
+  run_id: string | null
   node: string
   phase: 'start' | 'end'
   exit_code: number | null

@@ -269,10 +269,15 @@ def probe_transport(cfg: Any) -> TransportProbe:
         client.close()
 
 
-#: 该重试的 HTTP 状态。**429 与 5xx**：前者是限流（等一下就好），后者是对面的事。
-#: ⚠ 4xx 里除了 429 一律**不重试**——那是我们自己发错了（key 不对、参数不合法），
-#: 重试只会把同一个错误再犯三遍，而每一遍都可能计费。
-_RETRYABLE_STATUS = frozenset({408, 409, 429, 500, 502, 503, 504})
+def _retryable_http_status(status: int) -> bool:
+    """该不该做传输层有界退避。
+
+    408 是「超时」这一类的 HTTP 表达，与无状态码的 timeout 异常同样可重试；
+    其余 4xx 只有 429 可重试。409 等配置/请求冲突必须立即终态。
+    所有 5xx 由供应端负责，不在这里挑选少数状态码，避免新的 5xx
+    被误分类为不可重试。
+    """
+    return status in (408, 429) or 500 <= status <= 599
 
 
 def _classify(e: Exception) -> TransportError:
@@ -280,7 +285,8 @@ def _classify(e: Exception) -> TransportError:
     status = getattr(e, 'status_code', None) or getattr(e, 'status', None)
     name = type(e).__name__
     if isinstance(status, int):
-        return TransportError(f'{type(e).__name__}: {e}', retryable=status in _RETRYABLE_STATUS,
+        return TransportError(f'{type(e).__name__}: {e}',
+                              retryable=_retryable_http_status(status),
                               status=status,
                               kind=_error_kind(status=status, exception_name=name))
     # 没有状态码时只重试可识别的超时/连接异常；任意本地异常不能被当成网络抖动。

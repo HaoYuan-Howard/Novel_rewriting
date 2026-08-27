@@ -65,26 +65,35 @@
 ```text
 <PY> -X utf8 -u .claude/skills/novel-pipeline-operator/scripts/run_step.py --base <BASE> --sid <SID> --expect-code-version <START_CODE> <node> -- [flags]
 <PY> -X utf8 -u .claude/skills/novel-pipeline-operator/scripts/run_step.py --base <BASE> --sid <SID> --expect-code-version <START_CODE> --execute <node> -- [flags]
+<PY> -X utf8 -u .claude/skills/novel-pipeline-operator/scripts/run_step.py --base <BASE> --sid <SID> --expect-code-version <START_CODE> --run-id <RUN_ID> --execute stage2.blueprint -- [原 flags]
 ```
 
 runner 控制参数在显式 `--` 之前可位于 node 前后，但以上是规范写法；`--` 之后全部属于
 生产节点。新书摄入时省略 runner 的 `--sid`，在 node flags 里传 `--source <TXT>`。
-runner 在构建 Step 前、每一步执行前后逐字核对 `<START_CODE>`；漂移时不再启动下一步。
+第三行只用于 Stage2 人工暂停后的同身份 resume：`--run-id` 是 runner 控制参数，不是 node flag，
+初次主跑省略。runner 在构建 Step 前、每一步执行前后逐字核对 `<START_CODE>`；漂移时不再启动下一步。
 
 结构化付费节点只要在 `NODES` 中接受该参数，主跑就统一追加 `--response-repair agent`。这不是
-放宽内容闸，而是让可修的 JSON/形状拒绝在消耗下一采之前先停到受托 agent：终态会给出
-`attempt_id` 与唯一可编辑的 `candidate.json`。按[修复状态机](recovery.md#结构化响应的受托修复)
-提交或拒绝后，必须以**完全相同的节点参数**重新执行；client 会恢复原 sample/model 序列和来源账。
-下一次供应商请求会从不可变拒绝记录构造失败包：同模型第二采定向修复，Flash 切 Pro 的首采约束重建；
-它仍输出完整 JSON 并走原四道闸，不把 agent 候选或模型自报当成通过证据。
+放宽内容闸：候选始终重走 JSON、必需键、schema 与调用点 validator。通用节点仍按终态点名的
+单份 `attempt_id` 处理；Stage2 blueprint 则会等同一并发波次全部结束，把所有可修响应汇成一份
+`repair_manifest.json`。按[修复状态机](recovery.md#结构化响应的受托修复)一次性填写 decisions、
+提交一份 batch resolution 后，只允许用终态打印的同一 `run_id` 恢复一次。每条 `run` 命令会把
+自动生成或继承的 run id 打到 stderr；出现人工暂停时立即把它与 manifest 路径记进终审包，不能
+另起身份重跑。后继供应商请求继续由不可变失败证据构造，并走原四道闸，不把 agent 候选或模型自报
+当作通过证据。
 
 真跑本身已经打印同一份 fresh 报告时，追检的价值是**复核产物完整性**，不是重读判据（那句「⚠ 自动追跑：退出码 0 也可能是残缺产物」说的就是这件事）：仍必须执行并打点，但只取它的退出码与合计行即可，不必重读全文。
 
 对每条实际命令，包括自动追跑的 check 与修复命令：
 
-1. 运行 `mark <SID> --node <node> --phase start --base <BASE>`。
-2. 直接运行命令并保存真实子进程退出码。**不要让管道消费退出码**；把 stdout 重定向到文件、取到退出码之后再过滤该文件是允许的，也是长报告的推荐读法（见[结果判定](#结果判定)）。
-3. 运行 `mark <SID> --node <node> --phase end --exit <rc> --base <BASE>`。
+1. 若没有父进程 `NOVEL_RUN_ID`，先运行 `mark <SID> --node <node> --phase start --base <BASE>`；
+   它会生成并打印 `<RUN_ID>`。已有父身份时沿用它；也可从一开始就在 `mark` 前显式给全局
+   `--run-id <RUN_ID>`。
+2. 把同一个值显式用于真实命令：`--run-id <RUN_ID> run ...`，并保存真实子进程退出码。
+   **不要让管道消费退出码**；把 stdout 重定向到文件、取到退出码之后再过滤该文件是允许的，
+   也是长报告的推荐读法（见[结果判定](#结果判定)）。
+3. 用同一身份结束打点：`--run-id <RUN_ID> mark <SID> --node <node> --phase end --exit <rc> --base <BASE>`。
+   start/end 或真实命令任一换 run id，终审成本就无法精确联结，禁止靠时间补猜。
 
 `mark` 只记录观察轨迹，不证明质量通过。不要给 `preview` 打点。
 
@@ -101,8 +110,8 @@ runner 在构建 Step 前、每一步执行前后逐字核对 `<START_CODE>`；�
 | 2 | `stage0.approve` | `--actor <ACTOR> --reason <text>` | 按代批契约审阅 Stage0 check 与剔除视图后批准，批准状态写入 revision 链。**每本书都要过这一步**——首跑恒 pending，零剔除的书也一样（见下） |
 | 3 | `stage0.edit` | 仅当代批发现剔除错误时用 typed edit/edit-plan；无修改则 `state` 跳过 | 人工修订经同一 Stage0 闸门重判，不直改正式文本 |
 | 4 | `stage1.partition` | 无 | 追跑 check 无 HARD；章节 ordinal 唯一且覆盖 `1..N` |
-| 5 | `stage2.global` | `--response-repair agent` | global 正式落盘；随即生成 review workpack，逐项核验并提交 typed 决策；只有 current 且全部 PASS 才继续 |
-| 6 | `stage2.blueprint` | `--response-repair agent`；闸开后独立 preview/run | 逐章蓝图正式落盘，check 无 HARD |
+| 5 | `stage2.global` | `--response-repair agent` | global 经 schema/归一/producer HARD 正式落盘；随即生成 review workpack/template，可开始阅读并填写 decisions，但不必等提交后才跑 blueprint |
+| 6 | `stage2.blueprint` | `--response-repair agent`；global 正式可读后独立 preview/run | 逐章蓝图正式落盘；唯一 Stage2 `--check-only` 联合检查无 HARD；随后确认 global review current 且逐项 PASS，才进 Stage4 |
 | 7 | `stage4.design` | `--response-repair agent`；需要废止旧候选时显式另跑 `--replan` | 只产生当前盲候选；本相未读取原文顺序、证据位置或必须材料，且不会顺带启动下一相 |
 | 8 | `stage4.plan` | 在 A 落盘后重新独立 preview，再以 `--response-repair agent` 运行 | B 只绑定证据；`bound` 时编译计划且 check 无 HARD，`infeasible` 时正式负结论已落盘但没有计划 |
 | 9 | `stage4.context` | 计划落盘已自动组装时 `state` 跳过；只在需重建时执行 | `stage4/writer_context.json` 与当前计划投影一致且 fresh |
@@ -125,7 +134,16 @@ preview `stage4.design --replan`，新 A 成功后，B 仍是另一条独立 pre
 完整逐章 typed 结构决定。通用 s4 gate 不是兼容入口；结构主体变化后旧决定立即过期。
 只有全部章 `accept`，且随后另有 current Stage5 writing 授权，才可执行 `stage5.write`。
 
-Stage2 的顺序硬约束是：global 落盘 → `--emit-review-workpack` 辅助逐项对原文 → `--emit-review-template` 取得版本化决策骨架 → 提交 `--review-decisions` → 确认全部 PASS → 才运行 blueprint。机械测量不是独立节点：Stage5/6 会从各自已经读取的 Stage1 文本即时计算，operator 不需要预跑、确认或修复机械缓存。
+Stage2 有两条可重叠的支路，而不是一条全串行链：global 正式落盘后，先用
+`--emit-review-workpack` / `--emit-review-template` 取得绑定当前主体的阅读面与决策骨架；随后可立即
+启动 blueprint，同时阅读原文、填写 decisions。这里的“并行”只指阅读/填文件与模型计算重叠：
+真正的 `--review-decisions`、typed edit 与 producer 落盘仍使用同书互斥，所以应在 blueprint 写盘
+结束后提交。review 若无需改 global，提交后以 `stage2.blueprint --check-only` 做全局 + 逐章唯一联合
+复检；只有 global、blueprint 均 current、联合 HARD 无命中且 review current/全 PASS，才能 preview
+Stage4A。review 若发现 global 要改，先走 typed edit；共享人物称名 inventory 改变时 blueprint 会
+stale，必须重建，未消费字段变化则按 freshness 结果复用。提前完成的 review 可以保存，但缺 blueprint
+时 Stage2 仍未收口。机械测量不是独立节点：Stage5/6 会从各自已读的 Stage1 文本即时计算，operator
+不需要预跑、确认或修复机械缓存。
 
 ### 零剔除的书同样要过 stage0 闸门
 
@@ -233,7 +251,12 @@ CLI `state` 会显示共享的 deterministic freshness badge；这个 badge 才�
 仍匹配”的可视化结论。API `NovelOverview` 保持现有公开形状，不为 CLI 展示重复建第二套
 状态字段。
 
-从第一个非 `skip` 的主节点接续，但不要把旧 `.INVALID`、旧 review 或保留的 approval 当作当前结论。相同参数的中断重跑优先利用 `.llm_cache`；改变参数意味着新调用语义，必须重新 preview 和记账。
+从第一个非 `skip` 的主节点接续，但不要把旧 `.INVALID`、旧 review 或保留的 approval 当作当前结论。
+相同参数的普通中断重跑优先利用 `.llm_cache`。Stage2 blueprint 还有一层独立的验证后章节检查点：
+它只在终态点名的同一 `run_id` 下恢复，命中时会记录 `checkpoint_restored` 且新增 wire 为零；恢复仍会
+重跑当前 schema/validator/scope、整书编译与联合 HARD。跨 run、输入/SHA/ledger 漂移或检查点损坏
+不是普通 cache miss，应关闭式停止。`--resample` / `--chapters` 表示主动刷新，绝不能带旧 run 身份
+去绕过刷新。改变其他参数同样意味着新调用语义，必须重新 preview 和记账。
 
 ## 收尾
 
@@ -241,7 +264,7 @@ CLI `state` 会显示共享的 deterministic freshness badge；这个 badge 才�
 
 1. 执行代批文档中的逐字成书对账。
 2. 再运行一次 `state` 与 `inbox`，只统计活动目录，排除 `_rounds/` 历史。
-3. 从仓根运行 `.claude/skills/novel-pipeline-operator/scripts/collect_final_evidence.py --base <BASE> --sid <SID> --started-at <STARTED_AT> --start-code-version <START_CODE>`。最终成本只以 `<BASE>/_service/ledger.jsonl` 为权威源：先按 sid、`outcome == "ok"` 和 `<STARTED_AT>` 切出本次会话；同 SID 全历史另列累计审计，**两张表不相加**。缓存命中与实付分开计数，token 合计只累加 `cached == false`。产物 `_provenance.usage`、控制台日志和历史报告只用于单产物追溯，不得与 ledger 混加或替代它。
+3. 从仓根运行 `.claude/skills/novel-pipeline-operator/scripts/collect_final_evidence.py --base <BASE> --sid <SID> --started-at <STARTED_AT> --start-code-version <START_CODE>`。最终成本只以 `<BASE>/_service/ledger.jsonl` 为权威源：`started_at` 只切本次 beacon/退出序列；脚本从这些 beacon 取得 canonical run id，再按 `run_id + node` 精确汇总本次 ledger。无 run id 的历史行只标 `legacy/ungrouped` 并进入同 SID 累计审计，不按时间窗口猜进本轮；本轮与累计两张表不相加。缓存命中与 wire 分开计数，token 合计只累加 `cached == false`；每个非缓存 wire 的 `outcome` 都必须入表，`error` 代表已上线但供应商是否计费未知，单列披露而不冒充确定实付。产物 `_provenance.usage`、控制台日志和历史报告只用于单产物追溯，不得与 ledger 混加或替代它。
 4. 对按模板建立的终审包运行同参数的 `.claude/skills/novel-pipeline-operator/scripts/sync_review_evidence.py`，由脚本更新质量表、两张账本、退出序列与机器锚点；agent 只写内容判断、代批证据和恢复说明。
 5. 清除剩余占位符，用同一组会话参数运行 `.claude/skills/novel-pipeline-operator/scripts/validate_review.py`，再运行 `.claude/skills/novel-pipeline-operator/scripts/verify_delivery.py --base <BASE> --sid <SID> --start-code-version <START_CODE>`。确保每个异常、残红和不可验证项都有“影响、证据、恢复路径”。
 6. 只向用户交付成书与终审包；中间产物仅作为终审包中的可追溯指针。

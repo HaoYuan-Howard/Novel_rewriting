@@ -26,6 +26,7 @@ import time
 
 from contracts.invariants import BEACON_STATES, NODES, PIPELINE_STEPS
 from contracts.schema.orchestration import ProgressEvent, RunStepView
+from novel import run_identity
 from novel.appendlog import append_line
 from novel.cli import exit_codes as X
 from novel.orchestrator import nodes as N
@@ -54,6 +55,13 @@ def append(base: str | os.PathLike[str], event: ProgressEvent) -> None:
     一次交错就让所有书的进度屏一起打不开。互斥因此在 `novel/appendlog.py`
     （线程锁 + 操作系统文件锁），全仓只有那一份实现。
     """
+    # ``mark`` 显式收到的全局 --run-id 已在 event 上，以它为准；
+    # agent 旧调用没有显式值时，才从根进程环境在这一个写口补齐。
+    # 读旧行不走这里，因此不会把当前 run 误填给历史事件。
+    if event.run_id is None:
+        inherited = run_identity.inherited_run_id()
+        if inherited is not None:
+            event = event.model_copy(update={'run_id': inherited})
     append_line(
         beacon_path(base),
         json.dumps(event.model_dump(mode='json'), ensure_ascii=False))

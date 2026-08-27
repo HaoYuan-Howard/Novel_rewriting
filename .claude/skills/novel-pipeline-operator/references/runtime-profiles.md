@@ -30,13 +30,14 @@
   结束时把同一指纹传给终验。`unknown == unknown` 不证明同版；结束时现取当前值也不证明起点。
 
 「打点串联」与「重定向后过滤」合起来在 PowerShell 里的写法（把数十 KB 的报告压到个位数行，
-保留全部命中、非 `ok` 状态、来源与告警行）：
+保留全部命中、非 `ok` 状态、来源与告警行）。`$RUN_ID` 先按 workflow 的手工协议由首个
+`mark start` 生成并记录，或沿用父进程身份；下面三条必须显式复用同一值：
 
 ```powershell
-& $PY -X utf8 -u -m novel.cli mark $SID --node <node> --phase start --base $B
-& $PY -X utf8 -u -m novel.cli run <node> $SID --check-only --base $B > "$SP\out.txt"
+& $PY -X utf8 -u -m novel.cli --run-id $RUN_ID mark $SID --node <node> --phase start --base $B
+& $PY -X utf8 -u -m novel.cli --run-id $RUN_ID run <node> $SID --check-only --base $B > "$SP\out.txt"
 $rc = $LASTEXITCODE
-& $PY -X utf8 -u -m novel.cli mark $SID --node <node> --phase end --exit $rc --base $B
+& $PY -X utf8 -u -m novel.cli --run-id $RUN_ID mark $SID --node <node> --phase end --exit $rc --base $B
 Get-Content "$SP\out.txt" -Encoding UTF8 |
   Select-String -Pattern '^\s*\[!!\]|^\s*\[\?\?\]|^\s*\[--\]|^\s*\[\?{4}\]|^合计|^──|^\s*⚠|→\s+(PASS|AMBER|FAIL)|revalidated'
 ```

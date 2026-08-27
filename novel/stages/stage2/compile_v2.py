@@ -29,9 +29,11 @@ import copy
 from typing import Any
 
 from contracts.invariants import RESPONSE_TIME_LAYERS
-from novel.core.naming import strip_distinguisher
 from novel.core.spans import content_only, locate_unique_span
-from novel.core.text import norm
+from novel.stages.stage2.character_refs import (
+    blueprint_character_prompt_inventory, visible_character_refs,
+    visible_character_refs_with_drops,
+)
 from novel.stages.stage2.normalize import (
     _source, normalize_beat_ids,
 )
@@ -442,109 +444,13 @@ def canonical_ir_projection(blueprint: dict[str, Any],
     return out
 
 
-def visible_character_refs(
-    characters: dict[str, dict[str, Any]],
-    main_text: list[dict[str, Any]],
-) -> dict[int, dict[str, list[str]]]:
-    """每章可下发的 ``char_id -> 已出现且已到可用时点的称名``。**候选集的唯一落点。**
-
-    ⚠ 三个调用点（逐章 prompt、定向修复、`compile_v31_refs` 的合法性校验）必须
-    看到**逐字相同**的一份：编译器拿它验「这个 id 在不在本章可见集合里」，
-    prompt 拿它决定模型能选什么。两边差一个 id，模型的合法答案会在编译期炸。
-    """
-    return visible_character_refs_with_drops(characters, main_text)[0]
-
-
-def visible_character_refs_with_drops(
-    characters: dict[str, dict[str, Any]],
-    main_text: list[dict[str, Any]],
-) -> tuple[dict[int, dict[str, list[str]]], dict[int, list[list[str]]]]:
-    """同上，外加**因为无法区分而整组剔除**的 char_id 组（逐章）。
-
-    global 名册带未来信息，不能整份发给逐章模型。本函数只保留在累计正文里已经
-    逐字出现的 canonical/address 字面；**同一字面挂多人时**，address 还必须满足
-    自己的 ``from_chapter``。后一条不能省：文本命中「师尊」只证明这个字面出现过，
-    不证明未来那个人此时也能用这个叫法；也不能反过来拿 ``from_chapter`` 卡所有
-    唯一字面——它允许保守地晚于真实首现（只禁止过早），实跑「黎玄仙尊」就在 ch1
-    明写而名册记到 ch18。`char_id` 本身不含语义，因此这份关闭式子集既能让模型做
-    受限选择，也不会借歧义字面把未来才揭晓的人带回早章。
-
-    ⚠⚠ **可见称呼集合完全相同的几个 char_id 必须整组剔除，不能一起下发。**
-    `canonical_unique` 只保证**完整** canonical 唯一，而消歧靠的正是尾部区分词
-    （`小宫女(打翻茶盏)` / `小宫女(捧灯)`）——那是「为了 registry 键唯一」加的，
-    **不是这本书的语言**，`strip_distinguisher` 会把它剥掉。于是这两个人在某一章
-    可以只剩一个一模一样的可见字面。此时下发 `{"C007":["小宫女"],"C012":["小宫女"]}`
-    给模型的是**两个不可区分的键**：任选一个都能过 validator（它只查「在不在集合里」），
-    也都能过 `compile_v31_refs`（同一条集合）——**一个错误的人物身份就这样静默进蓝图**，
-    而下游改名、视点、在场关系全部跟着错。
-    ⇒ 模型在这一格上做不出比抛硬币更好的判断，就不该让它做。整组剔除的代价是这一章
-    少标几个在场者（`present_char_ids` 少人，没有任何判据因此变红），
-    换的是**不会多标一个错的**。剔除逐章记账，由调用方 `observe` 出去。
-    ⚠ 不改成「保留区分词一起下发」：区分词不在原文里，模型会把它抄进 `event`
-    （`early_name_leak` 那一族当场红），而 `_surface_for_ref` 也投影不回一个
-    原文里根本没有的字面。
-    """
-    inventory: dict[str, list[tuple[str, int | None]]] = {}
-    for cid, char in characters.items():
-        surfaces: list[tuple[str, int | None]] = [
-            (strip_distinguisher(str((char or {}).get('canonical') or '')), None)]
-        for address in ((char or {}).get('address') or []):
-            chapter = (address or {}).get('from_chapter')
-            surfaces.append((str((address or {}).get('surface') or '').strip(),
-                             chapter if isinstance(chapter, int) and chapter > 0 else 1))
-        distinct: dict[str, tuple[str, int | None]] = {}
-        for surface, from_chapter in surfaces:
-            key = norm(surface)
-            if not key:
-                continue
-            # canonical 与 address 常是同一个字面；只下发一次。canonical 的
-            # None 表示「由正文实际首现控制」，比 address 的登记章更严格且更直接。
-            if key not in distinct or from_chapter is None:
-                distinct[key] = (surface, from_chapter)
-        inventory[cid] = list(distinct.values())
-
-    owners: dict[str, set[str]] = {}
-    for cid, surfaces in inventory.items():
-        for surface, _from_chapter in surfaces:
-            owners.setdefault(norm(surface), set()).add(cid)
-
-    out: dict[int, dict[str, list[str]]] = {}
-    dropped: dict[int, list[list[str]]] = {}
-    cumulative = ''
-    for section in main_text:
-        ordinal = int(section.get('chapter_ordinal') or 0)
-        cumulative += norm(str(section.get('text') or ''))
-        visible = {
-            cid: [surface for surface, from_chapter in surfaces
-                  if norm(surface) in cumulative
-                  and (len(owners.get(norm(surface), set())) <= 1
-                       or from_chapter is None or from_chapter <= ordinal)]
-            for cid, surfaces in inventory.items()
-        }
-        present = {
-            cid: surfaces for cid, surfaces in visible.items() if surfaces
-        }
-        by_signature: dict[frozenset[str], list[str]] = {}
-        for cid, surfaces in present.items():
-            by_signature.setdefault(
-                frozenset(norm(surface) for surface in surfaces), []).append(cid)
-        collisions = [sorted(cids) for cids in by_signature.values()
-                      if len(cids) > 1]
-        if collisions:
-            dropped[ordinal] = sorted(collisions)
-            indistinguishable = {cid for group in collisions for cid in group}
-            present = {cid: surfaces for cid, surfaces in present.items()
-                       if cid not in indistinguishable}
-        out[ordinal] = present
-    return out, dropped
-
-
 def compile_v2_refs(data: dict[str, Any], main_text: list[dict[str, Any]],
                     characters: dict[str, dict[str, Any]]) \
         -> tuple[dict[str, Any], dict[str, Any]]:
     """两段式 v2 响应 → 现役产物；人物身份全程只保留关闭式 char_id。"""
     work = copy.deepcopy(data)
-    visible = visible_character_refs(characters, main_text)
+    visible = blueprint_character_prompt_inventory(
+        characters, main_text)['visible_character_refs']
     for blueprint in (work.get('blueprints') or []):
         ordinal = int(blueprint.get('chapter_ordinal') or 0)
         allowed = visible.get(ordinal, {})

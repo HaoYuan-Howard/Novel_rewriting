@@ -27,7 +27,10 @@ from contracts.schema.orchestration import JobRecord
 from contracts.schema.stage5 import ChapterResponse
 from novel.api.deps import checked_sid, get_base
 from novel.cli import exit_codes as X
-from novel.errors import ApprovalRequired, GateBlocked, NovelError
+from novel.errors import (
+    ApprovalRequired, ArtifactUnreadable, BlockingFindingsUnresolved,
+    GateBlocked, NovelError, UpstreamMissing, UpstreamStale, UpstreamUnproven,
+)
 from novel.orchestrator import approvals, jobs, uploads
 
 router = APIRouter(prefix='/novels')
@@ -49,20 +52,29 @@ def _completed(record: JobRecord) -> bool:
 
 
 def _stamp(base: str, sid: str, gate: str) -> None:
-    """**尽力而为**地盖审批章。产物里的 `approved` 是定稿的真相；
+    """**尽力而为**地盖审批章。产物里的 typed 决定是人工操作的真相；
     审批文档是队列的检查单（`R-13.5`），它带前置链（s7 要 s6、s6 要 s5…）。
 
-    前置审批链尚未补齐 ⇒ 定稿照样落，检查单那一格由
+    前置审批链尚未补齐 ⇒ 人工决定照样落，检查单那一格由
     approvals 屏自己呈现、可在那里手工补链——**不把检查单的顺序翻成定稿的失败**。
 
-    ⚠ **两条都要接住**：「前置章没盖」是 `ApprovalRequired`，
-    「有一份没裁决的 `.INVALID` 挡着，批不了」是 `GateBlocked`。
-    只接前者的样子是：一次**已经落盘**的定稿因为上游还躺着一份废稿而整条请求 409。
+    Stage2 特别依赖这一点：global 复核可以在 blueprint 尚未落盘时先提交；此时
+    s2 的联合 proof 还不能铸造，但已落盘的逐项决定绝不能随 HTTP 请求一起回滚。
+
+    ⚠ **完整收口的预期终态都要接住**：前置章/人审未齐是
+    `ApprovalRequired`，尚未并发完成是 `UpstreamMissing`，坏载体是
+    `ArtifactUnreadable`，未裁决 `.INVALID` 是 `GateBlocked`，新鲜度是
+    `UpstreamStale` / `UpstreamUnproven`，联合 HARD 红是
+    `BlockingFindingsUnresolved`。漏一条都会让一次已经落盘的
+    人工决定在 HTTP 面伪装成失败。
     """
     try:
         approvals.approve_gate(base, sid, gate)
-    except (ApprovalRequired, GateBlocked) as exc:
-        warnings.warn(f'定稿已落盘，但审批章 {gate} 没盖上（{exc}）——'
+    except (
+        ApprovalRequired, ArtifactUnreadable, BlockingFindingsUnresolved,
+        GateBlocked, UpstreamMissing, UpstreamStale, UpstreamUnproven,
+    ) as exc:
+        warnings.warn(f'人工决定已落盘，但审批章 {gate} 没盖上（{exc}）——'
                       f'前置链在 approvals 屏补', RuntimeWarning, stacklevel=2)
 
 
@@ -116,6 +128,8 @@ def decide_global_review(
         # CHECK_FAILED means the batch landed but at least one current row is
         # still not PASS.  Unlike ordinary human approvals, that state must not
         # open s2: the global-review contract explicitly requires all PASS.
+        # Even on OK, blueprint may still be running/missing; `_stamp` is
+        # intentionally best-effort so the already-landed decisions remain valid.
         if record.exit_code == X.OK:
             _stamp(base, sid, 's2')
         return record

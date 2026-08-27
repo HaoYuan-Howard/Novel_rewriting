@@ -58,7 +58,7 @@ description: 作为受托终审代理，使用本仓 novel.cli 将单本中文�
 2. 首个动作前从仓根运行 `.claude/skills/novel-pipeline-operator/scripts/session_preflight.py --base <BASE> --sid <SID>`；新书改用 `--source <TXT>`。把输出的 `started_at` 固化为 `<STARTED_AT>`、`code_version` 固化为 `<START_CODE>`，后续命令全程逐字复用，不能在收尾时现取一个新值冒充起点。
 3. 对既有 `sid` 先运行 `state` 与 `inbox`；对新书先预览 `stage0.remove`。从盘上事实决定起点。
 4. 在首个动作前创建终审包草稿，随每次授权判断、闸门裁决、修复与异常更新；不要等到最后凭记忆补写。
-5. 从仓根优先用 `.claude/skills/novel-pipeline-operator/scripts/run_step.py --base <BASE> --sid <SID> --expect-code-version <START_CODE> <node> -- [flags]` 预览生产 `build_steps`；真跑采用同一条命令并把 `--execute` 放在 node 前。需要机器复核 preview 时加 `--evidence-json <PATH>`：它原子记录同一份 Step 的 argv/付费/写盘信息，preview 与 execute 复用同一路径时内容不同会拒绝覆盖。execute 无论是否传该路径，都会把本次真实 Step canonical evidence 的完整 SHA-256 同时写进 start/end 信标 note，供会话证据关闭式核对。脚本会逐字执行同一 Step.argv、串起 start/end 信标，并在每一步前后拒绝代码漂移。新书的 `stage0.remove` 省略 runner 的 `--sid`。不要凭文档手拼真实 argv。所有接受该参数的结构化付费节点主跑都带 `--response-repair agent`；遇到 `ResponseRepairRequired` 按修复状态机编辑隔离候选、提交或拒绝，再以原参数续跑。Stage5 全书写作节点不带选臂参数；定向维护只用 `--chapters`。
+5. 从仓根优先用 `.claude/skills/novel-pipeline-operator/scripts/run_step.py --base <BASE> --sid <SID> --expect-code-version <START_CODE> <node> -- [flags]` 预览生产 `build_steps`；真跑采用同一条命令并把 `--execute` 放在 node 前。需要机器复核 preview 时加 `--evidence-json <PATH>`：它原子记录同一份 Step 的 argv/付费/写盘信息，preview 与 execute 复用同一路径时内容不同会拒绝覆盖。execute 无论是否传该路径，都会把本次真实 Step canonical evidence 的完整 SHA-256 同时写进 start/end 信标 note，供会话证据关闭式核对。脚本会逐字执行同一 Step.argv、串起 start/end 信标，并在每一步前后拒绝代码漂移。新书的 `stage0.remove` 省略 runner 的 `--sid`。不要凭文档手拼真实 argv。所有接受该参数的结构化付费节点主跑都带 `--response-repair agent`；普通单响应暂停按修复状态机编辑隔离候选、提交或拒绝，Stage2 blueprint 则一次处理整份 batch manifest，并用终态打印的同一 `run_id` 只 resume 一次。Stage5 全书写作节点不带选臂参数；定向维护只用 `--chapters`。
 6. 不使用 runner 的特殊诊断命令，仍须执行 `mark start`，取得真实子进程退出码后执行 `mark end --exit <rc>`；`preview` 不打点，并在动作前确认当前代码仍等于 `<START_CODE>`。
 7. 一次只运行一个写盘节点。用退出码判断进程结果，用最新 check badge 与 finding 判断质量结果。
 8. 命中闸门时按代批契约裁决；命中失败时按修复状态机收敛。每次决定同时记录证据、被否决方案和复验结果。
@@ -82,12 +82,14 @@ description: 作为受托终审代理，使用本仓 novel.cli 将单本中文�
 只有同时满足以下条件才可标记 `ready`：
 
 - `state` 显示主链完成且所有消费中的正式产物 fresh/match；已解释的诊断噪声单列披露。
-- Stage2 全局复核面 current 且逐项 PASS；这是 `ready` 与 `ready_with_disclosures` 的共同硬前提。
+- Stage2 global 与 blueprint 均 current、唯一联合 check 无 HARD，且全局复核面 current/逐项 PASS；
+  这是 `ready` 与 `ready_with_disclosures` 的共同硬前提。人审可与 blueprint 计算重叠，但不能缺席。
 - `inbox.delivery_counts.blocking == 0`；`attention_counts` 区分“尚待处理”与“已裁决但记录保留”，不得拿总数冒充失败数。披露项逐类记录。
 - `inbox.counts` 的八类余额必须逐类披露：`invalid`、`rejected`、`repairable`、`human_only`、`verification`、`upstream`、`stalled`、`approval`；类别总数不直接等于阻塞数，阻塞性只读 `delivery_effect`。
 - 活动目录不存在未解释的 `.INVALID`、`.rejected` 或 `.stalled`；历史 `_rounds/` 不计入活动余额。
 - 全部代批均有可追溯依据；Stage4 结构逐章接受，所选 stage6 候选和 stage7 人名表均通过各自定稿条件。
 - 成书通过 [代批与终审契约](references/delegated-review.md) 的逐字对账，终审包中的统计与盘上事实一致。
-- 终审包的退出序列与成本账按 `<STARTED_AT>` 切出本次会话；同 SID 历史只作累计审计，不能混进本轮数字；起止代码指纹逐字一致。
+- 终审包的退出序列按 `<STARTED_AT>` 切出本次会话，成本账再按这些 beacon 的 `run_id + node`
+  精确联结；旧无 run id 行只作 legacy/ungrouped 累计审计，不能靠时间猜进本轮；起止代码指纹逐字一致。
 
 任何一项未满足时只能使用 `ready_with_disclosures` 或 `stopped`，并说明用户审阅时真正需要关注什么。

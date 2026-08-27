@@ -19,9 +19,9 @@ rg -n "stage6|hook_para_sep|exit 70" .claude/skills/novel-pipeline-operator/refe
 |---|---|---|---|---|
 | FN-001 | stage0 批准前的预期红灯 | contract-confirmed | `s0_approval`, exit 1 | `stage0.approve` |
 | FN-002 | 重号与缺号章节 | contract-confirmed | `s1_chapter_labels` | 核对源文标记与 ordinal，不改正文 |
-| FN-003 | 旧并发首跑留下部分完成盘面 | contract-confirmed | Stage2 下游缺失 | 先完成全局逐项复核，再分别 preview 缺失节点 |
+| FN-003 | Stage2 部分完成盘面按 run 收口 | contract-confirmed | Stage2 下游缺失, `repair_manifest.json`, `checkpoint_restored` | 同一 `run_id` resume；Stage4 前收齐 review |
 | FN-004 | blueprint 锚点失败要先判原字节 | observed | `hinge_anchor_void`, `verbatim_failed` | `--chapters`（付费）或 finding 明列的免费 fix |
-| FN-005 | 钱已调用但目标产物缺失 | contract-confirmed | exit 70, 账本有调用而产物不在盘 | 完全相同参数重跑，命中 `.llm_cache` |
+| FN-005 | 钱已调用但目标产物缺失 | contract-confirmed | exit 70, 账本有调用而产物不在盘 | Stage2 同 run 恢复 checkpoint；其余完全相同参数重跑 |
 | FN-006 | 语义结论按文本 sha1 绑定，不跟机械验收的轮次走 | contract-confirmed | `stage6.semantic`, `semantic_review_seq` | 文本未变就**不要**重跑；变了才重跑 |
 | FN-008 | stage6 首轮只有 INVALID | contract-confirmed | `hook.INVALID.json`, `hook_para_sep` | `stage6.hook --apply-edit` 或 `--revalidate` |
 | FN-009 | stage6 总报告与所选候选不是同一粒度 | observed | 落选候选 HARD, 同 sha1 两轮矛盾 | 按 label+sha1 对齐，采更严格那一轮 |
@@ -68,19 +68,22 @@ rg -n "stage6|hook_para_sep|exit 70" .claude/skills/novel-pipeline-operator/refe
 - 依据：`novel/stages/stage1/checks.py::check` 产出的 `s1_chapter_labels`（读的是**原始标签**，
   不是下游 ordinal）；成书侧由代批契约的逐字对账第 1 项复核。
 
-### FN-003 · 旧并发首跑留下部分完成盘面
+### FN-003 · Stage2 部分完成盘面按 run 收口
 
 - 状态：`contract-confirmed`
-- 触发：存量盘面来自已下线的并发首跑，global/旧 style/blueprint 只有部分正式落盘。
-- 判断：组合命令不是原子事务；已经正式落盘的上游不应为补齐下游而重复付费。
-  已观测到的一种历史形态：global 与现已退役的 style 产物都正式落盘，只有逐章蓝图被拦成
-  `.INVALID`，而它的逐章生成事件全部 `succeeded`、`failed` 为零。
-  ⇒ **逐章生成成功不等于落盘**：闸门是在合并落盘那一步判的，
-  所以"每章都绿"与"整条命令 exit 2"完全可以同时成立，别据前者推断产物已就位。
-- 处置：先 `state` 看清哪几份已 fresh；先把 current Stage2 全局复核逐项收成 PASS，
-  再按 finding 修复活动失败并 preview 缺失的 `stage2.blueprint`。旧 style 不补跑、不迁移。
-- 验证：Stage2 follow-check fresh 且无 HARD，`state` 显示当前节点完成。
-- 依据：当前 CLI 的 Stage2 全局硬闸与产物存在性；并发入口已经从注册表删除。
+- 触发：Stage2 下游缺失，或本书出现 `repair_manifest.json` / `checkpoint_restored`；global、逐章
+  checkpoint、正式 blueprint 与 review 可能只完成其中一部分。
+- 判断：checkpoint 只证明一章模型响应已经通过当时的单章闸，不是正式 artifact，也不提升 Stage2
+  完成度；review PASS 也只证明人审支路完成。只有正式 blueprint 编译并通过联合 HARD，且 current
+  review 全 PASS，两支才真正汇合。已经验证并 checkpoint 的章不应因别章失败重新付费。
+- 处置：先 `state` 看正式产物。manifest 点名恢复时必须使用同一 `run_id` resume，让成功章复验恢复；
+  没有可恢复 sidecar 才按当前 preview 补跑缺失节点。global review 可与 blueprint 计算重叠，但必须在
+  Stage4 前收齐；旧 style 不补跑、不迁移。
+- 验证：恢复章出现 `checkpoint_restored` 且新增 wire 为零；`stage2.blueprint --check-only` fresh 且无
+  HARD，review current/全 PASS，`state` 显示 Stage2 完成。
+- 依据：`novel/llm/stage2_runs.py::restore_checkpoint`；
+  `novel/stages/stage2/extract.py::_raise_response_repair`；
+  `contracts/invariants.py::stage2_review_required`。
 
 ### FN-004 · blueprint 锚点失败要先判原字节
 
@@ -97,10 +100,13 @@ rg -n "stage6|hook_para_sep|exit 70" .claude/skills/novel-pipeline-operator/refe
 - 状态：`contract-confirmed`
 - 触发：连接中断、宿主终止或 exit 70；账本有调用而目标产物不在盘。
 - 判断：账本与产物写入不是事务；“记过调用”不能证明生成成功。
-- 处置：先 `state`，再用完全相同参数重跑；不得通过换参数或删缓存强制新调用。
-- 验证：目标正式产物存在、fresh，追跑 check 完成；账本将缓存回放与实付分开。
+- 处置：先 `state`。Stage2 blueprint 已有 run sidecar 时用原 `run_id` 恢复，已验证章从 checkpoint
+  复验；其余节点用完全相同参数重跑。不得通过换身份、换参数、删 checkpoint 或删缓存强制新调用。
+- 验证：目标正式产物存在、fresh，追跑 check 完成；Stage2 恢复章为 `checkpoint_restored` 且零新增
+  wire，其余缓存回放与实付仍由账本分开。
 - 依据：`novel/llm/cache.py::cache_key` 决定同参数重跑能不能命中回放；
-  `novel/llm/cache.py::ResponseCache` 与 CLI 的写盘顺序不是一个事务。
+  `novel/llm/cache.py::ResponseCache` 与 CLI 的写盘顺序不是一个事务；
+  `novel/llm/stage2_runs.py::restore_checkpoint` 负责同 run 的验证后章节恢复。
 
 ### FN-006 · 语义结论按文本 sha1 绑定，不跟机械验收的轮次走
 

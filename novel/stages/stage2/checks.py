@@ -1587,7 +1587,7 @@ def _present(c: _Ctx) -> list[Outcome]:
 
 def check(*, global_g: dict[str, Any] | None, blueprints: dict[str, Any] | None,
           main_text: list[dict[str, Any]] | None) -> list[Outcome]:
-    """对两份 stage2 产物跑全部 77 条确定性判据 → `[Outcome]`。
+    """对两份 stage2 产物跑全部注册的确定性判据 → `[Outcome]`。
 
     **一条判据恰好一个 `Outcome`，一条都不许少**：`build()` 遍历判据注册表，
     注册了而这里没产出 ⇒ 强制 `skipped`，徽章至少 amber。

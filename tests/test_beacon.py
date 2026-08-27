@@ -59,6 +59,22 @@ def test_append_then_read_roundtrip(base):
     ]
 
 
+def test_legacy_progress_without_run_id_is_read_without_backfill(base):
+    """旧信标缺 run_id 仍可读为 legacy/ungrouped，且读取不迁移历史 JSONL。"""
+    path = beacon.beacon_path(base)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = _ev(1, 'stage0.remove', 'start').model_dump(
+        mode='json', exclude={'run_id'})
+    before = (json.dumps(payload, ensure_ascii=False) + '\n').encode('utf-8')
+    path.write_bytes(before)
+
+    events = beacon.read_events(base)
+
+    assert len(events) == 1 and events[0].run_id is None
+    assert path.read_bytes() == before
+    assert 'run_id' not in json.loads(path.read_text('utf-8'))
+
+
 def test_read_tolerates_a_truncated_last_line(base):
     """被 kill 截在半路的最后一行当没有——与 `jobs.read_events` 同一条容错。"""
     beacon.append(base, _ev(1, 'stage0.remove', 'start'))

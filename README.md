@@ -17,6 +17,9 @@
   “审校台”而不是 dashboard：主体动作是并排对照证据，再由人做决定。
 - stage0 批准是全链第一个人工硬闸；Stage4 计划另有绑定当前结构主体的逐章人工批准，Stage5 的
   付费写作授权与它独立；stage6 与 stage7 的人工定稿是各自产物进入下游的语义闸。
+- Stage2 global 正式落盘后，人可一边逐项复核、一边让 blueprint 逐章计算；两支必须在 Stage4A
+  前汇合为 current global + current blueprint、联合 HARD 通过与 current 全 PASS 人审。同书的
+  review / typed edit / producer 写回仍串行，不能把“人机并行”解释成并发改文件。
 - 看、免费但写盘、付费 LLM 三类动作必须一眼可分。付费前由服务端下发完整 argv 并二次确认；
   不显示猜测的价格或调用次数，发起后不承诺无损取消在途调用。
 
@@ -28,8 +31,10 @@
 ```
 stage0  非正文剔除 + 人工审阅闸门              0 成本，无 LLM，**必须人批准才能往下走**
 stage1  摄入 + 分章                          0 成本，无 LLM
-stage2  全书级抽取（人物/关系/规则/秘密/弧线）  1 次调用 ┐
-        逐章抽取（事实原子/因果/舞台 + 保真点） 每章 1 次、最多 32 并发
+stage2  全书级抽取（人物/关系/规则/秘密/弧线）  1 次调用
+          ├─ 逐章抽取（事实原子/因果/舞台 + 保真点） 每章 1 次、最多 32 并发
+          └─ 全局事实逐项人审                         0 成本，与逐章计算重叠
+        两支汇合：blueprint 联合 check-only + current 全 PASS 人审；随后才进 Stage4A
 stage4  A：去序真相图上的盲场景设计              1 次独立调用
         B：只给冻结候选绑定舞台/人物/材料并编译计划 1 次独立调用
         人工逐章结构批准（不自动触发重规划）       0 成本
@@ -41,6 +46,15 @@ stage6  开篇文案：一次调用产三候选，人定稿       1 次调用
 stage7  人名替换：一次调用产新人物表（只产决策）  1 次调用
         替换与成书组装                          0 成本
 ```
+
+Stage2 逐章调用以 `run_id` 归组。通过 JSON/schema/动态判据/章节 scope 的成功章会写入书内的
+验证后检查点；同一 run 中断后可在不新增 wire 的情况下重验恢复。一个并发波次的可人工修复响应
+只生成一份 batch workpack、一次原子 resolution 和一次 resume；reasoning 通道里已经完整过闸的
+JSON 直接采用，不再为了取得普通 content 重采。损坏、跨 run、输入或 SHA 漂移会关闭式停止，
+`--resample` 与 `--chapters` 的刷新语义不会被检查点绕过。检查点不是正式 artifact 或普通 LLM 缓存，
+不改变 `chapter_blueprints.json` 的 schema，也不改变 `micro_events`、`beats` 或 fact atoms。
+逐章扇出的供应商前缀 warm-up 仍默认开启，未新增关闭型产品 flag；本次不另做付费 A/B，收益只在
+下一次自然跑书按 `run_id` 回读 wire/章、checkpoint restore、repair batch、reasoning token 与墙钟。
 
 Stage5 的 canonical v2 产物与单臂工作流已完成工程回归；现役 atom / scene / material 写作契约属于
 设计改进，但没有完成与此前 event-list / beat-material 契约的受控双书付费 A/B，不能据此宣称质量更高、成本更低
@@ -57,7 +71,7 @@ Stage5 的 canonical v2 产物与单臂工作流已完成工程回归；现役 a
 |---|---|---|
 | stage0 | 剔除番外、后记、尾声、作者有话说 | 整本审阅删除范围；可直接修正范围或正文；批准后才下行 |
 | stage1 | 确定性分章 | 原文与切分并排，确认无漏章、错章、断号 |
-| stage2 | 全书事实底座与逐章事实原子/舞台证据 | 原文与事实契约逐段对照；全局人物、关系、规则、秘密是否有据 |
+| stage2 | 全书事实底座与逐章事实原子/舞台证据 | global 落盘后即可开始逐项对原文复核，并可与 blueprint 计算重叠；Stage4 前必须全部 PASS |
 | stage4 | 盲设计、证据绑定、计划编译与写作上下文 | 逐章审阅 retain/reconstruct、入口/分组/披露读数与证据落点；接受或请求重规划 |
 | stage5 | canonical 闭卷写作与机械验收 | 材料与成稿、原文与改写、finding 与修订面 |
 | stage6 | 生成三个开篇文案候选 | 三候选并排，人选一条定稿 |

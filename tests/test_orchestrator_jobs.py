@@ -20,6 +20,7 @@ import pytest
 
 from contracts.invariants import NODES
 from contracts.schema.orchestration import JobEvent, JobStart, Step
+from novel import run_identity
 from novel.orchestrator import beacon
 from novel.orchestrator import jobs as J
 
@@ -146,6 +147,26 @@ def test_sync_run_projects_start_and_end_into_the_progress_beacon(base):
         ('stage3.style', 'start', None),
         ('stage3.style', 'end', 0),
     ]
+
+
+def test_job_id_reaches_every_child_env_and_both_progress_events(base):
+    """服务作业的一份身份必须同时进入子进程环境与 start/end 观察轨迹。"""
+    run_id = 'acceptance-run-42'
+    inherited: list[str | None] = []
+
+    def capture_env(argv, cwd, env, log):
+        inherited.append(env.get(run_identity.RUN_ID_ENV))
+        return 0
+
+    rec = J.run(
+        base, 'stage3.style', SID, steps=_steps(2), spawn=capture_env,
+        registry=J.JobRegistry(), job_id=run_id)
+    events = beacon.read_events(base)
+
+    assert rec.job_id == run_id
+    assert inherited == [run_id, run_id]
+    assert [(event.phase, event.run_id) for event in events] == [
+        ('start', run_id), ('end', run_id)]
 
 
 def test_a_registry_only_releases_its_own_lock():

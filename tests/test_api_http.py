@@ -498,10 +498,61 @@ def test_free_stage5_recovery_jobs_do_not_request_writing_authorization(
     assert authorized == []
 
 
+def test_paid_blueprint_can_start_while_global_review_is_pending(
+        client, monkeypatch):
+    """Stage2 第二个 producer 不得被下游人审策略误判成 consumer。"""
+    checked: list[tuple] = []
+
+    monkeypatch.setattr(
+        JOB_API.approvals, 'require_stage2_review',
+        lambda *args: checked.append(args))
+
+    def start_without_thread(run_base, node, sid, run_flags, *, steps, prepare=None):
+        assert prepare is None
+        return _started_record(run_base, node, sid, run_flags, steps)
+
+    monkeypatch.setattr(JOB_API.jobs, 'start', start_without_thread)
+
+    response = client.post('/api/jobs', json={
+        'sid': '42', 'node': 'stage2.blueprint', 'flags': [],
+    })
+
+    assert response.status_code == 202, response.text
+    assert response.json()['start']['paid'] is True
+    assert checked == []
+
+
+@pytest.mark.parametrize('node', [
+    'stage4.design', 'stage4.context', 'stage6.hook', 'stage7.assemble',
+])
+def test_stage2_review_is_checked_for_paid_and_free_consumers_under_the_book_lock(
+        client, monkeypatch, node):
+    checked: list[tuple[str, str]] = []
+
+    monkeypatch.setattr(
+        JOB_API.approvals, 'require_stage2_review',
+        lambda _base, sid, checked_node: checked.append((sid, checked_node)))
+
+    def start_without_thread(run_base, run_node, sid, run_flags, *, steps, prepare=None):
+        assert prepare is not None
+        prepare()
+        return _started_record(run_base, run_node, sid, run_flags, steps)
+
+    monkeypatch.setattr(JOB_API.jobs, 'start', start_without_thread)
+
+    response = client.post('/api/jobs', json={
+        'sid': '42', 'node': node, 'flags': [],
+    })
+
+    assert response.status_code == 202, response.text
+    assert checked == [('42', node)]
+
+
 def test_paid_stage5_job_authorizes_selected_chapters_before_start(
         client, base, monkeypatch):
     """付费定向写作仍在占锁后、启动前校验 writing proof。"""
     authorized = []
+    reviewed = []
 
     def authorize(run_base, sid, chapters, *, requires_fresh_review):
         authorized.append((run_base, sid, chapters, requires_fresh_review))
@@ -512,6 +563,9 @@ def test_paid_stage5_job_authorizes_selected_chapters_before_start(
         return _started_record(run_base, node, sid, run_flags, steps)
 
     monkeypatch.setattr(JOB_API.approvals, 'authorize_writing', authorize)
+    monkeypatch.setattr(
+        JOB_API.approvals, 'require_stage2_review',
+        lambda _base, sid, node: reviewed.append((sid, node)))
     monkeypatch.setattr(JOB_API.jobs, 'start', start_without_thread)
 
     response = client.post('/api/jobs', json={
@@ -521,6 +575,7 @@ def test_paid_stage5_job_authorizes_selected_chapters_before_start(
 
     assert response.status_code == 202, response.text
     assert response.json()['start']['paid'] is True
+    assert reviewed == [('42', 'stage5.write')]
     assert [(sid, chapters, fresh) for _, sid, chapters, fresh in authorized] == [
         ('42', [1, 3], False),
     ]

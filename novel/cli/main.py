@@ -43,9 +43,10 @@ from collections.abc import Callable, Sequence
 
 from contracts.invariants import (
     FREE_ENTRIES, NODES, PAID_FLAGS, PROGRESS_PHASES, STAGES, VALUED_FLAGS,
+    stage2_review_required,
 )
 from contracts.schema.orchestration import ProgressEvent
-from novel import paths, prov
+from novel import paths, prov, run_identity
 from novel.cli import exit_codes as X
 from novel.errors import (
     ApprovalRequired, ArtifactUnreadable, RefusedByStructure, TerminalState, UpstreamMissing,
@@ -75,8 +76,19 @@ def _force_utf8() -> None:
             reconfigure(encoding='utf-8')
 
 
+def _run_id_arg(value: str) -> str:
+    """把 run 身份的纯值域校验接到 argparse 的用户输入错误面。"""
+    try:
+        return run_identity.check_run_id(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(str(exc)) from exc
+
+
 def _parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(prog='python -m novel.cli', description=__doc__)
+    ap.add_argument(
+        '--run-id', default=None, type=_run_id_arg,
+        help='跨“首轮 → batch repair → 唯一 resume”的运行身份；首次省略会自动生成')
     sub = ap.add_subparsers(dest='cmd', required=True)
 
     def with_run_args(p: argparse.ArgumentParser) -> None:
@@ -95,6 +107,9 @@ def _parser() -> argparse.ArgumentParser:
 
     r = sub.add_parser('run', help='真跑一个节点')
     with_run_args(r)
+    r.add_argument(
+        '--run-id', dest='run_id', default=argparse.SUPPRESS, type=_run_id_arg,
+        help='同全局 --run-id；兼容放在 run 子命令之后')
     r.add_argument('--yes', action='store_true',
                    help='确认这一次会花钱（付费跑法必填）')
 
@@ -143,9 +158,12 @@ def _parser() -> argparse.ArgumentParser:
     rr = sub.add_parser('response-repair', help='提交或放弃一份隔离响应修复稿（0 成本）')
     rr.add_argument('sid')
     rr.add_argument('--base', required=True)
-    rr.add_argument('--attempt', required=True, help='拒绝记录的 16 位 attempt_id')
+    target = rr.add_mutually_exclusive_group(required=True)
+    target.add_argument('--attempt', help='历史/单项路径：拒绝记录的 16 位 attempt_id')
+    target.add_argument('--batch', help='Stage2 一次性 repair_manifest.json')
     rr.add_argument('--actor', required=True)
-    rr.add_argument('--reason', required=True)
+    rr.add_argument('--reason', help='单项路径必填；batch 的 reason 逐项写在 decisions 里')
+    rr.add_argument('--decisions', help='batch 路径必填：完整 submit|decline 决定 JSON')
     rr.add_argument('--decline', action='store_true',
                     help='明确放弃本次修复额度；重跑原节点后进入下一采')
 
@@ -227,6 +245,8 @@ def _run_stage0_source(
     base: str,
     sid: str | None,
     flags: list[str],
+    *,
+    run_id: str,
 ) -> int:
     '''目录尚不存在时的摄入入口；sid 从 source 文件名推导。'''
     from novel.stages.stage0 import removal
@@ -242,6 +262,7 @@ def _run_stage0_source(
         base,
         dry_run='--dry-run' in tokens,
         expected_sid=sid,
+        run_id=run_id,
     )
     action = '将写入' if '--dry-run' in tokens else '已写入'
     print(
@@ -503,7 +524,10 @@ def _run_stage2(ctx: RunContext, flags: list[str]) -> int:
             passed = global_review.is_approved(ctx, review)
             print(f'  {"✓" if passed else "⚠"} stage2 全局复核：'
                   f'{sum(item.state == "PASS" for item in review.items)}/'
-                  f'{len(review.items)} 项 PASS；只有全部 PASS 才打开 s2 gate')
+                  f'{len(review.items)} 项 PASS；'
+                  + ('global review 支路已收口；仍需 current blueprint 与联合 HARD '
+                     '通过才打开 s2 gate' if passed else
+                     '仍有非 PASS 项，s2 gate 保持关闭'))
             return X.OK if passed else X.CHECK_FAILED
         if '--resample' in tokens:
             extract.run_resample(ctx, _llm_client(ctx))
@@ -924,7 +948,13 @@ def _cmd_run(a: argparse.Namespace) -> int:
     # ⚠ `paid` 由 `is_paid` 算，**不由 `NODES[node].paid` 推**：
     # 真正的贵贱是 `(node, flags)` 二元组的函数，而它只有一处算（`R-11.7`）。
     if a.node == 'stage0.remove' and '--source' in N.flag_tokens(flags):
-        return _run_stage0_source(a.base, a.sid, flags)
+        # 这条路径在书目录建立前进入 producer，不经 `RunContext.open`。
+        # 因此必须在这里先铸造这次跑的唯一身份，人手命令立即
+        # 看得到，producer 里的 context / ledger 也复用同一个值。
+        run_id = run_identity.resolve_run_id(a.run_id)
+        print(f'  run_id : {run_id}', file=sys.stderr)
+        return _run_stage0_source(
+            a.base, a.sid, flags, run_id=run_id)
     if a.sid is None:
         raise TerminalState(
             f'{a.node} 要已有书 sid；只有 stage0.remove --source 摄入新书时可以省略')
@@ -934,12 +964,18 @@ def _cmd_run(a: argparse.Namespace) -> int:
             f'--response-repair 当前只接受 agent，实得 {repair_mode!r}')
     ctx = RunContext.open(
         a.base, a.sid, a.node, paid=paid,
-        repair_rejected_responses=repair_mode == 'agent')
+        repair_rejected_responses=(
+            repair_mode == 'agent'
+            or (paid and a.node == 'stage2.blueprint')),
+        run_id=a.run_id)
+    # stdout 有 JSON 模板等机读消费者；身份打 stderr，人在终端仍能第一时间看到。
+    # 测试里的最小 fake context 可能不带新字段，生产 RunContext 则结构上必有。
+    if run_id := getattr(ctx, 'run_id', None):
+        print(f'  run_id : {run_id}', file=sys.stderr)
     # Stage2 人工评测是**运行边界**，不是某个编排器的礼貌约定。任何调用方
     # （手敲 CLI、前端 jobs、headless agent）最终都要经过这里；0 成本复检/人工修复
     # 仍可在闸关闭时运行，否则人连开闸的恢复路都进不去。
-    if ((paid and a.node not in ('stage2.global',))
-            or a.node == 'stage7.assemble'):
+    if stage2_review_required(a.node, paid=paid):
         from novel.stages.stage2 import global_review
         global_review.require_approved(ctx)
     # API 的 prepare 只做早反馈；手敲 CLI 也必须经过同一座权威门，且要在
@@ -1144,6 +1180,47 @@ def _cmd_response_repair(a: argparse.Namespace) -> int:
     from novel.llm import response_repair
 
     novel_dir = paths.resolve_novel_dir(a.base, a.sid)
+    if a.batch:
+        if a.decline or a.reason:
+            raise TerminalState(
+                'batch 每项的 submit|decline 与 reason 必须全部写进 --decisions；'
+                '不能再混用单项 --decline/--reason')
+        if not a.decisions:
+            raise TerminalState('response-repair --batch 必须同时给 --decisions <json>')
+        from novel.llm import stage2_runs
+        resume = stage2_runs.manifest_resume_metadata(a.batch)
+        run_id = str(resume['run_id'])
+        if a.run_id is not None and a.run_id != run_id:
+            raise TerminalState(
+                f'--run-id={a.run_id!r} 与 batch manifest run_id={run_id!r} 不一致；'
+                '拒绝写 batch resolution')
+        target = stage2_runs.submit_batch(
+            novel_dir, a.batch, a.decisions, actor=a.actor)
+        print(f'  ✓ 已原子封存整份 batch resolution：{target}')
+        print('  ⚠ 这不是通过；原节点会逐项重跑当前 schema/validator，再整书联合 HARD')
+        print('  → 用同一身份 resume：')
+        required_environment = resume['required_environment']
+        architecture = str(resume['architecture'])
+        env_key = next(iter(required_environment))
+        print(f'  ⚠ 必须保持 {env_key}={architecture!r}；'
+              'architecture 没有 CLI flag，不得从当前默认反推')
+        resume_flags = ' '.join(str(flag) for flag in resume['flags'])
+        suffix = f' {resume_flags}' if resume_flags else ''
+        print('    python -X utf8 -u -m novel.cli '
+              f'--run-id {run_id} run stage2.blueprint {a.sid} '
+              f'--base "{a.base}" --yes{suffix}')
+        return X.OK
+    if a.decisions:
+        raise TerminalState('--decisions 只与 --batch 同用')
+    if not a.reason:
+        raise TerminalState('response-repair --attempt 必须给非空 --reason')
+    pending = response_repair.find_attempt(novel_dir, a.attempt)
+    pending_run_id = pending.rejection.get('run_id')
+    if (a.run_id is not None and pending_run_id is not None
+            and a.run_id != pending_run_id):
+        raise TerminalState(
+            f'--run-id={a.run_id!r} 与 rejection run_id={pending_run_id!r} 不一致；'
+            '拒绝写单项 resolution')
     record = response_repair.submit(
         novel_dir, a.attempt, actor=a.actor, reason=a.reason,
         decline=a.decline)
@@ -1153,6 +1230,8 @@ def _cmd_response_repair(a: argparse.Namespace) -> int:
         print(f'  ✓ 已封存 attempt={a.attempt} 的候选 '
               f'{record.root / response_repair.CANDIDATE_FILE}')
         print('  ⚠ 这不是通过；请重跑原节点，让候选经过原 schema/validator 闸')
+    if run_id := record.rejection.get('run_id'):
+        print(f'  → resume 必须显式复用 run_id：{run_id}')
     return X.OK
 
 
@@ -1170,9 +1249,17 @@ def _cmd_mark(a: argparse.Namespace) -> int:
         raise TerminalState('phase=end 必须带 --exit <退出码>（phase=start 不许带）')
     if a.phase == 'start' and a.exit is not None:
         raise TerminalState('phase=start 不许带 --exit——还没跑完哪来的退出码')
+    inherited = run_identity.inherited_run_id()
+    effective_run_id = run_identity.resolve_run_id(a.run_id)
+    if a.run_id is None and inherited is None:
+        # 手工协议的第一条 start 没有父进程身份：在真正落信标前铸造并打印，
+        # operator 随后把同一值显式传给 producer 与 end mark。不能写一条 null
+        # 再指望成本收尾按时间窗口猜它属于哪次 run。
+        print(f'  run_id : {effective_run_id}', file=sys.stderr)
     beacon.append(a.base, ProgressEvent(
         ts=int(time.time()), sid=paths.check_sid(a.sid), node=a.node,
-        phase=a.phase, exit_code=a.exit, note=a.note))
+        phase=a.phase, exit_code=a.exit, note=a.note,
+        run_id=effective_run_id))
     return X.OK
 
 

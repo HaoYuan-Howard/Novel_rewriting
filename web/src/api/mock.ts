@@ -347,7 +347,7 @@ function freshDoc(sid: string): ApprovalDoc {
       current_decision: null,
       history: [],
     },
-    spawns: SPAWN_ON_APPROVE,
+    spawns: {},
   }
 }
 
@@ -370,7 +370,7 @@ function seededDoc(sid: string): ApprovalDoc {
       current_decision: decision,
       history: [decision],
     },
-    spawns: SPAWN_ON_APPROVE,
+    spawns: {},
   }
 }
 
@@ -378,16 +378,18 @@ function loadDoc(sid: string): ApprovalDoc {
   const got = lsRead<unknown>('approvals.' + sid)
   // spawns 是服务端的事；只接受当前公开 v4，旧本地记录按当前种子重建。
   if (got && typeof got === 'object' && (got as { v?: unknown }).v === 4) {
-    return { ...(got as ApprovalDoc), spawns: SPAWN_ON_APPROVE }
+    return withMockSpawns(got as ApprovalDoc)
   }
   const seed = sid === SAMPLE_SID ? seededDoc(sid) : freshDoc(sid)
-  lsWrite('approvals.' + sid, seed)
-  return seed
+  const projected = withMockSpawns(seed)
+  lsWrite('approvals.' + sid, projected)
+  return projected
 }
 
 function saveDoc(doc: ApprovalDoc): ApprovalDoc {
-  lsWrite('approvals.' + doc.sid, doc)
-  return doc
+  const projected = withMockSpawns(doc)
+  lsWrite('approvals.' + doc.sid, projected)
+  return projected
 }
 
 /* ------------------------------------------------------ Stage2 全局复核 */
@@ -693,18 +695,29 @@ function publicJobs(sid: string): JobsResponse {
 }
 
 /** 确认之后自动发起的下游。谁发起什么由服务端决定，不由界面决定。 */
-const SPAWN_ON_APPROVE: Partial<Record<GateKey, ActionRef[]>> =
-  {
-    s1: [{
-      kind: 'stage2.global',
-      label: '生成 stage2 全局底座；完成后逐项人工复核',
-      extra: null,
-    }],
+function withMockSpawns(doc: ApprovalDoc): ApprovalDoc {
+  const s1: ActionRef[] = !doc.seen.global
+    ? [{
+        kind: 'stage2.global',
+        label: '生成 stage2 全局底座；完成后逐项人工复核',
+        extra: null,
+      }]
+    : !doc.seen.read
+      ? [{
+          kind: 'stage2.blueprint',
+          label: '生成 stage2 逐章骨架；可与全局人工复核并行',
+          extra: null,
+        }]
+      : []
+  const spawns: Partial<Record<GateKey, ActionRef[]>> = {
+    s1,
     s2: [{ kind: 'stage4.plan', label: 'stage4 重构计划', extra: null }],
     s5: [{ kind: 'stage6.hook', label: 'stage6 开篇文案（产三候选）', extra: null }],
     s6: [{ kind: 'stage7.rename', label: 'stage7 人名替换（产新人物表）', extra: null }],
     s7: [{ kind: 'stage7.assemble', label: 'stage7 · 组装成书 txt', extra: null }],
   }
+  return { ...doc, spawns }
+}
 
 function codePoints(text: string): number {
   return [...text].length
@@ -1032,8 +1045,6 @@ export const mockApi: Api = {
     })
     const approved = review.current && items.length > 0 && items.every((item) => item.state === 'PASS')
     saveGlobalReview(sid, { ...review, items, approved })
-    const doc = loadDoc(sid)
-    saveDoc({ ...doc, gate: { ...doc.gate, s2: approved } })
     const job = finish({
       kind: 'stage2.global',
       label: 'stage2 全局复核决策',

@@ -107,17 +107,30 @@ def append_line(path: str | os.PathLike[str], line: str) -> None:
     `json.dumps` 本来就会把换行转义掉，所以这条闸平时不响；它拦的是
     「以后有人在这里拼一段多行文本」。
     """
+    p = Path(os.fspath(path))
+    with _thread_lock_for(os.path.normcase(os.path.abspath(p))):
+        with process_append_lock(p):
+            append_line_under_process_lock(p, line)
+
+
+def append_line_under_process_lock(path: str | os.PathLike[str], line: str) -> None:
+    """在调用方**已持有** ``process_append_lock(path)`` 时追加一行。
+
+    这个窄口只供「锁内读取判断 → 条件追加」这类不能重新拿锁的
+    原子事务。它故意不自己加锁；普通写手必须调 ``append_line``。
+    """
     if '\n' in line or '\r' in line:
         raise ValueError(
             f'append-only 事件流一行一条记录，行内不许有换行：{line[:80]!r}')
     p = Path(os.fspath(path))
     p.parent.mkdir(parents=True, exist_ok=True)
     payload = line.encode('utf-8') + b'\n'
-    with _thread_lock_for(os.path.normcase(os.path.abspath(p))):
-        with process_append_lock(p):
-            with open(p, 'ab') as handle:
-                handle.write(payload)
-                handle.flush()
+    with open(p, 'ab') as handle:
+        handle.write(payload)
+        handle.flush()
 
 
-__all__ = ['LOCK_TIMEOUT_SECONDS', 'append_line', 'process_append_lock']
+__all__ = [
+    'LOCK_TIMEOUT_SECONDS', 'append_line', 'append_line_under_process_lock',
+    'process_append_lock',
+]

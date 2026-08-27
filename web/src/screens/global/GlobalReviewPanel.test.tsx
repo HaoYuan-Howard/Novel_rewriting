@@ -130,6 +130,7 @@ describe('GlobalReviewPanel', () => {
     expect(screen.getByText('pending')).toBeVisible()
     expect(screen.getAllByText('FAIL').some((element) => element.tagName === 'SPAN')).toBe(true)
     expect(screen.getAllByText('UNVER').some((element) => element.tagName === 'SPAN')).toBe(true)
+    expect(screen.getByText('Stage4 保持关闭')).toBeVisible()
 
     fireEvent.change(screen.getByLabelText(/自报身份/), {
       target: { value: 'reviewer-a' },

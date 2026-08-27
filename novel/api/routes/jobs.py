@@ -10,10 +10,12 @@ from __future__ import annotations
 
 import asyncio
 import json
+from collections.abc import Callable
 
 from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import StreamingResponse
 
+from contracts.invariants import stage2_review_required
 from contracts.schema.api import JobList, LogChunk, LogStreamEvent, PreviewRequest
 from contracts.schema.orchestration import JobRecord, JobStart
 from novel.api.deps import checked_sid, get_base
@@ -65,7 +67,16 @@ def start_job(req: PreviewRequest, base: str = Depends(get_base)) -> JobRecord:
     sid = checked_sid(req.sid) if req.sid is not None else None
     planned = jobs.plan_start(
         req.node, sid, req.flags, base=base)
-    prepare = None
+    prepares: list[Callable[[], None]] = []
+    # API 只做占住同书锁后的早反馈；CLI 仍是所有调用方共用的最终执行门。
+    # global 与 blueprint 两个 producer 明确豁免，Stage4 起的付费消费、免费
+    # context 和 assemble 则必须绑定当前全局逐项复核。preview 不走这里，始终可用。
+    if stage2_review_required(req.node, paid=planned.paid):
+        if sid is None:
+            raise UnsupportedRunMode(
+                f'{req.node} requires a novel sid for Stage2 review verification')
+        prepares.append(
+            lambda: approvals.require_stage2_review(base, sid, req.node))
     # writing 授权保护的是正文外发 / 付费 LLM 调用。Stage5 同一节点下还有
     # rebuild/recheck/revalidate/dry-run 等零成本恢复路；若也绑 writing，恢复路
     # 会在入口处被自己堵死。`planned.paid` 与 preview 展示的是同一份折叠结论，
@@ -75,11 +86,16 @@ def start_job(req: PreviewRequest, base: str = Depends(get_base)) -> JobRecord:
             raise UnsupportedRunMode('stage5 writing requires a novel sid')
         chapters = _chapter_selection(req.flags)
         revise = '--revise' in nodes.flag_tokens(req.flags)
-        prepare = lambda: approvals.authorize_writing(
-            base, sid, chapters, requires_fresh_review=revise)
+        prepares.append(lambda: approvals.authorize_writing(
+            base, sid, chapters, requires_fresh_review=revise))
+
+    def prepare() -> None:
+        for check in prepares:
+            check()
+
     return jobs.start(
         base, req.node, sid, req.flags,
-        steps=planned.steps, prepare=prepare)
+        steps=planned.steps, prepare=prepare if prepares else None)
 
 
 @router.get('/{job_id}', response_model=JobRecord)

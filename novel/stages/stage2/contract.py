@@ -74,11 +74,9 @@ class ContractSpec:
     #: v3.1 的进一步收窄面；调用方按能力分派，不按架构名字猜。
     uses_hinge_candidates: bool = False
 
-    #: v3.1 的同请求 A/B 观察到救回稿会把一章过切为 15 拍且地点全 unknown，
-    #: 正常正文重采则为 10 拍且地点全明确；但两本空缓存整跑又观察到全拒救回稿
-    #: 会把 41 章放大为 69 次真实调用。折中不是加 prompt，也不是无条件采纳：
-    #: 首份合法救回稿先留作同档后备，再争取一次正常 `content`；第二份仍不可用时
-    #: 才采纳后备，绝不再切 Pro 白烧。多数结构化契约保持“合法即采纳”。
+    #: 客户端保留的通用“优先再争取一次正常 content”能力。Stage2 两套契约都不启用：
+    #: reasoning 中的 JSON 已通过与 content 完全相同的本地契约，继续重采只会增加
+    #: 一次 wire 与中断后丢失合格结果的风险。
     prefers_content_over_reasoning_salvage: bool = False
 
 
@@ -119,7 +117,6 @@ CONTRACTS: dict[str, ContractSpec] = {
         supports_field_patch=True,
         topology='scaffolded_single',
         uses_hinge_candidates=True,
-        prefers_content_over_reasoning_salvage=True,
     ),
 }
 

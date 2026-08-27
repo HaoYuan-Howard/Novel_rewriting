@@ -1697,6 +1697,32 @@ NODES: Final[dict[str, NodeSpec]] = {
                                  produces=(artifact_paths.STAGE7_BOOK,)),
 }
 
+#: Stage2 的两份付费生成可以在全局人工复核收口前完成：global 先产正式复核面，
+#: blueprint 随后即可在人工阅读期间生成。闸门真正守的是它们的下游消费，不能再把
+#: blueprint 本身误当成「消费了已批准 global」；否则所谓并行只剩一句 UI 文案。
+_STAGE2_REVIEW_PRODUCERS: Final = frozenset({
+    'stage2.global', 'stage2.blueprint',
+})
+
+#: 这两项自身不花钱，却会把未复核的 Stage2 主体投影给写手或交付物；若只用
+#: ``paid`` 判闸，它们会成为绕过点。其余 0 成本 check/revalidate/apply-edit 都是
+#: 开闸所需恢复路，必须保持可用。
+_STAGE2_REVIEW_FREE_CONSUMERS: Final = frozenset({
+    'stage4.context', 'stage7.assemble',
+})
+
+
+def stage2_review_required(node: str, *, paid: bool) -> bool:
+    """这次真实执行是否必须先完成当前 Stage2 全局逐项复核。
+
+    ``paid`` 必须来自运行时唯一贵贱判据 ``novel.orchestrator.nodes.is_paid``；
+    contracts 层只拥有策略边界，不在这里重算 flags。未知节点仍由调用入口的
+    ``validate_run`` 关闭式拒收。
+    """
+    if node in _STAGE2_REVIEW_PRODUCERS:
+        return False
+    return paid or node in _STAGE2_REVIEW_FREE_CONSUMERS
+
 #: `(节点, 触发 flag)` → 这条跑法**额外**必填的 flag。`NodeSpec.required_flags` 的补集：
 #: 那一列管无条件必填，这张表管「跟着另一条跑法才必填」。
 #:

@@ -35,6 +35,7 @@ from pathlib import Path
 
 from contracts.invariants import (
     LEGACY_STAGE5_MODES, NODES, RETIRED_NODES, RETIRED_STAGES, STAGES,
+    stage2_review_required,
 )
 from contracts.schema.orchestration import (
     QueueCounts, QueueEntry, QueueEvent, QueueItem, QueueLaneCounts, QueuePlan,
@@ -47,7 +48,11 @@ from novel import paths, prov
 from novel.appendlog import append_line
 from novel.cli import exit_codes as X
 from novel.cli.exit_codes import CRASH
-from novel.errors import ApprovalRequired, ArtifactUnreadable, QueueConflict, UpstreamMissing
+from novel.errors import (
+    ApprovalRequired, ArtifactUnreadable, BlockingFindingsUnresolved,
+    GateBlocked, QueueConflict, UpstreamMissing, UpstreamStale,
+    UpstreamUnproven,
+)
 from novel.orchestrator import approvals, jobs, state as st
 from novel.orchestrator.nodes import build_steps, flag_value, shell_line
 from novel.stages.stage4.phase_state import current_infeasible_binding
@@ -66,6 +71,7 @@ OPTIONAL_HUMAN_NODES: frozenset[str] = frozenset({'stage0.edit'})
 
 #: 待人工清单非空时挡队列的那个理由（`INBOX_KIND` 的 `invalid`）。
 WAITING_ON_INBOX = 'inbox:invalid'
+WAITING_ON_STAGE2_REVIEW = 'approval:stage2-global-review'
 WAITING_ON_STAGE4_PHASE_APPROVAL = 'approval:stage4-bind'
 WAITING_ON_STAGE4_REPLAN = 'approval:stage4-replan'
 WAITING_ON_WRITING_APPROVAL = 'approval:stage5-writing'
@@ -205,6 +211,23 @@ def plan_book(base: str | os.PathLike[str], sid: str, *, until_stage: str,
             if _human_gate_satisfied(base, sid, node):
                 continue                             # 人已经完成这道闸
             why_blocked = node                       # 在等这一步的那个人
+        # 人审移到 Stage4 的最低消费边界。队列的完整节点序列必经 A；在这里挡住后，
+        # ``stuck`` 会把 B、context 与后续全部保持 blocked。Stage2 blueprint 因而能
+        # 先跑，而恢复 global/blueprint 的 0 成本入口也不会被这道门反向堵死。
+        # ⚠ 必须先于通用 upstream-invalid 分类：Stage2 的 `.INVALID` 本来就是完整
+        # closure 的一种 typed 终态；若先压成 `inbox:invalid`，规定的
+        # `approval:stage2-global-review` 阻塞项与恢复文案就永远到不了。
+        if (why_blocked is None and node == 'stage4.design'
+                and stage2_review_required(node, paid=spec.paid)):
+            try:
+                approvals.require_stage2_review(base, sid, node)
+            except (
+                ApprovalRequired, UpstreamMissing, ArtifactUnreadable,
+                GateBlocked, UpstreamStale, UpstreamUnproven,
+                BlockingFindingsUnresolved,
+            ):
+                why_blocked = WAITING_ON_STAGE2_REVIEW
+
         if why_blocked is None:
             ghosts = _upstream_invalid(ov, spec.stage)
             if ghosts:
@@ -277,10 +300,11 @@ def plan_book(base: str | os.PathLike[str], sid: str, *, until_stage: str,
                 steps = []
 
         if why_blocked in (
+            WAITING_ON_STAGE2_REVIEW,
             WAITING_ON_STAGE4_PHASE_APPROVAL, WAITING_ON_STAGE4_REPLAN,
         ):
-            # 当前队列快照里不放 B 的付费 argv。A 成功后也不得把这份
-            # 旧快照重解释为新授权；下一次队列会按当前候选重新展示 B。
+            # 人审/相位决定完成前，当前队列快照里不放下游付费 argv。状态改变后
+            # 必须重新 plan，不能把旧快照重解释为新授权。
             steps = []
 
         if verdict == st.RESUME_LEGACY or why_blocked == WAITING_ON_RESUME_DECISION:
@@ -326,6 +350,13 @@ def _blocked_why(waiting_on: str, verdict_why: str) -> str:
     if waiting_on == WAITING_ON_WRITING_APPROVAL:
         return ('还没有当前 Stage5 全书闭卷写作授权；先在 Stage5 空状态明确授权，'
                 f'队列不会从默认路径反推同意花钱；{verdict_why}')
+    if waiting_on == WAITING_ON_STAGE2_REVIEW:
+        return (
+            'Stage2 尚未在当前完整主体上收口：global/blueprint 可能缺失、过期或有'
+            '问题稿/联合 HARD，也可能是全局逐项复核尚未全部 PASS。global 与 blueprint '
+            '可以先后生成并在人工阅读期间并行推进，但 Stage4A/B、写作上下文、后续'
+            '付费调用与最终成书都不会越过这道门；处理完具体终态后请重新预览队列；'
+            f'{verdict_why}')
     if waiting_on == WAITING_ON_STAGE4_PHASE_APPROVAL:
         return (
             'Stage4A 尚未产生可人工检查的当前盲候选；本次队列只能跑 A。'
@@ -1206,6 +1237,7 @@ def resume_incomplete(base: str | os.PathLike[str], *,
 
 __all__ = [
     'HUMAN_NODES', 'OPTIONAL_HUMAN_NODES', 'WAITING_ON_INBOX',
+    'WAITING_ON_STAGE2_REVIEW',
     'WAITING_ON_STAGE4_PHASE_APPROVAL',
     'WAITING_ON_WRITING_APPROVAL', 'WAITING_ON_REVIEW', 'WAITING_ON_LEGACY',
     'WAITING_ON_RESUME_DECISION', 'WAITING_ON_RESTART_CONFIRMATION', 'WAITING_ON_REPLAN',

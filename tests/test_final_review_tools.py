@@ -27,13 +27,14 @@ def _facts() -> dict:
     counts = {kind: 0 for kind in (
         'invalid', 'rejected', 'stalled', 'repairable', 'human_only',
         'verification', 'upstream', 'approval')}
-    exits = [{'node': 'stage7.assemble', 'exit_code': 0}]
+    exits = [{'node': 'stage7.assemble', 'exit_code': 0, 'run_id': 'run-final'}]
     exit_digest = hashlib.sha256(json.dumps(
         exits, ensure_ascii=False, sort_keys=True, separators=(',', ':'),
     ).encode('utf-8')).hexdigest()
     anchor = {
-        'schema': 'novel-final-evidence-v3', 'sid': 'book-1', 'title': '测试书',
+        'schema': 'novel-final-evidence-v4', 'sid': 'book-1', 'title': '测试书',
         'session_started_at': 100, 'start_code_version': 'code-v1',
+        'session_run_ids': ['run-final'],
         'novel_dir': 'E:\\outputs\\测试书_book-1',
         'book_path': 'E:\\outputs\\测试书_book-1\\stage7\\测试书_rewriting.txt',
         'book_sha1': 'a' * 40, 'chapters': 8, 'inbox_counts': counts,
@@ -54,7 +55,8 @@ def _facts() -> dict:
     ]
     empty_ledger = {
         'path': 'E:\\outputs\\_service\\ledger.jsonl',
-        'scope': 'session', 'started_at': 100, 'by_node': {},
+        'scope': 'run_ids', 'run_ids': ['run-final'],
+        'legacy_ungrouped_rows': 0, 'by_node': {}, 'by_run_node': [],
         'total': {
             'calls_paid': 0, 'calls_cached': 0, 'prompt_tokens': 0,
             'completion_tokens': 0, 'reasoning_tokens': 0, 'latency_ms': 0,
@@ -73,7 +75,7 @@ def _facts() -> dict:
         'active_terminal_files': [],
         'ledger': empty_ledger,
         'ledger_cumulative': {**empty_ledger, 'scope': 'sid_all_history',
-                              'started_at': None},
+                              'run_ids': None},
         'book': {'sha1': 'a' * 40, 'path': anchor['book_path'],
                  'current_delivery_readable': True, 'exact_rebuild_match': True},
     }
@@ -157,41 +159,60 @@ def test_review_validator_distinguishes_disclosures_from_delivery_blockers():
     assert any('交付阻塞余额' in error for error in errors)
 
 
-def test_ledger_and_exit_evidence_are_scoped_to_this_session(monkeypatch, tmp_path):
+def test_ledger_uses_beacon_run_ids_and_leaves_legacy_ungrouped(monkeypatch, tmp_path):
     rows = [
         {'sid': 'book-1', 'outcome': 'ok', 'node': 'stage2.global',
+         'run_id': 'run-old',
          'at': '1970-01-01T00:01:30+00:00', 'cached': False,
          'prompt_tokens': 90, 'completion_tokens': 9, 'reasoning_tokens': 1,
          'latency_ms': 900},
         {'sid': 'book-1', 'outcome': 'ok', 'node': 'stage2.global',
+         'run_id': 'run-current',
          'at': '1970-01-01T00:01:50+00:00', 'cached': False,
          'prompt_tokens': 110, 'completion_tokens': 11, 'reasoning_tokens': 2,
          'latency_ms': 1100},
         {'sid': 'book-1', 'outcome': 'ok', 'node': 'stage5.write',
+         'run_id': 'run-current',
          'at': '1970-01-01T00:02:00+00:00', 'cached': True},
+        {'sid': 'book-1', 'outcome': 'error', 'node': 'stage2.blueprint',
+         'run_id': 'run-current',
+         'at': '1970-01-01T00:02:05+00:00', 'cached': False,
+         'latency_ms': 250},
+        {'sid': 'book-1', 'outcome': 'ok', 'node': 'stage4.plan',
+         'at': '1970-01-01T00:02:10+00:00', 'cached': False,
+         'prompt_tokens': 50, 'completion_tokens': 5,
+         'reasoning_tokens': 3, 'latency_ms': 500},
         {'sid': 'other', 'outcome': 'ok', 'node': 'stage2.global',
+         'run_id': 'run-current',
          'at': '1970-01-01T00:02:00+00:00', 'cached': False},
     ]
     monkeypatch.setattr(collector, '_jsonl', lambda _path: rows)
     monkeypatch.setattr(collector, 'ledger_path', lambda _base: tmp_path / 'ledger.jsonl')
 
-    session = collector._ledger(tmp_path, 'book-1', started_at=100)
+    session = collector._ledger(
+        tmp_path, 'book-1', run_ids={'run-current'})
     cumulative = collector._ledger(tmp_path, 'book-1')
     events = [
         SimpleNamespace(sid='book-1', phase='end', ts=99,
-                        node='stage2.global', exit_code=0),
+                        node='stage2.global', exit_code=0, run_id='run-old'),
         SimpleNamespace(sid='book-1', phase='end', ts=100,
-                        node='stage5.write', exit_code=1),
+                        node='stage5.write', exit_code=1, run_id='run-current'),
         SimpleNamespace(sid='other', phase='end', ts=101,
-                        node='stage7.assemble', exit_code=0),
+                        node='stage7.assemble', exit_code=0, run_id='run-other'),
     ]
 
     assert session['total']['calls_paid'] == 1
     assert session['total']['calls_cached'] == 1
+    assert session['total']['wire_attempts'] == 2
+    assert session['total']['wire_errors_billing_unknown'] == 1
+    assert session['total']['wire_outcomes'] == {'error': 1, 'ok': 1}
     assert session['total']['prompt_tokens'] == 110
-    assert cumulative['total']['calls_paid'] == 2
+    assert cumulative['total']['calls_paid'] == 3
+    assert session['legacy_ungrouped_rows'] == 1
+    assert session['by_run_node'][0]['run_id'] == 'run-current'
     assert collector._session_exits(events, 'book-1', 100) == [
-        {'node': 'stage5.write', 'exit_code': 1}]
+        {'node': 'stage5.write', 'exit_code': 1, 'run_id': 'run-current'}]
+    assert collector._session_run_ids(events, 'book-1', 100) == {'run-current'}
 
 
 def test_review_evidence_sync_replaces_only_the_machine_blocks():

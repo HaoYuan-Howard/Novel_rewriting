@@ -539,7 +539,11 @@ def main(argv: list[str] | None = None) -> int:
             print('  ✓ 正式产物与诊断目录均零改动')
         return 1 if caught else 0
 
-    batch = extract.request_blueprints(ctx, client, chapters=targets)
+    # 7A 的显式产品契约是“合并稿只活在内存，书目录零改动”。正式 Stage2
+    # producer 默认写 validated checkpoints；这里没有 commit/resume 消费者，故显式
+    # 关闭内部检查点，只保留普通 cache、ledger 与 audit 供后续整跑/成本对账。
+    batch = extract.request_blueprints(
+        ctx, client, chapters=targets, checkpoints=False)
     raw_blueprints = batch['raw_blueprints']
     errors = [f'{type(e).__name__}: {str(e).splitlines()[0]}' for e in batch['errors']]
     if not raw_blueprints:

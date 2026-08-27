@@ -136,26 +136,39 @@ def test_stage2_review_workpack_is_read_only_and_never_auto_decides(reviewed_box
     assert after == before
 
 
-def test_r_2_15_blocks_downstream_paid_work_before_dispatch(box, monkeypatch, capsys):
-    """`R-2.16` 是 CLI 运行边界；换调用方也绕不过 Stage2 typed 闸。"""
+def test_r_2_16_allows_blueprint_but_blocks_stage4_before_dispatch(
+        tmp_path, monkeypatch, capsys):
+    """review pending 时 blueprint 可跑；Stage4 仍在 CLI 最终边界拒绝。"""
     import importlib
+    from novel.stages.stage2 import global_review
 
     cli_main = importlib.import_module('novel.cli.main')
     calls: list[str] = []
+    checked: list[str] = []
+    monkeypatch.setattr(
+        cli_main, 'RunContext', SimpleNamespace(open=lambda _base, _sid, node, **_kw:
+                                                SimpleNamespace(
+                                                    node=node, run_id='test-run')))
     monkeypatch.setattr(
         cli_main, '_dispatch',
         lambda node, _ctx, _flags: calls.append(node) or X.OK)
 
-    rc = _run('run', 'stage2.blueprint', box.sid, '--yes',
-              '--base', str(box.root))
-    assert rc == X.TERMINAL_STATE
-    assert calls == []
-    assert 'stage2' in capsys.readouterr().err.lower()
+    def pending(ctx):
+        checked.append(ctx.node)
+        raise ApprovalRequired('stage2 global review pending')
 
-    sandbox.decide_global_review(box)
-    rc = _run('run', 'stage2.blueprint', box.sid, '--yes',
-              '--base', str(box.root))
-    assert rc == X.OK and calls == ['stage2.blueprint']
+    monkeypatch.setattr(global_review, 'require_approved', pending)
+
+    rc = _run('run', 'stage2.blueprint', 'book-1', '--yes',
+              '--base', str(tmp_path))
+    assert rc == X.OK
+    assert calls == ['stage2.blueprint'] and checked == []
+
+    rc = _run('run', 'stage4.design', 'book-1', '--yes',
+              '--base', str(tmp_path))
+    assert rc == X.TERMINAL_STATE
+    assert calls == ['stage2.blueprint'] and checked == ['stage4.design']
+    assert 'review pending' in capsys.readouterr().err
 
 
 @pytest.mark.parametrize('reached,status,want_rc', [
@@ -317,6 +330,198 @@ def test_direct_cli_parser_has_no_retired_stage5_entry(
     err = capsys.readouterr().err
     assert retired_args[0] in err
     assert 'unrecognized arguments' in err and 'Traceback' not in err
+
+
+@pytest.mark.parametrize('prefix', [True, False], ids=['global', 'after-run'])
+def test_invalid_run_id_is_a_stable_cli_input_error_before_context(
+        tmp_path, monkeypatch, capsys, prefix):
+    """`--run-id` 是命令行值域；非法值应由 argparse exit 2，不得冒充崩溃 70。"""
+    from novel.cli import main as M
+
+    opened: list[object] = []
+    monkeypatch.setattr(
+        M, 'RunContext',
+        SimpleNamespace(open=lambda *_args, **_kwargs: opened.append(_kwargs)))
+    head = ['--run-id', '../跨书'] if prefix else []
+    tail = [] if prefix else ['--run-id', '../跨书']
+
+    with pytest.raises(SystemExit) as stopped:
+        _run(
+            *head, 'run', 'stage2.global', 'book-1', *tail,
+            '--base', str(tmp_path), '--yes')
+
+    assert stopped.value.code == X.TERMINAL_STATE == 2
+    assert opened == [], '值域错误必须在创建 RunContext、读写书目录之前拒绝'
+    err = capsys.readouterr().err
+    assert '--run-id' in err and 'run_id 必须是 1..128 位' in err
+    assert 'Traceback' not in err and 'exit 70' not in err
+
+
+def test_global_run_id_reaches_mark_progress_event(
+        tmp_path, monkeypatch):
+    """全局 ``--run-id`` 是 mark 事件的显式真值，不能被父环境覆盖。"""
+    from novel import run_identity
+    from novel.orchestrator import beacon
+
+    monkeypatch.setenv(run_identity.RUN_ID_ENV, 'inherited-agent-run')
+
+    rc = _run(
+        '--run-id', 'explicit-mark-run',
+        'mark', 'book-1', '--node', 'stage0.remove', '--phase', 'start',
+        '--base', str(tmp_path))
+
+    assert rc == X.OK
+    events = beacon.read_events(tmp_path)
+    assert len(events) == 1
+    assert events[0].run_id == 'explicit-mark-run'
+
+
+@pytest.mark.parametrize('explicit', [None, 'explicit-source-run'],
+                         ids=['generated', 'explicit'])
+def test_stage0_source_cli_prints_and_threads_one_run_id_into_real_context(
+        tmp_path, monkeypatch, capsys, explicit):
+    """source 特殊入口不经 ``RunContext.open``，仍须与真 producer 同身份。"""
+    from novel import run_identity
+    from novel.stages.stage0 import removal
+
+    monkeypatch.delenv(run_identity.RUN_ID_ENV, raising=False)
+    source = tmp_path / 'FQ_cli_identity_1001.txt'
+    source.write_text('第一章 起点\n这是用于 CLI 身份回归的正文。\n', encoding='utf-8')
+    observed: list[tuple[str, str]] = []
+    original_checked = removal._checked
+
+    def recording_checked(ctx, log):
+        observed.append((ctx.run_id, ctx.ledger.run_id))
+        return original_checked(ctx, log)
+
+    monkeypatch.setattr(removal, '_checked', recording_checked)
+    argv = [] if explicit is None else ['--run-id', explicit]
+    argv += [
+        'run', 'stage0.remove', '--source', str(source),
+        '--base', str(tmp_path / 'Output'),
+    ]
+
+    rc = _run(*argv)
+
+    assert rc == X.OK
+    err = capsys.readouterr().err
+    lines = [line.strip() for line in err.splitlines()
+             if line.strip().startswith('run_id : ')]
+    assert len(lines) == 1
+    printed = lines[0].removeprefix('run_id : ')
+    assert run_identity.check_run_id(printed) == printed
+    if explicit is not None:
+        assert printed == explicit
+    assert observed == [(printed, printed)]
+
+
+def test_batch_repair_refuses_a_conflicting_explicit_run_before_submit(
+        tmp_path, monkeypatch, capsys):
+    """显式 run 身份与 manifest 冲突时，必须在不可变 resolution 写盘前 exit 2。"""
+    from novel.cli import main as M
+    from novel.llm import stage2_runs
+
+    submitted: list[object] = []
+    monkeypatch.setattr(M.paths, 'resolve_novel_dir', lambda *_args: tmp_path / 'book')
+    monkeypatch.setattr(
+        stage2_runs, 'manifest_resume_metadata',
+        lambda _path: {
+            'run_id': 'manifest-run',
+            'architecture': 'extraction-ir-v3.1',
+            'required_environment': {
+                'NOVEL_STAGE2_BLUEPRINT_CONTRACT': 'extraction-ir-v3.1',
+            },
+            'flags': (),
+        })
+    monkeypatch.setattr(
+        stage2_runs, 'submit_batch',
+        lambda *_args, **_kwargs: submitted.append((_args, _kwargs)))
+
+    rc = _run(
+        '--run-id', 'other-run', 'response-repair', 'book-1',
+        '--batch', 'repair_manifest.json', '--decisions', 'decisions.json',
+        '--actor', 'operator', '--base', str(tmp_path))
+
+    assert rc == X.TERMINAL_STATE
+    assert submitted == [], '身份冲突时不得进入会写 batch resolution 的函数'
+    err = capsys.readouterr().err
+    assert 'manifest-run' in err and 'other-run' in err and '不一致' in err
+    assert 'Traceback' not in err
+
+
+@pytest.mark.parametrize('explicit', [None, 'manifest-run'], ids=['implicit', 'matching'])
+def test_batch_repair_resumes_with_the_manifest_run_id_and_original_flags(
+        tmp_path, monkeypatch, capsys, explicit):
+    """提交后打印 manifest 封存的身份、架构环境与原始定向 flags。"""
+    from novel.cli import main as M
+    from novel.llm import stage2_runs
+
+    target = tmp_path / 'book' / '_stage2_runs' / 'manifest-run' / 'blueprint' / 'batch_resolution.json'
+    submitted: list[tuple[object, ...]] = []
+    monkeypatch.setattr(M.paths, 'resolve_novel_dir', lambda *_args: tmp_path / 'book')
+    monkeypatch.setattr(
+        stage2_runs, 'manifest_resume_metadata',
+        lambda _path: {
+            'run_id': 'manifest-run',
+            'architecture': 'extraction-ir-v3.1',
+            'required_environment': {
+                'NOVEL_STAGE2_BLUEPRINT_CONTRACT': 'extraction-ir-v3.1',
+            },
+            'flags': ('--chapters', '1,2'),
+        })
+
+    def submit(*args, **kwargs):
+        submitted.append((*args, kwargs))
+        return target
+
+    monkeypatch.setattr(stage2_runs, 'submit_batch', submit)
+    prefix = [] if explicit is None else ['--run-id', explicit]
+    rc = _run(
+        *prefix, 'response-repair', 'book-1',
+        '--batch', 'repair_manifest.json', '--decisions', 'decisions.json',
+        '--actor', 'operator', '--base', str(tmp_path))
+
+    assert rc == X.OK and len(submitted) == 1
+    out = capsys.readouterr().out
+    assert '--run-id manifest-run run stage2.blueprint' in out
+    assert '--yes --chapters 1,2' in out
+    assert "NOVEL_STAGE2_BLUEPRINT_CONTRACT='extraction-ir-v3.1'" in out
+
+
+@pytest.mark.parametrize(
+    ('rejection_run_id', 'expected'),
+    [('attempt-run', X.TERMINAL_STATE), (None, X.OK)],
+    ids=['conflict', 'legacy-without-run-id'],
+)
+def test_single_repair_checks_a_recorded_run_but_does_not_guess_legacy(
+        tmp_path, monkeypatch, capsys, rejection_run_id, expected):
+    """新 rejection 精确同源；旧记录缺 run_id 时不按时间或当前身份回填。"""
+    from novel.cli import main as M
+    from novel.llm import response_repair
+
+    rejection = {} if rejection_run_id is None else {'run_id': rejection_run_id}
+    record = SimpleNamespace(rejection=rejection, root=tmp_path / 'attempt')
+    submitted: list[object] = []
+    monkeypatch.setattr(M.paths, 'resolve_novel_dir', lambda *_args: tmp_path / 'book')
+    monkeypatch.setattr(response_repair, 'find_attempt', lambda *_args: record)
+
+    def submit(*args, **kwargs):
+        submitted.append((args, kwargs))
+        return record
+
+    monkeypatch.setattr(response_repair, 'submit', submit)
+    rc = _run(
+        '--run-id', 'caller-run', 'response-repair', 'book-1',
+        '--attempt', '0123456789abcdef', '--actor', 'operator',
+        '--reason', '材料不足', '--decline', '--base', str(tmp_path))
+
+    assert rc == expected
+    assert len(submitted) == (1 if expected == X.OK else 0)
+    err = capsys.readouterr().err
+    if expected == X.TERMINAL_STATE:
+        assert 'attempt-run' in err and 'caller-run' in err and '不一致' in err
+    else:
+        assert 'Traceback' not in err
 
 
 # ───────────────────── 钱（Q-10） ─────────────────────

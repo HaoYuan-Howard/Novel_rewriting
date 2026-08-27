@@ -172,6 +172,10 @@ _JSON_READ_ALLOWED = {
         '⚠ 更要紧的是它**读的时候一定坏得起**——半成品条目正是进程被硬中断留下的，'
         '写到一半的 JSON 必须当成「没有 metadata」继续往下判，'
         '而产物读路的纪律恰恰相反：坏 JSON 一律关闭式失败'),
+    'novel/llm/stage2_runs.py': (
+        'Stage2 验证后章节检查点与一次性 repair workpack 不是正式产物或普通缓存；'
+        '它们跟书走、按 run_id 关闭式恢复，读取后仍须重跑当前 schema/validator/scope/HARD。'
+        '单独成模块正是为了不给 extract.py/client.py 开裸 IO 豁免'),
 }
 
 
@@ -231,6 +235,10 @@ _WRITE_ALLOWED = {
         '结构化拒绝响应的书内隔离区与不可变受托修复决定。它不是缓存或正式产物；'
         '只允许写 `_llm_rejected/`，真正采纳仍回 LlmClient 的同一套内容闸。'
         '单独成模块是为了不把 `client.py` 整体加入写盘白名单'),
+    'novel/llm/stage2_runs.py': (
+        'Stage2 验证后章节检查点与一次性 batch resolution。它不是正式 artifact 或普通缓存，'
+        '只写书内 `_stage2_runs/<run_id>/blueprint/`，正式采纳仍回 producer 的完整编译/HARD/写盘口。'
+        '单独成模块是为了不把 extract.py/client.py 整体加入写盘白名单'),
     'novel/orchestrator/jobs.py': (
         '作业记录与子进程日志。⚠ **`R-11.3` 已于 2026-08-11（骨架 D）'
         '收窄成「绝不落**产物**盘」**，理由是一句话：'

@@ -198,6 +198,17 @@ def test_visible_refs_do_not_grant_a_future_owner_of_an_already_seen_surface():
     assert visible[2]['char_003'] == ['后来者', '母亲']
 
 
+def test_canonical_surface_shadows_the_same_address_clock():
+    """canonical 已提供同一字面时，address 的较晚登记章不能把它重新关掉。"""
+    characters = copy.deepcopy(CHARACTERS)
+    characters['char_002']['address'][0]['from_chapter'] = 9
+
+    visible = visible_character_refs(
+        characters, [{'chapter_ordinal': 1, 'text': '母亲先在门边等着。'}])
+
+    assert visible[1]['char_002'] == ['母亲']
+
+
 def test_v2_refs_keeps_selected_ids_authoritative_without_display_name_copies():
     raw = {'blueprints': [{
         'chapter_ordinal': 1,

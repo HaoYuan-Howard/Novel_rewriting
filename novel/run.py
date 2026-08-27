@@ -31,7 +31,7 @@ from contracts.invariants import NODES
 from contracts.schema import InputEdge, Provenance
 from contracts.schema.common import FreeProvenance, LlmProvenance
 from contracts.artifacts import STAGE0_CLEAN_TEXT
-from novel import paths, prov
+from novel import paths, prov, run_identity
 from novel.errors import ProvenanceRefused
 from novel.llm.cache import CachePolicy
 from novel.llm.ledger import CostLedger, UsageMark, ledger_path
@@ -57,6 +57,11 @@ class RunContext:
     code: str
     cache: CachePolicy
     ledger: CostLedger
+
+    #: 这一次跑的跨进程联结键。它只进运行时账/观测/恢复状态，
+    #: 不进正式 provenance、cache key 或 node flags。手搭 context 也必须
+    #: 自动得到非空身份，否则单测/独立 evaluator 会留下一类无法联结的新账。
+    run_id: str = ''
 
     #: 结构化响应被 parse/require/schema 等可修复闸拒绝时，是否先物化给外层受托
     #: agent，而不是立即烧掉下一采。显式 CLI flag 才能开启；普通 CLI/队列保持原行为。
@@ -91,6 +96,10 @@ class RunContext:
     _observed_roots: dict[str, str] = field(default_factory=dict, init=False, repr=False)
 
     def __post_init__(self) -> None:
+        # 手搭 context 常先构造 ``CostLedger()``；未显式给 run_id 时
+        # 直接沿用那本账已有的身份，不在同一次跑里再生第二个。
+        self.run_id = run_identity.check_run_id(self.run_id or self.ledger.run_id)
+        self.ledger.bind_run_id(self.run_id)
         if self.node not in NODES:
             raise ValueError(
                 f'未知节点 {self.node!r}。取值面的唯一落点是 contracts.invariants.NODES：'
@@ -215,6 +224,7 @@ class RunContext:
         "发一条结构化运行事件；身份字段只在这里补一次。"
         payload: dict[str, object] = {
             'event': event,
+            'run_id': self.run_id,
             'sid': self.sid,
             'node': self.node,
             **fields,
@@ -378,17 +388,26 @@ class RunContext:
     def open(cls, base: str | os.PathLike[str], sid: str, node: str, *,
              paid: bool, cache: CachePolicy | None = None,
              ledger: CostLedger | None = None, write_ledger: bool = True,
-             repair_rejected_responses: bool = False) -> RunContext:
+             repair_rejected_responses: bool = False,
+             run_id: str | None = None) -> RunContext:
         """按 `<Output>` + 书 id 开一次跑。**找不到书目录 ⇒ 显式终态**（`UpstreamMissing`）。
 
         `write_ledger=False` 时账本只在内存里攒（`--dry-run` / 测试）——
         ⚠ 那不是「不记账」，`usage` 照样产出；它只是不往盘上追加行。
         """
         novel_dir = paths.resolve_novel_dir(base, sid)
+        resolved_run_id = (
+            run_identity.check_run_id(ledger.run_id)
+            if run_id is None and ledger is not None
+            else run_identity.resolve_run_id(run_id)
+        )
         return cls(
             novel_dir=novel_dir, node=node, paid=paid,
             code=prov.code_version(),
             cache=cache or CachePolicy.default(),
-            ledger=ledger or CostLedger(path=ledger_path(base) if write_ledger else None),
+            ledger=ledger or CostLedger(
+                path=ledger_path(base) if write_ledger else None,
+                run_id=resolved_run_id),
+            run_id=resolved_run_id,
             repair_rejected_responses=repair_rejected_responses,
         )

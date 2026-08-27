@@ -14,7 +14,6 @@ import json
 import re
 import sys
 from collections import defaultdict
-from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -118,58 +117,98 @@ def _reports(novel_dir: Path, sid: str) -> tuple[dict[str, Any], list[str]]:
     return reports, rows
 
 
-def _event_epoch(row: dict[str, Any]) -> int | None:
-    """读服务账本的一行时间；不知道就显式返回 ``None``。"""
-    ts = row.get('ts')
-    if isinstance(ts, (int, float)) and not isinstance(ts, bool):
-        return int(ts)
-    at = row.get('at')
-    if not isinstance(at, str) or not at.strip():
-        return None
-    try:
-        parsed = datetime.fromisoformat(at.strip().replace('Z', '+00:00'))
-    except ValueError:
-        return None
-    if parsed.tzinfo is None:
-        return None
-    return int(parsed.timestamp())
+def _ledger(
+        base: Path, sid: str, *, run_ids: set[str] | None = None,
+) -> dict[str, Any]:
+    """按 canonical run_id 精确选账，并如实分开 wire 结果与计费结论。
 
+    ``outcome=error`` 仍是一条已经上线的 wire；供应商是否计费通常未知，不能
+    丢掉，也不能塞进历史兼容字段 ``calls_paid`` 冒充确定实付。因此该字段继续
+    只数成功 wire，同时新增完整 ``wire_attempts`` / ``wire_outcomes`` 分解。
+    """
 
-def _ledger(base: Path, sid: str, *, started_at: int | None = None) -> dict[str, Any]:
-    by_node: dict[str, dict[str, int]] = defaultdict(lambda: {
-        'calls_paid': 0, 'calls_cached': 0, 'prompt_tokens': 0,
-        'completion_tokens': 0, 'reasoning_tokens': 0, 'latency_ms': 0,
-    })
+    def bucket() -> dict[str, Any]:
+        return {
+            # 兼容旧终审实例：只数成功且非缓存的响应。新消费者应同时看 wire 分解。
+            'calls_paid': 0,
+            'calls_cached': 0,
+            'wire_attempts': 0,
+            'wire_errors_billing_unknown': 0,
+            'wire_unknown_outcome': 0,
+            'wire_outcomes': {},
+            'prompt_tokens': 0,
+            'completion_tokens': 0,
+            'reasoning_tokens': 0,
+            'latency_ms': 0,
+        }
+
+    by_node: dict[str, dict[str, Any]] = defaultdict(bucket)
+    by_run_node: dict[tuple[str, str], dict[str, Any]] = defaultdict(bucket)
+    legacy_ungrouped_rows = 0
     for row in _jsonl(ledger_path(base)):
-        if row.get('sid') != sid or row.get('outcome') != 'ok':
+        if row.get('sid') != sid:
             continue
-        if started_at is not None:
-            event_at = _event_epoch(row)
-            if event_at is None:
-                raise ValueError(
-                    f'账本中 sid={sid} 有一条 outcome=ok 记录没有可解析时间，'
-                    '无法证明它属于本次会话还是历史：' + repr(row))
-            if event_at < started_at:
+        raw_run_id = row.get('run_id')
+        row_run_id = (raw_run_id if isinstance(raw_run_id, str)
+                      and raw_run_id.strip() else None)
+        if row_run_id is None:
+            legacy_ungrouped_rows += 1
+        if run_ids is not None:
+            if row_run_id is None or row_run_id not in run_ids:
                 continue
-        bucket = by_node[str(row.get('node') or 'unknown')]
+        node = str(row.get('node') or 'unknown')
+        run_label = row_run_id or 'legacy/ungrouped'
+        buckets = (by_node[node], by_run_node[(run_label, node)])
         if row.get('cached') is True:
-            bucket['calls_cached'] += 1
+            for bucket in buckets:
+                bucket['calls_cached'] += 1
             continue
-        bucket['calls_paid'] += 1
-        for key in ('prompt_tokens', 'completion_tokens', 'reasoning_tokens', 'latency_ms'):
-            value = row.get(key)
-            if isinstance(value, int):
-                bucket[key] += value
-    total = {key: sum(row[key] for row in by_node.values())
-             for key in next(iter(by_node.values()), {
-                 'calls_paid': 0, 'calls_cached': 0, 'prompt_tokens': 0,
-                 'completion_tokens': 0, 'reasoning_tokens': 0, 'latency_ms': 0,
-             })}
+        raw_outcome = row.get('outcome')
+        outcome = (raw_outcome if isinstance(raw_outcome, str)
+                   and raw_outcome.strip() else 'legacy/unknown')
+        for bucket in buckets:
+            bucket['wire_attempts'] += 1
+            outcomes = bucket['wire_outcomes']
+            outcomes[outcome] = int(outcomes.get(outcome, 0)) + 1
+            if outcome == 'ok':
+                bucket['calls_paid'] += 1
+            elif outcome == 'error':
+                bucket['wire_errors_billing_unknown'] += 1
+            else:
+                bucket['wire_unknown_outcome'] += 1
+            for key in (
+                    'prompt_tokens', 'completion_tokens',
+                    'reasoning_tokens', 'latency_ms'):
+                value = row.get(key)
+                if isinstance(value, int):
+                    bucket[key] += value
+    numeric_keys = (
+        'calls_paid', 'calls_cached', 'wire_attempts',
+        'wire_errors_billing_unknown', 'wire_unknown_outcome',
+        'prompt_tokens', 'completion_tokens', 'reasoning_tokens', 'latency_ms',
+    )
+    total: dict[str, Any] = {
+        key: sum(int(row[key]) for row in by_node.values())
+        for key in numeric_keys
+    }
+    total_outcomes: dict[str, int] = {}
+    for row in by_node.values():
+        for outcome, count in row['wire_outcomes'].items():
+            total_outcomes[outcome] = total_outcomes.get(outcome, 0) + int(count)
+    total['wire_outcomes'] = dict(sorted(total_outcomes.items()))
     return {
         'path': str(ledger_path(base)),
-        'scope': ('session' if started_at is not None else 'sid_all_history'),
-        'started_at': started_at,
+        'scope': ('run_ids' if run_ids is not None else 'sid_all_history'),
+        'run_ids': sorted(run_ids) if run_ids is not None else None,
+        'legacy_ungrouped_rows': legacy_ungrouped_rows,
+        'billing_note': (
+            'calls_paid 是兼容字段，只数 outcome=ok 的成功 wire；'
+            'outcome=error 已上线但是否计费未知，单列且不冒充实付'),
         'by_node': dict(sorted(by_node.items())), 'total': total,
+        'by_run_node': [
+            {'run_id': run_id, 'node': node, **values}
+            for (run_id, node), values in sorted(by_run_node.items())
+        ],
     }
 
 
@@ -274,10 +313,20 @@ def _book_facts(base: Path, sid: str, novel_dir: Path) -> dict[str, Any]:
 def _session_exits(events: list[Any], sid: str, started_at: int) -> list[dict[str, Any]]:
     """只取本次会话内的 end 信标；同 SID 的旧 run 不得混入。"""
     return [
-        {'node': event.node, 'exit_code': event.exit_code}
+        {'node': event.node, 'exit_code': event.exit_code,
+         'run_id': event.run_id}
         for event in events
         if (event.sid == sid and event.phase == 'end' and event.ts >= started_at)
     ]
+
+
+def _session_run_ids(events: list[Any], sid: str, started_at: int) -> set[str]:
+    """会话时间只圈 beacon；成本归属随后只按其中的 canonical run_id。"""
+    return {
+        event.run_id for event in events
+        if (event.sid == sid and event.ts >= started_at
+            and isinstance(event.run_id, str) and event.run_id)
+    }
 
 
 def collect(base: str | Path, sid: str, *, started_at: int,
@@ -295,7 +344,9 @@ def collect(base: str | Path, sid: str, *, started_at: int,
     inbox = inbox_view(base, sid)
     terminals, edits = _active_files(novel_dir)
     reports, quality_rows = _reports(novel_dir, sid)
-    exits = _session_exits(beacon.read_events(base), sid, started_at)
+    progress_events = beacon.read_events(base)
+    exits = _session_exits(progress_events, sid, started_at)
+    session_run_ids = _session_run_ids(progress_events, sid, started_at)
     exit_text = ' → '.join(f"{row['node']}:{row['exit_code']}" for row in exits) or '无'
     exit_compact = _compact_exits(exits)
     exit_digest = hashlib.sha256(json.dumps(
@@ -324,8 +375,9 @@ def collect(base: str | Path, sid: str, *, started_at: int,
             'error': f'{type(exc).__name__}: {exc}',
         }
     anchor = {
-        'schema': 'novel-final-evidence-v3', 'sid': sid,
+        'schema': 'novel-final-evidence-v4', 'sid': sid,
         'session_started_at': started_at,
+        'session_run_ids': sorted(session_run_ids),
         'start_code_version': start_code_version,
         'title': paths.title_of(novel_dir), 'novel_dir': str(novel_dir),
         'book_path': book['path'], 'book_sha1': book.get('sha1'),
@@ -346,7 +398,7 @@ def collect(base: str | Path, sid: str, *, started_at: int,
         'reports': reports, 'quality_table_rows': quality_rows,
         'active_terminal_files': terminals, 'active_edit_inputs': edits,
         'book': book,
-        'ledger': _ledger(base, sid, started_at=started_at),
+        'ledger': _ledger(base, sid, run_ids=session_run_ids),
         'ledger_cumulative': _ledger(base, sid),
         'stage2_review': stage2_review,
         'exit_sequence': exits, 'exit_sequence_text': exit_text,

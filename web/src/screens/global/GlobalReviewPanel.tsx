@@ -163,7 +163,7 @@ export function GlobalReviewPanel({ sid }: { sid: string }) {
     <Panel>
       <PaneHeader
         title="全局逐项复核"
-        meta="集合完整性也是独立 subject；只有当前完整审计面全部 PASS 才开 s2 gate"
+        meta="逐章骨架可先生成；只有当前完整审计面全部 PASS 才允许进入 Stage4"
       />
       <QueryStates
         q={review}
@@ -179,7 +179,7 @@ export function GlobalReviewPanel({ sid }: { sid: string }) {
                   ? { color: SEV.info.color, borderColor: SEV.info.border }
                   : { color: SEV.unver.color, borderColor: SEV.unver.border }}
               >
-                {data.approved ? '当前 subject：全部 PASS' : 's2 gate 保持关闭'}
+                {data.approved ? '当前 subject：全部 PASS' : 'Stage4 保持关闭'}
               </span>
               <span className="text-ink-4">
                 PASS {data.items.filter((item) => item.state === 'PASS').length}/{data.items.length}

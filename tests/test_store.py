@@ -35,7 +35,7 @@ from contracts.invariants import STYLE_MEASUREMENT_CONTRACT, STRUCTURE_METRIC_CO
 from contracts.schema.stage4 import PlanChapters, PlanProvenance
 from novel.consumption import (
     CONSUMED_PROJECTIONS, legacy_stage3_projection_for, legacy_stage5_style,
-    producer_node, projection_for,
+    producer_node, project_consumed, projection_for,
 )
 from novel.errors import (
     ApprovalRequired, ArtifactUnreadable, ByteFormRefused, PathRefused,
@@ -434,6 +434,7 @@ def _stage4_grounding_payload() -> dict:
 def _write_grounding_projection_subject(
     base: Path, grounding: dict, *, node: str, rel: str,
     payload: dict | None = None,
+    main_text: list[dict] | None = None,
 ) -> ArtifactStore:
     """把 `grounding` 写成上游，再按 `node` **注册的那一个**投影给 `rel` 记来源边。
 
@@ -442,10 +443,22 @@ def _write_grounding_projection_subject(
     ——守卫要调用生产的落点，不重拼一份。
     """
     book = base / '书名_123'
+    related: dict[str, object] = {}
+    if node == 'stage2.blueprint':
+        # contextual consumed 必须与盘上 current main_text 同一份。
+        # 默认文本覆盖本组正反例会编辑的全部称名；需测
+        # 「从未出现」/「首现前时点」时由调用方显式传入。
+        main_text = main_text or [{
+            'chapter_ordinal': 1,
+            'text': '甲乙掌柜东家老掌柜二爷都在。',
+        }]
+        _write_payload(book, STAGE1_MAIN_TEXT, main_text)
+        related[STAGE1_MAIN_TEXT] = main_text
     _write_payload(book, STAGE2_GLOBAL_GROUNDING, grounding)
     source = book / STAGE2_GLOBAL_GROUNDING
-    project = projection_for(node, STAGE2_GLOBAL_GROUNDING)
-    assert project is not None
+    resolved, projected = project_consumed(
+        node, STAGE2_GLOBAL_GROUNDING, grounding, related=related)
+    assert resolved
     _write_payload(book, rel, {
         **({'output_chapters': []} if payload is None else payload),
         '_provenance': {
@@ -453,7 +466,7 @@ def _write_grounding_projection_subject(
             'inputs': {
                 STAGE2_GLOBAL_GROUNDING: {
                     'file': prov.fingerprint_bytes(source.read_bytes()),
-                    'consumed': prov.projection_fingerprint(project(grounding)),
+                    'consumed': prov.projection_fingerprint(projected),
                 },
             },
         },
@@ -618,7 +631,7 @@ def test_stage5_review_name_projection_ignores_non_name_character_metadata():
     'name_distinctiveness', 'address_context', 'address_by', 'address_from_chapter',
 ))
 def test_blueprint_grounding_projection_only_tracks_attested_names(edited: str):
-    """改 global 的**非称名**字段不许让 blueprint 判 stale。
+    """改 global 的非称名字段或无效时点，不许让 blueprint 判 stale。
 
     ⭐ 这是这条投影存在的全部理由。`stage2.blueprint` 是全链 reasoning 占比最高的
     付费节点（账本实测 40.8%、逐章调用），而它对 global 的真实依赖只有
@@ -666,6 +679,8 @@ def test_blueprint_grounding_projection_only_tracks_attested_names(edited: str):
     elif edited == 'address_by':
         char['address'][0]['by'] = 'narration'
     else:
+        # 本 fixture 的「掌柜」只挂 char_001；运行时只按正文首现控制它，
+        # 所以这个 from_chapter 不影响任何逐章候选字节。
         char['address'][0]['from_chapter'] = 9
     _write_payload(base / '书名_123', STAGE2_GLOBAL_GROUNDING, grounding)
 
@@ -675,6 +690,98 @@ def test_blueprint_grounding_projection_only_tracks_attested_names(edited: str):
                 if edge.key == STAGE2_GLOBAL_GROUNDING)
     assert edge.recorded_file != edge.now_file, \
         '整份指纹本该变——它不变说明这次编辑压根没落盘，用例在自证空转'
+    assert edge.recorded_consumed == edge.now_consumed
+
+
+def test_blueprint_grounding_projection_tracks_ambiguous_address_clock():
+    """同一称呼挂多人时，``from_chapter`` 会改变逐章 char_id 候选，必须 stale。"""
+    base = _book()
+    grounding = _stage4_grounding_payload()
+    other = copy.deepcopy(grounding['entities']['characters']['char_001'])
+    other['canonical'] = '乙'
+    grounding['entities']['characters']['char_002'] = other
+    store = _write_grounding_projection_subject(
+        base, grounding, node='stage2.blueprint',
+        rel=STAGE2_CHAPTER_BLUEPRINTS, payload={'blueprints': []})
+
+    grounding['entities']['characters']['char_001']['address'][0][
+        'from_chapter'] = 9
+    _write_payload(base / '书名_123', STAGE2_GLOBAL_GROUNDING, grounding)
+
+    report = store.freshness(STAGE2_CHAPTER_BLUEPRINTS)
+    assert (report.state, report.reason) == ('stale', 'consumed_changed')
+    edge = next(edge for edge in report.edges
+                if edge.key == STAGE2_GLOBAL_GROUNDING)
+    assert edge.recorded_consumed != edge.now_consumed
+
+
+def test_blueprint_grounding_projection_ignores_unattested_ambiguous_clock():
+    """歧义字面从未出现时，时点不会改变任何逐章候选。"""
+    base = _book()
+    grounding = _stage4_grounding_payload()
+    other = copy.deepcopy(grounding['entities']['characters']['char_001'])
+    other['canonical'] = '乙'
+    grounding['entities']['characters']['char_002'] = other
+    store = _write_grounding_projection_subject(
+        base, grounding, node='stage2.blueprint',
+        rel=STAGE2_CHAPTER_BLUEPRINTS, payload={'blueprints': []},
+        main_text=[{'chapter_ordinal': 1, 'text': '无人开口称呼他们。'}])
+
+    grounding['entities']['characters']['char_001']['address'][0][
+        'from_chapter'] = 9
+    _write_payload(base / '书名_123', STAGE2_GLOBAL_GROUNDING, grounding)
+
+    report = store.freshness(STAGE2_CHAPTER_BLUEPRINTS)
+    assert (report.state, report.reason) == ('fresh', 'match')
+
+
+@pytest.mark.parametrize(('new_clock', 'expected'), [
+    (2, ('fresh', 'match')),
+    (3, ('stale', 'consumed_changed')),
+])
+def test_ambiguous_clock_only_stales_when_it_crosses_real_first_attestation(
+        new_clock: int, expected: tuple[str, str]):
+    """投影比较剔除 collision 后的最终候选，不比中间 inventory。"""
+    base = _book()
+    grounding = _stage4_grounding_payload()
+    other = copy.deepcopy(grounding['entities']['characters']['char_001'])
+    other['canonical'] = '乙'
+    grounding['entities']['characters']['char_002'] = other
+    main_text = [
+        {'chapter_ordinal': 1, 'text': '两人都没有被点名。'},
+        {'chapter_ordinal': 2, 'text': '有人喊了一声掌柜。'},
+    ]
+    store = _write_grounding_projection_subject(
+        base, grounding, node='stage2.blueprint',
+        rel=STAGE2_CHAPTER_BLUEPRINTS, payload={'blueprints': []},
+        main_text=main_text)
+
+    grounding['entities']['characters']['char_001']['address'][0][
+        'from_chapter'] = new_clock
+    _write_payload(base / '书名_123', STAGE2_GLOBAL_GROUNDING, grounding)
+
+    report = store.freshness(STAGE2_CHAPTER_BLUEPRINTS)
+    assert (report.state, report.reason) == expected
+
+
+def test_blueprint_grounding_projection_ignores_canonical_shadowed_address_clock():
+    """canonical 与 address 是同一归一字面时，address 时点不参与真实消费。"""
+    base = _book()
+    grounding = _stage4_grounding_payload()
+    character = grounding['entities']['characters']['char_001']
+    character['address'][0]['surface'] = character['canonical']
+    store = _write_grounding_projection_subject(
+        base, grounding, node='stage2.blueprint',
+        rel=STAGE2_CHAPTER_BLUEPRINTS, payload={'blueprints': []})
+
+    character['address'][0]['from_chapter'] = 9
+    _write_payload(base / '书名_123', STAGE2_GLOBAL_GROUNDING, grounding)
+
+    report = store.freshness(STAGE2_CHAPTER_BLUEPRINTS)
+    assert (report.state, report.reason) == ('fresh', 'match')
+    edge = next(edge for edge in report.edges
+                if edge.key == STAGE2_GLOBAL_GROUNDING)
+    assert edge.recorded_file != edge.now_file
     assert edge.recorded_consumed == edge.now_consumed
 
 

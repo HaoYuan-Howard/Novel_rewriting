@@ -96,17 +96,36 @@ def _quality(facts: dict[str, Any]) -> str:
 
 def _ledger_table(data: dict[str, Any]) -> list[str]:
     lines = [
-        '| 节点 | 实付调用 | 缓存命中 | prompt tokens | completion tokens | reasoning tokens | 可证实耗时 ms |',
-        '|---|---:|---:|---:|---:|---:|---:|',
+        '| run_id | 节点 | 成功 wire（兼容 calls_paid） | error wire（计费未知） | 其他/旧 outcome wire | wire 合计 | 缓存命中 | prompt tokens | completion tokens | reasoning tokens | 累计 wire 耗时 ms |',
+        '|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|',
     ]
-    for node, row in data['by_node'].items():
+    rows = data.get('by_run_node')
+    if not isinstance(rows, list):
+        rows = [
+            {'run_id': 'legacy/ungrouped', 'node': node, **row}
+            for node, row in data['by_node'].items()
+        ]
+    for row in rows:
+        successful = int(row.get('calls_paid', 0))
+        errors = int(row.get('wire_errors_billing_unknown', 0))
+        unknown = int(row.get('wire_unknown_outcome', 0))
+        wire_attempts = int(row.get(
+            'wire_attempts', successful + errors + unknown))
         lines.append(
-            f"| {node} | {row['calls_paid']} | {row['calls_cached']} | "
+            f"| {row['run_id']} | {row['node']} | "
+            f"{successful} | {errors} | {unknown} | {wire_attempts} | "
+            f"{row['calls_cached']} | "
             f"{row['prompt_tokens']} | {row['completion_tokens']} | "
             f"{row['reasoning_tokens']} | {row['latency_ms']} |")
     total = data['total']
+    successful = int(total.get('calls_paid', 0))
+    errors = int(total.get('wire_errors_billing_unknown', 0))
+    unknown = int(total.get('wire_unknown_outcome', 0))
+    wire_attempts = int(total.get(
+        'wire_attempts', successful + errors + unknown))
     lines.append(
-        f"| **合计** | {total['calls_paid']} | {total['calls_cached']} | "
+        f"| **合计** | — | {successful} | {errors} | {unknown} | "
+        f"{wire_attempts} | {total['calls_cached']} | "
         f"{total['prompt_tokens']} | {total['completion_tokens']} | "
         f"{total['reasoning_tokens']} | {total['latency_ms']} |")
     return lines
@@ -116,7 +135,11 @@ def _ledger(facts: dict[str, Any]) -> str:
     book = facts['book']
     return '\n'.join([
         f"本次会话：`started_at={facts['review_anchor']['session_started_at']}`；"
-        f"`start_code_version={facts['review_anchor']['start_code_version']}`。",
+        f"`start_code_version={facts['review_anchor']['start_code_version']}`；"
+        f"`run_ids={facts['review_anchor'].get('session_run_ids', [])}`。",
+        f"缺 run_id 的历史账标为 `legacy/ungrouped`；本次表不按时间窗口猜归属。",
+        "`outcome=error` 仍是已上线 wire，但供应商是否计费未知；单列披露，"
+        "不计入兼容字段 `calls_paid`，也不从账中删除。",
         '',
         f"当前 state/inbox：{facts['inbox_counts_text']}",
         '',

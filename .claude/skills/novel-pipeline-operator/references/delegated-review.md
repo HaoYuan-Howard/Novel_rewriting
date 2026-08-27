@@ -76,9 +76,10 @@
 
 ## Stage2 逐项复核
 
-`stage2.global` 落盘后立即运行 `--emit-review-workpack`。workpack 把每一项的当前主体、
-注册证据和原文精确命中上下文放在一起，但它明确不自动做决定：0 命中不等于 PASS，
-集合完整性项必须通读全书反向寻找漏项。
+`stage2.global` 经 schema、归一化与 producer HARD 正式落盘后，立即运行
+`--emit-review-workpack`。workpack 把每一项的当前主体、注册证据和原文精确命中上下文放在一起，
+但它明确不自动做决定：0 命中不等于 PASS，集合完整性项必须通读全书反向寻找漏项。此时
+`stage2.blueprint` 已可启动；阅读原文、填写决策文件与逐章计算可以重叠。
 
 随后用 `--emit-review-template` 取得带当前 schema version、逐项 subject SHA-256 的骨架，
 按以下口径逐项替换默认 UNVER：
@@ -87,9 +88,17 @@
 2. `FAIL`：存在可指向的冲突、错抽或漏抽；先走 typed Stage2 编辑/重建，再生成新模板。不能用“已知问题”把 FAIL 当成披露放行。
 3. `UNVER`：证据不足以安全判断；如实保留并以 `stopped` 结束。Agent 代批权限不包括把未知改写成已通过。
 
-提交 `--review-decisions` 后重新读取当前 review：只有评测面 current 且每一项都是 PASS，
-才能运行 `stage2.blueprint` 以及后续付费节点。CLI、组装与下载都会重复执行同一道硬闸；
-外层 Agent `exit 0` 不会覆盖该结论。
+“重叠”不放宽同书写盘互斥：blueprint producer、`--review-decisions` 与 typed global edit 不并发改文件。
+可以在 blueprint 运行中完成阅读与 decisions 草稿，等 producer 写盘结束再提交。若复核发现 global
+需要 typed edit，先修 global；改变实际人物称名候选 inventory 会让 blueprint stale，必须重建，
+只改未消费字段则以 freshness 结论复用。review 早于 blueprint 完成也可以保存，但 Stage2 状态仍关闭，
+不得把“已有人审”冒充整层已收口。
+
+提交 `--review-decisions` 后重新读取当前 review，并运行 Stage2 唯一显式复检
+`stage2.blueprint --check-only`：只有 global 与 blueprint 均 current、联合 HARD 通过、评测面 current
+且每一项都是 PASS，才可运行 Stage4A 或任何后续付费/组装/下载路径。CLI、API、队列、组装与下载
+会重复执行同一道硬闸；外层 Agent `exit 0` 不会覆盖该结论。`FAIL` / `UNVER` / pending 仍全部阻断，
+人审只是从 blueprint 的串行前置移到 Stage4 前的汇合点，没有被删除。
 
 ## Stage4 结构代批
 
@@ -229,8 +238,9 @@ freshness。确为同输入非确定性时采信更严格的一轮，不用后�
 - 每个代批决定都包含证据、落选项和不可验证余额。
 - 先用本次 preflight 的 `started_at` 与 `start_code_version` 运行
   `scripts/sync_review_evidence.py`，由脚本同步质量表、退出序列、机器锚点和账本；不要手抄这些事实。
-- 最终成本只以 `<base>/_service/ledger.jsonl` 为权威源。本次表按 sid、
-  `outcome == "ok"` 与 `started_at` 过滤；同 SID 全历史另列累计审计，二者不相加。
+- 最终成本只以 `<base>/_service/ledger.jsonl` 为权威源。`started_at` 只选择本次 beacon/退出序列，
+  本次表按 beacon 携带的 `run_id + node` 精确联结 ledger；同 SID 全历史另列累计审计，二者不相加。
+  旧无 run id 行标为 `legacy/ungrouped`，不按时间窗口猜进本轮。
   `cached == true` 只计缓存次数，不重复累计其携带的原调用 token。不把产物 usage、
   终端日志或历史 report 叠加成第二份成本账。
 - 不写金额，只写实付调用数、缓存命中、prompt/completion/reasoning token 与可证实耗时。

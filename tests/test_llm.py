@@ -1593,6 +1593,27 @@ def test_transport_errors_have_stable_timeout_and_http_classifications():
     assert (bad.kind, bad.retryable, bad.status) == ('http_error', False, 400)
 
 
+@pytest.mark.parametrize(
+    ('status', 'kind', 'retryable'),
+    [
+        (408, 'timeout', True),
+        (409, 'conflict', False),
+        (429, 'rate_limit', True),
+        (501, 'server_error', True),
+        (505, 'server_error', True),
+    ],
+)
+def test_http_retry_policy_covers_timeout_rate_limit_and_all_5xx(
+        status, kind, retryable):
+    class HttpFailure(Exception):
+        status_code = status
+
+    classified = _classify(HttpFailure(f'HTTP {status}'))
+
+    assert (classified.kind, classified.retryable, classified.status) == (
+        kind, retryable, status)
+
+
 def test_an_inflight_attempt_emits_periodic_heartbeats_with_chapter_progress():
     events = []
     in_flight = threading.Event()

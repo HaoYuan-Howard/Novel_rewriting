@@ -82,6 +82,17 @@ class ResponseRepairRequired(TerminalState):
         self.original_path = original_path
 
 
+class ResponseRepairBatchRequired(TerminalState):
+    """同一 Stage2 并发波次已收齐为一份不可变 workpack，等待一次人工决定。"""
+
+    def __init__(self, message: str, *, run_id: str, manifest_path: str,
+                 attempts: tuple[str, ...], hint: str) -> None:
+        super().__init__(message, hint=hint)
+        self.run_id = run_id
+        self.manifest_path = manifest_path
+        self.attempts = attempts
+
+
 class BookTrashFailed(TerminalState):
     """项目无法安全移入回收站；正式书目录保持原位或仍可从回收站恢复。"""
 

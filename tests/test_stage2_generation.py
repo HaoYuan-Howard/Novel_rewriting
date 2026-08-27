@@ -26,18 +26,23 @@ from contracts.schema.stage2 import (
 from novel import prov
 from novel.errors import (
     ArtifactUnreadable, ContextBudgetRefused, GateBlocked, ProvenanceRefused,
-    ResponseRepairRequired, UpstreamMissing, UpstreamStale,
+    ResponseRepairBatchRequired, ResponseRepairRequired, UpstreamMissing,
+    UpstreamStale,
 )
 from novel.llm.budget import enforce_request_budget
 from novel.llm.cache import CachePolicy, ResponseCache
 from novel.llm.client import LlmClient, LlmFailed
-from novel.llm.ledger import CostLedger
+from novel.llm.ledger import AUDIT_REL, CostLedger
+from novel.llm import response_repair, stage2_runs
 from novel.llm.transport import ChatRequest, ChatResponse, FakeTransport
 from novel.core.evidence import iter_global_evidence_slots
 from novel.quality.global_review import build_review
 from novel.run import RunContext
+from novel.run_identity import new_run_id
 from novel.stages.stage2 import extract
-from novel.stages.stage2.compile_v2 import canonical_ir_projection_v31
+from novel.stages.stage2.compile_v2 import (
+    canonical_ir_projection_refs, canonical_ir_projection_v31,
+)
 from contracts.invariants import HINGE_FAILURE_ROUTE
 from novel.stages.stage2.normalize import normalize_global, normalize_verbatim
 from novel.stages.stage2.paragraphs import paragraph_spans
@@ -126,8 +131,8 @@ def test_one_llmfailed_chapter_does_not_abort_other_blueprint_chapters():
     ]
 
 
-def test_response_repair_waits_for_other_blueprint_chapters_then_stops_before_compile():
-    """修复暂停按章隔离；成功章先收完，但不得把暂缺章写成 `.INVALID`。"""
+def test_response_repair_waits_for_other_blueprint_chapters_before_batching():
+    """请求波次先完整 drain；batch producer 再一次处理收齐的 pending。"""
     calls = []
 
     class Response:
@@ -158,9 +163,7 @@ def test_response_repair_waits_for_other_blueprint_chapters_then_stops_before_co
 
     assert sorted(calls) == [4, 9]
     assert results == [{'chapter_ordinal': 9}] and violations == []
-    with pytest.raises(ResponseRepairRequired) as stopped:
-        extract._raise_response_repair(errors)
-    assert stopped.value is pause
+    assert errors == [pause]
 
 
 @pytest.mark.parametrize(('chapters', 'expected_peak'), [(20, 20), (40, 32)])
@@ -525,6 +528,97 @@ def test_stage2_generation_reaches_a_reloadable_jointly_checked_artifact():
         assert not rerun_store.exists(extract._INVALID)
         assert list((book / 'stage2' / '_rounds').glob(
             'chapter_blueprints.INVALID.r*.json'))
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+@pytest.mark.parametrize('live_invalid', [False, True])
+def test_blueprint_resume_after_formal_write_is_idempotent_before_commit_sentinel(
+        monkeypatch, live_invalid):
+    """断点收尾不重复写；残留 INVALID 只归档自己，不制造正式稿轮次。"""
+    root = Path(tempfile.mkdtemp())
+    book = root / '蓝图提交断点_125'
+    book.mkdir()
+    try:
+        global_ctx = _ctx(book, 'stage2.global')
+        ArtifactStore(global_ctx).write(
+            extract.MAIN_TEXT, MainText.model_validate(main_text()))
+        global_client, _ = _client(
+            global_ctx, lambda _req, _index: _ok(_response_global()))
+        extract.run_global(global_ctx, global_client)
+
+        run_id = new_run_id()
+        ledger_path = root / '_service' / 'ledger.jsonl'
+
+        def blueprint_ctx() -> RunContext:
+            return RunContext(
+                novel_dir=book, node='stage2.blueprint', paid=True,
+                code='test-stage2-generation', cache=CachePolicy.default(),
+                ledger=CostLedger(path=ledger_path, run_id=run_id),
+                run_id=run_id,
+            )
+
+        by_ordinal = _response_blueprints()
+
+        def respond(req: ChatRequest, _index: int) -> ChatResponse:
+            return _respond_blueprints(req, by_ordinal)
+
+        from novel.llm import stage2_runs
+        real_mark = stage2_runs.mark_committed
+
+        def crash_before_sentinel(*_args, **_kwargs):
+            raise RuntimeError('synthetic crash before committed sentinel')
+
+        first_ctx = blueprint_ctx()
+        first_transport = FakeTransport(responder=respond)
+        first_client = LlmClient(
+            first_ctx, first_transport, cache=ResponseCache(root / 'cache'),
+            model='test-model', max_retries=0, concurrency=3,
+            budget_checker=lambda *_args, **_kwargs: None,
+        )
+        monkeypatch.setattr(stage2_runs, 'mark_committed', crash_before_sentinel)
+        with pytest.raises(RuntimeError, match='before committed'):
+            extract.run_blueprint(first_ctx, first_client)
+        monkeypatch.setattr(stage2_runs, 'mark_committed', real_mark)
+
+        assert ArtifactStore(first_ctx).exists(extract.BLUEPRINT_REL)
+        assert stage2_runs.committed(first_ctx) is None
+        if live_invalid:
+            first_store = ArtifactStore(first_ctx)
+            formal, _formal_raw = first_store.read_own(
+                ChapterBlueprints, extract.BLUEPRINT_REL)
+            first_store.write_invalid(
+                extract.BLUEPRINT_REL, formal, gates_skipped=[])
+            assert first_store.exists(extract._INVALID)
+        rounds = book / 'stage2' / '_rounds'
+        before_rounds = sorted(path.name for path in rounds.glob(
+            'chapter_blueprints.r*.json')) if rounds.exists() else []
+
+        resumed_ctx = blueprint_ctx()
+        resumed_transport = FakeTransport(
+            responder=lambda *_args: pytest.fail('checkpoint resume 不得新增 wire'))
+        resumed_client = LlmClient(
+            resumed_ctx, resumed_transport,
+            cache=ResponseCache(root / 'cache'), model='test-model',
+            max_retries=0, concurrency=3,
+            budget_checker=lambda *_args, **_kwargs: None,
+        )
+        report = extract.run_blueprint(resumed_ctx, resumed_client)
+
+        assert report.passed and resumed_transport.calls == []
+        after_rounds = sorted(path.name for path in rounds.glob(
+            'chapter_blueprints.r*.json')) if rounds.exists() else []
+        assert after_rounds == before_rounds
+        if live_invalid:
+            resumed_store = ArtifactStore(resumed_ctx)
+            assert not resumed_store.exists(extract._INVALID)
+            assert list(rounds.glob(
+                'chapter_blueprints.INVALID.r*.json'))
+        assert stage2_runs.committed(resumed_ctx) is not None
+        audit_path = ledger_path.with_name(AUDIT_REL[-1])
+        audit = [json.loads(line) for line in audit_path.read_text('utf-8').splitlines()]
+        adopted = [row for row in audit if row.get('kind') == 'artifact_adoption']
+        assert len(adopted) == len(main_text()), 'resume 不得重复追加 adoption'
     finally:
         shutil.rmtree(root, ignore_errors=True)
 
@@ -1208,8 +1302,11 @@ def test_blueprint_context_keeps_current_full_hides_future_and_bounds_past():
         'char_002': {'canonical': '丙丁', 'address': []},
     }
 
-    user = extract.build_blueprint_user('边界测试', sections, (5,),
-                                        characters=characters)
+    from novel.stages.stage2.character_refs import blueprint_character_prompt_inventory
+    inventory = blueprint_character_prompt_inventory(characters, sections)
+    user = extract.build_blueprint_user(
+        '边界测试', sections, (5,),
+        past_names=inventory['past_attested_surfaces'][5])
     prefix = extract._blueprint_stable_prefix('边界测试', sections)
 
     assert user.startswith(prefix)
@@ -1221,8 +1318,9 @@ def test_blueprint_context_keeps_current_full_hides_future_and_bounds_past():
     assert '此前章节已出现的称名（代码派生，仅过去）' in user
     assert '甲乙' in user
     assert '丙丁' not in user
-    first = extract.build_blueprint_user('边界测试', sections, (1,),
-                                         characters=characters)
+    first = extract.build_blueprint_user(
+        '边界测试', sections, (1,),
+        past_names=inventory['past_attested_surfaces'][1])
     assert '无（此前正文未出现名册称名）' in first
     assert '甲乙' not in first
     block = extract._past_names_block(['名' * 300, '姓' * 300])
@@ -1348,3 +1446,258 @@ def test_stage2_targeted_regeneration_refreshes_one_chapter_and_merges_book():
         assert previous.provenance.usage is not None
     finally:
         shutil.rmtree(root, ignore_errors=True)
+
+
+def test_targeted_refresh_drains_two_chapters_and_resumes_once_from_checkpoints(
+        tmp_path, monkeypatch):
+    """定向 batch 的 formal→committed 尾窗可同 run、零 wire 幂等收口。"""
+    book = tmp_path / '定向批量恢复_461'
+    book.mkdir()
+    global_ctx = _ctx(book, 'stage2.global')
+    ArtifactStore(global_ctx).write(
+        extract.MAIN_TEXT, MainText.model_validate(main_text()))
+    global_client, _global_transport = _client(
+        global_ctx, lambda _req, _index: _ok(_response_global()))
+    extract.run_global(global_ctx, global_client)
+
+    by_ordinal = _response_blueprints()
+    baseline_ctx = _ctx(book, 'stage2.blueprint')
+    baseline_client, _baseline_transport = _client(
+        baseline_ctx, lambda req, _index: _respond_blueprints(req, by_ordinal))
+    assert extract.run_blueprint(baseline_ctx, baseline_client).passed
+
+    run_id = new_run_id()
+    ledger_path = tmp_path / 'refresh-ledger.jsonl'
+
+    def refresh_ctx(*, events=None):
+        return RunContext(
+            novel_dir=book,
+            node='stage2.blueprint',
+            paid=True,
+            code='test-stage2-generation',
+            cache=CachePolicy.refresh(),
+            ledger=CostLedger(path=ledger_path, run_id=run_id),
+            run_id=run_id,
+            repair_rejected_responses=True,
+            observer=(events.append if events is not None else lambda _row: None),
+        )
+
+    first = refresh_ctx()
+
+    def first_wave(req: ChatRequest, _index: int) -> ChatResponse:
+        ordinal = int(re.findall(r'阅读序第(\d+)章', req.user)[-1])
+        if ordinal == 1:
+            return _ok({'blueprints': [by_ordinal[ordinal]]})
+        return ChatResponse(
+            content='{"blueprints":[}', finish_reason='stop', model='test-model')
+
+    first_client, first_transport = _client(first, first_wave)
+    with pytest.raises(ResponseRepairBatchRequired) as paused:
+        extract.run_blueprint(first, first_client, chapters=(1, 2))
+
+    assert len(first_transport.calls) == 2
+    manifest = Path(paused.value.manifest_path)
+    assert paused.value.run_id == run_id
+    assert len(paused.value.attempts) == 1
+    assert stage2_runs.paths.stage2_blueprint_checkpoint_path(
+        book, run_id, 'repair', 1).is_file()
+    assert not stage2_runs.paths.stage2_blueprint_checkpoint_path(
+        book, run_id, 'repair', 2).exists()
+
+    premature = refresh_ctx()
+    premature_client, premature_transport = _client(
+        premature,
+        lambda _req, _index: AssertionError(
+            'batch resolution 落盘前不得把同 run 再执行冒充 resume'))
+    with pytest.raises(ProvenanceRefused, match='batch resolution'):
+        extract.run_blueprint(
+            premature, premature_client, chapters=(1, 2))
+    assert premature_transport.calls == []
+
+    attempt_id = paused.value.attempts[0]
+    record = response_repair.find_attempt(book, attempt_id)
+    response_repair.candidate_path(record).write_text(
+        json.dumps({'blueprints': [by_ordinal[2]]}, ensure_ascii=False),
+        encoding='utf-8')
+    decisions = tmp_path / 'targeted-refresh-decisions.json'
+    decisions.write_text(json.dumps({'decisions': [{
+        'attempt_id': attempt_id,
+        'action': 'submit',
+        'reason': '候选完整保留原响应中的第二章结构，只修复 JSON 容器',
+    }]}, ensure_ascii=False), encoding='utf-8')
+    resolution = stage2_runs.submit_batch(
+        book, manifest, decisions, actor='operator')
+
+    events: list[dict[str, object]] = []
+    resumed = refresh_ctx(events=events)
+    resumed_client, resumed_transport = _client(
+        resumed,
+        lambda _req, _index: AssertionError(
+            '成功章 checkpoint 与 submit candidate 都不应新增 wire'))
+    real_mark = stage2_runs.mark_committed
+
+    def crash_before_sentinel(*_args, **_kwargs):
+        raise RuntimeError('synthetic targeted crash before committed sentinel')
+
+    monkeypatch.setattr(stage2_runs, 'mark_committed', crash_before_sentinel)
+    with pytest.raises(RuntimeError, match='targeted crash'):
+        extract.run_blueprint(resumed, resumed_client, chapters=(1, 2))
+    monkeypatch.setattr(stage2_runs, 'mark_committed', real_mark)
+
+    assert resumed_transport.calls == []
+    assert [event['chapter'] for event in events
+            if event.get('event') == 'checkpoint_restored'] == [1]
+    assert stage2_runs.paths.stage2_blueprint_checkpoint_path(
+        book, run_id, 'repair', 2).is_file()
+    assert list(manifest.parent.glob(stage2_runs.MANIFEST_FILE)) == [manifest]
+    assert list(manifest.parent.glob(stage2_runs.RESOLUTION_FILE)) == [resolution]
+    assert stage2_runs.committed(resumed) is None
+    assert stage2_runs.commit_state(resumed)['state'] == 'prepared'
+    crash_store = ArtifactStore(resumed)
+    formal, _formal_raw = crash_store.read_own(
+        ChapterBlueprints, extract.BLUEPRINT_REL)
+    crash_store.write_invalid(
+        extract.BLUEPRINT_REL, formal, gates_skipped=[])
+    assert crash_store.exists(extract._INVALID)
+    rounds = book / 'stage2' / '_rounds'
+    before_rounds = sorted(
+        path.name for path in rounds.glob('chapter_blueprints.r*.json'))
+    audit_path = ledger_path.with_name(AUDIT_REL[-1])
+    before_adoptions = [
+        row for row in map(json.loads, audit_path.read_text('utf-8').splitlines())
+        if row.get('kind') == 'artifact_adoption'
+    ]
+    assert len(before_adoptions) == 2
+
+    finalized = refresh_ctx()
+    finalized_client, finalized_transport = _client(
+        finalized,
+        lambda _req, _index: AssertionError(
+            'formal 已落的 commit 尾窗不得重建 prompt 或新增 wire'))
+    report = extract.run_blueprint(
+        finalized, finalized_client, chapters=(1, 2))
+
+    assert report.passed and finalized_transport.calls == []
+    assert stage2_runs.committed(finalized) is not None
+    assert not ArtifactStore(finalized).exists(extract._INVALID)
+    assert list(rounds.glob('chapter_blueprints.INVALID.r*.json'))
+    assert sorted(path.name for path in rounds.glob(
+        'chapter_blueprints.r*.json')) == before_rounds
+    after_adoptions = [
+        row for row in map(json.loads, audit_path.read_text('utf-8').splitlines())
+        if row.get('kind') == 'artifact_adoption'
+    ]
+    assert after_adoptions == before_adoptions, 'commit 尾窗不得重复 adoption'
+
+
+def test_targeted_v2_refresh_cannot_open_a_second_batch_in_detail_phase(
+        tmp_path, monkeypatch):
+    """v2 定向重切边界与细节相共享 refresh run 的唯一人工 workpack。"""
+    monkeypatch.setenv(
+        'NOVEL_STAGE2_BLUEPRINT_CONTRACT', 'extraction-ir-v2')
+    book = tmp_path / '定向v2单批次_462'
+    book.mkdir()
+    global_ctx = _ctx(book, 'stage2.global')
+    ArtifactStore(global_ctx).write(
+        extract.MAIN_TEXT, MainText.model_validate(main_text()))
+    global_client, _global_transport = _client(
+        global_ctx, lambda _req, _index: _ok(_response_global()))
+    extract.run_global(global_ctx, global_client)
+
+    texts = {row['chapter_ordinal']: row['text'] for row in main_text()}
+    by_ordinal = {
+        row['chapter_ordinal']: canonical_ir_projection_refs(
+            row, texts[row['chapter_ordinal']])
+        for row in copy.deepcopy(blueprints())['blueprints']
+    }
+
+    def boundary_payload(ordinal: int) -> dict:
+        rows = [
+            {
+                'end_para': beat['end_para'],
+                'event': '；'.join(
+                    atom['claim'] for atom in beat['fact_atoms']),
+            }
+            for beat in by_ordinal[ordinal]['beats']
+        ]
+        return {'blueprints': [{
+            'chapter_ordinal': ordinal,
+            'micro_events': rows,
+            'beats': rows,
+        }]}
+
+    def baseline_response(req: ChatRequest, _index: int) -> ChatResponse:
+        ordinal = int(re.findall(r'阅读序第(\d+)章', req.user)[-1])
+        if '第一张表 `micro_events`' in req.system:
+            return _ok(boundary_payload(ordinal))
+        return _ok({'blueprints': [by_ordinal[ordinal]]})
+
+    baseline_ctx = _ctx(book, 'stage2.blueprint')
+    baseline_client, _baseline_transport = _client(
+        baseline_ctx, baseline_response)
+    assert extract.run_blueprint(baseline_ctx, baseline_client).passed
+
+    # 真实问题路由只决定是否重切边界；测试关心的是两相恢复状态机，不复制
+    # `beats_coarse` 判据的输入构造。
+    monkeypatch.setattr(extract, '_repair_findings', lambda *_args: [{
+        'rule': 'beats_coarse',
+        'item': 'b01',
+        'detail': '合成问题要求重新切分边界',
+    }])
+
+    run_id = new_run_id()
+    ledger_path = tmp_path / 'v2-refresh-ledger.jsonl'
+
+    def refresh_ctx():
+        return RunContext(
+            novel_dir=book,
+            node='stage2.blueprint',
+            paid=True,
+            code='test-stage2-generation',
+            cache=CachePolicy.refresh(),
+            ledger=CostLedger(path=ledger_path, run_id=run_id),
+            run_id=run_id,
+            repair_rejected_responses=True,
+            observer=lambda _row: None,
+        )
+
+    first = refresh_ctx()
+    first_client, first_transport = _client(
+        first,
+        lambda _req, _index: ChatResponse(
+            content='{"blueprints":[}', finish_reason='stop', model='test-model'))
+    with pytest.raises(ResponseRepairBatchRequired) as paused:
+        extract.run_blueprint(first, first_client, chapters=(1,))
+    assert len(first_transport.calls) == 1
+    manifest = Path(paused.value.manifest_path)
+    manifest_before = manifest.read_bytes()
+
+    attempt_id = paused.value.attempts[0]
+    record = response_repair.find_attempt(book, attempt_id)
+    response_repair.candidate_path(record).write_text(
+        json.dumps(boundary_payload(1), ensure_ascii=False), encoding='utf-8')
+    decisions = tmp_path / 'targeted-v2-decisions.json'
+    decisions.write_text(json.dumps({'decisions': [{
+        'attempt_id': attempt_id,
+        'action': 'submit',
+        'reason': '候选忠实保留边界表，仅修复 JSON 容器',
+    }]}, ensure_ascii=False), encoding='utf-8')
+    resolution = stage2_runs.submit_batch(
+        book, manifest, decisions, actor='operator')
+
+    resumed = refresh_ctx()
+    resumed_client, resumed_transport = _client(
+        resumed,
+        lambda _req, _index: ChatResponse(
+            content='{"blueprints":[}', finish_reason='stop', model='test-model'))
+    with pytest.raises(LlmFailed):
+        extract.run_blueprint(resumed, resumed_client, chapters=(1,))
+
+    assert stage2_runs.paths.stage2_blueprint_checkpoint_path(
+        book, run_id, 'repair-boundaries', 1).is_file()
+    assert not stage2_runs.paths.stage2_blueprint_checkpoint_path(
+        book, run_id, 'repair', 1).exists()
+    assert resumed_transport.calls, 'detail 相必须真实进入自动恢复而非提前返回'
+    assert manifest.read_bytes() == manifest_before
+    assert list(manifest.parent.glob(stage2_runs.MANIFEST_FILE)) == [manifest]
+    assert list(manifest.parent.glob(stage2_runs.RESOLUTION_FILE)) == [resolution]

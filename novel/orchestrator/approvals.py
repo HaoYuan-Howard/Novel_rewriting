@@ -289,8 +289,6 @@ def _spawns(base: str | os.PathLike[str], sid: str) -> dict[str, list[ApprovalAc
     remains a renderer and never has to infer freshness or cost itself.
     """
     candidates = {
-        's1': [ApprovalAction(
-            kind='stage2.global', label='生成 stage2 全局底座；完成后逐项人工复核')],
         's5': [ApprovalAction(
             kind='stage6.hook', label='\u751f\u6210\u5f00\u7bc7\u6587\u6848')],
         's6': [ApprovalAction(
@@ -304,6 +302,19 @@ def _spawns(base: str | os.PathLike[str], sid: str) -> dict[str, list[ApprovalAc
                if state.resume_verdict(overview, action.kind)[0] != state.RESUME_SKIP]
         for gate, actions in candidates.items()
     }
+    # Stage2 两份付费生成各自确认、顺序落盘，但 global 的人工阅读不再挡住
+    # blueprint。global 已当前有效时，已完成的 s1 直接下发唯一 continuation；
+    # 浏览器只渲染服务端动作，不从页面是否看过/复核是否 PASS 反推产物状态。
+    global_action = ApprovalAction(
+        kind='stage2.global', label='生成 stage2 全局底座；完成后逐项人工复核')
+    blueprint_action = ApprovalAction(
+        kind='stage2.blueprint', label='生成 stage2 逐章骨架；可与全局人工复核并行')
+    if state.resume_verdict(overview, global_action.kind)[0] != state.RESUME_SKIP:
+        spawns['s1'] = [global_action]
+    elif state.resume_verdict(overview, blueprint_action.kind)[0] != state.RESUME_SKIP:
+        spawns['s1'] = [blueprint_action]
+    else:
+        spawns['s1'] = []
     # Stage4 是两次互相独立的付费确认，不是一个按钮里塞两项作业。A 尚未完成时
     # 只能展示 A；A 已落盘后才展示 B。这样服务端给 GateBar 的永远是一条可预览
     # 动作，浏览器不猜阶段，也不会在一次确认里自动串行两次调用。
@@ -429,6 +440,22 @@ def writing_is_current(base: str | os.PathLike[str], sid: str) -> bool:
 
 def has_record(base: str | os.PathLike[str], sid: str) -> bool:
     return writing_is_current(base, sid)
+
+
+def require_stage2_review(
+    base: str | os.PathLike[str], sid: str, node: str,
+) -> None:
+    """在服务/队列入口复用 Stage2 producer 的正式人审判据。
+
+    这里只提供早反馈；CLI 真实执行边界仍会在构造下游请求前再验一次。同一个
+    ``global_review.require_approved`` 同时读取当前 grounding/review，并复用
+    ``stage2.blueprint --check-only`` 的联合判定与 freshness；不在编排层新增
+    一份机械 check 或自行解释 PASS/UNVER。
+    """
+    novel_dir = paths.resolve_novel_dir(base, sid)
+    ctx = state.readonly_ctx(novel_dir, node, prov.code_version())
+    from novel.stages.stage2 import global_review
+    global_review.require_approved(ctx)
 
 
 _GATE_ARTIFACTS = {
@@ -750,13 +777,12 @@ def _require_typed_gate_decision(store: ArtifactStore, gate: str) -> str | None:
             details = '；'.join(item.detail for item in audit.hard_findings[:6])
             raise ApprovalRequired(f'stage1 当前材料未通过 HARD 审计：{details}')
     elif gate == 's2':
-        review, _ = store.read_own(GlobalReview, STAGE2_GLOBAL_REVIEW)
-        grounding, _ = store.read_own(GlobalGrounding, STAGE2_GLOBAL_GROUNDING)
-        if not global_review_status(
-            grounding.model_dump(by_alias=True), review,
-        )[2]:
-            raise ApprovalRequired(
-                'stage2 global review is stale, incomplete, or not all PASS')
+        # s2 不是“review 那张表全 PASS”的别名。公开盖章与 CLI/API/queue 的
+        # Stage4 前置必须共用同一座完整收口闸：current global + current
+        # blueprint + 联合 HARD + current all-PASS review。否则 UI 会先显示 s2
+        # 已打开，真实 Stage4 子进程却在 dispatch 前拒绝，形成一份会说谎的 proof。
+        from novel.stages.stage2 import global_review as stage2_global_review
+        stage2_global_review.require_approved(store.ctx)
     elif gate == 's6':
         hook, _ = store.read_own(Hook, STAGE6_HOOK)
         from novel.stages.stage6 import semantic

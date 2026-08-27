@@ -19,11 +19,20 @@ from types import SimpleNamespace
 import pytest
 
 from novel.errors import PathRefused
-from contracts.artifacts import STAGE2_GLOBAL_REVIEW_DECISIONS
+from contracts.artifacts import (
+    STAGE2_GLOBAL_GROUNDING, STAGE2_GLOBAL_REVIEW_DECISIONS,
+)
 from contracts.schema import encode_artifact
-from contracts.schema.evaluation import EvidenceRef
-from novel.quality.global_review import build_review
+from contracts.schema.evaluation import EvidenceRef, GlobalReview
+from novel import paths
+from novel.errors import (
+    BlockingFindingsUnresolved, GateBlocked, UpstreamMissing, UpstreamStale,
+)
+from novel.orchestrator import approvals
+from novel.quality.global_review import build_review, decide
 from novel.stages.stage2 import global_review
+from novel.stages.stage7 import assemble
+from novel.store import ArtifactStore
 from tests.test_stage2_generation import _ctx
 from tests.test_stage2_secret_edit import _sandbox, _seed
 
@@ -46,6 +55,23 @@ def _versioned_decisions(items) -> str:
     }
     return json.dumps(
         encode_artifact(STAGE2_GLOBAL_REVIEW_DECISIONS, payload), ensure_ascii=False)
+
+
+def _approve_all_review(book) -> None:
+    review_ctx = _ctx(book, 'stage2.global', paid=False)
+    store = ArtifactStore(review_ctx)
+    review = store.read(GlobalReview, global_review.REL)
+    for item in tuple(review.items):
+        review = decide(
+            review,
+            item_id=item.item_id,
+            expected_subject_sha256=item.subject_sha256,
+            state='PASS',
+            actor='joint-gate-reviewer',
+            reason='逐项对照当前正文与全局事实后确认',
+            now='2026-08-27T00:00:00+00:00',
+        )
+    store.write_round(global_review.REL, review)
 
 
 def test_a_book_dir_absolute_decision_path_is_accepted():
@@ -108,6 +134,95 @@ def test_the_emitted_template_round_trips_through_a_custom_relative_path():
     # 模板自己就是一份合法（全 pending）的决策集，读得回来即证明信封解得开。
     updated = global_review.apply_file(ctx, 'stage2/emitted_template.json')
     assert updated.items
+
+
+def test_downstream_gate_requires_current_blueprint_and_joint_check(tmp_path):
+    """全 PASS review 不能替缺失 blueprint 或联合 HARD 背书。"""
+    book = tmp_path / '联合收口_123'
+    book.mkdir()
+    _seed(book, with_blueprints=True)
+
+    _approve_all_review(book)
+
+    # 完整的 current global + current blueprint + 联合 HARD + all-PASS review
+    # 才是可供 Stage4 消费的那一态。
+    global_review.require_approved(
+        _ctx(book, 'stage4.design', paid=False))
+
+    (book / 'stage2/chapter_blueprints.json').unlink()
+
+    # API/queue 的早反馈调用同一入口；没有 blueprint 时不得先创建下游作业。
+    with pytest.raises(UpstreamMissing, match='chapter_blueprints'):
+        approvals.require_stage2_review(tmp_path, '123', 'stage4.design')
+    # 已存在的成书/下载路径也不能只凭旧 review 穿过后来缺失的 blueprint。
+    with pytest.raises(UpstreamMissing, match='chapter_blueprints'):
+        assemble.read_current_book(
+            _ctx(book, 'stage7.assemble', paid=False))
+
+
+def test_downstream_gate_refuses_a_live_global_invalid_even_with_old_passes(tmp_path):
+    """旧 formal/review 都还在，也不能越过一份更新的 global 问题稿。"""
+    book = tmp_path / '全局问题稿_124'
+    book.mkdir()
+    _seed(book, with_blueprints=True)
+    _approve_all_review(book)
+
+    formal = book / STAGE2_GLOBAL_GROUNDING
+    invalid = book / paths.invalid_of(STAGE2_GLOBAL_GROUNDING)
+    invalid.write_bytes(formal.read_bytes())
+
+    with pytest.raises(GateBlocked, match='Stage2 global'):
+        global_review.require_approved(
+            _ctx(book, 'stage4.design', paid=False))
+
+
+def test_downstream_gate_requires_the_formal_global_to_be_current(tmp_path):
+    """review 只绑定 global 字节；它不能替 stale global 对当前正文背书。"""
+    book = tmp_path / '全局过期_125'
+    book.mkdir()
+    _seed(book, with_blueprints=True)
+    _approve_all_review(book)
+
+    clean = book / 'stage0/clean_text.txt'
+    clean.write_text(
+        clean.read_text(encoding='utf-8') + '根正文已经变化\n',
+        encoding='utf-8', newline='')
+
+    with pytest.raises(UpstreamStale, match='global_grounding'):
+        global_review.require_approved(
+            _ctx(book, 'stage4.design', paid=False))
+
+
+def test_s2_service_approval_cannot_outvote_a_joint_hard_failure(
+        tmp_path, monkeypatch):
+    """公开 s2 盖章必须复用联合判官，不能只看 review 全 PASS。"""
+    book = tmp_path / '联合红灯_126'
+    book.mkdir()
+    _seed(book, with_blueprints=True)
+    _approve_all_review(book)
+
+    record = approvals._fresh_record('126')
+    gates = dict(record.gate)
+    gates.update({'s0': True, 's1': True})
+    record = record.model_copy(update={
+        'gate': gates,
+        'seen': {'global': True, 'read': True},
+    })
+    monkeypatch.setattr(
+        approvals, '_read_current', lambda _base, _sid: record)
+
+    from novel.stages.stage2 import extract
+    monkeypatch.setattr(extract, 'run_check_only', lambda _ctx_: SimpleNamespace(
+        provenance=SimpleNamespace(
+            invalid=False, freshness='fresh', reason='synthetic current'),
+        passed=False,
+        rules=[SimpleNamespace(
+            rule='synthetic_joint_hard', sev='hard', status='hit')],
+    ))
+
+    with pytest.raises(
+            BlockingFindingsUnresolved, match='联合 HARD'):
+        approvals.approve_gate(tmp_path, '126', 's2')
 
 
 def test_workpack_prefers_formal_evidence_and_never_fabricates_for_source_none(

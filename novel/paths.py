@@ -652,15 +652,22 @@ def uploaded_source_tail(recorded: str | os.PathLike[str]) -> tuple[str, str] | 
 #: 而跨书的服务目录里至今一个字正文都没有——这条不该由一份诊断来打破。
 #: `_` 前缀与 `_rounds` / `_revalidation` 同类：它不是产物，完成度与阶段视图不看它。
 #:
-#: ⚠ 留证是**只写不读**的：救场仍然禁止从 `reasoning` 里把答案抠出来
-#: （抠回来的是半成品，见 `novel/llm/transport.py::ChatResponse.reasoning`）。
-#: 它只回答「那条通道里到底装了什么」——在此之前这个问题只能拿 token 体积去猜。
+#: 对自由文本 `ask_text`，留证仍只作诊断而不从 reasoning 抠正文；对结构化
+#: `ask_json`，整段 reasoning 只有重新通过与 content 完全相同的 parse、schema、
+#: dynamic validator 与章节 scope 闸后才可采用，并由 checkpoint 继续绑定原始字节。
+#: 因而它既回答「那条通道里到底装了什么」，也为一份已完整验证的结构化救回稿留来源证据。
 ANSWER_LOST_DIRNAME = '_answer_lost'
 
 #: 被结构化内容闸拒绝的供应商响应与受托修复决定。它与 `_answer_lost` 同样跟书走，
 #: 但不是只写诊断：`--response-repair agent` 会把这里当成一个显式、可恢复的状态机。
 #: 因此目录名仍用 `_` 隔离于正式产物，路径构造也必须拒绝外部传入的穿越片段。
 REJECTED_RESPONSE_DIRNAME = '_llm_rejected'
+
+#: Stage2 逐章响应在正式整书产物提交前的验证后检查点。它不是正式 artifact、
+#: 不进完成度与来源账，也不是会被普通请求直接命中的 `.llm_cache`。目录跟书走，
+#: 因为其中封存了模型响应正文；`run_id` 只负责把一次首轮、人工修复与唯一 resume
+#: 绑成同一条恢复链。
+STAGE2_RUNS_DIRNAME = '_stage2_runs'
 
 
 def answer_lost_rel(attempt_id: str) -> str:
@@ -686,3 +693,26 @@ def rejected_response_path(novel_dir: str | os.PathLike[str], chain_id: str,
                            attempt_id: str) -> Path:
     """`<书目录>/_llm_rejected/<chain>/<attempt>/`；不是缓存或正式产物。"""
     return Path(os.fspath(novel_dir)) / rejected_response_rel(chain_id, attempt_id)
+
+
+def stage2_blueprint_run_path(
+        novel_dir: str | os.PathLike[str], run_id: str,
+) -> Path:
+    """`<书目录>/_stage2_runs/<run_id>/blueprint/`；run id 先过唯一身份闸。"""
+    from novel.run_identity import check_run_id
+
+    return (Path(os.fspath(novel_dir)) / STAGE2_RUNS_DIRNAME
+            / check_run_id(run_id) / 'blueprint')
+
+
+def stage2_blueprint_checkpoint_path(
+        novel_dir: str | os.PathLike[str], run_id: str,
+        phase: str, chapter: int,
+) -> Path:
+    """一章一相的检查点路径；phase/章号不允许成为路径注入面。"""
+    if not re.fullmatch(r'[a-z][a-z0-9_-]{0,31}', phase):
+        raise PathRefused(f'Stage2 checkpoint phase 不合法：{phase!r}')
+    if isinstance(chapter, bool) or int(chapter) < 1:
+        raise PathRefused(f'Stage2 checkpoint 章号必须是正整数，实得 {chapter!r}')
+    return (stage2_blueprint_run_path(novel_dir, run_id) / 'checkpoints'
+            / f'{phase}-ch{int(chapter):04d}.json')

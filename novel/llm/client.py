@@ -17,11 +17,13 @@ client.py —— `ask_text` / `ask_json`。**重采与 Flash→Pro 兜底只有�
      ⚠ **`ask_text` 那一侧仍然不抠，而且这不是遗漏**：它一次都没量过，且**没有等价的
        客观闸**——JSON 那边「解析得动 + 合契约」是可判的证据，自然语言那边「这段是答案
        还是推敲」判不出来。两条边界与两条已知代价都写在 `SALVAGE_ANSWER_FROM_REASONING`。
-     ⚠ **捞不动时走法逐字未变**：`_answer_lost` 与 `_worth_resampling` 一行没动。
+     ⚠ **通用非 Stage2 路径里，捞不动时走法不变**：`_answer_lost` 与
+       `_worth_resampling` 仍负责原来的内容采样策略；Stage2 的例外见本段末尾。
      ⇒ 2026-08-22 起它在账上**有自己的名字**（闸名 `answer_lost`，见 `REJECT_GATES`），
        且整份响应会落一份留证（`novel/paths.py::answer_lost_path`）。在此之前它与
        ②「JSON 被截断」共用 `parse` 一格，而这两类的处置正好相反。
-     ⇒ 2026-08-20 起这一档先**同档重采一次**（`MAX_SAMPLES_PER_RUNG`）；
+     ⇒ 2026-08-20 起，通用非 Stage2 路径先**同档重采一次**
+       （`MAX_SAMPLES_PER_RUNG`）；
        2026-08-24 起同档仍失败改由 Pro **保持同配置**兜底，不再自动降 effort；
      2026-08-22 起**除截断外的每一种拒绝**都走这条重采（见 `_worth_resampling`）。
      实测（flash 迁移，三本书）：`stage4.plan` 的 `high` 档空正文而 `reasoning_chars`
@@ -43,7 +45,8 @@ client.py —— `ask_text` / `ask_json`。**重采与 Flash→Pro 兜底只有�
      实测：某次规划调用拿回 `{"reconstruction_strategy": "…"}`——0 个输出章、正常结束、
      4477 token 里推理占 4317。它是合法 JSON，于是一路放行**并进了缓存**；
      旧下游把它摊成 **74 条**派生症状，盖住了「规划结果为空」这一句真正的事实。
-     ⚠ 它与①同源（想得多、交得少），因此**也先同档重采**再由 Pro 兜底——
+     ⚠ 在通用非 Stage2 路径里，它与①同源（想得多、交得少），因此
+       **也先同档重采**再由 Pro 兜底——
      `stage4.plan` 实测 `high` 档被拒后旧实现直接降档，白花掉整条阶梯再回 `high` 才成功。
 
 ⚠⚠ **原型把响应恢复在两个入口各写了一遍。** 两份逐行相同的东西必然分家——
@@ -54,9 +57,14 @@ client.py —— `ask_text` / `ask_json`。**重采与 Flash→Pro 兜底只有�
 **网络**（429 / 5xx / 超时）。混成一条，一次网络抖动就会消耗内容采样预算；
 而自动降低 effort 还会把显式失败洗成一份取证能力更差的“成功”响应。
 
-受托 `--response-repair agent` 路径会改变后三次的 **user prompt**，但不改变上述三层：
-Flash 第二采定向修复，Pro 首采约束重建，Pro 第二采再定向修复；模型、effort、thinking、
-max_tokens 与采样上限均不变。普通 CLI 仍以原 prompt 独立重采。
+通用非 Stage2 的受托 `--response-repair agent` 路径会改变后三次的 **user prompt**，
+但不改变上述三层：Flash 第二采定向修复，Pro 首采约束重建，Pro 第二采再定向修复；
+模型、effort、thinking、max_tokens 与采样上限均不变。普通 CLI 仍以原 prompt 独立重采。
+
+⚠ **Stage2 `stage2-blueprint-v1` 是显式例外。** 合法 reasoning JSON 立即采用；
+统一 batch 后最多一次 Flash 定向恢复、再最多一次 Pro constraint rebuild。若主模型本来
+就是 Pro，只允许一次不同 request-mode 的 constraint rebuild；没有同动作 Pro 第二采，
+且同一 run 已消费人工 workpack 后不得形成第二次人工暂停。
 """
 from __future__ import annotations
 
@@ -66,19 +74,22 @@ import threading
 import time
 from contextlib import contextmanager
 from datetime import datetime, timezone
-from typing import Any, Callable, Final, Iterator, TypeVar
+from typing import Any, Callable, Final, Iterable, Iterator, Mapping, TypeVar
 from uuid import uuid4
 
 from pydantic import BaseModel, ValidationError
 
 from novel import config
-from novel.errors import ContextBudgetRefused, ResponseRepairRequired, TerminalState
+from novel.errors import (
+    ContextBudgetRefused, ProvenanceRefused, ResponseRepairRequired, TerminalState,
+)
 from novel.llm.budget import BudgetChecker, enforce_request_budget
 from novel.llm.cache import (
     CachePolicy, ResponseCache, cache_key, request_fingerprint,
 )
 from novel.llm.keepsake import write_answer_lost
 from novel.llm import response_repair
+from novel.llm.json_text import normalize_json_text as _strip_fences
 from novel.llm.prompts import required_top_level
 from novel.llm.transport import ChatRequest, ChatResponse, Transport, TransportError
 from novel.observability import (
@@ -89,7 +100,9 @@ from novel.run import RunContext
 #: 默认模型行为，只有一档。2026-08-24 用户裁决：**取消自动 effort / thinking 降级**。
 #: Flash 的实跑问题主要是能力与稳定性不足；把 `high` 降成 `low` 会让失败变成一份
 #: 取证能力更差、却可能通过结构闸的响应。默认因此保持原档位，Flash 同档重采仍失败
-#: 就交给 Pro 的**同档位**兜底。显式 effort A/B 仍可从 `rungs_from_effort()` 选择一档，
+#: 就交给 Pro 的**同档位**兜底。Stage2 的内容恢复次数另由
+#: ``stage2-blueprint-v1`` 收紧，不复用通用同档二采上限。显式 effort A/B 仍可从
+#: `rungs_from_effort()` 选择一档，
 #: 辅助调用也仍可显式传 `rungs=`；两者都不是异常驱动的静默降级。
 DEFAULT_RUNGS: Final[tuple[tuple[str, bool], ...]] = (('high', True),)
 
@@ -161,21 +174,24 @@ JSON_OBJECT_MODE: Final = True
 #: 【两条已知代价，认下来不掩盖】
 #: · **捞成功的那一份仍然进不了缓存**：`ResponseCache.put` 拒写空正文（那是对的），
 #:   而把捞出来的文本塞进 `content` 再存等于**改写供应商的响应** ⇒ 缓存里的东西
-#:   与账本 `response_sha256` 分家。⇒ 不动缓存：这条路省的是**本次的重采**，
-#:   不是下次重跑的钱。
+#:   与账本 `response_sha256` 分家。⇒ 不动普通缓存：通用节点只省**本次重采**；
+#:   Stage2 会把通过全闸的章另写 validated checkpoint，同一 `run_id` 的 resume
+#:   仍可零 wire 恢复，但它不冒充 cache hit，也不跨逻辑运行复用。
 #: · **账上必须分得出来**：`gate_decision` 与 `answer_lost` 两种审计行都带 `salvaged`，
 #:   否则事后答不了「这本书有几章的产物是从推理通道里捞出来的」。留证照写不误——
 #:   这条路新、有产品语义争议，头几次跑必须能完整复核。
 #:
 #: ⚠ **翻这一位不会让缓存作废**（与 `JSON_OBJECT_MODE` 的关键区别）：它不进
 #: `cache_payload`，因为它一个字都不改请求，只改我们怎么读回来的那一份。
-#: ⚠ **判定式一行没动**：`_answer_lost` 与 `_worth_resampling` 与从前逐字相同——
-#: 捞不动时仍先同档重采；2026-08-24 起随后走 Flash→Pro 同配置兜底。
+#: ⚠ `_answer_lost` 的分类式不因 salvage 改变；通用非 Stage2 路径仍由
+#: `_worth_resampling` 先同档重采再走 Flash→Pro。Stage2 则由
+#: ``stage2-blueprint-v1`` 把无材料 answer_lost 直接送 Pro rebuild。
 SALVAGE_ANSWER_FROM_REASONING: Final = True
 
-#: 除截断外的内容/契约拒绝发生时，同一模型配置最多采几个样本。
+#: 通用非 Stage2 内容/契约拒绝发生时，同一模型配置最多采几个样本。
 #: **2 = 首发 + 一次内容恢复采样。**普通 CLI 第二采仍是原 prompt 独立重采；
 #: 受托路径第二采显式消费前序失败证据，但不多占第三个样本。
+#: Stage2 的 `stage2-blueprint-v1` 在 `ask_json` 内按失败类型进一步收紧该额度。
 #:
 #: ⚠ 这是「重采」不是「重试」：重试扛**网络**（`_send_attempts`，429/5xx/超时），
 #: 重采换的是**同参数下的新样本**，兜底换的是**模型能力**——三条循环各管各的，不许合并
@@ -208,7 +224,10 @@ RESOURCE_INTERRUPTED: Final = 'insufficient_system_resource'
 
 
 def _worth_resampling(resp: ChatResponse) -> bool:
-    """这一配置被拒之后，值不值得再消费一个**同模型配置样本**（而不是交给 Pro）。
+    """通用非 Stage2 路径是否再消费一个**同模型配置样本**。
+
+    Stage2 不直接把本函数的答案当恢复策略；`ask_json.worth_content_recovery`
+    会再按 gate、模型位置与 ``stage2-blueprint-v1`` 覆盖它。
 
     规则只有一条例外：**截断（`finish_reason='length'`）不重采。**
     那是模块 docstring ②——同参数重采大概率把推理再写满一遍；现由同配置的 Pro
@@ -484,14 +503,23 @@ def _response_sha256(resp: ChatResponse | None) -> str | None:
     return hashlib.sha256((resp.content or '').encode('utf-8')).hexdigest()
 
 
-def _strip_fences(s: str | None) -> str:
-    """防御性地剥掉 ```json … ``` ——有些模型在 JSON 模式下照样吐围栏。"""
-    s = (s or '').strip()
-    if s.startswith('```'):
-        s = s.split('\n', 1)[1] if '\n' in s else s[3:]
-        if s.rstrip().endswith('```'):
-            s = s.rstrip()[:-3]
-    return s.strip()
+def _text_sha256(text: str) -> str:
+    return hashlib.sha256(text.encode('utf-8')).hexdigest()
+
+
+def _checkpoint_request_binding(req: ChatRequest) -> dict[str, Any]:
+    """不保存 prompt 正文，仍能逐字段重建并核验一次完整 ChatRequest。"""
+    return {
+        'request_model': req.model,
+        'reasoning_effort': req.reasoning_effort,
+        'thinking': req.thinking,
+        'json_mode': req.json_mode,
+        'max_tokens': req.max_tokens,
+        'temperature': req.temperature,
+        'system_sha256': _text_sha256(req.system),
+        'user_sha256': _text_sha256(req.user),
+        'request_fingerprint': request_fingerprint(req),
+    }
 
 
 def _is_empty(v: Any) -> bool:
@@ -578,6 +606,9 @@ class LlmClient:
         #: 一个 run 里一个 purpose 只问一次，后采纳者覆盖前者即是正确语义。
         self._adopt_lock = threading.Lock()
         self._accepted: dict[str, str] = {}
+        #: 章节检查点所需的 accepted-channel 原文与精确成本联结。它只在内存里活到
+        #: producer 把验证后的 payload 原子写进书内 `_stage2_runs/`；不进普通 cache。
+        self._accepted_checkpoint: dict[str, dict[str, Any]] = {}
 
     # ── 两个入口 ──────────────────────────────────────────────────────────
 
@@ -665,7 +696,7 @@ class LlmClient:
         for model_index, model in enumerate(active_models):
             transport_failure: TransportError | LlmFailed | None = None
             for i, (effort, thinking) in enumerate(active_rungs):
-                # 被拒后先同档重采一次；截断除外。默认只有一个模型行为档位，
+                # 自由文本被拒后先同档重采一次；截断除外。默认只有一个模型行为档位，
                 # 因而该档耗尽后进入 Pro 兜底，不会自动降低 effort。
                 for sample in range(1, MAX_SAMPLES_PER_RUNG + 1):
                     try:
@@ -738,7 +769,8 @@ class LlmClient:
                  rungs: tuple[tuple[str, bool], ...] | None = None,
                  progress: RequestProgress | None = None,
                  cache_policy: CachePolicy | None = None,
-                 prefer_content_over_reasoning_salvage: bool = False) -> M:
+                 prefer_content_over_reasoning_salvage: bool = False,
+                 recovery_policy: str | None = None) -> M:
         """结构化调用。默认与 `ask_text` 使用同一档模型行为与 Flash→Pro 兜底；
         只有收缩/裁决这类成本语义明确不同的辅助调用可显式收窄 `rungs`。
         解析失败与「结构上是空的」同等对待。
@@ -764,9 +796,13 @@ class LlmClient:
           ③ `model_validate`  —— 形状/类型/`extra='forbid'`。
         ②在③之前：`require` 是按**盘上键名**（alias）定义的，而且这条路要报得出
         「缺的是哪一个顶层键」——那句话归②，不归 pydantic 的错误文本。
-        三道闸失败的处置**完全一样**：驱逐缓存 + 必要时消费同配置恢复采样 + Pro 兜底。
+        通用非 Stage2 路径对三道闸采用同一处置：驱逐缓存 + 必要时消费同配置
+        恢复采样 + Pro 兜底。Stage2 传入 ``stage2-blueprint-v1`` 后按失败类型改走
+        人工 batch / Flash targeted / Pro constraint rebuild，但仍复用同一组三道闸。
         """
         active_rungs = self._active_rungs_for(rungs, purpose=purpose)
+        if recovery_policy not in (None, 'stage2-blueprint-v1'):
+            raise ValueError(f'{purpose}: 未登记的内容恢复策略 {recovery_policy!r}')
         active_models = self._models
         derived = required_top_level(model_cls)
         if require is None:
@@ -783,6 +819,7 @@ class LlmClient:
                         max_tokens=max_tokens, purpose=purpose)
 
         repair_chain_id: str | None = None
+        legacy_repair_chain_id: str | None = None
         original_repair_request_fingerprints: tuple[str, ...] = ()
         if getattr(self.ctx, 'repair_rejected_responses', False):
             repair_requests = tuple(
@@ -794,11 +831,17 @@ class LlmClient:
                 for effort, thinking in active_rungs)
             original_repair_request_fingerprints = tuple(
                 request_fingerprint(req) for req in repair_requests)
-            repair_chain_id = response_repair.chain_fingerprint(
+            chain_args = dict(
                 sid=self.ctx.sid, node=self.ctx.node, purpose=purpose,
                 code=self.ctx.code, system=system, user=user,
                 models=active_models, rungs=active_rungs,
                 json_mode=JSON_OBJECT_MODE, max_tokens=max_tokens)
+            repair_chain_id = response_repair.chain_fingerprint(
+                **chain_args, run_id=self.ctx.run_id)
+            # 旧 rejection 的 chain 身份没有 run_id。只兼容其中同样没有
+            # ``run_id`` 字段的真正 legacy 行；过渡版本写出的异 run 新行绝不能
+            # 混进当前恢复链，否则一次放弃的 run 会永久锁死相同 prompt。
+            legacy_repair_chain_id = response_repair.chain_fingerprint(**chain_args)
 
         def wire_history_before(
                 records: list[response_repair.RepairRecord], *,
@@ -836,13 +879,19 @@ class LlmClient:
                 rung_index=rung_index, sample=sample)
             if not history:
                 return ()
-            # Flash/主模型第二采修最新候选；切到下一模型的首采负责跳出局部解，
-            # 按全部失败史重建。该模型自己的第二采再回到定向修复。
+            # 通用非 Stage2 链：Flash/主模型第二采修最新候选；切到下一模型的
+            # 首采按全部失败史重建，该模型自己的第二采再回到定向修复。
+            # Stage2 policy 会在预算层截掉 Pro 第二采，但仍复用本函数构造前两种 prompt。
+            pro_primary_rebuild = (
+                len(active_models) == 1
+                and active_models[0] == PRO_FALLBACK_MODEL
+                and model_index == 0 and sample > 1)
             strategy = (
                 'constraint_rebuild'
-                if sample == 1 and any(
-                    int(record.rejection.get('model_index') or 0) < model_index
-                    for record in history)
+                if pro_primary_rebuild or (
+                    sample == 1 and any(
+                        int(record.rejection.get('model_index') or 0) < model_index
+                        for record in history))
                 else 'targeted_repair')
             return response_repair.recovery_prompt_variants(
                 user, history, strategy=strategy)
@@ -942,27 +991,88 @@ class LlmClient:
 
         errors: list[str] = []
 
+        def human_batch_already_resolved() -> bool:
+            if recovery_policy != 'stage2-blueprint-v1':
+                return False
+            from novel.llm import stage2_runs
+            return stage2_runs.human_batch_resolved(
+                self.ctx.novel_dir, self.ctx.run_id)
+
+        def worth_content_recovery(
+                resp: ChatResponse, *, gate: str, model_index: int,
+        ) -> bool:
+            """Stage2 只留 Flash 定向恢复 + Pro 重建各一次；其余节点保持旧策略。"""
+            if recovery_policy != 'stage2-blueprint-v1':
+                return _worth_resampling(resp)
+            # 显式把主模型配置成 Pro 时没有 Flash→Pro 的第二个 model slot；首采
+            # 被拒后仍保留一次**同 Pro、不同 request mode** 的 constraint rebuild。
+            # 这不是同配置重采，answer_lost/length 也直接进入这一动作。
+            if (len(active_models) == 1
+                    and active_models[0] == PRO_FALLBACK_MODEL
+                    and model_index == 0):
+                return True
+            if resp.finish_reason == 'length' or gate == 'answer_lost':
+                return False
+            # Pro 的第一次已经是 constraint rebuild；再采一份同动作只会重付。
+            return model_index == 0
+
+        # 每份 rejection 的实际请求不能信盘上自报；repair_records 会用当前
+        # prompt/模型链/档位重建并核验后，把唯一 ChatRequest 留在这里供 agent /
+        # deterministic 采纳铸 checkpoint。
+        verified_repair_requests: dict[str, ChatRequest] = {}
+
         def repair_records() -> list[response_repair.RepairRecord]:
             """读取并核验本逻辑请求的跨 CLI 状态，同时恢复未认领的成本窗口。"""
             if repair_chain_id is None:
                 return []
             records = response_repair.records_for_chain(
                 self.ctx.novel_dir, repair_chain_id)
+            if (legacy_repair_chain_id is not None
+                    and legacy_repair_chain_id != repair_chain_id):
+                records.extend(
+                    record for record in response_repair.records_for_chain(
+                        self.ctx.novel_dir, legacy_repair_chain_id)
+                    if 'run_id' not in record.rejection)
+            records.sort(key=lambda record: (
+                int(record.rejection.get('model_index') or 0),
+                -1 if record.rejection.get('sample') is None
+                else int(record.rejection['sample']),
+                record.attempt_id,
+            ))
             attempt_ids: set[str] = set()
             allowed_fingerprints = set(original_repair_request_fingerprints)
+            seen_failure_actions: set[tuple[str, str]] = set()
             for record in records:
                 rejection = record.rejection
+                signature = rejection.get('failure_signature')
+                action = rejection.get('next_recovery_action')
+                if isinstance(signature, str) and isinstance(action, str):
+                    key = (signature, action)
+                    if key in seen_failure_actions:
+                        raise TerminalState(
+                            f'{self.ctx.node}/{purpose}: 相同失败签名重复执行恢复动作 '
+                            f'{action}；run={self.ctx.run_id} 拒绝继续白烧')
+                    seen_failure_actions.add(key)
                 model_index = rejection.get('model_index')
                 rung_index = rejection.get('rung_index')
+                expected_chain_id = (
+                    legacy_repair_chain_id
+                    if 'run_id' not in rejection else repair_chain_id)
                 if (rejection.get('sid') != self.ctx.sid
                         or rejection.get('node') != self.ctx.node
                         or rejection.get('purpose') != purpose
                         or rejection.get('code') != self.ctx.code
-                        or rejection.get('chain_id') != repair_chain_id
+                        or rejection.get('chain_id') != expected_chain_id
                         or rejection.get('response_model') != model_cls.__name__):
                     raise TerminalState(
                         f'响应修复状态 {record.root} 不属于当前请求/代码/响应契约；'
                         '拒绝把旧候选接到新 prompt 上')
+                if ('run_id' in rejection
+                        and rejection.get('run_id') != self.ctx.run_id):
+                    raise TerminalState(
+                        f'响应修复状态 {record.root} 属于 run_id='
+                        f'{rejection.get("run_id")!r}，当前={self.ctx.run_id!r}；'
+                        '必须显式复用原 run_id')
                 if (not isinstance(model_index, int) or isinstance(model_index, bool)
                         or not 0 <= model_index < len(active_models)
                         or rejection.get('model') != active_models[model_index]
@@ -977,10 +1087,7 @@ class LlmClient:
                     raise TerminalState(
                         f'响应修复状态 {record.root} 的 sample={sample!r} 不合法')
                 effort, thinking = active_rungs[rung_index]
-                original_fp = request_fingerprint(request_shape(
-                    model=active_models[model_index], effort=effort,
-                    thinking=thinking, request_user=user))
-                expected: list[tuple[str, tuple[str, ...], str]] = []
+                expected: list[tuple[str, tuple[str, ...], ChatRequest]] = []
                 variants: tuple[response_repair.RecoveryPrompt, ...] = ()
                 if isinstance(sample, int):
                     variants = recovery_variants_for(
@@ -989,18 +1096,23 @@ class LlmClient:
                     expected.extend((
                         variant.request_mode,
                         variant.from_attempt_ids,
-                        request_fingerprint(request_shape(
+                        request_shape(
                             model=active_models[model_index], effort=effort,
-                            thinking=thinking, request_user=variant.user)),
+                            thinking=thinking, request_user=variant.user),
                     ) for variant in variants)
                     if variants:
                         expected.append((
                             'original:budget_fallback',
                             variants[0].from_attempt_ids,
-                            original_fp,
+                            request_shape(
+                                model=active_models[model_index], effort=effort,
+                                thinking=thinking, request_user=user),
                         ))
                 if not variants or 'request_mode' not in rejection:
-                    expected.append(('original', (), original_fp))
+                    expected.append((
+                        'original', (), request_shape(
+                            model=active_models[model_index], effort=effort,
+                            thinking=thinking, request_user=user)))
                 actual_fp = rejection.get('request_fingerprint')
                 actual_mode = rejection.get('request_mode', 'original')
                 raw_from = rejection.get('recovery_from_attempts', [])
@@ -1012,13 +1124,14 @@ class LlmClient:
                 # 旧 v1 记录没有 request_mode/recovery_from_attempts；它只可能来自
                 # 上一版的独立重采，按 original 兼容读取。新记录则必须逐字匹配
                 # 由不可变前序失败重建出的请求，不能信盘上自报的 fingerprint。
-                if not any(
-                        actual_mode == mode and actual_from == from_ids
-                        and actual_fp == fingerprint
-                        for mode, from_ids, fingerprint in expected):
+                matches = [request for mode, from_ids, request in expected
+                           if actual_mode == mode and actual_from == from_ids
+                           and actual_fp == request_fingerprint(request)]
+                if len(matches) != 1:
                     raise TerminalState(
                         f'响应修复状态 {record.root} 的后继请求身份无法由前序失败重建；'
                         '拒绝把旧候选/成本接到当前链上')
+                verified_repair_requests[record.attempt_id] = matches[0]
                 allowed_fingerprints.add(str(actual_fp))
                 ids = rejection.get('attempt_ids')
                 if not isinstance(ids, list) or not all(isinstance(x, str) for x in ids):
@@ -1109,20 +1222,35 @@ class LlmClient:
                         record, decision='declined', gate=record.rejection.get('gate'),
                         detail=record.rejection.get('reject_detail'),
                         why='受托 agent 判定不可在不发明内容的前提下安全修复')
-                    self.ctx.ledger.note_response_repair(
-                        sid=self.ctx.sid, node=self.ctx.node, purpose=purpose,
-                        attempt_id=record.attempt_id, action='declined',
-                        decision='declined', actor=str(resolution.get('actor') or ''),
-                        gate=str(record.rejection.get('gate') or ''),
-                        model=str(record.rejection.get('model') or ''),
-                        rung_index=record.rejection.get('rung_index'),
-                        sample=record.rejection.get('sample'),
-                        chapter=record.rejection.get('chapter'))
+                self.ctx.ledger.note_response_repair(
+                    sid=self.ctx.sid, node=self.ctx.node, purpose=purpose,
+                    attempt_id=record.attempt_id, action='declined',
+                    decision='declined', actor=str(resolution.get('actor') or ''),
+                    gate=str(record.rejection.get('gate') or ''),
+                    model=str(record.rejection.get('model') or ''),
+                    rung_index=record.rejection.get('rung_index'),
+                    sample=record.rejection.get('sample'),
+                    chapter=record.rejection.get('chapter'))
                 return False, None
             if action not in ('submit', 'deterministic') or 'candidate' not in resolution:
                 raise TerminalState(
                     f'{record.root / response_repair.RESOLUTION_FILE} 的 action/candidate 不合法')
             if record.outcome is not None and record.outcome.get('decision') == 'rejected':
+                # outcome 是先于 audit 落盘的完成事实。若进程恰在二者之间崩溃，
+                # resume 也必须以稳定 event_id 补回最终判定，不能因已有 rejected
+                # outcome 走快速分支而永久留下审计断口。
+                self.ctx.ledger.note_response_repair(
+                    sid=self.ctx.sid, node=self.ctx.node, purpose=purpose,
+                    attempt_id=record.attempt_id,
+                    action=('deterministic' if action == 'deterministic' else 'agent'),
+                    decision='rejected',
+                    actor=str(resolution.get('actor') or ''),
+                    gate=str(record.outcome.get('gate') or ''),
+                    candidate_sha256=str(resolution.get('candidate_sha256') or ''),
+                    model=str(record.rejection.get('model') or ''),
+                    rung_index=record.rejection.get('rung_index'),
+                    sample=record.rejection.get('sample'),
+                    chapter=record.rejection.get('chapter'))
                 errors.append(
                     f'agent 修复 attempt={record.attempt_id} 已被 '
                     f'{record.outcome.get("gate")} 闸拒绝：{record.outcome.get("why")}')
@@ -1141,30 +1269,51 @@ class LlmClient:
                 model=str(raw_response.get('model') or record.rejection.get('model') or ''))
             obj, why, gate, detail = gate_payload(candidate_text, repaired_response)
             decision = 'accepted' if why is None else 'rejected'
-            first_check = record.outcome is None
             response_repair.write_outcome(
                 record, decision=decision, gate=None if why is None else gate,
                 detail=None if why is None else detail, why=why)
-            if first_check:
-                self.ctx.ledger.note_response_repair(
-                    sid=self.ctx.sid, node=self.ctx.node, purpose=purpose,
-                    attempt_id=record.attempt_id,
-                    action='deterministic' if action == 'deterministic' else 'agent',
-                    decision=decision,
-                    actor=str(resolution.get('actor') or ''),
-                    gate=None if why is None else gate,
-                    candidate_sha256=str(resolution.get('candidate_sha256') or ''),
-                    model=str(record.rejection.get('model') or ''),
-                    rung_index=record.rejection.get('rung_index'),
-                    sample=record.rejection.get('sample'),
-                    chapter=record.rejection.get('chapter'))
+            self.ctx.ledger.note_response_repair(
+                sid=self.ctx.sid, node=self.ctx.node, purpose=purpose,
+                attempt_id=record.attempt_id,
+                action='deterministic' if action == 'deterministic' else 'agent',
+                decision=decision,
+                actor=str(resolution.get('actor') or ''),
+                gate=None if why is None else gate,
+                candidate_sha256=str(resolution.get('candidate_sha256') or ''),
+                model=str(record.rejection.get('model') or ''),
+                rung_index=record.rejection.get('rung_index'),
+                sample=record.rejection.get('sample'),
+                chapter=record.rejection.get('chapter'))
             if why is not None:
                 errors.append(
                     f'agent 修复 attempt={record.attempt_id} 仍被 {gate} 闸拒绝：{why}')
                 return False, None
             assert obj is not None
-            with self._adopt_lock:
-                self._accepted[purpose] = record.attempt_id
+            accepted_request = verified_repair_requests.get(record.attempt_id)
+            if accepted_request is None:
+                repair_records()
+                accepted_request = verified_repair_requests.get(record.attempt_id)
+            if accepted_request is None:
+                raise TerminalState(
+                    f'{record.root}: 无法重建 agent 候选所属的实际 ChatRequest')
+            self._remember_json_acceptance(
+                purpose=purpose, attempt_id=record.attempt_id,
+                raw_accepted_text=candidate_text,
+                normalized_text=candidate_text,
+                channel=('deterministic' if action == 'deterministic' else 'agent'),
+                salvaged=False,
+                recovery_mode=('deterministic' if action == 'deterministic'
+                               else 'agent_submit'),
+                request=accepted_request,
+                request_mode=str(record.rejection.get('request_mode') or 'original'),
+                recovery_from_attempts=tuple(
+                    str(item) for item in
+                    record.rejection.get('recovery_from_attempts', [])
+                    if isinstance(item, str)),
+                contributing_attempts=(
+                    str(item) for item in record.rejection.get('attempt_ids', [])
+                    if isinstance(item, str)),
+            )
             return True, obj
 
         def offer_repair(*, resp: ChatResponse, attempt_id: str,
@@ -1180,6 +1329,27 @@ class LlmClient:
             if repair_chain_id is None:
                 return None
             eligible, eligibility_reason = _agent_repair_eligibility(gate, resp)
+            if eligible and human_batch_already_resolved():
+                eligible = False
+                eligibility_reason = (
+                    f'run={self.ctx.run_id} 已消费唯一人工 workpack；'
+                    '后继失败只能升级到登记的自动恢复动作或终态')
+            failure_signature = response_repair.failure_signature(
+                request_fingerprint=request_fp, model=model,
+                reasoning_effort=active_rungs[rung_index][0],
+                thinking=active_rungs[rung_index][1], request_mode=request_mode,
+                finish_reason=resp.finish_reason, gate=gate,
+                reject_detail=detail, why=why)
+            pro_primary_rebuild = (
+                would_resample and len(active_models) == 1
+                and active_models[0] == PRO_FALLBACK_MODEL
+                and model_index == 0)
+            next_recovery_action = (
+                'human_batch' if eligible else
+                'pro_constraint_rebuild' if pro_primary_rebuild else
+                'flash_targeted_repair' if would_resample else
+                'pro_constraint_rebuild' if model_index + 1 < len(active_models)
+                else 'terminal')
             original = (_strip_fences(resp.reasoning) if gate == 'answer_lost'
                         else content)
             candidate: Any | None = None
@@ -1200,6 +1370,7 @@ class LlmClient:
                 attempt_id=attempt_id, original=original, candidate=candidate,
                 payload={
                     'sid': self.ctx.sid, 'node': self.ctx.node,
+                    'run_id': self.ctx.run_id,
                     'purpose': purpose, 'code': self.ctx.code,
                     'request_fingerprint': request_fp,
                     'attempt_ids': list(self.ctx.ledger.attempt_ids_for(
@@ -1210,6 +1381,8 @@ class LlmClient:
                     'request_mode': request_mode,
                     'recovery_from_attempts': list(recovery_from_attempts),
                     'would_resample': would_resample,
+                    'failure_signature': failure_signature,
+                    'next_recovery_action': next_recovery_action,
                     'gate': gate, 'why': why[:4000], 'reject_detail': detail,
                     'repair_eligible': eligible,
                     'eligibility_reason': eligibility_reason,
@@ -1267,8 +1440,31 @@ class LlmClient:
                 rung_index=record.rejection.get('rung_index'),
                 sample=record.rejection.get('sample'),
                 chapter=record.rejection.get('chapter'))
-            with self._adopt_lock:
-                self._accepted[purpose] = record.attempt_id
+            accepted_request = verified_repair_requests.get(record.attempt_id)
+            if accepted_request is None:
+                repair_records()
+                accepted_request = verified_repair_requests.get(record.attempt_id)
+            if accepted_request is None:
+                raise TerminalState(
+                    f'{record.root}: 无法重建 deterministic 候选所属的实际 ChatRequest')
+            normalized_candidate = json.dumps(
+                candidate, ensure_ascii=False, separators=(',', ':'))
+            self._remember_json_acceptance(
+                purpose=purpose, attempt_id=record.attempt_id,
+                raw_accepted_text=normalized_candidate,
+                normalized_text=normalized_candidate,
+                channel='deterministic', salvaged=False,
+                recovery_mode='deterministic',
+                request=accepted_request,
+                request_mode=str(record.rejection.get('request_mode') or 'original'),
+                recovery_from_attempts=tuple(
+                    str(item) for item in
+                    record.rejection.get('recovery_from_attempts', [])
+                    if isinstance(item, str)),
+                contributing_attempts=(
+                    str(item) for item in record.rejection.get('attempt_ids', [])
+                    if isinstance(item, str)),
+            )
             return obj
 
         # 同 ask_text：主模型或兜底模型任一档已有合格缓存时，本次必须是 0 次真请求。
@@ -1303,6 +1499,17 @@ class LlmClient:
                             json_mode=JSON_OBJECT_MODE, index=i, sample=None,
                             resample=False, resp=resp, progress=progress,
                             salvaged=True)
+                    self._remember_json_acceptance(
+                        purpose=purpose, attempt_id=attempt_id,
+                        raw_accepted_text=(
+                            (resp.reasoning or '') if salvaged else (resp.content or '')),
+                        normalized_text=content,
+                        channel='reasoning' if salvaged else 'content',
+                        salvaged=salvaged, recovery_mode='original',
+                        request=request_shape(
+                            model=model, effort=effort, thinking=thinking,
+                            request_user=user),
+                        request_mode='original')
                     return obj
                 self.cache.evict(key)
                 repair_record = offer_repair(
@@ -1342,8 +1549,10 @@ class LlmClient:
         for model_index, model in enumerate(active_models):
             transport_failure: TransportError | LlmFailed | None = None
             for i, (effort, thinking) in enumerate(active_rungs):
-                # 被拒后先同档重采一次；截断除外。默认只有一个模型行为档位，
-                # 因而该档耗尽后进入 Pro 兜底，不会自动降低 effort。
+                # 通用非 Stage2 链被拒后先同档重采一次（截断除外），再进 Pro，
+                # 且不自动降低 effort。Stage2 policy 在下面按失败类型/签名收紧：
+                # batch 后最多一次 targeted Flash + 一次 Pro rebuild；answer_lost、
+                # length 与 dynamic validator 都按各自登记动作升级，不套这句顺序。
                 first_sample = 1
                 if repair_chain_id is not None:
                     prior = [
@@ -1396,6 +1605,18 @@ class LlmClient:
                         json_mode=JSON_OBJECT_MODE, index=index, sample=sample_,
                         resample=False, resp=resp_, progress=progress,
                         salvaged=True)
+                    self._remember_json_acceptance(
+                        purpose=purpose, attempt_id=attempt_,
+                        raw_accepted_text=resp_.reasoning or '',
+                        normalized_text=_strip_fences(resp_.reasoning),
+                        channel='reasoning', salvaged=True,
+                        recovery_mode=request_mode_,
+                        request=request_shape(
+                            model=model, effort=effort, thinking=thinking,
+                            request_user=_request_user),
+                        request_mode=request_mode_,
+                        recovery_from_attempts=recovery_from_,
+                        contributing_attempts=recovery_from_)
                     return obj_
 
                 for sample in range(first_sample, MAX_SAMPLES_PER_RUNG + 1):
@@ -1442,6 +1663,24 @@ class LlmClient:
                                         sample=sample, resample=False,
                                         resp=cached_resp, progress=progress,
                                         salvaged=True)
+                                self._remember_json_acceptance(
+                                    purpose=purpose, attempt_id=cached_attempt,
+                                    raw_accepted_text=(
+                                        (cached_resp.reasoning or '')
+                                        if cached_salvaged
+                                        else (cached_resp.content or '')),
+                                    normalized_text=cached_content,
+                                    channel=('reasoning' if cached_salvaged
+                                             else 'content'),
+                                    salvaged=cached_salvaged,
+                                    recovery_mode=request_mode,
+                                    request=request_shape(
+                                        model=model, effort=effort,
+                                        thinking=thinking,
+                                        request_user=request_user),
+                                    request_mode=request_mode,
+                                    recovery_from_attempts=recovery_from_attempts,
+                                    contributing_attempts=recovery_from_attempts)
                                 return cached_obj
                             self.cache.evict(cached_key)
                             cached_record = offer_repair(
@@ -1454,11 +1693,20 @@ class LlmClient:
                                 recovery_from_attempts=recovery_from_attempts,
                                 gate=cached_gate, why=cached_why,
                                 detail=cached_detail, content=cached_content,
-                                would_resample=True)
+                                would_resample=(
+                                    sample < MAX_SAMPLES_PER_RUNG
+                                    and worth_content_recovery(
+                                        cached_resp, gate=cached_gate,
+                                        model_index=model_index)))
                             cache_pending = (
                                 cached_record is not None and cached_record.eligible
                                 and cached_record.resolution is None)
-                            cache_resample = not cache_pending
+                            cache_resample = (
+                                not cache_pending
+                                and sample < MAX_SAMPLES_PER_RUNG
+                                and worth_content_recovery(
+                                    cached_resp, gate=cached_gate,
+                                    model_index=model_index))
                             self._settle_gate(
                                 purpose=purpose, attempt_id=cached_attempt,
                                 source='cache', accepted=False, gate=cached_gate,
@@ -1563,6 +1811,20 @@ class LlmClient:
                                 json_mode=JSON_OBJECT_MODE, index=i, sample=sample,
                                 resample=False, resp=resp, progress=progress,
                                 salvaged=True)
+                        self._remember_json_acceptance(
+                            purpose=purpose, attempt_id=attempt_id,
+                            raw_accepted_text=(
+                                (resp.reasoning or '') if salvaged
+                                else (resp.content or '')),
+                            normalized_text=content,
+                            channel='reasoning' if salvaged else 'content',
+                            salvaged=salvaged, recovery_mode=request_mode,
+                            request=request_shape(
+                                model=model, effort=effort, thinking=thinking,
+                                request_user=request_user),
+                            request_mode=request_mode,
+                            recovery_from_attempts=recovery_from_attempts,
+                            contributing_attempts=recovery_from_attempts)
                         return obj
                     self.cache.evict(key)
                     repair_record = (None if deferred_salvage is not None else offer_repair(
@@ -1575,13 +1837,17 @@ class LlmClient:
                         gate=gate, why=why,
                         detail=detail, content=content,
                         would_resample=(sample < MAX_SAMPLES_PER_RUNG
-                                        and _worth_resampling(resp))))
+                                        and worth_content_recovery(
+                                            resp, gate=gate,
+                                            model_index=model_index))))
                     repair_pending = (
                         repair_record is not None and repair_record.eligible
                         and repair_record.resolution is None)
                     resample = (not repair_pending
                                 and sample < MAX_SAMPLES_PER_RUNG
-                                and _worth_resampling(resp))
+                                and worth_content_recovery(
+                                    resp, gate=gate,
+                                    model_index=model_index))
                     self._settle_gate(
                         purpose=purpose, attempt_id=attempt_id, source='wire',
                         accepted=False, gate=gate, rungs=active_rungs, index=i,
@@ -1820,6 +2086,247 @@ class LlmClient:
         """这个 purpose 最终被采纳的响应的 `attempt_id`；本 run 没采纳过则 `None`。"""
         with self._adopt_lock:
             return self._accepted.get(purpose)
+
+    def json_request_policy(
+            self, phases: Iterable[tuple[str, type[BaseModel], int, bool]], *,
+            recovery_policy: str,
+    ) -> dict[str, Any]:
+        """给 producer 一份可在扇出前绑定的完整 JSON 请求策略。"""
+        rows: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for phase, response_model, max_tokens, prefer_content in phases:
+            if not phase or phase in seen:
+                raise ValueError(f'JSON request policy phase 重复或为空：{phase!r}')
+            if not isinstance(max_tokens, int) or isinstance(max_tokens, bool) \
+                    or max_tokens <= 0:
+                raise ValueError(f'{phase}: max_tokens 必须是正整数')
+            seen.add(phase)
+            schema = response_model.model_json_schema(by_alias=True)
+            schema_sha = hashlib.sha256(json.dumps(
+                schema, ensure_ascii=False, sort_keys=True,
+                separators=(',', ':')).encode('utf-8')).hexdigest()
+            rows.append({
+                'phase': phase,
+                'response_model': response_model.__name__,
+                'response_schema_sha256': schema_sha,
+                'max_tokens': max_tokens,
+                'prefer_content_over_reasoning_salvage': bool(prefer_content),
+            })
+        if not rows or not recovery_policy:
+            raise ValueError('JSON request policy 必须含 phase 与 recovery_policy')
+        return {
+            'model_chain': list(self._models),
+            'rungs': [[effort, thinking] for effort, thinking in self._rungs],
+            'json_mode': JSON_OBJECT_MODE,
+            'temperature': None,
+            'recovery_policy': recovery_policy,
+            'phases': rows,
+        }
+
+    def _remember_json_acceptance(
+            self, *, purpose: str, attempt_id: str,
+            raw_accepted_text: str, normalized_text: str,
+            channel: str, salvaged: bool, recovery_mode: str,
+            request: ChatRequest, request_mode: str,
+            recovery_from_attempts: Iterable[str] = (),
+            contributing_attempts: Iterable[str] = (),
+    ) -> None:
+        """保留验证后 checkpoint 的原通道字节、解析文本与完整成本/请求联结。"""
+        if channel not in ('content', 'reasoning', 'agent', 'deterministic'):
+            raise ProvenanceRefused(f'{purpose}: accepted channel={channel!r} 不合法')
+        if request_fingerprint(request) \
+                != self.ctx.ledger.request_fingerprint_for_attempt(attempt_id):
+            raise ProvenanceRefused(
+                f'{purpose}: accepted ChatRequest 与 ledger attempt={attempt_id} 不一致')
+        attempts = sorted(
+            set(self.ctx.ledger.attempt_ids_for_purpose(purpose))
+            | set(contributing_attempts) | {attempt_id})
+        links = [self.ctx.ledger.request_identity_for_attempt(item) for item in attempts]
+        accepted_identity = self.ctx.ledger.request_identity_for_attempt(attempt_id)
+        payload = {
+            'attempt_id': attempt_id,
+            'request_fingerprint': accepted_identity['request_fingerprint'],
+            'model': accepted_identity['model'],
+            'ledger_response_sha256': accepted_identity['response_sha256'],
+            'accepted_channel': channel,
+            # `accepted_text` 保留供应商/agent 通道的原字节；真正送进 json.loads 的
+            # 围栏剥离文本另存，二者不能再混成一格。
+            'accepted_text': raw_accepted_text,
+            'normalized_text': normalized_text,
+            'accepted_request': _checkpoint_request_binding(request),
+            'model_chain': list(self._models),
+            'rungs': [[effort, thinking] for effort, thinking in self._rungs],
+            'attempt_links': links,
+            'recovery_mode': recovery_mode,
+            'request_mode': request_mode,
+            'recovery_from_attempts': list(recovery_from_attempts),
+            'salvaged': bool(salvaged),
+        }
+        with self._adopt_lock:
+            self._accepted[purpose] = attempt_id
+            self._accepted_checkpoint[purpose] = payload
+
+    def accepted_checkpoint(self, purpose: str) -> dict[str, Any]:
+        """返回刚通过完整响应闸的原文/attempt 联结；缺一格就不允许伪造检查点。"""
+        with self._adopt_lock:
+            value = self._accepted_checkpoint.get(purpose)
+            if value is None:
+                raise ProvenanceRefused(
+                    f'{purpose}: accepted response 没有 checkpoint channel/raw-text 联结')
+            return {
+                **value,
+                'attempt_links': [dict(row) for row in value['attempt_links']],
+            }
+
+    def restore_checkpoint_acceptance(
+            self, purpose: str, record: Mapping[str, Any], *,
+            system: str | None = None, user: str | None = None,
+            max_tokens: int | None = None,
+            recovery_policy: str | None = None,
+            rungs: tuple[tuple[str, bool], ...] | None = None,
+    ) -> None:
+        """按当前完整 ChatRequest/恢复协议复算 checkpoint，再恢复 adoption 索引。"""
+        attempt_id = str(record.get('attempt_id') or '')
+        links = record.get('attempt_links')
+        if not isinstance(links, list) or not links:
+            raise ProvenanceRefused(f'{purpose}: checkpoint 缺 attempt_links')
+        accepted_text = record.get('accepted_text')
+        normalized_text = record.get('normalized_text')
+        channel = str(record.get('accepted_channel') or '')
+        if (not isinstance(accepted_text, str)
+                or not isinstance(normalized_text, str) or channel not in (
+                'content', 'reasoning', 'agent', 'deterministic')):
+            raise ProvenanceRefused(f'{purpose}: checkpoint accepted channel/raw-text 不合法')
+        response_model = str(record.get('model') or '')
+        if not response_model:
+            raise ProvenanceRefused(f'{purpose}: checkpoint 缺供应商实际响应 model')
+        if system is None or user is None or max_tokens is None:
+            raise ProvenanceRefused(
+                f'{purpose}: checkpoint 恢复缺当前 system/user/max_tokens，'
+                '不能核验实际 ChatRequest')
+        if recovery_policy not in (None, 'stage2-blueprint-v1'):
+            raise ProvenanceRefused(
+                f'{purpose}: checkpoint 使用未登记恢复策略 {recovery_policy!r}')
+        active_rungs = self._active_rungs_for(rungs, purpose=purpose)
+        expected_chain = list(self._models)
+        expected_rungs = [[effort, thinking] for effort, thinking in active_rungs]
+        if (record.get('model_chain') != expected_chain
+                or record.get('rungs') != expected_rungs):
+            raise ProvenanceRefused(
+                f'{purpose}: checkpoint 模型链/effort/thinking 与当前配置漂移；'
+                f'盘上={record.get("model_chain")!r}/{record.get("rungs")!r}，'
+                f'当前={expected_chain!r}/{expected_rungs!r}')
+        binding = record.get('accepted_request')
+        if not isinstance(binding, dict):
+            raise ProvenanceRefused(f'{purpose}: checkpoint 缺完整 accepted_request 配置')
+        request_model = str(binding.get('request_model') or '')
+        effort = binding.get('reasoning_effort')
+        thinking = binding.get('thinking')
+        if request_model not in self._models:
+            raise ProvenanceRefused(
+                f'{purpose}: checkpoint accepted_request.request_model='
+                f'{request_model!r} 不在当前模型链 {self._models!r}')
+        if (not isinstance(effort, str)
+                or not isinstance(thinking, bool)
+                or (effort, thinking) not in active_rungs
+                or binding.get('json_mode') != JSON_OBJECT_MODE
+                or not isinstance(binding.get('max_tokens'), int)
+                or isinstance(binding.get('max_tokens'), bool)
+                or binding.get('max_tokens') != max_tokens
+                or binding.get('temperature') is not None):
+            raise ProvenanceRefused(
+                f'{purpose}: checkpoint 的 model/effort/thinking/json_mode/max_tokens '
+                '与当前将发送的请求配置不同')
+
+        request_mode = str(record.get('request_mode') or '')
+        raw_from = record.get('recovery_from_attempts')
+        if (not isinstance(raw_from, list)
+                or not all(isinstance(item, str) for item in raw_from)):
+            raise ProvenanceRefused(f'{purpose}: checkpoint 缺 recovery_from_attempts')
+        recovery_from = tuple(raw_from)
+        request_user = user
+        if request_mode == 'original':
+            if recovery_from:
+                raise ProvenanceRefused(
+                    f'{purpose}: original checkpoint 不应携带恢复来源 attempts')
+        elif request_mode == 'original:budget_fallback':
+            if recovery_policy != 'stage2-blueprint-v1' or not recovery_from:
+                raise ProvenanceRefused(
+                    f'{purpose}: budget fallback checkpoint 缺已登记恢复链')
+        else:
+            try:
+                strategy, _detail = request_mode.split(':', 1)
+            except ValueError:
+                raise ProvenanceRefused(
+                    f'{purpose}: checkpoint request_mode={request_mode!r} 不合法') from None
+            if (recovery_policy != 'stage2-blueprint-v1'
+                    or strategy not in response_repair.RECOVERY_STRATEGIES
+                    or not recovery_from):
+                raise ProvenanceRefused(
+                    f'{purpose}: checkpoint 恢复 prompt 身份不完整')
+            chain_id = response_repair.chain_fingerprint(
+                sid=self.ctx.sid, node=self.ctx.node, purpose=purpose,
+                code=self.ctx.code, system=system, user=user,
+                models=self._models, rungs=active_rungs,
+                json_mode=JSON_OBJECT_MODE, max_tokens=max_tokens,
+                run_id=self.ctx.run_id)
+            records = response_repair.records_for_chain(self.ctx.novel_dir, chain_id)
+            by_attempt = {item.attempt_id: item for item in records}
+            if set(by_attempt).intersection(recovery_from) != set(recovery_from):
+                raise ProvenanceRefused(
+                    f'{purpose}: checkpoint 恢复 prompt 所指 attempts 不在当前 repair chain')
+            selected = tuple(by_attempt[item] for item in recovery_from)
+            variants = response_repair.recovery_prompt_variants(
+                user, selected, strategy=strategy)
+            matches = [variant for variant in variants
+                       if variant.request_mode == request_mode
+                       and variant.from_attempt_ids == recovery_from]
+            if len(matches) != 1:
+                raise ProvenanceRefused(
+                    f'{purpose}: checkpoint 恢复 prompt 无法由当前失败证据唯一重建')
+            request_user = matches[0].user
+
+        expected_request = ChatRequest(
+            model=request_model, system=system, user=request_user,
+            reasoning_effort=str(effort), thinking=bool(thinking),
+            json_mode=JSON_OBJECT_MODE, max_tokens=max_tokens)
+        expected_binding = _checkpoint_request_binding(expected_request)
+        if binding != expected_binding:
+            raise ProvenanceRefused(
+                f'{purpose}: checkpoint accepted_request 指纹/prompt/config 与当前重建结果不同')
+        accepted_ledger = self.ctx.ledger.request_identity_for_attempt(attempt_id)
+        if response_model != str(accepted_ledger.get('model') or ''):
+            raise ProvenanceRefused(
+                f'{purpose}: checkpoint 实际响应 model 与 ledger 不闭合')
+        ledger_request = {
+            key: accepted_ledger.get(key)
+            for key in ('request_model', 'reasoning_effort', 'thinking',
+                        'json_mode', 'max_tokens', 'request_fingerprint')
+        }
+        binding_request = {
+            key: binding.get(key)
+            for key in ('request_model', 'reasoning_effort', 'thinking',
+                        'json_mode', 'max_tokens', 'request_fingerprint')
+        }
+        if ledger_request != binding_request:
+            raise ProvenanceRefused(
+                f'{purpose}: checkpoint accepted_request 与 ledger ChatRequest 不闭合')
+        if record.get('ledger_response_sha256') \
+                != accepted_ledger.get('response_sha256'):
+            raise ProvenanceRefused(
+                f'{purpose}: checkpoint ledger_response_sha256 与成本账不同')
+        self._remember_json_acceptance(
+            purpose=purpose, attempt_id=attempt_id,
+            raw_accepted_text=accepted_text,
+            normalized_text=normalized_text, channel=channel,
+            salvaged=record.get('salvaged') is True,
+            recovery_mode=str(record.get('recovery_mode') or 'checkpoint'),
+            request=expected_request, request_mode=request_mode,
+            recovery_from_attempts=recovery_from,
+            contributing_attempts=(
+                str(row.get('attempt_id') or '') for row in links
+                if isinstance(row, dict)),
+        )
 
     def accepted_request_fingerprint(self, purpose: str) -> str | None:
         """最终采纳响应的实际请求指纹；由 attempt 联结成本账，不按默认档位重算。"""
@@ -2097,6 +2604,7 @@ class LlmClient:
             attempt_id=attempt_id,
             request_fingerprint=request_fingerprint(req),
             response_sha256=_response_sha256(resp),
+            request_model=req.model,
             node=self.ctx.node, sid=self.ctx.sid,
             model=(resp.model if resp else '') or req.model,
             code=self.ctx.code, cached=False, cache_policy=policy.name,
@@ -2140,6 +2648,7 @@ class LlmClient:
             attempt_id=attempt_id,
             request_fingerprint=request_fingerprint(req),
             response_sha256=_response_sha256(resp),
+            request_model=req.model,
             node=self.ctx.node, sid=self.ctx.sid, model=resp.model or req.model,
             code=self.ctx.code, cached=True, cache_policy=policy.name,
             prompt_tokens=u.get('prompt_tokens'),

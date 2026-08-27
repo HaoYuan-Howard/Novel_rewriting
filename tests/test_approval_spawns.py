@@ -23,8 +23,19 @@ def test_gate_spawns_follow_the_same_disk_resume_verdict(monkeypatch, tmp_path):
         lambda overview, node: (verdicts.get(node, approvals.state.RESUME_RUN), node))
 
     fresh = approvals.get(tmp_path, '123')
+    assert [action.kind for action in fresh.spawns['s1']] == ['stage2.global']
     assert fresh.spawns['s2'] == [], 'fresh Stage4 A/B must not be spawned again'
     assert not (tmp_path / '_service').exists(), 'the dynamic GET remains read-only'
+
+    verdicts['stage2.global'] = approvals.state.RESUME_SKIP
+    global_done = approvals.get(tmp_path, '123')
+    assert [action.kind for action in global_done.spawns['s1']] == [
+        'stage2.blueprint',
+    ], 'global 一落盘就应下发 blueprint，不等待全局人工复核'
+
+    verdicts['stage2.blueprint'] = approvals.state.RESUME_SKIP
+    stage2_done = approvals.get(tmp_path, '123')
+    assert stage2_done.spawns['s1'] == []
 
     verdicts['stage4.plan'] = approvals.state.RESUME_RUN
     missing = approvals.get(tmp_path, '123')

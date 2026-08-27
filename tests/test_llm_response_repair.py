@@ -4,21 +4,28 @@
 from __future__ import annotations
 
 import json
+import shutil
 import tempfile
 from pathlib import Path
 
 import pytest
 from pydantic import BaseModel, Field
 
-from novel.errors import ContextBudgetRefused, ResponseRepairRequired, TerminalState
-from novel.llm import response_repair
+from novel.errors import (
+    ContextBudgetRefused, ResponseRepairBatchRequired, ResponseRepairRequired,
+    TerminalState,
+)
+from novel.llm import response_repair, stage2_runs
 from novel.llm.cache import ResponseCache
 from novel.llm.client import (
-    MAX_SAMPLES_PER_RUNG, PRO_FALLBACK_MODEL, LlmClient, LlmFailed,
+    DEFAULT_MAX_TOKENS, JSON_OBJECT_MODE, MAX_SAMPLES_PER_RUNG,
+    PRO_FALLBACK_MODEL, LlmClient, LlmFailed,
 )
 from novel.llm.ledger import AUDIT_REL, ledger_path
 from novel.llm.transport import ChatResponse, FakeTransport
 from novel.run import RunContext
+from novel.run_identity import new_run_id
+from novel.stages.stage2 import extract
 
 
 class RepairResponse(BaseModel):
@@ -28,6 +35,7 @@ class RepairResponse(BaseModel):
 
 GOOD = {'voice': {'person': 'third'}, 'surface_habits': ['短句']}
 BAD = {'voice': {'person': 'third'}}
+_RUN_IDS: dict[Path, str] = {}
 
 
 def _base() -> Path:
@@ -37,9 +45,18 @@ def _base() -> Path:
 
 
 def _ctx(base: Path) -> RunContext:
+    # 这一族测的多个 ``_ctx`` 就是同一次跨 CLI resume；
+    # 新账不再允许靠 sid/purpose 把另一 run 的成本接过来。
+    run_id = _RUN_IDS.setdefault(base, new_run_id())
     return RunContext.open(
         base, '123', 'stage2.global', paid=True,
-        repair_rejected_responses=True)
+        repair_rejected_responses=True, run_id=run_id)
+
+
+def _ctx_for_run(base: Path, run_id: str) -> RunContext:
+    return RunContext.open(
+        base, '123', 'stage2.global', paid=True,
+        repair_rejected_responses=True, run_id=run_id)
 
 
 def _client(ctx: RunContext, transport: FakeTransport, **kwargs) -> LlmClient:
@@ -60,6 +77,12 @@ def _good(model: str = 'deepseek-v4-flash') -> ChatResponse:
 
 def _ask(client: LlmClient) -> RepairResponse:
     return client.ask_json('system', 'user', model_cls=RepairResponse, purpose='repair.p')
+
+
+def _ask_stage2(client: LlmClient, *, validator=None) -> RepairResponse:
+    return client.ask_json(
+        'system', 'user', model_cls=RepairResponse, purpose='repair.p',
+        validator=validator, recovery_policy='stage2-blueprint-v1')
 
 
 def _rows(path: Path) -> list[dict]:
@@ -113,6 +136,255 @@ def test_an_agent_candidate_is_revalidated_and_adopted_without_a_second_wire_cal
     assert [(row['decision'], row['gate']) for row in gate] == [('rejected', 'require')]
 
 
+def test_repair_chain_isolated_by_run_but_same_run_resume_reuses_pending_state():
+    base = _base()
+    first_run = new_run_id()
+    first_transport = FakeTransport.always(_bad())
+    with pytest.raises(ResponseRepairRequired) as stopped:
+        _ask(_client(_ctx_for_run(base, first_run), first_transport))
+    assert len(first_transport.calls) == 1
+
+    same_run_transport = FakeTransport.always(_good())
+    with pytest.raises(ResponseRepairRequired) as resumed:
+        _ask(_client(_ctx_for_run(base, first_run), same_run_transport))
+    assert resumed.value.attempt_id == stopped.value.attempt_id
+    assert same_run_transport.calls == [], '同 run 必须先消费既有 pending，不能再付费'
+
+    fresh_run_transport = FakeTransport.always(_good())
+    got = _ask(_client(
+        _ctx_for_run(base, new_run_id()), fresh_run_transport))
+    assert got.voice == GOOD['voice']
+    assert len(fresh_run_transport.calls) == 1, (
+        '新 run 不得被相同 prompt 的旧 rejection 永久锁死')
+
+
+def test_true_legacy_chain_without_run_id_remains_resumable():
+    base = _base()
+    ctx = _ctx(base)
+    first_client = _client(ctx, FakeTransport.always(_bad()))
+    with pytest.raises(ResponseRepairRequired) as stopped:
+        _ask(first_client)
+    record = response_repair.find_attempt(ctx.novel_dir, stopped.value.attempt_id)
+
+    legacy_chain = response_repair.chain_fingerprint(
+        sid=ctx.sid, node=ctx.node, purpose='repair.p', code=ctx.code,
+        system='system', user='user', models=first_client._models,
+        rungs=first_client._rungs, json_mode=JSON_OBJECT_MODE,
+        max_tokens=DEFAULT_MAX_TOKENS)
+    rejection_path = record.root / response_repair.REJECTION_FILE
+    rejection = json.loads(rejection_path.read_text('utf-8'))
+    rejection.pop('run_id')
+    rejection['chain_id'] = legacy_chain
+    rejection_path.write_text(
+        json.dumps(rejection, ensure_ascii=False), encoding='utf-8')
+    legacy_root = record.root.parents[1] / legacy_chain
+    legacy_root.mkdir(parents=True)
+    shutil.move(str(record.root), str(legacy_root / record.root.name))
+    record.root.parent.rmdir()
+
+    ledger = ledger_path(base)
+    legacy_rows = _rows(ledger)
+    for row in legacy_rows:
+        row.pop('run_id', None)
+    ledger.write_text('\n'.join(
+        json.dumps(row, ensure_ascii=False, sort_keys=True)
+        for row in legacy_rows) + '\n', encoding='utf-8')
+
+    candidate = legacy_root / stopped.value.attempt_id / response_repair.CANDIDATE_FILE
+    candidate.write_text(json.dumps(GOOD, ensure_ascii=False), encoding='utf-8')
+    response_repair.submit(
+        ctx.novel_dir, stopped.value.attempt_id,
+        actor='legacy-operator', reason='历史记录只修外层字段')
+    transport = FakeTransport.always(_bad())
+    got = _ask(_client(_ctx(base), transport))
+    assert got.surface_habits == ['短句']
+    assert transport.calls == []
+
+
+@pytest.mark.parametrize('first', [
+    ChatResponse(
+        content='', reasoning='', finish_reason='stop',
+        usage={'completion_tokens': 1}, model='deepseek-v4-flash'),
+    ChatResponse(
+        content='{"voice":', reasoning='', finish_reason='length',
+        usage={'completion_tokens': 1}, model='deepseek-v4-flash'),
+])
+def test_stage2_answer_lost_without_material_and_length_go_directly_to_pro(first):
+    base = _base()
+    ctx = _ctx(base)
+
+    def respond(req, index):
+        return first if index == 0 else _good(req.model)
+
+    transport = FakeTransport(responder=respond)
+    got = _ask_stage2(_client(ctx, transport))
+
+    assert got.voice == GOOD['voice']
+    assert [request.model for request in transport.calls] == [
+        'deepseek-v4-flash', PRO_FALLBACK_MODEL,
+    ]
+    assert _recovery_packet(transport.calls[1].user)['strategy'] == 'constraint_rebuild'
+
+
+@pytest.mark.parametrize('first', [
+    ChatResponse(
+        content='', reasoning='', finish_reason='stop',
+        usage={'completion_tokens': 1}, model=PRO_FALLBACK_MODEL),
+    ChatResponse(
+        content='{"voice":', reasoning='', finish_reason='length',
+        usage={'completion_tokens': 1}, model=PRO_FALLBACK_MODEL),
+])
+def test_stage2_pro_primary_uses_one_constraint_rebuild_not_a_fake_flash_retry(first):
+    base = _base()
+
+    def respond(req, index):
+        return first if index == 0 else _good(req.model)
+
+    transport = FakeTransport(responder=respond)
+    got = _ask_stage2(_client(
+        _ctx(base), transport, model=PRO_FALLBACK_MODEL))
+
+    assert got.voice == GOOD['voice']
+    assert [request.model for request in transport.calls] == [
+        PRO_FALLBACK_MODEL, PRO_FALLBACK_MODEL,
+    ]
+    assert _recovery_packet(transport.calls[1].user)['strategy'] == 'constraint_rebuild'
+    rejected = [
+        json.loads(path.read_text('utf-8'))
+        for path in _ctx(base).novel_dir.glob(
+            f'{response_repair.paths.REJECTED_RESPONSE_DIRNAME}/*/*/'
+            f'{response_repair.REJECTION_FILE}')
+    ]
+    assert rejected[0]['next_recovery_action'] == 'pro_constraint_rebuild'
+
+
+def test_stage2_validator_failure_uses_one_flash_target_then_one_pro_rebuild():
+    base = _base()
+    transport = FakeTransport(
+        responder=lambda req, _index: _good(req.model))
+    with pytest.raises(LlmFailed):
+        _ask_stage2(
+            _client(_ctx(base), transport),
+            validator=lambda _obj, _resp: 'dynamic scope mismatch')
+
+    assert [request.model for request in transport.calls] == [
+        'deepseek-v4-flash', 'deepseek-v4-flash', PRO_FALLBACK_MODEL,
+    ]
+    assert [
+        _recovery_packet(request.user)['strategy']
+        for request in transport.calls[1:]
+    ] == ['targeted_repair', 'constraint_rebuild']
+
+
+def test_stage2_pro_primary_validator_failure_has_only_one_rebuild():
+    base = _base()
+    transport = FakeTransport(
+        responder=lambda req, _index: _good(req.model))
+    with pytest.raises(LlmFailed):
+        _ask_stage2(
+            _client(_ctx(base), transport, model=PRO_FALLBACK_MODEL),
+            validator=lambda _obj, _resp: 'dynamic scope mismatch')
+
+    assert [request.model for request in transport.calls] == [
+        PRO_FALLBACK_MODEL, PRO_FALLBACK_MODEL,
+    ]
+    assert _recovery_packet(transport.calls[1].user)['strategy'] == 'constraint_rebuild'
+
+
+def test_stage2_pro_primary_after_human_decline_resumes_with_constraint_rebuild():
+    base = _base()
+    first_ctx = _ctx(base)
+    with pytest.raises(ResponseRepairRequired) as pending:
+        _ask_stage2(_client(
+            first_ctx, FakeTransport.always(_bad(PRO_FALLBACK_MODEL)),
+            model=PRO_FALLBACK_MODEL))
+    response_repair.submit(
+        first_ctx.novel_dir, pending.value.attempt_id,
+        actor='operator', reason='候选缺必需键，不能忠实补齐', decline=True)
+
+    resumed_transport = FakeTransport.always(_good(PRO_FALLBACK_MODEL))
+    got = _ask_stage2(_client(
+        _ctx(base), resumed_transport, model=PRO_FALLBACK_MODEL))
+
+    assert got.voice == GOOD['voice']
+    assert len(resumed_transport.calls) == 1
+    assert resumed_transport.calls[0].model == PRO_FALLBACK_MODEL
+    assert _recovery_packet(
+        resumed_transport.calls[0].user)['strategy'] == 'constraint_rebuild'
+
+
+def test_same_failure_signature_cannot_repeat_the_same_recovery_action():
+    base = _base()
+    ctx = _ctx(base)
+    with pytest.raises(LlmFailed):
+        _ask_stage2(
+            _client(ctx, FakeTransport.always(_good())),
+            validator=lambda _obj, _resp: 'same dynamic failure')
+
+    rejected_root = ctx.novel_dir / '_llm_rejected'
+    source = next(rejected_root.glob('*/*'))
+    duplicate_id = 'f' * 16
+    duplicate = source.parent / duplicate_id
+    shutil.copytree(source, duplicate)
+    rejection_path = duplicate / response_repair.REJECTION_FILE
+    rejection = json.loads(rejection_path.read_text('utf-8'))
+    rejection['attempt_id'] = duplicate_id
+    rejection_path.write_text(
+        json.dumps(rejection, ensure_ascii=False), encoding='utf-8')
+
+    transport = FakeTransport.always(_good())
+    with pytest.raises(TerminalState, match='相同失败签名重复执行恢复动作'):
+        _ask_stage2(
+            _client(_ctx(base), transport),
+            validator=lambda _obj, _resp: 'same dynamic failure')
+    assert transport.calls == []
+
+
+def test_stage2_batch_decline_resumes_once_without_second_human_pause(tmp_path):
+    base = tmp_path / 'outputs'
+    book = base / '书名_123'
+    (book / 'stage1').mkdir(parents=True)
+    run_id = new_run_id()
+    ctx = RunContext.open(
+        base, '123', 'stage2.blueprint', paid=True,
+        repair_rejected_responses=True, run_id=run_id)
+    initial_client = _client(ctx, FakeTransport.always(_bad()))
+    stage2_runs.ensure_run(
+        ctx, architecture='extraction-ir-v3.1', topology='scaffolded_single',
+        requests=[(1, 'system', 'user')],
+        request_policy=initial_client.json_request_policy(
+            [('blueprint', RepairResponse, DEFAULT_MAX_TOKENS, False)],
+            recovery_policy='stage2-blueprint-v1'))
+
+    with pytest.raises(ResponseRepairRequired) as pending:
+        _ask_stage2(initial_client)
+    with pytest.raises(ResponseRepairBatchRequired) as packed:
+        extract._raise_response_repair(
+            ctx, [pending.value], architecture='extraction-ir-v3.1')
+    decisions = tmp_path / 'decisions.json'
+    decisions.write_text(json.dumps({'decisions': [{
+        'attempt_id': pending.value.attempt_id,
+        'action': 'decline', 'reason': '材料不足，升级模型恢复',
+    }]}, ensure_ascii=False), encoding='utf-8')
+    stage2_runs.submit_batch(
+        ctx.novel_dir, Path(packed.value.manifest_path), decisions,
+        actor='operator')
+
+    def respond(req, index):
+        return _bad(req.model) if index == 0 else _good(req.model)
+
+    resumed_transport = FakeTransport(responder=respond)
+    resumed_ctx = RunContext.open(
+        base, '123', 'stage2.blueprint', paid=True,
+        repair_rejected_responses=True, run_id=run_id)
+    got = _ask_stage2(_client(resumed_ctx, resumed_transport))
+
+    assert got.voice == GOOD['voice']
+    assert [request.model for request in resumed_transport.calls] == [
+        'deepseek-v4-flash', PRO_FALLBACK_MODEL,
+    ]
+
+
 def test_a_trailing_comma_is_repaired_mechanically_before_agent_or_resampling():
     base = _base()
     malformed = ChatResponse(
@@ -130,6 +402,131 @@ def test_a_trailing_comma_is_repaired_mechanically_before_agent_or_resampling():
     resolution, = list((_ctx(base).novel_dir / '_llm_rejected').glob(
         '*/*/resolution.json'))
     assert json.loads(resolution.read_text('utf-8'))['action'] == 'deterministic'
+
+
+@pytest.mark.parametrize('kind', ['agent', 'deterministic'])
+def test_outcome_then_audit_crash_is_replayed_to_exactly_one_final_event(
+        tmp_path, monkeypatch, kind):
+    base = tmp_path / kind
+    (base / '书名_123' / 'stage1').mkdir(parents=True)
+    if kind == 'agent':
+        first_ctx = _ctx(base)
+        with pytest.raises(ResponseRepairRequired) as stopped:
+            _ask(_client(first_ctx, FakeTransport.always(_bad())))
+        Path(stopped.value.candidate_path).write_text(
+            json.dumps(GOOD, ensure_ascii=False), encoding='utf-8')
+        response_repair.submit(
+            first_ctx.novel_dir, stopped.value.attempt_id,
+            actor='operator', reason='补齐已有证据中的外层字段')
+        attempt_id = stopped.value.attempt_id
+        crash_ctx = _ctx(base)
+        transport = FakeTransport(
+            lambda _request, _index: AssertionError('已封存 agent 候选不应新增 wire'))
+    else:
+        crash_ctx = _ctx(base)
+        malformed = ChatResponse(
+            content='{"voice":{"person":"third"},'
+                    '"surface_habits":["短句"],}',
+            finish_reason='stop', usage={'completion_tokens': 8},
+            model='deepseek-v4-flash')
+        transport = FakeTransport.always(malformed)
+        attempt_id = ''
+
+    original_note = crash_ctx.ledger.note_response_repair
+
+    def crash_after_outcome(**kwargs):
+        if kwargs.get('decision') == 'accepted':
+            raise RuntimeError('synthetic crash after outcome before audit')
+        return original_note(**kwargs)
+
+    monkeypatch.setattr(
+        crash_ctx.ledger, 'note_response_repair', crash_after_outcome)
+    with pytest.raises(RuntimeError, match='after outcome'):
+        _ask(_client(crash_ctx, transport))
+    if kind == 'deterministic':
+        outcome_path, = list(crash_ctx.novel_dir.glob(
+            f'{response_repair.paths.REJECTED_RESPONSE_DIRNAME}/*/*/'
+            f'{response_repair.OUTCOME_FILE}'))
+        attempt_id = outcome_path.parent.name
+    record = response_repair.find_attempt(crash_ctx.novel_dir, attempt_id)
+    assert record.outcome is not None
+    assert record.outcome['decision'] == 'accepted'
+    before = [row for row in _rows(base.joinpath(*AUDIT_REL))
+              if row.get('kind') == 'response_repair'
+              and row.get('attempt_id') == attempt_id
+              and row.get('decision') == 'accepted']
+    assert before == []
+
+    for _ in range(2):
+        resumed_transport = FakeTransport(
+            lambda _request, _index: AssertionError('outcome replay 不应新增 wire'))
+        got = _ask(_client(_ctx(base), resumed_transport))
+        assert got.surface_habits == ['短句']
+        assert resumed_transport.calls == []
+
+    final = [row for row in _rows(base.joinpath(*AUDIT_REL))
+             if row.get('kind') == 'response_repair'
+             and row.get('attempt_id') == attempt_id
+             and row.get('decision') == 'accepted']
+    assert len(final) == 1
+    assert len(final[0]['repair_event_id']) == 64
+
+
+def test_rejected_outcome_then_audit_crash_is_replayed_once(tmp_path, monkeypatch):
+    base = tmp_path / 'agent-rejected'
+    (base / '书名_123' / 'stage1').mkdir(parents=True)
+    first_ctx = _ctx(base)
+    with pytest.raises(ResponseRepairRequired) as stopped:
+        _ask(_client(first_ctx, FakeTransport.always(_bad())))
+    Path(stopped.value.candidate_path).write_text(
+        '{}', encoding='utf-8')
+    response_repair.submit(
+        first_ctx.novel_dir, stopped.value.attempt_id,
+        actor='operator', reason='故意保留不完整候选以覆盖 rejected crash window')
+
+    crash_ctx = _ctx(base)
+    original_note = crash_ctx.ledger.note_response_repair
+
+    def crash_after_outcome(**kwargs):
+        if kwargs.get('decision') == 'rejected':
+            raise RuntimeError('synthetic crash after rejected outcome before audit')
+        return original_note(**kwargs)
+
+    monkeypatch.setattr(
+        crash_ctx.ledger, 'note_response_repair', crash_after_outcome)
+    with pytest.raises(RuntimeError, match='after rejected outcome'):
+        _ask(_client(
+            crash_ctx,
+            FakeTransport(lambda _request, _index: AssertionError(
+                'rejected agent 候选复验阶段不应新增 wire'))))
+
+    attempt_id = stopped.value.attempt_id
+    record = response_repair.find_attempt(crash_ctx.novel_dir, attempt_id)
+    assert record.outcome is not None
+    assert record.outcome['decision'] == 'rejected'
+    assert [row for row in _rows(base.joinpath(*AUDIT_REL))
+            if row.get('kind') == 'response_repair'
+            and row.get('attempt_id') == attempt_id
+            and row.get('decision') == 'rejected'] == []
+
+    resumed = _ctx(base)
+    good = FakeTransport.always(ChatResponse(
+        content=json.dumps(GOOD, ensure_ascii=False),
+        finish_reason='stop', usage={'completion_tokens': 8},
+        model='deepseek-v4-flash'))
+    _ask(_client(resumed, good))
+    # 再 replay 一次，稳定 event_id 仍只允许一行。
+    _ask(_client(_ctx(base), FakeTransport.always(ChatResponse(
+        content=json.dumps(GOOD, ensure_ascii=False),
+        finish_reason='stop', usage={'completion_tokens': 8},
+        model='deepseek-v4-flash'))))
+
+    final = [row for row in _rows(base.joinpath(*AUDIT_REL))
+             if row.get('kind') == 'response_repair'
+             and row.get('attempt_id') == attempt_id
+             and row.get('decision') == 'rejected']
+    assert len(final) == 1
+    assert len(final[0]['repair_event_id']) == 64
 
 
 def test_a_repaired_candidate_that_still_fails_uses_flash_sample_two_before_pro():
