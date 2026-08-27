@@ -24,10 +24,22 @@ alias，数组顺序也由确定性散列打乱。不要从 alias 字面、数�
 每个输出章与同号输入章一一对应。先按事实因果、人物状态和读者信息设计场景分组与披露顺序，
 再选择结构决定：
 - retain：本章适合直接、线性的真相推进，不主动声明结构变化；declared_change_kinds 必须为空；
-- reconstruct：本章有真实重构空间，必须声明至少两类变化。可选值只有：$CHANGE_KINDS。
+- reconstruct：本章有真实重构空间，必须声明至少两类变化。可选值及唯一合法排列顺序是：
+  $CHANGE_KINDS；只选需要的项，去重后仍须保持这个契约顺序。
 
-每个 land alias 恰好落入一场；context alias 只作上下文；turn 必须属于本场 land；状态输入输出要
-承接。三个 goal 只能引用本章 fact alias，并分别落在章目标、首场和末场。场景数组就是新披露顺序。
+每个 land alias 恰好落入一场；context_fact_aliases 只能引用输入中 obligation=context 的 alias，
+land alias 即使已在前场落地也不能转填为 context。turn 必须属于本场 land。
+entry_state_aliases / exit_state_aliases 是该场在**故事时点边界**上必须成立的最小状态，
+不是截至此处已披露事实的累计清单：
+- X_CONTINUE 才表示同一时间线紧邻续接，必须承接上一场 exit；
+- X_EARLIER 打开更早时点，不继承刚刚展示的未来场 exit；
+- X_PARALLEL 打开并行时层，也不继承紧邻上一场 exit；
+- 单一 X_EARLIER/X_PARALLEL 支路用 X_RETURN 回到离开主线前的锚点并恢复该锚点状态，
+  不继承支路末场 exit；当前输出没有 branch id，不要嵌套支路或在支路内再用 X_LATER；
+- X_LATER 跳到更晚时点，有时间空档，不承诺线性继承紧邻上一场 exit。
+机器无法从 alias 图完整判断非线性时序是否合理；必须如实标注边界留给人工盲审，
+不得为了让状态看似连续而把未来事实带入过去。章首输入与章尾输出状态仍必须闭合。
+三个 goal 只能引用本章 fact alias，并分别落在章目标、首场和末场。场景数组就是新披露顺序。
 weight/role/delivery/transition 使用响应契约里的前缀枚举，首场 transition 必须 X_START。
 只谈事实组织，不指定文风，不写纯写法词：$STYLE_WORDS。只输出 JSON。""" \
     .replace('$CHANGE_KINDS', '、'.join(STRUCTURE_CHANGE_KINDS)) \
@@ -44,7 +56,8 @@ _BLIND_SCENE_HINT = {
     'delivery': '|'.join(RESPONSE_DELIVERY_MODES),
     'transition': '|'.join(RESPONSE_TEMPORAL_LINKS),
     'land_fact_aliases': ['a_0123456789abcdef'],
-    'context_fact_aliases': ['a_fedcba9876543210'],
+    # 空数组是常态：多数场不需要额外上下文事实，示例给非空会诱导硬凑。
+    'context_fact_aliases': [],
     'turn_fact_alias': 'a_0123456789abcdef',
     'entry_state_aliases': [], 'exit_state_aliases': ['a_0123456789abcdef'],
 }

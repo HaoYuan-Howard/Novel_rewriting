@@ -284,3 +284,20 @@ def test_stage4_has_two_paid_phases_plus_one_free_context_node():
     assert [name for name in nodes if '--check-only' in NODES[name].flags] == [
         'stage4.plan']
     assert NODES['stage4.context'].flags == ()
+
+
+def test_blind_design_prompt_teaches_the_same_temporal_rule_the_validator_enforces():
+    """判据放宽了非线性边界，prompt 必须同批说清每个 transition 的状态义务。
+
+    ⚠ 钉的是**最终渲染出去的那一段**，不是常量片段（判据 7）。
+    """
+    from novel.stages.stage4 import prompts
+
+    rendered = prompts.blind_design_system()
+    for clause in (
+        'X_CONTINUE', 'X_EARLIER', 'X_PARALLEL', 'X_RETURN', 'X_LATER',
+        '章首输入与章尾输出状态仍必须闭合',
+        '不得为了让状态看似连续而把未来事实带入过去',
+    ):
+        assert clause in rendered, clause
+    assert 'obligation=context' in rendered, 'context alias 的取值面必须写明'
