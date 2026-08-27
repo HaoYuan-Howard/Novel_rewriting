@@ -33,7 +33,7 @@ from contracts.artifacts import (
 from typing import Any
 
 from contracts.invariants import (
-    BLIND_ALIAS_ALGORITHM, RESPONSE_TEMPORAL_LINKS, STYLE_WORDS,
+    BLIND_ALIAS_ALGORITHM, STYLE_WORDS,
 )
 from contracts.schema import artifact_spec
 from contracts.schema.report import CheckReport
@@ -417,8 +417,6 @@ def _blind_candidate_problem(
         int(chapter.get('output_ordinal') or 0): chapter
         for chapter in (compiled.get('output_chapters') or [])
     }
-    start_transition = next(
-        key for key, value in RESPONSE_TEMPORAL_LINKS.items() if value == 'start')
     problems: list[str] = []
     if sorted(actual) != sorted(expected) or len(actual) != len(
             compiled.get('output_chapters') or []):
@@ -450,16 +448,22 @@ def _blind_candidate_problem(
                 scene.get('exit_state_aliases') or [])
             if state_refs - set(facts):
                 problems.append(f'{prefix} state 越界：{sorted(state_refs - set(facts))}')
-            want = start_transition if index == 0 else None
-            transition = scene.get('transition')
-            if (want is not None and transition != want) or (
-                    index > 0 and transition == start_transition):
-                problems.append(f'{prefix} transition={transition}')
-            if index and not set(scene.get('entry_state_aliases') or []).issuperset(
-                    set(scenes[index - 1].get('exit_state_aliases') or [])):
-                problems.append(f'{prefix} 未承接上一场 exit state')
             style_texts.append(str(scene.get('purpose') or ''))
+        # ⚠ 章内时态与 transition 语法**只有一处判定**：A 相选中的候选被最终
+        #   checker 用另一套时态语义拒绝，是本仓最贵的一种自相矛盾。
+        #   `unknown` 在 A 相刻意丢弃——它是留给人审的读数，不是拒稿理由。
+        chapter_state_bad, chapter_transition_bad, _unknown = \
+            checks.temporal_state_findings(
+                scenes,
+                prefix=f'ch{ordinal}',
+                land_key='land_fact_aliases',
+                entry_key='entry_state_aliases',
+                exit_key='exit_state_aliases',
+            )
+        problems.extend(chapter_state_bad)
+        problems.extend(chapter_transition_bad)
         if scenes:
+            # 章级边界仍是 HARD，与章内非线性正交。
             if not set(scenes[0].get('entry_state_aliases') or []).issuperset(
                     set(source.get('entry_state_aliases') or [])):
                 problems.append(f'ch{ordinal} 首场未承接章首状态')

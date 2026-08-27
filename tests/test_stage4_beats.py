@@ -255,11 +255,48 @@ def test_clean_compiled_plan_closes_all_new_scene_hard_rules():
 
 
 def test_fact_coverage_and_state_closure_fail_independently():
+    """两条判据互不搭便车：覆盖坏了，可判的状态边界也要独立红。
+
+    ⚠ 拿来破坏状态的**必须是一条可判边界**——章首 entry 是章级契约，与章内
+    是否回溯正交。拿 `earlier` 支路的 entry 去破坏，那是判据 21 说的假红：
+    产品明说那种边界机器判不了。
+    """
     plan = _compiled()
     plan['output_chapters'][0]['scenes'][1]['land_fact_refs'].remove('f01_001')
-    plan['output_chapters'][0]['scenes'][1]['entry_state_refs'] = []
+    plan['output_chapters'][0]['scenes'][-1]['exit_state_refs'] = []
     findings = _findings(plan)
     assert findings['fact_coverage'] and findings['state_closure']
+    assert '末场未闭合 ending_state' in findings['state_closure'][0].detail
+
+
+def test_a_nonlinear_branch_entry_is_unverifiable_rather_than_a_violation():
+    """`earlier` 支路不继承紧邻上一场的 exit——旧线性口径在这里恒假红。
+
+    盘上的 `transition` 已经如实标了回溯，判据却按披露数组读，于是一次整书
+    计划被判掉。现在它落 `unver` 并带扫描分母，逐项证据留给结构人审。
+    """
+    plan = _compiled()
+    plan['output_chapters'][0]['scenes'][1]['entry_state_refs'] = []
+    outcomes = {outcome.rule: outcome for outcome in checks.check(
+        plan, blueprints=_blueprints(), main_text=_main())}
+    state = outcomes['state_closure']
+    assert list(state.findings) == []
+    assert state.unver_why, '机器够不着的边界不许洗成绿'
+    assert '场' in (state.scanned or ''), '绿灯/unver 都必须带扫描分母'
+
+    reading = _findings(plan)['semantic_closure_reading']
+    assert reading and 'state_unknown_findings' in reading[0].detail
+
+
+def test_a_continue_scene_that_drops_the_previous_exit_state_is_still_hard():
+    """放宽的只有非线性边界；`continue` 那一条一格没松。"""
+    plan = _compiled()
+    scene = plan['output_chapters'][0]['scenes'][1]
+    scene['transition'] = 'continue'
+    scene['entry_state_refs'] = []
+    findings = _findings(plan)
+    assert findings['state_closure'], 'continue 必须承接紧邻上一场退出状态'
+    assert 'continue 未承接' in findings['state_closure'][0].detail
 
 
 def test_reconstruction_metrics_are_always_reported_without_a_threshold():
@@ -271,3 +308,81 @@ def test_reconstruction_metrics_are_always_reported_without_a_threshold():
         'semantic_closure_reading',
     ):
         assert findings[rule], f'{rule} 应常驻给读数，不应设自动放行阈值'
+
+
+def _scenes(*rows: tuple[str, list[str], list[str], list[str]]) -> list[dict]:
+    """`(transition, land, entry, exit)` 四元组的最小场序列。"""
+    return [
+        {'transition': transition, 'land_fact_refs': land,
+         'entry_state_refs': entry, 'exit_state_refs': exit_refs}
+        for transition, land, entry, exit_refs in rows
+    ]
+
+
+def _temporal(*rows):
+    return checks.temporal_state_findings(
+        _scenes(*rows), prefix='ch1', land_key='land_fact_refs',
+        entry_key='entry_state_refs', exit_key='exit_state_refs')
+
+
+def test_a_single_unambiguous_return_must_restore_the_anchor_state():
+    """`earlier → return` 是唯一能配对的支路形状，那一条恢复检查仍是 HARD。"""
+    bad, transition_bad, unknown = _temporal(
+        ('start', ['a'], [], ['a']),
+        ('earlier', ['b'], [], ['b']),
+        ('return', ['c'], [], ['c']),
+    )
+    assert transition_bad == []
+    assert any('return 未恢复支路前锚点状态' in row for row in bad)
+    assert unknown, '支路入口本身仍然是人审读数'
+
+    ok_bad, _t, _u = _temporal(
+        ('start', ['a'], [], ['a']),
+        ('earlier', ['b'], [], ['b']),
+        ('return', ['c'], ['a'], ['c']),
+    )
+    assert ok_bad == []
+
+
+def test_two_branch_openers_make_the_pairing_unjudgeable_instead_of_inventing_lifo():
+    """当前 schema 没有 branch id/depth ⇒ 第二个 opener 之后只能报不可判。"""
+    bad, _transition_bad, unknown = _temporal(
+        ('start', ['a'], [], ['a']),
+        ('earlier', ['b'], [], ['b']),
+        ('parallel', ['c'], [], ['c']),
+        ('return', ['d'], [], ['d']),
+    )
+    assert bad == [], '配不出唯一锚点时不许硬判违约'
+    assert any('没有唯一可证明的本章支路锚点' in row for row in unknown)
+
+
+def test_an_unclosed_branch_at_chapter_end_is_reported_not_swallowed():
+    _bad, _transition_bad, unknown = _temporal(
+        ('start', ['a'], [], ['a']),
+        ('earlier', ['b'], [], ['b']),
+    )
+    assert any('章末仍有未显式 return' in row for row in unknown)
+
+
+def test_transition_syntax_stays_hard_in_both_directions():
+    _bad, transition_bad, _unknown = _temporal(('continue', ['a'], [], ['a']))
+    assert any('首场 transition=continue' in row for row in transition_bad)
+
+    _bad, transition_bad, _unknown = _temporal(
+        ('start', ['a'], [], ['a']), ('start', ['b'], ['a'], ['b']))
+    assert any('非首场不得 start' in row for row in transition_bad)
+
+    _bad, transition_bad, _unknown = _temporal(
+        ('start', ['a'], [], ['a']), ('teleport', ['b'], ['a'], ['b']))
+    assert any('未知 transition=teleport' in row for row in transition_bad)
+
+
+def test_the_response_prefixed_transitions_use_the_very_same_ruler():
+    """A 相拿 `X_` 前缀，正式计划拿产物取值——两侧必须判出同一个结论。"""
+    prefixed = checks.temporal_state_findings(
+        _scenes(('X_START', ['a'], [], ['a']), ('X_CONTINUE', ['b'], [], ['b'])),
+        prefix='ch1', land_key='land_fact_refs',
+        entry_key='entry_state_refs', exit_key='exit_state_refs')
+    plain = _temporal(('start', ['a'], [], ['a']), ('continue', ['b'], [], ['b']))
+    assert prefixed == plain
+    assert any('continue 未承接' in row for row in plain[0])

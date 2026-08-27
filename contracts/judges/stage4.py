@@ -41,7 +41,7 @@ for rule, item, req in (
     ('fact_ref', '场景事实/舞台引用只来自同章关闭式目录', 'R-5.6'),
     ('fact_coverage', '每个 land 事实恰好落一个场景', 'R-5.12'),
     ('causal_closure', 'Stage2 因果边两端事实都落入实际场景', 'R-5.6'),
-    ('state_closure', '章首输入与章尾输出状态闭合', 'R-5.6'),
+    ('state_closure', '章首/章尾状态闭合；章内只判可判的故事时态边界', 'R-5.6'),
     ('material_coverage', '每条保真材料恰好落一个场景', 'R-5.6'),
     ('scene_transition', '新场景 slot 与 transition 可执行', 'R-5.17'),
     ('goal_landing', '章首/章尾目标落在新首尾场景', 'R-5.6'),

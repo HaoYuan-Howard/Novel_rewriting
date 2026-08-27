@@ -8,8 +8,8 @@ import json
 from typing import Any
 
 from contracts.invariants import (
-    BOOK_BAND, HINGE_GROUPS, PLAN_BUDGET_BAND, STYLE_WORDS,
-    VERBATIM_BUDGET_FACTOR,
+    BOOK_BAND, HINGE_GROUPS, PLAN_BUDGET_BAND, RESPONSE_TEMPORAL_LINKS,
+    STYLE_WORDS, VERBATIM_BUDGET_FACTOR,
 )
 from contracts.schema.report import finding
 from novel.report.findings import Outcome, ran, unverifiable
@@ -22,6 +22,131 @@ from novel.stages.stage4.phase_binding import PhaseArtifactLink
 
 _NO_CTX = ('writer_context 不在场或读不回来；这是查不了，不是通过。跑 stage4.context 0 成本重建。')
 _HINGE_FIELDS = tuple(dict.fromkeys(HINGE_GROUPS.values()))
+
+
+def temporal_state_findings(
+    scenes: list[dict[str, Any]],
+    *,
+    prefix: str,
+    land_key: str,
+    entry_key: str,
+    exit_key: str,
+) -> tuple[list[str], list[str], list[str]]:
+    """按**故事时间**而不是披露数组的相邻关系检查场景状态。
+
+    【为什么旧口径必然假红】旧规则是「每一场的 entry 必须包含上一场的 exit」。
+    它隐含了「披露顺序 == 故事时间顺序」，而 Stage4 的整个存在理由恰恰是允许
+    重排：一场 `earlier` 的回忆之后，下一场回到主线，它的 entry 当然不该继承
+    那段回忆结尾的状态。盘上实测的形状就是这个——`transition` 已经如实标了
+    `earlier`/`return`，判据却按线性读，于是一次整书计划被判掉。
+
+    【可判定域画在哪】`transition` 描述当前场相对上一披露场的故事时间：
+    只有 ``continue`` 能把紧邻上一场当成真实前驱，那一条继续 **HARD**。
+    当前 schema 没有 branch id / depth，因此只在 ``earlier|parallel → continue* →
+    return`` 这一种**单一、无歧义**的局部支路上检查恢复锚点；第二个支路 opener
+    或中途 ``later`` 都会让配对不可判，必须报不可验证，**不能凭空发明 LIFO 语法**。
+    ``later`` 本身也有未建模的时间空档。
+
+    ⚠ **章首 entry 与章尾 ending 不在这里，也没有被放松**：它们是章级边界，
+    与章内非线性正交，仍由 `check()` 与 A 相 validator 各自的 HARD 守着。
+
+    返回 ``(state_hard, transition_hard, unknown)``。A 相动态 validator 与最终
+    plan checker **共用这一处**——前者选中的候选被后者用另一套时态语义拒绝，
+    是本仓最贵的一种自相矛盾。
+    """
+
+    def canonical(value: object) -> str:
+        """响应侧的 `X_` 前缀与产物侧取值收成同一把尺子。"""
+        text = str(value or '')
+        return RESPONSE_TEMPORAL_LINKS.get(text, text)
+
+    state_bad: list[str] = []
+    transition_bad: list[str] = []
+    unknown: list[str] = []
+    # schema 没有 branch id；只保存唯一且未受第二 opener/later 干扰的局部锚点。
+    branch_anchor: dict[str, Any] | None = None
+    branch_future: set[str] = set()
+    branch_ambiguous = False
+
+    for index, scene in enumerate(scenes):
+        where = f'{prefix}.scene{index + 1}'
+        transition = canonical(scene.get('transition'))
+        entry = {str(ref) for ref in (scene.get(entry_key) or [])}
+        exit_refs = {str(ref) for ref in (scene.get(exit_key) or [])}
+
+        if index == 0:
+            if transition != 'start':
+                transition_bad.append(
+                    f'{where}:首场 transition={transition or "<empty>"}')
+            continue
+        if transition == 'start':
+            transition_bad.append(f'{where}:非首场不得 start')
+            continue
+
+        previous = scenes[index - 1]
+        if transition == 'continue':
+            missing = {str(ref) for ref in (previous.get(exit_key) or [])} - entry
+            if missing:
+                state_bad.append(
+                    f'{where}:continue 未承接上一场退出状态 {sorted(missing)}')
+        elif transition in {'earlier', 'parallel'}:
+            newly_future = (
+                {str(ref) for ref in (previous.get(land_key) or [])}
+                if transition == 'earlier' else set()
+            )
+            if branch_anchor is None and not branch_ambiguous:
+                branch_anchor = previous
+                branch_future = newly_future
+            else:
+                branch_ambiguous = True
+                branch_future |= newly_future
+                unknown.append(
+                    f'{where}:{transition} 出现在未闭合非线性支路内；'
+                    '当前 schema 无 branch id/depth，return 配对不可判')
+            unknown.append(
+                f'{where}:{transition} 支路入口缺少可判定的完整故事时点真值')
+        elif transition == 'return':
+            if branch_anchor is not None and not branch_ambiguous:
+                missing = {
+                    str(ref) for ref in (branch_anchor.get(exit_key) or [])
+                } - entry
+                if missing:
+                    state_bad.append(
+                        f'{where}:return 未恢复支路前锚点状态 {sorted(missing)}')
+            else:
+                unknown.append(
+                    f'{where}:return 没有唯一可证明的本章支路锚点；'
+                    '可能是复杂嵌套、跨章或未显式建模的返回')
+            unknown.append(
+                f'{where}:return 只核恢复锚点，其余跨时层状态需人工判断')
+            branch_anchor = None
+            branch_future = set()
+            branch_ambiguous = False
+        elif transition == 'later':
+            if branch_anchor is not None or branch_ambiguous:
+                branch_ambiguous = True
+                unknown.append(
+                    f'{where}:later 位于未闭合非线性支路内；后续 return 配对不可判')
+            unknown.append(
+                f'{where}:later 含未建模时间空档，不能强制继承紧邻上一场退出状态')
+        else:
+            transition_bad.append(
+                f'{where}:未知 transition={transition or "<empty>"}')
+
+        # ``land`` 表示本章/本场必须披露，不等于该事实在故事时间上刚刚发生。
+        # 因此这类重叠是重要的人审线索，却没有足够真值升级为 HARD；否则
+        # 「本场首次揭示他一直怕水 → 回忆童年怕水」也会被误杀。
+        leaked = (entry | exit_refs) & branch_future
+        if leaked:
+            unknown.append(
+                f'{where}:非线性支路复用前场 land 状态 {sorted(leaked)}，'
+                '需人工判断它是既有状态还是未来事实')
+
+    if branch_anchor is not None or branch_ambiguous:
+        unknown.append(
+            f'{prefix}:章末仍有未显式 return 或无法唯一配对的时间支路；'
+            '允许以回忆/并行线收尾，也可能跨章恢复，但其状态闭合只能人工判断')
+    return state_bad, transition_bad, unknown
 
 
 def check(plan: dict[str, Any], *, blueprints: dict[str, Any],
@@ -65,6 +190,7 @@ def check(plan: dict[str, Any], *, blueprints: dict[str, Any],
     coverage_bad: list[str] = []
     causal_bad: list[str] = []
     state_bad: list[str] = []
+    state_unknown: list[str] = []
     material_bad: list[str] = []
     transition_bad: list[str] = []
     goal_bad: list[str] = []
@@ -111,15 +237,22 @@ def check(plan: dict[str, Any], *, blueprints: dict[str, Any],
             want_slot = f's{index + 1:02d}'
             if scene.get('slot') != want_slot:
                 transition_bad.append(f'ch{ordinal}:{scene.get("slot")}!={want_slot}')
-            transition = scene.get('transition')
-            if (index == 0 and transition != 'start') or (index > 0 and transition == 'start'):
-                transition_bad.append(f'{prefix}:transition={transition}')
             budget = scene.get('budget_chars')
             if type(budget) is not int or budget <= 0:
                 budget_bad.append(f'{prefix}:budget={budget!r}')
-            if index and not set(scene.get('entry_state_refs') or []) \
-                    .issuperset(set(scenes[index - 1].get('exit_state_refs') or [])):
-                state_bad.append(f'{prefix}:进入状态未承接上一场退出状态')
+
+        # 章内的时态承接与 transition 语法都归这一处；A 相 validator 共用它。
+        chapter_state_bad, chapter_transition_bad, chapter_unknown = \
+            temporal_state_findings(
+                scenes,
+                prefix=f'ch{ordinal}',
+                land_key='land_fact_refs',
+                entry_key='entry_state_refs',
+                exit_key='exit_state_refs',
+            )
+        state_bad.extend(chapter_state_bad)
+        transition_bad.extend(chapter_transition_bad)
+        state_unknown.extend(chapter_unknown)
 
         counts = Counter(landed)
         missing = sorted(land - set(landed))
@@ -131,6 +264,8 @@ def check(plan: dict[str, Any], *, blueprints: dict[str, Any],
         mdup = sorted(ref for ref, count in mcounts.items() if count != 1)
         if mmissing or mdup:
             material_bad.append(f'ch{ordinal}:missing={mmissing},duplicate={mdup}')
+        # ⚠ **章级边界继续 HARD**，与章内非线性正交：不论章内怎样回溯或并行，
+        #   这一章从哪个状态开始、到哪个状态结束都是 Stage2 冻结的事实契约。
         entry = set(bp.get('entry_state_refs') or [])
         ending = set(bp.get('ending_state_refs') or [])
         if scenes and not set(scenes[0].get('entry_state_refs') or []).issuperset(entry):
@@ -171,14 +306,32 @@ def check(plan: dict[str, Any], *, blueprints: dict[str, Any],
         ('fact_ref', ref_bad, '场景引用越界'),
         ('fact_coverage', coverage_bad, 'land 事实未恰好落一次'),
         ('causal_closure', causal_bad, '因果边漂移'),
-        ('state_closure', state_bad, '状态不闭合'),
+        ('state_closure', state_bad, '可判故事时态的状态冲突'),
         ('material_coverage', material_bad, '材料未恰好落一次'),
         ('scene_transition', transition_bad, 'slot/transition 不可执行'),
         ('goal_landing', goal_bad, '首尾目标未落场'),
         ('budget_int', budget_bad, '预算不是正整数'),
         ('budget_band', chapter_budget_bad, '章预算出带'),
     ):
-        outcomes.append(outcome(rule, rows(bad, label), f'{len(chapters)} 章'))
+        if rule != 'state_closure':
+            outcomes.append(outcome(rule, rows(bad, label), f'{len(chapters)} 章'))
+            continue
+        # ⚠ 「机器够不着的边界」不许洗成绿：可判的红照红，全部可判都干净但仍有
+        #   非线性边界时落 `unver` 并带分母（判据 2 / 4），交 hash-bound 结构人审。
+        scene_count = sum(len(ch.get('scenes') or []) for ch in chapters)
+        if state_bad:
+            outcomes.append(outcome(
+                rule, rows(state_bad, label),
+                f'{scene_count} 场；另有 {len(state_unknown)} 个非线性边界需人工判断'))
+        elif state_unknown:
+            outcomes.append(unverifiable(
+                rule,
+                f'{len(state_unknown)} 个 earlier/later/parallel/return 边界缺少完整'
+                '故事时点真值；已检查 continue 承接、唯一无歧义的局部 return 锚点恢复'
+                '与章首/章尾状态闭合；逐项证据见 semantic_closure_reading',
+                scanned=f'{scene_count} 场'))
+        else:
+            outcomes.append(outcome(rule, [], f'{scene_count} 场'))
 
     known_book = all(source_cov.get(o, (0, 1))[0] == source_cov.get(o, (0, 1))[1]
                      for o in bp_of)
@@ -279,9 +432,16 @@ def check(plan: dict[str, Any], *, blueprints: dict[str, Any],
         'structure_eligibility': metric_rows('eligibility'),
         'structure_alignment': json.dumps(
             alignments, ensure_ascii=False, sort_keys=True, separators=(',', ':')),
-        'semantic_closure_reading': (
-            f'fact={len(coverage_bad)} bad · causal={len(causal_bad)} bad · '
-            f'state={len(state_bad)} bad · material={len(material_bad)} bad'),
+        'semantic_closure_reading': json.dumps({
+            'fact_bad': len(coverage_bad),
+            'causal_bad': len(causal_bad),
+            'state_bad': len(state_bad),
+            'state_unknown': len(state_unknown),
+            # ⚠ **不截断**：UNVER 的全部价值在于把机器够不着的边界完整交给人，
+            #   截断会静默丢掉后章证据，正好重演「绿灯没有扫描分母」那个错误。
+            'state_unknown_findings': state_unknown,
+            'material_bad': len(material_bad),
+        }, ensure_ascii=False, sort_keys=True, separators=(',', ':')),
         'ctx_source': ctx_source or '未提供 writer_context 来源账',
     }
     for rule, detail in metrics.items():

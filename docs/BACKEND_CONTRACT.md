@@ -491,7 +491,7 @@ Stage5/6 从各自已经读取的 Stage1 文本即时计算确定性机械读数
 | R-5.3c | **全书**预算之和落在全书 span 合计的 `BOOK_BAND`（0.90~1.10）内。逐章带一放宽，「章章 ±10% ⇒ 全书必然 ±10%」这条蕴含就断了，而总量是对用户的产品承诺。⚠ `unver` 臂比 `R-5.3b` 严：**缺一章就不判**（少一章分子分母同时缺一块，得出的倍率既不能说合格也不能说不合格）。⚠ finding 必须打出**逐章倍率明细**，否则本层那条 0 成本恢复路名存实亡。⚠⚠ **2026-08-22（批 4）起同样是代码的后置条件**（同 `R-5.3b`）：全书总量恒等于全书 span 合计（带的中心 1.0），逐章档位只决定它**怎么分**。定向修复那一路把本章总量钉死在基线合计上，因此也顶不出带外——而从前它可以 | `HARD` |
 | R-5.4 | A 相全书策略、三个 goal、`chapter_rewrite_brief` 与场景 `purpose` 只说**写什么与怎样组场**，不许用风格套话代替结构决策；A 策略不进入正式计划，Stage2 冻结的 `chapter_function` 只读、不由 Stage4 改写 | `HARD`（`style_words`） |
 | R-5.5 | Stage4 正式生产拆成两个**独立付费节点/逻辑调用**：`stage4.design` 只把冻结的 Stage2 v6 真相图设计成 `blind_candidate.json`；`stage4.plan` 只把该候选绑定证据并确定性编译为计划。两步分别进入付费预览/`--yes`，A 完成不得静默连跑 B；批量队列也只能在首次快照中确认 A，A 落盘且人审阅后必须重新 plan/preview/confirm 才能得到 B 的付费 argv。传输或内容重采仍可能产生额外 wire，必须逐条进 ledger。A 的 prompt 不得出现原文、SourceSpan、`source_beat_ref`、beat/stage、材料、带源序含义的 id 或事实数组顺序，只见稳定散列去序的 opaque alias、事实语义、因果图与首尾状态；因果偏序是事实真相，不是原叙述顺序 | `结构`（`contracts/invariants.py::NODES` 的 `stage4.design` / `stage4.plan` + `novel/stages/stage4/prompts.py::blind_design_system` + `novel/orchestrator/queue.py::plan_book`） |
-| R-5.6 | 计划不复制 `semantic_contract`；需要它的 Context 与 API view 每次从当前同号 Stage2 blueprint 派生。每个 land 原子和 material 恰落一个新场景；context 可复用；引用只限所在计划章；首尾 goal 落在新首尾场景；章首输入与章尾输出闭合；Stage2 因果边两端事实必须落进实际场景 | `HARD`（`fact_ref` / `fact_coverage` / `causal_closure` / `state_closure` / `material_coverage` / `goal_landing`） |
+| R-5.6 | 计划不复制 `semantic_contract`；需要它的 Context 与 API view 每次从当前同号 Stage2 blueprint 派生。每个 land 原子和 material 恰落一个新场景；context 可复用；引用只限所在计划章；首尾 goal 落在新首尾场景；**章首输入与章尾输出闭合恒为 HARD**；章内状态承接按 `transition` 说的**故事时间**判——只有 `continue` 强制承接紧邻上一场退出状态，唯一无歧义的 `earlier|parallel → continue* → return` 支路检查锚点恢复，其余非线性边界（第二个 opener、支路内 `later`、章末未收口）产 `unver` 并把逐项证据交结构人审，**不得洗成 PASS**；Stage2 因果边两端事实必须落进实际场景，端点可由 land 或 context 引用入场、多次出现取首次可见场 | `HARD`（`fact_ref` / `fact_coverage` / `causal_closure` / `state_closure` / `material_coverage` / `goal_landing`） |
 | R-5.7 | Stage4A 只产全书策略、逐章 `retain/reconstruct` 决定、三个 alias goal、章/场 weight、brief 与按新披露序排列的非空候选 `scenes[]`；goal 不存展示 rationale；代码注入稳定 `candidate_scene_id` 并保存 A 自己的 LLM provenance。候选场没有 material/stage refs，不能冒充最终计划 | `HARD`（`empty_chapter` / `budget_int`）+ strict schema（`contracts/schema/stage4.py::BlindCandidate`） |
 | R-5.8 | Stage4B 才看原文证据、源舞台、人物与必须材料；它只能按 `candidate_scene_id` 回填 `stage_refs` / `material_refs`，人物到场统一从绑定舞台的 `present` 推导，并回显冻结候选完整 SHA-256。B 不得改变 A 的章/场顺序、事实分组、首尾锚点、goal、`retain/reconstruct`、purpose/role/delivery/transition 或 weight；能绑定则返回完整 `bound`，不能绑定则返回 typed `infeasible` 与非空证据引用。负结论的引用也只能来自本次下发的候选 scene/opaque alias/关闭式 stage·material 目录，不得交任意 token、部分绑定或静默重规划 | `结构`（`contracts/schema/stage4.py::EvidenceBinding` + `novel/stages/stage4/prompts.py::evidence_bind_system` + `novel/stages/stage4/blind.py::validate_infeasible_binding`）；引用闭合见 `R-5.6`，自由文本泄漏风险仍 **无守卫 → `B-06`** |
 | R-5.9 | 场景详略由章级与场级 `weight` 决定，整数预算由代码分配；“多少场算过多、何种详略最好、哪一种顺序更好”没有 ground truth，不设自动审美阈值 | **`人`**；预算硬门见 `R-5.3b/c`，分布见 `R-5.9b`；旧盲区见 `B-17` |
@@ -539,7 +539,7 @@ Stage5/6 从各自已经读取的 Stage1 文本即时计算确定性机械读数
 > **`R-6.1`~`R-6.4` 为什么各配一条【后置条件】判据，而不是四行一起改 `结构`。**
 > 组装器带着多道逐章闸、比分组函数大一个数量级，而它一条报告行都不产
 > ——改坏了没有任何东西会出声。本文档自己有现役先例：`fact_coverage` / `material_coverage`
-> 对缺失与重复引用分别出声，`state_closure` 对相邻场景状态链断裂出声；它们都是正式场景计划的
+> 对缺失与重复引用分别出声，`state_closure` 对章级状态边界与 `continue` 承接断裂出声；它们都是正式场景计划的
 > 后置条件，不是只给模型的叮嘱。同一条理由在这里更强，不是更弱。
 >
 > ⚠ 而 `R-6.5` / `R-6.6` **不补**：前者的判别力已被 `R-6.7` 量死（字面子串包含，命中 0/8
@@ -1293,8 +1293,9 @@ HARD / INFO / 闸门 / 度量的 R 必须被注册 Rule 覆盖；每条 Rule 必
 - stage4/6/7 每条 HARD 在 `tests/hard_cases.py` 有真实会红的反例；stage0/1 的 warning、编码、kind、
   新增 HARD 与阈值带由 `tests/test_ingest_fixtures.py` 双向覆盖。
 - ⚠ **一条 HARD 有多个判定分支时，「红过一次」不等于每一支都红过。** Stage4 现役定向反例覆盖
-  `fact_coverage` 的缺失/重复事实、`material_coverage` 的缺失/重复材料，以及 `state_closure` 中前一场
-  exit state 未被后一场 entry state 消费；靶子自检与绿对照一并放在
+  `fact_coverage` 的缺失/重复事实、`material_coverage` 的缺失/重复材料，以及 `state_closure` 的章尾
+  ending 未闭合；它另外三支（`continue` 未承接、唯一支路 `return` 未恢复锚点、transition 语法）由
+  `tests/test_stage4_beats.py` 直接走生产 `temporal_state_findings` 逐支覆盖；靶子自检与绿对照一并放在
   `tests/test_hard_counterexamples.py`，靶子一旦因契约变动而散掉，自检当场红。
 
 ### 9.4 架构与前端 seam
