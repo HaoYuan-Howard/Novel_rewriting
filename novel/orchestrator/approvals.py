@@ -26,6 +26,7 @@ from contracts.schema import artifact_spec
 from contracts.schema.api import (
     ApprovalAction, ApprovalBackfillResult, ApprovalDoc,
     StructureApprovalDecision, StructureApprovalRequest, StructureApprovalView,
+    WritingApprovalDecision, WritingApprovalRequest, WritingApprovalView,
 )
 from contracts.schema.evaluation import GlobalReview
 from contracts.schema.stage0 import Stage0Revisions
@@ -180,6 +181,12 @@ class _StoredStructureDecision(StructureApprovalDecision):
     proof: _ApprovalProof
 
 
+class _StoredWritingDecision(WritingApprovalDecision):
+    """一项 Stage5 写作授权历史：typed 决定 + 当时完整主体 proof。"""
+
+    proof: _ApprovalProof
+
+
 class _ApprovalRecordV4Legacy(StrictModel):
     """只为显式 backfill 读取的旧 v4；它仍含退役的 s3 闸门。"""
 
@@ -241,6 +248,10 @@ class _ApprovalRecordV5(StrictModel):
     writing_proof: _ApprovalProof | None = None
     structure_history: list[_StoredStructureDecision] = Field(default_factory=list)
     structure_decision: _StoredStructureDecision | None = None
+    # v5 初版只有 writing/writing_proof。以下两项是同一 v5 服务记录上的
+    # additive 审计面；默认值保证旧记录仍可读，但新的正式入口绝不匿名补签。
+    writing_history: list[_StoredWritingDecision] = Field(default_factory=list)
+    writing_decision: _StoredWritingDecision | None = None
 
     @model_validator(mode='after')
     def _record_is_complete_and_proved(self) -> _ApprovalRecordV5:
@@ -265,6 +276,11 @@ class _ApprovalRecordV5(StrictModel):
         if (self.structure_decision is not None
                 and self.structure_decision != self.structure_history[-1]):
             raise ValueError('structure_decision 必须是 structure_history 最后一项')
+        if (self.writing_decision is None) != (not self.writing_history):
+            raise ValueError('writing_decision 与非空 writing_history 必须同进同出')
+        if (self.writing_decision is not None
+                and self.writing_decision != self.writing_history[-1]):
+            raise ValueError('writing_decision 必须是 writing_history 最后一项')
         if self.gate['s4']:
             decision = self.structure_decision
             if decision is None or any(
@@ -278,6 +294,53 @@ class _ApprovalRecordV5(StrictModel):
 
 def _path(base: str | os.PathLike[str], sid: str) -> Path:
     return Path(os.fspath(base)) / '_service' / APPROVALS_DIRNAME / f'{sid}.json'
+
+
+def _lock_path(base: str | os.PathLike[str], sid: str) -> Path:
+    """每本书审批 RMW 的跨进程锁；锁文件不是审批事实，长期保留无害。"""
+    checked = paths.check_sid(sid)
+    return (
+        Path(os.fspath(base)).resolve()
+        / '_service' / APPROVALS_DIRNAME / '.locks' / f'{checked}.lock'
+    )
+
+
+@contextmanager
+def approval_file_lock(
+    base: str | os.PathLike[str], sid: str,
+) -> Iterator[None]:
+    """串行化一份审批文件的完整 read-modify-write 与回收站移动。
+
+    ``threading.RLock`` 只管当前服务进程；Commander 从 CLI apply，HTTP 从服务
+    路由 apply，两者可能是两个进程。这里把进程内锁和 OS 文件锁叠在同一个公开
+    边界上，trash 也占同一把锁，避免审批更新丢失或书删完后审批复活。
+    """
+    lock_path = _lock_path(base, sid)
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with _LOCK:
+        with lock_path.open('a+b') as handle:
+            handle.seek(0, os.SEEK_END)
+            if handle.tell() == 0:
+                handle.write(b'\0')
+                handle.flush()
+            handle.seek(0)
+            if os.name == 'nt':
+                import msvcrt
+
+                msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
+                try:
+                    yield
+                finally:
+                    handle.seek(0)
+                    msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                import fcntl
+
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+                try:
+                    yield
+                finally:
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
 
 def _spawns(base: str | os.PathLike[str], sid: str) -> dict[str, list[ApprovalAction]]:
@@ -343,9 +406,10 @@ def _fresh_record(sid: str, planned: list[int] | None = None) -> _ApprovalRecord
 def _view(
     base: str | os.PathLike[str], record: _ApprovalRecordV5,
 ) -> ApprovalDoc:
-    """服务记录的唯一公开投影；public v4 明示结构裁决的五态。"""
+    """服务记录的唯一公开投影；public v4 明示两类 typed 裁决。"""
     novel_dir = paths.resolve_novel_dir(base, record.sid)
     structure = _structure_view(novel_dir, record)
+    writing_approval = _writing_view(novel_dir, record)
     spawns = _spawns(base, record.sid)
     replan_cause = _stage4_replan_cause(novel_dir, structure)
     if replan_cause is not None:
@@ -371,6 +435,7 @@ def _view(
         sid=record.sid, gate=record.gate, seen=record.seen,
         writing=record.writing,
         structure=structure,
+        writing_approval=writing_approval,
         spawns=spawns,
     )
 
@@ -414,7 +479,7 @@ def _write(
     _refuse_if_frozen(record.sid)
     p = _path(base, record.sid)
     p.parent.mkdir(parents=True, exist_ok=True)
-    tmp = p.with_suffix(f'.{threading.get_ident()}.tmp')
+    tmp = p.with_suffix(f'.{os.getpid()}.{threading.get_ident()}.tmp')
     tmp.write_text(record.model_dump_json(indent=2), encoding='utf-8')
     os.replace(tmp, p)
     return _view(base, record)
@@ -641,6 +706,25 @@ def _public_structure_decision(
         decision.model_dump(mode='json', exclude={'proof'}))
 
 
+def _writing_decision_payload(
+    decision: WritingApprovalRequest | WritingApprovalDecision,
+) -> dict[str, Any]:
+    """写作授权的唯一 proof 投影；服务端时间不参与人的决定摘要。"""
+    return {
+        'kind': 'stage5_writing_approval',
+        'subject_sha256': decision.subject_sha256,
+        'actor': decision.actor,
+        'reason': decision.reason,
+    }
+
+
+def _public_writing_decision(
+    decision: _StoredWritingDecision,
+) -> WritingApprovalDecision:
+    return WritingApprovalDecision.model_validate(
+        decision.model_dump(mode='json', exclude={'proof'}))
+
+
 def _current_structure_subject_and_chapters(
     novel_dir: Path,
 ) -> tuple[str, list[int]]:
@@ -675,6 +759,30 @@ def _proof_for_structure(
     return _make_proof(
         novel_dir, (STAGE4_PLAN_CHAPTERS,),
         _structure_decision_payload(decision),
+    )
+
+
+def _writing_subject_sha256(proof: _ApprovalProof) -> str:
+    """把根、完整输入字节与 Stage5 契约折成 Commander 必须回传的 current SHA。"""
+    return _decision_sha256({
+        'kind': 'stage5_writing_subject',
+        'proof': proof.model_dump(mode='json'),
+    })
+
+
+def _current_writing_subject(novel_dir: Path) -> tuple[str, _ApprovalProof]:
+    proof = _proof_for_writing(novel_dir)
+    return _writing_subject_sha256(proof), proof
+
+
+def _proof_for_writing_decision(
+    novel_dir: Path,
+    decision: WritingApprovalRequest | WritingApprovalDecision,
+) -> _ApprovalProof:
+    """同时绑定正文根、完整 Stage1/Stage4 字节与 actor/reason/current SHA。"""
+    return _make_proof(
+        novel_dir, (STAGE1_MAIN_TEXT, STAGE4_PLAN_CHAPTERS),
+        _writing_decision_payload(decision),
     )
 
 
@@ -723,6 +831,60 @@ def _structure_view(
     return StructureApprovalView(
         state=state, current_subject_sha256=current_subject,
         current_decision=public, history=history,
+    )
+
+
+def _writing_view(
+    novel_dir: Path, record: _ApprovalRecordV5,
+) -> WritingApprovalView:
+    """即时投影写作授权；旧/stale 决定留在 history，但绝不冒充当前。"""
+    history = [
+        _public_writing_decision(decision)
+        for decision in record.writing_history
+    ]
+    if not record.gate['s4']:
+        return WritingApprovalView(
+            available=False,
+            current_subject_sha256=None,
+            current_decision=None,
+            history=history,
+        )
+    try:
+        current_subject, _current_proof = _current_writing_subject(novel_dir)
+    except NovelError:
+        return WritingApprovalView(
+            available=False,
+            current_subject_sha256=None,
+            current_decision=None,
+            history=history,
+        )
+    latest = record.writing_decision
+    if latest is None:
+        return WritingApprovalView(
+            available=True,
+            current_subject_sha256=current_subject,
+            current_decision=None,
+            history=history,
+        )
+    public = _public_writing_decision(latest)
+    try:
+        current_decision_proof = _proof_for_writing_decision(novel_dir, public)
+    except NovelError:
+        current_decision_proof = None
+    current = (
+        public
+        if (
+            latest.subject_sha256 == current_subject
+            and current_decision_proof is not None
+            and _same_proof(latest.proof, current_decision_proof)
+        )
+        else None
+    )
+    return WritingApprovalView(
+        available=True,
+        current_subject_sha256=current_subject,
+        current_decision=current,
+        history=history,
     )
 
 
@@ -1057,7 +1219,7 @@ def approve_structure(
     base: str | os.PathLike[str], sid: str, request: StructureApprovalRequest,
 ) -> ApprovalDoc:
     """保存一次原子的全书结构裁决；本函数不启动任何作业。"""
-    with _LOCK:
+    with approval_file_lock(base, sid):
         record = _read_current(base, sid)
         if missing := [
             key for key in _GATE_REQUIREMENTS['s4'] if not record.gate[key]
@@ -1136,7 +1298,7 @@ def approve_gate(base: str | os.PathLike[str], sid: str, gate: str) -> ApprovalD
         raise ApprovalRequired(
             's4 不接受匿名通用盖章；请提交带 subject hash、actor/reason 与逐章决定的 '
             'Stage4 structure approval')
-    with _LOCK:
+    with approval_file_lock(base, sid):
         record = _read_current(base, sid)
         if missing := [
             key for key in _GATE_REQUIREMENTS.get(gate, ()) if not record.gate[key]
@@ -1403,7 +1565,7 @@ def backfill_from_disk(
     本入口只在对应正式产物齐备且没有 `.INVALID` 时补章。Stage5 只认
     全部 canonical `stage5/chNN.json` + fresh Review。
     """
-    with _LOCK:
+    with approval_file_lock(base, sid):
         migrated = False
         migrated_gates: list[str] = []
         try:
@@ -1498,7 +1660,7 @@ def backfill_from_disk(
 def mark_seen(base: str | os.PathLike[str], sid: str, key: str) -> ApprovalDoc:
     if key not in _SEEN_ARTIFACTS:
         raise ApprovalRequired(f'unknown stage2 view: {key}')
-    with _LOCK:
+    with approval_file_lock(base, sid):
         record = _read_current(base, sid)
         novel_dir = paths.resolve_novel_dir(base, sid)
         proof = _proof_for_seen(novel_dir, key)
@@ -1521,25 +1683,133 @@ def _has_stage5_work(novel_dir: Path) -> bool:
     )
 
 
+def _writing_prerequisites(
+    base: str | os.PathLike[str], sid: str, record: _ApprovalRecordV5,
+) -> tuple[Path, str, _ApprovalProof]:
+    """写作 template/apply 共用的 current subject 判据；不写盘、不启动作业。"""
+    novel_dir = paths.resolve_novel_dir(base, sid)
+    _require_stage5_contract_compatible(novel_dir, action='授权新作业')
+    if not record.gate['s4']:
+        raise ApprovalRequired('current typed stage4 plan must be approved first')
+    planned = _planned(base, sid)
+    if planned is None:
+        raise UpstreamMissing(f'{STAGE4_PLAN_CHAPTERS} is required before writing')
+    if not planned:
+        raise ApprovalRequired('stage4 plan contains no output chapters')
+    subject, proof = _current_writing_subject(novel_dir)
+    return novel_dir, subject, proof
+
+
+def structure_template(
+    base: str | os.PathLike[str], sid: str, *, actor: str, reason: str,
+) -> StructureApprovalRequest:
+    """生成关闭式结构审批模板；每章默认 request_replan，且全程只读。"""
+    with _LOCK:
+        record = _read_current(base, sid)
+        if missing := [
+            key for key in _GATE_REQUIREMENTS['s4'] if not record.gate[key]
+        ]:
+            raise ApprovalRequired(
+                f's4 structure decision requires prior approvals: {missing}')
+        novel_dir = paths.resolve_novel_dir(base, sid)
+        subject, planned = _current_structure_subject_and_chapters(novel_dir)
+        if not planned:
+            raise ApprovalRequired('stage4 plan contains no output chapters')
+        return StructureApprovalRequest(
+            actor=actor,
+            reason=reason,
+            subject_sha256=subject,
+            chapters=[{
+                'output_ordinal': ordinal,
+                'decision': 'request_replan',
+                'reason': '关闭式模板：尚未逐章核实，保持 request_replan',
+            } for ordinal in planned],
+        )
+
+
+def writing_template(
+    base: str | os.PathLike[str], sid: str, *, actor: str, reason: str,
+) -> WritingApprovalRequest:
+    """生成绑定当前 Stage1/Stage4/契约的 typed 写作授权模板；全程只读。"""
+    with _LOCK:
+        record = _read_current(base, sid)
+        _novel_dir, subject, _proof = _writing_prerequisites(base, sid, record)
+        return WritingApprovalRequest(
+            actor=actor, reason=reason, subject_sha256=subject)
+
+
+def approve_writing(
+    base: str | os.PathLike[str], sid: str, request: WritingApprovalRequest,
+) -> ApprovalDoc:
+    """保存 Stage5 typed 写作授权；不启动模型、作业或任何 continuation。"""
+    with approval_file_lock(base, sid):
+        record = _read_current(base, sid)
+        novel_dir, current_subject, current_proof = _writing_prerequisites(
+            base, sid, record)
+        if request.subject_sha256 != current_subject:
+            raise HumanEditProtected(
+                'Stage5 写作审批对象已变化：'
+                f'提交 {request.subject_sha256}，当前 {current_subject}；请刷新模板后重审')
+        decision_proof = _proof_for_writing_decision(novel_dir, request)
+
+        # template 与 apply 之间允许停很久，但 apply 自己的多次读取也不能把两个
+        # 时刻的字节拼成一张立即过期的授权。第二次完整计算与第一次必须一致。
+        after_subject, after_proof = _current_writing_subject(novel_dir)
+        after_decision_proof = _proof_for_writing_decision(novel_dir, request)
+        if (
+            after_subject != current_subject
+            or after_proof != current_proof
+            or after_decision_proof != decision_proof
+        ):
+            raise HumanEditProtected('Stage5 写作主体在授权提交期间发生变化；请刷新模板后重审')
+
+        latest = record.writing_decision
+        if (
+            latest is not None
+            and _writing_decision_payload(
+                _public_writing_decision(latest)) == _writing_decision_payload(request)
+            and _same_proof(latest.proof, decision_proof)
+        ):
+            if record.writing and _same_proof(record.writing_proof, current_proof):
+                return _view(base, record)
+            return _write(base, record.model_copy(update={
+                'writing': True,
+                'writing_proof': current_proof,
+            }))
+
+        public = WritingApprovalDecision(
+            actor=request.actor,
+            reason=request.reason,
+            subject_sha256=request.subject_sha256,
+            decided_at=_now(),
+        )
+        stored = _StoredWritingDecision(
+            **public.model_dump(mode='json'), proof=decision_proof)
+        return _write(base, record.model_copy(update={
+            'writing': True,
+            'writing_proof': current_proof,
+            'writing_history': [*record.writing_history, stored],
+            'writing_decision': stored,
+        }))
+
+
 def begin_writing(
     base: str | os.PathLike[str], sid: str,
 ) -> ApprovalDoc:
-    with _LOCK:
+    """旧 UI 的空-body 兼容缝；Commander/CLI 不得调用这一匿名入口。
+
+    它保留既有业务语义与旧 v5 盘面，不伪造 actor/reason，也不把匿名旧决定
+    塞进 typed history。正式 agent 路径只暴露 ``writing_template`` +
+    ``approve_writing``。
+    """
+    with approval_file_lock(base, sid):
         record = _read_current(base, sid)
-        novel_dir = paths.resolve_novel_dir(base, sid)
-        _require_stage5_contract_compatible(novel_dir, action='授权新作业')
-        if not record.gate['s4']:
-            raise ApprovalRequired('current typed stage4 plan must be approved first')
-        planned = _planned(base, sid)
-        if planned is None:
-            raise UpstreamMissing(f'{STAGE4_PLAN_CHAPTERS} is required before writing')
-        if not planned:
-            raise ApprovalRequired('stage4 plan contains no output chapters')
+        _novel_dir, _subject, proof = _writing_prerequisites(base, sid, record)
         if record.writing:
             return _view(base, record)
-        proof = _proof_for_writing(novel_dir)
         return _write(base, record.model_copy(update={
-            'writing': True, 'writing_proof': proof,
+            'writing': True,
+            'writing_proof': proof,
         }))
 
 
@@ -1584,7 +1854,7 @@ def authorize_writing(
 
 
 def reset(base: str | os.PathLike[str], sid: str) -> ApprovalDoc:
-    with _LOCK:
+    with approval_file_lock(base, sid):
         novel_dir = paths.resolve_novel_dir(base, sid)
         if _has_stage5_work(novel_dir):
             raise HumanEditProtected('cannot reset approvals after stage5 drafts exist')

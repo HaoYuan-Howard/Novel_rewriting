@@ -212,7 +212,8 @@ _SHAPE_BREAKS: dict[str, tuple[int, str, str]] = {
         '不能直接从 producer 付费重建。本次把它们明确退役为**只读历史实验证据**：'
         '不纳入 current-schema corpus，也不承诺当前运行时可读；字节原样保留，'
         '需要检视时使用形状破坏前的代码身份。现役交付必须由 producer 生成 v2 并重新人工定稿。'
-        '`stage6/semantic_*.json` 未破坏形状，但它按 `judged_texts` 绑文本、重跑后会判 stale',
+        '当次 `stage6/semantic_*.json` 未破坏形状，但它按 `judged_texts` '
+        '绑候选文本、重跑后会判 stale；后续的 semantic v2 破坏另见独立记录',
     ),
     'stage6/hook_edit.json': (
         2,
@@ -220,6 +221,17 @@ _SHAPE_BREAKS: dict[str, tuple[int, str, str]] = {
         '`c1`/`c2`/`c3`（`None` 仍表示「写/替换定稿」）。策略名不再唯一 ⇒ 选不中那一条',
         '**盘上零存量**（全 `outputs/` 找不到一份 `hook_edit.json`）⇒ 本次代价为零。'
         '它是人工决策集不是产出物，下次写的时候按新取值面写即可',
+    ),
+    'stage6/semantic_{n}.json': (
+        2,
+        '2026-08-27 agent 执行者纵切：新增 `judged`，以 '
+        '`JudgedDraft.consumed.text_sha1` 绑定 A/B 判官实际看见的 Stage5 '
+        '开篇成稿。v1 只绑 hook 候选文本；Stage5 正文改字后，它无法证明'
+        '旧的矛盾证据与质量判断仍是对当前参考材料作出',
+        '不迁移、不手补 `judged` 或版本号；由 `stage6.semantic` 对当前 '
+        'hook + canonical Stage5 成稿重跑（A/B 两次付费判官调用）。'
+        '旧人工定稿仍由它自己的 actor/reason/完整 subject SHA-256 绑定；'
+        '若 hook 文本未变，不伪造一次重批需求',
     ),
     'stage7/name_map.json': (
         2,

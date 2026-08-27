@@ -93,6 +93,34 @@ trim 决定、s5 审批与 Stage6/7 消费均只读最小主体；证明删字�
 与审批对象语义不变。旧 base 保持关闭式拒读且不被自动改写，TODO-21 的 manifest 只接受完成切换后的
 current-schema 盘面。
 
+### TODO-32 · 将现役付费生成迁移到逐节点可恢复 agent
+
+**剩余缺口**：Phase 1～6 的工程迁移已经接通——八个付费生成节点均有 Claude Code / Codex
+逐节点可恢复 agent 路径，整书 Commander、typed 代批与前端双角色/逐节点配置也已贯穿真实
+preview/start/argv/session/audit 链。但这些结论仍只来自 fake driver、本机零模型 CLI 检查与非
+corpus 回归：尚未用 current-schema 真实整书跑到 Stage7，也没有据此冻结 agent-only 服务端默认。
+因此 `default_profiles` 仍为 null，未显式 profile 的 legacy LLM 路仍保留；现在删除或自动改写它会把
+未经真实验收的工程可达性冒充生产迁移完成。
+
+**工作（严格按顺序完成）**：
+
+- 已建立供应商中立 executor / Commander driver、能力探针、精确 profile、追加式 session 审计与
+  start/resume/stop 协议；配置、actual identity、CLI 或审计不闭合均关闭式失败或降 unknown。
+- 已按顺序接通 `stage2.global`、`stage2.blueprint`、`stage6.semantic` 与其余五个付费节点；每个
+  node/chapter/judge 独占 session，候选、代码反馈、checkpoint、正式提交、adoption 与终验闭合。
+- 已接通 API/前端 capability 驱动的 Commander、默认 executor、逐节点 override、精确模型与
+  reasoning effort；preview/start/queue 冻结同一快照，两项授权继续独立，标准代批只走 typed CLI façade。
+- 用 current-schema 真实整书跑到 Stage7 并核对正式产物、双账、会话审计、审批与终审包后，才把
+  agent 设为 Commander 主路的默认执行路径。DeepSeek 长期保留为独立、显式且不可自动触发的
+  legacy LLM 路径，不作为 agent 的静默 fallback；后续另行把现役 LLM 客户端抽成供应商中立基类，
+  再让 DeepSeek 作为一个具体实现接入，这项后续重构不阻断当前 agent 纵切验收。
+
+**验收**：两个 driver 的零成本 wire / resume / 取消测试通过；八节点 registry 闭合且没有 vendor×node
+子类笛卡尔积；中间拒稿不写正式产物、不伪造终态，最终提交可由 ledger attempt、session turn 与
+artifact adoption 逐项联结；Stage2 逐章 session 和 Stage6 双判官互相不可见；所有未迁移组合在
+spawn 前拒绝且显式 profile 永不 fallback；前端选择经页面 → API → Job/Commander → 子 CLI →
+driver 的真实链路生效。非 corpus 回归与真实付费整书验收分开报告；没有显式授权时不发模型请求。
+
 ## 条目生命周期
 
 1. 开工前补足可复现输入、预期最终状态、成本与受影响守卫。

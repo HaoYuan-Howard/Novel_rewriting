@@ -2,6 +2,7 @@ import { api } from '@/api/endpoints'
 import { act, fireEvent, screen, waitFor } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import { renderRoute } from '@/test/render'
+import { EXECUTOR_PROFILE } from '@/test/agent'
 import { JobDrawer } from './JobDrawer'
 
 describe('JobDrawer 作业概览', () => {
@@ -20,6 +21,8 @@ describe('JobDrawer 作业概览', () => {
           finished: 2,
           sid: 'book-1',
           ordinal: null,
+          executor_profile: EXECUTOR_PROFILE,
+          egress_authorized: false,
         },
         {
           id: 'job-2',
@@ -57,6 +60,8 @@ describe('JobDrawer 作业概览', () => {
     )
     fireEvent.click(screen.getByRole('button', { name: '查看“Stage0 扫描”日志' }))
 
+    expect(screen.getByText(/executor-model-v7/)).toBeVisible()
+    expect(screen.getByText('正文外发：未授权')).toBeVisible()
     expect(await screen.findByText('stderr: 分章器失败')).toBeVisible()
     expect(screen.getByText('恢复命令：python -m novel.cli state')).toBeVisible()
     expect(stream).toHaveBeenLastCalledWith('job-1', 0, expect.any(Object))

@@ -19,7 +19,10 @@ plan.py —— Stage4 v4 的三个节点。**两次付费调用、一次确定�
 """
 from __future__ import annotations
 
+import hashlib
 import json
+from collections.abc import Mapping
+from dataclasses import dataclass, field
 
 from contracts.artifacts import (
     STAGE1_MAIN_TEXT, STAGE2_CHAPTER_BLUEPRINTS, STAGE2_GLOBAL_GROUNDING,
@@ -44,7 +47,7 @@ from contracts.schema.stage4 import (
 from novel import paths, prov
 from novel.errors import (
     ArtifactUnreadable, GateBlocked, RefusedByStructure, TerminalState,
-    UpstreamMissing,
+    UpstreamMissing, ProvenanceRefused,
 )
 from novel.report import build
 from novel.report.findings import Outcome
@@ -65,6 +68,8 @@ from novel.stages.stage4.measure import (
 )
 from novel.stages.stage4.phase_binding import verify_plan_phase_artifacts
 from novel.stages.stage4.phase_state import current_infeasible_binding
+from novel.llm.client import LlmFailed
+from novel.llm.transport import ChatResponse
 from novel.store import ArtifactStore
 
 REL = STAGE4_PLAN_CHAPTERS
@@ -135,6 +140,83 @@ class _DesignUpstream:
                 f'{BLUEPRINTS} 不在盘上——stage4.design 只消费冻结的 Stage2 真相图')
         self.blueprints = store.read(
             ChapterBlueprints, BLUEPRINTS).model_dump(by_alias=True)
+
+
+@dataclass(frozen=True)
+class DesignCandidateContext:
+    """Stage4A 在任何 wire 前冻结的去序 allowlist。"""
+
+    system: str
+    user: str
+    store: ArtifactStore = field(repr=False, compare=False)
+    upstream: _DesignUpstream = field(repr=False, compare=False)
+    truth: dict[str, Any]
+    mapping: dict[str, Any]
+    input_sha256: str
+    validator: Any = field(repr=False, compare=False)
+
+
+@dataclass(frozen=True)
+class DesignCandidateEvaluation:
+    """Stage4A 已过代码闸、尚未结算或落盘的候选。"""
+
+    response: BlindPlanResponse
+    candidate: BlindCandidate
+    requested_model: str
+    adopted_models: tuple[str, ...]
+    attempt_id: str
+    input_sha256: str
+    candidate_sha256: str
+
+
+@dataclass(frozen=True)
+class PlanCandidateContext:
+    """Stage4B 冻结的 A 候选、证据层与 prompt allowlist。"""
+
+    system: str
+    user: str
+    store: ArtifactStore = field(repr=False, compare=False)
+    upstream: _Upstreams = field(repr=False, compare=False)
+    candidate: BlindCandidate = field(repr=False, compare=False)
+    candidate_raw: dict[str, Any]
+    candidate_file_sha256: str
+    subject_sha256: str
+    catalog: dict[int, dict[str, frozenset[str]]] = field(
+        repr=False, compare=False)
+    input_sha256: str
+    validator: Any = field(repr=False, compare=False)
+
+
+@dataclass(frozen=True)
+class PlanCandidateEvaluation:
+    """Stage4B 可物化的 binding、确定性编译树与代码业务结论。
+
+    ``hard_hits`` 非空不表示响应无效：这份候选已经通过 wire/schema 与局部
+    编译不变量，因而必须先形成 accepted checkpoint。executor 有剩余轮次时，
+    ``feedback_rows`` 会回到同一 logical session；耗尽后则由 finalize 把最后
+    一份候选正式落成 ``binding + plan.INVALID``。
+    """
+
+    response: EvidenceBindingResponse
+    binding: EvidenceBinding
+    compiled: dict[str, Any] | None
+    requested_model: str
+    adopted_models: tuple[str, ...]
+    attempt_id: str
+    input_sha256: str
+    binding_sha256: str
+    compiled_sha256: str | None
+    hard_hits: tuple[str, ...]
+    feedback: tuple[dict[str, object], ...] = field(
+        repr=False, compare=False)
+
+    @property
+    def passed(self) -> bool:
+        return not self.hard_hits
+
+    def feedback_rows(self) -> list[dict[str, object]]:
+        """交回 executor 的 JSON-safe 业务拒稿行；审计层只取规则与计数。"""
+        return [dict(row) for row in self.feedback]
 
 
 # ── 判定与报告 ──────────────────────────────────────────────────────────────
@@ -402,15 +484,29 @@ def _blind_candidate_problem(
     return '；'.join(problems[:16]) if problems else None
 
 
-def _blind_validator(truth: dict[str, Any], mapping: dict[str, Any]) -> Any:
-    def validate(response: BlindPlanResponse, _wire: Any) -> str | None:
+class _BlindValidator:
+    """同一个 validator 既回馈 provider，也留下唯一编译结果。"""
+
+    def __init__(self, truth: dict[str, Any], mapping: dict[str, Any]) -> None:
+        self.truth = truth
+        self.mapping = mapping
+        self.compiled: dict[str, Any] | None = None
+
+    def __call__(self, response: BlindPlanResponse, _wire: Any) -> str | None:
+        self.compiled = None
         try:
             compiled = compile_blind_candidate(
-                response.model_dump(by_alias=True), mapping)
+                response.model_dump(by_alias=True), self.mapping)
         except BlindPlanError as exc:
             return str(exc)
-        return _blind_candidate_problem(compiled, truth)
-    return validate
+        why = _blind_candidate_problem(compiled, self.truth)
+        if why is None:
+            self.compiled = compiled
+        return why
+
+
+def _blind_validator(truth: dict[str, Any], mapping: dict[str, Any]) -> _BlindValidator:
+    return _BlindValidator(truth, mapping)
 
 
 def build_prompt(ctx: RunContext, *, chapters: tuple[int, ...] = ()) -> tuple[str, str]:
@@ -498,34 +594,125 @@ def _binding_request(
     )
 
 
-def _binding_validator(
-    *, candidate: dict[str, Any], subject: str,
-    catalog: dict[int, dict[str, frozenset[str]]], up: _Upstreams,
-    store: ArtifactStore,
-) -> Any:
-    def validate(response: EvidenceBindingResponse, _wire: Any) -> str | None:
+def _candidate_bundle_verdict(
+        data: dict[str, Any], up: _Upstreams,
+) -> tuple[tuple[str, ...], tuple[dict[str, object], ...]]:
+    """在候选内存中组出 writer context，产出唯一联合 HARD 与反馈投影。
+
+    这不冒充正式终验：它只回答一份**已经能编译**的 plan/context 候选是否
+    命中业务 HARD。正式路仍要写盘、typed readback，并重跑本函数与 A/B
+    完整字节边。反馈直接投影本次 ``Outcome``，不另拼一套业务判据。
+    """
+    from contracts.rules import REGISTRY
+
+    assert up.global_g is not None
+    asm = build_writer_context(data, up.global_g, up.blueprints, up.main_text)
+    candidate_ctx = asm.ctx
+    outcomes = checks.check(
+        data,
+        blueprints=up.blueprints,
+        main_text=up.main_text,
+        global_g=up.global_g,
+        ctx=candidate_ctx,
+        expected_ctx=candidate_ctx,
+        ctx_link=('ok', '候选内存中的 plan/context 同源'),
+        ctx_source='候选内存组装；正式 provenance link 待落盘后终验',
+        # 候选还没有 A/B 正式字节指纹，空 tuple 的语义是
+        # human/candidate origin，不把「尚未落盘」伪造成 mismatch。
+        phase_links=(),
+        bidx=up.bidx,
+    )
+    hits = tuple(_hard_hits(outcomes))
+    rows: list[dict[str, object]] = []
+    for rule_id in hits:
+        rule = REGISTRY.get(rule_id)
+        findings: list[dict[str, object]] = []
+        seen: set[tuple[str, tuple[str, ...]]] = set()
+        for outcome in outcomes:
+            if outcome.rule != rule_id:
+                continue
+            for finding in outcome.findings:
+                identity = (finding.detail, tuple(finding.evidence))
+                if identity in seen:
+                    continue
+                seen.add(identity)
+                findings.append({
+                    'detail': finding.detail,
+                    'evidence': list(finding.evidence),
+                })
+        rows.append({
+            'rule': rule_id,
+            'item': rule.item,
+            'requirement': rule.requirement,
+            'findings': findings,
+        })
+    return hits, tuple(rows)
+
+
+class _BindingValidator:
+    """B 的 dynamic + 唯一编译器；agent 业务 HARD 不在此层拒绝。
+
+    legacy ``LlmClient`` 仍用 ``include_business_hard=True`` 保留旧的 validator
+    重采语义。agent 必须先接受并封存一份可物化候选，业务 HARD 才能由代码
+    ``evaluate`` 记拒稿、同 session 续改，并在预算耗尽时诚实落 INVALID。
+    """
+
+    def __init__(
+            self, *, candidate: dict[str, Any], subject: str,
+            catalog: dict[int, dict[str, frozenset[str]]], up: _Upstreams,
+            store: ArtifactStore, include_business_hard: bool = False,
+    ) -> None:
+        self.candidate = candidate
+        self.subject = subject
+        self.catalog = catalog
+        self.up = up
+        self.store = store
+        self.include_business_hard = include_business_hard
+        self.compiled: dict[str, Any] | None = None
+
+    def __call__(
+            self, response: EvidenceBindingResponse, _wire: Any,
+    ) -> str | None:
+        self.compiled = None
         raw = response.model_dump(by_alias=True)
-        if raw.get('candidate_sha256') != subject:
+        if raw.get('candidate_sha256') != self.subject:
             return (
-                f'candidate_sha256 必须回显冻结候选 {subject}，'
+                f'candidate_sha256 必须回显冻结候选 {self.subject}，'
                 f'实得 {raw.get("candidate_sha256")}')
         if response.status == 'infeasible':
             try:
-                validate_infeasible_binding(candidate, raw, catalog)
+                validate_infeasible_binding(
+                    self.candidate, raw, self.catalog)
             except BlindPlanError as exc:
                 return str(exc)
             return None
         try:
-            data = merge_evidence_bindings(candidate, raw, catalog)
-            adopt_plan_response(data, up.blueprints, up.bidx)
-            assert up.global_g is not None
+            data = merge_evidence_bindings(
+                self.candidate, raw, self.catalog)
+            adopt_plan_response(data, self.up.blueprints, self.up.bidx)
+            assert self.up.global_g is not None
             validate_plan_refs(
-                data, fact_catalog(up.global_g, up.blueprints, up.main_text))
-            hard = _hard_hits(_judge(store, data, up, with_ctx_link=False))
+                data, fact_catalog(
+                    self.up.global_g, self.up.blueprints, self.up.main_text))
         except (BlindPlanError, RefusedByStructure) as exc:
             return str(exc)
-        return f'绑定后计划仍有阻断项：{hard}' if hard else None
-    return validate
+        self.compiled = data
+        if self.include_business_hard:
+            hard, _feedback = _candidate_bundle_verdict(data, self.up)
+            if hard:
+                return f'绑定后 plan/context 联合候选仍有阻断项：{list(hard)}'
+        return None
+
+
+def _binding_validator(
+    *, candidate: dict[str, Any], subject: str,
+    catalog: dict[int, dict[str, frozenset[str]]], up: _Upstreams,
+    store: ArtifactStore, include_business_hard: bool = False,
+) -> _BindingValidator:
+    return _BindingValidator(
+        candidate=candidate, subject=subject, catalog=catalog,
+        up=up, store=store,
+        include_business_hard=include_business_hard)
 
 
 def _assert_budget_basis(up: _Upstreams) -> None:
@@ -708,6 +895,327 @@ def _gate_and_write(ctx: RunContext, store: ArtifactStore, data: dict[str, Any],
         ctx, store, final_outcomes, art.provenance.model_dump(by_alias=True))
 
 
+def _uses_agent_runs(ctx: RunContext) -> bool:
+    return getattr(ctx, 'executor_profile', None) is not None
+
+
+def _canonical_sha256(value: object) -> str:
+    from novel.llm.agent_runs import canonical_sha256
+    return canonical_sha256(value)
+
+
+def _live_code_guard(ctx: RunContext, *, where: str) -> None:
+    # legacy LlmClient 历史测试/人工运行允许显式 code 标签；不存在
+    # 可跨进程恢复的 agent journal，也不能拿 git 现值反过来否定它。
+    if not _uses_agent_runs(ctx):
+        return
+    current = prov.code_version()
+    if current != ctx.code:
+        raise ProvenanceRefused(
+            f'{where} 代码版本已漂移：start={ctx.code} current={current}')
+
+
+def _accepted_identity(
+        ctx: RunContext, source: Any,
+) -> tuple[str, tuple[str, ...]]:
+    attempt_id = source.accepted_attempt(ctx.node)
+    if not isinstance(attempt_id, str) or not attempt_id:
+        raise ProvenanceRefused(f'{ctx.node}: 候选缺 accepted attempt')
+    models = tuple(sorted(set(source.accepted_models(ctx.node))))
+    if not models or any(not isinstance(model, str) or not model for model in models):
+        raise ProvenanceRefused(
+            f'{ctx.node}: 候选缺 actual accepted model，不能拿 requested 冒充')
+    return attempt_id, models
+
+
+def _require_agent_bridge(ctx: RunContext, source: Any) -> None:
+    required = (
+        'accepted_checkpoint', 'restore_checkpoint_acceptance',
+        'accepted_attempt', 'accepted_models',
+    )
+    missing = [name for name in required if not callable(getattr(source, name, None))]
+    if missing:
+        raise ProvenanceRefused(
+            f'{ctx.node} agent source 缺 checkpoint bridge {missing}；'
+            '已在首个 wire 前停止')
+    if not hasattr(source, 'provider_session_id'):
+        raise ProvenanceRefused(
+            f'{ctx.node} agent source 不暴露 provider_session_id；'
+            '无法区分 live resume 与 durable-checkpoint 恢复')
+
+
+def _finish_restored_agent_session(
+        ctx: RunContext, source: Any, *, delivery_state: str,
+        error_kind: str | None,
+) -> bool:
+    """幂等收口 checkpoint 指向的旧 logical session。
+
+    ``restore_checkpoint_acceptance`` 只恢复费用事实与 adoption 索引，
+    不会也不得把历史 provider id 冒充成可 resume 会话。因此：
+
+    * 干净/infeasible 零 wire 交付后，把旧 session 收成 delivered；
+    * 业务 HARD 在新 session 继续之前，先收成 blocked；
+    * 当前进程已建立 provider session 时不经此口，交给节点
+      agent 的 ``SessionAgentClient.finish`` 记录真实最后一轮。
+    """
+    if not _uses_agent_runs(ctx):
+        return False
+    if not hasattr(source, 'provider_session_id'):
+        raise ProvenanceRefused(
+            f'{ctx.node} agent source 不暴露 provider_session_id')
+    if source.provider_session_id is not None:
+        return False
+    checkpoint = source.accepted_checkpoint(ctx.node)
+    _live_code_guard(ctx, where=f'{ctx.node}.finish_restored_session')
+    from novel import agent_session_audit
+    return agent_session_audit.finish_restored_session(
+        ctx.novel_dir.parent,
+        checkpoint,
+        process_state='ok',
+        delivery_state=delivery_state,
+        end_code_version=prov.code_version(),
+        error_kind=error_kind,
+    )
+
+
+def _refuse_foreign_before_wire(ctx: RunContext) -> None:
+    """legacy/agent 共用正式路径，不能踩过另一 run 的 prepared。"""
+    from novel.llm import stage4_runs
+    if (not _uses_agent_runs(ctx)
+            and not (ctx.novel_dir / paths.STAGE4_RUNS_DIRNAME).is_dir()):
+        return
+    with stage4_runs.commit_ownership(ctx.novel_dir):
+        stage4_runs.refuse_foreign_commit_reservations(ctx)
+
+
+def _assert_design_current(
+        ctx: RunContext, prepared: DesignCandidateContext,
+) -> None:
+    _live_code_guard(ctx, where='stage4.design')
+    with ctx.validation_reads():
+        system, user, _store, _up, truth, mapping = _design_request(ctx)
+    current_input = _canonical_sha256({'truth': truth, 'mapping': mapping})
+    if (system != prepared.system or user != prepared.user
+            or truth != prepared.truth or mapping != prepared.mapping
+            or current_input != prepared.input_sha256):
+        raise ProvenanceRefused(
+            'stage4.design 运行期间 truth/mapping/prompt 发生漂移')
+    ctx.require_observed_roots_current()
+
+
+def prepare_design_candidate(ctx: RunContext) -> DesignCandidateContext:
+    """读取并冻结 A 的去序输入；不发请求、不写正式产物。"""
+    if ctx.node != 'stage4.design':
+        raise ValueError(
+            f'prepare_design_candidate 只接受 stage4.design，实得 {ctx.node!r}')
+    _refuse_foreign_before_wire(ctx)
+    system, user, store, up, truth, mapping = _design_request(ctx)
+    prepared = DesignCandidateContext(
+        system=system,
+        user=user,
+        store=store,
+        upstream=up,
+        truth=truth,
+        mapping=mapping,
+        input_sha256=_canonical_sha256({'truth': truth, 'mapping': mapping}),
+        validator=_blind_validator(truth, mapping),
+    )
+    _assert_design_current(ctx, prepared)
+    if _uses_agent_runs(ctx):
+        from novel.llm import stage4_runs
+        stage4_runs.ensure_run(
+            ctx,
+            input_sha256=prepared.input_sha256,
+            system=system,
+            user=user,
+            response_model=BlindPlanResponse,
+            max_tokens=prompts.BLIND_DESIGN_MAX_TOKENS,
+        )
+    return prepared
+
+
+def _design_checkpoint_state(
+        response: BlindPlanResponse, compiled: Mapping[str, Any],
+) -> dict[str, Any]:
+    return {
+        'kind': 'stage4-design-terminal',
+        'response_sha256': _canonical_sha256(
+            response.model_dump(by_alias=True, mode='json')),
+        'compiled_sha256': _canonical_sha256(dict(compiled)),
+    }
+
+
+def request_design_candidate(
+        ctx: RunContext, source: Any, prepared: DesignCandidateContext,
+) -> BlindPlanResponse:
+    """取得 A 候选；agent 先恢复 latest revision，缺失才发一条 wire。"""
+    _assert_design_current(ctx, prepared)
+    if _uses_agent_runs(ctx):
+        _require_agent_bridge(ctx, source)
+        from novel.llm import stage4_runs
+        restored = stage4_runs.restore_checkpoint(
+            ctx,
+            input_sha256=prepared.input_sha256,
+            system=prepared.system,
+            user=prepared.user,
+            response_model=BlindPlanResponse,
+            max_tokens=prompts.BLIND_DESIGN_MAX_TOKENS,
+            validator=prepared.validator,
+        )
+        if restored is not None:
+            compiled = prepared.validator.compiled
+            if (compiled is None or restored.revision_key != 'terminal'
+                    or restored.state_payload
+                    != _design_checkpoint_state(restored.value, compiled)):
+                raise ProvenanceRefused(
+                    'stage4.design latest checkpoint 的业务 progress_state 不闭合')
+            source.restore_checkpoint_acceptance(
+                ctx.node,
+                restored.acceptance,
+                system=prepared.system,
+                user=prepared.user,
+                max_tokens=prompts.BLIND_DESIGN_MAX_TOKENS,
+                recovery_policy=stage4_runs.recovery_policy(ctx.node),
+            )
+            return restored.value
+        _assert_design_current(ctx, prepared)
+        response = source.ask_json(
+            prepared.system,
+            prepared.user,
+            model_cls=BlindPlanResponse,
+            purpose=ctx.node,
+            max_tokens=prompts.BLIND_DESIGN_MAX_TOKENS,
+            validator=prepared.validator,
+            recovery_policy=stage4_runs.recovery_policy(ctx.node),
+        )
+        compiled = prepared.validator.compiled
+        if compiled is None:
+            raise ProvenanceRefused(
+                'stage4.design source 返回候选但未经唯一 validator')
+        stage4_runs.write_checkpoint(
+            ctx,
+            input_sha256=prepared.input_sha256,
+            system=prepared.system,
+            user=prepared.user,
+            response_model=BlindPlanResponse,
+            max_tokens=prompts.BLIND_DESIGN_MAX_TOKENS,
+            response_payload=response.model_dump(by_alias=True, mode='json'),
+            acceptance=source.accepted_checkpoint(ctx.node),
+            state_payload=_design_checkpoint_state(response, compiled),
+        )
+        return response
+
+    # legacy LlmClient 的公开实参保持原样；它不会被要求伪造
+    # node-executor acceptance/recovery policy。
+    return source.ask_json(
+        prepared.system,
+        prepared.user,
+        model_cls=BlindPlanResponse,
+        purpose=ctx.node,
+        max_tokens=prompts.BLIND_DESIGN_MAX_TOKENS,
+        validator=prepared.validator,
+    )
+
+
+def _materialize_design_candidate(
+        ctx: RunContext, source: Any, prepared: DesignCandidateContext,
+        response: BlindPlanResponse, *, settle: bool,
+) -> BlindCandidate:
+    why = prepared.validator(
+        response,
+        ChatResponse(content=response.model_dump_json(by_alias=True),
+                     model=source.model),
+    )
+    if why is not None or prepared.validator.compiled is None:
+        raise ProvenanceRefused(
+            f'stage4.design 候选绕过响应闸：{why or "未编译"}')
+    _attempt, adopted_models = _accepted_identity(ctx, source)
+    provenance = ctx.llm_provenance(
+        BlindCandidateProvenance,
+        prompts={'BLIND_DESIGN_SYS': prepared.system},
+        model=source.model,
+        adopted_models=adopted_models,
+        settle=settle,
+        alias_algorithm=BLIND_ALIAS_ALGORITHM,
+        truth_sha256=str(prepared.mapping['truth_sha256']),
+    )
+    return BlindCandidate.model_validate({
+        **prepared.validator.compiled,
+        '_provenance': provenance,
+    })
+
+
+def evaluate_design_candidate(
+        ctx: RunContext, source: Any, prepared: DesignCandidateContext,
+        response: BlindPlanResponse,
+) -> DesignCandidateEvaluation:
+    """编译并铸 provisional typed candidate；不 settle、不写盘。"""
+    _assert_design_current(ctx, prepared)
+    candidate = _materialize_design_candidate(
+        ctx, source, prepared, response, settle=False)
+    attempt_id, adopted_models = _accepted_identity(ctx, source)
+    payload = candidate.model_dump(by_alias=True, mode='json')
+    return DesignCandidateEvaluation(
+        response=response,
+        candidate=candidate,
+        requested_model=source.model,
+        adopted_models=adopted_models,
+        attempt_id=attempt_id,
+        input_sha256=prepared.input_sha256,
+        candidate_sha256=_canonical_sha256(payload),
+    )
+
+
+def _assert_design_evaluation(
+        ctx: RunContext, source: Any, prepared: DesignCandidateContext,
+        evaluation: DesignCandidateEvaluation,
+) -> None:
+    if evaluation.input_sha256 != prepared.input_sha256:
+        raise ProvenanceRefused('stage4.design evaluation 不属于当前 input')
+    attempt, models = _accepted_identity(ctx, source)
+    if (source.model != evaluation.requested_model
+            or attempt != evaluation.attempt_id
+            or models != evaluation.adopted_models
+            or _canonical_sha256(evaluation.candidate.model_dump(
+                by_alias=True, mode='json')) != evaluation.candidate_sha256):
+        raise ProvenanceRefused(
+            'stage4.design evaluation 的 model/attempt/candidate 在评估后漂移')
+
+
+def _design_finalization_payload(
+        prepared: DesignCandidateContext, artifact: BlindCandidate,
+) -> dict[str, Any]:
+    return {
+        'delivery_kind': 'design',
+        'input_sha256': prepared.input_sha256,
+        'truth_sha256': str(prepared.mapping['truth_sha256']),
+        'candidate_sha256': _canonical_sha256(
+            artifact.model_dump(by_alias=True, mode='json')),
+    }
+
+
+def verify_design_delivery(
+        ctx: RunContext, prepared: DesignCandidateContext,
+        expected: BlindCandidate,
+) -> BlindCandidate:
+    """正式 A 的 typed readback + exact equality + freshness 终验。"""
+    _assert_design_current(ctx, prepared)
+    store = ArtifactStore(ctx)
+    with ctx.validation_reads():
+        landed, _raw = store.read_own(
+            BlindCandidate, CANDIDATE_REL, require_current=True)
+        freshness = store.freshness(CANDIDATE_REL)
+    if landed.model_dump(by_alias=True, mode='json') != expected.model_dump(
+            by_alias=True, mode='json'):
+        raise ProvenanceRefused(
+            'stage4.design 正式 readback 与本 run 候选不完全相等')
+    if freshness.state != 'fresh':
+        raise ProvenanceRefused(
+            f'stage4.design readback freshness={freshness.state}/'
+            f'{freshness.reason}')
+    return landed
+
+
 def _note_adoption(
     ctx: RunContext, client: Any, *, purpose: str, rel: str, artifact: Any,
 ) -> None:
@@ -722,32 +1230,1148 @@ def _note_adoption(
     )
 
 
+def _note_adoption_attempt(
+        ctx: RunContext, *, purpose: str, attempt_id: str,
+        rel: str, artifact: Any,
+) -> None:
+    ctx.ledger.note_adoption(
+        sid=ctx.sid,
+        node=ctx.node,
+        purpose=purpose,
+        attempt_id=attempt_id,
+        artifact=rel,
+        artifact_fingerprint=prov.projection_fingerprint(
+            artifact.model_dump(by_alias=True, mode='json')),
+        chapter=None,
+    )
+
+
+def finalize_design_candidate(
+        ctx: RunContext, source: Any, prepared: DesignCandidateContext,
+        evaluation: DesignCandidateEvaluation,
+) -> BlindCandidate:
+    """A 的唯一 settle/write/readback/adoption/committed 边界。"""
+    _assert_design_evaluation(ctx, source, prepared, evaluation)
+    _assert_design_current(ctx, prepared)
+    if not _uses_agent_runs(ctx):
+        artifact = _materialize_design_candidate(
+            ctx, source, prepared, evaluation.response, settle=True)
+        if artifact.model_dump(by_alias=True, mode='json') != \
+                evaluation.candidate.model_dump(by_alias=True, mode='json'):
+            raise ProvenanceRefused(
+                'stage4.design provisional/final candidate 不一致')
+        prepared.store.write(CANDIDATE_REL, artifact)
+        _note_adoption(
+            ctx, source, purpose=ctx.node,
+            rel=CANDIDATE_REL, artifact=artifact)
+        return artifact
+
+    from novel.llm import agent_runs, stage4_runs
+    with stage4_runs.commit_ownership(ctx.novel_dir):
+        _assert_design_current(ctx, prepared)
+        stage4_runs.refuse_foreign_commit_reservations(ctx)
+        committed = stage4_runs.committed(ctx)
+        if committed is not None:
+            landed = verify_design_delivery(ctx, prepared, evaluation.candidate)
+            payload = landed.model_dump(by_alias=True, mode='json')
+            finalization = _design_finalization_payload(prepared, landed)
+            stage4_runs.verify_committed_delivery(
+                ctx,
+                committed,
+                primary_payload=payload,
+                finalization_payload=finalization,
+                landed_payloads={CANDIDATE_REL: payload},
+            )
+            _finish_restored_agent_session(
+                ctx, source, delivery_state='delivered', error_kind=None)
+            return landed
+
+        artifact = _materialize_design_candidate(
+            ctx, source, prepared, evaluation.response, settle=True)
+        payload = artifact.model_dump(by_alias=True, mode='json')
+        if (payload != evaluation.candidate.model_dump(
+                by_alias=True, mode='json')
+                or _canonical_sha256(payload) != evaluation.candidate_sha256):
+            raise ProvenanceRefused(
+                'stage4.design provisional/final candidate 不一致')
+        finalization = _design_finalization_payload(prepared, artifact)
+        journal = stage4_runs.prepare_commit(
+            ctx,
+            primary_artifact=CANDIDATE_REL,
+            primary_payload=payload,
+            finalization_payload=finalization,
+            touched_paths=(CANDIDATE_REL,),
+            attempt_id=evaluation.attempt_id,
+        )
+        if (not stage4_runs.verify_commit_primary(journal, payload)
+                or not stage4_runs.verify_commit_finalization(
+                    journal, finalization)):
+            raise ProvenanceRefused(
+                'stage4.design commit journal 与终态候选不闭合')
+        expected_file_sha = agent_runs.canonical_sha256(
+            prepared.store._render(CANDIDATE_REL, artifact))
+        _assert_design_current(ctx, prepared)
+        state = stage4_runs.target_state(
+            ctx, journal, CANDIDATE_REL,
+            expected_file_sha256=expected_file_sha)
+        if state == 'baseline':
+            prepared.store.write(CANDIDATE_REL, artifact)
+        _assert_design_current(ctx, prepared)
+        landed = verify_design_delivery(ctx, prepared, artifact)
+        landed_payload = landed.model_dump(by_alias=True, mode='json')
+        _assert_design_current(ctx, prepared)
+        purpose, attempt_id = stage4_runs.restore_commit_adoption(ctx, journal)
+        _note_adoption_attempt(
+            ctx,
+            purpose=purpose,
+            attempt_id=attempt_id,
+            rel=CANDIDATE_REL,
+            artifact=landed,
+        )
+        _assert_design_current(ctx, prepared)
+        stage4_runs.mark_committed(
+            ctx,
+            primary_payload=landed_payload,
+            finalization_payload=_design_finalization_payload(prepared, landed),
+            landed_payloads={CANDIDATE_REL: landed_payload},
+        )
+        _finish_restored_agent_session(
+            ctx, source, delivery_state='delivered', error_kind=None)
+        return landed
+
+
 def run_design(ctx: RunContext, client: Any) -> BlindCandidate:
-    """Stage4A：只消费去序 Stage2 真相图，落一份可恢复的盲候选。"""
-    system, user, store, _up, truth, mapping = _design_request(ctx)
-    response = client.ask_json(
-        system, user, model_cls=BlindPlanResponse, purpose=ctx.node,
-        max_tokens=prompts.BLIND_DESIGN_MAX_TOKENS,
-        validator=_blind_validator(truth, mapping),
-    )
-    business = compile_blind_candidate(
-        response.model_dump(by_alias=True), mapping)
-    truth_sha256 = str(mapping['truth_sha256'])
-    provenance = ctx.llm_provenance(
-        BlindCandidateProvenance,
-        prompts={'BLIND_DESIGN_SYS': system},
-        model=client.model,
-        adopted_models=client.accepted_models(ctx.node),
-        alias_algorithm=BLIND_ALIAS_ALGORITHM,
-        truth_sha256=truth_sha256,
-    )
-    artifact = BlindCandidate.model_validate({
-        **business, '_provenance': provenance,
+    """legacy 包装；agent 也走同一 prepare/evaluate/finalize 业务路。"""
+    prepared = prepare_design_candidate(ctx)
+    response = request_design_candidate(ctx, client, prepared)
+    evaluation = evaluate_design_candidate(ctx, client, prepared, response)
+    return finalize_design_candidate(ctx, client, prepared, evaluation)
+
+
+def _assert_plan_current(
+        ctx: RunContext, prepared: PlanCandidateContext,
+) -> None:
+    _live_code_guard(ctx, where='stage4.plan')
+    with ctx.validation_reads():
+        (
+            system, user, _store, up, _candidate, candidate_raw,
+            candidate_file_sha, subject, _catalog,
+        ) = _binding_request(ctx)
+    current_input = _canonical_sha256({
+        'candidate': candidate_raw,
+        'candidate_file_sha256': candidate_file_sha,
+        'candidate_subject_sha256': subject,
+        'main_text': up.main_text,
+        'blueprints': up.blueprints,
+        'global_grounding': up.global_g,
     })
-    store.write(CANDIDATE_REL, artifact)
-    _note_adoption(
-        ctx, client, purpose=ctx.node, rel=CANDIDATE_REL, artifact=artifact)
-    return artifact
+    if (system != prepared.system or user != prepared.user
+            or candidate_raw != prepared.candidate_raw
+            or candidate_file_sha != prepared.candidate_file_sha256
+            or subject != prepared.subject_sha256
+            or current_input != prepared.input_sha256):
+        raise ProvenanceRefused(
+            'stage4.plan 运行期间 candidate/证据/prompt 发生漂移')
+    ctx.require_observed_roots_current()
+
+
+def _own_stage4_tail(ctx: RunContext) -> Mapping[str, Any] | None:
+    if not _uses_agent_runs(ctx):
+        return None
+    from novel.llm import stage4_runs
+    with stage4_runs.commit_ownership(ctx.novel_dir):
+        stage4_runs.refuse_foreign_commit_reservations(ctx)
+        return stage4_runs.committed(ctx) or stage4_runs.prepared(ctx)
+
+
+def prepare_plan_candidate(
+        ctx: RunContext, *, chapters: tuple[int, ...] = (),
+) -> PlanCandidateContext:
+    """冻结 B 的 A 候选与证据 allowlist；所有前置都在 wire 前。"""
+    if chapters:
+        raise TerminalState(
+            'Stage4 v4 不接受 --chapters；重规划须整书重走 '
+            'stage4.design → stage4.plan')
+    uses_agent = _uses_agent_runs(ctx)
+    # legacy 的历史早退比 RunContext 其余字段更早；单元测试与
+    # 真实 CLI 都依赖它在 prompt/lock/transport 之前停止。
+    if (not uses_agent
+            and current_infeasible_binding(ArtifactStore(ctx)) is not None):
+        raise TerminalState(
+            'Stage4B 已对当前 Stage4A 候选落盘 fresh typed infeasible 结论；'
+            '不得重复执行同一 B（本次尚未调用 LLM）。请另行预览并批准 '
+            '`stage4.design --replan`，新候选落盘后再单独确认 stage4.plan')
+    if getattr(ctx, 'node', None) != 'stage4.plan':
+        raise ValueError(
+            'prepare_plan_candidate 只接受 stage4.plan，'
+            f'实得 {getattr(ctx, "node", None)!r}')
+    tail = _own_stage4_tail(ctx)
+    _refuse_foreign_before_wire(ctx)
+    # 只有本 run 的 prepared/committed 尾窗可穿过这条早退：它是零 wire
+    # 收尾，不是对同一 A 再付费。
+    if (uses_agent and tail is None
+            and current_infeasible_binding(ArtifactStore(ctx)) is not None):
+        raise TerminalState(
+            'Stage4B 已对当前 Stage4A 候选落盘 fresh typed infeasible 结论；'
+            '不得重复执行同一 B（本次尚未调用 LLM）。请另行预览并批准 '
+            '`stage4.design --replan`，新候选落盘后再单独确认 stage4.plan')
+    (
+        system, user, store, up, candidate, candidate_raw,
+        candidate_file_sha, subject, catalog,
+    ) = _binding_request(ctx)
+    input_sha256 = _canonical_sha256({
+        'candidate': candidate_raw,
+        'candidate_file_sha256': candidate_file_sha,
+        'candidate_subject_sha256': subject,
+        'main_text': up.main_text,
+        'blueprints': up.blueprints,
+        'global_grounding': up.global_g,
+    })
+    prepared = PlanCandidateContext(
+        system=system,
+        user=user,
+        store=store,
+        upstream=up,
+        candidate=candidate,
+        candidate_raw=candidate_raw,
+        candidate_file_sha256=candidate_file_sha,
+        subject_sha256=subject,
+        catalog=catalog,
+        input_sha256=input_sha256,
+        validator=_binding_validator(
+            candidate=candidate_raw,
+            subject=subject,
+            catalog=catalog,
+            up=up,
+            store=store,
+        ),
+    )
+    _assert_plan_current(ctx, prepared)
+    if _uses_agent_runs(ctx):
+        from novel.llm import stage4_runs
+        stage4_runs.ensure_run(
+            ctx,
+            input_sha256=input_sha256,
+            system=system,
+            user=user,
+            response_model=EvidenceBindingResponse,
+            max_tokens=prompts.EVIDENCE_BIND_MAX_TOKENS,
+        )
+    return prepared
+
+
+def _plan_checkpoint_state(
+        response: EvidenceBindingResponse,
+        compiled: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    return {
+        # 一份 accepted candidate 可能随后被业务 HARD 拒稿；是否终态由
+        # commit journal 决定，checkpoint 不抢先把它叫作 terminal。
+        'kind': 'stage4-plan-candidate',
+        'status': response.status,
+        'response_sha256': _canonical_sha256(
+            response.model_dump(by_alias=True, mode='json')),
+        'compiled_sha256': (
+            None if compiled is None else _canonical_sha256(dict(compiled))),
+    }
+
+
+def _ask_and_checkpoint_plan_candidate(
+        ctx: RunContext, source: Any, prepared: PlanCandidateContext,
+) -> EvidenceBindingResponse:
+    """消费原始请求或已经排队的 feedback，并追加一份 accepted revision。"""
+    from novel.llm import stage4_runs
+
+    _assert_plan_current(ctx, prepared)
+    response = source.ask_json(
+        prepared.system,
+        prepared.user,
+        model_cls=EvidenceBindingResponse,
+        purpose=ctx.node,
+        max_tokens=prompts.EVIDENCE_BIND_MAX_TOKENS,
+        # agent validator 只守可物化边界；联合业务 HARD 在 evaluate 后排队。
+        validator=prepared.validator,
+        recovery_policy=stage4_runs.recovery_policy(ctx.node),
+    )
+    if response.status == 'bound' and prepared.validator.compiled is None:
+        raise ProvenanceRefused(
+            'stage4.plan source 返回 bound 但未经唯一 compiler validator')
+    stage4_runs.write_checkpoint(
+        ctx,
+        input_sha256=prepared.input_sha256,
+        system=prepared.system,
+        user=prepared.user,
+        response_model=EvidenceBindingResponse,
+        max_tokens=prompts.EVIDENCE_BIND_MAX_TOKENS,
+        response_payload=response.model_dump(by_alias=True, mode='json'),
+        acceptance=source.accepted_checkpoint(ctx.node),
+        state_payload=_plan_checkpoint_state(
+            response, prepared.validator.compiled),
+        revision_key='candidate',
+    )
+    return response
+
+
+def request_plan_candidate(
+        ctx: RunContext, source: Any, prepared: PlanCandidateContext,
+) -> EvidenceBindingResponse:
+    """取得首份 B 候选；优先恢复 latest accepted revision，缺失才发 wire。"""
+    _assert_plan_current(ctx, prepared)
+    if _uses_agent_runs(ctx):
+        _require_agent_bridge(ctx, source)
+        from novel.llm import stage4_runs
+        restored = stage4_runs.restore_checkpoint(
+            ctx,
+            input_sha256=prepared.input_sha256,
+            system=prepared.system,
+            user=prepared.user,
+            response_model=EvidenceBindingResponse,
+            max_tokens=prompts.EVIDENCE_BIND_MAX_TOKENS,
+            validator=prepared.validator,
+        )
+        if restored is not None:
+            if (restored.revision_key != 'candidate'
+                    or restored.state_payload != _plan_checkpoint_state(
+                        restored.value, prepared.validator.compiled)):
+                raise ProvenanceRefused(
+                    'stage4.plan latest checkpoint 的业务 progress_state 不闭合')
+            source.restore_checkpoint_acceptance(
+                ctx.node,
+                restored.acceptance,
+                system=prepared.system,
+                user=prepared.user,
+                max_tokens=prompts.EVIDENCE_BIND_MAX_TOKENS,
+                recovery_policy=stage4_runs.recovery_policy(ctx.node),
+            )
+            return restored.value
+        return _ask_and_checkpoint_plan_candidate(ctx, source, prepared)
+    legacy_validator = _binding_validator(
+        candidate=prepared.candidate_raw,
+        subject=prepared.subject_sha256,
+        catalog=prepared.catalog,
+        up=prepared.upstream,
+        store=prepared.store,
+        include_business_hard=True,
+    )
+    return source.ask_json(
+        prepared.system,
+        prepared.user,
+        model_cls=EvidenceBindingResponse,
+        purpose=ctx.node,
+        max_tokens=prompts.EVIDENCE_BIND_MAX_TOKENS,
+        # legacy 的真实调用形态保持不变：业务 HARD 仍由 ask_json validator
+        # 在 LlmClient 内按旧重试策略处理，不要求它实现 agent feedback bridge。
+        validator=legacy_validator,
+    )
+
+
+def _materialize_binding(
+        ctx: RunContext, source: Any, prepared: PlanCandidateContext,
+        response: EvidenceBindingResponse, *, settle: bool,
+) -> tuple[EvidenceBinding, dict[str, Any] | None]:
+    why = prepared.validator(
+        response,
+        ChatResponse(content=response.model_dump_json(by_alias=True),
+                     model=source.model),
+    )
+    if why is not None:
+        raise ProvenanceRefused(f'stage4.plan 候选绕过响应闸：{why}')
+    if response.status == 'bound' and prepared.validator.compiled is None:
+        raise ProvenanceRefused('stage4.plan bound 候选没有唯一编译树')
+    _attempt, adopted_models = _accepted_identity(ctx, source)
+    provenance = ctx.llm_provenance(
+        EvidenceBindingProvenance,
+        prompts={'EVIDENCE_BIND_SYS': prepared.system},
+        model=source.model,
+        adopted_models=adopted_models,
+        settle=settle,
+        candidate_sha256=prepared.subject_sha256,
+    )
+    binding = EvidenceBinding.model_validate({
+        **response.model_dump(by_alias=True),
+        '_provenance': provenance,
+    })
+    return binding, prepared.validator.compiled
+
+
+def evaluate_plan_candidate(
+        ctx: RunContext, source: Any, prepared: PlanCandidateContext,
+        response: EvidenceBindingResponse,
+) -> PlanCandidateEvaluation:
+    """铸 provisional binding、冻结编译树并跑联合业务 HARD；无终态副作用。"""
+    _assert_plan_current(ctx, prepared)
+    binding, compiled = _materialize_binding(
+        ctx, source, prepared, response, settle=False)
+    if compiled is None:
+        hard_hits: tuple[str, ...] = ()
+        feedback: tuple[dict[str, object], ...] = ()
+    else:
+        hard_hits, feedback = _candidate_bundle_verdict(
+            compiled, prepared.upstream)
+    attempt_id, adopted_models = _accepted_identity(ctx, source)
+    payload = binding.model_dump(by_alias=True, mode='json')
+    return PlanCandidateEvaluation(
+        response=response,
+        binding=binding,
+        compiled=compiled,
+        requested_model=source.model,
+        adopted_models=adopted_models,
+        attempt_id=attempt_id,
+        input_sha256=prepared.input_sha256,
+        binding_sha256=_canonical_sha256(payload),
+        compiled_sha256=(
+            None if compiled is None else _canonical_sha256(compiled)),
+        hard_hits=hard_hits,
+        feedback=feedback,
+    )
+
+
+def _assert_plan_evaluation(
+        ctx: RunContext, source: Any, prepared: PlanCandidateContext,
+        evaluation: PlanCandidateEvaluation,
+) -> None:
+    attempt, models = _accepted_identity(ctx, source)
+    if evaluation.compiled is None:
+        current_hits: tuple[str, ...] = ()
+        current_feedback: tuple[dict[str, object], ...] = ()
+    else:
+        current_hits, current_feedback = _candidate_bundle_verdict(
+            evaluation.compiled, prepared.upstream)
+    if (evaluation.input_sha256 != prepared.input_sha256
+            or source.model != evaluation.requested_model
+            or attempt != evaluation.attempt_id
+            or models != evaluation.adopted_models
+            or _canonical_sha256(evaluation.binding.model_dump(
+                by_alias=True, mode='json')) != evaluation.binding_sha256
+            or (None if evaluation.compiled is None
+                else _canonical_sha256(evaluation.compiled))
+            != evaluation.compiled_sha256
+            or current_hits != evaluation.hard_hits
+            or current_feedback != evaluation.feedback):
+        raise ProvenanceRefused(
+            'stage4.plan evaluation 的 model/attempt/binding/compiled/verdict 漂移')
+
+
+def _plan_finalization_payload(
+        ctx: RunContext, prepared: PlanCandidateContext,
+        binding: EvidenceBinding, compiled: Mapping[str, Any] | None,
+        *, hard_hits: tuple[str, ...] = (),
+) -> dict[str, Any]:
+    from novel.llm import agent_runs
+    status = binding.status
+    if status == 'infeasible' and hard_hits:
+        raise ProvenanceRefused(
+            'stage4.plan typed infeasible 不能夹带 bound 业务 HARD')
+    delivery_kind = (
+        'infeasible' if status == 'infeasible'
+        else ('bound-HARD' if hard_hits else 'bound-clean'))
+    payload: dict[str, Any] = {
+        'delivery_kind': delivery_kind,
+        'input_sha256': prepared.input_sha256,
+        'candidate_file_sha256': prepared.candidate_file_sha256,
+        'candidate_subject_sha256': prepared.subject_sha256,
+        'binding_sha256': _canonical_sha256(
+            binding.model_dump(by_alias=True, mode='json')),
+        'compiled_sha256': (
+            None if compiled is None else _canonical_sha256(dict(compiled))),
+        'hard_hits': list(hard_hits),
+    }
+    if status == 'infeasible':
+        # typed infeasible 不得借机改动旧 plan/context/INVALID。这三条不是
+        # touched，但作为「必须原样」的终态投影写入 journal。
+        payload['preserved_file_sha256s'] = {
+            rel: agent_runs.file_sha256(ctx, rel)
+            for rel in (REL, CTX_REL, _INVALID)
+        }
+    elif hard_hits:
+        # bound-HARD 只允许写 binding 与 plan.INVALID；既有正式 plan/context
+        # 是下游当前仍消费的 byte set，必须从 prepare 到 committed 始终逐字不变。
+        payload['preserved_file_sha256s'] = {
+            rel: agent_runs.file_sha256(ctx, rel)
+            for rel in (REL, CTX_REL)
+        }
+    return payload
+
+
+def _assert_preserved_infeasible(
+        ctx: RunContext, finalization: Mapping[str, Any],
+) -> None:
+    from novel.llm import agent_runs
+    expected = finalization.get('preserved_file_sha256s')
+    if (not isinstance(expected, Mapping)
+            or set(expected) != {REL, CTX_REL, _INVALID}):
+        raise ProvenanceRefused(
+            'stage4.plan infeasible finalization 缺 preserved byte set')
+    current = {rel: agent_runs.file_sha256(ctx, rel) for rel in expected}
+    if current != dict(expected):
+        raise ProvenanceRefused(
+            'stage4.plan typed infeasible 路径改动了旧 plan/context/INVALID')
+
+
+def _assert_preserved_plan_hard(
+        ctx: RunContext, finalization: Mapping[str, Any],
+) -> None:
+    """bound-HARD 只落问题稿，不得碰旧正式 plan/context。"""
+    from novel.llm import agent_runs
+
+    expected = finalization.get('preserved_file_sha256s')
+    if (not isinstance(expected, Mapping)
+            or set(expected) != {REL, CTX_REL}):
+        raise ProvenanceRefused(
+            'stage4.plan bound-HARD finalization 缺 preserved byte set')
+    current = {rel: agent_runs.file_sha256(ctx, rel) for rel in expected}
+    if current != dict(expected):
+        raise ProvenanceRefused(
+            'stage4.plan bound-HARD 路径改动了旧正式 plan/context')
+
+
+def _expected_context_artifact(ctx: RunContext) -> WriterContext:
+    """从已落稳的 plan 用 context 产地身份组出确定性期望字节。"""
+    cctx = context_ctx(ctx)
+    store = ArtifactStore(cctx)
+    up = _Upstreams(cctx, store)
+    plan = store.read(PlanChapters, REL)
+    plan_raw = plan.model_dump(by_alias=True)
+    assert up.global_g is not None
+    asm = build_writer_context(
+        plan_raw, up.global_g, up.blueprints, up.main_text)
+    return WriterContext.model_validate({
+        **asm.ctx,
+        '_provenance': cctx.free_provenance(CtxProvenance),
+    })
+
+
+def verify_plan_delivery(
+        ctx: RunContext, prepared: PlanCandidateContext,
+        expected_binding: EvidenceBinding,
+        expected_plan: PlanChapters | None,
+) -> tuple[EvidenceBinding, PlanChapters | None, WriterContext | None,
+           CheckReport | None]:
+    """B primary 与可选 plan/context bundle 的 typed/fresh/HARD 终验。"""
+    _assert_plan_current(ctx, prepared)
+    store = ArtifactStore(ctx)
+    with ctx.validation_reads():
+        binding, _raw = store.read_own(
+            EvidenceBinding, BINDING_REL, require_current=True)
+        binding_freshness = store.freshness(BINDING_REL)
+    if binding.model_dump(by_alias=True, mode='json') != expected_binding.model_dump(
+            by_alias=True, mode='json'):
+        raise ProvenanceRefused(
+            'stage4.plan binding readback 与本 run 终态候选不完全相等')
+    if binding_freshness.state != 'fresh':
+        raise ProvenanceRefused(
+            f'stage4.plan binding freshness={binding_freshness.state}/'
+            f'{binding_freshness.reason}')
+    if binding.status == 'infeasible':
+        if expected_plan is not None:
+            raise ProvenanceRefused('infeasible binding 不得带 expected plan')
+        return binding, None, None, None
+    if store.exists(_INVALID):
+        raise ProvenanceRefused(
+            f'stage4.plan clean bound 正式终验仍有 live {_INVALID}')
+    if expected_plan is None:
+        raise ProvenanceRefused('bound binding 缺 expected compiled plan')
+    with ctx.validation_reads():
+        plan, plan_raw = store.read_own(
+            PlanChapters, REL, require_current=True)
+        writer, _ctx_raw = store.read_own(
+            WriterContext, CTX_REL, require_current=True)
+        plan_freshness = store.freshness(REL)
+        context_freshness = store.freshness(CTX_REL)
+    if plan.model_dump(by_alias=True, mode='json') != expected_plan.model_dump(
+            by_alias=True, mode='json'):
+        raise ProvenanceRefused(
+            'stage4.plan compiled plan readback 与本 run 期望不完全相等')
+    expected_context = _expected_context_artifact(ctx)
+    if writer.model_dump(by_alias=True, mode='json') != expected_context.model_dump(
+            by_alias=True, mode='json'):
+        raise ProvenanceRefused(
+            'stage4.plan writer_context readback 与确定性组装结果不等')
+    if plan_freshness.state != 'fresh' or context_freshness.state != 'fresh':
+        raise ProvenanceRefused(
+            'stage4.plan/context readback 不 fresh：'
+            f'plan={plan_freshness.state}/{plan_freshness.reason}, '
+            f'context={context_freshness.state}/{context_freshness.reason}')
+    outcomes = _judge(store, plan_raw, prepared.upstream, with_ctx_link=True)
+    if hits := _hard_hits(outcomes):
+        raise ProvenanceRefused(
+            f'stage4.plan 正式 readback 仍有 HARD：{hits}')
+    report = _report(
+        ctx,
+        store,
+        outcomes,
+        plan.provenance.model_dump(by_alias=True),
+    )
+    return binding, plan, writer, report
+
+
+def _compiled_plan_artifact(
+        ctx: RunContext, prepared: PlanCandidateContext,
+        compiled: dict[str, Any], *, binding_file_sha256: str,
+) -> PlanChapters:
+    provenance = ctx.free_provenance(
+        PlanProvenance,
+        origin='compiled',
+        blind_candidate_sha256=prepared.candidate_file_sha256,
+        evidence_binding_sha256=binding_file_sha256,
+    )
+    data = dict(compiled)
+    data.pop('_provenance', None)
+    return PlanChapters.model_validate({**data, '_provenance': provenance})
+
+
+def _render_expected_invalid(
+        store: ArtifactStore, artifact: PlanChapters,
+) -> tuple[bytes, str]:
+    """用 ``ArtifactStore`` 的唯一 renderer 预演 ``write_invalid`` 最终字节。
+
+    journal 必须在写前知道 live INVALID 的 expected SHA，才能识别进程崩在
+    ``write_invalid`` 之后的合法恢复态。这里不复制 JSON 编码或路径算法；只复用
+    ``write_invalid`` 明示的两步 provenance 定位键变换，真正渲染仍由 store 完成。
+    """
+    source = artifact.provenance
+    pending = source.model_copy(update={
+        'gates_skipped': [],
+        'invalid_baseline_sha256': None,
+    })
+    preliminary = store._render(
+        _INVALID, artifact, prov_override=pending)
+    locator = hashlib.sha256(preliminary).hexdigest()
+    final_source = pending.model_copy(update={
+        'invalid_baseline_sha256': locator,
+    })
+    return (
+        store._render(_INVALID, artifact, prov_override=final_source),
+        locator,
+    )
+
+
+def _render_expected_invalid_bytes(
+        store: ArtifactStore, artifact: PlanChapters,
+) -> bytes:
+    return _render_expected_invalid(store, artifact)[0]
+
+
+def _write_prepared_invalid(
+        store: ArtifactStore, artifact: PlanChapters,
+) -> None:
+    """用可重放的 copy→snapshot→atomic-replace 落 prepared INVALID。
+
+    ``ArtifactStore.write_invalid`` 的常规路会先把旧 live INVALID
+    **move** 进 ``_rounds``。Python 异常可由 history transaction 回滚，
+    但进程在 move 与新 live replace 之间被 kill 时，盘上会短暂
+    没有 live；commit journal 既不是 baseline 也不是 expected，只能把
+    自己的半步误报成第三方漂移。
+
+    agent prepared 路已有书级 ownership，因而可以把同一语义改成：
+
+    1. 旧 live 只 **copy** 入它自己的不可变 round（重放严格同字节）；
+    2. 新 INVALID 的 content-addressed baseline 先幂等写稳；
+    3. 最后一次同目录 atomic replace 切换 live。
+
+    任意 kill 点下 live 都是 journal 认得的 baseline 或 expected；
+    不复制 JSON 编码，render/round/baseline/atomic replace 仍全部由
+    ``ArtifactStore`` 的唯一落点执行。
+    """
+    data, locator = _render_expected_invalid(store, artifact)
+    store._verify_round_trip(_INVALID, PlanChapters, data)
+    if store.exists(_INVALID):
+        store.archive_round(_INVALID, keep=True)
+    baseline = store.path(store._revalidation_baseline_rel(_INVALID, locator))
+    store._write_immutable(baseline, data)
+    store._replace_atomically(store.path(_INVALID), data)
+
+
+def _verify_plan_hard_delivery(
+        ctx: RunContext, prepared: PlanCandidateContext,
+        expected_binding: EvidenceBinding,
+        expected_invalid: PlanChapters,
+        expected_hits: tuple[str, ...],
+        finalization: Mapping[str, Any],
+) -> tuple[EvidenceBinding, PlanChapters]:
+    """bound-HARD 的 binding/INVALID typed readback 与旧正式 byte set 终验。"""
+    from novel.llm import agent_runs
+
+    _assert_plan_current(ctx, prepared)
+    if not expected_hits:
+        raise ProvenanceRefused('stage4.plan bound-HARD 终验缺 HARD 命中')
+    store = ArtifactStore(ctx)
+    with ctx.validation_reads():
+        binding, _binding_raw = store.read_own(
+            EvidenceBinding, BINDING_REL, require_current=True)
+        invalid, invalid_raw = store.read_own(
+            PlanChapters, _INVALID, require_current=True)
+        binding_freshness = store.freshness(BINDING_REL)
+        invalid_freshness = store.freshness(_INVALID)
+    if binding.model_dump(by_alias=True, mode='json') != expected_binding.model_dump(
+            by_alias=True, mode='json'):
+        raise ProvenanceRefused(
+            'stage4.plan bound-HARD binding readback 与终态候选不等')
+    if binding_freshness.state != 'fresh' or invalid_freshness.state != 'fresh':
+        raise ProvenanceRefused(
+            'stage4.plan bound-HARD readback 不 fresh：'
+            f'binding={binding_freshness.state}/{binding_freshness.reason}, '
+            f'INVALID={invalid_freshness.state}/{invalid_freshness.reason}')
+
+    expected_payload = expected_invalid.model_dump(by_alias=True, mode='json')
+    landed_payload = invalid.model_dump(by_alias=True, mode='json')
+    expected_provenance = expected_payload.get('_provenance')
+    landed_provenance = landed_payload.get('_provenance')
+    if isinstance(expected_provenance, dict) and isinstance(landed_provenance, dict):
+        expected_provenance['gates_skipped'] = landed_provenance.get(
+            'gates_skipped')
+        expected_provenance['invalid_baseline_sha256'] = landed_provenance.get(
+            'invalid_baseline_sha256')
+    if expected_payload != landed_payload:
+        raise ProvenanceRefused(
+            'stage4.plan bound-HARD INVALID typed readback 与最后 accepted 候选不等')
+    expected_file_sha = agent_runs.canonical_sha256(
+        _render_expected_invalid_bytes(store, expected_invalid))
+    if agent_runs.file_sha256(ctx, _INVALID) != expected_file_sha:
+        raise ProvenanceRefused(
+            'stage4.plan bound-HARD INVALID 正式字节与预演结果不等')
+
+    candidate_hits, _feedback = _candidate_bundle_verdict(
+        invalid_raw, prepared.upstream)
+    if candidate_hits != expected_hits:
+        raise ProvenanceRefused(
+            'stage4.plan bound-HARD INVALID 在 typed readback 后的联合判据漂移：'
+            f'expected={list(expected_hits)}, landed={list(candidate_hits)}')
+    formal_hits = tuple(_hard_hits(_judge(
+        store, invalid_raw, prepared.upstream, with_ctx_link=False)))
+    unexpected = sorted(set(formal_hits) - set(expected_hits))
+    if unexpected:
+        raise ProvenanceRefused(
+            f'stage4.plan bound-HARD INVALID 新增正式字节/引用 HARD：{unexpected}')
+    _assert_preserved_plan_hard(ctx, finalization)
+    return binding, invalid
+
+
+def _land_bound_hard_bundle(
+        ctx: RunContext, prepared: PlanCandidateContext,
+        binding: EvidenceBinding, compiled: dict[str, Any],
+        journal: Mapping[str, Any], *, binding_state: str,
+        expected_binding_sha: str,
+        finalization: Mapping[str, Any],
+) -> PlanChapters:
+    """按 prepared journal 补齐 ``binding + plan.INVALID``，绝不碰旧正式计划。"""
+    from novel.llm import agent_runs, stage4_runs
+
+    _assert_preserved_plan_hard(ctx, finalization)
+    if binding_state == 'baseline':
+        _assert_plan_current(ctx, prepared)
+        prepared.store.write(BINDING_REL, binding)
+    _assert_plan_current(ctx, prepared)
+    _assert_preserved_plan_hard(ctx, finalization)
+    _same_binding, binding_file_sha = prepared.store.read_with_sha256(
+        EvidenceBinding, BINDING_REL)
+    if binding_file_sha != expected_binding_sha:
+        raise ProvenanceRefused(
+            'stage4.plan bound-HARD binding 字节与 prepared 期望不等')
+    invalid_artifact = _compiled_plan_artifact(
+        ctx, prepared, compiled,
+        binding_file_sha256=binding_file_sha)
+    expected_invalid_sha = agent_runs.canonical_sha256(
+        _render_expected_invalid_bytes(prepared.store, invalid_artifact))
+    invalid_state = stage4_runs.target_state(
+        ctx, journal, _INVALID,
+        expected_file_sha256=expected_invalid_sha)
+    _assert_preserved_plan_hard(ctx, finalization)
+    if invalid_state == 'baseline':
+        _assert_plan_current(ctx, prepared)
+        _write_prepared_invalid(prepared.store, invalid_artifact)
+    _assert_plan_current(ctx, prepared)
+    _assert_preserved_plan_hard(ctx, finalization)
+    stage4_runs.target_state(
+        ctx, journal, _INVALID,
+        expected_file_sha256=expected_invalid_sha)
+    return invalid_artifact
+
+
+def _land_bound_bundle(
+        ctx: RunContext, prepared: PlanCandidateContext,
+        binding: EvidenceBinding, compiled: dict[str, Any],
+        journal: Mapping[str, Any], *, binding_state: str,
+        expected_binding_sha: str,
+) -> PlanChapters:
+    """在一个普通异常可回滚的字节集中补完 bound bundle。
+
+    进程 kill 不会跑 Python rollback；那条路由 prepared journal 逐路径
+    识别 baseline/expected 继续，所以二者不互相冒充。
+    """
+    from novel.llm import agent_runs, stage4_runs
+    with prepared.store.history_transaction(BINDING_REL, REL, CTX_REL):
+        if binding_state == 'baseline':
+            for rel in (REL, CTX_REL, _INVALID):
+                stage4_runs.target_state(ctx, journal, rel)
+            _assert_plan_current(ctx, prepared)
+            prepared.store.write(BINDING_REL, binding)
+        _assert_plan_current(ctx, prepared)
+        prepared.store.read(EvidenceBinding, BINDING_REL)
+        _same_binding, binding_file_sha = prepared.store.read_with_sha256(
+            EvidenceBinding, BINDING_REL)
+        if binding_file_sha != expected_binding_sha:
+            raise ProvenanceRefused(
+                'stage4.plan binding 正式字节与 prepared 期望不等')
+        plan_artifact = _compiled_plan_artifact(
+            ctx, prepared, compiled,
+            binding_file_sha256=binding_file_sha)
+        expected_plan_sha = agent_runs.canonical_sha256(
+            prepared.store._render(REL, plan_artifact))
+        plan_state = stage4_runs.target_state(
+            ctx, journal, REL, expected_file_sha256=expected_plan_sha)
+        if plan_state == 'baseline':
+            stage4_runs.target_state(ctx, journal, CTX_REL)
+            stage4_runs.target_state(ctx, journal, _INVALID)
+            _assert_plan_current(ctx, prepared)
+            _gate_and_write(
+                ctx, prepared.store, compiled, prepared.upstream,
+                provenance=plan_artifact.provenance)
+        _assert_plan_current(ctx, prepared)
+        expected_context = _expected_context_artifact(ctx)
+        expected_context_sha = agent_runs.canonical_sha256(
+            ArtifactStore(context_ctx(ctx))._render(
+                CTX_REL, expected_context))
+        context_state = stage4_runs.target_state(
+            ctx, journal, CTX_REL,
+            expected_file_sha256=expected_context_sha)
+        if context_state == 'baseline':
+            _assert_plan_current(ctx, prepared)
+            run_context(ctx)
+        invalid_state = stage4_runs.target_state(
+            ctx, journal, _INVALID, expected_absent=True)
+        if invalid_state == 'baseline':
+            # 崩溃可能发生在 plan/context 已落、但 store.write 尚未来得及退休
+            # 旧 INVALID 的窄窗；恢复必须补完这一步，不能把 baseline 当成 absent。
+            _assert_plan_current(ctx, prepared)
+            prepared.store.retire_invalid(REL)
+        stage4_runs.target_state(
+            ctx, journal, _INVALID, expected_absent=True)
+        return plan_artifact
+
+
+def finalize_plan_candidate(
+        ctx: RunContext, source: Any, prepared: PlanCandidateContext,
+        evaluation: PlanCandidateEvaluation,
+) -> CheckReport | EvidenceBinding:
+    """B 的唯一 settle/write/readback/adoption/committed 边界。"""
+    _assert_plan_evaluation(ctx, source, prepared, evaluation)
+    _assert_plan_current(ctx, prepared)
+    if not _uses_agent_runs(ctx):
+        binding, compiled = _materialize_binding(
+            ctx, source, prepared, evaluation.response, settle=True)
+        if (None if compiled is None else _canonical_sha256(compiled)) \
+                != evaluation.compiled_sha256:
+            raise ProvenanceRefused(
+                'stage4.plan provisional/final compiled 不一致')
+        if binding.model_dump(by_alias=True, mode='json') != \
+                evaluation.binding.model_dump(by_alias=True, mode='json'):
+            raise ProvenanceRefused(
+                'stage4.plan provisional/final binding 不一致')
+        prepared.store.write(BINDING_REL, binding)
+        _note_adoption(
+            ctx, source, purpose=ctx.node,
+            rel=BINDING_REL, artifact=binding)
+        if binding.status == 'infeasible':
+            return binding
+        assert compiled is not None
+        prepared.store.read(EvidenceBinding, BINDING_REL)
+        _same_binding, binding_file_sha = prepared.store.read_with_sha256(
+            EvidenceBinding, BINDING_REL)
+        provenance = ctx.free_provenance(
+            PlanProvenance,
+            origin='compiled',
+            blind_candidate_sha256=prepared.candidate_file_sha256,
+            evidence_binding_sha256=binding_file_sha,
+        )
+        return _gate_and_write(
+            ctx, prepared.store, compiled, prepared.upstream,
+            provenance=provenance)
+
+    from novel.llm import agent_runs, stage4_runs
+    with stage4_runs.commit_ownership(ctx.novel_dir):
+        _assert_plan_current(ctx, prepared)
+        stage4_runs.refuse_foreign_commit_reservations(ctx)
+        committed = stage4_runs.committed(ctx)
+        if committed is not None:
+            compiled = evaluation.compiled
+            expected_binding = evaluation.binding
+            # bound-HARD 原始交付先结算 LLM binding，再为确定性
+            # INVALID plan 铸造一份 0-用量 provenance。新进程恢复时
+            # ``claim_prior_attempts`` 会把旧调用重放进当前 usage 窗口；
+            # 若直接 ``free_provenance``，就会把 binding 的 token 错记到
+            # deterministic plan，与已落 INVALID 不同字节。这里只在
+            # provider session 未被伪恢复的 durable-checkpoint 路径重放原始
+            # 结算边界，不发 wire。
+            if evaluation.hard_hits and source.provider_session_id is None:
+                expected_binding, restored_compiled = _materialize_binding(
+                    ctx, source, prepared, evaluation.response, settle=True)
+                if (restored_compiled is None
+                        or _canonical_sha256(restored_compiled)
+                        != evaluation.compiled_sha256
+                        or expected_binding.model_dump(
+                            by_alias=True, mode='json')
+                        != evaluation.binding.model_dump(
+                            by_alias=True, mode='json')):
+                    raise ProvenanceRefused(
+                        'stage4.plan committed bound-HARD 恢复结算后'
+                        ' binding/compiled 漂移')
+            finalization = _plan_finalization_payload(
+                ctx, prepared, expected_binding, compiled,
+                hard_hits=evaluation.hard_hits)
+            if evaluation.hard_hits:
+                if expected_binding.status != 'bound' or compiled is None:
+                    raise ProvenanceRefused(
+                        'stage4.plan committed bound-HARD 缺 binding/compiled')
+                _same_binding, binding_file_sha = ArtifactStore(
+                    ctx).read_with_sha256(EvidenceBinding, BINDING_REL)
+                expected_invalid = _compiled_plan_artifact(
+                    ctx, prepared, compiled,
+                    binding_file_sha256=binding_file_sha)
+                landed_binding, _landed_invalid = _verify_plan_hard_delivery(
+                    ctx, prepared, expected_binding, expected_invalid,
+                    evaluation.hard_hits, finalization)
+                landed_payload = landed_binding.model_dump(
+                    by_alias=True, mode='json')
+                stage4_runs.verify_committed_delivery(
+                    ctx,
+                    committed,
+                    primary_payload=landed_payload,
+                    finalization_payload=finalization,
+                    landed_payloads={BINDING_REL: landed_payload},
+                )
+                _finish_restored_agent_session(
+                    ctx,
+                    source,
+                    delivery_state='blocked',
+                    error_kind='checkpoint_business_rejected',
+                )
+                raise GateBlocked(
+                    f'{len(evaluation.hard_hits)} 条阻断级判据在 agent 预算耗尽后'
+                    f'仍命中：{list(evaluation.hard_hits)}。最后 accepted 问题稿已存 '
+                    f'`{_INVALID}`，旧正式计划与上下文未覆盖；用 '
+                    '`stage4.plan --revalidate --actor <id> --reason <why>` '
+                    '走 0 成本恢复',
+                    invalid_path=str(prepared.store.path(_INVALID)),
+                )
+            expected_plan: PlanChapters | None = None
+            if evaluation.binding.status == 'bound':
+                with ctx.validation_reads():
+                    expected_plan, _raw = ArtifactStore(ctx).read_own(
+                        PlanChapters, REL, require_current=True)
+            landed_binding, landed_plan, landed_ctx, report = verify_plan_delivery(
+                ctx, prepared, evaluation.binding, expected_plan)
+            finalization = _plan_finalization_payload(
+                ctx, prepared, landed_binding, compiled,
+                hard_hits=evaluation.hard_hits)
+            if landed_binding.status == 'infeasible':
+                _assert_preserved_infeasible(ctx, finalization)
+            landed_payloads = {
+                BINDING_REL: landed_binding.model_dump(
+                    by_alias=True, mode='json')}
+            if landed_plan is not None and landed_ctx is not None:
+                landed_payloads[REL] = landed_plan.model_dump(
+                    by_alias=True, mode='json')
+                landed_payloads[CTX_REL] = landed_ctx.model_dump(
+                    by_alias=True, mode='json')
+            stage4_runs.verify_committed_delivery(
+                ctx,
+                committed,
+                primary_payload=landed_payloads[BINDING_REL],
+                finalization_payload=finalization,
+                landed_payloads=landed_payloads,
+            )
+            _finish_restored_agent_session(
+                ctx, source, delivery_state='delivered', error_kind=None)
+            if landed_binding.status == 'infeasible':
+                return landed_binding
+            if report is None:
+                raise ProvenanceRefused(
+                    'stage4.plan committed bound bundle 缺终验报告')
+            return report
+
+        binding, compiled = _materialize_binding(
+            ctx, source, prepared, evaluation.response, settle=True)
+        if (None if compiled is None else _canonical_sha256(compiled)) \
+                != evaluation.compiled_sha256:
+            raise ProvenanceRefused(
+                'stage4.plan provisional/final compiled 不一致')
+        binding_payload = binding.model_dump(by_alias=True, mode='json')
+        if (binding_payload != evaluation.binding.model_dump(
+                by_alias=True, mode='json')
+                or _canonical_sha256(binding_payload) != evaluation.binding_sha256):
+            raise ProvenanceRefused(
+                'stage4.plan provisional/final binding 不一致')
+        finalization = _plan_finalization_payload(
+            ctx, prepared, binding, compiled,
+            hard_hits=evaluation.hard_hits)
+        touched = (
+            (BINDING_REL,) if binding.status == 'infeasible'
+            else ((BINDING_REL, _INVALID) if evaluation.hard_hits
+                  else (BINDING_REL, REL, CTX_REL, _INVALID)))
+        journal = stage4_runs.prepare_commit(
+            ctx,
+            primary_artifact=BINDING_REL,
+            primary_payload=binding_payload,
+            finalization_payload=finalization,
+            touched_paths=touched,
+            attempt_id=evaluation.attempt_id,
+        )
+        expected_binding_sha = agent_runs.canonical_sha256(
+            prepared.store._render(BINDING_REL, binding))
+        binding_state = stage4_runs.target_state(
+            ctx, journal, BINDING_REL,
+            expected_file_sha256=expected_binding_sha)
+        _assert_plan_current(ctx, prepared)
+        if binding.status == 'infeasible':
+            if binding_state == 'baseline':
+                prepared.store.write(BINDING_REL, binding)
+            _assert_plan_current(ctx, prepared)
+            landed, _plan, _writer, _report_value = verify_plan_delivery(
+                ctx, prepared, binding, None)
+            _assert_preserved_infeasible(ctx, finalization)
+            landed_payload = landed.model_dump(by_alias=True, mode='json')
+            _assert_plan_current(ctx, prepared)
+            purpose, attempt_id = stage4_runs.restore_commit_adoption(ctx, journal)
+            _note_adoption_attempt(
+                ctx,
+                purpose=purpose,
+                attempt_id=attempt_id,
+                rel=BINDING_REL,
+                artifact=landed,
+            )
+            _assert_plan_current(ctx, prepared)
+            _assert_preserved_infeasible(ctx, finalization)
+            stage4_runs.mark_committed(
+                ctx,
+                primary_payload=landed_payload,
+                finalization_payload=finalization,
+                landed_payloads={BINDING_REL: landed_payload},
+            )
+            _finish_restored_agent_session(
+                ctx, source, delivery_state='delivered', error_kind=None)
+            return landed
+
+        assert compiled is not None
+        if evaluation.hard_hits:
+            invalid_artifact = _land_bound_hard_bundle(
+                ctx,
+                prepared,
+                binding,
+                compiled,
+                journal,
+                binding_state=binding_state,
+                expected_binding_sha=expected_binding_sha,
+                finalization=finalization,
+            )
+            _assert_plan_current(ctx, prepared)
+            landed_binding, _landed_invalid = _verify_plan_hard_delivery(
+                ctx, prepared, binding, invalid_artifact,
+                evaluation.hard_hits, finalization)
+            landed_payload = landed_binding.model_dump(
+                by_alias=True, mode='json')
+            _assert_plan_current(ctx, prepared)
+            _assert_preserved_plan_hard(ctx, finalization)
+            purpose, attempt_id = stage4_runs.restore_commit_adoption(ctx, journal)
+            _note_adoption_attempt(
+                ctx,
+                purpose=purpose,
+                attempt_id=attempt_id,
+                rel=BINDING_REL,
+                artifact=landed_binding,
+            )
+            _assert_plan_current(ctx, prepared)
+            _assert_preserved_plan_hard(ctx, finalization)
+            stage4_runs.mark_committed(
+                ctx,
+                primary_payload=landed_payload,
+                finalization_payload=finalization,
+                landed_payloads={BINDING_REL: landed_payload},
+            )
+            _finish_restored_agent_session(
+                ctx,
+                source,
+                delivery_state='blocked',
+                error_kind='checkpoint_business_rejected',
+            )
+            raise GateBlocked(
+                f'{len(evaluation.hard_hits)} 条阻断级判据在 agent 预算耗尽后'
+                f'仍命中：{list(evaluation.hard_hits)}。最后 accepted 问题稿已存 '
+                f'`{_INVALID}`，旧正式计划与上下文未覆盖；用 '
+                '`stage4.plan --revalidate --actor <id> --reason <why>` '
+                '走 0 成本恢复',
+                invalid_path=str(prepared.store.path(_INVALID)),
+            )
+
+        plan_artifact = _land_bound_bundle(
+            ctx,
+            prepared,
+            binding,
+            compiled,
+            journal,
+            binding_state=binding_state,
+            expected_binding_sha=expected_binding_sha,
+        )
+        _assert_plan_current(ctx, prepared)
+        landed_binding, landed_plan, landed_ctx, report = verify_plan_delivery(
+            ctx, prepared, binding, plan_artifact)
+        assert landed_plan is not None and landed_ctx is not None and report is not None
+        landed_payloads = {
+            BINDING_REL: landed_binding.model_dump(by_alias=True, mode='json'),
+            REL: landed_plan.model_dump(by_alias=True, mode='json'),
+            CTX_REL: landed_ctx.model_dump(by_alias=True, mode='json'),
+        }
+        _assert_plan_current(ctx, prepared)
+        purpose, attempt_id = stage4_runs.restore_commit_adoption(ctx, journal)
+        _note_adoption_attempt(
+            ctx,
+            purpose=purpose,
+            attempt_id=attempt_id,
+            rel=BINDING_REL,
+            artifact=landed_binding,
+        )
+        _assert_plan_current(ctx, prepared)
+        stage4_runs.mark_committed(
+            ctx,
+            primary_payload=landed_payloads[BINDING_REL],
+            finalization_payload=_plan_finalization_payload(
+                ctx, prepared, landed_binding, compiled,
+                hard_hits=evaluation.hard_hits),
+            landed_payloads=landed_payloads,
+        )
+        _finish_restored_agent_session(
+            ctx, source, delivery_state='delivered', error_kind=None)
+        return report
+
+
+def _queue_plan_validation_feedback(
+        ctx: RunContext, source: Any,
+        evaluation: PlanCandidateEvaluation,
+) -> bool:
+    """把业务 HARD 接到 live session，或接到 checkpoint 恢复的新 session。"""
+    rows = evaluation.feedback_rows()
+    if not evaluation.hard_hits or not rows:
+        raise ProvenanceRefused(
+            'stage4.plan 只有完整业务 HARD 反馈才能排入 executor')
+    missing = [
+        name for name in (
+            'queue_code_validation_feedback',
+            'queue_restored_code_validation_feedback',
+        )
+        if not callable(getattr(source, name, None))
+    ]
+    if missing:
+        raise ProvenanceRefused(
+            f'stage4.plan agent source 缺业务 feedback bridge {missing}')
+    if not hasattr(source, 'provider_session_id'):
+        raise ProvenanceRefused(
+            'stage4.plan agent source 不暴露 provider session 状态，'
+            '不能判断 live resume 与 checkpoint recovery')
+    if source.provider_session_id is None:
+        return source.queue_restored_code_validation_feedback(
+            rows, purpose=ctx.node)
+    return source.queue_code_validation_feedback(
+        rows, purpose=ctx.node)
 
 
 def run_plan(ctx: RunContext, client: Any, *,
@@ -758,58 +2382,33 @@ def run_plan(ctx: RunContext, client: Any, *,
     ``EvidenceBinding`` 交给 CLI 报 landed-red；它不是“什么都没
     产生”的 ``TerminalState``，也绝不会编译或覆盖最终计划。
     """
-    if chapters:
-        raise TerminalState(
-            'Stage4 v4 不接受 --chapters；重规划须整书重走 stage4.design → stage4.plan')
-    # B 的 typed infeasible 是当前候选的正式负结论，不是 missing。再次把同一个 A
-    # 发给 B 只会复用同一结论；必须先由人显式确认 ``stage4.design --replan``，
-    # 让候选字节变化后才重新开放 B。放在任何 prompt/transport 构造之前，保证 0 wire。
-    if current_infeasible_binding(ArtifactStore(ctx)) is not None:
-        raise TerminalState(
-            'Stage4B 已对当前 Stage4A 候选落盘 fresh typed infeasible 结论；'
-            '不得重复执行同一 B（本次尚未调用 LLM）。请另行预览并批准 '
-            '`stage4.design --replan`，新候选落盘后再单独确认 stage4.plan')
-    (
-        system, user, store, up, _candidate_art, candidate_raw,
-        candidate_file_sha, subject, catalog,
-    ) = _binding_request(ctx)
-    response = client.ask_json(
-        system, user, model_cls=EvidenceBindingResponse, purpose=ctx.node,
-        max_tokens=prompts.EVIDENCE_BIND_MAX_TOKENS,
-        validator=_binding_validator(
-            candidate=candidate_raw, subject=subject, catalog=catalog,
-            up=up, store=store),
-    )
-    raw = response.model_dump(by_alias=True)
-    binding_provenance = ctx.llm_provenance(
-        EvidenceBindingProvenance,
-        prompts={'EVIDENCE_BIND_SYS': system},
-        model=client.model,
-        adopted_models=client.accepted_models(ctx.node),
-        candidate_sha256=subject,
-    )
-    binding = EvidenceBinding.model_validate({
-        **raw, '_provenance': binding_provenance,
-    })
-    store.write(BINDING_REL, binding)
-    _note_adoption(
-        ctx, client, purpose=ctx.node, rel=BINDING_REL, artifact=binding)
-    if binding.status == 'infeasible':
-        return binding
+    prepared = prepare_plan_candidate(ctx, chapters=chapters)
+    response = request_plan_candidate(ctx, client, prepared)
+    if not _uses_agent_runs(ctx):
+        evaluation = evaluate_plan_candidate(ctx, client, prepared, response)
+        return finalize_plan_candidate(ctx, client, prepared, evaluation)
 
-    # 最终计划是编译物：把刚落盘的 B 产物作为真实输入边读回，再铸 0 成本 provenance。
-    store.read(EvidenceBinding, BINDING_REL)
-    _same_binding, binding_file_sha = store.read_with_sha256(
-        EvidenceBinding, BINDING_REL)
-    data = merge_evidence_bindings(candidate_raw, raw, catalog)
-    compiled_provenance = ctx.free_provenance(
-        PlanProvenance,
-        origin='compiled',
-        blind_candidate_sha256=candidate_file_sha,
-        evidence_binding_sha256=binding_file_sha,
-    )
-    return write_plan(
-        ctx, store, data, up, provenance=compiled_provenance)
+    last_rejected: PlanCandidateEvaluation | None = None
+    while True:
+        evaluation = evaluate_plan_candidate(ctx, client, prepared, response)
+        if evaluation.passed:
+            return finalize_plan_candidate(ctx, client, prepared, evaluation)
+        last_rejected = evaluation
+        if not _queue_plan_validation_feedback(ctx, client, evaluation):
+            # 预算耗尽：最后 accepted candidate 只终态化一次；中间轮从未落盘。
+            return finalize_plan_candidate(ctx, client, prepared, evaluation)
+        try:
+            response = _ask_and_checkpoint_plan_candidate(
+                ctx, client, prepared)
+        except LlmFailed:
+            # 若后续 parse/schema 轮把预算用尽，不能丢掉前一份已经 accepted
+            # 且业务 HARD 的可恢复候选。driver/code/subject 失败不走这条路。
+            if (last_rejected is not None
+                    and not client.driver_failed
+                    and not client.can_resume):
+                return finalize_plan_candidate(
+                    ctx, client, prepared, last_rejected)
+            raise
 
 
 def run_identity(ctx: RunContext) -> tuple[int, CheckReport]:

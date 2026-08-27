@@ -22,7 +22,7 @@ from pathlib import Path
 
 from contracts.schema.api import TrashNovelResult
 from novel import paths
-from novel.errors import BookTrashFailed, SourceConflict
+from novel.errors import BookTrashFailed, PathRefused, SourceConflict
 from novel.orchestrator import agent, approvals, jobs
 from novel.orchestrator.nodes import child_env
 
@@ -132,14 +132,26 @@ def sweep_incomplete(base: str | os.PathLike[str]) -> list[str]:
         if isinstance(trashed_at, int) and now - trashed_at < STALE_AFTER_SECONDS:
             continue
         archived_approval = item / 'approval.json'
-        sid = str(meta.get('sid') or '')
+        raw_sid = str(meta.get('sid') or '')
+        try:
+            sid = paths.check_sid(raw_sid) if raw_sid else ''
+        except PathRefused:
+            # metadata 是回收站里的不可信盘上输入；坏 sid 只能留下人工检查，
+            # 不能借恢复路径越出 approvals 目录。
+            sid = ''
         if archived_approval.is_file() and sid:
-            live = _approval_path(base, sid)
-            if live.exists():
-                archived_approval.replace(item / 'approval.superseded.json')
-            else:
-                live.parent.mkdir(parents=True, exist_ok=True)
-                os.replace(archived_approval, live)
+            # 与 HTTP/CLI apply 共用审批文件锁。live 是否存在、选择恢复还是
+            # supersede、以及移动本身必须是同一段临界区，不能只锁 os.replace。
+            with approvals.approval_file_lock(base, sid):
+                if not archived_approval.is_file():
+                    # 另一 sweep 已在我们等待锁时收完；后面的幂等清壳继续即可。
+                    continue
+                live = _approval_path(base, sid)
+                if live.exists():
+                    archived_approval.replace(item / 'approval.superseded.json')
+                else:
+                    live.parent.mkdir(parents=True, exist_ok=True)
+                    os.replace(archived_approval, live)
         try:
             if meta_path.exists():
                 meta_path.unlink()
@@ -154,9 +166,16 @@ def sweep_incomplete(base: str | os.PathLike[str]) -> list[str]:
 
 def execute(base: str | os.PathLike[str], sid: str, expected_title: str,
             trash_id: str) -> TrashNovelResult:
-    """CLI 子进程里的原子边界：书目录最后移动，前置失败则回滚审批文件。"""
+    """CLI 子进程里的原子边界；整段占用与 approval apply 相同的文件锁。"""
     if not _TRASH_ID.fullmatch(trash_id):
         raise BookTrashFailed(f'非法 trash_id={trash_id!r}')
+    with approvals.approval_file_lock(base, sid):
+        return _execute_locked(base, sid, expected_title, trash_id)
+
+
+def _execute_locked(base: str | os.PathLike[str], sid: str, expected_title: str,
+                    trash_id: str) -> TrashNovelResult:
+    """书目录最后移动；任何前置失败都把审批文件恢复到原位。"""
     novel_dir = paths.resolve_novel_dir(base, sid)
     title = paths.title_of(novel_dir)
     if title != expected_title:

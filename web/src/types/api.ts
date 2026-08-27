@@ -13,6 +13,7 @@ import type {
   StructureApprovalRequest,
 } from './approvals'
 import type {
+  AgentCapabilitiesResponse,
   AgentBatchRequest,
   AgentQueueView,
   AgentRunLogChunk,
@@ -108,6 +109,8 @@ export interface Api {
   startJob(req: JobRequest): Promise<Job>
 
   /* agent 代跑（互斥归服务端：冲突 409 / ErrorBody.kind = JobConflict） */
+  /** 本机 CLI/模型能力动态探针；响应与查询缓存都按 no-store 对待。 */
+  getAgentCapabilities(): Promise<AgentCapabilitiesResponse>
   /** 0 成本预览：与真跑同一构造函数。两项授权都进 prompt，任一勾选变化都重新 preview。 */
   previewAgentRun(req: AgentRunRequest): Promise<AgentRunPreview>
   startAgentRun(req: AgentRunRequest): Promise<AgentRunRecord>

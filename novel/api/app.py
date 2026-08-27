@@ -32,7 +32,8 @@ from fastapi.staticfiles import StaticFiles
 from contracts.schema.api import ErrorBody
 from novel.api.errors import CSRF_REFUSED, status_of
 from novel.api.routes import (
-    agent, approvals, checks, edits, enums, ingest, jobs, maintenance, novels, queues, run, screens,
+    agent, agent_capabilities, approvals, checks, edits, enums, ingest, jobs,
+    maintenance, novels, queues, run, screens,
 )
 from novel.errors import NovelError
 from novel.orchestrator import queue as queue_runner
@@ -208,7 +209,7 @@ def create_app(base: str | os.PathLike[str],
     for router in (
         enums.router, novels.router, checks.router, jobs.router, queues.router,
         ingest.router, approvals.router, screens.router, edits.router,
-        run.router, agent.router, maintenance.router,
+        run.router, agent_capabilities.router, agent.router, maintenance.router,
     ):
         app.include_router(router, prefix='/api')
 

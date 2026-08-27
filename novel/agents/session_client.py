@@ -1,0 +1,1104 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""session_client.py —— 把可恢复 CLI agent 接到既有 producer 的窄适配层。
+
+本模块不是第二套 producer。它只把一次 ``ask_json`` 变成「start/resume → 代码解析
+与 schema 校验 → 结构化反馈 → 同 session 再答」，并把每一轮同时联结成本账与
+``agent_sessions.jsonl``。业务 HARD、正式落盘与 freshness 仍由 stage producer 判断。
+
+agent 的工作目录是一只会话私有空目录；调用方只把已经投影好的 system/user/schema
+送进 stdin。repo/base/正式产物路径既不进 argv 也不进 prompt，candidate 只从 stdout
+返回。CLI 自身能调用哪些工具由 driver 的 executor policy 继续关闭式限制。
+"""
+from __future__ import annotations
+
+import hashlib
+import json
+import tempfile
+import time
+import uuid
+from collections.abc import Iterable, Mapping, Sequence
+from pathlib import Path
+from typing import Any, Callable, TypeVar
+
+from pydantic import BaseModel, ValidationError
+
+from contracts.schema.orchestration import AgentProfile
+from novel import agent_session_audit as session_audit, prov
+from novel.agent_capabilities import validate_profile
+from novel.agents import (
+    AgentBusyError, AgentCommandError, AgentConfigurationError, AgentDriver,
+    AgentError, AgentProbe, AgentRequest, AgentTurn, AgentUsage,
+)
+from novel.errors import ProvenanceRefused
+from novel.llm.client import LlmFailed
+from novel.llm.json_text import normalize_json_text
+from novel.llm.prompts import required_top_level
+from novel.llm.transport import ChatResponse
+from novel.observability import AttemptHeartbeat, RequestProgress
+from novel.run import RunContext
+
+
+M = TypeVar('M', bound=BaseModel)
+SESSION_PROTOCOL_VERSION = 'node-executor/v1'
+
+# 恢复策略与会话隔离是一对冻结语义，不能只把新 policy 名字塞进 allowlist 后
+# 继续沿用 Stage2 的逐章含义。逐章写作、Stage6 的 A/B 判官，以及书级单节点
+# executor 分别使用 per-chapter / per-purpose / per-node；policy 也同时绑定唯一 node，
+# 不能借同名协议把一个节点的 checkpoint 接到另一个节点。
+_RECOVERY_SESSION_ISOLATION = {
+    'stage2-blueprint-v1': 'per-purpose-chapter',
+    'stage4-design-v1': 'per-node',
+    'stage4-plan-v1': 'per-node',
+    'stage5-write-v1': 'per-chapter',
+    'stage6-hook-v1': 'per-node',
+    'stage6-semantic-v1': 'per-purpose',
+    'stage7-rename-v1': 'per-node',
+}
+_RECOVERY_POLICY_NODE = {
+    'stage2-blueprint-v1': 'stage2.blueprint',
+    'stage4-design-v1': 'stage4.design',
+    'stage4-plan-v1': 'stage4.plan',
+    'stage5-write-v1': 'stage5.write',
+    'stage6-hook-v1': 'stage6.hook',
+    'stage6-semantic-v1': 'stage6.semantic',
+    'stage7-rename-v1': 'stage7.rename',
+}
+
+
+def _sha256_bytes(payload: bytes) -> str:
+    return hashlib.sha256(payload).hexdigest()
+
+
+def _canonical_sha256(value: object) -> str:
+    return _sha256_bytes(json.dumps(
+        value, ensure_ascii=False, sort_keys=True,
+        separators=(',', ':'), allow_nan=False,
+    ).encode('utf-8'))
+
+
+def _attempt_id() -> str:
+    return uuid.uuid4().hex[:16]
+
+
+def _decode_json(text: str) -> object:
+    """解析 provider stdout 候选；它不是盘上 artifact，不经过 ``store``。"""
+    return json.JSONDecoder().decode(text)
+
+
+def _usage_or_none(usage: AgentUsage) -> session_audit.AgentSessionUsage | None:
+    values = {
+        'prompt_tokens': usage.prompt_tokens,
+        'prompt_cache_hit_tokens': usage.prompt_cache_hit_tokens,
+        'prompt_cache_miss_tokens': usage.prompt_cache_miss_tokens,
+        'completion_tokens': usage.completion_tokens,
+        'reasoning_tokens': usage.reasoning_tokens,
+        'total_tokens': usage.total_tokens,
+    }
+    if all(value is None for value in values.values()):
+        return None
+    return session_audit.AgentSessionUsage(**values)
+
+
+def _safe_validation_errors(exc: ValidationError) -> list[dict[str, object]]:
+    """只交回路径/类型，不把可能含正文的 input/msg 复制进反馈或审计。"""
+    rows: list[dict[str, object]] = []
+    for error in exc.errors(
+            include_url=False, include_context=False, include_input=False):
+        rows.append({
+            'loc': '.'.join(str(item) for item in error.get('loc', ())),
+            'type': str(error.get('type') or 'validation_error'),
+        })
+    return rows
+
+
+class SessionAgentClient:
+    """一个 node/chapter 独享的、可恢复且有界的 agent logical session。
+
+    它只实现现阶段 producer 真正消费的 ``LlmClient`` 窄面。checkpoint 恢复只认
+    已登记 policy 与完整 acceptance；不能用空 dict 或本地猜出的 provider session
+    伪装兼容。
+    """
+
+    concurrency = 1
+
+    def __init__(
+        self,
+        ctx: RunContext,
+        profile: AgentProfile,
+        driver: AgentDriver,
+        *,
+        chapter: int | None = None,
+        parent_run_id: str | None = None,
+        max_turns: int = 4,
+        preflight_probe: AgentProbe | None = None,
+    ) -> None:
+        if max_turns < 1:
+            raise ValueError('max_turns 必须 >= 1')
+        self.ctx = ctx
+        self.profile = validate_profile(profile, role='executor')
+        self.driver = driver
+        self.chapter = chapter
+        if parent_run_id is not None and parent_run_id != ctx.run_id:
+            raise ValueError(
+                'executor session 的 parent_run_id 必须等于 RunContext.run_id')
+        self.parent_run_id = ctx.run_id
+        self.max_turns = max_turns
+        self.model = self.profile.model
+
+        self.session_run_id = str(uuid.uuid4())
+        self.provider_session_id: str | None = None
+        self._observed_provider_session_id: str | None = None
+        self._provider_session_conflict_owner: str | None = None
+        self._turn_index = 0
+        self._accepted: dict[str, str] = {}
+        self._accepted_checkpoint: dict[str, dict[str, Any]] = {}
+        self._started = False
+        self._ended = False
+        self._driver_failed = False
+        self._subject_sha256: str | None = None
+        self._initial_identity: dict[str, object] | None = None
+        self._pending_feedback: str | None = None
+        # checkpoint 只证明旧 session 已经产出并通过 wire/schema；它不是一条
+        # 仍可 resume 的 provider 会话。业务校验在崩溃恢复后拒稿时，下一轮必须
+        # 用新 provider session start，同时沿用旧 logical request 的累计轮次预算。
+        self._checkpoint_recovery_start = False
+        self._last_prompt_sha256: str | None = None
+        self._last_schema_sha256: str | None = None
+        self._last_actual_model: str | None = None
+        self._last_actual_effort: str | None = None
+        self._cli_version: str | None = None
+        self._preflight_probe = preflight_probe
+        self._progress: RequestProgress | None = None
+        self._closed = False
+        self._workdir = tempfile.TemporaryDirectory(
+            prefix=f'novel-agent-{ctx.node.replace(".", "-")}-')
+
+    @property
+    def turns_used(self) -> int:
+        return self._turn_index
+
+    @property
+    def can_resume(self) -> bool:
+        return self._started and not self._ended and self._turn_index < self.max_turns
+
+    @property
+    def driver_failed(self) -> bool:
+        return self._driver_failed
+
+    @property
+    def observed_provider_session_id(self) -> str | None:
+        """本轮 CLI 实际回显的 id；可能是已拒绝认领的冲突证据。
+
+        ``provider_session_id`` 只表示当前 logical session 可安全 resume 的身份；
+        session pool 需要本属性才能在跨章/双判官冲突时把双方一并保守标红。
+        """
+        return self._observed_provider_session_id
+
+    @property
+    def provider_session_reused(self) -> bool:
+        """本 logical session 是否因 CLI 偷接既有 provider session 而失败。"""
+        return self._provider_session_conflict_owner is not None
+
+    @property
+    def workdir(self) -> Path:
+        """本 logical session 唯一的隔离 cwd；只供执行与零成本断言。"""
+        return Path(self._workdir.name)
+
+    def accepted_attempt(self, purpose: str) -> str | None:
+        return self._accepted.get(purpose)
+
+    def accepted_model(self, purpose: str) -> str | None:
+        attempt_id = self._accepted.get(purpose)
+        if attempt_id is None:
+            return None
+        return self.ctx.ledger.model_for_attempt(attempt_id)
+
+    def accepted_models(self, *purposes: str) -> tuple[str, ...]:
+        selected: Sequence[str] = purposes or tuple(self._accepted)
+        models = {
+            self.accepted_model(purpose)
+            for purpose in selected
+            if self._accepted.get(purpose) is not None
+        }
+        return tuple(sorted(model for model in models if model is not None))
+
+    @staticmethod
+    def build_json_request_policy(
+        profile: AgentProfile,
+        phases: Iterable[tuple[str, type[BaseModel], int, bool]],
+        *,
+        recovery_policy: str,
+    ) -> dict[str, Any]:
+        """构造可在逐章扇出前冻结的 agent JSON 请求策略。
+
+        CLI agent 没有跨厂商统一的 ``thinking`` 布尔值或硬输出 token 参数，
+        因此这里用独立 discriminator 诚实记录 requested ceiling，不伪造成旧
+        ``ChatRequest`` 的 model-chain/rungs/max_tokens。
+        """
+        resolved = validate_profile(profile, role='executor')
+        rows: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for phase, response_model, max_tokens, prefer_content in phases:
+            if not phase or phase in seen:
+                raise ValueError(f'JSON request policy phase 重复或为空：{phase!r}')
+            if (not isinstance(max_tokens, int) or isinstance(max_tokens, bool)
+                    or max_tokens <= 0):
+                raise ValueError(f'{phase}: requested output token ceiling 必须是正整数')
+            seen.add(phase)
+            rows.append({
+                'phase': phase,
+                'response_model': response_model.__name__,
+                'response_schema_sha256': _canonical_sha256(
+                    response_model.model_json_schema(by_alias=True)),
+                'requested_output_token_ceiling': max_tokens,
+                'prefer_content_over_reasoning_salvage': bool(prefer_content),
+            })
+        session_isolation = _RECOVERY_SESSION_ISOLATION.get(recovery_policy)
+        if not rows or session_isolation is None:
+            raise ValueError(
+                'agent JSON request policy 必须含 phase，且 recovery_policy '
+                f'必须属于 {sorted(_RECOVERY_SESSION_ISOLATION)}')
+        return {
+            'protocol_version': SESSION_PROTOCOL_VERSION,
+            'profile': resolved.model_dump(mode='json'),
+            'session_isolation': session_isolation,
+            'recovery_policy': recovery_policy,
+            'phases': rows,
+        }
+
+    def json_request_policy(
+        self,
+        phases: Iterable[tuple[str, type[BaseModel], int, bool]],
+        *,
+        recovery_policy: str,
+    ) -> dict[str, Any]:
+        return self.build_json_request_policy(
+            self.profile, phases, recovery_policy=recovery_policy)
+
+    def queue_code_validation_feedback(
+        self,
+        rows: Sequence[Mapping[str, object]],
+        *,
+        purpose: str | None = None,
+    ) -> bool:
+        """登记业务拒稿，并在还有预算时把完整反馈交回同一 session。
+
+        ``llm_audit`` 只留规则位置、类型和数量；带证据的完整反馈只进入下一轮
+        stdin，不复制进 ``_service``。返回值表示是否真的排入了 resume。
+        """
+        if not self._started or self.provider_session_id is None:
+            raise RuntimeError('代码反馈只能接到已经成功建立的 provider session')
+        if self._pending_feedback is not None:
+            raise RuntimeError('上一份代码反馈尚未消费，不能覆盖')
+        if not rows:
+            raise RuntimeError('没有失败行，不能伪造一次 validation feedback')
+        purpose = purpose or self.ctx.node
+        attempt_id = self._accepted.get(purpose)
+        if attempt_id is None:
+            raise RuntimeError(
+                f'{purpose}: 没有刚通过 wire/schema 的 candidate 可登记业务拒稿')
+        safe_detail: list[dict[str, object]] = []
+        for row in rows:
+            findings = row.get('findings')
+            count = row.get('count')
+            if (count is None and isinstance(findings, Sequence)
+                    and not isinstance(findings, (str, bytes, bytearray))):
+                count = len(findings)
+            safe_detail.append({
+                'loc': str(row.get('rule') or row.get('loc') or ''),
+                'type': str(row.get('type') or 'business_rule'),
+                'count': (count if isinstance(count, int)
+                          and not isinstance(count, bool) and count >= 0 else 1),
+            })
+        self.ctx.ledger.note_gate(
+            sid=self.ctx.sid, node=self.ctx.node, purpose=purpose,
+            attempt_id=attempt_id, source='wire', decision='rejected',
+            gate='validator', reasoning_effort=self.profile.reasoning_effort,
+            thinking=None, rung_index=0, sample=self._turn_index,
+            resample=self.can_resume, reject_detail=safe_detail,
+            request_mode='agent_session_resume', chapter=self.chapter,
+        )
+        if not self.can_resume:
+            return False
+        self._pending_feedback = json.dumps({
+            'kind': 'code_validation_failed',
+            'failures': [dict(row) for row in rows],
+            'instruction': (
+                '修正上一轮候选。保持原任务与输出 schema 不变；'
+                '只返回一份完整的新 JSON，不要解释，也不要调用工具。'),
+        }, ensure_ascii=False, sort_keys=True, separators=(',', ':'))
+        return True
+
+    def queue_restored_code_validation_feedback(
+        self,
+        rows: Sequence[Mapping[str, object]],
+        *,
+        purpose: str | None = None,
+    ) -> bool:
+        """把盘上坏 candidate 交给**新** provider session 继续修。
+
+        ``restore_checkpoint_acceptance`` 只恢复已经发生的付费事实、完整 stdout
+        与累计 turn，不恢复进程内 provider session。这里因此绝不调用旧 session id，
+        而是把旧完整 candidate 与代码反馈组成新 session 的首轮 stdin。返回 ``False``
+        表示旧轮次已经耗尽；调用方应走既有 INVALID/人工恢复终态，不能重置预算。
+
+        旧 candidate 的 rejected gate decision 由本方法按稳定 id 幂等补尾：正常
+        路径若已写成则零新增，崩溃若恰好停在 checkpoint 与拒稿账之间则补唯一一行。
+        """
+        if self._started or self.provider_session_id is not None:
+            raise RuntimeError(
+                'checkpoint 拒稿只能在尚未建立 provider session 的恢复 client 排队')
+        if self._ended:
+            raise RuntimeError('executor session 已结束，不能排入 checkpoint 恢复反馈')
+        if self._pending_feedback is not None or self._checkpoint_recovery_start:
+            raise RuntimeError('上一份代码反馈尚未消费，不能覆盖')
+        if not rows:
+            raise RuntimeError('没有失败行，不能伪造一次 checkpoint validation feedback')
+        purpose = purpose or self.ctx.node
+        checkpoint = self._accepted_checkpoint.get(purpose)
+        attempt_id = self._accepted.get(purpose)
+        if checkpoint is None or attempt_id is None:
+            raise RuntimeError(
+                f'{purpose}: 必须先恢复完整 accepted checkpoint，才能继续业务返工')
+        accepted_text = checkpoint.get('accepted_text')
+        if not isinstance(accepted_text, str) or not accepted_text:
+            raise RuntimeError(
+                f'{purpose}: restored checkpoint 缺完整 accepted stdout，不能续改')
+        can_continue = self._turn_index < self.max_turns
+        safe_detail: list[dict[str, object]] = []
+        for row in rows:
+            findings = row.get('findings')
+            count = row.get('count')
+            if (count is None and isinstance(findings, Sequence)
+                    and not isinstance(findings, (str, bytes, bytearray))):
+                count = len(findings)
+            safe_detail.append({
+                'loc': str(row.get('rule') or row.get('loc') or ''),
+                'type': str(row.get('type') or 'business_rule'),
+                'count': (count if isinstance(count, int)
+                          and not isinstance(count, bool) and count >= 0 else 1),
+            })
+        # gate_decision 带稳定 id；若正常路径已在 checkpoint 后写成，这里是零新增，
+        # 若崩溃恰好发生在两者之间，这里补齐唯一一行。
+        self.ctx.ledger.note_gate(
+            sid=self.ctx.sid, node=self.ctx.node, purpose=purpose,
+            attempt_id=attempt_id, source='wire', decision='rejected',
+            gate='validator', reasoning_effort=self.profile.reasoning_effort,
+            thinking=None, rung_index=0, sample=self._turn_index,
+            resample=can_continue, reject_detail=safe_detail,
+            request_mode='agent_session_resume', chapter=self.chapter,
+        )
+        # checkpoint 所属的是旧 logical/provider session；不论还有没有续改预算，
+        # 代码已经判定它的候选不可交付，这条旧 session 都应在新 session start
+        # 之前以 blocked 收尾。公共桥在同一 append-log 文件锁内幂等补 ended，
+        # 避免各 stage 复制一份“读到没结束再写”的竞态实现。
+        session_audit.finish_restored_session(
+            self.ctx.novel_dir.parent,
+            checkpoint,
+            process_state='ok',
+            delivery_state='blocked',
+            error_kind='checkpoint_business_rejected',
+            end_code_version=prov.code_version(),
+            only_if_open=True,
+        )
+        if not can_continue:
+            return False
+        self._pending_feedback = json.dumps({
+            'kind': 'checkpoint_recovery_validation_failed',
+            'previous_candidate': accepted_text,
+            'failures': [dict(row) for row in rows],
+            'instruction': (
+                '这是崩溃前已通过 wire/schema、但未通过代码业务校验的完整候选。'
+                '按失败项修正；保持原任务与输出 schema 不变；只返回一份完整的新 JSON，'
+                '不要解释，也不要调用工具。'),
+        }, ensure_ascii=False, sort_keys=True, separators=(',', ':'))
+        self._checkpoint_recovery_start = True
+        return True
+
+    def _identity(
+        self, system: str, user: str, schema: Mapping[str, Any], *,
+        purpose: str, max_tokens: int,
+    ) -> dict[str, object]:
+        return {
+            'node': self.ctx.node,
+            'chapter': self.chapter,
+            'purpose': purpose,
+            'system_sha256': _sha256_bytes(system.encode('utf-8')),
+            'user_sha256': _sha256_bytes(user.encode('utf-8')),
+            'schema_sha256': _canonical_sha256(schema),
+            'requested_model': self.profile.model,
+            'requested_effort': self.profile.reasoning_effort,
+            # CLI 暂无跨厂商硬 max-output-token 参数；身份仍记住 producer 的请求，
+            # 账本 max_tokens 留 null，不能把提示性上限冒充 provider 硬约束。
+            'requested_output_token_ceiling': max_tokens,
+            'protocol_version': SESSION_PROTOCOL_VERSION,
+        }
+
+    def _begin(
+        self, identity: dict[str, object], *, prompt_sha256: str,
+        schema_sha256: str,
+    ) -> None:
+        if self._started:
+            return
+        probe = self._preflight_probe or self.driver.probe()
+        if probe.driver != self.profile.driver:
+            raise LlmFailed(
+                f'{self.ctx.node}: executor 预检 driver={probe.driver!r} 与 '
+                f'profile.driver={self.profile.driver!r} 不一致')
+        if not probe.available:
+            raise LlmFailed(
+                f'{self.ctx.node}: {self.profile.driver} CLI 本地探针失败：'
+                f'{probe.detail or "unknown"}')
+        self._cli_version = probe.version
+        self._initial_identity = dict(identity)
+        self._subject_sha256 = _canonical_sha256(identity)
+        session_audit.append_event(
+            self.ctx.novel_dir.parent,
+            session_audit.AgentSessionEvent(
+                session_run_id=self.session_run_id,
+                parent_run_id=self.parent_run_id,
+                role='executor', node=self.ctx.node, chapter=self.chapter,
+                subject_sha256=self._subject_sha256,
+                profile=self.profile,
+                requested_model=self.profile.model,
+                requested_effort=self.profile.reasoning_effort,
+                cli_version=self._cli_version,
+                protocol_version=SESSION_PROTOCOL_VERSION,
+                start_code_version=self.ctx.code,
+                prompt_sha256=prompt_sha256,
+                schema_sha256=schema_sha256,
+                kind='started', ts=int(time.time()),
+            ),
+        )
+        self._started = True
+
+    def _assert_same_subject(self, identity: dict[str, object]) -> None:
+        if self._initial_identity != identity:
+            raise LlmFailed(
+                f'{self.ctx.node}: 同一 logical session 的原始 subject 已变化；'
+                '必须新建 executor session，不能把旧上下文接到新输入')
+
+    def _record_turn(
+        self, *, turn: AgentTurn | None, attempt_id: str,
+        request_fingerprint: str, response_sha256: str | None,
+        purpose: str, latency_ms: int, outcome: str,
+        error_kind: str | None, prompt_sha256: str, schema_sha256: str,
+        usage: AgentUsage, progress: RequestProgress | None,
+    ) -> str | None:
+        actual_model = None if turn is None else turn.model
+        actual_effort = None if turn is None else turn.actual_reasoning_effort
+        provider_session_id = None if turn is None else turn.session_id
+        # CostLedger.model 的既有语义是「实际响应模型」。provider 没回显时只能
+        # 记 unknown；把 requested model 填进去会让正式 adopted_models 伪称已知。
+        model_for_ledger = actual_model or 'unknown'
+        self.ctx.ledger.record(
+            attempt_id=attempt_id,
+            request_fingerprint=request_fingerprint,
+            response_sha256=response_sha256,
+            request_model=self.profile.model,
+            node=self.ctx.node, sid=self.ctx.sid,
+            model=model_for_ledger, code=self.ctx.code,
+            cached=False, cache_policy='agent-session',
+            prompt_tokens=usage.prompt_tokens,
+            prompt_cache_hit_tokens=usage.prompt_cache_hit_tokens,
+            prompt_cache_miss_tokens=usage.prompt_cache_miss_tokens,
+            completion_tokens=usage.completion_tokens,
+            reasoning_tokens=usage.reasoning_tokens,
+            purpose=purpose, outcome=outcome,
+            error=(None if error_kind is None else error_kind),
+            reasoning_effort=self.profile.reasoning_effort,
+            thinking=None, json_mode=True, max_tokens=None,
+            finish_reason=None,
+            attempt=self._turn_index, max_attempts=self.max_turns,
+            latency_ms=latency_ms, error_kind=error_kind,
+            retryable=False, will_retry=False,
+            progress=progress,
+        )
+        if provider_session_id is None:
+            return None
+        self._observed_provider_session_id = provider_session_id
+        if (self.provider_session_id is not None
+                and provider_session_id != self.provider_session_id):
+            raise LlmFailed(
+                f'{self.ctx.node}: resume 返回了不同 provider session id')
+        self._last_actual_model = actual_model or self._last_actual_model
+        self._last_actual_effort = actual_effort or self._last_actual_effort
+        conflict_owner = session_audit.append_provider_turn(
+            self.ctx.novel_dir.parent,
+            session_audit.AgentSessionEvent(
+                session_run_id=self.session_run_id,
+                parent_run_id=self.parent_run_id,
+                role='executor', node=self.ctx.node, chapter=self.chapter,
+                subject_sha256=self._subject_sha256,
+                profile=self.profile,
+                provider_session_id=provider_session_id,
+                turn_index=self._turn_index,
+                attempt_id=attempt_id,
+                requested_model=self.profile.model,
+                actual_model=actual_model,
+                requested_effort=self.profile.reasoning_effort,
+                actual_effort=actual_effort,
+                cli_version=self._cli_version,
+                protocol_version=SESSION_PROTOCOL_VERSION,
+                start_code_version=self.ctx.code,
+                prompt_sha256=prompt_sha256,
+                schema_sha256=schema_sha256,
+                usage=_usage_or_none(usage),
+                error_kind=error_kind,
+                kind='turn', ts=int(time.time()),
+            ),
+        )
+        if conflict_owner is None:
+            self.provider_session_id = provider_session_id
+        return conflict_owner
+
+    def _invoke(
+        self, *, prompt: str, system: str, schema: Mapping[str, Any],
+        purpose: str, progress: RequestProgress | None,
+    ) -> tuple[AgentTurn, str]:
+        if self._ended:
+            raise LlmFailed(f'{self.ctx.node}: executor session 已结束，不能再 resume')
+        if self._driver_failed:
+            raise LlmFailed(
+                f'{self.ctx.node}: executor session 已发生 provider/protocol 失败；'
+                '不能继续复用，必须显式结束并新建 session')
+        if prov.code_version() != self.ctx.code:
+            raise LlmFailed(
+                f'{self.ctx.node}: executor session 运行期间代码版本发生漂移；'
+                '已在下一次模型请求前停止，必须用新代码新建 session')
+        if self._turn_index >= self.max_turns:
+            raise LlmFailed(
+                f'{self.ctx.node}: executor 已用尽 {self.max_turns} 轮上限；'
+                '停止继续花费，保留最新 candidate/INVALID 供人工查看')
+        self._turn_index += 1
+        attempt_id = _attempt_id()
+        schema_sha256 = _canonical_sha256(schema)
+        # 首轮才发送稳定 system/user 全文；resume 只发送结构化校验反馈，复用
+        # provider session 已有上下文，既避免重复正文也降低 token 消耗。
+        request = AgentRequest(
+            prompt=prompt,
+            system=(None if self.provider_session_id is not None else system),
+            output_schema=schema,
+            cwd=self._workdir.name,
+            execution_policy='executor-isolated',
+        )
+        prompt_sha256 = _sha256_bytes(request.stdin_text().encode('utf-8'))
+        self._last_prompt_sha256 = prompt_sha256
+        self._last_schema_sha256 = schema_sha256
+        request_identity = {
+            'protocol_version': SESSION_PROTOCOL_VERSION,
+            'profile': self.profile.model_dump(),
+            'subject_sha256': self._subject_sha256,
+            'provider_session_id': self.provider_session_id,
+            'system_sha256': (None if request.system is None else
+                              _sha256_bytes(request.system.encode('utf-8'))),
+            'prompt_sha256': _sha256_bytes(prompt.encode('utf-8')),
+            'schema_sha256': schema_sha256,
+            'purpose': purpose,
+            'turn_index': self._turn_index,
+        }
+        request_fingerprint = _canonical_sha256(request_identity)
+        self.ctx.require_observed_roots_current()
+        started = time.perf_counter()
+        heartbeat = AttemptHeartbeat(
+            self.ctx.observe, purpose=purpose, attempt=self._turn_index,
+            max_attempts=self.max_turns, progress=progress)
+        heartbeat.start()
+        try:
+            if self.provider_session_id is None:
+                turn = self.driver.start(self.profile, request)
+            else:
+                turn = self.driver.resume(
+                    self.profile, self.provider_session_id, request)
+        except (AgentConfigurationError, AgentBusyError) as exc:
+            self._driver_failed = True
+            heartbeat.finish(outcome='failed', error_kind='agent_not_started')
+            # driver 明确声明子进程尚未成功进入供应商调用；不能给成本账增加
+            # calls_made，也不能伪造一个没有 provider session id 的 turn。
+            raise LlmFailed(
+                f'{self.ctx.node}: agent 在启动前拒绝请求：{exc}') from exc
+        except AgentCommandError as exc:
+            self._driver_failed = True
+            heartbeat.finish(outcome='failed', error_kind='agent_command')
+            partial = exc.partial_turn
+            usage = exc.usage or AgentUsage()
+            self._record_turn(
+                turn=partial, attempt_id=attempt_id,
+                request_fingerprint=request_fingerprint,
+                response_sha256=None, purpose=purpose,
+                latency_ms=max(0, round((time.perf_counter() - started) * 1000)),
+                outcome='error', error_kind='agent_command',
+                prompt_sha256=prompt_sha256, schema_sha256=schema_sha256,
+                usage=usage, progress=progress,
+            )
+            raise LlmFailed(f'{self.ctx.node}: agent CLI 执行失败：{exc}') from exc
+        except AgentError as exc:
+            self._driver_failed = True
+            heartbeat.finish(outcome='failed', error_kind='agent_protocol')
+            # 没有可信 provider session/usage 的协议失败只落成本失败事实；不能伪造 turn。
+            self._record_turn(
+                turn=None, attempt_id=attempt_id,
+                request_fingerprint=request_fingerprint,
+                response_sha256=None, purpose=purpose,
+                latency_ms=max(0, round((time.perf_counter() - started) * 1000)),
+                outcome='error', error_kind='agent_protocol',
+                prompt_sha256=prompt_sha256, schema_sha256=schema_sha256,
+                usage=AgentUsage(), progress=progress,
+            )
+            raise LlmFailed(f'{self.ctx.node}: agent 协议失败：{exc}') from exc
+        else:
+            heartbeat.finish(outcome='ok')
+
+        if (self.provider_session_id is not None
+                and turn.session_id != self.provider_session_id):
+            self._driver_failed = True
+            self._record_turn(
+                turn=None, attempt_id=attempt_id,
+                request_fingerprint=request_fingerprint,
+                response_sha256=_sha256_bytes(turn.content.encode('utf-8')),
+                purpose=purpose,
+                latency_ms=max(0, round((time.perf_counter() - started) * 1000)),
+                outcome='error', error_kind='provider_session_mismatch',
+                prompt_sha256=prompt_sha256, schema_sha256=schema_sha256,
+                usage=turn.usage, progress=progress,
+            )
+            raise LlmFailed(
+                f'{self.ctx.node}: resume 返回了不同 provider session id；'
+                '已记为协议失败，不能留下成功成本行')
+        conflict_owner = self._record_turn(
+            turn=turn, attempt_id=attempt_id,
+            request_fingerprint=request_fingerprint,
+            response_sha256=_sha256_bytes(turn.content.encode('utf-8')),
+            purpose=purpose,
+            latency_ms=max(0, round((time.perf_counter() - started) * 1000)),
+            outcome='ok', error_kind=None,
+            prompt_sha256=prompt_sha256, schema_sha256=schema_sha256,
+            usage=turn.usage, progress=progress,
+        )
+        if conflict_owner is not None:
+            self._driver_failed = True
+            self._provider_session_conflict_owner = conflict_owner
+            self.ctx.ledger.note_gate(
+                sid=self.ctx.sid, node=self.ctx.node, purpose=purpose,
+                attempt_id=attempt_id, source='wire', decision='rejected',
+                gate='validator', reasoning_effort=self.profile.reasoning_effort,
+                thinking=None, rung_index=0, sample=self._turn_index,
+                resample=False, reject_detail=[{
+                    'loc': 'provider_session_id',
+                    'type': session_audit.PROVIDER_SESSION_REUSED,
+                    'count': 1,
+                }], request_mode='agent_session_start', chapter=self.chapter,
+            )
+            raise ProvenanceRefused(
+                f'{self.ctx.node}: provider session {turn.session_id!r} 已属于 '
+                f'logical session {conflict_owner!r}；拒绝恢复时偷接旧 session')
+        metadata_failure: tuple[str, str] | None = None
+        if turn.model != self.profile.model:
+            # 命令显式带 requested model 仍不等于 provider 确实用了它。缺失与换模
+            # 都不能进入正式 provenance；精确相等是可恢复 checkpoint 的前提。
+            metadata_failure = ('actual_model', 'provider_metadata_mismatch')
+        elif (turn.actual_reasoning_effort is not None
+              and turn.actual_reasoning_effort != self.profile.reasoning_effort):
+            metadata_failure = (
+                'actual_reasoning_effort', 'provider_metadata_mismatch')
+        elif turn.turn_count != 1:
+            # AgentTurn 表示**这一次 CLI 调用**的结果，不是 provider session 累计轮数。
+            # 累计值会让一次 ledger attempt 与多轮模型调用静默合并，成本账无法闭合。
+            metadata_failure = ('turn_count', 'invalid_provider_turn_count')
+        if metadata_failure is not None:
+            self._driver_failed = True
+            self.ctx.ledger.note_gate(
+                sid=self.ctx.sid, node=self.ctx.node, purpose=purpose,
+                attempt_id=attempt_id, source='wire', decision='rejected',
+                gate='validator', reasoning_effort=self.profile.reasoning_effort,
+                thinking=None, rung_index=0, sample=self._turn_index,
+                resample=False, reject_detail=[{
+                    'loc': metadata_failure[0],
+                    'type': metadata_failure[1],
+                    'count': 1,
+                }], request_mode='agent_session_resume', chapter=self.chapter,
+            )
+            raise LlmFailed(
+                f'{self.ctx.node}: provider 回显与 resolved profile/单调用单 turn '
+                f'契约不一致（{metadata_failure[0]}）；拒绝铸 accepted checkpoint')
+        return turn, attempt_id
+
+    def _remember_json_acceptance(
+        self, *, purpose: str, turn: AgentTurn, attempt_id: str,
+        identity: Mapping[str, object],
+    ) -> None:
+        """冻结 agent stdout、session 与 ledger 的完整 checkpoint 联结。"""
+        accepted = self.ctx.ledger.request_identity_for_attempt(attempt_id)
+        if accepted.get('model') in (None, '', 'unknown'):
+            raise ProvenanceRefused(
+                f'{purpose}: accepted attempt 缺实际响应模型，不能铸 checkpoint')
+        attempts = self.ctx.ledger.attempt_ids_for_purpose(purpose)
+        links = [
+            self.ctx.ledger.request_identity_for_attempt(item)
+            for item in attempts
+        ]
+        if attempt_id not in {str(row.get('attempt_id') or '') for row in links}:
+            raise ProvenanceRefused(
+                f'{purpose}: accepted attempt 未出现在本 purpose 成本联结中')
+        if self.provider_session_id is None or self._subject_sha256 is None:
+            raise ProvenanceRefused(
+                f'{purpose}: accepted response 缺 logical/provider session 身份')
+        normalized = normalize_json_text(turn.content)
+        payload = {
+            'acceptance_protocol': SESSION_PROTOCOL_VERSION,
+            'attempt_id': attempt_id,
+            'request_fingerprint': accepted['request_fingerprint'],
+            'model': accepted['model'],
+            'ledger_response_sha256': accepted['response_sha256'],
+            'accepted_channel': 'content',
+            'accepted_text': turn.content,
+            'normalized_text': normalized,
+            'attempt_links': links,
+            'profile': self.profile.model_dump(mode='json'),
+            'subject_sha256': self._subject_sha256,
+            'session_run_id': self.session_run_id,
+            'provider_session_id': self.provider_session_id,
+            'accepted_turn_index': self._turn_index,
+            'accepted_prompt_sha256': self._last_prompt_sha256,
+            'accepted_schema_sha256': self._last_schema_sha256,
+            'accepted_request': dict(identity),
+            'request_mode': (
+                'original' if self._turn_index == 1 else 'agent_session_resume'),
+            'recovery_from_attempts': [
+                str(row['attempt_id']) for row in links
+                if row.get('attempt_id') != attempt_id
+            ],
+            'salvaged': False,
+        }
+        self._accepted[purpose] = attempt_id
+        self._accepted_checkpoint[purpose] = payload
+
+    def accepted_checkpoint(self, purpose: str) -> dict[str, Any]:
+        """返回刚通过 wire/schema/dynamic validator 的 agent checkpoint 材料。"""
+        value = self._accepted_checkpoint.get(purpose)
+        if value is None:
+            raise ProvenanceRefused(
+                f'{purpose}: accepted agent response 缺 stdout/session/ledger 联结')
+        return {
+            **value,
+            'profile': dict(value['profile']),
+            'accepted_request': dict(value['accepted_request']),
+            'attempt_links': [dict(row) for row in value['attempt_links']],
+            'recovery_from_attempts': list(value['recovery_from_attempts']),
+        }
+
+    def restore_checkpoint_acceptance(
+        self, purpose: str, record: Mapping[str, Any], *,
+        system: str | None = None, user: str | None = None,
+        max_tokens: int | None = None,
+        recovery_policy: str | None = None,
+        **unsupported: object,
+    ) -> None:
+        """复算 agent checkpoint 的当前 subject，再恢复 adoption 索引。
+
+        这里只恢复已付费事实，不伪造一条 live provider session。若整书联合 HARD
+        之后需要修改这章，节点 pool 会以同一原始 subject + 结构化反馈新开 session。
+        """
+        if unsupported:
+            raise ProvenanceRefused(
+                f'{purpose}: agent checkpoint 恢复含未实现参数 {sorted(unsupported)}')
+        if system is None or user is None or max_tokens is None:
+            raise ProvenanceRefused(
+                f'{purpose}: agent checkpoint 恢复缺 system/user/requested ceiling')
+        if recovery_policy not in _RECOVERY_SESSION_ISOLATION:
+            raise ProvenanceRefused(
+                f'{purpose}: checkpoint 使用未登记恢复策略 {recovery_policy!r}')
+        if self.ctx.node != _RECOVERY_POLICY_NODE[recovery_policy]:
+            raise ProvenanceRefused(
+                f'{purpose}: recovery_policy={recovery_policy!r} 只属于 '
+                f'{_RECOVERY_POLICY_NODE[recovery_policy]}，不能用于 {self.ctx.node}')
+        if record.get('acceptance_protocol') != SESSION_PROTOCOL_VERSION:
+            raise ProvenanceRefused(
+                f'{purpose}: checkpoint 不是当前 {SESSION_PROTOCOL_VERSION} agent acceptance')
+        if record.get('profile') != self.profile.model_dump(mode='json'):
+            raise ProvenanceRefused(
+                f'{purpose}: checkpoint resolved profile 与当前 executor 配置漂移')
+        binding = record.get('accepted_request')
+        if not isinstance(binding, dict):
+            raise ProvenanceRefused(f'{purpose}: agent checkpoint 缺 accepted_request')
+        schema_sha = binding.get('schema_sha256')
+        if (not isinstance(schema_sha, str) or len(schema_sha) != 64
+                or any(ch not in '0123456789abcdef' for ch in schema_sha)):
+            raise ProvenanceRefused(
+                f'{purpose}: agent checkpoint 缺合法 response schema SHA-256')
+        expected_binding = {
+            'node': self.ctx.node,
+            'chapter': self.chapter,
+            'purpose': purpose,
+            'system_sha256': _sha256_bytes(system.encode('utf-8')),
+            'user_sha256': _sha256_bytes(user.encode('utf-8')),
+            'schema_sha256': schema_sha,
+            'requested_model': self.profile.model,
+            'requested_effort': self.profile.reasoning_effort,
+            'requested_output_token_ceiling': max_tokens,
+            'protocol_version': SESSION_PROTOCOL_VERSION,
+        }
+        if binding != expected_binding:
+            raise ProvenanceRefused(
+                f'{purpose}: checkpoint accepted_request 与当前 prompt/profile/ceiling 漂移')
+        subject_sha = _canonical_sha256(expected_binding)
+        if record.get('subject_sha256') != subject_sha:
+            raise ProvenanceRefused(
+                f'{purpose}: checkpoint logical subject SHA-256 不闭合')
+        attempt_id = str(record.get('attempt_id') or '')
+        accepted = self.ctx.ledger.request_identity_for_attempt(attempt_id)
+        if (record.get('request_fingerprint')
+                != accepted.get('request_fingerprint')
+                or record.get('model') != accepted.get('model')
+                or record.get('ledger_response_sha256')
+                != accepted.get('response_sha256')):
+            raise ProvenanceRefused(
+                f'{purpose}: agent checkpoint accepted attempt 与成本账不闭合')
+        if accepted.get('model') != self.profile.model:
+            raise ProvenanceRefused(
+                f'{purpose}: checkpoint 实际响应模型与 resolved profile 漂移，'
+                '不能恢复 adoption')
+        if (not isinstance(record.get('provider_session_id'), str)
+                or not record.get('provider_session_id')
+                or not isinstance(record.get('session_run_id'), str)
+                or not record.get('session_run_id')):
+            raise ProvenanceRefused(
+                f'{purpose}: agent checkpoint 缺 provider/logical session 身份')
+        prior_turns = record.get('accepted_turn_index')
+        prior_links = record.get('attempt_links')
+        if (not isinstance(prior_turns, int) or isinstance(prior_turns, bool)
+                or prior_turns < 1 or prior_turns > self.max_turns
+                or not isinstance(prior_links, list)
+                or prior_turns != len(prior_links)):
+            raise ProvenanceRefused(
+                f'{purpose}: checkpoint accepted_turn_index={prior_turns!r} '
+                f'与 attempt_links/当前 max_turns={self.max_turns} 不闭合')
+        self._accepted[purpose] = attempt_id
+        # 恢复的是已经实际花掉的 provider turns。即使此后因联合业务校验失败而
+        # 新开 provider session，本 logical request 的总轮次预算也不能重新补满。
+        self._turn_index = max(self._turn_index, prior_turns)
+        self._accepted_checkpoint[purpose] = {
+            key: value for key, value in record.items()
+            if key in {
+                'acceptance_protocol', 'attempt_id', 'request_fingerprint',
+                'model', 'ledger_response_sha256', 'accepted_channel',
+                'accepted_text', 'normalized_text', 'attempt_links', 'profile',
+                'subject_sha256', 'session_run_id', 'provider_session_id',
+                'accepted_turn_index', 'accepted_prompt_sha256',
+                'accepted_schema_sha256', 'accepted_request', 'request_mode',
+                'recovery_from_attempts', 'salvaged',
+            }
+        }
+
+    def ask_json(
+        self,
+        system: str,
+        user: str,
+        *,
+        model_cls: type[M],
+        purpose: str,
+        require: tuple[str, ...] | None = None,
+        max_tokens: int = 64_000,
+        validator: Callable[[M, ChatResponse], str | None] | None = None,
+        progress: RequestProgress | None = None,
+        prefer_content_over_reasoning_salvage: bool = False,
+        recovery_policy: str | None = None,
+        **unsupported: object,
+    ) -> M:
+        if unsupported:
+            raise LlmFailed(
+                f'{self.ctx.node}/{purpose}: SessionAgentClient 尚未实现参数 '
+                f'{sorted(unsupported)}；拒绝静默忽略')
+        if progress is not None:
+            if self.chapter is None or progress.chapter != self.chapter:
+                raise LlmFailed('逐章请求必须由该 chapter 独享的 executor session 承接')
+            if self._progress is not None and progress != self._progress:
+                raise LlmFailed(
+                    '同一逐章 logical session 的 RequestProgress 发生漂移；'
+                    '必须新建 session，不能改写成本账批次位置')
+            self._progress = progress
+        elif self.chapter is not None:
+            raise LlmFailed('逐章 executor session 的每次请求都必须带真实 RequestProgress')
+        if prefer_content_over_reasoning_salvage is not False:
+            raise LlmFailed(
+                f'{self.ctx.node}/{purpose}: agent driver 只有 stdout content 通道；'
+                '不能接受 reasoning salvage 偏好后静默忽略')
+        if (recovery_policy is not None
+                and recovery_policy not in _RECOVERY_SESSION_ISOLATION):
+            raise LlmFailed(
+                f'{self.ctx.node}/{purpose}: 未登记 agent recovery_policy='
+                f'{recovery_policy!r}')
+        if (recovery_policy is not None
+                and self.ctx.node != _RECOVERY_POLICY_NODE[recovery_policy]):
+            raise LlmFailed(
+                f'{self.ctx.node}/{purpose}: recovery_policy={recovery_policy!r} '
+                f'只属于 {_RECOVERY_POLICY_NODE[recovery_policy]}')
+        derived = required_top_level(model_cls)
+        if require is None:
+            require = derived
+        elif extra := sorted(set(require) - set(derived)):
+            raise ValueError(f'{purpose}: require 含响应模型没有的键 {extra}')
+        schema = model_cls.model_json_schema(by_alias=True)
+        identity = self._identity(
+            system, user, schema, purpose=purpose, max_tokens=max_tokens)
+        initial_prompt_sha = _sha256_bytes(
+            f'{system}\n\n--- 本轮任务 ---\n\n{user}'.encode('utf-8'))
+        schema_sha = _canonical_sha256(schema)
+        self._begin(
+            identity, prompt_sha256=initial_prompt_sha,
+            schema_sha256=schema_sha)
+        self._assert_same_subject(identity)
+
+        while True:
+            has_feedback = self._pending_feedback is not None
+            prompt = self._pending_feedback or user
+            self._pending_feedback = None
+            checkpoint_recovery_start = self._checkpoint_recovery_start
+            self._checkpoint_recovery_start = False
+            if (has_feedback and self.provider_session_id is None
+                    and not checkpoint_recovery_start):
+                raise LlmFailed('validation feedback 不能在 provider session 建立前发送')
+            if checkpoint_recovery_start and not has_feedback:
+                raise LlmFailed('checkpoint 恢复标记缺完整 validation feedback')
+            if checkpoint_recovery_start:
+                # 普通 resume 依赖 provider session 已持有原任务；checkpoint 恢复则是
+                # 一条全新的 provider session，不能只发送“上一候选 + 失败项”并让模型
+                # 猜原任务。原 system 仍走 AgentRequest.system，原 user 与恢复包合并进
+                # 首轮 stdin；正文只发给 provider，不写入 ledger/session audit。
+                try:
+                    recovery = _decode_json(prompt)
+                except (json.JSONDecodeError, TypeError) as exc:
+                    raise LlmFailed(
+                        'checkpoint 恢复反馈不是内部生成的合法 JSON；拒绝启动新 session'
+                    ) from exc
+                prompt = json.dumps({
+                    'kind': 'checkpoint_recovery_task',
+                    'original_task': user,
+                    'recovery': recovery,
+                }, ensure_ascii=False, sort_keys=True, separators=(',', ':'))
+            turn, attempt_id = self._invoke(
+                prompt=prompt, system=system, schema=schema, purpose=purpose,
+                progress=progress)
+            gate: str | None = None
+            details: list[dict[str, object]] = []
+            private_feedback: str | None = None
+            obj: M | None = None
+            try:
+                payload = _decode_json(turn.content)
+            except (json.JSONDecodeError, TypeError) as exc:
+                gate = 'parse'
+                details = [{'loc': '', 'type': type(exc).__name__}]
+            else:
+                missing = [
+                    key for key in require
+                    if not isinstance(payload, dict) or key not in payload
+                    or payload[key] in (None, '', [], {})
+                ]
+                if missing:
+                    gate = 'require'
+                    details = [
+                        {'loc': key, 'type': 'missing_or_empty'} for key in missing]
+                else:
+                    try:
+                        obj = model_cls.model_validate(payload)
+                    except ValidationError as exc:
+                        gate = 'schema'
+                        details = _safe_validation_errors(exc)
+                    else:
+                        if validator is not None:
+                            why = validator(obj, ChatResponse(
+                                content=turn.content, finish_reason='stop',
+                                usage={
+                                    'prompt_tokens': turn.usage.prompt_tokens,
+                                    'completion_tokens': turn.usage.completion_tokens,
+                                    'reasoning_tokens': turn.usage.reasoning_tokens,
+                                },
+                                model=turn.model or self.profile.model,
+                            ))
+                            if why is not None:
+                                gate = 'validator'
+                                details = [{'loc': '', 'type': 'validator'}]
+                                # dynamic validator 的完整原因只回到同一 provider
+                                # session；审计仍只记上面的稳定类型，避免复制正文。
+                                private_feedback = why
+            if gate is None:
+                assert obj is not None
+                self.ctx.ledger.note_gate(
+                    sid=self.ctx.sid, node=self.ctx.node, purpose=purpose,
+                    attempt_id=attempt_id, source='wire', decision='accepted',
+                    reasoning_effort=self.profile.reasoning_effort,
+                    thinking=None, rung_index=0, sample=self._turn_index,
+                    chapter=self.chapter,
+                )
+                self._remember_json_acceptance(
+                    purpose=purpose, turn=turn, attempt_id=attempt_id,
+                    identity=identity)
+                return obj
+
+            self.ctx.ledger.note_gate(
+                sid=self.ctx.sid, node=self.ctx.node, purpose=purpose,
+                attempt_id=attempt_id, source='wire', decision='rejected',
+                gate=gate, reasoning_effort=self.profile.reasoning_effort,
+                thinking=None, rung_index=0, sample=self._turn_index,
+                resample=self.can_resume, reject_detail=details,
+                request_mode='agent_session_resume', chapter=self.chapter,
+            )
+            if not self.can_resume:
+                raise LlmFailed(
+                    f'{self.ctx.node}/{purpose}: {gate} 校验连续未通过，'
+                    f'已用尽 {self.max_turns} 轮；停止继续花费')
+            self._pending_feedback = json.dumps({
+                'kind': 'response_validation_failed',
+                'gate': gate,
+                'errors': details,
+                'validator_feedback': private_feedback,
+                'instruction': (
+                    '修正上一轮响应；保持事实内容与输出 schema，'
+                    '只返回完整 JSON，不要解释，也不要调用工具。'),
+            }, ensure_ascii=False, sort_keys=True, separators=(',', ':'))
+
+    def finish(
+        self, *, process_state: str, delivery_state: str,
+        error_kind: str | None = None,
+    ) -> None:
+        """在代码终验之后结束 logical session；无模型调用时不伪造一条会话。"""
+        if not self._started or self._ended:
+            return
+        end_code = prov.code_version()
+        session_audit.append_event(
+            self.ctx.novel_dir.parent,
+            session_audit.AgentSessionEvent(
+                session_run_id=self.session_run_id,
+                parent_run_id=self.parent_run_id,
+                role='executor', node=self.ctx.node, chapter=self.chapter,
+                subject_sha256=self._subject_sha256,
+                profile=self.profile,
+                provider_session_id=self.provider_session_id,
+                requested_model=self.profile.model,
+                actual_model=self._last_actual_model,
+                requested_effort=self.profile.reasoning_effort,
+                actual_effort=self._last_actual_effort,
+                cli_version=self._cli_version,
+                protocol_version=SESSION_PROTOCOL_VERSION,
+                start_code_version=self.ctx.code,
+                end_code_version=end_code,
+                prompt_sha256=self._last_prompt_sha256,
+                schema_sha256=self._last_schema_sha256,
+                process_state=process_state,
+                delivery_state=delivery_state,
+                error_kind=error_kind,
+                kind='ended', ts=int(time.time()),
+            ),
+        )
+        self._ended = True
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        self.driver.close()
+        self._workdir.cleanup()
+        self._closed = True
+
+
+__all__ = ['SESSION_PROTOCOL_VERSION', 'SessionAgentClient']

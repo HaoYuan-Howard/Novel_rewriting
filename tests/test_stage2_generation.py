@@ -55,6 +55,8 @@ from tests.test_stage2 import blueprints, global_grounding, main_text
 @pytest.fixture(autouse=True)
 def _pin_ir31_arm(monkeypatch):
     monkeypatch.setenv('NOVEL_STAGE2_BLUEPRINT_CONTRACT', 'extraction-ir-v3.1')
+    monkeypatch.setattr(
+        prov, 'code_version', lambda: 'test-stage2-generation')
 
 
 def test_parallel_chapter_requests_report_batch_positions_without_schema_changes():
@@ -364,7 +366,7 @@ def _ctx(book: Path, node: str, *, paid: bool = True) -> RunContext:
         novel_dir=book,
         node=node,
         paid=paid,
-        code='test-stage2-generation',
+        code=prov.code_version(),
         cache=CachePolicy.default(),
         ledger=CostLedger(path=None),
     )
@@ -623,6 +625,79 @@ def test_blueprint_resume_after_formal_write_is_idempotent_before_commit_sentine
         shutil.rmtree(root, ignore_errors=True)
 
 
+def test_blueprint_resume_after_prepare_before_formal_uses_sealed_candidate(
+        monkeypatch):
+    """prepare→formal 崩溃不得丢掉已付费、已过联合 HARD 的候选。"""
+    root = Path(tempfile.mkdtemp())
+    book = root / '蓝图写前提交断点_126'
+    book.mkdir()
+    try:
+        global_ctx = _ctx(book, 'stage2.global')
+        ArtifactStore(global_ctx).write(
+            extract.MAIN_TEXT, MainText.model_validate(main_text()))
+        global_client, _ = _client(
+            global_ctx, lambda _req, _index: _ok(_response_global()))
+        extract.run_global(global_ctx, global_client)
+
+        run_id = new_run_id()
+        ledger_path = root / '_service' / 'ledger.jsonl'
+
+        def blueprint_ctx() -> RunContext:
+            return RunContext(
+                novel_dir=book, node='stage2.blueprint', paid=True,
+                code='test-stage2-generation', cache=CachePolicy.default(),
+                ledger=CostLedger(path=ledger_path, run_id=run_id),
+                run_id=run_id,
+            )
+
+        by_ordinal = _response_blueprints()
+
+        def respond(req: ChatRequest, _index: int) -> ChatResponse:
+            return _respond_blueprints(req, by_ordinal)
+
+        real_write = extract._write_formal
+
+        def crash_before_formal(*_args, **_kwargs):
+            raise RuntimeError('synthetic crash before formal write')
+
+        first = blueprint_ctx()
+        first_transport = FakeTransport(responder=respond)
+        first_client = LlmClient(
+            first, first_transport, cache=ResponseCache(root / 'cache'),
+            model='test-model', max_retries=0, concurrency=3,
+            budget_checker=lambda *_args, **_kwargs: None,
+        )
+        monkeypatch.setattr(extract, '_write_formal', crash_before_formal)
+        with pytest.raises(RuntimeError, match='before formal write'):
+            extract.run_blueprint(first, first_client)
+        monkeypatch.setattr(extract, '_write_formal', real_write)
+
+        from novel.llm import stage2_runs
+        assert not ArtifactStore(first).exists(extract.BLUEPRINT_REL)
+        assert stage2_runs.commit_state(first)['state'] == 'prepared'
+        sealed, finalization = stage2_runs.restore_commit_payloads(first)
+        assert sealed['blueprints']
+        assert finalization['operation'] == 'stage2.blueprint full'
+        assert 'live_before' in finalization
+
+        resumed = blueprint_ctx()
+        resumed_transport = FakeTransport(
+            responder=lambda *_args: pytest.fail(
+                'prepared journal 已封存候选，不得重调模型'))
+        resumed_client = LlmClient(
+            resumed, resumed_transport, cache=ResponseCache(root / 'cache'),
+            model='test-model', max_retries=0, concurrency=3,
+            budget_checker=lambda *_args, **_kwargs: None,
+        )
+        report = extract.run_blueprint(resumed, resumed_client)
+
+        assert report.passed and resumed_transport.calls == []
+        assert ArtifactStore(resumed).exists(extract.BLUEPRINT_REL)
+        assert stage2_runs.committed(resumed) is not None
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
 def test_global_rebuild_is_not_locked_by_an_obsolete_blueprint_schema():
     """旧版下游不是可消费蓝图；它不能反向锁死 global producer 的重建路。"""
     root = Path(tempfile.mkdtemp())
@@ -799,6 +874,155 @@ def test_global_rebuild_still_refuses_a_blueprint_that_is_not_merely_old(marker,
 
         with pytest.raises(ArtifactUnreadable):
             extract.run_global(ctx, client)
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def test_global_candidate_boundary_keeps_intermediate_hard_in_memory():
+    """agent 可把 HARD 反馈接回同一 session；中间轮不落 INVALID，也不提前结算 usage。"""
+    root = Path(tempfile.mkdtemp())
+    book = root / '全局候选循环边界_452'
+    book.mkdir()
+    try:
+        ctx = _ctx(book, 'stage2.global')
+        ArtifactStore(ctx).write(
+            extract.MAIN_TEXT, MainText.model_validate(main_text()))
+        bad = _response_global()
+        bad['entities']['characters']['char_002']['canonical'] = \
+            bad['entities']['characters']['char_001']['canonical']
+
+        def respond(_req: ChatRequest, index: int) -> ChatResponse:
+            return _ok(bad if index == 0 else _response_global())
+
+        client, transport = _client(ctx, respond)
+        prepared = extract.prepare_global_candidate(ctx)
+        first = client.ask_json(
+            prepared.system, prepared.user,
+            model_cls=GlobalGroundingResponse,
+            purpose=ctx.node, max_tokens=extract.GLOBAL_MAX_TOKENS)
+        rejected = extract.evaluate_global_candidate(
+            ctx, client, prepared, first)
+
+        assert not rejected.passed
+        assert 'canonical_unique' in rejected.hard_hits
+        feedback = rejected.feedback_rows()
+        assert any(row['rule'] == 'canonical_unique' for row in feedback)
+        assert not (book / extract.GLOBAL_REL).exists()
+        assert not (book / extract._GLOBAL_INVALID).exists()
+        assert not (book / extract.GLOBAL_REVIEW_REL).exists()
+        assert not list((book / 'stage2/_rounds').glob('global_grounding*.json'))
+
+        # 模拟同一 logical session 消费代码反馈后交回完整 replacement JSON。
+        # user 加稳定反馈摘要只为让旧 LlmClient 测试缝产生第二次 wire；正式 agent
+        # 会由 SessionAgentClient.resume 复用 provider session。
+        second = client.ask_json(
+            prepared.system,
+            prepared.user + '\n\n代码反馈：canonical_unique，请交回完整 JSON。',
+            model_cls=GlobalGroundingResponse,
+            purpose=ctx.node, max_tokens=extract.GLOBAL_MAX_TOKENS)
+        accepted = extract.evaluate_global_candidate(
+            ctx, client, prepared, second)
+        assert accepted.passed
+        assert not (book / extract.GLOBAL_REL).exists(), '评估口不得冒充终态提交'
+
+        landed = extract.finalize_global_candidate(
+            ctx, client, prepared, accepted)
+        assert isinstance(landed, GlobalGrounding)
+        assert len(transport.calls) == 2
+        assert landed.provenance.usage is not None
+        assert landed.provenance.usage.calls_made == 2, \
+            '中间 settle 会让正式稿漏掉第一轮已发生调用'
+        assert (book / extract.GLOBAL_REL).is_file()
+        assert (book / extract.GLOBAL_REVIEW_REL).is_file()
+        assert not (book / extract._GLOBAL_INVALID).exists()
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def test_global_candidate_terminal_rejection_writes_invalid_only_once():
+    """重复评估是纯操作；只有显式 terminal finalize 才产生一轮可恢复 INVALID。"""
+    root = Path(tempfile.mkdtemp())
+    book = root / '全局候选终态拒绝_453'
+    book.mkdir()
+    try:
+        ctx = _ctx(book, 'stage2.global')
+        ArtifactStore(ctx).write(
+            extract.MAIN_TEXT, MainText.model_validate(main_text()))
+        bad = _response_global()
+        bad['entities']['characters']['char_002']['canonical'] = \
+            bad['entities']['characters']['char_001']['canonical']
+        client, transport = _client(ctx, lambda _req, _index: _ok(bad))
+        prepared = extract.prepare_global_candidate(ctx)
+        response = client.ask_json(
+            prepared.system, prepared.user,
+            model_cls=GlobalGroundingResponse,
+            purpose=ctx.node, max_tokens=extract.GLOBAL_MAX_TOKENS)
+
+        first = extract.evaluate_global_candidate(
+            ctx, client, prepared, response)
+        second = extract.evaluate_global_candidate(
+            ctx, client, prepared, response)
+        assert first.hard_hits == second.hard_hits
+        assert not (book / extract._GLOBAL_INVALID).exists()
+        assert not list((book / 'stage2/_rounds').glob(
+            'global_grounding.INVALID.r*.json'))
+
+        with pytest.raises(GateBlocked, match='canonical_unique'):
+            extract.finalize_global_candidate(
+                ctx, client, prepared, second)
+
+        assert len(transport.calls) == 1
+        assert (book / extract._GLOBAL_INVALID).is_file()
+        assert not (book / extract.GLOBAL_REL).exists()
+        assert not (book / extract.GLOBAL_REVIEW_REL).exists()
+        assert not list((book / 'stage2/_rounds').glob(
+            'global_grounding.INVALID.r*.json'))
+        invalid = ArtifactStore(ctx).read(
+            GlobalGrounding, extract._GLOBAL_INVALID)
+        assert invalid.provenance.usage is not None
+        assert invalid.provenance.usage.calls_made == 1
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def test_global_candidate_refuses_code_drift_before_settle_or_write(monkeypatch):
+    """长 session 不能先落旧代码候选；拒绝也不能吞掉本轮 usage 窗口。"""
+    root = Path(tempfile.mkdtemp())
+    book = root / '全局候选代码漂移_454'
+    book.mkdir()
+    try:
+        ctx = _ctx(book, 'stage2.global')
+        ArtifactStore(ctx).write(
+            extract.MAIN_TEXT, MainText.model_validate(main_text()))
+        client, transport = _client(
+            ctx, lambda _req, _index: _ok(_response_global()))
+        prepared = extract.prepare_global_candidate(ctx)
+        response = client.ask_json(
+            prepared.system, prepared.user,
+            model_cls=GlobalGroundingResponse,
+            purpose=ctx.node, max_tokens=extract.GLOBAL_MAX_TOKENS)
+        evaluation = extract.evaluate_global_candidate(
+            ctx, client, prepared, response)
+        original_code_version = extract.prov.code_version
+
+        monkeypatch.setattr(
+            extract.prov, 'code_version', lambda: 'changed-during-agent-session')
+        with pytest.raises(ProvenanceRefused, match='代码版本发生漂移'):
+            extract.finalize_global_candidate(
+                ctx, client, prepared, evaluation)
+
+        assert not (book / extract.GLOBAL_REL).exists()
+        assert not (book / extract.GLOBAL_REVIEW_REL).exists()
+        assert not (book / extract._GLOBAL_INVALID).exists()
+        assert not list((book / 'stage2/_rounds').glob('global_grounding*.json'))
+
+        # 拒绝发生在 settle 之前：恢复同一启动代码后，原候选仍能一次认领完整调用窗。
+        monkeypatch.setattr(extract.prov, 'code_version', original_code_version)
+        landed = extract.finalize_global_candidate(
+            ctx, client, prepared, evaluation)
+        assert len(transport.calls) == 1
+        assert landed.provenance.usage is not None
+        assert landed.provenance.usage.calls_made == 1
     finally:
         shutil.rmtree(root, ignore_errors=True)
 

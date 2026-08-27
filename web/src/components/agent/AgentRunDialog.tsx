@@ -1,23 +1,45 @@
-import { useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { api } from '@/api/endpoints'
 import { qk } from '@/api/queryKeys'
 import { errorBody, isApiError } from '@/api/errors'
-import { useStartAgentRun } from '@/hooks/useAgentRuns'
+import { useAgentCapabilities, useStartAgentRun } from '@/hooks/useAgentRuns'
 import { SCRIM } from '@/constants/vocabulary'
 import { Mono } from '@/components/ui/Mono'
 import { ErrorHint } from '@/components/state/States'
 import { LinkButton } from '@/components/ui/ActionButton'
+import { AgentProfilesSnapshot } from './AgentProfilesSnapshot'
+import { PipelineAgentProfilesForm } from './AgentProfilesForm'
+import {
+  clonePipelineAgentProfiles,
+  emptyPipelineAgentProfilesDraft,
+  materializePipelineAgentProfiles,
+  pipelineDraftOf,
+  pipelineProfilesEqual,
+} from '@/lib/agentProfiles'
 import { cx } from '@/lib/cx'
+import type { AgentRunRequest, PipelineAgentProfiles } from '@/types/agent'
 
-/**
- * 发起 agent 代跑前拦一道。
- *
- * 与 ConfirmDialog 同一条纪律：argv / prompt 由服务端 preview **原样下发**，
- * 前端一个字符都不拼。prompt 里带着付费与正文外发两项授权的原文 ——
- * 所以任一勾选变化都重新 preview，框里摆的必须是将要发出去的那一份。
- * 互斥不归这个框管：服务端 409（JobConflict）是裁决，框只把那句话摆出来。
- */
+function requestSnapshot(
+  sid: string,
+  authorized: boolean,
+  egressAuthorized: boolean,
+  profiles: PipelineAgentProfiles,
+): AgentRunRequest {
+  return {
+    sid,
+    authorized,
+    egress_authorized: egressAuthorized,
+    profiles: clonePipelineAgentProfiles(profiles),
+  }
+}
+
+/** 启动只拿成功 preview 随身保存的 request，不从当前表单再拼一次。 */
+interface PreviewEnvelope {
+  request: AgentRunRequest
+  response: Awaited<ReturnType<typeof api.previewAgentRun>>
+}
+
 export function AgentRunDialog({
   sid,
   onClose,
@@ -28,23 +50,53 @@ export function AgentRunDialog({
   onStarted: (sid: string) => void
 }) {
   const [authorized, setAuthorized] = useState(false)
-  // 产品默认允许正文外发，但仍作为独立复选框显式提交，用户可随时取消。
   const [egressAuthorized, setEgressAuthorized] = useState(true)
   const [commandOpen, setCommandOpen] = useState(false)
   const [promptOpen, setPromptOpen] = useState(false)
+  const [profilesInitialized, setProfilesInitialized] = useState(false)
+  const [profileDraft, setProfileDraft] = useState(emptyPipelineAgentProfilesDraft)
+  const capabilities = useAgentCapabilities()
   const start = useStartAgentRun(sid)
 
-  const preview = useQuery({
-    queryKey: qk.agentRunPreview(sid, authorized, egressAuthorized),
-    queryFn: () => api.previewAgentRun({
-      sid,
-      authorized,
-      egress_authorized: egressAuthorized,
-    }),
+  useEffect(() => {
+    if (!capabilities.data || profilesInitialized) return
+    setProfileDraft(pipelineDraftOf(capabilities.data.default_profiles))
+    setProfilesInitialized(true)
+  }, [capabilities.data, profilesInitialized])
+
+  const materialized = useMemo(
+    () => capabilities.data
+      ? materializePipelineAgentProfiles(capabilities.data, profileDraft)
+      : { profiles: null, errors: [] },
+    [capabilities.data, profileDraft],
+  )
+  const request = useMemo(
+    () => profilesInitialized && materialized.profiles
+      ? requestSnapshot(sid, authorized, egressAuthorized, materialized.profiles)
+      : null,
+    [authorized, egressAuthorized, materialized.profiles, profilesInitialized, sid],
+  )
+
+  const preview = useQuery<PreviewEnvelope>({
+    queryKey: qk.agentRunPreview(request),
+    queryFn: async () => {
+      if (!request) throw new Error('profile request is not materialized')
+      return { request, response: await api.previewAgentRun(request) }
+    },
+    enabled: request !== null,
   })
 
+  const echoed = preview.data
+    ? preview.data.response.authorized === preview.data.request.authorized
+      && preview.data.response.egress_authorized === preview.data.request.egress_authorized
+      && pipelineProfilesEqual(
+        preview.data.response.profiles,
+        preview.data.request.profiles,
+      )
+    : false
   const conflict = isApiError(start.error) && start.error.backendKind === 'JobConflict'
-  const disabled = preview.isPending || preview.isError || start.isPending
+  const disabled = !preview.data || !echoed || !authorized || !egressAuthorized || start.isPending
+  const previewResponse = preview.data?.response
 
   return (
     <div
@@ -54,8 +106,8 @@ export function AgentRunDialog({
     >
       <div
         data-testid="agent-run-dialog"
-        className="flex max-h-[calc(100vh-32px)] w-[min(660px,calc(100vw-32px))] flex-col overflow-hidden rounded-modal border border-line-btn bg-card shadow-modal"
-        onClick={(e) => e.stopPropagation()}
+        className="flex max-h-[calc(100vh-32px)] w-[min(760px,calc(100vw-32px))] flex-col overflow-hidden rounded-modal border border-line-btn bg-card shadow-modal"
+        onClick={(event) => event.stopPropagation()}
       >
         <div className="flex shrink-0 items-center gap-10 border-b border-line-soft px-22 py-16">
           <span
@@ -84,12 +136,66 @@ export function AgentRunDialog({
           data-testid="agent-run-dialog-body"
           className="flex min-h-0 flex-col gap-12 overflow-y-auto px-22 py-18"
         >
+          {capabilities.isPending ? (
+            <div className="rounded-block border border-line bg-inset px-14 py-11 text-body text-ink-4">
+              正在探测本机 Agent 能力；拿到服务端 capability 前不会预览或启动…
+            </div>
+          ) : capabilities.isError ? (
+            <div className="rounded-block border border-warn-line bg-warn-bg px-14 py-11 text-body text-warn-ink">
+              取不到本机 Agent capability，因此不会预览或启动。
+              <ErrorHint error={capabilities.error} />
+            </div>
+          ) : capabilities.data ? (
+            <>
+              {capabilities.data.default_profiles === null ? (
+                <div className="rounded-block border border-warn-line bg-warn-bg px-14 py-10 text-body text-warn-ink">
+                  服务端尚未发布默认 Agent 配置；请显式选完指挥大脑与执行者。界面不会猜第一项。
+                </div>
+              ) : null}
+              <PipelineAgentProfilesForm
+                capabilities={capabilities.data}
+                value={profileDraft}
+                onChange={setProfileDraft}
+                errors={materialized.errors}
+                disabled={start.isPending}
+              />
+            </>
+          ) : null}
+
+          <label className="flex cursor-pointer items-start gap-8 rounded-block border border-line-btn bg-sunken-2 px-14 py-10">
+            <input
+              type="checkbox"
+              checked={authorized}
+              disabled={start.isPending}
+              onChange={(event) => setAuthorized(event.target.checked)}
+              className="mt-3"
+            />
+            <span className="text-body text-ink-2">
+              允许本会话产生外部模型调用费用。它只控制付费授权，不会顺带开启正文外发；
+              指挥与执行者的真实费用均由所选 Agent/模型产生。
+            </span>
+          </label>
+
+          <label className="flex cursor-pointer items-start gap-8 rounded-block border border-line-btn bg-sunken-2 px-14 py-10">
+            <input
+              type="checkbox"
+              checked={egressAuthorized}
+              disabled={start.isPending}
+              onChange={(event) => setEgressAuthorized(event.target.checked)}
+              className="mt-3"
+            />
+            <span className="text-body text-ink-2">
+              允许将小说正文及派生上下文发送给外部模型。取消它不会撤销付费授权，
+              但需要正文外发的执行者会在调用前被拒绝。
+            </span>
+          </label>
+
           <div className="flex items-center gap-10">
             <span className="text-sm2 text-ink-4">
               将要执行的命令（服务端{' '}
               <span className="font-mono">POST /api/agent/runs/preview</span> 下发）
             </span>
-            <LinkButton onClick={() => setCommandOpen((v) => !v)} disabled={!preview.data}>
+            <LinkButton onClick={() => setCommandOpen((value) => !value)} disabled={!previewResponse}>
               {commandOpen ? '收起完整命令' : '展开完整命令'}
             </LinkButton>
           </div>
@@ -100,57 +206,39 @@ export function AgentRunDialog({
               commandOpen ? 'max-h-[260px]' : 'max-h-[92px]',
             )}
           >
-            {preview.isPending
-              ? '…'
-              : preview.isError
-                ? '取不到这条命令。没拿到服务端下发的 argv，就不该发起——界面不替你拼一条。'
-                : preview.data?.argv.join(' ')}
+            {request === null
+              ? '配置完成后才会请求预览。'
+              : preview.isPending
+                ? '…'
+                : preview.isError && !preview.data
+                  ? '取不到这条命令。没拿到服务端 preview，就不会发起。'
+                  : previewResponse?.argv.join(' ')}
           </div>
 
+          {previewResponse ? (
+            <AgentProfilesSnapshot profiles={previewResponse.profiles} />
+          ) : null}
+
           <div className="flex items-center gap-10">
-            <span className="text-sm2 text-ink-4">给 agent 的 prompt（授权原文在里面）</span>
-            <LinkButton onClick={() => setPromptOpen((v) => !v)} disabled={!preview.data}>
+            <span className="text-sm2 text-ink-4">给指挥 Agent 的 prompt（授权原文在里面）</span>
+            <LinkButton onClick={() => setPromptOpen((value) => !value)} disabled={!previewResponse}>
               {promptOpen
                 ? '收起 prompt'
                 : '展开 prompt 全文' +
-                  (preview.data ? '（' + preview.data.prompt.length + ' 字）' : '')}
+                  (previewResponse ? '（' + previewResponse.prompt.length + ' 字）' : '')}
             </LinkButton>
           </div>
-          {promptOpen && preview.data ? (
+          {promptOpen && previewResponse ? (
             <pre className="m-0 max-h-[220px] overflow-y-auto rounded-btn-lg border border-line bg-inset px-14 py-12 font-mono text-mini leading-[1.9] whitespace-pre-wrap text-ink-2 select-all">
-              {preview.data.prompt}
+              {previewResponse.prompt}
             </pre>
           ) : null}
 
-          <label className="flex cursor-pointer items-start gap-8 rounded-block border border-line-btn bg-sunken-2 px-14 py-10">
-            <input
-              type="checkbox"
-              checked={authorized}
-              onChange={(e) => setAuthorized(e.target.checked)}
-              className="mt-3"
-            />
-            <span className="text-body text-ink-2">
-              允许本会话产生外部模型调用费用（skill 接口契约的付费授权）；默认不勾，
-              不勾则 agent 在第一条付费命令前停下。
-              <strong className="font-semibold">
-                这一格只管流水线节点（DeepSeek）；agent 本身是一次 headless Claude
-                会话，无论勾不勾都会产生 Claude 侧调用费用。
-              </strong>
-            </span>
-          </label>
-
-          <label className="flex cursor-pointer items-start gap-8 rounded-block border border-line-btn bg-sunken-2 px-14 py-10">
-            <input
-              type="checkbox"
-              checked={egressAuthorized}
-              onChange={(e) => setEgressAuthorized(e.target.checked)}
-              className="mt-3"
-            />
-            <span className="text-body text-ink-2">
-              允许将小说正文及派生上下文发送给外部模型（正文外发授权，默认勾选）；取消后即使已有
-              付费授权，agent 也会在首个需要正文外发的步骤前停下
-            </span>
-          </label>
+          {preview.data && !echoed ? (
+            <div role="alert" className="rounded-block border border-warn-line bg-warn-bg px-14 py-10 text-body text-warn-ink">
+              服务端 preview 回显的 Agent 配置或授权与请求不一致；为防配置漂移，本次启动已关闭。
+            </div>
+          ) : null}
 
           {start.isError ? (
             <div className="rounded-block border border-warn-line bg-warn-bg px-14 py-10 text-body text-warn-ink">
@@ -171,9 +259,11 @@ export function AgentRunDialog({
           className="flex shrink-0 items-center gap-10 border-t border-line-soft bg-sunken-2 px-22 py-13"
         >
           <span data-testid="agent-run-cost-note" className="text-tag text-ink-4">
-            {authorized
-              ? '发起后跳到进度屏：跑到哪一步、退出码都在那。两侧都会计费：流水线节点走 DeepSeek，agent 会话走 Claude。'
-              : '不执行流水线付费节点；但仍会启动一次 headless Claude 会话收集状态与恢复方案，Claude 侧照常计费。'}
+            {!authorized
+              ? '未授予模型调用费用：当前只可预览，不会启动指挥 Agent。'
+              : !egressAuthorized
+                ? '未授予正文外发：当前只可预览，不会启动指挥 Agent。'
+                : '发起后跳到进度屏；指挥与付费执行节点都可能产生所选模型的调用费用。'}
           </span>
           <button
             type="button"
@@ -185,19 +275,24 @@ export function AgentRunDialog({
           <button
             type="button"
             disabled={disabled}
-            onClick={() =>
+            onClick={() => {
+              if (!preview.data || !echoed) return
               start.mutate(
-                { sid, authorized, egress_authorized: egressAuthorized },
-                { onSuccess: () => onStarted(sid) },
+                preview.data.request,
+                { onSuccess: () => onStarted(preview.data.request.sid) },
               )
-            }
+            }}
             className={cx(
               'rounded-btn px-18 py-8 text-body-lg font-semibold text-card',
               authorized ? 'bg-spend' : 'bg-ink',
               disabled ? 'cursor-not-allowed opacity-40' : 'cursor-pointer',
             )}
           >
-            {authorized ? '授权并开始跑书' : '启动诊断（仍产生 Claude 费用）'}
+            {!authorized
+              ? '需先授权模型调用费用'
+              : !egressAuthorized
+                ? '需先授权正文外发'
+                : '授权并开始跑书'}
           </button>
         </div>
       </div>

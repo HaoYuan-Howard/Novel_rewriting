@@ -178,6 +178,11 @@ def test_ledger_uses_beacon_run_ids_and_leaves_legacy_ungrouped(monkeypatch, tmp
          'run_id': 'run-current',
          'at': '1970-01-01T00:02:05+00:00', 'cached': False,
          'latency_ms': 250},
+        {'sid': 'book-1', 'outcome': 'ok', 'role': 'commander', 'node': None,
+         'run_id': 'run-current',
+         'at': '1970-01-01T00:02:07+00:00', 'cached': False,
+         'prompt_tokens': 7, 'completion_tokens': 3, 'reasoning_tokens': 2,
+         'latency_ms': 125},
         {'sid': 'book-1', 'outcome': 'ok', 'node': 'stage4.plan',
          'at': '1970-01-01T00:02:10+00:00', 'cached': False,
          'prompt_tokens': 50, 'completion_tokens': 5,
@@ -201,14 +206,20 @@ def test_ledger_uses_beacon_run_ids_and_leaves_legacy_ungrouped(monkeypatch, tmp
                         node='stage7.assemble', exit_code=0, run_id='run-other'),
     ]
 
-    assert session['total']['calls_paid'] == 1
+    assert session['total']['calls_paid'] == 2
     assert session['total']['calls_cached'] == 1
-    assert session['total']['wire_attempts'] == 2
+    assert session['total']['wire_attempts'] == 3
     assert session['total']['wire_errors_billing_unknown'] == 1
-    assert session['total']['wire_outcomes'] == {'error': 1, 'ok': 1}
-    assert session['total']['prompt_tokens'] == 110
-    assert cumulative['total']['calls_paid'] == 3
+    assert session['total']['wire_outcomes'] == {'error': 1, 'ok': 2}
+    assert session['total']['prompt_tokens'] == 117
+    assert cumulative['total']['calls_paid'] == 4
     assert session['legacy_ungrouped_rows'] == 1
+    assert session['by_node']['role:commander']['calls_paid'] == 1
+    assert 'unknown' not in session['by_node']
+    assert any(
+        row['node'] == 'role:commander'
+        for row in session['by_run_node']
+    )
     assert session['by_run_node'][0]['run_id'] == 'run-current'
     assert collector._session_exits(events, 'book-1', 100) == [
         {'node': 'stage5.write', 'exit_code': 1, 'run_id': 'run-current'}]

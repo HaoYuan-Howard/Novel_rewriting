@@ -20,16 +20,18 @@ import pytest
 from pydantic import ValidationError
 
 import contracts.judges.stage5  # noqa: F401  # 注册现役 Stage5 判据供 fixture 对账
-from contracts.invariants import APPROVAL_GATES
+from contracts.invariants import AGENT_EXECUTOR_NODES, APPROVAL_GATES
 from contracts.rules import REGISTRY
 from contracts.schema.api import (
-    ApprovalDoc, DraftAlignView, DraftView, ErrorBody, GlobalView, JobList,
-    LogChunk, LogStreamEvent, NovelList, PreviewRequest, ReadingView,
+    AgentCapabilitiesResponse, AgentDriverCapability, AgentModelCapability,
+    AgentRunRequest, ApprovalDoc, DraftAlignView, DraftView, ErrorBody, GlobalView,
+    JobList, LogChunk, LogStreamEvent, NovelList, PreviewRequest, ReadingView,
     ReviewChapterView, ReviewView,
     Stage0EditRequest, Stage0Segment, Stage0Segments, Stage1Segment, Stage1View,
     Stage4View, Stage5View, Stage6View, Stage7View, UploadResult,
 )
 from contracts.schema.api import ReadingBeatLine
+from contracts.schema.orchestration import AgentProfile, AgentRunStart, JobStart, Step
 from contracts.schema.report import CheckReport
 from contracts.schema.stage5 import ChapterSegment
 
@@ -90,6 +92,86 @@ def test_preview_sid_is_nullable_but_never_empty():
     assert PreviewRequest(sid=None, node='stage0.remove').sid is None
     with pytest.raises(ValidationError):
         PreviewRequest(sid='', node='stage0.remove')
+
+
+def test_old_job_and_agent_records_keep_missing_profiles_as_unknown():
+    """兼容字段缺席时保持 ``None``，绝不拿今天的 registry 默认倒推历史。"""
+    step = Step(
+        argv=['python'], cwd='E:/repo', label='旧步骤', paid=False, writes='')
+    job = JobStart(
+        sid='old', node='stage0.remove', steps=[step], python='3.10', code='old',
+        paid=False, writes=False,
+    )
+    agent = AgentRunStart(
+        sid='old', argv=['claude'], prompt='旧提示词',
+        authorized=False, egress_authorized=True,
+    )
+
+    assert PreviewRequest(sid='old', node='stage0.remove').executor_profile is None
+    assert PreviewRequest(sid='old', node='stage0.remove').egress_authorized is False
+    assert AgentRunRequest(sid='old').profiles is None
+    assert step.executor_profile is None and job.executor_profile is None
+    assert step.egress_authorized is None and job.egress_authorized is None
+    assert agent.profiles is None
+
+
+def test_executor_egress_snapshots_distinguish_old_unknown_from_new_bool():
+    profile = AgentProfile(
+        driver='codex', model='gpt-5.6-sol', reasoning_effort='high',
+        execution_mode='standard')
+    step_fields = dict(
+        argv=['python'], cwd='E:/repo', label='executor', paid=True, writes='artifact')
+
+    # Phase2/3 的 append-only 记录没有新格：字段缺席只能读成 unknown，不能倒推。
+    old_step = Step(**step_fields, executor_profile=profile)
+    old_job = JobStart(
+        sid='old', node='stage2.global', steps=[old_step], python='3.11', code='old',
+        paid=True, writes=True, executor_profile=profile)
+    assert old_step.egress_authorized is None
+    assert old_job.egress_authorized is None
+
+    # 公共 HTTP 会把旧缺席格投影成显式 null；再次解码仍必须保留 unknown。
+    old_round_trip = JobStart.model_validate_json(old_job.model_dump_json())
+    assert old_round_trip.egress_authorized is None
+    assert old_round_trip.steps[0].egress_authorized is None
+    with pytest.raises(ValidationError, match='不能携带正文外发授权'):
+        Step(**step_fields, executor_profile=None, egress_authorized=False)
+    with pytest.raises(ValidationError, match='与 argv'):
+        Step(**step_fields, executor_profile=profile, egress_authorized=True)
+
+    current_step = Step(
+        **step_fields, executor_profile=profile, egress_authorized=False)
+    current_job = JobStart(
+        sid='new', node='stage2.global', steps=[current_step], python='3.11', code='new',
+        paid=True, writes=True, executor_profile=profile, egress_authorized=False)
+    assert current_job.egress_authorized is False
+    with pytest.raises(ValidationError, match=r'steps\[\] 不一致'):
+        JobStart(
+            sid='new', node='stage2.global', steps=[current_step],
+            python='3.11', code='new', paid=True, writes=True,
+            executor_profile=profile, egress_authorized=True)
+
+
+def test_agent_capability_response_keeps_ids_labels_and_options_separate():
+    model = AgentModelCapability(
+        id='gpt-5.6-sol', label='GPT-5.6 Sol',
+        reasoning_efforts=['none', 'high'], execution_modes=['standard'],
+    )
+    driver = AgentDriverCapability(
+        id='codex', provider='openai', label='Codex',
+        roles=['commander', 'executor'],
+        availability='unknown', availability_reason='只做了本机版本探针',
+        models=[model],
+    )
+    response = AgentCapabilitiesResponse(
+        drivers=[driver], executor_nodes=list(AGENT_EXECUTOR_NODES))
+
+    assert response.drivers[0].models[0].id == 'gpt-5.6-sol'
+    assert response.drivers[0].models[0].label == 'GPT-5.6 Sol'
+    assert response.drivers[0].provider == 'openai'
+    with pytest.raises(ValidationError, match='不得重复'):
+        AgentCapabilitiesResponse(
+            drivers=[driver, driver], executor_nodes=list(AGENT_EXECUTOR_NODES))
 
 
 def test_stage0_continuous_view_rejects_a_gap_and_duplicate_ids():
@@ -214,6 +296,7 @@ def test_the_api_models_never_carry_a_verdict():
     verdicts = {'badge', 'passed', 'counts', 'hard_count', 'unver_count'}
     for model in (
         NovelList, JobList, LogChunk, LogStreamEvent, PreviewRequest, ErrorBody,
+        AgentCapabilitiesResponse,
         Stage0Segment, Stage0Segments, Stage1Segment, Stage1View, UploadResult,
         GlobalView, Stage6View, Stage7View,
         ReadingView, Stage4View, Stage5View, ReviewView,
@@ -302,6 +385,7 @@ def test_every_response_model_forbids_extra_fields():
     """
     for model in (
         NovelList, JobList, LogChunk, LogStreamEvent, PreviewRequest, ErrorBody,
+        AgentCapabilitiesResponse,
         Stage0Segment, Stage0Segments, Stage0EditRequest,
         Stage1Segment, Stage1View,
         UploadResult, GlobalView, Stage6View, Stage7View,

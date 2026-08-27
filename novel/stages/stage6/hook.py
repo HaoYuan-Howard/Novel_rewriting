@@ -19,6 +19,12 @@ hook.py —— `stage6.hook` 与 `stage6.approve` 的节点函数。
 """
 from __future__ import annotations
 
+import hashlib
+import json
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
+from typing import Any, Protocol
+
 from contracts.artifacts import (
     STAGE1_HOOK_COPY, STAGE2_GLOBAL_GROUNDING,
     STAGE4_WRITER_CONTEXT, STAGE6_HOOK, STAGE6_HOOK_EDIT,
@@ -36,12 +42,16 @@ from contracts.schema.stage6 import (
     ApprovedHook, Candidate, Hook, HookApprovalResolution, HookEdit, HookParams,
     HookCandidateRetryResponse, HookProvenance, HookResponse, Mech,
 )
-from novel import paths, prov, wontfix
+from novel import agent_session_audit, paths, prov, wontfix
 from novel.core.evidence import without_global_evidence
 from novel.core.measure import hook_style_metrics, measure
-from novel.errors import ArtifactUnreadable, GateBlocked, TerminalState, UpstreamMissing
+from novel.errors import (
+    ArtifactUnreadable, GateBlocked, ProvenanceRefused, TerminalState,
+    UpstreamMissing,
+)
 from novel.llm.cache import CachePolicy
-from novel.llm.client import LlmClient
+from novel.llm.client import LlmClient, LlmFailed
+from novel.llm.stage6_hook_runs import RECOVERY_POLICY as AGENT_RECOVERY_POLICY
 from novel.llm.transport import TransportError
 from novel.report import build
 from novel.report.findings import Outcome
@@ -466,6 +476,144 @@ CANDIDATE_RETRY_MAX_TOKENS = 24000
 CANDIDATE_RETRY_LIMIT = 1
 CANDIDATE_RETRY_RUNGS = (('low', False),)
 
+# Agent 不能把初始 ``HookResponse`` 与 legacy 单候选 retry schema 接在同一
+# provider session 上：SessionAgentClient 会冻结 system/user/schema/purpose。
+# 因此 agent 路始终返回完整三候选 replacement；policy 由薄 adapter 唯一声明。
+
+
+class _HookResponseSource(Protocol):
+    """legacy LlmClient 与单 session executor 共用的最窄响应面。"""
+
+    model: str
+
+    def ask_json(self, system: str, user: str, **kwargs: Any) -> Any: ...
+
+    def accepted_attempt(self, purpose: str) -> str | None: ...
+
+    def accepted_models(self, *purposes: str) -> tuple[str, ...]: ...
+
+    def accepted_checkpoint(self, purpose: str) -> dict[str, Any]: ...
+
+    def restore_checkpoint_acceptance(
+            self, purpose: str, record: Mapping[str, Any], **kwargs: Any,
+    ) -> None: ...
+
+    def queue_code_validation_feedback(
+            self, rows: Sequence[Mapping[str, object]], **kwargs: Any,
+    ) -> bool: ...
+
+    def queue_restored_code_validation_feedback(
+            self, rows: Sequence[Mapping[str, object]], **kwargs: Any,
+    ) -> bool: ...
+
+
+@dataclass(frozen=True)
+class HookCandidateContext:
+    """一次 hook 生成的只读输入快照；不含响应，也没有落盘能力。"""
+
+    system: str
+    user: str
+    input_sha256: str
+    _up: _Upstreams
+
+
+@dataclass(frozen=True)
+class HookCandidateBatch:
+    """完成初始生成与内存重试后的完整三候选 replacement。"""
+
+    response: HookResponse
+    initially_dirty: tuple[str, ...]
+    retry_history: tuple[Mapping[str, object], ...]
+    requested_model: str
+    adopted_models: tuple[str, ...]
+    adoptions: tuple[tuple[str, str], ...]
+    restored_acceptance: Mapping[str, Any] | None
+    agent_mode: bool
+    _batch_sha256: str
+
+
+@dataclass(frozen=True)
+class HookCandidateEvaluation:
+    """无落盘 provisional 结果；终态只能交给 ``finalize_hook_candidate``。"""
+
+    candidate: Hook
+    duplicate_slots: tuple[tuple[str, ...], ...]
+    dirty_slots: tuple[str, ...]
+    requested_model: str
+    adopted_models: tuple[str, ...]
+    adoptions: tuple[tuple[str, str], ...]
+    input_sha256: str
+    _batch: HookCandidateBatch
+    _candidate_sha256: str
+
+
+def _json_default(value: object) -> object:
+    dump = getattr(value, 'model_dump', None)
+    if callable(dump):
+        return dump(by_alias=True, mode='json')
+    if isinstance(value, tuple):
+        return list(value)
+    raise TypeError(f'{type(value).__name__} 不是可冻结的 JSON 值')
+
+
+def _canonical_sha256(value: object) -> str:
+    return hashlib.sha256(json.dumps(
+        value, ensure_ascii=False, sort_keys=True, separators=(',', ':'),
+        allow_nan=False, default=_json_default,
+    ).encode('utf-8')).hexdigest()
+
+
+def _input_identity(
+        ctx: RunContext, *, system: str, user: str, up: _Upstreams,
+) -> str:
+    return _canonical_sha256({
+        'node': ctx.node,
+        'code': ctx.code,
+        'system': system,
+        'user': user,
+        'lead_upto': up.upto,
+        'judged': up.judged,
+        'inputs': ctx.edges,
+    })
+
+
+def prepare_hook_candidate(ctx: RunContext) -> HookCandidateContext:
+    """冻结 prompt 与当前上游；不请求模型、不写正式件或 INVALID。"""
+    if ctx.node != 'stage6.hook':
+        raise ValueError(
+            f'prepare_hook_candidate 只接受 stage6.hook，实得 {ctx.node!r}')
+    store = ArtifactStore(ctx)
+    up = _Upstreams(ctx, store)
+    system = prompts.hook_system()
+    user = prompts.build_user(up.mat)
+    return HookCandidateContext(
+        system=system,
+        user=user,
+        input_sha256=_input_identity(
+            ctx, system=system, user=user, up=up),
+        _up=up,
+    )
+
+
+def _assert_prepared_current(
+        ctx: RunContext, prepared: HookCandidateContext,
+) -> _Upstreams:
+    if prov.code_version() != ctx.code:
+        raise ProvenanceRefused(
+            f'stage6.hook 候选期间代码版本漂移：start={ctx.code} '
+            f'current={prov.code_version()}；拒绝结算或落盘')
+    ctx.require_observed_roots_current()
+    current = _Upstreams(ctx, ArtifactStore(ctx))
+    system = prompts.hook_system()
+    user = prompts.build_user(current.mat)
+    identity = _input_identity(ctx, system=system, user=user, up=current)
+    if (identity != prepared.input_sha256
+            or system != prepared.system or user != prepared.user):
+        raise ProvenanceRefused(
+            'stage6.hook 初始 prompt/上游/成稿投影已变化；'
+            '拒绝把旧上下文候选写成当前正式产物')
+    return current
+
 
 def _hard_candidate_findings(findings: list[Finding]) -> list[Finding]:
     return [item for item in findings if _sev_of(item.rule) == 'hard']
@@ -509,81 +657,148 @@ def _retry_failure_rows(findings: list[Finding]) -> list[dict[str, object]]:
     } for item in findings]
 
 
-def run_hook(ctx: RunContext, client: LlmClient) -> Hook:
-    """**付费**：初始调用产三个候选，机械判定后逐条定向重试，再校验落盘。
-
-    ⚠⚠ **本函数写好了，但在你点头之前一次都不许真跑**（那是本仓第一次真花钱）。
-    先 `--dry-run`：`build_prompt()` 是 0 成本的。
-    初始与重试调用都在本函数，最终 provenance 的 usage 覆盖完整调用窗口。
-    """
-    store = ArtifactStore(ctx)
-    up = _Upstreams(ctx, store)
-    system, user = prompts.hook_system(), prompts.build_user(up.mat)
-    resp = client.ask_json(system, user, model_cls=HookResponse, purpose=ctx.node,
-                           max_tokens=MAX_TOKENS)
-
-    candidate_rows: list[dict[str, object]] = []
-    for c in resp.candidates:
-        # ⚠ 枚举**不许 `.get` 兜底**：写歪的 approach 兜成某个合法值，
-        # 等于给违约数据发一张静默通行证。载体已经用 `Literal` 拦了一道，
-        # 这里留着是因为「模型没按枚举产出」要是一句**人话**，不是一段栈。
-        if c.approach not in HOOK_APPROACHES:
+def _normalized_candidate_rows(
+        response: HookResponse, up: _Upstreams,
+) -> list[dict[str, object]]:
+    rows: list[dict[str, object]] = []
+    for candidate in response.candidates:
+        # 枚举不许兜底：写歪的值必须在人读错误里可见。
+        if candidate.approach not in HOOK_APPROACHES:
             raise TerminalState(
-                f'候选的 approach={c.approach!r} 不在 {sorted(HOOK_APPROACHES)} 里'
-                f'——模型没按枚举产出，别静默收下')
-        text, mech, fs = _normalize_and_judge(c.text, up)
-        candidate_rows.append({
-            'approach': c.approach, 'text': text, 'mech': mech, 'findings': fs,
+                f'候选的 approach={candidate.approach!r} 不在 '
+                f'{sorted(HOOK_APPROACHES)} 里——模型没按枚举产出，别静默收下')
+        text, mech, findings = _normalize_and_judge(candidate.text, up)
+        rows.append({
+            'approach': candidate.approach,
+            'text': text,
+            'mech': mech,
+            'findings': findings,
         })
+    return rows
 
+
+def _accepted_attempt(
+        source: _HookResponseSource, purpose: str,
+) -> str | None:
+    value = source.accepted_attempt(purpose)
+    return value if isinstance(value, str) and value else None
+
+
+def _batch(
+        *, response: HookResponse, initially_dirty: Sequence[str],
+        retry_history: Sequence[Mapping[str, object]], requested_model: str,
+        adopted_models: Sequence[str], adoptions: Sequence[tuple[str, str]],
+        restored_acceptance: Mapping[str, Any] | None,
+        agent_mode: bool,
+) -> HookCandidateBatch:
+    payload = {
+        'response': response.model_dump(by_alias=True, mode='json'),
+        'initially_dirty': list(initially_dirty),
+        'retry_history': [dict(row) for row in retry_history],
+        'requested_model': requested_model,
+        'adopted_models': sorted(set(adopted_models)),
+        'adoptions': [list(row) for row in adoptions],
+        'restored_acceptance': (
+            None if restored_acceptance is None
+            else dict(restored_acceptance)),
+        'agent_mode': agent_mode,
+    }
+    return HookCandidateBatch(
+        response=response.model_copy(deep=True),
+        initially_dirty=tuple(initially_dirty),
+        retry_history=tuple(dict(row) for row in retry_history),
+        requested_model=requested_model,
+        adopted_models=tuple(sorted(set(adopted_models))),
+        adoptions=tuple(adoptions),
+        restored_acceptance=(
+            None if restored_acceptance is None
+            else dict(restored_acceptance)),
+        agent_mode=agent_mode,
+        _batch_sha256=_canonical_sha256(payload),
+    )
+
+
+def _legacy_hook_candidates(
+        ctx: RunContext, source: _HookResponseSource,
+        prepared: HookCandidateContext,
+) -> HookCandidateBatch:
+    """旧 LlmClient：逐字保留初始请求 + 每个初始脏槽一次单候选 retry。"""
+    response = source.ask_json(
+        prepared.system,
+        prepared.user,
+        model_cls=HookResponse,
+        purpose=ctx.node,
+        max_tokens=MAX_TOKENS,
+    )
+    # ``rows`` 保存代码归一后的候选，用于机械判定与 retry prompt；最终再交给
+    # ``HookResponse`` 校验的却必须是模型实际返回的字节。两条原始文本可能只差
+    # 半角/全角标点：wire schema 允许它们通过，归一后重复则由正式落盘闸写
+    # ``.INVALID``。若把 ``rows[].text`` 重新塞回响应 schema，Pydantic 会在这里
+    # 提前报重复，业务闸便永远拿不到那份候选，也失去 0 成本 revalidate 路。
+    wire_candidates: list[dict[str, str]] = [{
+        'approach': candidate.approach,
+        'text': candidate.text,
+    } for candidate in response.candidates]
+    rows = _normalized_candidate_rows(response, prepared._up)
+    initially_dirty = [
+        index for index, row in enumerate(rows)
+        if _hard_candidate_findings(row['findings'])  # type: ignore[arg-type]
+    ]
+    initial_attempt = _accepted_attempt(source, ctx.node)
+    slot_sources: list[tuple[str, str] | None] = [
+        ((ctx.node, initial_attempt) if initial_attempt is not None else None)
+        for _row in rows
+    ]
+    rationale_source = (
+        (ctx.node, initial_attempt) if initial_attempt is not None else None)
+    rationale = response.rationale
     retry_system = prompts.hook_retry_system()
     retry_policy = CachePolicy.refresh()
     retry_history: list[dict[str, object]] = []
-    initially_dirty = [
-        index for index, row in enumerate(candidate_rows)
-        if _hard_candidate_findings(row['findings'])  # type: ignore[arg-type]
-    ]
-    rationale = resp.rationale
+
     for index in initially_dirty:
-        row = candidate_rows[index]
-        # ⚠ `index` 是 0 起的行号，`slot` 是 1 起的位置身份——**定向重试寻的是位置**。
-        #   按 `approach` 寻址在同一种策略采两条样本时会指向两条候选，
-        #   而这条路只允许替换其中一条。
+        row = rows[index]
         slot = slot_of(index + 1)
         approach = str(row['approach'])
-        before_findings = _hard_candidate_findings(row['findings'])  # type: ignore[arg-type]
+        before_findings = _hard_candidate_findings(
+            row['findings'])  # type: ignore[arg-type]
         failure_rows = _retry_failure_rows(before_findings)
         retry_user = prompts.build_retry_user(
-            up.mat,
+            prepared._up.mat,
             slot=slot,
             approach=approach,
             candidates=[{
                 'slot': slot_of(position),
                 'approach': str(candidate['approach']),
                 'text': str(candidate['text']),
-            } for position, candidate in enumerate(candidate_rows, 1)],
+            } for position, candidate in enumerate(rows, 1)],
             rationale=rationale,
-            hard_findings=failure_rows)
-        common_history: dict[str, object] = {
+            hard_findings=failure_rows,
+        )
+        purpose = f'{ctx.node}:retry:{slot}'
+        common: dict[str, object] = {
             'slot': slot,
             'attempt': 1,
             'failure_items': sorted({item.rule for item in before_findings}),
             'failure_evidence': prov.projection_fingerprint(failure_rows),
             'user_prompt': prov.fingerprint(retry_user),
-            'model': client.model,
+            'model': source.model,
             'cache_policy': retry_policy.name,
             'before_hard': len(before_findings),
         }
         try:
-            retried = client.ask_json(
-                retry_system, retry_user, model_cls=HookCandidateRetryResponse,
-                purpose=f'{ctx.node}:retry:{slot}',
+            retried = source.ask_json(
+                retry_system,
+                retry_user,
+                model_cls=HookCandidateRetryResponse,
+                purpose=purpose,
                 max_tokens=CANDIDATE_RETRY_MAX_TOKENS,
                 rungs=CANDIDATE_RETRY_RUNGS,
-                cache_policy=retry_policy)
+                cache_policy=retry_policy,
+            )
         except (TerminalState, TransportError) as exc:
             retry_history.append({
-                **common_history,
+                **common,
                 'output': None,
                 'after_hard': None,
                 'status': 'request_failed',
@@ -592,113 +807,855 @@ def run_hook(ctx: RunContext, client: LlmClient) -> Hook:
             })
             continue
 
-        output_fingerprint = prov.projection_fingerprint(
+        output = prov.projection_fingerprint(
             retried.model_dump(by_alias=True))
         if retried.approach != approach:
             retry_history.append({
-                **common_history,
-                'output': output_fingerprint,
+                **common,
+                'output': output,
                 'after_hard': None,
                 'status': 'wrong_approach',
-                # ⚠ 仍按 `approach` 判「模型跑偏了没有」：位置是**我们**指定的，
-                #   模型能说错的只有策略。两者查的不是同一件事。
-                'reason': (f'请求 {slot} 那一条（{approach!r}），'
-                           f'响应却返回 {retried.approach!r}；'
-                           '保留初始候选与整组 rationale'),
+                'reason': (
+                    f'请求 {slot} 那一条（{approach!r}），'
+                    f'响应却返回 {retried.approach!r}；'
+                    '保留初始候选与整组 rationale'),
                 'accepted': False,
             })
             continue
-        retry_text, retry_mech, retry_findings = _normalize_and_judge(retried.text, up)
+        retry_text, retry_mech, retry_findings = _normalize_and_judge(
+            retried.text, prepared._up)
         after_findings = _hard_candidate_findings(retry_findings)
         duplicate = any(
             retry_text == str(other['text'])
-            for other_index, other in enumerate(candidate_rows) if other_index != index
+            for other_index, other in enumerate(rows)
+            if other_index != index
         )
         if duplicate:
             status = 'duplicate'
             reason = '重试文本与另一条当前候选重复；保留初始候选与整组 rationale'
         elif len(after_findings) >= len(before_findings):
             status = 'hard_not_reduced'
-            reason = (f'HARD 未严格下降：{len(before_findings)} → '
-                      f'{len(after_findings)}；保留初始候选与整组 rationale')
+            reason = (
+                f'HARD 未严格下降：{len(before_findings)} → '
+                f'{len(after_findings)}；保留初始候选与整组 rationale')
         else:
             status = 'accepted'
             reason = None
         accepted = status == 'accepted'
         retry_history.append({
-            **common_history,
-            'output': output_fingerprint,
+            **common,
+            'output': output,
             'after_hard': len(after_findings),
             'status': status,
             'reason': reason,
             'accepted': accepted,
         })
         if accepted:
-            row.update(text=retry_text, mech=retry_mech, findings=retry_findings)
+            row.update(
+                text=retry_text, mech=retry_mech, findings=retry_findings)
+            wire_candidates[index] = {
+                'approach': retried.approach,
+                'text': retried.text,
+            }
             rationale = retried.rationale
+            attempt_id = _accepted_attempt(source, purpose)
+            if attempt_id is not None:
+                slot_sources[index] = (purpose, attempt_id)
+                rationale_source = (purpose, attempt_id)
 
-    cands = [
+    final = HookResponse.model_validate({
+        'candidates': wire_candidates,
+        'rationale': rationale,
+    })
+    contributions = {
+        value for value in [*slot_sources, rationale_source]
+        if value is not None
+    }
+    adoptions = tuple(sorted(contributions))
+    purposes = tuple(purpose for purpose, _attempt in adoptions)
+    return _batch(
+        response=final,
+        initially_dirty=tuple(slot_of(index + 1) for index in initially_dirty),
+        retry_history=retry_history,
+        requested_model=source.model,
+        adopted_models=source.accepted_models(*purposes),
+        adoptions=adoptions,
+        restored_acceptance=None,
+        agent_mode=False,
+    )
+
+
+def _agent_feedback(
+        *, slot: str, findings: Sequence[Finding],
+) -> list[dict[str, object]]:
+    """正文/证据不复制进反馈；只把规则元数据送回同一 provider session。"""
+    rows: list[dict[str, object]] = []
+    for finding in findings:
+        rule = REGISTRY.get(finding.rule)
+        rows.append({
+            'rule': finding.rule,
+            'item': rule.item,
+            'requirement': rule.requirement,
+            'count': 1,
+            'slot': slot,
+        })
+    return rows
+
+
+def _replacement_validator(
+        current: HookResponse, *, target_index: int, up: _Upstreams,
+):
+    """完整 replacement 只能改目标 slot，且目标机械 HARD 必须严格下降。"""
+    current_rows = _normalized_candidate_rows(current, up)
+    before = _hard_candidate_findings(
+        current_rows[target_index]['findings'])  # type: ignore[arg-type]
+    slot = slot_of(target_index + 1)
+
+    def validate(replacement: HookResponse, _wire: Any) -> str | None:
+        for index, (old, new) in enumerate(zip(
+                current.candidates, replacement.candidates)):
+            if index == target_index:
+                if new.approach != old.approach:
+                    return (
+                        f'{slot}: target approach 必须保持 {old.approach!r}，'
+                        f'实得 {new.approach!r}')
+                continue
+            if new.approach != old.approach or new.text != old.text:
+                return (
+                    f'{slot}: 完整 replacement 不得改非目标 '
+                    f'{slot_of(index + 1)} 的 approach/text 原字节')
+        rows = _normalized_candidate_rows(replacement, up)
+        after = _hard_candidate_findings(
+            rows[target_index]['findings'])  # type: ignore[arg-type]
+        if len(after) >= len(before):
+            return f'{slot}: 目标 HARD 必须严格下降：{len(before)} → {len(after)}'
+        target_text = str(rows[target_index]['text'])
+        if any(
+                target_text == str(row['text'])
+                for index, row in enumerate(rows) if index != target_index):
+            return f'{slot}: 目标归一后与另一候选重复'
+        return None
+
+    return validate
+
+
+def _agent_checkpoint_state(
+        response: HookResponse, *, up: _Upstreams,
+        initially_dirty: Sequence[str],
+) -> dict[str, object]:
+    """checkpoint 只补业务判定索引；完整响应由通用 core 自己封存。"""
+    rows = _normalized_candidate_rows(response, up)
+    by_text: dict[str, list[str]] = {}
+    hard_rules: dict[str, list[str]] = {}
+    for position, row in enumerate(rows, 1):
+        slot = slot_of(position)
+        text = str(row['text'])
+        by_text.setdefault(text, []).append(slot)
+        hard_rules[slot] = [
+            finding.rule for finding in _hard_candidate_findings(
+                row['findings'])  # type: ignore[arg-type]
+        ]
+    return {
+        'initially_dirty': list(initially_dirty),
+        'hard_rules': hard_rules,
+        'duplicate_slots': [
+            slots for slots in by_text.values() if len(slots) > 1
+        ],
+    }
+
+
+def _restore_agent_checkpoint(
+        ctx: RunContext, source: _HookResponseSource,
+        prepared: HookCandidateContext,
+) -> tuple[HookResponse, tuple[str, ...]] | None:
+    """完整复验 latest revision；只恢复 adoption，不伪造 live provider session。"""
+    from novel.llm import stage6_hook_runs
+
+    restored = stage6_hook_runs.restore_checkpoint(
+        ctx,
+        input_sha256=prepared.input_sha256,
+        system=prepared.system,
+        user=prepared.user,
+        response_model=HookResponse,
+        max_tokens=MAX_TOKENS,
+    )
+    if restored is None:
+        return None
+    state = restored.state_payload
+    if set(state) != {'initially_dirty', 'hard_rules', 'duplicate_slots'}:
+        raise ProvenanceRefused(
+            'stage6.hook checkpoint state_payload 字段漂移')
+    initial = state.get('initially_dirty')
+    if (not isinstance(initial, list)
+            or any(slot not in tuple(slot_of(i) for i in range(1, 4))
+                   for slot in initial)
+            or len(initial) != len(set(initial))):
+        raise ProvenanceRefused(
+            'stage6.hook checkpoint initially_dirty 不是合法槽位集合')
+    expected_state = _agent_checkpoint_state(
+        restored.value, up=prepared._up, initially_dirty=initial)
+    if state != expected_state:
+        raise ProvenanceRefused(
+            'stage6.hook checkpoint 的 HARD/重复索引不再等于当前代码判定')
+    if (restored.revision == 1
+            and tuple(initial) != tuple(
+                slot for slot, rules in expected_state['hard_rules'].items()
+                if rules)):
+        raise ProvenanceRefused(
+            'stage6.hook 首个 checkpoint 的 initially_dirty 与初始候选不闭合')
+    source.restore_checkpoint_acceptance(
+        ctx.node,
+        restored.acceptance,
+        system=prepared.system,
+        user=prepared.user,
+        max_tokens=MAX_TOKENS,
+        recovery_policy=AGENT_RECOVERY_POLICY,
+    )
+    return restored.value, tuple(str(slot) for slot in initial)
+
+
+def _finish_restored_hook_session(
+        ctx: RunContext, acceptance: Mapping[str, Any], *,
+        delivery_state: str, error_kind: str | None = None,
+) -> None:
+    """幂等补旧 logical session 的 ended，不伪造 live provider resume。"""
+    agent_session_audit.finish_restored_session(
+        ctx.novel_dir.parent,
+        acceptance,
+        process_state='ok',
+        delivery_state=delivery_state,
+        error_kind=error_kind,
+        end_code_version=prov.code_version(),
+        only_if_open=True,
+    )
+
+
+def _write_agent_checkpoint(
+        ctx: RunContext, source: _HookResponseSource,
+        prepared: HookCandidateContext, response: HookResponse, *,
+        initially_dirty: Sequence[str], revision_key: str,
+) -> None:
+    """每份 wire/schema/业务可终态化的完整 replacement 立即追加 revision。"""
+    from novel.llm import stage6_hook_runs
+
+    stage6_hook_runs.write_checkpoint(
+        ctx,
+        input_sha256=prepared.input_sha256,
+        system=prepared.system,
+        user=prepared.user,
+        response_model=HookResponse,
+        max_tokens=MAX_TOKENS,
+        response_payload=response.model_dump(by_alias=True, mode='json'),
+        acceptance=source.accepted_checkpoint(ctx.node),
+        revision_key=revision_key,
+        state_payload=_agent_checkpoint_state(
+            response, up=prepared._up,
+            initially_dirty=initially_dirty),
+    )
+
+
+def _agent_hook_candidates(
+        ctx: RunContext, source: _HookResponseSource,
+        prepared: HookCandidateContext,
+) -> HookCandidateBatch:
+    """Agent：同一 session/schema/purpose 逐槽接代码反馈并回完整 replacement。"""
+    required = (
+        'accepted_checkpoint', 'restore_checkpoint_acceptance',
+        'accepted_attempt', 'accepted_models',
+        'queue_code_validation_feedback',
+        'queue_restored_code_validation_feedback',
+    )
+    missing = [name for name in required if not callable(getattr(source, name, None))]
+    if missing:
+        raise ProvenanceRefused(
+            f'stage6.hook agent source 缺 checkpoint/session bridge {missing}；'
+            '已在首个 wire 前停止')
+    queue_feedback = getattr(source, 'queue_code_validation_feedback', None)
+    queue_restored_feedback = getattr(
+        source, 'queue_restored_code_validation_feedback', None)
+    from novel.llm import stage6_hook_runs
+
+    stage6_hook_runs.ensure_run(
+        ctx,
+        input_sha256=prepared.input_sha256,
+        system=prepared.system,
+        user=prepared.user,
+        response_model=HookResponse,
+        max_tokens=MAX_TOKENS,
+    )
+    restored = _restore_agent_checkpoint(ctx, source, prepared)
+    restored_only = restored is not None
+    restored_acceptance: dict[str, Any] | None = None
+    if restored is None:
+        current = source.ask_json(
+            prepared.system,
+            prepared.user,
+            model_cls=HookResponse,
+            purpose=ctx.node,
+            max_tokens=MAX_TOKENS,
+            recovery_policy=AGENT_RECOVERY_POLICY,
+        )
+        initial_rows = _normalized_candidate_rows(current, prepared._up)
+        dirty_indices = [
+            index for index, row in enumerate(initial_rows)
+            if _hard_candidate_findings(
+                row['findings'])  # type: ignore[arg-type]
+        ]
+        initially_dirty = tuple(
+            slot_of(index + 1) for index in dirty_indices)
+        _write_agent_checkpoint(
+            ctx, source, prepared, current,
+            initially_dirty=initially_dirty, revision_key='initial')
+    else:
+        current, initially_dirty = restored
+        restored_acceptance = dict(source.accepted_checkpoint(ctx.node))
+
+    # Agent 的轮次上限由 SessionAgentClient 统一掌管；producer 只关心总 HARD
+    # 是否继续严格下降。目标槽修掉一条 HARD 后若仍有 HARD，会在下一轮继续成为
+    # 最靠前的目标，而不是像 legacy 那样把「每槽一次」误套到长上下文 session。
+    while True:
+        current_rows = _normalized_candidate_rows(current, prepared._up)
+        index = next((
+            position for position, row in enumerate(current_rows)
+            if _hard_candidate_findings(
+                row['findings'])  # type: ignore[arg-type]
+        ), None)
+        if index is None:
+            break
+        before = _hard_candidate_findings(
+            current_rows[index]['findings'])  # type: ignore[arg-type]
+        slot = slot_of(index + 1)
+        feedback = _agent_feedback(slot=slot, findings=before)
+        # checkpoint 只恢复 adoption 与已花轮次，绝不把历史 provider id 冒充
+        # live session。仍有预算时，以“完整旧 stdout + 安全规则元数据”为新
+        # provider session 首轮；普通进程内循环才 resume 当前 session。
+        queued = (
+            queue_restored_feedback(feedback, purpose=ctx.node)
+            if restored_only else
+            queue_feedback(feedback, purpose=ctx.node)
+        )
+        # SessionAgentClient 的恢复反馈桥已在新 provider start 前幂等结束旧
+        # session 为 ok/blocked；它此后不能再被正式交付分支结束第二次。
+        if restored_only:
+            restored_acceptance = None
+        if not queued:
+            break
+        try:
+            current = source.ask_json(
+                prepared.system,
+                prepared.user,
+                model_cls=HookResponse,
+                purpose=ctx.node,
+                max_tokens=MAX_TOKENS,
+                validator=_replacement_validator(
+                    current, target_index=index, up=prepared._up),
+                recovery_policy=AGENT_RECOVERY_POLICY,
+            )
+        except LlmFailed:
+            # wire/schema/dynamic validator 用尽剩余总预算时，最后一份已接受
+            # checkpoint 仍是唯一可终态化候选；driver 或尚有预算的异常不能
+            # 被旧候选掩盖，继续向 executor 抛出。
+            turns_used = getattr(source, 'turns_used', None)
+            max_turns = getattr(source, 'max_turns', None)
+            exhausted = (
+                isinstance(turns_used, int) and not isinstance(turns_used, bool)
+                and isinstance(max_turns, int) and not isinstance(max_turns, bool)
+                and turns_used >= max_turns
+            )
+            if bool(getattr(source, 'driver_failed', False)) or not exhausted:
+                raise
+            break
+        except (TerminalState, TransportError):
+            # SessionAgentClient 已把 schema/validator 失败留在成本与 gate 账；
+            # 这里保留上一份完整、可终态化的 replacement。
+            break
+        restored_only = False
+        _write_agent_checkpoint(
+            ctx, source, prepared, current,
+            initially_dirty=initially_dirty,
+            revision_key=f'repair:{slot}')
+
+    attempt_id = _accepted_attempt(source, ctx.node)
+    if attempt_id is None:
+        raise ProvenanceRefused(
+            'stage6.hook agent 完整 replacement 缺 accepted attempt')
+    return _batch(
+        response=current,
+        initially_dirty=initially_dirty,
+        retry_history=(),
+        requested_model=source.model,
+        adopted_models=source.accepted_models(ctx.node),
+        adoptions=((ctx.node, attempt_id),),
+        restored_acceptance=restored_acceptance,
+        agent_mode=True,
+    )
+
+
+def request_hook_candidates(
+        ctx: RunContext, source: _HookResponseSource,
+        prepared: HookCandidateContext,
+) -> HookCandidateBatch:
+    """取得完整候选；全过程只在内存，不写 formal/INVALID、不结算 usage。"""
+    _assert_prepared_current(ctx, prepared)
+    if ctx.executor_profile is not None:
+        return _agent_hook_candidates(ctx, source, prepared)
+    return _legacy_hook_candidates(ctx, source, prepared)
+
+
+def _batch_identity(batch: HookCandidateBatch) -> str:
+    return _canonical_sha256({
+        'response': batch.response.model_dump(by_alias=True, mode='json'),
+        'initially_dirty': list(batch.initially_dirty),
+        'retry_history': [dict(row) for row in batch.retry_history],
+        'requested_model': batch.requested_model,
+        'adopted_models': list(batch.adopted_models),
+        'adoptions': [list(row) for row in batch.adoptions],
+        'restored_acceptance': (
+            None if batch.restored_acceptance is None
+            else dict(batch.restored_acceptance)),
+        'agent_mode': batch.agent_mode,
+    })
+
+
+def _materialize_hook_evaluation(
+        ctx: RunContext, prepared: HookCandidateContext,
+        batch: HookCandidateBatch, *, settle: bool,
+) -> HookCandidateEvaluation:
+    rows = _normalized_candidate_rows(batch.response, prepared._up)
+    candidates = [
         Candidate(
-            approach=row['approach'], text=row['text'], mech=row['mech'],  # type: ignore[arg-type]
-            findings=_labelled(slot_of(position), row['findings']))  # type: ignore[arg-type]
-        for position, row in enumerate(candidate_rows, 1)
+            approach=row['approach'],  # type: ignore[arg-type]
+            text=row['text'],  # type: ignore[arg-type]
+            mech=row['mech'],  # type: ignore[arg-type]
+            findings=_labelled(
+                slot_of(position), row['findings']),  # type: ignore[arg-type]
+        )
+        for position, row in enumerate(rows, 1)
     ]
-
     prompt_accounting = {
-        'HOOK_SYS': system,
+        'HOOK_SYS': prepared.system,
         'RULES': prov.rules_fingerprint('stage6'),
     }
-    if initially_dirty:
-        prompt_accounting['HOOK_RETRY_SYS'] = retry_system
-
+    if batch.initially_dirty and not batch.agent_mode:
+        prompt_accounting['HOOK_RETRY_SYS'] = prompts.hook_retry_system()
+    params = (
+        HookParams(max_tokens=MAX_TOKENS, candidate_retry_limit=0)
+        if batch.agent_mode else
+        HookParams(
+            max_tokens=MAX_TOKENS,
+            candidate_retry_max_tokens=CANDIDATE_RETRY_MAX_TOKENS,
+            candidate_retry_limit=CANDIDATE_RETRY_LIMIT,
+            candidate_retry_effort=CANDIDATE_RETRY_RUNGS[0][0],
+            candidate_retry_thinking=CANDIDATE_RETRY_RUNGS[0][1],
+        )
+    )
     artifact = Hook(
-        lead_upto=up.upto, rationale=rationale, candidates=cands, approved=None,
-        sources={'writer_context': _context_source()}, judged=up.judged,
+        lead_upto=prepared._up.upto,
+        rationale=batch.response.rationale,
+        candidates=candidates,
+        approved=None,
+        sources={'writer_context': _context_source()},
+        judged=prepared._up.judged,
         **{'_provenance': ctx.llm_provenance(
             HookProvenance,
             prompts=prompt_accounting,
-            model=client.model,
-            adopted_models=client.accepted_models(),
-            params=HookParams(
-                max_tokens=MAX_TOKENS,
-                candidate_retry_max_tokens=CANDIDATE_RETRY_MAX_TOKENS,
-                candidate_retry_limit=CANDIDATE_RETRY_LIMIT,
-                candidate_retry_effort=CANDIDATE_RETRY_RUNGS[0][0],
-                candidate_retry_thinking=CANDIDATE_RETRY_RUNGS[0][1]),
-            candidate_retries=retry_history)})
+            model=batch.requested_model,
+            adopted_models=batch.adopted_models,
+            settle=settle,
+            params=params,
+            # ``candidate_retries`` 专指 legacy 单候选 schema。Agent 的完整
+            # replacement 每 turn 已在 session audit/ledger，不能冒充这张旧账。
+            candidate_retries=[dict(row) for row in batch.retry_history],
+        )},
+    )
+    duplicates = tuple(
+        tuple(group) for group in _duplicate_candidate_slots(candidates))
+    dirty = tuple(sorted({
+        slot_of(position)
+        for position, candidate in enumerate(candidates, 1)
+        for finding in candidate.findings
+        if _sev_of(finding.rule) == 'hard'
+    }))
+    return HookCandidateEvaluation(
+        candidate=artifact,
+        duplicate_slots=duplicates,
+        dirty_slots=dirty,
+        requested_model=batch.requested_model,
+        adopted_models=batch.adopted_models,
+        adoptions=batch.adoptions,
+        input_sha256=prepared.input_sha256,
+        _batch=batch,
+        _candidate_sha256=_canonical_sha256(
+            artifact.model_dump(by_alias=True, mode='json')),
+    )
 
-    # `HookResponse` 只能守住 wire 上的原始文本互异；本层随后还会统一全半角标点、
-    # 引号与段间分隔。两条 wire 文本可能因此收敛成同一份正式字节，而三候选的
-    # 搜索方差与位置身份都建立在“确实是三条不同文本”上。
-    # ⚠ 这是新增落盘闸，必须把已付费产出留在 `.INVALID`，让人能 0 LLM 改一条后
-    # 走 `--revalidate` 提升；直接 TerminalState 会把有效响应永久锁死在缓存里。
-    duplicate_slots = _duplicate_candidate_slots(cands)
-    if duplicate_slots:
-        p = store.write_invalid(REL, artifact, gates_skipped=[])
-        raise GateBlocked(
-            f'候选经标点、引号与分段归一后出现重复槽位 {duplicate_slots}——'
-            f'没有交出三条不同的正式候选。问题稿在 {p}，改好其中至少一条后跑 '
-            f'`stage6.hook --revalidate --actor <id> --reason <why>`'
-            f'（0 LLM、同轮重判并留不可变审计）',
-            invalid_path=str(p))
 
-    # ⚠⚠ **闸门条件与 stage3 不同**：本层一次产**三份**，一条红不该废掉另两条。
-    # ⇒ 拦的是「**一条干净候选都没有**」。部分红照常落盘，报告把红的那条摆在人面前，
-    # 人 `--pick` 时避开它。
-    # ⚠ 按**位置**去重，不按策略名：同一种策略的两条候选各自红，
-    #   按策略名会去重成一条 ⇒ 「每一条都红」的闸判不成立，脏产物照样落正式盘。
-    dirty = {slot_of(position) for position, c in enumerate(cands, 1)
-             for f in c.findings if _sev_of(f.rule) == 'hard'}
-    if len(dirty) == len(cands):
-        p = store.write_invalid(REL, artifact, gates_skipped=[])
-        raise GateBlocked(
-            f'三条候选**每一条**都有阻断级问题（{sorted(dirty)}）——'
-            f'没有一条能拿去定稿。问题稿在 {p}，改完跑 '
-            f'`stage6.hook --revalidate --actor <id> --reason <why>`'
-            f'（0 LLM、同轮重判并留不可变审计）',
-            invalid_path=str(p))
-    store.write(REL, artifact)
-    return artifact
+def evaluate_hook_candidate(
+        ctx: RunContext, source: _HookResponseSource,
+        prepared: HookCandidateContext, batch: HookCandidateBatch,
+) -> HookCandidateEvaluation:
+    """归一、机械判定并铸 provisional Hook；严格无写盘/INVALID/usage settle。"""
+    if ctx.node != 'stage6.hook':
+        raise ValueError(
+            f'evaluate_hook_candidate 只接受 stage6.hook，实得 {ctx.node!r}')
+    _assert_prepared_current(ctx, prepared)
+    if batch._batch_sha256 != _batch_identity(batch):
+        raise ProvenanceRefused('stage6.hook candidate batch 在请求后被修改')
+    if source.model != batch.requested_model:
+        raise ProvenanceRefused('stage6.hook requested model 在评估前漂移')
+    return _materialize_hook_evaluation(
+        ctx, prepared, batch, settle=False)
+
+
+def _verify_hook_artifact(
+        ctx: RunContext, prepared: HookCandidateContext, expected: Hook,
+        *, rel: str,
+) -> Hook:
+    """typed readback、当前输入、归一/判据与正式落盘闸的独立终验。"""
+    store = ArtifactStore(ctx)
+    current = _assert_prepared_current(ctx, prepared)
+    with ctx.validation_reads():
+        landed, _raw = store.read_own(Hook, rel, require_current=True)
+        freshness = store.freshness(rel)
+    expected_payload = expected.model_dump(by_alias=True, mode='json')
+    landed_payload = landed.model_dump(by_alias=True, mode='json')
+    if paths.is_invalid(rel):
+        # write_invalid 只允许给来源账补两项问题稿定位事实；业务 payload
+        # 与其余 provenance 必须仍逐值相等。
+        expected_provenance = expected_payload.get('_provenance')
+        landed_provenance = landed_payload.get('_provenance')
+        if isinstance(expected_provenance, dict) and isinstance(landed_provenance, dict):
+            expected_provenance['gates_skipped'] = landed_provenance.get(
+                'gates_skipped')
+            expected_provenance['invalid_baseline_sha256'] = landed_provenance.get(
+                'invalid_baseline_sha256')
+    if (expected_payload != landed_payload
+            or _canonical_sha256(expected_payload)
+            != _canonical_sha256(landed_payload)):
+        raise ProvenanceRefused(
+            f'stage6.hook {rel} typed readback 与本次终态候选不完全相等')
+    if freshness.state != 'fresh':
+        raise ProvenanceRefused(
+            f'stage6.hook {rel} freshness={freshness.state}/'
+            f'{freshness.reason}；拒绝 delivered')
+    rebuilt: list[Candidate] = []
+    for position, candidate in enumerate(landed.candidates, 1):
+        text, mech, findings = _normalize_and_judge(candidate.text, current)
+        rebuilt.append(Candidate(
+            approach=candidate.approach,
+            text=text,
+            mech=mech,
+            findings=_labelled(slot_of(position), findings),
+        ))
+    if rebuilt != landed.candidates:
+        raise ProvenanceRefused(
+            f'stage6.hook {rel} readback 不再等于当前代码的归一/机械判定')
+    if landed.lead_upto != current.upto or landed.judged != current.judged:
+        raise ProvenanceRefused(
+            f'stage6.hook {rel} 绑定的开篇范围或 Stage5 正文已变化')
+    duplicate_slots = _duplicate_candidate_slots(rebuilt)
+    dirty = {
+        slot_of(position)
+        for position, candidate in enumerate(rebuilt, 1)
+        for finding in candidate.findings
+        if _sev_of(finding.rule) == 'hard'
+    }
+    blocked = bool(duplicate_slots) or len(dirty) == len(rebuilt)
+    if paths.is_invalid(rel):
+        if not blocked:
+            raise ProvenanceRefused(
+                'stage6.hook INVALID readback 已不命中落盘闸；应走 0 成本 revalidate')
+    else:
+        if store.exists(_INVALID):
+            raise ProvenanceRefused(
+                f'stage6.hook 正式 readback 后仍有 live {_INVALID}')
+        if blocked:
+            raise ProvenanceRefused(
+                'stage6.hook 正式 readback 命中重复/全候选 HARD 落盘闸')
+    return landed
+
+
+def verify_hook_delivery(
+        ctx: RunContext, prepared: HookCandidateContext, expected: Hook,
+) -> Hook:
+    """正式 Hook 的公开终验口；只在通过后才能结束 executor session。"""
+    return _verify_hook_artifact(ctx, prepared, expected, rel=REL)
+
+
+def _note_hook_adoptions(
+        ctx: RunContext, *, rel: str, artifact: Hook,
+        adoptions: Sequence[tuple[str, str]],
+) -> None:
+    fingerprint = prov.projection_fingerprint(
+        artifact.model_dump(by_alias=True, mode='json'))
+    seen: set[str] = set()
+    for purpose, attempt_id in adoptions:
+        if attempt_id in seen:
+            continue
+        seen.add(attempt_id)
+        ctx.ledger.note_adoption(
+            sid=ctx.sid,
+            node=ctx.node,
+            purpose=purpose,
+            attempt_id=attempt_id,
+            artifact=rel,
+            artifact_fingerprint=fingerprint,
+            chapter=None,
+        )
+
+
+def _terminal_hook_evaluation(
+        ctx: RunContext, prepared: HookCandidateContext,
+        evaluation: HookCandidateEvaluation,
+) -> HookCandidateEvaluation:
+    """usage 只在所有静态提交闸通过后结算一次，并复核 provisional 同值。"""
+    terminal = _materialize_hook_evaluation(
+        ctx, prepared, evaluation._batch, settle=True)
+    if (terminal.duplicate_slots != evaluation.duplicate_slots
+            or terminal.dirty_slots != evaluation.dirty_slots
+            or terminal.adoptions != evaluation.adoptions
+            or terminal.candidate.model_dump(by_alias=True, mode='json')
+            != evaluation.candidate.model_dump(by_alias=True, mode='json')
+            or terminal._candidate_sha256 != evaluation._candidate_sha256):
+        raise ProvenanceRefused(
+            'stage6.hook provisional/final 候选、机械闸或来源映射不确定')
+    return terminal
+
+
+def _hook_finalization_payload(
+        prepared: HookCandidateContext,
+        terminal: HookCandidateEvaluation,
+) -> dict[str, object]:
+    payload = terminal.candidate.model_dump(by_alias=True, mode='json')
+    provenance = payload.get('_provenance')
+    if not isinstance(provenance, Mapping):
+        raise ProvenanceRefused('stage6.hook candidate 缺 typed provenance')
+    return {
+        'artifact': REL,
+        'input_sha256': prepared.input_sha256,
+        'lead_upto': payload.get('lead_upto'),
+        'judged': payload.get('judged'),
+        'inputs': provenance.get('inputs'),
+        'duplicate_slots': [list(group) for group in terminal.duplicate_slots],
+        'dirty_slots': list(terminal.dirty_slots),
+    }
+
+
+def _formal_target_state(
+        ctx: RunContext, store: ArtifactStore,
+        journal: Mapping[str, Any], artifact: Hook,
+) -> str:
+    """区分写前 baseline 与 crash 后已落成的精确正式字节。"""
+    from novel.llm import stage6_hook_runs
+
+    try:
+        return stage6_hook_runs.target_state(ctx, journal, REL)
+    except ProvenanceRefused as baseline_error:
+        if not store.exists(REL):
+            raise
+        with ctx.validation_reads():
+            current, _raw = store.read_own(
+                Hook, REL, require_current=True)
+        if (current.model_dump(by_alias=True, mode='json')
+                != artifact.model_dump(by_alias=True, mode='json')):
+            raise baseline_error
+        expected_sha = stage6_hook_runs.file_sha256(ctx, REL)
+        if expected_sha is None:
+            raise baseline_error
+        return stage6_hook_runs.target_state(
+            ctx, journal, REL, expected_file_sha256=expected_sha)
+
+
+def _finalize_agent_formal(
+        ctx: RunContext, prepared: HookCandidateContext,
+        terminal: HookCandidateEvaluation,
+) -> Hook:
+    """prepared→write→readback→adoption→committed 的可恢复正式尾窗。"""
+    from novel.llm import stage6_hook_runs
+
+    artifact = terminal.candidate
+    payload = artifact.model_dump(by_alias=True, mode='json')
+    finalization = _hook_finalization_payload(prepared, terminal)
+    store = ArtifactStore(ctx)
+    journal = stage6_hook_runs.committed(ctx)
+    if journal is None:
+        journal = stage6_hook_runs.prepared(ctx)
+    if journal is None:
+        touched = [REL]
+        if store.exists(_INVALID):
+            touched.append(_INVALID)
+        attempt_id = (
+            terminal.adoptions[0][1]
+            if len(terminal.adoptions) == 1
+            and terminal.adoptions[0][0] == ctx.node else None)
+        if attempt_id is None:
+            raise ProvenanceRefused(
+                'stage6.hook 正式 agent 候选必须恰有当前 purpose adoption')
+        journal = stage6_hook_runs.prepare_commit(
+            ctx,
+            primary_payload=payload,
+            finalization_payload=finalization,
+            touched_paths=touched,
+            attempt_id=attempt_id,
+        )
+    elif (not stage6_hook_runs.verify_commit_primary(journal, payload)
+          or not stage6_hook_runs.verify_commit_finalization(
+              journal, finalization)):
+        raise ProvenanceRefused(
+            'stage6.hook commit journal 与最终候选/冻结输入漂移')
+
+    _assert_prepared_current(ctx, prepared)
+    formal_state = _formal_target_state(ctx, store, journal, artifact)
+    touched_paths = tuple(str(rel) for rel in journal['touched_paths'])
+    if _INVALID in touched_paths:
+        invalid_state = stage6_hook_runs.target_state(
+            ctx, journal, _INVALID, expected_absent=True)
+    else:
+        invalid_state = 'expected'
+        if store.exists(_INVALID):
+            raise ProvenanceRefused(
+                f'{_INVALID} 在 prepared 后由第三方出现；拒绝无 journal 删除')
+
+    if formal_state == 'baseline' or invalid_state == 'baseline':
+        _assert_prepared_current(ctx, prepared)
+        with store.history_transaction(REL):
+            store.write(REL, artifact)
+            _assert_prepared_current(ctx, prepared)
+            landed = verify_hook_delivery(ctx, prepared, artifact)
+    else:
+        landed = verify_hook_delivery(ctx, prepared, artifact)
+
+    landed_payload = landed.model_dump(by_alias=True, mode='json')
+    _assert_prepared_current(ctx, prepared)
+    adoption = stage6_hook_runs.restore_commit_adoption(ctx, journal)
+    _note_hook_adoptions(
+        ctx, rel=REL, artifact=landed, adoptions=(adoption,))
+    _assert_prepared_current(ctx, prepared)
+    stage6_hook_runs.mark_committed(
+        ctx,
+        primary_payload=landed_payload,
+        finalization_payload=finalization,
+        landed_payloads={REL: landed_payload},
+    )
+    _assert_prepared_current(ctx, prepared)
+    committed = stage6_hook_runs.committed(ctx)
+    if committed is None:
+        raise ProvenanceRefused(
+            'stage6.hook mark_committed 后没有 committed journal')
+    stage6_hook_runs.verify_committed_delivery(
+        ctx,
+        committed,
+        primary_payload=landed_payload,
+        finalization_payload=finalization,
+        landed_payloads={REL: landed_payload},
+    )
+    if terminal._batch.restored_acceptance is not None:
+        _finish_restored_hook_session(
+            ctx,
+            terminal._batch.restored_acceptance,
+            delivery_state='delivered',
+        )
+    return landed
+
+
+def finalize_hook_candidate(
+        ctx: RunContext, source: _HookResponseSource,
+        prepared: HookCandidateContext,
+        evaluation: HookCandidateEvaluation,
+) -> Hook:
+    """只提交最后候选一次；中间坏 replacement 不写盘、不归档、不结算。"""
+    if ctx.node != 'stage6.hook':
+        raise ValueError(
+            f'finalize_hook_candidate 只接受 stage6.hook，实得 {ctx.node!r}')
+    _assert_prepared_current(ctx, prepared)
+    if evaluation.input_sha256 != prepared.input_sha256:
+        raise ProvenanceRefused('stage6.hook evaluation 不属于当前 prepared input')
+    if source.model != evaluation.requested_model:
+        raise ProvenanceRefused('stage6.hook 评估后 requested model 漂移')
+    if evaluation._batch._batch_sha256 != _batch_identity(evaluation._batch):
+        raise ProvenanceRefused('stage6.hook 评估后的 candidate batch 被修改')
+    if evaluation._batch.agent_mode:
+        expected_attempt = (
+            evaluation.adoptions[0][1]
+            if len(evaluation.adoptions) == 1 else None)
+        if _accepted_attempt(source, ctx.node) != expected_attempt:
+            raise ProvenanceRefused(
+                'stage6.hook agent 最终完整 replacement 的 accepted attempt 漂移')
+        if source.accepted_models(ctx.node) != evaluation.adopted_models:
+            raise ProvenanceRefused(
+                'stage6.hook agent 最终完整 replacement 的 accepted model 漂移')
+
+    from novel.llm import stage6_hook_runs
+
+    with stage6_hook_runs.commit_ownership(ctx.novel_dir):
+        stage6_hook_runs.refuse_foreign_commit_reservations(ctx)
+        _assert_prepared_current(ctx, prepared)
+        if evaluation._batch.agent_mode:
+            existing = stage6_hook_runs.committed(ctx)
+            if existing is None:
+                existing = stage6_hook_runs.prepared(ctx)
+            provisional_payload = evaluation.candidate.model_dump(
+                by_alias=True, mode='json')
+            provisional_finalization = _hook_finalization_payload(
+                prepared, evaluation)
+            if (existing is not None
+                    and (not stage6_hook_runs.verify_commit_primary(
+                        existing, provisional_payload)
+                    or not stage6_hook_runs.verify_commit_finalization(
+                        existing, provisional_finalization))):
+                raise ProvenanceRefused(
+                    'stage6.hook 既有 commit journal 与 provisional 候选/输入漂移')
+        terminal = _terminal_hook_evaluation(ctx, prepared, evaluation)
+        artifact = terminal.candidate
+        store = ArtifactStore(ctx)
+        duplicates = [list(group) for group in terminal.duplicate_slots]
+        all_dirty = len(terminal.dirty_slots) == len(artifact.candidates)
+        if duplicates or all_dirty:
+            # INVALID 是 blocked 终态与 0 成本 revalidate 基线，不伪造正式 adoption/
+            # committed；但仍只在最终一轮写一次，并在同一历史事务里 readback。
+            with store.history_transaction(REL):
+                path = store.write_invalid(REL, artifact, gates_skipped=[])
+                _assert_prepared_current(ctx, prepared)
+                _verify_hook_artifact(
+                    ctx, prepared, artifact, rel=_INVALID)
+            if duplicates:
+                raise GateBlocked(
+                    f'候选经标点、引号与分段归一后出现重复槽位 {duplicates}——'
+                    f'没有交出三条不同的正式候选。问题稿在 {path}，改好其中至少一条后跑 '
+                    '`stage6.hook --revalidate --actor <id> --reason <why>`'
+                    '（0 LLM、同轮重判并留不可变审计）',
+                    invalid_path=str(path),
+                )
+            raise GateBlocked(
+                f'三条候选**每一条**都有阻断级问题'
+                f'（{list(terminal.dirty_slots)}）——没有一条能拿去定稿。'
+                f'问题稿在 {path}，改完跑 '
+                '`stage6.hook --revalidate --actor <id> --reason <why>`'
+                '（0 LLM、同轮重判并留不可变审计）',
+                invalid_path=str(path),
+            )
+
+        if terminal._batch.agent_mode:
+            return _finalize_agent_formal(
+                ctx, prepared, terminal)
+
+        with store.history_transaction(REL):
+            store.write(REL, artifact)
+            _assert_prepared_current(ctx, prepared)
+            landed = verify_hook_delivery(ctx, prepared, artifact)
+        _assert_prepared_current(ctx, prepared)
+        _note_hook_adoptions(
+            ctx, rel=REL, artifact=landed,
+            adoptions=terminal.adoptions)
+        return landed
+
+
+def run_hook(ctx: RunContext, client: LlmClient) -> Hook:
+    """legacy 包装；agent executor 复用相同四段，但使用同 session 完整 replacement。"""
+    prepared = prepare_hook_candidate(ctx)
+    batch = request_hook_candidates(ctx, client, prepared)
+    evaluation = evaluate_hook_candidate(ctx, client, prepared, batch)
+    return finalize_hook_candidate(ctx, client, prepared, evaluation)
 
 
 def run_apply_edit(ctx: RunContext, edit_path: str = '') -> tuple[Hook, CheckReport]:

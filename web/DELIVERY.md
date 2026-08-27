@@ -23,8 +23,9 @@ npm run seams        # 数据缝 / 设计缝红线（见下）
 agent 授权框。部分失败不回滚成功项，
 先逐本列出失败原因，再允许只把成功项交给 agent；人工路径始终可从语料库逐本进入 Stage0。
 
-**批量代跑**：语料库屏每本书标题前有勾选框，勾几本后打开批量确认框。未授予流水线
-付费权限时主动作显示「批量生成诊断与恢复方案」；授予后显示「授权并开始跑这 N 本」。
+**批量代跑**：语料库屏每本书标题前有勾选框，勾几本后打开批量确认框。付费授权与正文外发
+授权任一缺失时只允许 0 成本预览配置并明确写「不会启动任何一本」；两项同时授予且 profile
+完整有效后才显示「授权并开始跑这 N 本」。
 闸内的立刻起 agent，其余排队，一本结束自动带起下一本；`running`/`pending`/`rejected`
 三堆在确认框里逐本摆开（**部分失败不回滚**）。同时在跑的上限由服务端
 `GET /api/agent/runs/queue` 下发，前端不写死。排队只在服务进程内存里，重启不保留。
@@ -50,20 +51,61 @@ agent 授权框。部分失败不回滚成功项，
 **agent 一键跑书**：语料库屏每本书的「Agent」，或 Stage0 审批操作栏的
 「Agent 代跑」→ 确认框摊开
 将拉起的完整 argv 与提示词全文。付费授权与正文外发授权使用两个独立复选框：
-付费默认不勾，正文外发默认勾选，任一变化都会重新 preview；两项值和声明原文分别留档，
+付费默认不勾，正文外发默认勾选，任一变化都会使旧 preview 失效并重新 preview；两项值和声明原文分别留档，
 不会因已获付费授权而推定正文外发同意。完整命令与 prompt 默认折叠、按需展开；弹框限制在
-视口内，中段独立滚动，底部授权与发起动作始终可见。未授予付费权限时主动作是
-「生成诊断与恢复方案」，只取 state / inbox / 下一节点 preview；授予后才显示
-「授权并开始跑书」。确认后启动
-（`POST /api/agent/runs`，后端以 `claude -p` 子进程唤起 headless agent，
-权限白名单：Bash 仅 conda python 前缀、Edit 上界为 base；产品写入边界仍只允许 skill 明列的
-typed 人工输入与唯一终审包，正式产物一律经 CLI——见
-`novel/orchestrator/agent.py` 模块头的 Spike 结论）。进度在 `/n/:sid/run` 实时跟踪，
+视口内，中段独立滚动，底部授权与发起动作始终可见。任一授权缺失时当前只可 preview、不会启动
+Commander；两项同时授予后才显示「授权并开始跑书」。确认后启动
+（`POST /api/agent/runs`，后端按已选 profile 以 Claude Code 或 Codex Commander driver 拉起
+headless agent；长 prompt 只经 stdin 传入，不进 argv/env/log。产品写入边界仍只允许 skill 明列的
+typed 人工输入与唯一终审包，正式产物一律经 CLI）。进度在 `/n/:sid/run` 实时跟踪，
 那里有 agent 进程状态、日志尾部与「熄火」按钮（`POST /api/agent/runs/:id/stop`）。
 进程状态与交付终验是两条正交状态：exit 0 只显示“进程完成”；服务端另以启动/结束代码指纹、
 Stage2 typed 闸、当前成书、终审包和 inbox 阻塞轴判 `ready` / `ready_with_disclosures` /
 `stopped` / `failed` / `unknown`，界面不得从退出码补推“可下载”。
 互斥两个方向都拦：agent 在跑时起任何 API 作业 409，反之亦然。
+
+**Agent capability / executor / Commander Phase 1–6 边界**：后端提供动态 `GET /api/agent/capabilities`，发布
+driver/provider 元数据、角色、model id 与 label、各模型实际 effort / execution mode、本机 CLI/版本
+探针结果、executor 节点和 `default_profiles`。该响应不归 `/api/enums`，前端不得另写供应商能力表。
+`AgentRunDialog` / `AgentBatchDialog` 现已消费这个端点，动态呈现 Commander、默认 executor 与逐节点
+override 的 driver/model/effort/mode；driver/model 改动会清空失效的下游选择。`default_profiles=null`
+明确表示尚无 provider-neutral 默认，界面要求逐项显式完成，不能取 `drivers[0]` 自动代选。
+`ready / missing / unknown / unauthenticated` 四态和服务端 reason 原样显示，非 ready 不能选；CLI/版本
+探针不发模型请求，`ready` 也不等于账号或具体模型已验证。
+
+Phase 2 后端当时只接通一条**尚无页面入口**的直接作业纵切：`stage2.global + flags=[]`。
+Phase 3 以相同的 `POST /api/jobs/preview` / `POST /api/jobs` 边界增加
+`stage2.blueprint + flags=[]`；同一 resolved profile 经 Step / JobStart / argv / CLI / RunContext 传到
+节点 executor。blueprint 只有付费 producer Step 带 profile，自动 0 成本 `--check-only` Step 不带；
+逐章 session/checkpoint、联合 HARD、正式提交和终验均由后端闭合，不由页面或 agent 自述补判。
+
+Phase 4 增加 `stage6.semantic + flags=[]`，并为 direct executor 纵切接通独立正文外发授权：
+请求默认 false，preview 可回显 profile / egress 快照及没有 `--allow-egress` 的不可执行 argv；真 start
+只有显式 true 才可在 job/driver/probe 前越过授权闸。它与 `--yes` 付费确认正交，无 profile 时不能
+伪造 egress。Stage6 A/B 使用两个独立 driver/session/cwd/provider session，缺失角色并发；逐角色
+checkpoint 可完整或单边恢复，代码以 prepared journal → 正式写盘 → typed readback → 双 adoption →
+committed 收口并做最终校验，不由 agent 自述补判，也不回退 DeepSeek。
+
+Phase 5 把后端 direct profile 收口为 **8 节点 / 12 种 flag-token 组合**：
+
+- Stage2：`stage2.global []`、`stage2.blueprint []`；
+- Stage4：`stage4.design [] / [--replan]`、`stage4.plan []`；
+- Stage5：`stage5.write [] / [--chapters] / [--revise] / [--revise,--chapters]`；
+- Stage6：`stage6.hook []`、`stage6.semantic []`；
+- Stage7：`stage7.rename []`。
+
+`--chapters` 的章号是值，不另算 token。Stage4 design/plan、Stage5、Hook、Rename 均由 agent 交固定
+typed 完整候选，代码负责 HARD、结构化 feedback、checkpoint、正式 journal/readback/adoption 与终验；
+显式 profile 不回退 DeepSeek；矩阵外 direct executor 组合仍关闭式拒绝。
+
+Phase 6 同时接通 outer Commander：preview/start/batch 共用后端唯一 planner，页面将完整 profiles 与
+两项授权组成请求，并把最后一次成功 preview 的**同一个请求快照**保存到确认态；start 不从当前表单
+重拼。表单、授权、服务端回显或 capability 刷新任一漂移都会关闭启动。batch 受理后保存整批快照；
+历史 run 的 `profiles=null` 显示 unknown，不按今天的选择倒推。direct Job adapter/确认框/抽屉仍独立
+展示该次 executor profile 与 egress，不把它和 outer Commander 合并。后端 started 还冻结 base、代码
+指纹与 resolved profiles，child 通过 contract SHA 复核后才给节点 executor；进程状态与盘面 delivery
+终验继续正交。Phase 1～6 验证使用 fake driver、零模型 CLI 检查与非 corpus 回归，**真实模型请求数
+仍为 0，没有真实 Claude / Codex 调用、质量/速度/entitlement 或 current-schema corpus 实证**。
 
 ---
 
@@ -84,6 +126,7 @@ Stage2 typed 闸、当前成书、终审包和 inbox 阻塞轴判 `ready` / `rea
 - real 与 mock 适配器满足同一 TypeScript 接口；真实模式不允许缺端点时回退 mock。
 - 写请求携带 `X-Novel-UI: 1`；服务进程只写 `_service/`，产物变更经 CLI 子进程。
 - action、枚举、付费与写盘语义由服务端 `/api/enums` 和 preview 返回；前端不保存第二份判定表。
+- agent driver / model / effort / execution mode 由 `/api/agent/capabilities` 发布；`useAgentCapabilities` 使用 no-store 语义，页面按响应动态构造 Commander / 默认 executor / 节点 override，null 不代选。后端 8 节点 / 12 组合 direct job 纵切及独立 egress 快照仍原样保留。
 - 底部作业抽屉只消费 `/api/jobs`，逐条展示全部作业的最新状态，不订阅或展示命令、stdout/stderr；
   详情统一跳到本书运行进度页。日志能力仍由 `/api/jobs/:id/stream` SSE 提供给专用详情消费者：
   事件 `id` 等于 UTF-8 `next_byte`，断线用 `Last-Event-ID` 续读，终态先排空日志、再发唯一 `end`。

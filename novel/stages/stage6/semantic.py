@@ -17,7 +17,10 @@ import hashlib
 import json
 import os
 import re
+from collections.abc import Callable, Mapping
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
+from typing import Any, Protocol
 
 from contracts.schema.common import Finding
 from contracts.schema.evaluation import (
@@ -36,7 +39,12 @@ from contracts.schema.stage6 import (
 )
 from novel import prov
 from novel.core.text import whitespace_equivalent_slice
-from novel.errors import TerminalState, UpstreamMissing
+from novel.errors import (
+    ArtifactUnreadable,
+    ProvenanceRefused,
+    TerminalState,
+    UpstreamMissing,
+)
 from novel.llm.client import LlmClient
 from novel.llm.prompts import with_json_shape
 from novel.llm.transport import ChatResponse
@@ -48,6 +56,25 @@ from novel.store import ArtifactStore
 
 SEMANTIC_TPL = STAGE6_SEMANTIC
 _SEMANTIC_RX = re.compile(r'^semantic_(\d+)\.json$')
+SEMANTIC_MAX_TOKENS = 64_000
+
+
+class _SemanticResponseSource(Protocol):
+    """legacy client 与双判官 session pool 共用的最窄 producer 面。"""
+
+    model: str
+
+    def ask_json(self, system: str, user: str, **kwargs: Any) -> Any: ...
+
+    def accepted_attempt(self, purpose: str) -> str | None: ...
+
+    def accepted_models(self, *purposes: str) -> tuple[str, ...]: ...
+
+    def accepted_checkpoint(self, purpose: str) -> dict[str, Any]: ...
+
+    def restore_checkpoint_acceptance(
+            self, purpose: str, record: Mapping[str, Any], **kwargs: Any,
+    ) -> None: ...
 
 #: 固定权重是契约，不让模型自报总分。惩罚项为负权重。
 QUALITY_WEIGHTS = {
@@ -181,6 +208,40 @@ class CandidateAssessment:
     #: 要判「这条候选还用不用人看」，读 `state` 本身（两个值都要人看，理由不同）。
 
 
+@dataclass(frozen=True)
+class SemanticCandidateContext:
+    """一次双盲审判的只读输入快照；不含响应，也没有任何落盘能力。"""
+
+    system: str
+    user: str
+    judge_users: tuple[tuple[str, str], ...]
+    art: Hook
+    up: hook._Upstreams
+    aliases: tuple[tuple[str, str, str], ...]
+    judged: Mapping[str, Any]
+    input_sha256: str
+    hook_file_sha1: str
+
+    def user_for(self, role: str) -> str:
+        try:
+            return dict(self.judge_users)[role]
+        except KeyError as exc:
+            raise KeyError(f'prepared semantic 没有 judge role={role!r}') from exc
+
+
+@dataclass(frozen=True)
+class SemanticCandidateEvaluation:
+    """无落盘 provisional 结果；终态只能交给 ``finalize_semantic_candidate``。"""
+
+    candidate: HookSemanticReview
+    requested_model: str
+    adopted_models: tuple[str, ...]
+    accepted_attempts: tuple[tuple[str, str], ...]
+    input_sha256: str
+    _responses: tuple[tuple[str, HookSemanticResponse], ...]
+    _candidate_sha256: str
+
+
 def text_sha1(text: str) -> str:
     """一条文案文本的绑定指纹（10 位）。"""
     return prov.fingerprint(text)
@@ -267,6 +328,113 @@ def _anonymisation_order(art: Hook) -> list[tuple[str, str]]:
     return sorted(_unique_texts(art), key=lambda row: text_sha1(row[1]))
 
 
+def _canonical_sha256(value: object) -> str:
+    encoded = json.dumps(
+        value, ensure_ascii=False, sort_keys=True,
+        separators=(',', ':'), allow_nan=False,
+    ).encode('utf-8')
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _prompt_judged(up: hook._Upstreams) -> dict[str, Any]:
+    """只绑定真正进入 ``rewritten_opening`` 的 canonical Stage5 章稿。
+
+    ``lead_drafts`` 为复用 Stage6 hook 的判定面会返回全书 ``judged``；而语义判官
+    实际只收到 ``mat.lead``。后半书改字仍会按既有业务门先让全书 Stage5 Review
+    暂不可用；但零成本重跑 Review 后，若 opening 与其他 prompt 输入没变，这份审判
+    应恢复 current，不能再被一条从未下发的正文永久判 stale。筛选必须只在这里做，
+    prepared、artifact、commit 与 currentness 全部消费同一结果。
+    """
+    lead_ordinals = {
+        int(row.get('output_ordinal'))
+        for row in up.mat.lead
+        if isinstance(row, Mapping)
+        and isinstance(row.get('output_ordinal'), int)
+        and not isinstance(row.get('output_ordinal'), bool)
+    }
+    return {
+        rel: row
+        for rel, row in sorted(up.judged.items())
+        if row.output_ordinal <= up.upto and row.output_ordinal in lead_ordinals
+    }
+
+
+def _judged_text_projection(rows: Mapping[str, Any]) -> dict[str, dict[str, object]]:
+    """Stage5 reference currentness 只看路径、章序与实际消费的正文 SHA-1。"""
+    out: dict[str, dict[str, object]] = {}
+    for rel, raw in sorted(rows.items()):
+        row = (raw.model_dump(by_alias=True, mode='json')
+               if hasattr(raw, 'model_dump') else dict(raw))
+        consumed = row.get('consumed')
+        if not isinstance(consumed, Mapping):
+            raise ProvenanceRefused(f'{rel}: semantic judged 缺 consumed 投影')
+        ordinal = row.get('output_ordinal')
+        text_fp = consumed.get('text_sha1')
+        if (not isinstance(ordinal, int) or isinstance(ordinal, bool)
+                or ordinal < 1 or not isinstance(text_fp, str)):
+            raise ProvenanceRefused(
+                f'{rel}: semantic judged 缺合法 output_ordinal/consumed.text_sha1')
+        out[rel] = {'output_ordinal': ordinal, 'text_sha1': text_fp}
+    return out
+
+
+def _prompt_payload(
+        art: Hook, up: hook._Upstreams,
+        aliases: tuple[tuple[str, str, str], ...],
+) -> dict[str, object]:
+    """真正进入两个 judge user 的动态 allowlist；input hash 与 prompt 共用。"""
+    return {
+        'texts': [
+            {'label': neutral, 'text': text}
+            for neutral, _real, text in aliases
+        ],
+        'source_reference': up.src_hook,
+        'rewritten_opening': [
+            {'chapter': row.get('output_ordinal'), 'text': row.get('text') or ''}
+            for row in up.mat.lead
+        ],
+        'story_truth': up.mat.story_truth,
+        'whole_story_map': list(up.mat.story_map),
+    }
+
+
+def _semantic_input_payload(
+        art: Hook, up: hook._Upstreams,
+        aliases: tuple[tuple[str, str, str], ...],
+) -> dict[str, object]:
+    prompt = _prompt_payload(art, up, aliases)
+    return {
+        # run/checkpoint 保守绑定 producer 真正读到的 typed hook；普通 freshness 仍由
+        # ``stage6_semantic_hook`` 的文本投影保证 --pick 不会误判历史审判 stale。
+        'hook': art.model_dump(by_alias=True, mode='json'),
+        'references': {
+            key: prompt[key]
+            for key in (
+                'source_reference', 'rewritten_opening',
+                'story_truth', 'whole_story_map',
+            )
+        },
+        'aliases': [
+            {
+                'neutral': neutral,
+                'real': real,
+                'text_sha256': text_sha256(text),
+            }
+            for neutral, real, text in aliases
+        ],
+    }
+
+
+def _read_hook_as_input(store: ArtifactStore) -> Hook:
+    """正式运行必须走 ``read`` 记上游边；旧 unit fake 只实现 ``read_own``。"""
+    reader = getattr(store, 'read', None)
+    if callable(reader):
+        return reader(Hook, hook.REL)
+    # 这一支只保持既有的无盘单元替身；生产 ``ArtifactStore`` 必有 ``read``。
+    art, _raw = store.read_own(Hook, hook.REL)
+    return art
+
+
 def build_prompt(ctx: RunContext) -> tuple[str, str, Hook, hook._Upstreams,
                                                list[tuple[str, str, str]]]:
     """构造一次匿名审判请求；返回 ``(neutral, real, text)`` 映射供落盘解匿名。"""
@@ -276,26 +444,118 @@ def build_prompt(ctx: RunContext) -> tuple[str, str, Hook, hook._Upstreams,
     if store.freshness(hook.REL).state != 'fresh':
         raise TerminalState(
             'stage6/hook.json 的生成上游已经变化；不要付费审一份过期文案，先重跑 stage6.hook')
-    art, _raw = store.read_own(Hook, hook.REL)
+    art = _read_hook_as_input(store)
     up = hook._Upstreams(ctx, store)
 
-    aliases = [
+    aliases = tuple(
         (f'T{i}', real_label, text)
         for i, (real_label, text) in enumerate(_anonymisation_order(art), 1)
-    ]
-    payload = {
-        'texts': [{'label': neutral, 'text': text} for neutral, _real, text in aliases],
-        'source_reference': up.src_hook,
-        'rewritten_opening': [
-            {'chapter': row.get('output_ordinal'), 'text': row.get('text') or ''}
-            for row in up.mat.lead
-        ],
-        'story_truth': up.mat.story_truth,
-        'whole_story_map': list(up.mat.story_map),
-    }
+    )
+    payload = _prompt_payload(art, up, aliases)
     user = ('匿名评审以下候选。先核对实质矛盾，再按留存能力评分与排序。\n\n'
             + json.dumps(payload, ensure_ascii=False, indent=2))
-    return SEMANTIC_SYS, user, art, up, aliases
+    return SEMANTIC_SYS, user, art, up, list(aliases)
+
+
+def _hook_file_sha1(store: ArtifactStore) -> str:
+    try:
+        return prov.fingerprint_bytes(store.path(hook.REL).read_bytes())
+    except OSError as exc:
+        raise ArtifactUnreadable(f'无法读取 {hook.REL} 的审计指纹：{exc}') from exc
+
+
+def _context_from_inputs(ctx: RunContext) -> SemanticCandidateContext:
+    system, user, art, up, raw_aliases = build_prompt(ctx)
+    aliases = tuple(raw_aliases)
+    judge_users: list[tuple[str, str]] = []
+    for role in ('A', 'B'):
+        role_system, role_user = judge_request(system, user, role)
+        if role_system != system:
+            raise ProvenanceRefused(
+                f'stage6.semantic judge {role} 改写了共享 system；双盲缓存面已分叉')
+        judge_users.append((role, role_user))
+    judged = _prompt_judged(up)
+    return SemanticCandidateContext(
+        system=system,
+        user=user,
+        judge_users=tuple(judge_users),
+        art=art,
+        up=up,
+        aliases=aliases,
+        judged=judged,
+        input_sha256=_canonical_sha256(
+            _semantic_input_payload(art, up, aliases)),
+        hook_file_sha1=_hook_file_sha1(ArtifactStore(ctx)),
+    )
+
+
+def _uses_agent_runs(ctx: RunContext) -> bool:
+    return getattr(ctx, 'executor_profile', None) is not None
+
+
+def _assert_prepared_memory(prepared: SemanticCandidateContext) -> None:
+    current_input = _canonical_sha256(_semantic_input_payload(
+        prepared.art, prepared.up, prepared.aliases))
+    if current_input != prepared.input_sha256:
+        raise ProvenanceRefused(
+            'stage6.semantic prepared context 在内存中发生漂移；拒绝继续请求或落盘')
+    if _judged_text_projection(_prompt_judged(prepared.up)) \
+            != _judged_text_projection(prepared.judged):
+        raise ProvenanceRefused(
+            'stage6.semantic prepared Stage5 reference 在内存中发生漂移')
+    expected_users = tuple(
+        (role, judge_request(prepared.system, prepared.user, role)[1])
+        for role in ('A', 'B')
+    )
+    if prepared.judge_users != expected_users:
+        raise ProvenanceRefused(
+            'stage6.semantic prepared judge request 字节发生漂移')
+
+
+def _assert_prepared_current(
+        ctx: RunContext, prepared: SemanticCandidateContext,
+) -> SemanticCandidateContext:
+    """付费前/提交前重建 exact allowlist；校验读取不污染正式 provenance。"""
+    _assert_prepared_memory(prepared)
+    current_code = prov.code_version()
+    if current_code != ctx.code:
+        raise ProvenanceRefused(
+            f'stage6.semantic executor sessions 期间代码版本发生漂移：'
+            f'start={ctx.code} current={current_code}')
+    with ctx.validation_reads():
+        current = _context_from_inputs(ctx)
+    if (current.input_sha256 != prepared.input_sha256
+            or current.system != prepared.system
+            or current.judge_users != prepared.judge_users
+            or current.hook_file_sha1 != prepared.hook_file_sha1
+            or _judged_text_projection(current.judged)
+            != _judged_text_projection(prepared.judged)):
+        raise ProvenanceRefused(
+            'stage6.semantic 运行期间 hook/Stage5 reference/prompt 输入发生漂移；'
+            '必须新建双判官 sessions')
+    ctx.require_observed_roots_current()
+    return current
+
+
+def prepare_semantic_candidate(ctx: RunContext) -> SemanticCandidateContext:
+    """读取并冻结双判官共同主体；不发模型请求、不写 semantic 正式产物。"""
+    if ctx.node != 'stage6.semantic':
+        raise ValueError(
+            f'prepare_semantic_candidate 只接受 stage6.semantic，实得 {ctx.node!r}')
+    prepared = _context_from_inputs(ctx)
+    _assert_prepared_memory(prepared)
+    if _uses_agent_runs(ctx):
+        from novel.llm import stage6_runs
+
+        stage6_runs.ensure_run(
+            ctx,
+            input_sha256=prepared.input_sha256,
+            system=prepared.system,
+            users=dict(prepared.judge_users),
+            response_model=HookSemanticResponse,
+            max_tokens=SEMANTIC_MAX_TOKENS,
+        )
+    return prepared
 
 
 def response_validator(aliases: list[tuple[str, str, str]]):
@@ -332,6 +592,130 @@ def response_validator(aliases: list[tuple[str, str, str]]):
         return None
 
     return validate
+
+
+def _judge_purpose(ctx: RunContext, role: str) -> str:
+    return f'{ctx.node}.{role}'
+
+
+def _request_semantic_role(
+        ctx: RunContext,
+        source: _SemanticResponseSource,
+        prepared: SemanticCandidateContext,
+        *,
+        role: str,
+        validator: Callable[[HookSemanticResponse, ChatResponse], str | None],
+) -> HookSemanticResponse:
+    """一个独立判官的 wire→checkpoint 窄边界；供 agent 双 session 并发复用。"""
+    from novel.llm import stage6_runs
+
+    purpose = _judge_purpose(ctx, role)
+    response = source.ask_json(
+        prepared.system,
+        prepared.user_for(role),
+        model_cls=HookSemanticResponse,
+        purpose=purpose,
+        max_tokens=SEMANTIC_MAX_TOKENS,
+        validator=validator,
+        recovery_policy=stage6_runs.RECOVERY_POLICY,
+    )
+    stage6_runs.write_checkpoint(
+        ctx,
+        role=role,
+        input_sha256=prepared.input_sha256,
+        system=prepared.system,
+        user=prepared.user_for(role),
+        response_model=HookSemanticResponse,
+        max_tokens=SEMANTIC_MAX_TOKENS,
+        response_payload=response.model_dump(by_alias=True, mode='json'),
+        acceptance=source.accepted_checkpoint(purpose),
+    )
+    return response
+
+
+def request_semantic_candidates(
+        ctx: RunContext,
+        source: _SemanticResponseSource,
+        prepared: SemanticCandidateContext,
+) -> dict[str, HookSemanticResponse]:
+    """取得 A/B；legacy 保持顺序，agent 全量验 checkpoint 后并发缺失 session。"""
+    _assert_prepared_current(ctx, prepared)
+    validate = response_validator(list(prepared.aliases))
+    restored: dict[str, tuple[HookSemanticResponse, dict[str, Any]]] = {}
+    responses: dict[str, HookSemanticResponse] = {}
+
+    if _uses_agent_runs(ctx):
+        required = (
+            'accepted_checkpoint', 'restore_checkpoint_acceptance',
+            'accepted_attempt', 'accepted_models',
+        )
+        missing = [name for name in required if not callable(getattr(source, name, None))]
+        if missing:
+            raise ProvenanceRefused(
+                f'stage6.semantic agent source 缺 checkpoint bridge {missing}；'
+                '已在首个 wire 前停止')
+        from novel.llm import stage6_runs
+
+        # 两份都先验完：B 的损坏不能在 A 已经新付费之后才被发现。
+        for role in stage6_runs.JUDGE_ROLES:
+            got = stage6_runs.restore_checkpoint(
+                ctx,
+                role=role,
+                input_sha256=prepared.input_sha256,
+                system=prepared.system,
+                user=prepared.user_for(role),
+                response_model=HookSemanticResponse,
+                max_tokens=SEMANTIC_MAX_TOKENS,
+                validator=validate,
+            )
+            if got is not None:
+                restored[role] = got
+        for role, (response, acceptance) in restored.items():
+            source.restore_checkpoint_acceptance(
+                _judge_purpose(ctx, role),
+                acceptance,
+                system=prepared.system,
+                user=prepared.user_for(role),
+                max_tokens=SEMANTIC_MAX_TOKENS,
+                recovery_policy=stage6_runs.RECOVERY_POLICY,
+            )
+            responses[role] = response
+
+        missing_roles = tuple(
+            role for role in stage6_runs.JUDGE_ROLES if role not in responses)
+        if missing_roles:
+            # 双判官是两个独立 provider session。共享 RunContext 的来源账不是线程局部，
+            # 所以 exact input 只在启动前统一复核；线程里只碰各自 session/checkpoint。
+            _assert_prepared_current(ctx, prepared)
+            with ThreadPoolExecutor(max_workers=len(missing_roles)) as executor:
+                futures = {
+                    role: executor.submit(
+                        _request_semantic_role,
+                        ctx,
+                        source,
+                        prepared,
+                        role=role,
+                        validator=validate,
+                    )
+                    for role in missing_roles
+                }
+                # 取值顺序固定为 A/B；即使 A 失败，context manager 仍等 B 收口，
+                # B 已接受的响应会先写 checkpoint，重启不重复付费。
+                for role in missing_roles:
+                    responses[role] = futures[role].result()
+        return responses
+
+    # legacy LlmClient 的双请求、purpose 与顺序逐字保留；不把旧 acceptance
+    # 伪装成 node-executor/v1，也不创建 stage6 run sidecar。
+    for role in ('A', 'B'):
+        responses[role] = source.ask_json(
+            prepared.system,
+            prepared.user_for(role),
+            model_cls=HookSemanticResponse,
+            purpose=_judge_purpose(ctx, role),
+            validator=validate,
+        )
+    return responses
 
 
 def _judge_decision(judge: str, review: HookCandidateReviewResponse, *,
@@ -444,46 +828,363 @@ def materialize_double_blind(
     return reviews, decisions, ranking, judge_rankings
 
 
-def run_semantic(ctx: RunContext, client: LlmClient
-                 ) -> tuple[HookSemanticReview, CheckReport]:
-    current = _runtime_contract(client.model)
-    system, user, art, up, aliases = build_prompt(ctx)
-    # ⚠ 两次调用是**顺序**的，而这正是身份标签挪到 user 末尾之后省钱的前提：
-    #   A 跑完把 `system` + 整包材料写进供应商前缀缓存，B 才发出去 ⇒ B 命中那一整段。
-    responses = [
-        client.ask_json(
-            *judge_request(system, user, role),
-            model_cls=HookSemanticResponse,
-            purpose=f'{ctx.node}.{role}',
-            validator=response_validator(aliases),
+def _validated_responses(
+        prepared: SemanticCandidateContext,
+        responses: Mapping[str, HookSemanticResponse],
+) -> dict[str, HookSemanticResponse]:
+    if set(responses) != {'A', 'B'}:
+        raise ProvenanceRefused(
+            f'stage6.semantic responses 必须恰有 A/B，实得 {sorted(responses)}')
+    validate = response_validator(list(prepared.aliases))
+    out: dict[str, HookSemanticResponse] = {}
+    for role in ('A', 'B'):
+        response = HookSemanticResponse.model_validate(responses[role])
+        why = validate(
+            response,
+            ChatResponse(content=response.model_dump_json(by_alias=True)),
         )
-        for role in ('A', 'B')
-    ]
-    reviews, decisions, ranking, judge_rankings = materialize_double_blind(
-        responses[0], responses[1], aliases=aliases)
+        if why is not None:
+            raise ProvenanceRefused(
+                f'stage6.semantic judge {role} 候选绕过响应闸：{why}')
+        out[role] = response
+    return out
 
-    store = ArtifactStore(ctx)
-    artifact = HookSemanticReview(
-        judged_texts={real: text_sha1(text) for _neutral, real, text in aliases},
-        hook_file_sha1=prov.fingerprint_bytes(store.path(hook.REL).read_bytes()),
+
+def _accepted_attempts(
+        ctx: RunContext, source: _SemanticResponseSource,
+) -> tuple[tuple[str, str], ...]:
+    rows: list[tuple[str, str]] = []
+    for role in ('A', 'B'):
+        purpose = _judge_purpose(ctx, role)
+        attempt_id = source.accepted_attempt(purpose)
+        if not isinstance(attempt_id, str) or not attempt_id:
+            raise ProvenanceRefused(
+                f'{purpose}: 双盲响应已进入候选，但缺 accepted attempt')
+        rows.append((role, attempt_id))
+    if len({attempt for _role, attempt in rows}) != 2:
+        raise ProvenanceRefused('stage6.semantic A/B 不能共用同一 accepted attempt')
+    return tuple(rows)
+
+
+def _adopted_models(
+        ctx: RunContext, source: _SemanticResponseSource,
+) -> tuple[str, ...]:
+    purposes = tuple(_judge_purpose(ctx, role) for role in ('A', 'B'))
+    models = tuple(sorted(set(source.accepted_models(*purposes))))
+    if not models or any(not isinstance(model, str) or not model for model in models):
+        raise ProvenanceRefused(
+            'stage6.semantic 双盲候选缺实际 accepted model，不能按 requested model 猜')
+    return models
+
+
+def _materialize_semantic_candidate(
+        ctx: RunContext,
+        source: _SemanticResponseSource,
+        prepared: SemanticCandidateContext,
+        responses: Mapping[str, HookSemanticResponse],
+        *,
+        settle: bool,
+) -> HookSemanticReview:
+    checked = _validated_responses(prepared, responses)
+    reviews, decisions, ranking, judge_rankings = materialize_double_blind(
+        checked['A'], checked['B'], aliases=list(prepared.aliases))
+    adopted_models = _adopted_models(ctx, source)
+    return HookSemanticReview(
+        judged_texts={
+            real: text_sha1(text)
+            for _neutral, real, text in prepared.aliases
+        },
+        hook_file_sha1=prepared.hook_file_sha1,
         reviews=reviews,
         ranking=ranking,
         judge_rankings=judge_rankings,
         decisions=decisions,
-        evaluator_fingerprint=current,
+        evaluator_fingerprint=_runtime_contract(source.model),
+        judged=dict(prepared.judged),
         _provenance=ctx.llm_provenance(
-            prompts=judge_prompts(system),
-            model=client.model,
-            adopted_models=client.accepted_models(
-                f'{ctx.node}.A', f'{ctx.node}.B'),
+            prompts=judge_prompts(prepared.system),
+            model=source.model,
+            adopted_models=adopted_models,
+            settle=settle,
         ),
     )
+
+
+def evaluate_semantic_candidate(
+        ctx: RunContext,
+        source: _SemanticResponseSource,
+        prepared: SemanticCandidateContext,
+        responses: Mapping[str, HookSemanticResponse],
+) -> SemanticCandidateEvaluation:
+    """合并 A/B 并铸造 provisional typed artifact；不选序号、不写盘、不结算。"""
+    if ctx.node != 'stage6.semantic':
+        raise ValueError(
+            f'evaluate_semantic_candidate 只接受 stage6.semantic，实得 {ctx.node!r}')
+    _assert_prepared_current(ctx, prepared)
+    checked = _validated_responses(prepared, responses)
+    attempts = _accepted_attempts(ctx, source)
+    adopted_models = _adopted_models(ctx, source)
+    candidate = _materialize_semantic_candidate(
+        ctx, source, prepared, checked, settle=False)
+    payload = candidate.model_dump(by_alias=True, mode='json')
+    return SemanticCandidateEvaluation(
+        candidate=candidate,
+        requested_model=source.model,
+        adopted_models=adopted_models,
+        accepted_attempts=attempts,
+        input_sha256=prepared.input_sha256,
+        _responses=tuple((role, checked[role]) for role in ('A', 'B')),
+        _candidate_sha256=_canonical_sha256(payload),
+    )
+
+
+def _semantic_finalization_payload(
+        *, rel: str, seq: int, prepared: SemanticCandidateContext,
+        artifact: HookSemanticReview,
+) -> dict[str, object]:
+    payload = artifact.model_dump(by_alias=True, mode='json')
+    provenance = payload.get('_provenance')
+    if not isinstance(provenance, Mapping):
+        raise ProvenanceRefused('stage6.semantic candidate 缺 typed provenance')
+    return {
+        'artifact': rel,
+        'seq': seq,
+        'input_sha256': prepared.input_sha256,
+        'judged': payload.get('judged'),
+        'judged_texts': payload.get('judged_texts'),
+        'hook_file_sha1': payload.get('hook_file_sha1'),
+        'inputs': provenance.get('inputs'),
+    }
+
+
+def _journal_rel(record: Mapping[str, Any]) -> tuple[str, int]:
+    rel = record.get('artifact')
+    if not isinstance(rel, str):
+        raise ProvenanceRefused('stage6.semantic commit journal 缺 artifact 路径')
+    match = _SEMANTIC_RX.fullmatch(os.path.basename(rel))
+    if (match is None or os.path.dirname(rel).replace('\\', '/') != 'stage6'
+            or rel != SEMANTIC_TPL.format(n=int(match.group(1)))):
+        raise ProvenanceRefused(
+            f'stage6.semantic commit journal 指向非法 artifact={rel!r}')
+    return rel, int(match.group(1))
+
+
+def _note_semantic_adoptions(
+        ctx: RunContext, *, rel: str, candidate: HookSemanticReview,
+        adoptions: tuple[tuple[str, str], ...],
+) -> None:
+    fingerprint = prov.projection_fingerprint(
+        candidate.model_dump(by_alias=True, mode='json'))
+    if len(adoptions) != 2 or {purpose for purpose, _attempt in adoptions} != {
+            _judge_purpose(ctx, 'A'), _judge_purpose(ctx, 'B')}:
+        raise ProvenanceRefused(
+            f'stage6.semantic 正式产物必须恰有 A/B 两份 adoption，实得 {adoptions}')
+    for purpose, attempt_id in adoptions:
+        ctx.ledger.note_adoption(
+            sid=ctx.sid,
+            node=ctx.node,
+            purpose=purpose,
+            attempt_id=attempt_id,
+            artifact=rel,
+            artifact_fingerprint=fingerprint,
+            chapter=None,
+        )
+
+
+def verify_semantic_delivery(
+        ctx: RunContext,
+        prepared: SemanticCandidateContext,
+        expected: HookSemanticReview,
+        *,
+        rel: str,
+) -> tuple[HookSemanticReview, CheckReport]:
+    """typed readback + exact equality + freshness/latest + Stage5 reference 终验。"""
+    if ctx.node != 'stage6.semantic':
+        raise ValueError(
+            f'verify_semantic_delivery 只接受 stage6.semantic，实得 {ctx.node!r}')
+    current = _assert_prepared_current(ctx, prepared)
+    store = ArtifactStore(ctx)
+    match = _SEMANTIC_RX.fullmatch(os.path.basename(rel))
+    if match is None or rel != SEMANTIC_TPL.format(n=int(match.group(1))):
+        raise ProvenanceRefused(f'stage6.semantic 正式路径非法：{rel!r}')
+    seq = int(match.group(1))
     seqs = semantic_seqs(store)
-    seq = (seqs[-1] + 1) if seqs else 1
-    rel = SEMANTIC_TPL.format(n=seq)
-    store.write(rel, artifact)
-    outcomes = hook._judge_artifact(art, up, store)
-    return artifact, hook._report(ctx, store, outcomes, art, freshness_rel=rel)
+    if not seqs or seqs[-1] != seq:
+        raise ProvenanceRefused(
+            f'stage6.semantic readback 不是当前 latest：target={seq}, disk={seqs}')
+
+    with ctx.validation_reads():
+        landed, _raw = store.read_own(
+            HookSemanticReview, rel, require_current=True)
+        freshness = store.freshness(rel)
+    expected_payload = expected.model_dump(by_alias=True, mode='json')
+    landed_payload = landed.model_dump(by_alias=True, mode='json')
+    if (expected_payload != landed_payload
+            or _canonical_sha256(expected_payload)
+            != _canonical_sha256(landed_payload)):
+        raise ProvenanceRefused(
+            'stage6.semantic 正式 readback 与本次终态候选不完全相等')
+    if freshness.state != 'fresh':
+        raise ProvenanceRefused(
+            f'stage6.semantic 正式 readback freshness='
+            f'{freshness.state}/{freshness.reason}；拒绝 delivered')
+    if landed.hook_file_sha1 != current.hook_file_sha1:
+        raise ProvenanceRefused(
+            'stage6.semantic 正式 readback 的 hook_file_sha1 已不是当前输入字节')
+    if (_judged_text_projection(landed.judged)
+            != _judged_text_projection(current.judged)):
+        raise ProvenanceRefused(
+            'stage6.semantic 正式 readback 绑定的 Stage5 开篇正文已变化')
+
+    with ctx.validation_reads():
+        outcomes = hook._judge_artifact(current.art, current.up, store)
+        report = hook._report(
+            ctx, store, outcomes, current.art, freshness_rel=rel)
+    return landed, report
+
+
+def _assert_evaluation_identity(
+        ctx: RunContext,
+        source: _SemanticResponseSource,
+        prepared: SemanticCandidateContext,
+        evaluation: SemanticCandidateEvaluation,
+) -> None:
+    if evaluation.input_sha256 != prepared.input_sha256:
+        raise ProvenanceRefused(
+            'stage6.semantic evaluation 不属于当前 prepared input')
+    if source.model != evaluation.requested_model:
+        raise ProvenanceRefused(
+            'stage6.semantic 评估后 requested model 漂移')
+    if _accepted_attempts(ctx, source) != evaluation.accepted_attempts:
+        raise ProvenanceRefused(
+            'stage6.semantic 评估后 accepted attempts 漂移')
+    if _adopted_models(ctx, source) != evaluation.adopted_models:
+        raise ProvenanceRefused(
+            'stage6.semantic 评估后 adopted models 漂移')
+    if _canonical_sha256(evaluation.candidate.model_dump(
+            by_alias=True, mode='json')) != evaluation._candidate_sha256:
+        raise ProvenanceRefused(
+            'stage6.semantic provisional candidate 在评估后被修改')
+
+
+def finalize_semantic_candidate(
+        ctx: RunContext,
+        source: _SemanticResponseSource,
+        prepared: SemanticCandidateContext,
+        evaluation: SemanticCandidateEvaluation,
+) -> tuple[HookSemanticReview, CheckReport]:
+    """终态只提交一次；agent 走 checkpoint→journal→readback→双 adoption。"""
+    if ctx.node != 'stage6.semantic':
+        raise ValueError(
+            f'finalize_semantic_candidate 只接受 stage6.semantic，实得 {ctx.node!r}')
+    _assert_evaluation_identity(ctx, source, prepared, evaluation)
+    _assert_prepared_current(ctx, prepared)
+    responses = dict(evaluation._responses)
+
+    from novel.llm import stage6_runs
+
+    store = ArtifactStore(ctx)
+    with stage6_runs.commit_ownership(ctx.novel_dir):
+        _assert_prepared_current(ctx, prepared)
+        journal: Mapping[str, Any] | None = None
+        if _uses_agent_runs(ctx):
+            journal = stage6_runs.committed(ctx)
+            if journal is None:
+                journal = stage6_runs.prepared(ctx)
+        if journal is None:
+            seqs = semantic_seqs(store)
+            seq = seqs[-1] + 1 if seqs else 1
+            rel = SEMANTIC_TPL.format(n=seq)
+        else:
+            rel, seq = _journal_rel(journal)
+            later = [item for item in semantic_seqs(store) if item > seq]
+            if later:
+                raise ProvenanceRefused(
+                    f'run={ctx.run_id} 的 semantic commit={seq} 已不是 latest；'
+                    f'盘上还有后续审判 {later}')
+
+        # legacy 与 agent 共用序号空间。即使当前分支不造 journal，也不能复用
+        # 另一 agent run 已 prepared、但尚未正式写出的 crash 恢复位。
+        stage6_runs.refuse_foreign_commit_reservations(ctx, rel)
+        # 所有不依赖最终 provenance 的序号/恢复闸都已通过，才推进 usage settle。
+        # 否则 foreign prepared 等静态阻断会在没有正式产物时吞掉本 context 的结算窗。
+        artifact = _materialize_semantic_candidate(
+            ctx, source, prepared, responses, settle=True)
+        candidate = artifact.model_dump(by_alias=True, mode='json')
+        if (_canonical_sha256(candidate) != evaluation._candidate_sha256
+                or candidate != evaluation.candidate.model_dump(
+                    by_alias=True, mode='json')):
+            raise ProvenanceRefused(
+                'stage6.semantic provisional/final typed candidate 不一致；'
+                '拒绝在非确定合并器上写盘')
+
+        finalization = _semantic_finalization_payload(
+            rel=rel, seq=seq, prepared=prepared, artifact=artifact)
+        role_attempts = dict(evaluation.accepted_attempts)
+        if _uses_agent_runs(ctx):
+            journal = stage6_runs.prepare_commit(
+                ctx,
+                artifact=rel,
+                artifact_payload=candidate,
+                finalization_payload=finalization,
+                adoptions=role_attempts,
+            )
+            if (not stage6_runs.verify_commit_artifact(journal, candidate)
+                    or not stage6_runs.verify_commit_finalization(
+                        journal, finalization)):
+                raise ProvenanceRefused(
+                    'stage6.semantic commit journal 与最终候选/输入/序号不闭合')
+
+        if store.exists(rel):
+            existing, _raw = store.read_own(
+                HookSemanticReview, rel, require_current=True)
+            if existing.model_dump(by_alias=True, mode='json') != candidate:
+                raise ProvenanceRefused(
+                    f'{rel} 已存在另一份 semantic 候选；拒绝覆盖历史审判')
+        else:
+            store.write(rel, artifact)
+
+        landed, report = verify_semantic_delivery(
+            ctx, prepared, artifact, rel=rel)
+        landed_payload = landed.model_dump(by_alias=True, mode='json')
+        committed_finalization = _semantic_finalization_payload(
+            rel=rel, seq=seq, prepared=prepared, artifact=landed)
+        if _uses_agent_runs(ctx):
+            assert journal is not None
+            # adoption 是正式交付的一部分；在它之前再关一次代码/输入漂移窗，避免
+            # 已知过期的产物仍被记成「本 run 采纳」。
+            _assert_prepared_current(ctx, prepared)
+            restored = stage6_runs.restore_commit_adoptions(ctx, journal)
+            _note_semantic_adoptions(
+                ctx, rel=rel, candidate=landed, adoptions=restored)
+            _assert_prepared_current(ctx, prepared)
+            stage6_runs.mark_committed(
+                ctx,
+                artifact_payload=landed_payload,
+                finalization_payload=committed_finalization,
+            )
+        else:
+            _assert_prepared_current(ctx, prepared)
+            _note_semantic_adoptions(
+                ctx,
+                rel=rel,
+                candidate=landed,
+                adoptions=tuple(
+                    (_judge_purpose(ctx, role), attempt_id)
+                    for role, attempt_id in evaluation.accepted_attempts
+                ),
+            )
+        return landed, report
+
+
+def run_semantic(ctx: RunContext, client: LlmClient
+                 ) -> tuple[HookSemanticReview, CheckReport]:
+    """legacy 单轮包装；agent executor 复用相同四段，但启用 checkpoint/journal。"""
+    prepared = prepare_semantic_candidate(ctx)
+    responses = request_semantic_candidates(ctx, client, prepared)
+    evaluation = evaluate_semantic_candidate(
+        ctx, client, prepared, responses)
+    return finalize_semantic_candidate(ctx, client, prepared, evaluation)
 
 
 # ⚠⚠ 这里曾有 `_calibration_status()`（不发请求地复查 profile 漂移）与
@@ -506,6 +1207,23 @@ def _current_artifact(
     rel = SEMANTIC_TPL.format(n=seq)
     if store.freshness(rel).state != 'fresh':
         return None, f'{rel} 的上游已变化；当前结论降为 UNVER', seq
+
+    # `inputs` freshness 管普通上游；Stage5 正文是 judged 主体，必须另用真正下发
+    # 给 A/B 的开篇 allowlist 闭合。全书 Stage5 Review 若失效，`_Upstreams` 仍按既有
+    # 业务门让 semantic 暂不可用；免费重跑 Review 后，后半书不会继续残留成假 stale。
+    if isinstance(artifact, HookSemanticReview):
+        try:
+            ctx = store.ctx
+            with ctx.validation_reads():
+                current_up = hook._Upstreams(ctx, store)
+                current_judged = _prompt_judged(current_up)
+        except TerminalState as exc:
+            return None, (
+                f'{rel} 无法重验 Stage5 开篇正文：{exc}；当前结论降为 UNVER'), seq
+        if (_judged_text_projection(artifact.judged)
+                != _judged_text_projection(current_judged)):
+            return None, (
+                f'{rel} 判过的 Stage5 开篇正文已变化或缺失；当前结论降为 UNVER'), seq
 
     current_shas = {text_sha1(text) for _label, text in hook._texts_of(art)}
     judged_shas = {review.text_sha1 for review in artifact.reviews}

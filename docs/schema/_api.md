@@ -95,6 +95,7 @@ Prompt 选型完成后，`prompt_variants`、`prompt_defaults` 与 `--prompt-var
 | 端点 | 响应 | 新旧 |
 |---|---|---|
 | `GET /api/enums` | 无模型（见 §二） | 新 |
+| `GET /api/agent/capabilities` | `AgentCapabilitiesResponse`（registry 能力 + 本机 CLI/版本只读探针） | 新；Phase 1 发布，现役 UI 仍未消费 |
 | `GET /api/novels` | `NovelList` | 新 |
 | `GET /api/novels/:sid` | `NovelOverview` | **复用** `_orchestration.md` |
 | `GET /api/novels/:sid/check/:kind` | `CheckReport` | **复用** `_report.md` |
@@ -102,8 +103,8 @@ Prompt 选型完成后，`prompt_variants`、`prompt_defaults` 与 `--prompt-var
 | `GET /api/jobs/:id` | `JobRecord` | **复用** `_orchestration.md` |
 | `GET /api/jobs/:id/log?offset=N` | `LogChunk` | 新 |
 | `GET /api/jobs/:id/stream?offset=N` | SSE：`LogStreamEvent` | 新；主日志通道 |
-| `POST /api/jobs/preview` | `JobStart`（请求体 `PreviewRequest`） | **复用** `_orchestration.md` |
-| `POST /api/jobs` | `JobRecord`（202；请求体 `PreviewRequest`） | **复用** `_orchestration.md` |
+| `POST /api/jobs/preview` | `JobStart`（请求体 `PreviewRequest`） | **复用** `_orchestration.md`；现役 direct executor 为 8 节点 / 12 种 flag-token 组合（精确矩阵见下），并回显独立 `egress_authorized` 快照 |
+| `POST /api/jobs` | `JobRecord`（202；请求体 `PreviewRequest`） | **复用** `_orchestration.md`；同一组 profile / egress 边界，profile 非空且 egress 不是 true 时不起 job |
 | `GET /api/queues` | `QueueList` | 新 |
 | `POST /api/queues/preview` | `QueuePlan`（请求体 `QueueCreateRequest`；纯预览） | **复用** `_orchestration.md` |
 | `POST /api/queues` | `QueueRun`（202；确认并建立、启动持久队列） | **复用** `_orchestration.md` |
@@ -125,7 +126,7 @@ Prompt 选型完成后，`prompt_variants`、`prompt_defaults` 与 `--prompt-var
 | `POST /api/novels/:sid/approvals/gate/:key` | `ApprovalDoc` | 新 |
 | `POST /api/novels/:sid/approvals/seen/:key` | `ApprovalDoc` | 新 |
 | `POST /api/novels/:sid/approvals/structure` | `ApprovalDoc`（请求体 `StructureApprovalRequest`：完整结构 subject SHA-256、actor、总理由与恰好覆盖全书的逐章 `accept / request_replan`） | 新；typed Stage4 结构裁决，提交本身不启动作业 |
-| `POST /api/novels/:sid/approvals/writing` | `ApprovalDoc` | 新 |
+| `POST /api/novels/:sid/approvals/writing` | `ApprovalDoc`（请求体可省略：空 body 保留旧 UI 的 `begin_writing`；非空必须是 `WritingApprovalRequest` 的 actor、reason 与当前完整 subject SHA-256） | typed 分支只写审批账、不启动作业；Commander 使用 CLI façade，不走空 body 兼容口 |
 | `POST /api/novels/:sid/approvals/reset` | `ApprovalDoc` | 新 |
 | `POST /api/novels/:sid/approvals/backfill` | `ApprovalBackfillResult`（按盘面显式补录，不在 GET 时静默发生） | 新 |
 | `GET /api/novels/:sid/reading/:o` | `ReadingView` | 新 |
@@ -182,9 +183,86 @@ Prompt 选型完成后，`prompt_variants`、`prompt_defaults` 与 `--prompt-var
 |---|---|---|---|
 | `authorized` | `bool` | `false` | 是否允许产生外部模型调用费用 |
 | `egress_authorized` | `bool` | `true` | 是否允许向外部模型发送小说正文及派生上下文 |
+| `profiles` | `PipelineAgentProfiles \| null` | `null` | commander、默认 executor 与逐节点覆盖的选择；`null` 只是旧客户端/迁移期未指定，不是某个隐含默认 |
 
-缺省 `true` 是当前产品偏好，不代表两项授权合并。UI 必须显示两个独立复选框并显式提交二者；
-`AgentRunPreview` 回显两个布尔值，preview 与真跑都由同一函数把两段授权原文写入 prompt。
+只有正文外发轴的 wire 缺省是 `true`，不代表两项授权合并。UI 必须显示两个独立复选框并显式提交
+二者；`AgentRunPreview` 回显两个布尔值，preview 与真跑都由同一 planner 把两段授权原文写入 prompt。
+preview 可以在任一项为 false 时 0 成本展开；单本 start 与 batch 则在任何 Commander probe/spawn/wire
+之前同时要求二者为 true。`profiles` 键同样恒在：非空值经 registry 解析并进入真实 Commander；
+`null` 只保留请求兼容形状，当前 `default_profiles=null` 时 preview/start/batch 均关闭式拒绝，不能代选。
+
+`GET /api/agent/capabilities` 是 agent 选择面的唯一公开数据源：
+
+| 模型 | 字段 | 约束 |
+|---|---|---|
+| `AgentCapabilitiesResponse` | `drivers[]` · `executor_nodes[]` · `default_profiles` | `executor_nodes` 按 `AGENT_EXECUTOR_NODES` 完整有序发布，前端不维护第二份节点表。`default_profiles` 当前明确为 `null`：尚无 provider-neutral 默认，不能取 `drivers[0]` 猜；Phase 7 服务端冻结唯一默认后才可非空 |
+| `AgentDriverCapability` | `id` · `provider` · `label` · `roles[]` · `availability` · `availability_reason` · `version` · `models[]` | `id` 是可执行 driver 身份，`provider` 只是供应商元数据，`label` 只展示。可用性四态为 `ready / missing / unknown / unauthenticated` |
+| `AgentModelCapability` | `id` · `label` · `reasoning_efforts[]` · `execution_modes[]` | 精确 `id` 进入 argv/审计，label 可改；effort 与 execution mode 正交，只能提交该 model 实际发布的组合 |
+| `AgentProfile` | `driver` · `model` · `reasoning_effort` · `execution_mode` | schema 只承载选择；driver/角色/model/effort/mode 的组合由同一个 capability registry 关闭式校验，客户端不得自造笛卡尔积 |
+| `PipelineAgentProfiles` | `commander` · `executor_default` · `executor_overrides{node: profile}` | override 键只接受响应中的 executor 节点；代码节点、stage 名与退役节点不能伪装 executor |
+
+探针只在本机解析 CLI 并读取版本，**不发模型请求、不产生费用**；因此 `ready` 只证明可执行文件与
+版本探针成功，不证明账号认证、模型 entitlement 或真实调用可用。当前 registry 只发布实际受测的
+execution mode；`ultra` 既不是 reasoning effort，也尚未被发布，调用方不得凭 UI 文案自行放开。
+
+Phase 1 冻结上述能力响应与 nullable 配置槽；Phase 2 当时只开放一条窄纵切：直接
+`POST /api/jobs/preview` / `POST /api/jobs` 在 `node=stage2.global` 且 `flags=[]` 时可携带非空
+`executor_profile`。两端点共用 `plan_start`，registry 解析后的精确选择依次冻结进
+`Step.executor_profile`、`JobStart.executor_profile` 与 `steps[].argv` 的 executor CLI 参数；子进程
+CLI 再把同一选择交给 `RunContext`，由该节点自己的 executor 在同一 logical session 内循环接受代码
+校验反馈，直至正式产物提交与终验。显式 profile 绝不回退 DeepSeek。
+
+Phase 3 把相同 API 纵切扩到 `node=stage2.blueprint, flags=[]`。同一 profile 只进入付费 producer
+Step；自动追加的 0 成本 `--check-only` Step 仍为 `executor_profile=null`。CLI 后由逐章 executor
+按 phase/purpose/chapter 隔离 session，验证后的 checkpoint 严格联结 run policy、profile、prompt/schema、
+session audit、accepted stdout/typed payload 与成本账；跨 CLI 恢复须复验并认领 prior attempts，完整命中
+不产生新 wire。整书 compile、联合 HARD、正式提交、readback 和自动终验仍由代码决定。
+
+Phase 4 再把 direct profile 扩到 `node=stage6.semantic, flags=[]`，同时增加与 `--yes`
+正交的正文外发授权。direct `PreviewRequest.egress_authorized` 默认 false（不要与上方 outer
+`AgentRunRequest` 当前默认 true 混读）；resolved profile 非空时 builder 必须收到显式 bool，并将它与
+profile 同源冻结进 `JobStart` 和付费 `Step`，只有 true 才把运行控制参数 `--allow-egress` 加进 argv。
+false 的 preview 仍返回完整但不可执行的 argv；`POST /api/jobs` 与手敲 CLI 在 job、probe、driver、wire
+之前拒绝。profile 为空时 false 归一为 `null`，true 关闭式拒绝，不能从付费确认或 profile 选择倒推授权。
+
+Stage6 A/B 各用独立 driver 对象、logical session、临时 cwd 与 provider session id，缺失角色并发；
+逐角色 checkpoint 支持完整或单边恢复，恢复的历史 provider session 只作 adoption 身份，不冒充 live
+resume。正式交付由代码在同一提交所有权内执行 prepared journal、artifact write、typed readback、
+两条 adoption 与 committed，并继续承担双盲响应校验、合并和当前输入终验。
+
+Phase 5 后，当前 API 只接受以下 **8 节点 / 12 种 flag-token 组合**的非空 profile：
+
+| node | token 组合 |
+|---|---|
+| `stage2.global` | `[]` |
+| `stage2.blueprint` | `[]` |
+| `stage4.design` | `[]`、`[--replan]` |
+| `stage4.plan` | `[]` |
+| `stage5.write` | `[]`、`[--chapters]`、`[--revise]`、`[--revise,--chapters]` |
+| `stage6.hook` | `[]` |
+| `stage6.semantic` | `[]` |
+| `stage7.rename` | `[]` |
+
+`--chapters` 后的章号是值，不是第十三种 token。Phase5 五个新增 producer 固定 typed 完整 replacement；
+agent 只交候选，代码负责业务 HARD、结构化 feedback、append-only checkpoint、正式 journal、typed
+readback、current/fresh 终验和 accepted-attempt adoption。显式 profile 的节点 dispatch 先于 legacy
+client 构造，不能静默回退 DeepSeek。
+
+矩阵之外的 direct executor 组合仍在 wire/dispatch 前拒绝。Phase 6 后，outer
+`AgentRunRequest.profiles` 已接入 provider-neutral Commander：preview/start/batch 共用唯一 plan，
+把规范化 base、起始代码指纹、resolved profiles、stdin-only invocation 与两项授权冻结进 started/queue；
+排队出队不重读 capability 或默认。Commander child 只持 run id 与 contract SHA-256，再从 append-only
+started 事件复核整份配置；operator runner 按 exact node/flags 选 default executor 或 override，不能手拼
+`--executor-*`。Claude Code / Codex Commander 的 prompt 只走 stdin，argv/env/log 不复制全文；Commander
+本身另记 `role=commander,node=null` 的 session 与 ledger，实际模型/effort 缺失保持 unknown，漂移、串
+provider session 或账/审计不闭合只可把 delivery 降成 unknown。进程 state 与盘面 delivery outcome 正交。
+
+页面现已从 capability 动态构造 Commander、默认 executor 与逐节点 override 表单；`default_profiles=null`
+时必须显式选全，不取数组第一项。单本与批量 start 直接消费最后一次成功 preview 保存的同一请求快照；
+profiles、两项授权或 capability 有任何漂移都先使 preview 失效，不能用新默认重解释旧确认。历史 run 的
+`profiles=null` 只显示 unknown；direct Job 的 executor profile / egress 只读展示仍与 outer Commander
+分开。Phase 1～6 的工程验证仍没有真实 provider 模型请求或 current-schema corpus 验收，不能据此宣称
+模型质量、速度、账号认证或 entitlement 已验证。
 
 通用启动返回 202 和 `running` 作业，由后台线程逐步启动 CLI 子进程。同一 `sid` 的书级
 作业互斥并返回 409，不同小说可并行；Stage5 canonical 写作同样占书级键，并在启动前原子核对
@@ -203,14 +281,21 @@ current writing 授权、Review 状态与旧布局，不存在另一个按臂的
 | `NovelList` | `base` · `novels[]`（`NovelOverview`） | 抓包 `novels.json` 的顶层就是 `{base, novels}`。⚠ **复用 `NovelOverview`，不另造一张轻量清单**——原型 `Web/novels.py` 那张第二清单的代价是 stage5 被迫整个排除在外，于是「有没有陈旧产物」那个徽章不覆盖成稿 |
 | `TrashNovelResult` | `sid` · `title` · `trash_id` · `trash_rel` | `novel/orchestrator/trash.py` 的 CLI 子进程完成同盘移动后返回；`trash_rel` 是可恢复位置，不把“从语料库消失”偷换成“字节已永久销毁” |
 | `ApprovalBackfillResult` | `approvals` · `backfilled[]` | `backfilled` 是本次**按正式盘面补录**的 gate id，空数组表示无事可补；界面必须明确这些不是用户逐屏点过的验收记录 |
-| `ApprovalDoc` | `v=4` · `sid` · `gate` · `seen` · `writing` · `structure` · `spawns` | HTTP v4 不等于 `_service/approvals/<sid>.json` 的盘上 v5。公开 gate 没有 s3；`structure` 给出 current subject、typed 当前裁决、历史与 `unavailable / missing / accepted / replan_requested / expired` 状态；`gate.s4=true` 只可能来自当前 `accepted` 裁决。writing 绑定 Stage1 正文、Stage4 计划与测量契约。旧内部记录仅由显式 backfill 收敛，普通 GET 不迁移 |
+| `ApprovalDoc` | `v=4` · `sid` · `gate` · `seen` · `writing` · `structure` · `writing_approval` · `spawns` | HTTP v4 不等于 `_service/approvals/<sid>.json` 的盘上 v5。公开 gate 没有 s3；`structure` 给出 current subject、typed 当前裁决、历史与 `unavailable / missing / accepted / replan_requested / expired` 状态；`gate.s4=true` 只可能来自当前 `accepted` 裁决。`writing_approval` 同样给出 available、current subject、typed current decision/history；旧 v5 可能只有 current `writing=true` 而没有 typed 历史，公开视图照实保留，不能伪造 actor/reason。新 typed writing 决定绑定 Stage1 正文、Stage4 计划与测量契约。旧内部记录仅由显式 backfill 收敛，普通 GET 不迁移 |
 | `JobList` | `jobs[]`（`JobRecord`） | 抓包 `jobs.json` 就是 `{"jobs":[]}`——**一个样本都没有**，所以元素形状只能从 `_orchestration.md` 来 |
 | `LogChunk` | `text` · `next_byte` | 按**字节**续读。⚠ 中文一字跨 3 字节，**只在读的一侧解码**（写的一侧按字节追加，见 `_orchestration.md`）。`next_byte` 原样回传给下一次 `?offset=` |
 | `LogStreamEvent` | `text` · `next_byte` · `done` · `state` | SSE 的 `id` 与 `next_byte` 相同；普通 `log` 事件为 `done=false,state=null`，唯一的 `end` 事件为 `done=true,state=ok|landed_red|failed|unknown` 并随即释放连接。断线时浏览器用 `Last-Event-ID` 续读；显式 query offset 与它取较大者，避免刷新倒退 |
 
 `PreviewRequest`：`sid`（已有书为非空字符串；首次 `stage0.remove --source` 为 `null`）·
-`node` · `flags[]`。请求外壳是 strict，任何旧 `mode` 键都返回 422；老
+`node` · `flags[]` · `executor_profile`（`AgentProfile \| null`；迁移期未指定为 `null`）·
+`egress_authorized`（`bool`，默认 false；只授权 direct executor 外发正文）。
+请求外壳是 strict，任何旧 `mode` 键都返回 422；老
 `jobs.jsonl` 的兼容解码只在服务内部磁盘边界发生，不进入本请求或公开响应模型。
+现役只允许上表 8 节点 / 12 组合提交非空 `executor_profile`；blueprint、Stage4 plan、Hook、Rename
+自动追跑的 `--check-only` Step 不继承 profile。其余组合均以 `UnsupportedRunMode` 拒绝，不能接收后
+再改走旧 LLM。Phase 2～4 的三条是历史增量，Phase 5 闭合当前矩阵。非空 profile 必须显式携带
+bool egress：false 允许预览
+但真启动返回 `ApprovalRequired`，true 才进入 argv；无 profile 时 false 归一成响应快照 `null`，true 拒绝。
 ⚠ `flags` 里的**带值 flag 要带上值**（`--apply-edit <路径>`）——
 `/api/enums` 的 `actions[].needs_value` 就是用来告诉前端「这个按钮要先要一个文件」的。
 

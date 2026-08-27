@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-agent.py —— 前端一键唤起 **headless agent**（`claude -p`）代跑一本书。
+agent.py —— 前端一键唤起供应商中立 **Commander** 代跑一本书。
 
     Output/_service/agent_runs.jsonl        append-only 事件流（生死与改判）
     Output/_service/logs/agent-<run_id>.log agent 进程的 stdout+stderr，按字节追加
@@ -12,48 +12,44 @@ agent.py —— 前端一键唤起 **headless agent**（`claude -p`）代跑一�
 全部派生源头。所以它有自己的事件文件，形状照抄 `jobs.py`（同一条
 append-only 理由：永不读-改-写，被 kill 最坏只损坏最后一行）。
 
-【Spike 结论（2026-08-15，`claude` 2.1.219 本机实测）】
-1. `claude -p`（cwd=仓根）**自动加载** `.claude/skills/`——提示词里仍写明
-   SKILL.md 的路径，双保险不花钱。
-2. 白名单规则 `Bash(D:/Miniconda/envs/novel_refactor/python.exe *)` 命中
-   skill 的全部命令形态；复合命令逐段判，`echo`/`grep` 等只读命令属于
-   内建免批集合，不需要规则。⇒ Bash 规则只需要**一条 python 前缀**。
-3. **`Write(<路径>)` 规则被接受但从不被查阅**（官方原文；2.1.219 实测三次全拒）。
-   文件写的作用域要写在 **`Edit(<路径>)`** 上（它覆盖所有改文件的工具），
-   且 Windows 路径先归一成 POSIX 再加 `//` 锚：`E:\\x\\y` → `//e/x/y`。
-4. `shutil.which('claude')` 得 `D:\\npm-global\\claude.CMD`，而 `.cmd` 确实不能被
-   `CreateProcess` 直接执行。**但答案不是套一层 `cmd /c`**——`cmd` 在参数的第一个
-   换行处截断，而提示词是多行的。npm 的 `.cmd` 只是转发 shim，真入口是包内的
-   `.exe`，直接拉它（见 `_claude_entry`）。
-5. `claude -p` 永不弹工作区信任框，也**不读**项目 `.claude/settings.json` 的
-   allow 规则（官方原文明写）——白名单只能靠 `--allowedTools` 逐次带。
+【供应商边界】本模块只做整书编排与事件账；Claude/Codex 的 argv、stdin、协议解析
+与进程树取消全部在 ``novel.commanders``。prompt 永远只走 stdin，事件里的 argv
+因此可以安全展示和写日志，不会把整份任务原文重复泄进进程日志。
 
-【权限姿态】`--permission-mode manual` + 上面的白名单：白名单外一律拒
-（headless 没有人可问）。这把 SKILL 的写路径白名单从「纪律」升级成
-「结构拦截」——agent 想直改产物 JSON 或仓代码，权限层当场拒掉。
+【冻结边界】preview / 单本 start / batch 入队共用 ``plan``。profile 在那里关闭式
+校验并深拷贝；排队项携带整份 plan，出队不再读取默认或重新解释请求。当前服务没有
+默认 profile，``profiles=None`` 是显式终态，不拿 capability 第一项替用户选择。
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
-import re
-import shutil
-import subprocess
 import sys
 import threading
 import time
 from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from typing import BinaryIO, NamedTuple
 
 from contracts.schema.orchestration import (
     AgentDeliveryOutcome, AgentPending, AgentQueueView, AgentRejected, AgentRunEvent,
-    AgentRunRecord, AgentRunStart,
+    AgentProfile, AgentRunRecord, AgentRunStart, PipelineAgentProfiles,
 )
-from novel import paths, prov, run_identity
+from novel import agent_session_audit, paths, prov
+from novel.agent_capabilities import (
+    AgentProfileRefused, validate_pipeline_profiles,
+)
 from novel.appendlog import append_line
 from novel.cli.exit_codes import CRASH
-from novel.errors import UpstreamMissing
+from novel.commander_context import env_with_context
+from novel.commanders import (
+    CommanderConfigurationError, CommanderDriver, CommanderInvocation,
+    CommanderObservation, CommanderProcessResult, create_commander_driver,
+)
+from novel.errors import ApprovalRequired, UnsupportedRunMode, UpstreamMissing
+from novel.llm.ledger import append_commander_call
 from novel.orchestrator import jobs
 from novel.orchestrator.jobs import JobConflict, JobRegistry, service_dir
 from novel.orchestrator.nodes import shell_line
@@ -73,8 +69,8 @@ lock_key = jobs.agent_lock_key
 
 #: 同时在跑的 agent 上限。**改这一个数字就是改并发。**
 #:
-#: ⚠ 为什么必须有闸：一个 agent 是一整个 `claude` 会话，它自己烧 token，
-#: 而它起的 `novel.cli` 子进程还会再烧一遍 DeepSeek——**一本书两笔钱**。
+#: ⚠ 为什么必须有闸：一本整书代跑会保持一个 Commander 会话，
+#: 各付费节点又会创建各自隔离的 executor 会话；两层都可能产生外部模型费用。
 #: 没有闸的话，界面上勾 10 本点一下就是 10 份同时烧，且 API 配额是共享的。
 #: ⇒ 超出上限的不报错、进队列，由结束的那个 agent 把下一个带起来（`_drain`）。
 #: ⚠ 它与锁是**两件事**：锁保证「同一本书不被两个 agent 同时写」，
@@ -84,8 +80,8 @@ MAX_CONCURRENT = 3
 
 _THREADS_LOCK = threading.Lock()
 _THREADS: dict[str, threading.Thread] = {}
-_PROCS_LOCK = threading.Lock()
-_PROCS: dict[str, subprocess.Popen] = {}
+_COMMANDERS_LOCK = threading.Lock()
+_COMMANDERS: dict[str, CommanderDriver] = {}
 
 #: `R-11.11` 在这边的样子：服务重启后，agent 子进程是死是活我们真的不知道。
 RESTART_NOTE = ('服务重启前它是死是活我们不知道——'
@@ -93,24 +89,12 @@ RESTART_NOTE = ('服务重启前它是死是活我们不知道——'
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 一、提示词与命令行（纯函数；preview 与真跑共用——`R-11.8` 同构）
+# 一、提示词与 Commander plan（纯函数；preview 与真跑共用——`R-11.8` 同构）
 # ─────────────────────────────────────────────────────────────────────────────
-
-def _python_rule() -> str:
-    """白名单认得的唯一 Bash 形态。**与 skill 工作流契约的命令前缀同源**：
-    服务进程跑在哪个解释器下，agent 的 CLI 调用就走哪个——两处不许分家。"""
-    return f'Bash({Path(sys.executable).as_posix()} *)'
-
-
-def _posix_anchor(path: str | os.PathLike[str]) -> str:
-    """Windows 绝对路径 → gitignore `//` 锚（Spike 3）：`E:\\x\\y` → `//e/x/y`。"""
-    posix = Path(path).resolve().as_posix()
-    m = re.match(r'^([A-Za-z]):/(.*)$', posix)
-    return f'//{m.group(1).lower()}/{m.group(2)}' if m else f'//{posix}'
-
 
 def build_prompt(sid: str, base: str | os.PathLike[str], *,
                  authorized: bool, egress_authorized: bool,
+                 profiles: PipelineAgentProfiles,
                  code_version: str | None = None) -> str:
     """发给 agent 的提示词。两项授权原文都在这里，布尔字段只是机读摘要。
 
@@ -150,6 +134,12 @@ def build_prompt(sid: str, base: str | os.PathLike[str], *,
         '**正文外发授权未授予**：不得把小说正文或其派生上下文发送给外部模型；'
         '即使付费授权已经授予，也只能先完成只读的 state、inbox、下一节点 preview 与终审包草稿，'
         '并在首个需要正文外发的步骤前停下、写明恢复命令。')
+    commander = profiles.commander
+    executor = profiles.executor_default
+    overrides = ', '.join(
+        f'{node}={profile.driver}/{profile.model}/{profile.reasoning_effort}/'
+        f'{profile.execution_mode}'
+        for node, profile in sorted(profiles.executor_overrides.items())) or '无'
     return f"""你在仓库 {REPO_ROOT.as_posix()} 的根目录下工作。launcher 已把 cwd 固定在仓根；
 每次 Bash 调用都必须保持在仓根，不得 cd，读取 base 与产物一律使用绝对路径。
 
@@ -164,6 +154,14 @@ base 目录（--base 恒用下面这个绝对路径）：
 付费授权：{payment_authorization}
 正文外发授权：{egress_authorization}
 
+本次 agent 选择已经冻结进 append-only run contract：
+- Commander：{commander.driver}/{commander.model}/{commander.reasoning_effort}/{commander.execution_mode}
+- 默认 executor：{executor.driver}/{executor.model}/{executor.reasoning_effort}/{executor.execution_mode}
+- 节点覆盖：{overrides}
+所有付费节点必须经 operator 的 ``run_step.py`` 执行；它会用父进程注入的 run id 与
+contract SHA-256 重读 started 事件并核验 executor profile、代码指纹和两项授权。
+不得绕过这个入口自行拼模型参数，也不得拿当前环境变量覆盖冻结选择。
+
 启动顺序（不可跳步）：
 1. 先读 `.claude/skills/novel-pipeline-operator/SKILL.md` 全文，并照它的“按需加载资源”读取
    工作流契约、代批与终审契约及 headless 运行环境；失败时再读修复状态机，按节点名/rule id
@@ -171,10 +169,13 @@ base 目录（--base 恒用下面这个绝对路径）：
 2. 先运行 `state {sid}` 与 `inbox {sid}`，只按盘上事实确定续跑位置。
 3. 在任何写盘或付费动作前，按 skill 模板创建终审包草稿；以后每次授权判断、闸门裁决、
    修复与异常都立即更新，不要等结束时凭记忆补写。
-4. 下一步将调用外部模型时，先运行 `doctor --llm-transport`；随后 preview 下一动作，
-   陈述付费/外发边界；结构化付费节点按 skill 主跑参数带 `--response-repair agent`，再执行 preview
-   给出的完整步骤并复验。命中 `ResponseRepairRequired` 时只编辑终态点名的 `_llm_rejected/**/candidate.json`，
-   经 `novel.cli response-repair` 提交或拒绝后，以原节点原参数续跑。
+4. 下一步将调用外部模型时，先按 capability 与冻结 profile 核对对应 CLI 的本机可探测状态；
+   节点 executor 会在正文外发前再用同一 driver 做零模型 probe。随后 preview 下一动作，
+   陈述付费/外发边界，再执行 preview 给出的完整步骤并复验。agent executor
+   主路不带 `--response-repair agent`；候选被拒或传输中断时，使用该节点同一 logical session
+   与 durable checkpoint 续跑。只有显式选择 legacy DeepSeek 临时回滚、且已到终态时，
+   才先按 skill 运行 `doctor --llm-transport`，再用 sidecar `response-repair` 处理终态点名的
+   `_llm_rejected/**/candidate.json`；不得自动切到该回滚路。
 
 无人值守纪律：
 - 没有用户可以提问。任何 redo/unknown 或闸门争议，按 skill 的修复状态机与代批契约
@@ -191,58 +192,96 @@ base 目录（--base 恒用下面这个绝对路径）：
   {review_target}"""
 
 
-#: npm 生成的 `.cmd` shim 里那一行转发目标：`"%dp0%\\...\\claude.exe"   %*`。
-#: 只认 `.exe`——`%dp0%` 是 shim 自己的目录，展开后就是真入口的绝对路径。
-_SHIM_TARGET = re.compile(r'"%dp0%\\?(?P<rel>[^"]+\.exe)"', re.IGNORECASE)
-
-
-def _entry_from_shim(shim: str) -> str | None:
-    """从 npm 的 `.cmd` shim 原文里读出它真正转发到的可执行文件。
-
-    ⚠ **不硬编码 `node_modules/@anthropic-ai/claude-code/bin/`**：那是 npm 的布局，
-    不是我们的契约，它换一次我们就静默地退回坏路径。shim 自己写着目标在哪，读它。
-    """
+def _freeze_profiles(profiles: PipelineAgentProfiles | None,
+                     ) -> PipelineAgentProfiles:
+    """关闭式解析并深复制；``FrozenModel`` 本身不会冻结嵌套 dict。"""
+    if profiles is None:
+        raise UnsupportedRunMode(
+            '服务端尚未设置默认 agent profiles；请显式选择 Commander 与 executor')
     try:
-        text = Path(shim).read_text(encoding='utf-8', errors='replace')
-    except OSError:
-        return None
-    m = _SHIM_TARGET.search(text)
-    if m is None:
-        return None
-    target = Path(shim).parent / m.group('rel').lstrip('\\/')
-    return str(target) if target.is_file() else None
+        resolved = validate_pipeline_profiles(profiles)
+    except AgentProfileRefused as exc:
+        raise UnsupportedRunMode(str(exc)) from exc
+    return PipelineAgentProfiles.model_validate(
+        resolved.model_dump(mode='json'))
 
 
-def _claude_entry() -> str:
-    """能被 `CreateProcess` **直接**拉起的 claude 入口。
-
-    ⚠⚠ **绝不退回 `cmd /c <shim>`。** `cmd` 在参数的第一个换行处截断，而
-    `build_prompt` 是多行的：2026-08-19 实测五本书全部只收到提示词首行
-    （任务、sid、两项授权、终审包落点全丢），agent 于是自己找事做，
-    **然后 exit 0**——事件流折成 `ok`、界面显示成功、盘上一步没动。
-    这条路最坏的地方不是它错，是它**安静地**错。
-
-    ⇒ 解析不出真入口时**返回 shim 本身**，让 `Popen` 当场 `WinError 193` 崩掉
-    （记 `exit_code=70`「结论未知」，日志留全栈）。响亮地崩比截断后假装成功好。
-    """
-    found = shutil.which('claude')
-    if found is None:
-        return 'claude'
-    if not found.lower().endswith(('.cmd', '.bat')):
-        return found                            # 已经可以直接执行
-    return _entry_from_shim(found) or found
+def _copy_profiles(profiles: PipelineAgentProfiles) -> PipelineAgentProfiles:
+    """复制嵌套 overrides；对外 view 不得与内存队列共享可变 dict。"""
+    return PipelineAgentProfiles.model_validate(
+        profiles.model_dump(mode='json'))
 
 
-def build_argv(prompt: str, base: str | os.PathLike[str]) -> list[str]:
-    """拉起 agent 的完整命令行（解析后的真实形态，随事件全文留档）。
+def _validate_invocation(
+        invocation: CommanderInvocation, *, prompt: str,
+        profile: AgentProfile) -> None:
+    """planner 与启动边界共用的 stdin-only 后置条件。"""
+    if invocation.profile != profile:
+        raise UnsupportedRunMode(
+            'Commander invocation.profile 与冻结 commander profile 不一致')
+    if invocation.stdin_text != prompt:
+        raise UnsupportedRunMode('Commander invocation.stdin 与 preview prompt 不一致')
+    if any(prompt in item for item in invocation.argv):
+        raise UnsupportedRunMode('Commander prompt 只允许走 stdin，不得进入 argv')
+    if any(prompt in value for value in invocation.env_overrides.values()):
+        raise UnsupportedRunMode('Commander prompt 只允许走 stdin，不得进入 env')
+    if (os.path.normcase(os.path.abspath(invocation.cwd))
+            != os.path.normcase(os.path.abspath(REPO_ROOT))):
+        raise UnsupportedRunMode('Commander cwd 必须冻结在仓根')
 
-    ⚠ 提示词是 argv 里**独立的一项**，不经任何 shell 拼接（见 `_claude_entry`）；
-    `--add-dir` 把 base 纳入文件访问面（base 不在 cwd 下时读权限照样成立）。
-    """
+
+@dataclass(frozen=True)
+class AgentRunPlan:
+    """一次 preview / start 共用的不可变 Commander 启动计划。"""
+
+    base: str
+    sid: str
+    authorized: bool
+    egress_authorized: bool
+    code_version: str
+    profiles: PipelineAgentProfiles
+    prompt: str
+    invocation: CommanderInvocation
+
+
+def _plan_resolved(
+        base: str | os.PathLike[str], sid: str, *, authorized: bool,
+        egress_authorized: bool, profiles: PipelineAgentProfiles,
+        code_version: str | None = None) -> AgentRunPlan:
     base_abs = os.path.abspath(os.fspath(base))
-    return [_claude_entry(), '-p', prompt, '--permission-mode', 'manual',
-            '--add-dir', base_abs,
-            '--allowedTools', _python_rule(), f'Edit({_posix_anchor(base_abs)}/**)']
+    frozen = _copy_profiles(profiles)
+    code = code_version or prov.code_version()
+    prompt = build_prompt(
+        sid, base_abs, authorized=authorized,
+        egress_authorized=egress_authorized, profiles=frozen,
+        code_version=code)
+    driver: CommanderDriver | None = None
+    try:
+        driver = create_commander_driver(frozen.commander)
+        invocation = driver.build_invocation(
+            frozen.commander, prompt, repo=REPO_ROOT, base=base_abs)
+        _validate_invocation(
+            invocation, prompt=prompt, profile=frozen.commander)
+    except (AgentProfileRefused, CommanderConfigurationError) as exc:
+        raise UnsupportedRunMode(str(exc)) from exc
+    finally:
+        if driver is not None:
+            driver.close()
+    return AgentRunPlan(
+        base=base_abs, sid=sid, authorized=authorized,
+        egress_authorized=egress_authorized, code_version=code,
+        profiles=frozen, prompt=prompt, invocation=invocation)
+
+
+def plan(
+        base: str | os.PathLike[str], sid: str, *, authorized: bool,
+        egress_authorized: bool,
+        profiles: PipelineAgentProfiles | None) -> AgentRunPlan:
+    """preview、单本启动与批量入队的唯一 planner；不发模型请求、不写盘。"""
+    return _plan_resolved(
+        base, sid, authorized=authorized,
+        egress_authorized=egress_authorized,
+        profiles=_freeze_profiles(profiles))
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -353,33 +392,38 @@ def active_run(base: str | os.PathLike[str], *, registry: JobRegistry = REGISTRY
 # 三、拉起与熄火
 # ─────────────────────────────────────────────────────────────────────────────
 
-Spawn = Callable[[Sequence[str], str, dict, BinaryIO], int]
+Spawn = Callable[
+    [CommanderInvocation, dict[str, str], BinaryIO], CommanderProcessResult,
+]
 
 
 def _default_spawn(run_id: str) -> Spawn:
-    """拉起子进程并把句柄留在 `_PROCS`（`stop` 要用）。日志写法同 `jobs.default_spawn`。"""
+    """由选定 driver 拉起一棵 Commander 进程树，并只登记这一个 owner。"""
 
-    def go(argv: Sequence[str], cwd: str, env: dict, log: BinaryIO) -> int:
-        kw = {}
-        if os.name == 'nt':
-            # CREATE_NEW_PROCESS_GROUP：让 `taskkill /T` 能整棵树端掉
-            # （agent 自己还会起 `novel.cli` 孙进程，只杀根杀不干净）。
-            kw['creationflags'] = (subprocess.CREATE_NO_WINDOW
-                                   | subprocess.CREATE_NEW_PROCESS_GROUP)
-        proc = subprocess.Popen(list(argv), cwd=cwd, env=env,
-                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                stdin=subprocess.DEVNULL, bufsize=0, **kw)
-        assert proc.stdout is not None
-        with _PROCS_LOCK:
-            _PROCS[run_id] = proc
+    def go(invocation: CommanderInvocation, env: dict[str, str],
+           log: BinaryIO) -> CommanderProcessResult:
+        # ``env`` 里是 launcher 从已 append 的 AgentRunStart 铸出的 run contract
+        # 指针；它必须覆盖 plan 期 env，不能让排队前的字典改写授权身份。
+        runtime_env = dict(invocation.env_overrides)
+        runtime_env.update(env)
+        runtime_invocation = CommanderInvocation(
+            argv=invocation.argv,
+            stdin_text=invocation.stdin_text,
+            cwd=invocation.cwd,
+            env_overrides=runtime_env,
+            profile=invocation.profile,
+            protocol=invocation.protocol,
+            cli_version=invocation.cli_version,
+        )
+        driver = create_commander_driver(runtime_invocation.profile)
+        with _COMMANDERS_LOCK:
+            _COMMANDERS[run_id] = driver
         try:
-            for block in iter(lambda: proc.stdout.read(4096), b''):
-                log.write(block)
-                log.flush()
-            return proc.wait()
+            return driver.run(runtime_invocation, log=log, run_id=run_id)
         finally:
-            with _PROCS_LOCK:
-                _PROCS.pop(run_id, None)
+            with _COMMANDERS_LOCK:
+                _COMMANDERS.pop(run_id, None)
+            driver.close()
 
     return go
 
@@ -410,10 +454,7 @@ class _Pending(NamedTuple):
     ⚠ `base` 也存：队列是进程级的，而「哪个 base」是每一项自己的事。
     """
 
-    base: str
-    sid: str
-    authorized: bool
-    egress_authorized: bool
+    plan: AgentRunPlan
     spawn: Spawn | None
     batch_id: str
 
@@ -467,9 +508,7 @@ def _drain_locked(*, registry: JobRegistry,
             item = _PENDING.pop(0)
         remaining -= 1
         try:
-            record = start(item.base, item.sid, authorized=item.authorized,
-                           egress_authorized=item.egress_authorized,
-                           spawn=item.spawn, registry=registry)
+            record = _start_planned(item.plan, spawn=item.spawn, registry=registry)
         except AgentBusy:
             with _PENDING_LOCK:
                 _PENDING.insert(0, item)
@@ -481,15 +520,16 @@ def _drain_locked(*, registry: JobRegistry,
             # ⇒ 出队丢弃；本批有槽就如实 rejected，旧项留一条结构化观测。
             if item.batch_id == reject_batch:
                 rejected.append(AgentRejected(
-                    sid=item.sid,
+                    sid=item.plan.sid,
                     reason=str(exc).strip() or 'UpstreamMissing：这本书不在盘上'))
             else:
-                _observe_pending_dropped(item.base, item.sid, str(exc))
+                _observe_pending_dropped(
+                    item.plan.base, item.plan.sid, str(exc))
             continue
         except Exception as exc:                # noqa: BLE001 —— 逐本显式归类
             if item.batch_id == reject_batch:
                 reason = str(exc).strip() or f'{type(exc).__name__}：agent 启动失败'
-                rejected.append(AgentRejected(sid=item.sid, reason=reason))
+                rejected.append(AgentRejected(sid=item.plan.sid, reason=reason))
             else:
                 # 受理响应已经返回的旧项没有可回填的 rejected 槽；留在 pending
                 # 才不会静默丢书。挪到队尾，让后面的无冲突书仍有机会启动。
@@ -531,7 +571,7 @@ def drop_pending(base: str | os.PathLike[str], sid: str) -> int:
     base_abs = os.path.abspath(os.fspath(base))
     with _DRAIN_LOCK, _PENDING_LOCK:
         keep = [item for item in _PENDING
-                if not (item.base == base_abs and item.sid == sid)]
+                if not (item.plan.base == base_abs and item.plan.sid == sid)]
         dropped = len(_PENDING) - len(keep)
         _PENDING[:] = keep
     if dropped:
@@ -552,8 +592,36 @@ def _drain(*, registry: JobRegistry = REGISTRY) -> _DrainResult:
         return _drain_locked(registry=registry)
 
 
+def _require_start_authorization(*, authorized: bool,
+                                 egress_authorized: bool) -> None:
+    """真启动在任何 CLI 解析/探针/模型 wire 之前同时要求两项显式授权。"""
+    missing: list[str] = []
+    if not authorized:
+        missing.append('付费授权')
+    if not egress_authorized:
+        missing.append('正文外发授权')
+    if missing:
+        raise ApprovalRequired(
+            f'启动 Commander 前必须显式授予 {"、".join(missing)}；'
+            'preview 仍为 0 成本，可在确认完整 prompt/argv 后再启动')
+
+
+def _require_reproducible_code_version(code_version: str) -> None:
+    """付费启动前必须有可复验的代码身份；preview 可以照实展示 unknown。
+
+    ``unknown == unknown`` 只证明两次都没问出来，不证明整书跑没有
+    跨版本。放它进付费路，结束终验也注定只能 unknown，是可预知的白烧。
+    """
+    if (not isinstance(code_version, str) or not code_version.strip()
+            or code_version == prov.CODE_UNKNOWN):
+        raise UnsupportedRunMode(
+            '当前代码指纹不可用；preview 仍可查看，但不能启动付费 '
+            'Commander，请先恢复可复验的仓库代码身份')
+
+
 def enqueue(base: str | os.PathLike[str], sids: Sequence[str], *,
             authorized: bool, egress_authorized: bool,
+            profiles: PipelineAgentProfiles | None,
             spawn: Spawn | None = None,
             registry: JobRegistry = REGISTRY) -> AgentQueueView:
     """批量受理 N 本：能起的立刻起，起不动的排队。**返回本批的完整分区。**
@@ -563,13 +631,21 @@ def enqueue(base: str | os.PathLike[str], sids: Sequence[str], *,
     人看到的是一条报错，盘上却真的有进程在跑，那是最坏的一种不一致。
     ⇒ 逐本的落点全在返回值里：`running` / `pending` / `rejected` 三者之和 = 你提交的。
     """
+    # ⚠ 必须早于 profile factory / CLI 入口解析：缺授权时不能用一次探针当试运行。
+    _require_start_authorization(
+        authorized=authorized, egress_authorized=egress_authorized)
     base_abs = os.path.abspath(os.fspath(base))
+    resolved_profiles = _freeze_profiles(profiles)
+    code_version = prov.code_version()
+    _require_reproducible_code_version(code_version)
     batch_id = jobs.new_job_id()
     rejected: list[AgentRejected] = []
     with _DRAIN_LOCK:
         for sid in sids:
             with _PENDING_LOCK:
-                queued = {p.sid for p in _PENDING if p.base == base_abs}
+                queued = {
+                    p.plan.sid for p in _PENDING if p.plan.base == base_abs
+                }
             if sid in queued:
                 rejected.append(AgentRejected(sid=sid, reason='已经在队列里了'))
                 continue
@@ -581,15 +657,22 @@ def enqueue(base: str | os.PathLike[str], sids: Sequence[str], *,
                     sid=sid, reason=f'{base_abs} 下没有 id={sid} 的书目录——'
                                     '这本书已经不在语料库里（多半在回收站）'))
                 continue
+            item_plan = _plan_resolved(
+                base_abs, sid, authorized=authorized,
+                egress_authorized=egress_authorized,
+                profiles=resolved_profiles, code_version=code_version)
             with _PENDING_LOCK:
-                _PENDING.append(_Pending(base_abs, sid, authorized,
-                                         egress_authorized, spawn, batch_id))
+                _PENDING.append(_Pending(item_plan, spawn, batch_id))
         drained = _drain_locked(registry=registry, reject_batch=batch_id)
         rejected.extend(drained.rejected)
         with _PENDING_LOCK:
-            base_pending = [item for item in _PENDING if item.base == base_abs]
+            base_pending = [
+                item for item in _PENDING if item.plan.base == base_abs
+            ]
             pending = [
-                AgentPending(sid=item.sid, position=index + 1)
+                AgentPending(
+                    sid=item.plan.sid, position=index + 1,
+                    profiles=_copy_profiles(item.plan.profiles))
                 for index, item in enumerate(base_pending)
                 if item.batch_id == batch_id
             ]
@@ -603,17 +686,110 @@ def queue_view(base: str | os.PathLike[str], *,
     base_abs = os.path.abspath(os.fspath(base))
     running = [r for r in records(base, registry=registry) if r.state == 'running']
     with _PENDING_LOCK:
-        pending = [AgentPending(sid=p.sid, position=i + 1)
+        pending = [AgentPending(
+                       sid=p.plan.sid, position=i + 1,
+                       profiles=_copy_profiles(p.plan.profiles))
                    for i, p in enumerate(
-                       [q for q in _PENDING if q.base == base_abs])]
+                       [q for q in _PENDING if q.plan.base == base_abs])]
     return AgentQueueView(running=running, pending=pending,
                           max_concurrent=MAX_CONCURRENT)
 
 
+def _sha256_bytes(value: bytes) -> str:
+    return hashlib.sha256(value).hexdigest()
+
+
+def _skill_sha256() -> str:
+    skill = REPO_ROOT / '.claude' / 'skills' / 'novel-pipeline-operator' / 'SKILL.md'
+    try:
+        return _sha256_bytes(skill.read_bytes())
+    except OSError as exc:
+        raise UnsupportedRunMode(
+            f'Commander 启动契约缺 {skill.as_posix()}，不能声称会加载 operator skill') from exc
+
+
+def _usage_dict(observation: CommanderObservation) -> dict[str, int | None] | None:
+    usage = observation.usage
+    if usage is None:
+        return None
+    return {
+        'prompt_tokens': usage.prompt_tokens,
+        'prompt_cache_hit_tokens': usage.prompt_cache_hit_tokens,
+        'prompt_cache_miss_tokens': usage.prompt_cache_miss_tokens,
+        'completion_tokens': usage.completion_tokens,
+        'reasoning_tokens': usage.reasoning_tokens,
+        'total_tokens': usage.total_tokens,
+    }
+
+
+def _session_usage(observation: CommanderObservation,
+                   ) -> agent_session_audit.AgentSessionUsage | None:
+    usage = _usage_dict(observation)
+    if usage is None or all(value is None for value in usage.values()):
+        return None
+    return agent_session_audit.AgentSessionUsage(**usage)
+
+
+def _session_delivery(outcome: AgentDeliveryOutcome) -> str:
+    if outcome.state in ('ready', 'ready_with_disclosures'):
+        return 'delivered'
+    if outcome.state == 'stopped':
+        return 'blocked'
+    if outcome.state == 'failed':
+        return 'failed'
+    return 'unknown'
+
+
+def _append_safe_traceback(base: str, run_id: str, *, prompt: str) -> None:
+    """留异常类型/栈，但即使异常 repr 夹了 invocation 也不泄露 prompt。"""
+    import traceback
+
+    rendered = traceback.format_exc()
+    for secret in (prompt, repr(prompt), json.dumps(prompt, ensure_ascii=False)):
+        rendered = rendered.replace(secret, '<commander-prompt-redacted>')
+    try:
+        with open(run_log_path(base, run_id), 'ab') as fh:
+            fh.write(rendered.encode('utf-8', errors='replace'))
+    except OSError:
+        # 日志目录不可写时，事件账/成本账仍要尽力闭合；
+        # 不能让「记不下调试栈」再遮住原始异常。
+        return
+
+
+def _assess_delivery(base: str, sid: str, *, code_version: str,
+                     ) -> AgentDeliveryOutcome:
+    """无论 Commander exit 为多少都重验盘；验盘自身崩溃只得到 unknown。"""
+    try:
+        from novel.orchestrator import delivery
+        outcome = delivery.assess(
+            base, sid, start_code_version=code_version)
+        if not isinstance(outcome, AgentDeliveryOutcome):
+            raise TypeError(
+                'delivery.assess 必须返回 AgentDeliveryOutcome')
+        return outcome
+    except Exception as exc:  # noqa: BLE001 —— 终验崩溃也必须留下 ended
+        return AgentDeliveryOutcome(
+            state='unknown', checked_at=int(time.time()),
+            reason=('Commander 已结束，但交付终验自身崩溃：'
+                    f'{type(exc).__name__}: {exc}'))
+
+
 def start(base: str | os.PathLike[str], sid: str, *, authorized: bool,
           egress_authorized: bool,
+          profiles: PipelineAgentProfiles | None,
           spawn: Spawn | None = None,
           registry: JobRegistry = REGISTRY) -> AgentRunRecord:
+    """解析一次冻结 plan 后拉起 Commander；缺任一授权时不触碰 CLI。"""
+    _require_start_authorization(
+        authorized=authorized, egress_authorized=egress_authorized)
+    return _start_planned(
+        plan(base, sid, authorized=authorized,
+             egress_authorized=egress_authorized, profiles=profiles),
+        spawn=spawn, registry=registry)
+
+
+def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
+                   registry: JobRegistry = REGISTRY) -> AgentRunRecord:
     """拉起一次 agent 代跑（**异步**）：锁 → 记 `started` → 线程跑子进程 → 记 `ended`。
 
     三道闸，各管一边：
@@ -626,14 +802,31 @@ def start(base: str | os.PathLike[str], sid: str, *, authorized: bool,
     必查 `AGENT_REGISTRY`，锁一到手就不会有新的 API 作业插进来；已跑着的
     由 `records()` 那一查查出来。反过来先查后占会留一条竞争缝。
     """
-    code_version = prov.code_version()
-    prompt = build_prompt(sid, base, authorized=authorized,
-                          egress_authorized=egress_authorized,
-                          code_version=code_version)
-    argv = build_argv(prompt, base)
+    _require_start_authorization(
+        authorized=plan.authorized,
+        egress_authorized=plan.egress_authorized)
+    base = plan.base
+    sid = plan.sid
+    code_version = plan.code_version
+    _require_reproducible_code_version(code_version)
+    invocation = plan.invocation
+    _validate_invocation(
+        invocation, prompt=plan.prompt, profile=plan.profiles.commander)
     run_id = jobs.new_job_id()
+    session_run_id = jobs.new_job_id()
+    attempt_id = jobs.new_job_id()
+    prompt_sha256 = _sha256_bytes(plan.prompt.encode('utf-8'))
+    schema_sha256 = _sha256_bytes(
+        f'commander-observation:{invocation.protocol}'.encode('utf-8'))
+    skill_sha256 = _skill_sha256()
+    start_payload = AgentRunStart(
+        sid=sid, base=base, argv=list(invocation.argv), prompt=plan.prompt,
+        authorized=plan.authorized,
+        egress_authorized=plan.egress_authorized,
+        code_version=code_version, profiles=plan.profiles)
     key = lock_key(sid)
     _admit(key, run_id, registry)
+    outer_started = False
     try:
         holder = jobs.REGISTRY.conflicting_holder(sid)
         if holder is not None:
@@ -657,48 +850,235 @@ def start(base: str | os.PathLike[str], sid: str, *, authorized: bool,
                 f'agent 代跑与节点作业写同一片盘，等它结束再拉 agent')
         append(base, AgentRunEvent(
             run_id=run_id, kind='started', ts=int(time.time()),
-            start=AgentRunStart(sid=sid, argv=list(argv), prompt=prompt,
-                                 authorized=authorized,
-                                 egress_authorized=egress_authorized,
-                                 code_version=code_version)))
+            start=start_payload))
+        outer_started = True
+        agent_session_audit.append_event(
+            base,
+            agent_session_audit.AgentSessionEvent(
+                session_run_id=session_run_id,
+                parent_run_id=run_id,
+                role='commander', node=None, chapter=None,
+                subject_sha256=prompt_sha256,
+                profile=plan.profiles.commander,
+                requested_model=plan.profiles.commander.model,
+                requested_effort=plan.profiles.commander.reasoning_effort,
+                cli_version=invocation.cli_version,
+                protocol_version=invocation.protocol,
+                start_code_version=code_version,
+                skill_sha256=skill_sha256,
+                prompt_sha256=prompt_sha256,
+                schema_sha256=schema_sha256,
+                kind='started', ts=int(time.time()),
+            ),
+        )
     except Exception:
+        if outer_started:
+            append(base, AgentRunEvent(
+                run_id=run_id, kind='ended', ts=int(time.time()),
+                exit_code=CRASH,
+                outcome=AgentDeliveryOutcome(
+                    state='failed', checked_at=int(time.time()),
+                    reason='Commander session started 审计未能落盘，未启动进程')))
         registry.release(key, run_id)
         raise
 
     def worker() -> None:
         rc = CRASH
+        observation = CommanderObservation(
+            provider_session_id=None, actual_model=None,
+            actual_effort=None, usage=None)
+        runtime_error_kind: str | None = None
+        integrity_error_kind: str | None = None
+        provider_reuse_owner: str | None = None
+        provider_turn_recorded = False
+        invoked = False
         try:
             log = run_log_path(base, run_id)
             log.parent.mkdir(parents=True, exist_ok=True)
             with open(log, 'ab') as fh:
-                fh.write(('$ ' + shell_line(argv) + '\n').encode('utf-8'))
+                # prompt 只走 stdin；这一行可公开诊断 argv 而不会复制任务正文。
+                fh.write(('$ ' + shell_line(invocation.argv) + '\n').encode('utf-8'))
                 fh.flush()
-                rc = (spawn or _default_spawn(run_id))(
-                    argv, str(REPO_ROOT),
-                    run_identity.env_with_run_id(run_id, os.environ), fh)
-        except BaseException:                   # noqa: BLE001 —— 崩了也要记 ended
-            import traceback
-            with open(run_log_path(base, run_id), 'ab') as fh:
-                fh.write(traceback.format_exc().encode('utf-8'))
+                child_env = env_with_context(
+                    run_id=run_id, base=base, start=start_payload,
+                    env=os.environ)
+                invoked = True
+                result = (spawn or _default_spawn(run_id))(
+                    invocation, child_env, fh)
+                if not isinstance(result, CommanderProcessResult):
+                    raise TypeError(
+                        'Commander spawn 必须返回 CommanderProcessResult，'
+                        '不能只给退出码丢掉供应商观测')
+                if not isinstance(result.observation, CommanderObservation):
+                    raise TypeError(
+                        'CommanderProcessResult.observation 必须是 '
+                        'CommanderObservation，不能传自由 dict')
+                rc = result.exit_code
+                observation = result.observation
+        except BaseException as exc:            # noqa: BLE001 —— 崩了也要记 ended
+            known_rc = getattr(exc, 'returncode', None)
+            if isinstance(known_rc, int) and not isinstance(known_rc, bool):
+                rc = known_rc
+            runtime_error_kind = 'commander_runtime'
+            _append_safe_traceback(base, run_id, prompt=plan.prompt)
         finally:
             try:
-                if rc == 0:
+                outcome = _assess_delivery(
+                    base, sid, code_version=code_version)
+                if (observation.actual_model is not None
+                        and observation.actual_model
+                        != plan.profiles.commander.model):
+                    integrity_error_kind = 'commander_model_drift'
+                if (observation.actual_effort is not None
+                        and observation.actual_effort
+                        != plan.profiles.commander.reasoning_effort):
+                    integrity_error_kind = 'commander_effort_drift'
+                # 每一次已经尝试的 Commander invocation 都有成本行；usage 未回显
+                # 就是 null。它与 session turn 共用 attempt_id，但缺 provider id 时
+                # 后者不会被伪造。
+                if invoked:
                     try:
-                        from novel.orchestrator import delivery
-                        outcome = delivery.assess(
-                            base, sid, start_code_version=code_version)
-                    except Exception as exc:  # noqa: BLE001 —— 终验崩溃也必须留下 ended
-                        outcome = AgentDeliveryOutcome(
-                            state='unknown', checked_at=int(time.time()),
-                            reason=('agent 进程已正常结束，但交付终验自身崩溃：'
-                                    f'{type(exc).__name__}: {exc}'))
-                else:
+                        append_commander_call(
+                            base, run_id=run_id,
+                            session_run_id=session_run_id,
+                            sid=sid, attempt_id=attempt_id,
+                            request_model=plan.profiles.commander.model,
+                            requested_effort=(
+                                plan.profiles.commander.reasoning_effort),
+                            code=code_version,
+                            protocol_version=invocation.protocol,
+                            actual_model=observation.actual_model,
+                            actual_effort=observation.actual_effort,
+                            provider_session_id=(
+                                observation.provider_session_id),
+                            cli_version=invocation.cli_version,
+                            usage=_usage_dict(observation),
+                            outcome=('ok' if rc == 0 else 'error'),
+                            exit_code=rc,
+                            error_kind=(integrity_error_kind or runtime_error_kind or (
+                                None if rc == 0 else 'commander_process_exit')),
+                        )
+                    except Exception:  # noqa: BLE001 —— 成本账失败不能吞掉 ended
+                        integrity_error_kind = 'commander_ledger'
+                        _append_safe_traceback(
+                            base, run_id, prompt=plan.prompt)
+
+                if observation.provider_session_id is not None:
+                    try:
+                        provider_reuse_owner = (
+                            agent_session_audit.append_commander_turn(
+                                base,
+                                agent_session_audit.AgentSessionEvent(
+                                    session_run_id=session_run_id,
+                                    parent_run_id=run_id,
+                                    role='commander', node=None, chapter=None,
+                                    subject_sha256=prompt_sha256,
+                                    profile=plan.profiles.commander,
+                                    provider_session_id=(
+                                        observation.provider_session_id),
+                                    turn_index=1,
+                                    attempt_id=attempt_id,
+                                    requested_model=(
+                                        plan.profiles.commander.model),
+                                    actual_model=observation.actual_model,
+                                    requested_effort=(
+                                        plan.profiles.commander.reasoning_effort),
+                                    actual_effort=observation.actual_effort,
+                                    cli_version=invocation.cli_version,
+                                    protocol_version=invocation.protocol,
+                                    start_code_version=code_version,
+                                    skill_sha256=skill_sha256,
+                                    prompt_sha256=prompt_sha256,
+                                    schema_sha256=schema_sha256,
+                                    usage=_session_usage(observation),
+                                    error_kind=(integrity_error_kind
+                                                or runtime_error_kind),
+                                    kind='turn', ts=int(time.time()),
+                                ),
+                            )
+                        )
+                        provider_turn_recorded = provider_reuse_owner is None
+                    except Exception:  # noqa: BLE001 —— 审计失败关闭交付，不丢 ended
+                        integrity_error_kind = 'commander_session_audit'
+                        _append_safe_traceback(
+                            base, run_id, prompt=plan.prompt)
+
+                if provider_reuse_owner is not None:
+                    integrity_error_kind = (
+                        agent_session_audit.PROVIDER_SESSION_REUSED)
                     outcome = AgentDeliveryOutcome(
-                        state='failed', checked_at=int(time.time()),
-                        reason=f'headless agent 进程退出码为 {rc}，未执行成功交付终验')
-                append(base, AgentRunEvent(
-                    run_id=run_id, kind='ended', ts=int(time.time()),
-                    exit_code=rc, outcome=outcome))
+                        state='unknown', checked_at=int(time.time()),
+                        reason=(
+                            '盘面终验已经执行，但 Commander 返回的 provider session '
+                            f'已属于 logical session {provider_reuse_owner!r}；'
+                            '拒绝把串会话的运行判为可交付'))
+
+                if (integrity_error_kind is not None
+                        and provider_reuse_owner is None):
+                    outcome = AgentDeliveryOutcome(
+                        state='unknown', checked_at=int(time.time()),
+                        reason=(
+                            '盘面终验已经执行，但 Commander 身份/审计链不闭合：'
+                            f'{integrity_error_kind}；拒绝把运行判为可交付'))
+
+                try:
+                    end_code_version = prov.code_version()
+                except Exception:  # noqa: BLE001 —— 指纹器崩也要留 ended
+                    end_code_version = prov.CODE_UNKNOWN
+                delivery_state = _session_delivery(outcome)
+                if (delivery_state == 'delivered'
+                        and end_code_version != code_version):
+                    delivery_state = 'unknown'
+                    integrity_error_kind = (
+                        integrity_error_kind or 'code_version_drift')
+                    outcome = AgentDeliveryOutcome(
+                        state='unknown', checked_at=int(time.time()),
+                        reason='Commander 运行期间代码指纹漂移；拒绝判为可交付')
+                owned_provider_session_id = (
+                    observation.provider_session_id
+                    if provider_turn_recorded else None)
+                try:
+                    agent_session_audit.append_event(
+                        base,
+                        agent_session_audit.AgentSessionEvent(
+                            session_run_id=session_run_id,
+                            parent_run_id=run_id,
+                            role='commander', node=None, chapter=None,
+                            subject_sha256=prompt_sha256,
+                            profile=plan.profiles.commander,
+                            provider_session_id=owned_provider_session_id,
+                            requested_model=plan.profiles.commander.model,
+                            actual_model=observation.actual_model,
+                            requested_effort=(
+                                plan.profiles.commander.reasoning_effort),
+                            actual_effort=observation.actual_effort,
+                            cli_version=invocation.cli_version,
+                            protocol_version=invocation.protocol,
+                            start_code_version=code_version,
+                            end_code_version=end_code_version,
+                            skill_sha256=skill_sha256,
+                            prompt_sha256=prompt_sha256,
+                            schema_sha256=schema_sha256,
+                            process_state=('ok' if rc == 0 else 'failed'),
+                            delivery_state=delivery_state,
+                            error_kind=(integrity_error_kind
+                                        or runtime_error_kind or (
+                                            None if rc == 0 else
+                                            'commander_process_exit')),
+                            kind='ended', ts=int(time.time()),
+                        ),
+                    )
+                except Exception:  # noqa: BLE001 —— outer ended 仍必须落账
+                    integrity_error_kind = 'commander_session_audit'
+                    outcome = AgentDeliveryOutcome(
+                        state='unknown', checked_at=int(time.time()),
+                        reason='Commander ended 审计未能闭合；拒绝判为可交付')
+                    _append_safe_traceback(
+                        base, run_id, prompt=plan.prompt)
+                finally:
+                    append(base, AgentRunEvent(
+                        run_id=run_id, kind='ended', ts=int(time.time()),
+                        exit_code=rc, outcome=outcome))
             finally:
                 registry.release(key, run_id)
                 with _THREADS_LOCK:
@@ -717,11 +1097,36 @@ def start(base: str | os.PathLike[str], sid: str, *, authorized: bool,
         with _THREADS_LOCK:
             _THREADS.pop(run_id, None)
         registry.release(key, run_id)
-        append(base, AgentRunEvent(run_id=run_id, kind='ended',
-                                   ts=int(time.time()), exit_code=CRASH,
-                                   outcome=AgentDeliveryOutcome(
-                                       state='failed', checked_at=int(time.time()),
-                                       reason='agent worker 线程未能启动')))
+        failed = AgentDeliveryOutcome(
+            state='failed', checked_at=int(time.time()),
+            reason='Commander worker 线程未能启动')
+        try:
+            agent_session_audit.append_event(
+                base,
+                agent_session_audit.AgentSessionEvent(
+                    session_run_id=session_run_id,
+                    parent_run_id=run_id,
+                    role='commander', node=None, chapter=None,
+                    subject_sha256=prompt_sha256,
+                    profile=plan.profiles.commander,
+                    requested_model=plan.profiles.commander.model,
+                    requested_effort=plan.profiles.commander.reasoning_effort,
+                    cli_version=invocation.cli_version,
+                    protocol_version=invocation.protocol,
+                    start_code_version=code_version,
+                    end_code_version=prov.code_version(),
+                    skill_sha256=skill_sha256,
+                    prompt_sha256=prompt_sha256,
+                    schema_sha256=schema_sha256,
+                    process_state='failed', delivery_state='failed',
+                    error_kind='commander_thread_start',
+                    kind='ended', ts=int(time.time()),
+                ),
+            )
+        finally:
+            append(base, AgentRunEvent(
+                run_id=run_id, kind='ended', ts=int(time.time()),
+                exit_code=CRASH, outcome=failed))
         raise
     return next(r for r in records(base, registry=registry)
                 if r.run_id == run_id)
@@ -738,35 +1143,18 @@ def wait(run_id: str, timeout: float | None = None) -> bool:
 
 
 def stop(base: str | os.PathLike[str], run_id: str) -> AgentRunRecord:
-    """熄火：**付费进程的必备闸**。句柄不在（已结束/别的实例拉的）⇒ 显式终态。
-
-    返回前必须确认根进程已经退出。只调用 ``taskkill`` 而忽略退出码会把“发过停止命令”
-    误报成“已经熄火”；受限 Windows 会话里该命令可能失败，而付费进程仍继续运行。
-    """
-    with _PROCS_LOCK:
-        proc = _PROCS.get(run_id)
-    if proc is None:
+    """熄火：只让拥有该 run 的 Commander driver 终止自己那棵进程树。"""
+    with _COMMANDERS_LOCK:
+        driver = _COMMANDERS.get(run_id)
+    if driver is None:
         raise JobConflict(  # 复用「流程说这一步现在不该发生」的那一族，不是 bug
             f'run_id={run_id!r} 没有在跑的子进程（已结束，或服务重启后句柄已丢）')
-    if os.name == 'nt':
-        # /T 整棵树（claude → agent 起的 novel.cli 孙进程），/F 强制。
-        killed = subprocess.run(['taskkill', '/PID', str(proc.pid), '/T', '/F'],
-                                capture_output=True)
-        if killed.returncode != 0 and proc.poll() is None:
-            # 至少保证记在句柄里的付费根进程停下；taskkill 成功时仍由 /T 负责整棵树。
-            proc.kill()
-    else:
-        proc.terminate()
-    try:
-        proc.wait(timeout=5)
-    except subprocess.TimeoutExpired:
-        proc.kill()
-        try:
-            proc.wait(timeout=5)
-        except subprocess.TimeoutExpired as exc:
-            raise JobConflict(
-                f'run_id={run_id!r} 已发熄火命令，但进程 {proc.pid} 仍未退出；'
-                '不能把“发过命令”误报成“已经熄火”') from exc
+    if not driver.cancel(run_id):
+        raise JobConflict(
+            f'run_id={run_id!r} 的 Commander driver 没有确认终止它拥有的进程树')
+    if not wait(run_id, 10):
+        raise JobConflict(
+            f'run_id={run_id!r} 已发熄火命令，但 worker 尚未完成终态落账')
     rec = next((r for r in records(base) if r.run_id == run_id), None)
     if rec is None:
         raise UpstreamMissing(f'没有 run_id={run_id!r} 的 agent 代跑记录')

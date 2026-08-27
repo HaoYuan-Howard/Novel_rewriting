@@ -669,6 +669,24 @@ REJECTED_RESPONSE_DIRNAME = '_llm_rejected'
 #: 绑成同一条恢复链。
 STAGE2_RUNS_DIRNAME = '_stage2_runs'
 
+#: Stage4 design/plan executor 的验证后响应与提交尾窗 journal。两节点各占
+#: 独立目录，但正式写盘共用同一本书的所有权锁。
+STAGE4_RUNS_DIRNAME = '_stage4_runs'
+
+#: Stage5 逐章 executor 的验证后响应与正式提交尾窗 journal。每章各占一份
+#: run/checkpoint/ownership 空间；同批章节可并发，但任何两章都不能共享 session。
+STAGE5_RUNS_DIRNAME = '_stage5_runs'
+
+#: Stage6 hook executor 与双盲 semantic executor 的验证后响应及提交尾窗
+#: journal。两类 node 各占独立子目录、共用一本书的提交所有权锁；其中含模型
+#: stdout，必须跟书走，不是正式 artifact，也不参加完成度扫描。
+STAGE6_RUNS_DIRNAME = '_stage6_runs'
+
+#: Stage7 rename executor 的完整人物表 replacement、验证后 checkpoint 与正式
+#: 提交尾窗 journal。目录里含模型 stdout，必须跟书走；它不是正式 artifact，
+#: 也不参加完成度或下载路径扫描。
+STAGE7_RUNS_DIRNAME = '_stage7_runs'
+
 
 def answer_lost_rel(attempt_id: str) -> str:
     """留证文件相对**书目录**的路径。审计账里存的就是它——绝对路径换台机器就断。"""
@@ -716,3 +734,156 @@ def stage2_blueprint_checkpoint_path(
         raise PathRefused(f'Stage2 checkpoint 章号必须是正整数，实得 {chapter!r}')
     return (stage2_blueprint_run_path(novel_dir, run_id) / 'checkpoints'
             / f'{phase}-ch{int(chapter):04d}.json')
+
+
+def stage4_run_path(
+        novel_dir: str | os.PathLike[str], run_id: str, node: str,
+) -> Path:
+    """``<书目录>/_stage4_runs/<run_id>/<design|plan>/``。
+
+    节点名不是自由路径片段；两个付费节点必须落在不同目录，不能共享一份
+    provider session 或把 design stdout 当成 plan checkpoint。
+    """
+    from novel.run_identity import check_run_id
+
+    phase = {
+        'stage4.design': 'design',
+        'stage4.plan': 'plan',
+    }.get(node)
+    if phase is None:
+        raise PathRefused(
+            f'Stage4 agent run 节点必须是 stage4.design/stage4.plan，实得 {node!r}')
+    return (Path(os.fspath(novel_dir)) / STAGE4_RUNS_DIRNAME
+            / check_run_id(run_id) / phase)
+
+
+def stage4_checkpoint_dir(
+        novel_dir: str | os.PathLike[str], run_id: str, node: str,
+) -> Path:
+    """Stage4 每个节点的 append-only checkpoint revision 目录。"""
+    return stage4_run_path(novel_dir, run_id, node) / 'checkpoints'
+
+
+def stage4_commit_lock_path(
+        novel_dir: str | os.PathLike[str],
+) -> Path:
+    """同一本书 design/plan 的正式写盘与恢复共用的所有权锁目标。"""
+    return (Path(os.fspath(novel_dir)) / STAGE4_RUNS_DIRNAME
+            / '.commit-ownership')
+
+
+def _stage5_chapter_dirname(chapter: int) -> str:
+    if (not isinstance(chapter, int) or isinstance(chapter, bool)
+            or chapter < 1):
+        raise PathRefused(
+            f'Stage5 agent run 章号必须是正整数，实得 {chapter!r}')
+    return f'ch{chapter:04d}'
+
+
+def stage5_chapter_run_path(
+        novel_dir: str | os.PathLike[str], run_id: str, chapter: int,
+) -> Path:
+    """``<书目录>/_stage5_runs/<run_id>/chNNNN/``；一章一条恢复链。"""
+    from novel.run_identity import check_run_id
+
+    return (Path(os.fspath(novel_dir)) / STAGE5_RUNS_DIRNAME
+            / check_run_id(run_id) / _stage5_chapter_dirname(chapter))
+
+
+def stage5_chapter_checkpoint_dir(
+        novel_dir: str | os.PathLike[str], run_id: str, chapter: int,
+) -> Path:
+    """Stage5 每章 append-only checkpoint revision 目录。"""
+    return stage5_chapter_run_path(novel_dir, run_id, chapter) / 'checkpoints'
+
+
+def stage5_chapter_commit_lock_path(
+        novel_dir: str | os.PathLike[str], chapter: int,
+) -> Path:
+    """同一本书同一章的正式写盘与 crash 恢复共用所有权锁。"""
+    return (Path(os.fspath(novel_dir)) / STAGE5_RUNS_DIRNAME
+            / f'.commit-{_stage5_chapter_dirname(chapter)}')
+
+
+def stage6_semantic_run_path(
+        novel_dir: str | os.PathLike[str], run_id: str,
+) -> Path:
+    """``<书目录>/_stage6_runs/<run_id>/semantic/``；run id 先过唯一身份闸。"""
+    from novel.run_identity import check_run_id
+
+    return (Path(os.fspath(novel_dir)) / STAGE6_RUNS_DIRNAME
+            / check_run_id(run_id) / 'semantic')
+
+
+def stage6_hook_run_path(
+        novel_dir: str | os.PathLike[str], run_id: str,
+) -> Path:
+    """``<书目录>/_stage6_runs/<run_id>/hook/``；不与 semantic 共 session。"""
+    from novel.run_identity import check_run_id
+
+    return (Path(os.fspath(novel_dir)) / STAGE6_RUNS_DIRNAME
+            / check_run_id(run_id) / 'hook')
+
+
+def stage6_hook_checkpoint_dir(
+        novel_dir: str | os.PathLike[str], run_id: str,
+) -> Path:
+    """Stage6 hook 完整 replacement 的 append-only checkpoint 目录。"""
+    return stage6_hook_run_path(novel_dir, run_id) / 'checkpoints'
+
+
+def stage6_semantic_checkpoint_path(
+        novel_dir: str | os.PathLike[str], run_id: str, role: str,
+) -> Path:
+    """A/B 判官各一份不可变 checkpoint；角色不是自由路径片段。"""
+    if role not in ('A', 'B'):
+        raise PathRefused(f'Stage6 semantic judge role 必须是 A/B，实得 {role!r}')
+    return (stage6_semantic_run_path(novel_dir, run_id) / 'checkpoints'
+            / f'judge-{role}.json')
+
+
+def stage6_commit_lock_path(
+        novel_dir: str | os.PathLike[str],
+) -> Path:
+    """同一本书 Stage6 hook 写盘与 semantic 选 seq 共用的所有权锁目标。"""
+    return (Path(os.fspath(novel_dir)) / STAGE6_RUNS_DIRNAME
+            / '.commit-ownership')
+
+
+def stage6_semantic_commit_lock_path(
+        novel_dir: str | os.PathLike[str],
+) -> Path:
+    """兼容既有 semantic 调用名；权威路径由 ``stage6_commit_lock_path`` 构造。"""
+    return stage6_commit_lock_path(novel_dir)
+
+
+def stage6_hook_commit_lock_path(
+        novel_dir: str | os.PathLike[str],
+) -> Path:
+    """Stage6 hook 提交使用与 semantic 相同的全书所有权锁。"""
+    return stage6_commit_lock_path(novel_dir)
+
+
+def stage7_rename_run_path(
+        novel_dir: str | os.PathLike[str], run_id: str,
+) -> Path:
+    """``<书目录>/_stage7_runs/<run_id>/rename/``；run id 先过唯一身份闸。"""
+    from novel.run_identity import check_run_id
+
+    return (Path(os.fspath(novel_dir)) / STAGE7_RUNS_DIRNAME
+            / check_run_id(run_id) / 'rename')
+
+
+def stage7_rename_checkpoint_dir(
+        novel_dir: str | os.PathLike[str], run_id: str,
+) -> Path:
+    """Stage7 完整 ``NameMapResponse`` replacement 的 append-only revisions。"""
+    return stage7_rename_run_path(novel_dir, run_id) / 'checkpoints'
+
+
+def stage7_rename_commit_lock_path(
+        novel_dir: str | os.PathLike[str],
+) -> Path:
+    """同一本书所有 rename run 的正式写盘与 crash 恢复共用所有权锁。"""
+    return (Path(os.fspath(novel_dir)) / STAGE7_RUNS_DIRNAME
+            / '.commit-ownership')

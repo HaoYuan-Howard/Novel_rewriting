@@ -25,7 +25,7 @@ import threading
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Iterable
+from typing import Iterable, Mapping
 
 from contracts.schema import Usage
 from novel import run_identity
@@ -93,6 +93,122 @@ def audit_path(base: str | Path) -> Path:
     return Path(base).joinpath(*AUDIT_REL)
 
 
+def append_commander_call(
+        base: str | Path, *, run_id: str, session_run_id: str, sid: str,
+        attempt_id: str, request_model: str, requested_effort: str,
+        code: str, protocol_version: str,
+        actual_model: str | None = None,
+        actual_effort: str | None = None,
+        provider_session_id: str | None = None,
+        cli_version: str | None = None,
+        usage: Mapping[str, int | None] | None = None,
+        outcome: str, exit_code: int,
+        error_kind: str | None = None) -> None:
+    """追加一次整书 Commander 调用的成本事实。
+
+    Commander 不是 ``NODES`` 的成员，故意以 ``role='commander'``、``node=null``
+    落在同一本成本账里；拿一个假 node 填空会污染完成度与按节点成本统计。它也不
+    复用 ``CostLedger.record``：后者是一条节点产物生产线的 run 内累计器，而外层
+    Commander 不铸造任何 artifact provenance。两种调用仍用同一个 append-only
+    字节口，因此并发与半行恢复纪律不分叉。
+
+    ``attempt_id`` 同时写入 agent session 的可得 turn，是两账的联结键。供应商没有
+    回 provider session id 时仍诚实记一次调用，但 session audit 不得据此伪造 turn。
+    实际 model/effort 没回显就保持 ``null``，绝不拿请求值补齐。
+    """
+    run_id = run_identity.check_run_id(run_id)
+    session_run_id = run_identity.check_run_id(session_run_id)
+    for name, value in (
+            ('sid', sid), ('attempt_id', attempt_id),
+            ('request_model', request_model),
+            ('requested_effort', requested_effort), ('code', code),
+            ('protocol_version', protocol_version), ('outcome', outcome)):
+        if not isinstance(value, str) or not value.strip():
+            raise ProvenanceRefused(f'commander ledger {name} 必须是非空字符串')
+    if isinstance(exit_code, bool) or not isinstance(exit_code, int):
+        raise ProvenanceRefused('commander ledger exit_code 必须是整数')
+    if outcome not in ('ok', 'error'):
+        raise ProvenanceRefused('commander ledger outcome 只接受 ok/error')
+    for name, value in (
+            ('actual_model', actual_model), ('actual_effort', actual_effort),
+            ('provider_session_id', provider_session_id),
+            ('cli_version', cli_version), ('error_kind', error_kind)):
+        if value is not None and (
+                not isinstance(value, str) or not value.strip()
+                or any(ord(char) < 32 for char in value)):
+            raise ProvenanceRefused(
+                f'commander ledger {name} 必须是非空、无控制字符的字符串或 null')
+
+    usage_values: dict[str, int | None] = {
+        'prompt_tokens': None,
+        'prompt_cache_hit_tokens': None,
+        'prompt_cache_miss_tokens': None,
+        'completion_tokens': None,
+        'reasoning_tokens': None,
+        'total_tokens': None,
+    }
+    if usage is not None:
+        if not isinstance(usage, Mapping):
+            raise ProvenanceRefused('commander ledger usage 必须是 mapping 或 null')
+        extra = set(usage) - set(usage_values)
+        if extra:
+            raise ProvenanceRefused(
+                f'commander ledger usage 含未知字段：{sorted(extra)}')
+        for name in usage_values:
+            value = usage.get(name)
+            if (value is not None
+                    and (isinstance(value, bool) or not isinstance(value, int)
+                         or value < 0)):
+                raise ProvenanceRefused(
+                    f'commander ledger usage.{name} 必须是非负整数或 null')
+            usage_values[name] = value
+
+    row = {
+        'at': datetime.now(timezone.utc).isoformat(timespec='seconds'),
+        'run_id': run_id,
+        'session_run_id': session_run_id,
+        'role': 'commander',
+        'sid': sid,
+        'node': None,
+        'model': actual_model,
+        'request_model': request_model,
+        'code': code,
+        'cached': False,
+        'cache_policy': 'commander-agent-session',
+        **usage_values,
+        'purpose': 'commander',
+        'outcome': outcome,
+        'error': error_kind,
+        'status': None,
+        'exit_code': exit_code,
+        'reasoning_effort': requested_effort,
+        'actual_reasoning_effort': actual_effort,
+        'thinking': None,
+        'json_mode': None,
+        'max_tokens': None,
+        'finish_reason': None,
+        'attempt': 1,
+        'max_attempts': 1,
+        'latency_ms': None,
+        'error_kind': error_kind,
+        'retryable': False,
+        'will_retry': False,
+        'backoff_ms': None,
+        'attempt_id': attempt_id,
+        'request_fingerprint': None,
+        'response_sha256': None,
+        'provider_session_id': provider_session_id,
+        'protocol_version': protocol_version,
+        'cli_version': cli_version,
+        'chapter': None,
+        'chapter_index': None,
+        'chapter_total': None,
+    }
+    append_line(
+        ledger_path(base),
+        json.dumps(row, ensure_ascii=False, sort_keys=True, allow_nan=False))
+
+
 def _adoption_id(*, run_id: str, node: str, purpose: str, attempt_id: str,
                  artifact: str, artifact_fingerprint: str,
                  chapter: int | None) -> str:
@@ -114,6 +230,29 @@ def _repair_event_id(
         [run_id, node, purpose, attempt_id, action, decision,
          actor, gate, candidate_sha256],
         ensure_ascii=False, separators=(',', ':'))
+    return hashlib.sha256(canonical.encode('utf-8')).hexdigest()
+
+
+def _gate_decision_id(
+        *, run_id: str, sid: str, node: str, purpose: str, attempt_id: str,
+        source: str, decision: str, gate: str | None,
+        reasoning_effort: str | None, thinking: bool | None,
+        rung_index: int | None, sample: int | None, resample: bool,
+        reject_detail: list[dict[str, object]] | None, salvaged: bool,
+        request_mode: str, recovery_from_attempts: Iterable[str],
+        chapter: int | None,
+) -> str:
+    """一次内容闸判定的稳定身份；供 checkpoint 崩溃补尾去重。"""
+    canonical = json.dumps({
+        'run_id': run_id, 'sid': sid, 'node': node, 'purpose': purpose,
+        'attempt_id': attempt_id, 'source': source, 'decision': decision,
+        'gate': gate, 'reasoning_effort': reasoning_effort,
+        'thinking': thinking, 'rung_index': rung_index, 'sample': sample,
+        'resample': resample, 'reject_detail': reject_detail,
+        'salvaged': salvaged, 'request_mode': request_mode,
+        'recovery_from_attempts': list(recovery_from_attempts),
+        'chapter': chapter,
+    }, ensure_ascii=False, sort_keys=True, separators=(',', ':'))
     return hashlib.sha256(canonical.encode('utf-8')).hexdigest()
 
 
@@ -601,9 +740,19 @@ class CostLedger:
         定向修复还是约束重建，以及它显式消费了哪些失败 attempt。只留策略与联结键，
         不把动态 prompt 或失败正文复制进 `_service/` 审计账。
         """
-        self._append_audit({
+        recovery = list(recovery_from_attempts)
+        gate_decision_id = _gate_decision_id(
+            run_id=self.run_id, sid=sid, node=node, purpose=purpose,
+            attempt_id=attempt_id, source=source, decision=decision, gate=gate,
+            reasoning_effort=reasoning_effort, thinking=thinking,
+            rung_index=rung_index, sample=sample, resample=resample,
+            reject_detail=reject_detail, salvaged=salvaged,
+            request_mode=request_mode, recovery_from_attempts=recovery,
+            chapter=chapter)
+        self._append_audit_idempotent({
             'kind': 'gate_decision',
             'at': datetime.now(timezone.utc).isoformat(timespec='seconds'),
+            'gate_decision_id': gate_decision_id,
             'sid': sid, 'node': node, 'purpose': purpose,
             'attempt_id': attempt_id,
             'source': source,                  # cache | wire
@@ -616,11 +765,11 @@ class CostLedger:
             'resample': resample,
             # 后继请求是否显式消费了前序失败证据；只记策略与联结键，不记 prompt/正文。
             'request_mode': request_mode,
-            'recovery_from_attempts': list(recovery_from_attempts),
+            'recovery_from_attempts': recovery,
             'reject_detail': reject_detail,   # [{loc, type, count}, …]；accepted 时 None
             'salvaged': salvaged,              # True = 正文捞自推理通道，不是 content
             'chapter': chapter,
-        })
+        }, identity_key='gate_decision_id')
 
     def note_answer_lost(self, *, sid: str, node: str, purpose: str,
                          attempt_id: str, source: str,

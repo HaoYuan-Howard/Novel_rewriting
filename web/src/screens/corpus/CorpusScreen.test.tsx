@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { api } from '@/api/endpoints'
 import type { UploadResponse } from '@/types/jobs'
 import type { Artifact, NovelRow } from '@/types/novels'
+import { agentCapabilities, previewOf, READY_PROFILES } from '@/test/agent'
 import { CorpusScreen } from './CorpusScreen'
 
 function uploaded(sid: string): UploadResponse {
@@ -164,12 +165,11 @@ describe('CorpusScreen 批量开书', () => {
 
   it('单本扫描成功后立即弹出 agent 确认，返回时直接进入这本书的 Stage0', async () => {
     vi.spyOn(api, 'uploadCorpus').mockResolvedValue(uploaded('fq-a-1001'))
-    const preview = vi.spyOn(api, 'previewAgentRun').mockResolvedValue({
-      argv: ['claude', '-p', '从当前 Stage0 盘面续跑'],
+    vi.spyOn(api, 'getAgentCapabilities').mockResolvedValue(agentCapabilities())
+    const preview = vi.spyOn(api, 'previewAgentRun').mockImplementation(async (req) => ({
+      ...previewOf(req.profiles, req.authorized, req.egress_authorized),
       prompt: '从当前 Stage0 盘面续跑',
-      authorized: false,
-      egress_authorized: true,
-    })
+    }))
 
     renderCorpus()
     await screen.findByText('一本书都还没有')
@@ -184,6 +184,7 @@ describe('CorpusScreen 批量开书', () => {
         sid: 'fq-a-1001',
         authorized: false,
         egress_authorized: true,
+        profiles: READY_PROFILES,
       }),
     )
 

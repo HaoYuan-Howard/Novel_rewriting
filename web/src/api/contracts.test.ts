@@ -3,6 +3,7 @@ import { qk } from './queryKeys'
 import { adaptNovel, realApi, splitLog } from './endpoints'
 import { projectGlobalSpoilers, SPOILER_PLACEHOLDER } from './spoilers'
 import type { GlobalFactEvidence, Stage2Global } from '@/types/stages'
+import { READY_PROFILES } from '@/test/agent'
 
 function evidence(text: string): GlobalFactEvidence {
   return {
@@ -112,6 +113,43 @@ describe('request-shaped cache and diagnostics', () => {
     expect(qk.jobPreview({ ...base, args: ['--chapters', '1'] })).not.toEqual(
       qk.jobPreview({ ...base, args: ['--chapters', '2'] }),
     )
+  })
+
+  it('uses the whole agent request, including nested overrides, as preview cache identity', () => {
+    const base = {
+      sid: 's',
+      authorized: false,
+      egress_authorized: true,
+      profiles: READY_PROFILES,
+    }
+    expect(qk.agentRunPreview(base)).not.toEqual(qk.agentRunPreview({
+      ...base,
+      profiles: {
+        ...base.profiles,
+        executor_overrides: {
+          'node.dynamic': { ...base.profiles.executor_default },
+        },
+      },
+    }))
+    expect(qk.agentRunPreview(base)).not.toEqual(qk.agentRunPreview({
+      ...base,
+      egress_authorized: false,
+    }))
+  })
+
+  it('gets agent capabilities through the single HTTP seam', async () => {
+    const capabilities = {
+      drivers: [],
+      executor_nodes: [],
+      default_profiles: null,
+    }
+    const send = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(
+      JSON.stringify(capabilities),
+      { status: 200, headers: { 'Content-Type': 'application/json' } },
+    ))
+
+    await expect(realApi.getAgentCapabilities()).resolves.toEqual(capabilities)
+    expect(send).toHaveBeenCalledWith('/api/agent/capabilities', undefined)
   })
 
   it('takes the dynamic chapter count from the stage1-backed overview', () => {

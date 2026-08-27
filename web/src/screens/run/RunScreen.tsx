@@ -27,6 +27,7 @@ import { QueryStates } from '@/components/state/QueryStates'
 import { Mono } from '@/components/ui/Mono'
 import { Panel, PaneHeader } from '@/components/ui/Panel'
 import { LinkButton } from '@/components/ui/ActionButton'
+import { AgentProfilesSnapshot } from '@/components/agent/AgentProfilesSnapshot'
 import { CheckBadge, GateChip, JobStateChip } from '@/components/vocab/Badges'
 import { cx } from '@/lib/cx'
 
@@ -274,6 +275,7 @@ function AgentRunBlock() {
               ) : null}
             </span>
           </div>
+          <AgentProfilesSnapshot profiles={latest.start.profiles} compact />
           {logOpen ? (
             <pre className="m-0 max-h-[220px] overflow-y-auto rounded-btn-lg border border-line bg-inset px-14 py-12 font-mono text-mini leading-[1.9] whitespace-pre-wrap text-ink-2">
               {log.isPending

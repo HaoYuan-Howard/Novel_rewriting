@@ -1,25 +1,19 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-test_agent.py —— headless agent 代跑的提示词/命令行组装、事件流与互斥。
+test_agent.py —— Commander 代跑的提示词/启动计划、事件流与互斥。
 
-【不在这里测的】真拉起 `claude` —— 那要模型配额与真钱，归端到端实战
-（`docs/BACKEND_CONTRACT.md` §十那一档）。这里全部走 fake spawn（`Spawn` 那条缝存在的
-理由同 `jobs.default_spawn` 的注释）。
-
-⚠ **但 fake spawn 有一块它永远看不见的盲区**：它收到的是 Python list，而故障
-可能发生在 list → 命令行字符串那一层（2026-08-19 实测：`cmd /c` 把多行提示词
-截在首行，五本书全部 exit 0 却一步没动）。⇒ `test_launch_argv_delivers_the_whole_prompt`
-**真起一个子进程**——起的是 python 探针不是 claude，所以照样 0 成本。
+【不在这里测的】真拉起 Claude/Codex CLI——那要账号与模型配额，归
+端到端实战（`docs/BACKEND_CONTRACT.md` §十那一档）。这里全部走 fake spawn；
+两个供应商的 stdin/argv 与 JSON 协议边界由 `tests/test_commander_drivers.py` 的零成本
+子进程探针独立覆盖。
 
 临时目录由 pytest 提供，测试结束后自动清理。
 """
 from __future__ import annotations
 
+import json
 import os
-import shutil
-import subprocess
-import sys
 import threading
 import time
 from pathlib import Path
@@ -27,11 +21,51 @@ from pathlib import Path
 import pytest
 
 from contracts.schema.orchestration import (
-    AgentDeliveryOutcome, AgentRunEvent, AgentRunStart,
+    AgentDeliveryOutcome, AgentProfile, AgentRunEvent, AgentRunStart,
+    PipelineAgentProfiles,
 )
-from novel import paths
+from novel import agent_session_audit, commander_context, paths
+from novel.agents.base import AgentUsage
+from novel.commanders import (
+    CommanderInvocation, CommanderObservation, CommanderProcessResult,
+)
 from novel.orchestrator import agent, jobs
 from novel.orchestrator.jobs import JobConflict
+
+
+_CODEX = AgentProfile(
+    driver='codex', model='gpt-5.6-sol', reasoning_effort='high',
+    execution_mode='standard')
+_CLAUDE = AgentProfile(
+    driver='claude-code', model='claude-opus-5', reasoning_effort='max',
+    execution_mode='standard')
+_PROFILES = PipelineAgentProfiles(
+    commander=_CODEX, executor_default=_CLAUDE,
+    executor_overrides={})
+
+
+class _PlanningDriver:
+    """只冻结 invocation，不探 CLI、不发模型请求。真实 driver 由专用测试覆盖。"""
+
+    def __init__(self, profile: AgentProfile) -> None:
+        self.profile = profile
+
+    def build_invocation(self, profile, prompt, *, repo, base, **_kwargs):
+        del base
+        return CommanderInvocation(
+            argv=(profile.driver, 'headless', '--model', profile.model),
+            stdin_text=prompt, cwd=str(repo), env_overrides={},
+            profile=profile, protocol=f'{profile.driver}-test-v1')
+
+    def close(self):
+        return None
+
+
+@pytest.fixture(autouse=True)
+def no_real_commander_cli(monkeypatch):
+    monkeypatch.setattr(
+        agent, 'create_commander_driver',
+        lambda profile, **_kwargs: _PlanningDriver(profile))
 
 
 @pytest.fixture
@@ -53,11 +87,12 @@ def stable_code_version(monkeypatch):
     monkeypatch.setattr(prov, 'code_version', lambda: 'test-code-version')
 
 
-def _start(sid='42', argv=('claude', '-p', 'x'), authorized=True,
+def _start(sid='42', argv=('codex', 'exec', '--json', '-'), authorized=True,
            egress_authorized=True):
-    return AgentRunStart(sid=sid, argv=list(argv), prompt='提示词',
+    return AgentRunStart(sid=sid, base='E:/Output', argv=list(argv), prompt='提示词',
                          authorized=authorized,
-                         egress_authorized=egress_authorized)
+                         egress_authorized=egress_authorized,
+                         profiles=_PROFILES)
 
 
 # ── 提示词与命令行（纯函数） ──────────────────────────────────────────────
@@ -86,9 +121,12 @@ def corpus(base):
 
 def test_prompt_carries_the_two_authorizations_independently(base, book):
     """付费与正文外发是正交的两轴；任一项都不能借另一项扩权。"""
-    yes = agent.build_prompt('42', base, authorized=True, egress_authorized=True)
-    no_paid = agent.build_prompt('42', base, authorized=False, egress_authorized=True)
-    no_egress = agent.build_prompt('42', base, authorized=True, egress_authorized=False)
+    yes = agent.build_prompt(
+        '42', base, authorized=True, egress_authorized=True, profiles=_PROFILES)
+    no_paid = agent.build_prompt(
+        '42', base, authorized=False, egress_authorized=True, profiles=_PROFILES)
+    no_egress = agent.build_prompt(
+        '42', base, authorized=True, egress_authorized=False, profiles=_PROFILES)
 
     assert '付费授权已授予' in yes and '正文外发授权已授予' in yes
     assert '付费授权未授予' in no_paid and '正文外发授权已授予' in no_paid
@@ -110,7 +148,8 @@ def test_prompt_gives_the_rule_when_the_book_dir_is_not_there_yet(base):
     ⚠ 这一格**不许猜一个名字**：猜出来的那份会与书目录落地后按同一条规则算出的
     名字分家，于是盘上出现两份终审包，而没有任何一层会报错。
     """
-    text = agent.build_prompt('42', base, authorized=False, egress_authorized=False)
+    text = agent.build_prompt(
+        '42', base, authorized=False, egress_authorized=False, profiles=_PROFILES)
     assert '<书目录>/<书名>_review.md' in text
     assert 'state 42' in text                         # 指向真正能给出书目录的那条命令
 
@@ -122,7 +161,8 @@ def test_prompt_never_hardcodes_a_book_filename(base):
     退出码会变红。但 headless 下没有第二个人能纠正启动 prompt，而那是任务的
     第一句话。⇒ 只能靠这条守卫。
     """
-    text = agent.build_prompt('42', base, authorized=True, egress_authorized=True)
+    text = agent.build_prompt(
+        '42', base, authorized=True, egress_authorized=True, profiles=_PROFILES)
     assert 'book.txt' not in text
     assert '_rewriting.txt' in text
 
@@ -131,6 +171,7 @@ def test_prompt_surfaces_the_headless_safety_sequence(base, book):
     """高风险边界必须出现在启动 prompt，不能只埋在 agent 之后才读的长 skill 里。"""
     text = agent.build_prompt(
         '42', base, authorized=True, egress_authorized=True,
+        profiles=_PROFILES,
         code_version='expected-code-version')
 
     assert '每次 Bash 调用都必须保持在仓根，不得 cd' in text
@@ -141,14 +182,16 @@ def test_prompt_surfaces_the_headless_safety_sequence(base, book):
     assert 'expected-code-version' in text
     assert '没有可定位证据时必须保留 `UNVER`' in text
     assert '不得猜测 PASS' in text and '把 exit 0 当成交付 ready' in text
-    assert '--response-repair agent' in text
-    assert 'ResponseRepairRequired' in text and 'novel.cli response-repair' in text
+    assert '主路不带 `--response-repair agent`' in text
+    assert 'logical session' in text and 'durable checkpoint' in text
+    assert 'legacy DeepSeek' in text and 'sidecar `response-repair`' in text
     assert '_llm_rejected/**/candidate.json' in text
 
 
 def test_prompt_forbids_direct_edits_of_formal_artifacts(base, book):
     """Edit(base/**) 是权限上界，不是允许直接覆盖正式产物的产品语义。"""
-    text = agent.build_prompt('42', base, authorized=True, egress_authorized=True)
+    text = agent.build_prompt(
+        '42', base, authorized=True, egress_authorized=True, profiles=_PROFILES)
 
     assert '正式 stage JSON/TXT' in text
     assert '正式变更只经 `novel.cli`' in text
@@ -158,64 +201,87 @@ def test_prompt_forbids_direct_edits_of_formal_artifacts(base, book):
 
 def test_prompt_without_authorization_still_collects_recovery_evidence(base, book):
     """未授权不是一句话就退出：必须留下盘面事实、精确 preview 与恢复包。"""
-    text = agent.build_prompt('42', base, authorized=False, egress_authorized=False)
+    text = agent.build_prompt(
+        '42', base, authorized=False, egress_authorized=False, profiles=_PROFILES)
 
     assert '只读的 state、inbox、下一节点 preview' in text
     assert '终审包草稿' in text
     assert '首个需要正文外发的步骤前停下' in text
 
 
-def test_argv_is_the_whitelisted_shape(base):
-    """Spike 钉死的三件事：入口可直接执行、python 前缀规则、Edit 的 // 锚。"""
-    prompt = agent.build_prompt('42', base, authorized=True, egress_authorized=True)
-    argv = agent.build_argv(prompt, base)
-    assert '--permission-mode' in argv and 'manual' in argv
-    rules = argv[argv.index('--allowedTools') + 1:]
-    assert any(r.startswith('Bash(') and r.endswith('python.exe *)') for r in rules)
-    assert any(r.startswith('Edit(//') and r.endswith('/**)') for r in rules)
-    assert not any(r.startswith('Write(') for r in rules)   # Write(路径) 规则从不被查阅
-    assert '--add-dir' in argv
-    if os.name == 'nt' and shutil.which('claude'):
-        assert Path(argv[0]).suffix.lower() not in ('.cmd', '.bat'), (
-            '拉的必须是可直接 CreateProcess 的真入口，不是 npm 转发 shim')
+@pytest.mark.parametrize('commander', [_CODEX, _CLAUDE])
+def test_plan_echoes_the_exact_commander_and_keeps_prompt_out_of_argv(
+        base, commander):
+    profiles = PipelineAgentProfiles(
+        commander=commander, executor_default=_CODEX,
+        executor_overrides={})
+    planned = agent.plan(
+        base, '42', authorized=False, egress_authorized=False,
+        profiles=profiles)
+
+    assert planned.profiles.commander == commander
+    assert planned.invocation.profile == commander
+    assert planned.invocation.stdin_text == planned.prompt
+    assert planned.prompt not in planned.invocation.argv
+    assert '\n' in planned.prompt
+    assert planned.invocation.argv[0] == commander.driver
 
 
-def test_launch_argv_never_goes_through_a_shell(base):
-    """⭐ 提示词必须是 argv 里**独立的一项**，且没有 shell 包在外面。
+def test_plan_deep_freezes_nested_profile_overrides(base):
+    requested = PipelineAgentProfiles(
+        commander=_CODEX, executor_default=_CODEX,
+        executor_overrides={'stage5.write': _CLAUDE})
+    planned = agent.plan(
+        base, '42', authorized=False, egress_authorized=False,
+        profiles=requested)
 
-    ⚠ 这一条守的是钱与正确性，不是风格：`cmd` 在参数的第一个换行处截断，
-    而提示词恒是多行的。一旦回到 `['cmd', '/c', ...]`，agent 收到的就只有首行
-    ——任务、sid、两项授权、终审包落点全丢，而它照样 **exit 0**。
-    """
-    prompt = agent.build_prompt('42', base, authorized=True, egress_authorized=True)
-    assert '\n' in prompt, '前提变了：提示词不再是多行的，这条守卫要重想'
-    argv = agent.build_argv(prompt, base)
-    assert argv[1:3] == ['-p', prompt]                  # 逐字，不经任何拼接
-    assert [a.lower() for a in argv[:2]] != ['cmd', '/c']
-    assert not any(a.lower() in ('cmd', 'cmd.exe', 'powershell.exe', '/c')
-                   for a in argv[:2])
+    requested.executor_overrides['stage5.write'] = _CODEX
+    assert planned.profiles.executor_overrides['stage5.write'] == _CLAUDE
 
 
-def test_launch_argv_delivers_the_whole_prompt(base, tmp_path):
-    """⭐ **真起一个子进程**，验多行提示词逐字到达 —— fake spawn 的盲区就在这。
-
-    起的是 python 探针不是 claude（0 成本），但用的是 `build_argv` 的**真实形态**：
-    只把可执行入口换成探针，其余 argv 原样传下去。回显不等于原文即失败。
-    """
-    probe = tmp_path / 'probe.py'
-    probe.write_text('import sys; sys.stdout.write(sys.argv[2])', encoding='utf-8')
-    prompt = agent.build_prompt('42', base, authorized=True, egress_authorized=True)
-    argv = agent.build_argv(prompt, base)
-    out = subprocess.run([sys.executable, '-X', 'utf8', str(probe), *argv[1:]],
-                         capture_output=True, text=True, encoding='utf-8')
-    assert out.stdout == prompt, (
-        f'提示词在传给子进程的路上被改了：到达 {len(out.stdout)} 字 / '
-        f'原文 {len(prompt)} 字')
+def test_plan_refuses_missing_profiles_while_preview_remains_zero_cost(base):
+    with pytest.raises(Exception, match='显式选择'):
+        agent.plan(
+            base, '42', authorized=False, egress_authorized=False,
+            profiles=None)
 
 
-def test_posix_anchor():
-    assert agent._posix_anchor('E:/practice_group/Novel_rewriting/outputs/x') == \
-        '//e/practice_group/Novel_rewriting/outputs/x'
+def test_preview_can_show_unknown_code_but_start_refuses_before_spawn_or_audit(
+        base, corpus, monkeypatch):
+    from novel import prov
+
+    monkeypatch.setattr(prov, 'code_version', lambda: prov.CODE_UNKNOWN)
+    shown = agent.plan(
+        base, '42', authorized=True, egress_authorized=True,
+        profiles=_PROFILES)
+    assert shown.code_version == prov.CODE_UNKNOWN
+
+    spawned = []
+    with pytest.raises(Exception, match='代码指纹不可用'):
+        agent.start(
+            base, '42', authorized=True, egress_authorized=True,
+            profiles=_PROFILES,
+            spawn=lambda *_args: spawned.append(True))
+    assert spawned == []
+    assert not agent.runs_path(base).exists()
+    assert not agent_session_audit.audit_path(base).exists()
+
+
+def test_enqueue_refuses_unknown_code_before_planning_or_spawning(
+        base, corpus, monkeypatch):
+    from novel import prov
+
+    monkeypatch.setattr(prov, 'code_version', lambda: prov.CODE_UNKNOWN)
+    planned = []
+    monkeypatch.setattr(
+        agent, '_plan_resolved',
+        lambda *_args, **_kwargs: planned.append(True))
+    with pytest.raises(Exception, match='代码指纹不可用'):
+        agent.enqueue(
+            base, ['42'], authorized=True, egress_authorized=True,
+            profiles=_PROFILES, spawn=_ok_spawn)
+    assert planned == []
+    assert agent.queue_view(base).pending == []
 
 
 # ── 事件流与折叠 ──────────────────────────────────────────────────────────
@@ -274,23 +340,141 @@ def test_read_tolerates_a_truncated_last_line(base):
 
 # ── 拉起与互斥 ────────────────────────────────────────────────────────────
 
-def _ok_spawn(argv, cwd, env, log):
+def _commander_result(invocation, env, *, exit_code=0):
+    return CommanderProcessResult(
+        exit_code=exit_code,
+        observation=CommanderObservation(
+            provider_session_id=f"provider-{env['NOVEL_COMMANDER_RUN_ID']}",
+            actual_model=invocation.profile.model,
+            actual_effort=invocation.profile.reasoning_effort,
+            usage=AgentUsage(prompt_tokens=10, completion_tokens=2,
+                             total_tokens=12)))
+
+
+def _ok_spawn(invocation, env, log):
     log.write(b'fake run\n')
-    return 0
+    return _commander_result(invocation, env)
 
 
 def test_start_with_fake_spawn(base, corpus):
-    rec = agent.start(base, '42', authorized=True, egress_authorized=False,
-                      spawn=_ok_spawn)
+    rec = agent.start(base, '42', authorized=True, egress_authorized=True,
+                      profiles=_PROFILES, spawn=_ok_spawn)
     assert rec.state in ('running', 'ok')   # fake spawn 转瞬即完，两态都合法
     assert agent.wait(rec.run_id, 10)
     [done] = agent.records(base)
     assert done.state == 'ok' and done.exit_code == 0
     assert done.start.authorized is True
-    assert done.start.egress_authorized is False
+    assert done.start.egress_authorized is True
+    assert done.start.profiles == _PROFILES
+    assert done.start.base == os.path.abspath(base)
     assert done.start.code_version
     assert done.outcome is not None and done.outcome.state == 'stopped'
     assert 'fake run' in agent.run_log_path(base, rec.run_id).read_text('utf-8')
+
+
+@pytest.mark.parametrize('authorized,egress_authorized', [
+    (False, True), (True, False), (False, False),
+])
+def test_start_requires_both_authorizations_before_commander_factory(
+        base, corpus, monkeypatch, authorized, egress_authorized):
+    called = []
+    monkeypatch.setattr(
+        agent, 'create_commander_driver',
+        lambda *_args, **_kwargs: called.append(True))
+
+    with pytest.raises(Exception, match='启动 Commander 前'):
+        agent.start(
+            base, '42', authorized=authorized,
+            egress_authorized=egress_authorized,
+            profiles=_PROFILES, spawn=_ok_spawn)
+    assert called == [], '缺授权时连 CLI 入口解析/driver factory 都不应触碰'
+
+
+def test_preview_plan_and_start_share_invocation_profiles_and_context_env(
+        base, corpus):
+    shown = agent.plan(
+        base, '42', authorized=True, egress_authorized=True,
+        profiles=_PROFILES)
+    captured = {}
+
+    def inspect_spawn(invocation, env, log):
+        captured['invocation'] = invocation
+        captured['env'] = dict(env)
+        context = commander_context.load_from_environment(
+            base, '42', env=env)
+        assert context is not None
+        assert context.start.argv == list(shown.invocation.argv)
+        assert context.start.prompt == shown.prompt
+        assert context.profiles == shown.profiles
+        log.write(b'context verified\n')
+        return _commander_result(invocation, env)
+
+    rec = agent.start(
+        base, '42', authorized=True, egress_authorized=True,
+        profiles=_PROFILES, spawn=inspect_spawn)
+    assert agent.wait(rec.run_id, 10)
+    [done] = agent.records(base)
+    assert done.start.argv == list(shown.invocation.argv)
+    assert done.start.prompt == shown.prompt
+    assert done.start.profiles == shown.profiles
+    assert captured['invocation'].stdin_text == shown.prompt
+    assert shown.prompt not in captured['invocation'].argv
+    env = captured['env']
+    assert env['NOVEL_COMMANDER_RUN_ID'] == rec.run_id
+    assert len(env['NOVEL_COMMANDER_CONTRACT_SHA256']) == 64
+    assert shown.prompt not in agent.run_log_path(
+        base, rec.run_id).read_text('utf-8')
+
+
+def test_commander_session_and_ledger_are_linked_without_fake_node(base, corpus):
+    rec = agent.start(
+        base, '42', authorized=True, egress_authorized=True,
+        profiles=_PROFILES, spawn=_ok_spawn)
+    assert agent.wait(rec.run_id, 10)
+
+    [session] = agent_session_audit.fold(
+        agent_session_audit.read_events(base))
+    assert session.start.role == 'commander' and session.start.node is None
+    assert len(session.turns) == 1 and session.end is not None
+    turn = session.turns[0]
+    assert turn.actual_model == _CODEX.model
+    assert turn.actual_effort == _CODEX.reasoning_effort
+    rows = [json.loads(line) for line in (
+        Path(base) / '_service' / 'ledger.jsonl').read_text(
+            encoding='utf-8').splitlines()]
+    [row] = [item for item in rows if item.get('role') == 'commander']
+    assert row['node'] is None
+    assert row['run_id'] == rec.run_id
+    assert row['session_run_id'] == session.session_run_id
+    assert row['attempt_id'] == turn.attempt_id
+
+
+def test_missing_provider_session_does_not_fabricate_a_turn(base, corpus):
+    def no_session(invocation, env, log):
+        del invocation, env, log
+        return CommanderProcessResult(
+            exit_code=0,
+            observation=CommanderObservation(
+                provider_session_id=None, actual_model=None,
+                actual_effort=None, usage=None))
+
+    rec = agent.start(
+        base, '42', authorized=True, egress_authorized=True,
+        profiles=_PROFILES, spawn=no_session)
+    assert agent.wait(rec.run_id, 10)
+    [session] = agent_session_audit.fold(
+        agent_session_audit.read_events(base))
+    assert session.turns == ()
+    assert session.end is not None
+    assert session.end.actual_model is None
+    assert session.end.actual_effort is None
+    rows = [json.loads(line) for line in (
+        Path(base) / '_service' / 'ledger.jsonl').read_text(
+            encoding='utf-8').splitlines()]
+    [row] = [item for item in rows if item.get('role') == 'commander']
+    assert row['model'] is None
+    assert row['actual_reasoning_effort'] is None
+    assert row['provider_session_id'] is None
 
 
 def test_successful_agent_records_the_independent_delivery_outcome(base, corpus, monkeypatch):
@@ -303,13 +487,183 @@ def test_successful_agent_records_the_independent_delivery_outcome(base, corpus,
             checked_at=123))
 
     rec = agent.start(base, '42', authorized=True, egress_authorized=True,
-                      spawn=_ok_spawn)
+                      profiles=_PROFILES, spawn=_ok_spawn)
     assert agent.wait(rec.run_id, 10)
     [done] = agent.records(base)
     assert done.state == 'ok'
     assert done.outcome is not None
     assert done.outcome.state == 'ready_with_disclosures'
     assert done.outcome.reason == '强闸已过，保留语义披露'
+
+
+def test_nonzero_commander_exit_still_runs_delivery_assessment(
+        base, corpus, monkeypatch):
+    from novel.orchestrator import delivery
+
+    assessed = []
+
+    def assess(*_args, **_kwargs):
+        assessed.append(True)
+        return AgentDeliveryOutcome(
+            state='ready', reason='盘面独立可交付', checked_at=456)
+
+    def red_spawn(invocation, env, log):
+        log.write(b'commander exited 7\n')
+        return _commander_result(invocation, env, exit_code=7)
+
+    monkeypatch.setattr(delivery, 'assess', assess)
+    rec = agent.start(
+        base, '42', authorized=True, egress_authorized=True,
+        profiles=_PROFILES, spawn=red_spawn)
+    assert agent.wait(rec.run_id, 10)
+    [done] = agent.records(base)
+    assert assessed == [True]
+    assert done.state == 'failed' and done.exit_code == 7
+    assert done.outcome is not None and done.outcome.state == 'ready'
+    [session] = agent_session_audit.fold(
+        agent_session_audit.read_events(base))
+    assert session.process_state == 'failed'
+    assert session.delivery_state == 'delivered'
+
+
+@pytest.mark.parametrize('field,value,error_kind', [
+    ('actual_model', 'unexpected-fallback-model', 'commander_model_drift'),
+    ('actual_effort', 'low', 'commander_effort_drift'),
+])
+def test_commander_actual_identity_drift_closes_delivery_without_backfill(
+        base, corpus, monkeypatch, field, value, error_kind):
+    from novel.orchestrator import delivery
+
+    monkeypatch.setattr(
+        delivery, 'assess',
+        lambda *_args, **_kwargs: AgentDeliveryOutcome(
+            state='ready', reason='盘面本来可交付', checked_at=1))
+
+    def drifted(invocation, env, log):
+        del log
+        values = {
+            'provider_session_id': f"provider-{env['NOVEL_COMMANDER_RUN_ID']}",
+            'actual_model': invocation.profile.model,
+            'actual_effort': invocation.profile.reasoning_effort,
+            'usage': None,
+        }
+        values[field] = value
+        return CommanderProcessResult(
+            exit_code=0, observation=CommanderObservation(**values))
+
+    rec = agent.start(
+        base, '42', authorized=True, egress_authorized=True,
+        profiles=_PROFILES, spawn=drifted)
+    assert agent.wait(rec.run_id, 10)
+    [done] = agent.records(base)
+    assert done.state == 'ok'
+    assert done.outcome is not None and done.outcome.state == 'unknown'
+    [session] = agent_session_audit.fold(
+        agent_session_audit.read_events(base))
+    assert session.error_kind == error_kind
+    # 请求身份与实际事实分格保留；绝不把 requested 写回 actual。
+    assert getattr(session.end, field) == value
+
+
+@pytest.mark.parametrize('broken', ['ledger', 'session_turn', 'session_end'])
+def test_required_commander_audit_failure_downgrades_outcome_but_keeps_outer_end(
+        base, corpus, monkeypatch, broken):
+    from novel.orchestrator import delivery
+
+    monkeypatch.setattr(
+        delivery, 'assess',
+        lambda *_args, **_kwargs: AgentDeliveryOutcome(
+            state='ready', reason='盘面本来可交付', checked_at=1))
+    if broken == 'ledger':
+        monkeypatch.setattr(
+            agent, 'append_commander_call',
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                OSError('ledger unavailable')))
+    elif broken == 'session_turn':
+        monkeypatch.setattr(
+            agent_session_audit, 'append_commander_turn',
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                OSError('session audit unavailable')))
+    else:
+        append_event = agent_session_audit.append_event
+
+        def fail_session_end(base_arg, event):
+            if event.kind == 'ended':
+                raise OSError('session ended audit unavailable')
+            return append_event(base_arg, event)
+
+        monkeypatch.setattr(agent_session_audit, 'append_event', fail_session_end)
+
+    rec = agent.start(
+        base, '42', authorized=True, egress_authorized=True,
+        profiles=_PROFILES, spawn=_ok_spawn)
+    assert agent.wait(rec.run_id, 10)
+    [done] = agent.records(base)
+    assert done.ended is not None and done.state == 'ok'
+    assert done.outcome is not None and done.outcome.state == 'unknown'
+    assert ('审计链不闭合' in done.outcome.reason
+            or 'ended 审计未能闭合' in done.outcome.reason)
+
+
+def test_commander_session_start_audit_failure_never_spawns_and_closes_outer_run(
+        base, corpus, monkeypatch):
+    spawned = []
+    monkeypatch.setattr(
+        agent_session_audit, 'append_event',
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            OSError('session start audit unavailable')))
+
+    with pytest.raises(OSError, match='session start audit unavailable'):
+        agent.start(
+            base, '42', authorized=True, egress_authorized=True,
+            profiles=_PROFILES,
+            spawn=lambda *_args: spawned.append(True))
+    assert spawned == []
+    [done] = agent.records(base)
+    assert done.ended is not None and done.exit_code != 0
+    assert done.outcome is not None and done.outcome.state == 'failed'
+
+
+def test_provider_session_reuse_across_commander_runs_closes_delivery(
+        base, corpus, monkeypatch):
+    from novel.orchestrator import delivery
+
+    monkeypatch.setattr(
+        delivery, 'assess',
+        lambda *_args, **_kwargs: AgentDeliveryOutcome(
+            state='ready', reason='盘面本来可交付', checked_at=1))
+
+    def reused(invocation, env, log):
+        del env, log
+        return CommanderProcessResult(
+            exit_code=0,
+            observation=CommanderObservation(
+                provider_session_id='provider-reused-across-runs',
+                actual_model=invocation.profile.model,
+                actual_effort=invocation.profile.reasoning_effort,
+                usage=None))
+
+    first = agent.start(
+        base, '42', authorized=True, egress_authorized=True,
+        profiles=_PROFILES, spawn=reused)
+    assert agent.wait(first.run_id, 10)
+    second = agent.start(
+        base, '43', authorized=True, egress_authorized=True,
+        profiles=_PROFILES, spawn=reused)
+    assert agent.wait(second.run_id, 10)
+
+    second_done = next(
+        item for item in agent.records(base) if item.run_id == second.run_id)
+    assert second_done.outcome is not None
+    assert second_done.outcome.state == 'unknown'
+    assert 'provider session' in second_done.outcome.reason
+    sessions = agent_session_audit.fold(
+        agent_session_audit.read_events(base))
+    second_session = next(
+        item for item in sessions
+        if item.start.parent_run_id == second.run_id)
+    assert second_session.error_kind == agent_session_audit.PROVIDER_SESSION_REUSED
+    assert second_session.provider_session_ids == ()
 
 
 def test_delivery_verifier_crash_is_unknown_but_never_loses_the_ended_event(
@@ -321,7 +675,7 @@ def test_delivery_verifier_crash_is_unknown_but_never_loses_the_ended_event(
         lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError('synthetic verifier crash')))
 
     rec = agent.start(base, '42', authorized=True, egress_authorized=True,
-                      spawn=_ok_spawn)
+                      profiles=_PROFILES, spawn=_ok_spawn)
     assert agent.wait(rec.run_id, 10)
     [done] = agent.records(base)
     assert done.state == 'ok' and done.ended is not None
@@ -329,20 +683,36 @@ def test_delivery_verifier_crash_is_unknown_but_never_loses_the_ended_event(
     assert 'synthetic verifier crash' in done.outcome.reason
 
 
+def test_spawn_exception_traceback_redacts_the_stdin_prompt(base, corpus):
+    def leaks_invocation_in_repr(invocation, env, log):
+        del env, log
+        raise RuntimeError(f'synthetic failure: {invocation!r}')
+
+    rec = agent.start(
+        base, '42', authorized=True, egress_authorized=True,
+        profiles=_PROFILES, spawn=leaks_invocation_in_repr)
+    assert agent.wait(rec.run_id, 10)
+    done = next(item for item in agent.records(base) if item.run_id == rec.run_id)
+    log = agent.run_log_path(base, rec.run_id).read_text('utf-8')
+    assert done.start.prompt not in log
+    assert '任务：把 sid=42' not in log
+    assert '<commander-prompt-redacted>' in log
+
+
 def test_one_agent_per_book(base, corpus):
     """**同一本书**一次只跑一个 agent。两个 agent 写同一片盘是 SKILL 明禁的。"""
     gate = threading.Event()
 
-    def slow(argv, cwd, env, log):
+    def slow(invocation, env, log):
         gate.wait(10)
-        return 0
+        return _commander_result(invocation, env)
 
     rec = agent.start(base, '42', authorized=True, egress_authorized=True,
-                      spawn=slow)
+                      profiles=_PROFILES, spawn=slow)
     try:
         with pytest.raises(JobConflict):
             agent.start(base, '42', authorized=True, egress_authorized=True,
-                        spawn=_ok_spawn)
+                        profiles=_PROFILES, spawn=_ok_spawn)
     finally:
         gate.set()
         agent.wait(rec.run_id, 10)
@@ -357,14 +727,14 @@ def test_different_books_run_in_parallel(base, corpus):
     """
     gate = threading.Event()
 
-    def slow(argv, cwd, env, log):
+    def slow(invocation, env, log):
         gate.wait(10)
-        return 0
+        return _commander_result(invocation, env)
 
     first = agent.start(base, '42', authorized=True, egress_authorized=True,
-                        spawn=slow)
+                        profiles=_PROFILES, spawn=slow)
     second = agent.start(base, '43', authorized=True, egress_authorized=True,
-                         spawn=slow)
+                         profiles=_PROFILES, spawn=slow)
     try:
         live = {r.run_id for r in agent.records(base) if r.state == 'running'}
         assert {first.run_id, second.run_id} <= live, '两本书没能同时在跑'
@@ -377,21 +747,22 @@ def test_different_books_run_in_parallel(base, corpus):
 def test_the_concurrency_gate_holds(base, corpus, monkeypatch):
     """⭐ 并发闸：满了就抛 `AgentBusy`，**不是**悄悄多起一个。
 
-    ⚠ 闸判错的代价是钱：每个 agent 是一整个 claude 会话，还会再起 CLI 烧 DeepSeek。
+    ⚠ 闸判错的代价是钱：每本都有 Commander 会话，付费节点还会起 executor 会话。
     """
     monkeypatch.setattr(agent, 'MAX_CONCURRENT', 2)
     gate = threading.Event()
 
-    def slow(argv, cwd, env, log):
+    def slow(invocation, env, log):
         gate.wait(10)
-        return 0
+        return _commander_result(invocation, env)
 
     started = [agent.start(base, sid, authorized=True, egress_authorized=True,
-                           spawn=slow) for sid in ('42', '43')]
+                           profiles=_PROFILES, spawn=slow)
+               for sid in ('42', '43')]
     try:
         with pytest.raises(agent.AgentBusy):
             agent.start(base, '44', authorized=True, egress_authorized=True,
-                        spawn=_ok_spawn)
+                        profiles=_PROFILES, spawn=_ok_spawn)
     finally:
         gate.set()
         for rec in started:
@@ -406,14 +777,30 @@ def test_the_queue_starts_the_next_book_when_one_ends(base, corpus, monkeypatch)
     monkeypatch.setattr(agent, 'MAX_CONCURRENT', 1)
     gate = threading.Event()
 
-    def slow(argv, cwd, env, log):
+    def slow(invocation, env, log):
         gate.wait(10)
-        return 0
+        return _commander_result(invocation, env)
 
+    requested = PipelineAgentProfiles(
+        commander=_CODEX, executor_default=_CODEX,
+        executor_overrides={'stage5.write': _CLAUDE})
     view = agent.enqueue(base, ['42', '43'], authorized=True,
-                         egress_authorized=True, spawn=slow)
+                         egress_authorized=True, profiles=requested, spawn=slow)
     assert [r.start.sid for r in view.running] == ['42']
     assert [p.sid for p in view.pending] == ['43'] and view.pending[0].position == 1
+    assert view.pending[0].profiles.executor_overrides['stage5.write'] == _CLAUDE
+    # response model 也不得与内部 pending plan 共享可变 overrides。
+    view.pending[0].profiles.executor_overrides['stage5.write'] = _CODEX
+    requested.executor_overrides['stage5.write'] = _CODEX
+    # 入队后 registry/default 即使漂移也不得在出队时重解析。
+    monkeypatch.setattr(
+        agent, 'validate_pipeline_profiles',
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError('出队重解析了 profiles')))
+    monkeypatch.setattr(
+        agent, 'create_commander_driver',
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError('出队重建了 planner/driver')))
 
     gate.set()                                   # 第一本收尾 ⇒ 第二本应被带起来
     assert agent.wait(view.running[0].run_id, 10)
@@ -424,6 +811,9 @@ def test_the_queue_starts_the_next_book_when_one_ends(base, corpus, monkeypatch)
             break
         time.sleep(0.05)
     assert '43' in {r.start.sid for r in agent.records(base)}, '队列没有把下一本带起来'
+    second = next(r for r in agent.records(base) if r.start.sid == '43')
+    assert second.start.profiles is not None
+    assert second.start.profiles.executor_overrides['stage5.write'] == _CLAUDE
     for rec in agent.records(base):
         agent.wait(rec.run_id, 10)
 
@@ -435,15 +825,15 @@ def test_enqueue_reports_every_book_it_refused(base, corpus):
     """
     gate = threading.Event()
 
-    def slow(argv, cwd, env, log):
+    def slow(invocation, env, log):
         gate.wait(10)
-        return 0
+        return _commander_result(invocation, env)
 
     first = agent.start(base, '42', authorized=True, egress_authorized=True,
-                        spawn=slow)
+                        profiles=_PROFILES, spawn=slow)
     try:
         view = agent.enqueue(base, ['42', '43'], authorized=True,
-                             egress_authorized=True, spawn=slow)
+                             egress_authorized=True, profiles=_PROFILES, spawn=slow)
         assert [r.sid for r in view.rejected] == ['42']
         assert '43' in {r.start.sid for r in view.running}
         assert view.max_concurrent == agent.MAX_CONCURRENT
@@ -457,15 +847,15 @@ def test_batch_response_excludes_agents_that_were_already_running(base, corpus):
     """响应三分区只讲**本批**，不能把批外原本在跑的书混进 running。"""
     gate = threading.Event()
 
-    def slow(argv, cwd, env, log):
+    def slow(invocation, env, log):
         gate.wait(10)
-        return 0
+        return _commander_result(invocation, env)
 
     outside = agent.start(base, '41', authorized=True, egress_authorized=True,
-                          spawn=slow)
+                          profiles=_PROFILES, spawn=slow)
     try:
         view = agent.enqueue(base, ['42'], authorized=True,
-                             egress_authorized=True, spawn=slow)
+                             egress_authorized=True, profiles=_PROFILES, spawn=slow)
         assert [record.start.sid for record in view.running] == ['42']
         assert len(view.running) + len(view.pending) + len(view.rejected) == 1
     finally:
@@ -479,14 +869,14 @@ def test_batch_turns_an_api_job_launch_conflict_into_rejected(base, corpus):
     """从 pending 弹出后启动失败也必须落进本批 rejected，不能静默丢书。"""
     gate = threading.Event()
 
-    def slow(argv, cwd, env, log):
+    def slow(invocation, env, log):
         gate.wait(10)
-        return 0
+        return _commander_result(invocation, env)
 
     jobs.REGISTRY.acquire(jobs.active_key('42', 'stage1.partition'), 'api-job')
     try:
         view = agent.enqueue(base, ['42', '43'], authorized=True,
-                             egress_authorized=True, spawn=slow)
+                             egress_authorized=True, profiles=_PROFILES, spawn=slow)
         assert [record.start.sid for record in view.running] == ['43']
         assert view.pending == []
         assert [item.sid for item in view.rejected] == ['42']
@@ -504,12 +894,12 @@ def test_background_drain_keeps_a_late_api_conflict_pending(base, corpus, monkey
     monkeypatch.setattr(agent, 'MAX_CONCURRENT', 1)
     gate = threading.Event()
 
-    def slow(argv, cwd, env, log):
+    def slow(invocation, env, log):
         gate.wait(10)
-        return 0
+        return _commander_result(invocation, env)
 
     view = agent.enqueue(base, ['42', '43'], authorized=True,
-                         egress_authorized=True, spawn=slow)
+                         egress_authorized=True, profiles=_PROFILES, spawn=slow)
     jobs.REGISTRY.acquire(jobs.active_key('43', 'stage1.partition'), 'api-job')
     try:
         gate.set()
@@ -527,7 +917,12 @@ def test_api_job_refused_while_the_same_book_has_an_agent(base):
     jobs.AGENT_REGISTRY.acquire(jobs.agent_lock_key('42'), 'r-test')
     try:
         with pytest.raises(JobConflict):
-            jobs.start(base, 'stage0.approve', '42')
+            jobs.start(
+                base,
+                'stage0.approve',
+                '42',
+                ['--actor', '测试者', '--reason', '验证同书 agent 互斥'],
+            )
     finally:
         jobs.AGENT_REGISTRY.release(jobs.agent_lock_key('42'), 'r-test')
 
@@ -563,23 +958,28 @@ def test_ingest_is_still_refused_while_any_agent_runs(base):
         jobs.AGENT_REGISTRY.release(jobs.agent_lock_key('42'), 'r-test')
 
 
-def test_stop_terminates_the_process_tree(base):
-    """熄火是付费进程的必备闸：真起一个 sleep，真杀掉。"""
+def test_stop_delegates_only_to_the_driver_that_owns_the_run(base):
+    """进程树细节归 CommanderDriver；编排层只按精确 run_id 找 owner。"""
     agent.append(base, AgentRunEvent(run_id='r-stop', kind='started',
                                      ts=int(time.time()), start=_start()))
-    proc = subprocess.Popen(
-        ['python', '-c', 'import time; time.sleep(60)'],
-        creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0)
-        | getattr(subprocess, 'CREATE_NEW_PROCESS_GROUP', 0))
-    with agent._PROCS_LOCK:
-        agent._PROCS['r-stop'] = proc
+
+    class Owner:
+        def __init__(self):
+            self.calls = []
+
+        def cancel(self, run_id):
+            self.calls.append(run_id)
+            return True
+
+    owner = Owner()
+    with agent._COMMANDERS_LOCK:
+        agent._COMMANDERS['r-stop'] = owner
     try:
         agent.stop(base, 'r-stop')
-        assert proc.wait(timeout=10) is not None                # 真的死了
+        assert owner.calls == ['r-stop']
     finally:
-        agent._PROCS.pop('r-stop', None)
-        if proc.poll() is None:
-            proc.kill()
+        with agent._COMMANDERS_LOCK:
+            agent._COMMANDERS.pop('r-stop', None)
 
 
 def test_stop_without_a_live_process_is_a_terminal_state(base):

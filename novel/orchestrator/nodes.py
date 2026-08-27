@@ -32,8 +32,9 @@ from contracts.invariants import (
     CONDITIONAL_REQUIRED_FLAGS, FREE_ENTRIES, NODES, NODE_WRITE_EFFECTS,
     REQUIRED_PLACEHOLDER_PREFIX, VALUED_FLAGS, WRITE_EFFECTS,
 )
-from contracts.schema.orchestration import Step
+from contracts.schema.orchestration import AgentProfile, Step
 from novel import paths as novel_paths
+from novel.agent_capabilities import AgentProfileRefused, validate_profile
 from novel.errors import UnsupportedRunMode
 
 #: 仓根。`build_argv` 里的 `-m novel.cli` 要求 cwd 在这里。
@@ -50,6 +51,31 @@ CLI_MODULE = 'novel.cli'
 #: 之后**没有 `sys.exit`**，于是一份残缺产物退出码 0（F-087）。
 #: ⇒ 凡是写盘的付费节点，跑完自动追一次复检，两个结论并排显示。
 FOLLOW_CHECK_NOTE = '自动追跑：退出码 0 也可能是残缺产物'
+
+#: 已完成真实「profile → CLI driver → session loop → 代码提交」纵切的付费跑法。
+#:
+#: 节点名不够表达执行边界：``stage5.write --revise`` 与默认写作都付费，
+#: ``stage4.design --replan`` 也是同一 producer 的显式重采；反过来，``--dry-run`` /
+#: ``--revalidate`` 等 0 成本路径绝不能因为节点在名单里就拿到 executor profile。
+#: 因此唯一判据是 ``(node, flag token set)``，值只列**已经完整迁移**的组合。
+#: 带值参数只以 token 入表，值仍由 ``validate_run`` 与 producer 校验。
+EXECUTOR_PROFILED_RUNS: dict[str, tuple[frozenset[str], ...]] = {
+    'stage2.global': (frozenset(),),
+    'stage2.blueprint': (frozenset(),),
+    'stage4.design': (frozenset(), frozenset({'--replan'})),
+    'stage4.plan': (frozenset(),),
+    'stage5.write': (
+        frozenset(),
+        frozenset({'--chapters'}),
+        frozenset({'--revise'}),
+        frozenset({'--revise', '--chapters'}),
+    ),
+    'stage6.hook': (frozenset(),),
+    'stage6.semantic': (frozenset(),),
+    'stage7.rename': (frozenset(),),
+}
+
+EXECUTOR_PROFILED_NODES = tuple(EXECUTOR_PROFILED_RUNS)
 
 #: 各节点的“主操作”。其余 ``--chapters`` / ``--actor`` /
 #: ``--reason`` 都只是这些操作的参数，不参与互斥。Stage4A
@@ -338,6 +364,8 @@ def child_env(env: Mapping[str, str] | None = None) -> dict[str, str]:
 
 def build_argv(node: str, sid: str | None, flags: Sequence[str] = (), *,
                base: str | os.PathLike[str],
+               executor_profile: AgentProfile | None = None,
+               egress_authorized: bool | None = None,
                placeholders: bool = False) -> list[str]:
     """那条命令。**preview 与真跑共用这一个函数**（`R-11.8`）。
 
@@ -360,6 +388,9 @@ def build_argv(node: str, sid: str | None, flags: Sequence[str] = (), *,
             filled += [flag, placeholder_for(flag)]
         flags = filled
     tokens = validate_run(node, flags, allow_placeholders=placeholders)
+    executor_profile = resolve_executor_profile(node, flags, executor_profile)
+    egress_authorized = resolve_executor_egress(
+        executor_profile, egress_authorized)
     if sid is None:
         if node != 'stage0.remove' or '--source' not in tokens:
             raise UnsupportedRunMode(
@@ -371,6 +402,18 @@ def build_argv(node: str, sid: str | None, flags: Sequence[str] = (), *,
     if sid is not None:
         argv.append(sid)
     argv += list(flags)
+    if executor_profile is not None:
+        if executor_profile.execution_mode is None:  # pragma: no cover —— registry 后置条件
+            raise AssertionError('resolved executor_profile 缺 execution_mode')
+        argv += [
+            '--executor-driver', executor_profile.driver,
+            '--executor-model', executor_profile.model,
+            '--executor-effort', executor_profile.reasoning_effort,
+            '--executor-mode', executor_profile.execution_mode,
+        ]
+        if egress_authorized:
+            # 运行控制参数，不属于 NodeSpec flag：它不改变节点身份、贵贱或写盘语义。
+            argv.append('--allow-egress')
     argv += ['--base', os.path.abspath(os.fspath(base))]
     if is_paid(node, flags):
         # ⚠ **付费跑法在命令行上必须带 `--yes`**（`Q-10`：花钱前必须人确认）。
@@ -440,8 +483,48 @@ def step_label(node: str, flags: Sequence[str] = ()) -> str:
     return f'{label} {" ".join(tokens)}' if tokens else label
 
 
+def resolve_executor_profile(
+    node: str, flags: Sequence[str], profile: AgentProfile | None,
+) -> AgentProfile | None:
+    """校验并物化直接节点 executor；迁移未完成的组合关闭式拒绝。"""
+    if profile is None:
+        return None
+    if node not in EXECUTOR_PROFILED_NODES:
+        raise UnsupportedRunMode(
+            f'{node} 尚未接入 executor agent；不能接受 profile 后静默回退 DeepSeek')
+    tokens = frozenset(flag_tokens(flags))
+    if tokens not in EXECUTOR_PROFILED_RUNS[node]:
+        supported = [sorted(item) for item in EXECUTOR_PROFILED_RUNS[node]]
+        raise UnsupportedRunMode(
+            f'{node} 的 executor agent 尚未迁移 flag 组合 {sorted(tokens)}；'
+            f'当前只接受 {supported}，拒绝静默回退 DeepSeek')
+    if not is_paid(node, flags):  # pragma: no cover —— 当前空 flags 纵切均为付费
+        raise UnsupportedRunMode('executor_profile 只属于真正付费生成步，0 成本恢复步不接 agent')
+    try:
+        return validate_profile(profile, role='executor')
+    except AgentProfileRefused as exc:
+        raise UnsupportedRunMode(f'executor_profile 不可执行：{exc}') from exc
+
+
+def resolve_executor_egress(
+    profile: AgentProfile | None, egress_authorized: bool | None,
+) -> bool | None:
+    """把请求默认收成执行快照；正文外发授权不能脱离 executor 存在。"""
+    if profile is None:
+        if egress_authorized is None or egress_authorized is False:
+            return None
+        raise UnsupportedRunMode(
+            '--allow-egress 只授权显式 executor；没有 executor_profile 时不能伪造外发授权')
+    if type(egress_authorized) is not bool:
+        raise UnsupportedRunMode(
+            'executor_profile 必须显式给 bool 正文外发授权；预览可给 false，执行必须为 true')
+    return egress_authorized
+
+
 def _step(node: str, sid: str | None, flags: Sequence[str], *, base: str | os.PathLike[str],
           note: str | None = None,
+          executor_profile: AgentProfile | None = None,
+          egress_authorized: bool | None = None,
           placeholders: bool = False) -> Step:
     # ⚠ **一个 Step 的四格必须出自同一份 flags。** argv 补了占位符而 `paid`/`writes`/
     #   `label` 还按原 flags 算，就是同一条命令的第二个落点（`R-11.8` 要防的那件事）
@@ -455,18 +538,29 @@ def _step(node: str, sid: str | None, flags: Sequence[str], *, base: str | os.Pa
                          for f in missing)
         said = f'必填项已渲染成占位符，执行前逐个替换：{said}'
         note = f'{note}\n    ⚠ {said}' if note else said
+    resolved_profile = resolve_executor_profile(node, filled, executor_profile)
+    resolved_egress = resolve_executor_egress(
+        resolved_profile, egress_authorized)
     return Step(
-        argv=build_argv(node, sid, filled, base=base, placeholders=placeholders),
+        argv=build_argv(
+            node, sid, filled, base=base,
+            executor_profile=resolved_profile,
+            egress_authorized=resolved_egress,
+            placeholders=placeholders),
         cwd=str(REPO_ROOT),
         label=step_label(node, filled),
         paid=is_paid(node, filled),
         writes=write_effect(node, filled),
         note=note,
+        executor_profile=resolved_profile,
+        egress_authorized=resolved_egress,
     )
 
 
 def build_steps(node: str, sid: str | None, flags: Sequence[str] = (), *,
                 base: str | os.PathLike[str],
+                executor_profile: AgentProfile | None = None,
+                egress_authorized: bool | None = None,
                 follow_check: bool = True,
                 placeholders: bool = False) -> list[Step]:
     """一个作业要依次跑哪几条命令。**纯函数、无副作用。**
@@ -480,7 +574,10 @@ def build_steps(node: str, sid: str | None, flags: Sequence[str] = (), *,
     ⚠ 只在那个节点**真的接受** `--check-only` 时才追（stage2.global 就不接受）——
     追一条它拒收的命令，作业会在第二步无缘无故失败，而第一步可能已经花过钱了。
     """
-    first = _step(node, sid, flags, base=base, placeholders=placeholders)
+    first = _step(
+        node, sid, flags, base=base, executor_profile=executor_profile,
+        egress_authorized=egress_authorized,
+        placeholders=placeholders)
     steps = [first]
     if (follow_check and first.writes
             and '--check-only' in NODES[node].flags

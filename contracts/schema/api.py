@@ -32,6 +32,12 @@ from pydantic import Field, field_validator, model_validator
 
 from contracts.invariants import (
     ADDRESS_CONTEXT,
+    AGENT_EXECUTOR_NODES,
+    AgentAvailability,
+    AgentDriver,
+    AgentExecutionMode,
+    AgentReasoningEffort,
+    AgentRole,
     ANCHOR_COVERAGE_STATE,
     ANCHOR_COVERAGE_WARN,
     APPROVAL_GATES,
@@ -71,8 +77,9 @@ from contracts.schema.base import FrozenModel, StrictModel
 from contracts.schema.common import Finding, HashBoundHumanApproval
 from contracts.schema.evaluation import GlobalReviewItem
 from contracts.schema.orchestration import (
-    AgentRunRecord, ArtifactCondition, ArtifactState, Freshness, FreshnessReason,
-    JobRecord, JobState, NovelOverview, QueueRun,
+    AgentProfile, AgentRunRecord, ArtifactCondition, ArtifactState, Freshness,
+    FreshnessReason, JobRecord, JobState, NovelOverview, PipelineAgentProfiles,
+    QueueRun,
 )
 from contracts.schema.stage0 import Stage0RevisionOrigin, Stage0Warning
 from contracts.schema.stage2 import (
@@ -447,6 +454,14 @@ class PreviewRequest(StrictModel):
     node: str = Field(min_length=1)
     flags: list[str] = Field(default_factory=list)
 
+    #: 直接节点作业只需要 executor。``None`` 为旧客户端兼容面；真正启动前由
+    #: builder 按服务端 registry 解析默认并把 resolved profile 留档。
+    executor_profile: AgentProfile | None = None
+
+    #: 正文外发授权与付费确认相互独立。请求层默认未授权；无 profile 的 legacy
+    #: 路径会在 builder 边界归一成 ``None``，不得把这个默认值伪造成历史快照。
+    egress_authorized: bool = False
+
 
 class QueueCreateRequest(StrictModel):
     """``POST /api/queues`` and ``/preview`` request body."""
@@ -492,6 +507,10 @@ class AgentRunRequest(StrictModel):
     authorized: bool = False
     egress_authorized: bool = True
 
+    #: ``None`` 只为旧客户端保留请求兼容形状；当前服务端默认也是
+    #: ``null``，preview/start 均会关闭式拒绝，绝不拿 capability 首项代选。
+    profiles: PipelineAgentProfiles | None = None
+
 
 class AgentBatchRequest(StrictModel):
     """`POST /api/agent/runs/batch` 的请求体：**一次交 N 本**，超出并发闸的排队。
@@ -505,6 +524,7 @@ class AgentBatchRequest(StrictModel):
     sids: list[str] = Field(min_length=1)
     authorized: bool = False
     egress_authorized: bool = True
+    profiles: PipelineAgentProfiles | None = None
 
 
 class AgentRunPreview(StrictModel):
@@ -514,6 +534,83 @@ class AgentRunPreview(StrictModel):
     prompt: str = Field(min_length=1)
     authorized: bool
     egress_authorized: bool
+
+    #: 服务端关闭式校验并物化 execution mode 后的完整选择。当前默认仍为 ``null``，
+    #: 因此成功 preview 必然有这份快照；不能拿 capability 数组第一项替用户猜。
+    profiles: PipelineAgentProfiles
+
+
+class AgentModelCapability(FrozenModel):
+    """一个稳定 model id 的可选 effort / execution mode。
+
+    ``id`` 进入 argv 与审计账；``label`` 只负责界面显示。二者分开，避免改文案
+    破坏重放，也避免把可升级的供应商别名当成稳定模型身份。
+    """
+
+    id: str = Field(min_length=1)
+    label: str = Field(min_length=1)
+    reasoning_efforts: list[AgentReasoningEffort] = Field(min_length=1)
+    execution_modes: list[AgentExecutionMode] = Field(default_factory=list)
+
+    @model_validator(mode='after')
+    def _options_are_unique(self) -> AgentModelCapability:
+        if len(self.reasoning_efforts) != len(set(self.reasoning_efforts)):
+            raise ValueError('reasoning_efforts 不得重复')
+        if len(self.execution_modes) != len(set(self.execution_modes)):
+            raise ValueError('execution_modes 不得重复')
+        return self
+
+
+class AgentDriverCapability(FrozenModel):
+    """一个本机 CLI driver 的静态能力与当次只读探针结果。"""
+
+    id: AgentDriver
+    #: 只作能力元数据；真正选择仍以 ``AgentProfile.driver`` 为唯一键。
+    provider: str = Field(min_length=1)
+    label: str = Field(min_length=1)
+    roles: list[AgentRole] = Field(min_length=1)
+    availability: AgentAvailability
+
+    #: 人读探针说明。``ready`` 也会明确写出「只验 CLI/版本，未发模型请求」。
+    availability_reason: str = Field(min_length=1)
+
+    #: ``--version`` 成功时的首个非空输出行；缺失或无法探测时为 ``None``。
+    version: str | None = Field(default=None, min_length=1)
+    models: list[AgentModelCapability] = Field(min_length=1)
+
+    @model_validator(mode='after')
+    def _domains_are_unique(self) -> AgentDriverCapability:
+        if len(self.roles) != len(set(self.roles)):
+            raise ValueError('roles 不得重复')
+        ids = [model.id for model in self.models]
+        if len(ids) != len(set(ids)):
+            raise ValueError(f'driver={self.id!r} 的 model id 不得重复')
+        if self.availability == 'missing' and self.version is not None:
+            raise ValueError('CLI=missing 时不得声称探测到 version')
+        return self
+
+
+class AgentCapabilitiesResponse(StrictModel):
+    """``GET /api/agent/capabilities``：前端 agent 选择器的唯一数据源。"""
+
+    drivers: list[AgentDriverCapability] = Field(min_length=1)
+    executor_nodes: list[str] = Field(min_length=1)
+
+    #: 服务端已冻结的双角色默认；``None`` 明确表示迁移期尚无 provider-neutral
+    #: 默认，调用方必须显式选择，不能拿 capability 数组第一项猜。Phase7 切换唯一
+    #: agent 默认时才会变为非空。
+    default_profiles: PipelineAgentProfiles | None = None
+
+    @model_validator(mode='after')
+    def _drivers_are_unique(self) -> AgentCapabilitiesResponse:
+        ids = [driver.id for driver in self.drivers]
+        if len(ids) != len(set(ids)):
+            raise ValueError('driver id 不得重复')
+        if self.executor_nodes != list(AGENT_EXECUTOR_NODES):
+            raise ValueError(
+                'executor_nodes 必须按 AGENT_EXECUTOR_NODES 的完整顺序发布，'
+                '不能让前端再维护一份节点清单')
+        return self
 
 
 class AgentRunList(StrictModel):
@@ -600,6 +697,43 @@ class StructureApprovalView(FrozenModel):
         return self
 
 
+class WritingApprovalRequest(HashBoundHumanApproval):
+    """对当前整本 Stage5 写作主体作出的、可归责且 hash-bound 的授权请求。"""
+
+
+class WritingApprovalDecision(WritingApprovalRequest):
+    """服务端已经落盘的一次写作授权；决定时间只由服务端填写。"""
+
+    decided_at: str = Field(min_length=1)
+
+
+class WritingApprovalView(FrozenModel):
+    """当前写作主体与不可擦除的 typed 授权历史。
+
+    ``available`` 回答当前主体能否在已通过 Stage4 结构闸的前提下完整计算；
+    真正能否启动写作仍由 ``ApprovalDoc.writing`` 回答。旧 v5 盘上记录可能
+    只有 ``writing=true`` 而没有 typed 历史，因此这里允许空历史，不能伪造
+    actor/reason 替旧记录补签。
+    """
+
+    available: bool = False
+    current_subject_sha256: str | None = Field(
+        default=None, pattern=r'^[0-9a-f]{64}$')
+    current_decision: WritingApprovalDecision | None = None
+    history: list[WritingApprovalDecision] = Field(default_factory=list)
+
+    @model_validator(mode='after')
+    def _subject_and_current_decision_agree(self) -> WritingApprovalView:
+        if self.available != (self.current_subject_sha256 is not None):
+            raise ValueError('writing available 与 current subject 必须同进同出')
+        if self.current_decision is not None:
+            if self.current_decision.subject_sha256 != self.current_subject_sha256:
+                raise ValueError('当前写作授权必须绑定当前 subject')
+            if not self.history or self.current_decision != self.history[-1]:
+                raise ValueError('current_decision 必须是 writing history 最后一项')
+        return self
+
+
 class ApprovalDoc(StrictModel):
     v: Literal[4] = 4
     sid: str = Field(min_length=1)
@@ -607,6 +741,7 @@ class ApprovalDoc(StrictModel):
     seen: dict[SeenKey, bool]
     writing: bool = False
     structure: StructureApprovalView
+    writing_approval: WritingApprovalView = Field(default_factory=WritingApprovalView)
     spawns: dict[GateKey, list[ApprovalAction]] = Field(default_factory=dict)
 
     @model_validator(mode='after')

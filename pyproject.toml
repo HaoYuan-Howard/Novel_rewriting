@@ -45,7 +45,7 @@ build-backend = "setuptools.build_meta"
 #   是运行时 `ModuleNotFoundError`，离根因很远。
 #   实测漏过一次：F1 把 `novel.stages.stage6` 建出来了而这张表没跟上，F2 补回来。
 packages = ["contracts", "contracts.judges", "contracts.schema",
-            "novel", "novel.api", "novel.api.routes", "novel.cli", "novel.core",
+            "novel", "novel.agents", "novel.commanders", "novel.api", "novel.api.routes", "novel.cli", "novel.core",
             "novel.llm", "novel.orchestrator", "novel.quality", "novel.report", "novel.stages",
             "novel.stages.stage0", "novel.stages.stage1",
             "novel.stages.stage2", "novel.stages.stage3", "novel.stages.stage4",

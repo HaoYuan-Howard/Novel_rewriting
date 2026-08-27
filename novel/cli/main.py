@@ -17,6 +17,7 @@ main.py —— `python -X utf8 -u -m novel.cli <子命令> …`
     reconcile                       启动时把「运行中」一律改判「不知道」
     doctor --llm-transport          0 成本探测 DeepSeek DNS/TCP/TLS/HTTP；不发正文/密钥
     response-repair <sid>           0 成本：提交/放弃一份隔离的结构化响应修复稿
+    approval <show|template|apply>  0 成本：查看/生成/提交正式审批 JSON
 
 ⚠ **这张表就是 `--help` 打印出来的那一份**（argparse 的 `description` 直接取本 docstring），
 而操作规程让执行者第一步就跑 `--help`。少列一条 = 那条路对读它的人不存在。
@@ -36,20 +37,25 @@ main.py —— `python -X utf8 -u -m novel.cli <子命令> …`
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 import time
 import traceback
 from collections.abc import Callable, Sequence
+from pathlib import Path
+
+from pydantic import ValidationError
 
 from contracts.invariants import (
     FREE_ENTRIES, NODES, PAID_FLAGS, PROGRESS_PHASES, STAGES, VALUED_FLAGS,
     stage2_review_required,
 )
-from contracts.schema.orchestration import ProgressEvent
-from novel import paths, prov, run_identity
+from contracts.schema.orchestration import AgentProfile, ProgressEvent
+from novel import commander_context, paths, prov, run_identity
 from novel.cli import exit_codes as X
 from novel.errors import (
-    ApprovalRequired, ArtifactUnreadable, RefusedByStructure, TerminalState, UpstreamMissing,
+    ApprovalRequired, ArtifactUnreadable, RefusedByStructure, TerminalState,
+    UnsupportedRunMode, UpstreamMissing,
 )
 from novel.orchestrator import beacon
 from novel.orchestrator import nodes as N
@@ -104,6 +110,19 @@ def _parser() -> argparse.ArgumentParser:
             else:
                 p.add_argument(f, action='store_true',
                                help=FREE_ENTRIES.get(f) or PAID_FLAGS.get(f))
+        # executor profile 是运行控制面，不是 NodeSpec flag：它不改变节点身份、贵贱或
+        # 写盘语义，也绝不能混进 ``_flags_of``。可选组合只由 capability registry 校验。
+        p.add_argument('--executor-driver', default=None,
+                       help='executor driver 精确 id（与 model/effort 成组）')
+        p.add_argument('--executor-model', default=None,
+                       help='executor model 精确 id（不是展示 label）')
+        p.add_argument('--executor-effort', default=None,
+                       help='该 model capability 发布的 reasoning effort')
+        p.add_argument('--executor-mode', default=None,
+                       help='可选 execution mode；省略时由 registry 物化普通模式')
+        p.add_argument(
+            '--allow-egress', action='store_true',
+            help='独立确认允许 executor 向所选 provider 外发小说正文')
 
     r = sub.add_parser('run', help='真跑一个节点')
     with_run_args(r)
@@ -167,6 +186,31 @@ def _parser() -> argparse.ArgumentParser:
     rr.add_argument('--decline', action='store_true',
                     help='明确放弃本次修复额度；重跑原节点后进入下一采')
 
+    approval = sub.add_parser(
+        'approval', help='0 成本审批 façade：只读 show/template 与 typed apply')
+    approval_sub = approval.add_subparsers(dest='approval_action', required=True)
+
+    approval_show = approval_sub.add_parser('show', help='只读输出当前审批公开视图')
+    approval_show.add_argument('sid')
+    approval_show.add_argument('--base', required=True)
+
+    approval_template = approval_sub.add_parser(
+        'template', help='只读生成绑定当前 subject 的审批模板')
+    approval_template.add_argument('surface', choices=('structure', 'writing'))
+    approval_template.add_argument('sid')
+    approval_template.add_argument('--base', required=True)
+    approval_template.add_argument('--actor', required=True)
+    approval_template.add_argument('--reason', required=True)
+
+    approval_apply = approval_sub.add_parser(
+        'apply', help='提交 typed 审批 JSON；只写审批账，不启动作业')
+    approval_apply.add_argument('surface', choices=('structure', 'writing'))
+    approval_apply.add_argument('sid')
+    approval_apply.add_argument('--base', required=True)
+    approval_apply.add_argument(
+        '--input', required=True,
+        help='模板 JSON 文件；传 - 时从 stdin 读取（正文不进入 argv）')
+
     mk = sub.add_parser('mark', help='进度信标打点（0 成本，恒 exit 0）')
     mk.add_argument('sid')
     mk.add_argument('--node', required=True, choices=sorted(NODES))
@@ -195,6 +239,28 @@ def _flags_of(a: argparse.Namespace) -> list[str]:
     return out
 
 
+def _executor_profile_of(a: argparse.Namespace) -> AgentProfile | None:
+    """把四个 CLI 控制参数收成一份 profile；半份选择关闭式拒绝。"""
+    values = {
+        'driver': getattr(a, 'executor_driver', None),
+        'model': getattr(a, 'executor_model', None),
+        'reasoning_effort': getattr(a, 'executor_effort', None),
+        'execution_mode': getattr(a, 'executor_mode', None),
+    }
+    if not any(value is not None for value in values.values()):
+        return None
+    missing = [name for name in ('driver', 'model', 'reasoning_effort')
+               if not values[name]]
+    if missing:
+        raise UnsupportedRunMode(
+            'executor profile 必须同时给 --executor-driver / --executor-model / '
+            f'--executor-effort；缺少 {missing}')
+    try:
+        return AgentProfile(**values)  # type: ignore[arg-type]
+    except ValueError as exc:
+        raise UnsupportedRunMode(f'executor profile 形状无效：{exc}') from exc
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # 节点派发 —— 取值面要全，能不能跑是另一件事
 # ─────────────────────────────────────────────────────────────────────────────
@@ -213,6 +279,43 @@ def runnable_stages() -> frozenset[str]:
 
 def _dispatch(node: str, ctx: RunContext, flags: list[str]) -> int:
     """跑一个当前节点；`NODES` 与 `_runners` 的覆盖关系由契约测试钉住。"""
+    # 显式 profile 是不可降级的执行决定：在进入任何 stage runner、尤其是
+    # ``_llm_client`` 之前统一分流到该节点自己的短生命周期 agent。
+    if profile := getattr(ctx, 'executor_profile', None):
+        ctx.executor_profile = N.resolve_executor_profile(node, flags, profile)
+        from novel.node_agents import build_node_agent
+
+        kwargs: dict[str, object] = {}
+        if node == 'stage5.write':
+            # Stage5 的两个付费入口与定向章集都是业务身份的一部分；通用
+            # executor 分流发生在 `_run_stage5` 之前，必须在这里显式交给
+            # Stage5WriteAgent，不能把 flag 吞掉后误跑默认全书写作。
+            kwargs = {
+                'chapters': _valued(flags, '--chapters'),
+                'revise': '--revise' in N.flag_tokens(flags),
+            }
+        result = build_node_agent(ctx, **kwargs).run()
+        artifact = result.artifact
+        report = result.report
+        from contracts.schema.report import CheckReport
+        from contracts.schema.stage4 import EvidenceBinding
+        if isinstance(report, CheckReport):
+            print(render(report))
+        passed = result.passed
+        if isinstance(artifact, EvidenceBinding):
+            if artifact.status != 'infeasible':
+                raise RefusedByStructure(
+                    'stage4.plan agent 返回了未编译的 bound EvidenceBinding')
+            passed = False
+            print('  ✗ Stage4B 已落盘 typed infeasible 证据结论，'
+                  '未生成或覆盖正式计划')
+            print(f'    {artifact.reason_kind} · {artifact.reason}')
+            print('  → 人工审阅后显式预览并批准 '
+                  '`stage4.design --replan`；系统不会自动生成第二候选')
+        print(
+            f'  {"✓" if passed else "✗"} {node} executor agent 已提交并终验'
+            f'{"正式产物" if passed else "落盘负结论"}（{result.turns} turn）')
+        return X.OK if passed else X.CHECK_FAILED
     return _runners()[NODES[node].stage](ctx, flags)
 
 
@@ -390,9 +493,15 @@ def _run_stage6(ctx: RunContext, flags: list[str]) -> int:
         if '--dry-run' in tokens:
             system, user, _art, _up, aliases = semantic.build_prompt(ctx)
             for role in ('A', 'B'):
-                exact = system + semantic.JUDGE_ROLE_SUFFIX[role]
-                print(f'── anonymous editor {role} system（{len(exact)} 字）──\n{exact}')
-            print(f'\n── user（{len(user)} 字；{len(aliases)} 份去重文本）──\n{user}')
+                exact_system, exact_user = semantic.judge_request(
+                    system, user, role)
+                print(
+                    f'── anonymous editor {role} system'
+                    f'（{len(exact_system)} 字）──\n{exact_system}')
+                print(
+                    f'\n── anonymous editor {role} user'
+                    f'（{len(exact_user)} 字；{len(aliases)} 份去重文本）──\n'
+                    f'{exact_user}')
             return X.OK
         artifact, report = semantic.run_semantic(
             ctx, _llm_client(ctx))
@@ -917,11 +1026,14 @@ def _valued(flags: list[str], name: str) -> str | None:
 
 def _cmd_preview(a: argparse.Namespace) -> int:
     flags = _flags_of(a)
+    executor_profile = _executor_profile_of(a)
     # ⚠ `placeholders=True` **只在这一趟**：preview 要摊开的是一条形状完整的命令。
     # 缺必填项时渲染占位符并标注，而不是摊开一条真跑必然 exit 2 的半截命令
     # （2026-08-16 复盘 §六.1）。占位符本身在真跑那一趟仍会被 `validate_run` 拒。
     for i, step in enumerate(N.build_steps(a.node, a.sid, flags,
                                            base=a.base,
+                                           executor_profile=executor_profile,
+                                           egress_authorized=bool(a.allow_egress),
                                            placeholders=True)):
         print(f'[{i + 1}] {step.label}')
         print(f'    $ {N.shell_line(step.argv)}')
@@ -939,6 +1051,49 @@ def _cmd_run(a: argparse.Namespace) -> int:
     # （该节点不接受这条跑法）先被 `is_paid` 倒向“会花钱”，显示成“加 --yes”；
     # 真加了又会落到默认付费分支。入口先走与 preview 共用的节点校验。
     N.validate_run(a.node, flags)
+    executor_profile = N.resolve_executor_profile(
+        a.node, flags, _executor_profile_of(a))
+    egress_authorized = N.resolve_executor_egress(
+        executor_profile, bool(a.allow_egress))
+    parent_context = None
+    if (
+        commander_context.COMMANDER_RUN_ID_ENV in os.environ
+        or commander_context.COMMANDER_CONTRACT_SHA256_ENV in os.environ
+    ):
+        if a.sid is None:
+            raise TerminalState('Commander contract 下的 node run 必须显式给已有书 sid')
+        parent_context = commander_context.load_from_environment(a.base, a.sid)
+        assert parent_context is not None
+        commander_context.require_execution_authorized(parent_context)
+        tokens = frozenset(N.flag_tokens(flags))
+        supported = N.EXECUTOR_PROFILED_RUNS.get(a.node, ())
+        if tokens in supported:
+            expected_profile = N.resolve_executor_profile(
+                a.node, flags, parent_context.executor_profile(a.node))
+        else:
+            if N.is_paid(a.node, flags):
+                raise TerminalState(
+                    f'Commander 不允许付费跑法 {a.node} {sorted(tokens)} '
+                    '落回 legacy LLM；该组合尚未接入 executor agent')
+            expected_profile = None
+        if executor_profile != expected_profile:
+            raise TerminalState(
+                '子 CLI executor profile 与 Commander started 事件的 resolved 选择不一致；'
+                '拒绝静默换 driver/model/effort')
+        expected_egress = True if expected_profile is not None else None
+        if egress_authorized != expected_egress:
+            raise TerminalState(
+                '子 CLI egress 控制与 Commander started 事件及本 Step 的角色不一致')
+        inherited = run_identity.inherited_run_id()
+        if inherited != parent_context.run_id:
+            raise TerminalState(
+                f'子 CLI NOVEL_RUN_ID={inherited!r} 与 Commander run '
+                f'{parent_context.run_id!r} 不一致')
+    if executor_profile is not None and egress_authorized is not True:
+        raise ApprovalRequired(
+            'executor 会向所选 provider 外发小说正文；正文外发授权必须显式加 '
+            '--allow-egress。'
+            '这与 --yes 付费确认是两份独立授权')
     paid = N.is_paid(a.node, flags)
     if paid and not a.yes:
         raise ApprovalRequired(
@@ -967,6 +1122,7 @@ def _cmd_run(a: argparse.Namespace) -> int:
         repair_rejected_responses=(
             repair_mode == 'agent'
             or (paid and a.node == 'stage2.blueprint')),
+        executor_profile=executor_profile,
         run_id=a.run_id)
     # stdout 有 JSON 模板等机读消费者；身份打 stderr，人在终端仍能第一时间看到。
     # 测试里的最小 fake context 可能不带新字段，生产 RunContext 则结构上必有。
@@ -1235,6 +1391,53 @@ def _cmd_response_repair(a: argparse.Namespace) -> int:
     return X.OK
 
 
+def _approval_input(path: str) -> str:
+    """读正式审批请求；支持 stdin，避免大 JSON 与隐私内容进入 argv。"""
+    try:
+        return sys.stdin.read() if path == '-' else Path(path).read_text(encoding='utf-8')
+    except (OSError, UnicodeDecodeError) as exc:
+        raise TerminalState(f'审批输入不可读：{exc}') from exc
+
+
+def _cmd_approval(a: argparse.Namespace) -> int:
+    """可审计审批 CLI：template/show 只读，apply 只落审批账且绝不拉作业。"""
+    from contracts.schema.api import StructureApprovalRequest, WritingApprovalRequest
+    from novel.orchestrator import approvals
+
+    if a.approval_action == 'show':
+        result = approvals.get(a.base, a.sid)
+    elif a.approval_action == 'template':
+        try:
+            if a.surface == 'structure':
+                result = approvals.structure_template(
+                    a.base, a.sid, actor=a.actor, reason=a.reason)
+            else:
+                result = approvals.writing_template(
+                    a.base, a.sid, actor=a.actor, reason=a.reason)
+        except ValidationError as exc:
+            raise TerminalState(
+                f'{a.surface} 审批模板身份不符合 typed 契约：{exc}') from exc
+    else:
+        raw = _approval_input(a.input)
+        model = (
+            StructureApprovalRequest
+            if a.surface == 'structure'
+            else WritingApprovalRequest
+        )
+        try:
+            request = model.model_validate_json(raw)
+        except ValidationError as exc:
+            raise TerminalState(f'{a.surface} 审批 JSON 不符合 typed 契约：{exc}') from exc
+        if a.surface == 'structure':
+            result = approvals.approve_structure(a.base, a.sid, request)
+        else:
+            # Commander 只有这一条入口：request 类型保证 actor/reason/full current SHA
+            # 一个都不能省；旧 UI 的空 body 兼容缝不暴露在 CLI。
+            result = approvals.approve_writing(a.base, a.sid, request)
+    print(result.model_dump_json(indent=2))
+    return X.OK
+
+
 def _cmd_mark(a: argparse.Namespace) -> int:
     """进度信标打点：往 `_service/agent_progress.jsonl` 追加一行。**0 成本，恒 exit 0**。
 
@@ -1269,6 +1472,7 @@ _CMDS = {'run': _cmd_run, 'preview': _cmd_preview,
          'queue-resume': _cmd_queue_resume,
          'jobs': _cmd_jobs, 'reconcile': _cmd_reconcile, 'doctor': _cmd_doctor,
          'response-repair': _cmd_response_repair,
+         'approval': _cmd_approval,
          'mark': _cmd_mark}
 
 

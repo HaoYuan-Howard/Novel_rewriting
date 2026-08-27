@@ -6,6 +6,7 @@
  */
 import type { Api } from '@/types/api'
 import type {
+  AgentCapabilitiesResponse,
   AgentQueueView,
   AgentRunLogChunk,
   AgentRunPreview,
@@ -169,6 +170,8 @@ function adaptJob(record: BackendJobRecord, sidOverride?: string): Job {
     finished: record.ended,
     sid: sidOverride ?? record.start.sid,
     ordinal: null,
+    executor_profile: record.start.executor_profile,
+    egress_authorized: record.start.egress_authorized,
   }
 }
 
@@ -178,11 +181,15 @@ function adaptPreview(start: BackendJobStart): JobPreview {
     paid: start.paid,
     label: labelOf(start),
     kind: start.node,
+    executor_profile: start.executor_profile,
+    egress_authorized: start.egress_authorized,
     steps: start.steps.map((step) => ({
       label: step.label,
       paid: step.paid,
       writes: step.writes,
       argv: step.argv.map(quoteArg).join(' '),
+      executor_profile: step.executor_profile,
+      egress_authorized: step.egress_authorized,
     })),
   }
 }
@@ -447,6 +454,7 @@ export const realApi: Api = {
     adaptJob(await post<BackendJobRecord>('/jobs', backendJobRequest(req))),
 
   /* agent 代跑：响应已是视图形状（snake_case 原样），数据缝不做适配 */
+  getAgentCapabilities: () => get<AgentCapabilitiesResponse>('/agent/capabilities'),
   previewAgentRun: (req) => post<AgentRunPreview>('/agent/runs/preview', req),
   startAgentRun: (req) => post<AgentRunRecord>('/agent/runs', req),
   getAgentRuns: (sid) => get<AgentRunsResponse>('/agent/runs?sid=' + encodeURIComponent(sid)),

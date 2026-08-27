@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends
 
 from contracts.schema.api import (
     ApprovalBackfillResult, ApprovalDoc, GateKey, SeenKey,
-    StructureApprovalRequest,
+    StructureApprovalRequest, WritingApprovalRequest,
 )
 from novel.api.deps import checked_sid, get_base
 from novel.orchestrator import approvals
@@ -52,10 +52,16 @@ def mark_seen(
 
 
 @router.post('/writing', response_model=ApprovalDoc)
-def begin_writing(
+def approve_writing(
+    request: WritingApprovalRequest | None = None,
     sid: str = Depends(checked_sid), base: str = Depends(get_base),
 ) -> ApprovalDoc:
-    return approvals.begin_writing(base, sid)
+    """新 typed body 可审计；空 body 只兼容既有 UI，二者都不启动付费作业。"""
+    return (
+        approvals.begin_writing(base, sid)
+        if request is None
+        else approvals.approve_writing(base, sid, request)
+    )
 
 
 @router.post('/reset', response_model=ApprovalDoc)

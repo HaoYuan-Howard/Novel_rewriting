@@ -19,12 +19,44 @@ import threading
 import pytest
 
 from contracts.invariants import NODES
-from contracts.schema.orchestration import JobEvent, JobStart, Step
+from contracts.schema.orchestration import AgentProfile, JobEvent, JobStart, Step
 from novel import run_identity
+from novel.errors import ApprovalRequired, UnsupportedRunMode
 from novel.orchestrator import beacon
 from novel.orchestrator import jobs as J
+from novel.orchestrator import nodes as N
 
 SID = '7615069877019300633'
+EXECUTOR_PROFILE = AgentProfile(
+    driver='codex',
+    model='gpt-5.6-sol',
+    reasoning_effort='high',
+)
+
+
+def _executor_flags(node: str, tokens: frozenset[str]) -> list[str]:
+    """把 token-only 运行矩阵物化成真正可交给 argv builder 的 flags。"""
+    ordered = [flag for flag in NODES[node].flags if flag in tokens]
+    assert set(ordered) == set(tokens), f'{node} 的 executor token 未登记进 NodeSpec.flags'
+    out: list[str] = []
+    for flag in ordered:
+        out += [flag, '1,3'] if flag == '--chapters' else [flag]
+    return out
+
+
+_FOLLOW_CHECK_EXECUTORS = frozenset({
+    'stage2.blueprint', 'stage4.plan', 'stage6.hook', 'stage7.rename',
+})
+EXECUTOR_RUN_CASES = [
+    pytest.param(
+        node,
+        _executor_flags(node, tokens),
+        2 if node in _FOLLOW_CHECK_EXECUTORS else 1,
+        id=f'{node}:{"+".join(sorted(tokens)) or "default"}',
+    )
+    for node, combinations in N.EXECUTOR_PROFILED_RUNS.items()
+    for tokens in combinations
+]
 
 
 @pytest.fixture
@@ -427,6 +459,86 @@ def test_the_service_only_writes_under_service_dir(base):
     touched = {p.relative_to(base).parts[0] for p in base.rglob('*') if p.is_file()}
     assert touched == {J.SERVICE_DIRNAME}, \
         f'服务进程碰了 `_service/` 以外的东西：{touched}'
+
+
+@pytest.mark.parametrize(('node', 'flags', 'step_count'), EXECUTOR_RUN_CASES)
+def test_executor_profile_is_frozen_from_plan_through_spawn_and_disk(
+        base, node, flags, step_count):
+    """preview/start/Step/argv 必须是一份已解析选择，不能在子进程重新猜默认。"""
+    spawn = _fake()
+    registry = J.JobRegistry()
+
+    record = J.run(
+        base,
+        node,
+        SID,
+        flags,
+        executor_profile=EXECUTOR_PROFILE,
+        egress_authorized=True,
+        spawn=spawn,
+        registry=registry,
+    )
+
+    resolved = record.start.executor_profile
+    assert resolved is not None and resolved.execution_mode == 'standard'
+    assert len(record.start.steps) == step_count
+    assert record.start.steps[0].executor_profile == resolved
+    assert record.start.flags == flags
+    assert record.start.egress_authorized is True
+    assert record.start.steps[0].egress_authorized is True
+    assert spawn.calls == [step.argv for step in record.start.steps]
+    argv = spawn.calls[0]
+    assert argv[argv.index('--executor-driver') + 1] == resolved.driver
+    assert argv[argv.index('--executor-model') + 1] == resolved.model
+    assert argv[argv.index('--executor-effort') + 1] == resolved.reasoning_effort
+    assert argv[argv.index('--executor-mode') + 1] == resolved.execution_mode
+    assert '--allow-egress' in argv
+    if step_count == 2:
+        follow = record.start.steps[1]
+        assert follow.executor_profile is None
+        assert follow.egress_authorized is None
+        assert follow.paid is False
+        assert '--check-only' in follow.argv
+        assert '--allow-egress' not in follow.argv
+        assert '--yes' not in follow.argv
+        assert not any(token.startswith('--executor-') for token in follow.argv)
+
+    reread = J.records(base, registry=registry)[0]
+    assert reread.start.executor_profile == resolved
+    assert reread.start.steps[0].executor_profile == resolved
+    assert reread.start.steps == record.start.steps
+
+
+@pytest.mark.parametrize('entrypoint', [J.run, J.start])
+def test_profiled_job_without_egress_approval_never_starts(
+        base, entrypoint):
+    spawn = _fake()
+
+    with pytest.raises(ApprovalRequired, match='正文外发'):
+        entrypoint(
+            base, 'stage2.global', SID,
+            executor_profile=EXECUTOR_PROFILE,
+            egress_authorized=False,
+            spawn=spawn,
+            registry=J.JobRegistry())
+
+    assert spawn.calls == []
+    assert not J.jobs_path(base).exists(), '拒绝前不得建立 job 事件账'
+
+
+def test_frozen_steps_cannot_smuggle_a_profile_into_an_unmigrated_node(base):
+    smuggled = Step(
+        argv=['python', '-m', 'novel.cli', 'run', 'stage4.context'],
+        cwd='.',
+        label='伪造步骤',
+        paid=True,
+        writes='stage4/writer_context.json',
+        executor_profile=EXECUTOR_PROFILE,
+    )
+
+    with pytest.raises(UnsupportedRunMode, match='尚未接入 executor agent'):
+        J.plan_start(
+            'stage4.context', SID, base=base, steps=[smuggled])
 
 
 # ───────────────────── 真的起一个子进程（那条缝自己验不了自己） ─────────────────────

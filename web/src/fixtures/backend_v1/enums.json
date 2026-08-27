@@ -82,6 +82,18 @@
   "failed",
   "unknown"
  ],
+ "agent_session_process_state": [
+  "ok",
+  "failed",
+  "stopped",
+  "unknown"
+ ],
+ "agent_session_delivery_state": [
+  "delivered",
+  "blocked",
+  "failed",
+  "unknown"
+ ],
  "job_event_kinds": [
   "started",
   "step",

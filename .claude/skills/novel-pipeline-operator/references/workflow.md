@@ -32,7 +32,9 @@
 逐项确认：
 
 1. cwd 是仓根；`<PY> -X utf8 -u -m novel.cli --help` 可用。
-2. `.env` 中存在外部模型密钥，但不输出值；`.llm_cache/` 可用。
+2. headless Commander 已冻结的 commander/executor profile 都能由 capability registry 解析，所选
+   CLI 在本机为可探测状态；不要打印账号、token 或认证材料。`.env` 密钥与 `.llm_cache/` 只在
+   操作者明确选择 legacy DeepSeek 临时回滚时检查，不能拿缺 DeepSeek 配置阻断 agent 主路。
 3. 新跑与续跑使用**同一个** `<BASE>`：隔离靠每本书自己的 `<平台_书名_sid>/` 目录，不靠另建输出根。另建一个根会把同一本书的 `_service/ledger.jsonl` 分裂成两份，而[收尾](#收尾)把它当成本的唯一权威源。不要写入任何历史验收或证据目录。
 4. 源文件或既有书目录存在，`<SID>` 唯一。立即从仓根运行
    `<PY> -X utf8 -u .claude/skills/novel-pipeline-operator/scripts/session_preflight.py --base <BASE> --sid <SID>`；新书把
@@ -40,7 +42,8 @@
    也以它解析出的 sid/novel_dir 为准。终验不得在结束时现取新代码指纹冒充起点。
 5. 付费授权与正文外发授权各自取到值：交互式会话两项**默认 `granted`**，本步是记录不是索要；
    headless 取 launcher prompt 原文。两项不是同一授权，任何一项都不由另一项推定。
-6. 不覆盖项目默认模型与思考配置；运行时实际模型以配置和账本为准。
+6. 不覆盖 launcher started 事件冻结的 commander / executor 模型与思考配置；运行时请求身份以
+   resolved profile、session audit 与账本为准，wire 未回显的实际字段保留 unknown，不拿请求值倒填。
 7. 同一时刻没有**这本书**的其他 API/agent 写盘作业在运行。⚠ 只看这一本：不同 `sid` 的作业互不阻塞（跨书并行是产品明确要求的能力），把别书也算进来会让本条在一次正常的并行跑里永远不成立。
 
 ## 命令协议
@@ -73,14 +76,17 @@ runner 控制参数在显式 `--` 之前可位于 node 前后，但以上是规�
 第三行只用于 Stage2 人工暂停后的同身份 resume：`--run-id` 是 runner 控制参数，不是 node flag，
 初次主跑省略。runner 在构建 Step 前、每一步执行前后逐字核对 `<START_CODE>`；漂移时不再启动下一步。
 
-结构化付费节点只要在 `NODES` 中接受该参数，主跑就统一追加 `--response-repair agent`。这不是
-放宽内容闸：候选始终重走 JSON、必需键、schema 与调用点 validator。通用节点仍按终态点名的
-单份 `attempt_id` 处理；Stage2 blueprint 则会等同一并发波次全部结束，把所有可修响应汇成一份
-`repair_manifest.json`。按[修复状态机](recovery.md#结构化响应的受托修复)一次性填写 decisions、
-提交一份 batch resolution 后，只允许用终态打印的同一 `run_id` 恢复一次。每条 `run` 命令会把
-自动生成或继承的 run id 打到 stderr；出现人工暂停时立即把它与 manifest 路径记进终审包，不能
-另起身份重跑。后继供应商请求继续由不可变失败证据构造，并走原四道闸，不把 agent 候选或模型自报
-当作通过证据。
+headless Commander 不手拼运行期 agent profile 参数：launcher 把 resolved profiles、两项授权、base/sid 与
+起始代码指纹冻结在 append-only started 事件中，runner 只从环境取得 `run_id + contract SHA-256`
+指针并重读该事件。默认 executor 与逐节点 override 由代码选择，付费 producer Step 才携 profile 与
+egress；自动 `--check-only` 等 0 成本 Step 明确不携带。preview、evidence 与 execute 任一不一致都在
+spawn 前关闭式拒绝，不能静默落回 DeepSeek。
+
+八个 agent executor 自身已经把完整候选依次送过 JSON、必需键、schema、调用点 validator 与业务
+HARD，并把结构化代码反馈交回同一 provider session；因此 agent 主路**不得**追加
+`--response-repair agent`。那条 sidecar 只服务显式 DeepSeek 临时回滚：legacy 响应停在
+`ResponseRepairRequired` 时，才按[修复状态机](recovery.md#显式-deepseek-回滚的结构化响应修复)处理隔离候选，
+并沿用同一 `run_id`。不得让一个 legacy flag 同时冒充 node-agent 的 session 恢复协议。
 
 真跑本身已经打印同一份 fresh 报告时，追检的价值是**复核产物完整性**，不是重读判据（那句「⚠ 自动追跑：退出码 0 也可能是残缺产物」说的就是这件事）：仍必须执行并打点，但只取它的退出码与合计行即可，不必重读全文。
 
@@ -110,17 +116,17 @@ runner 控制参数在显式 `--` 之前可位于 node 前后，但以上是规�
 | 2 | `stage0.approve` | `--actor <ACTOR> --reason <text>` | 按代批契约审阅 Stage0 check 与剔除视图后批准，批准状态写入 revision 链。**每本书都要过这一步**——首跑恒 pending，零剔除的书也一样（见下） |
 | 3 | `stage0.edit` | 仅当代批发现剔除错误时用 typed edit/edit-plan；无修改则 `state` 跳过 | 人工修订经同一 Stage0 闸门重判，不直改正式文本 |
 | 4 | `stage1.partition` | 无 | 追跑 check 无 HARD；章节 ordinal 唯一且覆盖 `1..N` |
-| 5 | `stage2.global` | `--response-repair agent` | global 经 schema/归一/producer HARD 正式落盘；随即生成 review workpack/template，可开始阅读并填写 decisions，但不必等提交后才跑 blueprint |
-| 6 | `stage2.blueprint` | `--response-repair agent`；global 正式可读后独立 preview/run | 逐章蓝图正式落盘；唯一 Stage2 `--check-only` 联合检查无 HARD；随后确认 global review current 且逐项 PASS，才进 Stage4 |
-| 7 | `stage4.design` | `--response-repair agent`；需要废止旧候选时显式另跑 `--replan` | 只产生当前盲候选；本相未读取原文顺序、证据位置或必须材料，且不会顺带启动下一相 |
-| 8 | `stage4.plan` | 在 A 落盘后重新独立 preview，再以 `--response-repair agent` 运行 | B 只绑定证据；`bound` 时编译计划且 check 无 HARD，`infeasible` 时正式负结论已落盘但没有计划 |
+| 5 | `stage2.global` | 无；agent executor 原生同 session 修复 | global 经 schema/归一/producer HARD 正式落盘；随即生成 review workpack/template，可开始阅读并填写 decisions，但不必等提交后才跑 blueprint |
+| 6 | `stage2.blueprint` | global 正式可读后独立 preview/run | 逐章蓝图正式落盘；唯一 Stage2 `--check-only` 联合检查无 HARD；随后确认 global review current 且逐项 PASS，才进 Stage4 |
+| 7 | `stage4.design` | 需要废止旧候选时显式另跑 `--replan` | 只产生当前盲候选；本相未读取原文顺序、证据位置或必须材料，且不会顺带启动下一相 |
+| 8 | `stage4.plan` | 在 A 落盘后重新独立 preview/run | B 只绑定证据；`bound` 时编译计划且 check 无 HARD，`infeasible` 时正式负结论已落盘但没有计划 |
 | 9 | `stage4.context` | 计划落盘已自动组装时 `state` 跳过；只在需重建时执行 | `stage4/writer_context.json` 与当前计划投影一致且 fresh |
-| 10 | `stage5.write` | `--response-repair agent`（不带 `--chapters` 即写全部缺少的 canonical 章） | `stage5/chNN.json` 恰好覆盖计划章集合；内部重试不等于整节点失败 |
+| 10 | `stage5.write` | 不带 `--chapters` 即写全部缺少的 canonical 章 | `stage5/chNN.json` 恰好覆盖计划章集合；内部重试不等于整节点失败 |
 | 11 | `stage5.review` | 无 | 最新机械验收完成；HARD 按 remediation 收敛，info/metric/unver 保持原态 |
-| 12 | `stage6.hook` | `--response-repair agent` | 至少一条候选通过落盘闸；追跑 check 可读正式候选 |
-| 13 | `stage6.semantic` | `--response-repair agent` | 每个去重文本都有两名盲评判官的带证据结论与匿名质量排序；结论按完整 SHA-256 与当前候选对齐 |
+| 12 | `stage6.hook` | 无；完整三候选 replacement 在同 session 内修复 | 至少一条候选通过落盘闸；追跑 check 可读正式候选 |
+| 13 | `stage6.semantic` | 无；A/B 独立 session 并发 | 每个去重文本都有两名盲评判官的带证据结论与匿名质量排序；结论按完整 SHA-256 与当前候选对齐 |
 | 14 | `stage6.approve` | `--pick <N> --actor <ACTOR> --reason <text> --subject-sha256 <64hex>` | 所选候选满足代批判据，hash 与当前文本一致，`hook.json.approved` 与最新语义结论一致 |
-| 15 | `stage7.rename` | `--response-repair agent` | 人名表正式落盘；追跑 check 的 HARD 清零，info/unver 已人工审阅 |
+| 15 | `stage7.rename` | 无；完整映射 replacement 在同 session 内修复 | 人名表正式落盘；追跑 check 的 HARD 清零，info/unver 已人工审阅 |
 | 16 | `stage7.approve` | `--actor <ACTOR> --reason <text> --subject-sha256 <64hex>` | 映射、漏网称呼与语义标记通过代批判据，hash 与当前决策面一致，批准状态落盘 |
 | 17 | `stage7.assemble` | 无 | `stage7/<书名>_rewriting.txt` 生成并通过独立成书对账 |
 <!-- pipeline-steps:end -->
@@ -264,7 +270,7 @@ CLI `state` 会显示共享的 deterministic freshness badge；这个 badge 才�
 
 1. 执行代批文档中的逐字成书对账。
 2. 再运行一次 `state` 与 `inbox`，只统计活动目录，排除 `_rounds/` 历史。
-3. 从仓根运行 `.claude/skills/novel-pipeline-operator/scripts/collect_final_evidence.py --base <BASE> --sid <SID> --started-at <STARTED_AT> --start-code-version <START_CODE>`。最终成本只以 `<BASE>/_service/ledger.jsonl` 为权威源：`started_at` 只切本次 beacon/退出序列；脚本从这些 beacon 取得 canonical run id，再按 `run_id + node` 精确汇总本次 ledger。无 run id 的历史行只标 `legacy/ungrouped` 并进入同 SID 累计审计，不按时间窗口猜进本轮；本轮与累计两张表不相加。缓存命中与 wire 分开计数，token 合计只累加 `cached == false`；每个非缓存 wire 的 `outcome` 都必须入表，`error` 代表已上线但供应商是否计费未知，单列披露而不冒充确定实付。产物 `_provenance.usage`、控制台日志和历史报告只用于单产物追溯，不得与 ledger 混加或替代它。
+3. 从仓根运行 `.claude/skills/novel-pipeline-operator/scripts/collect_final_evidence.py --base <BASE> --sid <SID> --started-at <STARTED_AT> --start-code-version <START_CODE>`。最终成本只以 `<BASE>/_service/ledger.jsonl` 为权威源：`started_at` 只切本次 beacon/退出序列；脚本从这些 beacon 取得 canonical run id，再按 `run_id + node/role` 精确汇总本次 ledger。节点 executor 使用真实 node，整书 Commander 单列 `role:commander`，不伪装成 NODES 或 `unknown`。无 run id 的历史行只标 `legacy/ungrouped` 并进入同 SID 累计审计，不按时间窗口猜进本轮；本轮与累计两张表不相加。缓存命中与 wire 分开计数，token 合计只累加 `cached == false`；每个非缓存 wire 的 `outcome` 都必须入表，`error` 代表已上线但供应商是否计费未知，单列披露而不冒充确定实付。产物 `_provenance.usage`、控制台日志和历史报告只用于单产物追溯，不得与 ledger 混加或替代它。
 4. 对按模板建立的终审包运行同参数的 `.claude/skills/novel-pipeline-operator/scripts/sync_review_evidence.py`，由脚本更新质量表、两张账本、退出序列与机器锚点；agent 只写内容判断、代批证据和恢复说明。
 5. 清除剩余占位符，用同一组会话参数运行 `.claude/skills/novel-pipeline-operator/scripts/validate_review.py`，再运行 `.claude/skills/novel-pipeline-operator/scripts/verify_delivery.py --base <BASE> --sid <SID> --start-code-version <START_CODE>`。确保每个异常、残红和不可验证项都有“影响、证据、恢复路径”。
 6. 只向用户交付成书与终审包；中间产物仅作为终审包中的可追溯指针。

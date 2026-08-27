@@ -3,8 +3,9 @@
 """
 jobs.py —— 作业面板 P-01：列表 / 详情 / 日志 / 预览 / 异步启动。
 
-通用启动只接收结构化 `{sid,node,flags}`，先用与预览相同的 `plan_start()`
-构造命令，再交给后台执行器。同一本书的第二个请求由书级锁返回 409；不同小说互不阻塞。
+通用启动只接收结构化 `{sid,node,flags,executor_profile?,egress_authorized?}`，
+先用与预览相同的 `plan_start()` 构造命令，再交给后台执行器。同一本书的第二个请求
+由书级锁返回 409；不同小说互不阻塞。
 """
 from __future__ import annotations
 
@@ -66,7 +67,9 @@ def list_jobs(sid: str | None = Query(default=None),
 def start_job(req: PreviewRequest, base: str = Depends(get_base)) -> JobRecord:
     sid = checked_sid(req.sid) if req.sid is not None else None
     planned = jobs.plan_start(
-        req.node, sid, req.flags, base=base)
+        req.node, sid, req.flags, base=base,
+        executor_profile=req.executor_profile,
+        egress_authorized=req.egress_authorized)
     prepares: list[Callable[[], None]] = []
     # API 只做占住同书锁后的早反馈；CLI 仍是所有调用方共用的最终执行门。
     # global 与 blueprint 两个 producer 明确豁免，Stage4 起的付费消费、免费
@@ -95,6 +98,8 @@ def start_job(req: PreviewRequest, base: str = Depends(get_base)) -> JobRecord:
 
     return jobs.start(
         base, req.node, sid, req.flags,
+        executor_profile=planned.executor_profile,
+        egress_authorized=planned.egress_authorized,
         steps=planned.steps, prepare=prepare if prepares else None)
 
 
@@ -203,5 +208,7 @@ def preview_job(req: PreviewRequest, base: str = Depends(get_base)) -> JobStart:
     # missing values and rejects the placeholder tokens themselves.
     return jobs.plan_start(
         req.node, sid, req.flags, base=base,
+        executor_profile=req.executor_profile,
+        egress_authorized=req.egress_authorized,
         placeholders=True,
     )

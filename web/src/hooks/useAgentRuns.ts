@@ -4,6 +4,21 @@ import { qk } from '@/api/queryKeys'
 import type { AgentBatchRequest, AgentRunRecord, AgentRunRequest } from '@/types/agent'
 import { useSid } from './useRouteParams'
 
+/**
+ * capability 含这台机器此刻的 CLI/登录探针结果。HTTP 是 Cache-Control: no-store，
+ * React Query 这一层也不把旧结果当新结果复用：每次挂载都重取，卸载即回收。
+ */
+export function useAgentCapabilities() {
+  return useQuery({
+    queryKey: qk.agentCapabilities(),
+    queryFn: () => api.getAgentCapabilities(),
+    staleTime: 0,
+    gcTime: 0,
+    refetchOnMount: 'always',
+    refetchOnWindowFocus: 'always',
+  })
+}
+
 /** agent 代跑记录（新的在前）。有在跑的 2.5s 一轮，都停着不轮询 —— 与 useJobs 同款纪律。 */
 export function useAgentRuns(sidOverride?: string) {
   const routeSid = useSid()

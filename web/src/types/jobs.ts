@@ -1,4 +1,5 @@
 import type { JobState } from '@/constants/vocabulary'
+import type { AgentProfile } from '@/types/agent'
 
 /**
  * 作业。jobs.json 是空数组，样本里没有元素形状 ——
@@ -18,6 +19,10 @@ export interface Job {
   finished: number | null
   sid: string | null
   ordinal: number | null
+  /** 直接节点作业启动时冻结的执行者；旧记录或非 executor 节点为 null/缺失。 */
+  executor_profile?: AgentProfile | null
+  /** 与 profile 正交的正文外发授权；旧记录/非 executor 节点为 null/缺失。 */
+  egress_authorized?: boolean | null
 }
 
 export interface JobsResponse {
@@ -34,6 +39,10 @@ export interface BackendJobStep {
   paid: boolean
   writes: string
   note: string | null
+  /** 本步已解析的 executor；旧记录、未指定或未迁移路径为 null，不按当前默认回填。 */
+  executor_profile: AgentProfile | null
+  /** 独立正文外发授权；旧/无 profile Step 为 null，新 executor Step 冻结 true/false 并与 argv 闭合。 */
+  egress_authorized: boolean | null
 }
 
 export interface BackendJobStart {
@@ -45,6 +54,10 @@ export interface BackendJobStart {
   code: string
   paid: boolean
   writes: boolean
+  /** 与 steps 中同源的直接节点 executor 快照；不能由当前默认倒推历史。 */
+  executor_profile: AgentProfile | null
+  /** 与付费 executor Step 同源；false 是可预览但不可启动，旧/无 profile 记录为 null。 */
+  egress_authorized: boolean | null
 }
 
 export interface BackendJobRecord {
@@ -105,11 +118,15 @@ export interface JobPreview {
   paid: boolean
   label: string
   kind: string
+  executor_profile?: AgentProfile | null
+  egress_authorized?: boolean | null
   steps: Array<{
     label: string
     paid: boolean
     writes: string
     argv: string
+    executor_profile?: AgentProfile | null
+    egress_authorized?: boolean | null
   }>
 }
 
@@ -152,4 +169,14 @@ export interface BackendJobRequest {
   sid: string | null
   node: string
   flags: string[]
+  /**
+   * 可选直接节点 executor。当前后端放行 8 节点 / 12 种 flag-token 组合：
+   * Stage2 global/blueprint，Stage4 design/plan，Stage5 write，Stage6 hook/semantic，
+   * Stage7 rename；capability 只发布节点，精确 flag 组合由服务端 run registry 关闭式校验。
+   * 自动 check-only Step 不继承 profile。本类型不硬编码 capability，现有 UI 尚无
+   * 选择器并继续省略；commander/executor 页面配置属于 Phase 6。
+   */
+  executor_profile?: AgentProfile | null
+  /** 独立正文外发授权；默认 false。false 可 preview，POST start 会在 driver 前拒绝；不能由付费确认或 profile 推导。 */
+  egress_authorized?: boolean
 }

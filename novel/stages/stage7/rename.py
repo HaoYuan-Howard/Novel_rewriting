@@ -14,13 +14,17 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 
 from contracts.artifacts import (
     STAGE1_MAIN_TEXT, STAGE2_GLOBAL_GROUNDING, STAGE4_PLAN_CHAPTERS,
     STAGE4_WRITER_CONTEXT, STAGE6_HOOK, STAGE7_NAME_MAP, STAGE7_NAME_MAP_EDIT,
 )
 
-from typing import Any
+from typing import Any, Protocol
+
+from pydantic import ValidationError
 
 from contracts.schema.common import Finding
 from contracts.schema.report import CheckReport
@@ -32,12 +36,13 @@ from contracts.schema.stage7 import (
     ApprovedNameMap, ExtraSub, IdentityBaseline, NameMap, NameMapEdit, NameMapParams,
     NameMapFreeProvenance, NameMapProvenance, NameMapResponse,
 )
-from novel import paths, prov
+from novel import agent_session_audit, paths, prov
 from novel.core.naming import family_groups, strip_distinguisher, surface_owners
 from novel.errors import (
     BlockingFindingsUnresolved, GateBlocked, TerminalState, UpstreamMissing,
 )
-from novel.llm.client import LlmClient
+from novel.llm.client import LlmClient, LlmFailed
+from novel.llm.stage7_runs import RECOVERY_POLICY as AGENT_RECOVERY_POLICY
 from novel.report import build
 from novel.report.findings import Outcome
 from novel.run import RunContext
@@ -142,8 +147,17 @@ def approval_decision_surface(art: NameMap) -> dict[str, Any]:
 
 
 def _canonical_sha256(value: Any) -> str:
+    def json_default(item: object) -> object:
+        dump = getattr(item, 'model_dump', None)
+        if callable(dump):
+            return dump(mode='json', by_alias=True)
+        if isinstance(item, tuple):
+            return list(item)
+        raise TypeError(f'{type(item).__name__} 不是可冻结的 JSON 值')
+
     raw = json.dumps(
         value, ensure_ascii=False, sort_keys=True, separators=(',', ':'),
+        allow_nan=False, default=json_default,
     ).encode('utf-8')
     return hashlib.sha256(raw).hexdigest()
 
@@ -823,18 +837,96 @@ def run_revalidate(
     return True, _report(ctx, store, _judge(ctx, store, promoted, up), promoted)
 
 
-def run_rename(ctx: RunContext, client: LlmClient) -> NameMap:
-    """**付费**：一次调用产整份新人物表，先校验后落盘。
+class _NameMapResponseSource(Protocol):
+    """legacy ``LlmClient`` 与单 session executor 共用的最窄响应面。"""
 
-    ⚠⚠ **本函数写好了，但在你点头之前一次都不许真跑**（那是本仓第一次真花钱）。
-    先 `--dry-run`：`build_prompt()` 是 0 成本的。
-    〔`R-10.1`：**全层唯一一处 `client.ask_json`**。〕
+    model: str
+    turns_used: int
+    max_turns: int
+    driver_failed: bool
 
-    ⚠ `require` 从 `NameMapResponse` 的必需顶层键派生 ⇒ `surname_map` 漏不掉。
-    原型那个调用点写的是 `require=('characters',)`，而缺席会**静默关掉一条 HARD**。
-    """
-    store = ArtifactStore(ctx)
-    up = _Upstreams(ctx, store)
+    def ask_json(self, system: str, user: str, **kwargs: Any) -> Any: ...
+
+    def accepted_attempt(self, purpose: str) -> str | None: ...
+
+    def accepted_models(self, *purposes: str) -> tuple[str, ...]: ...
+
+    def accepted_checkpoint(self, purpose: str) -> dict[str, Any]: ...
+
+    def restore_checkpoint_acceptance(
+            self, purpose: str, record: Mapping[str, Any], **kwargs: Any,
+    ) -> None: ...
+
+    def queue_code_validation_feedback(
+            self, rows: Sequence[Mapping[str, object]], **kwargs: Any,
+    ) -> bool: ...
+
+    def queue_restored_code_validation_feedback(
+            self, rows: Sequence[Mapping[str, object]], **kwargs: Any,
+    ) -> bool: ...
+
+
+@dataclass(frozen=True)
+class RenameCandidateContext:
+    """一次改名生成的冻结输入；不含响应，也没有正式落盘能力。"""
+
+    system: str
+    user: str
+    input_sha256: str
+    identity: IdentityBaseline
+    invalid_file_sha256: str | None
+    _up: _Upstreams
+
+
+@dataclass(frozen=True)
+class RenameCandidateBatch:
+    """最终一份完整 ``NameMapResponse`` replacement 与精确来源索引。"""
+
+    response: NameMapResponse
+    requested_model: str
+    adopted_models: tuple[str, ...]
+    attempt_id: str | None
+    restored_acceptance: Mapping[str, Any] | None
+    agent_mode: bool
+    _batch_sha256: str
+
+
+@dataclass(frozen=True)
+class RenameCandidateEvaluation:
+    """无落盘 provisional 人物表；只能交给 ``finalize_rename_candidate``。"""
+
+    candidate: NameMap
+    hard_rules: tuple[str, ...]
+    requested_model: str
+    adopted_models: tuple[str, ...]
+    attempt_id: str | None
+    input_sha256: str
+    _batch: RenameCandidateBatch
+    _candidate_sha256: str
+
+
+def _uses_agent_runs(ctx: RunContext) -> bool:
+    return ctx.executor_profile is not None
+
+
+def _accepted_attempt(source: _NameMapResponseSource, purpose: str) -> str | None:
+    value = source.accepted_attempt(purpose)
+    return value if isinstance(value, str) and value else None
+
+
+def _current_invalid_sha256(store: ArtifactStore) -> str | None:
+    target = store.path(_INVALID)
+    try:
+        return hashlib.sha256(target.read_bytes()).hexdigest()
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        raise ProvenanceRefused(f'读不了 {_INVALID} 写前身份：{exc}') from exc
+
+
+def _require_generation_preconditions(
+        store: ArtifactStore, up: _Upstreams,
+) -> IdentityBaseline:
     if up.hook_art is None:
         raise UpstreamMissing(f'{HOOK} 不在盘上——先完成 stage6')
     from novel.stages.stage6 import semantic as hook_semantic
@@ -844,33 +936,829 @@ def run_rename(ctx: RunContext, client: LlmClient) -> NameMap:
         raise TerminalState(
             '恒等基线不守恒，已在发出 LLM 请求前中止：'
             f'{baseline.mismatches or ["量到 0 章"]}')
-    system, user = prompts.rename_system(), prompts.build_user(up.mat)
-    resp = client.ask_json(system, user, model_cls=NameMapResponse, purpose=ctx.node,
-                           max_tokens=MAX_TOKENS)
+    return baseline
 
+
+def _rename_input_identity(
+        ctx: RunContext, *, system: str, user: str,
+        up: _Upstreams, identity: IdentityBaseline,
+) -> str:
+    return _canonical_sha256({
+        'node': ctx.node,
+        'code': ctx.code,
+        'system': system,
+        'user': user,
+        'identity': identity,
+        'judged': up.judged,
+        'hook_consumed': up.hook_consumed,
+        'inputs': ctx.edges,
+    })
+
+
+def prepare_rename_candidate(ctx: RunContext) -> RenameCandidateContext:
+    """冻结 prompt、上游与恒等基线；所有前置条件均先于首个 wire。"""
+    if ctx.node != 'stage7.rename':
+        raise ValueError(
+            f'prepare_rename_candidate 只接受 stage7.rename，实得 {ctx.node!r}')
+    store = ArtifactStore(ctx)
+    up = _Upstreams(ctx, store)
+    identity = _require_generation_preconditions(store, up)
+    system, user = prompts.rename_system(), prompts.build_user(up.mat)
+    prepared = RenameCandidateContext(
+        system=system,
+        user=user,
+        input_sha256=_rename_input_identity(
+            ctx, system=system, user=user, up=up, identity=identity),
+        identity=identity,
+        invalid_file_sha256=_current_invalid_sha256(store),
+        _up=up,
+    )
+    _assert_rename_prepared_current(ctx, prepared)
+    if _uses_agent_runs(ctx):
+        from novel.llm import stage7_runs
+        stage7_runs.ensure_run(
+            ctx,
+            input_sha256=prepared.input_sha256,
+            system=prepared.system,
+            user=prepared.user,
+            response_model=NameMapResponse,
+            max_tokens=MAX_TOKENS,
+        )
+    return prepared
+
+
+def _assert_rename_prepared_current(
+        ctx: RunContext, prepared: RenameCandidateContext,
+) -> _Upstreams:
+    if prov.code_version() != ctx.code:
+        raise ProvenanceRefused(
+            f'stage7.rename 候选期间代码版本漂移：start={ctx.code} '
+            f'current={prov.code_version()}；拒绝结算或落盘')
+    ctx.require_observed_roots_current()
+    current_store = ArtifactStore(ctx)
+    current = _Upstreams(ctx, current_store)
+    identity = _require_generation_preconditions(current_store, current)
+    system, user = prompts.rename_system(), prompts.build_user(current.mat)
+    current_input = _rename_input_identity(
+        ctx, system=system, user=user, up=current, identity=identity)
+    if (system != prepared.system or user != prepared.user
+            or identity != prepared.identity
+            or current_input != prepared.input_sha256):
+        raise ProvenanceRefused(
+            'stage7.rename 初始 prompt/上游/成稿/恒等基线已变化；'
+            '拒绝把旧上下文候选写成当前正式产物')
+    return current
+
+
+def _materialize_rename_candidate(
+        ctx: RunContext, prepared: RenameCandidateContext,
+        response: NameMapResponse, *, requested_model: str,
+        adopted_models: Sequence[str], settle: bool,
+) -> tuple[NameMap, list[Finding]]:
     provenance = ctx.llm_provenance(
         NameMapProvenance,
-        prompts={'RENAME_SYS': system, 'RULES': prov.rules_fingerprint('stage7')},
-        model=client.model, adopted_models=client.accepted_models(ctx.node),
-        params=NameMapParams(max_tokens=MAX_TOKENS))
-    art, fs, _hook_new = _build(ctx, up, resp.model_dump(by_alias=True), [], provenance)
-    art = art.model_copy(update={'identity': baseline})
+        prompts={
+            'RENAME_SYS': prepared.system,
+            'RULES': prov.rules_fingerprint('stage7'),
+        },
+        model=requested_model,
+        adopted_models=adopted_models,
+        settle=settle,
+        params=NameMapParams(max_tokens=MAX_TOKENS),
+    )
+    artifact, findings, _hook_new = _build(
+        ctx, prepared._up,
+        response.model_dump(by_alias=True, mode='json'), [], provenance)
+    return artifact.model_copy(update={'identity': prepared.identity}), findings
 
-    # ⚠⚠ **闸门条件照 stage3，不照 stage6**：本层一次产**一份**（stage6 一次产三份，
-    # 那里拦的是「一条干净候选都没有」）⇒ 这里**任何一条 hard 命中就拦**。
-    blocking = sorted({f.rule for f in fs if _sev_of(f.rule) == 'hard'})
-    if blocking:
-        p = store.write_invalid(REL, art, gates_skipped=[])
+
+def _response_materialization_validator(
+        ctx: RunContext, source: _NameMapResponseSource,
+        prepared: RenameCandidateContext,
+):
+    """SessionClient 只接受能被当前 ``NameMap`` 载体完整物化的响应。"""
+    def validate(response: NameMapResponse, _wire: Any) -> str | None:
+        try:
+            _materialize_rename_candidate(
+                ctx, prepared, response,
+                requested_model=source.model,
+                # 动态 validator 尚在 acceptance 之前；实际 model 稍后由
+                # SessionAgentClient 与 profile/ledger 精确核验。这里只造丢弃的载体。
+                adopted_models=(source.model,),
+                settle=False,
+            )
+        except (ValidationError, TerminalState, ValueError) as exc:
+            return f'NameMapResponse 无法物化：{type(exc).__name__}: {str(exc)[:800]}'
+        return None
+    return validate
+
+
+def _hard_findings(findings: Sequence[Finding]) -> list[Finding]:
+    return [finding for finding in findings if _sev_of(finding.rule) == 'hard']
+
+
+def _safe_rule_feedback(findings: Sequence[Finding]) -> list[dict[str, object]]:
+    """只回传规则元数据与次数；不复制正文、detail 或 evidence。"""
+    from contracts.rules import REGISTRY
+
+    counts: dict[str, int] = {}
+    for finding in findings:
+        counts[finding.rule] = counts.get(finding.rule, 0) + 1
+    rows: list[dict[str, object]] = []
+    for rule_key, count in sorted(counts.items()):
+        rule = REGISTRY.get(rule_key)
+        rows.append({
+            'rule': rule_key,
+            'item': rule.item,
+            'requirement': rule.requirement,
+            'count': count,
+        })
+    return rows
+
+
+def _checkpoint_state(
+        response: NameMapResponse, *, findings: Sequence[Finding],
+        identity: IdentityBaseline,
+) -> dict[str, object]:
+    hard = _hard_findings(findings)
+    counts: dict[str, int] = {}
+    for finding in hard:
+        counts[finding.rule] = counts.get(finding.rule, 0) + 1
+    return {
+        'kind': 'stage7-rename-candidate',
+        'response_sha256': _canonical_sha256(
+            response.model_dump(by_alias=True, mode='json')),
+        'identity_sha256': _canonical_sha256(identity),
+        'hard_rules': sorted(counts),
+        'hard_counts': {key: counts[key] for key in sorted(counts)},
+    }
+
+
+def _candidate_verdict(
+        ctx: RunContext, source: _NameMapResponseSource,
+        prepared: RenameCandidateContext, response: NameMapResponse,
+) -> tuple[NameMap, list[Finding]]:
+    return _materialize_rename_candidate(
+        ctx, prepared, response,
+        requested_model=source.model,
+        adopted_models=source.accepted_models(ctx.node),
+        settle=False,
+    )
+
+
+def _write_rename_checkpoint(
+        ctx: RunContext, source: _NameMapResponseSource,
+        prepared: RenameCandidateContext, response: NameMapResponse, *,
+        findings: Sequence[Finding], revision_key: str,
+) -> None:
+    from novel.llm import stage7_runs
+
+    stage7_runs.write_checkpoint(
+        ctx,
+        input_sha256=prepared.input_sha256,
+        system=prepared.system,
+        user=prepared.user,
+        response_model=NameMapResponse,
+        max_tokens=MAX_TOKENS,
+        response_payload=response.model_dump(by_alias=True, mode='json'),
+        acceptance=source.accepted_checkpoint(ctx.node),
+        revision_key=revision_key,
+        state_payload=_checkpoint_state(
+            response, findings=findings, identity=prepared.identity),
+    )
+
+
+def _restore_rename_checkpoint(
+        ctx: RunContext, source: _NameMapResponseSource,
+        prepared: RenameCandidateContext,
+) -> tuple[NameMapResponse, list[Finding], dict[str, Any]] | None:
+    """恢复 adoption 与累计轮次，不把历史 provider id 冒充 live session。"""
+    from novel.llm import stage7_runs
+
+    restored = stage7_runs.restore_checkpoint(
+        ctx,
+        input_sha256=prepared.input_sha256,
+        system=prepared.system,
+        user=prepared.user,
+        response_model=NameMapResponse,
+        max_tokens=MAX_TOKENS,
+        validator=_response_materialization_validator(ctx, source, prepared),
+    )
+    if restored is None:
+        return None
+    source.restore_checkpoint_acceptance(
+        ctx.node,
+        restored.acceptance,
+        system=prepared.system,
+        user=prepared.user,
+        max_tokens=MAX_TOKENS,
+        recovery_policy=AGENT_RECOVERY_POLICY,
+    )
+    _artifact, findings = _candidate_verdict(
+        ctx, source, prepared, restored.value)
+    expected_state = _checkpoint_state(
+        restored.value, findings=findings, identity=prepared.identity)
+    if restored.state_payload != expected_state:
+        raise ProvenanceRefused(
+            'stage7.rename checkpoint 的 response/identity/HARD 索引不再等于当前代码判定')
+    return restored.value, findings, dict(restored.acceptance)
+
+
+def _finish_restored_rename_session(
+        ctx: RunContext, acceptance: Mapping[str, Any], *,
+        delivery_state: str, error_kind: str | None = None,
+) -> None:
+    """补旧 logical session 的 ended；公共桥自己保证跨进程幂等。"""
+    agent_session_audit.finish_restored_session(
+        ctx.novel_dir.parent,
+        acceptance,
+        process_state='ok',
+        delivery_state=delivery_state,
+        error_kind=error_kind,
+        end_code_version=prov.code_version(),
+        only_if_open=True,
+    )
+
+
+def _agent_rename_candidate(
+        ctx: RunContext, source: _NameMapResponseSource,
+        prepared: RenameCandidateContext,
+) -> RenameCandidateBatch:
+    required = (
+        'accepted_checkpoint', 'restore_checkpoint_acceptance',
+        'accepted_attempt', 'accepted_models',
+        'queue_code_validation_feedback',
+        'queue_restored_code_validation_feedback',
+    )
+    missing = [name for name in required if not callable(getattr(source, name, None))]
+    if missing:
+        raise ProvenanceRefused(
+            f'stage7.rename agent source 缺 checkpoint/session bridge {missing}；'
+            '已在首个 wire 前停止')
+    queue_feedback = source.queue_code_validation_feedback
+    queue_restored_feedback = source.queue_restored_code_validation_feedback
+    validator = _response_materialization_validator(ctx, source, prepared)
+    restored = _restore_rename_checkpoint(ctx, source, prepared)
+    restored_only = restored is not None
+    restored_acceptance: dict[str, Any] | None = None
+    if restored is None:
+        response = source.ask_json(
+            prepared.system,
+            prepared.user,
+            model_cls=NameMapResponse,
+            purpose=ctx.node,
+            max_tokens=MAX_TOKENS,
+            validator=validator,
+            recovery_policy=AGENT_RECOVERY_POLICY,
+        )
+        _artifact, findings = _candidate_verdict(
+            ctx, source, prepared, response)
+        checkpoint = source.accepted_checkpoint(ctx.node)
+        turn = checkpoint.get('accepted_turn_index')
+        _write_rename_checkpoint(
+            ctx, source, prepared, response,
+            findings=findings,
+            revision_key=f'candidate:{turn}',
+        )
+    else:
+        response, findings, restored_acceptance = restored
+
+    while True:
+        hard = _hard_findings(findings)
+        if not hard:
+            break
+        feedback = _safe_rule_feedback(hard)
+        queued = (
+            queue_restored_feedback(feedback, purpose=ctx.node)
+            if restored_only else
+            queue_feedback(feedback, purpose=ctx.node)
+        )
+        # 恢复桥已在新 provider start 前幂等结束旧 session 为 ok/blocked；
+        # 后续无论是否还有预算，都不能再把它结束成 delivered。
+        if restored_only:
+            restored_acceptance = None
+        if not queued:
+            break
+        try:
+            response = source.ask_json(
+                prepared.system,
+                prepared.user,
+                model_cls=NameMapResponse,
+                purpose=ctx.node,
+                max_tokens=MAX_TOKENS,
+                validator=validator,
+                recovery_policy=AGENT_RECOVERY_POLICY,
+            )
+        except LlmFailed:
+            turns_used = getattr(source, 'turns_used', None)
+            max_turns = getattr(source, 'max_turns', None)
+            exhausted = (
+                isinstance(turns_used, int) and not isinstance(turns_used, bool)
+                and isinstance(max_turns, int) and not isinstance(max_turns, bool)
+                and turns_used >= max_turns)
+            if bool(getattr(source, 'driver_failed', False)) or not exhausted:
+                raise
+            break
+        restored_only = False
+        _artifact, findings = _candidate_verdict(
+            ctx, source, prepared, response)
+        checkpoint = source.accepted_checkpoint(ctx.node)
+        turn = checkpoint.get('accepted_turn_index')
+        _write_rename_checkpoint(
+            ctx, source, prepared, response,
+            findings=findings,
+            revision_key=f'candidate:{turn}',
+        )
+
+    attempt_id = _accepted_attempt(source, ctx.node)
+    if attempt_id is None:
+        raise ProvenanceRefused(
+            'stage7.rename agent 完整 replacement 缺 accepted attempt')
+    return _rename_batch(
+        response=response,
+        requested_model=source.model,
+        adopted_models=source.accepted_models(ctx.node),
+        attempt_id=attempt_id,
+        restored_acceptance=restored_acceptance,
+        agent_mode=True,
+    )
+
+
+def _rename_batch(
+        *, response: NameMapResponse, requested_model: str,
+        adopted_models: Sequence[str], attempt_id: str | None,
+        restored_acceptance: Mapping[str, Any] | None,
+        agent_mode: bool,
+) -> RenameCandidateBatch:
+    payload = {
+        'response': response.model_dump(by_alias=True, mode='json'),
+        'requested_model': requested_model,
+        'adopted_models': sorted(set(adopted_models)),
+        'attempt_id': attempt_id,
+        'restored_acceptance': (
+            None if restored_acceptance is None
+            else dict(restored_acceptance)),
+        'agent_mode': agent_mode,
+    }
+    return RenameCandidateBatch(
+        response=response.model_copy(deep=True),
+        requested_model=requested_model,
+        adopted_models=tuple(sorted(set(adopted_models))),
+        attempt_id=attempt_id,
+        restored_acceptance=(
+            None if restored_acceptance is None
+            else dict(restored_acceptance)),
+        agent_mode=agent_mode,
+        _batch_sha256=_canonical_sha256(payload),
+    )
+
+
+def _rename_batch_identity(batch: RenameCandidateBatch) -> str:
+    return _canonical_sha256({
+        'response': batch.response.model_dump(by_alias=True, mode='json'),
+        'requested_model': batch.requested_model,
+        'adopted_models': list(batch.adopted_models),
+        'attempt_id': batch.attempt_id,
+        'restored_acceptance': (
+            None if batch.restored_acceptance is None
+            else dict(batch.restored_acceptance)),
+        'agent_mode': batch.agent_mode,
+    })
+
+
+def request_rename_candidate(
+        ctx: RunContext, source: _NameMapResponseSource,
+        prepared: RenameCandidateContext,
+) -> RenameCandidateBatch:
+    """取得最终完整 response；中间坏候选只进 checkpoint 与内存反馈。"""
+    _assert_rename_prepared_current(ctx, prepared)
+    if _uses_agent_runs(ctx):
+        return _agent_rename_candidate(ctx, source, prepared)
+    # legacy 一次请求的顺序、schema、purpose 与参数保持原样。
+    response = source.ask_json(
+        prepared.system,
+        prepared.user,
+        model_cls=NameMapResponse,
+        purpose=ctx.node,
+        max_tokens=MAX_TOKENS,
+    )
+    return _rename_batch(
+        response=response,
+        requested_model=source.model,
+        adopted_models=source.accepted_models(ctx.node),
+        attempt_id=_accepted_attempt(source, ctx.node),
+        restored_acceptance=None,
+        agent_mode=False,
+    )
+
+
+def evaluate_rename_candidate(
+        ctx: RunContext, source: _NameMapResponseSource,
+        prepared: RenameCandidateContext, batch: RenameCandidateBatch,
+) -> RenameCandidateEvaluation:
+    """归一并跑当前业务 HARD；严格不写 formal/INVALID、不结算 usage。"""
+    if ctx.node != 'stage7.rename':
+        raise ValueError(
+            f'evaluate_rename_candidate 只接受 stage7.rename，实得 {ctx.node!r}')
+    _assert_rename_prepared_current(ctx, prepared)
+    if batch._batch_sha256 != _rename_batch_identity(batch):
+        raise ProvenanceRefused('stage7.rename candidate batch 在请求后被修改')
+    if source.model != batch.requested_model:
+        raise ProvenanceRefused('stage7.rename requested model 在评估前漂移')
+    if batch.agent_mode:
+        if (_accepted_attempt(source, ctx.node) != batch.attempt_id
+                or source.accepted_models(ctx.node) != batch.adopted_models):
+            raise ProvenanceRefused(
+                'stage7.rename agent 最终 accepted attempt/model 在评估前漂移')
+    artifact, findings = _materialize_rename_candidate(
+        ctx, prepared, batch.response,
+        requested_model=batch.requested_model,
+        adopted_models=batch.adopted_models,
+        settle=False,
+    )
+    hard_rules = tuple(sorted({
+        finding.rule for finding in _hard_findings(findings)}))
+    return RenameCandidateEvaluation(
+        candidate=artifact,
+        hard_rules=hard_rules,
+        requested_model=batch.requested_model,
+        adopted_models=batch.adopted_models,
+        attempt_id=batch.attempt_id,
+        input_sha256=prepared.input_sha256,
+        _batch=batch,
+        _candidate_sha256=_canonical_sha256(
+            artifact.model_dump(by_alias=True, mode='json')),
+    )
+
+
+def _assert_rename_evaluation(
+        ctx: RunContext, source: _NameMapResponseSource,
+        prepared: RenameCandidateContext,
+        evaluation: RenameCandidateEvaluation,
+) -> None:
+    if (evaluation.input_sha256 != prepared.input_sha256
+            or evaluation._batch._batch_sha256
+            != _rename_batch_identity(evaluation._batch)
+            or source.model != evaluation.requested_model):
+        raise ProvenanceRefused(
+            'stage7.rename evaluation 不属于当前冻结输入/response/model')
+    if evaluation._batch.agent_mode:
+        if (_accepted_attempt(source, ctx.node) != evaluation.attempt_id
+                or source.accepted_models(ctx.node) != evaluation.adopted_models):
+            raise ProvenanceRefused(
+                'stage7.rename agent 最终 accepted attempt/model 在 finalize 前漂移')
+
+
+def _terminal_rename_evaluation(
+        ctx: RunContext, prepared: RenameCandidateContext,
+        evaluation: RenameCandidateEvaluation,
+) -> RenameCandidateEvaluation:
+    """只在唯一终态边界结算 usage，并复核 provisional 全值确定。"""
+    artifact, findings = _materialize_rename_candidate(
+        ctx, prepared, evaluation._batch.response,
+        requested_model=evaluation.requested_model,
+        adopted_models=evaluation.adopted_models,
+        settle=True,
+    )
+    hard_rules = tuple(sorted({
+        finding.rule for finding in _hard_findings(findings)}))
+    payload = artifact.model_dump(by_alias=True, mode='json')
+    if (hard_rules != evaluation.hard_rules
+            or payload != evaluation.candidate.model_dump(
+                by_alias=True, mode='json')
+            or _canonical_sha256(payload) != evaluation._candidate_sha256):
+        raise ProvenanceRefused(
+            'stage7.rename provisional/final 人物表、HARD 或 usage 不确定')
+    return RenameCandidateEvaluation(
+        candidate=artifact,
+        hard_rules=hard_rules,
+        requested_model=evaluation.requested_model,
+        adopted_models=evaluation.adopted_models,
+        attempt_id=evaluation.attempt_id,
+        input_sha256=evaluation.input_sha256,
+        _batch=evaluation._batch,
+        _candidate_sha256=evaluation._candidate_sha256,
+    )
+
+
+def _equal_invalid_payload(expected: NameMap, landed: NameMap) -> bool:
+    left = expected.model_dump(by_alias=True, mode='json')
+    right = landed.model_dump(by_alias=True, mode='json')
+    left_prov = left.get('_provenance')
+    right_prov = right.get('_provenance')
+    if isinstance(left_prov, dict) and isinstance(right_prov, dict):
+        left_prov['gates_skipped'] = right_prov.get('gates_skipped')
+        left_prov['invalid_baseline_sha256'] = right_prov.get(
+            'invalid_baseline_sha256')
+    return left == right
+
+
+def _verify_rename_artifact(
+        ctx: RunContext, prepared: RenameCandidateContext,
+        expected: NameMap, *, rel: str,
+) -> NameMap:
+    """typed readback、freshness、当前输入、派生字段与 HARD 的独立终验。"""
+    store = ArtifactStore(ctx)
+    current = _assert_rename_prepared_current(ctx, prepared)
+    with ctx.validation_reads():
+        landed, _raw = store.read_own(
+            NameMap, rel, require_current=True)
+        freshness = store.freshness(rel)
+    if paths.is_invalid(rel):
+        equal = _equal_invalid_payload(expected, landed)
+    else:
+        equal = (
+            expected.model_dump(by_alias=True, mode='json')
+            == landed.model_dump(by_alias=True, mode='json'))
+    if not equal:
+        raise ProvenanceRefused(
+            f'stage7.rename {rel} typed readback 与本次终态候选不完全相等')
+    if freshness.state != 'fresh':
+        raise ProvenanceRefused(
+            f'stage7.rename {rel} freshness={freshness.state}/'
+            f'{freshness.reason}；拒绝 delivered')
+
+    model_out = {
+        'surname_map': dict(landed.surname_map),
+        'characters': [{
+            'char_id': item.char_id,
+            'new_canonical': item.new_canonical,
+            'renamed': item.renamed,
+            'not_renamed_reason': item.not_renamed_reason,
+            'aliases': [alias.model_dump(by_alias=True, mode='json')
+                        for alias in item.aliases],
+            'reason': item.reason,
+        } for item in landed.characters],
+    }
+    extra = [item.model_dump(by_alias=True, mode='json')
+             for item in landed.extra_subs]
+    rebuilt, findings, _hook_new = _build(
+        ctx, current, model_out, extra, landed.provenance)
+    rebuilt = rebuilt.model_copy(update={'identity': prepared.identity})
+    if (rebuilt.model_dump(by_alias=True, mode='json')
+            != landed.model_dump(by_alias=True, mode='json')):
+        raise ProvenanceRefused(
+            f'stage7.rename {rel} 不再等于当前代码的归一、替换与判据输出')
+    hard = sorted({finding.rule for finding in _hard_findings(findings)})
+    if paths.is_invalid(rel):
+        if not hard:
+            raise ProvenanceRefused(
+                'stage7.rename INVALID readback 已不命中业务 HARD；应走 0 成本 revalidate')
+    else:
+        if hard:
+            raise ProvenanceRefused(
+                f'stage7.rename 正式 readback 仍命中业务 HARD：{hard}')
+        if store.exists(_INVALID):
+            raise ProvenanceRefused(
+                f'stage7.rename 正式 readback 后仍有 live {_INVALID}')
+        if store.path(book_txt_rel(store)).is_file():
+            raise ProvenanceRefused(
+                'stage7.rename 正式 readback 后旧动态成书仍在 live 下载路径')
+        if landed.approved is not None or landed.book_txt is not None:
+            raise ProvenanceRefused(
+                'stage7.rename 新正式人物表不得继承旧审批或成书账')
+    return landed
+
+
+def verify_rename_delivery(
+        ctx: RunContext, prepared: RenameCandidateContext,
+        expected: NameMap,
+) -> NameMap:
+    """正式人物表公开终验口；通过后 executor session 才能 delivered。"""
+    return _verify_rename_artifact(ctx, prepared, expected, rel=REL)
+
+
+def _note_rename_adoption(
+        ctx: RunContext, *, artifact: NameMap,
+        purpose: str, attempt_id: str,
+) -> None:
+    ctx.ledger.note_adoption(
+        sid=ctx.sid,
+        node=ctx.node,
+        purpose=purpose,
+        attempt_id=attempt_id,
+        artifact=REL,
+        artifact_fingerprint=prov.projection_fingerprint(
+            artifact.model_dump(by_alias=True, mode='json')),
+        chapter=None,
+    )
+
+
+def _rename_finalization_payload(
+        prepared: RenameCandidateContext,
+        terminal: RenameCandidateEvaluation,
+) -> dict[str, object]:
+    payload = terminal.candidate.model_dump(by_alias=True, mode='json')
+    provenance = payload.get('_provenance')
+    if not isinstance(provenance, Mapping):
+        raise ProvenanceRefused('stage7.rename candidate 缺 typed provenance')
+    return {
+        'artifact': REL,
+        'input_sha256': prepared.input_sha256,
+        'identity': prepared.identity.model_dump(by_alias=True, mode='json'),
+        'inputs': provenance.get('inputs'),
+        'judged': payload.get('judged'),
+        'hook_consumed': payload.get('hook_consumed'),
+        'hard_rules': list(terminal.hard_rules),
+    }
+
+
+def _formal_target_state(
+        ctx: RunContext, store: ArtifactStore,
+        journal: Mapping[str, Any], artifact: NameMap,
+) -> str:
+    from novel.llm import stage7_runs
+
+    expected_sha = hashlib.sha256(store._render(REL, artifact)).hexdigest()
+    return stage7_runs.target_state(
+        ctx, journal, REL, expected_file_sha256=expected_sha)
+
+
+def _finalize_agent_rename_formal(
+        ctx: RunContext, prepared: RenameCandidateContext,
+        terminal: RenameCandidateEvaluation,
+) -> NameMap:
+    """prepared→write→typed readback→adoption→committed 的可恢复正式尾窗。"""
+    from novel.llm import stage7_runs
+
+    artifact = terminal.candidate
+    payload = artifact.model_dump(by_alias=True, mode='json')
+    finalization = _rename_finalization_payload(prepared, terminal)
+    store = ArtifactStore(ctx)
+    journal = stage7_runs.committed(ctx) or stage7_runs.prepared(ctx)
+    if journal is None:
+        if terminal.attempt_id is None:
+            raise ProvenanceRefused(
+                'stage7.rename 正式 agent 候选缺 accepted attempt')
+        journal = stage7_runs.prepare_commit(
+            ctx,
+            primary_payload=payload,
+            finalization_payload=finalization,
+            touched_paths=(REL, _INVALID, book_txt_rel(store)),
+            attempt_id=terminal.attempt_id,
+        )
+    elif (not stage7_runs.verify_commit_primary(journal, payload)
+          or not stage7_runs.verify_commit_finalization(
+              journal, finalization)):
+        raise ProvenanceRefused(
+            'stage7.rename commit journal 与最终人物表/冻结输入漂移')
+
+    _assert_rename_prepared_current(ctx, prepared)
+    formal_state = _formal_target_state(ctx, store, journal, artifact)
+    invalid_state = stage7_runs.target_state(
+        ctx, journal, _INVALID, expected_absent=True)
+    dynamic_book = book_txt_rel(store)
+    book_state = stage7_runs.target_state(
+        ctx, journal, dynamic_book, expected_absent=True)
+    if 'baseline' in (formal_state, invalid_state, book_state):
+        _assert_rename_prepared_current(ctx, prepared)
+        with store.history_transaction(REL, dynamic_book):
+            if book_state == 'baseline':
+                _retire_book_txt(store)
+            if formal_state == 'baseline' or invalid_state == 'baseline':
+                store.write(REL, artifact)
+            _assert_rename_prepared_current(ctx, prepared)
+            landed = verify_rename_delivery(ctx, prepared, artifact)
+    else:
+        landed = verify_rename_delivery(ctx, prepared, artifact)
+
+    landed_payload = landed.model_dump(by_alias=True, mode='json')
+    _assert_rename_prepared_current(ctx, prepared)
+    purpose, attempt_id = stage7_runs.restore_commit_adoption(ctx, journal)
+    if (purpose != ctx.node or attempt_id != terminal.attempt_id):
+        raise ProvenanceRefused(
+            'stage7.rename commit adoption 不等于最终 accepted attempt')
+    _note_rename_adoption(
+        ctx, artifact=landed, purpose=purpose, attempt_id=attempt_id)
+    _assert_rename_prepared_current(ctx, prepared)
+    stage7_runs.mark_committed(
+        ctx,
+        primary_payload=landed_payload,
+        finalization_payload=finalization,
+        landed_payloads={REL: landed_payload},
+    )
+    _assert_rename_prepared_current(ctx, prepared)
+    committed = stage7_runs.committed(ctx)
+    if committed is None:
+        raise ProvenanceRefused(
+            'stage7.rename mark_committed 后没有 committed journal')
+    stage7_runs.verify_committed_delivery(
+        ctx,
+        committed,
+        primary_payload=landed_payload,
+        finalization_payload=finalization,
+        landed_payloads={REL: landed_payload},
+    )
+    if terminal._batch.restored_acceptance is not None:
+        _finish_restored_rename_session(
+            ctx,
+            terminal._batch.restored_acceptance,
+            delivery_state='delivered',
+        )
+    return landed
+
+
+def _write_or_reuse_terminal_invalid(
+        ctx: RunContext, prepared: RenameCandidateContext,
+        artifact: NameMap,
+) -> tuple[NameMap, Any]:
+    """同一 checkpoint 的 blocked 终态最多落一次 live INVALID。"""
+    store = ArtifactStore(ctx)
+    if _current_invalid_sha256(store) != prepared.invalid_file_sha256:
+        # 新进程恢复时 prepare 会把已落成的同值 INVALID 当基线；同一进程内
+        # 的第三方漂移则必须关闭式拒绝，不能凭“最后一轮”覆盖。
+        raise ProvenanceRefused(
+            f'{_INVALID} 在候选生成期间被另一写者改动；拒绝覆盖')
+    if store.exists(_INVALID):
+        with ctx.validation_reads():
+            existing, _raw = store.read_own(
+                NameMap, _INVALID, require_current=True)
+        if _equal_invalid_payload(artifact, existing):
+            landed = _verify_rename_artifact(
+                ctx, prepared, artifact, rel=_INVALID)
+            return landed, store.path(_INVALID)
+    with store.history_transaction(REL):
+        path = store.write_invalid(REL, artifact, gates_skipped=[])
+        _assert_rename_prepared_current(ctx, prepared)
+        landed = _verify_rename_artifact(
+            ctx, prepared, artifact, rel=_INVALID)
+    return landed, path
+
+
+def finalize_rename_candidate(
+        ctx: RunContext, source: _NameMapResponseSource,
+        prepared: RenameCandidateContext,
+        evaluation: RenameCandidateEvaluation,
+) -> NameMap:
+    """唯一 settle/write/readback/adoption 边界；中间坏候选绝不落正式件。"""
+    if ctx.node != 'stage7.rename':
+        raise ValueError(
+            f'finalize_rename_candidate 只接受 stage7.rename，实得 {ctx.node!r}')
+    _assert_rename_evaluation(ctx, source, prepared, evaluation)
+    _assert_rename_prepared_current(ctx, prepared)
+
+    if evaluation._batch.agent_mode:
+        from novel.llm import stage7_runs
+        with stage7_runs.commit_ownership(ctx.novel_dir):
+            stage7_runs.refuse_foreign_commit_reservations(ctx)
+            existing = stage7_runs.committed(ctx) or stage7_runs.prepared(ctx)
+            if existing is not None:
+                provisional_payload = evaluation.candidate.model_dump(
+                    by_alias=True, mode='json')
+                provisional_finalization = _rename_finalization_payload(
+                    prepared, evaluation)
+                if (not stage7_runs.verify_commit_primary(
+                        existing, provisional_payload)
+                        or not stage7_runs.verify_commit_finalization(
+                            existing, provisional_finalization)):
+                    raise ProvenanceRefused(
+                        'stage7.rename 既有 commit journal 与 provisional 人物表/输入漂移')
+            terminal = _terminal_rename_evaluation(
+                ctx, prepared, evaluation)
+            if terminal.hard_rules:
+                if existing is not None:
+                    raise ProvenanceRefused(
+                        'stage7.rename 业务 HARD 候选不应拥有正式 commit journal')
+                _landed, path = _write_or_reuse_terminal_invalid(
+                    ctx, prepared, terminal.candidate)
+                raise GateBlocked(
+                    f'这份映射表在 agent 总轮次耗尽后仍有阻断级问题'
+                    f'（{list(terminal.hard_rules)}）——不该拿它去替换正文。'
+                    f'最后 accepted 问题稿在 {path}',
+                    invalid_path=str(path),
+                    hint='stage7.rename --apply-edit <name_map_edit.json 路径> 改一行，'
+                         '或 stage7.rename --revalidate --actor <id> --reason <why>'
+                         '（0 LLM、同轮重判并留不可变审计）')
+            return _finalize_agent_rename_formal(
+                ctx, prepared, terminal)
+
+    terminal = _terminal_rename_evaluation(ctx, prepared, evaluation)
+    if terminal.hard_rules:
+        _landed, path = _write_or_reuse_terminal_invalid(
+            ctx, prepared, terminal.candidate)
         raise GateBlocked(
-            f'这份映射表有阻断级问题（{blocking}）——不该拿它去替换正文。问题稿在 {p}',
-            invalid_path=str(p),
+            f'这份映射表有阻断级问题（{list(terminal.hard_rules)}）'
+            f'——不该拿它去替换正文。问题稿在 {path}',
+            invalid_path=str(path),
             hint='stage7.rename --apply-edit <name_map_edit.json 路径> 改一行，'
                  '或 stage7.rename --revalidate --actor <id> --reason <why>'
                  '（0 LLM、同轮重判并留不可变审计）')
+    store = ArtifactStore(ctx)
     with store.history_transaction(REL, book_txt_rel(store)):
         _retire_book_txt(store)
-        store.write(REL, art)
-    return art
+        store.write(REL, terminal.candidate)
+        _assert_rename_prepared_current(ctx, prepared)
+        landed = verify_rename_delivery(
+            ctx, prepared, terminal.candidate)
+    return landed
+
+
+def run_rename(ctx: RunContext, client: LlmClient) -> NameMap:
+    """legacy 包装：仍只请求一次；agent executor 复用同一四段并在 session 内返工。"""
+    prepared = prepare_rename_candidate(ctx)
+    batch = request_rename_candidate(ctx, client, prepared)
+    evaluation = evaluate_rename_candidate(ctx, client, prepared, batch)
+    return finalize_rename_candidate(ctx, client, prepared, evaluation)
 
 
 def run_approve(

@@ -19,9 +19,47 @@ fastapi = pytest.importorskip(
 from fastapi.testclient import TestClient               # noqa: E402
 
 from novel.api.app import UI_HEADER, create_app         # noqa: E402
+from novel.agents.base import AgentUsage                # noqa: E402
+from novel.commanders import (                          # noqa: E402
+    CommanderInvocation, CommanderObservation, CommanderProcessResult,
+)
 from novel.orchestrator import agent                    # noqa: E402
 
 UI = {UI_HEADER: '1'}
+
+_PROFILE = {
+    'driver': 'codex',
+    'model': 'gpt-5.6-sol',
+    'reasoning_effort': 'high',
+    'execution_mode': 'standard',
+}
+_PIPELINE_PROFILES = {
+    'commander': _PROFILE,
+    'executor_default': _PROFILE,
+    'executor_overrides': {},
+}
+
+
+class _PlanningDriver:
+    def __init__(self, profile):
+        self.profile = profile
+
+    def build_invocation(self, profile, prompt, *, repo, base, **_kwargs):
+        del base
+        return CommanderInvocation(
+            argv=(profile.driver, 'headless', '--model', profile.model),
+            stdin_text=prompt, cwd=str(repo), env_overrides={},
+            profile=profile, protocol=f'{profile.driver}-test-v1')
+
+    def close(self):
+        return None
+
+
+@pytest.fixture(autouse=True)
+def no_real_commander_cli(monkeypatch):
+    monkeypatch.setattr(
+        agent, 'create_commander_driver',
+        lambda profile, **_kwargs: _PlanningDriver(profile))
 
 
 #: 这一族用例真去拉 agent，而 `agent.start` / `enqueue` 现在**拒绝一本不在盘上的书**
@@ -39,15 +77,27 @@ def client(tmp_path):
         yield c, base
 
 
-def _ok_spawn(argv, cwd, env, log):
+def _result(invocation, env, *, exit_code=0):
+    return CommanderProcessResult(
+        exit_code=exit_code,
+        observation=CommanderObservation(
+            provider_session_id=f"provider-{env['NOVEL_COMMANDER_RUN_ID']}",
+            actual_model=invocation.profile.model,
+            actual_effort=invocation.profile.reasoning_effort,
+            usage=AgentUsage(prompt_tokens=5, completion_tokens=1,
+                             total_tokens=6)))
+
+
+def _ok_spawn(invocation, env, log):
     log.write(b'fake agent output\n')
-    return 0
+    return _result(invocation, env)
 
 
 def test_preview_shows_the_exact_argv_and_prompt(client):
     c, base = client
     r = c.post('/api/agent/runs/preview', json={
         'sid': '42', 'authorized': True, 'egress_authorized': True,
+        'profiles': _PIPELINE_PROFILES,
     },
                headers=UI)
     assert r.status_code == 200
@@ -56,9 +106,12 @@ def test_preview_shows_the_exact_argv_and_prompt(client):
     assert d['egress_authorized'] is True
     assert '付费授权已授予' in d['prompt']
     assert '正文外发授权已授予' in d['prompt']
-    assert any('python.exe *' in rule for rule in d['argv'])
-    # 请求入口的产品默认：不付费，但默认允许正文外发；prompt 仍把两项都显式写出。
-    d2 = c.post('/api/agent/runs/preview', json={'sid': '42'}, headers=UI).json()
+    assert d['profiles'] == _PIPELINE_PROFILES
+    assert d['prompt'] not in d['argv']
+    # preview 仍可在未授权状态 0 成本查看；profiles 不能省略，因为当前默认是 null。
+    d2 = c.post('/api/agent/runs/preview', json={
+        'sid': '42', 'profiles': _PIPELINE_PROFILES,
+    }, headers=UI).json()
     assert d2['authorized'] is False and d2['egress_authorized'] is True
     assert '付费授权未授予' in d2['prompt']
     assert '正文外发授权已授予' in d2['prompt']
@@ -66,10 +119,40 @@ def test_preview_shows_the_exact_argv_and_prompt(client):
     # 外发授权可独立取消，不能被已勾选的付费授权覆盖。
     d3 = c.post('/api/agent/runs/preview', json={
         'sid': '42', 'authorized': True, 'egress_authorized': False,
+        'profiles': _PIPELINE_PROFILES,
     }, headers=UI).json()
     assert d3['authorized'] is True and d3['egress_authorized'] is False
     assert '付费授权已授予' in d3['prompt']
     assert '正文外发授权未授予' in d3['prompt']
+
+
+@pytest.mark.parametrize('path,payload', [
+    ('/api/agent/runs/preview', {'sid': '42'}),
+    ('/api/agent/runs', {
+        'sid': '42', 'authorized': True, 'egress_authorized': True}),
+    ('/api/agent/runs/batch', {
+        'sids': ['42'], 'authorized': True, 'egress_authorized': True}),
+])
+def test_missing_pipeline_profiles_are_closed_while_default_is_null(
+        client, path, payload):
+    c, _ = client
+    response = c.post(path, json=payload, headers=UI)
+    assert response.status_code == 400
+    assert response.json()['kind'] == 'UnsupportedRunMode'
+    assert '显式选择' in response.json()['message']
+
+
+def test_invalid_profile_combination_is_refused(client):
+    c, _ = client
+    bad = {
+        **_PIPELINE_PROFILES,
+        'commander': {**_PROFILE, 'model': 'claude-opus-5'},
+    }
+    response = c.post('/api/agent/runs/preview', json={
+        'sid': '42', 'profiles': bad,
+    }, headers=UI)
+    assert response.status_code == 400
+    assert response.json()['kind'] == 'UnsupportedRunMode'
 
 
 def test_start_list_log_and_stop_gate(client, monkeypatch):
@@ -77,11 +160,13 @@ def test_start_list_log_and_stop_gate(client, monkeypatch):
     monkeypatch.setattr(agent, '_default_spawn', lambda run_id: _ok_spawn)
 
     r = c.post('/api/agent/runs', json={
-        'sid': '42', 'authorized': True, 'egress_authorized': False,
+        'sid': '42', 'authorized': True, 'egress_authorized': True,
+        'profiles': _PIPELINE_PROFILES,
     }, headers=UI)
     assert r.status_code == 202
     assert r.json()['start']['authorized'] is True
-    assert r.json()['start']['egress_authorized'] is False
+    assert r.json()['start']['egress_authorized'] is True
+    assert r.json()['start']['profiles'] == _PIPELINE_PROFILES
     run_id = r.json()['run_id']
     assert agent.wait(run_id, 10)
 
@@ -103,17 +188,56 @@ def test_csrf_guard_covers_the_mutation(client):
     assert c.post('/api/agent/runs', json={'sid': '42'}).status_code == 403
 
 
+@pytest.mark.parametrize('authorized,egress_authorized', [
+    (False, True), (True, False), (False, False),
+])
+def test_http_start_requires_both_authorizations_before_driver(
+        client, monkeypatch, authorized, egress_authorized):
+    c, _ = client
+    called = []
+    monkeypatch.setattr(
+        agent, 'create_commander_driver',
+        lambda *_args, **_kwargs: called.append(True))
+    response = c.post('/api/agent/runs', json={
+        'sid': '42', 'authorized': authorized,
+        'egress_authorized': egress_authorized,
+        'profiles': _PIPELINE_PROFILES,
+    }, headers=UI)
+    assert response.status_code == 409
+    assert response.json()['kind'] == 'ApprovalRequired'
+    assert called == []
+
+
+def test_http_start_refuses_unknown_code_before_spawn(client, monkeypatch):
+    from novel import prov
+
+    c, _ = client
+    spawned = []
+    monkeypatch.setattr(prov, 'code_version', lambda: prov.CODE_UNKNOWN)
+    monkeypatch.setattr(
+        agent, '_default_spawn', lambda _run_id: spawned.append(True))
+    response = c.post('/api/agent/runs', json={
+        'sid': '42', 'authorized': True, 'egress_authorized': True,
+        'profiles': _PIPELINE_PROFILES,
+    }, headers=UI)
+    assert response.status_code == 400
+    assert response.json()['kind'] == 'UnsupportedRunMode'
+    assert '代码指纹不可用' in response.json()['message']
+    assert spawned == []
+
+
 def test_both_directions_of_the_mutex(client, monkeypatch):
     c, base = client
     gate = threading.Event()
 
-    def slow(argv, cwd, env, log):
+    def slow(invocation, env, log):
         gate.wait(10)
-        return 0
+        return _result(invocation, env)
 
     monkeypatch.setattr(agent, '_default_spawn', lambda run_id: slow)
     r = c.post('/api/agent/runs', json={
         'sid': '42', 'authorized': True, 'egress_authorized': True,
+        'profiles': _PIPELINE_PROFILES,
     }, headers=UI)
     assert r.status_code == 202
     other = None
@@ -130,18 +254,20 @@ def test_both_directions_of_the_mutex(client, monkeypatch):
         # 同一本书的第二个 agent 仍 409（一本书一把锁）
         r3 = c.post('/api/agent/runs', json={
             'sid': '42', 'authorized': True, 'egress_authorized': True,
+            'profiles': _PIPELINE_PROFILES,
         },
                      headers=UI)
         assert r3.status_code == 409
         # ⭐ 但**另一本书**起得来：锁按书分，异书两个 agent 谁也碰不到谁的目录。
         r4 = c.post('/api/agent/runs', json={
             'sid': '43', 'authorized': True, 'egress_authorized': True,
+            'profiles': _PIPELINE_PROFILES,
         }, headers=UI)
         assert r4.status_code == 202, '另一本书被挡住了——锁又变回全局一把了'
         other = r4.json()['run_id']
     finally:
         # ⚠ 收尾走 `wait` 不是 `stop`：这一批用的是 monkeypatch 进去的假 spawn，
-        # `_PROCS` 里根本没有句柄，`stop` 会以「没有在跑的子进程」当场炸掉。
+        # Commander owner 表里根本没有句柄，`stop` 会以「没有在跑的子进程」当场炸掉。
         gate.set()
         agent.wait(r.json()['run_id'], 10)
         if other:
@@ -156,9 +282,9 @@ def test_batch_starts_what_it_can_and_queues_the_rest(client, monkeypatch):
     monkeypatch.setattr(agent, 'MAX_CONCURRENT', 2)
     gate = threading.Event()
 
-    def slow(argv, cwd, env, log):
+    def slow(invocation, env, log):
         gate.wait(10)
-        return 0
+        return _result(invocation, env)
 
     monkeypatch.setattr(agent, '_default_spawn', lambda run_id: slow)
     started = []
@@ -166,12 +292,14 @@ def test_batch_starts_what_it_can_and_queues_the_rest(client, monkeypatch):
         r = c.post('/api/agent/runs/batch', json={
             'sids': ['42', '43', '44'], 'authorized': True,
             'egress_authorized': True,
+            'profiles': _PIPELINE_PROFILES,
         }, headers=UI)
         assert r.status_code == 202
         d = r.json()
         assert {rec['start']['sid'] for rec in d['running']} == {'42', '43'}
         assert [p['sid'] for p in d['pending']] == ['44']
         assert d['pending'][0]['position'] == 1
+        assert d['pending'][0]['profiles'] == _PIPELINE_PROFILES
         assert d['max_concurrent'] == 2
         assert d['rejected'] == []
         started = [rec['run_id'] for rec in d['running']]
@@ -198,18 +326,20 @@ def test_batch_rejects_a_book_that_already_has_an_agent(client, monkeypatch):
     c, base = client
     gate = threading.Event()
 
-    def slow(argv, cwd, env, log):
+    def slow(invocation, env, log):
         gate.wait(10)
-        return 0
+        return _result(invocation, env)
 
     monkeypatch.setattr(agent, '_default_spawn', lambda run_id: slow)
     first = c.post('/api/agent/runs', json={
         'sid': '42', 'authorized': True, 'egress_authorized': True,
+        'profiles': _PIPELINE_PROFILES,
     }, headers=UI)
     assert first.status_code == 202
     try:
         r = c.post('/api/agent/runs/batch', json={
             'sids': ['42', '43'], 'authorized': True, 'egress_authorized': True,
+            'profiles': _PIPELINE_PROFILES,
         }, headers=UI)
         assert r.status_code == 202
         d = r.json()

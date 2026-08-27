@@ -3,6 +3,8 @@
 """Stage6 当前文案契约、确定性重判、归一幂等与人工定稿。"""
 from __future__ import annotations
 
+from contextlib import contextmanager
+
 import pytest
 
 from contracts.invariants import slot_of
@@ -369,18 +371,35 @@ def test_synthetic_stage6_gate_blocks_only_when_every_candidate_is_dirty(
     from tests.test_stage2_generation import _ctx
 
     written = []
+    state = {}
 
     class Store:
         def __init__(self, ctx):
             self.ctx = ctx
 
         def write(self, rel, artifact):
+            state[rel] = artifact
+            state.pop(hook._INVALID, None)
             written.append((rel, artifact))
 
         def write_invalid(self, rel, artifact, *, gates_skipped):
             invalid = rel.replace('.json', '.INVALID.json')
+            state[invalid] = artifact
             written.append((invalid, artifact))
             return self.ctx.novel_dir / invalid
+
+        def exists(self, rel):
+            return rel in state
+
+        def read_own(self, _model, rel, **_kwargs):
+            return state[rel], {}
+
+        def freshness(self, _rel):
+            return SimpleNamespace(state='fresh', reason='match')
+
+        @contextmanager
+        def history_transaction(self, *_rels):
+            yield
 
     upstreams = SimpleNamespace(
         mat=prompts.Material(blocks=('合成完整创作包。',), upto=1),

@@ -68,6 +68,10 @@ _CONSUMED: dict[str, str] = {
 #: ⚠ 这张表**必须逐个列名**，不许写成「所有标量一律不发」那种规则：
 #: 那样新加一个标量会被**静默**挡住，而静默正是本模块要防的方向。
 _WITHHELD: dict[str, str] = {
+    'AGENT_EXECUTOR_NODES': (
+        'agent 执行节点属于 driver/model/effort/mode 组合能力面，'
+        '唯一公开口是动态 `GET /api/agent/capabilities`；'
+        '再经 `/api/enums` 发一份会造成两个可漂移的节点清单'),
     'LEGACY_STAGE5_MODES': '只用来识别并拒绝旧 deep/shallow 盘面，不是现役选项',
     # ── 分章（stage0 / stage1）的判据阈值与剥壳正则 ──
     'NONBODY_LEAD_STRIP': '正则。发过去等于请前端自己剥壳，而剥出来的 core 是所有长度阈值的输入',

@@ -16,6 +16,8 @@ from types import SimpleNamespace
 import pytest
 from pydantic import BaseModel, Field
 
+from contracts.schema.orchestration import AgentProfile
+from novel import agent_session_audit
 from novel.errors import (
     ArtifactUnreadable, ProvenanceRefused, ResponseRepairBatchRequired,
     ResponseRepairRequired, TerminalState,
@@ -64,6 +66,13 @@ def _checkpoint_hash(payload: dict[str, object]) -> str:
                  if key not in ('created_at', 'checkpoint_sha256')}
     raw = json.dumps(
         projected, ensure_ascii=False, sort_keys=True, separators=(',', ':'),
+    ).encode('utf-8')
+    return hashlib.sha256(raw).hexdigest()
+
+
+def _canonical_sha(value: object) -> str:
+    raw = json.dumps(
+        value, ensure_ascii=False, sort_keys=True, separators=(',', ':'),
     ).encode('utf-8')
     return hashlib.sha256(raw).hexdigest()
 
@@ -137,6 +146,7 @@ class _SyntheticChapterClient:
 
 def _ctx(
         tmp_path: Path, run_id: str, *, observer=None, repair: bool = False,
+        executor_profile: AgentProfile | None = None,
 ) -> RunContext:
     book = tmp_path / '恢复测试_123'
     clean = book / 'stage0' / 'clean_text.txt'
@@ -151,6 +161,7 @@ def _ctx(
         ledger=CostLedger(
             path=tmp_path / '_service' / 'ledger.jsonl', run_id=run_id),
         run_id=run_id,
+        executor_profile=executor_profile,
         repair_rejected_responses=repair,
         observer=observer or (lambda _payload: None),
     )
@@ -179,6 +190,137 @@ def _test_request_policy(
     }
 
 
+_AGENT_PROFILE = AgentProfile(
+    driver='codex', model='gpt-5.6-sol', reasoning_effort='high',
+    execution_mode='standard')
+
+
+def _agent_request_policy(
+        *, profile: AgentProfile = _AGENT_PROFILE,
+        max_tokens: int = 64_000,
+) -> dict[str, object]:
+    return {
+        'protocol_version': 'node-executor/v1',
+        'profile': profile.model_dump(mode='json'),
+        'session_isolation': 'per-purpose-chapter',
+        'recovery_policy': 'stage2-blueprint-v1',
+        'phases': [{
+            'phase': 'blueprint',
+            'response_model': _ChapterRows.__name__,
+            'response_schema_sha256': _canonical_sha(
+                _ChapterRows.model_json_schema(by_alias=True)),
+            'requested_output_token_ceiling': max_tokens,
+            'prefer_content_over_reasoning_salvage': False,
+        }],
+    }
+
+
+def _agent_checkpoint_acceptance(
+        ctx: RunContext, *, purpose: str, system: str, user: str,
+        texts: list[tuple[str, str]], max_tokens: int = 64_000,
+) -> dict[str, object]:
+    """登记若干 agent turns，并返回最后一轮的 SessionClient 同形 acceptance。"""
+    assert ctx.executor_profile is not None and texts
+    profile = ctx.executor_profile.model_dump(mode='json')
+    schema_sha = _canonical_sha(_ChapterRows.model_json_schema(by_alias=True))
+    binding = {
+        'node': ctx.node,
+        'chapter': 1,
+        'purpose': purpose,
+        'system_sha256': hashlib.sha256(system.encode()).hexdigest(),
+        'user_sha256': hashlib.sha256(user.encode()).hexdigest(),
+        'schema_sha256': schema_sha,
+        'requested_model': profile['model'],
+        'requested_effort': profile['reasoning_effort'],
+        'requested_output_token_ceiling': max_tokens,
+        'protocol_version': 'node-executor/v1',
+    }
+    subject_sha = _canonical_sha(binding)
+    session_run_id = f'session-{texts[-1][0]}'
+    provider_session_id = f'provider-{texts[-1][0]}'
+    prompt_shas = [
+        hashlib.sha256(f'agent stdin {index}'.encode()).hexdigest()
+        for index in range(1, len(texts) + 1)
+    ]
+    initial_prompt_sha = hashlib.sha256(
+        f'{system}\n\n--- 本轮任务 ---\n\n{user}'.encode()).hexdigest()
+    agent_session_audit.append_event(
+        ctx.novel_dir.parent,
+        agent_session_audit.AgentSessionEvent(
+            session_run_id=session_run_id, parent_run_id=ctx.run_id,
+            role='executor', node=ctx.node, chapter=1,
+            subject_sha256=subject_sha, profile=ctx.executor_profile,
+            requested_model=ctx.executor_profile.model,
+            requested_effort=ctx.executor_profile.reasoning_effort,
+            cli_version='synthetic-cli', protocol_version='node-executor/v1',
+            start_code_version=ctx.code, prompt_sha256=initial_prompt_sha,
+            schema_sha256=schema_sha, kind='started', ts=1)),
+    links: list[dict[str, object]] = []
+    for index, (attempt_id, text) in enumerate(texts, 1):
+        fingerprint = _canonical_sha({
+            'protocol_version': 'node-executor/v1',
+            'purpose': purpose,
+            'turn_index': index,
+            'attempt_id': attempt_id,
+        })
+        ctx.ledger.record(
+            node=ctx.node, sid=ctx.sid, model=ctx.executor_profile.model,
+            request_model=ctx.executor_profile.model, code=ctx.code,
+            cached=False, cache_policy='agent-session', purpose=purpose,
+            outcome='ok', attempt_id=attempt_id,
+            request_fingerprint=fingerprint,
+            response_sha256=hashlib.sha256(text.encode()).hexdigest(),
+            reasoning_effort=ctx.executor_profile.reasoning_effort,
+            thinking=None, json_mode=True, max_tokens=None,
+            prompt_tokens=10, completion_tokens=20, reasoning_tokens=15,
+        )
+        links.append(ctx.ledger.request_identity_for_attempt(attempt_id))
+        agent_session_audit.append_event(
+            ctx.novel_dir.parent,
+            agent_session_audit.AgentSessionEvent(
+                session_run_id=session_run_id, parent_run_id=ctx.run_id,
+                role='executor', node=ctx.node, chapter=1,
+                subject_sha256=subject_sha, profile=ctx.executor_profile,
+                provider_session_id=provider_session_id,
+                turn_index=index, attempt_id=attempt_id,
+                requested_model=ctx.executor_profile.model,
+                actual_model=ctx.executor_profile.model,
+                requested_effort=ctx.executor_profile.reasoning_effort,
+                actual_effort=ctx.executor_profile.reasoning_effort,
+                cli_version='synthetic-cli',
+                protocol_version='node-executor/v1',
+                start_code_version=ctx.code, prompt_sha256=prompt_shas[index - 1],
+                schema_sha256=schema_sha, kind='turn', ts=index + 1))
+    links.sort(key=lambda row: (
+        str(row['attempt_id']), str(row['request_fingerprint'])))
+    accepted = links[-1]
+    accepted_text = texts[-1][1]
+    return {
+        'acceptance_protocol': 'node-executor/v1',
+        'attempt_id': accepted['attempt_id'],
+        'request_fingerprint': accepted['request_fingerprint'],
+        'model': accepted['model'],
+        'ledger_response_sha256': accepted['response_sha256'],
+        'accepted_channel': 'content',
+        'accepted_text': accepted_text,
+        'normalized_text': accepted_text,
+        'attempt_links': links,
+        'profile': profile,
+        'subject_sha256': subject_sha,
+        'session_run_id': session_run_id,
+        'provider_session_id': provider_session_id,
+        'accepted_turn_index': len(links),
+        'accepted_prompt_sha256': prompt_shas[-1],
+        'accepted_schema_sha256': schema_sha,
+        'accepted_request': binding,
+        'request_mode': (
+            'original' if len(links) == 1 else 'agent_session_resume'),
+        'recovery_from_attempts': [
+            row['attempt_id'] for row in links[:-1]],
+        'salvaged': False,
+    }
+
+
 def _ensure_run(
         ctx: RunContext, *, architecture: str, topology: str,
         requests: list[tuple[int | None, str, str]],
@@ -188,6 +330,352 @@ def _ensure_run(
     return stage2_runs.ensure_run(
         ctx, architecture=architecture, topology=topology, requests=requests,
         request_policy=request_policy or _test_request_policy(), refresh=refresh)
+
+
+def test_agent_request_policy_is_discriminated_and_legacy_stays_exact(tmp_path):
+    requests = [(1, 'SYSTEM', 'USER')]
+    agent = _ctx(
+        tmp_path, new_run_id(), executor_profile=_AGENT_PROFILE)
+    agent_policy = _agent_request_policy(max_tokens=2048)
+    agent_run = _ensure_run(
+        agent, architecture='extraction-ir-v3.1',
+        topology='scaffolded_single', requests=requests,
+        request_policy=agent_policy)
+
+    assert agent_run['request_policy'] == agent_policy
+    assert set(agent_run['request_policy']) == {
+        'protocol_version', 'profile', 'session_isolation',
+        'recovery_policy', 'phases'}
+    assert not ({'model_chain', 'rungs', 'thinking', 'max_tokens'}
+                & set(agent_run['request_policy']))
+    phase = agent_run['request_policy']['phases'][0]
+    assert phase['requested_output_token_ceiling'] == 2048
+    assert 'max_tokens' not in phase
+
+    legacy = _ctx(tmp_path, new_run_id())
+    legacy_policy = _test_request_policy(max_tokens=2048)
+    legacy_run = _ensure_run(
+        legacy, architecture='extraction-ir-v3.1',
+        topology='scaffolded_single', requests=requests,
+        request_policy=legacy_policy)
+    assert legacy_run['request_policy'] == legacy_policy
+    assert 'protocol_version' not in legacy_run['request_policy']
+
+
+@pytest.mark.parametrize('case', [
+    'unknown_protocol', 'legacy_field', 'unresolved_profile',
+    'wrong_isolation', 'provider_max_tokens',
+])
+def test_agent_request_policy_rejects_ambiguous_or_unresolved_shape(
+        tmp_path, case):
+    run_id = new_run_id()
+    ctx = _ctx(tmp_path, run_id, executor_profile=_AGENT_PROFILE)
+    policy = _agent_request_policy(max_tokens=2048)
+    if case == 'unknown_protocol':
+        policy['protocol_version'] = 'node-executor/v2'
+    elif case == 'legacy_field':
+        policy['model_chain'] = ['gpt-5.6-sol']
+    elif case == 'unresolved_profile':
+        policy['profile'] = {
+            **dict(policy['profile']), 'execution_mode': None}
+    elif case == 'wrong_isolation':
+        policy['session_isolation'] = 'shared-book'
+    else:
+        phase = dict(policy['phases'][0])
+        phase['max_tokens'] = phase.pop('requested_output_token_ceiling')
+        policy['phases'] = [phase]
+
+    with pytest.raises(ProvenanceRefused, match='agent|profile|policy'):
+        _ensure_run(
+            ctx, architecture='extraction-ir-v3.1',
+            topology='scaffolded_single',
+            requests=[(1, 'SYSTEM', 'USER')], request_policy=policy)
+    assert not (stage2_runs.paths.stage2_blueprint_run_path(
+        ctx.novel_dir, run_id) / stage2_runs.RUN_FILE).exists()
+
+
+def test_agent_checkpoint_restores_full_session_and_ledger_with_zero_wire(
+        tmp_path):
+    run_id = new_run_id()
+    purpose = 'stage2.blueprint:ch1'
+    requests = [(1, 'SYSTEM', 'USER')]
+    accepted_text = '{"blueprints":[{"chapter_ordinal":1}]}'
+    first = _ctx(
+        tmp_path, run_id, executor_profile=_AGENT_PROFILE)
+    policy = _agent_request_policy(max_tokens=2048)
+    _ensure_run(
+        first, architecture='extraction-ir-v3.1',
+        topology='scaffolded_single', requests=requests,
+        request_policy=policy)
+    acceptance = _agent_checkpoint_acceptance(
+        first, purpose=purpose, system='SYSTEM', user='USER',
+        texts=[('1' * 16, '{"blueprints":[]}'),
+               ('2' * 16, accepted_text)], max_tokens=2048)
+    checkpoint = stage2_runs.write_checkpoint(
+        first, phase='blueprint', chapter=1, purpose=purpose,
+        architecture='extraction-ir-v3.1', response_model=_ChapterRows,
+        system='SYSTEM', user='USER',
+        response_payload={'blueprints': [{'chapter_ordinal': 1}]},
+        acceptance=acceptance, scope_violation=None)
+    stored = json.loads(checkpoint.read_text(encoding='utf-8'))
+    assert stored['acceptance_protocol'] == 'node-executor/v1'
+    assert stored['accepted_text'] == accepted_text
+    assert stored['accepted_turn_index'] == 2
+    assert stored['recovery_from_attempts'] == ['1' * 16]
+    assert not ({'model_chain', 'rungs', 'repair_resolution', 'recovery_mode'}
+                & set(stored))
+
+    resumed = _ctx(
+        tmp_path, run_id, executor_profile=_AGENT_PROFILE)
+    _ensure_run(
+        resumed, architecture='extraction-ir-v3.1',
+        topology='scaffolded_single', requests=requests,
+        request_policy=policy)
+    restored = stage2_runs.restore_checkpoint(
+        resumed, phase='blueprint', chapter=1, purpose=purpose,
+        architecture='extraction-ir-v3.1', response_model=_ChapterRows,
+        system='SYSTEM', user='USER')
+
+    assert restored == stored
+    assert resumed.ledger.calls_made == 2
+    assert resumed.ledger.attempt_ids_for_purpose(purpose) == (
+        '1' * 16, '2' * 16)
+    assert resumed.ledger.request_identity_for_attempt('2' * 16) \
+        == stored['attempt_links'][1]
+
+
+@pytest.mark.parametrize('case', [
+    'profile', 'actual_model', 'subject', 'schema', 'ceiling', 'stdout', 'session_turn',
+    'provider_max_tokens',
+])
+def test_agent_checkpoint_write_rejects_each_unclosed_identity(tmp_path, case):
+    run_id = new_run_id()
+    purpose = 'stage2.blueprint:ch1'
+    ctx = _ctx(tmp_path, run_id, executor_profile=_AGENT_PROFILE)
+    _ensure_run(
+        ctx, architecture='extraction-ir-v3.1',
+        topology='scaffolded_single', requests=[(1, 'SYSTEM', 'USER')],
+        request_policy=_agent_request_policy(max_tokens=2048))
+    text = '{"blueprints":[{"chapter_ordinal":1}]}'
+    acceptance = _agent_checkpoint_acceptance(
+        ctx, purpose=purpose, system='SYSTEM', user='USER',
+        texts=[('3' * 16, text)], max_tokens=2048)
+    if case == 'profile':
+        acceptance['profile'] = AgentProfile(
+            driver='codex', model='gpt-5.6-terra', reasoning_effort='high',
+            execution_mode='standard').model_dump(mode='json')
+    elif case == 'actual_model':
+        acceptance['model'] = 'gpt-5.6-terra'
+    elif case == 'subject':
+        acceptance['subject_sha256'] = '0' * 64
+    elif case == 'schema':
+        acceptance['accepted_schema_sha256'] = '0' * 64
+    elif case == 'ceiling':
+        acceptance['accepted_request'] = {
+            **dict(acceptance['accepted_request']),
+            'requested_output_token_ceiling': 4096,
+        }
+    elif case == 'stdout':
+        acceptance['accepted_text'] = text + ' '
+    elif case == 'session_turn':
+        acceptance['session_run_id'] = 'session-missing'
+    else:
+        acceptance['attempt_links'][0]['max_tokens'] = 2048
+
+    with pytest.raises(ProvenanceRefused):
+        stage2_runs.write_checkpoint(
+            ctx, phase='blueprint', chapter=1, purpose=purpose,
+            architecture='extraction-ir-v3.1', response_model=_ChapterRows,
+            system='SYSTEM', user='USER',
+            response_payload={'blueprints': [{'chapter_ordinal': 1}]},
+            acceptance=acceptance, scope_violation=None)
+    assert not stage2_runs.paths.stage2_blueprint_checkpoint_path(
+        ctx.novel_dir, run_id, 'blueprint', 1).exists()
+
+
+def test_agent_checkpoint_restore_rechecks_session_and_never_overwrites_first(
+        tmp_path):
+    run_id = new_run_id()
+    purpose = 'stage2.blueprint:ch1'
+    ctx = _ctx(tmp_path, run_id, executor_profile=_AGENT_PROFILE)
+    _ensure_run(
+        ctx, architecture='extraction-ir-v3.1',
+        topology='scaffolded_single', requests=[(1, 'SYSTEM', 'USER')],
+        request_policy=_agent_request_policy(max_tokens=2048))
+    text = '{"blueprints":[{"chapter_ordinal":1}]}'
+    first_acceptance = _agent_checkpoint_acceptance(
+        ctx, purpose=purpose, system='SYSTEM', user='USER',
+        texts=[('4' * 16, text)], max_tokens=2048)
+    checkpoint = stage2_runs.write_checkpoint(
+        ctx, phase='blueprint', chapter=1, purpose=purpose,
+        architecture='extraction-ir-v3.1', response_model=_ChapterRows,
+        system='SYSTEM', user='USER',
+        response_payload={'blueprints': [{'chapter_ordinal': 1}]},
+        acceptance=first_acceptance, scope_violation=None)
+    before = checkpoint.read_bytes()
+
+    replacement = _agent_checkpoint_acceptance(
+        ctx, purpose=purpose, system='SYSTEM', user='USER',
+        texts=[('5' * 16, text)], max_tokens=2048)
+    with pytest.raises(ProvenanceRefused, match='拒绝覆盖'):
+        stage2_runs.write_checkpoint(
+            ctx, phase='blueprint', chapter=1, purpose=purpose,
+            architecture='extraction-ir-v3.1', response_model=_ChapterRows,
+            system='SYSTEM', user='USER',
+            response_payload={'blueprints': [{'chapter_ordinal': 1}]},
+            acceptance=replacement, scope_violation=None)
+    assert checkpoint.read_bytes() == before
+
+    tampered = json.loads(before.decode('utf-8'))
+    # 非空但错误，确保 restore 失败来自 checkpoint ↔ audit turn 漂移，
+    # 而不是先被普通字符串形状校验挡住。
+    tampered['provider_session_id'] = 'provider-tampered'
+    tampered['checkpoint_sha256'] = _checkpoint_hash(tampered)
+    checkpoint.write_text(json.dumps(tampered, ensure_ascii=False), encoding='utf-8')
+    resumed = _ctx(
+        tmp_path, run_id, executor_profile=_AGENT_PROFILE)
+    with pytest.raises(ProvenanceRefused, match='session'):
+        stage2_runs.restore_checkpoint(
+            resumed, phase='blueprint', chapter=1, purpose=purpose,
+            architecture='extraction-ir-v3.1', response_model=_ChapterRows,
+            system='SYSTEM', user='USER')
+
+
+def test_agent_checkpoint_restore_refuses_legacy_prior_ledger_actual_model_drift(
+        tmp_path):
+    """旧写入器可能将前一轮的实际模型同时写入 checkpoint/ledger；
+    两份相互自洽仍不能替代 resolved profile 这第三把尺。
+    """
+    run_id = new_run_id()
+    purpose = 'stage2.blueprint:ch1'
+    first_attempt = '6' * 16
+    accepted_attempt = '7' * 16
+    ctx = _ctx(tmp_path, run_id, executor_profile=_AGENT_PROFILE)
+    policy = _agent_request_policy(max_tokens=2048)
+    _ensure_run(
+        ctx, architecture='extraction-ir-v3.1',
+        topology='scaffolded_single', requests=[(1, 'SYSTEM', 'USER')],
+        request_policy=policy)
+    text = '{"blueprints":[{"chapter_ordinal":1}]}'
+    acceptance = _agent_checkpoint_acceptance(
+        ctx, purpose=purpose, system='SYSTEM', user='USER',
+        texts=[(first_attempt, '{"blueprints":[]}'),
+               (accepted_attempt, text)], max_tokens=2048)
+    checkpoint = stage2_runs.write_checkpoint(
+        ctx, phase='blueprint', chapter=1, purpose=purpose,
+        architecture='extraction-ir-v3.1', response_model=_ChapterRows,
+        system='SYSTEM', user='USER',
+        response_payload={'blueprints': [{'chapter_ordinal': 1}]},
+        acceptance=acceptance, scope_violation=None)
+
+    # 模拟旧 checkpoint：前一轮 checkpoint link 与盘上 ledger 都声称
+    # 实际返回自另一个已知模型，而最终 accepted turn 仍是 profile 模型。
+    stored = json.loads(checkpoint.read_text(encoding='utf-8'))
+    prior_link = next(
+        row for row in stored['attempt_links']
+        if row['attempt_id'] == first_attempt)
+    prior_link['model'] = 'gpt-5.6-terra'
+    stored['checkpoint_sha256'] = _checkpoint_hash(stored)
+    checkpoint.write_text(
+        json.dumps(stored, ensure_ascii=False), encoding='utf-8')
+
+    assert ctx.ledger.path is not None
+    ledger_rows = [
+        json.loads(line) for line in ctx.ledger.path.read_text(
+            encoding='utf-8').splitlines() if line.strip()
+    ]
+    prior_ledger = next(
+        row for row in ledger_rows if row.get('attempt_id') == first_attempt)
+    prior_ledger['model'] = 'gpt-5.6-terra'
+    ctx.ledger.path.write_text(
+        ''.join(json.dumps(row, ensure_ascii=False, sort_keys=True) + '\n'
+                for row in ledger_rows),
+        encoding='utf-8', newline='')
+
+    # 旧的失败 turn 可能没有 provider actual_model；保持 audit 事件流
+    # 合法，使失败精确落在 ledger actual model 与 profile 的漂移。
+    audit_path = agent_session_audit.audit_path(ctx.novel_dir.parent)
+    audit_rows = [
+        json.loads(line) for line in audit_path.read_text(
+            encoding='utf-8').splitlines() if line.strip()
+    ]
+    prior_turn = next(
+        row for row in audit_rows
+        if row.get('kind') == 'turn'
+        and row.get('attempt_id') == first_attempt)
+    prior_turn['actual_model'] = None
+    audit_path.write_text(
+        ''.join(json.dumps(row, ensure_ascii=False, sort_keys=True) + '\n'
+                for row in audit_rows),
+        encoding='utf-8', newline='')
+
+    resumed = _ctx(
+        tmp_path, run_id, executor_profile=_AGENT_PROFILE)
+    _ensure_run(
+        resumed, architecture='extraction-ir-v3.1',
+        topology='scaffolded_single', requests=[(1, 'SYSTEM', 'USER')],
+        request_policy=policy)
+    with pytest.raises(ProvenanceRefused, match='resolved profile'):
+        stage2_runs.restore_checkpoint(
+            resumed, phase='blueprint', chapter=1, purpose=purpose,
+            architecture='extraction-ir-v3.1', response_model=_ChapterRows,
+            system='SYSTEM', user='USER')
+
+
+@pytest.mark.parametrize(('field', 'value', 'message'), [
+    ('actual_model', None, 'actual model'),
+    ('actual_model', 'gpt-5.6-terra', 'actual model'),
+    ('actual_effort', 'max', 'actual effort'),
+])
+def test_agent_checkpoint_restore_refuses_legacy_audit_actual_profile_drift(
+        tmp_path, field, value, message):
+    """accepted turn 的供应商实际值必须与 resolved profile 精确闭合。"""
+    run_id = new_run_id()
+    purpose = 'stage2.blueprint:ch1'
+    attempt_id = '8' * 16
+    ctx = _ctx(tmp_path, run_id, executor_profile=_AGENT_PROFILE)
+    policy = _agent_request_policy(max_tokens=2048)
+    _ensure_run(
+        ctx, architecture='extraction-ir-v3.1',
+        topology='scaffolded_single', requests=[(1, 'SYSTEM', 'USER')],
+        request_policy=policy)
+    text = '{"blueprints":[{"chapter_ordinal":1}]}'
+    acceptance = _agent_checkpoint_acceptance(
+        ctx, purpose=purpose, system='SYSTEM', user='USER',
+        texts=[(attempt_id, text)], max_tokens=2048)
+    stage2_runs.write_checkpoint(
+        ctx, phase='blueprint', chapter=1, purpose=purpose,
+        architecture='extraction-ir-v3.1', response_model=_ChapterRows,
+        system='SYSTEM', user='USER',
+        response_payload={'blueprints': [{'chapter_ordinal': 1}]},
+        acceptance=acceptance, scope_violation=None)
+
+    audit_path = agent_session_audit.audit_path(ctx.novel_dir.parent)
+    audit_rows = [
+        json.loads(line) for line in audit_path.read_text(
+            encoding='utf-8').splitlines() if line.strip()
+    ]
+    accepted_turn = next(
+        row for row in audit_rows
+        if row.get('kind') == 'turn'
+        and row.get('attempt_id') == attempt_id)
+    accepted_turn[field] = value
+    audit_path.write_text(
+        ''.join(json.dumps(row, ensure_ascii=False, sort_keys=True) + '\n'
+                for row in audit_rows),
+        encoding='utf-8', newline='')
+
+    resumed = _ctx(
+        tmp_path, run_id, executor_profile=_AGENT_PROFILE)
+    _ensure_run(
+        resumed, architecture='extraction-ir-v3.1',
+        topology='scaffolded_single', requests=[(1, 'SYSTEM', 'USER')],
+        request_policy=policy)
+    with pytest.raises(ProvenanceRefused, match=message):
+        stage2_runs.restore_checkpoint(
+            resumed, phase='blueprint', chapter=1, purpose=purpose,
+            architecture='extraction-ir-v3.1', response_model=_ChapterRows,
+            system='SYSTEM', user='USER')
 
 
 def test_validated_checkpoint_restores_cost_and_acceptance_with_zero_wire(tmp_path):

@@ -31,6 +31,7 @@ from types import SimpleNamespace
 import pytest
 
 from contracts.rules import REGISTRY
+from contracts.schema.orchestration import AgentProfile, PipelineAgentProfiles
 from contracts.schema.report import finding
 from novel.prov import EdgeVerdict, FreshnessReport
 from novel.report import build, render
@@ -137,6 +138,102 @@ def test_run_step_executes_the_production_argv_and_brackets_it_with_beacons(
     assert calls[0][0][calls[0][0].index('--note') + 1] == expected_note
     assert calls[2][0][calls[2][0].index('--note') + 1] == expected_note
     assert all('shell' not in kwargs for _argv, kwargs in calls)
+
+
+def _commander_profiles() -> PipelineAgentProfiles:
+    return PipelineAgentProfiles(
+        commander=AgentProfile(
+            driver='claude-code', model='claude-opus-5',
+            reasoning_effort='high', execution_mode='standard'),
+        executor_default=AgentProfile(
+            driver='codex', model='gpt-5.6-sol',
+            reasoning_effort='high', execution_mode='standard'),
+        executor_overrides={},
+    )
+
+
+def test_run_step_projects_frozen_executor_and_egress_into_production_steps(
+        monkeypatch, tmp_path):
+    runner = _operator_script('run_step')
+    profiles = _commander_profiles()
+    start = SimpleNamespace(
+        authorized=True, egress_authorized=True, code_version='code-v1')
+    context = SimpleNamespace(
+        run_id='outer-1', base=str(tmp_path.resolve()),
+        contract_sha256='a' * 64, start=start, profiles=profiles,
+        executor_profile=lambda node: profiles.executor_overrides.get(
+            node, profiles.executor_default),
+    )
+    built: list[tuple] = []
+    profile = profiles.executor_default
+    step = SimpleNamespace(
+        label='stage2 全局事实',
+        argv=['python', '-m', 'novel.cli', 'run', 'stage2.global', '42'],
+        cwd=str(REPO_ROOT), paid=True,
+        writes='stage2/global_grounding.json', note=None,
+        executor_profile=profile, egress_authorized=True)
+    monkeypatch.setenv(runner.commander_context.COMMANDER_RUN_ID_ENV, 'outer-1')
+    monkeypatch.setenv(
+        runner.commander_context.COMMANDER_CONTRACT_SHA256_ENV, 'a' * 64)
+    monkeypatch.setattr(
+        runner.commander_context, 'load_from_environment',
+        lambda *_args, **_kwargs: context)
+    monkeypatch.setattr(runner.prov, 'code_version', lambda: 'code-v1')
+    monkeypatch.setattr(
+        runner, 'build_steps',
+        lambda *args, **kwargs: built.append((args, kwargs)) or [step])
+
+    evidence = tmp_path / 'evidence.json'
+    rc = runner.main([
+        '--base', str(tmp_path), '--sid', '42',
+        '--expect-code-version', 'code-v1', '--evidence-json', str(evidence),
+        'stage2.global',
+    ])
+
+    assert rc == 0
+    assert built[0][1]['executor_profile'] == profile
+    assert built[0][1]['egress_authorized'] is True
+    payload = json.loads(evidence.read_bytes())
+    assert payload['schema'] == 'novel-operator-step-evidence-v2'
+    assert payload['commander']['run_id'] == 'outer-1'
+    assert payload['steps'][0]['executor_profile'] == profile.model_dump(mode='json')
+    assert payload['steps'][0]['egress_authorized'] is True
+
+
+def test_run_step_with_frozen_profile_refuses_execute_without_both_authorizations(
+        monkeypatch, tmp_path):
+    runner = _operator_script('run_step')
+    profiles = _commander_profiles()
+    context = SimpleNamespace(
+        run_id='outer-1', base=str(tmp_path.resolve()),
+        contract_sha256='b' * 64,
+        start=SimpleNamespace(
+            authorized=True, egress_authorized=False, code_version='code-v1'),
+        profiles=profiles,
+        executor_profile=lambda _node: profiles.executor_default,
+    )
+    step = SimpleNamespace(
+        label='stage2 全局事实', argv=['python'], cwd=str(REPO_ROOT),
+        paid=True, writes='stage2/global_grounding.json', note=None,
+        executor_profile=profiles.executor_default, egress_authorized=False)
+    monkeypatch.setenv(runner.commander_context.COMMANDER_RUN_ID_ENV, 'outer-1')
+    monkeypatch.setenv(
+        runner.commander_context.COMMANDER_CONTRACT_SHA256_ENV, 'b' * 64)
+    monkeypatch.setattr(
+        runner.commander_context, 'load_from_environment',
+        lambda *_args, **_kwargs: context)
+    monkeypatch.setattr(runner.prov, 'code_version', lambda: 'code-v1')
+    monkeypatch.setattr(runner, 'build_steps', lambda *_args, **_kwargs: [step])
+    monkeypatch.setattr(
+        runner.subprocess, 'run',
+        lambda *_args, **_kwargs: pytest.fail('授权不足不得打信标或启动节点'))
+
+    rc = runner.main([
+        '--base', str(tmp_path), '--sid', '42',
+        '--expect-code-version', 'code-v1', '--execute', 'stage2.global',
+    ])
+
+    assert rc == 2
 
 
 def test_run_step_rejects_an_invalid_run_id_at_the_argument_boundary(capsys):

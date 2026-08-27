@@ -30,6 +30,7 @@ from typing import Any, Callable, Iterable, Iterator, TypeVar
 from contracts.invariants import NODES
 from contracts.schema import InputEdge, Provenance
 from contracts.schema.common import FreeProvenance, LlmProvenance
+from contracts.schema.orchestration import AgentProfile
 from contracts.artifacts import STAGE0_CLEAN_TEXT
 from novel import paths, prov, run_identity
 from novel.errors import ProvenanceRefused
@@ -57,6 +58,11 @@ class RunContext:
     code: str
     cache: CachePolicy
     ledger: CostLedger
+
+    #: 本次付费节点若由 executor agent 承接，这里保存 builder 已关闭式校验并
+    #: 物化过的精确快照。``None`` 在迁移期仍表示走旧 DeepSeek 路；不得在深处
+    #: 根据环境变量偷偷选另一个 provider。
+    executor_profile: AgentProfile | None = None
 
     #: 这一次跑的跨进程联结键。它只进运行时账/观测/恢复状态，
     #: 不进正式 provenance、cache key 或 node flags。手搭 context 也必须
@@ -389,6 +395,7 @@ class RunContext:
              paid: bool, cache: CachePolicy | None = None,
              ledger: CostLedger | None = None, write_ledger: bool = True,
              repair_rejected_responses: bool = False,
+             executor_profile: AgentProfile | None = None,
              run_id: str | None = None) -> RunContext:
         """按 `<Output>` + 书 id 开一次跑。**找不到书目录 ⇒ 显式终态**（`UpstreamMissing`）。
 
@@ -409,5 +416,6 @@ class RunContext:
                 path=ledger_path(base) if write_ledger else None,
                 run_id=resolved_run_id),
             run_id=resolved_run_id,
+            executor_profile=executor_profile,
             repair_rejected_responses=repair_rejected_responses,
         )

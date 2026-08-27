@@ -1,5 +1,6 @@
 import type { CheckKind } from '@/types/stages'
 import type { JobRequest } from '@/types/jobs'
+import type { AgentRunRequest } from '@/types/agent'
 
 /**
  * 所有 query key 都以 sid 开头（除了语料库与 enums）。
@@ -42,11 +43,14 @@ export const qk = {
     ] as const,
 
   agentRuns: (sid: string) => ['agentRuns', sid] as const,
+  /** capability 含本机瞬时 CLI 状态，hook 会把这一 key 当 no-store 使用。 */
+  agentCapabilities: () => ['agentCapabilities'] as const,
   /** 队列是**全 base 一份**，不带 sid：它回答的是「这台机器上现在跑着几本」。 */
   agentQueue: () => ['agentQueue'] as const,
   agentRunLog: (id: string) => ['agentRunLog', id] as const,
-  agentRunPreview: (sid: string, authorized: boolean, egressAuthorized: boolean) =>
-    ['agentRunPreview', sid, authorized, egressAuthorized] as const,
+  /** 完整请求就是预览身份：profiles 的任一深层字段变化都必须换 key、重新预览。 */
+  agentRunPreview: (req: AgentRunRequest | null) =>
+    ['agentRunPreview', req] as const,
 
   approvals: (sid: string) => ['approvals', sid] as const,
 }

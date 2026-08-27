@@ -18,6 +18,35 @@ def _row(node: str, **usage):
     }
 
 
+def test_commander_cost_is_a_role_group_without_a_fake_node():
+    commander = _row('placeholder', prompt_tokens=12, completion_tokens=3)
+    commander.update({
+        'role': 'commander',
+        'node': None,
+        'purpose': 'commander',
+        'model': 'gpt-5.6-sol',
+    })
+
+    costs = A.cost_table([commander, _row('stage2.global')])
+    wall = A.wall_table([commander, _row('stage2.global')], 600)
+
+    assert sorted(costs) == ['role:commander', 'stage2.global']
+    assert costs['role:commander']['calls_made'] == 1
+    assert costs['role:commander']['models'] == ['gpt-5.6-sol']
+    assert sorted(wall) == ['role:commander', 'stage2.global']
+
+    arm = {
+        'base': 'synthetic', 'cost': costs, 'wall': wall,
+        'quality': {stage: {'unreachable': 'synthetic'} for stage in STAGES},
+        'inbox': {'counts': {kind: 0 for kind in INBOX_KIND},
+                  'total': 0, 'wontfix': 0},
+        'semantic': {}, 'book': {'book': None},
+    }
+    rendered = A.render('sid', {'arm': arm}, None)
+    assert 'role:commander·指挥' in rendered
+    assert '| **指挥合计** | calls_made | 1 |' in rendered
+
+
 def test_provider_cache_usage_preserves_null_and_explicit_zero():
     costs = A.cost_table([
         _row('null-node', prompt_tokens=12,

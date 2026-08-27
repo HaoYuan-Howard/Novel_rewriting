@@ -17,13 +17,20 @@ import sys
 import pytest
 
 from contracts.invariants import (
-    FREE_ENTRIES, NODES, NODE_WRITE_EFFECTS, STAGES, VALUED_FLAGS, WRITE_EFFECTS,
+    AGENT_EXECUTOR_NODES, FREE_ENTRIES, NODES, NODE_WRITE_EFFECTS, STAGES,
+    VALUED_FLAGS, WRITE_EFFECTS,
 )
+from contracts.schema.orchestration import AgentProfile
 from novel.errors import UnsupportedRunMode
 from novel.orchestrator import nodes as N
 
 BASE = os.path.join('E:', os.sep, 'somewhere', 'Output')
 SID = '7615069877019300633'
+EXECUTOR_PROFILE = AgentProfile(
+    driver='codex',
+    model='gpt-5.6-sol',
+    reasoning_effort='high',
+)
 
 CASES = [
     (node, flag) for node, spec in NODES.items() for flag in spec.flags
@@ -55,6 +62,38 @@ def _args(flag: str, node: str | None = None) -> list[str]:
         for extra in N.missing_required(node, out):
             out += [extra, 'payload.json'] if extra in VALUED_FLAGS else [extra]
     return out
+
+
+def _executor_flags(node: str, tokens: frozenset[str]) -> list[str]:
+    """把生产登记的 token set 物化成一条可执行测试 argv。"""
+    ordered = [flag for flag in NODES[node].flags if flag in tokens]
+    assert set(ordered) == set(tokens), f'{node} 的 executor token 未登记进 NodeSpec.flags'
+    out: list[str] = []
+    for flag in ordered:
+        out += [flag, '1,3'] if flag == '--chapters' else [flag]
+    return out
+
+
+_FOLLOW_CHECK_EXECUTORS = frozenset({
+    'stage2.blueprint', 'stage4.plan', 'stage6.hook', 'stage7.rename',
+})
+EXECUTOR_RUN_CASES = [
+    pytest.param(
+        node,
+        _executor_flags(node, tokens),
+        2 if node in _FOLLOW_CHECK_EXECUTORS else 1,
+        id=f'{node}:{"+".join(sorted(tokens)) or "default"}',
+    )
+    for node, combinations in N.EXECUTOR_PROFILED_RUNS.items()
+    for tokens in combinations
+]
+
+UNMIGRATED_EXECUTOR_FLAG_CASES = [
+    pytest.param(node, _args(flag, node), id=f'{node}:{flag}')
+    for node, combinations in N.EXECUTOR_PROFILED_RUNS.items()
+    for flag in NODES[node].flags
+    if frozenset({flag}) not in combinations
+]
 
 
 # ───────────────────────── 守卫的守卫 ─────────────────────────
@@ -216,6 +255,134 @@ def test_stage2_global_resample_is_paid_and_cannot_hide_another_action():
     with pytest.raises(UnsupportedRunMode, match='必须单独执行'):
         N.build_argv(
             'stage2.global', SID, ['--resample', '--purge-role'], base=BASE)
+
+
+@pytest.mark.parametrize(('node', 'flags', 'step_count'), EXECUTOR_RUN_CASES)
+def test_every_profiled_executor_run_has_one_resolved_argv_and_step_snapshot(
+        node, flags, step_count):
+    """八节点十二组合共用 builder；自动复检永远不继承 agent/egress。"""
+    steps = N.build_steps(
+        node, SID, flags, base=BASE,
+        executor_profile=EXECUTOR_PROFILE,
+        egress_authorized=True,
+    )
+
+    assert len(steps) == step_count
+    producer = steps[0]
+    assert producer.executor_profile is not None
+    assert producer.executor_profile.execution_mode == 'standard'
+    assert producer.paid is True
+    assert producer.argv == N.build_argv(
+        node, SID, flags, base=BASE,
+        executor_profile=EXECUTOR_PROFILE,
+        egress_authorized=True,
+    )
+    assert producer.argv[producer.argv.index('--executor-driver') + 1] == \
+        producer.executor_profile.driver
+    assert producer.argv[producer.argv.index('--executor-model') + 1] == \
+        producer.executor_profile.model
+    assert producer.argv[producer.argv.index('--executor-effort') + 1] == \
+        producer.executor_profile.reasoning_effort
+    assert producer.argv[producer.argv.index('--executor-mode') + 1] == \
+        producer.executor_profile.execution_mode
+    assert '--yes' in producer.argv
+    assert producer.egress_authorized is True
+    assert '--allow-egress' in producer.argv
+
+    if step_count == 2:
+        follow = steps[1]
+        assert follow.executor_profile is None
+        assert follow.egress_authorized is None
+        assert follow.paid is False
+        assert follow.argv == N.build_argv(
+            node, SID, ['--check-only'], base=BASE)
+        assert '--check-only' in follow.argv
+        assert '--allow-egress' not in follow.argv
+        assert '--yes' not in follow.argv
+        assert not any(token.startswith('--executor-') for token in follow.argv)
+        assert follow.note == N.FOLLOW_CHECK_NOTE
+
+
+def test_profiled_preview_can_freeze_denied_egress_but_cannot_execute_that_argv():
+    steps = N.build_steps(
+        'stage2.global', SID, base=BASE,
+        executor_profile=EXECUTOR_PROFILE,
+        egress_authorized=False)
+
+    assert steps[0].egress_authorized is False
+    assert '--allow-egress' not in steps[0].argv
+
+
+def test_executor_egress_must_be_explicit_and_cannot_exist_without_a_profile():
+    with pytest.raises(UnsupportedRunMode, match='必须显式给 bool'):
+        N.build_steps(
+            'stage2.global', SID, base=BASE,
+            executor_profile=EXECUTOR_PROFILE)
+    with pytest.raises(UnsupportedRunMode, match='没有 executor_profile'):
+        N.build_steps(
+            'stage2.global', SID, base=BASE,
+            egress_authorized=True)
+
+
+@pytest.mark.parametrize(('node', 'flags'), UNMIGRATED_EXECUTOR_FLAG_CASES)
+def test_profiled_nodes_refuse_every_unmigrated_single_flag(node, flags):
+    """节点已接 agent 不等于它的所有诊断、恢复或人工跑法也已迁移。"""
+    with pytest.raises(UnsupportedRunMode, match='尚未迁移 flag 组合'):
+        N.build_steps(
+            node, SID, flags, base=BASE,
+            executor_profile=EXECUTOR_PROFILE,
+        )
+
+
+def test_executor_profile_refuses_unmigrated_nodes_and_unknown_capability_pairs():
+    with pytest.raises(UnsupportedRunMode, match='尚未接入 executor agent'):
+        N.build_steps(
+            'stage4.context', SID, base=BASE,
+            executor_profile=EXECUTOR_PROFILE,
+        )
+
+    unknown_model = AgentProfile(
+        driver='codex',
+        model='claude-opus-5',
+        reasoning_effort='high',
+    )
+    with pytest.raises(UnsupportedRunMode, match='不可执行'):
+        N.build_steps(
+            'stage2.global', SID, base=BASE,
+            executor_profile=unknown_model,
+        )
+
+
+def test_executor_runtime_registries_close_over_the_same_eight_nodes():
+    """能力公开面、跑法矩阵与真实 factory 缺任何一边都必须响亮地红。"""
+    from novel.node_agents import EXECUTOR_FACTORIES
+
+    expected = set(AGENT_EXECUTOR_NODES)
+    assert len(expected) == len(N.EXECUTOR_PROFILED_RUNS) == 8
+    assert sum(len(rows) for rows in N.EXECUTOR_PROFILED_RUNS.values()) == 12
+    assert set(EXECUTOR_FACTORIES) == set(N.EXECUTOR_PROFILED_RUNS) == expected
+
+
+def test_node_agent_result_cannot_silently_green_a_red_report():
+    """报告与 CLI 退出判定是同一事实；`passed` 不得再靠默认值猜。"""
+    from contracts.schema.report import CheckReport
+    from novel.node_agents import NodeAgentResult
+
+    report = CheckReport.model_construct(passed=False)
+    assert inspect.signature(NodeAgentResult).parameters['passed'].default \
+        is inspect.Parameter.empty
+    with pytest.raises(ValueError, match='report.passed 精确一致'):
+        NodeAgentResult(
+            artifact=report, turns=1, passed=True, report=report)
+    with pytest.raises(ValueError, match='必须同时放进 report'):
+        NodeAgentResult(
+            artifact=report, turns=1, passed=False)
+
+
+def test_absent_executor_profile_preserves_the_legacy_argv_shape():
+    argv = N.build_argv('stage2.global', SID, base=BASE)
+    assert not any(token.startswith('--executor-') for token in argv)
+    assert '--allow-egress' not in argv
 
 
 def test_no_current_node_takes_a_mode_and_stage5_rejects_retired_flags():

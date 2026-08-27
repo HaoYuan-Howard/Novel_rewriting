@@ -26,7 +26,9 @@ from pydantic import Field, model_validator
 
 from contracts.invariants import (
     AGENT_DELIVERY_OUTCOME,
-    AGENT_RUN_EVENT_KINDS, ARTIFACT_CONDITION, ARTIFACT_DISPLAY, BEACON_STATES,
+    AGENT_EXECUTOR_NODES, AGENT_RUN_EVENT_KINDS,
+    ARTIFACT_CONDITION, ARTIFACT_DISPLAY, BEACON_STATES,
+    AgentDriver, AgentExecutionMode, AgentReasoningEffort,
     FRESHNESS, FRESHNESS_REASON, JOB_EVENT_KINDS, JOB_STATE, NODES,
     OVERVIEW_VERDICT, PROGRESS_PHASES, RETIRED_NODES, RETIRED_STAGES, STAGES,
 )
@@ -43,6 +45,50 @@ OverviewVerdict = Literal[OVERVIEW_VERDICT]
 ProgressPhase = Literal[PROGRESS_PHASES]
 BeaconState = Literal[BEACON_STATES]
 AgentDeliveryState = Literal[AGENT_DELIVERY_OUTCOME]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 零、agent 运行配置 —— 一次选择的精确快照
+# ─────────────────────────────────────────────────────────────────────────────
+
+class AgentProfile(FrozenModel):
+    """一个 agent 进程的精确运行配置。
+
+    ``driver`` 是本机交互式 CLI，不拿供应商名冒充可执行入口；``model`` 保存
+    稳定 id，界面文案由 capability 的独立 ``label`` 给出。这里只守字段形状，
+    driver / role / model / effort / mode 的组合由
+    ``novel.agent_capabilities::validate_profile`` 对照唯一 registry 关闭式校验。
+    """
+
+    driver: AgentDriver
+    model: str = Field(min_length=1)
+    reasoning_effort: AgentReasoningEffort
+
+    #: ``None`` = 让 registry 选择普通 ``standard``；显式字符串与 reasoning
+    #: effort 正交，且仍须由具体 model capability 准入。当前不宣称支持 ``ultra``。
+    execution_mode: AgentExecutionMode | None = None
+
+
+class PipelineAgentProfiles(FrozenModel):
+    """一次整书代跑的 commander 与 executor 选择。
+
+    默认 executor 覆盖付费 agent 节点；节点覆盖只写差异。键必须属于
+    ``AGENT_EXECUTOR_NODES``，不能拿 stage 名、代码节点或退役节点冒充。
+    角色能力与每个 profile 的组合仍由 registry 校验。
+    """
+
+    commander: AgentProfile
+    executor_default: AgentProfile
+    executor_overrides: dict[str, AgentProfile] = Field(default_factory=dict)
+
+    @model_validator(mode='after')
+    def _overrides_are_current_nodes(self) -> PipelineAgentProfiles:
+        unknown = sorted(set(self.executor_overrides) - set(AGENT_EXECUTOR_NODES))
+        if unknown:
+            raise ValueError(
+                f'executor_overrides 含非 executor 节点 {unknown}；'
+                f'只接受 {list(AGENT_EXECUTOR_NODES)}')
+        return self
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -86,6 +132,31 @@ class Step(FrozenModel):
     #: 这一步的特别提醒（例：追跑的那条 `--check-only` 为什么在）。`None` = 键不在。
     note: str | None = None
 
+    #: 本步真正解析后的 executor 配置。旧 ``steps`` 没有这一格时为 ``None``，
+    #: 不得拿当前默认值倒推历史；新执行会在命令 builder 边界补齐。
+    executor_profile: AgentProfile | None = None
+
+    #: 本步是否拿到独立的正文外发授权。旧记录没有这一格时为 ``None``；新 executor
+    #: 步必须显式冻结 bool，未接 executor 的代码/legacy 步则不得伪造授权快照。
+    egress_authorized: bool | None = None
+
+    @model_validator(mode='after')
+    def _executor_egress_shape(self) -> Step:
+        argv_authorized = '--allow-egress' in self.argv
+        if self.executor_profile is None:
+            if self.egress_authorized is not None:
+                raise ValueError('没有 executor_profile 的 Step 不能携带正文外发授权')
+            if argv_authorized:
+                raise ValueError('没有 executor_profile 的 Step.argv 不能夹带 --allow-egress')
+            return self
+        if not self.paid:
+            raise ValueError('0 成本 step 不能携带 executor_profile')
+        # ``None`` 既要读旧盘，也会由旧记录的公共 HTTP 投影显式发成 null；不能靠
+        # fields_set 猜它来自哪一边。新执行的“必须显式 bool”由唯一 builder 边界守。
+        if argv_authorized is not (self.egress_authorized is True):
+            raise ValueError('Step.egress_authorized 与 argv 的 --allow-egress 不一致')
+        return self
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 二、作业（`_orchestration.md` §二 · §三）
@@ -115,6 +186,14 @@ class JobStart(StrictModel):
     paid: bool
     writes: bool
 
+    #: 本次直接节点作业的 executor 选择。``None`` 只承接旧记录或尚未指定的请求；
+    #: 新执行须把解析后的 profile 同时快照到本格与 ``steps[]``。
+    executor_profile: AgentProfile | None = None
+
+    #: 与付费 executor Step 同源的正文外发授权快照。旧记录缺字段时为 ``None``；
+    #: 新执行必须显式冻结 bool，且不得拿请求默认或今天的配置倒推历史。
+    egress_authorized: bool | None = None
+
     @model_validator(mode='after')
     def _postconditions(self) -> JobStart:
         if self.node not in NODES and self.node not in RETIRED_NODES:
@@ -125,6 +204,33 @@ class JobStart(StrictModel):
             raise ValueError(f'paid={self.paid} 与逐步折叠出来的对不上')
         if self.writes != any(bool(s.writes) for s in self.steps):
             raise ValueError(f'writes={self.writes} 与逐步折叠出来的对不上')
+        step_profiles = [
+            step.executor_profile for step in self.steps
+            if step.executor_profile is not None
+        ]
+        if self.executor_profile is None:
+            if step_profiles:
+                raise ValueError('JobStart 缺 executor_profile，但 step 已带 profile')
+        else:
+            if not step_profiles:
+                raise ValueError('JobStart 带 executor_profile，但没有执行 step 承接')
+            if any(profile != self.executor_profile for profile in step_profiles):
+                raise ValueError('JobStart.executor_profile 与 steps[] 快照不一致')
+        if any(step.executor_profile is not None and not step.paid
+               for step in self.steps):
+            raise ValueError('0 成本 step 不能携带 executor_profile')
+        profiled_steps = [
+            step for step in self.steps if step.executor_profile is not None
+        ]
+        if self.executor_profile is None:
+            if self.egress_authorized is not None:
+                raise ValueError('没有 executor_profile 的 JobStart 不能携带正文外发授权')
+        elif self.egress_authorized is None:
+            if any(step.egress_authorized is not None for step in profiled_steps):
+                raise ValueError('历史 JobStart 缺外发授权，但 step 已带授权快照')
+        elif any(step.egress_authorized is not self.egress_authorized
+                 for step in profiled_steps):
+            raise ValueError('JobStart.egress_authorized 与付费 executor steps[] 不一致')
         return self
 
 
@@ -296,14 +402,20 @@ class RunProgressView(StrictModel):
 class AgentRunStart(FrozenModel):
     """`started` 事件的载荷——一次 agent 代跑的全部静态字段。
 
-    ⚠ `argv` 与 `prompt` **全文留档**：这是一次会花两笔钱的进程
-    （pipeline 的 DeepSeek + agent 自身的模型），审计与终审包要能看到
-    「到底跑了哪条命令、授权声明原文是什么」——不是一份摘要。
+    ⚠ `argv` 与 `prompt` **分栏全文留档**：Commander 与它调度的逐节点
+    executor 都可能产生外部模型费用，审计与终审包要能看到
+    「到底跑了哪条命令、授权声明原文是什么」。prompt 只作为
+    Commander stdin 传入，绝不出现在 `argv` 或进程日志里。
     """
 
     sid: str = Field(min_length=1)
 
-    #: 解析后的真实命令行（含 claude 的绝对路径与全部旗标）。
+    #: 本次整书代跑所绑定的规范化绝对 base。旧事件没有这一格时为 ``None``；
+    #: 新运行必须由 launcher 显式写入，child CLI 才能用 ``run_id + contract SHA``
+    #: 从 append-only 事件流反查并核验同一份配置，不能只信一段可被改写的环境 JSON。
+    base: str | None = Field(default=None, min_length=1)
+
+    #: 解析后的真实 Commander 命令行（可安全回显，不含 prompt）。
     argv: list[str] = Field(min_length=1)
 
     #: 发给 agent 的提示词全文。两项授权声明都在里面；下面两格只是机读摘要。
@@ -318,6 +430,10 @@ class AgentRunStart(FrozenModel):
     #: 启动时的仓库代码指纹。旧事件没有这一格时为 `None`，只能把最终交付判为
     #: unknown；新 run 在结束时必须与当前指纹一致，避免一次跑跨两版代码却冒充可复现。
     code_version: str | None = None
+
+    #: commander + 默认 executor + 节点覆盖的解析后快照。旧事件没有这一格时为
+    #: ``None``，只能显示 unknown，绝不按今天的默认配置回填昨天的运行身份。
+    profiles: PipelineAgentProfiles | None = None
 
 
 class AgentDeliveryOutcome(FrozenModel):
@@ -427,6 +543,10 @@ class AgentPending(FrozenModel):
 
     #: 排在第几，**1 起算**。给人看的序号，不是索引。
     position: int = Field(ge=1)
+
+    #: 入队时已解析并深拷贝的完整选择。出队只消费这份快照，不再读取默认值，
+    #: 也不重新解释请求对象；因此等待期间前端对象或服务默认变化都不会漂移运行身份。
+    profiles: PipelineAgentProfiles
 
 
 class AgentRejected(FrozenModel):

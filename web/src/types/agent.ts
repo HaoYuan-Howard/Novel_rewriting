@@ -4,6 +4,55 @@
  */
 import type { JobState } from '@/constants/vocabulary'
 
+/**
+ * Agent 组合由后端 capability registry 发布。driver/model/effort/mode 都保留为
+ * 字符串，前端不能用联合类型复制一份供应商能力表。
+ */
+export interface AgentProfile {
+  driver: string
+  model: string
+  reasoning_effort: string
+  execution_mode: string | null
+}
+
+export interface PipelineAgentProfiles {
+  commander: AgentProfile
+  executor_default: AgentProfile
+  /** 键同样由 capability 响应的 executor_nodes 给出，前端不保存节点副本。 */
+  executor_overrides: Record<string, AgentProfile>
+}
+
+export type AgentRole = 'commander' | 'executor'
+
+export type AgentAvailability = 'ready' | 'missing' | 'unknown' | 'unauthenticated'
+
+export interface AgentModelCapability {
+  /** 进入 argv 与审计账的精确模型 id；与展示文案分开。 */
+  id: string
+  label: string
+  reasoning_efforts: string[]
+  execution_modes: string[]
+}
+
+export interface AgentDriverCapability {
+  id: string
+  /** 供应商元数据，不等于可执行 driver id。 */
+  provider: string
+  label: string
+  roles: AgentRole[]
+  availability: AgentAvailability
+  availability_reason: string
+  version: string | null
+  models: AgentModelCapability[]
+}
+
+export interface AgentCapabilitiesResponse {
+  drivers: AgentDriverCapability[]
+  executor_nodes: string[]
+  /** null = 服务端尚无 provider-neutral 默认，调用方不得拿 drivers[0] 猜。 */
+  default_profiles: PipelineAgentProfiles | null
+}
+
 /** 发起参数。两项授权彼此独立，都会原样进入 prompt 与审计记录。 */
 export interface AgentRunRequest {
   sid: string
@@ -11,6 +60,8 @@ export interface AgentRunRequest {
   authorized: boolean
   /** 只控制是否允许向外部模型发送正文及派生上下文。 */
   egress_authorized: boolean
+  /** 本次预览与启动共用的完整快照；前端新入口绝不省略或发送 null。 */
+  profiles: PipelineAgentProfiles
 }
 
 /** preview 的返回：与真跑同一构造函数，0 成本。前端不拼 argv / prompt。 */
@@ -19,6 +70,8 @@ export interface AgentRunPreview {
   prompt: string
   authorized: boolean
   egress_authorized: boolean
+  /** 服务端解析后的双角色配置；旧路由尚未接线或旧记录为 null。 */
+  profiles: PipelineAgentProfiles | null
 }
 
 export interface AgentRunStart {
@@ -29,6 +82,8 @@ export interface AgentRunStart {
   egress_authorized: boolean
   /** 启动时仓库代码指纹；历史记录可能没有。 */
   code_version: string | null
+  /** 历史缺失只能表示 unknown，不能按今天的默认倒推。 */
+  profiles: PipelineAgentProfiles | null
 }
 
 export type AgentDeliveryState =
@@ -81,6 +136,8 @@ export interface AgentBatchRequest {
   sids: string[]
   authorized: boolean
   egress_authorized: boolean
+  /** 整批共享并冻结的完整快照；排队中的书也不能随随后界面选择漂移。 */
+  profiles: PipelineAgentProfiles
 }
 
 /** 排在队里、还没有进程的一本。它不是 AgentRunRecord 的一种状态：盘上没有它。 */

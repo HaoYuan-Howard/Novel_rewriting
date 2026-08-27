@@ -165,6 +165,11 @@ _JSON_READ_ALLOWED = {
         'agent 代跑记录**不是产物**：与 jobs.jsonl 同一份理由，append-only 事件流'
         '（`_service/agent_runs.jsonl` + `logs/agent-*.log`），'
         '读的一侧要容忍被 kill 截断的最后一行'),
+    'novel/agent_session_audit.py': (
+        'commander / executor 会话审计**不是产物**：'
+        '`_service/agent_sessions.jsonl` 是 append-only 事件流，'
+        '只记 profile/session/usage/指纹与双轴终态，不进来源账或 ARTIFACTS；'
+        '读侧只容忍被 kill 截断的最后一行，中间坏行关闭式失败'),
     'novel/orchestrator/trash.py': (
         '回收站条目的 `metadata.json` **不是产物**：`ARTIFACTS` 里没有它、'
         '不进来源账、不进 `_provenance`，它只回答「这条删除完成了没有」'
@@ -176,6 +181,15 @@ _JSON_READ_ALLOWED = {
         'Stage2 验证后章节检查点与一次性 repair workpack 不是正式产物或普通缓存；'
         '它们跟书走、按 run_id 关闭式恢复，读取后仍须重跑当前 schema/validator/scope/HARD。'
         '单独成模块正是为了不给 extract.py/client.py 开裸 IO 豁免'),
+    'novel/llm/stage6_runs.py': (
+        'Stage6 双判官检查点与 prepared→committed 提交账不是正式产物；'
+        '它们跟书走、按 run_id/role 关闭式恢复，读取后仍须复验'
+        '当前 schema/validator/input/profile/session/ledger/audit，正式写盘仍回 semantic producer'),
+    'novel/llm/agent_runs.py': (
+        '逐节点 executor 的通用 run/checkpoint/commit journal 不是正式产物；'
+        '它只读书内 `_stage*_runs/<run_id>/` 的不可变恢复账，并在恢复时重新闭合'
+        'profile/prompt/schema/code/ledger/session audit。正式 artifact 仍只能由 stage producer '
+        '经 ArtifactStore 读写'),
 }
 
 
@@ -239,6 +253,16 @@ _WRITE_ALLOWED = {
         'Stage2 验证后章节检查点与一次性 batch resolution。它不是正式 artifact 或普通缓存，'
         '只写书内 `_stage2_runs/<run_id>/blueprint/`，正式采纳仍回 producer 的完整编译/HARD/写盘口。'
         '单独成模块是为了不把 extract.py/client.py 整体加入写盘白名单'),
+    'novel/llm/stage6_runs.py': (
+        'Stage6 双判官验证后 checkpoint 与 commit journal，只写书内 '
+        '`_stage6_runs/<run_id>/semantic/`；它们不是正式 artifact，'
+        '正式 semantic 产物、typed readback、双 adoption 与终验仍由 producer 完成。'
+        '独立模块让恢复账的裸 IO 豁免不扩散到 semantic.py'),
+    'novel/llm/agent_runs.py': (
+        '逐节点 executor 的 provider-neutral 恢复核心只原子写书内 '
+        '`_stage*_runs/<run_id>/run.json`、append-only checkpoint revision 与 commit journal；'
+        '这些 sidecar 不是正式 artifact，候选仍须回到对应 stage producer 的 schema/HARD/'
+        'ArtifactStore/readback/adoption 终验后才能 delivered'),
     'novel/orchestrator/jobs.py': (
         '作业记录与子进程日志。⚠ **`R-11.3` 已于 2026-08-11（骨架 D）'
         '收窄成「绝不落**产物**盘」**，理由是一句话：'

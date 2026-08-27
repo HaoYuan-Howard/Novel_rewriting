@@ -22,9 +22,12 @@
   别书的作业同时在跑不构成障碍（互斥只落在各自 `sid`），也不需要等它。
 - 对长命令使用宿主提供的持久句柄或足够长的前台超时。每 60 秒以内给出一次状态更新，不用短 timeout 杀进程来模拟更新。
 - 任何宿主中断后先运行 `state`/`inbox`，不要从聊天记忆推断落盘位置。
-- 真跑前先执行 `<PY> -X utf8 -u -m novel.cli doctor --llm-transport`。它使用正式代理与超时，
-  但不发送正文、API key，也不产生模型调用；收到任意 HTTP 状态即证明 DNS/TCP/TLS 通路成立。
-  `SSL UNEXPECTED_EOF` 等连接错误应在这里先复现并修代理/TUN 进程环境，不要烧一次正文请求来诊断网络。
+- agent executor 主路不运行 DeepSeek 的 `<PY> -X utf8 -u -m novel.cli doctor --llm-transport`。
+  Commander 启动契约已经冻结 capability 中的 driver/model/effort，节点 executor 还会在任何正文外发前
+  用同一 driver 做零模型 CLI probe；缺 executable、协议或配置时关闭式失败。只有操作者明确选择
+  **legacy DeepSeek 临时回滚**时才运行上述 doctor：它使用正式代理与超时，但不发送正文、API key，
+  也不产生模型调用；收到任意 HTTP 状态即证明 DNS/TCP/TLS 通路成立。`SSL UNEXPECTED_EOF` 等
+  连接错误应先在 doctor 复现并修代理/TUN 进程环境，不要烧一次正文请求来诊断网络。
 - 任何宿主都先用 `scripts/session_preflight.py` 固化 `<STARTED_AT>` 与 `<START_CODE>`。正常节点走
   `scripts/run_step.py --expect-code-version <START_CODE>`；特殊诊断/人工入口也在动作前复算并逐字比较。
   结束时把同一指纹传给终验。`unknown == unknown` 不证明同版；结束时现取当前值也不证明起点。
@@ -118,27 +121,28 @@ import 期时通常没有写盘，但仍以 `state`、目标产物与信标核�
 
 ## headless agent
 
-把启动 prompt 当作本次权限事实，不从 UI 行为或布尔字段名称推定授权：
+把启动 prompt 与 append-only started contract 一起当作本次权限/身份事实，不从 UI 行为或字段默认推定：
 
-- **交互式那条「默认已授予」在这里不成立。** launcher 恒把两项授权各写成一句整话，
-  取值以 prompt 原文为准：这里没有可追问的人，而 launcher 的付费授权字段产品默认为**假**
-  （正文外发那一项默认为真），两者不对称，靠默认值推定会推反。
-  prompt 只出现其中一项时，另一项视为 `not_granted`。
-- 授权不足时仍运行只读的 `state`、`inbox` 和下一节点 `preview`，把 preview 生成的精确恢复命令写入终审包；在执行首个外部调用前安全停止。
+- 新 launcher 在任何 Commander probe/spawn 前同时要求付费授权与正文外发授权；任一不足只允许
+  API/UI 做 0 成本 preview，**不会产生一个 headless 进程**。因此新启动 prompt 中两项都应为 granted；
+  若缺句、为 false，或与 started 事件不一致，按 contract 损坏安全停止，不能把另一项推成真。
 - 启动后先运行 `state <sid>` 与 `inbox <sid>`，从盘上续跑。
-- 标准 `approval` 由本 skill 代批；`redo/unknown` 在两项授权和可验证恢复路径都具备时自行处置，否则安全停止。
+- 标准 `approval` 由本 skill 代批，并只走 `novel.cli approval show/template/apply` 的 typed façade；
+  不直接 import 审批服务或临时拼 HTTP。`redo/unknown` 在可验证恢复路径具备时自行处置，否则安全停止。
 - 只在 launcher 授权的 base 范围写人工输入和终审包。权限拒绝说明动作不在允许面，不换 shell 或路径绕过。
 - 进程日志与生死记录由 launcher 管理；不要手改 `_service/agent_runs.jsonl` 或日志来改变状态。
 - launcher 记录的进程 `state` 与交付 `outcome` 是两根轴：只有 outcome 为 `ready` 或
   `ready_with_disclosures` 才表示服务端已从盘面复验交付；`exit 0` 本身只表示 Agent 正常退出。
 - 启动 prompt 带代码指纹；先确认它与 `session_preflight.py` 的 `<START_CODE>` 一致，再按共同规则
   由 runner 逐步比较。结束终验继续使用这一份起始指纹，跨版本 run 不会被判 ready。
+- launcher 只把 run id 与 contract SHA-256 放进环境；runner 必须重读 started 事件，精确复核 base、sid、
+  起始代码指纹、Commander/default executor/逐节点 override 与两项授权。不得拿环境里的自由 JSON
+  或当前 capability 替换已冻结快照。
 
 当前 launcher 使用两个独立字段：`authorized` 只表示付费授权，`egress_authorized`
 只表示正文外发授权。新 API 请求对 `egress_authorized` 的产品默认值为 `true`，UI 也默认勾选；
-`authorized` 的产品默认值是 `false`，**必须由调用方显式给真**——这条不对称正是上面
-「headless 以 prompt 原文为准」的理由。
-preview、启动 prompt 与新事件记录必须始终把两项值分别物化；不得因其中一项为真推定另一项。
+`authorized` 的产品默认值是 `false`。这只影响 preview 初态；start/batch 的产品闸是两项都为 true。
+preview、成功启动的 prompt 与新事件记录必须始终把两项值分别物化；不得因其中一项为真推定另一项。
 历史事件若该字段为 `null`，只表示当时未采集，按未知处理，不能追认为已授权。
 
 ## 只读进度观察

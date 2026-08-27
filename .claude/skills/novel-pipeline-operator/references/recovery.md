@@ -142,15 +142,22 @@ schema version 写），不按记忆手抄。
 - `--apply-edit` 消费明确的 typed 人工输入，开新人工修订轮，并让已绑定旧主体的下游结论/
   approval 按契约过期。它是 0 LLM 费用，不等于没有人工输入或可以跳过重判。
 
-## 结构化响应的受托修复
+## 显式 DeepSeek 回滚的结构化响应修复
 
-主跑带 `--response-repair agent` 时，被拒响应保留在书目录
+八个现役 agent executor 的主跑**不带** `--response-repair agent`：候选解析、schema、动态判据与
+业务 HARD 都由代码把结构化反馈交回同一 provider session，append-only checkpoint 与正式提交
+journal 负责崩溃恢复。不要在 Commander 或直接 executor profile 的 argv 上补这个 flag；它不是
+Claude Code/Codex executor 的能力开关，补上只会改变作业身份并被关闭式拒绝。
+
+下面整节只属于独立保留的**显式 DeepSeek 回滚路径**。只有操作者明确选择 legacy DeepSeek、
+没有携带 executor profile，且当前终态逐字给出该 sidecar 时，主跑才可带
+`--response-repair agent`。被拒响应保留在书目录
 `_llm_rejected/<chain>/<attempt>/`。终态点名的 `candidate.json` 是**唯一允许直接编辑**的响应文件；
 `original.txt`、`rejection.json`、`resolution.json`、`outcome.json` 与 Stage2 run sidecar 都是审计/
 恢复状态，不得修改。修复原则是不发明剧情或事实：完整通过的 reasoning JSON 已由生产立即采用；
 BOM / 容器尾逗号由代码窄修；agent 只忠实补 JSON、必需键或 schema 形状。
 
-### Stage2 blueprint：一份 batch、一次 resume
+### Legacy Stage2 blueprint：一份 batch、一次 resume
 
 Stage2 不在第一章 pending 时立刻暂停。它先收完同一并发波次，把所有已过完整闸的成功章写成验证后
 checkpoint，再把全部可修 attempt 稳定排序到唯一 `repair_manifest.json`。按以下顺序处理：
@@ -184,7 +191,7 @@ batch，只走 Stage2 定向恢复与 Pro 重建；
 传输退避单独计算，不可重试错误立即终止。同一 run 的相同失败签名不得重复同一动作，看到“拒绝继续
 白烧”时应停止，不得删账或换身份绕开。
 
-### 其他结构化节点：保留单 attempt 路径
+### 其他 legacy 结构化节点：保留单 attempt 路径
 
 非 Stage2 batch 终态仍按既有单份入口处理：能忠实修复时编辑 candidate 后执行
 `<PY> -X utf8 -u -m novel.cli response-repair <SID> --base <BASE> --attempt <ID> --actor <ACTOR> --reason <text>`；
@@ -193,7 +200,7 @@ batch，只走 Stage2 定向恢复与 Pro 重建；
 选择完整候选、诊断摘要或最小诊断，effort / thinking / max_tokens 与四道内容闸不变，审计以
 `request_mode` / `recovery_from_attempts` 留下联结。
 
-`response-repair` 是零 LLM 的 CLI sidecar，不是 node，不另造 preview。账本会恢复中断前已发生的
+`response-repair` 是 legacy DeepSeek 的零 LLM CLI sidecar，不是 node，不另造 preview。账本会恢复中断前已发生的
 调用与 accepted-attempt 联结；不能删隔离目录、Stage2 checkpoint、换参数或清缓存来“重新开始”。
 
 ## 付费修复与缓存

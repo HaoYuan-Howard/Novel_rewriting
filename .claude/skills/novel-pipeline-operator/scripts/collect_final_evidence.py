@@ -144,6 +144,18 @@ def _ledger(
 
     by_node: dict[str, dict[str, Any]] = defaultdict(bucket)
     by_run_node: dict[tuple[str, str], dict[str, Any]] = defaultdict(bucket)
+
+    def group_of(row: dict[str, Any]) -> str:
+        """保留旧输出键，同时不把无 node 的 Commander 伪装成未知节点。"""
+
+        role = row.get('role')
+        node = row.get('node')
+        if role == 'commander':
+            return 'role:commander'
+        if isinstance(node, str) and node.strip():
+            return node
+        return 'unknown'
+
     legacy_ungrouped_rows = 0
     for row in _jsonl(ledger_path(base)):
         if row.get('sid') != sid:
@@ -156,7 +168,7 @@ def _ledger(
         if run_ids is not None:
             if row_run_id is None or row_run_id not in run_ids:
                 continue
-        node = str(row.get('node') or 'unknown')
+        node = group_of(row)
         run_label = row_run_id or 'legacy/ungrouped'
         buckets = (by_node[node], by_run_node[(run_label, node)])
         if row.get('cached') is True:

@@ -272,7 +272,9 @@ ARTIFACT_SPECS: dict[str, ArtifactSpec] = {
     STAGE5_WONTFIX: ArtifactSpec(WontFix),
     STAGE6_HOOK: ArtifactSpec(Hook, 2),
     STAGE6_HOOK_EDIT: ArtifactSpec(HookEdit, 2),
-    STAGE6_SEMANTIC: ArtifactSpec(HookSemanticReview),
+    # v2 新增判官实际看见的 Stage5 开篇成稿 `judged`绑定；
+    # 旧 v1 不能证明正文改字后语义结论仍然 current。
+    STAGE6_SEMANTIC: ArtifactSpec(HookSemanticReview, 2),
     STAGE6_WONTFIX: ArtifactSpec(WontFix),
     STAGE7_NAME_MAP: ArtifactSpec(NameMap, 2),
     STAGE7_NAME_MAP_EDIT: ArtifactSpec(NameMapEdit),

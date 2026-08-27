@@ -420,9 +420,13 @@ class HookCandidateReview(HookCandidateReviewResponse):
 class HookSemanticReview(StrictModel):
     """`stage6/semantic_<n>.json` —— 付费文案质量审判的可审计落盘形态。
 
-    ⚠ **绑定键是 `judged_texts`（label → 文本内容 sha1），不绑 hook.json 整文件**：
+    ⚠ **候选文本绑定键是 `judged_texts`（label → 文本内容 sha1），不绑 hook.json 整文件**：
     `--pick` 只改 `approved` 键、不换任何文本字节，整文件指纹绑死会让定稿动作把
     语义结论误判过期——`R-9.17` 教训的同型。`hook_file_sha1` 只作审计。
+
+    判官同时看见 Stage5 开篇成稿。它们是被审判的参考主体，不是普通
+    `inputs`；因此必须与 Stage6 hook 一样用 `JudgedDraft` 的消费投影单独绑定。
+    否则正文改字后，旧语义审判仍可能被当成 current。
     """
 
     judged_texts: dict[str, Fp10] = Field(min_length=1)
@@ -437,6 +441,9 @@ class HookSemanticReview(StrictModel):
     #: 不从某一名 judge 的 ``reviews`` 倒推。
     decisions: list[SemanticDecision] = Field(min_length=1)
     evaluator_fingerprint: EvaluatorFingerprint
+    #: `{stage5/chNN.json: 当时实际下发给 A/B 判官的成稿引用}`。
+    #: 整文件 sha1 只作审计；过期判定只比 `consumed.text_sha1`。
+    judged: dict[str, JudgedDraft]
     provenance: LlmProvenance = Field(alias='_provenance')
 
     @model_validator(mode='after')

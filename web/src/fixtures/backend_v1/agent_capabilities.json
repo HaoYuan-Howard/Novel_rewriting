@@ -1,0 +1,61 @@
+{
+  "drivers": [
+    {
+      "id": "claude-code",
+      "provider": "anthropic",
+      "label": "Claude Code",
+      "roles": ["commander", "executor"],
+      "availability": "ready",
+      "availability_reason": "mock：CLI 可执行且版本探针成功；未发模型请求",
+      "version": "2.1.237 (mock)",
+      "models": [
+        {
+          "id": "claude-opus-5",
+          "label": "Claude Opus 5",
+          "reasoning_efforts": ["low", "medium", "high", "xhigh", "max"],
+          "execution_modes": ["standard"]
+        },
+        {
+          "id": "claude-sonnet-5",
+          "label": "Claude Sonnet 5",
+          "reasoning_efforts": ["low", "medium", "high", "xhigh", "max"],
+          "execution_modes": ["standard"]
+        }
+      ]
+    },
+    {
+      "id": "codex",
+      "provider": "openai",
+      "label": "Codex",
+      "roles": ["commander", "executor"],
+      "availability": "ready",
+      "availability_reason": "mock：CLI 可执行且版本探针成功；未发模型请求",
+      "version": "0.148.0 (mock)",
+      "models": [
+        {
+          "id": "gpt-5.6-sol",
+          "label": "GPT-5.6 Sol",
+          "reasoning_efforts": ["none", "low", "medium", "high", "xhigh", "max"],
+          "execution_modes": ["standard"]
+        },
+        {
+          "id": "gpt-5.6-terra",
+          "label": "GPT-5.6 Terra",
+          "reasoning_efforts": ["none", "low", "medium", "high", "xhigh", "max"],
+          "execution_modes": ["standard"]
+        }
+      ]
+    }
+  ],
+  "executor_nodes": [
+    "stage2.global",
+    "stage2.blueprint",
+    "stage4.design",
+    "stage4.plan",
+    "stage5.write",
+    "stage6.hook",
+    "stage6.semantic",
+    "stage7.rename"
+  ],
+  "default_profiles": null
+}

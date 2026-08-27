@@ -6,6 +6,7 @@ import type { CheckReport } from '@/types/stages'
 import { act, fireEvent, screen, waitFor } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import { renderRoute } from '@/test/render'
+import { READY_PROFILES } from '@/test/agent'
 import { RunScreen } from './RunScreen'
 
 describe('RunScreen 交付终验', () => {
@@ -25,6 +26,7 @@ describe('RunScreen 交付终验', () => {
           authorized: true,
           egress_authorized: true,
           code_version: 'abc',
+          profiles: null,
         },
         started: 1,
         ended: 2,
@@ -53,6 +55,48 @@ describe('RunScreen 交付终验', () => {
     expect(await screen.findByTestId('delivery-reason')).toHaveTextContent(
       'Stage2 复核闸未打开',
     )
+    expect(screen.getByTestId('agent-profiles-unknown')).toHaveTextContent(
+      '历史未记录，不能按当前默认倒推',
+    )
+  })
+
+  it('展示每次运行已冻结的 commander/default/override 精确配置', async () => {
+    const run = await mockApi.getRunProgress(SAMPLE_SID)
+    vi.spyOn(api, 'getRunProgress').mockResolvedValue(run)
+    vi.spyOn(api, 'getCheck').mockResolvedValue(null)
+    vi.spyOn(api, 'getAgentRuns').mockResolvedValue({
+      runs: [{
+        run_id: 'run-profile-history',
+        start: {
+          sid: SAMPLE_SID,
+          argv: ['agent-dynamic'],
+          prompt: 'x',
+          authorized: false,
+          egress_authorized: true,
+          code_version: 'abc',
+          profiles: {
+            ...READY_PROFILES,
+            executor_overrides: {
+              'node.dynamic-a': { ...READY_PROFILES.executor_default },
+            },
+          },
+        },
+        started: 1,
+        ended: null,
+        exit_code: null,
+        state: 'running',
+        note: null,
+        outcome: null,
+      }],
+    })
+
+    renderRoute(<RunScreen />, `/n/${SAMPLE_SID}/run`)
+
+    const snapshot = await screen.findByTestId('agent-profiles-snapshot')
+    expect(snapshot).toHaveTextContent('commander-model-v9')
+    expect(snapshot).toHaveTextContent('executor-model-v7')
+    expect(snapshot).toHaveTextContent('node.dynamic-a')
+    expect(snapshot).toHaveTextContent('effort=deep-dynamic')
   })
 })
 

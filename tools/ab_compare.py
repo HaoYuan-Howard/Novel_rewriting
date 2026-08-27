@@ -54,6 +54,17 @@ _CH_MARK = re.compile(r'^(?:第[0-9一二三四五六七八九十百千两]{1,7}
 
 # ── 账本 ─────────────────────────────────────────────────────────────────────
 
+def _cost_group(row: dict) -> str:
+    """账本行的展示分组；Commander 是 role，不伪装成 ``NODES`` 成员。"""
+    if row.get('role') == 'commander':
+        if row.get('node') is not None:
+            raise ValueError('commander 成本行的 node 必须为 null')
+        return 'role:commander'
+    node = row.get('node')
+    if not isinstance(node, str) or not node:
+        raise ValueError('非 commander 成本行必须带非空 node')
+    return node
+
 def load_rows(base: str, sid: str) -> list[dict]:
     """读 `<base>/_service/ledger.jsonl` 里这本书的行。容忍末尾半行（进程被杀）。"""
     p = Path(ledger_path(base))
@@ -81,10 +92,11 @@ def _tok(rows: list[dict], key: str) -> tuple[int, int, int]:
 
 
 def cost_table(rows: list[dict]) -> dict:
-    """按 node 聚成本事实；生成与判官分账。"""
+    """按 node / Commander role 聚成本事实；生成、判官与指挥分账。"""
     out: dict[str, dict] = {}
-    for node in sorted({r['node'] for r in rows}):
-        nr = [r for r in rows if r['node'] == node]
+    groups = {_cost_group(row) for row in rows}
+    for node in sorted(groups):
+        nr = [row for row in rows if _cost_group(row) == node]
         wire = [r for r in nr if not r.get('cached')]
         p, p_n, p_null = _tok(wire, 'prompt_tokens')
         ph, ph_n, ph_null = _tok(wire, 'prompt_cache_hit_tokens')
@@ -157,10 +169,11 @@ def cost_table(rows: list[dict]) -> dict:
 
 
 def wall_table(rows: list[dict], gap_s: float) -> dict:
-    """按 node 的墙钟两口径：span 分段（近似墙钟）与 Σlatency（并发下的高估口径）。"""
+    """按 node / Commander role 的墙钟两口径：span 分段与 Σlatency。"""
     out: dict[str, dict] = {}
-    for node in sorted({r['node'] for r in rows}):
-        nr = sorted((r for r in rows if r['node'] == node),
+    groups = {_cost_group(row) for row in rows}
+    for node in sorted(groups):
+        nr = sorted((row for row in rows if _cost_group(row) == node),
                     key=lambda r: r.get('at') or '')
         stamps = [(datetime.fromisoformat(r['at']), (r.get('latency_ms') or 0) / 1000.0)
                   for r in nr if r.get('at')]
@@ -394,11 +407,12 @@ def render(sid: str, arms: dict[str, dict], rates: dict | None) -> str:
     arm_line = ', '.join('{}={}'.format(n, arms[n]['base']) for n in names)
     L: list[str] = [f'# 跨臂对比 · sid={sid}', '', f'臂：{arm_line}', '']
 
-    L += ['## ① 成本（token 事实；生成/判官分账；cached 行实付 0 不计入）', '',
-          _row(['node', '账'] + names), _row(['---'] * (len(names) + 2))]
+    L += ['## ① 成本（token 事实；指挥/生成/判官分账；cached 行实付 0 不计入）', '',
+          _row(['node / role', '账'] + names), _row(['---'] * (len(names) + 2))]
     all_nodes = sorted({n for a in arms.values() for n in a['cost']})
     for node in all_nodes:
-        tag = '判官' if node in JUDGE_NODES else '生成'
+        tag = ('指挥' if node == 'role:commander' else
+               '判官' if node in JUDGE_NODES else '生成')
         for key, label in (('calls_made', '真调用'), ('calls_cached', '缓存命中'),
                            ('prompt_tokens', 'prompt'),
                            ('completion_tokens', 'completion（已含 reasoning）'),
@@ -439,8 +453,10 @@ def render(sid: str, arms: dict[str, dict], rates: dict | None) -> str:
                 else:
                     cells.append(str(c[key]))
             L.append(_row([f'{node}·{tag}', label] + cells))
-    for scope, pred in (('生成合计', lambda nd: nd not in JUDGE_NODES),
-                        ('判官合计', lambda nd: nd in JUDGE_NODES)):
+    for scope, pred in (
+            ('指挥合计', lambda nd: nd == 'role:commander'),
+            ('生成合计', lambda nd: nd != 'role:commander' and nd not in JUDGE_NODES),
+            ('判官合计', lambda nd: nd in JUDGE_NODES)):
         for key in ('prompt_tokens', 'completion_tokens', 'reasoning_tokens', 'calls_made'):
             cells = [_fmt_int(sum(c[key] for nd, c in arms[n]['cost'].items() if pred(nd)))
                      for n in names]
@@ -464,8 +480,10 @@ def render(sid: str, arms: dict[str, dict], rates: dict | None) -> str:
                   f'缓存 usage+费率完整时分算 hit/miss，否则 input 未命中价上界；'
                   f'completion 含 reasoning）', '',
               _row(['范围'] + names), _row(['---'] * (len(names) + 1))]
-        for scope, pred in (('生成', lambda nd: nd not in JUDGE_NODES),
-                            ('判官', lambda nd: nd in JUDGE_NODES)):
+        for scope, pred in (
+                ('指挥', lambda nd: nd == 'role:commander'),
+                ('生成', lambda nd: nd != 'role:commander' and nd not in JUDGE_NODES),
+                ('判官', lambda nd: nd in JUDGE_NODES)):
             cells = []
             for n in names:
                 money = money_of({nd: c for nd, c in arms[n]['cost'].items() if pred(nd)},
@@ -476,7 +494,7 @@ def render(sid: str, arms: dict[str, dict], rates: dict | None) -> str:
             L.append(_row([scope] + cells))
 
     L += ['', '## ② 墙钟（span=近似墙钟；Σlatency 并发下高估，只作对照）', '',
-          _row(['node', '口径'] + names), _row(['---'] * (len(names) + 2))]
+          _row(['node / role', '口径'] + names), _row(['---'] * (len(names) + 2))]
     for node in all_nodes:
         for key, label in (('span_s', 'span(s)'), ('segments', '分段数'),
                            ('sum_latency_s', 'Σlatency(s)')):
@@ -486,7 +504,7 @@ def render(sid: str, arms: dict[str, dict], rates: dict | None) -> str:
                 cells.append('—' if w is None else str(w[key]))
             L.append(_row([node, label] + cells))
     cells = [str(round(sum(w['span_s'] for w in arms[n]['wall'].values()), 1)) for n in names]
-    L.append(_row(['**全部节点 span 合计**', 's'] + cells))
+    L.append(_row(['**全部 node / role span 合计**', 's'] + cells))
 
     L += ['', '## ③ 质量闸（badge / 四态 / HARD 残留；判定语义归 check 报告）', '',
           _row(['stage', '项'] + names), _row(['---'] * (len(names) + 2))]

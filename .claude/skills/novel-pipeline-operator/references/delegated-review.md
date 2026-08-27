@@ -7,6 +7,7 @@
 - [stage0 代批](#stage0-代批)
 - [Stage2 逐项复核](#stage2-逐项复核)
 - [Stage4 结构代批](#stage4-结构代批)
+- [Stage5 写作授权](#stage5-写作授权)
 - [stage6 代批](#stage6-代批)
 - [stage7 代批](#stage7-代批)
 - [成书逐字对账](#成书逐字对账)
@@ -127,6 +128,34 @@ legacy control 与 Stage4A candidate 出匿名工作包；人工填写逐方案�
 不得启动作业。随后只使用服务端给出的 `stage4.design --replan` 动作另行 preview/run，新 A 之后的
 B 仍需另一次 preview/run。全部章接受后还要单独取得 current Stage5 writing 授权；结构批准不能替代它。
 
+Commander 只经公开的 0 成本 CLI façade 提交，不直接 import 审批服务，也不临时拼 HTTP：
+
+```text
+novel.cli approval show <SID> --base <BASE>
+novel.cli approval template structure <SID> --base <BASE> --actor <ACTOR> --reason <总理由>
+novel.cli approval apply structure <SID> --base <BASE> --input <决定文件或 ->
+```
+
+`template structure` 的逐章默认值全部是 `request_replan`，这是防止无人值守时“一键全接收”的
+关闭式起点；逐章审阅并写出证据后才可把对应项改成 `accept`。`apply` 只落审批账，不启动作业，
+提交后必须重新 `approval show` 核对 current subject 与决定。
+
+## Stage5 写作授权
+
+Stage5 写作授权与 Stage4 结构接受是两份独立的人类决定。只有当前 typed 结构决定覆盖全书且全部
+`accept`，才能生成写作授权模板；Commander 不得从 s4 绿灯、付费总授权或正文外发授权推导这枚决定。
+
+```text
+novel.cli approval template writing <SID> --base <BASE> --actor <ACTOR> --reason <理由>
+novel.cli approval apply writing <SID> --base <BASE> --input <决定文件或 ->
+novel.cli approval show <SID> --base <BASE>
+```
+
+模板携带当前 Stage1 / Stage4 计划与 measurement contract 所绑定的完整 subject SHA-256。
+`apply writing` 只接受 typed JSON 的 actor、reason 与完整 current subject；旧 UI 的空 body 兼容入口
+不是 Commander 入口。结构、计划或测量主体漂移后旧授权必须显示为 non-current，不能靠历史
+`writing=true` 继续写作。
+
 ## stage6 代批
 
 按候选级而不是总报告级裁决。把 mechanical 与 semantic 中相同 label、相同完整
@@ -239,7 +268,9 @@ freshness。确为同输入非确定性时采信更严格的一轮，不用后�
 - 先用本次 preflight 的 `started_at` 与 `start_code_version` 运行
   `scripts/sync_review_evidence.py`，由脚本同步质量表、退出序列、机器锚点和账本；不要手抄这些事实。
 - 最终成本只以 `<base>/_service/ledger.jsonl` 为权威源。`started_at` 只选择本次 beacon/退出序列，
-  本次表按 beacon 携带的 `run_id + node` 精确联结 ledger；同 SID 全历史另列累计审计，二者不相加。
+  本次表按 canonical `run_id` 精确联结 ledger，再按节点或角色分栏；节点 executor 使用真实 node，
+  整书 Commander 明确列为 `role:commander`，绝不塞进 `unknown` 或伪造一个 NODES id。
+  同 SID 全历史另列累计审计，二者不相加。
   旧无 run id 行标为 `legacy/ungrouped`，不按时间窗口猜进本轮。
   `cached == true` 只计缓存次数，不重复累计其携带的原调用 token。不把产物 usage、
   终端日志或历史 report 叠加成第二份成本账。

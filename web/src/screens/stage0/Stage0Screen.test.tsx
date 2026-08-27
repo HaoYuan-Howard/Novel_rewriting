@@ -3,6 +3,7 @@ import { fireEvent, screen, waitFor, within } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import { useLocation } from 'react-router-dom'
 import { renderRoute } from '@/test/render'
+import { agentCapabilities, previewOf, READY_PROFILES } from '@/test/agent'
 import { Stage0Screen } from './Stage0Screen'
 import type { Stage0Segments } from '@/types/stages'
 
@@ -26,12 +27,11 @@ describe('Stage0Screen 新书起跑入口', () => {
       segments: [],
     })
     vi.spyOn(api, 'getStage0Candidate').mockResolvedValue(null)
-    const preview = vi.spyOn(api, 'previewAgentRun').mockResolvedValue({
-      argv: ['claude', '-p', 'prompt'],
+    vi.spyOn(api, 'getAgentCapabilities').mockResolvedValue(agentCapabilities())
+    const preview = vi.spyOn(api, 'previewAgentRun').mockImplementation(async (req) => ({
+      ...previewOf(req.profiles, req.authorized, req.egress_authorized),
       prompt: '从当前盘面续跑',
-      authorized: false,
-      egress_authorized: true,
-    })
+    }))
 
     renderRoute(<Stage0Screen />, '/n/book-1/stage0')
 
@@ -50,6 +50,7 @@ describe('Stage0Screen 新书起跑入口', () => {
         sid: 'book-1',
         authorized: false,
         egress_authorized: true,
+        profiles: READY_PROFILES,
       }),
     )
   })

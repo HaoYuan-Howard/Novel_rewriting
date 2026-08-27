@@ -13,6 +13,7 @@
  */
 import type { Api } from '@/types/api'
 import type {
+  AgentCapabilitiesResponse,
   AgentQueueView,
   AgentRunLogChunk,
   AgentRunPreview,
@@ -518,6 +519,8 @@ function mockJobPreview(req: JobRequest): JobPreview {
     paid: paidOf(req),
     label: req.label,
     kind: req.kind,
+    executor_profile: null,
+    egress_authorized: null,
     steps: previewStepsOf(planned),
   }
 }
@@ -528,6 +531,8 @@ function previewStepsOf(req: JobRequest): JobPreview['steps'] {
     paid: paidOf(req),
     writes: 'mock 产物',
     argv: argvOf(req),
+    executor_profile: null,
+    egress_authorized: null,
   }
   const checkArgv = (kind: string) =>
     ['python', '-m', 'novel_refactor.cli', kind, '--sid', req.sid, '--check-only'].join(' ')
@@ -539,6 +544,8 @@ function previewStepsOf(req: JobRequest): JobPreview['steps'] {
         paid: false,
         writes: '',
         argv: checkArgv('stage5.write'),
+        executor_profile: null,
+        egress_authorized: null,
       },
     ]
   }
@@ -638,6 +645,8 @@ function spawn(req: JobRequest, label?: string): Job {
     finished: null,
     sid: req.sid,
     ordinal: req.ordinal ?? null,
+    executor_profile: null,
+    egress_authorized: null,
     log: ['$ ' + argv],
   }
   JOBS = [...JOBS, job]
@@ -686,6 +695,8 @@ function stripLog(j: MockJob): Job {
     finished: j.finished,
     sid: j.sid,
     ordinal: j.ordinal,
+    executor_profile: j.executor_profile ?? null,
+    egress_authorized: j.egress_authorized ?? null,
   }
 }
 
@@ -850,6 +861,7 @@ function mockAgentRunPreview(req: AgentRunRequest): AgentRunPreview {
         : '正文外发授权未授予：不得发送正文及派生上下文。'),
     authorized: req.authorized,
     egress_authorized: req.egress_authorized,
+    profiles: req.profiles ?? null,
   }
 }
 
@@ -864,6 +876,7 @@ function mockAgentRunRecord(req: AgentRunRequest): AgentRunRecord {
       authorized: preview.authorized,
       egress_authorized: preview.egress_authorized,
       code_version: 'mock-code-version',
+      profiles: preview.profiles,
     },
     started: Math.floor(Date.now() / 1000),
     ended: null,
@@ -1211,17 +1224,29 @@ export const mockApi: Api = {
   startJob: (req) => later(spawn(req)),
 
   /* agent 代跑：静态样例 —— 列表恒空（mock 不养 agent 进程），start 回一条 running 记录 */
+  getAgentCapabilities: () => later(fx<AgentCapabilitiesResponse>('agent_capabilities.json')),
   previewAgentRun: (req) => later(mockAgentRunPreview(req)),
   startAgentRun: (req) => later(mockAgentRunRecord(req)),
   getAgentRuns: () => later<AgentRunsResponse>({ runs: [] }),
   getAgentRunLog: () => later<AgentRunLogChunk>({ text: '', next_byte: 0 }),
   stopAgentRun: (runId) =>
     later<AgentRunRecord>({
-      ...mockAgentRunRecord({ sid: SAMPLE_SID, authorized: false, egress_authorized: true }),
       run_id: runId,
+      start: {
+        sid: SAMPLE_SID,
+        argv: ['agent-cli', '--sid', SAMPLE_SID, '--base', '/mock/base'],
+        prompt: 'mock 历史运行没有保存 Agent profile，不能按今天的能力表倒推。',
+        authorized: false,
+        egress_authorized: true,
+        code_version: 'mock-code-version',
+        profiles: null,
+      },
+      started: Math.floor(Date.now() / 1000) - 1,
       ended: Math.floor(Date.now() / 1000),
+      exit_code: null,
       state: 'unknown',
       note: 'mock：熄火后结局不明，不改判 ok',
+      outcome: null,
     }),
 
   /* 批量：闸写死 3（真实模式由服务端下发）。前 3 本算在跑，其余按提交顺序排队。
@@ -1234,6 +1259,7 @@ export const mockApi: Api = {
           sid,
           authorized: req.authorized,
           egress_authorized: req.egress_authorized,
+          profiles: req.profiles,
         }),
       ),
       pending: req.sids.slice(3).map((sid, i) => ({ sid, position: i + 1 })),

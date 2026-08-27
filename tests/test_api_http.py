@@ -33,7 +33,11 @@ from novel.api.app import HOST, PORT, UI_HEADER, create_app   # noqa: E402
 from novel.api.routes import jobs as JOB_API       # noqa: E402
 from novel.orchestrator import jobs as J           # noqa: E402
 from novel.orchestrator import queue as Q          # noqa: E402
-from novel.orchestrator.nodes import build_steps   # noqa: E402
+from novel.orchestrator.nodes import (             # noqa: E402
+    EXECUTOR_PROFILED_RUNS,
+    build_steps,
+    flag_tokens,
+)
 from tests import corpus, sandbox                  # noqa: E402
 
 UI = {UI_HEADER: '1'}
@@ -339,6 +343,7 @@ def test_the_published_surface_is_exactly_the_current_surface(app):
         #    ⚠ 这五条是本条绊线**按设计逮到的**一次「顺手加端点」：路由已上线、
         #    §3 的屏幕职责表也已登记，而这张清单没跟着改 ⇒ 全量跑时它红着。
         #    补进来就是那次「显式的决定」；它们的行为归 `tests/test_api_agent.py`。
+        '/api/agent/capabilities': ['GET'],
         '/api/agent/runs': ['GET', 'POST'],
         '/api/agent/runs/preview': ['POST'],
         #: 批量受理 N 本 + 队列全景。放开 agent 并发之后新增的那一面
@@ -421,6 +426,163 @@ def test_preview_refuses_a_flag_that_node_does_not_have(client):
     assert r.status_code == 400 and r.json()['kind'] == 'UnsupportedRunMode'
 
 
+_EXECUTOR_PROFILE_HTTP_CASES = (
+    ('stage2.global', (), 1),
+    ('stage2.blueprint', (), 2),
+    ('stage4.design', (), 1),
+    ('stage4.design', ('--replan',), 1),
+    ('stage4.plan', (), 2),
+    ('stage5.write', (), 1),
+    ('stage5.write', ('--chapters', '1'), 1),
+    ('stage5.write', ('--revise',), 1),
+    ('stage5.write', ('--revise', '--chapters', '1'), 1),
+    ('stage6.hook', (), 2),
+    ('stage6.semantic', (), 1),
+    ('stage7.rename', (), 2),
+)
+
+
+def test_executor_profile_http_matrix_covers_current_run_registry():
+    """HTTP 纵切必须覆盖生产注册表的每一种 token 组合，不能手工漏节点。"""
+    covered: dict[str, list[frozenset[str]]] = {}
+    for node, flags, _step_count in _EXECUTOR_PROFILE_HTTP_CASES:
+        covered.setdefault(node, []).append(frozenset(flag_tokens(flags)))
+    assert {node: tuple(token_sets) for node, token_sets in covered.items()} == \
+        EXECUTOR_PROFILED_RUNS
+
+
+@pytest.mark.parametrize(
+    ('node', 'flags', 'step_count'),
+    _EXECUTOR_PROFILE_HTTP_CASES,
+    ids=lambda value: str(value),
+)
+def test_executor_profile_is_identical_in_preview_and_start(
+        client, base, monkeypatch, node, flags, step_count):
+    profile = {
+        'driver': 'codex', 'model': 'gpt-5.6-sol',
+        'reasoning_effort': 'high',
+    }
+    request = {
+        'sid': '42', 'node': node, 'flags': list(flags),
+        'executor_profile': profile,
+        'egress_authorized': True,
+    }
+    captured = {}
+
+    def start_without_thread(
+            run_base, node, sid, run_flags, *, steps,
+            executor_profile=None, egress_authorized=None, prepare=None):
+        assert (prepare is None) is node.startswith('stage2.')
+        captured['executor_profile'] = executor_profile
+        captured['egress_authorized'] = egress_authorized
+        captured['steps'] = steps
+        return _started_record(
+            run_base, node, sid, run_flags, steps,
+            executor_profile=executor_profile,
+            egress_authorized=egress_authorized)
+
+    monkeypatch.setattr(JOB_API.jobs, 'start', start_without_thread)
+    preview = client.post('/api/jobs/preview', json=request)
+    started = client.post('/api/jobs', json=request)
+    assert preview.status_code == 200, preview.text
+    assert started.status_code == 202, started.text
+
+    preview_start = preview.json()
+    started_start = started.json()['start']
+    assert started_start == preview_start
+    resolved = preview_start['executor_profile']
+    assert resolved == {**profile, 'execution_mode': 'standard'}
+    assert len(preview_start['steps']) == step_count
+    assert preview_start['steps'][0]['executor_profile'] == resolved
+    assert preview_start['egress_authorized'] is True
+    assert preview_start['steps'][0]['egress_authorized'] is True
+    assert captured['executor_profile'].model_dump(mode='json') == resolved
+    assert captured['egress_authorized'] is True
+    assert [step.model_dump(mode='json') for step in captured['steps']] == \
+        preview_start['steps']
+    expected_steps = build_steps(
+        node, '42', list(flags), base=base,
+        executor_profile=captured['executor_profile'],
+        egress_authorized=True,
+    )
+    assert [step.model_dump(mode='json') for step in expected_steps] == \
+        preview_start['steps']
+    argv = preview_start['steps'][0]['argv']
+    assert argv[argv.index('--executor-driver') + 1] == 'codex'
+    assert argv[argv.index('--executor-model') + 1] == 'gpt-5.6-sol'
+    assert argv[argv.index('--executor-effort') + 1] == 'high'
+    assert argv[argv.index('--executor-mode') + 1] == 'standard'
+    assert '--allow-egress' in argv
+    for follow in preview_start['steps'][1:]:
+        assert follow['executor_profile'] is None
+        assert follow['egress_authorized'] is None
+        assert '--check-only' in follow['argv']
+        assert not any(token.startswith('--executor-') for token in follow['argv'])
+
+
+def test_profiled_preview_can_show_denied_egress_but_post_cannot_start(
+        client, base):
+    request = {
+        'sid': '42', 'node': 'stage2.global', 'flags': [],
+        'executor_profile': {
+            'driver': 'codex', 'model': 'gpt-5.6-sol',
+            'reasoning_effort': 'high',
+        },
+    }
+
+    preview = client.post('/api/jobs/preview', json=request)
+    started = client.post('/api/jobs', json=request)
+
+    assert preview.status_code == 200, preview.text
+    assert preview.json()['egress_authorized'] is False
+    assert preview.json()['steps'][0]['egress_authorized'] is False
+    assert '--allow-egress' not in preview.json()['steps'][0]['argv']
+    assert started.status_code == 409
+    assert started.json()['kind'] == 'ApprovalRequired'
+    assert '正文外发' in started.json()['message']
+    assert not J.jobs_path(base).exists()
+
+
+def test_http_refuses_egress_authorization_without_an_executor_profile(client):
+    response = client.post('/api/jobs/preview', json={
+        'sid': '42', 'node': 'stage2.global', 'flags': [],
+        'egress_authorized': True,
+    })
+
+    assert response.status_code == 400
+    assert response.json()['kind'] == 'UnsupportedRunMode'
+    assert '没有 executor_profile' in response.json()['message']
+
+
+@pytest.mark.parametrize(('path', 'node', 'flags'), [
+    ('/api/jobs/preview', 'stage2.global', ['--purge-role']),
+    ('/api/jobs', 'stage2.global', ['--purge-role']),
+    ('/api/jobs/preview', 'stage2.blueprint', ['--chapters', '1']),
+    ('/api/jobs', 'stage2.blueprint', ['--chapters', '1']),
+    ('/api/jobs/preview', 'stage4.context', []),
+    ('/api/jobs', 'stage4.context', []),
+    ('/api/jobs/preview', 'stage6.semantic', ['--dry-run']),
+    ('/api/jobs', 'stage6.semantic', ['--dry-run']),
+])
+def test_http_executor_profile_refuses_flags_and_unmigrated_nodes(
+        client, path, node, flags):
+    response = client.post(path, json={
+        'sid': '42',
+        'node': node,
+        'flags': flags,
+        'executor_profile': {
+            'driver': 'codex',
+            'model': 'gpt-5.6-sol',
+            'reasoning_effort': 'high',
+        },
+    })
+
+    assert response.status_code == 400
+    assert response.json()['kind'] == 'UnsupportedRunMode'
+    assert ('尚未迁移 flag 组合' in response.json()['message']
+            or '尚未接入 executor agent' in response.json()['message'])
+
+
 def test_preview_request_shape_rejects_retired_mode_field(client):
     r = client.post('/api/jobs/preview', json={
         'sid': '42', 'node': 'stage5.write', 'mode': 'deep', 'flags': [],
@@ -454,8 +616,13 @@ def test_old_job_mode_is_not_serialized_by_public_http(client, base):
     assert 'shallow' not in json.dumps(start, ensure_ascii=False)
 
 
-def _started_record(base, node, sid, flags, steps):
-    start = J.plan_start(node, sid, flags, base=base, steps=steps)
+def _started_record(
+        base, node, sid, flags, steps, *, executor_profile=None,
+        egress_authorized=None):
+    start = J.plan_start(
+        node, sid, flags, base=base, steps=steps,
+        executor_profile=executor_profile,
+        egress_authorized=egress_authorized)
     return J.JobRecord(
         job_id='job-stage5-authorization',
         start=start,
@@ -482,8 +649,12 @@ def test_free_stage5_recovery_jobs_do_not_request_writing_authorization(
         authorized.append((args, kwargs))
         raise AssertionError('零成本 Stage5 作业不应申请 writing 授权')
 
-    def start_without_thread(run_base, node, sid, run_flags, *, steps, prepare=None):
+    def start_without_thread(
+            run_base, node, sid, run_flags, *, steps,
+            executor_profile=None, egress_authorized=None, prepare=None):
         assert prepare is None
+        assert executor_profile is None
+        assert egress_authorized is None
         return _started_record(run_base, node, sid, run_flags, steps)
 
     monkeypatch.setattr(JOB_API.approvals, 'authorize_writing', refuse_authorization)
@@ -507,8 +678,12 @@ def test_paid_blueprint_can_start_while_global_review_is_pending(
         JOB_API.approvals, 'require_stage2_review',
         lambda *args: checked.append(args))
 
-    def start_without_thread(run_base, node, sid, run_flags, *, steps, prepare=None):
+    def start_without_thread(
+            run_base, node, sid, run_flags, *, steps,
+            executor_profile=None, egress_authorized=None, prepare=None):
         assert prepare is None
+        assert executor_profile is None
+        assert egress_authorized is None
         return _started_record(run_base, node, sid, run_flags, steps)
 
     monkeypatch.setattr(JOB_API.jobs, 'start', start_without_thread)
@@ -533,8 +708,12 @@ def test_stage2_review_is_checked_for_paid_and_free_consumers_under_the_book_loc
         JOB_API.approvals, 'require_stage2_review',
         lambda _base, sid, checked_node: checked.append((sid, checked_node)))
 
-    def start_without_thread(run_base, run_node, sid, run_flags, *, steps, prepare=None):
+    def start_without_thread(
+            run_base, run_node, sid, run_flags, *, steps,
+            executor_profile=None, egress_authorized=None, prepare=None):
         assert prepare is not None
+        assert executor_profile is None
+        assert egress_authorized is None
         prepare()
         return _started_record(run_base, run_node, sid, run_flags, steps)
 
@@ -557,8 +736,12 @@ def test_paid_stage5_job_authorizes_selected_chapters_before_start(
     def authorize(run_base, sid, chapters, *, requires_fresh_review):
         authorized.append((run_base, sid, chapters, requires_fresh_review))
 
-    def start_without_thread(run_base, node, sid, run_flags, *, steps, prepare=None):
+    def start_without_thread(
+            run_base, node, sid, run_flags, *, steps,
+            executor_profile=None, egress_authorized=None, prepare=None):
         assert prepare is not None
+        assert executor_profile is None
+        assert egress_authorized is None
         prepare()
         return _started_record(run_base, node, sid, run_flags, steps)
 

@@ -44,7 +44,15 @@ stage6/wontfix.json          人的「这条我不修」（可选；`--wontfix` 
   键全挂在那个答案上。存量重建代价见 `tests/test_artifact_versions.py::_SHAPE_BREAKS`。
   `outputs/_ab/flash/` 下两份 v1 实验快照已明确退役为只读历史证据：不属于 current-schema
   corpus，当前运行时拒读，原字节不删除；现役交付须由 producer 重建 v2 后重新人工定稿。
-- `semantic_<n>.json`、`wontfix.json` ——**都是 schema v1**。
+- `semantic_<n>.json` ——**schema v2**。2026-08-27 新增 `judged`，把 A/B 判官实际
+  看见的 Stage5 开篇成稿按 `JudgedDraft.consumed.text_sha1` 绑定。旧 v1 只绑
+  hook 候选文本，正文改字后仍可被误当 current，因此不迁移、不手补；由
+  `stage6.semantic` 在当前 hook + canonical Stage5 上重跑（legacy 是 A/B 各一次调用；显式 executor
+  profile 是 A/B 各一条可多轮 session，wire 数由代码反馈轮次决定）。v2 不把
+  未进入判官 prompt 的后半书稿塞进 `judged`；全书 Stage5 accepted Review 仍是既有前置门，
+  后半书改字先令 Review 暂不可用，零成本重跑 Review 后若实际 prompt 输入未变，旧 v2
+  semantic 可以重新成为 current，不白做 A/B。
+- v1 档（当前只有 `wontfix.json`）——**都是 schema v1**。
 
 ### 2.1 `hook.json`
 
@@ -104,8 +112,14 @@ HARD 数严格下降且文本不与另两条重复时才替换该候选和整组
 | `ranking` | `str[]` | 代码从合并决议与平均分确定性派生的真实标签排序 |
 | `judge_rankings` | `{A: str[], B: str[]}` | 两名 judge 各自的原始解匿名排序 |
 | `decisions` | `SemanticDecision[]` | 每份去重文本一条合并 PASS/FAIL/UNVER；唯一运行时判定源 |
-| `evaluator_fingerprint` | `EvaluatorFingerprint` | 运行时 dataset/model/prompt/schema/decoder 全指纹 |
+| `evaluator_fingerprint` | `EvaluatorFingerprint` | 运行时 model/prompt/schema/decoder 四格指纹，**没有 dataset**；prompt SHA 只冻结 `judge_request` 产出的两份实际静态请求面，不冒充逐书动态材料身份 |
+| `judged` | `{stage5/chNN.json: JudgedDraft}` | A/B 当时真正收到的开篇成稿；整文件 sha1 审计，`consumed.text_sha1` 判过期，未下发的后半书章稿不在此表 |
 | `_provenance` | `LlmProvenance` | 本次质量审判来源账 |
+
+逐书动态身份没有丢：hook、匿名材料、story truth/map 与正文输入由 provenance、agent run/checkpoint 的
+prompt/input hash 及 `judged` 分别绑定。evaluator fingerprint 只回答静态 evaluator 是否换了 model、
+prompt 模板、响应 schema 或 decoder；把动态正文也混进这里会让“判官实现变了”和“本书输入变了”
+无法区分。
 
 `HookCandidateReview`：
 
@@ -177,7 +191,9 @@ producer 在归一后、落盘前再守一次正式文本唯一性。这里**不
 
 本节点没有 flag（`--dry-run` 只打印下发面）。运行时先冻结这一次的请求身份
 `EvaluatorFingerprint`（`model` / `prompt_sha256` / `schema_sha256` / `decoder_sha256` 四格，
-**没有 dataset**），然后把同一份匿名材料分别以 A/B 角色后缀发给两名 judge，
+**没有 dataset**）。其中 `prompt_sha256` 由唯一拼装口 `judge_request` 对空动态 user 生成的
+`[system, user-role-A, system, user-role-B]` 实际静态字节面计算；逐书匿名材料不在这格重复绑定。
+随后把同一份匿名材料分别以 A/B 角色后缀发给两名 judge，
 候选标签都是 `T1/T2/...`。评论、证据与质量排序必须显示在报告中，不能因为结论是 `UNVER`
 就伪装成“0 份当前审判”。
 
@@ -185,8 +201,11 @@ producer 在归一后、落盘前再守一次正式文本唯一性。这里**不
 （唯一拼装口 `novel/stages/stage6/semantic.py::judge_request`）。这是一条**成本判据**：
 供应商按 `<BOS>{system}<｜User｜>{user}…` 的字节前缀做上下文缓存，后缀一旦回到 system 末尾，
 前缀就在那里分叉、judge B 那一份约 45k token 的匿名材料**全额 miss**——而两份材料逐字节相同。
-两次调用是顺序的，A 跑完写入前缀缓存，B 才发出去。双盲语义由「两次独立请求」承担，
-不由这句话落在哪一侧承担。守卫见 `tests/test_stage6_semantic.py`。
+现役显式 executor profile 路径为 A/B 各建独立 driver/session/cwd/provider session，并发请求缺失角色；
+legacy `LlmClient` 包装仍按 A 后 B 顺序执行。后缀位置只保证公共前缀不会被代码确定性拆断，实际是否
+命中供应商缓存仍取决于调度和供应商，不能把并发回归写成 cache hit 实证。双盲语义由「两次独立请求」
+承担，不由后缀落在哪一侧或串并行承担。守卫见 `tests/test_stage6_semantic.py`、
+`tests/test_stage6_semantic_agent.py` 与 `tests/test_stage6_semantic_agent_boundary.py`。
 
 ⇒ 因此本层 `_provenance.prompts` 的三个键与 `_common.md` §1.1「system prompt 指纹」的通用
 说法有别，是本层特例：`HOOK_SEMANTIC_SYS`（两名 judge 共用的那一份）+
@@ -199,7 +218,10 @@ validator 必须确认：
 2. 每条矛盾 evidence 是对应候选的连续原字节；唯一空白差异可回取成原字节；
 3. 所有 `complete` 且无矛盾的候选排在矛盾或 uncertain 候选之前；
 4. 六维分数都在 0~10；总分由代码计算；
-5. 当前 hook 文本集合与审判的文本 sha1 / 决议 SHA-256 集合一致，且 semantic 产物新鲜。
+5. 当前 hook 文本集合与审判的文本 sha1 / 决议 SHA-256 集合一致；
+6. 当前 Stage5 **实际下发的开篇**成稿与 `judged` 的路径集合及 `consumed.text_sha1` 逐项一致，且
+   semantic 产物新鲜。全书 accepted Review 仍须先可用；后半书改字并零成本重跑 Review 后，若这份
+   开篇投影及其余 prompt 输入没变，不得让未下发正文继续制造假 stale。
 
 批准动作 `stage6.approve --pick N --actor <id> --reason <why>
 --subject-sha256 <hash>` 在归档和写盘之前执行两道硬检查：

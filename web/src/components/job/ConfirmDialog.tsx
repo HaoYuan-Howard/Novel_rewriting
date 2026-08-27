@@ -7,6 +7,7 @@ import { useChrome } from '@/hooks/useChrome'
 import { useJobs, useStartJob } from '@/hooks/useJobs'
 import { SCRIM } from '@/constants/vocabulary'
 import { ErrorHint } from '@/components/state/States'
+import { AgentProfileSnapshot } from '@/components/agent/AgentProfilesSnapshot'
 import { cx } from '@/lib/cx'
 
 /**
@@ -211,6 +212,12 @@ export function ConfirmDialog() {
                     </span>
                     <span className="text-mini text-ink-4">
                       {step.writes ? '写盘：' + step.writes : '不写盘'}
+                    </span>
+                    <AgentProfileSnapshot profile={step.executor_profile} />
+                    <span className="text-mini text-ink-4">
+                      正文外发：{step.egress_authorized == null
+                        ? 'unknown'
+                        : step.egress_authorized ? '已授权' : '未授权'}
                     </span>
                   </div>
                   <pre className="m-0 px-14 py-11 font-mono text-mini leading-[1.8] break-words whitespace-pre-wrap text-ink select-all">

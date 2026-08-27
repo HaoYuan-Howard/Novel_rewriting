@@ -24,6 +24,7 @@ import pytest
 from contracts.invariants import FREE_ENTRIES, NODES, PAID_FLAGS, VALUED_FLAGS
 from contracts.schema import decode_artifact
 from contracts.schema.evaluation import GlobalReview, GlobalReviewDecisionSet
+from contracts.schema.orchestration import AgentProfile
 from contracts.schema.stage7 import NameMapEdit
 from novel.cli import exit_codes as X
 from novel.cli.main import main
@@ -989,6 +990,418 @@ def test_a_terminal_state_prints_no_stack(box, capsys):
 
 
 # ───────────────────── `R-11.8`：展示与执行同一条 ─────────────────────
+
+EXECUTOR_PROFILE_ARGS = (
+    '--executor-driver', 'codex',
+    '--executor-model', 'gpt-5.6-sol',
+    '--executor-effort', 'high',
+)
+
+
+# 八个已迁移节点的正向面；Stage5 的 flag 组合是四种不同业务身份，不能
+# 只测“节点在名单里”后让 `_dispatch` 静默吞掉 chapters/revise。
+_PROFILED_RUN_CASES = (
+    pytest.param('stage2.global', [], {}, id='stage2-global'),
+    pytest.param('stage2.blueprint', [], {}, id='stage2-blueprint'),
+    pytest.param('stage4.design', [], {}, id='stage4-design'),
+    pytest.param('stage4.plan', [], {}, id='stage4-plan'),
+    pytest.param(
+        'stage5.write', [], {'chapters': None, 'revise': False},
+        id='stage5-default'),
+    pytest.param(
+        'stage5.write', ['--chapters', '5,2,5'],
+        {'chapters': '5,2,5', 'revise': False}, id='stage5-chapters'),
+    pytest.param(
+        'stage5.write', ['--revise'],
+        {'chapters': None, 'revise': True}, id='stage5-revise'),
+    pytest.param(
+        'stage5.write', ['--chapters', '5,2,5', '--revise'],
+        {'chapters': '5,2,5', 'revise': True},
+        id='stage5-revise-chapters'),
+    pytest.param('stage6.hook', [], {}, id='stage6-hook'),
+    pytest.param('stage6.semantic', [], {}, id='stage6-semantic'),
+    pytest.param('stage7.rename', [], {}, id='stage7-rename'),
+)
+
+
+@pytest.mark.parametrize(('node', 'flags', '_agent_kwargs'), _PROFILED_RUN_CASES)
+def test_profiled_preview_prints_the_exact_resolved_agent_argv(
+        tmp_path, capsys, node, flags, _agent_kwargs):
+    profile = AgentProfile(
+        driver='codex', model='gpt-5.6-sol', reasoning_effort='high')
+    steps = N.build_steps(
+        node, 'book-1', flags, base=tmp_path,
+        executor_profile=profile,
+        egress_authorized=True)
+
+    rc = _run(
+        'preview', node, 'book-1', *flags, *EXECUTOR_PROFILE_ARGS,
+        '--allow-egress',
+        '--base', str(tmp_path))
+
+    assert rc == X.OK
+    out = capsys.readouterr().out
+    assert all(N.shell_line(step.argv) in out for step in steps)
+    assert steps[0].executor_profile is not None
+    assert steps[0].executor_profile.execution_mode == 'standard'
+    assert steps[0].egress_authorized is True
+    assert '--allow-egress' in steps[0].argv
+    for follow in steps[1:]:
+        assert follow.executor_profile is None
+        assert not any(
+            token.startswith('--executor-') for token in follow.argv)
+
+
+@pytest.mark.parametrize(('node', 'flags', '_agent_kwargs'), _PROFILED_RUN_CASES)
+def test_profiled_argv_round_trips_through_cli_into_run_context(
+        tmp_path, monkeypatch, node, flags, _agent_kwargs):
+    from novel.cli import main as M
+
+    profile = AgentProfile(
+        driver='codex', model='gpt-5.6-sol', reasoning_effort='high')
+    argv = N.build_argv(
+        node, 'book-1', flags, base=tmp_path,
+        executor_profile=profile,
+        egress_authorized=True)
+    cli_argv = argv[argv.index('run'):]
+    captured = {}
+
+    def open_context(base, sid, node, **kwargs):
+        captured.update(base=base, sid=sid, node=node, **kwargs)
+        return SimpleNamespace(
+            node=node,
+            run_id='profile-round-trip',
+            executor_profile=kwargs['executor_profile'],
+        )
+
+    def dispatch(node, ctx, flags):
+        captured['dispatch'] = (node, ctx.executor_profile, list(flags))
+        return X.OK
+
+    monkeypatch.setattr(M, 'RunContext', SimpleNamespace(open=open_context))
+    monkeypatch.setattr(M, '_dispatch', dispatch)
+    from novel.stages.stage2 import global_review
+    monkeypatch.setattr(global_review, 'require_approved', lambda _ctx: None)
+    from novel.orchestrator import approvals
+    monkeypatch.setattr(
+        approvals, 'authorize_writing', lambda *_args, **_kwargs: None)
+
+    assert _run(*cli_argv) == X.OK
+    resolved = captured['executor_profile']
+    assert resolved.execution_mode == 'standard'
+    assert captured['dispatch'] == (node, resolved, list(flags))
+    assert resolved == N.resolve_executor_profile(node, flags, profile)
+
+
+@pytest.mark.parametrize(
+    ('node', 'flags', 'expected_agent_kwargs'), _PROFILED_RUN_CASES)
+def test_profiled_dispatch_never_constructs_a_deepseek_client(
+        tmp_path, monkeypatch, node, flags, expected_agent_kwargs):
+    from novel.cli import main as M
+    from novel import node_agents
+
+    contexts = []
+    seen = []
+    built = []
+
+    def open_context(_base, _sid, actual_node, **kwargs):
+        ctx = SimpleNamespace(
+            node=actual_node,
+            run_id='profiled-stage2-cli',
+            executor_profile=kwargs['executor_profile'],
+        )
+        contexts.append(ctx)
+        return ctx
+
+    class FakeNodeAgent:
+        def __init__(self, ctx, kwargs):
+            self.ctx = ctx
+            self.kwargs = kwargs
+
+        def run(self):
+            seen.append(self.ctx.executor_profile)
+            return SimpleNamespace(
+                artifact=object(), report=None, passed=True, turns=2)
+
+    def deepseek_would_be_a_downgrade(_ctx):
+        raise AssertionError('显式 executor_profile 绝不能构造 DeepSeek client')
+
+    monkeypatch.setattr(M, 'RunContext', SimpleNamespace(open=open_context))
+    monkeypatch.setattr(M, '_llm_client', deepseek_would_be_a_downgrade)
+    def build_agent(actual, **kwargs):
+        built.append((actual, kwargs))
+        return FakeNodeAgent(actual, kwargs)
+
+    monkeypatch.setattr(node_agents, 'build_node_agent', build_agent)
+    from novel.stages.stage2 import global_review
+    monkeypatch.setattr(global_review, 'require_approved', lambda _ctx: None)
+    from novel.orchestrator import approvals
+    monkeypatch.setattr(
+        approvals, 'authorize_writing', lambda *_args, **_kwargs: None)
+
+    assert _run(
+        'run', node, 'book-1', *flags, *EXECUTOR_PROFILE_ARGS,
+        '--allow-egress', '--base', str(tmp_path), '--yes') == X.OK
+    assert len(contexts) == 1
+    assert built == [(contexts[0], expected_agent_kwargs)]
+    assert seen == [contexts[0].executor_profile]
+    assert seen[0] == N.resolve_executor_profile(
+        node, flags, AgentProfile(
+            driver='codex', model='gpt-5.6-sol', reasoning_effort='high'))
+
+
+def test_profiled_dispatch_renders_report_and_maps_passed_false_to_exit_one(
+        monkeypatch, capsys):
+    """agent 的 artifact/report 是两轴；红报告已落盘，必须显示且 exit 1。"""
+    from contracts.schema.common import Finding
+    from contracts.schema.report import (
+        CheckReport, ProvenanceSection, RuleLine, StatusCounts,
+    )
+    from novel import node_agents
+    from novel.cli import main as M
+
+    finding = Finding(
+        rule='SYNTHETIC-HARD', sev='hard', item='合成阻断项',
+        detail='用于验证 CLI agent report seam。', evidence=['ch1'],
+        evidence_key='ch1', owner='stage5', actionable=False,
+        identity_hit=False, converge='new', unresolved_rounds=0,
+    )
+    line = RuleLine(
+        rule=finding.rule, sev='hard', status='hit', item=finding.item,
+        requirement='合成要求', findings=[finding],
+    )
+    report = CheckReport(
+        sid='book-1', node='stage5.write', stage='stage5',
+        provenance=ProvenanceSection(
+            freshness='unknown', reason='no_inputs'),
+        rules=[line], badge='fail', passed=False,
+        counts=StatusCounts.of([line]),
+    )
+    rendered = []
+    monkeypatch.setattr(
+        M, 'render', lambda actual: rendered.append(actual) or 'SYNTHETIC REPORT')
+
+    class Agent:
+        def run(self):
+            return SimpleNamespace(
+                artifact=object(), report=report, passed=False, turns=3)
+
+    built = []
+
+    def build_agent(_ctx, **kwargs):
+        built.append(kwargs)
+        return Agent()
+
+    monkeypatch.setattr(node_agents, 'build_node_agent', build_agent)
+    ctx = SimpleNamespace(node='stage5.write', executor_profile=AgentProfile(
+        driver='codex', model='gpt-5.6-sol', reasoning_effort='high'))
+
+    rc = M._dispatch('stage5.write', ctx, [])
+
+    assert rc == X.CHECK_FAILED and X.landed(rc)
+    assert built == [{'chapters': None, 'revise': False}]
+    assert rendered == [report]
+    out = capsys.readouterr().out
+    assert 'SYNTHETIC REPORT' in out
+    assert '落盘负结论' in out and '3 turn' in out
+
+
+def test_profiled_stage4_infeasible_is_landed_exit_one(monkeypatch, capsys):
+    """Stage4B typed negative 不是假报告，也不是没跑成的 exit 2。"""
+    from contracts.schema.stage4 import EvidenceBinding
+    from novel import node_agents
+    from novel.cli import main as M
+
+    binding = EvidenceBinding.model_construct(
+        status='infeasible', candidate_sha256='a' * 64,
+        chapters=None, reason_kind='future_leak',
+        reason='候选只能依赖未来证据。', evidence_refs=['f02_001'])
+
+    class Agent:
+        def run(self):
+            # 即使 producer result 的通用 passed 默认真，typed negative 仍由 CLI
+            # 按 artifact 自身的权威状态收成 landed-red。
+            return SimpleNamespace(
+                artifact=binding, report=None, passed=True, turns=1)
+
+    monkeypatch.setattr(
+        node_agents, 'build_node_agent', lambda _ctx, **_kwargs: Agent())
+    monkeypatch.setattr(
+        M, 'render', lambda _report: pytest.fail(
+            'Stage4 infeasible 不得伪造 CheckReport'))
+    ctx = SimpleNamespace(node='stage4.plan', executor_profile=AgentProfile(
+        driver='codex', model='gpt-5.6-sol', reasoning_effort='high'))
+
+    rc = M._dispatch('stage4.plan', ctx, [])
+
+    assert rc == X.CHECK_FAILED and X.landed(rc)
+    out = capsys.readouterr().out
+    assert 'typed infeasible' in out and 'future_leak' in out
+    assert 'stage4.design --replan' in out
+
+
+def test_profiled_gate_blocked_remains_exit_two_without_a_stack(
+        tmp_path, monkeypatch, capsys):
+    """agent 把候选写成 `.INVALID` 后抛 GateBlocked：没正式交付，仍是 exit 2。"""
+    from novel import node_agents
+    from novel.cli import main as M
+    from novel.errors import GateBlocked
+
+    def open_context(_base, _sid, node, **kwargs):
+        return SimpleNamespace(
+            node=node, run_id='profiled-gate-blocked',
+            executor_profile=kwargs['executor_profile'])
+
+    class Agent:
+        def run(self):
+            raise GateBlocked(
+                '合成 agent 候选被代码闸拦下',
+                invalid_path='stage2/global_grounding.INVALID.json')
+
+    monkeypatch.setattr(M, 'RunContext', SimpleNamespace(open=open_context))
+    monkeypatch.setattr(
+        node_agents, 'build_node_agent', lambda _ctx, **_kwargs: Agent())
+    monkeypatch.setattr(
+        M, '_llm_client', lambda _ctx: pytest.fail(
+            '显式 executor GateBlocked 不得回退 DeepSeek'))
+
+    rc = _run(
+        'run', 'stage2.global', 'book-1', *EXECUTOR_PROFILE_ARGS,
+        '--allow-egress', '--base', str(tmp_path), '--yes')
+
+    assert rc == X.TERMINAL_STATE and not X.landed(rc)
+    err = capsys.readouterr().err
+    assert '合成 agent 候选被代码闸拦下' in err
+    assert 'Traceback' not in err
+
+
+@pytest.mark.parametrize(('node', 'flags'), [
+    ('stage2.global', ['--purge-role']),
+    ('stage2.blueprint', ['--chapters', '1']),
+    ('stage6.semantic', ['--dry-run']),
+    ('stage4.context', []),
+])
+def test_cli_refuses_profiled_flags_and_unmigrated_nodes_before_context(
+        tmp_path, monkeypatch, capsys, node, flags):
+    from novel.cli import main as M
+
+    opened = []
+    monkeypatch.setattr(
+        M, 'RunContext',
+        SimpleNamespace(open=lambda *_args, **_kwargs: opened.append(_kwargs)))
+
+    rc = _run(
+        'run', node, 'book-1', *flags, *EXECUTOR_PROFILE_ARGS,
+        '--base', str(tmp_path), '--yes')
+
+    assert rc == X.TERMINAL_STATE
+    assert opened == []
+    err = capsys.readouterr().err
+    assert 'Traceback' not in err
+    if node == 'stage4.context':
+        assert '尚未接入 executor agent' in err
+    else:
+        assert '尚未迁移 flag 组合' in err
+
+
+def test_cli_refuses_a_partial_executor_profile_before_preview(tmp_path, capsys):
+    rc = _run(
+        'preview', 'stage2.global', 'book-1',
+        '--executor-driver', 'codex', '--base', str(tmp_path))
+
+    assert rc == X.TERMINAL_STATE
+    err = capsys.readouterr().err
+    assert '必须同时给' in err and '--executor-model' in err
+    assert 'Traceback' not in err
+
+
+def test_stage6_semantic_dry_run_prints_the_exact_role_requests(
+        monkeypatch, capsys):
+    """dry-run 不得把 role suffix 错拼到 system 后再声称是真 wire。"""
+    from novel.cli import main as M
+    from novel.stages.stage6 import semantic
+
+    monkeypatch.setattr(
+        semantic,
+        'build_prompt',
+        lambda _ctx: ('COMMON-SYSTEM', 'COMMON-USER', object(), object(), [
+            ('T1', 'c1', '候选文本'),
+        ]),
+    )
+
+    assert M._run_stage6(
+        SimpleNamespace(node='stage6.semantic'), ['--dry-run']) == X.OK
+    output = capsys.readouterr().out
+    for role in ('A', 'B'):
+        exact_system, exact_user = semantic.judge_request(
+            'COMMON-SYSTEM', 'COMMON-USER', role)
+        assert f'anonymous editor {role} system' in output
+        assert exact_system in output
+        assert f'anonymous editor {role} user' in output
+        assert exact_user in output
+    assert 'COMMON-SYSTEM' + semantic.JUDGE_ROLE_SUFFIX['A'] not in output
+    assert 'COMMON-SYSTEM' + semantic.JUDGE_ROLE_SUFFIX['B'] not in output
+
+
+def test_profiled_preview_without_egress_approval_is_visible_but_not_executable(
+        tmp_path, capsys):
+    rc = _run(
+        'preview', 'stage2.global', 'book-1', *EXECUTOR_PROFILE_ARGS,
+        '--base', str(tmp_path))
+
+    assert rc == X.OK
+    out = capsys.readouterr().out
+    assert '--executor-driver' in out
+    assert '--allow-egress' not in out
+
+
+def test_profiled_cli_run_without_egress_approval_refuses_before_context(
+        tmp_path, monkeypatch, capsys):
+    from novel.cli import main as M
+    from novel import node_agents
+
+    opened = []
+    dispatched = []
+    monkeypatch.setattr(
+        M, 'RunContext',
+        SimpleNamespace(open=lambda *_args, **_kwargs: opened.append(_kwargs)))
+    monkeypatch.setattr(
+        M, '_dispatch',
+        lambda *_args: dispatched.append(True) or X.OK)
+    monkeypatch.setattr(
+        M, '_llm_client',
+        lambda _ctx: pytest.fail('外发授权拒绝后不得构造 LLM client'))
+    monkeypatch.setattr(
+        node_agents, 'build_node_agent',
+        lambda _ctx: pytest.fail('外发授权拒绝后不得构造 executor driver'))
+
+    rc = _run(
+        'run', 'stage2.global', 'book-1', *EXECUTOR_PROFILE_ARGS,
+        '--base', str(tmp_path), '--yes')
+
+    assert rc == X.TERMINAL_STATE
+    assert opened == [] and dispatched == []
+    err = capsys.readouterr().err
+    assert '正文外发' in err and '--allow-egress' in err
+    assert 'Traceback' not in err
+
+
+def test_cli_refuses_egress_authorization_without_executor_before_context(
+        tmp_path, monkeypatch, capsys):
+    from novel.cli import main as M
+
+    opened = []
+    monkeypatch.setattr(
+        M, 'RunContext',
+        SimpleNamespace(open=lambda *_args, **_kwargs: opened.append(_kwargs)))
+
+    rc = _run(
+        'run', 'stage2.global', 'book-1', '--allow-egress',
+        '--base', str(tmp_path), '--yes')
+
+    assert rc == X.TERMINAL_STATE and opened == []
+    err = capsys.readouterr().err
+    assert '没有 executor_profile' in err and 'Traceback' not in err
 
 @pytest.mark.corpus
 def test_preview_prints_exactly_the_command_that_would_run(box, capsys):

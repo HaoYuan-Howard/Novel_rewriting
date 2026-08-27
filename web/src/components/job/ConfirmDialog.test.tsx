@@ -6,6 +6,7 @@ import { fireEvent, screen, waitFor } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import { ConfirmDialog } from './ConfirmDialog'
 import { renderRoute } from '@/test/render'
+import { EXECUTOR_PROFILE } from '@/test/agent'
 import type { JobPreview, JobRequest } from '@/types/jobs'
 
 const request: JobRequest = {
@@ -22,12 +23,16 @@ const preview: JobPreview = {
   paid: true,
   label: request.label,
   kind: request.kind,
+  executor_profile: EXECUTOR_PROFILE,
+  egress_authorized: false,
   steps: [
     {
       label: '第 11 章闭卷写作',
       paid: true,
       writes: 'stage5/ch11.json',
       argv: 'python -m novel.cli stage5.write --chapters 11',
+      executor_profile: EXECUTOR_PROFILE,
+      egress_authorized: false,
     },
   ],
 }
@@ -110,6 +115,8 @@ describe('ConfirmDialog', () => {
     const command = await screen.findByText(/--chapters 11/)
     expect(command).toBeVisible()
     expect(command.textContent?.match(/--chapters/g)).toHaveLength(1)
+    expect(screen.getByText(/executor-model-v7/)).toBeVisible()
+    expect(screen.getByText('正文外发：未授权')).toBeVisible()
     expect(previewSpy).toHaveBeenCalledWith(request)
     fireEvent.click(screen.getByRole('button', { name: '确认发起（花钱）' }))
     await waitFor(() => expect(startSpy).toHaveBeenCalledWith(request))

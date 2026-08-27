@@ -1,23 +1,34 @@
-import { useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { errorBody } from '@/api/errors'
-import { useAgentQueue, useStartAgentBatch } from '@/hooks/useAgentRuns'
+import {
+  useAgentCapabilities,
+  useAgentQueue,
+  useStartAgentBatch,
+} from '@/hooks/useAgentRuns'
 import { SCRIM } from '@/constants/vocabulary'
 import { Mono } from '@/components/ui/Mono'
 import { ErrorHint } from '@/components/state/States'
+import { AgentProfilesSnapshot } from './AgentProfilesSnapshot'
+import { PipelineAgentProfilesForm } from './AgentProfilesForm'
+import {
+  clonePipelineAgentProfiles,
+  emptyPipelineAgentProfilesDraft,
+  materializePipelineAgentProfiles,
+  pipelineDraftOf,
+} from '@/lib/agentProfiles'
 import { cx } from '@/lib/cx'
-import type { AgentQueueView } from '@/types/agent'
+import type {
+  AgentBatchRequest,
+  AgentQueueView,
+  PipelineAgentProfiles,
+} from '@/types/agent'
 
-/**
- * 批量发起 agent 代跑前拦一道。
- *
- * 与单本的 `AgentRunDialog` 的分界线：那一个摆的是**将要执行的那条命令**
- * （服务端 preview 原样下发，`R-11.8` 同构）；N 本摆不下 N 条命令，
- * 所以这一个摆的是**这一批的边界**——哪几本、几个同时跑、两项授权覆盖到哪。
- * ⚠ 要逐字核对某一本的 argv，仍然走那本书自己的「agent 跑书」按钮。
- *
- * ⚠ 授权对**整批**生效，不逐本勾：逐本勾会让「这一批到底授权了什么」
- * 没有一个能写进终审包的答案。要给不同书不同授权，就分两批。
- */
+interface AcceptedBatch {
+  view: AgentQueueView
+  /** 受理瞬间的整批请求快照；排队中的书也冻结这一份。 */
+  request: AgentBatchRequest
+}
+
 export function AgentBatchDialog({
   books,
   onClose,
@@ -26,27 +37,58 @@ export function AgentBatchDialog({
   onClose: () => void
 }) {
   const [authorized, setAuthorized] = useState(false)
-  // 与单本入口同款产品默认：默认允许正文外发，但仍显式提交，随时可取消。
   const [egressAuthorized, setEgressAuthorized] = useState(true)
-  const [result, setResult] = useState<AgentQueueView | null>(null)
+  const [accepted, setAccepted] = useState<AcceptedBatch | null>(null)
+  const [profilesInitialized, setProfilesInitialized] = useState(false)
+  const [profileDraft, setProfileDraft] = useState(emptyPipelineAgentProfilesDraft)
+  const capabilities = useAgentCapabilities()
   const batch = useStartAgentBatch()
   const queue = useAgentQueue()
 
-  // 闸由服务端下发。⚠ 前端不写死这个数——同「贵贱只有一处算」那条纪律。
-  const gate = result?.max_concurrent ?? queue.data?.max_concurrent ?? null
+  useEffect(() => {
+    if (!capabilities.data || profilesInitialized) return
+    setProfileDraft(pipelineDraftOf(capabilities.data.default_profiles))
+    setProfilesInitialized(true)
+  }, [capabilities.data, profilesInitialized])
+
+  const materialized = useMemo(
+    () => capabilities.data
+      ? materializePipelineAgentProfiles(capabilities.data, profileDraft)
+      : { profiles: null, errors: [] },
+    [capabilities.data, profileDraft],
+  )
+  const gate = accepted?.view.max_concurrent ?? queue.data?.max_concurrent ?? null
   const alreadyRunning = queue.data?.running.length ?? 0
+  const disabled = batch.isPending
+    || books.length === 0
+    || materialized.profiles === null
+    || !authorized
+    || !egressAuthorized
+
+  const submit = (profiles: PipelineAgentProfiles) => {
+    const request: AgentBatchRequest = {
+      sids: books.map((book) => book.sid),
+      authorized,
+      egress_authorized: egressAuthorized,
+      profiles: clonePipelineAgentProfiles(profiles),
+    }
+    batch.mutate(request, {
+      onSuccess: (view) => setAccepted({ view, request }),
+    })
+  }
 
   return (
     <div
-      className="fixed inset-0 z-60 flex items-center justify-center"
+      className="fixed inset-0 z-60 flex items-center justify-center p-16"
       style={{ background: SCRIM }}
       onClick={onClose}
     >
       <div
-        className="w-[660px] overflow-hidden rounded-modal border border-line-btn bg-card shadow-modal"
-        onClick={(e) => e.stopPropagation()}
+        data-testid="agent-batch-dialog"
+        className="flex max-h-[calc(100vh-32px)] w-[min(760px,calc(100vw-32px))] flex-col overflow-hidden rounded-modal border border-line-btn bg-card shadow-modal"
+        onClick={(event) => event.stopPropagation()}
       >
-        <div className="flex items-center gap-10 border-b border-line-soft px-22 py-16">
+        <div className="flex shrink-0 items-center gap-10 border-b border-line-soft px-22 py-16">
           <span
             className={cx(
               'rounded-chip px-9 py-3 text-tag font-semibold',
@@ -64,107 +106,137 @@ export function AgentBatchDialog({
             {egressAuthorized ? '允许正文外发' : '禁止正文外发'}
           </span>
           <span className="text-h3 font-semibold">
-            {result ? '这一批已受理' : '让 agent 跑这 ' + books.length + ' 本'}
+            {accepted ? '这一批已受理' : '让 agent 跑这 ' + books.length + ' 本'}
           </span>
         </div>
 
-        {result ? (
-          <div className="flex flex-col gap-12 px-22 py-18">
-            <BatchOutcome result={result} books={books} />
-          </div>
-        ) : (
-          <div className="flex flex-col gap-12 px-22 py-18">
-            <div className="max-h-[190px] overflow-y-auto rounded-btn-lg border border-line bg-inset px-14 py-10">
-              {books.map((b) => (
-                <div key={b.sid} className="flex items-baseline gap-10 py-3">
-                  <span className="text-body text-ink">{b.title}</span>
-                  <Mono className="ml-auto text-mini text-ink-4">{b.sid}</Mono>
+        <div className="flex min-h-0 flex-col gap-12 overflow-y-auto px-22 py-18">
+          {accepted ? (
+            <>
+              <AgentProfilesSnapshot profiles={accepted.request.profiles} />
+              <div className="text-tag text-ink-4">
+                上面是本批受理时的冻结配置；后续修改页面或服务端默认都不会改写排队项。
+              </div>
+              <BatchOutcome result={accepted.view} books={books} />
+            </>
+          ) : (
+            <>
+              <div className="max-h-[190px] overflow-y-auto rounded-btn-lg border border-line bg-inset px-14 py-10">
+                {books.map((book) => (
+                  <div key={book.sid} className="flex items-baseline gap-10 py-3">
+                    <span className="text-body text-ink">{book.title}</span>
+                    <Mono className="ml-auto text-mini text-ink-4">{book.sid}</Mono>
+                  </div>
+                ))}
+              </div>
+
+              <div className="rounded-block border border-line-btn bg-sunken-2 px-14 py-10 text-body text-ink-2">
+                最多 <span className="font-semibold">{gate ?? '…'}</span> 本同时跑，其余排队；
+                一本结束自动带起下一本。
+                {alreadyRunning > 0 ? '现在已经有 ' + alreadyRunning + ' 本在跑，占着名额。' : ''}
+                <div className="mt-6 text-ink-4">
+                  ⚠ 每本书起一个指挥 Agent；它派生的执行者按下方同一快照运行。
+                  排队只在服务进程内存里，重启不保留。
                 </div>
-              ))}
-            </div>
-
-            <div className="rounded-block border border-line-btn bg-sunken-2 px-14 py-10 text-body text-ink-2">
-              最多 <span className="font-semibold">{gate ?? '…'}</span> 本同时跑，其余排队；
-              一本结束自动带起下一本。
-              {alreadyRunning > 0 ? '现在已经有 ' + alreadyRunning + ' 本在跑，占着名额。' : ''}
-              <div className="mt-6 text-ink-4">
-                ⚠ 每本书起一个 agent 进程，它自己花一笔、它起的流水线再花一笔。
-                排队只在服务进程内存里，重启不保留。
               </div>
-            </div>
 
-            <label className="flex cursor-pointer items-start gap-8 rounded-block border border-line-btn bg-sunken-2 px-14 py-10">
-              <input
-                type="checkbox"
-                checked={authorized}
-                onChange={(e) => setAuthorized(e.target.checked)}
-                className="mt-3"
-              />
-              <span className="text-body text-ink-2">
-                允许这一批产生外部模型调用费用（skill 接口契约的付费授权）；默认不勾，
-                不勾则每个 agent 都在第一条付费命令前停下
-              </span>
-            </label>
+              {capabilities.isPending ? (
+                <div className="rounded-block border border-line bg-inset px-14 py-11 text-body text-ink-4">
+                  正在探测本机 Agent 能力；拿到 capability 前不会受理这一批…
+                </div>
+              ) : capabilities.isError ? (
+                <div className="rounded-block border border-warn-line bg-warn-bg px-14 py-11 text-body text-warn-ink">
+                  取不到本机 Agent capability，因此不会启动。
+                  <ErrorHint error={capabilities.error} />
+                </div>
+              ) : capabilities.data ? (
+                <>
+                  {capabilities.data.default_profiles === null ? (
+                    <div className="rounded-block border border-warn-line bg-warn-bg px-14 py-10 text-body text-warn-ink">
+                      服务端尚未发布默认 Agent 配置；请显式选完本批的指挥与执行者。界面不会猜第一项。
+                    </div>
+                  ) : null}
+                  <PipelineAgentProfilesForm
+                    capabilities={capabilities.data}
+                    value={profileDraft}
+                    onChange={setProfileDraft}
+                    errors={materialized.errors}
+                    disabled={batch.isPending}
+                  />
+                </>
+              ) : null}
 
-            <label className="flex cursor-pointer items-start gap-8 rounded-block border border-line-btn bg-sunken-2 px-14 py-10">
-              <input
-                type="checkbox"
-                checked={egressAuthorized}
-                onChange={(e) => setEgressAuthorized(e.target.checked)}
-                className="mt-3"
-              />
-              <span className="text-body text-ink-2">
-                允许把这几本的正文及派生上下文发送给外部模型（正文外发授权，默认勾选）
-              </span>
-            </label>
+              <label className="flex cursor-pointer items-start gap-8 rounded-block border border-line-btn bg-sunken-2 px-14 py-10">
+                <input
+                  type="checkbox"
+                  checked={authorized}
+                  disabled={batch.isPending}
+                  onChange={(event) => setAuthorized(event.target.checked)}
+                  className="mt-3"
+                />
+                <span className="text-body text-ink-2">
+                  允许这一批产生外部模型调用费用。它不自动开启正文外发授权。
+                </span>
+              </label>
 
-            {batch.isError ? (
-              <div className="rounded-block border border-warn-line bg-warn-bg px-14 py-10 text-body text-warn-ink">
-                {errorBody(batch.error)}
-                <ErrorHint error={batch.error} />
-              </div>
-            ) : null}
-          </div>
-        )}
+              <label className="flex cursor-pointer items-start gap-8 rounded-block border border-line-btn bg-sunken-2 px-14 py-10">
+                <input
+                  type="checkbox"
+                  checked={egressAuthorized}
+                  disabled={batch.isPending}
+                  onChange={(event) => setEgressAuthorized(event.target.checked)}
+                  className="mt-3"
+                />
+                <span className="text-body text-ink-2">
+                  允许把这几本的正文及派生上下文发送给外部模型。取消它不会撤销付费授权。
+                </span>
+              </label>
 
-        <div className="flex items-center gap-10 border-t border-line-soft bg-sunken-2 px-22 py-13">
+              {batch.isError ? (
+                <div className="rounded-block border border-warn-line bg-warn-bg px-14 py-10 text-body text-warn-ink">
+                  {errorBody(batch.error)}
+                  <ErrorHint error={batch.error} />
+                </div>
+              ) : null}
+            </>
+          )}
+        </div>
+
+        <div className="flex shrink-0 items-center gap-10 border-t border-line-soft bg-sunken-2 px-22 py-13">
           <span className="text-tag text-ink-4">
-            {result
-              ? '每本书的进度在它自己的「进度」屏上。'
-              : '受理后立刻返回，不等任何一本跑完。'}
+            {accepted
+              ? '每本书的进度与冻结配置都在它自己的「进度」屏上。'
+              : !authorized
+                ? '未授予模型调用费用：当前仅可预览配置，不会启动任何一本。'
+                : !egressAuthorized
+                  ? '未授予正文外发：当前仅可预览配置，不会启动任何一本。'
+                  : '受理后立刻返回，不等任何一本跑完。'}
           </span>
           <button
             type="button"
             onClick={onClose}
             className="ml-auto cursor-pointer rounded-btn border border-line-btn bg-card px-16 py-8 text-body-lg"
           >
-            {result ? '关闭' : '返回'}
+            {accepted ? '关闭' : '返回'}
           </button>
-          {result ? null : (
+          {accepted ? null : (
             <button
               type="button"
-              disabled={batch.isPending || books.length === 0}
-              onClick={() =>
-                batch.mutate(
-                  {
-                    sids: books.map((b) => b.sid),
-                    authorized,
-                    egress_authorized: egressAuthorized,
-                  },
-                  { onSuccess: (view) => setResult(view) },
-                )
-              }
+              disabled={disabled}
+              onClick={() => {
+                if (materialized.profiles) submit(materialized.profiles)
+              }}
               className={cx(
                 'rounded-btn px-18 py-8 text-body-lg font-semibold text-card',
                 authorized ? 'bg-spend' : 'bg-ink',
-                batch.isPending || books.length === 0
-                  ? 'cursor-not-allowed opacity-40'
-                  : 'cursor-pointer',
+                disabled ? 'cursor-not-allowed opacity-40' : 'cursor-pointer',
               )}
             >
-              {authorized
-                ? '授权并开始跑这 ' + books.length + ' 本'
-                : '批量启动诊断（仍产生 Claude 费用）'}
+              {!authorized
+                ? '需先授权模型调用费用'
+                : !egressAuthorized
+                  ? '需先授权正文外发'
+                  : '授权并开始跑这 ' + books.length + ' 本'}
             </button>
           )}
         </div>
@@ -173,11 +245,6 @@ export function AgentBatchDialog({
   )
 }
 
-/**
- * 受理结果：三堆逐本摆开。
- * ⚠ 「部分失败不回滚」在界面上的样子——被拒的那几本连同原因单独列出，
- * 而不是把整批说成失败（那会把已经在跑的那几本藏掉）。
- */
 function BatchOutcome({
   result,
   books,
@@ -185,24 +252,35 @@ function BatchOutcome({
   result: AgentQueueView
   books: { sid: string; title: string }[]
 }) {
-  const title = (sid: string) => books.find((b) => b.sid === sid)?.title ?? sid
+  const title = (sid: string) => books.find((book) => book.sid === sid)?.title ?? sid
 
   return (
     <>
       <Group label={'已经在跑（' + result.running.length + '）'}>
-        {result.running.map((r) => (
-          <Row key={r.run_id} name={title(r.start.sid)} sid={r.start.sid} note="running" />
+        {result.running.map((run) => (
+          <Row key={run.run_id} name={title(run.start.sid)} sid={run.start.sid} note="running" />
         ))}
       </Group>
       <Group label={'排队中（' + result.pending.length + '）'}>
-        {result.pending.map((p) => (
-          <Row key={p.sid} name={title(p.sid)} sid={p.sid} note={'第 ' + p.position + ' 位'} />
+        {result.pending.map((pending) => (
+          <Row
+            key={pending.sid}
+            name={title(pending.sid)}
+            sid={pending.sid}
+            note={'第 ' + pending.position + ' 位'}
+          />
         ))}
       </Group>
       {result.rejected.length ? (
         <Group label={'没有受理（' + result.rejected.length + '）'} warn>
-          {result.rejected.map((r) => (
-            <Row key={r.sid} name={title(r.sid)} sid={r.sid} note={r.reason} warn />
+          {result.rejected.map((rejected) => (
+            <Row
+              key={rejected.sid}
+              name={title(rejected.sid)}
+              sid={rejected.sid}
+              note={rejected.reason}
+              warn
+            />
           ))}
         </Group>
       ) : null}

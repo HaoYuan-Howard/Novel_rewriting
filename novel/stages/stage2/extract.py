@@ -13,10 +13,12 @@ from contracts.artifacts import (
 )
 
 import copy
+import hashlib
 import json
 import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Any, Callable
+from dataclasses import dataclass, field
+from typing import Any, Callable, Protocol
 
 from pydantic import ValidationError
 
@@ -44,7 +46,7 @@ from novel.llm.client import LlmClient
 from novel.llm.ledger import combine_usage
 from novel.llm.prompts import with_json_shape
 from novel.observability import ChapterProgressTracker
-from novel.quality.global_review import build_review
+from novel.quality.global_review import build_review, require_current as require_current_review
 from novel.report import build
 from novel.report.findings import Outcome
 from novel.run import RunContext
@@ -85,6 +87,185 @@ ROLE_MAX_TOKENS = 32_000
 PAST_NEIGHBOR_CHARS_MAX = 4_000
 CONTINUITY_CHARS_MAX = 1_600
 PAST_NAMES_CHARS_MAX = 600
+
+
+class _GlobalResponseSource(Protocol):
+    """全局 producer 真正依赖的最小来源面；旧 LlmClient 与 session client 同形。"""
+
+    model: str
+
+    def accepted_attempt(self, purpose: str) -> str | None: ...
+
+    def accepted_models(self, *purposes: str) -> tuple[str, ...]: ...
+
+
+class _BlueprintRequestSource(_GlobalResponseSource, Protocol):
+    """blueprint 扇出真正消费的客户端窄面。
+
+    agent 路径应由节点层提供一个按 ``(phase, chapter)`` 路由的聚合器；聚合器背后
+    每格必须是独立 ``SessionAgentClient``。这里不持有 driver，也不另造 checkpoint
+    或 adoption 状态，只继续消费既有 ``stage2_runs`` 所要求的桥接方法。
+    """
+
+    concurrency: int
+
+    def ask_json(self, system: str, user: str, **kwargs: Any) -> Any: ...
+
+    def json_request_policy(
+            self, phases: Any, *, recovery_policy: str,
+    ) -> dict[str, Any]: ...
+
+    def accepted_checkpoint(self, purpose: str) -> dict[str, Any]: ...
+
+    def restore_checkpoint_acceptance(
+            self, purpose: str, record: Any, **kwargs: Any,
+    ) -> None: ...
+
+
+@dataclass(frozen=True)
+class GlobalCandidateFinding:
+    """一条可交回同一 agent session 的代码结论；它不是落盘报告。"""
+
+    detail: str
+    evidence: tuple[str, ...]
+
+    def to_dict(self) -> dict[str, object]:
+        return {'detail': self.detail, 'evidence': list(self.evidence)}
+
+
+@dataclass(frozen=True)
+class GlobalCandidateFeedback:
+    """一条 HARD 拒因的稳定业务摘要。
+
+    完整摘要只用于下一轮 provider prompt；成本/会话审计只应另取 rule 与计数，
+    不能把 ``detail`` 或 ``evidence`` 复制进 ``_service``。
+    """
+
+    rule: str
+    item: str
+    requirement: str
+    findings: tuple[GlobalCandidateFinding, ...]
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            'rule': self.rule,
+            'item': self.item,
+            'requirement': self.requirement,
+            'findings': [finding.to_dict() for finding in self.findings],
+        }
+
+
+@dataclass(frozen=True)
+class _BlueprintGuard:
+    """global 重跑期间当前正式 blueprint 的冻结快照。"""
+
+    state: str                         # absent | current | older:<found>:<current>
+    raw_sha256: str | None = None
+    raw: dict[str, Any] | None = field(default=None, repr=False)
+
+
+@dataclass(frozen=True)
+class _GlobalDownstreamGuard:
+    """现有 blueprint 差分闸所需的全部冻结事实。"""
+
+    blueprint: _BlueprintGuard
+    baseline_state: str                # unused | current | absent | older:<found>:<current>
+    baseline_sha256: str | None = None
+    baseline_hard_hits: frozenset[str] | None = None
+
+
+@dataclass(frozen=True)
+class GlobalCandidateContext:
+    """一次 global 候选循环的冻结输入。
+
+    agent 只需要公开的 ``system`` / ``user``。正文、旧 global 与 blueprint 快照留在
+    producer 内存里；调用方拿不到任何正式落盘路径，也无须自己重拼差分判据。
+    """
+
+    system: str
+    user: str
+    _main_text: tuple[dict[str, Any], ...] = field(repr=False)
+    _downstream: _GlobalDownstreamGuard = field(repr=False)
+
+
+@dataclass(frozen=True)
+class GlobalCandidateEvaluation:
+    """一份尚未提交的强类型候选及代码 HARD 结论。
+
+    ``candidate`` 带 ``settle=False`` 的 provisional provenance，只供同 schema 判定；
+    它绝不能直接交给 ``ArtifactStore``。终态必须走 :func:`finalize_global_candidate`，
+    由那里一次结算完整 usage、重判并选择 formal 或 ``.INVALID``。
+    """
+
+    candidate: GlobalGrounding
+    hard_hits: tuple[str, ...]
+    feedback: tuple[GlobalCandidateFeedback, ...]
+    source_attempt_id: str | None
+    requested_model: str
+    adopted_models: tuple[str, ...]
+    _response: GlobalGroundingResponse = field(repr=False)
+
+    @property
+    def passed(self) -> bool:
+        return not self.hard_hits
+
+    def feedback_rows(self) -> list[dict[str, object]]:
+        """交给 agent resume 的 JSON-safe 行；不含 artifact 路径或来源账。"""
+        return [row.to_dict() for row in self.feedback]
+
+
+@dataclass(frozen=True)
+class BlueprintCandidateFeedback:
+    """整书代码 HARD 对逐章 executor 的稳定反馈投影。"""
+
+    rule: str
+    item: str
+    requirement: str
+    chapters: tuple[int, ...]
+    findings: tuple[GlobalCandidateFinding, ...]
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            'rule': self.rule,
+            'item': self.item,
+            'requirement': self.requirement,
+            'chapters': list(self.chapters),
+            'findings': [finding.to_dict() for finding in self.findings],
+        }
+
+
+@dataclass(frozen=True)
+class BlueprintCandidateEvaluation:
+    """尚未提交的整书 blueprint 候选与唯一业务判据结论。
+
+    每章 schema/dynamic validator 已在独立请求 client 内完成；这里再按正式 compile
+    结果跑联合 HARD。``candidate`` 的 provenance 使用 ``settle=False``，只能用于
+    判定与反馈，终态必须走 :func:`finalize_blueprint_candidate`。
+    """
+
+    candidate: ChapterBlueprints
+    hard_hits: tuple[str, ...]
+    feedback: tuple[BlueprintCandidateFeedback, ...]
+    purposes: tuple[tuple[str, int | None], ...]
+    accepted_attempts: tuple[tuple[str, str | None], ...]
+    requested_model: str
+    adopted_models: tuple[str, ...]
+    error_count: int
+    _batch_sha256: str = field(repr=False)
+    _main_text_sha256: str = field(repr=False)
+    _global_sha256: str = field(repr=False)
+
+    @property
+    def passed(self) -> bool:
+        return not self.hard_hits
+
+    def feedback_rows(self, chapter: int | None = None) \
+            -> list[dict[str, object]]:
+        """返回可交回 executor 的 JSON-safe 行；书级结论发给每个目标 session。"""
+        return [
+            row.to_dict() for row in self.feedback
+            if chapter is None or not row.chapters or chapter in row.chapters
+        ]
 
 
 class _ScopeViolationRow(StrictModel):
@@ -660,6 +841,240 @@ def _judge_candidate(
         global_g=global_g, blueprints=blueprints, main_text=main_text)
 
 
+def _canonical_sha256(value: object) -> str:
+    """候选/冻结 guard 的全宽身份；10 位 provenance 指纹不承担提交等值证明。"""
+    payload = json.dumps(
+        value, ensure_ascii=False, sort_keys=True,
+        separators=(',', ':'), allow_nan=False,
+    ).encode('utf-8')
+    return hashlib.sha256(payload).hexdigest()
+
+
+def _read_blueprint_guard(
+        ctx: RunContext, store: ArtifactStore, *, observe: bool,
+) -> _BlueprintGuard:
+    """冻结现有**正式** blueprint；INVALID 不得反向约束 global producer。"""
+    if not store.exists(BLUEPRINT_REL):
+        return _BlueprintGuard(state='absent')
+    try:
+        _old_bp, raw = store.read_own(ChapterBlueprints, BLUEPRINT_REL)
+    except ArtifactUnreadable as exc:
+        # 只放真正的旧注册版本；坏 marker、未来版本和坏 envelope 继续关闭式失败。
+        cause = _older_version_error(exc)
+        if cause is None:
+            raise
+        if observe:
+            ctx.observe(
+                'optional_downstream_guard_skipped', artifact=BLUEPRINT_REL,
+                reason='artifact_version_mismatch',
+                found_version=cause.found, current_version=cause.expected,
+            )
+        return _BlueprintGuard(
+            state=f'older:{cause.found!r}:{cause.expected!r}')
+    frozen = copy.deepcopy(raw)
+    return _BlueprintGuard(
+        state='current', raw_sha256=_canonical_sha256(frozen), raw=frozen)
+
+
+def _read_global_downstream_guard(
+        ctx: RunContext, store: ArtifactStore,
+        main_text: list[dict[str, Any]], *, observe: bool,
+) -> _GlobalDownstreamGuard:
+    """冻结现有 blueprint 差分语义；读取只作前置校验，不进入新 global inputs。"""
+    blueprint = _read_blueprint_guard(ctx, store, observe=observe)
+    if blueprint.state != 'current':
+        return _GlobalDownstreamGuard(
+            blueprint=blueprint, baseline_state='unused')
+    assert blueprint.raw is not None
+    try:
+        old_global = _read_raw(store, GlobalGrounding, GLOBAL_REL)
+    except ArtifactUnreadable as exc:
+        # 与旧路径一致：只有低版本 global 可失去 before 差分；其余载体错误关闭式失败。
+        version = _older_version_error(exc)
+        if version is None:
+            raise
+        if observe:
+            ctx.observe(
+                'optional_downstream_baseline_unavailable', artifact=GLOBAL_REL,
+                found_version=version.found, current_version=version.expected,
+            )
+        return _GlobalDownstreamGuard(
+            blueprint=blueprint,
+            baseline_state=f'older:{version.found!r}:{version.expected!r}',
+            baseline_hard_hits=None,
+        )
+
+    before = frozenset(_hard_hits(
+        _judge_candidate(old_global, blueprint.raw, main_text)))
+    return _GlobalDownstreamGuard(
+        blueprint=blueprint,
+        baseline_state='absent' if old_global is None else 'current',
+        baseline_sha256=(
+            None if old_global is None else _canonical_sha256(old_global)),
+        baseline_hard_hits=before,
+    )
+
+
+def prepare_global_candidate(ctx: RunContext) -> GlobalCandidateContext:
+    """冻结一次 global 候选循环的 prompt、正文与下游差分基线。
+
+    本函数不调用模型、不铸 provenance、不写盘。blueprint/旧 global 只决定能否提交，
+    不参与候选内容，因此用 ``validation_reads`` 隔离，避免它们冒充新 global 的输入边。
+    """
+    if ctx.node != 'stage2.global':
+        raise ValueError(
+            f'prepare_global_candidate 只接受 stage2.global，实得 {ctx.node!r}')
+    store = ArtifactStore(ctx)
+    requests = build_prompts(ctx)
+    _ordinal, system, user = requests[0]
+    main_text = _read_main_text(store)
+    assert main_text is not None
+    with ctx.validation_reads():
+        downstream = _read_global_downstream_guard(
+            ctx, store, main_text, observe=True)
+    return GlobalCandidateContext(
+        system=system,
+        user=user,
+        _main_text=tuple(copy.deepcopy(main_text)),
+        _downstream=downstream,
+    )
+
+
+def _assert_global_guard_current(
+        ctx: RunContext, prepared: GlobalCandidateContext,
+) -> None:
+    """每次反馈/终态前证明 agent 仍在回答同一份盘面。"""
+    store = ArtifactStore(ctx)
+    main_text = copy.deepcopy(list(prepared._main_text))
+    with ctx.validation_reads():
+        current = _read_global_downstream_guard(
+            ctx, store, main_text, observe=False)
+    if current != prepared._downstream:
+        raise ProvenanceRefused(
+            'stage2.global executor session 期间 blueprint/global 差分基线发生漂移；'
+            '拒绝把旧 session 的候选接到新盘面，须以新 session 重跑')
+
+
+def _assert_blueprint_guard_current(
+        ctx: RunContext, prepared: GlobalCandidateContext,
+) -> None:
+    """正式 global 已替换后，只复核仍应保持不变的 blueprint 那一半。"""
+    store = ArtifactStore(ctx)
+    with ctx.validation_reads():
+        current = _read_blueprint_guard(ctx, store, observe=False)
+    if current != prepared._downstream.blueprint:
+        raise ProvenanceRefused(
+            'stage2.global 正式提交期间 blueprint guard 漂移；'
+            '不能把本次 readback 声明为 delivered')
+
+
+def _global_candidate_outcomes(
+        candidate: dict[str, Any], prepared: GlobalCandidateContext,
+) -> tuple[list[Outcome], tuple[str, ...]]:
+    """复用现有判据并严格保留 blueprint 的 before/after 差分口径。"""
+    main_text = copy.deepcopy(list(prepared._main_text))
+    outcomes = _judge_candidate(candidate, None, main_text)
+    hits = set(_hard_hits(outcomes, ignore={'upstream_missing'}))
+    guard = prepared._downstream
+    if guard.blueprint.state == 'current':
+        assert guard.blueprint.raw is not None
+        after = _judge_candidate(candidate, guard.blueprint.raw, main_text)
+        outcomes.extend(after)
+        after_hits = set(_hard_hits(after))
+        if guard.baseline_hard_hits is None:
+            # 旧 global schema 无法构造可靠 before；与原实现一致，保守拦下全部 after HARD。
+            hits.update(after_hits)
+        else:
+            hits.update(after_hits - set(guard.baseline_hard_hits))
+    return outcomes, tuple(sorted(hits))
+
+
+def _global_feedback(
+        outcomes: list[Outcome], hits: tuple[str, ...],
+) -> tuple[GlobalCandidateFeedback, ...]:
+    """从命中的那份 Outcome 直接投影；不另跑一套 report 判定。"""
+    rows: list[GlobalCandidateFeedback] = []
+    for rule_id in hits:
+        rule = REGISTRY.get(rule_id)
+        findings: list[GlobalCandidateFinding] = []
+        seen: set[tuple[str, tuple[str, ...]]] = set()
+        for outcome in outcomes:
+            if outcome.rule != rule_id:
+                continue
+            for finding in outcome.findings:
+                identity = (finding.detail, tuple(finding.evidence))
+                if identity in seen:
+                    continue
+                seen.add(identity)
+                findings.append(GlobalCandidateFinding(
+                    detail=finding.detail,
+                    evidence=tuple(finding.evidence),
+                ))
+        rows.append(GlobalCandidateFeedback(
+            rule=rule_id,
+            item=rule.item,
+            requirement=rule.requirement,
+            findings=tuple(findings),
+        ))
+    return tuple(rows)
+
+
+def _materialize_global_evaluation(
+        ctx: RunContext,
+        prepared: GlobalCandidateContext,
+        response: GlobalGroundingResponse,
+        *, requested_model: str,
+        adopted_models: tuple[str, ...],
+        source_attempt_id: str | None,
+        settle: bool,
+) -> GlobalCandidateEvaluation:
+    """归一、铸候选来源账并判定；``settle=False`` 时严格无终态副作用。"""
+    main_text = copy.deepcopy(list(prepared._main_text))
+    data, accounting = normalize_global(
+        response.model_dump(by_alias=True), main_text)
+    provenance = ctx.llm_provenance(
+        GlobalProvenance,
+        prompts={'GLOBAL_SYS': prepared.system},
+        model=requested_model,
+        adopted_models=adopted_models,
+        settle=settle,
+        **accounting,
+    )
+    artifact = GlobalGrounding.model_validate({
+        **data, '_provenance': provenance,
+    })
+    candidate = artifact.model_dump(by_alias=True)
+    outcomes, hits = _global_candidate_outcomes(candidate, prepared)
+    return GlobalCandidateEvaluation(
+        candidate=artifact,
+        hard_hits=hits,
+        feedback=_global_feedback(outcomes, hits),
+        source_attempt_id=source_attempt_id,
+        requested_model=requested_model,
+        adopted_models=tuple(sorted(set(adopted_models))),
+        _response=response.model_copy(deep=True),
+    )
+
+
+def evaluate_global_candidate(
+        ctx: RunContext,
+        source: _GlobalResponseSource,
+        prepared: GlobalCandidateContext,
+        response: GlobalGroundingResponse,
+) -> GlobalCandidateEvaluation:
+    """代码评估一轮 agent 候选；不写 formal/INVALID、不归档、不结算 usage。"""
+    _assert_global_guard_current(ctx, prepared)
+    return _materialize_global_evaluation(
+        ctx,
+        prepared,
+        response,
+        requested_model=source.model,
+        adopted_models=source.accepted_models(ctx.node),
+        source_attempt_id=source.accepted_attempt(ctx.node),
+        settle=False,
+    )
+
+
 def _refresh_global_review(store: ArtifactStore, artifact: GlobalGrounding) -> None:
     previous = (
         store.read_own(GlobalReview, GLOBAL_REVIEW_REL)[0]
@@ -701,7 +1116,7 @@ def _write_invalid(
     return str(store.write_invalid(rel, artifact, gates_skipped=[]))
 
 
-def _note_adopted(ctx: RunContext, client: LlmClient, *, rel: str,
+def _note_adopted(ctx: RunContext, client: _GlobalResponseSource, *, rel: str,
                   candidate: dict[str, Any],
                   purposes: dict[str, int | None]) -> None:
     """正式产物落盘后，逐 purpose 写 `artifact_adoption` 审计行（`llm_audit.jsonl`）。
@@ -721,7 +1136,7 @@ def _note_adopted(ctx: RunContext, client: LlmClient, *, rel: str,
 
 
 def _accepted_adoptions(
-        client: LlmClient, purposes: dict[str, int | None],
+        client: _GlobalResponseSource, purposes: dict[str, int | None],
 ) -> tuple[tuple[str, int | None, str], ...]:
     """把 client 的最终采纳映射冻结成 commit journal 可跨进程恢复的形状。"""
     return tuple(
@@ -743,95 +1158,131 @@ def _note_restored_adoptions(
             artifact=rel, artifact_fingerprint=fp, chapter=chapter)
 
 
-def run_global(ctx: RunContext, client: LlmClient) -> GlobalGrounding:
-    """付费产出全书事实底座；响应边界、归一与落盘载体各校验一次。"""
+def verify_global_delivery(
+        ctx: RunContext,
+        prepared: GlobalCandidateContext,
+        expected: GlobalGrounding,
+) -> GlobalGrounding:
+    """正式提交后的独立 readback 终验；通过不等于 global review 已获人工 PASS。"""
     store = ArtifactStore(ctx)
-    requests = build_prompts(ctx)
-    _ordinal, system, user = requests[0]
-    main_text = _read_main_text(store)
-    assert main_text is not None
+    _assert_blueprint_guard_current(ctx, prepared)
+    if store.exists(_GLOBAL_INVALID):
+        raise ProvenanceRefused(
+            f'stage2.global 正式提交后仍有 live {_GLOBAL_INVALID}；'
+            '不能把一对互相矛盾的 live 文件声明为 delivered')
 
-    response = client.ask_json(
-        system, user,
-        model_cls=GlobalGroundingResponse,
-        purpose=ctx.node,
-        max_tokens=GLOBAL_MAX_TOKENS,
-    )
-    data, accounting = normalize_global(
-        response.model_dump(by_alias=True), main_text)
-    provenance = ctx.llm_provenance(
-        GlobalProvenance,
-        prompts={'GLOBAL_SYS': system},
-        model=client.model,
-        adopted_models=client.accepted_models(ctx.node),
-        **accounting,
-    )
-    artifact = GlobalGrounding.model_validate({
-        **data, '_provenance': provenance,
-    })
+    with ctx.validation_reads():
+        landed, landed_raw = store.read_own(
+            GlobalGrounding, GLOBAL_REL, require_current=True)
+        review, _review_raw = store.read_own(
+            GlobalReview, GLOBAL_REVIEW_REL, require_current=True)
+        global_freshness = store.freshness(GLOBAL_REL)
+        review_freshness = store.freshness(GLOBAL_REVIEW_REL)
 
-    candidate = artifact.model_dump(by_alias=True)
-    outcomes = _judge_candidate(candidate, None, main_text)
-    hits = _hard_hits(outcomes, ignore={'upstream_missing'})
+    expected_raw = expected.model_dump(by_alias=True, mode='json')
+    landed_dump = landed.model_dump(by_alias=True, mode='json')
+    if (_canonical_sha256(expected_raw) != _canonical_sha256(landed_dump)
+            or expected_raw != landed_dump):
+        raise ProvenanceRefused(
+            'stage2.global 正式 readback 与本次终态候选不等值；'
+            '拒绝只凭写盘调用未抛错声明 delivered')
+    if global_freshness.state != 'fresh':
+        raise ProvenanceRefused(
+            f'stage2.global 正式 readback freshness='
+            f'{global_freshness.state}/{global_freshness.reason}，拒绝 delivered')
+    if review_freshness.state != 'fresh':
+        raise ProvenanceRefused(
+            f'{GLOBAL_REVIEW_REL} readback freshness='
+            f'{review_freshness.state}/{review_freshness.reason}，拒绝 delivered')
+    require_current_review(landed_raw, review)
 
-    # 已有 blueprint 时，额外防止一次 global 重跑新造悬空 char_id；
-    # 旧问题照报，但不把与本次无关的存量违约当作新错误。
-    if store.exists(BLUEPRINT_REL):
-        try:
-            _old_bp, old_bp_raw = store.read_own(ChapterBlueprints, BLUEPRINT_REL)
-        except ArtifactUnreadable as exc:
-            # schema 升级后的旧蓝图已经不是一份可消费的下游，不能反过来锁死
-            # producer 的重建路；但当前版本坏 JSON / 坏形状仍须关闭式失败。
-            #
-            # ⚠⚠ **只放「盘上确实是更早的注册版本」这一种。** 按异常类型放宽
-            #   会把另外五种一起放掉：缺 marker、`_schema_version` 不是整数、
-            #   root envelope 形状坏、以及**比当前还高的版本**。最后一种最坏——
-            #   一份 `_schema_version: 999` 的蓝图会让这道守卫整个消失，
-            #   于是这次 global 重跑可以新造悬空 char_id 而不被任何东西挡住
-            #   （实测已复现）。判据取版本号大小，不取异常的类型。
-            cause = _older_version_error(exc)
-            if cause is None:
-                raise
-            ctx.observe(
-                'optional_downstream_guard_skipped', artifact=BLUEPRINT_REL,
-                reason='artifact_version_mismatch',
-                found_version=cause.found, current_version=cause.expected,
-            )
-        else:
-            after = set(_hard_hits(
-                _judge_candidate(candidate, old_bp_raw, main_text)))
-            try:
-                old_global = _read_raw(store, GlobalGrounding, GLOBAL_REL)
-            except ArtifactUnreadable as exc:
-                # 当前蓝图可能已经按新架构重建，但正式 global 仍是上一个 schema
-                # （逐产物升级的真实中间态）。这时没有一份可比较的旧业务底座，不能
-                # 为了做“只拦新增悬空引用”的差分而锁死 producer。仍对新候选 + 当前
-                # 蓝图跑完整 HARD，并把全部命中都拦下；只是不再伪造 before 差分。
-                if (version := _older_version_error(exc)) is None:
-                    raise
-                ctx.observe(
-                    'optional_downstream_baseline_unavailable', artifact=GLOBAL_REL,
-                    found_version=version.found, current_version=version.expected,
-                )
-                hits = sorted(set(hits) | after)
-            else:
-                before = set(_hard_hits(
-                    _judge_candidate(old_global, old_bp_raw, main_text)))
-                hits = sorted(set(hits) | (after - before))
-
+    _outcomes, hits = _global_candidate_outcomes(landed_raw, prepared)
     if hits:
+        raise ProvenanceRefused(
+            f'stage2.global 正式 readback 终验仍命中 HARD {list(hits)}；'
+            '不能把 exit 0 冒充 delivered')
+    return landed
+
+
+def finalize_global_candidate(
+        ctx: RunContext,
+        source: _GlobalResponseSource,
+        prepared: GlobalCandidateContext,
+        evaluation: GlobalCandidateEvaluation,
+) -> GlobalGrounding:
+    """把 agent 循环选定的最后一份候选提交一次；中间候选不得调用本函数。
+
+    通过候选走 global + review 的既有事务、readback 与 adoption；失败候选只在这里
+    写一次 ``.INVALID`` 并抛现有 ``GateBlocked``，因而 ``--revalidate`` /
+    ``--resample`` 的恢复语义保持不变。
+    """
+    current_code = prov.code_version()
+    if current_code != ctx.code:
+        raise ProvenanceRefused(
+            f'stage2.global executor session 期间代码版本发生漂移：'
+            f'start={ctx.code} current={current_code}；'
+            '拒绝用旧代码启动的候选结算 usage 或写入正式产物')
+    if source.model != evaluation.requested_model:
+        raise ProvenanceRefused(
+            'stage2.global 候选评估后 requested model 漂移；拒绝跨配置提交')
+    if source.accepted_attempt(ctx.node) != evaluation.source_attempt_id:
+        raise ProvenanceRefused(
+            'stage2.global 候选评估后 accepted attempt 已变化；'
+            '只能提交最后一次被评估的响应')
+    if source.accepted_models(ctx.node) != evaluation.adopted_models:
+        raise ProvenanceRefused(
+            'stage2.global 候选评估后 adopted model 集合漂移；拒绝猜测来源')
+
+    _assert_global_guard_current(ctx, prepared)
+    terminal = _materialize_global_evaluation(
+        ctx,
+        prepared,
+        evaluation._response,
+        requested_model=evaluation.requested_model,
+        adopted_models=evaluation.adopted_models,
+        source_attempt_id=evaluation.source_attempt_id,
+        settle=True,
+    )
+    if terminal.hard_hits != evaluation.hard_hits:
+        raise ProvenanceRefused(
+            'stage2.global 同一候选的 provisional/final HARD 结论不一致；'
+            '拒绝在判据非确定时写盘')
+
+    store = ArtifactStore(ctx)
+    artifact = terminal.candidate
+    candidate = artifact.model_dump(by_alias=True)
+    if terminal.hard_hits:
         path = _write_invalid(store, GLOBAL_REL, artifact)
         raise GateBlocked(
-            f'stage2.global 落盘闸门命中 {hits}。问题稿已存 '
+            f'stage2.global 落盘闸门命中 {list(terminal.hard_hits)}。问题稿已存 '
             f'{_GLOBAL_INVALID}，正式产物没有被覆盖。改好后跑 '
             '`stage2.global --revalidate --actor <id> --reason <why>`'
             '（0 LLM、同轮重判并留不可变审计）。',
             invalid_path=path,
         )
+
     _write_formal(store, GLOBAL_REL, artifact)
-    _note_adopted(ctx, client, rel=GLOBAL_REL, candidate=candidate,
-                  purposes={ctx.node: None})
-    return artifact
+    landed = verify_global_delivery(ctx, prepared, artifact)
+    _note_adopted(
+        ctx, source, rel=GLOBAL_REL, candidate=candidate,
+        purposes={ctx.node: None})
+    return landed
+
+
+def run_global(ctx: RunContext, client: LlmClient) -> GlobalGrounding:
+    """旧 LlmClient 单轮入口；agent 多轮必须显式用 prepare/evaluate/finalize 三段。"""
+    prepared = prepare_global_candidate(ctx)
+    response = client.ask_json(
+        prepared.system,
+        prepared.user,
+        model_cls=GlobalGroundingResponse,
+        purpose=ctx.node,
+        max_tokens=GLOBAL_MAX_TOKENS,
+    )
+    evaluation = evaluate_global_candidate(
+        ctx, client, prepared, response)
+    return finalize_global_candidate(
+        ctx, client, prepared, evaluation)
 
 
 def run_resample(ctx: RunContext, client: LlmClient) -> GlobalGrounding:
@@ -1005,7 +1456,7 @@ def run_purge_role(ctx: RunContext, client: LlmClient) -> GlobalGrounding:
 
 def _run_chapter_requests(
     ctx: RunContext,
-    client: LlmClient,
+    client: _BlueprintRequestSource,
     requests: list[tuple[int | None, str, str]],
     *,
     model_cls: type,
@@ -1449,15 +1900,169 @@ def _keep_scope_violation(row: str, targets: set[int]) -> bool:
 def _refresh_commit_payload(
         *, chapters: tuple[int, ...], global_raw: dict[str, Any],
         main_text: list[dict[str, Any]], candidate: dict[str, Any],
+        live_before: dict[str, str | None] | None = None,
 ) -> dict[str, Any]:
     """提交尾窗只重验当前输入与最终候选；原 baseline/prompt 身份仍由 run/checkpoint 守。"""
-    return {
+    payload: dict[str, Any] = {
         'operation': 'stage2.blueprint --chapters',
         'chapters': list(chapters),
         'global': global_raw,
         'main_text': main_text,
         'artifact': candidate,
     }
+    if live_before is not None:
+        payload['live_before'] = live_before
+    return payload
+
+
+def _full_commit_payload(
+        *, global_raw: dict[str, Any], main_text: list[dict[str, Any]],
+        candidate: dict[str, Any],
+        live_before: dict[str, str | None] | None = None,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        'operation': 'stage2.blueprint full',
+        'global': global_raw,
+        'main_text': main_text,
+        'artifact': candidate,
+    }
+    if live_before is not None:
+        payload['live_before'] = live_before
+    return payload
+
+
+def _blueprint_live_state(store: ArtifactStore) -> dict[str, str | None]:
+    """提交前 formal/INVALID 的全宽字节身份。
+
+    新 journal 不只要证明“要写什么”，还要证明重启后看见的
+    live 文件仍是 prepare 时那一份。否则一个第三方人工改动会被
+    恢复路当成“formal 还没写”而覆盖。
+    """
+    state: dict[str, str | None] = {}
+    for rel in (BLUEPRINT_REL, _INVALID):
+        path = store.path(rel)
+        if not path.is_file():
+            state[rel] = None
+            continue
+        try:
+            state[rel] = hashlib.sha256(path.read_bytes()).hexdigest()
+        except OSError as exc:
+            raise ProvenanceRefused(
+                f'无法冻结提交前 {rel} 字节：{exc}') from exc
+    return state
+
+
+def _require_blueprint_code_current(ctx: RunContext, *, moment: str) -> None:
+    current = prov.code_version()
+    if current != ctx.code:
+        raise ProvenanceRefused(
+            f'stage2.blueprint {moment}时代码版本漂移：'
+            f'start={ctx.code} current={current}；拒绝提交')
+
+
+def _finish_full_commit_tail(
+        ctx: RunContext, *, store: ArtifactStore,
+        main_text: list[dict[str, Any]], global_raw: dict[str, Any],
+) -> CheckReport | None:
+    """full run 在 prepare 之后崩溃时，用封存候选零 wire 收尾。"""
+    from novel.llm import stage2_runs
+
+    journal = stage2_runs.commit_state(ctx)
+    if journal is None:
+        return None
+    if journal.get('artifact') != BLUEPRINT_REL:
+        raise ProvenanceRefused(
+            f'run={ctx.run_id} 的 commit journal 指向 '
+            f'{journal.get("artifact")!r}，不是 {BLUEPRINT_REL}')
+
+    live_artifact: ChapterBlueprints | None = None
+    formal_matches = False
+    if store.exists(BLUEPRINT_REL):
+        live_artifact, _raw = store.read_own(
+            ChapterBlueprints, BLUEPRINT_REL, require_current=True)
+        live_payload = live_artifact.model_dump(by_alias=True, mode='json')
+        formal_matches = stage2_runs.verify_commit_artifact(journal, live_payload)
+        if not formal_matches:
+            live_artifact = None
+
+    stored_finalization = journal.get('finalization_payload')
+    if live_artifact is None:
+        if journal.get('state') == 'committed':
+            raise ProvenanceRefused(
+                f'run={ctx.run_id} 已 committed，但正式 blueprint 缺失或与 journal 不一致')
+        if not isinstance(stored_finalization, dict):
+            # 历史 hash-only journal 在 formal 尚未落时没有可恢复字节。
+            # 保留旧 LlmClient/checkpoint 重编译路，但不在这里猜候选。
+            return None
+        candidate, stored_finalization = stage2_runs.restore_commit_payloads(
+            ctx, journal)
+        live_artifact = ChapterBlueprints.model_validate(candidate)
+        live_before = stored_finalization.get('live_before')
+        if not isinstance(live_before, dict):
+            raise ProvenanceRefused(
+                f'run={ctx.run_id} 的 prepared journal 缺 live_before；'
+                '不能证明恢复写盘不会覆盖第三方改动')
+        if _blueprint_live_state(store) != live_before:
+            raise ProvenanceRefused(
+                f'run={ctx.run_id} prepare 后 formal/INVALID 已漂移；'
+                '拒绝用封存候选覆盖')
+    candidate = live_artifact.model_dump(by_alias=True, mode='json')
+    if isinstance(stored_finalization, dict):
+        live_before = stored_finalization.get('live_before')
+        if formal_matches and store.exists(_INVALID) and isinstance(live_before, dict):
+            invalid_artifact, _invalid_raw = store.read_own(
+                ChapterBlueprints, _INVALID, require_current=True)
+            invalid_payload = invalid_artifact.model_dump(
+                by_alias=True, mode='json')
+            invalid_business = {
+                key: value for key, value in invalid_payload.items()
+                if key != '_provenance'
+            }
+            candidate_business = {
+                key: value for key, value in candidate.items()
+                if key != '_provenance'
+            }
+            invalid_matches_candidate = (
+                invalid_business == candidate_business
+                and _canonical_sha256(invalid_business)
+                == _canonical_sha256(candidate_business)
+            )
+            current_invalid = _blueprint_live_state(store).get(_INVALID)
+            if (not invalid_matches_candidate
+                    and current_invalid != live_before.get(_INVALID)):
+                raise ProvenanceRefused(
+                    f'run={ctx.run_id} 的 formal 已落，但 live {_INVALID} '
+                    '不是 prepare 时那一份；拒绝归档第三方改动')
+        expected_finalization = _full_commit_payload(
+            global_raw=global_raw, main_text=main_text, candidate=candidate,
+            live_before=(live_before if isinstance(live_before, dict) else None),
+        )
+    else:
+        # 兼容旧 hash-only journal：只有 formal 已精确命中时才会走到这里。
+        expected_finalization = _full_commit_payload(
+            global_raw=global_raw, main_text=main_text, candidate=candidate)
+    if not stage2_runs.verify_commit_finalization(journal, expected_finalization):
+        raise ProvenanceRefused(
+            f'run={ctx.run_id} 的 full 提交尾窗输入或候选已漂移')
+    if hits := _hard_hits(_judge_candidate(global_raw, candidate, main_text)):
+        raise ProvenanceRefused(
+            f'run={ctx.run_id} 封存的 blueprint 不再通过联合 HARD：{hits}')
+
+    _require_blueprint_code_current(ctx, moment='commit tail 写盘前')
+    ctx.require_observed_roots_current()
+    if not formal_matches:
+        _write_formal(store, BLUEPRINT_REL, live_artifact)
+    elif store.exists(_INVALID):
+        _retire_invalid_for_matching_formal(
+            store, BLUEPRINT_REL, live_artifact)
+    report = verify_blueprint_delivery(ctx, live_artifact)
+    restored = stage2_runs.restore_commit_adoptions(ctx, journal)
+    _note_restored_adoptions(
+        ctx, rel=BLUEPRINT_REL, candidate=candidate, adoptions=restored)
+    _require_blueprint_code_current(ctx, moment='commit tail 落哨兵前')
+    ctx.require_observed_roots_current()
+    stage2_runs.mark_committed(ctx)
+    return report
 
 
 def _finish_refresh_commit_tail(
@@ -1467,6 +2072,8 @@ def _finish_refresh_commit_tail(
     """formal 已落而 committed 未落时，零 wire 补 adoption/哨兵并返回联合报告。"""
     from novel.llm import stage2_runs
 
+    _require_blueprint_code_current(ctx, moment='定向 commit tail 开始')
+    ctx.require_observed_roots_current()
     journal = stage2_runs.commit_state(ctx)
     if journal is None:
         return None
@@ -1490,9 +2097,16 @@ def _finish_refresh_commit_tail(
         # prepared 写在正式替换之前：此时 live 仍是原 baseline，继续走 checkpoint
         # 重编译即可。若 live 是第三方改写，后面的 run subject/request 绑定会关闭式拒绝。
         return None
+    stored_finalization = journal.get('finalization_payload')
+    stored_live_before = (
+        stored_finalization.get('live_before')
+        if isinstance(stored_finalization, dict) else None
+    )
     finalization = _refresh_commit_payload(
         chapters=chapters, global_raw=global_raw,
-        main_text=main_text, candidate=candidate)
+        main_text=main_text, candidate=candidate,
+        live_before=(stored_live_before
+                     if isinstance(stored_live_before, dict) else None))
     if not stage2_runs.verify_commit_finalization(journal, finalization):
         raise ProvenanceRefused(
             f'run={ctx.run_id} 的提交尾窗输入/global/目标章已经漂移；拒绝补猜 committed')
@@ -1510,9 +2124,10 @@ def _finish_refresh_commit_tail(
     restored = stage2_runs.restore_commit_adoptions(ctx, journal)
     _note_restored_adoptions(
         ctx, rel=BLUEPRINT_REL, candidate=candidate, adoptions=restored)
+    _require_blueprint_code_current(ctx, moment='定向 commit tail 哨兵前')
+    ctx.require_observed_roots_current()
     stage2_runs.mark_committed(ctx)
-    both = _Both(store)
-    return _report(ctx, store, both, both.judge())
+    return verify_blueprint_delivery(ctx, formal)
 
 
 def _run_blueprint_repair(
@@ -1908,6 +2523,7 @@ def _run_blueprint_repair(
         block(artifact, hits)
 
     adoptions = _accepted_adoptions(client, repair_purposes)
+    live_before = _blueprint_live_state(store)
     stage2_runs.prepare_commit(
         ctx,
         artifact=BLUEPRINT_REL,
@@ -1915,18 +2531,25 @@ def _run_blueprint_repair(
         artifact_payload=candidate,
         finalization_payload=_refresh_commit_payload(
             chapters=chapters, global_raw=global_raw,
-            main_text=main_text, candidate=candidate),
+            main_text=main_text, candidate=candidate,
+            live_before=live_before),
         adoptions=adoptions,
     )
+    _require_blueprint_code_current(ctx, moment='定向正式写盘前')
+    ctx.require_observed_roots_current()
     _write_formal(store, BLUEPRINT_REL, artifact)
+    report = verify_blueprint_delivery(ctx, artifact)
+    _require_blueprint_code_current(ctx, moment='定向 adoption 前')
+    ctx.require_observed_roots_current()
     _note_adopted(ctx, client, rel=BLUEPRINT_REL, candidate=candidate,
                   purposes=repair_purposes)
+    _require_blueprint_code_current(ctx, moment='定向 committed 哨兵前')
+    ctx.require_observed_roots_current()
     stage2_runs.mark_committed(ctx)
-    both = _Both(store)
-    return _report(ctx, store, both, both.judge())
+    return report
 
 
-def request_blueprints(ctx: RunContext, client: LlmClient, *,
+def request_blueprints(ctx: RunContext, client: _BlueprintRequestSource, *,
                        chapters: tuple[int, ...] = (),
                        checkpoints: bool = True) -> dict[str, Any]:
     """发出**首轮形状**的逐章请求。`chapters` 为空 = 整跑（生产唯一用法）。
@@ -1945,6 +2568,20 @@ def request_blueprints(ctx: RunContext, client: LlmClient, *,
     store = ArtifactStore(ctx)
     main_text = _read_main_text(store)
     assert main_text is not None
+    if checkpoints:
+        required_bridge = (
+            'json_request_policy',
+            'accepted_checkpoint',
+            'restore_checkpoint_acceptance',
+        )
+        missing_bridge = [
+            name for name in required_bridge
+            if not callable(getattr(client, name, None))
+        ]
+        if missing_bridge:
+            raise ProvenanceRefused(
+                'stage2.blueprint 正式请求缺现有 stage2_runs checkpoint bridge '
+                f'{missing_bridge}；已在首个 wire 前停止，不能跳过恢复账继续花费')
     spec = _active_spec()
     requests = build_prompts(ctx, chapters=chapters)
     if (spec.topology == 'boundary_then_detail'
@@ -2081,18 +2718,85 @@ def request_blueprints(ctx: RunContext, client: LlmClient, *,
     }
 
 
-def finish_blueprints(
-    ctx: RunContext,
-    client: LlmClient,
-    batch: dict[str, Any],
-) -> CheckReport:
-    """付费逐章抽取；每章独立请求，合并后统一归一、联合校验和落盘。"""
+def _blueprint_batch_sha256(batch: dict[str, Any]) -> str:
+    """冻结候选批次；异常只取稳定类型/文字，不把对象身份当成业务输入。"""
+    return _canonical_sha256({
+        'main_text': batch.get('main_text'),
+        'requests': batch.get('requests'),
+        'boundary_requests': batch.get('boundary_requests'),
+        'frozen_boundaries': batch.get('frozen_boundaries'),
+        'boundary_events': batch.get('boundary_events'),
+        'raw_blueprints': batch.get('raw_blueprints'),
+        'scope_violations': batch.get('scope_violations'),
+        'errors': [
+            {'type': f'{type(exc).__module__}.{type(exc).__qualname__}',
+             'message': str(exc)}
+            for exc in (batch.get('errors') or [])
+        ],
+        'contract': batch.get('contract'),
+    })
+
+
+def _blueprint_feedback(
+        outcomes: list[Outcome], hits: tuple[str, ...],
+) -> tuple[BlueprintCandidateFeedback, ...]:
+    """从唯一 Outcome 投影可路由章节；推不出章号的书级问题保留空 chapters。"""
+    rows: list[BlueprintCandidateFeedback] = []
+    for rule_id in hits:
+        rule = REGISTRY.get(rule_id)
+        chapters: set[int] = set()
+        findings: list[GlobalCandidateFinding] = []
+        seen: set[tuple[str, tuple[str, ...]]] = set()
+        for outcome in outcomes:
+            if outcome.rule != rule_id:
+                continue
+            for finding in outcome.findings:
+                if finding.output_ordinal is not None:
+                    chapters.add(int(finding.output_ordinal))
+                raw_chapters = finding.fix_args.get('--chapters')
+                if raw_chapters:
+                    chapters.update(
+                        int(value) for value in raw_chapters.split(',')
+                        if value.strip().isdigit() and int(value) > 0)
+                identity = (finding.detail, tuple(finding.evidence))
+                if identity in seen:
+                    continue
+                seen.add(identity)
+                findings.append(GlobalCandidateFinding(
+                    detail=finding.detail,
+                    evidence=tuple(finding.evidence),
+                ))
+        rows.append(BlueprintCandidateFeedback(
+            rule=rule_id,
+            item=rule.item,
+            requirement=rule.requirement,
+            chapters=tuple(sorted(chapters)),
+            findings=tuple(findings),
+        ))
+    return tuple(rows)
+
+
+def _materialize_blueprint_evaluation(
+        ctx: RunContext,
+        source: _GlobalResponseSource,
+        batch: dict[str, Any],
+        *, settle: bool,
+) -> tuple[
+    ChapterBlueprints, list[Outcome], tuple[str, ...],
+    tuple[tuple[str, int | None], ...], list[dict[str, Any]], dict[str, Any],
+]:
+    """同一批响应的唯一 compile/provenance/HARD 口。"""
     from novel.stages.stage2.contract import contract_for
 
     store = ArtifactStore(ctx)
-    main_text = batch['main_text']
+    main_text = copy.deepcopy(batch['main_text'])
+    current_main_text = _read_main_text(store)
+    if current_main_text != main_text:
+        raise ProvenanceRefused(
+            'stage2.blueprint 候选批次绑定的 main_text 与当前盘面不同；'
+            '拒绝把旧章节响应编进新正文')
     global_art = store.read(GlobalGrounding, GLOBAL_REL)
-    global_raw = global_art.model_dump(by_alias=True)
+    global_raw = global_art.model_dump(by_alias=True, mode='json')
     requests = batch['requests']
     raw_blueprints = batch['raw_blueprints']
     scope_violations = batch['scope_violations']
@@ -2122,43 +2826,172 @@ def finish_blueprints(
     purposes: dict[str, int | None] = {f'{ctx.node}:ch{o}': o for o in produced}
     if spec.topology == 'boundary_then_detail':
         purposes.update({f'{ctx.node}:boundaries:ch{o}': o for o in produced})
+    missing_attempts = [
+        purpose for purpose in purposes
+        if source.accepted_attempt(purpose) is None
+    ]
+    if missing_attempts:
+        raise ProvenanceRefused(
+            f'stage2.blueprint 已有编译候选，但这些章节/相位没有 accepted attempt：'
+            f'{missing_attempts}；拒绝让部分 adoption 冒充整书来源')
+    purpose_rows = tuple(purposes.items())
+    provenance = ctx.llm_provenance(
+        BlueprintProvenance,
+        prompts=prompt_keys,
+        model=source.model,
+        adopted_models=source.accepted_models(*purposes),
+        scope_violations=scope_violations,
+        context=blueprint_context(ctx.title, main_text,
+                                  architecture=spec.architecture),
+        settle=settle,
+        **accounting,
+    )
+    artifact = ChapterBlueprints.model_validate({
+        **data, '_provenance': provenance,
+    })
+    candidate = artifact.model_dump(by_alias=True)
+    outcomes = _judge_candidate(global_raw, candidate, main_text)
+    return (
+        artifact, outcomes, tuple(_hard_hits(outcomes)), purpose_rows,
+        main_text, global_raw,
+    )
 
-    def current_artifact(*, settle: bool = True) -> ChapterBlueprints:
-        provenance = ctx.llm_provenance(
-            BlueprintProvenance,
-            prompts=prompt_keys,
-            model=client.model,
-            adopted_models=client.accepted_models(*purposes),
-            scope_violations=scope_violations,
-            context=blueprint_context(ctx.title, main_text,
-                                      architecture=spec.architecture),
-            settle=settle,
-            **accounting,
-        )
-        return ChapterBlueprints.model_validate({
-            **data, '_provenance': provenance,
-        })
 
-    def block(artifact: ChapterBlueprints, hits: list[str]) -> None:
+def evaluate_blueprint_candidate(
+        ctx: RunContext,
+        source: _GlobalResponseSource,
+        batch: dict[str, Any],
+) -> BlueprintCandidateEvaluation:
+    """编译并评估一批逐章响应；不写 formal/INVALID、不归档、不结算 usage。"""
+    if ctx.node != 'stage2.blueprint':
+        raise ValueError(
+            f'evaluate_blueprint_candidate 只接受 stage2.blueprint，实得 {ctx.node!r}')
+    artifact, outcomes, hits, purposes, main_text, global_raw = \
+        _materialize_blueprint_evaluation(
+            ctx, source, batch, settle=False)
+    return BlueprintCandidateEvaluation(
+        candidate=artifact,
+        hard_hits=hits,
+        feedback=_blueprint_feedback(outcomes, hits),
+        purposes=purposes,
+        accepted_attempts=tuple(
+            (purpose, source.accepted_attempt(purpose))
+            for purpose, _chapter in purposes
+        ),
+        requested_model=source.model,
+        adopted_models=tuple(sorted(set(source.accepted_models(
+            *(purpose for purpose, _chapter in purposes))))),
+        error_count=len(batch.get('errors') or []),
+        _batch_sha256=_blueprint_batch_sha256(batch),
+        _main_text_sha256=_canonical_sha256(main_text),
+        _global_sha256=_canonical_sha256(global_raw),
+    )
+
+
+def verify_blueprint_delivery(
+        ctx: RunContext,
+        expected: ChapterBlueprints,
+) -> CheckReport:
+    """正式 blueprint 的独立 readback 终验；报告仍由现有唯一判据生成。"""
+    _require_blueprint_code_current(ctx, moment='readback 终验开始')
+    ctx.require_observed_roots_current()
+    store = ArtifactStore(ctx)
+    if store.exists(_INVALID):
+        raise ProvenanceRefused(
+            f'stage2.blueprint 正式提交后仍有 live {_INVALID}；拒绝 delivered')
+    with ctx.validation_reads():
+        landed, _landed_raw = store.read_own(
+            ChapterBlueprints, BLUEPRINT_REL, require_current=True)
+        freshness = store.freshness(BLUEPRINT_REL)
+        both = _Both(store)
+        outcomes = both.judge()
+    expected_raw = expected.model_dump(by_alias=True, mode='json')
+    landed_raw = landed.model_dump(by_alias=True, mode='json')
+    if (_canonical_sha256(expected_raw) != _canonical_sha256(landed_raw)
+            or expected_raw != landed_raw):
+        raise ProvenanceRefused(
+            'stage2.blueprint 正式 readback 与本次终态候选不等值；拒绝 delivered')
+    if freshness.state != 'fresh':
+        raise ProvenanceRefused(
+            f'stage2.blueprint 正式 readback freshness='
+            f'{freshness.state}/{freshness.reason}；拒绝 delivered')
+    if hits := _hard_hits(outcomes):
+        raise ProvenanceRefused(
+            f'stage2.blueprint 正式 readback 仍命中 HARD {hits}；拒绝 delivered')
+    # 不把入口的代码快照当成整个提交窗的锁：readback/判据
+    # 跑完后再核一次，中途漂移就不得声称 delivered。
+    _require_blueprint_code_current(ctx, moment='readback 终验结束')
+    ctx.require_observed_roots_current()
+    return _report(ctx, store, both, outcomes)
+
+
+def finalize_blueprint_candidate(
+        ctx: RunContext,
+        source: _GlobalResponseSource,
+        batch: dict[str, Any],
+        evaluation: BlueprintCandidateEvaluation,
+) -> CheckReport:
+    """终态只提交一次；通过沿用现有 checkpoint→commit journal→adoption 恢复链。"""
+    if ctx.node != 'stage2.blueprint':
+        raise ValueError(
+            f'finalize_blueprint_candidate 只接受 stage2.blueprint，实得 {ctx.node!r}')
+    _require_blueprint_code_current(ctx, moment='executor sessions 终态结算')
+    if _blueprint_batch_sha256(batch) != evaluation._batch_sha256:
+        raise ProvenanceRefused(
+            'stage2.blueprint 候选评估后的 batch 内容发生漂移；拒绝提交')
+    if source.model != evaluation.requested_model:
+        raise ProvenanceRefused(
+            'stage2.blueprint 候选评估后 requested model 漂移；拒绝提交')
+    current_attempts = tuple(
+        (purpose, source.accepted_attempt(purpose))
+        for purpose, _chapter in evaluation.purposes
+    )
+    if current_attempts != evaluation.accepted_attempts:
+        raise ProvenanceRefused(
+            'stage2.blueprint 候选评估后 accepted attempts 已变化；'
+            '只能提交最后一次完整评估过的章节集合')
+    current_models = tuple(sorted(set(source.accepted_models(
+        *(purpose for purpose, _chapter in evaluation.purposes)))))
+    if current_models != evaluation.adopted_models:
+        raise ProvenanceRefused(
+            'stage2.blueprint 候选评估后 adopted models 漂移；拒绝猜测来源')
+
+    with ctx.validation_reads():
+        store = ArtifactStore(ctx)
+        current_main = _read_main_text(store)
+        current_global = store.read(GlobalGrounding, GLOBAL_REL) \
+            .model_dump(by_alias=True, mode='json')
+    if (_canonical_sha256(current_main) != evaluation._main_text_sha256
+            or _canonical_sha256(current_global) != evaluation._global_sha256):
+        raise ProvenanceRefused(
+            'stage2.blueprint 候选评估后 main_text/global 输入漂移；'
+            '必须新建每章 executor sessions')
+
+    artifact, outcomes, hits, purposes, main_text, global_raw = \
+        _materialize_blueprint_evaluation(
+            ctx, source, batch, settle=True)
+    if purposes != evaluation.purposes or hits != evaluation.hard_hits:
+        raise ProvenanceRefused(
+            'stage2.blueprint 同一批候选的 provisional/final 目标或 HARD 结论不一致；'
+            '拒绝在判据非确定时写盘')
+
+    store = ArtifactStore(ctx)
+    candidate = artifact.model_dump(by_alias=True)
+    purpose_map = dict(purposes)
+    errors = batch.get('errors') or []
+    if hits:
         path = store.write_invalid(
             BLUEPRINT_REL, artifact, gates_skipped=[])
         suffix = (
             f'；另有 {len(errors)} 个章节调用失败，已成功返回的付费结果仍保留'
             if errors else '')
         raise GateBlocked(
-            f'stage2.blueprint 落盘闸门命中 {hits}{suffix}。问题稿已存 '
+            f'stage2.blueprint 落盘闸门命中 {list(hits)}{suffix}。问题稿已存 '
             f'{_INVALID}，正式产物没有被覆盖。改好后跑 '
             '`stage2.blueprint --revalidate --actor <id> --reason <why>`'
             '（0 LLM、同轮重判并留不可变审计）。',
             invalid_path=str(path),
         )
-
-    artifact = current_artifact()
-    candidate = artifact.model_dump(by_alias=True)
-    outcomes = _judge_candidate(global_raw, candidate, main_text)
-    hits = _hard_hits(outcomes)
-    if hits:
-        block(artifact, hits)
 
     # 完整重跑也可能是在一份被拦下的 `.INVALID` 之后发生。成功稿必须像定向修复一样
     # 归档旧正式稿与问题稿；否则 `_Both` / `--check-only` 会继续优先读取旧问题稿，
@@ -2186,29 +3019,43 @@ def finish_blueprints(
     else:
         # prepare journal 必须先于正式替换：若进程停在 formal 已落、adoption/哨兵
         # 未落的尾窗，下一次同 run 才有一枚不靠当前 live baseline 猜测的候选 SHA。
+        live_before = _blueprint_live_state(store)
         stage2_runs.prepare_commit(
             ctx,
             artifact=BLUEPRINT_REL,
             artifact_fingerprint=artifact_fp,
             artifact_payload=candidate,
-            finalization_payload={
-                'operation': 'stage2.blueprint full',
-                'global': global_raw,
-                'main_text': main_text,
-                'artifact': candidate,
-            },
-            adoptions=_accepted_adoptions(client, purposes),
+            finalization_payload=_full_commit_payload(
+                global_raw=global_raw, main_text=main_text,
+                candidate=candidate, live_before=live_before),
+            adoptions=_accepted_adoptions(source, purpose_map),
         )
+        _require_blueprint_code_current(ctx, moment='正式写盘前')
+        ctx.require_observed_roots_current()
         if not existing_matches:
             _write_formal(store, BLUEPRINT_REL, artifact)
         elif invalid_present:
             _retire_invalid_for_matching_formal(
                 store, BLUEPRINT_REL, artifact)
-    _note_adopted(ctx, client, rel=BLUEPRINT_REL, candidate=candidate,
-                  purposes=purposes)
+    report = verify_blueprint_delivery(ctx, artifact)
+    _require_blueprint_code_current(ctx, moment='adoption 前')
+    ctx.require_observed_roots_current()
+    _note_adopted(ctx, source, rel=BLUEPRINT_REL, candidate=candidate,
+                  purposes=purpose_map)
+    _require_blueprint_code_current(ctx, moment='committed 哨兵前')
+    ctx.require_observed_roots_current()
     stage2_runs.mark_committed(ctx)
-    both = _Both(store)
-    return _report(ctx, store, both, both.judge())
+    return report
+
+
+def finish_blueprints(
+    ctx: RunContext,
+    client: _GlobalResponseSource,
+    batch: dict[str, Any],
+) -> CheckReport:
+    """旧单轮终态入口；agent 循环显式调用 evaluate/finalize 两段。"""
+    evaluation = evaluate_blueprint_candidate(ctx, client, batch)
+    return finalize_blueprint_candidate(ctx, client, batch, evaluation)
 
 
 def run_blueprint(
@@ -2237,6 +3084,11 @@ def run_blueprint(
             main_text=main_text,
             global_raw=global_art.model_dump(by_alias=True),
         )
+    finalized = _finish_full_commit_tail(
+        ctx, store=store, main_text=main_text,
+        global_raw=global_art.model_dump(by_alias=True, mode='json'))
+    if finalized is not None:
+        return finalized
     return finish_blueprints(ctx, client, request_blueprints(ctx, client))
 
 

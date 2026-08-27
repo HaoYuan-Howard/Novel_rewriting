@@ -18,9 +18,10 @@ ROOT = Path(__file__).resolve().parents[4]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from novel import paths, prov, run_identity  # noqa: E402
+from novel import commander_context, paths, prov, run_identity  # noqa: E402
 from novel.cli import exit_codes as X  # noqa: E402
 from novel.errors import TerminalState  # noqa: E402
+from novel.orchestrator import nodes as node_planner  # noqa: E402
 from novel.orchestrator.nodes import build_steps, shell_line  # noqa: E402
 
 
@@ -28,6 +29,7 @@ _VALUE_OPTIONS = (
     '--base', '--sid', '--expect-code-version', '--evidence-json', '--run-id',
 )
 _EVIDENCE_SCHEMA = 'novel-operator-step-evidence-v1'
+_COMMANDER_EVIDENCE_SCHEMA = 'novel-operator-step-evidence-v2'
 _SECRET_MARKER = re.compile(r'api[_-]?key|deepseek_api_key', re.IGNORECASE)
 
 
@@ -119,10 +121,14 @@ def _mark(base: str, sid: str, node: str, phase: str,
         argv, cwd=str(ROOT), check=False, env=env).returncode
 
 
-def _evidence_bytes(steps: Sequence[Any]) -> bytes:
+def _evidence_bytes(
+    steps: Sequence[Any],
+    context: commander_context.CommanderContext | None = None,
+) -> bytes:
     """直接投影本次 ``build_steps`` 的对象；不重造 argv 或运行判定。"""
     payload = {
-        'schema': _EVIDENCE_SCHEMA,
+        'schema': (
+            _COMMANDER_EVIDENCE_SCHEMA if context is not None else _EVIDENCE_SCHEMA),
         'steps': [
             {
                 'argv': list(step.argv),
@@ -130,9 +136,26 @@ def _evidence_bytes(steps: Sequence[Any]) -> bytes:
                 'writes': step.writes,
                 'label': step.label,
                 'note': step.note,
+                **({
+                    'executor_profile': (
+                        step.executor_profile.model_dump(mode='json')
+                        if getattr(step, 'executor_profile', None) is not None
+                        else None),
+                    'egress_authorized': getattr(step, 'egress_authorized', None),
+                } if context is not None else {}),
             }
             for step in steps
         ],
+        **({
+            'commander': {
+                'run_id': context.run_id,
+                'contract_sha256': context.contract_sha256,
+                'profile': context.profiles.commander.model_dump(mode='json'),
+                'authorized': context.start.authorized,
+                'egress_authorized': context.start.egress_authorized,
+                'code_version': context.start.code_version,
+            },
+        } if context is not None else {}),
     }
     rendered = json.dumps(
         payload, ensure_ascii=False, indent=2, sort_keys=True) + '\n'
@@ -210,13 +233,44 @@ def main(argv: list[str] | None = None) -> int:
     if flags[:1] == ['--']:
         flags = flags[1:]
     try:
+        context = None
+        if os.environ.get(commander_context.COMMANDER_RUN_ID_ENV) is not None \
+                or os.environ.get(
+                    commander_context.COMMANDER_CONTRACT_SHA256_ENV) is not None:
+            if args.sid is None:
+                raise TerminalState('Commander contract 只属于一本文书，run_step 必须显式给 --sid')
+            context = commander_context.load_from_environment(args.base, args.sid)
+            assert context is not None
+            if args.expect_code_version != context.start.code_version:
+                raise TerminalState(
+                    '--expect-code-version 必须逐字等于 Commander started 事件的起始指纹')
+            if args.run_id is not None and args.run_id != context.run_id:
+                raise TerminalState(
+                    f'run_step --run-id={args.run_id!r} 与 Commander run '
+                    f'{context.run_id!r} 不一致')
+        profile = None
+        egress_authorized = None
+        if context is not None:
+            tokens = frozenset(node_planner.flag_tokens(flags))
+            supported = node_planner.EXECUTOR_PROFILED_RUNS.get(args.node, ())
+            if tokens in supported:
+                profile = context.executor_profile(args.node)
+                egress_authorized = context.start.egress_authorized
+            elif node_planner.is_paid(args.node, flags):
+                raise TerminalState(
+                    f'Commander 不允许付费跑法 {args.node} {sorted(tokens)} '
+                    '落回 legacy LLM；该组合尚未接入 executor agent')
         steps = build_steps(
             args.node, args.sid, flags, base=args.base,
+            executor_profile=profile,
+            egress_authorized=egress_authorized,
             placeholders=not args.execute)
-        evidence_data = _evidence_bytes(steps)
+        evidence_data = _evidence_bytes(steps, context)
         evidence_sha256 = hashlib.sha256(evidence_data).hexdigest()
         if args.evidence_json:
             _write_evidence(args.evidence_json, evidence_data)
+        if args.execute and context is not None:
+            commander_context.require_execution_authorized(context)
     except TerminalState as exc:
         print(f'✗ {exc}', file=sys.stderr)
         return X.TERMINAL_STATE
@@ -229,8 +283,13 @@ def main(argv: list[str] | None = None) -> int:
     if not args.execute:
         return 0
 
-    effective_run_id = run_identity.resolve_run_id(args.run_id)
-    child_env = run_identity.env_with_run_id(effective_run_id)
+    if context is not None:
+        effective_run_id = context.run_id
+        child_env = commander_context.env_with_context(
+            run_id=context.run_id, base=context.base, start=context.start)
+    else:
+        effective_run_id = run_identity.resolve_run_id(args.run_id)
+        child_env = run_identity.env_with_run_id(effective_run_id)
     print(f'operator run_id={effective_run_id}', file=sys.stderr)
     evidence_note = f'operator_evidence_sha256={evidence_sha256}'
     for step in steps:

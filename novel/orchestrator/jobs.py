@@ -37,14 +37,18 @@ from typing import BinaryIO
 
 from contracts.invariants import LEGACY_STAGE5_MODES
 from contracts.schema.orchestration import (
+    AgentProfile,
     JobEvent, JobRecord, JobStart, ProgressEvent, Step,
 )
 from novel import run_identity
 from novel.appendlog import append_line
 from novel.cli import exit_codes as X
 from novel.cli.exit_codes import CRASH
-from novel.errors import TerminalState
-from novel.orchestrator.nodes import build_steps, child_env, shell_line
+from novel.errors import ApprovalRequired, TerminalState
+from novel.orchestrator.nodes import (
+    build_steps, child_env, resolve_executor_egress, resolve_executor_profile,
+    shell_line,
+)
 from novel.paths import SERVICE_DIRNAME, service_dir
 from novel.prov import code_version
 
@@ -490,6 +494,8 @@ def new_job_id(now: float | None = None) -> str:
 
 def plan_start(node: str, sid: str | None, flags: Sequence[str] = (), *,
                base: str | os.PathLike[str],
+               executor_profile: AgentProfile | None = None,
+               egress_authorized: bool | None = None,
                follow_check: bool = True,
                placeholders: bool = False,
                steps: Sequence[Step] | None = None) -> JobStart:
@@ -506,12 +512,53 @@ def plan_start(node: str, sid: str | None, flags: Sequence[str] = (), *,
     """
     plan = list(steps) if steps is not None else build_steps(
         node, sid, flags, base=base, follow_check=follow_check,
+        executor_profile=executor_profile,
+        egress_authorized=egress_authorized,
         placeholders=placeholders)
+    step_profiles = [
+        step.executor_profile for step in plan
+        if step.executor_profile is not None
+    ]
+    if executor_profile is None and step_profiles:
+        executor_profile = step_profiles[0]
+    if executor_profile is not None:
+        executor_profile = resolve_executor_profile(
+            node, flags, executor_profile)
+        if any(profile != executor_profile for profile in step_profiles):
+            raise ValueError('传入 executor_profile 与冻结 steps[] 不一致')
+    profiled_steps = [
+        step for step in plan if step.executor_profile is not None
+    ]
+    step_egress = [step.egress_authorized for step in profiled_steps]
+    if egress_authorized is None:
+        explicit_step_egress = [value for value in step_egress if value is not None]
+        if explicit_step_egress:
+            egress_authorized = explicit_step_egress[0]
+    egress_authorized = resolve_executor_egress(
+        executor_profile, egress_authorized)
+    if executor_profile is not None:
+        if egress_authorized is None:
+            if any(value is not None for value in step_egress):
+                raise ValueError('JobStart 与冻结 steps[] 的正文外发授权不一致')
+        elif any(value is not egress_authorized for value in step_egress):
+            raise ValueError('传入正文外发授权与付费 executor steps[] 不一致')
     return JobStart(
         sid=sid, node=node, flags=list(flags), steps=plan,
         python=sys.version, code=code_version(),
         paid=any(s.paid for s in plan),
-        writes=any(bool(s.writes) for s in plan))
+        writes=any(bool(s.writes) for s in plan),
+        executor_profile=executor_profile,
+        egress_authorized=egress_authorized)
+
+
+def _require_executor_egress(start_meta: JobStart) -> None:
+    """真执行前的独立正文外发闸；preview 仍可冻结 false 命令。"""
+    if (start_meta.executor_profile is not None
+            and start_meta.egress_authorized is not True):
+        raise ApprovalRequired(
+            'executor 会向所选 provider 外发小说正文；正文外发授权必须显式给 '
+            'egress_authorized=true（手敲 CLI 用 --allow-egress）。'
+            '这与 --yes 付费确认是两份独立授权')
 
 
 def _run_steps(base: str | os.PathLike[str], job_id: str,
@@ -555,6 +602,8 @@ def _append_progress(base: str | os.PathLike[str], sid: str | None, node: str,
 
 
 def run(base: str | os.PathLike[str], node: str, sid: str | None, flags: Sequence[str] = (), *,
+        executor_profile: AgentProfile | None = None,
+        egress_authorized: bool | None = None,
         follow_check: bool = True,
         spawn: Spawn = default_spawn, registry: JobRegistry = REGISTRY,
         steps: Sequence[Step] | None = None,
@@ -568,10 +617,16 @@ def run(base: str | os.PathLike[str], node: str, sid: str | None, flags: Sequenc
 
     ⚠ 任一步非零即停（`R-13.4` 在单个作业内的样子）：后面那些步一步都不跑。
     """
-    _refuse_if_agent_running(sid)
     plan = list(steps) if steps is not None else build_steps(
-        node, sid, flags, base=base, follow_check=follow_check)
-    start_meta = plan_start(node, sid, flags, base=base, steps=plan)
+        node, sid, flags, base=base, follow_check=follow_check,
+        executor_profile=executor_profile,
+        egress_authorized=egress_authorized)
+    start_meta = plan_start(
+        node, sid, flags, base=base, steps=plan,
+        executor_profile=executor_profile,
+        egress_authorized=egress_authorized)
+    _require_executor_egress(start_meta)
+    _refuse_if_agent_running(sid)
     key = active_key(sid, node)
     job_id = job_id or new_job_id()
     if any(event.job_id == job_id for event in read_events(base)):
@@ -622,6 +677,8 @@ def start(
     sid: str | None,
     flags: Sequence[str] = (),
     *,
+    executor_profile: AgentProfile | None = None,
+    egress_authorized: bool | None = None,
     follow_check: bool = True,
     spawn: Spawn = default_spawn,
     registry: JobRegistry = REGISTRY,
@@ -634,10 +691,16 @@ def start(
         for finished_id, finished in list(_THREADS.items()):
             if not finished.is_alive():
                 _THREADS.pop(finished_id, None)
-    _refuse_if_agent_running(sid)
     plan = list(steps) if steps is not None else build_steps(
-        node, sid, flags, base=base, follow_check=follow_check)
-    start_meta = plan_start(node, sid, flags, base=base, steps=plan)
+        node, sid, flags, base=base, follow_check=follow_check,
+        executor_profile=executor_profile,
+        egress_authorized=egress_authorized)
+    start_meta = plan_start(
+        node, sid, flags, base=base, steps=plan,
+        executor_profile=executor_profile,
+        egress_authorized=egress_authorized)
+    _require_executor_egress(start_meta)
+    _refuse_if_agent_running(sid)
     key = active_key(sid, node)
     job_id = job_id or new_job_id()
     if any(event.job_id == job_id for event in read_events(base)):

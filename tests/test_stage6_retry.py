@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import shutil
 import tempfile
+from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -37,13 +38,28 @@ def _run_case(monkeypatch, root: Path, initial_texts: list[str], retry_responder
         mat=material, src_hook='', secrets=[], arc=None, characters={},
         hook_mechanical={}, upto=1, judged={})
     written = []
+    state = {}
 
     class Store:
         def __init__(self, _ctx):
             pass
 
         def write(self, rel, artifact):
+            state[rel] = artifact
             written.append((rel, artifact))
+
+        def exists(self, rel):
+            return rel in state
+
+        def read_own(self, _model, rel, **_kwargs):
+            return state[rel], {}
+
+        def freshness(self, _rel):
+            return SimpleNamespace(state='fresh', reason='match')
+
+        @contextmanager
+        def history_transaction(self, *_rels):
+            yield
 
     monkeypatch.setattr(hook, 'ArtifactStore', Store)
     monkeypatch.setattr(hook, '_Upstreams', lambda _ctx, _store: upstreams)
@@ -93,13 +109,28 @@ def test_each_initially_dirty_candidate_retries_once_and_usage_includes_retries(
             mat=material, src_hook='', secrets=[], arc=None, characters={},
             hook_mechanical={}, upto=1, judged={})
         written = []
+        state = {}
 
         class Store:
             def __init__(self, _ctx):
                 pass
 
             def write(self, rel, artifact):
+                state[rel] = artifact
                 written.append((rel, artifact))
+
+            def exists(self, rel):
+                return rel in state
+
+            def read_own(self, _model, rel, **_kwargs):
+                return state[rel], {}
+
+            def freshness(self, _rel):
+                return SimpleNamespace(state='fresh', reason='match')
+
+            @contextmanager
+            def history_transaction(self, *_rels):
+                yield
 
         monkeypatch.setattr(hook, 'ArtifactStore', Store)
         monkeypatch.setattr(hook, '_Upstreams', lambda _ctx, _store: upstreams)

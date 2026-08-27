@@ -132,7 +132,7 @@ def _seed_semantic(box, *, dirty: int = 0, uncertain: tuple[int, ...] = ()) -> s
     ctx = _ctx(box, 'stage6.semantic', paid=True)
     store = ArtifactStore(ctx)
     art, _raw = store.read_own(Hook, hook.REL)
-    hook._Upstreams(ctx, store)                      # 读齐上游 ⇒ 来源账与真跑同源
+    up = hook._Upstreams(ctx, store)                 # 读齐上游 ⇒ 来源账与真跑同源
 
     # 匿名标签照 `build_prompt` 那一条现算，别在测试里另起一套编号。
     aliases = [
@@ -160,6 +160,7 @@ def _seed_semantic(box, *, dirty: int = 0, uncertain: tuple[int, ...] = ()) -> s
         response, response, aliases=aliases)
     artifact = HookSemanticReview(
         judged_texts={real: semantic.text_sha1(text) for _n, real, text in aliases},
+        judged=semantic._prompt_judged(up),
         hook_file_sha1=prov.fingerprint_bytes(store.path(hook.REL).read_bytes()),
         reviews=reviews,
         ranking=ranking,

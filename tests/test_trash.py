@@ -5,12 +5,45 @@ from __future__ import annotations
 
 import json
 import threading
+from contextlib import contextmanager
 
 import pytest
 
+from contracts.schema.orchestration import AgentProfile, PipelineAgentProfiles
 from novel.errors import ApprovalFrozen, SourceConflict, UpstreamMissing
+from novel.commanders.base import CommanderInvocation
 from novel.orchestrator import agent, approvals, jobs, trash
 from novel.orchestrator.jobs import JobConflict
+
+
+_PROFILE = AgentProfile(
+    driver='codex', model='gpt-5.6-sol', reasoning_effort='high',
+    execution_mode='standard')
+_PROFILES = PipelineAgentProfiles(
+    commander=_PROFILE, executor_default=_PROFILE, executor_overrides={})
+
+
+class _PlanningDriver:
+    """trash 只测互斥；planner 冻结本地 invocation，绝不探 CLI 或发模型请求。"""
+
+    def build_invocation(self, profile, prompt, *, repo, base, **_kwargs):
+        del base
+        return CommanderInvocation(
+            argv=('offline-commander', '--model', profile.model),
+            stdin_text=prompt, cwd=str(repo), env_overrides={}, profile=profile,
+            protocol='trash-test-v1')
+
+    def close(self):
+        return None
+
+
+@pytest.fixture(autouse=True)
+def _offline_commander_planning(monkeypatch):
+    monkeypatch.setattr(
+        agent, 'create_commander_driver',
+        lambda _profile, **_kwargs: _PlanningDriver())
+    monkeypatch.setattr(
+        agent, '_require_reproducible_code_version', lambda _version: None)
 
 
 def _book(base, *, sid='1001', title='测试书'):
@@ -35,6 +68,26 @@ def test_execute_moves_the_whole_project_and_approval_into_recoverable_trash(tmp
     metadata = json.loads((item / 'metadata.json').read_text(encoding='utf-8'))
     assert metadata['sid'] == '1001' and metadata['title'] == '测试书'
     assert result.trash_rel == '_service/trash/1700000000-deadbeef/book'
+
+
+def test_execute_holds_the_same_approval_file_lock_for_both_moves(
+        tmp_path, monkeypatch):
+    book, approval = _book(tmp_path)
+    events = []
+
+    @contextmanager
+    def observed_lock(base, sid):
+        events.append(('enter', base, sid, approval.exists(), book.exists()))
+        yield
+        events.append(('exit', base, sid, approval.exists(), book.exists()))
+
+    monkeypatch.setattr(approvals, 'approval_file_lock', observed_lock)
+    trash.execute(tmp_path, '1001', '测试书', '1700000000-c001d00d')
+
+    assert events == [
+        ('enter', tmp_path, '1001', True, True),
+        ('exit', tmp_path, '1001', False, False),
+    ]
 
 
 def test_title_bound_confirmation_refuses_without_moving_anything(tmp_path):
@@ -76,14 +129,15 @@ def test_trash_reserves_the_book_before_an_agent_can_start(tmp_path, monkeypatch
     attempted: list[Exception] = []
     spawn_called = threading.Event()
 
-    def agent_spawn(argv, cwd, env, log):
+    def agent_spawn(invocation, env, log):
+        del invocation, env, log
         spawn_called.set()
-        return 0
+        raise AssertionError('删除已占书锁时不应进入 Commander spawn')
 
     def interleaved_queue_view(base):
         try:
             agent.start(base, '1001', authorized=True, egress_authorized=True,
-                        spawn=agent_spawn)
+                        profiles=_PROFILES, spawn=agent_spawn)
         except Exception as exc:  # 断言在调用完成后做，避免 monkeypatch 缝吞细节
             attempted.append(exc)
         return original_queue_view(base)
@@ -140,14 +194,15 @@ def test_a_book_deleted_mid_flight_cannot_be_started_from_the_queue_afterwards(
     _keep_pending(monkeypatch)
     started: list[str] = []
 
-    def never_reached(argv, cwd, env, log):
+    def never_reached(invocation, env, log):
+        del invocation, env, log
         started.append('起来了')
-        return 0
+        raise AssertionError('已删除的书不应进入 Commander spawn')
 
     def interleaved_queue_view(base):
         snapshot = original_queue_view(base)          # 快照：此刻队列还是空的
         agent.enqueue(base, ['1001'], authorized=True, egress_authorized=True,
-                      spawn=never_reached)
+                      profiles=_PROFILES, spawn=never_reached)
         return snapshot
 
     monkeypatch.setattr(agent, 'queue_view', interleaved_queue_view)
@@ -171,7 +226,7 @@ def test_a_gone_book_leaves_the_queue_instead_of_being_retried_forever(
     original_admit = agent._admit
     _keep_pending(monkeypatch)
     agent.enqueue(tmp_path, ['1001'], authorized=True, egress_authorized=True,
-                  spawn=lambda *a: 0)
+                  profiles=_PROFILES, spawn=lambda *a: 0)
     try:
         assert [item.sid for item in agent.queue_view(tmp_path).pending] == ['1001']
         trash.execute(tmp_path, '1001', '测试书', '1700000000-cafebabe')
@@ -188,7 +243,8 @@ def test_a_gone_book_leaves_the_queue_instead_of_being_retried_forever(
 def test_enqueue_refuses_a_book_that_is_not_in_the_corpus(tmp_path):
     """入队这一格就该拒：批量响应里如实占一条 rejected，不静默排一本幽灵书。"""
     view = agent.enqueue(tmp_path, ['1001'], authorized=True,
-                         egress_authorized=True, spawn=lambda *a: 0)
+                         egress_authorized=True, profiles=_PROFILES,
+                         spawn=lambda *a: 0)
     try:
         assert [item.sid for item in view.rejected] == ['1001']
         assert view.running == [] and view.pending == []
@@ -199,7 +255,7 @@ def test_enqueue_refuses_a_book_that_is_not_in_the_corpus(tmp_path):
 def test_start_refuses_a_book_that_is_not_in_the_corpus(tmp_path):
     with pytest.raises(UpstreamMissing):
         agent.start(tmp_path, '1001', authorized=True, egress_authorized=True,
-                    spawn=lambda *a: 0)
+                    profiles=_PROFILES, spawn=lambda *a: 0)
 
 
 def test_approval_writes_are_refused_while_the_book_is_being_trashed(tmp_path):

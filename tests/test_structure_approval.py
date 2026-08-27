@@ -11,6 +11,7 @@ from contracts.artifacts import STAGE4_PLAN_CHAPTERS
 from contracts.invariants import APPROVAL_GATES, APPROVAL_SEEN
 from contracts.schema.api import (
     ApprovalDoc, StructureApprovalRequest, StructureApprovalView,
+    WritingApprovalRequest,
 )
 from novel.errors import ApprovalRequired, HumanEditProtected, UpstreamMissing
 from novel.orchestrator import approvals
@@ -96,6 +97,27 @@ def test_request_is_strict_and_requires_sorted_unique_chapters_and_real_reasons(
             chapters=[{'output_ordinal': 1, 'decision': 'maybe', 'reason': 'no'}])
 
 
+def test_old_v5_record_without_typed_writing_fields_remains_readable():
+    old_payload = approvals._fresh_record(SID).model_dump(
+        mode='json', exclude={'writing_history', 'writing_decision'})
+
+    restored = approvals._ApprovalRecordV5.model_validate(old_payload)
+
+    assert restored.writing_history == [] and restored.writing_decision is None
+
+
+def test_structure_template_is_current_and_fail_closed_by_default(isolated):
+    base, _book, _state = isolated
+
+    template = approvals.structure_template(
+        base, SID, actor='commander-reviewer', reason='逐章人工复核前的关闭式模板')
+
+    assert template.subject_sha256 == SUBJECT_A
+    assert [row.output_ordinal for row in template.chapters] == [1, 2]
+    assert all(row.decision == 'request_replan' for row in template.chapters)
+    assert all('尚未逐章核实' in row.reason for row in template.chapters)
+
+
 def test_structure_proof_binds_the_full_plan_path_and_exact_typed_decision(monkeypatch):
     captured = {}
 
@@ -109,6 +131,52 @@ def test_structure_proof_binds_the_full_plan_path_and_exact_typed_decision(monke
     assert captured['rels'] == (STAGE4_PLAN_CHAPTERS,)
     assert captured['decision'] == approvals._structure_decision_payload(request)
     assert captured['decision']['chapters'][1]['decision'] == 'request_replan'
+
+
+def test_typed_writing_approval_persists_actor_reason_subject_and_history(
+        isolated, monkeypatch):
+    base, book, state = isolated
+    approvals.approve_structure(base, SID, _request('accept', 'accept'))
+    current_proof = approvals._ApprovalProof(
+        root_clean_sha1='c' * 40,
+        artifacts={
+            'stage1/main_text.json': 'e' * 64,
+            STAGE4_PLAN_CHAPTERS: 'd' * 64,
+        },
+        decision_sha256='f' * 64,
+    )
+
+    def decision_proof(_novel_dir, decision):
+        return current_proof.model_copy(update={
+            'decision_sha256': approvals._decision_sha256(
+                approvals._writing_decision_payload(decision)),
+        })
+
+    monkeypatch.setattr(
+        approvals, '_writing_prerequisites',
+        lambda _base, _sid, _record: (book, SUBJECT_B, current_proof))
+    monkeypatch.setattr(
+        approvals, '_current_writing_subject',
+        lambda _novel_dir: (SUBJECT_B, current_proof))
+    monkeypatch.setattr(approvals, '_proof_for_writing_decision', decision_proof)
+    request = WritingApprovalRequest(
+        actor='commander-reviewer', reason='完整核对当前写作主体',
+        subject_sha256=SUBJECT_B)
+
+    first = approvals.approve_writing(base, SID, request)
+    second = approvals.approve_writing(base, SID, request)
+
+    assert first.writing and second.writing
+    assert first.writing_approval.current_decision is not None
+    assert first.writing_approval.current_decision.actor == 'commander-reviewer'
+    assert first.writing_approval.current_decision.reason == '完整核对当前写作主体'
+    assert first.writing_approval.current_decision.subject_sha256 == SUBJECT_B
+    assert len(state['record'].writing_history) == 1
+    assert state['record'].writing_decision == state['record'].writing_history[-1]
+
+    with pytest.raises(HumanEditProtected, match='审批对象已变化'):
+        approvals.approve_writing(
+            base, SID, request.model_copy(update={'subject_sha256': SUBJECT_A}))
 
 
 def test_all_accept_opens_s4_persists_v5_history_and_is_idempotent(isolated):
@@ -320,3 +388,66 @@ def test_structure_route_accepts_the_typed_body(monkeypatch, tmp_path):
     assert got.json()['v'] == 4
     assert captured['sid'] == SID
     assert isinstance(captured['request'], StructureApprovalRequest)
+
+
+def _empty_approval_response() -> ApprovalDoc:
+    return ApprovalDoc(
+        sid=SID,
+        gate={key: False for key in APPROVAL_GATES},
+        seen={key: False for key in APPROVAL_SEEN},
+        structure=StructureApprovalView(
+            state='missing', current_subject_sha256=SUBJECT_A),
+        spawns={},
+    )
+
+
+def test_writing_route_keeps_the_existing_empty_body_ui_branch(monkeypatch, tmp_path):
+    pytest.importorskip('fastapi')
+    from fastapi.testclient import TestClient
+    from novel.api.app import UI_HEADER, create_app
+    from novel.api.routes import approvals as route
+
+    called = []
+    monkeypatch.setattr(
+        route.approvals, 'begin_writing',
+        lambda base, sid: called.append((base, sid)) or _empty_approval_response())
+    monkeypatch.setattr(
+        route.approvals, 'approve_writing',
+        lambda *_args: pytest.fail('空 body 不得误走 typed 分支'))
+
+    with TestClient(create_app(tmp_path)) as client:
+        got = client.post(
+            f'/api/novels/{SID}/approvals/writing', headers={UI_HEADER: '1'})
+
+    assert got.status_code == 200, got.text
+    assert called and called[0][1] == SID
+
+
+def test_writing_route_dispatches_a_typed_body_without_starting_a_job(monkeypatch, tmp_path):
+    pytest.importorskip('fastapi')
+    from fastapi.testclient import TestClient
+    from novel.api.app import UI_HEADER, create_app
+    from novel.api.routes import approvals as route
+
+    captured = {}
+
+    def decide(base, sid, request):
+        captured.update(base=base, sid=sid, request=request)
+        return _empty_approval_response()
+
+    monkeypatch.setattr(route.approvals, 'approve_writing', decide)
+    monkeypatch.setattr(
+        route.approvals, 'begin_writing',
+        lambda *_args: pytest.fail('typed body 不得降级成匿名旧 UI 分支'))
+    request = WritingApprovalRequest(
+        actor='commander-reviewer', reason='核对当前全书写作主体后授权',
+        subject_sha256=SUBJECT_B)
+
+    with TestClient(create_app(tmp_path)) as client:
+        got = client.post(
+            f'/api/novels/{SID}/approvals/writing',
+            headers={UI_HEADER: '1'}, json=request.model_dump(mode='json'))
+
+    assert got.status_code == 200, got.text
+    assert captured['sid'] == SID
+    assert captured['request'] == request

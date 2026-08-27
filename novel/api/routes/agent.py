@@ -3,9 +3,9 @@
 """
 agent.py —— `/api/agent/runs`：前端一键唤起 headless agent 代跑一本书。
 
-【这一层只组装与转发】提示词与命令行的唯一构造函数在
-`novel/orchestrator/agent.py`（`build_prompt` / `build_argv`）——preview 与真跑
-调同一对函数，「界面上摊开的那条」与「真的被 Popen 的那条」是同一个对象
+【这一层只组装与转发】提示词与 Commander invocation 的唯一 planner 在
+`novel/orchestrator/agent.py::plan`——preview、单本启动与 batch 入队
+共享它，「界面上摊开的那条」与「真的被 Popen 的那条」是同一个对象
 （`R-11.8` 同构）。变更路由全部在全局 CSRF 中间件后面，不另开闸。
 """
 from __future__ import annotations
@@ -34,15 +34,17 @@ def _one(base: str, run_id: str) -> AgentRunRecord:
 def preview_run(req: AgentRunRequest, base: str = Depends(get_base)) -> AgentRunPreview:
     """把**将要拉起的那条命令与提示词全文**摊开。**0 成本：只算，不跑、不写。**
 
-    ⚠ 与真跑共用 `build_prompt` / `build_argv`（`R-11.8` 同构）——
+    ⚠ 与真跑共用 ``agent.plan``（`R-11.8` 同构）——
     两个授权勾选框的文案都会在提示词原文里逐字变化，确认框里给人看的就是全文。
     """
     sid = checked_sid(req.sid)
-    prompt = agent.build_prompt(sid, base, authorized=req.authorized,
-                                egress_authorized=req.egress_authorized)
-    return AgentRunPreview(argv=agent.build_argv(prompt, base), prompt=prompt,
+    planned = agent.plan(
+        base, sid, authorized=req.authorized,
+        egress_authorized=req.egress_authorized, profiles=req.profiles)
+    return AgentRunPreview(argv=list(planned.invocation.argv), prompt=planned.prompt,
                            authorized=req.authorized,
-                           egress_authorized=req.egress_authorized)
+                           egress_authorized=req.egress_authorized,
+                           profiles=planned.profiles)
 
 
 @router.post('', response_model=AgentRunRecord, status_code=202)
@@ -54,7 +56,8 @@ def start_run(req: AgentRunRequest, base: str = Depends(get_base)) -> AgentRunRe
     """
     sid = checked_sid(req.sid)
     return agent.start(base, sid, authorized=req.authorized,
-                       egress_authorized=req.egress_authorized)
+                       egress_authorized=req.egress_authorized,
+                       profiles=req.profiles)
 
 
 @router.post('/batch', response_model=AgentQueueView, status_code=202)
@@ -69,7 +72,8 @@ def start_batch(req: AgentBatchRequest,
     """
     sids = [checked_sid(s) for s in req.sids]
     return agent.enqueue(base, sids, authorized=req.authorized,
-                         egress_authorized=req.egress_authorized)
+                         egress_authorized=req.egress_authorized,
+                         profiles=req.profiles)
 
 
 @router.get('/queue', response_model=AgentQueueView)
@@ -101,7 +105,7 @@ def get_run_log(run_id: str, offset: int = Query(default=0, ge=0),
 
 @router.post('/{run_id}/stop', response_model=AgentRunRecord)
 def stop_run(run_id: str, base: str = Depends(get_base)) -> AgentRunRecord:
-    """熄火。**付费进程的必备闸**：Windows 上 `taskkill /T` 整棵树端掉
-    （cmd → node → agent 起的 `novel.cli` 孙进程）。"""
+    """熄火。**付费进程的必备闸**：精确找到该 run 的 Commander driver，
+    由供应商驱动结束它拥有的整棵进程树；路由层不猜平台命令。"""
     _one(base, run_id)
     return agent.stop(base, run_id)
