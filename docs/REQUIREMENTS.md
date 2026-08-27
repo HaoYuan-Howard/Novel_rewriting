@@ -79,7 +79,11 @@ Chapter/Review/trim 中也存在可由正文、findings 或绑定主体重算的
 人工 trim 决定，本批只完成运行时单一落点和一致性断言，盘上破坏形状延期；不能把延期误解成这些
 字段仍有独立语义。
 
-**工作**：只在下一次创建并从 producer 完整生成的新 base 上，同批切换：
+**依赖调整（TODO-45）**：本条的五次 shape break 不再单独安排一次新 base，
+统一并入 TODO-45 的 P2 批次一起切换，避免为同一批减法付两次重建费用。本条继续
+独立登记验收口径，不因并批销账。
+
+**工作**：只在下一次创建并从 producer 完整生成的新 base 上（即 TODO-45 P2 的那一次），同批切换：
 
 - WriterContext v5 删除 `ChapterCharacter.char_id` 与章级 `from_source_ordinals/source_chars/budget_chars`；
 - Chapter v3 删除 `from_source_ordinals/chars/overlap_excl_verbatim/warns`，运行时由正文和当前任务书重算；
@@ -115,11 +119,74 @@ corpus 回归：尚未用 current-schema 真实整书跑到 Stage7，也没有�
   legacy LLM 路径，不作为 agent 的静默 fallback；后续另行把现役 LLM 客户端抽成供应商中立基类，
   再让 DeepSeek 作为一个具体实现接入，这项后续重构不阻断当前 agent 纵切验收。
 
+**依赖调整（TODO-45）**：TODO-45 P3 的两臂都跑 agent-only、legacy 路禁用，因此候选臂
+那次真实整书**可以**充当本条要的付费验收——前提是它跑在干净 main 的提交上
+（`experiment_valid=true`，即代码身份唯一且不带 `-dirty`）。脏工作树跑出来的整书不算数。
+
 **验收**：两个 driver 的零成本 wire / resume / 取消测试通过；八节点 registry 闭合且没有 vendor×node
 子类笛卡尔积；中间拒稿不写正式产物、不伪造终态，最终提交可由 ledger attempt、session turn 与
 artifact adoption 逐项联结；Stage2 逐章 session 和 Stage6 双判官互相不可见；所有未迁移组合在
 spawn 前拒绝且显式 profile 永不 fallback；前端选择经页面 → API → Job/Commander → 子 CLI →
 driver 的真实链路生效。非 corpus 回归与真实付费整书验收分开报告；没有显式授权时不发模型请求。
+
+### TODO-45 · Stage2 事实分级、Stage4 整书救援与上下文瘦身
+
+**冻结决策（先读这一段，再看分批）**：
+
+- Stage2 只让高影响事实阻断下游；低影响项目保留审计与披露，不自动 PASS、不消失。
+- Stage4 保留整书 A/B 调用与整书结构审批，**不开放公开的 `--chapters` 定向重规划**。
+- 模型只提出候选；代码确定性分级，人确认高影响事实后才能成为 binding。
+- Stage4 局部修复只走 agent session；legacy DeepSeek 保持无历史单发路径，
+  且**不作为 agent 的静默 fallback**。
+- 审计证据、provenance、拒稿与历史轮次继续完整保存；优化目标是减少模型输入、
+  人审负担与重复业务语义，不是删审计。
+
+**P0（不升 artifact version）**：
+
+- 已交付只读读数器 `tools/workflow_metrics.py`：来源逐格唯一（产物体积/重复率取书内
+  `stage*/` 顶层 JSON、token/缓存取 ledger、CLI 取 `agent_progress.jsonl`、闸与恢复取
+  `llm_audit.jsonl`、结构只调生产 `structure_metrics_of`），输出不含正文/人名/书名/
+  绝对语料路径，`--json` 拒绝写进 base。
+- 已精确复算 v8 基线并标记 `experiment_valid=false`（7 个 `-dirty` 代码身份）。
+- 按行为逐条移植已证实的假拒绝修复，**不移植** worktree 的 Claude transport、
+  旧 `run_design/run_plan` 与旧 response contract：`declared_change_kinds` 去重并按冻结顺序
+  canonicalize；`bound + evidence_refs=[]` 收成 `null`；只有 `continue` 强制相邻状态承接、
+  可证明的 `return` 查锚点、其余非线性边界产 UNVER；**章首 entry 与章尾 ending 继续 HARD**；
+  因果端点可通过 context fact 入场、多次出现取首次可见场；`STYLE_WORDS` 只拦真正的写法指令。
+- 跑书 skill 写明：INFO、metric、UNVER 只披露，不触发付费重试。
+
+**P1（兼容当前 schema 的高影响阻断面）**：`contracts/invariants.py` 建立唯一
+`review_effect_of(kind)`（blocking / disclosure，legacy `known_by` 保守按 blocking 读）；
+`global_review.json` 形状与版本不变、current 仍要求 item/path/hash 集合完全一致；
+闸改为「current 且全部 blocking 项 PASS」，disclosure 的 pending/FAIL/UNVER 不自动 PASS、
+不阻断 Stage4，但必须进 inbox 与终审披露；API row 增服务端派生的 `effect` / `group_key` 与
+四态计数，前端不得自行复制分类表；`--emit-review-template/workpack` 默认只出 blocking 面，
+新增 `--review-scope blocking|all`；UI 按人物/关系/秘密时间线/规则/设定与弧线/集合完整性
+成卡，卡片批量提交仍展开为逐项 hash-bound decision。
+
+**P2（新 base 的候选事实、整书修复与最小上下文）**：blueprint fact 增代码计算的
+`derived_tier`（core/support/incidental）与 `tier_reasons/depends_on`，模型的
+`producer_obligation` 只留审计；Blueprint Review 分 frontier/coverage 与 claim 两层，
+source beat 必须闭合为 `covered_by` 或显式无状态变化；Stage4 首轮仍整书、反馈轮改章节
+replacement schema 并由代码原子合并后重跑整书闸；抽出唯一 `gate_payload` 校验函数供
+LlmClient / agent intake / response-repair / adoption / repair 共用；拒稿仓统一为
+`_llm_rejected/<chain>/<attempt>/`，新增 `--adopt-rejected` 与 `--apply-repair`；
+WriterContext v5 改共享表 + refs；Stage6 拆 `generation_packet` /
+`mechanical_guard_basis` / `semantic_verification_packet` 三面，发明判据的允许集只来自
+generation packet。TODO-31 的 Stage4→5 减法并入本批。
+
+**P3（组合 treatment 全链实验，需用户在付费前显式批准）**：控制臂
+`e15aefbf4856aba83a44abd1a607bfdc48a20b87`，候选臂为 P2 完成提交；两臂同一份冻结
+profile、同一 agent executor、`max_turns=4`、legacy 路禁用；两书跑序对冲（书一 A→B、
+书二 B→A）；先跑第一本第一臂 pilot 并回算成本与人时基线，用户批准剩余预算后才启动其余三次；
+达到 token/货币/infra cap 即停并判 inconclusive。**不宣称 Stage4 单变量隔离，不销账 TODO-30。**
+
+**验收**：P0/P1/P2 各批跑冻结契约 §9.5、对应 stage/API 测试与完整非 corpus 回归；
+P2 的每次 shape break 登记 `tests/test_artifact_versions.py::_SHAPE_BREAKS`；
+P3 自动化只验「2/2 书到 Stage7、TODO-21 manifest 闭合、双臂 panel/hash/证据/遮蔽完整、
+HARD 全闭合且 UNVER 不计绿、人工对证后关键事实遗漏为 0、账本与审批可逐项联结」，
+结构偏好与美学比例只报原始标签、比例、区间与样本量，不预设自动 go/no-go。
+阶段验收后把冻结行为写入对应 R 条与 `docs/BACKEND_CONTRACT.md` §十，并从本条删除已完成部分。
 
 ## 条目生命周期
 
