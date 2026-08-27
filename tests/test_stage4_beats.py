@@ -433,3 +433,72 @@ def test_reverse_disclosure_uses_the_first_visible_scene_not_the_last():
     _missing, reversed_order = checks.causal_scene_findings(
         [{'before': 'a', 'after': 'b'}], positions)
     assert reversed_order == ['a>b'], '按首次可见场，b 先于 a'
+
+
+def _style_sites(brief: str, purpose: str, claim: str) -> list[str]:
+    """把一句 brief / purpose 与一条本章 claim 送进生产判定，返回命中。"""
+    return checks.style_word_findings(
+        [{
+            'output_ordinal': 1,
+            'chapter_rewrite_brief': brief,
+            'scenes': [{'purpose': purpose,
+                        'land_fact_refs': ['f01_001'],
+                        'context_fact_refs': []}],
+        }],
+        source_chapters=[{
+            'chapter_ordinal': 1,
+            'fact_atoms': [{'fact_id': 'f01_001', 'claim': claim}],
+        }],
+        source_facts_key='fact_atoms', source_ref_key='fact_id',
+        land_key='land_fact_refs', context_key='context_fact_refs')
+
+
+def test_a_style_word_used_as_a_writing_instruction_is_still_hard():
+    hits = _style_sites('用白描手法渲染氛围。', '把节奏放慢。', '甲收到入住邀请')
+    assert any('渲染氛围' in row for row in hits)
+    assert any('白描' in row for row in hits)
+
+
+def test_a_style_word_quoted_from_a_typed_fact_is_not_a_writing_instruction():
+    """事实可以逐字含有写法词；复述它不该被判成「用写法词代替结构决策」。"""
+    claim = '乙评价甲的画只有意象没有骨架'
+    hits = _style_sites(
+        f'先落「{claim}」这条判断，再补出它的由来。',
+        f'让「{claim}」当场说出口。', claim)
+    assert hits == [], hits
+
+
+def test_the_exemption_never_leaks_past_the_quoted_span_or_the_field():
+    """豁免只覆盖被引用的那一段；同字段第二次无据出现照旧红。"""
+    claim = '乙评价甲的画只有意象没有骨架'
+    hits = _style_sites(
+        f'先落「{claim}」，然后整章都用意象堆出来。', '正常组场。', claim)
+    assert len(hits) == 1 and '意象' in hits[0]
+
+    # 短引号不算证据：引的是那个词本身，不是一段事实。
+    assert _style_sites('本章要有「意象」。', '正常组场。', claim)
+
+    # 另一章的 claim 不能替本章开豁免口。
+    other = checks.style_word_findings(
+        [{'output_ordinal': 1, 'chapter_rewrite_brief': f'先落「{claim}」。',
+          'scenes': []}],
+        source_chapters=[{'chapter_ordinal': 2,
+                          'fact_atoms': [{'fact_id': 'f02_001', 'claim': claim}]}],
+        source_facts_key='fact_atoms', source_ref_key='fact_id',
+        land_key='land_fact_refs', context_key='context_fact_refs')
+    assert other, '跨章不共享事实证据'
+
+
+def test_the_book_level_strategy_has_no_typed_ref_and_therefore_no_exemption():
+    hits = checks.style_word_findings(
+        [], source_chapters=[], source_facts_key='fact_atoms',
+        source_ref_key='fact_id', land_key='land_fact_refs',
+        context_key='context_fact_refs',
+        reconstruction_strategy='全书用「乙评价甲的画只有意象没有骨架」的意象串起来。')
+    assert [row for row in hits if row.startswith('reconstruction_strategy:')]
+
+
+def test_style_word_scan_survives_punctuation_changes_in_the_claim():
+    """标点不是事实词义：claim 从逗号改成顿号不该让守卫变红。"""
+    assert _style_sites('先落「甲收到邀请，随后察觉画里的意象」。', '正常组场。',
+                        '甲收到邀请、随后察觉画里的意象') == []

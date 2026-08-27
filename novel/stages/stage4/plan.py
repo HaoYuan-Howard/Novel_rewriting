@@ -32,9 +32,7 @@ from contracts.artifacts import (
 
 from typing import Any
 
-from contracts.invariants import (
-    BLIND_ALIAS_ALGORITHM, STYLE_WORDS,
-)
+from contracts.invariants import BLIND_ALIAS_ALGORITHM
 from contracts.schema import artifact_spec
 from contracts.schema.report import CheckReport
 from contracts.schema.stage1 import MainText
@@ -422,7 +420,6 @@ def _blind_candidate_problem(
             compiled.get('output_chapters') or []):
         problems.append(
             f'章集不闭合：expected={sorted(expected)},actual={sorted(actual)}')
-    style_texts = [str(compiled.get('reconstruction_strategy') or '')]
     for ordinal, source in expected.items():
         chapter = actual.get(ordinal)
         if chapter is None:
@@ -458,7 +455,6 @@ def _blind_candidate_problem(
                 scene.get('exit_state_aliases') or [])
             if state_refs - set(facts):
                 problems.append(f'{prefix} state 越界：{sorted(state_refs - set(facts))}')
-            style_texts.append(str(scene.get('purpose') or ''))
         # ⚠ 章内时态与 transition 语法**只有一处判定**：A 相选中的候选被最终
         #   checker 用另一套时态语义拒绝，是本仓最贵的一种自相矛盾。
         #   `unknown` 在 A 相刻意丢弃——它是留给人审的读数，不是拒稿理由。
@@ -490,11 +486,17 @@ def _blind_candidate_problem(
             refs = set((chapter.get(label) or {}).get('fact_aliases') or [])
             if refs - set(facts):
                 problems.append(f'ch{ordinal}.{label} 越界：{sorted(refs - set(facts))}')
-        style_texts.append(str(chapter.get('chapter_rewrite_brief') or ''))
-    hits = sorted({word for word in STYLE_WORDS
-                   if any(word in text for text in style_texts)})
-    if hits:
-        problems.append(f'盲设计自由文本命中纯写法词：{hits}')
+    style_bad = checks.style_word_findings(
+        list(compiled.get('output_chapters') or []),
+        source_chapters=list(truth.get('chapters') or []),
+        source_facts_key='facts',
+        source_ref_key='fact_alias',
+        land_key='land_fact_aliases',
+        context_key='context_fact_aliases',
+        reconstruction_strategy=str(compiled.get('reconstruction_strategy') or ''),
+    )
+    if style_bad:
+        problems.append(f'盲设计自由文本命中无据纯写法词：{style_bad[:8]}')
     return '；'.join(problems[:16]) if problems else None
 
 

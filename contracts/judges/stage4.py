@@ -48,7 +48,7 @@ for rule, item, req in (
     ('budget_int', '每场预算为正整数', 'R-5.7'),
     ('budget_band', '逐章场景预算落在目标区间', 'R-5.3b'),
     ('plan_book_band', '全书场景预算总量守恒', 'R-5.3c'),
-    ('style_words', 'brief/purpose 只说写什么，不用纯写法词代替设计', 'R-5.4'),
+    ('style_words', '无字段内完整事实引文证据的写法词不得代替设计', 'R-5.4'),
     ('phase_artifact_link', 'compiled 计划完整绑定盘上当前 A/B 两份版本化字节', 'R-5.10d'),
     ('context_link', 'writer_context 照的是盘上这份计划', 'R-5.10b'),
     ('ctx_facts_exact', '写手场景事实由 typed refs 精确解析且没有旧骨架键', 'R-6.1'),

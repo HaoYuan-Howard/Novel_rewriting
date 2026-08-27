@@ -227,10 +227,14 @@ class PlanChapter(StrictModel):
     #: **[HARD] 长度恒为 1**——这是「禁合并/重排/删章/拆分」四条禁令的**合取式**（`R-5.2`）。
     from_source_ordinals: list[int] = Field(min_length=1, max_length=1)
 
-    #: 三个 goal **[HARD] 不含 `STYLE_WORDS`**（15 个纯写法词）。
-    #: 判 `HARD` 而不是 `INFO` 的理由是「挡下来不需要再付费」：落 `.INVALID` 后手改那一行、
-    #: `--revalidate` 提升即可。
-    #: ⚠ 放行的代价是实测的——旧口径下两本共 5 处命中（「张力」×4、「意象」×1）**全在 goal 里**，
+    #: 三个 goal 现只含 enum + typed refs，**没有可扫描的自由文本**。
+    #: `style_words` **[HARD]** 扫 A 策略 / `chapter_rewrite_brief` / 场景 `purpose`；
+    #: 但与该字段显式 land/context claim 连续对齐的**足够长中文引文**是事实词义，
+    #: 不是写法指令——无引号、短引号、跨场跨章与同字段第二次无据出现均不豁免。
+    #: A 与正式复检共用 `novel/stages/stage4/checks.py::style_word_findings`，
+    #: 不做全章/全书词面豁免。判 `HARD` 而不是 `INFO` 的理由仍是「挡下来不需要再付费」：
+    #: 正式计划红后有手改 + `--revalidate` 的 0 成本路。
+    #: ⚠ 放行的代价是实测的——旧口径下两本共 5 处命中（「张力」×4、「意象」×1）
     #: 全部 INFO 放行、一路进了写手 prompt。
     chapter_goal: PlanGoal
     open_hook_goal: PlanGoal
