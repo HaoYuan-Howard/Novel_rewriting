@@ -512,7 +512,7 @@ class _BlindValidator:
         self.compiled = None
         try:
             compiled = compile_blind_candidate(
-                response.model_dump(by_alias=True), self.mapping)
+                response.model_dump(by_alias=True), self.mapping, truth=self.truth)
         except BlindPlanError as exc:
             return str(exc)
         why = _blind_candidate_problem(compiled, self.truth)

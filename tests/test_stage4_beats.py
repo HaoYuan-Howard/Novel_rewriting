@@ -502,3 +502,80 @@ def test_style_word_scan_survives_punctuation_changes_in_the_claim():
     """标点不是事实词义：claim 从逗号改成顿号不该让守卫变红。"""
     assert _style_sites('先落「甲收到邀请，随后察觉画里的意象」。', '正常组场。',
                         '甲收到邀请、随后察觉画里的意象') == []
+
+
+def _derived(*rows: tuple[str, list[str], list[str], list[str]],
+             chapter_entry: list[str] | None = None) -> list[dict]:
+    scenes = _scenes(*rows)
+    checks.derive_effective_states(
+        scenes, chapter_entry_refs=chapter_entry or [],
+        entry_key='entry_state_refs', exit_key='exit_state_refs')
+    return scenes
+
+
+def test_same_timeline_carry_forward_is_computed_by_code_not_asked_of_the_model():
+    """v8 实测：25 个 `continue` 场有 18 个没把前面的状态抄全，整本 A 相白重出一次。
+
+    累加账是代码本来就精确知道的事；`continue` 这个标签的**定义**就是「上一场结束时
+    成立的事现在仍然成立」。派生之后判据变成永远不该红的后置条件。
+    """
+    scenes = _derived(
+        ('start', ['a'], [], ['a']),
+        ('continue', ['b'], [], ['b']),
+        ('continue', ['c'], [], ['c']),
+        chapter_entry=['z'])
+
+    assert scenes[0]['entry_state_refs'] == ['z'], '首场自动承接章首状态'
+    assert scenes[1]['entry_state_refs'] == ['a', 'z']
+    assert scenes[2]['exit_state_refs'] == ['a', 'b', 'c', 'z']
+
+    bad, transition_bad, _unknown = checks.temporal_state_findings(
+        scenes, prefix='ch1', land_key='land_fact_refs',
+        entry_key='entry_state_refs', exit_key='exit_state_refs')
+    assert (bad, transition_bad) == ([], [])
+
+
+def test_a_return_restores_the_anchor_state_by_derivation_too():
+    scenes = _derived(
+        ('start', ['a'], [], ['a']),
+        ('earlier', ['b'], [], ['b']),
+        ('return', ['c'], [], ['c']))
+    assert scenes[1]['entry_state_refs'] == [], 'earlier 支路不继承主线状态'
+    assert 'a' in scenes[2]['entry_state_refs'], 'return 恢复锚点'
+    assert 'b' not in scenes[2]['entry_state_refs'], '不把支路末场状态带回主线'
+    bad, _t, _u = checks.temporal_state_findings(
+        scenes, prefix='ch1', land_key='land_fact_refs',
+        entry_key='entry_state_refs', exit_key='exit_state_refs')
+    assert bad == []
+
+
+def test_an_ambiguous_branch_is_left_alone_instead_of_being_guessed():
+    """配不出唯一锚点时**不派生**——那里只报 unver，交人判断。"""
+    scenes = _derived(
+        ('start', ['a'], [], ['a']),
+        ('earlier', ['b'], [], ['b']),
+        ('parallel', ['c'], [], ['c']),
+        ('return', ['d'], [], ['d']))
+    assert scenes[3]['entry_state_refs'] == [], '支路不唯一 ⇒ 不替它编一个锚点'
+    _bad, _t, unknown = checks.temporal_state_findings(
+        scenes, prefix='ch1', land_key='land_fact_refs',
+        entry_key='entry_state_refs', exit_key='exit_state_refs')
+    assert any('没有唯一可证明的本章支路锚点' in row for row in unknown)
+
+
+def test_derivation_never_manufactures_a_chapter_ending_that_was_not_established():
+    """派生**不掩盖真问题**：land 一个事实不等于把它写进状态面。"""
+    scenes = _derived(
+        ('start', ['a'], [], ['a']),
+        ('continue', ['ending_fact'], [], []))
+    assert 'ending_fact' not in scenes[-1]['exit_state_refs']
+
+
+def test_the_state_closure_rule_is_still_a_real_guard_on_hand_edited_plans():
+    """判据一条都不撤：`--apply-edit` 的人工计划不经过派生，那里它仍会红。"""
+    plan = _compiled()
+    scene = plan['output_chapters'][0]['scenes'][1]
+    scene['transition'] = 'continue'
+    scene['entry_state_refs'] = []          # 人手写出来的、没承接的一场
+    findings = _findings(plan)
+    assert findings['state_closure'], '人工稿绕过编译器 ⇒ 后置条件仍是真守卫'

@@ -20,6 +20,7 @@ from typing import Any, Final
 
 from contracts.invariants import BLIND_ALIAS_ALGORITHM
 from contracts.schema.stage2 import FACT_ID_PATTERN
+from novel.stages.stage4.checks import derive_effective_states
 
 
 BLIND_CONTRACT: Final = 'stage4-blind-truth-graph-v1'
@@ -368,12 +369,20 @@ def _compile_blind_goal(
 def compile_blind_candidate(
     candidate: object,
     formal_mapping: object,
+    *,
+    truth: object,
 ) -> dict[str, Any]:
     """把 ``BlindPlanResponse.model_dump()`` 编译成可审计候选主体。
 
-    A 的 alias 字段原样保留；正式映射独立附在主体根部。代码只规范章序并注入
-    ``candidate_scene_id``，不替模型决定场景、事实分组或 ``structure_decision``。
+    A 的 alias 字段原样保留；正式映射独立附在主体根部。代码只规范章序、注入
+    ``candidate_scene_id``，并按 ``transition`` 的**定义**补全同一时间线的状态承接
+    （`novel/stages/stage4/checks.py::derive_effective_states`）——不替模型决定场景、
+    事实分组或 ``structure_decision``。
     返回值是 ``BlindCandidate`` 去掉 ``_provenance`` 后的业务形状。
+
+    ⚠ ``truth`` 是必填的：章首状态是 Stage2 冻结的事实契约，首场的有效 entry 由它
+    决定。给一个「没有 truth 就跳过章首推导」的默认值，会让同一个函数有两种行为，
+    而两种行为里只有一种是对的。
     """
     raw = _mapping(candidate, 'blind_candidate_response')
     _exact_keys(raw, _A_TOP_KEYS, 'blind_candidate_response', required=_A_TOP_KEYS)
@@ -385,6 +394,12 @@ def compile_blind_candidate(
     if not chapters:
         raise BlindPlanError('blind_candidate_response.output_chapters 不能为空')
     truth_sha256, fact_aliases, participant_aliases = _formal_maps(formal_mapping)
+    chapter_entry_states = {
+        int(row.get('chapter_ordinal') or 0): list(row.get('entry_state_aliases') or [])
+        for row in _list(
+            _mapping(truth, 'blind_truth').get('chapters', []), 'blind_truth.chapters')
+        if isinstance(row, Mapping)
+    }
 
     compiled_chapters: list[dict[str, Any]] = []
     seen_chapters: set[int] = set()
@@ -449,6 +464,13 @@ def compile_blind_candidate(
                 'entry_state_aliases': entry,
                 'exit_state_aliases': exit_refs,
             })
+        # 状态承接由代码按 transition 的定义补全；模型只交本场新增的最小状态。
+        derive_effective_states(
+            compiled_scenes,
+            chapter_entry_refs=list(chapter_entry_states.get(chapter) or []),
+            entry_key='entry_state_aliases',
+            exit_key='exit_state_aliases',
+        )
         compiled_chapters.append({
             'output_ordinal': chapter,
             'structure_decision': copy.deepcopy(row.get('structure_decision')),

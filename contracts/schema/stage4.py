@@ -139,6 +139,11 @@ class PlanScene(StrictModel):
     context_fact_refs: list[str]
     material_refs: list[str]
     turn_fact_ref: str = Field(pattern=FACT_ID_PATTERN)
+    #: **该场在故事时点边界上必须成立的状态。** 模型只交本场新增的那一部分，
+    #: 同一时间线上的承接由 `novel/stages/stage4/checks.py::derive_effective_states`
+    #: 在编译期补全 ⇒ 盘上这两格是**有效状态**（已含继承来的部分），不是模型原话。
+    #: ⚠ 让模型逐场把前面还成立的 ref 抄一遍，是要求它做代码本来就精确知道的累加账。
+    #: 实测代价：v8 那份被拒的真候选里 25 个 `continue` 场有 18 个没抄全，整本重出。
     entry_state_refs: list[str]
     exit_state_refs: list[str]
     stage_refs: list[str] = Field(min_length=1)

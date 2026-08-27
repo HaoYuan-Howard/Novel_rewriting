@@ -246,6 +246,87 @@ def causal_scene_findings(
     return missing, reversed_order
 
 
+def _canonical_transition(value: object) -> str:
+    """响应侧的 `X_` 前缀与产物侧取值收成同一把尺子。"""
+    text = str(value or '')
+    return RESPONSE_TEMPORAL_LINKS.get(text, text)
+
+
+#: **同一时间线上，状态从哪里承接过来。** 派生与判定共用这一张表——
+#: 两处各写一份 `if transition == ...`，是「同一件事的第二个落点」的标准形状。
+#:
+#:   · `start`    → 本章章首状态（Stage2 冻结的事实契约）
+#:   · `continue` → 紧邻上一场的**有效** exit（同一时间线、紧邻 ⇒ 那时成立的现在仍成立）
+#:   · `return`   → 离开主线前那个**唯一可证明**的锚点的有效 exit
+#:
+#: `earlier` / `parallel` / `later` **不在表内**：它们打开另一个时点，没有可推导的前驱。
+_STATE_INHERITS_FROM: dict[str, str] = {
+    'start': 'chapter', 'continue': 'previous', 'return': 'anchor',
+}
+
+
+def derive_effective_states(
+    scenes: list[dict[str, Any]],
+    *,
+    chapter_entry_refs: list[str],
+    entry_key: str,
+    exit_key: str,
+) -> None:
+    """把「同一时间线的状态承接」从模型的责任改成**代码的后置条件**，就地补全。
+
+    【为什么必须是代码算】`entry`/`exit` 记的是该场在故事时点边界上必须成立的**最小
+    状态**，而「上一场结束时成立的事现在仍然成立」是 `continue` 这个标签的**定义**，
+    不是一条需要模型去记的事实。让模型逐场把前面所有还成立的 ref 抄一遍，是在要求
+    它做一件代码本来就精确知道的累加账——而它做不好：v8 那份被拒的真候选里
+    **25 个 `continue` 场有 18 个没抄全**，整本 Stage4A 因此白重出一次。
+    同一条理由在本仓已有先例（预算档位与 `end_beat` 那一批把三条 HARD 变成后置条件）。
+
+    ⚠ **它不会掩盖任何真问题。** 三种承接都是定义式的推导，不是猜测；
+    schema 里没有「否定」，所以不存在「上一场成立、这一场应当不成立」的可表达情形。
+    支路配对不唯一时（第二个 opener / 支路内 `later`）**不派生**，那里仍然只报
+    `unver`，交人判断。章尾 `ending_state` 闭合也**不因此自动成立**：land 一个事实
+    不等于把它写进状态面，所以那条 HARD 仍然会红。
+    ⚠ **判据一条都不撤。** `--apply-edit` 的人工计划与 `--revalidate` 的存量产物
+    不经过本函数，在那两条路上 `state_closure` 仍是真守卫。
+    """
+    chapter_entry = {str(ref) for ref in (chapter_entry_refs or [])}
+    previous_exit: set[str] = set()
+    anchor_exit: set[str] | None = None
+    branch_ambiguous = False
+
+    for index, scene in enumerate(scenes):
+        transition = _canonical_transition(scene.get('transition'))
+        declared_in = {str(ref) for ref in (scene.get(entry_key) or [])}
+        declared_out = {str(ref) for ref in (scene.get(exit_key) or [])}
+        inherits = _STATE_INHERITS_FROM.get(transition)
+
+        if index == 0:
+            effective_in = declared_in | chapter_entry
+        elif inherits == 'previous':
+            effective_in = declared_in | previous_exit
+        elif inherits == 'anchor' and anchor_exit is not None and not branch_ambiguous:
+            effective_in = declared_in | anchor_exit
+        else:
+            effective_in = declared_in
+        effective_out = effective_in | declared_out
+
+        if index and transition in {'earlier', 'parallel'}:
+            if anchor_exit is None and not branch_ambiguous:
+                anchor_exit = previous_exit
+            else:
+                branch_ambiguous = True
+        elif index and transition == 'return':
+            anchor_exit = None
+            branch_ambiguous = False
+        elif index and transition == 'later' and (
+                anchor_exit is not None or branch_ambiguous):
+            branch_ambiguous = True
+
+        scene[entry_key] = sorted(effective_in)
+        scene[exit_key] = sorted(effective_out)
+        previous_exit = effective_out
+
+
 def temporal_state_findings(
     scenes: list[dict[str, Any]],
     *,
@@ -277,11 +358,7 @@ def temporal_state_findings(
     是本仓最贵的一种自相矛盾。
     """
 
-    def canonical(value: object) -> str:
-        """响应侧的 `X_` 前缀与产物侧取值收成同一把尺子。"""
-        text = str(value or '')
-        return RESPONSE_TEMPORAL_LINKS.get(text, text)
-
+    canonical = _canonical_transition
     state_bad: list[str] = []
     transition_bad: list[str] = []
     unknown: list[str] = []
@@ -306,7 +383,7 @@ def temporal_state_findings(
             continue
 
         previous = scenes[index - 1]
-        if transition == 'continue':
+        if _STATE_INHERITS_FROM.get(transition) == 'previous':
             missing = {str(ref) for ref in (previous.get(exit_key) or [])} - entry
             if missing:
                 state_bad.append(
@@ -327,7 +404,7 @@ def temporal_state_findings(
                     '当前 schema 无 branch id/depth，return 配对不可判')
             unknown.append(
                 f'{where}:{transition} 支路入口缺少可判定的完整故事时点真值')
-        elif transition == 'return':
+        elif _STATE_INHERITS_FROM.get(transition) == 'anchor':
             if branch_anchor is not None and not branch_ambiguous:
                 missing = {
                     str(ref) for ref in (branch_anchor.get(exit_key) or [])

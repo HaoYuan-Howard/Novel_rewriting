@@ -281,8 +281,9 @@ def _typed_bindings(compiled: dict) -> dict:
 
 
 def _compiled() -> tuple[dict, dict, dict]:
-    _prompt, mapping = build_blind_projection(_blueprints(), root_clean_sha1=ROOT)
-    compiled = compile_blind_candidate(_typed_candidate(mapping), mapping)
+    truth, mapping = build_blind_projection(_blueprints(), root_clean_sha1=ROOT)
+    compiled = compile_blind_candidate(
+        _typed_candidate(mapping), mapping, truth=truth)
     return compiled, mapping, build_evidence_catalog(_blueprints())
 
 
@@ -342,7 +343,7 @@ def test_blind_candidate_accepts_stage2_fact_ids_beyond_two_digit_chapters():
             'narration': [],
         }],
     }
-    _prompt, mapping = build_blind_projection(blueprint, root_clean_sha1=ROOT)
+    truth, mapping = build_blind_projection(blueprint, root_clean_sha1=ROOT)
     alias = _fact_aliases(mapping)['f100_001']
     response = {
         'reconstruction_strategy': '线性短章保留因果顺序。',
@@ -366,7 +367,8 @@ def test_blind_candidate_accepts_stage2_fact_ids_beyond_two_digit_chapters():
     }
 
     compiled = compile_blind_candidate(
-        BlindPlanResponse.model_validate(response).model_dump(mode='json'), mapping)
+        BlindPlanResponse.model_validate(response).model_dump(mode='json'),
+        mapping, truth=truth)
 
     chapter = compiled['output_chapters'][0]
     assert chapter['scenes'][0]['candidate_scene_id'] == 'c100s01'
@@ -476,18 +478,18 @@ def test_b_unknown_or_cross_chapter_evidence_refs_are_closed(field: str, unknown
 
 
 def test_unknown_alias_and_model_owned_scene_id_are_closed_in_a_compiler():
-    _prompt, mapping = build_blind_projection(_blueprints(), root_clean_sha1=ROOT)
+    truth, mapping = build_blind_projection(_blueprints(), root_clean_sha1=ROOT)
     candidate = _typed_candidate(mapping)
     candidate['output_chapters'][1]['scenes'][0]['context_fact_aliases'] = [
         'a_' + '0' * 16,
     ]
     with pytest.raises(BlindPlanError, match='未知事实别名'):
-        compile_blind_candidate(candidate, mapping)
+        compile_blind_candidate(candidate, mapping, truth=truth)
 
     candidate = _typed_candidate(mapping)
     candidate['output_chapters'][1]['scenes'][0]['candidate_scene_id'] = 'c01s99'
     with pytest.raises(BlindPlanError, match='协议外字段.*candidate_scene_id'):
-        compile_blind_candidate(candidate, mapping)
+        compile_blind_candidate(candidate, mapping, truth=truth)
     with pytest.raises(ValidationError, match='candidate_scene_id'):
         BlindPlanResponse.model_validate(candidate)
 
@@ -512,7 +514,7 @@ def test_declared_change_kinds_are_canonicalized_instead_of_rejected():
     ⚠ 反方向同样要成立：**非法枚举不许被归一顺手洗掉**。归一只处理
     「取值都合法、只是重复或乱序」这一种输入，其余原样交给 pydantic。
     """
-    _prompt, mapping = build_blind_projection(_blueprints(), root_clean_sha1=ROOT)
+    _truth, mapping = build_blind_projection(_blueprints(), root_clean_sha1=ROOT)
     candidate = _typed_candidate(mapping)
     index, decision = next(
         (position, chapter['structure_decision'])

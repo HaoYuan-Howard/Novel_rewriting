@@ -29,16 +29,19 @@ alias，数组顺序也由确定性散列打乱。不要从 alias 字面、数�
 
 每个 land alias 恰好落入一场；context_fact_aliases 只能引用输入中 obligation=context 的 alias，
 land alias 即使已在前场落地也不能转填为 context。turn 必须属于本场 land。
-entry_state_aliases / exit_state_aliases 是该场在**故事时点边界**上必须成立的最小状态，
-不是截至此处已披露事实的累计清单：
-- X_CONTINUE 才表示同一时间线紧邻续接，必须承接上一场 exit；
-- X_EARLIER 打开更早时点，不继承刚刚展示的未来场 exit；
-- X_PARALLEL 打开并行时层，也不继承紧邻上一场 exit；
-- 单一 X_EARLIER/X_PARALLEL 支路用 X_RETURN 回到离开主线前的锚点并恢复该锚点状态，
-  不继承支路末场 exit；当前输出没有 branch id，不要嵌套支路或在支路内再用 X_LATER；
+entry_state_aliases / exit_state_aliases 只填**本场新增**的状态：entry 填本场开场时必须
+额外成立、而上一时点尚未给出的状态，exit 填本场结束时新确立的状态。**不要把前面已经
+成立的状态再抄一遍**——同一时间线上的承接由代码按 transition 的定义自动补全：
+- X_CONTINUE 表示同一时间线紧邻续接，代码自动继承上一场的有效 exit；
+- X_RETURN 回到离开主线前的锚点，代码自动恢复该锚点的有效状态；
+- 首场自动承接本章章首状态。
+真正需要你判断的是**时点本身**：
+- X_EARLIER 打开更早时点，X_PARALLEL 打开并行时层，二者都不继承紧邻上一场 exit；
+- 一条 X_EARLIER/X_PARALLEL 支路用一次 X_RETURN 收口；当前输出没有 branch id，
+  不要嵌套支路，也不要在支路内再用 X_LATER；
 - X_LATER 跳到更晚时点，有时间空档，不承诺线性继承紧邻上一场 exit。
-机器无法从 alias 图完整判断非线性时序是否合理；必须如实标注边界留给人工盲审，
-不得为了让状态看似连续而把未来事实带入过去。章首输入与章尾输出状态仍必须闭合。
+机器无法从 alias 图完整判断非线性时序是否合理；必须如实标注边界留给人工判断，
+不得为了让状态看似连续而把未来事实带入过去。章尾必须真的把本章 ending 状态确立起来。
 三个 goal 只能引用本章 fact alias，并分别落在章目标、首场和末场。场景数组就是新披露顺序。
 weight/role/delivery/transition 使用响应契约里的前缀枚举，首场 transition 必须 X_START。
 只谈事实组织，不指定文风，不写纯写法词：$STYLE_WORDS。只输出 JSON。""" \

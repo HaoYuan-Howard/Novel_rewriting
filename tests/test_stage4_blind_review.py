@@ -125,7 +125,7 @@ def _seed_candidate(
     response = BlindPlanResponse.model_validate(
         _candidate_response(blueprints_artifact, mapping),
     ).model_dump(mode='json')
-    business = compile_blind_candidate(response, mapping)
+    business = compile_blind_candidate(response, mapping, truth=truth)
     candidate = BlindCandidate.model_validate({
         **business,
         '_provenance': {

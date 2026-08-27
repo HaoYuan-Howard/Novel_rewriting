@@ -296,7 +296,10 @@ def test_blind_design_prompt_teaches_the_same_temporal_rule_the_validator_enforc
     rendered = prompts.blind_design_system()
     for clause in (
         'X_CONTINUE', 'X_EARLIER', 'X_PARALLEL', 'X_RETURN', 'X_LATER',
-        '章首输入与章尾输出状态仍必须闭合',
+        # 承接由代码补全 ⇒ prompt 必须明说「不要再抄一遍」，否则它与判据打架。
+        '不要把前面已经',  # 换行处断开，只钉住这半句的存在
+        '成立的状态再抄一遍',
+        '代码自动继承上一场的有效 exit',
         '不得为了让状态看似连续而把未来事实带入过去',
     ):
         assert clause in rendered, clause
