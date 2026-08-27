@@ -176,7 +176,8 @@ Stage5 prompt 不接收 fact/beat/hinge/secret/rule id、alias、A 策略、结�
 
 `partition_change`、`disclosure_order`、`noncontiguous_regroup`、`anchor_migration`、
 `structure_eligibility`、`structure_alignment` 与 `semantic_closure_reading` 都是现场读数，不设自动美学
-阈值。`causal_closure` 直接依据 Stage2 因果边检查事实是否落入实际场景；事实、状态、材料和上下文
+阈值。`causal_closure` 直接依据 Stage2 因果边检查事实是否落入实际场景——`land` 与 `context` 两种引用
+都算入场，端点只作本章上下文出现不是漏落；事实、状态、材料和上下文
 精确性仍由 HARD 守卫关闭。
 
 公开 `ApprovalDoc` 是 v4；服务盘上 `_service/approvals/<sid>.json` 是 v5。旧 v4 只经显式

@@ -439,6 +439,16 @@ def _blind_candidate_problem(
         if sorted(landed) != sorted(land):
             problems.append(
                 f'ch{ordinal} land 必须恰落一次：expected={sorted(land)},got={sorted(landed)}')
+        # A 相就把「因果端点根本没进任何场」挡下来，别等到 B 之后才发现整书要重出。
+        # 逆序只在正式计划上作 INFO 报读数，A 相不据此拒稿（倒叙本来就合法）。
+        missing_causal, _reversed_causal = checks.causal_scene_findings(
+            list(source.get('causal_edges') or []),
+            checks.causal_scene_positions(
+                scenes, land_key='land_fact_aliases',
+                context_key='context_fact_aliases'),
+            before_key='before_alias', after_key='after_alias')
+        if missing_causal:
+            problems.append(f'ch{ordinal} 因果端点未入候选场：{missing_causal}')
         for index, scene in enumerate(scenes):
             prefix = f'ch{ordinal}.scene{index + 1}'
             crefs = set(scene.get('context_fact_aliases') or [])

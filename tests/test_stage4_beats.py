@@ -386,3 +386,50 @@ def test_the_response_prefixed_transitions_use_the_very_same_ruler():
     plain = _temporal(('start', ['a'], [], ['a']), ('continue', ['b'], [], ['b']))
     assert prefixed == plain
     assert any('continue 未承接' in row for row in plain[0])
+
+
+def test_a_causal_endpoint_that_enters_as_context_still_counts_as_landed():
+    """端点落在 context 不是「因果边漂移」——旧口径只看 land，那是判据够不着。"""
+    plan = _compiled()
+    scenes = plan['output_chapters'][0]['scenes']
+    # f01_003 改由第二场以 context 身份引用；它仍在本章的披露面里。
+    positions = checks.causal_scene_positions(
+        scenes, land_key='land_fact_refs', context_key='context_fact_refs')
+    assert positions['f01_002'] == [0] and positions['f01_003'] == [1]
+
+    moved = [
+        {**scenes[0], 'context_fact_refs': ['f01_003']},
+        {**scenes[1], 'land_fact_refs': ['f01_001', 'f01_003']},
+    ]
+    missing, reversed_order = checks.causal_scene_findings(
+        [{'before': 'f01_002', 'after': 'f01_003'}],
+        checks.causal_scene_positions(
+            moved, land_key='land_fact_refs', context_key='context_fact_refs'))
+    assert missing == [], 'context 身份的端点同样算入场'
+    # 两端首次可见场都是 scene1 ⇒ 没有可判的逆序；同场披露不是倒叙。
+    assert reversed_order == []
+
+
+def test_a_causal_endpoint_in_no_scene_at_all_is_still_hard():
+    """放宽的只有「算不算入场」；真的一场都没进，因果链就是断的。"""
+    missing, reversed_order = checks.causal_scene_findings(
+        [{'before': 'f01_002', 'after': 'f01_009'}],
+        checks.causal_scene_positions(
+            _compiled()['output_chapters'][0]['scenes'],
+            land_key='land_fact_refs', context_key='context_fact_refs'))
+    assert missing == ['f01_002>f01_009:未落入场景']
+    assert reversed_order == []
+
+
+def test_reverse_disclosure_uses_the_first_visible_scene_not_the_last():
+    """`context` 可以在多场复用；只留最后一个会让先后取决于数组尾部。"""
+    scenes = [
+        {'land_fact_refs': ['b'], 'context_fact_refs': []},
+        {'land_fact_refs': ['a'], 'context_fact_refs': ['b']},
+    ]
+    positions = checks.causal_scene_positions(
+        scenes, land_key='land_fact_refs', context_key='context_fact_refs')
+    assert positions['b'] == [0, 1]
+    _missing, reversed_order = checks.causal_scene_findings(
+        [{'before': 'a', 'after': 'b'}], positions)
+    assert reversed_order == ['a>b'], '按首次可见场，b 先于 a'

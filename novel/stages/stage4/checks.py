@@ -24,6 +24,53 @@ _NO_CTX = ('writer_context 不在场或读不回来；这是查不了，不是�
 _HINGE_FIELDS = tuple(dict.fromkeys(HINGE_GROUPS.values()))
 
 
+def causal_scene_positions(
+    scenes: list[dict[str, Any]],
+    *,
+    land_key: str,
+    context_key: str,
+) -> dict[str, list[int]]:
+    """事实引用进入了哪些场景。
+
+    ⚠ **`context` 也算入场。** 一条 Stage2 因果边的端点未必需要在本章被「落」：
+    它可以作为本章的上下文事实出现（前情已成立、本章只是引用它）。旧口径只看
+    `land_fact_refs`，于是每一条端点落在 context 的因果边都被判成「未落入场景」
+    ——那是判据够不着，不是计划有问题。
+    ⚠ **位置保留为多值**：`context` 可以在多场复用，只留最后一个会让先后关系
+    取决于数组尾部；先后一律按**首次可见场**算，那才是读者第一次拿到它的位置。
+    """
+    positions: dict[str, list[int]] = {}
+    for index, scene in enumerate(scenes):
+        for ref in (*(scene.get(land_key) or []), *(scene.get(context_key) or [])):
+            positions.setdefault(str(ref), []).append(index)
+    return positions
+
+
+def causal_scene_findings(
+    edges: list[dict[str, Any]],
+    positions: dict[str, list[int]],
+    *,
+    before_key: str = 'before',
+    after_key: str = 'after',
+) -> tuple[list[str], list[str]]:
+    """返回 ``(未入场端点, 按首次可见场算的逆因果披露)``。
+
+    两个返回值分属两条判据：前者是 HARD 的 `causal_closure`（端点根本没进任何
+    场景 ⇒ 这条因果链在新计划里断了），后者是 INFO 的 `causal_disclosure`
+    （顺序倒置可能是有意的倒叙，没有 ground truth，只报不挡）。
+    """
+    missing: list[str] = []
+    reversed_order: list[str] = []
+    for edge in edges:
+        before, after = str(edge.get(before_key)), str(edge.get(after_key))
+        if before not in positions or after not in positions:
+            missing.append(f'{before}>{after}:未落入场景')
+            continue
+        if min(positions[after]) < min(positions[before]):
+            reversed_order.append(f'{before}>{after}')
+    return missing, reversed_order
+
+
 def temporal_state_findings(
     scenes: list[dict[str, Any]],
     *,
@@ -213,14 +260,12 @@ def check(plan: dict[str, Any], *, blueprints: dict[str, Any],
         scenes = list(chapter.get('scenes') or [])
         landed: list[str] = []
         assigned_materials: list[str] = []
-        scene_of: dict[str, int] = {}
         for index, scene in enumerate(scenes):
             prefix = f'ch{ordinal}.{scene.get("slot") or index + 1}'
             lrefs = [str(ref) for ref in (scene.get('land_fact_refs') or [])]
             crefs = [str(ref) for ref in (scene.get('context_fact_refs') or [])]
             landed.extend(lrefs)
             assigned_materials.extend(str(ref) for ref in (scene.get('material_refs') or []))
-            scene_of.update({ref: index for ref in lrefs})
             if set(lrefs) - land:
                 ref_bad.append(f'{prefix}:land={sorted(set(lrefs) - land)}')
             if set(crefs) - context:
@@ -291,13 +336,12 @@ def check(plan: dict[str, Any], *, blueprints: dict[str, Any],
 
         structure = structure_metrics_of(bp, chapter)
         structure_rows.append(structure)
-        for edge in (bp.get('causal_edges') or []):
-            before, after = str(edge.get('before')), str(edge.get('after'))
-            if before not in scene_of or after not in scene_of:
-                causal_bad.append(f'ch{ordinal}:{before}>{after}:未落入场景')
-                continue
-            if before in scene_of and after in scene_of and scene_of[after] < scene_of[before]:
-                disclosure_reversed.append(f'ch{ordinal}:{before}>{after}')
+        positions = causal_scene_positions(
+            scenes, land_key='land_fact_refs', context_key='context_fact_refs')
+        edge_missing, edge_reversed = causal_scene_findings(
+            list(bp.get('causal_edges') or []), positions)
+        causal_bad.extend(f'ch{ordinal}:{row}' for row in edge_missing)
+        disclosure_reversed.extend(f'ch{ordinal}:{row}' for row in edge_reversed)
 
     def rows(rule_bad: list[str], label: str) -> list[tuple[str, list[str]]]:
         return [(f'{len(rule_bad)} 处{label}：{rule_bad[:8]}', rule_bad)] if rule_bad else []

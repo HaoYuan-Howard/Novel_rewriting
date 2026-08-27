@@ -506,7 +506,7 @@ Stage5/6 从各自已经读取的 Stage1 文本即时计算确定性机械读数
 | R-5.13 | 一场的预算不许被必须逐字写入的原话挤满：低于 2 倍只提示，不自动改场或改事实 | `INFO`（`verbatim_starved`） |
 | R-5.14 | 原话占场景预算的分布要无条件报出；阈值没有独立质量真值，读数不作放行门 | `度量`（`verbatim_share`） |
 | R-5.15 | 结构变化必须从同一个逐章函数复算且带分子、分母与 `unver`：事实→场景分区用全部 land-fact pair 的 split/merge 距离；披露顺序只比较 SourceSpan 严格可排序的 fact pair，并把同场 tie 与逆序分开；非连续重组按同一新场覆盖多少段互不相邻 source locus 计算。事实映射不闭合、SourceSpan 不可判或分母为零时不得产漂亮比例 | `度量`（`partition_change` / `disclosure_order` / `noncontiguous_regroup`，唯一数学落点 `novel/stages/stage4/measure.py::structure_metrics_of`） |
-| R-5.16 | `causal_edges` 约束故事成立顺序，不等于披露顺序；披露先于因果前提可能是合法倒叙，必须报逆序读数但不自动阻断 | `INFO`（`causal_disclosure`） |
+| R-5.16 | `causal_edges` 约束故事成立顺序，不等于披露顺序；披露先于因果前提可能是合法倒叙，必须报逆序读数但不自动阻断。先后一律按端点的**首次可见场**算（`context` 可在多场复用，取最后一场会让先后取决于数组尾部） | `INFO`（`causal_disclosure`） |
 | R-5.17 | 场景 `transition` 必须是关闭式可执行标签，首场必须 `start`；回溯/返回的审美是否合适无 ground truth | `HARD`（`scene_transition`）+ 人工盲读 |
 | R-5.18 | 首尾锚点必须同时报 typed goal 相对源首尾 locus 的迁移，以及首/末新场 payload 是否仍含源首/尾 locus；另单报每章 source locus/源分组数、跨组可比较事实对、因果传递闭包约束/不可比对与非连续重组机会，作为“本章是否有重构空间”的保守分母。它们不以场景数量变化、合并两个相邻场或字面低重合冒充重构，也不自动判优劣 | `度量`（`anchor_migration` / `structure_eligibility`） |
 | R-5.19 | 每章必须显式记 `structure_decision`：`retain` 的声明变化为空；`reconstruct` 必须从 `entry_anchor / ending_anchor / fact_grouping / disclosure_order / noncontiguous_regroup` 中声明至少两类。计划只存 mode/reason/declared；`computed_change_kinds` 每次从当前 blueprint 与实际场景现场计算，声明已实现、未实现或出现未声明变化常驻对证，但不回写计划，也**不把“至少两项实际变化”或整书距离写成未经标定的自动美学门**。事实/状态/因果闭合仍由 HARD 守 | `度量`（`structure_alignment` / `semantic_closure_reading`） |
