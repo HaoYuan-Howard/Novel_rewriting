@@ -164,7 +164,18 @@ driver 的真实链路生效。非 corpus 回归与真实付费整书验收分�
 新增 `--review-scope blocking|all`；UI 按人物/关系/秘密时间线/规则/设定与弧线/集合完整性
 成卡，卡片批量提交仍展开为逐项 hash-bound decision。
 
-**P2（新 base 的候选事实、整书修复与最小上下文）**：blueprint fact 增代码计算的
+**P2（按稳定性优先重排；2026-08-28 用户裁定）**
+
+P2 原本是一个「候选事实分级 + 整书修复 + 上下文瘦身」的大批次。按「稳定跑通优先」
+重排为两段，**先做与稳定性直接相关的那一段**：
+
+- **P2a（先做，不破坏盘上形状）**：Stage4 首轮仍整书、反馈轮改章节 replacement schema
+  并由代码原子合并后重跑整书闸——把「一处错就整书重出」变成「只换出错的那一章」；
+  抽出唯一 `gate_payload` 校验函数供 LlmClient / agent intake / response-repair /
+  adoption / repair 共用；拒稿仓统一为 `_llm_rejected/<chain>/<attempt>/`，
+  新增 `--adopt-rejected` 与 `--apply-repair` 两条 0-wire 恢复入口。
+  这一段的目标就是 P3 的目标：**一次有效付费产出不许被判据或形状问题永久锁死**。
+- **P2b（后做，需要新 base 与一次付费重建）**：blueprint fact 增代码计算的
 `derived_tier`（core/support/incidental）与 `tier_reasons/depends_on`，模型的
 `producer_obligation` 只留审计；Blueprint Review 分 frontier/coverage 与 claim 两层，
 source beat 必须闭合为 `covered_by` 或显式无状态变化；Stage4 首轮仍整书、反馈轮改章节
@@ -175,17 +186,29 @@ WriterContext v5 改共享表 + refs；Stage6 拆 `generation_packet` /
 `mechanical_guard_basis` / `semantic_verification_packet` 三面，发明判据的允许集只来自
 generation packet。TODO-31 的 Stage4→5 减法并入本批。
 
-**P3（组合 treatment 全链实验，需用户在付费前显式批准）**：控制臂
-`e15aefbf4856aba83a44abd1a607bfdc48a20b87`，候选臂为 P2 完成提交；两臂同一份冻结
-profile、同一 agent executor、`max_turns=4`、legacy 路禁用；两书跑序对冲（书一 A→B、
-书二 B→A）；先跑第一本第一臂 pilot 并回算成本与人时基线，用户批准剩余预算后才启动其余三次；
-达到 token/货币/infra cap 即停并判 inconclusive。**不宣称 Stage4 单变量隔离，不销账 TODO-30。**
+**P3（全链稳定性验收，需用户在付费前显式批准预算）**
+
+⚠ **2026-08-28 用户裁定：P3 不做盲审，也不做双臂偏好实验。** 当务之急是
+「给定一本小说，agent driver 下 opus5 + xhigh 能稳定跑通 stage0～stage7」，
+核心指标是**一次调用就落盘产物 + 少量人审**。原计划里的两臂对冲、42/42 章双臂 panel、
+臂遮蔽与结构偏好统计整体撤下；控制臂 `e15aefbf4856aba83a44abd1a607bfdc48a20b87`
+只作为已有 v8 读数的对照**从账本上读**，不为它另花一次钱。
+
+- 执行面：单臂、agent executor、`max_turns=4`、legacy 路禁用；profile 在首个付费调用前
+  由用户批准并写入 manifest，能力不可用就停止、不 fallback。
+- 稳定性读数（全部由 `tools/workflow_metrics.py` 从账本与审计现算，不换算金额）：
+  逐节点 **首次调用即落盘率**、wire 次数与重采次数、内容拒绝次数、`.INVALID` 次数、
+  infra 失败（timeout/连接）单列不与内容失败混算、人审项数与人工介入次数。
+- 目标（是目标不是 HARD）：Stage4 自动整书 resample 为 0；INFO / metric / UNVER 引发的
+  付费调用为 0；内容拒绝 ≤ 1 次/书；全链 0 次因判据假红导致的整书重出。
+- 达到用户批准的 token 或货币 cap 即停并如实判 inconclusive，不挑便宜结果。
 
 **验收**：P0/P1/P2 各批跑冻结契约 §9.5、对应 stage/API 测试与完整非 corpus 回归；
 P2 的每次 shape break 登记 `tests/test_artifact_versions.py::_SHAPE_BREAKS`；
-P3 自动化只验「2/2 书到 Stage7、TODO-21 manifest 闭合、双臂 panel/hash/证据/遮蔽完整、
-HARD 全闭合且 UNVER 不计绿、人工对证后关键事实遗漏为 0、账本与审批可逐项联结」，
-结构偏好与美学比例只报原始标签、比例、区间与样本量，不预设自动 go/no-go。
+P3 自动化只验「书到 Stage7、产物版本全 current、HARD 全闭合且 UNVER 不计绿、
+`inbox.delivery_counts.blocking == 0`、账本 / session 审计 / artifact adoption / 审批
+可逐项联结、`experiment_valid=true`（代码身份唯一且不带 `-dirty`）」；
+稳定性读数只报原始次数与分母，不预设自动 go/no-go。
 阶段验收后把冻结行为写入对应 R 条与 `docs/BACKEND_CONTRACT.md` §十，并从本条删除已完成部分。
 
 ## 条目生命周期
