@@ -5,7 +5,7 @@ import { errorBody } from '@/api/errors'
 import { ErrorHint } from '@/components/state/States'
 import { qk } from '@/api/queryKeys'
 import { lookupAction } from '@/constants/actions'
-import { SEV } from '@/constants/vocabulary'
+import { REVIEW_GROUP_LABEL, REVIEW_GROUP_ORDER, SEV } from '@/constants/vocabulary'
 import { useChrome } from '@/hooks/useChrome'
 import { useEnums } from '@/hooks/useEnums'
 import { QueryStates } from '@/components/state/QueryStates'
@@ -20,6 +20,52 @@ import type {
   GlobalReviewItem,
   GlobalReviewState,
 } from '@/types/stages'
+
+interface ReviewCard {
+  key: string
+  label: string
+  subject: string
+  items: GlobalReviewItem[]
+  blocking: number
+  disclosure: number
+}
+
+/**
+ * Group the unresolved rows into one card per subject.
+ *
+ * A person reads this surface by subject ("this character", "this secret's
+ * timeline"), not as one 145-row table. The grouping key and the blocking /
+ * disclosure verdict both arrive from the server; this function only lays them
+ * out. Bulk submit still expands into per-item hash-bound decisions.
+ */
+function reviewCards(items: GlobalReviewItem[]): ReviewCard[] {
+  const byKey = new Map<string, GlobalReviewItem[]>()
+  for (const item of items) {
+    const rows = byKey.get(item.group_key)
+    if (rows) rows.push(item)
+    else byKey.set(item.group_key, [item])
+  }
+  const cards = [...byKey.entries()].map(([key, rows]) => {
+    const [prefix, subject] = key.includes(':') ? key.split(':') : [key, '']
+    return {
+      key,
+      label: REVIEW_GROUP_LABEL[prefix] ?? prefix,
+      subject,
+      items: rows,
+      blocking: rows.filter((row) => row.effect === 'blocking').length,
+      disclosure: rows.filter((row) => row.effect === 'disclosure').length,
+    }
+  })
+  const rank = (key: string) => {
+    const at = REVIEW_GROUP_ORDER.indexOf(key.split(':')[0])
+    return at < 0 ? REVIEW_GROUP_ORDER.length : at
+  }
+  // Cards that can hold Stage4 closed come first; ties keep a stable order.
+  return cards.sort((a, b) =>
+    Number(b.blocking > 0) - Number(a.blocking > 0)
+    || rank(a.key) - rank(b.key)
+    || a.key.localeCompare(b.key))
+}
 
 type DecisionState = Exclude<GlobalReviewState, 'pending'>
 
@@ -112,6 +158,7 @@ export function GlobalReviewPanel({ sid }: { sid: string }) {
     () => review.data?.items.filter((item) => item.state !== 'PASS') ?? [],
     [review.data?.items],
   )
+  const cards = useMemo(() => reviewCards(unresolved), [unresolved])
   const selected = unresolved.filter((item) => drafts[item.item_id]?.selected)
   const selectedValid = selected.length > 0 && selected.every((item) => {
     const draft = drafts[item.item_id]
@@ -179,10 +226,17 @@ export function GlobalReviewPanel({ sid }: { sid: string }) {
                   ? { color: SEV.info.color, borderColor: SEV.info.border }
                   : { color: SEV.unver.color, borderColor: SEV.unver.border }}
               >
-                {data.approved ? '当前 subject：全部 PASS' : 'Stage4 保持关闭'}
+                {data.approved ? '阻断面：全部 PASS' : 'Stage4 保持关闭'}
               </span>
               <span className="text-ink-4">
-                PASS {data.items.filter((item) => item.state === 'PASS').length}/{data.items.length}
+                阻断 PASS {data.effect_counts.blocking.PASS}/
+                {Object.values(data.effect_counts.blocking).reduce((a, b) => a + b, 0)}
+              </span>
+              <span className="text-ink-4">
+                披露未决 {data.effect_counts.disclosure.pending
+                  + data.effect_counts.disclosure.FAIL
+                  + data.effect_counts.disclosure.UNVER}
+                （不挡 Stage4，仍须逐条裁决）
               </span>
               <Mono
                 className="ml-auto text-micro text-ink-5"
@@ -209,8 +263,47 @@ export function GlobalReviewPanel({ sid }: { sid: string }) {
               <>
                 <ActorReasonFields actor={actor} onActor={setActor} />
 
-                <div className="flex flex-col gap-10">
-                  {unresolved.map((item) => {
+                <div className="flex flex-col gap-14">
+                  {cards.map((card) => (
+                    <section
+                      key={card.key}
+                      aria-label={'复核卡 ' + card.key}
+                      className="rounded-block border border-line px-12 py-10"
+                    >
+                      <div className="flex flex-wrap items-center gap-8">
+                        <input
+                          type="checkbox"
+                          aria-label={'全选 ' + card.key}
+                          checked={card.items.every(
+                            (row) => drafts[row.item_id]?.selected)}
+                          onChange={(event) => card.items.forEach((row) =>
+                            patchDraft(row.item_id, { selected: event.target.checked }))}
+                        />
+                        <span className="text-body font-semibold">{card.label}</span>
+                        {card.subject ? (
+                          <Mono className="text-mini text-ink-5">{card.subject}</Mono>
+                        ) : null}
+                        <span className="ml-auto flex items-center gap-8 text-mini">
+                          {card.blocking ? (
+                            <span
+                              className="rounded-tag border px-7 py-2"
+                              style={{ color: SEV.hard.color, borderColor: SEV.hard.border }}
+                            >
+                              阻断 {card.blocking}
+                            </span>
+                          ) : null}
+                          {card.disclosure ? (
+                            <span
+                              className="rounded-tag border px-7 py-2"
+                              style={{ color: SEV.metric.color, borderColor: SEV.metric.border }}
+                            >
+                              披露 {card.disclosure}
+                            </span>
+                          ) : null}
+                        </span>
+                      </div>
+                      <div className="mt-10 flex flex-col gap-10">
+                  {card.items.map((item) => {
                     const draft = drafts[item.item_id] ?? EMPTY_DRAFT
                     return (
                       <div key={item.item_id} className="rounded-block border border-line-soft bg-sunken-2 px-14 py-12">
@@ -223,6 +316,14 @@ export function GlobalReviewPanel({ sid }: { sid: string }) {
                           />
                           <Mono className="text-mini text-ink-5">{item.kind}</Mono>
                           <span className="text-body font-semibold">{item.subject_path}</span>
+                          <span
+                            className="rounded-tag border px-7 py-2 text-micro"
+                            style={item.effect === 'blocking'
+                              ? { color: SEV.hard.color, borderColor: SEV.hard.border }
+                              : { color: SEV.metric.color, borderColor: SEV.metric.border }}
+                          >
+                            {item.effect === 'blocking' ? '阻断 Stage4' : '只披露'}
+                          </span>
                           <span className="ml-auto rounded-tag bg-card px-7 py-2 text-mini text-ink-3">
                             {item.state}
                           </span>
@@ -308,6 +409,9 @@ export function GlobalReviewPanel({ sid }: { sid: string }) {
                       </div>
                     )
                   })}
+                      </div>
+                    </section>
+                  ))}
                 </div>
 
                 {decide.isError ? (

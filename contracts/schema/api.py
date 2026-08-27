@@ -46,6 +46,7 @@ from contracts.invariants import (
     DELIVERY_MODES,
     FACT_ATOM_KINDS,
     FACT_ATOM_OBLIGATIONS,
+    GLOBAL_REVIEW_EFFECTS,
     HINGE_KINDS,
     HOOK_APPROACHES,
     HOOK_SLOTS,
@@ -982,19 +983,42 @@ class GlobalView(StrictModel):
     provenance: GlobalProvenance = Field(alias='_provenance')
 
 
+class GlobalReviewRow(GlobalReviewItem):
+    """一条复核项 **加上服务端派生的两格**：交付效果与人审卡收敛键。
+
+    ⚠ 两格都**只在服务端算**（`contracts/invariants.py::review_effect_of` 与
+    `novel/quality/global_review.py::review_group_key`）。前端复制一份分类表，
+    就出现第二个判官：某天新增一类高影响事实，界面仍按旧表把它画成「只披露」，
+    而没有任何东西会出声（判据 13）。
+    ⚠ 它们**不进产物**：`global_review.json` 的形状与版本一格没动，两格都可由
+    kind/subject_path 零成本重算。
+    """
+
+    effect: Literal[GLOBAL_REVIEW_EFFECTS]
+    group_key: str = Field(min_length=1)
+
+
 class GlobalReviewView(StrictModel):
     """Current-subject status plus the auditable Stage2 review rows.
 
     ``approved`` is recomputed by the read model.  It is never trusted from the
     persisted review alone, because the current ``GlobalGrounding`` or required
     review surface may have changed since a person decided the rows.
+
+    ⚠ ``approved`` 只回答 **blocking 面**是否逐项 PASS——那是 Stage4 那道闸的口径。
+    `disclosure` 的未决项一条不少地留在 `items` 与 `effect_counts` 里；
+    界面必须把它们画出来，只是不画成「Stage4 被它挡住」。
     """
 
     source_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
     current_subject_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
     current: bool
     approved: bool
-    items: list[GlobalReviewItem]
+
+    #: ``{effect: {四态: n}}``。两层键都**恒全出**（0 也出）：
+    #: 「没有这个键」与「值是 0」不许混（同 `InboxView.counts`）。
+    effect_counts: dict[str, dict[str, int]]
+    items: list[GlobalReviewRow]
 
 
 # ─────────────────────────────────────────────────────────────────────────────

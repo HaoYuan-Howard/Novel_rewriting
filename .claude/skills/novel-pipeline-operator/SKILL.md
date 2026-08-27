@@ -86,8 +86,10 @@ description: 作为受托终审代理，使用本仓 novel.cli 将单本中文�
 只有同时满足以下条件才可标记 `ready`：
 
 - `state` 显示主链完成且所有消费中的正式产物 fresh/match；已解释的诊断噪声单列披露。
-- Stage2 global 与 blueprint 均 current、唯一联合 check 无 HARD，且全局复核面 current/逐项 PASS；
-  这是 `ready` 与 `ready_with_disclosures` 的共同硬前提。人审可与 blueprint 计算重叠，但不能缺席。
+- Stage2 global 与 blueprint 均 current、唯一联合 check 无 HARD，且全局复核面 current、
+  **blocking 面逐项 PASS**；这是 `ready` 与 `ready_with_disclosures` 的共同硬前提。
+  人审可与 blueprint 计算重叠，但不能缺席。`disclosure` 的三类不挡门，
+  却必须在终审包里逐条披露——「不阻断」不等于「不列出」。
 - `inbox.delivery_counts.blocking == 0`；`attention_counts` 区分“尚待处理”与“已裁决但记录保留”，不得拿总数冒充失败数。披露项逐类记录。
 - `inbox.counts` 的八类余额必须逐类披露：`invalid`、`rejected`、`repairable`、`human_only`、`verification`、`upstream`、`stalled`、`approval`；类别总数不直接等于阻塞数，阻塞性只读 `delivery_effect`。
 - 活动目录不存在未解释的 `.INVALID`、`.rejected` 或 `.stalled`；历史 `_rounds/` 不计入活动余额。

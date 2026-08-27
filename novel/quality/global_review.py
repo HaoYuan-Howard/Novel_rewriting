@@ -6,6 +6,9 @@ import json
 from datetime import datetime, timezone
 from typing import Any
 
+from contracts.invariants import (
+    GLOBAL_REVIEW_EFFECTS, GLOBAL_REVIEW_KINDS, review_effect_of,
+)
 from contracts.schema.evaluation import (
     GlobalReview, GlobalReviewDecisionSet, GlobalReviewItem,
 )
@@ -28,6 +31,16 @@ def _item(kind: str, path: str, value: Any) -> GlobalReviewItem:
     return GlobalReviewItem(
         item_id=f'{kind}:{path}:{digest[:12]}', kind=kind, subject_path=path,
         subject_sha256=digest, state='pending', evidence=[])
+
+
+def review_item_kind(item_id: str) -> str:
+    """从 `item_id` 取回 kind。**`item_id` 的文法只有 `_item` 一个产地，本函数
+    是它唯一的反向读法**——inbox 这类只拿到 `rule=item_id` 的消费方需要它，
+    而在那边现拆一次 `split(':')` 就是文法的第二个落点。"""
+    kind = str(item_id).split(':', 1)[0]
+    if kind not in GLOBAL_REVIEW_KINDS:
+        raise ValueError(f'{item_id!r} 不是一个 stage2 复核项 id')
+    return kind
 
 
 def _fact_item(
@@ -56,7 +69,10 @@ def enumerate_required(global_grounding: dict[str, Any]) -> list[GlobalReviewIte
     `conflict_stages` 与 `arc` 是这一层自己定义的**解读层**，拆成逐条反而每条都
     判不出对错，合成一项整体裁决。
 
-    ⚠ 取值面在 `contracts.schema.evaluation.GlobalReviewItem.kind`，两处必须一起改。
+    ⚠ 取值面在 `contracts/invariants.py::GLOBAL_REVIEW_KINDS`（`GlobalReviewItem.kind`
+    从那里派生），交付效果在同文件的 `review_effect_of`；新增一类必须同批在两处登记。
+    ⚠ 主体路径的形状同时是 `review_group_key` 的输入：新增一类主体路径要同批登记
+    卡片收敛键，否则那一类没人分组，而没有兜底键会让它当场炸出来。
     """
     rows: list[GlobalReviewItem] = []
     projected = without_global_evidence(global_grounding)
@@ -210,16 +226,80 @@ def build_review(
     return GlobalReview(source_sha256=subject_sha256(source), items=items)
 
 
+#: 卡片收敛键的路径文法。**闭集**：产地是 `enumerate_required` 拼出的
+#: `subject_path`，两处必须同进同出，因此未知形状当场炸而不是回落成一个兜底键——
+#: 兜底键会让「这一类没人分组」看起来和「分好了」一模一样。
+_GROUP_PREFIXES: tuple[tuple[str, str], ...] = (
+    ('entities.characters.', 'character'),
+    ('entities.relations.', 'relation'),
+    ('canon.world_rules.', 'world_rule'),
+    ('canon.secrets.', 'secret'),
+)
+_GROUP_COLLECTIONS: dict[str, str] = {
+    'entities.characters': 'set:characters',
+    'entities.relations': 'set:relations',
+    'canon.world_rules': 'set:world_rules',
+    'canon.secrets': 'set:secrets',
+}
+
+
+def review_group_key(subject_path: str) -> str:
+    """一条复核项归哪张人审卡。**同一个主体的全部项进同一张卡。**
+
+    人不是逐条读 145 行的，他是按「这个人物 / 这条关系 / 这条秘密的时间线」读的。
+    收敛键因此绑**主体**而不是 kind：`role` 与 `fate` 是同一个人的两格，
+    `secret` / `setup` / `reveal` / `knowledge_event` 是同一条秘密时间线的四格。
+    ⚠ 它只决定**怎么摆**，不决定**能不能提交**：批量提交仍逐项展开为 hash-bound
+    decision，允许单项覆盖，且永不自动 PASS。
+    """
+    path = str(subject_path)
+    if path in _GROUP_COLLECTIONS:
+        return _GROUP_COLLECTIONS[path]
+    for prefix, group in _GROUP_PREFIXES:
+        if path.startswith(prefix):
+            return f'{group}:{path[len(prefix):].split(".", 1)[0]}'
+    if path == 'canon.setting' or path.startswith('canon.setting.'):
+        return 'setting'
+    if path == 'arc' or path.startswith('arc.'):
+        return 'arc'
+    raise ValueError(
+        f'复核项路径 {path!r} 没有登记的卡片收敛键。'
+        f'`enumerate_required` 新增一类主体路径时必须同批在这里登记，'
+        f'不给兜底键——兜底会让「没人分组」看起来和「分好了」一样')
+
+
+def review_effect_counts(review: GlobalReview) -> dict[str, dict[str, int]]:
+    """按交付效果分开的四态计数。**两条轴不合成一个数**（判据 27）。
+
+    ``{'blocking': {四态}, 'disclosure': {四态}}``，四个状态键恒全出（0 也出）：
+    「没有这个键」与「值是 0」不许混。
+    """
+    out = {
+        effect: {state: 0 for state in ('pending', 'PASS', 'FAIL', 'UNVER')}
+        for effect in GLOBAL_REVIEW_EFFECTS
+    }
+    for item in review.items:
+        out[review_effect_of(item.kind)][item.state] += 1
+    return out
+
+
 def review_status(
     global_grounding: dict[str, Any],
     review: GlobalReview,
 ) -> tuple[str, bool, bool]:
-    """Return ``(current subject hash, exact-current, approved)``.
+    """Return ``(current subject hash, exact-current, blocking-approved)``.
 
     The persisted ``source_sha256`` is not sufficient by itself: an older or
     hand-written review could omit newly required subjects while copying that
     hash.  Gate readiness therefore recomputes both the complete Stage2 subject
     and the exact required-item surface from the current ``GlobalGrounding``.
+
+    ⚠ 第三格是 **blocking 面**的逐项 PASS，不是整份 145 项。分级的理由与那三类
+    `disclosure` 的名单在 `contracts/invariants.py::review_effect_of`；
+    `disclosure` 的 pending/FAIL/UNVER **不自动 PASS、不阻断 Stage4，但必须继续
+    出现在 inbox 与终审包**——「不阻断」不等于「没人看」。
+    ⚠ **评测面 current 仍要求 item/path/hash 集合完全一致**，一格没松：
+    分级只改「谁能拦」，不改「谁必须在场」。
     """
     expected = build_review(global_grounding)
     def identity(item: GlobalReviewItem) -> tuple[str, str, str, str]:
@@ -229,8 +309,10 @@ def review_status(
         and [identity(item) for item in review.items]
         == [identity(item) for item in expected.items]
     )
-    approved = current and bool(review.items) and all(
-        item.state == 'PASS' for item in review.items)
+    blocking = [item for item in review.items
+                if review_effect_of(item.kind) == 'blocking']
+    approved = current and bool(blocking) and all(
+        item.state == 'PASS' for item in blocking)
     return expected.source_sha256, current, approved
 
 

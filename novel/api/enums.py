@@ -72,6 +72,11 @@ _WITHHELD: dict[str, str] = {
         'agent 执行节点属于 driver/model/effort/mode 组合能力面，'
         '唯一公开口是动态 `GET /api/agent/capabilities`；'
         '再经 `/api/enums` 发一份会造成两个可漂移的节点清单'),
+    'GLOBAL_REVIEW_DISCLOSURE_KINDS': (
+        '它是**分类表**，不是取值面。发过去等于请前端自己判「这一项挡不挡 Stage4」，'
+        '而那条判定已经随行下发在 `GlobalReviewRow.effect` 上了（`R-11.4`）。'
+        '两处并存的下场是：某天新增一类高影响事实，界面仍按旧表画成「只披露」，'
+        '而没有任何东西会出声'),
     'LEGACY_STAGE5_MODES': '只用来识别并拒绝旧 deep/shallow 盘面，不是现役选项',
     # ── 分章（stage0 / stage1）的判据阈值与剥壳正则 ──
     'NONBODY_LEAD_STRIP': '正则。发过去等于请前端自己剥壳，而剥出来的 core 是所有长度阈值的输入',

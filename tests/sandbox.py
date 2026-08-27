@@ -74,8 +74,10 @@ def decide_global_review(box: 'Sandbox', *, actor: str = 'reviewer',
     """把这本书的 stage2 审阅面**逐条判 PASS** —— `s2` 审批闸的前置事实。
 
     ⚠⚠ 现役语料三本的审阅项**全是 `pending`**（从没有人做过决策），而 `s2` 要求
-    `global_review_status(...)` 的 `approved` 为真（当前 **且**逐条 PASS，见
-    `novel/orchestrator/approvals.py::_require_typed_gate_decision`）
+    `global_review_status(...)` 的 `approved` 为真（当前 **且** blocking 面逐条 PASS，见
+    `novel/orchestrator/approvals.py::_require_typed_gate_decision`）。
+    ⚠ 本函数逐条判 PASS **包含 disclosure 那三类**——那是充分条件，不是闸的口径；
+    闸只看 blocking（`contracts/invariants.py::review_effect_of`）
     ⇒ 不摆这条前置事实，`s2` 永远填不出，再由 `_GATE_REQUIREMENTS` 级联堵死
     `s4`→`s5`→`s6`→`s7`，表现成一批与「审阅决策」毫无字面关系的红。
     人工决策是本层被测行为的**输入**不是它的结论，摆它是前置事实不是绕守卫

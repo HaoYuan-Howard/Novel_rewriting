@@ -89,6 +89,19 @@
 2. `FAIL`：存在可指向的冲突、错抽或漏抽；先走 typed Stage2 编辑/重建，再生成新模板。不能用“已知问题”把 FAIL 当成披露放行。
 3. `UNVER`：证据不足以安全判断；如实保留并以 `stopped` 结束。Agent 代批权限不包括把未知改写成已通过。
 
+### blocking 与 disclosure 是两轴，不是两档优先级
+
+模板与 workpack **默认只出 blocking 面**（要整份加 `--review-scope all`）。裁剪的是阅读
+范围，不是评测面：没进输出的 `disclosure` 项在盘上仍是 `pending`，仍逐条出现在 `inbox`
+（`delivery_effect='disclosure'`）与终审包。
+
+- `blocking`（当前 95/145 那一类的口径）：判错会让下游造出一本假书 ⇒ 逐项 PASS 才开 Stage4。
+- `disclosure`（`name_distinctiveness` / `address_context` / `fate` 三类）：不挡 Stage4，
+  但**不许自动 PASS、不许从终审包消失**。终审包必须逐条列出它们的 subject_path 与状态。
+
+⚠ 「不阻断」一旦顺手变成「不列出」，这次分级就成了一次静默删审计。分类只从
+`contracts/invariants.py::review_effect_of` 取，本 skill 不复制第二张表。
+
 “重叠”不放宽同书写盘互斥：blueprint producer、`--review-decisions` 与 typed global edit 不并发改文件。
 可以在 blueprint 运行中完成阅读与 decisions 草稿，等 producer 写盘结束再提交。若复核发现 global
 需要 typed edit，先修 global；改变实际人物称名候选 inventory 会让 blueprint stale，必须重建，
@@ -97,7 +110,7 @@
 
 提交 `--review-decisions` 后重新读取当前 review，并运行 Stage2 唯一显式复检
 `stage2.blueprint --check-only`：只有 global 与 blueprint 均 current、联合 HARD 通过、评测面 current
-且每一项都是 PASS，才可运行 Stage4A 或任何后续付费/组装/下载路径。CLI、API、队列、组装与下载
+且**每一个 blocking 项**都是 PASS，才可运行 Stage4A 或任何后续付费/组装/下载路径。CLI、API、队列、组装与下载
 会重复执行同一道硬闸；外层 Agent `exit 0` 不会覆盖该结论。`FAIL` / `UNVER` / pending 仍全部阻断，
 人审只是从 blueprint 的串行前置移到 Stage4 前的汇合点，没有被删除。
 

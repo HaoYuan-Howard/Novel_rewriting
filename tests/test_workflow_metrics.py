@@ -186,6 +186,10 @@ def test_human_surface_keeps_items_and_decisions_apart(base: Path) -> None:
     human = W.collect(base, SID)['human']
     assert human['stage2_review_items'] == 2
     assert human['stage2_items_by_state'] == {'PASS': 1, 'pending': 1}
+    # 「多少项」与「人要点开多少张卡」是两个读数；分级只从生产落点取。
+    assert human['stage2_items_by_effect'] == {
+        'blocking': 1, 'disclosure': 1, 'unregistered': 0}
+    assert human['stage2_cards_by_effect']['blocking'] == 1
     assert human['stage2_decision_files'] == {'global_review_decisions_a.json': 1}
     assert human['stage4_structure_decisions'] == 2
     assert human['stage4_structure_modes'] == {'reconstruct': 1, 'retain': 1}

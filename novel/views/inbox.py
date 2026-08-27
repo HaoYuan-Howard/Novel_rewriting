@@ -44,7 +44,7 @@ import os
 import re
 
 from contracts.invariants import (
-    INBOX_KIND, NODES, STAGES, STOP_REWRITE_AFTER, slot_of,)
+    INBOX_KIND, NODES, STAGES, STOP_REWRITE_AFTER, review_effect_of, slot_of,)
 from contracts.rules import REGISTRY
 from contracts.schema.api import InboxDecision, InboxItem, InboxView
 from contracts.schema.evaluation import GlobalReview
@@ -52,6 +52,7 @@ from contracts.schema.report import CheckReport
 from contracts.schema.stage6 import Hook
 from contracts.schema.stage7 import NameMap
 from novel import paths, prov, wontfix
+from novel.quality.global_review import review_item_kind
 from novel.errors import ArtifactUnreadable, TerminalState, UpstreamMissing
 from novel.orchestrator.nodes import check_node
 from novel.orchestrator.state import readonly_ctx
@@ -206,10 +207,19 @@ def inbox_view(base: str | os.PathLike[str], sid: str) -> InboxView:
 
 
 def _classify(item: InboxItem) -> InboxItem:
-    """把正交两轴物化；不因“看起来像人工项”猜一份不存在的裁决。"""
+    """把正交两轴物化；不因“看起来像人工项”猜一份不存在的裁决。
+
+    ⚠ **这是 `delivery_effect` 的唯一物化口**，所以 stage2 复核项的分级也必须落在
+    这里，而不是在 `_verification_items` 里先填一次再被这里覆盖掉——那种形状
+    「填了但不生效」不会报错，只会静默恢复成旧口径。
+    分类本身仍只从 `review_effect_of` 取，本模块不复制第二张表；`item_id` 的文法
+    也只由 `review_item_kind` 反向读，不在这里现拆一次 `split(':')`。
+    """
     disclosure = (
         item.kind == 'human_only'
         or (item.kind == 'verification' and item.stage == 'stage6')
+        or (item.kind == 'verification' and item.stage == 'stage2'
+            and review_effect_of(review_item_kind(item.rule)) == 'disclosure')
     )
     return item.model_copy(update={
         'delivery_effect': 'disclosure' if disclosure else 'blocking',
@@ -443,7 +453,13 @@ def _report_items(
 
 
 def _verification_items(novel_dir, code: str) -> list[InboxItem]:
-    """TODO-24 可人工消解的全书评测项；通用 `unver` 不借机入列。"""
+    """TODO-24 可人工消解的全书评测项；通用 `unver` 不借机入列。
+
+    ⚠ **分级只改 `delivery_effect`，不改「在不在清单里」。** `disclosure` 的三类
+    （名字区分度 / 称谓场合 / 结局）不再挡 Stage4，正因为如此它们**必须**继续
+    逐条出现在这里与终审包——「不阻断」一旦顺手变成「不列出」，这次分级就成了
+    一次静默删审计。分类只从 `review_effect_of` 取，本模块不复制第二张表。
+    """
     store = ArtifactStore(readonly_ctx(novel_dir, 'stage2.global', code))
     if not store.exists(STAGE2_GLOBAL_REVIEW):
         return []
@@ -461,14 +477,17 @@ def _verification_items(novel_dir, code: str) -> list[InboxItem]:
             'UNVER': '证据不足（UNVER）',
         }[row.state]
         reason = f'；上次理由：{row.reason}' if row.reason else ''
+        scope = ('' if review_effect_of(row.kind) == 'blocking'
+                 else '（只披露，不挡 Stage4）')
         out.append(InboxItem(
             kind='verification', stage='stage2', chapter=None,
             rule=row.item_id,
-            what=f'{row.subject_path}：{state}{reason}',
+            what=f'{row.subject_path}：{state}{scope}{reason}',
             how=('在全局设定屏逐项或批量补 actor、理由与证据，按 subject_sha256 '
                  '提交 PASS/FAIL/UNVER；也可跑 '
-                 '`stage2.global --review-decisions <书内json>`；'
-                  'subject hash 已变的旧决策会被拒绝'),
+                 '`stage2.global --review-decisions <书内json>`'
+                 '（模板默认只出 blocking 面，要整份加 `--review-scope all`）；'
+                 'subject hash 已变的旧决策会被拒绝'),
             attention=('pending' if row.state == 'pending' else 'reviewed_retained'),
             decision=(None if row.state == 'pending' else InboxDecision(
                 actor=row.actor or '', reason=row.reason or '',

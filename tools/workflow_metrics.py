@@ -47,11 +47,12 @@ sys.stdout.reconfigure(encoding='utf-8')
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from contracts.artifacts import ARTIFACT_PATHS, BOOK_SCOPED_PATHS  # noqa: E402
-from contracts.invariants import STAGES                            # noqa: E402
+from contracts.invariants import STAGES, review_effect_of          # noqa: E402
 from contracts.schema import ARTIFACT_SPECS, artifact_key          # noqa: E402
 from novel import paths                                           # noqa: E402
 from novel.llm.ledger import audit_path, ledger_path              # noqa: E402
 from novel.orchestrator.beacon import read_events                 # noqa: E402
+from novel.quality.global_review import review_group_key          # noqa: E402
 from novel.stages.stage4.measure import structure_metrics_of      # noqa: E402
 
 #: 长串阈值。短串大多是 id 与 ref（`f01_02` / `b03_01`），它们重复本来就是设计目标；
@@ -398,12 +399,37 @@ def human_metrics(novel_dir: Path) -> dict[str, Any]:
         chapter.get('structure_decision') or {} for chapter in chapters
         if isinstance(chapter, dict)
     ]
+    # 分级与卡片键都只从生产落点取（`review_effect_of` / `review_group_key`），
+    # 本工具不复算一份。读旧盘时未登记的 kind 归 `unregistered`，不猜也不崩。
+    by_effect: dict[str, list[dict[str, Any]]] = {
+        'blocking': [], 'disclosure': [], 'unregistered': []}
+    for item in items:
+        try:
+            effect = review_effect_of(str(item.get('kind')))
+        except ValueError:
+            effect = 'unregistered'
+        by_effect[effect].append(item)
+
+    def cards(rows: list[dict[str, Any]]) -> int:
+        keys = set()
+        for row in rows:
+            try:
+                keys.add(review_group_key(str(row.get('subject_path'))))
+            except ValueError:
+                keys.add(f'unregistered:{row.get("kind")}')
+        return len(keys)
+
     return {
         'stage2_review_items': len(items),
         'stage2_items_by_kind': dict(sorted(Counter(
             str(item.get('kind')) for item in items).items())),
         'stage2_items_by_state': dict(sorted(Counter(
             str(item.get('state')) for item in items).items())),
+        # 「多少项」与「人要点开多少张卡」是两个读数，不合成一个。
+        'stage2_items_by_effect': {
+            effect: len(rows) for effect, rows in by_effect.items()},
+        'stage2_cards_by_effect': {
+            effect: cards(rows) for effect, rows in by_effect.items()},
         'stage2_decision_files': dict(sorted(decisions.items())),
         'stage4_structure_decisions': len(structure),
         'stage4_structure_modes': dict(sorted(Counter(
@@ -577,6 +603,8 @@ def render(report: dict[str, Any]) -> str:
     out += [
         '## 人审面', '',
         f'- Stage2 复核项 {human["stage2_review_items"]}：{human["stage2_items_by_kind"]}',
+        f'- 分交付效果：项 {human["stage2_items_by_effect"]} · '
+        f'人审卡 {human["stage2_cards_by_effect"]}',
         f'- Stage2 决定文件：{human["stage2_decision_files"]}',
         f'- Stage4 结构章决定 {human["stage4_structure_decisions"]}：'
         f'{human["stage4_structure_modes"]}', '',

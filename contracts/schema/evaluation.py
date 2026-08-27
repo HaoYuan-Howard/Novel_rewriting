@@ -19,6 +19,7 @@ from typing import Literal
 
 from pydantic import Field, model_validator
 
+from contracts.invariants import GLOBAL_REVIEW_KINDS
 from contracts.schema.base import StrictModel
 from contracts.schema.common import FreeProvenance
 
@@ -98,20 +99,16 @@ class GlobalReviewItem(StrictModel):
     #: 「这个主体没人审」**——这份枚举就是 `R-2.16` 那道硬闸的评测面，而下游全部
     #: 付费执行都压在它上面。与 `novel/quality/global_review.py::enumerate_required`
     #: 必须同时改：那边枚举得出、这边收不下，是落盘时才炸的一对。
-    kind: Literal[
-        # `known_by` 只为读取存量 global_review v1 保留；当前 grounding 的
-        # knowledge_events 有时间与逐事件证据，生产面改用 `knowledge_event`。
-        'world_rule_version', 'secret', 'reveal', 'known_by', 'knowledge_event',
-        'name_distinctiveness', 'address_context', 'world_rule_kind',
-        'character_set_complete', 'relation_set_complete',
-        'world_rule_set_complete', 'secret_set_complete',
-        # 2026-08-23 补齐：此前评测面只有上面九类，于是 `role` 泄结局、`setting`
-        # 泄底、relations 这条第二剧透通道、以及两道下发闸门的前件 `setup_chapters`
-        # **全部无人裁决**。粒度按「能不能被单独修正」分：前五个事实逐条，
-        # 后两个是这一层自己声明的解读层，分组整体裁决。
-        'role', 'fate', 'relation', 'setting_fact', 'secret_setup',
-        'conflict_partition', 'arc_analysis',
-    ]
+    #: ⚠ 取值面已收到 `contracts/invariants.py::GLOBAL_REVIEW_KINDS`——那里同时
+    #: 住着 `review_effect_of`（blocking / disclosure），两者必须同进同出：
+    #: 一个 kind 存在却没有交付效果，等于一条谁也说不清该不该拦的复核项。
+    #: `known_by` 只为读取存量 global_review v1 保留；当前 grounding 的
+    #: knowledge_events 有时间与逐事件证据，生产面改用 `knowledge_event`。
+    #: 2026-08-23 补齐 `role` / `fate` / `relation` / `setting_fact` /
+    #: `secret_setup` / `conflict_partition` / `arc_analysis`：此前评测面只有九类，
+    #: 于是结局旁路、setting 泄底、relations 这条第二剧透通道与两道下发闸门的前件
+    #: **全部无人裁决**。粒度按「能不能被单独修正」分。
+    kind: Literal[GLOBAL_REVIEW_KINDS]
     subject_path: str = Field(min_length=1)
     subject_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
     state: GlobalReviewState

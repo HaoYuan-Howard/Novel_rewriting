@@ -411,17 +411,25 @@ function freshGlobalReview(): GlobalReviewResponse {
     decided_at: '2026-08-16T00:00:00+00:00',
     reason: 'mock 样本已经逐项核对',
   }
+  // ⚠ `effect` / `group_key` 由服务端派生，mock 只是**转录**后端会下发的值——
+  //   这里不许现算一份分类逻辑，那正是屏幕侧被禁止的第二个判官。
   return {
     source_sha256: MOCK_SHA.source,
     current_subject_sha256: MOCK_SHA.source,
     current: true,
     approved: true,
+    effect_counts: {
+      blocking: { pending: 0, PASS: 4, FAIL: 0, UNVER: 0 },
+      disclosure: { pending: 1, PASS: 0, FAIL: 0, UNVER: 0 },
+    },
     items: [
       {
         item_id: 'character_set_complete:entities.characters:' + MOCK_SHA.characters.slice(0, 12),
         kind: 'character_set_complete',
         subject_path: 'entities.characters',
         subject_sha256: MOCK_SHA.characters,
+        effect: 'blocking',
+        group_key: 'set:characters',
         ...decided,
       },
       {
@@ -429,6 +437,8 @@ function freshGlobalReview(): GlobalReviewResponse {
         kind: 'relation_set_complete',
         subject_path: 'entities.relations',
         subject_sha256: MOCK_SHA.relations,
+        effect: 'blocking',
+        group_key: 'set:relations',
         ...decided,
       },
       {
@@ -436,6 +446,8 @@ function freshGlobalReview(): GlobalReviewResponse {
         kind: 'world_rule_set_complete',
         subject_path: 'canon.world_rules',
         subject_sha256: MOCK_SHA.rules,
+        effect: 'blocking',
+        group_key: 'set:world_rules',
         ...decided,
       },
       {
@@ -443,7 +455,23 @@ function freshGlobalReview(): GlobalReviewResponse {
         kind: 'secret_set_complete',
         subject_path: 'canon.secrets',
         subject_sha256: MOCK_SHA.secrets,
+        effect: 'blocking',
+        group_key: 'set:secrets',
         ...decided,
+      },
+      // 一条**未决的披露项**：它不挡 Stage4，但界面必须把它画出来。
+      {
+        item_id: 'fate:entities.characters.char_001.fate:' + MOCK_SHA.characters.slice(0, 12),
+        kind: 'fate',
+        subject_path: 'entities.characters.char_001.fate',
+        subject_sha256: MOCK_SHA.characters,
+        effect: 'disclosure',
+        group_key: 'character:char_001',
+        state: 'pending',
+        evidence: [],
+        actor: null,
+        decided_at: null,
+        reason: null,
       },
     ],
   }

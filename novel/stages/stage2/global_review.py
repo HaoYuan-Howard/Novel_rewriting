@@ -4,13 +4,16 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
+from typing import Final
 
 from contracts.artifacts import (
     STAGE1_MAIN_TEXT, STAGE2_CHAPTER_BLUEPRINTS, STAGE2_GLOBAL_GROUNDING,
     STAGE2_GLOBAL_REVIEW, STAGE2_GLOBAL_REVIEW_DECISIONS,
 )
+from contracts.invariants import review_effect_of
 from contracts.schema.evaluation import (
     EvidenceRef, GlobalReview, GlobalReviewDecision, GlobalReviewDecisionSet,
+    GlobalReviewItem,
 )
 from contracts.schema import encode_artifact
 from contracts.schema.stage2 import GlobalGrounding
@@ -24,7 +27,9 @@ from novel.errors import (
     TerminalState, UpstreamMissing, UpstreamStale, UpstreamUnproven,
 )
 from novel.orchestrator.jobs import service_dir
-from novel.quality.global_review import apply_decision_set, require_current, review_status
+from novel.quality.global_review import (
+    apply_decision_set, require_current, review_effect_counts, review_status,
+)
 from novel.run import RunContext
 from novel.store import ArtifactStore
 
@@ -33,12 +38,35 @@ REL = STAGE2_GLOBAL_REVIEW
 DEFAULT_DECISIONS = STAGE2_GLOBAL_REVIEW_DECISIONS
 
 
-def review_template(ctx: RunContext) -> GlobalReviewDecisionSet:
+#: `--review-scope` 的取值面与默认值。默认只出能挡 Stage4 的那一面：
+#: 人的注意力是稀缺资源，把 95 项高影响事实和 50 项披露项混成一张 145 行的表，
+#: 结果是两边都读得潦草。⚠ **它只裁剪只读输出，不裁剪评测面**——
+#: `global_review.json` 仍枚举全部主体，`current` 仍要求集合完全一致。
+REVIEW_SCOPES: Final = ('blocking', 'all')
+DEFAULT_REVIEW_SCOPE: Final = 'blocking'
+
+
+def _scoped_items(items: list[GlobalReviewItem], scope: str) -> list[GlobalReviewItem]:
+    if scope not in REVIEW_SCOPES:
+        raise TerminalState(
+            f'--review-scope 只接受 {list(REVIEW_SCOPES)}，收到 {scope!r}')
+    if scope == 'all':
+        return list(items)
+    return [item for item in items if review_effect_of(item.kind) == 'blocking']
+
+
+def review_template(
+    ctx: RunContext, *, scope: str = DEFAULT_REVIEW_SCOPE,
+) -> GlobalReviewDecisionSet:
     """返回绑定当前逐项 hash/evidence 的安全人工复核骨架。
 
     每一项默认 `UNVER`，所以原样应用也**不会打开 s2 gate**；执行者只需把已核实项
     改成 PASS/FAIL、替换 actor/reason，不再手抄乐观锁与证据坐标。骨架读取正式
     `global_review.json`，不从 grounding 重拼第二份 item 身份。
+
+    ⚠ `scope='blocking'`（默认）只交出能挡 Stage4 的那一面。**这不会让披露项被
+    自动 PASS**：没进模板的项在盘上仍是 `pending`，仍逐条出现在 inbox 与终审包。
+    要整份就传 `--review-scope all`。
     """
     store = ArtifactStore(ctx)
     if not store.exists(REL):
@@ -52,13 +80,15 @@ def review_template(ctx: RunContext) -> GlobalReviewDecisionSet:
             state='UNVER',
             reason='待人工核验：请替换本句并将已核实项改为 PASS 或 FAIL',
             evidence=list(item.evidence),
-        ) for item in current.items],
+        ) for item in _scoped_items(current.items, scope)],
     )
 
 
-def review_template_json(ctx: RunContext) -> str:
+def review_template_json(
+    ctx: RunContext, *, scope: str = DEFAULT_REVIEW_SCOPE,
+) -> str:
     """stdout 用注册表版本化 JSON；相对/绝对/API 三条输入路吃同一形状。"""
-    payload = review_template(ctx).model_dump(mode='json', by_alias=True)
+    payload = review_template(ctx, scope=scope).model_dump(mode='json', by_alias=True)
     return json.dumps(
         encode_artifact(DEFAULT_DECISIONS, payload),
         ensure_ascii=False, indent=2, sort_keys=True)
@@ -193,8 +223,14 @@ _NO_FORMAL_EVIDENCE_KINDS = frozenset({
 })
 
 
-def review_workpack(ctx: RunContext) -> dict[str, object]:
-    """只读人工核验材料；精确命中是证据候选，不是自动裁决。"""
+def review_workpack(
+    ctx: RunContext, *, scope: str = DEFAULT_REVIEW_SCOPE,
+) -> dict[str, object]:
+    """只读人工核验材料；精确命中是证据候选，不是自动裁决。
+
+    ⚠ 与 `review_template` 同一条 `scope` 纪律：默认只出 blocking 面，
+    裁剪的是**阅读范围**而不是评测面；披露项没进 workpack 不等于被放行。
+    """
     store = ArtifactStore(ctx)
     grounding = store.read_own(GlobalGrounding, STAGE2_GLOBAL_GROUNDING)[0]
     review = store.read_own(GlobalReview, REL)[0]
@@ -208,7 +244,7 @@ def review_workpack(ctx: RunContext) -> dict[str, object]:
     ]
     chapters = {chapter.chapter_ordinal: chapter for chapter in main.root}
     rows: list[dict[str, object]] = []
-    for item in review.items:
+    for item in _scoped_items(review.items, scope):
         subject_path = item.subject_path
         lookup_path = subject_path
         if item.kind == 'address_context' and lookup_path.endswith('.context'):
@@ -304,8 +340,12 @@ def review_workpack(ctx: RunContext) -> dict[str, object]:
     }
 
 
-def review_workpack_json(ctx: RunContext) -> str:
-    return json.dumps(review_workpack(ctx), ensure_ascii=False, indent=2, sort_keys=True)
+def review_workpack_json(
+    ctx: RunContext, *, scope: str = DEFAULT_REVIEW_SCOPE,
+) -> str:
+    return json.dumps(
+        review_workpack(ctx, scope=scope),
+        ensure_ascii=False, indent=2, sort_keys=True)
 
 
 def apply_file(ctx: RunContext, decision_path: str = '') -> GlobalReview:
@@ -361,7 +401,7 @@ def apply_file(ctx: RunContext, decision_path: str = '') -> GlobalReview:
 
 
 def is_approved(ctx: RunContext, review: GlobalReview) -> bool:
-    """Bind approval to the complete, current Stage2 subject."""
+    """Bind approval to the complete, current Stage2 subject (blocking surface)."""
     grounding = ArtifactStore(ctx).read_own(
         GlobalGrounding, STAGE2_GLOBAL_GROUNDING)[0]
     return review_status(
@@ -369,7 +409,12 @@ def is_approved(ctx: RunContext, review: GlobalReview) -> bool:
 
 
 def approval_status(ctx: RunContext) -> tuple[bool, bool, dict[str, int]]:
-    """返回 ``(评测面当前, 全部PASS, 四态计数)``；闸门与终验共用这一处。"""
+    """返回 ``(评测面当前, blocking 面逐项 PASS, 计数)``；闸门与终验共用这一处。
+
+    ⚠ 计数是**两轴并存**的一张平表，不是两张：四个裸状态键（全书合计，供旧消费方
+    与终审包读）加上 ``blocking.*`` / ``disclosure.*`` 八个分效果键。合计与分效果
+    **不互相推导**——把 disclosure 从合计里减掉，就再也说不清「一共有多少项被人看过」。
+    """
     store = ArtifactStore(ctx)
     grounding = store.read_own(GlobalGrounding, STAGE2_GLOBAL_GROUNDING)[0]
     review = store.read_own(GlobalReview, REL)[0]
@@ -378,6 +423,8 @@ def approval_status(ctx: RunContext) -> tuple[bool, bool, dict[str, int]]:
     counts = {state: 0 for state in ('pending', 'PASS', 'FAIL', 'UNVER')}
     for item in review.items:
         counts[item.state] += 1
+    for effect, states in review_effect_counts(review).items():
+        counts.update({f'{effect}.{state}': n for state, n in states.items()})
     return current, approved, counts
 
 
@@ -405,11 +452,14 @@ def require_approved(ctx: RunContext) -> None:
     current, approved, counts = approval_status(ctx)
     if not approved:
         raise ApprovalRequired(
-            'stage2 全局复核未打开：必须是当前完整评测面且逐项 PASS；'
-            f'current={current}，counts={counts}',
-            hint=('先运行 `stage2.global --emit-review-template`，逐项核验后用 '
+            'stage2 全局复核未打开：必须是当前完整评测面，且**全部 blocking 项**逐项 '
+            f'PASS；current={current}，counts={counts}',
+            hint=('先运行 `stage2.global --emit-review-template`（默认只出 blocking 面，'
+                  '要整份加 `--review-scope all`），逐项核验后用 '
                   '`stage2.global --review-decisions <书内json>` 提交；'
-                  'FAIL/UNVER 不会被 Agent 退出码覆盖'))
+                  'FAIL/UNVER 不会被 Agent 退出码覆盖。'
+                  'disclosure 项（名字区分度 / 称谓场合 / 结局）不挡门，'
+                  '但仍必须在 inbox 与终审包里逐条披露，不许自动 PASS'))
 
     global_freshness = store.freshness(STAGE2_GLOBAL_GROUNDING)
     if global_freshness.state == 'stale':

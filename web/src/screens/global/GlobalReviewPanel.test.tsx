@@ -14,6 +14,10 @@ const review: GlobalReviewResponse = {
   current_subject_sha256: 'd'.repeat(64),
   current: true,
   approved: false,
+  effect_counts: {
+    blocking: { pending: 1, PASS: 0, FAIL: 1, UNVER: 1 },
+    disclosure: { pending: 1, PASS: 0, FAIL: 0, UNVER: 0 },
+  },
   items: [
     {
       item_id: 'rules',
@@ -25,6 +29,8 @@ const review: GlobalReviewResponse = {
       actor: null,
       decided_at: null,
       reason: null,
+      effect: 'blocking',
+      group_key: 'set:world_rules',
     },
     {
       item_id: 'secrets',
@@ -36,6 +42,8 @@ const review: GlobalReviewResponse = {
       actor: 'reviewer-old',
       decided_at: '2026-08-16T00:00:00Z',
       reason: '疑似漏抽',
+      effect: 'blocking',
+      group_key: 'set:secrets',
     },
     {
       item_id: 'known-by',
@@ -47,6 +55,21 @@ const review: GlobalReviewResponse = {
       actor: 'reviewer-old',
       decided_at: '2026-08-16T00:00:00Z',
       reason: '证据不足',
+      effect: 'blocking',
+      group_key: 'secret:secret_01',
+    },
+    {
+      item_id: 'fate',
+      kind: 'fate',
+      subject_path: 'entities.characters.char_001.fate',
+      subject_sha256: hashes[2],
+      state: 'pending',
+      evidence: [],
+      actor: null,
+      decided_at: null,
+      reason: null,
+      effect: 'disclosure',
+      group_key: 'character:char_001',
     },
   ],
 }
@@ -127,7 +150,7 @@ describe('GlobalReviewPanel', () => {
     expect(await screen.findByText('canon.world_rules')).toBeVisible()
     expect(screen.getByText('canon.secrets')).toBeVisible()
     expect(screen.getByText('canon.secrets.secret_01.character_known_by')).toBeVisible()
-    expect(screen.getByText('pending')).toBeVisible()
+    expect(screen.getAllByText('pending').length).toBeGreaterThan(0)
     expect(screen.getAllByText('FAIL').some((element) => element.tagName === 'SPAN')).toBe(true)
     expect(screen.getAllByText('UNVER').some((element) => element.tagName === 'SPAN')).toBe(true)
     expect(screen.getByText('Stage4 保持关闭')).toBeVisible()
@@ -182,5 +205,45 @@ describe('GlobalReviewPanel', () => {
     renderRoute(<GlobalReviewPanel sid="book-1" />)
     expect(await screen.findByText(/盘上复核没有绑定当前完整 GlobalGrounding/)).toBeVisible()
     expect(screen.getByRole('button', { name: /提交 0 项复核/ })).toBeDisabled()
+  })
+})
+
+describe('Stage2 复核卡片', () => {
+  it('按主体成卡、阻断卡在前，且分级只读服务端下发的那一格', async () => {
+    vi.spyOn(api, 'getGlobalReview').mockResolvedValue(review)
+    vi.spyOn(api, 'getEnums').mockResolvedValue(enums)
+    renderRoute(<Harness />)
+
+    const cards = await screen.findAllByLabelText(/^复核卡 /)
+    // 能挡住 Stage4 的卡排在前面；只披露的那张不因此消失。
+    expect(cards.map((card) => card.getAttribute('aria-label'))).toEqual([
+      '复核卡 set:secrets',
+      '复核卡 set:world_rules',
+      '复核卡 secret:secret_01',
+      '复核卡 character:char_001',
+    ])
+    expect(screen.getByText('秘密时间线')).toBeVisible()
+    expect(screen.getByText('人物')).toBeVisible()
+    // 逐项徽标直接转录服务端的 effect，不在这里重算一份分类。
+    expect(screen.getAllByText('只披露')).toHaveLength(1)
+    expect(screen.getAllByText('阻断 Stage4')).toHaveLength(3)
+    expect(screen.getByText(/披露未决 1/)).toBeVisible()
+  })
+
+  it('卡片全选展开成逐项选择，仍允许单项撤销', async () => {
+    vi.spyOn(api, 'getGlobalReview').mockResolvedValue(review)
+    vi.spyOn(api, 'getEnums').mockResolvedValue(enums)
+    renderRoute(<Harness />)
+
+    await screen.findAllByLabelText(/^复核卡 /)
+    fireEvent.click(screen.getByLabelText('全选 secret:secret_01'))
+    const single = screen.getByLabelText(
+      '选择 canon.secrets.secret_01.character_known_by') as HTMLInputElement
+    expect(single.checked).toBe(true)
+
+    fireEvent.click(single)
+    expect(single.checked).toBe(false)
+    expect((screen.getByLabelText('全选 secret:secret_01') as HTMLInputElement).checked)
+      .toBe(false)
   })
 })

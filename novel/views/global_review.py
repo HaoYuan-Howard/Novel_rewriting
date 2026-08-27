@@ -2,13 +2,16 @@
 from __future__ import annotations
 
 from contracts.artifacts import STAGE2_GLOBAL_GROUNDING, STAGE2_GLOBAL_REVIEW
-from contracts.schema.api import GlobalReviewView
+from contracts.invariants import review_effect_of
+from contracts.schema.api import GlobalReviewRow, GlobalReviewView
 from contracts.schema.evaluation import GlobalReview
 from contracts.schema.stage2 import GlobalGrounding
 from novel import paths, prov
 from novel.errors import UpstreamMissing
 from novel.orchestrator import state
-from novel.quality.global_review import review_status
+from novel.quality.global_review import (
+    review_effect_counts, review_group_key, review_status,
+)
 from novel.store import ArtifactStore
 
 
@@ -28,5 +31,14 @@ def global_review_view(base: str, sid: str) -> GlobalReviewView:
         current_subject_sha256=subject,
         current=current,
         approved=approved,
-        items=review.items,
+        effect_counts=review_effect_counts(review),
+        # 两格由服务端派生后随行下发；界面不复制分类表，也不自己解析 subject_path。
+        items=[
+            GlobalReviewRow(
+                **item.model_dump(mode='json'),
+                effect=review_effect_of(item.kind),
+                group_key=review_group_key(item.subject_path),
+            )
+            for item in review.items
+        ],
     )

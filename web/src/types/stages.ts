@@ -427,6 +427,9 @@ export type GlobalReviewKind =
   | 'conflict_partition'
   | 'arc_analysis'
 
+/** Server-side verdict: does this item hold Stage4 closed, or is it audit-only? */
+export type GlobalReviewEffect = 'blocking' | 'disclosure'
+
 export interface GlobalReviewItem {
   item_id: string
   kind: GlobalReviewKind
@@ -437,6 +440,15 @@ export interface GlobalReviewItem {
   actor: string | null
   decided_at: string | null
   reason: string | null
+  /**
+   * Derived by the server. Never recompute it here: a local copy of the
+   * classification table becomes a second judge, and a newly added
+   * high-impact kind would keep rendering as audit-only with nothing
+   * making a sound.
+   */
+  effect: GlobalReviewEffect
+  /** Derived by the server; every item of one subject shares this key. */
+  group_key: string
 }
 
 export interface GlobalReviewResponse {
@@ -445,7 +457,10 @@ export interface GlobalReviewResponse {
   /** Hash recomputed from the current complete GlobalGrounding. */
   current_subject_sha256: string
   current: boolean
+  /** Blocking surface only — that is the Stage4 gate's own reading. */
   approved: boolean
+  /** `{effect: {state: n}}`; both key levels always present, zeros included. */
+  effect_counts: Record<GlobalReviewEffect, Record<GlobalReviewState, number>>
   items: GlobalReviewItem[]
 }
 

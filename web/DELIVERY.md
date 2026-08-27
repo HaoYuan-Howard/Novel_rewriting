@@ -241,6 +241,15 @@ Stage4 屏另有 `screens/stage4/StructureApprovalPanel`：它替代通用 `Gate
 `structure_approval_decisions`；`request_replan` 不顺手拉起重规划，写作授权仍只在 Stage5
 的付费确认流中单独授予。
 
+全局屏的 `screens/global/GlobalReviewPanel` 按**主体**成卡：人读这一面的方式是
+「这个人物 / 这条关系 / 这条秘密的时间线」，不是一张 145 行的表。收敛键
+`group_key` 与交付效果 `effect` **都由服务端随行下发**（`R-2.22`），屏幕侧只负责摆
+——本地复制一份分类表就是第二个判官，某天新增一类高影响事实，界面仍会把它画成
+「只披露」而没有任何东西出声。能挡住 Stage4 的卡排在前面，只披露的卡**不因此消失**；
+卡片全选只是把逐项选择一次勾上，提交时仍展开成逐项 hash-bound decision，
+允许单项撤销，且任何路径都不会自动 `PASS`。顶部计数直接读
+`effect_counts`，不在前端从 `items` 重算一份。
+
 notice 槽与快捷键不属于任何一屏：`useChrome().notify(text)` 推一条瞬态通知
 （写回成功 / 已复制之类的一句话反馈），AppShell 在右下角渲染，约 3s 自消、最多堆 3 条；
 `useHotkeys` 挂在 AppShell，管全局 ←/→ 翻章与 Esc（见下「快捷键」）。

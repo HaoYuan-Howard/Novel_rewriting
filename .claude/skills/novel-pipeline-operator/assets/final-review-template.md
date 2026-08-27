@@ -20,7 +20,8 @@
 ### 不需要用户重做的中间工作
 
 - stage0 剔除审阅：<agent 已代批结论>
-- Stage2 全局逐项复核：<current + PASS/FAIL/UNVER 分母；只有全 PASS 才可交付>
+- Stage2 全局逐项复核：<current + blocking/disclosure 各自的 PASS/FAIL/UNVER/pending 分母；
+  只有 blocking 面全 PASS 才可交付，disclosure 未决项在下面逐条披露>
 - Stage4 结构审批：<current subject + accept/request_replan 分母；只有逐章全 accept 才可写作>
 - stage6 开篇文案选择：<所选候选与理由>
 - stage7 人名映射审阅：<agent 已代批结论>
@@ -60,9 +61,12 @@
 
 - 决定面：<current true/false；总项数>
 - 四态分母：<PASS / FAIL / UNVER / pending>
+- 分效果分母：<blocking 四态 / disclosure 四态；两轴不合成一个数>
 - 核验材料：<workpack 路径/命令、精确命中分母与集合完整性反查>
 - typed 决策：<actor、逐项理由、subject SHA-256 乐观锁结果>
-- 结论：<all PASS / stopped；FAIL/UNVER 不得作为披露放行>
+- 结论：<blocking 面 all PASS / stopped；**blocking 面的 FAIL/UNVER 不得作为披露放行**>
+- 未决披露项：<逐条列出 disclosure 面上 pending/FAIL/UNVER 的 subject_path 与状态；
+  一条都没有就写「无」。它们不挡成书，但不许从这里消失>
 
 ### Stage4 structure approval
 

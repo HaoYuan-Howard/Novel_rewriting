@@ -599,13 +599,16 @@ def _run_stage2(ctx: RunContext, flags: list[str]) -> int:
     tokens = set(N.flag_tokens(flags))
 
     if ctx.node == 'stage2.global':
-        if '--emit-review-template' in tokens:
+        if '--emit-review-template' in tokens or '--emit-review-workpack' in tokens:
             from novel.stages.stage2 import global_review
-            print(global_review.review_template_json(ctx))
-            return X.OK
-        if '--emit-review-workpack' in tokens:
-            from novel.stages.stage2 import global_review
-            print(global_review.review_workpack_json(ctx))
+            # 默认只出 blocking 面。裁剪的是**阅读范围**，不是评测面：没进输出的
+            # 披露项在盘上仍是 pending，仍逐条进 inbox 与终审包。
+            scope = (_valued(flags, '--review-scope')
+                     or global_review.DEFAULT_REVIEW_SCOPE)
+            if '--emit-review-template' in tokens:
+                print(global_review.review_template_json(ctx, scope=scope))
+            else:
+                print(global_review.review_workpack_json(ctx, scope=scope))
             return X.OK
         if '--revalidate' in tokens:
             promoted, report = extract.run_revalidate(

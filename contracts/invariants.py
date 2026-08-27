@@ -721,6 +721,63 @@ WORLD_RULE_KINDS: Final = (
 #: 本表没有那个形状（没有从它派生的分数），所以不必登记为不发。
 BARE_PRONOUNS: Final = ('我', '你', '他', '她', '它', '咱')
 
+#: ── Stage2 全局复核项：取值面与**交付效果**分级 ────────────────────────────
+#:
+#: 【为什么要分级】旧口径是「145 项全部 PASS 才开 Stage4」。它把两件事压成一件：
+#: 「这条事实错了会让下游造出一本假书」与「这条读起来不够好」。实测那一本 145 项里
+#: **50 项属于后者**——名字够不够独特、称谓场合、结局措辞——它们既不下发写手，
+#: 也另有 naming / Stage7 改名审批 / 恒等检查在守。让它们阻断，等于用一道无法自动
+#: 判定的闸把整条链锁死，而真正的高影响事实混在同一堆里得不到应有的注意力。
+#:
+#: ⚠ **分级不是删审计。** `disclosure` 的项一条不少地留在 `global_review.json`、
+#: 留在 inbox、留在终审包；它们只是不再拦 Stage4。**不许自动 PASS**。
+#: ⚠ **加一个 kind 必须同时选一边**：`review_effect_of` 对未登记 kind 关闭式失败，
+#: 而不是给一个「默认 disclosure」——默认放行是这张表唯一不能有的方向。
+GLOBAL_REVIEW_KINDS: Final = (
+    'world_rule_version', 'secret', 'reveal', 'known_by', 'knowledge_event',
+    'name_distinctiveness', 'address_context', 'world_rule_kind',
+    'character_set_complete', 'relation_set_complete',
+    'world_rule_set_complete', 'secret_set_complete',
+    'role', 'fate', 'relation', 'setting_fact', 'secret_setup',
+    'conflict_partition', 'arc_analysis',
+)
+
+#: 只披露、不阻断的那三类。**它是白名单，其余一律 blocking**（见下面的函数）。
+#:
+#: · `name_distinctiveness`：名字够不够独特是改名质量问题，`novel/core/naming.py`
+#:   与 Stage7 的人名表审批 + 恒等检查已经在守，而它判错不会造出假剧情。
+#: · `address_context`：称谓用在什么场合同样受 naming 约束，且是措辞层。
+#: · `fate`：**本来就不下发写手**——它是剧透面，Stage4/5 的 packet 里没有它。
+#:
+#: ⚠ 这三条的 P1→P2 窗口风险由「继续披露」承接：它们不得从审计面消失，
+#: inbox 与终审包必须逐条列出，否则「不阻断」就变成了「没人看」。
+GLOBAL_REVIEW_DISCLOSURE_KINDS: Final = (
+    'name_distinctiveness', 'address_context', 'fate',
+)
+
+#: 复核项对**交付**的效果。两个取值与 `InboxDeliveryEffect` 同名同义，不另造第三套词。
+GLOBAL_REVIEW_EFFECTS: Final = ('blocking', 'disclosure')
+
+
+def review_effect_of(kind: str) -> str:
+    """一个复核项该不该拦下游。**全仓唯一的分类落点。**
+
+    ⚠ **未登记的 kind 当场炸，不给默认值。** 这张表的失败方向是「新加一类高影响
+    事实被静默放行」，所以它必须是白名单 + 关闭式：加 kind 的人被强制选一边。
+    ⚠ legacy `known_by`（只为读存量 v1 review 保留）保守按 `blocking` 读：
+    读不准的历史项宁可挡住，也不替它开门。
+    """
+    if kind not in GLOBAL_REVIEW_KINDS:
+        raise ValueError(
+            f'未登记的 stage2 复核项 kind：{kind!r}。'
+            f'加一类必须同时在 GLOBAL_REVIEW_KINDS 与（若只披露）'
+            f'GLOBAL_REVIEW_DISCLOSURE_KINDS 里登记，没有默认值')
+    return 'disclosure' if kind in GLOBAL_REVIEW_DISCLOSURE_KINDS else 'blocking'
+
+
+assert set(GLOBAL_REVIEW_DISCLOSURE_KINDS) <= set(GLOBAL_REVIEW_KINDS)
+assert len(set(GLOBAL_REVIEW_KINDS)) == len(GLOBAL_REVIEW_KINDS)
+
 #: TODO-25 的唯一机器契约。它描述的是显示投影，不是访问控制：服务端响应仍含完整数据。
 #: 后端发布器、前端 adapter、Screen 与 mock 都消费这一个结构；隐藏路径和承诺不再散落成文案。
 SPOILER_DISCLOSURE: Final = {
@@ -1364,6 +1421,11 @@ VALUED_FLAGS: Final = {
     '--validate-edit': '要预检的 stage7 人工编辑路径（与 --apply-edit 同路径规则，不写盘）',
     '--apply-edit-plan': '审校台生成的 stage0 编辑计划路径（正文 + 剔除账 + 乐观锁）',
     '--review-decisions': 'stage2/global_review 的人工决策集（相对当前书目录）',
+    # ⚠ 它只裁剪**只读输出面**，不裁剪评测面本身：`global_review.json` 仍枚举全部
+    #   145 类主体，`current` 仍要求集合完全一致。默认 `blocking` 是为了把人的注意力
+    #   放在真能挡住成书的那 95 项上；`all` 一格不少地交出整份，供审计与终审包使用。
+    '--review-scope': ('只读复核输出的范围：`blocking`（默认，只出能挡 Stage4 的项）'
+                       '或 `all`（整份评测面）。它不改评测面，也不改任何判定'),
     '--apply-candidate-plan': '审校台生成的 stage0 候选裁决（采纳 / 否掉整版 + 乐观锁）',
     '--actor': '人工决定的自报身份（不是认证身份）',
     '--reason': '人工决定的非空理由',
@@ -1592,6 +1654,7 @@ NODES: Final[dict[str, NodeSpec]] = {
                                          '--revalidate',
                                          '--apply-edit', '--review-decisions',
                                          '--emit-review-template', '--emit-review-workpack',
+                                         '--review-scope',
                                          '--actor', '--reason', '--response-repair'),
                                  produces=(artifact_paths.STAGE2_GLOBAL_GROUNDING,
                                            artifact_paths.STAGE2_GLOBAL_REVIEW)),
