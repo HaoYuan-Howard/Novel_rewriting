@@ -72,7 +72,8 @@ EVIDENCE_BIND_SYS = """\
 场景顺序、事实分组、goal、retain/reconstruct、变化声明、purpose、role、delivery、transition 或 weight。
 
 candidate_sha256 必须逐字回显。若全部候选场都能在本章证据内执行，返回 status=bound，并且每个候选场
-恰好绑定一次、每条必须材料恰好落一次、stage 引用来自本章关闭式目录。若任何一场无法在不改
+恰好绑定一次、每条必须材料恰好落一次、stage 引用来自本章关闭式目录；此时 reason_kind、reason、
+evidence_refs 三项必须全部为 null。若任何一场无法在不改
 候选结构的前提下成立，返回 status=infeasible，给出关闭式 reason_kind、具体理由和非空 evidence_refs；
 不得返回一份悄悄重规划或只绑定一半的候选。只输出 JSON。"""
 
@@ -87,9 +88,11 @@ EVIDENCE_BIND_HINT: dict[str, Any] = {
             'stage_refs': ['b01_01'],
         }],
     }],
-    'reason_kind': 'causal_conflict|stage_conflict|material_conflict|future_leak|insufficient_evidence|null',
-    'reason': '不可行理由|null',
-    'evidence_refs': ['b01_01'] ,
+    # ⚠ 示例三项都写 null：旧示例给的是一条**非空** evidence 数组，模型照抄成
+    #   `bound` 下的空数组，于是一次整书 B 相白重出。示例形态就是契约的一部分。
+    'reason_kind': None,
+    'reason': None,
+    'evidence_refs': None,
 }
 
 

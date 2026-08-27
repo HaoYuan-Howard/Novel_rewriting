@@ -452,6 +452,22 @@ class EvidenceBindingResponse(StrictModel):
     reason: str | None = Field(default=None, min_length=1)
     evidence_refs: list[str] | None = None
 
+    @model_validator(mode='before')
+    @classmethod
+    def _empty_bound_evidence_is_the_same_as_absent(cls, value: object) -> object:
+        """`bound` 下的空 `evidence_refs` 数组与缺省同义，确定性收成 `null`。
+
+        ⚠ **只收空数组这一种。** 非空的 evidence 在 `bound` 下仍是「夹带 infeasible
+        理由」，照旧红——那条闸防的是模型一边说能绑定、一边偷偷给不可行证据。
+        空数组不携带任何这样的语义，却让整书 B 相白重出一次。
+        `infeasible` 一侧一个字不动：它的空数组正是「没给证据」，必须继续红。
+        """
+        if not isinstance(value, dict) or value.get('status') != 'bound':
+            return value
+        if value.get('evidence_refs') != []:
+            return value
+        return {**value, 'evidence_refs': None}
+
     @model_validator(mode='after')
     def _status_has_exact_payload(self) -> EvidenceBindingResponse:
         if self.status == 'bound':

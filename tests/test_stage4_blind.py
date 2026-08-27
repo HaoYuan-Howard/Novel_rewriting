@@ -532,3 +532,28 @@ def test_declared_change_kinds_are_canonicalized_instead_of_rejected():
     decision['declared_change_kinds'] = ['fact_grouping', 'fact_grouping']
     with pytest.raises(ValidationError, match='至少两类'):
         BlindPlanResponse.model_validate(candidate)
+
+
+def test_bound_tolerates_an_empty_evidence_array_but_not_a_populated_one():
+    """`bound` 下的空 evidence 数组与缺省同义；非空的仍然是夹带，照旧红。
+
+    ⚠ `infeasible` 一侧一个字不动——那里的空数组正是「没给证据」。
+    """
+    compiled, _mapping, _catalog = _compiled()
+    payload = {
+        **_raw_bindings(compiled),
+        'reason_kind': None, 'reason': None, 'evidence_refs': [],
+    }
+    parsed = EvidenceBindingResponse.model_validate(payload)
+    assert parsed.evidence_refs is None
+
+    with pytest.raises(ValidationError, match='不得夹带'):
+        EvidenceBindingResponse.model_validate({**payload, 'evidence_refs': ['b01_01']})
+
+    with pytest.raises(ValidationError, match='非空 evidence_refs'):
+        EvidenceBindingResponse.model_validate({
+            'status': 'infeasible',
+            'candidate_sha256': candidate_subject_sha256(compiled),
+            'chapters': None, 'reason_kind': 'future_leak',
+            'reason': '候选场景只能靠未来章证据成立。', 'evidence_refs': [],
+        })
