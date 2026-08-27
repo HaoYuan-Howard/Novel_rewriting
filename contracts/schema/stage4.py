@@ -86,11 +86,32 @@ class StructureDecision(StrictModel):
 
 
 class BlindStructureDecision(StrictModel):
-    """Stage4A 只声明意图；实际变化由最终计划现场复算。"""
+    """Stage4A 只声明意图；实际变化由最终计划现场复算。
+
+    ⚠ **`declared_change_kinds` 是集合，不是序列。** 去重与排序是代码本来就精确
+    知道的事（判据：代码知道的别去问模型），把它判成响应违约，代价是**一次全书
+    重出**——Stage4A 是本仓最贵、最容易空正文的那一次调用。因此这里在 `before`
+    阶段先做确定性归一，`after` 的 canonical 断言随即变成一条**永远不该红的
+    后置条件**：它仍留着，因为人工/历史字节仍走同一个模型，而归一只接受
+    「全部取值都合法」的输入，非法枚举照旧原样交给 pydantic 报错。
+    """
 
     mode: Literal[STRUCTURE_MODES]
     reason: str = Field(min_length=1)
     declared_change_kinds: list[Literal[STRUCTURE_CHANGE_KINDS]]
+
+    @model_validator(mode='before')
+    @classmethod
+    def _canonicalize_declared_change_kinds(cls, value: object) -> object:
+        if not isinstance(value, dict):
+            return value
+        raw = value.get('declared_change_kinds')
+        if not isinstance(raw, list) or any(
+                item not in STRUCTURE_CHANGE_KINDS for item in raw):
+            return value
+        order = {name: index for index, name in enumerate(STRUCTURE_CHANGE_KINDS)}
+        return {**value,
+                'declared_change_kinds': sorted(set(raw), key=order.__getitem__)}
 
     @model_validator(mode='after')
     def _declared_decision_is_canonical(self) -> BlindStructureDecision:

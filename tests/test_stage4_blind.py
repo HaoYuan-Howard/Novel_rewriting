@@ -504,3 +504,31 @@ def test_infeasible_b_is_a_typed_terminal_and_never_partially_compiles():
     }).model_dump(mode='json')
     with pytest.raises(BlindPlanError, match='infeasible 是正式终态'):
         merge_evidence_bindings(compiled, response, catalog)
+
+
+def test_declared_change_kinds_are_canonicalized_instead_of_rejected():
+    """集合语义由代码归一，不拿一次全书重出去换一个排序。
+
+    ⚠ 反方向同样要成立：**非法枚举不许被归一顺手洗掉**。归一只处理
+    「取值都合法、只是重复或乱序」这一种输入，其余原样交给 pydantic。
+    """
+    _prompt, mapping = build_blind_projection(_blueprints(), root_clean_sha1=ROOT)
+    candidate = _typed_candidate(mapping)
+    index, decision = next(
+        (position, chapter['structure_decision'])
+        for position, chapter in enumerate(candidate['output_chapters'])
+        if chapter['structure_decision']['mode'] == 'reconstruct')
+    decision['declared_change_kinds'] = [
+        'fact_grouping', 'entry_anchor', 'fact_grouping']
+
+    parsed = BlindPlanResponse.model_validate(candidate)
+    assert parsed.output_chapters[index].structure_decision.declared_change_kinds         == ['entry_anchor', 'fact_grouping']
+
+    decision['declared_change_kinds'] = ['entry_anchor', 'not_a_change_kind']
+    with pytest.raises(ValidationError):
+        BlindPlanResponse.model_validate(candidate)
+
+    # 归一之后 retain / reconstruct 那两条业务闸一格没松。
+    decision['declared_change_kinds'] = ['fact_grouping', 'fact_grouping']
+    with pytest.raises(ValidationError, match='至少两类'):
+        BlindPlanResponse.model_validate(candidate)
