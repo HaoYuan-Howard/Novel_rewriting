@@ -262,11 +262,13 @@ def test_fact_coverage_and_state_closure_fail_independently():
     产品明说那种边界机器判不了。
     """
     plan = _compiled()
-    plan['output_chapters'][0]['scenes'][1]['land_fact_refs'].remove('f01_001')
-    plan['output_chapters'][0]['scenes'][-1]['exit_state_refs'] = []
+    scenes = plan['output_chapters'][0]['scenes']
+    scenes[1]['land_fact_refs'].remove('f01_001')       # 覆盖坏了
+    scenes[1]['transition'] = 'continue'                # 同一时间线……
+    scenes[1]['entry_state_refs'] = []                  # ……却没承接上一场
     findings = _findings(plan)
     assert findings['fact_coverage'] and findings['state_closure']
-    assert '末场未闭合 ending_state' in findings['state_closure'][0].detail
+    assert 'continue 未承接' in findings['state_closure'][0].detail
 
 
 def test_a_nonlinear_branch_entry_is_unverifiable_rather_than_a_violation():
@@ -579,3 +581,65 @@ def test_the_state_closure_rule_is_still_a_real_guard_on_hand_edited_plans():
     scene['entry_state_refs'] = []          # 人手写出来的、没承接的一场
     findings = _findings(plan)
     assert findings['state_closure'], '人工稿绕过编译器 ⇒ 后置条件仍是真守卫'
+
+
+def _ctx_scenes(*rows: tuple[list[str], list[str]]) -> list[dict]:
+    return [{'land_fact_refs': land, 'context_fact_refs': ctx} for land, ctx in rows]
+
+
+def test_a_land_fact_may_be_referenced_as_background_only_after_it_lands():
+    """判据防的是「提前引用还没披露的事实」，不是「已经发生过的事别再提」。
+
+    ⚠ v8 实测：被拒候选里 54 条 context 引用，**43 条已在更早场落地**、真泄漏 0 条
+    ⇒ 旧口径在那本书上 43/44 是误红。
+    """
+    scenes = _ctx_scenes((['a'], []), (['b'], ['a']))
+    assert checks.context_ref_findings(
+        scenes, context_obligation_refs=set(),
+        land_key='land_fact_refs', context_key='context_fact_refs') == []
+
+
+def test_referencing_a_fact_before_or_at_its_landing_scene_is_still_hard():
+    """真泄漏方向一格没松：还没披露就当背景引用，照旧红。"""
+    early = _ctx_scenes((['a'], ['b']), (['b'], []))
+    assert checks.context_ref_findings(
+        early, context_obligation_refs=set(),
+        land_key='land_fact_refs', context_key='context_fact_refs') == ["scene1:['b']"]
+
+    # 同一场既 land 又 context 不算已确立：那是同一个时点。
+    same = _ctx_scenes((['a'], ['a']),)
+    assert checks.context_ref_findings(
+        same, context_obligation_refs=set(),
+        land_key='land_fact_refs', context_key='context_fact_refs') == ["scene1:['a']"]
+
+
+def test_a_context_ref_that_never_lands_anywhere_is_still_hard():
+    scenes = _ctx_scenes((['a'], ['ghost']),)
+    assert checks.context_ref_findings(
+        scenes, context_obligation_refs=set(),
+        land_key='land_fact_refs', context_key='context_fact_refs') == ["scene1:['ghost']"]
+    # 真 context 义务的原子不需要落地。
+    assert checks.context_ref_findings(
+        scenes, context_obligation_refs={'ghost'},
+        land_key='land_fact_refs', context_key='context_fact_refs') == []
+
+
+def test_chapter_ending_is_closed_by_landing_the_fact_not_by_declaring_it_twice():
+    """v8 实测：7 条「章尾未闭合」7/7 都已在第 2~3 场落地——那是要模型写两遍。"""
+    plan = _compiled()
+    scenes = plan['output_chapters'][0]['scenes']
+    scenes[-1]['exit_state_refs'] = []       # 末场不再复述状态
+    assert 'f01_003' in scenes[-1]['land_fact_refs'], '但它确实在本章落了地'
+    assert _findings(plan)['state_closure'] == []
+
+
+def test_an_ending_fact_that_never_lands_still_fails_chapter_closure():
+    plan = _compiled()
+    chapter = plan['output_chapters'][0]
+    for scene in chapter['scenes']:
+        scene['land_fact_refs'] = [r for r in scene['land_fact_refs'] if r != 'f01_003']
+        scene['exit_state_refs'] = [r for r in scene['exit_state_refs'] if r != 'f01_003']
+    findings = _findings(plan)
+    assert findings['state_closure'], '章尾要求的事实压根没落进本章 ⇒ 必须红'
+    assert '章尾状态未在本章确立' in findings['state_closure'][0].detail
+    assert findings['fact_coverage'], 'fact_coverage 同向再报一次'

@@ -446,11 +446,12 @@ def _blind_candidate_problem(
             before_key='before_alias', after_key='after_alias')
         if missing_causal:
             problems.append(f'ch{ordinal} 因果端点未入候选场：{missing_causal}')
+        problems.extend(
+            f'ch{ordinal}.{row} context 越界' for row in checks.context_ref_findings(
+                scenes, context_obligation_refs=context,
+                land_key='land_fact_aliases', context_key='context_fact_aliases'))
         for index, scene in enumerate(scenes):
             prefix = f'ch{ordinal}.scene{index + 1}'
-            crefs = set(scene.get('context_fact_aliases') or [])
-            if crefs - context:
-                problems.append(f'{prefix} context 越界：{sorted(crefs - context)}')
             state_refs = set(scene.get('entry_state_aliases') or []) | set(
                 scene.get('exit_state_aliases') or [])
             if state_refs - set(facts):
@@ -473,9 +474,12 @@ def _blind_candidate_problem(
             if not set(scenes[0].get('entry_state_aliases') or []).issuperset(
                     set(source.get('entry_state_aliases') or [])):
                 problems.append(f'ch{ordinal} 首场未承接章首状态')
-            if not set(scenes[-1].get('exit_state_aliases') or []).issuperset(
-                    set(source.get('ending_state_aliases') or [])):
-                problems.append(f'ch{ordinal} 末场未闭合章尾状态')
+            # 章尾比的是「本章有没有让它成立」：落地即算成立，不要求末场再抄一遍。
+            established = set(landed) | set(scenes[-1].get('exit_state_aliases') or [])
+            if not established.issuperset(set(source.get('ending_state_aliases') or [])):
+                problems.append(
+                    f'ch{ordinal} 章尾状态未在本章确立：'
+                    f'{sorted(set(source.get("ending_state_aliases") or []) - established)}')
             for label, scene in (
                 ('open_hook_goal', scenes[0]), ('end_hook_goal', scenes[-1]),
             ):

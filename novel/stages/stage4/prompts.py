@@ -27,8 +27,9 @@ alias，数组顺序也由确定性散列打乱。不要从 alias 字面、数�
 - reconstruct：本章有真实重构空间，必须声明至少两类变化。可选值及唯一合法排列顺序是：
   $CHANGE_KINDS；只选需要的项，去重后仍须保持这个契约顺序。
 
-每个 land alias 恰好落入一场；context_fact_aliases 只能引用输入中 obligation=context 的 alias，
-land alias 即使已在前场落地也不能转填为 context。turn 必须属于本场 land。
+每个 land alias 恰好落入一场；context_fact_aliases 只能引用「此刻读者已经知道」的事实：
+输入中 obligation=context 的 alias，或**已经在更早场落地**的 land alias。**不得引用本场或
+后面才落地的 land alias**——那是把还没披露的事实提前当成已成立。turn 必须属于本场 land。
 entry_state_aliases / exit_state_aliases 只填**本场新增**的状态：entry 填本场开场时必须
 额外成立、而上一时点尚未给出的状态，exit 填本场结束时新确立的状态。**不要把前面已经
 成立的状态再抄一遍**——同一时间线上的承接由代码按 transition 的定义自动补全：

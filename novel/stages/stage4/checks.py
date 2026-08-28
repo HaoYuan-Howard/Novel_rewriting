@@ -246,6 +246,49 @@ def causal_scene_findings(
     return missing, reversed_order
 
 
+def context_ref_findings(
+    scenes: list[dict[str, Any]],
+    *,
+    context_obligation_refs: set[str],
+    land_key: str,
+    context_key: str,
+) -> list[str]:
+    """场景的 context 引用越没越界。**A 相与正式复检共用这一处。**
+
+    【判据想防的是什么】提前引用一个**还没披露**的事实——那是真泄漏：读者在
+    第 2 场看到「他知道父亲已死」，而这件事第 5 场才第一次揭示。
+
+    【旧口径拦错了什么】旧规则是「`context_fact_refs` 只能引用 `obligation=context`
+    的原子」，于是「这事第 1 场已经发生过，第 4 场当背景再提一句」也被判成越界。
+    v8 那两份被拒的真候选里，54 条 context 引用的实际形态是：
+    **43 条已在更早场落地**、10 条合法 context、1 条从未落地、**真泄漏 0 条**。
+    ⇒ 那条 HARD 在这本书上 43/44 是误红，而它想防的那一种一次都没出现。
+
+    【收窄后的口径】一条引用合法，当且仅当它是
+      ① `obligation == 'context'` 的原子，或
+      ② 一个在**严格更早**的场里落地的 land 原子。
+    从未落地的 land 原子**自然仍然红**（它没有落地场，②不成立），
+    而那也正是 `fact_coverage` 会独立报出的同一件事——两条判据同向，不互相顶。
+    ⚠ 「同一场既 land 又 context」不算已确立：本场的披露与本场的背景是同一时点，
+    允许它等于允许模型把 land 义务复述一遍充数。
+    """
+    landed_at: dict[str, int] = {}
+    for index, scene in enumerate(scenes):
+        for ref in (scene.get(land_key) or []):
+            landed_at.setdefault(str(ref), index)
+
+    bad: list[str] = []
+    for index, scene in enumerate(scenes):
+        offenders = sorted(
+            str(ref) for ref in (scene.get(context_key) or [])
+            if str(ref) not in context_obligation_refs
+            and landed_at.get(str(ref), index) >= index
+        )
+        if offenders:
+            bad.append(f'scene{index + 1}:{offenders}')
+    return bad
+
+
 def _canonical_transition(value: object) -> str:
     """响应侧的 `X_` 前缀与产物侧取值收成同一把尺子。"""
     text = str(value or '')
@@ -520,8 +563,7 @@ def check(plan: dict[str, Any], *, blueprints: dict[str, Any],
             assigned_materials.extend(str(ref) for ref in (scene.get('material_refs') or []))
             if set(lrefs) - land:
                 ref_bad.append(f'{prefix}:land={sorted(set(lrefs) - land)}')
-            if set(crefs) - context:
-                ref_bad.append(f'{prefix}:context={sorted(set(crefs) - context)}')
+
             if set(scene.get('material_refs') or []) - materials:
                 ref_bad.append(f'{prefix}:material')
             if set(scene.get('stage_refs') or []) - beats:
@@ -537,6 +579,12 @@ def check(plan: dict[str, Any], *, blueprints: dict[str, Any],
             budget = scene.get('budget_chars')
             if type(budget) is not int or budget <= 0:
                 budget_bad.append(f'{prefix}:budget={budget!r}')
+
+        # context 越界要看「它在哪一场落地」⇒ 必须整章一起判，不能逐场即判。
+        ref_bad.extend(
+            f'ch{ordinal}.{row}' for row in context_ref_findings(
+                scenes, context_obligation_refs=context,
+                land_key='land_fact_refs', context_key='context_fact_refs'))
 
         # 章内的时态承接与 transition 语法都归这一处；A 相 validator 共用它。
         chapter_state_bad, chapter_transition_bad, chapter_unknown = \
@@ -563,12 +611,19 @@ def check(plan: dict[str, Any], *, blueprints: dict[str, Any],
             material_bad.append(f'ch{ordinal}:missing={mmissing},duplicate={mdup}')
         # ⚠ **章级边界继续 HARD**，与章内非线性正交：不论章内怎样回溯或并行，
         #   这一章从哪个状态开始、到哪个状态结束都是 Stage2 冻结的事实契约。
+        # ⚠⚠ 章尾比的是「这一章**有没有让它成立**」，不是「模型有没有在末场的
+        #   数组里再抄一遍」。事实一旦在本章某场落地就不会被撤销 ⇒ 落地即算成立。
+        #   旧口径只认末场 declared exit，于是 v8 那份真候选里 7 条 ending 全部
+        #   命中，而 7/7 都**已经在第 2~3 场落地了**——那是要模型把同一件事写两遍。
+        #   真问题（ending 事实压根没落进本章）在这里照旧红，`fact_coverage` 同向再报一次。
         entry = set(bp.get('entry_state_refs') or [])
         ending = set(bp.get('ending_state_refs') or [])
+        established = set(landed) | set(scenes[-1].get('exit_state_refs') or [])             if scenes else set()
         if scenes and not set(scenes[0].get('entry_state_refs') or []).issuperset(entry):
             state_bad.append(f'ch{ordinal}:首场未承接 entry_state')
-        if scenes and not set(scenes[-1].get('exit_state_refs') or []).issuperset(ending):
-            state_bad.append(f'ch{ordinal}:末场未闭合 ending_state')
+        if scenes and not established.issuperset(ending):
+            state_bad.append(
+                f'ch{ordinal}:章尾状态未在本章确立 {sorted(ending - established)}')
 
         first_land = set(scenes[0].get('land_fact_refs') or []) if scenes else set()
         last_land = set(scenes[-1].get('land_fact_refs') or []) if scenes else set()

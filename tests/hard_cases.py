@@ -219,8 +219,11 @@ def _bad_plan4(rule: str) -> list:
         scenes[-1]['land_fact_refs'] = [
             ref for ref in scenes[-1]['land_fact_refs'] if ref != 'f01_003']
     elif rule == 'state_closure':
-        scenes[0]['entry_state_refs'] = []
-        scenes[-1]['exit_state_refs'] = []
+        # ⚠ 靶子必须打在**可判的**那一支上。章尾闭合现在按「本章有没有让它成立」
+        #   判（落地即成立），清空末场 declared exit 已经不是违约；`continue`
+        #   承接才是那条恒可判的边。
+        scenes[-2]['exit_state_refs'] = ['f01_002']   # 上一场确立了一个状态
+        scenes[-1]['entry_state_refs'] = []           # 同一时间线却没承接它
     elif rule == 'material_coverage':
         for scene in scenes:
             scene['material_refs'] = []
