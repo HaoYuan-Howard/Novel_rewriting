@@ -361,7 +361,11 @@ def test_phase5_recovery_policies_freeze_their_session_isolation(
     [
         ('model', 'gpt-5.6-terra'),
         ('actual_reasoning_effort', 'low'),
-        ('turn_count', 2),
+        # ⚠ 这里曾经是 `('turn_count', 2)`——它把「provider 内部多走了一轮」当成违约。
+        #   实测 Claude CLI 2.1.237：带 `--json-schema` 的一次 invocation 报 3，
+        #   而本仓八个 executor 全走结构化输出 ⇒ 那条参数化断言的是一个**正常形态**，
+        #   代价是付完钱之后拒收每一个响应。非正数才是真违约，另有专门用例守。
+        ('turn_count', 0),
     ],
 )
 def test_provider_metadata_must_match_profile_and_one_cli_turn(
@@ -560,3 +564,66 @@ def test_restored_business_rejection_repairs_gate_audit_idempotently(tmp_path):
     ]
     assert len(rejected) == 1
     assert rejected[0]['gate_decision_id']
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# `turn_count`：本次 invocation 的正整数轮数，不是「provider 只走了一轮」
+# ─────────────────────────────────────────────────────────────────────────────
+
+class _StructuredOutputDriver(_FakeDriver):
+    """按**实测**的结构化输出形状回包。
+
+    2026-08-28 实测 Claude CLI 2.1.237：纯文本 `-p` 报 `num_turns=1`，
+    带 `--json-schema` 报 **3**（结构化输出以 tool call 交付）。本仓八个 executor
+    全部走 `--json-schema`，所以 3 才是常态；`tests/test_agent_drivers.py` 那两条
+    解析用例断言的也正是 3。
+    """
+
+    def _turn(self) -> AgentTurn:
+        return AgentTurn(
+            session_id='provider-session-1', content=self.responses.pop(0),
+            model='gpt-5.6-sol', actual_reasoning_effort='high',
+            usage=AgentUsage(
+                prompt_tokens=10, completion_tokens=3, reasoning_tokens=2,
+                total_tokens=13),
+            turn_count=3,
+        )
+
+
+def test_structured_output_turn_count_is_accepted(tmp_path):
+    """旧口径写的是 `!= 1` ⇒ 它在付完钱之后拒收每一个响应。
+
+    实测代价：一次 632 秒、147k prompt / 44k completion 的成功调用被整份丢掉，
+    而 `_llm_rejected` 里连证据都没有——它死在内容闸之前的 metadata 闸。
+    """
+    ctx = _ctx(tmp_path)
+    client = SessionAgentClient(
+        ctx, _profile(), _StructuredOutputDriver(['{"value":1}']))
+
+    answer = client.ask_json('SYS', 'subject', model_cls=_Answer,
+                             purpose='stage2.global')
+
+    assert answer.value == 1
+    assert client.accepted_attempt('stage2.global') is not None
+    client.finish(process_state='ok', delivery_state='delivered')
+    client.close()
+
+
+def test_a_non_positive_turn_count_is_still_refused(tmp_path):
+    """放宽的只是「不是 1」；`0` 说明这次 invocation 根本没完成一轮，仍必须拒。"""
+    class _ZeroTurnDriver(_FakeDriver):
+        def _turn(self) -> AgentTurn:
+            return AgentTurn(
+                session_id='provider-session-1', content=self.responses.pop(0),
+                model='gpt-5.6-sol', actual_reasoning_effort='high',
+                usage=AgentUsage(total_tokens=13), turn_count=0)
+
+    ctx = _ctx(tmp_path)
+    client = SessionAgentClient(ctx, _profile(), _ZeroTurnDriver(['{"value":1}']))
+
+    with pytest.raises(LlmFailed, match='单调用单 turn'):
+        client.ask_json('SYS', 'subject', model_cls=_Answer,
+                        purpose='stage2.global')
+    client.finish(process_state='failed', delivery_state='failed',
+                  error_kind='invalid_provider_turn_count')
+    client.close()

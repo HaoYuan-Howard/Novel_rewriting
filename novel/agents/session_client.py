@@ -734,9 +734,19 @@ class SessionAgentClient:
               and turn.actual_reasoning_effort != self.profile.reasoning_effort):
             metadata_failure = (
                 'actual_reasoning_effort', 'provider_metadata_mismatch')
-        elif turn.turn_count != 1:
+        elif turn.turn_count is not None and turn.turn_count < 1:
             # AgentTurn 表示**这一次 CLI 调用**的结果，不是 provider session 累计轮数。
             # 累计值会让一次 ledger attempt 与多轮模型调用静默合并，成本账无法闭合。
+            # ⚠⚠ **这里曾经写的是 `!= 1`，而那个值在本仓的协议下永远不可能出现。**
+            #   2026-08-28 实测 Claude CLI 2.1.237（`novel/agents/claude_code.py` 那条
+            #   argv 的形状）：纯文本 `-p` 报 `num_turns=1`，而**带 `--json-schema` 报 3**
+            #   ——结构化输出是以 tool call 交付的，天然多消耗内部轮次。本仓八个
+            #   executor 全部走 `--json-schema` ⇒ 旧断言会在**付完钱之后**拒收每一个响应。
+            #   实测代价：stage2.global 一次 632 秒、147k prompt / 44k completion 的成功
+            #   调用被整份丢掉（`_llm_rejected` 里都不会有，因为它死在 metadata 闸）。
+            #   ⇒ 要守的性质是「这一格是**本次 invocation** 的正整数轮数」，
+            #   不是「provider 内部只走了一轮」——后者从来不是我们能规定的事。
+            #   成本闭合由 CLI 逐次 invocation 回报的 usage 承担，与内部轮数正交。
             metadata_failure = ('turn_count', 'invalid_provider_turn_count')
         if metadata_failure is not None:
             self._driver_failed = True
