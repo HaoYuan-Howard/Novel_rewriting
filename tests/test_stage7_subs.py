@@ -23,9 +23,10 @@ from pydantic import ValidationError
 
 from contracts.schema import decode_artifact
 from contracts.schema.stage7 import ExtraSub, NameDecision, NameMapEdit, Residual
-from novel.errors import BlockingFindingsUnresolved, TerminalState
-from novel.stages.stage7 import checks
-from novel.stages.stage7 import rename
+from novel import prov
+from novel.consumption import stage7_grounding
+from novel.errors import ApprovalRequired, BlockingFindingsUnresolved, TerminalState
+from novel.stages.stage7 import assemble, checks, prompts, rename
 from novel.stages.stage7.subs import (
     apply_subs, derived_alias_scan, mask_known, residual_scan, sub_table, surface_hits,
     unclaimed_residual_keys,
@@ -86,6 +87,20 @@ def test_edit_template_is_a_registry_encoded_strict_v1_artifact():
     model = NameMapEdit.model_validate(
         decode_artifact(rename.EDIT, raw).payload)
     assert model == NameMapEdit()
+
+
+def test_rename_prompt_receives_the_typed_era_instead_of_an_alias_mismatch():
+    """时代背景必须真的进最终 user prompt，不能因 ``era``/中文 alias 错位变未知。"""
+    material = prompts.build_material(
+        title='测试书', registry={}, relations=[], era='架空古代江南',
+        groups={}, sur={}, book_text='', targets=[],
+    )
+
+    user = prompts.build_user(material)
+
+    assert '"架空古代江南"' in user
+    era_block = next(block for block in material.blocks if '时代背景' in block)
+    assert '（未知）' not in era_block
 
 
 def test_generic_appellation_wrapper_may_keep_label_and_replace_embedded_name():
@@ -650,9 +665,13 @@ class _Dumpable(SimpleNamespace):
     def model_dump(self, **_kwargs):
         return dict(vars(self))
 
+    def model_copy(self, *, update):
+        return _Dumpable(**(vars(self) | update))
+
 
 class _AtomicStore:
-    def __init__(self, art, *, rels, edit=None, fail_write=False, fail_archive=False):
+    def __init__(self, art, *, rels, edit=None, fail_write=False, fail_archive=False,
+                 input_freshness=None):
         self.ctx = _FAKE_CTX
         self.art = art
         self.rels = set(rels)
@@ -662,6 +681,9 @@ class _AtomicStore:
         self.events = []
         self.writes = []
         self.archives = []
+        self.input_freshness = input_freshness or SimpleNamespace(
+            state='fresh', reason='match')
+        self.seen_recorded_inputs = []
 
     def exists(self, rel):
         return rel in self.rels
@@ -673,6 +695,11 @@ class _AtomicStore:
     def read(self, _model, rel):
         assert rel == rename.EDIT
         return self.edit
+
+    def freshness_of_inputs(self, rel, recorded):
+        assert rel == rename.REL
+        self.seen_recorded_inputs.append(recorded)
+        return self.input_freshness
 
     def history_transaction(self, *_rels):
         return nullcontext()
@@ -696,17 +723,21 @@ class _AtomicStore:
 
 def _atomic_harness(
         monkeypatch, *, rels, fail_write=False, fail_archive=False,
-        blocking=False):
+        blocking=False, input_freshness=None, recorded_inputs=None):
     subject = 'a' * 64
+    recorded_inputs = recorded_inputs or {
+        rename.GLOBAL_GROUNDING: {'file': 'old-file', 'consumed': 'old-consumed'},
+    }
     art = _Dumpable(
         surname_map={'温': '顾'}, characters=[], extra_subs=[],
-        provenance='old-provenance',
+        provenance=_Dumpable(inputs=recorded_inputs),
         approved=SimpleNamespace(subject_sha256=subject),
         book_txt='old-delivery', identity='identity-baseline',
     )
     store = _AtomicStore(
         art, rels=rels, edit=_Dumpable(character_patches=[]),
         fail_write=fail_write, fail_archive=fail_archive,
+        input_freshness=input_freshness,
     )
     retired = []
     monkeypatch.setattr(rename, 'ArtifactStore', lambda _ctx: store)
@@ -735,6 +766,135 @@ def _atomic_harness(
         rewrite_provenance=lambda provenance, *, by: (provenance, by),
     )
     return ctx, store, retired
+
+
+def _stage7_grounding_with(*, role: str, fate: str | None = None) -> dict:
+    return {
+        'entities': {
+            'characters': {
+                'char_001': {
+                    'canonical': '沈清禾', 'role': role, 'fate': fate,
+                    'address': [{'surface': '沈娘子'}],
+                },
+            },
+            'relations': [],
+        },
+        'canon': {'setting': {'时代背景': '架空古代江南'}},
+    }
+
+
+def _input_freshness_between(before: dict, after: dict):
+    key = rename.GLOBAL_GROUNDING
+    recorded = {
+        key: {
+            'file': 'before-file',
+            'consumed': prov.projection_fingerprint(stage7_grounding(before)),
+        },
+    }
+    report = prov.freshness(
+        recorded,
+        file_now=lambda _key: 'after-file',
+        consumed_now=lambda _key: prov.projection_fingerprint(stage7_grounding(after)),
+    )
+    return recorded, report
+
+
+def test_recheck_revokes_approval_after_role_drift_and_assemble_stays_closed(monkeypatch):
+    before = _stage7_grounding_with(role='县令之女')
+    after = _stage7_grounding_with(role='商户之女')
+    recorded, freshness = _input_freshness_between(before, after)
+    assert (freshness.state, freshness.reason) == ('stale', 'consumed_changed')
+    ctx, store, _retired = _atomic_harness(
+        monkeypatch, rels={rename.REL}, input_freshness=freshness,
+        recorded_inputs=recorded,
+    )
+
+    rebuilt, _report = rename.run_recheck(ctx)
+
+    assert store.seen_recorded_inputs == [recorded]
+    assert rebuilt.approved is None, '旧 role 下的批准不能由 provenance 重写洗成当前批准'
+    with pytest.raises(ApprovalRequired, match='还没定稿'):
+        assemble._require_mapping_current(ctx, store, rebuilt, SimpleNamespace())
+
+
+def test_recheck_preserves_approval_when_only_an_unconsumed_field_changed(monkeypatch):
+    before = _stage7_grounding_with(role='县令之女', fate='最终留在故乡')
+    after = _stage7_grounding_with(role='县令之女', fate='最终远走他乡')
+    recorded, freshness = _input_freshness_between(before, after)
+    assert (freshness.state, freshness.reason) == ('fresh', 'match')
+    ctx, store, _retired = _atomic_harness(
+        monkeypatch, rels={rename.REL}, input_freshness=freshness,
+        recorded_inputs=recorded,
+    )
+    old_approval = store.art.approved
+
+    rebuilt, _report = rename.run_recheck(ctx)
+
+    assert rebuilt.approved is old_approval
+
+
+def test_identity_revokes_approval_after_role_drift_and_assemble_stays_closed(monkeypatch):
+    before = _stage7_grounding_with(role='县令之女')
+    after = _stage7_grounding_with(role='商户之女')
+    recorded, freshness = _input_freshness_between(before, after)
+    assert (freshness.state, freshness.reason) == ('stale', 'consumed_changed')
+    ctx, store, retired = _atomic_harness(
+        monkeypatch, rels={rename.REL}, input_freshness=freshness,
+        recorded_inputs=recorded,
+    )
+    baseline = SimpleNamespace(roundtrip_ok=True)
+    monkeypatch.setattr(rename, '_identity_baseline', lambda _up: baseline)
+
+    got, _report = rename.run_identity(ctx)
+    rebuilt = store.writes[-1][1]
+
+    assert got is baseline
+    assert store.seen_recorded_inputs == [recorded]
+    assert rebuilt.approved is None and rebuilt.book_txt is None
+    assert retired == [True]
+    assert store.events == ['archive', 'write', 'retire']
+    with pytest.raises(ApprovalRequired, match='还没定稿'):
+        assemble._require_mapping_current(ctx, store, rebuilt, SimpleNamespace())
+
+
+def test_identity_revokes_approval_when_old_inputs_are_unprovable(monkeypatch):
+    ctx, store, retired = _atomic_harness(
+        monkeypatch, rels={rename.REL},
+        input_freshness=SimpleNamespace(state='unknown', reason='no_inputs'),
+    )
+    monkeypatch.setattr(
+        rename, '_identity_baseline',
+        lambda _up: SimpleNamespace(roundtrip_ok=True),
+    )
+
+    rename.run_identity(ctx)
+    rebuilt = store.writes[-1][1]
+
+    assert rebuilt.approved is None and rebuilt.book_txt is None
+    assert retired == [True]
+
+
+def test_identity_preserves_approval_when_only_an_unconsumed_field_changed(monkeypatch):
+    before = _stage7_grounding_with(role='县令之女', fate='最终留在故乡')
+    after = _stage7_grounding_with(role='县令之女', fate='最终远走他乡')
+    recorded, freshness = _input_freshness_between(before, after)
+    assert (freshness.state, freshness.reason) == ('fresh', 'match')
+    ctx, store, retired = _atomic_harness(
+        monkeypatch, rels={rename.REL}, input_freshness=freshness,
+        recorded_inputs=recorded,
+    )
+    old_approval = store.art.approved
+    monkeypatch.setattr(
+        rename, '_identity_baseline',
+        lambda _up: SimpleNamespace(roundtrip_ok=True),
+    )
+
+    rename.run_identity(ctx)
+    rebuilt = store.writes[-1][1]
+
+    assert rebuilt.approved is old_approval
+    assert rebuilt.book_txt is None and retired == [True]
+    assert store.events == ['archive', 'write', 'retire']
 
 
 def test_recheck_write_failure_keeps_live_delivery(monkeypatch):

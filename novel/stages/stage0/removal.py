@@ -84,6 +84,15 @@ class RemovalResult:
         return self.report.body_code_points / self.report.total_code_points
 
 
+@dataclass(frozen=True)
+class PreparedEditPlan:
+    """同一份 edit-plan 在真正提交前可复算的精确落点。"""
+
+    clean_text: str
+    removed: tuple[RemovedSegment, ...]
+    revision_id: str
+
+
 def preview_text(value: str, limit: int) -> str:
     return re.sub(r'\s+', ' ', value).strip()[:limit]
 
@@ -438,14 +447,8 @@ def _read_plan(model, plan_path: str | Path, what: str):
         raise ArtifactUnreadable(f'{what}不是合法契约：{exc}') from exc
 
 
-def run_edit_plan(
-    ctx: RunContext,
-    plan_path: str | Path,
-) -> tuple[Stage0Snapshot, CheckReport]:
-    '''应用 S-00 选择计划；原文、区间、重建正文与乐观锁全部在子进程内复核。'''
-    plan: Stage0EditPlan = _read_plan(Stage0EditPlan, plan_path, 'stage0 编辑计划')
-    _store, log = _load(ctx)
-    current = rev.current_revision(log)
+def _edit_plan_source(ctx: RunContext, log: Stage0Revisions) -> str:
+    """按生产读取尺子取回 edit-plan 的原文坐标系。"""
     # ⚠ 经唯一读取落点，不自己拼路径：`managed_upload` 那一支的位置**只能**由当前
     #   base 算出来（它跟着 base 走），而这里此前只认记录的绝对路径 ⇒ Output 根
     #   搬过家的上传书会在这里假报「原文没了」。
@@ -470,23 +473,67 @@ def run_edit_plan(
         raise SourceConflict(
             f'原始小说当前长度 {len(decoded.text)} 与当前版本 '
             f'{log.source.total_code_points} 对不上')
+    return decoded.text
+
+
+def prepare_edit_plan(ctx: RunContext, plan: Stage0EditPlan) -> PreparedEditPlan:
+    """只读复算计划将落到哪条 revision；API 与 CLI 共用这一处。"""
+    log = rev.read(ArtifactStore(ctx))
+    if log is None:
+        raise UpstreamMissing('stage0 还没跑，盘上没有可预演的 revision 链')
+    current = rev.current_revision(log)
+    if plan.expected_revision_id != current.revision_id:
+        raise HumanEditProtected(
+            '这份 stage0 编辑计划基于旧页面，拒绝按当前稿预演：'
+            f'revision_id 页面={plan.expected_revision_id!r}，当前={current.revision_id!r}')
+    source_text = _edit_plan_source(ctx, log)
 
     cursor = 0
     kept: list[str] = []
     for segment in plan.removed:
         lo, hi = segment.span
-        kept.append(decoded.text[cursor:lo])
+        kept.append(source_text[cursor:lo])
         cursor = hi
-    kept.append(decoded.text[cursor:])
+    kept.append(source_text[cursor:])
     reconstructed = ''.join(kept)
-    return _apply_edit(
+    removed = tuple(verified_removals(
+        plan.removed, source_text, current.content.removed))
+    content = Stage0RevisionContent(
+        clean_text=reconstructed, removed=list(removed))
+    revision_id = (
+        current.revision_id
+        if content == current.content else
+        rev.revision_digest(
+            parent_revision_id=current.revision_id,
+            origin='human_edit',
+            actor=plan.actor.strip(),
+            reason=plan.reason.strip(),
+            content=content,
+        )
+    )
+    return PreparedEditPlan(
+        clean_text=reconstructed, removed=removed, revision_id=revision_id)
+
+
+def run_edit_plan(
+    ctx: RunContext,
+    plan_path: str | Path,
+) -> tuple[Stage0Snapshot, CheckReport]:
+    '''应用 S-00 选择计划；原文、区间、重建正文与乐观锁全部在子进程内复核。'''
+    plan: Stage0EditPlan = _read_plan(Stage0EditPlan, plan_path, 'stage0 编辑计划')
+    prepared = prepare_edit_plan(ctx, plan)
+    landed = _apply_edit(
         ctx,
-        reconstructed,
-        removed=verified_removals(plan.removed, decoded.text, current.content.removed),
+        prepared.clean_text,
+        removed=prepared.removed,
         expected_revision_id=plan.expected_revision_id,
         actor=plan.actor,
         reason=plan.reason,
     )
+    if landed[0].revision_id != prepared.revision_id:
+        raise ProvenanceRefused(
+            'stage0 edit-plan 预演 revision 与实际落点不一致；拒绝向调用方返回错误版本')
+    return landed
 
 
 def verified_removals(
@@ -525,6 +572,7 @@ def verified_removals(
 
 
 def run_approve(ctx: RunContext, *, actor: str, reason: str,
+                expected_revision_id: str | None = None,
                 approved_at: str | None = None) \
         -> tuple[Stage0Snapshot, CheckReport]:
     '''批准当前这一版。批准不改正文、不产生新 revision。'''
@@ -532,6 +580,11 @@ def run_approve(ctx: RunContext, *, actor: str, reason: str,
     store, log = _load(ctx)
     if not actor.strip() or not reason.strip():
         raise HumanEditProtected('stage0 人工批准必须显式给 actor 与 reason')
+    if (expected_revision_id is not None
+            and expected_revision_id != log.current.revision_id):
+        raise HumanEditProtected(
+            'Stage0 批准乐观锁失效：实际审阅的 revision 已不是当前版本；'
+            f'工作包={expected_revision_id!r}，当前={log.current.revision_id!r}')
     # ⚠ 判的是「这次批准是不是同一决定的重放」，**不是执行资格**——后者的唯一落点是
     #   `eligibility.is_stage0_executable`，那是给消费方用的，本函数是写入方。
     if log.current.approval.status == 'approved':

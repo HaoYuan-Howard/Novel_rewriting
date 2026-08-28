@@ -199,9 +199,26 @@ def plan_book(base: str | os.PathLike[str], sid: str, *, until_stage: str,
     # 验收”。这格只记本次 plan 已经真正排入的 runnable writer；
     # blocked writer 仍由 ``stuck`` 传递，不伪装成会在本次改变主体。
     stage5_write_will_run = False
+    naming_projection_blocked = st.stage2_global_projection_blocked(ov)
 
     for node in nodes_up_to(until_stage):
         spec = NODES[node]
+        projection_recovery = (
+            node == 'stage2.global'
+            and st.stage2_projection_recovery_needed(ov)
+        )
+        projection_blocked = (
+            node == 'stage2.global'
+            and naming_projection_blocked
+        )
+        blueprint_invalid_recovery = (
+            node == 'stage2.blueprint'
+            and st.stage2_blueprint_invalid_recovery_needed(ov)
+        )
+        legacy_blueprint_recovery = (
+            node == 'stage2.blueprint'
+            and st.stage2_legacy_blueprint_recovery_needed(ov)
+        )
         why_blocked = stuck
         if why_blocked is None and node in HUMAN_NODES:
             if node in OPTIONAL_HUMAN_NODES:
@@ -211,6 +228,11 @@ def plan_book(base: str | os.PathLike[str], sid: str, *, until_stage: str,
             if _human_gate_satisfied(base, sid, node):
                 continue                             # 人已经完成这道闸
             why_blocked = node                       # 在等这一步的那个人
+        if (why_blocked is None
+                and (projection_blocked or blueprint_invalid_recovery)):
+            # 两种状态都已有可恢复的问题稿，且下一步需要人提供 typed 决策。
+            # 队列不能替人造 actor/reason，更不能把 RUN 解释成默认再付一次钱。
+            why_blocked = WAITING_ON_INBOX
         # 人审移到 Stage4 的最低消费边界。队列的完整节点序列必经 A；在这里挡住后，
         # ``stuck`` 会把 B、context 与后续全部保持 blocked。Stage2 blueprint 因而能
         # 先跑，而恢复 global/blueprint 的 0 成本入口也不会被这道门反向堵死。
@@ -269,8 +291,19 @@ def plan_book(base: str | os.PathLike[str], sid: str, *, until_stage: str,
             # 等于队列在真实消费面把四态重新压回二态。
             why_blocked = WAITING_ON_RESUME_DECISION
 
-        flags: list[str] = []
+        # 称名投影是 Global 的确定性伴生产物。缺/坏/stale 时只冻结免费物化
+        # 命令，绝不能因 ``produces`` 少一份而把默认付费 Global argv 排进队列。
+        flags: list[str] = (
+            ['--renormalize']
+            if projection_recovery or legacy_blueprint_recovery else []
+        )
         steps = None
+        if (projection_blocked or blueprint_invalid_recovery
+                or (naming_projection_blocked
+                    and stuck == WAITING_ON_INBOX)):
+            # 称名面未收口时，Global 之后的 blocked 项也不能残留被冻结的
+            # 付费命令；否则恢复确认界面仍会把“不允许执行”展示成潜在花费。
+            steps = []
         if node == 'stage5.write':
             stage5_state = next(
                 (stage for stage in ov.stages if stage.stage == 'stage5'), None)

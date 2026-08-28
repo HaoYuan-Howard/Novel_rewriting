@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from typing import Any, TypedDict
 
+from contracts.schema.stage2 import BlueprintCharacterProjection
 from novel.core.naming import strip_distinguisher
 from novel.core.text import norm
 
@@ -144,8 +145,62 @@ def blueprint_character_prompt_inventory(
     }
 
 
+def materialize_blueprint_character_projection(
+    characters: dict[str, dict[str, Any]],
+    main_text: list[dict[str, Any]],
+) -> BlueprintCharacterProjection:
+    """把真实 prompt inventory 物化成注册产物；不增加第三种中间形态。"""
+    inventory = blueprint_character_prompt_inventory(characters, main_text)
+    past = inventory['past_attested_surfaces']
+    visible = inventory['visible_character_refs']
+    ordinals = sorted({
+        int(section.get('chapter_ordinal') or 0)
+        for section in main_text
+        if int(section.get('chapter_ordinal') or 0) > 0
+    })
+    return BlueprintCharacterProjection.model_validate({
+        'chapters': [
+            {
+                'chapter_ordinal': ordinal,
+                'past_attested_surfaces': list(past.get(ordinal, [])),
+                'visible_character_refs': {
+                    cid: list(surfaces)
+                    for cid, surfaces in visible.get(ordinal, {}).items()
+                },
+            }
+            for ordinal in ordinals
+        ],
+    })
+
+
+def blueprint_inventory_from_projection(
+    projection: BlueprintCharacterProjection | dict[str, Any],
+) -> BlueprintCharacterPromptInventory:
+    """版本化投影 → prompt/validator/compile 共用的最终下发形态。"""
+    artifact = (
+        projection
+        if isinstance(projection, BlueprintCharacterProjection)
+        else BlueprintCharacterProjection.model_validate(projection)
+    )
+    return {
+        'past_attested_surfaces': {
+            row.chapter_ordinal: list(row.past_attested_surfaces)
+            for row in artifact.chapters
+        },
+        'visible_character_refs': {
+            row.chapter_ordinal: {
+                cid: list(surfaces)
+                for cid, surfaces in row.visible_character_refs.items()
+            }
+            for row in artifact.chapters
+        },
+    }
+
+
 __all__ = [
     'BlueprintCharacterPromptInventory', 'blueprint_character_prompt_inventory',
+    'blueprint_inventory_from_projection',
     'character_ref_inventory',
+    'materialize_blueprint_character_projection',
     'visible_character_refs', 'visible_character_refs_with_drops',
 ]

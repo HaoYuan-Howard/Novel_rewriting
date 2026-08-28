@@ -95,6 +95,40 @@ HEDGE_WORDS: tuple[str, ...] = (
     '可能', '似乎', '大约', '应该是', '疑似', '也许', '或许', '之类',
 )
 
+#: 「不可能」是确定性判断，不是「可能」的模棱版。但再否定一次的
+#: 「并非不可能 / 不是不可能 / 未必不可能」又把可能性打开了，仍是不确定。
+#: 这份前缀表只服务下方同一个匹配器，不进 prompt，不在判据调用处手拼第二份。
+_UNCERTAIN_NEGATED_IMPOSSIBILITY_PREFIXES: tuple[str, ...] = (
+    '并非', '不是', '未必', '未尝', '未见得', '不能说', '难说',
+)
+
+
+def _contains_hedge(text: str, word: str) -> bool:
+    """这个字段是否真含该模棱语。
+
+    其他词仍按完整短语扫描；「可能」额外区分确定的「不可能」与
+    重新打开可能性的双重否定。「不太可能」的「可能」前一字是「太」，
+    会自然落入命中分支。
+    """
+    if word != '可能':
+        return word in text
+
+    start = 0
+    while (index := text.find(word, start)) >= 0:
+        if index == 0 or text[index - 1] != '不':
+            return True
+        before_negation = text[:index - 1]
+        if any(before_negation.endswith(prefix)
+               for prefix in _UNCERTAIN_NEGATED_IMPOSSIBILITY_PREFIXES):
+            return True
+        start = index + len(word)
+    return False
+
+
+def _hedge_hits(text: str) -> list[str]:
+    """一个字段内命中的词；同一词出现多次仍只报一格。"""
+    return [word for word in HEDGE_WORDS if _contains_hedge(text, word)]
+
 #: 「原文正在点破一件事」的字面标记。逐字搬自原型 `check_blueprints.REVEAL_MARKS`。
 #: ⚠⚠ **它的判别力全在反面**：这些是高频词，基线命中率实测 **21/22 章**
 #: （不论那一章有没有点破什么）⇒ 「都能找到标记」几乎必然成立，
@@ -481,11 +515,12 @@ def _addresses(c: _Ctx) -> list[Outcome]:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 三、身份与结局（5 HARD · 1 度量 · 1 查不了）
+# 三、身份与结局（5 HARD · 1 INFO · 1 度量 · 1 查不了）
 # ─────────────────────────────────────────────────────────────────────────────
 
 _ROLE_RULES = ('role_missing', 'role_leaks_fate', 'role_repeats_name', 'hedge_words',
-               'distinguisher_lonely', 'role_fate_unverifiable', 'fate_report')
+               'fate_hedge_words', 'distinguisher_lonely',
+               'role_fate_unverifiable', 'fate_report')
 
 
 def _roles(c: _Ctx) -> list[Outcome]:
@@ -520,13 +555,27 @@ def _roles(c: _Ctx) -> list[Outcome]:
                             evidence=sorted(same))] if same else [],
                    scanned=f'{len(items)} 个角色'))
 
-    hedged = [f'{cid}.{fld}:{w}' for cid, v in items for fld in ('role', 'fate', 'canonical')
-              for w in HEDGE_WORDS if w in (((v or {}).get(fld) or '') if v else '')]
+    # `role` / `canonical` 会进下游写作/命名面，命中仍是 producer HARD。
+    # `fate` 不下发写手，只作审计披露；两者不能再共用同一条严重度。
+    hedged = [f'{cid}.{fld}:{word}'
+              for cid, v in items for fld in ('role', 'canonical')
+              for word in _hedge_hits(((v or {}).get(fld) or '') if v else '')]
     out.append(ran('hedge_words',
                    [finding('hedge_words',
-                            detail=f'{len(hedged)} 处 role/fate/canonical 出现模棱语：{_cut(hedged)}',
+                            detail=f'{len(hedged)} 处 role/canonical 出现模棱语：{_cut(hedged)}',
                             evidence=sorted(hedged))] if hedged else [],
-                   scanned=f'{len(items)} 个角色 × 3 个字段 · 词表 {HEDGE_WORDS}'))
+                   scanned=f'{len(items)} 个角色 × 2 个下游消费字段 · '
+                           f'词表 {HEDGE_WORDS}'))
+
+    fate_hedged = [f'{cid}.fate:{word}'
+                   for cid, v in items
+                   for word in _hedge_hits(((v or {}).get('fate') or '') if v else '')]
+    out.append(ran('fate_hedge_words',
+                   [finding('fate_hedge_words',
+                            detail=f'{len(fate_hedged)} 处 fate 出现模棱语：'
+                                   f'{_cut(fate_hedged)}',
+                            evidence=sorted(fate_hedged))] if fate_hedged else [],
+                   scanned=f'{len(items)} 个角色的 fate · 词表 {HEDGE_WORDS}'))
 
     # ── `distinguisher_lonely` ────────────────────────────────────────────
     # 没有重名就没有消歧可言，而**区分词会被写手原样写进正文**。
@@ -890,7 +939,7 @@ def _arc(c: _Ctx) -> list[Outcome]:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 六、拍与区间（7 HARD · 1 INFO）+ 相关度量
+# 六、拍与区间（6 HARD · 1 INFO）+ 相关度量
 # ─────────────────────────────────────────────────────────────────────────────
 
 _BEAT_RULES = ('beat_id_unique', 'beat_id_format', 'span_unlocatable',
@@ -1587,6 +1636,56 @@ def _present(c: _Ctx) -> list[Outcome]:
 # ─────────────────────────────────────────────────────────────────────────────
 # 九、入口
 # ─────────────────────────────────────────────────────────────────────────────
+
+#: 这些 Global HARD 会使当前称名闭集本身不适合作为一次付费 Blueprint 的稳定输入。
+#: role/fate/relation/secret 等 HARD 不在这里：它们可与逐章计算并行，且修订后若真实
+#: 投影逐值不变就不制造重跑。`hedge_words` 同时检查 role/canonical，须在函数里再按
+#: finding evidence 只取 canonical 那一半，不能粗按 rule id 阻断。
+_BLUEPRINT_PROJECTION_BLOCKING_HARDS = frozenset({
+    'canonical_unique',
+    'character_unattested',
+    'address_from_out_of_range',
+    'address_bare_pronoun',
+    'address_all_pronoun',
+})
+
+
+def blueprint_projection_blocking_hard_hits(
+        outcomes: Iterable[Outcome],
+) -> tuple[str, ...]:
+    """返回会让当前称名投影不宜启动付费 Blueprint 的 Global HARD。
+
+    这不是第二套称名判据：命中事实与严重度仍只来自 ``check()`` + 注册表；
+    本函数只回答哪个既有 HARD 会改变 Blueprint 真正消费的称名面。
+    """
+    hits: set[str] = set()
+    for outcome in outcomes:
+        if (outcome.unver_why is not None or not outcome.findings
+                or REGISTRY.get(outcome.rule).sev != 'hard'):
+            continue
+        if outcome.rule in _BLUEPRINT_PROJECTION_BLOCKING_HARDS:
+            hits.add(outcome.rule)
+            continue
+        if outcome.rule == 'hedge_words' and any(
+                '.canonical:' in str(evidence)
+                for finding_ in outcome.findings
+                for evidence in finding_.evidence):
+            hits.add(outcome.rule)
+    return tuple(sorted(hits))
+
+
+def blueprint_projection_blockers(
+        *, global_g: dict[str, Any], main_text: list[dict[str, Any]],
+) -> tuple[str, ...]:
+    """只跑称谓/身份两族并返回投影阻断项，供高频 freshness 路径复用。
+
+    不能在每次 ``state`` 查看时把 Stage2 的蓝图/证据/区间全表重扫一遍；
+    这里仍调用生产判据的同一实现，只把与称名投影无关的族省掉。
+    """
+    context = _Ctx(global_g, None, main_text)
+    return blueprint_projection_blocking_hard_hits([
+        *_addresses(context), *_roles(context),
+    ])
 
 def check(*, global_g: dict[str, Any] | None, blueprints: dict[str, Any] | None,
           main_text: list[dict[str, Any]] | None) -> list[Outcome]:

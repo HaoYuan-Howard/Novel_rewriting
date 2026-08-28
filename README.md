@@ -17,8 +17,8 @@
   “审校台”而不是 dashboard：主体动作是并排对照证据，再由人做决定。
 - stage0 批准是全链第一个人工硬闸；Stage4 计划另有绑定当前结构主体的逐章人工批准，Stage5 的
   付费写作授权与它独立；stage6 与 stage7 的人工定稿是各自产物进入下游的语义闸。
-- Stage2 global 正式落盘后，人可一边逐项复核、一边让 blueprint 逐章计算；两支必须在 Stage4A
-  前汇合为 current global + current blueprint、联合 HARD 通过与 current 全 PASS 人审。同书的
+- Stage2 称名投影可用后，人可一边复核 global、一边让 blueprint 逐章计算；两支必须在 Stage4A
+  前汇合为 current 正式 global + current blueprint、联合 HARD 通过与 current blocking 面全 PASS 人审。同书的
   review / typed edit / producer 写回仍串行，不能把“人机并行”解释成并发改文件。
 - 看、免费但写盘、付费 LLM 三类动作必须一眼可分。付费前由服务端下发完整 argv 并二次确认；
   不显示猜测的价格或调用次数，发起后不承诺无损取消在途调用。
@@ -34,7 +34,7 @@ stage1  摄入 + 分章                          0 成本，无 LLM
 stage2  全书级抽取（人物/关系/规则/秘密/弧线）  1 次调用
           ├─ 逐章抽取（事实原子/因果/舞台 + 保真点） 每章 1 次、最多 32 并发
           └─ 全局事实逐项人审                         0 成本，与逐章计算重叠
-        两支汇合：blueprint 联合 check-only + current 全 PASS 人审；随后才进 Stage4A
+        两支汇合：blueprint 联合 check-only + current blocking 面全 PASS 人审；随后才进 Stage4A
 stage4  A：1 个公开付费节点/授权；内部 1 份整书策略 + 每章 1 个私有 session
           策略串行先行，逐章最多 4 并发；全部通过后才确定性聚合并原子落盘
         B：只给冻结候选绑定舞台/人物/材料并编译计划 1 次独立调用（不变）
@@ -80,7 +80,7 @@ Stage5 的 canonical v2 产物与单臂工作流已完成工程回归；现役 a
 |---|---|---|
 | stage0 | 剔除番外、后记、尾声、作者有话说 | 整本审阅删除范围；可直接修正范围或正文；批准后才下行 |
 | stage1 | 确定性分章 | 原文与切分并排，确认无漏章、错章、断号 |
-| stage2 | 全书事实底座与逐章事实原子/舞台证据 | global 落盘后即可开始逐项对原文复核，并可与 blueprint 计算重叠；Stage4 前必须全部 PASS |
+| stage2 | 全书事实底座与逐章事实原子/舞台证据 | 称名投影可用后即可让 blueprint 计算，并与 global 复核重叠；Stage4 前 blocking 面必须全部 PASS，disclosure 未决项继续披露 |
 | stage4 | 盲设计、证据绑定、计划编译与写作上下文 | 逐章审阅 retain/reconstruct、入口/分组/披露读数与证据落点；接受或请求重规划 |
 | stage5 | canonical 闭卷写作与机械验收 | 材料与成稿、原文与改写、finding 与修订面 |
 | stage6 | 生成三个开篇文案候选 | 三候选并排，人选一条定稿 |

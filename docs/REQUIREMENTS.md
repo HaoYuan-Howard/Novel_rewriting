@@ -179,15 +179,6 @@ Stage4B 与正式 artifact v2 形状不变。
    `global_evidence_unlocated`、总 wall/token 与人审质量；质量无回退且成本/耗时改善前不切默认。
    本项需要单独的正文外发与付费授权，不复用主分支跑书目录或缓存。
 
-**P1（兼容当前 schema 的高影响阻断面）**：`contracts/invariants.py` 建立唯一
-`review_effect_of(kind)`（blocking / disclosure，legacy `known_by` 保守按 blocking 读）；
-`global_review.json` 形状与版本不变、current 仍要求 item/path/hash 集合完全一致；
-闸改为「current 且全部 blocking 项 PASS」，disclosure 的 pending/FAIL/UNVER 不自动 PASS、
-不阻断 Stage4，但必须进 inbox 与终审披露；API row 增服务端派生的 `effect` / `group_key` 与
-四态计数，前端不得自行复制分类表；`--emit-review-template/workpack` 默认只出 blocking 面，
-新增 `--review-scope blocking|all`；UI 按人物/关系/秘密时间线/规则/设定与弧线/集合完整性
-成卡，卡片批量提交仍展开为逐项 hash-bound decision。
-
 **P2（按稳定性优先重排；2026-08-28 用户裁定）**
 
 P2 原本是一个「候选事实分级 + 整书修复 + 上下文瘦身」的大批次。按「稳定跑通优先」

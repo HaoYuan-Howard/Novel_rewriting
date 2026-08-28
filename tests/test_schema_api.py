@@ -27,7 +27,8 @@ from contracts.schema.api import (
     AgentRunRequest, ApprovalDoc, DraftAlignView, DraftView, ErrorBody, GlobalView,
     JobList, LogChunk, LogStreamEvent, NovelList, PreviewRequest, ReadingView,
     ReviewChapterView, ReviewView,
-    Stage0EditRequest, Stage0Segment, Stage0Segments, Stage1Segment, Stage1View,
+    Stage0EditRequest, Stage0EditResult, Stage0Segment, Stage0Segments,
+    Stage1Segment, Stage1View,
     Stage4View, Stage5View, Stage6View, Stage7View, UploadResult,
 )
 from contracts.schema.api import ReadingBeatLine
@@ -386,7 +387,7 @@ def test_every_response_model_forbids_extra_fields():
     for model in (
         NovelList, JobList, LogChunk, LogStreamEvent, PreviewRequest, ErrorBody,
         AgentCapabilitiesResponse,
-        Stage0Segment, Stage0Segments, Stage0EditRequest,
+        Stage0Segment, Stage0Segments, Stage0EditRequest, Stage0EditResult,
         Stage1Segment, Stage1View,
         UploadResult, GlobalView, Stage6View, Stage7View,
         ReadingView, Stage4View, Stage5View, ReviewView,

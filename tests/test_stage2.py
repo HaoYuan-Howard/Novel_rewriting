@@ -4,8 +4,8 @@
 test_stage2.py —— Stage 2 当前判据。
 
 ⚠⚠ **本文件的主体是「盘上 0 命中的 HARD 各配一份会让它红的样本」**（2026-08-12 用户裁决）。
-40 条 HARD 里盘上只有 **4 条**有真反例（`address_bare_pronoun` 1 本 · `role_leaks_fate` 2 本 ·
-`hedge_words` 2 本 · `hinge_in_hole` 1 本）——**其余 37 条盘上 0 命中，那不是「干净」，
+39 条 HARD 里盘上只有 **3 条**有真反例（`address_bare_pronoun` 1 本 ·
+`role_leaks_fate` 2 本 · `hinge_in_hole` 1 本）——**其余 36 条盘上 0 命中，那不是「干净」，
 是那种失效模式在这三本上一次都没发生过**。一条从没见过反例的判据与一条不存在的判据，
 在报告上长得一模一样。
 
@@ -15,7 +15,7 @@ test_stage2.py —— Stage 2 当前判据。
 本文件因此全程操作 dict，一次都不 `model_validate`。
 
 【干净底座是本文件的另一半】`test_the_clean_base_has_no_hard_hits` 钉住：
-**底座上 40 条 HARD 一条都不命中**。没有它，下面 36 条「改一处就红」什么也证明不了
+**底座上 39 条 HARD 一条都不命中**。没有它，下面 36 条「改一处就红」什么也证明不了
 ——一个本来就红的底座上，改什么都红。
 """
 from __future__ import annotations
@@ -309,7 +309,7 @@ def _hard_hits(gg: dict | None, bp: dict | None, mt: list | None) -> set[str]:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def test_the_clean_base_has_no_hard_hits():
-    """⭐ **下面 37 条全部建立在这一条上。**
+    """⭐ **下面 36 条全部建立在这一条上。**
 
     一个本来就红的底座上，「改一处就红」什么也证明不了。
     """
@@ -400,14 +400,60 @@ def test_canonical_unique_accepts_two_explicitly_distinguished_same_base_names()
     assert 'distinguisher_lonely' not in hits
 
 
-def test_hedge_words_does_not_treat_factual_or_as_uncertainty():
+@pytest.mark.parametrize(('field', 'text', 'rule', 'expected'), [
+    ('role', '家中长女，不可能离开家业。', 'hedge_words', False),
+    ('role', '家中长女，不太可能离开家业。', 'hedge_words', True),
+    ('role', '家中长女，并非不可能离开家业。', 'hedge_words', True),
+    ('fate', '她不可能再嫁入慕容家。', 'fate_hedge_words', False),
+    ('fate', '她不太可能再嫁入慕容家。', 'fate_hedge_words', True),
+    ('fate', '她并非不可能再嫁入慕容家。', 'fate_hedge_words', True),
+    ('fate', '御医建议过继或让父母再生。', 'fate_hedge_words', False),
+])
+def test_hedge_words_distinguish_definite_impossibility_and_field_effect(
+        field, text, rule, expected):
     gg = global_grounding()
-    character = gg['entities']['characters']['char_001']
-    character['fate'] = '御医建议过继或让父母再生。'
-    assert 'hedge_words' not in _hard_hits(gg, blueprints(), main_text())
+    gg['entities']['characters']['char_001'][field] = text
+    outcomes = {outcome.rule: outcome for outcome in checks.check(
+        global_g=gg, blueprints=blueprints(), main_text=main_text())}
+    assert bool(outcomes[rule].findings) is expected
 
-    character['fate'] = '或许会让父母再生。'
-    assert 'hedge_words' in _hard_hits(gg, blueprints(), main_text())
+    # fate 的词表命中留在报告里，但永远不得借 `hedge_words`
+    # 那条 HARD 阻止 global 落盘。
+    if field == 'fate':
+        assert not outcomes['hedge_words'].findings
+        assert REGISTRY.get('fate_hedge_words').sev == 'info'
+
+
+def test_role_fate_wordlist_remains_hard_because_role_reaches_writer():
+    from contracts.invariants import review_effect_of
+
+    gg = global_grounding()
+    gg['entities']['characters']['char_001']['role'] = '沈家账房，最终下狱'
+    outcome = next(outcome for outcome in checks.check(
+        global_g=gg, blueprints=blueprints(), main_text=main_text())
+        if outcome.rule == 'role_leaks_fate')
+
+    rule = REGISTRY.get('role_leaks_fate')
+    assert outcome.findings, '转抄式结局词必须在进入 writer context 前阻断'
+    assert rule.sev == 'hard'
+    assert rule.fix == ('stage2.global', '--purge-role')
+    assert 'role_leaks_fate' in _hard_hits(gg, blueprints(), main_text())
+    assert review_effect_of('role') == 'blocking', '机械闸与 Stage4 前人审应共同保护 role'
+
+
+def test_beats_coarse_reports_the_long_tail_without_rejecting_the_candidate():
+    bp = blueprints()
+    # 留带 hinge 的那一拍，避免把「粗切长尾」与「整章无材料」混成一个反例。
+    _ch(bp, 3)['beats'] = _ch(bp, 3)['beats'][1:2]
+    outcome = next(outcome for outcome in checks.check(
+        global_g=global_grounding(), blueprints=bp, main_text=main_text())
+        if outcome.rule == 'beats_coarse')
+
+    assert outcome.findings, '越过 3× 长尾线仍必须出声'
+    assert REGISTRY.get('beats_coarse').sev == 'info'
+    assert REGISTRY.get('beats_coarse').fix is None, '统计长尾不得指挥付费重生成'
+    assert 'beats_coarse' not in _hard_hits(global_grounding(), bp, main_text())
+    assert REGISTRY.get('beats_collapsed').sev == 'hard'
 
 
 def test_the_clean_base_leaves_no_rule_unimplemented():
@@ -421,7 +467,7 @@ def test_the_clean_base_leaves_no_rule_unimplemented():
                         main_text=main_text())
     want = {r.rule for r in REGISTRY.all() if r.stage == 'stage2'}
     assert {o.rule for o in outs} == want
-    assert len(outs) == len(want) == 67
+    assert len(outs) == len(want) == 68
 
 
 def test_global_field_failures_route_to_resample_except_evidence_locator():
@@ -456,7 +502,7 @@ def test_the_two_unver_rules_always_speak():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 三、37 条盘上 0 命中的 HARD —— 各配一份会让它红的样本
+# 三、36 条盘上 0 命中的 HARD —— 各配一份会让它红的样本
 # ─────────────────────────────────────────────────────────────────────────────
 
 Mutator = Callable[[dict, dict, list], Any]
@@ -485,7 +531,7 @@ def _ch(bp: dict, o: int) -> dict:
     return next(x for x in bp['blueprints'] if x['chapter_ordinal'] == o)
 
 
-#: `(判据 id, 改哪一处, 为什么这一处会让它红)`。**一行一条**，37 条。
+#: `(判据 id, 改哪一处, 为什么这一处会让它红)`。**一行一条**，36 条。
 CASES: list[tuple[str, Mutator, str]] = [
     # ── 一、产物完整性与章对齐 ──────────────────────────────────────────
     ('upstream_missing', lambda g, b, m: (None, b, m),
@@ -531,6 +577,10 @@ CASES: list[tuple[str, Mutator, str]] = [
     ('role_repeats_name',
      _m(lambda g, b, m: g['entities']['characters']['char_001'].__setitem__('role', '李宝珠')),
      'role 与 canonical 完全同字 ⇒ 写手拿到的是「李宝珠：李宝珠」'),
+    ('hedge_words',
+     _m(lambda g, b, m: g['entities']['characters']['char_001'].__setitem__(
+         'role', '疑似是沈家账房')),
+     'role 会下发写手，「疑似」说明静态身份没有抽到底'),
     ('distinguisher_lonely',
      _m(lambda g, b, m: g['entities']['characters']['char_002']
         .__setitem__('canonical', '沈母（内院）')),
@@ -587,13 +637,6 @@ CASES: list[tuple[str, Mutator, str]] = [
      _m(lambda g, b, m: (m[0].__setitem__('text', CH1 + '天黑之后院子里静得出奇。' * 24),
                          _ch(b, 1).__setitem__('beats', _ch(b, 1)['beats'][:1]))),
      '≥300 字的章只切了 1 拍。⚠ 锚用的是**契约自己的反例**，不跨书比'),
-    ('beats_coarse',
-     # ⚠ 留下的是**带 hinge 的那一拍**（`b03_02`）而不是第一拍：留第一拍会连带
-     #   `chapter_no_hinge` 一起红，而那条与「切得太粗」是两件事，混在一份样本里
-     #   会让人以为它们同源。
-     _m(lambda g, b, m: _ch(b, 3).__setitem__('beats', _ch(b, 3)['beats'][1:2])),
-     '章级 字/拍 超过**本书自己的中位数** 3 倍。⚠ 分母是本书的中位数不是跨书常量：'
-     '拍数是同一个 prompt 都能改动 ±44% 的自由变量'),
     # ── 六、保真材料 ────────────────────────────────────────────────────
     ('hinge_cross_chapter',
      _m(lambda g, b, m: _ch(b, 1)['beats'][0]['hinges'].append(
@@ -665,16 +708,16 @@ def test_a_sample_that_makes_this_hard_rule_red(rule, mutate, why):
 def test_every_hard_rule_without_a_disk_counterexample_has_a_synthetic_one():
     """⭐⭐ **守卫的守卫：这张清单不许悄悄变短。**
 
-    40 条 HARD 里盘上只有 4 条有真反例；本文件要为**其余每一条**配一份。
+    39 条 HARD 里盘上只有 3 条有真反例；本文件要为**其余每一条**配一份。
     加一条 HARD 而不配样本，这条测试当场点名——
     否则那条新判据就又回到「从没见过反例」那一档，而它与一条不存在的判据长得一样。
     """
-    #: 盘上**有真反例**的 4 条（`docs/schema/stage2.md` §5.5）。它们不需要合成样本
+    #: 盘上**有真反例**的 3 条（`docs/schema/stage2.md` §5.5）。它们不需要合成样本
     #: ——真数据比合成样本强，而 `tests/test_corpus_fixtures.py` 一族在跑那三本。
-    on_disk = {'address_bare_pronoun', 'role_leaks_fate', 'hedge_words', 'hinge_in_hole'}
+    on_disk = {'address_bare_pronoun', 'role_leaks_fate', 'hinge_in_hole'}
     hard = {r.rule for r in REGISTRY.all() if r.stage == 'stage2' and r.sev == 'hard'}
     covered = {c[0] for c in CASES}
-    assert len(hard) == 40, f'HARD 条数变了（{len(hard)}）——本条与 §5.1 的账要一起改'
+    assert len(hard) == 39, f'HARD 条数变了（{len(hard)}）——本条与 §5.1 的账要一起改'
     assert covered <= hard, f'CASES 里有不是 HARD 的：{sorted(covered - hard)}'
     assert not (missing := sorted(hard - on_disk - covered)), (
         f'这几条 HARD 既没有盘上反例、也没有合成样本：{missing}\n'

@@ -964,16 +964,27 @@ export const mockApi: Api = {
 
   editStage0: (sid, request) => {
     lsWrite('stage0.selection.' + sid, request)
-    return later(finish({
-      kind: 'stage0.edit',
-      label: 'stage0 人工编辑',
-      extra: null,
-      sid,
-      ordinal: null,
-    }))
+    return later({
+      job: finish({
+        kind: 'stage0.edit',
+        label: 'stage0 人工编辑',
+        extra: null,
+        sid,
+        ordinal: null,
+      }),
+      revision_id: 'b'.repeat(64),
+    })
   },
 
   approveStage0: (sid, request) => {
+    const current = mockStage0Report(sid)
+    if (request.expected_revision_id !== current.revision_id) {
+      return fail(new ApiError('server', `/novels/${sid}/stage0/approve`, {
+        status: 409,
+        message: 'Stage0 页面已过期，请刷新后重新审阅',
+        backendKind: 'HumanEditProtected',
+      }))
+    }
     lsWrite('stage0.approval.' + sid, request)
     const doc = loadDoc(sid)
     saveDoc({ ...doc, gate: { ...doc.gate, s0: true } })
@@ -1035,10 +1046,20 @@ export const mockApi: Api = {
   decideGlobalReview: (sid, request: GlobalReviewDecisionSet) => {
     const path = `/novels/${sid}/stage2/global-review`
     if (sid !== SAMPLE_SID) return noBook(path)
-    if (!request.actor.trim() || request.decisions.some((row) => !row.reason.trim())) {
+    // Commander 的 compact scope 绑定 CLI workpack SHA；浏览器 mock 没有那份
+    // 只读材料，不能忽略 scope 后假装提交成功。真实后端/API 原样支持该形状。
+    if (request.blocking_scope) {
+      return fail(new ApiError('server', path, {
+        status: 501,
+        message: 'mock 不模拟 hash-bound blocking workpack；请使用真实后端',
+        backendKind: 'MockCapabilityUnavailable',
+      }))
+    }
+    if (!request.actor.trim() || request.decisions.length === 0
+      || request.decisions.some((row) => !row.reason.trim())) {
       return fail(new ApiError('server', path, {
         status: 422,
-        message: 'actor/reason 不得只有空白',
+        message: 'actor/reason 不得只有空白，且逐项提交不能为空',
         backendKind: 'RequestValidationError',
       }))
     }
@@ -1084,7 +1105,9 @@ export const mockApi: Api = {
           }
         : item
     })
-    const approved = review.current && items.length > 0 && items.every((item) => item.state === 'PASS')
+    const blocking = items.filter((item) => item.effect === 'blocking')
+    const approved = review.current && blocking.length > 0
+      && blocking.every((item) => item.state === 'PASS')
     saveGlobalReview(sid, { ...review, items, approved })
     const job = finish({
       kind: 'stage2.global',

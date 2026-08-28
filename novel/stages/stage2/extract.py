@@ -8,8 +8,9 @@
 from __future__ import annotations
 
 from contracts.artifacts import (
-    STAGE1_MAIN_TEXT, STAGE2_CHAPTER_BLUEPRINTS, STAGE2_GLOBAL_EDIT,
-    STAGE2_GLOBAL_GROUNDING, STAGE2_GLOBAL_REVIEW,
+    STAGE1_MAIN_TEXT, STAGE2_BLUEPRINT_CHARACTER_PROJECTION,
+    STAGE2_CHAPTER_BLUEPRINTS, STAGE2_GLOBAL_EDIT, STAGE2_GLOBAL_GROUNDING,
+    STAGE2_GLOBAL_REVIEW,
 )
 
 import copy
@@ -30,7 +31,7 @@ from contracts.schema.report import CheckReport
 from contracts.schema.evaluation import GlobalReview
 from contracts.schema.stage1 import MainText
 from contracts.schema.stage2 import (
-    BlueprintProvenance, ChapterBlueprints,
+    BlueprintCharacterProjection, BlueprintProvenance, ChapterBlueprints,
     GlobalAgentTurnResponse, GlobalEdit, GlobalEvidencePatchTurn,
     GlobalFullCandidateTurn, GlobalGrounding, GlobalGroundingResponse,
     GlobalProvenance, RoleSplitResponse,
@@ -54,7 +55,8 @@ from novel.report.findings import Outcome
 from novel.run import RunContext
 from novel.stages.stage2 import checks
 from novel.stages.stage2.character_refs import (
-    blueprint_character_prompt_inventory, visible_character_refs_with_drops,
+    blueprint_inventory_from_projection,
+    materialize_blueprint_character_projection,
 )
 from novel.stages.stage2.normalize import (
     EvidenceLocatorCorrection,
@@ -70,6 +72,7 @@ from novel.store import ArtifactStore
 GLOBAL_REL = STAGE2_GLOBAL_GROUNDING
 GLOBAL_REVIEW_REL = STAGE2_GLOBAL_REVIEW
 BLUEPRINT_REL = STAGE2_CHAPTER_BLUEPRINTS
+BLUEPRINT_CHARACTER_REL = STAGE2_BLUEPRINT_CHARACTER_PROJECTION
 MAIN_TEXT = STAGE1_MAIN_TEXT
 
 #: `--apply-edit` 的缺省决策集路径。形状是契约（`ARTIFACTS` 里登记着 `GlobalEdit`）。
@@ -303,7 +306,7 @@ class BlueprintCandidateEvaluation:
     error_count: int
     _batch_sha256: str = field(repr=False)
     _main_text_sha256: str = field(repr=False)
-    _global_sha256: str = field(repr=False)
+    _character_projection_sha256: str = field(repr=False)
 
     @property
     def passed(self) -> bool:
@@ -383,6 +386,80 @@ def _read_main_text(store: ArtifactStore) -> list[dict[str, Any]] | None:
     return [s.model_dump(by_alias=True) for s in art.root]
 
 
+def _write_blueprint_character_projection(
+    store: ArtifactStore,
+    grounding: GlobalGrounding,
+    *,
+    main_text: list[dict[str, Any]] | None = None,
+) -> BlueprintCharacterProjection:
+    """Global 终态写回时，用真实 prompt inventory 的唯一纯函数物化投影。
+
+    投影未变时不重写字节；这不是小优化，而是 role/fate 等非消费
+    修订不让 Blueprint stale 的物理保证。载体损坏也可在这条 0-LLM
+    生产者路上重建，不需要重采 global。
+    """
+    sections = main_text if main_text is not None else _read_main_text(store)
+    if sections is None:
+        raise UpstreamMissing(
+            f'{MAIN_TEXT} 不在盘上——无法物化 Blueprint 称名投影')
+    characters = grounding.model_dump(
+        by_alias=True, mode='json')['entities']['characters']
+    expected = materialize_blueprint_character_projection(characters, sections)
+    if store.exists(BLUEPRINT_CHARACTER_REL):
+        try:
+            current, _raw = store.read_own(
+                BlueprintCharacterProjection,
+                BLUEPRINT_CHARACTER_REL,
+            )
+        except ArtifactUnreadable:
+            current = None
+        if (current is not None
+                and current.model_dump(by_alias=True, mode='json')
+                == expected.model_dump(by_alias=True, mode='json')):
+            return current
+    store.write_round(BLUEPRINT_CHARACTER_REL, expected)
+    return expected
+
+
+def _require_blueprint_character_projection(
+    store: ArtifactStore,
+) -> tuple[BlueprintCharacterProjection, dict[str, Any]]:
+    """Blueprint 的唯一称名输入；缺/坏/stale 都关闭并指向 0-LLM 恢复。"""
+    recovery = (
+        'stage2.global --renormalize（0 LLM）会从当前 formal/INVALID global '
+        '与 MainText 重建该投影')
+    projection_exists = store.exists(BLUEPRINT_CHARACTER_REL)
+    try:
+        freshness = store.freshness(BLUEPRINT_CHARACTER_REL)
+    except UpstreamMissing:
+        raise UpstreamMissing(
+            f'{BLUEPRINT_CHARACTER_REL} 不在盘上；{recovery}') from None
+    except ArtifactUnreadable as exc:
+        raise ProvenanceRefused(
+            f'{BLUEPRINT_CHARACTER_REL} 载体/版本信封不可读；{recovery}'
+        ) from exc
+    if freshness.reason == 'global_naming_blocked':
+        raise ProvenanceRefused(
+            '最新 Global 候选仍有会改变 Blueprint 称名闭集的 HARD；'
+            '先走 stage2.global typed edit / '
+            '`--revalidate --actor <id> --reason <why>`（0 LLM）。'
+            '在称名面收口前不得启动付费 Blueprint')
+    if not projection_exists:
+        raise UpstreamMissing(
+            f'{BLUEPRINT_CHARACTER_REL} 不在盘上；{recovery}')
+    if freshness.state != 'fresh':
+        raise ProvenanceRefused(
+            f'{BLUEPRINT_CHARACTER_REL} 无法证明绑定当前最新 global + '
+            f'MainText（{freshness.state}/{freshness.reason}）；{recovery}')
+    try:
+        artifact = store.read(
+            BlueprintCharacterProjection, BLUEPRINT_CHARACTER_REL)
+    except ArtifactUnreadable as exc:
+        raise ProvenanceRefused(
+            f'{BLUEPRINT_CHARACTER_REL} 载体不可读；{recovery}') from exc
+    return artifact, artifact.model_dump(by_alias=True, mode='json')
+
+
 #: 两份产物的记账键 → 报告的记账节。⚠ **只放产物里真有的键**：
 #: 键不在 ⇒ 报告打「未记录」，那与「记了 0 次」不是一回事（`Q-2` 的三态）。
 _GLOBAL_KEYS = ('setup_chapters_pruned', 'evidence_locator_failures')
@@ -460,6 +537,181 @@ def run_check_only(ctx: RunContext) -> CheckReport:
     return _report(ctx, store, both, both.judge())
 
 
+def _checkpoint_fact_atom_phrases(
+        ctx: RunContext, *, artifact: ChapterBlueprints,
+        raw: dict[str, Any], main_text: list[dict[str, Any]],
+        character_projection: dict[str, Any],
+        failures: list[tuple[str, str, str]],
+) -> dict[str, str]:
+    """从与当前问题章逐字段闭合的已验证 checkpoint 恢复原始证据短语。
+
+    INVALID 只保留 ``claim``，而 claim 是模型转述，绝不能反猜 locator。这里先用
+    immutable provenance 限定 code/架构/system/model/usage，再让 stage2_runs 核
+    accepted attempt 与 ledger；最后按当前 main/称名投影重编译。只有编译章除失败事实
+    的 ``source/source_beat_ref`` 外逐字段相等、且同章恰有一个响应 payload 时才交给
+    normalizer。checkpoint 不闭合只是没有恢复材料，原 HARD 仍原样保留。
+    """
+    from novel.llm import stage2_runs
+    from novel.stages.stage2.contract import contract_for
+
+    provenance = artifact.provenance
+    try:
+        spec = contract_for(provenance.context.architecture)
+    except KeyError:
+        return {}
+    if provenance.prompts.get(spec.sys_name) != prov.fingerprint(spec.system):
+        return {}
+    if provenance.usage is None:
+        return {}
+
+    chapter_of_fact: dict[str, int] = {}
+    current_by_chapter: dict[int, dict[str, Any]] = {}
+    atoms: dict[str, dict[str, Any]] = {}
+    for blueprint in (raw.get('blueprints') or []):
+        if not isinstance(blueprint, dict):
+            continue
+        ordinal = int(blueprint.get('chapter_ordinal') or 0)
+        current_by_chapter[ordinal] = blueprint
+        for atom in (blueprint.get('fact_atoms') or []):
+            if not isinstance(atom, dict):
+                continue
+            fact_id = str(atom.get('fact_id') or '')
+            if fact_id in atoms:
+                return {}
+            atoms[fact_id] = atom
+            chapter_of_fact[fact_id] = ordinal
+
+    targets: dict[int, dict[str, str]] = {}
+    for row in failures:
+        if len(row) != 3:
+            return {}
+        fact_id, original_ref, _cause = row
+        fact_id = str(fact_id)
+        atom = atoms.get(fact_id)
+        ordinal = chapter_of_fact.get(fact_id)
+        # live INVALID 若已由人改过这格，尊重人工候选，不拿旧 checkpoint 覆盖。
+        if (atom is None or ordinal is None or atom.get('source') is not None
+                or str(atom.get('source_beat_ref') or '') != str(original_ref)):
+            continue
+        targets.setdefault(ordinal, {})[fact_id] = str(original_ref)
+    if not targets:
+        return {}
+
+    checkpoints = stage2_runs.verified_blueprint_recovery_checkpoints(
+        ctx,
+        architecture=spec.architecture,
+        response_model=spec.response_model,
+        system=spec.system,
+        artifact_code=provenance.code,
+        accepted_models=provenance.adopted_model_ids(),
+        artifact_usage=provenance.usage.model_dump(mode='json'),
+        chapters=targets,
+    )
+    character_inventory = blueprint_inventory_from_projection(
+        character_projection)
+    candidates: dict[int, dict[str, dict[str, str]]] = {}
+
+    def masked(
+            blueprint: dict[str, Any], wanted: set[str],
+    ) -> tuple[dict[str, Any], set[str]]:
+        value = copy.deepcopy(blueprint)
+        seen: set[str] = set()
+        for atom in (value.get('fact_atoms') or []):
+            if not isinstance(atom, dict):
+                continue
+            fact_id = str(atom.get('fact_id') or '')
+            if fact_id not in wanted:
+                continue
+            atom['source'] = None
+            atom['source_beat_ref'] = '__checkpoint_rehome_target__'
+            seen.add(fact_id)
+        return value, seen
+
+    for checkpoint in checkpoints:
+        wanted_map = targets.get(checkpoint.chapter)
+        current = current_by_chapter.get(checkpoint.chapter)
+        if not wanted_map or current is None:
+            continue
+        response_rows = checkpoint.response_payload.get('blueprints')
+        if not isinstance(response_rows, list):
+            continue
+        selected = [
+            copy.deepcopy(row) for row in response_rows
+            if isinstance(row, dict)
+            and int(row.get('chapter_ordinal') or 0) == checkpoint.chapter
+        ]
+        if len(selected) != 1:
+            continue
+        try:
+            compiled, accounting = spec.compile_fn(
+                {'blueprints': selected}, main_text,
+                character_inventory=character_inventory)
+        except (TypeError, ValueError, ValidationError):
+            continue
+        compiled_rows = compiled.get('blueprints')
+        if not isinstance(compiled_rows, list) or len(compiled_rows) != 1:
+            continue
+        candidate_chapter = compiled_rows[0]
+        if not isinstance(candidate_chapter, dict):
+            continue
+        failed_ids = {
+            str(row[0]) for row in accounting.get('fact_atom_failures', [])
+            if isinstance(row, (list, tuple)) and len(row) == 3
+        }
+        wanted = set(wanted_map)
+        if failed_ids & wanted:
+            continue
+
+        current_masked, current_seen = masked(current, wanted)
+        candidate_masked, candidate_seen = masked(candidate_chapter, wanted)
+        if (current_seen != wanted or candidate_seen != wanted
+                or current_masked != candidate_masked):
+            continue
+
+        landed = {
+            str(atom.get('fact_id') or ''): atom
+            for atom in (candidate_chapter.get('fact_atoms') or [])
+            if isinstance(atom, dict)
+        }
+        # 本入口只恢复“声明拍外、唯一落入另一拍”的旧失败；同拍补 source 属另一类
+        # typed 修订，不能借这条自动路扩大权限。
+        if any(
+                not isinstance((landed.get(fact_id) or {}).get('source'), dict)
+                or str((landed.get(fact_id) or {}).get('source_beat_ref') or '')
+                == original_ref
+                for fact_id, original_ref in wanted_map.items()):
+            continue
+
+        phrases: dict[str, str] = {}
+        sequence = 0
+        for beat in (selected[0].get('beats') or []):
+            if not isinstance(beat, dict):
+                continue
+            for atom in (beat.get('fact_atoms') or []):
+                if not isinstance(atom, dict):
+                    continue
+                sequence += 1
+                fact_id = f'f{checkpoint.chapter:02d}_{sequence:03d}'
+                if fact_id in wanted:
+                    phrase = atom.get('evidence_phrase')
+                    if isinstance(phrase, str) and phrase.strip():
+                        phrases[fact_id] = phrase
+        if set(phrases) != wanted:
+            continue
+        candidates.setdefault(checkpoint.chapter, {})[
+            checkpoint.response_payload_sha256] = phrases
+
+    recovered: dict[str, str] = {}
+    for ordinal, wanted_map in targets.items():
+        by_payload = candidates.get(ordinal, {})
+        if len(by_payload) != 1:
+            continue
+        phrases = next(iter(by_payload.values()))
+        if set(phrases) == set(wanted_map):
+            recovered.update(phrases)
+    return recovered
+
+
 def run_revalidate(
     ctx: RunContext, *, actor: str, reason: str,
 ) -> tuple[bool, CheckReport]:
@@ -499,11 +751,15 @@ def run_revalidate(
             return False, _report(
                 ctx, store, both, outcomes,
                 judged_rel=_GLOBAL_INVALID, invalid_rel=_GLOBAL_INVALID)
-        with store.history_transaction(GLOBAL_REL, GLOBAL_REVIEW_REL):
+        with store.history_transaction(
+                GLOBAL_REL, GLOBAL_REVIEW_REL, BLUEPRINT_CHARACTER_REL):
             store.promote_invalid(
                 GLOBAL_REL, GlobalGrounding, actor=actor, reason=reason,
                 artifact_override=rebuilt)
-            _refresh_global_review(store, store.read(GlobalGrounding, GLOBAL_REL))
+            promoted = store.read(GlobalGrounding, GLOBAL_REL)
+            _refresh_global_review(store, promoted)
+            _write_blueprint_character_projection(
+                store, promoted, main_text=main_text)
         _note_evidence_locator_corrections(
             ctx, store, accounting.evidence_locator_corrections,
             rel=GLOBAL_REL)
@@ -517,23 +773,37 @@ def run_revalidate(
     if not store.exists(_INVALID):
         raise UpstreamMissing(
             f'{_INVALID} 不在盘上——没有被拦下的逐章问题稿要提升')
-    if not store.exists(GLOBAL_REL):
-        raise UpstreamMissing(
-            f'{GLOBAL_REL} 不在盘上——逐章问题稿不能脱离正式全局底座提升')
-    _global, global_raw = store.read_own(GlobalGrounding, GLOBAL_REL)
+    _projection, character_projection = \
+        _require_blueprint_character_projection(store)
+    baseline = store.revalidation_baseline(
+        BLUEPRINT_REL, ChapterBlueprints, actor=actor, reason=reason)
     artifact, raw = store.read_own(ChapterBlueprints, _INVALID)
+    phrases = _checkpoint_fact_atom_phrases(
+        ctx,
+        artifact=baseline,
+        raw=raw,
+        main_text=main_text,
+        character_projection=character_projection,
+        failures=list(baseline.provenance.fact_atom_failures),
+    )
     data = copy.deepcopy(raw)
     data.pop('_provenance', None)
-    data, accounting = normalize_blueprints(data, main_text)
+    data, accounting = normalize_blueprints(
+        data,
+        main_text,
+        previous_fact_atom_failures=list(
+            baseline.provenance.fact_atom_failures),
+        evidence_phrases=phrases,
+    )
     rebuilt = ChapterBlueprints.model_validate({
         **data,
         '_provenance': BlueprintProvenance.model_validate({
-            **artifact.provenance.model_dump(), **accounting,
+            **baseline.provenance.model_dump(), **accounting,
         }),
     })
     candidate = rebuilt.model_dump(by_alias=True)
-    outcomes = _judge_candidate(global_raw, candidate, main_text)
-    if _hard_hits(outcomes):
+    outcomes = _judge_candidate(None, candidate, main_text)
+    if _blueprint_hard_hits(outcomes):
         both = _Both(store)
         return False, _report(ctx, store, both, outcomes, judged_rel=_INVALID)
     store.promote_invalid(
@@ -544,13 +814,15 @@ def run_revalidate(
 
 
 def build_prompts(
-    ctx: RunContext, *, chapters: tuple[int, ...] = ()
+    ctx: RunContext, *, chapters: tuple[int, ...] = (),
+    character_projection: BlueprintCharacterProjection | None = None,
+    main_text: list[dict[str, Any]] | None = None,
 ) -> list[tuple[int | None, str, str]]:
     """返回本次会发出的真实请求；blueprint 始终是一章一条。"""
     from novel.stages.stage2 import prompts
 
     store = ArtifactStore(ctx)
-    mt = _read_main_text(store)
+    mt = main_text if main_text is not None else _read_main_text(store)
     if mt is None:
         raise UpstreamMissing(f'{MAIN_TEXT} 不在盘上——先跑 stage1')
     if ctx.node == 'stage2.global':
@@ -562,12 +834,11 @@ def build_prompts(
     missing = sorted(set(targets) - set(ordinals))
     if missing:
         raise TerminalState(f'--chapters 不在正文阅读序里：{missing}')
-    if not store.exists(GLOBAL_REL):
-        raise UpstreamMissing(
-            f'{GLOBAL_REL} 不在盘上——已现称名表由全局名册派生，先跑 stage2.global')
-    characters = store.read(GlobalGrounding, GLOBAL_REL) \
-        .model_dump(by_alias=True)['entities']['characters']
-    character_inventory = blueprint_character_prompt_inventory(characters, mt)
+    projection = character_projection
+    if projection is None:
+        projection, _projection_raw = \
+            _require_blueprint_character_projection(store)
+    character_inventory = blueprint_inventory_from_projection(projection)
     past_names = character_inventory['past_attested_surfaces']
     # 契约 dispatch：system 是 spec 里**已拼好结构提示**的完整字节。v2 的首相
     # 不需要关闭式细节表；scaffolded single 必须在唯一请求里同时拿到人物与候选。
@@ -583,8 +854,6 @@ def build_prompts(
     candidates: dict[int, list[dict[str, Any]]] = {}
     if spec.topology == 'scaffolded_single':
         visible = character_inventory['visible_character_refs']
-        _unused_visible, dropped_refs = visible_character_refs_with_drops(characters, mt)
-        _observe_indistinguishable_refs(ctx, dropped_refs)
     if spec.topology == 'scaffolded_single' and spec.uses_hinge_candidates:
         candidates = hinge_candidates_by_chapter(mt)
     return [
@@ -615,7 +884,7 @@ def build_prompt(ctx: RunContext, *, chapters: tuple[int, ...] = ()) -> tuple[st
     ⚠ 它与付费路**共用同一个构造入口**（`R-11.8`）——否则「预览里看到的」与
     「真发出去的」是两件事，而那种分家没有任何东西会报错。
     ⚠ global 的 `user` 带全书原文；blueprint 只带稳定索引、当前章全文、有界过去窗口
-    与已现称名表（后者由全局名册派生 ⇒ blueprint 的预览也要求 `stage2.global` 先在盘上）。
+    与已现称名表（后者只从注册的称名投影读取）。
     预览与付费路共用同一个构造入口，因此这里看到的边界就是真实模型可见边界。
     """
     _ordinal, system, user = build_prompts(ctx, chapters=chapters)[0]
@@ -1003,6 +1272,25 @@ def global_evidence_patch_scope(
     )
 
 
+def _blueprint_hard_hits(outcomes: list[Outcome]) -> list[str]:
+    """Blueprint 自身落盘只拦它所有的 R-3 业务违约。
+
+    联合报告仍然保留全部 Global + Blueprint outcomes；这里只分流
+    producer landing gate。否则一份 schema-valid global 因 role/证据/时间线
+    HARD 落在 `.INVALID` 时，它已能完整提供称名投影，却会让正式
+    Blueprint 被另一个 producer 的问题连坐拒写。Stage4 前的联合闸仍用
+    :func:`_hard_hits` 检查全集。
+    """
+    return sorted(
+        outcome.rule for outcome in outcomes
+        if outcome.rule != 'upstream_missing'
+        and outcome.unver_why is None
+        and outcome.findings
+        and REGISTRY.get(outcome.rule).sev == 'hard'
+        and REGISTRY.get(outcome.rule).requirement.startswith('R-3.')
+    )
+
+
 def global_evidence_patch_feedback_rows(
     evaluation: GlobalCandidateEvaluation,
     scope: GlobalEvidencePatchScope,
@@ -1370,11 +1658,15 @@ def _refresh_global_review(store: ArtifactStore, artifact: GlobalGrounding) -> N
 
 def _write_formal(store: ArtifactStore, rel: str, artifact: Any) -> None:
     """Commit a new round; global grounding and its review are indivisible."""
-    companions = (rel, GLOBAL_REVIEW_REL) if rel == GLOBAL_REL else (rel,)
+    companions = (
+        (rel, GLOBAL_REVIEW_REL, BLUEPRINT_CHARACTER_REL)
+        if rel == GLOBAL_REL else (rel,)
+    )
     with store.history_transaction(*companions):
         store.write_round(rel, artifact)
         if rel == GLOBAL_REL:
             _refresh_global_review(store, artifact)
+            _write_blueprint_character_projection(store, artifact)
 
 
 def _retire_invalid_for_matching_formal(
@@ -1397,7 +1689,31 @@ def _write_invalid(
     store: ArtifactStore, rel: str, artifact: Any
 ) -> str:
     """Store a failed round; the store atomically preserves its predecessor."""
-    return str(store.write_invalid(rel, artifact, gates_skipped=[]))
+    if rel != GLOBAL_REL:
+        return str(store.write_invalid(rel, artifact, gates_skipped=[]))
+    sections = _read_main_text(store)
+    if sections is None:
+        raise UpstreamMissing(
+            f'{MAIN_TEXT} 不在盘上——无法判定 Blueprint 称名投影是否可发布')
+    grounding_payload = artifact.model_dump(by_alias=True, mode='json')
+    naming_blockers = checks.blueprint_projection_blockers(
+        global_g=grounding_payload,
+        main_text=sections,
+    )
+    if naming_blockers:
+        # 问题稿本身必须稳定落盘，但称名闭集尚不可信时不发布一份必然
+        # ``unknown`` 的正式伴生产物。freshness 会直接从 latest INVALID
+        # 报 ``global_naming_blocked``，修好后再由 0-LLM 路径物化投影。
+        return str(store.write_invalid(rel, artifact, gates_skipped=[]))
+
+    # schema-valid Global 被非称名 HARD 拦在 INVALID 时，已经足够确定
+    # Blueprint 真正消费的称名闭集。两者必须同进同退，否则崩在中间会让
+    # 旧投影为新名册继续背书。
+    with store.history_transaction(_GLOBAL_INVALID, BLUEPRINT_CHARACTER_REL):
+        path = store.write_invalid(rel, artifact, gates_skipped=[])
+        _write_blueprint_character_projection(
+            store, artifact, main_text=sections)
+    return str(path)
 
 
 def _note_evidence_locator_corrections(
@@ -2233,7 +2549,7 @@ def _keep_scope_violation(row: str, targets: set[int]) -> bool:
 
 
 def _refresh_commit_payload(
-        *, chapters: tuple[int, ...], global_raw: dict[str, Any],
+        *, chapters: tuple[int, ...], character_projection: dict[str, Any],
         main_text: list[dict[str, Any]], candidate: dict[str, Any],
         live_before: dict[str, str | None] | None = None,
 ) -> dict[str, Any]:
@@ -2241,7 +2557,7 @@ def _refresh_commit_payload(
     payload: dict[str, Any] = {
         'operation': 'stage2.blueprint --chapters',
         'chapters': list(chapters),
-        'global': global_raw,
+        'character_projection': character_projection,
         'main_text': main_text,
         'artifact': candidate,
     }
@@ -2251,13 +2567,14 @@ def _refresh_commit_payload(
 
 
 def _full_commit_payload(
-        *, global_raw: dict[str, Any], main_text: list[dict[str, Any]],
+        *, character_projection: dict[str, Any],
+        main_text: list[dict[str, Any]],
         candidate: dict[str, Any],
         live_before: dict[str, str | None] | None = None,
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {
         'operation': 'stage2.blueprint full',
-        'global': global_raw,
+        'character_projection': character_projection,
         'main_text': main_text,
         'artifact': candidate,
     }
@@ -2297,7 +2614,8 @@ def _require_blueprint_code_current(ctx: RunContext, *, moment: str) -> None:
 
 def _finish_full_commit_tail(
         ctx: RunContext, *, store: ArtifactStore,
-        main_text: list[dict[str, Any]], global_raw: dict[str, Any],
+        main_text: list[dict[str, Any]],
+        character_projection: dict[str, Any],
 ) -> CheckReport | None:
     """full run 在 prepare 之后崩溃时，用封存候选零 wire 收尾。"""
     from novel.llm import stage2_runs
@@ -2369,19 +2687,22 @@ def _finish_full_commit_tail(
                     f'run={ctx.run_id} 的 formal 已落，但 live {_INVALID} '
                     '不是 prepare 时那一份；拒绝归档第三方改动')
         expected_finalization = _full_commit_payload(
-            global_raw=global_raw, main_text=main_text, candidate=candidate,
+            character_projection=character_projection,
+            main_text=main_text, candidate=candidate,
             live_before=(live_before if isinstance(live_before, dict) else None),
         )
     else:
         # 兼容旧 hash-only journal：只有 formal 已精确命中时才会走到这里。
         expected_finalization = _full_commit_payload(
-            global_raw=global_raw, main_text=main_text, candidate=candidate)
+            character_projection=character_projection,
+            main_text=main_text, candidate=candidate)
     if not stage2_runs.verify_commit_finalization(journal, expected_finalization):
         raise ProvenanceRefused(
             f'run={ctx.run_id} 的 full 提交尾窗输入或候选已漂移')
-    if hits := _hard_hits(_judge_candidate(global_raw, candidate, main_text)):
+    if hits := _blueprint_hard_hits(
+            _judge_candidate(None, candidate, main_text)):
         raise ProvenanceRefused(
-            f'run={ctx.run_id} 封存的 blueprint 不再通过联合 HARD：{hits}')
+            f'run={ctx.run_id} 封存的 blueprint 不再通过自身 HARD：{hits}')
 
     _require_blueprint_code_current(ctx, moment='commit tail 写盘前')
     ctx.require_observed_roots_current()
@@ -2402,7 +2723,8 @@ def _finish_full_commit_tail(
 
 def _finish_refresh_commit_tail(
         ctx: RunContext, *, chapters: tuple[int, ...], store: ArtifactStore,
-        main_text: list[dict[str, Any]], global_raw: dict[str, Any],
+        main_text: list[dict[str, Any]],
+        character_projection: dict[str, Any],
 ) -> CheckReport | None:
     """formal 已落而 committed 未落时，零 wire 补 adoption/哨兵并返回联合报告。"""
     from novel.llm import stage2_runs
@@ -2438,17 +2760,18 @@ def _finish_refresh_commit_tail(
         if isinstance(stored_finalization, dict) else None
     )
     finalization = _refresh_commit_payload(
-        chapters=chapters, global_raw=global_raw,
+        chapters=chapters, character_projection=character_projection,
         main_text=main_text, candidate=candidate,
         live_before=(stored_live_before
                      if isinstance(stored_live_before, dict) else None))
     if not stage2_runs.verify_commit_finalization(journal, finalization):
         raise ProvenanceRefused(
-            f'run={ctx.run_id} 的提交尾窗输入/global/目标章已经漂移；拒绝补猜 committed')
-    hits = _hard_hits(_judge_candidate(global_raw, candidate, main_text))
+            f'run={ctx.run_id} 的提交尾窗输入/称名投影/目标章已经漂移；'
+            '拒绝补猜 committed')
+    hits = _blueprint_hard_hits(_judge_candidate(None, candidate, main_text))
     if hits:
         raise ProvenanceRefused(
-            f'run={ctx.run_id} 的正式 blueprint 不再通过联合 HARD：{hits}')
+            f'run={ctx.run_id} 的正式 blueprint 不再通过自身 HARD：{hits}')
     if store.exists(_INVALID):
         if journal.get('state') == 'committed':
             raise ProvenanceRefused(
@@ -2472,7 +2795,7 @@ def _run_blueprint_repair(
     chapters: tuple[int, ...],
     store: ArtifactStore,
     main_text: list[dict[str, Any]],
-    global_raw: dict[str, Any],
+    character_projection: dict[str, Any],
 ) -> CheckReport:
     """只重生成目标章，合并未动章节并记录完整 repair 账。
 
@@ -2486,7 +2809,7 @@ def _run_blueprint_repair(
             '定向重生成不得读回原请求缓存')
     finalized = _finish_refresh_commit_tail(
         ctx, chapters=chapters, store=store,
-        main_text=main_text, global_raw=global_raw)
+        main_text=main_text, character_projection=character_projection)
     if finalized is not None:
         return finalized
     source_rel = _INVALID if store.exists(_INVALID) else BLUEPRINT_REL
@@ -2540,13 +2863,13 @@ def _run_blueprint_repair(
           spec.prefers_content_over_reasoning_salvage)]
     )
     # 定向刷新最终会把未改章节与目标章重新合并；只哈目标 prompt 抓不到未改基线
-    # 在暂停期间被人改写。把完整 baseline/global/main_text 与目标集压成一枚主体指纹，
+    # 在暂停期间被人改写。把完整 baseline/称名投影/main_text 与目标集压成一枚主体指纹，
     # resume 时任何输入漂移都会在首个 wire 前关闭式停止。
     refresh_subject = prov.projection_fingerprint({
         'operation': 'stage2.blueprint --chapters',
         'chapters': list(chapters),
         'baseline': previous_raw,
-        'global': global_raw,
+        'character_projection': character_projection,
         'main_text': main_text,
     })
     refresh_run_ready = False
@@ -2585,7 +2908,7 @@ def _run_blueprint_repair(
     }
     missing_baselines = set(chapters) - set(old_by)
 
-    before_outcomes = _judge_candidate(global_raw, previous_raw, main_text)
+    before_outcomes = _judge_candidate(None, previous_raw, main_text)
     prompt_rows: dict[int, tuple[str, list[dict[str, str]]]] = {}
     findings_of: dict[int, list[dict[str, str]]] = {}
     baselines: dict[int, dict[str, Any]] = {}
@@ -2594,13 +2917,10 @@ def _run_blueprint_repair(
     boundary_requests: list[tuple[int | None, str, str]] = []
     visible: dict[int, dict[str, list[str]]] = {}
     candidate_rows: dict[int, list[dict[str, Any]]] = {}
-    character_inventory = blueprint_character_prompt_inventory(
-        global_raw['entities']['characters'], main_text)
+    character_inventory = blueprint_inventory_from_projection(
+        character_projection)
     visible = character_inventory['visible_character_refs']
     past_names = character_inventory['past_attested_surfaces']
-    _unused_visible, dropped_refs = visible_character_refs_with_drops(
-        global_raw['entities']['characters'], main_text)
-    _observe_indistinguishable_refs(ctx, dropped_refs)
     if spec.uses_hinge_candidates:
         candidate_rows = hinge_candidates_by_chapter(main_text)
     for ordinal in chapters:
@@ -2750,7 +3070,7 @@ def _run_blueprint_repair(
     target_data, target_accounting = spec.compile_fn(
         {'blueprints': returned},
         main_text,
-        global_raw['entities']['characters'],
+        character_inventory=character_inventory,
     )
     normalized_by = {
         int(blueprint.get('chapter_ordinal') or 0): blueprint
@@ -2852,8 +3172,8 @@ def _run_blueprint_repair(
 
     artifact = current_artifact()
     candidate = artifact.model_dump(by_alias=True)
-    outcomes = _judge_candidate(global_raw, candidate, main_text)
-    hits = _hard_hits(outcomes)
+    outcomes = _judge_candidate(None, candidate, main_text)
+    hits = _blueprint_hard_hits(outcomes)
     if hits or errors or not_returned:
         block(artifact, hits)
 
@@ -2865,7 +3185,7 @@ def _run_blueprint_repair(
         artifact_fingerprint=prov.projection_fingerprint(candidate),
         artifact_payload=candidate,
         finalization_payload=_refresh_commit_payload(
-            chapters=chapters, global_raw=global_raw,
+            chapters=chapters, character_projection=character_projection,
             main_text=main_text, candidate=candidate,
             live_before=live_before),
         adoptions=adoptions,
@@ -2903,6 +3223,10 @@ def request_blueprints(ctx: RunContext, client: _BlueprintRequestSource, *,
     store = ArtifactStore(ctx)
     main_text = _read_main_text(store)
     assert main_text is not None
+    character_projection, character_projection_raw = \
+        _require_blueprint_character_projection(store)
+    character_inventory = blueprint_inventory_from_projection(
+        character_projection)
     if checkpoints:
         required_bridge = (
             'json_request_policy',
@@ -2918,7 +3242,13 @@ def request_blueprints(ctx: RunContext, client: _BlueprintRequestSource, *,
                 'stage2.blueprint 正式请求缺现有 stage2_runs checkpoint bridge '
                 f'{missing_bridge}；已在首个 wire 前停止，不能跳过恢复账继续花费')
     spec = _active_spec()
-    requests = build_prompts(ctx, chapters=chapters)
+    # prompt / validator / compiler 必须消费同一份冻结投影。此前 build_prompts
+    # 会独立再读一次 current，Global 称名在两次读取间变化时会把一个 batch
+    # 内部先拼成 P0 validator + P1 prompt，wire 之后又按 P2 编译。
+    requests = build_prompts(
+        ctx, chapters=chapters,
+        character_projection=character_projection,
+        main_text=main_text)
     if (spec.topology == 'boundary_then_detail'
             and (spec.boundary_system is None
                  or spec.boundary_response_model is None)):
@@ -2944,10 +3274,7 @@ def request_blueprints(ctx: RunContext, client: _BlueprintRequestSource, *,
     if spec.topology != 'boundary_then_detail':
         validator_of = None
         if spec.topology == 'scaffolded_single':
-            characters = store.read(GlobalGrounding, GLOBAL_REL) \
-                .model_dump(by_alias=True)['entities']['characters']
-            visible = blueprint_character_prompt_inventory(
-                characters, main_text)['visible_character_refs']
+            visible = character_inventory['visible_character_refs']
             candidate_rows = (hinge_candidates_by_chapter(main_text)
                               if spec.uses_hinge_candidates else {})
             paragraph_count = {
@@ -2972,6 +3299,7 @@ def request_blueprints(ctx: RunContext, client: _BlueprintRequestSource, *,
         _raise_response_repair(ctx, errors, architecture=spec.architecture)
         return {
             'main_text': main_text,
+            'character_projection': character_projection_raw,
             'requests': requests,
             'raw_blueprints': raw,
             'scope_violations': violations,
@@ -3009,11 +3337,6 @@ def request_blueprints(ctx: RunContext, client: _BlueprintRequestSource, *,
         [str(beat.get('event') or '') for beat in (blueprint.get('beats') or [])]
         for blueprint in boundary_raw
     }
-    store = ArtifactStore(ctx)
-    characters = store.read(GlobalGrounding, GLOBAL_REL) \
-        .model_dump(by_alias=True)['entities']['characters']
-    character_inventory = blueprint_character_prompt_inventory(
-        characters, main_text)
     visible = character_inventory['visible_character_refs']
     past_names = character_inventory['past_attested_surfaces']
     detail_requests = [
@@ -3042,6 +3365,7 @@ def request_blueprints(ctx: RunContext, client: _BlueprintRequestSource, *,
     _raise_response_repair(ctx, detail_errors, architecture=spec.architecture)
     return {
         'main_text': main_text,
+        'character_projection': character_projection_raw,
         'requests': detail_requests,
         'boundary_requests': requests,
         'frozen_boundaries': frozen,
@@ -3057,6 +3381,7 @@ def _blueprint_batch_sha256(batch: dict[str, Any]) -> str:
     """冻结候选批次；异常只取稳定类型/文字，不把对象身份当成业务输入。"""
     return _canonical_sha256({
         'main_text': batch.get('main_text'),
+        'character_projection': batch.get('character_projection'),
         'requests': batch.get('requests'),
         'boundary_requests': batch.get('boundary_requests'),
         'frozen_boundaries': batch.get('frozen_boundaries'),
@@ -3130,8 +3455,22 @@ def _materialize_blueprint_evaluation(
         raise ProvenanceRefused(
             'stage2.blueprint 候选批次绑定的 main_text 与当前盘面不同；'
             '拒绝把旧章节响应编进新正文')
-    global_art = store.read(GlobalGrounding, GLOBAL_REL)
-    global_raw = global_art.model_dump(by_alias=True, mode='json')
+    frozen_projection_raw = batch.get('character_projection')
+    try:
+        frozen_projection = BlueprintCharacterProjection.model_validate(
+            frozen_projection_raw)
+    except ValidationError as exc:
+        raise ProvenanceRefused(
+            'stage2.blueprint 候选批次缺 request-time 强类型称名投影；'
+            '拒绝按当前盘面替旧响应补猜输入') from exc
+    _current_projection, current_projection_raw = \
+        _require_blueprint_character_projection(store)
+    if current_projection_raw != frozen_projection_raw:
+        raise ProvenanceRefused(
+            'stage2.blueprint 发出章节请求后称名投影发生漂移；'
+            '拒绝把旧 prompt 响应按新名册编译或记账')
+    character_inventory = blueprint_inventory_from_projection(
+        frozen_projection)
     requests = batch['requests']
     raw_blueprints = batch['raw_blueprints']
     scope_violations = batch['scope_violations']
@@ -3145,7 +3484,7 @@ def _materialize_blueprint_evaluation(
     data, accounting = spec.compile_fn(
         {'blueprints': raw_blueprints},
         main_text,
-        global_raw['entities']['characters'],
+        character_inventory=character_inventory,
     )
     system = requests[0][1]
     prompt_keys = {spec.sys_name: system}
@@ -3185,10 +3524,10 @@ def _materialize_blueprint_evaluation(
         **data, '_provenance': provenance,
     })
     candidate = artifact.model_dump(by_alias=True)
-    outcomes = _judge_candidate(global_raw, candidate, main_text)
+    outcomes = _judge_candidate(None, candidate, main_text)
     return (
-        artifact, outcomes, tuple(_hard_hits(outcomes)), purpose_rows,
-        main_text, global_raw,
+        artifact, outcomes, tuple(_blueprint_hard_hits(outcomes)), purpose_rows,
+        main_text, frozen_projection_raw,
     )
 
 
@@ -3201,7 +3540,7 @@ def evaluate_blueprint_candidate(
     if ctx.node != 'stage2.blueprint':
         raise ValueError(
             f'evaluate_blueprint_candidate 只接受 stage2.blueprint，实得 {ctx.node!r}')
-    artifact, outcomes, hits, purposes, main_text, global_raw = \
+    artifact, outcomes, hits, purposes, main_text, character_projection = \
         _materialize_blueprint_evaluation(
             ctx, source, batch, settle=False)
     return BlueprintCandidateEvaluation(
@@ -3219,7 +3558,7 @@ def evaluate_blueprint_candidate(
         error_count=len(batch.get('errors') or []),
         _batch_sha256=_blueprint_batch_sha256(batch),
         _main_text_sha256=_canonical_sha256(main_text),
-        _global_sha256=_canonical_sha256(global_raw),
+        _character_projection_sha256=_canonical_sha256(character_projection),
     )
 
 
@@ -3238,6 +3577,8 @@ def verify_blueprint_delivery(
         landed, _landed_raw = store.read_own(
             ChapterBlueprints, BLUEPRINT_REL, require_current=True)
         freshness = store.freshness(BLUEPRINT_REL)
+        _projection, _projection_raw = \
+            _require_blueprint_character_projection(store)
         both = _Both(store)
         outcomes = both.judge()
     expected_raw = expected.model_dump(by_alias=True, mode='json')
@@ -3250,9 +3591,10 @@ def verify_blueprint_delivery(
         raise ProvenanceRefused(
             f'stage2.blueprint 正式 readback freshness='
             f'{freshness.state}/{freshness.reason}；拒绝 delivered')
-    if hits := _hard_hits(outcomes):
+    if hits := _blueprint_hard_hits(outcomes):
         raise ProvenanceRefused(
-            f'stage2.blueprint 正式 readback 仍命中 HARD {hits}；拒绝 delivered')
+            f'stage2.blueprint 正式 readback 仍命中自身 HARD {hits}；'
+            '拒绝 delivered')
     # 不把入口的代码快照当成整个提交窗的锁：readback/判据
     # 跑完后再核一次，中途漂移就不得声称 delivered。
     _require_blueprint_code_current(ctx, moment='readback 终验结束')
@@ -3294,15 +3636,16 @@ def finalize_blueprint_candidate(
     with ctx.validation_reads():
         store = ArtifactStore(ctx)
         current_main = _read_main_text(store)
-        current_global = store.read(GlobalGrounding, GLOBAL_REL) \
-            .model_dump(by_alias=True, mode='json')
+        _projection, current_projection = \
+            _require_blueprint_character_projection(store)
     if (_canonical_sha256(current_main) != evaluation._main_text_sha256
-            or _canonical_sha256(current_global) != evaluation._global_sha256):
+            or _canonical_sha256(current_projection)
+            != evaluation._character_projection_sha256):
         raise ProvenanceRefused(
-            'stage2.blueprint 候选评估后 main_text/global 输入漂移；'
+            'stage2.blueprint 候选评估后 main_text/称名投影输入漂移；'
             '必须新建每章 executor sessions')
 
-    artifact, outcomes, hits, purposes, main_text, global_raw = \
+    artifact, outcomes, hits, purposes, main_text, character_projection = \
         _materialize_blueprint_evaluation(
             ctx, source, batch, settle=True)
     if purposes != evaluation.purposes or hits != evaluation.hard_hits:
@@ -3361,7 +3704,8 @@ def finalize_blueprint_candidate(
             artifact_fingerprint=artifact_fp,
             artifact_payload=candidate,
             finalization_payload=_full_commit_payload(
-                global_raw=global_raw, main_text=main_text,
+                character_projection=character_projection,
+                main_text=main_text,
                 candidate=candidate, live_before=live_before),
             adoptions=_accepted_adoptions(source, purpose_map),
         )
@@ -3409,7 +3753,8 @@ def run_blueprint(
     store = ArtifactStore(ctx)
     main_text = _read_main_text(store)
     assert main_text is not None
-    global_art = store.read(GlobalGrounding, GLOBAL_REL)
+    _projection, character_projection = \
+        _require_blueprint_character_projection(store)
     if chapters:
         return _run_blueprint_repair(
             ctx,
@@ -3417,11 +3762,11 @@ def run_blueprint(
             chapters=chapters,
             store=store,
             main_text=main_text,
-            global_raw=global_art.model_dump(by_alias=True),
+            character_projection=character_projection,
         )
     finalized = _finish_full_commit_tail(
         ctx, store=store, main_text=main_text,
-        global_raw=global_art.model_dump(by_alias=True, mode='json'))
+        character_projection=character_projection)
     if finalized is not None:
         return finalized
     return finish_blueprints(ctx, client, request_blueprints(ctx, client))
@@ -3485,16 +3830,27 @@ def run_renormalize(ctx: RunContext) -> CheckReport:
     if not store.exists(source_rel):
         raise UpstreamMissing(
             f'{BLUEPRINT_REL} 与 {_INVALID} 都不在盘上——没有可重新归一的逐章蓝图')
-    if not store.exists(GLOBAL_REL):
-        raise UpstreamMissing(f'{GLOBAL_REL} 不在盘上——逐章蓝图不能脱离人物表归一')
-
-    global_artifact = store.read(GlobalGrounding, GLOBAL_REL)
-    global_raw = global_artifact.model_dump(by_alias=True)
+    _projection, character_projection = \
+        _require_blueprint_character_projection(store)
     previous, raw = store.read_own(ChapterBlueprints, source_rel)
     previous_provenance = previous.provenance
+    phrases = _checkpoint_fact_atom_phrases(
+        ctx,
+        artifact=previous,
+        raw=raw,
+        main_text=main_text,
+        character_projection=character_projection,
+        failures=list(previous_provenance.fact_atom_failures),
+    )
     data = copy.deepcopy(raw)
     data.pop('_provenance', None)
-    data, accounting = normalize_blueprints(data, main_text)
+    data, accounting = normalize_blueprints(
+        data,
+        main_text,
+        previous_fact_atom_failures=list(
+            previous_provenance.fact_atom_failures),
+        evidence_phrases=phrases,
+    )
     rewritten = ctx.rewrite_provenance(
         previous_provenance, by='--renormalize')
     provenance = BlueprintProvenance.model_validate({
@@ -3506,8 +3862,8 @@ def run_renormalize(ctx: RunContext) -> CheckReport:
         **data, '_provenance': provenance,
     })
     candidate = artifact.model_dump(by_alias=True)
-    outcomes = _judge_candidate(global_raw, candidate, main_text)
-    if _hard_hits(outcomes):
+    outcomes = _judge_candidate(None, candidate, main_text)
+    if _blueprint_hard_hits(outcomes):
         _write_invalid(store, BLUEPRINT_REL, artifact)
         both = _Both(store)
         return _report(ctx, store, both, outcomes, judged_rel=_INVALID)

@@ -123,7 +123,7 @@ export function GlobalScreen() {
                 <span className="text-body-lg font-semibold text-ink-2">全局复核不再挡住逐章骨架</span>
                 <span className="text-body text-ink-4">
                   {blueprintAction.label}。你可以一边核对本页、一边先跑骨架；同书写入仍互斥，
-                  骨架作业运行时请等它结束再提交复核决定。Stage4 会等当前全局复核全部 PASS。
+                  骨架作业运行时请等它结束再提交复核决定。Stage4 会等当前全局复核的阻断面全部 PASS。
                 </span>
               </div>
               <GateBar screen="stage1" actionOnly />

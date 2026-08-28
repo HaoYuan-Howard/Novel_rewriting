@@ -257,8 +257,23 @@ class Stage0EditRequest(StrictModel):
 
 
 class Stage0ApprovalRequest(StrictModel):
+    expected_revision_id: Annotated[str, Field(pattern=r'^[0-9a-f]{64}$')]
     actor: str = Field(min_length=1)
     reason: str = Field(min_length=1)
+
+
+class Stage0EditResult(StrictModel):
+    """Stage0 编辑作业及该计划精确落成的 revision。"""
+
+    job: JobRecord
+    revision_id: Annotated[str, Field(pattern=r'^[0-9a-f]{64}$')] | None
+
+    @model_validator(mode='after')
+    def _revision_only_exists_for_a_landed_edit(self) -> Stage0EditResult:
+        landed = self.job.state in ('ok', 'landed_red')
+        if landed != (self.revision_id is not None):
+            raise ValueError('Stage0 edit revision_id 只可随已落盘作业返回')
+        return self
 
 
 class Stage0CandidateDecisionRequest(StrictModel):

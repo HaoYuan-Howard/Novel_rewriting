@@ -12,6 +12,7 @@ import type {
   RuleLine,
   Sources,
 } from './common'
+import type { Job } from './jobs'
 
 /* ---------------------------------------------------------------- stage0 */
 
@@ -88,7 +89,15 @@ export interface Stage0EditRequest {
   reason: string
 }
 
+export interface Stage0EditResult {
+  job: Job
+  /** 本次 edit 计划实际落成的版本；作业未落盘时为 null。 */
+  revision_id: string | null
+}
+
 export interface Stage0ApprovalRequest {
+  /** 乐观锁：必须等于本次实际审阅的 current revision。 */
+  expected_revision_id: string
   actor: string
   reason: string
 }
@@ -472,10 +481,24 @@ export interface GlobalReviewDecision {
   evidence: EvidenceRef[]
 }
 
+export interface GlobalReviewBlockingScopeDecision {
+  expected_source_sha256: string
+  expected_blocking_scope_sha256: string
+  expected_workpack_sha256: string
+  expected_item_count: number
+  reviewed_chapter_ordinals: number[]
+  /** Emitted templates are UNVER; the reviewer must explicitly change this to PASS. */
+  state: 'PASS' | 'UNVER'
+  reason: string
+  evidence: EvidenceRef[]
+}
+
 export interface GlobalReviewDecisionSet {
   /** Self-reported audit label; not an authenticated identity. */
   actor: string
   decisions: GlobalReviewDecision[]
+  /** Optional complete blocking-surface default; explicit decisions are exceptions. */
+  blocking_scope?: GlobalReviewBlockingScopeDecision | null
 }
 
 /* ---------------------------------------------------------------- stage4 */

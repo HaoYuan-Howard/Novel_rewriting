@@ -7,13 +7,14 @@ from pathlib import Path
 from typing import Final
 
 from contracts.artifacts import (
-    STAGE1_MAIN_TEXT, STAGE2_CHAPTER_BLUEPRINTS, STAGE2_GLOBAL_GROUNDING,
-    STAGE2_GLOBAL_REVIEW, STAGE2_GLOBAL_REVIEW_DECISIONS,
+    STAGE1_MAIN_TEXT, STAGE2_BLUEPRINT_CHARACTER_PROJECTION,
+    STAGE2_CHAPTER_BLUEPRINTS, STAGE2_GLOBAL_GROUNDING, STAGE2_GLOBAL_REVIEW,
+    STAGE2_GLOBAL_REVIEW_DECISIONS,
 )
 from contracts.invariants import review_effect_of
 from contracts.schema.evaluation import (
-    EvidenceRef, GlobalReview, GlobalReviewDecision, GlobalReviewDecisionSet,
-    GlobalReviewItem,
+    EvidenceRef, GlobalReview, GlobalReviewBlockingScopeDecision,
+    GlobalReviewDecision, GlobalReviewDecisionSet, GlobalReviewItem,
 )
 from contracts.schema import encode_artifact
 from contracts.schema.stage2 import GlobalGrounding
@@ -28,7 +29,9 @@ from novel.errors import (
 )
 from novel.orchestrator.jobs import service_dir
 from novel.quality.global_review import (
-    apply_decision_set, require_current, review_effect_counts, review_status,
+    apply_decision_set, blocking_scope_sha256, require_current,
+    review_effect_counts, review_status, subject_sha256,
+    UNBOUND_WORKPACK_SHA256,
 )
 from novel.run import RunContext
 from novel.store import ArtifactStore
@@ -44,6 +47,11 @@ DEFAULT_DECISIONS = STAGE2_GLOBAL_REVIEW_DECISIONS
 #: `global_review.json` 仍枚举全部主体，`current` 仍要求集合完全一致。
 REVIEW_SCOPES: Final = ('blocking', 'all')
 DEFAULT_REVIEW_SCOPE: Final = 'blocking'
+_TEMPLATE_ACTOR: Final = '待填·actor'
+_TEMPLATE_SCOPE_REASON: Final = (
+    '待人工核验完整 blocking workpack 与所列全部正文章后改为 PASS')
+_TEMPLATE_ITEM_REASON: Final = (
+    '待人工核验：请替换本句并将已核实项改为 PASS 或 FAIL')
 
 
 def _scoped_items(items: list[GlobalReviewItem], scope: str) -> list[GlobalReviewItem]:
@@ -60,25 +68,51 @@ def review_template(
 ) -> GlobalReviewDecisionSet:
     """返回绑定当前逐项 hash/evidence 的安全人工复核骨架。
 
-    每一项默认 `UNVER`，所以原样应用也**不会打开 s2 gate**；执行者只需把已核实项
-    改成 PASS/FAIL、替换 actor/reason，不再手抄乐观锁与证据坐标。骨架读取正式
-    `global_review.json`，不从 grounding 重拼第二份 item 身份。
+    默认 blocking 模板只交一个完整 scope：状态为 `UNVER`，所以原样应用也**不会打开
+    s2 gate**；执行者核完 workpack 后须手工复制该包的 SHA，再把状态改成 PASS，
+    FAIL/UNVER 例外放进 ``decisions``。服务端按 scope hash 展开回逐项决定，不让 Commander 重复输出几十份
+    同义 PASS 理由。`scope='all'` 仍给逐项骨架，供披露项单独裁决。
 
     ⚠ `scope='blocking'`（默认）只交出能挡 Stage4 的那一面。**这不会让披露项被
     自动 PASS**：没进模板的项在盘上仍是 `pending`，仍逐条出现在 inbox 与终审包。
     要整份就传 `--review-scope all`。
     """
+    if scope == 'blocking':
+        workpack = review_workpack(ctx, scope=scope)
+        binding = workpack['binding']
+        if not isinstance(binding, dict):
+            raise TerminalState('blocking workpack 缺少可提交的 scope binding')
+        return GlobalReviewDecisionSet(
+            actor=_TEMPLATE_ACTOR,
+            decisions=[],
+            blocking_scope=GlobalReviewBlockingScopeDecision(
+                expected_source_sha256=str(binding['expected_source_sha256']),
+                expected_blocking_scope_sha256=str(
+                    binding['expected_blocking_scope_sha256']),
+                # 模板生成发生在人工阅读之后；若这里替执行者现场刷新成当前
+                # workpack hash，旧包 A 读完后再生成新模板 B，就能不读 B 而把
+                # B 的阅读凭证一起带走。全零是不可提交占位，必须从实际读过的
+                # workpack 顶层手工复制真实 hash。
+                expected_workpack_sha256=UNBOUND_WORKPACK_SHA256,
+                expected_item_count=int(binding['expected_item_count']),
+                reviewed_chapter_ordinals=list(
+                    binding['reviewed_chapter_ordinals']),
+                state='UNVER',
+                reason=_TEMPLATE_SCOPE_REASON,
+                evidence=[],
+            ),
+        )
     store = ArtifactStore(ctx)
     if not store.exists(REL):
         raise UpstreamMissing(f'{REL} 不在盘上；先生成/重建 stage2.global')
     current = store.read_own(GlobalReview, REL)[0]
     return GlobalReviewDecisionSet(
-        actor='待填·actor',
+        actor=_TEMPLATE_ACTOR,
         decisions=[GlobalReviewDecision(
             item_id=item.item_id,
             expected_subject_sha256=item.subject_sha256,
             state='UNVER',
-            reason='待人工核验：请替换本句并将已核实项改为 PASS 或 FAIL',
+            reason=_TEMPLATE_ITEM_REASON,
             evidence=list(item.evidence),
         ) for item in _scoped_items(current.items, scope)],
     )
@@ -232,9 +266,12 @@ def review_workpack(
     裁剪的是**阅读范围**而不是评测面；披露项没进 workpack 不等于被放行。
     """
     store = ArtifactStore(ctx)
-    grounding = store.read_own(GlobalGrounding, STAGE2_GLOBAL_GROUNDING)[0]
-    review = store.read_own(GlobalReview, REL)[0]
-    main = store.read(MainText, STAGE1_MAIN_TEXT)
+    grounding = store.read_own(
+        GlobalGrounding, STAGE2_GLOBAL_GROUNDING, require_current=True)[0]
+    review = store.read_own(GlobalReview, REL, require_current=True)[0]
+    main = store.read_own(MainText, STAGE1_MAIN_TEXT, require_current=True)[0]
+    main_text_subject_sha256 = subject_sha256(
+        main.model_dump(mode='json', by_alias=True))
     payload = grounding.model_dump(mode='json', by_alias=True)
     claim_payload = without_global_evidence(payload)
     assert isinstance(claim_payload, dict)
@@ -331,13 +368,29 @@ def review_workpack(
             'exact_literal_hits': hits,
             'review_note': note,
         })
-    return {
-        'kind': 'stage2-global-review-workpack-v1',
+    payload: dict[str, object] = {
+        'kind': 'stage2-global-review-workpack-v2',
         'sid': ctx.sid,
+        'scope': scope,
         'read_only': True,
         'auto_decisions': False,
+        # 绑定完整 typed MainText 主体，不只绑定章号或最多 24 个展示命中；
+        # 未展示上下文之外改一个字，也必须让旧 workpack/scope 失效。
+        'main_text_subject_sha256': main_text_subject_sha256,
+        'binding': ({
+            'expected_source_sha256': review.source_sha256,
+            'expected_blocking_scope_sha256': blocking_scope_sha256(review),
+            'main_text_subject_sha256': main_text_subject_sha256,
+            'expected_item_count': len(rows),
+            'reviewed_chapter_ordinals': [
+                int(chapter.chapter_ordinal) for chapter in main.root],
+        } if scope == 'blocking' else None),
         'items': rows,
     }
+    # 哈希故意不含它自己；模板与应用口都调本函数现算，
+    # 不从 grounding/review 另拼一份“看起来相同”的阅读面。
+    payload['workpack_sha256'] = subject_sha256(payload)
+    return payload
 
 
 def review_workpack_json(
@@ -349,7 +402,7 @@ def review_workpack_json(
 
 
 def apply_file(ctx: RunContext, decision_path: str = '') -> GlobalReview:
-    """Apply audited human decisions with per-item optimistic subject hashes."""
+    """Apply audited per-item or complete-scope decisions with optimistic hashes."""
     store = ArtifactStore(ctx)
     if not store.exists(REL):
         raise UpstreamMissing(f'{REL} 不在盘上；先生成/重建 stage2.global')
@@ -376,7 +429,8 @@ def apply_file(ctx: RunContext, decision_path: str = '') -> GlobalReview:
         rel = paths.edit_rel(ctx.novel_dir, decision_path, DEFAULT_DECISIONS)
         if not store.exists(rel):
             raise TerminalState(
-                f'{rel} 不在盘上；放入 GlobalReviewDecisionSet（actor + decisions）')
+                f'{rel} 不在盘上；放入 GlobalReviewDecisionSet '
+                '（actor + blocking_scope/decisions）')
         if rel == DEFAULT_DECISIONS:
             decisions = store.read(GlobalReviewDecisionSet, rel)
         else:
@@ -394,7 +448,20 @@ def apply_file(ctx: RunContext, decision_path: str = '') -> GlobalReview:
     grounding_payload = grounding.model_dump(by_alias=True)
     current = store.read_own(GlobalReview, REL)[0]
     require_current(grounding_payload, current)
-    updated = apply_decision_set(current, decisions)
+    main_text = store.read_own(MainText, STAGE1_MAIN_TEXT)[0]
+    blocking_workpack = (
+        review_workpack(ctx, scope='blocking')
+        if decisions.blocking_scope is not None else None
+    )
+    updated = apply_decision_set(
+        current,
+        decisions,
+        expected_chapter_ordinals=tuple(
+            int(section.chapter_ordinal) for section in main_text.root),
+        expected_workpack_sha256=(
+            str(blocking_workpack['workpack_sha256'])
+            if blocking_workpack is not None else None),
+    )
     require_current(grounding_payload, updated)
     store.write_round(REL, updated)
     return updated
@@ -473,6 +540,25 @@ def require_approved(ctx: RunContext) -> None:
             f'（{global_freshness.state}/{global_freshness.reason}）',
             hint='从 producer 重建 stage2.global')
 
+    if not store.exists(STAGE2_BLUEPRINT_CHARACTER_PROJECTION):
+        raise UpstreamMissing(
+            f'{STAGE2_BLUEPRINT_CHARACTER_PROJECTION} 不在盘上；'
+            'Stage4 不能让 Blueprint 拿一份未绑当前 global 的旧称名表过门',
+            hint='stage2.global --renormalize（0 LLM）重建称名投影')
+    projection_freshness = store.freshness(
+        STAGE2_BLUEPRINT_CHARACTER_PROJECTION)
+    if projection_freshness.state == 'stale':
+        raise UpstreamStale(
+            f'{STAGE2_BLUEPRINT_CHARACTER_PROJECTION} 已不是当前最新 '
+            'global + MainText 的确定性投影；拒绝让旧 Blueprint 过门',
+            hint='stage2.global --renormalize（0 LLM）重建称名投影')
+    if projection_freshness.state != 'fresh':
+        raise UpstreamUnproven(
+            f'{STAGE2_BLUEPRINT_CHARACTER_PROJECTION} 证明不了自己来自当前'
+            f'最新 global + MainText（{projection_freshness.state}/'
+            f'{projection_freshness.reason}）',
+            hint='stage2.global --renormalize（0 LLM）重建称名投影')
+
     blueprint_invalid = paths.invalid_of(STAGE2_CHAPTER_BLUEPRINTS)
     if (not store.exists(STAGE2_CHAPTER_BLUEPRINTS)
             and not store.exists(blueprint_invalid)):
@@ -495,7 +581,7 @@ def require_approved(ctx: RunContext) -> None:
             hint='stage2.blueprint --revalidate --actor <id> --reason <why>（0 成本）')
     if report.provenance.freshness == 'stale':
         raise UpstreamStale(
-            f'{STAGE2_CHAPTER_BLUEPRINTS} 已不是当前 global/main_text 上的结果；'
+            f'{STAGE2_CHAPTER_BLUEPRINTS} 已不是当前称名投影/main_text 上的结果；'
             'Stage2 联合检查不能沿用旧结论',
             hint='重跑 stage2.blueprint；若是 typed global edit，先看人物称名消费投影')
     if report.provenance.freshness != 'fresh':

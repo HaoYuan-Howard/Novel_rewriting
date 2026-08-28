@@ -121,6 +121,7 @@ export function Stage0Screen() {
       segments: Stage0Segments
     }) => {
       const picked = selection ?? initial
+      let approvalRevisionId = current.revision_id
       if (!sameIds(picked, initial)) {
         const request: Stage0EditRequest = {
           expected_revision_id: current.revision_id,
@@ -128,9 +129,17 @@ export function Stage0Screen() {
           actor: HUMAN_ACTOR,
           reason: HUMAN_REASON.edit,
         }
-        requireOk(await api.editStage0(sid, request))
+        const edited = await api.editStage0(sid, request)
+        requireOk(edited.job)
+        if (edited.revision_id === null) {
+          throw new Error('Stage0 编辑已完成，但服务端没有返回本次落成的 revision_id')
+        }
+        // 批准只绑定 edit 子进程实际落成的那一版。不能在两次请求之间 GET latest：
+        // 若另一写者已经落了 C，拿 latest 会把用户只读过的 B 洗成对 C 的批准。
+        approvalRevisionId = edited.revision_id
       }
       requireOk(await api.approveStage0(sid, {
+        expected_revision_id: approvalRevisionId,
         actor: HUMAN_ACTOR,
         reason: HUMAN_REASON.approve,
       }))

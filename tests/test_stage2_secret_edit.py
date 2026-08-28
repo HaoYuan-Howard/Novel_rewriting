@@ -45,7 +45,7 @@ from tests.test_stage2_generation import (
 )
 from tests.test_stage2 import main_text
 
-BLUEPRINT_EDGE = 'stage2/global_grounding.json'
+BLUEPRINT_EDGE = 'stage2/blueprint_character_projection.json'
 
 
 #: 通用底座固定在默认 v3.1；契约特有拓扑由 dispatch 测试覆盖。
@@ -136,8 +136,8 @@ def test_a_wrong_reveal_chapter_is_corrected_and_the_downstream_turns_stale():
       ① **改真的落进产物**（不是只改了报告）；
       ② **重走归一**：埋点章 `[1]` 仍严格早于新揭示章 ⇒ 留着；
       ③ **重判**：闸门跑过、报告出得来；
-      ④ **下游按各自消费什么分开判**：逐章蓝图那条边的**字节指纹**必失配，
-         而**字段投影**必须**对得上**——blueprint 从 global 只取已现称名表，
+      ④ **下游按各自消费什么分开判**：逐章蓝图只绑定物化称名投影；
+         secret 编辑不改变投影字节——blueprint 从 global 只取已现称名表，
          改 secret 不该让全链最贵的付费节点重跑一遍。
          ⚠ 这一段 2026-08-23 改过判向。此前它断言投影也失配，理由写着
          「逐章剧透闸门正是消费它的那一个」——**那句话是错的**：剧透闸门在
@@ -175,14 +175,17 @@ def test_a_wrong_reveal_chapter_is_corrected_and_the_downstream_turns_stale():
         assert {r.rule for r in report.rules if r.status == 'skipped'} == set(), \
             '有判据没排上——那一行会绿着而什么都没查'
 
-        # ④ 下游按各自消费什么分开判：字节变了，而 blueprint 读的那几格没变
+        # ④ Blueprint 不伪记 global 边；非称名修订保持投影字节与消费指纹不变。
         fresh = ArtifactStore(bp_ctx).freshness(extract.BLUEPRINT_REL)
         edge = next(e for e in fresh.edges if e.key == BLUEPRINT_EDGE)
-        assert edge.recorded_file != edge.now_file, '字节指纹没动？那底座根本没被写回去'
+        assert edge.recorded_file == edge.now_file, \
+            '非称名编辑不应重写投影字节，否则仍会制造一次付费 Blueprint stale'
         assert edge.recorded_consumed == edge.now_consumed, \
-            'blueprint 从 global 只取已现称名表 ⇒ 改 secret 不该让它重跑'
+            'blueprint 只取已现称名投影 ⇒ 改 secret 不该让它重跑'
         assert (fresh.state, edge.state) == ('fresh', 'fresh'), \
             'consumed 对得上就该是 fresh——判定顺序是 consumed 优先于 file，不是反过来'
+        assert extract.GLOBAL_REL not in {e.key for e in fresh.edges}, \
+            'Blueprint 来源账不得伪造一条没有读取的 global 输入边'
     finally:
         shutil.rmtree(root, ignore_errors=True)
 

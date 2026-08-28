@@ -90,10 +90,12 @@ def test_real_http_flow_from_upload_through_stage1(client: TestClient, root: Pat
     edited_response = client.post(
         f'/api/novels/{sid}/stage0/edit', json=request, headers=UI)
     assert edited_response.status_code == 200, edited_response.text
-    assert edited_response.json()['state'] == 'ok'
+    edit_result = edited_response.json()
+    assert edit_result['job']['state'] == 'ok'
 
     edited = client.get(f'/api/novels/{sid}/stage0/report').json()
     assert edited['revision_id'] != report['revision_id']
+    assert edit_result['revision_id'] == edited['revision_id']
     assert edited['revision_origin'] == 'human_edit'
     assert edited['executable'] is False
     edited_segments = client.get(f'/api/novels/{sid}/stage0/segments').json()['segments']
@@ -103,9 +105,18 @@ def test_real_http_flow_from_upload_through_stage1(client: TestClient, root: Pat
     assert stale.status_code == 409
     assert stale.json()['kind'] == 'HumanEditProtected'
 
+    stale_approval = client.post(
+        f'/api/novels/{sid}/stage0/approve', headers=UI,
+        json={'expected_revision_id': report['revision_id'],
+              'actor': 'api-stage01-test', 'reason': '误批旧工作包'},
+    )
+    assert stale_approval.status_code == 409
+    assert stale_approval.json()['kind'] == 'HumanEditProtected'
+
     approved = client.post(
         f'/api/novels/{sid}/stage0/approve', headers=UI,
-        json={'actor': 'api-stage01-test', 'reason': 'approve reviewed removal'},
+        json={'expected_revision_id': edited['revision_id'],
+              'actor': 'api-stage01-test', 'reason': 'approve reviewed removal'},
     )
     assert approved.status_code == 200 and approved.json()['state'] == 'ok'
     partitioned = client.post(f'/api/novels/{sid}/stage1/partition', headers=UI)
@@ -168,7 +179,8 @@ def test_stage1_is_the_only_partition_diagnostic_surface(
     # 人批准并正式切分后，唯一 Stage1 响应同时给连续原文和章号诊断。
     approved = client.post(
         f'/api/novels/{sid}/stage0/approve', headers=UI,
-        json={'actor': 'api-stage01-test', 'reason': '核对章号异常后批准'},
+        json={'expected_revision_id': report['revision_id'],
+              'actor': 'api-stage01-test', 'reason': '核对章号异常后批准'},
     )
     assert approved.status_code == 200 and approved.json()['state'] == 'ok'
     partition = client.post(f'/api/novels/{sid}/stage1/partition', headers=UI)

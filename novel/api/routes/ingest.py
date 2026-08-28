@@ -17,6 +17,7 @@ from contracts.schema.api import (
     Stage0CandidateDecisionRequest,
     Stage0CandidateView,
     Stage0EditRequest,
+    Stage0EditResult,
     Stage0Report,
     Stage0Segments,
     Stage1View,
@@ -25,7 +26,7 @@ from contracts.schema.api import (
 from contracts.schema.orchestration import JobRecord
 from contracts.schema.stage0 import Stage0CandidatePlan
 from novel.api.deps import checked_sid, get_base
-from novel.errors import NovelError, SourcePathRejected
+from novel.errors import HumanEditProtected, NovelError, SourcePathRejected
 from novel.orchestrator import approvals, jobs, uploads
 from novel.views import ingest
 
@@ -48,21 +49,27 @@ def get_stage0_segments(
     return ingest.stage0_segments(base, sid)
 
 
-@router.post('/novels/{sid}/stage0/edit', response_model=JobRecord)
+@router.post('/novels/{sid}/stage0/edit', response_model=Stage0EditResult)
 def edit_stage0(
     request: Stage0EditRequest,
     sid: str = Depends(checked_sid),
     base: str = Depends(get_base),
-) -> JobRecord:
+) -> Stage0EditResult:
     plan = ingest.stage0_edit_plan(base, sid, request)
+    target_revision_id = ingest.stage0_edit_target_revision_id(base, sid, plan)
     plan_path = uploads.save_edit_plan(base, sid, plan)
     try:
-        return jobs.run(
+        record = jobs.run(
             base,
             'stage0.edit',
             sid,
             ['--apply-edit-plan', str(plan_path)],
             follow_check=False,
+        )
+        return Stage0EditResult(
+            job=record,
+            revision_id=(target_revision_id
+                         if record.state in ('ok', 'landed_red') else None),
         )
     finally:
         try:
@@ -81,9 +88,15 @@ def approve_stage0(
     sid: str = Depends(checked_sid),
     base: str = Depends(get_base),
 ) -> JobRecord:
+    current = ingest.stage0_report(base, sid)
+    if request.expected_revision_id != current.revision_id:
+        raise HumanEditProtected(
+            'Stage0 批准页面已过期：'
+            f'工作包={request.expected_revision_id!r}，当前={current.revision_id!r}')
     record = jobs.run(
         base, 'stage0.approve', sid,
-        ['--actor', request.actor, '--reason', request.reason],
+        ['--expected-revision-id', request.expected_revision_id,
+         '--actor', request.actor, '--reason', request.reason],
     )
     if record.state == 'ok':
         approvals.approve_gate(base, sid, 's0')

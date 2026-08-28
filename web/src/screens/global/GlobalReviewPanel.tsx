@@ -210,7 +210,7 @@ export function GlobalReviewPanel({ sid }: { sid: string }) {
     <Panel>
       <PaneHeader
         title="全局逐项复核"
-        meta="逐章骨架可先生成；只有当前完整审计面全部 PASS 才允许进入 Stage4"
+        meta="逐章骨架可先生成；只有当前阻断面全部 PASS 才允许进入 Stage4，披露项继续留在审计面"
       />
       <QueryStates
         q={review}

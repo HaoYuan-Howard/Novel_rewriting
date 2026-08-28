@@ -24,6 +24,7 @@ ARTIFACT_PATHS: Final[dict[str, str]] = {
     'stage2.global_review': 'stage2/global_review.json',
     'stage2.global_review_decisions': 'stage2/global_review_decisions.json',
     'stage2.global_edit': 'stage2/global_edit.json',
+    'stage2.blueprint_character_projection': 'stage2/blueprint_character_projection.json',
     'stage2.chapter_blueprints': 'stage2/chapter_blueprints.json',
     'stage4.blind_candidate': 'stage4/blind_candidate.json',
     'stage4.evidence_binding': 'stage4/evidence_binding.json',
@@ -96,6 +97,8 @@ STAGE2_GLOBAL_GROUNDING = artifact_rel('stage2.global_grounding')
 STAGE2_GLOBAL_REVIEW = artifact_rel('stage2.global_review')
 STAGE2_GLOBAL_REVIEW_DECISIONS = artifact_rel('stage2.global_review_decisions')
 STAGE2_GLOBAL_EDIT = artifact_rel('stage2.global_edit')
+STAGE2_BLUEPRINT_CHARACTER_PROJECTION = artifact_rel(
+    'stage2.blueprint_character_projection')
 STAGE2_CHAPTER_BLUEPRINTS = artifact_rel('stage2.chapter_blueprints')
 RETIRED_STAGE3_STYLE_GROUNDING = RETIRED_ARTIFACT_PATHS['stage3.style_grounding']
 STAGE4_BLIND_CANDIDATE = artifact_rel('stage4.blind_candidate')

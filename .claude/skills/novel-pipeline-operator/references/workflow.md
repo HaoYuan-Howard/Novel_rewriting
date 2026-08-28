@@ -113,11 +113,11 @@ HARD，并把结构化代码反馈交回同一 provider session；因此 agent �
 | # | 节点 | 主跑参数 | 放行证据 |
 |---:|---|---|---|
 | 1 | `stage0.remove` | 新书：`--source <txt>`，省略 sid | 摄入完成；追跑 check 除待批准项外无 HARD。批准前仅 `s0_approval=pending` 导致 exit 1 是预期状态 |
-| 2 | `stage0.approve` | `--actor <ACTOR> --reason <text>` | 按代批契约审阅 Stage0 check 与剔除视图后批准，批准状态写入 revision 链。**每本书都要过这一步**——首跑恒 pending，零剔除的书也一样（见下） |
+| 2 | `stage0.approve` | `--expected-revision-id <工作包 revision_id> --actor <ACTOR> --reason <text>` | 按代批契约审阅 Stage0 check 与剔除视图后批准，批准状态写入 revision 链；读包后 revision 漂移会关闭式拒绝。**每本书都要过这一步**——首跑恒 pending，零剔除的书也一样（见下） |
 | 3 | `stage0.edit` | 仅当代批发现剔除错误时用 typed edit/edit-plan；无修改则 `state` 跳过 | 人工修订经同一 Stage0 闸门重判，不直改正式文本 |
 | 4 | `stage1.partition` | 无 | 追跑 check 无 HARD；章节 ordinal 唯一且覆盖 `1..N` |
-| 5 | `stage2.global` | 无；agent executor 原生同 session 修复 | global 经 schema/归一/producer HARD 正式落盘；随即生成 review workpack/template，可开始阅读并填写 decisions，但不必等提交后才跑 blueprint |
-| 6 | `stage2.blueprint` | global 正式可读后独立 preview/run | 逐章蓝图正式落盘；唯一 Stage2 `--check-only` 联合检查无 HARD；随后确认 global review current 且逐项 PASS，才进 Stage4 |
+| 5 | `stage2.global` | 无；agent executor 原生同 session 修复 | 最新 Global 候选通过 schema 后即物化 current 称名投影；Global HARD 可让候选暂留 `.INVALID`，但只要投影 current/fresh 就不阻塞 blueprint 计算 |
+| 6 | `stage2.blueprint` | current/fresh 称名投影可读后独立 preview/run，不等 Global 正式稿 | 逐章蓝图正式落盘；Stage4 前再汇合 current 正式 global、唯一 Stage2 `--check-only` 联合 HARD 无命中，以及 current review 的 blocking 面逐项 PASS |
 | 7 | `stage4.design` | 需要废止旧候选时显式另跑 `--replan` | 只产生当前盲候选；本相未读取原文顺序、证据位置或必须材料，且不会顺带启动下一相 |
 | 8 | `stage4.plan` | 在 A 落盘后重新独立 preview/run | B 只绑定证据；`bound` 时编译计划且 check 无 HARD，`infeasible` 时正式负结论已落盘但没有计划 |
 | 9 | `stage4.context` | 计划落盘已自动组装时 `state` 跳过；只在需重建时执行 | `stage4/writer_context.json` 与当前计划投影一致且 fresh |
@@ -140,15 +140,20 @@ preview `stage4.design --replan`，新 A 成功后，B 仍是另一条独立 pre
 完整逐章 typed 结构决定。通用 s4 gate 不是兼容入口；结构主体变化后旧决定立即过期。
 只有全部章 `accept`，且随后另有 current Stage5 writing 授权，才可执行 `stage5.write`。
 
-Stage2 有两条可重叠的支路，而不是一条全串行链：global 正式落盘后，先用
-`--emit-review-workpack` / `--emit-review-template` 取得绑定当前主体的阅读面与决策骨架；随后可立即
-启动 blueprint，同时阅读原文、填写 decisions。这里的“并行”只指阅读/填文件与模型计算重叠：
-真正的 `--review-decisions`、typed edit 与 producer 落盘仍使用同书互斥，所以应在 blueprint 写盘
-结束后提交。review 若无需改 global，提交后以 `stage2.blueprint --check-only` 做全局 + 逐章唯一联合
-复检；只有 global、blueprint 均 current、联合 HARD 无命中且 review current/全 PASS，才能 preview
-Stage4A。review 若发现 global 要改，先走 typed edit；共享人物称名 inventory 改变时 blueprint 会
-stale，必须重建，未消费字段变化则按 freshness 结果复用。提前完成的 review 可以保存，但缺 blueprint
-时 Stage2 仍未收口。机械测量不是独立节点：Stage5/6 会从各自已读的 Stage1 文本即时计算，operator
+Stage2 有两条可重叠的支路，而不是一条全串行链：最新 Global 候选只要通过当前 schema，并物化出
+current/fresh 称名投影，就可立即启动 blueprint；不必等待 Global 正式稿。Global HARD 可以把候选
+留在 `.INVALID`，其修复与逐章计算重叠；若后续修订真的改变投影，freshness 会让旧 blueprint 失效。
+Global 正式落盘后，
+生成并完整阅读 `--emit-review-workpack`，记下顶层 `workpack_sha256`；再用
+`--emit-review-template` 取得决策骨架，把模板中全零的 `expected_workpack_sha256` 手工换成刚读过的
+hash（不得靠重发模板刷新阅读凭证），同时阅读原文、填写 decisions。这里的“并行”不放宽同书写盘
+互斥：真正的 `--review-decisions`、typed edit 与 producer 落盘仍应错峰提交。review 若无需改 global，
+提交后以 `stage2.blueprint --check-only` 做全局 + 逐章唯一联合复检；只有 current 正式 global、
+current/fresh 投影与 blueprint、联合 HARD 无命中且 review current/**blocking 面逐项 PASS**，才能
+preview Stage4A；disclosure 未决项继续披露但不阻断。review 若发现 global 要改，先走 typed edit；
+共享人物称名 inventory 改变时 blueprint 会 stale，必须重建，未消费字段变化则按 freshness 结果复用。
+提前完成的 review 可以保存，但缺 blueprint 时 Stage2 仍未收口。机械测量不是独立节点：Stage5/6
+会从各自已读的 Stage1 文本即时计算，operator
 不需要预跑、确认或修复机械缓存。
 
 ### 零剔除的书同样要过 stage0 闸门

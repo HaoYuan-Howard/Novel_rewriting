@@ -248,7 +248,8 @@ def test_both_directions_of_the_mutex(client, monkeypatch):
         #   地方变绿/变红——它要测的是「一条本来能起的作业被锁挡住」。
         r2 = c.post('/api/jobs', json={
             'sid': '42', 'node': 'stage0.approve',
-            'flags': ['--actor', 'tester', '--reason', '互斥用例'],
+            'flags': ['--expected-revision-id', 'a' * 64,
+                      '--actor', 'tester', '--reason', '互斥用例'],
         }, headers=UI)
         assert r2.status_code == 409
         # 同一本书的第二个 agent 仍 409（一本书一把锁）

@@ -102,7 +102,7 @@ class Material:
 
 
 def build_material(*, title: str, registry: dict[str, dict], relations: list[dict],
-                   setting: dict, groups: dict[int, list[str]],
+                   era: str, groups: dict[int, list[str]],
                    sur: dict[str, str | None], book_text: str,
                    targets: list[str]) -> Material:
     """按现行 Stage 7 契约组装下发材料。
@@ -111,6 +111,10 @@ def build_material(*, title: str, registry: dict[str, dict], relations: list[dic
     `fate` / `secrets` / `arc` / `chapter_blueprints` / **任何正文**都不发。
     `name_distinctiveness` 也不发——它的消费方是确定性代码（残留探针的 stems），
     prompt 里从没定义过这个枚举是什么意思，发过去只是噪声。
+
+    ⚠ 时代背景直接收 typed ``Setting.era``，不收整份 setting dict。上一版把
+    ``Setting`` 用字段名 dump 成 ``era``，这里却查中文 alias ``时代背景``，于是
+    真实 prompt 恒落「未知」；显式参数同时保证世界观与两份 evidence 不会误进消费面。
     """
     chars: dict[str, dict] = {}
     universe: set[str] = set()
@@ -161,7 +165,7 @@ def build_material(*, title: str, registry: dict[str, dict], relations: list[dic
     blocks = [
         f'《{title}》 —— 给这本书的人物换真名。',
         '── 时代背景（新名必须贴合它）──\n'
-        + json.dumps((setting or {}).get('时代背景') or '（未知）', ensure_ascii=False),
+        + json.dumps(era or '（未知）', ensure_ascii=False),
         '── 人物表（attested=false 的 canonical 是内部记账标签，不是原作里的叫法）──\n'
         + json.dumps(chars, ensure_ascii=False, indent=1),
         # 关系只发**谓词边**，用来让模型理解「谁和谁是什么关系」以便挑名字的气质；

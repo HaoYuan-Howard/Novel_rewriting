@@ -31,11 +31,13 @@ from typing import Any
 from contracts.invariants import RESPONSE_TIME_LAYERS
 from novel.core.spans import content_only, locate_unique_span
 from novel.stages.stage2.character_refs import (
-    blueprint_character_prompt_inventory, visible_character_refs,
+    BlueprintCharacterPromptInventory, blueprint_character_prompt_inventory,
+    visible_character_refs,
     visible_character_refs_with_drops,
 )
 from novel.stages.stage2.normalize import (
-    _source, normalize_beat_ids,
+    BlueprintNormalizationAccounting, FactAtomRehome, _source,
+    locate_fact_atom_source, normalize_beat_ids,
 )
 from novel.stages.stage2.paragraphs import (
     ParagraphIndexError, paragraph_range_of, paragraph_spans, span_of,
@@ -256,6 +258,7 @@ def _compile_semantic_contract(
     blueprint: dict[str, Any],
     text: str,
     fact_failures: list[tuple[str, str, str]],
+    fact_rehomes: list[FactAtomRehome],
 ) -> None:
     """把拍内临时 atom_key 编译成章级稳定事实契约，并给 hinge 分配稳定 id。"""
     ordinal = int(blueprint.get('chapter_ordinal') or 0)
@@ -268,9 +271,6 @@ def _compile_semantic_contract(
         beat_id = str(beat.get('beat_id') or '')
         # `event` 是已退休响应留下的复合事实键；即使诊断重放喂进来，也不得进入正式蓝图。
         beat.pop('event', None)
-        span = beat.get('span')
-        seg_start = span.get('start') if isinstance(span, dict) else None
-        seg_end = span.get('end') if isinstance(span, dict) else None
         for atom in beat.pop('fact_atoms', None) or []:
             fact_seq += 1
             fact_id = f'f{ordinal:02d}_{fact_seq:03d}'
@@ -279,27 +279,25 @@ def _compile_semantic_contract(
                 raise ValueError(f'ch{ordinal} fact atom 临时引用重复：{atom_key!r}')
             key_map[atom_key] = fact_id
             phrase = str(atom.get('evidence_phrase') or '')
-            source = None
-            if type(seg_start) is int and type(seg_end) is int:
-                got = locate_unique_span(text[seg_start:seg_end], phrase)
-                if isinstance(got, tuple):
-                    offset, tail, _method = got
-                    start, end = seg_start + offset, seg_start + tail
-                    source = _source(text, start, end)
-                elif isinstance(got, int):
-                    fact_failures.append((fact_id, beat_id, '证据短语在所属拍内多处命中'))
-                elif content_only(phrase) and content_only(phrase) in content_only(text):
-                    fact_failures.append((fact_id, beat_id, '证据短语不在所属拍区间'))
-                else:
-                    fact_failures.append((fact_id, beat_id, '证据短语不在本章原文'))
-            else:
-                fact_failures.append((fact_id, beat_id, '所属拍没有可用 span'))
+            resolved_ref, source, recovery, cause = locate_fact_atom_source(
+                text, phrase, beat_id, list(blueprint.get('beats') or []))
+            if resolved_ref is None or source is None or recovery is None:
+                resolved_ref = beat_id
+                fact_failures.append((fact_id, beat_id, cause))
+            elif resolved_ref != beat_id:
+                fact_rehomes.append(FactAtomRehome(
+                    chapter_ordinal=ordinal,
+                    fact_id=fact_id,
+                    original_beat_ref=beat_id,
+                    resolved_beat_ref=resolved_ref,
+                    recovery=recovery,
+                ))
             facts.append({
                 'fact_id': fact_id,
                 'claim': atom.get('claim'),
                 'kind': atom.get('kind'),
                 'obligation': atom.get('obligation'),
-                'source_beat_ref': beat_id,
+                'source_beat_ref': resolved_ref,
                 'source': source,
                 'participant_char_ids': list(dict.fromkeys(
                     str(cid) for cid in (atom.get('participant_char_ids') or []))),
@@ -347,21 +345,25 @@ def compile_v2(data: dict[str, Any], main_text: list[dict[str, Any]],
                for section in main_text}
     failures: list[tuple[str, str, str]] = []
     fact_failures: list[tuple[str, str, str]] = []
+    fact_rehomes: list[FactAtomRehome] = []
     ambiguous_pending: list[tuple[str, str, str]] = []
     for blueprint in blueprints:
         ordinal = int(blueprint.get('chapter_ordinal') or 0)
         _compile_beats(blueprint, text_of.get(ordinal, ''), failures,
                        ambiguous_pending)
         _compile_semantic_contract(
-            blueprint, text_of.get(ordinal, ''), fact_failures)
+            blueprint, text_of.get(ordinal, ''), fact_failures, fact_rehomes)
         if not str(blueprint.get('chapter_function') or '').strip():
             raise ValueError('chapter_function must not be empty')
 
-    return data, {
-        'verbatim_failures': failures,
-        'fact_atom_failures': fact_failures,
-        'hinge_ambiguous_pending': ambiguous_pending,
-    }
+    accounting = BlueprintNormalizationAccounting(
+        verbatim_failures=failures,
+        fact_atom_failures=fact_failures,
+        fact_atom_rehomes=fact_rehomes,
+    )
+    # v1 的多处 hinge 仍需第三笔失败恢复材料；它不是 normalize 公共账的一部分。
+    accounting['hinge_ambiguous_pending'] = ambiguous_pending
+    return data, accounting
 
 
 def canonical_ir_projection(blueprint: dict[str, Any],
@@ -444,13 +446,19 @@ def canonical_ir_projection(blueprint: dict[str, Any],
     return out
 
 
-def compile_v2_refs(data: dict[str, Any], main_text: list[dict[str, Any]],
-                    characters: dict[str, dict[str, Any]]) \
+def compile_v2_refs(
+    data: dict[str, Any],
+    main_text: list[dict[str, Any]],
+    characters: dict[str, dict[str, Any]] | None = None,
+    *,
+    character_inventory: BlueprintCharacterPromptInventory | None = None,
+) \
         -> tuple[dict[str, Any], dict[str, Any]]:
     """两段式 v2 响应 → 现役产物；人物身份全程只保留关闭式 char_id。"""
     work = copy.deepcopy(data)
-    visible = blueprint_character_prompt_inventory(
-        characters, main_text)['visible_character_refs']
+    inventory = character_inventory or blueprint_character_prompt_inventory(
+        characters or {}, main_text)
+    visible = inventory['visible_character_refs']
     for blueprint in (work.get('blueprints') or []):
         ordinal = int(blueprint.get('chapter_ordinal') or 0)
         allowed = visible.get(ordinal, {})
@@ -479,7 +487,7 @@ def compile_v2_refs(data: dict[str, Any], main_text: list[dict[str, Any]],
                 raise ValueError(
                     f'ch{ordinal} 叙述身份引用不在本章可见集合：{invalid}')
 
-    return compile_v2(work, main_text, characters)
+    return compile_v2(work, main_text, characters or {})
 
 
 def canonical_ir_projection_refs(blueprint: dict[str, Any],
@@ -513,7 +521,9 @@ def canonical_ir_projection_v3(
 def compile_v31_refs(
     data: dict[str, Any],
     main_text: list[dict[str, Any]],
-    characters: dict[str, dict[str, Any]],
+    characters: dict[str, dict[str, Any]] | None = None,
+    *,
+    character_inventory: BlueprintCharacterPromptInventory | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """v3.1 关闭引用响应 → 既有蓝图。
 
@@ -557,7 +567,12 @@ def compile_v31_refs(
             beat['hinges'] = fresh_hinges
             cursor = end_para + 1
 
-    return compile_v2_refs(work, main_text, characters)
+    return compile_v2_refs(
+        work,
+        main_text,
+        characters,
+        character_inventory=character_inventory,
+    )
 
 
 def canonical_ir_projection_v31(

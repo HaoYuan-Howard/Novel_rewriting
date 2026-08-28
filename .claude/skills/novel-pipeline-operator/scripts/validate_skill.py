@@ -467,7 +467,7 @@ def validate(counters: dict[str, int] | None = None,
                 "fix_routes", "cli_subcommands", "status_marks",
                 "template_headings", "evidence_symbols", "notes_files",
                 "notes_chars", "notes_budget", "index_rows", "repo_fn_citations",
-                "open_gap_entries"):
+                "open_gap_entries", "stage0_workpack_contract"):
         counters.setdefault(key, 0)
     errors: list[str] = []
     root = _repo_root()
@@ -520,6 +520,54 @@ def validate(counters: dict[str, int] | None = None,
             errors.append(
                 f"reference 未从 SKILL.md 直接链接：{reference.relative_to(SKILL_DIR)}"
             )
+
+    # Stage0 快速审阅工作包是一条只读能力契约：文档若提到它，文件、生产读取缝与
+    # “不审批/不写盘”必须一起存在。只验调用的生产名字，不在这里复制任何模式词表。
+    workpack_path = SKILL_DIR / "scripts" / "stage0_review_workpack.py"
+    delegated_path = SKILL_DIR / "references" / "delegated-review.md"
+    maintenance_path = SKILL_DIR / "references" / "maintenance.md"
+    delegated = skill_texts.get(delegated_path, "")
+    maintenance = skill_texts.get(maintenance_path, "")
+    workpack_token = "scripts/stage0_review_workpack.py"
+    if not workpack_path.is_file():
+        errors.append("Stage0 审阅契约指向的 scripts/stage0_review_workpack.py 不在盘上")
+    else:
+        counters["stage0_workpack_contract"] += 1
+        tree = ast.parse(workpack_path.read_text(encoding="utf-8"))
+        calls = {
+            node.func.id
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+        }
+        required_calls = {
+            "stage0_report", "stage0_segments", "run_check_only",
+            "readonly_ctx", "scan_text",
+        }
+        missing_calls = sorted(required_calls - calls)
+        if missing_calls:
+            errors.append(
+                "stage0_review_workpack.py 没有调用完整的生产只读缝："
+                f"缺 {missing_calls}。不要在脚本里重拼报告/分区/词法"
+            )
+        forbidden_names = {
+            node.id
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Name)
+        } & {"ArtifactStore", "run_approve", "run_edit", "run_remove"}
+        forbidden_attrs = {
+            node.attr
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Attribute)
+        } & {"load", "loads", "write_text", "write_bytes", "write_own", "append_text"}
+        if forbidden_names or forbidden_attrs:
+            errors.append(
+                "stage0_review_workpack.py 越过了只读生产出口："
+                f"names={sorted(forbidden_names)} attrs={sorted(forbidden_attrs)}"
+            )
+    for doc, body_text in (("delegated-review.md", delegated),
+                           ("maintenance.md", maintenance)):
+        if workpack_token not in body_text:
+            errors.append(f"{doc} 没有登记 {workpack_token}")
 
     # 【断言 D】日期、版本号与无锚的一次性读数——**全部 skill markdown**，不只 SKILL.md。
     # 那条唯一的日期戳能长期活着，就是因为原来只查 SKILL.md 正文。

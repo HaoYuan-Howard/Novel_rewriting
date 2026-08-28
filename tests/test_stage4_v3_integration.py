@@ -18,11 +18,13 @@ import pytest
 
 from contracts.artifacts import (
     STAGE1_MAIN_TEXT,
+    STAGE2_BLUEPRINT_CHARACTER_PROJECTION,
     STAGE2_CHAPTER_BLUEPRINTS,
     STAGE2_GLOBAL_GROUNDING,
 )
 from contracts.schema.stage1 import MainText
 from contracts.schema.stage2 import (
+    BlueprintCharacterProjection,
     BlueprintProvenance,
     ChapterBlueprints,
     GlobalGrounding,
@@ -41,6 +43,9 @@ from novel.llm.client import LlmClient, LlmFailed
 from novel.llm.ledger import CostLedger
 from novel.llm.transport import ChatRequest, ChatResponse, FakeTransport
 from novel.run import RunContext
+from novel.stages.stage2.character_refs import (
+    materialize_blueprint_character_projection,
+)
 from novel.stages.stage4 import plan
 from novel.stages.stage4.blind import (
     build_blind_projection,
@@ -81,7 +86,8 @@ def _seed_current_stage2(book: Path) -> ChapterBlueprints:
     """写 current Stage2 产物；来源边与 root 都走正式 ``RunContext`` 铸造口。"""
     global_ctx = _ctx(book, 'stage2.global')
     global_store = ArtifactStore(global_ctx)
-    global_store.write(STAGE1_MAIN_TEXT, MainText.model_validate(main_text()))
+    main_artifact = MainText.model_validate(main_text())
+    global_store.write(STAGE1_MAIN_TEXT, main_artifact)
     global_store.read(MainText, STAGE1_MAIN_TEXT)
 
     global_raw = copy.deepcopy(global_grounding())
@@ -93,18 +99,25 @@ def _seed_current_stage2(book: Path) -> ChapterBlueprints:
         adopted_models=(MODEL,),
         **global_extra,
     )
-    global_store.write(
-        STAGE2_GLOBAL_GROUNDING,
-        GlobalGrounding.model_validate({
-            **global_raw,
-            '_provenance': global_provenance,
-        }),
+    global_artifact = GlobalGrounding.model_validate({
+        **global_raw,
+        '_provenance': global_provenance,
+    })
+    global_store.write(STAGE2_GLOBAL_GROUNDING, global_artifact)
+    projection = materialize_blueprint_character_projection(
+        global_artifact.model_dump(
+            by_alias=True, mode='json')['entities']['characters'],
+        [row.model_dump(by_alias=True, mode='json') for row in main_artifact.root],
     )
+    global_store.write(STAGE2_BLUEPRINT_CHARACTER_PROJECTION, projection)
 
     blueprint_ctx = _ctx(book, 'stage2.blueprint')
     blueprint_store = ArtifactStore(blueprint_ctx)
     blueprint_store.read(MainText, STAGE1_MAIN_TEXT)
-    blueprint_store.read(GlobalGrounding, STAGE2_GLOBAL_GROUNDING)
+    blueprint_store.read(
+        BlueprintCharacterProjection,
+        STAGE2_BLUEPRINT_CHARACTER_PROJECTION,
+    )
     blueprint_raw = copy.deepcopy(blueprints())
     blueprint_extra = blueprint_raw.pop('_provenance')
     blueprint_provenance = blueprint_ctx.llm_provenance(

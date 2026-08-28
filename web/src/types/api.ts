@@ -45,6 +45,7 @@ import type {
   ReadingResponse,
   ReviewResponse,
   Stage0EditRequest,
+  Stage0EditResult,
   Stage0ApprovalRequest,
   Stage0CandidateDecisionRequest,
   Stage0CandidateView,
@@ -69,7 +70,7 @@ export interface Api {
 
   getStage0Report(sid: string): Promise<Stage0Report>
   getStage0Segments(sid: string): Promise<Stage0Segments>
-  editStage0(sid: string, request: Stage0EditRequest): Promise<Job>
+  editStage0(sid: string, request: Stage0EditRequest): Promise<Stage0EditResult>
   approveStage0(sid: string, request: Stage0ApprovalRequest): Promise<Job>
   getStage0Candidate(sid: string): Promise<Stage0CandidateView | null>
   adoptStage0Candidate(sid: string, request: Stage0CandidateDecisionRequest): Promise<Job>

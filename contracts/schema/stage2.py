@@ -493,6 +493,42 @@ class GlobalGrounding(StrictModel):
     provenance: GlobalProvenance = Field(alias='_provenance')
 
 
+class BlueprintCharacterProjectionChapter(StrictModel):
+    """某一章真正交给 Blueprint 的已现称名闭集。
+
+    这不是 GlobalGrounding 的摘要：只有最终 prompt/validator 消费的两格能进入这里。
+    ``role``、``fate``、关系、秘密、设定与证据一概没有载体位置，因而后续订正它们
+    不会靠调用方记得“忽略字段”来避免整书 Blueprint 过期。
+    """
+
+    chapter_ordinal: ChapterOrdinal
+    past_attested_surfaces: list[str]
+    # 与 ``Entities.characters`` 同一键域：这里是成员闭集载体，不新增一条仓内
+    # 明说不存在的 char_id 格式守卫。格式异常若需要阻断，必须先成为 Global 判据。
+    visible_character_refs: dict[str, list[str]]
+
+
+class BlueprintCharacterProjection(StrictModel):
+    """``global + main_text`` 的确定性、版本化 Blueprint 称名投影。
+
+    本产物没有通用 ``_provenance``：它的全部业务字节就是确定性投影本身，freshness
+    由当前最新 schema-valid GlobalGrounding（formal 或 INVALID）与 MainText 重算后
+    逐值对账。加入输入文件指纹反而会让一次 role-only 修订改动本产物字节，重新制造
+    本产物要消除的无效 stale。
+    """
+
+    chapters: list[BlueprintCharacterProjectionChapter] = Field(min_length=1)
+
+    @model_validator(mode='after')
+    def _chapters_are_unique_and_ordered(self) -> BlueprintCharacterProjection:
+        ordinals = [row.chapter_ordinal for row in self.chapters]
+        if len(ordinals) != len(set(ordinals)):
+            raise ValueError('blueprint character projection chapter_ordinal 重号')
+        if ordinals != sorted(ordinals):
+            raise ValueError('blueprint character projection 必须按阅读序排列')
+        return self
+
+
 # ── LLM response models：只收【模型该写的字段】──────────────────────────────
 #
 # 最终产物模型不能直接拿来校验响应：Address.by 允许模型先写人名、再由代码回解；
@@ -1310,7 +1346,8 @@ class ChapterBlueprints(StrictModel):
     #: 长度 = 正文章数（盘上 8~14）。
     blueprints: list[Blueprint] = Field(min_length=1)
 
-    #: `inputs` 恒两条：`stage1/main_text.json` · `stage2/global_grounding.json`。
+    #: `inputs` 恒两条：`stage1/main_text.json` ·
+    #: `stage2/blueprint_character_projection.json`。Blueprint 不读 global 其他字段。
     provenance: BlueprintProvenance = Field(alias='_provenance')
 
     @model_validator(mode='after')

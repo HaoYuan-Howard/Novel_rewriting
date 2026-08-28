@@ -22,7 +22,7 @@ import threading
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterable, Mapping, Sequence
+from typing import Any, Iterable, Mapping, NamedTuple, Sequence
 
 from pydantic import BaseModel, ValidationError
 
@@ -74,11 +74,41 @@ _AGENT_REQUEST_FIELDS = {
     'schema_sha256', 'requested_model', 'requested_effort',
     'requested_output_token_ceiling', 'protocol_version',
 }
+_LEGACY_PHASE_FIELDS = {
+    'phase', 'response_model', 'response_schema_sha256', 'max_tokens',
+    'prefer_content_over_reasoning_salvage',
+}
+_LEGACY_REQUEST_FIELDS = {
+    'request_model', 'reasoning_effort', 'thinking', 'json_mode', 'max_tokens',
+    'temperature', 'system_sha256', 'user_sha256', 'request_fingerprint',
+}
 _LEDGER_IDENTITY_FIELDS = {
     'attempt_id', 'request_fingerprint', 'model', 'request_model',
     'reasoning_effort', 'thinking', 'json_mode', 'max_tokens',
     'response_sha256',
 }
+#: 只有这些 phase 的响应形状才是完整 Blueprint detail；boundary 响应没有
+#: ``fact_atoms``，即使被重签成同一个 response model 也不能进入恢复候选。
+_BLUEPRINT_RECOVERY_PHASES = frozenset({'blueprint', 'detail', 'repair'})
+
+
+class VerifiedBlueprintCheckpoint(NamedTuple):
+    """可供 0-wire fact atom 恢复使用的一章已验证响应。
+
+    这里只暴露 typed payload 与不可变身份摘要，不把 checkpoint 文件路径扩散到
+    producer。调用方仍须用当前 main/global 重编译，并证明它与 INVALID 业务章逐字段
+    闭合后，才能取其中的 ``evidence_phrase``。
+    """
+
+    run_id: str
+    phase: str
+    chapter: int
+    purpose: str
+    checkpoint_sha256: str
+    response_payload_sha256: str
+    accepted_attempt_id: str
+    accepted_model: str
+    response_payload: dict[str, Any]
 
 
 def _ownership_thread_lock(path: Path) -> threading.RLock:
@@ -1191,6 +1221,648 @@ def restore_checkpoint(
             accepted_text.encode('utf-8')):
         raise ProvenanceRefused(f'{target} 的 content accepted 原文与 ledger response 不同')
     return record
+
+
+def _recovery_phase_policy(
+        ctx: Any, *, run: Mapping[str, Any], phase: str,
+        response_model: type[BaseModel],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """取历史 run 中与 detail checkpoint **同名且唯一**的请求策略。"""
+    raw_policy = run.get('request_policy')
+    if not isinstance(raw_policy, dict):
+        raise ProvenanceRefused('历史 Stage2 run 缺 request_policy 对象')
+    policy = _normalize_request_policy(ctx, raw_policy)
+    if run.get('request_policy_sha256') != _sha(policy):
+        raise ProvenanceRefused('历史 Stage2 run 的 request_policy SHA-256 不闭合')
+    rows = [
+        row for row in policy.get('phases', [])
+        if isinstance(row, dict) and row.get('phase') == phase
+    ]
+    if len(rows) != 1:
+        raise ProvenanceRefused(
+            f'历史 Stage2 run 对 phase={phase!r} 没有唯一请求策略')
+    row = rows[0]
+    expected_fields = (
+        _AGENT_PHASE_FIELDS
+        if policy.get('protocol_version') == AGENT_PROTOCOL_VERSION
+        else _LEGACY_PHASE_FIELDS
+    )
+    current_schema_sha = _sha(response_model.model_json_schema(by_alias=True))
+    if (set(row) != expected_fields
+            or row.get('response_model') != response_model.__name__
+            or row.get('response_schema_sha256') != current_schema_sha):
+        raise ProvenanceRefused(
+            f'历史 Stage2 phase={phase!r} 的字段或 response schema 与当前契约漂移')
+    if policy.get('protocol_version') != AGENT_PROTOCOL_VERSION:
+        max_tokens = row.get('max_tokens')
+        if (not isinstance(max_tokens, int) or isinstance(max_tokens, bool)
+                or max_tokens <= 0
+                or not isinstance(
+                    row.get('prefer_content_over_reasoning_salvage'), bool)):
+            raise ProvenanceRefused(
+                f'历史 Stage2 phase={phase!r} 的 legacy token/salvage 策略不合法')
+    return policy, row
+
+
+def _validate_historical_agent_session(
+        ctx: Any, *, record: Mapping[str, Any], run_id: str,
+        purpose: str, chapter: int, artifact_code: str,
+        policy: Mapping[str, Any], phase_policy: Mapping[str, Any],
+        response_model: type[BaseModel],
+) -> None:
+    """不 claim 当前 run，仍把 agent checkpoint 联回历史 session turn 链。"""
+    acceptance = {key: record.get(key) for key in _AGENT_ACCEPTANCE_FIELDS}
+    profile = _resolved_profile_dict(
+        ctx, policy.get('profile'), label='历史 Stage2 agent request policy')
+    binding = acceptance.get('accepted_request')
+    schema_sha = _sha(response_model.model_json_schema(by_alias=True))
+    ceiling = phase_policy.get('requested_output_token_ceiling')
+    expected_binding = {
+        'node': 'stage2.blueprint',
+        'chapter': chapter,
+        'purpose': purpose,
+        'system_sha256': record.get('system_sha256'),
+        'user_sha256': record.get('user_sha256'),
+        'schema_sha256': schema_sha,
+        'requested_model': profile['model'],
+        'requested_effort': profile['reasoning_effort'],
+        'requested_output_token_ceiling': ceiling,
+        'protocol_version': AGENT_PROTOCOL_VERSION,
+    }
+    if (not isinstance(binding, dict) or set(binding) != _AGENT_REQUEST_FIELDS
+            or binding != expected_binding
+            or acceptance.get('acceptance_protocol') != AGENT_PROTOCOL_VERSION
+            or acceptance.get('profile') != profile
+            or acceptance.get('model') != profile['model']
+            or acceptance.get('accepted_channel') != 'content'
+            or acceptance.get('salvaged') is not False
+            or acceptance.get('accepted_schema_sha256') != schema_sha
+            or acceptance.get('subject_sha256') != _sha(binding)):
+        raise ProvenanceRefused(
+            f'{purpose}: 历史 agent accepted_request/profile/schema 不闭合')
+
+    try:
+        events = agent_session_audit.read_events(ctx.novel_dir.parent)
+        sessions = agent_session_audit.fold(events)
+    except (OSError, UnicodeError, ValueError) as exc:
+        raise ProvenanceRefused(
+            f'{purpose}: 历史 agent session 审计不可验证：{exc}') from exc
+    matches = [
+        session for session in sessions
+        if session.session_run_id == acceptance.get('session_run_id')
+    ]
+    if len(matches) != 1 or not matches[0].turns:
+        raise ProvenanceRefused(f'{purpose}: 历史 agent session 不是唯一非空 turn 链')
+    session = validate_agent_session_request_binding(
+        events,
+        acceptance,
+        purpose=purpose,
+        profile=profile,
+        # 历史 user 正文不重新落第二份；首轮 prompt SHA 已由 append-only session
+        # 事件保存，accepted_request 另以 user/system hash 绑定当前 checkpoint。
+        original_prompt_sha256=str(matches[0].turns[0].prompt_sha256),
+        original_schema_sha256=schema_sha,
+    )
+    accepted = [
+        turn for turn in session.turns
+        if turn.attempt_id == acceptance.get('attempt_id')
+    ]
+    start = session.start
+    if len(accepted) != 1:
+        raise ProvenanceRefused(f'{purpose}: accepted attempt 没有唯一 session turn')
+    turn = accepted[0]
+    start_profile = (
+        None if start.profile is None else start.profile.model_dump(mode='json'))
+    turn_profile = (
+        None if turn.profile is None else turn.profile.model_dump(mode='json'))
+    if ({
+            'parent_run_id': start.parent_run_id,
+            'role': start.role,
+            'node': start.node,
+            'chapter': start.chapter,
+            'subject_sha256': start.subject_sha256,
+            'profile': start_profile,
+            'requested_model': start.requested_model,
+            'requested_effort': start.requested_effort,
+            'protocol_version': start.protocol_version,
+            'start_code_version': start.start_code_version,
+        } != {
+            'parent_run_id': run_id,
+            'role': 'executor',
+            'node': 'stage2.blueprint',
+            'chapter': chapter,
+            'subject_sha256': acceptance.get('subject_sha256'),
+            'profile': profile,
+            'requested_model': profile['model'],
+            'requested_effort': profile['reasoning_effort'],
+            'protocol_version': AGENT_PROTOCOL_VERSION,
+            'start_code_version': artifact_code,
+        } or {
+            'parent_run_id': turn.parent_run_id,
+            'role': turn.role,
+            'node': turn.node,
+            'chapter': turn.chapter,
+            'subject_sha256': turn.subject_sha256,
+            'profile': turn_profile,
+            'provider_session_id': turn.provider_session_id,
+            'turn_index': turn.turn_index,
+            'requested_model': turn.requested_model,
+            'actual_model': turn.actual_model,
+            'requested_effort': turn.requested_effort,
+            'protocol_version': turn.protocol_version,
+            'start_code_version': turn.start_code_version,
+            'prompt_sha256': turn.prompt_sha256,
+            'schema_sha256': turn.schema_sha256,
+        } != {
+            'parent_run_id': run_id,
+            'role': 'executor',
+            'node': 'stage2.blueprint',
+            'chapter': chapter,
+            'subject_sha256': acceptance.get('subject_sha256'),
+            'profile': profile,
+            'provider_session_id': acceptance.get('provider_session_id'),
+            'turn_index': acceptance.get('accepted_turn_index'),
+            'requested_model': profile['model'],
+            'actual_model': profile['model'],
+            'requested_effort': profile['reasoning_effort'],
+            'protocol_version': AGENT_PROTOCOL_VERSION,
+            'start_code_version': artifact_code,
+            'prompt_sha256': acceptance.get('accepted_prompt_sha256'),
+            'schema_sha256': schema_sha,
+        }):
+        raise ProvenanceRefused(
+            f'{purpose}: 历史 agent checkpoint 与 started/turn 身份漂移')
+
+
+def _validate_recovery_request_binding(
+        ctx: Any, *, record: Mapping[str, Any], run_id: str,
+        purpose: str, chapter: int, artifact_code: str,
+        policy: Mapping[str, Any], phase_policy: Mapping[str, Any],
+        response_model: type[BaseModel],
+        accepted_link: Mapping[str, Any], links: Sequence[Mapping[str, Any]],
+) -> None:
+    """复验 accepted_request；checkpoint 自签名不能替代独立 ledger/session。"""
+    if policy.get('protocol_version') == AGENT_PROTOCOL_VERSION:
+        profile = _resolved_profile_dict(
+            ctx, policy.get('profile'), label='历史 Stage2 agent request policy')
+        for link in links:
+            if (link.get('model') != profile['model']
+                    or link.get('request_model') != profile['model']
+                    or link.get('reasoning_effort') != profile['reasoning_effort']
+                    or link.get('thinking') is not None
+                    or link.get('json_mode') is not True
+                    or link.get('max_tokens') is not None):
+                raise ProvenanceRefused(
+                    f'{purpose}: 历史 agent attempt link 与 run profile 漂移')
+        _validate_historical_agent_session(
+            ctx,
+            record=record,
+            run_id=run_id,
+            purpose=purpose,
+            chapter=chapter,
+            artifact_code=artifact_code,
+            policy=policy,
+            phase_policy=phase_policy,
+            response_model=response_model,
+        )
+        return
+
+    binding = record.get('accepted_request')
+    chain = policy.get('model_chain')
+    rungs = policy.get('rungs')
+    max_tokens = phase_policy.get('max_tokens')
+    if (not isinstance(binding, dict) or set(binding) != _LEGACY_REQUEST_FIELDS
+            or not isinstance(chain, list) or not chain
+            or any(not isinstance(item, str) or not item for item in chain)
+            or len(set(chain)) != len(chain)
+            or not isinstance(rungs, list) or not rungs
+            or record.get('model_chain') != chain
+            or record.get('rungs') != rungs
+            or binding.get('system_sha256') != record.get('system_sha256')
+            or not _is_sha256(binding.get('user_sha256'))
+            or binding.get('request_fingerprint') != record.get('request_fingerprint')
+            or binding.get('request_model') != accepted_link.get('request_model')
+            or binding.get('reasoning_effort') != accepted_link.get('reasoning_effort')
+            or binding.get('thinking') != accepted_link.get('thinking')
+            or binding.get('json_mode') != accepted_link.get('json_mode')
+            or binding.get('max_tokens') != accepted_link.get('max_tokens')
+            or binding.get('max_tokens') != max_tokens
+            or binding.get('temperature') is not None):
+        raise ProvenanceRefused(
+            f'{purpose}: 历史 legacy accepted_request 与 phase/ledger 不闭合')
+    valid_rungs = [
+        row for row in rungs
+        if (isinstance(row, list) and len(row) == 2
+            and isinstance(row[0], str) and row[0]
+            and isinstance(row[1], bool))
+    ]
+    allowed_rungs = {(row[0], row[1]) for row in valid_rungs}
+    if len(valid_rungs) != len(rungs) or len(allowed_rungs) != len(rungs):
+        raise ProvenanceRefused(f'{purpose}: 历史 run 的 rungs 不是关闭式二元组')
+    for link in links:
+        if (link.get('model') not in chain
+                or link.get('request_model') not in chain
+                or (link.get('reasoning_effort'), link.get('thinking'))
+                not in allowed_rungs
+                or link.get('json_mode') is not True
+                or link.get('max_tokens') != max_tokens):
+            raise ProvenanceRefused(
+                f'{purpose}: 历史 legacy attempt link 不属于 run phase 策略')
+    recovery = record.get('recovery_from_attempts')
+    request_mode = record.get('request_mode')
+    link_ids = {str(link.get('attempt_id') or '') for link in links}
+    if (not isinstance(request_mode, str) or not request_mode
+            or not isinstance(recovery, list)
+            or any(not isinstance(item, str) for item in recovery)
+            or len(set(recovery)) != len(recovery)
+            or not set(recovery).issubset(
+                link_ids - {str(record.get('attempt_id') or '')})):
+        raise ProvenanceRefused(f'{purpose}: 历史 legacy recovery chain 不闭合')
+    if request_mode in ('original', 'original:budget_fallback'):
+        if (request_mode == 'original' and recovery
+                or binding.get('user_sha256') != record.get('user_sha256')):
+            raise ProvenanceRefused(
+                f'{purpose}: 原始请求的 user/recovery 身份漂移')
+    elif not recovery:
+        raise ProvenanceRefused(
+            f'{purpose}: 动态恢复请求没有 contributing attempts')
+
+
+def _validate_reasoning_acceptance(
+        ctx: Any, *, run_id: str, purpose: str, chapter: int,
+        attempt_id: str, model: str, accepted_text: str,
+        ledger_response_sha256: str, accepted_request: Mapping[str, Any],
+) -> None:
+    """reasoning 救回稿须与书内留证及 append-only 审计逐格闭合。
+
+    成本账的 ``response_sha256`` 历史上只绑定供应商 ``content``；reasoning
+    不能拿 checkpoint 的可重签 self-hash 冒充原响应身份。因此这里同时要求：
+    留证的 content 仍命中 ledger hash、reasoning 与 accepted_text 逐字相同，且
+    唯一 answer_lost 审计行指向这份留证。
+    """
+    dump_rel = paths.answer_lost_rel(attempt_id)
+    dump_path = paths.answer_lost_path(ctx.novel_dir, attempt_id)
+    try:
+        dump = json.loads(dump_path.read_text(encoding='utf-8'))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise ProvenanceRefused(
+            f'{purpose}: reasoning answer_lost 留证不可读：{exc}') from exc
+    if not isinstance(dump, dict):
+        raise ProvenanceRefused(f'{purpose}: reasoning answer_lost 留证不是 JSON 对象')
+    content = dump.get('content')
+    raw_content = content if isinstance(content, str) else '' if content is None else None
+    if (raw_content is None
+            or _sha(raw_content.encode('utf-8')) != ledger_response_sha256
+            or dump.get('reasoning') != accepted_text
+            or dump.get('run_id') not in (None, run_id)
+            or dump.get('sid') != ctx.sid
+            or dump.get('node') != 'stage2.blueprint'
+            or dump.get('purpose') != purpose
+            or dump.get('attempt_id') != attempt_id
+            or dump.get('chapter') != chapter
+            or dump.get('salvaged') is not True
+            or dump.get('model') != model
+            or dump.get('reasoning_effort') != accepted_request.get('reasoning_effort')
+            or dump.get('thinking') != accepted_request.get('thinking')
+            or dump.get('json_mode') != accepted_request.get('json_mode')):
+        raise ProvenanceRefused(
+            f'{purpose}: reasoning accepted text 与 answer_lost/ledger 留证不闭合')
+
+    if ctx.ledger.path is None:
+        rows = list(ctx.ledger.audit_events)
+    else:
+        from novel.llm.ledger import AUDIT_REL
+
+        target = ctx.ledger.path.with_name(AUDIT_REL[-1])
+        try:
+            with process_append_lock(target):
+                lines = target.read_text(encoding='utf-8').splitlines()
+        except OSError as exc:
+            raise ProvenanceRefused(
+                f'{purpose}: reasoning 留证的 LLM audit 不可读：{exc}') from exc
+        rows = []
+        for index, line in enumerate(lines):
+            if not line.strip():
+                continue
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError as exc:
+                raise ProvenanceRefused(
+                    f'{purpose}: LLM audit 第 {index + 1} 行损坏') from exc
+            if isinstance(row, dict):
+                rows.append(row)
+    matches = [
+        row for row in rows
+        if (row.get('kind') == 'answer_lost'
+            and row.get('run_id') == run_id
+            and row.get('sid') == ctx.sid
+            and row.get('node') == 'stage2.blueprint'
+            and row.get('purpose') == purpose
+            and row.get('attempt_id') == attempt_id
+            and row.get('chapter') == chapter
+            and row.get('salvaged') is True)
+    ]
+    if len(matches) != 1:
+        raise ProvenanceRefused(
+            f'{purpose}: reasoning accepted attempt 没有唯一 answer_lost 审计行')
+    audit = matches[0]
+    if (audit.get('dump') != dump_rel
+            or audit.get('dump_error') is not None
+            or audit.get('source') != dump.get('source')
+            or audit.get('finish_reason') != dump.get('finish_reason')
+            or audit.get('reasoning_effort') != dump.get('reasoning_effort')
+            or audit.get('thinking') != dump.get('thinking')
+            or audit.get('json_mode') != dump.get('json_mode')
+            or audit.get('content_chars') != len(raw_content)
+            or audit.get('reasoning_chars') != len(accepted_text)):
+        raise ProvenanceRefused(
+            f'{purpose}: reasoning answer_lost 审计指针/读数与留证漂移')
+
+
+def _usage_covers(
+        whole: Mapping[str, Any], part: BaseModel,
+) -> bool:
+    """产物总账至少覆盖一章 checkpoint 所属 purpose 的完整成本。"""
+    row = part.model_dump(mode='json')
+    for key in ('calls_made', 'calls_cached'):
+        total = whole.get(key)
+        value = row.get(key)
+        if (not isinstance(total, int) or isinstance(total, bool)
+                or not isinstance(value, int) or isinstance(value, bool)
+                or value > total):
+            return False
+    for key in ('prompt_tokens', 'completion_tokens', 'reasoning_tokens'):
+        value = row.get(key)
+        if value is None:
+            continue
+        total = whole.get(key)
+        if (not isinstance(total, int) or isinstance(total, bool)
+                or not isinstance(value, int) or isinstance(value, bool)
+                or value > total):
+            return False
+    return True
+
+
+def _verified_recovery_checkpoint(
+        ctx: Any, *, target: Path, run: Mapping[str, Any],
+        architecture: str, response_model: type[BaseModel], system: str,
+        artifact_code: str, accepted_models: frozenset[str],
+        artifact_usage: Mapping[str, Any], chapters: frozenset[int],
+) -> VerifiedBlueprintCheckpoint | None:
+    """核验一份历史 checkpoint；任一联结不闭合就不给恢复材料。"""
+    record = _read_json(target)
+    if record.get('checkpoint_sha256') != _checkpoint_hash(record):
+        raise ArtifactUnreadable(f'{target} 的 checkpoint_sha256 不闭合')
+
+    run_id = str(run.get('run_id') or '')
+    chapter = record.get('chapter')
+    phase = record.get('phase')
+    purpose = record.get('purpose')
+    if (not isinstance(chapter, int) or isinstance(chapter, bool)
+            or chapter not in chapters
+            or not isinstance(phase, str)
+            or not isinstance(purpose, str) or not purpose.strip()
+            or phase not in _BLUEPRINT_RECOVERY_PHASES
+            or purpose != f'stage2.blueprint:ch{chapter}'
+            or record.get('run_id') != run_id
+            or record.get('sid') != ctx.sid
+            or record.get('node') != 'stage2.blueprint'
+            or record.get('code') != artifact_code
+            or record.get('architecture') != architecture
+            or record.get('response_model') != response_model.__name__
+            or record.get('system_sha256') != _sha(system.encode('utf-8'))):
+        return None
+    if target.resolve() != paths.stage2_blueprint_checkpoint_path(
+            ctx.novel_dir, run_id, phase, chapter).resolve():
+        return None
+    policy, phase_policy = _recovery_phase_policy(
+        ctx, run=run, phase=phase, response_model=response_model)
+
+    parsed_payload = record.get('parsed_payload')
+    response_payload = record.get('response_payload')
+    accepted_text = record.get('accepted_text')
+    normalized_text = record.get('normalized_text')
+    channel = record.get('accepted_channel')
+    salvaged = record.get('salvaged')
+    if (not isinstance(parsed_payload, dict)
+            or record.get('parsed_payload_sha256') != _sha(parsed_payload)
+            or not isinstance(response_payload, dict)
+            or record.get('response_payload_sha256') != _sha(response_payload)
+            or not isinstance(accepted_text, str)
+            or not isinstance(normalized_text, str)
+            or channel not in ('content', 'reasoning', 'agent', 'deterministic')):
+        raise ArtifactUnreadable(f'{target} 的响应正文或 payload SHA-256 不闭合')
+    if 'acceptance_protocol' not in record:
+        if (record.get('accepted_text_sha256')
+                != _sha(accepted_text.encode('utf-8'))
+                or record.get('normalized_text_sha256')
+                != _sha(normalized_text.encode('utf-8'))):
+            raise ArtifactUnreadable(f'{target} 的 accepted/normalized 文本 SHA-256 不闭合')
+    _validate_channel_text(
+        label=str(target), accepted_text=accepted_text,
+        normalized_text=normalized_text, channel=str(channel), salvaged=salvaged)
+    try:
+        decoded = json.loads(normalized_text)
+    except json.JSONDecodeError as exc:
+        raise ArtifactUnreadable(
+            f'{target} 的 normalized accepted text 已不是合法 JSON：{exc}') from exc
+    if decoded != parsed_payload:
+        raise ProvenanceRefused(
+            f'{target} 的 normalized accepted text 与 parsed payload 不同')
+    try:
+        current_payload = response_model.model_validate(
+            parsed_payload).model_dump(by_alias=True)
+    except ValidationError as exc:
+        raise ArtifactUnreadable(
+            f'{target} 的 parsed payload 不再通过当前 {response_model.__name__}：{exc}') from exc
+    if current_payload != response_payload:
+        raise ProvenanceRefused(
+            f'{target} 的 parsed payload 经当前 schema 归一后与 typed payload 不同')
+
+    attempt_id = record.get('attempt_id')
+    model = record.get('model')
+    fingerprint = record.get('request_fingerprint')
+    ledger_response_sha = record.get('ledger_response_sha256')
+    links = record.get('attempt_links')
+    if (not _is_attempt_id(attempt_id)
+            or not isinstance(model, str) or model not in accepted_models
+            or not _is_sha256(fingerprint)
+            or not _is_sha256(ledger_response_sha)
+            or not isinstance(links, list) or not links):
+        raise ProvenanceRefused(f'{target} 缺 accepted attempt/model/ledger 身份')
+    normalized_links: list[dict[str, Any]] = []
+    for link in links:
+        if (not isinstance(link, dict)
+                or set(link) != _LEDGER_IDENTITY_FIELDS
+                or not _is_attempt_id(link.get('attempt_id'))
+                or not _is_sha256(link.get('request_fingerprint'))
+                or not _is_sha256(link.get('response_sha256'))):
+            raise ProvenanceRefused(f'{target} 的 attempt_links 含不完整身份')
+        normalized_links.append(dict(link))
+    ids = [str(link['attempt_id']) for link in normalized_links]
+    if len(set(ids)) != len(ids) or attempt_id not in ids:
+        raise ProvenanceRefused(f'{target} 的 contributing attempts 重复或缺 accepted attempt')
+    accepted_link = next(
+        link for link in normalized_links if link['attempt_id'] == attempt_id)
+    if (accepted_link.get('request_fingerprint') != fingerprint
+            or accepted_link.get('model') != model
+            or accepted_link.get('response_sha256') != ledger_response_sha):
+        raise ProvenanceRefused(f'{target} 的 accepted attempt 与封存 identity 不闭合')
+    _validate_recovery_request_binding(
+        ctx,
+        record=record,
+        run_id=run_id,
+        purpose=purpose,
+        chapter=chapter,
+        artifact_code=artifact_code,
+        policy=policy,
+        phase_policy=phase_policy,
+        response_model=response_model,
+        accepted_link=accepted_link,
+        links=normalized_links,
+    )
+    if channel == 'content' and ledger_response_sha != _sha(
+            accepted_text.encode('utf-8')):
+        raise ProvenanceRefused(f'{target} 的 content 原文与 ledger response 不同')
+
+    stored_resolution = record.get('repair_resolution')
+    if channel in ('agent', 'deterministic'):
+        if not isinstance(stored_resolution, dict):
+            raise ProvenanceRefused(f'{target} 缺不可变 repair resolution 联结')
+        current_resolution = _repair_resolution_binding(
+            ctx.novel_dir, str(attempt_id), str(channel))
+        if (current_resolution != stored_resolution
+                or current_resolution is None
+                or current_resolution['candidate_payload_sha256']
+                != _sha(parsed_payload)):
+            raise ProvenanceRefused(f'{target} 的 repair resolution 已漂移')
+    elif stored_resolution is not None:
+        raise ProvenanceRefused(f'{target} 的供应商通道不应携带 repair resolution')
+
+    # CostLedger 的完整 purpose 口会发现同一 logical purpose 下未被 checkpoint
+    # links 列出的失败轮；恢复不能只核采用的那一次，更不能污染当前 run 的计数器。
+    if ctx.ledger.path is None:
+        if ctx.ledger.run_id != run_id:
+            return None
+        ledger = ctx.ledger
+    else:
+        from novel.llm.ledger import CostLedger
+        ledger = CostLedger(path=ctx.ledger.path, run_id=run_id)
+    usage = ledger.usage_for_complete_purposes(
+        [purpose], sid=ctx.sid, node='stage2.blueprint',
+        required_identities=[(purpose, link) for link in normalized_links])
+    if usage is None or not _usage_covers(artifact_usage, usage):
+        return None
+    if channel == 'reasoning':
+        binding = record.get('accepted_request')
+        assert isinstance(binding, dict)
+        _validate_reasoning_acceptance(
+            ctx,
+            run_id=run_id,
+            purpose=purpose,
+            chapter=chapter,
+            attempt_id=str(attempt_id),
+            model=str(model),
+            accepted_text=accepted_text,
+            ledger_response_sha256=str(ledger_response_sha),
+            accepted_request=binding,
+        )
+
+    return VerifiedBlueprintCheckpoint(
+        run_id=run_id,
+        phase=phase,
+        chapter=chapter,
+        purpose=purpose,
+        checkpoint_sha256=str(record['checkpoint_sha256']),
+        response_payload_sha256=str(record['response_payload_sha256']),
+        accepted_attempt_id=str(attempt_id),
+        accepted_model=str(model),
+        response_payload=copy.deepcopy(response_payload),
+    )
+
+
+def verified_blueprint_recovery_checkpoints(
+        ctx: Any, *, architecture: str, response_model: type[BaseModel],
+        system: str, artifact_code: str, accepted_models: Sequence[str],
+        artifact_usage: Mapping[str, Any], chapters: Iterable[int],
+) -> tuple[VerifiedBlueprintCheckpoint, ...]:
+    """扫描与当前 INVALID 来源账相容的历史章节响应，且全程只读、零 wire。
+
+    checkpoint 本身没有资格直接修正式产物。本口只核其 run/schema/system/hash、
+    accepted attempt 与完整 purpose 成本账；producer 随后还必须用当前 main/global
+    编译，并与 INVALID 章逐字段闭合。坏的或无法对证的历史状态按 miss 处理，不能
+    因为“看起来像那次响应”就猜 locator。
+    """
+    wanted = frozenset(int(chapter) for chapter in chapters)
+    models = frozenset(str(model) for model in accepted_models if str(model))
+    if not wanted or not models:
+        return ()
+    root = Path(ctx.novel_dir) / paths.STAGE2_RUNS_DIRNAME
+    try:
+        run_dirs = sorted(
+            (path for path in root.iterdir() if path.is_dir()),
+            key=lambda path: path.name,
+        ) if root.is_dir() else []
+    except OSError:
+        return ()
+
+    found: list[VerifiedBlueprintCheckpoint] = []
+    current_schema_sha = _sha(response_model.model_json_schema(by_alias=True))
+    for run_dir in run_dirs:
+        try:
+            run_id = check_run_id(run_dir.name)
+            run_root = paths.stage2_blueprint_run_path(ctx.novel_dir, run_id)
+            run = _read_json(run_root / RUN_FILE)
+            policy = run.get('request_policy')
+            phases = policy.get('phases') if isinstance(policy, dict) else None
+            if ({
+                    'run_id': run.get('run_id'),
+                    'sid': run.get('sid'),
+                    'node': run.get('node'),
+                    'code': run.get('code'),
+                    'architecture': run.get('architecture'),
+                } != {
+                    'run_id': run_id,
+                    'sid': ctx.sid,
+                    'node': 'stage2.blueprint',
+                    'code': artifact_code,
+                    'architecture': architecture,
+                }
+                    or not isinstance(policy, dict)
+                    or run.get('request_policy_sha256') != _sha(policy)
+                    or not isinstance(phases, list)
+                    or not any(
+                        isinstance(row, dict)
+                        and row.get('response_model') == response_model.__name__
+                        and row.get('response_schema_sha256') == current_schema_sha
+                        for row in phases)):
+                continue
+            checkpoint_dir = run_root / 'checkpoints'
+            targets = sorted(checkpoint_dir.glob('*.json')) \
+                if checkpoint_dir.is_dir() else []
+            for target in targets:
+                try:
+                    candidate = _verified_recovery_checkpoint(
+                        ctx,
+                        target=target,
+                        run=run,
+                        architecture=architecture,
+                        response_model=response_model,
+                        system=system,
+                        artifact_code=artifact_code,
+                        accepted_models=models,
+                        artifact_usage=artifact_usage,
+                        chapters=wanted,
+                    )
+                except (ArtifactUnreadable, ProvenanceRefused, UpstreamMissing,
+                        OSError, UnicodeError, ValueError, TypeError):
+                    candidate = None
+                if candidate is not None:
+                    found.append(candidate)
+        except (ArtifactUnreadable, ProvenanceRefused, UpstreamMissing,
+                OSError, UnicodeError, ValueError, TypeError):
+            continue
+    return tuple(found)
 
 
 def _manifest_hash(payload: Mapping[str, Any]) -> str:

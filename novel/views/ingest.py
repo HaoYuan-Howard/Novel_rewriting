@@ -318,6 +318,15 @@ def stage0_edit_plan(
     )
 
 
+def stage0_edit_target_revision_id(
+    base: str | os.PathLike[str], sid: str, plan: Stage0EditPlan,
+) -> str:
+    """返回这份计划唯一能落成的 revision，不读取“执行后的 latest”。"""
+    novel_dir = paths.resolve_novel_dir(base, sid)
+    ctx = readonly_ctx(novel_dir, 'stage0.edit', prov.code_version())
+    return removal.prepare_edit_plan(ctx, plan).revision_id
+
+
 @dataclass(frozen=True)
 class _Stage1Material:
     clean: str

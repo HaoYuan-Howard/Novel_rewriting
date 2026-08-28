@@ -21,8 +21,10 @@ routing 不符 ⇒ 重跑」。改成 Web 编排之后**整个消失，且没有
 from __future__ import annotations
 
 from contracts.artifacts import (
-    ARTIFACT_PATHS, BOOK_SCOPED_PATHS, STAGE1_MAIN_TEXT, STAGE4_PLAN_CHAPTERS,
-    STAGE5_CHAPTER, artifact_rel,
+    ARTIFACT_PATHS, BOOK_SCOPED_PATHS, STAGE1_MAIN_TEXT,
+    STAGE2_BLUEPRINT_CHARACTER_PROJECTION, STAGE2_CHAPTER_BLUEPRINTS,
+    STAGE2_GLOBAL_GROUNDING,
+    STAGE4_PLAN_CHAPTERS, STAGE5_CHAPTER, artifact_rel,
 )
 
 import os
@@ -118,8 +120,16 @@ def artifact_state(store: ArtifactStore, rel: str) -> ArtifactState:
     p = store.path(rel)
     invalid = store.exists(paths.invalid_of(rel))
     if not p.is_file():
+        reason = 'no_provenance'
+        if rel == STAGE2_BLUEPRINT_CHARACTER_PROJECTION:
+            try:
+                report = store.freshness(rel)
+            except (ArtifactUnreadable, UpstreamMissing):
+                pass
+            else:
+                reason = report.reason
         return ArtifactState(rel=rel, exists=False, bytes=None, mtime=None,
-                             freshness='unknown', reason='no_provenance',
+                             freshness='unknown', reason=reason,
                              display_freshness='missing', invalid=invalid, readable=True,
                              condition='invalid' if invalid else 'missing')
 
@@ -485,6 +495,155 @@ RESUME_LEGACY = 'legacy_incompatible'  # 旧 Stage5 契约；绝不自动付费�
 RESUME_VERDICTS = (RESUME_RUN, RESUME_SKIP, RESUME_REDO, RESUME_UNKNOWN, RESUME_LEGACY)
 
 
+def stage2_global_projection_blocked(ov: NovelOverview) -> bool:
+    """最新 Global 的称名 HARD 是否让 Blueprint 投影暂不可消费。"""
+    stage = next(
+        (candidate for candidate in getattr(ov, 'stages', ())
+         if candidate.stage == 'stage2'),
+        None,
+    )
+    if stage is None:
+        return False
+    by_rel = {artifact.rel: artifact for artifact in stage.artifacts}
+    grounding = by_rel.get(STAGE2_GLOBAL_GROUNDING)
+    projection = by_rel.get(STAGE2_BLUEPRINT_CHARACTER_PROJECTION)
+    return bool(
+        grounding is not None and grounding.invalid
+        and projection is not None and projection.freshness == 'unknown'
+        and projection.reason == 'global_naming_blocked'
+    )
+
+
+def stage2_projection_recovery_needed(ov: NovelOverview) -> bool:
+    """当前 Global 可作底座、但 Blueprint 称名投影需要 0-LLM 重物化吗。
+
+    这格专门防一条昂贵的误派单：投影是 ``stage2.global.produces`` 的一员，
+    通用完成度若只看「少了一份 producer 产物」，会把它解释成整份 Global
+    需要默认重跑。实际恢复只需 ``stage2.global --renormalize``；即使最新
+    schema-valid Global 因非称名 HARD 留在 ``.INVALID``，它也足够确定这份投影。
+
+    ``invalid=True`` 只证明盘上有候选，不替候选伪造 schema-valid 结论；真正的
+    载体读取仍由 renormalize 的 ``ArtifactStore.read_own`` 关闭式执行。即便字节
+    损坏，这条免费命令也只会如实失败，绝不会退回付费重采。
+    """
+    if stage2_global_projection_blocked(ov):
+        return False
+    stage = next(
+        (candidate for candidate in getattr(ov, 'stages', ())
+         if candidate.stage == 'stage2'),
+        None,
+    )
+    if stage is None:
+        return False
+    by_rel = {artifact.rel: artifact for artifact in stage.artifacts}
+    grounding = by_rel.get(STAGE2_GLOBAL_GROUNDING)
+    projection = by_rel.get(STAGE2_BLUEPRINT_CHARACTER_PROJECTION)
+    if grounding is None or projection is None:
+        return False
+    source_available = bool(
+        grounding.invalid
+        or (grounding.exists and grounding.readable
+            and grounding.freshness == 'fresh')
+    )
+    projection_current = bool(
+        projection.exists and projection.readable
+        and projection.freshness == 'fresh'
+    )
+    return source_available and not projection_current
+
+
+def stage2_invalid_projection_ready(ov: NovelOverview) -> bool:
+    """最新 Global 已是 INVALID、但 Blueprint 所需投影已经 current/fresh 吗。"""
+    stage = next(
+        (candidate for candidate in getattr(ov, 'stages', ())
+         if candidate.stage == 'stage2'),
+        None,
+    )
+    if stage is None:
+        return False
+    by_rel = {artifact.rel: artifact for artifact in stage.artifacts}
+    grounding = by_rel.get(STAGE2_GLOBAL_GROUNDING)
+    projection = by_rel.get(STAGE2_BLUEPRINT_CHARACTER_PROJECTION)
+    return bool(
+        grounding is not None and grounding.invalid
+        and projection is not None and projection.exists and projection.readable
+        and projection.freshness == 'fresh'
+    )
+
+
+def stage2_projection_source_unproven(ov: NovelOverview) -> str | None:
+    """只缺投影时，盘上 formal Global 是否存在但不能证明可作免费底座。
+
+    这种盘面既不是首次生成，也不能擅自拿坏/unknown Global 重物化。返回原因让
+    ``resume_verdict`` 保持 UNKNOWN；最重要的是不让通用 ``missing`` 分支把一份
+    已存在的昂贵产物解释成“默认再采一次”。stale 仍走既有 REDO 分支。
+    """
+    stage = next(
+        (candidate for candidate in getattr(ov, 'stages', ())
+         if candidate.stage == 'stage2'),
+        None,
+    )
+    if stage is None:
+        return None
+    by_rel = {artifact.rel: artifact for artifact in stage.artifacts}
+    grounding = by_rel.get(STAGE2_GLOBAL_GROUNDING)
+    projection = by_rel.get(STAGE2_BLUEPRINT_CHARACTER_PROJECTION)
+    if grounding is None or projection is None:
+        return None
+    projection_current = bool(
+        projection.exists and projection.readable
+        and projection.freshness == 'fresh'
+    )
+    if projection_current or grounding.invalid or not grounding.exists:
+        return None
+    if not grounding.readable:
+        return 'formal Global 盘上存在但按当前 schema/version 读不回来'
+    if grounding.freshness == 'unknown':
+        return (
+            'formal Global 盘上存在但来源 freshness '
+            f'为 unknown/{grounding.reason}')
+    return None
+
+
+def stage2_legacy_blueprint_recovery_needed(ov: NovelOverview) -> bool:
+    """旧 v6 ``{MainText, Global}`` 来源边可否零调用刷新为 projection 边。"""
+    stage = next(
+        (candidate for candidate in getattr(ov, 'stages', ())
+         if candidate.stage == 'stage2'),
+        None,
+    )
+    if stage is None:
+        return False
+    by_rel = {artifact.rel: artifact for artifact in stage.artifacts}
+    projection = by_rel.get(STAGE2_BLUEPRINT_CHARACTER_PROJECTION)
+    blueprint = by_rel.get(STAGE2_CHAPTER_BLUEPRINTS)
+    return bool(
+        projection is not None and projection.exists and projection.readable
+        and projection.freshness == 'fresh'
+        and blueprint is not None and blueprint.exists and blueprint.readable
+        and not blueprint.invalid
+        and blueprint.freshness == 'unknown'
+        and blueprint.reason == 'consumed_unresolved'
+    )
+
+
+def stage2_blueprint_invalid_recovery_needed(ov: NovelOverview) -> bool:
+    """canonical Blueprint 行是否有一份 live ``.INVALID`` 等待免费提升。"""
+    stage = next(
+        (candidate for candidate in getattr(ov, 'stages', ())
+         if candidate.stage == 'stage2'),
+        None,
+    )
+    if stage is None:
+        return False
+    blueprint = next(
+        (artifact for artifact in stage.artifacts
+         if artifact.rel == STAGE2_CHAPTER_BLUEPRINTS),
+        None,
+    )
+    return bool(blueprint is not None and blueprint.invalid)
+
+
 def resume_verdict(ov: NovelOverview, node: str) -> tuple[str, str]:
     """这个节点该不该跑，以及**为什么**。返回 `(结论, 一句话)`。
 
@@ -508,6 +667,47 @@ def resume_verdict(ov: NovelOverview, node: str) -> tuple[str, str]:
         return RESUME_LEGACY, (
             '旧 Stage5 契约不兼容：' + ', '.join(st.legacy_paths)
             + '。它们是只读历史证据，不会当成 missing 或触发静默付费重跑')
+
+    if node == 'stage2.global' and stage2_global_projection_blocked(ov):
+        return RESUME_RUN, (
+            '最新 Global 候选的称名 HARD 尚未收口，Blueprint 投影为 '
+            '`unknown/global_naming_blocked`；先运行 '
+            '`stage2.global --apply-edit <stage2/global_edit.json>` 修正称名，'
+            '或人工确认后运行 '
+            '`stage2.global --revalidate --actor <id> --reason <why>`（均为 0 LLM）。'
+            '不得用 `--renormalize` 洗成可消费投影，也不得重采付费 Global')
+    if node == 'stage2.global' and stage2_projection_recovery_needed(ov):
+        return RESUME_RUN, (
+            f'{STAGE2_BLUEPRINT_CHARACTER_PROJECTION} 缺失、损坏或未绑定当前称名底座；'
+            '当前 formal/INVALID Global 已足够确定性重建它，只运行 '
+            '`stage2.global --renormalize`（0 LLM），不得重采付费 Global')
+    if node == 'stage2.global' and stage2_invalid_projection_ready(ov):
+        return RESUME_SKIP, (
+            '最新 Global 候选虽因 HARD 留在 `.INVALID`，但 Blueprint 实际消费的'
+            '称名投影已 current/fresh；不得在 Blueprint 前自动重采付费 Global。'
+            '允许继续 Blueprint，Global INVALID 留给 Stage4 联合闸与人工恢复')
+    if node == 'stage2.global':
+        unproven = stage2_projection_source_unproven(ov)
+        if unproven is not None:
+            return RESUME_UNKNOWN, (
+                f'{unproven}，同时称名投影缺失/损坏/未证明 current。'
+                '不得因伴生产物少一份就排默认付费 Global；先人工核对底座，'
+                '可只读诊断或尝试 `stage2.global --renormalize`（0 LLM），'
+                '命令若读不回会关闭式失败')
+    if (node == 'stage2.blueprint'
+            and stage2_blueprint_invalid_recovery_needed(ov)):
+        return RESUME_RUN, (
+            '盘上有 live `stage2/chapter_blueprints.INVALID.json`；只先运行 '
+            '`stage2.blueprint --revalidate --actor <id> --reason <why>`（0 LLM）'
+            '按当前判据重判。队列不得构造默认付费 Blueprint argv；'
+            '免费提升仍失败时再由人决定是否定向重生成')
+    if (node == 'stage2.blueprint'
+            and stage2_legacy_blueprint_recovery_needed(ov)):
+        return RESUME_RUN, (
+            '当前 ChapterBlueprints v6 仍记录旧 `{MainText, Global}` 来源边；'
+            'current/fresh 称名投影已在场，只运行 '
+            '`stage2.blueprint --renormalize`（0 LLM）刷新为真实消费边，'
+            '不得重跑付费 Blueprint')
 
     if node == 'stage5.review':
         if st.review_state == 'fresh':
@@ -629,4 +829,10 @@ def resume_verdict(ov: NovelOverview, node: str) -> tuple[str, str]:
             f'{", ".join(a.rel for a in unreadable)} 在盘上但按当前 schema 读不回来。'
             f'⚠ 它**跑过**，只是那一份不合现在的契约——'
             f'这与「还没跑」是两件事，别当成前者顺手重跑')
+    unknown = [a for a in mine if a.exists and a.freshness == 'unknown']
+    if unknown:
+        return RESUME_UNKNOWN, (
+            f'{", ".join(a.rel for a in unknown)} 在盘上但新鲜度无法证明。'
+            '⚠ UNKNOWN 不能折成 SKIP，也不能折成默认付费 RUN；先走对应的'
+            '零成本诊断/恢复路或人工核对')
     return RESUME_SKIP, f'{spec.stage} 已完成且不陈旧——已存在即跳过'

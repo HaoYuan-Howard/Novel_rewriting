@@ -33,6 +33,7 @@ import pytest
 from contracts.rules import REGISTRY
 from contracts.schema.orchestration import AgentProfile, PipelineAgentProfiles
 from contracts.schema.report import finding
+from novel.errors import UpstreamMissing
 from novel.prov import EdgeVerdict, FreshnessReport
 from novel.report import build, render
 from novel.report.findings import ran, unverifiable
@@ -422,6 +423,198 @@ def test_delivery_verifier_requires_the_start_code_version():
     assert exc.value.code == 2
 
 
+def _stage0_check_report(*, status: str = 'unver'):
+    line = SimpleNamespace(
+        rule='s0_correctness', sev='unver', status=status,
+        scanned='0 个剔除段待人工语义确认',
+        why='结构规则不能代替人工语义判断' if status == 'unver' else None,
+        findings=[],
+    )
+    return SimpleNamespace(
+        badge='amber' if status == 'unver' else 'pass',
+        provenance=SimpleNamespace(freshness='fresh'),
+        counts=SimpleNamespace(model_dump=lambda **_kwargs: {
+            'ok': 12 if status == 'unver' else 13,
+            'hit': 0, 'unver': 1 if status == 'unver' else 0, 'skipped': 0,
+        }),
+        rules=[line],
+    )
+
+
+def _stage0_segment(text: str, start: int, *, kind: str = 'keep',
+                    flagged: bool = False, removed_kind=None,
+                    origin=None, marker_line=None):
+    return SimpleNamespace(
+        kind=kind, start=start, end=start + len(text), chars=len(text),
+        text=text, flagged=flagged, removed_kind=removed_kind,
+        origin=origin, marker_line=marker_line,
+    )
+
+
+def _wire_stage0_workpack(monkeypatch, tmp_path, module, *, text: str,
+                          segments, available: bool = True,
+                          unavailable_reason: str | None = None,
+                          revision_origin: str = 'machine'):
+    calls: list[str] = []
+    monkeypatch.setattr(
+        module.paths, 'resolve_novel_dir',
+        lambda _base, _sid: calls.append('resolve_novel_dir') or tmp_path / 'book')
+    monkeypatch.setattr(module.prov, 'code_version', lambda: 'code-v1')
+    monkeypatch.setattr(
+        module, 'readonly_ctx',
+        lambda *_args: calls.append('readonly_ctx') or object())
+    monkeypatch.setattr(
+        module, 'stage0_report',
+        lambda *_args: calls.append('stage0_report') or SimpleNamespace(
+            revision_id='a' * 64, revision_origin=revision_origin, executable=False,
+            total_code_points=len(text), warnings=[]))
+    monkeypatch.setattr(
+        module, 'stage0_segments',
+        lambda *_args: calls.append('stage0_segments') or SimpleNamespace(
+            available=available, reason=unavailable_reason, segments=segments))
+    monkeypatch.setattr(
+        module, 'run_check_only',
+        lambda *_args: calls.append('run_check_only') or _stage0_check_report())
+    return calls
+
+
+def test_stage0_workpack_zero_removal_uses_fixed_review_patterns_and_keeps_decision_human(
+        monkeypatch, tmp_path):
+    workpack = _operator_script('stage0_review_workpack')
+    text = '文案首句\n\n1\n红袖添香在这里是店名。\n2\n完整收束句。\n'
+    segment = _stage0_segment(text, 0)
+    calls = _wire_stage0_workpack(
+        monkeypatch, tmp_path, workpack, text=text, segments=[segment])
+
+    payload = workpack.build_workpack(tmp_path, '42')
+
+    assert payload['route'] == 'zero_removal'
+    assert payload['automated_decision'] is None
+    assert payload['counts']['removed_segments'] == 0
+    assert workpack.REVIEW_PATTERN_VERSION == 'stage0-review-v1'
+    assert len(workpack.REVIEW_PATTERNS) == 13
+    assert len({item.key for item in workpack.REVIEW_PATTERNS}) == 13
+    assert payload['reverse_scan']['patterns_scanned'] == len(workpack.REVIEW_PATTERNS)
+    platform = next(
+        item for item in payload['reverse_scan']['patterns']
+        if item['key'] == 'platform_name')
+    assert platform['hits'] == 1
+    assert platform['contexts'][0]['matched'] == '红袖添香'
+    assert 'chapters' not in payload, '章号与连续性属于 Stage1，不得扩大 Stage0 阅读面'
+    assert isinstance(payload['production_nonbody_markers'], list)
+    assert isinstance(payload['production_end_marker_present'], bool)
+    assert payload['boundaries']['first_nonempty_lines'][0] == '文案首句'
+    assert payload['boundaries']['last_nonempty_lines'][-1] == '完整收束句。'
+    assert '待确认' in payload['approval_reason_draft']
+    assert {'stage0_report', 'stage0_segments', 'run_check_only', 'readonly_ctx'} <= set(calls)
+
+
+def test_stage0_workpack_removed_route_exposes_every_span_and_scans_only_retained_text(
+        monkeypatch, tmp_path):
+    workpack = _operator_script('stage0_review_workpack')
+    before = '1\n正文。\n'
+    removed_text = '作者的话：' + ('求收藏与支持。' * 220) + '\n'
+    after = '2\n结尾。\n'
+    original = before + removed_text + after
+    segments = [
+        _stage0_segment(before, 0),
+        _stage0_segment(
+            removed_text, len(before), kind='remove', flagged=True,
+            removed_kind='作者有话说', origin='machine', marker_line='作者有话说'),
+        _stage0_segment(after, len(before) + len(removed_text)),
+    ]
+    _wire_stage0_workpack(
+        monkeypatch, tmp_path, workpack, text=original, segments=segments)
+
+    payload = workpack.build_workpack(tmp_path, '42')
+
+    assert payload['route'] == 'removed_segments'
+    assert payload['counts']['removed_segments'] == 1
+    assert payload['removed'][0]['text'] == removed_text
+    assert payload['removed'][0]['span'] == [len(before), len(before + removed_text)]
+    assert payload['removed'][0]['before'].endswith(before)
+    assert payload['removed'][0]['after'].startswith(after)
+    assert payload['reverse_scan']['total_hits'] == 0, \
+        '反向模式必须扫描 clean_text，不能把已经剔除的“求收藏”报成残留'
+    assert payload['automated_decision'] is None
+    assert '逐段语义类别与边界=待确认' in payload['approval_reason_draft']
+
+
+def test_stage0_workpack_leaves_out_of_order_chapter_markers_to_stage1(
+        monkeypatch, tmp_path):
+    workpack = _operator_script('stage0_review_workpack')
+    text = '1\n第一章。\n3\n第三章。\n2\n第二章。\n'
+    _wire_stage0_workpack(
+        monkeypatch, tmp_path, workpack, text=text,
+        segments=[_stage0_segment(text, 0)])
+    payload = workpack.build_workpack(tmp_path, '42')
+
+    assert 'chapters' not in payload
+    assert '章序' not in payload['approval_reason_draft']
+    assert payload['boundaries']['first_nonempty_lines'][0] == '1'
+    assert payload['boundaries']['last_nonempty_lines'][-1] == '第二章。'
+
+
+def test_stage0_workpack_source_unavailable_stops_instead_of_faking_an_empty_review(
+        monkeypatch, tmp_path):
+    workpack = _operator_script('stage0_review_workpack')
+    _wire_stage0_workpack(
+        monkeypatch, tmp_path, workpack, text='正文', segments=[],
+        available=False, unavailable_reason='原始文件已移走')
+
+    payload = workpack.build_workpack(tmp_path, '42')
+
+    assert payload['state'] == 'stopped'
+    assert payload['route'] == 'source_unavailable'
+    assert payload['source_unavailable_reason'] == '原始文件已移走'
+    assert payload['automated_decision'] is None
+    assert '不得批准' in payload['approval_reason_draft']
+
+
+def test_stage0_workpack_human_edit_all_keep_cannot_masquerade_as_zero_removal(
+        monkeypatch, tmp_path):
+    workpack = _operator_script('stage0_review_workpack')
+    original = '1\n第一段正文。\n2\n第二段正文。\n'
+    edited_clean = '1\n第一段正文。\n'
+    _wire_stage0_workpack(
+        monkeypatch, tmp_path, workpack, text=original,
+        segments=[_stage0_segment(edited_clean, 0)],
+        revision_origin='human_edit',
+    )
+
+    payload = workpack.build_workpack(tmp_path, '42')
+
+    assert payload['state'] == 'stopped'
+    assert payload['route'] == 'human_edit_partition_unproven'
+    assert payload['current_clean_code_points'] == len(edited_clean)
+    assert payload['source_code_points'] == len(original)
+    assert payload['automated_decision'] is None
+    assert '不得按零剔除批准' in payload['approval_reason_draft']
+
+
+def test_stage0_workpack_main_returns_stopped_json_for_an_expected_pipeline_terminal(
+        monkeypatch, capsys, tmp_path):
+    workpack = _operator_script('stage0_review_workpack')
+    monkeypatch.setattr(
+        workpack.paths, 'resolve_novel_dir',
+        lambda _base, _sid: tmp_path / 'book',
+    )
+    monkeypatch.setattr(
+        workpack, 'stage0_report',
+        lambda *_args: (_ for _ in ()).throw(UpstreamMissing(
+            'stage0 还没跑', hint='先运行 stage0.remove')),
+    )
+
+    rc = workpack.main(['--base', str(tmp_path), '--sid', '42'])
+    payload = json.loads(capsys.readouterr().out)
+
+    assert rc == 1
+    assert payload['state'] == 'stopped'
+    assert payload['error'] == 'UpstreamMissing: stage0 还没跑'
+    assert payload['hint'] == '先运行 stage0.remove'
+    assert payload['automated_decision'] is None
+
+
 #: 每个扫描面的下界。**不是等值断言**——注册表本来就会增删；
 #: 它防的是另一件事：正则失配、glob 变空、`NODES` 被改空时，
 #: 「零个都没查」会伪装成「全部一致」。
@@ -443,6 +636,7 @@ _FLOORS = {
     'index_rows': 10,         # 索引是条目的投影，条目有几条它就有几行
     'notes_budget': 5000,     # 整读预算算不出来（必读集读空）时，那条界会失效
     'repo_fn_citations': 1,   # 仓内确实在按号引用经验，这条反查不是空的
+    'stage0_workpack_contract': 1,
 }
 
 

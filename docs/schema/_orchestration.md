@@ -273,7 +273,8 @@ profiles/授权；无法复验时不得启动付费节点。
 `ended` 事件在 `exit_code` 外另带 `outcome`（旧事件缺失时折叠成 `unknown`）。
 `AgentRunRecord.state` 仍只按外层进程退出码折叠；`outcome.state` 的唯一取值面是
 `AGENT_DELIVERY_OUTCOME`：`ready` / `ready_with_disclosures` / `stopped` / `failed` /
-`unknown`。终验从盘面重新核 Stage2 current+全 PASS、当前可下载成书、终审包、阻塞待办与
+`unknown`。终验从盘面重新核 Stage2 正式 Global + 称名投影 + Blueprint current、联合 HARD 通过、
+global review 的 blocking 面逐项 PASS（disclosure 非 PASS 只披露）、当前可下载成书、终审包、阻塞待办与
 启动/结束代码指纹；不解析 agent 自述。两轴不许互推，尤其 `state=ok` 不推出可交付。
 
 ---
@@ -326,7 +327,7 @@ profiles/授权；无法复验时不得启动付费节点。
 | `freshness` | `str` | **是** | `FRESHNESS` 三态 | **三源** |
 | `display_freshness` | `str` | **是** | 界面直接显示的**四态** = `FRESHNESS` 三态 + `missing`。⚠ `missing` **在服务端合并**——前端不许再拿 `!exists` 另算一遍（`R-11.4`） | **契·码** |
 | `condition` | `str` | **是** | `ready` / `missing` / `invalid` / `unreadable`。界面只按这个 id 选文案，不再自己组合 `exists`/`invalid`/`readable` 三个 bool | **契·码** |
-| `reason` | `str` | **是** | `FRESHNESS_REASON` 八值。**用 id 不用措辞** | **契·码** |
+| `reason` | `str` | **是** | `FRESHNESS_REASON` 九值。**用 id 不用措辞** | **契·码** |
 | `ghosts` | `str[]` | **是** | 指向已不在盘上的那些边，**按名字点名**（`Q-4` 亲自点过的 bug）。空列表也要写 | **盘·码** |
 | `invalid` | `bool` | **是** | 盘上有一份 `.INVALID` 在等人处理 | **盘·码** |
 | `readable` | `bool` | **是** | 能不能按当前 schema 加载。⚠ 见下面那条 | **盘·码** |
@@ -334,6 +335,11 @@ profiles/授权；无法复验时不得启动付费节点。
 ⚠ **`readable=False` 不等于 `exists=False`。** 盘上真有一份加载不了的产物
 （`成年人不做选择` 那本的 `stage4/plan_chapters.json` 根本没有 `_provenance`）。
 把它折成「不存在」会让界面说「还没跑」——而它跑过，只是那次把来源账丢了。
+
+`global_naming_blocked` 是 Stage2 的专用 unknown：latest Global 候选虽能按当前 schema 读取，
+但称名 HARD 尚未收口，因而不能铸成 Blueprint 可消费的投影。state/queue 只允许停在 Global typed
+edit / `--revalidate`（0 LLM）等待人工决定；不得把它解释成可 `--renormalize` 的伴生产物缺失，
+更不得生成默认付费 Global / Blueprint argv。
 
 **`StageState`** = 一层的全部 `ArtifactState` + 一个折叠出来的 `done`。
 `done` 的判据是**全部必需产物 `exists` 且 `readable` 且 `freshness != 'stale'` 且 `not invalid`**。

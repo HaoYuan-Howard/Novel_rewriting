@@ -186,6 +186,28 @@ def approval_proof_sha256(art: NameMap) -> str | None:
     })
 
 
+def _input_freshness_before_rewrite(
+        store: ArtifactStore, art: NameMap) -> prov.FreshnessReport:
+    """判旧映射真正见过的 inputs；必须在 ``rewrite_provenance`` 之前调用。"""
+    recorded = art.provenance.model_dump(mode='json', by_alias=True).get('inputs')
+    return store.freshness_of_inputs(REL, recorded)
+
+
+def _approval_after_free_rewrite(
+        previous: NameMap, rebuilt: NameMap,
+        input_freshness: prov.FreshnessReport) -> ApprovedNameMap | None:
+    """0 模型重写只可继承仍绑定同一模型输入与同一决策面的批准。"""
+    old_subject = approval_subject_sha256(previous)
+    new_subject = approval_subject_sha256(rebuilt)
+    approval = previous.approved
+    if (input_freshness.state != 'fresh'
+            or old_subject != new_subject
+            or approval is None
+            or approval.subject_sha256 != new_subject):
+        return None
+    return approval
+
+
 def edit_template_json() -> str:
     """Return the registry-versioned, copyable human edit skeleton."""
     payload = NameMapEdit().model_dump(mode='json', by_alias=True)
@@ -215,7 +237,9 @@ class _Upstreams:
         self.registry: dict[str, dict] = {
             cid: c.model_dump(by_alias=True) for cid, c in gg.entities.characters.items()}
         self.relations: list[dict] = [r.model_dump(by_alias=True) for r in gg.entities.relations]
-        self.setting: dict = dict(gg.canon.setting or {})
+        # prompt 只消费时代背景正文。直接取 typed 字段，不在这里制造一份
+        # ``era`` / ``时代背景`` 双形态字典（上一版因此真实下发恒为「未知」）。
+        self.era: str = gg.canon.setting.era
         # 原文：`attested_surname` 与 `rn_stem_noise` 的取值面。
         # ⚠ `MainText` 顶层是**数组**（`RootModel`），所以要走 `.root`。
         self.source_text: str = '\n'.join(c.text or '' for c in main_text.root)
@@ -254,7 +278,7 @@ class _Upstreams:
         targets = [r.get('text') or '' for r in self.recs] + [self.hook_text, self.title]
         self.mat = prompts.build_material(
             title=self.title, registry=self.registry, relations=self.relations,
-            setting=self.setting, groups=groups, sur=self.sur,
+            era=self.era, groups=groups, sur=self.sur,
             book_text=self.source_text, targets=targets)
 
     @property
@@ -608,11 +632,18 @@ def run_identity(ctx: RunContext) -> tuple[IdentityBaseline, CheckReport]:
 
     if store.exists(REL):
         art, _raw = store.read_own(NameMap, REL)
+        input_freshness = _input_freshness_before_rewrite(store, art)
         new = art.model_copy(update={
             'identity': baseline,
             'provenance': ctx.rewrite_provenance(art.provenance, by='--identity'),
+            'book_txt': None,
         })
-        store.write_round(REL, new)
+        new = new.model_copy(update={
+            'approved': _approval_after_free_rewrite(art, new, input_freshness),
+        })
+        with store.history_transaction(REL, book_txt_rel(store)):
+            store.write_round(REL, new)
+            _retire_book_txt(store)
         return baseline, _report(ctx, store, _judge(ctx, store, new, up), new)
     # 还没有产物时它照样能跑（那正是「在花第一分钱之前」的意思）。只报告实际
     # 执行过的 identity 两行；正式生成入口会在请求前复算并把同一结论落进产物。
@@ -633,6 +664,10 @@ def run_recheck(ctx: RunContext) -> tuple[NameMap, CheckReport]:
         raise UpstreamMissing(f'{REL} 不在盘上——先跑 stage7.rename')
     up = _Upstreams(ctx, store)
     art, _raw = store.read_own(NameMap, REL)
+    # 必须在 ``rewrite_provenance`` 盖上当前 inputs **之前**判断旧映射看见的材料
+    # 是否仍是当前材料。否则 role/时代背景等真实 prompt 输入改过后，recheck 会把
+    # 旧映射盖成 fresh，并让旧批准继续授权一个模型从未见过的新输入。
+    input_freshness = _input_freshness_before_rewrite(store, art)
     model_out = {'surname_map': dict(art.surname_map),
                  'characters': [c.model_dump(by_alias=True) for c in art.characters]}
     extra = [e.model_dump(by_alias=True) for e in art.extra_subs]
@@ -640,14 +675,11 @@ def run_recheck(ctx: RunContext) -> tuple[NameMap, CheckReport]:
     new_art, _fs, _hook_new = _build(
         ctx, up, model_out, extra,
         ctx.rewrite_provenance(art.provenance, by='--recheck'))
-    # 映射决定可继续有效，但旧交付物绑定的是重判前的上游，必须退出 live 路径。
-    old_subject = approval_subject_sha256(art)
-    new_subject = approval_subject_sha256(new_art)
-    approval = art.approved
-    if (old_subject != new_subject
-            or approval is None
-            or approval.subject_sha256 != new_subject):
-        approval = None
+    # 只有「旧映射的真实模型输入仍被证明 fresh」时，未变化的映射决定才可继续
+    # 沿用批准。stale/unknown 都清空批准，但新映射已由 recheck 免费重建并落盘，
+    # 人仍可直接走 ``stage7.approve`` 零模型重批。
+    # 旧交付物无论如何都绑定的是重判前的上游，必须退出 live 路径。
+    approval = _approval_after_free_rewrite(art, new_art, input_freshness)
     new_art = new_art.model_copy(update={
         'approved': approval, 'book_txt': None, 'identity': art.identity})
     with store.history_transaction(REL, book_txt_rel(store)):

@@ -76,7 +76,7 @@ export function resolveGate(screen: ScreenName, doc: ApprovalDoc): GateView | nu
         done,
         blocked: !both,
         title: done ? 'stage2 已确认' : 'stage2 两屏都要过一遍',
-        note: 'stage2 = 全局设定 + 逐章骨架。全局逐项复核当前且全部 PASS、两屏都看过后，才可发起 stage4。',
+        note: 'stage2 = 全局设定 + 逐章骨架。全局复核当前且阻断面全部 PASS、两屏都看过后，才可发起 stage4；披露项继续留在审计面。',
         chips: [
           { ok: seen.global, label: '全局设定' },
           { ok: seen.read, label: '原文↔骨架' },

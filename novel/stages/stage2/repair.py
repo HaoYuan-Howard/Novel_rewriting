@@ -33,7 +33,7 @@ from typing import Any
 
 from contracts.invariants import REPAIR_ROUTE
 from contracts.schema.stage2 import (
-    BlueprintProvenance, ChapterBlueprints, GlobalGrounding,
+    BlueprintProvenance, ChapterBlueprints,
     HingePhraseResponse, HingeSelectResponse,
 )
 from novel.core.spans import content_index, content_only
@@ -42,6 +42,7 @@ from novel.llm.client import LlmClient
 from novel.llm.ledger import combine_usage
 from novel.llm.prompts import with_json_shape
 from novel.run import RunContext
+from novel.stages.stage2.character_refs import blueprint_inventory_from_projection
 from novel.store import ArtifactStore
 
 #: 候选上下文窗（前后各取的字符数）。给人/模型认位置用的展示量，不进任何判定。
@@ -182,8 +183,9 @@ def run_field_patches(ctx: RunContext, client: LlmClient) -> Any:
     from novel.stages.stage2 import prompts
     from novel.stages.stage2.contract import CONTRACTS, contract_for
     from novel.stages.stage2.extract import (
-        BLUEPRINT_REL, GLOBAL_REL, _INVALID, _Both,
-        _hard_hits, _judge_candidate, _note_adopted, _read_main_text, _report,
+        BLUEPRINT_REL, _INVALID, _Both,
+        _blueprint_hard_hits, _judge_candidate, _note_adopted,
+        _read_main_text, _report, _require_blueprint_character_projection,
         _write_formal, _write_invalid,
     )
 
@@ -231,7 +233,10 @@ def run_field_patches(ctx: RunContext, client: LlmClient) -> Any:
         raise TerminalState(
             '账上没有可字段级修复的失败（歧义 / 编的短语都为 0）——没有要修的东西')
 
-    global_raw = store.read(GlobalGrounding, GLOBAL_REL).model_dump(by_alias=True)
+    character_projection, _projection_raw = \
+        _require_blueprint_character_projection(store)
+    character_inventory = blueprint_inventory_from_projection(
+        character_projection)
     text_of = {int(s.get('chapter_ordinal') or 0): str(s.get('text') or '')
                for s in main_text}
     spans_by_beat = {
@@ -321,7 +326,7 @@ def run_field_patches(ctx: RunContext, client: LlmClient) -> Any:
     ordinals = sorted(ir_by_ordinal)
     data, accounting = spec.compile_fn(
         {'blueprints': [ir_by_ordinal[o] for o in ordinals]},
-        main_text, global_raw['entities']['characters'])
+        main_text, character_inventory=character_inventory)
     # ⚠ `llm_provenance` 自己给 prompts 值算指纹 ⇒ delta 只喂**新臂的完整字节**，
     #   旧键（已是指纹）在最终合并时并入——把旧指纹再喂回去会被二次指纹。
     delta = ctx.llm_provenance(
@@ -345,8 +350,8 @@ def run_field_patches(ctx: RunContext, client: LlmClient) -> Any:
         'blueprints': data['blueprints'], '_provenance': provenance,
     })
     candidate = artifact.model_dump(by_alias=True)
-    outcomes = _judge_candidate(global_raw, candidate, main_text)
-    hits = _hard_hits(outcomes)
+    outcomes = _judge_candidate(None, candidate, main_text)
+    hits = _blueprint_hard_hits(outcomes)
     if hits:
         path = _write_invalid(store, BLUEPRINT_REL, artifact)
         raise GateBlocked(

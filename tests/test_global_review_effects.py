@@ -17,15 +17,19 @@ test_global_review_effects.py —— Stage2 复核项的 blocking / disclosure �
 from __future__ import annotations
 
 import json
+import copy
 
 import pytest
 
 from contracts.invariants import (
     GLOBAL_REVIEW_DISCLOSURE_KINDS, GLOBAL_REVIEW_KINDS, review_effect_of,
 )
-from contracts.schema.evaluation import GlobalReview
+from contracts.schema.evaluation import GlobalReview, GlobalReviewDecision
+from novel.errors import HumanEditProtected
 from novel.quality.global_review import (
-    build_review, decide, review_effect_counts, review_group_key, review_status,
+    apply_decision_set, blocking_scope_sha256, build_review, decide,
+    review_effect_counts, review_group_key, review_status, subject_sha256,
+    UNBOUND_WORKPACK_SHA256,
 )
 from novel.stages.stage2 import global_review
 from novel.store import ArtifactStore
@@ -153,6 +157,31 @@ def test_the_required_surface_still_demands_every_item_including_disclosure():
     assert not approved, '面不 current 就绝不许开门'
 
 
+def test_a_new_main_text_identity_reopens_only_whole_book_review_decisions():
+    """正文别处改字即使抽出同形 Global，也不能继承“全书没有漏项”的旧 PASS。"""
+    grounding_a = _global()
+    grounding_a['_provenance'] = {'inputs': {
+        'stage1/main_text.json': {'file': 'main-a', 'consumed': 'main-a'},
+    }}
+    approved = _decide_all(build_review(grounding_a), set(GLOBAL_REVIEW_KINDS))
+    grounding_b = copy.deepcopy(grounding_a)
+    grounding_b['_provenance']['inputs']['stage1/main_text.json'] = {
+        'file': 'main-b', 'consumed': 'main-b',
+    }
+
+    refreshed = build_review(grounding_b, approved)
+    whole_book = {
+        'character_set_complete', 'relation_set_complete',
+        'world_rule_set_complete', 'secret_set_complete',
+        'conflict_partition', 'arc_analysis',
+    }
+
+    assert all(item.state == 'pending' for item in refreshed.items
+               if item.kind in whole_book)
+    assert all(item.state == 'PASS' for item in refreshed.items
+               if item.kind not in whole_book)
+
+
 def test_effect_counts_always_emit_every_key_even_at_zero():
     counts = review_effect_counts(build_review(_global()))
     assert sorted(counts) == ['blocking', 'disclosure']
@@ -168,6 +197,15 @@ def _book_with_review():
     return book
 
 
+def _bind_scope_to_workpack(template, workpack_sha256: str):
+    assert template.blocking_scope is not None
+    return template.model_copy(update={
+        'blocking_scope': template.blocking_scope.model_copy(update={
+            'expected_workpack_sha256': workpack_sha256,
+        }),
+    })
+
+
 def test_the_review_template_defaults_to_blocking_and_all_is_opt_in():
     book = _book_with_review()
     ctx = _ctx(book, 'stage2.global', paid=False)
@@ -178,10 +216,20 @@ def test_the_review_template_defaults_to_blocking_and_all_is_opt_in():
 
     blocking_ids = {item.item_id for item in everything
                     if review_effect_of(item.kind) == 'blocking'}
-    assert {row.item_id for row in default.decisions} == blocking_ids
+    assert default.decisions == []
+    assert default.blocking_scope is not None
+    assert default.blocking_scope.expected_item_count == len(blocking_ids)
+    assert default.blocking_scope.expected_blocking_scope_sha256 == \
+        blocking_scope_sha256(ArtifactStore(ctx).read(GlobalReview, global_review.REL))
+    workpack = global_review.review_workpack(ctx)
+    assert default.blocking_scope.expected_workpack_sha256 == \
+        UNBOUND_WORKPACK_SHA256
+    assert workpack['binding']['reviewed_chapter_ordinals'] == \
+        default.blocking_scope.reviewed_chapter_ordinals
     assert {row.item_id for row in full.decisions} == {
         item.item_id for item in everything}
-    assert len(full.decisions) > len(default.decisions), '这本书必须真有披露项'
+    assert full.blocking_scope is None
+    assert len(full.decisions) > len(blocking_ids), '这本书必须真有披露项'
 
 
 def test_a_scoped_template_never_decides_anything_on_its_own():
@@ -191,8 +239,246 @@ def test_a_scoped_template_never_decides_anything_on_its_own():
     global_review.review_template_json(ctx)
     on_disk = ArtifactStore(ctx).read(GlobalReview, global_review.REL)
     assert all(item.state == 'pending' for item in on_disk.items)
-    # 模板本身也全是 UNVER —— 原样应用不会开闸。
-    assert {row.state for row in global_review.review_template(ctx).decisions} == {'UNVER'}
+    # 模板的完整 scope 是 UNVER —— 原样应用不会开闸。
+    template = _bind_scope_to_workpack(
+        global_review.review_template(ctx),
+        str(global_review.review_workpack(ctx)['workpack_sha256']),
+    )
+    assert template.blocking_scope is not None
+    assert template.blocking_scope.state == 'UNVER'
+
+
+def test_a_compact_scope_pass_expands_to_every_blocking_item_but_not_disclosure():
+    book = _book_with_review()
+    ctx = _ctx(book, 'stage2.global', paid=False)
+    current = ArtifactStore(ctx).read(GlobalReview, global_review.REL)
+    template = _bind_scope_to_workpack(
+        global_review.review_template(ctx),
+        str(global_review.review_workpack(ctx)['workpack_sha256']),
+    )
+    assert template.blocking_scope is not None
+    supplied = template.model_copy(update={
+        'actor': 'scope-reviewer',
+        'blocking_scope': template.blocking_scope.model_copy(update={
+            'state': 'PASS',
+            'reason': '已通读所列全部章节并逐卡核对 blocking workpack',
+        }),
+    })
+
+    updated = apply_decision_set(
+        current, supplied,
+        expected_chapter_ordinals=tuple(
+            supplied.blocking_scope.reviewed_chapter_ordinals),
+        expected_workpack_sha256=supplied.blocking_scope.expected_workpack_sha256,
+        now='2026-08-28T00:00:00+00:00',
+    )
+
+    assert all(item.state == 'PASS' for item in updated.items
+               if review_effect_of(item.kind) == 'blocking')
+    assert all(item.state == 'pending' for item in updated.items
+               if review_effect_of(item.kind) == 'disclosure')
+    assert global_review.is_approved(ctx, updated) is True
+
+
+def test_a_compact_scope_rejects_a_stale_surface_or_incomplete_chapter_claim():
+    book = _book_with_review()
+    ctx = _ctx(book, 'stage2.global', paid=False)
+    current = ArtifactStore(ctx).read(GlobalReview, global_review.REL)
+    template = _bind_scope_to_workpack(
+        global_review.review_template(ctx),
+        str(global_review.review_workpack(ctx)['workpack_sha256']),
+    )
+    assert template.blocking_scope is not None
+    actual_chapters = tuple(template.blocking_scope.reviewed_chapter_ordinals)
+
+    stale = template.model_copy(update={
+        'actor': 'scope-reviewer',
+        'blocking_scope': template.blocking_scope.model_copy(update={
+            'expected_blocking_scope_sha256': '0' * 64,
+        }),
+    })
+    with pytest.raises(HumanEditProtected, match='surface changed'):
+        apply_decision_set(
+            current, stale, expected_chapter_ordinals=actual_chapters,
+            expected_workpack_sha256=(
+                stale.blocking_scope.expected_workpack_sha256))
+
+    incomplete = template.model_copy(update={
+        'actor': 'scope-reviewer',
+        'blocking_scope': template.blocking_scope.model_copy(update={
+            'reviewed_chapter_ordinals': list(actual_chapters[:-1]),
+        }),
+    })
+    with pytest.raises(HumanEditProtected, match='未精确覆盖'):
+        apply_decision_set(
+            current, incomplete, expected_chapter_ordinals=actual_chapters,
+            expected_workpack_sha256=(
+                incomplete.blocking_scope.expected_workpack_sha256))
+    assert all(item.state == 'pending' for item in current.items)
+
+
+def test_a_compact_scope_rejects_a_stale_workpack_or_template_placeholders():
+    book = _book_with_review()
+    ctx = _ctx(book, 'stage2.global', paid=False)
+    current = ArtifactStore(ctx).read(GlobalReview, global_review.REL)
+    template = global_review.review_template(ctx)
+    assert template.blocking_scope is not None
+    chapters = tuple(template.blocking_scope.reviewed_chapter_ordinals)
+
+    unbound = template.model_copy(update={
+        'actor': 'scope-reviewer',
+        'blocking_scope': template.blocking_scope.model_copy(update={
+            'state': 'PASS',
+            'reason': '已逐项核对当前工作包',
+        }),
+    })
+    with pytest.raises(HumanEditProtected, match='未绑定实际阅读'):
+        apply_decision_set(
+            current, unbound,
+            expected_chapter_ordinals=chapters,
+            expected_workpack_sha256=UNBOUND_WORKPACK_SHA256,
+        )
+
+    current_workpack_sha256 = str(
+        global_review.review_workpack(ctx)['workpack_sha256'])
+    template = _bind_scope_to_workpack(template, current_workpack_sha256)
+
+    stale_workpack = template.model_copy(update={
+        'actor': 'scope-reviewer',
+        'blocking_scope': template.blocking_scope.model_copy(update={
+            'state': 'PASS',
+            'reason': '已逐项核对当前工作包',
+        }),
+    })
+    with pytest.raises(HumanEditProtected, match='workpack changed'):
+        apply_decision_set(
+            current, stale_workpack,
+            expected_chapter_ordinals=chapters,
+            expected_workpack_sha256='f' * 64,
+        )
+
+    flip_only = template.model_copy(update={
+        'actor': 'scope-reviewer',
+        'blocking_scope': template.blocking_scope.model_copy(update={
+            'state': 'PASS',
+        }),
+    })
+    with pytest.raises(HumanEditProtected, match='占位理由'):
+        apply_decision_set(
+            current, flip_only,
+            expected_chapter_ordinals=chapters,
+            expected_workpack_sha256=(
+                flip_only.blocking_scope.expected_workpack_sha256),
+        )
+
+    with pytest.raises(HumanEditProtected, match='actor.*占位'):
+        apply_decision_set(
+            current, template,
+            expected_chapter_ordinals=chapters,
+            expected_workpack_sha256=(
+                template.blocking_scope.expected_workpack_sha256),
+        )
+
+
+def test_a_new_template_cannot_refresh_an_old_workpack_reading_claim(monkeypatch):
+    """读 A 后生成 B 模板，不能只改三格就把“读过 B”凭证一起刷新。"""
+    book = _book_with_review()
+    ctx = _ctx(book, 'stage2.global', paid=False)
+    current = ArtifactStore(ctx).read(GlobalReview, global_review.REL)
+    workpack_a = global_review.review_workpack(ctx)
+    workpack_b = copy.deepcopy(workpack_a)
+    workpack_b['main_text_subject_sha256'] = 'b' * 64
+    assert isinstance(workpack_b['binding'], dict)
+    workpack_b['binding']['main_text_subject_sha256'] = 'b' * 64
+    workpack_b.pop('workpack_sha256')
+    workpack_b['workpack_sha256'] = subject_sha256(workpack_b)
+    assert workpack_a['workpack_sha256'] != workpack_b['workpack_sha256']
+
+    monkeypatch.setattr(
+        global_review, 'review_workpack',
+        lambda _ctx, *, scope='blocking': copy.deepcopy(workpack_b),
+    )
+    template_b = global_review.review_template(ctx)
+    assert template_b.blocking_scope is not None
+    assert template_b.blocking_scope.expected_workpack_sha256 == \
+        UNBOUND_WORKPACK_SHA256
+    chapters = tuple(template_b.blocking_scope.reviewed_chapter_ordinals)
+    edited_three_fields = template_b.model_copy(update={
+        'actor': 'scope-reviewer',
+        'blocking_scope': template_b.blocking_scope.model_copy(update={
+            'state': 'PASS',
+            'reason': '已通读并逐项核完当前工作包',
+        }),
+    })
+
+    with pytest.raises(HumanEditProtected, match='未绑定实际阅读'):
+        apply_decision_set(
+            current, edited_three_fields,
+            expected_chapter_ordinals=chapters,
+            expected_workpack_sha256=str(workpack_b['workpack_sha256']),
+        )
+
+    bound_to_a = _bind_scope_to_workpack(
+        edited_three_fields, str(workpack_a['workpack_sha256']))
+    with pytest.raises(HumanEditProtected, match='workpack changed'):
+        apply_decision_set(
+            current, bound_to_a,
+            expected_chapter_ordinals=chapters,
+            expected_workpack_sha256=str(workpack_b['workpack_sha256']),
+        )
+
+    bound_to_b = _bind_scope_to_workpack(
+        edited_three_fields, str(workpack_b['workpack_sha256']))
+    updated = apply_decision_set(
+        current, bound_to_b,
+        expected_chapter_ordinals=chapters,
+        expected_workpack_sha256=str(workpack_b['workpack_sha256']),
+        now='2026-08-28T00:00:00+00:00',
+    )
+    assert all(item.state == 'PASS' for item in updated.items
+               if review_effect_of(item.kind) == 'blocking')
+
+
+def test_an_explicit_item_decision_overrides_the_compact_scope_default():
+    book = _book_with_review()
+    ctx = _ctx(book, 'stage2.global', paid=False)
+    current = ArtifactStore(ctx).read(GlobalReview, global_review.REL)
+    template = _bind_scope_to_workpack(
+        global_review.review_template(ctx),
+        str(global_review.review_workpack(ctx)['workpack_sha256']),
+    )
+    assert template.blocking_scope is not None
+    exception = next(
+        item for item in current.items
+        if review_effect_of(item.kind) == 'blocking')
+    supplied = template.model_copy(update={
+        'actor': 'scope-reviewer',
+        'blocking_scope': template.blocking_scope.model_copy(update={
+            'state': 'PASS',
+            'reason': '已逐项核完，例外另列',
+        }),
+        'decisions': [GlobalReviewDecision(
+            item_id=exception.item_id,
+            expected_subject_sha256=exception.subject_sha256,
+            state='FAIL',
+            reason='该项与原文不符，需 typed edit',
+            evidence=exception.evidence,
+        )],
+    })
+
+    updated = apply_decision_set(
+        current, supplied,
+        expected_chapter_ordinals=tuple(
+            supplied.blocking_scope.reviewed_chapter_ordinals),
+        expected_workpack_sha256=supplied.blocking_scope.expected_workpack_sha256,
+        now='2026-08-28T00:00:00+00:00',
+    )
+
+    assert next(item for item in updated.items
+                if item.item_id == exception.item_id).state == 'FAIL'
+    assert all(item.state == 'PASS' for item in updated.items
+               if review_effect_of(item.kind) == 'blocking'
+               and item.item_id != exception.item_id)
 
 
 def test_an_unknown_review_scope_is_refused_instead_of_silently_widening():
@@ -212,6 +498,9 @@ def test_the_workpack_follows_the_same_scope_rule():
     assert len(full['items']) > len(default['items'])
     assert all(review_effect_of(row['kind']) == 'blocking'
                for row in default['items'])
+    assert default['main_text_subject_sha256'] == \
+        default['binding']['main_text_subject_sha256']
+    assert len(default['main_text_subject_sha256']) == 64
 
 
 def test_the_api_row_carries_the_server_derived_effect_and_group_key():

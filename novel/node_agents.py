@@ -41,7 +41,7 @@ from novel.llm.client import LlmFailed
 from novel.observability import RequestProgress
 from novel.run import RunContext
 from novel.stages.stage2 import extract
-from novel.stages.stage2.character_refs import blueprint_character_prompt_inventory
+from novel.stages.stage2.character_refs import blueprint_inventory_from_projection
 from novel.stages.stage2.contract import active_contract, contract_for
 from novel.stages.stage2.paragraphs import paragraph_spans
 from novel.stages.stage2.references import hinge_candidates_by_chapter
@@ -958,10 +958,15 @@ class Stage2BlueprintAgent(NodeExecutorAgent[ChapterBlueprints]):
             for ordinal, system, user in batch['requests']
             if ordinal is not None
         }
-        characters = ArtifactStore(self.ctx).read(
-            GlobalGrounding, extract.GLOBAL_REL,
-        ).model_dump(by_alias=True)['entities']['characters']
-        inventory = blueprint_character_prompt_inventory(characters, main_text)
+        frozen_projection = batch.get('character_projection')
+        _projection, current_projection = \
+            extract._require_blueprint_character_projection(
+                ArtifactStore(self.ctx))
+        if current_projection != frozen_projection:
+            raise ProvenanceRefused(
+                'stage2.blueprint agent revision 前称名投影已偏离 request batch；'
+                '拒绝让旧 session 按新名册继续修订')
+        inventory = blueprint_inventory_from_projection(frozen_projection)
         visible = inventory['visible_character_refs']
         paragraph_count = {
             int(section.get('chapter_ordinal') or 0):

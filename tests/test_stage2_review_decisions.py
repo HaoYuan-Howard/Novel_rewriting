@@ -18,7 +18,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from novel.errors import PathRefused
+from novel.errors import HumanEditProtected, PathRefused
 from contracts.artifacts import (
     STAGE2_GLOBAL_GROUNDING, STAGE2_GLOBAL_REVIEW_DECISIONS,
 )
@@ -123,7 +123,7 @@ def test_a_custom_book_relative_decision_path_is_readable():
 
 
 def test_the_emitted_template_round_trips_through_a_custom_relative_path():
-    """产地与读回口用的是同一把尺子：emit 出来的字节原样存下就该能提交。"""
+    """产地与读回口用同一把尺子，但占位 actor 不能冒充审阅。"""
     _root, book = _sandbox('书_123')
     _seed(book)
     ctx = _ctx(book, 'stage2.global', paid=False)
@@ -131,9 +131,10 @@ def test_the_emitted_template_round_trips_through_a_custom_relative_path():
     (book / 'stage2/emitted_template.json').write_text(
         emitted, encoding='utf-8', newline='\n')
 
-    # 模板自己就是一份合法（全 pending）的决策集，读得回来即证明信封解得开。
-    updated = global_review.apply_file(ctx, 'stage2/emitted_template.json')
-    assert updated.items
+    # 能读回当前 v2 信封；真正 apply 另拒绝占位自报，
+    # 防止 Commander 只把 UNVER 翻成 PASS 就整批开闸。
+    with pytest.raises(HumanEditProtected, match='actor.*占位'):
+        global_review.apply_file(ctx, 'stage2/emitted_template.json')
 
 
 def test_downstream_gate_requires_current_blueprint_and_joint_check(tmp_path):
@@ -283,12 +284,21 @@ def test_workpack_prefers_formal_evidence_and_never_fabricates_for_source_none(
     }
     review = build_review(payload)
     grounding = SimpleNamespace(model_dump=lambda **_kwargs: payload)
-    main = SimpleNamespace(root=[SimpleNamespace(
-        chapter_ordinal=1, text=chapter_text)])
+    main = SimpleNamespace(
+        root=[SimpleNamespace(chapter_ordinal=1, text=chapter_text)],
+        model_dump=lambda **_kwargs: [{
+            'chapter_ordinal': 1,
+            'text': chapter_text,
+        }],
+    )
 
     class FakeStore:
-        def read_own(self, _model, rel):
-            return (review if rel == global_review.REL else grounding, None)
+        def read_own(self, _model, rel, **_kwargs):
+            if rel == global_review.REL:
+                return review, None
+            if rel == global_review.STAGE1_MAIN_TEXT:
+                return main, None
+            return grounding, None
 
         def read(self, _model, _rel):
             return main

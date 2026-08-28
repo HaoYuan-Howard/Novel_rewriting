@@ -35,7 +35,7 @@ from pydantic import BaseModel
 
 from contracts.artifacts import (
     STAGE0_REVISIONS, STAGE1_HOOK_COPY, STAGE1_MAIN_TEXT,
-    STAGE2_CHAPTER_BLUEPRINTS, STAGE2_GLOBAL_EDIT,
+    STAGE2_BLUEPRINT_CHARACTER_PROJECTION, STAGE2_CHAPTER_BLUEPRINTS, STAGE2_GLOBAL_EDIT,
     STAGE2_GLOBAL_GROUNDING, STAGE2_GLOBAL_REVIEW, STAGE2_GLOBAL_REVIEW_DECISIONS,
     STAGE4_BLIND_CANDIDATE, STAGE4_EVIDENCE_BINDING,
     STAGE4_PLAN_CHAPTERS, STAGE4_PLAN_EDIT, STAGE4_WRITER_CONTEXT,
@@ -60,6 +60,7 @@ from contracts.schema.api import (
     NovelList,
     PreviewRequest,
     Stage0EditRequest,
+    Stage0EditResult,
     Stage0ApprovalRequest,
     Stage0Report,
     Stage0WarningView,
@@ -99,8 +100,9 @@ from contracts.schema.corpus import (
 )
 from contracts.schema.evaluation import (
     EvaluatorFingerprint, EvidenceRef,
-    GlobalReview, GlobalReviewDecision, GlobalReviewDecisionSet, GlobalReviewItem,
-    JudgeDecision, SemanticDecision, TrimAudit, TrimResolution,
+    GlobalReview, GlobalReviewBlockingScopeDecision, GlobalReviewDecision,
+    GlobalReviewDecisionSet, GlobalReviewItem, JudgeDecision, SemanticDecision,
+    TrimAudit, TrimResolution,
 )
 from contracts.schema.report import (
     AccountingLine,
@@ -129,6 +131,7 @@ from contracts.schema.stage0 import (
 from contracts.schema.stage1 import HookCopy, MainText, MainTextSection
 from contracts.schema.stage2 import (
     Address, AddressContextPatch, Arc, ArcTrack, ArcTrackPatch, Beat, Blueprint, Canon,
+    BlueprintCharacterProjection, BlueprintCharacterProjectionChapter,
     ChapterBlueprints, Character,
     CharacterAddressReplacement, CharacterRef, ConflictStage, Entities, EvidenceLocator,
     CausalEdge, FactAtom, FactEvidence, GlobalEdit, GlobalGrounding, GlobalCharacterPatch,
@@ -230,12 +233,18 @@ ARTIFACT_SPECS: dict[str, ArtifactSpec] = {
     #   只能由 `stage2.global` 付费重建。完整版本账见 artifact version 守卫。
     STAGE2_GLOBAL_GROUNDING: ArtifactSpec(GlobalGrounding, 4),
     STAGE2_GLOBAL_REVIEW: ArtifactSpec(GlobalReview),
-    STAGE2_GLOBAL_REVIEW_DECISIONS: ArtifactSpec(GlobalReviewDecisionSet),
+    # v2（2026-08-28）：新增完整 blocking scope 默认决定与逐项例外；旧 v1 没有
+    # scope hash / 正文章全集阅读声明，由人免费重发模板后重新提交，不迁移。
+    STAGE2_GLOBAL_REVIEW_DECISIONS: ArtifactSpec(GlobalReviewDecisionSet, 2),
     # ⚠ 人产的 Stage2 typed 订正决策集（`stage2.global --apply-edit` 吃它）——
     #   与下面三份 `*_edit.json` 同一类：不是节点产的，但落在产物目录、
     #   被 `store.read` 当上游边记账 ⇒ 形状同样是契约。
     # ⚠ v3：随 GlobalGrounding v4 删除同一批冗余字段；由人按当前 typed 契约重写。
     STAGE2_GLOBAL_EDIT: ArtifactSpec(GlobalEdit, 3),
+    # v1：由当前 schema-valid global（正式或 INVALID）+ main_text 免费物化；
+    # 无存量兼容负担，缺/坏时由 `stage2.global --renormalize` 0-LLM 重建。
+    STAGE2_BLUEPRINT_CHARACTER_PROJECTION: ArtifactSpec(
+        BlueprintCharacterProjection),
     # ⚠⚠ 2026-08-19 首次破坏：beat 区间改由**段号**算出，升 v2。
     #   2026-08-23 第二次破坏：`BlueprintContext.architecture` 从七值收窄为
     #   v1.1/v2/v3.1 三值，升 v3；2026-08-24 再收成 v2/v3.1 两值，升 v4。
@@ -244,7 +253,8 @@ ARTIFACT_SPECS: dict[str, ArtifactSpec] = {
     #   一律作废，不手补字段冒充当前产地。取值与升版记录见
     #   `contracts/invariants.py::BLUEPRINT_ARCHITECTURE`。
     # v6 删除摘要、人物显示名、重复父键与无消费者 provenance 账；由
-    # `stage2.blueprint` 整跑（付费）重建，不迁移或手补。
+    # `stage2.blueprint` 整跑（付费）重建，不迁移或手补。称名投影
+    # 只改通用 `inputs` 的运行时键，没改 BlueprintProvenance 载体形状，不升版。
     STAGE2_CHAPTER_BLUEPRINTS: ArtifactSpec(ChapterBlueprints, 6),
     # v2 删除 goal rationale；A 仍保留重构策略与预算权重，供 B/编译器消费。
     STAGE4_BLIND_CANDIDATE: ArtifactSpec(BlindCandidate, 2),
@@ -396,14 +406,15 @@ __all__ = [
     'CorpusArtifactEntry', 'CorpusBookEntry', 'CorpusLedgerSummary',
     'CorpusManifest', 'CorpusSkipExpectation', 'LedgerTokenSummary',
     'EvidenceRef', 'EvaluatorFingerprint', 'JudgeDecision', 'SemanticDecision', 'GlobalReviewItem', 'GlobalReview',
-    'GlobalReviewDecision', 'GlobalReviewDecisionSet',
+    'GlobalReviewBlockingScopeDecision', 'GlobalReviewDecision',
+    'GlobalReviewDecisionSet',
     'TrimAudit', 'TrimResolution',
     # 校验报告（`_report.md`）——**不是产物**，所以不在 `ARTIFACTS` 里
     'CheckReport', 'RuleLine', 'ProvenanceSection', 'EdgeLine',
     'CheckKind', 'Remediation', 'FixRoute',
     'AccountingLine', 'StatusCounts', 'Status', 'Badge', 'finding', 'badge_of',
     # HTTP 响应（`_api.md`）——同样**不是产物**。它是前三份的视图，不产生新事实
-    'Stage0Segment', 'Stage0Segments', 'Stage0EditRequest',
+    'Stage0Segment', 'Stage0Segments', 'Stage0EditRequest', 'Stage0EditResult',
     'Stage0ApprovalRequest', 'Stage0CandidateDecisionRequest', 'Stage0CandidateView',
     'Stage0CandidateRevisionView',
     'Stage1Segment', 'Stage1View', 'UploadResult',
@@ -421,6 +432,7 @@ __all__ = [
     'Stage0Current', 'Stage0DismissedCandidate',
     'MainText', 'MainTextSection', 'HookCopy',
     'GlobalGrounding', 'Entities', 'Character', 'Address', 'Relation', 'Canon',
+    'BlueprintCharacterProjection', 'BlueprintCharacterProjectionChapter',
     'Setting', 'WorldRule', 'WorldRuleVersion', 'Secret',
     'EvidenceLocator', 'FactEvidence', 'CharacterRef', 'GroupRef', 'KnowledgeEvent',
     'KnowledgeEventResponse', 'RelationVisibility',

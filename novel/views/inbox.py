@@ -55,7 +55,10 @@ from novel import paths, prov, wontfix
 from novel.quality.global_review import review_item_kind
 from novel.errors import ArtifactUnreadable, TerminalState, UpstreamMissing
 from novel.orchestrator.nodes import check_node
-from novel.orchestrator.state import readonly_ctx
+from novel.orchestrator.state import (
+    overview, readonly_ctx, stage2_legacy_blueprint_recovery_needed,
+    stage2_projection_recovery_needed,
+)
 from novel.stages import check_only
 from novel.store import ArtifactStore
 
@@ -183,6 +186,9 @@ def inbox_view(base: str | os.PathLike[str], sid: str) -> InboxView:
             items += _report_items(report, stage)
 
     items += _verification_items(novel_dir, code)
+    ov = overview(base, sid)
+    items += _stage2_projection_recovery_items(ov)
+    items += _stage2_legacy_blueprint_recovery_items(ov)
     items += _trim_verification_items(novel_dir, code, audits=trim_audits)
     items += _hook_verification_items(novel_dir, code)
     items += _approval_items(novel_dir, code)
@@ -204,6 +210,34 @@ def inbox_view(base: str | os.PathLike[str], sid: str) -> InboxView:
     return InboxView(
         items=items, counts=counts, attention_counts=attention_counts,
         delivery_counts=delivery_counts, total=len(items), wontfix=wontfix_total)
+
+
+def _stage2_projection_recovery_items(ov) -> list[InboxItem]:
+    """把 state 的唯一恢复判定投影成可执行待办，不在 view 重算一套条件。"""
+    if not stage2_projection_recovery_needed(ov):
+        return []
+    return [InboxItem(
+        kind='repairable', stage='stage2', chapter=None,
+        rule='blueprint_character_projection',
+        what=('Stage2 Blueprint 称名投影缺失、损坏或未绑定当前最新 '
+              'formal/INVALID Global；不得把它当成整份 Global 未生成'),
+        how=('跑 `stage2.global --renormalize`：只从当前 Global + MainText '
+             '确定性重建投影，0 LLM、不会重采付费 Global'),
+    )]
+
+
+def _stage2_legacy_blueprint_recovery_items(ov) -> list[InboxItem]:
+    """旧 v6 来源边只需换账，不应重采已落盘的 Blueprint。"""
+    if not stage2_legacy_blueprint_recovery_needed(ov):
+        return []
+    return [InboxItem(
+        kind='repairable', stage='stage2', chapter=None,
+        rule='chapter_blueprints_legacy_inputs',
+        what=('当前 ChapterBlueprints v6 仍记录旧 `{MainText, Global}` 来源边；'
+              '称名投影已经 current/fresh，旧账不能证明真实消费 freshness'),
+        how=('跑 `stage2.blueprint --renormalize`：只重编译并刷新来源边，'
+             '0 LLM、不会重采付费 Blueprint'),
+    )]
 
 
 def _classify(item: InboxItem) -> InboxItem:

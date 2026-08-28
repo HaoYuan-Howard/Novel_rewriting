@@ -43,7 +43,8 @@ from pydantic import BaseModel, ValidationError
 from contracts.artifacts import (
     STAGE0_CLEAN_TEXT, STAGE0_REVISIONS,
     STAGE1_HOOK_COPY, STAGE1_MAIN_TEXT,
-    STAGE2_CHAPTER_BLUEPRINTS, STAGE2_GLOBAL_GROUNDING, STAGE2_GLOBAL_REVIEW,
+    STAGE2_BLUEPRINT_CHARACTER_PROJECTION, STAGE2_CHAPTER_BLUEPRINTS,
+    STAGE2_GLOBAL_GROUNDING, STAGE2_GLOBAL_REVIEW,
     RETIRED_STAGE3_STYLE_GROUNDING,
     STAGE4_PLAN_CHAPTERS, STAGE4_WRITER_CONTEXT,
     STAGE7_NAME_MAP,
@@ -95,6 +96,7 @@ _REVALIDATION_DERIVED_PROVENANCE_FIELDS = {
 #   「换了一份原文」在 stage0 是一条**合法的、由判据去拒**的路（`R-0.14`），
 #   写盘口再拒一次就把它变成写不进去。判别力落在判据那一侧，不在这道后置条件。
 SELF_FRESH_DETERMINISTIC = frozenset({
+    STAGE2_BLUEPRINT_CHARACTER_PROJECTION,
     STAGE2_GLOBAL_REVIEW,
 })
 
@@ -1231,6 +1233,14 @@ class ArtifactStore:
         rel = paths.check_rel_deep(rel)
         p = self.path(rel)
         if not _is_file(p):
+            # 称名 HARD 时 producer **有意不发布** projection；这不是普通 missing，
+            # 而是一条必须传到 state/queue/consumer 的前置闸。其余缺失产物仍按
+            # 既有契约抛 ``UpstreamMissing``，不把不存在伪装成可判 freshness。
+            if rel == STAGE2_BLUEPRINT_CHARACTER_PROJECTION:
+                deterministic = self._deterministic_freshness(rel)
+                if (deterministic is not None
+                        and deterministic.reason == 'global_naming_blocked'):
+                    return deterministic
             raise UpstreamMissing(f'{self.ctx.node}: 要判新鲜度的 {rel} 不在盘上')
 
         # 这六份确定性/字节形态产物没有通用 `_provenance.inputs` 槽位，但盘上已经有
@@ -1261,9 +1271,44 @@ class ArtifactStore:
             if block is not None and recorded is None:
                 recorded = {}                # 有来源账但没有 `inputs` ⇒ `no_inputs`，不是 `no_provenance`
         report = self.freshness_of_inputs(rel, recorded)
+        if canonical_rel(rel) == STAGE2_CHAPTER_BLUEPRINTS:
+            report = self._legacy_blueprint_inputs_freshness(recorded, report)
         if canonical_rel(rel) == STAGE4_PLAN_CHAPTERS and isinstance(data, dict):
             return self._stage4_plan_phase_freshness(data, report)
         return report
+
+    def _legacy_blueprint_inputs_freshness(
+        self, recorded: object, ordinary: FreshnessReport,
+    ) -> FreshnessReport:
+        """把 current v6 Blueprint 的旧 ``{MainText, Global}`` 边标成免费恢复态。
+
+        这不是 stale：旧边并没有声明现役称名投影，因而不能证明其消费内容是否与
+        当前 projection 相同；也不是普通 unknown：只有这一格精确历史键形拥有
+        ``stage2.blueprint --renormalize`` 的零调用迁移语义。MainText 自身若已经
+        stale/unknown，仍保留普通结论，不能借兼容桥把真正的上游漂移洗掉。
+        """
+        if not isinstance(recorded, dict) or set(recorded) != {
+                STAGE1_MAIN_TEXT, STAGE2_GLOBAL_GROUNDING}:
+            return ordinary
+        by_key = {edge.key: edge for edge in ordinary.edges}
+        main_edge = by_key.get(STAGE1_MAIN_TEXT)
+        global_edge = by_key.get(STAGE2_GLOBAL_GROUNDING)
+        if main_edge is None or main_edge.state != 'fresh' or global_edge is None:
+            return ordinary
+        legacy_global = prov.EdgeVerdict(
+            key=global_edge.key,
+            state='unknown',
+            reason='consumed_unresolved',
+            recorded_file=global_edge.recorded_file,
+            now_file=global_edge.now_file,
+            recorded_consumed=global_edge.recorded_consumed,
+            now_consumed=None,
+        )
+        edges = tuple(
+            legacy_global if edge.key == STAGE2_GLOBAL_GROUNDING else edge
+            for edge in ordinary.edges
+        )
+        return FreshnessReport('unknown', 'consumed_unresolved', edges)
 
     def freshness_of_inputs(self, rel: str, recorded: dict | None) -> FreshnessReport:
         """同 `freshness`，但**来源账由调用方给**——用于还没落盘的那一份。
@@ -1356,6 +1401,8 @@ class ArtifactStore:
             return self._stage0_clean_freshness()
         if rel in (STAGE1_MAIN_TEXT, STAGE1_HOOK_COPY):
             return self._stage1_freshness(rel)
+        if rel == STAGE2_BLUEPRINT_CHARACTER_PROJECTION:
+            return self._blueprint_character_projection_freshness()
         if rel == STAGE2_GLOBAL_REVIEW:
             return self._global_review_freshness()
         # ⚠ 成书的 rel 带书名 ⇒ **不能与 `STAGE7_BOOK` 直接比**（那是模板）。
@@ -1364,6 +1411,113 @@ class ArtifactStore:
         if rel == paths.book_txt_rel(self.ctx.novel_dir):
             return self._book_freshness()
         return None
+
+    def _blueprint_character_projection_freshness(self) -> FreshnessReport:
+        """称名投影必须等于“当前最新 schema-valid global + main_text”的纯函数。
+
+        global 的 formal/INVALID 是同一业务候选的两种终态：INVALID 存在时它总是更新
+        的一次尝试，投影也必须跟它走；否则一次称名修订会让旧 Blueprint 继续显示 fresh。
+        反过来，role/fate 等修订若不改变最终投影，逐值对账仍是 match。
+        """
+        recorded = self._freshness_payload(STAGE2_BLUEPRINT_CHARACTER_PROJECTION)
+        global_invalid = paths.invalid_of(STAGE2_GLOBAL_GROUNDING)
+        global_rel = (
+            global_invalid if self.exists(global_invalid)
+            else STAGE2_GLOBAL_GROUNDING
+        )
+        global_loaded, global_payload = self._projection_payload(global_rel)
+        main_loaded, main_payload = self._projection_payload(STAGE1_MAIN_TEXT)
+        if not global_loaded or not main_loaded:
+            if recorded is None:
+                return FreshnessReport('unknown', 'no_provenance')
+            missing = global_rel if not global_loaded else STAGE1_MAIN_TEXT
+            edge = prov.EdgeVerdict(
+                key=missing, state='unknown', reason='ghost',
+                recorded_file=None, now_file=None,
+                recorded_consumed=prov.projection_fingerprint(recorded),
+                now_consumed=None,
+            )
+            return FreshnessReport('unknown', 'ghost', (edge,))
+
+        try:
+            # ``decode_artifact`` 只核版本信封，不替业务模型证明载体完整。
+            # Blueprint 可以从 ``.INVALID`` 提前启动的前提是它仍是一份完整、
+            # schema-valid 的 GlobalGrounding；若人工改坏 role/relation 等未消费字段，
+            # 不能仅因 ``entities.characters`` 还能读就把问题稿称为可用底座。
+            from contracts.schema.stage1 import MainText
+            from contracts.schema.stage2 import GlobalGrounding
+
+            grounding = GlobalGrounding.model_validate(global_payload)
+            main_text = MainText.model_validate(main_payload)
+            grounding_payload = grounding.model_dump(
+                by_alias=True, mode='json')
+            characters = grounding_payload['entities']['characters']
+            sections = [
+                section.model_dump(by_alias=True, mode='json')
+                for section in main_text.root
+            ]
+            # Global 的非称名 HARD 可以与 Blueprint 并行；但重名、全角色无据、
+            # 代词称谓等命中会让当前称名闭集本身不稳定。此时即使投影字节恰好
+            # 与上一版相同，也不能把它叫作 fresh 并提前花一次 Blueprint 的钱。
+            from novel.stages.stage2 import checks as stage2_checks
+
+            naming_blockers = (
+                stage2_checks.blueprint_projection_blockers(
+                    global_g=grounding_payload,
+                    main_text=sections,
+                )
+                # 这道闸只服务“从 schema-valid 问题稿提前并行 Blueprint”。
+                # formal Global 按正式投影逐值比较：变化就 stale，不把已有
+                # 正式产物的普通漂移泛化成另一种人工等待态。
+                if global_rel == global_invalid else ()
+            )
+            if naming_blockers:
+                edge = prov.EdgeVerdict(
+                    key=global_rel,
+                    state='unknown',
+                    reason='global_naming_blocked',
+                    recorded_file=None,
+                    now_file=self._file_fp_of_key(global_rel),
+                    recorded_consumed=(
+                        prov.projection_fingerprint(recorded)
+                        if recorded is not None else None
+                    ),
+                    now_consumed=None,
+                )
+                return FreshnessReport(
+                    'unknown', 'global_naming_blocked', (edge,))
+            if recorded is None:
+                return FreshnessReport('unknown', 'no_provenance')
+            from novel.stages.stage2.character_refs import (
+                materialize_blueprint_character_projection,
+            )
+            expected = materialize_blueprint_character_projection(
+                characters, sections).model_dump(by_alias=True, mode='json')
+        except (AttributeError, KeyError, IndexError, TypeError, ValueError,
+                ValidationError):
+            if recorded is None:
+                return FreshnessReport('unknown', 'no_provenance')
+            edge = prov.EdgeVerdict(
+                key=global_rel, state='unknown', reason='consumed_unresolved',
+                recorded_file=None, now_file=self._file_fp_of_key(global_rel),
+                recorded_consumed=prov.projection_fingerprint(recorded),
+                now_consumed=None,
+            )
+            return FreshnessReport('unknown', 'consumed_unresolved', (edge,))
+
+        recorded_fp = prov.projection_fingerprint(recorded)
+        expected_fp = prov.projection_fingerprint(expected)
+        reason = 'match' if recorded_fp == expected_fp else 'consumed_changed'
+        state = 'fresh' if reason == 'match' else 'stale'
+        edges = tuple(
+            prov.EdgeVerdict(
+                key=key, state=state, reason=reason,
+                recorded_file=None, now_file=self._file_fp_of_key(key),
+                recorded_consumed=recorded_fp, now_consumed=expected_fp,
+            )
+            for key in (global_rel, STAGE1_MAIN_TEXT)
+        )
+        return FreshnessReport(state, reason, edges)
 
     def _stage0_revisions_freshness(self) -> FreshnessReport:
         """`stage0/revisions.json`：这条链是照盘上**现在这份原文**建的吗？

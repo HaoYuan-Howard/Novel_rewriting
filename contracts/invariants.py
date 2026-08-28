@@ -70,6 +70,7 @@ FRESHNESS_REASON: Final = (
     'consumed_changed',     # 本节点真正读到的那部分变了 ⇒ stale
     'consumed_undeclared',  # 边上 consumed=null ⇒ 该边 unknown
     'consumed_unresolved',  # 声明过投影，但这次算不出来（没登记投影函数）⇒ 该边 unknown
+    'global_naming_blocked',  # latest Global 的称名 HARD 使 Blueprint 投影暂不可消费 ⇒ unknown
     'match',                # 取到且相等 ⇒ fresh
 )
 
@@ -1441,6 +1442,8 @@ VALUED_FLAGS: Final = {
     '--apply-candidate-plan': '审校台生成的 stage0 候选裁决（采纳 / 否掉整版 + 乐观锁）',
     '--actor': '人工决定的自报身份（不是认证身份）',
     '--reason': '人工决定的非空理由',
+    '--expected-revision-id': ('Stage0 人工批准乐观锁定的完整 revision SHA-256；'
+                               '必须取自本次实际审阅的 current/workpack'),
     '--subject-sha256': '人工决定乐观锁定的完整内容 SHA-256',
     '--source': '要摄入的原始小说 txt/md 路径；新书在目录产生前没有 sid',
     # ⚠ `--pick` 只表示 stage6 定稿候选序号；定稿动作本身是独立节点。
@@ -1622,7 +1625,7 @@ class NodeSpec(NamedTuple):
 #:
 #: 未登记的 flag 会由命令构造器直接拒收，节点表只描述当前真实入口。
 #: 【`required_flags` 那一列：少一个就拼不出可执行 argv 的 flag】它是 `flags` 的**子集**，
-#: 补它是因为「必填」此前**只活在节点函数体里**（`stage0.approve` 少了 `--actor/--reason`
+#: 补它是因为「必填」此前**只活在节点函数体里**（`stage0.approve` 少 revision 乐观锁或 `--actor/--reason`
 #: 就 `TerminalState`），而 `NodeSpec` 表达不出来 ⇒ `build_argv` 只能拼出一条缺参数的命令，
 #: `preview` 于是照着摊开一条**注定 exit 2** 的命令，而 skill 的工作流契约明写
 #: 「逐字执行 preview 给出的全部步骤」——两边对不上（2026-08-16 复盘 §六.1）。
@@ -1645,8 +1648,9 @@ NODES: Final[dict[str, NodeSpec]] = {
                                   produces=(artifact_paths.STAGE0_REVISIONS,
                                             artifact_paths.STAGE0_CLEAN_TEXT)),
     'stage0.approve':   NodeSpec('stage0', 'R-0',  False, 'stage0 人工批准',
-                                  flags=('--actor', '--reason'),
-                                  required_flags=('--actor', '--reason'),
+                                  flags=('--expected-revision-id', '--actor', '--reason'),
+                                  required_flags=(
+                                      '--expected-revision-id', '--actor', '--reason'),
                                    produces=(artifact_paths.STAGE0_REVISIONS,)),
     'stage0.edit':      NodeSpec('stage0', 'R-0',  False, 'stage0 人工编辑',
                                   flags=('--apply-edit', '--apply-edit-plan',
@@ -1669,7 +1673,8 @@ NODES: Final[dict[str, NodeSpec]] = {
                                          '--review-scope',
                                          '--actor', '--reason', '--response-repair'),
                                  produces=(artifact_paths.STAGE2_GLOBAL_GROUNDING,
-                                           artifact_paths.STAGE2_GLOBAL_REVIEW)),
+                                           artifact_paths.STAGE2_GLOBAL_REVIEW,
+                                           artifact_paths.STAGE2_BLUEPRINT_CHARACTER_PROJECTION)),
     # ⚠⚠ **`--chapters` 是这一列里最容易漏的那一个**：§5.1 有 **19 条**判据的修法是
     #   `blueprint --chapters`（定向重生成那几章），而它此前只挂在 `stage5.write` 上。
     #   漏了它，那 19 条在 F5-4 注册的那一刻全被 `_validate` ⑧ 拒收。

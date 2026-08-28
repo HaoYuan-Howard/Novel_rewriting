@@ -391,11 +391,15 @@ def _run_stage0(ctx: RunContext, flags: list[str]) -> int:
 
     tokens = set(N.flag_tokens(flags))
     if ctx.node == 'stage0.approve':
+        expected_revision_id = _valued(flags, '--expected-revision-id')
         actor = _valued(flags, '--actor')
         reason = _valued(flags, '--reason')
-        if actor is None or reason is None:
-            raise TerminalState('stage0.approve 必须显式给 --actor 与 --reason')
-        _art, report = removal.run_approve(ctx, actor=actor, reason=reason)
+        if expected_revision_id is None or actor is None or reason is None:
+            raise TerminalState(
+                'stage0.approve 必须显式给 --expected-revision-id、--actor 与 --reason')
+        _art, report = removal.run_approve(
+            ctx, actor=actor, reason=reason,
+            expected_revision_id=expected_revision_id)
         print(render(report))
         return X.OK if report.passed else X.CHECK_FAILED
     if ctx.node == 'stage0.edit':

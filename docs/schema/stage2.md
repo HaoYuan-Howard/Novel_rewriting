@@ -1,16 +1,17 @@
 # Stage 2 当前契约
 
-Stage 2 产出三份严格 JSON，另收两份人产的决策集：
+Stage 2 产出四份严格 JSON，另收两份人产的决策集：
 
 | 路径 | 模型 | 生产节点 | 内容 |
 |---|---|---|---|
 | `stage2/global_grounding.json` | `GlobalGrounding` v4 | `stage2.global` | 全书人物、关系、设定、规则、秘密、弧线及代码回取证据 |
+| `stage2/blueprint_character_projection.json` | `BlueprintCharacterProjection` v1 | `stage2.global` | 从最新 schema-valid global（formal 或 `.INVALID`）与 MainText 确定性物化的、Blueprint 唯一消费的逐章称名闭集 |
 | `stage2/chapter_blueprints.json` | `ChapterBlueprints` v6 | `stage2.blueprint` | 逐章语义功能、原子事实/因果/状态契约、精确证据区间、保真材料、舞台与叙述信息 |
 | `stage2/global_review.json` | `GlobalReview` | `stage2.global` | 由当前全局底座确定性枚举的逐项人工复核；详见 `docs/schema/evaluation.md` |
-| `stage2/global_review_decisions.json` | `GlobalReviewDecisionSet` | 人工输入 | actor、理由、证据及 subject hash 乐观锁；也可经同形 API 提交 |
+| `stage2/global_review_decisions.json` | `GlobalReviewDecisionSet` v2 | 人工输入 | actor、逐项 subject hash 决定，或绑定完整 blocking scope/正文章全集的默认决定 + 逐项例外；也可经同形 API 提交 |
 | `stage2/global_edit.json` | `GlobalEdit` v3 | 人工输入 | Stage2 typed 订正决策集（`stage2.global --apply-edit` 吃它） |
 
-三份正式产物与两份人工决策集都使用当前 Pydantic `StrictModel`，未知字段拒收。运行时不升级旧形状，也不为
+四份正式产物与两份人工决策集都使用当前 Pydantic `StrictModel`，未知字段拒收。运行时不升级旧形状，也不为
 缺失字段补默认值；需要保留的输入必须先按本文件的当前 schema 重新生成。旧
 GlobalGrounding / ChapterBlueprints 由各自 producer 重建；旧 GlobalEdit 由人按 v3 重写。
 
@@ -131,6 +132,27 @@ formal / `.INVALID` / `_rounds`；`candidate_patch_applied` 服务审计只记 p
 readback 后，唯一 `artifact_adoption` 才绑定最终 patch attempt。候选始终归
 `Stage2GlobalAgent` 所有，外层 Commander 不接收或改写。
 
+## 一之二、`blueprint_character_projection.json`
+
+这是 `stage2.global` 与 `stage2.blueprint` 之间的注册、版本化边界，而不是
+GlobalGrounding 的通用摘要。产地从当前 MainText 与盘上最新的 schema-valid
+GlobalGrounding（有 `.INVALID` 时取它，否则取 formal）确定性重算；因此
+global 的非称名 HARD 仍然会阻止它自身正式落盘，但不会让已有合法称名
+的 Blueprint 一起空等。
+
+顶层只含 `chapters[]`；每章三格全部必填：
+
+| 字段 | 类型 | 内容 |
+|---|---|---|
+| `chapter_ordinal` | `int` | 当前 MainText 的阅读序章号 |
+| `past_attested_surfaces` | `str[]` | 在当章之前已被原文证明出现的名册称名 |
+| `visible_character_refs` | `{char_id: str[]}` | 截止当章已出现、且能唯一区分 owner 的关闭式人物候选 |
+
+它没有通用 `_provenance`：freshness 先强类型校验完整 latest GlobalGrounding 与 MainText，再逐值
+对账。`role` / `fate` / relation / secret / setting / evidence 等没有载体位置；
+只修这些字段且投影字节不变时，既有 Blueprint 不 stale。显示名、实际可用
+称呼或会改变 owner 的首现章变化时，投影变化并使 Blueprint stale。
+
 ## 二、`chapter_blueprints.json`
 
 顶层只含必填的 `blueprints[]` 与 `_provenance`。
@@ -220,7 +242,7 @@ SourceSpan 只保留可直接复验的字节和坐标。内容空间定位是编
 | `scope_violations` | `str[]` | 逐章请求越出任务范围；空也必须写 |
 | `context` | `BlueprintContext` | 逐章上下文架构与边界 |
 | `verbatim_failures` | `(beat_id, position, cause)[]` | 回取失败；非空阻断晋升。`position ∈ span｜hinge`，根因取值面见下 |
-| `fact_atom_failures` | `(fact_id, evidence_phrase, cause)[]` | 原子证据在所属 beat 内 0/多命中或越界；非空阻断晋升 |
+| `fact_atom_failures` | `(fact_id, source_beat_ref, cause)[]` | 原子证据无法在声明 beat 定位，且不能凭全章唯一命中确定性改绑到唯一其他 beat；非空阻断晋升。失败 artifact 不保存原 `evidence_phrase`，存量 0-wire 恢复只从来源账/ledger/当前输入与重编译结果全部闭合的唯一 checkpoint 取回，绝不从 claim 猜 locator |
 | `hinge_ambiguous_pending` | `(beat_id, kind, phrase)[]` | 拍区间内多处命中的原短语，供 `--patch` 确定性枚举候选 |
 
 成功归一、边界外扩、地点实验读数与修复历史不再重复落盘：它们只供展示或与 ledger/运行时前置条件
@@ -319,7 +341,9 @@ address 后的新 subject 一律回到 `pending`，旧复合事实的 PASS 不�
   `--renormalize` 仅对**已符合当前 schema**的产物重算代码派生字段；
   `--apply-edit <路径>` 吃 `global_edit.json` 落 Stage2 typed facts 的 0 成本人工订正（见 §三之二）；
   `--emit-review-template` stdout-only 从当前 `global_review.json` 投影逐项 hash/evidence，
-  默认全部 `UNVER`，原样应用也不会打开事实闸。
+  默认全部 `UNVER`，原样应用也不会打开事实闸。每次 formal 或
+  schema-valid `.INVALID` 写回都同步确定性物化称名投影；旧盘面首次进入
+  Blueprint 时也会用同一纯函数补齐。
 - `stage2.blueprint`：逐章生成；默认 `extraction-ir-v3.1` 每章发一次请求，把召回脚手架和
   最终细节合在同一响应中；`micro_events` 只交短 `cue`、编译前丢弃，narration 选择本章可见
   `char_id`，hinge 优先选择确定性原文候选 id，候选覆盖不到仍交唯一 phrase。显式 v2 回退臂
@@ -327,8 +351,9 @@ address 后的新 subject 一律回到 `pending`，旧复合事实的 PASS 不�
   两列止段严格递增且落到章尾，beat 止段必须取自 micro-event 止段；第二相只能在代码冻结的
   beat 边界上填 time layer、地点、hinge、叙述信息与可见 `char_id`。`--chapters` 定向付费
   重生成；`--renormalize` 重算当前 schema 的原文定位，不会在无显示名时猜测人物 ID；
-  `--check-only` 联合读取两份
-  产物复检。两种现役契约的拓扑显式登记在 `ContractSpec.topology`，预览、整跑与定向修复共用
+  `--check-only` 联合读取两份业务产物复检。Blueprint 的 prompt、dynamic
+  validator、compile 与 provenance 只读 MainText + 称名投影，不伪造一条 canonical
+  global 输入边。两种现役契约的拓扑显式登记在 `ContractSpec.topology`，预览、整跑与定向修复共用
   该分派，不从可空 system 字段猜。
 - 正式写入前先跑严格载体校验与联合 HARD 闸门；失败响应进入 `.INVALID`，不会覆盖正式产物。
 - 本层没有旧 schema 迁移入口、字段别名或双形状读取路径。旧生成产物由 producer 重建，
@@ -341,14 +366,14 @@ address 后的新 subject 一律回到 `pending`，旧复合事实的 PASS 不�
 
 ## 五、现行判据
 
-当前注册表共 **67 条**：**40 hard、14 info、11 metric、2 unver**。两个 Stage 2 节点共用
+当前注册表共 **68 条**：**39 hard、16 info、11 metric、2 unver**。两个 Stage 2 节点共用
 同一张注册表。本次契约收缩同步删除只服务展示名、摘要、批次和已退役地点模式的判据。
 
 | 分组 | 当前规则 id |
 |---|---|
 | 产物与章对齐 | `upstream_missing` · `section_id_leak` · `chapter_coverage` · `chapter_order` |
 | 人物与称谓 | `canonical_unique` · `character_unattested` · `address_by_unresolved` · `address_from_out_of_range` · `address_from_too_early` · `address_bare_pronoun` · `address_all_pronoun` · `address_has_pronoun` · `address_selfref` · `address_missing` · `address_unlocatable` |
-| 身份与结局 | `role_missing` · `role_leaks_fate` · `role_repeats_name` · `hedge_words` · `distinguisher_lonely` · `role_fate_unverifiable` · `fate_report` |
+| 身份与结局 | `role_missing` · `role_leaks_fate` · `role_repeats_name` · `hedge_words` · `fate_hedge_words` · `distinguisher_lonely` · `role_fate_unverifiable` · `fate_report` |
 | 规则、秘密、关系与弧线 | `world_rule_no_desc` · `canon_chapter_refs_dangling` · `world_rule_names_person` · `secret_setup_order` · `secret_cold_reveal` · `secret_known_by_dangling` · `reveal_unmarked` · `secrets_absent` · `relation_dangling` · `relation_visibility_mismatch` · `global_evidence_unlocated` · `conflict_stage_coverage` |
 | 拍与区间 | `beat_id_unique` · `beat_id_format` · `span_unlocatable` · `verbatim_failed` · `edge_hole` · `beats_collapsed` · `beats_coarse` |
 | 保真材料 | `hinge_cross_chapter` · `hinge_in_hole` · `hinge_anchor_void` · `hinge_ambiguous` · `hinge_cascade` · `hinge_drift` · `chapter_no_hinge` |
@@ -356,9 +381,9 @@ address 后的新 subject 一律回到 `pending`，旧复合事实的 PASS 不�
 | 范围与必填 | `scope_violation` · `fact_atom_empty` |
 | 无条件读数 | `narration_voices` · `time_layer_mix` · `place_moves` · `present_broad` · `context_scope` · `span_coverage` · `span_coverage_per_chapter` · `uncovered_holes` · `hinge_density` |
 
-机器可读修复路由共 **35 条**：
+机器可读修复路由共 **34 条**：
 
-- `stage2.blueprint --chapters`: 16 条；
+- `stage2.blueprint --chapters`: 15 条；
 - `stage2.blueprint --patch`: 1 条（`hinge_ambiguous`——字段级候选选择，量级是条不是章）；
 - `stage2.global --resample`: 16 条；
 - `stage2.global --purge-role`: 1 条；
@@ -366,6 +391,9 @@ address 后的新 subject 一律回到 `pending`，旧复合事实的 PASS 不�
 
 `global_evidence_unlocated` 不再把整份 `--resample` 暴露为默认路由：生成期先做确定性唯一回取，
 agent 期只修失败 evidence 槽；终态报告转人工 typed edit / `--revalidate`，显式整份重采仅作最后手段。
+`hedge_words` 只检查会进入写作/改名材料的 `role` 与 `canonical`；确定判断「不可能」不命中，
+「不太可能」「并非不可能」仍命中。`fate` 使用独立的 `fate_hedge_words` INFO，只披露、不阻断。
+`beats_collapsed` 继续 HARD；`beats_coarse` 是同书长尾 INFO，没有付费重生成路由。
 
 判据的权威定义在 `contracts/judges/stage2.py`，注册期会验证规则 id 唯一、严重度、需求落点、
 节点与 flag 的存在性。报告形状见 [`_report.md`](./_report.md)。

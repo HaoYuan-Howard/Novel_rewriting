@@ -74,13 +74,17 @@ rg -n "stage6|hook_para_sep|exit 70" .claude/skills/novel-pipeline-operator/refe
 - 触发：Stage2 下游缺失，或本书出现 `repair_manifest.json` / `checkpoint_restored`；global、逐章
   checkpoint、正式 blueprint 与 review 可能只完成其中一部分。
 - 判断：checkpoint 只证明一章模型响应已经通过当时的单章闸，不是正式 artifact，也不提升 Stage2
-  完成度；review PASS 也只证明人审支路完成。只有正式 blueprint 编译并通过联合 HARD，且 current
-  review 全 PASS，两支才真正汇合。已经验证并 checkpoint 的章不应因别章失败重新付费。
+  完成度；review 的 blocking 面收口也只证明人审支路完成。Blueprint 只等待 current/fresh 称名投影：
+  非称名 HARD 留下的 schema-valid Global `.INVALID` 可先物化投影并继续计算；称名 HARD 未收口则投影为
+  `unknown/global_naming_blocked`，只能先 typed edit / `--revalidate`（0 LLM），不能 renormalize 或付费重采。
+  只有正式 blueprint 编译并通过联合 HARD，且 current review 的 blocking 面逐项 PASS，两支才真正汇合。
+  disclosure 非 PASS 保留披露但不挡汇合。已经验证并 checkpoint 的章不应因别章失败重新付费。
 - 处置：先 `state` 看正式产物。manifest 点名恢复时必须使用同一 `run_id` resume，让成功章复验恢复；
   没有可恢复 sidecar 才按当前 preview 补跑缺失节点。global review 可与 blueprint 计算重叠，但必须在
   Stage4 前收齐；旧 style 不补跑、不迁移。
 - 验证：恢复章出现 `checkpoint_restored` 且新增 wire 为零；`stage2.blueprint --check-only` fresh 且无
-  HARD，review current/全 PASS，`state` 显示 Stage2 完成。
+  HARD，review current 且 blocking 面逐项 PASS，`state` 显示 Stage2 完成；disclosure 未决项仍在 inbox /
+  终审包披露。
 - 依据：`novel/llm/stage2_runs.py::restore_checkpoint`；
   `novel/stages/stage2/extract.py::_raise_response_repair`；
   `contracts/invariants.py::stage2_review_required`。

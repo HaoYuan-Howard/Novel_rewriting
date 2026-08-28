@@ -302,7 +302,10 @@ def actions() -> list[dict[str, Any]]:
     # These flags are audit credentials/locks, never a runnable operation by
     # themselves.  They remain in ``job_kinds[].flags`` and are exposed on the
     # operation that requires them through ``required_inputs`` below.
-    credential_flags = {'--actor', '--reason', '--subject-sha256'}
+    credential_flags = {
+        '--actor', '--reason', '--subject-sha256',
+        '--expected-revision-id',
+    }
 
     def required_inputs(node: str, flags: Sequence[str]) -> list[dict[str, str]]:
         """Missing values the caller must collect before *execution*.

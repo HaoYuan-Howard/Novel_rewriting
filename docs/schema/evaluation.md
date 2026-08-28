@@ -94,7 +94,9 @@
 外加四个集合级 subject：`entities.characters` 的 `character_set_complete`、`entities.relations`
 的 `relation_set_complete`、`canon.world_rules` 的 `world_rule_set_complete` 与 `canon.secrets` 的
 `secret_set_complete`。即使集合为空，这四项仍存在且初始为 `pending`；只有人工对照来源后才能
-裁为 `PASS｜FAIL｜UNVER`。因此「一个人/一条关系/一条规则/一个秘密都没抽到」不能借空循环变成全绿。
+裁为 `PASS｜FAIL｜UNVER`。它们与 `conflict_partition`、`arc_analysis` 两个整书解读项一起绑定
+Global producer 实际读取的 MainText 输入身份；正文变化会重开这六项，而不会冲掉未变事实的逐项决定。
+因此「一个人/一条关系/一条规则/一个秘密都没抽到」不能借空循环变成全绿。
 
 ⚠ **没被枚举出来的字段等于没人审。** 下一段说的「缺任一必审项就不能开 gate」守的是这份清单
 **自身**的完整性，不是「整份 grounding 都过了人眼」。2026-08-23 之前，`role` 的结局旁路
@@ -103,10 +105,10 @@
 清单之外——闸照开，人却从没看过它们。
 
 每次生成或编辑 `GlobalGrounding` 后，review 的 `source_sha256` 绑定去除 schema/provenance 后的
-完整 typed subject。旧决定只在 `(item_id, kind, subject_path, subject_sha256)` 四项完全不变时
-继承；变过的项回到 `pending`。读 API 与 s2 gate 不信任盘上 `approved` 推论，而是从当前
+完整 typed subject。普通事实的旧决定只在 `(item_id, kind, subject_path, subject_sha256)` 四项完全不变时
+继承；上述六个整书项还须 MainText 输入身份不变，变过的项回到 `pending`。读 API 与 s2 gate 不信任盘上 `approved` 推论，而是从当前
 `GlobalGrounding` 重算完整 subject SHA 和现役必审 item surface：hash 过期、缺任一必审项、
-顺序/身份不一致或存在非 PASS 项，`approved=false`，不能开 gate。
+顺序/身份不一致或 blocking 面存在非 PASS 项，`approved=false`，不能开 gate；disclosure 未决项继续披露。
 
 真实决策入口为：
 
@@ -115,9 +117,23 @@ python -m novel.cli run stage2.global <sid> `
   --review-decisions <书内或服务私有目录中的 GlobalReviewDecisionSet.json>
 ```
 
-同形服务入口为 `POST /api/novels/:sid/stage2/global-review`，读面为对应 GET。请求可批量提交，
-但每项恰好一次，并必须带自报 `actor`、非空 `reason`、显式 `evidence[]` 及
-`expected_subject_sha256`；这是乐观锁，不是认证身份。CLI 在写前再次读取当前完整底座并拒绝
-过期/缺项 review。POST 只有 CLI exit `0`（当前完整面全部 PASS）才尝试盖 s2 章；exit `1`
+同形服务入口为 `POST /api/novels/:sid/stage2/global-review`，读面为对应 GET。请求有两种关闭式形状：
+
+- 逐项 `decisions[]`：每项恰好一次，并带非空 `reason`、显式 `evidence[]` 与
+  `expected_subject_sha256`；
+- 压缩 `blocking_scope`：绑定当前 `source_sha256`、完整 blocking
+  `(item_id, subject_sha256)` 集合 SHA、项目数、正文章全集与实际只读 workpack SHA-256，
+  给未列入 `decisions[]` 的 blocking
+  项一个显式默认 `PASS｜UNVER`。服务端仍展开成逐项持久决定；`decisions[]` 是例外，disclosure
+  永不被 scope 自动裁决。workpack 的 binding 含完整 typed MainText SHA-256，整书完整性决定也绑定
+  MainText 输入身份；正文变化会重开这些决定。emit 模板默认 `UNVER`，actor/reason 与
+  `expected_workpack_sha256` 都是不可提交的占位值；后者只能从实际读过的 workpack 顶层手工复制，
+  只改状态、重新生成模板代替阅读或换用旧 workpack 都会关闭式拒绝。
+
+`GlobalReviewDecisionSet` 因新增第二种形状由 v1 升为 v2。旧 v1 没有 scope hash 与正文章全集
+阅读声明，不自动迁移；由 `--emit-review-template` 零成本重发当前模板，人工复核后重新提交。
+
+两种形状都必须带自报 `actor`；这些字段是乐观锁与审计声明，不是认证身份。CLI 在写前再次读取当前完整底座并拒绝
+过期/缺项 review。POST 只有 CLI exit `0`（当前 blocking 面全部 PASS）才尝试盖 s2 章；exit `1`
 表示决定已落盘但仍有 FAIL/UNVER/pending，作业为 `landed_red`，gate 保持关闭。Inbox 把三种
 未闭合状态都列为 `verification`，GlobalScreen 提供逐项或批量提交入口。

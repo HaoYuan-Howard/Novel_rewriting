@@ -251,7 +251,8 @@ def test_stage2_global_resample_is_paid_and_cannot_hide_another_action():
     assert '--resample' in argv
     assert N.is_paid('stage2.global', ['--resample']) is True
     assert N.write_effect('stage2.global', ['--resample']) == \
-        'stage2/global_grounding.json · stage2/global_review.json'
+        ('stage2/global_grounding.json · stage2/global_review.json · '
+         'stage2/blueprint_character_projection.json')
     with pytest.raises(UnsupportedRunMode, match='必须单独执行'):
         N.build_argv(
             'stage2.global', SID, ['--resample', '--purge-role'], base=BASE)
@@ -444,7 +445,7 @@ def test_valued_flags_must_carry_a_value_and_bare_flags_must_not():
 def test_a_node_refuses_to_build_a_command_that_is_missing_a_required_flag():
     """⭐ **这一条守的是「摊开的那条命令不是一条注定 exit 2 的命令」。**
 
-    此前「必填」只活在节点函数体里（`stage0.approve` 少 `--actor/--reason`
+    此前「必填」只活在节点函数体里（`stage0.approve` 少 revision 乐观锁或 actor/reason
     就 `TerminalState`），`NodeSpec` 表达不出来 ⇒ `build_argv` 照样拼得出来，
     `preview` 照着摊开，而 skill 的工作流契约明写「逐字执行 preview 的全部步骤」。
     ⇒ 拒收挪到 `validate_run`（展示与执行共用的那一处）。
@@ -454,7 +455,9 @@ def test_a_node_refuses_to_build_a_command_that_is_missing_a_required_flag():
     with pytest.raises(UnsupportedRunMode, match='缺必填'):
         N.build_argv('stage0.approve', SID, ['--actor', '我'], base=BASE)
     argv = N.build_argv('stage0.approve', SID,
-                        ['--actor', '我', '--reason', '零命中'], base=BASE)
+                        ['--expected-revision-id', 'a' * 64,
+                         '--actor', '我', '--reason', '零命中'], base=BASE)
+    assert argv[argv.index('--expected-revision-id') + 1] == 'a' * 64
     assert argv[argv.index('--actor') + 1] == '我'
     assert argv[argv.index('--reason') + 1] == '零命中'
 
@@ -491,12 +494,15 @@ def test_preview_fills_required_flags_with_placeholders_that_never_run():
     """
     steps = N.build_steps('stage0.approve', SID, base=BASE, placeholders=True)
     argv = steps[0].argv
+    assert argv[argv.index('--expected-revision-id') + 1] == \
+        '待填·expected-revision-id'
     assert argv[argv.index('--actor') + 1] == '待填·actor'
     assert argv[argv.index('--reason') + 1] == '待填·reason'
     assert '占位符' in (steps[0].note or '')
     with pytest.raises(UnsupportedRunMode, match='占位符'):
         N.build_argv('stage0.approve', SID,
-                     ['--actor', '待填·actor', '--reason', '真理由'], base=BASE)
+                     ['--expected-revision-id', 'a' * 64,
+                      '--actor', '待填·actor', '--reason', '真理由'], base=BASE)
 
     retain = N.build_steps(
         'stage5.review', SID, ['--retain-pretrim'],

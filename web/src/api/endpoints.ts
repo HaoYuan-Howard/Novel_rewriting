@@ -45,6 +45,7 @@ import type {
   InboxResponse,
   ReadingResponse,
   ReviewResponse,
+  Stage0EditResult,
   Stage0Report,
   Stage0CandidateView,
   Stage0Segments,
@@ -86,6 +87,11 @@ interface BackendStageState {
   done: boolean | null
   chapters_done: number[]
   reviewable: boolean
+}
+
+interface BackendStage0EditResult {
+  job: BackendJobRecord
+  revision_id: string | null
 }
 
 interface BackendNovelOverview {
@@ -339,8 +345,13 @@ export const realApi: Api = {
 
   getStage0Report: (sid) => get<Stage0Report>(n(sid) + '/stage0/report'),
   getStage0Segments: (sid) => get<Stage0Segments>(n(sid) + '/stage0/segments'),
-  editStage0: async (sid, request) =>
-    adaptJob(await post<BackendJobRecord>(n(sid) + '/stage0/edit', request)),
+  editStage0: async (sid, request) => {
+    const raw = await post<BackendStage0EditResult>(n(sid) + '/stage0/edit', request)
+    return {
+      job: adaptJob(raw.job),
+      revision_id: raw.revision_id,
+    } satisfies Stage0EditResult
+  },
   approveStage0: async (sid, request) =>
     adaptJob(await post<BackendJobRecord>(n(sid) + '/stage0/approve', request)),
   getStage0Candidate: async (sid) => {

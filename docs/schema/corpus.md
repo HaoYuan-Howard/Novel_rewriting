@@ -17,6 +17,11 @@ manifest 不含书名、原文、prompt 或生成正文，只记录：
 实体字节；这样既不泄漏书名，又与 `contracts/artifacts.py::ARTIFACT_PATHS['stage7.book']`
 保持同一落点。
 
+Stage2 current 盘面除 Global、review 与 ChapterBlueprints 外，还必须含
+`stage2/blueprint_character_projection.json` v1：它由 schema-valid 的最新 formal/INVALID
+Global + MainText 零调用确定性物化，是 Blueprint 唯一的人物称名输入；缺失时不得用一次新的
+付费 `stage2.global` dispatch 冒充恢复，须先跑 `stage2.global --renormalize` 重建。
+
 Stage5 current 盘面必须恰有 `stage5/ch01.json`～`stage5/chNN.json` 与
 `stage5/review_1.json`；不得出现旧 `stage5/deep|shallow/` 目录来替代
 canonical 章。正式章为 schema v2，Review 为 schema v2；版本逐份从 registry 现算，不能手补

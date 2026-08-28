@@ -153,16 +153,50 @@ class GlobalReviewDecision(StrictModel):
     evidence: list[EvidenceRef]
 
 
+class GlobalReviewBlockingScopeDecision(StrictModel):
+    """对当前完整 blocking 面的一次显式默认裁决。
+
+    逐项 ``subject_sha256`` 仍由 ``expected_blocking_scope_sha256`` 整体绑定，
+    ``expected_workpack_sha256`` 再绑定执行者实际读的只读材料；
+    ``decisions`` 只需列例外，服务端会把默认裁决展开回每一条持久 item。这样压缩的是
+    Commander 重复输出，不是人审范围，也不会让 disclosure 被自动 PASS。
+
+    模板默认 ``UNVER``：原样提交仍保持闸门关闭。审阅者只有在确实通读列出的全部章、
+    核完当前 workpack 后，才把它显式改成 ``PASS``。
+    """
+
+    expected_source_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    expected_blocking_scope_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    expected_workpack_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    expected_item_count: int = Field(ge=1)
+    reviewed_chapter_ordinals: list[int] = Field(min_length=1)
+    state: Literal['PASS', 'UNVER']
+    reason: str = Field(min_length=1)
+    evidence: list[EvidenceRef]
+
+    @model_validator(mode='after')
+    def _closed_audit_surface(self) -> 'GlobalReviewBlockingScopeDecision':
+        if not self.reason.strip():
+            raise ValueError('blocking scope reason must not be blank')
+        chapters = self.reviewed_chapter_ordinals
+        if chapters != sorted(set(chapters)) or any(chapter < 1 for chapter in chapters):
+            raise ValueError('reviewed_chapter_ordinals 必须是去重升序的正整数全集')
+        return self
+
+
 class GlobalReviewDecisionSet(StrictModel):
     """A human-produced optimistic-lock decision file/API payload."""
 
     actor: str = Field(min_length=1)
-    decisions: list[GlobalReviewDecision] = Field(min_length=1)
+    decisions: list[GlobalReviewDecision] = Field(default_factory=list)
+    blocking_scope: GlobalReviewBlockingScopeDecision | None = None
 
     @model_validator(mode='after')
     def _exactly_once(self) -> 'GlobalReviewDecisionSet':
         if not self.actor.strip() or any(not row.reason.strip() for row in self.decisions):
             raise ValueError('global-review actor/reason must not be blank')
+        if not self.decisions and self.blocking_scope is None:
+            raise ValueError('global-review decision set 至少要有逐项决定或 blocking_scope')
         ids = [row.item_id for row in self.decisions]
         if len(ids) != len(set(ids)):
             raise ValueError('each global-review item may be decided at most once per request')

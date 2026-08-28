@@ -222,6 +222,7 @@ _REASON_STATE: dict[str, Freshness] = {
     'consumed_changed': 'stale',
     'consumed_undeclared': 'unknown',
     'consumed_unresolved': 'unknown',
+    'global_naming_blocked': 'unknown',
     'match': 'fresh',
 }
 assert set(_REASON_STATE) == set(FRESHNESS_REASON), \

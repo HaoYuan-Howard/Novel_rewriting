@@ -125,9 +125,9 @@ def decide_global_review(
         record = jobs.run(
             base, 'stage2.global', sid,
             ['--review-decisions', str(path)], follow_check=False)
-        # CHECK_FAILED means the batch landed but at least one current row is
-        # still not PASS.  Unlike ordinary human approvals, that state must not
-        # open s2: the global-review contract explicitly requires all PASS.
+        # CHECK_FAILED means the batch landed but the current blocking surface
+        # has not closed.  Unlike ordinary human approvals, that state must not
+        # open s2; disclosure rows may remain non-PASS and stay in the audit view.
         # Even on OK, blueprint may still be running/missing; `_stamp` is
         # intentionally best-effort so the already-landed decisions remain valid.
         if record.exit_code == X.OK:

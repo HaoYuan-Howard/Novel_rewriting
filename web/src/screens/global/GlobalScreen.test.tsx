@@ -156,7 +156,7 @@ describe('GlobalScreen disclosure', () => {
 
     const continuation = await screen.findByRole('group', { name: '逐章骨架并行生成' })
     expect(continuation).toHaveTextContent('全局复核不再挡住逐章骨架')
-    expect(continuation).toHaveTextContent('Stage4 会等当前全局复核全部 PASS')
+    expect(continuation).toHaveTextContent('Stage4 会等当前全局复核的阻断面全部 PASS')
     expect(screen.getByRole('button', { name: '继续下一步' })).toBeVisible()
   })
 

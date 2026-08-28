@@ -3,7 +3,7 @@
 """
 stage2.py —— 抽取那一层的判据行。源是 `docs/schema/stage2.md` §5.1（**唯一落点**）。
 
-**67 条现役：40 HARD · 14 INFO · 11 度量 · 2 查不了。**
+**68 条现役：39 HARD · 16 INFO · 11 度量 · 2 查不了。**
 权威恒在本模块的注册表与 `BACKEND_CONTRACT.md` §反向覆盖率；2026-08-23 新增的
 `conflict_stage_coverage` HARD 把冲突阶段的逐章覆盖关在 Stage2 产地。
 
@@ -19,13 +19,13 @@ stage2.py —— 抽取那一层的判据行。源是 `docs/schema/stage2.md` §
 【本层特有的四条，与其余六个现役层都不同】
 
 **① 这是第一个用 `Rule.fix` 的层。** 修复路由使用机器可读的节点与 flag：
-`blueprint --chapters` · `blueprint --patch` ·
-`global --resample` 16 ·
-`global --purge-role` / `--renormalize` 各 1。注册期第 ⑧ 条会查节点与 flag 都真实存在——**写歪一个当场炸**，
+`blueprint --chapters` 15 · `blueprint --patch` 1 ·
+`global --resample` 16 · `global --purge-role` 1 ·
+`global --renormalize` 1。注册期第 ⑧ 条会查节点与 flag 都真实存在——**写歪一个当场炸**，
 而写进 `note` 的散文里拼错一个 flag 名不会有任何东西出声（LESSONS 第 11 条）。
 ⚠ **`fix` 与 `directive` 是两格，在本层完全不重叠**：全表 `repair='NONE'`
 （反哺是 stage5 独有的，`contracts/rules.py::_validate` ④ 把它锁在 `owner='stage5'` 上）
-⇒ `directive` 全表为空，而 `fix` 有 35 条。
+⇒ `directive` 全表为空，而 `fix` 有 34 条。
 
 ⚠ **徽章结构上永远不可能是 `pass`**：本表有 **2 条 `unver`**，其中
 `role_fate_unverifiable` **无条件产出**（见下）⇒ 每本每次都产 ⇒ 最好情况是 `amber`
@@ -178,12 +178,13 @@ _info('address_unlocatable', '每条叫法都能在原文里原样找到', 'R-2.
            '判 INFO 不判 HARD：绰号 / 转述里的叫法确实可能改过一两个字，'
            '而落盘前的最长子串回取会先确定性修正。盘上 0/3')
 
-# ═══ 三、身份与结局（5 HARD · 1 度量 · 1 查不了）══════════════════════════
+# ═══ 三、身份与结局（5 HARD · 1 INFO · 1 度量 · 1 查不了）════════════════════════
 
 _hard('role_missing', '每个角色都有静态身份描述', 'R-2.6', fix=FIX_RESAMPLE,
       note='下游**只下发 `role`，不下发 `fate`** ⇒ 缺了它写手不认识这个人。盘上 0/3')
 
-_hard('role_leaks_fate', '静态身份里没有结局词', 'R-2.6', wordlist=True, fix=FIX_PURGE_ROLE,
+_hard('role_leaks_fate', '静态身份里没有结局词', 'R-2.6', wordlist=True,
+      fix=FIX_PURGE_ROLE,
       baseline='⭐ **盘上 2/3 命中**（头牌 2 处 · 三岁 5 处）。'
                '⚠⚠ **词表只抓转抄式**：`(最终/后被/而死/下狱/被处死/走向/结局/沦为)` '
                '在头牌上命中 **0/17 而人读真违规 6/17**——`char_009.role` 写着'
@@ -199,14 +200,19 @@ _hard('role_leaks_fate', '静态身份里没有结局词', 'R-2.6', wordlist=Tru
 _hard('role_repeats_name', '静态身份不与显示名完全同字', 'R-2.6', fix=FIX_RESAMPLE,
       note='同字的话写手拿到的下发面是「李宝珠：李宝珠」——一条零信息的介绍。盘上 0/3')
 
-_hard('hedge_words', '身份 / 结局 / 显示名里没有模棱语', 'R-2.6', wordlist=True,
+_hard('hedge_words', '身份 / 显示名里没有模棱语', 'R-2.6', wordlist=True,
       fix=FIX_RESAMPLE,
-      baseline='⭐ **盘上 2/3 命中**（成年人 1 · 头牌 1），⚠ **两处都在 `fate`**——'
-               '而 `fate` 一概不下发给写手 ⇒ 这两处的实际危害低于它的严重度，'
-               '但**不降级**：同一把尺子量 `role` 时它是真阻断，按命中位置分级'
-               '会让这条判据说不清自己在查什么',
-      note='模棱语（可能 / 疑似 / 大概 / 或许…）落在这三个字段上意味着**抽取没抽到底**：'
-           '这三个字段是「原文写出来的事实」，不确定就不该写进来')
+      baseline='旧裸子串基线 **2/3 命中**，两处都在 `fate`；拆出 fate 后'
+               '`role/canonical` 基线为 **0/3**。',
+      note='模棱语（可能 / 疑似 / 大概 / 或许…）落在下发字段上意味着'
+           '**抽取没抽到底**。⚠ 「不可能」是确定判断，匹配器不再把它当成「可能」；'
+           '「不太可能 / 并非不可能」仍是不确定并继续命中')
+
+_info('fate_hedge_words', '结局字段的模棱语筛查', 'R-2.6', wordlist=True,
+      baseline='旧裸子串基线 **2/3 命中**（成年人 1 · 头牌 1），两处都在 fate；'
+               '新匹配器排除确定的「不可能」后待 current-schema corpus 重算。',
+      note='`fate` 不下发 Stage4/5 写手，且其人工复核项的交付效果本就是 '
+           '`disclosure`，所以模棱语保留在报告中但不拒绝 global 落盘，也不拦 Stage4。')
 
 _hard('distinguisher_lonely', '带区分词的显示名真有同名对象', 'R-2.6b',
       fix=FIX_RESAMPLE,
@@ -318,7 +324,7 @@ _hard('conflict_stage_coverage', '冲突阶段逐章显式枚举且恰好覆盖�
            '本条把错误拦在付费产物的产地；问题稿可人工补全后走 `--revalidate` 0 成本提升，'
            '或显式 `--resample` 重采整份 global。')
 
-# ═══ 六、拍与区间（8 HARD · 1 INFO）═══════════════════════════════════════
+# ═══ 六、拍与区间（6 HARD · 1 INFO）═══════════════════════════════════════
 
 _hard('beat_id_unique', '全书 beat_id 不重复', 'R-3.1',
       note='`beat_id` 是下游回取舞台与保真材料的**唯一**键（Stage4 `stage_refs` · '
@@ -368,10 +374,12 @@ _hard('beats_collapsed', '≥300 字的章不止一拍', 'R-3.9', fix=FIX_REGEN,
       note='⚠ 阈值用的是**契约自己的反例**（一章 ≤1 拍），**不跨书比**：'
            '拍数是同一个 prompt 都能改动 ±44% 的自由变量。盘上 0/3')
 
-_hard('beats_coarse', '章级 字/拍 不超本书中位数的 3 倍', 'R-3.9', fix=FIX_REGEN,
+_info('beats_coarse', '章级 字/拍 超本书中位数的 3 倍', 'R-3.9',
       note='⚠⚠ **同一本书内部才可比**——分母是**本书自己的中位数**，不是跨书常量。'
-           '理由同上：拍数是自由变量，拿别的书的中位数当尺子量到的是两本书的差异。'
-           '盘上 0/3（中位 143 / 169 / 138 字每拍）')
+           '但这个倍数只是统计长尾，无法证明事实漏抓；本书 502/495 的边界命中就显示'
+           '用它拒绝付费候选会诱发无独立质量证据的重采。⇒ 降 INFO，不再给付费修复路由；'
+           '`beats_collapsed` 与漏抓/证据失配等独立 HARD 仍原样阻断。'
+           '旧基线 0/3（中位 143 / 169 / 138 字每拍）')
 
 # ═══ 七、保真材料（6 HARD · 1 INFO）═══════════════════════════════════════
 #

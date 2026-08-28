@@ -116,7 +116,7 @@ Prompt 选型完成后，`prompt_variants`、`prompt_defaults` 与 `--prompt-var
 | `GET /api/novels/:sid/stage0/report` | `Stage0Report` | 从 `stage0/revisions.json` 派生的窄视图，见下 |
 | `GET /api/novels/:sid/stage0/segments` | `Stage0Segments` | 新 |
 | `POST /api/novels/:sid/stage0/edit` | `JobRecord`（请求体 `Stage0EditRequest`） | 新 |
-| `POST /api/novels/:sid/stage0/approve` | `JobRecord`（请求体 `Stage0ApprovalRequest`：自报 `actor` + `reason`） | 新 |
+| `POST /api/novels/:sid/stage0/approve` | `JobRecord`（请求体 `Stage0ApprovalRequest`：`expected_revision_id` + 自报 `actor` + `reason`） | 新 |
 | `GET /api/novels/:sid/stage0/candidate` | `Stage0CandidateView`（待裁决的那条机器 revision + **当前稿的读数**） | 新 |
 | `POST /api/novels/:sid/stage0/candidate/adopt` | `JobRecord`（请求体 `Stage0CandidateDecisionRequest`） | 新 |
 | `POST /api/novels/:sid/stage0/candidate/dismiss` | `JobRecord`（同一请求体） | 新 |
@@ -132,7 +132,7 @@ Prompt 选型完成后，`prompt_variants`、`prompt_defaults` 与 `--prompt-var
 | `GET /api/novels/:sid/reading/:o` | `ReadingView` | 新 |
 | `GET /api/novels/:sid/stage2/global` | `GlobalView` | 新 |
 | `GET /api/novels/:sid/stage2/global-review` | `GlobalReviewView`（含当前完整 subject 重算状态与逐项审计） | 新 |
-| `POST /api/novels/:sid/stage2/global-review` | `JobRecord`（请求体 `GlobalReviewDecisionSet`；仅全部 PASS 的 exit 0 可盖 s2） | 新 |
+| `POST /api/novels/:sid/stage2/global-review` | `JobRecord`（请求体 `GlobalReviewDecisionSet` v2：逐项决定，或绑定 source/scope/workpack hash 与正文章全集的 blocking scope + 逐项例外；仅全部 blocking PASS 的 exit 0 可盖 s2） | 新 |
 | `GET /api/novels/:sid/stage4/:o` | `Stage4View` | 新 |
 | `GET /api/novels/:sid/stage5/:o` | `Stage5View` | 新 |
 | `GET /api/novels/:sid/review/:o` | `ReviewView` | 新 |
@@ -473,7 +473,7 @@ HTTP 进程只写 `_service/`（一次性人工稿）。
 
 | 端点 | 请求体 | 说明 |
 |---|---|---|
-| `POST /api/novels/:sid/stage0/approve` | `Stage0ApprovalRequest`（`actor` + `reason`） | actor 是自报身份；空值拒绝。⚠ 零命中自动批已于 2026-08-21 停产、记录它的 `approval.origin` 一格已于 2026-08-22 删除 ⇒ **本端点是批准的唯一来源** |
+| `POST /api/novels/:sid/stage0/approve` | `Stage0ApprovalRequest`（`expected_revision_id` + `actor` + `reason`） | `expected_revision_id` 必须等于人实际审阅的 current revision，读包后 edit/adopt 的旧请求以 409 拒绝；actor 是自报身份，空值拒绝。⚠ 零命中自动批已于 2026-08-21 停产、记录它的 `approval.origin` 一格已于 2026-08-22 删除 ⇒ **本端点是批准的唯一来源** |
 | `POST /api/novels/:sid/stage0/candidate/adopt` / `dismiss` | `Stage0CandidateDecisionRequest`（`candidate_revision_id` + `expected_revision_id` 乐观锁 + actor/reason） | 页面上要决定的是**整版留哪一版**，不是逐个冲突选边——聚合根是 `{原文身份, 正文, 剔除账本, 告警}` 整团（`stage0.md` §2.5），只对正文做 diff3 保证不了整个聚合一致。`adopt` 落一条 `human_adopt` revision 并把审批退回 pending；`dismiss` 当前稿一字不动、候选进 `dismissed[]`（否则同一候选每跑一次机器就复活一次）。⚠ 「采纳后再编辑」不是第三个端点，是 adopt 之后照常 `POST /stage0/edit`。决定按内容寻址保留，崩溃后同一请求幂等重放；只有 `ok/landed_red` 才清理一次性 plan |
 | `POST /api/novels/:sid/review/:o/edit` | `DraftEditRequest`（仅 `segments[{slot,text}]`，无 mode） | typed segments 落 `_service/edits/` 一次性 JSON 稿（文件名带 `ch{o}`，`--apply-edit` 从文件名认章）；slot 必须唯一，最终与计划 slot 集合完全一致且顺序由 producer 决定的校验归 `stage5.write --apply-edit`。随后走**与生成稿同一个判定落点**（归一 → 判据 → 归档 → 写回，`origin=human` 记账）；仍有阻断级**只报不拦**（人改的往往正是机器修不动的地方）。⚠ **没有乐观锁**：并发改稿以整份归档兜底，覆盖的代价是多花一轮归档——登记为已知限制，不在 API 层造第二套锁 |
 | `POST /api/novels/:sid/stage6/approve` | `HookApproveRequest`（`pick`、`actor`、`reason`、`subject_sha256`） | **不收文本**；完整 hash 与当前候选乐观绑定，actor 是自报而非认证身份。改字是另一个节点（`stage6.hook --apply-edit`），契约把编辑文件钉死在书目录内，`R-11.3` 禁止服务进程写产物盘。**`stage6/edit` / `stage7/edit` 刻意不在 HTTP**，走 CLI |

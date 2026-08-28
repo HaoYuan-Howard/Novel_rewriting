@@ -36,6 +36,23 @@ def _request() -> GlobalReviewDecisionSet:
     })
 
 
+def _scope_request() -> GlobalReviewDecisionSet:
+    return GlobalReviewDecisionSet.model_validate({
+        'actor': 'reviewer-scope',
+        'decisions': [],
+        'blocking_scope': {
+            'expected_source_sha256': 'a' * 64,
+            'expected_blocking_scope_sha256': 'b' * 64,
+            'expected_workpack_sha256': 'c' * 64,
+            'expected_item_count': 12,
+            'reviewed_chapter_ordinals': [1, 2, 3],
+            'state': 'PASS',
+            'reason': '已逐项通读当前工作包与所列全部正文章',
+            'evidence': [],
+        },
+    })
+
+
 @pytest.mark.parametrize('exit_code,stamp_expected', [(0, True), (1, False), (2, False)])
 def test_global_review_http_stamps_s2_only_after_all_pass(
     monkeypatch, tmp_path, exit_code, stamp_expected,
@@ -125,6 +142,17 @@ def test_api_upload_uses_the_same_versioned_decision_contract(tmp_path):
     path = uploads.save_global_review_decisions(tmp_path, 'book-a', decisions)
 
     raw = json.loads(path.read_text(encoding='utf-8'))
-    assert raw['_schema_version'] == 1
+    assert raw['_schema_version'] == 2
     decoded = decode_artifact('stage2/global_review_decisions.json', raw).payload
     assert GlobalReviewDecisionSet.model_validate(decoded) == decisions
+
+
+def test_api_upload_preserves_the_compact_scope_binding(tmp_path):
+    decisions = _scope_request()
+
+    path = uploads.save_global_review_decisions(tmp_path, 'book-a', decisions)
+
+    raw = json.loads(path.read_text(encoding='utf-8'))
+    decoded = decode_artifact('stage2/global_review_decisions.json', raw).payload
+    assert GlobalReviewDecisionSet.model_validate(decoded) == decisions
+    assert decoded['blocking_scope']['expected_workpack_sha256'] == 'c' * 64

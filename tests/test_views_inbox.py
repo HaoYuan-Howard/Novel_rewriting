@@ -80,6 +80,53 @@ def test_human_only_collects_hits_whose_remediation_is_human():
     assert '--apply-edit' in human[0].how or '--pick' in human[0].how
 
 
+def test_missing_blueprint_projection_inbox_points_only_to_free_materialization():
+    """待办文案不能把缺伴生产物说成要重新付费抽 Global。"""
+    from novel.views import inbox as I
+
+    grounding = SimpleNamespace(
+        rel='stage2/global_grounding.json', exists=True, readable=True,
+        freshness='fresh', invalid=False,
+    )
+    projection = SimpleNamespace(
+        rel='stage2/blueprint_character_projection.json', exists=False,
+        readable=True, freshness='unknown', invalid=False,
+    )
+    ov = SimpleNamespace(stages=[SimpleNamespace(
+        stage='stage2', artifacts=[grounding, projection])])
+
+    rows = I._stage2_projection_recovery_items(ov)
+
+    assert len(rows) == 1 and rows[0].kind == 'repairable'
+    assert rows[0].rule == 'blueprint_character_projection'
+    assert 'stage2.global --renormalize' in rows[0].how
+    assert '0 LLM' in rows[0].how and '不会重采付费 Global' in rows[0].how
+
+
+def test_legacy_v6_blueprint_inbox_points_only_to_free_renormalize():
+    """旧来源账有独立 0-LLM 待办，不应建议付费重采 Blueprint。"""
+    from novel.views import inbox as I
+
+    projection = SimpleNamespace(
+        rel='stage2/blueprint_character_projection.json', exists=True,
+        readable=True, freshness='fresh', invalid=False, reason='match',
+    )
+    blueprint = SimpleNamespace(
+        rel='stage2/chapter_blueprints.json', exists=True,
+        readable=True, freshness='unknown', invalid=False,
+        reason='consumed_unresolved',
+    )
+    ov = SimpleNamespace(stages=[SimpleNamespace(
+        stage='stage2', artifacts=[projection, blueprint])])
+
+    rows = I._stage2_legacy_blueprint_recovery_items(ov)
+
+    assert len(rows) == 1 and rows[0].kind == 'repairable'
+    assert rows[0].rule == 'chapter_blueprints_legacy_inputs'
+    assert 'stage2.blueprint --renormalize' in rows[0].how
+    assert '0 LLM' in rows[0].how and '不会重采付费 Blueprint' in rows[0].how
+
+
 def test_stage5_band_drift_is_one_book_task_with_chapter_details_preserved():
     """inbox 直接消费 CheckReport 的书级 finding，不再做第二次聚合。"""
     from novel.views import inbox as I

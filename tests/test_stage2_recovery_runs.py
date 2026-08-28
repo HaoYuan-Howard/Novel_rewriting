@@ -1901,17 +1901,19 @@ def test_v2_detail_failure_after_boundary_batch_cannot_pause_a_second_time(
         prefers_content_over_reasoning_salvage=False,
         system=detail_system,
     )
-
-    class _GlobalStub:
-        def model_dump(self, *, by_alias=False):
-            return {'entities': {'characters': {}}}
+    character_projection = extract.materialize_blueprint_character_projection(
+        {}, main_text)
+    character_projection_raw = character_projection.model_dump(
+        by_alias=True, mode='json')
 
     monkeypatch.setattr(extract, '_active_spec', lambda: spec)
-    monkeypatch.setattr(extract, 'build_prompts', lambda _ctx, chapters=(): requests)
+    monkeypatch.setattr(
+        extract, 'build_prompts',
+        lambda _ctx, chapters=(), **_kwargs: requests)
     monkeypatch.setattr(extract, '_read_main_text', lambda _store: main_text)
     monkeypatch.setattr(
-        extract.ArtifactStore, 'read',
-        lambda _store, _model, _rel: _GlobalStub())
+        extract, '_require_blueprint_character_projection',
+        lambda _store: (character_projection, character_projection_raw))
     monkeypatch.setattr(
         extract, 'build_blueprint_user',
         lambda *_args, **_kwargs: 'DETAIL USER 1')

@@ -8,7 +8,9 @@ from pathlib import Path
 import pytest
 
 from contracts.schema.stage1 import MainText
-from contracts.schema.stage2 import ChapterBlueprints, ChapterBlueprintsResponseV31
+from contracts.schema.stage2 import (
+    ChapterBlueprints, ChapterBlueprintsResponseV31, GlobalGrounding,
+)
 from novel import prov
 from novel.errors import GateBlocked, ProvenanceRefused
 from novel.llm import stage2_runs
@@ -161,6 +163,36 @@ def test_blueprint_candidate_finalizes_through_existing_commit_journal(tmp_path)
     assert committed['attempts'] == sorted(
         attempt for _purpose, attempt in evaluation.accepted_attempts)
     assert extract.verify_blueprint_delivery(ctx, landed).passed
+
+
+def test_blueprint_candidate_rejects_naming_projection_drift_after_wire(tmp_path):
+    """P1 prompt 的响应不得在并发 Global 称名变成 P2 后按 P2 编译/记账。"""
+    book = tmp_path / '蓝图请求后称名漂移_504'
+    book.mkdir()
+    _land_global(book)
+    ctx = _ctx(book, 'stage2.blueprint')
+    client, transport = _blueprint_client(ctx, _response_blueprints())
+    batch = extract.request_blueprints(ctx, client)
+    request_projection = batch['character_projection']
+
+    global_ctx = _ctx(book, 'stage2.global')
+    store = ArtifactStore(global_ctx)
+    grounding, _raw = store.read_own(GlobalGrounding, extract.GLOBAL_REL)
+    changed = grounding.model_dump(by_alias=True, mode='json')
+    # 改成正文第 3 章真实出现的唯一字面，确保这不只是
+    # Global 整份字节变化，而是请求已经消费的称名投影真的从 P1 变 P2。
+    changed['entities']['characters']['char_001']['canonical'] = '管家'
+    replacement = GlobalGrounding.model_validate(changed)
+    extract._write_formal(store, extract.GLOBAL_REL, replacement)
+    _projection, current_projection = \
+        extract._require_blueprint_character_projection(store)
+    assert current_projection != request_projection, '反例没有真正改变称名投影'
+
+    with pytest.raises(ProvenanceRefused, match='请求后称名投影发生漂移'):
+        extract.evaluate_blueprint_candidate(ctx, client, batch)
+    assert len(transport.calls) == len(main_text()), '拒绝发生在已有 wire 之后，不追加请求'
+    assert not (book / extract.BLUEPRINT_REL).exists()
+    assert not (book / extract._INVALID).exists()
 
 
 def test_blueprint_code_drift_is_rejected_before_settle_or_write(

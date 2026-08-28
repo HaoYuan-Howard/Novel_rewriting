@@ -6,6 +6,7 @@ import json
 from datetime import datetime, timezone
 from typing import Any
 
+from contracts.artifacts import STAGE1_MAIN_TEXT
 from contracts.invariants import (
     GLOBAL_REVIEW_EFFECTS, GLOBAL_REVIEW_KINDS, review_effect_of,
 )
@@ -16,6 +17,9 @@ from novel.core.evidence import iter_global_evidence_slots, without_global_evide
 from novel.errors import HumanEditProtected
 
 
+UNBOUND_WORKPACK_SHA256 = '0' * 64
+
+
 def _canonical(value: Any) -> bytes:
     return json.dumps(
         value, ensure_ascii=False, sort_keys=True, separators=(',', ':'),
@@ -24,6 +28,24 @@ def _canonical(value: Any) -> bytes:
 
 def subject_sha256(value: Any) -> str:
     return hashlib.sha256(_canonical(value)).hexdigest()
+
+
+def blocking_scope_sha256(review: GlobalReview) -> str:
+    """绑定当前完整 blocking ``(item_id, subject_sha256)`` 面。
+
+    不能只 hash ``item_id``：同一路径的事实改字后 id 虽通常也会变，但 scope 的契约是
+    明说逐项主体身份，不依赖 id 生成文法的偶然性质。``source_sha256`` 同时入账，避免
+    一份手写 review 搬用另一份 grounding 的同形 item 集合。
+    """
+    rows = [
+        (item.item_id, item.subject_sha256)
+        for item in review.items
+        if review_effect_of(item.kind) == 'blocking'
+    ]
+    return subject_sha256({
+        'source_sha256': review.source_sha256,
+        'blocking_items': rows,
+    })
 
 
 def _item(kind: str, path: str, value: Any) -> GlobalReviewItem:
@@ -53,8 +75,30 @@ def _fact_item(
     return _item(kind, path, {'claim': claim, 'evidence': evidence})
 
 
-def enumerate_required(global_grounding: dict[str, Any]) -> list[GlobalReviewItem]:
-    """Derive every review subject from the typed Stage2 surface.
+def _whole_book_item(
+    kind: str,
+    path: str,
+    value: Any,
+    main_text_input: Any,
+) -> GlobalReviewItem:
+    """把必须通读全书的决定同时绑定到 Global 主体与正文输入身份。
+
+    普通事实有自己的 claim/evidence hash，正文别处改字不该把它们全部重开；集合
+    完整性、冲突分期与整条 arc 却是在回答“这本完整正文有没有漏/分对”。若只 hash
+    Global 结果，同章数的新正文重新抽出同形 Global 时，旧的全书 PASS 会被继承。
+    ``main_text_input`` 取 Global provenance 里 producer 真正读到的 MainText 边，
+    不另读正文、也不另造一套 freshness 算法。
+    """
+    return _item(kind, path, {
+        'subject': value,
+        'main_text_input': main_text_input,
+    })
+
+
+def enumerate_required(
+    global_grounding: dict[str, Any], *, main_text_input: Any = None,
+) -> list[GlobalReviewItem]:
+    """从 typed Stage2 表面派生全部人工复核主体。
 
     ⚠⚠ **没被枚举出来的字段等于没人审。** 这份清单是 `R-2.16` 那道硬闸的评测面，
     下游全部付费执行与成书组装都压在它上面；`R-2.16` 说的「与当前 grounding 完整
@@ -104,10 +148,12 @@ def enumerate_required(global_grounding: dict[str, Any]) -> list[GlobalReviewIte
     # 改写事实则必须重新通读来源确认没有漏项。
     projected_characters = projected_entities.get('characters') or {}
     projected_relations = projected_entities.get('relations') or []
-    rows.append(_item(
-        'character_set_complete', 'entities.characters', projected_characters))
-    rows.append(_item(
-        'relation_set_complete', 'entities.relations', projected_relations))
+    rows.append(_whole_book_item(
+        'character_set_complete', 'entities.characters', projected_characters,
+        main_text_input))
+    rows.append(_whole_book_item(
+        'relation_set_complete', 'entities.relations', projected_relations,
+        main_text_input))
     for cid, character in sorted((entities.get('characters') or {}).items()):
         rows.append(_item(
             'name_distinctiveness', f'entities.characters.{cid}.name_distinctiveness',
@@ -156,13 +202,14 @@ def enumerate_required(global_grounding: dict[str, Any]) -> list[GlobalReviewIte
     secrets = canon.get('secrets') or []
     projected_world_rules = projected_canon.get('world_rules') or []
     projected_secrets = projected_canon.get('secrets') or []
-    # Completeness is not implied by reviewing the rows that happened to be
-    # extracted.  In particular, an empty list still needs a human decision
-    # saying that no rule/secret was omitted from the source.
-    rows.append(_item(
-        'world_rule_set_complete', 'canon.world_rules', projected_world_rules))
-    rows.append(_item(
-        'secret_set_complete', 'canon.secrets', projected_secrets))
+    # 逐条核已抽出的内容，不能证明集合没有整项漏抽；即使列表为空，也必须由人明确判断
+    # 原文中确实没有被漏掉的规则或秘密。
+    rows.append(_whole_book_item(
+        'world_rule_set_complete', 'canon.world_rules', projected_world_rules,
+        main_text_input))
+    rows.append(_whole_book_item(
+        'secret_set_complete', 'canon.secrets', projected_secrets,
+        main_text_input))
     for ri, rule in enumerate(world_rules):
         rid = rule.get('rule_id') or str(ri)
         rows.append(_item('world_rule_kind', f'canon.world_rules.{rid}.kind', rule.get('kind')))
@@ -197,11 +244,16 @@ def enumerate_required(global_grounding: dict[str, Any]) -> list[GlobalReviewIte
     # 每条都判不出对错 ⇒ 整体一项。
     arc = global_grounding.get('arc') or {}
     projected_arc = projected.get('arc') or {}
-    rows.append(_item(
-        'conflict_partition', 'arc.conflict_stages', arc.get('conflict_stages') or []))
-    rows.append(_fact_item('arc_analysis', 'arc', {
-        key: value for key, value in projected_arc.items() if key != 'conflict_stages'
-    }, evidence_for('arc', grouped=True)))
+    rows.append(_whole_book_item(
+        'conflict_partition', 'arc.conflict_stages',
+        arc.get('conflict_stages') or [], main_text_input))
+    rows.append(_whole_book_item('arc_analysis', 'arc', {
+        'claim': {
+            key: value for key, value in projected_arc.items()
+            if key != 'conflict_stages'
+        },
+        'evidence': evidence_for('arc', grouped=True),
+    }, main_text_input))
     return rows
 
 
@@ -210,6 +262,10 @@ def build_review(
     previous: GlobalReview | None = None,
 ) -> GlobalReview:
     """Carry decisions only when their exact subject hash survives an edit."""
+    provenance = global_grounding.get('_provenance') or {}
+    inputs = provenance.get('inputs') if isinstance(provenance, dict) else None
+    main_text_input = (
+        inputs.get(STAGE1_MAIN_TEXT) if isinstance(inputs, dict) else None)
     source = {
         key: value for key, value in global_grounding.items()
         if key not in {'_provenance', '_schema_version'}
@@ -219,7 +275,7 @@ def build_review(
         for item in (previous.items if previous else [])
     }
     items = []
-    for fresh in enumerate_required(source):
+    for fresh in enumerate_required(source, main_text_input=main_text_input):
         inherited = prior.get((
             fresh.item_id, fresh.kind, fresh.subject_path, fresh.subject_sha256))
         items.append(inherited if inherited is not None else fresh)
@@ -370,11 +426,73 @@ def apply_decision_set(
     review: GlobalReview,
     decision_set: GlobalReviewDecisionSet,
     *,
+    expected_chapter_ordinals: tuple[int, ...] | None = None,
+    expected_workpack_sha256: str | None = None,
     now: str | None = None,
 ) -> GlobalReview:
-    """Apply a batch atomically in memory; any stale row rejects the whole set."""
+    """Apply a batch atomically in memory; any stale row/scope rejects the whole set.
+
+    ``blocking_scope`` 是“除显式例外外，其余当前 blocking 项同一裁决”的压缩输入。
+    持久 review 仍逐项展开，所以下游闸、inbox 与旧消费者完全不需要理解默认值。
+    """
+    if decision_set.actor.strip().startswith('待填'):
+        raise HumanEditProtected(
+            'global-review actor 仍是模板占位值；必须填真实审阅者身份')
+    for row in decision_set.decisions:
+        if row.state != 'UNVER' and row.reason.strip().startswith('待人工核验'):
+            raise HumanEditProtected(
+                f'{row.item_id} 的 {row.state} 仍沿用模板占位理由；'
+                '拒绝把改枚举冒充审阅')
+
     result = review
     timestamp = now or datetime.now(timezone.utc).isoformat()
+    explicit_ids = {row.item_id for row in decision_set.decisions}
+    scope = decision_set.blocking_scope
+    if scope is not None:
+        if scope.expected_workpack_sha256 == UNBOUND_WORKPACK_SHA256:
+            raise HumanEditProtected(
+                'global-review blocking scope 仍未绑定实际阅读的 workpack；'
+                '请从已完整读过的 workpack 顶层复制 workpack_sha256')
+        if (scope.state != 'UNVER'
+                and scope.reason.strip().startswith('待人工核验')):
+            raise HumanEditProtected(
+                f'blocking scope 的 {scope.state} 仍沿用模板占位理由；'
+                '拒绝只改状态就批量开闸')
+        blocking = [item for item in review.items
+                    if review_effect_of(item.kind) == 'blocking']
+        if scope.expected_source_sha256 != review.source_sha256:
+            raise HumanEditProtected(
+                'global-review source changed; stale blocking scope rejected')
+        if scope.expected_blocking_scope_sha256 != blocking_scope_sha256(review):
+            raise HumanEditProtected(
+                'global-review blocking item/hash surface changed; stale scope rejected')
+        if scope.expected_item_count != len(blocking):
+            raise HumanEditProtected(
+                'global-review blocking item count changed; stale scope rejected')
+        if (expected_workpack_sha256 is None
+                or scope.expected_workpack_sha256 != expected_workpack_sha256):
+            raise HumanEditProtected(
+                'global-review blocking workpack changed; stale reading claim rejected')
+        if expected_chapter_ordinals is None:
+            raise HumanEditProtected(
+                'blocking scope decision 缺当前 main_text 章全集，拒绝把阅读声明当成已核验')
+        chapters = tuple(scope.reviewed_chapter_ordinals)
+        if chapters != expected_chapter_ordinals:
+            raise HumanEditProtected(
+                'blocking scope 的 reviewed_chapter_ordinals 未精确覆盖当前正文章全集')
+        for item in blocking:
+            if item.item_id in explicit_ids:
+                continue
+            result = decide(
+                result,
+                item_id=item.item_id,
+                expected_subject_sha256=item.subject_sha256,
+                state=scope.state,
+                actor=decision_set.actor,
+                reason=scope.reason,
+                evidence=[ref.model_dump() for ref in scope.evidence],
+                now=timestamp,
+            )
     for row in decision_set.decisions:
         result = decide(
             result,

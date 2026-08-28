@@ -55,6 +55,35 @@ class GlobalNormalizationAccounting(dict[str, Any]):
         self.evidence_locator_corrections = tuple(evidence_locator_corrections)
 
 
+class FactAtomRehome(NamedTuple):
+    """一次由原文唯一性推出的事实证据改绑；成功态不重复写进 artifact。"""
+
+    chapter_ordinal: int
+    fact_id: str
+    original_beat_ref: str
+    resolved_beat_ref: str
+    recovery: Literal['exact', 'normalized']
+
+
+class BlueprintNormalizationAccounting(dict[str, Any]):
+    """Blueprint 正式 provenance 的失败账，以及本次成功 rehome 的瞬时观察面。"""
+
+    fact_atom_rehomes: tuple[FactAtomRehome, ...]
+
+    def __init__(
+        self,
+        *,
+        verbatim_failures: list[tuple[str, str, str]],
+        fact_atom_failures: list[tuple[str, str, str]],
+        fact_atom_rehomes: list[FactAtomRehome],
+    ) -> None:
+        super().__init__(
+            verbatim_failures=verbatim_failures,
+            fact_atom_failures=fact_atom_failures,
+        )
+        self.fact_atom_rehomes = tuple(fact_atom_rehomes)
+
+
 def restore_failed_global_evidence_locators(
     data: dict[str, Any],
     failures: list[tuple[str, int, str, str]],
@@ -460,6 +489,64 @@ def _source(text: str, start: int, end: int) -> dict[str, Any]:
     }
 
 
+def locate_fact_atom_source(
+    chapter_text: str,
+    phrase: str,
+    declared_beat_ref: str,
+    beats: list[dict[str, Any]],
+) -> tuple[str | None, dict[str, Any] | None, str | None, str]:
+    """按「声明拍优先、全章唯一才改绑」定位一条事实原子证据。
+
+    返回 ``(beat_ref, source, recovery, cause)``。成功时 ``cause`` 为空；失败时
+    前三格为空并给稳定根因。声明拍内已经唯一命中时维持模型分拍，即使同一句在
+    别拍重复也不擅自改绑；只有声明拍内 0 命中，才扩大到全章，并要求命中区间
+    完整落入**恰好一个**有效 beat。这样跨拍的内容空间命中、重叠坏区间和没有
+    可用 span 的目标拍都不会被 ``find`` 首命中洗成成功。
+    """
+    ranges: list[tuple[str, int, int]] = []
+    declared: tuple[int, int] | None = None
+    for beat in beats:
+        beat_ref = str(beat.get('beat_id') or '')
+        span = beat.get('span')
+        start = span.get('start') if isinstance(span, dict) else None
+        end = span.get('end') if isinstance(span, dict) else None
+        if type(start) is not int or type(end) is not int:
+            continue
+        if start < 0 or end <= start or end > len(chapter_text):
+            continue
+        ranges.append((beat_ref, start, end))
+        if beat_ref == declared_beat_ref:
+            declared = (start, end)
+
+    if declared is None:
+        return None, None, None, '所属拍没有可用 span'
+
+    declared_start, declared_end = declared
+    local = locate_unique_span(
+        chapter_text[declared_start:declared_end], phrase)
+    if isinstance(local, tuple):
+        offset, tail, recovery = local
+        start, end = declared_start + offset, declared_start + tail
+        return declared_beat_ref, _source(chapter_text, start, end), recovery, ''
+    if isinstance(local, int):
+        return None, None, None, '证据短语在所属拍内多处命中'
+
+    chapter_hit = locate_unique_span(chapter_text, phrase)
+    if isinstance(chapter_hit, int):
+        return None, None, None, '证据短语在本章多处命中'
+    if chapter_hit is None:
+        return None, None, None, '证据短语不在本章原文'
+
+    start, end, recovery = chapter_hit
+    owners = [
+        beat_ref for beat_ref, beat_start, beat_end in ranges
+        if beat_start <= start and end <= beat_end
+    ]
+    if len(owners) != 1:
+        return None, None, None, '证据短语不能唯一归属一个 beat'
+    return owners[0], _source(chapter_text, start, end), recovery, ''
+
+
 def _blank_hinge(hinge: dict[str, Any]) -> None:
     """把一条 hinge 打回失败态：只留 `kind`，`source` 置空。
 
@@ -609,8 +696,103 @@ def normalize_verbatim(blueprints: list[dict[str, Any]],
     return {'verbatim_failures': failures}
 
 
-def normalize_blueprints(data: dict[str, Any], main_text: list[dict[str, Any]]) \
-        -> tuple[dict[str, Any], dict[str, Any]]:
+def normalize_fact_atom_sources(
+    blueprints: list[dict[str, Any]],
+    text_of: dict[int, str],
+    *,
+    previous_failures: list[tuple[str, str, str]] = (),
+    evidence_phrases: dict[str, str] | None = None,
+) -> tuple[list[tuple[str, str, str]], list[FactAtomRehome]]:
+    """重验正式 fact atom 证据，并用已对证的短语作确定性 rehome。
+
+    ``evidence_phrases`` 不是人工自由输入：生产调用方只从当前 compiler 的响应，
+    或与 INVALID 业务章逐字段闭合的已验证 checkpoint 取得。失败 artifact 本身只留
+    ``source=None``，所以这里显式接收恢复材料；拿 claim 猜 locator 会把转述当证据，
+    是本函数刻意不做的事。
+    """
+    locators = evidence_phrases or {}
+    prior_by_fact: dict[str, list[tuple[str, str, str]]] = {}
+    for row in previous_failures:
+        if len(row) == 3:
+            prior_by_fact.setdefault(str(row[0]), []).append(tuple(row))
+
+    failures: list[tuple[str, str, str]] = []
+    rehomes: list[FactAtomRehome] = []
+    seen_facts: set[str] = set()
+    for blueprint in blueprints:
+        ordinal = int(blueprint.get('chapter_ordinal') or 0)
+        chapter_text = text_of.get(ordinal, '')
+        beats = list(blueprint.get('beats') or [])
+        ranges = {
+            str(beat.get('beat_id') or ''): (
+                (beat.get('span') or {}).get('start'),
+                (beat.get('span') or {}).get('end'),
+            )
+            for beat in beats
+        }
+        for atom in (blueprint.get('fact_atoms') or []):
+            fact_id = str(atom.get('fact_id') or '')
+            beat_ref = str(atom.get('source_beat_ref') or '')
+            seen_facts.add(fact_id)
+            source = atom.get('source')
+            if source is not None:
+                start, end, problem = exact_span(source, chapter_text)
+                beat_range = ranges.get(beat_ref)
+                in_declared = (
+                    isinstance(beat_range, tuple)
+                    and type(beat_range[0]) is int
+                    and type(beat_range[1]) is int
+                    and beat_range[0] <= start
+                    and end <= beat_range[1]
+                )
+                if problem is None and in_declared:
+                    # 重新落一次 `_source`，确保正式字节只来自当前 main_text。
+                    atom['source'] = _source(chapter_text, start, end)
+                    continue
+                atom['source'] = None
+                failures.append((
+                    fact_id, beat_ref,
+                    '已落盘的 source 与它声明的 beat 区间对不上',
+                ))
+                continue
+
+            phrase = locators.get(fact_id)
+            if not isinstance(phrase, str) or not phrase.strip():
+                old = prior_by_fact.get(fact_id)
+                failures.extend(old or [(
+                    fact_id, beat_ref, '事实原子 source 为空且没有可恢复证据短语',
+                )])
+                continue
+            resolved_ref, resolved_source, recovery, cause = locate_fact_atom_source(
+                chapter_text, phrase, beat_ref, beats)
+            if resolved_ref is None or resolved_source is None or recovery is None:
+                failures.append((fact_id, beat_ref, cause))
+                continue
+            atom['source_beat_ref'] = resolved_ref
+            atom['source'] = resolved_source
+            if resolved_ref != beat_ref:
+                rehomes.append(FactAtomRehome(
+                    chapter_ordinal=ordinal,
+                    fact_id=fact_id,
+                    original_beat_ref=beat_ref,
+                    resolved_beat_ref=resolved_ref,
+                    recovery=recovery,
+                ))
+
+    # 删除失败 atom 不能顺手洗掉不可变失败账；人工业务修改应走有审计的 typed 路。
+    for fact_id, rows in prior_by_fact.items():
+        if fact_id not in seen_facts:
+            failures.extend(rows)
+    return failures, rehomes
+
+
+def normalize_blueprints(
+    data: dict[str, Any],
+    main_text: list[dict[str, Any]],
+    *,
+    previous_fact_atom_failures: list[tuple[str, str, str]] = (),
+    evidence_phrases: dict[str, str] | None = None,
+) -> tuple[dict[str, Any], BlueprintNormalizationAccounting]:
     """重验正式蓝图中的证据区间；人物 id 不做第二次名字反解。"""
     blueprints = list(data.get('blueprints') or [])
     data['blueprints'] = blueprints
@@ -618,4 +800,14 @@ def normalize_blueprints(data: dict[str, Any], main_text: list[dict[str, Any]]) 
     text_of = {int(section.get('chapter_ordinal') or 0): str(section.get('text') or '')
                for section in main_text}
     verbatim = normalize_verbatim(blueprints, text_of)
-    return data, verbatim
+    fact_failures, rehomes = normalize_fact_atom_sources(
+        blueprints,
+        text_of,
+        previous_failures=previous_fact_atom_failures,
+        evidence_phrases=evidence_phrases,
+    )
+    return data, BlueprintNormalizationAccounting(
+        verbatim_failures=list(verbatim['verbatim_failures']),
+        fact_atom_failures=fact_failures,
+        fact_atom_rehomes=rehomes,
+    )

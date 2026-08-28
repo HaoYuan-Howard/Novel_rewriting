@@ -39,6 +39,7 @@
   "consumed_changed",
   "consumed_undeclared",
   "consumed_unresolved",
+  "global_naming_blocked",
   "match"
  ],
  "badge": [
@@ -610,6 +611,7 @@
   "--apply-candidate-plan": "审校台生成的 stage0 候选裁决（采纳 / 否掉整版 + 乐观锁）",
   "--actor": "人工决定的自报身份（不是认证身份）",
   "--reason": "人工决定的非空理由",
+  "--expected-revision-id": "Stage0 人工批准乐观锁定的完整 revision SHA-256；必须取自本次实际审阅的 current/workpack",
   "--subject-sha256": "人工决定乐观锁定的完整内容 SHA-256",
   "--source": "要摄入的原始小说 txt/md 路径；新书在目录产生前没有 sid",
   "--pick": "定稿选第几个候选（1 起）",
@@ -773,6 +775,7 @@
    "stage": "stage0",
    "section": "R-0",
    "flags": [
+    "--expected-revision-id",
     "--actor",
     "--reason"
    ],
@@ -832,7 +835,8 @@
    ],
    "produces": [
     "stage2/global_grounding.json",
-    "stage2/global_review.json"
+    "stage2/global_review.json",
+    "stage2/blueprint_character_projection.json"
    ]
   },
   "stage2.blueprint": {
@@ -1099,6 +1103,10 @@
    "needs_value": null,
    "required_inputs": [
     {
+     "flag": "--expected-revision-id",
+     "description": "Stage0 人工批准乐观锁定的完整 revision SHA-256；必须取自本次实际审阅的 current/workpack"
+    },
+    {
      "flag": "--actor",
      "description": "人工决定的自报身份（不是认证身份）"
     },
@@ -1210,7 +1218,7 @@
    "extra": null,
    "paid": true,
    "free_flag": null,
-   "writes": "stage2/global_grounding.json · stage2/global_review.json",
+   "writes": "stage2/global_grounding.json · stage2/global_review.json · stage2/blueprint_character_projection.json",
    "writes_disk": true,
    "needs_value": null,
    "required_inputs": []
@@ -1236,7 +1244,7 @@
    ],
    "paid": true,
    "free_flag": null,
-   "writes": "stage2/global_grounding.json · stage2/global_review.json",
+   "writes": "stage2/global_grounding.json · stage2/global_review.json · stage2/blueprint_character_projection.json",
    "writes_disk": true,
    "needs_value": null,
    "required_inputs": []
@@ -1249,7 +1257,7 @@
    ],
    "paid": true,
    "free_flag": null,
-   "writes": "stage2/global_grounding.json · stage2/global_review.json",
+   "writes": "stage2/global_grounding.json · stage2/global_review.json · stage2/blueprint_character_projection.json",
    "writes_disk": true,
    "needs_value": null,
    "required_inputs": []
@@ -1297,7 +1305,7 @@
    ],
    "paid": false,
    "free_flag": "--review-decisions",
-   "writes": "stage2/global_grounding.json · stage2/global_review.json",
+   "writes": "stage2/global_grounding.json · stage2/global_review.json · stage2/blueprint_character_projection.json",
    "writes_disk": true,
    "needs_value": "stage2/global_review 的人工决策集（相对当前书目录）",
    "required_inputs": []
@@ -1336,7 +1344,7 @@
    ],
    "paid": true,
    "free_flag": null,
-   "writes": "stage2/global_grounding.json · stage2/global_review.json",
+   "writes": "stage2/global_grounding.json · stage2/global_review.json · stage2/blueprint_character_projection.json",
    "writes_disk": true,
    "needs_value": "只读复核输出的范围：`blocking`（默认，只出能挡 Stage4 的项）或 `all`（整份评测面）。它不改评测面，也不改任何判定",
    "required_inputs": []
@@ -1349,7 +1357,7 @@
    ],
    "paid": true,
    "free_flag": null,
-   "writes": "stage2/global_grounding.json · stage2/global_review.json",
+   "writes": "stage2/global_grounding.json · stage2/global_review.json · stage2/blueprint_character_projection.json",
    "writes_disk": true,
    "needs_value": "结构化拒绝响应恢复模式；当前只接受 `agent`。可修复响应先隔离并停给外层受托 agent，同闸复验失败才继续采样",
    "required_inputs": []

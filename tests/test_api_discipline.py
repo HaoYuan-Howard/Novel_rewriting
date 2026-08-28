@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import ast
 import os
+from types import SimpleNamespace
 
 import pytest
 
@@ -342,7 +343,7 @@ def test_the_spoiler_disclosure_boundary_is_published():
 
 # ───────────────────────── `R-11.10`：映射 + 真实冲突行为 ─────────────────────────
 
-def test_job_conflict_maps_and_returns_409():
+def test_job_conflict_maps_and_returns_409(monkeypatch):
     """`R-11.10`：同一本书已有作业占锁时，第二个 Stage 0 请求真的返回 409。
 
     通用 `POST /api/jobs` 已明确开放；所有变更入口仍受同一 CSRF 中间件和书级锁保护。
@@ -351,6 +352,12 @@ def test_job_conflict_maps_and_returns_409():
     pytest.importorskip('fastapi', reason='没装 fastapi ⇒ 真实 409 行为**没在查**')
     from fastapi.testclient import TestClient
     from novel.api.app import UI_HEADER, create_app
+    from novel.api.routes import ingest as ingest_route
+
+    revision_id = '0' * 64
+    monkeypatch.setattr(
+        ingest_route.ingest, 'stage0_report',
+        lambda _base, _sid: SimpleNamespace(revision_id=revision_id))
 
     app = create_app(ROOT)
     posts = [p for p, ops in app.openapi()['paths'].items()
@@ -402,7 +409,9 @@ def test_job_conflict_maps_and_returns_409():
             response = client.post(
                 f'/api/novels/{sid}/stage0/approve',
                 headers={UI_HEADER: '1'},
-                json={'actor': 'api-discipline-test', 'reason': 'lock conflict test'},
+                json={'expected_revision_id': revision_id,
+                      'actor': 'api-discipline-test',
+                      'reason': 'lock conflict test'},
             )
     finally:
         J.REGISTRY.release(key, holder)

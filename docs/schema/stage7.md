@@ -36,6 +36,11 @@ Stage 7 负责人物真名替换与最终成书。模型只产改名决定；映
 | `identity` | `IdentityBaseline｜null` | 恒等替换基线 |
 | `_provenance` | `NameMapProvenance｜NameMapFreeProvenance` | 模型或纯人工来源账 |
 
+`stage7.rename` 的人物材料实际包含 `canonical / aliases / role` 与 `时代背景` 正文；因此
+provenance 对 `stage2/global_grounding.json` 的 consumed 投影包含 role，但 setting 只包含
+真实下发的 `时代背景`。role / 时代背景改字会使旧 name map stale；未下发的 fate、secret、
+arc、世界观与 setting evidence 不进入这条指纹，避免无消费者变化制造重跑。
+
 ### 1.1 人物决定
 
 `NameDecision`：
@@ -140,7 +145,7 @@ v1 骨架为：
 - 替换器按长度优先构造单一 alternation；`subs` 与 `kept` 同时参与，防止子串跨界。
 - 正文和已定稿文案使用同一替换器；书名只作为人工不可验证项报告。
 - 成书前要求每个输出章恰有一份正式成稿、没有 `.INVALID` 成稿，并且 Stage 6 文案已定稿。
-- 成书只能在当前 `name_map` 已人工批准、批准的 subject 仍精确等于当前决策面、provenance fresh、正文/文案消费指纹均未漂移时写入；写入后，其 sha1、字符数与章节数进入 `book_txt`。映射编辑/重判会清空旧 `book_txt`（映射编辑同时清空旧批准），并将旧 txt 移到内容寻址的 `_rounds/` 归档。
+- 成书只能在当前 `name_map` 已人工批准、批准的 subject 仍精确等于当前决策面、provenance fresh、正文/文案消费指纹均未漂移时写入；写入后，其 sha1、字符数与章节数进入 `book_txt`。映射编辑、`--identity` 与重判都会清空旧 `book_txt`，并将旧 txt 移到内容寻址的 `_rounds/` 归档。映射编辑始终清空旧批准；`--identity` / 重判只有在重写 provenance **之前**证明旧模型消费投影仍 fresh、且决策面未变时才保留批准，输入 stale / unknown 时清空批准并保留零模型 `stage7.approve` 重批路。
 - 预览/下载端点复用组装前的 approved/current/fresh 闸并复核 `book_txt` 指纹与规模；只有文件存在而账或批准不成立时拒绝返回。
 
 ## 五、当前入口
@@ -149,8 +154,8 @@ v1 骨架为：
 |---|---|---|
 | 主路径 | 付费 | 生成新人物决定并跑完整确定性闸门 |
 | `--dry-run` | 0 | 打印当前实际下发内容，不写盘 |
-| `--identity` | 0 | 运行恒等替换基线并写回结论 |
-| `--recheck` | 0 | 按当前代码重建派生字段并重判 |
+| `--identity` | 0 | 运行恒等替换基线并写回结论；若已有映射的旧模型消费投影漂移或不可证明，清空旧批准并退休旧交付物 |
+| `--recheck` | 0 | 按当前代码重建派生字段并重判；若旧模型消费投影漂移或不可证明，清空旧批准后等待人工重批 |
 | `--emit-edit-template` | 0 | stdout-only 输出 registry 绑定的 `NameMapEdit` v1 骨架，不写盘 |
 | `--apply-edit <路径>` | 0 | 应用严格人工编辑输入并开新人工修订轮。路径相对**书目录**，也接受书目录内的绝对路径；目录外（含 `..` 穿越）是显式终态（`novel/paths.py::edit_rel`，stage2/4/6/7 共用） |
 | `--adopt-residual high` | 0 | 把当前高置信残留作为新决策输入重判；其他参数关闭式拒绝 |

@@ -16,6 +16,7 @@
 | `field-notes.md` | 经验证或明确标态的经验；索引兼入口（超出整读预算后条目分片进 `field-notes/`） | 稳定公共接口、流水账 |
 | `assets/final-review-template.md` | 用户最终审阅界面 | 运行逻辑 |
 | `scripts/session_preflight.py` | 只读固化一次 run 的起始时间、代码指纹、sid 与路径 | 推进节点或替代授权检查 |
+| `scripts/stage0_review_workpack.py` | 只读复用生产 check/审校分区/`scan_text`，固定 Stage0 反向审阅模式并输出紧凑工作包 | 自动审批、自动剔除或复制生产删除判据 |
 | `scripts/run_step.py` | 调用生产 `build_steps`，核对起始代码并给每一步串 start/end 信标 | 重造 argv、判定质量或吞掉节点退出码 |
 | `scripts/collect_final_evidence.py` | 只读调用生产 state/inbox/check/组装/账本出口，按会话收拢终审事实与机器锚点 | 新造质量判据、写盘或替代逐项人工审阅 |
 | `scripts/sync_review_evidence.py` | 只改终审模板稳定标记间的机器事实块 | 改写 agent 的语义判断、代批理由或产物 |

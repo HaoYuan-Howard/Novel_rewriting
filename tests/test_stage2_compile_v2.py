@@ -26,6 +26,9 @@ from novel.stages.stage2.compile_v2 import (
     compile_v2_refs, compile_v31_refs, visible_character_refs,
 )
 from novel.stages.stage2.references import hinge_candidates
+from novel.stages.stage2.normalize import (
+    FactAtomRehome, locate_fact_atom_source, normalize_blueprints,
+)
 
 #: 5 段的合成章。段号（1-based）：1 开门 · 2 第一课台词 · 3 两担水 · 4 母亲说话 · 5 三十文。
 CH1 = ('李宝珠推开院门，井边的水汽漫上来。\n'
@@ -388,6 +391,115 @@ def test_v31_projection_is_a_valid_repair_baseline_and_round_trips():
     replayed, _ = compile_v31_refs(
         {'blueprints': [projected]}, _main_text(), CHARACTERS)
     assert replayed['blueprints'][0] == artifact
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 一·c、事实证据唯一跨拍时确定性 rehome；不能证明唯一时保持 HARD
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_fact_atom_unique_elsewhere_is_rehomed_with_an_exact_source_span():
+    raw = _data(
+        _beat(2, event='母亲宣布第一课'),
+        _beat(5, event='李宝珠完成挑水并收钱'),
+    )
+    raw['blueprints'][0]['beats'][0]['fact_atoms'][0]['evidence_phrase'] = '三十文钱'
+    raw['blueprints'][0]['beats'][1]['fact_atoms'][0]['evidence_phrase'] = '两担水'
+
+    data, accounting = _compile(raw)
+    first = data['blueprints'][0]['fact_atoms'][0]
+    start = CH1.index('三十文钱')
+
+    assert first['source_beat_ref'] == 'b01_02'
+    assert first['source'] == {
+        'text': '三十文钱', 'start': start, 'end': start + len('三十文钱')}
+    assert accounting['fact_atom_failures'] == []
+    assert accounting.fact_atom_rehomes == (
+        FactAtomRehome(
+            chapter_ordinal=1,
+            fact_id='f01_001',
+            original_beat_ref='b01_01',
+            resolved_beat_ref='b01_02',
+            recovery='exact',
+        ),
+    )
+
+
+def test_fact_atom_multiple_chapter_hits_are_not_rehomed():
+    text = '开场。\n目标在此。\n目标在此。\n收束。'
+    raw = _data(_beat(1, event='开场'), _beat(4, event='收束'))
+    raw['blueprints'][0]['beats'][0]['fact_atoms'][0]['evidence_phrase'] = '目标在此'
+    raw['blueprints'][0]['beats'][1]['fact_atoms'][0]['evidence_phrase'] = '收束'
+
+    data, accounting = _compile(raw, text=text)
+    first = data['blueprints'][0]['fact_atoms'][0]
+
+    assert first['source_beat_ref'] == 'b01_01'
+    assert first['source'] is None
+    assert accounting['fact_atom_failures'][0] == (
+        'f01_001', 'b01_01', '证据短语在本章多处命中')
+    assert accounting.fact_atom_rehomes == ()
+
+
+def test_fact_atom_content_match_across_a_beat_boundary_is_not_rehomed():
+    text = '起。\n甲。\n乙。\n终。'
+    raw = _data(_beat(2, event='起'), _beat(4, event='终'))
+    raw['blueprints'][0]['beats'][0]['fact_atoms'][0]['evidence_phrase'] = '甲乙'
+    raw['blueprints'][0]['beats'][1]['fact_atoms'][0]['evidence_phrase'] = '终'
+
+    data, accounting = _compile(raw, text=text)
+    first = data['blueprints'][0]['fact_atoms'][0]
+
+    assert first['source'] is None
+    assert accounting['fact_atom_failures'][0] == (
+        'f01_001', 'b01_01', '证据短语不能唯一归属一个 beat')
+
+
+def test_renormalize_never_guesses_a_missing_locator_from_the_claim():
+    raw = _data(_beat(2, event='母亲宣布第一课'), _beat(5, event='收钱'))
+    raw['blueprints'][0]['beats'][0]['fact_atoms'][0]['evidence_phrase'] = '三十文钱'
+    raw['blueprints'][0]['beats'][0]['fact_atoms'][0]['claim'] = '三十文钱'
+    raw['blueprints'][0]['beats'][1]['fact_atoms'][0]['evidence_phrase'] = '两担水'
+    compiled, _accounting = _compile(raw)
+    atom = compiled['blueprints'][0]['fact_atoms'][0]
+    atom['source_beat_ref'] = 'b01_01'
+    atom['source'] = None
+    previous = [('f01_001', 'b01_01', '证据短语不在所属拍区间')]
+
+    normalized, accounting = normalize_blueprints(
+        compiled,
+        _main_text(),
+        previous_fact_atom_failures=previous,
+        evidence_phrases={},
+    )
+
+    assert normalized['blueprints'][0]['fact_atoms'][0]['source'] is None
+    assert accounting['fact_atom_failures'] == previous
+    assert accounting.fact_atom_rehomes == ()
+
+
+@pytest.mark.parametrize('owners', [0, 2])
+def test_fact_atom_unique_chapter_hit_requires_exactly_one_valid_beat_owner(owners):
+    text = '声明拍。\n唯一证据。'
+    beats = [{
+        'beat_id': 'b01_01',
+        'span': {'text': '声明拍。', 'start': 0, 'end': len('声明拍。')},
+    }]
+    target_start = text.index('唯一证据')
+    for index in range(owners):
+        beats.append({
+            'beat_id': f'b01_{index + 2:02d}',
+            'span': {
+                'text': '唯一证据。',
+                'start': target_start,
+                'end': len(text),
+            },
+        })
+
+    resolved, source, recovery, cause = locate_fact_atom_source(
+        text, '唯一证据', 'b01_01', beats)
+
+    assert (resolved, source, recovery) == (None, None, None)
+    assert cause == '证据短语不能唯一归属一个 beat'
 
 
 # ─────────────────────────────────────────────────────────────────────────────

@@ -921,7 +921,8 @@ def test_api_job_refused_while_the_same_book_has_an_agent(base):
                 base,
                 'stage0.approve',
                 '42',
-                ['--actor', '测试者', '--reason', '验证同书 agent 互斥'],
+                ['--expected-revision-id', 'a' * 64,
+                 '--actor', '测试者', '--reason', '验证同书 agent 互斥'],
             )
     finally:
         jobs.AGENT_REGISTRY.release(jobs.agent_lock_key('42'), 'r-test')

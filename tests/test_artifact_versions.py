@@ -111,6 +111,14 @@ _SHAPE_BREAKS: dict[str, tuple[int, str, str]] = {
         'v1/v2 都不手补字段冒充当前产地。重建后 review 按 claim+evidence 新 hash 重新 pending；'
         '这是形状破坏的真实人工成本，不能靠迁移伪装成旧决定仍有效。',
     ),
+    'stage2/global_review_decisions.json': (
+        2,
+        '2026-08-28：新增 hash-bound `blocking_scope`，允许 `decisions[]` 为空并只承载逐项'
+        '例外；服务端把 scope 默认决定展开回完整 blocking item 面。旧 v1 只能表达逐项决定，'
+        '也没有正文章全集与实际 workpack SHA-256 阅读声明',
+        '`stage2.global --emit-review-template` 免费重发 v2 模板；人工核对 scope、正文章全集与'
+        '逐项例外后重新提交。旧 v1 文件原样保留为历史输入，不改版本号冒充新阅读声明',
+    ),
     'stage2/global_edit.json': (
         3,
         '2026-08-24：secret patch/replacement 从 `character_known_by` 换成带 locator 的 '

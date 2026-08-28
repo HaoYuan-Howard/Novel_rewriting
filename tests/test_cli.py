@@ -21,7 +21,9 @@ from types import SimpleNamespace
 
 import pytest
 
-from contracts.invariants import FREE_ENTRIES, NODES, PAID_FLAGS, VALUED_FLAGS
+from contracts.invariants import (
+    FREE_ENTRIES, NODES, PAID_FLAGS, VALUED_FLAGS, review_effect_of,
+)
 from contracts.schema import decode_artifact
 from contracts.schema.evaluation import GlobalReview, GlobalReviewDecisionSet
 from contracts.schema.orchestration import AgentProfile
@@ -102,19 +104,20 @@ def test_stage2_emit_review_template_binds_current_rows_and_stays_closed(
 
     assert rc == X.OK
     template_raw = json.loads(capsys.readouterr().out)
-    assert template_raw['_schema_version'] == 1
+    assert template_raw['_schema_version'] == 2
     template = GlobalReviewDecisionSet.model_validate(decode_artifact(
         'stage2/global_review_decisions.json', template_raw).payload)
     # ⚠ `Sandbox.read` 出来的已经是**解码后的载荷**；再套一层 `decode_artifact`
     #   会去找版本标记而当场炸——这条用例从落地起就没真跑过，别照抄那一层。
     review = GlobalReview.model_validate(
         reviewed_box.read('stage2/global_review.json'))
-    current = {item.item_id: item for item in review.items}
-    assert set(current) == {row.item_id for row in template.decisions}
-    assert all(row.state == 'UNVER' for row in template.decisions)
-    assert all(row.expected_subject_sha256 == current[row.item_id].subject_sha256
-               and row.evidence == current[row.item_id].evidence
-               for row in template.decisions)
+    blocking = [item for item in review.items
+                if review_effect_of(item.kind) == 'blocking']
+    assert template.decisions == []
+    assert template.blocking_scope is not None
+    assert template.blocking_scope.state == 'UNVER'
+    assert template.blocking_scope.expected_source_sha256 == review.source_sha256
+    assert template.blocking_scope.expected_item_count == len(blocking)
 
 
 def test_stage2_review_workpack_is_read_only_and_never_auto_decides(reviewed_box, capsys):
@@ -127,7 +130,9 @@ def test_stage2_review_workpack_is_read_only_and_never_auto_decides(reviewed_box
 
     assert rc == X.OK
     workpack = json.loads(capsys.readouterr().out)
-    assert workpack['kind'] == 'stage2-global-review-workpack-v1'
+    assert workpack['kind'] == 'stage2-global-review-workpack-v2'
+    assert len(workpack['workpack_sha256']) == 64
+    assert workpack['binding']['expected_item_count'] == len(workpack['items'])
     assert workpack['read_only'] is True and workpack['auto_decisions'] is False
     assert workpack['items']
     assert all('current_state' in row and 'review_note' in row

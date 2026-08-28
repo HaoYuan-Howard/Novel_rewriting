@@ -108,12 +108,84 @@ describe('Stage0Screen 新书起跑入口', () => {
 
     await waitFor(() => expect(approve).toHaveBeenCalledTimes(1))
     expect(approve).toHaveBeenCalledWith('book-1', {
+      expected_revision_id: 'a'.repeat(64),
       actor: 'human-ui',
       reason: '前端人工审校并批准 Stage0',
     })
     expect(partition).toHaveBeenCalledWith('book-1')
     await waitFor(() => expect(screen.getByTestId('location')).toHaveTextContent('/n/book-1/stage1'))
     expect(screen.queryByText('没有进入 Stage 1')).not.toBeInTheDocument()
+  })
+
+  it('编辑后批准绑定 edit 返回的 revision，而不是重新读取 latest', async () => {
+    const initialReport = {
+      original_filename: 'book.txt',
+      total_code_points: 12,
+      warnings: [],
+      executable: false,
+      revision_id: 'a'.repeat(64),
+      revision_origin: 'machine' as const,
+    }
+    const latestFromAnotherWriter = {
+      ...initialReport,
+      revision_id: 'c'.repeat(64),
+      revision_origin: 'human_edit' as const,
+    }
+    const getReport = vi.spyOn(api, 'getStage0Report').mockResolvedValue(initialReport)
+    vi.spyOn(api, 'getStage0Segments').mockResolvedValue({
+      available: true,
+      reason: null,
+      segments: [{
+        id: 'keep-1',
+        kind: 'keep',
+        start: 0,
+        end: 12,
+        chars: 12,
+        flagged: false,
+        text: '第一段正文内容',
+        origin: null,
+        removed_kind: null,
+        marker_line: null,
+      }],
+    })
+    vi.spyOn(api, 'getStage0Candidate').mockResolvedValue(null)
+    const edit = vi.spyOn(api, 'editStage0').mockImplementation(async () => {
+      // 模拟 edit 落 B 后、批准请求之前，另一写者又落了 C。旧实现会 GET C 并误批。
+      getReport.mockResolvedValue(latestFromAnotherWriter)
+      return {
+        job: {
+          id: 'edit', kind: 'stage0.edit', label: '编辑 Stage0', argv: 'edit',
+          state: 'ok', paid: false, started: 1, finished: 2,
+          sid: 'book-1', ordinal: null,
+        },
+        revision_id: 'b'.repeat(64),
+      }
+    })
+    const approve = vi.spyOn(api, 'approveStage0').mockResolvedValue({
+      id: 'approve', kind: 'stage0.approve', label: '批准 Stage0', argv: 'approve',
+      state: 'ok', paid: false, started: 2, finished: 3,
+      sid: 'book-1', ordinal: null,
+    })
+    vi.spyOn(api, 'partitionStage1').mockResolvedValue({
+      id: 'partition', kind: 'stage1.partition', label: '切分 Stage1', argv: 'partition',
+      state: 'landed_red', paid: false, started: 3, finished: 4,
+      sid: 'book-1', ordinal: null,
+    })
+
+    renderRoute(<Stage0Screen />, '/n/book-1/stage0')
+    fireEvent.click(await screen.findByTitle('删除这一段'))
+    fireEvent.click(screen.getByRole('button', { name: /^保存选择并进入 stage1/ }))
+
+    await waitFor(() => expect(edit).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(approve).toHaveBeenCalledTimes(1))
+    expect(approve).toHaveBeenCalledWith('book-1', {
+      expected_revision_id: 'b'.repeat(64),
+      actor: 'human-ui',
+      reason: '前端人工审校并批准 Stage0',
+    })
+    expect(approve).not.toHaveBeenCalledWith(
+      'book-1', expect.objectContaining({ expected_revision_id: 'c'.repeat(64) }),
+    )
   })
 })
 

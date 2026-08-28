@@ -113,7 +113,10 @@ def test_every_action_is_unique_and_buildable(paid_payload):
 
 def test_revalidate_actions_collect_audit_values_without_credential_buttons(paid_payload):
     actions = paid_payload['actions']
-    credentials = {'--actor', '--reason', '--subject-sha256'}
+    credentials = {
+        '--actor', '--reason', '--subject-sha256',
+        '--expected-revision-id',
+    }
 
     assert not [
         action for action in actions
