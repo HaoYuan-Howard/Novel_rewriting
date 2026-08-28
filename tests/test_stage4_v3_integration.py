@@ -533,3 +533,140 @@ def test_infeasible_unknown_evidence_ref_is_rejected_before_any_binding_lands(de
     assert not any(
         row['kind'] == 'artifact_adoption' for row in ctx.ledger.audit_events
     )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# `--adopt-rejected`：validator 拒稿唯一的 0-wire 恢复入口
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _seal_a_validator_rejection(
+        ctx: RunContext, book: Path, *, response: dict, why: str) -> str:
+    """按生产形状封存一份 Stage4A validator 拒稿；不发任何请求。"""
+    from novel.llm import response_repair
+
+    attempt_id = 'ab12cd34ef567890'
+    chain_id = 'c' * 64
+    text = json.dumps(response, ensure_ascii=False)
+    rel, error = response_repair.keep_rejection(
+        book, chain_id=chain_id, attempt_id=attempt_id,
+        payload={
+            'sid': ctx.sid, 'node': ctx.node, 'purpose': ctx.node,
+            'gate': 'validator', 'why': why, 'model': MODEL, 'code': CODE,
+            'repair_eligible': False,
+            'eligibility_reason': 'validator 不属于通用 JSON/形状修复面',
+            'response': {
+                'content': text, 'finish_reason': 'stop',
+                'sha256': hashlib.sha256(text.encode('utf-8')).hexdigest(),
+            },
+        },
+        original=text,
+        candidate=None,
+    )
+    assert error is None, error
+    assert rel
+    return attempt_id
+
+
+def test_a_validator_rejection_can_be_adopted_with_zero_calls_after_a_human_fix(
+        tmp_path: Path):
+    """v8 的真实处境：一次已付费的整书候选被 validator 拒 ⇒ 此前只能整本重来。"""
+    book = _book(tmp_path)
+    blueprints_artifact = _seed_current_stage2(book)
+    ctx = _ctx(book, 'stage4.design', paid=False)      # ⚠ 0 成本的跑
+    truth, mapping = build_blind_projection(
+        blueprints_artifact.model_dump(by_alias=True, mode='json'),
+        root_clean_sha1=ctx.root_clean_sha1,
+    )
+    good = _retain_a_response(
+        blueprints_artifact.model_dump(by_alias=True, mode='json'), mapping)
+    broken = copy.deepcopy(good)
+    # 制造一条**只有 validator 抓得住**的违约：整章漏掉。schema 允许任意非空章集，
+    # 「章集不闭合」只有绑定当前 truth 的动态 validator 判得出来。
+    assert len(broken['output_chapters']) > 1
+    broken['output_chapters'] = broken['output_chapters'][:-1]
+    attempt = _seal_a_validator_rejection(
+        ctx, book, response=broken, why='章集不闭合')
+
+    # ① 原样重判仍然红，且当场封 outcome。
+    from novel.errors import TerminalState
+    from novel.llm import response_repair
+
+    # 显式终态、一个字节都没落盘 ⇒ exit 2 那一类，不是「跑完了没过」的 exit 1。
+    with pytest.raises(TerminalState):
+        plan.run_adopt_rejected(
+            ctx, attempt_id=attempt, actor='tester', reason='先原样试一次')
+    sealed = response_repair.find_attempt(book, attempt)
+    assert sealed.outcome is not None and sealed.outcome['decision'] == 'rejected'
+    assert not (book / plan.CANDIDATE_REL).exists(), '重判失败绝不落正式产物'
+
+
+def test_a_human_fixed_candidate_is_adopted_and_the_history_stays_separable(
+        tmp_path: Path):
+    book = _book(tmp_path)
+    blueprints_artifact = _seed_current_stage2(book)
+    ctx = _ctx(book, 'stage4.design', paid=False)
+    truth, mapping = build_blind_projection(
+        blueprints_artifact.model_dump(by_alias=True, mode='json'),
+        root_clean_sha1=ctx.root_clean_sha1,
+    )
+    good = _retain_a_response(
+        blueprints_artifact.model_dump(by_alias=True, mode='json'), mapping)
+    broken = copy.deepcopy(good)
+    assert len(broken['output_chapters']) > 1
+    broken['output_chapters'] = broken['output_chapters'][:-1]
+    attempt = _seal_a_validator_rejection(
+        ctx, book, response=broken, why='章集不闭合')
+
+    from novel.llm import response_repair
+
+    record = response_repair.find_attempt(book, attempt)
+    response_repair.candidate_path(record).write_text(
+        json.dumps(good, ensure_ascii=False), encoding='utf-8')
+
+    artifact = plan.run_adopt_rejected(
+        ctx, attempt_id=attempt, actor='agent:novel-pipeline-operator',
+        reason='人工补回被漏掉的那一章后按当前四道闸重判')
+
+    assert (book / plan.CANDIDATE_REL).is_file()
+    adoption = artifact.provenance.rejected_response_adoption
+    assert adoption is not None
+    assert adoption.attempt_id == attempt
+    # 历史与现在分开：响应来自当时那份代码，编译由现在这份做。
+    assert adoption.historical_code == CODE
+    assert artifact.provenance.code == ctx.code
+    # 人改过什么，逐个 JSON pointer 记着。
+    assert adoption.audit.edited_by_human is True
+    assert adoption.audit.changed_json_pointers
+    assert adoption.audit.actor == 'agent:novel-pipeline-operator'
+    # 这一次跑真的一个模型都没调；成本仍由 attempt_id 联结回账本。
+    assert artifact.provenance.model == MODEL
+    assert (artifact.provenance.usage is None
+            or artifact.provenance.usage.calls_made == 0)
+
+    sealed = response_repair.find_attempt(book, attempt)
+    assert sealed.outcome['decision'] == 'accepted'
+    # 一份拒稿只有一次采用机会。
+    with pytest.raises(Exception):
+        plan.run_adopt_rejected(
+            ctx, attempt_id=attempt, actor='tester', reason='再来一次')
+
+
+def test_adoption_refuses_a_rejection_that_belongs_to_another_node(tmp_path: Path):
+    book = _book(tmp_path)
+    blueprints_artifact = _seed_current_stage2(book)
+    ctx = _ctx(book, 'stage4.design', paid=False)
+    truth, mapping = build_blind_projection(
+        blueprints_artifact.model_dump(by_alias=True, mode='json'),
+        root_clean_sha1=ctx.root_clean_sha1,
+    )
+    good = _retain_a_response(
+        blueprints_artifact.model_dump(by_alias=True, mode='json'), mapping)
+    foreign = _ctx(book, 'stage2.blueprint', paid=False)
+    attempt = _seal_a_validator_rejection(
+        foreign, book, response=good, why='别的节点的拒稿')
+
+    from novel.errors import TerminalState
+
+    with pytest.raises(TerminalState, match='不能被'):
+        plan.run_adopt_rejected(
+            ctx, attempt_id=attempt, actor='tester', reason='跨节点采用')

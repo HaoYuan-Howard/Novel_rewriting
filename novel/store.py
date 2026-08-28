@@ -158,6 +158,47 @@ def _json_pointer_diff(before: Any, after: Any, pointer: str = '') -> tuple[str,
     return tuple(sorted(set(changed)))
 
 
+def build_revalidation_audit(
+    *,
+    actor: str,
+    reason: str,
+    baseline_locator_sha256: str,
+    baseline_raw_sha256: str,
+    baseline_payload: Any,
+    candidate_raw_sha256: str,
+    candidate_payload: Any,
+) -> RevalidationAudit:
+    """铸一份「基线 → 候选」的不可变对证账。**全仓唯一的构造口。**
+
+    两种消费方共用它：`.INVALID` 提升（改写一份已落盘的正式产物）与
+    `stage4.design --adopt-rejected`（采用一份从未落过盘的封存拒稿）。两者的
+    「基线」是不同的东西，但**要回答的问题一模一样**：字节变没变、逻辑内容变没变、
+    变在哪几个 JSON pointer 上。各铸一份的下场是两处对「变没变」的判定慢慢分家。
+
+    ⚠ `edited_by_human` 与 `content_changed` 同值不是笔误：只有人能改这两条路上的
+    候选（提升前的 live `.INVALID`、隔离区里那份固定 `candidate.json`），
+    所以逻辑内容变了就等于人改过。
+    """
+    baseline_canonical = hashlib.sha256(
+        _canonical_json_bytes(baseline_payload)).hexdigest()
+    candidate_canonical = hashlib.sha256(
+        _canonical_json_bytes(candidate_payload)).hexdigest()
+    content_changed = baseline_canonical != candidate_canonical
+    return RevalidationAudit(
+        actor=actor,
+        reason=reason,
+        baseline_locator_sha256=baseline_locator_sha256,
+        baseline_raw_sha256=baseline_raw_sha256,
+        candidate_raw_sha256=candidate_raw_sha256,
+        baseline_canonical_sha256=baseline_canonical,
+        candidate_canonical_sha256=candidate_canonical,
+        raw_changed=baseline_raw_sha256 != candidate_raw_sha256,
+        content_changed=content_changed,
+        edited_by_human=content_changed,
+        changed_json_pointers=_json_pointer_diff(baseline_payload, candidate_payload),
+    )
+
+
 def provenance_field(model: type[BaseModel]) -> str | None:
     """这个模型里哪个字段是来源账。没有就返回 `None`。
 
@@ -1673,20 +1714,14 @@ class ArtifactStore:
             _canonical_json_bytes(candidate_business)).hexdigest()
         baseline_raw_sha = hashlib.sha256(baseline_raw).hexdigest()
         candidate_raw_sha = hashlib.sha256(current_raw).hexdigest()
-        pointers = _json_pointer_diff(baseline_business, candidate_business)
-        content_changed = baseline_canonical != candidate_canonical
-        audit = RevalidationAudit(
+        audit = build_revalidation_audit(
             actor=approval.actor,
             reason=approval.reason,
             baseline_locator_sha256=locator,
             baseline_raw_sha256=baseline_raw_sha,
+            baseline_payload=baseline_business,
             candidate_raw_sha256=candidate_raw_sha,
-            baseline_canonical_sha256=baseline_canonical,
-            candidate_canonical_sha256=candidate_canonical,
-            raw_changed=baseline_raw_sha != candidate_raw_sha,
-            content_changed=content_changed,
-            edited_by_human=content_changed,
-            changed_json_pointers=pointers,
+            candidate_payload=candidate_business,
         )
         # live INVALID 的业务主体允许按 producer 规则编辑，但它的 provenance 不是
         # 人工输入面。最终提升必须继承不可变创建快照，而不是信任 live 文件里一块

@@ -341,6 +341,39 @@ class RunContext:
                   usage=self.ledger.usage_since(self._usage_mark), **extra)
         return self._settled(out)
 
+    def recovered_llm_provenance(
+            self, cls: type[P] = LlmProvenance, /, *,
+            prompts: dict[str, str], model: str,
+            adopted_models: Iterable[str], **extra: Any) -> P:
+        """**第四个口，也是唯一一个「0 成本的跑写一份带 `model` 的账」**。
+
+        它服务的只有一种处境：一次**已经付过费**的响应被内容闸拒绝、封存进
+        `_llm_rejected/`，事后由 `--adopt-rejected` 按当前四道闸 0 次调用重判并采用。
+        产物确实由某个模型产出，所以 `model` 必须记；而**这一次跑没有调用任何模型**，
+        所以它过不了 `llm_provenance` 的 `paid` 闸，也不该走 `free_provenance`
+        （那一口结构上没有 `model`，记不下「谁产的」）。
+
+        【它凭什么不是「现造一份假账」】调用方必须同时在 `extra` 里交出封存证据
+        （`rejected_response_adoption`：attempt_id、当时的代码身份、响应完整 SHA-256
+        与 actor/reason/新旧内容 diff）。没有那份证据这一口铸不出东西来——
+        它要的不是「相信我」，是那次调用的不可变留痕。
+
+        【`usage` 为什么是本次窗口而不是历史那次的数】**成本的唯一权威源是账本**
+        （`<base>/_service/ledger.jsonl`），产物 `usage` 不与它混加。把历史那一次的
+        token 抄进这份产物，等于让同一批 token 被两处各声称一次。这一次跑真的是
+        0 次调用，就如实记 0；那次付费仍然在账本里，并由 `attempt_id` 精确联结。
+        """
+        actual_models = sorted(set(adopted_models))
+        if not actual_models:
+            raise ProvenanceRefused(
+                f'{self.node}: 拒稿采用必须交出当初实际产出这份响应的模型')
+        out = cls(code=self.code, root_clean_sha1=self._require_single_root(),
+                  inputs=self.edges,
+                  prompts={k: prov.fingerprint(v) for k, v in prompts.items()},
+                  model=model, adopted_models=actual_models,
+                  usage=self.ledger.usage_since(self._usage_mark), **extra)
+        return self._settled(out)
+
     def rewrite_provenance(self, prev: P, *, by: str) -> P:
         """**第三个口，也是最窄的一个**：一条 0 成本路径只改了这份产物的一部分。
 

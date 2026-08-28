@@ -131,7 +131,8 @@ schema version 写），不按记忆手抄。
 [经验库](field-notes.md) FN-017）。
 
 下表按**节点**索引，覆盖每一条 0 成本、但**会改动盘上产物**的入口——包括不需要另写输入文件的那几条
-（`--revalidate` / `--renormalize` / `--recheck` / `--identity` / `--adopt-residual`）。
+（`--revalidate` / `--renormalize` / `--recheck` / `--identity` / `--adopt-residual` /
+`--adopt-rejected`）。
 **“0 成本”不等于“只看不动”**：真正只读的是 `--dry-run`、`--check-only`、
 `--names-only`、`--emit-review-template`、`--emit-review-workpack`、`--emit-edit-template`、
 `--validate-edit`，以及
@@ -142,6 +143,7 @@ schema version 写），不按记忆手抄。
 | `stage0.edit` | `--apply-edit` · `--apply-edit-plan` · `--apply-candidate-plan` | 正式 edit / edit-plan / candidate-plan 形状 | 不直接覆盖 `clean_text.txt`：三者都只向 `revisions.json` 追加一版，再由链物化唯一 clean 投影。`--apply-candidate-plan` 裁决机器候选（`adopt` / `dismiss`），与 edit-plan 同样带 `expected_revision_id` 乐观锁。⚠ 「采纳后再编辑」不是第三个动作，是 adopt 后照常走 `--apply-edit-plan` |
 | `stage2.global` | `--apply-edit` · `--review-decisions` · `--renormalize` · `--revalidate` | 当前 `global_edit.json` 的 typed 修订；`stage2/global_review_decisions.json` | 本层**有**通用 `--apply-edit`。先用只读 `--emit-review-template` 取得当前 item hash/evidence；模板默认全 `UNVER`，原样应用不会开闸。`--review-decisions` 按 `actor + 理由 + subject_sha256` 提交 PASS/FAIL/UNVER，subject hash 变更后旧决策被拒收 |
 | `stage2.blueprint` | `--renormalize` · `--revalidate` | finding 明确允许时编辑活动 `.INVALID` | 本层确实没有 `--apply-edit`；逐章内容的修正走 `--chapters <N>` 定向重生成（**付费**）或回上游 `stage2.global`。只改证据指向字段，不改生成轮次与来源账 |
+| `stage4.design` | `--adopt-rejected` | 隔离区里那份固定的 `_llm_rejected/<chain>/<attempt>/candidate.json`（不存在时按原响应原样重判） | **0 LLM 调用，且是 Stage4A validator 拒稿唯一的恢复入口**——通用 `--response-repair` 只收 parse/require/schema，validator 拒稿的封存记录里逐字写着「不属于通用 JSON/形状修复面」。用法：`stage4.design --adopt-rejected <attempt_id> --actor <ACTOR> --reason <text>`；attempt_id 从 `inbox` 的 rejected 条目或 `_llm_rejected/` 目录名取。候选按**当前**四道闸重判（validator 仍绑当前 truth/mapping ⇒ 上游变过就一定失败），改了什么由逐个 JSON pointer 的 diff 记进 provenance。⚠ **一份拒稿只有一次采用机会**：重判失败当场封 outcome，之后只能整跑重来或走完整 typed 人工计划 |
 | `stage4.plan` | `--apply-edit` · `--revalidate` | `<novel-dir>/stage4/plan_edit.json`；终态明确允许时可修活动 `.INVALID` | `--revalidate` 强审计并重建 writer context；仍以追跑 check/state 验证。`--identity` 只作内存诊断，归上面的只读入口 |
 | `stage5.write` | `--apply-edit` · `--recheck` · `--revalidate` | **`<base>/_service/edits/` 下**、文件名含 `chNN` 的完整 `ChapterResponse`：`{"segments":[{"slot":"s01","text":"…"},…]}` | **0 LLM 调用。** `--apply-edit` 必须提交该章全部 producer-owned slot 的全文；`--recheck` 不改正文或写作 provenance，只刷新当前契约的派生指标并对账 trim；`--revalidate` 原字节重判 `.INVALID` segments。不直接改正式 chapter JSON 或其他章。⚠⚠ **编辑文件落点不要按上面四层类比写进 `<novel-dir>/stage5/`**：那四层的编辑文件登记在 `ARTIFACTS` 里（所以必须在书目录内），本层**刻意没有登记**（`novel/paths.py::edit_rel` 的例外一段），写进书目录会让 `tests/corpus.py::_classify` 关闭式失败 ⇒ **这本书从此当不成语料底座**，而报错文案还会把人引向「加进 ARTIFACTS」那条错路（真发生过）|
 | `stage5.review` | `--retain-pretrim` · `--wontfix` | 无人产文件；决定本身就是输入 | `--retain-pretrim --chapters <N> --actor <ACTOR> --reason <text>` 恰好一章，写 hash-bound `trim_resolution_chNN.json`，不改正文、不采用收缩候选（见 FN-014）；`--wontfix` 只把豁免记进 `stage5/wontfix.json`，**一份验收报告都不产** |

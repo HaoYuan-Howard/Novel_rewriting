@@ -39,6 +39,7 @@ from contracts.schema.stage1 import MainText
 from contracts.schema.stage2 import ChapterBlueprints, GlobalGrounding
 from contracts.schema.stage4 import (
     BlindCandidate, BlindCandidateProvenance, BlindPlanResponse,
+    RejectedResponseAdoption,
     CtxProvenance, EvidenceBinding, EvidenceBindingProvenance,
     EvidenceBindingResponse, PlanChapters, PlanEdit, PlanProvenance, WriterContext,
 )
@@ -66,9 +67,12 @@ from novel.stages.stage4.measure import (
 )
 from novel.stages.stage4.phase_binding import verify_plan_phase_artifacts
 from novel.stages.stage4.phase_state import current_infeasible_binding
-from novel.llm.client import LlmFailed
+from novel.llm import response_repair
+from novel.llm.client import LlmFailed, judge_payload
+from novel.llm.json_text import normalize_json_text as _strip_fences
+from novel.llm.prompts import required_top_level
 from novel.llm.transport import ChatResponse
-from novel.store import ArtifactStore
+from novel.store import ArtifactStore, build_revalidation_audit
 
 REL = STAGE4_PLAN_CHAPTERS
 CANDIDATE_REL = STAGE4_BLIND_CANDIDATE
@@ -1358,6 +1362,105 @@ def finalize_design_candidate(
         _finish_restored_agent_session(
             ctx, source, delivery_state='delivered', error_kind=None)
         return landed
+
+
+def run_adopt_rejected(
+        ctx: RunContext, *, attempt_id: str, actor: str, reason: str,
+) -> BlindCandidate:
+    """Stage4A：**0 次调用**按当前完整四道闸重判并采用一份封存的拒稿。
+
+    【它补的是哪个洞】通用 `--response-repair` 只收 parse/require/schema
+    （`repair_eligible=True`）。Stage4A 的 validator 拒稿明确不在那个面上
+    （封存记录里逐字写着 `validator 不属于通用 JSON/形状修复面`）⇒ 在此之前
+    一次**已经付过费**的整书候选被判据挡下后，**没有任何恢复入口**，只能整本重来。
+    v8 那次跑就这样丢掉过整书候选。
+
+    【它凭什么不是「绕过判据」】
+    - 走的是同一个 `judge_payload`（parse/require/schema/validator 四道闸的唯一实现），
+      不是一套宽松的旁路；validator 仍绑**当前**的 truth/mapping，
+      所以上游变了就一定重判失败，不会拿旧候选配新上游。
+    - 人只能编辑隔离区里那份固定的 `candidate.json`；改了什么由
+      `RevalidationAudit` 逐个 JSON pointer 记下来，actor/reason 必填。
+    - 重判失败**当场封 outcome**：一份拒稿只有一次采用机会，不许反复试到过为止。
+    - provenance 走 `recovered_llm_provenance`：`model` 记当初那次真实产出的模型，
+      `code` 记**现在**这份编译代码，历史代码身份单独存在
+      `rejected_response_adoption.historical_code` 里，两半不压成一个数。
+    """
+    actor, reason = actor.strip(), reason.strip()
+    if not actor or not reason:
+        raise TerminalState('--adopt-rejected 必须显式给非空 --actor 与 --reason')
+
+    record = response_repair.find_attempt(ctx.novel_dir, attempt_id)
+    rejection = record.rejection
+    if str(rejection.get('node')) != ctx.node:
+        raise TerminalState(
+            f'attempt_id={attempt_id} 属于 {rejection.get("node")}，'
+            f'不能被 {ctx.node} 采用')
+    if record.outcome is not None:
+        raise TerminalState(
+            f'attempt_id={attempt_id} 已有不可变 outcome（'
+            f'{record.outcome.get("decision")}）；一份拒稿只有一次采用机会，'
+            '要么开一次新 run，要么走完整 typed 人工计划')
+
+    # 隔离区的字节格式归 `response_repair` 一处解析；这里只拿结果，不碰路径。
+    material = response_repair.adoption_material(record)
+    candidate_text = _strip_fences(material.candidate_text)
+
+    system, user, store, _up, truth, mapping = _design_request(ctx)
+    validator = _blind_validator(truth, mapping)
+    replay = ChatResponse(
+        content=candidate_text,
+        model=str(rejection.get('model') or ''),
+        finish_reason=str((rejection.get('response') or {}).get('finish_reason') or ''),
+    )
+    response, why, gate, detail = judge_payload(
+        candidate_text, replay,
+        require=required_top_level(BlindPlanResponse),
+        model_cls=BlindPlanResponse,
+        validator=validator,
+    )
+    if why is not None or response is None or validator.compiled is None:
+        response_repair.write_outcome(
+            record, decision='rejected', gate=gate, detail=detail, why=why)
+        # 显式终态、没落盘 ⇒ exit 2。不是 `1`：`1` 说的是「跑完了、判定不通过、
+        # 已落盘」，而这里一个字节都没写进正式产物。
+        raise TerminalState(
+            f'attempt_id={attempt_id} 按当前四道闸仍不通过（gate={gate}）：{why}；'
+            '本次结论已封存，同一份拒稿不再接受第二次采用——'
+            '要么开一次新 run，要么走完整 typed 人工计划')
+
+    business = validator.compiled
+    audit = build_revalidation_audit(
+        actor=actor,
+        reason=reason,
+        baseline_locator_sha256=str((rejection.get('response') or {}).get('sha256') or ''),
+        baseline_raw_sha256=material.original_sha256,
+        baseline_payload=material.original_payload,
+        candidate_raw_sha256=material.candidate_raw_sha256,
+        candidate_payload=material.candidate_payload,
+    )
+    provenance = ctx.recovered_llm_provenance(
+        BlindCandidateProvenance,
+        prompts={'BLIND_DESIGN_SYS': system},
+        model=str(rejection.get('model') or ''),
+        adopted_models=[str(rejection.get('model') or '')],
+        alias_algorithm=BLIND_ALIAS_ALGORITHM,
+        truth_sha256=str(mapping['truth_sha256']),
+        rejected_response_adoption=RejectedResponseAdoption(
+            attempt_id=attempt_id,
+            historical_code=str(rejection.get('code') or ''),
+            response_sha256=str((rejection.get('response') or {}).get('sha256') or ''),
+            audit=audit,
+        ),
+    )
+    artifact = BlindCandidate.model_validate({**business, '_provenance': provenance})
+    store.write(CANDIDATE_REL, artifact)
+    response_repair.write_outcome(
+        record, decision='accepted', gate=None, detail=None, why=None)
+    _note_adoption_attempt(
+        ctx, purpose=ctx.node, attempt_id=attempt_id,
+        rel=CANDIDATE_REL, artifact=artifact)
+    return artifact
 
 
 def run_design(ctx: RunContext, client: Any) -> BlindCandidate:

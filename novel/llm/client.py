@@ -74,7 +74,9 @@ import threading
 import time
 from contextlib import contextmanager
 from datetime import datetime, timezone
-from typing import Any, Callable, Final, Iterable, Iterator, Mapping, TypeVar
+from typing import (
+    Any, Callable, Final, Iterable, Iterator, Mapping, Sequence, TypeVar,
+)
 from uuid import uuid4
 
 from pydantic import BaseModel, ValidationError
@@ -541,6 +543,58 @@ def _is_empty(v: Any) -> bool:
     return isinstance(v, (str, bytes, list, tuple, dict, set, frozenset)) and len(v) == 0
 
 
+def judge_payload(
+    text: str,
+    resp: ChatResponse,
+    *,
+    require: Sequence[str],
+    model_cls: type[M],
+    validator: Callable[[M, ChatResponse], str | None] | None,
+) -> tuple[M | None, str | None, str, list[dict[str, Any]] | None]:
+    """三道闸（+ 调用点那道可选的第四道）判**一段已经归一过的正文**。
+
+    ⚠ 它与 `inspect_response` 的分工是承重的：这里只回答「这段文本能不能用」，
+    **不问它是从哪个通道来的**。⇒ 从 `content` 来的那份与从 `reasoning` 里
+    捞出来的那份走的是**同一套闸、同一份 `require`、同一个 `model_cls`**
+    （`SALVAGE_ANSWER_FROM_REASONING` 边界②）。两条路各写一遍判定，
+    就是给捞出来的那份开了一个自己的契约。
+
+    【它为什么是模块级的】判定面**只许有一份**，而消费方不止 `ask_json` 一个：
+    响应修复、机械候选采纳，以及 Stage4 的 0-wire 拒稿重判
+    （`stage4.design --adopt-rejected`）都必须走同一套 parse/require/schema/validator。
+    它当初写成 `ask_json` 里的闭包，于是**函数外的任何恢复路都调不到它**——
+    那正是「一次有效付费产出只能整本重来」的结构性原因。
+    """
+    why: str | None = None
+    obj: M | None = None
+    gate = 'parse'
+    detail: list[dict[str, Any]] | None = None
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError as e:
+        why, detail = f'解析失败: {e}', _parse_detail(e, text, resp)
+    else:
+        missing = [k for k in require
+                   if not isinstance(data, dict) or k not in data
+                   or _is_empty(data[k])]
+        if missing:
+            why, gate = f'顶层缺必需键（或值为空）: {missing}', 'require'
+            # 缺的是**顶层必需键**，键名来自 `model_cls` 的派生、不是模型正文。
+            detail = [{'loc': k, 'type': 'missing_or_empty', 'count': 1}
+                      for k in missing]
+        else:
+            try:
+                obj = model_cls.model_validate(data)
+            except ValidationError as e:
+                why, gate = f'不合 {model_cls.__name__} 的契约: {e}', 'schema'
+                detail = _schema_detail(e)
+            else:
+                if validator is not None:
+                    why, gate = validator(obj, resp), 'validator'
+                    # 调用点自带那道闸只交回一句人话，没有可机器数的结构 ⇒ 不编。
+    return obj, why, gate, detail
+
+
 class LlmClient:
     """一次跑的 LLM 入口。**缓存口径与成本账都从 `RunContext` 来**，不各自持有一份。"""
 
@@ -906,42 +960,10 @@ class LlmClient:
 
         def gate_payload(text: str, resp: ChatResponse) -> tuple[
                 M | None, str | None, str, list[dict[str, Any]] | None]:
-            """三道闸（+ 调用点那道可选的第四道）判**一段已经归一过的正文**。
-
-            ⚠ 它与 `inspect_response` 的分工是承重的：这里只回答「这段文本能不能用」，
-            **不问它是从哪个通道来的**。⇒ 从 `content` 来的那份与从 `reasoning` 里
-            捞出来的那份走的是**同一套闸、同一份 `require`、同一个 `model_cls`**
-            （`SALVAGE_ANSWER_FROM_REASONING` 边界②）。两条路各写一遍判定，
-            就是给捞出来的那份开了一个自己的契约。
-            """
-            why: str | None = None
-            obj: M | None = None
-            gate = 'parse'
-            detail: list[dict[str, Any]] | None = None
-            try:
-                data = json.loads(text)
-            except json.JSONDecodeError as e:
-                why, detail = f'解析失败: {e}', _parse_detail(e, text, resp)
-            else:
-                missing = [k for k in require
-                           if not isinstance(data, dict) or k not in data
-                           or _is_empty(data[k])]
-                if missing:
-                    why, gate = f'顶层缺必需键（或值为空）: {missing}', 'require'
-                    # 缺的是**顶层必需键**，键名来自 `model_cls` 的派生、不是模型正文。
-                    detail = [{'loc': k, 'type': 'missing_or_empty', 'count': 1}
-                              for k in missing]
-                else:
-                    try:
-                        obj = model_cls.model_validate(data)
-                    except ValidationError as e:
-                        why, gate = f'不合 {model_cls.__name__} 的契约: {e}', 'schema'
-                        detail = _schema_detail(e)
-                    else:
-                        if validator is not None:
-                            why, gate = validator(obj, resp), 'validator'
-                            # 调用点自带那道闸只交回一句人话，没有可机器数的结构 ⇒ 不编。
-            return obj, why, gate, detail
+            """本次调用的四道闸；实现是模块级的 `judge_payload`，这里只绑参数。"""
+            return judge_payload(
+                text, resp, require=require, model_cls=model_cls,
+                validator=validator)
 
         def inspect_response(resp: ChatResponse) -> tuple[
                 M | None, str | None, str, str, list[dict[str, Any]] | None, bool]:

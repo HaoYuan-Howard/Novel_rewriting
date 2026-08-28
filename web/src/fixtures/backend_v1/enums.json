@@ -582,7 +582,8 @@
   "--validate-edit": "按 stage7 apply-edit 的同一构建与判定链预检人工编辑，不写盘",
   "--emit-review-template": "向 stdout 输出绑定当前 stage2 全局复核项 hash/evidence 的安全 UNVER 决策骨架，不写盘",
   "--emit-review-workpack": "向 stdout 输出 Stage2 逐项主体与原文精确命中上下文；只辅助人工核验，不自动做 PASS/FAIL",
-  "--adopt-residual": "显式采纳可安全应用的 high residual 建议并重放 stage7 确定性链"
+  "--adopt-residual": "显式采纳可安全应用的 high residual 建议并重放 stage7 确定性链",
+  "--adopt-rejected": "按当前完整四道闸 0 次调用重判一份封存的 Stage4A 拒稿；只消费隔离区里的候选与既有成本账，不发新请求"
  },
  "paid_flags": {
   "--revise": "stage5 的修订式反哺——把可反哺的结论连同上一轮成稿发回写手",
@@ -601,6 +602,7 @@
  "valued_flags": {
   "--apply-edit": "人工改好的候选稿路径（必填；相对路径相对**书目录**，如 stage7/name_map_edit.json，也接受书目录内的绝对路径）",
   "--response-repair": "结构化拒绝响应恢复模式；当前只接受 `agent`。可修复响应先隔离并停给外层受托 agent，同闸复验失败才继续采样",
+  "--adopt-rejected": "要重判并采用的拒绝响应 attempt_id（16 位小写十六进制）；人只能编辑隔离区里那份固定的 candidate.json，本命令封存 actor/reason 与新旧闸指纹后再走同一套闸",
   "--validate-edit": "要预检的 stage7 人工编辑路径（与 --apply-edit 同路径规则，不写盘）",
   "--apply-edit-plan": "审校台生成的 stage0 编辑计划路径（正文 + 剔除账 + 乐观锁）",
   "--review-decisions": "stage2/global_review 的人工决策集（相对当前书目录）",
@@ -861,6 +863,9 @@
    "flags": [
     "--dry-run",
     "--replan",
+    "--adopt-rejected",
+    "--actor",
+    "--reason",
     "--response-repair"
    ],
    "produces": [
@@ -1496,6 +1501,28 @@
    "writes_disk": true,
    "needs_value": null,
    "required_inputs": []
+  },
+  {
+   "kind": "stage4.design",
+   "label": "stage4 盲场景设计 --adopt-rejected",
+   "extra": [
+    "--adopt-rejected"
+   ],
+   "paid": false,
+   "free_flag": "--adopt-rejected",
+   "writes": "stage4/blind_candidate.json",
+   "writes_disk": true,
+   "needs_value": "要重判并采用的拒绝响应 attempt_id（16 位小写十六进制）；人只能编辑隔离区里那份固定的 candidate.json，本命令封存 actor/reason 与新旧闸指纹后再走同一套闸",
+   "required_inputs": [
+    {
+     "flag": "--actor",
+     "description": "人工决定的自报身份（不是认证身份）"
+    },
+    {
+     "flag": "--reason",
+     "description": "人工决定的非空理由"
+    }
+   ]
   },
   {
    "kind": "stage4.design",

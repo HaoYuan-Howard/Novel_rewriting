@@ -529,3 +529,59 @@ def write_outcome(record: RepairRecord, *, decision: str, gate: str | None,
 
 def candidate_path(record: RepairRecord) -> Path:
     return record.root / CANDIDATE_FILE
+
+
+@dataclass(frozen=True)
+class AdoptionMaterial:
+    """一次 0-wire 拒稿采用要用到的全部字节与其解析结果。
+
+    ⚠ **解析归本模块**：`_llm_rejected/` 的三个文件是本模块的字节格式，
+    它们不是产物（不进 ARTIFACTS / 完成度 / provenance），所以既不该走
+    `ArtifactStore`，也不该让消费方各自 `json.loads` 一遍——那会把「隔离区长什么样」
+    变成两处知识。消费方只拿这个结构，不碰路径。
+    """
+
+    original_text: str
+    original_payload: Any
+    original_sha256: str
+    candidate_raw_sha256: str
+    candidate_text: str
+    candidate_payload: Any
+    edited: bool
+
+
+def adoption_material(record: RepairRecord) -> AdoptionMaterial:
+    """取「原响应」与「待采用候选」两份字节。
+
+    候选优先取那份固定的 `candidate.json`（人唯一能编辑的位置）；它不存在时按
+    原响应原样重判——那是「判据变了、响应没变」的正常处境，不是缺料。
+    """
+    original_text = str((record.rejection.get('response') or {}).get('content') or '')
+    original_raw = original_text.encode('utf-8')
+    path = candidate_path(record)
+    if path.is_file():
+        candidate_raw = path.read_bytes()
+        try:
+            candidate_text = candidate_raw.decode('utf-8')
+        except UnicodeError as exc:
+            raise ArtifactUnreadable(f'{path} 不是合法 UTF-8：{exc}') from exc
+    else:
+        candidate_raw, candidate_text = original_raw, original_text
+
+    def parsed(text: str, where: str) -> Any:
+        if not text.strip():
+            return None
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError as exc:
+            raise ArtifactUnreadable(f'{where} 不是合法 JSON：{exc}') from exc
+
+    return AdoptionMaterial(
+        original_text=original_text,
+        original_payload=parsed(original_text, '封存的原响应'),
+        original_sha256=hashlib.sha256(original_raw).hexdigest(),
+        candidate_raw_sha256=hashlib.sha256(candidate_raw).hexdigest(),
+        candidate_text=candidate_text,
+        candidate_payload=parsed(candidate_text, str(path)),
+        edited=candidate_raw != original_raw,
+    )

@@ -737,6 +737,17 @@ def _run_stage4(ctx: RunContext, flags: list[str]) -> int:
         return X.OK if report.passed else X.CHECK_FAILED
 
     if ctx.node == 'stage4.design':
+        if '--adopt-rejected' in tokens:
+            # 0 次调用：只消费隔离区里那份封存候选，走同一套四道闸重判。
+            artifact = plan.run_adopt_rejected(
+                ctx,
+                attempt_id=_valued(flags, '--adopt-rejected') or '',
+                actor=_valued(flags, '--actor') or '',
+                reason=_valued(flags, '--reason') or '')
+            print(f'  ✓ Stage4A 拒稿已按当前四道闸重判并采用：'
+                  f'{len(artifact.output_chapters)} 章（0 次调用）。'
+                  '下一步请先人工检查候选，再单独预览并批准 stage4.plan')
+            return X.OK
         if '--dry-run' in tokens:
             system, user = plan.build_design_prompt(ctx)
             print(f'── system（{len(system)} 字）──\n{system}')

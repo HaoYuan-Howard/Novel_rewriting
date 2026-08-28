@@ -49,8 +49,10 @@ from contracts.invariants import (
     STRUCTURE_CHANGE_KINDS, STRUCTURE_MODES,
     TEMPORAL_LINKS, TIME_LAYERS, WORLD_RULE_KINDS,
 )
-from contracts.schema.base import StrictModel
-from contracts.schema.common import FreeProvenance, LlmProvenance, Sha256
+from contracts.schema.base import FrozenModel, StrictModel
+from contracts.schema.common import (
+    FreeProvenance, LlmProvenance, RevalidationAudit, Sha256,
+)
 
 from contracts.schema.stage2 import (
     BEAT_ID_PATTERN, FACT_ID_PATTERN, HINGE_ID_PATTERN, CausalEdge,
@@ -391,9 +393,31 @@ class BlindCandidateChapter(BlindChapterResponse):
         return self
 
 
+class RejectedResponseAdoption(FrozenModel):
+    """Stage4A 专属的**拒稿采用**账；它不是 `.INVALID` 提升。
+
+    ⚠ 两者的区别是承重的：`.INVALID` 提升改写的是一份**已经落过盘**的正式产物，
+    而这里的响应从来没有成为过产物——它在内容闸就被挡住并封进 `_llm_rejected/`。
+    所以它没有 `invalid_baseline_sha256` 那条锚，只能自证到「哪一次调用、当时是
+    哪份代码、原响应的完整 SHA-256 是什么」。
+    ⚠ `historical_code` 与产物根部的 `code` **故意分开**：编译是**现在**这份代码做的，
+    响应是**当时**那份代码要来的。压成一个数就再也说不清哪一半是历史。
+    """
+
+    attempt_id: str = Field(pattern=r'^[0-9a-f]{16}$')
+    historical_code: str = Field(min_length=1)
+    response_sha256: Sha256
+    audit: RevalidationAudit
+
+
 class BlindCandidateProvenance(LlmProvenance):
     alias_algorithm: Literal[BLIND_ALIAS_ALGORITHM]
     truth_sha256: Sha256
+
+    #: 只有 `--adopt-rejected` 那一条 0-wire 路会填它；正常付费产出恒为 `None`。
+    #: ⚠ 它是**加法且带默认值** ⇒ 存量 `blind_candidate.json` 照样读得进来，
+    #: 不构成 shape break（`_SHAPE_BREAKS` 的语义是「存量读不进来」）。
+    rejected_response_adoption: RejectedResponseAdoption | None = None
 
 
 class BlindCandidate(StrictModel):

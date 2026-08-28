@@ -1338,6 +1338,12 @@ FREE_ENTRIES: Final = {
     '--emit-review-workpack': ('向 stdout 输出 Stage2 逐项主体与原文精确命中上下文；'
                                '只辅助人工核验，不自动做 PASS/FAIL'),
     '--adopt-residual': '显式采纳可安全应用的 high residual 建议并重放 stage7 确定性链',
+    # ⚠ 它**不是**通用 response-repair 的一种：那条路只收 parse/require/schema
+    #   （`repair_eligible=True`）。Stage4 的 validator 拒稿明确不在通用修复面
+    #   （`eligibility_reason='validator 不属于通用 JSON/形状修复面'`），在此之前
+    #   它**没有任何恢复入口** ⇒ 一次有效付费的整书候选只能整本重来。
+    '--adopt-rejected': ('按当前完整四道闸 0 次调用重判一份封存的 Stage4A 拒稿；'
+                         '只消费隔离区里的候选与既有成本账，不发新请求'),
 }
 
 #: 挂在**付费**动作上的 flag。它们不是 0 成本入口，登记在这里免得被当成漏项。
@@ -1418,6 +1424,9 @@ VALUED_FLAGS: Final = {
                     '如 stage7/name_map_edit.json，也接受书目录内的绝对路径）',
     '--response-repair': '结构化拒绝响应恢复模式；当前只接受 `agent`。'
                          '可修复响应先隔离并停给外层受托 agent，同闸复验失败才继续采样',
+    '--adopt-rejected': ('要重判并采用的拒绝响应 attempt_id（16 位小写十六进制）；'
+                         '人只能编辑隔离区里那份固定的 candidate.json，'
+                         '本命令封存 actor/reason 与新旧闸指纹后再走同一套闸'),
     '--validate-edit': '要预检的 stage7 人工编辑路径（与 --apply-edit 同路径规则，不写盘）',
     '--apply-edit-plan': '审校台生成的 stage0 编辑计划路径（正文 + 剔除账 + 乐观锁）',
     '--review-decisions': 'stage2/global_review 的人工决策集（相对当前书目录）',
@@ -1682,7 +1691,8 @@ NODES: Final[dict[str, NodeSpec]] = {
     #   ⚠ 治本仍在别处：本节点的毛病（空正文率最高、失败最贵、全书级判据难守）根因
     #   同一个——**全书一次调用这个粒度**。钉 pro 是治标的那一手。
     'stage4.design':    NodeSpec('stage4', 'R-5',  True,  'stage4 盲场景设计',
-                                  flags=('--dry-run', '--replan', '--response-repair'),
+                                  flags=('--dry-run', '--replan', '--adopt-rejected',
+                                         '--actor', '--reason', '--response-repair'),
                                   produces=(artifact_paths.STAGE4_BLIND_CANDIDATE,),
                                   model='deepseek-v4-pro'),
     'stage4.plan':      NodeSpec('stage4', 'R-5',  True,  'stage4 证据绑定与计划编译',
@@ -1843,6 +1853,7 @@ CONDITIONAL_REQUIRED_FLAGS: Final[dict[tuple[str, str], tuple[str, ...]]] = {
     ('stage2.global', '--revalidate'): ('--actor', '--reason'),
     ('stage2.blueprint', '--revalidate'): ('--actor', '--reason'),
     ('stage4.plan', '--revalidate'): ('--actor', '--reason'),
+    ('stage4.design', '--adopt-rejected'): ('--actor', '--reason'),
     ('stage5.write', '--revalidate'): ('--actor', '--reason'),
     ('stage5.review', '--retain-pretrim'): ('--chapters', '--actor', '--reason'),
     ('stage6.hook', '--revalidate'): ('--actor', '--reason'),
