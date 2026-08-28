@@ -261,3 +261,30 @@ def test_a_leaking_filename_fails_closed_instead_of_being_printed(base: Path) ->
     with pytest.raises(SystemExit) as excinfo:
         W.collect(base, SID)
     assert '书名' in str(excinfo.value)
+
+
+def test_first_call_landing_keeps_retried_and_never_accepted_apart(
+        base: Path, tmp_path: Path) -> None:
+    """「重试后成功」与「一次都没被接受」是完全不同的处境，不许合成一个比例。"""
+    audit = base / '_service/llm_audit.jsonl'
+    audit.write_text('\n'.join(json.dumps(row) for row in (
+        # 一次就过
+        {'sid': SID, 'kind': 'gate_decision', 'node': 'stage5.write',
+         'chapter': 1, 'decision': 'accepted'},
+        # 先拒后过
+        {'sid': SID, 'kind': 'gate_decision', 'node': 'stage5.write',
+         'chapter': 2, 'decision': 'rejected'},
+        {'sid': SID, 'kind': 'gate_decision', 'node': 'stage5.write',
+         'chapter': 2, 'decision': 'accepted'},
+        # 一直没过
+        {'sid': SID, 'kind': 'gate_decision', 'node': 'stage4.design',
+         'chapter': None, 'decision': 'rejected'},
+        {'sid': SID, 'kind': 'gate_decision', 'node': 'stage4.design',
+         'chapter': None, 'decision': 'rejected'},
+    )) + '\n', encoding='utf-8')
+
+    landing = W.collect(base, SID)['audit']['first_call_landing']
+    assert landing['stage5.write'] == {
+        'units': 2, 'first_call': 1, 'retried': 1, 'never_accepted': 0}
+    assert landing['stage4.design'] == {
+        'units': 1, 'first_call': 0, 'retried': 0, 'never_accepted': 1}

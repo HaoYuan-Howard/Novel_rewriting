@@ -304,6 +304,32 @@ def ledger_metrics(base: Path, sid: str) -> dict[str, Any]:
     }
 
 
+def _first_call_landing(gates: list[dict[str, Any]]) -> dict[str, dict[str, int]]:
+    """逐节点：多少个生成单元是**第一次调用就被接受**的。
+
+    单元 = `(node, chapter)`；整书级节点的 chapter 是 `None`，自成一个单元。
+    判据只用 append-only 的先后顺序，不用 `sample` 那一格——`sample` 在恢复/缓存
+    行上会是 `null`，拿它当分母会把「读回来的那一条」算成一次新采样。
+    """
+    units: dict[tuple[str, Any], list[str]] = {}
+    for row in gates:
+        key = (str(row.get('node') or '?'), row.get('chapter'))
+        units.setdefault(key, []).append(str(row.get('decision')))
+
+    out: dict[str, dict[str, int]] = {}
+    for (node, _chapter), decisions in units.items():
+        bucket = out.setdefault(node, {
+            'units': 0, 'first_call': 0, 'retried': 0, 'never_accepted': 0})
+        bucket['units'] += 1
+        if 'accepted' not in decisions:
+            bucket['never_accepted'] += 1
+        elif decisions.index('accepted') == 0:
+            bucket['first_call'] += 1
+        else:
+            bucket['retried'] += 1
+    return {node: values for node, values in sorted(out.items())}
+
+
 def audit_metrics(base: Path, sid: str) -> dict[str, Any]:
     """闸决定 / 修复 / 重采 / 采纳的唯一来源。"""
     rows = [row for row in _jsonl(audit_path(base)) if row.get('sid') == sid]
@@ -321,6 +347,10 @@ def audit_metrics(base: Path, sid: str) -> dict[str, Any]:
         'resamples': sum(1 for row in gates if row.get('resample')),
         'salvaged': sum(1 for row in gates if row.get('salvaged')),
         'source': dict(sorted(Counter(str(row.get('source')) for row in gates).items())),
+        # 「首次调用即落盘率」——P3 的主读数。按 (node, chapter) 分组，
+        # 用 append-only 顺序判：接受之前有没有过拒绝。⚠ 三态分开，不合成一个比例：
+        # 「重试后成功」与「一次都没被接受」是完全不同的处境（判据 4）。
+        'first_call_landing': _first_call_landing(gates),
         'response_repairs': len(repairs),
         'repair_actions': dict(sorted(Counter(
             str(row.get('action')) for row in repairs).items())),
@@ -586,6 +616,12 @@ def render(report: dict[str, Any]) -> str:
         f'- gate 决定 {aud["gate_decisions"]}：{aud["gate_by_decision"]}',
         f'- 重采 {aud["resamples"]} · salvage {aud["salvaged"]} · '
         f'响应修复 {aud["response_repairs"]}{aud["repair_actions"]}',
+        '',
+        '| node | 生成单元 | 首次即落盘 | 重试后落盘 | 一次都没被接受 |',
+        '|---|---|---|---|---|',
+        *[f'| {node} | {v["units"]} | {v["first_call"]} | {v["retried"]} | '
+          f'{v["never_accepted"]} |'
+          for node, v in aud['first_call_landing'].items()],
         f'- 产物采纳 {aud["artifact_adoptions"]}', '',
     ]
 
