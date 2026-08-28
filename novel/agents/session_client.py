@@ -77,6 +77,38 @@ def _canonical_sha256(value: object) -> str:
     ).encode('utf-8'))
 
 
+def agent_json_schema(model_cls: type) -> dict:
+    """交给 agent CLI 的响应 JSON Schema。**全仓唯一构造口。**
+
+    ⚠ **必须剥掉 `discriminator`。** pydantic 为 discriminated union 发这一格
+    （Stage2 global 那份响应里就有 3 处：`KnowledgeEventResponse.subject`、
+    `RelationResponse.visibility`、`SecretResponse.setup`），而 Claude CLI 的
+    `--json-schema` 走 AJV **strict 模式**，遇到词表外的关键字直接拒收整份 schema：
+    `unknown keyword: "discriminator"` ⇒ CLI exit=1，**一次模型都没调就整节点终态**。
+    这是 2026-08-28 第一次用 main 的 agent 路真跑整书时当场撞到的第一堵墙。
+
+    ⚠ **剥掉它不放宽任何约束**：`discriminator` 只是给校验器的分支提示，
+    `oneOf`/`anyOf` 的分支本身一格没动，形状约束完全等价；而真正的判定权从来不在
+    provider 侧——响应回来仍要过 `novel/llm/client.py::judge_payload` 的四道闸，
+    其中 schema 那一道用的是 pydantic 模型本身，不是这份下发的 schema。
+    ⇒ 这里改的是「怎么把契约讲给 CLI 听」，不是「契约是什么」。
+
+    ⚠ 归一在**构造口**而不是某个 driver 里：identity、`schema_sha256` 与真正发出去的
+    字节必须是同一份。放进 driver 会让账上记的 schema 与 wire 上的那份分家。
+    """
+    def strip(node: object) -> object:
+        if isinstance(node, dict):
+            return {key: strip(value) for key, value in node.items()
+                    if key != 'discriminator'}
+        if isinstance(node, list):
+            return [strip(item) for item in node]
+        return node
+
+    schema = strip(model_cls.model_json_schema(by_alias=True))
+    assert isinstance(schema, dict)
+    return schema
+
+
 def _attempt_id() -> str:
     return uuid.uuid4().hex[:16]
 
@@ -250,7 +282,7 @@ class SessionAgentClient:
                 'phase': phase,
                 'response_model': response_model.__name__,
                 'response_schema_sha256': _canonical_sha256(
-                    response_model.model_json_schema(by_alias=True)),
+                    agent_json_schema(response_model)),
                 'requested_output_token_ceiling': max_tokens,
                 'prefer_content_over_reasoning_salvage': bool(prefer_content),
             })
@@ -939,7 +971,7 @@ class SessionAgentClient:
             require = derived
         elif extra := sorted(set(require) - set(derived)):
             raise ValueError(f'{purpose}: require 含响应模型没有的键 {extra}')
-        schema = model_cls.model_json_schema(by_alias=True)
+        schema = agent_json_schema(model_cls)
         identity = self._identity(
             system, user, schema, purpose=purpose, max_tokens=max_tokens)
         initial_prompt_sha = _sha256_bytes(
