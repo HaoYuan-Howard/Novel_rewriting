@@ -18,6 +18,8 @@ from pydantic import BaseModel, Field
 
 from contracts.schema.orchestration import AgentProfile
 from novel import agent_session_audit
+from novel.agents.base import render_structured_agent_stdin
+from novel.agents.session_client import agent_request_fingerprint
 from novel.errors import (
     ArtifactUnreadable, ProvenanceRefused, ResponseRepairBatchRequired,
     ResponseRepairRequired, TerminalState,
@@ -193,6 +195,9 @@ def _test_request_policy(
 _AGENT_PROFILE = AgentProfile(
     driver='codex', model='gpt-5.6-sol', reasoning_effort='high',
     execution_mode='standard')
+_CLAUDE_AGENT_PROFILE = AgentProfile(
+    driver='claude-code', model='claude-opus-5', reasoning_effort='high',
+    execution_mode='standard')
 
 
 def _agent_request_policy(
@@ -238,12 +243,16 @@ def _agent_checkpoint_acceptance(
     subject_sha = _canonical_sha(binding)
     session_run_id = f'session-{texts[-1][0]}'
     provider_session_id = f'provider-{texts[-1][0]}'
-    prompt_shas = [
-        hashlib.sha256(f'agent stdin {index}'.encode()).hexdigest()
-        for index in range(1, len(texts) + 1)
-    ]
     initial_prompt_sha = hashlib.sha256(
-        f'{system}\n\n--- 本轮任务 ---\n\n{user}'.encode()).hexdigest()
+        render_structured_agent_stdin(
+            system, user, driver=str(profile['driver']),
+        ).encode()).hexdigest()
+    # synthetic audit 也必须遵守生产不变式：started 与该 session
+    # 第一条 turn 绑定同一份真实 stdin，后续轮才是反馈 prompt。
+    prompt_shas = [initial_prompt_sha, *[
+        hashlib.sha256(f'agent stdin {index}'.encode()).hexdigest()
+        for index in range(2, len(texts) + 1)
+    ]]
     agent_session_audit.append_event(
         ctx.novel_dir.parent,
         agent_session_audit.AgentSessionEvent(
@@ -257,12 +266,16 @@ def _agent_checkpoint_acceptance(
             schema_sha256=schema_sha, kind='started', ts=1)),
     links: list[dict[str, object]] = []
     for index, (attempt_id, text) in enumerate(texts, 1):
-        fingerprint = _canonical_sha({
-            'protocol_version': 'node-executor/v1',
-            'purpose': purpose,
-            'turn_index': index,
-            'attempt_id': attempt_id,
-        })
+        fingerprint = agent_request_fingerprint(
+            profile=profile,
+            subject_sha256=subject_sha,
+            provider_session_id=(None if index == 1 else provider_session_id),
+            system_sha256=(binding['system_sha256'] if index == 1 else None),
+            prompt_sha256=prompt_shas[index - 1],
+            schema_sha256=schema_sha,
+            purpose=purpose,
+            turn_index=index,
+        )
         ctx.ledger.record(
             node=ctx.node, sid=ctx.sid, model=ctx.executor_profile.model,
             request_model=ctx.executor_profile.model, code=ctx.code,
@@ -442,6 +455,39 @@ def test_agent_checkpoint_restores_full_session_and_ledger_with_zero_wire(
         '1' * 16, '2' * 16)
     assert resumed.ledger.request_identity_for_attempt('2' * 16) \
         == stored['attempt_links'][1]
+
+
+def test_claude_checkpoint_audit_hashes_the_final_structured_stdin(tmp_path):
+    run_id = new_run_id()
+    purpose = 'stage2.blueprint:ch1'
+    ctx = _ctx(
+        tmp_path, run_id, executor_profile=_CLAUDE_AGENT_PROFILE)
+    policy = _agent_request_policy(
+        profile=_CLAUDE_AGENT_PROFILE, max_tokens=2048)
+    _ensure_run(
+        ctx, architecture='extraction-ir-v3.1',
+        topology='scaffolded_single', requests=[(1, 'SYSTEM', 'USER')],
+        request_policy=policy)
+    text = '{"blueprints":[{"chapter_ordinal":1}]}'
+    acceptance = _agent_checkpoint_acceptance(
+        ctx, purpose=purpose, system='SYSTEM', user='USER',
+        texts=[('c' * 16, text)], max_tokens=2048)
+
+    [started] = [
+        event for event in agent_session_audit.read_events(tmp_path)
+        if event.kind == 'started']
+    expected_stdin = render_structured_agent_stdin(
+        'SYSTEM', 'USER', driver='claude-code')
+    assert started.prompt_sha256 == hashlib.sha256(
+        expected_stdin.encode('utf-8')).hexdigest()
+
+    checkpoint = stage2_runs.write_checkpoint(
+        ctx, phase='blueprint', chapter=1, purpose=purpose,
+        architecture='extraction-ir-v3.1', response_model=_ChapterRows,
+        system='SYSTEM', user='USER',
+        response_payload={'blueprints': [{'chapter_ordinal': 1}]},
+        acceptance=acceptance, scope_violation=None)
+    assert checkpoint.is_file()
 
 
 @pytest.mark.parametrize('case', [

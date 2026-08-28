@@ -822,11 +822,14 @@ def _canon(c: _Ctx) -> list[Outcome]:
             chapter = evidence.get('chapter_ordinal')
             text = c.text_of.get(chapter)
             if text is None:
-                problems[path] = f'证据章 {chapter!r} 不在正文集合'
+                problems.setdefault(path, f'证据章 {chapter!r} 不在正文集合')
                 continue
             _start, _end, problem = exact_span(evidence.get('source'), text)
             if problem:
-                problems[path] = problem
+                # 归一失败账保留 locator 经历的 0/多/跨章歧义；失败态的
+                # ``source=None`` 只能再给出笼统的 span 缺失。后者不得覆盖
+                # 前者，否则交回 agent 的反馈会丢掉唯一可修的根因。
+                problems.setdefault(path, problem)
         findings = [finding(
             'global_evidence_unlocated', detail=f'{path}: {problem}', evidence=[path, problem],
         ) for path, problem in sorted(problems.items())]

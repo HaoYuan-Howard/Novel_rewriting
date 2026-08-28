@@ -304,38 +304,144 @@ def ledger_metrics(base: Path, sid: str) -> dict[str, Any]:
     }
 
 
-def _first_call_landing(gates: list[dict[str, Any]]) -> dict[str, dict[str, int]]:
-    """逐节点：多少个生成单元是**第一次调用就被接受**的。
+def _first_call_landing(
+    gates: list[dict[str, Any]],
+    adoptions: list[dict[str, Any]],
+    ledger_attempts: list[dict[str, Any]],
+) -> dict[str, dict[str, int]]:
+    """逐节点统计真正落盘的 adopted attempt 在本 run 的 wire 排位。
 
-    单元 = `(node, chapter)`；整书级节点的 chapter 是 `None`，自成一个单元。
-    判据只用 append-only 的先后顺序，不用 `sample` 那一格——`sample` 在恢复/缓存
-    行上会是 `null`，拿它当分母会把「读回来的那一条」算成一次新采样。
+    单元 = ``(run_id, node, chapter, purpose)``；同一 attempt 的 wire/schema
+    accepted 与随后 business rejected 仍只是一通 provider 调用。wire
+    排位以成本账中所有 non-cached attempts 的 append 顺序为准，因而
+    timeout/protocol 失败即使没进 gate 也不会被漏掉。只有
+    ``artifact_adoption.attempt_id`` 才能证明内容最终落盘，不能拿中间 accepted
+    冒充。cache 采纳单列 ``zero_wire_landed``；缺 run/attempt、adoption
+    指不到本单元 wire，或同 attempt 出现在不同单元都落 ``unknown``。
     """
-    units: dict[tuple[str, Any], list[str]] = {}
-    for row in gates:
-        key = (str(row.get('node') or '?'), row.get('chapter'))
-        units.setdefault(key, []).append(str(row.get('decision')))
+    Unit = tuple[str, str, Any, tuple[str, str]]
+    units: dict[Unit, dict[str, Any]] = {}
+    # 内容缓存会在新 run 合法复用原 attempt_id；冲突只在同一 run 内判。
+    attempt_units: dict[tuple[str, str], set[Unit]] = {}
+
+    def row_unit(row: dict[str, Any], index: int) -> tuple[Unit, bool]:
+        run_id = row.get('run_id')
+        node = row.get('node')
+        attempt_id = row.get('attempt_id')
+        valid = all(isinstance(value, str) and value.strip()
+                    for value in (run_id, node, attempt_id))
+        # purpose 两边都缺时仍可借精确 attempt 联结；用判别标记避免把
+        # “缺 purpose”与恰好等于 node 的真实 purpose 静默合并。
+        purpose = row.get('purpose')
+        purpose_key = (
+            ('value', purpose.strip())
+            if isinstance(purpose, str) and purpose.strip()
+            else ('missing', str(node or '?'))
+        )
+        if valid:
+            return (
+                str(run_id), str(node), row.get('chapter'), purpose_key,
+            ), True
+        legacy_identity = (
+            str(attempt_id) if isinstance(attempt_id, str) and attempt_id.strip()
+            else f'row-{index}'
+        )
+        return (
+            f'legacy:{legacy_identity}', str(node or '?'),
+            row.get('chapter'), purpose_key,
+        ), False
+
+    all_rows = [('ledger', row) for row in ledger_attempts] + [
+        ('gate', row) for row in gates] + [
+        ('adoption', row) for row in adoptions]
+    for index, (kind, row) in enumerate(all_rows):
+        key, identity_valid = row_unit(row, index)
+        unit = units.setdefault(key, {
+            'wire_attempts': [], 'nonwire_attempts': set(),
+            'failed_attempts': set(), 'adopted_attempts': set(), 'unknown': False,
+        })
+        if not identity_valid:
+            unit['unknown'] = True
+        attempt_id = row.get('attempt_id')
+        if not isinstance(attempt_id, str) or not attempt_id.strip():
+            unit['unknown'] = True
+            continue
+        attempt_units.setdefault((key[0], attempt_id), set()).add(key)
+        if kind == 'adoption':
+            unit['adopted_attempts'].add(attempt_id)
+            continue
+        if kind == 'ledger':
+            cached = row.get('cached')
+            if row.get('outcome') != 'ok':
+                unit['failed_attempts'].add(attempt_id)
+            if cached is False:
+                if attempt_id not in unit['wire_attempts']:
+                    unit['wire_attempts'].append(attempt_id)
+            elif cached is True:
+                unit['nonwire_attempts'].add(attempt_id)
+            else:
+                unit['unknown'] = True
+            continue
+        source = row.get('source')
+        if source == 'wire':
+            if attempt_id not in unit['wire_attempts']:
+                # gate 不是成本权威源；缺 ledger 不得反向伪造一次调用。
+                unit['unknown'] = True
+        elif isinstance(source, str) and source:
+            if attempt_id not in unit['nonwire_attempts']:
+                unit['unknown'] = True
+        else:
+            unit['unknown'] = True
+
+    for keys in attempt_units.values():
+        if len(keys) > 1:
+            for key in keys:
+                units[key]['unknown'] = True
 
     out: dict[str, dict[str, int]] = {}
-    for (node, _chapter), decisions in units.items():
+    for (_run_id, node, _chapter, _purpose), unit in units.items():
         bucket = out.setdefault(node, {
-            'units': 0, 'first_call': 0, 'retried': 0, 'never_accepted': 0})
+            'units': 0, 'first_call': 0, 'retried': 0,
+            'zero_wire_landed': 0, 'never_landed': 0, 'unknown': 0,
+        })
         bucket['units'] += 1
-        if 'accepted' not in decisions:
-            bucket['never_accepted'] += 1
-        elif decisions.index('accepted') == 0:
-            bucket['first_call'] += 1
+        adopted = unit['adopted_attempts']
+        wire = unit['wire_attempts']
+        nonwire = unit['nonwire_attempts']
+        failed = unit['failed_attempts']
+        if unit['unknown'] or len(adopted) > 1:
+            bucket['unknown'] += 1
+        elif adopted:
+            attempt_id = next(iter(adopted))
+            if attempt_id in failed:
+                bucket['unknown'] += 1
+            elif attempt_id in wire:
+                bucket['first_call' if wire.index(attempt_id) == 0
+                       else 'retried'] += 1
+            elif attempt_id in nonwire:
+                bucket['zero_wire_landed'] += 1
+            else:
+                bucket['unknown'] += 1
+        elif wire or nonwire:
+            bucket['never_landed'] += 1
         else:
-            bucket['retried'] += 1
+            bucket['unknown'] += 1
     return {node: values for node, values in sorted(out.items())}
 
 
 def audit_metrics(base: Path, sid: str) -> dict[str, Any]:
-    """闸决定 / 修复 / 重采 / 采纳的唯一来源。"""
+    """闸决定 / 修复 / 确定性纠正 / 重采 / 采纳的唯一来源。"""
     rows = [row for row in _jsonl(audit_path(base)) if row.get('sid') == sid]
     gates = [row for row in rows if row.get('kind') == 'gate_decision']
     repairs = [row for row in rows if row.get('kind') == 'response_repair']
+    candidate_patches = [
+        row for row in rows if row.get('kind') == 'candidate_patch_applied']
+    locator_rewrites = [
+        row for row in rows if row.get('kind') == 'evidence_locator_rewrite']
     adoptions = [row for row in rows if row.get('kind') == 'artifact_adoption']
+    ledger_attempts = [
+        row for row in _jsonl(ledger_path(base)) if row.get('sid') == sid
+    ]
     return {
         'lines': len(rows),
         'gate_decisions': len(gates),
@@ -347,13 +453,19 @@ def audit_metrics(base: Path, sid: str) -> dict[str, Any]:
         'resamples': sum(1 for row in gates if row.get('resample')),
         'salvaged': sum(1 for row in gates if row.get('salvaged')),
         'source': dict(sorted(Counter(str(row.get('source')) for row in gates).items())),
-        # 「首次调用即落盘率」——P3 的主读数。按 (node, chapter) 分组，
-        # 用 append-only 顺序判：接受之前有没有过拒绝。⚠ 三态分开，不合成一个比例：
-        # 「重试后成功」与「一次都没被接受」是完全不同的处境（判据 4）。
-        'first_call_landing': _first_call_landing(gates),
+        # 「首次调用即落盘率」——P3 的主读数。adoption 精确指回同 run、
+        # 同 node/chapter/purpose 的 distinct wire attempt；零 wire 与断链单列。
+        'first_call_landing': _first_call_landing(
+            gates, adoptions, ledger_attempts),
         'response_repairs': len(repairs),
         'repair_actions': dict(sorted(Counter(
             str(row.get('action')) for row in repairs).items())),
+        'candidate_patches_applied': len(candidate_patches),
+        'candidate_patch_changed_paths': sum(
+            int(row.get('changed_path_count') or 0) for row in candidate_patches),
+        'evidence_locator_rewrites': len(locator_rewrites),
+        'evidence_locator_rewrite_modes': dict(sorted(Counter(
+            str(row.get('match_mode')) for row in locator_rewrites).items())),
         'artifact_adoptions': len(adoptions),
         'per_node_gate_rejections': dict(sorted(Counter(
             str(row.get('node')) for row in gates
@@ -616,11 +728,15 @@ def render(report: dict[str, Any]) -> str:
         f'- gate 决定 {aud["gate_decisions"]}：{aud["gate_by_decision"]}',
         f'- 重采 {aud["resamples"]} · salvage {aud["salvaged"]} · '
         f'响应修复 {aud["response_repairs"]}{aud["repair_actions"]}',
+        f'- Stage2 候选窄 patch {aud["candidate_patches_applied"]} 次 / '
+        f'{aud["candidate_patch_changed_paths"]} 格 · 确定性跨章纠正 '
+        f'{aud["evidence_locator_rewrites"]} 次'
+        f'{aud["evidence_locator_rewrite_modes"]}',
         '',
-        '| node | 生成单元 | 首次即落盘 | 重试后落盘 | 一次都没被接受 |',
-        '|---|---|---|---|---|',
+        '| node | 生成单元 | 首次即落盘 | 重试后落盘 | 零 wire 落盘 | 未落盘 | 未知 |',
+        '|---|---|---|---|---|---|---|',
         *[f'| {node} | {v["units"]} | {v["first_call"]} | {v["retried"]} | '
-          f'{v["never_accepted"]} |'
+          f'{v["zero_wire_landed"]} | {v["never_landed"]} | {v["unknown"]} |'
           for node, v in aud['first_call_landing'].items()],
         f'- 产物采纳 {aud["artifact_adoptions"]}', '',
     ]

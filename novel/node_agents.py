@@ -22,7 +22,8 @@ from pydantic import BaseModel
 from contracts.schema.orchestration import AgentProfile
 from contracts.schema.report import CheckReport
 from contracts.schema.stage2 import (
-    ChapterBlueprints, GlobalGrounding, GlobalGroundingResponse,
+    ChapterBlueprints, GlobalAgentTurnResponse, GlobalEvidencePatchTurn,
+    GlobalFullCandidateTurn, GlobalGrounding,
 )
 from contracts.schema.stage4 import BlindCandidate, EvidenceBinding
 from contracts.schema.stage5 import ChapterResponse
@@ -171,16 +172,24 @@ class Stage2GlobalAgent(NodeExecutorAgent[GlobalGrounding]):
 
     def run(self) -> NodeAgentResult[GlobalGrounding]:
         last_rejected: extract.GlobalCandidateEvaluation | None = None
+        patch_base: extract.GlobalCandidateEvaluation | None = None
         try:
-            prepared = extract.prepare_global_candidate(self.ctx)
+            prepared = extract.prepare_global_candidate(
+                self.ctx, agent_envelope=True)
             while True:
                 try:
-                    response = self.client.ask_json(
+                    turn = self.client.ask_json(
                         prepared.system,
                         prepared.user,
-                        model_cls=GlobalGroundingResponse,
+                        model_cls=GlobalAgentTurnResponse,
                         purpose=self.ctx.node,
                         max_tokens=extract.GLOBAL_MAX_TOKENS,
+                        validator=(
+                            extract.validate_global_full_candidate_turn
+                            if patch_base is None else
+                            extract.global_evidence_patch_validator(
+                                prepared, patch_base)
+                        ),
                     )
                 except LlmFailed:
                     # 若本 session 至少产出过一份 schema 合格但业务 HARD 的候选，
@@ -200,12 +209,50 @@ class Stage2GlobalAgent(NodeExecutorAgent[GlobalGrounding]):
                     )
                     raise
 
+                if patch_base is None:
+                    if not isinstance(turn.payload, GlobalFullCandidateTurn):
+                        raise ProvenanceRefused(
+                            'stage2.global full turn 通过 dynamic validator 后分支漂移')
+                    response = turn.payload.candidate
+                else:
+                    if not isinstance(turn.payload, GlobalEvidencePatchTurn):
+                        raise ProvenanceRefused(
+                            'stage2.global patch turn 通过 dynamic validator 后分支漂移')
+                    base_evaluation = patch_base
+                    response = extract.apply_global_evidence_patch(
+                        prepared, base_evaluation, turn.payload)
+                    attempt_id = self.client.accepted_attempt(self.ctx.node)
+                    if attempt_id is None:
+                        raise ProvenanceRefused(
+                            'stage2.global evidence patch 已合并但缺当前 accepted attempt')
+                    self.ctx.ledger.note_candidate_patch(
+                        sid=self.ctx.sid,
+                        node=self.ctx.node,
+                        purpose=self.ctx.node,
+                        attempt_id=attempt_id,
+                        base_candidate_sha256=base_evaluation.response_sha256,
+                        result_candidate_sha256=extract.global_response_sha256(
+                            response),
+                        changed_path_count=len(turn.payload.changes),
+                    )
+                patch_base = None
+
                 evaluation = extract.evaluate_global_candidate(
                     self.ctx, self.client, prepared, response)
                 if not evaluation.passed:
                     last_rejected = evaluation
+                    patch_scope = extract.global_evidence_patch_scope(evaluation)
+                    if patch_scope is None:
+                        feedback = extract.global_full_candidate_feedback_rows(
+                            evaluation)
+                        next_patch_base = None
+                    else:
+                        feedback = extract.global_evidence_patch_feedback_rows(
+                            evaluation, patch_scope)
+                        next_patch_base = evaluation
                     if self.client.queue_code_validation_feedback(
-                            evaluation.feedback_rows(), purpose=self.ctx.node):
+                            feedback, purpose=self.ctx.node):
+                        patch_base = next_patch_base
                         continue
                     # 只有循环预算耗尽才在这里写一次 INVALID；中间轮始终只在内存。
                     self._finalize_rejected(prepared, evaluation)

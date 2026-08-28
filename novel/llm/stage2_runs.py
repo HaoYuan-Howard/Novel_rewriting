@@ -29,6 +29,8 @@ from pydantic import BaseModel, ValidationError
 from contracts.schema.orchestration import AgentProfile
 from novel import agent_session_audit, paths
 from novel.agent_capabilities import validate_profile
+from novel.agents.base import render_structured_agent_stdin_bytes
+from novel.agents.session_client import validate_agent_session_request_binding
 from novel.config import ENV_KEYS
 from novel.appendlog import process_append_lock
 from novel.errors import (
@@ -304,8 +306,16 @@ def _validate_agent_session_turn(
         None if turn.profile is None else turn.profile.model_dump(mode='json'))
     start_profile = (
         None if start.profile is None else start.profile.model_dump(mode='json'))
-    initial_prompt_sha = _sha(
-        f'{system}\n\n--- 本轮任务 ---\n\n{user}'.encode('utf-8'))
+    current_session = validate_agent_session_request_binding(
+        events, acceptance,
+        purpose=purpose,
+        profile=profile,
+        original_prompt_sha256=_sha(
+            render_structured_agent_stdin_bytes(
+                system, user, driver=str(profile.get('driver') or ''))),
+        original_schema_sha256=str(acceptance.get('accepted_schema_sha256')),
+    )
+    first_turn = current_session.turns[0]
     expected_start = {
         'wire_version': agent_session_audit.SESSION_AUDIT_WIRE_VERSION,
         'session_run_id': acceptance.get('session_run_id'),
@@ -322,8 +332,8 @@ def _validate_agent_session_turn(
         'actual_effort': None,
         'protocol_version': AGENT_PROTOCOL_VERSION,
         'start_code_version': ctx.code,
-        'prompt_sha256': initial_prompt_sha,
-        'schema_sha256': acceptance.get('accepted_schema_sha256'),
+        'prompt_sha256': first_turn.prompt_sha256,
+        'schema_sha256': first_turn.schema_sha256,
     }
     actual_start = {
         'wire_version': start.wire_version,

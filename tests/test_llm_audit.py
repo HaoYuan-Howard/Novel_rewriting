@@ -239,6 +239,51 @@ def test_audit_events_survive_in_memory_when_there_is_no_ledger_file():
         transport.calls[0])
 
 
+def test_candidate_patch_audit_is_hash_only_and_idempotent():
+    ledger = CostLedger(run_id='candidate-patch-run')
+    kwargs = dict(
+        sid='123', node='stage2.global', purpose='stage2.global',
+        attempt_id='patch-attempt-01',
+        base_candidate_sha256='a' * 64,
+        result_candidate_sha256='b' * 64,
+        changed_path_count=1,
+    )
+
+    ledger.note_candidate_patch(**kwargs)
+    ledger.note_candidate_patch(**kwargs)
+
+    row, = ledger.audit_events
+    assert row['kind'] == 'candidate_patch_applied'
+    assert row['attempt_id'] == 'patch-attempt-01'
+    assert row['changed_path_count'] == 1
+    assert row['base_candidate_sha256'] == 'a' * 64
+    assert row['result_candidate_sha256'] == 'b' * 64
+    assert 'path' not in row and 'locator' not in row
+
+
+def test_evidence_locator_rewrite_audit_omits_text_and_binds_artifact_bytes():
+    ledger = CostLedger(run_id='locator-rewrite-run')
+    kwargs = dict(
+        sid='123', node='stage2.global', purpose='stage2.global',
+        artifact='stage2/global_grounding.json',
+        artifact_sha256='c' * 64,
+        claim_path='entities.relations.rel_39.predicate',
+        original_chapter_ordinal=9,
+        resolved_chapter_ordinal=12,
+        match_mode='exact',
+    )
+
+    ledger.note_evidence_locator_rewrite(**kwargs)
+    ledger.note_evidence_locator_rewrite(**kwargs)
+
+    row, = ledger.audit_events
+    assert row['kind'] == 'evidence_locator_rewrite'
+    assert row['artifact_sha256'] == 'c' * 64
+    assert (row['original_chapter_ordinal'], row['resolved_chapter_ordinal']) == (9, 12)
+    assert row['match_mode'] == 'exact'
+    assert 'locator' not in row and 'source' not in row and 'text' not in row
+
+
 def test_request_fingerprint_lookup_refuses_a_missing_attempt_instead_of_estimating():
     with pytest.raises(ProvenanceRefused, match='拒绝按默认 effort/thinking 估算'):
         CostLedger().request_fingerprint_for_attempt('not-recorded')

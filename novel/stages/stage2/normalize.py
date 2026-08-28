@@ -8,7 +8,7 @@
 from __future__ import annotations
 
 import copy
-from typing import Any
+from typing import Any, Literal, NamedTuple
 
 from novel.core.evidence import iter_global_evidence_slots
 from novel.core.facts import first_reveal_chapter, setup_chapters_of
@@ -20,6 +20,92 @@ from novel.core.text import norm
 from novel.stages.stage2.paragraphs import (
     ParagraphIndexError, paragraph_range_of, paragraph_slice, paragraph_spans, span_of,
 )
+
+
+class EvidenceLocatorCorrection(NamedTuple):
+    """一次成功的跨章 locator 纠正；只供本次调用观察，不进入正式 provenance。"""
+
+    claim_path: str
+    original_chapter: int
+    resolved_chapter: int
+    recovery: Literal['exact', 'normalized']
+
+
+class GlobalNormalizationAccounting(dict[str, Any]):
+    """可直接展开给 ``GlobalProvenance`` 的账，以及不落盘的成功纠正元数据。
+
+    映射部分故意仍只有当前 v4 provenance 的两个键；既有调用点继续
+    ``**accounting`` 时不会把成功纠正写进严格 schema。需要观察本次纠正的调用方
+    读取 ``accounting.evidence_locator_corrections``。
+    """
+
+    evidence_locator_corrections: tuple[EvidenceLocatorCorrection, ...]
+
+    def __init__(
+        self,
+        *,
+        setup_chapters_pruned: list[tuple[str, list[int], list[int]]],
+        evidence_locator_failures: list[tuple[str, int, str, str]],
+        evidence_locator_corrections: list[EvidenceLocatorCorrection],
+    ) -> None:
+        super().__init__(
+            setup_chapters_pruned=setup_chapters_pruned,
+            evidence_locator_failures=evidence_locator_failures,
+        )
+        self.evidence_locator_corrections = tuple(evidence_locator_corrections)
+
+
+def restore_failed_global_evidence_locators(
+    data: dict[str, Any],
+    failures: list[tuple[str, int, str, str]],
+) -> int:
+    """从当前 ``.INVALID`` 的正向失败账恢复未落地 locator。
+
+    正式 evidence 槽只能保存 ``source=None``，locator 必须留在
+    ``GlobalProvenance.evidence_locator_failures`` 才能支持后续 0 LLM
+    ``--revalidate``。这里只恢复「同路径、同声明章、source 仍为空」且
+    reason 明确表示原输入是 locator 的槽；已有 SourceSpan、人工改过章号、
+    路径漂移，尤其是 formal SourceSpan 验证失败都不会被旧 provenance
+    反向洗成 locator，否则第二次 revalidate 会违反 R-2.20 自动搬家。
+    """
+    slots: dict[str, tuple[dict[str, Any], str]] = {}
+    for path, owner, field in iter_global_evidence_slots(data):
+        if path in slots:
+            raise ValueError(f'global evidence canonical claim_path 重复：{path}')
+        slots[path] = (owner, field)
+
+    restored = 0
+    seen: set[str] = set()
+    for row in failures:
+        if len(row) != 4:
+            raise ValueError('evidence_locator_failures 行必须是四元组')
+        path, chapter, locator, reason = row
+        if path in seen:
+            raise ValueError(f'evidence_locator_failures 路径重复：{path}')
+        seen.add(path)
+        slot = slots.get(path)
+        if slot is None:
+            raise ValueError(
+                f'evidence_locator_failures 路径不在当前候选：{path}')
+        owner, field = slot
+        evidence = owner.get(field)
+        if not isinstance(evidence, dict):
+            continue
+        if evidence.get('source') is not None or 'locator' in evidence:
+            continue
+        # 新旧版 locator 失败的稳定开头都是这一句。formal
+        # ``exact_span`` 错误不带此前缀，因而永不反向恢复。
+        if not isinstance(reason, str) or not reason.startswith(
+                'locator 在指定章内'):
+            continue
+        if evidence.get('chapter_ordinal') != chapter:
+            continue
+        owner[field] = {
+            'chapter_ordinal': chapter,
+            'locator': locator,
+        }
+        restored += 1
+    return restored
 
 
 def _normalize_distinguishers(characters: dict[str, dict[str, Any]]) -> None:
@@ -144,12 +230,20 @@ def _prune_setups(data: dict[str, Any]) -> list[tuple[str, list[int], list[int]]
 
 def _normalize_global_evidence(
     data: dict[str, Any], main_text: list[dict[str, Any]],
-) -> list[tuple[str, int, str, str]]:
+) -> tuple[
+    list[tuple[str, int, str, str]],
+    list[EvidenceLocatorCorrection],
+]:
     """把所有响应/人工 locator 回取成正式 ``FactEvidence``。
 
-    指定章内必须唯一命中；零命中、多命中、错章与既有正式 span 漂移都写正向失败账，
+    指定合法章唯一命中时直接采用；只有该章零命中才逐章复用同一把
+    ``locate_unique_span`` 尺子，全书恰一候选且没有任何章内多命中时才纠正章号。
+    指定章多命中、非法章、全书零/多命中与既有正式 span 漂移都写正向失败账，
     并把该槽收成 ``source=None``。失败态仍符合最终 schema，随后由同一 HARD 判据
     拦进 `.INVALID`，因此 typed edit 与 `--revalidate` 有一份可读问题稿可恢复。
+
+    返回的第二项只含成功跨章纠正的坐标元数据，不含 locator 或正文；调用方可以观察，
+    但它不属于正式 ``GlobalProvenance``。
     """
     text_of = {
         int(section.get('chapter_ordinal') or 0): str(section.get('text') or '')
@@ -157,6 +251,7 @@ def _normalize_global_evidence(
     }
     fallback_chapter = min(text_of) if text_of else 1
     failures: list[tuple[str, int, str, str]] = []
+    corrections: list[EvidenceLocatorCorrection] = []
 
     for path, owner, field in iter_global_evidence_slots(data):
         evidence = owner.get(field)
@@ -185,9 +280,58 @@ def _normalize_global_evidence(
                     continue
                 owner[field] = {'chapter_ordinal': chapter, 'source': source}
                 continue
+            if isinstance(got, int):
+                owner[field] = {'chapter_ordinal': chapter, 'source': None}
+                failures.append((
+                    path, chapter, locator,
+                    f'locator 在指定章内多处命中（{got} 处）',
+                ))
+                continue
+
+            # 指定章确为零命中时，章号只是可安全纠正的定位提示。逐章调用同一
+            # locator 尺子，不能拼接全文（否则会产生跨章边界假命中），也不能
+            # 在章内多命中时挑第一处。
+            cross_candidates: list[tuple[int, int, int, str]] = []
+            cross_count = 0
+            has_chapter_ambiguity = False
+            for candidate_chapter, candidate_text in sorted(text_of.items()):
+                cross_got = locate_unique_span(candidate_text, locator)
+                if isinstance(cross_got, tuple):
+                    start, end, recovery = cross_got
+                    cross_candidates.append(
+                        (candidate_chapter, start, end, recovery))
+                    cross_count += 1
+                elif isinstance(cross_got, int):
+                    has_chapter_ambiguity = True
+                    cross_count += cross_got
+
+            if len(cross_candidates) == 1 and not has_chapter_ambiguity:
+                resolved_chapter, start, end, recovery = cross_candidates[0]
+                resolved_text = text_of[resolved_chapter]
+                source = _source(resolved_text, start, end)
+                _start, _end, problem = exact_span(source, resolved_text)
+                if problem:
+                    owner[field] = {'chapter_ordinal': chapter, 'source': None}
+                    failures.append((path, chapter, locator, problem))
+                    continue
+                owner[field] = {
+                    'chapter_ordinal': resolved_chapter,
+                    'source': source,
+                }
+                corrections.append(EvidenceLocatorCorrection(
+                    claim_path=path,
+                    original_chapter=chapter,
+                    resolved_chapter=resolved_chapter,
+                    recovery=recovery,
+                ))
+                continue
+
             owner[field] = {'chapter_ordinal': chapter, 'source': None}
-            reason = (f'locator 在指定章内多处命中（{got} 处）'
-                      if isinstance(got, int) else 'locator 在指定章内找不到')
+            reason = (
+                'locator 在指定章内找不到，且在全书各章均找不到'
+                if cross_count == 0 else
+                f'locator 在指定章内找不到，跨章回取不唯一（全书 {cross_count} 处）'
+            )
             failures.append((path, chapter, locator, reason))
             continue
 
@@ -204,11 +348,11 @@ def _normalize_global_evidence(
         # 已是正式产物形：只验证，不按字面重搜，不把重复原文误判成漂移。
         owner[field] = {'chapter_ordinal': chapter, 'source': copy.deepcopy(source)}
 
-    return failures
+    return failures, corrections
 
 
 def normalize_global(data: dict[str, Any], main_text: list[dict[str, Any]]) \
-        -> tuple[dict[str, Any], dict[str, Any]]:
+        -> tuple[dict[str, Any], GlobalNormalizationAccounting]:
     """把 ``GlobalGroundingResponse`` 的 dict 归一为最终产物字段。"""
     characters = (((data.get('entities') or {}).get('characters')) or {})
     whole = ''.join(str(section.get('text') or '') for section in main_text)
@@ -221,11 +365,13 @@ def normalize_global(data: dict[str, Any], main_text: list[dict[str, Any]]) \
     _normalize_from_chapter(characters, chapters)
     _resolve_address_by(characters)
     pruned = _prune_setups(data)
-    evidence_failures = _normalize_global_evidence(data, main_text)
-    return data, {
-        'setup_chapters_pruned': pruned,
-        'evidence_locator_failures': evidence_failures,
-    }
+    evidence_failures, evidence_corrections = _normalize_global_evidence(
+        data, main_text)
+    return data, GlobalNormalizationAccounting(
+        setup_chapters_pruned=pruned,
+        evidence_locator_failures=evidence_failures,
+        evidence_locator_corrections=evidence_corrections,
+    )
 
 
 def normalize_beat_ids(blueprints: list[dict[str, Any]]) -> None:

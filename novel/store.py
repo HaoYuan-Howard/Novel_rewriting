@@ -28,6 +28,7 @@ store.py —— 产物的**唯一**读写口。`ArtifactStore(ctx)`，一次跑�
 """
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import os
@@ -42,7 +43,7 @@ from pydantic import BaseModel, ValidationError
 from contracts.artifacts import (
     STAGE0_CLEAN_TEXT, STAGE0_REVISIONS,
     STAGE1_HOOK_COPY, STAGE1_MAIN_TEXT,
-    STAGE2_GLOBAL_GROUNDING, STAGE2_GLOBAL_REVIEW,
+    STAGE2_CHAPTER_BLUEPRINTS, STAGE2_GLOBAL_GROUNDING, STAGE2_GLOBAL_REVIEW,
     RETIRED_STAGE3_STYLE_GROUNDING,
     STAGE4_PLAN_CHAPTERS, STAGE4_WRITER_CONTEXT,
     STAGE7_NAME_MAP,
@@ -70,6 +71,20 @@ M = TypeVar('M', bound=BaseModel)
 #: 是私有属性），靠 `Field(alias='_provenance')` 对上；这里按 alias 找，不按字段名猜。
 PROVENANCE_KEY = '_provenance'
 REVALIDATION_DIRNAME = '_revalidation'
+
+#: 提升时可从 ``artifact_override`` 带入的**确定性归一账**。
+#: 生成来源（prompts/model/inputs/usage/round）仍强制取不可变创建基线；
+#: 这张按 artifact 关闭的白名单只允许同一 normalizer 重算的派生账，
+#: 否则 Stage2 ``--revalidate`` 虽然提升了新 SourceSpan，正式 provenance
+#: 却会被旧 ``evidence_locator_failures`` 再次判红。
+_REVALIDATION_DERIVED_PROVENANCE_FIELDS = {
+    STAGE2_GLOBAL_GROUNDING: frozenset({
+        'setup_chapters_pruned', 'evidence_locator_failures',
+    }),
+    STAGE2_CHAPTER_BLUEPRINTS: frozenset({
+        'verbatim_failures', 'fact_atom_failures', 'hinge_ambiguous_pending',
+    }),
+}
 
 # These no-provenance artifacts have a deterministic freshness bridge and are
 # written only after the companion facts needed by that bridge are available.
@@ -936,8 +951,10 @@ class ArtifactStore:
            轮次，按版本契约应由 producer 重建且不得污染 current `_rounds`。
 
         ``artifact_override`` 只承载调用方按 live INVALID 重建的确定性派生字段。
-        人工改动审计仍严格比较「不可变基线 vs live INVALID」，而最终来源账强制使用
-        不可变基线的 ``src.promoted(audit=...)``；live / override 自带的来源账都不被信任。
+        人工改动审计仍严格比较「不可变基线 vs live INVALID」；最终来源账的
+        prompts/model/inputs/usage/round 强制使用不可变基线的
+        ``src.promoted(audit=...)``。只有模块级白名单登记的 Stage2 确定性归一账
+        可从已验证的 override 带入；live 中自报的生成来源仍不被信任。
         """
         official_rel = paths.check_rel_deep(rel)
         inv_rel = paths.invalid_of(official_rel)
@@ -980,9 +997,28 @@ class ArtifactStore:
         if _path_exists(dest):
             raise PathRefused(
                 f'归档位 {dest} 已被占用，**一个字节都没动**。轮次号多半算错了')
+        promoted_source = src.promoted(code=self.ctx.code, audit=audit)
+        derived_fields = _REVALIDATION_DERIVED_PROVENANCE_FIELDS.get(
+            official_rel, frozenset())
+        if derived_fields:
+            override_source = self._provenance_of(artifact)
+            if override_source is None:
+                raise ProvenanceRefused(
+                    f'{official_rel} 的确定性提升候选缺 provenance')
+            missing = sorted(
+                field for field in derived_fields
+                if field not in type(override_source).model_fields
+                or field not in type(promoted_source).model_fields)
+            if missing:
+                raise ProvenanceRefused(
+                    f'{official_rel} 提升派生账字段与当前 schema 漂移：{missing}')
+            promoted_source = promoted_source.model_copy(update={
+                field: copy.deepcopy(getattr(override_source, field))
+                for field in derived_fields
+            })
         data = self._render(
             official_rel, artifact,
-            prov_override=src.promoted(code=self.ctx.code, audit=audit),
+            prov_override=promoted_source,
         )
         self._verify_round_trip(official_rel, model, data)
 

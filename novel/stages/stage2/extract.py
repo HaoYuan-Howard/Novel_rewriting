@@ -31,11 +31,13 @@ from contracts.schema.evaluation import GlobalReview
 from contracts.schema.stage1 import MainText
 from contracts.schema.stage2 import (
     BlueprintProvenance, ChapterBlueprints,
-    GlobalEdit, GlobalGrounding, GlobalGroundingResponse, GlobalProvenance,
-    RoleSplitResponse,
+    GlobalAgentTurnResponse, GlobalEdit, GlobalEvidencePatchTurn,
+    GlobalFullCandidateTurn, GlobalGrounding, GlobalGroundingResponse,
+    GlobalProvenance, RoleSplitResponse,
 )
 from novel import paths, prov
 from novel.config import MAX_CONCURRENCY
+from novel.core.evidence import iter_global_evidence_slots
 from novel.errors import (
     ArtifactUnreadable, GateBlocked, ProvenanceRefused,
     ResponseRepairBatchRequired, ResponseRepairRequired, TerminalState,
@@ -55,7 +57,9 @@ from novel.stages.stage2.character_refs import (
     blueprint_character_prompt_inventory, visible_character_refs_with_drops,
 )
 from novel.stages.stage2.normalize import (
+    EvidenceLocatorCorrection,
     normalize_blueprints, normalize_global,
+    restore_failed_global_evidence_locators,
 )
 from novel.stages.stage2.paragraphs import paragraph_spans, render_numbered
 from novel.stages.stage2.references import (
@@ -203,7 +207,12 @@ class GlobalCandidateEvaluation:
     source_attempt_id: str | None
     requested_model: str
     adopted_models: tuple[str, ...]
+    response_sha256: str
     _response: GlobalGroundingResponse = field(repr=False)
+    _evidence_locator_failures: tuple[tuple[str, int, str, str], ...] = field(
+        repr=False)
+    _evidence_locator_corrections: tuple[EvidenceLocatorCorrection, ...] = field(
+        repr=False)
 
     @property
     def passed(self) -> bool:
@@ -212,6 +221,47 @@ class GlobalCandidateEvaluation:
     def feedback_rows(self) -> list[dict[str, object]]:
         """交给 agent resume 的 JSON-safe 行；不含 artifact 路径或来源账。"""
         return [row.to_dict() for row in self.feedback]
+
+
+@dataclass(frozen=True)
+class GlobalEvidencePatchTarget:
+    """一格可返给同 session 的 evidence 修订目标；路径来自统一槽位遍历。"""
+
+    claim_path: str
+    chapter_ordinal: int
+    locator: str
+    reason: str
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            'claim_path': self.claim_path,
+            'chapter_ordinal': self.chapter_ordinal,
+            'locator': self.locator,
+            'reason': self.reason,
+        }
+
+
+@dataclass(frozen=True)
+class GlobalEvidencePatchScope:
+    """绑定一份 raw global candidate 的关闭式 evidence patch allowlist。"""
+
+    candidate_sha256: str
+    targets: tuple[GlobalEvidencePatchTarget, ...]
+
+    @property
+    def allowed_paths(self) -> tuple[str, ...]:
+        return tuple(target.claim_path for target in self.targets)
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            'kind': 'evidence_patch',
+            'candidate_sha256': self.candidate_sha256,
+            'allowed_paths': list(self.allowed_paths),
+            'failures': [target.to_dict() for target in self.targets],
+            'instruction': (
+                '只返回 evidence_patch 分支；每个 allowed_path 恰好一项。'
+                '不得改 claim、ID、数组或任何未列出的字段。'),
+        }
 
 
 @dataclass(frozen=True)
@@ -428,9 +478,13 @@ def run_revalidate(
         if not store.exists(_GLOBAL_INVALID):
             raise UpstreamMissing(
                 f'{_GLOBAL_INVALID} 不在盘上——没有被拦下的全局问题稿要提升')
+        baseline = store.revalidation_baseline(
+            GLOBAL_REL, GlobalGrounding, actor=actor, reason=reason)
         artifact, raw = store.read_own(GlobalGrounding, _GLOBAL_INVALID)
         data = copy.deepcopy(raw)
         data.pop('_provenance', None)
+        restore_failed_global_evidence_locators(
+            data, baseline.provenance.evidence_locator_failures)
         data, accounting = normalize_global(data, main_text)
         rebuilt = GlobalGrounding.model_validate({
             **data,
@@ -450,6 +504,9 @@ def run_revalidate(
                 GLOBAL_REL, GlobalGrounding, actor=actor, reason=reason,
                 artifact_override=rebuilt)
             _refresh_global_review(store, store.read(GlobalGrounding, GLOBAL_REL))
+        _note_evidence_locator_corrections(
+            ctx, store, accounting.evidence_locator_corrections,
+            rel=GLOBAL_REL)
         both = _Both(store)
         return True, _report(
             ctx, store, both, both.judge(),
@@ -730,6 +787,43 @@ def build_global_user(title: str, main_text: list[dict[str, Any]]) -> str:
     ])
 
 
+def build_global_agent_system() -> str:
+    """为 agent 固定 full/patch 信封；legacy 单发仍沿用 direct global 形状。"""
+    from novel.stages.stage2 import prompts
+
+    full = {
+        'payload': {
+            'kind': 'full_candidate',
+            'candidate': prompts.GLOBAL_HINT,
+        },
+    }
+    patch = {
+        'payload': {
+            'kind': 'evidence_patch',
+            'candidate_sha256': '代码反馈给出的64位小写sha256',
+            'changes': [{
+                'claim_path': '只能复制代码反馈 allowed_paths 中的一项',
+                'evidence': {
+                    'chapter_ordinal': 1,
+                    'locator': '指定章内原样出现且唯一的短片段',
+                },
+            }],
+        },
+    }
+    return (
+        prompts.GLOBAL_SYS
+        + '\n\n最终只沿请求声明的唯一结构化出口提交一份'
+          '符合响应 JSON Schema 的完整对象，不要解释、不要 markdown。'
+          '第一次回答必须使用 full_candidate；只有代码反馈明确给出 '
+          'repair_contract.kind=evidence_patch 时，才使用 evidence_patch。'
+          'evidence_patch 必须逐字回显 candidate_sha256，并且只覆盖 allowed_paths。'
+        + '\n\n首轮完整候选形状：\n'
+        + json.dumps(full, ensure_ascii=False, indent=2)
+        + '\n\n代码指定局部证据修订时的形状：\n'
+        + json.dumps(patch, ensure_ascii=False, indent=2)
+    )
+
+
 def build_blueprint_user(title: str, main_text: list[dict[str, Any]],
                          targets: tuple[int, ...], *,
                          past_names: list[str],
@@ -850,6 +944,187 @@ def _canonical_sha256(value: object) -> str:
     return hashlib.sha256(payload).hexdigest()
 
 
+def global_response_sha256(response: GlobalGroundingResponse) -> str:
+    """hash-bound patch 的主体：未归一、无 provenance 的强类型 raw response。"""
+    return _canonical_sha256(response.model_dump(by_alias=True, mode='json'))
+
+
+def _global_response_slots(
+    response: GlobalGroundingResponse,
+) -> tuple[dict[str, Any], dict[str, tuple[dict[str, Any], str]]]:
+    """返回 raw response 深拷贝与 canonical claim_path → evidence 槽。"""
+    raw = response.model_dump(by_alias=True, mode='json')
+    slots: dict[str, tuple[dict[str, Any], str]] = {}
+    for path, owner, field_name in iter_global_evidence_slots(raw):
+        if path in slots:
+            raise ValueError(f'global evidence canonical claim_path 重复：{path}')
+        slots[path] = (owner, field_name)
+    return raw, slots
+
+
+def global_evidence_patch_scope(
+    evaluation: GlobalCandidateEvaluation,
+) -> GlobalEvidencePatchScope | None:
+    """仅把纯 ``global_evidence_unlocated`` 收成关闭式 patch allowlist。"""
+    if evaluation.hard_hits != ('global_evidence_unlocated',):
+        return None
+    if global_response_sha256(evaluation._response) != evaluation.response_sha256:
+        raise ProvenanceRefused(
+            'stage2.global 评估后 raw candidate 已变异；'
+            '拒绝用旧 SHA 构造 evidence patch allowlist')
+    _raw, slots = _global_response_slots(evaluation._response)
+    recorded = evaluation._evidence_locator_failures
+    if not recorded:
+        return None
+
+    by_path: dict[str, GlobalEvidencePatchTarget] = {}
+    for row in recorded:
+        if len(row) != 4:
+            return None
+        path, chapter, locator, reason = row
+        if (not isinstance(path, str) or path not in slots or path in by_path
+                or not isinstance(chapter, int) or isinstance(chapter, bool)
+                or not isinstance(locator, str) or not isinstance(reason, str)):
+            return None
+        by_path[path] = GlobalEvidencePatchTarget(
+            claim_path=path,
+            chapter_ordinal=chapter,
+            locator=locator,
+            reason=reason,
+        )
+
+    # 顺序也只认统一槽位遍历，不能让 provenance/finding 自己定义第二张路径表。
+    targets = tuple(by_path[path] for path in slots if path in by_path)
+    if len(targets) != len(recorded):
+        return None
+    return GlobalEvidencePatchScope(
+        candidate_sha256=evaluation.response_sha256,
+        targets=targets,
+    )
+
+
+def global_evidence_patch_feedback_rows(
+    evaluation: GlobalCandidateEvaluation,
+    scope: GlobalEvidencePatchScope,
+) -> list[dict[str, object]]:
+    """给 provider 的完整失败事实；服务审计仍由 client 只投影规则与计数。"""
+    rows = evaluation.feedback_rows()
+    matched = [row for row in rows
+               if row.get('rule') == 'global_evidence_unlocated']
+    if len(matched) != 1:
+        raise ValueError('evidence patch 必须恰好对应一条 global_evidence_unlocated 反馈')
+    matched[0]['repair_contract'] = scope.to_dict()
+    return rows
+
+
+def global_full_candidate_feedback_rows(
+    evaluation: GlobalCandidateEvaluation,
+) -> list[dict[str, object]]:
+    """非局部 HARD 明确要求信封的完整候选分支。"""
+    rows = evaluation.feedback_rows()
+    contract = {
+        'kind': 'full_candidate',
+        'instruction': '返回完整 full_candidate；不得返回 evidence_patch。',
+    }
+    for row in rows:
+        row['repair_contract'] = dict(contract)
+    return rows
+
+
+def _patch_projection(
+    raw: dict[str, Any], allowed_paths: tuple[str, ...],
+) -> dict[str, Any]:
+    """抹掉授权 evidence 槽后比较整棵树，防 applicator 意外改到别处。"""
+    projected = copy.deepcopy(raw)
+    slots = {
+        path: (owner, field_name)
+        for path, owner, field_name in iter_global_evidence_slots(projected)
+    }
+    for path in allowed_paths:
+        owner, field_name = slots[path]
+        owner[field_name] = {'_authorized_evidence_patch': path}
+    return projected
+
+
+def apply_global_evidence_patch(
+    prepared: GlobalCandidateContext,
+    evaluation: GlobalCandidateEvaluation,
+    patch: GlobalEvidencePatchTurn,
+) -> GlobalGroundingResponse:
+    """关闭式合并 evidence patch；返回值仍须再走完整 evaluate/finalize。"""
+    actual_base_sha256 = global_response_sha256(evaluation._response)
+    if actual_base_sha256 != evaluation.response_sha256:
+        raise ValueError(
+            'stage2.global 评估后 raw candidate 已变异；'
+            '拒绝把旧 SHA 绑定的 patch 套到新内容')
+    scope = global_evidence_patch_scope(evaluation)
+    if scope is None:
+        raise ValueError('当前候选不是纯 global_evidence_unlocated，禁止 evidence patch')
+    if patch.candidate_sha256 != scope.candidate_sha256:
+        raise ValueError(
+            'evidence patch candidate_sha256 与当前 raw candidate 不一致')
+
+    patch_by_path = {item.claim_path: item for item in patch.changes}
+    allowed = scope.allowed_paths
+    if set(patch_by_path) != set(allowed):
+        missing = sorted(set(allowed) - set(patch_by_path))
+        extra = sorted(set(patch_by_path) - set(allowed))
+        raise ValueError(
+            f'evidence patch 路径集合必须与 allowlist 精确相等：'
+            f'missing={missing}, extra={extra}')
+
+    before, slots = _global_response_slots(evaluation._response)
+    candidate = copy.deepcopy(before)
+    candidate_slots = {
+        path: (owner, field_name)
+        for path, owner, field_name in iter_global_evidence_slots(candidate)
+    }
+    for path in allowed:
+        owner, field_name = candidate_slots[path]
+        replacement = patch_by_path[path].evidence.model_dump(
+            by_alias=True, mode='json')
+        if owner.get(field_name) == replacement:
+            raise ValueError(f'evidence patch {path} 是 no-op')
+        owner[field_name] = replacement
+
+    if _patch_projection(before, allowed) != _patch_projection(candidate, allowed):
+        raise ValueError('evidence patch 改动了 allowlist 之外的字段')
+    repaired = GlobalGroundingResponse.model_validate(candidate)
+
+    # 这里只验 hash/path/no-op/非授权投影与完整 response schema。
+    # accepted 后由 evaluate_global_candidate 统一跑 normalize + 全部 HARD。
+    # 若多格 patch 修好了一部分，新失败集会绑定新 candidate SHA
+    # 继续窄 patch，不迫迫模型重做已经有进展的槽。
+    _ = prepared  # 保留参数作为 applicator 与 validator 的固定边界。
+    return repaired
+
+
+def validate_global_full_candidate_turn(
+    response: GlobalAgentTurnResponse, _wire: Any,
+) -> str | None:
+    """初轮/完整重写轮只能返回 full_candidate 分支。"""
+    if not isinstance(response.payload, GlobalFullCandidateTurn):
+        return '本轮只接受 full_candidate；evidence_patch 尚无当前候选可绑定'
+    return None
+
+
+def global_evidence_patch_validator(
+    prepared: GlobalCandidateContext,
+    evaluation: GlobalCandidateEvaluation,
+) -> Callable[[GlobalAgentTurnResponse, Any], str | None]:
+    """构造绑定当前候选的 dynamic validator；错误 patch 不进入 accepted 状态。"""
+    def validate(response: GlobalAgentTurnResponse, _wire: Any) -> str | None:
+        if not isinstance(response.payload, GlobalEvidencePatchTurn):
+            return '本轮 repair_contract 只接受 evidence_patch，不接受完整候选'
+        try:
+            apply_global_evidence_patch(prepared, evaluation, response.payload)
+        except (TypeError, ValueError) as exc:
+            return str(exc)
+        return None
+
+    return validate
+
+
 def _read_blueprint_guard(
         ctx: RunContext, store: ArtifactStore, *, observe: bool,
 ) -> _BlueprintGuard:
@@ -915,7 +1190,9 @@ def _read_global_downstream_guard(
     )
 
 
-def prepare_global_candidate(ctx: RunContext) -> GlobalCandidateContext:
+def prepare_global_candidate(
+    ctx: RunContext, *, agent_envelope: bool = False,
+) -> GlobalCandidateContext:
     """冻结一次 global 候选循环的 prompt、正文与下游差分基线。
 
     本函数不调用模型、不铸 provenance、不写盘。blueprint/旧 global 只决定能否提交，
@@ -927,6 +1204,8 @@ def prepare_global_candidate(ctx: RunContext) -> GlobalCandidateContext:
     store = ArtifactStore(ctx)
     requests = build_prompts(ctx)
     _ordinal, system, user = requests[0]
+    if agent_envelope:
+        system = build_global_agent_system()
     main_text = _read_main_text(store)
     assert main_text is not None
     with ctx.validation_reads():
@@ -1052,7 +1331,12 @@ def _materialize_global_evaluation(
         source_attempt_id=source_attempt_id,
         requested_model=requested_model,
         adopted_models=tuple(sorted(set(adopted_models))),
+        response_sha256=global_response_sha256(response),
         _response=response.model_copy(deep=True),
+        _evidence_locator_failures=tuple(
+            tuple(row) for row in accounting['evidence_locator_failures']),
+        _evidence_locator_corrections=(
+            accounting.evidence_locator_corrections),
     )
 
 
@@ -1114,6 +1398,34 @@ def _write_invalid(
 ) -> str:
     """Store a failed round; the store atomically preserves its predecessor."""
     return str(store.write_invalid(rel, artifact, gates_skipped=[]))
+
+
+def _note_evidence_locator_corrections(
+    ctx: RunContext,
+    store: ArtifactStore,
+    corrections: tuple[EvidenceLocatorCorrection, ...],
+    *,
+    rel: str,
+) -> None:
+    """在候选字节落地后记录无正文的跨章唯一回取账。"""
+    if not corrections:
+        return
+    artifact_sha256 = store.full_sha256_or_none(rel)
+    if artifact_sha256 is None:
+        raise ProvenanceRefused(
+            f'{rel} 还未落地，拒绝把 evidence locator 纠正记成已采用')
+    for correction in corrections:
+        ctx.ledger.note_evidence_locator_rewrite(
+            sid=ctx.sid,
+            node=ctx.node,
+            purpose=ctx.node,
+            artifact=rel,
+            artifact_sha256=artifact_sha256,
+            claim_path=correction.claim_path,
+            original_chapter_ordinal=correction.original_chapter,
+            resolved_chapter_ordinal=correction.resolved_chapter,
+            match_mode=correction.recovery,
+        )
 
 
 def _note_adopted(ctx: RunContext, client: _GlobalResponseSource, *, rel: str,
@@ -1232,6 +1544,10 @@ def finalize_global_candidate(
     if source.accepted_models(ctx.node) != evaluation.adopted_models:
         raise ProvenanceRefused(
             'stage2.global 候选评估后 adopted model 集合漂移；拒绝猜测来源')
+    if global_response_sha256(evaluation._response) != evaluation.response_sha256:
+        raise ProvenanceRefused(
+            'stage2.global 候选评估后 raw candidate 已变异；'
+            '拒绝用旧 SHA 的评估结论提交新内容')
 
     _assert_global_guard_current(ctx, prepared)
     terminal = _materialize_global_evaluation(
@@ -1247,12 +1563,22 @@ def finalize_global_candidate(
         raise ProvenanceRefused(
             'stage2.global 同一候选的 provisional/final HARD 结论不一致；'
             '拒绝在判据非确定时写盘')
+    if (terminal._evidence_locator_failures
+            != evaluation._evidence_locator_failures
+            or terminal._evidence_locator_corrections
+            != evaluation._evidence_locator_corrections):
+        raise ProvenanceRefused(
+            'stage2.global 同一候选的 provisional/final evidence 定位账不一致；'
+            '拒绝在确定性归一漂移时写盘')
 
     store = ArtifactStore(ctx)
     artifact = terminal.candidate
     candidate = artifact.model_dump(by_alias=True)
     if terminal.hard_hits:
         path = _write_invalid(store, GLOBAL_REL, artifact)
+        _note_evidence_locator_corrections(
+            ctx, store, terminal._evidence_locator_corrections,
+            rel=_GLOBAL_INVALID)
         raise GateBlocked(
             f'stage2.global 落盘闸门命中 {list(terminal.hard_hits)}。问题稿已存 '
             f'{_GLOBAL_INVALID}，正式产物没有被覆盖。改好后跑 '
@@ -1262,6 +1588,9 @@ def finalize_global_candidate(
         )
 
     _write_formal(store, GLOBAL_REL, artifact)
+    _note_evidence_locator_corrections(
+        ctx, store, terminal._evidence_locator_corrections,
+        rel=GLOBAL_REL)
     landed = verify_global_delivery(ctx, prepared, artifact)
     _note_adopted(
         ctx, source, rel=GLOBAL_REL, candidate=candidate,
@@ -1442,6 +1771,9 @@ def run_purge_role(ctx: RunContext, client: LlmClient) -> GlobalGrounding:
     )
     if hits:
         path = _write_invalid(store, GLOBAL_REL, artifact)
+        _note_evidence_locator_corrections(
+            ctx, store, accounting.evidence_locator_corrections,
+            rel=_GLOBAL_INVALID)
         raise GateBlocked(
             f'role/fate 重划后仍命中 {hits}。问题稿保留在 {_GLOBAL_INVALID}。'
             '改好后跑 `stage2.global --revalidate --actor <id> --reason <why>`'
@@ -1449,6 +1781,9 @@ def run_purge_role(ctx: RunContext, client: LlmClient) -> GlobalGrounding:
             invalid_path=path,
         )
     _write_formal(store, GLOBAL_REL, artifact)
+    _note_evidence_locator_corrections(
+        ctx, store, accounting.evidence_locator_corrections,
+        rel=GLOBAL_REL)
     _note_adopted(ctx, client, rel=GLOBAL_REL, candidate=candidate,
                   purposes={f'{ctx.node}:purge-role': None})
     return artifact
@@ -3128,11 +3463,17 @@ def run_renormalize(ctx: RunContext) -> CheckReport:
         hits = _hard_hits(outcomes, ignore={'upstream_missing'})
         if hits:
             _write_invalid(store, GLOBAL_REL, artifact)
+            _note_evidence_locator_corrections(
+                ctx, store, accounting.evidence_locator_corrections,
+                rel=_GLOBAL_INVALID)
             both = _Both(store)
             return _report(
                 ctx, store, both, outcomes,
                 judged_rel=_GLOBAL_INVALID, invalid_rel=_GLOBAL_INVALID)
         _write_formal(store, GLOBAL_REL, artifact)
+        _note_evidence_locator_corrections(
+            ctx, store, accounting.evidence_locator_corrections,
+            rel=GLOBAL_REL)
         both = _Both(store)
         return _report(
             ctx, store, both, both.judge(),
@@ -3440,6 +3781,9 @@ def run_apply_edit(ctx: RunContext, edit_path: str = '') -> tuple[GlobalGroundin
     hits = _hard_hits(outcomes, ignore={'upstream_missing'})
     if hits:
         path = _write_invalid(store, GLOBAL_REL, artifact)
+        _note_evidence_locator_corrections(
+            ctx, store, accounting.evidence_locator_corrections,
+            rel=_GLOBAL_INVALID)
         raise GateBlocked(
             f'人工 Stage2 订正被落盘闸门拦下：{hits}（改动 {changed}）。'
             f'问题稿在 {path}，**正式全书底座没有被覆盖**；'
@@ -3450,6 +3794,9 @@ def run_apply_edit(ctx: RunContext, edit_path: str = '') -> tuple[GlobalGroundin
             invalid_path=path)
 
     _write_formal(store, GLOBAL_REL, artifact)
+    _note_evidence_locator_corrections(
+        ctx, store, accounting.evidence_locator_corrections,
+        rel=GLOBAL_REL)
     both = _Both(store)
     return artifact, _report(ctx, store, both, both.judge(),
                              judged_rel=GLOBAL_REL, invalid_rel=_GLOBAL_INVALID)

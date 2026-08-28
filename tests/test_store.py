@@ -628,7 +628,8 @@ def test_stage5_review_name_projection_ignores_non_name_character_metadata():
 @pytest.mark.parametrize('edited', (
     'secret_fact', 'setup', 'first_reveal', 'knowledge_events', 'role', 'fate',
     'relations', 'setting', 'arc', 'world_rules',
-    'name_distinctiveness', 'address_context', 'address_by', 'address_from_chapter',
+    'name_distinctiveness', 'address_context', 'address_by', 'evidence',
+    'address_from_chapter',
 ))
 def test_blueprint_grounding_projection_only_tracks_attested_names(edited: str):
     """改 global 的非称名字段或无效时点，不许让 blueprint 判 stale。
@@ -678,6 +679,11 @@ def test_blueprint_grounding_projection_only_tracks_attested_names(edited: str):
         char['address'][0]['context'] = 'reference'
     elif edited == 'address_by':
         char['address'][0]['by'] = 'narration'
+    elif edited == 'evidence':
+        secret['evidence'] = {
+            'chapter_ordinal': 2,
+            'source': {'text': '另一处证据', 'start': 80, 'end': 85},
+        }
     else:
         # 本 fixture 的「掌柜」只挂 char_001；运行时只按正文首现控制它，
         # 所以这个 from_chapter 不影响任何逐章候选字节。

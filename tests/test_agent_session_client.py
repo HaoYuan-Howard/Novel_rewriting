@@ -3,6 +3,7 @@
 """逐节点 agent logical session 的零成本协议测试。"""
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 
@@ -12,6 +13,8 @@ from pydantic import BaseModel, ConfigDict
 from contracts.schema.orchestration import AgentProfile
 from novel import agent_session_audit, prov
 from novel.agents import (
+    CLAUDE_STRUCTURED_DELIVERY_FOOTER_V1,
+    CLAUDE_STRUCTURED_DELIVERY_V1,
     AgentConfigurationError, AgentDriver, AgentProbe, AgentRequest, AgentTurn,
     AgentUsage,
 )
@@ -32,6 +35,7 @@ class _Answer(BaseModel):
 class _FakeDriver(AgentDriver):
     driver = 'codex'
     provider = 'openai'
+    model = 'gpt-5.6-sol'
 
     def __init__(self, responses: list[str]) -> None:
         self.responses = list(responses)
@@ -40,13 +44,14 @@ class _FakeDriver(AgentDriver):
 
     def probe(self) -> AgentProbe:
         return AgentProbe(
-            driver=self.driver, provider=self.provider, executable='fake-codex',
+            driver=self.driver, provider=self.provider,
+            executable=f'fake-{self.driver}',
             available=True, version='0.test')
 
     def _turn(self) -> AgentTurn:
         return AgentTurn(
             session_id='provider-session-1', content=self.responses.pop(0),
-            model='gpt-5.6-sol', actual_reasoning_effort='high',
+            model=self.model, actual_reasoning_effort='high',
             usage=AgentUsage(
                 prompt_tokens=10, completion_tokens=3, reasoning_tokens=2,
                 total_tokens=13),
@@ -54,13 +59,13 @@ class _FakeDriver(AgentDriver):
         )
 
     def start(self, profile: AgentProfile, request: AgentRequest) -> AgentTurn:
-        assert profile.model == 'gpt-5.6-sol'
+        assert profile.model == self.model
         self.calls.append(('start', None, request))
         return self._turn()
 
     def resume(self, profile: AgentProfile, session_id: str,
                request: AgentRequest) -> AgentTurn:
-        assert profile.model == 'gpt-5.6-sol'
+        assert profile.model == self.model
         assert session_id == 'provider-session-1'
         self.calls.append(('resume', session_id, request))
         return self._turn()
@@ -72,25 +77,50 @@ class _FakeDriver(AgentDriver):
         self.closed = True
 
 
+class _ClaudeDriver(_FakeDriver):
+    driver = 'claude-code'
+    provider = 'anthropic'
+    model = 'claude-opus-5'
+
+
 def _profile() -> AgentProfile:
     return AgentProfile(
         driver='codex', model='gpt-5.6-sol', reasoning_effort='high',
         execution_mode='standard')
 
 
-def _ctx(base: Path, node: str = 'stage2.global') -> RunContext:
+def _claude_profile() -> AgentProfile:
+    return AgentProfile(
+        driver='claude-code', model='claude-opus-5', reasoning_effort='high',
+        execution_mode='standard')
+
+
+def _ctx(base: Path, node: str = 'stage2.global', *,
+         profile: AgentProfile | None = None) -> RunContext:
     book = base / '会话测试_42'
     book.mkdir(exist_ok=True)
     return RunContext(
         novel_dir=book, node=node, paid=True,
         code=prov.code_version(), cache=CachePolicy.default(),
-        ledger=CostLedger(path=ledger_path(base)), executor_profile=_profile())
+        ledger=CostLedger(path=ledger_path(base)),
+        executor_profile=profile or _profile())
 
 
 def _rows(path: Path) -> list[dict[str, object]]:
     if not path.exists():
         return []
     return [json.loads(line) for line in path.read_text(encoding='utf-8').splitlines()]
+
+
+def _sha(text: str) -> str:
+    return hashlib.sha256(text.encode('utf-8')).hexdigest()
+
+
+def _canonical_sha(value: object) -> str:
+    return hashlib.sha256(json.dumps(
+        value, ensure_ascii=False, sort_keys=True,
+        separators=(',', ':'), allow_nan=False,
+    ).encode('utf-8')).hexdigest()
 
 
 def test_parse_failure_resumes_same_session_and_links_both_ledgers(tmp_path):
@@ -166,6 +196,77 @@ def test_business_rejection_only_sends_feedback_on_resume(tmp_path):
         'loc': 'global.canon', 'type': 'business_rule', 'count': 1,
     }]
     assert '证据片段' not in json.dumps(rejected, ensure_ascii=False)
+
+
+def test_claude_structured_footer_is_once_and_hashes_exact_final_stdin(tmp_path):
+    profile = _claude_profile()
+    ctx = _ctx(tmp_path, profile=profile)
+    driver = _ClaudeDriver(['{"value":1}', '{"value":2}'])
+    client = SessionAgentClient(ctx, profile, driver, max_turns=2)
+
+    client.ask_json(
+        '稳定系统约束', '含正文的原始任务', model_cls=_Answer,
+        purpose='stage2.global')
+    assert client.queue_code_validation_feedback([{
+        'rule': 'global.canon', 'count': 1,
+    }]) is True
+    result = client.ask_json(
+        '稳定系统约束', '含正文的原始任务', model_cls=_Answer,
+        purpose='stage2.global')
+    checkpoint = client.accepted_checkpoint('stage2.global')
+    client.finish(process_state='ok', delivery_state='delivered')
+    client.close()
+
+    assert result.value == 2
+    first, second = (call[2] for call in driver.calls)
+    for request in (first, second):
+        assert request.output_schema is not None
+        assert request.delivery_protocol == CLAUDE_STRUCTURED_DELIVERY_V1
+        assert request.stdin_text().endswith(
+            CLAUDE_STRUCTURED_DELIVERY_FOOTER_V1)
+        assert request.stdin_text().count(
+            CLAUDE_STRUCTURED_DELIVERY_FOOTER_V1) == 1
+        assert CLAUDE_STRUCTURED_DELIVERY_FOOTER_V1 not in request.prompt
+    assert second.system is None
+    assert 'code_validation_failed' in second.prompt
+    assert '不要调用工具' not in second.prompt
+    assert '沿请求声明的唯一结构化出口提交' in second.prompt
+
+    [session] = agent_session_audit.fold(
+        agent_session_audit.read_events(tmp_path))
+    assert session.start.prompt_sha256 == _sha(first.stdin_text())
+    assert [turn.prompt_sha256 for turn in session.turns] == [
+        _sha(first.stdin_text()), _sha(second.stdin_text())]
+    assert checkpoint['accepted_prompt_sha256'] == _sha(second.stdin_text())
+
+    ledger = _rows(ledger_path(tmp_path))
+    assert len(ledger) == 2
+    expected_identities = (
+        {
+            'protocol_version': 'node-executor/v1',
+            'profile': profile.model_dump(),
+            'subject_sha256': checkpoint['subject_sha256'],
+            'provider_session_id': None,
+            'system_sha256': _sha('稳定系统约束'),
+            'prompt_sha256': _sha(first.stdin_text()),
+            'schema_sha256': checkpoint['accepted_schema_sha256'],
+            'purpose': 'stage2.global',
+            'turn_index': 1,
+        },
+        {
+            'protocol_version': 'node-executor/v1',
+            'profile': profile.model_dump(),
+            'subject_sha256': checkpoint['subject_sha256'],
+            'provider_session_id': 'provider-session-1',
+            'system_sha256': None,
+            'prompt_sha256': _sha(second.stdin_text()),
+            'schema_sha256': checkpoint['accepted_schema_sha256'],
+            'purpose': 'stage2.global',
+            'turn_index': 2,
+        },
+    )
+    assert [row['request_fingerprint'] for row in ledger] == [
+        _canonical_sha(identity) for identity in expected_identities]
 
 
 def test_subject_change_is_refused_before_another_provider_turn(tmp_path):

@@ -33,6 +33,89 @@ from typing import Any, Literal, Protocol
 from contracts.schema.orchestration import AgentProfile
 
 
+PLAIN_DELIVERY = 'plain'
+CLAUDE_STRUCTURED_DELIVERY_V1 = 'claude-structured-output/v1'
+AgentDeliveryProtocol = Literal[
+    'plain',
+    'claude-structured-output/v1',
+]
+
+#: Claude CLI 的 ``--json-schema`` 会把最终交付实现成内置 structured-output
+#: tool call。footer 只说明**怎样交付最后一份对象**，不重复业务 prompt/schema；
+#: 版本写进稳定标记，后续若改字必须显式换协议名并自然改变真实 stdin hash。
+CLAUDE_STRUCTURED_DELIVERY_FOOTER_V1 = """\
+--- 结构化交付协议 v1（claude-structured-output/v1）---
+本轮已提供 JSON Schema。最终答案必须且只能通过 CLI 提供的结构化输出工具提交一次：
+工具参数本身就是符合 schema 的完整响应对象；不要先在普通回答中打印 JSON，不要套
+`response`、`result` 或 `structured_output` 包装键，也不要在结构化提交之后重复输出。
+除 CLI 内建的 `StructuredOutput` 外，不得调用任何其他工具。"""
+
+
+def agent_delivery_protocol(*, driver: str,
+                            has_output_schema: bool) -> AgentDeliveryProtocol:
+    """把 driver/schema 组合映射到唯一 stdin 交付协议。"""
+    if driver == 'claude-code' and has_output_schema:
+        return CLAUDE_STRUCTURED_DELIVERY_V1
+    return PLAIN_DELIVERY
+
+
+def render_agent_stdin(
+    system: str | None,
+    prompt: str,
+    *,
+    delivery_protocol: AgentDeliveryProtocol = PLAIN_DELIVERY,
+) -> str:
+    """渲染真正送进 CLI stdin 的唯一字节源（编码前）。"""
+    if system is None:
+        rendered = prompt
+    else:
+        rendered = f'{system}\n\n--- 本轮任务 ---\n\n{prompt}'
+    if delivery_protocol == PLAIN_DELIVERY:
+        return rendered
+    if delivery_protocol == CLAUDE_STRUCTURED_DELIVERY_V1:
+        return f'{rendered}\n\n{CLAUDE_STRUCTURED_DELIVERY_FOOTER_V1}'
+    raise AgentConfigurationError(
+        f'未知 agent delivery_protocol={delivery_protocol!r}')
+
+
+def render_agent_stdin_bytes(
+    system: str | None,
+    prompt: str,
+    *,
+    delivery_protocol: AgentDeliveryProtocol = PLAIN_DELIVERY,
+) -> bytes:
+    """把最终 stdin 渲染为生产子进程真正接收的 UTF-8 字节。
+
+    这是送达、prompt SHA、request fingerprint 与 checkpoint 的共同
+    落点；生产 runner 不得再把它放回文本模式，否则 Windows 会把
+    LF 静默转为 CRLF，导致账上哈希与 provider 所见字节分家。
+    """
+    return render_agent_stdin(
+        system, prompt, delivery_protocol=delivery_protocol).encode('utf-8')
+
+
+def render_structured_agent_stdin(
+        system: str, prompt: str, *, driver: str) -> str:
+    """checkpoint/恢复守卫复算一次结构化请求的真实首轮 stdin。"""
+    return render_agent_stdin(
+        system,
+        prompt,
+        delivery_protocol=agent_delivery_protocol(
+            driver=driver, has_output_schema=True),
+    )
+
+
+def render_structured_agent_stdin_bytes(
+        system: str, prompt: str, *, driver: str) -> bytes:
+    """checkpoint/恢复守卫复算结构化请求的真实 UTF-8 stdin。"""
+    return render_agent_stdin_bytes(
+        system,
+        prompt,
+        delivery_protocol=agent_delivery_protocol(
+            driver=driver, has_output_schema=True),
+    )
+
+
 class AgentError(RuntimeError):
     """所有 agent 驱动错误的共同父类。"""
 
@@ -82,6 +165,7 @@ class AgentRequest:
     execution_policy: Literal['executor-isolated']
     system: str | None = None
     output_schema: Mapping[str, Any] | None = None
+    delivery_protocol: AgentDeliveryProtocol = PLAIN_DELIVERY
     cwd: str | os.PathLike[str] | None = None
 
     def __post_init__(self) -> None:
@@ -99,12 +183,26 @@ class AgentRequest:
         if self.output_schema is not None and not isinstance(
                 self.output_schema, Mapping):
             raise AgentConfigurationError('output_schema 必须是 JSON object')
+        if self.delivery_protocol not in (
+                PLAIN_DELIVERY, CLAUDE_STRUCTURED_DELIVERY_V1):
+            raise AgentConfigurationError(
+                f'未知 agent delivery_protocol={self.delivery_protocol!r}')
+        if (self.delivery_protocol == CLAUDE_STRUCTURED_DELIVERY_V1
+                and self.output_schema is None):
+            raise AgentConfigurationError(
+                'claude structured delivery 必须同时提供 output_schema')
 
     def stdin_text(self) -> str:
         """生成跨厂商一致的 stdin；不把多行正文塞进命令行。"""
-        if self.system is None:
-            return self.prompt
-        return f'{self.system}\n\n--- 本轮任务 ---\n\n{self.prompt}'
+        return render_agent_stdin(
+            self.system, self.prompt,
+            delivery_protocol=self.delivery_protocol)
+
+    def stdin_bytes(self) -> bytes:
+        """生成真正送达子进程且用于哈希绑定的 stdin 字节。"""
+        return render_agent_stdin_bytes(
+            self.system, self.prompt,
+            delivery_protocol=self.delivery_protocol)
 
 
 @dataclass(frozen=True)
@@ -183,7 +281,7 @@ class AgentDriver(ABC):
 class Runner(Protocol):
     """可注入的命令执行缝；真实实现与测试 fake 共用这一张面。"""
 
-    def run(self, argv: Sequence[str], *, input: str | None,
+    def run(self, argv: Sequence[str], *, input: bytes | None,
             cwd: str | None, timeout: float,
             session_id: str | None) -> subprocess.CompletedProcess[str]: ...
 
@@ -225,20 +323,26 @@ def ensure_command_line_fits(
 
 
 class _CallableRunner:
-    """兼容简单 ``subprocess.run`` 形 fake；同步 callable 本身不可中途取消。"""
+    """兼容文本 ``subprocess.run`` 形 fake；生产送达仍只走字节。
+
+    这一层只是测试适配器：它把已冻结的 UTF-8 字节还原成
+    ``str`` 交给历史 fake，不参与真实 CLI 子进程的 newline 处理。
+    """
 
     def __init__(self, call: RunnerCallable) -> None:
         self._call = call
         self._closed = False
 
-    def run(self, argv: Sequence[str], *, input: str | None,
+    def run(self, argv: Sequence[str], *, input: bytes | None,
             cwd: str | None, timeout: float,
             session_id: str | None) -> subprocess.CompletedProcess[str]:
         del session_id
         if self._closed:
             raise AgentConfigurationError('runner 已关闭')
         return self._call(
-            list(argv), input=input, cwd=cwd, capture_output=True, text=True,
+            list(argv),
+            input=(None if input is None else input.decode('utf-8')),
+            cwd=cwd, capture_output=True, text=True,
             encoding='utf-8', errors='replace', timeout=timeout, check=False,
             shell=False)
 
@@ -255,10 +359,10 @@ class _SubprocessRunner:
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
-        self._active: tuple[subprocess.Popen[str], str | None] | None = None
+        self._active: tuple[subprocess.Popen[bytes], str | None] | None = None
         self._closed = False
 
-    def run(self, argv: Sequence[str], *, input: str | None,
+    def run(self, argv: Sequence[str], *, input: bytes | None,
             cwd: str | None, timeout: float,
             session_id: str | None) -> subprocess.CompletedProcess[str]:
         with self._lock:
@@ -279,8 +383,8 @@ class _SubprocessRunner:
                 process_options['start_new_session'] = True
             process = subprocess.Popen(
                 list(argv), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE, cwd=cwd, text=True, encoding='utf-8',
-                errors='replace', shell=False, **process_options)
+                stderr=subprocess.PIPE, cwd=cwd, text=False,
+                shell=False, **process_options)
             self._active = (process, session_id)
         try:
             stdout, stderr = process.communicate(input=input, timeout=timeout)
@@ -307,7 +411,9 @@ class _SubprocessRunner:
                 if self._active is not None and self._active[0] is process:
                     self._active = None
         return subprocess.CompletedProcess(
-            list(argv), int(process.returncode), stdout, stderr)
+            list(argv), int(process.returncode),
+            stdout.decode('utf-8', errors='replace'),
+            stderr.decode('utf-8', errors='replace'))
 
     def cancel(self, session_id: str | None = None) -> bool:
         with self._lock:
@@ -330,7 +436,7 @@ class _SubprocessRunner:
             process = active[0]
         _signal_process_tree(process, force=True)
 
-    def _owns(self, process: subprocess.Popen[str]) -> bool:
+    def _owns(self, process: subprocess.Popen[Any]) -> bool:
         """确认异常处理仍只操作本轮 Popen；避免结束/新一轮交界处误杀。"""
         with self._lock:
             return self._active is not None and self._active[0] is process
@@ -342,7 +448,7 @@ def _windows_taskkill_path() -> str:
     return str(Path(system_root) / 'System32' / 'taskkill.exe')
 
 
-def _signal_process_tree(process: subprocess.Popen[str], *, force: bool) -> bool:
+def _signal_process_tree(process: subprocess.Popen[Any], *, force: bool) -> bool:
     """只终止 ``process`` 建立的进程组/树；进程不存在时返回 False。
 
     Windows 没有可移植的 ``killpg``，沿用本仓已经实跑验证的 ``taskkill /T``；
@@ -583,7 +689,7 @@ class CliAgentDriver(AgentDriver):
         cwd = self._prepare_request_cwd(request, session_id=session_id)
         try:
             return self._runner.run(
-                argv, input=request.stdin_text(), cwd=cwd,
+                argv, input=request.stdin_bytes(), cwd=cwd,
                 timeout=self.timeout, session_id=session_id)
         except subprocess.TimeoutExpired as exc:
             raise AgentCommandError(

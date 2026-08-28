@@ -39,7 +39,7 @@ from contracts.invariants import (
     TIME_LAYERS, WORLD_RULE_KINDS,
 )
 from contracts.schema.base import Fp10, StrictModel
-from contracts.schema.common import LlmProvenance
+from contracts.schema.common import LlmProvenance, Sha256
 
 #: 「谁在这么叫」。取值是**某个 `char_id`**，或 `ADDRESS_BY` 里那两个字面之一。
 #: ⚠ `ADDRESS_BY` 记的是**三类**（`char_id` 是类名不是值），所以这里必须写成模式，
@@ -640,6 +640,47 @@ class GlobalGroundingResponse(StrictModel):
     entities: EntitiesResponse
     canon: CanonResponse
     arc: ArcResponse
+
+
+class GlobalEvidenceLocatorPatch(StrictModel):
+    """一格全局事实证据的 agent 私有修订；路径只作关闭式槽位标识。"""
+
+    claim_path: str = Field(min_length=1, max_length=240)
+    evidence: EvidenceLocator
+
+
+class GlobalFullCandidateTurn(StrictModel):
+    """stage2.global agent 首轮或非局部 HARD 的完整候选分支。"""
+
+    kind: Literal['full_candidate']
+    candidate: GlobalGroundingResponse
+
+
+class GlobalEvidencePatchTurn(StrictModel):
+    """只允许改当前候选已失败 evidence 槽的 hash-bound 修订分支。"""
+
+    kind: Literal['evidence_patch']
+    candidate_sha256: Sha256
+    changes: list[GlobalEvidenceLocatorPatch] = Field(min_length=1)
+
+    @model_validator(mode='after')
+    def _claim_paths_are_unique(self) -> GlobalEvidencePatchTurn:
+        paths = [change.claim_path for change in self.changes]
+        if len(paths) != len(set(paths)):
+            raise ValueError('evidence patch claim_path 不能重复')
+        return self
+
+
+GlobalAgentPayload = Annotated[
+    GlobalFullCandidateTurn | GlobalEvidencePatchTurn,
+    Field(discriminator='kind'),
+]
+
+
+class GlobalAgentTurnResponse(StrictModel):
+    """stage2.global agent 全 session 固定信封；修复轮不得切换 wire schema。"""
+
+    payload: GlobalAgentPayload
 
 
 class RoleFateResponse(StrictModel):

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 import threading
 from pathlib import Path
@@ -320,6 +321,18 @@ def test_crash_restore_opens_one_new_subject_and_never_builds_restored_drivers(
         if record.start.chapter == 1 and record.session_run_id != old[0].session_run_id
     ]
     assert len(newer) == 1 and newer[0].delivery_state == 'delivered'
+    original_request = AgentRequest(
+        prompt=feedback['original_task'], system=request.system,
+        output_schema=request.output_schema,
+        delivery_protocol=request.delivery_protocol,
+        execution_policy=request.execution_policy, cwd=request.cwd,
+    )
+    assert newer[0].turns
+    assert newer[0].start.prompt_sha256 == hashlib.sha256(
+        request.stdin_bytes()).hexdigest()
+    assert newer[0].start.prompt_sha256 == newer[0].turns[0].prompt_sha256
+    assert newer[0].start.prompt_sha256 != hashlib.sha256(
+        original_request.stdin_bytes()).hexdigest()
 
 
 def test_clean_checkpoint_restore_is_zero_driver_and_closes_old_sessions(

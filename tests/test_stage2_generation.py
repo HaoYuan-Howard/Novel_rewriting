@@ -21,7 +21,7 @@ from contracts.schema.evaluation import GlobalReview
 from contracts.schema.stage1 import MainText
 from contracts.schema.stage2 import (
     ChapterBlueprints, ChapterBlueprintsResponseV31,
-    GlobalGrounding, GlobalGroundingResponse,
+    GlobalEvidencePatchTurn, GlobalGrounding, GlobalGroundingResponse,
 )
 from novel import prov
 from novel.errors import (
@@ -44,7 +44,9 @@ from novel.stages.stage2.compile_v2 import (
     canonical_ir_projection_refs, canonical_ir_projection_v31,
 )
 from contracts.invariants import HINGE_FAILURE_ROUTE
-from novel.stages.stage2.normalize import normalize_global, normalize_verbatim
+from novel.stages.stage2.normalize import (
+    EvidenceLocatorCorrection, normalize_global, normalize_verbatim,
+)
 from novel.stages.stage2.paragraphs import paragraph_spans
 from novel.store import ArtifactStore
 from tests.test_stage2 import blueprints, global_grounding, main_text
@@ -220,6 +222,64 @@ def _response_global() -> dict:
     return data
 
 
+def _response_global_with_every_evidence_kind() -> dict:
+    """补一条非空 fate，使 R-2.20 的九类槽都能逐路径跑同一恢复尺子。"""
+    data = _response_global()
+    character = data['entities']['characters']['char_001']
+    character['fate'] = '最终仍独自承担家中账目'
+    character['fate_evidence'] = {
+        'chapter_ordinal': 3,
+        'locator': '她端起来吹了吹没有喝。',
+    }
+    return data
+
+
+_ALL_GLOBAL_EVIDENCE_PATHS = tuple(
+    path for path, _owner, _field in iter_global_evidence_slots(
+        _response_global_with_every_evidence_kind()))
+
+
+@pytest.mark.parametrize('claim_path', _ALL_GLOBAL_EVIDENCE_PATHS)
+def test_cross_chapter_unique_recovery_covers_every_global_evidence_slot(
+    claim_path: str,
+):
+    response = _response_global_with_every_evidence_kind()
+    assert len(_ALL_GLOBAL_EVIDENCE_PATHS) == 11
+    slots = {
+        path: (owner, field)
+        for path, owner, field in iter_global_evidence_slots(response)
+    }
+    owner, field = slots[claim_path]
+    evidence = owner[field]
+    original_chapter = evidence['chapter_ordinal']
+    locator = evidence['locator']
+    wrong_chapter = next(
+        section['chapter_ordinal'] for section in main_text()
+        if section['chapter_ordinal'] != original_chapter
+        and locator not in section['text'])
+    evidence['chapter_ordinal'] = wrong_chapter
+
+    normalized, accounting = normalize_global(response, main_text())
+    normalized_slots = {
+        path: (slot_owner, slot_field)
+        for path, slot_owner, slot_field in iter_global_evidence_slots(normalized)
+    }
+    normalized_owner, normalized_field = normalized_slots[claim_path]
+    landed = normalized_owner[normalized_field]
+
+    assert landed['chapter_ordinal'] == original_chapter
+    assert landed['source'] is not None
+    assert accounting['evidence_locator_failures'] == []
+    assert accounting.evidence_locator_corrections == (
+        EvidenceLocatorCorrection(
+            claim_path=claim_path,
+            original_chapter=wrong_chapter,
+            resolved_chapter=original_chapter,
+            recovery='exact',
+        ),
+    )
+
+
 @pytest.mark.parametrize(('branch', 'message'), [
     ('secret', 'duplicate secret ids'),
     ('world_rule', 'duplicate world rule ids'),
@@ -290,17 +350,19 @@ def test_global_response_rejects_order_dependent_timelines_and_lossy_values():
             GlobalGroundingResponse.model_validate(payload)
 
 
-@pytest.mark.parametrize(('chapter', 'locator', 'recovery', 'failure_fragment'), [
-    (1, '信上说父亲已经回城。', 'exact', None),
-    (1, '信上说 父亲，已经回城', 'normalized', None),
-    (1, '这句话在原文里不存在', None, '找不到'),
-    (1, '她', None, '多处命中'),
-    (2, '信上说父亲已经回城。', None, '找不到'),
+@pytest.mark.parametrize(
+    ('chapter', 'locator', 'recovery', 'failure_fragment', 'expected_chapter'), [
+    (1, '信上说父亲已经回城。', 'exact', None, 1),
+    (1, '信上说 父亲，已经回城', 'normalized', None, 1),
+    (1, '这句话在原文里不存在', None, '找不到', 1),
+    (1, '她', None, '多处命中', 1),
+    (2, '信上说父亲已经回城。', 'exact', None, 1),
 ])
-def test_global_evidence_locator_is_unique_within_its_named_chapter(
-    chapter: int, locator: str, recovery: str | None, failure_fragment: str | None,
+def test_global_evidence_locator_prefers_named_chapter_then_global_unique(
+    chapter: int, locator: str, recovery: str | None,
+    failure_fragment: str | None, expected_chapter: int,
 ):
-    """exact / normalized / 零命中 / 多命中 / 指错章共用生产归一入口。"""
+    """原章优先；合法错章仅在全书唯一时确定性纠正。"""
     response = _response_global()
     secret = response['canon']['secrets'][0]
     secret['fact_evidence'] = {'chapter_ordinal': chapter, 'locator': locator}
@@ -308,12 +370,18 @@ def test_global_evidence_locator_is_unique_within_its_named_chapter(
     normalized, meta = normalize_global(response, main_text())
     evidence = normalized['canon']['secrets'][0]['fact_evidence']
 
-    assert evidence['chapter_ordinal'] == chapter
+    assert evidence['chapter_ordinal'] == expected_chapter
     if recovery is not None:
         assert evidence['source']['text'] == '信上说父亲已经回城。'
         assert set(evidence['source']) == {'text', 'start', 'end'}
         assert meta['evidence_locator_failures'] == []
         assert 'evidence_locator_rewrites' not in meta
+        corrections = meta.evidence_locator_corrections
+        if expected_chapter != chapter:
+            assert [(row.original_chapter, row.resolved_chapter, row.recovery)
+                    for row in corrections] == [(chapter, expected_chapter, recovery)]
+        else:
+            assert corrections == ()
     else:
         assert evidence['source'] is None
         assert len(meta['evidence_locator_failures']) == 1
@@ -321,6 +389,160 @@ def test_global_evidence_locator_is_unique_within_its_named_chapter(
         assert path == 'canon.secrets.secret_01.fact'
         assert (failed_chapter, failed_locator) == (chapter, locator)
         assert failure_fragment in reason
+
+
+@pytest.mark.parametrize('land_invalid', [False, True])
+def test_cross_chapter_locator_audit_binds_the_landed_formal_or_invalid_bytes(
+    tmp_path, land_invalid: bool,
+):
+    book = tmp_path / ('跨章审计问题稿_121' if land_invalid else '跨章审计正式稿_120')
+    book.mkdir()
+    ctx = _ctx(book, 'stage2.global')
+    store = ArtifactStore(ctx)
+    store.write(extract.MAIN_TEXT, MainText.model_validate(main_text()))
+    response = _response_global()
+    evidence = response['entities']['relations'][0]['predicate_evidence']
+    evidence['chapter_ordinal'] = 1
+    locator = evidence['locator']
+    if land_invalid:
+        response['entities']['characters']['char_002']['canonical'] = \
+            response['entities']['characters']['char_001']['canonical']
+    client, _transport = _client(
+        ctx, lambda _req, _index: _ok(response))
+
+    if land_invalid:
+        with pytest.raises(GateBlocked, match='canonical_unique'):
+            extract.run_global(ctx, client)
+        rel = extract._GLOBAL_INVALID
+    else:
+        artifact = extract.run_global(ctx, client)
+        assert artifact.entities.relations[0].predicate_evidence.chapter_ordinal == 2
+        rel = extract.GLOBAL_REL
+
+    event, = [row for row in ctx.ledger.audit_events
+              if row['kind'] == 'evidence_locator_rewrite']
+    assert event['run_id'] == ctx.run_id
+    assert event['sid'] == ctx.sid
+    assert event['node'] == event['purpose'] == ctx.node
+    assert event['claim_path'] == 'entities.relations.rel_01.predicate'
+    assert (event['original_chapter_ordinal'],
+            event['resolved_chapter_ordinal']) == (1, 2)
+    assert event['match_mode'] == 'exact'
+    assert event['artifact'] == rel
+    assert event['artifact_sha256'] == store.full_sha256_or_none(rel)
+    serialized = json.dumps(event, ensure_ascii=False)
+    assert locator not in serialized
+    assert all(key not in event for key in ('locator', 'source', 'text'))
+
+
+def test_existing_invalid_uses_immutable_failure_ledger_for_zero_llm_revalidate(
+        tmp_path):
+    book = tmp_path / '存量问题稿跨章恢复_122'
+    book.mkdir()
+    initial_ctx = _ctx(book, 'stage2.global')
+    store = ArtifactStore(initial_ctx)
+    store.write(extract.MAIN_TEXT, MainText.model_validate(main_text()))
+    response = _response_global()
+    client, transport = _client(
+        initial_ctx, lambda _req, _index: _ok(response))
+    extract.run_global(initial_ctx, client)
+    assert len(transport.calls) == 1
+
+    _formal, formal_raw = store.read_own(GlobalGrounding, extract.GLOBAL_REL)
+    old_invalid = copy.deepcopy(formal_raw)
+    old_invalid['entities']['relations'][0]['predicate_evidence'] = {
+        'chapter_ordinal': 1, 'source': None,
+    }
+    old_invalid['_provenance']['evidence_locator_failures'] = [[
+        'entities.relations.rel_01.predicate', 1,
+        '回来时看见母亲在门口等她。',
+        'locator 在指定章内 0 次；旧契约未做跨章唯一回取',
+    ]]
+    store.write_invalid(
+        extract.GLOBAL_REL,
+        GlobalGrounding.model_validate(old_invalid),
+        gates_skipped=[])
+
+    invalid_path = book / extract._GLOBAL_INVALID
+    raw = json.loads(invalid_path.read_text(encoding='utf-8'))
+    failure = next(
+        row for row in raw['_provenance']['evidence_locator_failures']
+        if row[0] == 'entities.relations.rel_01.predicate')
+    # live provenance 是可编辑载体的一部分，但不是人工输入面；篡改它不得
+    # 越过创建 INVALID 时的不可变 baseline。
+    failure[2] = 'live provenance 里伪造的 locator'
+    invalid_path.write_text(
+        json.dumps(raw, ensure_ascii=False, indent=2) + '\n',
+        encoding='utf-8', newline='\n')
+
+    recovery_ctx = _ctx(book, 'stage2.global', paid=False)
+    promoted, report = extract.run_revalidate(
+        recovery_ctx, actor='operator', reason='使用现役唯一回取规则')
+
+    assert promoted
+    assert next(row for row in report.rules
+                if row.rule == 'global_evidence_unlocated').status == 'ok'
+    assert len(transport.calls) == 1
+    assert not invalid_path.exists()
+    landed = ArtifactStore(recovery_ctx).read(
+        GlobalGrounding, extract.GLOBAL_REL)
+    evidence = landed.entities.relations[0].predicate_evidence
+    assert evidence.chapter_ordinal == 2 and evidence.source is not None
+    assert landed.provenance.evidence_locator_failures == []
+    event, = [row for row in recovery_ctx.ledger.audit_events
+              if row['kind'] == 'evidence_locator_rewrite']
+    assert event['artifact'] == extract.GLOBAL_REL
+    assert event['artifact_sha256'] == ArtifactStore(
+        recovery_ctx).full_sha256_or_none(extract.GLOBAL_REL)
+
+
+def test_formal_span_drift_stays_invalid_across_real_revalidate(tmp_path):
+    """formal 漂移失败账不能在下一次恢复时被洗成 locator 并跨章搬家。"""
+    book = tmp_path / '正式坐标漂移不得搬家_123'
+    book.mkdir()
+    initial_ctx = _ctx(book, 'stage2.global')
+    store = ArtifactStore(initial_ctx)
+    sections = main_text()
+    store.write(extract.MAIN_TEXT, MainText.model_validate(sections))
+    client, _transport = _client(
+        initial_ctx, lambda _req, _index: _ok(_response_global()))
+    extract.run_global(initial_ctx, client)
+    _formal, formal_raw = store.read_own(
+        GlobalGrounding, extract.GLOBAL_REL)
+    formal_before = (book / extract.GLOBAL_REL).read_bytes()
+
+    stale = copy.deepcopy(formal_raw)
+    stale.pop('_provenance')
+    evidence = stale['entities']['characters']['char_001']['role_evidence']
+    assert evidence['source']['text'] in sections[2]['text']
+    evidence['chapter_ordinal'] = 2
+    normalized, accounting = normalize_global(stale, sections)
+    failure = next(
+        row for row in accounting['evidence_locator_failures']
+        if row[0] == 'entities.characters.char_001.role')
+    assert not failure[3].startswith('locator 在指定章内')
+
+    artifact = GlobalGrounding.model_validate({
+        **normalized,
+        '_provenance': {
+            **formal_raw['_provenance'],
+            **accounting,
+        },
+    })
+    store.write_invalid(extract.GLOBAL_REL, artifact, gates_skipped=[])
+
+    recovery_ctx = _ctx(book, 'stage2.global', paid=False)
+    promoted, report = extract.run_revalidate(
+        recovery_ctx,
+        actor='operator', reason='确认正式坐标漂移仍关闭式失败')
+
+    assert not promoted
+    assert next(row for row in report.rules
+                if row.rule == 'global_evidence_unlocated').status == 'hit'
+    assert (book / extract.GLOBAL_REL).read_bytes() == formal_before
+    assert store.exists(extract._GLOBAL_INVALID)
+    assert not [row for row in recovery_ctx.ledger.audit_events
+                if row['kind'] == 'evidence_locator_rewrite']
 
 
 def test_punctuation_only_evidence_locator_becomes_a_recoverable_failure():
@@ -934,6 +1156,50 @@ def test_global_candidate_boundary_keeps_intermediate_hard_in_memory():
             '中间 settle 会让正式稿漏掉第一轮已发生调用'
         assert (book / extract.GLOBAL_REL).is_file()
         assert (book / extract.GLOBAL_REVIEW_REL).is_file()
+        assert not (book / extract._GLOBAL_INVALID).exists()
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def test_global_patch_and_finalize_refuse_a_mutated_raw_candidate_snapshot():
+    root = Path(tempfile.mkdtemp())
+    book = root / 'global候选变异防线_4521'
+    book.mkdir()
+    try:
+        ctx = _ctx(book, 'stage2.global')
+        ArtifactStore(ctx).write(
+            extract.MAIN_TEXT, MainText.model_validate(main_text()))
+        bad = _response_global()
+        bad['entities']['relations'][0]['predicate_evidence']['locator'] = \
+            '全书没有这句关系证据'
+        client, _transport = _client(ctx, lambda _req, _index: _ok(bad))
+        prepared = extract.prepare_global_candidate(ctx)
+        response = client.ask_json(
+            prepared.system, prepared.user,
+            model_cls=GlobalGroundingResponse,
+            purpose=ctx.node, max_tokens=extract.GLOBAL_MAX_TOKENS)
+        evaluation = extract.evaluate_global_candidate(
+            ctx, client, prepared, response)
+        assert evaluation.hard_hits == ('global_evidence_unlocated',)
+        patch = GlobalEvidencePatchTurn.model_validate({
+            'kind': 'evidence_patch',
+            'candidate_sha256': evaluation.response_sha256,
+            'changes': [{
+                'claim_path': 'entities.relations.rel_01.predicate',
+                'evidence': {
+                    'chapter_ordinal': 2,
+                    'locator': '回来时看见母亲在门口等她。',
+                },
+            }],
+        })
+
+        evaluation._response.entities.relations[0].predicate = '评估后篡改的关系'
+        with pytest.raises(ValueError, match='raw candidate 已变异'):
+            extract.apply_global_evidence_patch(prepared, evaluation, patch)
+        with pytest.raises(ProvenanceRefused, match='raw candidate 已变异'):
+            extract.finalize_global_candidate(
+                ctx, client, prepared, evaluation)
+        assert not (book / extract.GLOBAL_REL).exists()
         assert not (book / extract._GLOBAL_INVALID).exists()
     finally:
         shutil.rmtree(root, ignore_errors=True)

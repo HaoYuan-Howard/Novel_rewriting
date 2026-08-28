@@ -117,6 +117,10 @@ def base(tmp_path: Path) -> Path:
         {'sid': SID, 'kind': 'gate_decision', 'node': 'stage4.design',
          'decision': 'rejected', 'gate': 'validator', 'resample': True,
          'source': 'wire'},
+        {'sid': SID, 'kind': 'candidate_patch_applied', 'node': 'stage2.global',
+         'changed_path_count': 1},
+        {'sid': SID, 'kind': 'evidence_locator_rewrite', 'node': 'stage2.global',
+         'match_mode': 'exact'},
         {'sid': SID, 'kind': 'artifact_adoption', 'node': 'stage4.design'},
     )) + '\n', encoding='utf-8')
     (service / 'agent_progress.jsonl').write_text('\n'.join(json.dumps(row) for row in (
@@ -169,6 +173,14 @@ def test_ledger_reads_only_this_sid_and_never_adds_reasoning_to_completion(
     assert led['completion_tokens'] == 40
     assert led['reasoning_tokens_within_completion'] == 25
     assert 'stage4.design:agent_timeout' in led['error_kinds']
+
+
+def test_stage2_narrow_repair_and_zero_wire_rewrite_are_visible(base: Path) -> None:
+    audit = W.collect(base, SID)['audit']
+    assert audit['candidate_patches_applied'] == 1
+    assert audit['candidate_patch_changed_paths'] == 1
+    assert audit['evidence_locator_rewrites'] == 1
+    assert audit['evidence_locator_rewrite_modes'] == {'exact': 1}
 
 
 def test_cli_track_keeps_every_exit_code_and_never_folds_them_into_a_verdict(
@@ -263,28 +275,190 @@ def test_a_leaking_filename_fails_closed_instead_of_being_printed(base: Path) ->
     assert '书名' in str(excinfo.value)
 
 
+def _write_metric_ledger(base: Path, rows: list[dict[str, object]]) -> None:
+    common = {
+        'sid': SID, 'code': CODE_CLEAN, 'model': 'm', 'outcome': 'ok',
+        'reasoning_effort': 'high',
+    }
+    (base / '_service/ledger.jsonl').write_text(
+        '\n'.join(json.dumps({**common, **row}) for row in rows) + '\n',
+        encoding='utf-8')
+
+
 def test_first_call_landing_keeps_retried_and_never_accepted_apart(
         base: Path, tmp_path: Path) -> None:
-    """「重试后成功」与「一次都没被接受」是完全不同的处境，不许合成一个比例。"""
+    """中间 accepted 不算落盘；只认同 run adopted attempt 的 wire 排位。"""
     audit = base / '_service/llm_audit.jsonl'
     audit.write_text('\n'.join(json.dumps(row) for row in (
         # 一次就过
-        {'sid': SID, 'kind': 'gate_decision', 'node': 'stage5.write',
-         'chapter': 1, 'decision': 'accepted'},
+        {'sid': SID, 'run_id': 'r1', 'kind': 'gate_decision',
+         'node': 'stage5.write', 'purpose': 'stage5.write:ch1',
+         'chapter': 1, 'attempt_id': 'a1', 'source': 'wire',
+         'decision': 'accepted'},
+        {'sid': SID, 'run_id': 'r1', 'kind': 'artifact_adoption',
+         'node': 'stage5.write', 'purpose': 'stage5.write:ch1',
+         'chapter': 1, 'attempt_id': 'a1'},
         # 先拒后过
-        {'sid': SID, 'kind': 'gate_decision', 'node': 'stage5.write',
-         'chapter': 2, 'decision': 'rejected'},
-        {'sid': SID, 'kind': 'gate_decision', 'node': 'stage5.write',
-         'chapter': 2, 'decision': 'accepted'},
-        # 一直没过
-        {'sid': SID, 'kind': 'gate_decision', 'node': 'stage4.design',
-         'chapter': None, 'decision': 'rejected'},
-        {'sid': SID, 'kind': 'gate_decision', 'node': 'stage4.design',
-         'chapter': None, 'decision': 'rejected'},
+        {'sid': SID, 'run_id': 'r1', 'kind': 'gate_decision',
+         'node': 'stage5.write', 'purpose': 'stage5.write:ch2',
+         'chapter': 2, 'attempt_id': 'a2', 'source': 'wire',
+         'decision': 'rejected'},
+        {'sid': SID, 'run_id': 'r1', 'kind': 'gate_decision',
+         'node': 'stage5.write', 'purpose': 'stage5.write:ch2',
+         'chapter': 2, 'attempt_id': 'a3', 'source': 'wire',
+         'decision': 'accepted'},
+        {'sid': SID, 'run_id': 'r1', 'kind': 'artifact_adoption',
+         'node': 'stage5.write', 'purpose': 'stage5.write:ch2',
+         'chapter': 2, 'attempt_id': 'a3'},
+        # 一直没落盘
+        {'sid': SID, 'run_id': 'r2', 'kind': 'gate_decision',
+         'node': 'stage4.design', 'purpose': 'stage4.design',
+         'chapter': None, 'attempt_id': 'a4', 'source': 'wire',
+         'decision': 'rejected'},
+        {'sid': SID, 'run_id': 'r2', 'kind': 'gate_decision',
+         'node': 'stage4.design', 'purpose': 'stage4.design',
+         'chapter': None, 'attempt_id': 'a5', 'source': 'wire',
+         'decision': 'rejected'},
     )) + '\n', encoding='utf-8')
+    _write_metric_ledger(base, [
+        {'run_id': 'r1', 'node': 'stage5.write',
+         'purpose': 'stage5.write:ch1', 'chapter': 1,
+         'attempt_id': 'a1', 'cached': False},
+        {'run_id': 'r1', 'node': 'stage5.write',
+         'purpose': 'stage5.write:ch2', 'chapter': 2,
+         'attempt_id': 'a2', 'cached': False, 'outcome': 'error'},
+        {'run_id': 'r1', 'node': 'stage5.write',
+         'purpose': 'stage5.write:ch2', 'chapter': 2,
+         'attempt_id': 'a3', 'cached': False},
+        {'run_id': 'r2', 'node': 'stage4.design',
+         'purpose': 'stage4.design', 'chapter': None,
+         'attempt_id': 'a4', 'cached': False, 'outcome': 'error'},
+        {'run_id': 'r2', 'node': 'stage4.design',
+         'purpose': 'stage4.design', 'chapter': None,
+         'attempt_id': 'a5', 'cached': False, 'outcome': 'error'},
+    ])
 
     landing = W.collect(base, SID)['audit']['first_call_landing']
     assert landing['stage5.write'] == {
-        'units': 2, 'first_call': 1, 'retried': 1, 'never_accepted': 0}
+        'units': 2, 'first_call': 1, 'retried': 1,
+        'zero_wire_landed': 0, 'never_landed': 0, 'unknown': 0}
     assert landing['stage4.design'] == {
-        'units': 1, 'first_call': 0, 'retried': 0, 'never_accepted': 1}
+        'units': 1, 'first_call': 0, 'retried': 0,
+        'zero_wire_landed': 0, 'never_landed': 1, 'unknown': 0}
+
+
+def test_first_call_landing_dedupes_business_rejection_and_uses_patch_adoption(
+        base: Path) -> None:
+    audit = base / '_service/llm_audit.jsonl'
+    common = {
+        'sid': SID, 'run_id': 'patch-run', 'node': 'stage2.global',
+        'purpose': 'stage2.global', 'chapter': None,
+    }
+    audit.write_text('\n'.join(json.dumps(row) for row in (
+        {**common, 'kind': 'gate_decision', 'attempt_id': 'full-attempt',
+         'source': 'wire', 'decision': 'accepted'},
+        # 同一 wire 随后被代码业务闸拒绝，不能算成第二次调用。
+        {**common, 'kind': 'gate_decision', 'attempt_id': 'full-attempt',
+         'source': 'wire', 'decision': 'rejected', 'gate': 'validator'},
+        {**common, 'kind': 'gate_decision', 'attempt_id': 'patch-attempt',
+         'source': 'wire', 'decision': 'accepted'},
+        {**common, 'kind': 'artifact_adoption', 'attempt_id': 'patch-attempt'},
+    )) + '\n', encoding='utf-8')
+    _write_metric_ledger(base, [
+        {**common, 'attempt_id': 'full-attempt', 'cached': False},
+        {**common, 'attempt_id': 'patch-attempt', 'cached': False},
+    ])
+
+    assert W.collect(base, SID)['audit']['first_call_landing'][
+        'stage2.global'] == {
+            'units': 1, 'first_call': 0, 'retried': 1,
+            'zero_wire_landed': 0, 'never_landed': 0, 'unknown': 0,
+        }
+
+
+def test_first_call_landing_separates_runs_zero_wire_and_broken_links(
+        base: Path) -> None:
+    audit = base / '_service/llm_audit.jsonl'
+    rows = [
+        {'sid': SID, 'run_id': 'r1', 'kind': 'gate_decision',
+         'node': 'stage2.global', 'purpose': 'stage2.global', 'chapter': None,
+         'attempt_id': 'wire-1', 'source': 'wire', 'decision': 'accepted'},
+        {'sid': SID, 'run_id': 'r1', 'kind': 'artifact_adoption',
+         'node': 'stage2.global', 'purpose': 'stage2.global', 'chapter': None,
+         'attempt_id': 'wire-1'},
+        {'sid': SID, 'run_id': 'r2', 'kind': 'gate_decision',
+         'node': 'stage2.global', 'purpose': 'stage2.global', 'chapter': None,
+         # cache 合法复用旧 run 的原始 attempt id，不能跨 run 判成冲突。
+         'attempt_id': 'wire-1', 'source': 'cache', 'decision': 'accepted'},
+        {'sid': SID, 'run_id': 'r2', 'kind': 'artifact_adoption',
+         'node': 'stage2.global', 'purpose': 'stage2.global', 'chapter': None,
+         'attempt_id': 'wire-1'},
+        # adoption 指不到本 run 的任何 gate，必须 unknown。
+        {'sid': SID, 'run_id': 'r3', 'kind': 'artifact_adoption',
+         'node': 'stage2.global', 'purpose': 'stage2.global', 'chapter': None,
+         'attempt_id': 'orphan-3'},
+    ]
+    audit.write_text('\n'.join(json.dumps(row) for row in rows) + '\n',
+                     encoding='utf-8')
+    _write_metric_ledger(base, [
+        {'run_id': 'r1', 'node': 'stage2.global',
+         'purpose': 'stage2.global', 'chapter': None,
+         'attempt_id': 'wire-1', 'cached': False},
+        {'run_id': 'r2', 'node': 'stage2.global',
+         'purpose': 'stage2.global', 'chapter': None,
+         'attempt_id': 'wire-1', 'cached': True},
+    ])
+
+    assert W.collect(base, SID)['audit']['first_call_landing'][
+        'stage2.global'] == {
+            'units': 3, 'first_call': 1, 'retried': 0,
+            'zero_wire_landed': 1, 'never_landed': 0, 'unknown': 1,
+        }
+
+
+def test_first_call_landing_counts_transport_failure_before_adopted_attempt(
+        base: Path) -> None:
+    common = {
+        'sid': SID, 'run_id': 'transport-run', 'node': 'stage2.global',
+        'purpose': 'stage2.global', 'chapter': None,
+    }
+    _write_metric_ledger(base, [
+        {**common, 'attempt_id': 'timeout-attempt', 'cached': False,
+         'outcome': 'error', 'error_kind': 'agent_timeout'},
+        {**common, 'attempt_id': 'accepted-attempt', 'cached': False},
+    ])
+    (base / '_service/llm_audit.jsonl').write_text(
+        '\n'.join(json.dumps(row) for row in (
+            {**common, 'kind': 'gate_decision',
+             'attempt_id': 'accepted-attempt', 'source': 'wire',
+             'decision': 'accepted'},
+            {**common, 'kind': 'artifact_adoption',
+             'attempt_id': 'accepted-attempt'},
+        )) + '\n', encoding='utf-8')
+
+    assert W.collect(base, SID)['audit']['first_call_landing'][
+        'stage2.global'] == {
+            'units': 1, 'first_call': 0, 'retried': 1,
+            'zero_wire_landed': 0, 'never_landed': 0, 'unknown': 0,
+        }
+
+
+def test_first_call_landing_refuses_an_adopted_transport_error(base: Path) -> None:
+    common = {
+        'sid': SID, 'run_id': 'broken-adoption', 'node': 'stage2.global',
+        'purpose': 'stage2.global', 'chapter': None,
+    }
+    _write_metric_ledger(base, [
+        {**common, 'attempt_id': 'failed-attempt', 'cached': False,
+         'outcome': 'error', 'error_kind': 'agent_protocol'},
+    ])
+    (base / '_service/llm_audit.jsonl').write_text(
+        json.dumps({**common, 'kind': 'artifact_adoption',
+                    'attempt_id': 'failed-attempt'}) + '\n',
+        encoding='utf-8')
+
+    assert W.collect(base, SID)['audit']['first_call_landing'][
+        'stage2.global'] == {
+            'units': 1, 'first_call': 0, 'retried': 0,
+            'zero_wire_landed': 0, 'never_landed': 0, 'unknown': 1,
+        }

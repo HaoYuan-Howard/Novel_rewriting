@@ -168,7 +168,11 @@ context 引用与章尾闭合改判「读者此刻知不知道 / 本章有没有
    `eligibility_reason='validator 不属于通用 JSON/形状修复面'`）⇒ 一次有效付费产出
    只能整本重来。补 `--adopt-rejected`（按当前闸原样重判封存候选，0 wire）与
    `--apply-repair`（hash-bound 章节 replacement）。
-3. 逐节点「首次调用即落盘率」进 `tools/workflow_metrics.py`，作为 P3 的主读数。
+3. `evidence_candidate_id` 只作为另批冷缓存 A/B：候选表由 `paragraph_spans` 同源渲染与
+   lookup，模型响应使用独立 candidate-only 类型，人工 GlobalEdit 仍用 locator，正式
+   GlobalGrounding 仍落 SourceSpan。对同一固定语料配对比较首轮落盘率、
+   `global_evidence_unlocated`、总 wall/token 与人审质量；质量无回退且成本/耗时改善前不切默认。
+   本项需要单独的正文外发与付费授权，不复用主分支跑书目录或缓存。
 
 **P1（兼容当前 schema 的高影响阻断面）**：`contracts/invariants.py` 建立唯一
 `review_effect_of(kind)`（blocking / disclosure，legacy `known_by` 保守按 blocking 读）；

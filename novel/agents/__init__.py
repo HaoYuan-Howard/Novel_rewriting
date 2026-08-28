@@ -6,6 +6,8 @@
 也不得在某个驱动失败时静默回退到 DeepSeek 或另一个供应商。
 """
 from novel.agents.base import (
+    CLAUDE_STRUCTURED_DELIVERY_FOOTER_V1,
+    CLAUDE_STRUCTURED_DELIVERY_V1,
     AgentBusyError,
     AgentCommandError,
     AgentConfigurationError,
@@ -16,12 +18,19 @@ from novel.agents.base import (
     AgentRequest,
     AgentTurn,
     AgentUsage,
+    agent_delivery_protocol,
+    render_agent_stdin,
+    render_agent_stdin_bytes,
+    render_structured_agent_stdin,
+    render_structured_agent_stdin_bytes,
 )
 from novel.agents.claude_code import ClaudeCodeDriver
 from novel.agents.codex import CodexDriver
 
 __all__ = [
     'AgentBusyError',
+    'CLAUDE_STRUCTURED_DELIVERY_FOOTER_V1',
+    'CLAUDE_STRUCTURED_DELIVERY_V1',
     'AgentCommandError',
     'AgentConfigurationError',
     'AgentDriver',
@@ -33,4 +42,9 @@ __all__ = [
     'AgentUsage',
     'ClaudeCodeDriver',
     'CodexDriver',
+    'agent_delivery_protocol',
+    'render_agent_stdin',
+    'render_agent_stdin_bytes',
+    'render_structured_agent_stdin',
+    'render_structured_agent_stdin_bytes',
 ]

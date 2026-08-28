@@ -44,7 +44,9 @@ _VOCABULARY = frozenset({
 #: 现役会被送进 agent CLI 的响应模型。**逐个点名**，不从字符串反射——
 #: 反射出来的空表会让这条守卫静默失去判别力（判据 3）。
 def _models() -> dict[str, type]:
-    from contracts.schema.stage2 import HingePhraseResponse, HingeSelectResponse
+    from contracts.schema.stage2 import (
+        GlobalAgentTurnResponse, HingePhraseResponse, HingeSelectResponse,
+    )
     from contracts.schema.stage4 import BlindPlanResponse, EvidenceBindingResponse
     from contracts.schema.stage5 import ChapterResponse
     from contracts.schema.stage6 import (
@@ -52,11 +54,11 @@ def _models() -> dict[str, type]:
     )
     from contracts.schema.stage7 import NameMapResponse
     from novel.stages.stage2.extract import (
-        GlobalGroundingResponse, RoleSplitResponse,
+        RoleSplitResponse,
     )
 
     return {
-        'stage2.global': GlobalGroundingResponse,
+        'stage2.global': GlobalAgentTurnResponse,
         'stage2.global/role_split': RoleSplitResponse,
         'stage2.blueprint/hinge_select': HingeSelectResponse,
         'stage2.blueprint/hinge_phrase': HingePhraseResponse,

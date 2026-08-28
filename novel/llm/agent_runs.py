@@ -32,7 +32,11 @@ from pydantic import BaseModel, ValidationError
 from contracts.schema.orchestration import AgentProfile
 from novel import agent_session_audit, prov
 from novel.agent_capabilities import validate_profile
-from novel.agents.session_client import SESSION_PROTOCOL_VERSION
+from novel.agents.base import render_structured_agent_stdin_bytes
+from novel.agents.session_client import (
+    SESSION_PROTOCOL_VERSION,
+    validate_agent_session_request_binding,
+)
 from novel.appendlog import process_append_lock
 from novel.errors import ArtifactUnreadable, ProvenanceRefused, UpstreamMissing
 from novel.llm.json_text import normalize_json_text
@@ -344,7 +348,7 @@ def _validate_policy(
 
 def _request_identity(
         spec: SingleSessionRunSpec, system: str, user: str,
-        response_model: type[BaseModel],
+        response_model: type[BaseModel], *, driver: str,
 ) -> dict[str, Any]:
     if not isinstance(system, str) or not isinstance(user, str):
         raise ProvenanceRefused(f'{spec.label} system/user 必须是字符串')
@@ -353,7 +357,8 @@ def _request_identity(
         'system_sha256': canonical_sha256(system.encode('utf-8')),
         'user_sha256': canonical_sha256(user.encode('utf-8')),
         'initial_prompt_sha256': canonical_sha256(
-            f'{system}\n\n--- 本轮任务 ---\n\n{user}'.encode('utf-8')),
+            render_structured_agent_stdin_bytes(
+                system, user, driver=driver)),
         'response_schema_sha256': canonical_sha256(
             response_model.model_json_schema(by_alias=True)),
     }
@@ -375,7 +380,9 @@ def _expected_run_identity(
         'input_sha256': input_sha256,
         'request_policy': policy,
         'request_policy_sha256': canonical_sha256(policy),
-        'request': _request_identity(spec, system, user, response_model),
+        'request': _request_identity(
+            spec, system, user, response_model,
+            driver=str(policy['profile']['driver'])),
     }
 
 
@@ -457,7 +464,14 @@ def _validate_request_against_run(
         response_model=response_model, max_tokens=max_tokens)
     if run.get('input_sha256') != input_sha256 or not is_sha256(input_sha256):
         raise ProvenanceRefused(f'{spec.label} 当前输入与 run.json 漂移')
-    expected = _request_identity(spec, system, user, response_model)
+    policy = run.get('request_policy')
+    if not isinstance(policy, dict):
+        raise ArtifactUnreadable(f'{spec.label} run.json 缺 request policy')
+    profile = _resolved_profile(
+        ctx, policy.get('profile'), label=f'{spec.label} request policy')
+    expected = _request_identity(
+        spec, system, user, response_model,
+        driver=str(profile['driver']))
     if run['request'] != expected:
         raise ProvenanceRefused(f'{spec.label} 当前 prompt/schema 与 run.json 漂移')
     return run, dict(expected)
@@ -495,8 +509,16 @@ def _validate_session_turn(
         None if start.profile is None else start.profile.model_dump(mode='json'))
     turn_profile = (
         None if turn.profile is None else turn.profile.model_dump(mode='json'))
-    initial_prompt_sha = canonical_sha256(
-        f'{system}\n\n--- 本轮任务 ---\n\n{user}'.encode('utf-8'))
+    current_session = validate_agent_session_request_binding(
+        events, acceptance,
+        purpose=spec.purpose,
+        profile=profile,
+        original_prompt_sha256=canonical_sha256(
+            render_structured_agent_stdin_bytes(
+                system, user, driver=str(profile.get('driver') or ''))),
+        original_schema_sha256=str(acceptance.get('accepted_schema_sha256')),
+    )
+    first_turn = current_session.turns[0]
     expected_start = {
         'wire_version': agent_session_audit.SESSION_AUDIT_WIRE_VERSION,
         'session_run_id': acceptance.get('session_run_id'),
@@ -508,8 +530,8 @@ def _validate_session_turn(
         'requested_effort': profile.get('reasoning_effort'), 'actual_effort': None,
         'protocol_version': SESSION_PROTOCOL_VERSION,
         'start_code_version': ctx.code,
-        'prompt_sha256': initial_prompt_sha,
-        'schema_sha256': acceptance.get('accepted_schema_sha256'),
+        'prompt_sha256': first_turn.prompt_sha256,
+        'schema_sha256': first_turn.schema_sha256,
     }
     actual_start = {
         'wire_version': start.wire_version,

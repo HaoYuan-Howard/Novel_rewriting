@@ -6,7 +6,7 @@ test_agent_drivers.py —— provider-neutral agent runtime 的离线协议测�
 本文件不探测真实账号、不发 prompt；wire 用例都经过注入 runner，另有一条
 零模型请求的真跨进程用例验证取消边界。重点钉住：模型/effort 没有下发、
 resume 串错 session、Codex JSONL/失败计量误读、Windows 退回 ``cmd /c``、
-超长 schema 被系统截断，以及 cancel 只杀根进程却留下孙进程。
+超长 schema 被系统截断、stdin 换行被文本管道改写，以及 cancel 只杀根进程却留下孙进程。
 """
 from __future__ import annotations
 
@@ -24,6 +24,8 @@ import novel.agents.base as agent_base
 import novel.agents.codex as codex_module
 from contracts.schema.orchestration import AgentProfile
 from novel.agents import (
+    CLAUDE_STRUCTURED_DELIVERY_FOOTER_V1,
+    CLAUDE_STRUCTURED_DELIVERY_V1,
     AgentCommandError,
     AgentConfigurationError,
     AgentDriver,
@@ -55,6 +57,7 @@ def _request(
     prompt: str,
     system: str | None = None,
     output_schema: dict[str, object] | None = None,
+    delivery_protocol: str = 'plain',
 ) -> AgentRequest:
     """测试也必须显式选择隔离策略，不能靠生产代码的隐藏默认。"""
     return AgentRequest(
@@ -62,6 +65,7 @@ def _request(
         execution_policy='executor-isolated',
         system=system,
         output_schema=output_schema,
+        delivery_protocol=delivery_protocol,
         cwd=cwd,
     )
 
@@ -135,6 +139,27 @@ def test_agent_driver_is_an_abstract_lifecycle_contract():
         'probe', 'start', 'resume', 'cancel', 'close'}
 
 
+def test_default_runner_sends_exact_utf8_stdin_bytes_without_newline_translation(
+        tmp_path):
+    """真子进程从 raw stdin 回显 hex；Windows 上可直接抓出 LF→CRLF。"""
+    payload = '甲\n乙\n'.encode('utf-8')
+    runner = agent_base._SubprocessRunner()
+    try:
+        completed = runner.run(
+            [
+                sys.executable, '-I', '-c',
+                'import sys;sys.stdout.write(sys.stdin.buffer.read().hex())',
+            ],
+            input=payload, cwd=str(tmp_path), timeout=10, session_id=None,
+        )
+    finally:
+        runner.close()
+
+    assert completed.returncode == 0
+    assert completed.stderr == ''
+    assert completed.stdout == payload.hex()
+
+
 def test_claude_start_uses_json_stdin_and_explicit_model_effort(tmp_path):
     seen: dict[str, object] = {}
 
@@ -150,7 +175,8 @@ def test_claude_start_uses_json_stdin_and_explicit_model_effort(tmp_path):
             'type': 'object',
             'properties': {'status': {'type': 'string'}},
             'required': ['status'],
-        })
+        },
+        delivery_protocol=CLAUDE_STRUCTURED_DELIVERY_V1)
     turn = driver.start(_profile('claude-code'), request)
 
     argv = seen['argv']
@@ -167,7 +193,15 @@ def test_claude_start_uses_json_stdin_and_explicit_model_effort(tmp_path):
     assert '--fallback-model' not in argv and '--resume' not in argv
     assert '--no-session-persistence' not in argv
     assert not any('deepseek' in value.casefold() for value in argv)
-    assert kwargs['input'] == '只按证据行动\n\n--- 本轮任务 ---\n\n写入最终产物'
+    assert kwargs['input'] == (
+        '只按证据行动\n\n--- 本轮任务 ---\n\n写入最终产物\n\n'
+        + CLAUDE_STRUCTURED_DELIVERY_FOOTER_V1)
+    assert kwargs['input'].count(CLAUDE_STRUCTURED_DELIVERY_FOOTER_V1) == 1
+    assert all(
+        f'`{wrapper}`' in CLAUDE_STRUCTURED_DELIVERY_FOOTER_V1
+        for wrapper in ('response', 'result', 'structured_output'))
+    assert '除 CLI 内建的 `StructuredOutput` 外，不得调用任何其他工具' \
+        in CLAUDE_STRUCTURED_DELIVERY_FOOTER_V1
     assert kwargs['cwd'] == str(tmp_path.resolve())
     assert kwargs['shell'] is False
 
@@ -201,12 +235,15 @@ def test_claude_resume_uses_the_exact_session_id_same_cwd_and_rejects_a_fork(
     driver = ClaudeCodeDriver(executable='claude.exe', runner=ok_runner)
     driver.start(
         _profile('claude-code'),
-        _request(isolated, prompt='建立会话', output_schema={'type': 'object'}))
+        _request(
+            isolated, prompt='建立会话', output_schema={'type': 'object'},
+            delivery_protocol=CLAUDE_STRUCTURED_DELIVERY_V1))
     turn = driver.resume(
         _profile('claude-code'), 'kept-session',
         _request(
             isolated, prompt='这是代码校验反馈',
-            output_schema={'type': 'object'}))
+            output_schema={'type': 'object'},
+            delivery_protocol=CLAUDE_STRUCTURED_DELIVERY_V1))
     assert turn.session_id == 'kept-session'
     assert turn.turn_count == 3, 'turn_count 只表示本次 invocation 的 provider 读数'
     resume_argv = calls[1]
@@ -219,6 +256,7 @@ def test_claude_resume_uses_the_exact_session_id_same_cwd_and_rejects_a_fork(
         '--resume', 'kept-session', '--json-schema', schema_text,
     ]
     assert call_cwds == [str(isolated.resolve()), str(isolated.resolve())]
+    assert calls[1].count('--json-schema') == 1
     assert '--session-id' not in resume_argv and '--fork-session' not in resume_argv
     assert '--no-session-persistence' not in resume_argv
 
@@ -271,6 +309,50 @@ def test_claude_requires_cli_session_id_and_keeps_failure_usage(tmp_path):
     assert caught.value.partial_turn.usage.total_tokens == 27
     assert caught.value.partial_turn.content == ''
     assert 'private detail' not in str(caught.value)
+
+
+def test_claude_schema_requires_structured_output_but_schema_less_can_use_result(
+        tmp_path):
+    raw = json.loads(_claude_wrapper())
+    raw.pop('structured_output')
+    raw['result'] = '{"status":"done"}'
+    stdout = json.dumps(raw, ensure_ascii=False)
+    driver = ClaudeCodeDriver(
+        executable='claude.exe',
+        runner=lambda argv, **_kwargs: _completed(argv, stdout))
+
+    with pytest.raises(AgentProtocolError, match='缺 structured_output'):
+        driver.start(
+            _profile('claude-code'),
+            _request(
+                tmp_path, prompt='结构化请求',
+                output_schema={'type': 'object'},
+                delivery_protocol=CLAUDE_STRUCTURED_DELIVERY_V1))
+
+    schema_less = ClaudeCodeDriver(
+        executable='claude.exe',
+        runner=lambda argv, **_kwargs: _completed(argv, stdout))
+    turn = schema_less.start(
+        _profile('claude-code'), _request(tmp_path, prompt='普通请求'))
+    assert turn.content == '{"status":"done"}'
+
+
+def test_claude_schema_refuses_a_request_without_the_v1_delivery_footer(tmp_path):
+    called = False
+
+    def runner(argv, **_kwargs):
+        nonlocal called
+        called = True
+        return _completed(argv, _claude_wrapper())
+
+    driver = ClaudeCodeDriver(executable='claude.exe', runner=runner)
+    with pytest.raises(AgentConfigurationError, match='delivery footer'):
+        driver.start(
+            _profile('claude-code'),
+            _request(
+                tmp_path, prompt='不能缺 footer',
+                output_schema={'type': 'object'}))
+    assert called is False
 
 
 def test_codex_start_uses_jsonl_output_schema_and_explicit_profile(tmp_path):
@@ -540,6 +622,7 @@ def test_claude_large_inline_schema_is_refused_before_windows_createprocess(
     request = _request(
         tmp_path, prompt='开始',
         output_schema={'type': 'string', 'description': '甲' * 33_000},
+        delivery_protocol=CLAUDE_STRUCTURED_DELIVERY_V1,
     )
 
     with pytest.raises(AgentConfigurationError, match='CreateProcess'):

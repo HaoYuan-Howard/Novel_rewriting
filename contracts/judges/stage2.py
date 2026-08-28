@@ -20,12 +20,12 @@ stage2.py —— 抽取那一层的判据行。源是 `docs/schema/stage2.md` §
 
 **① 这是第一个用 `Rule.fix` 的层。** 修复路由使用机器可读的节点与 flag：
 `blueprint --chapters` · `blueprint --patch` ·
-`global --resample` 17 ·
+`global --resample` 16 ·
 `global --purge-role` / `--renormalize` 各 1。注册期第 ⑧ 条会查节点与 flag 都真实存在——**写歪一个当场炸**，
 而写进 `note` 的散文里拼错一个 flag 名不会有任何东西出声（LESSONS 第 11 条）。
 ⚠ **`fix` 与 `directive` 是两格，在本层完全不重叠**：全表 `repair='NONE'`
 （反哺是 stage5 独有的，`contracts/rules.py::_validate` ④ 把它锁在 `owner='stage5'` 上）
-⇒ `directive` 全表为空，而 `fix` 有 38 条。
+⇒ `directive` 全表为空，而 `fix` 有 35 条。
 
 ⚠ **徽章结构上永远不可能是 `pass`**：本表有 **2 条 `unver`**，其中
 `role_fate_unverifiable` **无条件产出**（见下）⇒ 每本每次都产 ⇒ 最好情况是 `amber`
@@ -38,7 +38,7 @@ from contracts.rules import REGISTRY, Rule
 STAGE = 'stage2'
 
 #: 本层两个节点的修复路由。**写成常量而不是每处一个元组字面**：
-#: 17 条判据指着同一条 `blueprint --chapters`，散着写就是 17 份会各自漂的拷贝。
+#: 16 条判据指着同一条 `blueprint --chapters`，散着写就是 16 份会各自漂的拷贝。
 FIX_REGEN = ('stage2.blueprint', '--chapters')      # 定向重生成那几章（**付费**）
 FIX_REGEN_ARGS = ('--chapters',)                    # 值由本次 finding 的机器证据给
 FIX_RENORMALIZE_G = ('stage2.global', '--renormalize')      # 同上，全书那一份
@@ -244,7 +244,7 @@ _hard('canon_chapter_refs_dangling', '规则版本与 secret 时间线章号都�
       note='覆盖 world_rules[].versions[].effective_from_chapter、secret setup.chapters 与 '
            'first_reveal_chapter。它们都直接决定逐章下发；越界值会让一条事实'
            '永不生效/永不揭示。relation、knowledge、address、evidence 与 conflict stage '
-           '各由自己的专门规则守，不在这里重报。人工可用 GlobalEdit v2 0 LLM 修复')
+           '各由自己的专门规则守，不在这里重报。人工可用 GlobalEdit v3 0 LLM 修复')
 
 _info('world_rule_names_person', '规则正文里出现人名时按叫法时点扣住', 'R-2.11b',
       note='⚠⚠ **这道闸门在盘上什么也没拦住，而判据必须报出自己的基线**：'
@@ -300,11 +300,12 @@ _info('relation_visibility_mismatch', '显式 relation visibility 与旧启发�
       note='显式 visibility 是生产权威；旧的人名 + 隐瞒窗口启发式保留为独立 INFO 探针。'
            '不一致必须出声，但 INFO 不能改生产 gate')
 
-_hard('global_evidence_unlocated', '自由事实证据能在指定章唯一回取为精确 SourceSpan', 'R-2.20',
-      fix=FIX_RESAMPLE,
-      note='模型只交章号 + 短 locator；代码原样优先、内容字符归一次之，且必须唯一命中。'
-           '零命中、多命中、错章、正式 span 漂移都落 source=null + 正向失败账，问题稿仍可读。'
-           '人工可同交新 claim/locator，或修正式 span 后 `--revalidate`；两条均 0 LLM')
+_hard('global_evidence_unlocated', '自由事实证据能唯一回取为精确 SourceSpan', 'R-2.20',
+      note='模型只交章号 + 短 locator；合法指定章先按原样/内容字符归一唯一回取，'
+           '仅零命中时允许全书逐章扫描且全书唯一才纠正章号。章内多命中、全书零/多命中、'
+           '非法章与正式 span 漂移仍落 source=null + 正向失败账。agent 首轮只命中本条时'
+           '走同会话 hash-bound evidence patch；终态后由 typed GlobalEdit / `--revalidate` '
+           '0 LLM 收口，显式 `--resample` 只作最后手段，不再作为报告默认修复路由')
 
 # ═══ 五、冲突阶段章覆盖（1 HARD）═══════════════════════════════════════════
 

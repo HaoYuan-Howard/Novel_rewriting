@@ -86,12 +86,22 @@ Stage4 下发只认这格；旧的人名/埋点启发式只作 INFO 对账。
 | `chapter_ordinal` | `int` | 必须是 Stage1 现役阅读序章号 |
 | `locator` | `str` | 1～160 字的短原文定位串 |
 
-代码只在指定章内定位：raw 原文唯一命中优先，否则尝试 normalized 唯一命中；0 处或多处都不猜，
-更不能静默取首命中。成功后正式产物改写成 `FactEvidence {chapter_ordinal, source: SourceSpan}`，
-`SourceSpan` 继续服从 §2.2 的逐字/坐标不变量。失败时仍构造
+代码先在合法指定章内定位：raw 原文唯一命中优先，否则尝试 normalized 唯一命中。指定章
+多命中立即失败；只有指定章零命中时才按阅读序逐章复用同一定位函数，且仅在全书恰一候选、
+任何章都没有多命中时把章号纠正为真实章。非法章不扫描，禁止 fuzzy、拼接全文或静默取首命中；
+已有正式 `SourceSpan` 只按原章复验，正文漂移时不自动搬家。成功后正式产物改写成
+`FactEvidence {chapter_ordinal, source: SourceSpan}`，`SourceSpan` 继续服从 §2.2 的逐字/坐标不变量。失败时仍构造
 `FactEvidence {chapter_ordinal, source: null}` 并登记失败账，使问题稿能落
 `global_grounding.INVALID.json`；随后可用 typed locator 重新 `--apply-edit`，或手改 `.INVALID`
 后 `--revalidate`，而不是在 Pydantic 构造前崩掉、把付费结果永久锁死。
+存量问题稿重判时，只对 failure 原因明确来自 locator、路径与声明章仍相同且 `source` 仍为空的槽
+恢复 locator；formal `SourceSpan` 校验失败永不反向恢复，所以正文漂移不能在第二次
+`--revalidate` / `--renormalize` 时被静默搬到另一章。
+
+成功跨章纠正不写入 `GlobalProvenance`，以保持 GlobalGrounding v4 / GlobalEdit v3；正式或
+`.INVALID` 字节落地后，`_service/llm_audit.jsonl` 只追加一条绑定最终文件 SHA 的
+`evidence_locator_rewrite`：claim path、原章、新章与 `exact｜normalized`。该事件不含 locator、
+SourceSpan 或正文。
 
 七类必举证事实是：人物 role/fate、relation predicate、setting 两格、world-rule desc、
 secret fact、每条 knowledge event、arc trajectory。模型响应使用独立的 `*Response` 载体，
@@ -100,6 +110,26 @@ secret fact、每条 knowledge event、arc trajectory。模型响应使用独立
 
 Stage4/5/6 的实际材料与节点 freshness 投影共用代码剥掉全部 evidence：坐标或证据文本单独修订
 不会触发无关付费重跑，也不会把原文证据作为额外故事材料外发给下游模型。
+
+### 1.5 agent 私有的固定 turn 信封
+
+agent executor 的 `stage2.global` 在整个 logical/provider session 内固定使用
+`GlobalAgentTurnResponse`，不改变 legacy 单轮入口：
+
+- 首轮及非局部 HARD：`payload.kind=full_candidate`，`candidate` 是完整
+  `GlobalGroundingResponse`；
+- 仅命中 `global_evidence_unlocated`：`payload.kind=evidence_patch`，携带当前 raw candidate 的
+  完整 SHA-256 与 `changes[]`；每项只有 canonical `claim_path` 和新 `EvidenceLocator`。
+
+`claim_path` 只来自 `iter_global_evidence_slots`，返回集合必须与 validator 的失败路径集合精确相等。
+`candidate_sha256` 只绑定信封内、归一前 `GlobalGroundingResponse` 的 canonical JSON，不含
+turn envelope、provenance 或正式 artifact。apply 前重新计算当前 base SHA；旧 hash、base 变异、
+重复/缺失/额外路径与 no-op 都关闭式拒绝。代码在候选副本应用后证明非授权投影不变，再完整重跑
+response schema、normalize、全部 HARD 与 downstream guard。中间业务候选不写
+formal / `.INVALID` / `_rounds`；`candidate_patch_applied` 服务审计只记 patch attempt、前后 raw SHA
+与改动格数，不记 claim path、locator 或正文，也不冒充 adoption。最终经既有 finalize 写盘与正式
+readback 后，唯一 `artifact_adoption` 才绑定最终 patch attempt。候选始终归
+`Stage2GlobalAgent` 所有，外层 Commander 不接收或改写。
 
 ## 二、`chapter_blueprints.json`
 
@@ -181,7 +211,7 @@ SourceSpan 只保留可直接复验的字节和坐标。内容空间定位是编
 | 字段 | 类型 | 内容 |
 |---|---|---|
 | `setup_chapters_pruned` | `(secret_id, old[], new[])[]` | 秘密埋点裁剪明细。⚠ `new` 为空 ⇒ 那条 `setup` 已降级成 `cold`，与声明的冷揭示同形，只有本账分得开 |
-| `evidence_locator_failures` | `(claim_path, chapter, locator, cause)[]` | 0 命中、多命中、错章或 formal span 漂移；非空由 `global_evidence_unlocated` HARD 阻断 |
+| `evidence_locator_failures` | `(claim_path, chapter, locator, cause)[]` | 指定章多命中、非法章、全书 0/多命中或 formal span 漂移；非空由 `global_evidence_unlocated` HARD 阻断。成功跨章唯一纠正另进无正文服务审计，不改变本形状 |
 
 ### 3.2 `BlueprintProvenance`
 
@@ -326,13 +356,16 @@ address 后的新 subject 一律回到 `pending`，旧复合事实的 PASS 不�
 | 范围与必填 | `scope_violation` · `fact_atom_empty` |
 | 无条件读数 | `narration_voices` · `time_layer_mix` · `place_moves` · `present_broad` · `context_scope` · `span_coverage` · `span_coverage_per_chapter` · `uncovered_holes` · `hinge_density` |
 
-机器可读修复路由共 **36 条**：
+机器可读修复路由共 **35 条**：
 
 - `stage2.blueprint --chapters`: 16 条；
 - `stage2.blueprint --patch`: 1 条（`hinge_ambiguous`——字段级候选选择，量级是条不是章）；
-- `stage2.global --resample`: 17 条；
+- `stage2.global --resample`: 16 条；
 - `stage2.global --purge-role`: 1 条；
 - `stage2.global --renormalize`: 1 条。
+
+`global_evidence_unlocated` 不再把整份 `--resample` 暴露为默认路由：生成期先做确定性唯一回取，
+agent 期只修失败 evidence 槽；终态报告转人工 typed edit / `--revalidate`，显式整份重采仅作最后手段。
 
 判据的权威定义在 `contracts/judges/stage2.py`，注册期会验证规则 id 唯一、严重度、需求落点、
 节点与 flag 的存在性。报告形状见 [`_report.md`](./_report.md)。

@@ -18,7 +18,9 @@ from typing import Any
 
 from contracts.schema.orchestration import AgentProfile
 from novel.agents.base import (
+    CLAUDE_STRUCTURED_DELIVERY_V1,
     AgentCommandError,
+    AgentConfigurationError,
     AgentProtocolError,
     AgentRequest,
     AgentTurn,
@@ -175,12 +177,21 @@ class ClaudeCodeDriver(CliAgentDriver):
             argv.extend(('--resume', session_id))
         schema = compact_schema(request.output_schema)
         if schema is not None:
+            if request.delivery_protocol != CLAUDE_STRUCTURED_DELIVERY_V1:
+                raise AgentConfigurationError(
+                    'Claude --json-schema 请求必须使用 '
+                    'claude-structured-output/v1 delivery footer')
             argv.extend(('--json-schema', schema))
+        elif request.delivery_protocol == CLAUDE_STRUCTURED_DELIVERY_V1:
+            raise AgentConfigurationError(
+                'Claude schema-less 请求不能冒充 structured delivery')
         return argv
 
     def _decode(self, completed: subprocess.CompletedProcess[str], *,
                 profile: AgentProfile,
-        expected_session_id: str | None) -> AgentTurn:
+        expected_session_id: str | None,
+        expects_structured_output: bool,
+    ) -> AgentTurn:
         try:
             raw = decode_wire_json(completed.stdout or '')
         except (json.JSONDecodeError, TypeError) as exc:
@@ -207,7 +218,7 @@ class ClaudeCodeDriver(CliAgentDriver):
         if structured is not None:
             content = json.dumps(
                 structured, ensure_ascii=False, separators=(',', ':'))
-        elif isinstance(result, str):
+        elif not expects_structured_output and isinstance(result, str):
             content = result
         else:
             content = ''
@@ -228,6 +239,10 @@ class ClaudeCodeDriver(CliAgentDriver):
                 returncode=completed.returncode,
                 # 失败信封可以带看似完整的 result；只留结算证据，绝不让它成为候选。
                 partial_turn=replace(turn, content=''))
+        if expects_structured_output and structured is None:
+            raise AgentProtocolError(
+                'Claude Code --json-schema 成功信封缺 structured_output；'
+                '拒绝把普通 result 冒充结构化交付')
         if not content:
             raise AgentProtocolError('Claude Code 成功信封没有最终回答')
         return turn
@@ -239,7 +254,8 @@ class ClaudeCodeDriver(CliAgentDriver):
             self._argv(profile, request, session_id=None), request,
             session_id=None)
         turn = self._decode(
-            completed, profile=profile, expected_session_id=None)
+            completed, profile=profile, expected_session_id=None,
+            expects_structured_output=request.output_schema is not None)
         self._bind_session_cwd(turn.session_id, cwd)
         return turn
 
@@ -253,6 +269,7 @@ class ClaudeCodeDriver(CliAgentDriver):
             self._argv(profile, request, session_id=session_id), request,
             session_id=session_id)
         turn = self._decode(
-            completed, profile=profile, expected_session_id=session_id)
+            completed, profile=profile, expected_session_id=session_id,
+            expects_structured_output=request.output_schema is not None)
         self._bind_session_cwd(turn.session_id, cwd)
         return turn

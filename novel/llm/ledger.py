@@ -39,9 +39,10 @@ from novel.observability import RequestProgress
 LEDGER_REL = ('_service', 'ledger.jsonl')
 
 #: 采纳审计账：与成本账同目录、**分文件**。成本账答「花了多少」，这份答
-#: 「内容闸怎么判的、最终 artifact 用的是哪一次响应、丢掉的那份答案留证在哪」
-#: （`gate_decision` / `artifact_adoption` / `answer_lost` 三种行，
-#: 靠 `attempt_id` 与成本账的 wire 行相联）。
+#: 「内容闸怎么判的、最终 artifact 用的是哪一次响应、丢掉的那份答案留证在哪」。
+#: 现役还包含不携业务正文的 `candidate_patch_applied` 与
+#: `evidence_locator_rewrite`；需关联 wire 的行靠 `attempt_id` 与成本账相联，
+#: 纯确定性 locator 改写则绑定最终 artifact 的完整 SHA-256。
 #: ⚠ 不并进 `ledger.jsonl`：既有读者按「行=一次调用」聚合
 #: （`tools/ab_compare.py::cost_table` 把没有 `cached` 键的行当 wire 行数，
 #: `tools/observe_provider_limits.py` 拿行数对 wire attempts）——审计行混进去
@@ -231,6 +232,40 @@ def _repair_event_id(
          actor, gate, candidate_sha256],
         ensure_ascii=False, separators=(',', ':'))
     return hashlib.sha256(canonical.encode('utf-8')).hexdigest()
+
+
+def _candidate_patch_event_id(
+        *, run_id: str, node: str, purpose: str, attempt_id: str,
+        base_candidate_sha256: str, result_candidate_sha256: str,
+        changed_path_count: int,
+) -> str:
+    """一次 hash-bound 候选窄修的稳定身份；正文与路径明细不进服务账。"""
+    canonical = json.dumps(
+        [run_id, node, purpose, attempt_id, base_candidate_sha256,
+         result_candidate_sha256, changed_path_count],
+        ensure_ascii=False, separators=(',', ':'))
+    return hashlib.sha256(canonical.encode('utf-8')).hexdigest()
+
+
+def _evidence_locator_rewrite_id(
+        *, run_id: str, node: str, purpose: str, artifact: str,
+        artifact_sha256: str, claim_path: str,
+        original_chapter_ordinal: int, resolved_chapter_ordinal: int,
+        match_mode: str,
+) -> str:
+    """一次确定性 locator 跨章纠正的稳定身份；只绑定坐标事实与正式字节。"""
+    canonical = json.dumps(
+        [run_id, node, purpose, artifact, artifact_sha256, claim_path,
+         original_chapter_ordinal, resolved_chapter_ordinal, match_mode],
+        ensure_ascii=False, separators=(',', ':'))
+    return hashlib.sha256(canonical.encode('utf-8')).hexdigest()
+
+
+def _require_sha256(value: str, *, field: str) -> str:
+    if (not isinstance(value, str) or len(value) != 64
+            or any(char not in '0123456789abcdef' for char in value)):
+        raise ProvenanceRefused(f'{field} 必须是完整小写 SHA-256')
+    return value
 
 
 def _gate_decision_id(
@@ -865,6 +900,87 @@ class CostLedger:
                 row, identity_key='repair_event_id')
             return
         self._append_audit(row)
+
+    def note_candidate_patch(
+            self, *, sid: str, node: str, purpose: str, attempt_id: str,
+            base_candidate_sha256: str, result_candidate_sha256: str,
+            changed_path_count: int) -> None:
+        """记录一次已通过 hash/path/invariance 闸的窄 patch，不复制业务正文。
+
+        这行描述的是 agent 内存候选的状态转移，不等同于最终 artifact adoption；
+        后者仍只允许由 ``note_adoption`` 记一次最终采用的 attempt。
+        """
+        base_sha = _require_sha256(
+            base_candidate_sha256, field='base_candidate_sha256')
+        result_sha = _require_sha256(
+            result_candidate_sha256, field='result_candidate_sha256')
+        if (not isinstance(changed_path_count, int)
+                or isinstance(changed_path_count, bool)
+                or changed_path_count < 1):
+            raise ProvenanceRefused('changed_path_count 必须是正整数')
+        if not isinstance(attempt_id, str) or not attempt_id.strip():
+            raise ProvenanceRefused('candidate patch attempt_id 必须是非空字符串')
+        event_id = _candidate_patch_event_id(
+            run_id=self.run_id, node=node, purpose=purpose,
+            attempt_id=attempt_id, base_candidate_sha256=base_sha,
+            result_candidate_sha256=result_sha,
+            changed_path_count=changed_path_count)
+        self._append_audit_idempotent({
+            'kind': 'candidate_patch_applied',
+            'at': datetime.now(timezone.utc).isoformat(timespec='seconds'),
+            'candidate_patch_event_id': event_id,
+            'sid': sid,
+            'node': node,
+            'purpose': purpose,
+            'attempt_id': attempt_id,
+            'base_candidate_sha256': base_sha,
+            'result_candidate_sha256': result_sha,
+            'changed_path_count': changed_path_count,
+        }, identity_key='candidate_patch_event_id')
+
+    def note_evidence_locator_rewrite(
+            self, *, sid: str, node: str, purpose: str, artifact: str,
+            artifact_sha256: str, claim_path: str,
+            original_chapter_ordinal: int, resolved_chapter_ordinal: int,
+            match_mode: str) -> None:
+        """记录一次已随正式/INVALID 字节落地的跨章唯一回取。
+
+        locator 与 SourceSpan 都属于小说正文，不进入 ``_service``；事件只保留
+        claim 路径、前后章号、匹配模式及最终文件 SHA，足以复核确定性改写。
+        """
+        digest = _require_sha256(artifact_sha256, field='artifact_sha256')
+        if not isinstance(claim_path, str) or not claim_path.strip():
+            raise ProvenanceRefused('evidence locator rewrite claim_path 必须非空')
+        for field, value in (
+                ('original_chapter_ordinal', original_chapter_ordinal),
+                ('resolved_chapter_ordinal', resolved_chapter_ordinal)):
+            if (not isinstance(value, int) or isinstance(value, bool) or value < 1):
+                raise ProvenanceRefused(f'{field} 必须是正整数')
+        if original_chapter_ordinal == resolved_chapter_ordinal:
+            raise ProvenanceRefused('evidence locator rewrite 必须实际改变章号')
+        if match_mode not in ('exact', 'normalized'):
+            raise ProvenanceRefused('evidence locator rewrite match_mode 非法')
+        event_id = _evidence_locator_rewrite_id(
+            run_id=self.run_id, node=node, purpose=purpose,
+            artifact=artifact, artifact_sha256=digest,
+            claim_path=claim_path,
+            original_chapter_ordinal=original_chapter_ordinal,
+            resolved_chapter_ordinal=resolved_chapter_ordinal,
+            match_mode=match_mode)
+        self._append_audit_idempotent({
+            'kind': 'evidence_locator_rewrite',
+            'at': datetime.now(timezone.utc).isoformat(timespec='seconds'),
+            'evidence_locator_rewrite_id': event_id,
+            'sid': sid,
+            'node': node,
+            'purpose': purpose,
+            'artifact': artifact,
+            'artifact_sha256': digest,
+            'claim_path': claim_path,
+            'original_chapter_ordinal': original_chapter_ordinal,
+            'resolved_chapter_ordinal': resolved_chapter_ordinal,
+            'match_mode': match_mode,
+        }, identity_key='evidence_locator_rewrite_id')
 
     def note_adoption(self, *, sid: str, node: str, purpose: str,
                       attempt_id: str, artifact: str,

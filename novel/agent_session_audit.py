@@ -659,6 +659,14 @@ def fold(events: Iterable[AgentSessionEvent]) -> list[AgentSessionRecord]:
             slot[name] = value
 
         if event.kind == 'turn':
+            if (not slot['turns']
+                    and start.wire_version == SESSION_AUDIT_WIRE_VERSION
+                    and event.wire_version == SESSION_AUDIT_WIRE_VERSION
+                    and (start.prompt_sha256 != event.prompt_sha256
+                         or start.schema_sha256 != event.schema_sha256)):
+                raise ValueError(
+                    f'{session_run_id} 的 started 必须与本 session 首条 '
+                    'turn 绑定同一份 prompt/schema')
             if event.attempt_id is not None:
                 owner = attempt_owners.get(event.attempt_id)
                 if owner is not None:

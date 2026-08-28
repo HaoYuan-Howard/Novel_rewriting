@@ -402,6 +402,36 @@ def test_a_leaky_role_invalid_is_repaired_by_the_typed_zero_llm_path():
         shutil.rmtree(root, ignore_errors=True)
 
 
+def test_typed_edit_uses_cross_chapter_unique_recovery_and_hash_only_audit():
+    root, book = _sandbox('人工证据错章恢复_003ab')
+    try:
+        _seed(book)
+        locator = '李宝珠把账册摊在桌上一页页翻。'
+        _write_edit(book, {'characters': [{
+            'char_id': 'char_001',
+            'role': '沈家账房，负责核对往来账目',
+            'role_evidence': _locator(1, locator),
+        }]})
+        ctx = _ctx(book, 'stage2.global', paid=False)
+
+        artifact, report = extract.run_apply_edit(ctx)
+
+        assert report.passed
+        evidence = artifact.entities.characters['char_001'].role_evidence
+        assert evidence.chapter_ordinal == 3 and evidence.source is not None
+        event, = [row for row in ctx.ledger.audit_events
+                  if row['kind'] == 'evidence_locator_rewrite']
+        assert event['claim_path'] == 'entities.characters.char_001.role'
+        assert (event['original_chapter_ordinal'],
+                event['resolved_chapter_ordinal']) == (1, 3)
+        assert event['artifact'] == extract.GLOBAL_REL
+        assert event['artifact_sha256'] == ArtifactStore(
+            ctx).full_sha256_or_none(extract.GLOBAL_REL)
+        assert locator not in json.dumps(event, ensure_ascii=False)
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
 def test_complete_typed_surfaces_reach_disk_and_rebuild_the_human_review():
     """A compound secret can be split without bypassing the real consumer.
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -17,11 +18,13 @@ from contracts.schema.orchestration import AgentProfile
 from novel import paths, prov
 from novel.agents import (
     AgentDriver, AgentProbe, AgentRequest, AgentTurn, AgentUsage,
+    render_agent_stdin, render_structured_agent_stdin,
 )
 from novel.agents.session_client import SessionAgentClient
 from novel.errors import ArtifactUnreadable, ProvenanceRefused
 from novel.llm import agent_runs, stage4_runs
 from novel.llm.cache import CachePolicy
+from novel.llm.client import LlmFailed
 from novel.llm.ledger import CostLedger, ledger_path
 from novel.run import RunContext
 
@@ -83,6 +86,12 @@ def _profile(*, effort: str = 'high') -> AgentProfile:
     return AgentProfile(
         driver='codex', model='gpt-5.6-sol',
         reasoning_effort=effort, execution_mode='standard')
+
+
+def _claude_profile() -> AgentProfile:
+    return AgentProfile(
+        driver='claude-code', model='claude-opus-5',
+        reasoning_effort='high', execution_mode='standard')
 
 
 def _ctx(
@@ -273,6 +282,55 @@ def test_new_revision_requires_monotonic_turn_and_all_prior_attempts(
     client.close()
 
 
+def test_clean_session_cannot_self_consistently_replace_original_prompt_hash(
+        tmp_path: Path, monkeypatch) -> None:
+    ctx = _ctx(tmp_path)
+    _ensure(ctx)
+    client = SessionAgentClient(
+        ctx, _profile(), _Driver(['{"value":1}']), max_turns=2)
+    value, acceptance = _accept(ctx, client)
+    wrong_sha = 'f' * 64
+    events = agent_runs.agent_session_audit.read_events(ctx.novel_dir.parent)
+    tampered = [
+        replace(event, prompt_sha256=wrong_sha)
+        if (event.session_run_id == acceptance['session_run_id']
+            and event.kind in ('started', 'turn'))
+        else event
+        for event in events
+    ]
+    monkeypatch.setattr(
+        agent_runs.agent_session_audit, 'read_events', lambda _base: tampered)
+    changed_acceptance = {**acceptance, 'accepted_prompt_sha256': wrong_sha}
+
+    with pytest.raises(ProvenanceRefused, match='正常首发 stdin'):
+        _write(ctx, value, changed_acceptance, state_value='tampered')
+    client.close()
+
+
+def test_trailing_rejected_turn_does_not_replace_last_accepted_checkpoint(
+        tmp_path: Path) -> None:
+    ctx = _ctx(tmp_path)
+    _ensure(ctx)
+    client = SessionAgentClient(
+        ctx, _profile(), _Driver(['{"value":1}', '{"other":2}']),
+        max_turns=2)
+    value, acceptance = _accept(ctx, client)
+    with pytest.raises(LlmFailed, match='已用尽 2 轮'):
+        client.ask_json(
+            _SYSTEM, _USER, model_cls=_Answer,
+            purpose='stage4.design', max_tokens=_MAX_TOKENS,
+            recovery_policy='stage4-design-v1')
+
+    path = _write(ctx, value, acceptance, state_value='last-valid')
+    assert path.name == 'rev-0001.json'
+    records = agent_runs.agent_session_audit.fold(
+        agent_runs.agent_session_audit.read_events(ctx.novel_dir.parent))
+    assert [turn.turn_index for turn in records[0].turns] == [1, 2]
+    assert acceptance['accepted_turn_index'] == 1
+    client.finish(process_state='ok', delivery_state='delivered')
+    client.close()
+
+
 def test_run_refuses_profile_prompt_schema_and_code_drift(tmp_path: Path) -> None:
     ctx = _ctx(tmp_path)
     _ensure(ctx)
@@ -296,6 +354,19 @@ def test_run_refuses_profile_prompt_schema_and_code_drift(tmp_path: Path) -> Non
         profile=_profile(effort='max'))
     with pytest.raises(ProvenanceRefused, match='profile'):
         _ensure(changed_profile)
+
+
+def test_claude_run_identity_hashes_the_final_structured_stdin(tmp_path: Path) -> None:
+    ctx = _ctx(tmp_path, profile=_claude_profile())
+    record = _ensure(ctx)
+    expected_stdin = render_structured_agent_stdin(
+        _SYSTEM, _USER, driver='claude-code')
+
+    assert record['request']['initial_prompt_sha256'] == hashlib.sha256(
+        expected_stdin.encode('utf-8')).hexdigest()
+    assert record['request']['initial_prompt_sha256'] != hashlib.sha256(
+        render_agent_stdin(_SYSTEM, _USER).encode('utf-8')
+    ).hexdigest()
 
 
 def test_commit_target_states_and_formal_adoption_are_exact(tmp_path: Path) -> None:

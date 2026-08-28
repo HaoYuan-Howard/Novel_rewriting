@@ -240,6 +240,22 @@ def test_read_and_fold_preserve_turns_provider_sessions_and_orthogonal_end(tmp_p
     assert record.turns[0].actual_effort == 'high'
 
 
+@pytest.mark.parametrize(('prompt_sha256', 'schema_sha256'), [
+    (_SHA_B, _SHA_D),
+    (_SHA_C, _SHA_C),
+])
+def test_fold_rejects_current_started_and_first_turn_request_mismatch(
+        prompt_sha256, schema_sha256):
+    with pytest.raises(ValueError, match='started.*首条 turn'):
+        A.fold((
+            _start(),
+            _turn(
+                prompt_sha256=prompt_sha256,
+                schema_sha256=schema_sha256,
+            ),
+        ))
+
+
 def test_legacy_missing_fields_stay_unknown_or_none_and_are_not_inferred(tmp_path):
     path = A.audit_path(tmp_path)
     path.parent.mkdir(parents=True)

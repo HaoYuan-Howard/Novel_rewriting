@@ -8,13 +8,17 @@ import json
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
 from contracts.schema.evaluation import GlobalReview
 from contracts.schema.orchestration import AgentProfile
 from contracts.schema.stage1 import MainText
-from contracts.schema.stage2 import GlobalGrounding
+from contracts.schema.stage2 import (
+    GlobalAgentTurnResponse, GlobalGrounding, GlobalGroundingResponse,
+)
 from novel import agent_session_audit, prov
 from novel.agents import AgentDriver, AgentProbe, AgentRequest, AgentTurn, AgentUsage
+from novel.agents.session_client import agent_json_schema
 from novel.errors import GateBlocked
 from novel.llm.cache import CachePolicy
 from novel.llm.client import LlmFailed
@@ -53,6 +57,44 @@ def _bad_global() -> dict:
     bad['entities']['characters']['char_002']['canonical'] = \
         bad['entities']['characters']['char_001']['canonical']
     return bad
+
+
+def _full(candidate: dict) -> str:
+    return json.dumps({
+        'payload': {'kind': 'full_candidate', 'candidate': candidate},
+    }, ensure_ascii=False)
+
+
+def _bad_evidence_global() -> dict:
+    bad = copy.deepcopy(_response_global())
+    bad['entities']['relations'][0]['predicate_evidence']['locator'] = \
+        '全书没有这句关系证据'
+    return bad
+
+
+def _evidence_patch(
+    candidate: dict,
+    *,
+    candidate_sha256: str | None = None,
+    claim_path: str = 'entities.relations.rel_01.predicate',
+    chapter: int = 2,
+    locator: str = '回来时看见母亲在门口等她。',
+) -> str:
+    sha = candidate_sha256 or extract.global_response_sha256(
+        GlobalGroundingResponse.model_validate(candidate))
+    return json.dumps({
+        'payload': {
+            'kind': 'evidence_patch',
+            'candidate_sha256': sha,
+            'changes': [{
+                'claim_path': claim_path,
+                'evidence': {
+                    'chapter_ordinal': chapter,
+                    'locator': locator,
+                },
+            }],
+        },
+    }, ensure_ascii=False)
 
 
 class _Driver(AgentDriver):
@@ -114,8 +156,8 @@ def _rows(path: Path) -> list[dict[str, object]]:
 def test_hard_candidate_resumes_same_session_then_lands_once(tmp_path):
     ctx = _ctx(tmp_path)
     driver = _Driver([
-        json.dumps(_bad_global(), ensure_ascii=False),
-        json.dumps(_response_global(), ensure_ascii=False),
+        _full(_bad_global()),
+        _full(_response_global()),
     ], ctx.novel_dir)
 
     result = Stage2GlobalAgent(ctx, driver=driver, max_turns=3).run()
@@ -128,6 +170,8 @@ def test_hard_candidate_resumes_same_session_then_lands_once(tmp_path):
     assert resumed.execution_policy == 'executor-isolated'
     assert 'code_validation_failed' in resumed.prompt
     assert 'canonical_unique' in resumed.prompt
+    assert 'full_candidate' in resumed.prompt
+    assert first.output_schema == resumed.output_schema
     assert main_text()[0]['text'][:30] in first.prompt
     assert main_text()[0]['text'][:30] not in resumed.prompt
 
@@ -153,10 +197,262 @@ def test_hard_candidate_resumes_same_session_then_lands_once(tmp_path):
         'accepted', 'rejected', 'accepted']
     adoption, = [row for row in llm_audit if row['kind'] == 'artifact_adoption']
     assert adoption['attempt_id'] == record.turns[-1].attempt_id
+    assert not [row for row in llm_audit
+                if row['kind'] == 'candidate_patch_applied']
+
+
+def test_evidence_hard_resumes_with_hash_bound_path_restricted_patch(tmp_path):
+    ctx = _ctx(tmp_path)
+    bad = _bad_evidence_global()
+    driver = _Driver([
+        _full(bad),
+        _evidence_patch(bad),
+    ], ctx.novel_dir)
+
+    result = Stage2GlobalAgent(ctx, driver=driver, max_turns=3).run()
+
+    assert result.turns == 2
+    first, resumed = (request for _kind, request in driver.calls)
+    assert first.output_schema == resumed.output_schema
+    assert first.output_schema == agent_json_schema(GlobalAgentTurnResponse)
+    assert 'evidence_patch' in resumed.prompt
+    assert 'entities.relations.rel_01.predicate' in resumed.prompt
+    assert extract.global_response_sha256(
+        GlobalGroundingResponse.model_validate(bad)) in resumed.prompt
+    feedback = json.loads(resumed.prompt)
+    contract = feedback['failures'][0]['repair_contract']
+    assert contract['allowed_paths'] == [
+        'entities.relations.rel_01.predicate']
+    assert set(contract) == {
+        'kind', 'candidate_sha256', 'allowed_paths', 'failures', 'instruction'}
+
+    relation = result.artifact.entities.relations[0]
+    assert relation.predicate == '母女'
+    assert relation.predicate_evidence.chapter_ordinal == 2
+    assert relation.predicate_evidence.source is not None
+    assert relation.predicate_evidence.source.text == '回来时看见母亲在门口等她。'
+
+    record, = agent_session_audit.fold(agent_session_audit.read_events(tmp_path))
+    audit_rows = _rows(tmp_path.joinpath(*AUDIT_REL))
+    adoption, = [row for row in audit_rows
+                 if row['kind'] == 'artifact_adoption']
+    assert adoption['attempt_id'] == record.turns[-1].attempt_id
+    patch_event, = [row for row in audit_rows
+                    if row['kind'] == 'candidate_patch_applied']
+    assert patch_event['attempt_id'] == record.turns[-1].attempt_id
+    assert patch_event['base_candidate_sha256'] == \
+        extract.global_response_sha256(
+            GlobalGroundingResponse.model_validate(bad))
+    assert patch_event['result_candidate_sha256'] == \
+        extract.global_response_sha256(
+            GlobalGroundingResponse.model_validate(_response_global()))
+    assert patch_event['changed_path_count'] == 1
+    assert patch_event['sid'] == ctx.sid
+    assert patch_event['node'] == patch_event['purpose'] == ctx.node
+    assert 'path' not in patch_event and 'locator' not in patch_event
+    assert '回来时看见母亲在门口等她。' not in json.dumps(
+        patch_event, ensure_ascii=False)
+
+
+def test_evidence_patch_keeps_progress_and_rebinds_only_new_failures(tmp_path):
+    ctx = _ctx(tmp_path)
+    good = _response_global()
+    bad = copy.deepcopy(good)
+    bad['entities']['relations'][0]['predicate_evidence']['locator'] = \
+        '全书没有这句关系证据'
+    bad['canon']['secrets'][0]['fact_evidence']['locator'] = \
+        '全书没有这句秘密证据'
+
+    intermediate = copy.deepcopy(bad)
+    intermediate['entities']['relations'][0]['predicate_evidence'] = \
+        copy.deepcopy(good['entities']['relations'][0]['predicate_evidence'])
+    intermediate['canon']['secrets'][0]['fact_evidence'] = {
+        'chapter_ordinal': 1,
+        'locator': '这句秘密证据仍然不存在',
+    }
+
+    def patch(candidate: dict, changes: list[dict]) -> str:
+        return json.dumps({
+            'payload': {
+                'kind': 'evidence_patch',
+                'candidate_sha256': extract.global_response_sha256(
+                    GlobalGroundingResponse.model_validate(candidate)),
+                'changes': changes,
+            },
+        }, ensure_ascii=False)
+
+    first_patch = patch(bad, [{
+        'claim_path': 'entities.relations.rel_01.predicate',
+        'evidence': good['entities']['relations'][0]['predicate_evidence'],
+    }, {
+        'claim_path': 'canon.secrets.secret_01.fact',
+        'evidence': intermediate['canon']['secrets'][0]['fact_evidence'],
+    }])
+    second_patch = patch(intermediate, [{
+        'claim_path': 'canon.secrets.secret_01.fact',
+        'evidence': good['canon']['secrets'][0]['fact_evidence'],
+    }])
+    driver = _Driver([
+        _full(bad), first_patch, second_patch,
+    ], ctx.novel_dir)
+
+    result = Stage2GlobalAgent(ctx, driver=driver, max_turns=3).run()
+
+    assert result.turns == 3
+    assert result.artifact.entities.relations[0].predicate_evidence.source is not None
+    assert result.artifact.canon.secrets[0].fact_evidence.source is not None
+    second_resume = json.loads(driver.calls[2][1].prompt)
+    contract = second_resume['failures'][0]['repair_contract']
+    assert contract['candidate_sha256'] == extract.global_response_sha256(
+        GlobalGroundingResponse.model_validate(intermediate))
+    assert contract['allowed_paths'] == ['canon.secrets.secret_01.fact']
+
+    record, = agent_session_audit.fold(agent_session_audit.read_events(tmp_path))
+    rows = _rows(tmp_path.joinpath(*AUDIT_REL))
+    patches = [row for row in rows if row['kind'] == 'candidate_patch_applied']
+    assert len(patches) == 2
+    assert [row['changed_path_count'] for row in patches] == [2, 1]
+    adoption, = [row for row in rows if row['kind'] == 'artifact_adoption']
+    assert adoption['attempt_id'] == record.turns[-1].attempt_id
+
+
+def test_multi_evidence_patch_rejects_a_missing_allowed_path(tmp_path):
+    ctx = _ctx(tmp_path)
+    good = _response_global()
+    bad = copy.deepcopy(good)
+    bad['entities']['relations'][0]['predicate_evidence']['locator'] = \
+        '不存在的关系证据'
+    bad['canon']['secrets'][0]['fact_evidence']['locator'] = \
+        '不存在的秘密证据'
+    candidate_sha = extract.global_response_sha256(
+        GlobalGroundingResponse.model_validate(bad))
+
+    def payload(changes: list[dict]) -> str:
+        return json.dumps({
+            'payload': {
+                'kind': 'evidence_patch',
+                'candidate_sha256': candidate_sha,
+                'changes': changes,
+            },
+        }, ensure_ascii=False)
+
+    relation_change = {
+        'claim_path': 'entities.relations.rel_01.predicate',
+        'evidence': good['entities']['relations'][0]['predicate_evidence'],
+    }
+    secret_change = {
+        'claim_path': 'canon.secrets.secret_01.fact',
+        'evidence': good['canon']['secrets'][0]['fact_evidence'],
+    }
+    driver = _Driver([
+        _full(bad),
+        payload([relation_change]),
+        payload([relation_change, secret_change]),
+    ], ctx.novel_dir)
+
+    result = Stage2GlobalAgent(ctx, driver=driver, max_turns=3).run()
+
+    assert result.passed and result.turns == 3
+    validation_feedback = json.loads(driver.calls[2][1].prompt)
+    detail = validation_feedback['validator_feedback']
+    assert 'missing=' in detail
+    assert 'canon.secrets.secret_01.fact' in detail
+    patch_events = [
+        row for row in _rows(tmp_path.joinpath(*AUDIT_REL))
+        if row['kind'] == 'candidate_patch_applied']
+    assert [row['changed_path_count'] for row in patch_events] == [2]
+
+
+@pytest.mark.parametrize('bad_patch', ['hash', 'path', 'noop'])
+def test_bad_evidence_patch_is_rejected_without_mutating_candidate(
+    tmp_path, bad_patch: str,
+):
+    ctx = _ctx(tmp_path)
+    bad = _bad_evidence_global()
+    if bad_patch == 'hash':
+        rejected = _evidence_patch(bad, candidate_sha256='0' * 64)
+    elif bad_patch == 'path':
+        rejected = _evidence_patch(
+            bad, claim_path='canon.setting.时代背景',
+            chapter=1, locator='春风吹过老宅的院墙。')
+    else:
+        rejected = _evidence_patch(
+            bad, chapter=2, locator='全书没有这句关系证据')
+    driver = _Driver([
+        _full(bad), rejected, _evidence_patch(bad),
+    ], ctx.novel_dir)
+
+    result = Stage2GlobalAgent(ctx, driver=driver, max_turns=3).run()
+
+    assert result.turns == 3
+    assert [kind for kind, _request in driver.calls] == [
+        'start', 'resume', 'resume']
+    assert len({json.dumps(request.output_schema, sort_keys=True)
+                for _kind, request in driver.calls}) == 1
+    assert result.artifact.entities.relations[0].predicate == '母女'
+    assert result.artifact.entities.relations[0] \
+        .predicate_evidence.chapter_ordinal == 2
+    patch_events = [
+        row for row in _rows(tmp_path.joinpath(*AUDIT_REL))
+        if row['kind'] == 'candidate_patch_applied']
+    assert len(patch_events) == 1
+    record, = agent_session_audit.fold(agent_session_audit.read_events(tmp_path))
+    assert patch_events[0]['attempt_id'] == record.turns[-1].attempt_id
+
+
+def test_mixed_evidence_and_other_hard_requires_full_candidate(tmp_path):
+    ctx = _ctx(tmp_path)
+    mixed = _bad_evidence_global()
+    mixed['entities']['characters']['char_002']['canonical'] = \
+        mixed['entities']['characters']['char_001']['canonical']
+    driver = _Driver([
+        _full(mixed),
+        _evidence_patch(mixed),
+        _full(_response_global()),
+    ], ctx.novel_dir)
+
+    result = Stage2GlobalAgent(ctx, driver=driver, max_turns=3).run()
+
+    assert result.passed and result.turns == 3
+    first_feedback = json.loads(driver.calls[1][1].prompt)
+    assert {row['rule'] for row in first_feedback['failures']} >= {
+        'canonical_unique', 'global_evidence_unlocated'}
+    assert all(row['repair_contract']['kind'] == 'full_candidate'
+               for row in first_feedback['failures'])
+    second_feedback = json.loads(driver.calls[2][1].prompt)
+    assert '本轮只接受 full_candidate' in \
+        second_feedback['validator_feedback']
+    rows = _rows(tmp_path.joinpath(*AUDIT_REL))
+    assert not [row for row in rows if row['kind'] == 'candidate_patch_applied']
+
+
+def test_global_agent_envelope_rejects_duplicate_or_extra_patch_fields():
+    change = {
+        'claim_path': 'entities.relations.rel_01.predicate',
+        'evidence': {'chapter_ordinal': 2, 'locator': '母亲在门口等她'},
+    }
+    with pytest.raises(ValidationError, match='claim_path 不能重复'):
+        GlobalAgentTurnResponse.model_validate({
+            'payload': {
+                'kind': 'evidence_patch',
+                'candidate_sha256': 'a' * 64,
+                'changes': [change, copy.deepcopy(change)],
+            },
+        })
+    with pytest.raises(ValidationError, match='extra_forbidden'):
+        GlobalAgentTurnResponse.model_validate({
+            'payload': {
+                'kind': 'evidence_patch',
+                'candidate_sha256': 'a' * 64,
+                'changes': [change],
+                'candidate': _response_global(),
+            },
+        })
+
 
 def test_turn_limit_lands_only_the_last_typed_invalid(tmp_path):
     ctx = _ctx(tmp_path)
-    bad = json.dumps(_bad_global(), ensure_ascii=False)
+    bad = _full(_bad_global())
     driver = _Driver([bad, bad], ctx.novel_dir)
 
     with pytest.raises(GateBlocked, match='canonical_unique'):
@@ -177,7 +473,7 @@ def test_turn_limit_lands_only_the_last_typed_invalid(tmp_path):
 def test_schema_exhaustion_after_business_reject_preserves_recovery_candidate(tmp_path):
     ctx = _ctx(tmp_path)
     driver = _Driver([
-        json.dumps(_bad_global(), ensure_ascii=False),
+        _full(_bad_global()),
         'not-json',
     ], ctx.novel_dir)
 

@@ -13,6 +13,7 @@ from contracts.schema.orchestration import AgentProfile
 from novel import prov
 from novel.agents import (
     AgentDriver, AgentProbe, AgentRequest, AgentTurn, AgentUsage,
+    render_structured_agent_stdin,
 )
 from novel.agents.session_client import SessionAgentClient
 from novel.errors import ProvenanceRefused
@@ -68,8 +69,15 @@ def _profile() -> AgentProfile:
         execution_mode='standard')
 
 
+def _claude_profile() -> AgentProfile:
+    return AgentProfile(
+        driver='claude-code', model='claude-opus-5',
+        reasoning_effort='high', execution_mode='standard')
+
+
 def _ctx(base: Path, *, run_id: str | None = None,
-         code: str | None = None) -> RunContext:
+         code: str | None = None,
+         profile: AgentProfile | None = None) -> RunContext:
     novel_dir = base / '双盲测试_42'
     novel_dir.mkdir(exist_ok=True)
     ledger = (CostLedger(path=ledger_path(base)) if run_id is None else
@@ -77,7 +85,7 @@ def _ctx(base: Path, *, run_id: str | None = None,
     return RunContext(
         novel_dir=novel_dir, node='stage6.semantic', paid=True,
         code=code or prov.code_version(), cache=CachePolicy.default(),
-        ledger=ledger, executor_profile=_profile(), run_id=run_id or '')
+        ledger=ledger, executor_profile=profile or _profile(), run_id=run_id or '')
 
 
 _SYSTEM = '稳定 Stage6 系统提示'
@@ -140,6 +148,18 @@ def test_run_freezes_two_role_policy_and_refuses_prompt_or_input_drift(tmp_path)
             ctx, input_sha256=_INPUT_SHA, system=_SYSTEM,
             users={'A': _USERS['A'], 'B': _USERS['B'] + ' changed'},
             response_model=_JudgeAnswer, max_tokens=_MAX_TOKENS)
+
+
+def test_claude_run_hashes_each_role_final_structured_stdin(tmp_path):
+    ctx = _ctx(tmp_path, profile=_claude_profile())
+    record = _ensure(ctx)
+
+    for row in record['requests']:
+        role = str(row['role'])
+        expected_stdin = render_structured_agent_stdin(
+            _SYSTEM, _USERS[role], driver='claude-code')
+        assert row['initial_prompt_sha256'] == hashlib.sha256(
+            expected_stdin.encode('utf-8')).hexdigest()
 
 
 def test_each_role_checkpoint_restores_typed_payload_ledger_and_session(tmp_path):
