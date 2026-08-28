@@ -154,6 +154,21 @@ driver 的真实链路生效。非 corpus 回归与真实付费整书验收分�
   可证明的 `return` 查锚点、其余非线性边界产 UNVER；**章首 entry 与章尾 ending 继续 HARD**；
   因果端点可通过 context fact 入场、多次出现取首次可见场；`STYLE_WORDS` 只拦真正的写法指令。
 - 跑书 skill 写明：INFO、metric、UNVER 只披露，不触发付费重试。
+- **P0 已完成并按 `docs/BACKEND_CONTRACT.md` §十 2026-08-28 行留证**：v8 那 5 份真拒稿
+  0 成本重放，4 份通过、1 份仍红且红在真漏落事实。
+
+**P2a 进行中**：已把两类「让模型复述代码已知信息」的假拒绝收窄——同一时间线的状态
+承接改由编译器派生（`novel/stages/stage4/checks.py::derive_effective_states`），
+context 引用与章尾闭合改判「读者此刻知不知道 / 本章有没有让它成立」。
+**剩下的 P2a 项**（按对稳定性的贡献排序）：
+
+1. Stage4 反馈轮改章节 replacement schema：首轮仍整书，出错只换出错的那一章。
+   现状是「一处错 ⇒ 整本 A 相重出」，而重出一次是本链最贵的一次调用。
+2. Stage4 validator 拒稿目前**没有任何恢复入口**（`repair_eligible=false`、
+   `eligibility_reason='validator 不属于通用 JSON/形状修复面'`）⇒ 一次有效付费产出
+   只能整本重来。补 `--adopt-rejected`（按当前闸原样重判封存候选，0 wire）与
+   `--apply-repair`（hash-bound 章节 replacement）。
+3. 逐节点「首次调用即落盘率」进 `tools/workflow_metrics.py`，作为 P3 的主读数。
 
 **P1（兼容当前 schema 的高影响阻断面）**：`contracts/invariants.py` 建立唯一
 `review_effect_of(kind)`（blocking / disclosure，legacy `known_by` 保守按 blocking 读）；
