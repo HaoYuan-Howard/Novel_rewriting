@@ -1414,8 +1414,7 @@ def test_stage2_global_over_limit_stops_before_transport_cache_ledger_or_artifac
 
 def test_stage4_plan_over_limit_with_candidate_stops_before_b_transport_or_outputs():
     from novel.stages.stage4 import plan as stage4_plan
-    from novel.stages.stage4.blind import build_blind_projection
-    from tests.test_stage4_v3_integration import _retain_a_response
+    from tests.test_stage4_v3_integration import _split_a_responder
 
     root = Path(tempfile.mkdtemp())
     book = root / '规划超限测试_123'
@@ -1444,16 +1443,14 @@ def test_stage4_plan_over_limit_with_candidate_stops_before_b_transport_or_outpu
         design_store = ArtifactStore(design_ctx)
         produced_blueprints = design_store.read(
             ChapterBlueprints, stage4_plan.BLUEPRINTS)
-        _truth, mapping = build_blind_projection(
-            produced_blueprints.model_dump(by_alias=True, mode='json'),
-            root_clean_sha1=design_ctx.root_clean_sha1,
-        )
-        design_response = _retain_a_response(
-            produced_blueprints.model_dump(by_alias=True, mode='json'), mapping)
+        design_response = _split_a_responder(
+            produced_blueprints.model_dump(by_alias=True, mode='json'))
         design_client, design_transport = _client(
-            design_ctx, lambda _request, _index: _ok(design_response))
+            design_ctx,
+            lambda request, _index: _ok(design_response(request)))
         stage4_plan.run_design(design_ctx, design_client)
-        assert len(design_transport.calls) == 1
+        assert len(design_transport.calls) == 1 + len(
+            produced_blueprints.blueprints)
         candidate_before = (book / stage4_plan.CANDIDATE_REL).read_bytes()
 
         ctx = _ctx(book, 'stage4.plan')

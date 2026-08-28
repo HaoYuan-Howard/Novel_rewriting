@@ -133,6 +133,8 @@ _WITHHELD: dict[str, str] = {
                                  '前端只展示当前计划的决定与审批态，不自行判断算法新旧',
     'BLIND_ALIAS_ALGORITHM': 'Stage4A 审计用的 opaque alias 算法身份；前端既不生成 alias，'
                              '也不据此判断候选是否可用',
+    'STAGE4_DESIGN_MAX_CONCURRENCY': 'Stage4A 私有 session 的供应商稳定性护栏；'
+                                     '它是后端编排参数，不是前端可调取值面',
     # ── stage7（人名替换与成书）──
     'MIN_SURFACE': '判据阈值（能进替换面的称呼最短几个字）。前端拿到就能自己判'
                    '「这条映射合不合法」，而那条判据在 stage7',

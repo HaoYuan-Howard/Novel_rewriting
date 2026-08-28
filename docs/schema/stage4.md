@@ -4,22 +4,26 @@ Stage4 由两个隔离的付费相和一个确定性上下文相组成：
 
 ```text
 Stage2 v6
-  ├─ 去序真相图 ─ stage4.design（A，付费）─ blind_candidate v2
-  └─ 原文证据层 ─ stage4.plan（B，付费）── evidence_binding v2
-                                                │
-                    A + B ─ 确定性编译 ─────────┴─ plan_chapters v4
-                                                         │
-                                  stage4.context（免费）── writer_context v4
+  ├─ 章功能/计数 ─ stage4.design（A，付费）─ 整书策略 checkpoint
+  │                                      └─ 冻结策略 + 单章去序真相 ─ N 个私有 session（≤4 并发）
+  │                                                                      └─ 单章 checkpoints
+  │                              策略 + 全部章节 ─ 确定性聚合 + 整书 HARD ─ blind_candidate v2（原子落盘）
+  └─ 原文证据层 + 冻结候选 ─ stage4.plan（B，付费）────────────── evidence_binding v2
+                                                                           │
+                                      A + B ─ 确定性编译 ──────────────────┴─ plan_chapters v4
+                                                                                    │
+                                                             stage4.context（免费）── writer_context v4
 ```
 
-A、B 是两个独立节点、两次独立授权；A 落盘后不会自动连跑 B。`stage4.plan --identity`
+A、B 是两个独立公开节点、两次独立授权；A 的一次授权覆盖预览中明示的 1+N 个内部逻辑请求，
+不是 N+1 次公开授权。A 落盘后不会自动连跑 B。`stage4.plan --identity`
 仍完整构造并校验恒等计划与上下文，但只输出诊断，不产生 artifact。
 
 ## 一、产物与版本
 
 | 路径 | 模型 / 版本 | 生产者 | 责任 | 证据 |
 |---|---|---|---|---|
-| `stage4/blind_candidate.json` | `BlindCandidate` v2 | `stage4.design` | 保存 A 的盲场景候选、编译映射与 A 自己的来源账 | 码·契 |
+| `stage4/blind_candidate.json` | `BlindCandidate` v2 | `stage4.design` | 保存 A 的 N+1 个已验 unit 确定性聚合后的盲场景候选、编译映射与聚合来源账 | 码·契 |
 | `stage4/evidence_binding.json` | `EvidenceBinding` v2 | `stage4.plan` | 保存 B 的证据绑定或 typed `infeasible` | 码·契 |
 | `stage4/plan_chapters.json` | `PlanChapters` v4 | `stage4.plan` 的编译段 | 保存 Stage5 真正消费的结构计划与 A/B 完整字节哈希 | 码·契 |
 | `stage4/plan_edit.json` | `PlanEdit` v4 | 人工输入 | 人工整份替换计划的 typed 入口 | 码·契 |
@@ -34,25 +38,31 @@ compiled 计划从 `stage4.design` → `stage4.plan` 重建；人工稿提交 v4
 
 ### 2.1 A 的输入边界
 
-A 只看同号章身份、冻结 `chapter_function`、事实 claim/kind/obligation 及人物 alias、因果边、
-章首与章尾状态。事实和人物引用换成 opaque alias，事实数组独立稳定散列排序。因果边是真相约束，
-不是源披露顺序，因此继续保留。
+Stage4A 不是一份全书事实请求。首个整书策略 session 只看按阅读序排列的章身份、冻结
+`chapter_function` 与代码计算的事实/因果/状态计数；它看不到 claim、事实或人物 alias，也不设计
+逐章场景，只返回 `reconstruction_strategy + chapter_weights[]`。
 
-A 看不到原文、SourceSpan、`source_beat_ref`、beat/stage、材料、正式 fact id 或源出现顺序。
-alias 映射只供确定性编译和审计，不能拼回 A 的 user message。现役算法为
-`hmac-sha256-v1`；算法名、真相图 SHA-256 与 prompt 指纹互不替代。
+策略通过后，每章各开一个独立私有 session。单章请求只看冻结策略与本章权重、本章事实
+claim/kind/obligation、因果边与章首/章尾状态；不会看见其他章真相。
+事实与人物引用使用该章独有的短 local alias（`f_*` / `p_*`）：由 root 身份、章号和正式 alias
+确定性 HMAC 派生，碰撞时只延长摘要，因此跨恢复稳定且不携带源序；数组继续按 alias 稳定排序。
+因果边是真相约束，不是源披露顺序，因此在本章请求中保留。
+
+两类 session 都看不到原文、SourceSpan、`source_beat_ref`、beat/stage、材料、正式 fact id 或源出现
+顺序。local→正式 alias 映射只供确定性编译和审计，不能拼回 A 的 user message。正式算法仍为
+`hmac-sha256-v1`；算法名、真相图 SHA-256、各 unit 输入 SHA 与 prompt 指纹互不替代。
 
 ### 2.2 顶层与章场字段
 
 | 字段 | 类型 / 约束 | 语义 | 证据 |
 |---|---|---|---|
 | `alias_algorithm` | `hmac-sha256-v1` | opaque alias 算法 | 码·契 |
-| `truth_sha256` | 64 位 SHA-256 | A 实际看见的去序真相图主体 | 码·契 |
+| `truth_sha256` | 64 位 SHA-256 | 完整去序真相图主体；各 unit 绑定它，但没有 session 看见整份图 | 码·契 |
 | `fact_aliases` | `{alias: fact_id}`；非空 | 编译期一一映射，不进入 A prompt | 码·契 |
 | `participant_aliases` | `{alias: char_id}` | 人物别名编译映射，不进入 B 回填 | 码·契 |
 | `reconstruction_strategy` | 非空字符串 | 仅 A 相使用的全书规划脚手架 | 码·契 |
 | `output_chapters` | 非空数组 | 一章对一章的盲候选 | 码·契 |
-| `_provenance` | `BlindCandidateProvenance` | A 自己的 LLM 来源账 | 码·契 |
+| `_provenance` | `BlindCandidateProvenance` | A 的策略/逐章获采纳调用聚合来源账；逐 unit 明细留在 ledger/session/checkpoint | 码·契 |
 
 每章保存 `output_ordinal`、`structure_decision`、三个 goal、章级 `weight`、
 `chapter_rewrite_brief` 与候选场数组。goal 只含 `intent + fact_aliases`，不保存 rationale。
@@ -71,6 +81,22 @@ land/context/turn/state aliases。权重只服务预算编译，进入正式计�
 
 变化类型关闭为 `entry_anchor`、`ending_anchor`、`fact_grouping`、`disclosure_order`、
 `noncontiguous_regroup`。A 只声明意图，不能自证实际变化。
+
+### 2.3 调度、检查点与原子提交
+
+策略 session 是逐章扇出的串行前置；策略验证并 checkpoint 后，N 个逐章 session 才能启动。节点内
+实际并发取 `min(4, NOVEL_CONCURRENCY, 待跑章数)`：配置可以下调，但硬上限始终为 4。策略和每章分别
+绑定同一个 `run_id` 下自己的 purpose、provider session、请求身份、
+accepted attempt、ledger 与验证后 checkpoint。进程中断后只恢复匹配当前代码/契约/输入/prompt/schema
+且 ledger 闭合的已验 unit，只补缺失或失败单元；恢复 checkpoint 不记 cache hit，也不新增 wire。
+正式 provenance 的 usage 不取“本次重启以后”的增量：它按当前 `run_id` 下 N+1 个稳定 purpose
+从 ledger 重建全部成本，包含先前无 checkpoint 的失败私有 session；因此部分恢复、完整恢复与
+aggregate prepared 尾窗恢复必须得到同一份 usage，不能把已付费历史显示成 0 或漏掉。
+
+unit checkpoint 不是正式 artifact。只有策略和全部章节齐全，代码才能把 local alias 映回正式 alias、
+注入章号/权重/`candidate_scene_id`、按章排序并组装完整 `BlindCandidate`；聚合物必须再过 strict schema、
+单章动态闸与整书全部 HARD。通过后才由 commit journal 原子写 `blind_candidate.json`；中断、缺章、
+聚合失败或 HARD 命中都不得留下部分正式文件，也不得覆盖旧正式候选。
 
 ## 三、Stage4B：`evidence_binding.json` v2
 
@@ -190,7 +216,7 @@ subject SHA-256、actor、全书理由及与计划章集精确相等的逐章 ac
 
 | 状态 | 允许的恢复 | 禁止的捷径 | 证据 |
 |---|---|---|---|
-| A 响应暂停或拒收 | 显式 response-repair，或重新批准 A | 补字段冒充正式候选 | 码·契 |
+| A 的策略或单章响应暂停/拒收 | 同一 `run_id` 恢复，只补失败/缺失 unit；必要时显式 response-repair 或重新批准 A | 重发已验 unit、公开 `--chapters`、补字段或部分聚合冒充正式候选 | 码·契 |
 | B typed `infeasible` | 人审阅；必要时另行批准 `stage4.design --replan`，再独立批准 B；或提交完整 v4 人工计划 | B 私改 A、自动生成 A2、一次批准串跑 A/B | 码·契 |
 | 计划落 `.INVALID` | 修订 v4 `plan_edit.json` 后 `--apply-edit`，或 `--revalidate --actor --reason` | 改名提升、绕过 schema/判据/归档 | 三源 |
 | Context 缺失或 stale | `stage4.context` 免费重建 | 用旧上下文继续写 | 三源 |

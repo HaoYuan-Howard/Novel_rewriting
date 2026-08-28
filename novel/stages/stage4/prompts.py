@@ -13,7 +13,90 @@ from contracts.invariants import (
 from novel.llm.prompts import with_json_shape
 
 BLIND_DESIGN_MAX_TOKENS = 96_000
+# 新架构把宏观策略与逐章设计拆成独立 provider request；这两枚是请求身份里的
+# 输出预算边界。旧 ``BLIND_DESIGN_MAX_TOKENS`` 只供整书拒稿的零 wire 重放身份。
+BLIND_BOOK_STRATEGY_MAX_TOKENS = 16_000
+BLIND_CHAPTER_DESIGN_MAX_TOKENS = 24_000
 EVIDENCE_BIND_MAX_TOKENS = 48_000
+
+
+BLIND_BOOK_STRATEGY_SYS = """\
+你是 Stage4A 的整书宏观策略器。你只能看到按阅读序排列的 chapter_function 与确定性计数，
+看不到事实 claim、事实或人物 alias、原文、源舞台、source beat 或逐字材料。
+
+请给出一条全书 reconstruction_strategy，并为输入中的每章选择相对篇幅权重。章号集合必须与
+输入完全一致且不得重复。权重只能使用响应契约中的 CH_ 前缀枚举；它表达章间相对轻重，
+不等于最终字数，预算整数由代码统一计算。不要设计逐章场景，不回显章摘要，不添加事实、人物
+或证据。只谈宏观事实组织，不指定文风，不写纯写法词：$STYLE_WORDS。只输出 JSON。""" \
+    .replace('$STYLE_WORDS', '、'.join(f'「{word}」' for word in STYLE_WORDS))
+
+BLIND_BOOK_STRATEGY_HINT: dict[str, Any] = {
+    'reconstruction_strategy': '只基于章级功能与计数的全书结构意图',
+    'chapter_weights': [{
+        'chapter_ordinal': 1,
+        'weight': '|'.join(RESPONSE_CHAPTER_WEIGHTS),
+    }],
+}
+
+
+BLIND_CHAPTER_DESIGN_SYS = """\
+你是 Stage4A 单章盲结构设计器。你只看到本章去序的事实真相图：事实与人物都用仅在本请求
+有效的短 local alias，数组顺序也由确定性散列打乱。不要从 alias 字面或数组位置猜原文
+叙述顺序；你没有原文、源舞台、source_beat_ref 或逐字材料。输入中的全书策略与本章权重
+已经冻结；不要在响应中回显或修改它们，章号也由请求身份确定，不在响应中回显。
+
+先按事实因果、人物状态和读者信息设计场景分组与披露顺序，再选择结构决定：
+- retain：本章适合直接、线性的真相推进，不主动声明结构变化；declared_change_kinds 必须为空；
+- reconstruct：本章有真实重构空间，必须声明至少两类变化。可选值及唯一合法排列顺序是：
+  $CHANGE_KINDS；只选需要的项，去重后仍须保持这个契约顺序。
+
+每个 land alias 恰好落入一场；context_fact_aliases 只能引用「此刻读者已经知道」的事实：
+输入中 obligation=context 的 alias，或**已经在更早场落地**的 land alias。**不得引用本场或
+后面才落地的 land alias**。turn 必须属于本场 land。entry_state_aliases / exit_state_aliases
+只填**本场新增**的状态，不要把前面已经成立的状态再抄一遍：
+- X_CONTINUE 表示同一时间线紧邻续接，代码自动继承上一场的有效 exit；
+- X_RETURN 回到离开主线前的锚点，代码自动恢复该锚点的有效状态；
+- 首场自动承接本章章首状态；
+- X_EARLIER 打开更早时点，X_PARALLEL 打开并行时层，二者不继承紧邻上一场 exit；
+- 一条 X_EARLIER/X_PARALLEL 支路用一次 X_RETURN 收口；当前输出没有 branch id，
+  不要嵌套支路，也不要在支路内再用 X_LATER；
+- X_LATER 跳到更晚时点，有时间空档，不承诺线性继承紧邻上一场 exit。
+
+机器无法从 alias 图完整判断非线性时序是否合理；必须如实标注边界留给人工判断，
+不得为了让状态看似连续而把未来事实带入过去。章尾必须真的把本章 ending 状态确立起来。
+三个 goal 只能引用本章 local fact alias，并分别落在章目标、首场和末场。场景数组就是新披露顺序。
+scene weight/role/delivery/transition 使用响应契约里的前缀枚举，首场 transition 必须 X_START。
+只谈事实组织，不指定文风，不写纯写法词：$STYLE_WORDS。只输出 JSON。""" \
+    .replace('$CHANGE_KINDS', '、'.join(STRUCTURE_CHANGE_KINDS)) \
+    .replace('$STYLE_WORDS', '、'.join(f'「{word}」' for word in STYLE_WORDS))
+
+_BLIND_LOCAL_GOAL_HINT = {
+    'intent': '|'.join(RESPONSE_GOAL_INTENTS),
+    'fact_aliases': ['f_012345'],
+}
+_BLIND_LOCAL_SCENE_HINT = {
+    'weight': '|'.join(RESPONSE_UNIT_WEIGHTS),
+    'purpose': '本场要完成的事实局面变化',
+    'role': '|'.join(RESPONSE_STRUCTURAL_ROLES),
+    'delivery': '|'.join(RESPONSE_DELIVERY_MODES),
+    'transition': '|'.join(RESPONSE_TEMPORAL_LINKS),
+    'land_fact_aliases': ['f_012345'],
+    'context_fact_aliases': [],
+    'turn_fact_alias': 'f_012345',
+    'entry_state_aliases': [],
+    'exit_state_aliases': ['f_012345'],
+}
+BLIND_CHAPTER_DESIGN_HINT: dict[str, Any] = {
+    'structure_decision': {
+        'mode': 'retain|reconstruct', 'reason': '本章选择理由',
+        'declared_change_kinds': ['entry_anchor', 'fact_grouping'],
+    },
+    'chapter_goal': _BLIND_LOCAL_GOAL_HINT,
+    'open_hook_goal': _BLIND_LOCAL_GOAL_HINT,
+    'end_hook_goal': _BLIND_LOCAL_GOAL_HINT,
+    'chapter_rewrite_brief': '入口、事实组合与收束的可执行简报',
+    'scenes': [_BLIND_LOCAL_SCENE_HINT],
+}
 
 
 BLIND_DESIGN_SYS = """\
@@ -117,6 +200,14 @@ def blind_design_system() -> str:
     return with_json_shape(BLIND_DESIGN_SYS, BLIND_DESIGN_HINT)
 
 
+def blind_book_strategy_system() -> str:
+    return with_json_shape(BLIND_BOOK_STRATEGY_SYS, BLIND_BOOK_STRATEGY_HINT)
+
+
+def blind_chapter_design_system() -> str:
+    return with_json_shape(BLIND_CHAPTER_DESIGN_SYS, BLIND_CHAPTER_DESIGN_HINT)
+
+
 def evidence_bind_system() -> str:
     return with_json_shape(EVIDENCE_BIND_SYS, EVIDENCE_BIND_HINT)
 
@@ -127,6 +218,9 @@ BLOCK_SKELETON = '── Stage2 原子事实契约与舞台目录（只作场景
 BLOCK_SIZES = '── 章级源字数与原子数（预算整数由代码计算）──'
 BLOCK_BODY = '── 全书原文正文（不可变原文，按阅读序章号分块）──'
 BLOCK_BLIND_TRUTH = '── 去序真相图（opaque alias 无顺序含义）──'
+BLOCK_BLIND_BOOK_STRATEGY = '── 章级功能与确定性计数（整书宏观策略输入）──'
+BLOCK_BLIND_CHAPTER_TRUTH = '── 单章去序真相图（local alias 仅在本请求有效）──'
+BLOCK_ACCEPTED_BOOK_STRATEGY = '── 已接受的整书策略与本章权重（不得修改）──'
 BLOCK_CANDIDATE = '── 已冻结的 Stage4A 盲设计候选（不得修改）──'
 BLOCK_CANDIDATE_HASH = '── 候选完整 SHA-256（必须回显）──'
 BLOCK_EVIDENCE = '── Stage2 证据层与关闭式引用目录（只用于绑定）──'

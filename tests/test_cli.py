@@ -28,6 +28,7 @@ from contracts.schema.orchestration import AgentProfile
 from contracts.schema.stage7 import NameMapEdit
 from novel.cli import exit_codes as X
 from novel.cli.main import main
+from novel.config import DEFAULT_CONCURRENCY
 from novel.errors import ApprovalRequired, TerminalState
 from novel.orchestrator import nodes as N
 from novel.orchestrator import queue as Q
@@ -1002,21 +1003,30 @@ EXECUTOR_PROFILE_ARGS = (
 # 只测“节点在名单里”后让 `_dispatch` 静默吞掉 chapters/revise。
 _PROFILED_RUN_CASES = (
     pytest.param('stage2.global', [], {}, id='stage2-global'),
-    pytest.param('stage2.blueprint', [], {}, id='stage2-blueprint'),
-    pytest.param('stage4.design', [], {}, id='stage4-design'),
+    pytest.param(
+        'stage2.blueprint', [], {'concurrency': DEFAULT_CONCURRENCY},
+        id='stage2-blueprint'),
+    pytest.param(
+        'stage4.design', [], {'concurrency': DEFAULT_CONCURRENCY},
+        id='stage4-design'),
     pytest.param('stage4.plan', [], {}, id='stage4-plan'),
     pytest.param(
-        'stage5.write', [], {'chapters': None, 'revise': False},
+        'stage5.write', [], {
+            'concurrency': DEFAULT_CONCURRENCY,
+            'chapters': None, 'revise': False},
         id='stage5-default'),
     pytest.param(
         'stage5.write', ['--chapters', '5,2,5'],
-        {'chapters': '5,2,5', 'revise': False}, id='stage5-chapters'),
+        {'concurrency': DEFAULT_CONCURRENCY,
+         'chapters': '5,2,5', 'revise': False}, id='stage5-chapters'),
     pytest.param(
         'stage5.write', ['--revise'],
-        {'chapters': None, 'revise': True}, id='stage5-revise'),
+        {'concurrency': DEFAULT_CONCURRENCY,
+         'chapters': None, 'revise': True}, id='stage5-revise'),
     pytest.param(
         'stage5.write', ['--chapters', '5,2,5', '--revise'],
-        {'chapters': '5,2,5', 'revise': True},
+        {'concurrency': DEFAULT_CONCURRENCY,
+         'chapters': '5,2,5', 'revise': True},
         id='stage5-revise-chapters'),
     pytest.param('stage6.hook', [], {}, id='stage6-hook'),
     pytest.param('stage6.semantic', [], {}, id='stage6-semantic'),
@@ -1199,7 +1209,9 @@ def test_profiled_dispatch_renders_report_and_maps_passed_false_to_exit_one(
     rc = M._dispatch('stage5.write', ctx, [])
 
     assert rc == X.CHECK_FAILED and X.landed(rc)
-    assert built == [{'chapters': None, 'revise': False}]
+    assert built == [{
+        'concurrency': DEFAULT_CONCURRENCY,
+        'chapters': None, 'revise': False}]
     assert rendered == [report]
     out = capsys.readouterr().out
     assert 'SYNTHETIC REPORT' in out

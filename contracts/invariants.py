@@ -329,6 +329,9 @@ STRUCTURE_CHANGE_KINDS: Final = (
 )
 STRUCTURE_METRIC_CONTRACT: Final = 'atomic-structure-v2'
 BLIND_ALIAS_ALGORITHM: Final = 'hmac-sha256-v1'
+#: Stage4A 的逐章私有 session 并发上限。配置可以把它调低，但不能调高；
+#: 这是该节点的供应商稳定性边界，不与全局 ``MAX_CONCURRENCY`` 混成一把尺子。
+STAGE4_DESIGN_MAX_CONCURRENCY: Final = 4
 STRUCTURE_APPROVAL_DECISIONS: Final = ('accept', 'request_replan')
 STRUCTURE_APPROVAL_STATES: Final = (
     'unavailable', 'missing', 'accepted', 'replan_requested', 'expired',
@@ -1676,20 +1679,13 @@ NODES: Final[dict[str, NodeSpec]] = {
                                         '--revalidate', '--actor', '--reason',
                                         '--response-repair'),
                                  produces=(artifact_paths.STAGE2_CHAPTER_BLUEPRINTS,)),
-    # ⚠⚠ Stage4 两个付费相都钉死 `deepseek-v4-pro`（2026-08-22 用户裁决沿用）。
-    #   理由**不是**「flash 在这里更容易空」，是**重采粒度**：每相都是
-    #   全书一次调用 ⇒ 一次 `answer_lost` 的重采代价是整本书，而逐章节点
-    #   重采一章 ≈ 5.7k output。跨 4 份账本的严格口径（正文空 **且** `finish=stop`）：
-    #   `stage4.plan` flash@high **13/30 = 43.3%**（blueprint 22.9% / write 12.1% /
-    #   style 7.9%），pro@high **0/6**、全表 pro **0/249**。
-    #   ⚠ 43.3% 下 `MAX_SAMPLES_PER_RUNG=2` 双空掉档的概率 ≈ 18.7%，而本节点在 low
-    #   上有已知劣化（猜 event 编号）⇒ 掉档不是安全网，是另一种坏。
-    #   ⚠ **它不是一次加钱**：flash 产出一份可用计划累计 completion ≈ 67k
-    #   （`json_mode` 同场次对照两臂 67 028 / 68 214），pro 一次过 out 中位 22 848
-    #   （n=6）⇒ 按 pro:flash ≈ 3:1 的单价比几乎持平，而 flash 最终稿 10/23 与 8/19 章
-    #   产自降档档位（pro 对照 0/23）。
-    #   ⚠ 治本仍在别处：本节点的毛病（空正文率最高、失败最贵、全书级判据难守）根因
-    #   同一个——**全书一次调用这个粒度**。钉 pro 是治标的那一手。
+    # ⚠⚠ Stage4 两个付费相仍沿用 `deepseek-v4-pro`，但 2026-08-28 起不能再用
+    #   “两相都是全书一次调用”解释这两个值：A 已拆成一条小型整书策略 + N 条
+    #   逐章请求，代码聚合后再跑整书 HARD；B 仍是一次全书证据绑定调用。
+    #   2026-08-22 的空正文证据直接支持的是 B：`stage4.plan` flash@high
+    #   13/30，pro@high 0/6、全表 pro 0/249；一次 Flash 可用计划累计 completion
+    #   约 67k，Pro 一次过 out 中位约 22.8k。A 拆分后暂不凭架构变化静默翻默认，
+    #   须在相同逐章契约下另行比较首次交付率、HARD、token 与墙钟再裁决。
     'stage4.design':    NodeSpec('stage4', 'R-5',  True,  'stage4 盲场景设计',
                                   flags=('--dry-run', '--replan', '--adopt-rejected',
                                          '--actor', '--reason', '--response-repair'),

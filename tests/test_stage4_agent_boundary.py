@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
+from typing import Any, Callable
 
 from contracts.artifacts import (
     STAGE4_BLIND_CANDIDATE, STAGE4_EVIDENCE_BINDING,
@@ -12,21 +14,24 @@ from contracts.artifacts import (
 )
 from contracts.schema.orchestration import AgentProfile
 from contracts.schema.stage4 import BlindCandidate, EvidenceBinding, PlanChapters
-from novel import agent_session_audit, prov
+from novel import agent_session_audit, paths, prov
 from novel.agents import (
     AgentDriver, AgentProbe, AgentRequest, AgentTurn, AgentUsage,
 )
 from novel.agents.session_client import SessionAgentClient
-from novel.errors import GateBlocked
+from novel.errors import GateBlocked, ProvenanceRefused
 from novel.llm import stage4_runs
 from novel.llm.cache import CachePolicy
 from novel.llm.ledger import CostLedger, ledger_path
 from novel.run import RunContext
+from novel.node_agents import Stage4DesignSessionPool
 from novel.stages.stage4 import plan
+from novel.stages.stage4.blind import build_blind_projection
 from novel.store import ArtifactStore
 from tests.test_stage4_v3_integration import (
-    _book, _bound_b_response, _infeasible_b_response, _retain_a_response,
-    _seed_current_stage2,
+    _book, _bound_b_response, _infeasible_b_response, _seed_current_stage2,
+    _split_a_responder, _ctx as _legacy_ctx, _retain_a_response,
+    _seal_a_validator_rejection,
 )
 
 
@@ -99,6 +104,34 @@ class _NoWireDriver(_OneTurnDriver):
         raise AssertionError('checkpoint/committed 恢复不得 resume')
 
 
+class _RequestDriver(_OneTurnDriver):
+    """按每个 unit 的真实 AgentRequest 动态构造 fake structured output。"""
+
+    def __init__(
+            self, responder: Callable[[AgentRequest], dict[str, Any]], *,
+            session_id: str,
+    ) -> None:
+        super().__init__({}, session_id=session_id)
+        self._responder = responder
+
+    def _answer(self, request: AgentRequest) -> AgentTurn:
+        self.content = json.dumps(
+            self._responder(request), ensure_ascii=False, sort_keys=True,
+            separators=(',', ':'))
+        self.requests.append(request)
+        return self._turn()
+
+    def start(self, profile: AgentProfile, request: AgentRequest) -> AgentTurn:
+        return self._answer(request)
+
+    def resume(
+            self, profile: AgentProfile, session_id: str,
+            request: AgentRequest,
+    ) -> AgentTurn:
+        assert session_id == self.session_id
+        return self._answer(request)
+
+
 def _ctx(
         book: Path, node: str, *, run_id: str | None = None,
         code: str | None = None,
@@ -125,19 +158,38 @@ def _client(
         ctx, _profile(), driver, max_turns=max_turns)
 
 
+def _design_pool(
+        ctx: RunContext, blueprint_raw: dict,
+) -> tuple[Stage4DesignSessionPool, list[_RequestDriver]]:
+    split = _split_a_responder(blueprint_raw)
+    drivers: list[_RequestDriver] = []
+
+    def factory(purpose: str, chapter: int | None) -> _RequestDriver:
+        def respond(request: AgentRequest) -> dict[str, Any]:
+            return split(SimpleNamespace(
+                system=request.system, user=request.prompt))
+
+        driver = _RequestDriver(
+            respond,
+            session_id=f'provider-design-{"strategy" if chapter is None else chapter}',
+        )
+        drivers.append(driver)
+        return driver
+
+    return Stage4DesignSessionPool(ctx, driver_factory=factory), drivers
+
+
 def _land_design(
         book: Path, blueprint_raw: dict, *, finish: bool = True,
 ) -> tuple[RunContext, BlindCandidate]:
     ctx = _ctx(book, 'stage4.design')
-    prepared = plan.prepare_design_candidate(ctx)
-    response = _retain_a_response(blueprint_raw, prepared.mapping)
-    driver = _OneTurnDriver(response, session_id='provider-design-only')
-    client = _client(ctx, driver)
-    artifact = plan.run_design(ctx, client)
+    pool, drivers = _design_pool(ctx, blueprint_raw)
+    artifact = plan.run_design(ctx, pool)
     if finish:
-        client.finish(process_state='ok', delivery_state='delivered')
-    client.close()
-    assert driver.calls == 1
+        pool.finish_all(delivered=True)
+    pool.close()
+    assert len(drivers) == 1 + len(blueprint_raw['blueprints'])
+    assert all(driver.calls == 1 for driver in drivers)
     return ctx, artifact
 
 
@@ -159,25 +211,141 @@ def test_design_checkpoint_and_committed_restart_are_zero_wire(tmp_path: Path) -
 
     assert ArtifactStore(first_ctx).read(
         BlindCandidate, STAGE4_BLIND_CANDIDATE) == artifact
-    checkpoint_dir = (
-        book / '_stage4_runs' / first_ctx.run_id / 'design' / 'checkpoints')
-    assert [path.name for path in checkpoint_dir.glob('*.json')] == [
-        'rev-0001.json']
-    assert stage4_runs.committed(first_ctx) is not None
-    checkpoint = json.loads((checkpoint_dir / 'rev-0001.json').read_text(
-        encoding='utf-8'))
-    assert _session_record(book, checkpoint['session_run_id']).end is None
+    ordinals = tuple(row.chapter_ordinal for row in blueprints.blueprints)
+    checkpoint_paths = [
+        paths.stage4_design_unit_checkpoint_dir(
+            book, first_ctx.run_id, chapter) / 'rev-0001.json'
+        for chapter in (None, *ordinals)
+    ]
+    assert all(path.is_file() for path in checkpoint_paths)
+    assert stage4_runs.design_aggregate_committed(first_ctx) is not None
+    checkpoints = [
+        json.loads(path.read_text(encoding='utf-8'))
+        for path in checkpoint_paths
+    ]
+    assert all(
+        _session_record(book, row['session_run_id']).end is None
+        for row in checkpoints)
+    assert artifact.provenance.usage is not None
+    assert artifact.provenance.usage.calls_made == 1 + len(ordinals)
 
     restarted = _ctx(
         book, 'stage4.design', run_id=first_ctx.run_id, code=first_ctx.code)
-    no_wire = _client(restarted, _NoWireDriver())
-    recovered = plan.run_design(restarted, no_wire)
-    no_wire.close()
+    pool = Stage4DesignSessionPool(
+        restarted,
+        driver_factory=lambda _purpose, _chapter: (_ for _ in ()).throw(
+            AssertionError('committed 恢复不得构造 driver')),
+    )
+    recovered = plan.run_design(restarted, pool)
+    pool.finish_all(delivered=True)
+    pool.close()
     assert recovered == artifact
-    ended = _session_record(book, checkpoint['session_run_id']).end
-    assert ended is not None
-    assert (ended.process_state, ended.delivery_state, ended.error_kind) == (
-        'ok', 'delivered', None)
+    for checkpoint in checkpoints:
+        ended = _session_record(book, checkpoint['session_run_id']).end
+        assert ended is not None
+        assert (ended.process_state, ended.delivery_state, ended.error_kind) == (
+            'ok', 'delivered', None)
+
+
+def test_design_prepared_tail_recovers_same_candidate_and_usage_zero_wire(
+        tmp_path: Path, monkeypatch,
+) -> None:
+    """崩在 formal write 后、adoption 前时，封存候选可跨进程零 wire 收尾。"""
+    import pytest
+
+    book = _book(tmp_path)
+    blueprints = _seed_current_stage2(book)
+    blueprint_raw = blueprints.model_dump(by_alias=True)
+    first = _ctx(book, 'stage4.design')
+    pool, drivers = _design_pool(first, blueprint_raw)
+    original_restore = stage4_runs.restore_design_aggregate_adoptions
+
+    def crash_after_formal_write(*args, **kwargs):
+        assert (book / STAGE4_BLIND_CANDIDATE).is_file()
+        raise RuntimeError('模拟 aggregate prepared 正式写盘尾窗中断')
+
+    monkeypatch.setattr(
+        stage4_runs, 'restore_design_aggregate_adoptions',
+        crash_after_formal_write)
+    with pytest.raises(RuntimeError, match='prepared'):
+        plan.run_design(first, pool)
+    pool.close()  # 模拟进程直接退出：不写 ended，不伪造业务终态。
+    monkeypatch.setattr(
+        stage4_runs, 'restore_design_aggregate_adoptions', original_restore)
+
+    assert len(drivers) == 1 + len(blueprints.blueprints)
+    assert stage4_runs.design_aggregate_prepared(first) is not None
+    assert stage4_runs.design_aggregate_committed(first) is None
+    sealed = ArtifactStore(first).read(
+        BlindCandidate, STAGE4_BLIND_CANDIDATE)
+
+    restarted = _ctx(
+        book, 'stage4.design', run_id=first.run_id, code=first.code)
+    recovered_pool = Stage4DesignSessionPool(
+        restarted,
+        driver_factory=lambda _purpose, _chapter: (_ for _ in ()).throw(
+            AssertionError('prepared 尾窗恢复不得构造 driver')),
+    )
+    recovered = plan.run_design(restarted, recovered_pool)
+    recovered_pool.finish_all(delivered=True)
+    recovered_pool.close()
+
+    assert recovered == sealed
+    assert recovered.provenance.usage == sealed.provenance.usage
+    assert stage4_runs.design_aggregate_committed(restarted) is not None
+
+
+def test_legacy_adopter_refuses_foreign_prepared_design_aggregate(
+        tmp_path: Path, monkeypatch,
+) -> None:
+    """旧 whole-book 恢复口不能踩过另一 run 尚未收完的 split 提交。"""
+    import pytest
+    from novel.llm import response_repair
+
+    book = _book(tmp_path)
+    blueprints = _seed_current_stage2(book)
+    blueprint_raw = blueprints.model_dump(by_alias=True)
+    split_ctx = _ctx(book, 'stage4.design')
+    pool, _drivers = _design_pool(split_ctx, blueprint_raw)
+    original_restore = stage4_runs.restore_design_aggregate_adoptions
+
+    def crash_after_formal_write(*args, **kwargs):
+        assert (book / STAGE4_BLIND_CANDIDATE).is_file()
+        raise RuntimeError('模拟 foreign aggregate prepared 尾窗')
+
+    monkeypatch.setattr(
+        stage4_runs, 'restore_design_aggregate_adoptions',
+        crash_after_formal_write)
+    with pytest.raises(RuntimeError, match='foreign aggregate prepared'):
+        plan.run_design(split_ctx, pool)
+    pool.close()
+    monkeypatch.setattr(
+        stage4_runs, 'restore_design_aggregate_adoptions', original_restore)
+    assert stage4_runs.design_aggregate_prepared(split_ctx) is not None
+    formal_before = (book / STAGE4_BLIND_CANDIDATE).read_bytes()
+
+    legacy_ctx = _legacy_ctx(book, 'stage4.design', paid=False)
+    _truth, mapping = build_blind_projection(
+        blueprints.model_dump(by_alias=True, mode='json'),
+        root_clean_sha1=legacy_ctx.root_clean_sha1,
+    )
+    response = _retain_a_response(
+        blueprints.model_dump(by_alias=True, mode='json'), mapping)
+    attempt = _seal_a_validator_rejection(
+        legacy_ctx, book, response=response,
+        why='合成的旧整书 validator 拒稿')
+
+    with pytest.raises(ProvenanceRefused, match='仍持有 prepared'):
+        plan.run_adopt_rejected(
+            legacy_ctx, attempt_id=attempt,
+            actor='tester', reason='不得覆盖 split 尾窗')
+
+    assert (book / STAGE4_BLIND_CANDIDATE).read_bytes() == formal_before
+    assert response_repair.find_attempt(book, attempt).outcome is None
+    assert not any(
+        row.get('kind') == 'artifact_adoption'
+        and row.get('attempt_id') == attempt
+        for row in legacy_ctx.ledger.audit_events)
 
 
 def test_plan_infeasible_lands_only_binding_and_recovers_without_wire(
@@ -220,16 +388,23 @@ def test_plan_infeasible_lands_only_binding_and_recovers_without_wire(
     assert (ended.process_state, ended.delivery_state, ended.error_kind) == (
         'ok', 'delivered', None)
 
-    design_checkpoint = json.loads((
-        book / '_stage4_runs' / design_ctx.run_id / 'design'
-        / 'checkpoints' / 'rev-0001.json').read_text(encoding='utf-8'))
     plan_checkpoint = json.loads((
         book / '_stage4_runs' / plan_ctx.run_id / 'plan'
         / 'checkpoints' / 'rev-0001.json').read_text(encoding='utf-8'))
-    assert design_checkpoint['provider_session_id'] == 'provider-design-only'
+    design_checkpoints = [
+        json.loads(path.read_text(encoding='utf-8'))
+        for path in (
+            paths.stage4_design_unit_checkpoint_dir(
+                book, design_ctx.run_id, None) / 'rev-0001.json',
+            *(paths.stage4_design_unit_checkpoint_dir(
+                book, design_ctx.run_id, row.chapter_ordinal) / 'rev-0001.json'
+              for row in blueprints.blueprints),
+        )
+    ]
     assert plan_checkpoint['provider_session_id'] == 'provider-plan-only'
-    assert design_checkpoint['provider_session_id'] != \
-        plan_checkpoint['provider_session_id']
+    assert all(
+        row['provider_session_id'] != plan_checkpoint['provider_session_id']
+        for row in design_checkpoints)
 
 
 def _hard_bound_response(

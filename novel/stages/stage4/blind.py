@@ -24,9 +24,13 @@ from novel.stages.stage4.checks import derive_effective_states
 
 
 BLIND_CONTRACT: Final = 'stage4-blind-truth-graph-v1'
+BLIND_BOOK_STRATEGY_CONTRACT: Final = 'stage4-blind-book-strategy-v1'
+BLIND_CHAPTER_CONTRACT: Final = 'stage4-blind-chapter-v1'
 _ROOT_SHA1_RE: Final = re.compile(r'^[0-9a-f]{40}$')
 _SHA256_RE: Final = re.compile(r'^[0-9a-f]{64}$')
 _ALIAS_RE: Final = re.compile(r'^a_[0-9a-f]{16,64}$')
+_LOCAL_FACT_ALIAS_RE: Final = re.compile(r'^f_[0-9a-f]{6,64}$')
+_LOCAL_PARTICIPANT_ALIAS_RE: Final = re.compile(r'^p_[0-9a-f]{6,64}$')
 
 _A_TOP_KEYS: Final = frozenset({'reconstruction_strategy', 'output_chapters'})
 _A_CHAPTER_KEYS: Final = frozenset({
@@ -39,6 +43,14 @@ _A_SCENE_KEYS: Final = frozenset({
     'weight', 'purpose', 'role', 'delivery', 'transition',
     'land_fact_aliases', 'context_fact_aliases', 'turn_fact_alias',
     'entry_state_aliases', 'exit_state_aliases',
+})
+_STRATEGY_TOP_KEYS: Final = frozenset({
+    'reconstruction_strategy', 'chapter_weights',
+})
+_STRATEGY_WEIGHT_KEYS: Final = frozenset({'chapter_ordinal', 'weight'})
+_LOCAL_CHAPTER_KEYS: Final = _A_CHAPTER_KEYS - {'output_ordinal', 'weight'}
+_LOCAL_MAPPING_KEYS: Final = frozenset({
+    'chapter_ordinal', 'truth_sha256', 'fact_aliases', 'participant_aliases',
 })
 _CANDIDATE_KEYS: Final = frozenset({
     'alias_algorithm', 'truth_sha256', 'fact_aliases', 'participant_aliases',
@@ -121,6 +133,23 @@ def _unique_strings(value: object, where: str, *, nonempty: bool = False) -> lis
     return list(rows)
 
 
+def _refuse_formal_refs(
+    text: str,
+    *,
+    formal_refs: Collection[str],
+    where: str,
+) -> None:
+    """拒绝自由文本回显本书真实登记过的内部引用。
+
+    这里只查本次投影已经知道的精确 ID 集合，不拿宽泛 ``f*`` / ``char_*``
+    正则猜测普通文字。命中后也不做静默替换：删掉引用可能改变 claim/function
+    的事实语义，必须回到 Stage2 修正后再重新构造 blind truth。
+    """
+    leaked = sorted(ref for ref in formal_refs if ref in text)
+    if leaked:
+        raise BlindPlanError(f'{where} 泄漏正式内部引用 {leaked}')
+
+
 def _blueprint_rows(blueprints: object) -> list[Mapping[str, Any]]:
     rows = blueprints.get('blueprints') if isinstance(blueprints, Mapping) else blueprints
     values = _list(rows, 'blueprints')
@@ -159,6 +188,7 @@ def build_blind_projection(
     seen_chapters: set[int] = set()
     seen_fact_ids: set[str] = set()
     participant_ids: set[str] = set()
+    evidence_ids: set[str] = set()
     facts_by_chapter: dict[int, list[Mapping[str, Any]]] = {}
     chapters_by_ordinal: dict[int, Mapping[str, Any]] = {}
     for raw_chapter in rows:
@@ -180,6 +210,20 @@ def build_blind_projection(
             participant_ids.update(_unique_strings(
                 atom.get('participant_char_ids', []),
                 f'ch{chapter}.{fact_id}.participant_char_ids'))
+        for beat_index, raw_beat in enumerate(_list(
+                raw_chapter.get('beats', []), f'ch{chapter}.beats')):
+            beat = _mapping(raw_beat, f'ch{chapter}.beats[{beat_index}]')
+            evidence_ids.add(_text(
+                beat.get('beat_id'), f'ch{chapter}.beats[{beat_index}].beat_id'))
+            for hinge_index, raw_hinge in enumerate(_list(
+                    beat.get('hinges', []),
+                    f'ch{chapter}.beats[{beat_index}].hinges')):
+                hinge = _mapping(
+                    raw_hinge,
+                    f'ch{chapter}.beats[{beat_index}].hinges[{hinge_index}]')
+                evidence_ids.add(_text(
+                    hinge.get('hinge_id'),
+                    f'ch{chapter}.beats[{beat_index}].hinges[{hinge_index}].hinge_id'))
         facts_by_chapter[chapter] = typed_atoms
         chapters_by_ordinal[chapter] = raw_chapter
 
@@ -209,18 +253,22 @@ def build_blind_projection(
             participant, participant_aliases, participant_to_alias)
 
     prompt_chapters: list[dict[str, Any]] = []
+    formal_refs = seen_fact_ids | participant_ids | evidence_ids
     for chapter in sorted(chapters_by_ordinal):
         raw_chapter = chapters_by_ordinal[chapter]
         chapter_fact_ids = {str(atom['fact_id']) for atom in facts_by_chapter[chapter]}
         projected_atoms: list[dict[str, Any]] = []
         for atom in facts_by_chapter[chapter]:
             fact_id = str(atom['fact_id'])
+            claim = _text(atom.get('claim'), f'ch{chapter}.{fact_id}.claim')
+            _refuse_formal_refs(
+                claim, formal_refs=formal_refs, where=f'ch{chapter}.{fact_id}.claim')
             participants = _unique_strings(
                 atom.get('participant_char_ids', []),
                 f'ch{chapter}.{fact_id}.participant_char_ids')
             projected_atoms.append({
                 'fact_alias': fact_to_alias[fact_id],
-                'claim': _text(atom.get('claim'), f'ch{chapter}.{fact_id}.claim'),
+                'claim': claim,
                 'kind': _text(atom.get('kind'), f'ch{chapter}.{fact_id}.kind'),
                 'obligation': _text(
                     atom.get('obligation'), f'ch{chapter}.{fact_id}.obligation'),
@@ -257,10 +305,15 @@ def build_blind_projection(
         projected_atoms.sort(key=lambda atom: atom['_order'])
         for atom in projected_atoms:
             atom.pop('_order')
+        chapter_function = _text(
+            raw_chapter.get('chapter_function'), f'ch{chapter}.chapter_function')
+        _refuse_formal_refs(
+            chapter_function,
+            formal_refs=formal_refs,
+            where=f'ch{chapter}.chapter_function')
         prompt_chapters.append({
             'chapter_ordinal': chapter,
-            'chapter_function': _text(
-                raw_chapter.get('chapter_function'), f'ch{chapter}.chapter_function'),
+            'chapter_function': chapter_function,
             'facts': projected_atoms,
             'causal_edges': causal,
             'entry_state_aliases': state_aliases('entry_state_refs'),
@@ -277,6 +330,216 @@ def build_blind_projection(
         },
     }
     return prompt, formal_mapping
+
+
+def _truth_chapter_rows(truth: object) -> dict[int, Mapping[str, Any]]:
+    raw = _mapping(truth, 'blind_truth')
+    _exact_keys(
+        raw, {'blind_contract', 'chapters'}, 'blind_truth',
+        required={'blind_contract', 'chapters'})
+    if raw.get('blind_contract') != BLIND_CONTRACT:
+        raise BlindPlanError(
+            f'blind_truth.blind_contract 必须是 {BLIND_CONTRACT}')
+    chapters = _list(raw.get('chapters'), 'blind_truth.chapters')
+    if not chapters:
+        raise BlindPlanError('blind_truth.chapters 不能为空')
+    indexed: dict[int, Mapping[str, Any]] = {}
+    for index, value in enumerate(chapters):
+        row = _mapping(value, f'blind_truth.chapters[{index}]')
+        chapter = _ordinal(
+            row.get('chapter_ordinal'),
+            f'blind_truth.chapters[{index}].chapter_ordinal')
+        if chapter in indexed:
+            raise BlindPlanError(f'blind_truth chapter_ordinal 重号：{chapter}')
+        indexed[chapter] = row
+    return indexed
+
+
+def build_blind_strategy_projection(truth: object) -> dict[str, Any]:
+    """从规范全书 truth 派生不含任何 alias/claim 的宏观策略输入。"""
+    chapters: list[dict[str, Any]] = []
+    for chapter, row in sorted(_truth_chapter_rows(truth).items()):
+        facts = [
+            _mapping(value, f'ch{chapter}.facts[{index}]')
+            for index, value in enumerate(_list(row.get('facts'), f'ch{chapter}.facts'))
+        ]
+        obligations = [str(fact.get('obligation') or '') for fact in facts]
+        chapters.append({
+            'chapter_ordinal': chapter,
+            'chapter_function': _text(
+                row.get('chapter_function'), f'ch{chapter}.chapter_function'),
+            'land_fact_count': obligations.count('land'),
+            'context_fact_count': obligations.count('context'),
+            'causal_edge_count': len(_list(
+                row.get('causal_edges'), f'ch{chapter}.causal_edges')),
+            'entry_state_count': len(_list(
+                row.get('entry_state_aliases'), f'ch{chapter}.entry_state_aliases')),
+            'ending_state_count': len(_list(
+                row.get('ending_state_aliases'), f'ch{chapter}.ending_state_aliases')),
+        })
+    projected = {
+        'blind_contract': BLIND_BOOK_STRATEGY_CONTRACT,
+        'chapters': chapters,
+    }
+    _canonical_bytes(projected)
+    return projected
+
+
+def _local_alias_tables(
+    values: Collection[str],
+    *,
+    root_clean_sha1: str,
+    chapter: int,
+    kind: str,
+    prefix: str,
+) -> tuple[dict[str, str], dict[str, str]]:
+    """返回 ``(global→local, local→global)``，宽度按整章集合确定。"""
+    if not isinstance(root_clean_sha1, str) or not _ROOT_SHA1_RE.fullmatch(
+            root_clean_sha1):
+        raise BlindPlanError('root_clean_sha1 必须是 40 位小写十六进制 SHA-1')
+    unique = sorted(set(values))
+    if len(unique) != len(values):
+        raise BlindPlanError(f'ch{chapter}.{kind} global alias 不能重复')
+    digests = {
+        value: _digest(
+            root_clean_sha1, f'chapter-local-{kind}-v1',
+            f'{chapter}\0{value}')
+        for value in unique
+    }
+    width: int | None = None
+    for candidate in range(6, 65, 2):
+        if len({digest[:candidate] for digest in digests.values()}) == len(digests):
+            width = candidate
+            break
+    if width is None:
+        raise BlindPlanError(f'ch{chapter}.{kind} local alias 完整摘要仍碰撞')
+    global_to_local = {
+        value: f'{prefix}_{digests[value][:width]}' for value in unique
+    }
+    local_to_global = {
+        local: value for value, local in global_to_local.items()
+    }
+    return global_to_local, {
+        local: local_to_global[local] for local in sorted(local_to_global)
+    }
+
+
+def build_blind_chapter_projection(
+    truth: object,
+    formal_mapping: object,
+    *,
+    chapter_ordinal: int,
+    root_clean_sha1: str,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """派生一个只含短 local alias 的单章公开输入与私有还原表。"""
+    chapter = _ordinal(chapter_ordinal, 'chapter_ordinal')
+    truth_rows = _truth_chapter_rows(truth)
+    source = truth_rows.get(chapter)
+    if source is None:
+        raise BlindPlanError(f'blind_truth 缺少第 {chapter} 章')
+    truth_sha256, formal_facts, formal_participants = _formal_maps(formal_mapping)
+    if _sha256(truth) != truth_sha256:
+        raise BlindPlanError('blind_truth 与 formal_alias_mapping.truth_sha256 不匹配')
+
+    facts: list[Mapping[str, Any]] = []
+    global_fact_aliases: list[str] = []
+    global_participant_aliases: set[str] = set()
+    for index, value in enumerate(_list(source.get('facts'), f'ch{chapter}.facts')):
+        fact = _mapping(value, f'ch{chapter}.facts[{index}]')
+        _exact_keys(
+            fact, {'fact_alias', 'claim', 'kind', 'obligation', 'participant_aliases'},
+            f'ch{chapter}.facts[{index}]',
+            required={'fact_alias', 'claim', 'kind', 'obligation', 'participant_aliases'})
+        alias = _text(fact.get('fact_alias'), f'ch{chapter}.facts[{index}].fact_alias')
+        target = formal_facts.get(alias)
+        if target is None or target[1] != chapter:
+            raise BlindPlanError(f'ch{chapter}.facts[{index}] 含未知或跨章事实别名 {alias}')
+        participants = _unique_strings(
+            fact.get('participant_aliases'),
+            f'ch{chapter}.facts[{index}].participant_aliases')
+        unknown_participants = sorted(
+            set(participants) - set(formal_participants))
+        if unknown_participants:
+            raise BlindPlanError(
+                f'ch{chapter}.facts[{index}] 含未知人物别名 {unknown_participants}')
+        global_fact_aliases.append(alias)
+        global_participant_aliases.update(participants)
+        facts.append(fact)
+
+    fact_to_local, local_to_fact = _local_alias_tables(
+        global_fact_aliases,
+        root_clean_sha1=root_clean_sha1,
+        chapter=chapter,
+        kind='fact',
+        prefix='f')
+    participant_to_local, local_to_participant = _local_alias_tables(
+        list(global_participant_aliases),
+        root_clean_sha1=root_clean_sha1,
+        chapter=chapter,
+        kind='participant',
+        prefix='p')
+
+    projected_facts = [{
+        'fact_alias': fact_to_local[str(fact['fact_alias'])],
+        'claim': copy.deepcopy(fact.get('claim')),
+        'kind': copy.deepcopy(fact.get('kind')),
+        'obligation': copy.deepcopy(fact.get('obligation')),
+        'participant_aliases': sorted(
+            participant_to_local[alias]
+            for alias in _unique_strings(
+                fact.get('participant_aliases'), 'fact.participant_aliases')),
+    } for fact in facts]
+    # 单章公开面只承诺 local alias 的稳定顺序；local alias 本身由 HMAC
+    # 派生，不携带源事实序。不能意外继承上一层 truth 的展示顺序，否则
+    # 文档所述的局部协议与真实 wire 会悄悄分叉。
+    projected_facts.sort(key=lambda fact: str(fact['fact_alias']))
+
+    projected_edges: list[dict[str, str]] = []
+    for index, value in enumerate(_list(
+            source.get('causal_edges'), f'ch{chapter}.causal_edges')):
+        edge = _mapping(value, f'ch{chapter}.causal_edges[{index}]')
+        _exact_keys(
+            edge, {'before_alias', 'after_alias'}, f'ch{chapter}.causal_edges[{index}]',
+            required={'before_alias', 'after_alias'})
+        try:
+            projected_edges.append({
+                'before_alias': fact_to_local[str(edge['before_alias'])],
+                'after_alias': fact_to_local[str(edge['after_alias'])],
+            })
+        except KeyError as exc:
+            raise BlindPlanError(
+                f'ch{chapter}.causal_edges[{index}] 含未知事实别名 {exc.args[0]}') from exc
+    projected_edges.sort(key=lambda edge: (edge['before_alias'], edge['after_alias']))
+
+    def project_states(field: str) -> list[str]:
+        aliases = _unique_strings(source.get(field), f'ch{chapter}.{field}')
+        try:
+            return sorted(fact_to_local[alias] for alias in aliases)
+        except KeyError as exc:
+            raise BlindPlanError(
+                f'ch{chapter}.{field} 含未知事实别名 {exc.args[0]}') from exc
+
+    projected = {
+        'blind_contract': BLIND_CHAPTER_CONTRACT,
+        'chapter': {
+            'chapter_ordinal': chapter,
+            'chapter_function': _text(
+                source.get('chapter_function'), f'ch{chapter}.chapter_function'),
+            'facts': projected_facts,
+            'causal_edges': projected_edges,
+            'entry_state_aliases': project_states('entry_state_aliases'),
+            'ending_state_aliases': project_states('ending_state_aliases'),
+        },
+    }
+    private_mapping = {
+        'chapter_ordinal': chapter,
+        'truth_sha256': truth_sha256,
+        'fact_aliases': local_to_fact,
+        'participant_aliases': local_to_participant,
+    }
+    _canonical_bytes(projected)
+    _canonical_bytes(private_mapping)
+    return projected, private_mapping
 
 
 def _formal_maps(formal_mapping: object) \
@@ -366,6 +629,91 @@ def _compile_blind_goal(
     }
 
 
+def _compile_global_blind_chapter(
+    value: object,
+    *,
+    fact_aliases: Mapping[str, tuple[str, int]],
+    chapter_entry_refs: list[str],
+    where: str,
+) -> dict[str, Any]:
+    """旧整书 wire 与新单章 wire 共用的唯一 global-alias 编译核心。"""
+    row = _mapping(value, where)
+    _exact_keys(row, _A_CHAPTER_KEYS, where, required=_A_CHAPTER_KEYS)
+    chapter = _ordinal(row.get('output_ordinal'), f'{where}.output_ordinal')
+    scenes = _list(row.get('scenes'), f'ch{chapter}.scenes')
+    if not scenes:
+        raise BlindPlanError(f'ch{chapter}.scenes 不能为空')
+    compiled_scenes: list[dict[str, Any]] = []
+    for scene_index, raw_scene in enumerate(scenes, 1):
+        scene = _mapping(raw_scene, f'ch{chapter}.scenes[{scene_index - 1}]')
+        _exact_keys(
+            scene, _A_SCENE_KEYS, f'ch{chapter}.scenes[{scene_index - 1}]',
+            required=_A_SCENE_KEYS)
+        land = _fact_alias_list(
+            scene.get('land_fact_aliases'), fact_aliases=fact_aliases,
+            chapter=chapter,
+            where=f'ch{chapter}.scenes[{scene_index - 1}].land_fact_aliases',
+            nonempty=True)
+        context = _fact_alias_list(
+            scene.get('context_fact_aliases'), fact_aliases=fact_aliases,
+            chapter=chapter,
+            where=f'ch{chapter}.scenes[{scene_index - 1}].context_fact_aliases')
+        entry = _fact_alias_list(
+            scene.get('entry_state_aliases'), fact_aliases=fact_aliases,
+            chapter=chapter,
+            where=f'ch{chapter}.scenes[{scene_index - 1}].entry_state_aliases')
+        exit_refs = _fact_alias_list(
+            scene.get('exit_state_aliases'), fact_aliases=fact_aliases,
+            chapter=chapter,
+            where=f'ch{chapter}.scenes[{scene_index - 1}].exit_state_aliases')
+        turn = _text(
+            scene.get('turn_fact_alias'),
+            f'ch{chapter}.scenes[{scene_index - 1}].turn_fact_alias')
+        _fact_alias_list(
+            [turn], fact_aliases=fact_aliases, chapter=chapter,
+            where=f'ch{chapter}.scenes[{scene_index - 1}].turn_fact_alias',
+            nonempty=True)
+        if turn not in land:
+            raise BlindPlanError(
+                f'ch{chapter}.scenes[{scene_index - 1}].turn_fact_alias '
+                '必须属于 land_fact_aliases')
+        compiled_scenes.append({
+            'candidate_scene_id': f'c{chapter:02d}s{scene_index:02d}',
+            'weight': copy.deepcopy(scene.get('weight')),
+            'purpose': copy.deepcopy(scene.get('purpose')),
+            'role': copy.deepcopy(scene.get('role')),
+            'delivery': copy.deepcopy(scene.get('delivery')),
+            'transition': copy.deepcopy(scene.get('transition')),
+            'land_fact_aliases': land,
+            'context_fact_aliases': context,
+            'turn_fact_alias': turn,
+            'entry_state_aliases': entry,
+            'exit_state_aliases': exit_refs,
+        })
+    derive_effective_states(
+        compiled_scenes,
+        chapter_entry_refs=list(chapter_entry_refs),
+        entry_key='entry_state_aliases',
+        exit_key='exit_state_aliases',
+    )
+    return {
+        'output_ordinal': chapter,
+        'structure_decision': copy.deepcopy(row.get('structure_decision')),
+        'chapter_goal': _compile_blind_goal(
+            row.get('chapter_goal'), fact_aliases=fact_aliases,
+            chapter=chapter, where=f'ch{chapter}.chapter_goal'),
+        'open_hook_goal': _compile_blind_goal(
+            row.get('open_hook_goal'), fact_aliases=fact_aliases,
+            chapter=chapter, where=f'ch{chapter}.open_hook_goal'),
+        'end_hook_goal': _compile_blind_goal(
+            row.get('end_hook_goal'), fact_aliases=fact_aliases,
+            chapter=chapter, where=f'ch{chapter}.end_hook_goal'),
+        'weight': copy.deepcopy(row.get('weight')),
+        'chapter_rewrite_brief': copy.deepcopy(row.get('chapter_rewrite_brief')),
+        'scenes': compiled_scenes,
+    }
+
+
 def compile_blind_candidate(
     candidate: object,
     formal_mapping: object,
@@ -394,99 +742,27 @@ def compile_blind_candidate(
     if not chapters:
         raise BlindPlanError('blind_candidate_response.output_chapters 不能为空')
     truth_sha256, fact_aliases, participant_aliases = _formal_maps(formal_mapping)
-    chapter_entry_states = {
-        int(row.get('chapter_ordinal') or 0): list(row.get('entry_state_aliases') or [])
-        for row in _list(
-            _mapping(truth, 'blind_truth').get('chapters', []), 'blind_truth.chapters')
-        if isinstance(row, Mapping)
-    }
+    truth_rows = _truth_chapter_rows(truth)
+    if _sha256(truth) != truth_sha256:
+        raise BlindPlanError('blind_truth 与 formal_alias_mapping.truth_sha256 不匹配')
 
     compiled_chapters: list[dict[str, Any]] = []
     seen_chapters: set[int] = set()
     for chapter_index, raw_chapter in enumerate(chapters):
         row = _mapping(
             raw_chapter, f'blind_candidate_response.output_chapters[{chapter_index}]')
-        _exact_keys(
-            row, _A_CHAPTER_KEYS,
-            f'blind_candidate_response.output_chapters[{chapter_index}]',
-            required=_A_CHAPTER_KEYS)
         chapter = _ordinal(row.get('output_ordinal'), 'output_ordinal')
         if chapter in seen_chapters:
             raise BlindPlanError(f'blind_candidate_response output_ordinal 重号：{chapter}')
         seen_chapters.add(chapter)
-        scenes = _list(row.get('scenes'), f'ch{chapter}.scenes')
-        if not scenes:
-            raise BlindPlanError(f'ch{chapter}.scenes 不能为空')
-        compiled_scenes: list[dict[str, Any]] = []
-        for scene_index, raw_scene in enumerate(scenes, 1):
-            scene = _mapping(raw_scene, f'ch{chapter}.scenes[{scene_index - 1}]')
-            _exact_keys(
-                scene, _A_SCENE_KEYS, f'ch{chapter}.scenes[{scene_index - 1}]',
-                required=_A_SCENE_KEYS)
-            land = _fact_alias_list(
-                scene.get('land_fact_aliases'), fact_aliases=fact_aliases,
-                chapter=chapter,
-                where=f'ch{chapter}.scenes[{scene_index - 1}].land_fact_aliases',
-                nonempty=True)
-            context = _fact_alias_list(
-                scene.get('context_fact_aliases'), fact_aliases=fact_aliases,
-                chapter=chapter,
-                where=f'ch{chapter}.scenes[{scene_index - 1}].context_fact_aliases')
-            entry = _fact_alias_list(
-                scene.get('entry_state_aliases'), fact_aliases=fact_aliases,
-                chapter=chapter,
-                where=f'ch{chapter}.scenes[{scene_index - 1}].entry_state_aliases')
-            exit_refs = _fact_alias_list(
-                scene.get('exit_state_aliases'), fact_aliases=fact_aliases,
-                chapter=chapter,
-                where=f'ch{chapter}.scenes[{scene_index - 1}].exit_state_aliases')
-            turn = _text(
-                scene.get('turn_fact_alias'),
-                f'ch{chapter}.scenes[{scene_index - 1}].turn_fact_alias')
-            _fact_alias_list(
-                [turn], fact_aliases=fact_aliases, chapter=chapter,
-                where=f'ch{chapter}.scenes[{scene_index - 1}].turn_fact_alias',
-                nonempty=True)
-            if turn not in land:
-                raise BlindPlanError(
-                    f'ch{chapter}.scenes[{scene_index - 1}].turn_fact_alias '
-                    '必须属于 land_fact_aliases')
-            compiled_scenes.append({
-                'candidate_scene_id': f'c{chapter:02d}s{scene_index:02d}',
-                'weight': copy.deepcopy(scene.get('weight')),
-                'purpose': copy.deepcopy(scene.get('purpose')),
-                'role': copy.deepcopy(scene.get('role')),
-                'delivery': copy.deepcopy(scene.get('delivery')),
-                'transition': copy.deepcopy(scene.get('transition')),
-                'land_fact_aliases': land,
-                'context_fact_aliases': context,
-                'turn_fact_alias': turn,
-                'entry_state_aliases': entry,
-                'exit_state_aliases': exit_refs,
-            })
-        # 状态承接由代码按 transition 的定义补全；模型只交本场新增的最小状态。
-        derive_effective_states(
-            compiled_scenes,
-            chapter_entry_refs=list(chapter_entry_states.get(chapter) or []),
-            entry_key='entry_state_aliases',
-            exit_key='exit_state_aliases',
-        )
-        compiled_chapters.append({
-            'output_ordinal': chapter,
-            'structure_decision': copy.deepcopy(row.get('structure_decision')),
-            'chapter_goal': _compile_blind_goal(
-                row.get('chapter_goal'), fact_aliases=fact_aliases,
-                chapter=chapter, where=f'ch{chapter}.chapter_goal'),
-            'open_hook_goal': _compile_blind_goal(
-                row.get('open_hook_goal'), fact_aliases=fact_aliases,
-                chapter=chapter, where=f'ch{chapter}.open_hook_goal'),
-            'end_hook_goal': _compile_blind_goal(
-                row.get('end_hook_goal'), fact_aliases=fact_aliases,
-                chapter=chapter, where=f'ch{chapter}.end_hook_goal'),
-            'weight': copy.deepcopy(row.get('weight')),
-            'chapter_rewrite_brief': copy.deepcopy(row.get('chapter_rewrite_brief')),
-            'scenes': compiled_scenes,
-        })
+        truth_row = truth_rows.get(chapter)
+        compiled_chapters.append(_compile_global_blind_chapter(
+            row,
+            fact_aliases=fact_aliases,
+            chapter_entry_refs=(list(truth_row.get('entry_state_aliases') or [])
+                                if truth_row is not None else []),
+            where=f'blind_candidate_response.output_chapters[{chapter_index}]',
+        ))
 
     compiled_chapters.sort(key=lambda chapter: chapter['output_ordinal'])
     compiled = {
@@ -496,6 +772,244 @@ def compile_blind_candidate(
         'participant_aliases': dict(participant_aliases),
         'reconstruction_strategy': strategy,
         'output_chapters': compiled_chapters,
+    }
+    _canonical_bytes(compiled)
+    return compiled
+
+
+def _local_fact_map(
+    local_mapping: object,
+    formal_mapping: object,
+) -> tuple[int, dict[str, str]]:
+    mapping = _mapping(local_mapping, 'local_alias_mapping')
+    _exact_keys(
+        mapping, _LOCAL_MAPPING_KEYS, 'local_alias_mapping',
+        required=_LOCAL_MAPPING_KEYS)
+    chapter = _ordinal(
+        mapping.get('chapter_ordinal'), 'local_alias_mapping.chapter_ordinal')
+    local_truth_sha = _text(
+        mapping.get('truth_sha256'), 'local_alias_mapping.truth_sha256')
+    truth_sha, formal_facts, formal_participants = _formal_maps(formal_mapping)
+    if not hmac.compare_digest(local_truth_sha, truth_sha):
+        raise BlindPlanError(
+            'local_alias_mapping.truth_sha256 与 formal mapping 不匹配')
+
+    raw_facts = _mapping(
+        mapping.get('fact_aliases'), 'local_alias_mapping.fact_aliases')
+    raw_participants = _mapping(
+        mapping.get('participant_aliases'), 'local_alias_mapping.participant_aliases')
+    if not raw_facts:
+        raise BlindPlanError('local_alias_mapping.fact_aliases 不能为空')
+
+    facts: dict[str, str] = {}
+    seen_global: set[str] = set()
+    for local, global_alias in raw_facts.items():
+        local = _text(local, 'local_alias_mapping.fact_aliases.alias')
+        global_alias = _text(
+            global_alias, f'local_alias_mapping.fact_aliases[{local}]')
+        target = formal_facts.get(global_alias)
+        if (not _LOCAL_FACT_ALIAS_RE.fullmatch(local)
+                or target is None or target[1] != chapter):
+            raise BlindPlanError(
+                f'local_alias_mapping.fact_aliases 非法映射 {local}->{global_alias}')
+        if global_alias in seen_global:
+            raise BlindPlanError(
+                f'local_alias_mapping.fact_aliases 不是一一映射：{global_alias}')
+        seen_global.add(global_alias)
+        facts[local] = global_alias
+
+    seen_participants: set[str] = set()
+    for local, global_alias in raw_participants.items():
+        local = _text(local, 'local_alias_mapping.participant_aliases.alias')
+        global_alias = _text(
+            global_alias, f'local_alias_mapping.participant_aliases[{local}]')
+        if (not _LOCAL_PARTICIPANT_ALIAS_RE.fullmatch(local)
+                or global_alias not in formal_participants):
+            raise BlindPlanError(
+                f'local_alias_mapping.participant_aliases 非法映射 '
+                f'{local}->{global_alias}')
+        if global_alias in seen_participants:
+            raise BlindPlanError(
+                f'local_alias_mapping.participant_aliases 不是一一映射：{global_alias}')
+        seen_participants.add(global_alias)
+    return chapter, facts
+
+
+def compile_blind_chapter_design(
+    response: object,
+    local_mapping: object,
+    formal_mapping: object,
+    *,
+    truth_chapter: object,
+    chapter_weight: str,
+) -> dict[str, Any]:
+    """把一个 local-alias 单章响应编译成当前正式候选的章业务形状。"""
+    chapter, local_facts = _local_fact_map(local_mapping, formal_mapping)
+    source = _mapping(truth_chapter, 'truth_chapter')
+    source_chapter = _ordinal(
+        source.get('chapter_ordinal'), 'truth_chapter.chapter_ordinal')
+    if source_chapter != chapter:
+        raise BlindPlanError(
+            f'local mapping 属于第 {chapter} 章，truth_chapter 却是第 {source_chapter} 章')
+
+    raw = _mapping(response, f'ch{chapter}.local_response')
+    _exact_keys(
+        raw, _LOCAL_CHAPTER_KEYS, f'ch{chapter}.local_response',
+        required=_LOCAL_CHAPTER_KEYS)
+
+    def translate_alias(value: object, where: str) -> str:
+        local = _text(value, where)
+        global_alias = local_facts.get(local)
+        if global_alias is None:
+            raise BlindPlanError(f'{where} 含未知 local fact alias {local}')
+        return global_alias
+
+    def translate_list(
+        value: object, where: str, *, nonempty: bool = False,
+    ) -> list[str]:
+        local = _unique_strings(value, where, nonempty=nonempty)
+        return [translate_alias(alias, where) for alias in local]
+
+    def translate_goal(value: object, where: str) -> dict[str, Any]:
+        goal = _mapping(value, where)
+        _exact_keys(goal, _A_GOAL_KEYS, where, required=_A_GOAL_KEYS)
+        return {
+            'intent': copy.deepcopy(goal.get('intent')),
+            'fact_aliases': translate_list(
+                goal.get('fact_aliases'), f'{where}.fact_aliases', nonempty=True),
+        }
+
+    translated_scenes: list[dict[str, Any]] = []
+    for index, value in enumerate(_list(raw.get('scenes'), f'ch{chapter}.scenes')):
+        scene = _mapping(value, f'ch{chapter}.scenes[{index}]')
+        _exact_keys(
+            scene, _A_SCENE_KEYS, f'ch{chapter}.scenes[{index}]',
+            required=_A_SCENE_KEYS)
+        translated_scenes.append({
+            'weight': copy.deepcopy(scene.get('weight')),
+            'purpose': copy.deepcopy(scene.get('purpose')),
+            'role': copy.deepcopy(scene.get('role')),
+            'delivery': copy.deepcopy(scene.get('delivery')),
+            'transition': copy.deepcopy(scene.get('transition')),
+            'land_fact_aliases': translate_list(
+                scene.get('land_fact_aliases'),
+                f'ch{chapter}.scenes[{index}].land_fact_aliases', nonempty=True),
+            'context_fact_aliases': translate_list(
+                scene.get('context_fact_aliases'),
+                f'ch{chapter}.scenes[{index}].context_fact_aliases'),
+            'turn_fact_alias': translate_alias(
+                scene.get('turn_fact_alias'),
+                f'ch{chapter}.scenes[{index}].turn_fact_alias'),
+            'entry_state_aliases': translate_list(
+                scene.get('entry_state_aliases'),
+                f'ch{chapter}.scenes[{index}].entry_state_aliases'),
+            'exit_state_aliases': translate_list(
+                scene.get('exit_state_aliases'),
+                f'ch{chapter}.scenes[{index}].exit_state_aliases'),
+        })
+    translated = {
+        'output_ordinal': chapter,
+        'structure_decision': copy.deepcopy(raw.get('structure_decision')),
+        'chapter_goal': translate_goal(
+            raw.get('chapter_goal'), f'ch{chapter}.chapter_goal'),
+        'open_hook_goal': translate_goal(
+            raw.get('open_hook_goal'), f'ch{chapter}.open_hook_goal'),
+        'end_hook_goal': translate_goal(
+            raw.get('end_hook_goal'), f'ch{chapter}.end_hook_goal'),
+        'weight': copy.deepcopy(chapter_weight),
+        'chapter_rewrite_brief': copy.deepcopy(raw.get('chapter_rewrite_brief')),
+        'scenes': translated_scenes,
+    }
+    _truth_sha, formal_facts, _participants = _formal_maps(formal_mapping)
+    return _compile_global_blind_chapter(
+        translated,
+        fact_aliases=formal_facts,
+        chapter_entry_refs=list(source.get('entry_state_aliases') or []),
+        where=f'ch{chapter}.translated_response',
+    )
+
+
+def assemble_blind_candidate(
+    strategy: object,
+    compiled_chapters: Collection[object],
+    formal_mapping: object,
+    *,
+    truth: object,
+) -> dict[str, Any]:
+    """关闭式组装 strategy + 全部单章结果为当前 ``BlindCandidate`` 业务形状。"""
+    raw_strategy = _mapping(strategy, 'blind_book_strategy_response')
+    _exact_keys(
+        raw_strategy, _STRATEGY_TOP_KEYS, 'blind_book_strategy_response',
+        required=_STRATEGY_TOP_KEYS)
+    strategy_text = _text(
+        raw_strategy.get('reconstruction_strategy'),
+        'blind_book_strategy_response.reconstruction_strategy')
+    raw_weights = _list(
+        raw_strategy.get('chapter_weights'),
+        'blind_book_strategy_response.chapter_weights')
+    if not raw_weights:
+        raise BlindPlanError('blind_book_strategy_response.chapter_weights 不能为空')
+    weights: dict[int, Any] = {}
+    for index, value in enumerate(raw_weights):
+        row = _mapping(value, f'chapter_weights[{index}]')
+        _exact_keys(
+            row, _STRATEGY_WEIGHT_KEYS, f'chapter_weights[{index}]',
+            required=_STRATEGY_WEIGHT_KEYS)
+        chapter = _ordinal(
+            row.get('chapter_ordinal'), f'chapter_weights[{index}].chapter_ordinal')
+        if chapter in weights:
+            raise BlindPlanError(f'chapter_weights.chapter_ordinal 重号：{chapter}')
+        weights[chapter] = copy.deepcopy(row.get('weight'))
+
+    truth_rows = _truth_chapter_rows(truth)
+    truth_sha256, fact_aliases, participant_aliases = _formal_maps(formal_mapping)
+    if _sha256(truth) != truth_sha256:
+        raise BlindPlanError('blind_truth 与 formal_alias_mapping.truth_sha256 不匹配')
+    expected = set(truth_rows)
+    if set(weights) != expected:
+        raise BlindPlanError(
+            f'chapter_weights 章集不闭合：expected={sorted(expected)},got={sorted(weights)}')
+
+    compiled_by_chapter: dict[int, Mapping[str, Any]] = {}
+    for index, value in enumerate(compiled_chapters):
+        row = _mapping(value, f'compiled_chapters[{index}]')
+        _exact_keys(
+            row, _A_CHAPTER_KEYS, f'compiled_chapters[{index}]',
+            required=_A_CHAPTER_KEYS)
+        chapter = _ordinal(
+            row.get('output_ordinal'), f'compiled_chapters[{index}].output_ordinal')
+        if chapter in compiled_by_chapter:
+            raise BlindPlanError(f'compiled_chapters output_ordinal 重号：{chapter}')
+        if row.get('weight') != weights.get(chapter):
+            raise BlindPlanError(
+                f'ch{chapter}.weight 与整书策略不一致：'
+                f'{row.get("weight")} != {weights.get(chapter)}')
+        for scene_index, value_scene in enumerate(_list(
+                row.get('scenes'), f'compiled_chapters[{index}].scenes')):
+            scene = _mapping(
+                value_scene, f'compiled_chapters[{index}].scenes[{scene_index}]')
+            _exact_keys(
+                scene, _CANDIDATE_SCENE_KEYS,
+                f'compiled_chapters[{index}].scenes[{scene_index}]',
+                required=_CANDIDATE_SCENE_KEYS)
+        compiled_by_chapter[chapter] = row
+    if set(compiled_by_chapter) != expected:
+        raise BlindPlanError(
+            f'compiled_chapters 章集不闭合：expected={sorted(expected)},'
+            f'got={sorted(compiled_by_chapter)}')
+
+    compiled = {
+        'alias_algorithm': BLIND_ALIAS_ALGORITHM,
+        'truth_sha256': truth_sha256,
+        'fact_aliases': {
+            alias: formal for alias, (formal, _owner) in fact_aliases.items()
+        },
+        'participant_aliases': dict(participant_aliases),
+        'reconstruction_strategy': strategy_text,
+        'output_chapters': [
+            copy.deepcopy(compiled_by_chapter[chapter])
+            for chapter in sorted(compiled_by_chapter)
+        ],
     }
     _canonical_bytes(compiled)
     return compiled
@@ -830,8 +1344,12 @@ def merge_evidence_bindings(
 
 
 __all__ = [
-    'BLIND_CONTRACT', 'BlindPlanError',
-    'build_blind_projection', 'compile_blind_candidate',
+    'BLIND_CONTRACT', 'BLIND_BOOK_STRATEGY_CONTRACT',
+    'BLIND_CHAPTER_CONTRACT', 'BlindPlanError',
+    'build_blind_projection', 'build_blind_strategy_projection',
+    'build_blind_chapter_projection',
+    'compile_blind_candidate', 'compile_blind_chapter_design',
+    'assemble_blind_candidate',
     'candidate_subject_sha256', 'build_evidence_catalog',
     'merge_evidence_bindings',
 ]

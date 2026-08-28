@@ -159,6 +159,59 @@ def test_parse_failure_resumes_same_session_and_links_both_ledgers(tmp_path):
     assert all(row['cache_policy'] == 'agent-session' for row in ledger_rows)
 
 
+def test_fresh_session_does_not_adopt_failed_same_purpose_attempts(tmp_path):
+    """同一 run/purpose 的旧失败费用仍留总账，但不属于新 logical session。"""
+    class SessionDriver(_FakeDriver):
+        def __init__(self, responses: list[str], session_id: str) -> None:
+            super().__init__(responses)
+            self.session_id = session_id
+
+        def _turn(self) -> AgentTurn:
+            return AgentTurn(
+                session_id=self.session_id, content=self.responses.pop(0),
+                model=self.model, actual_reasoning_effort='high',
+                usage=AgentUsage(
+                    prompt_tokens=10, completion_tokens=3, reasoning_tokens=2,
+                    total_tokens=13),
+                turn_count=1,
+            )
+
+    ctx = _ctx(tmp_path)
+    failed = SessionAgentClient(
+        ctx, _profile(), SessionDriver(['not-json'], 'provider-failed'),
+        max_turns=1)
+    with pytest.raises(LlmFailed, match='已用尽 1 轮'):
+        failed.ask_json(
+            'SYS', 'same subject', model_cls=_Answer,
+            purpose='stage2.global')
+    failed.finish(
+        process_state='failed', delivery_state='failed',
+        error_kind='response_invalid')
+    failed.close()
+    [failed_row] = _rows(ledger_path(tmp_path))
+
+    succeeded = SessionAgentClient(
+        ctx, _profile(), SessionDriver(['{"value":7}'], 'provider-succeeded'),
+        max_turns=1)
+    assert succeeded.ask_json(
+        'SYS', 'same subject', model_cls=_Answer,
+        purpose='stage2.global').value == 7
+    checkpoint = succeeded.accepted_checkpoint('stage2.global')
+    succeeded.finish(process_state='ok', delivery_state='delivered')
+    succeeded.close()
+
+    rows = _rows(ledger_path(tmp_path))
+    assert len(rows) == 2
+    succeeded_row = rows[1]
+    assert checkpoint['accepted_turn_index'] == 1
+    assert checkpoint['request_mode'] == 'original'
+    assert checkpoint['recovery_from_attempts'] == []
+    assert checkpoint['attempt_links'] == [
+        ctx.ledger.request_identity_for_attempt(succeeded_row['attempt_id'])]
+    assert failed_row['attempt_id'] not in {
+        row['attempt_id'] for row in checkpoint['attempt_links']}
+
+
 def test_business_rejection_only_sends_feedback_on_resume(tmp_path):
     ctx = _ctx(tmp_path)
     driver = _FakeDriver(['{"value":1}', '{"value":2}'])
@@ -441,6 +494,7 @@ def test_stage6_policy_is_per_purpose_not_per_chapter():
     ('policy_name', 'isolation'),
     [
         ('stage4-design-v1', 'per-node'),
+        ('stage4-design-v2', 'per-purpose'),
         ('stage4-plan-v1', 'per-node'),
         ('stage5-write-v1', 'per-chapter'),
         ('stage6-hook-v1', 'per-node'),

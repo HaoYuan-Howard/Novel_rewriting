@@ -22,6 +22,7 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Mapping
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 
 from contracts.artifacts import (
@@ -38,7 +39,8 @@ from contracts.schema.report import CheckReport
 from contracts.schema.stage1 import MainText
 from contracts.schema.stage2 import ChapterBlueprints, GlobalGrounding
 from contracts.schema.stage4 import (
-    BlindCandidate, BlindCandidateProvenance, BlindPlanResponse,
+    BlindBookStrategyResponse, BlindCandidate, BlindCandidateProvenance,
+    BlindChapterDesignResponse, BlindPlanResponse,
     RejectedResponseAdoption,
     CtxProvenance, EvidenceBinding, EvidenceBindingProvenance,
     EvidenceBindingResponse, PlanChapters, PlanEdit, PlanProvenance, WriterContext,
@@ -54,9 +56,11 @@ from novel.run import RunContext
 from novel.core.naming import display_names_at
 from novel.stages.stage4 import checks, prompts
 from novel.stages.stage4.blind import (
-    BlindPlanError, build_blind_projection,
+    BlindPlanError, assemble_blind_candidate, build_blind_chapter_projection,
+    build_blind_projection, build_blind_strategy_projection,
     build_evidence_catalog, candidate_subject_sha256,
-    compile_blind_candidate, merge_evidence_bindings,
+    compile_blind_candidate, compile_blind_chapter_design,
+    merge_evidence_bindings,
     validate_infeasible_binding,
 )
 from novel.stages.stage4.beats import beat_index
@@ -146,7 +150,7 @@ class _DesignUpstream:
 
 @dataclass(frozen=True)
 class DesignCandidateContext:
-    """Stage4A 在任何 wire 前冻结的去序 allowlist。"""
+    """Stage4A 在任何 wire 前冻结的全书 truth 与首个策略请求。"""
 
     system: str
     user: str
@@ -154,19 +158,50 @@ class DesignCandidateContext:
     upstream: _DesignUpstream = field(repr=False, compare=False)
     truth: dict[str, Any]
     mapping: dict[str, Any]
+    strategy_projection: dict[str, Any]
+    input_sha256: str
+    strategy_input_sha256: str
+    validator: Any = field(repr=False, compare=False)
+
+
+@dataclass(frozen=True)
+class DesignChapterContext:
+    """一章独立 session 的公开 subject 与私有确定性编译尺子。"""
+
+    chapter_ordinal: int
+    chapter_weight: str
+    system: str
+    user: str
+    projection: dict[str, Any]
+    local_mapping: dict[str, Any] = field(repr=False, compare=False)
     input_sha256: str
     validator: Any = field(repr=False, compare=False)
 
 
 @dataclass(frozen=True)
-class DesignCandidateEvaluation:
-    """Stage4A 已过代码闸、尚未结算或落盘的候选。"""
+class DesignCandidateResponses:
+    """策略 + 全章响应；tuple 顺序恒等于阅读序，不承载线程完成顺序。"""
 
-    response: BlindPlanResponse
+    strategy: BlindBookStrategyResponse
+    chapters: tuple[tuple[int, BlindChapterDesignResponse], ...]
+
+
+@dataclass(frozen=True)
+class DesignAdoption:
+    purpose: str
+    chapter: int | None
+    attempt_id: str
+
+
+@dataclass(frozen=True)
+class DesignCandidateEvaluation:
+    """Stage4A 聚合后已过整书 HARD、尚未结算或落盘的候选。"""
+
+    responses: DesignCandidateResponses
     candidate: BlindCandidate
     requested_model: str
     adopted_models: tuple[str, ...]
-    attempt_id: str
+    adoptions: tuple[DesignAdoption, ...]
     input_sha256: str
     candidate_sha256: str
 
@@ -389,8 +424,26 @@ def run_check_only(ctx: RunContext) -> CheckReport:
 
 def _design_request(
     ctx: RunContext,
+) -> tuple[
+    str, str, ArtifactStore, _DesignUpstream,
+    dict[str, Any], dict[str, Any], dict[str, Any],
+]:
+    """Stage4A 首个策略请求与真发共用的唯一构造口。"""
+    store = ArtifactStore(ctx)
+    up = _DesignUpstream(ctx, store)
+    truth, mapping = build_blind_projection(
+        up.blueprints, root_clean_sha1=ctx.root_clean_sha1)
+    projection = build_blind_strategy_projection(truth)
+    system = prompts.blind_book_strategy_system()
+    user = prompts.BLOCK_BLIND_BOOK_STRATEGY + '\n' + json.dumps(
+        projection, ensure_ascii=False, sort_keys=True, separators=(',', ':'))
+    return system, user, store, up, truth, mapping, projection
+
+
+def _legacy_design_request(
+    ctx: RunContext,
 ) -> tuple[str, str, ArtifactStore, _DesignUpstream, dict[str, Any], dict[str, Any]]:
-    """Stage4A 预览与真发共用的唯一构造口。"""
+    """只供旧整书拒稿的零 wire 采用路；新付费路径不得调用。"""
     store = ArtifactStore(ctx)
     up = _DesignUpstream(ctx, store)
     truth, mapping = build_blind_projection(
@@ -402,15 +455,104 @@ def _design_request(
 
 
 def build_design_prompt(ctx: RunContext) -> tuple[str, str]:
-    """`stage4.design --dry-run`：只摊开真正会外发的去序真相图。"""
-    system, user, _store, _up, _truth, _mapping = _design_request(ctx)
+    """`stage4.design --dry-run`：摊开第一条策略请求。
+
+    逐章请求依赖已接受的策略响应，无法在付费前逐字生成；章 truth 投影仍是
+    当前 Stage2 真相图的确定性函数，并由正式执行逐章冻结进私有 run。
+    """
+    system, user, _store, _up, _truth, _mapping, _projection = \
+        _design_request(ctx)
     return system, user
+
+
+def _blind_chapter_problems(
+    chapter: Mapping[str, Any], source: Mapping[str, Any],
+) -> list[str]:
+    """单章编译结果的 HARD；整书终验与逐章 checkpoint 共用这一把尺子。"""
+    ordinal = int(source.get('chapter_ordinal') or 0)
+    problems: list[str] = []
+    if int(chapter.get('output_ordinal') or 0) != ordinal:
+        return [
+            f'ch{ordinal} 编译章号漂移：got={chapter.get("output_ordinal")!r}']
+    facts = {
+        str(row.get('fact_alias')): str(row.get('obligation'))
+        for row in (source.get('facts') or [])
+    }
+    land = {alias for alias, obligation in facts.items() if obligation == 'land'}
+    context = {alias for alias, obligation in facts.items() if obligation == 'context'}
+    scenes = list(chapter.get('scenes') or [])
+    landed = [str(alias) for scene in scenes
+              for alias in (scene.get('land_fact_aliases') or [])]
+    if sorted(landed) != sorted(land):
+        problems.append(
+            f'ch{ordinal} land 必须恰落一次：expected={sorted(land)},got={sorted(landed)}')
+    # A 相就把「因果端点根本没进任何场」挡下来，别等到 B 之后才发现整书要重出。
+    # 逆序只在正式计划上作 INFO 报读数，A 相不据此拒稿（倒叙本来就合法）。
+    missing_causal, _reversed_causal = checks.causal_scene_findings(
+        list(source.get('causal_edges') or []),
+        checks.causal_scene_positions(
+            scenes, land_key='land_fact_aliases',
+            context_key='context_fact_aliases'),
+        before_key='before_alias', after_key='after_alias')
+    if missing_causal:
+        problems.append(f'ch{ordinal} 因果端点未入候选场：{missing_causal}')
+    problems.extend(
+        f'ch{ordinal}.{row} context 越界' for row in checks.context_ref_findings(
+            scenes, context_obligation_refs=context,
+            land_key='land_fact_aliases', context_key='context_fact_aliases'))
+    for index, scene in enumerate(scenes):
+        prefix = f'ch{ordinal}.scene{index + 1}'
+        state_refs = set(scene.get('entry_state_aliases') or []) | set(
+            scene.get('exit_state_aliases') or [])
+        if state_refs - set(facts):
+            problems.append(f'{prefix} state 越界：{sorted(state_refs - set(facts))}')
+    # ⚠ 章内时态与 transition 语法**只有一处判定**：A 相选中的候选被最终
+    #   checker 用另一套时态语义拒绝，是本仓最贵的一种自相矛盾。
+    #   `unknown` 在 A 相刻意丢弃——它是留给人审的读数，不是拒稿理由。
+    chapter_state_bad, chapter_transition_bad, _unknown = \
+        checks.temporal_state_findings(
+            scenes,
+            prefix=f'ch{ordinal}',
+            land_key='land_fact_aliases',
+            entry_key='entry_state_aliases',
+            exit_key='exit_state_aliases',
+        )
+    problems.extend(chapter_state_bad)
+    problems.extend(chapter_transition_bad)
+    if scenes:
+        # 章级边界仍是 HARD，与章内非线性正交。
+        if not set(scenes[0].get('entry_state_aliases') or []).issuperset(
+                set(source.get('entry_state_aliases') or [])):
+            problems.append(f'ch{ordinal} 首场未承接章首状态')
+        # 章尾比的是「本章有没有让它成立」：落地即算成立，不要求末场再抄一遍。
+        established = set(landed) | set(scenes[-1].get('exit_state_aliases') or [])
+        if not established.issuperset(set(source.get('ending_state_aliases') or [])):
+            problems.append(
+                f'ch{ordinal} 章尾状态未在本章确立：'
+                f'{sorted(set(source.get("ending_state_aliases") or []) - established)}')
+        for label, scene in (
+            ('open_hook_goal', scenes[0]), ('end_hook_goal', scenes[-1]),
+        ):
+            refs = set((chapter.get(label) or {}).get('fact_aliases') or [])
+            if not refs.intersection(scene.get('land_fact_aliases') or []):
+                problems.append(f'ch{ordinal}.{label} 没有落到对应首/末场')
+    for label in ('chapter_goal', 'open_hook_goal', 'end_hook_goal'):
+        refs = set((chapter.get(label) or {}).get('fact_aliases') or [])
+        if refs - set(facts):
+            problems.append(f'ch{ordinal}.{label} 越界：{sorted(refs - set(facts))}')
+    style_bad = checks.style_word_findings(
+        [dict(chapter)], source_chapters=[dict(source)],
+        source_facts_key='facts', source_ref_key='fact_alias',
+        land_key='land_fact_aliases', context_key='context_fact_aliases')
+    if style_bad:
+        problems.append(f'盲设计自由文本命中无据纯写法词：{style_bad[:8]}')
+    return problems
 
 
 def _blind_candidate_problem(
     compiled: dict[str, Any], truth: dict[str, Any],
 ) -> str | None:
-    """A 响应的闭合后置条件；只用 A 已看见的真相图，不偷读证据层。"""
+    """聚合后的整书 HARD；必须在所有逐章 checkpoint 之后再完整复跑。"""
     expected = {
         int(chapter.get('chapter_ordinal') or 0): chapter
         for chapter in (truth.get('chapters') or [])
@@ -426,81 +568,13 @@ def _blind_candidate_problem(
             f'章集不闭合：expected={sorted(expected)},actual={sorted(actual)}')
     for ordinal, source in expected.items():
         chapter = actual.get(ordinal)
-        if chapter is None:
-            continue
-        facts = {
-            str(row.get('fact_alias')): str(row.get('obligation'))
-            for row in (source.get('facts') or [])
-        }
-        land = {alias for alias, obligation in facts.items() if obligation == 'land'}
-        context = {alias for alias, obligation in facts.items() if obligation == 'context'}
-        scenes = list(chapter.get('scenes') or [])
-        landed = [str(alias) for scene in scenes
-                  for alias in (scene.get('land_fact_aliases') or [])]
-        if sorted(landed) != sorted(land):
-            problems.append(
-                f'ch{ordinal} land 必须恰落一次：expected={sorted(land)},got={sorted(landed)}')
-        # A 相就把「因果端点根本没进任何场」挡下来，别等到 B 之后才发现整书要重出。
-        # 逆序只在正式计划上作 INFO 报读数，A 相不据此拒稿（倒叙本来就合法）。
-        missing_causal, _reversed_causal = checks.causal_scene_findings(
-            list(source.get('causal_edges') or []),
-            checks.causal_scene_positions(
-                scenes, land_key='land_fact_aliases',
-                context_key='context_fact_aliases'),
-            before_key='before_alias', after_key='after_alias')
-        if missing_causal:
-            problems.append(f'ch{ordinal} 因果端点未入候选场：{missing_causal}')
-        problems.extend(
-            f'ch{ordinal}.{row} context 越界' for row in checks.context_ref_findings(
-                scenes, context_obligation_refs=context,
-                land_key='land_fact_aliases', context_key='context_fact_aliases'))
-        for index, scene in enumerate(scenes):
-            prefix = f'ch{ordinal}.scene{index + 1}'
-            state_refs = set(scene.get('entry_state_aliases') or []) | set(
-                scene.get('exit_state_aliases') or [])
-            if state_refs - set(facts):
-                problems.append(f'{prefix} state 越界：{sorted(state_refs - set(facts))}')
-        # ⚠ 章内时态与 transition 语法**只有一处判定**：A 相选中的候选被最终
-        #   checker 用另一套时态语义拒绝，是本仓最贵的一种自相矛盾。
-        #   `unknown` 在 A 相刻意丢弃——它是留给人审的读数，不是拒稿理由。
-        chapter_state_bad, chapter_transition_bad, _unknown = \
-            checks.temporal_state_findings(
-                scenes,
-                prefix=f'ch{ordinal}',
-                land_key='land_fact_aliases',
-                entry_key='entry_state_aliases',
-                exit_key='exit_state_aliases',
-            )
-        problems.extend(chapter_state_bad)
-        problems.extend(chapter_transition_bad)
-        if scenes:
-            # 章级边界仍是 HARD，与章内非线性正交。
-            if not set(scenes[0].get('entry_state_aliases') or []).issuperset(
-                    set(source.get('entry_state_aliases') or [])):
-                problems.append(f'ch{ordinal} 首场未承接章首状态')
-            # 章尾比的是「本章有没有让它成立」：落地即算成立，不要求末场再抄一遍。
-            established = set(landed) | set(scenes[-1].get('exit_state_aliases') or [])
-            if not established.issuperset(set(source.get('ending_state_aliases') or [])):
-                problems.append(
-                    f'ch{ordinal} 章尾状态未在本章确立：'
-                    f'{sorted(set(source.get("ending_state_aliases") or []) - established)}')
-            for label, scene in (
-                ('open_hook_goal', scenes[0]), ('end_hook_goal', scenes[-1]),
-            ):
-                refs = set((chapter.get(label) or {}).get('fact_aliases') or [])
-                if not refs.intersection(scene.get('land_fact_aliases') or []):
-                    problems.append(f'ch{ordinal}.{label} 没有落到对应首/末场')
-        for label in ('chapter_goal', 'open_hook_goal', 'end_hook_goal'):
-            refs = set((chapter.get(label) or {}).get('fact_aliases') or [])
-            if refs - set(facts):
-                problems.append(f'ch{ordinal}.{label} 越界：{sorted(refs - set(facts))}')
+        if chapter is not None:
+            problems.extend(_blind_chapter_problems(chapter, source))
     style_bad = checks.style_word_findings(
         list(compiled.get('output_chapters') or []),
         source_chapters=list(truth.get('chapters') or []),
-        source_facts_key='facts',
-        source_ref_key='fact_alias',
-        land_key='land_fact_aliases',
-        context_key='context_fact_aliases',
+        source_facts_key='facts', source_ref_key='fact_alias',
+        land_key='land_fact_aliases', context_key='context_fact_aliases',
         reconstruction_strategy=str(compiled.get('reconstruction_strategy') or ''),
     )
     if style_bad:
@@ -531,6 +605,55 @@ class _BlindValidator:
 
 def _blind_validator(truth: dict[str, Any], mapping: dict[str, Any]) -> _BlindValidator:
     return _BlindValidator(truth, mapping)
+
+
+class _BlindStrategyValidator:
+    """策略响应只裁决章集、权重唯一性与无据纯写法词。"""
+
+    def __init__(self, chapters: tuple[int, ...]) -> None:
+        self.chapters = chapters
+
+    def __call__(self, response: BlindBookStrategyResponse, _wire: Any) -> str | None:
+        rows = response.chapter_weights
+        actual = tuple(sorted(row.chapter_ordinal for row in rows))
+        if actual != self.chapters or len(rows) != len(self.chapters):
+            return f'策略章集不闭合：expected={list(self.chapters)},actual={list(actual)}'
+        style_bad = checks.style_word_findings(
+            [], source_chapters=[], source_facts_key='facts',
+            source_ref_key='fact_alias', land_key='land_fact_aliases',
+            context_key='context_fact_aliases',
+            reconstruction_strategy=response.reconstruction_strategy)
+        if style_bad:
+            return f'整书策略命中无据纯写法词：{style_bad[:8]}'
+        return None
+
+
+class _BlindChapterValidator:
+    """单章 local 响应的唯一编译与 checkpoint HARD。"""
+
+    def __init__(
+        self, *, truth_chapter: dict[str, Any], local_mapping: dict[str, Any],
+        formal_mapping: dict[str, Any], chapter_weight: str,
+    ) -> None:
+        self.truth_chapter = truth_chapter
+        self.local_mapping = local_mapping
+        self.formal_mapping = formal_mapping
+        self.chapter_weight = chapter_weight
+        self.compiled: dict[str, Any] | None = None
+
+    def __call__(self, response: BlindChapterDesignResponse, _wire: Any) -> str | None:
+        self.compiled = None
+        try:
+            compiled = compile_blind_chapter_design(
+                response.model_dump(by_alias=True), self.local_mapping,
+                self.formal_mapping, truth_chapter=self.truth_chapter,
+                chapter_weight=self.chapter_weight)
+        except BlindPlanError as exc:
+            return str(exc)
+        problems = _blind_chapter_problems(compiled, self.truth_chapter)
+        if not problems:
+            self.compiled = compiled
+        return '；'.join(problems[:16]) if problems else None
 
 
 def build_prompt(ctx: RunContext, *, chapters: tuple[int, ...] = ()) -> tuple[str, str]:
@@ -968,6 +1091,23 @@ def _require_agent_bridge(ctx: RunContext, source: Any) -> None:
             '无法区分 live resume 与 durable-checkpoint 恢复')
 
 
+def _require_design_agent_bridge(source: Any) -> None:
+    """Stage4A 是多 session pool，不能拿单 session 的 provider id 当节点身份。"""
+    required = (
+        'accepted_checkpoint', 'restore_checkpoint_acceptance',
+        'accepted_attempt', 'accepted_models', 'prepare_initial_sessions',
+    )
+    missing = [name for name in required if not callable(getattr(source, name, None))]
+    if missing:
+        raise ProvenanceRefused(
+            f'stage4.design agent pool 缺 unit checkpoint bridge {missing}；'
+            '已在首个 wire 前停止')
+    concurrency = getattr(source, 'concurrency', None)
+    if (not isinstance(concurrency, int) or isinstance(concurrency, bool)
+            or concurrency < 1):
+        raise ProvenanceRefused('stage4.design agent pool 缺合法 concurrency')
+
+
 def _finish_restored_agent_session(
         ctx: RunContext, source: Any, *, delivery_state: str,
         error_kind: str | None,
@@ -1017,23 +1157,52 @@ def _assert_design_current(
 ) -> None:
     _live_code_guard(ctx, where='stage4.design')
     with ctx.validation_reads():
-        system, user, _store, _up, truth, mapping = _design_request(ctx)
-    current_input = _canonical_sha256({'truth': truth, 'mapping': mapping})
+        system, user, _store, _up, truth, mapping, projection = \
+            _design_request(ctx)
+    current_input = _canonical_sha256({
+        'architecture': 'book_strategy_chapters_v1',
+        'truth': truth, 'mapping': mapping,
+    })
+    strategy_input = _canonical_sha256({
+        'root_input_sha256': current_input,
+        'strategy_projection': projection,
+    })
     if (system != prepared.system or user != prepared.user
             or truth != prepared.truth or mapping != prepared.mapping
-            or current_input != prepared.input_sha256):
+            or projection != prepared.strategy_projection
+            or current_input != prepared.input_sha256
+            or strategy_input != prepared.strategy_input_sha256):
         raise ProvenanceRefused(
             'stage4.design 运行期间 truth/mapping/prompt 发生漂移')
     ctx.require_observed_roots_current()
 
 
+def _design_strategy_unit(prepared: DesignCandidateContext) -> Any:
+    from novel.llm import stage4_runs
+    return stage4_runs.DesignUnitRequest(
+        chapter=None,
+        input_sha256=prepared.strategy_input_sha256,
+        system=prepared.system,
+        user=prepared.user,
+        response_model=BlindBookStrategyResponse,
+        max_tokens=prompts.BLIND_BOOK_STRATEGY_MAX_TOKENS,
+    )
+
+
 def prepare_design_candidate(ctx: RunContext) -> DesignCandidateContext:
-    """读取并冻结 A 的去序输入；不发请求、不写正式产物。"""
+    """冻结全书 truth 与小型策略请求；不发请求、不写正式产物。"""
     if ctx.node != 'stage4.design':
         raise ValueError(
             f'prepare_design_candidate 只接受 stage4.design，实得 {ctx.node!r}')
     _refuse_foreign_before_wire(ctx)
-    system, user, store, up, truth, mapping = _design_request(ctx)
+    system, user, store, up, truth, mapping, projection = _design_request(ctx)
+    chapters = tuple(sorted(
+        int(row.get('chapter_ordinal') or 0)
+        for row in (truth.get('chapters') or [])))
+    root_input = _canonical_sha256({
+        'architecture': 'book_strategy_chapters_v1',
+        'truth': truth, 'mapping': mapping,
+    })
     prepared = DesignCandidateContext(
         system=system,
         user=user,
@@ -1041,150 +1210,386 @@ def prepare_design_candidate(ctx: RunContext) -> DesignCandidateContext:
         upstream=up,
         truth=truth,
         mapping=mapping,
-        input_sha256=_canonical_sha256({'truth': truth, 'mapping': mapping}),
-        validator=_blind_validator(truth, mapping),
+        strategy_projection=projection,
+        input_sha256=root_input,
+        strategy_input_sha256=_canonical_sha256({
+            'root_input_sha256': root_input,
+            'strategy_projection': projection,
+        }),
+        validator=_BlindStrategyValidator(chapters),
     )
     _assert_design_current(ctx, prepared)
     if _uses_agent_runs(ctx):
         from novel.llm import stage4_runs
-        stage4_runs.ensure_run(
-            ctx,
-            input_sha256=prepared.input_sha256,
-            system=system,
-            user=user,
-            response_model=BlindPlanResponse,
-            max_tokens=prompts.BLIND_DESIGN_MAX_TOKENS,
-        )
+        stage4_runs.ensure_design_unit_run(ctx, _design_strategy_unit(prepared))
     return prepared
 
 
-def _design_checkpoint_state(
-        response: BlindPlanResponse, compiled: Mapping[str, Any],
+def _design_strategy_checkpoint_state(
+        response: BlindBookStrategyResponse,
 ) -> dict[str, Any]:
     return {
-        'kind': 'stage4-design-terminal',
+        'kind': 'stage4-design-strategy-terminal',
+        'response_sha256': _canonical_sha256(
+            response.model_dump(by_alias=True, mode='json')),
+    }
+
+
+def _design_chapter_checkpoint_state(
+        response: BlindChapterDesignResponse, compiled: Mapping[str, Any],
+) -> dict[str, Any]:
+    return {
+        'kind': 'stage4-design-chapter-terminal',
+        'chapter_ordinal': int(compiled.get('output_ordinal') or 0),
         'response_sha256': _canonical_sha256(
             response.model_dump(by_alias=True, mode='json')),
         'compiled_sha256': _canonical_sha256(dict(compiled)),
     }
 
 
-def request_design_candidate(
-        ctx: RunContext, source: Any, prepared: DesignCandidateContext,
-) -> BlindPlanResponse:
-    """取得 A 候选；agent 先恢复 latest revision，缺失才发一条 wire。"""
-    _assert_design_current(ctx, prepared)
+def _design_chapter_contexts(
+        ctx: RunContext, prepared: DesignCandidateContext,
+        strategy: BlindBookStrategyResponse,
+) -> tuple[DesignChapterContext, ...]:
+    why = prepared.validator(strategy, None)
+    if why is not None:
+        raise ProvenanceRefused(f'stage4.design 策略绕过响应闸：{why}')
+    weights = {
+        row.chapter_ordinal: row.weight for row in strategy.chapter_weights
+    }
+    truth_by = {
+        int(row.get('chapter_ordinal') or 0): row
+        for row in (prepared.truth.get('chapters') or [])
+    }
+    strategy_payload = strategy.model_dump(by_alias=True, mode='json')
+    strategy_sha = _canonical_sha256(strategy_payload)
+    contexts: list[DesignChapterContext] = []
+    for ordinal in sorted(truth_by):
+        projection, local_mapping = build_blind_chapter_projection(
+            prepared.truth, prepared.mapping,
+            chapter_ordinal=ordinal, root_clean_sha1=ctx.root_clean_sha1)
+        accepted = {
+            'reconstruction_strategy': strategy.reconstruction_strategy,
+            'chapter_ordinal': ordinal,
+            'chapter_weight': weights[ordinal],
+        }
+        system = prompts.blind_chapter_design_system()
+        user = '\n'.join((
+            prompts.BLOCK_ACCEPTED_BOOK_STRATEGY,
+            json.dumps(accepted, ensure_ascii=False, sort_keys=True,
+                       separators=(',', ':')),
+            prompts.BLOCK_BLIND_CHAPTER_TRUTH,
+            json.dumps(projection, ensure_ascii=False, sort_keys=True,
+                       separators=(',', ':')),
+        ))
+        input_sha = _canonical_sha256({
+            'root_input_sha256': prepared.input_sha256,
+            'strategy_response_sha256': strategy_sha,
+            'chapter_projection': projection,
+            'local_mapping': local_mapping,
+            'chapter_weight': weights[ordinal],
+        })
+        contexts.append(DesignChapterContext(
+            chapter_ordinal=ordinal,
+            chapter_weight=weights[ordinal],
+            system=system,
+            user=user,
+            projection=projection,
+            local_mapping=local_mapping,
+            input_sha256=input_sha,
+            validator=_BlindChapterValidator(
+                truth_chapter=truth_by[ordinal],
+                local_mapping=local_mapping,
+                formal_mapping=prepared.mapping,
+                chapter_weight=weights[ordinal],
+            ),
+        ))
     if _uses_agent_runs(ctx):
-        _require_agent_bridge(ctx, source)
         from novel.llm import stage4_runs
-        restored = stage4_runs.restore_checkpoint(
-            ctx,
-            input_sha256=prepared.input_sha256,
-            system=prepared.system,
-            user=prepared.user,
-            response_model=BlindPlanResponse,
-            max_tokens=prompts.BLIND_DESIGN_MAX_TOKENS,
-            validator=prepared.validator,
-        )
+        for chapter in contexts:
+            stage4_runs.ensure_design_unit_run(
+                ctx, _design_chapter_unit(chapter))
+    return tuple(contexts)
+
+
+def _design_chapter_unit(chapter: DesignChapterContext) -> Any:
+    from novel.llm import stage4_runs
+    return stage4_runs.DesignUnitRequest(
+        chapter=chapter.chapter_ordinal,
+        input_sha256=chapter.input_sha256,
+        system=chapter.system,
+        user=chapter.user,
+        response_model=BlindChapterDesignResponse,
+        max_tokens=prompts.BLIND_CHAPTER_DESIGN_MAX_TOKENS,
+    )
+
+
+def _request_design_strategy(
+        ctx: RunContext, source: Any, prepared: DesignCandidateContext,
+) -> BlindBookStrategyResponse:
+    from novel.llm import stage4_runs
+    purpose = stage4_runs.design_unit_purpose(None)
+    unit = _design_strategy_unit(prepared)
+    if _uses_agent_runs(ctx):
+        restored = stage4_runs.restore_design_unit_checkpoint(
+            ctx, unit, validator=prepared.validator)
         if restored is not None:
-            compiled = prepared.validator.compiled
-            if (compiled is None or restored.revision_key != 'terminal'
+            response = BlindBookStrategyResponse.model_validate(restored.value)
+            if (restored.revision_key != 'terminal'
                     or restored.state_payload
-                    != _design_checkpoint_state(restored.value, compiled)):
+                    != _design_strategy_checkpoint_state(response)):
                 raise ProvenanceRefused(
-                    'stage4.design latest checkpoint 的业务 progress_state 不闭合')
+                    'stage4.design strategy checkpoint 的业务状态不闭合')
             source.restore_checkpoint_acceptance(
-                ctx.node,
-                restored.acceptance,
-                system=prepared.system,
-                user=prepared.user,
-                max_tokens=prompts.BLIND_DESIGN_MAX_TOKENS,
-                recovery_policy=stage4_runs.recovery_policy(ctx.node),
-            )
-            return restored.value
+                purpose, restored.acceptance,
+                system=prepared.system, user=prepared.user,
+                max_tokens=prompts.BLIND_BOOK_STRATEGY_MAX_TOKENS,
+                recovery_policy=stage4_runs.DESIGN_UNIT_RECOVERY_POLICY)
+            return response
+        source.prepare_initial_sessions(((purpose, None),))
         _assert_design_current(ctx, prepared)
         response = source.ask_json(
-            prepared.system,
-            prepared.user,
-            model_cls=BlindPlanResponse,
-            purpose=ctx.node,
-            max_tokens=prompts.BLIND_DESIGN_MAX_TOKENS,
+            prepared.system, prepared.user,
+            model_cls=BlindBookStrategyResponse,
+            purpose=purpose,
+            max_tokens=prompts.BLIND_BOOK_STRATEGY_MAX_TOKENS,
             validator=prepared.validator,
-            recovery_policy=stage4_runs.recovery_policy(ctx.node),
-        )
-        compiled = prepared.validator.compiled
+            recovery_policy=stage4_runs.DESIGN_UNIT_RECOVERY_POLICY)
+        stage4_runs.write_design_unit_checkpoint(
+            ctx, unit,
+            response_payload=response.model_dump(by_alias=True, mode='json'),
+            acceptance=source.accepted_checkpoint(purpose),
+            state_payload=_design_strategy_checkpoint_state(response))
+        return response
+    return source.ask_json(
+        prepared.system, prepared.user,
+        model_cls=BlindBookStrategyResponse,
+        purpose=purpose,
+        max_tokens=prompts.BLIND_BOOK_STRATEGY_MAX_TOKENS,
+        validator=prepared.validator)
+
+
+def _request_design_chapters(
+        ctx: RunContext, source: Any, prepared: DesignCandidateContext,
+        chapters: tuple[DesignChapterContext, ...],
+) -> tuple[tuple[int, BlindChapterDesignResponse], ...]:
+    from novel.llm import stage4_runs
+    restored_values: dict[int, BlindChapterDesignResponse] = {}
+    missing: list[DesignChapterContext] = list(chapters)
+    if _uses_agent_runs(ctx):
+        # 先串行完整复验所有现存 checkpoint；任一损坏时，本批零新 wire。
+        missing = []
+        failures: list[Exception] = []
+        for chapter in chapters:
+            unit = _design_chapter_unit(chapter)
+            purpose = stage4_runs.design_unit_purpose(chapter.chapter_ordinal)
+            try:
+                restored = stage4_runs.restore_design_unit_checkpoint(
+                    ctx, unit, validator=chapter.validator)
+                if restored is None:
+                    missing.append(chapter)
+                    continue
+                response = BlindChapterDesignResponse.model_validate(restored.value)
+                compiled = chapter.validator.compiled
+                if (compiled is None or restored.revision_key != 'terminal'
+                        or restored.state_payload
+                        != _design_chapter_checkpoint_state(response, compiled)):
+                    raise ProvenanceRefused(
+                        f'{purpose} checkpoint 的业务状态不闭合')
+                source.restore_checkpoint_acceptance(
+                    purpose, restored.acceptance,
+                    system=chapter.system, user=chapter.user,
+                    max_tokens=prompts.BLIND_CHAPTER_DESIGN_MAX_TOKENS,
+                    recovery_policy=stage4_runs.DESIGN_UNIT_RECOVERY_POLICY)
+                restored_values[chapter.chapter_ordinal] = response
+            except Exception as exc:
+                failures.append(exc)
+        if failures:
+            if len(failures) == 1:
+                raise failures[0]
+            raise ExceptionGroup(
+                'stage4.design 章节 checkpoint preflight 失败，未启动新 wire',
+                failures)
+        source.prepare_initial_sessions(tuple(
+            (stage4_runs.design_unit_purpose(chapter.chapter_ordinal),
+             chapter.chapter_ordinal)
+            for chapter in missing))
+
+    def one(chapter: DesignChapterContext) -> BlindChapterDesignResponse:
+        purpose = stage4_runs.design_unit_purpose(chapter.chapter_ordinal)
+        kwargs: dict[str, Any] = {}
+        if _uses_agent_runs(ctx):
+            kwargs['recovery_policy'] = stage4_runs.DESIGN_UNIT_RECOVERY_POLICY
+        response = source.ask_json(
+            chapter.system, chapter.user,
+            model_cls=BlindChapterDesignResponse,
+            purpose=purpose,
+            max_tokens=prompts.BLIND_CHAPTER_DESIGN_MAX_TOKENS,
+            validator=chapter.validator,
+            **kwargs)
+        compiled = chapter.validator.compiled
         if compiled is None:
             raise ProvenanceRefused(
-                'stage4.design source 返回候选但未经唯一 validator')
-        stage4_runs.write_checkpoint(
-            ctx,
-            input_sha256=prepared.input_sha256,
-            system=prepared.system,
-            user=prepared.user,
-            response_model=BlindPlanResponse,
-            max_tokens=prompts.BLIND_DESIGN_MAX_TOKENS,
-            response_payload=response.model_dump(by_alias=True, mode='json'),
-            acceptance=source.accepted_checkpoint(ctx.node),
-            state_payload=_design_checkpoint_state(response, compiled),
-        )
+                f'{purpose} source 返回候选但未经唯一 validator')
+        if _uses_agent_runs(ctx):
+            stage4_runs.write_design_unit_checkpoint(
+                ctx, _design_chapter_unit(chapter),
+                response_payload=response.model_dump(
+                    by_alias=True, mode='json'),
+                acceptance=source.accepted_checkpoint(purpose),
+                state_payload=_design_chapter_checkpoint_state(
+                    response, compiled))
         return response
 
-    # legacy LlmClient 的公开实参保持原样；它不会被要求伪造
-    # node-executor acceptance/recovery policy。
-    return source.ask_json(
-        prepared.system,
-        prepared.user,
-        model_cls=BlindPlanResponse,
-        purpose=ctx.node,
-        max_tokens=prompts.BLIND_DESIGN_MAX_TOKENS,
-        validator=prepared.validator,
-    )
+    results = dict(restored_values)
+    failures: dict[int, Exception] = {}
+    if missing:
+        max_workers = min(
+            stage4_runs.DESIGN_MAX_CONCURRENCY,
+            int(getattr(source, 'concurrency', stage4_runs.DESIGN_MAX_CONCURRENCY)),
+            len(missing))
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {
+                executor.submit(one, chapter): chapter.chapter_ordinal
+                for chapter in missing
+            }
+            for future in as_completed(futures):
+                ordinal = futures[future]
+                try:
+                    results[ordinal] = future.result()
+                except Exception as exc:
+                    failures[ordinal] = exc
+        if failures:
+            ordered = [failures[ordinal] for ordinal in sorted(failures)]
+            if len(ordered) == 1:
+                raise ordered[0]
+            raise ExceptionGroup(
+                'stage4.design 逐章请求失败；已通过章节的 checkpoint 已保留',
+                ordered)
+    return tuple((ordinal, results[ordinal]) for ordinal in sorted(results))
+
+
+def request_design_candidate(
+        ctx: RunContext, source: Any, prepared: DesignCandidateContext,
+) -> DesignCandidateResponses:
+    """先取宏观策略，再并发取逐章设计；任一章通过即私有 checkpoint。"""
+    _assert_design_current(ctx, prepared)
+    if _uses_agent_runs(ctx):
+        _require_design_agent_bridge(source)
+    strategy = _request_design_strategy(ctx, source, prepared)
+    chapters = _design_chapter_contexts(ctx, prepared, strategy)
+    responses = _request_design_chapters(
+        ctx, source, prepared, chapters)
+    if len(responses) != len(chapters):
+        raise ProvenanceRefused('stage4.design 逐章响应集合未闭合')
+    return DesignCandidateResponses(strategy=strategy, chapters=responses)
 
 
 def _materialize_design_candidate(
         ctx: RunContext, source: Any, prepared: DesignCandidateContext,
-        response: BlindPlanResponse, *, settle: bool,
+        responses: DesignCandidateResponses, *, settle: bool,
 ) -> BlindCandidate:
-    why = prepared.validator(
-        response,
-        ChatResponse(content=response.model_dump_json(by_alias=True),
-                     model=source.model),
-    )
-    if why is not None or prepared.validator.compiled is None:
+    why = prepared.validator(responses.strategy, None)
+    if why is not None:
+        raise ProvenanceRefused(f'stage4.design 策略绕过响应闸：{why}')
+    chapter_contexts = _design_chapter_contexts(
+        ctx, prepared, responses.strategy)
+    response_by = dict(responses.chapters)
+    expected = tuple(chapter.chapter_ordinal for chapter in chapter_contexts)
+    if (tuple(sorted(response_by)) != expected
+            or len(response_by) != len(responses.chapters)):
         raise ProvenanceRefused(
-            f'stage4.design 候选绕过响应闸：{why or "未编译"}')
-    _attempt, adopted_models = _accepted_identity(ctx, source)
+            f'stage4.design 聚合章集不闭合：expected={expected},'
+            f'actual={tuple(sorted(response_by))}')
+    compiled_chapters: list[dict[str, Any]] = []
+    for chapter in chapter_contexts:
+        response = response_by[chapter.chapter_ordinal]
+        why = chapter.validator(response, None)
+        if why is not None or chapter.validator.compiled is None:
+            raise ProvenanceRefused(
+                f'stage4.design ch{chapter.chapter_ordinal} 绕过响应闸：'
+                f'{why or "未编译"}')
+        compiled_chapters.append(chapter.validator.compiled)
+    try:
+        business = assemble_blind_candidate(
+            responses.strategy.model_dump(by_alias=True),
+            compiled_chapters, prepared.mapping, truth=prepared.truth)
+    except BlindPlanError as exc:
+        raise ProvenanceRefused(f'stage4.design 确定性聚合失败：{exc}') from exc
+    if why := _blind_candidate_problem(business, prepared.truth):
+        raise ProvenanceRefused(f'stage4.design 整书 HARD 未闭合：{why}')
+    _adoptions, adopted_models = _design_accepted_identity(source, expected)
+    usage_kwargs: dict[str, Any] = {}
+    if _uses_agent_runs(ctx):
+        from novel.llm import stage4_runs
+        units = (
+            _design_strategy_unit(prepared),
+            *(_design_chapter_unit(chapter) for chapter in chapter_contexts),
+        )
+        usage_kwargs['usage_override'] = \
+            stage4_runs.design_aggregate_usage(ctx, units)
     provenance = ctx.llm_provenance(
         BlindCandidateProvenance,
-        prompts={'BLIND_DESIGN_SYS': prepared.system},
+        prompts={
+            'BLIND_BOOK_STRATEGY_SYS': prepared.system,
+            'BLIND_CHAPTER_DESIGN_SYS': (
+                chapter_contexts[0].system if chapter_contexts else
+                prompts.blind_chapter_design_system()),
+        },
         model=source.model,
         adopted_models=adopted_models,
         settle=settle,
         alias_algorithm=BLIND_ALIAS_ALGORITHM,
         truth_sha256=str(prepared.mapping['truth_sha256']),
+        architecture='book_strategy_chapters_v1',
+        **usage_kwargs,
     )
     return BlindCandidate.model_validate({
-        **prepared.validator.compiled,
+        **business,
         '_provenance': provenance,
     })
 
 
+def _design_accepted_identity(
+        source: Any, chapters: tuple[int, ...],
+) -> tuple[tuple[DesignAdoption, ...], tuple[str, ...]]:
+    from novel.llm import stage4_runs
+    units = (None, *chapters)
+    rows: list[DesignAdoption] = []
+    purposes: list[str] = []
+    for chapter in units:
+        purpose = stage4_runs.design_unit_purpose(chapter)
+        purposes.append(purpose)
+        attempt_id = source.accepted_attempt(purpose)
+        if not isinstance(attempt_id, str) or not attempt_id:
+            raise ProvenanceRefused(
+                f'{purpose}: 候选缺 accepted attempt')
+        rows.append(DesignAdoption(
+            purpose=purpose, chapter=chapter, attempt_id=attempt_id))
+    models = tuple(sorted(set(source.accepted_models(*purposes))))
+    if not models or any(not isinstance(model, str) or not model for model in models):
+        raise ProvenanceRefused(
+            'stage4.design 候选缺 N+1 units 的 actual accepted model')
+    return tuple(rows), models
+
+
 def evaluate_design_candidate(
         ctx: RunContext, source: Any, prepared: DesignCandidateContext,
-        response: BlindPlanResponse,
+        responses: DesignCandidateResponses,
 ) -> DesignCandidateEvaluation:
     """编译并铸 provisional typed candidate；不 settle、不写盘。"""
     _assert_design_current(ctx, prepared)
     candidate = _materialize_design_candidate(
-        ctx, source, prepared, response, settle=False)
-    attempt_id, adopted_models = _accepted_identity(ctx, source)
+        ctx, source, prepared, responses, settle=False)
+    chapters = tuple(ordinal for ordinal, _response in responses.chapters)
+    adoptions, adopted_models = _design_accepted_identity(source, chapters)
     payload = candidate.model_dump(by_alias=True, mode='json')
     return DesignCandidateEvaluation(
-        response=response,
+        responses=responses,
         candidate=candidate,
         requested_model=source.model,
         adopted_models=adopted_models,
-        attempt_id=attempt_id,
+        adoptions=adoptions,
         input_sha256=prepared.input_sha256,
         candidate_sha256=_canonical_sha256(payload),
     )
@@ -1196,14 +1601,16 @@ def _assert_design_evaluation(
 ) -> None:
     if evaluation.input_sha256 != prepared.input_sha256:
         raise ProvenanceRefused('stage4.design evaluation 不属于当前 input')
-    attempt, models = _accepted_identity(ctx, source)
+    chapters = tuple(
+        ordinal for ordinal, _response in evaluation.responses.chapters)
+    adoptions, models = _design_accepted_identity(source, chapters)
     if (source.model != evaluation.requested_model
-            or attempt != evaluation.attempt_id
+            or adoptions != evaluation.adoptions
             or models != evaluation.adopted_models
             or _canonical_sha256(evaluation.candidate.model_dump(
                 by_alias=True, mode='json')) != evaluation.candidate_sha256):
         raise ProvenanceRefused(
-            'stage4.design evaluation 的 model/attempt/candidate 在评估后漂移')
+            'stage4.design evaluation 的 model/adoptions/candidate 在评估后漂移')
 
 
 def _design_finalization_payload(
@@ -1211,6 +1618,8 @@ def _design_finalization_payload(
 ) -> dict[str, Any]:
     return {
         'delivery_kind': 'design',
+        'architecture': 'book_strategy_chapters_v1',
+        'unit_count': 1 + len(prepared.truth.get('chapters') or []),
         'input_sha256': prepared.input_sha256,
         'truth_sha256': str(prepared.mapping['truth_sha256']),
         'candidate_sha256': _canonical_sha256(
@@ -1256,7 +1665,7 @@ def _note_adoption(
 
 def _note_adoption_attempt(
         ctx: RunContext, *, purpose: str, attempt_id: str,
-        rel: str, artifact: Any,
+        rel: str, artifact: Any, chapter: int | None = None,
 ) -> None:
     ctx.ledger.note_adoption(
         sid=ctx.sid,
@@ -1266,7 +1675,7 @@ def _note_adoption_attempt(
         artifact=rel,
         artifact_fingerprint=prov.projection_fingerprint(
             artifact.model_dump(by_alias=True, mode='json')),
-        chapter=None,
+        chapter=chapter,
     )
 
 
@@ -1274,93 +1683,121 @@ def finalize_design_candidate(
         ctx: RunContext, source: Any, prepared: DesignCandidateContext,
         evaluation: DesignCandidateEvaluation,
 ) -> BlindCandidate:
-    """A 的唯一 settle/write/readback/adoption/committed 边界。"""
+    """A 的唯一 settle/aggregate/write/readback/N+1 adoption/commit 边界。"""
     _assert_design_evaluation(ctx, source, prepared, evaluation)
     _assert_design_current(ctx, prepared)
     if not _uses_agent_runs(ctx):
         artifact = _materialize_design_candidate(
-            ctx, source, prepared, evaluation.response, settle=True)
+            ctx, source, prepared, evaluation.responses, settle=True)
         if artifact.model_dump(by_alias=True, mode='json') != \
                 evaluation.candidate.model_dump(by_alias=True, mode='json'):
             raise ProvenanceRefused(
                 'stage4.design provisional/final candidate 不一致')
         prepared.store.write(CANDIDATE_REL, artifact)
-        _note_adoption(
-            ctx, source, purpose=ctx.node,
-            rel=CANDIDATE_REL, artifact=artifact)
-        return artifact
+        landed = verify_design_delivery(ctx, prepared, artifact)
+        for adoption in evaluation.adoptions:
+            _note_adoption_attempt(
+                ctx, purpose=adoption.purpose,
+                attempt_id=adoption.attempt_id,
+                rel=CANDIDATE_REL, artifact=landed,
+                chapter=adoption.chapter)
+        return landed
 
     from novel.llm import agent_runs, stage4_runs
+    chapter_contexts = _design_chapter_contexts(
+        ctx, prepared, evaluation.responses.strategy)
+    units = (
+        _design_strategy_unit(prepared),
+        *(_design_chapter_unit(chapter) for chapter in chapter_contexts),
+    )
     with stage4_runs.commit_ownership(ctx.novel_dir):
         _assert_design_current(ctx, prepared)
         stage4_runs.refuse_foreign_commit_reservations(ctx)
-        committed = stage4_runs.committed(ctx)
-        if committed is not None:
-            landed = verify_design_delivery(ctx, prepared, evaluation.candidate)
-            payload = landed.model_dump(by_alias=True, mode='json')
-            finalization = _design_finalization_payload(prepared, landed)
-            stage4_runs.verify_committed_delivery(
+        journal = stage4_runs.design_aggregate_state(ctx)
+        if journal is not None:
+            sealed_payload, sealed_finalization = \
+                stage4_runs.restore_design_aggregate_payloads(ctx, journal)
+            artifact = BlindCandidate.model_validate(sealed_payload)
+            if artifact.model_dump(by_alias=True, mode='json') != \
+                    evaluation.candidate.model_dump(by_alias=True, mode='json'):
+                raise ProvenanceRefused(
+                    'stage4.design aggregate 封存候选与当前确定性重建不一致')
+            expected_finalization = _design_finalization_payload(
+                prepared, artifact)
+            if sealed_finalization != expected_finalization:
+                raise ProvenanceRefused(
+                    'stage4.design aggregate finalization 与当前输入漂移')
+        else:
+            artifact = _materialize_design_candidate(
+                ctx, source, prepared, evaluation.responses, settle=True)
+            payload = artifact.model_dump(by_alias=True, mode='json')
+            if (payload != evaluation.candidate.model_dump(
+                    by_alias=True, mode='json')
+                    or _canonical_sha256(payload) != evaluation.candidate_sha256):
+                raise ProvenanceRefused(
+                    'stage4.design provisional/final candidate 不一致')
+            expected_finalization = _design_finalization_payload(
+                prepared, artifact)
+            journal = stage4_runs.prepare_design_aggregate_commit(
                 ctx,
-                committed,
+                units=units,
                 primary_payload=payload,
-                finalization_payload=finalization,
+                finalization_payload=expected_finalization,
+                touched_paths=(CANDIDATE_REL,),
+            )
+        payload = artifact.model_dump(by_alias=True, mode='json')
+        if (not stage4_runs.verify_design_aggregate_primary(journal, payload)
+                or not stage4_runs.verify_design_aggregate_finalization(
+                    journal, expected_finalization)):
+            raise ProvenanceRefused(
+                'stage4.design aggregate journal 与终态候选不闭合')
+
+        if journal['state'] == 'committed':
+            landed = verify_design_delivery(ctx, prepared, artifact)
+            payload = landed.model_dump(by_alias=True, mode='json')
+            stage4_runs.verify_design_aggregate_committed_delivery(
+                ctx,
+                journal,
+                primary_payload=payload,
+                finalization_payload=_design_finalization_payload(
+                    prepared, landed),
                 landed_payloads={CANDIDATE_REL: payload},
             )
-            _finish_restored_agent_session(
-                ctx, source, delivery_state='delivered', error_kind=None)
             return landed
 
-        artifact = _materialize_design_candidate(
-            ctx, source, prepared, evaluation.response, settle=True)
-        payload = artifact.model_dump(by_alias=True, mode='json')
-        if (payload != evaluation.candidate.model_dump(
-                by_alias=True, mode='json')
-                or _canonical_sha256(payload) != evaluation.candidate_sha256):
-            raise ProvenanceRefused(
-                'stage4.design provisional/final candidate 不一致')
-        finalization = _design_finalization_payload(prepared, artifact)
-        journal = stage4_runs.prepare_commit(
-            ctx,
-            primary_artifact=CANDIDATE_REL,
-            primary_payload=payload,
-            finalization_payload=finalization,
-            touched_paths=(CANDIDATE_REL,),
-            attempt_id=evaluation.attempt_id,
-        )
-        if (not stage4_runs.verify_commit_primary(journal, payload)
-                or not stage4_runs.verify_commit_finalization(
-                    journal, finalization)):
-            raise ProvenanceRefused(
-                'stage4.design commit journal 与终态候选不闭合')
         expected_file_sha = agent_runs.canonical_sha256(
             prepared.store._render(CANDIDATE_REL, artifact))
         _assert_design_current(ctx, prepared)
-        state = stage4_runs.target_state(
+        state = stage4_runs.design_aggregate_target_state(
             ctx, journal, CANDIDATE_REL,
             expected_file_sha256=expected_file_sha)
         if state == 'baseline':
+            # ArtifactStore 的临时文件 + replace 是 blind_candidate.json 的唯一
+            # 正式写口；N+1 checkpoint/聚合/HARD 未闭合前绝不会走到这里。
             prepared.store.write(CANDIDATE_REL, artifact)
         _assert_design_current(ctx, prepared)
         landed = verify_design_delivery(ctx, prepared, artifact)
         landed_payload = landed.model_dump(by_alias=True, mode='json')
         _assert_design_current(ctx, prepared)
-        purpose, attempt_id = stage4_runs.restore_commit_adoption(ctx, journal)
-        _note_adoption_attempt(
-            ctx,
-            purpose=purpose,
-            attempt_id=attempt_id,
-            rel=CANDIDATE_REL,
-            artifact=landed,
-        )
+        restored_adoptions = stage4_runs.restore_design_aggregate_adoptions(
+            ctx, journal, units=units)
+        expected_adoptions = tuple(
+            (row.purpose, row.chapter, row.attempt_id)
+            for row in evaluation.adoptions)
+        if restored_adoptions != expected_adoptions:
+            raise ProvenanceRefused(
+                'stage4.design aggregate adoptions 与本次评估冻结集合漂移')
+        for purpose, chapter, attempt_id in restored_adoptions:
+            _note_adoption_attempt(
+                ctx, purpose=purpose, attempt_id=attempt_id,
+                rel=CANDIDATE_REL, artifact=landed, chapter=chapter)
         _assert_design_current(ctx, prepared)
-        stage4_runs.mark_committed(
+        stage4_runs.mark_design_aggregate_committed(
             ctx,
             primary_payload=landed_payload,
             finalization_payload=_design_finalization_payload(prepared, landed),
             landed_payloads={CANDIDATE_REL: landed_payload},
         )
-        _finish_restored_agent_session(
-            ctx, source, delivery_state='delivered', error_kind=None)
         return landed
 
 
@@ -1390,77 +1827,116 @@ def run_adopt_rejected(
     if not actor or not reason:
         raise TerminalState('--adopt-rejected 必须显式给非空 --actor 与 --reason')
 
-    record = response_repair.find_attempt(ctx.novel_dir, attempt_id)
-    rejection = record.rejection
-    if str(rejection.get('node')) != ctx.node:
-        raise TerminalState(
-            f'attempt_id={attempt_id} 属于 {rejection.get("node")}，'
-            f'不能被 {ctx.node} 采用')
-    if record.outcome is not None:
-        raise TerminalState(
-            f'attempt_id={attempt_id} 已有不可变 outcome（'
-            f'{record.outcome.get("decision")}）；一份拒稿只有一次采用机会，'
-            '要么开一次新 run，要么走完整 typed 人工计划')
+    # 旧整书拒稿与新 strategy/chapter unit 共用 node，但不共用响应契约。
+    # 这条恢复口只能消费历史 whole-book response；若只验 node，新 unit 拒稿
+    # 会被送进 BlindPlanResponse 重判并永久封掉 outcome，等于把未来的逐 unit
+    # 恢复材料误销毁。身份检查和 outcome 检查都放在同书提交所有权内，避免
+    # 两只 CLI 同时看见“尚未处理”。
+    from novel.llm import stage4_runs
 
-    # 隔离区的字节格式归 `response_repair` 一处解析；这里只拿结果，不碰路径。
-    material = response_repair.adoption_material(record)
-    candidate_text = _strip_fences(material.candidate_text)
+    with stage4_runs.commit_ownership(ctx.novel_dir):
+        stage4_runs.refuse_foreign_commit_reservations(ctx)
+        record = response_repair.find_attempt(ctx.novel_dir, attempt_id)
+        rejection = record.rejection
+        if str(rejection.get('node')) != ctx.node:
+            raise TerminalState(
+                f'attempt_id={attempt_id} 属于 {rejection.get("node")}，'
+                f'不能被 {ctx.node} 采用')
+        if (rejection.get('purpose') != ctx.node
+                or rejection.get('response_model')
+                != BlindPlanResponse.__name__):
+            raise TerminalState(
+                f'attempt_id={attempt_id} 不是旧 whole-book Stage4A 拒稿：'
+                f'purpose={rejection.get("purpose")!r}, '
+                f'response_model={rejection.get("response_model")!r}。'
+                'strategy/单章 unit 修复尚未开放，不能送进旧整书采用器')
+        if record.outcome is not None:
+            raise TerminalState(
+                f'attempt_id={attempt_id} 已有不可变 outcome（'
+                f'{record.outcome.get("decision")}）；一份拒稿只有一次采用机会，'
+                '要么开一次新 run，要么走完整 typed 人工计划')
 
-    system, user, store, _up, truth, mapping = _design_request(ctx)
-    validator = _blind_validator(truth, mapping)
-    replay = ChatResponse(
-        content=candidate_text,
-        model=str(rejection.get('model') or ''),
-        finish_reason=str((rejection.get('response') or {}).get('finish_reason') or ''),
-    )
-    response, why, gate, detail = judge_payload(
-        candidate_text, replay,
-        require=required_top_level(BlindPlanResponse),
-        model_cls=BlindPlanResponse,
-        validator=validator,
-    )
-    if why is not None or response is None or validator.compiled is None:
+        # 隔离区的字节格式归 `response_repair` 一处解析；这里只拿结果，不碰路径。
+        material = response_repair.adoption_material(record)
+        candidate_text = _strip_fences(material.candidate_text)
+
+        system, user, store, _up, truth, mapping = _legacy_design_request(ctx)
+        validator = _blind_validator(truth, mapping)
+        replay = ChatResponse(
+            content=candidate_text,
+            model=str(rejection.get('model') or ''),
+            finish_reason=str(
+                (rejection.get('response') or {}).get('finish_reason') or ''),
+        )
+        response, why, gate, detail = judge_payload(
+            candidate_text, replay,
+            require=required_top_level(BlindPlanResponse),
+            model_cls=BlindPlanResponse,
+            validator=validator,
+        )
+        if why is not None or response is None or validator.compiled is None:
+            response_repair.write_outcome(
+                record, decision='rejected', gate=gate, detail=detail, why=why)
+            # 显式终态、没落盘 ⇒ exit 2。不是 `1`：`1` 说的是「跑完了、判定不通过、
+            # 已落盘」，而这里一个字节都没写进正式产物。
+            raise TerminalState(
+                f'attempt_id={attempt_id} 按当前四道闸仍不通过（gate={gate}）：{why}；'
+                '本次结论已封存，同一份拒稿不再接受第二次采用——'
+                '要么开一次新 run，要么走完整 typed 人工计划')
+
+        business = validator.compiled
+        audit = build_revalidation_audit(
+            actor=actor,
+            reason=reason,
+            baseline_locator_sha256=str(
+                (rejection.get('response') or {}).get('sha256') or ''),
+            baseline_raw_sha256=material.original_sha256,
+            baseline_payload=material.original_payload,
+            candidate_raw_sha256=material.candidate_raw_sha256,
+            candidate_payload=material.candidate_payload,
+        )
+        provenance = ctx.recovered_llm_provenance(
+            BlindCandidateProvenance,
+            prompts={'BLIND_DESIGN_SYS': system},
+            model=str(rejection.get('model') or ''),
+            adopted_models=[str(rejection.get('model') or '')],
+            alias_algorithm=BLIND_ALIAS_ALGORITHM,
+            truth_sha256=str(mapping['truth_sha256']),
+            architecture='whole_book_v1',
+            rejected_response_adoption=RejectedResponseAdoption(
+                attempt_id=attempt_id,
+                historical_code=str(rejection.get('code') or ''),
+                response_sha256=str(
+                    (rejection.get('response') or {}).get('sha256') or ''),
+                audit=audit,
+            ),
+        )
+        artifact = BlindCandidate.model_validate({
+            **business, '_provenance': provenance,
+        })
+        store.write(CANDIDATE_REL, artifact)
+        with ctx.validation_reads():
+            landed, _raw = store.read_own(
+                BlindCandidate, CANDIDATE_REL, require_current=True)
+            freshness = store.freshness(CANDIDATE_REL)
+        if landed.model_dump(by_alias=True, mode='json') != artifact.model_dump(
+                by_alias=True, mode='json'):
+            raise ProvenanceRefused(
+                '旧 whole-book Stage4A 采用后的正式 readback 与候选不相等')
+        if freshness.state != 'fresh':
+            raise ProvenanceRefused(
+                '旧 whole-book Stage4A 采用后的正式 readback 不 fresh：'
+                f'{freshness.state}/{freshness.reason}')
+
+        # adoption_id 是稳定幂等键；必须先于不可变 accepted outcome。若进程
+        # 死在两者之间，重跑会重复核验/写同一稿并命中同一 adoption，而后补齐
+        # outcome。反过来先封 outcome 会把缺 adoption 的尾窗永久锁死。
+        _note_adoption_attempt(
+            ctx, purpose=ctx.node, attempt_id=attempt_id,
+            rel=CANDIDATE_REL, artifact=landed)
         response_repair.write_outcome(
-            record, decision='rejected', gate=gate, detail=detail, why=why)
-        # 显式终态、没落盘 ⇒ exit 2。不是 `1`：`1` 说的是「跑完了、判定不通过、
-        # 已落盘」，而这里一个字节都没写进正式产物。
-        raise TerminalState(
-            f'attempt_id={attempt_id} 按当前四道闸仍不通过（gate={gate}）：{why}；'
-            '本次结论已封存，同一份拒稿不再接受第二次采用——'
-            '要么开一次新 run，要么走完整 typed 人工计划')
-
-    business = validator.compiled
-    audit = build_revalidation_audit(
-        actor=actor,
-        reason=reason,
-        baseline_locator_sha256=str((rejection.get('response') or {}).get('sha256') or ''),
-        baseline_raw_sha256=material.original_sha256,
-        baseline_payload=material.original_payload,
-        candidate_raw_sha256=material.candidate_raw_sha256,
-        candidate_payload=material.candidate_payload,
-    )
-    provenance = ctx.recovered_llm_provenance(
-        BlindCandidateProvenance,
-        prompts={'BLIND_DESIGN_SYS': system},
-        model=str(rejection.get('model') or ''),
-        adopted_models=[str(rejection.get('model') or '')],
-        alias_algorithm=BLIND_ALIAS_ALGORITHM,
-        truth_sha256=str(mapping['truth_sha256']),
-        rejected_response_adoption=RejectedResponseAdoption(
-            attempt_id=attempt_id,
-            historical_code=str(rejection.get('code') or ''),
-            response_sha256=str((rejection.get('response') or {}).get('sha256') or ''),
-            audit=audit,
-        ),
-    )
-    artifact = BlindCandidate.model_validate({**business, '_provenance': provenance})
-    store.write(CANDIDATE_REL, artifact)
-    response_repair.write_outcome(
-        record, decision='accepted', gate=None, detail=None, why=None)
-    _note_adoption_attempt(
-        ctx, purpose=ctx.node, attempt_id=attempt_id,
-        rel=CANDIDATE_REL, artifact=artifact)
-    return artifact
+            record, decision='accepted', gate=None, detail=None, why=None)
+        return landed
 
 
 def run_design(ctx: RunContext, client: Any) -> BlindCandidate:

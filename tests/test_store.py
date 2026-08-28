@@ -1137,6 +1137,26 @@ def test_each_artifact_gets_its_own_usage_not_the_whole_runs_total():
     assert (ctx.ledger.usage().calls_made, ctx.ledger.usage().prompt_tokens) == (2, 30)
 
 
+def test_durable_aggregate_can_override_usage_without_reusing_current_mark():
+    """跨 CLI 聚合按 adopted attempts 重建 usage，但仍须结算本进程刻度。"""
+    ctx = _plan_ctx(_book())
+    _spend(ctx, prompt_tokens=10, completion_tokens=5)
+    aggregate = Usage(
+        calls_made=3, calls_cached=0,
+        prompt_tokens=33, completion_tokens=12, reasoning_tokens=None)
+
+    first = ctx.llm_provenance(
+        LlmProvenance, prompts={'TEST_SYS': 'x'}, model='m',
+        adopted_models=['m'], usage_override=aggregate)
+    _spend(ctx, prompt_tokens=7, completion_tokens=2)
+    second = _mint(ctx)
+
+    assert first.usage == aggregate
+    assert second.usage is not None
+    assert (second.usage.calls_made, second.usage.prompt_tokens) == (1, 7), \
+        'usage override 没有推进当前 mark，下一份又认领了同一次调用'
+
+
 def test_every_artifacts_usage_sums_back_to_the_run_total():
     """守卫的守卫：按份切开之后，**各份之和必须等于账本的总量**。
 

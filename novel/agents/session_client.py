@@ -50,6 +50,7 @@ SESSION_PROTOCOL_VERSION = 'node-executor/v1'
 _RECOVERY_SESSION_ISOLATION = {
     'stage2-blueprint-v1': 'per-purpose-chapter',
     'stage4-design-v1': 'per-node',
+    'stage4-design-v2': 'per-purpose',
     'stage4-plan-v1': 'per-node',
     'stage5-write-v1': 'per-chapter',
     'stage6-hook-v1': 'per-node',
@@ -59,6 +60,7 @@ _RECOVERY_SESSION_ISOLATION = {
 _RECOVERY_POLICY_NODE = {
     'stage2-blueprint-v1': 'stage2.blueprint',
     'stage4-design-v1': 'stage4.design',
+    'stage4-design-v2': 'stage4.design',
     'stage4-plan-v1': 'stage4.plan',
     'stage5-write-v1': 'stage5.write',
     'stage6-hook-v1': 'stage6.hook',
@@ -346,6 +348,14 @@ class SessionAgentClient:
         self._turn_index = 0
         self._accepted: dict[str, str] = {}
         self._accepted_checkpoint: dict[str, dict[str, Any]] = {}
+        # checkpoint 的 attempt_links 只描述这一只 logical session 实际发生的
+        # attempts；CostLedger 同一 run/purpose 还可能含前一只失败 session，不能
+        # 靠 purpose 反查把它们静默吸进来。只有显式恢复过的 accepted checkpoint
+        # 才能把旧 links 接到新 session 前面。
+        self._logical_session_attempts: list[tuple[str, str]] = []
+        self._restored_attempt_links: dict[
+            str, tuple[dict[str, object], ...]
+        ] = {}
         self._started = False
         self._ended = False
         self._driver_failed = False
@@ -725,6 +735,10 @@ class SessionAgentClient:
             retryable=False, will_retry=False,
             progress=progress,
         )
+        # 只有 ledger.record 成功后，这一 attempt 才有资格进入 acceptance 联结。
+        # 不能稍后再按 purpose 扫整只 ledger：并发 pool/失败重启会共享 purpose，
+        # 那会把另一只 logical session 的费用事实误写成当前 session 的轮次。
+        self._logical_session_attempts.append((purpose, attempt_id))
         if provider_session_id is None:
             return None
         self._observed_provider_session_id = provider_session_id
@@ -948,14 +962,31 @@ class SessionAgentClient:
         if accepted.get('model') in (None, '', 'unknown'):
             raise ProvenanceRefused(
                 f'{purpose}: accepted attempt 缺实际响应模型，不能铸 checkpoint')
-        attempts = self.ctx.ledger.attempt_ids_for_purpose(purpose)
-        links = [
-            self.ctx.ledger.request_identity_for_attempt(item)
-            for item in attempts
+        current_attempts = [
+            item_attempt for item_purpose, item_attempt
+            in self._logical_session_attempts
+            if item_purpose == purpose
         ]
-        if attempt_id not in {str(row.get('attempt_id') or '') for row in links}:
+        if attempt_id not in current_attempts:
             raise ProvenanceRefused(
-                f'{purpose}: accepted attempt 未出现在本 purpose 成本联结中')
+                f'{purpose}: accepted attempt 未出现在当前 logical session 成本联结中')
+        links = [
+            dict(row) for row in self._restored_attempt_links.get(purpose, ())
+        ]
+        links.extend(
+            self.ctx.ledger.request_identity_for_attempt(item)
+            for item in current_attempts
+        )
+        links.sort(key=lambda row: (
+            str(row.get('attempt_id') or ''),
+            str(row.get('request_fingerprint') or ''),
+        ))
+        linked_attempts = [str(row.get('attempt_id') or '') for row in links]
+        if (len(set(linked_attempts)) != len(linked_attempts)
+                or len(links) != self._turn_index):
+            raise ProvenanceRefused(
+                f'{purpose}: 当前 logical session + 显式 checkpoint links '
+                f'与累计 turn={self._turn_index} 不闭合')
         if self.provider_session_id is None or self._subject_sha256 is None:
             raise ProvenanceRefused(
                 f'{purpose}: accepted response 缺 logical/provider session 身份')
@@ -1089,6 +1120,32 @@ class SessionAgentClient:
             raise ProvenanceRefused(
                 f'{purpose}: checkpoint accepted_turn_index={prior_turns!r} '
                 f'与 attempt_links/当前 max_turns={self.max_turns} 不闭合')
+        restored_links: list[dict[str, object]] = []
+        restored_attempts: set[str] = set()
+        for link in prior_links:
+            if not isinstance(link, Mapping):
+                raise ProvenanceRefused(
+                    f'{purpose}: checkpoint attempt_links 含非对象身份')
+            restored_link = dict(link)
+            restored_attempt = restored_link.get('attempt_id')
+            if (not isinstance(restored_attempt, str) or not restored_attempt
+                    or restored_attempt in restored_attempts
+                    or restored_link
+                    != self.ctx.ledger.request_identity_for_attempt(
+                        restored_attempt)):
+                raise ProvenanceRefused(
+                    f'{purpose}: checkpoint attempt_links 与成本账不闭合')
+            restored_attempts.add(restored_attempt)
+            restored_links.append(restored_link)
+        if attempt_id not in restored_attempts:
+            raise ProvenanceRefused(
+                f'{purpose}: checkpoint attempt_links 漏 accepted attempt')
+        previous_links = self._restored_attempt_links.get(purpose)
+        frozen_links = tuple(restored_links)
+        if previous_links is not None and previous_links != frozen_links:
+            raise ProvenanceRefused(
+                f'{purpose}: 同一恢复 client 收到两份不同 checkpoint links')
+        self._restored_attempt_links[purpose] = frozen_links
         self._accepted[purpose] = attempt_id
         # 恢复的是已经实际花掉的 provider turns。即使此后因联合业务校验失败而
         # 新开 provider session，本 logical request 的总轮次预算也不能重新补满。

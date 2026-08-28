@@ -12,15 +12,21 @@ from pydantic import ValidationError
 
 from contracts.invariants import BLIND_ALIAS_ALGORITHM
 from contracts.schema.stage4 import (
-    BlindCandidateChapter, BlindGoalResponse,
-    BlindPlanResponse,
+    BlindBookStrategyResponse, BlindCandidateChapter, BlindCandidateProvenance,
+    BlindChapterDesignResponse, BlindGoalResponse, BlindPlanResponse,
     EvidenceBindingResponse, EvidenceSceneBinding,
 )
+from novel.stages.stage4 import blind as blind_core
+from novel.stages.stage4 import prompts
 from novel.stages.stage4.blind import (
     BlindPlanError,
+    assemble_blind_candidate,
+    build_blind_chapter_projection,
     build_blind_projection,
+    build_blind_strategy_projection,
     build_evidence_catalog,
     candidate_subject_sha256,
+    compile_blind_chapter_design,
     compile_blind_candidate,
     merge_evidence_bindings,
 )
@@ -235,6 +241,61 @@ def _typed_candidate(mapping: dict) -> dict:
     return BlindPlanResponse.model_validate(_candidate(mapping)).model_dump(mode='json')
 
 
+def _split_strategy(mapping: dict) -> dict:
+    candidate = _candidate(mapping)
+    return {
+        'reconstruction_strategy': candidate['reconstruction_strategy'],
+        'chapter_weights': [{
+            'chapter_ordinal': chapter['output_ordinal'],
+            'weight': chapter['weight'],
+        } for chapter in candidate['output_chapters']],
+    }
+
+
+def _local_chapter_response(chapter: dict, local_mapping: dict) -> dict:
+    local_by_global = {
+        global_alias: local
+        for local, global_alias in local_mapping['fact_aliases'].items()
+    }
+
+    def goal(value: dict) -> dict:
+        return {
+            'intent': value['intent'],
+            'fact_aliases': [local_by_global[alias] for alias in value['fact_aliases']],
+        }
+
+    def scene(value: dict) -> dict:
+        return {
+            'weight': value['weight'],
+            'purpose': value['purpose'],
+            'role': value['role'],
+            'delivery': value['delivery'],
+            'transition': value['transition'],
+            'land_fact_aliases': [
+                local_by_global[alias] for alias in value['land_fact_aliases']
+            ],
+            'context_fact_aliases': [
+                local_by_global[alias] for alias in value['context_fact_aliases']
+            ],
+            'turn_fact_alias': local_by_global[value['turn_fact_alias']],
+            'entry_state_aliases': [
+                local_by_global[alias] for alias in value['entry_state_aliases']
+            ],
+            'exit_state_aliases': [
+                local_by_global[alias] for alias in value['exit_state_aliases']
+            ],
+        }
+
+    return {
+        'structure_decision': copy.deepcopy(chapter['structure_decision']),
+        'chapter_goal': goal(chapter['chapter_goal']),
+        'open_hook_goal': goal(chapter['open_hook_goal']),
+        'end_hook_goal': goal(chapter['end_hook_goal']),
+        'chapter_rewrite_brief': chapter['chapter_rewrite_brief'],
+        'scenes': [scene(value) for value in chapter['scenes']],
+    }
+
+
 def _raw_bindings(compiled: dict) -> dict:
     scene_ids = {
         chapter['output_ordinal']: [scene['candidate_scene_id'] for scene in chapter['scenes']]
@@ -324,6 +385,276 @@ def test_blind_projection_is_order_invariant_and_hides_formal_ids_from_a():
         'char_001', 'char_002', 'char_003',
     }
     assert re.fullmatch(r'[0-9a-f]{64}', mapping['truth_sha256'])
+
+
+@pytest.mark.parametrize(
+    ('field', 'leaked_ref'),
+    (
+        ('claim', 'f02_001'),
+        ('claim', 'char_003'),
+        ('claim', 'b02_01'),
+        ('claim', 'h02_001'),
+        ('chapter_function', 'f01_003'),
+        ('chapter_function', 'char_002'),
+        ('chapter_function', 'b01_02'),
+        ('chapter_function', 'h01_002'),
+    ),
+)
+def test_blind_projection_refuses_book_formal_ids_hidden_in_free_text(
+        field: str, leaked_ref: str):
+    blueprints = _blueprints()
+    chapter = blueprints['blueprints'][0]
+    if field == 'claim':
+        chapter['fact_atoms'][0]['claim'] = f'甲在说明中回显 {leaked_ref}'
+    else:
+        chapter['chapter_function'] = f'本章功能误写内部引用 {leaked_ref}'
+
+    with pytest.raises(BlindPlanError, match='泄漏正式内部引用'):
+        build_blind_projection(blueprints, root_clean_sha1=ROOT)
+
+
+def test_blind_projection_does_not_reject_unregistered_id_shaped_text():
+    blueprints = _blueprints()
+    blueprints['blueprints'][0]['chapter_function'] = \
+        '本章讨论 char_999 与 b99_99 这两个未登记字面。'
+    blueprints['blueprints'][0]['fact_atoms'][0]['claim'] = \
+        '甲把 f99_999 与 h99_999 当作普通字面记在纸上'
+
+    prompt, _mapping = build_blind_projection(
+        blueprints, root_clean_sha1=ROOT)
+    serialized = json.dumps(prompt, ensure_ascii=False)
+    assert 'char_999' in serialized
+    assert 'f99_999' in serialized
+    assert 'b99_99' in serialized
+    assert 'h99_999' in serialized
+
+
+def test_split_wire_schemas_keep_book_accounting_out_of_chapter_response():
+    strategy = BlindBookStrategyResponse.model_validate({
+        'reconstruction_strategy': '按章级功能协调全书事实组织。',
+        'chapter_weights': [
+            {'chapter_ordinal': 1, 'weight': 'CH_MAJOR'},
+            {'chapter_ordinal': 2, 'weight': 'CH_BELOW'},
+        ],
+    })
+    assert [row.chapter_ordinal for row in strategy.chapter_weights] == [1, 2]
+    with pytest.raises(ValidationError, match='不能重复'):
+        BlindBookStrategyResponse.model_validate({
+            'reconstruction_strategy': '重复章号必须关闭式失败。',
+            'chapter_weights': [
+                {'chapter_ordinal': 1, 'weight': 'CH_MAJOR'},
+                {'chapter_ordinal': 1, 'weight': 'CH_BELOW'},
+            ],
+        })
+
+    truth, mapping = build_blind_projection(_blueprints(), root_clean_sha1=ROOT)
+    _public, local_mapping = build_blind_chapter_projection(
+        truth, mapping, chapter_ordinal=1, root_clean_sha1=ROOT)
+    global_chapter = next(
+        row for row in _candidate(mapping)['output_chapters']
+        if row['output_ordinal'] == 1)
+    local = _local_chapter_response(global_chapter, local_mapping)
+    parsed = BlindChapterDesignResponse.model_validate(local)
+    assert not hasattr(parsed, 'output_ordinal') and not hasattr(parsed, 'weight')
+
+    with pytest.raises(ValidationError, match='output_ordinal'):
+        BlindChapterDesignResponse.model_validate({**local, 'output_ordinal': 1})
+    with pytest.raises(ValidationError, match='weight'):
+        BlindChapterDesignResponse.model_validate({**local, 'weight': 'CH_EVEN'})
+    leaked = copy.deepcopy(local)
+    leaked['chapter_goal']['fact_aliases'] = [
+        global_chapter['chapter_goal']['fact_aliases'][0]
+    ]
+    with pytest.raises(ValidationError, match='local fact alias'):
+        BlindChapterDesignResponse.model_validate(leaked)
+
+
+def test_split_prompt_shapes_and_provenance_architecture_are_explicit():
+    strategy_hint = prompts.BLIND_BOOK_STRATEGY_HINT
+    assert set(strategy_hint) == {'reconstruction_strategy', 'chapter_weights'}
+    assert set(strategy_hint['chapter_weights'][0]) == {'chapter_ordinal', 'weight'}
+    chapter_hint = prompts.BLIND_CHAPTER_DESIGN_HINT
+    assert {'output_ordinal', 'weight'}.isdisjoint(chapter_hint)
+    assert chapter_hint['scenes'][0]['turn_fact_alias'].startswith('f_')
+    rendered = prompts.blind_chapter_design_system()
+    for clause in (
+        'local alias', 'X_CONTINUE', 'X_EARLIER', 'X_PARALLEL',
+        'X_RETURN', 'X_LATER', '代码自动继承上一场的有效 exit',
+    ):
+        assert clause in rendered
+
+    common = {
+        'code': 'test-code', 'root_clean_sha1': ROOT, 'inputs': {},
+        'prompts': {'BLIND_BOOK_STRATEGY_SYS': 'a' * 10},
+        'model': 'test-model', 'adopted_models': ['test-model'],
+        'alias_algorithm': BLIND_ALIAS_ALGORITHM,
+        'truth_sha256': 'b' * 64,
+    }
+    legacy = BlindCandidateProvenance.model_validate(common)
+    assert legacy.architecture is None
+    split = BlindCandidateProvenance.model_validate({
+        **common, 'architecture': 'book_strategy_chapters_v1',
+    })
+    assert split.architecture == 'book_strategy_chapters_v1'
+    with pytest.raises(ValidationError, match='architecture'):
+        BlindCandidateProvenance.model_validate({
+            **common, 'architecture': 'implicit-current-default',
+        })
+
+
+def test_strategy_and_local_chapter_projections_are_deterministic_and_closed():
+    truth, mapping = build_blind_projection(_blueprints(), root_clean_sha1=ROOT)
+    permuted_truth, permuted_mapping = build_blind_projection(
+        _permuted_blueprints(), root_clean_sha1=ROOT)
+
+    strategy = build_blind_strategy_projection(truth)
+    assert strategy == build_blind_strategy_projection(permuted_truth)
+    assert strategy['blind_contract'] == blind_core.BLIND_BOOK_STRATEGY_CONTRACT
+    assert [row['chapter_ordinal'] for row in strategy['chapters']] == [1, 2]
+    serialized_strategy = json.dumps(strategy, ensure_ascii=False, sort_keys=True)
+    for forbidden in (
+        'fact_alias', 'participant_alias', 'claim', 'f01_001', 'char_001',
+        'a_', 'source_beat_ref', 'summary', 'SOURCE-ONLY',
+    ):
+        assert forbidden not in serialized_strategy
+
+    public, local_mapping = build_blind_chapter_projection(
+        truth, mapping, chapter_ordinal=1, root_clean_sha1=ROOT)
+    repeated_public, repeated_mapping = build_blind_chapter_projection(
+        permuted_truth, permuted_mapping, chapter_ordinal=1, root_clean_sha1=ROOT)
+    assert public == repeated_public
+    assert local_mapping == repeated_mapping
+    assert public['blind_contract'] == blind_core.BLIND_CHAPTER_CONTRACT
+    assert public['chapter']['chapter_ordinal'] == 1
+    assert local_mapping['chapter_ordinal'] == 1
+    assert local_mapping['truth_sha256'] == mapping['truth_sha256']
+    assert local_mapping['fact_aliases']
+    assert all(re.fullmatch(r'f_[0-9a-f]{6,64}', alias)
+               for alias in local_mapping['fact_aliases'])
+    assert all(re.fullmatch(r'p_[0-9a-f]{6,64}', alias)
+               for alias in local_mapping['participant_aliases'])
+    assert set(local_mapping['fact_aliases'].values()) == {
+        alias for alias, formal in mapping['fact_aliases'].items()
+        if formal.startswith('f01_')
+    }
+
+    serialized_public = json.dumps(public, ensure_ascii=False, sort_keys=True)
+    assert not any(alias in serialized_public for alias in mapping['fact_aliases'])
+    assert not any(alias in serialized_public for alias in mapping['participant_aliases'])
+    for formal in (*mapping['fact_aliases'].values(),
+                   *mapping['participant_aliases'].values()):
+        assert formal not in serialized_public
+    assert 'SOURCE-ONLY' not in serialized_public
+
+    local_facts = set(local_mapping['fact_aliases'])
+    chapter = public['chapter']
+    assert {fact['fact_alias'] for fact in chapter['facts']} == local_facts
+    assert [fact['fact_alias'] for fact in chapter['facts']] == sorted(local_facts)
+    for edge in chapter['causal_edges']:
+        assert {edge['before_alias'], edge['after_alias']} <= local_facts
+    assert set(chapter['entry_state_aliases']) <= local_facts
+    assert set(chapter['ending_state_aliases']) <= local_facts
+
+
+def test_local_alias_collision_extends_the_whole_namespace_deterministically(
+        monkeypatch):
+    truth, mapping = build_blind_projection(_blueprints(), root_clean_sha1=ROOT)
+    real_digest = blind_core._digest
+    assigned: dict[str, str] = {}
+
+    def colliding_digest(root: str, domain: str, owner: str) -> str:
+        if domain == 'chapter-local-fact-v1':
+            suffix = assigned.setdefault(owner, f'{len(assigned):02x}')
+            return 'abcdef' + suffix + '0' * 56
+        return real_digest(root, domain, owner)
+
+    monkeypatch.setattr(blind_core, '_digest', colliding_digest)
+    public, local_mapping = build_blind_chapter_projection(
+        truth, mapping, chapter_ordinal=1, root_clean_sha1=ROOT)
+    aliases = list(local_mapping['fact_aliases'])
+    assert aliases and all(len(alias) == len('f_') + 8 for alias in aliases)
+    assert len(aliases) == len(set(aliases))
+    assert {fact['fact_alias'] for fact in public['chapter']['facts']} == set(aliases)
+
+
+def test_split_chapter_compilation_and_assembly_equal_legacy_whole_book():
+    truth, mapping = build_blind_projection(_blueprints(), root_clean_sha1=ROOT)
+    legacy_response = _typed_candidate(mapping)
+    legacy = compile_blind_candidate(legacy_response, mapping, truth=truth)
+    strategy = BlindBookStrategyResponse.model_validate(
+        _split_strategy(mapping)).model_dump(mode='json')
+    truth_by_chapter = {
+        row['chapter_ordinal']: row for row in truth['chapters']
+    }
+    source_by_chapter = {
+        row['output_ordinal']: row for row in legacy_response['output_chapters']
+    }
+    weight_by_chapter = {
+        row['chapter_ordinal']: row['weight'] for row in strategy['chapter_weights']
+    }
+
+    compiled = []
+    for chapter in sorted(source_by_chapter):
+        _public, local_mapping = build_blind_chapter_projection(
+            truth, mapping, chapter_ordinal=chapter, root_clean_sha1=ROOT)
+        local = BlindChapterDesignResponse.model_validate(
+            _local_chapter_response(source_by_chapter[chapter], local_mapping)
+        ).model_dump(mode='json')
+        compiled.append(compile_blind_chapter_design(
+            local, local_mapping, mapping,
+            truth_chapter=truth_by_chapter[chapter],
+            chapter_weight=weight_by_chapter[chapter],
+        ))
+
+    split = assemble_blind_candidate(
+        strategy, list(reversed(compiled)), mapping, truth=truth)
+    assert split == legacy
+    assert candidate_subject_sha256(split) == candidate_subject_sha256(legacy)
+    assert [row['output_ordinal'] for row in split['output_chapters']] == [1, 2]
+    for chapter in split['output_chapters']:
+        BlindCandidateChapter.model_validate(chapter)
+
+
+def test_split_compiler_and_assembler_close_unknown_alias_and_chapter_sets():
+    truth, mapping = build_blind_projection(_blueprints(), root_clean_sha1=ROOT)
+    legacy_response = _typed_candidate(mapping)
+    truth_by_chapter = {
+        row['chapter_ordinal']: row for row in truth['chapters']
+    }
+    source = next(
+        row for row in legacy_response['output_chapters']
+        if row['output_ordinal'] == 1)
+    _public, local_mapping = build_blind_chapter_projection(
+        truth, mapping, chapter_ordinal=1, root_clean_sha1=ROOT)
+    local = _local_chapter_response(source, local_mapping)
+    local['chapter_goal']['fact_aliases'] = ['f_000000']
+    with pytest.raises(BlindPlanError, match='未知 local fact alias'):
+        compile_blind_chapter_design(
+            local, local_mapping, mapping,
+            truth_chapter=truth_by_chapter[1], chapter_weight='CH_EVEN')
+
+    good_local = _local_chapter_response(source, local_mapping)
+    compiled = compile_blind_chapter_design(
+        good_local, local_mapping, mapping,
+        truth_chapter=truth_by_chapter[1], chapter_weight='CH_EVEN')
+    missing_weight = {
+        'reconstruction_strategy': '按章级功能协调全书事实组织。',
+        'chapter_weights': [{'chapter_ordinal': 1, 'weight': 'CH_EVEN'}],
+    }
+    with pytest.raises(BlindPlanError, match='chapter_weights 章集不闭合'):
+        assemble_blind_candidate(
+            missing_weight, [compiled], mapping, truth=truth)
+
+    complete_weights = {
+        'reconstruction_strategy': '按章级功能协调全书事实组织。',
+        'chapter_weights': [
+            {'chapter_ordinal': 1, 'weight': 'CH_MAJOR'},
+            {'chapter_ordinal': 2, 'weight': 'CH_EVEN'},
+        ],
+    }
+    with pytest.raises(BlindPlanError, match='weight 与整书策略不一致'):
+        assemble_blind_candidate(
+            complete_weights, [compiled], mapping, truth=truth)
 
 
 def test_blind_candidate_accepts_stage2_fact_ids_beyond_two_digit_chapters():

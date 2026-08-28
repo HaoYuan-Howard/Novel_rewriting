@@ -148,6 +148,140 @@ def test_legacy_ledger_without_run_id_is_claimed_without_backfill():
     assert 'run_id' not in json.loads(path.read_text('utf-8'))
 
 
+def test_usage_for_exact_attempt_identities_is_independent_of_live_counter():
+    """精确 attempt 聚合只数 checkpoint 所指行，并复用 token-null 算法。"""
+    d = Path(tempfile.mkdtemp())
+    path = d / 'ledger.jsonl'
+    run_id = 'selected-usage-run'
+    sid, node = '123', 'stage4.design'
+
+    def row(
+            attempt: str, purpose: str, fingerprint_char: str, *,
+            cached: bool, prompt: int | None,
+            completion: int | None, reasoning: int | None,
+    ) -> dict:
+        return {
+            'run_id': run_id, 'attempt_id': attempt,
+            'sid': sid, 'node': node, 'purpose': purpose,
+            'request_fingerprint': fingerprint_char * 64,
+            'model': 'gpt-5.6-sol', 'request_model': 'gpt-5.6-sol',
+            'cached': cached, 'reasoning_effort': 'high',
+            'thinking': None, 'json_mode': True, 'max_tokens': None,
+            'response_sha256': attempt[0] * 64, 'chapter': None,
+            'prompt_tokens': prompt, 'completion_tokens': completion,
+            'reasoning_tokens': reasoning,
+        }
+
+    selected = [
+        row('1' * 16, 'stage4.design:strategy', 'a',
+            cached=False, prompt=10, completion=5, reasoning=None),
+        row('2' * 16, 'stage4.design:strategy', 'b',
+            cached=False, prompt=20, completion=7, reasoning=3),
+        row('3' * 16, 'stage4.design:ch0001', 'c',
+            cached=True, prompt=None, completion=2, reasoning=None),
+    ]
+    unrelated = row(
+        '4' * 16, 'stage4.design:ch9999', 'd',
+        cached=False, prompt=999, completion=999, reasoning=999)
+    path.write_text(
+        ''.join(json.dumps(item, sort_keys=True) + '\n'
+                for item in (*selected, unrelated)),
+        encoding='utf-8')
+    ledger = CostLedger(path=path, run_id=run_id)
+    # 污染当前实例计数器；精确聚合不得读它。
+    ledger.calls_made = 77
+    ledger.prompt_tokens = 7777
+    ledger._seen['prompt_tokens'] = 77
+    before = path.read_bytes()
+
+    def identity(item: dict) -> dict[str, object]:
+        return {
+            'attempt_id': item['attempt_id'],
+            'request_fingerprint': item['request_fingerprint'],
+            'model': item['model'], 'request_model': item['request_model'],
+            'reasoning_effort': item['reasoning_effort'],
+            'thinking': item['thinking'], 'json_mode': item['json_mode'],
+            'max_tokens': item['max_tokens'],
+            'response_sha256': item['response_sha256'],
+        }
+
+    usage = ledger.usage_for_attempt_identities(
+        [(item['purpose'], identity(item)) for item in selected],
+        sid=sid, node=node)
+
+    assert usage is not None
+    assert usage.model_dump() == {
+        'calls_made': 2, 'calls_cached': 1,
+        'prompt_tokens': 30, 'completion_tokens': 14,
+        'reasoning_tokens': 3,
+    }
+    assert path.read_bytes() == before
+    assert ledger.calls_made == 77 and ledger.prompt_tokens == 7777
+
+    # checkpoint 只锚住每个 purpose 的最终采纳行；complete 边界
+    # 仍须纳入 strategy 的前一次失败/重试，但排除其他 purpose。
+    complete = ledger.usage_for_complete_purposes(
+        ['stage4.design:strategy', 'stage4.design:ch0001'],
+        sid=sid, node=node,
+        required_identities=[
+            (selected[1]['purpose'], identity(selected[1])),
+            (selected[2]['purpose'], identity(selected[2])),
+        ])
+    assert complete == usage
+
+    tampered = identity(selected[0])
+    tampered['response_sha256'] = 'f' * 64
+    with pytest.raises(ProvenanceRefused, match='identity|ledger'):
+        ledger.usage_for_attempt_identities(
+            [(selected[0]['purpose'], tampered)], sid=sid, node=node)
+
+
+def test_complete_purpose_usage_uses_exact_in_memory_scope_without_path():
+    """path=None 仍从同源 purpose counter 结算，不借全局累计值。"""
+    ledger = CostLedger(path=None, run_id='memory-purpose-run')
+    sid, node = '123', 'stage4.design'
+
+    def record(
+            attempt: str, purpose: str, fingerprint_char: str, *,
+            row_sid: str = sid, row_node: str = node,
+            cached: bool = False, prompt: int | None = None,
+            completion: int | None = None,
+    ) -> None:
+        ledger.record(
+            node=row_node, sid=row_sid, model='gpt-5.6-sol', code='test',
+            cached=cached, cache_policy='default', purpose=purpose,
+            prompt_tokens=prompt, completion_tokens=completion,
+            attempt_id=attempt,
+            request_fingerprint=fingerprint_char * 64,
+            response_sha256=fingerprint_char * 64,
+            request_model='gpt-5.6-sol', reasoning_effort='high',
+            thinking=None, json_mode=True, max_tokens=None)
+
+    record(
+        'memory-attempt-1', 'stage4.design:strategy', 'a',
+        prompt=5, completion=None)
+    record(
+        'memory-attempt-2', 'stage4.design:ch0001', 'b',
+        cached=True, prompt=None, completion=2)
+    # 同 purpose 但不同 node 不得因为 path=None 串入。
+    record(
+        'memory-attempt-other', 'stage4.design:strategy', 'c',
+        row_node='stage4.plan', prompt=999, completion=999)
+    accepted = ledger.request_identity_for_attempt('memory-attempt-2')
+
+    usage = ledger.usage_for_complete_purposes(
+        ['stage4.design:strategy', 'stage4.design:ch0001'],
+        sid=sid, node=node,
+        required_identities=[('stage4.design:ch0001', accepted)])
+
+    assert usage is not None
+    assert usage.model_dump() == {
+        'calls_made': 1, 'calls_cached': 1,
+        'prompt_tokens': 5, 'completion_tokens': 2,
+        'reasoning_tokens': None,
+    }
+
+
 def test_gate_decisions_and_adoption_answer_which_model_was_finally_used():
     """⭐ 反查全链：Flash 被 parse 闸拒 → Pro 采纳 → adoption → 实际模型。
 

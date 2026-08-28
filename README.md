@@ -35,8 +35,9 @@ stage2  全书级抽取（人物/关系/规则/秘密/弧线）  1 次调用
           ├─ 逐章抽取（事实原子/因果/舞台 + 保真点） 每章 1 次、最多 32 并发
           └─ 全局事实逐项人审                         0 成本，与逐章计算重叠
         两支汇合：blueprint 联合 check-only + current 全 PASS 人审；随后才进 Stage4A
-stage4  A：去序真相图上的盲场景设计              1 次独立调用
-        B：只给冻结候选绑定舞台/人物/材料并编译计划 1 次独立调用
+stage4  A：1 个公开付费节点/授权；内部 1 份整书策略 + 每章 1 个私有 session
+          策略串行先行，逐章最多 4 并发；全部通过后才确定性聚合并原子落盘
+        B：只给冻结候选绑定舞台/人物/材料并编译计划 1 次独立调用（不变）
         人工逐章结构批准（不自动触发重规划）       0 成本
         写作上下文（确定性组装，写作的唯一输入） 0 成本
 stage5  全书逐章闭卷写作；正式稿唯一落 `stage5/chNN.json`，默认补齐全部缺章
@@ -55,6 +56,14 @@ JSON 直接采用，不再为了取得普通 content 重采。损坏、跨 run�
 不改变 `chapter_blueprints.json` 的 schema，也不改变 `micro_events`、`beats` 或 fact atoms。
 逐章扇出的供应商前缀 warm-up 仍默认开启，未新增关闭型产品 flag；本次不另做付费 A/B，收益只在
 下一次自然跑书按 `run_id` 回读 wire/章、checkpoint restore、repair batch、reasoning token 与墙钟。
+
+Stage4A 对外仍只有一条 `stage4.design` 付费 argv 和一次 `--yes` 授权，不开放公开的
+`--chapters`。内部先让一条小型整书策略请求只决定宏观重构意图与章间权重；策略过
+JSON/schema/动态判据后立即写验证后 checkpoint，再按章启动互相独立的私有 session，硬上限 4 并发。
+每章通过即 checkpoint，同一 `run_id` 恢复时只补缺失或失败单元，已验策略和章节不重发 wire。
+这些 checkpoint 都不是正式 artifact：必须等策略与全部章节齐全，由代码确定性还原正式 alias、排序并
+组装整书候选，重跑整书级 schema 与全部 HARD，最后才原子写入 `stage4/blind_candidate.json`；任何
+中断或聚合失败都不得留下部分正式候选。Stage4B 仍是另一个公开节点、另一次授权和一次独立调用。
 
 Stage5 的 canonical v2 产物与单臂工作流已完成工程回归；现役 atom / scene / material 写作契约属于
 设计改进，但没有完成与此前 event-list / beat-material 契约的受控双书付费 A/B，不能据此宣称质量更高、成本更低

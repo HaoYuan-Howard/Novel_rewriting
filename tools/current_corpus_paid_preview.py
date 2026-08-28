@@ -66,7 +66,8 @@ from novel.stages.stage2 import extract as stage2_extract  # noqa: E402
 from novel.stages.stage2.contract import active_contract  # noqa: E402
 from novel.stages.stage2 import prompts as stage2_prompts  # noqa: E402
 from novel.stages.stage4.prompts import (  # noqa: E402
-    BLIND_DESIGN_MAX_TOKENS,
+    BLIND_BOOK_STRATEGY_MAX_TOKENS,
+    BLIND_CHAPTER_DESIGN_MAX_TOKENS,
     EVIDENCE_BIND_MAX_TOKENS,
 )
 from novel.stages.stage5 import write as stage5_write  # noqa: E402
@@ -334,6 +335,11 @@ def _logical_topology(node: str, chapters: int, rung_count: int,
         spec = active_contract()
         per_chapter = 2 if spec.topology == 'boundary_then_detail' else 1
         base = chapters * per_chapter
+    elif node == 'stage4.design':
+        # 对外仍是一个付费节点、一次 argv dispatch 与一次授权；节点内部的
+        # 真实逻辑拓扑是「一份整书策略 + 每章一个私有 session」。预览必须
+        # 把这 N+1 份分别计入，否则会把稳定性拆分误报成仍然只有一次请求。
+        base = 1 + chapters
     elif node == 'stage5.write':
         # 收缩臂整臂下线后本层只剩逐章一次调用；超上限只落 audit，0 次调用。
         base = chapters
@@ -367,10 +373,19 @@ def _logical_topology(node: str, chapters: int, rung_count: int,
 
 def _request_envelopes(node: str, models: tuple[str, ...],
                        rungs: tuple[tuple[str, bool], ...]) -> list[dict[str, Any]]:
+    if node == 'stage4.design':
+        return [{
+            'kind': kind,
+            'max_tokens': max_tokens,
+            'models': list(models),
+            'rungs': [list(row) for row in rungs],
+        } for kind, max_tokens in (
+            ('book_strategy', BLIND_BOOK_STRATEGY_MAX_TOKENS),
+            ('chapter_design', BLIND_CHAPTER_DESIGN_MAX_TOKENS),
+        )]
     normal_max = {
         'stage2.global': stage2_extract.GLOBAL_MAX_TOKENS,
         'stage2.blueprint': stage2_extract.BLUEPRINT_MAX_TOKENS,
-        'stage4.design': BLIND_DESIGN_MAX_TOKENS,
         'stage4.plan': EVIDENCE_BIND_MAX_TOKENS,
         'stage5.write': stage5_write.MAX_TOKENS,
         'stage6.hook': HOOK_MAX_TOKENS,

@@ -28,7 +28,7 @@ from pathlib import Path
 from typing import Any, Callable, Iterable, Iterator, TypeVar
 
 from contracts.invariants import NODES
-from contracts.schema import InputEdge, Provenance
+from contracts.schema import InputEdge, Provenance, Usage
 from contracts.schema.common import FreeProvenance, LlmProvenance
 from contracts.schema.orchestration import AgentProfile
 from contracts.artifacts import STAGE0_CLEAN_TEXT
@@ -39,6 +39,7 @@ from novel.llm.ledger import CostLedger, UsageMark, ledger_path
 from novel.observability import emit_observation
 
 P = TypeVar('P', bound=Provenance)
+_USAGE_FROM_CURRENT_MARK = object()
 
 
 @dataclass
@@ -258,7 +259,10 @@ class RunContext:
     def llm_provenance(self, cls: type[P] = LlmProvenance, /, *,
                        prompts: dict[str, str], model: str,
                        adopted_models: Iterable[str] | None = None,
-                       settle: bool = True, **extra: Any) -> P:
+                       settle: bool = True,
+                       usage_override: Usage | None | object =
+                       _USAGE_FROM_CURRENT_MARK,
+                       **extra: Any) -> P:
         """付费产出的来源账。`inputs` **不接受参数**——它只能来自 `_edges`。
 
         `prompts` 收的是**插值之后的 system prompt 原文**，这里替它算指纹。
@@ -289,10 +293,24 @@ class RunContext:
             raise ProvenanceRefused(
                 f'{self.node}: 已有付费产出要铸来源账，但没有 accepted model；'
                 '拒绝拿主模型配置冒充实际响应来源')
+        if (usage_override is not _USAGE_FROM_CURRENT_MARK
+                and usage_override is not None
+                and not isinstance(usage_override, Usage)):
+            raise TypeError('usage_override 必须是 Usage、None 或省略')
+        # durable 多单元 producer 会跨 CLI 恢复；这时当前 RunContext 的 mark
+        # 天然晚于先前已经付费并 checkpoint 的 attempts。调用方只有在已用
+        # checkpoint + ledger 关闭式证明完整 attempt 集时，才可把那份确定性
+        # 聚合结果送进来。无论哪支，settle 仍推进当前 mark，避免本进程新增调用
+        # 又被下一份产物重复认领。
+        usage = (
+            self.ledger.usage_since(self._usage_mark)
+            if usage_override is _USAGE_FROM_CURRENT_MARK
+            else usage_override
+        )
         out = cls(code=self.code, root_clean_sha1=self._require_single_root(), inputs=self.edges,
                   prompts={k: prov.fingerprint(v) for k, v in prompts.items()},
                   model=model, adopted_models=actual_models,
-                  usage=self.ledger.usage_since(self._usage_mark), **extra)
+                  usage=usage, **extra)
         # `settle=False` 只供**尚未决定是否落盘**的候选做同 schema 校验：若它最终被
         # HARD 拦成 `.INVALID`，调用方必须再以默认 `settle=True` 铸造落盘稿；若它继续
         # 进入下一次付费调用，最终稿才能一次认领完整窗口。预览时推进刻度会让正式稿

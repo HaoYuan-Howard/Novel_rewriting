@@ -129,12 +129,14 @@ artifact adoption 逐项联结；Stage2 逐章 session 和 Stage6 双判官互�
 spawn 前拒绝且显式 profile 永不 fallback；前端选择经页面 → API → Job/Commander → 子 CLI →
 driver 的真实链路生效。非 corpus 回归与真实付费整书验收分开报告；没有显式授权时不发模型请求。
 
-### TODO-45 · Stage2 事实分级、Stage4 整书救援与上下文瘦身
+### TODO-45 · Stage2 事实分级、Stage4 分单元恢复与上下文瘦身
 
 **冻结决策（先读这一段，再看分批）**：
 
 - Stage2 只让高影响事实阻断下游；低影响项目保留审计与披露，不自动 PASS、不消失。
-- Stage4 保留整书 A/B 调用与整书结构审批，**不开放公开的 `--chapters` 定向重规划**。
+- Stage4 保留一个公开 `stage4.design` 节点/授权、一个独立 `stage4.plan` 节点/授权和整书结构审批；
+  A 内部固定为 1 条整书策略 + N 条逐章私有 session（最多 4 并发），B 不变，**不开放公开的
+  `--chapters` 定向重规划**。
 - 模型只提出候选；代码确定性分级，人确认高影响事实后才能成为 binding。
 - Stage4 局部修复只走 agent session；legacy DeepSeek 保持无历史单发路径，
   且**不作为 agent 的静默 fallback**。
@@ -159,16 +161,19 @@ driver 的真实链路生效。非 corpus 回归与真实付费整书验收分�
 
 **P2a 进行中**：已把两类「让模型复述代码已知信息」的假拒绝收窄——同一时间线的状态
 承接改由编译器派生（`novel/stages/stage4/checks.py::derive_effective_states`），
-context 引用与章尾闭合改判「读者此刻知不知道 / 本章有没有让它成立」。
+context 引用与章尾闭合改判「读者此刻知不知道 / 本章有没有让它成立」。Stage4A 的
+生产拓扑与提交边界也已改成「1 条小型整书策略 + N 条逐章私有 session」：策略与每章分别
+验证后 checkpoint，逐章池由配置下调且绝不超过 4，并在 N+1 个 unit 全闭合后确定性聚合、
+重跑整书 schema/HARD、通过 commit journal 原子提交现有 `BlindCandidate`。公开节点、授权次数、
+Stage4B 与正式 artifact v2 形状不变。
 **剩下的 P2a 项**（按对稳定性的贡献排序）：
 
-1. Stage4 反馈轮改章节 replacement schema：首轮仍整书，出错只换出错的那一章。
-   现状是「一处错 ⇒ 整本 A 相重出」，而重出一次是本链最贵的一次调用。
-2. Stage4 validator 拒稿目前**没有任何恢复入口**（`repair_eligible=false`、
-   `eligibility_reason='validator 不属于通用 JSON/形状修复面'`）⇒ 一次有效付费产出
-   只能整本重来。补 `--adopt-rejected`（按当前闸原样重判封存候选，0 wire）与
-   `--apply-repair`（hash-bound 章节 replacement）。
-3. `evidence_candidate_id` 只作为另批冷缓存 A/B：候选表由 `paragraph_spans` 同源渲染与
+1. Stage4 分单元 validator 拒稿目前**没有 unit 级 0-wire 恢复入口**（`repair_eligible=false`、
+   `eligibility_reason='validator 不属于通用 JSON/形状修复面'`）⇒ 一份已有有效材料的 unit 仍需
+   重新付费生成；现有 `--adopt-rejected` 只覆盖旧整书拒稿，不得冒充新拓扑的 unit 恢复。
+   新入口不得拖着已验策略/其他章一起重发：补按当前闸原样重判封存 unit 的 0-wire adoption，
+   以及 hash-bound unit/章节 replacement。
+2. `evidence_candidate_id` 只作为另批冷缓存 A/B：候选表由 `paragraph_spans` 同源渲染与
    lookup，模型响应使用独立 candidate-only 类型，人工 GlobalEdit 仍用 locator，正式
    GlobalGrounding 仍落 SourceSpan。对同一固定语料配对比较首轮落盘率、
    `global_evidence_unlocated`、总 wall/token 与人审质量；质量无回退且成本/耗时改善前不切默认。
@@ -188,17 +193,18 @@ context 引用与章尾闭合改判「读者此刻知不知道 / 本章有没有
 P2 原本是一个「候选事实分级 + 整书修复 + 上下文瘦身」的大批次。按「稳定跑通优先」
 重排为两段，**先做与稳定性直接相关的那一段**：
 
-- **P2a（先做，不破坏盘上形状）**：Stage4 首轮仍整书、反馈轮改章节 replacement schema
-  并由代码原子合并后重跑整书闸——把「一处错就整书重出」变成「只换出错的那一章」；
-  抽出唯一 `gate_payload` 校验函数供 LlmClient / agent intake / response-repair /
-  adoption / repair 共用；拒稿仓统一为 `_llm_rejected/<chain>/<attempt>/`，
-  新增 `--adopt-rejected` 与 `--apply-repair` 两条 0-wire 恢复入口。
-  这一段的目标就是 P3 的目标：**一次有效付费产出不许被判据或形状问题永久锁死**。
+- **P2a（先做，不破坏正式盘上形状）**：生产拓扑、N+1 份验证后 checkpoint、最多 4 并发、
+  确定性聚合、整书 schema/HARD 和 aggregate commit journal 已落地，把「一处错就整书归零」
+  收成「保留全部已验单元」。本段剩余工作是抽出唯一 `gate_payload` 校验函数供 LlmClient /
+  agent intake / response-repair / adoption / repair 共用；拒稿仓统一为
+  `_llm_rejected/<chain>/<attempt>/`，并给**新分单元拓扑**补 0-wire adoption 与 hash-bound
+  unit repair。旧整书 `--adopt-rejected` 不是这条恢复路。目标不变：**一次有效付费产出不许被
+  判据或形状问题永久锁死**。
 - **P2b（后做，需要新 base 与一次付费重建）**：blueprint fact 增代码计算的
 `derived_tier`（core/support/incidental）与 `tier_reasons/depends_on`，模型的
 `producer_obligation` 只留审计；Blueprint Review 分 frontier/coverage 与 claim 两层，
-source beat 必须闭合为 `covered_by` 或显式无状态变化；Stage4 首轮仍整书、反馈轮改章节
-replacement schema 并由代码原子合并后重跑整书闸；抽出唯一 `gate_payload` 校验函数供
+source beat 必须闭合为 `covered_by` 或显式无状态变化；Stage4A 沿用已冻结的策略 + N 单章
+session/checkpoint/整书聚合契约；抽出唯一 `gate_payload` 校验函数供
 LlmClient / agent intake / response-repair / adoption / repair 共用；拒稿仓统一为
 `_llm_rejected/<chain>/<attempt>/`，新增 `--adopt-rejected` 与 `--apply-repair`；
 WriterContext v5 改共享表 + refs；Stage6 拆 `generation_packet` /
@@ -209,17 +215,19 @@ generation packet。TODO-31 的 Stage4→5 减法并入本批。
 
 ⚠ **2026-08-28 用户裁定：P3 不做盲审，也不做双臂偏好实验。** 当务之急是
 「给定一本小说，agent driver 下 opus5 + xhigh 能稳定跑通 stage0～stage7」，
-核心指标是**一次调用就落盘产物 + 少量人审**。原计划里的两臂对冲、42/42 章双臂 panel、
+核心指标是**每个逻辑单元首次交付 + 一次节点授权完成正式落盘 + 少量人审**。原计划里的两臂对冲、
+42/42 章双臂 panel、
 臂遮蔽与结构偏好统计整体撤下；控制臂 `e15aefbf4856aba83a44abd1a607bfdc48a20b87`
 只作为已有 v8 读数的对照**从账本上读**，不为它另花一次钱。
 
 - 执行面：单臂、agent executor、`max_turns=4`、legacy 路禁用；profile 在首个付费调用前
   由用户批准并写入 manifest，能力不可用就停止、不 fallback。
 - 稳定性读数（全部由 `tools/workflow_metrics.py` 从账本与审计现算，不换算金额）：
-  逐节点 **首次调用即落盘率**、wire 次数与重采次数、内容拒绝次数、`.INVALID` 次数、
+  逐逻辑单元**首次交付率**、逐公开节点**首次授权运行正式落盘率**、wire 次数与重采次数、
+  内容拒绝次数、`.INVALID` 次数、
   infra 失败（timeout/连接）单列不与内容失败混算、人审项数与人工介入次数。
-- 目标（是目标不是 HARD）：Stage4 自动整书 resample 为 0；INFO / metric / UNVER 引发的
-  付费调用为 0；内容拒绝 ≤ 1 次/书；全链 0 次因判据假红导致的整书重出。
+- 目标（是目标不是 HARD）：Stage4 整节点归零重跑为 0，已验策略/章节不因其他单元失败而重发；
+  INFO / metric / UNVER 引发的付费调用为 0；内容拒绝 ≤ 1 次/书；全链 0 次因判据假红导致的整书重出。
 - 达到用户批准的 token 或货币 cap 即停并如实判 inconclusive，不挑便宜结果。
 
 **验收**：P0/P1/P2 各批跑冻结契约 §9.5、对应 stage/API 测试与完整非 corpus 回归；

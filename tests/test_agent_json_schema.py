@@ -47,7 +47,10 @@ def _models() -> dict[str, type]:
     from contracts.schema.stage2 import (
         GlobalAgentTurnResponse, HingePhraseResponse, HingeSelectResponse,
     )
-    from contracts.schema.stage4 import BlindPlanResponse, EvidenceBindingResponse
+    from contracts.schema.stage4 import (
+        BlindBookStrategyResponse, BlindChapterDesignResponse,
+        BlindPlanResponse, EvidenceBindingResponse,
+    )
     from contracts.schema.stage5 import ChapterResponse
     from contracts.schema.stage6 import (
         HookCandidateRetryResponse, HookResponse, HookSemanticResponse,
@@ -62,7 +65,9 @@ def _models() -> dict[str, type]:
         'stage2.global/role_split': RoleSplitResponse,
         'stage2.blueprint/hinge_select': HingeSelectResponse,
         'stage2.blueprint/hinge_phrase': HingePhraseResponse,
-        'stage4.design': BlindPlanResponse,
+        'stage4.design/strategy': BlindBookStrategyResponse,
+        'stage4.design/chapter': BlindChapterDesignResponse,
+        'stage4.design/legacy-rejected-replay': BlindPlanResponse,
         'stage4.plan': EvidenceBindingResponse,
         'stage5.write': ChapterResponse,
         'stage6.hook': HookResponse,
@@ -93,7 +98,7 @@ def _keywords(node: object, *, in_names: bool = False) -> set[str]:
 def test_every_agent_response_schema_only_uses_json_schema_keywords():
     """任何词表外的关键字都会让 CLI 整份拒收 ⇒ 真跑时一次模型都调不到。"""
     models = _models()
-    assert len(models) >= 11, '扫描面缩小了；新增/退役响应模型要同批改这里'
+    assert len(models) >= 13, '扫描面缩小了；新增/退役响应模型要同批改这里'
     for label, model_cls in models.items():
         outside = sorted(_keywords(agent_json_schema(model_cls)) - _VOCABULARY)
         assert not outside, f'{label} 的 schema 含词表外关键字 {outside}'

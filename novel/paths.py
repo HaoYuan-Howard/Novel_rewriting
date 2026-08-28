@@ -764,6 +764,39 @@ def stage4_checkpoint_dir(
     return stage4_run_path(novel_dir, run_id, node) / 'checkpoints'
 
 
+def stage4_design_unit_dirname(chapter: int | None) -> str:
+    """Stage4 design 单元的 canonical 目录名；``None`` 唯一表示全书策略。"""
+    if chapter is None:
+        return 'strategy'
+    if (not isinstance(chapter, int) or isinstance(chapter, bool)
+            or chapter < 1):
+        raise PathRefused(
+            f'Stage4 design unit 章号必须是 None 或正整数，实得 {chapter!r}')
+    return f'ch{chapter:04d}'
+
+
+def stage4_design_unit_run_path(
+        novel_dir: str | os.PathLike[str], run_id: str,
+        chapter: int | None,
+) -> Path:
+    """``.../<run>/design/units/{strategy|chNNNN}/``。
+
+    策略与每章各占一条 single-session run/checkpoint 链；不再把
+    N+1 份独立响应塞进 design 节点旧的单链目录。
+    """
+    return (stage4_run_path(novel_dir, run_id, 'stage4.design') / 'units'
+            / stage4_design_unit_dirname(chapter))
+
+
+def stage4_design_unit_checkpoint_dir(
+        novel_dir: str | os.PathLike[str], run_id: str,
+        chapter: int | None,
+) -> Path:
+    """Stage4 design 策略/单章各自的 append-only revision 目录。"""
+    return stage4_design_unit_run_path(
+        novel_dir, run_id, chapter) / 'checkpoints'
+
+
 def stage4_commit_lock_path(
         novel_dir: str | os.PathLike[str],
 ) -> Path:

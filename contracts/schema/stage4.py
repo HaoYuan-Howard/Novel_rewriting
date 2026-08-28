@@ -64,6 +64,7 @@ from contracts.schema.stage2 import (
 # ─────────────────────────────────────────────────────────────────────────────
 
 _BLIND_ALIAS_PATTERN = r'^a_[0-9a-f]{16,64}$'
+_BLIND_LOCAL_FACT_ALIAS_PATTERN = r'^f_[0-9a-f]{6,64}$'
 _CANDIDATE_SCENE_PATTERN = r'^c\d{2,}s\d{2,}$'
 
 
@@ -320,6 +321,85 @@ class PlanChapters(StrictModel):
 
 # ── Stage4A：盲设计响应与中间产物 ────────────────────────────────────────────
 
+class BlindChapterWeightResponse(StrictModel):
+    """整书策略相只负责跨章可比较的相对轻重。"""
+
+    chapter_ordinal: int = Field(ge=1)
+    weight: Literal[tuple(RESPONSE_CHAPTER_WEIGHTS)]
+
+
+class BlindBookStrategyResponse(StrictModel):
+    """Stage4A 的小型整书策略响应；不携带任何事实 alias 或场景设计。"""
+
+    reconstruction_strategy: str = Field(min_length=1)
+    chapter_weights: list[BlindChapterWeightResponse] = Field(min_length=1)
+
+    @model_validator(mode='after')
+    def _chapter_weights_are_unique(self) -> BlindBookStrategyResponse:
+        ordinals = [row.chapter_ordinal for row in self.chapter_weights]
+        if len(ordinals) != len(set(ordinals)):
+            raise ValueError('chapter_weights.chapter_ordinal 不能重复')
+        return self
+
+
+class BlindLocalGoalResponse(StrictModel):
+    """单章 wire goal；短 alias 只在该章请求内有意义。"""
+
+    intent: Literal[tuple(RESPONSE_GOAL_INTENTS)]
+    fact_aliases: list[str] = Field(min_length=1)
+
+    @model_validator(mode='after')
+    def _aliases_are_unique(self) -> BlindLocalGoalResponse:
+        if len(self.fact_aliases) != len(set(self.fact_aliases)):
+            raise ValueError('goal.fact_aliases 不能重复')
+        if any(not re.match(_BLIND_LOCAL_FACT_ALIAS_PATTERN, alias)
+               for alias in self.fact_aliases):
+            raise ValueError('goal.fact_aliases 存在非法 local fact alias')
+        return self
+
+
+class BlindLocalSceneResponse(StrictModel):
+    """单章 wire scene；编译前不得出现正式 ``a_*`` alias。"""
+
+    weight: Literal[tuple(RESPONSE_UNIT_WEIGHTS)]
+    purpose: str = Field(min_length=1)
+    role: Literal[tuple(RESPONSE_STRUCTURAL_ROLES)]
+    delivery: Literal[tuple(RESPONSE_DELIVERY_MODES)]
+    transition: Literal[tuple(RESPONSE_TEMPORAL_LINKS)]
+    land_fact_aliases: list[str] = Field(min_length=1)
+    context_fact_aliases: list[str]
+    turn_fact_alias: str = Field(pattern=_BLIND_LOCAL_FACT_ALIAS_PATTERN)
+    entry_state_aliases: list[str]
+    exit_state_aliases: list[str]
+
+    @model_validator(mode='after')
+    def _alias_sets_are_coherent(self) -> BlindLocalSceneResponse:
+        for label, values in (
+            ('land_fact_aliases', self.land_fact_aliases),
+            ('context_fact_aliases', self.context_fact_aliases),
+            ('entry_state_aliases', self.entry_state_aliases),
+            ('exit_state_aliases', self.exit_state_aliases),
+        ):
+            if len(values) != len(set(values)):
+                raise ValueError(f'{label} 不能重复')
+            if any(not re.match(_BLIND_LOCAL_FACT_ALIAS_PATTERN, alias)
+                   for alias in values):
+                raise ValueError(f'{label} 存在非法 local fact alias')
+        if self.turn_fact_alias not in self.land_fact_aliases:
+            raise ValueError('turn_fact_alias 必须属于 land_fact_aliases')
+        return self
+
+
+class BlindChapterDesignResponse(StrictModel):
+    """Stage4A 单章设计响应；章号与章权重均由请求身份确定性注入。"""
+
+    structure_decision: BlindStructureDecision
+    chapter_goal: BlindLocalGoalResponse
+    open_hook_goal: BlindLocalGoalResponse
+    end_hook_goal: BlindLocalGoalResponse
+    chapter_rewrite_brief: str = Field(min_length=1)
+    scenes: list[BlindLocalSceneResponse] = Field(min_length=1)
+
 class BlindGoalResponse(StrictModel):
     intent: Literal[tuple(RESPONSE_GOAL_INTENTS)]
     fact_aliases: list[str] = Field(min_length=1)
@@ -413,6 +493,11 @@ class RejectedResponseAdoption(FrozenModel):
 class BlindCandidateProvenance(LlmProvenance):
     alias_algorithm: Literal[BLIND_ALIAS_ALGORITHM]
     truth_sha256: Sha256
+
+    #: 响应拓扑不是 artifact shape；旧产物诚实保持未知，新 producer 必须显式填其架构。
+    architecture: Literal[
+        'whole_book_v1', 'book_strategy_chapters_v1',
+    ] | None = None
 
     #: 只有 `--adopt-rejected` 那一条 0-wire 路会填它；正常付费产出恒为 `None`。
     #: ⚠ 它是**加法且带默认值** ⇒ 存量 `blind_candidate.json` 照样读得进来，

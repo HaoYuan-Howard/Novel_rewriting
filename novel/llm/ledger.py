@@ -377,6 +377,14 @@ class CostLedger:
         default_factory=dict, repr=False)
     _claimed_chapters: set[int] = field(default_factory=set, repr=False)
 
+    #: ``chapter`` 不能覆盖 strategy/多相 logical request；断点恢复的
+    #: 精确成本边界是 ``run_id + purpose``。这张表与全局/逐章
+    #: counter 同源更新，使 ``path=None`` 的同进程运行也能按
+    #: purpose 聚合，不需要从请求 identity 猜 token。这里仍把
+    #: sid/node 收进 key，不许同一 run 里恰好同名的其他请求串账。
+    _by_purpose: dict[tuple[str, str, str], _UsageCounter] = field(
+        default_factory=dict, repr=False)
+
     #: 本 run 的 ``attempt_id → request_fingerprint`` 精确索引。
     #: 成本 JSONL 是跨 run 的账，不应为铸一份正在落盘的 provenance 再扫全文件；
     #: 且 ``path=None`` 的测试/缓存路径同样必须保留这条联结。
@@ -391,6 +399,8 @@ class CostLedger:
     #: 产物认领**的 attempts 重新纳入本次 provenance 窗口。按 purpose 过滤，不能把
     #: 同一节点的另一章/另一相调用一起认领。
     _request_purposes: dict[str, str] = field(default_factory=dict, repr=False)
+    _request_sids: dict[str, str] = field(default_factory=dict, repr=False)
+    _request_nodes: dict[str, str] = field(default_factory=dict, repr=False)
     _request_chapters: dict[str, int | None] = field(default_factory=dict, repr=False)
 
     #: checkpoint 不能只凭请求指纹反推配置：指纹是结果身份，不说明当前运行到底
@@ -484,6 +494,15 @@ class CostLedger:
                         f'attempt_id={attempt_id} 同时指向两个 purpose：'
                         f'{previous_purpose!r} / {purpose!r}')
                 self._request_purposes[attempt_id] = purpose
+                previous_sid = self._request_sids.get(attempt_id)
+                previous_node = self._request_nodes.get(attempt_id)
+                if ((previous_sid is not None and previous_sid != sid)
+                        or (previous_node is not None and previous_node != node)):
+                    raise ProvenanceRefused(
+                        f'attempt_id={attempt_id} 同时指向两个 sid/node：'
+                        f'{previous_sid}/{previous_node} / {sid}/{node}')
+                self._request_sids[attempt_id] = sid
+                self._request_nodes[attempt_id] = node
                 self._request_chapters[attempt_id] = (
                     progress.chapter if progress is not None else None)
                 spec: dict[str, object] = {
@@ -511,11 +530,22 @@ class CostLedger:
                 self.calls_cached += 1
             else:
                 self.calls_made += 1
+            purpose_counter = (
+                self._by_purpose.setdefault((sid, node, purpose), _UsageCounter())
+                if purpose else None)
+            if purpose_counter is not None:
+                if cached:
+                    purpose_counter.calls_cached += 1
+                else:
+                    purpose_counter.calls_made += 1
             for name, val in zip(TOKEN_KINDS,
                                  (prompt_tokens, completion_tokens, reasoning_tokens)):
                 if val is not None:
                     setattr(self, name, getattr(self, name) + val)
                     self._seen[name] += 1
+                    if purpose_counter is not None:
+                        purpose_counter.tokens[name] += val
+                        purpose_counter.seen[name] += 1
 
             if progress is not None:
                 counter = self._by_chapter.setdefault(
@@ -692,6 +722,8 @@ class CostLedger:
                 self._request_fingerprints[attempt_id] = fingerprint
                 self._request_models[attempt_id] = model
                 self._request_purposes[attempt_id] = purpose
+                self._request_sids[attempt_id] = sid
+                self._request_nodes[attempt_id] = node
                 chapter_raw = row.get('chapter')
                 chapter = chapter_raw if isinstance(chapter_raw, int) else None
                 self._request_chapters[attempt_id] = chapter
@@ -711,6 +743,12 @@ class CostLedger:
                     self.calls_cached += 1
                 else:
                     self.calls_made += 1
+                purpose_counter = self._by_purpose.setdefault(
+                    (sid, node, purpose), _UsageCounter())
+                if cached:
+                    purpose_counter.calls_cached += 1
+                else:
+                    purpose_counter.calls_made += 1
                 counter = (self._by_chapter.setdefault(chapter, _UsageCounter())
                            if chapter is not None else None)
                 if counter is not None:
@@ -723,9 +761,230 @@ class CostLedger:
                     if isinstance(value, int) and not isinstance(value, bool):
                         setattr(self, key, getattr(self, key) + value)
                         self._seen[key] += 1
+                        purpose_counter.tokens[key] += value
+                        purpose_counter.seen[key] += 1
                         if counter is not None:
                             counter.tokens[key] += value
                             counter.seen[key] += 1
+
+    def usage_for_attempt_identities(
+            self,
+            identities: Iterable[tuple[str, Mapping[str, object]]], *,
+            sid: str, node: str,
+    ) -> Usage | None:
+        """只聚合指定 attempt 集合的用量，不依赖当前实例起点。
+
+        ``identities`` 每项是 ``(purpose, request_identity)``；identity 必须
+        来自 checkpoint 封存的 ``attempt_links``。本口用一本隔离的
+        scratch ledger 按 purpose 从盘上账本 claim 这些行，再复用
+        ``usage()`` 的 calls/cache/token-null 三态算法。因此：
+
+        * 当前 ``CostLedger`` 已经记了什么、``RunContext`` 的 UsageMark
+          在哪里，都不会改变结果；
+        * 每个 attempt 的 run/sid/node/purpose/fingerprint/完整请求配置
+          与 response SHA 都由既有 claim/identity 闭环逐项复验；
+        * 不往账本追加任何行，也不污染当前实例计数器。
+
+        没有盘上账本时无法从 identity 反推 token；非空集合必须
+        关闭式拒绝，不能偷用当前累计值伪装精确聚合。
+        """
+        sealed: list[tuple[str, dict[str, object]]] = []
+        seen_attempts: set[str] = set()
+        for purpose, identity in identities:
+            if not isinstance(purpose, str) or not purpose.strip():
+                raise ProvenanceRefused(
+                    'attempt usage 聚合的 purpose 必须是非空字符串')
+            if not isinstance(identity, Mapping):
+                raise ProvenanceRefused(
+                    'attempt usage 聚合的 request identity 必须是 object')
+            row = dict(identity)
+            attempt_id = row.get('attempt_id')
+            fingerprint = row.get('request_fingerprint')
+            if (not isinstance(attempt_id, str) or not attempt_id
+                    or attempt_id in seen_attempts
+                    or not isinstance(fingerprint, str)
+                    or len(fingerprint) != 64
+                    or any(char not in '0123456789abcdef'
+                           for char in fingerprint)):
+                raise ProvenanceRefused(
+                    'attempt usage 聚合含重复/不完整 attempt identity')
+            seen_attempts.add(attempt_id)
+            sealed.append((purpose, row))
+        if not sealed:
+            return None
+        if self.path is None:
+            raise ProvenanceRefused(
+                'attempt usage 聚合需要盘上 ledger.jsonl 的 token 事实')
+
+        scratch = CostLedger(path=self.path, run_id=self.run_id)
+        by_purpose: dict[str, list[dict[str, object]]] = {}
+        for purpose, identity in sealed:
+            by_purpose.setdefault(purpose, []).append(identity)
+        for purpose in sorted(by_purpose):
+            rows = by_purpose[purpose]
+            scratch.claim_prior_attempts(
+                [str(row['attempt_id']) for row in rows],
+                sid=sid, node=node, purpose=purpose,
+                request_fingerprints=[
+                    str(row['request_fingerprint']) for row in rows],
+            )
+        for purpose, identity in sealed:
+            attempt_id = str(identity['attempt_id'])
+            if scratch.request_identity_for_attempt(attempt_id) != identity:
+                raise ProvenanceRefused(
+                    f'{purpose}: attempt={attempt_id} 的 checkpoint identity '
+                    '与盘上 ledger 不闭合')
+        return scratch.usage()
+
+    def usage_for_complete_purposes(
+            self, purposes: Iterable[str], *, sid: str, node: str,
+            required_identities: Iterable[
+                tuple[str, Mapping[str, object]]
+            ] = (),
+    ) -> Usage | None:
+        """聚合当前 run 中指定 logical purposes 的**全部** attempts。
+
+        accepted checkpoint 只有在成功落下之后才能封存
+        ``attempt_links``。如果一个 unit 在此前用尽轮次、进程退出，
+        同 ``run_id/purpose`` 重启后的新 checkpoint 未必能列出那些
+        旧失败行。仅求 checkpoint links 并集会给产物落一份稳定但
+        偏小的 usage。
+
+        本口以盘上成本账的 ``run_id + sid + node + purpose`` 为完整
+        边界，发现每个 attempt，再交给隔离 scratch ledger 的既有
+        ``claim_prior_attempts`` / ``usage`` 算法聚合。``required_identities``
+        是 checkpoint 已封存的 links：它们必须逐项存在且完全相等，
+        但不是完整性边界。这样既不丢无 checkpoint 失败轮，也不靠
+        当前内存计数器猜历史。
+        """
+        wanted_purposes: set[str] = set()
+        for purpose in purposes:
+            if not isinstance(purpose, str) or not purpose.strip():
+                raise ProvenanceRefused(
+                    'complete purpose usage 的 purpose 必须是非空字符串')
+            if purpose in wanted_purposes:
+                raise ProvenanceRefused(
+                    f'complete purpose usage 重复 purpose={purpose!r}')
+            wanted_purposes.add(purpose)
+        if not wanted_purposes:
+            return None
+
+        expected: dict[str, tuple[str, dict[str, object]]] = {}
+        for purpose, identity in required_identities:
+            if purpose not in wanted_purposes or not isinstance(identity, Mapping):
+                raise ProvenanceRefused(
+                    'checkpoint required identity 不属于 complete purposes')
+            row = dict(identity)
+            attempt_id = row.get('attempt_id')
+            if (not isinstance(attempt_id, str) or not attempt_id
+                    or attempt_id in expected):
+                raise ProvenanceRefused(
+                    'checkpoint required identities 含重复/缺失 attempt')
+            expected[attempt_id] = (purpose, row)
+
+        if self.path is None:
+            # 没有盘上 JSONL 时，同进程的 record 仍保有两份同源
+            # 事实：attempt 的精确 scope/identity，以及 scope 级原始计数。
+            # 只有两者数量闭合时才能用后者结算 token；否则说明
+            # 有一次调用没有可定位 attempt，不得猜它属于谁。
+            with self._lock:
+                discovered = {
+                    attempt_id: purpose
+                    for attempt_id, purpose in self._request_purposes.items()
+                    if (purpose in wanted_purposes
+                        and self._request_sids.get(attempt_id) == sid
+                        and self._request_nodes.get(attempt_id) == node)
+                }
+                combined = _UsageCounter()
+                for purpose in sorted(wanted_purposes):
+                    counter = self._by_purpose.get((sid, node, purpose))
+                    if counter is None:
+                        continue
+                    calls = counter.calls_made + counter.calls_cached
+                    indexed = sum(
+                        1 for item_purpose in discovered.values()
+                        if item_purpose == purpose)
+                    if calls != indexed:
+                        raise ProvenanceRefused(
+                            f'{purpose}: 内存 usage 有 {calls} 次调用但只有 '
+                            f'{indexed} 个可定位 attempt')
+                    combined.calls_made += counter.calls_made
+                    combined.calls_cached += counter.calls_cached
+                    for key in TOKEN_KINDS:
+                        combined.tokens[key] += counter.tokens[key]
+                        combined.seen[key] += counter.seen[key]
+                for attempt_id in discovered:
+                    # 与盘上分支一样，每个被纳入的 attempt 都必须能
+                    # 还原完整请求 identity，不只是有一个计数。
+                    self.request_identity_for_attempt(attempt_id)
+                for attempt_id, (purpose, identity) in expected.items():
+                    if (discovered.get(attempt_id) != purpose
+                            or self.request_identity_for_attempt(attempt_id) != identity):
+                        raise ProvenanceRefused(
+                            f'{purpose}: checkpoint attempt={attempt_id} '
+                            '与 complete purpose 内存账身份不闭合')
+                return combined.usage()
+
+        discovered: dict[str, tuple[str, str]] = {}
+        try:
+            with process_append_lock(self.path):
+                raw_lines = self.path.read_text(encoding='utf-8').splitlines()
+        except OSError as exc:
+            raise ProvenanceRefused(
+                f'读不了 complete purpose usage 所指成本账：{exc}') from exc
+        for index, line in enumerate(raw_lines):
+            if not line.strip():
+                continue
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError as exc:
+                if index == len(raw_lines) - 1:
+                    continue
+                raise ProvenanceRefused(
+                    f'成本账中间第 {index + 1} 行损坏，'
+                    '不能聚合 complete purpose usage') from exc
+            if not isinstance(row, dict) or (
+                    row.get('run_id') != self.run_id
+                    or row.get('sid') != sid
+                    or row.get('node') != node
+                    or row.get('purpose') not in wanted_purposes):
+                continue
+            attempt_id = row.get('attempt_id')
+            fingerprint = row.get('request_fingerprint')
+            if (not isinstance(attempt_id, str) or not attempt_id
+                    or attempt_id in discovered
+                    or not isinstance(fingerprint, str)
+                    or len(fingerprint) != 64
+                    or any(char not in '0123456789abcdef'
+                           for char in fingerprint)):
+                raise ProvenanceRefused(
+                    f'complete purpose usage 第 {index + 1} 行缺唯一 '
+                    'attempt_id/request_fingerprint')
+            discovered[attempt_id] = (str(row['purpose']), fingerprint)
+        if not discovered:
+            return None
+
+        scratch = CostLedger(path=self.path, run_id=self.run_id)
+        for purpose in sorted(wanted_purposes):
+            attempts = sorted(
+                attempt for attempt, (row_purpose, _fingerprint)
+                in discovered.items() if row_purpose == purpose)
+            if not attempts:
+                continue
+            scratch.claim_prior_attempts(
+                attempts, sid=sid, node=node, purpose=purpose,
+                request_fingerprints=[
+                    discovered[attempt][1] for attempt in attempts],
+            )
+
+        for attempt_id, (purpose, identity) in expected.items():
+            discovered_identity = scratch.request_identity_for_attempt(attempt_id)
+            if (discovered.get(attempt_id, (None, None))[0] != purpose
+                    or discovered_identity != identity):
+                raise ProvenanceRefused(
+                    f'{purpose}: checkpoint attempt={attempt_id} '
+                    '与 complete purpose ledger 身份不闭合')
+        return scratch.usage()
 
     def _append(self, row: dict) -> None:
         """一行 JSON，**按字节追加**（换行与两把锁都在 `appendlog.append_line` 里）。

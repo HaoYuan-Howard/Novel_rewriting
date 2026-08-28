@@ -19,6 +19,7 @@ from typing import Any, Generic, TypeVar
 
 from pydantic import BaseModel
 
+from contracts.invariants import STAGE4_DESIGN_MAX_CONCURRENCY
 from contracts.schema.orchestration import AgentProfile
 from contracts.schema.report import CheckReport
 from contracts.schema.stage2 import (
@@ -35,7 +36,7 @@ from novel.agents.factory import create_driver
 from novel.agents.session_client import SESSION_PROTOCOL_VERSION, SessionAgentClient
 from novel.config import MAX_CONCURRENCY
 from novel.errors import GateBlocked, ProvenanceRefused
-from novel.llm import stage5_runs
+from novel.llm import stage4_runs, stage5_runs
 from novel.llm.client import LlmFailed
 from novel.observability import RequestProgress
 from novel.run import RunContext
@@ -1143,27 +1144,696 @@ class Stage2BlueprintAgent(NodeExecutorAgent[ChapterBlueprints]):
             self.pool.close()
 
 
+Stage4DesignDriverFactory = Callable[[str, int | None], AgentDriver]
+
+
+class Stage4DesignSessionPool:
+    """Stage4A 的 strategy + 逐章私有 session 路由与恢复桥。
+
+    producer 先串行复验所有现存 checkpoint，再把本批缺失 unit 一次性交给
+    :meth:`prepare_initial_sessions`。pool 在任一 wire 前构造完这一批全部
+    driver/client/cwd；完整恢复只登记 durable acceptance，保持零 factory、
+    零 probe、零 model start。strategy 与每章的 driver、logical session、
+    provider session 都必须一对一，不能以“同一节点”为由共享上下文。
+    """
+
+    def __init__(
+        self,
+        ctx: RunContext,
+        *,
+        driver_factory: Stage4DesignDriverFactory | None = None,
+        max_turns: int = 4,
+        concurrency: int = STAGE4_DESIGN_MAX_CONCURRENCY,
+    ) -> None:
+        if ctx.node != 'stage4.design':
+            raise ValueError(
+                f'Stage4DesignSessionPool 只接受 stage4.design，实得 {ctx.node!r}')
+        if ctx.executor_profile is None:
+            raise ValueError('stage4.design executor 缺 resolved profile')
+        if (not isinstance(max_turns, int) or isinstance(max_turns, bool)
+                or max_turns < 1):
+            raise ValueError('Stage4DesignSessionPool.max_turns 必须 >= 1')
+        if (not isinstance(concurrency, int) or isinstance(concurrency, bool)
+                or concurrency < 1):
+            raise ValueError('Stage4DesignSessionPool.concurrency 必须 >= 1')
+        self.ctx = ctx
+        self.profile: AgentProfile = ctx.executor_profile
+        self.model = self.profile.model
+        self.max_turns = max_turns
+        self.concurrency = min(STAGE4_DESIGN_MAX_CONCURRENCY, concurrency)
+        self._driver_factory = driver_factory or (
+            lambda _purpose, _chapter: create_driver(
+                self.profile, role='executor'))
+        self._clients: dict[str, SessionAgentClient] = {}
+        self._restored: dict[str, dict[str, Any]] = {}
+        self._subjects: dict[str, tuple[str, str]] = {}
+        self._known_units: dict[str, int | None] = {}
+        self._prepared_units: set[str] = set()
+        self._wired_purposes: set[str] = set()
+        self._progress: dict[str, RequestProgress] = {}
+        self._probe: AgentProbe | None = None
+        self._driver_owners: dict[int, str] = {}
+        self._provider_session_owners: dict[
+            tuple[str, str], tuple[str, str],
+        ] = {}
+        self._isolation_failed_units: set[str] = set()
+        self._driver_setup_failed_units: set[str] = set()
+        self._closed = False
+        self._lock = threading.RLock()
+
+    @staticmethod
+    def _unit(purpose: str, chapter: object) -> tuple[str, int | None]:
+        if chapter is not None and (
+                not isinstance(chapter, int) or isinstance(chapter, bool)
+                or chapter < 1):
+            raise ProvenanceRefused(
+                f'stage4.design unit 章号必须为 None 或正整数，实得 {chapter!r}')
+        normalized = chapter if isinstance(chapter, int) else None
+        expected = stage4_runs.design_unit_purpose(normalized)
+        if purpose != expected:
+            raise ProvenanceRefused(
+                f'stage4.design unit purpose/chapter 不闭合：'
+                f'expected={expected!r}, actual={purpose!r}/{chapter!r}')
+        return purpose, normalized
+
+    @staticmethod
+    def _unit_sort(row: tuple[str, int | None]) -> tuple[int, int]:
+        _purpose, chapter = row
+        return (0, 0) if chapter is None else (1, chapter)
+
+    @property
+    def turns_used(self) -> int:
+        with self._lock:
+            live = sum(client.turns_used for client in self._clients.values())
+            restored = sum(
+                int(record['accepted_turn_index'])
+                for purpose, record in self._restored.items()
+                if purpose not in self._clients
+                and isinstance(record.get('accepted_turn_index'), int)
+                and not isinstance(record.get('accepted_turn_index'), bool)
+            )
+        return live + restored
+
+    @property
+    def driver_failed(self) -> bool:
+        with self._lock:
+            return (bool(self._driver_setup_failed_units)
+                    or any(client.driver_failed
+                           for client in self._clients.values()))
+
+    @property
+    def isolation_failed(self) -> bool:
+        with self._lock:
+            return bool(self._isolation_failed_units)
+
+    @property
+    def session_count(self) -> int:
+        with self._lock:
+            return len(self._clients)
+
+    def _new_client(
+        self, purpose: str, chapter: int | None,
+    ) -> SessionAgentClient:
+        try:
+            driver = self._driver_factory(purpose, chapter)
+        except BaseException:
+            self._driver_setup_failed_units.add(purpose)
+            raise
+        driver_id = id(driver)
+        prior_owner = self._driver_owners.get(driver_id)
+        if prior_owner is not None and prior_owner != purpose:
+            # 这是已有 unit 正在持有的同一对象，不能在这里 close 它。
+            self._isolation_failed_units.update((prior_owner, purpose))
+            raise ProvenanceRefused(
+                'stage4.design driver factory 把同一对象同时给了 '
+                f'{prior_owner}/{purpose}；已在首个 model start 前拒绝')
+        self._driver_owners[driver_id] = purpose
+        try:
+            if self._probe is None:
+                probe = driver.probe()
+                if not probe.available:
+                    self._driver_setup_failed_units.add(purpose)
+                    raise ProvenanceRefused(
+                        f'{purpose}: executor driver 本地探针不可用：'
+                        f'{probe.detail or "unknown"}')
+                if (driver.driver != self.profile.driver
+                        or probe.driver != self.profile.driver
+                        or probe.provider != driver.provider):
+                    self._isolation_failed_units.add(purpose)
+                    raise ProvenanceRefused(
+                        f'{purpose}: driver/probe/profile 身份不闭合：'
+                        f'profile={self.profile.driver!r}, '
+                        f'driver={driver.driver!r}, '
+                        f'probe={probe.driver!r}/{probe.provider!r}')
+                self._probe = probe
+            elif (driver.driver != self._probe.driver
+                  or driver.provider != self._probe.provider):
+                self._isolation_failed_units.add(purpose)
+                raise ProvenanceRefused(
+                    f'{purpose}: driver factory 在同一 Stage4A pool 内漂移厂商身份')
+            return SessionAgentClient(
+                self.ctx,
+                self.profile,
+                driver,
+                chapter=chapter,
+                parent_run_id=self.ctx.run_id,
+                max_turns=self.max_turns,
+                preflight_probe=self._probe,
+            )
+        except BaseException:
+            if purpose not in self._isolation_failed_units:
+                self._driver_setup_failed_units.add(purpose)
+            if self._driver_owners.get(driver_id) == purpose:
+                self._driver_owners.pop(driver_id, None)
+            try:
+                driver.close()
+            except Exception:
+                pass
+            raise
+
+    def _rebuild_progress(self) -> None:
+        chapters = sorted(
+            chapter for chapter in self._known_units.values()
+            if chapter is not None)
+        if len(chapters) != len(set(chapters)):
+            raise ProvenanceRefused('stage4.design unit 章号重复')
+        total = len(chapters)
+        self._progress = {
+            stage4_runs.design_unit_purpose(chapter): RequestProgress(
+                chapter=chapter, index=index, total=total)
+            for index, chapter in enumerate(chapters, 1)
+        }
+
+    def prepare_initial_sessions(
+        self, units: Sequence[tuple[str, int | None]],
+    ) -> None:
+        """为本批全部缺失 unit 预建私有 client，恢复 unit 一律跳过。"""
+        if not isinstance(units, Sequence) or isinstance(
+                units, (str, bytes, bytearray)):
+            raise ProvenanceRefused(
+                'stage4.design prepare_initial_sessions 必须接 unit 序列')
+        normalized: list[tuple[str, int | None]] = []
+        seen: set[str] = set()
+        for raw in units:
+            if (not isinstance(raw, Sequence)
+                    or isinstance(raw, (str, bytes, bytearray))
+                    or len(raw) != 2):
+                raise ProvenanceRefused(
+                    'stage4.design unit 必须是 (purpose, chapter) 二元组')
+            purpose, chapter = self._unit(str(raw[0]), raw[1])
+            if purpose in seen:
+                raise ProvenanceRefused(
+                    f'stage4.design 本批 unit={purpose} 重复')
+            seen.add(purpose)
+            normalized.append((purpose, chapter))
+
+        created: list[str] = []
+        primary: BaseException | None = None
+        cleanup_errors: list[BaseException] = []
+        with self._lock:
+            if self._closed:
+                raise ProvenanceRefused('stage4.design pool 已关闭')
+            new_chapters = {
+                chapter for purpose, chapter in normalized
+                if purpose not in self._known_units and chapter is not None
+            }
+            if new_chapters and any(
+                    self._known_units[purpose] is not None
+                    for purpose in self._wired_purposes):
+                raise ProvenanceRefused(
+                    'stage4.design 逐章 wire 启动后不能再扩充本批 unit；'
+                    '必须在首个章节 model start 前一次性预建全部缺失章')
+            for purpose, chapter in normalized:
+                existing = self._known_units.get(purpose, chapter)
+                if purpose in self._known_units and existing != chapter:
+                    raise ProvenanceRefused(
+                        f'{purpose}: 已绑定 chapter={existing!r}，不能改绑 {chapter!r}')
+                self._known_units[purpose] = chapter
+            self._rebuild_progress()
+            try:
+                for purpose, chapter in normalized:
+                    if purpose in self._restored or purpose in self._clients:
+                        self._prepared_units.add(purpose)
+                        continue
+                    client = self._new_client(purpose, chapter)
+                    self._clients[purpose] = client
+                    self._prepared_units.add(purpose)
+                    created.append(purpose)
+            except BaseException as exc:
+                primary = exc
+                # 只撤销本批刚造出的 client；上一批已 accepted 的 strategy
+                # 仍由 finish_all 以真实失败原因收口。
+                for purpose in reversed(created):
+                    client = self._clients.pop(purpose, None)
+                    self._prepared_units.discard(purpose)
+                    if client is None:
+                        continue
+                    self._driver_owners.pop(id(client.driver), None)
+                    try:
+                        client.close()
+                    except BaseException as cleanup:
+                        cleanup_errors.append(cleanup)
+        if primary is not None:
+            if cleanup_errors:
+                raise BaseExceptionGroup(
+                    'stage4.design 预建 session 与回收同时失败',
+                    [primary, *cleanup_errors])
+            raise primary
+
+    def _client_for(self, purpose: str) -> tuple[SessionAgentClient, int | None]:
+        with self._lock:
+            if purpose not in self._prepared_units:
+                raise ProvenanceRefused(
+                    f'{purpose}: 必须先随本批全部缺失 unit 预建，才能启动 wire')
+            if purpose in self._restored:
+                raise ProvenanceRefused(
+                    f'{purpose}: 已从 durable checkpoint 恢复，不能重复付费')
+            client = self._clients.get(purpose)
+            if client is None:
+                raise ProvenanceRefused(f'{purpose}: 缺预建的私有 client')
+            return client, self._known_units[purpose]
+
+    def _register_provider_owner(
+        self, purpose: str, client: SessionAgentClient,
+    ) -> None:
+        provider_session_id = client.observed_provider_session_id
+        if not isinstance(provider_session_id, str) or not provider_session_id:
+            return
+        key = (self.profile.driver, provider_session_id)
+        owner = (purpose, client.session_run_id)
+        with self._lock:
+            prior = self._provider_session_owners.get(key)
+            if prior is not None and prior != owner:
+                self._isolation_failed_units.update((prior[0], purpose))
+                raise ProvenanceRefused(
+                    f'stage4.design provider session {provider_session_id!r} '
+                    f'被 {prior[0]}/{purpose} 共享；拒绝伪造 unit 隔离')
+            self._provider_session_owners[key] = owner
+
+    def ask_json(self, system: str, user: str, **kwargs: Any) -> Any:
+        model_cls = kwargs.pop('model_cls', None)
+        if (not isinstance(model_cls, type)
+                or not issubclass(model_cls, BaseModel)):
+            raise ProvenanceRefused(
+                'stage4.design 请求缺显式 Pydantic model_cls')
+        purpose = str(kwargs.get('purpose') or '')
+        if kwargs.get('recovery_policy') != \
+                stage4_runs.DESIGN_UNIT_RECOVERY_POLICY:
+            raise ProvenanceRefused(
+                f'{purpose}: Stage4A recovery policy 漂移：'
+                f'{kwargs.get("recovery_policy")!r}')
+        client, chapter = self._client_for(purpose)
+        self._unit(purpose, chapter)
+        with self._lock:
+            subject = self._subjects.get(purpose)
+            if subject is not None and subject != (system, user):
+                raise ProvenanceRefused(
+                    f'{purpose}: 同一 unit 的原始 system/user 漂移')
+            self._subjects[purpose] = (system, user)
+            supplied_progress = kwargs.pop('progress', None)
+            if chapter is None:
+                if supplied_progress is not None:
+                    raise ProvenanceRefused(
+                        'stage4.design strategy 请求不能伪造章节 progress')
+            else:
+                expected_progress = self._progress.get(purpose)
+                if expected_progress is None:
+                    raise ProvenanceRefused(
+                        f'{purpose}: 缺整批章节 progress 身份')
+                if (supplied_progress is not None
+                        and supplied_progress != expected_progress):
+                    raise ProvenanceRefused(
+                        f'{purpose}: progress 与整批章序漂移')
+                kwargs['progress'] = expected_progress
+            self._wired_purposes.add(purpose)
+
+        primary: BaseException | None = None
+        result: Any = None
+        try:
+            result = client.ask_json(
+                system, user, model_cls=model_cls, **kwargs)
+        except BaseException as exc:
+            primary = exc
+        isolation: BaseException | None = None
+        try:
+            self._register_provider_owner(purpose, client)
+        except BaseException as exc:
+            isolation = exc
+        if primary is not None and isolation is not None:
+            raise BaseExceptionGroup(
+                f'{purpose}: wire 与 provider 隔离检查同时失败',
+                [primary, isolation])
+        if isolation is not None:
+            raise isolation
+        if primary is not None:
+            raise primary
+        return result
+
+    @staticmethod
+    def _identity_sha256(value: Mapping[str, Any]) -> str:
+        return hashlib.sha256(json.dumps(
+            dict(value), ensure_ascii=False, sort_keys=True,
+            separators=(',', ':'), allow_nan=False,
+        ).encode('utf-8')).hexdigest()
+
+    def accepted_checkpoint(self, purpose: str) -> dict[str, Any]:
+        with self._lock:
+            chapter = self._known_units.get(purpose, object())
+            restored = self._restored.get(purpose)
+            client = self._clients.get(purpose)
+        if chapter is not None and not isinstance(chapter, int):
+            raise ProvenanceRefused(f'{purpose}: 未登记 Stage4A unit')
+        self._unit(purpose, chapter)
+        if restored is not None:
+            return copy.deepcopy(restored)
+        if client is None:
+            raise ProvenanceRefused(f'{purpose}: 尚无 live/restored acceptance')
+        return client.accepted_checkpoint(purpose)
+
+    def restore_checkpoint_acceptance(
+        self, purpose: str, record: Mapping[str, Any], *,
+        system: str | None = None, user: str | None = None,
+        max_tokens: int | None = None, recovery_policy: str | None = None,
+        **unsupported: object,
+    ) -> None:
+        """恢复 N+1 unit 的 acceptance/adoption，不复活历史 provider 会话。"""
+        if unsupported:
+            raise ProvenanceRefused(
+                f'{purpose}: checkpoint 恢复含未实现参数 {sorted(unsupported)}')
+        if system is None or user is None or max_tokens is None:
+            raise ProvenanceRefused(
+                f'{purpose}: checkpoint 恢复缺 system/user/requested ceiling')
+        if recovery_policy != stage4_runs.DESIGN_UNIT_RECOVERY_POLICY:
+            raise ProvenanceRefused(
+                f'{purpose}: checkpoint recovery policy 漂移')
+        profile = record.get('profile')
+        binding = record.get('accepted_request')
+        if (record.get('acceptance_protocol') != SESSION_PROTOCOL_VERSION
+                or profile != self.profile.model_dump(mode='json')
+                or not isinstance(binding, dict)):
+            raise ProvenanceRefused(
+                f'{purpose}: checkpoint protocol/profile/request 漂移')
+        chapter = binding.get('chapter')
+        purpose, chapter = self._unit(purpose, chapter)
+        schema_sha = binding.get('schema_sha256')
+        if (not isinstance(schema_sha, str) or len(schema_sha) != 64
+                or any(char not in '0123456789abcdef' for char in schema_sha)):
+            raise ProvenanceRefused(
+                f'{purpose}: checkpoint 缺合法 response schema SHA-256')
+        expected = {
+            'node': self.ctx.node,
+            'chapter': chapter,
+            'purpose': purpose,
+            'system_sha256': hashlib.sha256(system.encode('utf-8')).hexdigest(),
+            'user_sha256': hashlib.sha256(user.encode('utf-8')).hexdigest(),
+            'schema_sha256': schema_sha,
+            'requested_model': self.profile.model,
+            'requested_effort': self.profile.reasoning_effort,
+            'requested_output_token_ceiling': max_tokens,
+            'protocol_version': SESSION_PROTOCOL_VERSION,
+        }
+        if binding != expected:
+            raise ProvenanceRefused(
+                f'{purpose}: checkpoint accepted_request 与当前 unit 请求漂移')
+        if record.get('subject_sha256') != self._identity_sha256(expected):
+            raise ProvenanceRefused(
+                f'{purpose}: checkpoint logical subject SHA-256 不闭合')
+        provider_session_id = record.get('provider_session_id')
+        logical_session_id = record.get('session_run_id')
+        if (not isinstance(provider_session_id, str) or not provider_session_id
+                or not isinstance(logical_session_id, str)
+                or not logical_session_id):
+            raise ProvenanceRefused(
+                f'{purpose}: checkpoint 缺 provider/logical session 身份')
+        turn_index = record.get('accepted_turn_index')
+        links = record.get('attempt_links')
+        if (not isinstance(turn_index, int) or isinstance(turn_index, bool)
+                or turn_index < 1 or turn_index > self.max_turns
+                or not isinstance(links, list) or len(links) != turn_index):
+            raise ProvenanceRefused(
+                f'{purpose}: checkpoint turn/attempt links 与当前预算不闭合')
+        linked: dict[str, dict[str, Any]] = {}
+        for link in links:
+            if not isinstance(link, dict):
+                raise ProvenanceRefused(
+                    f'{purpose}: checkpoint attempt link 不是对象')
+            attempt = link.get('attempt_id')
+            if not isinstance(attempt, str) or not attempt or attempt in linked:
+                raise ProvenanceRefused(
+                    f'{purpose}: checkpoint attempt links 不唯一')
+            identity = self.ctx.ledger.request_identity_for_attempt(attempt)
+            if dict(link) != identity:
+                raise ProvenanceRefused(
+                    f'{purpose}: checkpoint attempt={attempt} 与成本账漂移')
+            linked[attempt] = identity
+        attempt_id = record.get('attempt_id')
+        identity = linked.get(str(attempt_id))
+        if (identity is None
+                or record.get('request_fingerprint')
+                != identity.get('request_fingerprint')
+                or record.get('model') != identity.get('model')
+                or record.get('ledger_response_sha256')
+                != identity.get('response_sha256')
+                or identity.get('model') != self.profile.model
+                or identity.get('model') in (None, '', 'unknown')):
+            raise ProvenanceRefused(
+                f'{purpose}: checkpoint accepted attempt 与成本账/profile 漂移')
+
+        key = (self.profile.driver, provider_session_id)
+        owner = (purpose, logical_session_id)
+        normalized = copy.deepcopy(dict(record))
+        with self._lock:
+            if self._closed:
+                raise ProvenanceRefused('stage4.design pool 已关闭')
+            if purpose in self._clients:
+                raise ProvenanceRefused(
+                    f'{purpose}: 已预建 live client，不能再恢复 checkpoint')
+            previous = self._restored.get(purpose)
+            if previous is not None and previous != normalized:
+                raise ProvenanceRefused(
+                    f'{purpose}: 被恢复为两份不同 acceptance')
+            prior = self._provider_session_owners.get(key)
+            if prior is not None and prior != owner:
+                self._isolation_failed_units.update((prior[0], purpose))
+                # 两条历史 acceptance 都是真实发生过的付费事实。即便共享
+                # provider id 使本次恢复关闭式失败，也要保留第二条记录，
+                # 让 finish_all 能把两条开放 logical session 都准确收成
+                # session_isolation，而不是只审计先到的一条。
+                self._known_units[purpose] = chapter
+                self._prepared_units.add(purpose)
+                self._restored[purpose] = normalized
+                self._subjects[purpose] = (system, user)
+                self._rebuild_progress()
+                raise ProvenanceRefused(
+                    f'stage4.design provider session {provider_session_id!r} '
+                    f'被 {prior[0]}/{purpose} 的 checkpoint 共享')
+            existing_chapter = self._known_units.get(purpose, chapter)
+            if purpose in self._known_units and existing_chapter != chapter:
+                raise ProvenanceRefused(
+                    f'{purpose}: checkpoint chapter 与既有 unit 漂移')
+            self._provider_session_owners[key] = owner
+            self._known_units[purpose] = chapter
+            self._prepared_units.add(purpose)
+            self._restored[purpose] = normalized
+            self._subjects[purpose] = (system, user)
+            self._rebuild_progress()
+
+    def accepted_attempt(self, purpose: str) -> str | None:
+        with self._lock:
+            chapter = self._known_units.get(purpose, object())
+            restored = self._restored.get(purpose)
+            client = self._clients.get(purpose)
+        if chapter is not None and not isinstance(chapter, int):
+            raise ProvenanceRefused(f'{purpose}: 未登记 Stage4A unit')
+        self._unit(purpose, chapter)
+        if restored is not None:
+            attempt = restored.get('attempt_id')
+            return attempt if isinstance(attempt, str) and attempt else None
+        return None if client is None else client.accepted_attempt(purpose)
+
+    def accepted_models(self, *purposes: str) -> tuple[str, ...]:
+        with self._lock:
+            selected = tuple(purposes) or tuple(
+                purpose for purpose, _chapter in sorted(
+                    self._known_units.items(), key=self._unit_sort))
+        models: set[str] = set()
+        for purpose in selected:
+            attempt_id = self.accepted_attempt(purpose)
+            if attempt_id is None:
+                continue
+            model = self.ctx.ledger.model_for_attempt(attempt_id)
+            if isinstance(model, str) and model:
+                models.add(model)
+        return tuple(sorted(models))
+
+    @staticmethod
+    def _failure_contains(
+        failure: BaseException | None, cls: type[BaseException],
+    ) -> bool:
+        if failure is None:
+            return False
+        if isinstance(failure, cls):
+            return True
+        if isinstance(failure, BaseExceptionGroup):
+            return any(
+                Stage4DesignSessionPool._failure_contains(child, cls)
+                for child in failure.exceptions)
+        return False
+
+    def finish_all(
+        self, *, delivered: bool, failure: BaseException | None = None,
+    ) -> None:
+        """整书终态后一次收口所有 unit；失败时保留已过章 checkpoint。"""
+        with self._lock:
+            units = tuple(sorted(
+                self._known_units.items(), key=self._unit_sort))
+            clients = dict(self._clients)
+            restored = copy.deepcopy(self._restored)
+            isolation_failed = set(self._isolation_failed_units)
+            driver_setup_failed = set(self._driver_setup_failed_units)
+            accepted = {
+                purpose for purpose, client in clients.items()
+                if client.accepted_attempt(purpose) is not None
+            } | set(restored)
+        errors: list[BaseException] = []
+        if delivered and set(purpose for purpose, _chapter in units) != accepted:
+            errors.append(ProvenanceRefused(
+                'stage4.design 正式交付时 N+1 unit acceptance 未闭合'))
+        for purpose, _chapter in units:
+            client = clients.get(purpose)
+            record = restored.get(purpose)
+            try:
+                if delivered and purpose in accepted:
+                    state = ('ok', 'delivered', None)
+                elif (purpose in isolation_failed
+                      or (client is not None
+                          and client.provider_session_reused)):
+                    state = ('failed', 'unknown', 'session_isolation')
+                elif client is not None and client.driver_failed:
+                    state = ('failed', 'unknown', 'agent_driver')
+                elif purpose in driver_setup_failed:
+                    state = ('failed', 'unknown', 'agent_driver')
+                elif purpose in accepted:
+                    # 兄弟 unit/聚合任一失败时，已经付费并通过本 unit 闸的
+                    # 候选仍是可恢复进度，不得写成 failed 或 delivered。
+                    state = ('ok', 'blocked', 'peer_result_missing')
+                elif self._failure_contains(failure, LlmFailed):
+                    state = ('ok', 'failed', 'response_validation')
+                elif self._failure_contains(failure, GateBlocked):
+                    state = ('ok', 'blocked', 'artifact_validation')
+                elif self._failure_contains(failure, ProvenanceRefused):
+                    state = ('ok', 'unknown', 'artifact_verification')
+                else:
+                    state = ('ok', 'unknown', 'node_executor')
+                process_state, delivery_state, error_kind = state
+                if client is not None:
+                    client.finish(
+                        process_state=process_state,
+                        delivery_state=delivery_state,
+                        error_kind=error_kind,
+                    )
+                elif record is not None:
+                    agent_session_audit.finish_restored_session(
+                        self.ctx.novel_dir.parent,
+                        record,
+                        process_state=process_state,
+                        delivery_state=delivery_state,
+                        error_kind=error_kind,
+                        end_code_version=prov.code_version(),
+                        only_if_open=True,
+                    )
+            except BaseException as exc:
+                errors.append(exc)
+        if errors:
+            raise BaseExceptionGroup(
+                'stage4.design 逐 unit ended 审计写入失败', errors)
+
+    def close(self) -> None:
+        with self._lock:
+            if self._closed:
+                return
+            clients = tuple(self._clients.values())
+            self._closed = True
+        errors: list[BaseException] = []
+        for client in clients:
+            try:
+                client.close()
+            except BaseException as exc:
+                errors.append(exc)
+        if errors:
+            raise BaseExceptionGroup(
+                'stage4.design 逐 unit driver/cwd 关闭失败', errors)
+
+
 class Stage4DesignAgent(NodeExecutorAgent[BlindCandidate]):
-    """Stage4A 盲设计：独立 session，候选与正式提交仍由代码边界掌管。"""
+    """Stage4A 多 session 执行器；代码聚合与正式提交仍由 producer 独占。"""
 
     node = 'stage4.design'
 
+    def __init__(
+        self,
+        ctx: RunContext,
+        *,
+        driver_factory: Stage4DesignDriverFactory | None = None,
+        max_turns: int = 4,
+        concurrency: int = STAGE4_DESIGN_MAX_CONCURRENCY,
+    ) -> None:
+        if ctx.node != self.node:
+            raise ValueError(f'{type(self).__name__} 只接受 {self.node}，实得 {ctx.node}')
+        if ctx.executor_profile is None:
+            raise ValueError(f'{self.node} executor 缺 resolved profile')
+        self.ctx = ctx
+        self.pool = Stage4DesignSessionPool(
+            ctx,
+            driver_factory=driver_factory,
+            max_turns=max_turns,
+            concurrency=concurrency,
+        )
+
+    @staticmethod
+    def _raise_group(
+        primary: BaseException | None, extras: Sequence[BaseException],
+    ) -> None:
+        if primary is None and not extras:
+            return
+        if primary is not None and not extras:
+            raise primary
+        raise BaseExceptionGroup(
+            'stage4.design 执行/会话收口发生多项错误',
+            ([primary] if primary is not None else []) + list(extras),
+        )
+
     def run(self) -> NodeAgentResult[BlindCandidate]:
+        result: NodeAgentResult[BlindCandidate] | None = None
+        primary: BaseException | None = None
+        delivered = False
         try:
-            artifact = plan.run_design(self.ctx, self.client)
+            artifact = plan.run_design(self.ctx, self.pool)
             if not isinstance(artifact, BlindCandidate):
                 raise ProvenanceRefused(
                     'stage4.design executor 返回了非 BlindCandidate 正式产物')
-            self.client.finish(
-                process_state='ok', delivery_state='delivered')
-            return NodeAgentResult(
-                artifact=artifact, turns=self.client.turns_used,
-                passed=True)
-        except Exception as exc:
-            self._finish_exception(exc)
-            raise
-        finally:
-            self.client.close()
+            delivered = True
+            result = NodeAgentResult(
+                artifact=artifact,
+                turns=self.pool.turns_used,
+                passed=True,
+            )
+        except BaseException as exc:
+            primary = exc
+
+        extras: list[BaseException] = []
+        try:
+            self.pool.finish_all(delivered=delivered, failure=primary)
+        except BaseException as exc:
+            extras.append(exc)
+        try:
+            self.pool.close()
+        except BaseException as exc:
+            extras.append(exc)
+        if primary is not None or extras:
+            self._raise_group(primary, extras)
+        assert result is not None
+        return result
 
 
 class Stage4PlanAgent(NodeExecutorAgent[BaseModel]):
@@ -2464,11 +3134,13 @@ EXECUTOR_FACTORIES: dict[str, Callable[..., NodeExecutorAgent[BaseModel]]] = {
 def build_node_agent(
     ctx: RunContext, *, driver: AgentDriver | None = None,
     driver_factory: BlueprintDriverFactory | None = None,
+    stage4_design_driver_factory: Stage4DesignDriverFactory | None = None,
     stage5_driver_factory: Stage5DriverFactory | None = None,
     semantic_driver_factory: SemanticDriverFactory | None = None,
     chapters: str | None = None,
     revise: bool = False,
     max_turns: int = 4,
+    concurrency: int = MAX_CONCURRENCY,
 ) -> NodeExecutorAgent[BaseModel]:
     factory = EXECUTOR_FACTORIES.get(ctx.node)
     if factory is None:
@@ -2481,24 +3153,48 @@ def build_node_agent(
                 '测试注入请使用 driver_factory')
         if semantic_driver_factory is not None:
             raise ValueError('stage2.blueprint 不接受 semantic_driver_factory')
+        if stage4_design_driver_factory is not None:
+            raise ValueError(
+                'stage2.blueprint 不接受 stage4_design_driver_factory')
         if stage5_driver_factory is not None:
             raise ValueError('stage2.blueprint 不接受 stage5_driver_factory')
         if chapters is not None or revise:
             raise ValueError('stage2.blueprint 不接受 Stage5 chapters/revise 参数')
         return factory(
-            ctx, driver_factory=driver_factory, max_turns=max_turns)
+            ctx, driver_factory=driver_factory, max_turns=max_turns,
+            concurrency=concurrency)
+    if ctx.node == 'stage4.design':
+        if driver is not None:
+            raise ValueError(
+                'stage4.design 的 strategy/各章不能共享一个 driver；'
+                '测试注入请使用 stage4_design_driver_factory')
+        if (driver_factory is not None or stage5_driver_factory is not None
+                or semantic_driver_factory is not None):
+            raise ValueError(
+                'stage4.design 只接受 stage4_design_driver_factory，'
+                '不接受其他 pool factory')
+        if chapters is not None or revise:
+            raise ValueError('stage4.design 不接受 Stage5 chapters/revise 参数')
+        return factory(
+            ctx,
+            driver_factory=stage4_design_driver_factory,
+            max_turns=max_turns,
+            concurrency=concurrency,
+        )
     if ctx.node == 'stage5.write':
         if driver is not None:
             raise ValueError(
                 'stage5.write 不能让多个章节共享一个 driver；'
                 '测试注入请使用 stage5_driver_factory')
-        if driver_factory is not None or semantic_driver_factory is not None:
+        if (driver_factory is not None or semantic_driver_factory is not None
+                or stage4_design_driver_factory is not None):
             raise ValueError(
                 'stage5.write 只接受 stage5_driver_factory，不接受其他 pool factory')
         return factory(
             ctx,
             driver_factory=stage5_driver_factory,
             max_turns=max_turns,
+            concurrency=concurrency,
             chapters=chapters,
             revise=revise,
         )
@@ -2513,6 +3209,9 @@ def build_node_agent(
                 '请使用 semantic_driver_factory')
         if stage5_driver_factory is not None:
             raise ValueError('stage6.semantic 不接受 stage5_driver_factory')
+        if stage4_design_driver_factory is not None:
+            raise ValueError(
+                'stage6.semantic 不接受 stage4_design_driver_factory')
         if chapters is not None or revise:
             raise ValueError('stage6.semantic 不接受 Stage5 chapters/revise 参数')
         return factory(
@@ -2521,6 +3220,9 @@ def build_node_agent(
         raise ValueError(f'{ctx.node} 不接受 semantic_driver_factory')
     if driver_factory is not None:
         raise ValueError(f'{ctx.node} 不接受逐章 driver_factory')
+    if stage4_design_driver_factory is not None:
+        raise ValueError(
+            f'{ctx.node} 不接受 stage4_design_driver_factory')
     if stage5_driver_factory is not None:
         raise ValueError(f'{ctx.node} 不接受 stage5_driver_factory')
     if chapters is not None or revise:
@@ -2531,7 +3233,8 @@ def build_node_agent(
 __all__ = [
     'BlueprintDriverFactory', 'BlueprintSessionPool', 'EXECUTOR_FACTORIES',
     'NodeAgentResult', 'NodeExecutorAgent', 'Stage2BlueprintAgent',
-    'Stage2GlobalAgent', 'Stage4DesignAgent', 'Stage4PlanAgent',
+    'Stage2GlobalAgent', 'Stage4DesignAgent', 'Stage4DesignDriverFactory',
+    'Stage4DesignSessionPool', 'Stage4PlanAgent',
     'Stage5DriverFactory', 'Stage5SessionPool',
     'Stage5WriteAgent', 'SemanticDriverFactory', 'SemanticSessionPool',
     'Stage6HookAgent',

@@ -286,14 +286,19 @@ def _dispatch(node: str, ctx: RunContext, flags: list[str]) -> int:
         from novel.node_agents import build_node_agent
 
         kwargs: dict[str, object] = {}
+        if node in {'stage2.blueprint', 'stage4.design', 'stage5.write'}:
+            # 逐章 agent pool 必须消费与 legacy LLM 客户端同一份并发配置；
+            # 各节点仍可在自己的 pool 内再施加更低的稳定性上限。
+            from novel.config import load_config
+            kwargs['concurrency'] = load_config().concurrency
         if node == 'stage5.write':
             # Stage5 的两个付费入口与定向章集都是业务身份的一部分；通用
             # executor 分流发生在 `_run_stage5` 之前，必须在这里显式交给
             # Stage5WriteAgent，不能把 flag 吞掉后误跑默认全书写作。
-            kwargs = {
+            kwargs.update({
                 'chapters': _valued(flags, '--chapters'),
                 'revise': '--revise' in N.flag_tokens(flags),
-            }
+            })
         result = build_node_agent(ctx, **kwargs).run()
         artifact = result.artifact
         report = result.report
@@ -750,6 +755,9 @@ def _run_stage4(ctx: RunContext, flags: list[str]) -> int:
             return X.OK
         if '--dry-run' in tokens:
             system, user = plan.build_design_prompt(ctx)
+            print('── Stage4A 策略请求预览 ──\n'
+                  '这里只展示第 1 条整书策略请求；策略通过后，程序才会按当前'
+                  '真相图确定性生成 N 条 local-alias 单章请求，并以最多 4 路并发执行。')
             print(f'── system（{len(system)} 字）──\n{system}')
             print(f'\n── user（{len(user)} 字；不含原文/源序/beat/材料）──\n{user}')
             return X.OK
