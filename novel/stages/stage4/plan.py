@@ -68,6 +68,7 @@ from novel.stages.stage4.blind import (
     construct_feasible_binding_witness, merge_evidence_bindings,
     prove_binding_infeasible, validate_infeasible_binding,
 )
+from novel.stages.stage4.baseline import build_mechanical_baseline
 from novel.stages.stage4.beats import beat_index
 from novel.stages.stage4.context import build_writer_context
 from novel.stages.stage4.fact_refs import catalog as fact_catalog, validate_plan_refs
@@ -1063,8 +1064,27 @@ def preflight_binding_candidate(
         return _finish(failures=infeasible_failures, infeasibility=tuple(proof))
     constructive = construct_feasible_binding_witness(candidate_raw, catalog)
     up = _Upstreams(ctx, store, need_grounding=True)
+    # 批次 4：机械基线把代码能唯一确定的绑定先确定掉（签名等价多候选取规范
+    # 首项），歧义章回退 constructive 的零自由度行——预检的 canonical witness
+    # 因此与 B 的真实绑定空间同构，不再是「任取首舞台」的粗下界。
+    baseline = build_mechanical_baseline(candidate_raw, up.blueprints)
+    constructive_rows = {
+        int(row['output_ordinal']): row['scenes']
+        for row in constructive['chapters']}
+    for chapter in baseline.chapters:
+        if chapter.mechanical:
+            constructive_rows[chapter.chapter_ordinal] = chapter.binding_rows()
+    canonical_witness = {
+        'status': constructive['status'],
+        'candidate_sha256': constructive['candidate_sha256'],
+        'chapters': [
+            {'output_ordinal': ordinal, 'scenes': constructive_rows[ordinal]}
+            for ordinal in sorted(constructive_rows)
+        ],
+        'binding_concerns': constructive.get('binding_concerns') or [],
+    }
     try:
-        merged = merge_evidence_bindings(candidate_raw, constructive, catalog)
+        merged = merge_evidence_bindings(candidate_raw, canonical_witness, catalog)
         adopt_plan_response(merged, up.blueprints, up.bidx)
         assert up.global_g is not None
         validate_plan_refs(
