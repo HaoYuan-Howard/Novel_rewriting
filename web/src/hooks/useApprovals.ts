@@ -5,6 +5,7 @@ import type {
   ApprovalDoc,
   GateKey,
   SeenKey,
+  Stage5ClosureRequest,
   StructureApprovalRequest,
 } from '@/types/approvals'
 import { useSid } from './useRouteParams'
@@ -52,6 +53,16 @@ export function useApprovals(sidOverride?: string) {
       void qc.invalidateQueries({ queryKey: qk.inbox(sid) })
     },
   })
+  const approveStage5Closure = useMutation({
+    mutationFn: (request: Stage5ClosureRequest) => api.approveStage5Closure(sid, request),
+    onSuccess: (doc) => {
+      // 回执只写审批账；成功后 Stage5/下游与 inbox 必须重读服务端当前结论。
+      cache(doc)
+      void qc.invalidateQueries({ queryKey: qk.inbox(sid) })
+      void qc.invalidateQueries({ queryKey: qk.stage6(sid) })
+      void qc.invalidateQueries({ queryKey: qk.stage7(sid) })
+    },
+  })
   const markSeen = useMutation({
     mutationFn: (key: SeenKey) => api.markSeen(sid, key),
     onSuccess: put,
@@ -70,6 +81,7 @@ export function useApprovals(sidOverride?: string) {
     refetch: q.refetch,
     approve,
     approveStructure,
+    approveStage5Closure,
     backfill,
     markSeen,
     startWriting,

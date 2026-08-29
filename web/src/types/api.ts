@@ -8,12 +8,15 @@
 import type {
   ApprovalBackfillResult,
   ApprovalDoc,
+  BatchTrimResolutionRequest,
   DesignReviewRequest,
   DesignReviewTemplate,
   DesignReviewTemplateQuery,
   GateKey,
   SeenKey,
   StructureApprovalRequest,
+  Stage5ClosureRequest,
+  Stage5ClosureTemplate,
 } from './approvals'
 import type {
   AgentCapabilitiesResponse,
@@ -41,7 +44,9 @@ import type { RunProgress } from './run'
 import type {
   CheckKind,
   CheckReport,
-  ChapterSegment,
+  DraftEditPreview,
+  DraftEditPreviewRequest,
+  DraftEditRequest,
   InboxResponse,
   GlobalReviewDecisionSet,
   GlobalReviewResponse,
@@ -134,6 +139,10 @@ export interface Api {
 
   /* 人工验收记录 */
   getApprovals(sid: string): Promise<ApprovalDoc>
+  /** 当前盘面确定性生成的 Stage5 关闭式回执模板；只读、0 成本。 */
+  getStage5ClosureTemplate(sid: string): Promise<Stage5ClosureTemplate>
+  /** 原子提交当前 Stage5 Commander 回执；不启动任何付费作业。 */
+  approveStage5Closure(sid: string, request: Stage5ClosureRequest): Promise<ApprovalDoc>
   /** Stage4A 当前候选的关闭式审阅模板；全拒默认由服务端生成。 */
   getDesignReviewTemplate(
     sid: string,
@@ -150,14 +159,22 @@ export interface Api {
   resetBook(sid: string): Promise<ApprovalDoc>
 
   /* 写（三条人工写回走专用路由，返回真实作业记录——真实模式不写 localStorage 充成功） */
-  /** 章节改稿：与生成稿同一判定落点（stage5.write --apply-edit，origin=human 记账） */
+  /** 章节改稿只读预检：与 apply 共用归一、判据与双 SHA 主体，不写盘。 */
+  previewDraftEdit(
+    sid: string,
+    ordinal: number,
+    req: DraftEditPreviewRequest,
+  ): Promise<DraftEditPreview>
+  /** 章节改稿：只接受 preview 归一稿、人工审计、双 SHA 与服务端要求的确认语义。 */
   saveDraftEdit(
     sid: string,
     ordinal: number,
-    req: { segments: ChapterSegment[] },
+    req: DraftEditRequest,
   ): Promise<Job>
   /** Resolve one current trim verification by retaining pretrim; candidate adoption is impossible here. */
   retainPretrim(sid: string, ordinal: number, req: TrimResolutionRequest): Promise<Job>
+  /** 整批预检后按章幂等销账；identity 逐项原样来自 closure workpack。 */
+  retainPretrimBatch(sid: string, req: BatchTrimResolutionRequest): Promise<Job>
   /** 文案定稿：序号 + 自报身份/理由 + 候选完整 hash 乐观锁。 */
   approveHook(
     sid: string,

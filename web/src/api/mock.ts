@@ -25,12 +25,18 @@ import {
   GATE_KEYS,
   type ActionRef,
   type ApprovalDoc,
+  type BatchTrimResolutionRequest,
   type DesignReviewDecision,
   type DesignReviewRequest,
   type DesignReviewTemplate,
   type DesignReviewTemplateQuery,
   type GateKey,
   type SeenKey,
+  type Stage5ClosureDecision,
+  type Stage5FindingGroup,
+  type Stage5ClosureRequest,
+  type Stage5ClosureTemplate,
+  type Stage5ClosureWorkpack,
   type StructureApprovalDecision,
   type StructureApprovalRequest,
 } from '@/types/approvals'
@@ -41,6 +47,9 @@ import type { RunProgress } from '@/types/run'
 import type {
   CheckKind,
   CheckReport,
+  DraftEditPreview,
+  DraftEditPreviewRequest,
+  DraftEditRequest,
   GlobalReviewDecisionSet,
   GlobalReviewResponse,
   InboxResponse,
@@ -320,6 +329,45 @@ const MOCK_DESIGN_CANDIDATE = 'e'.repeat(64)
 const MOCK_DESIGN_AGGREGATE = 'd'.repeat(64)
 const MOCK_DESIGN_STRATEGY = 'c'.repeat(64)
 const MOCK_DESIGN_CHAPTER = 'b'.repeat(64)
+const MOCK_STAGE5_WORKPACK = '7'.repeat(64)
+const MOCK_STAGE5_REVIEW = '6'.repeat(64)
+
+function mockStage5Workpack(): Stage5ClosureWorkpack {
+  return {
+    review_seq: 1,
+    review_rel: 'stage5/review_1.json',
+    review_sha256: MOCK_STAGE5_REVIEW,
+    planned_chapters: [SAMPLE_ORDINAL],
+    missing_chapters: [],
+    chapter_subjects: [{
+      output_ordinal: SAMPLE_ORDINAL,
+      chapter_sha256: '3'.repeat(64),
+    }],
+    invalid_chapters: [],
+    hard_findings: [],
+    unresolved_trim_chapters: [],
+    unresolved_trim_items: [],
+    must_appear: [],
+    fact_group: null,
+    unver_group: null,
+    disclosure: {},
+    resolved: {},
+    workpack_sha256: MOCK_STAGE5_WORKPACK,
+  }
+}
+
+function mockStage5ClosureDecision(): Stage5ClosureDecision {
+  return {
+    actor: 'mock-commander',
+    reason: 'mock 样本已完成整书闭合复核',
+    workpack_sha256: MOCK_STAGE5_WORKPACK,
+    review_sha256: MOCK_STAGE5_REVIEW,
+    must_appear: [],
+    group_acks: [],
+    decision_sha256: '5'.repeat(64),
+    decided_at: '2026-08-29T00:00:00+00:00',
+  }
+}
 
 function enumAt(values: string[], index: number, label: string): string {
   const value = values[index]
@@ -503,7 +551,7 @@ function seededDesignReviewDecision(): DesignReviewDecision {
 
 function freshDoc(sid: string): ApprovalDoc {
   return {
-    v: 5,
+    v: 6,
     sid,
     gate: { s0: false, s1: false, s2: false, s4: false, s5: false, s6: false, s7: false },
     seen: { read: false, global: false },
@@ -524,6 +572,19 @@ function freshDoc(sid: string): ApprovalDoc {
       history: [],
       binding_concerns: [],
     },
+    writing_approval: {
+      available: false,
+      current_subject_sha256: null,
+      current_decision: null,
+      history: [],
+    },
+    closure: {
+      state: 'missing',
+      workpack: null,
+      next_step: null,
+      current_decision: null,
+      history: [],
+    },
     spawns: {},
   }
 }
@@ -537,7 +598,7 @@ function seededDoc(sid: string): ApprovalDoc {
   const decision = seededStructureDecision()
   const designDecision = seededDesignReviewDecision()
   return {
-    v: 5,
+    v: 6,
     sid,
     gate: { s0: true, s1: true, s2: true, s4: true, s5: true, s6: false, s7: false },
     seen: { read: true, global: true },
@@ -564,14 +625,27 @@ function seededDoc(sid: string): ApprovalDoc {
         closed_refs: ['a_' + '1'.repeat(16)],
       }],
     },
+    writing_approval: {
+      available: true,
+      current_subject_sha256: MOCK_STRUCTURE_SUBJECT,
+      current_decision: null,
+      history: [],
+    },
+    closure: {
+      state: 'closed',
+      workpack: mockStage5Workpack(),
+      next_step: null,
+      current_decision: mockStage5ClosureDecision(),
+      history: [mockStage5ClosureDecision()],
+    },
     spawns: {},
   }
 }
 
 function loadDoc(sid: string): ApprovalDoc {
   const got = lsRead<unknown>('approvals.' + sid)
-  // spawns 是服务端的事；只接受当前公开 v5，旧本地记录按当前种子重建。
-  if (got && typeof got === 'object' && (got as { v?: unknown }).v === 5) {
+  // spawns 是服务端的事；只接受当前公开 v6，旧本地记录按当前种子重建。
+  if (got && typeof got === 'object' && (got as { v?: unknown }).v === 6) {
     return withMockSpawns(got as ApprovalDoc)
   }
   const seed = sid === SAMPLE_SID ? seededDoc(sid) : freshDoc(sid)
@@ -1515,6 +1589,72 @@ export const mockApi: Api = {
 
   getApprovals: (sid) => later(loadDoc(sid)),
 
+  getStage5ClosureTemplate: (sid): Promise<Stage5ClosureTemplate> => {
+    const workpack = loadDoc(sid).closure.workpack
+    if (!workpack) {
+      return fail(new ApiError('server', '/novels/' + sid + '/approvals/stage5/template', {
+        message: '当前盘面还不能生成 Stage5 闭合工作包',
+      }))
+    }
+    const template: Stage5ClosureTemplate = {
+      actor: '(填写执行人)',
+      reason: '(填写整书闭合理由)',
+      workpack_sha256: workpack.workpack_sha256,
+      review_sha256: workpack.review_sha256,
+      must_appear: workpack.must_appear.map((row) => ({
+        chapter_ordinal: row.chapter_ordinal,
+        evidence_key: row.evidence_key,
+        finding_sha256: row.finding_sha256,
+        chapter_sha256: row.chapter_sha256,
+        ruling: '',
+        reason: '',
+        placeholder: true,
+        template_token: workpack.workpack_sha256.slice(0, 8) + '-' + row.finding_sha256.slice(0, 8),
+      })),
+      group_acks: [workpack.fact_group, workpack.unver_group]
+        .filter((group): group is Stage5FindingGroup => group !== null)
+        .map((group) => ({
+          group: group.group,
+          findings_sha256: group.findings_sha256,
+          items: group.items,
+          placeholder: true,
+          template_token: workpack.workpack_sha256.slice(0, 8) + '-' + group.group,
+        })),
+    }
+    return later(template)
+  },
+
+  approveStage5Closure: (sid, request: Stage5ClosureRequest) => {
+    const doc = loadDoc(sid)
+    const workpack = doc.closure.workpack
+    const invalid = !workpack
+      || request.workpack_sha256 !== workpack.workpack_sha256
+      || request.review_sha256 !== workpack.review_sha256
+      || request.must_appear.some((row) => row.placeholder || row.template_token !== null)
+      || request.group_acks.some((row) => row.placeholder || row.template_token !== null)
+    if (invalid) {
+      return fail(new ApiError('server', '/novels/' + sid + '/approvals/stage5', {
+        message: 'Stage5 闭合模板已过期或仍含未确认 placeholder',
+      }))
+    }
+    const decision: Stage5ClosureDecision = {
+      ...request,
+      decision_sha256: '4'.repeat(64),
+      decided_at: new Date().toISOString(),
+    }
+    return later(saveDoc({
+      ...doc,
+      gate: { ...doc.gate, s5: true },
+      closure: {
+        state: 'closed',
+        workpack,
+        next_step: null,
+        current_decision: decision,
+        history: [...doc.closure.history, decision],
+      },
+    }))
+  },
+
   getDesignReviewTemplate: (sid, query: DesignReviewTemplateQuery) => {
     const doc = loadDoc(sid)
     const template = mockDesignReviewTemplate(query)
@@ -1646,9 +1786,11 @@ export const mockApi: Api = {
   },
 
   approveGate: (sid, key: GateKey) => {
-    if (key === 's4') {
+    if (key === 's4' || key === 's5') {
       return fail(new ApiError('server', '/novels/' + sid + '/approvals/gate/s4', {
-        message: 'Stage4 只接受带完整 subject 与逐章理由的专用结构裁决',
+        message: key === 's4'
+          ? 'Stage4 只接受带完整 subject 与逐章理由的专用结构裁决'
+          : 'Stage5 只接受绑定当前工作包的 Commander 闭合回执',
       }))
     }
     const doc = loadDoc(sid)
@@ -1731,8 +1873,28 @@ export const mockApi: Api = {
 
   resetBook: (sid) => later(saveDoc(freshDoc(sid))),
 
-  saveDraftEdit: (sid, ordinal, req) => {
-    lsWrite(`edits.${sid}.${ordinal}`, { segments: req.segments, at: Date.now() })
+  previewDraftEdit: (sid, ordinal, req: DraftEditPreviewRequest) => {
+    const current = currentMockReview().chapter.findings.filter((finding) => finding.sev === 'hard')
+    const preview = {
+      output_ordinal: ordinal,
+      current_chapter_sha256: '3'.repeat(64),
+      preview_subject_sha256: '4'.repeat(64),
+      normalized_segments: req.segments.map((segment) => ({
+        ...segment,
+        text: segment.text.trim(),
+      })),
+      findings: currentMockReview().chapter.findings,
+      current_hard_findings: current,
+      introduced_hard_findings: [],
+      resolved_hard_findings: [],
+      required_confirmation: 'formal',
+    } satisfies DraftEditPreview
+    lsWrite(`edit-preview.${sid}.${ordinal}`, { ...preview, at: Date.now() })
+    return later(preview)
+  },
+
+  saveDraftEdit: (sid, ordinal, req: DraftEditRequest) => {
+    lsWrite(`edits.${sid}.${ordinal}`, { ...req, at: Date.now() })
     return later(finish({
       kind: 'stage5.write',
       label: '章节改稿（人工稿落成新一轮）',
@@ -1753,6 +1915,25 @@ export const mockApi: Api = {
       ],
       sid,
       ordinal,
+    }))
+  },
+
+  retainPretrimBatch: (sid, req: BatchTrimResolutionRequest) => {
+    for (const item of req.items) {
+      lsWrite(`trim-resolution.${sid}.${item.output_ordinal}`, {
+        actor: req.actor,
+        reason: item.reason.trim() || req.reason,
+        action: 'retain_pretrim',
+        audit_sha256: item.audit_sha256,
+        chapter_sha256: item.chapter_sha256,
+      })
+    }
+    return later(finish({
+      kind: 'stage5.review',
+      label: '批量保留 pretrim 原稿',
+      extra: ['--retain-pretrim-batch', '(mock manifest)'],
+      sid,
+      ordinal: null,
     }))
   },
 

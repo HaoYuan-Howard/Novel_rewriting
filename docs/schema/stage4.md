@@ -239,9 +239,10 @@ Stage5 prompt 不接收 fact/beat/hinge/secret/rule id、alias、A 策略、结�
 都算入场，端点只作本章上下文出现不是漏落；事实、状态、材料和上下文
 精确性仍由 HARD 守卫关闭。
 
-公开 `ApprovalDoc` 是 v5；服务盘上 `_service/approvals/<sid>.json` 是 v6。旧 v5 只经显式
-`backfill_from_disk` 逐项对证，普通 GET / 启动不静默迁移。迁移保留可对证的 gate/seen/结构/writing，
-但 design history 恒空，绝不从既有 A/B/Plan 或付费记录伪造 A 审阅；只有同时 current 的 Plan v4
+公开 `ApprovalDoc` 是 v6；服务盘上 `_service/approvals/<sid>.json` 是 v7。旧 v6 只经显式
+`backfill_from_disk` 收进 v7：保留可逐项对证的 s0～s4、seen 与 design/structure/writing typed 历史，
+清除 s5～s7，绝不伪造 Stage5 closure。更早版本同样只经显式逐项对证，普通 GET / 启动不静默迁移；
+其中旧 v5 的 design history 恒空，绝不从既有 A/B/Plan 或付费记录伪造 A 审阅。只有同时 current 的 Plan v4
 与 bound EvidenceBinding v3（含其 INVALID Plan 的零成本恢复）可继续最终结构审批，未来再次运行 B
 才要求 current A accept。旧 v2 Binding 不迁移、不补字段，须按 A 审阅 → B producer 重建。一次最终结构决定必须提交当前
 subject SHA-256、actor、全书理由及与计划章集精确相等的逐章 accept/request_replan。全章 accept 才

@@ -99,6 +99,9 @@ def test_every_action_is_unique_and_buildable(paid_payload):
         if action['needs_value']:
             index = next(i for i, flag in enumerate(flags) if flag in VALUED_FLAGS)
             value = ('1' if flags[index] == '--chapters'
+                     else 'formal' if flags[index] == '--edit-confirmation'
+                     else 'a' * 64 if flags[index] in {
+                         '--current-chapter-sha256', '--preview-subject-sha256'}
                      else 'C:/placeholder.json')
             flags.insert(index + 1, value)
         # ⚠ 必填项由**点下去的那个人**给（同 `needs_value` 那一格的理由）：
@@ -106,7 +109,11 @@ def test_every_action_is_unique_and_buildable(paid_payload):
         #   ⇒ 本条测的是「补齐必填之后这条动作拼得出命令」，不是「空 flags 拼得出」——
         #   后者恰恰该拼不出，那正是 `NodeSpec.required_flags` 要挡的（复盘 §六.1）。
         for extra in N.missing_required(action['kind'], flags):
-            flags += [extra, 'C:/placeholder.json'] if extra in VALUED_FLAGS else [extra]
+            value = ('formal' if extra == '--edit-confirmation'
+                     else 'a' * 64 if extra in {
+                         '--current-chapter-sha256', '--preview-subject-sha256'}
+                     else 'C:/placeholder.json')
+            flags += [extra, value] if extra in VALUED_FLAGS else [extra]
         argv = N.build_argv(action['kind'], 'sid123', flags, base=BASE)
         assert ('--yes' in argv) == action['paid']
 
@@ -116,6 +123,8 @@ def test_revalidate_actions_collect_audit_values_without_credential_buttons(paid
     credentials = {
         '--actor', '--reason', '--subject-sha256',
         '--expected-revision-id',
+        '--current-chapter-sha256', '--preview-subject-sha256',
+        '--edit-confirmation',
     }
 
     assert not [
@@ -135,6 +144,27 @@ def test_revalidate_actions_collect_audit_values_without_credential_buttons(paid
             {'flag': '--actor', 'description': VALUED_FLAGS['--actor']},
             {'flag': '--reason', 'description': VALUED_FLAGS['--reason']},
         ]
+
+
+def test_stage5_edit_publishes_one_complete_action_not_three_credential_actions(
+        paid_payload):
+    actions = paid_payload['actions']
+    apply = next(
+        action for action in actions
+        if action['kind'] == 'stage5.write'
+        and action['extra'] == ['--apply-edit'])
+    assert [row['flag'] for row in apply['required_inputs']] == [
+        '--actor', '--reason', '--current-chapter-sha256',
+        '--preview-subject-sha256', '--edit-confirmation',
+    ]
+    credential_only = {
+        '--current-chapter-sha256', '--preview-subject-sha256',
+        '--edit-confirmation',
+    }
+    assert not [
+        action for action in actions
+        if set(action['extra'] or ()) & credential_only
+    ]
 
 
 def test_action_fields_are_derived_from_current_registries(paid_payload):

@@ -49,6 +49,7 @@ from novel.errors import (
     ArtifactUnreadable, BlockingFindingsUnresolved, GateBlocked, TerminalState,
     UpstreamMissing,
 )
+from novel.llm import stage5_runs
 from novel.report.builder import build
 from novel.run import RunContext
 from novel.stages.stage5 import checks
@@ -377,19 +378,20 @@ def mark_wontfix(ctx: RunContext, spec: str) -> CheckReport:
         「不知道」，不许猜）；
       · **豁免不删结论**——照常出现在报告与界面上，只是不进反哺、不占「待人工」，并单独计数。
     """
-    store = ArtifactStore(ctx)
-    current = require_fresh_review(ctx, store)
-    assert current.seq is not None and current.review is not None
-    seq, rev = current.seq, current.review
+    with stage5_runs.book_commit_ownership(ctx.novel_dir):
+        store = ArtifactStore(ctx)
+        current = require_fresh_review(ctx, store)
+        assert current.seq is not None and current.review is not None
+        seq, rev = current.seq, current.review
 
-    def pool_of(ordinal: int | None) -> list[Finding]:
-        if ordinal is not None:
-            return list(next((c.findings for c in rev.chapters
-                              if c.output_ordinal == ordinal), []))
-        return list(rev.book)
+        def pool_of(ordinal: int | None) -> list[Finding]:
+            if ordinal is not None:
+                return list(next((c.findings for c in rev.chapters
+                                  if c.output_ordinal == ordinal), []))
+            return list(rev.book)
 
-    wontfix.mark(store, 'stage5', spec, pool_of=pool_of, at=f'review_{seq}')
-    return _report_of_review(ctx, store, rev)
+        wontfix.mark(store, 'stage5', spec, pool_of=pool_of, at=f'review_{seq}')
+        return _report_of_review(ctx, store, rev)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -852,17 +854,19 @@ def _report_of_review(ctx: RunContext, store: ArtifactStore, rev: Review,
 
 def run_review(ctx: RunContext) -> tuple[Review, CheckReport]:
     """默认路：算一份新的验收报告并落盘。**0 成本，不调 LLM。**"""
-    store = ArtifactStore(ctx)
-    legacy = M.legacy_stage5_paths(store)
-    if legacy:
-        raise TerminalState(
-            f'legacy_incompatible：发现旧 Stage5 双臂路径 {legacy[:8]}。'
-            '旧 base 是只读历史证据，不在原地迁移；请在新的 canonical base 从 Stage5 producer 重建')
-    book = load_book(ctx, store)
-    rev = build_review(ctx, store, book)
-    n = (review_seqs(store)[-1] + 1) if review_seqs(store) else 1
-    store.write(REVIEW_TPL.format(n=n), rev)
-    return rev, _report_of_review(ctx, store, rev, book)
+    with stage5_runs.book_commit_ownership(ctx.novel_dir):
+        store = ArtifactStore(ctx)
+        legacy = M.legacy_stage5_paths(store)
+        if legacy:
+            raise TerminalState(
+                f'legacy_incompatible：发现旧 Stage5 双臂路径 {legacy[:8]}。'
+                '旧 base 是只读历史证据，不在原地迁移；'
+                '请在新的 canonical base 从 Stage5 producer 重建')
+        book = load_book(ctx, store)
+        rev = build_review(ctx, store, book)
+        n = (review_seqs(store)[-1] + 1) if review_seqs(store) else 1
+        store.write(REVIEW_TPL.format(n=n), rev)
+        return rev, _report_of_review(ctx, store, rev, book)
 
 
 def run_check_only(ctx: RunContext) -> CheckReport:

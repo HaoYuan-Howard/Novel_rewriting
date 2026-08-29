@@ -16,12 +16,15 @@ import type {
 import type {
   ApprovalBackfillResult,
   ApprovalDoc,
+  BatchTrimResolutionRequest,
   DesignReviewRequest,
   DesignReviewTemplate,
   DesignReviewTemplateQuery,
   GateKey,
   SeenKey,
   StructureApprovalRequest,
+  Stage5ClosureRequest,
+  Stage5ClosureTemplate,
 } from '@/types/approvals'
 import type { EnumsResponse } from '@/types/enums'
 import type {
@@ -43,6 +46,9 @@ import type { TrashNovelResult } from '@/types/novels'
 import type { RunProgress } from '@/types/run'
 import type {
   CheckReport,
+  DraftEditPreview,
+  DraftEditPreviewRequest,
+  DraftEditRequest,
   GlobalReviewDecisionSet,
   GlobalReviewResponse,
   InboxResponse,
@@ -480,6 +486,10 @@ export const realApi: Api = {
   getAgentQueue: () => get<AgentQueueView>('/agent/runs/queue'),
 
   getApprovals: (sid) => get<ApprovalDoc>(n(sid) + '/approvals'),
+  getStage5ClosureTemplate: (sid) =>
+    get<Stage5ClosureTemplate>(n(sid) + '/approvals/stage5/template'),
+  approveStage5Closure: (sid, request: Stage5ClosureRequest) =>
+    post<ApprovalDoc>(n(sid) + '/approvals/stage5', request),
   getDesignReviewTemplate: (sid, query: DesignReviewTemplateQuery) => {
     const params = new URLSearchParams({
       actor: query.actor,
@@ -502,11 +512,16 @@ export const realApi: Api = {
   startWriting: (sid) => post<ApprovalDoc>(n(sid) + '/approvals/writing'),
   resetBook: (sid) => post<ApprovalDoc>(n(sid) + '/approvals/reset'),
 
-  saveDraftEdit: async (sid, o, req) =>
+  previewDraftEdit: (sid, o, req: DraftEditPreviewRequest) =>
+    post<DraftEditPreview>(n(sid) + '/review/' + o + '/edit/preview', req),
+  saveDraftEdit: async (sid, o, req: DraftEditRequest) =>
     adaptJob(await post<BackendJobRecord>(n(sid) + '/review/' + o + '/edit', req)),
   retainPretrim: async (sid, o, req) =>
     adaptJob(await post<BackendJobRecord>(
       n(sid) + '/stage5/trim/' + o + '/retain-pretrim', req)),
+  retainPretrimBatch: async (sid, req: BatchTrimResolutionRequest) =>
+    adaptJob(await post<BackendJobRecord>(
+      n(sid) + '/stage5/trim/retain-pretrim-batch', req)),
   approveHook: async (sid, req) =>
     adaptJob(await post<BackendJobRecord>(n(sid) + '/stage6/approve', req)),
   approveNames: async (sid, req) =>

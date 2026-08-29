@@ -51,10 +51,12 @@ _R_SECTION_SIZES = {
     # 的唯一出口、真实 stdin hash 与 schema-less fallback 边界。
     # R-6 于 2026-08-29 增至 12：`R-6.1a` 把 Context 的最终结构审批前置
     # 与 `ctx_facts_exact` 的内容 HARD 后置条件分开登记，避免一格混写两种守卫。
-    # R-7 于 2026-08-29 增至 44：`R-7.27`～`R-7.27e` 冻结 foreign
-    # prepared 的零调用恢复、审批/来源/lineage 与 CLI-only HTTP 边界。
+    # R-7 于 2026-08-30 增至 47：`R-7.28`～`R-7.30` 冻结逐 slot 段落计划/
+    # reflow shadow、hash-bound 人工改稿与正式提交 same-run sweep。
+    # R-8 于 2026-08-30 增至 23：`R-8.17` 冻结 Stage5 整书闭合回执、
+    # 批量 trim 的 exact 工作面与 Stage6/7/assemble 硬闸。
     'R-0': 16, 'R-1': 16, 'R-2': 29, 'R-3': 32, 'R-4': 18,
-    'R-5': 28, 'R-6': 12, 'R-7': 44, 'R-8': 22, 'R-9': 26,
+    'R-5': 28, 'R-6': 12, 'R-7': 47, 'R-8': 23, 'R-9': 26,
     'R-10': 33, 'R-11': 20, 'R-12': 12, 'R-13': 8, 'R-14': 7,
 }
 

@@ -40,7 +40,7 @@ const rows: Stage4IndexRow[] = [
 
 function undecided(): ApprovalDoc {
   return {
-    v: 5,
+    v: 6,
     sid: 'book-1',
     gate: {
       s0: true, s1: true, s2: true,
@@ -63,6 +63,12 @@ function undecided(): ApprovalDoc {
       current_decision: null,
       history: [],
       binding_concerns: [],
+    },
+    writing_approval: {
+      available: false, current_subject_sha256: null, current_decision: null, history: [],
+    },
+    closure: {
+      state: 'missing', workpack: null, next_step: null, current_decision: null, history: [],
     },
     spawns: {},
   }

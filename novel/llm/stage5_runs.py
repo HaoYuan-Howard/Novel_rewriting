@@ -3,7 +3,8 @@
 
 ``agent_runs`` 统一校验 resolved profile、prompt/schema、stdout、成本账、会话账、
 append-only checkpoint 与 ``prepared -> committed`` journal。本模块只声明 Stage5
-的业务边界：一章一个 logical/provider session；同章正式 bundle 独占提交锁；
+的业务边界：一章一个 logical/provider session；所有 Stage5 writer 先占全书锁，
+同章正式 bundle 再占逐章提交锁；
 foreign ``prepared`` 默认必须由原 run 补完；只有显式新 run 在当前代码下完成
 ``prepared checkpoint recovery``，且 source raw+self sidecar、adoption audit、typed
 canonical 与 committed replacement lineage 全部闭合时，旧 reservation 才算 superseded。
@@ -324,17 +325,14 @@ def _ownership_thread_lock(path: Path) -> threading.RLock:
         return lock
 
 
-def _ownership_key(novel_dir: Path, chapter: int) -> str:
-    return os.path.normcase(str(
-        paths.stage5_chapter_commit_lock_path(novel_dir, chapter).resolve()))
+def _ownership_key(path: Path) -> str:
+    return os.path.normcase(str(path.resolve()))
 
 
 @contextmanager
-def commit_ownership(novel_dir: Path, chapter: int):
-    """同一本书同一章的正式写盘/恢复共用线程与进程锁；兄弟章互不阻塞。"""
-    ordinal = _chapter(chapter)
-    target = paths.stage5_chapter_commit_lock_path(novel_dir, ordinal)
-    key = _ownership_key(Path(novel_dir), ordinal)
+def _reentrant_ownership(target: Path):
+    """同一路径可重入的线程 + 进程锁；进程锁只由最外层获取一次。"""
+    key = _ownership_key(target)
     held = getattr(_OWNERSHIP_LOCAL, 'depths', None)
     if held is None:
         held = _OWNERSHIP_LOCAL.depths = {}
@@ -354,9 +352,28 @@ def commit_ownership(novel_dir: Path, chapter: int):
                 del held[key]
 
 
+@contextmanager
+def book_commit_ownership(novel_dir: Path):
+    """Stage5 写者总锁；锁序恒为书 → 章（升序）→ append-only 账。"""
+    target = paths.stage5_book_commit_lock_path(Path(novel_dir))
+    with _reentrant_ownership(target):
+        yield
+
+
+@contextmanager
+def commit_ownership(novel_dir: Path, chapter: int):
+    """同书写者锁内再取逐章锁；兄弟章不再与整书快照/提交交错。"""
+    ordinal = _chapter(chapter)
+    target = paths.stage5_chapter_commit_lock_path(novel_dir, ordinal)
+    with book_commit_ownership(Path(novel_dir)):
+        with _reentrant_ownership(target):
+            yield
+
+
 def _require_ownership(ctx: Any, chapter: int) -> None:
     held = getattr(_OWNERSHIP_LOCAL, 'depths', {})
-    if held.get(_ownership_key(Path(ctx.novel_dir), chapter), 0) < 1:
+    target = paths.stage5_chapter_commit_lock_path(ctx.novel_dir, chapter)
+    if held.get(_ownership_key(target), 0) < 1:
         raise ProvenanceRefused(
             f'Stage5 第 {chapter} 章 commit 必须在逐章 commit_ownership 临界区内完成')
 
@@ -1466,7 +1483,7 @@ def verify_committed_delivery(
 
 __all__ = [
     'HistoricalPrepared', 'RECOVERY_POLICY', 'SESSION_ISOLATION',
-    'commit_ownership', 'committed', 'ensure_run', 'file_sha256',
+    'book_commit_ownership', 'commit_ownership', 'committed', 'ensure_run',
     'manifest_sha256', 'mark_committed', 'mark_recovery_committed',
     'preclaim_recovery_adoption', 'preclaim_recovery_journal',
     'prepare_commit', 'prepare_recovery_journal', 'prepared', 'purpose_of',

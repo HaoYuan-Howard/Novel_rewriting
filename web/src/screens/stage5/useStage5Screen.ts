@@ -4,7 +4,13 @@ import { api } from '@/api/endpoints'
 import { qk } from '@/api/queryKeys'
 import { FRESH, SEV, chNo, type Severity } from '@/constants/vocabulary'
 import type { Finding } from '@/types/common'
-import type { ChapterSegment, ReviewResponse, TrimResolutionRequest } from '@/types/stages'
+import type {
+  ChapterSegment,
+  DraftEditPreviewRequest,
+  DraftEditRequest,
+  ReviewResponse,
+  TrimResolutionRequest,
+} from '@/types/stages'
 import type { TextPart } from '@/components/ui/HighlightedText'
 import { useOrdinal, useSid } from '@/hooks/useRouteParams'
 import { useChrome } from '@/hooks/useChrome'
@@ -144,6 +150,11 @@ function paras(t: string): string[] {
   return t.split(/\n+/).filter((x) => x.trim())
 }
 
+/** preview 只绑定完整 typed segments；顺序和每个字节都属于输入身份。 */
+function editSegmentsIdentity(segments: readonly ChapterSegment[]): string {
+  return JSON.stringify(segments)
+}
+
 export function useStage5Screen() {
   const sid = useSid()
   const ordinal = useOrdinal()
@@ -159,6 +170,10 @@ export function useStage5Screen() {
   const [sideBySide, setSideBySide] = useState(true)
   const [editing, setEditing] = useState(false)
   const [draftSegments, setDraftSegments] = useState<ChapterSegment[] | null>(null)
+  const [editActor, setEditActor] = useState('')
+  const [editReason, setEditReason] = useState('')
+  const [editConfirmed, setEditConfirmed] = useState(false)
+  const [previewInputIdentity, setPreviewInputIdentity] = useState<string | null>(null)
   const [matOpen, setMatOpen] = useState(false)
   const [chaptersArg, setChaptersArg] = useState(String(ordinal))
   const [trimActor, setTrimActor] = useState('')
@@ -180,20 +195,37 @@ export function useStage5Screen() {
     retry: false,
   })
 
+  const editPreview = useMutation({
+    mutationFn: (req: DraftEditPreviewRequest) =>
+      api.previewDraftEdit(sid, ordinal, req),
+    onSuccess: (_, request) => {
+      setPreviewInputIdentity(editSegmentsIdentity(request.segments))
+      setEditConfirmed(false)
+    },
+  })
+
   const save = useMutation({
-    mutationFn: (req: { segments: ChapterSegment[] }) =>
-      api.saveDraftEdit(sid, ordinal, req),
+    mutationFn: (req: DraftEditRequest) => api.saveDraftEdit(sid, ordinal, req),
     onSuccess: (job) => {
-      if (job.state === 'failed') {
+      if (job.state === 'failed' || job.state === 'unknown') {
         // CLI 内失败不是 HTTP 错误（作业落 state='failed'）——完整输出在抽屉日志里
         openDrawer()
+      } else if (job.state === 'running') {
+        notify('改稿作业已发起；本次不会自动运行最终 Review')
       } else {
         setEditing(false)
-        notify('改稿已保存')
+        setDraftSegments(null)
+        setEditReason('')
+        setEditConfirmed(false)
+        setPreviewInputIdentity(null)
+        editPreview.reset()
+        notify('改稿已落成新一轮；完成其余改稿后在顶部只跑一次最终 Review')
       }
       void qc.invalidateQueries({ queryKey: qk.stage5(sid, ordinal) })
       void qc.invalidateQueries({ queryKey: qk.review(sid, ordinal) })
       void qc.invalidateQueries({ queryKey: qk.check(sid, 'stage5') })
+      void qc.invalidateQueries({ queryKey: qk.approvals(sid) })
+      void qc.invalidateQueries({ queryKey: qk.inbox(sid) })
       void qc.invalidateQueries({ queryKey: qk.jobs(sid) })
     },
   })
@@ -262,6 +294,9 @@ export function useStage5Screen() {
   const firstDraft = d?.drafts[0] ?? null
   const baseSegments = firstDraft?.segments ?? []
   const segments = draftSegments ?? baseSegments
+  const currentEditIdentity = editSegmentsIdentity(segments)
+  const editPreviewCurrent = !!editPreview.data
+    && previewInputIdentity === currentEditIdentity
   const baseText = baseSegments.map((segment) => segment.text.trim()).join('\n\n').trim()
   const text = segments.map((segment) => segment.text.trim()).join('\n\n').trim()
 
@@ -322,20 +357,51 @@ export function useStage5Screen() {
       setEditing((wasEditing) => {
         if (!wasEditing) {
           setDraftSegments(baseSegments.map((segment) => ({ ...segment })))
+          setPreviewInputIdentity(null)
+          setEditConfirmed(false)
+          editPreview.reset()
         }
         return !wasEditing
       })
     },
     text,
     editSegments: segments,
-    setSegmentText: (slot: string, value: string) =>
+    setSegmentText: (slot: string, value: string) => {
+      setEditConfirmed(false)
       setDraftSegments((current) =>
         (current ?? baseSegments).map((segment) =>
           segment.slot === slot ? { ...segment, text: value } : segment,
         ),
-      ),
+      )
+    },
+    editPreview,
+    editPreviewCurrent,
+    previewEdit: () => editPreview.mutate({
+      segments: segments.map((segment) => ({ ...segment })),
+    }),
+    editActor,
+    setEditActor,
+    editReason,
+    setEditReason,
+    editConfirmed,
+    setEditConfirmed,
+    applyPreview: async () => {
+      const preview = editPreview.data
+      if (
+        !preview || !editPreviewCurrent || !editConfirmed
+        || !editActor.trim() || !editReason.trim()
+      ) throw new Error('当前改稿 preview 已失效或尚未完成明示确认')
+      return save.mutateAsync({
+        segments: preview.normalized_segments.map((segment) => ({ ...segment })),
+        actor: editActor.trim(),
+        reason: editReason.trim(),
+        current_chapter_sha256: preview.current_chapter_sha256,
+        preview_subject_sha256: preview.preview_subject_sha256,
+        confirmation: preview.required_confirmation,
+      })
+    },
     save,
-    editNote: '保存走子进程重跑校验，落成新的一轮；旧轮归档，不覆盖。',
+    editNote: '先只读预检，再按服务端要求明示确认并 apply。每次 apply 不自动跑 Review；全部改完后只在顶部跑一次最终 Review。',
     trimAudit: d?.trim_audit ?? null,
     trimActor,
     setTrimActor,
@@ -540,6 +606,10 @@ export function useStage5Screen() {
     setChaptersArg,
     writeActions: stage5WriteActions(enums.data?.actions ?? []),
     fullWriteAction: lookupAction(enums.data, { kind: 'stage5.write', extra: null }),
+    editAction: lookupAction(enums.data, {
+      kind: 'stage5.write',
+      extra: ['--apply-edit'],
+    }),
     approvals,
     writingBefore: (action: { paid: boolean } | null) =>
       stage5WritingBefore(

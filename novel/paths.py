@@ -856,6 +856,14 @@ def stage5_chapter_commit_lock_path(
             / f'.commit-{_stage5_chapter_dirname(chapter)}')
 
 
+def stage5_book_commit_lock_path(
+        novel_dir: str | os.PathLike[str],
+) -> Path:
+    """Stage5 CLI writer 与 API closure 共用的 ``_service`` 书锁。"""
+    root = Path(os.fspath(novel_dir)).resolve()
+    return service_dir(root.parent) / 'stage5_writer_locks' / root.name / 'book'
+
+
 def stage6_semantic_run_path(
         novel_dir: str | os.PathLike[str], run_id: str,
 ) -> Path:

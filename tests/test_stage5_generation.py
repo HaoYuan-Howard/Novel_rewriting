@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import importlib
 import json
 import shutil
@@ -21,7 +22,8 @@ from contracts.schema.stage4 import CtxProvenance, WriterContext
 from novel import prov
 from novel.cli import exit_codes as X
 from novel.errors import (
-    GateBlocked, ProvenanceRefused, ResponseRepairRequired, TerminalState,
+    GateBlocked, ProvenanceRefused, ResponseRepairRequired, SourceConflict,
+    TerminalState,
 )
 from novel.llm.cache import (
     CachePolicy, ResponseCache, cache_key, request_fingerprint,
@@ -66,6 +68,10 @@ class _MemoryTrimStore:
 
     def read_own_with_sha256(self, _model, rel, **_kwargs):
         return self.docs[rel], 'a' * 64
+
+    def prospective_sha256(self, _rel, _artifact):
+        # 本 fake 的写后读回摘要恒为同一占位；prepared 必须与它逐字一致。
+        return 'a' * 64
 
     def revalidation_baseline(self, rel, _model, **_kwargs):
         invalid_rel = rel.replace('.json', '.INVALID.json')
@@ -120,6 +126,68 @@ class _MemoryTrimStore:
         yield
 
 
+class _TransactionalEditStore(_MemoryTrimStore):
+    """为 edit 单测保留真实 history_transaction 的回滚/轮次语义。"""
+
+    def __init__(self, docs=None, *, baselines=None):
+        super().__init__(docs, baselines=baselines)
+        self.rounds = []
+        self.write_round_calls = 0
+
+    @staticmethod
+    def _artifact_sha256(artifact) -> str:
+        payload = artifact.model_dump(by_alias=True, mode='json')
+        return hashlib.sha256(json.dumps(
+            payload, ensure_ascii=False, sort_keys=True,
+            separators=(',', ':')).encode('utf-8')).hexdigest()
+
+    def read_own_with_sha256(self, _model, rel, **_kwargs):
+        artifact = self.docs[rel]
+        return artifact, self._artifact_sha256(artifact)
+
+    def prospective_sha256(self, _rel, artifact):
+        return self._artifact_sha256(artifact)
+
+    def next_round(self, rel):
+        current = self.docs.get(rel)
+        current_round = (
+            int(current.provenance.round)
+            if current is not None and current.provenance is not None
+            else 0
+        )
+        archived = [
+            int(artifact.provenance.round)
+            for artifact in self.rounds
+            if artifact.provenance is not None
+        ]
+        return max([current_round, *archived], default=0) + 1
+
+    def write_round(self, rel, artifact):
+        if rel in self.docs:
+            self.rounds.append(copy.deepcopy(self.docs[rel]))
+        self.write_round_calls += 1
+        self.docs[rel] = artifact
+        return rel
+
+    @contextmanager
+    def history_transaction(self, *rels):
+        self.transactions.append(rels)
+        before_docs = copy.deepcopy(self.docs)
+        before_rounds = copy.deepcopy(self.rounds)
+        before_calls = self.write_round_calls
+        try:
+            yield
+        except BaseException as exc:
+            # 只供“操作系统在 canonical replace 后硬杀进程”的恢复测试：真实进程
+            # 此时根本没有机会执行 Python rollback。普通异常仍完整回滚。
+            if getattr(exc, 'simulate_process_kill', False):
+                raise
+            self.docs = before_docs
+            self.rounds = before_rounds
+            self.write_round_calls = before_calls
+            raise
+
+
 def _stage5_chapter(*, text, budget_chars=10, errs=None, output_ordinal=1):
     provenance = write.RoundFreeProvenance(
         code='test-code', root_clean_sha1='a' * 40, inputs={},
@@ -141,6 +209,51 @@ def _stage5_chapter(*, text, budget_chars=10, errs=None, output_ordinal=1):
 def _trim_book(entry):
     return SimpleNamespace(
         chapters={1: entry}, source_text={}, quote_style=None, sep_chars=None)
+
+
+def _edit_unit(tmp_path, monkeypatch, judge):
+    entry = {
+        'output_ordinal': 1,
+        'from_source_ordinals': [1],
+        'source_chars': 100,
+        'budget_chars': 1000,
+        'scenes': [{'slot': 's01', 'budget_chars': 1000}],
+    }
+    book = _trim_book(entry)
+    current = _stage5_chapter(text='当前正式稿。', budget_chars=1000)
+    store = _TransactionalEditStore({
+        'stage5/ch01.json': current,
+        'stage5/review_1.json': {'sentinel': '旧 Review 不得被 edit 改写'},
+    })
+    novel_dir = tmp_path / '人工改稿_001'
+    ctx = SimpleNamespace(
+        novel_dir=novel_dir,
+        sid='人工改稿_001',
+        run_id='run-edit-1',
+        code='test-edit-preview',
+        free_provenance=lambda cls, **kwargs: cls(
+            code='test-edit-preview', root_clean_sha1='a' * 40,
+            inputs={}, **kwargs),
+    )
+    monkeypatch.setattr(write, 'ArtifactStore', lambda _ctx: store)
+    monkeypatch.setattr(write, 'require_canonical_layout', lambda _store: None)
+    monkeypatch.setattr(write.review, 'load_book', lambda *_args: book)
+    monkeypatch.setattr(
+        write, '_normalize_segments',
+        lambda segments, _book: (segments, write.M.NormalizeAccount()))
+    monkeypatch.setattr(write, '_judge', judge)
+    monkeypatch.setattr(write.M, 'overlap_ratio', lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        write.prompts, 'build_material',
+        lambda *_args, **_kwargs: SimpleNamespace(given='given'))
+    monkeypatch.setattr(
+        write, '_report',
+        lambda *_args, **_kwargs: SimpleNamespace(passed=True))
+    edit = tmp_path / 'ch01.json'
+    response = write.ChapterResponse(
+        segments=[{'slot': 's01', 'text': '候选人工稿。'}])
+    edit.write_text(response.model_dump_json(), encoding='utf-8')
+    return ctx, store, response, edit
 
 
 def test_length_capped_nonempty_draft_is_not_usable():
@@ -169,16 +282,27 @@ def test_apply_edit_cannot_formalize_a_paragraph_budget_hard(tmp_path, monkeypat
     class Store:
         writes = []
 
+        current = _stage5_chapter(text='当前正式稿。', budget_chars=100)
+
         @staticmethod
-        def exists(_rel):
-            return False
+        def exists(rel):
+            return rel == 'stage5/ch01.json'
+
+        @classmethod
+        def read_own_with_sha256(cls, _model, rel, **_kwargs):
+            assert rel == 'stage5/ch01.json'
+            return cls.current, 'a' * 64
 
         @staticmethod
         def next_round(_rel):
             return 1
 
     store = Store()
-    ctx = SimpleNamespace(free_provenance=lambda *_args, **_kwargs: object())
+    ctx = SimpleNamespace(
+        novel_dir=tmp_path / '人工改稿_001', sid='人工改稿_001',
+        run_id='run-paragraph-hard', code='test-paragraph-hard',
+        free_provenance=lambda *_args, **_kwargs: object(),
+    )
     monkeypatch.setattr(write, 'ArtifactStore', lambda _ctx: store)
     monkeypatch.setattr(write, 'require_canonical_layout', lambda _store: None)
     monkeypatch.setattr(write.review, 'load_book', lambda *_args: book)
@@ -188,13 +312,26 @@ def test_apply_edit_cannot_formalize_a_paragraph_budget_hard(tmp_path, monkeypat
     monkeypatch.setattr(
         write.prompts, 'build_material',
         lambda *_args, **_kwargs: SimpleNamespace(given='given'))
-    hit = SimpleNamespace(
-        rule='paragraph_budget_missed',
-        detail='自然段数量未命中明确目标：1 段，不在 3~4 段内')
+    hit = write.checks.finding(
+        'paragraph_budget_missed',
+        detail='自然段数量未命中明确目标：1 段，不在 3~4 段内',
+        evidence=['actual=1', 'target=3~4'],
+    )
     monkeypatch.setattr(write, '_judge', lambda *_args, **_kwargs: ([hit], ['hard'], []))
 
-    with pytest.raises(TerminalState, match='段落数硬闸'):
-        write.run_apply_edit(ctx, str(edit))
+    preview = write.prepare_edit_preview(
+        ctx, 1, write.ChapterResponse.model_validate_json(original)).preview()
+    for confirmation in ('formal', 'working_draft'):
+        with pytest.raises(TerminalState, match='段落数硬闸'):
+            write.run_apply_edit(
+                ctx,
+                str(edit),
+                actor='editor',
+                reason='补足段落结构',
+                current_chapter_sha256=preview.current_chapter_sha256,
+                preview_subject_sha256=preview.preview_subject_sha256,
+                confirmation=confirmation,
+            )
     assert edit.read_text(encoding='utf-8') == original
     assert store.writes == []
 
@@ -212,7 +349,7 @@ def test_over_length_chapter_keeps_pretrim_and_records_why(monkeypatch):
 
 
 def test_model_landing_builds_trim_audit_from_the_final_normalized_segments(
-        monkeypatch):
+        tmp_path, monkeypatch):
     """首写/修订共用的落盘口，只能按最终 canonical 字节同步 trim。"""
     final_text = '终稿正文已经明显超过当前预算上限。'
     entry = {
@@ -230,7 +367,9 @@ def test_model_landing_builds_trim_audit_from_the_final_normalized_segments(
             [{'slot': 's01', 'text': final_text}], write.M.NormalizeAccount()))
     monkeypatch.setattr(write, '_judge', lambda *_args, **_kwargs: ([], [], []))
     monkeypatch.setattr(write.M, 'overlap_ratio', lambda *_args, **_kwargs: None)
-    ctx = SimpleNamespace(accounting={}, account=lambda *_args, **_kwargs: None)
+    ctx = SimpleNamespace(
+        novel_dir=tmp_path / 'book',
+        accounting={}, account=lambda *_args, **_kwargs: None)
 
     where, errors, _findings, trim_notes = write._write_chapter(
         ctx,
@@ -266,9 +405,16 @@ def test_apply_edit_commits_the_chapter_and_its_trim_audit_together(
         'scenes': [{'slot': 's01', 'budget_chars': 5}],
     }
     book = _trim_book(entry)
-    store = _MemoryTrimStore()
-    ctx = SimpleNamespace(free_provenance=lambda cls, **kwargs: cls(
-        code='test-code', root_clean_sha1='a' * 40, inputs={}, **kwargs))
+    store = _MemoryTrimStore({
+        'stage5/ch01.json': _stage5_chapter(
+            text='当前正式稿。', budget_chars=5),
+    })
+    ctx = SimpleNamespace(
+        novel_dir=tmp_path / '人工改稿_001', sid='人工改稿_001',
+        run_id='run-edit-1', code='test-code',
+        free_provenance=lambda cls, **kwargs: cls(
+            code='test-code', root_clean_sha1='a' * 40, inputs={}, **kwargs),
+    )
     monkeypatch.setattr(write, 'ArtifactStore', lambda _ctx: store)
     monkeypatch.setattr(write, 'require_canonical_layout', lambda _store: None)
     monkeypatch.setattr(write.review, 'load_book', lambda *_args: book)
@@ -282,7 +428,18 @@ def test_apply_edit_commits_the_chapter_and_its_trim_audit_together(
         lambda *_args, **_kwargs: SimpleNamespace(given='given'))
     monkeypatch.setattr(write, '_report', lambda *_args, **_kwargs: object())
 
-    write.run_apply_edit(ctx, str(edit))
+    response = write.ChapterResponse.model_validate_json(
+        edit.read_text(encoding='utf-8'))
+    preview = write.prepare_edit_preview(ctx, 1, response).preview()
+    write.run_apply_edit(
+        ctx,
+        str(edit),
+        actor='editor',
+        reason='人工调整正文并保留超长 trim 工作面',
+        current_chapter_sha256=preview.current_chapter_sha256,
+        preview_subject_sha256=preview.preview_subject_sha256,
+        confirmation=preview.required_confirmation,
+    )
 
     chapter = store.docs['stage5/ch01.json']
     audit = store.docs['stage5/trim_audit_ch01.json']
@@ -290,7 +447,312 @@ def test_apply_edit_commits_the_chapter_and_its_trim_audit_together(
     assert audit.before_sha256 == write._sha256_text(chapter.text)
 
 
-def test_recheck_preserves_paid_payload_and_backfills_trim_audit(monkeypatch):
+def test_edit_preview_is_readonly_and_working_draft_is_explicit(
+        tmp_path, monkeypatch):
+    """新增一般 HARD 只有 working_draft 可落；edit 不追跑 Review。"""
+    hit = write.checks.finding(
+        'meta_leak', detail='候选出现任务术语', evidence=['候选人工稿'])
+
+    def judge(text, *_args, **_kwargs):
+        return (([hit], ['候选出现任务术语'], [])
+                if text == '候选人工稿。' else ([], [], []))
+
+    ctx, store, response, edit = _edit_unit(tmp_path, monkeypatch, judge)
+    before = copy.deepcopy(store.docs)
+    preview = write.prepare_edit_preview(ctx, 1, response).preview()
+
+    assert store.docs == before, 'preview 不得写章、归档、Review 或审计账'
+    assert preview.required_confirmation == 'working_draft'
+    assert [row.rule for row in preview.introduced_hard_findings] == ['meta_leak']
+    with pytest.raises(SourceConflict, match='不得把新增 HARD 伪装成 formal'):
+        write.run_apply_edit(
+            ctx, str(edit), actor='editor', reason='先保存工作稿',
+            current_chapter_sha256=preview.current_chapter_sha256,
+            preview_subject_sha256=preview.preview_subject_sha256,
+            confirmation='formal')
+    assert store.write_round_calls == 0
+
+    report = write.run_apply_edit(
+        ctx, str(edit), actor='editor', reason='先保存工作稿',
+        current_chapter_sha256=preview.current_chapter_sha256,
+        preview_subject_sha256=preview.preview_subject_sha256,
+        confirmation='working_draft')
+
+    assert report.passed
+    assert store.docs['stage5/ch01.json'].text == '候选人工稿。'
+    assert store.docs['stage5/ch01.json'].errs == ['候选出现任务术语']
+    assert store.docs['stage5/review_1.json'] == before['stage5/review_1.json']
+    assert 'stage5/review_2.json' not in store.docs, '逐次 edit 不得自动追跑 Review'
+    actions = write.human_actions.read_events(tmp_path)
+    assert len(actions) == 1
+    assert actions[0].confirmation == 'working_draft'
+    assert actions[0].introduced_hard_rules == ['meta_leak']
+
+
+def test_apply_edit_requires_both_preview_locks(tmp_path, monkeypatch):
+    ctx, store, response, edit = _edit_unit(
+        tmp_path, monkeypatch, lambda *_args, **_kwargs: ([], [], []))
+    preview = write.prepare_edit_preview(ctx, 1, response).preview()
+
+    with pytest.raises(SourceConflict, match='已在 preview 后变化'):
+        write.run_apply_edit(
+            ctx, str(edit), actor='editor', reason='确认正式稿',
+            current_chapter_sha256='f' * 64,
+            preview_subject_sha256=preview.preview_subject_sha256,
+            confirmation='formal')
+    with pytest.raises(SourceConflict, match='preview 主体已漂移'):
+        write.run_apply_edit(
+            ctx, str(edit), actor='editor', reason='确认正式稿',
+            current_chapter_sha256=preview.current_chapter_sha256,
+            preview_subject_sha256='f' * 64,
+            confirmation='formal')
+
+    assert store.write_round_calls == 0
+    assert write.human_actions.read_events(tmp_path) == []
+
+
+def test_preview_subject_binds_the_complete_typed_finding(tmp_path, monkeypatch):
+    converge = {'value': 'new'}
+
+    def judge(text, *_args, **_kwargs):
+        if text != '候选人工稿。':
+            return [], [], []
+        hit = write.checks.finding(
+            'meta_leak', detail='候选出现任务术语', evidence=['候选人工稿'],
+            converge=converge['value'])
+        return [hit], ['候选出现任务术语'], []
+
+    ctx, _store, response, _edit = _edit_unit(tmp_path, monkeypatch, judge)
+    before = write.prepare_edit_preview(ctx, 1, response).preview()
+    converge['value'] = 'same_draft'
+    after = write.prepare_edit_preview(ctx, 1, response).preview()
+
+    assert before.normalized_segments == after.normalized_segments
+    assert before.introduced_hard_findings[0].converge != \
+        after.introduced_hard_findings[0].converge
+    assert before.preview_subject_sha256 != after.preview_subject_sha256
+
+
+def test_append_failure_rolls_back_edit_and_retry_creates_one_round_one_action(
+        tmp_path, monkeypatch):
+    ctx, store, response, edit = _edit_unit(
+        tmp_path, monkeypatch, lambda *_args, **_kwargs: ([], [], []))
+    preview = write.prepare_edit_preview(ctx, 1, response).preview()
+    before = copy.deepcopy(store.docs)
+    original_commit = write.human_actions.commit_edit
+    monkeypatch.setattr(
+        write.human_actions,
+        'commit_edit',
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError('disk full')))
+
+    with pytest.raises(OSError, match='disk full'):
+        write.run_apply_edit(
+            ctx, str(edit), actor='editor', reason='确认正式稿',
+            current_chapter_sha256=preview.current_chapter_sha256,
+            preview_subject_sha256=preview.preview_subject_sha256,
+            confirmation='formal')
+
+    assert store.docs == before
+    assert store.rounds == [] and store.write_round_calls == 0
+    assert write.human_actions.read_events(tmp_path) == []
+    assert len(write.human_actions.actions_path(tmp_path).read_text(
+        encoding='utf-8').splitlines()) == 1, 'prepared 留作可恢复证据，不冒充已提交动作'
+
+    monkeypatch.setattr(
+        write.human_actions,
+        'commit_edit',
+        original_commit)
+    # 新作业拥有不同 code/run，prospective result 也随来源账变化；旧 orphan prepared
+    # 不得用 request_id 抢占重试，新的 result-addressed action 应能正常提交。
+    retry_ctx = SimpleNamespace(
+        **{**ctx.__dict__, 'run_id': 'run-edit-retry', 'code': 'test-edit-retry'},
+    )
+    retry_ctx.free_provenance = lambda cls, **kwargs: cls(
+        code='test-edit-retry', root_clean_sha1='a' * 40, inputs={}, **kwargs)
+    write.run_apply_edit(
+        retry_ctx, str(edit), actor='editor', reason='确认正式稿',
+        current_chapter_sha256=preview.current_chapter_sha256,
+        preview_subject_sha256=preview.preview_subject_sha256,
+        confirmation='formal')
+    assert store.write_round_calls == 1 and len(store.rounds) == 1
+    assert len(write.human_actions.read_events(tmp_path)) == 1
+
+    # 客户端没收到成功响应而重放同一请求：按 landed SHA 读回 committed，幂等成功；
+    # 不再造一轮，也不再追加第二份公开动作。
+    write.run_apply_edit(
+        retry_ctx, str(edit), actor='editor', reason='确认正式稿',
+        current_chapter_sha256=preview.current_chapter_sha256,
+        preview_subject_sha256=preview.preview_subject_sha256,
+        confirmation='formal')
+    assert store.write_round_calls == 1 and len(store.rounds) == 1
+    assert len(write.human_actions.read_events(tmp_path)) == 1
+
+
+def test_kill_after_canonical_write_is_reconciled_by_a_new_run_without_new_round(
+        tmp_path, monkeypatch):
+    """prepared + landed canonical 是 kill 后的恢复证据；公开账只认 committed。"""
+    ctx, store, response, edit = _edit_unit(
+        tmp_path, monkeypatch, lambda *_args, **_kwargs: ([], [], []))
+    preview = write.prepare_edit_preview(ctx, 1, response).preview()
+    original_commit = write.human_actions.commit_edit
+
+    class SimulatedProcessKill(BaseException):
+        simulate_process_kill = True
+
+    monkeypatch.setattr(
+        write.human_actions, 'commit_edit',
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(SimulatedProcessKill()))
+    with pytest.raises(SimulatedProcessKill):
+        write.run_apply_edit(
+            ctx, str(edit), actor='editor', reason='确认正式稿',
+            current_chapter_sha256=preview.current_chapter_sha256,
+            preview_subject_sha256=preview.preview_subject_sha256,
+            confirmation='formal')
+
+    assert store.docs['stage5/ch01.json'].text == '候选人工稿。'
+    assert store.write_round_calls == 1 and len(store.rounds) == 1
+    assert write.human_actions.read_events(tmp_path) == []
+    assert len(write.human_actions.actions_path(tmp_path).read_text(
+        encoding='utf-8').splitlines()) == 1
+
+    monkeypatch.setattr(write.human_actions, 'commit_edit', original_commit)
+    retry_edit = tmp_path / 'retry-upload' / 'ch01.json'
+    retry_edit.parent.mkdir()
+    retry_edit.write_text(response.model_dump_json(), encoding='utf-8')
+    retry_ctx = SimpleNamespace(
+        **{**ctx.__dict__, 'run_id': 'run-after-kill', 'code': 'new-worker-code'},
+    )
+    retry_ctx.free_provenance = lambda cls, **kwargs: cls(
+        code='new-worker-code', root_clean_sha1='a' * 40, inputs={}, **kwargs)
+    write.run_apply_edit(
+        retry_ctx, str(retry_edit), actor='editor', reason='确认正式稿',
+        current_chapter_sha256=preview.current_chapter_sha256,
+        preview_subject_sha256=preview.preview_subject_sha256,
+        confirmation='formal')
+
+    assert store.write_round_calls == 1 and len(store.rounds) == 1
+    events = write.human_actions.read_events(tmp_path)
+    assert len(events) == 1 and events[0].phase == 'committed'
+    assert len(write.human_actions.actions_path(tmp_path).read_text(
+        encoding='utf-8').splitlines()) == 2
+
+
+def test_truncated_committed_tail_is_quarantined_and_rebuilt_without_new_round(
+        tmp_path, monkeypatch):
+    ctx, store, response, edit = _edit_unit(
+        tmp_path, monkeypatch, lambda *_args, **_kwargs: ([], [], []))
+    preview = write.prepare_edit_preview(ctx, 1, response).preview()
+    original_append = write.human_actions.append_line_under_process_lock
+
+    class SimulatedProcessKill(BaseException):
+        simulate_process_kill = True
+
+    def torn_committed(path, line):
+        if json.loads(line)['phase'] != 'committed':
+            return original_append(path, line)
+        payload = (line + '\n').encode('utf-8')
+        with Path(path).open('ab') as handle:
+            handle.write(payload[:len(payload) // 2])
+            handle.flush()
+        raise SimulatedProcessKill()
+
+    monkeypatch.setattr(
+        write.human_actions, 'append_line_under_process_lock', torn_committed)
+    with pytest.raises(SimulatedProcessKill):
+        write.run_apply_edit(
+            ctx, str(edit), actor='editor', reason='确认正式稿',
+            current_chapter_sha256=preview.current_chapter_sha256,
+            preview_subject_sha256=preview.preview_subject_sha256,
+            confirmation='formal')
+
+    assert store.write_round_calls == 1 and len(store.rounds) == 1
+    assert write.human_actions.read_events(tmp_path) == []
+    monkeypatch.setattr(
+        write.human_actions, 'append_line_under_process_lock', original_append)
+    retry_ctx = SimpleNamespace(
+        **{**ctx.__dict__, 'run_id': 'run-after-torn-commit', 'code': 'retry-code'},
+    )
+    retry_ctx.free_provenance = lambda cls, **kwargs: cls(
+        code='retry-code', root_clean_sha1='a' * 40, inputs={}, **kwargs)
+    write.run_apply_edit(
+        retry_ctx, str(edit), actor='editor', reason='确认正式稿',
+        current_chapter_sha256=preview.current_chapter_sha256,
+        preview_subject_sha256=preview.preview_subject_sha256,
+        confirmation='formal')
+
+    assert store.write_round_calls == 1 and len(store.rounds) == 1
+    assert len(write.human_actions.read_events(tmp_path)) == 1
+    assert len(list(write.human_actions.tail_recovery_dir(
+        tmp_path).glob('*.json'))) == 1
+
+
+def test_two_independent_stores_serialize_the_same_chapter_commit(
+        tmp_path, monkeypatch):
+    """直 CLI/多服务实例共用书章锁；输家只报 stale，不能回滚覆盖赢家。"""
+    ctx_a, store_a, response, edit = _edit_unit(
+        tmp_path, monkeypatch, lambda *_args, **_kwargs: ([], [], []))
+    preview = write.prepare_edit_preview(ctx_a, 1, response).preview()
+    ctx_b = SimpleNamespace(
+        **{**ctx_a.__dict__, 'run_id': 'run-edit-b', 'code': 'test-edit-b'},
+    )
+    ctx_b.free_provenance = lambda cls, **kwargs: cls(
+        code='test-edit-b', root_clean_sha1='a' * 40, inputs={}, **kwargs)
+    store_b = _TransactionalEditStore()
+    store_b.docs = store_a.docs
+    monkeypatch.setattr(
+        write, 'ArtifactStore',
+        lambda chosen: store_a if chosen is ctx_a else store_b)
+
+    barrier = threading.Barrier(3)
+    results: list[str] = []
+    failures: list[BaseException] = []
+
+    def apply(chosen, actor):
+        try:
+            barrier.wait()
+            write.run_apply_edit(
+                chosen, str(edit), actor=actor, reason=f'{actor} 确认当前预览',
+                current_chapter_sha256=preview.current_chapter_sha256,
+                preview_subject_sha256=preview.preview_subject_sha256,
+                confirmation='formal')
+            results.append(actor)
+        except BaseException as exc:  # noqa: BLE001 - 子线程错误必须回传断言
+            failures.append(exc)
+
+    threads = [
+        threading.Thread(target=apply, args=(ctx_a, 'editor-a')),
+        threading.Thread(target=apply, args=(ctx_b, 'editor-b')),
+    ]
+    for thread in threads:
+        thread.start()
+    barrier.wait()
+    for thread in threads:
+        thread.join(timeout=10)
+
+    assert len(results) == 1
+    assert len(failures) == 1 and isinstance(failures[0], SourceConflict)
+    assert store_a.docs['stage5/ch01.json'].text == '候选人工稿。'
+    assert store_a.write_round_calls + store_b.write_round_calls == 1
+    assert len(store_a.rounds) + len(store_b.rounds) == 1
+    assert len(write.human_actions.read_events(tmp_path)) == 1
+
+
+def test_preview_edit_relative_path_is_resolved_from_the_book_directory(
+        tmp_path, monkeypatch):
+    ctx, _store, response, _outside = _edit_unit(
+        tmp_path, monkeypatch, lambda *_args, **_kwargs: ([], [], []))
+    relative = ctx.novel_dir / 'incoming' / 'ch01.json'
+    relative.parent.mkdir(parents=True)
+    relative.write_text(response.model_dump_json(), encoding='utf-8')
+
+    preview = write.run_edit_preview(ctx, 'incoming/ch01.json')
+    assert preview.output_ordinal == 1
+    with pytest.raises(TerminalState, match='相对路径必须留在当前书目录'):
+        write.run_edit_preview(ctx, '../ch01.json')
+
+
+def test_recheck_preserves_paid_payload_and_backfills_trim_audit(
+        tmp_path, monkeypatch):
     original_text = '甲,乙。\n丙丁戊己庚辛。'
     chapter = _stage5_chapter(
         text=original_text, budget_chars=4, errs=['旧阻断读数'])
@@ -329,7 +791,7 @@ def test_recheck_preserves_paid_payload_and_backfills_trim_audit(monkeypatch):
         lambda *_args, **_kwargs: SimpleNamespace(given='given'))
     monkeypatch.setattr(write, '_report', lambda *_args, **_kwargs: object())
 
-    write.run_recheck(SimpleNamespace())
+    write.run_recheck(SimpleNamespace(novel_dir=tmp_path / 'book'))
 
     updated = store.docs[rel]
     assert judged == {
@@ -352,7 +814,7 @@ def test_recheck_preserves_paid_payload_and_backfills_trim_audit(monkeypatch):
 
 
 def test_revalidate_judges_and_promotes_the_live_invalid_segments_verbatim(
-        monkeypatch):
+        tmp_path, monkeypatch):
     original_text = '甲,乙。\n丙丁戊己庚辛。'
     invalid = _stage5_chapter(
         text=original_text, budget_chars=4, errs=['旧阻断读数'])
@@ -389,7 +851,8 @@ def test_revalidate_judges_and_promotes_the_live_invalid_segments_verbatim(
     monkeypatch.setattr(write, '_report', lambda *_args, **_kwargs: object())
 
     write.run_revalidate(
-        SimpleNamespace(), actor='tester', reason='按当前规则重判通过')
+        SimpleNamespace(novel_dir=tmp_path / 'book'),
+        actor='tester', reason='按当前规则重判通过')
 
     assert judged == {
         'text': invalid.text,
@@ -408,7 +871,7 @@ def test_revalidate_judges_and_promotes_the_live_invalid_segments_verbatim(
 
 
 def test_recheck_refuses_a_formal_chapter_whose_payload_ordinal_mismatches_path(
-        monkeypatch):
+        tmp_path, monkeypatch):
     chapter = _stage5_chapter(
         text='路径说第一章，载体却自报第二章。', output_ordinal=2)
     entry = {
@@ -434,14 +897,14 @@ def test_recheck_refuses_a_formal_chapter_whose_payload_ordinal_mismatches_path(
         lambda *_args, **_kwargs: SimpleNamespace(given='given'))
 
     with pytest.raises(ProvenanceRefused, match='提交主体错配'):
-        write.run_recheck(SimpleNamespace())
+        write.run_recheck(SimpleNamespace(novel_dir=tmp_path / 'book'))
 
     assert store.docs == {rel: chapter}
     assert store.transactions == []
 
 
 def test_revalidate_refuses_an_invalid_chapter_whose_payload_ordinal_mismatches_path(
-        monkeypatch):
+        tmp_path, monkeypatch):
     invalid = _stage5_chapter(
         text='问题稿路径说第一章，载体却自报第二章。', output_ordinal=2)
     entry = {
@@ -468,7 +931,8 @@ def test_revalidate_refuses_an_invalid_chapter_whose_payload_ordinal_mismatches_
 
     with pytest.raises(ProvenanceRefused, match='提交主体错配'):
         write.run_revalidate(
-            SimpleNamespace(), actor='tester', reason='尝试重判错主体')
+            SimpleNamespace(novel_dir=tmp_path / 'book'),
+            actor='tester', reason='尝试重判错主体')
 
     assert store.docs == {inv_rel: invalid}
     assert store.promoted is None
@@ -481,7 +945,7 @@ def test_revalidate_refuses_an_invalid_chapter_whose_payload_ordinal_mismatches_
     ('s02', 's01'),
 ))
 def test_revalidate_refuses_an_edited_invalid_with_noncanonical_slots(
-        monkeypatch, slots):
+        tmp_path, monkeypatch, slots):
     invalid = _stage5_chapter(text='占位正文。').model_copy(update={
         'segments': [
             write.ChapterSegment(slot=slot, text=f'{slot} 正文。')
@@ -510,7 +974,8 @@ def test_revalidate_refuses_an_edited_invalid_with_noncanonical_slots(
 
     with pytest.raises(TerminalState, match='canonical segment 契约不成立'):
         write.run_revalidate(
-            SimpleNamespace(), actor='tester', reason='尝试提升被改坏的 INVALID')
+            SimpleNamespace(novel_dir=tmp_path / 'book'),
+            actor='tester', reason='尝试提升被改坏的 INVALID')
 
     assert store.docs == {inv_rel: invalid}
     assert store.promoted is None
@@ -518,7 +983,7 @@ def test_revalidate_refuses_an_edited_invalid_with_noncanonical_slots(
 
 
 def test_revalidate_refuses_an_invalid_that_tampers_with_the_frozen_budget(
-        monkeypatch):
+        tmp_path, monkeypatch):
     baseline = _stage5_chapter(text='正文保持不变。', budget_chars=3)
     invalid = baseline.model_copy(update={'budget_chars': 3000})
     entry = {
@@ -538,7 +1003,8 @@ def test_revalidate_refuses_an_invalid_that_tampers_with_the_frozen_budget(
 
     with pytest.raises(ProvenanceRefused, match='任务身份字段.*budget_chars'):
         write.run_revalidate(
-            SimpleNamespace(), actor='tester', reason='尝试放大预算绕过 trim')
+            SimpleNamespace(novel_dir=tmp_path / 'book'),
+            actor='tester', reason='尝试放大预算绕过 trim')
 
     assert store.docs == {inv_rel: invalid}
     assert store.promoted is None
@@ -581,7 +1047,7 @@ def test_same_text_commit_keeps_the_matching_trim_resolution(monkeypatch):
 
 
 def test_a_successful_retry_uses_transactional_round_write_for_superseded_files(
-        monkeypatch):
+        tmp_path, monkeypatch):
     class Store:
         def __init__(self, live):
             self.live = set(live)
@@ -637,7 +1103,9 @@ def test_a_successful_retry_uses_transactional_round_write_for_superseded_files(
             segments=[write.ChapterSegment.model_validate(item) for item in segments]))
     monkeypatch.setattr(write, '_over_length_audit', lambda *_a, **_kw: ([], None))
 
-    ctx = SimpleNamespace(accounting={}, account=lambda *_a, **_kw: None)
+    ctx = SimpleNamespace(
+        novel_dir=tmp_path / 'book',
+        accounting={}, account=lambda *_a, **_kw: None)
     entry = {'output_ordinal': 5}
     kwargs = {
         'segments': [{'slot': 's01', 'text': '合格正文。'}],
@@ -868,10 +1336,54 @@ def test_paid_write_refuses_legacy_before_loading_upstream(monkeypatch):
             lambda *_args: loaded.append(True),
         )
         with pytest.raises(TerminalState, match='legacy_incompatible'):
-            write.run_write(object(), object())
+            write.run_write(
+                SimpleNamespace(novel_dir=root, executor_profile=None), object())
         assert loaded == [], '旧盘面在终态前不应读取上游，更不能进入付费写作'
     finally:
         shutil.rmtree(root, ignore_errors=True)
+
+
+def test_legacy_direct_write_holds_the_shared_book_lock_through_the_wire(
+        tmp_path, monkeypatch):
+    """无 agent journal 的直 CLI 路必须把输入快照到最终提交整段串行化。"""
+    ctx = SimpleNamespace(
+        novel_dir=tmp_path / 'book', executor_profile=None)
+    store = SimpleNamespace()
+    monkeypatch.setattr(write, 'ArtifactStore', lambda _ctx: store)
+    monkeypatch.setattr(write, 'require_canonical_layout', lambda _store: None)
+    monkeypatch.setattr(
+        write.stage5_runs, 'refuse_foreign_prepared_before_wire',
+        lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        write.review, 'load_book', lambda *_args: SimpleNamespace())
+    monkeypatch.setattr(
+        write, '_chapters_of', lambda *_args, **_kwargs: [{'output_ordinal': 1}])
+    started = threading.Event()
+    acquired = threading.Event()
+    worker: threading.Thread | None = None
+    crossed_wire: list[bool] = []
+    result = object()
+
+    def competing_writer() -> None:
+        started.set()
+        with write.stage5_runs.book_commit_ownership(ctx.novel_dir):
+            acquired.set()
+
+    def fake_group(*_args, **_kwargs):
+        nonlocal worker
+        worker = threading.Thread(target=competing_writer)
+        worker.start()
+        assert started.wait(timeout=5)
+        crossed_wire.append(acquired.wait(timeout=0.1))
+        return result
+
+    monkeypatch.setattr(write, '_run_group', fake_group)
+
+    assert write.run_write(ctx, object()) is result
+    assert worker is not None
+    worker.join(timeout=5)
+    assert crossed_wire == [False]
+    assert acquired.is_set()
 
 
 @pytest.mark.parametrize('write_path', [
@@ -1401,6 +1913,7 @@ class _LandingContext:
     code = 'test-code'
 
     def __init__(self):
+        self.novel_dir = Path(tempfile.mkdtemp()) / 'book'
         self.cache = CachePolicy.default()
         self.ledger = CostLedger()
         self._accounting = {}

@@ -26,6 +26,7 @@ from fastapi.testclient import TestClient          # noqa: E402
 
 from contracts.invariants import APPROVAL_GATES   # noqa: E402
 from contracts.schema import decode_artifact      # noqa: E402
+from contracts.schema.api import DraftEditPreview # noqa: E402
 from contracts.schema.stage7 import NameMap        # noqa: E402
 from novel.api.app import UI_HEADER, create_app    # noqa: E402
 from novel.run import RunContext                    # noqa: E402
@@ -144,6 +145,34 @@ def _edits_dir(box):
     return box.root / '_service' / 'edits'
 
 
+def _draft_apply_body(client, box, ordinal: int, segments: list[dict]) -> dict:
+    preview = client.post(
+        f'/api/novels/{box.sid}/review/{ordinal}/edit/preview',
+        json={'segments': segments})
+    assert preview.status_code == 200, preview.text[:500]
+    projection = preview.json()
+    return {
+        'segments': segments,
+        'actor': 'api-test-editor',
+        'reason': '逐项核对只读预览后提交本轮人工改稿',
+        'current_chapter_sha256': projection['current_chapter_sha256'],
+        'preview_subject_sha256': projection['preview_subject_sha256'],
+        'confirmation': projection['required_confirmation'],
+    }
+
+
+def _dummy_draft_apply_body(segments: list[dict]) -> dict:
+    """只用于让请求进入 CLI 后验证缺上游/越界终态；摘要绝不伪装可提交。"""
+    return {
+        'segments': segments,
+        'actor': 'api-test-editor',
+        'reason': '验证 CLI 关闭式失败',
+        'current_chapter_sha256': 'a' * 64,
+        'preview_subject_sha256': 'b' * 64,
+        'confirmation': 'formal',
+    }
+
+
 def _stamp_chain(box, upto: str) -> None:
     """预置审批检查单到 `upto`（含）——模拟一本正常走到中后段的书。
 
@@ -201,6 +230,93 @@ def test_stamp_chain_follows_current_gate_order_without_touching_stage3(monkeypa
 
 # ───────────────────────── 一、章节改稿 ─────────────────────────
 
+def test_draft_preview_route_returns_the_shared_typed_projection(
+        validation_client, monkeypatch):
+    """HTTP preview 直接消费生产评估，不上传临时稿、不启动 CLI 作业。"""
+    from novel.api.routes import edits as route
+
+    expected = DraftEditPreview.model_validate({
+        'output_ordinal': 1,
+        'current_chapter_sha256': 'a' * 64,
+        'preview_subject_sha256': 'b' * 64,
+        'normalized_segments': [{'slot': 's01', 'text': '归一后的正文。'}],
+        'findings': [],
+        'current_hard_findings': [],
+        'introduced_hard_findings': [],
+        'resolved_hard_findings': [],
+        'required_confirmation': 'formal',
+    })
+    seen = []
+    monkeypatch.setattr(
+        route, 'RunContext',
+        SimpleNamespace(open=lambda *args, **kwargs: SimpleNamespace()))
+    monkeypatch.setattr(
+        route.write, 'prepare_edit_preview',
+        lambda _ctx, ordinal, response: (
+            seen.append((ordinal, response))
+            or SimpleNamespace(preview=lambda: expected)))
+    monkeypatch.setattr(
+        route.jobs, 'run',
+        lambda *_args, **_kwargs: pytest.fail('只读 preview 不得启动 CLI 作业'))
+
+    response = validation_client.post(
+        '/api/novels/422/review/1/edit/preview',
+        json={'segments': [{'slot': 's01', 'text': '归一前正文。'}]})
+
+    assert response.status_code == 200
+    assert response.json() == expected.model_dump(mode='json')
+    assert len(seen) == 1 and seen[0][0] == 1
+
+
+def test_draft_apply_route_forwards_the_complete_preview_bound_cli_argv(
+        validation_client, tmp_path, monkeypatch):
+    """HTTP 只组一次现役 CLI argv；双 SHA、身份与确认模式一格都不能漏。"""
+    from novel.api.routes import edits as route
+
+    upload = tmp_path / '_service' / 'edits' / '422' / 'ch01.json'
+    seen = {}
+    monkeypatch.setattr(
+        route.uploads, 'save_draft_edit',
+        lambda base, sid, ordinal, response: upload)
+    monkeypatch.setattr(
+        route.uploads, 'discard_edit_plan',
+        lambda base, path: seen.setdefault('discarded', path))
+
+    def fake_run(base, node, sid, flags, *, follow_check):
+        seen.update(base=base, node=node, sid=sid, flags=list(flags),
+                    follow_check=follow_check)
+        start = route.jobs.plan_start(node, sid, flags, base=base)
+        return route.JobRecord(
+            job_id='job-stage5-edit-forwarding', start=start,
+            started=1, ended=2, exit_code=0, state='ok',
+            steps_started=len(start.steps),
+        )
+
+    monkeypatch.setattr(route.jobs, 'run', fake_run)
+    body = {
+        'segments': [{'slot': 's01', 'text': '归一候选。'}],
+        'actor': 'editor',
+        'reason': '核对完整预览主体后提交',
+        'current_chapter_sha256': 'a' * 64,
+        'preview_subject_sha256': 'b' * 64,
+        'confirmation': 'working_draft',
+    }
+    response = validation_client.post(
+        '/api/novels/422/review/1/edit', json=body)
+
+    assert response.status_code == 200, response.text
+    assert seen['node'] == 'stage5.write' and seen['sid'] == '422'
+    assert seen['follow_check'] is False
+    assert seen['flags'] == [
+        '--apply-edit', str(upload),
+        '--actor', 'editor',
+        '--reason', '核对完整预览主体后提交',
+        '--current-chapter-sha256', 'a' * 64,
+        '--preview-subject-sha256', 'b' * 64,
+        '--edit-confirmation', 'working_draft',
+    ]
+    assert seen['discarded'] == upload
+
 def test_a_draft_edit_lands_as_a_new_human_round(client, box):
     """⭐ 成功路：人工稿落成新一轮——`origin=human`、round+1、旧轮进 `_rounds/`、
     一次性稿已清理。**与生成稿同一个判定落点**（仍有阻断级只报不拦）。"""
@@ -208,10 +324,14 @@ def test_a_draft_edit_lands_as_a_new_human_round(client, box):
     before = json.loads(rel.read_text(encoding='utf-8'))
     marker = '她把那句话咽了回去，转身出门。'
     segments = [dict(segment) for segment in before['segments']]
-    segments[-1]['text'] += '\n\n' + marker
+    # 不改变自然段数量；paragraph_budget_missed 是 apply 的绝对拒绝项，不能拿
+    # 一个故意破坏段落预算的候选去测成功路。
+    segments[-1]['text'] += marker
+    reviews_before = sorted((box.dir / 'stage5').glob('review_*.json'))
+    body = _draft_apply_body(client, box, 1, segments)
 
     r = client.post(f'/api/novels/{box.sid}/review/1/edit',
-                    json={'segments': segments})
+                    json=body)
     assert r.status_code == 200, r.text[:300]
     assert r.json()['state'] == 'ok', r.text[:300]
 
@@ -225,13 +345,26 @@ def test_a_draft_edit_lands_as_a_new_human_round(client, box):
     rounds = list((box.dir / 'stage5' / '_rounds').glob('ch01.r*.json'))
     assert rounds, '旧轮没有归档——覆盖前的那一份再也回不去了'
     assert not any(_edits_dir(box).rglob('*.json')), '一次性人工稿没清理'
+    assert sorted((box.dir / 'stage5').glob('review_*.json')) == reviews_before, \
+        '逐次 edit 不得自动追跑 Review；多次改完后只跑一次最终 Review'
+    actions = [json.loads(line) for line in (
+        box.root / '_service' / 'human_actions.jsonl'
+    ).read_text(encoding='utf-8').splitlines()]
+    assert [row['phase'] for row in actions] == ['prepared', 'committed']
+    committed = actions[-1]
+    assert committed['actor'] == body['actor']
+    assert committed['reason'] == body['reason']
+    assert committed['confirmation'] == body['confirmation']
+    assert committed['request_id'] == actions[0]['request_id']
+    assert committed['action_id'] == actions[0]['action_id']
 
 
 def test_a_draft_edit_without_upstream_is_a_failed_job_not_a_5xx(client, box):
     """上游未运行：删 ctx ⇒ CLI 显式终态 ⇒ **200 + state=failed**（作业失败不是 HTTP 错误）。"""
     (box.dir / 'stage4' / 'writer_context.json').unlink()
     r = client.post(f'/api/novels/{box.sid}/review/1/edit',
-                    json={'segments': [{'slot': 's01', 'text': '改过的正文。'}]})
+                    json=_dummy_draft_apply_body([
+                        {'slot': 's01', 'text': '改过的正文。'}]))
     assert r.status_code == 200, r.text[:300]
     assert r.json()['state'] == 'failed'
     assert not any(_edits_dir(box).rglob('*.json')), '失败的作业也要清理一次性稿'
@@ -240,7 +373,8 @@ def test_a_draft_edit_without_upstream_is_a_failed_job_not_a_5xx(client, box):
 def test_a_draft_edit_for_a_chapter_outside_the_plan_fails_loudly(client, box):
     """章号不在计划里：CLI `TerminalState` ⇒ failed，日志说得出为什么。"""
     r = client.post(f'/api/novels/{box.sid}/review/999/edit',
-                    json={'segments': [{'slot': 's01', 'text': '不存在的章。'}]})
+                    json=_dummy_draft_apply_body([
+                        {'slot': 's01', 'text': '不存在的章。'}]))
     assert r.status_code == 200 and r.json()['state'] == 'failed'
     log = client.get(f'/api/jobs/{r.json()["job_id"]}/log').json()['text']
     assert '999' in log, '日志里连章号都没有——人无从知道错在哪'

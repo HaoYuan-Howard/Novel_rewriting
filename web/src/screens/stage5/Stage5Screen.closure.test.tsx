@@ -12,7 +12,12 @@ import { ChromeProvider } from '@/hooks/useChrome'
 import type { ApprovalDoc } from '@/types/approvals'
 import type { Finding } from '@/types/common'
 import type { Job, JobPreview, JobRequest } from '@/types/jobs'
-import type { ChapterSegment, ReviewResponse, Stage5Response } from '@/types/stages'
+import type {
+  ChapterSegment,
+  DraftEditPreview,
+  ReviewResponse,
+  Stage5Response,
+} from '@/types/stages'
 import { Stage5Screen } from './Stage5Screen'
 
 vi.mock('@/components/app/ScreenFrame', () => ({
@@ -118,7 +123,7 @@ async function seedScreen({
     decided_at: '2026-08-25T00:00:00+00:00',
   }
   const approvals: ApprovalDoc = {
-    v: 5,
+    v: 6,
     sid: SAMPLE_SID,
     gate: { s0: true, s1: true, s2: true, s4: true, s5: false, s6: false, s7: false },
     seen: { read: true, global: true },
@@ -135,6 +140,12 @@ async function seedScreen({
     structure: {
       state: 'accepted', current_subject_sha256: subject,
       current_decision: structureDecision, history: [structureDecision], binding_concerns: [],
+    },
+    writing_approval: {
+      available: true, current_subject_sha256: subject, current_decision: null, history: [],
+    },
+    closure: {
+      state: 'missing', workpack: null, next_step: null, current_decision: null, history: [],
     },
     spawns: {},
   }
@@ -227,6 +238,109 @@ describe('Stage5 人工审计闭环', () => {
     fireEvent.click(screen.getByRole('button', { name: '改' }))
     expect(screen.getByDisplayValue('来自 Draft 槽位的第一段。')).toBeVisible()
     expect(screen.getByDisplayValue('来自 Draft 槽位的第二段。')).toBeVisible()
+  })
+
+  it('改稿严格走只读 preview、明示 confirmation、双 SHA apply，且不逐次触发最终 Review', async () => {
+    sessionStorage.clear()
+    const initialSegments = [
+      { slot: 's01', text: '第一段原稿。' },
+      { slot: 's02', text: '第二段原稿。' },
+    ]
+    await seedScreen({ draftSegments: initialSegments })
+    const introduced = {
+      ...finding('fact_landing_missed', '关键事实没有落地', 'ch3:fact', 3),
+      sev: 'hard' as const,
+    }
+    const previewSpy = vi.spyOn(api, 'previewDraftEdit').mockImplementation(async (_sid, _o, req) => ({
+      output_ordinal: 3,
+      current_chapter_sha256: '1'.repeat(64),
+      preview_subject_sha256: '2'.repeat(64),
+      normalized_segments: req.segments.map((segment) => ({
+        ...segment,
+        text: segment.text.trim(),
+      })),
+      findings: [introduced],
+      current_hard_findings: [],
+      introduced_hard_findings: [introduced],
+      resolved_hard_findings: [],
+      required_confirmation: 'working_draft',
+    } satisfies DraftEditPreview))
+    const applySpy = vi.spyOn(api, 'saveDraftEdit').mockResolvedValue(
+      finishedJob({ kind: 'stage5.write', label: '章节改稿' }, 'edit-applied'),
+    )
+    const jobPreviewSpy = vi.spyOn(api, 'previewJob').mockImplementation(async (req) => freePreview(req))
+    const startJobSpy = vi.spyOn(api, 'startJob')
+    const { queryClient } = renderScreen()
+    const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries')
+
+    fireEvent.click(await screen.findByRole('button', { name: '改' }))
+    const first = screen.getByDisplayValue('第一段原稿。')
+    fireEvent.change(first, { target: { value: '  第一段改稿。  ' } })
+    fireEvent.click(screen.getByRole('button', { name: '只读预检改稿' }))
+
+    await waitFor(() => expect(previewSpy).toHaveBeenCalledWith(SAMPLE_SID, 3, {
+      segments: [
+        { slot: 's01', text: '  第一段改稿。  ' },
+        { slot: 's02', text: '第二段原稿。' },
+      ],
+    }))
+    expect(await screen.findByText('confirmation=working_draft')).toBeVisible()
+    expect(screen.getAllByText('关键事实没有落地')).toHaveLength(2)
+    expect(screen.getByRole('button', { name: /apply 当前预览/ })).toBeDisabled()
+
+    fireEvent.change(screen.getByRole('textbox', { name: /自报身份 actor/ }), {
+      target: { value: ' commander-a ' },
+    })
+    fireEvent.change(screen.getByRole('textbox', { name: /理由 reason/ }), {
+      target: { value: ' 先落工作稿，稍后统一跑最终 Review ' },
+    })
+    const confirmation = screen.getByRole('checkbox', {
+      name: '确认以 working_draft apply 当前预览',
+    })
+    fireEvent.click(confirmation)
+    expect(screen.getByRole('button', { name: /apply 当前预览/ })).toBeEnabled()
+
+    // preview 后再动一个字节，旧确认和双 SHA 必须立即失效。
+    fireEvent.change(first, { target: { value: '第一段最终改稿。' } })
+    expect(await screen.findByText(/正文在 preview 后又改过/)).toBeVisible()
+    expect(screen.getByRole('button', { name: /apply 当前预览/ })).toBeDisabled()
+    fireEvent.click(screen.getByRole('button', { name: '只读预检改稿' }))
+    await waitFor(() => expect(previewSpy).toHaveBeenCalledTimes(2))
+    fireEvent.click(screen.getByRole('checkbox', {
+      name: '确认以 working_draft apply 当前预览',
+    }))
+    fireEvent.click(screen.getByRole('button', { name: /apply 当前预览/ }))
+
+    expect(await screen.findByText(/--apply-edit.*--actor commander-a.*--reason/)).toBeVisible()
+    expect(jobPreviewSpy).toHaveBeenCalledWith(expect.objectContaining({
+      kind: 'stage5.write',
+      extra: ['--apply-edit'],
+      args: [
+        '(服务端一次性人工稿)',
+        '--actor', 'commander-a',
+        '--reason', '先落工作稿，稍后统一跑最终 Review',
+        '--current-chapter-sha256', '1'.repeat(64),
+        '--preview-subject-sha256', '2'.repeat(64),
+        '--edit-confirmation', 'working_draft',
+      ],
+    }))
+    expect(applySpy).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', { name: '发起' }))
+
+    await waitFor(() => expect(applySpy).toHaveBeenCalledWith(SAMPLE_SID, 3, {
+      segments: [
+        { slot: 's01', text: '第一段最终改稿。' },
+        { slot: 's02', text: '第二段原稿。' },
+      ],
+      actor: 'commander-a',
+      reason: '先落工作稿，稍后统一跑最终 Review',
+      current_chapter_sha256: '1'.repeat(64),
+      preview_subject_sha256: '2'.repeat(64),
+      confirmation: 'working_draft',
+    }))
+    expect(startJobSpy).not.toHaveBeenCalled()
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: qk.approvals(SAMPLE_SID) })
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: qk.inbox(SAMPLE_SID) })
   })
 
   it('展示 current trim audit，并经同源 preview + 专用 retain 路由销账', async () => {

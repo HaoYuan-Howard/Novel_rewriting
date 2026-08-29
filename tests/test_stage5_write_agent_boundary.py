@@ -247,7 +247,8 @@ def test_agent_hard_resumes_same_chapter_purpose_without_refresh(monkeypatch):
     assert secret not in json.dumps(source.feedback, ensure_ascii=False)
 
 
-def test_exhausted_revision_writes_only_rejected_evidence(monkeypatch):
+def test_exhausted_revision_writes_only_rejected_evidence(
+        monkeypatch, tmp_path):
     _patch_prompt_boundary(monkeypatch)
     _identity_normalization(monkeypatch)
     monkeypatch.setattr(write, '_judge', lambda *_args, **_kwargs: ([], [], []))
@@ -288,7 +289,8 @@ def test_exhausted_revision_writes_only_rejected_evidence(monkeypatch):
     store = Store()
     monkeypatch.setattr(write, 'ArtifactStore', lambda _ctx: store)
     delivery = write.finalize_chapter_candidate(
-        SimpleNamespace(node='stage5.write'), source, prepared, evaluation)
+        SimpleNamespace(node='stage5.write', novel_dir=tmp_path / 'book'),
+        source, prepared, evaluation)
 
     assert delivery.outcome == 'rejected_revision'
     assert store.writes == ['stage5/ch01.rejected.json']

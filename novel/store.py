@@ -708,6 +708,18 @@ class ArtifactStore:
                 self.archive_round(rel, keep=True)
             return self.write(rel, artifact)
 
+    def prospective_sha256(self, rel: str, artifact: BaseModel) -> str:
+        """计算这份 typed artifact 经正式写盘口后将得到的完整文件 SHA-256。
+
+        人工改稿两相账必须在写章前记录 expected result，供进程在 canonical 已落、
+        committed 尚未追加时安全补账。摘要必须来自 store 的唯一渲染口，不能由
+        调用方重拼 JSON；同时先做 round-trip，prepared 不得承诺一份写不回的结果。
+        """
+        rel = paths.check_rel_deep(rel)
+        data = self._render(rel, artifact)
+        self._verify_round_trip(rel, type(artifact), data)
+        return hashlib.sha256(data).hexdigest()
+
     def write(self, rel: str, artifact: BaseModel) -> Path:
         """落一份正式产物。**先校验后落盘**——校验在 `artifact` 被构造的那一刻就发生过了。
 

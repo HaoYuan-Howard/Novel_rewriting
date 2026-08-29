@@ -147,7 +147,9 @@ STAGE5_COMMIT_PHASES: Final = (
 #: 字面量只许活在这一张表里。
 STAGE5_MUST_APPEAR_RULINGS: Final = ('confirmed_present', 'accepted_exception')
 STAGE5_CLOSURE_GROUPS: Final = ('fact_landing', 'unver')
-STAGE5_CLOSURE_STATES: Final = ('missing', 'blocked', 'ready', 'closed', 'expired')
+STAGE5_CLOSURE_STATES: Final = (
+    'missing', 'review_required', 'blocked', 'ready', 'closed', 'expired',
+)
 
 STAGE5_CLOSED_EXEMPT_FLAGS: Final = (
     '--dry-run', '--check-only', '--identity', '--recheck',
@@ -1401,6 +1403,7 @@ FREE_ENTRIES: Final = {
     '--names-only': '只产逐章可用名册（stage4），不产计划',
     '--identity': '恒等基线：拿原作自己的东西跑整套判据，看判据有没有把合法情况排除在外',
     '--apply-edit': '把人工改过的内容落成新的一轮',
+    '--preview-edit': '只读预检 Stage5 人工稿，不调用模型、不写盘',
     '--review-decisions': '应用带 actor、理由和 subject hash 乐观锁的 stage2 人工复核决策',
     # ⚠⚠ **它是 2026-08-15 补的，而漏它的后果正是本表开头那条**：
     #   `--wontfix` 原来只挂在 `stage5.review` 上，而那是个 `paid=False` 节点
@@ -1464,6 +1467,12 @@ PAID_FLAGS: Final = {
 #: 否则一条不相干的旧问题会把重算这条路永久堵死。
 REVALIDATE_ONLY_NEW_ERRORS: Final = True
 
+#: Stage5 人工改稿预览后的提交语义。``formal`` 只允许没有新增 HARD 的候选；
+#: ``working_draft`` 允许把一般新增 HARD 明示落为新的 canonical 人工轮，随后由
+#: stale Review / closure / 下游闸阻断；段落预算 HARD 在两种模式下都不得正式化。
+#: 这是请求载体、CLI 与运行时共用的闭集，不能在三处各抄一份字符串。
+STAGE5_EDIT_CONFIRMATIONS: Final = ('formal', 'working_draft')
+
 #: **局部改写**一份付费产物的那几条 0 成本路。`_provenance.partial_rewrite` 的取值面。
 #:
 #: 【为什么是一个带值的键，不是三个布尔】这三条干的是同一件事——改掉产物的一部分，
@@ -1510,12 +1519,15 @@ PARTIAL_REWRITE_FLAGS: Final = (
 REQUIRED_PLACEHOLDER_PREFIX: Final = '待填·'
 
 VALUED_FLAGS: Final = {
-    # ⚠ 「相对**书目录**」这五个字是承重的：stage4/6/7 走
-    #   `novel/paths.py::edit_rel`，相对路径按当前书目录解释、绝对路径照收，
-    #   两者都必须落在书目录内。此前四份实现按进程 cwd 解释而报错文案说书目录，
+    # ⚠ 「相对**书目录**」这五个字是承重的：各节点相对路径都按当前书目录解释。
+    #   stage4/6/7 的绝对路径必须仍在书内；Stage5 还要接受服务进程放在
+    #   `<base>/_service/edits/` 的可信绝对上传路径（R-11.3），所以绝对路径边界
+    #   由具体节点说明。此前四份实现按进程 cwd 解释而报错文案说书目录，
     #   两个口径分家（skill 现场记录 FN-016）。这一行是人唯一会读到的说明。
-    '--apply-edit': '人工改好的候选稿路径（必填；相对路径相对**书目录**，'
-                    '如 stage7/name_map_edit.json，也接受书目录内的绝对路径）',
+    '--apply-edit': ('人工改好的候选稿路径（必填；相对路径相对**书目录**；'
+                     '绝对路径由节点校验，Stage5 额外接受服务上传的 _service/edits 路径）'),
+    '--preview-edit': ('只读预检 Stage5 人工整章稿；与 --apply-edit 共用归一、判据与'
+                       'preview subject 算法；相对路径相对书目录，不写产物'),
     '--response-repair': '结构化拒绝响应恢复模式；当前只接受 `agent`。'
                          '可修复响应先隔离并停给外层受托 agent，同闸复验失败才继续采样',
     '--adopt-rejected': ('要重判并采用的拒绝响应 attempt_id（16 位小写十六进制）；'
@@ -1545,6 +1557,9 @@ VALUED_FLAGS: Final = {
     '--expected-revision-id': ('Stage0 人工批准乐观锁定的完整 revision SHA-256；'
                                '必须取自本次实际审阅的 current/workpack'),
     '--subject-sha256': '人工决定乐观锁定的完整内容 SHA-256',
+    '--current-chapter-sha256': 'Stage5 人工改稿预览时读到的当前 canonical 完整文件 SHA-256',
+    '--preview-subject-sha256': 'Stage5 改稿预览绑定的归一候选、判据身份与结论 SHA-256',
+    '--edit-confirmation': 'Stage5 改稿提交语义：formal 或 working_draft',
     '--source': '要摄入的原始小说 txt/md 路径；新书在目录产生前没有 sid',
     # ⚠ `--pick` 只表示 stage6 定稿候选序号；定稿动作本身是独立节点。
     # 不进 `FREE_ENTRIES`（不是独立入口），也不进 `WRITE_EFFECTS`
@@ -1609,6 +1624,7 @@ WRITE_EFFECTS: Final = {
     '--emit-review-template': '',
     '--emit-review-workpack': '',
     '--emit-prepared-recovery-workpack': '',
+    '--preview-edit': '',
     '--adopt-residual': '重写 stage7/name_map.json，清旧审批并退休现有成书',
     # ── 免费但**会写盘**的那些：原型那 8 条注释点名的正是它们 ──
     '--recheck': '按当前判据刷新已有成稿的派生指标，并对账 trim 状态',
@@ -1824,9 +1840,12 @@ NODES: Final[dict[str, NodeSpec]] = {
     #   留着它是一格永远不起作用的声明——`is_paid` 早在 `spec.paid` 那一步就判完了。
     'stage5.write':     NodeSpec('stage5', 'R-7',  True,  'stage5 全书闭卷写作',
                                   flags=('--dry-run', '--recheck', '--revalidate',
-                                         '--apply-edit', '--revise',
+                                         '--preview-edit', '--apply-edit', '--revise',
                                          '--chapters', '--actor', '--reason',
                                          '--subject-sha256',
+                                         '--current-chapter-sha256',
+                                         '--preview-subject-sha256',
+                                         '--edit-confirmation',
                                          '--emit-prepared-recovery-workpack',
                                          '--recover-prepared', '--response-repair'),
                                  produces=(artifact_paths.STAGE5_CHAPTER,)),
@@ -1967,6 +1986,9 @@ CONDITIONAL_REQUIRED_FLAGS: Final[dict[tuple[str, str], tuple[str, ...]]] = {
     ('stage4.plan', '--revalidate'): ('--actor', '--reason'),
     ('stage4.design', '--adopt-rejected'): ('--actor', '--reason'),
     ('stage5.write', '--revalidate'): ('--actor', '--reason'),
+    ('stage5.write', '--apply-edit'): (
+        '--actor', '--reason', '--current-chapter-sha256',
+        '--preview-subject-sha256', '--edit-confirmation'),
     ('stage5.write', '--recover-prepared'): (
         '--actor', '--reason', '--subject-sha256'),
     ('stage5.review', '--retain-pretrim'): ('--chapters', '--actor', '--reason'),

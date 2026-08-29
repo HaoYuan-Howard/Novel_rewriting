@@ -105,11 +105,12 @@ builder、完成度不偷看作业记录、loopback、无 CORS、同书 409。�
 付费跑法必须 `--yes`。成本的唯一权威源是 `<base>/_service/ledger.jsonl`，不与产物 `usage` 或日志混加；
 缓存命中（`.llm_cache/`）单独记账，不能写成"没有执行过"。
 **付费授权与正文外发授权是两件独立的事**，任一缺失时仍可跑 0 成本的 `state`/`inbox`/`preview`。
-审批服务的盘上 `_service/approvals/<sid>.json` 是 **v6**（Stage4A `design_review` 只授权 B；B 后
-`structure_decision/history` 才打开 s4，Stage5 的 `writing/writing_proof` 仍与二者独立），公开 API
-`ApprovalDoc` 是 **v5**；两个版本面独立。旧盘上 v5 只能经显式 `backfill_from_disk` 且既有
-Stage1、Stage4 proofs 仍绑当前主体时保守收进 v6；更早记录最多恢复可逐项对证的闸，普通 GET 不得
-静默迁移或代开 s4。
+审批服务的盘上 `_service/approvals/<sid>.json` 是 **v7**（Stage4A `design_review` 只授权 B；B 后
+`structure_decision/history` 才打开 s4，Stage5 的 `writing/writing_proof` 与 typed `closure` 又是各自
+独立的授权/闭合面），公开 API `ApprovalDoc` 是 **v6**；两个版本面独立。旧盘 v6 只能经显式
+`backfill_from_disk` 保守收进 v7：保留可逐项对证的 s0～s4、seen 与 design/structure/writing typed
+历史，清除 s5～s7，绝不伪造 Stage5 闭合回执；更早记录最多恢复可逐项对证的闸，普通 GET 不得
+静默迁移或代开 s4/s5。
 
 ### 修复路由与恢复路
 

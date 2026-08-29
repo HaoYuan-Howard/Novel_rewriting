@@ -79,6 +79,23 @@ def _executor_flags(node: str, tokens: frozenset[str]) -> list[str]:
     return out
 
 
+_STAGE5_EDIT_FLAGS = frozenset({
+    '--apply-edit', '--actor', '--reason', '--current-chapter-sha256',
+    '--preview-subject-sha256', '--edit-confirmation',
+})
+
+
+def _stage5_edit_flags() -> list[str]:
+    """把任一 edit 绑定参数物化为同一条完整合法 argv。"""
+    return [
+        '--apply-edit', 'ch01.json',
+        '--actor', 'operator', '--reason', '逐项核对当前预览',
+        '--current-chapter-sha256', 'a' * 64,
+        '--preview-subject-sha256', 'b' * 64,
+        '--edit-confirmation', 'formal',
+    ]
+
+
 _FOLLOW_CHECK_EXECUTORS = frozenset({
     'stage2.blueprint', 'stage4.plan', 'stage6.hook', 'stage7.rename',
 })
@@ -94,7 +111,13 @@ EXECUTOR_RUN_CASES = [
 ]
 
 UNMIGRATED_EXECUTOR_FLAG_CASES = [
-    pytest.param(node, _args(flag, node), id=f'{node}:{flag}')
+    pytest.param(
+        node,
+        (_stage5_edit_flags()
+         if node == 'stage5.write' and flag in _STAGE5_EDIT_FLAGS
+         else _args(flag, node)),
+        id=f'{node}:{flag}',
+    )
     for node, combinations in N.EXECUTOR_PROFILED_RUNS.items()
     for flag in NODES[node].flags
     if frozenset({flag}) not in combinations
@@ -226,7 +249,9 @@ def test_every_registered_run_mode_builds_a_command(node, flag):
             '--subject-sha256', 'a' * 64,
         ]
         if (node, flag) == ('stage5.write', '--subject-sha256')
-        else _args(flag, node)
+        else (_stage5_edit_flags()
+              if node == 'stage5.write' and flag in _STAGE5_EDIT_FLAGS
+              else _args(flag, node))
     )
     argv = N.build_argv(node, SID, flags, base=BASE)
     assert argv[0] == sys.executable

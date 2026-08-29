@@ -3,6 +3,7 @@ import { qk } from './queryKeys'
 import { adaptNovel, realApi, splitLog } from './endpoints'
 import { projectGlobalSpoilers, SPOILER_PLACEHOLDER } from './spoilers'
 import type { GlobalFactEvidence, Stage2Global } from '@/types/stages'
+import type { BackendJobRecord } from '@/types/jobs'
 import { READY_PROFILES } from '@/test/agent'
 import { mockApi } from './mock'
 
@@ -69,6 +70,39 @@ function globalFixture(): Stage2Global {
   }
 }
 
+function backendJobRecord(node: string, flags: string[]): BackendJobRecord {
+  return {
+    job_id: 'job-' + node,
+    start: {
+      sid: 'book /1',
+      node,
+      flags,
+      steps: [{
+        argv: ['python', '-m', 'novel.cli', node, ...flags],
+        cwd: 'E:/repo',
+        label: node,
+        paid: false,
+        writes: '人工审计账',
+        note: null,
+        executor_profile: null,
+        egress_authorized: null,
+      }],
+      python: 'python',
+      code: 'abc123',
+      paid: false,
+      writes: true,
+      executor_profile: null,
+      egress_authorized: null,
+    },
+    started: 1,
+    ended: 2,
+    exit_code: 0,
+    state: 'ok',
+    steps_started: 1,
+    note: null,
+  }
+}
+
 describe('request-shaped cache and diagnostics', () => {
   it('sends the full typed Stage4 decision through the one real HTTP seam', async () => {
     const subject = 'a'.repeat(64)
@@ -79,7 +113,7 @@ describe('request-shaped cache and diagnostics', () => {
       chapters: [{ output_ordinal: 1, decision: 'accept', reason: '本章可执行' }],
     }
     const response = {
-      v: 5,
+      v: 6,
       sid: 'book /1',
       gate: {
         s0: true, s1: true, s2: true,
@@ -142,7 +176,7 @@ describe('request-shaped cache and diagnostics', () => {
       })),
     }
     const response = {
-      v: 5,
+      v: 6,
       sid: 'book /1',
       gate: {
         s0: true, s1: true, s2: true,
@@ -196,11 +230,146 @@ describe('request-shaped cache and diagnostics', () => {
     )
   })
 
+  it('sends Stage5 edit through read-only preview then exact audited double-SHA apply', async () => {
+    const segments = [{ slot: 's01', text: '改稿正文。' }]
+    const preview = {
+      output_ordinal: 3,
+      current_chapter_sha256: '1'.repeat(64),
+      preview_subject_sha256: '2'.repeat(64),
+      normalized_segments: segments,
+      findings: [],
+      current_hard_findings: [],
+      introduced_hard_findings: [],
+      resolved_hard_findings: [],
+      required_confirmation: 'formal',
+    }
+    const apply = {
+      segments: preview.normalized_segments,
+      actor: 'reviewer-a',
+      reason: '已核对本次改稿',
+      current_chapter_sha256: preview.current_chapter_sha256,
+      preview_subject_sha256: preview.preview_subject_sha256,
+      confirmation: 'formal' as const,
+    }
+    const send = vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(new Response(
+        JSON.stringify(preview),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      ))
+      .mockResolvedValueOnce(new Response(
+        JSON.stringify(backendJobRecord('stage5.write', ['--apply-edit'])),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      ))
+
+    await expect(realApi.previewDraftEdit('book /1', 3, { segments })).resolves.toEqual(preview)
+    expect(send).toHaveBeenNthCalledWith(
+      1,
+      '/api/novels/book%20%2F1/review/3/edit/preview',
+      expect.objectContaining({ method: 'POST', body: JSON.stringify({ segments }) }),
+    )
+    await expect(realApi.saveDraftEdit('book /1', 3, apply)).resolves.toMatchObject({
+      id: 'job-stage5.write',
+      kind: 'stage5.write',
+      state: 'ok',
+    })
+    expect(send).toHaveBeenNthCalledWith(
+      2,
+      '/api/novels/book%20%2F1/review/3/edit',
+      expect.objectContaining({ method: 'POST', body: JSON.stringify(apply) }),
+    )
+  })
+
+  it('uses the Stage5 closure template/apply endpoints and batch trim body without recomputing SHA', async () => {
+    const template = {
+      actor: '',
+      reason: '',
+      workpack_sha256: '3'.repeat(64),
+      review_sha256: '4'.repeat(64),
+      must_appear: [],
+      group_acks: [],
+    }
+    const closure = { ...template, actor: 'commander-a', reason: '全书已复核' }
+    const trim = {
+      actor: 'commander-a',
+      reason: '逐章保留 pretrim',
+      items: [{
+        output_ordinal: 3,
+        audit_sha256: '5'.repeat(64),
+        chapter_sha256: '6'.repeat(64),
+        reason: '',
+      }],
+    }
+    const response = { marker: 'approval-doc' }
+    const send = vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(new Response(
+        JSON.stringify(template),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      ))
+      .mockResolvedValueOnce(new Response(
+        JSON.stringify(response),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      ))
+      .mockResolvedValueOnce(new Response(
+        JSON.stringify(backendJobRecord('stage5.review', ['--retain-pretrim-batch'])),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      ))
+
+    await expect(realApi.getStage5ClosureTemplate('book /1')).resolves.toEqual(template)
+    expect(send).toHaveBeenNthCalledWith(
+      1,
+      '/api/novels/book%20%2F1/approvals/stage5/template',
+      undefined,
+    )
+    await expect(realApi.approveStage5Closure('book /1', closure)).resolves.toEqual(response)
+    expect(send).toHaveBeenNthCalledWith(
+      2,
+      '/api/novels/book%20%2F1/approvals/stage5',
+      expect.objectContaining({ method: 'POST', body: JSON.stringify(closure) }),
+    )
+    await expect(realApi.retainPretrimBatch('book /1', trim)).resolves.toMatchObject({
+      kind: 'stage5.review',
+      state: 'ok',
+    })
+    expect(send).toHaveBeenNthCalledWith(
+      3,
+      '/api/novels/book%20%2F1/stage5/trim/retain-pretrim-batch',
+      expect.objectContaining({ method: 'POST', body: JSON.stringify(trim) }),
+    )
+  })
+
   it('includes runtime chapter args in preview cache identity', () => {
     const base = { kind: 'stage5.write', label: '写', extra: null, sid: 's' }
     expect(qk.jobPreview({ ...base, args: ['--chapters', '1'] })).not.toEqual(
       qk.jobPreview({ ...base, args: ['--chapters', '2'] }),
     )
+  })
+
+  it('requires the Stage5 Commander enums and publishes the exact edit preview/apply input surface', async () => {
+    const enums = await mockApi.getEnums()
+    expect(enums.stage5_must_appear_rulings).toEqual([
+      'confirmed_present', 'accepted_exception',
+    ])
+    expect(enums.stage5_closure_groups).toEqual(['fact_landing', 'unver'])
+    expect(enums.stage5_closure_states).toContain('review_required')
+    expect(enums.job_kinds['stage5.write']?.flags).toEqual(expect.arrayContaining([
+      '--preview-edit',
+      '--apply-edit',
+      '--current-chapter-sha256',
+      '--preview-subject-sha256',
+      '--edit-confirmation',
+    ]))
+    const preview = enums.actions.find((action) =>
+      action.kind === 'stage5.write' && action.extra?.includes('--preview-edit'))
+    expect(preview).toMatchObject({ paid: false, writes_disk: false, required_inputs: [] })
+    const apply = enums.actions.find((action) =>
+      action.kind === 'stage5.write' && action.extra?.includes('--apply-edit'))
+    expect(apply?.required_inputs?.map((input) => input.flag)).toEqual([
+      '--actor',
+      '--reason',
+      '--current-chapter-sha256',
+      '--preview-subject-sha256',
+      '--edit-confirmation',
+    ])
   })
 
   it('uses the whole agent request, including nested overrides, as preview cache identity', () => {

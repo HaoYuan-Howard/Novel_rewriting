@@ -692,6 +692,37 @@ export interface ChapterSegment {
   text: string
 }
 
+/** Stage5 改稿 preview 给出的唯一合法提交语义；前端不按 finding 自行选择。 */
+export type DraftEditConfirmation = 'formal' | 'working_draft'
+
+/** 只读预检只提交完整 typed 槽位，不带人工审计或落盘意图。 */
+export interface DraftEditPreviewRequest {
+  segments: ChapterSegment[]
+}
+
+/** 与正式 apply 共用归一、判据和 subject 构造的只读服务端投影。 */
+export interface DraftEditPreview {
+  output_ordinal: number
+  current_chapter_sha256: string
+  preview_subject_sha256: string
+  normalized_segments: ChapterSegment[]
+  findings: Finding[]
+  current_hard_findings: Finding[]
+  introduced_hard_findings: Finding[]
+  resolved_hard_findings: Finding[]
+  required_confirmation: DraftEditConfirmation
+}
+
+/** 正式 apply 必须原样回传 preview 的归一稿、两枚 SHA 与确认语义。 */
+export interface DraftEditRequest {
+  segments: ChapterSegment[]
+  actor: string
+  reason: string
+  current_chapter_sha256: string
+  preview_subject_sha256: string
+  confirmation: DraftEditConfirmation
+}
+
 export interface Draft {
   chars: number
   budget_chars: number | null

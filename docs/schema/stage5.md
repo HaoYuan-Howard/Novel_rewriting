@@ -18,6 +18,9 @@ stage5/trim_resolution_chNN.json 人工保留 pretrim 的 hash-bound 决定（sc
 stage5/wontfix.json              人工豁免账（v1）
 ```
 
+人工改稿的身份审计另落 `<base>/_service/human_actions.jsonl`；它是服务账，不是 Stage5
+产物，不进 artifact registry、来源账或上面的路径清单，字段见 §4.3。
+
 现役没有 `stage5/<mode>/...`，也没有深 / 浅两条可执行写作臂。`deep`、`shallow`、
 `mode`、`depth` 只会出现在旧目录或不可变的旧作业 / 队列记录里；运行时把
 `stage5/deep/`、`stage5/shallow/` 识别为 `legacy_incompatible`，只读保留，绝不选一臂
@@ -33,11 +36,14 @@ stage5/wontfix.json              人工豁免账（v1）
 | 根据 fresh Review 修订 | `run stage5.write <sid> --revise --chapters 3,7 --base <base> --yes` | 付费 |
 | 预览 prompt | `run stage5.write <sid> --dry-run --chapters 3 --base <base>` | 0 |
 | 重判正式章 / 问题稿 | `--recheck` / `--revalidate --actor ... --reason ...` | 0 |
-| 人工整章写回 | `--apply-edit <ChapterResponse.json>` | 0 LLM |
+| 只读人工稿预览 | `--preview-edit <ChapterResponse.json>` | 0；不写盘 |
+| 人工整章写回 | `--apply-edit <ChapterResponse.json> --actor ... --reason ... --current-chapter-sha256 ... --preview-subject-sha256 ... --edit-confirmation formal\|working_draft` | 0 LLM |
 | 只读复验旧 run 的 prepared 尾窗 | `--emit-prepared-recovery-workpack <SOURCE_RUN_ID>` | 0 |
 | 按已审工作包收口 prepared 尾窗 | `--recover-prepared <SOURCE_RUN_ID> --actor ... --reason ... --subject-sha256 ...` | 0 wire |
 | 生成最新 Review | `run stage5.review <sid> --base <base>` | 0 |
 | 读取已有 Review | `run stage5.review <sid> --check-only --base <base>` | 0 |
+| 批量保留 pretrim | `stage5.review --retain-pretrim-batch <BatchTrimResolutionRequest.json>` | 0 |
+| 生成 / 提交闭合回执 | `approval template stage5 ...` / `approval apply stage5 ... --input <决定文件>` | 0 |
 
 不带 `--chapters` 就是全书，不需要也不接受 `--deep`、`--shallow-rest` 或 `--mode`。
 `novel/orchestrator/nodes.py` 在预览与真跑共用的命令构造口关闭式拒绝 `mode`，CLI/API
@@ -123,7 +129,7 @@ slot、逐槽归一，再跑内容判据。缺槽、重槽、多槽、未知键�
 | `overlap_excl_verbatim` | float / null | 是 | 20 字窗口重合率，扣除契约要求逐字保留的片段；短于窗口为 `null`，不是 0 | **契·码** |
 | `segments` | `ChapterSegment[]` | 是 | `{slot,text}`；slot 匹配 `^s\\d{2,4}$`、章内唯一 | **契·码** |
 | `warns` | str[] | 是 | finding 的人读字符串投影；metric 常驻，非空本身不代表异常 | **契·码** |
-| `errs` | str[] / 键不在 | 否 | `.INVALID` 中为阻断原因；人工正式稿可带其他 HARD 供 Review / wontfix 收口，但 `paragraph_budget_missed` 不得由 `--apply-edit` 正式化，正式下游拒绝任何当前 HARD | **契·码** |
+| `errs` | str[] / 键不在 | 否 | `.INVALID` 中为阻断原因；人工稿相对 current 未新增 HARD 时以 `formal` 写回，新增一般 HARD 时只可显式 `working_draft` 写成 canonical 人工轮并由 Review/closure 阻断；`paragraph_budget_missed` 两种确认态都不得正式化 | **契·码** |
 | `_provenance` | object | 是 | LLM 轮次账或人工 `RoundFreeProvenance` | **契·码** |
 
 v1 → v2 是破坏形状：删除 `mode`，路径从 `stage5/{mode}/chNN.json` 折平为
@@ -140,6 +146,12 @@ v1 → v2 是破坏形状：删除 `mode`，路径从 `stage5/{mode}/chNN.json` 
 `avg_paragraph_chars + paragraph_sep_chars` 得出；prompt 与判据共用该函数。实际段数
 由 `paragraph_count_report` 无条件报出，未落入明确区间由 `paragraph_budget_missed` HARD
 拦截；`para_len_drift` / `band_drift` 仍只回答风格漂移，保持 INFO。
+逐场目标由 `measure.paragraph_slot_plan` 唯一计算：章节目标 clamp 进同一合法区间，每个非空
+slot 至少一段，余量按场景预算作 largest-remainder 分配，slot 顺序是平局规则，总和精确等于
+章目标；场景数使目标不可行时在首个 wire 前拒绝。prompt、修订反馈与常驻 metric
+`paragraph_slot_report` 只消费这一份计划。`reflow_shadow` 只增删换行，强制非空白字符 SHA
+不变、不跨对白合并、只在句末拆分；它只向 observer 报可行性与 HARD 前后差，不写产物、
+不改变候选或 Review 结论，TODO-21 三书标定前不得默认采用。
 超上限不触发模型自动裁剪：正文原样保留，落 identity `TrimAudit`，由人工
 `retain_pretrim` 或整章 `--apply-edit` 收口。
 
@@ -154,6 +166,14 @@ LLM 正式稿用 `RoundLlmProvenance`；人工整章写回用 `RoundFreeProvenan
 提升原问题稿，直接判 `.INVALID` 保存的原始 segments，不借重判归一或修改正文；来源账继承，
 一个字未改就不得伪造新 prompt、模型或轮次。`--recheck` 同样不归一正文、不改 segments、任务
 快照或 provenance，只刷新 v2 派生指标并补齐历史遗漏的 trim audit。
+
+人工写回先经 `prepare_edit_preview`：读取 current canonical 完整文件 SHA，按计划校验全部 slot、
+归一并用当前 `_judge` 同时计算全部 finding、current/introduced/resolved HARD，再把章号、current
+SHA、规则指纹、归一 segments 和这些 finding 规范化为 `preview_subject_sha256`。preview 零模型、
+零写盘。apply 必填 actor/reason、current SHA、preview subject SHA 与 `formal｜working_draft`，重算
+同一评估面并在提交事务内再次核 current 文件 SHA；任一漂移在归档前拒绝。成功稿始终写新的
+canonical human 轮而不是 `.INVALID`，不自动追跑 Review；连续编辑多章后只需显式跑一次最终全书
+Review。已落动作另由 §4.3 的服务账保存身份与前后摘要，正文仍只在 canonical / `_rounds/`。
 
 0-wire prepared recovery 的正式章仍是 `RoundLlmProvenance`，因为正文确由 source model 生成；
 本次 usage 为零，并额外携带 typed `prepared_checkpoint_adoption`。该证据逐项绑定 source/target
@@ -189,34 +209,110 @@ currentness 出口。状态取值：
 | `legacy_incompatible` | 发现旧 deep/shallow 布局，或最新 Review / live trim 低于当前 schema |
 
 `require_fresh_review` 关闭式守住付费 `--revise` 与 wontfix；它只回答“这份结论是否当前”。
-`require_accepted_review` 在此之上拒绝活动 `.INVALID`、缺正式章和任何当前 HARD，是 s5 审批、
-Stage6、Stage7 与最终交付的共同闸。旧报告不得驱动新付费动作；恢复命令是先在 canonical
-章集合上零成本重跑 `stage5.review`。旧 Review v1 仍含
+`require_accepted_review` 在此之上拒绝活动 `.INVALID`、缺正式章和任何当前 HARD，是闭合回执
+可以提交的产物级前置。Stage6、Stage7 与最终交付还必须经过 `require_stage5_closed`，证明
+`gate.s5` 来自一份绑定当前 workpack 的 typed closure；accepted Review 不能替代人工回执。
+旧报告不得驱动新付费动作；恢复命令是所有改稿/trim 完成后，在 canonical 章集合上零成本只跑
+一次最终 `stage5.review`，再重新生成闭合模板。旧 Review v1 仍含
 `mode/mode_dir`；现役 v2 删除这两格，由 producer 免费重建，不做迁移。
 
-## 四、审批服务记录：HTTP v5，盘上 v6
+## 四、审批与人工服务账：HTTP v6，盘上 v7
 
-`ApprovalDoc.v=5` 是 HTTP 公共视图版本，字段为 `sid`、完整 `gate`、完整 `seen`、
-`writing`、typed `design_review`、typed `structure`、typed `writing_approval` 与 `spawns`；它不再暴露 `deep`。`structure` 明示当前结构主体、
-逐章 `accept / request_replan` 决定、历史与五态，且 `gate.s4=true` 只可能来自当前主体的
-全章 `accept`。`POST .../approvals/deep` 路由和 `DeepSelectionRequest` 已退役；结构批准与
-writing 授权是两个独立目的、两份 proof；Stage4A 的 design review 又是只授权 B 的第三个目的。
-writing proof 绑定当前 Stage1 正文、Stage4 Plan、最终结构批准后单独生成的 fresh WriterContext 与
-测量契约，只表达“允许当前 canonical 全书写作”。
+### 4.1 审批版本与职责
+
+`ApprovalDoc.v=6` 是 HTTP 公共视图版本，字段为 `sid`、完整 `gate`、完整 `seen`、
+`writing`、typed `design_review`、typed `structure`、typed `writing_approval`、typed `closure` 与
+`spawns`；它不再暴露 `deep`。前三份 typed 决定分别服务 Stage4A、最终结构和写作授权，不能
+互相推出；`closure` 服务 Stage5 成稿后的整书人工闭合。`gate.s4=true` 只可能来自当前结构主体的
+全章 `accept`，`gate.s5=true` 只可能来自当前 `closed` closure。匿名 `approve_gate('s5')`、
+`POST .../approvals/deep` 和 `DeepSelectionRequest` 都关闭式拒绝或已退役。
 
 `<base>/_service/approvals/<sid>.json` 不是产物，现役内部记录是
-`_ApprovalRecordV6(v=6)`：无 s3 的完整 gate / seen、typed A 设计决定、typed 最终结构决定与各自历史、`writing` 及各自
-current-subject proof。proof 绑定根 `clean_text` SHA-1、正式主体完整 SHA-256 与决定面规范
-SHA-256；bool 必须与 proof 是否存在逐格一致。结构 subject 或计划完整字节变化都会使 s4
-即时失效，writing 与下游 gate 随之关闭。
+`_ApprovalRecordV7(v=7)`：无 s3 的完整 gate/seen，design/structure/writing 的 current typed 决定与
+history/proof，以及 `closure_decision/closure_history`。proof 绑定根 `clean_text` SHA-1、正式主体
+完整 SHA-256 与决定面规范 SHA-256；bool 必须与 proof/typed 决定逐格闭合。结构或写作主体变化会
+关闭依赖 gate；Review、章节、finding 或 trim 身份变化会使 closure 进入 `review_required/expired`，
+旧决定只留 history。
 
-旧 `_ApprovalRecordV5Legacy` 及更早记录只供显式 backfill 读取，普通 GET / 启动绝不静默迁移。旧 s3 proof
-必须先对冻结 Stage3 v2 字节、Stage1 主体与当前测量契约逐项核验，才可用来证明旧 writing
-决定的上下文；新记录本身不再保留 s3。v5→v6 的 design history 恒空，不得从已有 A/B/Plan 或
-付费账伪造 A 人审；已有 current Plan v4 + current bound EvidenceBinding v3 可继续最终结构裁决，
-但未来再次产 B 必须补当前 A review；旧 v2 Binding 不迁移，仍由 B producer 重建。v2/v3
-没有 typed Stage4 结构裁决，最多迁移仍能按当前盘面对证的前置 gate；不得凭旧 s4 或 writing
-推造逐章决定。v1 或损坏记录只能显式 reset/backfill。
+旧 `_ApprovalRecordV6Legacy` 及更早记录只供显式 backfill 读取，普通 GET / 启动绝不静默迁移。
+v6→v7 保留可逐项对证的 s0～s4、seen 与 design/structure/writing typed 历史，清除 s5～s7，
+绝不伪造 closure。旧 v5 的 design history 恒空，不得从已有 A/B/Plan 或付费账伪造 A 人审；
+已有 current Plan v4 + current bound EvidenceBinding v3 可继续最终结构裁决，但未来再次产 B 必须
+补 current A review。旧 v2 Binding 不迁移，仍由 B producer 重建；更早记录最多迁移仍能按当前
+盘面对证的前置 gate，不得凭旧 s4/writing 推造 typed 决定。v1 或损坏记录只能显式 reset/backfill。
+
+### 4.2 `Stage5ClosureView` / `Stage5ClosureWorkpack`
+
+workpack 是从 current 盘面确定性重算的只读工作面，不是又一份产物。它只接受 fresh Review；
+只有 Stage5 尚无任何工作或回执历史时才是 `missing`。Stage5 已有稿件/历史但 Review 缺失，
+或 Review 为 stale/unknown/legacy/unreadable 时，都是 `review_required`：不发布 current
+workpack/decision，但不擦除 history。fresh Review 下先看 blockers：任一存在即 `blocked`；
+无 blocker 且已有决定精确绑定同一 workpack SHA 时才是 `closed`，旧决定不再 current
+时只留 history 并投影为 `expired`，其余可提交面为 `ready`。
+
+构包前后重走唯一 Review freshness，并对 Review 字节、全部 canonical 章、活动
+`.INVALID`、trim/wontfix 处置面做完整双采样；两次不同就拒绝返回混合工作包，由读方重试。
+
+| 字段 | 类型 | 必填 | 取值面 / 语义 | 证据 |
+|---|---|---:|---|---|
+| `state` | str | 是 | `missing｜review_required｜blocked｜ready｜closed｜expired`；页面只展示，不按 counts 重判 | **契·码** |
+| `workpack` | `Stage5ClosureWorkpack` / null | 是 | `blocked/ready/closed/expired` 必有；`missing/review_required` 必为 null | **契·码** |
+| `next_step` | str / null | 是 | `review_required` 必须给出最终 Review 的 0 成本恢复动作 | **契·码** |
+| `current_decision` | `Stage5ClosureDecision` / null | 是 | 只在 `closed` 存在，且绑定当前 workpack；过期决定不得继续冒充 current | **契·码** |
+| `history[]` | `Stage5ClosureDecision[]` | 是 | append-only 人工闭合历史；`closed` 时 current 是末项 | **契·码** |
+
+| Workpack 字段 | 类型 | 必填 | 取值面 / 语义 | 证据 |
+|---|---|---:|---|---|
+| `review_seq/review_rel/review_sha256` | int / str / SHA-256 | 是 | 当前 fresh Review 的序号、相对路径与完整文件摘要 | **契·码** |
+| `planned_chapters/missing_chapters` | int[] | 是 | 计划章升序去重；missing 只能是其子集 | **契·码** |
+| `chapter_subjects[]` | `{output_ordinal,chapter_sha256}` | 是 | 精确覆盖 `planned - missing`；这里的 SHA 是 canonical **完整文件**摘要 | **契·码** |
+| `invalid_chapters/hard_findings` | int[] / str[] | 是 | 任一非空都使 workpack blocked | **契·码** |
+| `unresolved_trim_chapters` | int[] | 是 | 待销账 trim 的升序章号投影 | **契·码** |
+| `unresolved_trim_items[]` | `{output_ordinal,audit_sha256,chapter_sha256}` | 是 | 与上一格章号精确同集；chapter SHA 是 trim audit 绑定的 canonical **正文**摘要，是浏览器批量提交的唯一合法 identity 来源 | **契·码** |
+| `must_appear[]` | `Stage5MustAppearRow[]` | 是 | 每项带章号、evidence key、detail、finding SHA 与完整 chapter file SHA | **契·码** |
+| `fact_group/unver_group` | `Stage5FindingGroup` / null | 是 | 各绑定组名、完整 finding-set SHA、条数与规则闭集；确认不把 UNVER 改成 PASS | **契·码** |
+| `disclosure/resolved` | `{rule:int}` | 是 | INFO/metric 披露计数与 wontfix/typed 已处置计数，不是放行判定 | **契·码** |
+| `workpack_sha256` | SHA-256 | 是 | 绑定除自身外全部当前工作包字段；模板、提交与过期判定共用 | **契·码** |
+
+`Stage5ClosureRequest` 必填 actor/reason、workpack/review 双 SHA、逐项 `must_appear[]` 与整组
+`group_acks[]`。must-appear 只接受 `confirmed_present` 或理由非空的 `accepted_exception`；finding
+与 chapter SHA 任一漂移即整份过期。fact landing / 其余 UNVER 按完整集合 digest 与条数确认。
+`Stage5ClosureTemplate` 的每条待裁决行带 `placeholder=true + template_token`，原样提交关闭式拒绝；
+`Stage5ClosureDecision` 由服务端另加 `decision_sha256/decided_at`，不得保留 placeholder/token。
+缺章、`.INVALID`、HARD 或 unresolved trim 任一非空都不得提交。历史 must-appear 预填只在 finding
+SHA 与 chapter SHA 同时不变时复用；`gate.s5`、Stage6/7 写效果与 assemble 都消费同一 current closure。
+
+### 4.3 `_service/human_actions.jsonl`（wire v1）
+
+这份 append-only 服务账以 `prepared → committed` 两相记录人工改稿意图与已落主体，不保存
+正文、不属于 artifact，也不能替代 Chapter provenance、Review 或 closure。公开读视图只返回
+已有同形 `prepared` 的 `committed`；孤立 prepared 是失败/被 kill 尾窗的恢复证据，不冒充成功动作。
+字段形状：
+
+| 字段 | 类型 | 必填 | 取值面 / 语义 | 证据 |
+|---|---|---:|---|---|
+| `wire_version/action/phase` | `1 / stage5_edit / prepared｜committed` | 是 | 当前唯一人工动作 wire、种类与两相状态 | **契·码** |
+| `request_id` | SHA-256 | 是 | 由 sid/章、actor/reason、confirmation、current chapter SHA 与 preview subject SHA 规范计算的 preview-bound 意图身份 | **契·码** |
+| `action_id` | SHA-256 | 是 | `request_id + result_chapter_sha256` 的 content-addressed 结果身份；同一结果跨进程幂等 | **契·码** |
+| `sid/output_ordinal` | str / int | 是 | 书与 canonical 输出章身份 | **契·码** |
+| `actor/reason` | str | 是 | 自报身份与非空理由；不是认证系统 | **契·码** |
+| `confirmation` | str | 是 | `formal｜working_draft` | **契·码** |
+| `current_chapter_sha256` | SHA-256 | 是 | preview 时 current canonical 完整文件摘要 | **契·码** |
+| `preview_subject_sha256` | SHA-256 | 是 | preview 归一候选、规则与 finding 的完整主体摘要 | **契·码** |
+| `result_chapter_sha256` | SHA-256 | 是 | 成功落盘后的 canonical 完整文件摘要 | **契·码** |
+| `introduced_hard_rules` | str[] | 是 | 升序去重；formal 必为空，working draft 明示新增一般 HARD | **契·码** |
+| `destination_rel/run_id/code/ts` | str / str / str / int | 是 | canonical 相对路径与写该 phase 的运行/代码/时间；目标只允许 `stage5/chNN.json` | **契·码** |
+
+producer 按“同书总锁 → 逐章锁 → append-only 账”的唯一锁序持有线程+跨进程提交所有权，
+重算双 SHA 后先追加 `prepared`，再在章/
+trim 历史事务内写 canonical、读回预期结果 SHA 并构造 `CheckReport`，最后追加 `committed`。
+普通异常会补偿 artifact/sidecar，prepared 仍保留为失败证据；若进程在 canonical 落盘后被 kill，
+后续同一 request 以 current result SHA 精确命中 prepared，只补 trim/report/committed，不再造一轮。
+同一 request 已 committed 为另一结果时关闭式拒绝。写口复用跨进程 append lock；读侧只容忍被 kill
+截断的最后一行。下一次追加会先把该尾的原始字节与前缀摘要内容寻址地隔离到
+`_service/human_actions_tail_recovery/`，证据原子落稳后才截去坏尾并补相；中间或已换行的
+完整坏行仍关闭式失败。preview 本身、纯 Review 都不写账。全部 Stage5 writer、Review/wontfix、
+trim 与 closure submit 另共用 `_service/stage5_writer_locks/<book>/book.lock` 总锁；API 不因取锁写书目录。
 
 ## 五、其余产物与退役投影
 

@@ -54,6 +54,10 @@ export interface EnumsResponse {
   /** code -> [minScenes, minOpaqueAliases]；只用于表单提示，最终合法性仍由后端判定。 */
   design_repair_constraint_arity: Record<string, [number, number]>
   design_review_states: string[]
+  /** Stage5 Commander 闭合表单的三张运行时取值面；页面不得复制枚举字面。 */
+  stage5_must_appear_rulings: string[]
+  stage5_closure_groups: string[]
+  stage5_closure_states: string[]
   /** Stage4B 语义担忧与代码铸造不可行证明的运行时取值面。 */
   binding_concern_codes: string[]
   binding_infeasibility_codes: string[]

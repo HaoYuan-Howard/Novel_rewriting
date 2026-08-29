@@ -54,6 +54,7 @@ from novel.errors import (
     ApprovalFrozen, ApprovalRequired, ArtifactUnreadable, GateBlocked, HumanEditProtected,
     NovelError, UpstreamMissing,
 )
+from novel.llm import stage5_runs
 from novel.orchestrator import state
 from novel.quality.global_review import (
     review_status as global_review_status,
@@ -474,7 +475,7 @@ def _fresh_record(sid: str, planned: list[int] | None = None) -> _ApprovalRecord
 def _view(
     base: str | os.PathLike[str], record: _ApprovalRecordV7,
 ) -> ApprovalDoc:
-    """服务记录的唯一公开投影；public v5 明示三类 typed 裁决。"""
+    """服务记录的唯一公开投影；public v6 明示闭合回执与 typed 裁决。"""
     novel_dir = paths.resolve_novel_dir(base, record.sid)
     design_review = _design_review_view(novel_dir, record)
     structure = _structure_view(novel_dir, record)
@@ -1507,19 +1508,34 @@ def _closure_view(novel_dir: Path, record: _ApprovalRecordV7) -> Stage5ClosureVi
     不去构造 workpack（那会把「没有 Review」读成一次注定失败的判定）。
     """
     from novel.stages.stage5.closure import closure_view as _workpack_view
-    if not (novel_dir / 'stage5').is_dir():
-        return Stage5ClosureView(state='missing')
-    store = _store_for(novel_dir)
     history = [_public_closure_decision(row) for row in record.closure_history]
     current = (
         None if record.closure_decision is None
         else _public_closure_decision(record.closure_decision))
+    if not (novel_dir / 'stage5').is_dir():
+        if history or current is not None:
+            return Stage5ClosureView(
+                state='review_required',
+                next_step=(
+                    'Stage5 产物目录缺失，但盘上仍有历史闭合回执。'
+                    '先恢复 canonical 章稿，再零成本运行一次 stage5.review'),
+                history=history,
+            )
+        return Stage5ClosureView(state='missing')
+    store = _store_for(novel_dir)
     try:
         return _workpack_view(
             store, record_history=history, record_current=current)
-    except NovelError:
-        # 盘面读不出确定性工作包（如 Review 损坏）时如实降级，不伪造态。
-        return Stage5ClosureView(state='missing')
+    except NovelError as exc:
+        # Stage5 目录已经存在却读不出 current Review，不是「没进入 Stage5」。
+        # 保留历史并给出唯一恢复动作，绝不能把 stale/unreadable 画成 missing/ready。
+        return Stage5ClosureView(
+            state='review_required',
+            next_step=(
+                f'当前最终 Review 无法构造闭合工作包：{exc}。'
+                '多次改稿完成后只需零成本运行一次 stage5.review'),
+            history=history,
+        )
 
 
 def stage5_closure_view(base: str | os.PathLike[str], sid: str) -> Stage5ClosureView:
@@ -1551,9 +1567,12 @@ def approve_stage5_closure(
     from novel.stages.stage5.closure import (
         closure_workpack, validate_closure_request,
     )
-    with approval_file_lock(base, sid):
+    novel_dir = paths.resolve_novel_dir(base, sid)
+    # 锁序固定为 Stage5 书锁 → 审批文件锁：盘面快照、proof 与 gate.s5
+    # 必须共同消费同一个正文/trim 主体，不能在回执尾窗让写者穿过。
+    with (stage5_runs.book_commit_ownership(novel_dir),
+          approval_file_lock(base, sid)):
         record = _read_current(base, sid)
-        novel_dir = paths.resolve_novel_dir(base, sid)
         store = _store_for(novel_dir)
         pack = validate_closure_request(store, request)
         # 双读防提交期间盘面漂移（与 design review 的提交窗口一致）。

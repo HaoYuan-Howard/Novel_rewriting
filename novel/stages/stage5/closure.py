@@ -36,8 +36,9 @@ from typing import Any
 
 from contracts.rules import REGISTRY
 from contracts.schema.api import (
-    Stage5ClosureRequest, Stage5ClosureTemplate, Stage5ClosureView,
-    Stage5ClosureWorkpack, Stage5FindingGroup, Stage5MustAppearRow,
+    Stage5ChapterSubject, Stage5ClosureRequest, Stage5ClosureTemplate,
+    Stage5ClosureView, Stage5ClosureWorkpack, Stage5FindingGroup,
+    Stage5MustAppearRow, Stage5TrimWorkItem,
 )
 from contracts.schema.common import Finding
 from novel.errors import GateBlocked, ProvenanceRefused, TerminalState
@@ -147,6 +148,34 @@ def _group_of(
         group=group, findings_sha256=digest, items=len(findings), rules=rules)
 
 
+def _invalid_chapters(store: ArtifactStore) -> list[int]:
+    """读取当前 `.INVALID` 阻断面；调用方用首尾两采关闭构包竞态。"""
+    return sorted(
+        int(item.name.split('ch')[1].split('.')[0])
+        for item in store.path('stage5').glob('ch*.INVALID.json')
+    )
+
+
+def _unresolved_trim_items(store: ArtifactStore) -> list[Stage5TrimWorkItem]:
+    """由当前 audit + canonical 精确生成批量 trim 的双 SHA 工作面。"""
+    unresolved = trim_resolution.current_unresolved_audits(store)
+    return [
+        Stage5TrimWorkItem(
+            output_ordinal=ordinal,
+            audit_sha256=unresolved[ordinal][1],
+            # current_unresolved_audits 已精确证明 canonical text SHA == audit.before。
+            chapter_sha256=unresolved[ordinal][0].before_sha256,
+        )
+        for ordinal in sorted(unresolved)
+    ]
+
+
+def _optional_file_sha256(store: ArtifactStore, rel: str) -> str | None:
+    """读取可选闭合主体的完整文件摘要；不存在与空内容必须分开。"""
+    path = store.path(rel)
+    return hashlib.sha256(path.read_bytes()).hexdigest() if path.is_file() else None
+
+
 def closure_workpack(
     store: ArtifactStore,
     *,
@@ -156,25 +185,35 @@ def closure_workpack(
 
     ``chapter_sha256_of`` 仅供测试注入正文摘要；生产路径恒读 canonical 文件字节。
     """
-    latest = review.latest_review(store)
-    if latest is None:
+    # latest 只回答「最后一轮是哪份」，不回答它是否仍绑定当前 RULES / 章集 / 正文。
+    # 闭合工作包能开 s5，必须先走 Review 唯一 currentness 判据，不能拿 stale 快照画 ready。
+    bound_review = review.require_fresh_review(store.ctx, store)
+    if (bound_review.seq is None or bound_review.review is None
+            or bound_review.review_rel is None):
         raise TerminalState(
-            'Stage5 还没有任何当前 schema 的验收报告；先零成本运行 `stage5.review`')
-    seq, rev = latest
+            'Stage5 fresh Review 缺少 typed 主体身份；先零成本运行 `stage5.review`')
+    seq, rev = bound_review.seq, bound_review.review
+    bound_review_sha256 = review_file_sha256(store, seq)
+    # wontfix 会改变 finding 的 actionable/已销账投影，却不属于 Review freshness
+    # 的 canonical 输入。先绑定它的完整字节，返回前再采一次，避免混合新旧裁决面。
+    bound_wontfix_sha256 = _optional_file_sha256(store, review.WONTFIX)
     rev = review.with_current_wontfix(store, rev)
 
-    def chapter_sha(ordinal: int) -> str:
-        if chapter_sha256_of is not None:
-            return chapter_sha256_of(ordinal)
-        rel = review.artifact_rel('stage5.chapter', nn=ordinal)
-        return hashlib.sha256(store.path(rel).read_bytes()).hexdigest()
+    chapter_sha_cache: dict[int, str] = {}
 
-    invalid_chapters = sorted(
-        int(name.split('ch')[1].split('.')[0])
-        for name in (
-            item.name for item in store.path('stage5').glob('ch*.INVALID.json'))
-    )
-    unresolved_trim = sorted(trim_resolution.current_unresolved_audits(store))
+    def chapter_sha(ordinal: int) -> str:
+        if ordinal not in chapter_sha_cache:
+            if chapter_sha256_of is not None:
+                value = chapter_sha256_of(ordinal)
+            else:
+                rel = review.artifact_rel('stage5.chapter', nn=ordinal)
+                value = hashlib.sha256(store.path(rel).read_bytes()).hexdigest()
+            chapter_sha_cache[ordinal] = value
+        return chapter_sha_cache[ordinal]
+
+    invalid_chapters = _invalid_chapters(store)
+    unresolved_trim_items = _unresolved_trim_items(store)
+    unresolved_trim = [item.output_ordinal for item in unresolved_trim_items]
 
     must_appear: list[Stage5MustAppearRow] = []
     fact_findings: list[Finding] = []
@@ -222,17 +261,26 @@ def closure_workpack(
 
     planned = [row.output_ordinal for row in rev.chapters]
     missing = [row.output_ordinal for row in rev.chapters if row.relpath is None]
+    chapter_subjects = [
+        Stage5ChapterSubject(
+            output_ordinal=ordinal,
+            chapter_sha256=chapter_sha(ordinal),
+        )
+        for ordinal in planned if ordinal not in set(missing)
+    ]
     fact_rules = sorted(_FACT_GROUP_RULES)
     unver_rules = sorted(_UNVER_GROUP_RULES)
     pack = Stage5ClosureWorkpack(
         review_seq=seq,
         review_rel=review.REVIEW_TPL.format(n=seq),
-        review_sha256=review_file_sha256(store, seq),
+        review_sha256=bound_review_sha256,
         planned_chapters=planned,
         missing_chapters=sorted(missing),
+        chapter_subjects=chapter_subjects,
         invalid_chapters=invalid_chapters,
         hard_findings=sorted(set(hard_rules)),
         unresolved_trim_chapters=unresolved_trim,
+        unresolved_trim_items=unresolved_trim_items,
         must_appear=must_appear,
         fact_group=_group_of(fact_findings, group='fact_landing', rules=fact_rules),
         unver_group=_group_of(unver_findings, group='unver', rules=unver_rules),
@@ -245,6 +293,40 @@ def closure_workpack(
     body = pack.model_dump(by_alias=True, mode='json')
     body.pop('workpack_sha256')
     pack = pack.model_copy(update={'workpack_sha256': _sha256_of(body)})
+    # 构包会逐章读取完整 canonical 字节；第一次 freshness 与最后一章摘要之间
+    # 仍有窗口。结束前再走 Review 唯一 currentness 判据，并核同一 Review 文件身份，
+    # 防止返回“旧 findings + 新章 SHA”或“Review_1 内容 + Review_2 currentness”的混合包。
+    rebound = review.require_fresh_review(store.ctx, store)
+    if (rebound.seq != seq or rebound.review_rel != bound_review.review_rel
+            or review_file_sha256(store, seq) != bound_review_sha256):
+        raise TerminalState(
+            'Stage5 Review 在闭合工作包构造期间变化；拒绝返回混合主体，请重新生成工作包')
+    rebound_chapter_subjects = [
+        Stage5ChapterSubject(
+            output_ordinal=ordinal,
+            chapter_sha256=(
+                chapter_sha256_of(ordinal)
+                if chapter_sha256_of is not None
+                else hashlib.sha256(store.path(
+                    review.artifact_rel('stage5.chapter', nn=ordinal),
+                ).read_bytes()).hexdigest()
+            ),
+        )
+        for ordinal in planned if ordinal not in set(missing)
+    ]
+    if rebound_chapter_subjects != chapter_subjects:
+        raise TerminalState(
+            'Stage5 canonical 完整章主体在闭合工作包构造期间变化；'
+            '拒绝返回混合主体，请重新生成工作包')
+    # Review currentness 不观察 `.INVALID`、trim resolution/audit 与 wontfix；这些
+    # 又都直接进入工作包判定。首尾完整复采，任何一格变化都关闭式拒绝混合快照。
+    if (_invalid_chapters(store) != invalid_chapters
+            or _unresolved_trim_items(store) != unresolved_trim_items
+            or _optional_file_sha256(store, review.WONTFIX)
+            != bound_wontfix_sha256):
+        raise TerminalState(
+            'Stage5 INVALID/trim/wontfix 在闭合工作包构造期间变化；'
+            '拒绝返回混合主体，请重新生成工作包')
     return pack
 
 
@@ -376,6 +458,7 @@ def require_stage5_closed(store: ArtifactStore) -> Stage5ClosureWorkpack:
     if view.state != 'closed':
         detail = {
             'missing': '还没有任何闭合回执',
+            'review_required': '最终 Review 缺失、过期或无法证明 current',
             'blocked': '工作包仍有阻断项',
             'ready': '工作包可提交但 Commander 尚未提交回执',
             'expired': '已有回执但盘面在提交后发生了变化',
@@ -394,10 +477,40 @@ def closure_view(
     record_current: Any = None,
 ) -> Stage5ClosureView:
     """把当前盘面折成公开闭合视图；历史由审批服务注入，这里不解释它。"""
-    try:
-        pack = closure_workpack(store)
-    except TerminalState:
-        return Stage5ClosureView(state='missing')
+    status = review.review_status(store.ctx, store)
+    if status.state == 'missing':
+        history = list(record_history or [])
+        stage5_dir = store.path('stage5')
+        has_stage5_work = (
+            stage5_dir.is_dir()
+            and any(path.is_file() for path in stage5_dir.rglob('*'))
+        )
+        if has_stage5_work or history or record_current is not None:
+            return Stage5ClosureView(
+                state='review_required',
+                next_step=(
+                    'Stage5 已有章稿、处置状态或历史回执，但当前没有最终 Review。'
+                    '多次改稿完成后只需零成本运行一次 stage5.review，再生成闭合模板'),
+                history=history,
+            )
+        return Stage5ClosureView(state='missing', history=history)
+    if not status.fresh:
+        reason = '；'.join(status.reasons[:6]) or status.state
+        return Stage5ClosureView(
+            state='review_required',
+            next_step=(
+                f'Stage5 Review 当前状态是 {status.state}：{reason}。'
+                '多次改稿完成后只需零成本运行一次 stage5.review，再生成闭合模板'),
+            history=list(record_history or []),
+        )
+    pack = closure_workpack(store)
+    # blocker 是当前盘面事实，优先级高于任何历史/异常决定。即使旧盘坏记录或
+    # 人工篡改碰巧声称绑定同一 workpack，也不能把 INVALID/trim/HARD 画成 closed。
+    if pack.blockers():
+        return Stage5ClosureView(
+            state='blocked', workpack=pack,
+            next_step='销账 trim / 修复阻断级后零成本重跑 stage5.review',
+            history=list(record_history or []))
     if record_current is not None and record_current.workpack_sha256 == pack.workpack_sha256:
         return Stage5ClosureView(
             state='closed', workpack=pack, current_decision=record_current,
@@ -406,10 +519,6 @@ def closure_view(
         return Stage5ClosureView(
             state='expired', workpack=pack,
             history=list(record_history or []))
-    if pack.blockers():
-        return Stage5ClosureView(
-            state='blocked', workpack=pack,
-            next_step='销账 trim / 修复阻断级后零成本重跑 stage5.review')
     return Stage5ClosureView(
         state='ready', workpack=pack,
         next_step='生成模板并逐项裁决 must_appear / 整组确认后提交回执')

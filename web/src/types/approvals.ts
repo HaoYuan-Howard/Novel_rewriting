@@ -264,8 +264,121 @@ export interface StructureApprovalView {
   binding_concerns: StructureBindingConcern[]
 }
 
+/** Stage5 写作授权的 typed 投影；`writing` 仍是服务端给出的最终可执行结论。 */
+export interface WritingApprovalDecision {
+  actor: string
+  reason: string
+  subject_sha256: string
+  decided_at: string
+}
+
+export interface WritingApprovalView {
+  available: boolean
+  current_subject_sha256: string | null
+  current_decision: WritingApprovalDecision | null
+  history: WritingApprovalDecision[]
+}
+
+/** 一条 current trim audit 的批量提交身份；两枚 SHA 都由服务端下发。 */
+export interface BatchTrimResolutionItem {
+  output_ordinal: number
+  audit_sha256: string
+  chapter_sha256: string
+  /** 空串表示沿用请求级共享 reason。 */
+  reason: string
+}
+
+export interface BatchTrimResolutionRequest {
+  actor: string
+  reason: string
+  items: BatchTrimResolutionItem[]
+}
+
+export interface Stage5MustAppearDecision {
+  chapter_ordinal: number
+  evidence_key: string
+  finding_sha256: string
+  chapter_sha256: string
+  /** 取值面来自 `/api/enums.stage5_must_appear_rulings`。 */
+  ruling: string
+  reason: string
+  placeholder: boolean
+  template_token: string | null
+}
+
+export interface Stage5FindingGroupAck {
+  /** 取值面来自 `/api/enums.stage5_closure_groups`。 */
+  group: string
+  findings_sha256: string
+  items: number
+  placeholder: boolean
+  template_token: string | null
+}
+
+export interface Stage5ClosureRequest {
+  actor: string
+  reason: string
+  workpack_sha256: string
+  review_sha256: string
+  must_appear: Stage5MustAppearDecision[]
+  group_acks: Stage5FindingGroupAck[]
+}
+
+/** GET `/approvals/stage5/template` 的关闭式模板；逐项确认前仍带 placeholder/token。 */
+export interface Stage5ClosureTemplate extends Stage5ClosureRequest {}
+
+export interface Stage5ClosureDecision extends Stage5ClosureRequest {
+  decision_sha256: string
+  decided_at: string
+}
+
+export interface Stage5MustAppearRow {
+  chapter_ordinal: number
+  evidence_key: string
+  detail: string
+  finding_sha256: string
+  chapter_sha256: string
+}
+
+export interface Stage5FindingGroup {
+  group: string
+  findings_sha256: string
+  items: number
+  rules: string[]
+}
+
+export interface Stage5ClosureWorkpack {
+  review_seq: number
+  review_rel: string
+  review_sha256: string
+  planned_chapters: number[]
+  missing_chapters: number[]
+  /** 全部 current canonical 计划章的服务端文件身份；预览/apply 不从正文重算。 */
+  chapter_subjects: { output_ordinal: number; chapter_sha256: string }[]
+  invalid_chapters: number[]
+  hard_findings: string[]
+  unresolved_trim_chapters: number[]
+  /** 批量 trim 的唯一合法 identity 来源；前端不得重算 audit/chapter SHA。 */
+  unresolved_trim_items: Omit<BatchTrimResolutionItem, 'reason'>[]
+  must_appear: Stage5MustAppearRow[]
+  fact_group: Stage5FindingGroup | null
+  unver_group: Stage5FindingGroup | null
+  disclosure: Record<string, number>
+  resolved: Record<string, number>
+  workpack_sha256: string
+}
+
+export interface Stage5ClosureView {
+  /** 取值面来自 `/api/enums.stage5_closure_states`；页面只展示，不从 counts 重判。 */
+  state: string
+  workpack: Stage5ClosureWorkpack | null
+  next_step: string | null
+  current_decision: Stage5ClosureDecision | null
+  history: Stage5ClosureDecision[]
+}
+
 export interface ApprovalDoc {
-  v: 5
+  v: 6
   sid: string
   gate: Record<GateKey, boolean>
   seen: Record<SeenKey, boolean>
@@ -275,6 +388,10 @@ export interface ApprovalDoc {
   design_review: DesignReviewView
   /** 独立于 writing 的、绑定当前完整 Stage4 计划字节的逐章结构裁决。 */
   structure: StructureApprovalView
+  /** 当前写作主体与 typed 授权历史；旧匿名记录不会被补造成人工决定。 */
+  writing_approval: WritingApprovalView
+  /** Stage5 唯一、强制、hash-bound 的整书 Commander 闭合回执。 */
+  closure: Stage5ClosureView
   /**
    * 确认某一道闸门之后服务端会发起什么。
    * 由服务端下发，界面据此决定按钮是不是橙的 —— 免得「谁会花钱」在前后端各存一份。

@@ -586,18 +586,21 @@ Output/_service/queues.jsonl      持久批量队列 append-only 事件流
 Output/_service/agent_runs.jsonl  headless agent append-only 事件流（含双授权快照）
 Output/_service/agent_sessions.jsonl commander / executor CLI 会话审计（wire v2）
 Output/_service/agent_progress.jsonl agent/runner 的 CLI 步骤观察轨迹
+Output/_service/human_actions.jsonl 已落盘人工动作的 append-only 身份审计（不含正文）
+Output/_service/human_actions_tail_recovery/<sha>.json 被 kill 截断的 human action 尾行隔离证据
+Output/_service/stage5_writer_locks/<book>/book.lock Stage5 CLI writer / API closure 共用总锁
 Output/_service/logs/<job_id>.log 子进程 stdout+stderr，按字节追加
 Output/_service/ledger.jsonl      跨书逐请求成本事实
-Output/_service/*.jsonl.lock      上面六份 JSONL 各自的追加锁载体（见下）
+Output/_service/*.jsonl.lock      上面七份 JSONL 各自的追加锁载体（见下）
 Output/_service/uploads/…         浏览器上传的原始小说字节
-Output/_service/edits/<sid>/…     交给 stage0 CLI 的一次性编辑计划
+Output/_service/edits/<sid>/…     交给 CLI 的一次性 typed 编辑稿、人工决定或批处理 manifest
 Output/_service/approvals/<sid>.json 人工闸门、已阅状态与 canonical 写作授权（原子替换）
 ```
 
 它们**不是产物**：不进来源账、不进 `_provenance`、`ARTIFACTS` 里没有它们；
 `tests/test_layering.py` 的写口与路由所有权白名单为每一类带着明确理由。
 
-> ### 六份 JSONL 的追加口只有一个：`novel/appendlog.py`
+> ### 七份 JSONL 的追加口只有一个：`novel/appendlog.py`
 >
 > 写入方**不止服务进程**：`agent_progress.jsonl` 由 N 个 agent 各自的
 > `novel.cli mark` 子进程写，`jobs.jsonl` / `queues.jsonl` 由服务进程**和**
@@ -605,7 +608,7 @@ Output/_service/approvals/<sid>.json 人工闸门、已阅状态与 canonical �
 >
 > ⇒ 追加同时握**线程锁**（同进程内多个写手）与**操作系统文件锁**
 > （Windows `msvcrt` / POSIX `flock`，`<目标>.lock`，30s 超时后显式 `TimeoutError`）。
-> 此前只有 `ledger.jsonl` 有那把文件锁，其余五份仅有线程锁——
+> 统一追加口落地前只有 `ledger.jsonl` 有那把文件锁，当时其余五份仅有线程锁——
 > 而读侧「只容忍**最后一行**」的容错在并发下兜不住：A 进程的半截行会被
 > B 进程紧接着写的完整行**顶到中间**，于是读侧对一次正常的并行跑开火，
 > 且是**所有书**的视图一起失效。锁补齐之后那条容忍才真正成立。
@@ -616,7 +619,22 @@ Output/_service/approvals/<sid>.json 人工闸门、已阅状态与 canonical �
 不进入正式 artifact provenance，也不参与 cache key。旧行没有该列时仍可读，但只能标为
 legacy / ungrouped；成本汇总不得用时间窗口把它猜进某个新 run。
 
-`approvals/<sid>.json` 的盘上服务记录当前为 **v6**；HTTP 投影 `ApprovalDoc.v=5` 是另一条
+`human_actions.jsonl` 当前只写 `HumanEditAction` wire v1 的 `prepared → committed`
+两相行：`request_id` 绑 preview 意图，`action_id` 再绑预期结果 SHA；其余字段是
+`action=stage5_edit`、sid/章号、自报 actor/reason、`formal｜working_draft`、preview 时
+current canonical 完整文件 SHA、preview subject SHA、写回后 canonical 完整文件 SHA、新增 HARD
+规则、目标相对路径，以及写该 phase 的 run/code/时间。同书总锁→逐章锁的线程+跨进程所有权覆盖
+“重算双 SHA → prepared → canonical/trim 写入与读回 → CheckReport → committed”。普通异常
+补偿产物而保留 prepared 失败证据；kill 留下的 prepared + 精确 landed SHA 由新 run 只补
+trim/report/committed，不造新轮。公开读视图只认 committed，同一 request 不得 committed 为两份结果。
+账不复制 segments/正文；尾行被 kill 截断时，追加口先把原字节内容寻址隔离到
+`human_actions_tail_recovery/`，再截去坏尾补相；中间或已换行的完整坏行仍关闭式失败。
+全部 Stage5 canonical/INVALID/recheck/revalidate/Review/wontfix/trim writer 与 closure submit 共用一把位于
+`_service/` 的书锁，closure 的二次 workpack 与 approval/gate 写回在同一临界区；逐章提交再按序取章锁。
+正文身份由 SHA 联结，
+账本不能反向充当产物或 Review。
+
+`approvals/<sid>.json` 的盘上服务记录当前为 **v7**；HTTP 投影 `ApprovalDoc.v=6` 是另一条
 版本轴，不能据同一个数字互推。每个已盖 gate、已阅状态、typed Stage4A 设计审阅、最终结构裁决和 writing 授权
 都必须带一份 current-subject proof：当前 `stage0/clean_text.txt` 的完整 SHA-1、所裁决正式
 产物的完整 SHA-256，以及决定本身的规范 JSON SHA-256。读取时必须重新走当前 schema、typed
@@ -626,8 +644,9 @@ legacy / ungrouped；成本汇总不得用时间窗口把它猜进某个新 run�
 `surname_map + characters + extra_subs` 决策面与完整 typed `ApprovedNameMap` 的规范摘要。
 因此 `stage7.assemble` 写回 `book_txt` 交付账不会自废 s7，而决策面、actor/reason/origin
 或 subject hash 变化仍会失效；读取还必须先证明 approval 存在且 subject 与当前决策面一致。
-旧 v5 记录仍可能含由更早版本保守收进的当前 proof，只为**显式** backfill 解码；迁入 v6 时只保留
-仍可逐项对证的 gate、seen、最终结构与 writing 决定，`design_history` 恒为空，绝不从既有 A/B/Plan
+旧 v6 只为**显式** backfill 解码；迁入 v7 时保留仍可逐项对证的 s0～s4、seen 以及
+design/structure/writing typed 历史，清除 s5～s7，绝不伪造 Stage5 closure 回执。更早记录迁入时只保留
+仍可逐项对证的 gate、seen、最终结构与 writing 决定；旧 v5 的 `design_history` 恒为空，绝不从既有 A/B/Plan
 或付费记录倒造 Stage4A 人审。已有 current Plan v4 + current bound EvidenceBinding v3（包括可零成本
 恢复的 `.INVALID` Plan）可继续做最终结构审；未来再次产 B 才要求真实 A 审阅。旧 v2 Binding
 不经审批迁移或补字段，仍由 B producer 重建。更早记录没有 typed Stage4 结构裁决时，最多保留按当前盘面逐项对证的

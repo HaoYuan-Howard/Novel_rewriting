@@ -66,7 +66,7 @@ describe('Stage5 部分写作授权链', () => {
       decided_at: '2026-08-25T00:00:00+00:00',
     }
     const approvals: ApprovalDoc = {
-      v: 5,
+      v: 6,
       sid: SAMPLE_SID,
       gate: { s0: true, s1: true, s2: true, s4: true, s5: false, s6: false, s7: false },
       seen: { read: true, global: true },
@@ -83,6 +83,12 @@ describe('Stage5 部分写作授权链', () => {
       structure: {
         state: 'accepted', current_subject_sha256: subject,
         current_decision: structureDecision, history: [structureDecision], binding_concerns: [],
+      },
+      writing_approval: {
+        available: true, current_subject_sha256: subject, current_decision: null, history: [],
+      },
+      closure: {
+        state: 'missing', workpack: null, next_step: null, current_decision: null, history: [],
       },
       spawns: {},
     }

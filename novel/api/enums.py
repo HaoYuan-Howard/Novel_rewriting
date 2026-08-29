@@ -301,22 +301,21 @@ def actions() -> list[dict[str, Any]]:
     ⚠ `extra` 里的带值 flag **不带值**（`--apply-edit` 而不是 `--apply-edit <路径>`）：
     那个值是人在点下去的那一刻才给的。`needs_value` 就是用来说这件事的。
     """
-    # These flags are audit credentials/locks, never a runnable operation by
-    # themselves.  They remain in ``job_kinds[].flags`` and are exposed on the
-    # operation that requires them through ``required_inputs`` below.
+    # 这些 flag 是审计凭据/提交锁，不是可独立运行的动作。它们仍留在
+    # ``job_kinds[].flags``，并经下方 ``required_inputs`` 挂到真正需要它们的动作。
     credential_flags = {
         '--actor', '--reason', '--subject-sha256',
         '--expected-revision-id',
+        '--current-chapter-sha256', '--preview-subject-sha256',
+        '--edit-confirmation',
     }
 
     def required_inputs(node: str, flags: Sequence[str]) -> list[dict[str, str]]:
-        """Missing values the caller must collect before *execution*.
+        """调用方在执行前必须收齐的缺失值。
 
-        This is deliberately derived from the same ``missing_required`` helper
-        used by ``validate_run`` and preview placeholders.  Publishing the
-        descriptors on each concrete action does not give the browser a second
-        required-flag table: it only tells the action renderer which human
-        inputs to collect; the server remains authoritative at submit time.
+        这里刻意复用 ``validate_run`` 与 preview placeholder 共用的
+        ``missing_required``。把描述挂到具体动作上不是给浏览器再造一张必填 flag 表，
+        只是在渲染动作时说明该收哪些人工输入；提交时仍由服务端作唯一权威校验。
         """
         return [
             {'flag': flag, 'description': VALUED_FLAGS[flag]}

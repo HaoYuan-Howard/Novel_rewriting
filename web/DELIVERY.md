@@ -174,7 +174,7 @@ export const api: Api = USE_MOCK ? mockApi : realApi
 | 状态 | 家 |
 |---|---|
 | 20 份响应 | TanStack Query |
-| **`gate` / `seen` / `design_review` / `structure` / `writing`** | 一份 v5 `ApprovalDoc`，也走 Query（`['approvals', sid]`）；`design_review` 保存绑定当前 Stage4A 主体的策略级与逐章 typed 裁决，只授权 B；`structure` 保存绑定完整 Stage4 plan + binding concerns 主体的最终逐章裁决；`writing` 仍独立记录全书闭卷写作授权 |
+| **`gate` / `seen` / `design_review` / `structure` / `writing` / `writing_approval` / `closure`** | 一份公开 v6 `ApprovalDoc`，也走 Query（`['approvals', sid]`）；`design_review` 保存绑定当前 Stage4A 主体的策略级与逐章 typed 裁决，只授权 B；`structure` 保存绑定完整 Stage4 plan + binding concerns 主体的最终逐章裁决；`writing_approval` 是当前 Stage4 主体的 typed 写作授权；`closure` 是绑定 current canonical 全章 + fresh Review + finding/trim 集的 Stage5 Commander 回执，只有 current `closed` 才打开 s5 |
 | `job` / `jobLog` | Query + `refetchInterval`（由服务端下发的 `running` 决定） |
 | 确认框里的 argv | Query（`api.previewJob`） |
 | `sid` / 章号 / 当前屏 | React Router 路径 |
@@ -210,7 +210,7 @@ Stage4A 表单一次提交当前完整 subject、策略 `accept|request_replan` 
 | `/n/:sid/read/:o` | 原文与 stage2 骨架对照 |
 | `/n/:sid/global` | stage2 全局人物、关系、规则、秘密 |
 | `/n/:sid/stage4/:o` | Stage4A 盲候选先经策略级与逐章 typed 人审；全接受后才呈现 B/最终结构工作面。常驻展示完整结构 subject SHA-256、全章 `retain/reconstruct`、声明/复算变化与 B 的 nonblocking concerns，选中章再展示计划/上下文细节，并经第二道 typed 表单原子提交最终逐章结构裁决。最终结构批准不等于 Stage5 写作授权 |
-| `/n/:sid/stage5/:o` | canonical 成稿、材料、验收 finding 与修订的合并工作面；空状态在付费确认前先写入全书闭卷授权；current TrimAudit 在本屏经专用 retain-pretrim 路由留 actor/reason 销账，fresh Review 的章级/书级 finding 可按完整 evidence identity 提交 wontfix |
+| `/n/:sid/stage5/:o` | canonical 成稿、材料、验收 finding 与修订的合并工作面；顶部常驻服务端 Stage5 Commander 闭合卡：`review_required` 只给一次最终 Review，blocked 工作包可按服务端 `unresolved_trim_items` 批量销账，ready/expired 经 `/approvals/stage5/template` 逐项形成 typed 回执；空状态在付费确认前先写入全书闭卷授权。单章改稿严格走只读 typed preview → 明示 `formal/working_draft` → 双 SHA apply，每次 apply 不自动 Review；fresh Review 的章级/书级 finding 仍可按完整 evidence identity 提交 wontfix |
 | `/n/:sid/inbox` | 八类待办的全书路由器，不提供第二个编辑面（校验下沉到各阶段屏的面板） |
 | `/n/:sid/stage6` | 三候选文案与人工定稿 |
 | `/n/:sid/stage7`、`/n/:sid/stage7/:o` | 人名表、漏网候选、成书状态和逐章替换对照 |
@@ -243,6 +243,15 @@ hash-bound 的策略级与逐章裁决；候选、证据、允许的 repair code
 关闭式拒绝，前端不替人补拒绝理由。只有后端返回 `design_review.state=accepted`，才呈现
 `screens/stage4/StructureApprovalPanel`。后者替代通用 `GateBar(s4)`，对完整 Plan + concerns 主体
 逐章裁决；`request_replan` 不顺手拉起重规划，写作授权仍只在 Stage5 的付费确认流中单独授予。
+
+Stage5 屏顶部另有 `screens/stage5/Stage5ClosurePanel`。它只消费 `ApprovalDoc.closure` 的
+`state/workpack/next_step`，不会拿旧 Review、历史回执或 finding 数量自行补成 ready/closed。
+workpack 的 `chapter_subjects` 是全章 canonical 身份展示面；批量 trim 请求逐项原样复制
+`unresolved_trim_items` 的 audit/chapter 两枚 SHA，只补共享 actor/reason 与可选单项 reason；发专用 API
+前仍以「服务端一次性 manifest」占位走通用 jobs preview，确认框核过 argv 后才真正提交。
+回执模板与提交分别真实走 `GET/POST /api/novels/:sid/approvals/stage5(/template)`；模板身份与页面
+current workpack 不一致时关闭式禁用，placeholder/token 必须由操作者逐项消掉。模板 GET 标为只读，
+正式回执 POST 会写审批账并打开 s5，按钮按 U-08 明示为免费写盘。
 
 全局屏的 `screens/global/GlobalReviewPanel` 按**主体**成卡：人读这一面的方式是
 「这个人物 / 这条关系 / 这条秘密的时间线」，不是一张 145 行的表。收敛键
@@ -296,6 +305,15 @@ stage5 的「三栏」= `ComparePanes(sticky=left)` 的右栏里装 `CompareRows
 - **Stage5 正文只取 Draft `segments[]`**：Review 只发 finding 与计数，不重复正文、轮次、篇幅、
   基线或来源账。阅读、编辑与证据高亮都拼接并行 Stage5 响应里的当前 segments，不能退回 Review
   的历史主体或在前端重判 stale。
+- **Stage5 改稿有独立只读 preview 主体**：`POST /review/:o/edit/preview` 返回服务端归一后的
+  `normalized_segments`、全部 finding、current/introduced/resolved HARD、current chapter SHA、
+  preview subject SHA 与唯一 `required_confirmation`。页面不从 rule/count 推确认语义；正文一改就让
+  旧 preview 失效。正式 `POST /review/:o/edit` 原样提交归一稿、actor/reason、两枚 SHA 和该 confirmation，
+  并在发起前仍用通用 jobs preview 摊开完整 CLI 形状；完成多次改稿后由顶部显式跑一次最终 Review。
+- **Stage5 closure/batch trim 的身份只来自服务端工作包**：`review_required` 明确区别于 missing；
+  `chapter_subjects` 与 `unresolved_trim_items` 都是必填投影，浏览器不从正文、reason/context 或 Review
+  重新算 SHA。Commander ruling/group/state 三张取值面是 `/api/enums` 的必填字段，整份 enums 未到才 loading，
+  不把缺键降成空枚举继续提交。
 - **Stage4 结构决定与最终人工裁决仍是两层**：`stage4.index[].structure_decision` 展示计划自己的
   `retain/reconstruct + declared/computed_change_kinds`；`ApprovalDoc.structure` 展示人对当前
   完整 Plan + concerns subject 的 `accept/request_replan`。前端不把前者自动翻译成后者。
@@ -345,9 +363,9 @@ stage5 的「三栏」= `ComparePanes(sticky=left)` 的右栏里装 `CompareRows
 | U-06 非完整遮蔽边界必须标注 | ✅ | `/api/enums` 的结构化 `spoiler_disclosure` 在 loading / empty / 404 / error / normal 全部状态常驻；界面明确服务端仍下发完整数据、该开关不是安全边界 |
 | U-07 花钱一眼可分，依据只有服务端 `paid` | ✅ | `previewJob` 下发 `paid`；`JobRequest` 里**没有** `paid` 字段，调用方带不进来 |
 | U-08 第三类：免费但写盘 | ✅ | 深色 + `写盘` 角标 + 第四种「未标注」。分类**只查表不判定**：`writes_disk` 由服务端 `novel/api/enums.py::would_write` 逐动作下发，`constants/actions.ts` 缺格即画 `unclassified`——「不知道它会不会写盘」和「它只读」是两回事 |
-| U-09 确认框显示完整命令 | ✅ | argv 来自 `POST /api/jobs/preview`；取不到就不让发起 |
+| U-09 确认框显示完整命令 | ✅ | argv 来自 `POST /api/jobs/preview`；取不到就不让发起。Stage5 typed edit 先做专用只读正文 preview，apply 前仍把一次性稿占位、actor/reason、双 SHA 与 `--edit-confirmation` 组成同一合法 `(node, flags)` 交给通用 preview；批量 trim 同样以服务端一次性 manifest 占位预览 `--retain-pretrim-batch`。两者都由确认框的 `run` 才调用专用 API，不用前端自拼展示命令 |
 | U-10 不显示预估花费 / 次数 | ✅ | 全屏搜不到 |
-| U-11 前端不做判定 | ✅ | `badge`/`paid`/`freshness`/`sev`/`passed` 全部照画。锚点覆盖率由服务端下发 `coverage_threshold` + `coverage_state`，前端只消费 state；Stage4 场景不再展示无独立下游作用的逐场源字数比较，章级预算是否出档只读 `/check/stage4` 的 `budget_band`。派生结构向量由 API view 给出，前端不复算、不写回计划。唯一例外是闸门 DAG——它是 brief 自己画的流程图，不是对服务端结论的再判定 |
+| U-11 前端不做判定 | ✅ | `badge`/`paid`/`freshness`/`sev`/`passed` 全部照画。锚点覆盖率由服务端下发 `coverage_threshold` + `coverage_state`，前端只消费 state；Stage4 场景不再展示无独立下游作用的逐场源字数比较，章级预算是否出档只读 `/check/stage4` 的 `budget_band`。派生结构向量由 API view 给出，前端不复算、不写回计划。Stage5 closure state/workpack、edit `required_confirmation` 与 batch trim 双 SHA 全部原样消费服务端投影，不从 finding/正文重判或重算。唯一例外是闸门 DAG——它是 brief 自己画的流程图，不是对服务端结论的再判定 |
 | U-12 不从文案正则抠结构 | ✅ | `chapters` / `fix` 全部读服务端字段；证据高亮只做 `indexOf`，且一处没命中时明说 |
 | U-13 不按下标切字符串 | ✅ | `HighlightedText` 的 props 里**没有 start/end**，类型上就踩不进去 |
 | U-14 中文阅读界面 | ✅ | 中文优先字体栈；行高 2.05–2.15；不 justify；段落用间距分隔；并排两栏共用一个 `measure` |

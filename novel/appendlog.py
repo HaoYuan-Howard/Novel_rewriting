@@ -3,11 +3,14 @@
 """
 appendlog.py —— append-only 事件流的**追加口**。互斥只有这一份实现。
 
-【本仓有五份 append-only JSONL，它们共享同一条纪律】
+【本仓有七份 append-only JSONL，它们共享同一条纪律】
 `_service/` 下的 `ledger.jsonl` · `jobs.jsonl` · `queues.jsonl` ·
-`agent_progress.jsonl` · `agent_runs.jsonl`。共同点是**永不读-改-写**：
+`agent_progress.jsonl` · `agent_runs.jsonl` · `agent_sessions.jsonl` ·
+`human_actions.jsonl`。正常事件共同点是**永不读-改-写**：
 并发安全、被 kill 不损坏、可以直接 `grep`。读的那一侧因此只容忍
 **被截断的最后一行**，中间出现坏行一律 `raise`——「记录不全」不许变成静默。
+唯一恢复例外是 human action 两相账：下一次追加会在同一目标锁内先隔离确证的
+未换行尾，再截回最后一个完整换行；完整坏行绝不修。
 
 【⚠ 那条容忍以前是半真的，多书并行会把它戳破】
 写入方不止一个进程：`agent_progress.jsonl` 由 **N 个 agent 各自的
@@ -99,6 +102,21 @@ def process_append_lock(path: str | os.PathLike[str]):
                 fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
 
+@contextmanager
+def append_transaction(path: str | os.PathLike[str]):
+    """同一目标文件的线程 + 进程事务锁。
+
+    普通单行追加与“锁内读取判断 → 条件追加”必须共用这一把 per-path 线程锁；
+    后者若在业务模块另造一把锁，同进程另一个普通 ``append_line`` 写手仍可穿过
+    判重窗口。调用方在上下文内只能用 ``append_line_under_process_lock``，避免重入。
+    """
+    p = Path(os.fspath(path))
+    key = os.path.normcase(os.path.abspath(p))
+    with _thread_lock_for(key):
+        with process_append_lock(p):
+            yield
+
+
 def append_line(path: str | os.PathLike[str], line: str) -> None:
     """把**一行已经渲染好的文本**追加进去；换行由本函数补。
 
@@ -108,13 +126,12 @@ def append_line(path: str | os.PathLike[str], line: str) -> None:
     「以后有人在这里拼一段多行文本」。
     """
     p = Path(os.fspath(path))
-    with _thread_lock_for(os.path.normcase(os.path.abspath(p))):
-        with process_append_lock(p):
-            append_line_under_process_lock(p, line)
+    with append_transaction(p):
+        append_line_under_process_lock(p, line)
 
 
 def append_line_under_process_lock(path: str | os.PathLike[str], line: str) -> None:
-    """在调用方**已持有** ``process_append_lock(path)`` 时追加一行。
+    """在调用方**已持有** ``append_transaction(path)`` 时追加一行。
 
     这个窄口只供「锁内读取判断 → 条件追加」这类不能重新拿锁的
     原子事务。它故意不自己加锁；普通写手必须调 ``append_line``。
@@ -132,5 +149,5 @@ def append_line_under_process_lock(path: str | os.PathLike[str], line: str) -> N
 
 __all__ = [
     'LOCK_TIMEOUT_SECONDS', 'append_line', 'append_line_under_process_lock',
-    'process_append_lock',
+    'append_transaction', 'process_append_lock',
 ]

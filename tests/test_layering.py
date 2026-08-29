@@ -170,6 +170,11 @@ _JSON_READ_ALLOWED = {
         '`_service/agent_sessions.jsonl` 是 append-only 事件流，'
         '只记 profile/session/usage/指纹与双轴终态，不进来源账或 ARTIFACTS；'
         '读侧只容忍被 kill 截断的最后一行，中间坏行关闭式失败'),
+    'novel/human_actions.py': (
+        '人工改稿身份账**不是产物**：'
+        '`_service/human_actions.jsonl` 是不含正文的 prepared→committed '
+        'append-only 恢复/审计事件流，不进来源账或 ARTIFACTS；'
+        '读侧要区分完整坏行与被 kill 截断的尾行'),
     'novel/orchestrator/trash.py': (
         '回收站条目的 `metadata.json` **不是产物**：`ARTIFACTS` 里没有它、'
         '不进来源账、不进 `_provenance`，它只回答「这条删除完成了没有」'
@@ -232,6 +237,11 @@ _WRITE_ALLOWED = {
         '`R-13.7` 允许不同小说并行，而 `mark` / CLI `queue` 都是独立进程 ⇒ '
         '只有线程锁时半截行会被顶到文件中间，而读侧对中间坏行是 `raise`。'
         '锁文件 `<目标>.lock` 也在这里创建'),
+    'novel/human_actions.py': (
+        '人工改稿两相账本身仍只经 appendlog 追加；本模块唯一的裸 IO 是把确证未换行的'
+        '截断尾先原子隔离到 `_service/human_actions_tail_recovery/`，随后在同一账锁内'
+        '截回完整前缀。隔离件不含正文、以完整 receipt 内容寻址，属于 kill 恢复审计，'
+        '不是小说产物，也不会被普通读视图当作 committed 动作'),
     'novel/llm/cache.py': (
         '响应缓存**不是产物**：不进来源账、不进 `_provenance`、`.gitignore` 盖着。'
         '它还是全仓唯一一处**会主动删文件**的地方（`evict`），而那与判据 7'

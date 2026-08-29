@@ -27,7 +27,7 @@ api.py —— 对应 `docs/schema/_api.md`。**一次 HTTP 响应长什么样。
 from __future__ import annotations
 
 import re
-from typing import Annotated, Literal
+from typing import Annotated, Literal, TypeAlias
 
 from pydantic import Field, field_validator, model_validator
 
@@ -82,6 +82,7 @@ from contracts.invariants import (
     TIME_LAYERS,
     TEMPORAL_LINKS,
     STAGE5_CLOSURE_GROUPS, STAGE5_CLOSURE_STATES,
+    STAGE5_EDIT_CONFIRMATIONS,
     STAGE5_MUST_APPEAR_RULINGS,)
 from contracts.schema.base import FrozenModel, StrictModel
 from contracts.schema.common import Finding, HashBoundHumanApproval
@@ -1155,7 +1156,7 @@ class WritingApprovalView(FrozenModel):
     """当前写作主体与不可擦除的 typed 授权历史。
 
     ``available`` 回答当前主体能否在已通过 Stage4 结构闸的前提下完整计算；
-    真正能否启动写作仍由 ``ApprovalDoc.writing`` 回答。旧 v5 盘上记录可能
+    真正能否启动写作仍由 ``ApprovalDoc.writing`` 回答。旧 v6 盘上记录可能
     只有 ``writing=true`` 而没有 typed 历史，因此这里允许空历史，不能伪造
     actor/reason 替旧记录补签。
     """
@@ -1259,6 +1260,14 @@ class BatchTrimResolutionRequest(StrictModel):
         return self
 
 
+class Stage5TrimWorkItem(FrozenModel):
+    """Commander 可直接提交的当前 trim 工作面；摘要全部由服务端精确读取。"""
+
+    output_ordinal: int = Field(ge=1)
+    audit_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    chapter_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+
+
 class Stage5ClosureRequest(StrictModel):
     """对当前整书 Stage5 主体作出的原子闭合提交。"""
 
@@ -1327,6 +1336,13 @@ class Stage5FindingGroup(StrictModel):
     rules: list[str] = Field(min_length=1)
 
 
+class Stage5ChapterSubject(FrozenModel):
+    """闭合工作包绑定的一章 canonical 完整文件身份。"""
+
+    output_ordinal: int = Field(ge=1)
+    chapter_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+
+
 class Stage5ClosureWorkpack(FrozenModel):
     """只读闭合工作包：由当前盘面确定性重算，是模板与过期判定的唯一依据。
 
@@ -1341,15 +1357,45 @@ class Stage5ClosureWorkpack(FrozenModel):
     review_sha256: str
     planned_chapters: list[int]
     missing_chapters: list[int]
+    chapter_subjects: list[Stage5ChapterSubject]
     invalid_chapters: list[int]
     hard_findings: list[str]
     unresolved_trim_chapters: list[int]
+    unresolved_trim_items: list[Stage5TrimWorkItem]
     must_appear: list[Stage5MustAppearRow]
     fact_group: Stage5FindingGroup | None = None
     unver_group: Stage5FindingGroup | None = None
     disclosure: dict[str, int] = Field(default_factory=dict)
     resolved: dict[str, int] = Field(default_factory=dict)
     workpack_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+
+    @model_validator(mode='after')
+    def _subject_sets_are_closed(self) -> 'Stage5ClosureWorkpack':
+        planned = set(self.planned_chapters)
+        missing = set(self.missing_chapters)
+        subjects = [row.output_ordinal for row in self.chapter_subjects]
+        trims = [row.output_ordinal for row in self.unresolved_trim_items]
+        if self.planned_chapters != sorted(planned):
+            raise ValueError('planned_chapters 必须升序、去重')
+        if not missing <= planned:
+            raise ValueError('missing_chapters 必须属于 planned_chapters')
+        if subjects != sorted(planned - missing):
+            raise ValueError('chapter_subjects 必须精确覆盖全部当前 canonical 计划章')
+        if trims != sorted(set(trims)):
+            raise ValueError('unresolved_trim_items 必须按章升序、去重')
+        if self.unresolved_trim_chapters != trims:
+            raise ValueError('unresolved_trim_chapters 必须是 trim 工作面的精确章号投影')
+        subject_sha = {
+            row.output_ordinal: row.chapter_sha256 for row in self.chapter_subjects}
+        mismatched_findings = [
+            row.chapter_ordinal for row in self.must_appear
+            if subject_sha.get(row.chapter_ordinal) != row.chapter_sha256
+        ]
+        if mismatched_findings:
+            raise ValueError(
+                'must_appear 的章 SHA 必须与完整 canonical 章主体表一致：'
+                f'{sorted(set(mismatched_findings))}')
+        return self
 
     def blockers(self) -> list[str]:
         """当前不可提交回执的原因；空列表 = 可以提交。"""
@@ -1384,6 +1430,11 @@ class Stage5ClosureView(FrozenModel):
                 raise ValueError('missing 态不能携带 workpack')
             if self.current_decision is not None:
                 raise ValueError('missing 态不能有当前决定')
+        if self.state == 'review_required':
+            if self.workpack is not None or self.current_decision is not None:
+                raise ValueError('review_required 态不能携带 current workpack/decision')
+            if not (self.next_step or '').strip():
+                raise ValueError('review_required 态必须给出重跑最终 Review 的下一步')
         if self.state in ('blocked', 'ready', 'closed', 'expired'):
             if self.workpack is None:
                 raise ValueError(f'{self.state} 态必须携带当前 workpack')
@@ -2340,19 +2391,54 @@ class DraftEditRequest(StrictModel):
     `stage5.write --apply-edit` 从文件名认章），CLI 子进程走**与生成稿同一个判定落点**
     （`run_apply_edit`：归一 → 判据 → 归档 → 写回，`origin=human` 记账）。
 
-    ⚠ **没有乐观锁**（`stage5.write --apply-edit` 无对应机制）：并发改稿以
-    `archive_round` 的整份归档兜底——覆盖的代价是多花一轮归档，不是丢稿。
-    登记为已知限制，不在 API 层造第二套锁。
+    正式 apply 必须同时绑定 preview 时读到的 current chapter 完整文件 SHA-256，
+    以及由归一候选、当前判据指纹与全部 finding 共同构成的 preview subject SHA-256。
+    ``formal`` 只接受没有新增 HARD 的候选；新增一般 HARD 必须显式确认
+    ``working_draft``，而段落预算 HARD 在两种确认下都拒绝。
     """
 
     segments: list[ChapterSegment] = Field(min_length=1)
+    actor: str = Field(min_length=1)
+    reason: str = Field(min_length=1)
+    current_chapter_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    preview_subject_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    confirmation: Literal[STAGE5_EDIT_CONFIRMATIONS]
 
     @model_validator(mode='after')
     def _segment_slots_are_unique(self) -> DraftEditRequest:
+        if not self.actor.strip() or not self.reason.strip():
+            raise ValueError('人工改稿 actor/reason 不得只有空白')
         slots = [segment.slot for segment in self.segments]
         if len(slots) != len(set(slots)):
             raise ValueError('人工稿 segment slot 不得重复')
         return self
+
+
+class DraftEditPreviewRequest(StrictModel):
+    """只读 Stage5 人工改稿预览；请求只含完整 producer-owned segments。"""
+
+    segments: list[ChapterSegment] = Field(min_length=1)
+
+    @model_validator(mode='after')
+    def _segment_slots_are_unique(self) -> 'DraftEditPreviewRequest':
+        slots = [segment.slot for segment in self.segments]
+        if len(slots) != len(set(slots)):
+            raise ValueError('人工稿 segment slot 不得重复')
+        return self
+
+
+class DraftEditPreview(FrozenModel):
+    """与正式 apply 共用纯评估结果的 hash-bound 只读投影。"""
+
+    output_ordinal: int = Field(ge=1)
+    current_chapter_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    preview_subject_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    normalized_segments: list[ChapterSegment] = Field(min_length=1)
+    findings: list[Finding]
+    current_hard_findings: list[Finding]
+    introduced_hard_findings: list[Finding]
+    resolved_hard_findings: list[Finding]
+    required_confirmation: Literal[STAGE5_EDIT_CONFIRMATIONS]
 
 
 class TrimResolutionRequest(StrictModel):

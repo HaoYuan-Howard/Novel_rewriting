@@ -22,6 +22,7 @@ from novel.errors import (
     ApprovalRequired, ArtifactUnreadable, ProvenanceRefused, TerminalState,
     UpstreamMissing, UpstreamStale,
 )
+from novel.llm import stage5_runs
 from novel.run import RunContext
 from novel.stages.stage5 import measure as M
 from novel.store import ArtifactStore
@@ -145,6 +146,18 @@ def retain_pretrim_batch(
     ctx: RunContext,
     request: 'BatchTrimResolutionRequest',
 ) -> list[TrimResolution]:
+    """全书写者锁内完成整批预检与全部 resolution 提交。"""
+    from contracts.schema.api import BatchTrimResolutionRequest
+    if not isinstance(request, BatchTrimResolutionRequest):
+        raise ValueError('批量销账必须交 typed BatchTrimResolutionRequest')
+    with stage5_runs.book_commit_ownership(ctx.novel_dir):
+        return _retain_pretrim_batch_locked(ctx, request)
+
+
+def _retain_pretrim_batch_locked(
+    ctx: RunContext,
+    request: 'BatchTrimResolutionRequest',
+) -> list[TrimResolution]:
     """按显式 manifest 一次销账多章（P1-2）。
 
     三条契约：
@@ -154,9 +167,6 @@ def retain_pretrim_batch(
         manifest 只会继续剩余项；
       - **actor 共享、reason 共享 + 单项覆盖**：与单章口同一把 hash-bound 尺子。
     """
-    from contracts.schema.api import BatchTrimResolutionRequest
-    if not isinstance(request, BatchTrimResolutionRequest):
-        raise ValueError('批量销账必须交 typed BatchTrimResolutionRequest')
     store = ArtifactStore(ctx)
 
     # ── 整批预检：一次把全部章的事实读齐并核对 SHA，任何漂移即显式终态。 ──
@@ -186,6 +196,22 @@ def retain_pretrim_batch(
                 f'audit/manifest 不一致（正文 {chapter_sha256[:8]}…）；整批不开始')
         facts.append((item.output_ordinal, audit, audit_sha256, chapter_rel,
                       item.reason.strip() or request.reason))
+
+    # 第二次完整采样落在第一笔 resolution 之前。共享书锁会拦住所有现役
+    # Stage5 writer；这次复核再把误接线/盘外改字节造成的混合预检关闭式挡住。
+    for ordinal, expected_audit, expected_audit_sha, chapter_rel, _reason in facts:
+        audit_rel = artifact_rel('stage5.trim_audit', nn=ordinal)
+        current_audit, current_audit_sha = store.read_with_sha256(
+            TrimAudit, audit_rel)
+        chapter = _current_pretrim(store, current_audit)
+        if (current_audit != expected_audit
+                or current_audit_sha != expected_audit_sha
+                or chapter is None
+                or chapter[0] != chapter_rel
+                or chapter[1] != expected_audit.before_sha256):
+            raise TerminalState(
+                f'批量销账首写前复核失败：第 {ordinal} 章 audit/正文在预检后漂移；'
+                '整批不开始，请重新抓取当前 trim 状态')
 
     # ── 按章序幂等写入。 ──
     written: list[TrimResolution] = []
@@ -241,6 +267,19 @@ def verification_context(store: ArtifactStore, audit: TrimAudit) -> str:
 
 
 def retain_pretrim(
+    ctx: RunContext,
+    ordinal: int,
+    *,
+    actor: str,
+    reason: str,
+) -> TrimResolution:
+    """全书写者锁内复核当前 audit/正文并提交单章 resolution。"""
+    with stage5_runs.book_commit_ownership(ctx.novel_dir):
+        return _retain_pretrim_locked(
+            ctx, ordinal, actor=actor, reason=reason)
+
+
+def _retain_pretrim_locked(
     ctx: RunContext,
     ordinal: int,
     *,

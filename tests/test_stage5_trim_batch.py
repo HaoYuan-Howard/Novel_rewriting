@@ -134,6 +134,34 @@ def test_any_drift_refuses_the_whole_batch(rig):
             '整批预检失败后不得留下任何一章的 resolution')
 
 
+def test_drift_between_preflight_and_first_write_leaves_zero_resolutions(
+        rig, monkeypatch):
+    """首轮采样与首写前复采之间漂移时，整批一个 resolution 都不能落。"""
+    ctx, store, sha_by_ordinal, audit_sha = rig
+    request = _request(sha_by_ordinal, audit_sha)
+    original = trim_resolution._current_pretrim
+    calls = 0
+
+    def drift_on_second_collection(current_store, audit):
+        nonlocal calls
+        calls += 1
+        current = original(current_store, audit)
+        if calls == 3 and current is not None:
+            return current[0], 'f' * 64
+        return current
+
+    monkeypatch.setattr(
+        trim_resolution, '_current_pretrim', drift_on_second_collection)
+
+    with pytest.raises(Exception, match='首写前复核失败.*整批不开始'):
+        trim_resolution.retain_pretrim_batch(ctx, request)
+    assert calls == 3
+    assert all(
+        not store.exists(trim_resolution.resolution_rel(ordinal))
+        for ordinal in (1, 2)
+    )
+
+
 def test_single_item_override_reason(rig):
     ctx, store, sha_by_ordinal, audit_sha = rig
     from contracts.schema.api import BatchTrimResolutionRequest

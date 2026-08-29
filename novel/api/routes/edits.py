@@ -20,7 +20,8 @@ from fastapi import APIRouter, Depends
 
 from contracts.schema.api import (
     BatchTrimResolutionRequest,
-    DraftEditRequest, HookApproveRequest, NameMapApproveRequest,
+    DraftEditPreview, DraftEditPreviewRequest, DraftEditRequest,
+    HookApproveRequest, NameMapApproveRequest,
     ResidualAdoptionRequest, TrimResolutionRequest,
 )
 from contracts.schema.evaluation import GlobalReviewDecisionSet
@@ -30,9 +31,12 @@ from novel.api.deps import checked_sid, get_base
 from novel.cli import exit_codes as X
 from novel.errors import (
     ApprovalRequired, ArtifactUnreadable, BlockingFindingsUnresolved,
-    GateBlocked, NovelError, UpstreamMissing, UpstreamStale, UpstreamUnproven,
+    GateBlocked, NovelError, SourceConflict, TerminalState,
+    UpstreamMissing, UpstreamStale, UpstreamUnproven,
 )
 from novel.orchestrator import approvals, jobs, uploads
+from novel.run import RunContext
+from novel.stages.stage5 import write
 
 router = APIRouter(prefix='/novels')
 
@@ -88,9 +92,10 @@ def edit_draft(
 ) -> JobRecord:
     '''章节改稿：typed `segments` → `_service/edits/` 一次性稿 → `stage5.write --apply-edit`。
 
-    人工稿走**与生成稿同一个判定落点**（归一 → 判据 → 归档 → 写回，`origin=human`）；
-    仍有阻断级时**只报不拦**（用户裁决：人改的往往正是机器修不动的地方），
-    红行照常出现在验收屏与 check 报告上。
+    人工稿走**与只读 preview 同一个判定落点**（归一 → 判据 → 归档 → 写回，
+    `origin=human`）。无新增 HARD 才接受 ``formal``；新增一般 HARD 只接受显式
+    ``working_draft``，段落预算 HARD 无条件拒绝。任何已落稿都会使旧 Review 过期，
+    多次编辑完成后由人只跑一次最终 Review。
     '''
     path = uploads.save_draft_edit(
         base, sid, ordinal, ChapterResponse(
@@ -100,7 +105,14 @@ def edit_draft(
             base,
             'stage5.write',
             sid,
-            ['--apply-edit', str(path)],
+            [
+                '--apply-edit', str(path),
+                '--actor', request.actor,
+                '--reason', request.reason,
+                '--current-chapter-sha256', request.current_chapter_sha256,
+                '--preview-subject-sha256', request.preview_subject_sha256,
+                '--edit-confirmation', request.confirmation,
+            ],
             follow_check=False,
         )
     finally:
@@ -112,6 +124,28 @@ def edit_draft(
                 RuntimeWarning,
                 stacklevel=2,
             )
+
+
+@router.post('/{sid}/review/{ordinal}/edit/preview', response_model=DraftEditPreview)
+def preview_draft_edit(
+    ordinal: int,
+    request: DraftEditPreviewRequest,
+    sid: str = Depends(checked_sid),
+    base: str = Depends(get_base),
+) -> DraftEditPreview:
+    """只读改稿预览：与 CLI apply 共用归一、判据与 subject 构造，不写一次性文件。"""
+    ctx = RunContext.open(
+        base, sid, 'stage5.write', paid=False, write_ledger=False)
+    response = ChapterResponse(
+        segments=[segment.model_dump() for segment in request.segments])
+    try:
+        return write.prepare_edit_preview(ctx, ordinal, response).preview()
+    except TerminalState as exc:
+        # 裸 TerminalState 只来自本次候选的 slot/归一契约；给同步 HTTP 一份已登记的
+        # 409 身份。其余带具体类型的 missing/stale/unreadable 仍按原类上浮。
+        if type(exc) is TerminalState:
+            raise SourceConflict(str(exc)) from exc
+        raise
 
 
 @router.post('/{sid}/stage2/global-review', response_model=JobRecord)

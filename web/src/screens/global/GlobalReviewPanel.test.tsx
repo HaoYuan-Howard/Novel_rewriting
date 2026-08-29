@@ -94,6 +94,9 @@ const enums: EnumsResponse = {
   design_repair_codes: [],
   design_repair_constraint_arity: {},
   design_review_states: [],
+  stage5_must_appear_rulings: [],
+  stage5_closure_groups: [],
+  stage5_closure_states: [],
   binding_concern_codes: [],
   binding_infeasibility_codes: [],
   actions: [{

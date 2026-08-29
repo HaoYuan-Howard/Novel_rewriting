@@ -211,12 +211,12 @@ def test_s7_service_proof_revokes_changed_typed_approval_or_decision(
 
 
 @_corpus_test
-def test_get_exposes_public_v5_without_retired_depth_and_is_read_only():
-    """GET 只公开 v5 审批面，且不落服务状态。"""
+def test_get_exposes_public_v6_without_retired_depth_and_is_read_only():
+    """GET 只公开 v6 审批面，且不落服务状态。"""
     box = _box()
     try:
         doc = approvals.get(box.root, box.sid)
-        assert doc.v == 5
+        assert doc.v == 6
         assert 'deep' not in doc.model_dump() and 'deep_proof' not in doc.model_dump()
         assert doc.writing is False
         assert not (box.root / '_service').exists(), 'GET must not persist service state'

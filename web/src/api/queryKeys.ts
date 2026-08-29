@@ -54,6 +54,9 @@ export const qk = {
     ['agentRunPreview', req] as const,
 
   approvals: (sid: string) => ['approvals', sid] as const,
+  /** workpack SHA 是模板的精确身份；盘面漂移必须换 key、重新读取关闭式模板。 */
+  stage5ClosureTemplate: (sid: string, workpackSha256: string | null) =>
+    ['approvals', sid, 'stage5', 'template', workpackSha256] as const,
   designReviewTemplate: (sid: string, query: DesignReviewTemplateQuery | null) =>
     ['approvals', sid, 'design', 'template', query] as const,
 }

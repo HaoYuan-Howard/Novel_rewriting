@@ -8,7 +8,7 @@ test_schema_api.py —— HTTP 响应模型的载体层守卫（`docs/schema/_ap
   ② **契约层不许手抄取值面**（`Literal['a','b']`）：取值面的唯一落点是 `invariants`。
   ③ **契约层不许背上 web 栈**：离线产 TS 类型的脚本一行 HTTP 都不发。
 
-⚠ 本文件**不需要 fastapi**。ApprovalDoc v5 还须关闭式拒绝退役的 s3 gate。
+⚠ 本文件**不需要 fastapi**。ApprovalDoc v6 还须关闭式拒绝退役的 s3 gate。
 """
 from __future__ import annotations
 

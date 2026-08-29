@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { errorBody } from '@/api/errors'
 import { FRESH, MUTED, SEV } from '@/constants/vocabulary'
+import type { Finding } from '@/types/common'
 import { useAskJob, useChrome } from '@/hooks/useChrome'
 import { useSampleCoverage } from '@/hooks/useSample'
 import { ScreenFrame } from '@/components/app/ScreenFrame'
@@ -25,6 +26,7 @@ import {
   useStage5Screen,
   type FindingView,
 } from './useStage5Screen'
+import { Stage5ClosurePanel } from './Stage5ClosurePanel'
 
 /**
  * `/api/enums` 用 `extra=['--chapters']` 标识这条带值动作，但值要到点击时才有。
@@ -98,19 +100,51 @@ export function Stage5Screen() {
     )
   }
 
+  const askApplyPreview = () => {
+    const preview = vm.editPreview.data
+    if (
+      !preview || !vm.editPreviewCurrent || !vm.editConfirmed
+      || !vm.editActor.trim() || !vm.editReason.trim()
+    ) return
+    askConfirm({
+      req: {
+        kind: 'stage5.write',
+        label: '章节改稿 · 第 ' + vm.ordinal + ' 章 · ' + preview.required_confirmation,
+        extra: ['--apply-edit'],
+        args: [
+          '(服务端一次性人工稿)',
+          '--actor', vm.editActor.trim(),
+          '--reason', vm.editReason.trim(),
+          '--current-chapter-sha256', preview.current_chapter_sha256,
+          '--preview-subject-sha256', preview.preview_subject_sha256,
+          '--edit-confirmation', preview.required_confirmation,
+        ],
+        required_inputs: vm.editAction?.required_inputs,
+        sid: vm.sid,
+        ordinal: vm.ordinal,
+      },
+      run: vm.applyPreview,
+    })
+  }
+
   return (
     <ScreenFrame screen="stage5" onJumpChapter={(n) => nav('/n/' + vm.sid + '/stage5/' + n)}>
-      <QueryStates
-        q={vm.draftQ}
-        loadingLabel="读这一章的成稿"
-        missing={{
-          title: '成稿 ↔ 材料',
-          chapters: [vm.ordinal],
-          ordinal: vm.ordinal,
-          path: 'stage5',
-        }}
-      >
-        {(d) => (
+      <>
+        <Stage5ClosurePanel
+          sid={vm.sid}
+          onJumpChapter={(n) => nav('/n/' + vm.sid + '/stage5/' + n)}
+        />
+        <QueryStates
+          q={vm.draftQ}
+          loadingLabel="读这一章的成稿"
+          missing={{
+            title: '成稿 ↔ 材料',
+            chapters: [vm.ordinal],
+            ordinal: vm.ordinal,
+            path: 'stage5',
+          }}
+        >
+          {(d) => (
           <section className="flex flex-col">
             <header className="sticky top-0 z-10 flex flex-col gap-12 border-b border-line bg-sunken-3 px-30 pt-20 pb-14">
               <div className="flex items-end justify-between gap-24">
@@ -509,45 +543,152 @@ export function Stage5Screen() {
                                 />
                               </label>
                             ))}
+                            {vm.editPreview.isError ? (
+                              <div className="rounded-block border border-warn-line bg-warn-bg px-13 py-9 text-body text-warn-ink">
+                                只读预检失败：{errorBody(vm.editPreview.error)}
+                                <ErrorHint error={vm.editPreview.error} />
+                              </div>
+                            ) : null}
+                            {vm.editPreview.data && !vm.editPreviewCurrent ? (
+                              <div className="rounded-block border border-warn-line bg-warn-bg px-13 py-9 text-body text-warn-ink">
+                                正文在 preview 后又改过；旧双 SHA 与归一稿已失效，必须重新只读预检。
+                              </div>
+                            ) : null}
+                            {vm.editPreview.data ? (
+                              <div className="flex flex-col gap-10 rounded-card border border-line bg-sunken-2 p-14">
+                                <div className="flex flex-wrap items-baseline gap-8">
+                                  <span className="text-body font-semibold">服务端只读预检</span>
+                                  <Mono className="rounded-tag bg-inset px-7 py-2 text-mini">
+                                    confirmation={vm.editPreview.data.required_confirmation}
+                                  </Mono>
+                                  <span className="text-tag text-ink-4">
+                                    finding {vm.editPreview.data.findings.length} 条
+                                    {' · '}当前 HARD {vm.editPreview.data.current_hard_findings.length}
+                                    {' · '}新增 HARD {vm.editPreview.data.introduced_hard_findings.length}
+                                    {' · '}消除 HARD {vm.editPreview.data.resolved_hard_findings.length}
+                                  </span>
+                                </div>
+                                <span className="prose-cn text-sm2 text-ink-4">
+                                  这些结论、归一稿和确认语义都来自 preview；浏览器不按 rule 重判能否落盘。
+                                  apply 时只原样回传当前预览的归一稿与两枚 SHA。
+                                </span>
+                                {vm.editPreview.data.required_confirmation === 'working_draft' ? (
+                                  <div className="rounded-block border border-warn-line bg-warn-bg px-12 py-9 text-sm2 text-warn-ink">
+                                    本次预检要求 working_draft：候选新增了 HARD。明示确认后仍由后端决定是否接受；
+                                    Stage5 闭合和下游会继续阻断，直到最终 Review 与 Commander 回执收口。
+                                  </div>
+                                ) : null}
+                                <EditPreviewFindingSet
+                                  title="本次预检全部 finding"
+                                  findings={vm.editPreview.data.findings}
+                                />
+                                <div className="grid gap-7 md:grid-cols-3">
+                                  <EditPreviewFindingSet
+                                    title="当前已有 HARD"
+                                    findings={vm.editPreview.data.current_hard_findings}
+                                  />
+                                  <EditPreviewFindingSet
+                                    title="本次新增 HARD"
+                                    findings={vm.editPreview.data.introduced_hard_findings}
+                                  />
+                                  <EditPreviewFindingSet
+                                    title="本次消除 HARD"
+                                    findings={vm.editPreview.data.resolved_hard_findings}
+                                  />
+                                </div>
+                                <details className="text-micro text-ink-4">
+                                  <summary className="cursor-pointer">查看 apply 双 SHA 与服务端归一槽位</summary>
+                                  <Mono className="mt-5 block break-all">
+                                    chapter {vm.editPreview.data.current_chapter_sha256}
+                                  </Mono>
+                                  <Mono className="mt-3 block break-all">
+                                    preview {vm.editPreview.data.preview_subject_sha256}
+                                  </Mono>
+                                  <div className="mt-5 flex flex-col gap-3">
+                                    {vm.editPreview.data.normalized_segments.map((segment) => (
+                                      <Mono key={segment.slot} className="break-all">
+                                        {segment.slot} · {segment.text.length} 字
+                                      </Mono>
+                                    ))}
+                                  </div>
+                                </details>
+                                <ActorReasonFields
+                                  actor={vm.editActor}
+                                  reason={vm.editReason}
+                                  onActor={vm.setEditActor}
+                                  onReason={vm.setEditReason}
+                                  reasonPlaceholder="说明本次改了什么，以及为何接受预检结论"
+                                  note={
+                                    vm.editPreviewCurrent
+                                      ? 'actor/reason 与本次双 SHA 一起进入人工动作审计；apply 不会自动跑 Review。'
+                                      : '当前 preview 已失效，重新预检后才能确认。'
+                                  }
+                                  actions={
+                                    <label className="flex items-start gap-7 text-sm2 font-semibold text-ink-2">
+                                      <input
+                                        type="checkbox"
+                                        aria-label={'确认以 ' + vm.editPreview.data.required_confirmation + ' apply 当前预览'}
+                                        checked={vm.editConfirmed}
+                                        disabled={!vm.editPreviewCurrent || vm.save.isPending}
+                                        onChange={(event) => vm.setEditConfirmed(event.target.checked)}
+                                      />
+                                      我已阅读服务端 finding，并确认以
+                                      <Mono>{vm.editPreview.data.required_confirmation}</Mono>
+                                      apply 当前归一稿与双 SHA
+                                    </label>
+                                  }
+                                />
+                              </div>
+                            ) : null}
                             {vm.save.isError ? (
                               <div className="rounded-block border border-warn-line bg-warn-bg px-13 py-9 text-body text-warn-ink">
-                                保存失败：{errorBody(vm.save.error)}
+                                apply 失败：{errorBody(vm.save.error)}
                                 <ErrorHint error={vm.save.error} />
                               </div>
                             ) : null}
-                            {vm.save.data?.state === 'failed' ? (
+                            {vm.save.data?.state === 'failed' || vm.save.data?.state === 'unknown' ? (
                               <div className="rounded-block border border-warn-line bg-warn-bg px-13 py-9 text-body text-warn-ink">
-                                改稿作业没跑成（failed），改稿未落成新一轮——完整输出在下方作业抽屉的日志里。
+                                改稿作业终态为 {vm.save.data.state}；不能据此认定落成新一轮，
+                                请在下方作业抽屉核对日志。
                               </div>
                             ) : null}
-                            <div className="flex items-center gap-10">
+                            <div className="flex flex-wrap items-center gap-10">
                               <span className="prose-cn text-tag text-ink-4">{vm.editNote}</span>
-                              <ActionButton
+                              <LinkButton
                                 className="ml-auto"
-                                action={{ kind: 'stage5.write', extra: ['--apply-edit'], paid: false }}
                                 disabled={
-                                  vm.save.isPending ||
+                                  vm.editPreview.isPending ||
                                   vm.editSegments.length === 0 ||
                                   vm.editSegments.some((segment) => !segment.text.trim())
                                 }
-                                onClick={() =>
-                                  askConfirm({
-                                    req: {
-                                      kind: 'stage5.write',
-                                      label: '章节改稿 · 第 ' + vm.ordinal + ' 章（人工稿落成新一轮）',
-                                      // 确认框 preview 同一个 (node, flags)；一次性稿的真实路径由服务端执行时生成
-                                      extra: ['--apply-edit', '(服务端一次性人工稿)'],
-                                      sid: vm.sid,
-                                      ordinal: vm.ordinal,
-                                    },
-                                    run: () =>
-                                      vm.save.mutateAsync({
-                                        segments: vm.editSegments,
-                                      }),
-                                  })
-                                }
+                                title="typed 槽位须完整且非空；preview 只读、不落盘"
+                                onClick={vm.previewEdit}
                               >
-                                保存，落成新的一轮
+                                {vm.editPreview.isPending ? '只读预检中…' : '只读预检改稿'}
+                              </LinkButton>
+                              <ActionButton
+                                action={vm.editAction}
+                                disabled={
+                                  !vm.editAction ||
+                                  vm.save.isPending ||
+                                  !vm.editPreview.data ||
+                                  !vm.editPreviewCurrent ||
+                                  !vm.editConfirmed ||
+                                  !vm.editActor.trim() ||
+                                  !vm.editReason.trim()
+                                }
+                                disabledReason={
+                                  !vm.editAction
+                                    ? '服务端未提供 stage5.write --apply-edit 动作'
+                                    : !vm.editPreview.data || !vm.editPreviewCurrent
+                                      ? '请先对当前正文完成只读预检'
+                                      : '请填写 actor/reason，并明示确认服务端要求的 confirmation'
+                                }
+                                onClick={askApplyPreview}
+                              >
+                                {vm.save.isPending
+                                  ? 'apply 中…'
+                                  : 'apply 当前预览'}
                               </ActionButton>
                             </div>
                           </div>
@@ -693,9 +834,45 @@ export function Stage5Screen() {
               />
             )}
           </section>
-        )}
-      </QueryStates>
+          )}
+        </QueryStates>
+      </>
     </ScreenFrame>
+  )
+}
+
+function EditPreviewFindingSet({
+  title,
+  findings,
+}: {
+  title: string
+  findings: Finding[]
+}) {
+  return (
+    <details className="rounded-block border border-line-row bg-card px-11 py-9">
+      <summary className="cursor-pointer text-tag font-semibold text-ink-3">
+        {title} · {findings.length} 条
+      </summary>
+      {findings.length ? (
+        <div className="mt-7 flex flex-col divide-y divide-line-row">
+          {findings.map((finding, index) => (
+            <div
+              key={finding.rule + '|' + (finding.evidence_key ?? '') + '|' + index}
+              className="flex flex-col gap-4 py-7 first:pt-0 last:pb-0"
+            >
+              <div className="flex items-center gap-6">
+                <SevMark sev={finding.sev} />
+                <span className="text-sm2 font-semibold text-ink-2">{finding.item}</span>
+                <Mono className="ml-auto text-micro text-ink-5">{finding.rule}</Mono>
+              </div>
+              <span className="prose-cn text-tag text-ink-4">{finding.detail}</span>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div className="mt-6 text-tag text-ink-4">服务端返回空集合。</div>
+      )}
+    </details>
   )
 }
 

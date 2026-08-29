@@ -30,7 +30,8 @@ from pathlib import Path
 
 from contracts.invariants import (
     CONDITIONAL_REQUIRED_FLAGS, FREE_ENTRIES, NODES, NODE_WRITE_EFFECTS,
-    REQUIRED_PLACEHOLDER_PREFIX, VALUED_FLAGS, WRITE_EFFECTS,
+    REQUIRED_PLACEHOLDER_PREFIX, STAGE5_EDIT_CONFIRMATIONS, VALUED_FLAGS,
+    WRITE_EFFECTS,
 )
 from contracts.schema.orchestration import AgentProfile, Step
 from novel import paths as novel_paths
@@ -99,7 +100,8 @@ _PRIMARY_OPERATIONS = {
         '--identity', '--apply-edit', '--apply-binding',
     }),
     'stage5.write': frozenset({
-        '--dry-run', '--recheck', '--revalidate', '--apply-edit', '--revise',
+        '--dry-run', '--recheck', '--revalidate', '--preview-edit',
+        '--apply-edit', '--revise',
         '--emit-prepared-recovery-workpack', '--recover-prepared',
     }),
     'stage5.review': frozenset({
@@ -200,6 +202,45 @@ def validate_run(node: str, flags: Sequence[str] = (), *,
             raise UnsupportedRunMode(
                 'stage5.write --emit-prepared-recovery-workpack 是纯读动作，'
                 '不得与 executor/profile/egress/chapters/revise/repair 或人工写回参数混用')
+    if node == 'stage5.write' and '--preview-edit' in tokens:
+        if set(tokens) != {'--preview-edit'}:
+            raise UnsupportedRunMode(
+                'stage5.write --preview-edit 是纯读动作，只接受人工稿路径；'
+                '不得混入 apply 凭据、chapters、revise 或其他操作')
+    if node == 'stage5.write' and '--apply-edit' in tokens:
+        expected = {
+            '--apply-edit', '--actor', '--reason', '--current-chapter-sha256',
+            '--preview-subject-sha256', '--edit-confirmation',
+        }
+        # 先把「两个主操作同时出现」留给下面的通用互斥判据报错；这里仅在
+        # apply-edit 是唯一主操作时核它自己的完整凭据面。否则同一个非法 argv
+        # 会因新增一格 apply 凭据而从稳定的“主操作互斥”漂成另一类错误。
+        other_primary = (
+            set(tokens) & _PRIMARY_OPERATIONS.get(node, frozenset())
+        ) - {'--apply-edit'}
+        if not other_primary and set(tokens) != expected:
+            raise UnsupportedRunMode(
+                'stage5.write --apply-edit 只接受人工稿路径与必填的 actor/reason/'
+                'current-chapter-sha256/preview-subject-sha256/edit-confirmation；'
+                '不得与 chapters/revise 或其他操作混用')
+        confirmation = flag_value(flags, '--edit-confirmation')
+        confirmation_is_placeholder = (
+            allow_placeholders
+            and confirmation == placeholder_for('--edit-confirmation')
+        )
+        if (not other_primary and not confirmation_is_placeholder
+                and confirmation not in STAGE5_EDIT_CONFIRMATIONS):
+            raise UnsupportedRunMode(
+                'stage5.write --edit-confirmation 只接受 '
+                f'{list(STAGE5_EDIT_CONFIRMATIONS)}，实得 {confirmation!r}')
+    edit_credentials = {
+        '--current-chapter-sha256', '--preview-subject-sha256',
+        '--edit-confirmation',
+    }
+    if (node == 'stage5.write' and set(tokens) & edit_credentials
+            and '--apply-edit' not in tokens):
+        raise UnsupportedRunMode(
+            'Stage5 改稿双锁与确认参数只绑定 --apply-edit；不得被其他跑法静默忽略')
     if node == 'stage5.write' and '--recover-prepared' in tokens:
         expected = {'--recover-prepared', '--actor', '--reason', '--subject-sha256'}
         if set(tokens) != expected:

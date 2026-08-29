@@ -270,12 +270,20 @@ def test_every_free_flag_runs_without_an_api_key(flag, node, box):
 
     Stage5 现役默认路径就是 canonical 全书写作，不存在需额外填入的臂选择。
     """
-    argv = ['run', node, box.sid, flag]
+    run_flags = [flag]
     if flag in VALUED_FLAGS:
-        argv.append(str(box.dir / 'payload.json'))
+        run_flags.append(str(box.dir / 'payload.json'))
+    if node == 'stage5.write' and flag == '--apply-edit':
+        run_flags += [
+            '--actor', 'cli-matrix', '--reason', '验证免费人工写回入口',
+            '--current-chapter-sha256', 'a' * 64,
+            '--preview-subject-sha256', 'b' * 64,
+            '--edit-confirmation', 'formal',
+        ]
+    argv = ['run', node, box.sid, *run_flags]
     argv += ['--base', str(box.root)]
 
-    assert N.is_paid(node, argv[3:5] if flag in VALUED_FLAGS else [flag]) is False, \
+    assert N.is_paid(node, run_flags) is False, \
         f'{node} {flag} 该是 0 成本的——它进了 FREE_ENTRIES'
     rc = _run(*argv)
     assert rc in (X.OK, X.CHECK_FAILED, X.TERMINAL_STATE), \
@@ -865,7 +873,14 @@ def test_every_paid_stage5_cli_path_authorizes_before_dispatch(
     ['--dry-run'],
     ['--recheck'],
     ['--revalidate', '--actor', 'operator', '--reason', '按当前判据提升'],
-    ['--apply-edit', 'stage5/chapter_edit.json'],
+    ['--preview-edit', 'stage5/chapter_edit.json'],
+    [
+        '--apply-edit', 'stage5/chapter_edit.json',
+        '--actor', 'operator', '--reason', '逐项核对当前预览',
+        '--current-chapter-sha256', 'a' * 64,
+        '--preview-subject-sha256', 'b' * 64,
+        '--edit-confirmation', 'formal',
+    ],
 ])
 def test_zero_cost_stage5_recovery_paths_are_not_blocked_by_paid_authorization(
         tmp_path, monkeypatch, extra):
@@ -896,6 +911,64 @@ def test_zero_cost_stage5_recovery_paths_are_not_blocked_by_paid_authorization(
     assert rc == X.OK
     assert len(dispatched) == 1 and dispatched[0][0] == 'stage5.write'
     assert N.is_paid('stage5.write', dispatched[0][1]) is False
+
+
+def test_stage5_preview_edit_dispatches_to_write_not_stage6(
+        monkeypatch, capsys):
+    """CLI 的只读 preview 分支必须住在 stage5.write，不能引用 stage6 局部变量。"""
+    from novel.cli import main as M
+    from novel.stages.stage5 import write
+
+    seen = []
+    projection = SimpleNamespace(
+        model_dump_json=lambda **_kwargs: '{"output_ordinal":1}')
+    monkeypatch.setattr(
+        write, 'run_edit_preview',
+        lambda ctx, path: seen.append((ctx.node, path)) or projection)
+
+    rc = M._run_stage5(
+        SimpleNamespace(node='stage5.write'),
+        ['--preview-edit', 'stage5/ch01.json'])
+
+    assert rc == X.OK
+    assert seen == [('stage5.write', 'stage5/ch01.json')]
+    assert json.loads(capsys.readouterr().out) == {'output_ordinal': 1}
+
+
+def test_stage5_apply_edit_forwards_both_locks_identity_and_confirmation(
+        monkeypatch):
+    """CLI 最后一跳不得漏掉 preview-bound 的五项提交输入。"""
+    from novel.cli import main as M
+    from novel.stages.stage5 import write
+
+    seen = []
+    monkeypatch.setattr(
+        write, 'run_apply_edit',
+        lambda ctx, path, **kwargs: (
+            seen.append((ctx.node, path, kwargs))
+            or SimpleNamespace(passed=True)))
+    monkeypatch.setattr(M, 'render', lambda _report: 'ok')
+    flags = [
+        '--apply-edit', 'incoming/ch01.json',
+        '--actor', 'operator',
+        '--reason', '逐项核对当前预览后提交',
+        '--current-chapter-sha256', 'a' * 64,
+        '--preview-subject-sha256', 'b' * 64,
+        '--edit-confirmation', 'working_draft',
+    ]
+
+    rc = M._run_stage5(SimpleNamespace(node='stage5.write'), flags)
+
+    assert rc == X.OK
+    assert seen == [(
+        'stage5.write', 'incoming/ch01.json', {
+            'actor': 'operator',
+            'reason': '逐项核对当前预览后提交',
+            'current_chapter_sha256': 'a' * 64,
+            'preview_subject_sha256': 'b' * 64,
+            'confirmation': 'working_draft',
+        },
+    )]
 
 
 # ───────────────────── 退出码只有一张表 ─────────────────────

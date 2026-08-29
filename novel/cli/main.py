@@ -1043,6 +1043,15 @@ def _run_stage5(ctx: RunContext, flags: list[str]) -> int:
         print(f'\n── user（{len(user)} 字）──\n{user}')
         return X.OK
 
+    if '--preview-edit' in tokens:
+        if chapters:
+            raise TerminalState(
+                '--preview-edit 由编辑文件名绑定章号，不接受 --chapters')
+        preview = write.run_edit_preview(
+            ctx, _valued(flags, '--preview-edit') or '')
+        print(preview.model_dump_json(indent=2))
+        return X.OK
+
     if '--recheck' in tokens:
         report = write.run_recheck(ctx, chapters)
         print(render(report))
@@ -1058,7 +1067,17 @@ def _run_stage5(ctx: RunContext, flags: list[str]) -> int:
     if '--apply-edit' in tokens:
         if chapters:
             raise TerminalState('--apply-edit 由编辑文件内的 output_ordinal 绑定章号，不接受 --chapters')
-        report = write.run_apply_edit(ctx, _valued(flags, '--apply-edit') or '')
+        report = write.run_apply_edit(
+            ctx,
+            _valued(flags, '--apply-edit') or '',
+            actor=_valued(flags, '--actor') or '',
+            reason=_valued(flags, '--reason') or '',
+            current_chapter_sha256=(
+                _valued(flags, '--current-chapter-sha256') or ''),
+            preview_subject_sha256=(
+                _valued(flags, '--preview-subject-sha256') or ''),
+            confirmation=_valued(flags, '--edit-confirmation') or '',
+        )
         print(render(report))
         return X.OK if report.passed else X.CHECK_FAILED
 
