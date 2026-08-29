@@ -920,6 +920,72 @@ def _job_record(base: str | os.PathLike[str], job_id: str,
                  if record.job_id == job_id), None)
 
 
+def _prior_execution_identity(
+    base: str | os.PathLike[str], queue_id: str, item_index: int,
+) -> tuple[str | None, str | None]:
+    """本队列项上一次 execution 的 `(run_id, job_id)`；从未启动过为 `(None, None)`。
+
+    只认 durable 事件流：队列项历史里最后一个带 ``job_id`` 的事件指向原 job，
+    原 job 的 ``started`` 事件携带业务 ``run_id``（批次 3）。旧盘作业没有
+    run_id 字段时返回 ``(None, prior_job_id)``——新 job 照常新造 run 身份，
+    不按时间猜、不伪造恢复链。
+    """
+    prior_job_id: str | None = None
+    for event in read_events(base):
+        if (event.queue_id == queue_id and event.item_index == item_index
+                and event.job_id):
+            prior_job_id = event.job_id
+    if prior_job_id is None:
+        return None, None
+    for event in jobs.read_events(base):
+        if (event.job_id == prior_job_id and event.kind == 'started'
+                and event.start is not None and event.start.run_id):
+            return event.start.run_id, prior_job_id
+    return None, prior_job_id
+
+
+def _auto_resume_block_reason(
+    base: str | os.PathLike[str], run: QueueRun, entry: QueueEntry,
+) -> str | None:
+    """批次 3（`R-13.3` 修订）：付费 pending 项能否按原授权自动续跑。
+
+    返回 ``None`` = 允许自动续跑（原授权 durable、原 execution 的代码/profile/
+    argv 零漂移、原 run 身份完整可对证）；返回字符串 = 拒绝原因（落
+    restart-confirmation，等显式确认，不自动猜）。只适用于有 durable
+    queue/job 父记录的恢复执行；手工 CLI 与从未启动过的付费项不在范围。
+    """
+    if not run.start.paid_confirmed:
+        return '队列创建时没有持久化付费确认（paid_confirmed=false）'
+    prior_run_id, prior_job_id = _prior_execution_identity(
+        base, run.queue_id, entry.index)
+    if prior_job_id is None:
+        return ('本项在服务重启前从未启动过（没有可对证的执行身份）；'
+                '首次执行仍需显式确认')
+    if prior_run_id is None:
+        return (f'原 job={prior_job_id} 是无 run 身份的旧盘记录；'
+                '不自动续跑、不按时间猜')
+    prior_start = None
+    for event in jobs.read_events(base):
+        if event.job_id == prior_job_id and event.kind == 'started':
+            prior_start = event.start
+    if prior_start is None:
+        return f'原 job={prior_job_id} 的 started 记录缺失，无法对证身份'
+    if prior_start.code != prov.code_version():
+        return (f'代码身份漂移：原 run 是 {prior_start.code}，当前是 '
+                f'{prov.code_version()}；恢复必须 replan，不自动续跑')
+    step_profiles = [
+        step.executor_profile for step in entry.item.steps
+        if step.executor_profile is not None]
+    if (prior_start.executor_profile is not None and step_profiles
+            and any(profile != prior_start.executor_profile
+                    for profile in step_profiles)):
+        return 'executor profile/模型/effort 与原 execution 不一致；不自动续跑'
+    if (any(step.executor_profile for step in entry.item.steps)
+            and prior_start.egress_authorized is not True):
+        return '原 execution 未持久化正文外发授权；不自动续跑'
+    return None
+
+
 def _recover_running(base: str | os.PathLike[str], run: QueueRun,
                      entry: QueueEntry, *, job_registry: jobs.JobRegistry) -> str:
     """Recover one stale running event from job records and artifact truth."""
@@ -1045,6 +1111,9 @@ def _run_lane(base: str | os.PathLike[str], queue_id: str, sid: str, *,
                 break
 
             job_id = jobs.new_job_id()
+            # 批次 3：恢复续跑 = 新 job_id（execution）+ 原 run_id（业务 run）。
+            prior_run_id, prior_job_id = _prior_execution_identity(
+                base, queue_id, entry.index)
             with _STATE_LOCK:
                 fresh = _one(base, queue_id, registry=queue_registry).entries[entry.index]
                 if fresh.state not in ('pending', 'blocked'):
@@ -1072,6 +1141,8 @@ def _run_lane(base: str | os.PathLike[str], queue_id: str, sid: str, *,
                     base, entry.item.node, entry.item.sid, entry.item.flags,
                     steps=entry.item.steps,
                     spawn=spawn, registry=job_registry, job_id=job_id,
+                    run_id=prior_run_id,
+                    recovered_from_job_id=prior_job_id,
                     prepare=prepare)
                 jobs.wait(job_id)
                 result = _job_record(base, job_id, job_registry)
@@ -1277,16 +1348,28 @@ def resume_incomplete(base: str | os.PathLike[str], *,
             continue
 
         pending = [entry for entry in current.entries if entry.state == 'pending']
-        if any(step.paid for entry in pending for step in entry.item.steps):
-            reason = (
-                '服务重启后不会复用旧队列几小时前的 `--yes` 静默执行付费节点；'
-                '当前命令快照未变，重新展示冻结命令并经 CLI `queue-resume --yes` '
-                '或 API `confirmed=true` 确认后才能恢复')
-            for entry in pending:
+        paid_pending = [entry for entry in pending
+                        if any(step.paid for step in entry.item.steps)]
+        if paid_pending:
+            # 批次 3（R-13.3 修订，2026-08-29 用户裁定）：durable queue 父记录
+            # 且身份完全闭合的同一 run，原付费授权可跨重启自动续跑（新
+            # execution、原 run_id、recovered_from_job_id 联结）。任一前提缺失
+            # 或漂移 → 仍落持久 restart-confirmation，等显式确认，不自动猜。
+            blocked_any = False
+            for entry in paid_pending:
+                reason = _auto_resume_block_reason(base, current, entry)
+                if reason is None:
+                    continue
+                blocked_any = True
                 _append_state(
                     base, current.queue_id, entry.index, 'blocked',
-                    waiting_on=WAITING_ON_RESTART_CONFIRMATION, note=reason)
-            continue
+                    waiting_on=WAITING_ON_RESTART_CONFIRMATION,
+                    note=('服务重启后不会自动续跑：' + reason
+                          + '；当前命令快照未变，重新展示冻结命令并经 CLI '
+                            '`queue-resume --yes` 或 API `confirmed=true` 确认后'
+                            '才能恢复'))
+            if blocked_any:
+                continue
 
         current = _one(base, record.queue_id, registry=registry)
         if any(entry.state in ('blocked', 'unknown', 'running')

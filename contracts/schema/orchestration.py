@@ -194,8 +194,20 @@ class JobStart(StrictModel):
     #: 新执行必须显式冻结 bool，且不得拿请求默认或今天的配置倒推历史。
     egress_authorized: bool | None = None
 
+    #: 业务 run 身份（TODO-45 批次 3，`R-13.3`）：同一业务节点从首跑、恢复到
+    #: 聚合**始终不变**，账本、session 审计、checkpoint 与 run 目录都以它为键。
+    #: 旧盘记录没有这一列（可缺、不回填、不按时间猜）；新 writer 必填。
+    run_id: str | None = Field(default=None, min_length=1)
+
+    #: 本次 execution 是从哪个旧 job 恢复的。新 job 必有**新** ``job_id``；
+    #: 恢复续跑必须同时携带原 ``run_id``，两个身份不得互相冒充。
+    recovered_from_job_id: str | None = Field(default=None, min_length=1)
+
     @model_validator(mode='after')
     def _postconditions(self) -> JobStart:
+        if self.recovered_from_job_id is not None and self.run_id is None:
+            raise ValueError(
+                'recovered_from_job_id 要求 run_id：恢复续跑必须携带原 run 身份')
         if self.node not in NODES and self.node not in RETIRED_NODES:
             raise ValueError(
                 f'未知节点 {self.node!r}。当前取值面在 NODES，历史只读面在 RETIRED_NODES')
@@ -348,6 +360,10 @@ class ProgressEvent(FrozenModel):
     #: 本条观测所属的跨进程 run。``None`` 只表示旧 JSONL 行没有这一列；
     #: 新 jobs / agent 行由运行时写入口自动补齐，读历史时不猜。
     run_id: str | None = Field(default=None, min_length=1)
+
+    #: 写下这一行的**进程 attempt**（job/execution 身份，TODO-45 批次 3）。
+    #: 同一业务 run 恢复后会有多个 execution；旧行可缺，新作业行必填。
+    execution_id: str | None = Field(default=None, min_length=1)
 
     node: str = Field(min_length=1)
     phase: ProgressPhase

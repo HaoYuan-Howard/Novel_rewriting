@@ -90,6 +90,15 @@ phase/purpose/chapter 隔离；Stage5 按章隔离；Stage6 semantic 管理 A/B 
 节点均按 node 隔离。agent 只交 fixed typed 候选，代码掌握 schema / HARD、结构化反馈、正式归一、
 checkpoint、提交 journal/readback/adoption 与终验。显式 profile 不得落回 DeepSeek。
 
+**两根身份轴（TODO-45 批次 3）**：`JobStart.run_id` 是**业务 run**——同一业务节点从
+首跑、恢复到聚合始终不变，账本行、agent session 审计、`_stage*_runs/<run_id>/`
+checkpoint 与 run 目录都以它为键；`job_id`（进度行里的 `execution_id`）是**本次进程
+attempt**，每次启动唯一。恢复续跑（队列重启确认或原授权自动续跑）= 新 `job_id` +
+`JobStart.recovered_from_job_id` 联结 + **原 `run_id`** 经 `NOVEL_RUN_ID` 传给 CLI/
+ledger/session/checkpoint。旧盘记录没有这三列（可缺、不回填、不按时间猜）；新 writer
+必填。旧 orphan attempt 永久保持 `reconciled/unknown`，不根据新 execution 伪造旧
+`ended`。
+
 direct job 另有一条正交授权链：`PreviewRequest.egress_authorized` 默认 false，profile 非空的新计划必须
 显式冻结 bool 到 `JobStart` 与付费 executor `Step`；只有 true 才在 argv 加 `--allow-egress`。false
 允许 0 成本 preview 摊开不可执行命令，真 start 与手敲 CLI 会在 job/driver/probe/wire 前拒绝；无

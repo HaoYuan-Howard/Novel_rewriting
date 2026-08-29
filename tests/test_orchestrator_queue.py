@@ -32,6 +32,7 @@ from novel.errors import (
     GateBlocked, QueueConflict, UpstreamMissing, UpstreamStale,
     UpstreamUnproven,
 )
+from novel import run_identity
 from novel.orchestrator import queue as Q
 from novel.orchestrator import jobs as J
 from novel.orchestrator import state as S
@@ -1094,7 +1095,7 @@ def test_service_restart_blocks_an_unfinished_paid_snapshot_until_reconfirmed(
     record = Q.records(queue_base, registry=qreg)[0]
     assert record.state == 'blocked'
     assert record.entries[0].waiting_on == Q.WAITING_ON_RESTART_CONFIRMATION
-    assert '不会复用旧队列' in (record.entries[0].note or '')
+    assert '不会自动续跑' in (record.entries[0].note or '')
     assert calls == []
 
     # Neither the low-level runner nor a resume request without a fresh explicit
@@ -1273,3 +1274,130 @@ def test_blocked_item_persists_what_it_is_waiting_for(queue_base):
     record = Q.records(queue_base, registry=Q.QueueRegistry())[0]
     assert record.state == 'blocked'
     assert record.entries[0].waiting_on == 'stage6.approve'
+
+
+def _interrupted_paid_run(queue_base, queue_id: str, *, code: str | None = None,
+                          run_id: str | None = 'sentinel'):
+    """一段「服务重启前的付费执行」的 durable 现场：running + started、无 ended。"""
+    item = _item('book-a', 'stage6.hook', 'paid-call', paid=True)
+    _seed(queue_base, queue_id, [item])
+    Q.append_event(queue_base, QueueEvent(
+        queue_id=queue_id, kind='item_state', ts=2, item_index=0,
+        state='running', job_id='old-job'))
+    start = J.plan_start(item.node, item.sid, base=queue_base, steps=item.steps)
+    if code is not None:
+        start = start.model_copy(update={'code': code})
+    if run_id == 'sentinel':
+        # 执行边界之外 plan_start 是预览形（run_id=None）；durable started
+        # 记录必须带已解析的 run 身份，这里按执行边界形状现造。
+        run_id = run_identity.new_run_id()
+    start = start.model_copy(update={'run_id': run_id})
+    J.append_event(queue_base, JobEvent(
+        job_id='old-job', kind='started', ts=2, start=start))
+    return item, start
+
+
+def test_service_restart_auto_resumes_authorized_paid_run_with_same_run_identity(
+        queue_base, monkeypatch):
+    """身份完全闭合的原付费授权跨重启自动续跑（批次 3，R-13.3 修订）。
+
+    新 execution（新 job_id、`recovered_from_job_id` 联结）携带**原 run_id**：
+    子进程 env、账本、checkpoint 恢复都沿原业务 run 继续。
+    """
+    _item_row, start = _interrupted_paid_run(queue_base, 'q-auto-resume')
+    monkeypatch.setattr(Q, '_live_disposition', _always_pending)
+    monkeypatch.setattr(
+        Q, '_current_plan_items', lambda _base, s: Q._ordered_items(s))
+
+    inherited: list[str | None] = []
+
+    def spawn(argv, cwd, env, log):
+        inherited.append(env.get(run_identity.RUN_ID_ENV))
+        return 0
+
+    qreg, jreg = Q.QueueRegistry(), J.JobRegistry()
+    assert Q.resume_incomplete(
+        queue_base, spawn=spawn, registry=qreg, job_registry=jreg) == [
+        'q-auto-resume']
+    assert Q.wait('q-auto-resume', 2)
+
+    records = {record.job_id: record
+               for record in J.records(queue_base, registry=jreg)}
+    assert 'old-job' in records
+    new_jobs = [job for job_id, job in records.items() if job_id != 'old-job']
+    assert len(new_jobs) == 1
+    new_job = new_jobs[0]
+    assert new_job.start.recovered_from_job_id == 'old-job'
+    assert new_job.start.run_id == start.run_id
+    assert inherited == [start.run_id]
+    # 旧 orphan attempt 永久保持 unknown：不根据新 execution 伪造旧 ended。
+    assert records['old-job'].state == 'unknown'
+    assert records['old-job'].ended is None
+
+
+def test_service_restart_refuses_auto_resume_when_code_drifted(
+        queue_base, monkeypatch):
+    _item_row, _start = _interrupted_paid_run(
+        queue_base, 'q-code-drift', code='drifted-code-version')
+    monkeypatch.setattr(Q, '_live_disposition', _always_pending)
+    monkeypatch.setattr(
+        Q, '_current_plan_items', lambda _base, s: Q._ordered_items(s))
+    calls: list[list[str]] = []
+    qreg, jreg = Q.QueueRegistry(), J.JobRegistry()
+    assert Q.resume_incomplete(
+        queue_base,
+        spawn=lambda argv, _cwd, _env, _log: calls.append(list(argv)) or 0,
+        registry=qreg, job_registry=jreg) == []
+    record = Q.records(queue_base, registry=qreg)[0]
+    assert record.entries[0].waiting_on == Q.WAITING_ON_RESTART_CONFIRMATION
+    assert '代码身份漂移' in (record.entries[0].note or '')
+    assert calls == []
+
+
+def test_service_restart_refuses_auto_resume_for_legacy_start_without_run_id(
+        queue_base, monkeypatch):
+    _item_row, _start = _interrupted_paid_run(
+        queue_base, 'q-legacy', run_id=None)
+    monkeypatch.setattr(Q, '_live_disposition', _always_pending)
+    monkeypatch.setattr(
+        Q, '_current_plan_items', lambda _base, s: Q._ordered_items(s))
+    calls: list[list[str]] = []
+    qreg, jreg = Q.QueueRegistry(), J.JobRegistry()
+    assert Q.resume_incomplete(
+        queue_base,
+        spawn=lambda argv, _cwd, _env, _log: calls.append(list(argv)) or 0,
+        registry=qreg, job_registry=jreg) == []
+    record = Q.records(queue_base, registry=qreg)[0]
+    assert record.entries[0].waiting_on == Q.WAITING_ON_RESTART_CONFIRMATION
+    assert '旧盘记录' in (record.entries[0].note or '')
+    assert calls == []
+
+
+def test_confirmed_resume_also_reuses_the_original_run_identity(
+        queue_base, monkeypatch):
+    """显式 `--yes` 恢复与自动续跑同一把尺：新 job_id、原 run_id。"""
+    _item_row, start = _interrupted_paid_run(queue_base, 'q-confirmed')
+    monkeypatch.setattr(Q, '_live_disposition', _always_pending)
+    monkeypatch.setattr(
+        Q, '_current_plan_items', lambda _base, s: Q._ordered_items(s))
+    inherited: list[str | None] = []
+
+    def spawn(argv, cwd, env, log):
+        inherited.append(env.get(run_identity.RUN_ID_ENV))
+        return 0
+
+    qreg, jreg = Q.QueueRegistry(), J.JobRegistry()
+    # 旧 execution 无 ended（unknown）；显式确认恢复与自动续跑必须同一把尺：
+    # 新 job_id + `recovered_from_job_id` + 原 run_id。
+    resumed = Q.resume(
+        queue_base, 'q-confirmed', yes=True, spawn=spawn,
+        registry=qreg, job_registry=jreg)
+    assert resumed.state == 'ok'
+    assert Q.wait('q-confirmed', 2)
+    new_jobs = [record for record in J.records(queue_base, registry=jreg)
+                if record.job_id != 'old-job']
+    assert new_jobs
+    assert all(record.start.recovered_from_job_id == 'old-job'
+               for record in new_jobs)
+    assert all(record.start.run_id == start.run_id for record in new_jobs)
+    assert inherited == [start.run_id]
