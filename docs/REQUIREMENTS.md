@@ -174,13 +174,15 @@ context 引用与章尾闭合改判「读者此刻知不知道 / 本章有没有
 `BlindCandidate` v2 形状不变。随后稳定性修复把 `EvidenceBinding` 升至 v3：模型只能提交
 非阻断 `binding_concerns`，正式 `infeasible` 必须由代码在同一关闭约束集铸造 witness；旧 v2 B
 不迁移，须在 current A 全 accept 后重跑 B。
-**P2a 已完成三项并按 `docs/BACKEND_CONTRACT.md` §十留证**：validator 拒稿的 unit 级
+**P2a 已完成四项并按 `docs/BACKEND_CONTRACT.md` §十留证**：validator 拒稿的 unit 级
 0-wire adoption（`stage4.design --adopt-rejected`，f138896）；typed failure witness /
 关闭式路由（`R-5.21`，批次 1：A/Stage2/code owner 首轮即停、同 fingerprint 两轮早停、
 审计无正文、witness 入 `_llm_rejected`）；A→formal 零调用预检与审阅元数据归一
 （`R-5.22`，批次 2：构造性绑定 + 同一 HARD 的四处预检调用点、blocked 拒 accept 与
 wire 前拒绝、`structure_alignment` metric_only、`structure_delta` 退役、
-`DESIGN_REVIEW_CONTRACT` v2）。
+`DESIGN_REVIEW_CONTRACT` v2）；B 的机械基线与章级私有 session（`R-5.23`，批次 4：
+唯一可解绑定代码确定、机械章 0 wire、歧义章私有 session 最多 4 并发、聚合锚章
+commit、来源账 architecture/unit_lineage additive——公开节点与授权次数不变）。
 **剩下的 P2a 项**（按对稳定性的贡献排序）：
 
 1. `evidence_candidate_id` 只作为另批冷缓存 A/B：候选表由 `paragraph_spans` 同源渲染与

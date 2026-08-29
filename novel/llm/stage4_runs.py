@@ -443,6 +443,32 @@ def _run_spec(node: str) -> agent_runs.SingleSessionRunSpec:
     )
 
 
+def plan_chapter_commit_spec(chapter: int) -> agent_runs.CommitBundleSpec:
+    """批次 4：章级拓扑的 commit 账机——journal 锚定锚章 checkpoint 链。
+
+    primary/touched 面与整书 spec 完全一致；只有 run/commit 路径落在
+    ``plan/chapters/chNNNN/``。聚合响应是代码从章 session + 机械基线编译的，
+    不是任何 provider 的逐字 turn，因此**不能**在整书链上伪铸 acceptance；
+    journal 改为锚定真实存在的那条章 checkpoint 链（锚章 attempt）。
+    """
+    primary = STAGE4_EVIDENCE_BINDING
+    allowed = (
+        (primary,),
+        (primary, _PLAN_INVALID),
+        (primary, STAGE4_PLAN_CHAPTERS, _PLAN_INVALID),
+    )
+    return agent_runs.CommitBundleSpec(
+        run=plan_chapter_run_spec(chapter),
+        commit_path=lambda ctx: (
+            paths.stage4_plan_chapter_run_path(
+                ctx.novel_dir, ctx.run_id, chapter)
+            / agent_runs.COMMIT_FILE),
+        primary_artifact=primary,
+        allowed_touched=allowed,
+        nonformal_paths=(_PLAN_INVALID,),
+    )
+
+
 def _commit_spec(node: str) -> agent_runs.CommitBundleSpec:
     run = _run_spec(node)
     if node == 'stage4.design':
@@ -874,8 +900,9 @@ def prepared(ctx: Any) -> dict[str, Any] | None:
     return record if record is not None and record.get('state') == 'prepared' else None
 
 
-def committed(ctx: Any) -> dict[str, Any] | None:
-    record = agent_runs.commit_state(ctx, _commit_spec(ctx.node))
+def committed(ctx: Any, spec: 'agent_runs.CommitBundleSpec | None' = None,
+             ) -> dict[str, Any] | None:
+    record = agent_runs.commit_state(ctx, spec or _commit_spec(ctx.node))
     return record if record is not None and record.get('state') == 'committed' else None
 
 
@@ -2030,9 +2057,10 @@ def prepare_commit(
         primary_payload: Mapping[str, Any],
         finalization_payload: Mapping[str, Any],
         touched_paths: Sequence[str], attempt_id: str,
+        spec: agent_runs.CommitBundleSpec | None = None,
 ) -> dict[str, Any]:
     _require_ownership(ctx)
-    spec = _commit_spec(ctx.node)
+    spec = spec or _commit_spec(ctx.node)
     if primary_artifact != spec.primary_artifact:
         raise ProvenanceRefused(
             f'{ctx.node}: primary artifact 必须是 {spec.primary_artifact}')
@@ -2047,10 +2075,11 @@ def target_state(
         ctx: Any, record: Mapping[str, Any], rel: str, *,
         expected_file_sha256: str | None = None,
         expected_absent: bool = False,
+        spec: agent_runs.CommitBundleSpec | None = None,
 ) -> str:
     _require_ownership(ctx)
     return agent_runs.target_state(
-        ctx, _commit_spec(ctx.node), record, rel,
+        ctx, spec or _commit_spec(ctx.node), record, rel,
         expected_file_sha256=expected_file_sha256,
         expected_absent=expected_absent)
 
@@ -2069,19 +2098,22 @@ def verify_commit_finalization(
 
 def restore_commit_adoption(
         ctx: Any, record: Mapping[str, Any],
+        spec: agent_runs.CommitBundleSpec | None = None,
 ) -> tuple[str, str]:
     _require_ownership(ctx)
-    return agent_runs.restore_commit_adoption(ctx, _commit_spec(ctx.node), record)
+    return agent_runs.restore_commit_adoption(
+        ctx, spec or _commit_spec(ctx.node), record)
 
 
 def mark_committed(
         ctx: Any, *, primary_payload: Mapping[str, Any],
         finalization_payload: Mapping[str, Any],
         landed_payloads: Mapping[str, Mapping[str, Any]],
+        spec: agent_runs.CommitBundleSpec | None = None,
 ) -> Path:
     _require_ownership(ctx)
     return agent_runs.mark_committed(
-        ctx, _commit_spec(ctx.node), primary_payload=primary_payload,
+        ctx, spec or _commit_spec(ctx.node), primary_payload=primary_payload,
         finalization_payload=finalization_payload,
         landed_payloads=landed_payloads)
 
@@ -2091,10 +2123,11 @@ def verify_committed_delivery(
         primary_payload: Mapping[str, Any],
         finalization_payload: Mapping[str, Any],
         landed_payloads: Mapping[str, Mapping[str, Any]],
+        spec: 'agent_runs.CommitBundleSpec | None' = None,
 ) -> None:
     _require_ownership(ctx)
     agent_runs.verify_committed_delivery(
-        ctx, _commit_spec(ctx.node), record,
+        ctx, spec or _commit_spec(ctx.node), record,
         primary_payload=primary_payload,
         finalization_payload=finalization_payload,
         landed_payloads=landed_payloads)
@@ -2104,6 +2137,7 @@ __all__ = [
     'DESIGN_AGGREGATE_COMMIT_FILE', 'DESIGN_REPAIR_AGGREGATE_COMMIT_FILE',
     'DESIGN_MAX_CONCURRENCY', 'DESIGN_UNIT_RECOVERY_POLICY',
     'DesignRepairCapability', 'DesignUnitRequest', 'DesignUnitSource',
+    'PlanChapterRequest', 'plan_chapter_commit_spec',
     'RECOVERY_POLICIES',
     'commit_ownership', 'committed', 'design_aggregate_committed',
     'design_aggregate_prepared', 'design_aggregate_state',

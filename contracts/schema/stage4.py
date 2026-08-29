@@ -36,7 +36,7 @@ writer_context.json   确定性组装（非 LLM）—— 写作节点的唯一�
 from __future__ import annotations
 
 import re
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import Field, model_validator
 
@@ -690,16 +690,54 @@ class EvidenceBindingProvenance(LlmProvenance):
     origin: Literal['llm'] = 'llm'
     candidate_sha256: Sha256
 
+    #: 绑定架构（TODO-45 批次 4）：``whole_book_v1`` = 旧整书单发；
+    #: ``chapter_baseline_v1`` = 机械基线 + 歧义章 session。additive 兼容，
+    #: 旧产物可缺。
+    architecture: str | None = Field(default=None, min_length=1)
+
+    #: 逐章 unit lineage：``[{chapter_ordinal, kind, attempt_id?, ...}]``。
+    #: kind ∈ {baseline, chapter_session}；baseline 章 0 wire（确定性重算）。
+    unit_lineage: list[dict[str, Any]] | None = None
+
+    @model_validator(mode='after')
+    def _unit_lineage_covers_each_chapter_once(self):
+        value = self.unit_lineage
+        if value is None:
+            return self
+        ordinals = [int(row.get('chapter_ordinal') or 0) for row in value]
+        if sorted(ordinals) != sorted(set(ordinals)) or 0 in ordinals:
+            raise ValueError('unit_lineage 章号必须非零且不重复')
+        kinds = {str(row.get('kind') or '') for row in value}
+        unknown = kinds - {'baseline', 'chapter_session'}
+        if unknown:
+            raise ValueError(f'unit_lineage kind 越界：{sorted(unknown)}')
+        return self
+
 
 class EvidenceBindingHumanProvenance(FreeProvenance):
     origin: Literal['human'] = 'human'
     candidate_sha256: Sha256
 
 
+class EvidenceBindingCompiledProvenance(FreeProvenance):
+    """全机械绑定（批次 4）的免费来源账：0 wire、无模型调用声明。
+
+    `origin='compiled'` 如实说明这份绑定是代码从机械基线确定性编译的；
+    `architecture`/`unit_lineage` 记录基线架构与逐章 unit。
+    """
+
+    origin: Literal['compiled'] = 'compiled'
+    candidate_sha256: Sha256
+    architecture: str | None = Field(default=None, min_length=1)
+    unit_lineage: list[dict[str, Any]] | None = None
+
+
 class EvidenceBinding(EvidenceBindingResponse):
     infeasibility_proof: list[BindingInfeasibilityWitness] | None = None
-    provenance: EvidenceBindingProvenance | EvidenceBindingHumanProvenance = Field(
-        alias='_provenance', discriminator='origin')
+    provenance: (
+        EvidenceBindingProvenance | EvidenceBindingHumanProvenance
+        | EvidenceBindingCompiledProvenance
+    ) = Field(alias='_provenance', discriminator='origin')
 
     @model_validator(mode='after')
     def _formal_terminal_requires_code_proof(self) -> EvidenceBinding:

@@ -1858,9 +1858,39 @@ class Stage4DesignAgent(NodeExecutorAgent[BlindCandidate]):
 
 
 class Stage4PlanAgent(NodeExecutorAgent[BaseModel]):
-    """Stage4B 证据绑定/计划编译：typed infeasible 是 landed-red，不洗绿。"""
+    """Stage4B 证据绑定/计划编译：typed infeasible 是 landed-red，不洗绿。
+
+    批次 4 起 agent 主路是**章级池**（`Stage4PlanSessionPool`）：机械章 0
+    wire、歧义章私有 session；`run_plan` 按 ``prepare_chapters`` 识别池并走
+    章级拓扑。legacy 整书单发 client 仅在显式传入时保留。
+    """
 
     node = 'stage4.plan'
+
+    def __init__(self, ctx: RunContext, *, driver: AgentDriver | None = None,
+                 max_turns: int = 4) -> None:
+        if ctx.node != self.node:
+            raise ValueError(
+                f'{type(self).__name__} 只接受 {self.node}，实得 {ctx.node}')
+        if ctx.executor_profile is None:
+            raise ValueError('stage4.plan executor 缺 resolved profile')
+        self.ctx = ctx
+        driver_factory: Stage4DesignDriverFactory | None = None
+        if driver is not None:
+            # 显式传入的单 driver 只能服务一个章 session：任何两章共享同一
+            # provider session 都是隔离破口，第二取用关闭式拒绝。
+            state = {'used': False}
+
+            def _single_use_factory(_purpose: str, _chapter: int | None):
+                if state['used']:
+                    raise ProvenanceRefused(
+                        'stage4.plan 章级池不接受跨章共享同一 driver/session')
+                state['used'] = True
+                return driver
+
+            driver_factory = _single_use_factory
+        self.client = Stage4PlanSessionPool(
+            ctx, driver_factory=driver_factory, max_turns=max_turns)
 
     def run(self) -> NodeAgentResult[BaseModel]:
         try:
@@ -2050,6 +2080,13 @@ class Stage4PlanSessionPool:
         with self._lock:
             return any(client.driver_failed
                        for client in self._clients.values())
+
+    def finish(self, *, process_state: str, delivery_state: str,
+               error_kind: str | None = None) -> None:
+        """与 SessionAgentClient.finish 同形；executor 收口统一走这里。"""
+        self.finish_all(process_state=process_state,
+                        delivery_state=delivery_state,
+                        error_kind=error_kind)
 
     def finish_all(self, *, process_state: str, delivery_state: str,
                    error_kind: str | None = None) -> None:
