@@ -80,6 +80,29 @@ def test_human_only_collects_hits_whose_remediation_is_human():
     assert '--apply-edit' in human[0].how or '--pick' in human[0].how
 
 
+def test_conflict_stage_coverage_inbox_points_to_typed_edit_not_paid_resample():
+    from contracts.rules import REGISTRY
+    from novel.report.builder import remediation_of
+    from novel.views import inbox as I
+
+    rule = REGISTRY.get('conflict_stage_coverage')
+    finding = SimpleNamespace(
+        output_ordinal=None, wontfix=None, unresolved_rounds=0,
+        owner='stage2', detail='冲突阶段缺章')
+    line = SimpleNamespace(
+        status='hit', sev=rule.sev, remediation=remediation_of(rule), fix=None,
+        rule=rule.rule, findings=[finding])
+
+    rows = I._report_items(SimpleNamespace(rules=[line]), 'stage2')
+
+    assert rule.fix is None and remediation_of(rule) == 'human'
+    assert len(rows) == 1 and rows[0].kind == 'human_only'
+    assert '`conflict_stages_replace`' in rows[0].how
+    assert ('`stage2.global --apply-edit stage2/global_edit.json`'
+            in rows[0].how)
+    assert '付费 `--resample` 只作最后手段' in rows[0].how
+
+
 def test_missing_blueprint_projection_inbox_points_only_to_free_materialization():
     """待办文案不能把缺伴生产物说成要重新付费抽 Global。"""
     from novel.views import inbox as I

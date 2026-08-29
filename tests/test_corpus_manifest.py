@@ -713,7 +713,7 @@ def test_default_collection_keeps_schema_gates_and_carrier_regressions(
     default_nodes = (
         'test_system_prompt_contains_every_current_style_word',
         'test_clean_compiled_plan_closes_all_new_scene_hard_rules',
-        'test_revalidate_promotes_the_current_invalid_without_any_llm_client',
+        'test_revalidate_promotes_only_plan_without_llm_or_context',
         'test_synthetic_stage6_gate_blocks_only_when_every_candidate_is_dirty',
         'test_synthetic_semantic_finding_can_be_marked_without_current_corpus',
         'test_the_current_system_prompt_is_the_rendered_prompt',

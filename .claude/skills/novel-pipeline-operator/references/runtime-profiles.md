@@ -127,7 +127,8 @@ import 期时通常没有写盘，但仍以 `state`、目标产物与信标核�
   API/UI 做 0 成本 preview，**不会产生一个 headless 进程**。因此新启动 prompt 中两项都应为 granted；
   若缺句、为 false，或与 started 事件不一致，按 contract 损坏安全停止，不能把另一项推成真。
 - 启动后先运行 `state <sid>` 与 `inbox <sid>`，从盘上续跑。
-- 标准 `approval` 由本 skill 代批，并只走 `novel.cli approval show/template/apply` 的 typed façade；
+- 标准 `approval` 由本 skill 代批，并只走
+  `novel.cli approval show/backfill/seen/gate/template/apply` 的 typed façade；
   不直接 import 审批服务或临时拼 HTTP。`redo/unknown` 在可验证恢复路径具备时自行处置，否则安全停止。
 - 只在 launcher 授权的 base 范围写人工输入和终审包。权限拒绝说明动作不在允许面，不换 shell 或路径绕过。
 - 进程日志与生死记录由 launcher 管理；不要手改 `_service/agent_runs.jsonl` 或日志来改变状态。

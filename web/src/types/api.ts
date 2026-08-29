@@ -8,6 +8,9 @@
 import type {
   ApprovalBackfillResult,
   ApprovalDoc,
+  DesignReviewRequest,
+  DesignReviewTemplate,
+  DesignReviewTemplateQuery,
   GateKey,
   SeenKey,
   StructureApprovalRequest,
@@ -131,6 +134,13 @@ export interface Api {
 
   /* 人工验收记录 */
   getApprovals(sid: string): Promise<ApprovalDoc>
+  /** Stage4A 当前候选的关闭式审阅模板；全拒默认由服务端生成。 */
+  getDesignReviewTemplate(
+    sid: string,
+    query: DesignReviewTemplateQuery,
+  ): Promise<DesignReviewTemplate>
+  /** 保存 Stage4A 正式审阅；只写审批记录，不隐式启动 B 或付费返修。 */
+  approveDesignReview(sid: string, request: DesignReviewRequest): Promise<ApprovalDoc>
   approveGate(sid: string, key: GateKey): Promise<ApprovalDoc>
   /** Stage4 的专用全书 typed 裁决；只写审批记录，不启动重规划作业。 */
   approveStructure(sid: string, request: StructureApprovalRequest): Promise<ApprovalDoc>

@@ -137,6 +137,9 @@ driver 的真实链路生效。非 corpus 回归与真实付费整书验收分�
 - Stage4 保留一个公开 `stage4.design` 节点/授权、一个独立 `stage4.plan` 节点/授权和整书结构审批；
   A 内部固定为 1 条整书策略 + N 条逐章私有 session（最多 4 并发），B 不变，**不开放公开的
   `--chapters` 定向重规划**。
+- A 的正式盲审与最终 Plan 结构审批是两张独立票：只有 current A 的策略与全部章节均 accept
+  才授权 B；B 编译成功后仍须对 current Plan 逐章全 accept，才可生成 Context。A 的逐章驳回
+  只通过绑定 current decision SHA-256 的定向 repair 执行，策略驳回才允许整书 replan。
 - 模型只提出候选；代码确定性分级，人确认高影响事实后才能成为 binding。
 - Stage4 局部修复只走 agent session；legacy DeepSeek 保持无历史单发路径，
   且**不作为 agent 的静默 fallback**。
@@ -165,14 +168,17 @@ context 引用与章尾闭合改判「读者此刻知不知道 / 本章有没有
 生产拓扑与提交边界也已改成「1 条小型整书策略 + N 条逐章私有 session」：策略与每章分别
 验证后 checkpoint，逐章池由配置下调且绝不超过 4，并在 N+1 个 unit 全闭合后确定性聚合、
 重跑整书 schema/HARD、通过 commit journal 原子提交现有 `BlindCandidate`。公开节点、授权次数、
-Stage4B 与正式 artifact v2 形状不变。
+`BlindCandidate` v2 形状不变。随后稳定性修复把 `EvidenceBinding` 升至 v3：模型只能提交
+非阻断 `binding_concerns`，正式 `infeasible` 必须由代码在同一关闭约束集铸造 witness；旧 v2 B
+不迁移，须在 current A 全 accept 后重跑 B。
 **剩下的 P2a 项**（按对稳定性的贡献排序）：
 
 1. Stage4 分单元 validator 拒稿目前**没有 unit 级 0-wire 恢复入口**（`repair_eligible=false`、
    `eligibility_reason='validator 不属于通用 JSON/形状修复面'`）⇒ 一份已有有效材料的 unit 仍需
    重新付费生成；现有 `--adopt-rejected` 只覆盖旧整书拒稿，不得冒充新拓扑的 unit 恢复。
    新入口不得拖着已验策略/其他章一起重发：补按当前闸原样重判封存 unit 的 0-wire adoption，
-   以及 hash-bound unit/章节 replacement。
+   以及 hash-bound unit replacement。正式落盘 A 候选的 hash-bound 逐章 repair 已完成，但它
+   不能替代一份尚未进入 aggregate 的 validator 拒稿 unit 的 0-wire 恢复。
 2. `evidence_candidate_id` 只作为另批冷缓存 A/B：候选表由 `paragraph_spans` 同源渲染与
    lookup，模型响应使用独立 candidate-only 类型，人工 GlobalEdit 仍用 locator，正式
    GlobalGrounding 仍落 SourceSpan。对同一固定语料配对比较首轮落盘率、
@@ -188,16 +194,17 @@ P2 原本是一个「候选事实分级 + 整书修复 + 上下文瘦身」的�
   确定性聚合、整书 schema/HARD 和 aggregate commit journal 已落地，把「一处错就整书归零」
   收成「保留全部已验单元」。本段剩余工作是抽出唯一 `gate_payload` 校验函数供 LlmClient /
   agent intake / response-repair / adoption / repair 共用；拒稿仓统一为
-  `_llm_rejected/<chain>/<attempt>/`，并给**新分单元拓扑**补 0-wire adoption 与 hash-bound
-  unit repair。旧整书 `--adopt-rejected` 不是这条恢复路。目标不变：**一次有效付费产出不许被
+  `_llm_rejected/<chain>/<attempt>/`，并给**尚未聚合的 validator 拒稿 unit**补 0-wire adoption
+  与 hash-bound replacement。正式候选已另有 decision-bound 逐章 repair；旧整书
+  `--adopt-rejected` 仍不是 unit 恢复路。目标不变：**一次有效付费产出不许被
   判据或形状问题永久锁死**。
 - **P2b（后做，需要新 base 与一次付费重建）**：blueprint fact 增代码计算的
 `derived_tier`（core/support/incidental）与 `tier_reasons/depends_on`，模型的
 `producer_obligation` 只留审计；Blueprint Review 分 frontier/coverage 与 claim 两层，
-source beat 必须闭合为 `covered_by` 或显式无状态变化；Stage4A 沿用已冻结的策略 + N 单章
-session/checkpoint/整书聚合契约；抽出唯一 `gate_payload` 校验函数供
-LlmClient / agent intake / response-repair / adoption / repair 共用；拒稿仓统一为
-`_llm_rejected/<chain>/<attempt>/`，新增 `--adopt-rejected` 与 `--apply-repair`；
+ source beat 必须闭合为 `covered_by` 或显式无状态变化；Stage4A 沿用已冻结的策略 + N 单章
+ session/checkpoint/整书聚合契约；抽出唯一 `gate_payload` 校验函数供
+ LlmClient / agent intake / response-repair / adoption / repair 共用；拒稿仓统一为
+ `_llm_rejected/<chain>/<attempt>/`，补齐分单元 0-wire adoption 与 typed replacement；
 WriterContext v5 改共享表 + refs；Stage6 拆 `generation_packet` /
 `mechanical_guard_basis` / `semantic_verification_packet` 三面，发明判据的允许集只来自
 generation packet。TODO-31 的 Stage4→5 减法并入本批。

@@ -311,6 +311,8 @@ def test_the_published_surface_is_exactly_the_current_surface(app):
         '/api/novels/{sid}/stage1/partition': ['POST'],
         '/api/novels/{sid}/stage1': ['GET'],
         '/api/novels/{sid}/approvals': ['GET'],
+        '/api/novels/{sid}/approvals/design/template': ['GET'],
+        '/api/novels/{sid}/approvals/design': ['POST'],
         '/api/novels/{sid}/approvals/gate/{key}': ['POST'],
         '/api/novels/{sid}/approvals/backfill': ['POST'],
         '/api/novels/{sid}/approvals/seen/{key}': ['POST'],
@@ -431,6 +433,7 @@ _EXECUTOR_PROFILE_HTTP_CASES = (
     ('stage2.blueprint', (), 2),
     ('stage4.design', (), 1),
     ('stage4.design', ('--replan',), 1),
+    ('stage4.design', ('--repair-decision', 'a' * 64), 1),
     ('stage4.plan', (), 2),
     ('stage5.write', (), 1),
     ('stage5.write', ('--chapters', '1'), 1),
@@ -669,6 +672,42 @@ def test_free_stage5_recovery_jobs_do_not_request_writing_authorization(
     assert authorized == []
 
 
+@pytest.mark.parametrize('path', ['/api/jobs/preview', '/api/jobs'])
+@pytest.mark.parametrize('flags', [
+    ['--emit-prepared-recovery-workpack', 'source-run-api'],
+    [
+        '--recover-prepared', 'source-run-api',
+        '--actor', 'reviewer-a',
+        '--reason', '逐章核对工作包后收口',
+        '--subject-sha256', 'a' * 64,
+    ],
+])
+def test_http_jobs_refuse_cli_only_prepared_recovery(
+        client, monkeypatch, path, flags):
+    """HTTP job 每次生成新 run_id，不能冒充可复用 target 的 CLI runner。"""
+    monkeypatch.setattr(
+        JOB_API.jobs, 'plan_start',
+        lambda *_args, **_kwargs: pytest.fail(
+            'prepared recovery API 边界必须先于 argv/job 构造'))
+    monkeypatch.setattr(
+        JOB_API.jobs, 'start',
+        lambda *_args, **_kwargs: pytest.fail(
+            'prepared recovery API 边界不得启动 job'))
+    monkeypatch.setattr(
+        JOB_API.approvals, 'authorize_prepared_recovery',
+        lambda *_args, **_kwargs: pytest.fail(
+            'prepared recovery API 边界不得读取或消费审批'))
+
+    response = client.post(path, json={
+        'sid': '42', 'node': 'stage5.write', 'flags': flags,
+    })
+
+    assert response.status_code == 400
+    assert response.json()['kind'] == 'UnsupportedRunMode'
+    assert 'CLI runner' in response.json()['message']
+    assert '同一 target run_id' in response.json()['message']
+
+
 def test_paid_blueprint_can_start_while_global_review_is_pending(
         client, monkeypatch):
     """Stage2 第二个 producer 不得被下游人审策略误判成 consumer。"""
@@ -703,10 +742,18 @@ def test_paid_blueprint_can_start_while_global_review_is_pending(
 def test_stage2_review_is_checked_for_paid_and_free_consumers_under_the_book_lock(
         client, monkeypatch, node):
     checked: list[tuple[str, str]] = []
+    contexts: list[str] = []
+    initial_designs: list[str] = []
 
     monkeypatch.setattr(
         JOB_API.approvals, 'require_stage2_review',
         lambda _base, sid, checked_node: checked.append((sid, checked_node)))
+    monkeypatch.setattr(
+        JOB_API.approvals, 'authorize_context',
+        lambda _base, sid: contexts.append(sid))
+    monkeypatch.setattr(
+        JOB_API.approvals, 'authorize_design_initial',
+        lambda _base, sid: initial_designs.append(sid))
 
     def start_without_thread(
             run_base, run_node, sid, run_flags, *, steps,
@@ -725,6 +772,75 @@ def test_stage2_review_is_checked_for_paid_and_free_consumers_under_the_book_loc
 
     assert response.status_code == 202, response.text
     assert checked == [('42', node)]
+    assert contexts == (['42'] if node == 'stage4.context' else [])
+    assert initial_designs == (['42'] if node == 'stage4.design' else [])
+
+
+@pytest.mark.parametrize(('flags', 'requires_design'), [
+    ([], True),
+    (['--apply-binding', 'binding.json'], True),
+    (['--check-only'], False),
+    (['--revalidate', '--actor', 'reviewer', '--reason', '同轮复核'], False),
+    (['--apply-edit', 'plan.json'], False),
+])
+def test_stage4_plan_new_outputs_require_design_review_but_recovery_does_not(
+        client, monkeypatch, flags, requires_design):
+    authorized: list[str] = []
+    monkeypatch.setattr(
+        JOB_API.approvals, 'require_stage2_review', lambda *_args: None)
+    monkeypatch.setattr(
+        JOB_API.approvals, 'authorize_plan',
+        lambda _base, sid: authorized.append(sid))
+
+    def start_without_thread(
+            run_base, node, sid, run_flags, *, steps,
+            executor_profile=None, egress_authorized=None, prepare=None):
+        if prepare is not None:
+            prepare()
+        return _started_record(run_base, node, sid, run_flags, steps)
+
+    monkeypatch.setattr(JOB_API.jobs, 'start', start_without_thread)
+    response = client.post('/api/jobs', json={
+        'sid': '42', 'node': 'stage4.plan', 'flags': flags,
+    })
+
+    assert response.status_code == 202, response.text
+    assert authorized == (['42'] if requires_design else [])
+
+
+@pytest.mark.parametrize(('flags', 'expected'), [
+    ([], None),
+    (['--repair-decision', 'a' * 64], ('a' * 64, 'repair')),
+    (['--replan'], (None, 'replan')),
+])
+def test_stage4_design_recovery_decision_is_resolved_under_the_job_lock(
+        client, monkeypatch, flags, expected):
+    resolved: list[tuple[str | None, str]] = []
+    initials: list[str] = []
+    monkeypatch.setattr(
+        JOB_API.approvals, 'require_stage2_review', lambda *_args: None)
+    monkeypatch.setattr(
+        JOB_API.approvals, 'resolve_design_action',
+        lambda _base, _sid, sha, *, expected: resolved.append((sha, expected)))
+    monkeypatch.setattr(
+        JOB_API.approvals, 'authorize_design_initial',
+        lambda _base, sid: initials.append(sid))
+
+    def start_without_thread(
+            run_base, node, sid, run_flags, *, steps,
+            executor_profile=None, egress_authorized=None, prepare=None):
+        if prepare is not None:
+            prepare()
+        return _started_record(run_base, node, sid, run_flags, steps)
+
+    monkeypatch.setattr(JOB_API.jobs, 'start', start_without_thread)
+    response = client.post('/api/jobs', json={
+        'sid': '42', 'node': 'stage4.design', 'flags': flags,
+    })
+
+    assert response.status_code == 202, response.text
+    assert resolved == ([] if expected is None else [expected])
+    assert initials == (['42'] if expected is None else [])
 
 
 def test_paid_stage5_job_authorizes_selected_chapters_before_start(

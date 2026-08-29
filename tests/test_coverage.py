@@ -49,8 +49,12 @@ _R_SECTION_SIZES = {
     # R-2 于 2026-08-28 增至 29：`R-2.19` 冻结复核项的 blocking / disclosure 分级。
     # R-12 于 2026-08-28 增至 12：`R-12.2c` 冻结 Claude structured delivery
     # 的唯一出口、真实 stdin hash 与 schema-less fallback 边界。
+    # R-6 于 2026-08-29 增至 12：`R-6.1a` 把 Context 的最终结构审批前置
+    # 与 `ctx_facts_exact` 的内容 HARD 后置条件分开登记，避免一格混写两种守卫。
+    # R-7 于 2026-08-29 增至 44：`R-7.27`～`R-7.27e` 冻结 foreign
+    # prepared 的零调用恢复、审批/来源/lineage 与 CLI-only HTTP 边界。
     'R-0': 16, 'R-1': 16, 'R-2': 29, 'R-3': 32, 'R-4': 18,
-    'R-5': 28, 'R-6': 11, 'R-7': 39, 'R-8': 22, 'R-9': 26,
+    'R-5': 28, 'R-6': 12, 'R-7': 44, 'R-8': 22, 'R-9': 26,
     'R-10': 33, 'R-11': 20, 'R-12': 12, 'R-13': 8, 'R-14': 7,
 }
 

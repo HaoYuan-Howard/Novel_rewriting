@@ -12,11 +12,12 @@ test_views_stage4.py —— S-07「计划 ↔ 写作上下文」那一屏的组�
 from __future__ import annotations
 
 import os
+from types import SimpleNamespace
 
 import pytest
 
 from novel.errors import UpstreamMissing
-from novel.stages.stage4.measure import structure_subject_sha256
+from novel.stages.stage4.measure import structure_review_subject_sha256
 from novel.stages.stage5.prompts import target_band
 from novel.views.stage4 import stage4_view
 from tests import corpus, sandbox
@@ -24,6 +25,7 @@ from tests.markers import corpus_params
 
 INPUTS = ('stage1/main_text.json', 'stage2/global_grounding.json',
           'stage2/chapter_blueprints.json',
+          'stage4/evidence_binding.json',
           'stage4/plan_chapters.json', 'stage4/writer_context.json')
 
 
@@ -60,10 +62,12 @@ def _tree(root) -> set:
 
 def test_the_real_plan_forwards_goals_and_sums_budgets(box):
     plan = sandbox.cut(box.book, 'stage4/plan_chapters.json')
+    binding = sandbox.cut(box.book, 'stage4/evidence_binding.json')
     o = plan['output_chapters'][0]['output_ordinal']
     v = stage4_view(box.root, box.sid, o)
     assert not v.identity_plan
-    assert v.structure_subject_sha256 == structure_subject_sha256(plan), \
+    assert v.structure_subject_sha256 == structure_review_subject_sha256(
+        plan, binding.get('binding_concerns') or []), \
         'rows 与 subject 必须来自同一份 plan，不许在 view 里二次读盘'
     pc = plan['output_chapters'][0]
     assert v.plan_chapter.chapter_goal.model_dump(mode='json') == pc['chapter_goal']
@@ -148,6 +152,8 @@ def test_formal_review_surface_hashes_the_single_plan_snapshot(monkeypatch):
             if rel == view_module.PLAN_REL:
                 plan_reads += 1
                 return snapshot, b'plan-snapshot'
+            if rel == view_module.STAGE4_EVIDENCE_BINDING:
+                return SimpleNamespace(status='bound', binding_concerns=[]), b'binding'
             raise UpstreamMissing(rel)
 
         def read(self, _model, rel):
@@ -178,7 +184,7 @@ def test_formal_review_surface_hashes_the_single_plan_snapshot(monkeypatch):
 
     got = stage4_view('unused', '123', 1)
     assert plan_reads == 1, 'subject 不许为了算 hash 重读 plan'
-    assert got.structure_subject_sha256 == structure_subject_sha256(snapshot)
+    assert got.structure_subject_sha256 == structure_review_subject_sha256(snapshot, [])
     assert got.plan_chapter.structure_decision.mode == \
         snapshot.output_chapters[0].structure_decision.mode
     assert got.plan_chapter.structure_decision.computed_change_kinds == []

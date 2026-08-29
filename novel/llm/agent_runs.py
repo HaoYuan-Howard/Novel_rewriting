@@ -40,6 +40,7 @@ from novel.agents.session_client import (
 from novel.appendlog import process_append_lock
 from novel.errors import ArtifactUnreadable, ProvenanceRefused, UpstreamMissing
 from novel.llm.json_text import normalize_json_text
+from novel.llm.ledger import CostLedger
 from novel.llm.prompts import required_top_level
 from novel.llm.transport import ChatResponse
 from novel.run_identity import check_run_id
@@ -155,6 +156,35 @@ class RestoredCheckpoint(Generic[M]):
     revision: int
     revision_key: str
     checkpoint_sha256: str
+
+
+@dataclass(frozen=True)
+class RestoredHistoricalRun(Generic[M]):
+    """以 source 自己的 code/profile/run ledger 复验后的只读历史 run。
+
+    普通恢复仍只能使用当前 ``RunContext``；本载体只给显式跨 run adoption
+    bridge 使用，调用方不能拿它创建 checkpoint、请求或覆盖 source sidecar。
+    """
+
+    context: Any
+    run_record: dict[str, Any]
+    run_sha256: str
+    checkpoint: RestoredCheckpoint[M]
+
+
+@dataclass
+class _HistoricalContext:
+    novel_dir: Path
+    node: str
+    code: str
+    executor_profile: AgentProfile
+    run_id: str
+    ledger: CostLedger
+    _sid: str
+
+    @property
+    def sid(self) -> str:
+        return self._sid
 
 
 def _now() -> str:
@@ -1076,6 +1106,88 @@ def restore_checkpoint(
     )
 
 
+def restore_historical_run(
+        current_ctx: Any, spec: SingleSessionRunSpec, *, source_run_id: str,
+        input_sha256: str, system: str, user: str,
+        response_model: type[M], max_tokens: int,
+        validator: Callable[[M, ChatResponse], str | None] | None = None,
+) -> RestoredHistoricalRun[M]:
+    """只读复验一个旧 run，且不放宽普通 exact-code 恢复语义。
+
+    先从 hash-closed ``run.json`` 取得旧 code/profile，再用它们和 source-run
+    ``CostLedger`` 构造隔离 context；后续直接复用本模块现有的 run/request/
+    checkpoint/session/ledger validators。current prompt/schema/input 仍由参数提供，
+    因而旧响应只能在当前 producer 恰好仍接受同一请求时被采用。
+    """
+    source = check_run_id(source_run_id)
+    if source == check_run_id(current_ctx.run_id):
+        raise ProvenanceRefused('historical adoption 必须使用不同于当前 run 的 source run')
+    bootstrap = type('_HistoricalPathContext', (), {
+        'novel_dir': Path(current_ctx.novel_dir),
+        'run_id': source,
+    })()
+    run_path = spec.run_path(bootstrap) / RUN_FILE
+    record = _read_json(run_path, label=f'{spec.label} historical run')
+    if set(record) != _RUN_FIELDS:
+        raise ArtifactUnreadable(f'{run_path} historical run.json 字段漂移')
+    identity = {
+        key: record[key] for key in _RUN_FIELDS
+        if key not in ('identity_sha256', 'created_at')
+    }
+    if record.get('identity_sha256') != canonical_sha256(identity):
+        raise ArtifactUnreadable(f'{run_path} historical identity SHA 不闭合')
+    expected_shell = {
+        'version': VERSION, 'run_id': source, 'sid': current_ctx.sid,
+        'node': spec.node, 'session_owner': spec.session_owner,
+        'chapter': spec.chapter, 'purpose': spec.purpose,
+    }
+    if {key: record.get(key) for key in expected_shell} != expected_shell:
+        raise ProvenanceRefused(f'{run_path} 不属于指定 source run/sid/chapter/purpose')
+    code = record.get('code')
+    policy = record.get('request_policy')
+    profile_payload = policy.get('profile') if isinstance(policy, dict) else None
+    if not isinstance(code, str) or not code or not isinstance(profile_payload, dict):
+        raise ArtifactUnreadable(f'{run_path} 缺历史 code/resolved profile')
+    try:
+        profile = validate_profile(
+            AgentProfile.model_validate(profile_payload), role='executor')
+    except (ValidationError, ValueError) as exc:
+        raise ProvenanceRefused(f'{run_path} 历史 executor profile 不可执行：{exc}') from exc
+    if profile.model_dump(mode='json') != profile_payload:
+        raise ProvenanceRefused(f'{run_path} 历史 profile 尚未完整物化')
+    ledger_path = getattr(current_ctx.ledger, 'path', None)
+    if ledger_path is None:
+        raise ProvenanceRefused('historical adoption 需要盘上 ledger.jsonl')
+    historical = _HistoricalContext(
+        novel_dir=Path(current_ctx.novel_dir), node=spec.node, code=code,
+        executor_profile=profile, run_id=source,
+        ledger=CostLedger(path=Path(ledger_path), run_id=source),
+        _sid=str(current_ctx.sid),
+    )
+    checked_run = _validate_run_record(
+        historical, spec, record,
+        response_model=response_model, max_tokens=max_tokens)
+    restored = restore_checkpoint(
+        historical, spec, input_sha256=input_sha256,
+        system=system, user=user, response_model=response_model,
+        max_tokens=max_tokens, validator=validator)
+    if restored is None:
+        raise ProvenanceRefused(f'{run_path} historical run 没有 checkpoint')
+    links = restored.acceptance.get('attempt_links')
+    if not isinstance(links, list):
+        raise ProvenanceRefused(f'{run_path} historical checkpoint 缺 attempt links')
+    historical.ledger.usage_for_complete_purposes(
+        [spec.purpose], sid=historical.sid, node=spec.node,
+        required_identities=[(spec.purpose, row) for row in links],
+    )
+    return RestoredHistoricalRun(
+        context=historical,
+        run_record=checked_run,
+        run_sha256=canonical_sha256(run_path.read_bytes()),
+        checkpoint=restored,
+    )
+
+
 def _commit_hash(payload: Mapping[str, Any]) -> str:
     return canonical_sha256({
         key: value for key, value in payload.items()
@@ -1452,9 +1564,11 @@ def verify_committed_delivery(
 
 __all__ = [
     'AGENT_ACCEPTANCE_FIELDS', 'COMMIT_FILE', 'CommitBundleSpec', 'RUN_FILE',
-    'RestoredCheckpoint', 'SingleSessionRunSpec', 'canonical_bytes', 'canonical_sha256',
+    'RestoredCheckpoint', 'RestoredHistoricalRun', 'SingleSessionRunSpec',
+    'canonical_bytes', 'canonical_sha256',
     'commit_state', 'ensure_run', 'file_sha256', 'is_sha256', 'mark_committed',
-    'prepare_commit', 'restore_checkpoint', 'restore_commit_adoption',
+    'prepare_commit', 'restore_checkpoint', 'restore_historical_run',
+    'restore_commit_adoption',
     'target_state', 'verify_commit_finalization', 'verify_commit_primary',
     'validate_foreign_commit_envelope', 'verify_committed_delivery',
     'write_checkpoint',

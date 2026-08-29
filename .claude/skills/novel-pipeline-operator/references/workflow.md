@@ -118,9 +118,9 @@ HARD，并把结构化代码反馈交回同一 provider session；因此 agent �
 | 4 | `stage1.partition` | 无 | 追跑 check 无 HARD；章节 ordinal 唯一且覆盖 `1..N` |
 | 5 | `stage2.global` | 无；agent executor 原生同 session 修复 | 最新 Global 候选通过 schema 后即物化 current 称名投影；Global HARD 可让候选暂留 `.INVALID`，但只要投影 current/fresh 就不阻塞 blueprint 计算 |
 | 6 | `stage2.blueprint` | current/fresh 称名投影可读后独立 preview/run，不等 Global 正式稿 | 逐章蓝图正式落盘；Stage4 前再汇合 current 正式 global、唯一 Stage2 `--check-only` 联合 HARD 无命中，以及 current review 的 blocking 面逐项 PASS |
-| 7 | `stage4.design` | 需要废止旧候选时显式另跑 `--replan` | 只产生当前盲候选；本相未读取原文顺序、证据位置或必须材料，且不会顺带启动下一相 |
-| 8 | `stage4.plan` | 在 A 落盘后重新独立 preview/run | B 只绑定证据；`bound` 时编译计划且 check 无 HARD，`infeasible` 时正式负结论已落盘但没有计划 |
-| 9 | `stage4.context` | 计划落盘已自动组装时 `state` 跳过；只在需重建时执行 | `stage4/writer_context.json` 与当前计划投影一致且 fresh |
+| 7 | `stage4.design` | 首轮无参数；只有当前正式 A 审阅明确拒绝时，才另行执行服务端给出的 `--repair-decision <SHA>` 或 `--replan` | 只产生当前盲候选；本相未读取原文顺序、证据位置或必须材料，且不会顺带启动下一相。机械通过后还须提交全书策略 + 逐章正式设计审阅 |
+| 8 | `stage4.plan` | 仅在当前 A 设计审阅全书 accepted 后重新独立 preview/run | B 只绑定证据；模型的 `binding_concerns` 进入最终人审但不阻断。模型声称 infeasible 只有代码构造性证明后才可正式落盘，否则同 session 返修为完整 bound |
+| 9 | `stage4.context` | B 编译计划机械通过、且最终逐章结构裁决全书 accepted 后单独执行 | `stage4/writer_context.json` 与当前计划投影一致且 fresh；B、`--revalidate`、`--apply-edit`、`--apply-binding` 都不得自动组装它 |
 | 10 | `stage5.write` | 不带 `--chapters` 即写全部缺少的 canonical 章 | `stage5/chNN.json` 恰好覆盖计划章集合；内部重试不等于整节点失败 |
 | 11 | `stage5.review` | 无 | 最新机械验收完成；HARD 按 remediation 收敛，info/metric/unver 保持原态 |
 | 12 | `stage6.hook` | 无；完整三候选 replacement 在同 session 内修复 | 至少一条候选通过落盘闸；追跑 check 可读正式候选 |
@@ -132,13 +132,17 @@ HARD，并把结构化代码反馈交回同一 provider session；因此 agent �
 <!-- pipeline-steps:end -->
 
 Stage4 的两次付费调用不得压成一次授权或一次 runner 执行。先对 `stage4.design` 单独 preview/run；
-候选正式落盘后，再对 `stage4.plan` 取得一份新的 preview 并单独 run。B 返回 typed `infeasible`
-时 exit 1 表示负结论已经正式落盘，不得继续 `stage4.context` 或 Stage5；按服务端恢复动作另行
-preview `stage4.design --replan`，新 A 成功后，B 仍是另一条独立 preview/run。
+候选机械通过并正式落盘后，按[代批与终审契约](delegated-review.md#stage4-结构代批)先提交 Stage4A
+完整 typed 设计审阅。只有策略与全章 accepted，才能重新取得 `stage4.plan` 的 preview 并单独 run。
+若逐章 `request_repair`，只执行服务端给出的 hash-bound `--repair-decision <SHA>`，未变且已接受的章
+由 checkpoint 复用；只有策略 `request_replan` 才可整书重做。自然语言 reason 只进审计，不充当模型
+自由指令。B 的模型负结论不是正式终态；只有代码产出不可行 witness 时 exit 1 才表示负结论已落盘，
+此时不得继续 Context 或 Stage5，也不得替人猜 repair/replan 决定。
 
-计划编译并通过机械检查后，先按[代批与终审契约](delegated-review.md#stage4-结构代批)提交
-完整逐章 typed 结构决定。通用 s4 gate 不是兼容入口；结构主体变化后旧决定立即过期。
-只有全部章 `accept`，且随后另有 current Stage5 writing 授权，才可执行 `stage5.write`。
+计划编译并通过机械检查后，再提交第二份、绑定 Plan 与 B concerns 的完整逐章 typed 最终结构决定。
+通用 s4 gate 不是兼容入口；计划或 concerns 变化后旧决定立即过期。只有全部章 `accept`，才可单独
+运行 0 成本 `stage4.context`；Context current/fresh 后再生成并提交 Stage5 writing 授权，才可执行
+`stage5.write`。
 
 Stage2 有两条可重叠的支路，而不是一条全串行链：最新 Global 候选只要通过当前 schema，并物化出
 current/fresh 称名投影，就可立即启动 blueprint；不必等待 Global 正式稿。Global HARD 可以把候选

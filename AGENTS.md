@@ -105,10 +105,10 @@ builder、完成度不偷看作业记录、loopback、无 CORS、同书 409。�
 付费跑法必须 `--yes`。成本的唯一权威源是 `<base>/_service/ledger.jsonl`，不与产物 `usage` 或日志混加；
 缓存命中（`.llm_cache/`）单独记账，不能写成"没有执行过"。
 **付费授权与正文外发授权是两件独立的事**，任一缺失时仍可跑 0 成本的 `state`/`inbox`/`preview`。
-审批服务的盘上 `_service/approvals/<sid>.json` 是 **v5**（Stage3 整层退役；Stage4 保留 hash-bound typed
-`structure_decision/history`，Stage5 的 `writing/writing_proof` 仍与它独立），公开 API
-`ApprovalDoc` 是 **v4**；两个版本面独立。旧盘上 v4 只能经显式 `backfill_from_disk` 且旧 Stage3、
-Stage1、Stage4 proofs 仍绑当前主体时保守收进 v5；更早记录最多恢复可逐项对证的闸，普通 GET 不得
+审批服务的盘上 `_service/approvals/<sid>.json` 是 **v6**（Stage4A `design_review` 只授权 B；B 后
+`structure_decision/history` 才打开 s4，Stage5 的 `writing/writing_proof` 仍与二者独立），公开 API
+`ApprovalDoc` 是 **v5**；两个版本面独立。旧盘上 v5 只能经显式 `backfill_from_disk` 且既有
+Stage1、Stage4 proofs 仍绑当前主体时保守收进 v6；更早记录最多恢复可逐项对证的闸，普通 GET 不得
 静默迁移或代开 s4。
 
 ### 修复路由与恢复路
@@ -136,7 +136,7 @@ provenance 的口相同。
 `tests/test_artifact_versions.py::_SHAPE_BREAKS` 里显式登记那一次破坏）。
 现役 `stage2/global_grounding.json` / `global_edit.json` 为 v4 / v3，
 `stage2/chapter_blueprints.json` 为 v6（2026-08-26 删除无下游作用的展示/过程字段）。
-Stage4 `blind_candidate.json` / `evidence_binding.json` 为 v2，
+Stage4 `blind_candidate.json` / `evidence_binding.json` 为 v2 / v3，
 `plan_chapters.json` / `plan_edit.json` 与 writer context 为 v4；identity artifact 已退役。旧 Stage4
 计划不迁移，必须先跑 `stage4.design`、再跑 `stage4.plan` 重建。Stage5 canonical 章稿、Review、
 trim audit/resolution 均为 v2。旧 `stage5/deep|shallow/` 只作历史证据，读模型必须明确报

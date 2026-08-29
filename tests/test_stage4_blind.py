@@ -28,8 +28,12 @@ from novel.stages.stage4.blind import (
     candidate_subject_sha256,
     compile_blind_chapter_design,
     compile_blind_candidate,
+    construct_feasible_binding_witness,
     merge_evidence_bindings,
+    prove_binding_infeasible,
+    validate_infeasible_binding,
 )
+from novel.stages.stage4.measure import adopt_plan_response
 
 
 ROOT = '1f' * 20
@@ -330,9 +334,7 @@ def _raw_bindings(compiled: dict) -> dict:
                 ],
             },
         ],
-        'reason_kind': None,
-        'reason': None,
-        'evidence_refs': None,
+        'binding_concerns': [],
     }
 
 
@@ -750,6 +752,30 @@ def test_binding_merge_accepts_formal_b_shape_and_preserves_a_order():
         'B 只绑证据；代码场景编译器才能复算最终结构读数')
 
 
+def test_full_b_compile_accepts_a_context_backref_to_a_prior_landed_fact():
+    """A 候选 → B join → allocator 的真实编译链共用 reader-knowledge 口径。"""
+    truth, mapping = build_blind_projection(_blueprints(), root_clean_sha1=ROOT)
+    candidate = _candidate(mapping)
+    aliases = _fact_aliases(mapping)
+    chapter = next(row for row in candidate['output_chapters']
+                   if row['output_ordinal'] == 1)
+    chapter['scenes'][1]['context_fact_aliases'] = [aliases['f01_002']]
+    compiled = compile_blind_candidate(
+        BlindPlanResponse.model_validate(candidate).model_dump(mode='json'),
+        mapping, truth=truth)
+
+    binding = _typed_bindings(compiled)
+    merged = merge_evidence_bindings(
+        compiled, binding, build_evidence_catalog(_blueprints()))
+    adopt_plan_response(merged, _blueprints(), {})
+
+    compiled_chapter = next(row for row in merged['output_chapters']
+                            if row['output_ordinal'] == 1)
+    assert compiled_chapter['scenes'][1]['context_fact_refs'] == ['f01_002']
+    assert all(scene['budget_chars'] > 0 for row in merged['output_chapters']
+               for scene in row['scenes'])
+
+
 def test_candidate_hash_mismatch_is_closed_before_any_merge():
     compiled, _mapping, catalog = _compiled()
     response = _typed_bindings(compiled)
@@ -831,12 +857,19 @@ def test_infeasible_b_is_a_typed_terminal_and_never_partially_compiles():
         'status': 'infeasible',
         'candidate_sha256': candidate_subject_sha256(compiled),
         'chapters': None,
-        'reason_kind': 'future_leak',
-        'reason': '候选场景只能靠未来章证据成立。',
-        'evidence_refs': ['f02_001'],
+        'binding_concerns': [{
+            'constraint_code': 'future_leak',
+            'chapter_ordinal': 2,
+            'scenes': ['c02s01'],
+            'reason': '候选场景只能靠未来章证据成立。',
+            'closed_refs': ['c02s01', 'b02_01'],
+        }],
     }).model_dump(mode='json')
-    with pytest.raises(BlindPlanError, match='infeasible 是正式终态'):
+    with pytest.raises(BlindPlanError, match='只有 status=bound'):
         merge_evidence_bindings(compiled, response, catalog)
+    with pytest.raises(BlindPlanError, match='构造出了完整 bound'):
+        validate_infeasible_binding(compiled, response, catalog)
+    assert prove_binding_infeasible(compiled, catalog) == []
 
 
 def test_declared_change_kinds_are_canonicalized_instead_of_rejected():
@@ -867,26 +900,37 @@ def test_declared_change_kinds_are_canonicalized_instead_of_rejected():
         BlindPlanResponse.model_validate(candidate)
 
 
-def test_bound_tolerates_an_empty_evidence_array_but_not_a_populated_one():
-    """`bound` 下的空 evidence 数组与缺省同义；非空的仍然是夹带，照旧红。
+def test_constructive_binding_witness_refutes_false_infeasible_and_concerns_do_not_block():
+    compiled, _mapping, catalog = _compiled()
+    witness = construct_feasible_binding_witness(compiled, catalog)
+    parsed = EvidenceBindingResponse.model_validate(witness)
+    assert parsed.status == 'bound'
+    assert merge_evidence_bindings(compiled, witness, catalog)['output_chapters']
 
-    ⚠ `infeasible` 一侧一个字不动——那里的空数组正是「没给证据」。
-    """
-    compiled, _mapping, _catalog = _compiled()
-    payload = {
-        **_raw_bindings(compiled),
-        'reason_kind': None, 'reason': None, 'evidence_refs': [],
-    }
-    parsed = EvidenceBindingResponse.model_validate(payload)
-    assert parsed.evidence_refs is None
+    concerned = copy.deepcopy(witness)
+    concerned['binding_concerns'] = [{
+        'constraint_code': 'semantic_ambiguity',
+        'chapter_ordinal': 1,
+        'scenes': ['c01s01'],
+        'reason': '这一场的语义键定仍需人工注意。',
+        'closed_refs': ['c01s01', 'b01_01'],
+    }]
+    assert merge_evidence_bindings(compiled, concerned, catalog) \
+        == merge_evidence_bindings(compiled, witness, catalog)
 
-    with pytest.raises(ValidationError, match='不得夹带'):
-        EvidenceBindingResponse.model_validate({**payload, 'evidence_refs': ['b01_01']})
+    unknown = copy.deepcopy(concerned)
+    unknown['binding_concerns'][0]['closed_refs'] = ['b01_999']
+    with pytest.raises(BlindPlanError, match='未下发引用'):
+        merge_evidence_bindings(compiled, unknown, catalog)
 
-    with pytest.raises(ValidationError, match='非空 evidence_refs'):
-        EvidenceBindingResponse.model_validate({
-            'status': 'infeasible',
-            'candidate_sha256': candidate_subject_sha256(compiled),
-            'chapters': None, 'reason_kind': 'future_leak',
-            'reason': '候选场景只能靠未来章证据成立。', 'evidence_refs': [],
-        })
+
+def test_deterministic_infeasibility_witness_only_covers_closed_code_constraints():
+    compiled, _mapping, catalog = _compiled()
+    broken_catalog = copy.deepcopy(catalog)
+    broken_catalog[1]['stage_refs'] = []
+    proof = prove_binding_infeasible(compiled, broken_catalog)
+    assert len(proof) == 1
+    assert proof[0]['constraint_code'] == 'empty_stage_allowlist'
+    assert proof[0]['chapter_ordinal'] == 1
+    assert proof[0]['scenes'] == ['c01s01', 'c01s02']
+    assert proof[0]['closed_refs'] == ['c01s01', 'c01s02']

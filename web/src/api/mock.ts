@@ -25,6 +25,10 @@ import {
   GATE_KEYS,
   type ActionRef,
   type ApprovalDoc,
+  type DesignReviewDecision,
+  type DesignReviewRequest,
+  type DesignReviewTemplate,
+  type DesignReviewTemplateQuery,
   type GateKey,
   type SeenKey,
   type StructureApprovalDecision,
@@ -312,6 +316,10 @@ function lsWrite(key: string, v: unknown): void {
 /* ------------------------------------------------------------ 验收记录 */
 
 const MOCK_STRUCTURE_SUBJECT = 'f'.repeat(64)
+const MOCK_DESIGN_CANDIDATE = 'e'.repeat(64)
+const MOCK_DESIGN_AGGREGATE = 'd'.repeat(64)
+const MOCK_DESIGN_STRATEGY = 'c'.repeat(64)
+const MOCK_DESIGN_CHAPTER = 'b'.repeat(64)
 
 function enumAt(values: string[], index: number, label: string): string {
   const value = values[index]
@@ -335,18 +343,186 @@ function seededStructureDecision(): StructureApprovalDecision {
   }
 }
 
+function mockDesignReviewTemplate(query: DesignReviewTemplateQuery): DesignReviewTemplate {
+  return {
+    actor: query.actor,
+    reviewer_kind: query.reviewer_kind,
+    review_run_id: query.review_run_id,
+    general_reason: query.reason,
+    candidate_sha256: MOCK_DESIGN_CANDIDATE,
+    aggregate_subject_sha256: MOCK_DESIGN_AGGREGATE,
+    binding_infeasibility: null,
+    repair_capability: {
+      repairable: true,
+      reason_code: 'ready',
+      chapters: [{
+        output_ordinal: SAMPLE_ORDINAL,
+        committed_rounds: 0,
+        request_repair_available: true,
+      }],
+    },
+    strategy: {
+      subject: {
+        basis: {
+          review_contract: 'stage4-design-review-v1',
+          root_clean_sha1: 'a'.repeat(40),
+          truth_sha256: '1'.repeat(64),
+          alias_algorithm: 'hmac-sha256-v1',
+        },
+        reconstruction_strategy: '打散原章顺序，以因果揭示次序重组场景。',
+        chapter_weights: [{ chapter_ordinal: SAMPLE_ORDINAL, weight: 'medium' }],
+      },
+      subject_sha256: MOCK_DESIGN_STRATEGY,
+      placeholder: true,
+      template_token: '7'.repeat(64),
+      decision: enumAt(enums().design_strategy_decisions, 1, 'A 策略审阅决定'),
+      reason: '关闭式模板：尚未核实整书策略，保持 request_replan',
+      source_decision_sha256: null,
+    },
+    chapters: [{
+      output_ordinal: SAMPLE_ORDINAL,
+      subject: {
+        strategy_subject_sha256: MOCK_DESIGN_STRATEGY,
+        blind_truth: {
+          chapter_ordinal: SAMPLE_ORDINAL,
+          chapter_function: '冲突升级并改写人物关系',
+          facts: [
+            {
+              fact_alias: 'a_' + '1'.repeat(16),
+              claim: '主角在公开场合取得关键证据。',
+              kind: 'event',
+              obligation: 'must_land',
+              participant_aliases: ['a_' + '4'.repeat(16)],
+            },
+            {
+              fact_alias: 'a_' + '2'.repeat(16),
+              claim: '对手尚不知道证据已经转手。',
+              kind: 'knowledge',
+              obligation: 'context',
+              participant_aliases: ['a_' + '5'.repeat(16)],
+            },
+            {
+              fact_alias: 'a_' + '3'.repeat(16),
+              claim: '章节结尾必须保留证据来源悬念。',
+              kind: 'boundary',
+              obligation: 'must_land',
+              participant_aliases: [],
+            },
+          ],
+          causal_edges: [{
+            before_alias: 'a_' + '1'.repeat(16),
+            after_alias: 'a_' + '3'.repeat(16),
+          }],
+          entry_state_aliases: ['a_' + '2'.repeat(16)],
+          ending_state_aliases: ['a_' + '3'.repeat(16)],
+        },
+        chapter: {
+          output_ordinal: SAMPLE_ORDINAL,
+          structure_decision: {
+            mode: 'reconstruct',
+            reason: '改变入口与事实组合，避免逐段复述。',
+            declared_change_kinds: ['entry_anchor', 'fact_grouping'],
+          },
+          chapter_goal: { intent: 'advance', fact_aliases: ['a_' + '1'.repeat(16)] },
+          open_hook_goal: { intent: 'open', fact_aliases: ['a_' + '2'.repeat(16)] },
+          end_hook_goal: { intent: 'withhold', fact_aliases: ['a_' + '3'.repeat(16)] },
+          weight: 'medium',
+          chapter_rewrite_brief: '由结果切入，再倒推人物动机。',
+          scenes: [{
+            candidate_scene_id: 'c03s01',
+            weight: 'medium',
+            purpose: '用结果现场建立冲突，再回收前因。',
+            role: 'turn',
+            delivery: 'dramatize',
+            transition: 'flashback',
+            land_fact_aliases: ['a_' + '1'.repeat(16)],
+            context_fact_aliases: ['a_' + '2'.repeat(16)],
+            turn_fact_alias: 'a_' + '1'.repeat(16),
+            entry_state_aliases: ['a_' + '2'.repeat(16)],
+            exit_state_aliases: ['a_' + '3'.repeat(16)],
+          }],
+        },
+        structure_evidence: {
+          metric_contract: 'atomic-structure-v2',
+          state: 'adequate',
+          declared_change_kinds: ['entry_anchor', 'fact_grouping'],
+          computed_change_kinds: ['entry_anchor', 'fact_grouping'],
+          realized_declared: ['entry_anchor', 'fact_grouping'],
+          unrealized_declared: [],
+          undeclared_actual: [],
+          readings: {
+            entry_anchor_changed: true,
+            noncontiguous_groups: 1,
+            source_order_correlation: 0.4,
+          },
+        },
+      },
+      subject_sha256: MOCK_DESIGN_CHAPTER,
+      placeholder: true,
+      template_token: '6'.repeat(64),
+      decision: enumAt(enums().design_chapter_decisions, 1, 'A 逐章审阅决定'),
+      reason: '关闭式模板：尚未核实本章候选，保持 request_repair',
+      constraints: [{
+        code: enumAt(enums().design_repair_codes, 0, 'A 返修码'),
+        scene_refs: [],
+        opaque_aliases: [],
+      }],
+      source_decision_sha256: null,
+    }],
+  }
+}
+
+function seededDesignReviewDecision(): DesignReviewDecision {
+  const request = mockDesignReviewTemplate({
+    actor: 'mock-reviewer',
+    reviewer_kind: enumAt(enums().design_reviewer_kinds, 0, 'A 审阅者类型'),
+    review_run_id: '00000000-0000-4000-8000-000000000001',
+    reason: 'mock 样本已核对 Stage4A 候选',
+  })
+  return {
+    ...request,
+    strategy: {
+      ...request.strategy,
+      placeholder: false,
+      template_token: null,
+      decision: enums().design_strategy_decisions[0]!,
+      reason: 'mock 已逐项核对当前整书策略',
+    },
+    chapters: request.chapters.map((chapter) => ({
+      ...chapter,
+      placeholder: false,
+      template_token: null,
+      decision: enums().design_chapter_decisions[0]!,
+      reason: 'mock 已逐项核对当前章设计',
+      constraints: [],
+    })),
+    decision_sha256: '9'.repeat(64),
+    decided_at: '2026-08-28T00:00:00+00:00',
+  }
+}
+
 function freshDoc(sid: string): ApprovalDoc {
   return {
-    v: 4,
+    v: 5,
     sid,
     gate: { s0: false, s1: false, s2: false, s4: false, s5: false, s6: false, s7: false },
     seen: { read: false, global: false },
     writing: false,
+    design_review: {
+      state: enumAt(enums().design_review_states, 0, 'A 审阅状态'),
+      candidate_sha256: null,
+      aggregate_subject_sha256: null,
+      current_decision: null,
+      history: [],
+      binding_infeasibility: null,
+      repair_capability: null,
+    },
     structure: {
       state: enumAt(enums().structure_approval_states, 0, '结构审批状态'),
       current_subject_sha256: null,
       current_decision: null,
       history: [],
+      binding_concerns: [],
     },
     spawns: {},
   }
@@ -359,17 +535,34 @@ function freshDoc(sid: string): ApprovalDoc {
  */
 function seededDoc(sid: string): ApprovalDoc {
   const decision = seededStructureDecision()
+  const designDecision = seededDesignReviewDecision()
   return {
-    v: 4,
+    v: 5,
     sid,
     gate: { s0: true, s1: true, s2: true, s4: true, s5: true, s6: false, s7: false },
     seen: { read: true, global: true },
     writing: true,
+    design_review: {
+      state: enumAt(enums().design_review_states, 4, 'A 审阅状态'),
+      candidate_sha256: MOCK_DESIGN_CANDIDATE,
+      aggregate_subject_sha256: MOCK_DESIGN_AGGREGATE,
+      current_decision: designDecision,
+      history: [designDecision],
+      binding_infeasibility: null,
+      repair_capability: designDecision.repair_capability,
+    },
     structure: {
       state: enumAt(enums().structure_approval_states, 2, '结构审批状态'),
       current_subject_sha256: MOCK_STRUCTURE_SUBJECT,
       current_decision: decision,
       history: [decision],
+      binding_concerns: [{
+        constraint_code: 'material_overlap',
+        chapter_ordinal: SAMPLE_ORDINAL,
+        scenes: ['c03s01'],
+        reason: '两场共用同一事实材料，绑定可行但需要人工确认重复披露风险。',
+        closed_refs: ['a_' + '1'.repeat(16)],
+      }],
     },
     spawns: {},
   }
@@ -377,8 +570,8 @@ function seededDoc(sid: string): ApprovalDoc {
 
 function loadDoc(sid: string): ApprovalDoc {
   const got = lsRead<unknown>('approvals.' + sid)
-  // spawns 是服务端的事；只接受当前公开 v4，旧本地记录按当前种子重建。
-  if (got && typeof got === 'object' && (got as { v?: unknown }).v === 4) {
+  // spawns 是服务端的事；只接受当前公开 v5，旧本地记录按当前种子重建。
+  if (got && typeof got === 'object' && (got as { v?: unknown }).v === 5) {
     return withMockSpawns(got as ApprovalDoc)
   }
   const seed = sid === SAMPLE_SID ? seededDoc(sid) : freshDoc(sid)
@@ -1322,6 +1515,136 @@ export const mockApi: Api = {
 
   getApprovals: (sid) => later(loadDoc(sid)),
 
+  getDesignReviewTemplate: (sid, query: DesignReviewTemplateQuery) => {
+    const doc = loadDoc(sid)
+    const template = mockDesignReviewTemplate(query)
+    const current = doc.design_review.current_decision
+    if (
+      current
+      && current.candidate_sha256 === template.candidate_sha256
+      && current.aggregate_subject_sha256 === template.aggregate_subject_sha256
+    ) {
+      const acceptedStrategy = enumAt(
+        enums().design_strategy_decisions, 0, 'A 策略审阅决定',
+      )
+      return later({
+        ...template,
+        strategy: current.strategy.decision === acceptedStrategy
+          ? {
+              ...template.strategy,
+              decision: current.strategy.decision,
+              reason: current.strategy.reason,
+              placeholder: false,
+              template_token: null,
+              source_decision_sha256: current.decision_sha256,
+            }
+          : template.strategy,
+        chapters: template.chapters.map((chapter) => {
+          const prior = current.chapters.find((row) => row.output_ordinal === chapter.output_ordinal)
+          return prior?.decision === enums().design_chapter_decisions[0]
+            ? {
+                ...chapter,
+                decision: prior.decision,
+                reason: prior.reason,
+                constraints: [],
+                placeholder: false,
+                template_token: null,
+                source_decision_sha256: current.decision_sha256,
+              }
+            : chapter
+        }),
+      })
+    }
+    return later(template)
+  },
+
+  approveDesignReview: (sid, request: DesignReviewRequest) => {
+    const doc = loadDoc(sid)
+    if (
+      request.candidate_sha256 !== MOCK_DESIGN_CANDIDATE
+      || request.aggregate_subject_sha256 !== MOCK_DESIGN_AGGREGATE
+    ) {
+      return fail(new ApiError('server', '/novels/' + sid + '/approvals/design', {
+        message: 'Stage4A 审阅对象已变化；请刷新关闭式模板后重审',
+      }))
+    }
+    const acceptedStrategy = enumAt(enums().design_strategy_decisions, 0, 'A 策略审阅决定')
+    const acceptedChapter = enumAt(enums().design_chapter_decisions, 0, 'A 逐章审阅决定')
+    const requestRepair = enumAt(enums().design_chapter_decisions, 1, 'A 逐章审阅决定')
+    if (
+      request.strategy.placeholder
+      || request.strategy.template_token !== null
+      || request.chapters.some((chapter) => (
+        chapter.placeholder || chapter.template_token !== null
+      ))
+    ) {
+      return fail(new ApiError('server', '/novels/' + sid + '/approvals/design', {
+        message: 'Stage4A 完整提交仍含未逐项确认的 template placeholder/token',
+      }))
+    }
+    const sentinel = mockDesignReviewTemplate({
+      actor: request.actor,
+      reviewer_kind: request.reviewer_kind,
+      review_run_id: request.review_run_id,
+      reason: request.general_reason,
+    })
+    const sentinelStrategy = request.strategy.source_decision_sha256 === null
+      && request.strategy.decision === sentinel.strategy.decision
+      && request.strategy.reason === sentinel.strategy.reason
+    const sentinelChapter = request.chapters.some((chapter) => {
+      if (chapter.source_decision_sha256 !== null) return false
+      const original = sentinel.chapters.find(
+        (row) => row.output_ordinal === chapter.output_ordinal,
+      )
+      return original !== undefined
+        && chapter.decision === original.decision
+        && chapter.reason === original.reason
+        && JSON.stringify(chapter.constraints) === JSON.stringify(original.constraints)
+    })
+    if (sentinelStrategy || sentinelChapter) {
+      return fail(new ApiError('server', '/novels/' + sid + '/approvals/design', {
+        message: 'Stage4A 不能把关闭式模板默认反馈原样冒充人工裁决',
+      }))
+    }
+    const invalidChapter = request.chapters.some((chapter) => (
+      (chapter.decision === acceptedChapter && chapter.constraints.length > 0)
+      || (chapter.decision === requestRepair && chapter.constraints.length === 0)
+      || (
+        chapter.decision === requestRepair
+        && !request.repair_capability.chapters.find(
+          (row) => row.output_ordinal === chapter.output_ordinal,
+        )?.request_repair_available
+      )
+    ))
+    if (invalidChapter) {
+      return fail(new ApiError('server', '/novels/' + sid + '/approvals/design', {
+        message: 'accept 章不得带返修约束；request_repair 必须可执行且至少选择一个返修码',
+      }))
+    }
+    const decision: DesignReviewDecision = {
+      ...request,
+      decision_sha256: '8'.repeat(64),
+      decided_at: new Date().toISOString(),
+    }
+    const stateIndex = request.strategy.decision !== acceptedStrategy
+      ? 3
+      : request.chapters.some((chapter) => chapter.decision !== acceptedChapter)
+        ? 2
+        : 4
+    return later(saveDoc({
+      ...doc,
+      design_review: {
+        state: enumAt(enums().design_review_states, stateIndex, 'A 审阅状态'),
+        candidate_sha256: request.candidate_sha256,
+        aggregate_subject_sha256: request.aggregate_subject_sha256,
+        current_decision: decision,
+        history: [...doc.design_review.history, decision],
+        binding_infeasibility: request.binding_infeasibility,
+        repair_capability: request.repair_capability,
+      },
+    }))
+  },
+
   approveGate: (sid, key: GateKey) => {
     if (key === 's4') {
       return fail(new ApiError('server', '/novels/' + sid + '/approvals/gate/s4', {
@@ -1374,6 +1697,7 @@ export const mockApi: Api = {
         current_subject_sha256: subject,
         current_decision: decision,
         history: [...doc.structure.history, decision],
+        binding_concerns: doc.structure.binding_concerns,
       },
     }))
   },

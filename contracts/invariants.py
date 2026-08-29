@@ -338,6 +338,56 @@ STRUCTURE_APPROVAL_STATES: Final = (
     'unavailable', 'missing', 'accepted', 'replan_requested', 'expired',
 )
 
+#: Stage4A 的正式设计审阅与 B 后最终计划审批是两张不同的票。前者只决定
+#: 当前盲候选能否进入付费 B，绝不打开 ``gate.s4``。决定与修复码都必须是
+#: 闭合集：自由文本理由只留审计，不能未经代码解释直接塞回模型 prompt。
+DESIGN_STRATEGY_DECISIONS: Final = ('accept', 'request_replan')
+DESIGN_CHAPTER_DECISIONS: Final = ('accept', 'request_repair')
+DESIGN_REVIEWER_KINDS: Final = ('human', 'delegated_operator')
+DESIGN_REVIEW_CONTRACT: Final = 'stage4-design-review-v1'
+DESIGN_REPAIR_CODES: Final = (
+    'structure_delta',
+    'entry_anchor',
+    'ending_anchor',
+    'fact_grouping',
+    'disclosure_order',
+    'noncontiguous_regroup',
+    'scene_goal',
+    'binding_constraint_unsat',
+)
+#: ``code -> (最少 scene_refs, 最少 opaque_aliases)``。审批 schema 与返修 prompt
+#: 必须共用这一张表；否则一边接受的“具体反馈”会在另一边变成空指令。
+DESIGN_REPAIR_CONSTRAINT_ARITY: Final = {
+    'structure_delta': (0, 0),
+    'entry_anchor': (0, 1),
+    'ending_anchor': (0, 1),
+    'fact_grouping': (0, 2),
+    'disclosure_order': (0, 2),
+    'noncontiguous_regroup': (0, 2),
+    'scene_goal': (1, 1),
+    'binding_constraint_unsat': (1, 0),
+}
+#: Stage4B 模型可以报告的语义担忧。它们只作非阻断证据，不得被解释成
+#: 编译器不可满足证明；schema、prompt 与 HTTP 枚举共用这一份取值面。
+BINDING_CONCERN_CODES: Final = (
+    'causal_conflict',
+    'stage_conflict',
+    'material_conflict',
+    'future_leak',
+    'insufficient_evidence',
+)
+#: Stage4B 关闭约束编译器目前能够机械铸造的不可行证明码。顺序与
+#: ``novel.stages.stage4.blind::prove_binding_infeasible`` 的两类 witness 对齐；
+#: 模型无权直接返回这些正式证明。
+BINDING_INFEASIBILITY_CODES: Final = (
+    'missing_chapter_catalog',
+    'empty_stage_allowlist',
+)
+DESIGN_REVIEW_STATES: Final = (
+    'unavailable', 'missing', 'repair_requested',
+    'strategy_replan_requested', 'accepted', 'expired',
+)
+
 #: 原始 txt 的编码候选，**按尝试顺序**。取值面只能从代码来：
 #: 全语料 163 本**只出现过 `utf-8`，另四个零样本**——样本再多也补不出没发生过的分支。
 SOURCE_ENCODINGS: Final = ('utf-8-sig', 'utf-32', 'utf-16', 'utf-8', 'gb18030')
@@ -1348,6 +1398,14 @@ FREE_ENTRIES: Final = {
     #   它**没有任何恢复入口** ⇒ 一次有效付费的整书候选只能整本重来。
     '--adopt-rejected': ('按当前完整四道闸 0 次调用重判一份封存的 Stage4A 拒稿；'
                          '只消费隔离区里的候选与既有成本账，不发新请求'),
+    '--apply-binding': ('把完整人工 EvidenceBinding 按与 Stage4B 相同的 schema、'
+                        '编译和 HARD 闸写回；0 次模型调用，也允许首次 B 无正式计划时恢复'),
+    '--emit-prepared-recovery-workpack': (
+        '向 stdout 输出一份绑定旧 Stage5 prepared checkpoint、当前代码与当前上游的'
+        '只读恢复工作包；不调用模型、不写产物'),
+    '--recover-prepared': (
+        '把旧 Stage5 run 中全部尚未收口的 prepared checkpoint 按当前代码重新验证并'
+        '提交为 canonical；0 次模型调用，必须带 hash-bound 人工凭据'),
 }
 
 #: 挂在**付费**动作上的 flag。它们不是 0 成本入口，登记在这里免得被当成漏项。
@@ -1365,7 +1423,10 @@ PAID_FLAGS: Final = {
     '--purge-role': 'stage2 的语义判官臂——把 role/fate 双向重划分一遍，它要再调一次模型',
     '--resample': 'stage2 全书响应被闸门拦下后，绕过同参数问题缓存重新采样整份响应',
     '--replan': ('Stage4B 返回 infeasible 或人工结构审批 request_replan 后，'
-                 '绕过同参数缓存重新采样整书 Stage4A；不会自动串行 Stage4B'),
+                 '仅在当前正式 Stage4A 策略审阅明确 request_replan 后，'
+                 '绕过同参数缓存重新采样整书策略与各章；不会自动串行 Stage4B'),
+    '--repair-decision': ('按当前正式 Stage4A 审阅决定定向返修被 request_repair 的章节；'
+                          '目标与反馈由 hash-bound 决定派生，不能在命令行另选章节'),
     '--patch': 'stage2 逐章蓝图 extraction IR 族的字段级修复——逐条失败各调一次模型，'
                '量级是条不是章',
 }
@@ -1431,6 +1492,14 @@ VALUED_FLAGS: Final = {
     '--adopt-rejected': ('要重判并采用的拒绝响应 attempt_id（16 位小写十六进制）；'
                          '人只能编辑隔离区里那份固定的 candidate.json，'
                          '本命令封存 actor/reason 与新旧闸指纹后再走同一套闸'),
+    '--repair-decision': ('当前 Stage4A 正式审阅决定的完整 SHA-256；'
+                          '代码只返修该决定中 request_repair 的章节并复用其余已接受单元'),
+    '--apply-binding': ('完整人工 Stage4 EvidenceBinding 路径（必填；相对路径相对书目录，'
+                        '也接受书目录内的绝对路径）'),
+    '--emit-prepared-recovery-workpack': (
+        '要审计的旧 Stage5 source run_id；输出绑定当前 target run/code 的只读工作包'),
+    '--recover-prepared': (
+        '要零调用收口的旧 Stage5 source run_id；范围固定为其中全部 unresolved prepared'),
     '--validate-edit': '要预检的 stage7 人工编辑路径（与 --apply-edit 同路径规则，不写盘）',
     '--apply-edit-plan': '审校台生成的 stage0 编辑计划路径（正文 + 剔除账 + 乐观锁）',
     '--review-decisions': 'stage2/global_review 的人工决策集（相对当前书目录）',
@@ -1508,6 +1577,7 @@ WRITE_EFFECTS: Final = {
     '--validate-edit': '',
     '--emit-review-template': '',
     '--emit-review-workpack': '',
+    '--emit-prepared-recovery-workpack': '',
     '--adopt-residual': '重写 stage7/name_map.json，清旧审批并退休现有成书',
     # ── 免费但**会写盘**的那些：原型那 8 条注释点名的正是它们 ──
     '--recheck': '按当前判据刷新已有成稿的派生指标，并对账 trim 状态',
@@ -1526,6 +1596,9 @@ WRITE_EFFECTS: Final = {
     '--wontfix': '把一条豁免记进 <stage>/wontfix.json（**本节点的正式产物一份都不产**）',
     '--retain-pretrim': ('写 stage5/trim_resolution_chNN.json；旧 resolution 归档，'
                          '不改正文、不采用收缩候选'),
+    '--recover-prepared': (
+        '写 stage5/chNN.json、target run recovery manifest/两相 replacement journal 与'
+        'append-only adoption lineage；不改旧 source sidecar'),
     # ── stage2 那两条 0 成本但**会写盘**的路（F5-1 补）──
     # ⚠ 它们与上面 `--recheck` 那几条是同一类：**免费，但写盘**。
     #   本表存在的全部理由就是这一类（原型那句「`FREE_FLAGS` 只管钱不管写」
@@ -1692,14 +1765,16 @@ NODES: Final[dict[str, NodeSpec]] = {
     #   约 67k，Pro 一次过 out 中位约 22.8k。A 拆分后暂不凭架构变化静默翻默认，
     #   须在相同逐章契约下另行比较首次交付率、HARD、token 与墙钟再裁决。
     'stage4.design':    NodeSpec('stage4', 'R-5',  True,  'stage4 盲场景设计',
-                                  flags=('--dry-run', '--replan', '--adopt-rejected',
+                                  flags=('--dry-run', '--replan', '--repair-decision',
+                                         '--adopt-rejected',
                                          '--actor', '--reason', '--response-repair'),
                                   produces=(artifact_paths.STAGE4_BLIND_CANDIDATE,),
                                   model='deepseek-v4-pro'),
     'stage4.plan':      NodeSpec('stage4', 'R-5',  True,  'stage4 证据绑定与计划编译',
                                   flags=('--dry-run', '--check-only',
                                          '--revalidate', '--names-only', '--identity',
-                                         '--apply-edit', '--actor', '--reason',
+                                         '--apply-edit', '--apply-binding',
+                                         '--actor', '--reason',
                                          '--response-repair'),
                                   produces=(artifact_paths.STAGE4_EVIDENCE_BINDING,
                                             artifact_paths.STAGE4_PLAN_CHAPTERS),
@@ -1718,7 +1793,9 @@ NODES: Final[dict[str, NodeSpec]] = {
                                   flags=('--dry-run', '--recheck', '--revalidate',
                                          '--apply-edit', '--revise',
                                          '--chapters', '--actor', '--reason',
-                                         '--response-repair'),
+                                         '--subject-sha256',
+                                         '--emit-prepared-recovery-workpack',
+                                         '--recover-prepared', '--response-repair'),
                                  produces=(artifact_paths.STAGE5_CHAPTER,)),
     # ⚠ `--wontfix` 是**参数**不是 0 成本入口（见 `VALUED_FLAGS`），形态同 `--pick`。
     # ⚠⚠ `stage5/wontfix.json` **刻意不进 `produces`**，而它确实是本节点写的：
@@ -1856,6 +1933,8 @@ CONDITIONAL_REQUIRED_FLAGS: Final[dict[tuple[str, str], tuple[str, ...]]] = {
     ('stage4.plan', '--revalidate'): ('--actor', '--reason'),
     ('stage4.design', '--adopt-rejected'): ('--actor', '--reason'),
     ('stage5.write', '--revalidate'): ('--actor', '--reason'),
+    ('stage5.write', '--recover-prepared'): (
+        '--actor', '--reason', '--subject-sha256'),
     ('stage5.review', '--retain-pretrim'): ('--chapters', '--actor', '--reason'),
     ('stage6.hook', '--revalidate'): ('--actor', '--reason'),
     ('stage7.rename', '--revalidate'): ('--actor', '--reason'),

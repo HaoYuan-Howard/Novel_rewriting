@@ -7,7 +7,7 @@ from types import SimpleNamespace
 import pytest
 from pydantic import ValidationError
 
-from contracts.artifacts import STAGE4_PLAN_CHAPTERS
+from contracts.artifacts import STAGE4_EVIDENCE_BINDING, STAGE4_PLAN_CHAPTERS
 from contracts.invariants import APPROVAL_GATES, APPROVAL_SEEN
 from contracts.schema.api import (
     ApprovalDoc, StructureApprovalRequest, StructureApprovalView,
@@ -62,6 +62,8 @@ def isolated(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
         approvals, '_current_structure_subject_and_chapters',
         lambda _novel_dir: (state['subject'], list(state['chapters'])))
     monkeypatch.setattr(
+        approvals, '_current_binding_concerns', lambda _novel_dir: [])
+    monkeypatch.setattr(
         approvals, '_proof_for_structure',
         lambda _novel_dir, decision: _proof(
             decision, root=state['root'], plan=state['plan']))
@@ -70,7 +72,7 @@ def isolated(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
         approvals, '_read_current', lambda _base, _sid: state['record'])
 
     def write(base, record):
-        record = approvals._ApprovalRecordV5.model_validate(record.model_dump())
+        record = approvals._ApprovalRecordV6.model_validate(record.model_dump())
         state['record'] = record
         return approvals._view(base, record)
 
@@ -97,11 +99,15 @@ def test_request_is_strict_and_requires_sorted_unique_chapters_and_real_reasons(
             chapters=[{'output_ordinal': 1, 'decision': 'maybe', 'reason': 'no'}])
 
 
-def test_old_v5_record_without_typed_writing_fields_remains_readable():
+def test_old_v5_record_without_typed_writing_fields_remains_migratable():
     old_payload = approvals._fresh_record(SID).model_dump(
-        mode='json', exclude={'writing_history', 'writing_decision'})
+        mode='json', exclude={
+            'writing_history', 'writing_decision',
+            'design_history', 'design_decision',
+        })
+    old_payload['v'] = 5
 
-    restored = approvals._ApprovalRecordV5.model_validate(old_payload)
+    restored = approvals._ApprovalRecordV5Legacy.model_validate(old_payload)
 
     assert restored.writing_history == [] and restored.writing_decision is None
 
@@ -128,7 +134,8 @@ def test_structure_proof_binds_the_full_plan_path_and_exact_typed_decision(monke
     monkeypatch.setattr(approvals, '_make_proof', make)
     request = _request('accept', 'request_replan')
     approvals._proof_for_structure(Path('book'), request)
-    assert captured['rels'] == (STAGE4_PLAN_CHAPTERS,)
+    assert captured['rels'] == (
+        STAGE4_PLAN_CHAPTERS, STAGE4_EVIDENCE_BINDING)
     assert captured['decision'] == approvals._structure_decision_payload(request)
     assert captured['decision']['chapters'][1]['decision'] == 'request_replan'
 
@@ -179,14 +186,14 @@ def test_typed_writing_approval_persists_actor_reason_subject_and_history(
             base, SID, request.model_copy(update={'subject_sha256': SUBJECT_A}))
 
 
-def test_all_accept_opens_s4_persists_v5_history_and_is_idempotent(isolated):
+def test_all_accept_opens_s4_persists_v6_history_and_is_idempotent(isolated):
     base, _book, state = isolated
     request = _request('accept', 'accept')
     first = approvals.approve_structure(base, SID, request)
-    assert first.v == 4 and first.gate['s4']
+    assert first.v == 5 and first.gate['s4']
     assert first.structure.state == 'accepted'
     assert first.structure.current_decision is not None
-    assert state['record'].v == 5
+    assert state['record'].v == 6
     assert len(state['record'].structure_history) == 1
     assert state['record'].gate_proofs['s4'] == state['record'].structure_decision.proof
 
@@ -217,12 +224,12 @@ def test_request_replan_is_a_saved_decision_but_closes_s4_writing_and_downstream
     assert not doc.gate['s4'] and not doc.writing
     assert not any(doc.gate[gate] for gate in ('s5', 's6', 's7'))
     assert len(state['record'].structure_history) == 2
-    assert len(doc.spawns['s4']) == 1
-    assert doc.spawns['s4'][0].kind == 'stage4.design'
-    assert doc.spawns['s4'][0].extra == ['--replan']
+    # 最终结构拒绝只关闭 gate；A 的 repair/replan 必须来自独立 design review，
+    # 不能把 B 审阅意见伪装成一条未经 hash 绑定的 Stage4A 重跑授权。
+    assert doc.spawns.get('s4', []) == []
 
 
-def test_fresh_infeasible_binding_exposes_replan_without_plan_and_hides_reused_b(
+def test_fresh_infeasible_binding_requires_typed_resolution_and_hides_reused_b(
         isolated, monkeypatch):
     """B 的 typed 负结论也必须有可点击恢复，且不能继续提供必然复用它的 B。"""
     base, _book, _state = isolated
@@ -231,6 +238,7 @@ def test_fresh_infeasible_binding_exposes_replan_without_plan_and_hides_reused_b
         raise UpstreamMissing('infeasible 没有正式 plan')
 
     monkeypatch.setattr(approvals, '_current_structure_subject_and_chapters', no_plan)
+    monkeypatch.setattr(approvals, '_current_design_subjects', no_plan)
     monkeypatch.setattr(approvals, '_store_for', lambda _novel_dir: object())
     monkeypatch.setattr(
         approvals, 'current_infeasible_binding',
@@ -246,10 +254,7 @@ def test_fresh_infeasible_binding_exposes_replan_without_plan_and_hides_reused_b
     assert doc.structure.state == 'unavailable'
     assert doc.structure.current_subject_sha256 is None
     assert doc.spawns['s2'] == []
-    assert len(doc.spawns['s4']) == 1
-    assert doc.spawns['s4'][0].kind == 'stage4.design'
-    assert doc.spawns['s4'][0].extra == ['--replan']
-    assert '证据不可行' in doc.spawns['s4'][0].label
+    assert doc.spawns['s4'] == [], 'B 负结论不能替人伪造 A repair/replan 决定'
 
 
 def test_authorize_writing_requires_typed_s4_and_independent_writing_proof(
@@ -286,6 +291,67 @@ def test_authorize_writing_requires_typed_s4_and_independent_writing_proof(
     })
     with pytest.raises(ApprovalRequired, match='typed Stage4'):
         approvals.authorize_writing(base, SID, None)
+
+
+def test_prepared_recovery_requires_current_s4_and_writing_but_not_fresh_review(
+        isolated, monkeypatch):
+    """尾窗恢复只放宽旧 Review freshness，不放宽当前结构/写作/计划章集。"""
+    base, _book, state = isolated
+    checked: list[str] = []
+
+    def compatible(_novel_dir, *, action):
+        checked.append(action)
+        return SimpleNamespace(ctx=object()), SimpleNamespace(state='stale')
+
+    monkeypatch.setattr(
+        approvals, '_require_stage5_contract_compatible', compatible)
+    monkeypatch.setattr(approvals, '_planned', lambda _base, _sid: [1, 2])
+    from novel.stages.stage5 import review
+    monkeypatch.setattr(
+        review,
+        'require_fresh_review',
+        lambda *_args, **_kwargs: pytest.fail(
+            'prepared recovery 不得被正常 stale Stage5 Review 反向堵死'),
+    )
+
+    with pytest.raises(ApprovalRequired, match='typed Stage4'):
+        approvals.authorize_prepared_recovery(base, SID, [1, 2])
+
+    approvals.approve_structure(base, SID, _request('accept', 'accept'))
+    with pytest.raises(ApprovalRequired, match='whole-book writing'):
+        approvals.authorize_prepared_recovery(base, SID, [1, 2])
+
+    state['record'] = state['record'].model_copy(update={
+        'writing': True,
+        'writing_proof': _proof(_request('accept', 'accept')),
+    })
+    approvals.authorize_prepared_recovery(base, SID, [1, 2])
+    assert checked[-1] == '收口 prepared checkpoint'
+
+    with pytest.raises(HumanEditProtected, match='outside the current plan'):
+        approvals.authorize_prepared_recovery(base, SID, [1, 3])
+
+    state['record'] = state['record'].model_copy(update={
+        'writing': False,
+        'writing_proof': None,
+    })
+    with pytest.raises(ApprovalRequired, match='whole-book writing'):
+        approvals.authorize_prepared_recovery(base, SID, [1, 2])
+
+    state['record'] = state['record'].model_copy(update={
+        'writing': True,
+        'writing_proof': _proof(_request('accept', 'accept')),
+    })
+    gates = dict(state['record'].gate)
+    gate_proofs = dict(state['record'].gate_proofs)
+    gates['s4'] = False
+    gate_proofs['s4'] = None
+    state['record'] = state['record'].model_copy(update={
+        'gate': gates,
+        'gate_proofs': gate_proofs,
+    })
+    with pytest.raises(ApprovalRequired, match='typed Stage4'):
+        approvals.authorize_prepared_recovery(base, SID, [1, 2])
 
 
 @pytest.mark.parametrize('mutation', ['subject', 'root', 'plan'])
@@ -349,7 +415,7 @@ def test_explicit_v3_migration_preserves_at_most_s0_through_s2(
         lambda _novel_dir, gate, _record: proof)
 
     migrated, backfilled = approvals._migrate_legacy_v3(tmp_path, SID, legacy)
-    assert migrated.v == 5 and backfilled == []
+    assert migrated.v == 6 and backfilled == []
     assert 's3' not in migrated.gate
     assert not any(migrated.gate[gate] for gate in ('s4', 's5', 's6', 's7'))
     assert not migrated.writing
@@ -385,7 +451,7 @@ def test_structure_route_accepts_the_typed_body(monkeypatch, tmp_path):
             json=_request('accept', 'accept').model_dump(mode='json'),
         )
     assert got.status_code == 200, got.text
-    assert got.json()['v'] == 4
+    assert got.json()['v'] == 5
     assert captured['sid'] == SID
     assert isinstance(captured['request'], StructureApprovalRequest)
 

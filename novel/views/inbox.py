@@ -37,7 +37,7 @@ inbox.py —— 「待人工」八类清单的**生产者**（BE-04 第一条；
 from __future__ import annotations
 
 from contracts.artifacts import (
-    STAGE2_GLOBAL_REVIEW, STAGE6_HOOK, STAGE7_NAME_MAP,
+    STAGE2_GLOBAL_EDIT, STAGE2_GLOBAL_REVIEW, STAGE6_HOOK, STAGE7_NAME_MAP,
 )
 
 import os
@@ -72,7 +72,7 @@ _HUMAN_FLAGS: tuple[tuple[str, str], ...] = (
 )
 
 
-def _human_how(stage: str) -> str:
+def _human_how(stage: str, rule: str | None = None) -> str:
     """兜底的 0 成本人工路（有 `Rule.fix` 时用 fix 那条，更具体）——
     **按这一层真有的入口说话，不背一句常量。**
 
@@ -104,6 +104,12 @@ def _human_how(stage: str) -> str:
     ⚠ 一条都没有时**如实说没有**，不要编一个看起来像下一步的句子：
     「这一层没有 0 成本入口」与「有而我没告诉你」是两件事。
     """
+    if stage == 'stage2' and rule == 'conflict_stage_coverage':
+        return (
+            '用 GlobalEdit 的 `conflict_stages_replace` 完整重画分段，再跑 '
+            f'`stage2.global --apply-edit {STAGE2_GLOBAL_EDIT}`（0 成本）；'
+            '付费 `--resample` 只作最后手段')
+
     # ⚠ 外层是 flag、内层才是 node：`_HUMAN_FLAGS` 的顺序即优先级（改内容在前），
     #   反过来写会让优先级随 `NODES` 的排列漂。
     routes = [
@@ -479,7 +485,7 @@ def _report_items(
                        if fix is not None and fix.available
                        else f'机器修复路由暂不可执行：{fix.unavailable_reason}'
                        if fix is not None
-                       else _human_how(stage))
+                       else _human_how(stage, line.rule))
                 out.append(InboxItem(
                     kind='human_only', stage=stage, chapter=chapter, rule=line.rule,
                     what=finding.detail, how=how))

@@ -13,7 +13,8 @@ Stage 2 产出四份严格 JSON，另收两份人产的决策集：
 
 四份正式产物与两份人工决策集都使用当前 Pydantic `StrictModel`，未知字段拒收。运行时不升级旧形状，也不为
 缺失字段补默认值；需要保留的输入必须先按本文件的当前 schema 重新生成。旧
-GlobalGrounding / ChapterBlueprints 由各自 producer 重建；旧 GlobalEdit 由人按 v3 重写。
+GlobalGrounding / ChapterBlueprints 由各自 producer 重建；GlobalEdit v1/v2 由人按 v3
+重写，本批之前已经合法的 v3 无须补 `conflict_stages_replace` 仍可原样读取。
 
 ## 一、`global_grounding.json`
 
@@ -273,7 +274,7 @@ hinge 那一侧的 LCS 兜底本来就是禁的 ⇒ 那笔账**结构性恒空**
 ## 三之二、`global_edit.json`（Stage2 typed 事实的 0 成本人工订正）
 
 全局 typed 事实抽错、漏抽或 evidence 回取失败时的**契约内 0 LLM 修正入口**。它覆盖
-人物 role/fate/枚举、relation、setting、secret、world rule、arc track 与 address；
+人物 role/fate/枚举、relation、setting、secret、world rule、冲突阶段、arc track 与 address；
 逐格 patch 用稳定 ID/下标改已有记录，完整 replace 则表达新增、删除或复合事实拆分。
 所有会改自由 claim 的入口必须同交新 locator，不能让旧 evidence 继续给新 claim 背书。
 
@@ -289,12 +290,14 @@ hinge 那一侧的 LCS 兜底本来就是禁的 ⇒ 那笔账**结构性恒空**
 | `secrets_replace` | `SecretResponse[] \| null` | 完整替换 secrets；可拆分、新增、删除，事实与知情事件交 locator |
 | `world_rules_replace` | `WorldRuleResponse[] \| null` | 完整替换 world rules；可新增、删除，desc 交 locator |
 | `relations_replace` | `RelationResponse[] \| null` | 完整替换 relations；ID 唯一，predicate 交 locator |
+| `conflict_stages_replace` | `ConflictStage[] \| null` | 完整重画 `arc.conflict_stages`；至少一段，缺/重/越界与 producer 的 `conflict_stage_coverage` 共用同一覆盖量尺，并在赋值前原子拒绝 |
 | `arc_tracks_replace` | `ArcTrackResponse[] \| null` | 完整替换 arc tracks；至少一项，trajectory 交 locator |
 | `addresses_replace` | `CharacterAddressReplacement[]` | 每项按 `char_id` 完整替换其 `address`；列表至少一条，可改 `surface/by/context/from_chapter` |
 
 集合 replacement 的 `null` 表示「没动」，允许为空的集合用显式 `[]` 表示「经复核删除全集」；
-两者不能合成默认空列表。`arc_tracks_replace` 与 `addresses_replace[].address` 不允许空，因为正式
-`Arc.arc_tracks` / `Character.address` 至少一项。相同集合不能同时 patch+replace；相同 address
+两者不能合成默认空列表。`conflict_stages_replace`、`arc_tracks_replace` 与
+`addresses_replace[].address` 不允许空，因为正式 `Arc.conflict_stages` / `Arc.arc_tracks` /
+`Character.address` 至少一项。相同集合不能同时 patch+replace；相同 address
 不能既按下标 patch 又整组 replace。
 
 所有载体/目标/外键/章号/窗口拒收都发生在调用者对象修改、正式写盘、`.INVALID` 与
@@ -308,10 +311,11 @@ hinge 那一侧的 LCS 兜底本来就是禁的 ⇒ 那笔账**结构性恒空**
 | 同一 secret/world-rule/relation/arc-track 集合既逐项 patch 又完整 replace | 载体（`GlobalEdit`） | 两个写口争同一 subject，结果依赖应用顺序 |
 | 同一人物的 address 既按下标 patch 又完整 replace | 载体（`GlobalEdit`） | replacement 会改变下标含义，必须二选一 |
 | 逐项 patch 的目标不存在；replacement 的人物目标不存在 | `TerminalState` | 错的是决策集，不该给它建 `.INVALID` |
+| `conflict_stages_replace` 缺章、重章或越界 | `TerminalState` | 错的是 replacement；只在该字段出现时用 `checks.measure_conflict_stage_coverage` 预检，通过前不赋给候选，也不动正式稿、`.INVALID` 或 `_rounds/` |
 | claim 改了却没同交 locator，或 evidence 被单独清空 | 载体（各 typed patch） | 旧证据不能继续绑定新事实，失败态也必须是显式 `FactEvidence` |
 | 应用后任一窗口/知情/reveal/setup/规则/address/evidence 章号不在本书章集合，或 relation 截止早于起章 | `TerminalState` | 越界/倒序时间会让下发闸门失真，越界证据无法回取 |
 | relation 端点、via-secret、KnowledgeEvent CharacterRef 或 `address.by` 的外键悬空 | `TerminalState` | 自由群体必须走 GroupRef，不能靠伪造 `char_id` 绕过 |
-| 应用后仍有 HARD | `.INVALID` + `GateBlocked` | 与生成路同一道闸；正式全书底座不被覆盖 |
+| 应用后的完整候选仍有 HARD（包括未由本次 replacement 引入的既有冲突覆盖错误） | `.INVALID` + `GateBlocked` | 与生成路同一道闸；正式全书底座不被覆盖，其他 typed edit 仍可逐步修复既有问题稿 |
 
 应用后重走 `normalize_global`（含 `_prune_setups`）、当前判据与落盘闸门，旧轮进 `_rounds/`。
 来源账走 `rewrite_provenance(by='--apply-edit')`：`prompts`/`model` 一字不动、`inputs` 换成
@@ -322,8 +326,10 @@ hinge 那一侧的 LCS 兜底本来就是禁的 ⇒ 那笔账**结构性恒空**
 `item_id + kind + subject_path + subject_sha256` 四者均未变时继承；拆分 secret、新增规则或重建
 address 后的新 subject 一律回到 `pending`，旧复合事实的 PASS 不能跟随到新时间线。
 
-`global_edit.json` 当前为 schema v3。它与 GlobalGrounding v4 一样只保留
-`first_reveal_chapter` 和无标签弧线；本仓没有迁移器，旧决策集必须由人核对后重写。
+`global_edit.json` 当前为 schema v3。`conflict_stages_replace` 是可缺的兼容加法，
+旧 v3 决策集仍能原样读取，因此没有为它升版。它与 GlobalGrounding v4 一样只保留
+`first_reveal_chapter` 和无标签弧线；本仓没有迁移器，只有旧 v1/v2
+决策集必须由人核对后按 v3 重写。
 
 ⚠ 把揭示章往前改到埋点章之前时，`_prune_setups` 会裁掉埋点章，而 `secret_setup_order`
 （HARD）断言的正是那个裁剪计数 ⇒ **照样进 `.INVALID`**，0 成本出路是 `--renormalize`。
@@ -357,7 +363,7 @@ address 后的新 subject 一律回到 `pending`，旧复合事实的 PASS 不�
   该分派，不从可空 system 字段猜。
 - 正式写入前先跑严格载体校验与联合 HARD 闸门；失败响应进入 `.INVALID`，不会覆盖正式产物。
 - 本层没有旧 schema 迁移入口、字段别名或双形状读取路径。旧生成产物由 producer 重建，
-  旧 GlobalEdit 只由人重写为 v3。
+  GlobalEdit v1/v2 只由人重写为 v3；旧 v3 即使没有新增的可缺字段也仍可读。
 
 `--resample` 必须单独执行，并使用 `refresh-write`：不读同参数缓存，但合格的新响应仍写回缓存，
 避免下一次正常运行再次付费。请求或响应契约失败发生在写盘前，当前正式稿与问题稿都不动；新候选
@@ -381,16 +387,19 @@ address 后的新 subject 一律回到 `pending`，旧复合事实的 PASS 不�
 | 范围与必填 | `scope_violation` · `fact_atom_empty` |
 | 无条件读数 | `narration_voices` · `time_layer_mix` · `place_moves` · `present_broad` · `context_scope` · `span_coverage` · `span_coverage_per_chapter` · `uncovered_holes` · `hinge_density` |
 
-机器可读修复路由共 **34 条**：
+机器可读修复路由共 **33 条**：
 
 - `stage2.blueprint --chapters`: 15 条；
 - `stage2.blueprint --patch`: 1 条（`hinge_ambiguous`——字段级候选选择，量级是条不是章）；
-- `stage2.global --resample`: 16 条；
+- `stage2.global --resample`: 15 条；
 - `stage2.global --purge-role`: 1 条；
 - `stage2.global --renormalize`: 1 条。
 
 `global_evidence_unlocated` 不再把整份 `--resample` 暴露为默认路由：生成期先做确定性唯一回取，
 agent 期只修失败 evidence 槽；终态报告转人工 typed edit / `--revalidate`，显式整份重采仅作最后手段。
+`conflict_stage_coverage` 也不再默认指向付费 `--resample`；它转人工用
+`GlobalEdit.conflict_stages_replace` + `stage2.global --apply-edit` 完整重画（0 LLM），
+不在没有稳定行 ID 的数组上伪造逐项机器修复。
 `hedge_words` 只检查会进入写作/改名材料的 `role` 与 `canonical`；确定判断「不可能」不命中，
 「不太可能」「并非不可能」仍命中。`fate` 使用独立的 `fate_hedge_words` INFO，只披露、不阻断。
 `beats_collapsed` 继续 HARD；`beats_coarse` 是同书长尾 INFO，没有付费重生成路由。

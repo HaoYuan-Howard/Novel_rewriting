@@ -7,16 +7,21 @@ import { Rail } from './Rail'
 import type { ApprovalDoc } from '@/types/approvals'
 
 const pending: ApprovalDoc = {
-  v: 4,
+  v: 5,
   sid: 'book-1',
   gate: { s0: false, s1: false, s2: false, s4: false, s5: false, s6: false, s7: false },
   seen: { read: false, global: false },
   writing: false,
+  design_review: {
+    state: 'unavailable', candidate_sha256: null, aggregate_subject_sha256: null,
+    current_decision: null, history: [], binding_infeasibility: null, repair_capability: null,
+  },
   structure: {
     state: 'unavailable',
     current_subject_sha256: null,
     current_decision: null,
     history: [],
+    binding_concerns: [],
   },
   spawns: {},
 }

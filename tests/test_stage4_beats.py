@@ -4,17 +4,20 @@
 from __future__ import annotations
 
 import copy
+import itertools
+import math
 
 import pytest
 from pydantic import ValidationError
 
+from contracts.invariants import CHAPTER_WEIGHT_RATIO, PLAN_BUDGET_BAND
 from contracts.schema.stage4 import BlindSceneResponse, PlanChapters
 from novel.errors import RefusedByStructure
 from novel.stages.stage4 import checks
 from novel.stages.stage4.beats import beat_index, verbatim_pieces
 from novel.stages.stage4.measure import (
-    adopt_plan_response, computed_structure_change_kinds, identity_plan,
-    semantic_contract_of, source_chars_table, structure_metrics_of,
+    _bounded_round_shares, adopt_plan_response, computed_structure_change_kinds,
+    identity_plan, semantic_contract_of, source_chars_table, structure_metrics_of,
 )
 
 
@@ -182,6 +185,118 @@ def test_scene_compiler_refuses_unknown_stage_refs():
     raw['output_chapters'][0]['scenes'][0]['stage_refs'] = ['b02_01']
     with pytest.raises(RefusedByStructure, match='stage_refs'):
         adopt_plan_response(raw, _blueprints(), beat_index(_blueprints(), _main()))
+
+
+def test_scene_compiler_reuses_the_context_ruler_and_accepts_a_prior_land(
+        monkeypatch):
+    """完整场景编译不能另留一份「context 只许引用 context 原子」的旧规则。"""
+    raw = _response()
+    raw['output_chapters'][0]['scenes'][1]['context_fact_refs'] = ['f01_002']
+    calls: list[tuple[list[dict], set[str]]] = []
+    production = checks.context_ref_findings
+
+    def traced(scenes, *, context_obligation_refs, land_key, context_key):
+        calls.append((scenes, context_obligation_refs))
+        return production(
+            scenes, context_obligation_refs=context_obligation_refs,
+            land_key=land_key, context_key=context_key)
+
+    monkeypatch.setattr(checks, 'context_ref_findings', traced)
+    adopt_plan_response(raw, _blueprints(), beat_index(_blueprints(), _main()))
+
+    assert len(calls) == 1, 'allocator/场景编译必须走 checks 的唯一 context 判据口'
+    assert raw['output_chapters'][0]['scenes'][1]['context_fact_refs'] == ['f01_002']
+
+
+@pytest.mark.parametrize(('scene_index', 'ref'), ((0, 'f01_003'), (0, 'f01_002')))
+def test_scene_compiler_still_refuses_future_or_same_scene_context_land(
+        scene_index: int, ref: str):
+    raw = _response()
+    raw['output_chapters'][0]['scenes'][scene_index]['context_fact_refs'] = [ref]
+    with pytest.raises(RefusedByStructure, match='context_fact_refs'):
+        adopt_plan_response(raw, _blueprints(), beat_index(_blueprints(), _main()))
+
+
+def _budget_case(sizes: list[int], weights: list[str]) -> tuple[dict, dict]:
+    blueprints: list[dict] = []
+    chapters: list[dict] = []
+    for ordinal, (size, weight) in enumerate(zip(sizes, weights), 1):
+        fact_id = f'f{ordinal:02d}_001'
+        beat_id = f'b{ordinal:02d}_01'
+        span = {'text': '甲' * size, 'start': 0, 'end': size}
+        blueprints.append({
+            'chapter_ordinal': ordinal,
+            'chapter_function': '验证确定性预算分配',
+            'fact_atoms': [{
+                'fact_id': fact_id, 'claim': f'第{ordinal}章事实', 'kind': 'event',
+                'obligation': 'land', 'source_beat_ref': beat_id, 'source': span,
+                'participant_char_ids': [],
+            }],
+            'causal_edges': [], 'entry_state_refs': [], 'ending_state_refs': [fact_id],
+            'beats': [{
+                'beat_id': beat_id, 'span': span, 'time_layer': 'present',
+                'place': '室内', 'present_char_ids': [], 'hinges': [],
+            }],
+            'narration': [],
+        })
+        chapters.append({
+            'output_ordinal': ordinal, 'weight': weight,
+            'scenes': [{
+                'weight': 'mid', 'role': 'payoff', 'delivery': 'scene',
+                'transition': 'start', 'purpose': '落地本章事实',
+                'land_fact_refs': [fact_id], 'context_fact_refs': [],
+                'material_refs': [], 'stage_refs': [beat_id],
+                'turn_fact_ref': fact_id, 'entry_state_refs': [],
+                'exit_state_refs': [fact_id],
+            }],
+        })
+    return {'blueprints': blueprints}, {'output_chapters': chapters}
+
+
+def _chapter_budget_totals(plan: dict) -> list[int]:
+    return [sum(scene['budget_chars'] for scene in chapter['scenes'])
+            for chapter in plan['output_chapters']]
+
+
+def test_chapter_budget_allocator_clamps_and_redistributes_the_real_failure_shape():
+    """minor 小章的裸归一份额会是 48.8/65；应夹到 52，再把残差给另一章。"""
+    sizes = [288, 65]
+    blueprints, plan = _budget_case(sizes, ['major', 'minor'])
+    adopt_plan_response(plan, blueprints, {})
+
+    assert _chapter_budget_totals(plan) == [301, 52]
+    assert sum(_chapter_budget_totals(plan)) == sum(sizes)
+
+
+def test_bounded_rounding_preserves_total_band_and_determinism_for_all_weight_pairs():
+    sizes = [65, 288]
+    lo, hi = PLAN_BUDGET_BAND
+    lower = [math.ceil(size * lo) for size in sizes]
+    upper = [math.floor(size * hi) for size in sizes]
+    for weights in itertools.product(CHAPTER_WEIGHT_RATIO, repeat=len(sizes)):
+        raw = [size * CHAPTER_WEIGHT_RATIO[weight]
+               for size, weight in zip(sizes, weights)]
+        first = _bounded_round_shares(raw, sum(sizes), lower, upper)
+        second = _bounded_round_shares(raw, sum(sizes), lower, upper)
+        assert first == second
+        assert sum(first) == sum(sizes)
+        assert all(left <= value <= right
+                   for value, left, right in zip(first, lower, upper))
+
+
+def test_budget_allocator_postconditions_are_green_at_the_production_checker():
+    sizes = [37, 65, 288, 411, 73]
+    weights = ['minor', 'below', 'even', 'above', 'major']
+    blueprints, plan = _budget_case(sizes, weights)
+    adopt_plan_response(plan, blueprints, {})
+
+    outcomes = {outcome.rule: outcome for outcome in checks.check(
+        plan, blueprints=blueprints,
+        main_text=[{'chapter_ordinal': ordinal, 'text': '甲' * size}
+                   for ordinal, size in enumerate(sizes, 1)])}
+    assert list(outcomes['budget_band'].findings) == []
+    assert list(outcomes['plan_book_band'].findings) == []
+    assert sum(_chapter_budget_totals(plan)) == sum(sizes)
 
 
 def test_identity_plan_is_an_explicit_source_order_baseline_but_uses_scenes():

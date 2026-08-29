@@ -72,8 +72,12 @@ OPTIONAL_HUMAN_NODES: frozenset[str] = frozenset({'stage0.edit'})
 #: 待人工清单非空时挡队列的那个理由（`INBOX_KIND` 的 `invalid`）。
 WAITING_ON_INBOX = 'inbox:invalid'
 WAITING_ON_STAGE2_REVIEW = 'approval:stage2-global-review'
-WAITING_ON_STAGE4_PHASE_APPROVAL = 'approval:stage4-bind'
-WAITING_ON_STAGE4_REPLAN = 'approval:stage4-replan'
+WAITING_ON_STAGE4_DESIGN_REVIEW = 'approval:stage4-design-review'
+WAITING_ON_STAGE4_BINDING_RESOLUTION = 'approval:stage4-binding-resolution'
+WAITING_ON_STAGE4_STRUCTURE_REVIEW = 'approval:stage4-structure-review'
+# 兼容只 import 常量名的旧调用者；值已收敛到两张真实决定面。
+WAITING_ON_STAGE4_PHASE_APPROVAL = WAITING_ON_STAGE4_DESIGN_REVIEW
+WAITING_ON_STAGE4_REPLAN = WAITING_ON_STAGE4_BINDING_RESOLUTION
 WAITING_ON_WRITING_APPROVAL = 'approval:stage5-writing'
 WAITING_ON_REVIEW = 'stage5:review-currentness'
 WAITING_ON_LEGACY = 'legacy_incompatible'
@@ -260,7 +264,7 @@ def plan_book(base: str | os.PathLike[str], sid: str, *, until_stage: str,
             if _stage4_replan_required(base, sid):
                 # B 的负结论已经是正式终态；这份队列不得继续暴露同一个 B argv，
                 # 更不能把旧的一次性授权解释成重采 A。恢复须另行 preview/confirm。
-                why_blocked = WAITING_ON_STAGE4_REPLAN
+                why_blocked = WAITING_ON_STAGE4_BINDING_RESOLUTION
             else:
                 design_verdict, _design_why = st.resume_verdict(ov, 'stage4.design')
             if (why_blocked is None
@@ -268,7 +272,20 @@ def plan_book(base: str | os.PathLike[str], sid: str, *, until_stage: str,
                 # A 还没有一份当前候选时，本次队列只能确认并执行 A。
                 # B 必须等 A 落盘、人看过候选后重新 plan/preview/--yes；
                 # 否则“队列一次确认”会偷偷合并产品明定的两次付费决定。
-                why_blocked = WAITING_ON_STAGE4_PHASE_APPROVAL
+                why_blocked = WAITING_ON_STAGE4_DESIGN_REVIEW
+            if (
+                why_blocked is None
+                and not approvals.design_review_is_current(base, sid)
+            ):
+                why_blocked = WAITING_ON_STAGE4_DESIGN_REVIEW
+        if why_blocked is None and node == 'stage4.context':
+            try:
+                approvals.authorize_context(base, sid)
+            except (
+                ApprovalRequired, UpstreamMissing, ArtifactUnreadable,
+                GateBlocked, UpstreamStale, UpstreamUnproven,
+            ):
+                why_blocked = WAITING_ON_STAGE4_STRUCTURE_REVIEW
         review_follows_planned_write = (
             node == 'stage5.review'
             and stage5_write_will_run
@@ -334,7 +351,9 @@ def plan_book(base: str | os.PathLike[str], sid: str, *, until_stage: str,
 
         if why_blocked in (
             WAITING_ON_STAGE2_REVIEW,
-            WAITING_ON_STAGE4_PHASE_APPROVAL, WAITING_ON_STAGE4_REPLAN,
+            WAITING_ON_STAGE4_DESIGN_REVIEW,
+            WAITING_ON_STAGE4_BINDING_RESOLUTION,
+            WAITING_ON_STAGE4_STRUCTURE_REVIEW,
         ):
             # 人审/相位决定完成前，当前队列快照里不放下游付费 argv。状态改变后
             # 必须重新 plan，不能把旧快照重解释为新授权。
@@ -390,16 +409,22 @@ def _blocked_why(waiting_on: str, verdict_why: str) -> str:
             '可以先后生成并在人工阅读期间并行推进，但 Stage4A/B、写作上下文、后续'
             '付费调用与最终成书都不会越过这道门；处理完具体终态后请重新预览队列；'
             f'{verdict_why}')
-    if waiting_on == WAITING_ON_STAGE4_PHASE_APPROVAL:
+    if waiting_on == WAITING_ON_STAGE4_DESIGN_REVIEW:
         return (
-            'Stage4A 尚未产生可人工检查的当前盲候选；本次队列只能跑 A。'
-            'A 落盘后请先审阅，再重新预览并明确批准付费 Stage4B；'
+            'Stage4A 尚无当前全书 all-accept typed 盲审；若候选尚未落盘，本次'
+            '队列只能跑 A。A 落盘后请完成策略与逐章审阅，再重新预览并明确批准'
+            '付费 Stage4B；'
             f'{verdict_why}')
-    if waiting_on == WAITING_ON_STAGE4_REPLAN:
+    if waiting_on == WAITING_ON_STAGE4_BINDING_RESOLUTION:
         return (
             'Stage4B 已对当前 Stage4A 候选落盘 fresh typed infeasible 结论；'
-            '队列不会再次暴露或执行同一个 B。请另行预览并批准 '
-            '`stage4.design --replan`，新候选落盘后再单独确认 B；'
+            '队列不会再次暴露或执行同一个 B，也不会替人猜 repair/replan。'
+            '请先提交当前 hash-bound design resolution，执行对应 A 修订后再单独确认 B；'
+            f'{verdict_why}')
+    if waiting_on == WAITING_ON_STAGE4_STRUCTURE_REVIEW:
+        return (
+            'Stage4B 的最终 Plan 尚未在当前主体上逐章 all-accept；免费 '
+            '`stage4.context` 也必须等这张最终结构票，审批后重新预览才会出现；'
             f'{verdict_why}')
     if waiting_on == WAITING_ON_REVIEW:
         return ('Stage5 Review 不是 fresh，旧结论不得驱动付费作业；'
@@ -1030,7 +1055,16 @@ def _run_lane(base: str | os.PathLike[str], queue_id: str, sid: str, *,
                     note=reason)
             try:
                 prepare = None
-                if entry.item.node == 'stage5.write':
+                if entry.item.node == 'stage4.design' and not entry.item.flags:
+                    prepare = lambda: approvals.authorize_design_initial(
+                        base, entry.item.sid)
+                elif entry.item.node == 'stage4.plan':
+                    prepare = lambda: approvals.authorize_plan(
+                        base, entry.item.sid)
+                elif entry.item.node == 'stage4.context':
+                    prepare = lambda: approvals.authorize_context(
+                        base, entry.item.sid)
+                elif entry.item.node == 'stage5.write':
                     chapters = _chapters_from_flags(entry.item.flags)
                     prepare = lambda chapters=chapters: approvals.authorize_writing(
                         base, entry.item.sid, chapters)
@@ -1271,7 +1305,10 @@ def resume_incomplete(base: str | os.PathLike[str], *,
 __all__ = [
     'HUMAN_NODES', 'OPTIONAL_HUMAN_NODES', 'WAITING_ON_INBOX',
     'WAITING_ON_STAGE2_REVIEW',
-    'WAITING_ON_STAGE4_PHASE_APPROVAL',
+    'WAITING_ON_STAGE4_DESIGN_REVIEW',
+    'WAITING_ON_STAGE4_BINDING_RESOLUTION',
+    'WAITING_ON_STAGE4_STRUCTURE_REVIEW',
+    'WAITING_ON_STAGE4_PHASE_APPROVAL', 'WAITING_ON_STAGE4_REPLAN',
     'WAITING_ON_WRITING_APPROVAL', 'WAITING_ON_REVIEW', 'WAITING_ON_LEGACY',
     'WAITING_ON_RESUME_DECISION', 'WAITING_ON_RESTART_CONFIRMATION', 'WAITING_ON_REPLAN',
     'QueueRegistry', 'append_event', 'cancel', 'confirm', 'create', 'fold',

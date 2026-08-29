@@ -21,6 +21,10 @@ def test_gate_spawns_follow_the_same_disk_resume_verdict(monkeypatch, tmp_path):
     monkeypatch.setattr(
         approvals.state, 'resume_verdict',
         lambda overview, node: (verdicts.get(node, approvals.state.RESUME_RUN), node))
+    design_review = {'accepted': False}
+    monkeypatch.setattr(
+        approvals, 'design_review_is_current',
+        lambda _base, _sid: design_review['accepted'])
 
     fresh = approvals.get(tmp_path, '123')
     assert [action.kind for action in fresh.spawns['s1']] == ['stage2.global']
@@ -38,6 +42,10 @@ def test_gate_spawns_follow_the_same_disk_resume_verdict(monkeypatch, tmp_path):
     assert stage2_done.spawns['s1'] == []
 
     verdicts['stage4.plan'] = approvals.state.RESUME_RUN
+    missing = approvals.get(tmp_path, '123')
+    assert missing.spawns['s2'] == [], 'A 候选落盘不等于 A 人审已通过'
+
+    design_review['accepted'] = True
     missing = approvals.get(tmp_path, '123')
     assert [action.kind for action in missing.spawns['s2']] == ['stage4.plan']
 
@@ -60,10 +68,10 @@ def test_default_approval_value_is_not_mistaken_for_a_saved_human_choice(
         lambda _overview, node: (approvals.state.RESUME_RUN, node))
 
     doc = approvals.get(tmp_path, '123')
-    assert doc.v == 4 and not doc.writing
-    assert 'deep' not in type(doc).model_fields, 'public v4 不得重新暴露已退役的双臂决定'
+    assert doc.v == 5 and not doc.writing
+    assert 'deep' not in type(doc).model_fields, 'public v5 不得重新暴露已退役的双臂决定'
     assert not approvals.has_record(tmp_path, '123')
 
-    # 盘上即使已有一份 v5 记录，writing 没有当前 subject proof 仍不是花钱授权。
+    # 盘上即使已有一份 v6 记录，writing 没有当前 subject proof 仍不是花钱授权。
     approvals._write(tmp_path, approvals._fresh_record('123', [1, 2, 3]))
     assert not approvals.has_record(tmp_path, '123')

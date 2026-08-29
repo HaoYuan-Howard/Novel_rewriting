@@ -40,7 +40,7 @@ const rows: Stage4IndexRow[] = [
 
 function undecided(): ApprovalDoc {
   return {
-    v: 4,
+    v: 5,
     sid: 'book-1',
     gate: {
       s0: true, s1: true, s2: true,
@@ -48,11 +48,21 @@ function undecided(): ApprovalDoc {
     },
     seen: { read: true, global: true },
     writing: false,
+    design_review: {
+      state: 'accepted', candidate_sha256: 'c'.repeat(64),
+      aggregate_subject_sha256: 'd'.repeat(64), current_decision: null, history: [],
+      binding_infeasibility: null,
+      repair_capability: {
+        repairable: true, reason_code: 'ready',
+        chapters: [{ output_ordinal: 3, committed_rounds: 0, request_repair_available: true }],
+      },
+    },
     structure: {
       state: 'missing',
       current_subject_sha256: SUBJECT,
       current_decision: null,
       history: [],
+      binding_concerns: [],
     },
     spawns: {},
   }
@@ -63,6 +73,75 @@ beforeEach(() => {
 })
 
 describe('Stage4 typed 结构审批', () => {
+  it('A 不是服务端 current accepted 时不呈现 B 审批表单', async () => {
+    vi.spyOn(api, 'getEnums').mockResolvedValue(await mockApi.getEnums())
+    vi.spyOn(api, 'getApprovals').mockResolvedValue({
+      ...undecided(),
+      design_review: {
+        state: 'expired', candidate_sha256: 'c'.repeat(64),
+        aggregate_subject_sha256: 'd'.repeat(64), current_decision: null, history: [],
+        binding_infeasibility: null,
+        repair_capability: {
+          repairable: true, reason_code: 'ready',
+          chapters: [{ output_ordinal: 3, committed_rounds: 0, request_repair_available: true }],
+        },
+      },
+    })
+    const approve = vi.spyOn(api, 'approveStructure')
+
+    renderRoute(
+      <StructureApprovalPanel
+        rows={rows}
+        identity={false}
+        viewSubject={SUBJECT}
+        onRefreshView={vi.fn()}
+      />,
+      '/n/book-1/stage4/1',
+    )
+
+    expect(await screen.findByText('Stage4B 最终计划审批正在等待 A')).toBeVisible()
+    expect(screen.getByText(/expired/)).toBeVisible()
+    expect(screen.queryByRole('button', { name: '保存全书结构裁决' })).not.toBeInTheDocument()
+    expect(approve).not.toHaveBeenCalled()
+  })
+
+  it('逐条展示 B 绑定关注项，但不按数量自动生成结构裁决', async () => {
+    vi.spyOn(api, 'getEnums').mockResolvedValue(await mockApi.getEnums())
+    vi.spyOn(api, 'getApprovals').mockResolvedValue({
+      ...undecided(),
+      structure: {
+        ...undecided().structure,
+        binding_concerns: [{
+          constraint_code: 'material_overlap',
+          chapter_ordinal: 2,
+          scenes: ['c02s01', 'c02s03'],
+          reason: '两场依赖同一闭合事实，需要人确认不会重复揭示。',
+          closed_refs: ['a_1234567890abcdef'],
+        }],
+      },
+    })
+    const approve = vi.spyOn(api, 'approveStructure')
+
+    renderRoute(
+      <StructureApprovalPanel
+        rows={rows}
+        identity={false}
+        viewSubject={SUBJECT}
+        onRefreshView={vi.fn()}
+      />,
+      '/n/book-1/stage4/1',
+    )
+
+    expect(await screen.findByText('Stage4B 绑定关注项')).toBeVisible()
+    expect(screen.getByText('非阻断但需人审；数量不会自动改变逐章裁决')).toBeVisible()
+    expect(screen.getByText('material_overlap')).toBeVisible()
+    expect(screen.getByText('场景：c02s01、c02s03')).toBeVisible()
+    expect(screen.getByText('两场依赖同一闭合事实，需要人确认不会重复揭示。')).toBeVisible()
+    expect(screen.getByText('closed_refs：a_1234567890abcdef')).toBeVisible()
+    expect(screen.getByLabelText('第 1 章结构裁决')).toHaveValue('')
+    expect(approve).not.toHaveBeenCalled()
+  })
+
   it('展示完整 subject 与逐章计划决定，并原子提交服务端枚举给出的全章裁决', async () => {
     const doc = undecided()
     const enums = await mockApi.getEnums()
@@ -104,6 +183,7 @@ describe('Stage4 typed 结构审批', () => {
           current_subject_sha256: SUBJECT,
           current_decision: decided,
           history: [decided],
+          binding_concerns: [],
         },
         spawns: { s4: [replan] },
       }
@@ -191,7 +271,7 @@ describe('Stage4 typed 结构审批', () => {
       ...doc,
       structure: {
         state: 'unavailable', current_subject_sha256: null,
-        current_decision: null, history: [],
+        current_decision: null, history: [], binding_concerns: [],
       },
       spawns: { s2: [], s4: [replan] },
     })
@@ -246,6 +326,7 @@ describe('Stage4 typed 结构审批', () => {
         current_subject_sha256: approvalSubject,
         current_decision: null,
         history: [],
+        binding_concerns: [],
       },
     })
     vi.spyOn(api, 'getEnums').mockResolvedValue(await mockApi.getEnums())

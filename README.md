@@ -15,8 +15,9 @@
   改名与成书，最终产出 `stage7/<书名>_rewriting.txt`。
 - 工具的主要风险不是程序崩溃，而是 LLM 造事实、提前泄密或漏掉内容后仍写得通顺。因此产品是
   “审校台”而不是 dashboard：主体动作是并排对照证据，再由人做决定。
-- stage0 批准是全链第一个人工硬闸；Stage4 计划另有绑定当前结构主体的逐章人工批准，Stage5 的
-  付费写作授权与它独立；stage6 与 stage7 的人工定稿是各自产物进入下游的语义闸。
+- stage0 批准是全链第一个人工硬闸；Stage4 有两张不同的票：A 候选先经全书策略 + 逐章正式审阅，
+  只授权 B；B 编译出的计划再经最终逐章结构批准，才打开 s4。Stage5 的付费写作授权与二者独立；
+  stage6 与 stage7 的人工定稿是各自产物进入下游的语义闸。
 - Stage2 称名投影可用后，人可一边复核 global、一边让 blueprint 逐章计算；两支必须在 Stage4A
   前汇合为 current 正式 global + current blueprint、联合 HARD 通过与 current blocking 面全 PASS 人审。同书的
   review / typed edit / producer 写回仍串行，不能把“人机并行”解释成并发改文件。
@@ -36,10 +37,11 @@ stage2  全书级抽取（人物/关系/规则/秘密/弧线）  1 次调用
           └─ 全局事实逐项人审                         0 成本，与逐章计算重叠
         两支汇合：blueprint 联合 check-only + current blocking 面全 PASS 人审；随后才进 Stage4A
 stage4  A：1 个公开付费节点/授权；内部 1 份整书策略 + 每章 1 个私有 session
-          策略串行先行，逐章最多 4 并发；全部通过后才确定性聚合并原子落盘
-        B：只给冻结候选绑定舞台/人物/材料并编译计划 1 次独立调用（不变）
-        人工逐章结构批准（不自动触发重规划）       0 成本
-        写作上下文（确定性组装，写作的唯一输入） 0 成本
+           策略串行先行，逐章最多 4 并发；全部通过后才确定性聚合并原子落盘
+        A 正式审阅：全书策略 + 逐章 accept/repair；拒绝章可 hash-bound 定向修订 0 成本审阅
+        B：只给已审阅候选绑定舞台/人物/材料并编译计划 1 次独立调用
+        最终人工逐章结构批准（不自动触发重规划） 0 成本
+        写作上下文（最终批准后独立确定性组装，写作的唯一输入） 0 成本
 stage5  全书逐章闭卷写作；正式稿唯一落 `stage5/chNN.json`，默认补齐全部缺章
         最多 32 并发，`--chapters` 只定向重写指定章；旧 Stage5 目录报 `legacy_incompatible`
         全书机械验收（判成品）+ 修订式修复（旧称「反哺」） 0 成本 / 逐章调用
@@ -63,7 +65,17 @@ JSON/schema/动态判据后立即写验证后 checkpoint，再按章启动互相
 每章通过即 checkpoint，同一 `run_id` 恢复时只补缺失或失败单元，已验策略和章节不重发 wire。
 这些 checkpoint 都不是正式 artifact：必须等策略与全部章节齐全，由代码确定性还原正式 alias、排序并
 组装整书候选，重跑整书级 schema 与全部 HARD，最后才原子写入 `stage4/blind_candidate.json`；任何
-中断或聚合失败都不得留下部分正式候选。Stage4B 仍是另一个公开节点、另一次授权和一次独立调用。
+中断或聚合失败都不得留下部分正式候选。候选落盘并不授权 B：必须先提交绑定当前候选的正式设计审阅。
+已接受且主体未变的章可在下一次整书原子决定中复用；被拒章只按关闭式约束定向修订，策略被拒才整书
+重规划。Stage4B 仍是另一个公开节点、另一次授权和一次独立调用；模型声称 `infeasible` 只有经代码
+构造性证明后才能成为正式终态，否则在同一 session 要求返回完整绑定。
+
+Stage5 同一 run 的正常中断继续复用原 `run_id` 恢复 checkpoint。若代码已变化、旧 run 已完成
+响应与 checkpoint 却停在 foreign `prepared` 提交尾窗，默认付费写作会在 client/driver 前关闭式
+拒绝；只能显式先 `--emit-prepared-recovery-workpack <SOURCE_RUN_ID>`，再在同一个新 target run
+提交 hash-bound `--recover-prepared`。该桥完整复验旧 ledger/session/request/sidecar 与当前
+上游/HARD/live baseline，零 driver、零 wire，source sidecar 只读；收口后仍须单独跑
+`stage5.review`。命令与中断恢复细节见 `.claude/skills/novel-pipeline-operator/references/recovery.md`。
 
 Stage5 的 canonical v2 产物与单臂工作流已完成工程回归；现役 atom / scene / material 写作契约属于
 设计改进，但没有完成与此前 event-list / beat-material 契约的受控双书付费 A/B，不能据此宣称质量更高、成本更低
@@ -81,7 +93,7 @@ Stage5 的 canonical v2 产物与单臂工作流已完成工程回归；现役 a
 | stage0 | 剔除番外、后记、尾声、作者有话说 | 整本审阅删除范围；可直接修正范围或正文；批准后才下行 |
 | stage1 | 确定性分章 | 原文与切分并排，确认无漏章、错章、断号 |
 | stage2 | 全书事实底座与逐章事实原子/舞台证据 | 称名投影可用后即可让 blueprint 计算，并与 global 复核重叠；Stage4 前 blocking 面必须全部 PASS，disclosure 未决项继续披露 |
-| stage4 | 盲设计、证据绑定、计划编译与写作上下文 | 逐章审阅 retain/reconstruct、入口/分组/披露读数与证据落点；接受或请求重规划 |
+| stage4 | 盲设计、证据绑定、计划编译与写作上下文 | 先审 A 的全书策略与逐章候选，接受或定向返修；再审 B 编译计划的入口/分组/披露读数、证据落点与 binding concerns |
 | stage5 | canonical 闭卷写作与机械验收 | 材料与成稿、原文与改写、finding 与修订面 |
 | stage6 | 生成三个开篇文案候选 | 三候选并排，人选一条定稿 |
 | stage7 | 生成人名决策，确定性替换并组书 | 新旧名表、漏网候选和逐章替换前后；人定稿 |

@@ -70,7 +70,12 @@ def _executor_flags(node: str, tokens: frozenset[str]) -> list[str]:
     assert set(ordered) == set(tokens), f'{node} 的 executor token 未登记进 NodeSpec.flags'
     out: list[str] = []
     for flag in ordered:
-        out += [flag, '1,3'] if flag == '--chapters' else [flag]
+        if flag == '--chapters':
+            out += [flag, '1,3']
+        elif flag in VALUED_FLAGS:
+            out += [flag, 'a' * 64]
+        else:
+            out.append(flag)
     return out
 
 
@@ -212,7 +217,18 @@ def test_node_specific_write_effects_keep_all_three_identity_behaviors_distinct(
 
 @pytest.mark.parametrize('node,flag', CASES, ids=lambda v: str(v))
 def test_every_registered_run_mode_builds_a_command(node, flag):
-    argv = N.build_argv(node, SID, _args(flag, node), base=BASE)
+    # ``--subject-sha256`` 是 recovery 的 hash-bound 参数，不是独立入口；
+    # 单独出现必须继续关闭式拒绝，这张正向矩阵则物化它所属的完整合法组合。
+    flags = (
+        [
+            '--recover-prepared', 'source-run-1',
+            '--actor', 'operator', '--reason', '逐项核对',
+            '--subject-sha256', 'a' * 64,
+        ]
+        if (node, flag) == ('stage5.write', '--subject-sha256')
+        else _args(flag, node)
+    )
+    argv = N.build_argv(node, SID, flags, base=BASE)
     assert argv[0] == sys.executable
     assert node in argv and SID in argv
 
@@ -360,7 +376,7 @@ def test_executor_runtime_registries_close_over_the_same_eight_nodes():
 
     expected = set(AGENT_EXECUTOR_NODES)
     assert len(expected) == len(N.EXECUTOR_PROFILED_RUNS) == 8
-    assert sum(len(rows) for rows in N.EXECUTOR_PROFILED_RUNS.values()) == 12
+    assert sum(len(rows) for rows in N.EXECUTOR_PROFILED_RUNS.values()) == 13
     assert set(EXECUTOR_FACTORIES) == set(N.EXECUTOR_PROFILED_RUNS) == expected
 
 

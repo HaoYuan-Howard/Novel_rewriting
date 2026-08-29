@@ -86,10 +86,10 @@ Phase 4 增加 `stage6.semantic + flags=[]`，并为 direct executor 纵切接�
 checkpoint 可完整或单边恢复，代码以 prepared journal → 正式写盘 → typed readback → 双 adoption →
 committed 收口并做最终校验，不由 agent 自述补判，也不回退 DeepSeek。
 
-Phase 5 把后端 direct profile 收口为 **8 节点 / 12 种 flag-token 组合**：
+Phase 5 把后端 direct profile 收口为 **8 节点 / 13 种 flag-token 组合**：
 
 - Stage2：`stage2.global []`、`stage2.blueprint []`；
-- Stage4：`stage4.design [] / [--replan]`、`stage4.plan []`；
+- Stage4：`stage4.design [] / [--replan] / [--repair-decision]`、`stage4.plan []`；
 - Stage5：`stage5.write [] / [--chapters] / [--revise] / [--revise,--chapters]`；
 - Stage6：`stage6.hook []`、`stage6.semantic []`；
 - Stage7：`stage7.rename []`。
@@ -126,7 +126,7 @@ Phase 6 同时接通 outer Commander：preview/start/batch 共用后端唯一 pl
 - real 与 mock 适配器满足同一 TypeScript 接口；真实模式不允许缺端点时回退 mock。
 - 写请求携带 `X-Novel-UI: 1`；服务进程只写 `_service/`，产物变更经 CLI 子进程。
 - action、枚举、付费与写盘语义由服务端 `/api/enums` 和 preview 返回；前端不保存第二份判定表。
-- agent driver / model / effort / execution mode 由 `/api/agent/capabilities` 发布；`useAgentCapabilities` 使用 no-store 语义，页面按响应动态构造 Commander / 默认 executor / 节点 override，null 不代选。后端 8 节点 / 12 组合 direct job 纵切及独立 egress 快照仍原样保留。
+- agent driver / model / effort / execution mode 由 `/api/agent/capabilities` 发布；`useAgentCapabilities` 使用 no-store 语义，页面按响应动态构造 Commander / 默认 executor / 节点 override，null 不代选。后端 8 节点 / 13 组合 direct job 纵切及独立 egress 快照仍原样保留。
 - 底部作业抽屉只消费 `/api/jobs`，逐条展示全部作业的最新状态，不订阅或展示命令、stdout/stderr；
   详情统一跳到本书运行进度页。日志能力仍由 `/api/jobs/:id/stream` SSE 提供给专用详情消费者：
   事件 `id` 等于 UTF-8 `next_byte`，断线用 `Last-Event-ID` 续读，终态先排空日志、再发唯一 `end`。
@@ -174,7 +174,7 @@ export const api: Api = USE_MOCK ? mockApi : realApi
 | 状态 | 家 |
 |---|---|
 | 20 份响应 | TanStack Query |
-| **`gate` / `seen` / `structure` / `writing`** | 一份 v4 `ApprovalDoc`，也走 Query（`['approvals', sid]`）；`structure` 保存绑定完整 Stage4 plan subject 的逐章 typed 裁决，`writing` 仍独立记录全书闭卷写作授权 |
+| **`gate` / `seen` / `design_review` / `structure` / `writing`** | 一份 v5 `ApprovalDoc`，也走 Query（`['approvals', sid]`）；`design_review` 保存绑定当前 Stage4A 主体的策略级与逐章 typed 裁决，只授权 B；`structure` 保存绑定完整 Stage4 plan + binding concerns 主体的最终逐章裁决；`writing` 仍独立记录全书闭卷写作授权 |
 | `job` / `jobLog` | Query + `refetchInterval`（由服务端下发的 `running` 决定） |
 | 确认框里的 argv | Query（`api.previewJob`） |
 | `sid` / 章号 / 当前屏 | React Router 路径 |
@@ -182,10 +182,12 @@ export const api: Api = USE_MOCK ? mockApi : realApi
 | 选中的判据 / 剧透开关 / tab / 编辑中的文本 | 屏内 `useState` |
 
 **gate 走 Query 而不是 reducer**：它在真产品里是服务端的人工验收记录。
-普通闸门经 `approveGate`；s4 刻意不走通用 bool 路由，而由 Stage4 专用表单一次提交
-完整 subject SHA-256、actor/reason 与全章 `accept|request_replan + reason`。
-任一章要求重规划只关闭 s4、保存决定，不自动发起付费作业。换实现仍只改 `src/api/`
-这一道传输缝，屏与组件不直接 fetch。
+普通闸门经 `approveGate`；Stage4 刻意不走通用 bool 路由，而有两道彼此独立的 typed 人审。
+Stage4A 表单一次提交当前完整 subject、策略 `accept|request_replan` 与逐章
+`accept|request_repair`；只有全接受才授权付费 B，拒绝决定本身不自动发起付费作业。B 编译并通过
+机械闸后，最终结构表单再对绑定 Plan 与 concerns 的完整 subject 逐章提交
+`accept|request_replan`，只有全接受才打开 s4。换实现仍只改 `src/api/` 这一道传输缝，屏与组件
+不直接 fetch。
 
 **「闸门不能是全局的」是结构性保证**，不是约定：
 `sid` 来自 `useParams()` → 进 query key → 进持久化 key。
@@ -207,7 +209,7 @@ export const api: Api = USE_MOCK ? mockApi : realApi
 | `/n/:sid/stage1` | 顶部合并展示校验结论与切分确认，且不依赖正文查询成功；下方是章节索引和原文切分结果，只读，开篇文案只展示一次，重号/缺号/倒退按服务端章号诊断逐章显式提示 |
 | `/n/:sid/read/:o` | 原文与 stage2 骨架对照 |
 | `/n/:sid/global` | stage2 全局人物、关系、规则、秘密 |
-| `/n/:sid/stage4/:o` | 计划与写作上下文逐场景对照；常驻展示完整结构 subject SHA-256、全章 `retain/reconstruct` 与声明/复算变化，选中章再展示计划/上下文细节，并经专用 typed 表单原子提交全章结构裁决。结构批准不等于 Stage5 写作授权 |
+| `/n/:sid/stage4/:o` | Stage4A 盲候选先经策略级与逐章 typed 人审；全接受后才呈现 B/最终结构工作面。常驻展示完整结构 subject SHA-256、全章 `retain/reconstruct`、声明/复算变化与 B 的 nonblocking concerns，选中章再展示计划/上下文细节，并经第二道 typed 表单原子提交最终逐章结构裁决。最终结构批准不等于 Stage5 写作授权 |
 | `/n/:sid/stage5/:o` | canonical 成稿、材料、验收 finding 与修订的合并工作面；空状态在付费确认前先写入全书闭卷授权；current TrimAudit 在本屏经专用 retain-pretrim 路由留 actor/reason 销账，fresh Review 的章级/书级 finding 可按完整 evidence identity 提交 wontfix |
 | `/n/:sid/inbox` | 八类待办的全书路由器，不提供第二个编辑面（校验下沉到各阶段屏的面板） |
 | `/n/:sid/stage6` | 三候选文案与人工定稿 |
@@ -236,10 +238,11 @@ components/
   agent/  AgentBatchDialog  AgentRunDialog
 ```
 
-Stage4 屏另有 `screens/stage4/StructureApprovalPanel`：它替代通用 `GateBar(s4)`，因为
-通用按钮装不下 hash-bound 全章裁决。表单选项只消费 `/api/enums` 的
-`structure_approval_decisions`；`request_replan` 不顺手拉起重规划，写作授权仍只在 Stage5
-的付费确认流中单独授予。
+Stage4 屏另有两块专用审批面板。`screens/stage4/DesignReviewPanel` 对当前 Stage4A 候选提交
+hash-bound 的策略级与逐章裁决；候选、证据、允许的 repair code 及约束最小基数都来自后端，默认
+关闭式拒绝，前端不替人补拒绝理由。只有后端返回 `design_review.state=accepted`，才呈现
+`screens/stage4/StructureApprovalPanel`。后者替代通用 `GateBar(s4)`，对完整 Plan + concerns 主体
+逐章裁决；`request_replan` 不顺手拉起重规划，写作授权仍只在 Stage5 的付费确认流中单独授予。
 
 全局屏的 `screens/global/GlobalReviewPanel` 按**主体**成卡：人读这一面的方式是
 「这个人物 / 这条关系 / 这条秘密的时间线」，不是一张 145 行的表。收敛键
@@ -284,14 +287,18 @@ stage5 的「三栏」= `ComparePanes(sticky=left)` 的右栏里装 `CompareRows
 - **Stage4 view 不照抄派生字段**：计划不持久化 `semantic_contract` 或
   `computed_change_kinds`；API 用当前 blueprint 与实际计划现场派生后再返回。Context 的
   `characters` 是带 `char_id` 的数组，界面不显示内部 id，也不重复展示舞台已有的 participants。
+- **Stage4A 人审与最终 Plan 人审是两份主体**：`ApprovalDoc.design_review` 只决定当前盲候选能否
+  进入 B；逐章 `request_repair` 必须带关闭式 repair code 和所需 scene/opaque-alias 引用。
+  `ApprovalDoc.structure` 只在 B 编译后对完整 Plan + `binding_concerns` 生效，二者不能互相代签。
+  concerns 是需人核对的非阻断披露，前端逐条展示，但不把它自动翻译成拒绝或通过。
 - **Stage5 `materials` 是对象或 `null`**：非空时以 `blocks[]` 为唯一下发面。前端分别处理
   对象缺席与对象内列表，不能把 `null` 洗成空列表。
 - **Stage5 正文只取 Draft `segments[]`**：Review 只发 finding 与计数，不重复正文、轮次、篇幅、
   基线或来源账。阅读、编辑与证据高亮都拼接并行 Stage5 响应里的当前 segments，不能退回 Review
   的历史主体或在前端重判 stale。
-- **Stage4 结构决定与人工裁决是两层**：`stage4.index[].structure_decision` 展示计划自己的
+- **Stage4 结构决定与最终人工裁决仍是两层**：`stage4.index[].structure_decision` 展示计划自己的
   `retain/reconstruct + declared/computed_change_kinds`；`ApprovalDoc.structure` 展示人对当前
-  完整 subject 的 `accept/request_replan`。前端不把前者自动翻译成后者。
+  完整 Plan + concerns subject 的 `accept/request_replan`。前端不把前者自动翻译成后者。
 - **`/api/jobs` 的元素是嵌套 `JobRecord`**。`api/endpoints.ts` 在唯一数据缝把它适配成抽屉
   使用的扁平 `Job`，五态（`running / ok / landed_red / failed / unknown`）从服务端原样适配；
   `landed_red` 表示产物已落盘但报告有阻断红行，不折进 `ok` 或 `failed`。抽屉只画概览，

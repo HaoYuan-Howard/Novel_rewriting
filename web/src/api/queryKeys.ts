@@ -1,6 +1,7 @@
 import type { CheckKind } from '@/types/stages'
 import type { JobRequest } from '@/types/jobs'
 import type { AgentRunRequest } from '@/types/agent'
+import type { DesignReviewTemplateQuery } from '@/types/approvals'
 
 /**
  * 所有 query key 都以 sid 开头（除了语料库与 enums）。
@@ -53,4 +54,6 @@ export const qk = {
     ['agentRunPreview', req] as const,
 
   approvals: (sid: string) => ['approvals', sid] as const,
+  designReviewTemplate: (sid: string, query: DesignReviewTemplateQuery | null) =>
+    ['approvals', sid, 'design', 'template', query] as const,
 }

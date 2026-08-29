@@ -26,6 +26,7 @@ api.py —— 对应 `docs/schema/_api.md`。**一次 HTTP 响应长什么样。
 """
 from __future__ import annotations
 
+import re
 from typing import Annotated, Literal
 
 from pydantic import Field, field_validator, model_validator
@@ -44,6 +45,12 @@ from contracts.invariants import (
     APPROVAL_SEEN,
     CHAPTER_LABEL_ANOMALY,
     DELIVERY_MODES,
+    DESIGN_CHAPTER_DECISIONS,
+    DESIGN_REPAIR_CONSTRAINT_ARITY,
+    DESIGN_REPAIR_CODES,
+    DESIGN_REVIEWER_KINDS,
+    DESIGN_REVIEW_STATES,
+    DESIGN_STRATEGY_DECISIONS,
     FACT_ATOM_KINDS,
     FACT_ATOM_OBLIGATIONS,
     GLOBAL_REVIEW_EFFECTS,
@@ -68,6 +75,7 @@ from contracts.invariants import (
     STRUCTURE_APPROVAL_DECISIONS,
     STRUCTURE_APPROVAL_STATES,
     STRUCTURE_CHANGE_KINDS,
+    STRUCTURE_METRIC_CONTRACT,
     STRUCTURAL_ROLES,
     STAGE0_SEGMENT_KINDS,
     STAGE1_SEGMENT_KINDS,
@@ -88,6 +96,8 @@ from contracts.schema.stage2 import (
     RelationVisibility, Setting, WorldRule,
 )
 from contracts.schema.stage4 import (
+    BindingConcern, BindingInfeasibilityWitness,
+    BlindCandidateChapter, BlindChapterWeightResponse,
     CtxChapter, CtxProvenance, PlanGoal, PlanProvenance, SemanticContract,
     StructureDecision,
 )
@@ -121,6 +131,11 @@ AnchorCoverageState = Literal[ANCHOR_COVERAGE_STATE]
 Stage5ReviewState = Literal[STAGE5_REVIEW_STATE]
 StructureApprovalDecisionKind = Literal[STRUCTURE_APPROVAL_DECISIONS]
 StructureApprovalState = Literal[STRUCTURE_APPROVAL_STATES]
+DesignStrategyDecisionKind = Literal[DESIGN_STRATEGY_DECISIONS]
+DesignChapterDecisionKind = Literal[DESIGN_CHAPTER_DECISIONS]
+DesignReviewerKind = Literal[DESIGN_REVIEWER_KINDS]
+DesignRepairCode = Literal[DESIGN_REPAIR_CODES]
+DesignReviewState = Literal[DESIGN_REVIEW_STATES]
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -641,6 +656,417 @@ class ApprovalAction(FrozenModel):
     extra: list[str] | None = None
 
 
+class DesignReviewBasis(FrozenModel):
+    """Stage4A 人审的全局失效域；任一格变化都会令策略与全部章过期。"""
+
+    review_contract: str = Field(min_length=1)
+    root_clean_sha1: str = Field(pattern=r'^[0-9a-f]{40}$')
+    truth_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    alias_algorithm: str = Field(min_length=1)
+
+
+class DesignStrategySubject(FrozenModel):
+    """人实际审阅的整书策略面；章权重属于策略，不属于可独立复用的章稿。"""
+
+    basis: DesignReviewBasis
+    reconstruction_strategy: str = Field(min_length=1)
+    chapter_weights: list[BlindChapterWeightResponse] = Field(min_length=1)
+
+    @model_validator(mode='after')
+    def _chapter_weights_are_canonical(self) -> DesignStrategySubject:
+        ordinals = [row.chapter_ordinal for row in self.chapter_weights]
+        if ordinals != sorted(set(ordinals)):
+            raise ValueError('design strategy 章权重必须按章号升序且不重复')
+        return self
+
+
+class DesignBlindFact(FrozenModel):
+    """A 相真正可见的事实原子；只含 opaque alias 与可读语义。"""
+
+    fact_alias: str = Field(pattern=r'^a_[0-9a-f]{16,64}$')
+    claim: str = Field(min_length=1)
+    kind: Literal[FACT_ATOM_KINDS]
+    obligation: Literal[FACT_ATOM_OBLIGATIONS]
+    participant_aliases: list[str]
+
+    @field_validator('participant_aliases')
+    @classmethod
+    def _participants_are_canonical(cls, values: list[str]) -> list[str]:
+        if values != sorted(set(values)):
+            raise ValueError('blind truth participant_aliases 必须排序且不重复')
+        if any(not re.fullmatch(r'a_[0-9a-f]{16,64}', value) for value in values):
+            raise ValueError('blind truth participant_aliases 必须是 opaque alias')
+        return values
+
+
+class DesignBlindCausalEdge(FrozenModel):
+    before_alias: str = Field(pattern=r'^a_[0-9a-f]{16,64}$')
+    after_alias: str = Field(pattern=r'^a_[0-9a-f]{16,64}$')
+
+
+class DesignBlindChapterTruth(FrozenModel):
+    """由当前 Stage2 blueprint 现场重建的 A 可见去序真相章。"""
+
+    chapter_ordinal: int = Field(ge=1)
+    chapter_function: str = Field(min_length=1)
+    facts: list[DesignBlindFact] = Field(min_length=1)
+    causal_edges: list[DesignBlindCausalEdge]
+    entry_state_aliases: list[str]
+    ending_state_aliases: list[str]
+
+    @model_validator(mode='after')
+    def _blind_truth_is_closed(self) -> DesignBlindChapterTruth:
+        facts = [row.fact_alias for row in self.facts]
+        if len(facts) != len(set(facts)):
+            raise ValueError('blind truth fact_alias 不得重复')
+        fact_set = set(facts)
+        edges = [(row.before_alias, row.after_alias) for row in self.causal_edges]
+        if edges != sorted(set(edges)):
+            raise ValueError('blind truth causal_edges 必须排序且不重复')
+        referenced = {
+            alias for edge in self.causal_edges
+            for alias in (edge.before_alias, edge.after_alias)
+        } | set(self.entry_state_aliases) | set(self.ending_state_aliases)
+        if not referenced.issubset(fact_set):
+            raise ValueError('blind truth 因果/状态 alias 必须属于本章 facts')
+        for label, values in (
+            ('entry_state_aliases', self.entry_state_aliases),
+            ('ending_state_aliases', self.ending_state_aliases),
+        ):
+            if values != sorted(set(values)):
+                raise ValueError(f'blind truth {label} 必须排序且不重复')
+        return self
+
+
+DesignStructureReadingValue = str | int | float | bool | None
+
+
+class DesignStructureEvidence(FrozenModel):
+    """从当前 blueprint+A 场景现场复算的安全结构读数，不含正式引用。"""
+
+    metric_contract: str = Field(default=STRUCTURE_METRIC_CONTRACT, min_length=1)
+    state: str = Field(min_length=1)
+    declared_change_kinds: list[Literal[STRUCTURE_CHANGE_KINDS]]
+    computed_change_kinds: list[Literal[STRUCTURE_CHANGE_KINDS]]
+    realized_declared: list[Literal[STRUCTURE_CHANGE_KINDS]]
+    unrealized_declared: list[Literal[STRUCTURE_CHANGE_KINDS]]
+    undeclared_actual: list[Literal[STRUCTURE_CHANGE_KINDS]]
+    readings: dict[str, DesignStructureReadingValue]
+
+    @model_validator(mode='after')
+    def _change_sets_are_derived(self) -> DesignStructureEvidence:
+        order = {name: index for index, name in enumerate(STRUCTURE_CHANGE_KINDS)}
+        for label in (
+            'declared_change_kinds', 'computed_change_kinds',
+            'realized_declared', 'unrealized_declared', 'undeclared_actual',
+        ):
+            values = getattr(self, label)
+            if values != sorted(set(values), key=order.__getitem__):
+                raise ValueError(f'design structure {label} 必须规范排序且不重复')
+        declared = set(self.declared_change_kinds)
+        computed = set(self.computed_change_kinds)
+        if set(self.realized_declared) != declared & computed:
+            raise ValueError('realized_declared 必须等于 declared∩computed')
+        if set(self.unrealized_declared) != declared - computed:
+            raise ValueError('unrealized_declared 必须等于 declared-computed')
+        if set(self.undeclared_actual) != computed - declared:
+            raise ValueError('undeclared_actual 必须等于 computed-declared')
+        if not self.readings:
+            raise ValueError('design structure readings 不能为空')
+        return self
+
+
+class DesignChapterSubject(FrozenModel):
+    """一章可独立复用的人审业务面；不暴露任何 formal id。"""
+
+    strategy_subject_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    blind_truth: DesignBlindChapterTruth
+    chapter: BlindCandidateChapter
+    structure_evidence: DesignStructureEvidence
+
+    @model_validator(mode='after')
+    def _ordinals_match(self) -> DesignChapterSubject:
+        if self.chapter.output_ordinal != self.blind_truth.chapter_ordinal:
+            raise ValueError('design chapter 与 blind truth 章号必须一致')
+        if (
+            self.chapter.structure_decision.declared_change_kinds
+            != self.structure_evidence.declared_change_kinds
+        ):
+            raise ValueError('structure evidence 必须复述候选声明的结构变化')
+        return self
+
+
+class DesignBindingInfeasibility(FrozenModel):
+    """当前 A 候选对应的 fresh B 关闭式不可行证据。"""
+
+    candidate_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    binding_concerns: list[BindingConcern] = Field(min_length=1)
+    infeasibility_proof: list[BindingInfeasibilityWitness] = Field(min_length=1)
+
+
+class DesignChapterRepairCapability(FrozenModel):
+    output_ordinal: int = Field(ge=1)
+    committed_rounds: int = Field(ge=0)
+    request_repair_available: bool
+
+
+class DesignReviewRepairCapability(FrozenModel):
+    """当前候选的 split-checkpoint targeted repair 可执行面。"""
+
+    repairable: bool
+    reason_code: str = Field(min_length=1)
+    chapters: list[DesignChapterRepairCapability] = Field(min_length=1)
+
+    @model_validator(mode='after')
+    def _chapter_availability_is_derived(self) -> DesignReviewRepairCapability:
+        ordinals = [row.output_ordinal for row in self.chapters]
+        if ordinals != sorted(set(ordinals)):
+            raise ValueError('design repair capability 章号必须升序且不重复')
+        for row in self.chapters:
+            expected = self.repairable and row.committed_rounds < 2
+            if row.request_repair_available != expected:
+                raise ValueError(
+                    'request_repair_available 必须由 lineage 与 committed_rounds 推导')
+        return self
+
+
+class DesignStrategyReview(FrozenModel):
+    subject: DesignStrategySubject
+    subject_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    #: GET 模板上的关闭式占位，不是人的决定。正式 decision 永远为 false。
+    placeholder: bool
+    #: 只标识服务端生成的未审行；显式确认时必须与 placeholder 一起清空。
+    template_token: str | None = Field(
+        default=None, pattern=r'^[0-9a-f]{64}$')
+    decision: DesignStrategyDecisionKind
+    reason: str = Field(min_length=1)
+    source_decision_sha256: str | None = Field(
+        default=None, pattern=r'^[0-9a-f]{64}$')
+
+    @field_validator('reason')
+    @classmethod
+    def _reason_is_not_blank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError('Stage4A 策略裁决理由不能只含空白')
+        return value
+
+    @model_validator(mode='after')
+    def _template_marker_matches_placeholder(self) -> DesignStrategyReview:
+        if self.placeholder != (self.template_token is not None):
+            raise ValueError('Stage4A 策略 placeholder 与 template_token 必须同进同出')
+        return self
+
+
+class DesignRepairConstraint(FrozenModel):
+    """一条可执行的关闭式修订约束；数组顺序由具体 code 的模板解释。"""
+
+    code: DesignRepairCode
+    scene_refs: list[str] = Field(default_factory=list)
+    opaque_aliases: list[str] = Field(default_factory=list)
+
+    @model_validator(mode='after')
+    def _refs_are_unique_without_destroying_order(self) -> DesignRepairConstraint:
+        if len(self.scene_refs) != len(set(self.scene_refs)):
+            raise ValueError('design constraint scene_refs 不得重复')
+        if len(self.opaque_aliases) != len(set(self.opaque_aliases)):
+            raise ValueError('design constraint opaque_aliases 不得重复')
+        min_scenes, min_aliases = DESIGN_REPAIR_CONSTRAINT_ARITY[self.code]
+        if len(self.scene_refs) < min_scenes or len(self.opaque_aliases) < min_aliases:
+            raise ValueError(
+                f'{self.code} 至少需要 {min_scenes} 个 scene_ref / '
+                f'{min_aliases} 个 opaque_alias')
+        return self
+
+
+class DesignChapterReview(FrozenModel):
+    output_ordinal: int = Field(ge=1)
+    subject: DesignChapterSubject
+    subject_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    #: GET 模板上的关闭式占位，不是人的决定。正式 decision 永远为 false。
+    placeholder: bool
+    template_token: str | None = Field(
+        default=None, pattern=r'^[0-9a-f]{64}$')
+    decision: DesignChapterDecisionKind
+    reason: str = Field(min_length=1)
+    constraints: list[DesignRepairConstraint] = Field(default_factory=list)
+    source_decision_sha256: str | None = Field(
+        default=None, pattern=r'^[0-9a-f]{64}$')
+
+    @model_validator(mode='after')
+    def _decision_has_a_canonical_scope(self) -> DesignChapterReview:
+        if self.placeholder != (self.template_token is not None):
+            raise ValueError('Stage4A 逐章 placeholder 与 template_token 必须同进同出')
+        if not self.reason.strip():
+            raise ValueError('Stage4A 逐章裁决理由不能只含空白')
+        fingerprints = [
+            (row.code, tuple(row.scene_refs), tuple(row.opaque_aliases))
+            for row in self.constraints
+        ]
+        if len(fingerprints) != len(set(fingerprints)):
+            raise ValueError('design chapter constraints 不得包含完全重复的约束')
+        if self.decision == 'accept' and self.constraints:
+            raise ValueError('accept 章不得夹带 repair scope')
+        if self.decision == 'request_repair' and not self.constraints:
+            raise ValueError('request_repair 章必须给出至少一条 constraint')
+        if self.output_ordinal != self.subject.chapter.output_ordinal:
+            raise ValueError('design chapter 章号必须与 subject.chapter 一致')
+        return self
+
+
+class DesignReviewRequest(StrictModel):
+    """对当前完整 Stage4A 候选作出的原子全书盲审提交。"""
+
+    actor: str = Field(min_length=1)
+    reviewer_kind: DesignReviewerKind
+    review_run_id: str = Field(pattern=r'^[a-z0-9][a-z0-9_-]{0,127}$')
+    general_reason: str = Field(min_length=1)
+    candidate_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    aggregate_subject_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    binding_infeasibility: DesignBindingInfeasibility | None = None
+    repair_capability: DesignReviewRepairCapability
+    strategy: DesignStrategyReview
+    chapters: list[DesignChapterReview] = Field(min_length=1)
+
+    @model_validator(mode='after')
+    def _submission_is_a_complete_book(self) -> DesignReviewRequest:
+        if not self.actor.strip() or not self.review_run_id.strip() \
+                or not self.general_reason.strip():
+            raise ValueError('design review actor/run/general reason 不能只含空白')
+        ordinals = [row.output_ordinal for row in self.chapters]
+        if ordinals != sorted(set(ordinals)):
+            raise ValueError('design review 章号必须升序、去重')
+        expected = [row.chapter_ordinal for row in self.strategy.subject.chapter_weights]
+        if ordinals != expected:
+            raise ValueError('design review 章集必须与策略章权重表精确一致')
+        if [row.output_ordinal for row in self.repair_capability.chapters] != ordinals:
+            raise ValueError('design repair capability 必须精确覆盖本次审阅章集')
+        if any(
+            row.subject.strategy_subject_sha256 != self.strategy.subject_sha256
+            for row in self.chapters
+        ):
+            raise ValueError('每章 subject 必须绑定本次策略 subject SHA-256')
+        return self
+
+
+class DesignReviewTemplate(DesignReviewRequest):
+    """服务端按当前候选生成的关闭式模板；可直接编辑后作为 request 提交。"""
+
+
+class DesignReviewDecision(DesignReviewRequest):
+    """服务端已落盘的人审决定；摘要与决定时间均不接受客户端代填。"""
+
+    decision_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    decided_at: str = Field(min_length=1)
+
+    @model_validator(mode='after')
+    def _decision_contains_no_template_placeholders(self) -> DesignReviewDecision:
+        if self.strategy.placeholder or any(
+            row.placeholder for row in self.chapters
+        ):
+            raise ValueError('正式 design review decision 不得保留模板 placeholder')
+        if self.strategy.template_token is not None or any(
+            row.template_token is not None for row in self.chapters
+        ):
+            raise ValueError('正式 design review decision 不得保留 template_token')
+        return self
+
+
+class DesignReviewView(FrozenModel):
+    """Stage4A 当前盲审态与不可擦除历史；它不是 ``gate.s4``。"""
+
+    state: DesignReviewState
+    candidate_sha256: str | None = Field(
+        default=None, pattern=r'^[0-9a-f]{64}$')
+    aggregate_subject_sha256: str | None = Field(
+        default=None, pattern=r'^[0-9a-f]{64}$')
+    binding_infeasibility: DesignBindingInfeasibility | None = None
+    repair_capability: DesignReviewRepairCapability | None = None
+    current_decision: DesignReviewDecision | None = None
+    history: list[DesignReviewDecision] = Field(default_factory=list)
+
+    @model_validator(mode='after')
+    def _state_matches_current_subject(self) -> DesignReviewView:
+        available = self.state != 'unavailable'
+        if available != (
+            self.candidate_sha256 is not None
+            and self.aggregate_subject_sha256 is not None
+        ):
+            raise ValueError('design review 可用态与两个 current hash 必须同进同出')
+        if available != (self.repair_capability is not None):
+            raise ValueError('design review 可用态与 repair capability 必须同进同出')
+        decided_states = {
+            'accepted', 'repair_requested', 'strategy_replan_requested',
+        }
+        if (self.state in decided_states) != (self.current_decision is not None):
+            raise ValueError('design review 当前决定必须与 decided state 同进同出')
+        if self.current_decision is not None:
+            if (
+                self.current_decision.candidate_sha256 != self.candidate_sha256
+                or self.current_decision.aggregate_subject_sha256
+                != self.aggregate_subject_sha256
+                or self.current_decision.binding_infeasibility
+                != self.binding_infeasibility
+                or self.current_decision.repair_capability
+                != self.repair_capability
+            ):
+                raise ValueError(
+                    'design review 当前决定必须绑定 current candidate/aggregate/B evidence')
+            if not self.history or self.current_decision != self.history[-1]:
+                raise ValueError('design review current_decision 必须是 history 最后一项')
+            wants_replan = self.current_decision.strategy.decision == 'request_replan'
+            wants_repair = any(
+                row.decision == 'request_repair'
+                for row in self.current_decision.chapters)
+            expected = (
+                'strategy_replan_requested' if wants_replan else
+                'repair_requested' if wants_repair else 'accepted'
+            )
+            if self.state != expected:
+                raise ValueError('design review state 与策略/逐章决定不一致')
+        if self.state == 'missing' and self.history:
+            raise ValueError('已有旧 design review 时当前无决定应为 expired')
+        if self.state == 'expired' and not self.history:
+            raise ValueError('没有 design review 历史时不能声称 expired')
+        return self
+
+
+class DesignRepairChapterScope(FrozenModel):
+    output_ordinal: int = Field(ge=1)
+    subject_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    constraints: list[DesignRepairConstraint] = Field(min_length=1)
+
+
+class DesignRepairScope(FrozenModel):
+    """CLI/Core 只读消费的稳定恢复面；不暴露服务盘记录形状。"""
+
+    candidate_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    aggregate_subject_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    decision_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    binding_infeasibility: DesignBindingInfeasibility | None = None
+    repair_capability: DesignReviewRepairCapability
+    strategy_replan: bool
+    target_chapters: list[int] = Field(default_factory=list)
+    chapters: list[DesignRepairChapterScope] = Field(default_factory=list)
+
+    @model_validator(mode='after')
+    def _target_chapters_match_rows(self) -> DesignRepairScope:
+        ordinals = [row.output_ordinal for row in self.chapters]
+        if ordinals != sorted(set(ordinals)) or self.target_chapters != ordinals:
+            raise ValueError('design repair target_chapters 必须精确等于规范章行')
+        if self.strategy_replan and ordinals:
+            raise ValueError('策略级 replan 不得夹带逐章 repair scope')
+        if not self.strategy_replan and not ordinals:
+            raise ValueError('逐章 repair 必须带非空 target_chapters')
+        available = {
+            row.output_ordinal
+            for row in self.repair_capability.chapters
+            if row.request_repair_available
+        }
+        if not self.strategy_replan and not set(ordinals).issubset(available):
+            raise ValueError('逐章 repair scope 包含当前不可执行 request_repair 的章')
+        return self
+
+
 class StructureChapterDecision(FrozenModel):
     """人对当前 Stage4 计划中一章作出的结构裁决。"""
 
@@ -681,6 +1107,7 @@ class StructureApprovalView(FrozenModel):
     state: StructureApprovalState
     current_subject_sha256: str | None = Field(
         default=None, pattern=r'^[0-9a-f]{64}$')
+    binding_concerns: list[BindingConcern] = Field(default_factory=list)
     current_decision: StructureApprovalDecision | None = None
     history: list[StructureApprovalDecision] = Field(default_factory=list)
 
@@ -751,11 +1178,13 @@ class WritingApprovalView(FrozenModel):
 
 
 class ApprovalDoc(StrictModel):
-    v: Literal[4] = 4
+    v: Literal[5] = 5
     sid: str = Field(min_length=1)
     gate: dict[GateKey, bool]
     seen: dict[SeenKey, bool]
     writing: bool = False
+    design_review: DesignReviewView = Field(
+        default_factory=lambda: DesignReviewView(state='unavailable'))
     structure: StructureApprovalView
     writing_approval: WritingApprovalView = Field(default_factory=WritingApprovalView)
     spawns: dict[GateKey, list[ApprovalAction]] = Field(default_factory=dict)

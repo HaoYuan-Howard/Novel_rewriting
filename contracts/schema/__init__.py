@@ -147,7 +147,9 @@ from contracts.schema.stage4 import (
 )
 from contracts.schema.stage5 import (
     Chapter, ChapterResponse, ChapterSegment, DraftConsumed,
-    JudgedDraft, RejectedAttempt, RejectedRevision, Review, ReviewChapter,
+    JudgedDraft, PreparedRecoveryAction, PreparedRecoveryChapter,
+    PreparedRecoveryJournal, PreparedRecoveryManifest, PreparedRecoveryWorkpack,
+    RejectedAttempt, RejectedRevision, Review, ReviewChapter,
 )
 from contracts.schema.stage6 import (
     ApprovedHook, Candidate, Hook, HookApprovalResolution, HookEdit,
@@ -240,6 +242,8 @@ ARTIFACT_SPECS: dict[str, ArtifactSpec] = {
     #   与下面三份 `*_edit.json` 同一类：不是节点产的，但落在产物目录、
     #   被 `store.read` 当上游边记账 ⇒ 形状同样是契约。
     # ⚠ v3：随 GlobalGrounding v4 删除同一批冗余字段；由人按当前 typed 契约重写。
+    # 2026-08-29 新增可缺的 ``conflict_stages_replace`` 是兼容加法：旧 v3
+    # 决策集仍能逐字解码，故不构成形状破坏、不升版。
     STAGE2_GLOBAL_EDIT: ArtifactSpec(GlobalEdit, 3),
     # v1：由当前 schema-valid global（正式或 INVALID）+ main_text 免费物化；
     # 无存量兼容负担，缺/坏时由 `stage2.global --renormalize` 0-LLM 重建。
@@ -259,7 +263,7 @@ ARTIFACT_SPECS: dict[str, ArtifactSpec] = {
     # v2 删除 goal rationale；A 仍保留重构策略与预算权重，供 B/编译器消费。
     STAGE4_BLIND_CANDIDATE: ArtifactSpec(BlindCandidate, 2),
     # v2 删除可由绑定舞台 present 唯一推出的 participant_refs。
-    STAGE4_EVIDENCE_BINDING: ArtifactSpec(EvidenceBinding, 2),
+    STAGE4_EVIDENCE_BINDING: ArtifactSpec(EvidenceBinding, 3),
     # v4 删除 A 相过程字段、Stage2 重复契约、派生结构向量与编译参数快照。
     STAGE4_PLAN_CHAPTERS: ArtifactSpec(PlanChapters, 4),
     STAGE4_PLAN_EDIT: ArtifactSpec(PlanEdit, 4),
@@ -447,6 +451,9 @@ __all__ = [
     'WriterContext',
     'CtxChapter', 'CtxScene', 'CtxFacts', 'CtxGoal',
     'Chapter', 'ChapterSegment', 'ChapterResponse',
+    'PreparedRecoveryAction', 'PreparedRecoveryChapter',
+    'PreparedRecoveryJournal', 'PreparedRecoveryManifest',
+    'PreparedRecoveryWorkpack',
     'RejectedAttempt', 'RejectedRevision',
     'Review', 'ReviewChapter', 'JudgedDraft', 'DraftConsumed',
     'Hook', 'Candidate', 'ApprovedHook', 'HookApprovalResolution', 'Mech',

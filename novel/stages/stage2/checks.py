@@ -31,6 +31,7 @@ from contracts.artifacts import (
 
 import re
 import statistics
+from dataclasses import dataclass
 from typing import Any, Iterable
 
 from contracts.invariants import (
@@ -896,6 +897,60 @@ def _canon(c: _Ctx) -> list[Outcome]:
 _ARC_RULES = ('conflict_stage_coverage',)
 
 
+@dataclass(frozen=True)
+class ConflictStageCoverageMeasure:
+    """冲突分段的唯一机械覆盖测量；producer 与 typed edit 共用。"""
+
+    memberships: dict[Any, tuple[str, ...]]
+    missing: tuple[int, ...]
+    extra: tuple[Any, ...]
+    duplicate: tuple[tuple[Any, tuple[str, ...]], ...]
+    evidence: tuple[str, ...]
+    stages_scanned: int
+    chapters_expected: int
+
+
+def measure_conflict_stage_coverage(
+    stages: Iterable[dict[str, Any]], expected_ordinals: Iterable[int],
+) -> ConflictStageCoverageMeasure:
+    """按 R-2.14 计算逐章显式枚举的缺、重、越界；不产生判定或写盘。"""
+    stage_rows = list(stages)
+    expected = set(expected_ordinals)
+    mutable_memberships: dict[Any, list[str]] = {}
+    for index, stage in enumerate(stage_rows, 1):
+        label = str((stage or {}).get('stage') or f'第{index}段')
+        for chapter in ((stage or {}).get('chapters') or []):
+            mutable_memberships.setdefault(chapter, []).append(label)
+    memberships = {
+        chapter: tuple(labels)
+        for chapter, labels in mutable_memberships.items()
+    }
+    missing = tuple(sorted(expected - set(memberships)))
+    extra = tuple(sorted(
+        (chapter for chapter in memberships if chapter not in expected), key=str))
+    duplicate = tuple(sorted(
+        ((chapter, labels) for chapter, labels in memberships.items()
+         if len(labels) != 1),
+        key=lambda row: str(row[0]),
+    ))
+    evidence = tuple(
+        [f'missing:ch{chapter}' for chapter in missing]
+        + [f'extra:ch{chapter}@{"|".join(memberships[chapter])}'
+           for chapter in extra]
+        + [f'duplicate:ch{chapter}@{"|".join(labels)}'
+           for chapter, labels in duplicate]
+    )
+    return ConflictStageCoverageMeasure(
+        memberships=memberships,
+        missing=missing,
+        extra=extra,
+        duplicate=duplicate,
+        evidence=evidence,
+        stages_scanned=len(stage_rows),
+        chapters_expected=len(expected),
+    )
+
+
 def _arc(c: _Ctx) -> list[Outcome]:
     """`conflict_stages[].chapters` 是逐章显式枚举，不是区间端点。"""
     if not c.has_gg:
@@ -904,37 +959,21 @@ def _arc(c: _Ctx) -> list[Outcome]:
         return [unverifiable(rule, _NO_MAIN_TEXT) for rule in _ARC_RULES]
 
     stages = ((c.gg.get('arc') or {}).get('conflict_stages') or [])
-    memberships: dict[Any, list[str]] = {}
-    for index, stage in enumerate(stages, 1):
-        label = str((stage or {}).get('stage') or f'第{index}段')
-        for chapter in ((stage or {}).get('chapters') or []):
-            memberships.setdefault(chapter, []).append(label)
-
-    expected = set(c.ords)
-    missing = sorted(expected - set(memberships))
-    extra = sorted((chapter for chapter in memberships if chapter not in expected), key=str)
-    duplicate = sorted(
-        ((chapter, labels) for chapter, labels in memberships.items() if len(labels) != 1),
-        key=lambda row: str(row[0]),
-    )
-    evidence = [f'missing:ch{chapter}' for chapter in missing]
-    evidence += [
-        f'extra:ch{chapter}@{"|".join(memberships[chapter])}' for chapter in extra
-    ]
-    evidence += [
-        f'duplicate:ch{chapter}@{"|".join(labels)}' for chapter, labels in duplicate
-    ]
+    measured = measure_conflict_stage_coverage(stages, c.ords)
     findings = [finding(
         'conflict_stage_coverage',
-        detail=(f'{len(stages)} 个冲突阶段没有把 {len(c.ords)} 章恰好各列一次：'
-                f'缺 {missing}，越界 {extra}，重复 '
-                f'{[(chapter, labels) for chapter, labels in duplicate]}'),
-        evidence=evidence,
-    )] if evidence else []
+        detail=(f'{measured.stages_scanned} 个冲突阶段没有把 '
+                f'{measured.chapters_expected} 章恰好各列一次：'
+                f'缺 {list(measured.missing)}，越界 {list(measured.extra)}，重复 '
+                f'{[(chapter, list(labels)) for chapter, labels in measured.duplicate]}'),
+        evidence=list(measured.evidence),
+    )] if measured.evidence else []
     return [ran(
         'conflict_stage_coverage', findings,
-        scanned=(f'{len(stages)} 个阶段 / {len(c.ords)} 章 / '
-                 f'{sum(len(labels) for labels in memberships.values())} 次显式章号声明'),
+        scanned=(f'{measured.stages_scanned} 个阶段 / '
+                 f'{measured.chapters_expected} 章 / '
+                 f'{sum(len(labels) for labels in measured.memberships.values())} '
+                 '次显式章号声明'),
     )]
 
 

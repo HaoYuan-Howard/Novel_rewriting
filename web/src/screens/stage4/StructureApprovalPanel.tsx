@@ -24,7 +24,7 @@ interface DraftDecision {
 }
 
 /**
- * Stage4 的专用结构审批面。
+ * Stage4B 的专用最终计划审批面。
  *
  * 通用 GateBar 只有一个 bool，无法携带 subject / actor / 全章 typed 决定，因此 s4
  * 必须在这里原子提交。这里也不出现「授权写作」按钮：writing 是 Stage5 的另一项授权。
@@ -48,18 +48,36 @@ export function StructureApprovalPanel({
   const [refreshing, setRefreshing] = useState(false)
 
   if (approvals.isLoading) {
-    return <Panel className="mx-30 mt-20 mb-4 px-20 py-16 text-body text-ink-4">读取结构审批记录…</Panel>
+    return <Panel className="mx-30 mt-20 mb-4 px-20 py-16 text-body text-ink-4">读取 Stage4B 最终计划审批记录…</Panel>
   }
   if (approvals.isError) {
     return (
       <Panel className="mx-30 mt-20 mb-4 border-warn-line bg-warn-bg px-20 py-16 text-body text-warn-ink">
-        结构审批记录读取失败：{errorBody(approvals.error)}
+        Stage4B 最终计划审批记录读取失败：{errorBody(approvals.error)}
         <ErrorHint error={approvals.error} />
       </Panel>
     )
   }
   const doc = approvals.doc
   if (!doc) return null
+
+  // A 是否 current、是否全收只认服务端 design_review.state；不按决定或 hash 复算。
+  // 未得到 current accepted 前，不呈现 B 的最终审批表单，保持 A → B 串行。
+  if (doc.design_review.state !== 'accepted') {
+    return (
+      <Panel className="mx-30 mt-20 mb-4 flex items-start gap-12 px-20 py-16">
+        <GateMark ok={false} />
+        <div className="flex flex-col gap-5">
+          <span className="text-read font-semibold">Stage4B 最终计划审批正在等待 A</span>
+          <span className="prose-cn text-sm2 text-ink-4">
+            服务端当前 A 审阅状态为 <Mono>{doc.design_review.state}</Mono>。
+            只有服务端返回 accepted，才会在这里呈现 B 的全书计划审批；
+            历史 accept 或前端自行比对 hash 都不能代开。
+          </span>
+        </div>
+      </Panel>
+    )
+  }
 
   // 是否存在付费恢复只认服务端 action；界面不根据 plan/binding 自己猜。
   // 因而 B=infeasible 即使没有正式 plan subject，也仍能走同一条预览确认缝。
@@ -251,13 +269,14 @@ function StructureApprovalForm({
         <GateMark ok={doc.gate.s4} />
         <div className="flex min-w-0 flex-1 flex-col gap-5">
           <div className="flex flex-wrap items-baseline gap-10">
-            <span className="text-read font-semibold">Stage4 独立结构审批</span>
+            <span className="text-read font-semibold">Stage4B 最终计划审批</span>
             <Mono className="rounded-tag bg-inset px-7 py-2 text-micro">
               服务端状态 {doc.structure.state}
             </Mono>
           </div>
           <span className="prose-cn text-sm2 text-ink-4">
-            一次提交必须覆盖当前计划的全部章节。任一章要求重规划，只会保存 typed 决定并关闭 s4；
+            A 当前 accepted 只准许进入 B，不等于批准本计划。一次提交必须覆盖当前计划的全部章节。
+            任一章要求重规划，只会保存 typed 决定并关闭 s4；
             不会静默发起付费重规划，也不会授予 Stage5 写作权限。
           </span>
           <span className="text-tag text-ink-4">
@@ -287,6 +306,34 @@ function StructureApprovalForm({
           >
             {replanSpawn.label}
           </ActionButton>
+        </div>
+      ) : null}
+
+      {doc.structure.binding_concerns.length ? (
+        <div className="flex flex-col gap-8 border-b border-warn-line bg-warn-bg px-20 py-14">
+          <div className="flex flex-wrap items-baseline gap-8">
+            <span className="text-body font-semibold text-warn-ink">Stage4B 绑定关注项</span>
+            <span className="text-tag text-warn-ink">非阻断但需人审；数量不会自动改变逐章裁决</span>
+          </div>
+          {doc.structure.binding_concerns.map((concern, index) => (
+            <div
+              key={concern.constraint_code + ':' + concern.chapter_ordinal + ':' + index}
+              className="grid gap-8 rounded-btn border border-warn-line bg-card px-12 py-10 text-sm2"
+              style={{ gridTemplateColumns: 'minmax(0,0.7fr) minmax(0,1.3fr)' }}
+            >
+              <div className="flex min-w-0 flex-col gap-4 text-warn-ink">
+                <Mono className="font-semibold">{concern.constraint_code}</Mono>
+                <span>{concern.chapter_ordinal === null ? '全书关注项' : '第 ' + concern.chapter_ordinal + ' 章'}</span>
+                <span>场景：{concern.scenes.join('、') || '（无）'}</span>
+              </div>
+              <div className="flex min-w-0 flex-col gap-4 text-ink-2">
+                <span className="prose-cn">{concern.reason}</span>
+                <span className="text-micro text-ink-4">
+                  closed_refs：{concern.closed_refs.join('、') || '（无）'}
+                </span>
+              </div>
+            </div>
+          ))}
         </div>
       ) : null}
 

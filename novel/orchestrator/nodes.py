@@ -62,7 +62,11 @@ FOLLOW_CHECK_NOTE = '自动追跑：退出码 0 也可能是残缺产物'
 EXECUTOR_PROFILED_RUNS: dict[str, tuple[frozenset[str], ...]] = {
     'stage2.global': (frozenset(),),
     'stage2.blueprint': (frozenset(),),
-    'stage4.design': (frozenset(), frozenset({'--replan'})),
+    'stage4.design': (
+        frozenset(),
+        frozenset({'--replan'}),
+        frozenset({'--repair-decision'}),
+    ),
     'stage4.plan': (frozenset(),),
     'stage5.write': (
         frozenset(),
@@ -87,9 +91,16 @@ EXECUTOR_PROFILED_NODES = tuple(EXECUTOR_PROFILED_RUNS)
 #: 可能被排在后面的 ``--dry-run`` / ``--check-only`` 盖成“不写盘”，preview 就会
 #: 对实际写盘说假话。这里关闭式拒收，展示与执行共用同一道门。
 _PRIMARY_OPERATIONS = {
-    'stage4.design': frozenset({'--dry-run', '--replan'}),
+    'stage4.design': frozenset({
+        '--dry-run', '--replan', '--repair-decision', '--adopt-rejected',
+    }),
+    'stage4.plan': frozenset({
+        '--dry-run', '--check-only', '--revalidate', '--names-only',
+        '--identity', '--apply-edit', '--apply-binding',
+    }),
     'stage5.write': frozenset({
         '--dry-run', '--recheck', '--revalidate', '--apply-edit', '--revise',
+        '--emit-prepared-recovery-workpack', '--recover-prepared',
     }),
     'stage5.review': frozenset({
         '--retain-pretrim', '--wontfix', '--check-only',
@@ -183,6 +194,24 @@ def validate_run(node: str, flags: Sequence[str] = (), *,
         if set(tokens) != {'--resample'}:
             raise UnsupportedRunMode(
                 'stage2.global --resample 必须单独执行；它会重新采样整份全局响应')
+    if node == 'stage5.write' and '--emit-prepared-recovery-workpack' in tokens:
+        expected = {'--emit-prepared-recovery-workpack'}
+        if set(tokens) != expected:
+            raise UnsupportedRunMode(
+                'stage5.write --emit-prepared-recovery-workpack 是纯读动作，'
+                '不得与 executor/profile/egress/chapters/revise/repair 或人工写回参数混用')
+    if node == 'stage5.write' and '--recover-prepared' in tokens:
+        expected = {'--recover-prepared', '--actor', '--reason', '--subject-sha256'}
+        if set(tokens) != expected:
+            raise UnsupportedRunMode(
+                'stage5.write --recover-prepared 只接受 source run_id 与必填的 '
+                '--actor/--reason/--subject-sha256；不得与 chapters/revise/'
+                'response-repair 或其他操作混用')
+    if (node == 'stage5.write' and '--subject-sha256' in tokens
+            and '--recover-prepared' not in tokens):
+        raise UnsupportedRunMode(
+            'stage5.write --subject-sha256 只绑定 --recover-prepared 工作包；'
+            '不能把孤立 subject 静默忽略后落到默认付费写作')
 
     bad = [f for f in tokens if f not in spec.flags]
     if bad:

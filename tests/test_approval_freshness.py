@@ -9,9 +9,10 @@ from types import SimpleNamespace
 import pytest
 
 from contracts.schema import encode_artifact
-from contracts.schema.api import StructureApprovalRequest
+from contracts.schema.api import StructureApprovalDecision, StructureApprovalRequest
 from contracts.schema.stage1 import MainText
 from contracts.schema.stage4 import PlanChapters, PlanProvenance
+from contracts.artifacts import STAGE4_EVIDENCE_BINDING, STAGE4_WRITER_CONTEXT
 from novel.orchestrator import approvals
 from novel.orchestrator import queue as Q
 from novel.run import RunContext
@@ -88,14 +89,20 @@ def current_book(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path,
     plan_store = ArtifactStore(plan_ctx)
     plan_store.read(MainText, MAIN_REL)
     plan_store.write(PLAN_REL, _plan(plan_ctx))
+    for rel in (STAGE4_EVIDENCE_BINDING, STAGE4_WRITER_CONTEXT):
+        path = book / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text('{}', encoding='utf-8')
 
     monkeypatch.setitem(approvals._GATE_REQUIREMENTS, 's4', ())
     monkeypatch.setattr(approvals.prov, 'code_version', lambda: 'fixture-readonly-code')
     monkeypatch.setattr(approvals, '_spawns', lambda _base, _sid: {})
+    monkeypatch.setattr(
+        approvals, '_current_binding_concerns', lambda _novel_dir, **_kwargs: [])
     require_fresh_json = approvals._require_fresh_json
 
     def require_synthetic_stage1(store, rel):
-        if rel == MAIN_REL:
+        if rel in (MAIN_REL, STAGE4_EVIDENCE_BINDING, STAGE4_WRITER_CONTEXT):
             return hashlib.sha256(store.path(rel).read_bytes()).hexdigest()
         return require_fresh_json(store, rel)
 
@@ -132,7 +139,7 @@ def _queue_stage5(monkeypatch: pytest.MonkeyPatch) -> None:
         lambda _overview, _node: (Q.st.RESUME_RUN, 'stage5 drafts are missing'))
 
 
-def test_current_writing_proof_binds_stage1_and_stage4_without_s3(
+def test_current_writing_proof_binds_stage1_plan_and_context_without_s3(
     current_book, monkeypatch,
 ):
     base, _book = current_book
@@ -140,9 +147,10 @@ def test_current_writing_proof_binds_stage1_and_stage4_without_s3(
 
     raw = json.loads(approvals._path(base, SID).read_text(encoding='utf-8'))
     public = approvals.get(base, SID)
-    assert raw['v'] == 5 and public.v == 4
+    assert raw['v'] == 6 and public.v == 5
     assert set(raw['gate']) == {'s0', 's1', 's2', 's4', 's5', 's6', 's7'}
-    assert set(raw['writing_proof']['artifacts']) == {MAIN_REL, PLAN_REL}
+    assert set(raw['writing_proof']['artifacts']) == {
+        MAIN_REL, PLAN_REL, STAGE4_WRITER_CONTEXT}
     assert raw['writing_proof']['decision_sha256']
     assert public.writing and approvals.has_record(base, SID)
 
@@ -153,7 +161,92 @@ def test_current_writing_proof_binds_stage1_and_stage4_without_s3(
     assert 'mode' not in todo[0].model_dump()
 
 
-@pytest.mark.parametrize('mutation', ['root', 'main', 'plan', 'invalid'])
+def test_explicit_v5_backfill_recasts_current_s4_decision_and_lands_v6(
+        current_book, monkeypatch):
+    """旧 Plan-only 决定只能显式重铸；落盘 proof/decision 必须同为新主体。"""
+    from novel.stages.stage4.measure import structure_subject_sha256
+
+    base, book = current_book
+    store = approvals._store_for(book)
+    plan, _raw = store.read_own(PlanChapters, PLAN_REL)
+    old_public = StructureApprovalDecision(
+        actor='legacy-reviewer',
+        reason='旧版已逐章核对同一份正式计划',
+        subject_sha256=structure_subject_sha256(plan),
+        chapters=[{
+            'output_ordinal': 1,
+            'decision': 'accept',
+            'reason': '旧版第一章结构已核对',
+        }],
+        decided_at='2026-08-26T00:00:00+00:00',
+    )
+    old_proof = approvals._proof_for_legacy_structure(book, old_public)
+    old_stored = approvals._StoredStructureDecision(
+        **old_public.model_dump(mode='json'), proof=old_proof)
+
+    fake_gate_proofs = {
+        gate: approvals._ApprovalProof(
+            root_clean_sha1='a' * 40,
+            artifacts={f'legacy/{gate}.json': format(index + 1, 'x') * 64},
+            decision_sha256=format(index + 5, 'x') * 64,
+        )
+        for index, gate in enumerate(('s0', 's1', 's2'))
+    }
+    fake_seen_proofs = {
+        key: approvals._ApprovalProof(
+            root_clean_sha1='a' * 40,
+            artifacts={f'legacy/{key}.json': format(index + 9, 'x') * 64},
+            decision_sha256=format(index + 11, 'x') * 64,
+        )
+        for index, key in enumerate(('read', 'global'))
+    }
+    current_gate_proof = approvals._proof_for_gate
+    monkeypatch.setattr(
+        approvals, '_proof_for_gate',
+        lambda novel_dir, gate, record: (
+            fake_gate_proofs[gate]
+            if gate in fake_gate_proofs
+            else current_gate_proof(novel_dir, gate, record)))
+    monkeypatch.setattr(
+        approvals, '_proof_for_seen',
+        lambda _novel_dir, key: fake_seen_proofs[key])
+
+    fresh = approvals._fresh_record(SID)
+    gates = dict(fresh.gate)
+    gate_proofs = dict(fresh.gate_proofs)
+    for gate in ('s0', 's1', 's2'):
+        gates[gate] = True
+        gate_proofs[gate] = fake_gate_proofs[gate]
+    gates['s4'] = True
+    gate_proofs['s4'] = old_proof
+    legacy = approvals._ApprovalRecordV5Legacy(
+        sid=SID,
+        gate=gates,
+        seen={key: True for key in fresh.seen},
+        gate_proofs=gate_proofs,
+        seen_proofs=fake_seen_proofs,
+        structure_history=[old_stored],
+        structure_decision=old_stored,
+    )
+    path = approvals._path(base, SID)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(legacy.model_dump_json(indent=2), encoding='utf-8')
+
+    result = approvals.backfill_from_disk(base, SID)
+    raw = json.loads(path.read_text(encoding='utf-8'))
+
+    assert result.approvals.v == 5 and result.approvals.gate['s4']
+    assert 's4' in result.backfilled and raw['v'] == 6
+    assert raw['structure_decision']['subject_sha256'] == \
+        result.approvals.structure.current_subject_sha256
+    assert raw['gate_proofs']['s4'] == raw['structure_decision']['proof']
+    assert set(raw['structure_decision']['proof']['artifacts']) == {
+        PLAN_REL, STAGE4_EVIDENCE_BINDING}
+    assert raw['structure_decision']['actor'] == 'legacy-reviewer'
+    assert raw['structure_decision']['decided_at'] == '2026-08-26T00:00:00+00:00'
+
+
+@pytest.mark.parametrize('mutation', ['root', 'main', 'plan', 'context', 'invalid'])
 def test_current_subject_changes_revoke_writing(current_book, monkeypatch, mutation):
     base, book = current_book
     _approve_writing(base)
@@ -171,6 +264,9 @@ def test_current_subject_changes_revoke_writing(current_book, monkeypatch, mutat
         data = json.loads(path.read_text(encoding='utf-8'))
         data['output_chapters'][0]['chapter_rewrite_brief'] = '当前计划字节已由人改动。'
         path.write_text(json.dumps(data, ensure_ascii=False), encoding='utf-8', newline='')
+    elif mutation == 'context':
+        (book / STAGE4_WRITER_CONTEXT).write_text(
+            '{"changed":true}', encoding='utf-8')
     else:
         invalid = book / 'stage4' / 'plan_chapters.INVALID.json'
         invalid.write_bytes((book / PLAN_REL).read_bytes())
@@ -187,7 +283,9 @@ def test_current_subject_changes_revoke_writing(current_book, monkeypatch, mutat
 
 def test_writing_requires_current_typed_s4_only(current_book, monkeypatch):
     base, _book = current_book
-    with pytest.raises(approvals.ApprovalRequired, match='stage4 plan'):
+    with pytest.raises(
+            approvals.ApprovalRequired,
+            match=r'stage4\.context|final structure'):
         approvals.begin_writing(base, SID)
 
     _queue_stage5(monkeypatch)
@@ -270,9 +368,9 @@ def test_v1_or_corrupt_service_record_never_authorizes_queue(
     }), encoding='utf-8')
 
     assert not approvals.has_record(base, SID)
-    with pytest.raises(approvals.HumanEditProtected, match='unsupported v1/v2/v3/v4'):
+    with pytest.raises(approvals.HumanEditProtected, match='unsupported v1/v2/v3/v4/v5'):
         approvals.get(base, SID)
-    with pytest.raises(approvals.HumanEditProtected, match='backfilled as v2/v3/v4'):
+    with pytest.raises(approvals.HumanEditProtected, match='backfilled as v2/v3/v4/v5'):
         approvals.backfill_from_disk(base, SID)
 
     _queue_stage5(monkeypatch)
@@ -317,7 +415,7 @@ def test_explicit_v2_backfill_drops_s3_and_never_resigns_s4_or_writing(
 
     result = approvals.backfill_from_disk(base, SID)
     assert result.backfilled == []
-    assert result.approvals.v == 4
+    assert result.approvals.v == 5
     assert set(result.approvals.gate) == set(approvals.APPROVAL_GATES)
     assert 's3' not in result.approvals.gate
     assert not result.approvals.gate['s4']
@@ -325,7 +423,7 @@ def test_explicit_v2_backfill_drops_s3_and_never_resigns_s4_or_writing(
     assert not any(result.approvals.gate[gate] for gate in ('s5', 's6', 's7'))
 
     raw = json.loads(approvals._path(base, SID).read_text(encoding='utf-8'))
-    assert raw['v'] == 5
+    assert raw['v'] == 6
     assert set(raw['gate']) == set(approvals.APPROVAL_GATES)
     assert 's3' not in raw['gate'] and 's3' not in raw['gate_proofs']
     assert 'deep' not in raw and 'deep_proof' not in raw

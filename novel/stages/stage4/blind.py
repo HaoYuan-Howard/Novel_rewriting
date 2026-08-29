@@ -18,7 +18,10 @@ import re
 from collections.abc import Collection, Mapping
 from typing import Any, Final
 
-from contracts.invariants import BLIND_ALIAS_ALGORITHM
+from contracts.invariants import (
+    BINDING_INFEASIBILITY_CODES,
+    BLIND_ALIAS_ALGORITHM,
+)
 from contracts.schema.stage2 import FACT_ID_PATTERN
 from novel.stages.stage4.checks import derive_effective_states
 
@@ -31,6 +34,7 @@ _SHA256_RE: Final = re.compile(r'^[0-9a-f]{64}$')
 _ALIAS_RE: Final = re.compile(r'^a_[0-9a-f]{16,64}$')
 _LOCAL_FACT_ALIAS_RE: Final = re.compile(r'^f_[0-9a-f]{6,64}$')
 _LOCAL_PARTICIPANT_ALIAS_RE: Final = re.compile(r'^p_[0-9a-f]{6,64}$')
+_MISSING_CATALOG_CODE, _EMPTY_STAGE_CODE = BINDING_INFEASIBILITY_CODES
 
 _A_TOP_KEYS: Final = frozenset({'reconstruction_strategy', 'output_chapters'})
 _A_CHAPTER_KEYS: Final = frozenset({
@@ -60,11 +64,14 @@ _CANDIDATE_SCENE_KEYS: Final = _A_SCENE_KEYS | {'candidate_scene_id'}
 
 _B_TOP_KEYS: Final = frozenset({
     'status', 'candidate_sha256', 'chapters',
-    'reason_kind', 'reason', 'evidence_refs',
+    'binding_concerns',
 })
 _B_CHAPTER_KEYS: Final = frozenset({'output_ordinal', 'scenes'})
 _B_SCENE_KEYS: Final = frozenset({
     'candidate_scene_id', 'material_refs', 'stage_refs',
+})
+_B_CONCERN_KEYS: Final = frozenset({
+    'constraint_code', 'chapter_ordinal', 'scenes', 'reason', 'closed_refs',
 })
 _EVIDENCE_FIELDS: Final = ('material_refs', 'stage_refs')
 
@@ -1094,6 +1101,182 @@ def _formal_goal(
     }
 
 
+def _binding_closed_surface(
+    compiled_candidate: object,
+    evidence_catalog: Mapping[int, Mapping[str, Collection[str]]],
+) -> tuple[Mapping[str, Any], dict[int, tuple[str, ...]], set[str]]:
+    """返回 B 请求真正下发的关闭式引用面。"""
+    candidate = _mapping(compiled_candidate, 'compiled_candidate')
+    _exact_keys(candidate, _CANDIDATE_KEYS, 'compiled_candidate', required=_CANDIDATE_KEYS)
+    allowed: set[str] = set()
+    for field in ('fact_aliases', 'participant_aliases'):
+        allowed.update(_mapping(candidate.get(field), f'compiled_candidate.{field}'))
+    chapter_scenes: dict[int, tuple[str, ...]] = {}
+    for index, raw_chapter in enumerate(_list(
+            candidate.get('output_chapters'), 'compiled_candidate.output_chapters')):
+        chapter_row = _mapping(raw_chapter, f'compiled_candidate.output_chapters[{index}]')
+        chapter = _ordinal(chapter_row.get('output_ordinal'), 'output_ordinal')
+        if chapter in chapter_scenes:
+            raise BlindPlanError(f'compiled_candidate output_ordinal 重号：{chapter}')
+        scene_ids: list[str] = []
+        for scene_index, raw_scene in enumerate(_list(
+                chapter_row.get('scenes'), f'ch{chapter}.scenes')):
+            scene = _mapping(raw_scene, f'ch{chapter}.scenes[{scene_index}]')
+            scene_id = _text(
+                scene.get('candidate_scene_id'),
+                f'ch{chapter}.scenes[{scene_index}].candidate_scene_id')
+            if scene_id in allowed:
+                raise BlindPlanError(f'candidate_scene_id 重号：{scene_id}')
+            scene_ids.append(scene_id)
+            allowed.add(scene_id)
+        if not scene_ids:
+            raise BlindPlanError(f'ch{chapter}.scenes 不能为空')
+        chapter_scenes[chapter] = tuple(scene_ids)
+        row = evidence_catalog.get(chapter)
+        if isinstance(row, Mapping):
+            for field in _EVIDENCE_FIELDS:
+                values = row.get(field, ())
+                if isinstance(values, Collection) and not isinstance(values, (str, bytes)):
+                    allowed.update(str(ref) for ref in values)
+    return candidate, chapter_scenes, allowed
+
+
+def _validate_binding_concerns(
+    compiled_candidate: object,
+    binding_response: Mapping[str, Any],
+    evidence_catalog: Mapping[int, Mapping[str, Collection[str]]],
+) -> None:
+    _candidate, chapter_scenes, allowed = _binding_closed_surface(
+        compiled_candidate, evidence_catalog)
+    scene_owner = {
+        scene: chapter for chapter, scenes in chapter_scenes.items() for scene in scenes
+    }
+    for index, raw_concern in enumerate(_list(
+            binding_response.get('binding_concerns'),
+            'binding_response.binding_concerns')):
+        concern = _mapping(raw_concern, f'binding_concerns[{index}]')
+        _exact_keys(
+            concern, _B_CONCERN_KEYS, f'binding_concerns[{index}]',
+            required=_B_CONCERN_KEYS)
+        _text(concern.get('constraint_code'), f'binding_concerns[{index}].constraint_code')
+        _text(concern.get('reason'), f'binding_concerns[{index}].reason')
+        chapter_raw = concern.get('chapter_ordinal')
+        chapter = None if chapter_raw is None else _ordinal(
+            chapter_raw, f'binding_concerns[{index}].chapter_ordinal')
+        scenes = _unique_strings(
+            concern.get('scenes'), f'binding_concerns[{index}].scenes')
+        unknown_scenes = sorted(set(scenes) - set(scene_owner))
+        if unknown_scenes:
+            raise BlindPlanError(
+                f'binding_concerns[{index}].scenes 含未下发场景 {unknown_scenes}')
+        if chapter is not None:
+            if chapter not in chapter_scenes:
+                raise BlindPlanError(
+                    f'binding_concerns[{index}] 引用未知章 {chapter}')
+            cross = sorted(scene for scene in scenes if scene_owner[scene] != chapter)
+            if cross:
+                raise BlindPlanError(
+                    f'binding_concerns[{index}] 把其他章场景归到第 {chapter} 章：{cross}')
+        refs = _unique_strings(
+            concern.get('closed_refs'),
+            f'binding_concerns[{index}].closed_refs', nonempty=True)
+        unknown = sorted(set(refs) - allowed)
+        if unknown:
+            raise BlindPlanError(
+                f'binding_concerns[{index}].closed_refs 含未下发引用 {unknown}')
+
+
+def construct_feasible_binding_witness(
+    compiled_candidate: object,
+    evidence_catalog: Mapping[int, Mapping[str, Collection[str]]],
+) -> dict[str, Any]:
+    """构造 B 关闭约束集的 canonical bound 反证，不作正式 B 自动兜底。"""
+    candidate, chapter_scenes, _allowed = _binding_closed_surface(
+        compiled_candidate, evidence_catalog)
+    chapters: list[dict[str, Any]] = []
+    for chapter, scenes in sorted(chapter_scenes.items()):
+        row = _catalog_for(evidence_catalog, chapter)
+        stage_refs = sorted(str(ref) for ref in row['stage_refs'])
+        material_refs = sorted(str(ref) for ref in row['material_refs'])
+        if not stage_refs:
+            raise BlindPlanError(f'第 {chapter} 章 stage_refs 关闭目录为空')
+        chapters.append({
+            'output_ordinal': chapter,
+            'scenes': [{
+                'candidate_scene_id': scene,
+                'material_refs': material_refs if index == 0 else [],
+                'stage_refs': [stage_refs[0]],
+            } for index, scene in enumerate(scenes)],
+        })
+    response = {
+        'status': 'bound',
+        'candidate_sha256': candidate_subject_sha256(candidate),
+        'chapters': chapters,
+        'binding_concerns': [],
+    }
+    # 建设性反证自己也必须经过同一编译器，防止守卫重拼参数漂移。
+    merge_evidence_bindings(candidate, response, evidence_catalog)
+    return response
+
+
+def prove_binding_infeasible(
+    compiled_candidate: object,
+    evidence_catalog: Mapping[int, Mapping[str, Collection[str]]],
+) -> list[dict[str, Any]]:
+    """用与 ``merge_evidence_bindings`` 相同的关闭约束面证明无解。
+
+    当前编译器对每场只要求「本章至少一个 stage_ref」，材料可为空。
+    因此冻结目录闭合时一定可构造解；模型所说的因果/未来泄漏只能是
+    ``binding_concerns``。本函数先构造最小解并真正调用编译器；只对编译器可
+    机械证明的缺章/空舞台产生 witness，其他损坏不冒充不可行。
+    """
+    candidate, chapter_scenes, _allowed = _binding_closed_surface(
+        compiled_candidate, evidence_catalog)
+    normalized_catalog = {
+        str(chapter): {
+            field: sorted(str(ref) for ref in row.get(field, ()))
+            for field in _EVIDENCE_FIELDS
+        }
+        for chapter, row in sorted(evidence_catalog.items())
+        if isinstance(row, Mapping)
+    }
+    proof_basis = _sha256({
+        'constraint_set': 'stage4-binding-compiler/v3',
+        'candidate_sha256': candidate_subject_sha256(candidate),
+        'catalog': normalized_catalog,
+    })
+    witnesses: list[dict[str, Any]] = []
+    for chapter, scenes in sorted(chapter_scenes.items()):
+        row = evidence_catalog.get(chapter)
+        if not isinstance(row, Mapping):
+            witnesses.append({
+                'chapter_ordinal': chapter,
+                'scenes': sorted(scenes),
+                'constraint_code': _MISSING_CATALOG_CODE,
+                'closed_refs': sorted(scenes),
+                'proof_basis': proof_basis,
+            })
+            continue
+        stage_refs = sorted(str(ref) for ref in row.get('stage_refs', ()))
+        if not stage_refs:
+            witnesses.append({
+                'chapter_ordinal': chapter,
+                'scenes': sorted(scenes),
+                'constraint_code': _EMPTY_STAGE_CODE,
+                'closed_refs': sorted(scenes),
+                'proof_basis': proof_basis,
+            })
+            continue
+    if witnesses:
+        return witnesses
+    try:
+        construct_feasible_binding_witness(candidate, evidence_catalog)
+    except BlindPlanError as exc:
+        raise BlindPlanError(
+            f'B 关闭输入损坏，但不属于可证明 infeasible：{exc}') from exc
+    return []
+
+
 def validate_infeasible_binding(
     compiled_candidate: object,
     binding_response: object,
@@ -1101,26 +1284,20 @@ def validate_infeasible_binding(
 ) -> None:
     """校验 Stage4B typed 负结论的证据面。
 
-    ``infeasible`` 是正式落盘结论，不是逃离 B 窄契约的口子。因此证据只能指向
-    B 请求真正下发过的东西：冻结候选场、opaque alias，或关闭式舞台/材料/人物引用；
-    任意自由文本 token 会让这份负结论在调用后无法复核。
+    模型的 ``infeasible`` 只是待证声称。本口先关闭检查 concerns，再调用
+    :func:`prove_binding_infeasible`；后者不能给出 witness 时必须拒绝落盘。
     """
     candidate = _mapping(compiled_candidate, 'compiled_candidate')
     _exact_keys(candidate, _CANDIDATE_KEYS, 'compiled_candidate', required=_CANDIDATE_KEYS)
     response = _mapping(binding_response, 'binding_response')
     _exact_keys(
         response, _B_TOP_KEYS, 'binding_response',
-        required={
-            'status', 'candidate_sha256', 'chapters',
-            'reason_kind', 'reason', 'evidence_refs',
-        },
+        required=_B_TOP_KEYS,
     )
     if response.get('status') != 'infeasible':
         raise BlindPlanError('只有 status=infeasible 的 B 响应可走负结论校验')
     if response.get('chapters') is not None:
         raise BlindPlanError('infeasible 不得返回部分 chapters 绑定')
-    _text(response.get('reason_kind'), 'binding_response.reason_kind')
-    _text(response.get('reason'), 'binding_response.reason')
 
     expected_hash = candidate_subject_sha256(candidate)
     actual_hash = response.get('candidate_sha256')
@@ -1130,33 +1307,12 @@ def validate_infeasible_binding(
         raise BlindPlanError(
             f'B 绑定的候选 hash 不符：期望 {expected_hash}，收到 {actual_hash}')
 
-    allowed: set[str] = set()
-    for field in ('fact_aliases', 'participant_aliases'):
-        allowed.update(_mapping(candidate.get(field), f'compiled_candidate.{field}'))
-    chapters = _list(
-        candidate.get('output_chapters'), 'compiled_candidate.output_chapters')
-    seen_chapters: set[int] = set()
-    for index, raw_chapter in enumerate(chapters):
-        chapter_row = _mapping(raw_chapter, f'compiled_candidate.output_chapters[{index}]')
-        chapter = _ordinal(chapter_row.get('output_ordinal'), 'output_ordinal')
-        if chapter in seen_chapters:
-            raise BlindPlanError(f'compiled_candidate output_ordinal 重号：{chapter}')
-        seen_chapters.add(chapter)
-        for scene_index, raw_scene in enumerate(_list(
-                chapter_row.get('scenes'), f'ch{chapter}.scenes')):
-            scene = _mapping(raw_scene, f'ch{chapter}.scenes[{scene_index}]')
-            allowed.add(_text(
-                scene.get('candidate_scene_id'),
-                f'ch{chapter}.scenes[{scene_index}].candidate_scene_id'))
-        chapter_catalog = _catalog_for(evidence_catalog, chapter)
-        for field in _EVIDENCE_FIELDS:
-            allowed.update(str(ref) for ref in chapter_catalog[field])
-
-    refs = _unique_strings(
-        response.get('evidence_refs'), 'binding_response.evidence_refs', nonempty=True)
-    unknown = sorted(set(refs) - allowed)
-    if unknown:
-        raise BlindPlanError(f'infeasible.evidence_refs 含未下发引用 {unknown}')
+    _validate_binding_concerns(candidate, response, evidence_catalog)
+    if not prove_binding_infeasible(candidate, evidence_catalog):
+        raise BlindPlanError(
+            '代码在同一关闭约束集中构造出了完整 bound 解；'
+            '模型担忧只能保留为非阻断 binding_concerns，'
+            '请返回 status=bound 的全量绑定')
 
 
 def merge_evidence_bindings(
@@ -1184,12 +1340,10 @@ def merge_evidence_bindings(
     response = _mapping(binding_response, 'binding_response')
     _exact_keys(
         response, _B_TOP_KEYS, 'binding_response',
-        required={'status', 'candidate_sha256', 'chapters'})
+        required=_B_TOP_KEYS)
     if response.get('status') != 'bound':
-        raise BlindPlanError('只有 status=bound 的 B 响应可以合并；infeasible 是正式终态')
-    if any(response.get(field) is not None
-           for field in ('reason_kind', 'reason', 'evidence_refs')):
-        raise BlindPlanError('bound 不得夹带 infeasible 理由')
+        raise BlindPlanError('只有 status=bound 的 B 响应可以合并')
+    _validate_binding_concerns(candidate, response, evidence_catalog)
     actual_hash = response.get('candidate_sha256')
     if not isinstance(actual_hash, str) or not _SHA256_RE.fullmatch(actual_hash):
         raise BlindPlanError('binding_response.candidate_sha256 必须是完整小写 SHA-256')
@@ -1351,5 +1505,6 @@ __all__ = [
     'compile_blind_candidate', 'compile_blind_chapter_design',
     'assemble_blind_candidate',
     'candidate_subject_sha256', 'build_evidence_catalog',
-    'merge_evidence_bindings',
+    'construct_feasible_binding_witness',
+    'merge_evidence_bindings', 'prove_binding_infeasible',
 ]

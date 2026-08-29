@@ -16,6 +16,9 @@ import type {
 import type {
   ApprovalBackfillResult,
   ApprovalDoc,
+  DesignReviewRequest,
+  DesignReviewTemplate,
+  DesignReviewTemplateQuery,
   GateKey,
   SeenKey,
   StructureApprovalRequest,
@@ -477,6 +480,19 @@ export const realApi: Api = {
   getAgentQueue: () => get<AgentQueueView>('/agent/runs/queue'),
 
   getApprovals: (sid) => get<ApprovalDoc>(n(sid) + '/approvals'),
+  getDesignReviewTemplate: (sid, query: DesignReviewTemplateQuery) => {
+    const params = new URLSearchParams({
+      actor: query.actor,
+      reviewer_kind: query.reviewer_kind,
+      review_run_id: query.review_run_id,
+      reason: query.reason,
+    })
+    return get<DesignReviewTemplate>(
+      n(sid) + '/approvals/design/template?' + params.toString(),
+    )
+  },
+  approveDesignReview: (sid, request: DesignReviewRequest) =>
+    post<ApprovalDoc>(n(sid) + '/approvals/design', request),
   approveGate: (sid, key: GateKey) => post<ApprovalDoc>(n(sid) + '/approvals/gate/' + key),
   approveStructure: (sid, request: StructureApprovalRequest) =>
     post<ApprovalDoc>(n(sid) + '/approvals/structure', request),

@@ -470,7 +470,7 @@ def test_the_clean_base_leaves_no_rule_unimplemented():
     assert len(outs) == len(want) == 68
 
 
-def test_global_field_failures_route_to_resample_except_evidence_locator():
+def test_global_field_failures_route_to_resample_except_typed_human_repairs():
     routed = {rule.rule for rule in REGISTRY.all()
               if rule.stage == 'stage2'
               and rule.fix == ('stage2.global', '--resample')}
@@ -480,10 +480,13 @@ def test_global_field_failures_route_to_resample_except_evidence_locator():
         'address_bare_pronoun', 'address_all_pronoun', 'role_missing',
         'role_repeats_name', 'hedge_words', 'distinguisher_lonely',
         'world_rule_no_desc', 'secret_known_by_dangling', 'relation_dangling',
-        'canon_chapter_refs_dangling', 'conflict_stage_coverage',
+        'canon_chapter_refs_dangling',
     }
     evidence = REGISTRY.get('global_evidence_unlocated')
     assert evidence.fix is None
+    conflict = REGISTRY.get('conflict_stage_coverage')
+    assert conflict.fix is None
+    assert '`--apply-edit` 0 LLM' in conflict.note
 
 
 def test_the_two_unver_rules_always_speak():

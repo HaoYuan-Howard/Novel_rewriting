@@ -20,12 +20,12 @@ stage2.py —— 抽取那一层的判据行。源是 `docs/schema/stage2.md` §
 
 **① 这是第一个用 `Rule.fix` 的层。** 修复路由使用机器可读的节点与 flag：
 `blueprint --chapters` 15 · `blueprint --patch` 1 ·
-`global --resample` 16 · `global --purge-role` 1 ·
+`global --resample` 15 · `global --purge-role` 1 ·
 `global --renormalize` 1。注册期第 ⑧ 条会查节点与 flag 都真实存在——**写歪一个当场炸**，
 而写进 `note` 的散文里拼错一个 flag 名不会有任何东西出声（LESSONS 第 11 条）。
 ⚠ **`fix` 与 `directive` 是两格，在本层完全不重叠**：全表 `repair='NONE'`
 （反哺是 stage5 独有的，`contracts/rules.py::_validate` ④ 把它锁在 `owner='stage5'` 上）
-⇒ `directive` 全表为空，而 `fix` 有 34 条。
+⇒ `directive` 全表为空，而 `fix` 有 33 条。
 
 ⚠ **徽章结构上永远不可能是 `pass`**：本表有 **2 条 `unver`**，其中
 `role_fate_unverifiable` **无条件产出**（见下）⇒ 每本每次都产 ⇒ 最好情况是 `amber`
@@ -316,13 +316,13 @@ _hard('global_evidence_unlocated', '自由事实证据能唯一回取为精确 S
 # ═══ 五、冲突阶段章覆盖（1 HARD）═══════════════════════════════════════════
 
 _hard('conflict_stage_coverage', '冲突阶段逐章显式枚举且恰好覆盖全书一次', 'R-2.14',
-      fix=FIX_RESAMPLE,
       note='`chapters` 是**显式章号枚举**，不是区间端点：`[3, 5]` 只表示第 3、5 章，'
            '不能暗含第 4 章。每个阅读序章号必须恰好出现一次；缺章会让 Stage4 拿不到'
            '`current_stage`，重章会让归属不唯一。实测 Flash 曾把连续段省写成 '
            '`[3,5]/[8,10]/[13,15]`，旧产地照常落盘，直到 Stage4 才裸抛 exit 70。'
-           '本条把错误拦在付费产物的产地；问题稿可人工补全后走 `--revalidate` 0 成本提升，'
-           '或显式 `--resample` 重采整份 global。')
+           '本条把错误拦在付费产物的产地；默认转人工用 GlobalEdit '
+           '`conflict_stages_replace` + `--apply-edit` 0 LLM 完整重画，或补全既有问题稿后走 '
+           '`--revalidate` 0 成本提升；显式 `--resample` 只作最后手段，不是报告默认路由。')
 
 # ═══ 六、拍与区间（6 HARD · 1 INFO）═══════════════════════════════════════
 

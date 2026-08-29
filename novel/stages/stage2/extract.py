@@ -3980,6 +3980,18 @@ def _apply_secret_patches(data: dict[str, Any], edit: GlobalEdit,
         dumped = edit.setting.model_dump(by_alias=True, exclude_unset=True)
         canon.setdefault('setting', {}).update(dumped)
         changed.extend(f'canon.setting.{key}' for key in dumped)
+    if edit.conflict_stages_replace is not None:
+        replacement = [row.model_dump(by_alias=True)
+                       for row in edit.conflict_stages_replace]
+        measured = checks.measure_conflict_stage_coverage(replacement, ordinals)
+        if measured.evidence:
+            raise TerminalState(
+                'conflict_stages_replace 没有让正文章恰好各出现一次：'
+                f'缺章={list(measured.missing)}，越界={list(measured.extra)}，'
+                f'重复={[(chapter, list(labels)) for chapter, labels in measured.duplicate]}；'
+                f'盘上章集合={sorted(ordinals)}')
+        arc['conflict_stages'] = replacement
+        changed.append('arc.conflict_stages')
     if edit.arc_tracks_replace is not None:
         arc['arc_tracks'] = [row.model_dump(by_alias=True)
                              for row in edit.arc_tracks_replace]
@@ -4072,8 +4084,9 @@ def run_apply_edit(ctx: RunContext, edit_path: str = '') -> tuple[GlobalGroundin
     """`--apply-edit`：吃 typed 人工订正，走与生成稿**同一道**归一、判定与闸门。0 成本。
 
     【它补的是什么】既能逐格订正已有 secret/world-rule/枚举，也能完整替换 secret、
-    world-rule 和单个人物的 address 集合，从而表达新增、删除与复合时间线拆分；所有字段
-    仍由同一严格 schema 收口，来源账明确记录这是人工 partial rewrite。
+    world-rule、冲突阶段和单个人物的 address 集合，从而表达新增、删除、复合时间线拆分
+    与全书冲突分段重画；所有字段仍由同一严格 schema 收口，来源账明确记录这是人工
+    partial rewrite。
 
     四条纪律（与 stage4/6/7 的现役人工路同款）：
       · **同一归一落点**（`normalize_global`）——人改完的埋点章照样过 `_prune_setups`，

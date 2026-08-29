@@ -8,7 +8,7 @@ test_schema_api.py —— HTTP 响应模型的载体层守卫（`docs/schema/_ap
   ② **契约层不许手抄取值面**（`Literal['a','b']`）：取值面的唯一落点是 `invariants`。
   ③ **契约层不许背上 web 栈**：离线产 TS 类型的脚本一行 HTTP 都不发。
 
-⚠ 本文件**不需要 fastapi**。ApprovalDoc v4 还须关闭式拒绝退役的 s3 gate。
+⚠ 本文件**不需要 fastapi**。ApprovalDoc v5 还须关闭式拒绝退役的 s3 gate。
 """
 from __future__ import annotations
 
@@ -324,9 +324,9 @@ def test_the_contract_layer_never_imports_the_web_stack():
     assert 'pydantic' in mods, 'pydantic 都没 import 到——AST 多半解析错了'
 
 
-def test_approval_doc_v4_has_exactly_the_current_seven_gates():
+def test_approval_doc_v5_has_exactly_the_current_seven_gates():
     payload = {
-        'v': 4,
+        'v': 5,
         'sid': '123',
         'gate': {gate: False for gate in APPROVAL_GATES},
         'seen': {'read': False, 'global': False},

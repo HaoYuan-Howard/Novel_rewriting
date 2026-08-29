@@ -42,7 +42,8 @@ from pydantic import Field, model_validator
 
 from contracts.invariants import (
     BLIND_ALIAS_ALGORITHM,
-    ADDRESS_CONTEXT, DELIVERY_MODES, GOAL_INTENTS,
+    ADDRESS_CONTEXT, BINDING_CONCERN_CODES, BINDING_INFEASIBILITY_CODES,
+    DELIVERY_MODES, GOAL_INTENTS,
     NARRATIVE_PERSON, RESPONSE_CHAPTER_WEIGHTS,
     RESPONSE_DELIVERY_MODES, RESPONSE_GOAL_INTENTS, RESPONSE_STRUCTURAL_ROLES,
     RESPONSE_TEMPORAL_LINKS, RESPONSE_UNIT_WEIGHTS, STRUCTURAL_ROLES,
@@ -490,6 +491,16 @@ class RejectedResponseAdoption(FrozenModel):
     audit: RevalidationAudit
 
 
+class DesignUnitLineage(StrictModel):
+    """Stage4A 聚合候选中每个实际被采纳 unit 的跨 run 来源。"""
+
+    chapter_ordinal: int | None = Field(default=None, ge=1)
+    source_run_id: str = Field(min_length=1)
+    purpose: str = Field(min_length=1)
+    attempt_id: str = Field(pattern=r'^[0-9a-f]{16}$')
+    source_kind: Literal['inherited', 'repair']
+
+
 class BlindCandidateProvenance(LlmProvenance):
     alias_algorithm: Literal[BLIND_ALIAS_ALGORITHM]
     truth_sha256: Sha256
@@ -497,12 +508,36 @@ class BlindCandidateProvenance(LlmProvenance):
     #: 响应拓扑不是 artifact shape；旧产物诚实保持未知，新 producer 必须显式填其架构。
     architecture: Literal[
         'whole_book_v1', 'book_strategy_chapters_v1',
+        'book_strategy_targeted_repair_v1',
     ] | None = None
+
+    parent_candidate_sha256: Sha256 | None = None
+    repair_decision_sha256: Sha256 | None = None
+    unit_lineage: list[DesignUnitLineage] | None = None
 
     #: 只有 `--adopt-rejected` 那一条 0-wire 路会填它；正常付费产出恒为 `None`。
     #: ⚠ 它是**加法且带默认值** ⇒ 存量 `blind_candidate.json` 照样读得进来，
     #: 不构成 shape break（`_SHAPE_BREAKS` 的语义是「存量读不进来」）。
     rejected_response_adoption: RejectedResponseAdoption | None = None
+
+    @model_validator(mode='after')
+    def _repair_lineage_is_closed(self) -> BlindCandidateProvenance:
+        repair = self.architecture == 'book_strategy_targeted_repair_v1'
+        fields = (
+            self.parent_candidate_sha256,
+            self.repair_decision_sha256,
+            self.unit_lineage,
+        )
+        if repair:
+            if any(value is None for value in fields) or not self.unit_lineage:
+                raise ValueError('targeted repair provenance 缺 parent/decision/unit lineage')
+            keys = [row.chapter_ordinal for row in self.unit_lineage]
+            chapters = sorted(value for value in keys if value is not None)
+            if keys.count(None) != 1 or chapters != list(range(1, len(chapters) + 1)):
+                raise ValueError('targeted repair unit_lineage 必须恰覆盖 strategy + 1..N')
+        elif any(value is not None for value in fields):
+            raise ValueError('非 targeted repair 候选不得夹带 repair lineage')
+        return self
 
 
 class BlindCandidate(StrictModel):
@@ -559,54 +594,90 @@ class EvidenceChapterBinding(StrictModel):
         return self
 
 
+class BindingConcern(StrictModel):
+    """模型对绑定的语义担忧，只是非阻断证据，不是不可行证明。"""
+
+    constraint_code: Literal[BINDING_CONCERN_CODES]
+    chapter_ordinal: int | None = Field(default=None, ge=1)
+    scenes: list[str] = Field(default_factory=list)
+    reason: str = Field(min_length=1)
+    closed_refs: list[str] = Field(min_length=1)
+
+    @model_validator(mode='after')
+    def _closed_surface_is_unique(self) -> BindingConcern:
+        for label, values in (
+            ('scenes', self.scenes), ('closed_refs', self.closed_refs),
+        ):
+            if len(values) != len(set(values)):
+                raise ValueError(f'binding_concerns.{label} 不能重复')
+        if any(not re.match(_CANDIDATE_SCENE_PATTERN, scene) for scene in self.scenes):
+            raise ValueError('binding_concerns.scenes 存在非法 candidate_scene_id')
+        return self
+
+
+class BindingInfeasibilityWitness(StrictModel):
+    """由编译器铸造的关闭式不可行证明；模型响应不接受此字段。"""
+
+    chapter_ordinal: int = Field(ge=1)
+    scenes: list[str] = Field(min_length=1)
+    constraint_code: Literal[BINDING_INFEASIBILITY_CODES]
+    closed_refs: list[str] = Field(min_length=1)
+    proof_basis: Sha256
+
+    @model_validator(mode='after')
+    def _proof_sets_are_canonical(self) -> BindingInfeasibilityWitness:
+        if self.scenes != sorted(set(self.scenes)):
+            raise ValueError('infeasibility_proof.scenes 必须去重并按字典序排列')
+        if self.closed_refs != sorted(set(self.closed_refs)):
+            raise ValueError(
+                'infeasibility_proof.closed_refs 必须去重并按字典序排列')
+        return self
+
+
 class EvidenceBindingResponse(StrictModel):
     status: Literal['bound', 'infeasible']
     candidate_sha256: Sha256
     chapters: list[EvidenceChapterBinding] | None = None
-    reason_kind: Literal[
-        'causal_conflict', 'stage_conflict', 'material_conflict',
-        'future_leak', 'insufficient_evidence',
-    ] | None = None
-    reason: str | None = Field(default=None, min_length=1)
-    evidence_refs: list[str] | None = None
-
-    @model_validator(mode='before')
-    @classmethod
-    def _empty_bound_evidence_is_the_same_as_absent(cls, value: object) -> object:
-        """`bound` 下的空 `evidence_refs` 数组与缺省同义，确定性收成 `null`。
-
-        ⚠ **只收空数组这一种。** 非空的 evidence 在 `bound` 下仍是「夹带 infeasible
-        理由」，照旧红——那条闸防的是模型一边说能绑定、一边偷偷给不可行证据。
-        空数组不携带任何这样的语义，却让整书 B 相白重出一次。
-        `infeasible` 一侧一个字不动：它的空数组正是「没给证据」，必须继续红。
-        """
-        if not isinstance(value, dict) or value.get('status') != 'bound':
-            return value
-        if value.get('evidence_refs') != []:
-            return value
-        return {**value, 'evidence_refs': None}
+    binding_concerns: list[BindingConcern] = Field(default_factory=list)
 
     @model_validator(mode='after')
     def _status_has_exact_payload(self) -> EvidenceBindingResponse:
         if self.status == 'bound':
             if not self.chapters:
                 raise ValueError('bound 必须返回非空 chapters')
-            if self.reason_kind is not None or self.reason is not None or self.evidence_refs is not None:
-                raise ValueError('bound 不得夹带 infeasible 理由')
         else:
             if self.chapters is not None:
                 raise ValueError('infeasible 不得返回部分绑定冒充可编译结果')
-            if self.reason_kind is None or self.reason is None or not self.evidence_refs:
-                raise ValueError('infeasible 必须给 typed reason 与非空 evidence_refs')
+            if not self.binding_concerns:
+                raise ValueError(
+                    'infeasible 模型声称必须给非空 binding_concerns；'
+                    '它仍须由代码独立证明')
         return self
 
 
 class EvidenceBindingProvenance(LlmProvenance):
+    origin: Literal['llm'] = 'llm'
+    candidate_sha256: Sha256
+
+
+class EvidenceBindingHumanProvenance(FreeProvenance):
+    origin: Literal['human'] = 'human'
     candidate_sha256: Sha256
 
 
 class EvidenceBinding(EvidenceBindingResponse):
-    provenance: EvidenceBindingProvenance = Field(alias='_provenance')
+    infeasibility_proof: list[BindingInfeasibilityWitness] | None = None
+    provenance: EvidenceBindingProvenance | EvidenceBindingHumanProvenance = Field(
+        alias='_provenance', discriminator='origin')
+
+    @model_validator(mode='after')
+    def _formal_terminal_requires_code_proof(self) -> EvidenceBinding:
+        if self.status == 'bound':
+            if self.infeasibility_proof is not None:
+                raise ValueError('bound 不得夹带 infeasibility_proof')
+        elif not self.infeasibility_proof:
+            raise ValueError('infeasible 正式产物必须带代码铸造的 proof witness')
+        return self
 
 
 class PlanEdit(StrictModel):

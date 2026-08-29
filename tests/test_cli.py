@@ -550,16 +550,24 @@ def test_build_argv_already_carries_the_yes_for_a_paid_run():
     assert '--yes' not in N.build_argv('stage6.hook', 'sid1', ['--check-only'], base='.')
 
 
-def test_stage4_design_and_plan_are_two_independent_paid_dispatches(monkeypatch):
+def test_stage4_design_and_plan_are_two_independent_paid_dispatches(
+        monkeypatch, tmp_path):
     """Stage4A 成功只落盲候选；同一命令不得顺手触发 Stage4B。"""
     from novel.cli import main as M
     from novel.stages.stage4 import plan
 
     events: list[tuple[str, str]] = []
-    design_ctx = SimpleNamespace(node='stage4.design')
-    plan_ctx = SimpleNamespace(node='stage4.plan')
+    design_ctx = SimpleNamespace(
+        node='stage4.design', novel_dir=tmp_path / 'book', sid='123')
+    plan_ctx = SimpleNamespace(
+        node='stage4.plan', novel_dir=tmp_path / 'book', sid='123')
+    authorizations = []
 
-    def run_design(got_ctx, client):
+    def run_design(got_ctx, client, **kwargs):
+        assert kwargs == {
+            'repair_decision_sha256': None,
+            'repair_scope': None,
+        }
         events.append(('design', f'{got_ctx.node}:{client}'))
         return SimpleNamespace(output_chapters=[object(), object()])
 
@@ -571,13 +579,22 @@ def test_stage4_design_and_plan_are_two_independent_paid_dispatches(monkeypatch)
     monkeypatch.setattr(M, 'render', lambda _report: 'report')
     monkeypatch.setattr(plan, 'run_design', run_design)
     monkeypatch.setattr(plan, 'run_plan', run_plan)
+    from novel.orchestrator import approvals
+    monkeypatch.setattr(
+        approvals, 'authorize_design_initial',
+        lambda base, sid: authorizations.append(('design', base, sid)))
+    monkeypatch.setattr(
+        approvals, 'authorize_plan',
+        lambda base, sid: authorizations.append(('plan', base, sid)))
 
     assert M._run_stage4(design_ctx, []) == X.OK
     assert events == [('design', 'stage4.design:client:stage4.design')]
+    assert authorizations == [('design', tmp_path, '123')]
 
     events.clear()
     assert M._run_stage4(plan_ctx, []) == X.OK
     assert events == [('plan', 'stage4.plan:client:stage4.plan')]
+    assert authorizations[-1] == ('plan', tmp_path, '123')
 
 
 def test_stage4_two_dry_runs_preview_only_their_own_prompt(monkeypatch):
@@ -605,19 +622,33 @@ def test_stage4_two_dry_runs_preview_only_their_own_prompt(monkeypatch):
     assert calls == ['plan']
 
 
-def test_stage4_replan_refreshes_only_a_and_remains_an_explicit_paid_run(monkeypatch):
-    """B 说不可绑定后，只有显式付费 replan 才绕过旧 A 缓存。"""
+def test_stage4_replan_requires_a_current_strategy_rejection_and_refreshes_only_a(
+        monkeypatch, tmp_path):
+    """整书重采必须消费正式策略驳回，且仍只产 A。"""
     from novel.cli import main as M
     from novel.llm.cache import CachePolicy
+    from novel.orchestrator import approvals
     from novel.stages.stage4 import plan
 
-    ctx = SimpleNamespace(node='stage4.design', cache=CachePolicy.default())
+    ctx = SimpleNamespace(
+        node='stage4.design', cache=CachePolicy.default(),
+        novel_dir=tmp_path / '平台_书_123', sid='123')
     events: list[tuple[str, str]] = []
+    resolved: list[tuple[object, str, object, str]] = []
+    scope = SimpleNamespace(strategy_replan=True, decision_sha256='d' * 64)
 
-    def run_design(got_ctx, client):
+    def run_design(got_ctx, client, **kwargs):
+        assert kwargs == {
+            'repair_decision_sha256': None,
+            'repair_scope': scope,
+        }
         events.append((got_ctx.cache.name, client))
         return SimpleNamespace(output_chapters=[object()])
 
+    monkeypatch.setattr(
+        approvals, 'resolve_design_action',
+        lambda base, sid, sha, *, expected: resolved.append(
+            (base, sid, sha, expected)) or scope)
     monkeypatch.setattr(M, '_llm_client', lambda _ctx: 'design-client')
     monkeypatch.setattr(plan, 'run_design', run_design)
     monkeypatch.setattr(
@@ -627,6 +658,60 @@ def test_stage4_replan_refreshes_only_a_and_remains_an_explicit_paid_run(monkeyp
     assert N.is_paid('stage4.design', ['--replan']) is True
     assert M._run_stage4(ctx, ['--replan']) == X.OK
     assert events == [('refresh-write', 'design-client')]
+    assert resolved == [(tmp_path, '123', None, 'replan')]
+
+
+def test_profiled_stage4_replan_passes_the_resolved_scope_to_agent(
+        monkeypatch, tmp_path):
+    from novel import node_agents
+    from novel.cli import main as M
+    from novel.orchestrator import approvals
+
+    profile = AgentProfile(
+        driver='codex', model='gpt-5.6-sol', reasoning_effort='high')
+    ctx = SimpleNamespace(
+        node='stage4.design', cache=object(), novel_dir=tmp_path / 'book',
+        sid='123', executor_profile=profile)
+    scope = SimpleNamespace(strategy_replan=True, decision_sha256='d' * 64)
+    captured = []
+
+    monkeypatch.setattr(
+        approvals, 'resolve_design_action',
+        lambda base, sid, sha, *, expected: scope)
+    monkeypatch.setattr(
+        M.N, 'resolve_executor_profile',
+        lambda _node, _flags, got: got)
+
+    class Agent:
+        def run(self):
+            return SimpleNamespace(
+                artifact=object(), report=None, passed=True, turns=1)
+
+    monkeypatch.setattr(
+        node_agents, 'build_node_agent',
+        lambda _ctx, **kwargs: captured.append(kwargs) or Agent())
+
+    assert M._dispatch('stage4.design', ctx, ['--replan']) == X.OK
+    assert captured == [{
+        'concurrency': DEFAULT_CONCURRENCY,
+        'repair_decision_sha256': None,
+        'repair_scope': scope,
+    }]
+
+
+def test_targeted_design_preview_refuses_legacy_executor_before_rendering(
+        monkeypatch, tmp_path, capsys):
+    from novel.cli import main as M
+
+    monkeypatch.setattr(
+        M.paths, 'resolve_novel_dir', lambda _base, _sid: tmp_path / 'book')
+    rc = _run(
+        'preview', 'stage4.design', '123',
+        '--repair-decision', 'a' * 64, '--base', str(tmp_path))
+
+    assert rc == X.TERMINAL_STATE
+    err = capsys.readouterr().err
+    assert '只支持带 executor profile' in err
 
 
 def test_stage4_replan_and_dry_run_are_mutually_exclusive_before_costing(
@@ -652,34 +737,46 @@ def test_stage4_replan_and_dry_run_are_mutually_exclusive_before_costing(
 
 
 def test_stage4_typed_infeasible_is_landed_red_without_a_fake_report(
-        monkeypatch, capsys):
+        tmp_path, monkeypatch, capsys):
     """B 负结论已落 evidence_binding：exit 1 记 landed，不伪造 CheckReport。"""
-    from contracts.schema.stage4 import EvidenceBinding
+    from contracts.schema.stage4 import (
+        BindingConcern, BindingInfeasibilityWitness, EvidenceBinding,
+    )
     from novel.cli import main as M
+    from novel.orchestrator import approvals
     from novel.stages.stage4 import plan
 
     binding = EvidenceBinding.model_construct(
         status='infeasible', candidate_sha256='a' * 64,
-        chapters=None, reason_kind='future_leak',
-        reason='候选场景只能靠未来章证据成立。',
-        evidence_refs=['f02_001'])
+        chapters=None,
+        binding_concerns=[BindingConcern(
+            constraint_code='future_leak', chapter_ordinal=2,
+            scenes=['c02s01'], reason='候选场景只能靠未来章证据成立。',
+            closed_refs=['c02s01'])],
+        infeasibility_proof=[BindingInfeasibilityWitness(
+            chapter_ordinal=2, scenes=['c02s01'],
+            constraint_code='empty_stage_allowlist',
+            closed_refs=['c02s01'], proof_basis='b' * 64)])
+    monkeypatch.setattr(approvals, 'authorize_plan', lambda *_args: None)
     monkeypatch.setattr(M, '_llm_client', lambda _ctx: 'binding-client')
     monkeypatch.setattr(plan, 'run_plan', lambda _ctx, _client: binding)
     monkeypatch.setattr(
         M, 'render', lambda _report: pytest.fail('typed negative 不得伪造 CheckReport'))
 
-    rc = M._run_stage4(SimpleNamespace(node='stage4.plan'), [])
+    rc = M._run_stage4(SimpleNamespace(
+        node='stage4.plan', novel_dir=tmp_path / 'book', sid='123'), [])
 
     assert rc == X.CHECK_FAILED and X.landed(rc)
     out = capsys.readouterr().out
-    assert 'typed infeasible' in out and 'future_leak' in out
-    assert 'stage4.design --replan' in out
+    assert 'typed infeasible' in out and 'empty_stage_allowlist' in out
+    assert 'Stage4A 返修审阅' in out
 
 
 def test_stage4_cli_handler_refuses_repeating_current_infeasible_without_wire(
-        monkeypatch):
+        tmp_path, monkeypatch):
     """手敲 paid B 也必须落到 producer 的同一前置，而不是只靠浏览器隐藏。"""
     from novel.cli import main as M
+    from novel.orchestrator import approvals
     from novel.stages.stage4 import plan
 
     store = object()
@@ -692,9 +789,13 @@ def test_stage4_cli_handler_refuses_repeating_current_infeasible_without_wire(
         def ask_json(self, *_args, **_kwargs):
             pytest.fail('CLI 不得为同一 current infeasible 再发 B wire')
 
+    # 本用例钉 producer 的第二道终闸；正式 A 审批的第一道授权由相邻用例
+    # 单独覆盖，不能让缺省 SimpleNamespace 先在 façade 属性访问处假红。
+    monkeypatch.setattr(approvals, 'authorize_plan', lambda *_args: None)
     monkeypatch.setattr(M, '_llm_client', lambda _ctx: NoWireClient())
     with pytest.raises(TerminalState, match=r'stage4\.design --replan'):
-        M._run_stage4(SimpleNamespace(node='stage4.plan'), [])
+        M._run_stage4(SimpleNamespace(
+            node='stage4.plan', novel_dir=tmp_path / 'book', sid='42'), [])
 
 
 def test_stage4_cli_rejects_retired_chapters_before_dispatch(
@@ -1123,6 +1224,7 @@ def test_profiled_dispatch_never_constructs_a_deepseek_client(
         ctx = SimpleNamespace(
             node=actual_node,
             run_id='profiled-stage2-cli',
+            novel_dir=tmp_path / 'book', sid='book-1',
             executor_profile=kwargs['executor_profile'],
         )
         contexts.append(ctx)
@@ -1153,6 +1255,10 @@ def test_profiled_dispatch_never_constructs_a_deepseek_client(
     from novel.orchestrator import approvals
     monkeypatch.setattr(
         approvals, 'authorize_writing', lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        approvals, 'authorize_design_initial', lambda *_args: None)
+    monkeypatch.setattr(
+        approvals, 'authorize_plan', lambda *_args: None)
 
     assert _run(
         'run', node, 'book-1', *flags, *EXECUTOR_PROFILE_ARGS,
@@ -1174,6 +1280,7 @@ def test_profiled_dispatch_renders_report_and_maps_passed_false_to_exit_one(
     )
     from novel import node_agents
     from novel.cli import main as M
+    from novel.llm import stage5_runs
 
     finding = Finding(
         rule='SYNTHETIC-HARD', sev='hard', item='合成阻断项',
@@ -1208,6 +1315,10 @@ def test_profiled_dispatch_renders_report_and_maps_passed_false_to_exit_one(
         return Agent()
 
     monkeypatch.setattr(node_agents, 'build_node_agent', build_agent)
+    monkeypatch.setattr(
+        stage5_runs, 'refuse_foreign_prepared_before_wire',
+        lambda _ctx, _chapters: None,
+    )
     ctx = SimpleNamespace(node='stage5.write', executor_profile=AgentProfile(
         driver='codex', model='gpt-5.6-sol', reasoning_effort='high'))
 
@@ -1223,16 +1334,27 @@ def test_profiled_dispatch_renders_report_and_maps_passed_false_to_exit_one(
     assert '落盘负结论' in out and '3 turn' in out
 
 
-def test_profiled_stage4_infeasible_is_landed_exit_one(monkeypatch, capsys):
+def test_profiled_stage4_infeasible_is_landed_exit_one(
+        tmp_path, monkeypatch, capsys):
     """Stage4B typed negative 不是假报告，也不是没跑成的 exit 2。"""
-    from contracts.schema.stage4 import EvidenceBinding
+    from contracts.schema.stage4 import (
+        BindingConcern, BindingInfeasibilityWitness, EvidenceBinding,
+    )
     from novel import node_agents
     from novel.cli import main as M
+    from novel.orchestrator import approvals
 
     binding = EvidenceBinding.model_construct(
         status='infeasible', candidate_sha256='a' * 64,
-        chapters=None, reason_kind='future_leak',
-        reason='候选只能依赖未来证据。', evidence_refs=['f02_001'])
+        chapters=None,
+        binding_concerns=[BindingConcern(
+            constraint_code='future_leak', chapter_ordinal=2,
+            scenes=['c02s01'], reason='候选只能依赖未来证据。',
+            closed_refs=['c02s01'])],
+        infeasibility_proof=[BindingInfeasibilityWitness(
+            chapter_ordinal=2, scenes=['c02s01'],
+            constraint_code='empty_stage_allowlist',
+            closed_refs=['c02s01'], proof_basis='b' * 64)])
 
     class Agent:
         def run(self):
@@ -1243,18 +1365,58 @@ def test_profiled_stage4_infeasible_is_landed_exit_one(monkeypatch, capsys):
 
     monkeypatch.setattr(
         node_agents, 'build_node_agent', lambda _ctx, **_kwargs: Agent())
+    monkeypatch.setattr(approvals, 'authorize_plan', lambda *_args: None)
     monkeypatch.setattr(
         M, 'render', lambda _report: pytest.fail(
             'Stage4 infeasible 不得伪造 CheckReport'))
-    ctx = SimpleNamespace(node='stage4.plan', executor_profile=AgentProfile(
-        driver='codex', model='gpt-5.6-sol', reasoning_effort='high'))
+    ctx = SimpleNamespace(
+        node='stage4.plan', novel_dir=tmp_path / 'book', sid='123',
+        executor_profile=AgentProfile(
+            driver='codex', model='gpt-5.6-sol', reasoning_effort='high'))
 
     rc = M._dispatch('stage4.plan', ctx, [])
 
     assert rc == X.CHECK_FAILED and X.landed(rc)
     out = capsys.readouterr().out
-    assert 'typed infeasible' in out and 'future_leak' in out
-    assert 'stage4.design --replan' in out
+    assert 'typed infeasible' in out and 'empty_stage_allowlist' in out
+    assert '当前 design review 决定' in out
+
+
+@pytest.mark.parametrize('flags', [
+    ['--check-only'],
+    ['--revalidate', '--actor', 'reviewer', '--reason', '同轮复核'],
+    ['--apply-edit', 'plan.json'],
+    ['--dry-run'],
+])
+def test_profiled_stage4_zero_cost_recovery_never_requires_design_review(
+        tmp_path, monkeypatch, flags):
+    """即使未来接入 executor，旧 Plan 的免费恢复也不能追溯要求 A 人审。"""
+    from novel import node_agents
+    from novel.cli import main as M
+    from novel.orchestrator import approvals
+
+    profile = AgentProfile(
+        driver='codex', model='gpt-5.6-sol', reasoning_effort='high')
+    ctx = SimpleNamespace(
+        node='stage4.plan', novel_dir=tmp_path / 'book', sid='123',
+        executor_profile=profile)
+
+    monkeypatch.setattr(
+        M.N, 'resolve_executor_profile',
+        lambda _node, _flags, got: got)
+    monkeypatch.setattr(
+        approvals, 'authorize_plan',
+        lambda *_args: pytest.fail('零成本 Plan 恢复不得要求 current A all-accept'))
+
+    class Agent:
+        def run(self):
+            return SimpleNamespace(
+                artifact=None, report=None, passed=True, turns=0)
+
+    monkeypatch.setattr(
+        node_agents, 'build_node_agent', lambda _ctx, **_kwargs: Agent())
+
+    assert M._dispatch('stage4.plan', ctx, flags) == X.OK
 
 
 def test_profiled_gate_blocked_remains_exit_two_without_a_stack(

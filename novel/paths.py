@@ -830,6 +830,24 @@ def stage5_chapter_checkpoint_dir(
     return stage5_chapter_run_path(novel_dir, run_id, chapter) / 'checkpoints'
 
 
+def stage5_prepared_recovery_manifest_path(
+        novel_dir: str | os.PathLike[str], run_id: str,
+) -> Path:
+    """target run 的整书 prepared recovery 不可变 manifest。"""
+    from novel.run_identity import check_run_id
+
+    return (Path(os.fspath(novel_dir)) / STAGE5_RUNS_DIRNAME
+            / check_run_id(run_id) / 'prepared_recovery.json')
+
+
+def stage5_chapter_recovery_journal_path(
+        novel_dir: str | os.PathLike[str], run_id: str, chapter: int,
+) -> Path:
+    """一章跨 run replacement 的两相 journal；不覆盖 source committed.json。"""
+    return (stage5_chapter_run_path(novel_dir, run_id, chapter)
+            / 'prepared_recovery.json')
+
+
 def stage5_chapter_commit_lock_path(
         novel_dir: str | os.PathLike[str], chapter: int,
 ) -> Path:

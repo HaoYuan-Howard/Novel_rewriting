@@ -7,7 +7,7 @@ append-only checkpoint，最后由本模块的 aggregate journal 冻结 N+1 份
 adoption 与整书候选。通用 profile/prompt/schema/stdout/ledger/session-audit
 闭环仍由 ``novel.llm.agent_runs`` 唯一实现。
 
-typed infeasible 只有 binding；bound bundle 还含 plan/context；同书任一
+typed infeasible 只有 binding；bound bundle 只含 plan，context 由独立节点组装；同书任一
 foreign ``prepared`` 都阻止另一 run/node 写正式路径。
 """
 from __future__ import annotations
@@ -27,10 +27,11 @@ from pydantic import BaseModel
 
 from contracts.artifacts import (
     STAGE4_BLIND_CANDIDATE, STAGE4_EVIDENCE_BINDING,
-    STAGE4_PLAN_CHAPTERS, STAGE4_WRITER_CONTEXT,
+    STAGE4_PLAN_CHAPTERS,
 )
 from contracts.invariants import STAGE4_DESIGN_MAX_CONCURRENCY
 from contracts.schema import Usage
+from contracts.schema.stage4 import BlindCandidate
 from novel import paths, prov
 from novel.appendlog import process_append_lock
 from novel.errors import ArtifactUnreadable, ProvenanceRefused
@@ -52,6 +53,7 @@ RECOVERY_POLICIES = {
 DESIGN_UNIT_RECOVERY_POLICY = 'stage4-design-v2'
 DESIGN_MAX_CONCURRENCY = STAGE4_DESIGN_MAX_CONCURRENCY
 DESIGN_AGGREGATE_COMMIT_FILE = 'aggregate-committed.json'
+DESIGN_REPAIR_AGGREGATE_COMMIT_FILE = 'repair-aggregate-committed.json'
 
 _DESIGN_AGGREGATE_VERSION = 1
 _DESIGN_AGGREGATE_KIND = 'stage4-design-aggregate/v1'
@@ -68,6 +70,29 @@ _DESIGN_ADOPTION_FIELDS = {
     'run_sha256', 'checkpoint_revision', 'checkpoint_sha256',
     'checkpoint_file_sha256', 'provider_session_id', 'request_identity',
 }
+_DESIGN_REPAIR_AGGREGATE_VERSION = 1
+_DESIGN_REPAIR_AGGREGATE_KIND = 'stage4-design-targeted-repair/v1'
+_DESIGN_REPAIR_AGGREGATE_FIELDS = {
+    'version', 'kind', 'state', 'prepared_at', 'committed_at',
+    'run_id', 'sid', 'node', 'code', 'parent_run_id',
+    'parent_candidate_sha256', 'repair_decision_sha256', 'target_chapters',
+    'primary_artifact', 'primary_payload_sha256',
+    'primary_payload_fingerprint', 'primary_payload',
+    'finalization_sha256', 'finalization_payload', 'touched_paths',
+    'baselines', 'attempts', 'sources', 'landed_payload_sha256s',
+    'post_file_sha256s', 'commit_sha256',
+}
+_DESIGN_REPAIR_SOURCE_FIELDS = {
+    'unit_key', 'chapter', 'source_run_id', 'purpose', 'attempt_id',
+    'source_kind', 'run_sha256', 'checkpoint_revision',
+    'checkpoint_sha256', 'checkpoint_file_sha256',
+    'response_payload_sha256', 'model', 'accepted_turn_index',
+}
+_LEGACY_STANDARD_NULL_PROVENANCE_FIELDS = (
+    'parent_candidate_sha256',
+    'repair_decision_sha256',
+    'unit_lineage',
+)
 _LEDGER_IDENTITY_FIELDS = {
     'attempt_id', 'request_fingerprint', 'model', 'request_model',
     'reasoning_effort', 'thinking', 'json_mode', 'max_tokens',
@@ -95,6 +120,35 @@ class DesignUnitRequest:
     user: str
     response_model: type[BaseModel]
     max_tokens: int
+
+
+@dataclass(frozen=True)
+class DesignUnitSource:
+    """已提交 aggregate 所指的一份不可变 unit checkpoint。"""
+
+    chapter: int | None
+    source_run_id: str
+    purpose: str
+    attempt_id: str
+    source_kind: str
+    run_sha256: str
+    checkpoint_revision: int
+    checkpoint_sha256: str
+    checkpoint_file_sha256: str
+    response_payload: dict[str, Any]
+    response_payload_sha256: str
+    model: str
+    accepted_turn_index: int
+
+
+@dataclass(frozen=True)
+class DesignRepairCapability:
+    """当前正式 A 能否走 split-checkpoint targeted repair 的只读结论。"""
+
+    repairable: bool
+    reason_code: str
+    parent_run_id: str | None
+    chapter_repair_rounds: tuple[tuple[int, int], ...]
 
 
 def recovery_policy(node: str) -> str:
@@ -251,6 +305,41 @@ def design_aggregate_usage(
     return usage
 
 
+def design_repair_usage(
+        ctx: Any, units: Sequence[DesignUnitRequest]) -> Usage:
+    """精确聚合当前 repair run 的目标章调用；不重复认领父 run 成本。"""
+    if not units or any(unit.chapter is None for unit in units):
+        raise ProvenanceRefused('design repair usage 只接受非空目标章 units')
+    by = {unit.chapter: unit for unit in units}
+    if len(by) != len(units):
+        raise ProvenanceRefused('design repair usage 目标章重复')
+    identities: list[tuple[str, Mapping[str, object]]] = []
+    purposes: list[str] = []
+    for chapter in sorted(by):
+        unit = by[chapter]
+        purpose = design_unit_purpose(unit.chapter)
+        restored = restore_design_unit_checkpoint(ctx, unit)
+        if restored is None:
+            raise ProvenanceRefused(f'{purpose}: repair usage 前缺 checkpoint')
+        links = restored.acceptance.get('attempt_links')
+        turn = restored.acceptance.get('accepted_turn_index')
+        if (not isinstance(links, list) or not links
+                or not isinstance(turn, int) or isinstance(turn, bool)
+                or turn != len(links) or turn > 2):
+            raise ProvenanceRefused(f'{purpose}: repair content turn 必须在 1..2')
+        for link in links:
+            if not isinstance(link, Mapping):
+                raise ProvenanceRefused(f'{purpose}: repair attempt link 非 object')
+            identities.append((purpose, dict(link)))
+        purposes.append(purpose)
+    usage = ctx.ledger.usage_for_complete_purposes(
+        purposes, sid=ctx.sid, node='stage4.design',
+        required_identities=identities)
+    if usage is None:
+        raise ProvenanceRefused('design repair 已有 checkpoints 但 usage 为空')
+    return usage
+
+
 def _run_spec(node: str) -> agent_runs.SingleSessionRunSpec:
     recovery = recovery_policy(node)
     other = tuple(value for value in RECOVERY_POLICIES if value != node)
@@ -282,7 +371,7 @@ def _commit_spec(node: str) -> agent_runs.CommitBundleSpec:
         allowed = (
             (primary,),
             (primary, _PLAN_INVALID),
-            (primary, STAGE4_PLAN_CHAPTERS, STAGE4_WRITER_CONTEXT, _PLAN_INVALID),
+            (primary, STAGE4_PLAN_CHAPTERS, _PLAN_INVALID),
         )
         nonformal = (_PLAN_INVALID,)
     return agent_runs.CommitBundleSpec(
@@ -404,13 +493,68 @@ def _read_object(path: Path, *, label: str) -> dict[str, Any]:
     return value
 
 
+def _normalized_design_candidate_identity(
+        payload: Mapping[str, Any], *, label: str,
+        aggregate_kind: str | None = None,
+) -> tuple[dict[str, Any], str]:
+    """把已验真的 journal 候选投影到当前 schema 身份。
+
+    aggregate 的 ``primary_payload_sha256`` 永远核原始 journal 字节对应的
+    JSON；这里不迁盘、不改写旧 record。唯一兼容面是旧 standard journal
+    缺少 repair lineage 的三个 ``null``：先显式补这三键，再 strict validate。
+    Pydantic dump 必须与这份只补白名单键的 payload 完全相等，不能借 coercion
+    或其他字段默认值把真实漂移折叠成当前候选。
+    """
+    if aggregate_kind not in (None, 'standard', 'repair'):
+        raise ValueError(f'未知 design aggregate kind：{aggregate_kind!r}')
+    candidate = copy.deepcopy(dict(payload))
+    provenance = candidate.get('_provenance')
+    if not isinstance(provenance, dict):
+        raise ArtifactUnreadable(f'{label} primary_payload 缺 typed _provenance')
+    if aggregate_kind is not None:
+        expected_architecture = (
+            'book_strategy_chapters_v1' if aggregate_kind == 'standard'
+            else 'book_strategy_targeted_repair_v1'
+        )
+        if provenance.get('architecture') != expected_architecture:
+            raise ArtifactUnreadable(
+                f'{label} primary_payload architecture 与 {aggregate_kind} '
+                'journal 不符')
+    if aggregate_kind == 'standard':
+        for field in _LEGACY_STANDARD_NULL_PROVENANCE_FIELDS:
+            provenance.setdefault(field, None)
+    try:
+        normalized = BlindCandidate.model_validate(
+            candidate, strict=True).model_dump(by_alias=True, mode='json')
+    except (TypeError, ValueError) as exc:
+        raise ArtifactUnreadable(
+            f'{label} primary_payload 不是当前 BlindCandidate：{exc}') from exc
+    if normalized != candidate:
+        raise ArtifactUnreadable(
+            f'{label} primary_payload 需要白名单之外的默认值补全或类型归一')
+    return normalized, agent_runs.canonical_sha256(normalized)
+
+
 def _design_aggregate_commit_path(ctx: Any) -> Path:
     return (paths.stage4_run_path(
         ctx.novel_dir, ctx.run_id, 'stage4.design')
         / DESIGN_AGGREGATE_COMMIT_FILE)
 
 
+def _design_repair_aggregate_commit_path(ctx: Any, run_id: str | None = None) -> Path:
+    return (paths.stage4_run_path(
+        ctx.novel_dir, check_run_id(run_id or ctx.run_id), 'stage4.design')
+        / DESIGN_REPAIR_AGGREGATE_COMMIT_FILE)
+
+
 def _design_aggregate_hash(payload: Mapping[str, Any]) -> str:
+    return agent_runs.canonical_sha256({
+        key: value for key, value in payload.items()
+        if key not in ('prepared_at', 'committed_at', 'commit_sha256')
+    })
+
+
+def _design_repair_aggregate_hash(payload: Mapping[str, Any]) -> str:
     return agent_runs.canonical_sha256({
         key: value for key, value in payload.items()
         if key not in ('prepared_at', 'committed_at', 'commit_sha256')
@@ -670,6 +814,372 @@ def _validate_foreign_design_aggregate_envelope(
     return record
 
 
+def _validate_foreign_design_repair_aggregate_envelope(
+        target: Path, *, run_id: str, sid: str) -> dict[str, Any]:
+    record = _read_object(target, label='Stage4 foreign design repair aggregate')
+    if (set(record) != _DESIGN_REPAIR_AGGREGATE_FIELDS
+            or record.get('commit_sha256')
+            != _design_repair_aggregate_hash(record)
+            or record.get('version') != _DESIGN_REPAIR_AGGREGATE_VERSION
+            or record.get('kind') != _DESIGN_REPAIR_AGGREGATE_KIND
+            or record.get('run_id') != check_run_id(run_id)
+            or record.get('sid') != sid
+            or record.get('node') != 'stage4.design'
+            or record.get('state') not in ('prepared', 'committed')):
+        raise ArtifactUnreadable(
+            f'Stage4 foreign design repair aggregate {target} 身份/哈希不闭合')
+    return record
+
+
+def _load_design_source(
+        ctx: Any, row: Mapping[str, Any], *, default_run_id: str,
+        default_source_kind: str) -> DesignUnitSource:
+    """从 aggregate row 指向的原 run/checkpoint 验证并取回响应。"""
+    chapter = row.get('chapter')
+    if chapter is not None and (
+            not isinstance(chapter, int) or isinstance(chapter, bool) or chapter < 1):
+        raise ArtifactUnreadable('Stage4 design source chapter 非法')
+    source_run_id = check_run_id(str(row.get('source_run_id') or default_run_id))
+    purpose = str(row.get('purpose') or '')
+    if purpose != design_unit_purpose(chapter):
+        raise ArtifactUnreadable('Stage4 design source purpose/chapter 不闭合')
+    source_kind = str(row.get('source_kind') or default_source_kind)
+    if source_kind not in ('inherited', 'repair'):
+        raise ArtifactUnreadable('Stage4 design source_kind 非法')
+    run_path = paths.stage4_design_unit_run_path(
+        ctx.novel_dir, source_run_id, chapter) / agent_runs.RUN_FILE
+    checkpoint_revision = row.get('checkpoint_revision')
+    if (not isinstance(checkpoint_revision, int)
+            or isinstance(checkpoint_revision, bool) or checkpoint_revision < 1):
+        raise ArtifactUnreadable('Stage4 design source checkpoint revision 非法')
+    checkpoint_path = (
+        paths.stage4_design_unit_checkpoint_dir(
+            ctx.novel_dir, source_run_id, chapter)
+        / f'rev-{checkpoint_revision:04d}.json')
+    try:
+        run_bytes = run_path.read_bytes()
+        checkpoint_bytes = checkpoint_path.read_bytes()
+    except OSError as exc:
+        raise ProvenanceRefused(
+            f'Stage4 design source run/checkpoint 不可读：{exc}') from exc
+    run_sha = agent_runs.canonical_sha256(run_bytes)
+    checkpoint_file_sha = agent_runs.canonical_sha256(checkpoint_bytes)
+    if (row.get('run_sha256') != run_sha
+            or row.get('checkpoint_file_sha256') != checkpoint_file_sha):
+        raise ProvenanceRefused('Stage4 design source run/checkpoint 字节已漂移')
+    run = _read_object(run_path, label='Stage4 design source run')
+    checkpoint = _read_object(
+        checkpoint_path, label='Stage4 design source checkpoint')
+    expected_run = {
+        'run_id': source_run_id, 'sid': ctx.sid, 'node': 'stage4.design',
+        'chapter': chapter, 'purpose': purpose, 'session_owner': purpose,
+    }
+    if {key: run.get(key) for key in expected_run} != expected_run:
+        raise ProvenanceRefused('Stage4 design source run 不属于当前书/unit')
+    if (checkpoint.get('checkpoint_sha256') != row.get('checkpoint_sha256')
+            or checkpoint.get('checkpoint_sha256')
+            != agent_runs._checkpoint_hash(checkpoint)
+            or checkpoint.get('run_id') != source_run_id
+            or checkpoint.get('sid') != ctx.sid
+            or checkpoint.get('node') != 'stage4.design'
+            or checkpoint.get('chapter') != chapter
+            or checkpoint.get('purpose') != purpose
+            or checkpoint.get('run_sha256') != run_sha
+            or checkpoint.get('revision') != checkpoint_revision):
+        raise ProvenanceRefused('Stage4 design source checkpoint 身份/哈希不闭合')
+    attempt_id = str(checkpoint.get('attempt_id') or '')
+    model = str(checkpoint.get('model') or '')
+    turn = checkpoint.get('accepted_turn_index')
+    response_payload = checkpoint.get('response_payload')
+    response_sha = checkpoint.get('response_payload_sha256')
+    if (not _is_attempt_id(attempt_id)
+            or attempt_id != row.get('attempt_id')
+            or not model
+            or (row.get('model') is not None and row.get('model') != model)
+            or not isinstance(turn, int) or isinstance(turn, bool) or turn < 1
+            or (source_kind == 'repair' and turn > 2)
+            or not isinstance(response_payload, dict)
+            or response_sha != agent_runs.canonical_sha256(response_payload)
+            or (row.get('response_payload_sha256') is not None
+                and row.get('response_payload_sha256') != response_sha)):
+        raise ProvenanceRefused('Stage4 design source response/attempt/turn 不闭合')
+    return DesignUnitSource(
+        chapter=chapter,
+        source_run_id=source_run_id,
+        purpose=purpose,
+        attempt_id=attempt_id,
+        source_kind=source_kind,
+        run_sha256=run_sha,
+        checkpoint_revision=checkpoint_revision,
+        checkpoint_sha256=str(checkpoint['checkpoint_sha256']),
+        checkpoint_file_sha256=checkpoint_file_sha,
+        response_payload=copy.deepcopy(response_payload),
+        response_payload_sha256=str(response_sha),
+        model=model,
+        accepted_turn_index=turn,
+    )
+
+
+def load_committed_design_sources(
+        ctx: Any, *, parent_run_id: str,
+        parent_candidate_sha256: str,
+) -> tuple[dict[str, Any], tuple[DesignUnitSource, ...]]:
+    """读已 committed 的父 aggregate，不复制旧 checkpoint。"""
+    source_run_id = check_run_id(parent_run_id)
+    standard = (paths.stage4_run_path(
+        ctx.novel_dir, source_run_id, 'stage4.design')
+        / DESIGN_AGGREGATE_COMMIT_FILE)
+    repair = _design_repair_aggregate_commit_path(ctx, source_run_id)
+    existing = [path for path in (standard, repair) if path.is_file()]
+    if len(existing) != 1:
+        raise ProvenanceRefused(
+            f'parent run={source_run_id} 必须恰有一份 design aggregate，'
+            f'实得 {len(existing)}')
+    target = existing[0]
+    if target == standard:
+        record = _validate_foreign_design_aggregate_envelope(
+            target, run_id=source_run_id, sid=ctx.sid)
+        rows = record.get('adoptions')
+        aggregate_kind = 'standard'
+        default_kind = 'inherited'
+    else:
+        record = _validate_foreign_committed_design_repair_aggregate(
+            ctx, target, run_id=source_run_id, sid=ctx.sid)
+        rows = record.get('sources')
+        aggregate_kind = 'repair'
+        default_kind = 'inherited'
+    primary = record.get('primary_payload')
+    if (record.get('state') != 'committed'
+            or not isinstance(primary, dict)
+            or record.get('primary_payload_sha256')
+            != agent_runs.canonical_sha256(primary)
+            or not isinstance(rows, list)):
+        raise ProvenanceRefused(
+            'parent design aggregate 未 committed 或原始候选 hash 不闭合')
+    normalized_primary, normalized_sha = _normalized_design_candidate_identity(
+        primary, label=f'parent design aggregate {target}',
+        aggregate_kind=aggregate_kind)
+    if normalized_sha != parent_candidate_sha256:
+        raise ProvenanceRefused(
+            'parent design aggregate 当前 schema 候选身份与 parent 引用不符')
+    sources = tuple(_load_design_source(
+        ctx, row, default_run_id=source_run_id,
+        default_source_kind=default_kind)
+        for row in rows if isinstance(row, Mapping))
+    if len(sources) != len(rows):
+        raise ArtifactUnreadable('parent design aggregate sources 含非 object')
+    by = {source.chapter: source for source in sources}
+    chapters = sorted(chapter for chapter in by if chapter is not None)
+    if (len(by) != len(sources) or None not in by
+            or chapters != list(range(1, len(chapters) + 1))):
+        raise ProvenanceRefused('parent design aggregate source 集不闭合')
+    # 进入新 repair 后，从父链继承的无论当时是 repair 还是首轮，
+    # 对新 aggregate 都是 inherited；新目标章会被当前 run 替换。
+    inherited = tuple(DesignUnitSource(
+        **{**source.__dict__, 'source_kind': 'inherited'}) for source in sources)
+    return normalized_primary, inherited
+
+
+def _committed_design_aggregate_for_run(
+        ctx: Any, run_id: str,
+) -> tuple[str, Path, dict[str, Any]]:
+    """取一个 run 唯一 committed design aggregate 并核其内部 payload hash。"""
+    checked = check_run_id(run_id)
+    standard = (paths.stage4_run_path(
+        ctx.novel_dir, checked, 'stage4.design')
+        / DESIGN_AGGREGATE_COMMIT_FILE)
+    repair = _design_repair_aggregate_commit_path(ctx, checked)
+    existing = [path for path in (standard, repair) if path.is_file()]
+    if len(existing) != 1:
+        raise ProvenanceRefused(
+            f'design run={checked} 必须恰有一份 aggregate，实得 '
+            f'{len(existing)}')
+    target = existing[0]
+    kind = 'standard' if target == standard else 'repair'
+    record = (
+        _validate_foreign_design_aggregate_envelope(
+            target, run_id=checked, sid=ctx.sid)
+        if kind == 'standard' else
+        _validate_foreign_committed_design_repair_aggregate(
+            ctx, target, run_id=checked, sid=ctx.sid)
+    )
+    primary = record.get('primary_payload')
+    if (record.get('state') != 'committed'
+            or not isinstance(primary, dict)
+            or record.get('primary_payload_sha256')
+            != agent_runs.canonical_sha256(primary)):
+        raise ProvenanceRefused(
+            f'design run={checked} aggregate 未 committed 或候选 hash 不闭合')
+    return kind, target, record
+
+
+def _repair_ancestry_rounds(
+        ctx: Any, parent_run_id: str,
+) -> tuple[tuple[int, int], ...]:
+    """沿 parent_run + parent candidate hash 链统计每章已提交修订轮。"""
+    counts: dict[int, int] = {}
+    seen: set[str] = set()
+    current = check_run_id(parent_run_id)
+    expected_primary_sha: str | None = None
+    while True:
+        if current in seen:
+            raise ProvenanceRefused('design repair parent_run lineage 成环')
+        seen.add(current)
+        kind, target, record = _committed_design_aggregate_for_run(ctx, current)
+        _normalized_primary, normalized_primary_sha = \
+            _normalized_design_candidate_identity(
+                record['primary_payload'], label=f'design aggregate {target}',
+                aggregate_kind=kind)
+        if (expected_primary_sha is not None
+                and normalized_primary_sha != expected_primary_sha):
+            raise ProvenanceRefused(
+                f'{target} 不是子 repair journal 绑定的 parent candidate')
+        if kind == 'standard':
+            break
+        targets = record.get('target_chapters')
+        if (not isinstance(targets, list) or not targets
+                or targets != sorted(set(targets))
+                or any(not isinstance(chapter, int) or isinstance(chapter, bool)
+                       or chapter < 1 for chapter in targets)):
+            raise ArtifactUnreadable(f'{target} target_chapters 不闭合')
+        for chapter in targets:
+            counts[chapter] = counts.get(chapter, 0) + 1
+        parent = record.get('parent_run_id')
+        parent_sha = record.get('parent_candidate_sha256')
+        if (not isinstance(parent, str)
+                or not agent_runs.is_sha256(parent_sha)):
+            raise ArtifactUnreadable(f'{target} parent run/candidate 不闭合')
+        current = check_run_id(parent)
+        expected_primary_sha = str(parent_sha)
+    return tuple(sorted(counts.items()))
+
+
+def inspect_design_repair_capability(
+        ctx: Any, *, candidate_payload: Mapping[str, Any],
+        candidate_file_sha256: str,
+) -> DesignRepairCapability:
+    """只读判定当前 A 是否有唯一可执行 split lineage。
+
+    本函数专供审批 template/approve/resolve 与 core pre-wire 共用；
+    ``whole_book_v1``/无 aggregate 候选不猜测，只能 strategy replan。
+    """
+    unavailable = lambda code: DesignRepairCapability(
+        repairable=False,
+        reason_code=code,
+        parent_run_id=None,
+        chapter_repair_rounds=(),
+    )
+    try:
+        if (not agent_runs.is_sha256(candidate_file_sha256)
+                or agent_runs.file_sha256(ctx, STAGE4_BLIND_CANDIDATE)
+                != candidate_file_sha256):
+            return unavailable('checkpoint_lineage_unavailable')
+        raw_candidate = copy.deepcopy(dict(candidate_payload))
+        raw_provenance = raw_candidate.get('_provenance')
+        if not raw_candidate or not isinstance(raw_provenance, Mapping):
+            return unavailable('legacy_or_untracked_candidate')
+        # whole_book/未记 architecture 的正式候选在产品上就没有 split
+        # aggregate/checkpoint lineage。先准确分类，不能让与 lineage 无关的
+        # Python strict 容器差异把它误报成 checkpoint 损坏。
+        if raw_provenance.get('architecture') in (None, 'whole_book_v1'):
+            return unavailable('legacy_or_untracked_candidate')
+        candidate, full_sha = _normalized_design_candidate_identity(
+            raw_candidate, label='当前正式 blind candidate')
+        from novel.stages.stage4.blind import candidate_subject_sha256
+        business = {
+            key: value for key, value in candidate.items()
+            if key != '_provenance'
+        }
+        business_sha = candidate_subject_sha256(business)
+        root = Path(ctx.novel_dir) / paths.STAGE4_RUNS_DIRNAME
+        matches: list[str] = []
+        if root.is_dir():
+            for filename in (
+                    DESIGN_AGGREGATE_COMMIT_FILE,
+                    DESIGN_REPAIR_AGGREGATE_COMMIT_FILE):
+                for target in root.glob(f'*/design/{filename}'):
+                    run_id = target.parent.parent.name
+                    kind, canonical_target, record = \
+                        _committed_design_aggregate_for_run(ctx, run_id)
+                    if canonical_target != target:
+                        # 同 run 同时有两份 aggregate 已在 helper 中关闭式拒绝。
+                        raise ProvenanceRefused(
+                            f'{target} 不是 run={run_id} 唯一 aggregate')
+                    if ((filename == DESIGN_AGGREGATE_COMMIT_FILE)
+                            != (kind == 'standard')):
+                        raise ProvenanceRefused(f'{target} aggregate kind 与路径漂移')
+                    primary, primary_sha = _normalized_design_candidate_identity(
+                        record['primary_payload'],
+                        label=f'design aggregate {target}',
+                        aggregate_kind=kind,
+                    )
+                    if primary_sha != full_sha or primary != candidate:
+                        continue
+                    primary_business = {
+                        key: value for key, value in primary.items()
+                        if key != '_provenance'
+                    }
+                    if candidate_subject_sha256(primary_business) != business_sha:
+                        raise ArtifactUnreadable(
+                            f'{target} 完整候选匹配但业务 subject 不闭合')
+                    matches.append(check_run_id(run_id))
+        if not matches:
+            return unavailable('legacy_or_untracked_candidate')
+        if len(matches) != 1:
+            return unavailable('ambiguous_aggregate')
+        parent_run_id = matches[0]
+        parent, _sources = load_committed_design_sources(
+            ctx,
+            parent_run_id=parent_run_id,
+            parent_candidate_sha256=full_sha,
+        )
+        if parent != candidate:
+            return unavailable('checkpoint_lineage_unavailable')
+        rounds = _repair_ancestry_rounds(ctx, parent_run_id)
+        return DesignRepairCapability(
+            repairable=True,
+            reason_code='ready',
+            parent_run_id=parent_run_id,
+            chapter_repair_rounds=rounds,
+        )
+    except (ArtifactUnreadable, ProvenanceRefused, OSError, ValueError):
+        return unavailable('checkpoint_lineage_unavailable')
+
+
+def resolve_committed_design_sources(
+        ctx: Any, *, candidate_payload: Mapping[str, Any],
+        candidate_file_sha256: str,
+) -> tuple[str, dict[str, Any], tuple[DesignUnitSource, ...]]:
+    """由当前正式 A 反查唯一 committed aggregate 与原 checkpoints。
+
+    首轮 ``book_strategy_chapters_v1`` 产物没有 ``run_id`` /
+    ``unit_lineage``，但 aggregate journal 已封存完整候选与 N+1 个
+    checkpoint 指针。这里同时核对正式文件 SHA、完整 payload
+    与去 provenance 的业务 subject；0 个或多个匹配都关闭式拒绝，
+    不靠目录新旧猜一个 parent run。
+    """
+    candidate, full_sha = _normalized_design_candidate_identity(
+        candidate_payload, label='当前正式 blind candidate')
+    capability = inspect_design_repair_capability(
+        ctx,
+        candidate_payload=candidate,
+        candidate_file_sha256=candidate_file_sha256,
+    )
+    if not capability.repairable or capability.parent_run_id is None:
+        raise ProvenanceRefused(
+            'Stage4 repair 无可执行 split checkpoint lineage：'
+            f'{capability.reason_code}')
+    parent_run_id = capability.parent_run_id
+    parent, sources = load_committed_design_sources(
+        ctx,
+        parent_run_id=parent_run_id,
+        parent_candidate_sha256=full_sha,
+    )
+    if parent != candidate:
+        raise ProvenanceRefused('Stage4 repair 解析的 parent payload 读取期漂移')
+    return parent_run_id, parent, sources
+
+
 def refuse_foreign_commit_reservations(ctx: Any) -> None:
     """同书任一 foreign prepared 必须先补完，不能跨节点覆盖正式路径。"""
     _require_ownership(ctx)
@@ -714,6 +1224,23 @@ def refuse_foreign_commit_reservations(ctx: Any) -> None:
             raise ProvenanceRefused(
                 f'Stage4 run={run_id}/stage4.design 仍持有 prepared '
                 'aggregate 写盘尾窗；必须先用原 run 补完')
+    current_repair = _design_repair_aggregate_commit_path(ctx).resolve()
+    for target in root.glob(
+            f'*/design/{DESIGN_REPAIR_AGGREGATE_COMMIT_FILE}'):
+        if target.resolve() == current_repair:
+            continue
+        run_id = target.parent.parent.name
+        try:
+            with process_append_lock(target):
+                record = _validate_foreign_design_repair_aggregate_envelope(
+                    target, run_id=run_id, sid=ctx.sid)
+        except OSError as exc:
+            raise ProvenanceRefused(
+                f'Stage4 foreign design repair aggregate 不可验证：{exc}') from exc
+        if record['state'] == 'prepared':
+            raise ProvenanceRefused(
+                f'Stage4 run={run_id}/stage4.design 仍持有 prepared '
+                'repair aggregate 写盘尾窗；必须先补完')
 
 
 def _design_adoption_row(
@@ -852,6 +1379,329 @@ def prepare_design_aggregate_commit(
                 return current
             _atomic_json(target, payload)
     return payload
+
+
+def _design_source_row(source: DesignUnitSource) -> dict[str, Any]:
+    return {
+        'unit_key': design_unit_key(source.chapter),
+        'chapter': source.chapter,
+        'source_run_id': source.source_run_id,
+        'purpose': source.purpose,
+        'attempt_id': source.attempt_id,
+        'source_kind': source.source_kind,
+        'run_sha256': source.run_sha256,
+        'checkpoint_revision': source.checkpoint_revision,
+        'checkpoint_sha256': source.checkpoint_sha256,
+        'checkpoint_file_sha256': source.checkpoint_file_sha256,
+        'response_payload_sha256': source.response_payload_sha256,
+        'model': source.model,
+        'accepted_turn_index': source.accepted_turn_index,
+    }
+
+
+def current_design_unit_source(
+        ctx: Any, unit: DesignUnitRequest, *, source_kind: str = 'repair',
+) -> DesignUnitSource:
+    """把当前 run 的已验证 checkpoint 投影成 aggregate lineage。"""
+    row = _design_adoption_row(ctx, unit)
+    return _load_design_source(
+        ctx,
+        {**row, 'source_run_id': ctx.run_id, 'source_kind': source_kind},
+        default_run_id=ctx.run_id,
+        default_source_kind=source_kind,
+    )
+
+
+def _validate_design_repair_aggregate_contents(
+        ctx: Any, target: Path, record: Mapping[str, Any], *, run_id: str,
+) -> dict[str, Any]:
+    """复验 current/foreign repair journal 共用的完整 lineage 业务面。"""
+    checked_run_id = check_run_id(run_id)
+    primary = record.get('primary_payload')
+    finalization = record.get('finalization_payload')
+    if (not isinstance(primary, dict) or not isinstance(finalization, dict)
+            or record.get('primary_payload_sha256')
+            != agent_runs.canonical_sha256(primary)
+            or record.get('primary_payload_fingerprint')
+            != prov.projection_fingerprint(primary)
+            or record.get('finalization_sha256')
+            != agent_runs.canonical_sha256(finalization)
+            or not agent_runs.is_sha256(record.get('parent_candidate_sha256'))
+            or not agent_runs.is_sha256(record.get('repair_decision_sha256'))):
+        raise ArtifactUnreadable(f'{target} repair 候选/finalization/hash 不闭合')
+    normalized_primary, _normalized_primary_sha = \
+        _normalized_design_candidate_identity(
+        primary, label=f'design repair aggregate {target}',
+        aggregate_kind='repair')
+    primary_provenance = normalized_primary['_provenance']
+    if (primary_provenance['parent_candidate_sha256']
+            != record.get('parent_candidate_sha256')
+            or primary_provenance['repair_decision_sha256']
+            != record.get('repair_decision_sha256')):
+        raise ArtifactUnreadable(
+            f'{target} repair primary provenance 与 journal parent/decision 不等')
+    targets = record.get('target_chapters')
+    rows = record.get('sources')
+    if (not isinstance(targets, list) or not targets
+            or targets != sorted(set(targets))
+            or any(not isinstance(chapter, int) or isinstance(chapter, bool)
+                   or chapter < 1 for chapter in targets)
+            or not isinstance(rows, list) or len(rows) < 2):
+        raise ArtifactUnreadable(f'{target} repair targets/sources 不闭合')
+    sources: list[DesignUnitSource] = []
+    for row in rows:
+        if not isinstance(row, dict) or set(row) != _DESIGN_REPAIR_SOURCE_FIELDS:
+            raise ArtifactUnreadable(f'{target} repair source 字段漂移')
+        source = _load_design_source(
+            ctx, row, default_run_id=str(row.get('source_run_id') or ''),
+            default_source_kind=str(row.get('source_kind') or ''))
+        sources.append(source)
+    by = {source.chapter: source for source in sources}
+    chapters = sorted(chapter for chapter in by if chapter is not None)
+    if (len(by) != len(sources) or None not in by
+            or chapters != list(range(1, len(chapters) + 1))
+            or any(chapter not in by for chapter in targets)
+            or [source.chapter for source in sources] != [None, *chapters]):
+        raise ArtifactUnreadable(f'{target} repair source unit 集不闭合')
+    for chapter, source in by.items():
+        expected_kind = 'repair' if chapter in targets else 'inherited'
+        if (source.source_kind != expected_kind
+                or (expected_kind == 'repair'
+                    and source.source_run_id != checked_run_id)):
+            raise ProvenanceRefused(
+                f'{target} ch{chapter} source_kind/source_run 与 targets 漂移')
+    expected_unit_lineage = [{
+        'chapter_ordinal': source.chapter,
+        'source_run_id': source.source_run_id,
+        'purpose': source.purpose,
+        'attempt_id': source.attempt_id,
+        'source_kind': source.source_kind,
+    } for source in sources]
+    if primary_provenance['unit_lineage'] != expected_unit_lineage:
+        raise ArtifactUnreadable(
+            f'{target} repair primary unit_lineage 与 journal sources 不等')
+    attempts = [{
+        'source_run_id': source.source_run_id,
+        'purpose': source.purpose,
+        'attempt_id': source.attempt_id,
+    } for source in sources]
+    if record.get('attempts') != attempts:
+        raise ArtifactUnreadable(f'{target} repair attempts/source lineage 不等')
+    if (record.get('touched_paths') != [STAGE4_BLIND_CANDIDATE]
+            or not isinstance(record.get('baselines'), dict)
+            or set(record['baselines']) != {STAGE4_BLIND_CANDIDATE}):
+        raise ArtifactUnreadable(f'{target} repair touched/baseline 不闭合')
+    landed = record.get('landed_payload_sha256s')
+    post = record.get('post_file_sha256s')
+    if record['state'] == 'prepared':
+        if (record.get('committed_at') is not None
+                or landed is not None or post is not None):
+            raise ArtifactUnreadable(f'{target} repair prepared 尾窗字段不闭合')
+    elif (not isinstance(record.get('committed_at'), str)
+          or not isinstance(landed, dict)
+          or not agent_runs.is_sha256(landed.get(STAGE4_BLIND_CANDIDATE))
+          or not isinstance(post, dict)
+          or not agent_runs.is_sha256(post.get(STAGE4_BLIND_CANDIDATE))):
+        raise ArtifactUnreadable(f'{target} repair committed 字段不闭合')
+    return dict(record)
+
+
+def _validate_foreign_committed_design_repair_aggregate(
+        ctx: Any, target: Path, *, run_id: str, sid: str,
+) -> dict[str, Any]:
+    """foreign repair 不只验 envelope；轮次必须来自完整可追溯 lineage。"""
+    record = _validate_foreign_design_repair_aggregate_envelope(
+        target, run_id=run_id, sid=sid)
+    if record.get('state') != 'committed':
+        raise ProvenanceRefused(f'{target} foreign repair aggregate 尚未 committed')
+    return _validate_design_repair_aggregate_contents(
+        ctx, target, record, run_id=run_id)
+
+
+def _validate_design_repair_aggregate_state(
+        ctx: Any, target: Path) -> dict[str, Any]:
+    record = _validate_foreign_design_repair_aggregate_envelope(
+        target, run_id=ctx.run_id, sid=ctx.sid)
+    if ctx.node != 'stage4.design' or record.get('code') != ctx.code:
+        raise ProvenanceRefused(f'{target} 不属于当前 design repair run/code')
+    return _validate_design_repair_aggregate_contents(
+        ctx, target, record, run_id=ctx.run_id)
+
+
+def design_repair_aggregate_state(ctx: Any) -> dict[str, Any] | None:
+    target = _design_repair_aggregate_commit_path(ctx)
+    return _validate_design_repair_aggregate_state(
+        ctx, target) if target.is_file() else None
+
+
+def prepare_design_repair_aggregate_commit(
+        ctx: Any, *, parent_run_id: str, parent_candidate_sha256: str,
+        repair_decision_sha256: str, target_chapters: Sequence[int],
+        sources: Sequence[DesignUnitSource], primary_payload: Mapping[str, Any],
+        finalization_payload: Mapping[str, Any],
+) -> dict[str, Any]:
+    """冻结 targeted repair 的跨 run unit lineage 与新候选。"""
+    _require_ownership(ctx)
+    targets = sorted(set(target_chapters))
+    if (not targets or len(targets) != len(tuple(target_chapters))
+            or any(not isinstance(chapter, int) or isinstance(chapter, bool)
+                   or chapter < 1 for chapter in targets)):
+        raise ProvenanceRefused('design repair target_chapters 必须是非空去重正整数')
+    if (not agent_runs.is_sha256(parent_candidate_sha256)
+            or not agent_runs.is_sha256(repair_decision_sha256)):
+        raise ProvenanceRefused('design repair parent/decision 必须是完整 SHA-256')
+    _parent_kind, parent_target, parent_record = \
+        _committed_design_aggregate_for_run(ctx, parent_run_id)
+    _parent_payload, normalized_parent_sha = \
+        _normalized_design_candidate_identity(
+            parent_record['primary_payload'],
+            label=f'parent design aggregate {parent_target}',
+            aggregate_kind=_parent_kind,
+        )
+    if parent_candidate_sha256 != normalized_parent_sha:
+        raise ProvenanceRefused(
+            'design repair parent_candidate_sha256 必须使用当前 schema '
+            '归一后的候选身份')
+    by = {source.chapter: source for source in sources}
+    chapters = sorted(chapter for chapter in by if chapter is not None)
+    if (len(by) != len(sources) or None not in by
+            or chapters != list(range(1, len(chapters) + 1))
+            or any(chapter not in by for chapter in targets)):
+        raise ProvenanceRefused('design repair sources 必须恰覆盖 strategy + 1..N')
+    ordered = tuple(by[chapter] for chapter in (None, *chapters))
+    for chapter, source in by.items():
+        expected = 'repair' if chapter in targets else 'inherited'
+        if (source.source_kind != expected
+                or (expected == 'repair' and source.source_run_id != ctx.run_id)):
+            raise ProvenanceRefused(
+                f'design repair ch{chapter} source_kind/source_run 不符')
+    primary = copy.deepcopy(dict(primary_payload))
+    finalization = copy.deepcopy(dict(finalization_payload))
+    rows = [_design_source_row(source) for source in ordered]
+    attempts = [{
+        'source_run_id': source.source_run_id,
+        'purpose': source.purpose,
+        'attempt_id': source.attempt_id,
+    } for source in ordered]
+    payload: dict[str, Any] = {
+        'version': _DESIGN_REPAIR_AGGREGATE_VERSION,
+        'kind': _DESIGN_REPAIR_AGGREGATE_KIND,
+        'state': 'prepared', 'prepared_at': _now(), 'committed_at': None,
+        'run_id': check_run_id(ctx.run_id), 'sid': ctx.sid,
+        'node': 'stage4.design', 'code': ctx.code,
+        'parent_run_id': check_run_id(parent_run_id),
+        'parent_candidate_sha256': parent_candidate_sha256,
+        'repair_decision_sha256': repair_decision_sha256,
+        'target_chapters': targets,
+        'primary_artifact': STAGE4_BLIND_CANDIDATE,
+        'primary_payload_sha256': agent_runs.canonical_sha256(primary),
+        'primary_payload_fingerprint': prov.projection_fingerprint(primary),
+        'primary_payload': primary,
+        'finalization_sha256': agent_runs.canonical_sha256(finalization),
+        'finalization_payload': finalization,
+        'touched_paths': [STAGE4_BLIND_CANDIDATE],
+        'baselines': {STAGE4_BLIND_CANDIDATE:
+                      agent_runs.file_sha256(ctx, STAGE4_BLIND_CANDIDATE)},
+        'attempts': attempts,
+        'sources': rows,
+        'landed_payload_sha256s': None,
+        'post_file_sha256s': None,
+    }
+    payload['commit_sha256'] = _design_repair_aggregate_hash(payload)
+    target = _design_repair_aggregate_commit_path(ctx)
+    with _DESIGN_AGGREGATE_LOCK, process_append_lock(target):
+        if target.is_file():
+            current = _validate_design_repair_aggregate_state(ctx, target)
+            ignored = {
+                'state', 'prepared_at', 'committed_at', 'commit_sha256',
+                'baselines', 'landed_payload_sha256s', 'post_file_sha256s',
+            }
+            if ({key: value for key, value in current.items() if key not in ignored}
+                    != {key: value for key, value in payload.items()
+                        if key not in ignored}):
+                raise ProvenanceRefused('repair aggregate 已绑定另一份候选/lineage')
+            return current
+        _atomic_json(target, payload)
+    return payload
+
+
+def restore_design_repair_aggregate_payloads(
+        ctx: Any, record: Mapping[str, Any] | None = None,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    current = design_repair_aggregate_state(ctx)
+    if current is None or (record is not None and dict(record) != current):
+        raise ProvenanceRefused('design repair aggregate 缺失或读取期漂移')
+    return (copy.deepcopy(current['primary_payload']),
+            copy.deepcopy(current['finalization_payload']))
+
+
+def design_repair_aggregate_target_state(
+        ctx: Any, record: Mapping[str, Any], *, expected_file_sha256: str,
+) -> str:
+    _require_ownership(ctx)
+    current = _validate_design_repair_aggregate_state(
+        ctx, _design_repair_aggregate_commit_path(ctx))
+    if dict(record) != current or not agent_runs.is_sha256(expected_file_sha256):
+        raise ProvenanceRefused('design repair aggregate target 身份/SHA 不闭合')
+    actual = agent_runs.file_sha256(ctx, STAGE4_BLIND_CANDIDATE)
+    if actual == expected_file_sha256:
+        return 'expected'
+    if actual == current['baselines'][STAGE4_BLIND_CANDIDATE]:
+        return 'baseline'
+    raise ProvenanceRefused('blind candidate 在 repair prepared 尾窗发生第三方漂移')
+
+
+def mark_design_repair_aggregate_committed(
+        ctx: Any, *, primary_payload: Mapping[str, Any],
+        finalization_payload: Mapping[str, Any],
+) -> Path:
+    _require_ownership(ctx)
+    target = _design_repair_aggregate_commit_path(ctx)
+    with _DESIGN_AGGREGATE_LOCK, process_append_lock(target):
+        current = _validate_design_repair_aggregate_state(ctx, target)
+        if (current['primary_payload_sha256']
+                != agent_runs.canonical_sha256(dict(primary_payload))
+                or current['finalization_sha256']
+                != agent_runs.canonical_sha256(dict(finalization_payload))):
+            raise ProvenanceRefused('repair aggregate committed 候选/finalization 漂移')
+        post = agent_runs.file_sha256(ctx, STAGE4_BLIND_CANDIDATE)
+        if post is None:
+            raise ProvenanceRefused('repair aggregate committed 前候选未落盘')
+        landed = {STAGE4_BLIND_CANDIDATE:
+                  agent_runs.canonical_sha256(dict(primary_payload))}
+        post_rows = {STAGE4_BLIND_CANDIDATE: post}
+        targets = set(current['target_chapters'])
+        expected = {
+            (row['purpose'], row['attempt_id'], row['chapter'])
+            for row in current['sources'] if row['chapter'] in targets
+        }
+        relevant = [row for row in _read_adoption_events(ctx)
+                    if (row.get('kind') == 'artifact_adoption'
+                        and row.get('run_id') == ctx.run_id
+                        and row.get('sid') == ctx.sid
+                        and row.get('node') == 'stage4.design'
+                        and row.get('artifact') == STAGE4_BLIND_CANDIDATE
+                        and row.get('artifact_fingerprint')
+                        == current['primary_payload_fingerprint'])]
+        actual = {(row.get('purpose'), row.get('attempt_id'), row.get('chapter'))
+                  for row in relevant}
+        if len(relevant) != len(expected) or actual != expected:
+            raise ProvenanceRefused(
+                'repair aggregate 提交前必须恰有每个目标章一条 adoption')
+        if current['state'] == 'committed':
+            if (current.get('landed_payload_sha256s') != landed
+                    or current.get('post_file_sha256s') != post_rows):
+                raise ProvenanceRefused('repair aggregate 已 committed 结果漂移')
+            return target
+        updated = dict(current)
+        updated.update({
+            'state': 'committed', 'committed_at': _now(),
+            'landed_payload_sha256s': landed,
+            'post_file_sha256s': post_rows,
+        })
+        updated['commit_sha256'] = _design_repair_aggregate_hash(updated)
+        _atomic_json(target, updated)
+    return target
 
 
 def verify_design_aggregate_primary(
@@ -1168,20 +2018,30 @@ def verify_committed_delivery(
 
 
 __all__ = [
-    'DESIGN_AGGREGATE_COMMIT_FILE', 'DESIGN_MAX_CONCURRENCY',
-    'DESIGN_UNIT_RECOVERY_POLICY', 'DesignUnitRequest', 'RECOVERY_POLICIES',
+    'DESIGN_AGGREGATE_COMMIT_FILE', 'DESIGN_REPAIR_AGGREGATE_COMMIT_FILE',
+    'DESIGN_MAX_CONCURRENCY', 'DESIGN_UNIT_RECOVERY_POLICY',
+    'DesignRepairCapability', 'DesignUnitRequest', 'DesignUnitSource',
+    'RECOVERY_POLICIES',
     'commit_ownership', 'committed', 'design_aggregate_committed',
     'design_aggregate_prepared', 'design_aggregate_state',
     'design_aggregate_target_state', 'design_unit_key',
-    'design_aggregate_usage', 'design_unit_purpose', 'design_unit_run_spec',
+    'design_aggregate_usage', 'design_repair_usage',
+    'design_repair_aggregate_state', 'design_repair_aggregate_target_state',
+    'design_unit_purpose', 'design_unit_run_spec',
+    'current_design_unit_source', 'load_committed_design_sources',
+    'inspect_design_repair_capability', 'resolve_committed_design_sources',
     'ensure_design_unit_run', 'ensure_run', 'mark_committed',
     'mark_design_aggregate_committed', 'prepare_commit',
-    'prepare_design_aggregate_commit', 'prepared', 'recovery_policy',
+    'prepare_design_aggregate_commit',
+    'prepare_design_repair_aggregate_commit', 'prepared', 'recovery_policy',
     'refuse_foreign_commit_reservations', 'restore_checkpoint',
     'restore_commit_adoption', 'restore_design_aggregate_adoptions',
-    'restore_design_aggregate_payloads', 'restore_design_unit_checkpoint',
+    'restore_design_aggregate_payloads',
+    'restore_design_repair_aggregate_payloads',
+    'restore_design_unit_checkpoint',
     'target_state', 'verify_commit_finalization', 'verify_commit_primary',
     'verify_committed_delivery', 'verify_design_aggregate_committed_delivery',
     'verify_design_aggregate_finalization', 'verify_design_aggregate_primary',
     'write_checkpoint', 'write_design_unit_checkpoint',
+    'mark_design_repair_aggregate_committed',
 ]

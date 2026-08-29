@@ -19,7 +19,7 @@ description: 作为受托终审代理，使用本仓 novel.cli 将单本中文�
 | 正文外发授权（`egress_authorized`） | 独立控制小说正文及派生上下文能否发送给外部模型。**交互式会话里同样默认 `granted`**，同样不索要 |
 | 可选约束 | 用户指定的模型实验、定向章节范围、停止条件或审阅偏好 |
 
-把“使用本 skill 端到端跑书”视为一次**完整**委托：`stage0.approve`、Stage2 逐项复核、Stage4 逐章 typed 结构裁决、独立 Stage5 writing 授权、`stage6.approve`、`stage7.approve` 的代批，加上两项授权。**这些事都不要回头问用户**——本 skill 的产品承诺是“用户只审最终成稿”。Stage2 代批仍必须逐项写入 typed PASS/FAIL/UNVER；“agent 看过”不能替代文件里的决定，更不能让 FAIL/UNVER 越过硬闸。用户在本次对话里明确收回某一项时遵从用户范围，并在终审包写明被收回的是哪一项。
+把“使用本 skill 端到端跑书”视为一次**完整**委托：`stage0.approve`、Stage2 逐项复核、Stage4A 的全书策略 + 逐章 typed 设计审阅、Stage4B 编译后的最终逐章 typed 结构裁决、独立 Stage5 writing 授权、`stage6.approve`、`stage7.approve` 的代批，加上两项授权。**这些事都不要回头问用户**——本 skill 的产品承诺是“用户只审最终成稿”。Stage2 代批仍必须逐项写入 typed PASS/FAIL/UNVER；“agent 看过”不能替代文件里的决定，更不能让 FAIL/UNVER 越过硬闸。两次 Stage4 审阅的主体与作用不同，任何一次也不能由另一张票、机械绿灯或付费授权代替。用户在本次对话里明确收回某一项时遵从用户范围，并在终审包写明被收回的是哪一项。
 
 两项授权仍**分别取值**，只是默认值都为真：收回其中一项时，不因另一项仍在而推定它。headless 是唯一的例外，取值以 launcher prompt 原文为准（见[运行环境](references/runtime-profiles.md)）。
 
@@ -76,7 +76,9 @@ description: 作为受托终审代理，使用本仓 novel.cli 将单本中文�
 - 不估算或换算金额。只报告账本中的调用次数、缓存命中、token 与耗时事实。
 - 两项授权默认都在，但收回是单向生效的：用户明确收回其中一项时，不因另一项仍在而推定它。被收回的那一项落在下一步路径上时，仍运行零成本的 `state`、`inbox` 与 `preview` 以形成恢复证据，但不得执行 preview 中的首个外部模型步骤。⚠ **「没有人特意重申授权」不是缺失**，别拿它当停机理由。
 - 不为追求“全绿”改写无关内容。只处理阻塞所选定稿、成书完整性或用户终审判断的事项。
-- **只有 HARD 能触发付费重试。** `info`、`metric` 与 `unver` 一律只披露：`unver` 是判据
+- **只有 HARD 或当前 hash-bound 的 Stage4A typed `request_repair / request_replan` 能触发付费修订。**
+  后者必须来自真实逐章阅读并带关闭式约束，不得把默认拒绝模板原样提交来制造付费理由。
+  `info`、`metric` 与 `unver` 本身一律只披露：`unver` 是判据
   诚实地说自己这次够不着（现役例子是 Stage4 `state_closure` 的章内非线性边界），
   看到它去重跑 `stage4.design` 就是拿一次整书付费换一份本来就在如实说话的报告。
   判据表的 `sev` 是唯一权威，见[修复状态机](references/recovery.md)。
@@ -93,7 +95,7 @@ description: 作为受托终审代理，使用本仓 novel.cli 将单本中文�
 - `inbox.delivery_counts.blocking == 0`；`attention_counts` 区分“尚待处理”与“已裁决但记录保留”，不得拿总数冒充失败数。披露项逐类记录。
 - `inbox.counts` 的八类余额必须逐类披露：`invalid`、`rejected`、`repairable`、`human_only`、`verification`、`upstream`、`stalled`、`approval`；类别总数不直接等于阻塞数，阻塞性只读 `delivery_effect`。
 - 活动目录不存在未解释的 `.INVALID`、`.rejected` 或 `.stalled`；历史 `_rounds/` 不计入活动余额。
-- 全部代批均有可追溯依据；Stage4 结构逐章接受，所选 stage6 候选和 stage7 人名表均通过各自定稿条件。
+- 全部代批均有可追溯依据；Stage4A 当前设计审阅与 Stage4B 最终结构裁决均逐章接受，所选 stage6 候选和 stage7 人名表均通过各自定稿条件。
 - 成书通过 [代批与终审契约](references/delegated-review.md) 的逐字对账，终审包中的统计与盘上事实一致。
 - 终审包的退出序列按 `<STARTED_AT>` 切出本次会话，成本账再按这些 beacon 的 `run_id + node`
   精确联结；旧无 run id 行只作 legacy/ungrouped 累计审计，不能靠时间猜进本轮；起止代码指纹逐字一致。

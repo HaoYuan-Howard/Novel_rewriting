@@ -15,6 +15,18 @@ def test_state_domains_include_unknown_or_amber():
     assert 'unver' in inv.SEVERITY
 
 
+def test_stage4_binding_codes_have_one_closed_contract_surface():
+    assert inv.BINDING_CONCERN_CODES == (
+        'causal_conflict', 'stage_conflict', 'material_conflict',
+        'future_leak', 'insufficient_evidence',
+    )
+    assert inv.BINDING_INFEASIBILITY_CODES == (
+        'missing_chapter_catalog', 'empty_stage_allowlist',
+    )
+    assert set(inv.BINDING_CONCERN_CODES).isdisjoint(
+        inv.BINDING_INFEASIBILITY_CODES)
+
+
 def test_stage6_wontfix_entry_is_registered_on_every_required_surface():
     assert '--wontfix' in inv.NODES['stage6.hook'].flags
     assert '--wontfix' in inv.NODES['stage5.review'].flags
@@ -223,6 +235,16 @@ def test_stage4_replan_is_an_explicit_paid_design_action_only():
     }
     assert accepting == {'stage4.design'}
     assert '--replan' not in inv.FREE_ENTRIES
+
+
+def test_stage4_targeted_repair_is_hash_bound_paid_and_not_publicly_chaptered():
+    assert '--repair-decision' in inv.PAID_FLAGS
+    assert '--repair-decision' in inv.VALUED_FLAGS
+    assert '--repair-decision' in inv.NODES['stage4.design'].flags
+    assert '--chapters' not in inv.NODES['stage4.design'].flags
+    assert '--apply-binding' in inv.FREE_ENTRIES
+    assert '--apply-binding' in inv.VALUED_FLAGS
+    assert '--apply-binding' in inv.NODES['stage4.plan'].flags
 
 
 def test_every_registered_flag_is_reachable():

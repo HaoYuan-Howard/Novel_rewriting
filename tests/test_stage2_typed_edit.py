@@ -4,7 +4,7 @@ import pytest
 from pydantic import ValidationError
 
 from contracts.schema import ArtifactVersionError, decode_artifact, encode_artifact
-from contracts.schema.stage2 import GlobalEdit, Relation
+from contracts.schema.stage2 import ConflictStage, GlobalEdit, Relation
 from novel.errors import TerminalState
 from novel.stages.stage2.extract import _apply_secret_patches
 
@@ -207,6 +207,88 @@ def test_complete_replacements_can_split_secrets_replace_rules_and_rebuild_addre
     assert changed == ['canon.secrets', 'canon.world_rules', 'char_001.address']
 
 
+def test_conflict_stages_are_replaced_as_one_nonempty_partition():
+    """冲突阶段没有稳定行 ID；人工路只允许整组重画，不按数组下标打 patch。"""
+    data = _grounding()
+    data['arc']['conflict_stages'] = [
+        {'stage': '旧分段', 'chapters': [1, 2]},
+    ]
+    edit = GlobalEdit.model_validate({
+        'conflict_stages_replace': [
+            {'stage': '矛盾浮现', 'chapters': [1]},
+            {'stage': '正面对质', 'chapters': [2]},
+        ],
+        # 两个 arc 子集合语义独立，可以在同一原子 edit 里同时完整替换。
+        'arc_tracks_replace': [{
+            'subject': 'char_001',
+            'trajectory': '从回避到账目当面说清',
+            'trajectory_evidence': _locator(2),
+        }],
+    })
+
+    changed = _apply_secret_patches(data, edit, {1, 2})
+
+    assert data['arc']['conflict_stages'] == [
+        {'stage': '矛盾浮现', 'chapters': [1]},
+        {'stage': '正面对质', 'chapters': [2]},
+    ]
+    assert data['arc']['arc_tracks'][0]['trajectory'] == '从回避到账目当面说清'
+    assert changed == ['arc.conflict_stages', 'arc.arc_tracks']
+
+
+def test_conflict_stage_replacement_is_nonempty_and_keeps_global_edit_v3():
+    with pytest.raises(ValidationError, match='at least 1 item'):
+        GlobalEdit.model_validate({'conflict_stages_replace': []})
+
+    payload = {'conflict_stages_replace': [
+        {'stage': '重画阶段', 'chapters': [1, 2]},
+    ]}
+    encoded = encode_artifact('stage2/global_edit.json', payload)
+    assert encoded['_schema_version'] == 3, '兼容加法不应把旧 v3 决策集整体判废'
+    decoded = decode_artifact('stage2/global_edit.json', encoded)
+    edit = GlobalEdit.model_validate(decoded.payload)
+    assert edit.conflict_stages_replace is not None
+    assert edit.conflict_stages_replace[0].chapters == [1, 2]
+
+
+@pytest.mark.parametrize('chapter', ['1', True, 1.0])
+def test_conflict_stage_chapter_memberships_reject_coerced_integers(chapter):
+    with pytest.raises(ValidationError, match='valid integer'):
+        ConflictStage.model_validate({
+            'stage': '严格章号', 'chapters': [chapter],
+        })
+
+
+@pytest.mark.parametrize('chapter', ['1', True, 1.0])
+def test_global_edit_conflict_replacement_rejects_coerced_integers(chapter):
+    with pytest.raises(ValidationError, match='valid integer'):
+        GlobalEdit.model_validate({'conflict_stages_replace': [{
+            'stage': '严格章号', 'chapters': [chapter],
+        }]})
+
+
+@pytest.mark.parametrize('stages,detail', [
+    ([{'stage': '缺章', 'chapters': [1]}], '缺章'),
+    ([{'stage': '重复甲', 'chapters': [1, 2]},
+      {'stage': '重复乙', 'chapters': [2]}], '重复'),
+    ([{'stage': '越界', 'chapters': [1, 2, 3]}], '越界'),
+])
+def test_conflict_stage_replacement_rejects_bad_coverage_before_mutation(
+    stages, detail,
+):
+    data = _grounding()
+    data['arc']['conflict_stages'] = [
+        {'stage': '旧完整分段', 'chapters': [1, 2]},
+    ]
+    before = repr(data)
+    edit = GlobalEdit.model_validate({'conflict_stages_replace': stages})
+
+    with pytest.raises(TerminalState, match=detail):
+        _apply_secret_patches(data, edit, {1, 2})
+
+    assert repr(data) == before
+
+
 @pytest.mark.parametrize('key,subject', [
     ('secrets_replace', 'secrets'),
     ('world_rules_replace', 'world_rules'),
@@ -232,6 +314,20 @@ def test_old_global_edit_v1_is_closed_off_after_the_current_shape_break():
 
     with pytest.raises(ArtifactVersionError, match=r'schema v1.*当前 v3'):
         decode_artifact('stage2/global_edit.json', legacy)
+
+
+def test_pre_addition_v3_edit_without_conflict_replacement_still_decodes():
+    payload = {'characters': [{
+        'char_id': 'char_001', 'name_distinctiveness': 'medium',
+    }]}
+    encoded = encode_artifact('stage2/global_edit.json', payload)
+
+    decoded = decode_artifact('stage2/global_edit.json', encoded)
+    edit = GlobalEdit.model_validate(decoded.payload)
+
+    assert decoded.version == 3
+    assert edit.conflict_stages_replace is None
+    assert edit.characters[0].char_id == 'char_001'
 
 
 @pytest.mark.parametrize('payload,match', [

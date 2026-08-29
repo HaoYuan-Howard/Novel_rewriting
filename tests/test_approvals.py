@@ -211,12 +211,12 @@ def test_s7_service_proof_revokes_changed_typed_approval_or_decision(
 
 
 @_corpus_test
-def test_get_exposes_public_v4_without_retired_depth_and_is_read_only():
-    """GET 只公开 v4 审批面，且不落服务状态。"""
+def test_get_exposes_public_v5_without_retired_depth_and_is_read_only():
+    """GET 只公开 v5 审批面，且不落服务状态。"""
     box = _box()
     try:
         doc = approvals.get(box.root, box.sid)
-        assert doc.v == 4
+        assert doc.v == 5
         assert 'deep' not in doc.model_dump() and 'deep_proof' not in doc.model_dump()
         assert doc.writing is False
         assert not (box.root / '_service').exists(), 'GET must not persist service state'
@@ -242,7 +242,7 @@ def test_get_exposes_public_v4_without_retired_depth_and_is_read_only():
 
 
 @_corpus_test
-def test_writing_approval_is_independent_and_persists_as_internal_v5():
+def test_writing_approval_is_independent_and_persists_as_internal_v6():
     box = _box()
     try:
         _approve_for_writing(box)
@@ -250,7 +250,7 @@ def test_writing_approval_is_independent_and_persists_as_internal_v5():
         doc = approvals.begin_writing(box.root, box.sid)
         assert doc.writing and approvals.writing_is_current(box.root, box.sid)
         raw = approvals._path(box.root, box.sid).read_text(encoding='utf-8')
-        assert '"v": 5' in raw and '"deep"' not in raw and 'deep_proof' not in raw
+        assert '"v": 6' in raw and '"deep"' not in raw and 'deep_proof' not in raw
     finally:
         box.close()
 
@@ -381,7 +381,7 @@ def test_retired_draft_in_old_s5_proof_revokes_s5_and_downstream(
         decided_at='2026-08-26T00:00:00+00:00',
         proof=stored_gate_proofs['s4'],
     )
-    record = approvals._ApprovalRecordV5(
+    record = approvals._ApprovalRecordV6(
         sid='123',
         gate={gate: True for gate in approvals._GATE_ORDER},
         seen={key: True for key in seen_proofs},

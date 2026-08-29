@@ -3,7 +3,6 @@
 """Stage4 v4 只保留整书 A/B 生成与 0 成本人工恢复。"""
 from __future__ import annotations
 
-from contextlib import nullcontext
 from types import SimpleNamespace
 
 import pytest
@@ -104,7 +103,7 @@ def test_apply_edit_is_a_free_human_round_and_clears_a_b_lineage(monkeypatch):
     assert captured['archive'] is True
 
 
-def test_revalidate_promotes_the_current_invalid_without_any_llm_client(monkeypatch):
+def test_revalidate_promotes_only_plan_without_llm_or_context(monkeypatch):
     """HARD 问题稿的恢复口是当前判据 + hash-bound 人工提升。"""
     provenance = SimpleNamespace(model_dump=lambda **_kwargs: {'origin': 'compiled'})
     artifact = SimpleNamespace(provenance=provenance)
@@ -121,11 +120,6 @@ def test_revalidate_promotes_the_current_invalid_without_any_llm_client(monkeypa
             return artifact, {'candidate': True}
 
         @staticmethod
-        def history_transaction(*_rels: str):
-            assert _rels == (plan.REL, plan.CTX_REL)
-            return nullcontext()
-
-        @staticmethod
         def promote_invalid(rel, model, *, actor, reason, artifact_override):
             promoted.append((rel, model, actor, reason, artifact_override))
 
@@ -133,7 +127,9 @@ def test_revalidate_promotes_the_current_invalid_without_any_llm_client(monkeypa
     monkeypatch.setattr(plan, 'ArtifactStore', lambda _ctx: Store())
     monkeypatch.setattr(plan, '_Upstreams', lambda *_args: object())
     monkeypatch.setattr(plan, '_judge', lambda *_args, **_kwargs: [])
-    monkeypatch.setattr(plan, 'run_context', lambda got: None)
+    monkeypatch.setattr(
+        plan, 'run_context',
+        lambda _got: pytest.fail('revalidate 不得代写 context'))
     monkeypatch.setattr(plan, 'run_check_only', lambda got: 'CURRENT-REPORT')
 
     assert plan.run_revalidate(

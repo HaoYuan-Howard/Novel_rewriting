@@ -46,6 +46,17 @@ export interface EnumsResponse {
   structure_change_kinds: string[]
   structure_approval_decisions: string[]
   structure_approval_states: string[]
+  /** Stage4A 正式审阅的五张闭合集；表单不得在前端另抄取值。 */
+  design_strategy_decisions: string[]
+  design_chapter_decisions: string[]
+  design_reviewer_kinds: string[]
+  design_repair_codes: string[]
+  /** code -> [minScenes, minOpaqueAliases]；只用于表单提示，最终合法性仍由后端判定。 */
+  design_repair_constraint_arity: Record<string, [number, number]>
+  design_review_states: string[]
+  /** Stage4B 语义担忧与代码铸造不可行证明的运行时取值面。 */
+  binding_concern_codes: string[]
+  binding_infeasibility_codes: string[]
   /**
    * This is an honest display boundary, not an access-control boundary: the server still
    * sends the complete stage2 document and the adapter projects it before a Screen sees it.

@@ -1782,16 +1782,23 @@ class Stage4DesignAgent(NodeExecutorAgent[BlindCandidate]):
         driver_factory: Stage4DesignDriverFactory | None = None,
         max_turns: int = 4,
         concurrency: int = STAGE4_DESIGN_MAX_CONCURRENCY,
+        repair_decision_sha256: str | None = None,
+        repair_scope: plan.DesignRepairScope | None = None,
     ) -> None:
         if ctx.node != self.node:
             raise ValueError(f'{type(self).__name__} 只接受 {self.node}，实得 {ctx.node}')
         if ctx.executor_profile is None:
             raise ValueError(f'{self.node} executor 缺 resolved profile')
+        repair_mode = (
+            repair_scope is not None and not repair_scope.strategy_replan)
         self.ctx = ctx
+        self.repair_decision_sha256 = repair_decision_sha256
+        self.repair_scope = repair_scope
         self.pool = Stage4DesignSessionPool(
             ctx,
             driver_factory=driver_factory,
-            max_turns=max_turns,
+            # targeted repair 的 content budget 是产品契约，不受通用默认值放大。
+            max_turns=2 if repair_mode else max_turns,
             concurrency=concurrency,
         )
 
@@ -1813,7 +1820,12 @@ class Stage4DesignAgent(NodeExecutorAgent[BlindCandidate]):
         primary: BaseException | None = None
         delivered = False
         try:
-            artifact = plan.run_design(self.ctx, self.pool)
+            artifact = plan.run_design(
+                self.ctx,
+                self.pool,
+                repair_decision_sha256=self.repair_decision_sha256,
+                repair_scope=self.repair_scope,
+            )
             if not isinstance(artifact, BlindCandidate):
                 raise ProvenanceRefused(
                     'stage4.design executor 返回了非 BlindCandidate 正式产物')
@@ -3144,6 +3156,8 @@ def build_node_agent(
     semantic_driver_factory: SemanticDriverFactory | None = None,
     chapters: str | None = None,
     revise: bool = False,
+    repair_decision_sha256: str | None = None,
+    repair_scope: plan.DesignRepairScope | None = None,
     max_turns: int = 4,
     concurrency: int = MAX_CONCURRENCY,
 ) -> NodeExecutorAgent[BaseModel]:
@@ -3151,6 +3165,10 @@ def build_node_agent(
     if factory is None:
         raise ValueError(
             f'{ctx.node} 尚未按迁移顺序接入 executor agent；拒绝静默回退 DeepSeek')
+    if (ctx.node != 'stage4.design'
+            and (repair_decision_sha256 is not None
+                 or repair_scope is not None)):
+        raise ValueError(f'{ctx.node} 不接受 Stage4 repair 参数')
     if ctx.node == 'stage2.blueprint':
         if driver is not None:
             raise ValueError(
@@ -3185,6 +3203,8 @@ def build_node_agent(
             driver_factory=stage4_design_driver_factory,
             max_turns=max_turns,
             concurrency=concurrency,
+            repair_decision_sha256=repair_decision_sha256,
+            repair_scope=repair_scope,
         )
     if ctx.node == 'stage5.write':
         if driver is not None:

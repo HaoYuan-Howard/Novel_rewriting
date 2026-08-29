@@ -119,7 +119,7 @@ def _plan_edit_of(box4) -> dict:
     return {'output_chapters': raw['output_chapters']}
 
 
-def test_stage4_apply_edit_lands_a_round_and_rebuilds_context(box4):
+def test_stage4_apply_edit_lands_a_round_without_writing_context(box4):
     from novel.stages.stage4 import plan
 
     edit = _plan_edit_of(box4)
@@ -132,40 +132,26 @@ def test_stage4_apply_edit_lands_a_round_and_rebuilds_context(box4):
     after = box4.read('stage4/plan_chapters.json')
     assert after['output_chapters'][0]['chapter_rewrite_brief'].endswith('（人工微调）')
     assert after['_provenance'].get('partial_rewrite') == '--apply-edit'
-    assert (box4.dir / 'stage4' / 'writer_context.json').exists(), '写作上下文没有同批重建'
+    assert not (box4.dir / 'stage4' / 'writer_context.json').exists(), \
+        'Plan 写入口不得冒充 stage4.context producer'
     assert list((box4.dir / 'stage4' / '_rounds').glob('plan_chapters.r*.json'))
     link = next(r for r in report.rules if r.rule == 'context_link')
-    assert link.status != 'hit', '同批重建之后 context_link 不该红'
+    assert link.status != 'hit', '本次 Plan 判定不应伪造 context link 阻断'
 
 
-def test_stage4_plan_and_context_failure_restores_the_complete_byte_set(box4, monkeypatch):
-    """A context failure after both writes must undo plan/context/history together."""
+def test_stage4_apply_edit_never_calls_context_producer(box4, monkeypatch):
     from novel.stages.stage4 import plan
 
     edit = _plan_edit_of(box4)
     edit['output_chapters'][0]['chapter_rewrite_brief'] += '（事务故障注入）'
     box4.write('stage4/plan_edit.json', edit)
-    stage = box4.dir / 'stage4'
-    before = {
-        path.relative_to(stage).as_posix(): path.read_bytes()
-        for path in stage.rglob('*') if path.is_file()
-    }
-    original_context = plan.run_context
-
-    def fail_after_context(ctx):
-        original_context(ctx)
-        raise OSError('模拟 context 落盘后失败')
-
-    monkeypatch.setattr(plan, 'run_context', fail_after_context)
+    monkeypatch.setattr(
+        plan, 'run_context',
+        lambda _ctx: pytest.fail('stage4.plan 不得调用 stage4.context'))
     ctx = RunContext.open(str(box4.root), box4.sid, 'stage4.plan', paid=False)
-    with pytest.raises(OSError, match='context 落盘后失败'):
-        plan.run_apply_edit(ctx)
-
-    after = {
-        path.relative_to(stage).as_posix(): path.read_bytes()
-        for path in stage.rglob('*') if path.is_file()
-    }
-    assert after == before
+    report = plan.run_apply_edit(ctx)
+    assert report.passed
+    assert not (box4.dir / 'stage4' / 'writer_context.json').exists()
 
 
 def test_stage4_apply_edit_rejects_retired_goal_rationale(box4):

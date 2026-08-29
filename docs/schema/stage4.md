@@ -8,30 +8,35 @@ Stage2 v6
   │                                      └─ 冻结策略 + 单章去序真相 ─ N 个私有 session（≤4 并发）
   │                                                                      └─ 单章 checkpoints
   │                              策略 + 全部章节 ─ 确定性聚合 + 整书 HARD ─ blind_candidate v2（原子落盘）
-  └─ 原文证据层 + 冻结候选 ─ stage4.plan（B，付费）────────────── evidence_binding v2
+  │                                                                        │
+  │                                                            A 正式设计审阅（服务账）
+  └─ 原文证据层 + 已审阅候选 ─ stage4.plan（B，付费）────────── evidence_binding v3
                                                                            │
                                       A + B ─ 确定性编译 ──────────────────┴─ plan_chapters v4
+                                                                                    │
+                                                               最终逐章结构审批（s4）
                                                                                     │
                                                              stage4.context（免费）── writer_context v4
 ```
 
 A、B 是两个独立公开节点、两次独立授权；A 的一次授权覆盖预览中明示的 1+N 个内部逻辑请求，
-不是 N+1 次公开授权。A 落盘后不会自动连跑 B。`stage4.plan --identity`
-仍完整构造并校验恒等计划与上下文，但只输出诊断，不产生 artifact。
+不是 N+1 次公开授权。A 落盘后先过正式设计审阅，不会自动连跑 B。B 编译 Plan 后再过另一份最终
+逐章结构审批；Context 只能在该决定全书接受后独立生成。`stage4.plan --identity` 仍完整构造并校验
+恒等计划与上下文，但只输出诊断，不产生 artifact 或审批。
 
 ## 一、产物与版本
 
 | 路径 | 模型 / 版本 | 生产者 | 责任 | 证据 |
 |---|---|---|---|---|
 | `stage4/blind_candidate.json` | `BlindCandidate` v2 | `stage4.design` | 保存 A 的 N+1 个已验 unit 确定性聚合后的盲场景候选、编译映射与聚合来源账 | 码·契 |
-| `stage4/evidence_binding.json` | `EvidenceBinding` v2 | `stage4.plan` | 保存 B 的证据绑定或 typed `infeasible` | 码·契 |
+| `stage4/evidence_binding.json` | `EvidenceBinding` v3 | `stage4.plan` / `--apply-binding` | 保存 B 的完整绑定、非阻断 concerns，或仅由代码铸造 witness 的 typed `infeasible` | 码·契 |
 | `stage4/plan_chapters.json` | `PlanChapters` v4 | `stage4.plan` 的编译段 | 保存 Stage5 真正消费的结构计划与 A/B 完整字节哈希 | 码·契 |
 | `stage4/plan_edit.json` | `PlanEdit` v4 | 人工输入 | 人工整份替换计划的 typed 入口 | 码·契 |
 | `stage4/writer_context.json` | `WriterContext` v4 | `stage4.context` | 把计划引用和当前 Stage2 真相投影成人话 | 三源 |
 
-旧 Blind/Evidence v1、Plan/Edit v3、WriterContext v3 均关闭式拒读，不迁移、不手补版本号。
+旧 Blind v1、Evidence v1/v2、Plan/Edit v3、WriterContext v3 均关闭式拒读，不迁移、不手补版本号。
 compiled 计划从 `stage4.design` → `stage4.plan` 重建；人工稿提交 v4 `PlanEdit`；上下文用
-`stage4.context` 免费重建。旧 `stage4/writer_context.identity.json` 已退役：不登记路径、不发现、
+`stage4.context` 在最终结构审批后免费重建。旧 `stage4/writer_context.identity.json` 已退役：不登记路径、不发现、
 不读取，也不主动删除用户盘上的历史文件。
 
 ## 二、Stage4A：`blind_candidate.json` v2
@@ -98,7 +103,27 @@ unit checkpoint 不是正式 artifact。只有策略和全部章节齐全，代�
 单章动态闸与整书全部 HARD。通过后才由 commit journal 原子写 `blind_candidate.json`；中断、缺章、
 聚合失败或 HARD 命中都不得留下部分正式文件，也不得覆盖旧正式候选。
 
-## 三、Stage4B：`evidence_binding.json` v2
+### 2.4 正式 A 设计审阅与定向修订
+
+A 的 schema/HARD 通过只说明候选可读、引用闭合，不替人判断它是否实现了足够的结构重构。审批服务对
+当前 A 构造完整 review subject：全局 basis 绑定 root/truth/alias/review contract；策略 subject 绑定
+重构策略与章权重；每章 subject 绑定同一策略摘要、安全的本章盲真相、候选业务面，以及服务端调用
+`structure_metrics_of` 现场计算的声明/实际/已实现/未实现/未声明变化和无 id 标量读数。formal fact/person
+id 与来源位置不公开；opaque alias 只在本章 subject 内闭合。
+
+一次 `DesignReviewRequest` 必须原子覆盖当前策略和全部章：策略 `accept / request_replan`，逐章
+`accept / request_repair`。repair 章必须给关闭式 `{code, scene_refs[], opaque_aliases[]}` constraints，
+各 code 的最小引用数只定义在 `DESIGN_REPAIR_CONSTRAINT_ARITY`；reason 只作审计，不发给模型。
+全局 basis 或策略变化使全章旧决定过期；单章业务变化只使该章过期。同一策略下、subject 完全相同的
+历史 accept 可由模板带 `source_decision_sha256` 复用，但仍须对当前整书重新提交一次，不静默代签。
+
+逐章拒绝只允许 `stage4.design --repair-decision <当前决定 SHA-256>`：重跑 request_repair 章，其他章
+引用既有已验 checkpoint；正式 provenance 记录 parent candidate、决定摘要与逐 unit lineage。旧首轮
+候选尚无 lineage 时，core 以正式 candidate 完整 SHA、业务主体和 committed aggregate journal 唯一反查
+基线 run；零或多匹配关闭式拒绝。策略被拒才允许 `--replan` 整书重做。两条付费路都只产新 A，之后
+必须重新审阅；任何审批提交本身都不启动作业。
+
+## 三、Stage4B：`evidence_binding.json` v3
 
 B 收到冻结候选、候选业务主体 SHA-256，以及原文证据、源舞台和必须材料的关闭式目录。人物到场
 由绑定舞台的 `present` 唯一给出，B 不再回填第二份人物清单。B 的输出没有结构字段入口，不能修改
@@ -109,15 +134,22 @@ A 的场景顺序、事实分组、goal、结构声明、brief、purpose/role/de
 | `status` | `bound` | `infeasible` | 码·契 |
 | `candidate_sha256` | 必须等于冻结候选主体 | 同左 | 码·契 |
 | `chapters` | 非空；章场集精确匹配候选 | `null` | 码·契 |
-| `reason_kind` / `reason` | `null` | typed 原因 + 非空说明 | 码·契 |
-| `evidence_refs` | `null` | 非空关闭式引用 | 码·契 |
-| `_provenance` | B 自己的 LLM 来源账 | 同左 | 码·契 |
+| `binding_concerns[]` | 可空；非阻断语义担忧 | 模型主张阶段必须非空；正式稿保留作审阅证据 | 码·契 |
+| `infeasibility_proof[]` | `null` | 非空、由代码铸造的关闭式 witness | 码·契 |
+| `_provenance` | `origin=llm` 的 B 来源账，或 `--apply-binding` 的 `origin=human` 免费来源账 | 同左 | 码·契 |
 
 `bound.chapters[].scenes[]` 只含 `candidate_scene_id`、`stage_refs`、`material_refs`。每个候选场恰绑定
 一次，每条材料全章恰落一次；返回数组顺序不产生叙事语义，编译始终沿 A 顺序。
 
-`infeasible` 是正式、可审计的终态，不允许部分 binding，也不自动生成 A2。其引用只能来自本次下发的
-候选场、opaque alias、stage 或 material 目录；自由 token 和悬空引用在落盘前拒绝。
+模型的 `infeasible` 只是待核证主张，不是 artifact。代码在同一目录上先作构造性求解：合法章至少有
+一个舞台、每场可复用首项舞台、全部材料可唯一落到首场，因此常规输入可绑定；错误主张在同一 session
+返回结构化反馈，要求完整 bound。只有 `prove_binding_infeasible` 能从关闭式目录铸造 witness（例如章目录
+缺失或合法舞台集合为空），才允许正式 `infeasible`；它不允许部分 binding，也不自动生成 A2。
+`binding_concerns` 的 scene/closed refs 同样闭合，并进入最终结构审批 subject，但不自动阻断编译。
+
+0-wire `stage4.plan --apply-binding <path>` 接受 `EvidenceBindingResponse` 业务 JSON，不接受客户端伪造
+`_provenance` 或 proof；core 现场铸 `origin=human`、独立证明任何 infeasible，并复用同一 compiler/HARD、
+写盘 journal 与 readback。
 
 ## 四、正式计划 v4
 
@@ -160,9 +192,10 @@ A 的场景顺序、事实分组、goal、结构声明、brief、purpose/role/de
 `novel/stages/stage4/measure.py::structure_metrics_of` 对当前 blueprint 和实际计划场景计算；
 `structure_alignment` 展示声明、实际、未实现声明与未声明实际，不回写计划。
 
-结构审批主体绑定同号章、`from_source_ordinals`、三个 goal、brief、预算、全部场景执行字段和人工结构
-声明；不包含来源账、已删除字段或现场派生向量。改变实际计划会改变 subject SHA-256；只改变算法读数
-不会改写计划字节。审批 proof 另外绑定 `plan_chapters.json` 完整字节，两层缺一不可。
+计划业务主体绑定同号章、`from_source_ordinals`、三个 goal、brief、预算、全部场景执行字段和人工结构
+声明；不包含来源账、已删除字段或现场派生向量。最终人审 subject 再把该 plan subject 与当前 B 的
+完整 `binding_concerns` 合成唯一 SHA-256。改变实际计划或 concerns 都会使决定过期；只改变算法读数
+不会改写计划字节。审批 proof 另外绑定 `plan_chapters.json` 与 `evidence_binding.json` 完整字节，缺一不可。
 
 ### 4.4 `PlanProvenance`
 
@@ -206,8 +239,11 @@ Stage5 prompt 不接收 fact/beat/hinge/secret/rule id、alias、A 策略、结�
 都算入场，端点只作本章上下文出现不是漏落；事实、状态、材料和上下文
 精确性仍由 HARD 守卫关闭。
 
-公开 `ApprovalDoc` 是 v4；服务盘上 `_service/approvals/<sid>.json` 是 v5。旧 v4 只经显式
-`backfill_from_disk` 逐项对证，普通 GET / 启动不静默迁移，迁移结果也不保留退役 s3。一次结构决定必须提交当前
+公开 `ApprovalDoc` 是 v5；服务盘上 `_service/approvals/<sid>.json` 是 v6。旧 v5 只经显式
+`backfill_from_disk` 逐项对证，普通 GET / 启动不静默迁移。迁移保留可对证的 gate/seen/结构/writing，
+但 design history 恒空，绝不从既有 A/B/Plan 或付费记录伪造 A 审阅；只有同时 current 的 Plan v4
+与 bound EvidenceBinding v3（含其 INVALID Plan 的零成本恢复）可继续最终结构审批，未来再次运行 B
+才要求 current A accept。旧 v2 Binding 不迁移、不补字段，须按 A 审阅 → B producer 重建。一次最终结构决定必须提交当前
 subject SHA-256、actor、全书理由及与计划章集精确相等的逐章 accept/request_replan。全章 accept 才
 打开 s4；任何 request_replan 都关闭 s4、保留 typed 决定并撤销旧 writing/下游证明，但不自动启动
 付费 A/B。计划变化后旧决定进入 history，当前态变 expired。
@@ -216,10 +252,11 @@ subject SHA-256、actor、全书理由及与计划章集精确相等的逐章 ac
 
 | 状态 | 允许的恢复 | 禁止的捷径 | 证据 |
 |---|---|---|---|
-| A 的策略或单章响应暂停/拒收 | 同一 `run_id` 恢复，只补失败/缺失 unit；必要时显式 response-repair 或重新批准 A | 重发已验 unit、公开 `--chapters`、补字段或部分聚合冒充正式候选 | 码·契 |
-| B typed `infeasible` | 人审阅；必要时另行批准 `stage4.design --replan`，再独立批准 B；或提交完整 v4 人工计划 | B 私改 A、自动生成 A2、一次批准串跑 A/B | 码·契 |
+| A 的策略或单章响应暂停/拒收 | 同一 `run_id` 恢复，只补失败/缺失 unit；validator 原字节可走 `--adopt-rejected` | 重发已验 unit、公开 `--chapters`、补字段或部分聚合冒充正式候选 | 码·契 |
+| A 正式审阅逐章拒绝 | 当前 decision SHA 绑定的 `--repair-decision` 只返修 request_repair 章；策略拒绝才 `--replan` | 把默认模板理由当真实反馈、自然语言自由指令、无决定随机重采整书 | 码·契 |
+| 模型声称 B `infeasible` | 同 session 结构化反馈要求 bound；真实代码 witness 可落正式终态；亦可提交 `--apply-binding` 或完整 v4 人工计划 | 信任模型自证、B 私改 A、自动生成 A2、要求已有 Plan 才给首次恢复 | 码·契 |
 | 计划落 `.INVALID` | 修订 v4 `plan_edit.json` 后 `--apply-edit`，或 `--revalidate --actor --reason` | 改名提升、绕过 schema/判据/归档 | 三源 |
-| Context 缺失或 stale | `stage4.context` 免费重建 | 用旧上下文继续写 | 三源 |
+| Context 缺失或 stale | 最终结构全章 accept 后用 `stage4.context` 免费重建 | B/计划修复时提前代写，或用旧上下文继续写 | 三源 |
 | 旧版本 | 从 producer 重建；人工稿重写为 v4 | 迁移、猜字段、手补版本号 | 码·契 |
 
 ## 八、现行判据

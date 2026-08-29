@@ -365,15 +365,16 @@ class RunContext:
             adopted_models: Iterable[str], **extra: Any) -> P:
         """**第四个口，也是唯一一个「0 成本的跑写一份带 `model` 的账」**。
 
-        它服务的只有一种处境：一次**已经付过费**的响应被内容闸拒绝、封存进
-        `_llm_rejected/`，事后由 `--adopt-rejected` 按当前四道闸 0 次调用重判并采用。
+        它只服务两种已经付过费、且带不可变证据的恢复：Stage4 被内容闸封存进
+        `_llm_rejected/` 的响应由 ``--adopt-rejected`` 重判采用；Stage5 旧 run 的
+        ``prepared`` checkpoint 由 ``--recover-prepared`` 在新 run/current code 下重判收口。
         产物确实由某个模型产出，所以 `model` 必须记；而**这一次跑没有调用任何模型**，
         所以它过不了 `llm_provenance` 的 `paid` 闸，也不该走 `free_provenance`
         （那一口结构上没有 `model`，记不下「谁产的」）。
 
-        【它凭什么不是「现造一份假账」】调用方必须同时在 `extra` 里交出封存证据
-        （`rejected_response_adoption`：attempt_id、当时的代码身份、响应完整 SHA-256
-        与 actor/reason/新旧内容 diff）。没有那份证据这一口铸不出东西来——
+        【它凭什么不是「现造一份假账」】调用方必须同时在 `extra` 里恰交一份 typed
+        封存证据（``rejected_response_adoption`` 或
+        ``prepared_checkpoint_adoption``）。没有证据、两种证据混用都铸不出东西来——
         它要的不是「相信我」，是那次调用的不可变留痕。
 
         【`usage` 为什么是本次窗口而不是历史那次的数】**成本的唯一权威源是账本**
@@ -384,7 +385,16 @@ class RunContext:
         actual_models = sorted(set(adopted_models))
         if not actual_models:
             raise ProvenanceRefused(
-                f'{self.node}: 拒稿采用必须交出当初实际产出这份响应的模型')
+                f'{self.node}: 0 wire 模型产物恢复必须交出当初实际产出响应的模型')
+        evidence_keys = [
+            key for key in (
+                'rejected_response_adoption', 'prepared_checkpoint_adoption')
+            if extra.get(key) is not None
+        ]
+        if len(evidence_keys) != 1:
+            raise ProvenanceRefused(
+                f'{self.node}: 0 wire 模型产物恢复必须恰有一份 typed adoption 证据，'
+                f'实际 {evidence_keys}')
         out = cls(code=self.code, root_clean_sha1=self._require_single_root(),
                   inputs=self.edges,
                   prompts={k: prov.fingerprint(v) for k, v in prompts.items()},

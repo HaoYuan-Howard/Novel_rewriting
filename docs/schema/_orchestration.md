@@ -70,13 +70,13 @@ reasoning effort 与 execution mode 的唯一公开来源是 `GET /api/agent/cap
 `None` / `null` 只服务旧历史与迁移期尚未指定的请求，**不表示 capability 数组第一项**。
 服务端 capability 的 `default_profiles=null` 表示当前还没有 provider-neutral 默认；UI 已消费该响应，
 但仍必须显式选择，不能替用户猜。Phase 2～4 依次接通 Stage2 global、blueprint 与 Stage6 semantic；
-Phase 5 后 direct executor 的**现役精确面**为 8 节点 / 12 种 flag-token 组合：
+Phase 5 后 direct executor 的**现役精确面**为 8 节点 / 13 种 flag-token 组合：
 
 | node | 接受非空 profile 的 `flags` token 集 | Step 说明 |
 |---|---|---|
 | `stage2.global` | `[]` | 1 个付费 producer Step |
 | `stage2.blueprint` | `[]` | producer 带 profile；自动 `--check-only` Step 不带 |
-| `stage4.design` | `[]`、`[--replan]` | 1 个付费 producer Step |
+| `stage4.design` | `[]`、`[--replan]`、`[--repair-decision]` | 1 个付费 producer Step；后两者分别消费当前正式策略驳回或逐章返修决定，不能裸调用 |
 | `stage4.plan` | `[]` | producer 带 profile；自动 `--check-only` Step 不带 |
 | `stage5.write` | `[]`、`[--chapters]`、`[--revise]`、`[--revise,--chapters]` | `--chapters` 的章号是 flag 值，不另算 token；逐章 session |
 | `stage6.hook` | `[]` | producer 带 profile；自动 `--check-only` Step 不带 |
@@ -118,7 +118,7 @@ node/flags 选择 executor profile。Phase 1～6 结论来自 fake driver、本�
 | `paid` | `bool` | **是** | 这一步会不会花钱。**唯一落点 `novel/orchestrator/nodes.py::is_paid`**（`R-11.7`：贵贱只有一处算） | **盘·码** |
 | `writes` | `str` | **是** | ⭐ 这一步会往盘上写什么。**空串 = 不写盘。** 见 §1.2 | **设计** |
 | `note` | `str \| 键不在` | 否 | 这一步的特别提醒（例：追跑的那条 `--check-only` 为什么在） | **契·码** |
-| `executor_profile` | `AgentProfile \| null` | 否；旧盘可缺 | 本步真正解析后的 executor 快照。现役仅限上表 8 节点 / 12 组合的付费 producer Step 可非空；blueprint、Stage4 plan、Hook、Rename 自动追跑的 0 成本 `--check-only` Step 必须为 `null`。`null` / 缺失只能显示 unknown，不按今天默认倒推昨天身份 | **契·码** |
+| `executor_profile` | `AgentProfile \| null` | 否；旧盘可缺 | 本步真正解析后的 executor 快照。现役仅限上表 8 节点 / 13 组合的付费 producer Step 可非空；blueprint、Stage4 plan、Hook、Rename 自动追跑的 0 成本 `--check-only` Step 必须为 `null`。`null` / 缺失只能显示 unknown，不按今天默认倒推昨天身份 | **契·码** |
 | `egress_authorized` | `bool \| null` | 否；旧盘可缺 | 独立正文外发授权快照。新付费 executor Step 必须为 bool，并与 argv 是否含 `--allow-egress` 逐字一致；profile 为空的 legacy/代码/追跑 Step 必须为 `null`。旧盘 `null` 只表示未记录，不倒推 | **契·码** |
 
 ### 1.1 ⚠ `--base` 用绝对路径，但 `-m novel.cli` 仍然吃 cwd
@@ -133,7 +133,7 @@ argv 的形态是：
 
 方括号里的 executor 四元组只在 resolved profile 非空时由 builder 整组加入；CLI 不接受半份选择。
 `--allow-egress` 也只可跟在这组 profile 后，且只在独立授权为 true 时出现；它与 `--yes` 分别回答
-正文能否外发、能否付费。当前只有上表 8 节点 / 12 组合会生成这组参数，不能把 argv 的可选形状
+正文能否外发、能否付费。当前只有上表 8 节点 / 13 组合会生成这组参数，不能把 argv 的可选形状
 误解为任意节点或任意 flag 都已迁移。
 
 `--base` 用绝对路径是原型定下来的，理由是「**好让 argv 与 cwd 无关**」。
@@ -203,7 +203,7 @@ argv 的形态是：
 | `code` | `str` | **是** | `git describe --always --dirty`。哪版代码跑的（同 `_provenance.code`，全链一个实现） | **三源** |
 | `paid` | `bool` | **是** | 整个作业花不花钱 = 任一步花钱 | **盘·码** |
 | `writes` | `bool` | **是** | 整个作业写不写盘 = 任一步写盘 | **设计** |
-| `executor_profile` | `AgentProfile \| null` | 否；旧盘可缺 | 直接节点作业解析后的 executor 快照；与付费 producer `steps[].executor_profile` 同源。现役仅上表 8 节点 / 12 组合可非空；未迁移组合不得冻结一份 profile 后仍走旧 backend | **契·码** |
+| `executor_profile` | `AgentProfile \| null` | 否；旧盘可缺 | 直接节点作业解析后的 executor 快照；与付费 producer `steps[].executor_profile` 同源。现役仅上表 8 节点 / 13 组合可非空；未迁移组合不得冻结一份 profile 后仍走旧 backend | **契·码** |
 | `egress_authorized` | `bool \| null` | 否；旧盘可缺 | 与所有付费 executor Step 同源的独立正文外发授权。新 profile 作业必须冻结 bool；无 profile 时必须 `null`。false 是“可预览、不可执行”，不是 unknown；旧盘 `null` 才是未记录 | **契·码** |
 | `started` | `int` | **是** | epoch 秒 | **盘·码** |
 | `ended` | `int \| null` | **是** | 必填但可为 `null`——**`null` = 还没结束或不知道**，不是 0 | **盘·码** |
@@ -616,8 +616,8 @@ Output/_service/approvals/<sid>.json 人工闸门、已阅状态与 canonical �
 不进入正式 artifact provenance，也不参与 cache key。旧行没有该列时仍可读，但只能标为
 legacy / ungrouped；成本汇总不得用时间窗口把它猜进某个新 run。
 
-`approvals/<sid>.json` 的盘上服务记录当前为 **v5**；HTTP 投影 `ApprovalDoc.v=4` 是另一条
-版本轴，不能据同一个数字互推。每个已盖 gate、已阅状态、typed Stage4 结构裁决和 writing 授权
+`approvals/<sid>.json` 的盘上服务记录当前为 **v6**；HTTP 投影 `ApprovalDoc.v=5` 是另一条
+版本轴，不能据同一个数字互推。每个已盖 gate、已阅状态、typed Stage4A 设计审阅、最终结构裁决和 writing 授权
 都必须带一份 current-subject proof：当前 `stage0/clean_text.txt` 的完整 SHA-1、所裁决正式
 产物的完整 SHA-256，以及决定本身的规范 JSON SHA-256。读取时必须重新走当前 schema、typed
 人工决定与 freshness 校验并逐字节比对；根变化、上游变化、正式产物被换字、损坏、出现
@@ -626,9 +626,12 @@ legacy / ungrouped；成本汇总不得用时间窗口把它猜进某个新 run�
 `surname_map + characters + extra_subs` 决策面与完整 typed `ApprovedNameMap` 的规范摘要。
 因此 `stage7.assemble` 写回 `book_txt` 交付账不会自废 s7，而决策面、actor/reason/origin
 或 subject hash 变化仍会失效；读取还必须先证明 approval 存在且 subject 与当前决策面一致。
-旧 v4 记录仍含 s3 proof，只为**显式** backfill 解码；只有旧 Stage3 v2、Stage1、Stage4 与
-测量契约全部对得上时，才保守恢复仍成立的决定，新 v5 本身不保存 s3。旧 v2/v3 没有 typed
-Stage4 结构裁决，最多保留按当前盘面逐项对证的前置 gate；不得凭旧 s4/writing 反造逐章结构决定。
+旧 v5 记录仍可能含由更早版本保守收进的当前 proof，只为**显式** backfill 解码；迁入 v6 时只保留
+仍可逐项对证的 gate、seen、最终结构与 writing 决定，`design_history` 恒为空，绝不从既有 A/B/Plan
+或付费记录倒造 Stage4A 人审。已有 current Plan v4 + current bound EvidenceBinding v3（包括可零成本
+恢复的 `.INVALID` Plan）可继续做最终结构审；未来再次产 B 才要求真实 A 审阅。旧 v2 Binding
+不经审批迁移或补字段，仍由 B producer 重建。更早记录没有 typed Stage4 结构裁决时，最多保留按当前盘面逐项对证的
+前置 gate；不得凭旧 s4/writing 反造逐章结构决定。
 普通 GET / 作业启动绝不静默迁移。旧 v1、损坏记录或
 不满足上述条件的记录只能显式 reset/backfill，不能猜。队列在一把锁内读取 current 结构裁决、
 writing 授权与盘面；不得先查文件、再另读授权，从而留下两次读取之间主体变化仍生成付费命令的窗口。

@@ -9,6 +9,7 @@ import { ChapterStrip } from '@/components/ui/ChapterStrip'
 import { Mono } from '@/components/ui/Mono'
 import { Panel, PaneHeader } from '@/components/ui/Panel'
 import { cx } from '@/lib/cx'
+import { DesignReviewPanel } from './DesignReviewPanel'
 import { StructureApprovalPanel } from './StructureApprovalPanel'
 import { useStage4Screen, type PlanSceneView } from './useStage4Screen'
 
@@ -193,6 +194,7 @@ export function Stage4Screen() {
           )}
         </QueryStates>
       </ScreenFrame>
+      <DesignReviewPanel />
       {vm.query.data ? (
         <StructureApprovalPanel
           rows={vm.structureRows}

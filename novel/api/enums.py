@@ -131,6 +131,8 @@ _WITHHELD: dict[str, str] = {
                                   '消费投影。发给前端会诱导第二个过期判官',
     'STRUCTURE_METRIC_CONTRACT': 'Stage4 结构指标算法版本；实例值已随计划来源账与结构审批主体落盘，'
                                  '前端只展示当前计划的决定与审批态，不自行判断算法新旧',
+    'DESIGN_REVIEW_CONTRACT': 'Stage4A 正式审阅 subject 的算法版本；后端已把它折进完整 hash，'
+                              '前端只提交模板给出的 subject，不自行判断审阅是否过期',
     'BLIND_ALIAS_ALGORITHM': 'Stage4A 审计用的 opaque alias 算法身份；前端既不生成 alias，'
                              '也不据此判断候选是否可用',
     'STAGE4_DESIGN_MAX_CONCURRENCY': 'Stage4A 私有 session 的供应商稳定性护栏；'

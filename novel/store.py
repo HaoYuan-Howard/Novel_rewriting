@@ -377,13 +377,57 @@ class ArtifactStore:
         正文、设定等其余上游仍关闭式拒绝。调用方不给键时与普通 ``require_current``
         完全同义，不能把它当成「问题稿一律跳过 freshness」的口子。
         """
+        obj, payload, _raw = self._read_own_validated(
+            model,
+            rel,
+            require_current=require_current,
+            replaced_input_keys=replaced_input_keys,
+        )
+        return obj, payload
+
+    def read_own_with_sha256(
+        self,
+        model: type[M],
+        rel: str,
+        *,
+        require_current: bool = False,
+        replaced_input_keys: Iterable[str] = (),
+    ) -> tuple[M, str]:
+        """读本节点自己的产物，并返回这一次读取的完整字节 SHA-256。
+
+        与 :meth:`read_own` 一样，这条路刻意不把本节点自己的产物记成普通
+        provenance 输入；区别只在于 hash-bound 提交/复核还需要绑定**同一次读取**
+        的精确盘上字节。不能先 ``read_own`` 再另读文件算 hash：两次读取之间的
+        TOCTOU 会让模型与摘要可能来自两份不同内容。
+
+        schema、根身份与可选 currentness 仍全部经过 ``read_own`` 共用的唯一口，
+        不允许调用方为了拿摘要退回裸文件读取或从模型重序列化估算。
+        """
+        obj, _payload, raw = self._read_own_validated(
+            model,
+            rel,
+            require_current=require_current,
+            replaced_input_keys=replaced_input_keys,
+        )
+        return obj, hashlib.sha256(raw).hexdigest()
+
+    def _read_own_validated(
+        self,
+        model: type[M],
+        rel: str,
+        *,
+        require_current: bool,
+        replaced_input_keys: Iterable[str],
+    ) -> tuple[M, Any, bytes]:
+        """``read_own*`` 的唯一字节、解码、schema、根与 currentness 入口。"""
         raw = self._read_bytes(rel)
         data = self._loads(rel, raw)
         obj, payload = self._validate_payload(model, rel, data)
         self._record_artifact_root(rel, obj)
         if require_current:
-            self._refuse_stale_upstream(rel, replaced_input_keys=replaced_input_keys)
-        return obj, payload
+            self._refuse_stale_upstream(
+                rel, replaced_input_keys=replaced_input_keys)
+        return obj, payload, raw
 
     def schema_version(self, rel: str) -> int | None:
         """只读盘上 envelope 的版本标记，不把旧产物解码成当前 payload。

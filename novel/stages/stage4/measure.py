@@ -5,15 +5,16 @@ from __future__ import annotations
 
 from collections import Counter
 import hashlib
+import heapq
 import json
 import math
 from typing import Any
 
 from contracts.invariants import (
-    CHAPTER_WEIGHT_RATIO, RESPONSE_CHAPTER_WEIGHTS, RESPONSE_DELIVERY_MODES,
-    RESPONSE_GOAL_INTENTS, RESPONSE_STRUCTURAL_ROLES, RESPONSE_TEMPORAL_LINKS,
-    RESPONSE_UNIT_WEIGHTS, STRUCTURE_CHANGE_KINDS, STRUCTURE_METRIC_CONTRACT,
-    UNIT_WEIGHT_FACTOR, VERBATIM_BUDGET_FACTOR,
+    CHAPTER_WEIGHT_RATIO, PLAN_BUDGET_BAND, RESPONSE_CHAPTER_WEIGHTS,
+    RESPONSE_DELIVERY_MODES, RESPONSE_GOAL_INTENTS, RESPONSE_STRUCTURAL_ROLES,
+    RESPONSE_TEMPORAL_LINKS, RESPONSE_UNIT_WEIGHTS, STRUCTURE_CHANGE_KINDS,
+    STRUCTURE_METRIC_CONTRACT, UNIT_WEIGHT_FACTOR, VERBATIM_BUDGET_FACTOR,
 )
 from novel.errors import RefusedByStructure
 from novel.stages.stage4.beats import beat_index, verbatim_pieces
@@ -258,6 +259,25 @@ def structure_subject_sha256(plan: Any) -> str:
         separators=(',', ':'),
     ).encode('utf-8')
     return hashlib.sha256(payload).hexdigest()
+
+
+def structure_review_subject_sha256(
+    plan: Any, binding_concerns: list[Any],
+) -> str:
+    """最终结构人审的唯一主体：Plan 业务面 + 当前 B 非阻断担忧。"""
+    concerns = [
+        value.model_dump(mode='json')
+        if hasattr(value, 'model_dump') else value
+        for value in binding_concerns
+    ]
+    payload = {
+        'kind': 'stage4_structure_review_subject',
+        'plan_subject_sha256': structure_subject_sha256(plan),
+        'binding_concerns': concerns,
+    }
+    return hashlib.sha256(json.dumps(
+        payload, ensure_ascii=False, sort_keys=True, separators=(',', ':'),
+    ).encode('utf-8')).hexdigest()
 
 
 def _structure_unver(reason: str) -> dict[str, Any]:
@@ -698,33 +718,82 @@ def source_chars_table(blueprints: dict[str, Any], _bidx: dict[str, dict[str, An
     return '\n'.join(rows)
 
 
-def _round_shares(raw: list[float], total: int) -> list[int]:
+def _bounded_round_shares(
+    raw: list[float], total: int, lower: list[int], upper: list[int],
+) -> list[int]:
+    """按 ``raw`` 的相对权重分整数，并严格守住逐格上下界与总和。
+
+    先把归一化后的精确份额钳进整数带，再用最大余量法逐字重分残差；堆中的
+    第二排序键是原数组位置，因此同一输入逐字稳定。上下界来自产品契约，不是
+    舍入建议：不可行时必须关闭式失败，不能像旧实现那样悄悄扩大 ``total``。
+    """
     if not raw:
-        return []
-    total = max(total, len(raw))
-    denom = sum(raw) or len(raw)
-    exact = [value * total / denom for value in raw]
-    out = [max(1, math.floor(value)) for value in exact]
-    while sum(out) < total:
-        index = max(range(len(out)), key=lambda i: exact[i] - out[i])
-        out[index] += 1
-    while sum(out) > total:
-        choices = [i for i, value in enumerate(out) if value > 1]
-        if not choices:
-            break
-        index = min(choices, key=lambda i: exact[i] - out[i])
-        out[index] -= 1
+        if total == 0 and not lower and not upper:
+            return []
+        raise RefusedByStructure('预算分配没有单元，却收到非零总量或边界')
+    if not (len(raw) == len(lower) == len(upper)):
+        raise RefusedByStructure('预算权重与上下界数量不一致')
+    if any(lo < 1 or hi < lo for lo, hi in zip(lower, upper)):
+        raise RefusedByStructure('预算上下界不可行')
+    if not sum(lower) <= total <= sum(upper):
+        raise RefusedByStructure(
+            f'预算总量 {total} 不在可分区间 [{sum(lower)}, {sum(upper)}]')
+
+    denom = sum(raw)
+    basis = raw if denom > 0 else [1.0] * len(raw)
+    denom = sum(basis)
+    exact = [value * total / denom for value in basis]
+    out = [min(hi, max(lo, math.floor(value)))
+           for value, lo, hi in zip(exact, lower, upper)]
+
+    rest = total - sum(out)
+    if rest > 0:
+        # 优先把字给「精确份额 - 当前整数」最大的格；每加一字重新入堆。
+        candidates = [(-(exact[i] - out[i]), i) for i in range(len(out))
+                      if out[i] < upper[i]]
+        heapq.heapify(candidates)
+        while rest:
+            if not candidates:               # 可行性前件守住后构造上到不了
+                raise RefusedByStructure('预算余量没有可接收的章节/场景')
+            _priority, index = heapq.heappop(candidates)
+            out[index] += 1
+            rest -= 1
+            if out[index] < upper[index]:
+                heapq.heappush(candidates, (-(exact[index] - out[index]), index))
+    elif rest < 0:
+        # 优先从「精确份额 - 当前整数」最小（超额最多）的格取回一字。
+        candidates = [(exact[i] - out[i], i) for i in range(len(out))
+                      if out[i] > lower[i]]
+        heapq.heapify(candidates)
+        while rest:
+            if not candidates:               # 可行性前件守住后构造上到不了
+                raise RefusedByStructure('预算超额没有可扣减的章节/场景')
+            _priority, index = heapq.heappop(candidates)
+            out[index] -= 1
+            rest += 1
+            if out[index] > lower[index]:
+                heapq.heappush(candidates, (exact[index] - out[index], index))
     return out
 
 
+def _round_shares(raw: list[float], total: int) -> list[int]:
+    """无额外业务带的正整数分配；总和仍必须逐字等于 ``total``。"""
+    return _bounded_round_shares(
+        raw, total, [1] * len(raw), [total] * len(raw))
+
+
 def _validate_scene_refs(chapter: dict[str, Any], blueprint: dict[str, Any]) -> None:
+    # `checks` 本身复用本模块的结构读数，故在调用时导入以避开模块初始化环；
+    # context 的产品口径仍只落在 checks.context_ref_findings 一处。
+    from novel.stages.stage4 import checks
+
     ordinal = chapter.get('output_ordinal')
     atoms = {str(a.get('fact_id')): a for a in (blueprint.get('fact_atoms') or [])}
     hinges = {str(h.get('hinge_id')) for beat in (blueprint.get('beats') or [])
               for h in (beat.get('hinges') or [])}
     beats = {str(b.get('beat_id')) for b in (blueprint.get('beats') or [])}
     land = {fid for fid, atom in atoms.items() if atom.get('obligation') == 'land'}
-    context = set(atoms) - land
+    context = {fid for fid, atom in atoms.items() if atom.get('obligation') == 'context'}
     landed: list[str] = []
     bad: list[str] = []
     for index, scene in enumerate(chapter.get('scenes') or [], 1):
@@ -734,14 +803,19 @@ def _validate_scene_refs(chapter: dict[str, Any], blueprint: dict[str, Any]) -> 
         landed.extend(lrefs)
         if set(lrefs) - land:
             bad.append(f'{prefix}.land_fact_refs 越界 {sorted(set(lrefs) - land)}')
-        if set(crefs) - context:
-            bad.append(f'{prefix}.context_fact_refs 越界 {sorted(set(crefs) - context)}')
         if set(scene.get('material_refs') or []) - hinges:
             bad.append(f'{prefix}.material_refs 越界')
         if set(scene.get('stage_refs') or []) - beats:
             bad.append(f'{prefix}.stage_refs 越界')
         if scene.get('turn_fact_ref') not in lrefs:
             bad.append(f'{prefix}.turn_fact_ref 不在本场落地事实中')
+    bad.extend(
+        f'ch{ordinal}.{row}.context_fact_refs 越界'
+        for row in checks.context_ref_findings(
+            list(chapter.get('scenes') or []),
+            context_obligation_refs=context,
+            land_key='land_fact_refs', context_key='context_fact_refs')
+    )
     duplicates = sorted({ref for ref in landed if landed.count(ref) > 1})
     missing = sorted(land - set(landed))
     if missing or duplicates or bad:
@@ -753,17 +827,54 @@ def _validate_scene_refs(chapter: dict[str, Any], blueprint: dict[str, Any]) -> 
 def allocate_budgets(plan: dict[str, Any], blueprints: dict[str, Any],
                      bidx: dict[str, dict[str, Any]], *,
                      chapter_totals: dict[Any, int] | None = None) -> None:
+    """把章/场档位编译成正整数预算，并守住两条篇幅 HARD 的后置条件。
+
+    整书路径先按 ``源章字数 × 章档位`` 求相对份额，再把每章夹在
+    ``PLAN_BUDGET_BAND`` 内，将夹出的余量在仍有容量的章之间确定性重分；最终
+    全书总量逐字等于源 span 合计。给定 ``chapter_totals`` 是定向修复路径：章
+    总量沿用基线，只重新分配场景，但仍拒绝一个带外或装不下正整数场景的基线。
+    """
     bp_of = {bp.get('chapter_ordinal'): bp for bp in (blueprints.get('blueprints') or [])}
     source, fact_sizes, gaps = budget_basis(blueprints, bidx)
     if gaps:
         raise RefusedByStructure(f'Stage2 有 {len(gaps)} 章没有可用 span，无法分配场景预算：{gaps}')
     chapters = list(plan.get('output_chapters') or [])
+    ordinals = [chapter.get('output_ordinal') for chapter in chapters]
+    if len(ordinals) != len(set(ordinals)):
+        raise RefusedByStructure(f'Stage4 输出章号重复，无法分配预算：{ordinals}')
+    if chapter_totals is None and set(ordinals) != set(source):
+        raise RefusedByStructure(
+            f'Stage4 章集与预算基准不闭合：计划={sorted(ordinals)}，'
+            f'基准={sorted(source)}')
+
+    lo_ratio, hi_ratio = PLAN_BUDGET_BAND
+    lower: list[int] = []
+    upper: list[int] = []
+    for chapter in chapters:
+        ordinal = chapter.get('output_ordinal')
+        base = source.get(ordinal)
+        if base is None:
+            raise RefusedByStructure(f'第 {ordinal} 章没有预算基准')
+        # 每场预算还须为正整数；场数因此也是章总量的构造性下界。
+        lower.append(max(math.ceil(base * lo_ratio), len(chapter.get('scenes') or []), 1))
+        upper.append(math.floor(base * hi_ratio))
+
     if chapter_totals is None:
         raw = [source.get(ch.get('output_ordinal'), 1)
                * CHAPTER_WEIGHT_RATIO.get(ch.get('weight'), 1.0) for ch in chapters]
-        totals = _round_shares(raw, sum(source.values()))
+        totals = _bounded_round_shares(raw, sum(source.values()), lower, upper)
         chapter_totals = {ch.get('output_ordinal'): total
                           for ch, total in zip(chapters, totals)}
+    else:
+        normalized: dict[Any, int] = {}
+        for chapter, lo, hi in zip(chapters, lower, upper):
+            ordinal = chapter.get('output_ordinal')
+            value = chapter_totals.get(ordinal, source[ordinal])
+            if type(value) is not int or not lo <= value <= hi:
+                raise RefusedByStructure(
+                    f'第 {ordinal} 章钉定预算 {value!r} 不在可分整数带 [{lo}, {hi}]')
+            normalized[ordinal] = value
+        chapter_totals = normalized
     for chapter in chapters:
         ordinal = chapter.get('output_ordinal')
         blueprint = bp_of.get(ordinal) or {}

@@ -390,7 +390,7 @@ class ConflictStage(StrictModel):
     #: **逐章显式枚举**，不是区间端点：`[3, 5]` 不暗含第 4 章。
     #: 全部阶段合起来必须让每个阅读序章号**恰好出现一次**；跨字段的不重不漏由
     #: `conflict_stage_coverage` HARD 在产地按 Stage1 正文章集合校验（`R-2.14`）。
-    chapters: list[int] = Field(min_length=1)
+    chapters: list[Annotated[int, Field(strict=True)]] = Field(min_length=1)
 
 
 class ArcTrack(StrictModel):
@@ -913,6 +913,8 @@ class GlobalEdit(StrictModel):
     secrets_replace: list[SecretResponse] | None = None
     world_rules_replace: list[WorldRuleResponse] | None = None
     relations_replace: list[RelationResponse] | None = None
+    conflict_stages_replace: list[ConflictStage] | None = Field(
+        default=None, min_length=1)
     arc_tracks_replace: list[ArcTrackResponse] | None = Field(default=None, min_length=1)
     addresses_replace: list[CharacterAddressReplacement] = Field(default_factory=list)
 
@@ -922,7 +924,9 @@ class GlobalEdit(StrictModel):
             self.secrets or self.world_rules or self.characters or self.relations
             or self.setting is not None or self.arc_tracks or self.addresses
             or self.secrets_replace is not None or self.world_rules_replace is not None
-            or self.relations_replace is not None or self.arc_tracks_replace is not None
+            or self.relations_replace is not None
+            or self.conflict_stages_replace is not None
+            or self.arc_tracks_replace is not None
             or self.addresses_replace
         ):
             raise ValueError('global edit must contain at least one typed patch')

@@ -41,6 +41,19 @@ def _chapter_selection(flags: list[str]) -> list[int] | None:
     return chapters
 
 
+def _refuse_prepared_recovery_api(node: str, flags: list[str]) -> None:
+    """prepared recovery 必须复用 target run；通用 HTTP job 做不到这件事。"""
+    tokens = set(nodes.flag_tokens(flags))
+    recovery = tokens & {
+        '--emit-prepared-recovery-workpack', '--recover-prepared'}
+    if node == 'stage5.write' and recovery:
+        selected = ', '.join(sorted(recovery))
+        raise UnsupportedRunMode(
+            f'{selected} 只允许由能显式复用同一 target run_id 的 CLI runner 执行；'
+            'POST /api/jobs/preview 与 POST /api/jobs 会为每个 job 生成新的 run_id，'
+            '不能安全承载 hash-bound prepared recovery')
+
+
 def _one(base: str, job_id: str) -> JobRecord:
     rec = next((r for r in jobs.records(base) if r.job_id == job_id), None)
     if rec is None:
@@ -66,6 +79,7 @@ def list_jobs(sid: str | None = Query(default=None),
 @router.post('', response_model=JobRecord, status_code=202)
 def start_job(req: PreviewRequest, base: str = Depends(get_base)) -> JobRecord:
     sid = checked_sid(req.sid) if req.sid is not None else None
+    _refuse_prepared_recovery_api(req.node, req.flags)
     planned = jobs.plan_start(
         req.node, sid, req.flags, base=base,
         executor_profile=req.executor_profile,
@@ -80,6 +94,39 @@ def start_job(req: PreviewRequest, base: str = Depends(get_base)) -> JobRecord:
                 f'{req.node} requires a novel sid for Stage2 review verification')
         prepares.append(
             lambda: approvals.require_stage2_review(base, sid, req.node))
+    tokens = nodes.flag_tokens(req.flags)
+    # A 的付费返修/重规划必须消费当前 hash-bound typed 决定；默认首次设计没有
+    # 这张票。占住书锁后先解析一次可执行 scope，CLI 仍在 subprocess 内终验。
+    if req.node == 'stage4.design' and (
+        '--repair-decision' in tokens or '--replan' in tokens
+    ):
+        if sid is None:
+            raise UnsupportedRunMode('stage4.design repair requires a novel sid')
+        if '--repair-decision' in tokens:
+            decision_sha256 = nodes.flag_value(
+                req.flags, '--repair-decision')
+            prepares.append(lambda decision_sha256=decision_sha256: (
+                approvals.resolve_design_action(
+                    base, sid, decision_sha256, expected='repair')))
+        else:
+            prepares.append(lambda: approvals.resolve_design_action(
+                base, sid, None, expected='replan'))
+    elif req.node == 'stage4.design' and not tokens:
+        if sid is None:
+            raise UnsupportedRunMode('stage4.design requires a novel sid')
+        prepares.append(lambda: approvals.authorize_design_initial(base, sid))
+    # Stage4B 的两条“产新 Plan”入口共用 A all-accept 票；check/revalidate/
+    # apply-edit/dry-run 是旧 Plan 的零成本恢复/诊断，不得被 A 反向堵死。
+    if req.node == 'stage4.plan' and (
+        not tokens or '--apply-binding' in tokens
+    ):
+        if sid is None:
+            raise UnsupportedRunMode('stage4.plan requires a novel sid')
+        prepares.append(lambda: approvals.authorize_plan(base, sid))
+    if req.node == 'stage4.context':
+        if sid is None:
+            raise UnsupportedRunMode('stage4.context requires a novel sid')
+        prepares.append(lambda: approvals.authorize_context(base, sid))
     # writing 授权保护的是正文外发 / 付费 LLM 调用。Stage5 同一节点下还有
     # rebuild/recheck/revalidate/dry-run 等零成本恢复路；若也绑 writing，恢复路
     # 会在入口处被自己堵死。`planned.paid` 与 preview 展示的是同一份折叠结论，
@@ -88,7 +135,7 @@ def start_job(req: PreviewRequest, base: str = Depends(get_base)) -> JobRecord:
         if sid is None:
             raise UnsupportedRunMode('stage5 writing requires a novel sid')
         chapters = _chapter_selection(req.flags)
-        revise = '--revise' in nodes.flag_tokens(req.flags)
+        revise = '--revise' in tokens
         prepares.append(lambda: approvals.authorize_writing(
             base, sid, chapters, requires_fresh_review=revise))
 
@@ -201,6 +248,7 @@ def preview_job(req: PreviewRequest, base: str = Depends(get_base)) -> JobStart:
     ⚠ 它与真启动端点都经过全局 CSRF 中间件；预览本身仍然 0 成本、无写盘。
     """
     sid = checked_sid(req.sid) if req.sid is not None else None
+    _refuse_prepared_recovery_api(req.node, req.flags)
     # Preview accepts an otherwise well-shaped action before the human has
     # supplied its required audit values.  ``nodes.build_steps`` fills those
     # omissions with visibly non-executable ``待填·...`` tokens.  POST /jobs

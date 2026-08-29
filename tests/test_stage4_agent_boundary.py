@@ -3,24 +3,30 @@
 """Stage4 design/plan executor 候选边界的零 wire 集成测试。"""
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Callable
+
+import pytest
 
 from contracts.artifacts import (
     STAGE4_BLIND_CANDIDATE, STAGE4_EVIDENCE_BINDING,
     STAGE4_PLAN_CHAPTERS, STAGE4_WRITER_CONTEXT,
 )
 from contracts.schema.orchestration import AgentProfile
+from contracts.schema.api import DesignRepairScope
 from contracts.schema.stage4 import BlindCandidate, EvidenceBinding, PlanChapters
 from novel import agent_session_audit, paths, prov
 from novel.agents import (
     AgentDriver, AgentProbe, AgentRequest, AgentTurn, AgentUsage,
 )
 from novel.agents.session_client import SessionAgentClient
-from novel.errors import GateBlocked, ProvenanceRefused
-from novel.llm import stage4_runs
+from novel.errors import (
+    ApprovalRequired, ArtifactUnreadable, GateBlocked, ProvenanceRefused,
+)
+from novel.llm import agent_runs, stage4_runs
 from novel.llm.cache import CachePolicy
 from novel.llm.ledger import CostLedger, ledger_path
 from novel.run import RunContext
@@ -33,6 +39,13 @@ from tests.test_stage4_v3_integration import (
     _split_a_responder, _ctx as _legacy_ctx, _retain_a_response,
     _seal_a_validator_rejection,
 )
+
+
+@pytest.fixture(autouse=True)
+def _stable_code_version(monkeypatch) -> None:
+    """并行编辑不应把本模块的 durable-checkpoint 用例变成 git 漂移假红。"""
+    monkeypatch.setattr(
+        prov, 'code_version', lambda: 'test-stage4-agent-boundary')
 
 
 def _profile() -> AgentProfile:
@@ -193,6 +206,73 @@ def _land_design(
     return ctx, artifact
 
 
+def _rewrite_standard_aggregate_primary(
+        ctx: RunContext, mutate: Callable[[dict[str, Any]], None],
+        *, refresh_payload_links: bool = True,
+        refresh_commit: bool = True,
+) -> tuple[str, str]:
+    """按旧 producer 形状重封 journal；正式候选文件保持不动。"""
+    target = (
+        paths.stage4_run_path(ctx.novel_dir, ctx.run_id, 'stage4.design')
+        / stage4_runs.DESIGN_AGGREGATE_COMMIT_FILE
+    )
+    record = json.loads(target.read_text(encoding='utf-8'))
+    primary = record['primary_payload']
+    before = agent_runs.canonical_sha256(primary)
+    mutate(primary)
+    after = agent_runs.canonical_sha256(primary)
+    assert after != before
+    if refresh_payload_links:
+        record['primary_payload_sha256'] = after
+        record['primary_payload_fingerprint'] = prov.projection_fingerprint(primary)
+        finalization = record['finalization_payload']
+        assert finalization['candidate_sha256'] == before
+        finalization['candidate_sha256'] = after
+        record['finalization_sha256'] = agent_runs.canonical_sha256(finalization)
+        record['landed_payload_sha256s'][STAGE4_BLIND_CANDIDATE] = after
+    if refresh_commit:
+        record['commit_sha256'] = stage4_runs._design_aggregate_hash(record)
+    agent_runs._atomic_json(target, record)
+    return before, after
+
+
+def _repair_aggregate_path(ctx: RunContext) -> Path:
+    return (
+        paths.stage4_run_path(ctx.novel_dir, ctx.run_id, 'stage4.design')
+        / stage4_runs.DESIGN_REPAIR_AGGREGATE_COMMIT_FILE
+    )
+
+
+def _rewrite_repair_aggregate_primary(
+        ctx: RunContext, mutate: Callable[[dict[str, Any]], None],
+) -> tuple[str, str]:
+    target = _repair_aggregate_path(ctx)
+    record = json.loads(target.read_text(encoding='utf-8'))
+    primary = record['primary_payload']
+    before = agent_runs.canonical_sha256(primary)
+    mutate(primary)
+    after = agent_runs.canonical_sha256(primary)
+    assert after != before
+    record['primary_payload_sha256'] = after
+    record['primary_payload_fingerprint'] = prov.projection_fingerprint(primary)
+    finalization = record['finalization_payload']
+    assert finalization['candidate_sha256'] == before
+    finalization['candidate_sha256'] = after
+    record['finalization_sha256'] = agent_runs.canonical_sha256(finalization)
+    record['landed_payload_sha256s'][STAGE4_BLIND_CANDIDATE] = after
+    record['commit_sha256'] = stage4_runs._design_repair_aggregate_hash(record)
+    agent_runs._atomic_json(target, record)
+    return before, after
+
+
+def _drop_legacy_standard_repair_nulls(primary: dict[str, Any]) -> None:
+    provenance = primary['_provenance']
+    for field in (
+            'parent_candidate_sha256', 'repair_decision_sha256',
+            'unit_lineage'):
+        assert provenance.pop(field) is None
+
+
 def _session_record(book: Path, session_run_id: str):
     matches = [
         record for record in agent_session_audit.fold(
@@ -245,6 +325,492 @@ def test_design_checkpoint_and_committed_restart_are_zero_wire(tmp_path: Path) -
         assert ended is not None
         assert (ended.process_state, ended.delivery_state, ended.error_kind) == (
             'ok', 'delivered', None)
+
+
+def test_bare_initial_design_cannot_overwrite_current_candidate_or_start_wire(
+        tmp_path: Path,
+) -> None:
+    book = _book(tmp_path)
+    blueprints = _seed_current_stage2(book)
+    _parent_ctx, parent = _land_design(
+        book, blueprints.model_dump(by_alias=True, mode='json'))
+    before = (book / STAGE4_BLIND_CANDIDATE).read_bytes()
+    retry_ctx = _ctx(book, 'stage4.design')
+    pool = Stage4DesignSessionPool(
+        retry_ctx,
+        driver_factory=lambda _purpose, _chapter: (_ for _ in ()).throw(
+            AssertionError('current A 的裸 initial 必须在构造 driver 前关闭')),
+    )
+
+    with pytest.raises(ApprovalRequired, match='裸 stage4.design 不得覆盖'):
+        plan.run_design(retry_ctx, pool)
+    pool.close()
+
+    assert (book / STAGE4_BLIND_CANDIDATE).read_bytes() == before
+    assert ArtifactStore(retry_ctx).read(
+        BlindCandidate, STAGE4_BLIND_CANDIDATE) == parent
+    assert not paths.stage4_run_path(
+        book, retry_ctx.run_id, 'stage4.design').exists()
+
+
+def test_design_repair_identity_rejects_coercion_and_nonwhitelist_defaults(
+        tmp_path: Path,
+) -> None:
+    book = _book(tmp_path)
+    blueprints = _seed_current_stage2(book)
+    parent_ctx, parent = _land_design(
+        book, blueprints.model_dump(by_alias=True, mode='json'))
+    target = (
+        paths.stage4_run_path(
+            book, parent_ctx.run_id, 'stage4.design')
+        / stage4_runs.DESIGN_AGGREGATE_COMMIT_FILE
+    )
+    original = json.loads(target.read_text(encoding='utf-8'))
+    candidate_file_sha = hashlib.sha256(
+        (book / STAGE4_BLIND_CANDIDATE).read_bytes()).hexdigest()
+
+    for coerced in ('1', True, 1.0):
+        agent_runs._atomic_json(target, original)
+
+        def drift_type(primary: dict[str, Any]) -> None:
+            primary['output_chapters'][0]['output_ordinal'] = coerced
+
+        _rewrite_standard_aggregate_primary(parent_ctx, drift_type)
+        record = json.loads(target.read_text(encoding='utf-8'))
+        with pytest.raises(ArtifactUnreadable, match='BlindCandidate'):
+            stage4_runs._normalized_design_candidate_identity(
+                record['primary_payload'], label='test standard journal',
+                aggregate_kind='standard')
+        capability = stage4_runs.inspect_design_repair_capability(
+            parent_ctx,
+            candidate_payload=parent.model_dump(by_alias=True, mode='json'),
+            candidate_file_sha256=candidate_file_sha,
+        )
+        assert capability.repairable is False
+        assert capability.reason_code == 'checkpoint_lineage_unavailable'
+
+    agent_runs._atomic_json(target, original)
+
+    def delete_nonwhitelist_default(primary: dict[str, Any]) -> None:
+        assert primary['_provenance'].pop(
+            'rejected_response_adoption') is None
+
+    _rewrite_standard_aggregate_primary(
+        parent_ctx, delete_nonwhitelist_default)
+    record = json.loads(target.read_text(encoding='utf-8'))
+    with pytest.raises(ArtifactUnreadable, match='白名单之外'):
+        stage4_runs._normalized_design_candidate_identity(
+            record['primary_payload'], label='test standard journal',
+            aggregate_kind='standard')
+    capability = stage4_runs.inspect_design_repair_capability(
+        parent_ctx,
+        candidate_payload=parent.model_dump(by_alias=True, mode='json'),
+        candidate_file_sha256=candidate_file_sha,
+    )
+    assert capability.repairable is False
+    assert capability.reason_code == 'checkpoint_lineage_unavailable'
+
+
+def test_design_repair_identity_keeps_raw_sha_and_commit_strict(
+        tmp_path: Path,
+) -> None:
+    book = _book(tmp_path)
+    blueprints = _seed_current_stage2(book)
+    parent_ctx, parent = _land_design(
+        book, blueprints.model_dump(by_alias=True, mode='json'))
+    target = (
+        paths.stage4_run_path(
+            book, parent_ctx.run_id, 'stage4.design')
+        / stage4_runs.DESIGN_AGGREGATE_COMMIT_FILE
+    )
+    original = json.loads(target.read_text(encoding='utf-8'))
+    candidate_file_sha = hashlib.sha256(
+        (book / STAGE4_BLIND_CANDIDATE).read_bytes()).hexdigest()
+
+    for refresh_payload_links, refresh_commit in ((False, True), (True, False)):
+        agent_runs._atomic_json(target, original)
+        _rewrite_standard_aggregate_primary(
+            parent_ctx, _drop_legacy_standard_repair_nulls,
+            refresh_payload_links=refresh_payload_links,
+            refresh_commit=refresh_commit,
+        )
+        with pytest.raises((ArtifactUnreadable, ProvenanceRefused)):
+            stage4_runs._committed_design_aggregate_for_run(
+                parent_ctx, parent_ctx.run_id)
+        capability = stage4_runs.inspect_design_repair_capability(
+            parent_ctx,
+            candidate_payload=parent.model_dump(by_alias=True, mode='json'),
+            candidate_file_sha256=candidate_file_sha,
+        )
+        assert capability.repairable is False
+        assert capability.reason_code == 'checkpoint_lineage_unavailable'
+
+
+def test_targeted_design_repair_reruns_only_target_and_reuses_parent_checkpoints(
+        tmp_path: Path,
+) -> None:
+    book = _book(tmp_path)
+    blueprints = _seed_current_stage2(book)
+    blueprint_raw = blueprints.model_dump(by_alias=True, mode='json')
+    parent_ctx, parent = _land_design(book, blueprint_raw)
+    normalized_parent_sha, legacy_raw_parent_sha = \
+        _rewrite_standard_aggregate_primary(
+            parent_ctx, _drop_legacy_standard_repair_nulls)
+    assert normalized_parent_sha == agent_runs.canonical_sha256(
+        parent.model_dump(by_alias=True, mode='json'))
+    assert legacy_raw_parent_sha != normalized_parent_sha
+    ordinals = tuple(row.chapter_ordinal for row in blueprints.blueprints)
+    parent_checkpoint_bytes = {
+        chapter: (
+            paths.stage4_design_unit_checkpoint_dir(
+                book, parent_ctx.run_id, chapter) / 'rev-0001.json'
+        ).read_bytes()
+        for chapter in (None, *ordinals)
+    }
+    candidate_file_sha = hashlib.sha256(
+        (book / STAGE4_BLIND_CANDIDATE).read_bytes()).hexdigest()
+    capability = stage4_runs.inspect_design_repair_capability(
+        parent_ctx,
+        candidate_payload=parent.model_dump(by_alias=True, mode='json'),
+        candidate_file_sha256=candidate_file_sha,
+    )
+    assert capability.repairable is True
+    assert capability.reason_code == 'ready'
+    assert capability.parent_run_id == parent_ctx.run_id
+    assert capability.chapter_repair_rounds == ()
+    scope = DesignRepairScope.model_validate({
+        'candidate_sha256': candidate_file_sha,
+        'aggregate_subject_sha256': 'a' * 64,
+        'decision_sha256': 'b' * 64,
+        'repair_capability': {
+            'repairable': True, 'reason_code': 'ready',
+            'chapters': [{
+                'output_ordinal': 1, 'committed_rounds': 0,
+                'request_repair_available': True,
+            }],
+        },
+        'strategy_replan': False,
+        'target_chapters': [1],
+        'chapters': [{
+            'output_ordinal': 1,
+            'subject_sha256': 'c' * 64,
+            'constraints': [{
+                'code': 'structure_delta',
+                'scene_refs': [],
+                'opaque_aliases': [],
+            }],
+        }],
+    })
+    repair_ctx = _ctx(book, 'stage4.design')
+    drivers: list[_RequestDriver] = []
+
+    def factory(purpose: str, chapter: int | None) -> _RequestDriver:
+        assert purpose == stage4_runs.design_unit_purpose(1)
+        assert chapter == 1
+
+        def respond(request: AgentRequest) -> dict[str, Any]:
+            lines = request.prompt.splitlines()
+            marker = lines.index(plan.prompts.BLOCK_PREVIOUS_CHAPTER_RESPONSE)
+            return json.loads(lines[marker + 1])['response']
+
+        driver = _RequestDriver(
+            respond, session_id='provider-targeted-repair-ch1')
+        drivers.append(driver)
+        return driver
+
+    pool = Stage4DesignSessionPool(
+        repair_ctx, driver_factory=factory, max_turns=2)
+    repaired = plan.run_design(
+        repair_ctx,
+        pool,
+        repair_decision_sha256=scope.decision_sha256,
+        repair_scope=scope,
+    )
+    pool.finish_all(delivered=True)
+    pool.close()
+
+    assert len(drivers) == 1 and drivers[0].calls == 1
+    request = drivers[0].requests[0]
+    assert request.system == plan.prompts.blind_chapter_repair_system()
+    assert plan.prompts.BLOCK_REPAIR_CONSTRAINTS in request.prompt
+    assert 'structure_delta' in request.prompt
+    assert repaired.provenance.architecture == 'book_strategy_targeted_repair_v1'
+    assert repaired.provenance.repair_decision_sha256 == scope.decision_sha256
+    assert repaired.provenance.parent_candidate_sha256 == \
+        agent_runs.canonical_sha256(
+            parent.model_dump(by_alias=True, mode='json'))
+    lineage = {row.chapter_ordinal: row for row in repaired.provenance.unit_lineage or []}
+    assert set(lineage) == {None, *ordinals}
+    assert lineage[1].source_kind == 'repair'
+    assert lineage[1].source_run_id == repair_ctx.run_id
+    assert all(
+        row.source_kind == 'inherited' and row.source_run_id == parent_ctx.run_id
+        for chapter, row in lineage.items() if chapter != 1)
+    parent_by = {row.output_ordinal: row for row in parent.output_chapters}
+    repaired_by = {row.output_ordinal: row for row in repaired.output_chapters}
+    assert all(
+        repaired_by[chapter] == parent_by[chapter]
+        for chapter in ordinals if chapter != 1)
+    assert all((
+        paths.stage4_design_unit_checkpoint_dir(
+            book, parent_ctx.run_id, chapter) / 'rev-0001.json'
+    ).read_bytes() == raw for chapter, raw in parent_checkpoint_bytes.items())
+    assert not paths.stage4_design_unit_run_path(
+        book, repair_ctx.run_id, None).exists()
+    assert all(
+        not paths.stage4_design_unit_run_path(
+            book, repair_ctx.run_id, chapter).exists()
+        for chapter in ordinals if chapter != 1)
+    journal = stage4_runs.design_repair_aggregate_state(repair_ctx)
+    assert journal is not None and journal['state'] == 'committed'
+    assert journal['target_chapters'] == [1]
+    assert journal['parent_candidate_sha256'] == normalized_parent_sha
+    repaired_capability = stage4_runs.inspect_design_repair_capability(
+        repair_ctx,
+        candidate_payload=repaired.model_dump(by_alias=True, mode='json'),
+        candidate_file_sha256=hashlib.sha256(
+            (book / STAGE4_BLIND_CANDIDATE).read_bytes()).hexdigest(),
+    )
+    assert repaired_capability.repairable is True
+    assert dict(repaired_capability.chapter_repair_rounds) == {1: 1}
+
+    # repair primary 内的 lineage 漂移本身仍是合法 BlindCandidate；完整候选
+    # 身份比较必须拒绝，不能只靠 schema 冲突碰巧挡住。
+    repair_target = _repair_aggregate_path(repair_ctx)
+    original_repair = json.loads(repair_target.read_text(encoding='utf-8'))
+
+    def drift_valid_lineage(primary: dict[str, Any]) -> None:
+        row = primary['_provenance']['unit_lineage'][0]
+        row['source_run_id'] += '-schema-valid-drift'
+
+    _rewrite_repair_aggregate_primary(repair_ctx, drift_valid_lineage)
+    tampered = json.loads(repair_target.read_text(encoding='utf-8'))
+    BlindCandidate.model_validate(tampered['primary_payload'], strict=True)
+    repaired_payload_sha = agent_runs.canonical_sha256(
+        repaired.model_dump(by_alias=True, mode='json'))
+    with pytest.raises(ArtifactUnreadable, match='unit_lineage'):
+        stage4_runs.load_committed_design_sources(
+            repair_ctx,
+            parent_run_id=repair_ctx.run_id,
+            parent_candidate_sha256=repaired_payload_sha,
+        )
+    with pytest.raises(ArtifactUnreadable, match='unit_lineage'):
+        stage4_runs._repair_ancestry_rounds(repair_ctx, repair_ctx.run_id)
+    drifted_capability = stage4_runs.inspect_design_repair_capability(
+        repair_ctx,
+        candidate_payload=repaired.model_dump(by_alias=True, mode='json'),
+        candidate_file_sha256=hashlib.sha256(
+            (book / STAGE4_BLIND_CANDIDATE).read_bytes()).hexdigest(),
+    )
+    assert drifted_capability.repairable is False
+    assert drifted_capability.reason_code == 'checkpoint_lineage_unavailable'
+
+    for field, drifted_sha in (
+            ('parent_candidate_sha256', 'e' * 64),
+            ('repair_decision_sha256', 'f' * 64)):
+        agent_runs._atomic_json(repair_target, original_repair)
+
+        def drift_top_level_link(primary: dict[str, Any]) -> None:
+            primary['_provenance'][field] = drifted_sha
+
+        _rewrite_repair_aggregate_primary(repair_ctx, drift_top_level_link)
+        with pytest.raises(ArtifactUnreadable, match='parent/decision'):
+            stage4_runs.load_committed_design_sources(
+                repair_ctx,
+                parent_run_id=repair_ctx.run_id,
+                parent_candidate_sha256=repaired_payload_sha,
+            )
+
+    # foreign committed repair 必须复验 target↔source_kind/source_run↔attempts，
+    # 不能只凭一份重封过 commit 的 target_chapters 给 ancestry 计轮。
+    agent_runs._atomic_json(repair_target, original_repair)
+    target_mismatch = json.loads(repair_target.read_text(encoding='utf-8'))
+    assert len(ordinals) >= 2
+    target_mismatch['target_chapters'] = [ordinals[1]]
+    target_mismatch['commit_sha256'] = \
+        stage4_runs._design_repair_aggregate_hash(target_mismatch)
+    agent_runs._atomic_json(repair_target, target_mismatch)
+    with pytest.raises(ProvenanceRefused, match='source_kind/source_run'):
+        stage4_runs.load_committed_design_sources(
+            repair_ctx,
+            parent_run_id=repair_ctx.run_id,
+            parent_candidate_sha256=repaired_payload_sha,
+        )
+    with pytest.raises(ProvenanceRefused, match='source_kind/source_run'):
+        stage4_runs._repair_ancestry_rounds(repair_ctx, repair_ctx.run_id)
+    mismatched_capability = stage4_runs.inspect_design_repair_capability(
+        repair_ctx,
+        candidate_payload=repaired.model_dump(by_alias=True, mode='json'),
+        candidate_file_sha256=hashlib.sha256(
+            (book / STAGE4_BLIND_CANDIDATE).read_bytes()).hexdigest(),
+    )
+    assert mismatched_capability.repairable is False
+    assert mismatched_capability.reason_code == 'checkpoint_lineage_unavailable'
+
+
+def test_design_repair_identity_normalization_keeps_real_drift_closed(
+        tmp_path: Path,
+) -> None:
+    book = _book(tmp_path)
+    blueprints = _seed_current_stage2(book)
+    parent_ctx, parent = _land_design(
+        book, blueprints.model_dump(by_alias=True, mode='json'))
+
+    def drift_business(primary: dict[str, Any]) -> None:
+        _drop_legacy_standard_repair_nulls(primary)
+        primary['reconstruction_strategy'] += '（journal 业务漂移）'
+
+    _rewrite_standard_aggregate_primary(parent_ctx, drift_business)
+    capability = stage4_runs.inspect_design_repair_capability(
+        parent_ctx,
+        candidate_payload=parent.model_dump(by_alias=True, mode='json'),
+        candidate_file_sha256=hashlib.sha256(
+            (book / STAGE4_BLIND_CANDIDATE).read_bytes()).hexdigest(),
+    )
+    assert capability.repairable is False
+    assert capability.reason_code == 'legacy_or_untracked_candidate'
+
+
+def test_design_repair_identity_normalization_does_not_erase_lineage_drift(
+        tmp_path: Path,
+) -> None:
+    book = _book(tmp_path)
+    blueprints = _seed_current_stage2(book)
+    parent_ctx, parent = _land_design(
+        book, blueprints.model_dump(by_alias=True, mode='json'))
+
+    def inject_nonempty_lineage(primary: dict[str, Any]) -> None:
+        primary['_provenance']['parent_candidate_sha256'] = 'd' * 64
+
+    _rewrite_standard_aggregate_primary(parent_ctx, inject_nonempty_lineage)
+    capability = stage4_runs.inspect_design_repair_capability(
+        parent_ctx,
+        candidate_payload=parent.model_dump(by_alias=True, mode='json'),
+        candidate_file_sha256=hashlib.sha256(
+            (book / STAGE4_BLIND_CANDIDATE).read_bytes()).hexdigest(),
+    )
+    assert capability.repairable is False
+    assert capability.reason_code == 'checkpoint_lineage_unavailable'
+
+
+def test_targeted_design_repair_stops_third_chapter_round_before_any_wire(
+        tmp_path: Path,
+) -> None:
+    book = _book(tmp_path)
+    blueprints = _seed_current_stage2(book)
+    parent_ctx, current = _land_design(
+        book, blueprints.model_dump(by_alias=True, mode='json'))
+    assert len(current.output_chapters) >= 2
+
+    for repair_round in (1, 2):
+        candidate_sha = hashlib.sha256(
+            (book / STAGE4_BLIND_CANDIDATE).read_bytes()).hexdigest()
+        decision_sha = f'{repair_round + 1:x}' * 64
+        scope = DesignRepairScope.model_validate({
+            'candidate_sha256': candidate_sha,
+            'aggregate_subject_sha256': f'{repair_round + 3:x}' * 64,
+            'decision_sha256': decision_sha,
+            'repair_capability': {
+                'repairable': True, 'reason_code': 'ready',
+                'chapters': [{
+                    'output_ordinal': 1,
+                    'committed_rounds': repair_round - 1,
+                    'request_repair_available': True,
+                }],
+            },
+            'strategy_replan': False,
+            'target_chapters': [1],
+            'chapters': [{
+                'output_ordinal': 1,
+                'subject_sha256': f'{repair_round + 5:x}' * 64,
+                'constraints': [{
+                    'code': 'structure_delta',
+                    'scene_refs': [],
+                    'opaque_aliases': [],
+                }],
+            }],
+        })
+        repair_ctx = _ctx(book, 'stage4.design')
+
+        def factory(_purpose: str, chapter: int | None) -> _RequestDriver:
+            assert chapter == 1
+
+            def respond(request: AgentRequest) -> dict[str, Any]:
+                lines = request.prompt.splitlines()
+                marker = lines.index(plan.prompts.BLOCK_PREVIOUS_CHAPTER_RESPONSE)
+                return json.loads(lines[marker + 1])['response']
+
+            return _RequestDriver(
+                respond,
+                session_id=f'provider-targeted-round-{repair_round}',
+            )
+
+        pool = Stage4DesignSessionPool(
+            repair_ctx, driver_factory=factory, max_turns=2)
+        current = plan.run_design(
+            repair_ctx,
+            pool,
+            repair_decision_sha256=decision_sha,
+            repair_scope=scope,
+        )
+        pool.finish_all(delivered=True)
+        pool.close()
+        capability = stage4_runs.inspect_design_repair_capability(
+            repair_ctx,
+            candidate_payload=current.model_dump(by_alias=True, mode='json'),
+            candidate_file_sha256=hashlib.sha256(
+                (book / STAGE4_BLIND_CANDIDATE).read_bytes()).hexdigest(),
+        )
+        counts = dict(capability.chapter_repair_rounds)
+        assert capability.repairable is True
+        assert capability.parent_run_id == repair_ctx.run_id
+        assert counts[1] == repair_round
+        assert counts.get(2, 0) == 0
+
+    third_sha = hashlib.sha256(
+        (book / STAGE4_BLIND_CANDIDATE).read_bytes()).hexdigest()
+    third_scope = DesignRepairScope.model_validate({
+        'candidate_sha256': third_sha,
+        'aggregate_subject_sha256': '8' * 64,
+        'decision_sha256': '9' * 64,
+        # 故意模拟上层给了一份过时/造假的 availability；core 仍须按 journal
+        # 现算两轮已耗尽并在任何 wire 前关闭。
+        'repair_capability': {
+            'repairable': True, 'reason_code': 'ready',
+            'chapters': [{
+                'output_ordinal': 1, 'committed_rounds': 0,
+                'request_repair_available': True,
+            }],
+        },
+        'strategy_replan': False,
+        'target_chapters': [1],
+        'chapters': [{
+            'output_ordinal': 1,
+            'subject_sha256': 'a' * 64,
+            'constraints': [{
+                'code': 'structure_delta',
+                'scene_refs': [],
+                'opaque_aliases': [],
+            }],
+        }],
+    })
+    third_ctx = _ctx(book, 'stage4.design')
+    third_pool = Stage4DesignSessionPool(
+        third_ctx,
+        driver_factory=lambda _purpose, _chapter: (_ for _ in ()).throw(
+            AssertionError('第三轮必须在构造 driver/session 前关闭')),
+        max_turns=2,
+    )
+    with pytest.raises(ProvenanceRefused, match='2 个 committed repair'):
+        plan.run_design(
+            third_ctx,
+            third_pool,
+            repair_decision_sha256=third_scope.decision_sha256,
+            repair_scope=third_scope,
+        )
+    third_pool.close()
+    assert not paths.stage4_run_path(
+        book, third_ctx.run_id, 'stage4.design').exists()
 
 
 def test_design_prepared_tail_recovers_same_candidate_and_usage_zero_wire(
@@ -348,63 +914,45 @@ def test_legacy_adopter_refuses_foreign_prepared_design_aggregate(
         for row in legacy_ctx.ledger.audit_events)
 
 
-def test_plan_infeasible_lands_only_binding_and_recovers_without_wire(
+def test_plan_false_infeasible_is_repaired_to_bound_in_same_session(
         tmp_path: Path,
 ) -> None:
     book = _book(tmp_path)
     blueprints = _seed_current_stage2(book)
-    design_ctx, candidate = _land_design(
+    _design_ctx, candidate = _land_design(
         book, blueprints.model_dump(by_alias=True))
     plan_ctx = _ctx(book, 'stage4.plan')
-    driver = _OneTurnDriver(
-        _infeasible_b_response(candidate), session_id='provider-plan-only')
-    client = _client(plan_ctx, driver)
-    landed = plan.run_plan(plan_ctx, client)
+    answers = iter((
+        _infeasible_b_response(candidate),
+        _bound_b_response(
+            candidate, blueprints.model_dump(by_alias=True, mode='json')),
+    ))
+    driver = _RequestDriver(
+        lambda _request: next(answers), session_id='provider-plan-one-session')
+    client = _client(plan_ctx, driver, max_turns=2)
+    report = plan.run_plan(plan_ctx, client)
+    client.finish(process_state='ok', delivery_state='delivered')
     client.close()
 
-    assert isinstance(landed, EvidenceBinding)
-    assert landed.status == 'infeasible'
+    assert report.passed
     store = ArtifactStore(plan_ctx)
-    assert store.exists(STAGE4_EVIDENCE_BINDING)
-    assert not store.exists(STAGE4_PLAN_CHAPTERS)
+    landed = store.read_own(EvidenceBinding, STAGE4_EVIDENCE_BINDING)[0]
+    assert landed.status == 'bound'
+    assert store.exists(STAGE4_PLAN_CHAPTERS)
     assert not store.exists(STAGE4_WRITER_CONTEXT)
     assert stage4_runs.committed(plan_ctx) is not None
-    assert driver.calls == 1
-
-    restarted = _ctx(
-        book, 'stage4.plan', run_id=plan_ctx.run_id, code=plan_ctx.code)
+    assert driver.calls == 2
+    assert len(driver.requests) == 2
+    assert driver.requests[0].system is not None
+    assert driver.requests[1].system is None
+    assert '构造出了完整 bound' in driver.requests[1].prompt
     plan_checkpoint_path = (
         book / '_stage4_runs' / plan_ctx.run_id / 'plan'
         / 'checkpoints' / 'rev-0001.json')
     plan_checkpoint = json.loads(plan_checkpoint_path.read_text(encoding='utf-8'))
-    assert _session_record(book, plan_checkpoint['session_run_id']).end is None
-    no_wire = _client(restarted, _NoWireDriver())
-    recovered = plan.run_plan(restarted, no_wire)
-    no_wire.close()
-    assert isinstance(recovered, EvidenceBinding)
-    assert recovered == landed
-    ended = _session_record(book, plan_checkpoint['session_run_id']).end
-    assert ended is not None
-    assert (ended.process_state, ended.delivery_state, ended.error_kind) == (
-        'ok', 'delivered', None)
-
-    plan_checkpoint = json.loads((
-        book / '_stage4_runs' / plan_ctx.run_id / 'plan'
-        / 'checkpoints' / 'rev-0001.json').read_text(encoding='utf-8'))
-    design_checkpoints = [
-        json.loads(path.read_text(encoding='utf-8'))
-        for path in (
-            paths.stage4_design_unit_checkpoint_dir(
-                book, design_ctx.run_id, None) / 'rev-0001.json',
-            *(paths.stage4_design_unit_checkpoint_dir(
-                book, design_ctx.run_id, row.chapter_ordinal) / 'rev-0001.json'
-              for row in blueprints.blueprints),
-        )
-    ]
-    assert plan_checkpoint['provider_session_id'] == 'provider-plan-only'
-    assert all(
-        row['provider_session_id'] != plan_checkpoint['provider_session_id']
-        for row in design_checkpoints)
+    assert plan_checkpoint['provider_session_id'] == 'provider-plan-one-session'
+    assert plan_checkpoint['accepted_turn_index'] == 2
+    assert len(plan_checkpoint['attempt_links']) == 2
 
 
 def _hard_bound_response(
@@ -429,7 +977,8 @@ def test_plan_agent_exhaustion_commits_binding_and_invalid_then_recovers_zero_wi
     _design_ctx, candidate = _land_design(
         book, blueprints.model_dump(by_alias=True))
 
-    # 先落一份下游正在消费的 clean plan/context，随后 HARD run 必须逐字保留它们。
+    # Plan 落盘后由独立 context producer 组装一次；随后 HARD
+    # run 必须逐字保留这两份下游当前仍消费的字节。
     clean_ctx = _ctx(book, 'stage4.plan')
     clean_driver = _OneTurnDriver(
         _bound_b_response(candidate, blueprints.model_dump(by_alias=True)),
@@ -438,6 +987,7 @@ def test_plan_agent_exhaustion_commits_binding_and_invalid_then_recovers_zero_wi
     assert plan.run_plan(clean_ctx, clean_client).passed
     clean_client.finish(process_state='ok', delivery_state='delivered')
     clean_client.close()
+    plan.run_context(_ctx(book, 'stage4.context'))
     plan_before = (book / STAGE4_PLAN_CHAPTERS).read_bytes()
     context_before = (book / STAGE4_WRITER_CONTEXT).read_bytes()
     # 先留一份旧 live INVALID，专门覆盖“替换问题稿”的

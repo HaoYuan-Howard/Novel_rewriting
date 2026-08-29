@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 
 from contracts.schema.api import (
-    ApprovalBackfillResult, ApprovalDoc, GateKey, SeenKey,
+    ApprovalBackfillResult, ApprovalDoc, DesignReviewerKind,
+    DesignReviewRequest, DesignReviewTemplate, GateKey, SeenKey,
     StructureApprovalRequest, WritingApprovalRequest,
 )
 from novel.api.deps import checked_sid, get_base
@@ -18,6 +19,36 @@ def get_approvals(
     sid: str = Depends(checked_sid), base: str = Depends(get_base),
 ) -> ApprovalDoc:
     return approvals.get(base, sid)
+
+
+@router.get('/design/template', response_model=DesignReviewTemplate)
+def get_design_review_template(
+    actor: str = Query(min_length=1),
+    reviewer_kind: DesignReviewerKind = Query(),
+    review_run_id: str = Query(
+        pattern=r'^[a-z0-9][a-z0-9_-]{0,127}$'),
+    reason: str = Query(min_length=1),
+    sid: str = Depends(checked_sid),
+    base: str = Depends(get_base),
+) -> DesignReviewTemplate:
+    """按当前 A 候选生成关闭式全书盲审模板；只读且不代签。"""
+    return approvals.design_template(
+        base, sid,
+        actor=actor,
+        reviewer_kind=reviewer_kind,
+        review_run_id=review_run_id,
+        reason=reason,
+    )
+
+
+@router.post('/design', response_model=ApprovalDoc)
+def approve_design_review(
+    request: DesignReviewRequest,
+    sid: str = Depends(checked_sid),
+    base: str = Depends(get_base),
+) -> ApprovalDoc:
+    """原子保存 Stage4A typed 盲审；不启动修订或 Stage4B。"""
+    return approvals.approve_design(base, sid, request)
 
 
 @router.post('/gate/{key}', response_model=ApprovalDoc)

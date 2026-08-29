@@ -13,6 +13,7 @@ test_store.py —— 唯一读写口 + 一次跑的上下文。
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 import os
 import shutil
@@ -208,6 +209,23 @@ def test_edges_are_a_snapshot_not_the_live_dict():
     ArtifactStore(ctx).read(Loose, UPSTREAM)
     ctx.edges.clear()
     assert set(ctx.edges) == {UPSTREAM}
+
+
+def test_read_own_with_sha256_returns_the_same_raw_bytes_without_an_input_edge():
+    """本节点 hash-bound 复核要拿精确字节，但绝不能把自己记成自己的上游。"""
+    base = _book()
+    writer = _plan_ctx(base)
+    writer_store = ArtifactStore(writer)
+    writer_store.read(Loose, UPSTREAM)
+    target = writer_store.write(PLAN_REL, _plan(writer))
+
+    reader = _plan_ctx(base)
+    artifact, digest = ArtifactStore(reader).read_own_with_sha256(
+        PlanChapters, PLAN_REL, require_current=True)
+
+    assert artifact.output_chapters[0].chapter_rewrite_brief == '计划一'
+    assert digest == hashlib.sha256(target.read_bytes()).hexdigest()
+    assert reader.edges == {}, '本节点自己的 hash-bound readback 泄漏进了 inputs'
 
 
 def test_validation_reads_restore_every_source_ledger_even_when_the_guard_raises():

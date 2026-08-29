@@ -11,9 +11,7 @@ from pathlib import Path
 import pytest
 from pydantic import BaseModel, ConfigDict
 
-from contracts.artifacts import (
-    STAGE4_EVIDENCE_BINDING, STAGE4_PLAN_CHAPTERS, STAGE4_WRITER_CONTEXT,
-)
+from contracts.artifacts import STAGE4_EVIDENCE_BINDING, STAGE4_PLAN_CHAPTERS
 from contracts.schema.orchestration import AgentProfile
 from novel import paths, prov
 from novel.agents import (
@@ -455,7 +453,6 @@ def test_stage4_plan_commit_declares_three_exact_terminal_bundles() -> None:
         frozenset((
             STAGE4_EVIDENCE_BINDING,
             STAGE4_PLAN_CHAPTERS,
-            STAGE4_WRITER_CONTEXT,
             invalid,
         )),
     }

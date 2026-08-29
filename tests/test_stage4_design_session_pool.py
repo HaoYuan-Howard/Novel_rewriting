@@ -11,6 +11,7 @@ import pytest
 from pydantic import BaseModel, ConfigDict
 
 from contracts.invariants import STAGE4_DESIGN_MAX_CONCURRENCY
+from contracts.schema.api import DesignRepairScope
 from contracts.schema.orchestration import AgentProfile
 from novel import agent_session_audit, prov
 from novel.agents import (
@@ -429,3 +430,43 @@ def test_build_node_agent_requires_stage4_factory_and_caps_concurrency(
     with pytest.raises(ValueError, match='不能共享一个 driver'):
         build_node_agent(
             ctx, driver=_Driver('shared', ['{"value":1}']))
+
+
+def test_build_node_agent_forwards_typed_repair_and_hard_caps_two_turns(
+        tmp_path: Path,
+) -> None:
+    ctx = _ctx(tmp_path)
+    scope = DesignRepairScope.model_validate({
+        'candidate_sha256': 'a' * 64,
+        'aggregate_subject_sha256': 'b' * 64,
+        'decision_sha256': 'c' * 64,
+        'repair_capability': {
+            'repairable': True, 'reason_code': 'ready',
+            'chapters': [{
+                'output_ordinal': 1, 'committed_rounds': 0,
+                'request_repair_available': True,
+            }],
+        },
+        'strategy_replan': False,
+        'target_chapters': [1],
+        'chapters': [{
+            'output_ordinal': 1,
+            'subject_sha256': 'd' * 64,
+            'constraints': [{
+                'code': 'structure_delta',
+                'scene_refs': [], 'opaque_aliases': [],
+            }],
+        }],
+    })
+    agent = build_node_agent(
+        ctx,
+        stage4_design_driver_factory=_Factory({}),
+        max_turns=99,
+        repair_decision_sha256=scope.decision_sha256,
+        repair_scope=scope,
+    )
+    assert isinstance(agent, Stage4DesignAgent)
+    assert agent.repair_decision_sha256 == scope.decision_sha256
+    assert agent.repair_scope == scope
+    assert agent.pool.max_turns == 2
+    agent.pool.close()

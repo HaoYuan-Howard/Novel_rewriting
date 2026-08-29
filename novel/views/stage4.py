@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from contracts.artifacts import (
     STAGE1_MAIN_TEXT, STAGE2_CHAPTER_BLUEPRINTS, STAGE2_GLOBAL_GROUNDING,
-    STAGE4_PLAN_CHAPTERS, STAGE4_WRITER_CONTEXT,
+    STAGE4_EVIDENCE_BINDING, STAGE4_PLAN_CHAPTERS, STAGE4_WRITER_CONTEXT,
 )
 
 import os
@@ -28,7 +28,9 @@ from contracts.schema.api import (
 )
 from contracts.schema.stage1 import MainText
 from contracts.schema.stage2 import ChapterBlueprints, GlobalGrounding
-from contracts.schema.stage4 import CtxChapter, PlanChapters, WriterContext
+from contracts.schema.stage4 import (
+    CtxChapter, EvidenceBinding, PlanChapters, WriterContext,
+)
 from novel import paths, prov
 from novel.errors import ArtifactUnreadable, UpstreamMissing
 from novel.orchestrator.state import artifact_state, readonly_ctx
@@ -36,7 +38,7 @@ from novel.stages.stage4.beats import beat_index
 from novel.stages.stage4.context import build_writer_context
 from novel.stages.stage4.measure import (
     computed_structure_change_kinds, identity_plan, semantic_contract_of,
-    structure_metrics_of, structure_subject_sha256,
+    structure_metrics_of, structure_review_subject_sha256,
 )
 from novel.stages.stage5.prompts import target_band
 from novel.store import ArtifactStore
@@ -68,7 +70,13 @@ def stage4_view(base: str | os.PathLike[str], sid: str, ordinal: int) -> Stage4V
         # rows / 章详情 / subject 必须由同一个已读入的 plan 快照派生。
         # 不另读一次路径，否则计划在两次读之间被替换时，
         # 屏幕会把旧 rows 冒充成新 subject 的审批表面。
-        structure_subject = structure_subject_sha256(plan_art)
+        binding, _binding_raw = store.read_own(
+            EvidenceBinding, STAGE4_EVIDENCE_BINDING)
+        if binding.status != 'bound':
+            raise ArtifactUnreadable(
+                '正式 Plan 的最终结构审阅面要求 status=bound EvidenceBinding')
+        structure_subject = structure_review_subject_sha256(
+            plan_art, binding.binding_concerns)
         plan_raw = plan_art.model_dump(by_alias=True)
         identity = False
         plan_prov = plan_art.provenance

@@ -47,15 +47,20 @@ stage5/wontfix.json              人的「这条我不修」
 """
 from __future__ import annotations
 
+import hashlib
+import json
 import re
+from collections.abc import Mapping
 from typing import Literal
 
 from pydantic import Field, field_validator, model_validator
 
 from contracts.schema.base import Fp10, FrozenModel, StrictModel
 from contracts.schema.common import (
-    Finding, FreeProvenance, LlmProvenance, RoundFreeProvenance, RoundLlmProvenance,
+    Finding, FreeProvenance, HashBoundHumanApproval, LlmProvenance,
+    RoundFreeProvenance, RoundLlmProvenance, Sha256,
 )
+from contracts.schema.orchestration import AgentProfile
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 一、`stage5/chNN.json`
@@ -178,6 +183,203 @@ class Chapter(StrictModel):
     def text(self) -> str:
         """Deterministic whole-chapter projection; never serialized as a second authority."""
         return '\n\n'.join(segment.text.strip() for segment in self.segments).strip()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 一a、Stage5 prepared checkpoint 的显式 0-wire 恢复合同（内部 sidecar）
+# ─────────────────────────────────────────────────────────────────────────────
+
+class PreparedRecoveryChapter(FrozenModel):
+    """工作包里一章历史响应与当前重判面的完整 hash 绑定。"""
+
+    output_ordinal: int = Field(ge=1)
+    mode: Literal['write', 'revise']
+    purpose: str = Field(min_length=1)
+    source_code: str = Field(min_length=1)
+    source_run_identity_sha256: Sha256
+    source_run_file_sha256: Sha256
+    source_commit_sha256: Sha256
+    source_commit_file_sha256: Sha256
+    source_checkpoint_sha256: Sha256
+    source_checkpoint_file_sha256: Sha256
+    source_checkpoint_revision: int = Field(ge=1)
+    source_attempt_id: str = Field(pattern=r'^[0-9a-f]{16}$')
+    source_response_sha256: Sha256
+    source_request_fingerprint: Sha256
+    source_session_run_id: str = Field(min_length=1)
+    source_provider_session_id: str = Field(min_length=1)
+    source_adoption_id: Sha256
+    input_sha256: Sha256
+    system_sha256: Sha256
+    user_sha256: Sha256
+    response_schema_sha256: Sha256
+    response_model: str = Field(min_length=1)
+    requested_output_token_ceiling: int = Field(gt=0)
+    profile: AgentProfile
+    candidate_sha256: Sha256
+    touched_paths: tuple[str, ...] = Field(min_length=1)
+    source_baselines: dict[str, Sha256 | None]
+    current_baselines: dict[str, Sha256 | None]
+    hard_rules: tuple[str, ...]
+    regressions: tuple[str, ...]
+
+    @model_validator(mode='after')
+    def _closed_chapter_binding(self) -> 'PreparedRecoveryChapter':
+        if self.mode != 'write':
+            raise ValueError('prepared recovery 只接 initial write；revision source 关闭')
+        if self.hard_rules or self.regressions:
+            raise ValueError('prepared recovery 工作包只能收当前重判已通过的候选')
+        if (tuple(sorted(self.touched_paths)) != self.touched_paths
+                or len(set(self.touched_paths)) != len(self.touched_paths)):
+            raise ValueError('prepared recovery touched_paths 必须去重并排序')
+        if (sorted(self.source_baselines) != list(self.touched_paths)
+                or sorted(self.current_baselines) != list(self.touched_paths)):
+            raise ValueError('prepared recovery baseline 键必须恰好覆盖 touched_paths')
+        return self
+
+
+def prepared_recovery_workpack_subject(payload: Mapping[str, object]) -> str:
+    """Stage5 prepared recovery 工作包 subject 的契约层唯一算法。"""
+    canonical = {
+        key: value for key, value in dict(payload).items()
+        if key != 'subject_sha256'
+    }
+    try:
+        raw = json.dumps(
+            canonical, ensure_ascii=False, sort_keys=True,
+            separators=(',', ':'), allow_nan=False,
+        ).encode('utf-8')
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f'prepared recovery 工作包不能 canonical JSON 化：{exc}') from exc
+    return hashlib.sha256(raw).hexdigest()
+
+
+class PreparedRecoveryWorkpack(FrozenModel):
+    """stdout 与 target manifest 共用的只读工作包。"""
+
+    version: Literal[1] = 1
+    kind: Literal['stage5-prepared-recovery-workpack-v1'] = \
+        'stage5-prepared-recovery-workpack-v1'
+    read_only: Literal[True] = True
+    sid: str = Field(min_length=1)
+    node: Literal['stage5.write'] = 'stage5.write'
+    source_run_id: str = Field(
+        min_length=1, max_length=128,
+        pattern=r'^[a-z0-9][a-z0-9_-]{0,127}$')
+    target_run_id: str = Field(
+        min_length=1, max_length=128,
+        pattern=r'^[a-z0-9][a-z0-9_-]{0,127}$')
+    source_code: str = Field(min_length=1)
+    target_code: str = Field(min_length=1)
+    chapters: tuple[PreparedRecoveryChapter, ...] = Field(min_length=1)
+    subject_sha256: Sha256
+
+    @model_validator(mode='after')
+    def _closed_scope(self) -> 'PreparedRecoveryWorkpack':
+        if self.source_run_id == self.target_run_id:
+            raise ValueError('prepared recovery 必须使用不同于 source 的新 target run')
+        ordinals = [row.output_ordinal for row in self.chapters]
+        if ordinals != sorted(set(ordinals)):
+            raise ValueError('prepared recovery chapters 必须按章序去重排序')
+        if {row.source_code for row in self.chapters} != {self.source_code}:
+            raise ValueError('prepared recovery source code 必须全书一致')
+        payload = self.model_dump(mode='json')
+        if self.subject_sha256 != prepared_recovery_workpack_subject(payload):
+            raise ValueError('prepared recovery workpack subject SHA 不闭合')
+        return self
+
+
+class PreparedRecoveryAction(HashBoundHumanApproval):
+    """操作员对精确工作包的显式 apply 决定。"""
+
+    source_run_id: str = Field(
+        min_length=1, max_length=128,
+        pattern=r'^[a-z0-9][a-z0-9_-]{0,127}$')
+    target_run_id: str = Field(
+        min_length=1, max_length=128,
+        pattern=r'^[a-z0-9][a-z0-9_-]{0,127}$')
+
+
+class PreparedRecoveryManifest(FrozenModel):
+    """target run 的不可变整书恢复声明；先于任何逐章写盘落下。"""
+
+    version: Literal[1] = 1
+    kind: Literal['stage5-prepared-recovery-manifest-v1'] = \
+        'stage5-prepared-recovery-manifest-v1'
+    workpack: PreparedRecoveryWorkpack
+    action: PreparedRecoveryAction
+    manifest_sha256: Sha256
+
+    @model_validator(mode='after')
+    def _action_matches_workpack(self) -> 'PreparedRecoveryManifest':
+        if (self.action.source_run_id != self.workpack.source_run_id
+                or self.action.target_run_id != self.workpack.target_run_id
+                or self.action.subject_sha256 != self.workpack.subject_sha256):
+            raise ValueError('prepared recovery action 与 workpack 身份漂移')
+        return self
+
+
+class PreparedRecoveryJournal(FrozenModel):
+    """一章 replacement 的 ``prepared -> committed`` 两相 journal。"""
+
+    version: Literal[1] = 1
+    kind: Literal['stage5-prepared-recovery-journal-v1'] = \
+        'stage5-prepared-recovery-journal-v1'
+    state: Literal['prepared', 'committed']
+    prepared_at: str = Field(min_length=1)
+    committed_at: str | None
+    sid: str = Field(min_length=1)
+    node: Literal['stage5.write'] = 'stage5.write'
+    source_run_id: str = Field(min_length=1)
+    target_run_id: str = Field(min_length=1)
+    code: str = Field(min_length=1)
+    source_code: str = Field(min_length=1)
+    output_ordinal: int = Field(ge=1)
+    subject_sha256: Sha256
+    source_adoption_id: Sha256
+    source_run_identity_sha256: Sha256
+    source_run_file_sha256: Sha256
+    source_commit_sha256: Sha256
+    source_commit_file_sha256: Sha256
+    source_checkpoint_sha256: Sha256
+    source_checkpoint_file_sha256: Sha256
+    source_attempt_id: str = Field(pattern=r'^[0-9a-f]{16}$')
+    source_response_sha256: Sha256
+    actor: str = Field(min_length=1)
+    reason: str = Field(min_length=1)
+    primary_artifact: str = Field(min_length=1)
+    primary_payload_sha256: Sha256
+    primary_payload_fingerprint: str = Field(pattern=r'^[0-9a-f]{10}$')
+    finalization_sha256: Sha256
+    touched_paths: tuple[str, ...] = Field(min_length=1)
+    baselines: dict[str, Sha256 | None]
+    landed_payload_sha256: Sha256 | None
+    post_file_sha256s: dict[str, Sha256 | None] | None
+    journal_sha256: Sha256
+
+    @field_validator('actor', 'reason')
+    @classmethod
+    def _human_fields_not_blank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError('prepared recovery 人工凭据不能只含空白')
+        return value
+
+    @model_validator(mode='after')
+    def _state_is_closed(self) -> 'PreparedRecoveryJournal':
+        if (tuple(sorted(self.touched_paths)) != self.touched_paths
+                or sorted(self.baselines) != list(self.touched_paths)):
+            raise ValueError('prepared recovery journal touched/baselines 不闭合')
+        if self.state == 'prepared':
+            if (self.committed_at is not None
+                    or self.landed_payload_sha256 is not None
+                    or self.post_file_sha256s is not None):
+                raise ValueError('prepared recovery journal prepared 字段不闭合')
+        elif (not self.committed_at
+              or self.landed_payload_sha256 is None
+              or self.post_file_sha256s is None
+              or sorted(self.post_file_sha256s) != list(self.touched_paths)):
+            raise ValueError('prepared recovery journal committed 字段不闭合')
+        return self
 
 
 # ─────────────────────────────────────────────────────────────────────────────

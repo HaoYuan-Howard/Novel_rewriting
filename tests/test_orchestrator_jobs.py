@@ -40,7 +40,12 @@ def _executor_flags(node: str, tokens: frozenset[str]) -> list[str]:
     assert set(ordered) == set(tokens), f'{node} 的 executor token 未登记进 NodeSpec.flags'
     out: list[str] = []
     for flag in ordered:
-        out += [flag, '1,3'] if flag == '--chapters' else [flag]
+        if flag == '--chapters':
+            out += [flag, '1,3']
+        elif flag == '--repair-decision':
+            out += [flag, 'a' * 64]
+        else:
+            out.append(flag)
     return out
 
 

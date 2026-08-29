@@ -3,6 +3,7 @@
 """Stage5 生成侧的零成本故障回归测试。"""
 from __future__ import annotations
 
+import copy
 import importlib
 import json
 import shutil
@@ -14,6 +15,9 @@ from types import SimpleNamespace
 
 import pytest
 
+from contracts.artifacts import STAGE4_WRITER_CONTEXT
+from contracts.schema import encode_artifact
+from contracts.schema.stage4 import CtxProvenance, WriterContext
 from novel import prov
 from novel.cli import exit_codes as X
 from novel.errors import (
@@ -28,7 +32,9 @@ from novel.llm.client import (
 )
 from novel.llm.ledger import CostLedger
 from novel.llm.transport import ChatRequest, ChatResponse, FakeTransport
+from novel.run import RunContext
 from novel.stages.stage5 import write
+from novel.store import ArtifactStore
 from tests import factories
 
 
@@ -56,6 +62,9 @@ class _MemoryTrimStore:
         return artifact, raw
 
     def read_with_sha256(self, _model, rel):
+        return self.docs[rel], 'a' * 64
+
+    def read_own_with_sha256(self, _model, rel, **_kwargs):
         return self.docs[rel], 'a' * 64
 
     def revalidation_baseline(self, rel, _model, **_kwargs):
@@ -1037,6 +1046,150 @@ def test_parallel_write_paths_land_each_successful_canonical_chapter(
     assert all(rel.startswith('stage5/ch') for rel in store.writes)
 
 
+def test_parallel_batch_trim_readback_does_not_poison_the_next_chapter(
+        tmp_path, monkeypatch):
+    """并发候选按章 formalize 时，前章自有 trim 状态不得进入后章 inputs。"""
+    seed = factories.stage5_book()
+    first = copy.deepcopy(seed.chapters[1])
+    first['budget_chars'] = 8
+    first['scenes'][0]['budget_chars'] = 8
+    second = copy.deepcopy(seed.chapters[1])
+    second.update({
+        'output_ordinal': 2,
+        'from_source_ordinals': [2],
+        'source_chars': len(seed.source_text[2]),
+        'budget_chars': 200,
+    })
+    second['scenes'][0]['budget_chars'] = 200
+
+    novel_dir = tmp_path / '双章来源账_812'
+    clean = novel_dir / 'stage0' / 'clean_text.txt'
+    clean.parent.mkdir(parents=True)
+    clean.write_text('固定测试根。\n', encoding='utf-8', newline='')
+    ctx = RunContext(
+        novel_dir=novel_dir,
+        node='stage5.write',
+        paid=True,
+        code='test-stage5-trim-source-account',
+        cache=CachePolicy.default(),
+        ledger=CostLedger(),
+        observer=lambda _event: None,
+    )
+    store = ArtifactStore(ctx)
+
+    writer_context = WriterContext(
+        chapters=[first, second],
+        _provenance=ctx.free_provenance(CtxProvenance),
+    )
+    writer_payload = writer_context.model_dump(by_alias=True, mode='json')
+    writer_payload['_provenance'] = writer_context.provenance.to_disk()
+    writer_bytes = (json.dumps(
+        encode_artifact(STAGE4_WRITER_CONTEXT, writer_payload),
+        ensure_ascii=False,
+        indent=2,
+    ) + '\n').encode('utf-8')
+    writer_path = store.path(STAGE4_WRITER_CONTEXT)
+    writer_path.parent.mkdir(parents=True)
+    writer_path.write_bytes(writer_bytes)
+    store.read(WriterContext, STAGE4_WRITER_CONTEXT)
+    baseline_inputs = ctx.edges
+    assert set(baseline_inputs) == {STAGE4_WRITER_CONTEXT}
+
+    rows = [
+        row.model_dump(by_alias=True, mode='json')
+        for row in writer_context.chapters
+    ]
+    book = write.M.Book(
+        title=seed.title,
+        ctx={'chapters': rows},
+        measurable=seed.measurable,
+        source_text=seed.source_text,
+        secrets=seed.secrets,
+        characters=seed.characters,
+    )
+    monkeypatch.setattr(
+        write, 'assert_chapter_candidate_current',
+        lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        write, '_judge', lambda *_args, **_kwargs: ([], [], []))
+
+    def artifact(entry, text):
+        ordinal = int(entry['output_ordinal'])
+        rel = write._rel(ordinal)
+        provenance = ctx.llm_provenance_for_chapter(
+            ordinal,
+            write.RoundLlmProvenance,
+            prompts={'SYS': 'TEST-SYS'},
+            model='requested-model',
+            adopted_models=['actual-model'],
+            round=store.next_round(rel),
+            request_fingerprint=str(ordinal) * 64,
+        )
+        return write._chapter_record(
+            entry,
+            [{'slot': 's01', 'text': text}],
+            book,
+            warns=[],
+            errs=None,
+            provenance=provenance,
+        )
+
+    # ``_run_group_parallel`` 的 agent 路在全部并发候选闭合后按章号正式化；
+    # 这里从那个确定性提交边界开始，先覆盖超限的第 1 章。
+    first_entry = book.chapters[1]
+    first_prepared = write.prepare_chapter_candidate(
+        first_entry, book, revision=None, system='TEST-SYS')
+    first_artifact = artifact(
+        first_entry, '第一章超限正文必须原样保留并生成审计。' * 4)
+    first_rel = write._rel(1)
+    _where, first_trim_notes = write._commit_canonical_chapter(
+        store,
+        first_artifact,
+        expected_ordinal=1,
+        commit=lambda rel, candidate: store.write_round(rel, candidate),
+    )
+    first_audit_rel = write.artifact_rel('stage5.trim_audit', nn=1)
+    assert first_trim_notes and store.exists(first_audit_rel)
+
+    write.verify_chapter_delivery(
+        ctx, first_prepared, first_artifact, rel=first_rel)
+    assert ctx.edges == baseline_inputs, 'trim readback 污染了 run-global inputs'
+
+    # 同一 live audit 的 crash preflight 与 matching-audit 提交路也必须只读不记边。
+    desired, audit_sha, resolution_sha = write._trim_preflight_expectations(
+        ctx, store, first_prepared, first_artifact)
+    assert desired is not None and audit_sha is not None and resolution_sha is None
+    before_audit = store.path(first_audit_rel).read_bytes()
+    write._commit_canonical_chapter(
+        store,
+        first_artifact,
+        expected_ordinal=1,
+        commit=lambda rel, _candidate: store.path(rel),
+    )
+    assert store.path(first_audit_rel).read_bytes() == before_audit
+    assert ctx.edges == baseline_inputs, '预存 TrimAudit 被误记成了 Stage5 写作输入'
+
+    second_entry = book.chapters[2]
+    second_prepared = write.prepare_chapter_candidate(
+        second_entry, book, revision=None, system='TEST-SYS')
+    second_artifact = artifact(second_entry, '第二章正常正文。')
+    assert set(second_artifact.provenance.inputs) == set(baseline_inputs)
+    assert first_audit_rel not in second_artifact.provenance.inputs
+    second_rel = write._rel(2)
+    write._commit_canonical_chapter(
+        store,
+        second_artifact,
+        expected_ordinal=2,
+        commit=lambda rel, candidate: store.write_round(rel, candidate),
+    )
+    write.verify_chapter_delivery(
+        ctx, second_prepared, second_artifact, rel=second_rel)
+
+    assert not store.exists(write.artifact_rel('stage5.trim_audit', nn=2))
+    assert store.freshness(second_rel).state == 'fresh'
+    assert ctx.edges == baseline_inputs
+
+
 def test_one_semantically_failed_chapter_does_not_abort_the_rest(monkeypatch):
     class Client:
         model = 'test-model'
@@ -1507,6 +1660,8 @@ def test_two_arm_composite_writer_is_gone():
 def test_targeted_stage5_refreshes_cache_and_does_not_print_false_success(
         monkeypatch, capsys):
     cli = importlib.import_module('novel.cli.main')
+    from novel.llm import stage5_runs
+
     ctx = SimpleNamespace(
         node='stage5.write',
         cache=CachePolicy.default(),
@@ -1516,6 +1671,10 @@ def test_targeted_stage5_refreshes_cache_and_does_not_print_false_success(
 
     monkeypatch.setattr(cli, '_llm_client', lambda _ctx: object())
     monkeypatch.setattr(cli, 'render', lambda _report: 'REPORT')
+    monkeypatch.setattr(
+        stage5_runs, 'refuse_foreign_prepared_before_wire',
+        lambda _ctx, _chapters: None,
+    )
 
     def fake_run(run_ctx, _client, chapters):
         seen['cache'] = run_ctx.cache.name

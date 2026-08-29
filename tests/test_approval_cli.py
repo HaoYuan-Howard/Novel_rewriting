@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from contracts.invariants import APPROVAL_GATES, APPROVAL_SEEN
 from contracts.schema.api import (
     ApprovalDoc,
@@ -40,6 +42,38 @@ def test_approval_show_is_a_read_only_json_surface(monkeypatch, capsys, tmp_path
     assert rc == X.OK
     assert json.loads(capsys.readouterr().out)['sid'] == SID
     assert called == [(str(tmp_path), SID)]
+
+
+def test_headless_seen_and_early_gates_reuse_approval_services(
+        monkeypatch, capsys, tmp_path):
+    calls = []
+    monkeypatch.setattr(
+        approvals, 'mark_seen',
+        lambda base, sid, key: calls.append(('seen', base, sid, key)) or _doc())
+    monkeypatch.setattr(
+        approvals, 'approve_gate',
+        lambda base, sid, key: calls.append(('gate', base, sid, key)) or _doc())
+
+    assert cli.main([
+        'approval', 'seen', 'read', SID, '--base', str(tmp_path),
+    ]) == X.OK
+    capsys.readouterr()
+    assert cli.main([
+        'approval', 'gate', 's0', SID, '--base', str(tmp_path),
+    ]) == X.OK
+    capsys.readouterr()
+
+    assert calls == [
+        ('seen', str(tmp_path), SID, 'read'),
+        ('gate', str(tmp_path), SID, 's0'),
+    ]
+
+
+def test_headless_generic_gate_never_exposes_s4():
+    with pytest.raises(SystemExit):
+        cli._parser().parse_args([
+            'approval', 'gate', 's4', SID, '--base', '.',
+        ])
 
 
 def test_approval_template_forwards_required_identity_and_prints_typed_json(

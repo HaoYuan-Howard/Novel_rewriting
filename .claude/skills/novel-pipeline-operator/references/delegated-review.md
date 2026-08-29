@@ -142,8 +142,62 @@ workpack；确认完整面成立后，才把 scope 改为 `PASS`，
 
 ## Stage4 结构代批
 
-本闸判断的是计划结构，不是文字质量，也不是第二次规划。先把当前结构 subject、计划完整字节、
-逐章 `structure_decision` 与最新结构报告对齐，再逐章裁决：
+Stage4 有两次正式人审，必须按顺序分别落账。
+
+若这本书还没有 `_service/approvals/<SID>.json`，先经同一公开 façade 补齐早期
+阅读/闸门记录；不能由 Commander 运行时 import 私调服务：
+
+```text
+novel.cli approval gate s0 <SID> --base <BASE>
+novel.cli approval gate s1 <SID> --base <BASE>
+novel.cli approval seen read <SID> --base <BASE>
+novel.cli approval seen global <SID> --base <BASE>
+novel.cli approval gate s2 <SID> --base <BASE>
+```
+
+`seen` 会绑定当前 Stage2 视图，`gate` 会绑定当前产物 proof 并逐级检查前置。
+通用 `approval gate` 只公开 `s0/s1/s2`；s4 必须走下面带完整 subject 与逐章决定的
+typed structure apply，不能匿名盖章。
+
+### A 候选设计审阅
+
+A 机械通过不等于可进 B。先生成绑定当前候选的关闭式模板：
+
+```text
+novel.cli approval backfill <SID> --base <BASE>  # 仅旧审批记录需要，普通 show 不迁移
+novel.cli approval template design <SID> --base <BASE> --actor <ACTOR> \
+  --reviewer-kind delegated_operator --review-run-id <RUN_ID> --reason <总理由>
+novel.cli approval apply design <SID> --base <BASE> --input <决定文件或 ->
+novel.cli approval show <SID> --base <BASE>
+```
+
+模板故意把未审策略置为 `request_replan`、未审章节置为 `request_repair`；这是关闭式起点，不是已经
+形成的拒绝理由。每个未审行还带 `placeholder=true + template_token`；显式确认时必须改为
+`false + null`，且至少真实改写该行的决定、理由或约束，原样 sentinel 不能提交。若当前 A 已有 fresh
+B infeasible 终态，模板与 view 会同时发布其 concerns 和代码 proof 并纳入 aggregate subject；旧 accept
+不得替人复用。`repair_capability` 另由 durable split lineage 现场判定每章能否 targeted repair：
+legacy/untracked 候选和已提交 2 轮 repair 的章不能选择 `request_repair`，只能确认接受或把策略裁成
+`request_replan`；前端/Commander 不自行按目录猜轮次。逐项阅读模板中的安全盲真相、候选场景与
+服务端现场复算的结构对证后再编辑：
+
+1. 策略只决定 `accept / request_replan`。只有策略本身无法指导全书结构重构时才拒绝；单章问题不得
+   借策略决定放大成整书重跑。
+2. 每章决定 `accept / request_repair`。拒绝理由必须指出该章可核证的问题；约束只选服务端枚举的
+   repair code，并填写属于本章 subject 的 `scene_refs / opaque_aliases`。不得凭空补证据，不得把
+   自然语言 reason 当自由 prompt。
+3. 已接受且 subject 未变的历史章可由模板携带 `source_decision_sha256` 复用，但仍须核对并对当前
+   整书主体原子提交；策略、truth/root/alias/review contract 变化使全章复用失效，单章变化只失效该章。
+4. 提交后只认 `design_review.state`。`repair_requested` 时执行服务端 action 中的
+   `stage4.design --repair-decision <decision_sha256>`；`strategy_replan_requested` 时才执行
+   `stage4.design --replan`。两者都需重新 preview/付费确认，修订 A 后还要再提交一份当前完整 A 审阅。
+
+只有 `design_review.state=accepted` 才能预览/执行 B。A 审阅只授权 B，不打开 s4，也不替代下面的
+最终计划裁决。
+
+### B 后最终计划裁决
+
+本闸判断的是已绑定计划结构，不是文字质量，也不是第二次规划。先把当前结构 subject、计划完整字节、
+B 的 `binding_concerns`、逐章 `structure_decision` 与最新结构报告对齐，再逐章裁决：
 
 1. `retain` 章的声明变化必须为空；人工理由要能指出强线性、因果锁定、证据受限或本章本就没有可靠
    重组空间中的具体一种，不能只写“保留更稳”。
@@ -154,18 +208,13 @@ workpack；确认完整面成立后，才把 scope 改为 `PASS`，
    `unver`、零分母或不可比较 span 保持原态，不能洗成通过。
 4. 核对 B 只给冻结的 A 候选绑定 stage/material/participant 证据，没有改场景顺序、事实分组、
    开尾目标或 retain/reconstruct 决定；该不变量若被破坏，应由正式计划闸关闭式拒绝，不靠人工宽免。
-
-若本轮是 Stage4 去序 A/B 标定，先用 `tools/stage4_blind_review.py pack` 对同一冻结 Stage2、
-legacy control 与 Stage4A candidate 出匿名工作包；人工填写逐方案分类、证据与偏好后运行
-`validate-decision`。只有决定已经完整封存，才按该工具 `-h` 的参数契约运行 `unblind`，并把
-`unblinded_result.json` 写在同一实验根目录。解盲输出把人工原始标签与代码计数分栏，逐章只用
-匿名 `panel_id` 索引；它明确不给“有效/无效”自动结论。operator 必须把分类计数、两臂偏好、
-平局/不可评和证据索引交给产品负责人裁决，不能从某个计数事后发明通过阈值。
+5. 逐条阅读 `binding_concerns`。它们是非阻断语义担忧，不是自动失败或正式 infeasible proof；接受章的
+   理由应说明 concern 为何不破坏本章结构，无法确认时保留 `request_replan`，不得把 concern 隐藏掉。
 
 提交时必须使用服务端当前完整 subject SHA-256、actor、总理由，以及恰好覆盖全部计划章的逐章
 `accept / request_replan` 与理由。任一章需要重规划时，仍原子提交整本决定并保持 s4 关闭；审批本身
-不得启动作业。随后只使用服务端给出的 `stage4.design --replan` 动作另行 preview/run，新 A 之后的
-B 仍需另一次 preview/run。全部章接受后还要单独取得 current Stage5 writing 授权；结构批准不能替代它。
+不得启动作业。全部章接受后先单独运行 `stage4.context`；Context current/fresh 后还要取得 Stage5
+writing 授权，结构批准不能替代它。
 
 Commander 只经公开的 0 成本 CLI façade 提交，不直接 import 审批服务，也不临时拼 HTTP：
 
@@ -181,8 +230,9 @@ novel.cli approval apply structure <SID> --base <BASE> --input <决定文件或 
 
 ## Stage5 写作授权
 
-Stage5 写作授权与 Stage4 结构接受是两份独立的人类决定。只有当前 typed 结构决定覆盖全书且全部
-`accept`，才能生成写作授权模板；Commander 不得从 s4 绿灯、付费总授权或正文外发授权推导这枚决定。
+Stage5 写作授权与两次 Stage4 审阅都是独立的人类决定。只有当前最终 typed 结构决定覆盖全书且全部
+`accept`、并已单独生成 current/fresh WriterContext，才能生成写作授权模板；Commander 不得从 s4
+绿灯、付费总授权或正文外发授权推导这枚决定。
 
 ```text
 novel.cli approval template writing <SID> --base <BASE> --actor <ACTOR> --reason <理由>
@@ -190,7 +240,7 @@ novel.cli approval apply writing <SID> --base <BASE> --input <决定文件或 ->
 novel.cli approval show <SID> --base <BASE>
 ```
 
-模板携带当前 Stage1 / Stage4 计划与 measurement contract 所绑定的完整 subject SHA-256。
+模板携带当前 Stage1 / Stage4 计划 / WriterContext 与 measurement contract 所绑定的完整 subject SHA-256。
 `apply writing` 只接受 typed JSON 的 actor、reason 与完整 current subject；旧 UI 的空 body 兼容入口
 不是 Commander 入口。结构、计划或测量主体漂移后旧授权必须显示为 non-current，不能靠历史
 `writing=true` 继续写作。

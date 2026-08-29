@@ -66,14 +66,23 @@ describe('Stage5 部分写作授权链', () => {
       decided_at: '2026-08-25T00:00:00+00:00',
     }
     const approvals: ApprovalDoc = {
-      v: 4,
+      v: 5,
       sid: SAMPLE_SID,
       gate: { s0: true, s1: true, s2: true, s4: true, s5: false, s6: false, s7: false },
       seen: { read: true, global: true },
       writing: false,
+      design_review: {
+        state: 'accepted', candidate_sha256: 'c'.repeat(64),
+        aggregate_subject_sha256: 'd'.repeat(64), current_decision: null, history: [],
+        binding_infeasibility: null,
+        repair_capability: {
+          repairable: true, reason_code: 'ready',
+          chapters: [{ output_ordinal: 3, committed_rounds: 0, request_repair_available: true }],
+        },
+      },
       structure: {
         state: 'accepted', current_subject_sha256: subject,
-        current_decision: structureDecision, history: [structureDecision],
+        current_decision: structureDecision, history: [structureDecision], binding_concerns: [],
       },
       spawns: {},
     }

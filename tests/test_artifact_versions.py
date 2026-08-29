@@ -166,9 +166,12 @@ _SHAPE_BREAKS: dict[str, tuple[int, str, str]] = {
         '`stage4.design` 付费重跑；旧 v1 不迁移、不手补版本号',
     ),
     'stage4/evidence_binding.json': (
-        2,
-        '2026-08-26 删除 participant_refs；人物到场统一读取绑定舞台的 present',
-        '`stage4.plan` 付费重跑 B 相；旧 v1 不迁移、不手补版本号',
+        3,
+        '2026-08-26 v2 删除 participant_refs；2026-08-28 v3 把模型 infeasible '
+        '降为待核证主张，新增非阻断 binding_concerns、代码铸造的 '
+        'infeasibility_proof 与 human/llm 判别来源账',
+        '`stage4.plan` 在当前 A 正式审阅 accepted 后付费重跑 B，或用 '
+        '`--apply-binding` 提交当前 EvidenceBindingResponse；旧 v1/v2 不迁移、不手补版本号',
     ),
     'stage4/writer_context.json': (
         4,

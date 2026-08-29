@@ -530,6 +530,127 @@ def test_complete_typed_surfaces_reach_disk_and_rebuild_the_human_review():
         shutil.rmtree(root, ignore_errors=True)
 
 
+def test_conflict_partition_replace_uses_the_full_apply_edit_commit_path():
+    """整组重画必须刷新审阅 hash、归档旧轮并保留人工来源账，不能旁写 Global。"""
+    root, book = _sandbox('冲突阶段重画_003c')
+    try:
+        _seed(book)
+        ctx = _ctx(book, 'stage2.global', paid=False)
+        store = ArtifactStore(ctx)
+        old_review = store.read(GlobalReview, extract.GLOBAL_REVIEW_REL)
+        old_item = next(
+            item for item in old_review.items
+            if item.kind == 'conflict_partition')
+        old_review = decide(
+            old_review,
+            item_id=old_item.item_id,
+            expected_subject_sha256=old_item.subject_sha256,
+            state='PASS',
+            actor='test-reviewer',
+            reason='synthetic old partition reviewed before replacement',
+            now='2026-08-29T00:00:00+00:00',
+        )
+        store.write(extract.GLOBAL_REVIEW_REL, old_review)
+        formal_before = (book / extract.GLOBAL_REL).read_bytes()
+
+        _write_edit(book, {'conflict_stages_replace': [
+            {'stage': '疑点累积', 'chapters': [1]},
+            {'stage': '关系对质', 'chapters': [2, 3]},
+        ]})
+        artifact, report = _apply(book)
+
+        assert report.passed
+        assert [row.stage for row in artifact.arc.conflict_stages] == [
+            '疑点累积', '关系对质']
+        assert artifact.provenance.partial_rewrite == '--apply-edit'
+        assert extract.GLOBAL_EDIT in artifact.provenance.inputs
+        reloaded = store.read(GlobalGrounding, extract.GLOBAL_REL)
+        assert reloaded.arc.conflict_stages == artifact.arc.conflict_stages
+
+        new_review = store.read(GlobalReview, extract.GLOBAL_REVIEW_REL)
+        new_item = next(
+            item for item in new_review.items
+            if item.kind == 'conflict_partition')
+        assert new_item.subject_sha256 != old_item.subject_sha256
+        assert new_item.state == 'pending'
+        assert new_item.actor is None and new_item.reason is None
+        assert (book / 'stage2' / '_rounds' /
+                'global_grounding.r1.json').read_bytes() == formal_before
+        assert (book / 'stage2' / '_rounds' / 'global_review.r1.json').exists()
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+@pytest.mark.parametrize('replacement,detail', [
+    ([{'stage': '缺章', 'chapters': [1, 3]}], '缺章'),
+    ([{'stage': '重复甲', 'chapters': [1, 2]},
+      {'stage': '重复乙', 'chapters': [2, 3]}], '重复'),
+    ([{'stage': '越界', 'chapters': [1, 2, 3, 4]}], '越界'),
+])
+def test_bad_conflict_partition_replacement_changes_no_artifact_bytes(
+    replacement, detail,
+):
+    """坏人工分段在内存副本关闭；正式底座不动，也不产生误导性的 INVALID。"""
+    root, book = _sandbox(f'冲突阶段{detail}_003d')
+    try:
+        _seed(book)
+        formal_before = (book / extract.GLOBAL_REL).read_bytes()
+        review_before = (book / extract.GLOBAL_REVIEW_REL).read_bytes()
+        _write_edit(book, {'conflict_stages_replace': replacement})
+        bytes_before = {
+            path.relative_to(book): path.read_bytes()
+            for path in book.rglob('*') if path.is_file()
+        }
+
+        with pytest.raises(TerminalState, match=detail):
+            _apply(book)
+
+        bytes_after = {
+            path.relative_to(book): path.read_bytes()
+            for path in book.rglob('*') if path.is_file()
+        }
+        assert bytes_after == bytes_before
+        assert (book / extract.GLOBAL_REL).read_bytes() == formal_before
+        assert (book / extract.GLOBAL_REVIEW_REL).read_bytes() == review_before
+        assert not (book / 'stage2' / 'global_grounding.INVALID.json').exists()
+        assert not (book / 'stage2' / '_rounds').exists()
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def test_unrelated_edit_on_bad_conflict_invalid_still_reaches_the_shared_hard_gate():
+    """没有 replacement 时不把既有坏 INVALID 误报成“坏决策集”。"""
+    root, book = _sandbox('冲突阶段渐进修复_003e')
+    try:
+        _seed(book)
+        ctx = _ctx(book, 'stage2.global', paid=False)
+        store = ArtifactStore(ctx)
+        formal_before = (book / extract.GLOBAL_REL).read_bytes()
+        current = store.read(GlobalGrounding, extract.GLOBAL_REL)
+        raw = current.model_dump(by_alias=True)
+        raw['arc']['conflict_stages'] = [
+            {'stage': '既有问题分段', 'chapters': [1, 3]},
+        ]
+        store.write_invalid(
+            extract.GLOBAL_REL, GlobalGrounding.model_validate(raw),
+            gates_skipped=[])
+        _write_edit(book, {'characters': [{
+            'char_id': 'char_001', 'name_distinctiveness': 'medium',
+        }]})
+
+        with pytest.raises(GateBlocked, match='conflict_stage_coverage'):
+            _apply(book)
+
+        assert (book / extract.GLOBAL_REL).read_bytes() == formal_before
+        invalid = ArtifactStore(
+            _ctx(book, 'stage2.global', paid=False)).read(
+                GlobalGrounding, 'stage2/global_grounding.INVALID.json')
+        assert invalid.entities.characters['char_001'].name_distinctiveness == 'medium'
+        assert invalid.arc.conflict_stages[0].chapters == [1, 3]
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # 二、来源账：这一份此后是混版的，而账要说得出口
 # ─────────────────────────────────────────────────────────────────────────────

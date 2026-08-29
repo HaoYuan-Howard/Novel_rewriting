@@ -433,6 +433,33 @@ class _RoundFields(StrictModel):
     fixes: list[tuple[str, str]] | None = None
 
 
+class PreparedCheckpointAdoption(HumanApproval):
+    """Stage5 以 0 wire 收口历史 prepared checkpoint 的自证载体。
+
+    这份证据跟 canonical Chapter 一起落盘；外部 recovery journal 与
+    ``llm_audit.jsonl`` 只是同一事实的两份审计索引，不能替正式产物自己回答
+    “为什么一次 usage=0 的当前写回仍然可以声明 model”。
+    """
+
+    source_run_id: str = Field(
+        min_length=1, max_length=128,
+        pattern=r'^[a-z0-9][a-z0-9_-]{0,127}$')
+    target_run_id: str = Field(
+        min_length=1, max_length=128,
+        pattern=r'^[a-z0-9][a-z0-9_-]{0,127}$')
+    source_code: str = Field(min_length=1)
+    source_run_identity_sha256: Sha256
+    source_run_file_sha256: Sha256
+    source_commit_sha256: Sha256
+    source_commit_file_sha256: Sha256
+    source_checkpoint_sha256: Sha256
+    source_checkpoint_file_sha256: Sha256
+    source_attempt_id: str = Field(pattern=r'^[0-9a-f]{16}$')
+    source_response_sha256: Sha256
+    source_adoption_id: Sha256
+    action_subject_sha256: Sha256
+
+
 class RoundLlmProvenance(LlmProvenance, _RoundFields):
     """stage5 逐章成稿（模型产的那一份）。"""
 
@@ -441,6 +468,11 @@ class RoundLlmProvenance(LlmProvenance, _RoundFields):
     #: 不能按默认 effort 或首发档位重算。现役 Stage5 producer 每份 LLM 成稿都写；
     #: 字段仍为可空只为拒绝把字段引入前的 v2 章伪造出一条请求身份。
     request_fingerprint: Sha256 | None = None
+
+    #: 缺席 = 普通付费写作或该字段引入前的旧 v2 章；存在 = 旧 run 已付费且
+    #: checkpoint/ledger/session/commit 全闭合，本次在新 run/current code 下 0 wire
+    #: 重铸 canonical。兼容加法，不把旧 v2 章伪造成一次恢复。
+    prepared_checkpoint_adoption: PreparedCheckpointAdoption | None = None
 
 
 class RoundFreeProvenance(FreeProvenance, _RoundFields):

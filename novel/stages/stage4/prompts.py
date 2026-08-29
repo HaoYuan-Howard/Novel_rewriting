@@ -51,7 +51,8 @@ BLIND_CHAPTER_DESIGN_SYS = """\
   $CHANGE_KINDS；只选需要的项，去重后仍须保持这个契约顺序。
 
 每个 land alias 恰好落入一场；context_fact_aliases 只能引用「此刻读者已经知道」的事实：
-输入中 obligation=context 的 alias，或**已经在更早场落地**的 land alias。**不得引用本场或
+输入中 obligation=context 的 alias（它可以来自更早章已落地的事实），或**已经在本章更早场落地**
+的 land alias。较早章/较早场的已落地事实可作后续上下文，不得反向将未落地事实提前。**不得引用本场或
 后面才落地的 land alias**。turn 必须属于本场 land。entry_state_aliases / exit_state_aliases
 只填**本场新增**的状态，不要把前面已经成立的状态再抄一遍：
 - X_CONTINUE 表示同一时间线紧邻续接，代码自动继承上一场的有效 exit；
@@ -172,10 +173,14 @@ EVIDENCE_BIND_SYS = """\
 场景顺序、事实分组、goal、retain/reconstruct、变化声明、purpose、role、delivery、transition 或 weight。
 
 candidate_sha256 必须逐字回显。若全部候选场都能在本章证据内执行，返回 status=bound，并且每个候选场
-恰好绑定一次、每条必须材料恰好落一次、stage 引用来自本章关闭式目录；此时 reason_kind、reason、
-evidence_refs 三项必须全部为 null。若任何一场无法在不改
-候选结构的前提下成立，返回 status=infeasible，给出关闭式 reason_kind、具体理由和非空 evidence_refs；
-不得返回一份悄悄重规划或只绑定一半的候选。只输出 JSON。"""
+恰好绑定一次、每条必须材料恰好落一次、stage 引用来自本章关闭式目录。更早场或
+更早章已经落地的事实可作后续场的 context，这不是 future leak。
+
+若你对因果、舞台、材料或未来泄漏有语义担忧，把它写入 binding_concerns。每条 concern 只能
+引用请求中下发的章号、candidate_scene_id、opaque alias、stage_ref 或 material_ref。
+binding_concerns 是非阻断证据：只要能交付关闭式完整绑定，仍必须返回 status=bound。只有你认为连完整
+绑定都无法给出时才可声称 status=infeasible；该声称不会自行成为正式终态，必须由编译器在同一
+关闭约束集上独立证明。不得返回一份悄悄重规划或只绑定一半的候选。只输出 JSON。"""
 
 EVIDENCE_BIND_HINT: dict[str, Any] = {
     'status': 'bound|infeasible',
@@ -188,12 +193,15 @@ EVIDENCE_BIND_HINT: dict[str, Any] = {
             'stage_refs': ['b01_01'],
         }],
     }],
-    # ⚠ 示例三项都写 null：旧示例给的是一条**非空** evidence 数组，模型照抄成
-    #   `bound` 下的空数组，于是一次整书 B 相白重出。示例形态就是契约的一部分。
-    'reason_kind': None,
-    'reason': None,
-    'evidence_refs': None,
+    'binding_concerns': [],
 }
+
+
+BLIND_CHAPTER_REPAIR_SYS = BLIND_CHAPTER_DESIGN_SYS + """
+
+这是一次定向单章返修。整书策略、章权重和非目标章已冻结，不得修改或重述。
+你会收到上一份本章响应与代码从受审决议闭集渲染的结构化约束；只修这些约束指向的场景/
+opaque alias，同时仍须返回一份完整的本章响应。不得推测或回显审阅人的自由文本理由。"""
 
 
 def blind_design_system() -> str:
@@ -206,6 +214,10 @@ def blind_book_strategy_system() -> str:
 
 def blind_chapter_design_system() -> str:
     return with_json_shape(BLIND_CHAPTER_DESIGN_SYS, BLIND_CHAPTER_DESIGN_HINT)
+
+
+def blind_chapter_repair_system() -> str:
+    return with_json_shape(BLIND_CHAPTER_REPAIR_SYS, BLIND_CHAPTER_DESIGN_HINT)
 
 
 def evidence_bind_system() -> str:
@@ -221,6 +233,8 @@ BLOCK_BLIND_TRUTH = '── 去序真相图（opaque alias 无顺序含义）─
 BLOCK_BLIND_BOOK_STRATEGY = '── 章级功能与确定性计数（整书宏观策略输入）──'
 BLOCK_BLIND_CHAPTER_TRUTH = '── 单章去序真相图（local alias 仅在本请求有效）──'
 BLOCK_ACCEPTED_BOOK_STRATEGY = '── 已接受的整书策略与本章权重（不得修改）──'
+BLOCK_PREVIOUS_CHAPTER_RESPONSE = '── 上一份已审本章响应（只修目标约束）──'
+BLOCK_REPAIR_CONSTRAINTS = '── 代码渲染的闭合返修约束（无自由文本理由）──'
 BLOCK_CANDIDATE = '── 已冻结的 Stage4A 盲设计候选（不得修改）──'
 BLOCK_CANDIDATE_HASH = '── 候选完整 SHA-256（必须回显）──'
 BLOCK_EVIDENCE = '── Stage2 证据层与关闭式引用目录（只用于绑定）──'

@@ -34,11 +34,10 @@ from contracts.schema.stage4 import (
     BlindCandidate,
     EvidenceBinding,
     PlanChapters,
-    WriterContext,
 )
-from novel import prov
+from novel import paths, prov
 from novel.llm.cache import CachePolicy, ResponseCache
-from novel.errors import ProvenanceRefused
+from novel.errors import ArtifactUnreadable, ProvenanceRefused
 from novel.llm.client import LlmClient, LlmFailed
 from novel.llm.ledger import CostLedger
 from novel.llm.transport import ChatRequest, ChatResponse, FakeTransport
@@ -297,14 +296,18 @@ def _infeasible_b_response(candidate: BlindCandidate) -> dict:
         'status': 'infeasible',
         'candidate_sha256': candidate_subject_sha256(_candidate_business(candidate)),
         'chapters': None,
-        'reason_kind': 'stage_conflict',
-        'reason': '冻结候选无法同时安放这些关闭式证据。',
-        'evidence_refs': [
-            first_scene.candidate_scene_id,
-            first_scene.land_fact_aliases[0],
-            'b01_01',
-            'h01_011',
-        ],
+        'binding_concerns': [{
+            'constraint_code': 'stage_conflict',
+            'chapter_ordinal': 1,
+            'scenes': [first_scene.candidate_scene_id],
+            'reason': '冻结候选无法同时安放这些关闭式证据。',
+            'closed_refs': [
+                first_scene.candidate_scene_id,
+                first_scene.land_fact_aliases[0],
+                'b01_01',
+                'h01_011',
+            ],
+        }],
     }
 
 
@@ -438,7 +441,7 @@ def test_run_design_is_blind_and_lands_a_reproducible_current_candidate(designed
     assert len(subject) == 64
 
 
-def test_run_plan_binds_evidence_then_compiles_plan_v4_and_context(designed):
+def test_run_plan_binds_evidence_then_compiles_plan_without_context(designed):
     book, blueprints_artifact, packed = designed
     _design_ctx, _design_client, _design_transport, candidate, _truth, _mapping = packed
     ctx = _ctx(book, 'stage4.plan')
@@ -453,9 +456,9 @@ def test_run_plan_binds_evidence_then_compiles_plan_v4_and_context(designed):
     store = ArtifactStore(ctx)
     binding = store.read_own(EvidenceBinding, plan.BINDING_REL)[0]
     final_plan = store.read_own(PlanChapters, plan.REL)[0]
-    context = store.read_own(WriterContext, plan.CTX_REL)[0]
     assert binding.status == 'bound'
-    assert context.chapters
+    assert not store.exists(plan.CTX_REL), \
+        'stage4.plan 不得代写 stage4.context 的产物'
     assert json.loads((book / plan.REL).read_text(encoding='utf-8'))['_schema_version'] == 4
 
     binding_inputs = {
@@ -533,64 +536,39 @@ def test_compiled_plan_exact_phase_hashes_guard_freshness_check_and_write_postco
     assert (book / plan.REL).read_bytes() == before_plan
 
 
-def test_infeasible_cli_lands_binding_without_plan_and_returns_landed_red(
-    designed, monkeypatch, capsys,
-):
-    from novel.cli import exit_codes as X
-    from novel.cli import main as cli_main
-
+def test_false_infeasible_is_rejected_and_never_lands_a_formal_terminal(designed):
     book, _blueprints_artifact, packed = designed
     _design_ctx, _design_client, _design_transport, candidate, _truth, _mapping = packed
     ctx = _ctx(book, 'stage4.plan')
     client, transport = _client(ctx, _infeasible_b_response(candidate))
-    monkeypatch.setattr(cli_main, '_llm_client', lambda got_ctx: client)
-
-    rc = cli_main._run_stage4(ctx, [])
-
-    assert rc == X.CHECK_FAILED
-    assert X.landed(rc)
-    assert len(transport.calls) == 1
-    binding = ArtifactStore(ctx).read_own(EvidenceBinding, plan.BINDING_REL)[0]
-    assert binding.status == 'infeasible'
+    with pytest.raises(LlmFailed, match='构造出了完整 bound'):
+        plan.run_plan(ctx, client)
+    assert len(transport.calls) == 2
+    assert not (book / plan.BINDING_REL).exists()
     assert not (book / plan.REL).exists()
     assert not (book / plan.CTX_REL).exists()
     assert not (book / plan._INVALID).exists()
-    adoption = _one_adoption(ctx, plan.BINDING_REL, binding)
-    assert adoption['attempt_id'] == client.accepted_attempt(ctx.node)
-    rendered = capsys.readouterr().out
-    assert 'typed infeasible' in rendered
-    assert 'stage4.design --replan' in rendered
 
 
-def test_infeasible_lands_typed_binding_without_overwriting_plan_or_context(designed):
+def test_false_infeasible_is_corrected_to_bound_in_the_same_logical_request(designed):
     book, blueprints_artifact, packed = designed
     _design_ctx, _design_client, _design_transport, candidate, _truth, _mapping = packed
-    bound_ctx = _ctx(book, 'stage4.plan')
-    bound_client, _transport = _client(
-        bound_ctx,
+    responses = iter((
+        _infeasible_b_response(candidate),
         _bound_b_response(
             candidate, blueprints_artifact.model_dump(by_alias=True, mode='json')),
-    )
-    assert plan.run_plan(bound_ctx, bound_client).passed
-    plan_before = (book / plan.REL).read_bytes()
-    context_before = (book / plan.CTX_REL).read_bytes()
-
-    response = _infeasible_b_response(candidate)
+    ))
     ctx = _ctx(book, 'stage4.plan')
-    client, transport = _client(ctx, response)
-
-    outcome = plan.run_plan(ctx, client)
-
-    assert isinstance(outcome, EvidenceBinding)
-    assert outcome.status == 'infeasible'
-    assert outcome.evidence_refs == response['evidence_refs']
-    assert len(transport.calls) == 1
+    client, transport = _client(ctx, lambda _request: next(responses))
+    report = plan.run_plan(ctx, client)
+    assert report.passed
+    assert len(transport.calls) == 2, '同一 B 请求内修正，不新开 replan'
     landed = ArtifactStore(ctx).read_own(EvidenceBinding, plan.BINDING_REL)[0]
-    assert landed == outcome
-    assert (book / plan.REL).read_bytes() == plan_before
-    assert (book / plan.CTX_REL).read_bytes() == context_before
+    assert landed.status == 'bound'
+    assert (book / plan.REL).exists()
+    assert not (book / plan.CTX_REL).exists()
     assert not (book / plan._INVALID).exists()
-    adoption = _one_adoption(ctx, plan.BINDING_REL, outcome)
+    adoption = _one_adoption(ctx, plan.BINDING_REL, landed)
     assert adoption['attempt_id'] == client.accepted_attempt(ctx.node)
 
 
@@ -601,9 +579,13 @@ def test_infeasible_unknown_evidence_ref_is_rejected_before_any_binding_lands(de
         'status': 'infeasible',
         'candidate_sha256': candidate_subject_sha256(_candidate_business(candidate)),
         'chapters': None,
-        'reason_kind': 'insufficient_evidence',
-        'reason': '用一个未下发 token 伪造负结论。',
-        'evidence_refs': ['source-position-that-B-never-saw'],
+        'binding_concerns': [{
+            'constraint_code': 'insufficient_evidence',
+            'chapter_ordinal': 1,
+            'scenes': [],
+            'reason': '用一个未下发 token 伪造负结论。',
+            'closed_refs': ['source-position-that-B-never-saw'],
+        }],
     }
     ctx = _ctx(book, 'stage4.plan')
     client, transport = _client(ctx, response)
@@ -621,9 +603,148 @@ def test_infeasible_unknown_evidence_ref_is_rejected_before_any_binding_lands(de
     )
 
 
+def _legacy_v2_binding_bytes(current_v3: bytes) -> bytes:
+    """把真实 producer 落下的 v3 bound B 投影回退役 v2 盘形。
+
+    这不是只改一个版本号的假旧稿：v2 的 reason 三字段仍在，v3 新增的
+    concerns/proof/origin 确实不在。用 current 子结构投影是为了让章/场绑定与
+    本次测试的 A 主体保持真实一致。
+    """
+    raw = json.loads(current_v3)
+    assert raw['_schema_version'] == 3
+    raw['_schema_version'] = 2
+    raw.pop('binding_concerns', None)
+    raw.pop('infeasibility_proof', None)
+    raw['reason_kind'] = None
+    raw['reason'] = None
+    raw['evidence_refs'] = None
+    raw['_provenance'].pop('origin', None)
+    assert 'reason_kind' in raw and 'binding_concerns' not in raw
+    return (json.dumps(raw, ensure_ascii=False, indent=2) + '\n').encode('utf-8')
+
+
+def test_apply_binding_mints_human_v3_and_builds_first_plan_without_context(designed):
+    book, blueprints_artifact, packed = designed
+    _design_ctx, _design_client, _design_transport, candidate, _truth, _mapping = packed
+    business = _bound_b_response(
+        candidate, blueprints_artifact.model_dump(by_alias=True, mode='json'))
+    target = book / 'stage4' / 'manual_binding.json'
+    target.write_text(
+        json.dumps(business, ensure_ascii=False), encoding='utf-8')
+    ctx = RunContext(
+        novel_dir=book,
+        node='stage4.plan',
+        paid=False,
+        code=CODE,
+        cache=CachePolicy.default(),
+        ledger=CostLedger(path=None),
+    )
+
+    report = plan.run_apply_binding(ctx, 'stage4/manual_binding.json')
+
+    assert report.passed
+    store = ArtifactStore(ctx)
+    binding = store.read_own(EvidenceBinding, plan.BINDING_REL)[0]
+    compiled = store.read_own(PlanChapters, plan.REL)[0]
+    assert binding.status == 'bound'
+    assert binding.provenance.origin == 'human'
+    assert 'model' not in type(binding.provenance).model_fields
+    assert binding.provenance.candidate_sha256 == business['candidate_sha256']
+    assert compiled.provenance.origin == 'compiled'
+    assert not store.exists(plan.CTX_REL)
+    raw = json.loads((book / plan.BINDING_REL).read_text(encoding='utf-8'))
+    assert raw['_schema_version'] == 3
+
+
 # ─────────────────────────────────────────────────────────────────────────────
+# shape-break 恢复：旧 B 只重建，不迁移或混入 current 轮次
+# ─────────────────────────────────────────────────────────────────────────────
+
+@pytest.mark.parametrize(('entry', 'expected_origin'), [
+    ('producer', 'llm'),
+    ('apply-binding', 'human'),
+])
+def test_first_v3_binding_replaces_real_v2_live_bytes_without_round_history(
+        designed, entry: str, expected_origin: str):
+    """首份 v3 B 无论来自 producer 还是人工恢复口，都不「迁移」v2。"""
+    book, blueprints_artifact, packed = designed
+    _design_ctx, _design_client, _design_transport, candidate, _truth, _mapping = packed
+    business = _bound_b_response(
+        candidate, blueprints_artifact.model_dump(by_alias=True, mode='json'))
+
+    # 先让真 producer 落一份同主体的 current B，再按退役契约投影成
+    # 真 v2 形状；避免测试只改 marker 却根本没有旧字段。
+    seed_ctx = _ctx(book, 'stage4.plan')
+    seed_client, _seed_transport = _client(seed_ctx, business)
+    assert plan.run_plan(seed_ctx, seed_client).passed
+    formal = book / plan.BINDING_REL
+    invalid = book / paths.invalid_of(plan.BINDING_REL)
+    legacy = _legacy_v2_binding_bytes(formal.read_bytes())
+    formal.write_bytes(legacy)
+    invalid.write_bytes(legacy)
+
+    manual = book / 'stage4' / 'manual_binding.json'
+    manual.write_text(
+        json.dumps(business, ensure_ascii=False), encoding='utf-8')
+    if entry == 'producer':
+        ctx = _ctx(book, 'stage4.plan')
+        client, _transport = _client(ctx, business)
+        outcome = plan.run_plan(ctx, client)
+    else:
+        ctx = _ctx(book, 'stage4.plan', paid=False)
+        outcome = plan.run_apply_binding(ctx, 'stage4/manual_binding.json')
+
+    assert outcome.passed
+    store = ArtifactStore(ctx)
+    landed = store.read_own(EvidenceBinding, plan.BINDING_REL)[0]
+    assert landed.provenance.origin == expected_origin
+    assert json.loads(formal.read_bytes())['_schema_version'] == 3
+    assert not invalid.exists(), '退役 INVALID 应由 shape-break replace 原位丢弃'
+    rounds = formal.parent / paths.ROUNDS_DIRNAME
+    binding_rounds = [] if not rounds.exists() else [
+        row for row in rounds.iterdir()
+        if row.name.startswith('evidence_binding')
+    ]
+    assert binding_rounds == [], 'v2 不是 current 业务轮，不得混进 _rounds'
+
+
+@pytest.mark.parametrize('legacy_side', ['formal', 'invalid'])
+def test_apply_binding_refuses_mixed_v2_v3_live_bytes_without_mutation(
+        designed, legacy_side: str):
+    """v2/v3 混版是未收口状态；人工入口不得猜谁该被覆盖。"""
+    book, blueprints_artifact, packed = designed
+    _design_ctx, _design_client, _design_transport, candidate, _truth, _mapping = packed
+    business = _bound_b_response(
+        candidate, blueprints_artifact.model_dump(by_alias=True, mode='json'))
+    seed_ctx = _ctx(book, 'stage4.plan')
+    seed_client, _seed_transport = _client(seed_ctx, business)
+    assert plan.run_plan(seed_ctx, seed_client).passed
+
+    formal = book / plan.BINDING_REL
+    invalid = book / paths.invalid_of(plan.BINDING_REL)
+    current = formal.read_bytes()
+    legacy = _legacy_v2_binding_bytes(current)
+    formal.write_bytes(legacy if legacy_side == 'formal' else current)
+    invalid.write_bytes(legacy if legacy_side == 'invalid' else current)
+    plan_path = book / plan.REL
+    before = (formal.read_bytes(), invalid.read_bytes(), plan_path.read_bytes())
+    manual = book / 'stage4' / 'manual_binding.json'
+    manual.write_text(
+        json.dumps(business, ensure_ascii=False), encoding='utf-8')
+    ctx = _ctx(book, 'stage4.plan', paid=False)
+
+    with pytest.raises(ArtifactUnreadable, match='版本混杂或来自未来'):
+        plan.run_apply_binding(ctx, 'stage4/manual_binding.json')
+
+    assert (formal.read_bytes(), invalid.read_bytes(), plan_path.read_bytes()) == before
+    rounds = formal.parent / paths.ROUNDS_DIRNAME
+    assert not rounds.exists() or not any(
+        row.name.startswith('evidence_binding') for row in rounds.iterdir())
+
+
+# ────────────────────────────────────────────────────────────────────────────
 # `--adopt-rejected`：validator 拒稿唯一的 0-wire 恢复入口
-# ─────────────────────────────────────────────────────────────────────────────
+# ───────────────────────────────────────────────────────────────────────────
 
 def _seal_a_validator_rejection(
         ctx: RunContext, book: Path, *, response: dict, why: str,
@@ -732,6 +853,20 @@ def test_a_human_fixed_candidate_is_adopted_and_the_history_stays_separable(
     assert artifact.provenance.model == MODEL
     assert (artifact.provenance.usage is None
             or artifact.provenance.usage.calls_made == 0)
+
+    # whole_book_v1 没有 split aggregate/checkpoints：审批模板必须在建立
+    # request_repair 前即可只读判为不可执行，只允许 strategy replan。
+    from novel.llm import stage4_runs
+    capability = stage4_runs.inspect_design_repair_capability(
+        ctx,
+        candidate_payload=artifact.model_dump(by_alias=True, mode='json'),
+        candidate_file_sha256=hashlib.sha256(
+            (book / plan.CANDIDATE_REL).read_bytes()).hexdigest(),
+    )
+    assert capability.repairable is False
+    assert capability.reason_code == 'legacy_or_untracked_candidate'
+    assert capability.parent_run_id is None
+    assert capability.chapter_repair_rounds == ()
 
     sealed = response_repair.find_attempt(book, attempt)
     assert sealed.outcome['decision'] == 'accepted'

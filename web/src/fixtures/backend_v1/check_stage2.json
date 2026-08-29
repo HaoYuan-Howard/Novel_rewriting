@@ -382,18 +382,13 @@
    "item": "冲突阶段逐章显式枚举且恰好覆盖全书一次",
    "requirement": "R-2.14",
    "check_kind": "mechanical",
-   "remediation": "llm",
-   "fix": {
-    "node": "stage2.global",
-    "flags": [
-     "--resample"
-    ],
-    "paid": true
-   },
+   "remediation": "human",
+   "fix": null,
    "findings": [],
    "why": "现役 fixture 没有这条新增判据的历史运行结果",
    "scanned": null,
-   "baseline": null
+   "baseline": null,
+   "note": "默认用 GlobalEdit.conflict_stages_replace + stage2.global --apply-edit stage2/global_edit.json 完整重画（0 LLM）；付费 --resample 只作最后手段"
   },
   {
    "rule": "context_scope",

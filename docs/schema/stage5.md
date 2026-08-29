@@ -34,12 +34,34 @@ stage5/wontfix.json              人工豁免账（v1）
 | 预览 prompt | `run stage5.write <sid> --dry-run --chapters 3 --base <base>` | 0 |
 | 重判正式章 / 问题稿 | `--recheck` / `--revalidate --actor ... --reason ...` | 0 |
 | 人工整章写回 | `--apply-edit <ChapterResponse.json>` | 0 LLM |
+| 只读复验旧 run 的 prepared 尾窗 | `--emit-prepared-recovery-workpack <SOURCE_RUN_ID>` | 0 |
+| 按已审工作包收口 prepared 尾窗 | `--recover-prepared <SOURCE_RUN_ID> --actor ... --reason ... --subject-sha256 ...` | 0 wire |
 | 生成最新 Review | `run stage5.review <sid> --base <base>` | 0 |
 | 读取已有 Review | `run stage5.review <sid> --check-only --base <base>` | 0 |
 
 不带 `--chapters` 就是全书，不需要也不接受 `--deep`、`--shallow-rest` 或 `--mode`。
 `novel/orchestrator/nodes.py` 在预览与真跑共用的命令构造口关闭式拒绝 `mode`，CLI/API
 也不再提供“选深度章”入口。
+
+prepared recovery 是默认付费续跑的关闭式例外，不是第二条写作臂。若旧 run 已有通过
+checkpoint、但进程停在 canonical 提交后的 `prepared` 尾窗，默认 `stage5.write` 会在构造
+client/driver 前拒绝，并给出显式恢复命令。操作员先以一个**不同于 source、且 emit/apply
+两次完全相同**的 `--run-id <TARGET_RUN_ID>` 运行只读 workpack；审阅后把打印出的完整
+`subject_sha256` 与 `actor/reason` 交给 `--recover-prepared`。两条 flag 禁止与 executor profile、
+egress、`--chapters`、`--revise` 或 response repair 混用；apply 覆盖 source run 当时全部
+unresolved prepared 章，不能挑章。
+
+两条 prepared recovery flag 仅供 operator CLI runner 使用，`POST /api/jobs/preview` 与
+`POST /api/jobs` 都会在构造 argv/job 前拒绝。HTTP 作业每次生成新 run id，无法安全复用已进入
+workpack subject 的 target；不得通过删除 target 绑定来迁就通用作业面。
+
+apply 不 probe/start、不读缓存、不发 wire，也不改 source run 的任何 sidecar。它以 source
+自己的 code/profile/session/ledger 复验 run、request、checkpoint 与 commit 的 raw file SHA 和
+semantic self-hash，再以 target 当前代码复算输入、prompt、schema、HARD 与 live baseline。
+target 的 `_stage5_runs/<TARGET>/prepared_recovery.json` 冻结整书 workpack/action，逐章
+`prepared_recovery.json` 走 `prepared → committed`；只有 replacement journal、全局 adoption
+audit 与 live canonical 三者精确闭合，旧 foreign reservation 才算 superseded。写回会令旧
+Review stale，因此恢复成功后必须**另跑** `stage5.review`。
 
 ### 1.1 Stage5 从 Stage1 即时计算正文机械基线
 
@@ -133,6 +155,13 @@ LLM 正式稿用 `RoundLlmProvenance`；人工整章写回用 `RoundFreeProvenan
 一个字未改就不得伪造新 prompt、模型或轮次。`--recheck` 同样不归一正文、不改 segments、任务
 快照或 provenance，只刷新 v2 派生指标并补齐历史遗漏的 trim audit。
 
+0-wire prepared recovery 的正式章仍是 `RoundLlmProvenance`，因为正文确由 source model 生成；
+本次 usage 为零，并额外携带 typed `prepared_checkpoint_adoption`。该证据逐项绑定 source/target
+run、source code、run/commit/checkpoint 的 raw+self SHA、attempt、response、稳定
+`source_adoption_id`、人工 workpack subject/actor/reason；不能只靠旁路 journal 或审计行替正文
+解释“为何 model 产物能在零调用的新 run 落盘”。兼容旧 v2 的缺席态只表示普通写作或字段引入前
+的历史章，不反推为一次恢复。
+
 ## 三、Review（schema v2）与 currentness
 
 `stage5.review` 不调 LLM，`review_<n>.json` 的 n 是盘上最大序号 +1。顶层字段：
@@ -165,24 +194,29 @@ Stage6、Stage7 与最终交付的共同闸。旧报告不得驱动新付费动�
 章集合上零成本重跑 `stage5.review`。旧 Review v1 仍含
 `mode/mode_dir`；现役 v2 删除这两格，由 producer 免费重建，不做迁移。
 
-## 四、审批服务记录：HTTP v4，盘上 v5
+## 四、审批服务记录：HTTP v5，盘上 v6
 
-`ApprovalDoc.v=4` 是 HTTP 公共视图版本，字段为 `sid`、完整 `gate`、完整 `seen`、
-`writing`、typed `structure` 与 `spawns`；它不再暴露 `deep`。`structure` 明示当前结构主体、
+`ApprovalDoc.v=5` 是 HTTP 公共视图版本，字段为 `sid`、完整 `gate`、完整 `seen`、
+`writing`、typed `design_review`、typed `structure`、typed `writing_approval` 与 `spawns`；它不再暴露 `deep`。`structure` 明示当前结构主体、
 逐章 `accept / request_replan` 决定、历史与五态，且 `gate.s4=true` 只可能来自当前主体的
 全章 `accept`。`POST .../approvals/deep` 路由和 `DeepSelectionRequest` 已退役；结构批准与
-writing 授权是两个独立目的、两份 proof，后者只表达“允许当前 canonical 全书写作”。
+writing 授权是两个独立目的、两份 proof；Stage4A 的 design review 又是只授权 B 的第三个目的。
+writing proof 绑定当前 Stage1 正文、Stage4 Plan、最终结构批准后单独生成的 fresh WriterContext 与
+测量契约，只表达“允许当前 canonical 全书写作”。
 
 `<base>/_service/approvals/<sid>.json` 不是产物，现役内部记录是
-`_ApprovalRecordV5(v=5)`：无 s3 的完整 gate / seen、typed 结构决定与历史、`writing` 及各自
+`_ApprovalRecordV6(v=6)`：无 s3 的完整 gate / seen、typed A 设计决定、typed 最终结构决定与各自历史、`writing` 及各自
 current-subject proof。proof 绑定根 `clean_text` SHA-1、正式主体完整 SHA-256 与决定面规范
 SHA-256；bool 必须与 proof 是否存在逐格一致。结构 subject 或计划完整字节变化都会使 s4
 即时失效，writing 与下游 gate 随之关闭。
 
-旧 `_ApprovalRecordV4Legacy` 只供显式 backfill 读取，普通 GET / 启动绝不静默迁移。旧 s3 proof
+旧 `_ApprovalRecordV5Legacy` 及更早记录只供显式 backfill 读取，普通 GET / 启动绝不静默迁移。旧 s3 proof
 必须先对冻结 Stage3 v2 字节、Stage1 主体与当前测量契约逐项核验，才可用来证明旧 writing
-决定的上下文；新记录本身不再保留 s3。v2/v3 没有 typed Stage4 结构裁决，最多迁移仍能按当前
-盘面对证的前置 gate；不得凭旧 s4 或 writing 推造逐章决定。v1 或损坏记录只能显式 reset/backfill。
+决定的上下文；新记录本身不再保留 s3。v5→v6 的 design history 恒空，不得从已有 A/B/Plan 或
+付费账伪造 A 人审；已有 current Plan v4 + current bound EvidenceBinding v3 可继续最终结构裁决，
+但未来再次产 B 必须补当前 A review；旧 v2 Binding 不迁移，仍由 B producer 重建。v2/v3
+没有 typed Stage4 结构裁决，最多迁移仍能按当前盘面对证的前置 gate；不得凭旧 s4 或 writing
+推造逐章决定。v1 或损坏记录只能显式 reset/backfill。
 
 ## 五、其余产物与退役投影
 

@@ -183,7 +183,9 @@ def test_pre_context_gate_does_not_pair_a_new_candidate_with_old_context(monkeyp
     assert captured['ctx_source'] == '前置计划闸门按契约不读取旧 writer_context 来源账'
 
 
-@pytest.mark.parametrize('rel', [plan.REL, plan.CTX_REL])
+@pytest.mark.parametrize('rel', [
+    plan.BINDING_REL, plan.REL, plan.CTX_REL,
+])
 def test_stage4_producers_replace_an_all_legacy_live_surface(rel):
     class LegacyStore:
         calls: list[tuple[str, str]] = []

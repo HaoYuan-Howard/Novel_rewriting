@@ -103,7 +103,7 @@ Prompt 选型完成后，`prompt_variants`、`prompt_defaults` 与 `--prompt-var
 | `GET /api/jobs/:id` | `JobRecord` | **复用** `_orchestration.md` |
 | `GET /api/jobs/:id/log?offset=N` | `LogChunk` | 新 |
 | `GET /api/jobs/:id/stream?offset=N` | SSE：`LogStreamEvent` | 新；主日志通道 |
-| `POST /api/jobs/preview` | `JobStart`（请求体 `PreviewRequest`） | **复用** `_orchestration.md`；现役 direct executor 为 8 节点 / 12 种 flag-token 组合（精确矩阵见下），并回显独立 `egress_authorized` 快照 |
+| `POST /api/jobs/preview` | `JobStart`（请求体 `PreviewRequest`） | **复用** `_orchestration.md`；现役 direct executor 为 8 节点 / 13 种 flag-token 组合（精确矩阵见下），并回显独立 `egress_authorized` 快照 |
 | `POST /api/jobs` | `JobRecord`（202；请求体 `PreviewRequest`） | **复用** `_orchestration.md`；同一组 profile / egress 边界，profile 非空且 egress 不是 true 时不起 job |
 | `GET /api/queues` | `QueueList` | 新 |
 | `POST /api/queues/preview` | `QueuePlan`（请求体 `QueueCreateRequest`；纯预览） | **复用** `_orchestration.md` |
@@ -123,6 +123,8 @@ Prompt 选型完成后，`prompt_variants`、`prompt_defaults` 与 `--prompt-var
 | `POST /api/novels/:sid/stage1/partition` | `JobRecord` | 新 |
 | `GET /api/novels/:sid/stage1` | `Stage1View`（一次返回连续分区、原文章号诊断与 `anomaly_count`；全部由当前 clean 复扫） | 新 |
 | `GET /api/novels/:sid/approvals` | `ApprovalDoc` | 新 |
+| `GET /api/novels/:sid/approvals/design/template?actor=&reviewer_kind=&review_run_id=&reason=` | `DesignReviewTemplate` | 四项 query 均必填；按当前 A 生成关闭式全书模板，可逐章复用仍完全绑定的历史 accept，但不代签；fresh B infeasible 时发布当前证明并禁止复用旧 accept |
+| `POST /api/novels/:sid/approvals/design` | `ApprovalDoc`（请求体 `DesignReviewRequest`） | 原子保存 Stage4A 全书策略 + 逐章 typed 审阅；不启动修订、B 或任何作业 |
 | `POST /api/novels/:sid/approvals/gate/:key` | `ApprovalDoc` | 新 |
 | `POST /api/novels/:sid/approvals/seen/:key` | `ApprovalDoc` | 新 |
 | `POST /api/novels/:sid/approvals/structure` | `ApprovalDoc`（请求体 `StructureApprovalRequest`：完整结构 subject SHA-256、actor、总理由与恰好覆盖全书的逐章 `accept / request_replan`） | 新；typed Stage4 结构裁决，提交本身不启动作业 |
@@ -230,13 +232,13 @@ Stage6 A/B 各用独立 driver 对象、logical session、临时 cwd 与 provide
 resume。正式交付由代码在同一提交所有权内执行 prepared journal、artifact write、typed readback、
 两条 adoption 与 committed，并继续承担双盲响应校验、合并和当前输入终验。
 
-Phase 5 后，当前 API 只接受以下 **8 节点 / 12 种 flag-token 组合**的非空 profile：
+Phase 5 后，当前 API 只接受以下 **8 节点 / 13 种 flag-token 组合**的非空 profile：
 
 | node | token 组合 |
 |---|---|
 | `stage2.global` | `[]` |
 | `stage2.blueprint` | `[]` |
-| `stage4.design` | `[]`、`[--replan]` |
+| `stage4.design` | `[]`、`[--replan]`、`[--repair-decision]` |
 | `stage4.plan` | `[]` |
 | `stage5.write` | `[]`、`[--chapters]`、`[--revise]`、`[--revise,--chapters]` |
 | `stage6.hook` | `[]` |
@@ -281,7 +283,9 @@ current writing 授权、Review 状态与旧布局，不存在另一个按臂的
 | `NovelList` | `base` · `novels[]`（`NovelOverview`） | 抓包 `novels.json` 的顶层就是 `{base, novels}`。⚠ **复用 `NovelOverview`，不另造一张轻量清单**——原型 `Web/novels.py` 那张第二清单的代价是 stage5 被迫整个排除在外，于是「有没有陈旧产物」那个徽章不覆盖成稿 |
 | `TrashNovelResult` | `sid` · `title` · `trash_id` · `trash_rel` | `novel/orchestrator/trash.py` 的 CLI 子进程完成同盘移动后返回；`trash_rel` 是可恢复位置，不把“从语料库消失”偷换成“字节已永久销毁” |
 | `ApprovalBackfillResult` | `approvals` · `backfilled[]` | `backfilled` 是本次**按正式盘面补录**的 gate id，空数组表示无事可补；界面必须明确这些不是用户逐屏点过的验收记录 |
-| `ApprovalDoc` | `v=4` · `sid` · `gate` · `seen` · `writing` · `structure` · `writing_approval` · `spawns` | HTTP v4 不等于 `_service/approvals/<sid>.json` 的盘上 v5。公开 gate 没有 s3；`structure` 给出 current subject、typed 当前裁决、历史与 `unavailable / missing / accepted / replan_requested / expired` 状态；`gate.s4=true` 只可能来自当前 `accepted` 裁决。`writing_approval` 同样给出 available、current subject、typed current decision/history；旧 v5 可能只有 current `writing=true` 而没有 typed 历史，公开视图照实保留，不能伪造 actor/reason。新 typed writing 决定绑定 Stage1 正文、Stage4 计划与测量契约。旧内部记录仅由显式 backfill 收敛，普通 GET 不迁移 |
+| `ApprovalDoc` | `v=5` · `sid` · `gate` · `seen` · `writing` · `design_review` · `structure` · `writing_approval` · `spawns` | HTTP v5 不等于 `_service/approvals/<sid>.json` 的盘上 v6。公开 gate 没有 s3；`design_review` 是 A 的独立相位，不是 gate：给出当前 candidate/aggregate hash、typed 当前决定、历史与 `unavailable / missing / repair_requested / strategy_replan_requested / accepted / expired`，只有 current `accepted` 才能授权 B。`structure` 是 B 编译 Plan 后的另一张票，另给当前 subject、B `binding_concerns`、typed 当前裁决、历史与 `unavailable / missing / accepted / replan_requested / expired`；`gate.s4=true` 只可能来自这张当前 `accepted`。`writing_approval` 同样给出 available、current subject、typed current decision/history；新 typed writing 决定绑定 Stage1 正文、Stage4 Plan、fresh WriterContext 与测量契约。旧 v5 盘上记录只经显式 backfill 收成 v6，A history 恒空，不能从既有 A/B/Plan/付费账伪造人审；普通 GET 不迁移 |
+| `DesignReviewTemplate / Request` | `actor` · `reviewer_kind` · `review_run_id` · `general_reason` · `candidate_sha256` · `aggregate_subject_sha256` · `binding_infeasibility?` · `repair_capability` · `strategy` · `chapters[]` | 一次提交必须覆盖当前完整策略与升序全章集。策略决定为 `accept / request_replan`；逐章决定为 `accept / request_repair`。repair 章必须给至少一条 `{code, scene_refs[], opaque_aliases[]}` 关闭式约束，accept 章不得夹带约束。GET 中每个未审行带 `placeholder=true + template_token`；显式确认须同时改为 `false + null`，且不能把默认 decision/reason/constraints sentinel 原样提交。`binding_infeasibility` 为 `{candidate_sha256,binding_concerns[],infeasibility_proof[]}`，仅发布当前 fresh B 负结论并进入 aggregate。`repair_capability={repairable,reason_code,chapters[{output_ordinal,committed_rounds,request_repair_available}]}` 由当前候选的 durable split lineage 唯一判定并进入 aggregate；legacy/untracked 或已提交 2 轮的章不得形成 `request_repair`。subject 只公开 opaque alias 的盲真相、候选业务面与服务端现场复算的结构证据，不公开 formal fact/person id；自然语言 reason 只作审计，不进入修订 prompt |
+| `DesignReviewDecision / View` | request 全字段 + `decision_sha256` · `decided_at`；view 另含 state/current hashes/`binding_infeasibility?`/current/history | 历史 accept 只有在全局 basis、策略主体、本章主体且 B 证据面仍逐字相同时才能由 `source_decision_sha256` 复用；仍须对当前整书重新原子提交。全局 basis 或策略变化使全章过期，单章业务变化只使该章过期；fresh B infeasible 使旧决定过期并要求重新逐项审阅，拒绝决定不会自动变成 accept |
 | `JobList` | `jobs[]`（`JobRecord`） | 抓包 `jobs.json` 就是 `{"jobs":[]}`——**一个样本都没有**，所以元素形状只能从 `_orchestration.md` 来 |
 | `LogChunk` | `text` · `next_byte` | 按**字节**续读。⚠ 中文一字跨 3 字节，**只在读的一侧解码**（写的一侧按字节追加，见 `_orchestration.md`）。`next_byte` 原样回传给下一次 `?offset=` |
 | `LogStreamEvent` | `text` · `next_byte` · `done` · `state` | SSE 的 `id` 与 `next_byte` 相同；普通 `log` 事件为 `done=false,state=null`，唯一的 `end` 事件为 `done=true,state=ok|landed_red|failed|unknown` 并随即释放连接。断线时浏览器用 `Last-Event-ID` 续读；显式 query offset 与它取较大者，避免刷新倒退 |
@@ -291,7 +295,7 @@ current writing 授权、Review 状态与旧布局，不存在另一个按臂的
 `egress_authorized`（`bool`，默认 false；只授权 direct executor 外发正文）。
 请求外壳是 strict，任何旧 `mode` 键都返回 422；老
 `jobs.jsonl` 的兼容解码只在服务内部磁盘边界发生，不进入本请求或公开响应模型。
-现役只允许上表 8 节点 / 12 组合提交非空 `executor_profile`；blueprint、Stage4 plan、Hook、Rename
+现役只允许 `_orchestration.md` 精确表中的 8 节点 / 13 组合提交非空 `executor_profile`；blueprint、Stage4 plan、Hook、Rename
 自动追跑的 `--check-only` Step 不继承 profile。其余组合均以 `UnsupportedRunMode` 拒绝，不能接收后
 再改走旧 LLM。Phase 2～4 的三条是历史增量，Phase 5 闭合当前矩阵。非空 profile 必须显式携带
 bool egress：false 允许预览

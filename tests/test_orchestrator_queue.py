@@ -469,6 +469,8 @@ def test_stage4_queue_requires_a_new_preview_after_blind_design(
     monkeypatch.setattr(
         Q.approvals, 'require_stage2_review', lambda *_args: None)
     monkeypatch.setattr(Q, '_stage4_replan_required', lambda _base, _sid: False)
+    monkeypatch.setattr(
+        Q.approvals, 'design_review_is_current', lambda _base, _sid: True)
 
     todo, blocked = Q.plan_book(
         queue_base, 'book-a', until_stage='stage4', follow_check=False)
@@ -506,6 +508,8 @@ def test_stage4_queue_offers_b_only_after_a_is_current(
     monkeypatch.setattr(
         Q.approvals, 'require_stage2_review', lambda *_args: None)
     monkeypatch.setattr(Q, '_stage4_replan_required', lambda _base, _sid: False)
+    monkeypatch.setattr(
+        Q.approvals, 'design_review_is_current', lambda _base, _sid: True)
 
     todo, blocked = Q.plan_book(
         queue_base, 'book-a', until_stage='stage4', follow_check=False)
@@ -544,11 +548,40 @@ def test_stage4_queue_hides_repeated_b_after_current_infeasible(
     item = blocked[0]
     assert item.waiting_on == Q.WAITING_ON_STAGE4_REPLAN
     assert item.steps == []
-    assert 'stage4.design --replan' in item.why
+    assert 'hash-bound design resolution' in item.why
     assert '不会再次暴露或执行同一个 B' in item.why
     # 没有 B 命令就没有可被一次 queue --yes 偷偷复用的付费面。
     planned = QueuePlan(items=[], blocked=blocked, paid_items=0)
     Q.confirm(planned, yes=False)
+
+
+def test_stage4_context_waits_for_a_new_snapshot_after_final_structure_review(
+        queue_base, monkeypatch):
+    monkeypatch.setattr(
+        Q, 'nodes_up_to', lambda _until: ['stage4.plan', 'stage4.context'])
+    monkeypatch.setattr(
+        Q.st, 'overview', lambda _base, _sid: SimpleNamespace(stages=[]))
+    def verdict(_overview, node):
+        if node == 'stage4.design':
+            return Q.st.RESUME_SKIP, 'blind candidate 当前有效'
+        return Q.st.RESUME_RUN, f'{node} 缺失'
+
+    monkeypatch.setattr(Q.st, 'resume_verdict', verdict)
+    monkeypatch.setattr(Q, '_stage4_replan_required', lambda _base, _sid: False)
+    monkeypatch.setattr(
+        Q.approvals, 'design_review_is_current', lambda _base, _sid: True)
+    monkeypatch.setattr(
+        Q.approvals, 'authorize_context',
+        lambda _base, _sid: (_ for _ in ()).throw(
+            ApprovalRequired('final structure missing')))
+
+    todo, blocked = Q.plan_book(
+        queue_base, 'book-a', until_stage='stage4', follow_check=False)
+
+    assert [item.node for item in todo] == ['stage4.plan']
+    assert [item.node for item in blocked] == ['stage4.context']
+    assert blocked[0].waiting_on == Q.WAITING_ON_STAGE4_STRUCTURE_REVIEW
+    assert blocked[0].steps == []
 
 
 def test_stage5_plan_uses_one_authorized_whole_book_command(
@@ -1198,6 +1231,36 @@ def test_stage5_queue_execution_rechecks_the_saved_writing_scope(
         registry=Q.QueueRegistry(), job_registry=J.JobRegistry())
     assert run.state == 'ok'
     assert prepared == [want]
+
+
+@pytest.mark.parametrize(('node', 'authorization'), [
+    ('stage4.design', 'initial'),
+    ('stage4.plan', 'plan'),
+    ('stage4.context', 'context'),
+])
+def test_stage4_queue_execution_rechecks_each_saved_phase_capability(
+        queue_base, monkeypatch, node, authorization):
+    item = _item('book-a', node, f'{node}-command', paid=node != 'stage4.context')
+    _seed(queue_base, f'q-{authorization}', [item])
+    monkeypatch.setattr(Q, '_live_disposition', _always_pending)
+    prepared = []
+    monkeypatch.setattr(
+        Q.approvals, 'authorize_design_initial',
+        lambda _base, sid: prepared.append(('initial', sid)))
+    monkeypatch.setattr(
+        Q.approvals, 'authorize_plan',
+        lambda _base, sid: prepared.append(('plan', sid)))
+    monkeypatch.setattr(
+        Q.approvals, 'authorize_context',
+        lambda _base, sid: prepared.append(('context', sid)))
+
+    run = Q.run(
+        queue_base, f'q-{authorization}',
+        spawn=lambda _argv, _cwd, _env, _log: 0,
+        registry=Q.QueueRegistry(), job_registry=J.JobRegistry())
+
+    assert run.state == 'ok'
+    assert prepared == [(authorization, 'book-a')]
 
 
 def test_blocked_item_persists_what_it_is_waiting_for(queue_base):

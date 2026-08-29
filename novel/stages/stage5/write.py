@@ -3,7 +3,7 @@
 """
 write.py —— `stage5.write`：**逐章写作**。全链唯一产出「书」的层，也是唯一带 LLM 返工回路的层。
 
-八条路：
+十条路：
     默认            逐章一次调用，落 `stage5/chNN.json`          **付费**
     `--revise`      把可反哺的结论连同上一轮成稿发回写手           **付费**
     `--chapters`    只写这几章                                      付费路的**参数**
@@ -11,6 +11,8 @@ write.py —— `stage5.write`：**逐章写作**。全链唯一产出「书」�
     `--recheck`     按当前判据重判存量成稿并写回指标                0 成本
     `--revalidate`  把合格的 `.INVALID` 提升为正式产物              0 成本
     `--apply-edit`  把人工改好的那一份落成新的一轮                  0 成本
+    `--emit-prepared-recovery-workpack`  只读复验旧 run 的 prepared   0 成本
+    `--recover-prepared`                 按已审工作包重铸正式章         0 wire
 
 ⚠⚠ **本层只有闭卷这一条写作路**。源章原文只供确定性校验，
 不进 prompt，也没有可以把它加回去的 mode 参数。
@@ -47,19 +49,23 @@ import threading
 from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import CancelledError, ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Protocol
 
 from contracts.invariants import STOP_REWRITE_AFTER
 from novel.config import MAX_CONCURRENCY
 from contracts.rules import REGISTRY
 from contracts.schema.common import (
-    Finding, InputEdge, RoundFreeProvenance, RoundLlmProvenance,
+    Finding, InputEdge, PreparedCheckpointAdoption,
+    RoundFreeProvenance, RoundLlmProvenance,
 )
 from contracts.schema.report import CheckReport
 from contracts.schema.evaluation import TrimAudit
 from contracts.schema.stage4 import CtxChapter
 from contracts.schema.stage5 import (
-    Chapter, ChapterResponse, ChapterSegment, RejectedRevision,
+    Chapter, ChapterResponse, ChapterSegment, PreparedRecoveryAction,
+    PreparedRecoveryChapter, PreparedRecoveryJournal,
+    PreparedRecoveryManifest, PreparedRecoveryWorkpack, RejectedRevision,
 )
 from novel import paths, prov
 from novel.errors import (
@@ -230,6 +236,32 @@ class ChapterCandidateDelivery:
     trim_notes: tuple[str, ...] = ()
 
 
+@dataclass(frozen=True)
+class _HistoricalCheckpointSource:
+    """只把已由 historical validator 复验的 acceptance 暴露给纯评估链。"""
+
+    model: str
+    purpose: str
+    acceptance: Mapping[str, Any] = field(repr=False)
+    concurrency: int = 1
+
+    def _for(self, purpose: str, key: str) -> str | None:
+        if purpose != self.purpose:
+            raise ProvenanceRefused(
+                f'historical checkpoint purpose 漂移：{purpose!r} != {self.purpose!r}')
+        value = self.acceptance.get(key)
+        return str(value) if isinstance(value, str) and value else None
+
+    def accepted_attempt(self, purpose: str) -> str | None:
+        return self._for(purpose, 'attempt_id')
+
+    def accepted_model(self, purpose: str) -> str | None:
+        return self._for(purpose, 'model')
+
+    def accepted_request_fingerprint(self, purpose: str) -> str | None:
+        return self._for(purpose, 'request_fingerprint')
+
+
 def _rel(ordinal: int) -> str:
     return artifact_rel('stage5.chapter', nn=ordinal)
 
@@ -279,7 +311,8 @@ def _commit_canonical_chapter(
     matching_audit: tuple[TrimAudit, str] | None = None
     if desired_audit is not None and store.exists(audit_rel):
         try:
-            current_audit, current_sha256 = store.read_with_sha256(TrimAudit, audit_rel)
+            current_audit, current_sha256 = store.read_own_with_sha256(
+                TrimAudit, audit_rel)
         except ArtifactUnreadable:
             pass
         else:
@@ -1275,7 +1308,7 @@ def verify_chapter_delivery(
             if not store.exists(audit_rel):
                 raise ProvenanceRefused(
                     f'Stage5 第 {prepared.ordinal} 章超限正文缺 live TrimAudit')
-            actual_audit, actual_sha256 = store.read_with_sha256(
+            actual_audit, actual_sha256 = store.read_own_with_sha256(
                 TrimAudit, audit_rel)
             if actual_audit != desired_audit:
                 raise ProvenanceRefused(
@@ -1396,7 +1429,8 @@ def _trim_preflight_expectations(
     current_audit_sha: str | None = None
     if desired_audit is not None and store.exists(audit_rel):
         try:
-            candidate, candidate_sha = store.read_with_sha256(TrimAudit, audit_rel)
+            candidate, candidate_sha = store.read_own_with_sha256(
+                TrimAudit, audit_rel)
         except ArtifactUnreadable:
             pass
         else:
@@ -1753,6 +1787,10 @@ def run_write(ctx: RunContext, client: LlmClient,
     """
     store = ArtifactStore(ctx)
     require_canonical_layout(store)
+    # 生产入口本身必须挡 foreign prepared。CLI/build_node_agent 只是更早反馈；
+    # legacy 形状先由零调用 canonical-layout 闸给出更精确终态，之后仍早于
+    # load_book、_run_group 以及 direct Stage5WriteAgent 的 driver/probe/session。
+    stage5_runs.refuse_foreign_prepared_before_wire(ctx, chapters)
     book = review.load_book(ctx, store)
     todo = _chapters_of(store, book, chapters)
     if not todo:
@@ -1760,6 +1798,542 @@ def run_write(ctx: RunContext, client: LlmClient,
             '这一次没有要写的章：计划里的每一章都已经有 canonical 成稿了。'
             '⚠ 这**不是**「没问题」——要重写某一章就用 `--chapters N` 明说')
     return _run_group(ctx, store, book, todo, client, revise=None)
+
+
+def _path_sha256(path: os.PathLike[str] | str) -> str:
+    try:
+        return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+    except OSError as exc:
+        raise ProvenanceRefused(f'prepared recovery sidecar {path} 不可读：{exc}') from exc
+
+
+def _historical_recovery_unit(
+    ctx: RunContext,
+    book: M.Book,
+    *,
+    source_run_id: str,
+    ordinal: int,
+) -> tuple[PreparedRecoveryChapter, ChapterCandidateContext, ChapterCandidateEvaluation]:
+    """把一章 source prepared 经现有 historical + current 纯函数链重判。"""
+    entry = book.chapters.get(ordinal)
+    if entry is None:
+        raise ProvenanceRefused(
+            f'Stage5 source prepared 第 {ordinal} 章已不在当前计划；拒绝跨计划采用')
+    prepared = prepare_chapter_candidate(entry, book, revision=None)
+    assert_chapter_candidate_current(ctx, prepared)
+    historical = stage5_runs.restore_historical_prepared(
+        ctx,
+        source_run_id=source_run_id,
+        chapter=ordinal,
+        input_sha256=prepared._input_sha256,
+        system=prepared.system,
+        user=prepared.user,
+        response_model=ChapterResponse,
+        max_tokens=MAX_TOKENS,
+        validator=lambda obj, wire: _response_problem(obj, wire, prepared._entry),
+    )
+    acceptance = historical.historical.checkpoint.acceptance
+    run_record = historical.historical.run_record
+    profile = run_record['request_policy']['profile']
+    source = _HistoricalCheckpointSource(
+        model=str(profile['model']), purpose=prepared.purpose,
+        acceptance=acceptance)
+    prior = tuple(
+        (int(item['chars']), str(item['text']))
+        for item in historical.historical.checkpoint.state_payload['prior_attempts']
+    )
+    evaluation = evaluate_chapter_candidate(
+        source,
+        prepared,
+        historical.historical.checkpoint.value,
+        accepted_purpose=prepared.purpose,
+        prior_attempts=prior,
+    )
+    _assert_chapter_evaluation_identity(source, prepared, evaluation)
+    if not evaluation.passed:
+        raise ProvenanceRefused(
+            f'Stage5 第 {ordinal} 章历史 checkpoint 在当前代码下未通过：'
+            f'HARD={list(evaluation.errors)} regressions={list(evaluation.regressions)}')
+    source_dir = paths.stage5_chapter_run_path(
+        ctx.novel_dir, source_run_id, ordinal)
+    run_path = source_dir / 'run.json'
+    commit_path = source_dir / 'committed.json'
+    checkpoint_path = (source_dir / 'checkpoints'
+                       / f'rev-{historical.historical.checkpoint.revision:04d}.json')
+    commit = historical.commit
+    run_identity_sha = str(run_record['identity_sha256'])
+    run_file_sha = _path_sha256(run_path)
+    commit_sha = str(commit['commit_sha256'])
+    commit_file_sha = _path_sha256(commit_path)
+    checkpoint_sha = historical.historical.checkpoint.checkpoint_sha256
+    checkpoint_file_sha = _path_sha256(checkpoint_path)
+    response_sha = str(acceptance['ledger_response_sha256'])
+    adoption_id = stage5_runs.source_adoption_id(
+        sid=ctx.sid, source_run_id=source_run_id, chapter=ordinal,
+        source_run_identity_sha256=run_identity_sha,
+        source_run_file_sha256=run_file_sha,
+        source_commit_sha256=commit_sha,
+        source_commit_file_sha256=commit_file_sha,
+        source_checkpoint_sha256=checkpoint_sha,
+        source_checkpoint_file_sha256=checkpoint_file_sha,
+        source_response_sha256=response_sha,
+    )
+    touched = tuple(sorted(stage5_runs.touched_paths(ordinal)))
+    row = PreparedRecoveryChapter(
+        output_ordinal=ordinal,
+        mode='write',
+        purpose=prepared.purpose,
+        source_code=str(run_record['code']),
+        source_run_identity_sha256=run_identity_sha,
+        source_run_file_sha256=run_file_sha,
+        source_commit_sha256=commit_sha,
+        source_commit_file_sha256=commit_file_sha,
+        source_checkpoint_sha256=checkpoint_sha,
+        source_checkpoint_file_sha256=checkpoint_file_sha,
+        source_checkpoint_revision=historical.historical.checkpoint.revision,
+        source_attempt_id=evaluation.source_attempt_id,
+        source_response_sha256=response_sha,
+        source_request_fingerprint=evaluation.request_fingerprint,
+        source_session_run_id=str(acceptance['session_run_id']),
+        source_provider_session_id=str(acceptance['provider_session_id']),
+        source_adoption_id=adoption_id,
+        input_sha256=prepared._input_sha256,
+        system_sha256=_sha256_text(prepared.system),
+        user_sha256=_sha256_text(prepared.user),
+        response_schema_sha256=_canonical_sha256(
+            ChapterResponse.model_json_schema(by_alias=True)),
+        response_model=ChapterResponse.__name__,
+        requested_output_token_ceiling=MAX_TOKENS,
+        profile=profile,
+        candidate_sha256=evaluation._candidate_sha256,
+        touched_paths=touched,
+        source_baselines={
+            rel: commit['baselines'][rel] for rel in touched
+        },
+        current_baselines={
+            rel: stage5_runs.file_sha256(ctx, rel) for rel in touched
+        },
+        hard_rules=tuple(evaluation.errors),
+        regressions=tuple(evaluation.regressions),
+    )
+    return row, prepared, evaluation
+
+
+def build_prepared_recovery_workpack(
+        ctx: RunContext, source_run_id: str,
+) -> PreparedRecoveryWorkpack:
+    """纯读构造绑定 source prepared 与 current producer 的整书工作包。"""
+    from novel.run_identity import check_run_id
+
+    source = check_run_id(source_run_id)
+    if ctx.node != 'stage5.write' or ctx.paid:
+        raise ProvenanceRefused('prepared recovery workpack 只属于 free stage5.write run')
+    if ctx.executor_profile is not None:
+        raise ProvenanceRefused('prepared recovery workpack 禁止 executor profile/driver')
+    existing = stage5_runs.read_recovery_manifest(ctx)
+    if existing is not None:
+        if existing.workpack.source_run_id != source:
+            raise ProvenanceRefused('当前 target run manifest 已绑定另一 source run')
+        stage5_runs.require_workpack_subject(existing.workpack)
+        return existing.workpack
+    store = ArtifactStore(ctx)
+    require_canonical_layout(store)
+    book = review.load_book(ctx, store)
+    unresolved = stage5_runs.unresolved_prepared_envelopes(ctx, source)
+    rows: list[PreparedRecoveryChapter] = []
+    for ordinal in sorted(unresolved):
+        row, _prepared, _evaluation = _historical_recovery_unit(
+            ctx, book, source_run_id=source, ordinal=ordinal)
+        if row.source_commit_sha256 != unresolved[ordinal]['commit_sha256']:
+            raise ProvenanceRefused(
+                f'Stage5 第 {ordinal} 章 source envelope/deep validation 漂移')
+        rows.append(row)
+    source_codes = {row.source_code for row in rows}
+    if len(source_codes) != 1:
+        raise ProvenanceRefused(
+            f'Stage5 source run 各章 code 不一致：{sorted(source_codes)}')
+    raw: dict[str, Any] = {
+        'version': 1,
+        'kind': 'stage5-prepared-recovery-workpack-v1',
+        'read_only': True,
+        'sid': ctx.sid,
+        'node': 'stage5.write',
+        'source_run_id': source,
+        'target_run_id': ctx.run_id,
+        'source_code': next(iter(source_codes)),
+        'target_code': ctx.code,
+        'chapters': [row.model_dump(mode='json') for row in rows],
+    }
+    raw['subject_sha256'] = stage5_runs.workpack_subject(raw)
+    return PreparedRecoveryWorkpack.model_validate(raw)
+
+
+def _recovered_formal_artifact(
+    ctx: RunContext,
+    prepared: ChapterCandidateContext,
+    evaluation: ChapterCandidateEvaluation,
+    row: PreparedRecoveryChapter,
+    action: PreparedRecoveryAction,
+    *,
+    round_number: int,
+) -> Chapter:
+    adoption = PreparedCheckpointAdoption(
+        source_run_id=action.source_run_id,
+        target_run_id=action.target_run_id,
+        source_code=row.source_code,
+        source_run_identity_sha256=row.source_run_identity_sha256,
+        source_run_file_sha256=row.source_run_file_sha256,
+        source_commit_sha256=row.source_commit_sha256,
+        source_commit_file_sha256=row.source_commit_file_sha256,
+        source_checkpoint_sha256=row.source_checkpoint_sha256,
+        source_checkpoint_file_sha256=row.source_checkpoint_file_sha256,
+        source_attempt_id=row.source_attempt_id,
+        source_response_sha256=row.source_response_sha256,
+        source_adoption_id=row.source_adoption_id,
+        action_subject_sha256=action.subject_sha256,
+        actor=action.actor,
+        reason=action.reason,
+    )
+    provenance = ctx.recovered_llm_provenance(
+        RoundLlmProvenance,
+        prompts={'SYS': prepared.system},
+        model=evaluation.requested_model,
+        adopted_models=[evaluation.adopted_model],
+        round=round_number,
+        request_fingerprint=evaluation.request_fingerprint,
+        prepared_checkpoint_adoption=adoption,
+    )
+    return _chapter_record(
+        prepared._entry,
+        [segment.model_dump() for segment in evaluation.segments],
+        prepared._book,
+        warns=list(evaluation.warnings),
+        errs=None,
+        provenance=provenance,
+    )
+
+
+def _recovery_landed_primary(
+        store: ArtifactStore, journal: PreparedRecoveryJournal, *, rel: str,
+) -> Chapter | None:
+    """若 live canonical 已是 recovery journal 目标则读回，否则仍按 baseline 处理。"""
+    if not store.exists(rel):
+        return None
+    current, _raw = store.read_own(Chapter, rel, require_current=False)
+    payload = current.model_dump(by_alias=True, mode='json')
+    return current if stage5_runs.verify_recovery_primary(journal, payload) else None
+
+
+def _preflight_recovery_targets(
+    ctx: RunContext,
+    store: ArtifactStore,
+    prepared: ChapterCandidateContext,
+    artifact: Chapter,
+    journal: PreparedRecoveryJournal,
+) -> None:
+    """恢复写盘前证明五个 live 路径只处于冻结 baseline 或本 journal 目标。"""
+    rel = _rel(prepared.ordinal)
+    invalid_rel = paths.invalid_of(rel)
+    rejected_rel = _rejected_rel(prepared.ordinal)
+    audit_rel = artifact_rel('stage5.trim_audit', nn=prepared.ordinal)
+    resolution_rel = artifact_rel('stage5.trim_resolution', nn=prepared.ordinal)
+    primary_sha: str | None = None
+    if _recovery_landed_primary(store, journal, rel=rel) is not None:
+        primary_sha = stage5_runs.file_sha256(ctx, rel)
+    desired_audit, audit_sha, resolution_sha = _trim_preflight_expectations(
+        ctx, store, prepared, artifact)
+    stage5_runs.recovery_target_state(
+        ctx, prepared.ordinal, journal, rel,
+        expected_file_sha256=primary_sha)
+    stage5_runs.recovery_target_state(
+        ctx, prepared.ordinal, journal, invalid_rel, expected_absent=True)
+    stage5_runs.recovery_target_state(
+        ctx, prepared.ordinal, journal, rejected_rel, expected_absent=True)
+    stage5_runs.recovery_target_state(
+        ctx, prepared.ordinal, journal, audit_rel,
+        expected_file_sha256=audit_sha,
+        expected_absent=desired_audit is None)
+    stage5_runs.recovery_target_state(
+        ctx, prepared.ordinal, journal, resolution_rel,
+        expected_file_sha256=resolution_sha,
+        expected_absent=resolution_sha is None)
+
+
+def _verify_recovery_targets(
+    ctx: RunContext,
+    store: ArtifactStore,
+    prepared: ChapterCandidateContext,
+    artifact: Chapter,
+    journal: PreparedRecoveryJournal,
+) -> None:
+    """正式 readback 后证明 recovery journal 的五个 touched path 全部收口。"""
+    rel = _rel(prepared.ordinal)
+    invalid_rel = paths.invalid_of(rel)
+    rejected_rel = _rejected_rel(prepared.ordinal)
+    audit_rel = artifact_rel('stage5.trim_audit', nn=prepared.ordinal)
+    resolution_rel = artifact_rel('stage5.trim_resolution', nn=prepared.ordinal)
+    primary_sha = stage5_runs.file_sha256(ctx, rel)
+    if primary_sha is None:
+        raise ProvenanceRefused(
+            f'Stage5 第 {prepared.ordinal} 章 recovery readback 后文件消失')
+    desired_audit, audit_sha, resolution_sha = _trim_preflight_expectations(
+        ctx, store, prepared, artifact)
+    states = [
+        stage5_runs.recovery_target_state(
+            ctx, prepared.ordinal, journal, rel,
+            expected_file_sha256=primary_sha),
+        stage5_runs.recovery_target_state(
+            ctx, prepared.ordinal, journal, invalid_rel,
+            expected_absent=True),
+        stage5_runs.recovery_target_state(
+            ctx, prepared.ordinal, journal, rejected_rel,
+            expected_absent=True),
+        stage5_runs.recovery_target_state(
+            ctx, prepared.ordinal, journal, audit_rel,
+            expected_file_sha256=audit_sha,
+            expected_absent=desired_audit is None),
+        stage5_runs.recovery_target_state(
+            ctx, prepared.ordinal, journal, resolution_rel,
+            expected_file_sha256=resolution_sha,
+            expected_absent=resolution_sha is None),
+    ]
+    if any(state != 'expected' for state in states):
+        raise ProvenanceRefused(
+            f'Stage5 第 {prepared.ordinal} 章 recovery 仍有 touched path 留在 baseline')
+
+
+def _finalize_recovered_prepared(
+    ctx: RunContext,
+    prepared: ChapterCandidateContext,
+    evaluation: ChapterCandidateEvaluation,
+    row: PreparedRecoveryChapter,
+    action: PreparedRecoveryAction,
+) -> ChapterCandidateDelivery:
+    """在逐章锁内把 source prepared 补成 typed canonical + committed lineage。"""
+    store = ArtifactStore(ctx)
+    rel = _rel(prepared.ordinal)
+    rejected_rel = _rejected_rel(prepared.ordinal)
+    audit_rel = artifact_rel('stage5.trim_audit', nn=prepared.ordinal)
+    resolution_rel = artifact_rel('stage5.trim_resolution', nn=prepared.ordinal)
+    with stage5_runs.commit_ownership(ctx.novel_dir, prepared.ordinal):
+        assert_chapter_candidate_current(ctx, prepared)
+        journal = stage5_runs.recovery_state(ctx, prepared.ordinal)
+        artifact = (
+            None if journal is None
+            else _recovery_landed_primary(store, journal, rel=rel))
+        if artifact is None:
+            artifact = _recovered_formal_artifact(
+                ctx, prepared, evaluation, row, action,
+                round_number=store.next_round(rel))
+        payload = artifact.model_dump(by_alias=True, mode='json')
+        finalization = _formal_finalization_payload(
+            prepared, evaluation, artifact)
+        journal = stage5_runs.prepare_recovery_journal(
+            ctx,
+            chapter=row,
+            action=action,
+            primary_payload=payload,
+            finalization_payload=finalization,
+        )
+        stage5_runs.verify_recovery_source(
+            ctx, prepared.ordinal, journal)
+        # journal 已存在、canonical 尚未写：再次从 manifest 还原本章 exact row，
+        # 以全局 source_adoption_id 做 0-or-exact 检查，堵住 manifest/journal
+        # 之间或 journal/live 之间出现的旧 target audit 尾窗。
+        stage5_runs.preclaim_recovery_journal(ctx, journal)
+
+        if journal.state == 'committed':
+            landed = verify_chapter_delivery(
+                ctx, prepared, artifact, rel=rel)
+            finalization = _formal_finalization_payload(
+                prepared, evaluation, landed)
+            stage5_runs.verify_recovery_committed(
+                ctx,
+                prepared.ordinal,
+                journal,
+                primary_payload=landed.model_dump(
+                    by_alias=True, mode='json'),
+                finalization_payload=finalization,
+            )
+            trim_notes, _desired = _over_length_audit(
+                [segment.model_dump() for segment in landed.segments],
+                prepared._entry,
+            )
+            _record_normalization_account(ctx, evaluation._account)
+            return ChapterCandidateDelivery(
+                outcome='formal', where=str(store.path(rel)), artifact=landed,
+                findings=evaluation.findings, trim_notes=tuple(trim_notes))
+
+        _preflight_recovery_targets(
+            ctx, store, prepared, artifact, journal)
+        assert_chapter_candidate_current(ctx, prepared)
+        with store.history_transaction(
+                rel, rejected_rel, audit_rel, resolution_rel):
+            if store.exists(rejected_rel):
+                store.archive_round(rejected_rel)
+
+            def commit(canonical_rel: str, candidate: Chapter) -> Any:
+                current = _recovery_landed_primary(
+                    store, journal, rel=canonical_rel)
+                if current is not None:
+                    if store.exists(paths.invalid_of(canonical_rel)):
+                        store.retire_invalid(canonical_rel)
+                    return store.path(canonical_rel)
+                assert_chapter_candidate_current(ctx, prepared)
+                return store.write_round(canonical_rel, candidate)
+
+            where_path, trim_notes = _commit_canonical_chapter(
+                store,
+                artifact,
+                expected_ordinal=prepared.ordinal,
+                commit=commit,
+            )
+            landed = verify_chapter_delivery(
+                ctx, prepared, artifact, rel=rel)
+            _verify_recovery_targets(
+                ctx, store, prepared, landed, journal)
+
+        _record_normalization_account(ctx, evaluation._account)
+        assert_chapter_candidate_current(
+            ctx, prepared, after_formal_commit=True)
+        landed_payload = landed.model_dump(by_alias=True, mode='json')
+        fingerprint = prov.projection_fingerprint(landed_payload)
+        ctx.ledger.note_prepared_recovery_adoption(
+            sid=ctx.sid,
+            purpose=row.purpose,
+            chapter=prepared.ordinal,
+            source_run_id=action.source_run_id,
+            source_code=row.source_code,
+            source_run_identity_sha256=row.source_run_identity_sha256,
+            source_run_file_sha256=row.source_run_file_sha256,
+            source_commit_sha256=row.source_commit_sha256,
+            source_commit_file_sha256=row.source_commit_file_sha256,
+            source_checkpoint_sha256=row.source_checkpoint_sha256,
+            source_checkpoint_file_sha256=row.source_checkpoint_file_sha256,
+            source_attempt_id=row.source_attempt_id,
+            source_response_sha256=row.source_response_sha256,
+            source_adoption_id=row.source_adoption_id,
+            subject_sha256=action.subject_sha256,
+            actor=action.actor,
+            reason=action.reason,
+            artifact=rel,
+            artifact_fingerprint=fingerprint,
+        )
+        assert_chapter_candidate_current(
+            ctx, prepared, after_formal_commit=True)
+        finalization = _formal_finalization_payload(
+            prepared, evaluation, landed)
+        stage5_runs.mark_recovery_committed(
+            ctx,
+            chapter=prepared.ordinal,
+            primary_payload=landed_payload,
+            finalization_payload=finalization,
+        )
+        committed = stage5_runs.recovery_state(ctx, prepared.ordinal)
+        if committed is None or committed.state != 'committed':
+            raise ProvenanceRefused(
+                f'Stage5 第 {prepared.ordinal} 章 recovery mark committed 后 journal 消失')
+        stage5_runs.verify_recovery_committed(
+            ctx,
+            prepared.ordinal,
+            committed,
+            primary_payload=landed_payload,
+            finalization_payload=finalization,
+        )
+    return ChapterCandidateDelivery(
+        outcome='formal', where=str(where_path), artifact=landed,
+        findings=evaluation.findings, trim_notes=tuple(trim_notes))
+
+
+def _require_prepared_recovery_zero_wire(ctx: RunContext) -> None:
+    stage5_runs.require_prepared_recovery_target_clean(ctx)
+
+
+def run_prepared_recovery(
+    ctx: RunContext,
+    source_run_id: str,
+    *,
+    actor: str,
+    reason: str,
+    subject_sha256: str,
+) -> CheckReport:
+    """显式采用整书 unresolved source prepared；只跑复验、正式写回与审计。"""
+    _require_prepared_recovery_zero_wire(ctx)
+    workpack = build_prepared_recovery_workpack(ctx, source_run_id)
+    stage5_runs.require_workpack_subject(workpack)
+    action = PreparedRecoveryAction(
+        actor=actor,
+        reason=reason,
+        subject_sha256=subject_sha256,
+        source_run_id=workpack.source_run_id,
+        target_run_id=ctx.run_id,
+    )
+    if action.subject_sha256 != workpack.subject_sha256:
+        raise ProvenanceRefused(
+            'prepared recovery --subject-sha256 与当前工作包不一致；请重新 emit 并审阅')
+    # API prepare 只是早反馈；producer 仍是不能绕过的最终授权口。恢复会让旧
+    # Stage5 Review stale，所以此处只验证当前 s4/writing/写作主体与计划章集。
+    from novel.orchestrator import approvals
+    approvals.authorize_prepared_recovery(
+        ctx.novel_dir.parent,
+        ctx.sid,
+        [row.output_ordinal for row in workpack.chapters],
+    )
+
+    manifest_raw: dict[str, Any] = {
+        'version': 1,
+        'kind': 'stage5-prepared-recovery-manifest-v1',
+        'workpack': workpack.model_dump(mode='json'),
+        'action': action.model_dump(mode='json'),
+        'manifest_sha256': '0' * 64,
+    }
+    manifest_raw['manifest_sha256'] = stage5_runs.manifest_sha256(manifest_raw)
+    manifest = PreparedRecoveryManifest.model_validate(manifest_raw)
+    stage5_runs.write_recovery_manifest(ctx, manifest)
+
+    source_scope = set(stage5_runs.source_prepared_envelopes(
+        ctx, workpack.source_run_id))
+    reviewed_scope = {row.output_ordinal for row in workpack.chapters}
+    if source_scope != reviewed_scope:
+        raise ProvenanceRefused(
+            'prepared recovery source run 的 prepared 章集在工作包冻结后漂移：'
+            f'已审={sorted(reviewed_scope)} 当前={sorted(source_scope)}')
+
+    store = ArtifactStore(ctx)
+    require_canonical_layout(store)
+    book = review.load_book(ctx, store)
+    written: list[str] = []
+    blocked: list[str] = []
+    judged: dict[int, list[Finding]] = {}
+    for row in workpack.chapters:
+        current_row, prepared, evaluation = _historical_recovery_unit(
+            ctx,
+            book,
+            source_run_id=workpack.source_run_id,
+            ordinal=row.output_ordinal,
+        )
+        journal = stage5_runs.recovery_state(ctx, row.output_ordinal)
+        comparable = current_row
+        if journal is not None:
+            # 第一次 prepared 后 live 可以已经是 baseline 或本 journal 目标；
+            # 这个漂移由 recovery_target_state 精确判，不用旧 workpack 假装重采样。
+            comparable = current_row.model_copy(update={
+                'current_baselines': dict(row.current_baselines),
+            })
+        if comparable != row:
+            raise ProvenanceRefused(
+                f'Stage5 第 {row.output_ordinal} 章 source/current producer '
+                '与已审 recovery workpack 漂移')
+        delivery = _finalize_recovered_prepared(
+            ctx, prepared, evaluation, row, action)
+        written.append(f'第 {row.output_ordinal} 章 → {delivery.where}')
+        blocked.extend(delivery.trim_notes)
+        judged[row.output_ordinal] = list(delivery.findings)
+        _require_prepared_recovery_zero_wire(ctx)
+    _require_prepared_recovery_zero_wire(ctx)
+    return _report(
+        ctx, store, written=written, blocked=blocked,
+        book=book, judged=judged)
 
 
 def _uses_agent_sessions(ctx: RunContext) -> bool:
@@ -2325,6 +2899,9 @@ def run_revise(ctx: RunContext, client: LlmClient,
     """`--revise`：把可反哺的结论连同上一轮成稿发回写手。**付费。**"""
     store = ArtifactStore(ctx)
     require_canonical_layout(store)
+    # 与 initial write 共用同一 producer 级 pre-wire reservation guard；
+    # 不能依赖 CLI，因为 NodeAgent/direct caller 也会走到这里。
+    stage5_runs.refuse_foreign_prepared_before_wire(ctx, chapters)
     book = review.load_book(ctx, store)
     # 付费反哺前必须先证明 Review 的上游、RULES、章集与
     # judged 主体都是当前的。旧规则/旧正文报告绝不能驱动一次付费重写。
