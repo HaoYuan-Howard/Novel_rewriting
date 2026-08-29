@@ -584,7 +584,7 @@ active_key(sid, node) -> str
 Output/_service/jobs.jsonl        append-only 事件流
 Output/_service/queues.jsonl      持久批量队列 append-only 事件流
 Output/_service/agent_runs.jsonl  headless agent append-only 事件流（含双授权快照）
-Output/_service/agent_sessions.jsonl commander / executor CLI 会话审计（wire v1）
+Output/_service/agent_sessions.jsonl commander / executor CLI 会话审计（wire v2）
 Output/_service/agent_progress.jsonl agent/runner 的 CLI 步骤观察轨迹
 Output/_service/logs/<job_id>.log 子进程 stdout+stderr，按字节追加
 Output/_service/ledger.jsonl      跨书逐请求成本事实
@@ -641,14 +641,19 @@ writing 授权与盘面；不得先查文件、再另读授权，从而留下两
 ### 7.0 `agent_sessions.jsonl` —— 内部 session wire，不是公开 HTTP 模型
 
 该账记录 commander / executor 各自的多轮 CLI 会话，供重放、成本对账和失败定位使用；它不属于
-artifact，也没有同名公开响应类型。`wire_version=1` 的每行键集固定为：
+artifact，也没有同名公开响应类型。`wire_version=2` 的每行键集固定为：
 
 `wire_version` · `session_run_id` · `parent_run_id` · `role` · `node` · `chapter` ·
 `subject_sha256` · `profile` · `provider_session_id` · `turn_index` · `attempt_id` ·
 `requested_model` · `actual_model` · `requested_effort` · `actual_effort` · `cli_version` ·
 `protocol_version` · `start_code_version` · `end_code_version` · `skill_sha256` ·
 `prompt_sha256` · `schema_sha256` · `usage` ·
-`process_state` · `delivery_state` · `error_kind` · `kind` · `ts`。
+`process_state` · `delivery_state` · `error_kind` ·
+`delivery_attempts` · `same_run_recovered` · `first_failure_phase` ·
+`first_failure_detail` · `kind` · `ts`。
+
+wire v2 在 v1 字段集之上只新增 ended 事件的提交诊断四元组，其余逐字相同；v1/legacy 0 只作
+只读接受，缺失事实投影为 `null`。
 
 | 轴 | 现役约束 |
 |---|---|
@@ -657,10 +662,12 @@ artifact，也没有同名公开响应类型。`wire_version=1` 的每行键集�
 | 实际执行 | requested 与 actual model/effort 分格，CLI 与 protocol 版本分格；每个新事件带启动代码版本，ended 另带结束版本，代码漂移时不能声明 delivered。缺失事实留 `null` / `unknown`，不能把 requested 冒充 actual |
 | 成本 | `usage` 的 prompt、cache hit/miss、completion、reasoning、total token 均可为 `null`；`null` 是未观测，不是 0 |
 | 终态 | `process_state=ok / failed / stopped / unknown` 与 `delivery_state=delivered / blocked / failed / unknown` 正交；进程退出不推出产物已交付 |
-| 隐私 | 只存 skill / prompt / schema 的 SHA-256，不存 prompt、响应正文、stdout 或 stderr |
+| 提交诊断 | ended 四元组只描述正式提交史：`delivery_attempts` ≥ 1 为发生过提交尝试；`same_run_recovered=true` 必须 `delivery_attempts≥2`；`first_failure_phase` 属于 `STAGE5_COMMIT_PHASES`；`first_failure_detail` 经生产侧截断脱敏（≤512、无控制字符）。四者皆可 `null`（未记录/未尝试），不得由其他状态倒推 |
+| 隐私 | 只存 skill / prompt / schema 的 SHA-256，不存 prompt、响应正文、stdout 或 stderr；`first_failure_detail` 只收异常摘要，同受此边界约束 |
 
-旧行没有 `wire_version` 时只在读盘边界投影成 legacy wire 0；缺失事实继续为 `None` / `unknown`。
-新写入不得生成 wire 0，也不得借当前 profile 默认补全旧 session 身份。
+旧行没有 `wire_version` 时只在读盘边界投影成 legacy wire 0；wire 1 按 legacy 接受（v2 四元组为
+`null`）。缺失事实继续为 `None` / `unknown`。新写入必须用当前 wire 版本，不得生成 wire 0/1，
+也不得借当前 profile 默认补全旧 session 身份。
 
 #### 7.0a Stage2 blueprint agent checkpoint —— 书内恢复态，不是公开 HTTP 模型
 

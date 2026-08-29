@@ -2381,8 +2381,18 @@ class Stage5SessionPool:
             'executor_failed': ('ok', 'failed', 'node_executor'),
         }[outcome]
 
-    def finish_chapter_session(self, chapter: int, *, outcome: str) -> None:
-        """一章正式终验后只结束本章 session；兄弟章仍可继续运行。"""
+    def finish_chapter_session(
+        self, chapter: int, *, outcome: str,
+        delivery_attempts: int | None = None,
+        same_run_recovered: bool | None = None,
+        first_failure_phase: str | None = None,
+        first_failure_detail: str | None = None,
+    ) -> None:
+        """一章正式终验后只结束本章 session；兄弟章仍可继续运行。
+
+        提交诊断四元组只在确实发生过正式提交尝试时由调用方给出
+        （``write.py`` 的提交链）；None = 未记录，不能倒推。
+        """
         ordinal = self._chapter(chapter)
         with self._lock:
             prepared = self._prepared_chapters
@@ -2409,6 +2419,10 @@ class Stage5SessionPool:
                     process_state=states[0],
                     delivery_state=states[1],
                     error_kind=states[2],
+                    delivery_attempts=delivery_attempts,
+                    same_run_recovered=same_run_recovered,
+                    first_failure_phase=first_failure_phase,
+                    first_failure_detail=first_failure_detail,
                     end_code_version=prov.code_version(),
                     only_if_open=True,
                 )
@@ -2417,6 +2431,10 @@ class Stage5SessionPool:
                     process_state=states[0],
                     delivery_state=states[1],
                     error_kind=states[2],
+                    delivery_attempts=delivery_attempts,
+                    same_run_recovered=same_run_recovered,
+                    first_failure_phase=first_failure_phase,
+                    first_failure_detail=first_failure_detail,
                 )
             self._terminal[ordinal] = states
 

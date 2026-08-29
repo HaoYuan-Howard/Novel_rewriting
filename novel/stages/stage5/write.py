@@ -46,13 +46,15 @@ import json
 import os
 import re
 import threading
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from concurrent.futures import CancelledError, ThreadPoolExecutor, as_completed
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol
 
-from contracts.invariants import STOP_REWRITE_AFTER
+from contracts.invariants import STAGE5_COMMIT_PHASES, STOP_REWRITE_AFTER
+from novel.agent_session_audit import sanitize_failure_detail
 from novel.config import MAX_CONCURRENCY
 from contracts.rules import REGISTRY
 from contracts.schema.common import (
@@ -92,6 +94,69 @@ MAX_TOKENS = 16000
 # ``RunContext.validation_reads`` 保存/恢复实例上的三张来源账，不是线程局部。
 # Stage5 各章模型请求仍可并发；只有极短的正式上游 currentness 重读必须串行。
 _STAGE5_VALIDATION_LOCK = threading.RLock()
+
+
+@dataclass(frozen=True)
+class _CommitOutcomeDiagnostics:
+    """一次终态收口要写进 session ended 的提交诊断投影。
+
+    ``attempts`` 是本章发生过的正式提交调用数（首次 1、sweep 恢复后 2）；
+    ``recovered=True`` 表示首次提交异常后 same-run 重放成功。它们只描述
+    已发生的提交史，不参与判定。
+    """
+
+    attempts: int
+    recovered: bool
+    failure_phase: str | None
+    failure_detail: str | None
+
+
+@dataclass
+class _CommitDiagnostics:
+    """一次正式提交调用的阶段诊断，喂给 session audit wire v2 的 ended 事件。
+
+    ``phase`` 是「当前执行段」游标（嵌套段退出时恢复上一段）；``failure_phase``
+    与 ``detail`` 在**首次**异常时定格（取值面 ``STAGE5_COMMIT_PHASES``，摘要经
+    :func:`sanitize_failure_detail` 截断脱敏），不被段恢复覆盖——收口方读的是
+    这两个格子。它只描述失败，不参与任何判定——拿它分支业务逻辑是误用。
+    """
+
+    phase: str | None = None
+    failure_phase: str | None = None
+    detail: str | None = None
+
+    def fail(self, exc: BaseException, *, phase: str) -> None:
+        if self.failure_phase is not None:
+            return  # 首个异常才是「第一次提交停在哪」；重入不覆盖
+        self.failure_phase = phase
+        self.detail = sanitize_failure_detail(f'{type(exc).__name__}: {exc}')
+
+
+@contextmanager
+def _commit_phase(
+    box: _CommitDiagnostics | None, phase: str,
+) -> Iterator[None]:
+    """把一段提交代码标进 ``STAGE5_COMMIT_PHASES``。
+
+    提交失败必须能说出发生在哪一段；只留笼统的 ``artifact_verification``
+    曾让一次 1/17 落盘事故无账可查。段名拼错时在进入阶段即刻终态，而不是
+    等真失败了才发现诊断面没登记。退出时恢复上一个段名：嵌套段（事务内的
+    typed_readback）失败后，``phase`` 必须回答「异常发生时正在执行哪段」。
+    """
+    if phase not in STAGE5_COMMIT_PHASES:
+        raise ValueError(f'提交阶段未登记：{phase!r}')
+    if box is None:
+        yield
+        return
+    previous = box.phase
+    box.phase = phase
+    try:
+        yield
+    except BaseException as exc:
+        box.fail(exc, phase=phase)
+        raise
+    finally:
+        box.phase = previous
 
 
 class _ChapterResponseSource(Protocol):
@@ -141,6 +206,10 @@ class _ChapterResponseSource(Protocol):
 
     def finish_chapter_session(
         self, chapter: int, *, outcome: str,
+        delivery_attempts: int | None = None,
+        same_run_recovered: bool | None = None,
+        first_failure_phase: str | None = None,
+        first_failure_detail: str | None = None,
     ) -> None: ...
 
 
@@ -1190,8 +1259,17 @@ def _assert_chapter_evaluation_identity(
 
 def _record_normalization_account(
     ctx: RunContext,
+    ordinal: int,
     account: M.NormalizeAccount,
 ) -> None:
+    """把一章的归一读数并进批级 accounting；同章一次 run 只并一次。
+
+    ``RunContext.accounting`` 是批级累计读数，same-run sweep 重放同一章时
+    不得把同一份响应的读数并两遍；反过来，首次提交若在记账前就失败，
+    重放仍要能补上——去重键是「章」，不是「第几次调用」。
+    """
+    if not ctx.once(f'stage5.normalize.{int(ordinal)}'):
+        return
     for key, value in account.counters().items():
         ctx.account(key, int(ctx.accounting.get(key) or 0) + value)
 
@@ -1250,80 +1328,85 @@ def verify_chapter_delivery(
     assert_chapter_candidate_current(
         ctx, prepared, after_formal_commit=rel == formal_rel)
     store = ArtifactStore(ctx)
-    landed, _raw = store.read_own(Chapter, rel, require_current=True)
-    expected_payload = expected.model_dump(by_alias=True, mode='json')
-    landed_payload = landed.model_dump(by_alias=True, mode='json')
-    if (expected_payload != landed_payload
-            or _canonical_sha256(expected_payload)
-            != _canonical_sha256(landed_payload)):
-        raise ProvenanceRefused(
-            f'Stage5 第 {prepared.ordinal} 章 readback 与本次终态候选不完全相等')
-    _require_canonical_slots(landed.segments, prepared._entry)
-    inspected = _inspection_account(
-        [segment.model_dump() for segment in landed.segments], prepared._book)
-    findings, errors, _warnings = _judge(
-        landed.text,
-        prepared._entry,
-        prepared._book,
-        mat=prepared.given,
-        account=inspected,
-        segments=[segment.model_dump() for segment in landed.segments],
-    )
-    del findings
-    if tuple(errors) != tuple(landed.errs or ()):
-        raise ProvenanceRefused(
-            f'Stage5 第 {prepared.ordinal} 章 readback 的 HARD 投影不可复算')
-    if rel == formal_rel:
-        if prepared.revision:
-            revision_of = getattr(landed.provenance, 'revision_of', None)
-            if revision_of != prov.fingerprint(prepared._prev_text):
-                raise ProvenanceRefused(
-                    f'Stage5 第 {prepared.ordinal} 章正式 readback 未绑定冻结旧稿')
-        if errors:
+    # typed readback 与 TrimAudit/Resolution 核验是「能不能交付」的判定读，
+    # 不是本产物的实质输入：全部关进 validation_reads，任何一处开始记来源边
+    # 都会立刻被 finalize 的提交前后边快照断言抓成假依赖（P0-1）。
+    with _STAGE5_VALIDATION_LOCK, ctx.validation_reads():
+        landed, _raw = store.read_own(Chapter, rel, require_current=True)
+        expected_payload = expected.model_dump(by_alias=True, mode='json')
+        landed_payload = landed.model_dump(by_alias=True, mode='json')
+        if (expected_payload != landed_payload
+                or _canonical_sha256(expected_payload)
+                != _canonical_sha256(landed_payload)):
             raise ProvenanceRefused(
-                f'Stage5 第 {prepared.ordinal} 章模型正式稿 readback 仍命中 HARD')
-        if store.exists(invalid_rel):
-            raise ProvenanceRefused(
-                f'Stage5 第 {prepared.ordinal} 章正式提交后仍有 live INVALID')
-        freshness = store.freshness(formal_rel)
-        if freshness.state != 'fresh':
-            raise ProvenanceRefused(
-                f'Stage5 第 {prepared.ordinal} 章 freshness='
-                f'{freshness.state}/{freshness.reason}；拒绝 delivered')
-        expected_round = int(getattr(landed.provenance, 'round', 0) or 0)
-        if store.next_round(formal_rel) != expected_round + 1:
-            raise ProvenanceRefused(
-                f'Stage5 第 {prepared.ordinal} 章 readback 不是最新正式轮次')
-        audit_rel = artifact_rel('stage5.trim_audit', nn=prepared.ordinal)
-        resolution_rel = artifact_rel('stage5.trim_resolution', nn=prepared.ordinal)
-        _notes, desired_audit = _over_length_audit(
-            [segment.model_dump() for segment in landed.segments],
+                f'Stage5 第 {prepared.ordinal} 章 readback 与本次终态候选不完全相等')
+        _require_canonical_slots(landed.segments, prepared._entry)
+        inspected = _inspection_account(
+            [segment.model_dump() for segment in landed.segments], prepared._book)
+        findings, errors, _warnings = _judge(
+            landed.text,
             prepared._entry,
+            prepared._book,
+            mat=prepared.given,
+            account=inspected,
+            segments=[segment.model_dump() for segment in landed.segments],
         )
-        if desired_audit is None:
-            if store.exists(audit_rel) or store.exists(resolution_rel):
-                raise ProvenanceRefused(
-                    f'Stage5 第 {prepared.ordinal} 章正文未超限却残留 live trim 状态')
-        else:
-            if not store.exists(audit_rel):
-                raise ProvenanceRefused(
-                    f'Stage5 第 {prepared.ordinal} 章超限正文缺 live TrimAudit')
-            actual_audit, actual_sha256 = store.read_own_with_sha256(
-                TrimAudit, audit_rel)
-            if actual_audit != desired_audit:
-                raise ProvenanceRefused(
-                    f'Stage5 第 {prepared.ordinal} 章 TrimAudit 未绑定 readback 正文')
-            if store.exists(resolution_rel):
-                from novel.stages.stage5 import trim_resolution
-                if not trim_resolution.matches_current_audit(
-                        store, actual_audit, actual_sha256):
+        del findings
+        if tuple(errors) != tuple(landed.errs or ()):
+            raise ProvenanceRefused(
+                f'Stage5 第 {prepared.ordinal} 章 readback 的 HARD 投影不可复算')
+        if rel == formal_rel:
+            if prepared.revision:
+                revision_of = getattr(landed.provenance, 'revision_of', None)
+                if revision_of != prov.fingerprint(prepared._prev_text):
                     raise ProvenanceRefused(
-                        f'Stage5 第 {prepared.ordinal} 章 trim resolution 已过期')
-    elif not errors:
-        raise ProvenanceRefused(
-            f'Stage5 第 {prepared.ordinal} 章 INVALID readback 已无 HARD；'
-            '不能把可正式化候选留在问题路径')
-    return landed
+                        f'Stage5 第 {prepared.ordinal} 章正式 readback 未绑定冻结旧稿')
+            if errors:
+                raise ProvenanceRefused(
+                    f'Stage5 第 {prepared.ordinal} 章模型正式稿 readback 仍命中 HARD')
+            if store.exists(invalid_rel):
+                raise ProvenanceRefused(
+                    f'Stage5 第 {prepared.ordinal} 章正式提交后仍有 live INVALID')
+            freshness = store.freshness(formal_rel)
+            if freshness.state != 'fresh':
+                raise ProvenanceRefused(
+                    f'Stage5 第 {prepared.ordinal} 章 freshness='
+                    f'{freshness.state}/{freshness.reason}；拒绝 delivered')
+            expected_round = int(getattr(landed.provenance, 'round', 0) or 0)
+            if store.next_round(formal_rel) != expected_round + 1:
+                raise ProvenanceRefused(
+                    f'Stage5 第 {prepared.ordinal} 章 readback 不是最新正式轮次')
+            audit_rel = artifact_rel('stage5.trim_audit', nn=prepared.ordinal)
+            resolution_rel = artifact_rel(
+                'stage5.trim_resolution', nn=prepared.ordinal)
+            _notes, desired_audit = _over_length_audit(
+                [segment.model_dump() for segment in landed.segments],
+                prepared._entry,
+            )
+            if desired_audit is None:
+                if store.exists(audit_rel) or store.exists(resolution_rel):
+                    raise ProvenanceRefused(
+                        f'Stage5 第 {prepared.ordinal} 章正文未超限却残留 live trim 状态')
+            else:
+                if not store.exists(audit_rel):
+                    raise ProvenanceRefused(
+                        f'Stage5 第 {prepared.ordinal} 章超限正文缺 live TrimAudit')
+                actual_audit, actual_sha256 = store.read_own_with_sha256(
+                    TrimAudit, audit_rel)
+                if actual_audit != desired_audit:
+                    raise ProvenanceRefused(
+                        f'Stage5 第 {prepared.ordinal} 章 TrimAudit 未绑定 readback 正文')
+                if store.exists(resolution_rel):
+                    from novel.stages.stage5 import trim_resolution
+                    if not trim_resolution.matches_current_audit(
+                            store, actual_audit, actual_sha256):
+                        raise ProvenanceRefused(
+                            f'Stage5 第 {prepared.ordinal} 章 trim resolution 已过期')
+        elif not errors:
+            raise ProvenanceRefused(
+                f'Stage5 第 {prepared.ordinal} 章 INVALID readback 已无 HARD；'
+                '不能把可正式化候选留在问题路径')
+        return landed
 
 
 def _formal_artifact(
@@ -1332,8 +1415,14 @@ def _formal_artifact(
     evaluation: ChapterCandidateEvaluation,
     *,
     round_number: int,
+    resume_claim: bool = False,
 ) -> Chapter:
-    """从已 checkpoint 的终态候选铸一份正式 Chapter；调用即结算本章 usage。"""
+    """从已 checkpoint 的终态候选铸一份正式 Chapter；调用即结算本章 usage。
+
+    ``resume_claim=True`` 只由 same-run deterministic sweep 的重放传入：第一次
+    提交可能在 usage 结算之后、commit journal 落盘之前失败，重放时按同一
+    checkpoint/候选接续那笔结算，而不是重新claim或伪造零 usage。
+    """
     extra: dict[str, Any] = {
         'round': round_number,
         'request_fingerprint': evaluation.request_fingerprint,
@@ -1353,6 +1442,7 @@ def _formal_artifact(
             if prepared.revision else prompt_record),
         model=evaluation.requested_model,
         adopted_models=[evaluation.adopted_model],
+        resume_claim=resume_claim,
         **extra,
     )
     return _chapter_record(
@@ -1417,7 +1507,21 @@ def _trim_preflight_expectations(
     prepared: ChapterCandidateContext,
     artifact: Chapter,
 ) -> tuple[TrimAudit | None, str | None, str | None]:
-    """返回 desired audit，以及当前已经安全等于目标的 audit/resolution file SHA。"""
+    """返回 desired audit，以及当前已经安全等于目标的 audit/resolution file SHA。
+
+    只服务写前/写后核验：整段读进 ``validation_reads``，TrimAudit/Resolution
+    的字节读不得冒充本产物的实质输入。
+    """
+    with _STAGE5_VALIDATION_LOCK, ctx.validation_reads():
+        return _trim_preflight_expectations_locked(ctx, store, prepared, artifact)
+
+
+def _trim_preflight_expectations_locked(
+    ctx: RunContext,
+    store: ArtifactStore,
+    prepared: ChapterCandidateContext,
+    artifact: Chapter,
+) -> tuple[TrimAudit | None, str | None, str | None]:
     _notes, desired_audit = _over_length_audit(
         [segment.model_dump() for segment in artifact.segments],
         prepared._entry,
@@ -1457,6 +1561,18 @@ def _preflight_formal_commit_targets(
     record: Mapping[str, Any],
 ) -> None:
     """任何写前证明五个 live 路径都仍是 baseline 或本 journal 的安全目标。"""
+    with _STAGE5_VALIDATION_LOCK, ctx.validation_reads():
+        _preflight_formal_commit_targets_locked(
+            ctx, store, prepared, artifact, record)
+
+
+def _preflight_formal_commit_targets_locked(
+    ctx: RunContext,
+    store: ArtifactStore,
+    prepared: ChapterCandidateContext,
+    artifact: Chapter,
+    record: Mapping[str, Any],
+) -> None:
     rel = _rel(prepared.ordinal)
     invalid_rel = paths.invalid_of(rel)
     rejected_rel = _rejected_rel(prepared.ordinal)
@@ -1493,6 +1609,18 @@ def _verify_formal_commit_targets(
     record: Mapping[str, Any],
 ) -> None:
     """readback 后把 journal 的全部 live touched path 收敛到唯一 post state。"""
+    with _STAGE5_VALIDATION_LOCK, ctx.validation_reads():
+        _verify_formal_commit_targets_locked(
+            ctx, store, prepared, artifact, record)
+
+
+def _verify_formal_commit_targets_locked(
+    ctx: RunContext,
+    store: ArtifactStore,
+    prepared: ChapterCandidateContext,
+    artifact: Chapter,
+    record: Mapping[str, Any],
+) -> None:
     rel = _rel(prepared.ordinal)
     invalid_rel = paths.invalid_of(rel)
     rejected_rel = _rejected_rel(prepared.ordinal)
@@ -1528,148 +1656,202 @@ def _verify_formal_commit_targets(
             f'Stage5 第 {prepared.ordinal} 章正式事务仍有 live touched path 留在 baseline')
 
 
+def _assert_commit_edges_stable(
+    ctx: RunContext,
+    snapshot: Mapping[str, InputEdge],
+    ordinal: int,
+    boundary: str,
+) -> None:
+    """提交链前后断言来源边集合未变化。
+
+    正式提交段里的所有核验读都必须是 validation_reads（判定读，不是实质输入）；
+    任何一处开始记边，都会在下一章的 provenance 里冒充成假依赖——这正是
+    「前章自有审计污染后章 provenance」那类静默事故的形状。发现即关闭式失败，
+    而不是把污染的账落盘。
+    """
+    current = ctx.inputs
+    if current != dict(snapshot):
+        added = sorted(set(current) - set(snapshot))
+        removed = sorted(set(snapshot) - set(current))
+        changed = sorted(
+            key for key in set(current) & set(snapshot)
+            if current[key] != snapshot[key])
+        raise ProvenanceRefused(
+            f'Stage5 第 {ordinal} 章提交链 {boundary} 处来源边漂移：'
+            f'新增={added} 消失={removed} 变更={changed}；'
+            '核验读必须走 validation_reads，不得把自有审计或他章状态记成本章输入')
+
+
 def _finalize_formal_agent_candidate(
     ctx: RunContext,
     prepared: ChapterCandidateContext,
     evaluation: ChapterCandidateEvaluation,
+    *,
+    diagnostics: _CommitDiagnostics | None = None,
+    resume_claim: bool = False,
 ) -> ChapterCandidateDelivery:
-    """逐章所有权锁内补完 prepared 尾窗，直至 typed delivery + adoption + committed。"""
+    """逐章所有权锁内补完 prepared 尾窗，直至 typed delivery + adoption + committed。
+
+    ``resume_claim`` 语义见 :func:`_formal_artifact`；``diagnostics`` 记录本调用
+    停在 ``STAGE5_COMMIT_PHASES`` 的哪一段。本函数**零 wire**：不建 driver、
+    不探针、不发任何模型请求，因此它同时是首次提交与 same-run sweep 的唯一重放体。
+    """
     store = ArtifactStore(ctx)
     rel = _rel(prepared.ordinal)
     rejected_rel = _rejected_rel(prepared.ordinal)
     audit_rel = artifact_rel('stage5.trim_audit', nn=prepared.ordinal)
     resolution_rel = artifact_rel('stage5.trim_resolution', nn=prepared.ordinal)
     with stage5_runs.commit_ownership(ctx.novel_dir, prepared.ordinal):
-        assert_chapter_candidate_current(ctx, prepared)
-        stage5_runs.refuse_foreign_commit_reservations(ctx, prepared.ordinal)
-        record = (
-            stage5_runs.committed(ctx, prepared.ordinal)
-            or stage5_runs.prepared(ctx, prepared.ordinal))
-        artifact = (
-            None if record is None
-            else _journal_landed_primary(store, record, rel=rel))
-        if artifact is None:
-            artifact = _formal_artifact(
-                ctx,
-                prepared,
-                evaluation,
-                round_number=store.next_round(rel),
-            )
-        payload = artifact.model_dump(by_alias=True, mode='json')
-        finalization = _formal_finalization_payload(
-            prepared, evaluation, artifact)
-        if record is None:
+        with _commit_phase(diagnostics, 'prepare_commit'):
             assert_chapter_candidate_current(ctx, prepared)
-            record = stage5_runs.prepare_commit(
-                ctx,
-                chapter=prepared.ordinal,
-                primary_payload=payload,
-                finalization_payload=finalization,
-                attempt_id=evaluation.source_attempt_id,
-            )
-        elif (not stage5_runs.verify_commit_primary(record, payload)
-              or not stage5_runs.verify_commit_finalization(
-                  record, finalization)):
-            raise ProvenanceRefused(
-                f'Stage5 第 {prepared.ordinal} 章 prepared journal 已绑定另一份候选')
+            stage5_runs.refuse_foreign_commit_reservations(ctx, prepared.ordinal)
+            record = (
+                stage5_runs.committed(ctx, prepared.ordinal)
+                or stage5_runs.prepared(ctx, prepared.ordinal))
+            artifact = (
+                None if record is None
+                else _journal_landed_primary(store, record, rel=rel))
+            if artifact is None:
+                artifact = _formal_artifact(
+                    ctx,
+                    prepared,
+                    evaluation,
+                    round_number=store.next_round(rel),
+                    resume_claim=resume_claim,
+                )
+            payload = artifact.model_dump(by_alias=True, mode='json')
+            finalization = _formal_finalization_payload(
+                prepared, evaluation, artifact)
+            if record is None:
+                assert_chapter_candidate_current(ctx, prepared)
+                record = stage5_runs.prepare_commit(
+                    ctx,
+                    chapter=prepared.ordinal,
+                    primary_payload=payload,
+                    finalization_payload=finalization,
+                    attempt_id=evaluation.source_attempt_id,
+                )
+            elif (not stage5_runs.verify_commit_primary(record, payload)
+                  or not stage5_runs.verify_commit_finalization(
+                      record, finalization)):
+                raise ProvenanceRefused(
+                    f'Stage5 第 {prepared.ordinal} 章 prepared journal 已绑定另一份候选')
+        # 候选与 provenance 此刻已完全铸定；从这里到提交结束，来源边不得再变。
+        edges_snapshot = ctx.inputs
 
         if record.get('state') == 'committed':
-            purpose, attempt_id = stage5_runs.restore_commit_adoption(
-                ctx, prepared.ordinal, record)
-            if (purpose != prepared.purpose
-                    or attempt_id != evaluation.source_attempt_id):
-                raise ProvenanceRefused(
-                    f'Stage5 第 {prepared.ordinal} 章 committed adoption 与候选漂移')
-            landed = verify_chapter_delivery(
-                ctx, prepared, artifact, rel=rel)
-            finalization = _formal_finalization_payload(
-                prepared, evaluation, landed)
-            stage5_runs.verify_committed_delivery(
-                ctx,
-                prepared.ordinal,
-                record,
-                primary_payload=landed.model_dump(
-                    by_alias=True, mode='json'),
-                finalization_payload=finalization,
-            )
-            trim_notes, _desired = _over_length_audit(
-                [segment.model_dump() for segment in landed.segments],
-                prepared._entry,
-            )
-            _record_normalization_account(ctx, evaluation._account)
+            with _commit_phase(diagnostics, 'adoption'):
+                purpose, attempt_id = stage5_runs.restore_commit_adoption(
+                    ctx, prepared.ordinal, record)
+                if (purpose != prepared.purpose
+                        or attempt_id != evaluation.source_attempt_id):
+                    raise ProvenanceRefused(
+                        f'Stage5 第 {prepared.ordinal} 章 committed adoption 与候选漂移')
+            with _commit_phase(diagnostics, 'typed_readback'):
+                landed = verify_chapter_delivery(
+                    ctx, prepared, artifact, rel=rel)
+            with _commit_phase(diagnostics, 'committed_verify'):
+                finalization = _formal_finalization_payload(
+                    prepared, evaluation, landed)
+                stage5_runs.verify_committed_delivery(
+                    ctx,
+                    prepared.ordinal,
+                    record,
+                    primary_payload=landed.model_dump(
+                        by_alias=True, mode='json'),
+                    finalization_payload=finalization,
+                )
+                trim_notes, _desired = _over_length_audit(
+                    [segment.model_dump() for segment in landed.segments],
+                    prepared._entry,
+                )
+                _record_normalization_account(
+                    ctx, prepared.ordinal, evaluation._account)
+                _assert_commit_edges_stable(
+                    ctx, edges_snapshot, prepared.ordinal, 'committed 恢复收尾')
             return ChapterCandidateDelivery(
                 outcome='formal', where=str(store.path(rel)), artifact=landed,
                 findings=evaluation.findings,
                 trim_notes=tuple(trim_notes),
             )
 
-        _preflight_formal_commit_targets(
-            ctx, store, prepared, artifact, record)
-        assert_chapter_candidate_current(ctx, prepared)
-        with store.history_transaction(
-                rel, rejected_rel, audit_rel, resolution_rel):
-            if store.exists(rejected_rel):
-                store.archive_round(rejected_rel)
+        with _commit_phase(diagnostics, 'formal_write'):
+            _preflight_formal_commit_targets(
+                ctx, store, prepared, artifact, record)
+            assert_chapter_candidate_current(ctx, prepared)
+            with store.history_transaction(
+                    rel, rejected_rel, audit_rel, resolution_rel):
+                if store.exists(rejected_rel):
+                    store.archive_round(rejected_rel)
 
-            def commit(canonical_rel: str, candidate: Chapter) -> Any:
-                current = _journal_landed_primary(
-                    store, record, rel=canonical_rel)
-                if current is not None:
-                    # crash 可能发生在 formal replace 与 INVALID 退休之间；跳过
-                    # 新轮写入，只补同名问题稿的确定性尾巴。
-                    if store.exists(paths.invalid_of(canonical_rel)):
-                        store.retire_invalid(canonical_rel)
-                    return store.path(canonical_rel)
-                assert_chapter_candidate_current(ctx, prepared)
-                return store.write_round(canonical_rel, candidate)
+                def commit(canonical_rel: str, candidate: Chapter) -> Any:
+                    current = _journal_landed_primary(
+                        store, record, rel=canonical_rel)
+                    if current is not None:
+                        # crash 可能发生在 formal replace 与 INVALID 退休之间；跳过
+                        # 新轮写入，只补同名问题稿的确定性尾巴。
+                        if store.exists(paths.invalid_of(canonical_rel)):
+                            store.retire_invalid(canonical_rel)
+                        return store.path(canonical_rel)
+                    assert_chapter_candidate_current(ctx, prepared)
+                    return store.write_round(canonical_rel, candidate)
 
-            where_path, trim_notes = _commit_canonical_chapter(
-                store,
-                artifact,
-                expected_ordinal=prepared.ordinal,
-                commit=commit,
+                where_path, trim_notes = _commit_canonical_chapter(
+                    store,
+                    artifact,
+                    expected_ordinal=prepared.ordinal,
+                    commit=commit,
+                )
+                # typed readback 留在回滚域内：核验失败 = 本次写盘整体回滚，
+                # live 停在 baseline，sweep 才能按 prepared journal 原样重放。
+                with _commit_phase(diagnostics, 'typed_readback'):
+                    landed = verify_chapter_delivery(
+                        ctx, prepared, artifact, rel=rel)
+                    _verify_formal_commit_targets(
+                        ctx, store, prepared, landed, record)
+
+        with _commit_phase(diagnostics, 'adoption'):
+            _record_normalization_account(
+                ctx, prepared.ordinal, evaluation._account)
+            assert_chapter_candidate_current(
+                ctx, prepared, after_formal_commit=True)
+            fingerprint = prov.projection_fingerprint(
+                landed.model_dump(by_alias=True, mode='json'))
+            ctx.ledger.note_adoption(
+                sid=ctx.sid,
+                node=ctx.node,
+                purpose=evaluation.accepted_purpose,
+                attempt_id=evaluation.source_attempt_id,
+                artifact=rel,
+                artifact_fingerprint=fingerprint,
+                chapter=prepared.ordinal,
             )
-            landed = verify_chapter_delivery(
-                ctx, prepared, artifact, rel=rel)
-            _verify_formal_commit_targets(
-                ctx, store, prepared, landed, record)
-
-        _record_normalization_account(ctx, evaluation._account)
-        assert_chapter_candidate_current(
-            ctx, prepared, after_formal_commit=True)
-        fingerprint = prov.projection_fingerprint(
-            landed.model_dump(by_alias=True, mode='json'))
-        ctx.ledger.note_adoption(
-            sid=ctx.sid,
-            node=ctx.node,
-            purpose=evaluation.accepted_purpose,
-            attempt_id=evaluation.source_attempt_id,
-            artifact=rel,
-            artifact_fingerprint=fingerprint,
-            chapter=prepared.ordinal,
-        )
-        assert_chapter_candidate_current(
-            ctx, prepared, after_formal_commit=True)
-        landed_payload = landed.model_dump(by_alias=True, mode='json')
-        finalization = _formal_finalization_payload(
-            prepared, evaluation, landed)
-        stage5_runs.mark_committed(
-            ctx,
-            chapter=prepared.ordinal,
-            primary_payload=landed_payload,
-            finalization_payload=finalization,
-        )
-        committed = stage5_runs.committed(ctx, prepared.ordinal)
-        if committed is None:
-            raise ProvenanceRefused(
-                f'Stage5 第 {prepared.ordinal} 章 mark committed 后 journal 消失')
-        stage5_runs.verify_committed_delivery(
-            ctx,
-            prepared.ordinal,
-            committed,
-            primary_payload=landed_payload,
-            finalization_payload=finalization,
-        )
+            assert_chapter_candidate_current(
+                ctx, prepared, after_formal_commit=True)
+        with _commit_phase(diagnostics, 'mark_committed'):
+            landed_payload = landed.model_dump(by_alias=True, mode='json')
+            finalization = _formal_finalization_payload(
+                prepared, evaluation, landed)
+            stage5_runs.mark_committed(
+                ctx,
+                chapter=prepared.ordinal,
+                primary_payload=landed_payload,
+                finalization_payload=finalization,
+            )
+        with _commit_phase(diagnostics, 'committed_verify'):
+            committed = stage5_runs.committed(ctx, prepared.ordinal)
+            if committed is None:
+                raise ProvenanceRefused(
+                    f'Stage5 第 {prepared.ordinal} 章 mark committed 后 journal 消失')
+            stage5_runs.verify_committed_delivery(
+                ctx,
+                prepared.ordinal,
+                committed,
+                primary_payload=landed_payload,
+                finalization_payload=finalization,
+            )
+            _assert_commit_edges_stable(
+                ctx, edges_snapshot, prepared.ordinal, 'committed 终验')
     return ChapterCandidateDelivery(
         outcome='formal', where=str(where_path), artifact=landed,
         findings=evaluation.findings,
@@ -1682,8 +1864,17 @@ def finalize_chapter_candidate(
     source: _ChapterResponseSource,
     prepared: ChapterCandidateContext,
     evaluation: ChapterCandidateEvaluation,
+    *,
+    diagnostics: _CommitDiagnostics | None = None,
+    same_run_replay: bool = False,
 ) -> ChapterCandidateDelivery:
-    """终态只提交一次；中间 agent HARD 候选不得调用本函数。"""
+    """终态只提交一次；中间 agent HARD 候选不得调用本函数。
+
+    ``same_run_replay=True`` 只由 ``_run_group_parallel`` 的 same-run
+    deterministic sweep 传入：表示这是同一 run 内、同一 checkpoint 候选的
+    有界重放（usage 结算接续、归一记账去重），不是一次新的生成尝试。
+    本函数零 wire，重放不会产生任何模型请求。
+    """
     if ctx.node != 'stage5.write':
         raise ValueError(
             f'finalize_chapter_candidate 只接受 stage5.write，实得 {ctx.node!r}')
@@ -1726,7 +1917,8 @@ def finalize_chapter_candidate(
 
     if not evaluation.errors:
         return _finalize_formal_agent_candidate(
-            ctx, prepared, evaluation)
+            ctx, prepared, evaluation,
+            diagnostics=diagnostics, resume_claim=same_run_replay)
 
     rel = _rel(prepared.ordinal)
     round_number = store.next_round(rel)
@@ -1749,9 +1941,10 @@ def finalize_chapter_candidate(
             if prepared.revision else prompt_record),
         model=evaluation.requested_model,
         adopted_models=[evaluation.adopted_model],
+        resume_claim=same_run_replay,
         **extra,
     )
-    _record_normalization_account(ctx, evaluation._account)
+    _record_normalization_account(ctx, prepared.ordinal, evaluation._account)
     segments = [segment.model_dump() for segment in evaluation.segments]
     artifact = _chapter_record(
         prepared._entry,
@@ -2159,7 +2352,8 @@ def _finalize_recovered_prepared(
                 [segment.model_dump() for segment in landed.segments],
                 prepared._entry,
             )
-            _record_normalization_account(ctx, evaluation._account)
+            _record_normalization_account(
+                ctx, prepared.ordinal, evaluation._account)
             return ChapterCandidateDelivery(
                 outcome='formal', where=str(store.path(rel)), artifact=landed,
                 findings=evaluation.findings, trim_notes=tuple(trim_notes))
@@ -2193,7 +2387,8 @@ def _finalize_recovered_prepared(
             _verify_recovery_targets(
                 ctx, store, prepared, landed, journal)
 
-        _record_normalization_account(ctx, evaluation._account)
+        _record_normalization_account(
+            ctx, prepared.ordinal, evaluation._account)
         assert_chapter_candidate_current(
             ctx, prepared, after_formal_commit=True)
         landed_payload = landed.model_dump(by_alias=True, mode='json')
@@ -2589,13 +2784,25 @@ def _run_group_parallel(
     )
     fatal: Exception | None = None
 
-    def finish_agent_session(ordinal: int, outcome: str) -> None:
+    def finish_agent_session(
+        ordinal: int, outcome: str, *,
+        delivery_attempts: int | None = None,
+        same_run_recovered: bool | None = None,
+        first_failure_phase: str | None = None,
+        first_failure_detail: str | None = None,
+    ) -> None:
         """ended 审计失败只阻断最终返回，不取消尚在运行的兄弟章。"""
         nonlocal fatal
         if not agent_sessions:
             return
         try:
-            client.finish_chapter_session(ordinal, outcome=outcome)
+            client.finish_chapter_session(
+                ordinal, outcome=outcome,
+                delivery_attempts=delivery_attempts,
+                same_run_recovered=same_run_recovered,
+                first_failure_phase=first_failure_phase,
+                first_failure_detail=first_failure_detail,
+            )
         except Exception as exc:
             if fatal is None:
                 fatal = exc
@@ -2761,26 +2968,33 @@ def _run_group_parallel(
                 tracker.finish(
                     ordinal, outcome='failed', detail='同批 session 隔离失败')
         else:
-            for ordinal in sorted(agent_candidates):
-                prepared, evaluation = agent_candidates[ordinal]
-                try:
-                    delivery = finalize_chapter_candidate(
-                        ctx, client, prepared, evaluation)
-                except Exception as exc:
-                    if fatal is None:
-                        fatal = exc
-                    finish_agent_session(ordinal, 'artifact_failed')
-                    blocked_by[ordinal] = (
-                        f'第 {ordinal} 章终态提交失败：{type(exc).__name__}: '
-                        f'{str(exc).splitlines()[0]}')
-                    tracker.finish(
-                        ordinal, outcome='failed', detail=str(exc).splitlines()[0])
-                    continue
+            first_pass_failures: dict[int, tuple[_CommitDiagnostics, Exception]] = {}
+
+            def settle_delivery(
+                ordinal: int,
+                delivery: ChapterCandidateDelivery,
+                *,
+                commit: _CommitOutcomeDiagnostics | None,
+            ) -> None:
+                """一次终态 delivery 的唯一收口：报告行 + tracker + ended 审计。
+
+                ``commit`` 非 None 表示本章经历过提交重放并成功；首次提交即
+                成功也如实记 ``delivery_attempts=1/same_run_recovered=False``。
+                只有从未进入提交链的章（隔离失败、发请求前取消）才留 None。
+                session 只在这里落一次终态。
+                """
                 judged[ordinal] = list(delivery.findings)
                 if delivery.outcome == 'rejected_revision':
-                    finish_agent_session(ordinal, 'blocked')
                     artifact = delivery.artifact
                     assert isinstance(artifact, RejectedRevision)
+                    finish_agent_session(
+                        ordinal, 'blocked',
+                        delivery_attempts=1 if commit is None else commit.attempts,
+                        same_run_recovered=False if commit is None else commit.recovered,
+                        first_failure_phase=commit.failure_phase if commit else None,
+                        first_failure_detail=(
+                            commit.failure_detail if commit else None),
+                    )
                     line = (
                         f'第 {ordinal} 章 agent 修订候选终态仍相对旧稿退化，'
                         f'旧正式稿未覆盖；证据 → {delivery.where}'
@@ -2788,7 +3002,7 @@ def _run_group_parallel(
                     blocked_by[ordinal] = line
                     tracker.finish(
                         ordinal, outcome='blocked', detail=artifact.why[0])
-                    continue
+                    return
                 line = (
                     f'第 {ordinal} 章 → {delivery.where}'
                     + (f'（{len(delivery.errors)} 条阻断级）'
@@ -2798,6 +3012,11 @@ def _run_group_parallel(
                 finish_agent_session(
                     ordinal,
                     'blocked' if delivery.errors else 'delivered',
+                    delivery_attempts=1 if commit is None else commit.attempts,
+                    same_run_recovered=False if commit is None else commit.recovered,
+                    first_failure_phase=commit.failure_phase if commit else None,
+                    first_failure_detail=(
+                        commit.failure_detail if commit else None),
                 )
                 (blocked_by if delivery.errors else written_by)[ordinal] = line
                 tracker.finish(
@@ -2806,6 +3025,61 @@ def _run_group_parallel(
                     detail=(delivery.errors[0] if delivery.errors
                             else (delivery.trim_notes[0]
                                   if delivery.trim_notes else None)),
+                )
+
+            # ── 第一次提交：逐章走完整提交链。提交异常**不**立即结束 session，
+            # 也不落 blocked；失败章与失败阶段留给下面的 same-run sweep。
+            for ordinal in sorted(agent_candidates):
+                prepared, evaluation = agent_candidates[ordinal]
+                diagnostics = _CommitDiagnostics()
+                try:
+                    delivery = finalize_chapter_candidate(
+                        ctx, client, prepared, evaluation,
+                        diagnostics=diagnostics)
+                except Exception as exc:
+                    first_pass_failures[ordinal] = (diagnostics, exc)
+                    continue
+                settle_delivery(ordinal, delivery, commit=None)
+
+            # ── same-run deterministic sweep：每个失败章一次有界重放。
+            # finalize_chapter_candidate 本身零 wire（不建 driver/probe/session、
+            # 不查缓存、不发模型请求），重放体与首次提交完全相同，因此这里
+            # 天然是 deterministic 的；不再叠加第二次重试，防止把内容缺陷
+            # 掩成基础设施抖动。
+            for ordinal, (first_box, first_exc) in sorted(first_pass_failures.items()):
+                prepared, evaluation = agent_candidates[ordinal]
+                retry_box = _CommitDiagnostics()
+                try:
+                    delivery = finalize_chapter_candidate(
+                        ctx, client, prepared, evaluation,
+                        diagnostics=retry_box,
+                        same_run_replay=True)
+                except Exception:
+                    if fatal is None:
+                        fatal = first_exc
+                    finish_agent_session(
+                        ordinal, 'artifact_failed',
+                        delivery_attempts=2,
+                        same_run_recovered=False,
+                        first_failure_phase=first_box.failure_phase,
+                        first_failure_detail=first_box.detail,
+                    )
+                    blocked_by[ordinal] = (
+                        f'第 {ordinal} 章终态提交在 {first_box.phase} 失败，'
+                        f'same-run 重放仍未恢复：{type(first_exc).__name__}: '
+                        f'{str(first_exc).splitlines()[0]}')
+                    tracker.finish(
+                        ordinal, outcome='failed',
+                        detail=str(first_exc).splitlines()[0])
+                    continue
+                settle_delivery(
+                    ordinal, delivery,
+                    commit=_CommitOutcomeDiagnostics(
+                        attempts=2,
+                        recovered=True,
+                        failure_phase=first_box.failure_phase,
+                        failure_detail=first_box.detail,
+                    ),
                 )
 
     written = [written_by[key] for key in sorted(written_by)]

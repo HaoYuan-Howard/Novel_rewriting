@@ -31,6 +31,8 @@ _WIRE_KEYS = {
     'cli_version', 'protocol_version', 'start_code_version', 'end_code_version',
     'skill_sha256', 'prompt_sha256',
     'schema_sha256', 'usage', 'process_state', 'delivery_state', 'error_kind',
+    'delivery_attempts', 'same_run_recovered',
+    'first_failure_phase', 'first_failure_detail',
     'kind', 'ts',
 }
 

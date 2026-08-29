@@ -128,6 +128,16 @@ AGENT_SESSION_DELIVERY_STATE: Final = (
     'delivered', 'blocked', 'failed', 'unknown',
 )
 
+#: Stage5 正式提交链的固定阶段枚举（session audit wire v2 的 ``first_failure_phase``
+#: 取值面）。提交诊断必须能说出失败发生在哪一段；只留下笼统的
+#: ``artifact_verification`` 而不给阶段，是 P0-1 之前那次 1/17 落盘事故里
+#: 「谁也说不清停在哪一步」的根因，不得复发。``session_end`` 属于收尾段：
+#: 它失败时 ended 事件本身就写不出去，列进枚举是为取值面闭合。
+STAGE5_COMMIT_PHASES: Final = (
+    'prepare_commit', 'formal_write', 'typed_readback',
+    'adoption', 'mark_committed', 'committed_verify', 'session_end',
+)
+
 #: agent 运行配置的四个基础取值域。它们刻意做成类型别名而不是新的
 #: ``AGENT_*`` 自动发布常量：浏览器需要的是「driver → model → effort / mode」的
 #: **组合能力矩阵**，不是四张可以任意笛卡尔积的平面枚举。唯一发布口是动态的

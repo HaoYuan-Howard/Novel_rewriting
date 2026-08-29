@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 import json
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -386,7 +386,8 @@ def test_formal_journal_preflight_covers_every_transaction_path(monkeypatch):
 
     monkeypatch.setattr(write.stage5_runs, 'target_state', target_state)
     write._preflight_formal_commit_targets(
-        SimpleNamespace(), store, prepared, SimpleNamespace(), {'state': 'prepared'})
+        SimpleNamespace(validation_reads=nullcontext),
+        store, prepared, SimpleNamespace(), {'state': 'prepared'})
 
     formal = write._rel(4)
     assert calls == [
@@ -421,8 +422,14 @@ def test_batch_waits_for_session_isolation_before_any_formal_write(monkeypatch):
         def prepare_initial_sessions(self, chapters):
             assert tuple(chapters) == (1, 2)
 
-        def finish_chapter_session(self, chapter, *, outcome):
-            self.finished.append((chapter, outcome))
+        def finish_chapter_session(self, chapter, *, outcome,
+                                   delivery_attempts=None,
+                                   same_run_recovered=None,
+                                   first_failure_phase=None,
+                                   first_failure_detail=None):
+            self.finished.append(
+                (chapter, outcome, delivery_attempts, same_run_recovered,
+                 first_failure_phase, first_failure_detail))
 
     pool = Pool()
     monkeypatch.setattr(
@@ -457,4 +464,5 @@ def test_batch_waits_for_session_isolation_before_any_formal_write(monkeypatch):
         )
 
     assert sorted(pool.finished) == [
-        (1, 'artifact_failed'), (2, 'artifact_failed')]
+        (1, 'artifact_failed', None, None, None, None),
+        (2, 'artifact_failed', None, None, None, None)]

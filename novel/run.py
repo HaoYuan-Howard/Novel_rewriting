@@ -101,6 +101,22 @@ class RunContext:
     _usage_mark: UsageMark | None = field(default=None, repr=False)
     _root_clean_sha1: str | None = field(default=None, init=False, repr=False)
     _observed_roots: dict[str, str] = field(default_factory=dict, init=False, repr=False)
+    #: 进程内「同 key 只生效一次」的去重账。服务 same-run deterministic sweep：
+    #: 正式提交重放会重走记账/合并段，批级累计读数不能因一次有界重放翻倍。
+    _once_keys: set[str] = field(default_factory=set, init=False, repr=False)
+
+    def once(self, key: str) -> bool:
+        """同一把 key 在本次 run 内只让第一次调用拿到 ``True``。
+
+        只服务「有界重放要幂等」的记账合并：重放侧用它跳过已经并进批级读数
+        的那一章，而**第一次没记到的重放仍会记上**（first-attempt 失败早于记账
+        时，读数不能丢）。它不是并发原语，也不承载判定语义——拿它跳过任何
+        判据、闸门或落盘都是误用。
+        """
+        if key in self._once_keys:
+            return False
+        self._once_keys.add(key)
+        return True
 
     def __post_init__(self) -> None:
         # 手搭 context 常先构造 ``CostLedger()``；未显式给 run_id 时
@@ -320,7 +336,8 @@ class RunContext:
     def llm_provenance_for_chapter(
             self, chapter: int, cls: type[P] = LlmProvenance, /, *,
             prompts: dict[str, str], model: str,
-            adopted_models: Iterable[str] | None = None, **extra: Any) -> P:
+            adopted_models: Iterable[str] | None = None,
+            resume_claim: bool = False, **extra: Any) -> P:
         if not self.paid:
             raise ProvenanceRefused(
                 f'{self.node} is paid=False and cannot mint model provenance')
@@ -339,7 +356,7 @@ class RunContext:
             usage=self.ledger.chapter_usage(chapter),
             **extra,
         )
-        self.ledger.commit_chapter(chapter)
+        self.ledger.commit_chapter(chapter, resume=resume_claim)
         return out
 
     def free_provenance(self, cls: type[P] = FreeProvenance, /, *,

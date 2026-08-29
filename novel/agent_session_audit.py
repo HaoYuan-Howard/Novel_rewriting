@@ -35,7 +35,7 @@ from typing import Any
 
 from contracts.invariants import (
     AGENT_EXECUTOR_NODES, AGENT_SESSION_DELIVERY_STATE,
-    AGENT_SESSION_PROCESS_STATE,
+    AGENT_SESSION_PROCESS_STATE, STAGE5_COMMIT_PHASES,
 )
 from contracts.schema.orchestration import AgentProfile
 from novel import run_identity
@@ -46,10 +46,19 @@ from novel.paths import service_dir
 
 
 SESSION_AUDIT_FILENAME = 'agent_sessions.jsonl'
-SESSION_AUDIT_WIRE_VERSION = 1
+# wire v2（P0-1）：ended 事件增加提交诊断四元组 ``delivery_attempts`` /
+# ``same_run_recovered`` / ``first_failure_phase`` / ``first_failure_detail``。
+# v1 只作只读 legacy 接受，不再写出；v1/v2 字段集的差异只在 v2 新增四格，
+# 其余逐字相同，折叠器按「缺事实投影为 None」的原则同时消费两代。
+SESSION_AUDIT_WIRE_VERSION = 2
+_LEGACY_WIRE_VERSIONS = (0, 1)
 UNKNOWN = 'unknown'
 EVENT_KINDS = ('started', 'turn', 'ended')
 AGENT_SESSION_ROLES = ('commander', 'executor')
+
+#: ``first_failure_detail`` 的统一截断/脱敏出口长度；事件侧校验同用这个数，
+#: 生产方（``sanitize_failure_detail``）与 wire 校验不会分家。
+FAILURE_DETAIL_MAX_LENGTH = 512
 
 # ``finish_restored_session`` 是「锁内读取 → 若缺 ended 才追加」的事务；普通
 # ``append_event`` 的跨进程文件锁会与它互斥，这把线程锁再把同一进程内的两个
@@ -86,6 +95,8 @@ _EVENT_FIELDS = frozenset({
     'cli_version', 'protocol_version', 'start_code_version', 'end_code_version',
     'skill_sha256', 'prompt_sha256',
     'schema_sha256', 'usage', 'process_state', 'delivery_state', 'error_kind',
+    'delivery_attempts', 'same_run_recovered',
+    'first_failure_phase', 'first_failure_detail',
     'kind', 'ts',
 })
 
@@ -125,6 +136,30 @@ def _sha256(value: object, field_name: str) -> str | None:
     if not isinstance(value, str) or _SHA256_RE.fullmatch(value) is None:
         raise ValueError(f'{field_name} 必须是 64 位小写 SHA-256')
     return value
+
+
+def sanitize_failure_detail(value: object) -> str | None:
+    """把一次异常的文本铸成可入账的 ``first_failure_detail``。
+
+    隐私边界与本账一致：只收异常的 ``type: message`` 摘要，**不收** prompt、
+    响应正文或 CLI 输出；控制字符压成空格、整段截断到
+    ``FAILURE_DETAIL_MAX_LENGTH``，让 wire 校验与生产方共用同一个长度。截断
+    保留尾部省略号，读账的人能看出这不是完整文本。
+    """
+    if value is None:
+        return None
+    # 换行/制表先当空白占位保留，其余控制字符（含 NUL）直接剔除；随后统一压成单空格。
+    text = ''.join(
+        ' ' if char in '\t\n\r' else char
+        for char in str(value)
+        if ord(char) >= 32 or char in '\t\n\r')
+    text = ' '.join(text.split())
+    if not text:
+        return None
+    if len(text) > FAILURE_DETAIL_MAX_LENGTH:
+        keep = FAILURE_DETAIL_MAX_LENGTH - 1
+        text = text[:keep] + '…'
+    return text
 
 
 def _profile(value: object) -> AgentProfile | None:
@@ -202,15 +237,21 @@ class AgentSessionEvent:
     process_state: str | None = None
     delivery_state: str | None = None
     error_kind: str | None = None
+    delivery_attempts: int | None = None
+    same_run_recovered: bool | None = None
+    first_failure_phase: str | None = None
+    first_failure_detail: str | None = None
     _allow_legacy_missing: InitVar[bool] = False
 
     def __post_init__(self, _allow_legacy_missing: bool) -> None:
         wire_version = _nonnegative_int(self.wire_version, 'wire_version')
-        if wire_version not in (0, SESSION_AUDIT_WIRE_VERSION):
+        if wire_version not in (*_LEGACY_WIRE_VERSIONS, SESSION_AUDIT_WIRE_VERSION):
             raise ValueError(
-                f'wire_version 只接受 legacy=0 或当前={SESSION_AUDIT_WIRE_VERSION}')
-        if wire_version == 0 and not _allow_legacy_missing:
-            raise ValueError('新事件不能写 legacy wire_version=0')
+                f'wire_version 只接受 legacy={_LEGACY_WIRE_VERSIONS} 或'
+                f' 当前={SESSION_AUDIT_WIRE_VERSION}')
+        if wire_version != SESSION_AUDIT_WIRE_VERSION and not _allow_legacy_missing:
+            raise ValueError(
+                f'新事件不能写 legacy wire_version={wire_version}')
         object.__setattr__(self, 'wire_version', wire_version)
         object.__setattr__(
             self, 'session_run_id', run_identity.check_run_id(self.session_run_id))
@@ -259,6 +300,32 @@ class AgentSessionEvent:
                     or _ERROR_KIND_RE.fullmatch(self.error_kind) is None):
                 raise ValueError(
                     'error_kind 必须是小写 ASCII kind（允许数字、_、-、.）')
+
+        if self.delivery_attempts is not None:
+            object.__setattr__(self, 'delivery_attempts', _nonnegative_int(
+                self.delivery_attempts, 'delivery_attempts', positive=True))
+        if self.same_run_recovered is not None \
+                and type(self.same_run_recovered) is not bool:
+            raise ValueError('same_run_recovered 必须是 bool 或 null')
+        if self.first_failure_phase is not None:
+            if self.first_failure_phase not in STAGE5_COMMIT_PHASES:
+                raise ValueError(
+                    f'first_failure_phase 必须属于 {STAGE5_COMMIT_PHASES}')
+        if self.first_failure_detail is not None:
+            object.__setattr__(self, 'first_failure_detail', _text(
+                self.first_failure_detail, 'first_failure_detail',
+                optional=True, max_length=FAILURE_DETAIL_MAX_LENGTH))
+        if self.same_run_recovered and (
+                self.delivery_attempts is None or self.delivery_attempts < 2):
+            raise ValueError(
+                'same_run_recovered=true 必须同时声明 delivery_attempts>=2；'
+                '一次尝试不存在 same-run 恢复')
+        if (self.first_failure_phase is not None
+                or self.first_failure_detail is not None) \
+                and self.delivery_attempts is None:
+            raise ValueError(
+                'first_failure_* 只有在至少发生过一次提交尝试时才有意义；'
+                '必须同时声明 delivery_attempts')
 
         if self.kind == 'started':
             if self.turn_index is not None or self.attempt_id is not None:
@@ -368,6 +435,10 @@ class AgentSessionEvent:
             'process_state': self.process_state,
             'delivery_state': self.delivery_state,
             'error_kind': self.error_kind,
+            'delivery_attempts': self.delivery_attempts,
+            'same_run_recovered': self.same_run_recovered,
+            'first_failure_phase': self.first_failure_phase,
+            'first_failure_detail': self.first_failure_detail,
             'kind': self.kind,
             'ts': self.ts,
         }
@@ -376,7 +447,10 @@ class AgentSessionEvent:
     def from_dict(cls, payload: object) -> AgentSessionEvent:
         if not isinstance(payload, dict):
             raise ValueError('agent session 事件必须是 JSON object')
-        legacy = 'wire_version' not in payload
+        wire_raw = payload.get('wire_version', 0)
+        # v1 行按 legacy 读：v2 只在 v1 字段集之上加了四格诊断，其余逐字相同；
+        # 缺失事实投影为 None，绝不由 requested 倒推（见模块头）。
+        legacy = wire_raw != SESSION_AUDIT_WIRE_VERSION
         extra = set(payload) - _EVENT_FIELDS
         if extra:
             raise ValueError(f'agent session 事件含未知字段：{sorted(extra)}')
@@ -417,6 +491,10 @@ class AgentSessionEvent:
             process_state=payload.get('process_state'),
             delivery_state=payload.get('delivery_state'),
             error_kind=payload.get('error_kind'),
+            delivery_attempts=payload.get('delivery_attempts'),
+            same_run_recovered=payload.get('same_run_recovered'),
+            first_failure_phase=payload.get('first_failure_phase'),
+            first_failure_detail=payload.get('first_failure_detail'),
             _allow_legacy_missing=legacy,
         )
 
@@ -709,6 +787,10 @@ def finish_restored_session(
     delivery_state: str,
     end_code_version: str,
     error_kind: str | None = None,
+    delivery_attempts: int | None = None,
+    same_run_recovered: bool | None = None,
+    first_failure_phase: str | None = None,
+    first_failure_detail: str | None = None,
     only_if_open: bool = False,
 ) -> bool:
     """给从 durable checkpoint 恢复的旧 logical session 幂等补 ``ended``。
@@ -821,6 +903,10 @@ def finish_restored_session(
             process_state=process_state,
             delivery_state=delivery_state,
             error_kind=error_kind,
+            delivery_attempts=delivery_attempts,
+            same_run_recovered=same_run_recovered,
+            first_failure_phase=first_failure_phase,
+            first_failure_detail=first_failure_detail,
             kind='ended',
             ts=max(int(time.time()), last_turn.ts),
         )

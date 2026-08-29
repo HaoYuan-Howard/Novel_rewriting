@@ -1567,12 +1567,21 @@ class CostLedger:
             counter = self._by_chapter.get(int(chapter))
             return counter.usage() if counter is not None else None
 
-    def commit_chapter(self, chapter: int) -> None:
+    def commit_chapter(self, chapter: int, *, resume: bool = False) -> None:
+        """把一章 usage 结算给一份产物 provenance。
+
+        默认（``resume=False``）保持原守卫：一章只能被结算一次，第二次是
+        双重 provenance。``resume=True`` 只服务 Stage5 same-run deterministic
+        sweep 的有界重放——同 run、同 checkpoint、同候选重走提交链时，接续
+        第一次已做的结算；它由重放边界显式传入，其余路径拿不到。
+        """
         chapter = int(chapter)
         with self._lock:
             if chapter in self._claimed_chapters:
-                raise ProvenanceRefused(
-                    f'chapter {chapter} usage was already claimed by an artifact')
+                if not resume:
+                    raise ProvenanceRefused(
+                        f'chapter {chapter} usage was already claimed by an artifact')
+                return
             self._claimed_chapters.add(chapter)
 
     def usage(self) -> Usage | None:

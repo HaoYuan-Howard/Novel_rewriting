@@ -1345,6 +1345,10 @@ class SessionAgentClient:
     def finish(
         self, *, process_state: str, delivery_state: str,
         error_kind: str | None = None,
+        delivery_attempts: int | None = None,
+        same_run_recovered: bool | None = None,
+        first_failure_phase: str | None = None,
+        first_failure_detail: str | None = None,
     ) -> None:
         """在代码终验之后结束 logical session；无模型调用时不伪造一条会话。"""
         if not self._started or self._ended:
@@ -1372,6 +1376,10 @@ class SessionAgentClient:
                 process_state=process_state,
                 delivery_state=delivery_state,
                 error_kind=error_kind,
+                delivery_attempts=delivery_attempts,
+                same_run_recovered=same_run_recovered,
+                first_failure_phase=first_failure_phase,
+                first_failure_detail=first_failure_detail,
                 kind='ended', ts=int(time.time()),
             ),
         )
