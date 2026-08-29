@@ -212,6 +212,12 @@ def _parser() -> argparse.ArgumentParser:
     approval_gate.add_argument('sid')
     approval_gate.add_argument('--base', required=True)
 
+    approval_workpack = approval_sub.add_parser(
+        'workpack', help='只读输出当前 Stage4 A/B 全章审阅工作包')
+    approval_workpack.add_argument('surface', choices=('design', 'structure'))
+    approval_workpack.add_argument('sid')
+    approval_workpack.add_argument('--base', required=True)
+
     approval_template = approval_sub.add_parser(
         'template', help='只读生成绑定当前 subject 的审批模板')
     approval_template.add_argument('surface', choices=('design', 'structure', 'writing'))
@@ -1591,6 +1597,12 @@ def _cmd_approval(a: argparse.Namespace) -> int:
             raise ApprovalRequired(
                 's4 只接受带 subject/逐章决定的 typed structure apply')
         result = approvals.approve_gate(a.base, a.sid, a.gate)
+    elif a.approval_action == 'workpack':
+        result = (
+            approvals.design_workpack(a.base, a.sid)
+            if a.surface == 'design'
+            else approvals.structure_workpack(a.base, a.sid)
+        )
     elif a.approval_action == 'template':
         try:
             if a.surface == 'design':

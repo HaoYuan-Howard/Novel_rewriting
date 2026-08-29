@@ -16,6 +16,7 @@ import type {
 import type {
   ApprovalBackfillResult,
   ApprovalDoc,
+  ApprovalWorkpack,
   DesignReviewRequest,
   DesignReviewTemplate,
   DesignReviewTemplateQuery,
@@ -480,6 +481,10 @@ export const realApi: Api = {
   getAgentQueue: () => get<AgentQueueView>('/agent/runs/queue'),
 
   getApprovals: (sid) => get<ApprovalDoc>(n(sid) + '/approvals'),
+  getDesignApprovalWorkpack: (sid) =>
+    get<ApprovalWorkpack>(n(sid) + '/approvals/design/workpack'),
+  getStructureApprovalWorkpack: (sid) =>
+    get<ApprovalWorkpack>(n(sid) + '/approvals/structure/workpack'),
   getDesignReviewTemplate: (sid, query: DesignReviewTemplateQuery) => {
     const params = new URLSearchParams({
       actor: query.actor,

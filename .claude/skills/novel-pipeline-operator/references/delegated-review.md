@@ -161,15 +161,24 @@ typed structure apply，不能匿名盖章。
 
 ### A 候选设计审阅
 
-A 机械通过不等于可进 B。先生成绑定当前候选的关闭式模板：
+A 机械通过不等于可进 B。先读取绑定当前候选与完整 design subject 的异常优先工作包，再生成关闭式
+决定模板；工作包只缩小阅读面，不替你填决定：
 
 ```text
 novel.cli approval backfill <SID> --base <BASE>  # 仅旧审批记录需要，普通 show 不迁移
+novel.cli approval workpack design <SID> --base <BASE>
 novel.cli approval template design <SID> --base <BASE> --actor <ACTOR> \
   --reviewer-kind delegated_operator --review-run-id <RUN_ID> --reason <总理由>
 novel.cli approval apply design <SID> --base <BASE> --input <决定文件或 ->
 novel.cli approval show <SID> --base <BASE>
 ```
+
+工作包固定按 blocking、semantic attention、disclosure、metric only、phase deferred、coverage 六组
+出线，空组也带扫描分母。先读 blocking 与 attention，再逐条核 coverage 的全部章；changed 章排在
+exact historical accept 可复用章之前，但 `historical_accept_reusable=true` 只说明主体逐字相等，仍须
+人工核对并随本次完整决定提交。INFO、metric、UNVER、skipped 的 `allowed_actions` 恒为空；不得因为
+它们排在异常区就制造 `request_repair` 或付费重跑。Context 才能判的条目只在 phase deferred 登记，
+不进入 A 的决定主体。
 
 模板故意把未审策略置为 `request_replan`、未审章节置为 `request_repair`；这是关闭式起点，不是已经
 形成的拒绝理由。每个未审行还带 `placeholder=true + template_token`；显式确认时必须改为
@@ -196,8 +205,9 @@ legacy/untracked 候选和已提交 2 轮 repair 的章不能选择 `request_rep
 
 ### B 后最终计划裁决
 
-本闸判断的是已绑定计划结构，不是文字质量，也不是第二次规划。先把当前结构 subject、计划完整字节、
-B 的 `binding_concerns`、逐章 `structure_decision` 与最新结构报告对齐，再逐章裁决：
+本闸判断的是已绑定计划结构，不是文字质量，也不是第二次规划。先运行并完整读取
+`novel.cli approval workpack structure <SID> --base <BASE>`，再把其中绑定的当前结构 subject、计划完整
+字节、B 的 `binding_concerns`、逐章 `structure_decision` 与最新结构报告对齐后逐章裁决：
 
 1. `retain` 章的声明变化必须为空；人工理由要能指出强线性、因果锁定、证据受限或本章本就没有可靠
    重组空间中的具体一种，不能只写“保留更稳”。
@@ -220,13 +230,16 @@ Commander 只经公开的 0 成本 CLI façade 提交，不直接 import 审批�
 
 ```text
 novel.cli approval show <SID> --base <BASE>
+novel.cli approval workpack structure <SID> --base <BASE>
 novel.cli approval template structure <SID> --base <BASE> --actor <ACTOR> --reason <总理由>
 novel.cli approval apply structure <SID> --base <BASE> --input <决定文件或 ->
 ```
 
 `template structure` 的逐章默认值全部是 `request_replan`，这是防止无人值守时“一键全接收”的
 关闭式起点；逐章审阅并写出证据后才可把对应项改成 `accept`。`apply` 只落审批账，不启动作业，
-提交后必须重新 `approval show` 核对 current subject 与决定。
+提交后必须重新 `approval show` 核对 current subject 与决定。工作包中的全部 B concern、
+`stage_signature_conflict` INFO、metric 与非线性 UNVER 都要保留披露；当前 hash-bound 决定已经覆盖的
+项目在 inbox 中可以是 `reviewed_retained`，但不得被删除或改回 pending。
 
 ## Stage5 写作授权
 

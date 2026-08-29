@@ -32,11 +32,13 @@ from contracts.invariants import (
     STRUCTURE_METRIC_CONTRACT,
     STYLE_MEASUREMENT_CONTRACT,
 )
+from contracts.rules import REGISTRY
 from contracts.schema import artifact_spec
 from contracts.schema.api import (
     ApprovalAction,
     ApprovalBackfillResult,
     ApprovalDoc,
+    ApprovalWorkpack,
     DesignBindingInfeasibility,
     DesignBlindChapterTruth,
     DesignChapterReview,
@@ -58,6 +60,8 @@ from contracts.schema.api import (
     StructureApprovalDecision,
     StructureApprovalRequest,
     StructureApprovalView,
+    WorkpackGroup,
+    WorkpackItem,
     WritingApprovalDecision,
     WritingApprovalRequest,
     WritingApprovalView,
@@ -210,9 +214,33 @@ class _ApprovalRecordV3Legacy(StrictModel):
 
 
 class _StoredStructureDecision(StructureApprovalDecision):
-    """一项服务审批历史：公开 typed 决定 + 当前主体完整字节 proof。"""
+    """一项服务审批历史：公开 typed 决定 + 当时主体的内部 proof。
+
+    ``chapter_subject_sha256`` 是 v6 additive 快照：它让工作包只复用
+    业务面仍精确相同的历史章 accept。旧 v6 记录默认空，只能走
+    整书 subject + 完整 proof 仍精确相同的保守 fallback。该字段不进
+    公开 ``ApprovalDoc`` v5。
+    """
 
     proof: _ApprovalProof
+    chapter_subject_sha256: dict[int, str] = Field(default_factory=dict)
+
+    @model_validator(mode='after')
+    def _chapter_subject_snapshot_is_complete_when_present(
+        self,
+    ) -> _StoredStructureDecision:
+        if not self.chapter_subject_sha256:
+            return self
+        expected = {row.output_ordinal for row in self.chapters}
+        if set(self.chapter_subject_sha256) != expected:
+            raise ValueError('structure 逐章 subject 快照必须精确覆盖决定章集')
+        if any(
+            len(value) != 64
+            or any(char not in '0123456789abcdef' for char in value)
+            for value in self.chapter_subject_sha256.values()
+        ):
+            raise ValueError('structure 逐章 subject 快照必须是完整小写 SHA-256')
+        return self
 
 
 class _StoredWritingDecision(WritingApprovalDecision):
@@ -640,6 +668,18 @@ class _DesignSubjects(StrictModel):
     strategy_subject_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
     chapters: list[DesignChapterSubject] = Field(min_length=1)
     chapter_subject_sha256: dict[int, str]
+
+
+class _StructureWorkpackSnapshot(StrictModel):
+    """B 工作包一次乐观只读快照；前后完全一致才允许返回。"""
+
+    subject_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    chapter_ordinals: list[int]
+    chapter_subject_sha256: dict[int, str]
+    plan: PlanChapters
+    concerns: list[BindingConcern]
+    plan_payload_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    binding_payload_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
 
 
 def _formal_design_chapter(
@@ -1178,7 +1218,8 @@ def _public_structure_decision(
     decision: _StoredStructureDecision,
 ) -> StructureApprovalDecision:
     return StructureApprovalDecision.model_validate(
-        decision.model_dump(mode='json', exclude={'proof'}))
+        decision.model_dump(
+            mode='json', exclude={'proof', 'chapter_subject_sha256'}))
 
 
 def _writing_decision_payload(
@@ -1227,6 +1268,89 @@ def _current_structure_subject_and_chapters(
     return subject, chapters
 
 
+def _structure_chapter_subject_sha256(
+    plan: PlanChapters, concerns: list[BindingConcern],
+) -> dict[int, str]:
+    """结构人审的逐章复用主体；业务 Plan 投影复用生产唯一尺子。
+
+    全局 concern（``chapter_ordinal=None``）影响每一章；章级 concern
+    只影响它所属章。因此改一章不会让其他章的 exact accept
+    凭空过期，但全局担忧变化会让全章都重审。
+    """
+    from novel.stages.stage4.measure import structure_subject
+
+    projected = structure_subject(plan)
+    projected_by = {
+        int(row.get('output_ordinal') or 0): row
+        for row in projected.get('output_chapters') or []
+    }
+    hashes: dict[int, str] = {}
+    for chapter in plan.output_chapters:
+        ordinal = chapter.output_ordinal
+        applicable = [
+            concern.model_dump(mode='json')
+            for concern in concerns
+            if concern.chapter_ordinal in (None, ordinal)
+        ]
+        hashes[ordinal] = _decision_sha256({
+            'kind': 'stage4_structure_chapter_review_subject_v1',
+            'chapter': projected_by[ordinal],
+            'binding_concerns': applicable,
+        })
+    return hashes
+
+
+def _current_structure_chapter_subject_sha256(
+    novel_dir: Path,
+) -> dict[int, str]:
+    """从当前 fresh Plan+B 一次读取铸造逐章审阅快照。"""
+    store = _store_for(novel_dir)
+    _require_fresh_json(store, STAGE4_PLAN_CHAPTERS)
+    plan, _raw = store.read_own(PlanChapters, STAGE4_PLAN_CHAPTERS)
+    concerns = _current_binding_concerns(novel_dir, store=store)
+    return _structure_chapter_subject_sha256(plan, concerns)
+
+
+def _structure_workpack_snapshot(
+    novel_dir: Path,
+) -> _StructureWorkpackSnapshot:
+    """从同一组 typed 对象铸造 B subject/coverage，并保留精确载荷摘要。"""
+    store = _store_for(novel_dir)
+    _require_fresh_json(store, STAGE4_PLAN_CHAPTERS)
+    plan, plan_raw = store.read_own(PlanChapters, STAGE4_PLAN_CHAPTERS)
+    _require_fresh_json(store, STAGE4_EVIDENCE_BINDING)
+    binding, binding_raw = store.read_own(
+        EvidenceBinding, STAGE4_EVIDENCE_BINDING)
+    concerns = _binding_concerns(binding)
+    try:
+        from novel.stages.stage4.measure import structure_review_subject_sha256
+    except ImportError as exc:
+        raise ArtifactUnreadable(
+            'stage4 structure subject helper is unavailable') from exc
+    subject = structure_review_subject_sha256(plan, concerns)
+    ordinals = [row.output_ordinal for row in plan.output_chapters]
+    if ordinals != sorted(set(ordinals)) or any(value < 1 for value in ordinals):
+        raise ArtifactUnreadable(
+            'stage4 structure workpack has a non-canonical output chapter set')
+    return _StructureWorkpackSnapshot(
+        subject_sha256=subject,
+        chapter_ordinals=ordinals,
+        chapter_subject_sha256=_structure_chapter_subject_sha256(plan, concerns),
+        plan=plan,
+        concerns=concerns,
+        plan_payload_sha256=_decision_sha256(plan_raw),
+        binding_payload_sha256=_decision_sha256(binding_raw),
+    )
+
+
+def _binding_concerns(binding: EvidenceBinding) -> list[BindingConcern]:
+    """bound B 的非阻断担忧唯一状态判定，供普通审批与快照共用。"""
+    if binding.status != 'bound':
+        raise ApprovalRequired(
+            '最终结构审批只接受当前 status=bound 的 EvidenceBinding')
+    return list(binding.binding_concerns)
+
+
 def _current_binding_concerns(
     novel_dir: Path, *, store: ArtifactStore | None = None,
 ) -> list[BindingConcern]:
@@ -1235,10 +1359,7 @@ def _current_binding_concerns(
     _require_fresh_json(current_store, STAGE4_EVIDENCE_BINDING)
     binding, _raw = current_store.read_own(
         EvidenceBinding, STAGE4_EVIDENCE_BINDING)
-    if binding.status != 'bound':
-        raise ApprovalRequired(
-            '最终结构审批只接受当前 status=bound 的 EvidenceBinding')
-    return list(binding.binding_concerns)
+    return _binding_concerns(binding)
 
 
 def _proof_for_structure(
@@ -1284,6 +1405,8 @@ def _migrate_current_legacy_structure(
         legacy_subject = structure_subject_sha256(plan)
         current_subject, current_chapters = \
             _current_structure_subject_and_chapters(novel_dir)
+        current_chapter_subjects = \
+            _current_structure_chapter_subject_sha256(novel_dir)
         legacy_proof = _proof_for_legacy_structure(novel_dir, public)
     except NovelError:
         return None
@@ -1308,6 +1431,8 @@ def _migrate_current_legacy_structure(
         migrated_proof = _proof_for_structure(novel_dir, migrated_public)
         after_subject, after_chapters = \
             _current_structure_subject_and_chapters(novel_dir)
+        after_chapter_subjects = \
+            _current_structure_chapter_subject_sha256(novel_dir)
         after_legacy_proof = _proof_for_legacy_structure(novel_dir, public)
         after_migrated_proof = _proof_for_structure(
             novel_dir, migrated_public)
@@ -1315,12 +1440,14 @@ def _migrate_current_legacy_structure(
         return None
     if (
         (after_subject, after_chapters) != (current_subject, current_chapters)
+        or after_chapter_subjects != current_chapter_subjects
         or after_legacy_proof != legacy_proof
         or after_migrated_proof != migrated_proof
     ):
         return None
     return _StoredStructureDecision(
-        **migrated_public.model_dump(mode='json'), proof=migrated_proof)
+        **migrated_public.model_dump(mode='json'), proof=migrated_proof,
+        chapter_subject_sha256=current_chapter_subjects)
 
 
 def _writing_subject_sha256(proof: _ApprovalProof) -> str:
@@ -1889,6 +2016,616 @@ def _accepted_design_chapter_source(
     return None
 
 
+def _compact(value: Any) -> str:
+    """工作包的机器可比细节；不用自由文字二次解释判定。"""
+    return json.dumps(
+        value, ensure_ascii=False, sort_keys=True, separators=(',', ':'))
+
+
+def _phase_deferred_rule_rows() -> list[Any]:
+    """Context 相延后的规则只从生产 R-6 注册表派生。"""
+    return [
+        rule for rule in REGISTRY.of_stage('stage4')
+        if rule.requirement.startswith('R-6.')
+    ]
+
+
+def _phase_deferred_items(
+    *, report_rules: dict[str, Any] | None = None,
+) -> list[WorkpackItem]:
+    rows: list[WorkpackItem] = []
+    for rule in _phase_deferred_rule_rows():
+        line = (report_rules or {}).get(rule.rule)
+        status = line.status if line is not None else 'unver'
+        detail = (
+            line.why or line.item
+            if line is not None
+            else f'{rule.item}：只在 stage4.context 产物在场后判定'
+        )
+        rows.append(WorkpackItem(
+            code=rule.rule,
+            rule=rule.rule,
+            sev=rule.sev,
+            status=status,
+            repair_owner=rule.owner,
+            detail=detail,
+            effect='phase_deferred',
+            allowed_actions=[],
+        ))
+    return rows
+
+
+def _design_preflight_actions(
+    current: _DesignSubjects, *, owner: str, ordinal: int | None,
+) -> list[str]:
+    """只发布 typed A 决定真能表达的路；Stage2/code owner 不伪造快捷修复。"""
+    if owner != 'stage4.design':
+        return []
+    available = {
+        row.output_ordinal
+        for row in current.repair_capability.chapters
+        if row.request_repair_available
+    }
+    if ordinal is None:
+        return ['request_repair', 'request_replan'] if available \
+            else ['request_replan']
+    return ['request_repair', 'request_replan'] \
+        if ordinal in available else ['request_replan']
+
+
+def _design_workpack_groups(
+    record: _ApprovalRecordV6, current: _DesignSubjects, novel_dir: Path,
+) -> list[WorkpackGroup]:
+    blocking: list[WorkpackItem] = []
+    attention: list[WorkpackItem] = []
+    metrics: list[WorkpackItem] = []
+
+    preflight = current.preflight
+    if preflight is None:
+        blocking.append(WorkpackItem(
+            code='design_preflight_unavailable',
+            rule=None,
+            sev='hard',
+            status='unver',
+            repair_owner='stage4.design',
+            detail='A→formal 生产预检无法产出；不得把未检冒充为通过',
+            effect='block_b',
+            allowed_actions=[],
+        ))
+    elif preflight.status == 'blocked':
+        for index, failure in enumerate(preflight.failures, start=1):
+            blocking.append(WorkpackItem(
+                code=f'design_preflight:{failure.code}:{index}',
+                rule=failure.rule,
+                sev='hard',
+                status='hit',
+                chapter_ordinal=failure.chapter_ordinal,
+                scene_refs=list(failure.scene_refs),
+                refs=list(failure.refs),
+                repair_owner=failure.repair_owner,
+                detail=failure.detail or (
+                    f'{failure.code}：owner={failure.repair_owner}'),
+                effect='block_b',
+                allowed_actions=_design_preflight_actions(
+                    current, owner=failure.repair_owner,
+                    ordinal=failure.chapter_ordinal),
+            ))
+        # 不可行 proof 是代码在关闭目录上铸出的第二种阻断面；
+        # 它可以没有 TypedFailure，所以必须单独全量投影。
+        for index, witness in enumerate(preflight.infeasibility, start=1):
+            blocking.append(WorkpackItem(
+                code=f'design_infeasible:{witness.constraint_code}:{index}',
+                rule=None,
+                sev='hard',
+                status='hit',
+                chapter_ordinal=witness.chapter_ordinal,
+                scene_refs=list(witness.scenes),
+                refs=list(witness.closed_refs),
+                repair_owner='stage4.design',
+                detail=_compact(witness.model_dump(mode='json')),
+                effect='block_b',
+                allowed_actions=_design_preflight_actions(
+                    current, owner='stage4.design',
+                    ordinal=witness.chapter_ordinal),
+            ))
+
+    if current.binding_infeasibility is not None:
+        for index, witness in enumerate(
+            current.binding_infeasibility.infeasibility_proof, start=1,
+        ):
+            blocking.append(WorkpackItem(
+                code=f'current_binding_infeasible:{witness.constraint_code}:{index}',
+                rule=None,
+                sev='hard',
+                status='hit',
+                chapter_ordinal=witness.chapter_ordinal,
+                scene_refs=list(witness.scenes),
+                refs=list(witness.closed_refs),
+                repair_owner='stage4.design',
+                detail=_compact(witness.model_dump(mode='json')),
+                effect='block_b',
+                allowed_actions=_design_preflight_actions(
+                    current, owner='stage4.design',
+                    ordinal=witness.chapter_ordinal),
+            ))
+
+    # 一份当前 repair 决定里的「哪几章、哪些 scene/alias」是 A 面
+    # 最应前置的人工上下文。它只做当前态投影，不执行 repair。
+    design_view = _design_review_view(novel_dir, record)
+    if (
+        design_view.state == 'repair_requested'
+        and design_view.current_decision is not None
+    ):
+        decision = design_view.current_decision
+        for row in decision.chapters:
+            if row.decision != 'request_repair':
+                continue
+            blocking.append(WorkpackItem(
+                code=f'design_repair_requested:ch{row.output_ordinal}',
+                rule=None,
+                chapter_ordinal=row.output_ordinal,
+                scene_refs=sorted({
+                    scene for constraint in row.constraints
+                    for scene in constraint.scene_refs
+                }),
+                refs=[
+                    alias for constraint in row.constraints
+                    for alias in constraint.opaque_aliases
+                ],
+                repair_owner='stage4.design',
+                detail=_compact({
+                    'decision_sha256': decision.decision_sha256,
+                    'constraints': [
+                        value.model_dump(mode='json')
+                        for value in row.constraints
+                    ],
+                }),
+                effect='block_b',
+                allowed_actions=[],
+            ))
+
+    for subject in current.chapters:
+        chapter = subject.chapter
+        truth = subject.blind_truth
+        ordinal = chapter.output_ordinal
+        attention.append(WorkpackItem(
+            code=f'design_semantic_focus:ch{ordinal}',
+            rule=None,
+            chapter_ordinal=ordinal,
+            scene_refs=[scene.candidate_scene_id for scene in chapter.scenes],
+            refs=[
+                *truth.entry_state_aliases,
+                *truth.ending_state_aliases,
+                *(edge.before_alias for edge in truth.causal_edges),
+                *(edge.after_alias for edge in truth.causal_edges),
+            ],
+            detail=_compact({
+                'entry_state_aliases': truth.entry_state_aliases,
+                'ending_state_aliases': truth.ending_state_aliases,
+                'causal_edges': [
+                    edge.model_dump(mode='json') for edge in truth.causal_edges
+                ],
+                'open_hook_goal': chapter.open_hook_goal.model_dump(mode='json'),
+                'end_hook_goal': chapter.end_hook_goal.model_dump(mode='json'),
+                'temporal_transitions': [{
+                    'scene_ref': scene.candidate_scene_id,
+                    'transition': scene.transition,
+                    'entry_state_aliases': scene.entry_state_aliases,
+                    'exit_state_aliases': scene.exit_state_aliases,
+                } for scene in chapter.scenes],
+            }),
+            effect='attention',
+            allowed_actions=[],
+        ))
+        metrics.append(WorkpackItem(
+            code=f'design_structure_metrics:ch{ordinal}',
+            rule=None,
+            sev='metric',
+            status='ok',
+            chapter_ordinal=ordinal,
+            refs=[],
+            detail=_compact(subject.structure_evidence.model_dump(mode='json')),
+            effect='read_only',
+            allowed_actions=[],
+        ))
+
+    capability = {
+        row.output_ordinal: row.request_repair_available
+        for row in current.repair_capability.chapters
+    }
+    coverage: list[WorkpackItem] = []
+    for subject in current.chapters:
+        ordinal = subject.chapter.output_ordinal
+        source = (
+            None if current.binding_infeasibility is not None
+            else _accepted_design_chapter_source(
+                record, subject, current.chapter_subject_sha256[ordinal])
+        )
+        reusable = source is not None
+        actions = ['accept']
+        if capability[ordinal]:
+            actions.append('request_repair')
+        coverage.append(WorkpackItem(
+            code=f'design_chapter_coverage:ch{ordinal}',
+            rule=None,
+            chapter_ordinal=ordinal,
+            scene_refs=[
+                scene.candidate_scene_id for scene in subject.chapter.scenes
+            ],
+            refs=[],
+            detail=_compact({
+                'weight': subject.chapter.weight,
+                'structure_decision': subject.chapter.structure_decision.model_dump(
+                    mode='json'),
+                'chapter_goal': subject.chapter.chapter_goal.model_dump(mode='json'),
+                'scene_count': len(subject.chapter.scenes),
+                'computed_change_kinds': (
+                    subject.structure_evidence.computed_change_kinds),
+            }),
+            effect='coverage',
+            allowed_actions=actions,
+            changed=not reusable,
+            historical_accept_reusable=reusable,
+            source_decision_sha256=(
+                source[0].decision_sha256 if source is not None else None),
+        ))
+    coverage.sort(key=lambda item: (not item.changed, item.chapter_ordinal or 0))
+
+    return [
+        WorkpackGroup(
+            group='blocking',
+            scanned=(
+                'A→formal 生产预检、当前 B 不可行 proof '
+                f'与 {len(current.chapters)} 章 typed repair 状态'),
+            items=blocking,
+        ),
+        WorkpackGroup(
+            group='semantic_attention',
+            scanned=f'{len(current.chapters)} 章 entry/end/因果/时态面',
+            items=attention,
+        ),
+        WorkpackGroup(
+            group='disclosure',
+            scanned='Stage4A blind 主体不披露 formal id；本组 0 条',
+            items=[],
+        ),
+        WorkpackGroup(
+            group='metric_only',
+            scanned=f'{len(current.chapters)} 章生产结构量尺',
+            items=metrics,
+        ),
+        WorkpackGroup(
+            group='phase_deferred',
+            scanned='contracts.rules 中 requirement=R-6.* 的 Stage4 规则',
+            items=_phase_deferred_items(),
+        ),
+        WorkpackGroup(
+            group='coverage',
+            scanned=f'{len(current.chapters)}/{len(current.chapters)} 章',
+            items=coverage,
+        ),
+    ]
+
+
+def design_workpack(
+    base: str | os.PathLike[str], sid: str,
+) -> ApprovalWorkpack:
+    """只读生成 A 审阅工作包；不填决定、不启动任何作业。"""
+    with _LOCK:
+        record = _read_current(base, sid)
+        novel_dir = paths.resolve_novel_dir(base, sid)
+        current = _current_design_subjects(novel_dir)
+        ordinals = [row.chapter.output_ordinal for row in current.chapters]
+        workpack = ApprovalWorkpack(
+            sid=sid,
+            kind='design',
+            candidate_sha256=current.candidate_sha256,
+            subject_sha256=current.aggregate_subject_sha256,
+            chapter_ordinals=ordinals,
+            groups=_design_workpack_groups(record, current, novel_dir),
+        )
+        if _current_design_subjects(novel_dir) != current:
+            raise ArtifactUnreadable(
+                'Stage4A 审阅主体在工作包构造期间变化；请刷新后重试')
+        return workpack
+
+
+def _report_item(
+    line: Any, *, effect: str, index: int = 1,
+    detail: str | None = None, refs: list[str] | None = None,
+    chapter_ordinal: int | None = None,
+    allowed_actions: list[str] | None = None,
+) -> WorkpackItem:
+    finding_row = line.findings[index - 1] if len(line.findings) >= index else None
+    return WorkpackItem(
+        code=f'{line.rule}:{index}',
+        rule=line.rule,
+        sev=line.sev,
+        status=line.status,
+        chapter_ordinal=(
+            chapter_ordinal if chapter_ordinal is not None
+            else finding_row.output_ordinal if finding_row is not None else None
+        ),
+        refs=(
+            list(refs) if refs is not None
+            else list(finding_row.evidence) if finding_row is not None else []
+        ),
+        repair_owner=(
+            str(finding_row.owner) if finding_row is not None
+            and finding_row.owner is not None
+            else REGISTRY.get(line.rule).owner
+        ),
+        detail=(
+            detail or (
+                finding_row.detail if finding_row is not None
+                else line.why or line.item
+            )
+        ),
+        effect=effect,
+        allowed_actions=allowed_actions or [],
+    )
+
+
+def _accepted_structure_chapter_sources(
+    record: _ApprovalRecordV6, novel_dir: Path, subject_sha256: str,
+    chapter_subject_sha256: dict[int, str],
+) -> dict[int, str]:
+    """逐章找仍精确绑定当前业务面的历史 accept，不复用旧散文。
+
+    新 v6 记录优先按内部逐章 subject 快照逐项对证；旧 v6 没有快照，
+    只能在整书 subject 与完整当前 proof 都仍相同的情况下保守复用。
+    """
+    accepted: dict[int, str] = {}
+    for stored in reversed(record.structure_history):
+        public = _public_structure_decision(stored)
+        if stored.proof.decision_sha256 != _decision_sha256(
+            _structure_decision_payload(public)
+        ):
+            continue
+
+        if stored.chapter_subject_sha256:
+            for row in public.chapters:
+                ordinal = row.output_ordinal
+                if (
+                    row.decision == 'accept'
+                    and ordinal not in accepted
+                    and stored.chapter_subject_sha256.get(ordinal)
+                    == chapter_subject_sha256.get(ordinal)
+                ):
+                    accepted[ordinal] = stored.proof.decision_sha256
+            continue
+
+        if public.subject_sha256 != subject_sha256:
+            continue
+        try:
+            current_proof = _proof_for_structure(novel_dir, public)
+        except NovelError:
+            continue
+        if not _same_proof(stored.proof, current_proof):
+            continue
+        for row in public.chapters:
+            if row.decision == 'accept' and row.output_ordinal not in accepted:
+                accepted[row.output_ordinal] = stored.proof.decision_sha256
+    return accepted
+
+
+def _baseline_signature_items(
+    *, report_rules: dict[str, Any],
+) -> list[WorkpackItem]:
+    """直接投影生产 INFO finding；不在工作包里重算第二份判据。"""
+    line = report_rules.get('stage_signature_conflict')
+    if line is None:
+        raise ArtifactUnreadable(
+            'stage_signature_conflict 已注册但生产复检未返回该行')
+    items: list[WorkpackItem] = []
+    for index, finding_row in enumerate(line.findings, start=1):
+        refs = list(finding_row.evidence)
+        digest = _decision_sha256({
+            'output_ordinal': finding_row.output_ordinal,
+            'detail': finding_row.detail,
+            'evidence': refs,
+        })[:16]
+        items.append(WorkpackItem(
+            code=f'stage_signature_conflict:{index}:{digest}',
+            rule='stage_signature_conflict',
+            sev=line.sev,
+            status=line.status,
+            chapter_ordinal=finding_row.output_ordinal,
+            scene_refs=refs[:1],
+            refs=refs,
+            repair_owner=(
+                str(finding_row.owner)
+                if finding_row.owner is not None else REGISTRY.get(line.rule).owner
+            ),
+            detail=finding_row.detail,
+            effect='disclose',
+            allowed_actions=[],
+        ))
+    return items
+
+
+def _structure_workpack_groups(
+    record: _ApprovalRecordV6, novel_dir: Path, *, subject_sha256: str,
+    chapter_subject_sha256: dict[int, str],
+    plan: PlanChapters, concerns: list[BindingConcern], report: Any,
+) -> list[WorkpackGroup]:
+    by_rule = {line.rule: line for line in report.rules}
+    deferred_ids = {rule.rule for rule in _phase_deferred_rule_rows()}
+    blocking: list[WorkpackItem] = []
+    attention: list[WorkpackItem] = []
+    disclosure: list[WorkpackItem] = []
+    metrics: list[WorkpackItem] = []
+
+    semantic_line = by_rule.get('semantic_closure_reading')
+    semantic_finding = (
+        semantic_line.findings[0]
+        if semantic_line is not None and semantic_line.findings else None
+    )
+
+    for line in report.rules:
+        if line.rule in deferred_ids or line.rule == 'stage_signature_conflict':
+            continue
+        if line.sev == 'metric':
+            if line.findings:
+                metrics.extend(
+                    _report_item(line, effect='read_only', index=index)
+                    for index in range(1, len(line.findings) + 1)
+                )
+            else:
+                metrics.append(_report_item(line, effect='read_only'))
+            continue
+        if line.status == 'hit' and line.sev == 'hard':
+            blocking.extend(
+                _report_item(
+                    line, effect='block_context', index=index,
+                    allowed_actions=['request_replan'],
+                )
+                for index in range(1, len(line.findings) + 1)
+            )
+            continue
+        if line.status in ('unver', 'skipped'):
+            if line.rule == 'state_closure':
+                detail = _compact({
+                    'why': line.why,
+                    # 直接保留生产 metric finding，不在 façade 另解码、重组第二份判据。
+                    'semantic_closure_reading': (
+                        semantic_finding.detail
+                        if semantic_finding is not None else None
+                    ),
+                })
+                attention.append(_report_item(
+                    line, effect='attention', detail=detail,
+                    refs=(
+                        [str(value) for value in semantic_finding.evidence]
+                        if semantic_finding is not None else []
+                    ),
+                ))
+            else:
+                attention.append(_report_item(line, effect='attention'))
+            continue
+        if line.status == 'hit' and line.sev == 'info':
+            disclosure.extend(
+                _report_item(line, effect='disclose', index=index)
+                for index in range(1, len(line.findings) + 1)
+            )
+
+    signature_items = _baseline_signature_items(report_rules=by_rule)
+    disclosure.extend(signature_items)
+    for index, concern in enumerate(concerns, start=1):
+        disclosure.append(WorkpackItem(
+            code=f'binding_concern:{concern.constraint_code}:{index}',
+            rule=None,
+            sev='info',
+            status='hit',
+            chapter_ordinal=concern.chapter_ordinal,
+            scene_refs=list(concern.scenes),
+            refs=list(concern.closed_refs),
+            repair_owner=None,
+            detail=concern.reason,
+            effect='disclose',
+            allowed_actions=[],
+        ))
+
+    accepted_sources = _accepted_structure_chapter_sources(
+        record, novel_dir, subject_sha256, chapter_subject_sha256)
+    coverage: list[WorkpackItem] = []
+    for chapter in plan.output_chapters:
+        ordinal = chapter.output_ordinal
+        source_sha = accepted_sources.get(ordinal)
+        coverage.append(WorkpackItem(
+            code=f'structure_chapter_coverage:ch{ordinal}',
+            rule=None,
+            chapter_ordinal=ordinal,
+            scene_refs=[scene.slot for scene in chapter.scenes],
+            refs=[],
+            detail=_compact({
+                'structure_decision': chapter.structure_decision.model_dump(
+                    mode='json'),
+                'chapter_goal': chapter.chapter_goal.model_dump(mode='json'),
+                'open_hook_goal': chapter.open_hook_goal.model_dump(mode='json'),
+                'end_hook_goal': chapter.end_hook_goal.model_dump(mode='json'),
+                'scene_count': len(chapter.scenes),
+                'budget_chars': sum(scene.budget_chars for scene in chapter.scenes),
+            }),
+            effect='coverage',
+            allowed_actions=['accept', 'request_replan'],
+            changed=source_sha is None,
+            historical_accept_reusable=source_sha is not None,
+            source_decision_sha256=source_sha,
+        ))
+    coverage.sort(key=lambda item: (not item.changed, item.chapter_ordinal or 0))
+
+    return [
+        WorkpackGroup(
+            group='blocking',
+            scanned=f'{len(report.rules)} 条 stage4.plan 生产复检规则',
+            items=blocking,
+        ),
+        WorkpackGroup(
+            group='semantic_attention',
+            scanned=(
+                '生产复检 UNVER/skipped；非线性状态未知取 '
+                'semantic_closure_reading 全量证据'),
+            items=attention,
+        ),
+        WorkpackGroup(
+            group='disclosure',
+            scanned=(
+                f'{len(concerns)} 条 bound B concern，'
+                f'{len(signature_items)} 条机械舞台签名冲突，'
+                '以及全部 INFO 生产结论'),
+            items=disclosure,
+        ),
+        WorkpackGroup(
+            group='metric_only',
+            scanned='全部 Stage4 生产 metric 读数',
+            items=metrics,
+        ),
+        WorkpackGroup(
+            group='phase_deferred',
+            scanned='contracts.rules 中 requirement=R-6.* 的 Stage4 规则',
+            items=_phase_deferred_items(report_rules=by_rule),
+        ),
+        WorkpackGroup(
+            group='coverage',
+            scanned=f'{len(plan.output_chapters)}/{len(plan.output_chapters)} 章',
+            items=coverage,
+        ),
+    ]
+
+
+def structure_workpack(
+    base: str | os.PathLike[str], sid: str,
+) -> ApprovalWorkpack:
+    """只读生成 B 结构审批工作包；subject 不含 Context 相延后规则。"""
+    with _LOCK:
+        record = _read_current(base, sid)
+        novel_dir = paths.resolve_novel_dir(base, sid)
+        snapshot = _structure_workpack_snapshot(novel_dir)
+        from novel.stages.stage4.plan import run_check_only
+        report = run_check_only(state.readonly_ctx(
+            novel_dir, 'stage4.plan', prov.code_version()))
+        after = _structure_workpack_snapshot(novel_dir)
+        if after != snapshot:
+            raise ArtifactUnreadable(
+                'Stage4B 审阅主体在工作包复检期间变化；请刷新后重试')
+        return ApprovalWorkpack(
+            sid=sid,
+            kind='structure',
+            candidate_sha256=None,
+            subject_sha256=snapshot.subject_sha256,
+            chapter_ordinals=snapshot.chapter_ordinals,
+            groups=_structure_workpack_groups(
+                record, novel_dir,
+                subject_sha256=snapshot.subject_sha256,
+                chapter_subject_sha256=snapshot.chapter_subject_sha256,
+                plan=snapshot.plan,
+                concerns=snapshot.concerns,
+                report=report,
+            ),
+        )
+
+
 _DESIGN_STRATEGY_TEMPLATE_REASON = \
     '关闭式模板：尚未确认当前整书策略，保持 request_replan'
 _DESIGN_CHAPTER_TEMPLATE_REASON = \
@@ -2405,6 +3142,8 @@ def approve_structure(
                 f's4 structure decision requires prior approvals: {missing}')
         novel_dir = paths.resolve_novel_dir(base, sid)
         current_subject, planned = _current_structure_subject_and_chapters(novel_dir)
+        current_chapter_subjects = \
+            _current_structure_chapter_subject_sha256(novel_dir)
         if request.subject_sha256 != current_subject:
             raise HumanEditProtected(
                 'Stage4 结构审批对象已变化：'
@@ -2418,9 +3157,12 @@ def approve_structure(
         # proof 会重新读取完整计划字节；再看一遍语义 subject 与章集，避免计划在两次读取
         # 之间变化却把 A 的 subject 与 B 的字节 proof 拼成一份立即过期的假批准。
         after_subject, after_planned = _current_structure_subject_and_chapters(novel_dir)
+        after_chapter_subjects = \
+            _current_structure_chapter_subject_sha256(novel_dir)
         after_proof = _proof_for_structure(novel_dir, request)
         if (
             (after_subject, after_planned) != (current_subject, planned)
+            or after_chapter_subjects != current_chapter_subjects
             or after_proof != proof
         ):
             raise HumanEditProtected('Stage4 计划在结构裁决提交期间发生变化；请刷新后重审')
@@ -2431,6 +3173,7 @@ def approve_structure(
             and _structure_decision_payload(
                 _public_structure_decision(latest)) == _structure_decision_payload(request)
             and _same_proof(latest.proof, proof)
+            and latest.chapter_subject_sha256 == current_chapter_subjects
         ):
             return _view(base, record)
 
@@ -2442,7 +3185,8 @@ def approve_structure(
             decided_at=_now(),
         )
         stored = _StoredStructureDecision(
-            **public.model_dump(mode='json'), proof=proof)
+            **public.model_dump(mode='json'), proof=proof,
+            chapter_subject_sha256=current_chapter_subjects)
         history = [*record.structure_history, stored]
         gates = dict(record.gate)
         gate_proofs = dict(record.gate_proofs)

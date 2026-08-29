@@ -61,7 +61,9 @@ description: 作为受托终审代理，使用本仓 novel.cli 将单本中文�
 5. 从仓根优先用 `.claude/skills/novel-pipeline-operator/scripts/run_step.py --base <BASE> --sid <SID> --expect-code-version <START_CODE> <node> -- [flags]` 预览生产 `build_steps`；真跑采用同一条命令并把 `--execute` 放在 node 前。需要机器复核 preview 时加 `--evidence-json <PATH>`：它原子记录同一份 Step 的 argv/付费/写盘信息，preview 与 execute 复用同一路径时内容不同会拒绝覆盖。execute 无论是否传该路径，都会把本次真实 Step canonical evidence 的完整 SHA-256 同时写进 start/end 信标 note，供会话证据关闭式核对。headless Commander 下，runner 还会从 append-only started 事件重读并核验冻结的 commander/executor profile、两项授权和代码指纹；为当前 node 选择默认 executor 或逐节点 override，并把同一快照写进带契约身份的 evidence 与子 CLI argv。脚本会逐字执行同一 Step.argv、串起 start/end 信标，并在每一步前后拒绝代码漂移。新书的 `stage0.remove` 省略 runner 的 `--sid`。不要凭文档手拼真实 argv，也不要手加运行期 agent profile 参数。八个 agent executor 已原生执行“候选 → 代码校验反馈 → 同 session resume”，主路**不得**再带 legacy `--response-repair agent`；该 flag 只属于显式 DeepSeek 临时回滚。Stage5 全书写作节点不带选臂参数；定向维护只用 `--chapters`。
 6. 不使用 runner 的特殊诊断命令，仍须执行 `mark start`，取得真实子进程退出码后执行 `mark end --exit <rc>`；`preview` 不打点，并在动作前确认当前代码仍等于 `<START_CODE>`。
 7. 一次只运行一个写盘节点。用退出码判断进程结果，用最新 check badge 与 finding 判断质量结果。
-8. 命中闸门时按代批契约裁决；命中失败时按修复状态机收敛。每次决定同时记录证据、被否决方案和复验结果。
+8. 命中闸门时按代批契约裁决；Stage4A/B 两次裁决都先完整读取当前 hash-bound 的
+   `approval workpack design|structure`，再编辑并提交决定模板。工作包只缩小阅读范围，不自动 accept，
+   INFO/metric/UNVER 不制造付费动作。命中失败时按修复状态机收敛；每次决定同时记录证据、被否决方案和复验结果。
 9. `stage7.assemble` 后执行独立成书对账，再刷新 `state`、`inbox` 与活动终态文件；从仓根用 `.claude/skills/novel-pipeline-operator/scripts/collect_final_evidence.py --base <BASE> --sid <SID> --started-at <STARTED_AT> --start-code-version <START_CODE>` 收拢本次会话事实。随后运行同参数的 `.claude/skills/novel-pipeline-operator/scripts/sync_review_evidence.py`，自动同步质量表、会话/累计账本、退出序列与机器锚点，不手抄这些重复事实。
 10. 清除终审包中的其余占位符，从仓根运行同一组会话参数的 `.claude/skills/novel-pipeline-operator/scripts/validate_review.py`，再运行 `.claude/skills/novel-pipeline-operator/scripts/verify_delivery.py --base <BASE> --sid <SID> --start-code-version <START_CODE>`；只有后者返回 `ready*` 才可交付，然后只把成书与终审包交给用户。
 

@@ -1944,8 +1944,8 @@ class Stage4PlanSessionPool:
         if ctx.executor_profile is None:
             raise ValueError('stage4.plan executor 缺 resolved profile')
         if (not isinstance(max_turns, int) or isinstance(max_turns, bool)
-                or max_turns < 1):
-            raise ValueError('Stage4PlanSessionPool.max_turns 必须 >= 1')
+                or not 1 <= max_turns <= 4):
+            raise ValueError('Stage4PlanSessionPool.max_turns 必须在 1..4')
         if (not isinstance(concurrency, int) or isinstance(concurrency, bool)
                 or concurrency < 1):
             raise ValueError('Stage4PlanSessionPool.concurrency 必须 >= 1')
@@ -1958,6 +1958,10 @@ class Stage4PlanSessionPool:
             lambda _purpose, _chapter: create_driver(
                 self.profile, role='executor'))
         self._clients: dict[int, SessionAgentClient] = {}
+        # factory 返回的是 provider session 的所有者，不是可跨章复用的无状态
+        # transport。用对象身份守住最早的共享破口；provider_session_id 的跨对象
+        # 碰撞仍由 agent_session_audit 在首轮真实响应处关闭式拒绝。
+        self._driver_owners: dict[int, int] = {}
         self._probe: AgentProbe | None = None
         self._progress: dict[int, RequestProgress] = {}
         self._closed = False
@@ -1970,6 +1974,12 @@ class Stage4PlanSessionPool:
                 return client
             driver = self._driver_factory(
                 stage4_runs.plan_chapter_purpose(chapter), chapter)
+            owner = self._driver_owners.get(id(driver))
+            if owner is not None and owner != chapter:
+                raise ProvenanceRefused(
+                    'stage4.plan 章级池不接受跨章共享同一 driver/session：'
+                    f'ch{owner} 与 ch{chapter}')
+            self._driver_owners[id(driver)] = chapter
             if self._probe is None:
                 probe = driver.probe()
                 if not probe.available:
@@ -1995,9 +2005,14 @@ class Stage4PlanSessionPool:
             return client
 
     def prepare_chapters(self, chapters: Sequence[int]) -> None:
-        """为本批歧义章建立 RequestProgress；重复调用以最后一次为准。"""
-        normalized = sorted(set(int(chapter) for chapter in chapters))
-        if len(normalized) != len(set(chapters)):
+        """为本批歧义章预建私有 client 与 RequestProgress。
+
+        client 必须在任何 wire 之前全部建好：这样 factory 错把一个有状态 driver
+        发给两章时，会在花钱前失败，而不是并发跑到一半才发现 session 串线。
+        """
+        raw = [int(chapter) for chapter in chapters]
+        normalized = sorted(set(raw))
+        if len(normalized) != len(raw):
             raise ProvenanceRefused('stage4.plan 章 session 章号重复')
         if not normalized:
             raise ProvenanceRefused('stage4.plan 章批次不能为空')
@@ -2006,6 +2021,8 @@ class Stage4PlanSessionPool:
             chapter: RequestProgress(chapter=chapter, index=index, total=total)
             for index, chapter in enumerate(normalized, 1)
         }
+        for chapter in normalized:
+            self._client(chapter)
 
     def restore_chapter(
             self, chapter: int, request: Any, *,
@@ -2027,7 +2044,10 @@ class Stage4PlanSessionPool:
         )
         return restored
 
-    def ask_chapter(self, chapter: int, request: Any) -> ChapterBindingResponse:
+    def ask_chapter(
+            self, chapter: int, request: Any, *,
+            validator: Callable[[Any, Any], str | None] | None = None,
+    ) -> ChapterBindingResponse:
         """一章的 wire：ask → 返回 typed 解析；checkpoint 由调用方在业务
         闭合校验通过后写（`write_chapter_checkpoint`）。"""
         progress = self._progress.get(chapter)
@@ -2041,6 +2061,8 @@ class Stage4PlanSessionPool:
             model_cls=ChapterBindingResponse,
             purpose=stage4_runs.plan_chapter_purpose(chapter),
             max_tokens=request.max_tokens,
+            validator=validator,
+            retain_validator_rejection=True,
             progress=progress,
             recovery_policy=stage4_runs.plan_chapter_run_spec(
                 chapter).recovery_policy,
@@ -2050,6 +2072,7 @@ class Stage4PlanSessionPool:
             self, chapter: int, request: Any, *,
             response_payload: Mapping[str, Any],
             state_payload: Mapping[str, Any],
+            revision_key: str = 'terminal',
     ) -> None:
         client = self._client(chapter)
         stage4_runs.write_plan_chapter_checkpoint(
@@ -2057,7 +2080,7 @@ class Stage4PlanSessionPool:
             response_payload=response_payload,
             acceptance=client.accepted_checkpoint(
                 stage4_runs.plan_chapter_purpose(chapter)),
-            state_payload=state_payload)
+            state_payload=state_payload, revision_key=revision_key)
 
     def queue_chapter_feedback(self, chapter: int, rows: Sequence[Mapping[str, object]]) -> bool:
         """业务 HARD 反馈回**该章自己的** session；其他章不受影响。"""
@@ -2069,6 +2092,26 @@ class Stage4PlanSessionPool:
         purpose = stage4_runs.plan_chapter_purpose(chapter)
         return client.accepted_attempt(purpose), tuple(
             sorted(set(client.accepted_models(purpose))))
+
+    def chapter_acceptance(self, chapter: int) -> dict[str, Any]:
+        """章级 accepted stdout 的完整不可变身份，供 hash-bound 恢复留证。"""
+        return self._client(chapter).accepted_checkpoint(
+            stage4_runs.plan_chapter_purpose(chapter))
+
+    def chapter_rejection(self, chapter: int) -> dict[str, Any] | None:
+        """只暴露最后一轮 schema-valid dynamic-validator 拒稿。"""
+        return self._client(chapter).last_json_rejection(
+            stage4_runs.plan_chapter_purpose(chapter))
+
+    @property
+    def provider_session_id(self) -> str | None:
+        """只投影“本进程是否有 live session”；聚合从不冒充单一 session。"""
+        with self._lock:
+            live = sorted(
+                str(client.provider_session_id)
+                for client in self._clients.values()
+                if client.provider_session_id is not None)
+        return None if not live else '|'.join(live)
 
     @property
     def turns_used(self) -> int:

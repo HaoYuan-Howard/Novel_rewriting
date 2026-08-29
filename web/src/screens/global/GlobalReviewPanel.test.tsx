@@ -96,6 +96,11 @@ const enums: EnumsResponse = {
   design_review_states: [],
   binding_concern_codes: [],
   binding_infeasibility_codes: [],
+  approval_workpack_groups: [],
+  approval_workpack_kinds: [],
+  approval_workpack_actions: [],
+  approval_workpack_effects: [],
+  approval_workpack_group_effects: {},
   actions: [{
     kind: 'stage2.global',
     label: '提交全局复核',

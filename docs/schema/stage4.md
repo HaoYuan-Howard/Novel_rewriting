@@ -10,9 +10,10 @@ Stage2 v6
   │                              策略 + 全部章节 ─ 确定性聚合 + 整书 HARD ─ blind_candidate v2（原子落盘）
   │                                                                        │
   │                                                            A 正式设计审阅（服务账）
-  └─ 原文证据层 + 已审阅候选 ─ stage4.plan（B，付费）────────── evidence_binding v3
+  └─ 原文证据层 + 已审阅候选 ─ stage4.plan（B，独立授权）─ 机械基线（唯一解 0 wire）
+                                                              └─ 真歧义章私有 session（≤4 并发）
                                                                            │
-                                      A + B ─ 确定性编译 ──────────────────┴─ plan_chapters v4
+                                      A + 逐章 B ─ 确定性聚合/编译 ────────┴─ plan_chapters v4
                                                                                     │
                                                                最终逐章结构审批（s4）
                                                                                     │
@@ -21,7 +22,8 @@ Stage2 v6
 
 A、B 是两个独立公开节点、两次独立授权；A 的一次授权覆盖预览中明示的 1+N 个内部逻辑请求，
 不是 N+1 次公开授权。A 落盘后先过正式设计审阅，不会自动连跑 B。B 编译 Plan 后再过另一份最终
-逐章结构审批；Context 只能在该决定全书接受后独立生成。`stage4.plan --identity` 仍完整构造并校验
+逐章结构审批；B 的公开授权也不等于一次整书 wire：代码先解机械唯一项，只有真歧义章各自发 wire。
+Context 只能在该决定全书接受后独立生成。`stage4.plan --identity` 仍完整构造并校验
 恒等计划与上下文，但只输出诊断，不产生 artifact 或审批。
 
 ## 一、产物与版本
@@ -125,9 +127,29 @@ id 与来源位置不公开；opaque alias 只在本章 subject 内闭合。
 
 ## 三、Stage4B：`evidence_binding.json` v3
 
-B 收到冻结候选、候选业务主体 SHA-256，以及原文证据、源舞台和必须材料的关闭式目录。人物到场
-由绑定舞台的 `present` 唯一给出，B 不再回填第二份人物清单。B 的输出没有结构字段入口，不能修改
-A 的场景顺序、事实分组、goal、结构声明、brief、purpose/role/delivery/transition 或权重。
+B 收到冻结候选、候选业务主体 SHA-256，以及原文证据、源舞台和必须材料的关闭式目录。代码先用
+`build_mechanical_baseline` 把 scene fact 经 `source_beat_ref` 映射到舞台 allowlist、把 material 经属主
+beat 映射到 eligible scene；唯一归属和签名等价候选均由代码规范化决定。只有
+`stage_signature_conflict`、`material_multi_scene`、`material_unplaceable` 三类真自由度形成内容寻址
+ambiguity id，并只把对应章送入私有 session。人物到场由绑定舞台的 `present` 唯一给出，B 不再回填
+第二份人物清单。B 没有结构字段入口，不能修改 A 的场景顺序、事实分组、goal、结构声明、brief、
+purpose/role/delivery/transition 或权重。
+
+其中每一个 `stage_signature_conflict` 都按 `R-5.24` 常驻为 INFO：选定舞台只闭合 binding，不会把
+“这里曾存在多个时间/地点/在场签名”洗掉。该披露进入 structure workpack，但没有付费 action。
+
+机械章不建模型 session、不写章级 checkpoint，恢复时从冻结输入 0 成本重算。每个歧义章独占
+provider session、purpose、ledger attempt 与 checkpoint；实际并发取配置、待跑章数与硬上限 4 的最小值。
+单章响应在 worker 内依次过 parse/必需键/schema/动态 validator 与本章 baseline 闭合，成功即原子
+checkpoint，后章失败不能取消或抹掉此前已验章。聚合始终按章号确定，B-owner 的整书 HARD 若能唯一
+路由到一章，只回该章原 session；新响应通过后同时替换 checkpoint、accepted attempt、unit lineage 与
+commit anchor，不能让正式来源账继续指向旧稿。A/Stage2/code owner 立即停止，不消耗该章后续轮次。
+
+章 prompt 只含本章候选、相关原文/hinge 文本、本章 blueprint 与关闭目录、机械歧义，以及相邻章一行
+边界摘要；不得携带其他章正文。时间层冲突无法闭合时不选任意 fallback，保留其他章 checkpoint，转
+hash-bound unit replacement。人工 replacement 与模型章响应复用同一个 `ChapterBindingResponse`
+validator、聚合 compiler 与全书 HARD；它只消费已封存且绑定原 run/request/code/subject 的 resolution，
+不新增 provider wire。整份人工 `--apply-binding` 继续作为另一条明确入口，不与 unit replacement 混用。
 
 | 字段 | `bound` | `infeasible` | 证据 |
 |---|---|---|---|
@@ -136,7 +158,7 @@ A 的场景顺序、事实分组、goal、结构声明、brief、purpose/role/de
 | `chapters` | 非空；章场集精确匹配候选 | `null` | 码·契 |
 | `binding_concerns[]` | 可空；非阻断语义担忧 | 模型主张阶段必须非空；正式稿保留作审阅证据 | 码·契 |
 | `infeasibility_proof[]` | `null` | 非空、由代码铸造的关闭式 witness | 码·契 |
-| `_provenance` | `origin=llm` 的 B 来源账，或 `--apply-binding` 的 `origin=human` 免费来源账 | 同左 | 码·契 |
+| `_provenance` | `architecture=chapter_baseline_v1` 时含 baseline/chapter session 的逐章 `unit_lineage`；全机械书明确 0 模型；旧整书路为 `whole_book_v1`；`--apply-binding` 为 human 免费来源账 | 同左 | 码·契 |
 
 `bound.chapters[].scenes[]` 只含 `candidate_scene_id`、`stage_refs`、`material_refs`。每个候选场恰绑定
 一次，每条材料全章恰落一次；返回数组顺序不产生叙事语义，编译始终沿 A 顺序。
@@ -252,7 +274,7 @@ subject SHA-256、actor、全书理由及与计划章集精确相等的逐章 ac
 
 | 状态 | 允许的恢复 | 禁止的捷径 | 证据 |
 |---|---|---|---|
-| A 的策略或单章响应暂停/拒收 | 同一 `run_id` 恢复，只补失败/缺失 unit；validator 原字节可走 `--adopt-rejected` | 重发已验 unit、公开 `--chapters`、补字段或部分聚合冒充正式候选 | 码·契 |
+| A 的策略或单章响应暂停/拒收 | 同一 `run_id` 恢复，只补失败/缺失 unit；旧 whole-book validator 拒稿才可走 `--adopt-rejected`，当前 split-run unit 仍按活动待办收口 | 重发已验 unit、公开 `--chapters`、拿旧整书入口冒充 unit adoption、补字段或部分聚合冒充正式候选 | 码·契 |
 | A 正式审阅逐章拒绝 | 当前 decision SHA 绑定的 `--repair-decision` 只返修 request_repair 章；策略拒绝才 `--replan` | 把默认模板理由当真实反馈、自然语言自由指令、无决定随机重采整书 | 码·契 |
 | 模型声称 B `infeasible` | 同 session 结构化反馈要求 bound；真实代码 witness 可落正式终态；亦可提交 `--apply-binding` 或完整 v4 人工计划 | 信任模型自证、B 私改 A、自动生成 A2、要求已有 Plan 才给首次恢复 | 码·契 |
 | 计划落 `.INVALID` | 修订 v4 `plan_edit.json` 后 `--apply-edit`，或 `--revalidate --actor --reason` | 改名提升、绕过 schema/判据/归档 | 三源 |
@@ -261,14 +283,14 @@ subject SHA-256、actor、全书理由及与计划章集精确相等的逐章 ac
 
 ## 八、现行判据
 
-当前注册表共 **32 条**：**20 hard、2 info、10 metric**。
+当前注册表共 **33 条**：**20 hard、3 info、10 metric**。
 
 | 分组 | 当前规则 id |
 |---|---|
 | 章场与事实安全 | `one_to_one` · `ordinal_seq` · `empty_chapter` · `fact_ref` · `fact_coverage` · `causal_closure` · `state_closure` · `material_coverage` · `scene_transition` · `goal_landing` |
 | 预算与文本策略 | `budget_int` · `budget_band` · `plan_book_band` · `style_words` · `verbatim_starved` |
 | A/B 与 Context | `phase_artifact_link` · `context_link` · `ctx_facts_exact` · `ctx_name_attested` · `ctx_stage_explicit` · `ctx_hinge_delivered` |
-| 因果提示 | `causal_disclosure` |
+| 因果与舞台提示 | `causal_disclosure` · `stage_signature_conflict` |
 | 常驻读数 | `scene_budget_distribution` · `verbatim_share` · `partition_change` · `disclosure_order` · `noncontiguous_regroup` · `anchor_migration` · `structure_eligibility` · `structure_alignment` · `semantic_closure_reading` · `ctx_source` |
 
 判据权威定义在 `contracts/judges/stage4.py`。metric 不产生自动结论，API、前端与审批服务不得再造第二个判官。

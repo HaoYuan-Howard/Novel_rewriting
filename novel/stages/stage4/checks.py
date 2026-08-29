@@ -18,6 +18,7 @@ from contracts.schema.report import finding
 from novel.llm.typed_failures import WitnessCollector
 from novel.report.findings import Outcome, ran, unverifiable
 from novel.stages.stage4.beats import beat_index, verbatim_pieces
+from novel.stages.stage4.baseline import _stage_signature
 from novel.stages.stage4.measure import (
     chapter_source_chars, computed_structure_change_kinds,
     structure_metrics_of, verbatim_share_stats,
@@ -495,6 +496,77 @@ def temporal_state_findings(
 _NO_OP_WITNESS = WitnessCollector()
 
 
+def stage_signature_conflict_findings(
+    chapters: list[dict[str, Any]],
+    bp_of: dict[int, dict[str, Any]],
+) -> list[tuple[int, str, list[str]]]:
+    """把 B 基线的 time/place/present 唯一签名尺子接到正式复检。
+
+    正式 Plan 已不保留 A 的 opaque alias，但每场 land fact 仍精确指回
+    ``fact_atom.source_beat_ref``；所以这里只做这条无损 join，签名本身复用
+    ``baseline._stage_signature``，不再发明第二套判据。
+
+    返回一冲突一行、证据全量。INFO 没有阈值，不得用 ``[:N]``
+    把后章或第九个候选舞台静默裁掉。
+    """
+    rows: list[tuple[int, str, list[str]]] = []
+    for chapter in chapters:
+        ordinal = int(chapter.get('output_ordinal') or 0)
+        bp = bp_of.get(ordinal) or {}
+        atoms = {
+            str(atom.get('fact_id')): atom
+            for atom in (bp.get('fact_atoms') or [])
+        }
+        beats = {
+            str(beat.get('beat_id')): beat
+            for beat in (bp.get('beats') or [])
+        }
+        for index, scene in enumerate(chapter.get('scenes') or []):
+            fact_to_beat: dict[str, str] = {}
+            for raw_ref in scene.get('land_fact_refs') or []:
+                fact_ref = str(raw_ref)
+                atom = atoms.get(fact_ref)
+                if atom is None:
+                    continue
+                beat_id = str(atom.get('source_beat_ref'))
+                if beat_id in beats:
+                    fact_to_beat[fact_ref] = beat_id
+            fact_to_beat = dict(sorted(fact_to_beat.items()))
+            beat_ids = sorted(set(fact_to_beat.values()))
+            signatures = {
+                beat_id: _stage_signature(beats[beat_id])
+                for beat_id in beat_ids
+            }
+            if len(set(signatures.values())) <= 1:
+                continue
+            slot = str(scene.get('slot') or index + 1)
+            disclosed = {
+                beat_id: {
+                    'time_layer': signature[0],
+                    'place': signature[1],
+                    'present_char_ids': signature[2].split('|')
+                    if signature[2] else [],
+                }
+                for beat_id, signature in signatures.items()
+            }
+            detail = f'ch{ordinal}.{slot}:stage signature conflict=' + json.dumps(
+                {
+                    'fact_to_source_beat': fact_to_beat,
+                    'signatures': disclosed,
+                },
+                ensure_ascii=False, sort_keys=True, separators=(',', ':'),
+            )
+            evidence = [slot, *fact_to_beat, *beat_ids, *(
+                f'{fact_ref}=>{fact_to_beat[fact_ref]}'
+                for fact_ref in fact_to_beat
+            ), *(
+                f'{beat_id}={json.dumps(disclosed[beat_id], ensure_ascii=False, sort_keys=True, separators=(",", ":"))}'
+                for beat_id in beat_ids
+            )]
+            rows.append((ordinal, detail, evidence))
+    return rows
+
+
 def check(plan: dict[str, Any], *, blueprints: dict[str, Any],
           main_text: list[dict[str, Any]], global_g: dict[str, Any] | None = None,
           ctx: dict[str, Any] | None = None,
@@ -845,6 +917,18 @@ def check(plan: dict[str, Any], *, blueprints: dict[str, Any],
     outcomes.append(scoped_outcome(
         'causal_disclosure', disclosure_reversed, '披露逆因果',
         f'{sum(len(bp.get("causal_edges") or []) for bp in bp_of.values())} 条因果边'))
+    signature_conflicts = stage_signature_conflict_findings(chapters, bp_of)
+    outcomes.append(ran(
+        'stage_signature_conflict',
+        [
+            finding(
+                'stage_signature_conflict', detail=detail, evidence=evidence,
+                output_ordinal=ordinal,
+            )
+            for ordinal, detail, evidence in signature_conflicts
+        ],
+        scanned=f'{sum(len(ch.get("scenes") or []) for ch in chapters)} 个场景',
+    ))
 
     def metric_rows(section: str) -> str:
         return json.dumps([

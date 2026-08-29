@@ -369,6 +369,10 @@ class SessionAgentClient:
         self._turn_index = 0
         self._accepted: dict[str, str] = {}
         self._accepted_checkpoint: dict[str, dict[str, Any]] = {}
+        # 只保存“schema 已过、dynamic validator 在最后一轮拒绝”的 stdout
+        # custody 材料。它仍是 rejected gate，不会被普通调用方当成成功响应；
+        # Stage4B 用它把最后一份已付费候选送入 hash-bound response-repair。
+        self._last_json_rejection: dict[str, dict[str, Any]] = {}
         # checkpoint 的 attempt_links 只描述这一只 logical session 实际发生的
         # attempts；CostLedger 同一 run/purpose 还可能含前一只失败 session，不能
         # 靠 purpose 反查把它们静默吸进来。只有显式恢复过的 accepted checkpoint
@@ -1044,7 +1048,7 @@ class SessionAgentClient:
         self._accepted_checkpoint[purpose] = payload
 
     def accepted_checkpoint(self, purpose: str) -> dict[str, Any]:
-        """返回刚通过 wire/schema/dynamic validator 的 agent checkpoint 材料。"""
+        """返回 accepted 或显式 repair-custody stdout 的不可变联结材料。"""
         value = self._accepted_checkpoint.get(purpose)
         if value is None:
             raise ProvenanceRefused(
@@ -1055,6 +1059,17 @@ class SessionAgentClient:
             'accepted_request': dict(value['accepted_request']),
             'attempt_links': [dict(row) for row in value['attempt_links']],
             'recovery_from_attempts': list(value['recovery_from_attempts']),
+        }
+
+    def last_json_rejection(self, purpose: str) -> dict[str, Any] | None:
+        """返回最后一轮 dynamic-validator 拒稿；其他 gate 永不冒充可修候选。"""
+        value = self._last_json_rejection.get(purpose)
+        if value is None:
+            return None
+        return {
+            **value,
+            'payload': dict(value['payload']),
+            'detail': [dict(row) for row in value['detail']],
         }
 
     def restore_checkpoint_acceptance(
@@ -1199,8 +1214,10 @@ class SessionAgentClient:
         progress: RequestProgress | None = None,
         prefer_content_over_reasoning_salvage: bool = False,
         recovery_policy: str | None = None,
+        retain_validator_rejection: bool = False,
         **unsupported: object,
     ) -> M:
+        self._last_json_rejection.pop(purpose, None)
         if unsupported:
             raise LlmFailed(
                 f'{self.ctx.node}/{purpose}: SessionAgentClient 尚未实现参数 '
@@ -1219,6 +1236,8 @@ class SessionAgentClient:
             raise LlmFailed(
                 f'{self.ctx.node}/{purpose}: agent driver 只有 stdout content 通道；'
                 '不能接受 reasoning salvage 偏好后静默忽略')
+        if type(retain_validator_rejection) is not bool:
+            raise LlmFailed('retain_validator_rejection 必须显式给 bool')
         if (recovery_policy is not None
                 and recovery_policy not in _RECOVERY_SESSION_ISOLATION):
             raise LlmFailed(
@@ -1361,6 +1380,24 @@ class SessionAgentClient:
                 request_mode='agent_session_resume', chapter=self.chapter,
             )
             if not self.can_resume:
+                if (retain_validator_rejection
+                        and gate == 'validator' and obj is not None):
+                    # 动态闸耗尽与 parse/schema 失败不同：stdout 已是一份完整
+                    # response-model 对象，可安全成为“一次人工 replacement”的原稿。
+                    # 这里冻结的仍是供应商原 stdout/attempt；人工候选只会封在
+                    # response-repair resolution，绝不回写这份 acceptance。
+                    self._remember_json_acceptance(
+                        purpose=purpose, turn=turn,
+                        attempt_id=attempt_id, identity=identity)
+                    self._last_json_rejection[purpose] = {
+                        'attempt_id': attempt_id,
+                        'content': turn.content,
+                        'payload': obj.model_dump(by_alias=True, mode='json'),
+                        'gate': gate,
+                        'detail': [dict(row) for row in details],
+                        'why': private_feedback,
+                        'model': turn.model or self.profile.model,
+                    }
                 raise LlmFailed(
                     f'{self.ctx.node}/{purpose}: {gate} 校验连续未通过，'
                     f'已用尽 {self.max_turns} 轮；停止继续花费')

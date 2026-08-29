@@ -16,6 +16,7 @@ import pytest
 
 from contracts.schema.stage4 import ChapterBindingResponse
 from novel import prov, run_identity
+from novel.errors import ProvenanceRefused
 from novel.llm import stage4_runs
 from novel.node_agents import Stage4PlanSessionPool
 from tests.test_stage4_agent_boundary import (
@@ -192,3 +193,12 @@ def test_pool_refuses_wrong_node_and_caps_concurrency(tmp_path) -> None:
         executor_profile=_profile())
     pool = Stage4PlanSessionPool(plan_ctx, concurrency=99)
     assert pool.concurrency == 4  # 供应商稳定性边界：配置只能调低
+    with pytest.raises(ValueError, match='1..4'):
+        Stage4PlanSessionPool(plan_ctx, max_turns=5)
+
+    shared = _ChapterDriver(1, [_resolution_payload('0' * 16)])
+    unsafe = Stage4PlanSessionPool(
+        plan_ctx, driver_factory=lambda _purpose, _chapter: shared)
+    with pytest.raises(ProvenanceRefused, match='跨章共享'):
+        unsafe.prepare_chapters([1, 2])
+    assert shared.calls == 0  # 必须在第一条 wire 前失败

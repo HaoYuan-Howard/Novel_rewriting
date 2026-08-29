@@ -175,6 +175,7 @@ export const api: Api = USE_MOCK ? mockApi : realApi
 |---|---|
 | 20 份响应 | TanStack Query |
 | **`gate` / `seen` / `design_review` / `structure` / `writing`** | 一份 v5 `ApprovalDoc`，也走 Query（`['approvals', sid]`）；`design_review` 保存绑定当前 Stage4A 主体的策略级与逐章 typed 裁决，只授权 B；`structure` 保存绑定完整 Stage4 plan + binding concerns 主体的最终逐章裁决；`writing` 仍独立记录全书闭卷写作授权 |
+| Stage4 A/B 审阅工作包 | 两条独立 Query（`['approvals', sid, 'design|structure', 'workpack']`）；分别读取 `/approvals/design/workpack` 与 `/approvals/structure/workpack`，绑定当前 A 候选或 B 结构主体，不从 `ApprovalDoc`、页面 rows 或历史决定重拼 |
 | `job` / `jobLog` | Query + `refetchInterval`（由服务端下发的 `running` 决定） |
 | 确认框里的 argv | Query（`api.previewJob`） |
 | `sid` / 章号 / 当前屏 | React Router 路径 |
@@ -209,7 +210,7 @@ Stage4A 表单一次提交当前完整 subject、策略 `accept|request_replan` 
 | `/n/:sid/stage1` | 顶部合并展示校验结论与切分确认，且不依赖正文查询成功；下方是章节索引和原文切分结果，只读，开篇文案只展示一次，重号/缺号/倒退按服务端章号诊断逐章显式提示 |
 | `/n/:sid/read/:o` | 原文与 stage2 骨架对照 |
 | `/n/:sid/global` | stage2 全局人物、关系、规则、秘密 |
-| `/n/:sid/stage4/:o` | Stage4A 盲候选先经策略级与逐章 typed 人审；全接受后才呈现 B/最终结构工作面。常驻展示完整结构 subject SHA-256、全章 `retain/reconstruct`、声明/复算变化与 B 的 nonblocking concerns，选中章再展示计划/上下文细节，并经第二道 typed 表单原子提交最终逐章结构裁决。最终结构批准不等于 Stage5 写作授权 |
+| `/n/:sid/stage4/:o` | Stage4A 盲候选先经策略级与逐章 typed 人审；A/B 各自先显示服务端异常优先工作包（`blocking → semantic_attention → disclosure → metric_only → phase_deferred → coverage`），再由人填写完整 typed 裁决。全接受后才呈现 B/最终结构工作面。常驻展示完整结构 subject SHA-256、全章 `retain/reconstruct`、声明/复算变化与 B 的 nonblocking concerns，选中章再展示计划/上下文细节，并经第二道 typed 表单原子提交最终逐章结构裁决。最终结构批准不等于 Stage5 写作授权 |
 | `/n/:sid/stage5/:o` | canonical 成稿、材料、验收 finding 与修订的合并工作面；空状态在付费确认前先写入全书闭卷授权；current TrimAudit 在本屏经专用 retain-pretrim 路由留 actor/reason 销账，fresh Review 的章级/书级 finding 可按完整 evidence identity 提交 wontfix |
 | `/n/:sid/inbox` | 八类待办的全书路由器，不提供第二个编辑面（校验下沉到各阶段屏的面板） |
 | `/n/:sid/stage6` | 三候选文案与人工定稿 |
@@ -243,6 +244,11 @@ hash-bound 的策略级与逐章裁决；候选、证据、允许的 repair code
 关闭式拒绝，前端不替人补拒绝理由。只有后端返回 `design_review.state=accepted`，才呈现
 `screens/stage4/StructureApprovalPanel`。后者替代通用 `GateBar(s4)`，对完整 Plan + concerns 主体
 逐章裁决；`request_replan` 不顺手拉起重规划，写作授权仍只在 Stage5 的付费确认流中单独授予。
+两面共用 `screens/stage4/ApprovalWorkpackPanel`，但各走自己的 GET 与 query key：六组按服务端顺序
+逐项展示 `scanned / sev / status / effect / detail / refs / scene_refs / allowed_actions`，并原样标出
+`changed / historical_accept_reusable / source_decision_sha256`。面板不按 severity 或文案重判、不据
+空组宣称通过、不预填 accept；`allowed_actions` 只作为 `accept|request_repair|request_replan` 的 typed
+入口披露，INFO、metric、UNVER、skipped 等只读项不会因此长出付费按钮。
 
 全局屏的 `screens/global/GlobalReviewPanel` 按**主体**成卡：人读这一面的方式是
 「这个人物 / 这条关系 / 这条秘密的时间线」，不是一张 145 行的表。收敛键
@@ -291,6 +297,10 @@ stage5 的「三栏」= `ComparePanes(sticky=left)` 的右栏里装 `CompareRows
   进入 B；逐章 `request_repair` 必须带关闭式 repair code 和所需 scene/opaque-alias 引用。
   `ApprovalDoc.structure` 只在 B 编译后对完整 Plan + `binding_concerns` 生效，二者不能互相代签。
   concerns 是需人核对的非阻断披露，前端逐条展示，但不把它自动翻译成拒绝或通过。
+- **Stage4 A/B 工作包是两份只读 façade v1**：各自携带当前 `subject_sha256` 与固定六组全集；空组仍
+  保留服务端的 `scanned` 口径。`phase_deferred` 只说明要等 Context 才可判，不进入 B 结构主体；
+  `coverage` 是全章核对导航，不是自动批准清单。界面只显示服务端 `effect` 与 `allowed_actions`，
+  不从 INFO / metric / UNVER 造 repair 或付费入口。
 - **Stage5 `materials` 是对象或 `null`**：非空时以 `blocks[]` 为唯一下发面。前端分别处理
   对象缺席与对象内列表，不能把 `null` 洗成空列表。
 - **Stage5 正文只取 Draft `segments[]`**：Review 只发 finding 与计数，不重复正文、轮次、篇幅、

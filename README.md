@@ -39,7 +39,8 @@ stage2  全书级抽取（人物/关系/规则/秘密/弧线）  1 次调用
 stage4  A：1 个公开付费节点/授权；内部 1 份整书策略 + 每章 1 个私有 session
            策略串行先行，逐章最多 4 并发；全部通过后才确定性聚合并原子落盘
         A 正式审阅：全书策略 + 逐章 accept/repair；拒绝章可 hash-bound 定向修订 0 成本审阅
-        B：只给已审阅候选绑定舞台/人物/材料并编译计划 1 次独立调用
+        B：机械基线先解唯一绑定；只给真歧义章开私有 session（最多 4 并发）
+           全机械书 0 wire；逐章闭合后确定性聚合并编译计划
         最终人工逐章结构批准（不自动触发重规划） 0 成本
         写作上下文（最终批准后独立确定性组装，写作的唯一输入） 0 成本
 stage5  全书逐章闭卷写作；正式稿唯一落 `stage5/chNN.json`，默认补齐全部缺章
@@ -67,8 +68,17 @@ JSON/schema/动态判据后立即写验证后 checkpoint，再按章启动互相
 组装整书候选，重跑整书级 schema 与全部 HARD，最后才原子写入 `stage4/blind_candidate.json`；任何
 中断或聚合失败都不得留下部分正式候选。候选落盘并不授权 B：必须先提交绑定当前候选的正式设计审阅。
 已接受且主体未变的章可在下一次整书原子决定中复用；被拒章只按关闭式约束定向修订，策略被拒才整书
-重规划。Stage4B 仍是另一个公开节点、另一次授权和一次独立调用；模型声称 `infeasible` 只有经代码
-构造性证明后才能成为正式终态，否则在同一 session 要求返回完整绑定。
+重规划。Stage4B 仍是另一个公开节点和另一次授权，但内部先由代码生成机械基线：唯一可解章不发
+wire，只有真歧义章各开一条私有 session（硬上限 4 并发），每章验证后立即 checkpoint，再按章号
+确定性聚合并走同一 compiler/HARD。单章失败不会抹掉其他已验章；模型声称 `infeasible` 只有经代码
+构造性证明后才能成为正式终态，否则只回对应章 session。无法自动闭合的 unit 走绑定 run/request/code
+与主体 SHA-256 的 0-wire replacement，不重发已经有效的模型输出。
+
+Stage4 两次人审都先读服务端生成的异常优先工作包：CLI 为
+`novel.cli approval workpack design|structure <SID> --base <BASE>`，HTTP 为对应的
+`GET /api/novels/:sid/approvals/{design|structure}/workpack`。工作包固定给出 blocking、语义关注、
+披露、metric、阶段延期与全章 coverage 六组，只缩小阅读面；它不预填决定、不自动接受，
+INFO / metric / UNVER 也不会因此获得付费返工入口。
 
 Stage5 同一 run 的正常中断继续复用原 `run_id` 恢复 checkpoint。若代码已变化、旧 run 已完成
 响应与 checkpoint 却停在 foreign `prepared` 提交尾窗，默认付费写作会在 client/driver 前关闭式

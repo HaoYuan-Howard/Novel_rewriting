@@ -1151,14 +1151,17 @@ def _chapter_binding_user(
          if int(row.get('output_ordinal') or 0) == chapter_ordinal), None)
     if chapter is None:
         raise UpstreamMissing(f'候选没有第 {chapter_ordinal} 章')
+    source_by_ordinal = {
+        int(row.get('chapter_ordinal') or 0): str(row.get('text') or '')
+        for row in up.main_text}
+    source_text = source_by_ordinal.get(chapter_ordinal)
+    if not source_text:
+        raise UpstreamMissing(f'第 {chapter_ordinal} 章原文为空或缺失')
     bp_by_ordinal = {
         int(row.get('chapter_ordinal') or 0): row
         for row in (up.blueprints.get('blueprints') or [])}
     bp = bp_by_ordinal.get(chapter_ordinal) or {}
     beats = {str(beat.get('beat_id')): beat for beat in (bp.get('beats') or [])}
-    alias_to_fact = {
-        str(alias): str(fid)
-        for alias, fid in (candidate_raw.get('fact_aliases') or {}).items()}
     atoms = {
         str(atom.get('fact_id')): atom
         for atom in (bp.get('fact_atoms') or [])}
@@ -1168,8 +1171,7 @@ def _chapter_binding_user(
     parts = [
         f'《{ctx.title}》第 {chapter_ordinal} 章（本章唯一；不含其他章）',
         prompts.BLOCK_CHAPTER_CANDIDATE + _PROMPT_NL + json.dumps(
-            {'reconstruction_strategy': candidate_raw.get('reconstruction_strategy'),
-             'weight': chapter.get('weight'),
+            {'weight': chapter.get('weight'),
              'scenes': [
                  {'candidate_scene_id': scene.get('candidate_scene_id'),
                   'land_fact_aliases': scene.get('land_fact_aliases') or [],
@@ -1177,18 +1179,26 @@ def _chapter_binding_user(
                  for scene in (chapter.get('scenes') or [])]},
             ensure_ascii=False, sort_keys=True, separators=(',', ':')),
         prompts.BLOCK_CHAPTER_EVIDENCE + _PROMPT_NL + json.dumps(
-            {'fact_atoms': [
+            {'chapter_source_text': source_text,
+             'fact_atoms': [
                 {'fact_id': atom.get('fact_id'), 'claim': atom.get('claim'),
                  'obligation': atom.get('obligation'),
-                 'source_beat_ref': atom.get('source_beat_ref')}
+                 'source_beat_ref': atom.get('source_beat_ref'),
+                 'source_text': (
+                     (atom.get('source') or {}).get('text')
+                     if isinstance(atom.get('source'), dict) else None)}
                 for atom in atoms.values()],
              'stages': [
                  {'stage_ref': beat.get('beat_id'),
                   'time_layer': beat.get('time_layer'),
                   'place': beat.get('place'),
                   'present_char_ids': beat.get('present_char_ids') or [],
-                  'material_refs': [
-                      hinge.get('hinge_id')
+                  'materials': [
+                      {'material_ref': hinge.get('hinge_id'),
+                       'kind': hinge.get('kind'),
+                       'text': (
+                           (hinge.get('source') or {}).get('text')
+                           if isinstance(hinge.get('source'), dict) else None)}
                       for hinge in (beat.get('hinges') or [])]}
                  for beat in beats.values()]},
             ensure_ascii=False, sort_keys=True, separators=(',', ':')),
@@ -1205,9 +1215,20 @@ def _chapter_binding_user(
             ensure_ascii=False, sort_keys=True, separators=(',', ':')),
     ]
     if neighbor is not None:
+        previous_bp = bp_by_ordinal.get(chapter_ordinal - 1) or {}
+        current_scenes = chapter.get('scenes') or []
+        previous_scenes = neighbor.get('scenes') or []
         parts.append(prompts.BLOCK_CHAPTER_NEIGHBORS + _PROMPT_NL + json.dumps(
             {'previous_chapter_ordinal': neighbor.get('output_ordinal'),
-             'previous_scenes': len(neighbor.get('scenes') or []),
+             'previous_ending_state_refs':
+                 previous_bp.get('ending_state_refs') or [],
+             'previous_exit_state_aliases': (
+                 previous_scenes[-1].get('exit_state_aliases') or []
+                 if previous_scenes else []),
+             'current_entry_state_refs': bp.get('entry_state_refs') or [],
+             'current_entry_state_aliases': (
+                 current_scenes[0].get('entry_state_aliases') or []
+                 if current_scenes else []),
              'note': '仅承接判断；不得引用、复述或推断上一章正文'},
             ensure_ascii=False, sort_keys=True, separators=(',', ':')))
     return _PROMPT_NL.join(parts)
@@ -1636,6 +1657,9 @@ def _finish_restored_agent_session(
                 process_state='ok', delivery_state=delivery_state,
                 end_code_version=prov.code_version(),
                 error_kind=error_kind,
+                # unit replacement 恢复的是一条已以 blocked 收尾的旧会话；
+                # 新正式交付不改写那段历史，只需在它仍开放时补尾。
+                only_if_open=True,
             ) or closed_any
         return closed_any
     if not hasattr(source, 'provider_session_id'):
@@ -3198,9 +3222,17 @@ def _materialize_binding(
             'unit_lineage': (
                 [{**row} for row in unit_lineage] if unit_lineage else None),
         }
+    prompt_name = (
+        'CHAPTER_BIND_SYS'
+        if architecture == 'chapter_baseline_v1'
+        else 'EVIDENCE_BIND_SYS')
+    prompt_text = (
+        prompts.chapter_binding_system()
+        if architecture == 'chapter_baseline_v1'
+        else prepared.system)
     provenance = ctx.llm_provenance(
         EvidenceBindingProvenance,
-        prompts={'EVIDENCE_BIND_SYS': prepared.system},
+        prompts={prompt_name: prompt_text},
         model=source.model,
         adopted_models=adopted_models,
         settle=settle,
@@ -3706,8 +3738,10 @@ def _plan_commit_spec(
     ]
     if not chapter_rows:
         return None
+    anchor = max(chapter_rows, key=lambda row: (
+        int(row.get('revision') or 0), int(row['chapter_ordinal'])))
     return stage4_runs.plan_chapter_commit_spec(
-        int(chapter_rows[-1]['chapter_ordinal']))
+        int(anchor['chapter_ordinal']))
 
 
 def finalize_plan_candidate(
@@ -4048,11 +4082,33 @@ def _queue_plan_validation_feedback(
         rows, purpose=ctx.node)
 
 
+@dataclass(frozen=True)
+class _PlanChapterUnit:
+    """一章已通过 wire 闸并可参与整书聚合的当前版本。"""
+
+    chapter_ordinal: int
+    request: Any = field(repr=False, compare=False)
+    response: ChapterBindingResponse = field(repr=False, compare=False)
+    rows: list[dict[str, Any]] = field(repr=False, compare=False)
+    attempt_id: str
+    models: tuple[str, ...]
+    restored: bool
+    # 聚合采纳版本，不等同 checkpoint 文件 revision：首轮/恢复=0，
+    # 每次 B-owner 返问 +1，人工 replacement 也 +1。
+    revision: int = 0
+    replacement: Any | None = field(default=None, repr=False, compare=False)
+
+
+class _PlanChapterRepairPending(Exception):
+    """线程内控制信号：章已留 work item；跨节点边界前转换为 TerminalState。"""
+
+
 class _PlanChapterAggregateSource:
     """把章级 session 池投影成 finalize 账机需要的聚合 source 视图。
 
-    聚合 checkpoint 锚定**最后一个有 session 的章**的 accepted attempt；
-    机械章没有 attempt（0 wire），只进 unit lineage。
+    commit anchor 取最高 ``(revision, chapter_ordinal)`` 的最终采纳 unit；
+    ``accepted_models`` 则取**全部**采纳 unit 的实际模型并集。机械章没有
+    attempt/model（0 wire），只进 unit lineage。
     """
 
     #: finalize 收尾钩子按此标记走章级池分支（真身是 _pool）。
@@ -4076,8 +4132,15 @@ class _PlanChapterAggregateSource:
             raise ProvenanceRefused('stage4.plan 章级聚合缺 actual accepted model')
         return self._anchor_models
 
+    @property
     def driver_failed(self) -> bool:
         return self._pool.driver_failed
+
+    @property
+    def provider_session_id(self) -> str | None:
+        # 聚合没有自己的 provider session；这里只向 finalize 投影“本进程是否
+        # 有任一 live 章 session”，绝不把历史 checkpoint id 冒充可恢复会话。
+        return self._pool.provider_session_id
 
 
 def _chapter_wire_validator(chapter_baseline):
@@ -4104,6 +4167,463 @@ def _chapter_input_sha(ctx: RunContext, prepared: PlanCandidateContext,
     })
 
 
+def _plan_chapter_request(
+        ctx: RunContext, prepared: PlanCandidateContext,
+        chapter_baseline, chapter_ordinal: int,
+) -> Any:
+    return stage4_runs.PlanChapterRequest(
+        chapter=chapter_ordinal,
+        input_sha256=_chapter_input_sha(ctx, prepared, chapter_ordinal),
+        system=prompts.chapter_binding_system(),
+        user=_chapter_binding_user(
+            ctx, prepared.upstream, prepared.candidate_raw,
+            chapter_baseline, chapter_ordinal),
+        response_model=ChapterBindingResponse,
+        max_tokens=16_000,
+    )
+
+
+def _plan_chapter_replacement_identity(
+        ctx: RunContext, prepared: PlanCandidateContext, request: Any,
+) -> dict[str, Any]:
+    return stage4_runs.plan_chapter_replacement_identity(
+        ctx, request, candidate_subject_sha256=prepared.subject_sha256)
+
+
+def _plan_chapter_replacement_command(
+        ctx: RunContext, attempt_id: str,
+) -> str:
+    """返回现役 CLI 可直接复制的单项封存命令。"""
+    return (
+        'python -X utf8 -u -m novel.cli response-repair '
+        f'{ctx.sid} --base "{ctx.novel_dir.parent}" '
+        f'--attempt {attempt_id} --actor <id> --reason <why>')
+
+
+def _replacement_response(
+        ctx: RunContext, prepared: PlanCandidateContext, unit: _PlanChapterUnit,
+        validator: Any,
+) -> tuple[ChapterBindingResponse, Any | None]:
+    """读取并复验一份已封存的章级 replacement；从不读可变 candidate。"""
+    identity = _plan_chapter_replacement_identity(ctx, prepared, unit.request)
+    chain = _canonical_sha256(identity)
+    records = response_repair.records_for_chain(ctx.novel_dir, chain)
+    if not records:
+        return unit.response, None
+    if len(records) != 1:
+        raise TerminalState(
+            f'stage4.plan ch{unit.chapter_ordinal} replacement 链有 '
+            f'{len(records)} 份拒稿；拒绝静默挑选')
+    record = records[0]
+    if (record.rejection.get('unit_replacement_identity') != identity
+            or record.attempt_id != unit.attempt_id
+            or record.rejection.get('run_id') != ctx.run_id
+            or record.rejection.get('code') != ctx.code
+            or record.rejection.get('candidate_sha256')
+            != prepared.subject_sha256):
+        raise ProvenanceRefused(
+            f'stage4.plan ch{unit.chapter_ordinal} replacement 与 '
+            'request/run/code/subject/attempt 不闭合')
+    if record.resolution is None:
+        command = _plan_chapter_replacement_command(
+            ctx, record.attempt_id)
+        raise TerminalState(
+            f'stage4.plan ch{unit.chapter_ordinal} 已生成 0-wire replacement '
+            f'工作项 attempt_id={record.attempt_id}；编辑 candidate.json 后用 '
+            f'`{command}` 封存决定')
+    action = record.resolution.get('action')
+    if action == 'decline':
+        if record.outcome is None:
+            response_repair.write_outcome(
+                record, decision='declined', gate=None, detail=None,
+                why='操作者显式放弃 Stage4B unit replacement')
+        raise TerminalState(
+            f'stage4.plan ch{unit.chapter_ordinal} replacement 已显式放弃')
+    if action not in ('submit', 'deterministic'):
+        raise ProvenanceRefused('Stage4B unit replacement action 越界')
+    if record.outcome is not None and record.outcome.get('decision') in (
+            'rejected', 'declined'):
+        raise TerminalState(
+            f'stage4.plan ch{unit.chapter_ordinal} replacement 已复验失败，'
+            '同一响应只有一次人工修复额度')
+    candidate = record.resolution.get('candidate')
+    text = json.dumps(candidate, ensure_ascii=False, sort_keys=True,
+                      separators=(',', ':'))
+    response, why, gate, detail = judge_payload(
+        text, ChatResponse(content=text, model=unit.models[-1]),
+        require=required_top_level(ChapterBindingResponse),
+        model_cls=ChapterBindingResponse, validator=validator)
+    if why is not None or response is None:
+        if record.outcome is None:
+            response_repair.write_outcome(
+                record, decision='rejected', gate=gate,
+                detail=detail, why=why or 'replacement 未产出合法章级响应')
+        raise TerminalState(
+            f'stage4.plan ch{unit.chapter_ordinal} replacement 未通过同一 '
+            f'{gate} 闸：{why}')
+    return response, record
+
+
+def _keep_plan_chapter_wire_rejection(
+        ctx: RunContext, pool: Any, prepared: PlanCandidateContext,
+        request: Any, rejection: Mapping[str, Any], *,
+        aggregate_revision: int,
+        checkpoint_written: bool = False,
+) -> None:
+    """章内 dynamic validator 耗尽：封存原 stdout 与一次修复工作项。"""
+    chapter = int(request.chapter)
+    attempt_id, models = pool.accepted_chapter(chapter)
+    if (rejection.get('attempt_id') != attempt_id
+            or rejection.get('model') not in models
+            or not isinstance(rejection.get('payload'), Mapping)
+            or not isinstance(rejection.get('content'), str)):
+        raise ProvenanceRefused(
+            f'stage4.plan ch{chapter} 最后一轮拒稿与 custody acceptance 不闭合')
+    if not checkpoint_written:
+        pool.write_chapter_checkpoint(
+            chapter, request,
+            response_payload=dict(rejection['payload']),
+            state_payload={
+                'chapter_ordinal': chapter,
+                'aggregate_revision': aggregate_revision,
+                'gate': 'validator',
+                'repair_state': 'awaiting_hash_bound_replacement',
+            },
+            revision_key='repairable-rejection')
+    identity = _plan_chapter_replacement_identity(ctx, prepared, request)
+    acceptance = pool.chapter_acceptance(chapter)
+    payload: dict[str, Any] = {
+        'sid': ctx.sid, 'node': ctx.node,
+        'purpose': stage4_runs.plan_chapter_purpose(chapter),
+        'run_id': ctx.run_id, 'code': ctx.code,
+        'request_fingerprint': acceptance['request_fingerprint'],
+        'attempt_ids': [attempt_id], 'model': models[-1],
+        'model_index': 0, 'rung_index': 0, 'sample': None,
+        'source': 'wire', 'request_mode': 'agent_session',
+        'recovery_from_attempts': list(
+            acceptance.get('recovery_from_attempts') or []),
+        'would_resample': False, 'gate': 'validator',
+        'why': str(rejection.get('why') or '章内 dynamic validator 未通过')[:4000],
+        'reject_detail': [dict(row) for row in rejection.get('detail') or []],
+        'repair_eligible': True,
+        'eligibility_reason': (
+            'Stage4B 章内 dynamic validator 轮次耗尽；允许一次 hash-bound '
+            'unit replacement，仍须重走 ChapterBindingResponse、同 validator、'
+            '整书 compiler/HARD'),
+        'response_model': 'ChapterBindingResponse',
+        'required_top_level': required_top_level(ChapterBindingResponse),
+        'chapter': chapter, 'candidate_sha256': prepared.subject_sha256,
+        'unit_replacement_identity': identity,
+    }
+    _rel, error = response_repair.keep_rejection(
+        ctx.novel_dir, chain_id=_canonical_sha256(identity),
+        attempt_id=attempt_id, payload=payload,
+        original=str(rejection['content']),
+        candidate=dict(rejection['payload']))
+    if error is not None:
+        raise TerminalState(
+            f'stage4.plan ch{chapter} validator 拒稿留证失败：{error}')
+
+
+def _load_plan_chapter_unit(
+        ctx: RunContext, pool: Any, prepared: PlanCandidateContext,
+        chapter_baseline, chapter_ordinal: int,
+) -> _PlanChapterUnit:
+    """一章的 worker：恢复/首问 → 同闸校验 → **立即** checkpoint。"""
+    request = _plan_chapter_request(
+        ctx, prepared, chapter_baseline, chapter_ordinal)
+    stage4_runs.ensure_plan_chapter_run(ctx, request)
+    validator = _chapter_wire_validator(chapter_baseline)
+    identity = _plan_chapter_replacement_identity(ctx, prepared, request)
+    replacement_records = response_repair.records_for_chain(
+        ctx.novel_dir, _canonical_sha256(identity))
+    if len(replacement_records) > 1:
+        raise TerminalState(
+            f'stage4.plan ch{chapter_ordinal} replacement 链不唯一')
+    # 一律先按 schema/ledger/request 恢复，再由本函数跑 dynamic validator。
+    # 这样“checkpoint 已落、workitem 落盘失败”的尾窗可从 state 幂等补建，
+    # 不会先被 validator 拒死成一条无恢复口的孤儿 checkpoint。
+    restored = pool.restore_chapter(
+        chapter_ordinal, request, validator=None)
+    if (replacement_records and restored is None):
+        raise ProvenanceRefused(
+            f'stage4.plan ch{chapter_ordinal} 有 replacement 工作项却缺 '
+            'provider stdout custody checkpoint')
+    if (restored is not None
+            and restored.state_payload.get('repair_state')
+            == 'awaiting_hash_bound_replacement'
+            and not replacement_records):
+        why = validator(restored.value, None)
+        if why is None:
+            raise ProvenanceRefused(
+                f'stage4.plan ch{chapter_ordinal} repairable checkpoint '
+                '如今通过 dynamic validator；拒绝静默改判历史')
+        acceptance = pool.chapter_acceptance(chapter_ordinal)
+        _keep_plan_chapter_wire_rejection(
+            ctx, pool, prepared, request, {
+                'attempt_id': acceptance['attempt_id'],
+                'content': acceptance['accepted_text'],
+                'payload': restored.value.model_dump(
+                    by_alias=True, mode='json'),
+                'gate': 'validator',
+                'detail': [{'loc': '', 'type': 'validator'}],
+                'why': why, 'model': acceptance['model'],
+            }, aggregate_revision=int(
+                restored.state_payload.get('aggregate_revision') or 0),
+            checkpoint_written=True)
+        replacement_records = response_repair.records_for_chain(
+            ctx.novel_dir, _canonical_sha256(identity))
+    if restored is None:
+        try:
+            response = pool.ask_chapter(
+                chapter_ordinal, request, validator=validator)
+        except LlmFailed:
+            rejection = pool.chapter_rejection(chapter_ordinal)
+            if rejection is None:
+                raise
+            _keep_plan_chapter_wire_rejection(
+                ctx, pool, prepared, request, rejection,
+                aggregate_revision=0)
+            raise _PlanChapterRepairPending(
+                f'stage4.plan ch{chapter_ordinal} 章内 validator 已用尽 '
+                f'{pool.max_turns} 轮；已生成 hash-bound 0-wire replacement '
+                f'工作项。封存命令：`{_plan_chapter_replacement_command(ctx, str(rejection["attempt_id"]))}`')
+    else:
+        response = restored.value
+        if not replacement_records:
+            why = validator(response, None)
+            if why is not None:
+                raise ProvenanceRefused(
+                    f'stage4.plan ch{chapter_ordinal} 普通 checkpoint '
+                    f'未通过当前 dynamic validator：{why}')
+    revision = (
+        int(restored.state_payload.get('aggregate_revision') or 0)
+        if restored is not None else 0)
+    attempt_id, models = pool.accepted_chapter(chapter_ordinal)
+    unit = _PlanChapterUnit(
+        chapter_ordinal=chapter_ordinal, request=request,
+        response=response, rows=[], attempt_id=attempt_id,
+        models=models, restored=restored is not None, revision=revision)
+    if restored is None:
+        rows = apply_chapter_resolutions(
+            chapter_baseline,
+            [row.model_dump(by_alias=True, mode='json')
+             for row in response.resolutions])
+        # worker 内先走过同一 validator + apply；后章即使失败，本章的付费
+        # stdout 已成为可恢复事实，不再等全书聚合。
+        pool.write_chapter_checkpoint(
+            chapter_ordinal, request,
+            response_payload=response.model_dump(by_alias=True, mode='json'),
+            state_payload={
+                'chapter_ordinal': chapter_ordinal,
+                'aggregate_revision': revision,
+                'ambiguity_ids': [
+                    row.ambiguity_id for row in chapter_baseline.ambiguities],
+            })
+    replacement_response, replacement = _replacement_response(
+        ctx, prepared, unit, validator)
+    if replacement is None:
+        rows = apply_chapter_resolutions(
+            chapter_baseline,
+            [row.model_dump(by_alias=True, mode='json')
+             for row in response.resolutions])
+        return _PlanChapterUnit(
+            chapter_ordinal=chapter_ordinal, request=request,
+            response=response, rows=rows, attempt_id=attempt_id,
+            models=models, restored=restored is not None, revision=revision)
+    replacement_rows = apply_chapter_resolutions(
+        chapter_baseline,
+        [row.model_dump(by_alias=True, mode='json')
+         for row in replacement_response.resolutions])
+    return _PlanChapterUnit(
+        chapter_ordinal=chapter_ordinal, request=request,
+        response=replacement_response, rows=replacement_rows,
+        attempt_id=attempt_id, models=models, restored=True,
+        revision=revision + 1,
+        replacement=replacement)
+
+
+def _reask_plan_chapter_unit(
+        ctx: RunContext, pool: Any, prepared: PlanCandidateContext,
+        chapter_baseline, previous: _PlanChapterUnit,
+) -> _PlanChapterUnit:
+    """B-owner 返问：同闸通过后立即追加新 checkpoint，并刷新身份。"""
+    validator = _chapter_wire_validator(chapter_baseline)
+    try:
+        response = pool.ask_chapter(
+            previous.chapter_ordinal, previous.request, validator=validator)
+    except LlmFailed:
+        rejection = pool.chapter_rejection(previous.chapter_ordinal)
+        if rejection is None:
+            raise
+        _keep_plan_chapter_wire_rejection(
+            ctx, pool, prepared, previous.request, rejection,
+            aggregate_revision=previous.revision)
+        raise _PlanChapterRepairPending(
+            f'stage4.plan ch{previous.chapter_ordinal} 章内 validator '
+            '已耗尽；replacement 工作项已封存。封存命令：'
+            f'`{_plan_chapter_replacement_command(ctx, str(rejection["attempt_id"]))}`')
+    rows = apply_chapter_resolutions(
+        chapter_baseline,
+        [row.model_dump(by_alias=True, mode='json')
+         for row in response.resolutions])
+    attempt_id, models = pool.accepted_chapter(previous.chapter_ordinal)
+    pool.write_chapter_checkpoint(
+        previous.chapter_ordinal, previous.request,
+        response_payload=response.model_dump(by_alias=True, mode='json'),
+        state_payload={
+            'chapter_ordinal': previous.chapter_ordinal,
+            'aggregate_revision': previous.revision + 1,
+            'ambiguity_ids': [
+                row.ambiguity_id for row in chapter_baseline.ambiguities],
+        })
+    return _PlanChapterUnit(
+        chapter_ordinal=previous.chapter_ordinal, request=previous.request,
+        response=response, rows=rows, attempt_id=attempt_id,
+        models=models, restored=False, revision=previous.revision + 1)
+
+
+def _plan_unit_lineage(
+        baseline: Any, units: Mapping[int, _PlanChapterUnit],
+) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for chapter in sorted(baseline.chapters, key=lambda row: row.chapter_ordinal):
+        unit = units.get(chapter.chapter_ordinal)
+        if unit is None:
+            rows.append({'chapter_ordinal': chapter.chapter_ordinal,
+                         'kind': 'baseline'})
+            continue
+        row: dict[str, Any] = {
+            'chapter_ordinal': chapter.chapter_ordinal,
+            'kind': 'chapter_session', 'attempt_id': unit.attempt_id,
+            'models': list(unit.models),
+            'revision': unit.revision,
+            'ambiguities': len(chapter.ambiguities),
+        }
+        if unit.replacement is not None:
+            resolution = unit.replacement.resolution or {}
+            row.update({
+                'replacement_resolution_sha256':
+                    resolution.get('resolution_sha256'),
+                'replacement_candidate_sha256':
+                    resolution.get('candidate_payload_sha256'),
+                'replacement_actor': resolution.get('actor'),
+                'replacement_reason': resolution.get('reason'),
+            })
+        rows.append(row)
+    return rows
+
+
+def _plan_aggregate_source(
+        pool: Any, units: Mapping[int, _PlanChapterUnit],
+) -> _PlanChapterAggregateSource:
+    ordered = [units[key] for key in sorted(units)]
+    if not ordered:
+        return _PlanChapterAggregateSource(pool, None, ())
+    models = tuple(sorted({model for unit in ordered for model in unit.models}))
+    anchor = max(ordered, key=lambda unit: (
+        unit.revision, unit.chapter_ordinal))
+    return _PlanChapterAggregateSource(
+        pool, anchor.attempt_id, models)
+
+
+def _keep_plan_chapter_replacements(
+        ctx: RunContext, pool: Any, prepared: PlanCandidateContext,
+        units: Mapping[int, _PlanChapterUnit],
+        evaluation: PlanCandidateEvaluation,
+        *, chapters: frozenset[int] | None = None,
+) -> bool:
+    """为纯 B-owner HARD 建 hash-bound unit replacement；返回是否全可路由。"""
+    if not evaluation.typed_failures:
+        return False
+    by_chapter: dict[int, list[TypedFailure]] = {}
+    for failure in evaluation.typed_failures:
+        chapter = failure.chapter_ordinal
+        if chapters is not None and chapter not in chapters:
+            continue
+        if (failure.repair_owner != 'stage4.plan'
+                or chapter is None or chapter not in units):
+            return False
+        by_chapter.setdefault(chapter, []).append(failure)
+    if chapters is not None and set(by_chapter) != set(chapters):
+        return False
+    for chapter, failures in sorted(by_chapter.items()):
+        unit = units[chapter]
+        if unit.replacement is not None:
+            if unit.replacement.outcome is None:
+                response_repair.write_outcome(
+                    unit.replacement, decision='rejected', gate='validator',
+                    detail=[row.audit_row() for row in failures],
+                    why='；'.join(f.rule for f in failures))
+            continue
+        identity = _plan_chapter_replacement_identity(
+            ctx, prepared, unit.request)
+        acceptance = pool.chapter_acceptance(chapter)
+        payload: dict[str, Any] = {
+            'sid': ctx.sid, 'node': ctx.node,
+            'purpose': stage4_runs.plan_chapter_purpose(chapter),
+            'run_id': ctx.run_id, 'code': ctx.code,
+            'request_fingerprint': acceptance['request_fingerprint'],
+            'attempt_ids': [unit.attempt_id], 'model': unit.models[-1],
+            'model_index': 0, 'rung_index': 0, 'sample': None,
+            'source': 'wire', 'request_mode': 'agent_session',
+            'recovery_from_attempts': list(
+                acceptance.get('recovery_from_attempts') or []),
+            'would_resample': False,
+            'gate': 'validator',
+            'why': '；'.join(f.rule for f in failures)[:4000],
+            'reject_detail': [f.audit_row() for f in failures],
+            'repair_eligible': True,
+            'eligibility_reason': (
+                'Stage4B 单章业务 HARD：允许一次 hash-bound unit replacement，'
+                '仍须重走 ChapterBindingResponse、章内 validator、整书 compiler/HARD'),
+            'response_model': 'ChapterBindingResponse',
+            'required_top_level': required_top_level(ChapterBindingResponse),
+            'chapter': chapter, 'hard_hits': list(evaluation.hard_hits),
+            'candidate_sha256': prepared.subject_sha256,
+            'typed_failures': [f.to_payload() for f in failures],
+            'unit_replacement_identity': identity,
+        }
+        chain = _canonical_sha256(identity)
+        _rel, error = response_repair.keep_rejection(
+            ctx.novel_dir, chain_id=chain, attempt_id=unit.attempt_id,
+            payload=payload,
+            original=unit.response.model_dump_json(by_alias=True),
+            candidate=unit.response.model_dump(by_alias=True, mode='json'))
+        if error is not None:
+            raise TerminalState(
+                f'stage4.plan ch{chapter} replacement 工作项写盘失败：{error}')
+    return True
+
+
+def _accept_plan_chapter_replacements(
+        units: Mapping[int, _PlanChapterUnit],
+) -> None:
+    """整书 compiler + HARD 已过后，才把封存候选记作 accepted。"""
+    for unit in units.values():
+        record = unit.replacement
+        if record is not None and record.outcome is None:
+            response_repair.write_outcome(
+                record, decision='accepted', gate=None,
+                detail=None, why=None)
+
+
+def _assert_plan_chapter_failure_scopes(
+        evaluation: PlanCandidateEvaluation,
+        units: Mapping[int, _PlanChapterUnit],
+) -> None:
+    """章拓扑下 B-owner failure 必须能唯一定位 unit，否则是判据代码错。"""
+    invalid = [
+        failure.code for failure in evaluation.typed_failures
+        if (failure.repair_owner == 'stage4.plan'
+            and (failure.chapter_ordinal is None
+                 or failure.chapter_ordinal not in units))]
+    if invalid:
+        raise ProvenanceRefused(
+            'stage4.plan 章拓扑收到无可路由 chapter 的 B-owner failure；'
+            f'应按 code failure 修判据发射点：{sorted(invalid)}')
+
+
 def _run_plan_with_chapters(
         ctx: RunContext, pool: Any, prepared: PlanCandidateContext,
 ) -> CheckReport | EvidenceBinding:
@@ -4115,81 +4635,40 @@ def _run_plan_with_chapters(
     ``repair_owner`` 路由：B owner 且带章号 → 只回该章 session；A/Stage2/
     code owner → 首轮即停；同一 fingerprint 集连续两轮未闭合 → 提前终止。
     """
-    from novel.llm import stage4_runs
-
     baseline = build_mechanical_baseline(
         prepared.candidate_raw, prepared.upstream.blueprints)
     resolved_rows: dict[int, list[dict[str, Any]]] = {}
-    lineage: list[dict[str, Any]] = []
     ambiguous: list[int] = []
     for chapter in baseline.chapters:
         if chapter.mechanical:
             resolved_rows[chapter.chapter_ordinal] = chapter.binding_rows()
-            lineage.append({'chapter_ordinal': chapter.chapter_ordinal,
-                            'kind': 'baseline'})
         else:
             ambiguous.append(chapter.chapter_ordinal)
 
-    anchor_attempt: str | None = None
-    anchor_models: tuple[str, ...] = ()
-    open_sessions: dict[int, dict[str, Any]] = {}
+    units: dict[int, _PlanChapterUnit] = {}
     if ambiguous:
         pool.prepare_chapters(ambiguous)
-        for chapter_ordinal in ambiguous:
-            chapter_baseline = baseline.chapter(chapter_ordinal)
-            request = stage4_runs.PlanChapterRequest(
-                chapter=chapter_ordinal,
-                input_sha256=_chapter_input_sha(ctx, prepared, chapter_ordinal),
-                system=prompts.chapter_binding_system(),
-                user=_chapter_binding_user(
-                    ctx, prepared.upstream, prepared.candidate_raw,
-                    chapter_baseline, chapter_ordinal),
-                response_model=ChapterBindingResponse,
-                max_tokens=16_000,
-            )
-            stage4_runs.ensure_plan_chapter_run(ctx, request)
-            restored = pool.restore_chapter(
-                chapter_ordinal, request,
-                validator=_chapter_wire_validator(chapter_baseline))
-            if restored is not None:
-                response = restored.value
-                session = {'request': request, 'response': response,
-                           'restored': True}
-            else:
-                response = pool.ask_chapter(chapter_ordinal, request)
-                session = {'request': request, 'response': response,
-                           'restored': False}
-            open_sessions[chapter_ordinal] = session
-
-        for chapter_ordinal in ambiguous:
-            session = open_sessions[chapter_ordinal]
-            chapter_baseline = baseline.chapter(chapter_ordinal)
-            response = session['response']
-            rows = apply_chapter_resolutions(
-                chapter_baseline,
-                [row.model_dump(by_alias=True, mode='json')
-                 for row in response.resolutions])
-            resolved_rows[chapter_ordinal] = rows
-            attempt_id, models = pool.accepted_chapter(chapter_ordinal)
-            lineage.append({
-                'chapter_ordinal': chapter_ordinal,
-                'kind': 'chapter_session',
-                'attempt_id': attempt_id,
-                'ambiguities': len(chapter_baseline.ambiguities),
-            })
-            if not session.get('restored'):
-                pool.write_chapter_checkpoint(
-                    chapter_ordinal, session['request'],
-                    response_payload=response.model_dump(
-                        by_alias=True, mode='json'),
-                    state_payload={
-                        'chapter_ordinal': chapter_ordinal,
-                        'ambiguity_ids': [
-                            a.ambiguity_id
-                            for a in chapter_baseline.ambiguities],
-                    })
-            anchor_attempt = attempt_id
-            anchor_models = tuple(sorted(set(anchor_models) | set(models)))
+        errors: list[tuple[int, Exception]] = []
+        with ThreadPoolExecutor(max_workers=min(
+                pool.concurrency, len(ambiguous))) as executor:
+            futures = {
+                executor.submit(
+                    _load_plan_chapter_unit, ctx, pool, prepared,
+                    baseline.chapter(chapter), chapter): chapter
+                for chapter in ambiguous}
+            for future in as_completed(futures):
+                chapter = futures[future]
+                try:
+                    units[chapter] = future.result()
+                except Exception as exc:  # 所有 worker 完成，保住已落 checkpoint
+                    errors.append((chapter, exc))
+        if errors:
+            first = sorted(errors, key=lambda row: row[0])[0][1]
+            if isinstance(first, _PlanChapterRepairPending):
+                raise TerminalState(str(first)) from first
+            raise first
+        resolved_rows.update({chapter: unit.rows
+                              for chapter, unit in units.items()})
 
     def _aggregate() -> dict[str, Any]:
         return {
@@ -4203,65 +4682,128 @@ def _run_plan_with_chapters(
                 row.model_dump(by_alias=True, mode='json')
                 for chapter_ordinal in ambiguous
                 for row in
-                open_sessions[chapter_ordinal]['response'].binding_concerns
+                units[chapter_ordinal].response.binding_concerns
             ],
         }
 
+    lineage = _plan_unit_lineage(baseline, units)
     if not ambiguous:
         # 整书零歧义：B 全部由机械基线确定性编译，0 wire。
         return _finalize_mechanical_plan(ctx, prepared, _aggregate(), lineage)
-    source = _PlanChapterAggregateSource(pool, anchor_attempt, anchor_models)
-    response_obj = EvidenceBindingResponse.model_validate(_aggregate())
-    prev_fingerprints: frozenset[str] | None = None
+    previous_by_chapter: dict[int, frozenset[str]] = {}
+    exhausted_chapters: set[int] = set()
+    pending_wire_replacements: set[int] = set()
     while True:
+        lineage = _plan_unit_lineage(baseline, units)
+        source = _plan_aggregate_source(pool, units)
+        response_obj = EvidenceBindingResponse.model_validate(_aggregate())
         evaluation = evaluate_plan_candidate(
             ctx, source, prepared, response_obj,
             architecture='chapter_baseline_v1', unit_lineage=lineage)
+        _assert_plan_chapter_failure_scopes(evaluation, units)
         if evaluation.passed:
-            return finalize_plan_candidate(ctx, source, prepared, evaluation)
+            artifact = finalize_plan_candidate(
+                ctx, source, prepared, evaluation)
+            _accept_plan_chapter_replacements(units)
+            return artifact
         stop_failures = evaluation.stop_owner_failures()
-        fingerprints = frozenset(
-            f.failure_fingerprint for f in evaluation.typed_failures)
-        repeat_stop = bool(fingerprints) and fingerprints == prev_fingerprints
-        prev_fingerprints = fingerprints
-        if not stop_failures and not repeat_stop:
+        current_by_chapter: dict[int, frozenset[str]] = {}
+        for failure in evaluation.typed_failures:
+            if failure.chapter_ordinal is not None:
+                current_by_chapter.setdefault(
+                    failure.chapter_ordinal, frozenset())
+        for chapter in tuple(current_by_chapter):
+            current_by_chapter[chapter] = frozenset(
+                failure.failure_fingerprint
+                for failure in evaluation.typed_failures
+                if failure.chapter_ordinal == chapter)
+        repeated = {
+            chapter for chapter, fingerprints in current_by_chapter.items()
+            if fingerprints
+            and previous_by_chapter.get(chapter) == fingerprints}
+        exhausted_chapters.update(repeated)
+        exhausted_chapters.update(
+            chapter for chapter, unit in units.items()
+            if unit.replacement is not None)
+        previous_by_chapter = current_by_chapter
+        if not stop_failures:
             # B owner 的失败按章号路由：只回该章自己的 session。
             by_chapter: dict[int, list[dict[str, object]]] = {}
             for failure in evaluation.typed_failures:
                 if (failure.repair_owner != 'stage4.plan'
                         or failure.chapter_ordinal is None
-                        or failure.chapter_ordinal not in open_sessions):
+                        or failure.chapter_ordinal not in units):
                     continue
                 by_chapter.setdefault(failure.chapter_ordinal, []).append(
                     {'rule': failure.rule,
                      'typed_failures': [failure.to_payload()]})
-            if by_chapter and all(
-                    pool.queue_chapter_feedback(chapter, rows)
-                    for chapter, rows in by_chapter.items()):
-                re_asks: list[int] = []
-                for chapter, session in open_sessions.items():
-                    if chapter not in by_chapter:
-                        continue
-                    try:
-                        new_response = pool.ask_chapter(
-                            chapter, session['request'])
-                    except LlmFailed:
-                        break
-                    try:
-                        resolved_rows[chapter] = apply_chapter_resolutions(
-                            baseline.chapter(chapter),
-                            [row.model_dump(by_alias=True, mode='json')
-                             for row in new_response.resolutions])
-                    except ValueError:
-                        # 章内响应违约：保留旧行，同一 fingerprint 会在下一轮
-                        # evaluate 再次出现并触发两轮早停。
-                        continue
-                    session['response'] = new_response
-                    re_asks.append(chapter)
-                if re_asks:
-                    response_obj = EvidenceBindingResponse.model_validate(
-                        _aggregate())
+            all_b_owned = bool(by_chapter) and len(
+                evaluation.typed_failures) == sum(
+                    len(rows) for rows in by_chapter.values())
+            retryable = (
+                set(by_chapter) - exhausted_chapters
+                - pending_wire_replacements
+                if all_b_owned else set())
+            queued: set[int] = set()
+            for chapter in sorted(retryable):
+                if pool.queue_chapter_feedback(
+                        chapter, by_chapter[chapter]):
+                    queued.add(chapter)
+                else:
+                    exhausted_chapters.add(chapter)
+            if all_b_owned and queued:
+                updated: dict[int, _PlanChapterUnit] = {}
+                hard_errors: list[tuple[int, Exception]] = []
+                with ThreadPoolExecutor(max_workers=min(
+                        pool.concurrency, len(queued))) as executor:
+                    futures = {
+                        executor.submit(
+                            _reask_plan_chapter_unit, ctx, pool, prepared,
+                            baseline.chapter(chapter), units[chapter]): chapter
+                        for chapter in queued}
+                    for future in as_completed(futures):
+                        chapter = futures[future]
+                        try:
+                            updated[chapter] = future.result()
+                        except _PlanChapterRepairPending:
+                            pending_wire_replacements.add(chapter)
+                            exhausted_chapters.add(chapter)
+                        except LlmFailed:
+                            exhausted_chapters.add(chapter)
+                        except Exception as exc:
+                            hard_errors.append((chapter, exc))
+                units.update(updated)
+                resolved_rows.update({chapter: unit.rows
+                                      for chapter, unit in updated.items()})
+                if hard_errors:
+                    raise sorted(hard_errors, key=lambda row: row[0])[0][1]
+                if updated:
                     continue
+            if all_b_owned:
+                business_replacements = frozenset(
+                    set(by_chapter) - pending_wire_replacements)
+                kept = (
+                    _keep_plan_chapter_replacements(
+                        ctx, pool, prepared, units, evaluation,
+                        chapters=business_replacements)
+                    if business_replacements else True)
+                if kept and (business_replacements
+                             or pending_wire_replacements):
+                    chapters = sorted(
+                        set(business_replacements)
+                        | pending_wire_replacements)
+                    raise TerminalState(
+                        f'stage4.plan 章级业务 HARD 已生成 hash-bound 0-wire '
+                        f'replacement 工作项：chapters={chapters}；'
+                        '正式聚合尚未提交')
+        if _keep_plan_chapter_replacements(
+                ctx, pool, prepared, units, evaluation):
+            chapters = sorted({failure.chapter_ordinal
+                               for failure in evaluation.typed_failures
+                               if failure.chapter_ordinal is not None})
+            raise TerminalState(
+                f'stage4.plan 章级业务 HARD 已生成 hash-bound 0-wire '
+                f'replacement 工作项：chapters={chapters}；正式聚合尚未提交')
         _keep_business_witness(ctx, source, prepared, evaluation)
         return finalize_plan_candidate(ctx, source, prepared, evaluation)
 

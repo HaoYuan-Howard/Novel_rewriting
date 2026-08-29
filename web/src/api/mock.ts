@@ -25,6 +25,7 @@ import {
   GATE_KEYS,
   type ActionRef,
   type ApprovalDoc,
+  type ApprovalWorkpack,
   type DesignReviewDecision,
   type DesignReviewRequest,
   type DesignReviewTemplate,
@@ -471,6 +472,90 @@ function mockDesignReviewTemplate(query: DesignReviewTemplateQuery): DesignRevie
       }],
       source_decision_sha256: null,
     }],
+  }
+}
+
+function mockApprovalWorkpack(
+  sid: string,
+  kind: 'design' | 'structure',
+): ApprovalWorkpack {
+  const empty = (group: ApprovalWorkpack['groups'][number]['group'], scanned: string) => ({
+    group,
+    scanned,
+    items: [],
+  })
+  return {
+    v: 1,
+    sid,
+    kind,
+    candidate_sha256: kind === 'design' ? MOCK_DESIGN_CANDIDATE : null,
+    subject_sha256: kind === 'design' ? MOCK_DESIGN_AGGREGATE : MOCK_STRUCTURE_SUBJECT,
+    chapter_ordinals: [SAMPLE_ORDINAL],
+    groups: [
+      empty('blocking', '已扫描当前主体的全部 HARD 与预检见证'),
+      {
+        group: 'semantic_attention',
+        scanned: '已扫描全章语义关注面',
+        items: [{
+          code: 'temporal_binding_unknown',
+          rule: 'temporal_binding_unknown',
+          sev: 'unver',
+          status: 'unver',
+          chapter_ordinal: SAMPLE_ORDINAL,
+          scene_refs: ['c03s01'],
+          refs: ['a_' + '1'.repeat(16)],
+          repair_owner: 'human',
+          detail: '第 3 章的倒叙入口仍需人工确认时间层绑定。',
+          effect: 'attention',
+          allowed_actions: [],
+          changed: false,
+          historical_accept_reusable: false,
+          source_decision_sha256: null,
+        }],
+      },
+      {
+        group: 'disclosure',
+        scanned: '已完整投影 INFO 与绑定关注项',
+        items: [{
+          code: 'stage_signature_conflict',
+          rule: 'stage_signature_conflict',
+          sev: 'info',
+          status: 'hit',
+          chapter_ordinal: SAMPLE_ORDINAL,
+          scene_refs: ['c03s01'],
+          refs: ['a_' + '2'.repeat(16)],
+          repair_owner: null,
+          detail: '同一材料在当前章存在多个时空签名，作为完整披露保留。',
+          effect: 'disclose',
+          allowed_actions: [],
+          changed: false,
+          historical_accept_reusable: false,
+          source_decision_sha256: null,
+        }],
+      },
+      empty('metric_only', '已扫描当前主体全部 metric 读数'),
+      empty('phase_deferred', '已登记必须等 stage4.context 后才能判定的规则'),
+      {
+        group: 'coverage',
+        scanned: '全章覆盖：1 / 1',
+        items: [{
+          code: 'chapter_coverage',
+          rule: null,
+          sev: null,
+          status: null,
+          chapter_ordinal: SAMPLE_ORDINAL,
+          scene_refs: [],
+          refs: [],
+          repair_owner: null,
+          detail: '第 3 章已进入本次工作包。',
+          effect: 'coverage',
+          allowed_actions: ['accept'],
+          changed: false,
+          historical_accept_reusable: true,
+          source_decision_sha256: '9'.repeat(64),
+        }],
+      },
+    ],
   }
 }
 
@@ -1516,6 +1601,9 @@ export const mockApi: Api = {
     later<AgentQueueView>({ running: [], pending: [], rejected: [], max_concurrent: 3 }),
 
   getApprovals: (sid) => later(loadDoc(sid)),
+
+  getDesignApprovalWorkpack: (sid) => later(mockApprovalWorkpack(sid, 'design')),
+  getStructureApprovalWorkpack: (sid) => later(mockApprovalWorkpack(sid, 'structure')),
 
   getDesignReviewTemplate: (sid, query: DesignReviewTemplateQuery) => {
     const doc = loadDoc(sid)

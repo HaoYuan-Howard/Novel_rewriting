@@ -123,10 +123,12 @@ Prompt 选型完成后，`prompt_variants`、`prompt_defaults` 与 `--prompt-var
 | `POST /api/novels/:sid/stage1/partition` | `JobRecord` | 新 |
 | `GET /api/novels/:sid/stage1` | `Stage1View`（一次返回连续分区、原文章号诊断与 `anomaly_count`；全部由当前 clean 复扫） | 新 |
 | `GET /api/novels/:sid/approvals` | `ApprovalDoc` | 新 |
+| `GET /api/novels/:sid/approvals/design/workpack` | `ApprovalWorkpack` v1（绑定 current A candidate + 完整 design subject；异常优先，只读、0 LLM） | 新；Commander/前端审阅入口，不预填决定 |
 | `GET /api/novels/:sid/approvals/design/template?actor=&reviewer_kind=&review_run_id=&reason=` | `DesignReviewTemplate` | 四项 query 均必填；按当前 A 生成关闭式全书模板，可逐章复用仍完全绑定的历史 accept，但不代签；fresh B infeasible 时发布当前证明并禁止复用旧 accept |
 | `POST /api/novels/:sid/approvals/design` | `ApprovalDoc`（请求体 `DesignReviewRequest`） | 原子保存 Stage4A 全书策略 + 逐章 typed 审阅；不启动修订、B 或任何作业 |
 | `POST /api/novels/:sid/approvals/gate/:key` | `ApprovalDoc` | 新 |
 | `POST /api/novels/:sid/approvals/seen/:key` | `ApprovalDoc` | 新 |
+| `GET /api/novels/:sid/approvals/structure/workpack` | `ApprovalWorkpack` v1（绑定 current structure subject；异常优先，只读、0 LLM） | 新；完整披露 B concern / INFO / metric / UNVER，不自动裁决 |
 | `POST /api/novels/:sid/approvals/structure` | `ApprovalDoc`（请求体 `StructureApprovalRequest`：完整结构 subject SHA-256、actor、总理由与恰好覆盖全书的逐章 `accept / request_replan`） | 新；typed Stage4 结构裁决，提交本身不启动作业 |
 | `POST /api/novels/:sid/approvals/writing` | `ApprovalDoc`（请求体可省略：空 body 保留旧 UI 的 `begin_writing`；非空必须是 `WritingApprovalRequest` 的 actor、reason 与当前完整 subject SHA-256） | typed 分支只写审批账、不启动作业；Commander 使用 CLI façade，不走空 body 兼容口 |
 | `POST /api/novels/:sid/approvals/reset` | `ApprovalDoc` | 新 |
@@ -153,6 +155,22 @@ Prompt 选型完成后，`prompt_variants`、`prompt_defaults` 与 `--prompt-var
 | `POST /api/novels/:sid/stage5/trim/:o/retain-pretrim` | `JobRecord`（请求体 `TrimResolutionRequest`；只允许保留原稿） | 新 |
 | `POST /api/novels/:sid/stage6/approve` | `JobRecord`（请求体 `HookApproveRequest`） | 新 |
 | `POST /api/novels/:sid/stage7/approve` | `JobRecord`（无请求体） | 新 |
+
+> #### `ApprovalWorkpack` v1 是只读阅读面，不是决定模板
+>
+> 两个端点共用同一外壳：`v=1`、`sid`、`kind=design｜structure`、当前完整
+> `subject_sha256`、设计面必有而结构面必须没有的 `candidate_sha256`、完整有序
+> `chapter_ordinals[]`，以及固定六组 `groups[]`。六组顺序恒为
+> `blocking / semantic_attention / disclosure / metric_only / phase_deferred / coverage`；
+> 空组也必须带 `scanned` 分母出线，不能用裁掉空数组暗示「没扫」。
+>
+> `WorkpackItem` 只投影服务端已算事实：`code`、`rule`、`sev`、`status`、
+> `chapter_ordinal`、`scene_refs`、`refs`、`repair_owner`、`detail`、`effect`、
+> `allowed_actions`、`changed`、`historical_accept_reusable`、`source_decision_sha256`。
+> `allowed_actions` 是关闭集 `accept / request_repair / request_replan`，
+> 不是 argv；INFO、metric、UNVER、skipped 和非 blocking/coverage effect 恒为空。coverage 恰覆盖
+> `chapter_ordinals`，changed 章在前、段内按章号升序；changed 与 exact historical accept reuse
+> 互斥且穷尽。工作包没有 actor/reason/decision 字段，GET 不写审批账、不启动 job，也不替用户签字。
 
 > #### `Stage0Report` 是窄视图
 >

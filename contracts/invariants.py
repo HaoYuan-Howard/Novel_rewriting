@@ -353,6 +353,35 @@ DESIGN_REVIEW_CONTRACT: Final = 'stage4-design-review-v2'
 #: `R-5.22` 预检结论的两态。pass = 构造性绑定过整书联合 HARD；
 #: blocked = 存在 stop-owner 失败或代码铸造的不可行 witness。
 DESIGN_PREFLIGHT_STATUSES: Final = ('pass', 'blocked')
+#: Commander 审阅工作包（TODO-45 批次 5）的固定分组顺序——异常优先：
+#: blocking 永远第一，全章 compact coverage 永远最后。`phase_deferred`
+#: 只登记「Context 落盘后才可判」的规则，不进入结构 subject。
+APPROVAL_WORKPACK_GROUPS: Final = (
+    'blocking', 'semantic_attention', 'disclosure',
+    'metric_only', 'phase_deferred', 'coverage',
+)
+#: 工作包只有 A / B 两个审阅面；它们都是只读视图，不是作业入口。
+APPROVAL_WORKPACK_KINDS: Final = ('design', 'structure')
+#: 工作包条目只能公布现役 typed 审批决定面；它不会把动作翻译成
+#: CLI argv，更不会因为读了一次工作包就启动模型。
+APPROVAL_WORKPACK_ACTIONS: Final = (
+    'accept', 'request_repair', 'request_replan',
+)
+#: 工作包条目的交付效果（服务端下发；前端只呈现，不自算）。
+APPROVAL_WORKPACK_EFFECTS: Final = (
+    'block_b', 'block_context', 'attention', 'disclose', 'read_only',
+    'phase_deferred', 'coverage',
+)
+#: 分组与 effect 的关系也是契约，不许 builder / 前端各猜一份。
+#: blocking 唯一的两个 effect 对应 A 挡 B、B 挡 Context；其余组均是单值。
+APPROVAL_WORKPACK_GROUP_EFFECTS: Final[Mapping[str, tuple[str, ...]]] = {
+    'blocking': ('block_b', 'block_context'),
+    'semantic_attention': ('attention',),
+    'disclosure': ('disclose',),
+    'metric_only': ('read_only',),
+    'phase_deferred': ('phase_deferred',),
+    'coverage': ('coverage',),
+}
 DESIGN_REPAIR_CODES: Final = (
     'entry_anchor',
     'ending_anchor',
@@ -1760,8 +1789,10 @@ class NodeSpec(NamedTuple):
     #   flash 判官，账本事后才看得出来。
     # ⚠⚠ **现有两个钉死值，而它们的理由不是同一个**，不许互相援引：
     #   · `stage6.semantic` = **判官给不出有区分度的证据**（质量死刑，2026-08-20）。
-    #   · `stage4.design` / `stage4.plan` = **重采粒度**（2026-08-22）：两相各是
-    #     一次全书调用，一次 `answer_lost` 重采就是整本书；逐章节点的便宜恢复网不适用。
+    #   · `stage4.design` = 小型整书策略 + 逐章私有 session；
+    #     `stage4.plan` = 机械 baseline + 仅歧义章私有 session（最多 4 并发）。
+    #     它们的模型默认是产品裁决，不得再用「两相各一次全书调用」
+    #     解释；B 的新恢复粒度是歧义 unit，零歧义章零模型调用。
     #   两条实测依据都在 `docs/BACKEND_CONTRACT.md` §十。
     model: str = ''
 
@@ -1852,13 +1883,13 @@ NODES: Final[dict[str, NodeSpec]] = {
                                         '--revalidate', '--actor', '--reason',
                                         '--response-repair'),
                                  produces=(artifact_paths.STAGE2_CHAPTER_BLUEPRINTS,)),
-    # ⚠⚠ Stage4 两个付费相仍沿用 `deepseek-v4-pro`，但 2026-08-28 起不能再用
-    #   “两相都是全书一次调用”解释这两个值：A 已拆成一条小型整书策略 + N 条
-    #   逐章请求，代码聚合后再跑整书 HARD；B 仍是一次全书证据绑定调用。
-    #   2026-08-22 的空正文证据直接支持的是 B：`stage4.plan` flash@high
-    #   13/30，pro@high 0/6、全表 pro 0/249；一次 Flash 可用计划累计 completion
-    #   约 67k，Pro 一次过 out 中位约 22.8k。A 拆分后暂不凭架构变化静默翻默认，
-    #   须在相同逐章契约下另行比较首次交付率、HARD、token 与墙钟再裁决。
+    # ⚠⚠ Stage4 两个付费相仍沿用 `deepseek-v4-pro`，但调用拓扑已分开：
+    #   A = 一条小型整书策略 + N 条逐章私有 session，代码聚合后跑整书 HARD；
+    #   B = 机械 baseline 先消除唯一解，只对真歧义章开私有 session（最多 4 并发），
+    #   零歧义章 0-wire 确定性编译（不伪造模型 checkpoint）。当前 B 默认模型的证据面包含历史
+    #   whole-book B 样本与现役歧义 unit，不再声称「一次重采就是整本书」。
+    #   架构改变本身不静默翻默认；后续须在同一 unit 契约下比较首交率、
+    #   HARD、token 与墙钟再裁决。
     'stage4.design':    NodeSpec('stage4', 'R-5',  True,  'stage4 盲场景设计',
                                   flags=('--dry-run', '--replan', '--repair-decision',
                                          '--adopt-rejected',

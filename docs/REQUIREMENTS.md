@@ -72,8 +72,10 @@ v4 减法契约；尚缺的是用 current-schema 真实书证明「A 的去序�
 「声明与复算对齐」不再是质量验收判据，只作盲评对照的读数；整书结构向量、逐章指标、
 A/B 原始候选、盲评标签与结构批准均可从盘上 current-schema 主体复算。人工抽样能指出入口、事实
 组合或披露顺序的具体差异，而非只说句子不同。每项 metric 最终得到“继续只报不挡 / 候选阈值需
-产品裁决 / 当前不可判”之一的结论并记入 `docs/BACKEND_CONTRACT.md` §十；在完成两书付费实证前，
-任何测试通过都只能叫非 corpus 回归，不能删除本条。
+产品裁决 / 当前不可判”之一的结论并记入 `docs/BACKEND_CONTRACT.md` §十。`R-5.25` 的 design /
+structure 工作包已把 current subject、异常、全章 coverage 与复用身份投影成可达阅读面，但它只缩小
+人工阅读范围，不制造盲评标签或质量结论；在完成两书付费实证前，任何测试通过都只能叫非 corpus
+回归，不能删除本条。
 
 ### TODO-31 · 下一次新 base 同批收紧 Stage4→5 盘上契约
 
@@ -138,8 +140,8 @@ driver 的真实链路生效。非 corpus 回归与真实付费整书验收分�
 
 - Stage2 只让高影响事实阻断下游；低影响项目保留审计与披露，不自动 PASS、不消失。
 - Stage4 保留一个公开 `stage4.design` 节点/授权、一个独立 `stage4.plan` 节点/授权和整书结构审批；
-  A 内部固定为 1 条整书策略 + N 条逐章私有 session（最多 4 并发），B 不变，**不开放公开的
-  `--chapters` 定向重规划**。
+  A 内部固定为 1 条整书策略 + N 条逐章私有 session；B 内部固定为机械基线 + 真歧义章私有
+  session，两相各自最多 4 并发，**不开放公开的 `--chapters` 定向重规划**。
 - A 的正式盲审与最终 Plan 结构审批是两张独立票：只有 current A 的策略与全部章节均 accept
   才授权 B；B 编译成功后仍须对 current Plan 逐章全 accept，才可生成 Context。A 的逐章驳回
   只通过绑定 current decision SHA-256 的定向 repair 执行，策略驳回才允许整书 replan。
@@ -174,15 +176,18 @@ context 引用与章尾闭合改判「读者此刻知不知道 / 本章有没有
 `BlindCandidate` v2 形状不变。随后稳定性修复把 `EvidenceBinding` 升至 v3：模型只能提交
 非阻断 `binding_concerns`，正式 `infeasible` 必须由代码在同一关闭约束集铸造 witness；旧 v2 B
 不迁移，须在 current A 全 accept 后重跑 B。
-**P2a 已完成四项并按 `docs/BACKEND_CONTRACT.md` §十留证**：validator 拒稿的 unit 级
-0-wire adoption（`stage4.design --adopt-rejected`，f138896）；typed failure witness /
+**P2a 已完成五项并按 `docs/BACKEND_CONTRACT.md` §十留证**：旧 whole-book validator 拒稿的
+0-wire adoption（`stage4.design --adopt-rejected`，f138896；不冒充 split-run unit 恢复）；typed failure witness /
 关闭式路由（`R-5.21`，批次 1：A/Stage2/code owner 首轮即停、同 fingerprint 两轮早停、
 审计无正文、witness 入 `_llm_rejected`）；A→formal 零调用预检与审阅元数据归一
 （`R-5.22`，批次 2：构造性绑定 + 同一 HARD 的四处预检调用点、blocked 拒 accept 与
 wire 前拒绝、`structure_alignment` metric_only、`structure_delta` 退役、
 `DESIGN_REVIEW_CONTRACT` v2）；B 的机械基线与章级私有 session（`R-5.23`，批次 4：
-唯一可解绑定代码确定、机械章 0 wire、歧义章私有 session 最多 4 并发、聚合锚章
-commit、来源账 architecture/unit_lineage additive——公开节点与授权次数不变）。
+唯一可解绑定代码确定、机械章 0 wire、歧义章私有 session 真实最多 4 并发、worker 内验证后即时
+checkpoint、聚合重问同步更新 lineage/anchor、hash-bound unit replacement 与同一 compiler/HARD、
+来源账 architecture/unit_lineage additive——公开节点与授权次数不变）；两次审批的异常优先工作包
+（`R-5.25`，批次 5：固定六组、当前 subject、全量 INFO/metric/UNVER/阶段延期披露、changed-first
+coverage、历史 exact accept 标识、服务端 action/effect 与 Inbox `reviewed_retained`，API/CLI/UI 均只读）。
 **剩下的 P2a 项**（按对稳定性的贡献排序）：
 
 1. `evidence_candidate_id` 只作为另批冷缓存 A/B：候选表由 `paragraph_spans` 同源渲染与
@@ -196,14 +201,13 @@ commit、来源账 architecture/unit_lineage additive——公开节点与授权
 P2 原本是一个「候选事实分级 + 整书修复 + 上下文瘦身」的大批次。按「稳定跑通优先」
 重排为两段，**先做与稳定性直接相关的那一段**：
 
-- **P2a（先做，不破坏正式盘上形状）**：生产拓扑、N+1 份验证后 checkpoint、最多 4 并发、
-  确定性聚合、整书 schema/HARD 和 aggregate commit journal 已落地，把「一处错就整书归零」
-  收成「保留全部已验单元」。本段剩余工作是抽出唯一 `gate_payload` 校验函数供 LlmClient /
-  agent intake / response-repair / adoption / repair 共用；拒稿仓统一为
-  `_llm_rejected/<chain>/<attempt>/`，并给**尚未聚合的 validator 拒稿 unit**补 0-wire adoption
-  与 hash-bound replacement。正式候选已另有 decision-bound 逐章 repair；旧整书
-  `--adopt-rejected` 仍不是 unit 恢复路。目标不变：**一次有效付费产出不许被
-  判据或形状问题永久锁死**。
+- **P2a（先做，不破坏正式盘上形状）**：A/B 的分 unit 生产拓扑、验证后即时 checkpoint、最多
+  4 并发、确定性聚合、整书 schema/HARD、aggregate commit journal 与 B 的 hash-bound unit
+  replacement 已落地，把「一处错就整书归零」收成「保留全部已验单元」。本段剩余工作是抽出唯一
+  `gate_payload` 校验函数供 LlmClient / agent intake / response-repair / adoption / repair 共用，并继续把
+  A 与其他 split-run 的 validator 拒稿 unit 收敛到统一 0-wire adoption/replacement。拒稿仓统一为
+  `_llm_rejected/<chain>/<attempt>/`；正式 A 候选仍走 decision-bound 逐章 repair，旧整书
+  `--adopt-rejected` 不冒充 unit 恢复路。目标不变：**一次有效付费产出不许被判据或形状问题永久锁死**。
 - **P2b（后做，需要新 base 与一次付费重建）**：blueprint fact 增代码计算的
 `derived_tier`（core/support/incidental）与 `tier_reasons/depends_on`，模型的
 `producer_obligation` 只留审计；Blueprint Review 分 frontier/coverage 与 claim 两层，

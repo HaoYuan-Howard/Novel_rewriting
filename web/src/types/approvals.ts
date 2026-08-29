@@ -287,3 +287,61 @@ export interface ApprovalBackfillResult {
   /** 这些章来自盘面补录，不伪装成用户逐屏点击。 */
   backfilled: GateKey[]
 }
+
+/** Commander 审阅工作包固定的异常优先分组；顺序由服务端响应保证。 */
+export type ApprovalWorkpackGroupKind =
+  | 'blocking'
+  | 'semantic_attention'
+  | 'disclosure'
+  | 'metric_only'
+  | 'phase_deferred'
+  | 'coverage'
+
+/** 条目对当前审批的影响只照画服务端结论，不由前端按 rule/severity 重算。 */
+export type ApprovalWorkpackEffect =
+  | 'block_b'
+  | 'block_context'
+  | 'attention'
+  | 'disclose'
+  | 'read_only'
+  | 'phase_deferred'
+  | 'coverage'
+
+export type ApprovalWorkpackSeverity = 'hard' | 'info' | 'metric' | 'unver'
+export type ApprovalWorkpackStatus = 'ok' | 'hit' | 'unver' | 'skipped'
+export type ApprovalWorkpackAction = 'accept' | 'request_repair' | 'request_replan'
+
+export interface ApprovalWorkpackItem {
+  code: string
+  rule: string | null
+  sev?: ApprovalWorkpackSeverity | null
+  status?: ApprovalWorkpackStatus | null
+  chapter_ordinal: number | null
+  scene_refs: string[]
+  refs: string[]
+  repair_owner: string | null
+  detail: string
+  effect: ApprovalWorkpackEffect
+  /** typed 入口名，只展示；空数组明确表示服务端没有给可执行动作。 */
+  allowed_actions: ApprovalWorkpackAction[]
+  changed: boolean
+  historical_accept_reusable: boolean
+  source_decision_sha256?: string | null
+}
+
+export interface ApprovalWorkpackGroup {
+  group: ApprovalWorkpackGroupKind
+  scanned: string
+  items: ApprovalWorkpackItem[]
+}
+
+/** Stage4 A/B 共用的只读、hash-bound 审阅工作包 façade v1。 */
+export interface ApprovalWorkpack {
+  v: 1
+  sid: string
+  kind: 'design' | 'structure'
+  candidate_sha256?: string | null
+  subject_sha256: string
+  chapter_ordinals: number[]
+  groups: ApprovalWorkpackGroup[]
+}

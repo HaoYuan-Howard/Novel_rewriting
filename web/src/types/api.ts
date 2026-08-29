@@ -8,6 +8,7 @@
 import type {
   ApprovalBackfillResult,
   ApprovalDoc,
+  ApprovalWorkpack,
   DesignReviewRequest,
   DesignReviewTemplate,
   DesignReviewTemplateQuery,
@@ -134,6 +135,10 @@ export interface Api {
 
   /* 人工验收记录 */
   getApprovals(sid: string): Promise<ApprovalDoc>
+  /** Stage4 A 当前候选的异常优先只读工作包；不预填任何审批决定。 */
+  getDesignApprovalWorkpack(sid: string): Promise<ApprovalWorkpack>
+  /** Stage4 B 当前结构主体的异常优先只读工作包；不预填任何审批决定。 */
+  getStructureApprovalWorkpack(sid: string): Promise<ApprovalWorkpack>
   /** Stage4A 当前候选的关闭式审阅模板；全拒默认由服务端生成。 */
   getDesignReviewTemplate(
     sid: string,

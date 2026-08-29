@@ -85,7 +85,7 @@ spawn 前关闭式拒绝，不能静默落回 DeepSeek。
 八个 agent executor 自身已经把完整候选依次送过 JSON、必需键、schema、调用点 validator 与业务
 HARD，并把结构化代码反馈交回同一 provider session；因此 agent 主路**不得**追加
 `--response-repair agent`。那条 sidecar 只服务显式 DeepSeek 临时回滚：legacy 响应停在
-`ResponseRepairRequired` 时，才按[修复状态机](recovery.md#显式-deepseek-回滚的结构化响应修复)处理隔离候选，
+`ResponseRepairRequired` 时，才按[修复状态机](recovery.md#显式-deepseek-回滚)处理隔离候选，
 并沿用同一 `run_id`。不得让一个 legacy flag 同时冒充 node-agent 的 session 恢复协议。
 
 真跑本身已经打印同一份 fresh 报告时，追检的价值是**复核产物完整性**，不是重读判据（那句「⚠ 自动追跑：退出码 0 也可能是残缺产物」说的就是这件事）：仍必须执行并打点，但只取它的退出码与合计行即可，不必重读全文。
@@ -133,13 +133,15 @@ HARD，并把结构化代码反馈交回同一 provider session；因此 agent �
 
 Stage4 的两次付费调用不得压成一次授权或一次 runner 执行。先对 `stage4.design` 单独 preview/run；
 候选机械通过并正式落盘后，按[代批与终审契约](delegated-review.md#stage4-结构代批)先提交 Stage4A
-完整 typed 设计审阅。只有策略与全章 accepted，才能重新取得 `stage4.plan` 的 preview 并单独 run。
+完整 typed 设计审阅；裁决前先走只读 `approval workpack design`，按 current subject 阅读异常与全章
+coverage。只有策略与全章 accepted，才能重新取得 `stage4.plan` 的 preview 并单独 run。
 若逐章 `request_repair`，只执行服务端给出的 hash-bound `--repair-decision <SHA>`，未变且已接受的章
 由 checkpoint 复用；只有策略 `request_replan` 才可整书重做。自然语言 reason 只进审计，不充当模型
 自由指令。B 的模型负结论不是正式终态；只有代码产出不可行 witness 时 exit 1 才表示负结论已落盘，
 此时不得继续 Context 或 Stage5，也不得替人猜 repair/replan 决定。
 
-计划编译并通过机械检查后，再提交第二份、绑定 Plan 与 B concerns 的完整逐章 typed 最终结构决定。
+计划编译并通过机械检查后，先走只读 `approval workpack structure`，再提交第二份、绑定 Plan 与 B
+concerns 的完整逐章 typed 最终结构决定。工作包里 INFO/metric/UNVER 的 action 为空，只披露不返工。
 通用 s4 gate 不是兼容入口；计划或 concerns 变化后旧决定立即过期。只有全部章 `accept`，才可单独
 运行 0 成本 `stage4.context`；Context current/fresh 后再生成并提交 Stage5 writing 授权，才可执行
 `stage5.write`。

@@ -194,6 +194,7 @@ def design_unit_run_spec(chapter: int | None) -> agent_runs.SingleSessionRunSpec
 #: Stage4B 章级单元（批次 4）复用 plan 节点的恢复策略；章与章之间
 #: per-purpose 隔离，任何两章不共享 provider session。
 PLAN_CHAPTER_RECOVERY_POLICY = RECOVERY_POLICIES['stage4.plan']
+PLAN_CHAPTER_REPLACEMENT_PROTOCOL = 'stage4-plan-chapter-replacement/v1'
 
 
 @dataclass(frozen=True)
@@ -240,6 +241,37 @@ def ensure_plan_chapter_run(ctx: Any, request: Any) -> dict[str, Any]:
         system=request.system, user=request.user,
         response_model=request.response_model,
         max_tokens=request.max_tokens)
+
+
+def plan_chapter_replacement_identity(
+        ctx: Any, request: Any, *, candidate_subject_sha256: str,
+) -> dict[str, Any]:
+    """章级 0-wire replacement 的完整不可变身份。
+
+    身份直接复用已校验的 run.json request/policy，而不是由恢复方重拼 prompt
+    指纹；另显式绑定 A 候选主体。run/request/code/subject 任一漂移都会换链。
+    """
+    run = ensure_plan_chapter_run(ctx, request)
+    if not agent_runs.is_sha256(candidate_subject_sha256):
+        raise ProvenanceRefused('Stage4B unit replacement 缺候选主体 SHA-256')
+    return {
+        'protocol': PLAN_CHAPTER_REPLACEMENT_PROTOCOL,
+        'run_id': run['run_id'], 'sid': run['sid'], 'node': run['node'],
+        'code': run['code'], 'chapter': run['chapter'],
+        'purpose': run['purpose'], 'input_sha256': run['input_sha256'],
+        'candidate_subject_sha256': candidate_subject_sha256,
+        'run_identity_sha256': run['identity_sha256'],
+        'request_policy_sha256': run['request_policy_sha256'],
+        'request': copy.deepcopy(run['request']),
+    }
+
+
+def plan_chapter_replacement_chain(
+        ctx: Any, request: Any, *, candidate_subject_sha256: str,
+) -> str:
+    """同一 unit replacement 在 response-repair 中的唯一 chain id。"""
+    return agent_runs.canonical_sha256(plan_chapter_replacement_identity(
+        ctx, request, candidate_subject_sha256=candidate_subject_sha256))
 
 
 def write_plan_chapter_checkpoint(
@@ -2137,7 +2169,9 @@ __all__ = [
     'DESIGN_AGGREGATE_COMMIT_FILE', 'DESIGN_REPAIR_AGGREGATE_COMMIT_FILE',
     'DESIGN_MAX_CONCURRENCY', 'DESIGN_UNIT_RECOVERY_POLICY',
     'DesignRepairCapability', 'DesignUnitRequest', 'DesignUnitSource',
-    'PlanChapterRequest', 'plan_chapter_commit_spec',
+    'PlanChapterRequest', 'PLAN_CHAPTER_REPLACEMENT_PROTOCOL',
+    'plan_chapter_commit_spec', 'plan_chapter_replacement_chain',
+    'plan_chapter_replacement_identity',
     'RECOVERY_POLICIES',
     'commit_ownership', 'committed', 'design_aggregate_committed',
     'design_aggregate_prepared', 'design_aggregate_state',

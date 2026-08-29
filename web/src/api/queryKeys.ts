@@ -54,6 +54,8 @@ export const qk = {
     ['agentRunPreview', req] as const,
 
   approvals: (sid: string) => ['approvals', sid] as const,
+  approvalWorkpack: (sid: string, kind: 'design' | 'structure') =>
+    ['approvals', sid, kind, 'workpack'] as const,
   designReviewTemplate: (sid: string, query: DesignReviewTemplateQuery | null) =>
     ['approvals', sid, 'design', 'template', query] as const,
 }
