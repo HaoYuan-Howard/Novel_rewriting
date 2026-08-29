@@ -992,6 +992,28 @@ def _run_stage5(ctx: RunContext, flags: list[str]) -> int:
             print(f'  ✓ ch{resolution.output_ordinal:02d} 已明确保留 pretrim 原稿；'
                   'hash-bound resolution 已落盘，未采用收缩候选')
             return X.OK
+        if '--retain-pretrim-batch' in tokens:
+            from contracts.schema.api import BatchTrimResolutionRequest
+            manifest_path = _valued(flags, '--retain-pretrim-batch')
+            if not manifest_path:
+                raise TerminalState(
+                    '--retain-pretrim-batch 必须给 manifest JSON 路径'
+                    '（相对书目录或书目录内绝对路径；actor/reason 在 manifest 内）')
+            # 与 --apply-edit 同路径规则：相对路径按书目录解释（paths.edit_rel）。
+            manifest_abs = paths.edit_rel(
+                str(ctx.novel_dir), manifest_path,
+                default_rel='--retain-pretrim-batch')
+            raw = Path(manifest_abs).read_text(encoding='utf-8')
+            try:
+                request = BatchTrimResolutionRequest.model_validate_json(raw)
+            except ValidationError as exc:
+                raise TerminalState(
+                    f'批量销账 manifest 不符合 typed 契约：{exc}') from exc
+            written = trim_resolution.retain_pretrim_batch(ctx, request)
+            print(f'  ✓ 批量销账完成：{len(written)} 章'
+                  f'（{[row.output_ordinal for row in written]}）'
+                  '；hash-bound resolution 已按章落盘，未采用收缩候选')
+            return X.OK
         stray = {'--chapters', '--actor', '--reason'} & tokens
         if stray:
             raise TerminalState(

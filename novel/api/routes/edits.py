@@ -19,6 +19,7 @@ import warnings
 from fastapi import APIRouter, Depends
 
 from contracts.schema.api import (
+    BatchTrimResolutionRequest,
     DraftEditRequest, HookApproveRequest, NameMapApproveRequest,
     ResidualAdoptionRequest, TrimResolutionRequest,
 )
@@ -156,6 +157,27 @@ def retain_pretrim(
          '--actor', request.actor, '--reason', request.reason],
         follow_check=False,
     )
+
+
+@router.post('/{sid}/stage5/trim/retain-pretrim-batch', response_model=JobRecord)
+def retain_pretrim_batch(
+    request: BatchTrimResolutionRequest,
+    sid: str = Depends(checked_sid),
+    base: str = Depends(get_base),
+) -> JobRecord:
+    """一次整批销账多章 trim：整批预检、按章幂等写 hash-bound resolution。"""
+    path = uploads.save_stage5_trim_batch(base, sid, request)
+    try:
+        return jobs.run(
+            base, 'stage5.review', sid,
+            ['--retain-pretrim-batch', str(path)], follow_check=False)
+    finally:
+        try:
+            uploads.discard_edit_plan(base, path)
+        except NovelError as exc:
+            warnings.warn(
+                f'批量销账作业已结束，但一次性 manifest 清理失败：{exc}',
+                RuntimeWarning, stacklevel=2)
 
 
 @router.post('/{sid}/stage6/approve', response_model=JobRecord)

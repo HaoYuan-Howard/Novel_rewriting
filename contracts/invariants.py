@@ -143,6 +143,12 @@ STAGE5_COMMIT_PHASES: Final = (
 #: 运行，否则人连开闸需要的证据都拿不到（硬闸与恢复面必须同批交付）。
 #: 一条 stage6/stage7 命令的 flag token 全部落在本表内 ⇒ 免闸；否则必须先有
 #: 当前 typed closure 回执。取值面以各 NodeSpec.flags 为准，由测试交叉钉住。
+#: Stage5 闭合回执的取值域（P0-2）；公开 schema 用 ``Literal[...]`` 引用，
+#: 字面量只许活在这一张表里。
+STAGE5_MUST_APPEAR_RULINGS: Final = ('confirmed_present', 'accepted_exception')
+STAGE5_CLOSURE_GROUPS: Final = ('fact_landing', 'unver')
+STAGE5_CLOSURE_STATES: Final = ('missing', 'blocked', 'ready', 'closed', 'expired')
+
 STAGE5_CLOSED_EXEMPT_FLAGS: Final = (
     '--dry-run', '--check-only', '--identity', '--recheck',
     '--revalidate', '--apply-edit', '--wontfix',
@@ -1406,6 +1412,8 @@ FREE_ENTRIES: Final = {
     '--wontfix': '把一条「这条我不修」记进 <stage>/wontfix.json，纯记账、不调用',
     '--retain-pretrim': ('人工确认保留当前 trim audit 对应的原稿；只写 hash-bound resolution，'
                          '0 次 LLM 调用（不是 0 人工成本）'),
+    '--retain-pretrim-batch': ('按显式 manifest 一次销账多章 trim；整批预检、按章幂等写'
+                               'hash-bound resolution，0 次 LLM 调用'),
     '--emit-edit-template': '向 stdout 输出带当前 schema version 的 stage7 人工编辑空壳，不写盘',
     '--validate-edit': '按 stage7 apply-edit 的同一构建与判定链预检人工编辑，不写盘',
     '--emit-review-template': ('向 stdout 输出绑定当前 stage2 全局复核项 hash/evidence 的'
@@ -1522,6 +1530,8 @@ VALUED_FLAGS: Final = {
     '--recover-prepared': (
         '要零调用收口的旧 Stage5 source run_id；范围固定为其中全部 unresolved prepared'),
     '--validate-edit': '要预检的 stage7 人工编辑路径（与 --apply-edit 同路径规则，不写盘）',
+    '--retain-pretrim-batch': ('批量销账 manifest 路径（必填；相对路径相对书目录，'
+                               '也接受书目录内的绝对路径）；actor/reason 在 manifest 内'),
     '--apply-edit-plan': '审校台生成的 stage0 编辑计划路径（正文 + 剔除账 + 乐观锁）',
     '--review-decisions': 'stage2/global_review 的人工决策集（相对当前书目录）',
     # ⚠ 它只裁剪**只读输出面**，不裁剪评测面本身：`global_review.json` 仍枚举全部
@@ -1617,6 +1627,8 @@ WRITE_EFFECTS: Final = {
     '--wontfix': '把一条豁免记进 <stage>/wontfix.json（**本节点的正式产物一份都不产**）',
     '--retain-pretrim': ('写 stage5/trim_resolution_chNN.json；旧 resolution 归档，'
                          '不改正文、不采用收缩候选'),
+    '--retain-pretrim-batch': ('按 manifest 逐章写 trim_resolution；已销账章幂等跳过，'
+                               '不改正文、不采用收缩候选'),
     '--recover-prepared': (
         '写 stage5/chNN.json、target run recovery manifest/两相 replacement journal 与'
         'append-only adoption lineage；不改旧 source sidecar'),
@@ -1825,6 +1837,7 @@ NODES: Final[dict[str, NodeSpec]] = {
     #   把它登记进来会让每一本书**永远差一份产物**。⇒ 它的写盘效应登记在 `WRITE_EFFECTS`。
     'stage5.review':    NodeSpec('stage5', 'R-8',  False, 'stage5 全书验收',
                                  flags=('--check-only', '--wontfix', '--retain-pretrim',
+                                        '--retain-pretrim-batch',
                                         '--chapters', '--actor', '--reason'),
                                  produces=(artifact_paths.STAGE5_REVIEW,)),
     # ⚠⚠ **`stage5.semantic` 已于 2026-08-17 整节点下线**（用户裁决，见

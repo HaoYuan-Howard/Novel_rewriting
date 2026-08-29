@@ -68,7 +68,7 @@ def test_default_approval_value_is_not_mistaken_for_a_saved_human_choice(
         lambda _overview, node: (approvals.state.RESUME_RUN, node))
 
     doc = approvals.get(tmp_path, '123')
-    assert doc.v == 5 and not doc.writing
+    assert doc.v == 6 and not doc.writing
     assert 'deep' not in type(doc).model_fields, 'public v5 不得重新暴露已退役的双臂决定'
     assert not approvals.has_record(tmp_path, '123')
 

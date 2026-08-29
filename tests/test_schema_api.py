@@ -324,9 +324,9 @@ def test_the_contract_layer_never_imports_the_web_stack():
     assert 'pydantic' in mods, 'pydantic 都没 import 到——AST 多半解析错了'
 
 
-def test_approval_doc_v5_has_exactly_the_current_seven_gates():
+def test_approval_doc_v6_has_exactly_the_current_seven_gates():
     payload = {
-        'v': 5,
+        'v': 6,
         'sid': '123',
         'gate': {gate: False for gate in APPROVAL_GATES},
         'seen': {'read': False, 'global': False},

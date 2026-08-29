@@ -317,6 +317,11 @@ def test_stage7_assemble_restores_map_and_delivery_on_any_half_commit(
             monkeypatch, fail_map_write, book_freshness):
     from novel.stages.stage2 import global_review
     monkeypatch.setattr(global_review, 'require_approved', lambda _ctx: None)
+    # 本用例验证的是组装半提交回滚；Stage5 闭合闸自身由 test_stage5_closure
+    # 覆盖，这里替换为恒通过，隔离两个关注点（assemble 在调用点做延迟 import，
+    # 因此补丁打在 closure 模块属性上）。
+    import novel.stages.stage5.closure as _closure
+    monkeypatch.setattr(_closure, 'require_stage5_closed', lambda _store: None)
     art = _atomic_map()
     store = _TransactionalStore(
         art, fail_map_write=fail_map_write, book_freshness=book_freshness)

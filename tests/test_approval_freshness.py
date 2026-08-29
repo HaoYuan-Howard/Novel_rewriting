@@ -147,7 +147,7 @@ def test_current_writing_proof_binds_stage1_plan_and_context_without_s3(
 
     raw = json.loads(approvals._path(base, SID).read_text(encoding='utf-8'))
     public = approvals.get(base, SID)
-    assert raw['v'] == 6 and public.v == 5
+    assert raw['v'] == 7 and public.v == 6
     assert set(raw['gate']) == {'s0', 's1', 's2', 's4', 's5', 's6', 's7'}
     assert set(raw['writing_proof']['artifacts']) == {
         MAIN_REL, PLAN_REL, STAGE4_WRITER_CONTEXT}
@@ -235,8 +235,8 @@ def test_explicit_v5_backfill_recasts_current_s4_decision_and_lands_v6(
     result = approvals.backfill_from_disk(base, SID)
     raw = json.loads(path.read_text(encoding='utf-8'))
 
-    assert result.approvals.v == 5 and result.approvals.gate['s4']
-    assert 's4' in result.backfilled and raw['v'] == 6
+    assert result.approvals.v == 6 and result.approvals.gate['s4']
+    assert 's4' in result.backfilled and raw['v'] == 7
     assert raw['structure_decision']['subject_sha256'] == \
         result.approvals.structure.current_subject_sha256
     assert raw['gate_proofs']['s4'] == raw['structure_decision']['proof']
@@ -368,7 +368,7 @@ def test_v1_or_corrupt_service_record_never_authorizes_queue(
     }), encoding='utf-8')
 
     assert not approvals.has_record(base, SID)
-    with pytest.raises(approvals.HumanEditProtected, match='unsupported v1/v2/v3/v4/v5'):
+    with pytest.raises(approvals.HumanEditProtected, match='pre-v7'):
         approvals.get(base, SID)
     with pytest.raises(approvals.HumanEditProtected, match='backfilled as v2/v3/v4/v5'):
         approvals.backfill_from_disk(base, SID)
@@ -415,7 +415,7 @@ def test_explicit_v2_backfill_drops_s3_and_never_resigns_s4_or_writing(
 
     result = approvals.backfill_from_disk(base, SID)
     assert result.backfilled == []
-    assert result.approvals.v == 5
+    assert result.approvals.v == 6
     assert set(result.approvals.gate) == set(approvals.APPROVAL_GATES)
     assert 's3' not in result.approvals.gate
     assert not result.approvals.gate['s4']
@@ -423,7 +423,7 @@ def test_explicit_v2_backfill_drops_s3_and_never_resigns_s4_or_writing(
     assert not any(result.approvals.gate[gate] for gate in ('s5', 's6', 's7'))
 
     raw = json.loads(approvals._path(base, SID).read_text(encoding='utf-8'))
-    assert raw['v'] == 6
+    assert raw['v'] == 7
     assert set(raw['gate']) == set(approvals.APPROVAL_GATES)
     assert 's3' not in raw['gate'] and 's3' not in raw['gate_proofs']
     assert 'deep' not in raw and 'deep_proof' not in raw

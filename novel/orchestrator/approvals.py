@@ -1501,8 +1501,14 @@ def _public_closure_decision(
 
 
 def _closure_view(novel_dir: Path, record: _ApprovalRecordV7) -> Stage5ClosureView:
-    """把当前盘面 + 盘上回执历史折成公开闭合视图；workpack 恒按当前盘面重算。"""
+    """把当前盘面 + 盘上回执历史折成公开闭合视图；workpack 恒按当前盘面重算。
+
+    书还没有进入 Stage5（无 stage5 目录）时 nothing to close ⇒ missing，
+    不去构造 workpack（那会把「没有 Review」读成一次注定失败的判定）。
+    """
     from novel.stages.stage5.closure import closure_view as _workpack_view
+    if not (novel_dir / 'stage5').is_dir():
+        return Stage5ClosureView(state='missing')
     store = _store_for(novel_dir)
     history = [_public_closure_decision(row) for row in record.closure_history]
     current = (

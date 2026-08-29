@@ -81,7 +81,8 @@ from contracts.invariants import (
     STAGE1_SEGMENT_KINDS,
     TIME_LAYERS,
     TEMPORAL_LINKS,
-)
+    STAGE5_CLOSURE_GROUPS, STAGE5_CLOSURE_STATES,
+    STAGE5_MUST_APPEAR_RULINGS,)
 from contracts.schema.base import FrozenModel, StrictModel
 from contracts.schema.common import Finding, HashBoundHumanApproval
 from contracts.schema.evaluation import GlobalReviewItem
@@ -1183,8 +1184,8 @@ class WritingApprovalView(FrozenModel):
 # TrimResolution、wontfix 与规则指纹确定性生成模板，Commander 逐项裁决后原子提交。
 # ``gate.s5`` 从此只能由这份 typed 回执打开；匿名盖章是关闭式拒绝。
 
-Stage5MustAppearRuling: TypeAlias = Literal['confirmed_present', 'accepted_exception']
-Stage5ClosureGroup: TypeAlias = Literal['fact_landing', 'unver']
+Stage5MustAppearRuling: TypeAlias = Literal[STAGE5_MUST_APPEAR_RULINGS]
+Stage5ClosureGroup: TypeAlias = Literal[STAGE5_CLOSURE_GROUPS]
 
 
 class Stage5MustAppearDecision(StrictModel):
@@ -1224,6 +1225,38 @@ class Stage5FindingGroupAck(StrictModel):
     items: int = Field(ge=1)
     placeholder: bool = False
     template_token: str | None = None
+
+
+class BatchTrimResolutionItem(StrictModel):
+    """批量销账的一章：绑定当章 audit 与 canonical 正文两个精确 SHA。"""
+
+    output_ordinal: int = Field(ge=1)
+    audit_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    chapter_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    #: 单项覆盖理由；空串 = 使用请求级共享 reason。
+    reason: str = Field(default='')
+
+
+class BatchTrimResolutionRequest(StrictModel):
+    """Stage5 trim 决定的一次整批提交（P1-2）。
+
+    写前先校验整批：任一项的 audit/chapter SHA 与当前盘面漂移 ⇒ **整批不开始**。
+    按章序幂等写入，进程中断后重交同一 manifest 只会继续剩余项。
+    actor 共享；reason 共享、单项可覆盖。
+    """
+
+    actor: str = Field(min_length=1)
+    reason: str = Field(min_length=1)
+    items: list[BatchTrimResolutionItem] = Field(min_length=1)
+
+    @model_validator(mode='after')
+    def _batch_has_unique_chapters(self) -> BatchTrimResolutionRequest:
+        if not self.actor.strip() or not self.reason.strip():
+            raise ValueError('批量销账 actor/reason 不能只含空白')
+        ordinals = [item.output_ordinal for item in self.items]
+        if ordinals != sorted(set(ordinals)):
+            raise ValueError('批量销账章号必须升序、去重')
+        return self
 
 
 class Stage5ClosureRequest(StrictModel):
@@ -1332,7 +1365,7 @@ class Stage5ClosureWorkpack(FrozenModel):
         return blockers
 
 
-Stage5ClosureState = Literal['missing', 'blocked', 'ready', 'closed', 'expired']
+Stage5ClosureState = Literal[STAGE5_CLOSURE_STATES]
 
 
 class Stage5ClosureView(FrozenModel):

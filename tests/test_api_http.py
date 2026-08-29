@@ -340,6 +340,7 @@ def test_the_published_surface_is_exactly_the_current_surface(app):
         #    ⚠ `stage6/edit` / `stage7/edit` 刻意不在（2026-08-17 裁决：改字走 CLI）。
         '/api/novels/{sid}/review/{ordinal}/edit': ['POST'],
         '/api/novels/{sid}/stage5/trim/{ordinal}/retain-pretrim': ['POST'],
+        '/api/novels/{sid}/stage5/trim/retain-pretrim-batch': ['POST'],
         '/api/novels/{sid}/stage6/approve': ['POST'],
         '/api/novels/{sid}/stage7/approve': ['POST'],
         '/api/novels/{sid}/stage7/adopt-residual': ['POST'],

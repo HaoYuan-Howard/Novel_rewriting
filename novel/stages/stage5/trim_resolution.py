@@ -19,8 +19,8 @@ from contracts.schema.evaluation import TrimAudit, TrimResolution
 from contracts.schema.stage4 import WriterContext
 from contracts.schema.stage5 import Chapter
 from novel.errors import (
-    ApprovalRequired, ArtifactUnreadable, ProvenanceRefused, UpstreamMissing,
-    UpstreamStale,
+    ApprovalRequired, ArtifactUnreadable, ProvenanceRefused, TerminalState,
+    UpstreamMissing, UpstreamStale,
 )
 from novel.run import RunContext
 from novel.stages.stage5 import measure as M
@@ -139,6 +139,77 @@ def current_unresolved_audits(
         for ordinal, row in current_trim_audits(store).items()
         if needs_human_resolution(store, row[0], row[1])
     }
+
+
+def retain_pretrim_batch(
+    ctx: RunContext,
+    request: 'BatchTrimResolutionRequest',
+) -> list[TrimResolution]:
+    """按显式 manifest 一次销账多章（P1-2）。
+
+    三条契约：
+      - **整批预检**：任一项的 audit/chapter SHA 与当前盘面漂移即整批不开始
+        （TerminalState），绝不出现「写了一半才发现漂移」；
+      - **按章序幂等写入**：已存在且逐字相等的 resolution 跳过；重交同一
+        manifest 只会继续剩余项；
+      - **actor 共享、reason 共享 + 单项覆盖**：与单章口同一把 hash-bound 尺子。
+    """
+    from contracts.schema.api import BatchTrimResolutionRequest
+    if not isinstance(request, BatchTrimResolutionRequest):
+        raise ValueError('批量销账必须交 typed BatchTrimResolutionRequest')
+    store = ArtifactStore(ctx)
+
+    # ── 整批预检：一次把全部章的事实读齐并核对 SHA，任何漂移即显式终态。 ──
+    facts: list[tuple[int, TrimAudit, str, str, str]] = []
+    for item in request.items:
+        audit_rel = artifact_rel('stage5.trim_audit', nn=item.output_ordinal)
+        audit, audit_sha256 = store.read_with_sha256(TrimAudit, audit_rel)
+        if audit.output_ordinal != item.output_ordinal:
+            raise TerminalState(
+                f'批量销账预检失败：{audit_rel} 声明 output_ordinal='
+                f'{audit.output_ordinal}，与 manifest 第 {item.output_ordinal} 章不符')
+        if audit_sha256 != item.audit_sha256:
+            raise TerminalState(
+                f'批量销账预检失败：第 {item.output_ordinal} 章 audit SHA 漂移'
+                f'（manifest {item.audit_sha256[:8]}… / 盘上 {audit_sha256[:8]}…）；'
+                '整批不开始，请重新抓取当前 trim 状态')
+        chapter = _current_pretrim(store, audit)
+        if chapter is None:
+            raise TerminalState(
+                f'批量销账预检失败：第 {item.output_ordinal} 章正式稿不存在或已过期；'
+                '整批不开始')
+        chapter_rel, chapter_sha256 = chapter
+        if (chapter_sha256 != audit.before_sha256
+                or chapter_sha256 != item.chapter_sha256):
+            raise TerminalState(
+                f'批量销账预检失败：第 {item.output_ordinal} 章正文 SHA 与 '
+                f'audit/manifest 不一致（正文 {chapter_sha256[:8]}…）；整批不开始')
+        facts.append((item.output_ordinal, audit, audit_sha256, chapter_rel,
+                      item.reason.strip() or request.reason))
+
+    # ── 按章序幂等写入。 ──
+    written: list[TrimResolution] = []
+    for ordinal, audit, audit_sha256, chapter_rel, reason in facts:
+        resolution = TrimResolution(
+            output_ordinal=ordinal,
+            action='retain_pretrim',
+            actor=request.actor,
+            reason=reason,
+            audit_sha256=audit_sha256,
+            before_sha256=audit.before_sha256,
+            chapter_rel=chapter_rel,
+            chapter_sha256=audit.before_sha256,
+            _provenance=ctx.free_provenance(),
+        )
+        rel = resolution_rel(ordinal)
+        if store.exists(rel):
+            current, _raw = store.read_own(TrimResolution, rel)
+            if current == resolution:
+                written.append(current)
+                continue
+        store.write_round(rel, resolution)
+        written.append(resolution)
+    return written
 
 
 def verification_context(store: ArtifactStore, audit: TrimAudit) -> str:

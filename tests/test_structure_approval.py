@@ -72,7 +72,7 @@ def isolated(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
         approvals, '_read_current', lambda _base, _sid: state['record'])
 
     def write(base, record):
-        record = approvals._ApprovalRecordV6.model_validate(record.model_dump())
+        record = approvals._ApprovalRecordV7.model_validate(record.model_dump())
         state['record'] = record
         return approvals._view(base, record)
 
@@ -104,6 +104,7 @@ def test_old_v5_record_without_typed_writing_fields_remains_migratable():
         mode='json', exclude={
             'writing_history', 'writing_decision',
             'design_history', 'design_decision',
+            'closure_history', 'closure_decision',
         })
     old_payload['v'] = 5
 
@@ -190,10 +191,10 @@ def test_all_accept_opens_s4_persists_v6_history_and_is_idempotent(isolated):
     base, _book, state = isolated
     request = _request('accept', 'accept')
     first = approvals.approve_structure(base, SID, request)
-    assert first.v == 5 and first.gate['s4']
+    assert first.v == 6 and first.gate['s4']
     assert first.structure.state == 'accepted'
     assert first.structure.current_decision is not None
-    assert state['record'].v == 6
+    assert state['record'].v == 7
     assert len(state['record'].structure_history) == 1
     assert state['record'].gate_proofs['s4'] == state['record'].structure_decision.proof
 
@@ -415,7 +416,7 @@ def test_explicit_v3_migration_preserves_at_most_s0_through_s2(
         lambda _novel_dir, gate, _record: proof)
 
     migrated, backfilled = approvals._migrate_legacy_v3(tmp_path, SID, legacy)
-    assert migrated.v == 6 and backfilled == []
+    assert migrated.v == 7 and backfilled == []
     assert 's3' not in migrated.gate
     assert not any(migrated.gate[gate] for gate in ('s4', 's5', 's6', 's7'))
     assert not migrated.writing
@@ -451,7 +452,7 @@ def test_structure_route_accepts_the_typed_body(monkeypatch, tmp_path):
             json=_request('accept', 'accept').model_dump(mode='json'),
         )
     assert got.status_code == 200, got.text
-    assert got.json()['v'] == 5
+    assert got.json()['v'] == 6
     assert captured['sid'] == SID
     assert isinstance(captured['request'], StructureApprovalRequest)
 

@@ -267,11 +267,17 @@ P3 自动化只验「书到 Stage7、产物版本全 current、HARD 全闭合且
   各 slot 差值、只调组织的指令）、`paragraph_slot_report` 只读 metric、whitespace-only
   reflow 仅 shadow（非空白 SHA 不变 + 完整重判），默认启用须等 TODO-21 语料三本
   新跑达标。不调模型、effort 与并发。
-- P1-2 Commander 工作台：Stage5 屏顶部闭合卡（freshness/HARD/trim/coverage/回执
-  态/唯一下一步）；TrimResolution 批量提交（绑定 audit+chapter SHA、整批预检、
-  按章幂等）；只读 edit preview（与正式 apply 同一归一与判据，apply 绑 preview
-  subject SHA）；人工改稿 actor/reason 进 `human_actions.jsonl`；多次编辑只跑
-  一次最终 Review。
+- P1-2 Commander 工作台（进行中）：**已交付**批量 trim 销账——
+  `BatchTrimResolutionRequest` 公开类型、`trim_resolution.retain_pretrim_batch`
+  （整批预检：任一 audit/chapter SHA 漂移即整批不开始；按章序幂等写入；actor
+  共享、reason 单项可覆盖）、CLI `stage5.review --retain-pretrim-batch <manifest>`
+  与 `POST /api/novels/{sid}/stage5/trim/retain-pretrim-batch`。
+  **剩余**：只读 edit preview（与正式 apply 同一归一与判据，apply 绑当前
+  chapter SHA 与 preview subject SHA，引入新 HARD 只能作为工作稿确认）、
+  人工改稿 actor/reason 进 `human_actions.jsonl`、多次编辑只跑一次最终 Review、
+  Stage5 屏顶部闭合卡与批量 trim/回执提交的前端入口（消费
+  `/approvals/stage5(/template)` 与批量 trim API），以及 web/DELIVERY.md 的
+  U 条目同步。
 - 验收：P1 各批跑冻结契约 §9.5 + 完整非 corpus 回归 + 前端 seams/typecheck/build；
   workpack/must_appear 决定的历史预填只在 finding SHA 与 chapter SHA 均未变化时
   允许。真实模型稳定性读数（首轮段落合规率、wire 倍率、formal commit 率、

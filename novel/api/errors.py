@@ -34,6 +34,7 @@ from novel.errors import (
     HookCopyMissing,
     HumanEditProtected,
     NovelError,
+    ParagraphPlanInfeasible,
     PathRefused,
     PartitionChapterMismatch,
     PartitionInputMismatch,
@@ -78,6 +79,9 @@ STATUS: dict[type[NovelError], int] = {
     #: 前者指得出重建哪一条边，后者只能整份从 producer 重建。
     UpstreamUnproven: 409,
     GateBlocked: 409,
+    #: 段落 slot 计划在任何 wire 前已不可能完成（场景数超过合法段数上限）：
+    #: 它是「计划与参数冲突」，属流程走不下去（409），恢复路在 Stage4 计划侧。
+    ParagraphPlanInfeasible: 409,
     #: 正式稿在 live 路径上、但带着没消的 hard ⇒ 下一步被拦住。**与 `GateBlocked` 同码
     #: 不同因**：那条指得出被拦下的稿在哪（`invalid_path`），这条盘上没有 `.INVALID`，
     #: 给的是 `rules`——逐条修判据命中，不是提升一份废稿。

@@ -9,6 +9,8 @@
 '''
 from __future__ import annotations
 
+NL = chr(10)  # 换行字面量：避免在字符串里写转义
+
 import hashlib
 import json
 import os
@@ -19,6 +21,7 @@ from contracts.schema.stage0 import Stage0CandidatePlan, Stage0EditPlan
 from contracts.schema.evaluation import GlobalReviewDecisionSet
 from contracts.schema import encode_artifact
 from contracts.artifacts import STAGE2_GLOBAL_REVIEW_DECISIONS
+from contracts.schema.api import BatchTrimResolutionRequest
 from contracts.schema.stage5 import ChapterResponse
 from novel import paths
 from novel.errors import (
@@ -233,6 +236,31 @@ def save_global_review_decisions(
         except OSError:
             pass
     return target.resolve()
+
+
+def save_stage5_trim_batch(
+    base: str | os.PathLike[str],
+    sid: str,
+    request: 'BatchTrimResolutionRequest',
+) -> Path:
+    """Persist a one-shot Stage5 batch trim manifest outside the artifact tree."""
+    try:
+        paths.check_sid(sid)
+    except PathRefused as exc:
+        raise SourcePathRejected(f'批量销账 manifest 的书 id 不合法：{exc}') from exc
+    root = service_dir(base) / EDITS_DIRNAME / sid
+    root.mkdir(parents=True, exist_ok=True)
+    target = root / f'stage5-trim-batch-{uuid.uuid4().hex}.json'
+    tmp = target.with_suffix('.tmp')
+    try:
+        payload = request.model_dump(mode='json', by_alias=True)
+        tmp.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + NL,
+            encoding='utf-8')
+        os.replace(tmp, target)
+    except OSError as exc:
+        raise ArtifactUnreadable(f'写不了批量销账 manifest：{exc!r}') from exc
+    return target
 
 
 def discard_edit_plan(base: str | os.PathLike[str], plan_path: str | os.PathLike[str]) -> None:

@@ -215,7 +215,7 @@ def isolated(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     monkeypatch.setattr(approvals, '_now', lambda: '2026-08-28T00:00:00+00:00')
 
     def write(base, record):
-        state['record'] = approvals._ApprovalRecordV6.model_validate(
+        state['record'] = approvals._ApprovalRecordV7.model_validate(
             record.model_dump(mode='json'))
         return approvals._view(base, state['record'])
 
@@ -537,7 +537,9 @@ def test_constraint_refs_must_belong_to_the_reviewed_chapter(isolated):
 def test_explicit_v5_to_v6_migration_never_fabricates_design_history(
         monkeypatch, tmp_path):
     payload = approvals._fresh_record(SID).model_dump(
-        mode='json', exclude={'design_history', 'design_decision'})
+        mode='json',
+        exclude={'design_history', 'design_decision',
+                 'closure_history', 'closure_decision'})
     payload['v'] = 5
     legacy = approvals._ApprovalRecordV5Legacy.model_validate(payload)
     book = tmp_path / f'legacy_{SID}'
@@ -547,7 +549,7 @@ def test_explicit_v5_to_v6_migration_never_fabricates_design_history(
 
     migrated, backfilled = approvals._migrate_legacy_v5(tmp_path, SID, legacy)
 
-    assert migrated.v == 6 and backfilled == []
+    assert migrated.v == 7 and backfilled == []
     assert migrated.design_history == [] and migrated.design_decision is None
     assert not migrated.writing
 

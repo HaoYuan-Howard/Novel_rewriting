@@ -387,6 +387,7 @@ def test_job_conflict_maps_and_returns_409(monkeypatch):
         # 第二阶段批 3 · 人工写回（行为在 `tests/test_api_edits.py`）
         '/api/novels/{sid}/review/{ordinal}/edit',
         '/api/novels/{sid}/stage5/trim/{ordinal}/retain-pretrim',
+        '/api/novels/{sid}/stage5/trim/retain-pretrim-batch',
         '/api/novels/{sid}/stage6/approve',
         '/api/novels/{sid}/stage7/approve',
         '/api/novels/{sid}/stage7/adopt-residual',

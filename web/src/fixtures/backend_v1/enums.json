@@ -95,6 +95,42 @@
   "failed",
   "unknown"
  ],
+ "stage5_commit_phases": [
+  "prepare_commit",
+  "formal_write",
+  "typed_readback",
+  "adoption",
+  "mark_committed",
+  "committed_verify",
+  "session_end"
+ ],
+ "stage5_must_appear_rulings": [
+  "confirmed_present",
+  "accepted_exception"
+ ],
+ "stage5_closure_groups": [
+  "fact_landing",
+  "unver"
+ ],
+ "stage5_closure_states": [
+  "missing",
+  "blocked",
+  "ready",
+  "closed",
+  "expired"
+ ],
+ "stage5_closed_exempt_flags": [
+  "--dry-run",
+  "--check-only",
+  "--identity",
+  "--recheck",
+  "--revalidate",
+  "--apply-edit",
+  "--wontfix",
+  "--emit-edit-template",
+  "--adopt-residual",
+  "--validate-edit"
+ ],
  "job_event_kinds": [
   "started",
   "step",
@@ -654,13 +690,16 @@
   "--review-decisions": "应用带 actor、理由和 subject hash 乐观锁的 stage2 人工复核决策",
   "--wontfix": "把一条「这条我不修」记进 <stage>/wontfix.json，纯记账、不调用",
   "--retain-pretrim": "人工确认保留当前 trim audit 对应的原稿；只写 hash-bound resolution，0 次 LLM 调用（不是 0 人工成本）",
+  "--retain-pretrim-batch": "按显式 manifest 一次销账多章 trim；整批预检、按章幂等写hash-bound resolution，0 次 LLM 调用",
   "--emit-edit-template": "向 stdout 输出带当前 schema version 的 stage7 人工编辑空壳，不写盘",
   "--validate-edit": "按 stage7 apply-edit 的同一构建与判定链预检人工编辑，不写盘",
   "--emit-review-template": "向 stdout 输出绑定当前 stage2 全局复核项 hash/evidence 的安全 UNVER 决策骨架，不写盘",
   "--emit-review-workpack": "向 stdout 输出 Stage2 逐项主体与原文精确命中上下文；只辅助人工核验，不自动做 PASS/FAIL",
   "--adopt-residual": "显式采纳可安全应用的 high residual 建议并重放 stage7 确定性链",
   "--adopt-rejected": "按当前完整四道闸 0 次调用重判一份封存的 Stage4A 拒稿；只消费隔离区里的候选与既有成本账，不发新请求",
-  "--apply-binding": "把完整人工 EvidenceBinding 按与 Stage4B 相同的 schema、编译和 HARD 闸写回；0 次模型调用，也允许首次 B 无正式计划时恢复"
+  "--apply-binding": "把完整人工 EvidenceBinding 按与 Stage4B 相同的 schema、编译和 HARD 闸写回；0 次模型调用，也允许首次 B 无正式计划时恢复",
+  "--emit-prepared-recovery-workpack": "向 stdout 输出一份绑定旧 Stage5 prepared checkpoint、当前代码与当前上游的只读恢复工作包；不调用模型、不写产物",
+  "--recover-prepared": "把旧 Stage5 run 中全部尚未收口的 prepared checkpoint 按当前代码重新验证并提交为 canonical；0 次模型调用，必须带 hash-bound 人工凭据"
  },
  "paid_flags": {
   "--revise": "stage5 的修订式反哺——把可反哺的结论连同上一轮成稿发回写手",
@@ -683,7 +722,10 @@
   "--adopt-rejected": "要重判并采用的拒绝响应 attempt_id（16 位小写十六进制）；人只能编辑隔离区里那份固定的 candidate.json，本命令封存 actor/reason 与新旧闸指纹后再走同一套闸",
   "--repair-decision": "当前 Stage4A 正式审阅决定的完整 SHA-256；代码只返修该决定中 request_repair 的章节并复用其余已接受单元",
   "--apply-binding": "完整人工 Stage4 EvidenceBinding 路径（必填；相对路径相对书目录，也接受书目录内的绝对路径）",
+  "--emit-prepared-recovery-workpack": "要审计的旧 Stage5 source run_id；输出绑定当前 target run/code 的只读工作包",
+  "--recover-prepared": "要零调用收口的旧 Stage5 source run_id；范围固定为其中全部 unresolved prepared",
   "--validate-edit": "要预检的 stage7 人工编辑路径（与 --apply-edit 同路径规则，不写盘）",
+  "--retain-pretrim-batch": "批量销账 manifest 路径（必填；相对路径相对书目录，也接受书目录内的绝对路径）；actor/reason 在 manifest 内",
   "--apply-edit-plan": "审校台生成的 stage0 编辑计划路径（正文 + 剔除账 + 乐观锁）",
   "--review-decisions": "stage2/global_review 的人工决策集（相对当前书目录）",
   "--review-scope": "只读复核输出的范围：`blocking`（默认，只出能挡 Stage4 的项）或 `all`（整份评测面）。它不改评测面，也不改任何判定",
@@ -706,13 +748,16 @@
   "--validate-edit": "",
   "--emit-review-template": "",
   "--emit-review-workpack": "",
+  "--emit-prepared-recovery-workpack": "",
   "--adopt-residual": "重写 stage7/name_map.json，清旧审批并退休现有成书",
   "--recheck": "按当前判据刷新已有成稿的派生指标，并对账 trim 状态",
   "--revalidate": "必填 actor/reason；0 LLM 同轮重判并留不可变审计，合格的 .INVALID 才提升，旧稿归档进 _rounds/",
   "--apply-edit": "把人工稿落成新的一版，上一版仍可回看（stage0 在 revision 链上，其余归档进 _rounds/）",
   "--renormalize": "按当前契约重算代码派生字段与原文定位并写回",
   "--wontfix": "把一条豁免记进 <stage>/wontfix.json（**本节点的正式产物一份都不产**）",
-  "--retain-pretrim": "写 stage5/trim_resolution_chNN.json；旧 resolution 归档，不改正文、不采用收缩候选"
+  "--retain-pretrim": "写 stage5/trim_resolution_chNN.json；旧 resolution 归档，不改正文、不采用收缩候选",
+  "--retain-pretrim-batch": "按 manifest 逐章写 trim_resolution；已销账章幂等跳过，不改正文、不采用收缩候选",
+  "--recover-prepared": "写 stage5/chNN.json、target run recovery manifest/两相 replacement journal 与append-only adoption lineage；不改旧 source sidecar"
  },
  "stages": [
   "stage0",
@@ -1002,6 +1047,9 @@
     "--chapters",
     "--actor",
     "--reason",
+    "--subject-sha256",
+    "--emit-prepared-recovery-workpack",
+    "--recover-prepared",
     "--response-repair"
    ],
    "produces": [
@@ -1017,6 +1065,7 @@
     "--check-only",
     "--wontfix",
     "--retain-pretrim",
+    "--retain-pretrim-batch",
     "--chapters",
     "--actor",
     "--reason"
@@ -1874,6 +1923,45 @@
   },
   {
    "kind": "stage5.write",
+   "label": "stage5 全书闭卷写作 --emit-prepared-recovery-workpack",
+   "extra": [
+    "--emit-prepared-recovery-workpack"
+   ],
+   "paid": false,
+   "free_flag": "--emit-prepared-recovery-workpack",
+   "writes": "",
+   "writes_disk": false,
+   "needs_value": "要审计的旧 Stage5 source run_id；输出绑定当前 target run/code 的只读工作包",
+   "required_inputs": []
+  },
+  {
+   "kind": "stage5.write",
+   "label": "stage5 全书闭卷写作 --recover-prepared",
+   "extra": [
+    "--recover-prepared"
+   ],
+   "paid": false,
+   "free_flag": "--recover-prepared",
+   "writes": "写 stage5/chNN.json、target run recovery manifest/两相 replacement journal 与append-only adoption lineage；不改旧 source sidecar",
+   "writes_disk": true,
+   "needs_value": "要零调用收口的旧 Stage5 source run_id；范围固定为其中全部 unresolved prepared",
+   "required_inputs": [
+    {
+     "flag": "--actor",
+     "description": "人工决定的自报身份（不是认证身份）"
+    },
+    {
+     "flag": "--reason",
+     "description": "人工决定的非空理由"
+    },
+    {
+     "flag": "--subject-sha256",
+     "description": "人工决定乐观锁定的完整内容 SHA-256"
+    }
+   ]
+  },
+  {
+   "kind": "stage5.write",
    "label": "stage5 全书闭卷写作 --response-repair",
    "extra": [
     "--response-repair"
@@ -1947,6 +2035,19 @@
      "description": "人工决定的非空理由"
     }
    ]
+  },
+  {
+   "kind": "stage5.review",
+   "label": "stage5 全书验收 --retain-pretrim-batch",
+   "extra": [
+    "--retain-pretrim-batch"
+   ],
+   "paid": false,
+   "free_flag": "--retain-pretrim-batch",
+   "writes": "按 manifest 逐章写 trim_resolution；已销账章幂等跳过，不改正文、不采用收缩候选",
+   "writes_disk": true,
+   "needs_value": "批量销账 manifest 路径（必填；相对路径相对书目录，也接受书目录内的绝对路径）；actor/reason 在 manifest 内",
+   "required_inputs": []
   },
   {
    "kind": "stage5.review",
