@@ -1177,8 +1177,200 @@ class WritingApprovalView(FrozenModel):
         return self
 
 
+# ── Stage5 Commander 闭合回执（P0-2）──────────────────────────────────────────
+#
+# 一份唯一、强制、hash-bound 的整书回执：由当前 canonical 章节、fresh Review、
+# TrimResolution、wontfix 与规则指纹确定性生成模板，Commander 逐项裁决后原子提交。
+# ``gate.s5`` 从此只能由这份 typed 回执打开；匿名盖章是关闭式拒绝。
+
+Stage5MustAppearRuling: TypeAlias = Literal['confirmed_present', 'accepted_exception']
+Stage5ClosureGroup: TypeAlias = Literal['fact_landing', 'unver']
+
+
+class Stage5MustAppearDecision(StrictModel):
+    """一条 ``must_appear_missing`` 的逐项终态裁决。
+
+    只有两种终态：正文已用改写或语义等价方式承载（``confirmed_present``）、
+    明确接受缺项（``accepted_exception``，理由必填）。「需要修改」不是终态，
+    它只跳转到逐章改稿，改完重算 Review 后再裁决。模板给出 finding 与本章
+    canonical 正文的精确 SHA；提交时二者漂移即整份回执过期。
+    """
+
+    chapter_ordinal: int = Field(ge=1)
+    evidence_key: str = Field(min_length=1)
+    finding_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    chapter_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    ruling: Stage5MustAppearRuling
+    reason: str = Field(default='')
+    placeholder: bool = False
+    template_token: str | None = None
+
+    @model_validator(mode='after')
+    def _exception_needs_a_reason(self) -> Stage5MustAppearDecision:
+        if self.ruling == 'accepted_exception' and not self.reason.strip():
+            raise ValueError('accepted_exception 必须写明接受缺项的理由')
+        return self
+
+
+class Stage5FindingGroupAck(StrictModel):
+    """fact landing / 其余 UNVER 的整组披露确认。
+
+    不逐条写理由：一次确认绑定**该组全部 finding 的完整 digest** 与条数。
+    确认不会把 UNVER 改成 PASS，也不会从报告中删除任何条目。
+    """
+
+    group: Stage5ClosureGroup
+    findings_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    items: int = Field(ge=1)
+    placeholder: bool = False
+    template_token: str | None = None
+
+
+class Stage5ClosureRequest(StrictModel):
+    """对当前整书 Stage5 主体作出的原子闭合提交。"""
+
+    actor: str = Field(min_length=1)
+    reason: str = Field(min_length=1)
+    workpack_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    review_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    must_appear: list[Stage5MustAppearDecision] = Field(default_factory=list)
+    group_acks: list[Stage5FindingGroupAck] = Field(default_factory=list)
+
+    @model_validator(mode='after')
+    def _submission_has_no_duplicate_targets(self) -> Stage5ClosureRequest:
+        if not self.actor.strip() or not self.reason.strip():
+            raise ValueError('closure actor/reason 不能只含空白')
+        seen_rows = {
+            (row.chapter_ordinal, row.evidence_key) for row in self.must_appear}
+        if len(seen_rows) != len(self.must_appear):
+            raise ValueError('must_appear 裁决必须逐章逐证据唯一')
+        seen_groups = [ack.group for ack in self.group_acks]
+        if len(set(seen_groups)) != len(seen_groups):
+            raise ValueError('每组 finding 只允许一次整组确认')
+        return self
+
+
+class Stage5ClosureTemplate(Stage5ClosureRequest):
+    """服务端按当前盘面生成的关闭式模板；可直接编辑后作为 request 提交。
+
+    模板的每条 must_appear / 整组确认都带 ``placeholder=True`` 与一次性
+    ``template_token``；原样提交会被关闭式拒绝，必须由人逐项裁决。
+    """
+
+
+class Stage5ClosureDecision(Stage5ClosureRequest):
+    """服务端已落盘的闭合回执；决定摘要与时间不接受客户端代填。"""
+
+    decision_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    decided_at: str = Field(min_length=1)
+
+    @model_validator(mode='after')
+    def _decision_contains_no_template_placeholders(self) -> Stage5ClosureDecision:
+        if any(row.placeholder or row.template_token is not None
+               for row in self.must_appear):
+            raise ValueError('正式 closure decision 不得保留 must_appear placeholder')
+        if any(ack.placeholder or ack.template_token is not None
+               for ack in self.group_acks):
+            raise ValueError('正式 closure decision 不得保留整组确认 placeholder')
+        return self
+
+
+class Stage5MustAppearRow(StrictModel):
+    """workpack 里一条待裁决的 ``must_appear_missing``；只读证据面。"""
+
+    chapter_ordinal: int = Field(ge=1)
+    evidence_key: str = Field(min_length=1)
+    detail: str = Field(min_length=1)
+    finding_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    chapter_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+
+
+class Stage5FindingGroup(StrictModel):
+    """workpack 里一组待整组确认的 finding 摘要；只读证据面。"""
+
+    group: Stage5ClosureGroup
+    findings_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    items: int = Field(ge=1)
+    rules: list[str] = Field(min_length=1)
+
+
+class Stage5ClosureWorkpack(FrozenModel):
+    """只读闭合工作包：由当前盘面确定性重算，是模板与过期判定的唯一依据。
+
+    ``blocking`` 回答「现在能不能提交回执」；``must_appear`` / ``fact_group`` /
+    ``unver_group`` 回答「Commander 还要看什么」；已由 wontfix / typed resolution
+    处置的条目不进任何待办，只在 ``resolved`` 里留计数。``disclosure`` 是
+    INFO/metric 的只读披露计数（规则 → 条数），不需要裁决。
+    """
+
+    review_seq: int
+    review_rel: str
+    review_sha256: str
+    planned_chapters: list[int]
+    missing_chapters: list[int]
+    invalid_chapters: list[int]
+    hard_findings: list[str]
+    unresolved_trim_chapters: list[int]
+    must_appear: list[Stage5MustAppearRow]
+    fact_group: Stage5FindingGroup | None = None
+    unver_group: Stage5FindingGroup | None = None
+    disclosure: dict[str, int] = Field(default_factory=dict)
+    resolved: dict[str, int] = Field(default_factory=dict)
+    workpack_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+
+    def blockers(self) -> list[str]:
+        """当前不可提交回执的原因；空列表 = 可以提交。"""
+        blockers: list[str] = []
+        if self.missing_chapters:
+            blockers.append(f'缺正式章稿 {self.missing_chapters}')
+        if self.invalid_chapters:
+            blockers.append(f'仍有 .INVALID {self.invalid_chapters}')
+        if self.hard_findings:
+            blockers.append(f'阻断级判定 {sorted(set(self.hard_findings))}')
+        if self.unresolved_trim_chapters:
+            blockers.append(f'trim 待销账 {self.unresolved_trim_chapters}')
+        return blockers
+
+
+Stage5ClosureState = Literal['missing', 'blocked', 'ready', 'closed', 'expired']
+
+
+class Stage5ClosureView(FrozenModel):
+    """Stage5 当前闭合态与不可擦除历史；它不是 ``gate.s5`` 本身。"""
+
+    state: Stage5ClosureState
+    workpack: Stage5ClosureWorkpack | None = None
+    next_step: str | None = None
+    current_decision: Stage5ClosureDecision | None = None
+    history: list[Stage5ClosureDecision] = Field(default_factory=list)
+
+    @model_validator(mode='after')
+    def _state_matches_workpack_and_decision(self) -> Stage5ClosureView:
+        if self.state == 'missing':
+            if self.workpack is not None:
+                raise ValueError('missing 态不能携带 workpack')
+            if self.current_decision is not None:
+                raise ValueError('missing 态不能有当前决定')
+        if self.state in ('blocked', 'ready', 'closed', 'expired'):
+            if self.workpack is None:
+                raise ValueError(f'{self.state} 态必须携带当前 workpack')
+        if self.state == 'closed':
+            decision = self.current_decision
+            if decision is None:
+                raise ValueError('closed 态必须有当前决定')
+            if decision.workpack_sha256 != self.workpack.workpack_sha256:
+                raise ValueError('closed 决定必须绑定当前 workpack')
+            if not self.history or decision != self.history[-1]:
+                raise ValueError('closed 当前决定必须是 history 最后一项')
+        if self.state == 'expired' and self.current_decision is not None:
+            raise ValueError('expired 态的旧决定只能留在 history')
+        return self
+
+
 class ApprovalDoc(StrictModel):
-    v: Literal[5] = 5
+    """公开审批面 v6：新增 Stage5 闭合回执投影。"""
+
+    v: Literal[6] = 6
     sid: str = Field(min_length=1)
     gate: dict[GateKey, bool]
     seen: dict[SeenKey, bool]
@@ -1187,6 +1379,8 @@ class ApprovalDoc(StrictModel):
         default_factory=lambda: DesignReviewView(state='unavailable'))
     structure: StructureApprovalView
     writing_approval: WritingApprovalView = Field(default_factory=WritingApprovalView)
+    closure: Stage5ClosureView = Field(
+        default_factory=lambda: Stage5ClosureView(state='missing'))
     spawns: dict[GateKey, list[ApprovalAction]] = Field(default_factory=dict)
 
     @model_validator(mode='after')
@@ -1197,6 +1391,8 @@ class ApprovalDoc(StrictModel):
             raise ValueError('seen must contain exactly read/global')
         if self.gate['s4'] and self.structure.state != 'accepted':
             raise ValueError('s4 gate 只能由当前 accepted 的 typed 结构裁决打开')
+        if self.gate['s5'] and self.closure.state != 'closed':
+            raise ValueError('s5 gate 只能由当前 typed closure 回执打开')
         return self
 
 

@@ -236,6 +236,48 @@ P3 自动化只验「书到 Stage7、产物版本全 current、HARD 全闭合且
 稳定性读数只报原始次数与分母，不预设自动 go/no-go。
 阶段验收后把冻结行为写入对应 R 条与 `docs/BACKEND_CONTRACT.md` §十，并从本条删除已完成部分。
 
+### TODO-46 · Stage5 稳定性与 Commander 审阅闭环（2026-08-29 计划）
+
+**冻结决策**：正式提交必须可隔离、可补偿、可诊断；Stage5 的「做完了吗」收成唯一、
+强制、hash-bound 的 Commander 回执，匿名盖章全部关闭；`require_stage5_closed`
+落在所有真实执行最终汇合的运行边界（CLI `_cmd_run` + `stage7.assemble`），
+硬闸与 0 成本恢复面同批交付。
+
+**已交付（P0）**：
+
+- 提交事务化（P0-1）：`STAGE5_COMMIT_PHASES` 固定阶段枚举；首次提交失败不再立即
+  收口，全部候选完成后对失败章做一次有界 same-run deterministic sweep（零 wire、
+  幂等重放、session 只落一次 ended）；session audit 升 wire v2（ended 增加
+  `delivery_attempts / same_run_recovered / first_failure_phase /
+  first_failure_detail`，v1 只读接受）；preflight/typed readback/trim 核验读全部
+  关进 `validation_reads`，提交链前后断言来源边未变化。
+- 闭合回执（P0-2）：`Stage5ClosureWorkpack/Template/Request/Decision/View` 公开
+  类型与 `novel/stages/stage5/closure.py`；must_appear 两终态（`confirmed_present` /
+  `accepted_exception`+理由）；fact landing 与 UNVER 整组确认绑定完整 finding-set
+  digest；闭合分类闭集（新增 actionable 规则未登记 ⇒ 工作包生成失败）；盘上
+  approval v6→v7、公开 ApprovalDoc v5→v6；v6→v7 只经显式 backfill（清除 s5–s7，
+  不伪造回执）；`approve_gate('s5')` 关闭式拒绝；`gate.s5` 只能由当前回执打开；
+  `GET/POST /api/novels/{sid}/approvals/stage5(/template)` 与 CLI
+  `approval template/apply stage5`；`stage7.assemble` 交付边界加闸。
+
+**剩余工作（P1）**：
+
+- P1-1 段落预算：确定性逐 slot 段落计划（largest-remainder、精确求和、不可行
+  pre-wire 拒绝）、`paragraph_budget_missed` session feedback 精确化（实际段数、
+  各 slot 差值、只调组织的指令）、`paragraph_slot_report` 只读 metric、whitespace-only
+  reflow 仅 shadow（非空白 SHA 不变 + 完整重判），默认启用须等 TODO-21 语料三本
+  新跑达标。不调模型、effort 与并发。
+- P1-2 Commander 工作台：Stage5 屏顶部闭合卡（freshness/HARD/trim/coverage/回执
+  态/唯一下一步）；TrimResolution 批量提交（绑定 audit+chapter SHA、整批预检、
+  按章幂等）；只读 edit preview（与正式 apply 同一归一与判据，apply 绑 preview
+  subject SHA）；人工改稿 actor/reason 进 `human_actions.jsonl`；多次编辑只跑
+  一次最终 Review。
+- 验收：P1 各批跑冻结契约 §9.5 + 完整非 corpus 回归 + 前端 seams/typecheck/build；
+  workpack/must_appear 决定的历史预填只在 finding SHA 与 chapter SHA 均未变化时
+  允许。真实模型稳定性读数（首轮段落合规率、wire 倍率、formal commit 率、
+  same-run recovery、Commander 操作数）只能在显式付费与正文外发授权的自然跑书中
+  由 `tools/workflow_metrics.py` 取证；未完成前不得宣称目标达成。
+
 ## 条目生命周期
 
 1. 开工前补足可复现输入、预期最终状态、成本与受影响守卫。

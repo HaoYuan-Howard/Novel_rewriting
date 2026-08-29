@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, Query
 from contracts.schema.api import (
     ApprovalBackfillResult, ApprovalDoc, DesignReviewerKind,
     DesignReviewRequest, DesignReviewTemplate, GateKey, SeenKey,
+    Stage5ClosureRequest, Stage5ClosureTemplate,
     StructureApprovalRequest, WritingApprovalRequest,
 )
 from novel.api.deps import checked_sid, get_base
@@ -49,6 +50,23 @@ def approve_design_review(
 ) -> ApprovalDoc:
     """原子保存 Stage4A typed 盲审；不启动修订或 Stage4B。"""
     return approvals.approve_design(base, sid, request)
+
+
+@router.get('/stage5/template', response_model=Stage5ClosureTemplate)
+def get_stage5_closure_template(
+    sid: str = Depends(checked_sid), base: str = Depends(get_base),
+) -> Stage5ClosureTemplate:
+    """按当前盘面生成 Stage5 闭合工作包模板；只读、0 成本、不代签。"""
+    return approvals.stage5_closure_template(base, sid)
+
+
+@router.post('/stage5', response_model=ApprovalDoc)
+def approve_stage5_closure(
+    request: Stage5ClosureRequest,
+    sid: str = Depends(checked_sid), base: str = Depends(get_base),
+) -> ApprovalDoc:
+    """原子提交 Stage5 闭合回执；通过即打开 gate.s5，不启动任何付费作业。"""
+    return approvals.approve_stage5_closure(base, sid, request)
 
 
 @router.post('/gate/{key}', response_model=ApprovalDoc)

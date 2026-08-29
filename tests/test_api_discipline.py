@@ -378,6 +378,8 @@ def test_job_conflict_maps_and_returns_409(monkeypatch):
         '/api/novels/{sid}/approvals/backfill',
         '/api/novels/{sid}/approvals/seen/{key}',
         '/api/novels/{sid}/approvals/design',
+        # Stage5 闭合回执提交：只写 _service 审批账，不启动任何付费作业。
+        '/api/novels/{sid}/approvals/stage5',
         '/api/novels/{sid}/approvals/structure',
         '/api/novels/{sid}/approvals/writing',
         '/api/novels/{sid}/approvals/reset',

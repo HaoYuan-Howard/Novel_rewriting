@@ -201,6 +201,10 @@ def run_assemble(ctx: RunContext) -> tuple[str, NameMap, CheckReport]:
     from novel.stages.stage2 import global_review
     global_review.require_approved(ctx)
     store = ArtifactStore(ctx)
+    # 组装是交付落盘的最后边界：除了 Stage2/Stage5 产物级闸，这里再守一次
+    # Stage5 typed 闭合回执（与 CLI 运行边界同一把尺子），旧文件不充当通行证。
+    from novel.stages.stage5.closure import require_stage5_closed
+    require_stage5_closed(store)
     if not store.exists(REL):
         raise UpstreamMissing(f'{REL} 不在盘上', hint='先跑 stage7.rename')
     up = _Upstreams(ctx, store)

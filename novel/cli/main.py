@@ -49,7 +49,8 @@ from pydantic import ValidationError
 from contracts.invariants import (
     APPROVAL_SEEN, DESIGN_REVIEWER_KINDS, FREE_ENTRIES, NODES,
     PAID_FLAGS, PROGRESS_PHASES,
-    STAGES, VALUED_FLAGS, stage2_review_required,
+    STAGES, STAGE5_CLOSED_EXEMPT_FLAGS, VALUED_FLAGS,
+    stage2_review_required,
 )
 from contracts.schema.orchestration import AgentProfile, ProgressEvent
 from novel import commander_context, paths, prov, run_identity
@@ -207,14 +208,16 @@ def _parser() -> argparse.ArgumentParser:
     approval_seen.add_argument('--base', required=True)
 
     approval_gate = approval_sub.add_parser(
-        'gate', help='批准当前 s0/s1/s2；s4 只接受 typed structure apply')
+        'gate', help='批准当前 s0/s1/s2；s4 只接受 typed structure apply，'
+                     's5 只接受 typed stage5 apply')
     approval_gate.add_argument('gate', choices=('s0', 's1', 's2'))
     approval_gate.add_argument('sid')
     approval_gate.add_argument('--base', required=True)
 
     approval_template = approval_sub.add_parser(
         'template', help='只读生成绑定当前 subject 的审批模板')
-    approval_template.add_argument('surface', choices=('design', 'structure', 'writing'))
+    approval_template.add_argument(
+        'surface', choices=('design', 'structure', 'writing', 'stage5'))
     approval_template.add_argument('sid')
     approval_template.add_argument('--base', required=True)
     approval_template.add_argument('--actor', required=True)
@@ -228,7 +231,8 @@ def _parser() -> argparse.ArgumentParser:
 
     approval_apply = approval_sub.add_parser(
         'apply', help='提交 typed 审批 JSON；只写审批账，不启动作业')
-    approval_apply.add_argument('surface', choices=('design', 'structure', 'writing'))
+    approval_apply.add_argument(
+        'surface', choices=('design', 'structure', 'writing', 'stage5'))
     approval_apply.add_argument('sid')
     approval_apply.add_argument('--base', required=True)
     approval_apply.add_argument(
@@ -1319,6 +1323,14 @@ def _cmd_run(a: argparse.Namespace) -> int:
             list(_chapters_of(_valued(flags, '--chapters'))) or None,
             requires_fresh_review='--revise' in N.flag_tokens(flags),
         )
+    # Stage5 闭合闸落在**所有真实执行最终汇合的运行边界**（手敲 CLI、API jobs、
+    # headless agent 子 CLI 都经过这里）：stage6/stage7 的任何写效果跑法都要求
+    # 当前 typed closure 回执已打开 gate.s5。0 成本只读跑法（--check-only 等）
+    # 仍可运行，否则人连开闸需要的证据都拿不到（R 系硬闸与恢复面同批交付）。
+    if a.node in ('stage6.hook', 'stage6.semantic', 'stage7.rename', 'stage7.assemble')             and not set(N.flag_tokens(flags)) <= set(STAGE5_CLOSED_EXEMPT_FLAGS):
+        from novel.llm import stage5_runs
+        from novel.stages.stage5 import closure as stage5_closure
+        stage5_closure.require_stage5_closed(ArtifactStore(ctx))
     return _dispatch(a.node, ctx, flags)
 
 
@@ -1576,7 +1588,8 @@ def _approval_input(path: str) -> str:
 def _cmd_approval(a: argparse.Namespace) -> int:
     """可审计审批 CLI：template/show 只读，apply 只落审批账且绝不拉作业。"""
     from contracts.schema.api import (
-        DesignReviewRequest, StructureApprovalRequest, WritingApprovalRequest,
+        DesignReviewRequest, Stage5ClosureRequest, StructureApprovalRequest,
+        WritingApprovalRequest,
     )
     from novel.orchestrator import approvals
 
@@ -1606,6 +1619,8 @@ def _cmd_approval(a: argparse.Namespace) -> int:
             elif a.surface == 'structure':
                 result = approvals.structure_template(
                     a.base, a.sid, actor=a.actor, reason=a.reason)
+            elif a.surface == 'stage5':
+                result = approvals.stage5_closure_template(a.base, a.sid)
             else:
                 result = approvals.writing_template(
                     a.base, a.sid, actor=a.actor, reason=a.reason)
@@ -1618,6 +1633,7 @@ def _cmd_approval(a: argparse.Namespace) -> int:
             'design': DesignReviewRequest,
             'structure': StructureApprovalRequest,
             'writing': WritingApprovalRequest,
+            'stage5': Stage5ClosureRequest,
         }[a.surface]
         try:
             request = model.model_validate_json(raw)
@@ -1627,6 +1643,8 @@ def _cmd_approval(a: argparse.Namespace) -> int:
             result = approvals.approve_design(a.base, a.sid, request)
         elif a.surface == 'structure':
             result = approvals.approve_structure(a.base, a.sid, request)
+        elif a.surface == 'stage5':
+            result = approvals.approve_stage5_closure(a.base, a.sid, request)
         else:
             # Commander 只有这一条入口：request 类型保证 actor/reason/full current SHA
             # 一个都不能省；旧 UI 的空 body 兼容缝不暴露在 CLI。

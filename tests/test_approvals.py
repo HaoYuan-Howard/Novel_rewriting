@@ -381,7 +381,15 @@ def test_retired_draft_in_old_s5_proof_revokes_s5_and_downstream(
         decided_at='2026-08-26T00:00:00+00:00',
         proof=stored_gate_proofs['s4'],
     )
-    record = approvals._ApprovalRecordV6(
+    closure = approvals._StoredClosureDecision(
+        actor='commander', reason='整书闭合回执',
+        workpack_sha256='3' * 64, review_sha256='4' * 64,
+        must_appear=[], group_acks=[],
+        decision_sha256='5' * 64,
+        decided_at='2026-08-29T00:00:00+00:00',
+        proof=current_gate_proofs['s5'],
+    )
+    record = approvals._ApprovalRecordV7(
         sid='123',
         gate={gate: True for gate in approvals._GATE_ORDER},
         seen={key: True for key in seen_proofs},
@@ -391,6 +399,8 @@ def test_retired_draft_in_old_s5_proof_revokes_s5_and_downstream(
         writing_proof=writing_proof,
         structure_history=[structure],
         structure_decision=structure,
+        closure_history=[closure],
+        closure_decision=closure,
     )
 
     monkeypatch.setattr(

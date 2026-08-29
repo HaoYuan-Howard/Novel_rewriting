@@ -138,6 +138,17 @@ STAGE5_COMMIT_PHASES: Final = (
     'adoption', 'mark_committed', 'committed_verify', 'session_end',
 )
 
+#: Stage5 闭合闸（``require_stage5_closed``）在 CLI 运行边界只拦 stage6/stage7
+#: 的**写效果**跑法。这些 flag 组合是 0 成本只读 / 人工恢复路：闸关闭时仍可
+#: 运行，否则人连开闸需要的证据都拿不到（硬闸与恢复面必须同批交付）。
+#: 一条 stage6/stage7 命令的 flag token 全部落在本表内 ⇒ 免闸；否则必须先有
+#: 当前 typed closure 回执。取值面以各 NodeSpec.flags 为准，由测试交叉钉住。
+STAGE5_CLOSED_EXEMPT_FLAGS: Final = (
+    '--dry-run', '--check-only', '--identity', '--recheck',
+    '--revalidate', '--apply-edit', '--wontfix',
+    '--emit-edit-template', '--adopt-residual', '--validate-edit',
+)
+
 #: agent 运行配置的四个基础取值域。它们刻意做成类型别名而不是新的
 #: ``AGENT_*`` 自动发布常量：浏览器需要的是「driver → model → effort / mode」的
 #: **组合能力矩阵**，不是四张可以任意笛卡尔积的平面枚举。唯一发布口是动态的
