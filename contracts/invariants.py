@@ -333,6 +333,9 @@ BLIND_ALIAS_ALGORITHM: Final = 'hmac-sha256-v1'
 #: Stage4A 的逐章私有 session 并发上限。配置可以把它调低，但不能调高；
 #: 这是该节点的供应商稳定性边界，不与全局 ``MAX_CONCURRENCY`` 混成一把尺子。
 STAGE4_DESIGN_MAX_CONCURRENCY: Final = 4
+#: Stage4B 章级 session 的并发上限（批次 4）：与 A 的逐章池同一供应商稳定性
+#: 边界，配置可以调低不能调高。
+STAGE4_PLAN_MAX_CONCURRENCY: Final = 4
 STRUCTURE_APPROVAL_DECISIONS: Final = ('accept', 'request_replan')
 STRUCTURE_APPROVAL_STATES: Final = (
     'unavailable', 'missing', 'accepted', 'replan_requested', 'expired',

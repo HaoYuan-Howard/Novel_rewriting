@@ -191,6 +191,89 @@ def design_unit_run_spec(chapter: int | None) -> agent_runs.SingleSessionRunSpec
     )
 
 
+#: Stage4B 章级单元（批次 4）复用 plan 节点的恢复策略；章与章之间
+#: per-purpose 隔离，任何两章不共享 provider session。
+PLAN_CHAPTER_RECOVERY_POLICY = RECOVERY_POLICIES['stage4.plan']
+
+
+@dataclass(frozen=True)
+class PlanChapterRequest:
+    """一份章级 B 请求的完整恢复身份（与 DesignUnitRequest 同构）。"""
+
+    chapter: int
+    input_sha256: str
+    system: str
+    user: str
+    response_model: type[BaseModel]
+    max_tokens: int
+
+
+def plan_chapter_purpose(chapter: int) -> str:
+    """章级 B session 的 ledger/session purpose。"""
+    return f'stage4.plan:{paths.stage4_plan_chapter_dirname(chapter)}'
+
+
+def plan_chapter_run_spec(chapter: int) -> agent_runs.SingleSessionRunSpec:
+    """章级 B session 的通用 single-session run 声明。"""
+    return agent_runs.SingleSessionRunSpec(
+        label=f'Stage4 plan chapter {paths.stage4_plan_chapter_dirname(chapter)}',
+        node='stage4.plan',
+        session_owner=plan_chapter_purpose(chapter),
+        purpose=plan_chapter_purpose(chapter),
+        chapter=chapter,
+        phase='chapter',
+        recovery_policy=PLAN_CHAPTER_RECOVERY_POLICY,
+        session_isolation='per-purpose',
+        run_path=lambda ctx: paths.stage4_plan_chapter_run_path(
+            ctx.novel_dir, ctx.run_id, chapter),
+        checkpoint_dir=lambda ctx: paths.stage4_plan_chapter_checkpoint_dir(
+            ctx.novel_dir, ctx.run_id, chapter),
+        incompatible_session_nodes=('stage4.design',),
+    )
+
+
+def ensure_plan_chapter_run(ctx: Any, request: Any) -> dict[str, Any]:
+    """创建或复验一份章级 B immutable run。"""
+    return agent_runs.ensure_run(
+        ctx, plan_chapter_run_spec(request.chapter),
+        input_sha256=request.input_sha256,
+        system=request.system, user=request.user,
+        response_model=request.response_model,
+        max_tokens=request.max_tokens)
+
+
+def write_plan_chapter_checkpoint(
+        ctx: Any, request: Any, *,
+        response_payload: Mapping[str, Any], acceptance: Mapping[str, Any],
+        state_payload: Mapping[str, Any], revision_key: str = 'terminal',
+) -> Path:
+    """一章歧义解析通过闭合校验后立即追加检查点。"""
+    return agent_runs.write_checkpoint(
+        ctx, plan_chapter_run_spec(request.chapter),
+        input_sha256=request.input_sha256,
+        system=request.system, user=request.user,
+        response_model=request.response_model,
+        max_tokens=request.max_tokens,
+        response_payload=response_payload,
+        acceptance=acceptance,
+        revision_key=revision_key,
+        state_payload=state_payload)
+
+
+def restore_plan_chapter_checkpoint(
+        ctx: Any, request: Any, *,
+        validator: Callable[[BaseModel, ChatResponse], str | None] | None = None,
+) -> agent_runs.RestoredCheckpoint[BaseModel] | None:
+    """只恢复该章 latest accepted revision；其他章失败不影响它。"""
+    return agent_runs.restore_checkpoint(
+        ctx, plan_chapter_run_spec(request.chapter),
+        input_sha256=request.input_sha256,
+        system=request.system, user=request.user,
+        response_model=request.response_model,
+        max_tokens=request.max_tokens,
+        validator=validator)
+
+
 def ensure_design_unit_run(
         ctx: Any, request: DesignUnitRequest,
 ) -> dict[str, Any]:
