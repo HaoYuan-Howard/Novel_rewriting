@@ -13,7 +13,9 @@ from __future__ import annotations
 import copy
 from typing import Any
 
-from novel.stages.stage4.baseline import build_mechanical_baseline
+from novel.stages.stage4.baseline import (
+    apply_chapter_resolutions, build_mechanical_baseline,
+)
 from tests.test_stage4_agent_boundary import (
     _book, _bound_b_response, _land_design, _seed_current_stage2,
 )
@@ -136,3 +138,34 @@ def test_clean_book_baseline_matches_the_canonical_bound_response(
         '夹具书的绑定应当唯一可解；出现歧义说明基线判定过严')
     canonical = _bound_b_response(candidate, blueprints_raw)
     assert baseline.binding_chapters() == canonical['chapters']
+
+
+def test_apply_chapter_resolutions_closes_ambiguities() -> None:
+    """解析逐项闭合歧义：越界/重复/缺漏都关闭式拒绝。"""
+    blueprints = _blueprint(
+        ('b01_01', 'now', '庭院', 'c1', ['h1']),
+        ('b01_02', 'now', '正厅', 'c1', ['h2']),
+        atoms=[('f_01', 'b01_01'), ('f_02', 'b01_02'), ('f_03', 'b01_02')])
+    candidate = _candidate(('cs1', ['f_01', 'f_03']), ('cs2', ['f_02']))
+    baseline = build_mechanical_baseline(candidate, blueprints)
+    chapter = baseline.chapter(1)
+    conflict = next(a for a in chapter.ambiguities
+                    if a.kind == 'stage_signature_conflict')
+    multi = next(a for a in chapter.ambiguities
+                 if a.kind == 'material_multi_scene')
+    rows = apply_chapter_resolutions(chapter, [
+        {'ambiguity_id': conflict.ambiguity_id, 'stage_ref': 'b01_02'},
+        {'ambiguity_id': multi.ambiguity_id, 'candidate_scene_id': 'cs2'},
+    ])
+    # cs1 舞台解析为 b01_02；h1 唯一可落 cs1；h2 由解析落 cs2。
+    by_scene = {row['candidate_scene_id']: row for row in rows}
+    assert set(by_scene) == {'cs1', 'cs2'}
+    assert by_scene['cs1']['stage_refs'] == ['b01_02']
+    assert by_scene['cs1']['material_refs'] == ['h1']
+    assert by_scene['cs2']['material_refs'] == ['h2']
+    import pytest
+    with pytest.raises(ValueError, match='越界'):
+        apply_chapter_resolutions(chapter, [
+            {'ambiguity_id': conflict.ambiguity_id, 'stage_ref': 'b01_04'}])
+    with pytest.raises(ValueError, match='未解析歧义'):
+        apply_chapter_resolutions(chapter, [])

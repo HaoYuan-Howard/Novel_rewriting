@@ -594,6 +594,37 @@ class EvidenceChapterBinding(StrictModel):
         return self
 
 
+class ChapterBindingResolution(StrictModel):
+    """章级 B session 对一个机械基线歧义的闭合选择（批次 4）。
+
+    `ambiguity_id` 是基线铸造的内容寻址 id；`stage_ref` 解 stage 歧义，
+    `candidate_scene_id` 解 material 歧义。二选一按歧义类别在应用器里
+    关闭式校验，本模型只收形状。
+    """
+
+    ambiguity_id: str = Field(pattern=r'^[0-9a-f]{16}$')
+    stage_ref: str | None = Field(default=None, min_length=1)
+    candidate_scene_id: str | None = Field(default=None, min_length=1)
+
+
+class ChapterBindingResponse(StrictModel):
+    """章级 B session 的唯一响应形状：只解析本章歧义 + 非阻断担忧。
+
+    刻意**没有**章号、候选 hash 与完整绑定面——章号由 session 隐含，
+    机械基线由代码持有，模型只回答代码真正问的那些自由度。
+    """
+
+    resolutions: list[ChapterBindingResolution] = Field(min_length=1)
+    binding_concerns: list[BindingConcern] = Field(default_factory=list)
+
+    @model_validator(mode='after')
+    def _resolutions_are_unique(self) -> ChapterBindingResponse:
+        ids = [row.ambiguity_id for row in self.resolutions]
+        if len(ids) != len(set(ids)):
+            raise ValueError('章级绑定解析的 ambiguity_id 不得重复')
+        return self
+
+
 class BindingConcern(StrictModel):
     """模型对绑定的语义担忧，只是非阻断证据，不是不可行证明。"""
 

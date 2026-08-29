@@ -246,3 +246,62 @@ def build_mechanical_baseline(
             ambiguities=tuple(ambiguities),
         ))
     return MechanicalBaseline(chapters=tuple(chapters))
+
+
+def apply_chapter_resolutions(
+        chapter: ChapterBaseline,
+        resolutions: list[dict[str, Any]],
+        *,
+        scene_ids: list[str] | None = None,
+) -> list[dict[str, Any]]:
+    """把章级 B session 的解析应用进基线，产出该章的闭合绑定行。
+
+    关闭式校验：每个歧义恰被解析一次；stage 选择必须 ∈ 该歧义候选；
+    material_multi_scene 的落场必须 ∈ 候选场景；material_unplaceable 的落场
+    必须 ∈ 本章场景集。任一越界都是响应违约，由调用方回同一 session。
+
+    `scene_ids` 未给时取基线场景并集。返回行与 `ChapterBaseline.binding_rows`
+    同构。
+    """
+    by_id = {a.ambiguity_id: a for a in chapter.ambiguities}
+    unknown = sorted(
+        {str(row.get('ambiguity_id')) for row in resolutions} - set(by_id))
+    if unknown:
+        raise ValueError(f'章 {chapter.chapter_ordinal} 收到未知歧义 id：{unknown}')
+    seen: set[str] = set()
+    stage_by_scene = dict(chapter.scene_stage_refs)
+    material_by_scene = {k: list(v) for k, v in chapter.scene_material_refs.items()}
+    for row in resolutions:
+        ambiguity = by_id[str(row.get('ambiguity_id'))]
+        if ambiguity.ambiguity_id in seen:
+            raise ValueError(f'歧义 {ambiguity.ambiguity_id} 被解析两次')
+        seen.add(ambiguity.ambiguity_id)
+        if ambiguity.kind == 'stage_signature_conflict':
+            chosen = str(row.get('stage_ref') or '')
+            if chosen not in ambiguity.candidates:
+                raise ValueError(
+                    f'歧义 {ambiguity.ambiguity_id} 的舞台选择越界：{chosen!r} '
+                    f'不在 {list(ambiguity.candidates)}')
+            stage_by_scene[str(ambiguity.candidate_scene_id)] = (chosen,)
+            continue
+        chosen_scene = str(row.get('candidate_scene_id') or '')
+        allowed = (ambiguity.candidates if ambiguity.kind == 'material_multi_scene'
+                   else tuple(scene_ids or sorted(material_by_scene)))
+        if chosen_scene not in allowed:
+            raise ValueError(
+                f'歧义 {ambiguity.ambiguity_id} 的落场选择越界：{chosen_scene!r} '
+                f'不在 {list(allowed)}')
+        material_by_scene[chosen_scene] = sorted(
+            material_by_scene.get(chosen_scene, [])
+            + [str(ambiguity.material_ref)])
+    missing = sorted(set(by_id) - seen)
+    if missing:
+        raise ValueError(f'章 {chapter.chapter_ordinal} 还有未解析歧义：{missing}')
+    return [
+        {
+            'candidate_scene_id': scene_id,
+            'stage_refs': list(stage_by_scene[scene_id]),
+            'material_refs': list(material_by_scene.get(scene_id, ())),
+        }
+        for scene_id in sorted(stage_by_scene)
+    ]
