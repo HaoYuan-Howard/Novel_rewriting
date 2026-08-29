@@ -3,8 +3,8 @@
 """
 stage5.py —— 逐章写作与全书验收那一层的判据行。源是 `docs/schema/stage5.md` §六（**唯一落点**）。
 
-**50 条现役：7 HARD · 26 INFO · 12 度量 · 5 查不了。**
-修复路由为 **12 UNIQUE · 12 FREE · 26 NONE**；数量由注册表测试反向核文档，
+**51 条现役：7 HARD · 26 INFO · 13 度量 · 5 查不了。**
+修复路由为 **12 UNIQUE · 12 FREE · 27 NONE**；数量由注册表测试反向核文档，
 不再靠手工维护一份“看起来差不多”的统计。
 
 【一张表，两相共用】落盘闸门 / `--recheck` / `--revalidate` / `--apply-edit` /
@@ -397,6 +397,12 @@ _metric('length_report', '〔度量〕篇幅', 'R-8.1b',
 _metric('paragraph_count_report', '〔度量〕自然段数量', 'R-7.25',
         note='逐章无条件报出实际段数与目标区间；越界时另由 `paragraph_budget_missed` '
              '给出 HARD，避免把读数与结论揉成同一条。')
+
+_metric('paragraph_slot_report', '〔度量〕逐 slot 段落计划对账', 'R-7.25',
+        note='逐章无条件报出每个 slot 的实际段数与 `measure.paragraph_slot_plan` '
+             '的确定性分配值；它只是读数（不 HARD、不自动返工），'
+             '让「哪一场把段数写偏了」在反馈与报告里可见。'
+             '在完成语料标定前不作为任何闸门条件。')
 
 _metric('overlap_report', '〔度量〕与源章原文的重合度', 'R-8.1b',
         note='按 20 字窗口计算，并扣除契约要求逐字保留的片段；逐章无条件报出。'

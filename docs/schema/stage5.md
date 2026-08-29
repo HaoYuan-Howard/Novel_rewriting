@@ -239,7 +239,7 @@ artifact、不再由节点生成，也不参与完成度、Review freshness、�
 
 ## 六、判据注册表
 
-当前注册表共 **50 条**：**7 hard、26 info、12 metric、5 unver**。
+当前注册表共 **51 条**：**7 hard、26 info、13 metric、5 unver**。
 repair 分桶为 **12 UNIQUE、12 FREE、26 NONE**；repair 不是 severity，只有 UNIQUE 才能在
 `unresolved_rounds < 2` 时进入付费 `--revise`，FREE / NONE 不得被包装成自动修复。
 
@@ -280,6 +280,7 @@ repair 分桶为 **12 UNIQUE、12 FREE、26 NONE**；repair 不是 severity，�
 | `quote_unbalanced` | info | NONE | `R-7.7` |
 | `length_report` | metric | NONE | `R-8.1b` |
 | `paragraph_count_report` | metric | NONE | `R-7.25` |
+| `paragraph_slot_report` | metric | NONE | `R-7.25` |
 | `overlap_report` | metric | NONE | `R-8.1b` |
 | `book_length_report` | metric | NONE | `R-8.1b` |
 | `dash_report` | metric | NONE | `R-7.21b` |

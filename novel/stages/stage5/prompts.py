@@ -292,8 +292,12 @@ _TRANSITION_CN = {
 }
 
 
-def chapter_facts(entry: dict[str, Any]) -> str:
-    """把 Stage4 新场景直接渲染成 Stage5 的唯一执行任务。"""
+def chapter_facts(entry: dict[str, Any], slot_plan: list[int] | None = None) -> str:
+    """把 Stage4 新场景直接渲染成 Stage5 的唯一执行任务。
+
+    ``slot_plan`` 来自 `measure.paragraph_slot_plan`（与判据/反馈同一落点）：
+    每场的「约 N 段」是确定性分配结果，不是模型自选的余地。
+    """
     lines: list[str] = []
     for i, scene in enumerate(entry['scenes'], 1):
         b = scene['budget_chars']
@@ -302,7 +306,10 @@ def chapter_facts(entry: dict[str, Any]) -> str:
         role = _ROLE_CN.get(scene.get('role'), scene.get('role') or '过渡')
         delivery = _DELIVERY_CN.get(raw_delivery, raw_delivery)
         transition = _TRANSITION_CN.get(scene.get('transition'), scene.get('transition') or '连续')
-        head = (f'{i}. 【slot={slot}；约 {b} 字；叙事作用={role}；'
+        para_note = (
+            f'；约 {slot_plan[i - 1]} 段'
+            if slot_plan is not None and i - 1 < len(slot_plan) else '')
+        head = (f'{i}. 【slot={slot}；约 {b} 字{para_note}；叙事作用={role}；'
                 f'承载={delivery}；衔接={transition}】')
         lines.append(head + _stage_line(scene))
         lines.append(f"   场景目的：{scene['purpose']}")
@@ -520,6 +527,9 @@ def build_material(entry: dict[str, Any], book: M.Book) -> Material:
     assert basis.source_chars is not None
     lo, hi = target_band(entry)
     plo, phi = target_paragraphs(entry, book)
+    # 确定性逐 slot 段落计划：slot 数超限会在这里（wire 之前）显式终态。
+    slot_plan = M.paragraph_slot_plan(entry, book)
+    plan_total = sum(slot_plan)
     nb = len(entry.get('scenes') or [])
     meas = book.measurable
     density = density_guidance(book)
@@ -532,6 +542,10 @@ def build_material(entry: dict[str, Any], book: M.Book) -> Material:
         f'章与章的密度和这种排版本身就是它的风格。\n'
         f"本章目标 **{lo}~{hi} 字**（约 {plo}~{phi} 个自然段；"
         f"原章对应部分 {basis.source_chars} 字），这是硬性要求。"
+        + (f'本章按计划写 **恰好 {plan_total} 个自然段**，'
+           f'每场任务书里的『约 N 段』加起来必须正好等于它；'
+           '只许靠合并或拆分段落调整，不许改写句子内容。'
+           if nb else '')
         # 场景预算是 Stage4 编译结果；这里只显示章内均值帮助写手检查量级。
         + (f'\n· **本章共 {nb} 场，算下来平均每场 {lo // nb}~{hi // nb} 字**。'
            f'逐场的`【约 N 字】`才是准数——高于均值的场是重头、低于的快速推进，'
@@ -549,7 +563,7 @@ def build_material(entry: dict[str, Any], book: M.Book) -> Material:
         '── Stage4 新场景设计（**slot 顺序就是落笔顺序**）──\n'
         '⚠ 下面锁定的是新场景及其语义约束，不是源事件清单。场内可以重新调度舞台表面；'
         '不得新增会改变人物、关系、知识或世界状态的剧情事实。\n'
-        + chapter_facts(entry),
+        + chapter_facts(entry, slot_plan),
         '── 人物（用这些名字，不要改名、不要另造称呼）──\n'
         + _compact(writer_chars(entry, book)),
         # ⚠ **逐章投影，不是书级**：`setting` 曾是唯一一个书级直发、无闸门的事实块，

@@ -229,6 +229,9 @@ class ChapterCandidateFeedback:
     instruction: str
     count: int
     changes: tuple[str, ...] = ()
+    #: 只给数字/槽位账的补充行（如段落计划的对账读数）。它们来自代码确定性
+    #: 计算，不含源文字节，与 privacy 边界一致。
+    details: tuple[str, ...] = ()
 
     def to_dict(self) -> dict[str, object]:
         out: dict[str, object] = {
@@ -241,6 +244,8 @@ class ChapterCandidateFeedback:
         }
         if self.changes:
             out['changes'] = list(self.changes)
+        if self.details:
+            out['details'] = list(self.details)
         return out
 
 
@@ -962,9 +967,50 @@ def _accepted_attempt(source: _ChapterResponseSource, purpose: str) -> str:
     return value
 
 
+def _paragraph_budget_details(
+    findings: Sequence[Finding],
+    segments: Sequence[ChapterSegment],
+    entry: dict[str, Any],
+    book: M.Book,
+) -> tuple[str, ...]:
+    """`paragraph_budget_missed` 反馈附带的精确槽位账（全部为代码现算读数）。
+
+    实际段数与合法范围、至少要合并/拆分多少段、各 slot 实际值 vs
+    `paragraph_slot_plan` 的目标值——写手拿到的是「差多少、差在哪」，而不是
+    一句笼统的「段数不对」。
+    """
+    if not any(f.rule == 'paragraph_budget_missed' for f in findings):
+        return ()
+    try:
+        plan = M.paragraph_slot_plan(entry, book)
+    except Exception:
+        plan = None
+    lo, hi = M.target_paragraphs(entry, book)
+    lines: list[str] = []
+
+    def paras(text: str) -> int:
+        return len([line for line in str(text).split('\n') if line.strip()])
+
+    actual_total = sum(paras(segment.text) for segment in segments)
+    lines.append(f'实际 {actual_total} 段，合法范围 {lo}~{hi} 段')
+    if actual_total < lo:
+        lines.append(f'至少需要拆分 {lo - actual_total} 段来增加段数')
+    elif actual_total > hi:
+        lines.append(f'至少需要合并 {actual_total - hi} 段来减少段数')
+    scenes = [scene for scene in (entry.get('scenes') or []) if scene]
+    if plan is not None and scenes and len(segments) == len(scenes):
+        for index, (segment, scene) in enumerate(zip(segments, scenes)):
+            lines.append(
+                f"slot {scene.get('slot')}：实际 {paras(segment.text)} 段 / 目标 {plan[index]} 段")
+    lines.append('只调整段落组织（合并或拆分段落），保留全部事实、场景内容与文字。')
+    return tuple(lines)
+
+
 def _chapter_feedback(
     findings: Sequence[Finding],
     regressions: Sequence[str],
+    *,
+    paragraph_details: Sequence[str] = (),
 ) -> tuple[ChapterCandidateFeedback, ...]:
     counts: dict[str, int] = {}
     for finding in findings:
@@ -979,6 +1025,7 @@ def _chapter_feedback(
             requirement=rule.requirement,
             instruction=rule.directive or rule.item,
             count=counts[rule_id],
+            details=tuple(paragraph_details) if rule_id == 'paragraph_budget_missed' else (),
         ))
     if regressions:
         rows.append(ChapterCandidateFeedback(
@@ -1203,7 +1250,12 @@ def evaluate_chapter_candidate(
         errors=tuple(errors),
         warnings=tuple(warnings),
         regressions=tuple(regressions),
-        feedback=_chapter_feedback(findings, regressions),
+        feedback=_chapter_feedback(
+            findings, regressions,
+            paragraph_details=_paragraph_budget_details(
+                findings,
+                [ChapterSegment.model_validate(item) for item in segments],
+                prepared._entry, prepared._book)),
         attempts=attempts,
         _account=M.NormalizeAccount(
             punct_fixed=account.punct_fixed,
@@ -2556,6 +2608,47 @@ def _require_agent_chapter_source(source: _ChapterResponseSource) -> None:
             f'stage5.write agent source 缺逐章 bridge {missing}；已在首个 wire 前停止')
 
 
+def _record_reflow_shadow(
+    ctx: RunContext,
+    prepared: ChapterCandidateContext,
+    evaluation: ChapterCandidateEvaluation,
+) -> None:
+    """P1-1 的 reflow shadow：只在观测层记录 whitespace-only 重排的判据差异。
+
+    段落 HARD 命中时，按 `paragraph_slot_plan` 的目标段数对候选做一次
+    shadow 重排，并用同一张判据表重判，把「可行与否 / HARD 前后差」写进
+    observer 事件流。**它不写任何产物、不改变 evaluation 的任何结论**——
+    在 TODO-21 语料标定完成前，reflow 不得被默认启用。
+    """
+    if not any(f.rule == 'paragraph_budget_missed' for f in evaluation.findings):
+        return
+    try:
+        plan = M.paragraph_slot_plan(prepared._entry, prepared._book)
+    except Exception:
+        return
+    target = sum(plan)
+    shadow_text = M.reflow_shadow(evaluation.text, target=target)
+    detail: dict[str, Any] = {
+        'chapter': prepared.ordinal,
+        'target_paragraphs': target,
+        'actual_paragraphs': sum(
+            1 for line in evaluation.text.split(M.NL) if line.strip()),
+        'feasible': shadow_text is not None,
+    }
+    if shadow_text is not None:
+        _findings, errors, _warnings = _judge(
+            shadow_text,
+            prepared._entry,
+            prepared._book,
+            mat=prepared.given,
+            account=M.NormalizeAccount(),
+            segments=[segment.model_dump() for segment in evaluation.segments],
+        )
+        detail['hard_before'] = len(evaluation.errors)
+        detail['hard_after'] = len(errors)
+    ctx.observe('reflow_shadow', **detail)
+
+
 def _generate_chapter_with_agent(
     ctx: RunContext,
     prepared: ChapterCandidateContext,
@@ -2640,6 +2733,7 @@ def _generate_chapter_with_agent(
         # 每一份通过 wire/schema/dynamic validator 的候选都先进入 append-only
         # checkpoint，再决定继续反馈还是终态提交；崩溃不会迫使同章重复付费。
         assert_chapter_candidate_current(ctx, prepared)
+        _record_reflow_shadow(ctx, prepared, evaluation)
         _write_chapter_checkpoint(ctx, source, prepared, evaluation)
         if evaluation.passed:
             return {'prepared': prepared, 'evaluation': evaluation}

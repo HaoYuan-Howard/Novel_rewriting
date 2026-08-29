@@ -415,10 +415,15 @@ def _para_len_drift(body: str, book: M.Book) -> list[Finding]:
     return []
 
 
-def _paragraph_budget(body: str, entry: dict[str, Any], book: M.Book) -> list[Finding]:
+def _paragraph_budget(
+    body: str, entry: dict[str, Any], book: M.Book,
+    slot_bodies: list[str] | None = None,
+) -> list[Finding]:
     """报告自然段数量，并对未命中下发目标给出独立 HARD。
 
     目标公式与 prompt 共用 `measure.target_paragraphs`；这里不重新拼预算口径。
+    ``slot_bodies`` 是按计划 slot 顺序切好的各场景正文（paragraph_slot_report
+    的分母）：给不出时只报章级两条，不伪造逐 slot 读数。
     """
     got = measure(body)
     if got is None:
@@ -435,6 +440,27 @@ def _paragraph_budget(body: str, entry: dict[str, Any], book: M.Book) -> list[Fi
             'paragraph_budget_missed',
             detail=f'自然段数量未命中明确目标：{count} 段，不在 {lo}~{hi} 段内',
             evidence=[f'{count} not in {lo}~{hi}'],
+        ))
+    # 逐 slot 对账读数（metric，只报不挡）：实际值与确定性计划值的差就是
+    # 「哪一场写偏了」；下发面/反馈与判据共用同一份 `paragraph_slot_plan`。
+    try:
+        slot_plan = M.paragraph_slot_plan(entry, book)
+    except Exception:
+        slot_plan = None
+    scenes = [scene for scene in (entry.get('scenes') or []) if scene]
+    if (scenes and slot_plan is not None and slot_bodies is not None
+            and len(slot_bodies) == len(scenes)):
+        readings: list[str] = []
+        for index, scene in enumerate(scenes):
+            lines = str(slot_bodies[index]).split('\n')
+            actual = len([line for line in lines if line.strip()])
+            readings.append(
+                f"{scene.get('slot')}:{actual}/{slot_plan[index]}")
+        out.append(finding(
+            'paragraph_slot_report',
+            detail='逐 slot 段数（实际/计划）：' + '；'.join(readings)
+                   + f'（合计 {count}/{sum(slot_plan)}）',
+            evidence=readings + [f'total {count}/{sum(slot_plan)}'],
         ))
     return out
 
@@ -825,7 +851,22 @@ def chapter_findings(text: str, entry: dict[str, Any], book: M.Book, *,
             detail=f'篇幅低于目标下限：{len(body)} 字 < {lo} 字',
             evidence=[f'{len(body)}<{lo}']))
 
-    fs += _paragraph_budget(body, entry, book)
+    # slot_bodies = 按计划 slot 顺序的各场景正文（paragraph_slot_report 分母）。
+    # 只在结构化响应存在时才有「哪一段属于哪个 slot」的事实，否则不伪造逐 slot 读数。
+    slot_bodies: list[str] | None = None
+    if segments is not None:
+        by_slot = {}
+        for item in segments:
+            item_text = item.text if hasattr(item, 'text') else str(item.get('text') or '')
+            slot_id = item.slot if hasattr(item, 'slot') else str(item.get('slot') or '')
+            by_slot[slot_id] = item_text
+        # slot 顺序 = 计划场景顺序；与 write._expected_slots 同一推导，
+        # 但 checks 不能反向 import write（write 依赖本模块），在此原地派生。
+        expected = tuple(
+            str(scene['slot']) for scene in (entry.get('scenes') or []) if scene)
+        if expected and all(slot in by_slot for slot in expected):
+            slot_bodies = [by_slot[slot] for slot in expected]
+    fs += _paragraph_budget(body, entry, book, slot_bodies=slot_bodies)
 
     # ── 重合度：度量无条件出；**闭卷才有上界** ──────────────────────────────
     ov = M.overlap_ratio(body, entry, book.source_text)
@@ -1218,7 +1259,7 @@ _FROM_CHAPTER: tuple[str, ...] = (
     'must_appear_missing', 'secret_leak',
     'invented_number', 'invented_name',
     'length_report', 'length_over', 'length_under',
-    'paragraph_count_report', 'paragraph_budget_missed',
+    'paragraph_count_report', 'paragraph_budget_missed', 'paragraph_slot_report',
     'overlap_report', 'source_overlap_high',
     'dialogue_report', 'dialogue_fewer', 'dialogue_broken',
     'dialogue_ratio_drift', 'quotes_in_unquoted_corpus',

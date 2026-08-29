@@ -373,6 +373,133 @@ def target_range(entry: dict[str, Any]) -> tuple[int, int]:
     return round(budget * lo), round(budget * hi)
 
 
+#: 段落分隔符字面量：reflow 与槽位计段共用（避免在行内写转义）。
+NL = '\n'
+
+
+def reflow_shadow(text: str, *, target: int) -> str | None:
+    """whitespace-only reflow 的 shadow 计算；**只算不采**（P1-1 观测面）。
+
+    把段列表向目标段数调整：段多时合并相邻段、段少时在句末边界拆分。
+    三条硬约束：
+      - **非空白字符序列逐字不变**（只增删换行）——函数内自检，不满足即返回 None；
+      - **不跨对白合并**：任一待并段含引号字符就不并；
+      - **只在句末标点后拆分**，不在词中间或引号内断开。
+
+    返回 None 表示这一章没有可行的 whitespace-only 重排；shadow 消费方必须
+    把 None 与「可行」分开记录，不得静默折叠。在语料标定完成前，reflow 的
+    结果**不写任何产物、不改变任何验收结论**。
+    """
+    import re as _re
+
+    _QUOTES = '「」『』“”"'''  # noqa: P103 —— 对白边界字符集
+    _SENT_END = _re.compile(r'[。！？…!?]["」』”]?\s*$')
+
+    paragraphs = [line for line in str(text).split(NL) if line.strip()]
+
+    def non_ws_sha(value: str) -> str:
+        import hashlib
+        return hashlib.sha256(
+            ''.join(value.split()).encode('utf-8')).hexdigest()
+
+    before = non_ws_sha(text)
+    out = list(paragraphs)
+
+    def has_quote(line: str) -> bool:
+        return any(char in _QUOTES for char in line)
+
+    # 段太多 → 从最短的非对白相邻对开始合并，直到达标或无可并。
+    while len(out) > target:
+        candidates = [
+            index for index in range(len(out) - 1)
+            if not has_quote(out[index]) and not has_quote(out[index + 1])]
+        if not candidates:
+            return None
+        index = min(candidates, key=lambda i: (len(out[i]) + len(out[i + 1]), i))
+        out[index:index + 2] = [out[index] + out[index + 1]]
+
+    # 段太少 → 在非对白段的句末边界拆分；先拆最长段、切点取最接近段心的，
+    # 让 shadow 结果尽量均匀。
+    _END_PUNCT = '。！？…!?'
+    _CLOSE_QUOTE = '」』”'
+    while len(out) < target:
+        candidates = []
+        for index, line in enumerate(out):
+            if has_quote(line) or len(line) < 8:
+                continue
+            for pos, char in enumerate(line[:-1], start=0):
+                if char not in _END_PUNCT:
+                    continue
+                cut = pos + 1
+                if cut < len(line) and line[cut] in _CLOSE_QUOTE:
+                    cut += 1
+                if cut < len(line):
+                    candidates.append((len(line), index, cut))
+        if not candidates:
+            return None
+        length, index, cut = max(
+            candidates,
+            key=lambda item: (item[0], -abs(item[2] - item[0] / 2), -item[1]))
+        out[index:index + 1] = [out[index][:cut], out[index][cut:]]
+
+    result = '\n'.join(out)
+    if non_ws_sha(result) != before:
+        return None  # 自检失败宁可放弃，不产出会改字的 shadow
+    return result
+
+
+def paragraph_slot_plan(entry: dict[str, Any], book: Book) -> list[int]:
+    """确定性逐 slot 段落计划；下发面与判据/反馈共同消费的唯一落点。
+
+    - 章节目标 = ``round(budget_chars / paragraph_cost)``，并 clamp 进
+      :func:`target_paragraphs` 的合法区间；
+    - 每个非空 slot 至少 1 段；剩余段数按场景字数预算做 largest-remainder
+      分配，slot 顺序是唯一的平局规则；
+    - 分配结果总和精确等于章节目标；
+    - slot 数已超过合法段数上限（或目标）⇒ :class:`ParagraphPlanInfeasible`：
+      任务在任何 wire 之前就是不可能完成的，不得发给写手。
+    """
+    from novel.errors import ParagraphPlanInfeasible
+
+    lo, hi = target_paragraphs(entry, book)
+    avg_paragraph_chars = book.measurable.get('avg_paragraph_chars') or 20
+    paragraph_cost = float(avg_paragraph_chars) + book.sep_chars
+    budget_chars = float(entry.get('budget_chars') or 0)
+    if budget_chars <= 0:
+        budget_chars = (lo + hi) / 2 * paragraph_cost
+    target = min(max(int(round(budget_chars / paragraph_cost)), lo), hi)
+    scenes = [scene for scene in (entry.get('scenes') or []) if scene]
+    if not scenes:
+        return [target]
+    slots = len(scenes)
+    if slots > hi or slots > target:
+        raise ParagraphPlanInfeasible(
+            f'paragraph_plan_infeasible：本章 {slots} 个场景至少要 {slots} 段，'
+            f'而合法段落区间是 {lo}~{hi}（目标 {target} 段）；'
+            '必须在 Stage4 计划里合并场景或调整章预算，不得把必败任务发给写手')
+    allocation = [1] * slots
+    remaining = target - slots
+    weights = [max(float(scene.get('budget_chars') or 0), 0.0) for scene in scenes]
+    total_weight = sum(weights)
+    if remaining > 0 and total_weight > 0:
+        remainders: list[tuple[float, int, int]] = []
+        handed_out = 0
+        for index, weight in enumerate(weights):
+            exact = remaining * weight / total_weight
+            give = int(exact)
+            allocation[index] += give
+            handed_out += give
+            remainders.append((exact - give, -index, index))
+        for _frac, _neg_index, index in sorted(
+                remainders, reverse=True)[:remaining - handed_out]:
+            allocation[index] += 1
+    elif remaining > 0:
+        for index in range(remaining):
+            allocation[index % slots] += 1
+    assert sum(allocation) == target, 'slot 段数分配必须精确等于章节目标'
+    return allocation
+
+
 def target_paragraphs(entry: dict[str, Any], book: Book) -> tuple[int, int]:
     """把篇幅带换算成段落数带，供下发面与落盘判据共同消费。
 

@@ -742,7 +742,7 @@ def test_the_two_phases_read_one_and_the_same_rule_table():
 
 
 def test_every_registered_rule_has_exactly_one_producer():
-    """⭐ 50 条判据**一条不多一条不少**地被实现覆盖。
+    """⭐ 51 条判据**一条不多一条不少**地被实现覆盖。
 
     ⚠ 少列一条，那一条在报告上就变 `skipped`——而 `skipped`（实现未被调用）与
     「跑了没命中」是**两种颜色**；多列一条，`builder` 会抛（那是「注册了没实现」的镜像病）。
@@ -752,8 +752,9 @@ def test_every_registered_rule_has_exactly_one_producer():
     assert len(mine) == len(set(mine)), '同一条判据被列了两次'
     assert set(mine) == reg, (f'注册了没实现：{sorted(reg - set(mine))}；'
                               f'实现了没注册：{sorted(set(mine) - reg)}')
-    # secret_unknown 随重复 must_not_reveal 清单退役，现役共 50 条。
-    assert len(reg) == 50
+    # secret_unknown 随重复 must_not_reveal 清单退役；paragraph_slot_report
+    # 加入后现役共 51 条。
+    assert len(reg) == 51
 
 
 def test_every_unver_rule_must_say_why_it_cannot_check():

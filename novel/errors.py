@@ -67,6 +67,16 @@ class TerminalState(NovelError):
     """
 
 
+
+class ParagraphPlanInfeasible(TerminalState):
+    """逐 slot 段落计划在任何 wire 之前已不可能完成。
+
+    Stage5 的段落计划按「每个场景至少一段」分配章节目标段数；当场景
+    （slot）数本身就超过合法段数上限时，把任务发出去只会买到必然的
+    `paragraph_budget_missed` 拒稿。⇒ 在构造下发面时显式终态，而不是
+    花一轮钱确认一个代码早就知道的死局。
+    """
+
 class ResponseRepairRequired(TerminalState):
     """一份已付费结构化响应可受托修复；原节点停在下一采之前。
 
