@@ -205,8 +205,11 @@
   "human",
   "delegated_operator"
  ],
+ "design_preflight_statuses": [
+  "pass",
+  "blocked"
+ ],
  "design_repair_codes": [
-  "structure_delta",
   "entry_anchor",
   "ending_anchor",
   "fact_grouping",
@@ -214,6 +217,9 @@
   "noncontiguous_regroup",
   "scene_goal",
   "binding_constraint_unsat"
+ ],
+ "design_repair_codes_retired": [
+  "structure_delta"
  ],
  "design_repair_constraint_arity": {
   "structure_delta": [

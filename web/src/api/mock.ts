@@ -364,7 +364,7 @@ function mockDesignReviewTemplate(query: DesignReviewTemplateQuery): DesignRevie
     strategy: {
       subject: {
         basis: {
-          review_contract: 'stage4-design-review-v1',
+          review_contract: 'stage4-design-review-v2',
           root_clean_sha1: 'a'.repeat(40),
           truth_sha256: '1'.repeat(64),
           alias_algorithm: 'hmac-sha256-v1',
@@ -465,7 +465,9 @@ function mockDesignReviewTemplate(query: DesignReviewTemplateQuery): DesignRevie
       constraints: [{
         code: enumAt(enums().design_repair_codes, 0, 'A 返修码'),
         scene_refs: [],
-        opaque_aliases: [],
+        // `structure_delta` 退役后首个 active 码是 entry_anchor（arity 0,1）：
+        // 泛化重排指令不再可作为不带证据的默认脚手架。
+        opaque_aliases: ['a_' + '1'.repeat(16)],
       }],
       source_decision_sha256: null,
     }],

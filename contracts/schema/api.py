@@ -46,6 +46,8 @@ from contracts.invariants import (
     CHAPTER_LABEL_ANOMALY,
     DELIVERY_MODES,
     DESIGN_CHAPTER_DECISIONS,
+    DESIGN_PREFLIGHT_STATUSES,
+    DESIGN_REPAIR_CODES_RETIRED,
     DESIGN_REPAIR_CONSTRAINT_ARITY,
     DESIGN_REPAIR_CODES,
     DESIGN_REVIEWER_KINDS,
@@ -134,7 +136,8 @@ StructureApprovalState = Literal[STRUCTURE_APPROVAL_STATES]
 DesignStrategyDecisionKind = Literal[DESIGN_STRATEGY_DECISIONS]
 DesignChapterDecisionKind = Literal[DESIGN_CHAPTER_DECISIONS]
 DesignReviewerKind = Literal[DESIGN_REVIEWER_KINDS]
-DesignRepairCode = Literal[DESIGN_REPAIR_CODES]
+# 退役码仍在 Literal 里：盘上历史决定要能解码；新决定在 approve 闸关闭式拒绝。
+DesignRepairCode = Literal[(*DESIGN_REPAIR_CODES, *DESIGN_REPAIR_CODES_RETIRED)]
 DesignReviewState = Literal[DESIGN_REVIEW_STATES]
 
 
@@ -796,6 +799,40 @@ class DesignChapterSubject(FrozenModel):
         return self
 
 
+class DesignPreflightFailure(FrozenModel):
+    """A→formal 零调用预检的一条 typed 失败投影（无模型正文）。
+
+    ``repair_owner`` 是服务端路由读数（A 修订 / 上游修复 / 代码），界面只呈现
+    它，不拿它二次判官（`R-11.4`）。
+    """
+
+    code: str = Field(min_length=1)
+    rule: str = Field(min_length=1)
+    chapter_ordinal: int | None = Field(default=None, ge=1)
+    scene_refs: list[str] = Field(default_factory=list)
+    refs: list[str] = Field(default_factory=list)
+    repair_owner: str = Field(min_length=1)
+    detail: str = ''
+
+
+class DesignPreflightSummary(FrozenModel):
+    """`preflight_binding_candidate` 的内存结论投影；不是产物、不落盘。
+
+    绑定 candidate / blueprint / review contract 三个 SHA；`failures` 只来自
+    构造性绑定（每场 catalog 首项舞台、材料全落首场）跑同一联合 HARD——
+    「B 选得不好」在这个预检里结构性不存在。
+    """
+
+    status: Literal[DESIGN_PREFLIGHT_STATUSES]
+    candidate_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    blueprint_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    review_contract: str = Field(min_length=1)
+    code_version: str = Field(min_length=1)
+    blocked_owners: list[str] = Field(default_factory=list)
+    failures: list[DesignPreflightFailure] = Field(default_factory=list)
+    infeasibility: list[BindingInfeasibilityWitness] = Field(default_factory=list)
+
+
 class DesignBindingInfeasibility(FrozenModel):
     """当前 A 候选对应的 fresh B 关闭式不可行证据。"""
 
@@ -923,6 +960,7 @@ class DesignReviewRequest(StrictModel):
     candidate_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
     aggregate_subject_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
     binding_infeasibility: DesignBindingInfeasibility | None = None
+    preflight: DesignPreflightSummary | None = None
     repair_capability: DesignReviewRepairCapability
     strategy: DesignStrategyReview
     chapters: list[DesignChapterReview] = Field(min_length=1)
@@ -980,6 +1018,7 @@ class DesignReviewView(FrozenModel):
     aggregate_subject_sha256: str | None = Field(
         default=None, pattern=r'^[0-9a-f]{64}$')
     binding_infeasibility: DesignBindingInfeasibility | None = None
+    preflight: DesignPreflightSummary | None = None
     repair_capability: DesignReviewRepairCapability | None = None
     current_decision: DesignReviewDecision | None = None
     history: list[DesignReviewDecision] = Field(default_factory=list)

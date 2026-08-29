@@ -66,7 +66,10 @@ v4 减法契约；尚缺的是用 current-schema 真实书证明「A 的去序�
   结构报告与人工决定、Stage5 canonical 的逐章读数；不得另拿旧 prompt 或旧 schema 产物充数。
 
 **验收**：两书事实、因果、人物状态、材料闭合与低文字重合仍成立；每章明确记
-`retain/reconstruct`，`reconstruct` 章的声明与代码复算变化可逐项对证；整书结构向量、逐章指标、
+`retain/reconstruct`。⚠ 2026-08-29（TODO-45 批次 2，`R-5.22`）口径修订：
+`computed_change_kinds` 是权威代码读数，`mode/declared_change_kinds` 只是模型设计意图，
+`structure_alignment` 固定为 metric_only 披露（无 fix 路由、不得生成付费 action）——
+「声明与复算对齐」不再是质量验收判据，只作盲评对照的读数；整书结构向量、逐章指标、
 A/B 原始候选、盲评标签与结构批准均可从盘上 current-schema 主体复算。人工抽样能指出入口、事实
 组合或披露顺序的具体差异，而非只说句子不同。每项 metric 最终得到“继续只报不挡 / 候选阈值需
 产品裁决 / 当前不可判”之一的结论并记入 `docs/BACKEND_CONTRACT.md` §十；在完成两书付费实证前，
@@ -171,10 +174,13 @@ context 引用与章尾闭合改判「读者此刻知不知道 / 本章有没有
 `BlindCandidate` v2 形状不变。随后稳定性修复把 `EvidenceBinding` 升至 v3：模型只能提交
 非阻断 `binding_concerns`，正式 `infeasible` 必须由代码在同一关闭约束集铸造 witness；旧 v2 B
 不迁移，须在 current A 全 accept 后重跑 B。
-**P2a 已完成两项并按 `docs/BACKEND_CONTRACT.md` §十留证**：validator 拒稿的 unit 级
-0-wire adoption（`stage4.design --adopt-rejected`，f138896）与 typed failure witness /
+**P2a 已完成三项并按 `docs/BACKEND_CONTRACT.md` §十留证**：validator 拒稿的 unit 级
+0-wire adoption（`stage4.design --adopt-rejected`，f138896）；typed failure witness /
 关闭式路由（`R-5.21`，批次 1：A/Stage2/code owner 首轮即停、同 fingerprint 两轮早停、
-审计无正文、witness 入 `_llm_rejected`）。
+审计无正文、witness 入 `_llm_rejected`）；A→formal 零调用预检与审阅元数据归一
+（`R-5.22`，批次 2：构造性绑定 + 同一 HARD 的四处预检调用点、blocked 拒 accept 与
+wire 前拒绝、`structure_alignment` metric_only、`structure_delta` 退役、
+`DESIGN_REVIEW_CONTRACT` v2）。
 **剩下的 P2a 项**（按对稳定性的贡献排序）：
 
 1. `evidence_candidate_id` 只作为另批冷缓存 A/B：候选表由 `paragraph_spans` 同源渲染与

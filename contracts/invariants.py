@@ -344,9 +344,13 @@ STRUCTURE_APPROVAL_STATES: Final = (
 DESIGN_STRATEGY_DECISIONS: Final = ('accept', 'request_replan')
 DESIGN_CHAPTER_DECISIONS: Final = ('accept', 'request_repair')
 DESIGN_REVIEWER_KINDS: Final = ('human', 'delegated_operator')
-DESIGN_REVIEW_CONTRACT: Final = 'stage4-design-review-v1'
+#: 2026-08-29 升 v2（TODO-45 批次 2）：审阅主体新增 A→formal 零调用预检
+#: 投影，v1 决定按 subject 相等性自然过期；重新审阅 0 成本，历史保留可解码。
+DESIGN_REVIEW_CONTRACT: Final = 'stage4-design-review-v2'
+#: `R-5.22` 预检结论的两态。pass = 构造性绑定过整书联合 HARD；
+#: blocked = 存在 stop-owner 失败或代码铸造的不可行 witness。
+DESIGN_PREFLIGHT_STATUSES: Final = ('pass', 'blocked')
 DESIGN_REPAIR_CODES: Final = (
-    'structure_delta',
     'entry_anchor',
     'ending_anchor',
     'fact_grouping',
@@ -355,6 +359,11 @@ DESIGN_REPAIR_CODES: Final = (
     'scene_goal',
     'binding_constraint_unsat',
 )
+#: 退役但仍可**解码**的修复码。`structure_delta` 是泛化重排指令：arity (0,0)
+#: 意味着它可以不带任何 scene/alias 证据提交，等于允许人用一句「重排一下」
+#: 制造不可执行的返修。历史决定保留可读（Literal 与 arity 表都仍收它），
+#: 新决定在 approve 闸关闭式拒绝，具体语义修复码都带 scene/alias 下限。
+DESIGN_REPAIR_CODES_RETIRED: Final = ('structure_delta',)
 #: ``code -> (最少 scene_refs, 最少 opaque_aliases)``。审批 schema 与返修 prompt
 #: 必须共用这一张表；否则一边接受的“具体反馈”会在另一边变成空指令。
 DESIGN_REPAIR_CONSTRAINT_ARITY: Final = {
@@ -446,6 +455,10 @@ STAGE4_FAILURE_OWNERS: Final[Mapping[str, str]] = {
     'ctx_name_attested': 'stage2.blueprint',
     'ctx_stage_explicit': 'stage4.plan',
     'ctx_hinge_delivered': 'stage4.plan',
+    # B 不可行证明的两类 witness（批次 2 预检复用同一分类）：关闭目录缺章/
+    # 空舞台allowlist 都是 Stage2 锚点/目录问题，不是 A 的场景设计错。
+    'missing_chapter_catalog': 'stage2.blueprint',
+    'empty_stage_allowlist': 'stage2.blueprint',
 }
 
 

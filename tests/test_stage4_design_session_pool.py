@@ -453,8 +453,8 @@ def test_build_node_agent_forwards_typed_repair_and_hard_caps_two_turns(
             'output_ordinal': 1,
             'subject_sha256': 'd' * 64,
             'constraints': [{
-                'code': 'structure_delta',
-                'scene_refs': [], 'opaque_aliases': [],
+                'code': 'scene_goal',
+                'scene_refs': ['cs0001'], 'opaque_aliases': ['fa0001'],
             }],
         }],
     })

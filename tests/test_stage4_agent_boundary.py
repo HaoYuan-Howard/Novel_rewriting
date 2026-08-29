@@ -446,6 +446,21 @@ def test_design_repair_identity_keeps_raw_sha_and_commit_strict(
         assert capability.reason_code == 'checkpoint_lineage_unavailable'
 
 
+def _scene_goal_constraint(candidate: Any) -> dict[str, Any]:
+    """批次 2 后唯一可默认下发的具体修复脚手架（scene_goal, arity 1,1）。"""
+    chapter = candidate.output_chapters[0]
+    return {
+        'code': 'scene_goal',
+        'scene_refs': [chapter.scenes[0].candidate_scene_id],
+        'opaque_aliases': [next(iter(candidate.fact_aliases))],
+    }
+
+
+def _candidate_at(book: Path, ctx: RunContext) -> Any:
+    """读盘上当前正式候选；返修循环里每轮候选都会换。"""
+    return ArtifactStore(ctx).read(BlindCandidate, STAGE4_BLIND_CANDIDATE)
+
+
 def test_targeted_design_repair_reruns_only_target_and_reuses_parent_checkpoints(
         tmp_path: Path,
 ) -> None:
@@ -494,11 +509,7 @@ def test_targeted_design_repair_reruns_only_target_and_reuses_parent_checkpoints
         'chapters': [{
             'output_ordinal': 1,
             'subject_sha256': 'c' * 64,
-            'constraints': [{
-                'code': 'structure_delta',
-                'scene_refs': [],
-                'opaque_aliases': [],
-            }],
+            'constraints': [_scene_goal_constraint(parent)],
         }],
     })
     repair_ctx = _ctx(book, 'stage4.design')
@@ -533,7 +544,7 @@ def test_targeted_design_repair_reruns_only_target_and_reuses_parent_checkpoints
     request = drivers[0].requests[0]
     assert request.system == plan.prompts.blind_chapter_repair_system()
     assert plan.prompts.BLOCK_REPAIR_CONSTRAINTS in request.prompt
-    assert 'structure_delta' in request.prompt
+    assert 'scene_goal' in request.prompt
     assert repaired.provenance.architecture == 'book_strategy_targeted_repair_v1'
     assert repaired.provenance.repair_decision_sha256 == scope.decision_sha256
     assert repaired.provenance.parent_candidate_sha256 == \
@@ -723,11 +734,8 @@ def test_targeted_design_repair_stops_third_chapter_round_before_any_wire(
             'chapters': [{
                 'output_ordinal': 1,
                 'subject_sha256': f'{repair_round + 5:x}' * 64,
-                'constraints': [{
-                    'code': 'structure_delta',
-                    'scene_refs': [],
-                    'opaque_aliases': [],
-                }],
+                'constraints': [_scene_goal_constraint(
+                    _candidate_at(book, parent_ctx))],
             }],
         })
         repair_ctx = _ctx(book, 'stage4.design')
@@ -787,11 +795,8 @@ def test_targeted_design_repair_stops_third_chapter_round_before_any_wire(
         'chapters': [{
             'output_ordinal': 1,
             'subject_sha256': 'a' * 64,
-            'constraints': [{
-                'code': 'structure_delta',
-                'scene_refs': [],
-                'opaque_aliases': [],
-            }],
+            'constraints': [_scene_goal_constraint(
+                _candidate_at(book, parent_ctx))],
         }],
     })
     third_ctx = _ctx(book, 'stage4.design')

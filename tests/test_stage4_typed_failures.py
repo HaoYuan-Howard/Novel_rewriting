@@ -210,19 +210,24 @@ def test_a_owned_failure_stops_first_round_without_more_wire(
     plan_ctx = _ctx(book, 'stage4.plan')
 
     real_check = checks.check
+    scans = {'n': 0}
 
     def injecting(plan_dict: dict[str, Any], *, witness=None, **kwargs):
         outcomes = real_check(plan_dict, witness=witness, **kwargs)
-        # 与生产同形：判据是输入的确定性函数，任何一次重算（含落盘后的
-        # typed readback）都必须重现同一条失败；witness 行只在收集器在场的
-        # 那一趟顺带记录，两条射线永不分叉。
-        outcomes.append(ran('causal_closure', [finding(
-            'causal_closure', detail='注入的因果边漂移',
-            evidence=['synthetic-edge'], output_ordinal=1)],
-            scanned='测试注入'))
-        if witness is not None:
-            witness.add(code='causal_closure', rule='causal_closure',
-                        chapter_ordinal=1, refs=['synthetic-edge'])
+        scans['n'] += 1
+        # 批次 2 分层：第 1 次判据扫描是 prepare 的零调用预检（构造性绑定，
+        # 注入干净以放行 wire）；第 2 次起是 evaluate 对**模型绑定**的联合
+        # HARD——A-owned 失败在这里首次现形，模拟「预检通过后模型绑定仍暴露
+        # A 域失败」。判据是输入的确定性函数，任何一次重算（含落盘后的 typed
+        # readback）都必须重现同一条失败；witness 行与 Outcome 成对出现。
+        if scans['n'] >= 2:
+            outcomes.append(ran('causal_closure', [finding(
+                'causal_closure', detail='注入的因果边漂移',
+                evidence=['synthetic-edge'], output_ordinal=1)],
+                scanned='测试注入'))
+            if witness is not None:
+                witness.add(code='causal_closure', rule='causal_closure',
+                            chapter_ordinal=1, refs=['synthetic-edge'])
         return outcomes
 
     monkeypatch.setattr(plan.checks, 'check', injecting)
@@ -236,6 +241,9 @@ def test_a_owned_failure_stops_first_round_without_more_wire(
                   error_kind='checkpoint_business_rejected')
     client.close()
 
+    # 预检放行 wire（第 1 次扫描干净），evaluate 首轮即停：不排队反馈，
+    # 只有一次 wire。
+    assert scans['n'] >= 2
     assert driver.calls == 1
     assert len(driver.requests) == 1
     witnesses = _rejection_witnesses(book)

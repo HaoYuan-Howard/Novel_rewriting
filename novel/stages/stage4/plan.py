@@ -65,7 +65,7 @@ from novel.stages.stage4.blind import (
     build_blind_projection, build_blind_strategy_projection,
     build_evidence_catalog, candidate_subject_sha256,
     compile_blind_candidate, compile_blind_chapter_design,
-    merge_evidence_bindings,
+    construct_feasible_binding_witness, merge_evidence_bindings,
     prove_binding_infeasible, validate_infeasible_binding,
 )
 from novel.stages.stage4.beats import beat_index
@@ -954,6 +954,144 @@ def _candidate_bundle_verdict(
             'findings': findings,
         })
     return hits, tuple(rows)
+
+
+@dataclass(frozen=True)
+class BindingPreflight:
+    """A→formal 零调用预检的唯一内存结论（TODO-45 批次 2，`R-5.22`）。
+
+    不落盘、不建新 artifact；调用方（A workpack 生成、approve 闸、
+    `authorize_plan`、`prepare_plan_candidate`）只读这份结论。绑定三个身份：
+    冻结候选 subject SHA、Stage2 blueprints 完整文件 SHA 与审阅契约版本；
+    ``code_version`` 是判定代码身份（信息性，不参与审阅主体 hash）。
+    """
+
+    candidate_sha256: str
+    blueprint_sha256: str
+    review_contract: str
+    code_version: str
+    #: 'pass' = 构造性绑定过整书联合 HARD；'blocked' = 存在必须在授权 B 之前
+    #: 收口的失败（owner ∈ FAILURE_STOP_OWNERS）或代码铸造的不可行 witness。
+    status: str
+    blocked_owners: tuple[str, ...]
+    failures: tuple[TypedFailure, ...]
+    infeasibility: tuple[dict[str, Any], ...]
+
+    @property
+    def blocked(self) -> bool:
+        return self.status == 'blocked'
+
+    def summary(self) -> dict[str, Any]:
+        """API 投影（`DesignPreflightSummary` 的形状，无模型正文）。"""
+        return {
+            'status': self.status,
+            'candidate_sha256': self.candidate_sha256,
+            'blueprint_sha256': self.blueprint_sha256,
+            'review_contract': self.review_contract,
+            'code_version': self.code_version,
+            'blocked_owners': list(self.blocked_owners),
+            'failures': [{
+                'code': f.code,
+                'rule': f.rule,
+                'chapter_ordinal': f.chapter_ordinal,
+                'scene_refs': list(f.scene_refs),
+                'refs': list(f.refs),
+                'repair_owner': f.repair_owner,
+            } for f in self.failures],
+            'infeasibility': list(self.infeasibility),
+        }
+
+
+def preflight_binding_candidate(
+        ctx: RunContext, *, store: ArtifactStore | None = None,
+) -> BindingPreflight:
+    """唯一 A→formal 预检：**任何 driver/probe/provider 副作用之前**可重跑。
+
+    从当前 A 候选与 Stage2 关闭目录构造 canonical binding witness——
+    `construct_feasible_binding_witness` 的零自由度构造性绑定（每场绑 catalog
+    首项舞台、全部材料落首场），再复用正式 `merge_evidence_bindings`、plan ref
+    validator、WriterContext 组装与 `_candidate_bundle_verdict` 同一联合 HARD。
+    因此预检暴露的每一条失败都只可能属于 A 的设计、上游 Stage2 或判据代码：
+    **「B 选得不好」在这个预检里结构性不存在**，不会拿任意舞台选择制造 A 假红。
+    失败分类 owner 由 `contracts.invariants` 的闭合表给；B 域失败（若将来出现）
+    只进入下一相，不阻断 A。
+    """
+    from contracts.invariants import DESIGN_REVIEW_CONTRACT, FAILURE_STOP_OWNERS
+
+    store = store or ArtifactStore(ctx)
+    if not store.exists(CANDIDATE_REL):
+        raise UpstreamMissing(
+            f'{CANDIDATE_REL} 不在盘上——预检只回答已存在的当前 A 候选')
+    candidate = store.read(BlindCandidate, CANDIDATE_REL)
+    candidate_raw = _candidate_business(candidate)
+    subject = candidate_subject_sha256(candidate_raw)
+    _same, blueprint_sha = store.read_with_sha256(ChapterBlueprints, BLUEPRINTS)
+    catalog = build_evidence_catalog(
+        store.read(ChapterBlueprints, BLUEPRINTS).model_dump(by_alias=True))
+
+    def _finish(
+            *, failures: tuple[TypedFailure, ...] = (),
+            infeasibility: tuple[dict[str, Any], ...] = (),
+    ) -> BindingPreflight:
+        owners = sorted({f.repair_owner for f in failures
+                         if f.repair_owner in FAILURE_STOP_OWNERS})
+        blocked = bool(owners) or bool(infeasibility)
+        return BindingPreflight(
+            candidate_sha256=subject,
+            blueprint_sha256=blueprint_sha,
+            review_contract=DESIGN_REVIEW_CONTRACT,
+            code_version=ctx.code,
+            status='blocked' if blocked else 'pass',
+            blocked_owners=tuple(owners),
+            failures=tuple(failures),
+            infeasibility=tuple(infeasibility),
+        )
+
+    # ① 构造性绑定可行性：不可构造 ⇒ 代码在同一关闭约束集铸造 typed witness。
+    #    这是 B 正式 infeasible 的唯一合法来源，必须在授权 B 之前就摆到 A 面前。
+    proof = prove_binding_infeasible(candidate_raw, catalog)
+    if proof:
+        infeasible_failures = tuple(
+            typed_failures.make(
+                candidate_sha256=subject,
+                code=str(row.get('constraint_code') or 'missing_chapter_catalog'),
+                rule=str(row.get('constraint_code') or 'missing_chapter_catalog'),
+                chapter_ordinal=row.get('chapter_ordinal'),
+                surfacing='stage4.design',
+                refs=[str(ref) for ref in (row.get('closed_refs') or [])])
+            for row in proof)
+        return _finish(failures=infeasible_failures, infeasibility=tuple(proof))
+    constructive = construct_feasible_binding_witness(candidate_raw, catalog)
+    up = _Upstreams(ctx, store, need_grounding=True)
+    try:
+        merged = merge_evidence_bindings(candidate_raw, constructive, catalog)
+        adopt_plan_response(merged, up.blueprints, up.bidx)
+        assert up.global_g is not None
+        validate_plan_refs(
+            merged, fact_catalog(
+                up.global_g, up.blueprints, up.main_text))
+        build_writer_context(merged, up.global_g, up.blueprints, up.main_text)
+    except (BlindPlanError, RefusedByStructure) as exc:
+        return _finish(failures=(typed_failures.make(
+            candidate_sha256=subject, code='blind_compile_refused',
+            rule='blind_compile_refused', surfacing='stage4.design',
+            refs=[str(exc)[:200]]),))
+    witness = WitnessCollector()
+    _hits, _feedback = _candidate_bundle_verdict(
+        merged, up, witness=witness)
+    return _finish(failures=witness.finalize(
+        candidate_sha256=subject, surfacing='stage4.design'))
+
+
+def _preflight_blocked_text(preflight: BindingPreflight) -> str:
+    codes = sorted({f.code for f in preflight.failures})
+    return (
+        f'A→formal 预检 blocked：owners={list(preflight.blocked_owners)}, '
+        f'codes={codes}'
+        + (f'，代码铸造不可行 witness {len(preflight.infeasibility)} 条'
+           if preflight.infeasibility else '')
+        + '。这些失败不是 B 能修的：按 owner 收口（A typed 修订 / Stage2 修复'
+        ' / 判据代码），不要重复付费跑 B')
 
 
 def _attach_typed_rows(
@@ -2204,7 +2342,8 @@ def run_adopt_rejected(
 
 
 _REPAIR_INSTRUCTION_TEMPLATES = {
-    'structure_delta': '重新评估本章 retain/reconstruct 与变化类型，但不改整书策略。',
+    # `structure_delta` 已退役（批次 2）：泛化重排指令退出 active 修复码，
+    # 新决定只接受带 scene/alias 的具体修复码；历史决定仍可解码。
     'entry_anchor': '以给定 opaque_aliases 作为章首入口锚，按列表顺序优先。',
     'ending_anchor': '以给定 opaque_aliases 作为章尾收束锚，按列表顺序优先。',
     'fact_grouping': '重新组合给定 opaque_aliases 的落地场景，不新增或删除事实。',
@@ -2757,6 +2896,11 @@ def prepare_plan_candidate(
         system, user, store, up, candidate, candidate_raw,
         candidate_file_sha, subject, catalog,
     ) = _binding_request(ctx)
+    # 批次 2：在任何 ownership/ensure_run/driver/probe/provider 副作用之前
+    # 重跑零调用预检，关闭「A 审阅通过后候选或上游再漂移」的 TOCTOU。
+    preflight = preflight_binding_candidate(ctx, store=store)
+    if preflight.blocked:
+        raise TerminalState(_preflight_blocked_text(preflight))
     input_sha256 = _canonical_sha256({
         'candidate': candidate_raw,
         'candidate_file_sha256': candidate_file_sha,

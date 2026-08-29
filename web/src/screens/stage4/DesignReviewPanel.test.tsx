@@ -124,7 +124,7 @@ describe('Stage4A 正式设计审阅', () => {
 
     expect(screen.getByLabelText('Stage4A 整书策略裁决')).toHaveValue('request_replan')
     expect(screen.getByLabelText('第 3 章 Stage4A 设计裁决')).toHaveValue('request_repair')
-    expect(screen.getByLabelText('第 3 章返修码 structure_delta')).toBeChecked()
+    expect(screen.getByLabelText('第 3 章返修码 entry_anchor')).toBeChecked()
     expect(screen.getAllByText('c03s01').length).toBeGreaterThan(0)
     expect(screen.getAllByText('主角在公开场合取得关键证据。').length).toBeGreaterThan(0)
     expect(screen.getByText('atomic-structure-v2')).toBeVisible()
@@ -177,7 +177,7 @@ describe('Stage4A 正式设计审阅', () => {
         decision: 'request_repair',
         reason: '本章入口锚点仍沿用原结构，需要定向返修',
         source_decision_sha256: null,
-        constraints: [{ code: 'structure_delta', scene_refs: [], opaque_aliases: [] }],
+        constraints: [{ code: 'entry_anchor', scene_refs: [], opaque_aliases: ['a_' + '1'.repeat(16)] }],
       }],
     })
   })
@@ -211,7 +211,7 @@ describe('Stage4A 正式设计审阅', () => {
     expect(screen.getByText('历史审阅已过期')).toBeVisible()
     await user.selectOptions(screen.getByLabelText('Stage4A 整书策略裁决'), 'accept')
     await user.selectOptions(screen.getByLabelText('第 3 章 Stage4A 设计裁决'), 'accept')
-    expect(screen.queryByLabelText('第 3 章返修码 structure_delta')).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('第 3 章返修码 entry_anchor')).not.toBeInTheDocument()
     await user.click(screen.getByLabelText('Stage4A 整书策略已核对'))
     await user.click(screen.getByLabelText('第 3 章 Stage4A 已核对'))
 

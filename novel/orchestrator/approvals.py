@@ -23,21 +23,44 @@ from typing import Any, Literal
 from pydantic import Field, ValidationError, model_validator
 
 from contracts.invariants import (
-    APPROVAL_GATES, APPROVAL_SEEN, DESIGN_REPAIR_CODES, DESIGN_REVIEW_CONTRACT,
-    STRUCTURE_CHANGE_KINDS, STRUCTURE_METRIC_CONTRACT, STYLE_MEASUREMENT_CONTRACT,
+    DESIGN_REPAIR_CODES_RETIRED,
+    APPROVAL_GATES,
+    APPROVAL_SEEN,
+    DESIGN_REPAIR_CODES,
+    DESIGN_REVIEW_CONTRACT,
+    STRUCTURE_CHANGE_KINDS,
+    STRUCTURE_METRIC_CONTRACT,
+    STYLE_MEASUREMENT_CONTRACT,
 )
 from contracts.schema import artifact_spec
 from contracts.schema.api import (
-    ApprovalAction, ApprovalBackfillResult, ApprovalDoc,
-    DesignBindingInfeasibility, DesignBlindChapterTruth,
-    DesignChapterReview, DesignChapterSubject, DesignRepairConstraint,
-    DesignRepairChapterScope, DesignRepairScope,
-    DesignReviewBasis, DesignReviewDecision, DesignReviewRequest,
-    DesignReviewRepairCapability, DesignReviewTemplate, DesignReviewView,
+    ApprovalAction,
+    ApprovalBackfillResult,
+    ApprovalDoc,
+    DesignBindingInfeasibility,
+    DesignBlindChapterTruth,
+    DesignChapterReview,
+    DesignChapterSubject,
+    DesignPreflightFailure,
+    DesignPreflightSummary,
+    DesignRepairChapterScope,
+    DesignRepairConstraint,
+    DesignRepairScope,
+    DesignReviewBasis,
+    DesignReviewDecision,
+    DesignReviewRepairCapability,
+    DesignReviewRequest,
+    DesignReviewTemplate,
+    DesignReviewView,
     DesignStrategyReview,
-    DesignStrategySubject, DesignStructureEvidence,
-    StructureApprovalDecision, StructureApprovalRequest, StructureApprovalView,
-    WritingApprovalDecision, WritingApprovalRequest, WritingApprovalView,
+    DesignStrategySubject,
+    DesignStructureEvidence,
+    StructureApprovalDecision,
+    StructureApprovalRequest,
+    StructureApprovalView,
+    WritingApprovalDecision,
+    WritingApprovalRequest,
+    WritingApprovalView,
 )
 from contracts.schema.evaluation import GlobalReview
 from contracts.schema.stage0 import Stage0Revisions
@@ -609,6 +632,9 @@ class _DesignSubjects(StrictModel):
     candidate_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
     aggregate_subject_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
     binding_infeasibility: DesignBindingInfeasibility | None = None
+    #: TODO-45 批次 2：A→formal 零调用预检投影。None = 预检自身无法产出
+    #: （上游缺失等）；审批 accept 闸对 None fail-closed。
+    preflight: DesignPreflightSummary | None = None
     repair_capability: DesignReviewRepairCapability
     strategy: DesignStrategySubject
     strategy_subject_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
@@ -810,6 +836,7 @@ def _current_design_subjects(novel_dir: Path) -> _DesignSubjects:
         raise ArtifactUnreadable(
             'Stage4A candidate、blind truth 与 Stage2 blueprint 章集不闭合')
 
+    preflight = _design_preflight_summary(novel_dir)
     basis = DesignReviewBasis(
         review_contract=DESIGN_REVIEW_CONTRACT,
         root_clean_sha1=root_clean_sha1,
@@ -849,9 +876,18 @@ def _current_design_subjects(novel_dir: Path) -> _DesignSubjects:
 
     business = candidate.model_dump(
         mode='json', by_alias=True, exclude={'provenance'})
+    # 预检进聚合主体（code_version 是信息性读数，不参与 hash）：
+    # 候选/上游/判据结论变化 ⇒ 旧 accept 自然过期，重审 0 成本。
+    preflight_subject = (
+        None if preflight is None else {
+            key: value for key, value in preflight.model_dump(mode='json').items()
+            if key != 'code_version'
+        }
+    )
     aggregate_sha256 = _decision_sha256({
         'kind': 'stage4_design_review_aggregate',
         'contract': DESIGN_REVIEW_CONTRACT,
+        'preflight': preflight_subject,
         'candidate_subject_sha256': candidate_subject_sha256(business),
         'binding_infeasibility': (
             binding_infeasibility.model_dump(mode='json')
@@ -867,12 +903,33 @@ def _current_design_subjects(novel_dir: Path) -> _DesignSubjects:
         candidate_sha256=candidate_sha256,
         aggregate_subject_sha256=aggregate_sha256,
         binding_infeasibility=binding_infeasibility,
+        preflight=preflight,
         repair_capability=repair_capability,
         strategy=strategy,
         strategy_subject_sha256=strategy_sha256,
         chapters=chapter_subjects,
         chapter_subject_sha256=chapter_hashes,
     )
+
+
+def _design_preflight_summary(
+    novel_dir: Path,
+) -> DesignPreflightSummary | None:
+    """批次 2：A→formal 零调用预检的唯一投影缝。
+
+    复用 `plan.preflight_binding_candidate`（构造性绑定 + 同一联合 HARD），
+    不重拼判据。预检自身无法产出（上游缺失等）时返回 None——accept 闸对
+    None fail-closed，审阅面仍可渲染以走修订路。
+    """
+    from novel.stages.stage4.plan import preflight_binding_candidate
+
+    try:
+        ctx = state.readonly_ctx(
+            novel_dir, 'stage4.plan', prov.code_version())
+        report = preflight_binding_candidate(ctx)
+    except NovelError:
+        return None
+    return DesignPreflightSummary.model_validate(report.summary())
 
 
 def _current_design_binding_infeasibility(
@@ -1088,6 +1145,7 @@ def _design_request_matches_subjects(
         request.candidate_sha256 != current.candidate_sha256
         or request.aggregate_subject_sha256 != current.aggregate_subject_sha256
         or request.binding_infeasibility != current.binding_infeasibility
+        or request.preflight != current.preflight
         or request.repair_capability != current.repair_capability
         or request.strategy.subject != current.strategy
         or request.strategy.subject_sha256 != current.strategy_subject_sha256
@@ -1311,6 +1369,7 @@ def _design_review_view(
             candidate_sha256=current.candidate_sha256,
             aggregate_subject_sha256=current.aggregate_subject_sha256,
             binding_infeasibility=current.binding_infeasibility,
+            preflight=current.preflight,
             repair_capability=current.repair_capability,
             current_decision=None,
             history=[],
@@ -1332,6 +1391,7 @@ def _design_review_view(
             candidate_sha256=current.candidate_sha256,
             aggregate_subject_sha256=current.aggregate_subject_sha256,
             binding_infeasibility=current.binding_infeasibility,
+            preflight=current.preflight,
             repair_capability=current.repair_capability,
             current_decision=None,
             history=history,
@@ -1348,6 +1408,7 @@ def _design_review_view(
         candidate_sha256=current.candidate_sha256,
         aggregate_subject_sha256=current.aggregate_subject_sha256,
         binding_infeasibility=current.binding_infeasibility,
+        preflight=current.preflight,
         repair_capability=current.repair_capability,
         current_decision=public,
         history=history,
@@ -1834,8 +1895,23 @@ _DESIGN_CHAPTER_TEMPLATE_REASON = \
     '关闭式模板：尚未确认当前章设计，保持 request_repair'
 _DESIGN_CHAPTER_UNREPAIRABLE_TEMPLATE_REASON = \
     '关闭式模板：当前章不能执行 targeted repair，须确认接受或改走策略 replan'
-_DESIGN_CHAPTER_TEMPLATE_CONSTRAINTS = [DesignRepairConstraint(
-    code='structure_delta', scene_refs=[], opaque_aliases=[])]
+def _design_chapter_template_constraints(
+    subject: DesignChapterSubject,
+) -> list[DesignRepairConstraint]:
+    """未审章的默认修复脚手架（批次 2）。
+
+    `structure_delta` 退役后不再作 sentinel：泛化重排指令可以不带任何
+    scene/alias 证据提交，等于允许「重排一下」式的不可执行返修。默认脚手架
+    改为带真实 scene/alias 的 `scene_goal`，操作者必须逐项改写或显式清除。
+    """
+    scene = next(
+        (scene.candidate_scene_id for scene in subject.chapter.scenes), None)
+    alias = next(
+        (fact.fact_alias for fact in subject.blind_truth.facts), None)
+    if scene is None or alias is None:
+        return []
+    return [DesignRepairConstraint(
+        code='scene_goal', scene_refs=[scene], opaque_aliases=[alias])]
 
 
 def _design_template_token(
@@ -1925,7 +2001,7 @@ def design_template(
                 ),
                 constraints=(
                     [] if source is not None or not can_repair
-                    else _DESIGN_CHAPTER_TEMPLATE_CONSTRAINTS
+                    else _design_chapter_template_constraints(subject)
                 ),
                 source_decision_sha256=(
                     source[0].decision_sha256 if source else None),
@@ -1938,6 +2014,7 @@ def design_template(
             candidate_sha256=current.candidate_sha256,
             aggregate_subject_sha256=current.aggregate_subject_sha256,
             binding_infeasibility=current.binding_infeasibility,
+            preflight=current.preflight,
             repair_capability=current.repair_capability,
             strategy=strategy,
             chapters=chapters,
@@ -2003,17 +2080,16 @@ def _require_design_template_materialized(request: DesignReviewRequest) -> None:
         raise HumanEditProtected(
             'Stage4A 策略仍是未填写的默认 template sentinel；'
             '须给出真实决定或审阅理由')
-    sentinel_constraints = [
-        row.model_dump(mode='json')
-        for row in _DESIGN_CHAPTER_TEMPLATE_CONSTRAINTS
-    ]
     for row in request.chapters:
         default_repair = (
             row.source_decision_sha256 is None
             and row.decision == 'request_repair'
             and row.reason.strip() == _DESIGN_CHAPTER_TEMPLATE_REASON
             and [item.model_dump(mode='json') for item in row.constraints]
-            == sentinel_constraints
+            == [
+                item.model_dump(mode='json')
+                for item in _design_chapter_template_constraints(row.subject)
+            ]
         )
         default_unrepairable = (
             row.source_decision_sha256 is None
@@ -2025,6 +2101,46 @@ def _require_design_template_materialized(request: DesignReviewRequest) -> None:
             raise HumanEditProtected(
                 f'Stage4A 第 {row.output_ordinal} 章仍是未填写的默认 '
                 'template sentinel；须给出真实决定、理由或约束')
+
+
+def _require_design_codes_active(request: DesignReviewRequest) -> None:
+    """新决定只接受 active 修复码；退役码历史可解码，但不再可提交（批次 2）。"""
+    retired = [row.output_ordinal for row in request.chapters for constraint in row.constraints
+               if constraint.code in DESIGN_REPAIR_CODES_RETIRED]
+    if retired:
+        raise HumanEditProtected(
+            f'Stage4A 第 {retired} 章使用了退役修复码 '
+            f'{list(DESIGN_REPAIR_CODES_RETIRED)}；泛化重排指令已退场，'
+            '请改用带 scene/alias 的具体修复码')
+
+
+def _require_design_preflight_clear(
+    request: DesignReviewRequest, current: _DesignSubjects,
+) -> None:
+    """批次 2：A-owned/上游/代码 witness 在场时不允许 accept 授权 B。
+
+    `request_repair` / `request_replan` 是 remedy，不受此闸；被拦的是「带着
+    已知 A 域失败把 A 盖章通过」。preflight 为 None（自身无法产出）同样
+    fail-closed——B 会跑同一把尺子，预检跑不动的书 B 也跑不动。
+    """
+    accepts = [row.output_ordinal for row in request.chapters
+               if row.decision == 'accept']
+    if request.strategy.decision == 'accept':
+        accepts.append(0)
+    if not accepts:
+        return
+    preflight = current.preflight
+    if preflight is None:
+        raise HumanEditProtected(
+            'A→formal 预检未能产出（上游缺失或读不回来）；'
+            'accept 需要 pass 的预检，先收口上游再刷新模板')
+    if preflight.status != 'blocked':
+        return
+    raise HumanEditProtected(
+        f'A→formal 预检 blocked（owners={preflight.blocked_owners}, '
+        f'codes={sorted({row.code for row in preflight.failures})}）；'
+        '这些失败不是 B 能修的，accept 不能授权 B——'
+        '按 owner 走 typed 修订/上游修复后刷新模板重审')
 
 
 def _require_design_repair_capability(request: DesignReviewRequest) -> None:
@@ -2043,7 +2159,9 @@ def _require_design_repair_capability(request: DesignReviewRequest) -> None:
             '或已耗尽 2 轮；只能接受该章或改走策略 request_replan')
 
 
-def _require_design_constraint_refs(request: DesignReviewRequest) -> None:
+def _require_design_constraint_refs(
+    request: DesignReviewRequest, current: _DesignSubjects | None = None,
+) -> None:
     for row in request.chapters:
         scenes = {
             scene.candidate_scene_id for scene in row.subject.chapter.scenes
@@ -2066,6 +2184,27 @@ def _require_design_constraint_refs(request: DesignReviewRequest) -> None:
                 raise HumanEditProtected(
                     f'Stage4A 第 {row.output_ordinal} 章 constraint 越界：'
                     f'scenes={unknown_scenes}, aliases={unknown_aliases}')
+
+    # 批次 2：`binding_constraint_unsat` 是「B 失败升级为约束不可满足」的唯一
+    # 合法通道，必须由机械 witness 支撑——代码铸造的预检不可行证明，或 fresh B
+    # infeasible 正式终态。没有 witness 时 B 失败不得升级。
+    if current is not None:
+        witness_present = bool(
+            (current.binding_infeasibility is not None
+             and current.binding_infeasibility.infeasibility_proof)
+            or (current.preflight.infeasibility if current.preflight else [])
+        )
+        if not witness_present:
+            offenders = [
+                row.output_ordinal for row in request.chapters
+                for constraint in row.constraints
+                if constraint.code == 'binding_constraint_unsat'
+            ]
+            if offenders:
+                raise HumanEditProtected(
+                    f'Stage4A 第 {offenders} 章 binding_constraint_unsat 缺机械 '
+                    'witness：预检构造性绑定可行且无 fresh B infeasible 终态；'
+                    '不能把 B 失败升级为约束不可满足')
 
 
 def approve_design(
@@ -2094,7 +2233,9 @@ def approve_design(
         _require_design_template_materialized(request)
         _require_design_repair_capability(request)
         _require_design_source_decisions(record, request)
-        _require_design_constraint_refs(request)
+        _require_design_constraint_refs(request, current)
+        _require_design_codes_active(request)
+        _require_design_preflight_clear(request, current)
         proof = _proof_for_design(novel_dir, request)
         digest = _decision_sha256(_design_decision_payload(request))
 
@@ -2161,6 +2302,16 @@ def authorize_plan(
             raise ApprovalRequired(
                 '当前 A 已有 fresh B infeasible 终态；必须先按 typed design 决定'
                 '修订/重规划 A，不能重复同一 B')
+        # 批次 2：批准与 B 真跑之间候选/上游仍可能漂移；授权口按**本次现场
+        # 重建**的 subjects 读预检（_design_review_view 每次都从盘面现算），
+        # 关闭 TOCTOU。B 的 prepare_plan_candidate 在任何 wire 前还会再跑一次。
+        preflight = view.preflight
+        if preflight is None or preflight.status == 'blocked':
+            owners = None if preflight is None else preflight.blocked_owners
+            raise ApprovalRequired(
+                'A→formal 预检未通过（status='
+                f"{'missing' if preflight is None else 'blocked'}, "
+                f'owners={owners}）；先按 owner 收口，不能授权 B')
         return view.current_decision
 
 
