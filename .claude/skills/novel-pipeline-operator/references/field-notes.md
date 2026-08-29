@@ -38,6 +38,7 @@ rg -n "stage6|hook_para_sep|exit 70" .claude/skills/novel-pipeline-operator/refe
 | FN-020 | 审阅 info finding 要按判据实际读的字段读 | contract-confirmed | `present_continuity`, `present_char_ids`, 字段名相近 | 先定位判据实现，再照它读的那几个字段取证 |
 | FN-021 | METRIC/UNVER 重复出现不是 stalled | contract-confirmed | `stalled`, `unresolved_rounds`, `metric`, `unver` | 只让 HARD/INFO 进入 stalled；不要给读数编修复任务 |
 | FN-022 | 长退出序列用无损 RLE 与完整摘要双重锁定 | contract-confirmed | `exit_sequence_compact_text`, `exit_sequence_sha256`, 终审包 | 复制收集器输出，不手抄连续同项 |
+| FN-023 | Stage4B 拒稿先看 owner，再决定等不等 | contract-confirmed | `typed_failures`, `repair_owner`, `_llm_rejected`, `GateBlocked` | 按 witness 的 owner 走 revalidate / A 返修 / 上游修复，不重跑 B |
 
 ### FN-001 · stage0 批准前的预期红灯
 
@@ -370,3 +371,22 @@ rg -n "stage6|hook_para_sep|exit 70" .claude/skills/novel-pipeline-operator/refe
   `exit_sequence_count` / `exit_sequence_sha256`；任一事件变化都会失败。
 - 依据：`.claude/skills/novel-pipeline-operator/scripts/collect_final_evidence.py::_compact_exits` 与
   `.claude/skills/novel-pipeline-operator/scripts/validate_review.py::validate`。
+
+### FN-023 · Stage4B 拒稿先看 owner，再决定等不等
+
+- 状态：`contract-confirmed`
+- 触发：`stage4.plan` 一次 wire 后即落 `GateBlocked`（`_INVALID`），日志里没有第二轮反馈；
+  或同一判据只续改一轮就提前收口。
+- 判断：这是 `R-5.21` 的关闭式路由在工作，不是卡死。B 的联合 HARD 拒稿先按 typed
+  witness 的 `repair_owner` 路由：`stage4.design` / `stage2.blueprint` / `code` 的失败重试 B
+  不可能闭合，**首轮即停**；同一 fingerprint 集连续两轮未闭合也提前终止。只有
+  `stage4.plan` owner（B 自己的绑定错）才回同一 session 续改。
+- 处置：完整 witness 在 `_llm_rejected/<chain>/<attempt>/rejection.json` 的 `typed_failures`
+  里（含 code/章号/refs/owner），`repair_eligible=false` 是正常的——收口不走
+  `--response-repair`，按 owner 走 `stage4.plan --revalidate`（判据假红）或 A 的
+  decision-bound repair（真设计错）/ 上游修复。`_service/llm_audit.jsonl` 的 reject_detail
+  只有无正文读数（code/chapter/fingerprint），不要在那里找判词。
+- 验证：`tests/test_stage4_typed_failures.py` 的首轮停与两轮早停用例；owner 表改动的
+  正反例都在 `contracts/invariants.py::STAGE4_FAILURE_OWNERS`。
+- 依据：`novel/stages/stage4/plan.py::run_plan` 与 `::_keep_business_witness`；
+  `novel/llm/typed_failures.py`。

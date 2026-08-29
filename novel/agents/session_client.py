@@ -276,6 +276,27 @@ def _attempt_id() -> str:
     return uuid.uuid4().hex[:16]
 
 
+def _typed_audit_rows(row: Mapping[str, object]) -> list[dict[str, object]]:
+    """业务拒稿行里的 typed witness → 无正文审计读数（TODO-45 批次 1）。
+
+    只取 code / chapter_ordinal / fingerprint；refs 与判词文本留在交回
+    provider 的反馈里，不复制进 `_service/llm_audit.jsonl`。
+    """
+    out: list[dict[str, object]] = []
+    for failure in (row.get('typed_failures') or []):
+        if not isinstance(failure, Mapping):
+            continue
+        out.append({
+            'loc': str(failure.get('code') or ''),
+            'type': 'typed_failure',
+            'count': 1,
+            'code': str(failure.get('code') or ''),
+            'chapter_ordinal': failure.get('chapter_ordinal'),
+            'fingerprint': str(failure.get('failure_fingerprint') or ''),
+        })
+    return out
+
+
 def _decode_json(text: str) -> object:
     """解析 provider stdout 候选；它不是盘上 artifact，不经过 ``store``。"""
     return json.JSONDecoder().decode(text)
@@ -514,6 +535,7 @@ class SessionAgentClient:
                 'count': (count if isinstance(count, int)
                           and not isinstance(count, bool) and count >= 0 else 1),
             })
+            safe_detail.extend(_typed_audit_rows(row))
         self.ctx.ledger.note_gate(
             sid=self.ctx.sid, node=self.ctx.node, purpose=purpose,
             attempt_id=attempt_id, source='wire', decision='rejected',
@@ -583,6 +605,7 @@ class SessionAgentClient:
                 'count': (count if isinstance(count, int)
                           and not isinstance(count, bool) and count >= 0 else 1),
             })
+            safe_detail.extend(_typed_audit_rows(row))
         # gate_decision 带稳定 id；若正常路径已在 checkpoint 后写成，这里是零新增，
         # 若崩溃恰好发生在两者之间，这里补齐唯一一行。
         self.ctx.ledger.note_gate(
@@ -1267,6 +1290,7 @@ class SessionAgentClient:
             gate: str | None = None
             details: list[dict[str, object]] = []
             private_feedback: str | None = None
+            typed_rows: list[dict[str, object]] = []
             obj: M | None = None
             try:
                 payload = _decode_json(turn.content)
@@ -1304,8 +1328,16 @@ class SessionAgentClient:
                                 gate = 'validator'
                                 details = [{'loc': '', 'type': 'validator'}]
                                 # dynamic validator 的完整原因只回到同一 provider
-                                # session；审计仍只记上面的稳定类型，避免复制正文。
+                                # session；审计仍只记稳定类型与无正文读数。
                                 private_feedback = why
+                                # Stage4 validator 自带 typed witness（批次 1）：
+                                # 审计追加 code/chapter/fingerprint 读数，反馈带
+                                # 全量结构行；其他 stage 的 validator 没有该属性，
+                                # 行为不变。
+                                for failure in getattr(
+                                        validator, 'typed_failures', ()):
+                                    details.append(failure.audit_row())
+                                    typed_rows.append(failure.to_payload())
             if gate is None:
                 assert obj is not None
                 self.ctx.ledger.note_gate(
@@ -1332,7 +1364,7 @@ class SessionAgentClient:
                 raise LlmFailed(
                     f'{self.ctx.node}/{purpose}: {gate} 校验连续未通过，'
                     f'已用尽 {self.max_turns} 轮；停止继续花费')
-            self._pending_feedback = json.dumps({
+            feedback_payload: dict[str, object] = {
                 'kind': 'response_validation_failed',
                 'gate': gate,
                 'errors': details,
@@ -1340,7 +1372,12 @@ class SessionAgentClient:
                 'instruction': (
                     '修正上一轮响应；保持事实内容与输出 schema，'
                     '沿请求声明的唯一结构化出口提交完整对象，不要解释。'),
-            }, ensure_ascii=False, sort_keys=True, separators=(',', ':'))
+            }
+            if typed_rows:
+                feedback_payload['typed_failures'] = typed_rows
+            self._pending_feedback = json.dumps(
+                feedback_payload, ensure_ascii=False, sort_keys=True,
+                separators=(',', ':'))
 
     def finish(
         self, *, process_state: str, delivery_state: str,

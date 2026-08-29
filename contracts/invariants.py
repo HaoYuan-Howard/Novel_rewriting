@@ -19,7 +19,7 @@ prompt 那一份必须是**插值来的**。手抄一份不会报错，它只是
 """
 from __future__ import annotations
 
-from typing import Final, Literal, NamedTuple
+from typing import Final, Literal, Mapping, NamedTuple
 
 import contracts.artifacts as artifact_paths
 
@@ -387,6 +387,85 @@ DESIGN_REVIEW_STATES: Final = (
     'unavailable', 'missing', 'repair_requested',
     'strategy_replan_requested', 'accepted', 'expired',
 )
+
+# ── Stage4 运行时失败 witness 的关闭式路由（TODO-45 批次 1）────────────────
+#: typed failure 的 ``repair_owner`` 完整取值面。前两个是现役节点 id；
+#: ``stage2.blueprint`` 是上游锚点/目录问题；``human`` 只形成 nonblocking
+#: concern；``code`` 是判据/编译器自身漂移；``infra`` 走传输退避、不计内容重采。
+FAILURE_REPAIR_OWNERS: Final = (
+    'stage4.design', 'stage4.plan', 'stage2.blueprint', 'human', 'code', 'infra',
+)
+#: 这些 owner 的失败**不是 B 在自己的 session 里能修掉的**：B 首轮见到立即
+#: 停止并诚实落盘，不把四轮预算烧在注定失败的重试上。
+FAILURE_STOP_OWNERS: Final = ('stage4.design', 'stage2.blueprint', 'code')
+
+#: Stage4 失败发射点 ``code`` → 修复 owner。**闭合表**：表外的 code 一律
+#: ``code`` owner（停下来给人看），绝不默认成可重试。
+#:
+#: 分域依据（B 只绑定舞台与保真材料；场景设计、预算、目标、状态都是 A 的）：
+#: · A 的设计域（``stage4.design``）：章集/序号/空章、land 事实落场、因果闭合、
+#:   状态承接、首尾目标、预算、写法词、slot/transition、ctx 事实投影与人名。
+#: · B 的绑定域（``stage4.plan``）：舞台引用、材料恰好落一次、材料送达、
+#:   舞台投影，以及 sha 回显 / infeasible 证明 / 绑定编译拒绝这些 B 自己的响应错。
+#: · 上游（``stage2.blueprint``）：人名证据缺位。
+#: · 代码（``code``）：来源边与 A/B 字节绑定是 provenance 机制自身；
+#:   ctx 事实投影的两侧都是代码组装，命中即代码漂移。
+STAGE4_FAILURE_OWNERS: Final[Mapping[str, str]] = {
+    # wire / 编译层（plan.py 的 validator 发射）
+    'candidate_sha256_echo': 'stage4.plan',
+    'infeasible_unproven': 'stage4.plan',
+    'binding_compile_refused': 'stage4.plan',
+    # A 单元自身的发射点（在 A 的 session 里可原地重试）
+    'strategy_chapter_set': 'stage4.design',
+    'strategy_style_words': 'stage4.design',
+    'blind_compile_refused': 'stage4.design',
+    'blind_chapter_problem': 'stage4.design',
+    # 联合 HARD（checks.check 发射）
+    'one_to_one': 'stage4.design',
+    'ordinal_seq': 'stage4.design',
+    'empty_chapter': 'stage4.design',
+    'fact_ref.land': 'stage4.design',
+    'fact_ref.context': 'stage4.design',
+    'fact_ref.state': 'stage4.design',
+    'fact_ref.turn': 'stage4.design',
+    'fact_ref.stage': 'stage4.plan',
+    'fact_ref.material': 'stage4.plan',
+    'fact_coverage': 'stage4.design',
+    'causal_closure': 'stage4.design',
+    'state_closure': 'stage4.design',
+    'material_coverage': 'stage4.plan',
+    'scene_transition': 'stage4.design',
+    'goal_landing': 'stage4.design',
+    'budget_int': 'stage4.design',
+    'budget_band': 'stage4.design',
+    'plan_book_band': 'stage4.design',
+    'style_words': 'stage4.design',
+    'phase_artifact_link': 'code',
+    'context_link': 'code',
+    'ctx_facts_exact': 'code',
+    'ctx_name_attested': 'stage2.blueprint',
+    'ctx_stage_explicit': 'stage4.plan',
+    'ctx_hinge_delivered': 'stage4.plan',
+}
+
+
+def stage4_failure_owner(code: str) -> str:
+    """失败发射点 → 修复 owner 的唯一读法；未登记的 code 关闭式归 ``code``。"""
+    owner = STAGE4_FAILURE_OWNERS.get(str(code))
+    if owner is None:
+        return 'code'
+    assert owner in FAILURE_REPAIR_OWNERS
+    return owner
+
+
+def stage4_failure_retryable(code: str, *, surfacing: str) -> bool:
+    """失败只有由能修它的那一方自己发现时才值得原地重试。
+
+    ``surfacing`` 是发现失败的节点 id。``infra`` 例外：传输层失败对任何节点
+    都走退避重试，不计内容重采。
+    """
+    owner = stage4_failure_owner(code)
+    return owner == surfacing or owner == 'infra'
 
 #: 原始 txt 的编码候选，**按尝试顺序**。取值面只能从代码来：
 #: 全语料 163 本**只出现过 `utf-8`，另四个零样本**——样本再多也补不出没发生过的分支。

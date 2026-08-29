@@ -171,15 +171,13 @@ context 引用与章尾闭合改判「读者此刻知不知道 / 本章有没有
 `BlindCandidate` v2 形状不变。随后稳定性修复把 `EvidenceBinding` 升至 v3：模型只能提交
 非阻断 `binding_concerns`，正式 `infeasible` 必须由代码在同一关闭约束集铸造 witness；旧 v2 B
 不迁移，须在 current A 全 accept 后重跑 B。
+**P2a 已完成两项并按 `docs/BACKEND_CONTRACT.md` §十留证**：validator 拒稿的 unit 级
+0-wire adoption（`stage4.design --adopt-rejected`，f138896）与 typed failure witness /
+关闭式路由（`R-5.21`，批次 1：A/Stage2/code owner 首轮即停、同 fingerprint 两轮早停、
+审计无正文、witness 入 `_llm_rejected`）。
 **剩下的 P2a 项**（按对稳定性的贡献排序）：
 
-1. Stage4 分单元 validator 拒稿目前**没有 unit 级 0-wire 恢复入口**（`repair_eligible=false`、
-   `eligibility_reason='validator 不属于通用 JSON/形状修复面'`）⇒ 一份已有有效材料的 unit 仍需
-   重新付费生成；现有 `--adopt-rejected` 只覆盖旧整书拒稿，不得冒充新拓扑的 unit 恢复。
-   新入口不得拖着已验策略/其他章一起重发：补按当前闸原样重判封存 unit 的 0-wire adoption，
-   以及 hash-bound unit replacement。正式落盘 A 候选的 hash-bound 逐章 repair 已完成，但它
-   不能替代一份尚未进入 aggregate 的 validator 拒稿 unit 的 0-wire 恢复。
-2. `evidence_candidate_id` 只作为另批冷缓存 A/B：候选表由 `paragraph_spans` 同源渲染与
+1. `evidence_candidate_id` 只作为另批冷缓存 A/B：候选表由 `paragraph_spans` 同源渲染与
    lookup，模型响应使用独立 candidate-only 类型，人工 GlobalEdit 仍用 locator，正式
    GlobalGrounding 仍落 SourceSpan。对同一固定语料配对比较首轮落盘率、
    `global_evidence_unlocated`、总 wall/token 与人审质量；质量无回退且成本/耗时改善前不切默认。

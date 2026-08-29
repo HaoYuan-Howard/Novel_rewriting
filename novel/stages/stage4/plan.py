@@ -33,7 +33,7 @@ from contracts.artifacts import (
 
 from typing import Any
 
-from contracts.invariants import BLIND_ALIAS_ALGORITHM
+from contracts.invariants import BLIND_ALIAS_ALGORITHM, FAILURE_STOP_OWNERS
 from contracts.schema import artifact_spec
 from contracts.schema.api import (
     DesignRepairChapterScope, DesignRepairConstraint, DesignRepairScope,
@@ -76,11 +76,12 @@ from novel.stages.stage4.measure import (
 )
 from novel.stages.stage4.phase_binding import verify_plan_phase_artifacts
 from novel.stages.stage4.phase_state import current_infeasible_binding
-from novel.llm import response_repair
+from novel.llm import response_repair, typed_failures
 from novel.llm.client import LlmFailed, judge_payload
 from novel.llm.json_text import normalize_json_text as _strip_fences
 from novel.llm.prompts import required_top_level
 from novel.llm.transport import ChatResponse
+from novel.llm.typed_failures import TypedFailure, WitnessCollector
 from novel.store import ArtifactStore, build_revalidation_audit
 
 REL = STAGE4_PLAN_CHAPTERS
@@ -262,6 +263,10 @@ class PlanCandidateEvaluation:
     hard_hits: tuple[str, ...]
     feedback: tuple[dict[str, object], ...] = field(
         repr=False, compare=False)
+    #: 本轮联合 HARD 的 typed 失败 witness（TODO-45 批次 1）。路由只看
+    #: ``repair_owner``：A/Stage2/code owner 首轮即停；同一 fingerprint 集连续
+    #: 两轮未闭合提前终止。审计与恢复面各取无正文/全量两种投影。
+    typed_failures: tuple[TypedFailure, ...] = ()
 
     @property
     def passed(self) -> bool:
@@ -270,6 +275,11 @@ class PlanCandidateEvaluation:
     def feedback_rows(self) -> list[dict[str, object]]:
         """交回 executor 的 JSON-safe 业务拒稿行；审计层只取规则与计数。"""
         return [dict(row) for row in self.feedback]
+
+    def stop_owner_failures(self) -> tuple[TypedFailure, ...]:
+        """不是 B 自己能修的失败：B 见到必须停，不许烧轮次。"""
+        return tuple(f for f in self.typed_failures
+                     if f.repair_owner in FAILURE_STOP_OWNERS)
 
 
 # ── 判定与报告 ──────────────────────────────────────────────────────────────
@@ -686,6 +696,11 @@ def _blind_candidate_problem(
     return '；'.join(problems[:16]) if problems else None
 
 
+def _response_witness_sha(response: Any) -> str:
+    """被判响应载荷的 canonical SHA-256；typed failure 的候选身份。"""
+    return _canonical_sha256(response.model_dump(by_alias=True, mode='json'))
+
+
 class _BlindValidator:
     """同一个 validator 既回馈 provider，也留下唯一编译结果。"""
 
@@ -693,17 +708,29 @@ class _BlindValidator:
         self.truth = truth
         self.mapping = mapping
         self.compiled: dict[str, Any] | None = None
+        self.typed_failures: tuple[TypedFailure, ...] = ()
 
     def __call__(self, response: BlindPlanResponse, _wire: Any) -> str | None:
         self.compiled = None
+        self.typed_failures = ()
+        witness_sha = _response_witness_sha(response)
         try:
             compiled = compile_blind_candidate(
                 response.model_dump(by_alias=True), self.mapping, truth=self.truth)
         except BlindPlanError as exc:
+            self.typed_failures = (typed_failures.make(
+                candidate_sha256=witness_sha, code='blind_compile_refused',
+                rule='blind_compile_refused', surfacing='stage4.design',
+                refs=[str(exc)[:200]]),)
             return str(exc)
         why = _blind_candidate_problem(compiled, self.truth)
         if why is None:
             self.compiled = compiled
+        else:
+            self.typed_failures = (typed_failures.make(
+                candidate_sha256=witness_sha, code='blind_chapter_problem',
+                rule='blind_chapter_problem', surfacing='stage4.design',
+                refs=[why[:200]]),)
         return why
 
 
@@ -716,11 +743,18 @@ class _BlindStrategyValidator:
 
     def __init__(self, chapters: tuple[int, ...]) -> None:
         self.chapters = chapters
+        self.typed_failures: tuple[TypedFailure, ...] = ()
 
     def __call__(self, response: BlindBookStrategyResponse, _wire: Any) -> str | None:
+        self.typed_failures = ()
+        witness_sha = _response_witness_sha(response)
         rows = response.chapter_weights
         actual = tuple(sorted(row.chapter_ordinal for row in rows))
         if actual != self.chapters or len(rows) != len(self.chapters):
+            self.typed_failures = (typed_failures.make(
+                candidate_sha256=witness_sha, code='strategy_chapter_set',
+                rule='strategy_chapter_set', surfacing='stage4.design',
+                refs=[f'expected={list(self.chapters)},actual={list(actual)}']),)
             return f'策略章集不闭合：expected={list(self.chapters)},actual={list(actual)}'
         style_bad = checks.style_word_findings(
             [], source_chapters=[], source_facts_key='facts',
@@ -728,6 +762,10 @@ class _BlindStrategyValidator:
             context_key='context_fact_aliases',
             reconstruction_strategy=response.reconstruction_strategy)
         if style_bad:
+            self.typed_failures = (typed_failures.make(
+                candidate_sha256=witness_sha, code='strategy_style_words',
+                rule='strategy_style_words', surfacing='stage4.design',
+                refs=[str(row) for row in style_bad[:8]]),)
             return f'整书策略命中无据纯写法词：{style_bad[:8]}'
         return None
 
@@ -744,19 +782,33 @@ class _BlindChapterValidator:
         self.formal_mapping = formal_mapping
         self.chapter_weight = chapter_weight
         self.compiled: dict[str, Any] | None = None
+        self.typed_failures: tuple[TypedFailure, ...] = ()
 
     def __call__(self, response: BlindChapterDesignResponse, _wire: Any) -> str | None:
         self.compiled = None
+        self.typed_failures = ()
+        witness_sha = _response_witness_sha(response)
+        ordinal = int(self.truth_chapter.get('chapter_ordinal') or 0) or None
         try:
             compiled = compile_blind_chapter_design(
                 response.model_dump(by_alias=True), self.local_mapping,
                 self.formal_mapping, truth_chapter=self.truth_chapter,
                 chapter_weight=self.chapter_weight)
         except BlindPlanError as exc:
+            self.typed_failures = (typed_failures.make(
+                candidate_sha256=witness_sha, code='blind_compile_refused',
+                rule='blind_compile_refused', surfacing='stage4.design',
+                chapter_ordinal=ordinal, refs=[str(exc)[:200]]),)
             return str(exc)
         problems = _blind_chapter_problems(compiled, self.truth_chapter)
         if not problems:
             self.compiled = compiled
+        else:
+            self.typed_failures = (typed_failures.make(
+                candidate_sha256=witness_sha, code='blind_chapter_problem',
+                rule='blind_chapter_problem', surfacing='stage4.design',
+                chapter_ordinal=ordinal,
+                refs=[problem[:200] for problem in problems[:8]]),)
         return '；'.join(problems[:16]) if problems else None
 
 
@@ -847,12 +899,15 @@ def _binding_request(
 
 def _candidate_bundle_verdict(
         data: dict[str, Any], up: _Upstreams,
+        *, witness: WitnessCollector | None = None,
 ) -> tuple[tuple[str, ...], tuple[dict[str, object], ...]]:
     """在候选内存中组出 writer context，产出唯一联合 HARD 与反馈投影。
 
     这不冒充正式终验：它只回答一份**已经能编译**的 plan/context 候选是否
     命中业务 HARD。正式路仍要写盘、typed readback，并重跑本函数与 A/B
     完整字节边。反馈直接投影本次 ``Outcome``，不另拼一套业务判据。
+    ``witness``：同一趟扫描顺手收集 typed 失败发射点（批次 1），调用方
+    finalize；本函数不做二次解析。
     """
     from contracts.rules import REGISTRY
 
@@ -872,6 +927,7 @@ def _candidate_bundle_verdict(
         # human/candidate origin，不把「尚未落盘」伪造成 mismatch。
         phase_links=(),
         bidx=up.bidx,
+        witness=witness,
     )
     hits = tuple(_hard_hits(outcomes))
     rows: list[dict[str, object]] = []
@@ -900,6 +956,93 @@ def _candidate_bundle_verdict(
     return hits, tuple(rows)
 
 
+def _attach_typed_rows(
+        row: dict[str, object], typed: tuple[TypedFailure, ...],
+) -> dict[str, object]:
+    """反馈行附上同规则的 typed 失败投影（不含正文，refs 是引用不是散文）。"""
+    mine = [f.to_payload() for f in typed if f.rule == row.get('rule')]
+    if not mine:
+        return row
+    out = dict(row)
+    out['typed_failures'] = mine
+    return out
+
+
+def _business_witness_chain(ctx: RunContext, prepared: PlanCandidateContext) -> str:
+    """业务拒稿 witness 的链身份：绑当前 run 与冻结候选，与 legacy 修复链无关。"""
+    return _canonical_sha256({
+        'node': ctx.node, 'purpose': ctx.node, 'run_id': ctx.run_id,
+        'candidate_subject_sha256': prepared.subject_sha256,
+        'input_sha256': prepared.input_sha256,
+    })
+
+
+def _gate_blocked_text(evaluation: PlanCandidateEvaluation) -> str:
+    """预算耗尽 / 关闭式路由停止后的同一句诚实终态文案。"""
+    owners = sorted({f.repair_owner for f in evaluation.typed_failures})
+    owner_line = (
+        f' typed witness：{len(evaluation.typed_failures)} 条失败，'
+        f"owner={owners}；完整 witness 见 `_llm_rejected`。"
+        if evaluation.typed_failures else '')
+    return (
+        f'{len(evaluation.hard_hits)} 条阻断级判据在 agent 预算耗尽或'
+        f'关闭式路由停止后仍命中：{list(evaluation.hard_hits)}。'
+        f'{owner_line}最后 accepted 问题稿已存 '
+        f'`{_INVALID}`，旧正式计划与上下文未覆盖；用 '
+        '`stage4.plan --revalidate --actor <id> --reason <why>` '
+        '走 0 成本恢复')
+
+
+def _keep_business_witness(
+        ctx: RunContext, source: Any, prepared: PlanCandidateContext,
+        evaluation: PlanCandidateEvaluation,
+) -> None:
+    """把业务 HARD 拒稿的完整 witness 与被拒响应送进现有 `_llm_rejected` 恢复面。
+
+    三份出口各取所需（批次 1）：完整反馈回同一 provider session；audit 只留
+    无正文读数；这里是第三份——**完整 witness**（typed 失败 + 被拒响应全文）
+    进 response_repair 的同一目录状态机，不建第二份审计文件。
+    ``repair_eligible=False``：这不是通用 JSON 修复面，收口走 ``--revalidate`` /
+    decision-bound repair / hash-bound replacement；``--adopt-rejected`` 会按
+    eligibility 关闭式拒绝它。
+    """
+    if not evaluation.typed_failures or not _uses_agent_runs(ctx):
+        return
+    payload: dict[str, Any] = {
+        'sid': ctx.sid, 'node': ctx.node, 'purpose': ctx.node,
+        'run_id': ctx.run_id, 'code': 'business_hard',
+        'request_fingerprint': prepared.input_sha256,
+        'attempt_ids': [evaluation.attempt_id],
+        'model': evaluation.requested_model,
+        'model_index': 0, 'rung_index': 0, 'sample': None,
+        'source': 'wire', 'request_mode': 'agent_session',
+        'recovery_from_attempts': [], 'would_resample': False,
+        'gate': 'validator',
+        'why': '；'.join(evaluation.hard_hits)[:4000],
+        'reject_detail': [f.audit_row() for f in evaluation.typed_failures],
+        'repair_eligible': False,
+        'eligibility_reason': (
+            '业务 HARD 拒稿走 stage4.plan --revalidate / typed repair；'
+            '不属于通用 JSON/形状修复面'),
+        'response_model': 'EvidenceBindingResponse',
+        'required_top_level': required_top_level(EvidenceBindingResponse),
+        'chapter': None,
+        'hard_hits': list(evaluation.hard_hits),
+        'candidate_sha256': prepared.subject_sha256,
+        'typed_failures': [f.to_payload() for f in evaluation.typed_failures],
+    }
+    response_rel, _dump_error = response_repair.keep_rejection(
+        ctx.novel_dir,
+        chain_id=_business_witness_chain(ctx, prepared),
+        attempt_id=evaluation.attempt_id,
+        payload=payload,
+        original=evaluation.response.model_dump_json(by_alias=True),
+        candidate=evaluation.response.model_dump(by_alias=True, mode='json'),
+    )
+    assert response_rel is None or response_rel == paths.rejected_response_rel(
+        _business_witness_chain(ctx, prepared), evaluation.attempt_id)
+
+
 class _BindingValidator:
     """B 的 dynamic + 唯一编译器；agent 业务 HARD 不在此层拒绝。
 
@@ -921,14 +1064,22 @@ class _BindingValidator:
         self.include_business_hard = include_business_hard
         self.compiled: dict[str, Any] | None = None
         self.infeasibility_proof: list[dict[str, Any]] | None = None
+        self.typed_failures: tuple[TypedFailure, ...] = ()
 
     def __call__(
             self, response: EvidenceBindingResponse, _wire: Any,
     ) -> str | None:
         self.compiled = None
         self.infeasibility_proof = None
+        self.typed_failures = ()
         raw = response.model_dump(by_alias=True)
+        witness_sha = _response_witness_sha(response)
         if raw.get('candidate_sha256') != self.subject:
+            self.typed_failures = (typed_failures.make(
+                candidate_sha256=witness_sha, code='candidate_sha256_echo',
+                rule='candidate_sha256_echo', surfacing='stage4.plan',
+                refs=[f'expected={self.subject},'
+                      f'actual={raw.get("candidate_sha256")}']),)
             return (
                 f'candidate_sha256 必须回显冻结候选 {self.subject}，'
                 f'实得 {raw.get("candidate_sha256")}')
@@ -939,12 +1090,22 @@ class _BindingValidator:
                 proof = prove_binding_infeasible(
                     self.candidate, self.catalog)
                 if not proof:
+                    self.typed_failures = (typed_failures.make(
+                        candidate_sha256=witness_sha,
+                        code='infeasible_unproven',
+                        rule='infeasible_unproven',
+                        surfacing='stage4.plan'),)
                     return (
                         '模型 infeasible 未被编译器在同一关闭约束集证明；'
                         '请返回完整 bound，并把语义担忧保留在 '
                         'binding_concerns')
                 self.infeasibility_proof = proof
             except BlindPlanError as exc:
+                self.typed_failures = (typed_failures.make(
+                    candidate_sha256=witness_sha,
+                    code='binding_compile_refused',
+                    rule='binding_compile_refused', surfacing='stage4.plan',
+                    refs=[str(exc)[:200]]),)
                 return str(exc)
             return None
         try:
@@ -956,11 +1117,19 @@ class _BindingValidator:
                 data, fact_catalog(
                     self.up.global_g, self.up.blueprints, self.up.main_text))
         except (BlindPlanError, RefusedByStructure) as exc:
+            self.typed_failures = (typed_failures.make(
+                candidate_sha256=witness_sha, code='binding_compile_refused',
+                rule='binding_compile_refused', surfacing='stage4.plan',
+                refs=[str(exc)[:200]]),)
             return str(exc)
         self.compiled = data
         if self.include_business_hard:
-            hard, _feedback = _candidate_bundle_verdict(data, self.up)
+            witness = WitnessCollector()
+            hard, _feedback = _candidate_bundle_verdict(
+                data, self.up, witness=witness)
             if hard:
+                self.typed_failures = witness.finalize(
+                    candidate_sha256=witness_sha, surfacing='stage4.plan')
                 return f'绑定后 plan/context 联合候选仍有阻断项：{list(hard)}'
         return None
 
@@ -2775,9 +2944,15 @@ def evaluate_plan_candidate(
     if compiled is None:
         hard_hits: tuple[str, ...] = ()
         feedback: tuple[dict[str, object], ...] = ()
+        typed: tuple[TypedFailure, ...] = ()
     else:
+        witness = WitnessCollector()
         hard_hits, feedback = _candidate_bundle_verdict(
-            compiled, prepared.upstream)
+            compiled, prepared.upstream, witness=witness)
+        typed = witness.finalize(
+            candidate_sha256=prepared.subject_sha256,
+            surfacing='stage4.plan')
+        feedback = tuple(_attach_typed_rows(row, typed) for row in feedback)
     attempt_id, adopted_models = _accepted_identity(ctx, source)
     payload = binding.model_dump(by_alias=True, mode='json')
     return PlanCandidateEvaluation(
@@ -2792,6 +2967,7 @@ def evaluate_plan_candidate(
         compiled_sha256=(
             None if compiled is None else _canonical_sha256(compiled)),
         hard_hits=hard_hits,
+        typed_failures=typed,
         feedback=feedback,
     )
 
@@ -2805,8 +2981,17 @@ def _assert_plan_evaluation(
         current_hits: tuple[str, ...] = ()
         current_feedback: tuple[dict[str, object], ...] = ()
     else:
+        # 与 evaluate_plan_candidate 完全同一投影（含 typed 行）：typed 投影是
+        # 纯函数（指纹/owner 只由发射点决定），重算必须逐行相等，否则下面的
+        # verdict 漂移断言会拿两种形状互比而假红。
+        witness = WitnessCollector()
         current_hits, current_feedback = _candidate_bundle_verdict(
-            evaluation.compiled, prepared.upstream)
+            evaluation.compiled, prepared.upstream, witness=witness)
+        current_typed = witness.finalize(
+            candidate_sha256=prepared.subject_sha256,
+            surfacing='stage4.plan')
+        current_feedback = tuple(
+            _attach_typed_rows(row, current_typed) for row in current_feedback)
     if (evaluation.input_sha256 != prepared.input_sha256
             or source.model != evaluation.requested_model
             or attempt != evaluation.attempt_id
@@ -3314,11 +3499,7 @@ def finalize_plan_candidate(
                     error_kind='checkpoint_business_rejected',
                 )
                 raise GateBlocked(
-                    f'{len(evaluation.hard_hits)} 条阻断级判据在 agent 预算耗尽后'
-                    f'仍命中：{list(evaluation.hard_hits)}。最后 accepted 问题稿已存 '
-                    f'`{_INVALID}`，旧正式计划与上下文未覆盖；用 '
-                    '`stage4.plan --revalidate --actor <id> --reason <why>` '
-                    '走 0 成本恢复',
+                    _gate_blocked_text(evaluation),
                     invalid_path=str(prepared.store.path(_INVALID)),
                 )
             expected_plan: PlanChapters | None = None
@@ -3465,11 +3646,7 @@ def finalize_plan_candidate(
                 error_kind='checkpoint_business_rejected',
             )
             raise GateBlocked(
-                f'{len(evaluation.hard_hits)} 条阻断级判据在 agent 预算耗尽后'
-                f'仍命中：{list(evaluation.hard_hits)}。最后 accepted 问题稿已存 '
-                f'`{_INVALID}`，旧正式计划与上下文未覆盖；用 '
-                '`stage4.plan --revalidate --actor <id> --reason <why>` '
-                '走 0 成本恢复',
+                _gate_blocked_text(evaluation),
                 invalid_path=str(prepared.store.path(_INVALID)),
             )
 
@@ -3560,26 +3737,39 @@ def run_plan(ctx: RunContext, client: Any, *,
         return finalize_plan_candidate(ctx, client, prepared, evaluation)
 
     last_rejected: PlanCandidateEvaluation | None = None
+    prev_fingerprints: frozenset[str] | None = None
     while True:
         evaluation = evaluate_plan_candidate(ctx, client, prepared, response)
         if evaluation.passed:
             return finalize_plan_candidate(ctx, client, prepared, evaluation)
         last_rejected = evaluation
-        if not _queue_plan_validation_feedback(ctx, client, evaluation):
-            # 预算耗尽：最后 accepted candidate 只终态化一次；中间轮从未落盘。
-            return finalize_plan_candidate(ctx, client, prepared, evaluation)
-        try:
-            response = _ask_and_checkpoint_plan_candidate(
-                ctx, client, prepared)
-        except LlmFailed:
-            # 若后续 parse/schema 轮把预算用尽，不能丢掉前一份已经 accepted
-            # 且业务 HARD 的可恢复候选。driver/code/subject 失败不走这条路。
-            if (last_rejected is not None
-                    and not client.driver_failed
-                    and not client.can_resume):
-                return finalize_plan_candidate(
-                    ctx, client, prepared, last_rejected)
-            raise
+        # 关闭式路由（批次 1）：owner 表唯一落在 invariants。
+        # · A/Stage2/code owner：重试 B 不可能闭合 ⇒ 首轮立即停止，不消耗四轮；
+        # · 同一 fingerprint 集连续两轮未闭合：该 unit 的重试已无信息量 ⇒ 提前终止；
+        # · 其余（B owner）：照旧回同一 session。
+        stop_failures = evaluation.stop_owner_failures()
+        fingerprints = frozenset(
+            f.failure_fingerprint for f in evaluation.typed_failures)
+        repeat_stop = bool(fingerprints) and fingerprints == prev_fingerprints
+        prev_fingerprints = fingerprints
+        if not stop_failures and not repeat_stop and _queue_plan_validation_feedback(
+                ctx, client, evaluation):
+            try:
+                response = _ask_and_checkpoint_plan_candidate(
+                    ctx, client, prepared)
+            except LlmFailed:
+                # 若后续 parse/schema 轮把预算用尽，不能丢掉前一份已经 accepted
+                # 且业务 HARD 的可恢复候选。driver/code/subject 失败不走这条路。
+                if (last_rejected is not None
+                        and not client.driver_failed
+                        and not client.can_resume):
+                    _keep_business_witness(ctx, client, prepared, last_rejected)
+                    return finalize_plan_candidate(
+                        ctx, client, prepared, last_rejected)
+                raise
+            continue
+        _keep_business_witness(ctx, client, prepared, evaluation)
+        return finalize_plan_candidate(ctx, client, prepared, evaluation)
 
 
 def run_identity(ctx: RunContext) -> tuple[int, CheckReport]:

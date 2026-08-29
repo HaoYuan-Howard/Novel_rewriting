@@ -15,6 +15,7 @@ from contracts.invariants import (
     STYLE_WORDS, VERBATIM_BUDGET_FACTOR,
 )
 from contracts.schema.report import finding
+from novel.llm.typed_failures import WitnessCollector
 from novel.report.findings import Outcome, ran, unverifiable
 from novel.stages.stage4.beats import beat_index, verbatim_pieces
 from novel.stages.stage4.measure import (
@@ -491,13 +492,25 @@ def temporal_state_findings(
     return state_bad, transition_bad, unknown
 
 
+_NO_OP_WITNESS = WitnessCollector()
+
+
 def check(plan: dict[str, Any], *, blueprints: dict[str, Any],
           main_text: list[dict[str, Any]], global_g: dict[str, Any] | None = None,
           ctx: dict[str, Any] | None = None,
           expected_ctx: dict[str, Any] | None = None,
           ctx_link: tuple[str, str] | None = None, ctx_source: str | None = None,
           phase_links: tuple[PhaseArtifactLink, ...] | None = None,
-          bidx: dict[str, dict[str, Any]] | None = None) -> list[Outcome]:
+          bidx: dict[str, dict[str, Any]] | None = None,
+          witness: WitnessCollector | None = None) -> list[Outcome]:
+    """唯一确定性判定落点。
+
+    ``witness``：可选的 typed 失败收集器（TODO-45 批次 1）。判据在发射违规行
+    的同一个地方顺手记录语义 ``code`` / 章号 / refs，调用方扫描后 finalize 成
+    ``TypedFailure``；**本函数不从 detail 文本反推任何结构**。
+    """
+    if witness is None:
+        witness = _NO_OP_WITNESS
     if bidx is None:
         bidx = beat_index(blueprints, main_text)
     bp_of = {int(bp.get('chapter_ordinal') or 0): bp
@@ -516,31 +529,39 @@ def check(plan: dict[str, Any], *, blueprints: dict[str, Any],
                if ch.get('from_source_ordinals') != [ch.get('output_ordinal')]]
     if actual != expected:
         one_bad.append(f'章集 expected={expected}, actual={actual}')
+    if one_bad:
+        witness.add(code='one_to_one', rule='one_to_one', refs=one_bad)
     outcomes.append(outcome('one_to_one', [
         (f'{len(one_bad)} 处章映射不满足同号一对一：{one_bad[:8]}', one_bad)
     ] if one_bad else [], f'{len(chapters)} 个输出章'))
     seq_bad = [] if actual == list(range(1, len(actual) + 1)) else [str(actual)]
+    if seq_bad:
+        witness.add(code='ordinal_seq', rule='ordinal_seq', refs=seq_bad)
     outcomes.append(outcome('ordinal_seq', [
         (f'输出章序列不是 1..N：{actual}', seq_bad)
     ] if seq_bad else [], f'{len(actual)} 个章号'))
     empty = [f'out{ch.get("output_ordinal")}' for ch in chapters if not ch.get('scenes')]
+    if empty:
+        witness.add(code='empty_chapter', rule='empty_chapter', refs=empty)
     outcomes.append(outcome('empty_chapter', [
         (f'{len(empty)} 章没有场景：{empty}', empty)
     ] if empty else [], f'{len(chapters)} 章'))
 
-    ref_bad: list[str] = []
-    coverage_bad: list[str] = []
-    causal_bad: list[str] = []
-    state_bad: list[str] = []
+    # 章级违规行统一带 ``(ordinal, detail)``：finding 按章拆分（已知章号必须
+    # 填 ``output_ordinal``），witness 在发射点直接记录语义 code，绝不事后反解。
+    ref_bad: list[tuple[int, str]] = []
+    coverage_bad: list[tuple[int, str]] = []
+    causal_bad: list[tuple[int, str]] = []
+    state_bad: list[tuple[int, str]] = []
     state_unknown: list[str] = []
-    material_bad: list[str] = []
-    transition_bad: list[str] = []
-    goal_bad: list[str] = []
-    budget_bad: list[str] = []
-    disclosure_reversed: list[str] = []
+    material_bad: list[tuple[int, str]] = []
+    transition_bad: list[tuple[int, str]] = []
+    goal_bad: list[tuple[int, str]] = []
+    budget_bad: list[tuple[int, str]] = []
+    disclosure_reversed: list[tuple[int, str]] = []
     structure_rows: list[dict[str, Any]] = []
     source_chars, source_cov = chapter_source_chars(main_text, bidx)
-    chapter_budget_bad: list[str] = []
+    chapter_budget_bad: list[tuple[int, str]] = []
 
     for chapter in chapters:
         ordinal = int(chapter.get('output_ordinal') or 0)
@@ -562,29 +583,61 @@ def check(plan: dict[str, Any], *, blueprints: dict[str, Any],
             landed.extend(lrefs)
             assigned_materials.extend(str(ref) for ref in (scene.get('material_refs') or []))
             if set(lrefs) - land:
-                ref_bad.append(f'{prefix}:land={sorted(set(lrefs) - land)}')
+                over = sorted(set(lrefs) - land)
+                ref_bad.append((ordinal, f'{prefix}:land={over}'))
+                witness.add(code='fact_ref.land', rule='fact_ref',
+                            chapter_ordinal=ordinal,
+                            scene_refs=[str(scene.get('slot') or index + 1)],
+                            refs=over)
 
             if set(scene.get('material_refs') or []) - materials:
-                ref_bad.append(f'{prefix}:material')
+                over = sorted(set(scene.get('material_refs') or []) - materials)
+                ref_bad.append((ordinal, f'{prefix}:material'))
+                witness.add(code='fact_ref.material', rule='fact_ref',
+                            chapter_ordinal=ordinal,
+                            scene_refs=[str(scene.get('slot') or index + 1)], refs=over)
             if set(scene.get('stage_refs') or []) - beats:
-                ref_bad.append(f'{prefix}:stage')
+                over = sorted(set(scene.get('stage_refs') or []) - beats)
+                ref_bad.append((ordinal, f'{prefix}:stage'))
+                witness.add(code='fact_ref.stage', rule='fact_ref',
+                            chapter_ordinal=ordinal,
+                            scene_refs=[str(scene.get('slot') or index + 1)], refs=over)
             state_refs = set(scene.get('entry_state_refs') or []) | set(scene.get('exit_state_refs') or [])
             if state_refs - set(atoms):
-                ref_bad.append(f'{prefix}:state={sorted(state_refs - set(atoms))}')
+                over = sorted(state_refs - set(atoms))
+                ref_bad.append((ordinal, f'{prefix}:state={over}'))
+                witness.add(code='fact_ref.state', rule='fact_ref',
+                            chapter_ordinal=ordinal,
+                            scene_refs=[str(scene.get('slot') or index + 1)], refs=over)
             if scene.get('turn_fact_ref') not in lrefs:
-                ref_bad.append(f'{prefix}:turn')
+                ref_bad.append((ordinal, f'{prefix}:turn'))
+                witness.add(code='fact_ref.turn', rule='fact_ref',
+                            chapter_ordinal=ordinal,
+                            scene_refs=[str(scene.get('slot') or index + 1)],
+                            refs=[str(scene.get('turn_fact_ref'))])
             want_slot = f's{index + 1:02d}'
             if scene.get('slot') != want_slot:
-                transition_bad.append(f'ch{ordinal}:{scene.get("slot")}!={want_slot}')
+                transition_bad.append(
+                    (ordinal, f'ch{ordinal}:{scene.get("slot")}!={want_slot}'))
+                witness.add(code='scene_transition', rule='scene_transition',
+                            chapter_ordinal=ordinal,
+                            scene_refs=[str(scene.get('slot') or index + 1)])
             budget = scene.get('budget_chars')
             if type(budget) is not int or budget <= 0:
-                budget_bad.append(f'{prefix}:budget={budget!r}')
+                budget_bad.append((ordinal, f'{prefix}:budget={budget!r}'))
+                witness.add(code='budget_int', rule='budget_int',
+                            chapter_ordinal=ordinal,
+                            scene_refs=[str(scene.get('slot') or index + 1)],
+                            refs=[repr(budget)])
 
         # context 越界要看「它在哪一场落地」⇒ 必须整章一起判，不能逐场即判。
-        ref_bad.extend(
-            f'ch{ordinal}.{row}' for row in context_ref_findings(
-                scenes, context_obligation_refs=context,
-                land_key='land_fact_refs', context_key='context_fact_refs'))
+        context_rows = context_ref_findings(
+            scenes, context_obligation_refs=context,
+            land_key='land_fact_refs', context_key='context_fact_refs')
+        ref_bad.extend((ordinal, f'ch{ordinal}.{row}') for row in context_rows)
+        for row in context_rows:
+            witness.add(code='fact_ref.context', rule='fact_ref',
+                        chapter_ordinal=ordinal, refs=[row])
 
         # 章内的时态承接与 transition 语法都归这一处；A 相 validator 共用它。
         chapter_state_bad, chapter_transition_bad, chapter_unknown = \
@@ -595,20 +648,26 @@ def check(plan: dict[str, Any], *, blueprints: dict[str, Any],
                 entry_key='entry_state_refs',
                 exit_key='exit_state_refs',
             )
-        state_bad.extend(chapter_state_bad)
-        transition_bad.extend(chapter_transition_bad)
+        state_bad.extend((ordinal, row) for row in chapter_state_bad)
+        transition_bad.extend((ordinal, row) for row in chapter_transition_bad)
         state_unknown.extend(chapter_unknown)
 
         counts = Counter(landed)
         missing = sorted(land - set(landed))
         duplicate = sorted(ref for ref, count in counts.items() if count != 1)
         if missing or duplicate:
-            coverage_bad.append(f'ch{ordinal}:missing={missing},duplicate={duplicate}')
+            coverage_bad.append(
+                (ordinal, f'ch{ordinal}:missing={missing},duplicate={duplicate}'))
+            witness.add(code='fact_coverage', rule='fact_coverage',
+                        chapter_ordinal=ordinal, refs=missing + duplicate)
         mcounts = Counter(assigned_materials)
         mmissing = sorted(materials - set(assigned_materials))
         mdup = sorted(ref for ref, count in mcounts.items() if count != 1)
         if mmissing or mdup:
-            material_bad.append(f'ch{ordinal}:missing={mmissing},duplicate={mdup}')
+            material_bad.append(
+                (ordinal, f'ch{ordinal}:missing={mmissing},duplicate={mdup}'))
+            witness.add(code='material_coverage', rule='material_coverage',
+                        chapter_ordinal=ordinal, refs=mmissing + mdup)
         # ⚠ **章级边界继续 HARD**，与章内非线性正交：不论章内怎样回溯或并行，
         #   这一章从哪个状态开始、到哪个状态结束都是 Stage2 冻结的事实契约。
         # ⚠⚠ 章尾比的是「这一章**有没有让它成立**」，不是「模型有没有在末场的
@@ -620,10 +679,16 @@ def check(plan: dict[str, Any], *, blueprints: dict[str, Any],
         ending = set(bp.get('ending_state_refs') or [])
         established = set(landed) | set(scenes[-1].get('exit_state_refs') or [])             if scenes else set()
         if scenes and not set(scenes[0].get('entry_state_refs') or []).issuperset(entry):
-            state_bad.append(f'ch{ordinal}:首场未承接 entry_state')
+            state_bad.append((ordinal, f'ch{ordinal}:首场未承接 entry_state'))
+            witness.add(code='state_closure', rule='state_closure',
+                        chapter_ordinal=ordinal, refs=sorted(entry))
         if scenes and not established.issuperset(ending):
             state_bad.append(
-                f'ch{ordinal}:章尾状态未在本章确立 {sorted(ending - established)}')
+                (ordinal,
+                 f'ch{ordinal}:章尾状态未在本章确立 {sorted(ending - established)}'))
+            witness.add(code='state_closure', rule='state_closure',
+                        chapter_ordinal=ordinal,
+                        refs=sorted(ending - established))
 
         first_land = set(scenes[0].get('land_fact_refs') or []) if scenes else set()
         last_land = set(scenes[-1].get('land_fact_refs') or []) if scenes else set()
@@ -631,7 +696,9 @@ def check(plan: dict[str, Any], *, blueprints: dict[str, Any],
             refs = {str(ref.get('ref')) for ref in ((chapter.get(label) or {}).get('fact_refs') or [])
                     if ref.get('kind') == 'fact_atom'}
             if refs and not refs & allowed:
-                goal_bad.append(f'ch{ordinal}.{label}:{sorted(refs)}')
+                goal_bad.append((ordinal, f'ch{ordinal}.{label}:{sorted(refs)}'))
+                witness.add(code='goal_landing', rule='goal_landing',
+                            chapter_ordinal=ordinal, refs=sorted(refs))
 
         total = sum(int(scene.get('budget_chars') or 0) for scene in scenes)
         got, all_beats = source_cov.get(ordinal, (0, 0))
@@ -639,7 +706,11 @@ def check(plan: dict[str, Any], *, blueprints: dict[str, Any],
             lo, hi = PLAN_BUDGET_BAND
             base = source_chars.get(ordinal, 0)
             if not math_is_between(total, base * lo, base * hi):
-                chapter_budget_bad.append(f'ch{ordinal}:{total}/{base}')
+                chapter_budget_bad.append(
+                    (ordinal, f'ch{ordinal}:{total}/{base}'))
+                witness.add(code='budget_band', rule='budget_band',
+                            chapter_ordinal=ordinal,
+                            refs=[f'{total}/{base}'])
 
         structure = structure_metrics_of(bp, chapter)
         structure_rows.append(structure)
@@ -647,11 +718,32 @@ def check(plan: dict[str, Any], *, blueprints: dict[str, Any],
             scenes, land_key='land_fact_refs', context_key='context_fact_refs')
         edge_missing, edge_reversed = causal_scene_findings(
             list(bp.get('causal_edges') or []), positions)
-        causal_bad.extend(f'ch{ordinal}:{row}' for row in edge_missing)
-        disclosure_reversed.extend(f'ch{ordinal}:{row}' for row in edge_reversed)
+        causal_bad.extend((ordinal, f'ch{ordinal}:{row}') for row in edge_missing)
+        disclosure_reversed.extend(
+            (ordinal, f'ch{ordinal}:{row}') for row in edge_reversed)
+        for row in edge_missing:
+            witness.add(code='causal_closure', rule='causal_closure',
+                        chapter_ordinal=ordinal, refs=[row])
 
-    def rows(rule_bad: list[str], label: str) -> list[tuple[str, list[str]]]:
+    def book_rows(rule_bad: list[str], label: str) -> list[tuple[str, list[str]]]:
         return [(f'{len(rule_bad)} 处{label}：{rule_bad[:8]}', rule_bad)] if rule_bad else []
+
+    def scoped_outcome(rule: str, rows: list[tuple[int, str]], label: str,
+                       scanned: str) -> Outcome:
+        """章级判据的落点：**按章拆 finding**，已知章号必须填 `output_ordinal`。
+
+        ⚠ 聚合成一条大 finding 会把章号只留在 detail 散文里，下游 typed
+        witness 就只剩「解析中文猜章节」一条路——批次 1 关掉的就是它。
+        """
+        by_chapter: dict[int, list[str]] = {}
+        for row_ordinal, detail in rows:
+            by_chapter.setdefault(row_ordinal, []).append(detail)
+        findings = [
+            finding(rule, detail=f'{len(subset)} 处{label}：{subset[:8]}',
+                    evidence=subset, output_ordinal=row_ordinal)
+            for row_ordinal, subset in sorted(by_chapter.items())
+        ]
+        return ran(rule, findings, scanned=scanned)
 
     for rule, bad, label in (
         ('fact_ref', ref_bad, '场景引用越界'),
@@ -665,14 +757,15 @@ def check(plan: dict[str, Any], *, blueprints: dict[str, Any],
         ('budget_band', chapter_budget_bad, '章预算出带'),
     ):
         if rule != 'state_closure':
-            outcomes.append(outcome(rule, rows(bad, label), f'{len(chapters)} 章'))
+            outcomes.append(
+                scoped_outcome(rule, bad, label, f'{len(chapters)} 章'))
             continue
         # ⚠ 「机器够不着的边界」不许洗成绿：可判的红照红，全部可判都干净但仍有
         #   非线性边界时落 `unver` 并带分母（判据 2 / 4），交 hash-bound 结构人审。
         scene_count = sum(len(ch.get('scenes') or []) for ch in chapters)
         if state_bad:
-            outcomes.append(outcome(
-                rule, rows(state_bad, label),
+            outcomes.append(scoped_outcome(
+                rule, state_bad, label,
                 f'{scene_count} 场；另有 {len(state_unknown)} 个非线性边界需人工判断'))
         elif state_unknown:
             outcomes.append(unverifiable(
@@ -693,7 +786,9 @@ def check(plan: dict[str, Any], *, blueprints: dict[str, Any],
         lo, hi = BOOK_BAND
         book_bad = [] if math_is_between(plan_total, source_total * lo, source_total * hi) \
             else [f'{plan_total}/{source_total}']
-        outcomes.append(outcome('plan_book_band', rows(book_bad, '全书预算出带'),
+        if book_bad:
+            witness.add(code='plan_book_band', rule='plan_book_band', refs=book_bad)
+        outcomes.append(outcome('plan_book_band', book_rows(book_bad, '全书预算出带'),
                                 f'{len(chapters)} 章'))
     else:
         outcomes.append(unverifiable('plan_book_band', 'Stage2 span 覆盖不全，基准未知'))
@@ -706,7 +801,9 @@ def check(plan: dict[str, Any], *, blueprints: dict[str, Any],
         land_key='land_fact_refs',
         context_key='context_fact_refs',
     )
-    outcomes.append(outcome('style_words', rows(
+    if style_hits:
+        witness.add(code='style_words', rule='style_words', refs=style_hits[:8])
+    outcomes.append(outcome('style_words', book_rows(
         style_hits, '无字段内 typed fact 证据的纯写法词命中'),
         f'{len(chapters)} 章 brief/purpose'))
     if phase_links is None:
@@ -722,6 +819,10 @@ def check(plan: dict[str, Any], *, blueprints: dict[str, Any],
              ])
             for link in phase_links if link.state != 'match'
         ]
+        if phase_bad:
+            witness.add(code='phase_artifact_link', rule='phase_artifact_link',
+                        refs=[link.key for link in phase_links
+                              if link.state != 'match'])
         scan = ('human origin：不声明 A/B 编译身份，0 条完整字节边'
                 if not phase_links else f'{len(phase_links)} 条 A/B 完整字节边')
         outcomes.append(outcome('phase_artifact_link', phase_bad, scan))
@@ -729,18 +830,21 @@ def check(plan: dict[str, Any], *, blueprints: dict[str, Any],
         outcomes.append(unverifiable('context_link', '候选计划尚未组装 context，本趟不判对应关系'))
     else:
         state, detail = ctx_link
+        if state != 'ok':
+            witness.add(code='context_link', rule='context_link', refs=[state])
         outcomes.append(outcome('context_link', [] if state == 'ok' else [(detail, [state])],
                                 'plan→writer_context 来源边'))
 
     outcomes.extend(_context_outcomes(
-        ctx, chapters, bp_of, bidx, expected_ctx=expected_ctx,
+        ctx, chapters, bp_of, bidx, expected_ctx=expected_ctx, witness=witness,
     ))
     stats, over = verbatim_share_stats(plan, bidx)
-    outcomes.append(outcome('verbatim_starved', rows(
+    outcomes.append(outcome('verbatim_starved', book_rows(
         [f'ch{o}.scene{i}:{vb}/{budget}' for o, i, vb, budget in over], '逐字材料挤占预算'),
         f'{stats["n"] if stats else 0} 个带逐字材料的场景'))
-    outcomes.append(outcome('causal_disclosure', rows(disclosure_reversed, '披露逆因果'),
-                            f'{sum(len(bp.get("causal_edges") or []) for bp in bp_of.values())} 条因果边'))
+    outcomes.append(scoped_outcome(
+        'causal_disclosure', disclosure_reversed, '披露逆因果',
+        f'{sum(len(bp.get("causal_edges") or []) for bp in bp_of.values())} 条因果边'))
 
     def metric_rows(section: str) -> str:
         return json.dumps([
@@ -809,7 +913,9 @@ def math_is_between(value: float, lo: float, hi: float) -> bool:
 def _context_outcomes(ctx: dict[str, Any] | None, plan_chapters: list[dict[str, Any]],
                       bp_of: dict[int, dict[str, Any]],
                       bidx: dict[str, dict[str, Any]], *,
-                      expected_ctx: dict[str, Any] | None = None) -> list[Outcome]:
+                      expected_ctx: dict[str, Any] | None = None,
+                      witness: WitnessCollector | None = None) -> list[Outcome]:
+    witness = witness or _NO_OP_WITNESS
     rules = ('ctx_facts_exact', 'ctx_name_attested',
              'ctx_stage_explicit', 'ctx_hinge_delivered')
     if ctx is None:
@@ -819,16 +925,20 @@ def _context_outcomes(ctx: dict[str, Any] | None, plan_chapters: list[dict[str, 
         int(ch.get('output_ordinal') or 0): ch
         for ch in ((expected_ctx or {}).get('chapters') or [])
     }
-    facts_bad: list[str] = []
-    stage_bad: list[str] = []
-    name_bad: list[str] = []
+    # 与主扫描同形：章级行带 ``(ordinal, detail)``；走整棵树的机械行没有章号，
+    # 记 `None`（书级），落 finding 时不许把章号只留在散文里。
+    facts_bad: list[tuple[int | None, str]] = []
+    stage_bad: list[tuple[int | None, str]] = []
+    name_bad: list[tuple[int | None, str]] = []
     forbidden = {'events', 'from_beats', 'end_beat'}
 
     def walk(value: Any, path: str = '') -> None:
         if isinstance(value, dict):
             for key, child in value.items():
                 if key in forbidden:
-                    facts_bad.append(f'{path}.{key}')
+                    facts_bad.append((None, f'{path}.{key}'))
+                    witness.add(code='ctx_facts_exact', rule='ctx_facts_exact',
+                                refs=[f'{path}.{key}'])
                 walk(child, f'{path}.{key}')
         elif isinstance(value, list):
             for index, child in enumerate(value):
@@ -848,13 +958,21 @@ def _context_outcomes(ctx: dict[str, Any] | None, plan_chapters: list[dict[str, 
         if expected_ctx is not None:
             for field in ('semantic_contract', 'facts'):
                 if cch.get(field) != expected_chapter.get(field):
-                    facts_bad.append(f'ch{ordinal}:{field}')
+                    facts_bad.append((ordinal, f'ch{ordinal}:{field}'))
+                    witness.add(code='ctx_facts_exact', rule='ctx_facts_exact',
+                                chapter_ordinal=ordinal, refs=[field])
         if len(cscenes) != len(pscenes):
-            facts_bad.append(f'ch{ordinal}:scene_count')
+            facts_bad.append((ordinal, f'ch{ordinal}:scene_count'))
+            witness.add(code='ctx_facts_exact', rule='ctx_facts_exact',
+                        chapter_ordinal=ordinal, refs=['scene_count'])
             continue
         if expected_ctx is not None and len(escenes) != len(pscenes):
-            facts_bad.append(f'ch{ordinal}:expected_scene_count')
-            stage_bad.append(f'ch{ordinal}:expected_scene_count')
+            facts_bad.append((ordinal, f'ch{ordinal}:expected_scene_count'))
+            stage_bad.append((ordinal, f'ch{ordinal}:expected_scene_count'))
+            witness.add(code='ctx_facts_exact', rule='ctx_facts_exact',
+                        chapter_ordinal=ordinal, refs=['expected_scene_count'])
+            witness.add(code='ctx_stage_explicit', rule='ctx_stage_explicit',
+                        chapter_ordinal=ordinal, refs=['expected_scene_count'])
             continue
         for index, (pscene, cscene) in enumerate(zip(pscenes, cscenes)):
             expected_scene = escenes[index] if expected_ctx is not None else None
@@ -865,7 +983,10 @@ def _context_outcomes(ctx: dict[str, Any] | None, plan_chapters: list[dict[str, 
             context = (expected_scene.get('context_facts') if expected_scene is not None else
                        [atoms.get(str(ref)) for ref in pscene.get('context_fact_refs') or []])
             if cscene.get('required_facts') != required or cscene.get('context_facts') != context:
-                facts_bad.append(f'ch{ordinal}.{pscene.get("slot")}:facts')
+                facts_bad.append((ordinal, f'ch{ordinal}.{pscene.get("slot")}:facts'))
+                witness.add(code='ctx_facts_exact', rule='ctx_facts_exact',
+                            chapter_ordinal=ordinal,
+                            scene_refs=[str(pscene.get('slot') or index + 1)])
             if expected_scene is not None:
                 expected = [
                     {'time_layer': row.get('time_layer'), 'place': row.get('place')}
@@ -879,15 +1000,34 @@ def _context_outcomes(ctx: dict[str, Any] | None, plan_chapters: list[dict[str, 
             got = [{'time_layer': row.get('time_layer'), 'place': row.get('place')}
                    for row in (cscene.get('stages') or [])]
             if got != expected:
-                stage_bad.append(f'ch{ordinal}.{pscene.get("slot")}:stages')
+                stage_bad.append((ordinal, f'ch{ordinal}.{pscene.get("slot")}:stages'))
+                witness.add(code='ctx_stage_explicit', rule='ctx_stage_explicit',
+                            chapter_ordinal=ordinal,
+                            scene_refs=[str(pscene.get('slot') or index + 1)])
         # display_name 的证据面由 context 产地负责；这里至少拒绝内部 id 泄漏。
-        name_bad += [f'ch{ordinal}:{name}' for name in (
-            row.get('display_name') for row in (cch.get('characters') or []))
-            if not name or str(name).startswith('char_')]
+        for row in (cch.get('characters') or []):
+            name = row.get('display_name')
+            if not name or str(name).startswith('char_'):
+                name_bad.append((ordinal, f'ch{ordinal}:{name}'))
+                witness.add(code='ctx_name_attested', rule='ctx_name_attested',
+                            chapter_ordinal=ordinal, refs=[str(name)])
 
-    def made(rule: str, bad: list[str], label: str) -> Outcome:
-        return ran(rule, [finding(rule, detail=f'{len(bad)} 处{label}：{bad[:8]}', evidence=bad)]
-                   if bad else [], scanned=f'{len(ctx_by)} 个上下文章')
+    def ctx_outcome(rule: str, bad: list[tuple[int | None, str]], label: str) -> Outcome:
+        findings = []
+        book_rows = [detail for ordinal, detail in bad if ordinal is None]
+        if book_rows:
+            findings.append(finding(
+                rule, detail=f'{len(book_rows)} 处{label}：{book_rows[:8]}',
+                evidence=book_rows))
+        by_chapter: dict[int, list[str]] = {}
+        for ordinal, detail in bad:
+            if ordinal is not None:
+                by_chapter.setdefault(ordinal, []).append(detail)
+        for ordinal, subset in sorted(by_chapter.items()):
+            findings.append(finding(
+                rule, detail=f'{len(subset)} 处{label}：{subset[:8]}',
+                evidence=subset, output_ordinal=ordinal))
+        return ran(rule, findings, scanned=f'{len(ctx_by)} 个上下文章')
 
     want = sum(len(verbatim_pieces([hinge])[0].get(group) or [])
                for row in bidx.values() for hinge in (row.get('hinges') or [])
@@ -895,9 +1035,16 @@ def _context_outcomes(ctx: dict[str, Any] | None, plan_chapters: list[dict[str, 
     got = sum(len(scene.get(group) or []) for chapter in ctx_by.values()
               for scene in (chapter.get('scenes') or []) for group in _HINGE_FIELDS)
     hinge_bad = [] if want == got else [f'want={want},got={got}']
+    if hinge_bad:
+        witness.add(code='ctx_hinge_delivered', rule='ctx_hinge_delivered',
+                    refs=hinge_bad)
     return [
-        made('ctx_facts_exact', facts_bad, '事实解析或旧骨架键'),
-        made('ctx_name_attested', name_bad, '人名为空或内部 id'),
-        made('ctx_stage_explicit', stage_bad, '舞台投影漂移'),
-        made('ctx_hinge_delivered', hinge_bad, '材料数量不闭合'),
+        ctx_outcome('ctx_facts_exact', facts_bad, '事实解析或旧骨架键'),
+        ctx_outcome('ctx_name_attested', name_bad, '人名为空或内部 id'),
+        ctx_outcome('ctx_stage_explicit', stage_bad, '舞台投影漂移'),
+        ran('ctx_hinge_delivered',
+            [finding('ctx_hinge_delivered',
+                     detail=f'材料数量不闭合：{hinge_bad}', evidence=hinge_bad)]
+            if hinge_bad else [],
+            scanned=f'{len(ctx_by)} 个上下文章'),
     ]

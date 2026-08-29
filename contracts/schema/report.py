@@ -48,11 +48,15 @@ def finding(rule: str, *, detail: str, evidence: list[str],
             identity_hit: bool = False, identity_dead: bool | None = None,
             converge: str = 'new', unresolved_rounds: int = 0,
             wontfix: WontFixNote | None = None,
+            output_ordinal: int | None = None,
             registry: Registry = REGISTRY) -> Finding:
     """造一条结论。**调用方只给 `detail` + `evidence`。**
 
     `sev` / `item` / `owner` / `actionable` **一律从判据注册表取**
     ⇒ 一条 finding 不可能与判据表说的不一致（`_common.md` §七 设计要点 1）。
+
+    `output_ordinal` 由调用方在**已知章号**时填写（章级扫描的聚合行不许
+    再把章号只留在 detail 散文里）；书级结论保持 `None`。
 
     ⚠ **`actionable` 从 `repair != 'NONE'` 派生，`Rule` 上不加第二个字段。**
     两条已有的不变量正好同构：`rules.py::_validate` ③ 是
@@ -87,6 +91,7 @@ def finding(rule: str, *, detail: str, evidence: list[str],
         converge=converge,
         unresolved_rounds=unresolved_rounds,
         wontfix=wontfix,
+        output_ordinal=output_ordinal,
     )
 
 
