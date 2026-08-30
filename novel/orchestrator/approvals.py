@@ -1742,6 +1742,14 @@ def _public_closure_decision(
         decision.model_dump(exclude={'proof'}, mode='json'))
 
 
+def _closure_proof_payload(workpack_sha256: str) -> dict[str, str]:
+    """Stage5 typed closure 与 ``gate.s5`` 共用的 proof 决策主体。"""
+    return {
+        'kind': 'closure',
+        'closure_sha256': workpack_sha256,
+    }
+
+
 def _closure_view(novel_dir: Path, record: _ApprovalRecordV7) -> Stage5ClosureView:
     """把当前盘面 + 盘上回执历史折成公开闭合视图；workpack 恒按当前盘面重算。
 
@@ -1823,7 +1831,7 @@ def approve_stage5_closure(
                 'Stage5 盘面在回执提交期间发生变化；请刷新模板后重新裁决')
         proof = _make_proof(
             novel_dir, _stage5_subject_rels(base, sid, record),
-            {'kind': 'closure', 'closure_sha256': request.workpack_sha256})
+            _closure_proof_payload(request.workpack_sha256))
         payload = request.model_dump(mode='json')
         digest = _decision_sha256(payload)
         latest = record.closure_decision
@@ -1832,38 +1840,29 @@ def approve_stage5_closure(
             and latest.decision_sha256 == digest
             and _same_proof(latest.proof, proof)
         ):
-            # closure 决定自身的 proof 绑定工作包；gate.s5 的 proof 还要绑定
-            # typed 决定摘要。两者不是同一个主体。重复提交时也必须经生产
-            # proof builder 重铸 gate proof：既保持幂等不追加历史，也能修复
-            # 已有正确 closure、但 gate proof 缺失/过期的半提交尾窗。
-            gate_proof = _proof_for_gate(novel_dir, 's5', record)
             if record.gate['s5'] and _same_proof(
-                record.gate_proofs['s5'], gate_proof,
+                record.gate_proofs['s5'], proof,
             ):
                 return _view(base, record)
+            # 同一 typed 回执已存在，但旧/并行实现可能留下不同的 gate proof。
+            # 复用本次已验证的统一 proof 原子补正，不追加第二条人工决定。
             gates = dict(record.gate)
             gate_proofs = dict(record.gate_proofs)
             gates['s5'] = True
-            gate_proofs['s5'] = gate_proof
+            gate_proofs['s5'] = proof
             return _write(base, record.model_copy(update={
                 'gate': gates, 'gate_proofs': gate_proofs,
             }))
         public = Stage5ClosureDecision(
             **payload, decision_sha256=digest, decided_at=_now())
         stored = _StoredClosureDecision(**public.model_dump(mode='json'), proof=proof)
-        history = [*record.closure_history, stored]
-        working = record.model_copy(update={
-            'closure_history': history,
-            'closure_decision': stored,
-        })
-        # 不手拼第二份 freshness 口径；首次提交与之后每次公开读取都调用
-        # 同一个 gate proof builder，保证落盘 proof 能被原样重算。
-        gate_proof = _proof_for_gate(novel_dir, 's5', working)
         gates = dict(record.gate)
         gate_proofs = dict(record.gate_proofs)
         gates['s5'] = True
-        gate_proofs['s5'] = gate_proof
-        return _write(base, working.model_copy(update={
+        gate_proofs['s5'] = proof
+        return _write(base, record.model_copy(update={
+            'closure_history': [*record.closure_history, stored],
+            'closure_decision': stored,
             'gate': gates, 'gate_proofs': gate_proofs,
         }))
 
@@ -2049,8 +2048,8 @@ def _proof_for_gate(
             }),
         )
     if gate == 's5':
-        # stage5.closure 反向经 approvals 读取 typed 回执；保持局部 import，
-        # 避免模块初始化环，同时让首次提交与公开 freshness 读取共用同一尺子。
+        # closure.py 在 require_stage5_closed() 的末端延迟 import approvals；
+        # 这里也必须留在函数内，不能把循环依赖搬到模块 import 时。
         from novel.stages.stage5.closure import closure_workpack
         decision = record.closure_decision
         if decision is None:
@@ -2062,8 +2061,7 @@ def _proof_for_gate(
                 's5 closure 回执绑定的是过期工作包；请重新生成模板并重新裁决')
         rels = _stage5_subject_rels(novel_dir.parent, record.sid, record)
         return _make_proof(
-            novel_dir, rels,
-            {'kind': 'gate', 'gate': gate, 'closure': decision.decision_sha256})
+            novel_dir, rels, _closure_proof_payload(decision.workpack_sha256))
     rels = list(_GATE_ARTIFACTS[gate])
     return _make_proof(
         novel_dir, rels, {'kind': 'gate', 'gate': gate})

@@ -43,7 +43,8 @@ from contracts.schema.stage1 import MainText
 from contracts.schema.stage2 import ChapterBlueprints, GlobalGrounding
 from contracts.schema.stage4 import (
     BlindBookStrategyResponse, BlindCandidate, BlindCandidateProvenance,
-    BlindChapterDesignResponse, BlindPlanResponse, ChapterBindingResponse,
+    BlindChapterDesignResponse, BlindPlanResponse, BindingConcern,
+    ChapterBindingResponse,
     EvidenceBindingCompiledProvenance,
     RejectedResponseAdoption,
     CtxProvenance, EvidenceBinding, EvidenceBindingProvenance,
@@ -1136,15 +1137,66 @@ def _attach_typed_rows(
 
 _PROMPT_NL = chr(10)
 
-def _chapter_binding_user(
+
+@dataclass(frozen=True)
+class _ChapterBindingIssue:
+    """一章真实下发的 concern 引用面，同时供 prompt、wire 闸与聚合使用。"""
+
+    chapter_ordinal: int
+    scene_ids: frozenset[str]
+    issued_refs: frozenset[str]
+    user: str = field(repr=False, compare=False)
+    formal_to_alias: Mapping[str, str] = field(repr=False, compare=False)
+
+    def concern_error(self, concern: BindingConcern) -> str | None:
+        if concern.chapter_ordinal not in (None, self.chapter_ordinal):
+            return (
+                f'binding_concerns.chapter_ordinal 只能是本章 '
+                f'{self.chapter_ordinal}，实得 {concern.chapter_ordinal}')
+        unknown_scenes = sorted(set(concern.scenes) - self.scene_ids)
+        if unknown_scenes:
+            return (
+                'binding_concerns.scenes 含非本章 candidate_scene_id '
+                f'{unknown_scenes}')
+        unknown_refs = sorted(set(concern.closed_refs) - self.issued_refs)
+        if unknown_refs:
+            return (
+                'binding_concerns.closed_refs 含非本章 issued-ref '
+                f'{unknown_refs}')
+        return None
+
+    def canonical_concern(self, concern: BindingConcern) -> dict[str, Any]:
+        """把已过同一章尺的正式 fact/char id 规范回 opaque alias。"""
+        why = self.concern_error(concern)
+        if why is not None:
+            raise ProvenanceRefused(
+                f'stage4.plan ch{self.chapter_ordinal} 聚合绕过章内引用闸：{why}')
+        payload = concern.model_dump(by_alias=True, mode='json')
+        canonical_refs: list[str] = []
+        for ref in concern.closed_refs:
+            canonical = self.formal_to_alias.get(ref, ref)
+            if canonical not in canonical_refs:
+                canonical_refs.append(canonical)
+        unknown = sorted(set(canonical_refs) - self.issued_refs)
+        if unknown:
+            raise ProvenanceRefused(
+                f'stage4.plan ch{self.chapter_ordinal} 正式引用规范化后脱离 '
+                f'issued-ref 闭集：{unknown}')
+        payload['chapter_ordinal'] = self.chapter_ordinal
+        payload['closed_refs'] = canonical_refs
+        return payload
+
+
+def _chapter_binding_issue(
         ctx: RunContext, up: _Upstreams, candidate_raw: dict[str, Any],
         chapter_baseline, chapter_ordinal: int,
-) -> str:
-    """章级 B 的 user：只含本章候选场景、本章关闭目录与基线歧义。
+) -> _ChapterBindingIssue:
+    """铸造章级 B 的 prompt 与唯一 issued-ref 尺。
 
     ⚠ **测试禁止出现其他章正文**：本构造器不下发全书原文，也不下发其他章的
     blueprint 行；相邻章只给 entry/ending 状态引用的**一行摘要**（承接判断的
-    最小必要），不下发其正文、场景或材料。
+    最小必要），不下发其正文、场景或材料。上一章摘要里的引用不进入本章
+    ``issued_ref_allowlist``，因此只能阅读、不能写进本章 concern。
     """
     chapter = next(
         (row for row in (candidate_raw.get('output_chapters') or [])
@@ -1168,70 +1220,161 @@ def _chapter_binding_user(
     neighbor = next(
         (row for row in (candidate_raw.get('output_chapters') or [])
          if int(row.get('output_ordinal') or 0) == chapter_ordinal - 1), None)
-    parts = [
-        f'《{ctx.title}》第 {chapter_ordinal} 章（本章唯一；不含其他章）',
-        prompts.BLOCK_CHAPTER_CANDIDATE + _PROMPT_NL + json.dumps(
-            {'weight': chapter.get('weight'),
-             'scenes': [
-                 {'candidate_scene_id': scene.get('candidate_scene_id'),
-                  'land_fact_aliases': scene.get('land_fact_aliases') or [],
-                  'context_fact_aliases': scene.get('context_fact_aliases') or []}
-                 for scene in (chapter.get('scenes') or [])]},
-            ensure_ascii=False, sort_keys=True, separators=(',', ':')),
-        prompts.BLOCK_CHAPTER_EVIDENCE + _PROMPT_NL + json.dumps(
-            {'chapter_source_text': source_text,
-             'fact_atoms': [
-                {'fact_id': atom.get('fact_id'), 'claim': atom.get('claim'),
-                 'obligation': atom.get('obligation'),
-                 'source_beat_ref': atom.get('source_beat_ref'),
-                 'source_text': (
-                     (atom.get('source') or {}).get('text')
-                     if isinstance(atom.get('source'), dict) else None)}
-                for atom in atoms.values()],
-             'stages': [
-                 {'stage_ref': beat.get('beat_id'),
-                  'time_layer': beat.get('time_layer'),
-                  'place': beat.get('place'),
-                  'present_char_ids': beat.get('present_char_ids') or [],
-                  'materials': [
-                      {'material_ref': hinge.get('hinge_id'),
-                       'kind': hinge.get('kind'),
-                       'text': (
-                           (hinge.get('source') or {}).get('text')
-                           if isinstance(hinge.get('source'), dict) else None)}
-                      for hinge in (beat.get('hinges') or [])]}
-                 for beat in beats.values()]},
-            ensure_ascii=False, sort_keys=True, separators=(',', ':')),
-        prompts.BLOCK_CHAPTER_BASELINE + _PROMPT_NL + json.dumps(
-            {'scene_stage_refs': {
-                scene_id: list(refs)
-                for scene_id, refs in chapter_baseline.scene_stage_refs.items()},
-             'scene_material_refs': {
-                 scene_id: list(refs)
-                 for scene_id, refs in chapter_baseline.scene_material_refs.items()}},
-            ensure_ascii=False, sort_keys=True, separators=(',', ':')),
-        prompts.BLOCK_CHAPTER_AMBIGUITIES + _PROMPT_NL + json.dumps(
-            [a.to_payload() for a in chapter_baseline.ambiguities],
-            ensure_ascii=False, sort_keys=True, separators=(',', ':')),
-    ]
+
+    formal_to_alias: dict[str, str] = {}
+    for field_name in ('fact_aliases', 'participant_aliases'):
+        table = candidate_raw.get(field_name)
+        if not isinstance(table, Mapping):
+            raise ProvenanceRefused(
+                f'stage4.plan ch{chapter_ordinal} 候选缺 {field_name} 映射')
+        for alias_raw, formal_raw in table.items():
+            alias, formal = str(alias_raw), str(formal_raw)
+            previous = formal_to_alias.get(formal)
+            if previous is not None and previous != alias:
+                raise ProvenanceRefused(
+                    f'stage4.plan ch{chapter_ordinal} 正式引用 {formal} '
+                    f'映到多个 opaque alias：{previous}, {alias}')
+            formal_to_alias[formal] = alias
+
+    candidate_payload = {
+        'weight': chapter.get('weight'),
+        'scenes': [
+            {'candidate_scene_id': scene.get('candidate_scene_id'),
+             'land_fact_aliases': scene.get('land_fact_aliases') or [],
+             'context_fact_aliases': scene.get('context_fact_aliases') or []}
+            for scene in (chapter.get('scenes') or [])],
+    }
+    fact_payload = [
+        {'fact_id': atom.get('fact_id'), 'claim': atom.get('claim'),
+         'obligation': atom.get('obligation'),
+         'source_beat_ref': atom.get('source_beat_ref'),
+         'source_text': (
+             (atom.get('source') or {}).get('text')
+             if isinstance(atom.get('source'), dict) else None)}
+        for atom in atoms.values()]
+    stage_payload = [
+        {'stage_ref': beat.get('beat_id'),
+         'time_layer': beat.get('time_layer'),
+         'place': beat.get('place'),
+         'present_char_ids': beat.get('present_char_ids') or [],
+         'materials': [
+             {'material_ref': hinge.get('hinge_id'),
+              'kind': hinge.get('kind'),
+              'text': (
+                  (hinge.get('source') or {}).get('text')
+                  if isinstance(hinge.get('source'), dict) else None)}
+             for hinge in (beat.get('hinges') or [])]}
+        for beat in beats.values()]
+    baseline_payload = {
+        'scene_stage_refs': {
+            scene_id: list(refs)
+            for scene_id, refs in chapter_baseline.scene_stage_refs.items()},
+        'scene_material_refs': {
+            scene_id: list(refs)
+            for scene_id, refs in chapter_baseline.scene_material_refs.items()},
+    }
+    ambiguity_payload = [
+        ambiguity.to_payload() for ambiguity in chapter_baseline.ambiguities]
+
+    scene_ids = frozenset(
+        str(scene['candidate_scene_id'])
+        for scene in candidate_payload['scenes']
+        if isinstance(scene.get('candidate_scene_id'), str))
+    issued_refs: set[str] = set(scene_ids)
+
+    def issue(value: object) -> None:
+        if isinstance(value, str) and value:
+            issued_refs.add(value)
+
+    for scene in candidate_payload['scenes']:
+        for field_name in ('land_fact_aliases', 'context_fact_aliases'):
+            for ref in scene[field_name]:
+                issue(ref)
+    for atom in fact_payload:
+        issue(atom.get('fact_id'))
+        issue(atom.get('source_beat_ref'))
+    for stage in stage_payload:
+        issue(stage.get('stage_ref'))
+        for ref in stage['present_char_ids']:
+            issue(ref)
+        for material in stage['materials']:
+            issue(material.get('material_ref'))
+    for scene_id, refs in baseline_payload['scene_stage_refs'].items():
+        issue(scene_id)
+        for ref in refs:
+            issue(ref)
+    for scene_id, refs in baseline_payload['scene_material_refs'].items():
+        issue(scene_id)
+        for ref in refs:
+            issue(ref)
+    for ambiguity in ambiguity_payload:
+        issue(ambiguity.get('candidate_scene_id'))
+        issue(ambiguity.get('material_ref'))
+        for ref in ambiguity.get('candidates') or []:
+            issue(ref)
+
+    neighbor_payload: dict[str, Any] | None = None
     if neighbor is not None:
         previous_bp = bp_by_ordinal.get(chapter_ordinal - 1) or {}
         current_scenes = chapter.get('scenes') or []
         previous_scenes = neighbor.get('scenes') or []
+        neighbor_payload = {
+            'previous_chapter_ordinal': neighbor.get('output_ordinal'),
+            'previous_ending_state_refs':
+                previous_bp.get('ending_state_refs') or [],
+            'previous_exit_state_aliases': (
+                previous_scenes[-1].get('exit_state_aliases') or []
+                if previous_scenes else []),
+            'current_entry_state_refs': bp.get('entry_state_refs') or [],
+            'current_entry_state_aliases': (
+                current_scenes[0].get('entry_state_aliases') or []
+                if current_scenes else []),
+            'note': '仅承接判断；不得引用、复述或推断上一章正文',
+        }
+        # 只把当前章一侧收入 concern 闭集；上一章一侧只是只读边界摘要。
+        for field_name in (
+                'current_entry_state_refs', 'current_entry_state_aliases'):
+            for ref in neighbor_payload[field_name]:
+                issue(ref)
+
+    # 章内正式 fact_id / char_id 既可被模型原样引用，也必须有一个聚合后仍在
+    # 同一闭集里的 canonical alias。映射的其他章值不会因此进入本章 allowlist。
+    issued_refs.update(
+        formal_to_alias[ref]
+        for ref in tuple(issued_refs)
+        if ref in formal_to_alias)
+    evidence_payload = {
+        'chapter_source_text': source_text,
+        'issued_ref_allowlist': sorted(issued_refs),
+        'fact_atoms': fact_payload,
+        'stages': stage_payload,
+    }
+    parts = [
+        f'《{ctx.title}》第 {chapter_ordinal} 章（本章唯一；不含其他章）',
+        prompts.BLOCK_CHAPTER_CANDIDATE + _PROMPT_NL + json.dumps(
+            candidate_payload,
+            ensure_ascii=False, sort_keys=True, separators=(',', ':')),
+        prompts.BLOCK_CHAPTER_EVIDENCE + _PROMPT_NL + json.dumps(
+            evidence_payload,
+            ensure_ascii=False, sort_keys=True, separators=(',', ':')),
+        prompts.BLOCK_CHAPTER_BASELINE + _PROMPT_NL + json.dumps(
+            baseline_payload,
+            ensure_ascii=False, sort_keys=True, separators=(',', ':')),
+        prompts.BLOCK_CHAPTER_AMBIGUITIES + _PROMPT_NL + json.dumps(
+            ambiguity_payload,
+            ensure_ascii=False, sort_keys=True, separators=(',', ':')),
+    ]
+    if neighbor_payload is not None:
         parts.append(prompts.BLOCK_CHAPTER_NEIGHBORS + _PROMPT_NL + json.dumps(
-            {'previous_chapter_ordinal': neighbor.get('output_ordinal'),
-             'previous_ending_state_refs':
-                 previous_bp.get('ending_state_refs') or [],
-             'previous_exit_state_aliases': (
-                 previous_scenes[-1].get('exit_state_aliases') or []
-                 if previous_scenes else []),
-             'current_entry_state_refs': bp.get('entry_state_refs') or [],
-             'current_entry_state_aliases': (
-                 current_scenes[0].get('entry_state_aliases') or []
-                 if current_scenes else []),
-             'note': '仅承接判断；不得引用、复述或推断上一章正文'},
+            neighbor_payload,
             ensure_ascii=False, sort_keys=True, separators=(',', ':')))
-    return _PROMPT_NL.join(parts)
+    return _ChapterBindingIssue(
+        chapter_ordinal=chapter_ordinal,
+        scene_ids=scene_ids,
+        issued_refs=frozenset(issued_refs),
+        user=_PROMPT_NL.join(parts),
+        formal_to_alias=formal_to_alias,
+    )
 
 
 def _business_witness_chain(ctx: RunContext, prepared: PlanCandidateContext) -> str:
@@ -4089,6 +4232,7 @@ class _PlanChapterUnit:
     chapter_ordinal: int
     request: Any = field(repr=False, compare=False)
     response: ChapterBindingResponse = field(repr=False, compare=False)
+    issue: _ChapterBindingIssue = field(repr=False, compare=False)
     rows: list[dict[str, Any]] = field(repr=False, compare=False)
     attempt_id: str
     models: tuple[str, ...]
@@ -4143,8 +4287,10 @@ class _PlanChapterAggregateSource:
         return self._pool.provider_session_id
 
 
-def _chapter_wire_validator(chapter_baseline):
-    """章级响应的 wire 闸：schema 之外，歧义解析必须逐项闭合。"""
+def _chapter_wire_validator(
+        chapter_baseline, issue: _ChapterBindingIssue,
+):
+    """章级响应 wire 闸：歧义与 concern 共用本请求真实下发的闭集。"""
     def validate(response, _wire):
         try:
             apply_chapter_resolutions(
@@ -4153,6 +4299,10 @@ def _chapter_wire_validator(chapter_baseline):
                  for row in response.resolutions])
         except ValueError as exc:
             return str(exc)
+        for concern in response.binding_concerns:
+            why = issue.concern_error(concern)
+            if why is not None:
+                return why
         return None
     return validate
 
@@ -4170,14 +4320,17 @@ def _chapter_input_sha(ctx: RunContext, prepared: PlanCandidateContext,
 def _plan_chapter_request(
         ctx: RunContext, prepared: PlanCandidateContext,
         chapter_baseline, chapter_ordinal: int,
+        issue: _ChapterBindingIssue,
 ) -> Any:
+    if issue.chapter_ordinal != chapter_ordinal:
+        raise ProvenanceRefused(
+            f'stage4.plan ch{chapter_ordinal} request 错绑 '
+            f'ch{issue.chapter_ordinal} issued-ref 尺')
     return stage4_runs.PlanChapterRequest(
         chapter=chapter_ordinal,
         input_sha256=_chapter_input_sha(ctx, prepared, chapter_ordinal),
         system=prompts.chapter_binding_system(),
-        user=_chapter_binding_user(
-            ctx, prepared.upstream, prepared.candidate_raw,
-            chapter_baseline, chapter_ordinal),
+        user=issue.user,
         response_model=ChapterBindingResponse,
         max_tokens=16_000,
     )
@@ -4330,10 +4483,13 @@ def _load_plan_chapter_unit(
         chapter_baseline, chapter_ordinal: int,
 ) -> _PlanChapterUnit:
     """一章的 worker：恢复/首问 → 同闸校验 → **立即** checkpoint。"""
+    issue = _chapter_binding_issue(
+        ctx, prepared.upstream, prepared.candidate_raw,
+        chapter_baseline, chapter_ordinal)
     request = _plan_chapter_request(
-        ctx, prepared, chapter_baseline, chapter_ordinal)
+        ctx, prepared, chapter_baseline, chapter_ordinal, issue)
     stage4_runs.ensure_plan_chapter_run(ctx, request)
-    validator = _chapter_wire_validator(chapter_baseline)
+    validator = _chapter_wire_validator(chapter_baseline, issue)
     identity = _plan_chapter_replacement_identity(ctx, prepared, request)
     replacement_records = response_repair.records_for_chain(
         ctx.novel_dir, _canonical_sha256(identity))
@@ -4402,7 +4558,7 @@ def _load_plan_chapter_unit(
     attempt_id, models = pool.accepted_chapter(chapter_ordinal)
     unit = _PlanChapterUnit(
         chapter_ordinal=chapter_ordinal, request=request,
-        response=response, rows=[], attempt_id=attempt_id,
+        response=response, issue=issue, rows=[], attempt_id=attempt_id,
         models=models, restored=restored is not None, revision=revision)
     if restored is None:
         rows = apply_chapter_resolutions(
@@ -4429,7 +4585,7 @@ def _load_plan_chapter_unit(
              for row in response.resolutions])
         return _PlanChapterUnit(
             chapter_ordinal=chapter_ordinal, request=request,
-            response=response, rows=rows, attempt_id=attempt_id,
+            response=response, issue=issue, rows=rows, attempt_id=attempt_id,
             models=models, restored=restored is not None, revision=revision)
     replacement_rows = apply_chapter_resolutions(
         chapter_baseline,
@@ -4437,7 +4593,7 @@ def _load_plan_chapter_unit(
          for row in replacement_response.resolutions])
     return _PlanChapterUnit(
         chapter_ordinal=chapter_ordinal, request=request,
-        response=replacement_response, rows=replacement_rows,
+        response=replacement_response, issue=issue, rows=replacement_rows,
         attempt_id=attempt_id, models=models, restored=True,
         revision=revision + 1,
         replacement=replacement)
@@ -4448,7 +4604,7 @@ def _reask_plan_chapter_unit(
         chapter_baseline, previous: _PlanChapterUnit,
 ) -> _PlanChapterUnit:
     """B-owner 返问：同闸通过后立即追加新 checkpoint，并刷新身份。"""
-    validator = _chapter_wire_validator(chapter_baseline)
+    validator = _chapter_wire_validator(chapter_baseline, previous.issue)
     try:
         response = pool.ask_chapter(
             previous.chapter_ordinal, previous.request, validator=validator)
@@ -4479,7 +4635,8 @@ def _reask_plan_chapter_unit(
         })
     return _PlanChapterUnit(
         chapter_ordinal=previous.chapter_ordinal, request=previous.request,
-        response=response, rows=rows, attempt_id=attempt_id,
+        response=response, issue=previous.issue, rows=rows,
+        attempt_id=attempt_id,
         models=models, restored=False, revision=previous.revision + 1)
 
 
@@ -4679,7 +4836,7 @@ def _run_plan_with_chapters(
                 for ordinal in sorted(resolved_rows)
             ],
             'binding_concerns': [
-                row.model_dump(by_alias=True, mode='json')
+                units[chapter_ordinal].issue.canonical_concern(row)
                 for chapter_ordinal in ambiguous
                 for row in
                 units[chapter_ordinal].response.binding_concerns
