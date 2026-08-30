@@ -1438,14 +1438,18 @@ def require_approved_clear(store: ArtifactStore, art: Hook) -> CandidateAssessme
     actual = text_sha256(art.approved.text)
     if resolution.subject_sha256 != actual:
         raise TerminalState('定稿 resolution 绑定的不是当前文本字节')
-    pack, _report = hook._approval_workpack_snapshot(store, art)
-    if (resolution.workpack_sha256 is None
-            or resolution.workpack_sha256 != pack.workpack_sha256
-            or pack.disposition != 'already_current'):
-        raise TerminalState(
-            '开篇文案旧批准没有绑定当前代码/规则/机械与 A/B 证据工作包——'
-            '请刷新 Stage6 approval workpack 后重跑 stage6.approve（0 成本）')
-    return assessment_for_text(store, art, art.approved.text)
+    # 这是下游消费闸：重算工作包与取语义证据所读的 Hook 上游只决定
+    # 「能不能继续」，没有进入调用方的 prompt/产物。隔离在 helper 的最低边界，
+    # 避免 Stage7 rename、assemble 或未来新调用方漏包后污染自己的 provenance。
+    with store.ctx.validation_reads():
+        pack, _report = hook._approval_workpack_snapshot(store, art)
+        if (resolution.workpack_sha256 is None
+                or resolution.workpack_sha256 != pack.workpack_sha256
+                or pack.disposition != 'already_current'):
+            raise TerminalState(
+                '开篇文案旧批准没有绑定当前代码/规则/机械与 A/B 证据工作包——'
+                '请刷新 Stage6 approval workpack 后重跑 stage6.approve（0 成本）')
+        return assessment_for_text(store, art, art.approved.text)
 
 
 def unavailable_outcomes(why: str) -> list[Outcome]:

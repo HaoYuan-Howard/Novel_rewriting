@@ -100,10 +100,15 @@ def rules_fingerprint(stage: str) -> str:
 CODE_UNKNOWN = 'unknown'
 
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_GIT_QUERY_TIMEOUT_SECONDS = 60
 
 
 def _git(*args: str) -> bytes | None:
-    """运行一条只读 git 查询；失败时返回 ``None``，不拿半份答案冒充身份。"""
+    """运行一条只读 git 查询；失败时返回 ``None``，不拿半份答案冒充身份。
+
+    Windows 冷启动、杀毒扫描与机械盘长尾可能超过数秒，故保留明确的长上限；
+    超时后照旧关闭式返回 ``None``，不把半份结果写成身份。
+    """
     try:
         out = subprocess.run(
             [
@@ -111,7 +116,8 @@ def _git(*args: str) -> bytes | None:
                 f'safe.directory={os.path.abspath(_REPO_ROOT).replace(os.sep, "/")}',
                 *args,
             ],
-            cwd=_REPO_ROOT, capture_output=True, timeout=5)
+            cwd=_REPO_ROOT, capture_output=True,
+            timeout=_GIT_QUERY_TIMEOUT_SECONDS)
     except (OSError, subprocess.SubprocessError):
         return None
     return out.stdout if out.returncode == 0 else None
@@ -125,8 +131,10 @@ def _worktree_digest() -> str | None:
     决定，避免缓存、输出和本机密钥仅因存在就污染代码身份。
     """
     diff = _git('diff', '--binary', '--no-ext-diff', 'HEAD', '--', '.')
+    if diff is None:
+        return None
     untracked = _git('ls-files', '--others', '--exclude-standard', '-z')
-    if diff is None or untracked is None:
+    if untracked is None:
         return None
     names = sorted(name for name in untracked.split(b'\0') if name)
     if not diff and not names:

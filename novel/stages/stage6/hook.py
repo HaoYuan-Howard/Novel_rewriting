@@ -232,7 +232,8 @@ def _judged_drift(art: Hook, up: _Upstreams) -> tuple[list[str], list[str]]:
 
 
 def _report(ctx: RunContext, store: ArtifactStore, outcomes: list[Outcome],
-            art: Hook | None, freshness_rel: str | None = None) -> CheckReport:
+            art: Hook | None, freshness_rel: str | None = None,
+            *, report_node: str | None = None) -> CheckReport:
     """⚠ **新鲜度判的是「这份报告在说哪个文件」**，而那不总是 `REL`。
 
     ⚠⚠ **这一处是 F2 在 stage7 上撞出来才回头补的**（本层同形，只是没有样本走到）：
@@ -252,7 +253,11 @@ def _report(ctx: RunContext, store: ArtifactStore, outcomes: list[Outcome],
     prov = (art.provenance.model_dump(by_alias=True) if art is not None else {})
     judged_rel = freshness_rel or (REL if store.exists(REL) else _INVALID)
     return build(
-        sid=ctx.sid, node=ctx.node, freshness=store.freshness(judged_rel),
+        # 批准工作包会被 Stage7 的消费闸重算；那份报告仍然在描述 Stage6
+        # 候选，不能继承下游 ``stage7.rename`` / ``stage7.assemble`` 的节点身份。
+        # 其余生产/复检路不传 override，继续如实保留本次实际节点。
+        sid=ctx.sid, node=report_node or ctx.node,
+        freshness=store.freshness(judged_rel),
         outcomes=wontfix.applied_to_outcomes(outcomes, wontfix.load(store, 'stage6')),
         accounting=_accounting_of(prov),
         invalid=store.exists(_INVALID),
@@ -1912,7 +1917,8 @@ def _approval_workpack_snapshot(
     subject = art.model_copy(update={'approved': None})
     up = _Upstreams(store.ctx, store)
     report = _report(
-        store.ctx, store, _judge_artifact(subject, up, store), subject)
+        store.ctx, store, _judge_artifact(subject, up, store), subject,
+        report_node='stage6.approve')
     rows = _approval_candidate_rows(store, subject)
     base = Stage6ApprovalWorkpack(
         kind='stage6',

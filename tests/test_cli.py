@@ -96,6 +96,40 @@ def test_stage7_edit_template_is_stdout_only_and_round_trips(
     assert list(novel_dir.iterdir()) == []
 
 
+def test_stage7_approve_cli_forwards_both_hash_bound_locks(monkeypatch):
+    """预览列出的两把锁必须真的穿过 CLI；否则正式命令会在落盘前 exit 70。"""
+    from novel.cli import main as M
+    from novel.stages.stage7 import rename
+
+    captured = {}
+    report = SimpleNamespace(passed=True)
+
+    def approve(actual_ctx, **kwargs):
+        captured.update(ctx=actual_ctx, **kwargs)
+        return object(), report
+
+    monkeypatch.setattr(rename, 'run_approve', approve)
+    monkeypatch.setattr(M, 'render', lambda actual: 'REPORT' if actual is report else '')
+    ctx = SimpleNamespace(node='stage7.approve')
+    flags = [
+        '--actor', 'reviewer-a', '--reason', '逐项核验完成',
+        '--subject-sha256', 'a' * 64,
+        '--workpack-sha256', 'b' * 64,
+    ]
+
+    assert M._run_stage7(ctx, flags) == X.OK
+    assert captured == {
+        'ctx': ctx,
+        'actor': 'reviewer-a',
+        'reason': '逐项核验完成',
+        'subject_sha256': 'a' * 64,
+        'workpack_sha256': 'b' * 64,
+    }
+
+    with pytest.raises(TerminalState, match='--workpack-sha256'):
+        M._run_stage7(ctx, flags[:-2])
+
+
 def test_stage2_emit_review_template_binds_current_rows_and_stays_closed(
         reviewed_box, capsys):
     """模板省掉 hash/evidence 手抄，但默认 UNVER 绝不能顺手打开事实闸。"""

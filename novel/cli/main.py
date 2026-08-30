@@ -1146,11 +1146,21 @@ def _run_stage7(ctx: RunContext, flags: list[str]) -> int:
     tokens = set(N.flag_tokens(flags))
 
     if ctx.node == 'stage7.approve':
+        actor = _valued(flags, '--actor')
+        reason = _valued(flags, '--reason')
+        subject_sha256 = _valued(flags, '--subject-sha256')
+        workpack_sha256 = _valued(flags, '--workpack-sha256')
+        if not actor or not reason or not subject_sha256 or not workpack_sha256:
+            raise TerminalState(
+                'stage7.approve 必须显式给 --actor、--reason 和 '
+                '--subject-sha256、--workpack-sha256；actor 是自报身份，'
+                '两个 hash 用于防旧页面误批')
         _art, report = rename.run_approve(
             ctx,
-            actor=_valued(flags, '--actor') or '',
-            reason=_valued(flags, '--reason') or '',
-            subject_sha256=_valued(flags, '--subject-sha256') or '',
+            actor=actor,
+            reason=reason,
+            subject_sha256=subject_sha256,
+            workpack_sha256=workpack_sha256,
         )
         print(render(report))
         return X.OK if report.passed else X.CHECK_FAILED

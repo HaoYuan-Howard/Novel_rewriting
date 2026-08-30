@@ -41,7 +41,8 @@ def _stage6_snapshot_env(monkeypatch):
         semantic, 'current_judge_rankings', lambda _store, _art: None)
     monkeypatch.setattr(hook, '_Upstreams', lambda *_args: object())
     monkeypatch.setattr(hook, '_judge_artifact', lambda *_args: [])
-    monkeypatch.setattr(hook, '_report', lambda *_args: SimpleNamespace())
+    monkeypatch.setattr(
+        hook, '_report', lambda *_args, **_kwargs: SimpleNamespace())
     monkeypatch.setattr(
         hook, 'compact_approval_check', lambda _report: _compact_check())
     monkeypatch.setattr(
@@ -100,6 +101,25 @@ def test_stage6_workpack_hash_is_stable_after_approval_and_old_approval_is_not_c
         store, art.model_copy(update={'approved': approved}))
     assert changed_code.workpack_sha256 != before.workpack_sha256
     assert changed_code.disposition == 'review_required'
+
+
+def test_stage6_workpack_pins_its_report_node_when_rechecked_by_stage7(
+    monkeypatch,
+) -> None:
+    """下游消费闸重算 Stage6 工作包时，不得拿 Stage7 判据表解释 hook 结论。"""
+    store, art = _stage6_snapshot_env(monkeypatch)
+    store.ctx.node = 'stage7.rename'
+    seen: dict[str, str | None] = {}
+
+    def capture_report(*_args, report_node=None, **_kwargs):
+        seen['report_node'] = report_node
+        return SimpleNamespace()
+
+    monkeypatch.setattr(hook, '_report', capture_report)
+
+    hook._approval_workpack_snapshot(store, art)
+
+    assert seen == {'report_node': 'stage6.approve'}
 
 
 class _Stage6Store:

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+from contextlib import contextmanager
 from types import SimpleNamespace
 
 import pytest
@@ -129,9 +130,23 @@ def _semantic_artifact(reviews: list[HookCandidateReview], ranking: list[str] | 
     )
 
 
+class _ValidationCtx:
+    def __init__(self) -> None:
+        self.reads: list[str] = []
+
+    @contextmanager
+    def validation_reads(self):
+        before = list(self.reads)
+        try:
+            yield
+        finally:
+            self.reads[:] = before
+
+
 class _Store:
     def __init__(self, fresh: bool = True) -> None:
         self._fresh = fresh
+        self.ctx = _ValidationCtx()
 
     def freshness(self, _rel):
         return SimpleNamespace(state='fresh' if self._fresh else 'stale')
@@ -717,6 +732,27 @@ def test_downstream_requires_the_current_approved_bytes(monkeypatch):
     with pytest.raises(TerminalState, match='工作包'):
         semantic.require_approved_clear(
             _Store(), _art(approved='source_architecture'))
+
+
+def test_downstream_approval_recheck_does_not_leak_validation_reads(monkeypatch):
+    """下游重算 Stage6 工作包的读取不能混入调用方的 provenance。"""
+    store = _Store()
+
+    def snapshot(current_store, _art):
+        current_store.ctx.reads.append('stage1/hook_copy.json')
+        return SimpleNamespace(
+            workpack_sha256='f' * 64, disposition='already_current'), None
+
+    monkeypatch.setattr(hook, '_approval_workpack_snapshot', snapshot)
+    monkeypatch.setattr(
+        semantic, 'assessment_for_text',
+        lambda *_args: SimpleNamespace(state='uncertain'))
+
+    got = semantic.require_approved_clear(
+        store, _art(approved='source_architecture'))
+
+    assert got.state == 'uncertain'
+    assert store.ctx.reads == []
 
 
 def test_build_prompt_refuses_missing_or_stale_hook(monkeypatch):

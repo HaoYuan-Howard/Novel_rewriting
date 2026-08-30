@@ -266,6 +266,53 @@ def _fake_git(*, diff: bytes = b'', untracked: bytes = b''):
     return run
 
 
+def test_git_query_allows_windows_cold_start_but_stays_bounded(monkeypatch):
+    """Windows 冷启动长尾不得被旧的 5 秒上限误读成 ``unknown``。"""
+    seen: dict[str, object] = {}
+
+    class _Done:
+        returncode = 0
+        stdout = b'answer'
+
+    def _run(argv, **kwargs):
+        seen['argv'] = argv
+        seen.update(kwargs)
+        return _Done()
+
+    monkeypatch.setattr(prov.subprocess, 'run', _run)
+    assert prov._git('rev-parse', 'HEAD') == b'answer'
+    argv = seen['argv']
+    assert isinstance(argv, list)
+    assert any(str(arg).startswith('safe.directory=') for arg in argv)
+    assert seen['cwd'] == prov._REPO_ROOT
+    assert seen['capture_output'] is True
+    assert seen['timeout'] == prov._GIT_QUERY_TIMEOUT_SECONDS
+    assert prov._GIT_QUERY_TIMEOUT_SECONDS >= 45
+
+
+def test_git_query_timeout_remains_fail_closed(monkeypatch):
+    def _timeout(*_args, **_kwargs):
+        raise prov.subprocess.TimeoutExpired(
+            'git', prov._GIT_QUERY_TIMEOUT_SECONDS)
+
+    monkeypatch.setattr(prov.subprocess, 'run', _timeout)
+    assert prov._git('rev-parse', 'HEAD') is None
+
+
+def test_worktree_digest_stops_after_the_first_failed_query(monkeypatch):
+    calls: list[tuple[str, ...]] = []
+
+    def _failed_diff(*args: str):
+        calls.append(args)
+        if args[0] == 'diff':
+            return None
+        raise AssertionError('diff 已失败，不应继续等待 ls-files')
+
+    monkeypatch.setattr(prov, '_git', _failed_diff)
+    assert prov._worktree_digest() is None
+    assert calls == [('diff', '--binary', '--no-ext-diff', 'HEAD', '--', '.')]
+
+
 def test_clean_code_identity_is_the_full_commit(monkeypatch):
     monkeypatch.setattr(prov, '_git', _fake_git())
     assert prov.code_version() == COMMIT.decode().strip()
