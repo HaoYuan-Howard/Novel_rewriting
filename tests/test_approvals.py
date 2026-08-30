@@ -7,11 +7,12 @@ from types import SimpleNamespace
 
 import pytest
 
-from contracts.schema.api import StructureApprovalRequest
+from contracts.schema.api import BlueprintSeenRequest, StructureApprovalRequest
 from contracts.schema.stage7 import ApprovedNameMap
 from novel.errors import ApprovalRequired, GateBlocked, HumanEditProtected, UpstreamMissing
 from novel.orchestrator import approvals, jobs, state
 from novel.stages.stage7 import rename
+from novel.views.stage2 import blueprint_review_workpack
 from tests import corpus, sandbox
 
 _HAS_APPROVAL_CORPUS = (
@@ -115,7 +116,20 @@ def _approve_for_writing(box: sandbox.Sandbox) -> None:
     approvals.approve_gate(box.root, box.sid, 's0')
     approvals.approve_gate(box.root, box.sid, 's1')
     approvals.mark_seen(box.root, box.sid, 'global')
-    approvals.mark_seen(box.root, box.sid, 'read')
+    pack = blueprint_review_workpack(box.root, box.sid)
+    approvals.mark_seen(
+        box.root,
+        box.sid,
+        'read',
+        blueprint_subject=BlueprintSeenRequest(
+            expected_binding_sha256=pack.binding_sha256,
+            expected_subject_sha256=pack.subject_sha256,
+            expected_main_text_artifact_sha256=(
+                pack.binding.main_text_artifact_sha256),
+            expected_code_version=pack.binding.code_version,
+            expected_rules_fingerprint=pack.binding.rules_fingerprint,
+        ),
+    )
     approvals.approve_gate(box.root, box.sid, 's2')
     subject, chapters = approvals._current_structure_subject_and_chapters(box.dir)
     approvals.approve_structure(

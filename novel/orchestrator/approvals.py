@@ -40,6 +40,8 @@ from contracts.schema.api import (
     ApprovalBackfillResult,
     ApprovalDoc,
     ApprovalWorkpack,
+    BlueprintReviewWorkpack,
+    BlueprintSeenRequest,
     DesignBindingInfeasibility,
     DesignBlindChapterTruth,
     DesignChapterReview,
@@ -1941,7 +1943,59 @@ def _require_typed_gate_decision(store: ArtifactStore, gate: str) -> str | None:
     return None
 
 
+def _blueprint_seen_proof(
+    novel_dir: Path, workpack: BlueprintReviewWorkpack,
+) -> tuple[_ApprovalProof, dict[str, str]]:
+    """把一份已构造工作包铸成可重算 proof，并拒绝构造后的主体竞态。"""
+    if workpack.binding.subject_kind != 'formal':
+        raise ApprovalRequired(
+            'seen.read 只接受 current formal Blueprint 工作包；'
+            'INVALID 工作包只能用于恢复，不能生成已读证明')
+    # ``binding_sha256`` 覆盖整份可见工作包，其中包括联合 CheckReport；
+    # 因而 Global、formal/INVALID 选择或任何可见判定变化都会改变 decision
+    # 摘要。只把 BP/Main/code/rules 分开存而遗漏这枚 binding，会让提交时
+    # 与后续 ``_effective_record`` 使用两种“实际读过对象”定义。
+    proof = _make_proof(
+        novel_dir,
+        (STAGE2_CHAPTER_BLUEPRINTS, STAGE1_MAIN_TEXT),
+        {
+            'kind': 'seen',
+            'key': 'read',
+            'contract': 'blueprint-review-workpack-v1',
+            'binding_sha256': workpack.binding_sha256,
+        },
+    )
+    identity = {
+        'binding': workpack.binding_sha256,
+        'subject': workpack.subject_sha256,
+        'main_text': workpack.binding.main_text_artifact_sha256,
+        'code': workpack.binding.code_version,
+        'rules': workpack.binding.rules_fingerprint,
+    }
+    if (
+        proof.artifacts.get(STAGE2_CHAPTER_BLUEPRINTS) != identity['subject']
+        or proof.artifacts.get(STAGE1_MAIN_TEXT) != identity['main_text']
+    ):
+        raise ApprovalRequired(
+            'Blueprint 审阅主体在工作包构造后发生变化；'
+            '本次 seen.read 不落盘，请刷新工作包后重新确认')
+    return proof, identity
+
+
+def _blueprint_seen_snapshot(
+    novel_dir: Path,
+) -> tuple[_ApprovalProof, dict[str, str]]:
+    """重建完整工作包，再读出可持久化 read proof 与明文身份。"""
+    from novel.views.stage2 import blueprint_review_workpack
+
+    sid, _title, _platform = paths.derive_source_meta(novel_dir.name)
+    workpack = blueprint_review_workpack(novel_dir.parent, sid)
+    return _blueprint_seen_proof(novel_dir, workpack)
+
+
 def _proof_for_seen(novel_dir: Path, key: str) -> _ApprovalProof:
+    if key == 'read':
+        return _blueprint_seen_snapshot(novel_dir)[0]
     return _make_proof(
         novel_dir, _SEEN_ARTIFACTS[key], {'kind': 'seen', 'key': key})
 
@@ -3825,11 +3879,12 @@ def _migrate_legacy_v5(
 def _migrate_legacy_v6(
     base: str | os.PathLike[str], sid: str, legacy: _ApprovalRecordV6Legacy,
 ) -> tuple[_ApprovalRecordV7, list[str]]:
-    """显式把 v6 收成 v7：保留 s0–s4、seen 与 design/structure/writing 历史。
+    """显式把 v6 收成 v7：仅保留现役 proof 可对证的旧决定与历史。
 
     s5/s6/s7 的 gate 与 proof 一律清除——v7 的 s5 只能由当前 typed closure
     回执打开，backfill 不伪造 Commander 回执。写作授权的 typed 历史保留，
-    但与 v5 迁移一样按当前盘面重新对证后才能投影成现行授权。
+    但与 v5 迁移一样按当前盘面重新对证后才能投影成现行授权。旧
+    ``seen.read`` 没有完整工作包 binding，不能迁成现役阅读事实。
     """
     if legacy.sid != sid:
         raise HumanEditProtected(
@@ -3935,6 +3990,10 @@ def backfill_from_disk(
                     'approval record cannot be explicitly backfilled as '
                     'v2/v3/v4/v5/v6: no legacy reader accepted the bytes')
         novel_dir = paths.resolve_novel_dir(base, sid)
+        # backfill 只能补“产物已落成”的链，不能替人制造阅读事实。先把盘上
+        # 历史布尔投影成 current；旧 seen.read proof 因未绑定工作包的
+        # MainText/code/rules 会在这里自然失效。
+        record = _effective_record(novel_dir, record)
         gates = dict(record.gate)
         gate_proofs = dict(record.gate_proofs)
         seen = dict(record.seen)
@@ -3953,15 +4012,11 @@ def backfill_from_disk(
             if any(not gates[key] for key in _GATE_REQUIREMENTS.get(gate, ())):
                 continue
 
-            if gate == 's2':
-                try:
-                    seen_proofs = {
-                        key: _proof_for_seen(novel_dir, key)
-                        for key in APPROVAL_SEEN
-                    }
-                except NovelError:
-                    continue
-                seen = {key: True for key in APPROVAL_SEEN}
+            if gate == 's2' and not all(seen.values()):
+                # Stage2 产物齐备只证明“可读”，不证明 Commander 已经读过。
+                # ``seen.read`` 只能由 hash-bound 工作包确认入口写入；
+                # ``seen.global`` 也仍由自己的显式阅读动作写入。
+                continue
 
             if gate == 's5':
                 if state.stage5_legacy_paths(novel_dir):
@@ -3996,13 +4051,66 @@ def backfill_from_disk(
             approvals=approvals_view, backfilled=backfilled)
 
 
-def mark_seen(base: str | os.PathLike[str], sid: str, key: str) -> ApprovalDoc:
+def mark_seen(
+    base: str | os.PathLike[str], sid: str, key: str,
+    *, blueprint_subject: BlueprintSeenRequest | None = None,
+) -> ApprovalDoc:
     if key not in _SEEN_ARTIFACTS:
         raise ApprovalRequired(f'unknown stage2 view: {key}')
+    if key == 'read' and blueprint_subject is None:
+        raise ApprovalRequired(
+            'seen.read 必须携带实际读过的 Blueprint 工作包身份；'
+            '请先取得完整工作包再确认')
+    if blueprint_subject is not None and key != 'read':
+        raise ApprovalRequired('Blueprint 工作包身份只能用于 seen.read')
     with approval_file_lock(base, sid):
         record = _read_current(base, sid)
         novel_dir = paths.resolve_novel_dir(base, sid)
-        proof = _proof_for_seen(novel_dir, key)
+        if blueprint_subject is not None:
+            from novel.views.stage2 import blueprint_review_workpack
+
+            workpack = blueprint_review_workpack(base, sid)
+            if workpack.binding.subject_kind != 'formal':
+                raise ApprovalRequired(
+                    'seen.read 只接受 current formal Blueprint 工作包；'
+                    'INVALID 工作包只能用于恢复，不能生成已读证明')
+            current = {
+                'binding': workpack.binding_sha256,
+                'subject': workpack.subject_sha256,
+                'main_text': workpack.binding.main_text_artifact_sha256,
+                'code': workpack.binding.code_version,
+                'rules': workpack.binding.rules_fingerprint,
+            }
+            expected = {
+                'binding': blueprint_subject.expected_binding_sha256,
+                'subject': blueprint_subject.expected_subject_sha256,
+                'main_text': blueprint_subject.expected_main_text_artifact_sha256,
+                'code': blueprint_subject.expected_code_version,
+                'rules': blueprint_subject.expected_rules_fingerprint,
+            }
+            if current != expected:
+                changed = [name for name in expected if current[name] != expected[name]]
+                raise ApprovalRequired(
+                    'Blueprint 审阅工作包已过期（漂移：'
+                    + '、'.join(changed)
+                    + '）；本次 seen.read 不落盘，请刷新工作包后重新确认')
+        if key == 'read':
+            proof, proof_identity = _blueprint_seen_proof(novel_dir, workpack)
+            # 不能只做“两次 proof 相等”：若盘面恰在 workpack 比对后、第一次
+            # proof 前从 B1 变到 B2，两次都可能稳定得到 P2。第一份 proof 的
+            # 明文身份还必须重新等于用户提交的 B1 工作包身份。
+            expected_proof_identity = dict(expected)
+            if proof_identity != expected_proof_identity:
+                raise ApprovalRequired(
+                    'Blueprint 审阅主体在工作包校验后发生变化；'
+                    '本次 seen.read 不落盘，请刷新工作包后重新确认')
+            after_proof, after_identity = _blueprint_seen_snapshot(novel_dir)
+            if after_proof != proof or after_identity != proof_identity:
+                raise ApprovalRequired(
+                    'Blueprint 审阅主体在确认提交期间发生变化；'
+                    '本次 seen.read 不落盘，请刷新工作包后重新确认')
+        else:
+            proof = _proof_for_seen(novel_dir, key)
         seen = dict(record.seen)
         proofs = dict(record.seen_proofs)
         seen[key] = True

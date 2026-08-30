@@ -13,6 +13,7 @@ import type {
   Sources,
 } from './common'
 import type { Job } from './jobs'
+import type { CompactApprovalCheck } from './approvals'
 
 /* ---------------------------------------------------------------- stage0 */
 
@@ -294,6 +295,83 @@ export interface ReadingResponse {
   /** blueprint=false 的两种来路（没跑 / 读不回）靠它分 */
   blueprint_state: ArtifactState
   _provenance: Provenance | null
+}
+
+/** Stage2 Blueprint 只读异常优先工作包；它不是 approval，也不改变任何 gate。 */
+export interface BlueprintReviewCoverageSegment {
+  beat_order: number | null
+  chars: number
+  text: string
+  flagged: boolean
+}
+
+export interface BlueprintReviewFact {
+  claim: string
+  kind: string
+  obligation: string
+  evidence_text: string | null
+  participant_char_ids: string[]
+}
+
+export interface BlueprintReviewBeat {
+  beat_order: number
+  located: boolean
+  time_layer: string
+  place: string | null
+  present_char_ids: string[]
+  facts: BlueprintReviewFact[]
+  hinges: ReadingHinge[]
+}
+
+export interface BlueprintReviewChapter {
+  chapter_ordinal: number
+  anomalous: boolean
+  attention_rules: string[]
+  chapter_function: string
+  coverage: {
+    text_chars: number
+    covered_chars: number
+    loose_chars: number
+    uncovered_min_chars: number
+    segments: BlueprintReviewCoverageSegment[]
+  }
+  beats: BlueprintReviewBeat[]
+  causal_links: { before_claim: string; after_claim: string }[]
+  entry_state_claims: string[]
+  ending_state_claims: string[]
+  narration: ReadingNarration[]
+}
+
+export interface BlueprintReviewWorkpack {
+  sid: string
+  title: string
+  read_only: true
+  auto_decisions: false
+  subject_sha256: string
+  binding_sha256: string
+  binding: {
+    blueprint_rel: string
+    subject_kind: 'formal' | 'invalid'
+    main_text_artifact_sha256: string
+    blueprint_artifact_sha256: string
+    check_report_sha256: string
+    code_version: string
+    rules_fingerprint: string
+    chapter_ordinals: number[]
+  }
+  check: CompactApprovalCheck
+  accounting: CheckAccountingLine[]
+  mechanical_fields_hidden: string[]
+  /** 异常章在前；异常组和普通组内部各按章号升序。 */
+  chapters: BlueprintReviewChapter[]
+}
+
+export interface BlueprintSeenRequest {
+  expected_binding_sha256: string
+  expected_subject_sha256: string
+  expected_main_text_artifact_sha256: string
+  expected_code_version: string
+  expected_rules_fingerprint: string
 }
 
 /* ------------------------------------------------- stage2 · 全局设定 */

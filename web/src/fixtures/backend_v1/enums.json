@@ -459,6 +459,10 @@
   "extraction-ir-v2",
   "extraction-ir-v3.1"
  ],
+ "blueprint_review_subject_kinds": [
+  "formal",
+  "invalid"
+ ],
  "repair_route": {
   "短语不在本章原文里": "field_patch",
   "段号越界，本章没有那一段": "chapter_regen",
@@ -757,7 +761,7 @@
   "--emit-edit-template": "向 stdout 输出带当前 schema version 的 stage7 人工编辑空壳，不写盘",
   "--validate-edit": "按 stage7 apply-edit 的同一构建与判定链预检人工编辑，不写盘",
   "--emit-review-template": "向 stdout 输出绑定当前 stage2 全局复核项 hash/evidence 的安全 UNVER 决策骨架，不写盘",
-  "--emit-review-workpack": "向 stdout 输出 Stage2 逐项主体与原文精确命中上下文；只辅助人工核验，不自动做 PASS/FAIL",
+  "--emit-review-workpack": "向 stdout 输出 Stage2 Global 逐项证据包，或 Blueprint 异常优先全章包；只辅助人工核验，不自动做决定",
   "--adopt-residual": "显式采纳可安全应用的 high residual 建议并重放 stage7 确定性链",
   "--adopt-rejected": "按当前完整四道闸 0 次调用重判一份封存的 Stage4A 拒稿；只消费隔离区里的候选与既有成本账，不发新请求",
   "--apply-binding": "把完整人工 EvidenceBinding 按与 Stage4B 相同的 schema、编译和 HARD 闸写回；0 次模型调用，也允许首次 B 无正式计划时恢复",
@@ -1047,6 +1051,7 @@
     "--renormalize",
     "--chapters",
     "--patch",
+    "--emit-review-workpack",
     "--revalidate",
     "--actor",
     "--reason",
@@ -1644,6 +1649,19 @@
    "free_flag": null,
    "writes": "stage2/chapter_blueprints.json",
    "writes_disk": true,
+   "needs_value": null,
+   "required_inputs": []
+  },
+  {
+   "kind": "stage2.blueprint",
+   "label": "stage2 逐章抽取 --emit-review-workpack",
+   "extra": [
+    "--emit-review-workpack"
+   ],
+   "paid": false,
+   "free_flag": "--emit-review-workpack",
+   "writes": "",
+   "writes_disk": false,
    "needs_value": null,
    "required_inputs": []
   },

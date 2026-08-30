@@ -50,6 +50,8 @@ import type { RunProgress } from '@/types/run'
 import type {
   CheckKind,
   CheckReport,
+  BlueprintReviewWorkpack,
+  BlueprintSeenRequest,
   DraftEditPreview,
   DraftEditPreviewRequest,
   DraftEditRequest,
@@ -1315,6 +1317,129 @@ function mockInbox(): InboxResponse {
   }
 }
 
+function mockBlueprintReviewWorkpack(sid: string): BlueprintReviewWorkpack {
+  const reading = fx<ReadingResponse>('reading_ch3.json')
+  const beatOrder = new Map(reading.beats.map((beat, index) => [beat.beat_id, index + 1]))
+  const segments = reading.segments.map((segment) => ({
+    beat_order: segment.beat_id === null ? null : (beatOrder.get(segment.beat_id) ?? null),
+    chars: segment.chars,
+    text: segment.text,
+    flagged: segment.flagged,
+  }))
+  const covered = segments
+    .filter((segment) => segment.beat_order !== null)
+    .reduce((total, segment) => total + segment.chars, 0)
+  const loose = segments
+    .filter((segment) => segment.beat_order === null)
+    .reduce((total, segment) => total + segment.chars, 0)
+  const subject = 'b'.repeat(64)
+  return {
+    sid,
+    title: reading.title,
+    read_only: true,
+    auto_decisions: false,
+    subject_sha256: subject,
+    binding_sha256: 'c'.repeat(64),
+    binding: {
+      blueprint_rel: 'stage2/chapter_blueprints.json',
+      subject_kind: 'formal',
+      main_text_artifact_sha256: 'a'.repeat(64),
+      blueprint_artifact_sha256: subject,
+      check_report_sha256: 'd'.repeat(64),
+      code_version: 'mock-sample',
+      rules_fingerprint: 'mock-rules',
+      chapter_ordinals: [reading.chapter_ordinal],
+    },
+    check: {
+      rules_scanned: 0,
+      counts: { ok: 0, hit: 0, unver: 0, skipped: 0 },
+      provenance: {
+        freshness: 'unknown',
+        reason: 'mock_sample_only',
+        ghosts: [],
+        edges: [],
+        invalid: false,
+        revalidated: null,
+        origin: null,
+      },
+      attention: [],
+      metrics: [],
+    },
+    accounting: [],
+    mechanical_fields_hidden: [
+      'blueprints[].beats[].beat_id',
+      'blueprints[].beats[].span.start/end',
+      'blueprints[].fact_atoms[].fact_id',
+      'blueprints[].fact_atoms[].source_beat_ref',
+    ],
+    chapters: [{
+      chapter_ordinal: reading.chapter_ordinal,
+      anomalous: false,
+      attention_rules: [],
+      chapter_function: 'mock 仅保留抓包章节；真实后端返回全书完整工作包',
+      coverage: {
+        text_chars: reading.text_chars,
+        covered_chars: covered,
+        loose_chars: loose,
+        uncovered_min_chars: reading.uncovered_min_chars,
+        segments,
+      },
+      beats: reading.beats.map((beat, index) => ({
+        beat_order: index + 1,
+        located: beat.located,
+        time_layer: beat.time_layer,
+        place: beat.place,
+        present_char_ids: beat.present_char_ids,
+        facts: beat.fact_atoms.map((fact) => ({
+          claim: fact.claim,
+          kind: fact.kind,
+          obligation: fact.obligation,
+          evidence_text: fact.evidence_text,
+          participant_char_ids: fact.participant_char_ids,
+        })),
+        hinges: beat.hinges,
+      })),
+      causal_links: [],
+      entry_state_claims: [],
+      ending_state_claims: [],
+      narration: reading.narration,
+    }],
+  }
+}
+
+const BLUEPRINT_SEEN_FIELDS = [
+  'expected_binding_sha256',
+  'expected_subject_sha256',
+  'expected_main_text_artifact_sha256',
+  'expected_code_version',
+  'expected_rules_fingerprint',
+] as const satisfies readonly (keyof BlueprintSeenRequest)[]
+
+function expectedBlueprintSeenRequest(sid: string): BlueprintSeenRequest {
+  const workpack = mockBlueprintReviewWorkpack(sid)
+  return {
+    expected_binding_sha256: workpack.binding_sha256,
+    expected_subject_sha256: workpack.subject_sha256,
+    expected_main_text_artifact_sha256: workpack.binding.main_text_artifact_sha256,
+    expected_code_version: workpack.binding.code_version,
+    expected_rules_fingerprint: workpack.binding.rules_fingerprint,
+  }
+}
+
+function isCurrentBlueprintSeenRequest(
+  sid: string,
+  request: BlueprintSeenRequest | undefined,
+): request is BlueprintSeenRequest {
+  if (!request) return false
+  const keys = Object.keys(request)
+  if (keys.length !== BLUEPRINT_SEEN_FIELDS.length
+    || keys.some((key) => !BLUEPRINT_SEEN_FIELDS.includes(
+      key as (typeof BLUEPRINT_SEEN_FIELDS)[number],
+    ))) return false
+  const expected = expectedBlueprintSeenRequest(sid)
+  return BLUEPRINT_SEEN_FIELDS.every((field) => request[field] === expected[field])
+}
+
 /* ------------------------------------------------------------------ Api */
 
 export const mockApi: Api = {
@@ -1408,6 +1533,10 @@ export const mockApi: Api = {
 
   getReading: (sid, o) =>
     chapterOnly(sid, o, `/novels/${sid}/reading/${o}`, () => fx<ReadingResponse>('reading_ch3.json')),
+
+  getBlueprintReviewWorkpack: (sid) =>
+    bookOnly(sid, `/novels/${sid}/stage2/blueprint-review-workpack`, () =>
+      mockBlueprintReviewWorkpack(sid)),
 
   getGlobal: (sid, revealSpoilers = false) =>
     bookOnly(sid, `/novels/${sid}/stage2/global`, () =>
@@ -2114,7 +2243,10 @@ export const mockApi: Api = {
 
   backfillApprovals: (sid) => {
     const doc = loadDoc(sid)
-    const backfillable = GATE_KEYS.slice(0, 4)
+    // Stage2 必须由两个独立 seen 共同打开。盘上没有 seen 证据时，backfill
+    // 只能补到 s1，不能替人制造 read/global 或越过它们补 s2/s4。
+    const stage2Seen = doc.seen.read && doc.seen.global
+    const backfillable = GATE_KEYS.slice(0, stage2Seen ? 3 : 2)
     const backfilled = backfillable.filter((key) => !doc.gate[key])
     const approvals = saveDoc({
       ...doc,
@@ -2122,13 +2254,27 @@ export const mockApi: Api = {
         ...doc.gate,
         ...Object.fromEntries(backfillable.map((key) => [key, true])),
       },
-      seen: { read: true, global: true },
       writing: doc.gate.s4 ? doc.writing : false,
     })
     return later({ approvals, backfilled })
   },
 
-  markSeen: (sid, key: SeenKey) => {
+  markSeen: (sid, key: SeenKey, request?: BlueprintSeenRequest) => {
+    const path = '/novels/' + sid + '/approvals/seen/' + key
+    if (key === 'read' && !isCurrentBlueprintSeenRequest(sid, request)) {
+      return fail(new ApiError('server', path, {
+        status: 409,
+        message: 'seen.read 必须逐项绑定当前 Blueprint 工作包；请刷新阅读页后重试',
+        backendKind: 'ApprovalRequired',
+      }))
+    }
+    if (key === 'global' && request !== undefined) {
+      return fail(new ApiError('server', path, {
+        status: 409,
+        message: 'seen.global 不接受 Blueprint 工作包身份',
+        backendKind: 'ApprovalRequired',
+      }))
+    }
     const doc = loadDoc(sid)
     if (doc.seen[key]) return later(doc)
     return later(saveDoc({ ...doc, seen: { ...doc.seen, [key]: true } }))

@@ -43,6 +43,7 @@ from contracts.invariants import (
     ANCHOR_COVERAGE_WARN,
     APPROVAL_GATES,
     APPROVAL_SEEN,
+    BLUEPRINT_REVIEW_SUBJECT_KINDS,
     CHAPTER_LABEL_ANOMALY,
     DELIVERY_MODES,
     DESIGN_CHAPTER_DECISIONS,
@@ -126,7 +127,9 @@ from contracts.schema.stage6 import (
     HookSources,
     Mech,
 )
-from contracts.schema.report import ProvenanceSection, RuleLine, StatusCounts
+from contracts.schema.report import (
+    AccountingLine, ProvenanceSection, RuleLine, StatusCounts,
+)
 from contracts.schema.stage7 import (
     Alias, ApprovedNameMap, BookTxt, ExtraSub, IdentityBaseline,
     NameMapProvenance, NameMapSources, Residual, StemBaseline,
@@ -2417,6 +2420,202 @@ class ReadingView(StrictModel):
         if self.loose != holes:
             raise ValueError(f'loose={self.loose} 而空隙合计 {holes}——两个数必须是同一个')
         return self
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# 二f、Stage2 Blueprint 只读审阅工作包（暂不是审批面）
+# ──────────────────────────────────────────────────────────────────────────
+
+class BlueprintReviewCoverageSegment(FrozenModel):
+    """一章原文的一个连续分区。
+
+    坐标和 ``beat_id`` 是机械面，工作包不重复展示；``beat_order``
+    只是当前工作包内的 1 起顺序，让 coverage 能与右侧语义拍对齐。
+    ``None`` 表示未被任何已定位 beat 覆盖的原文空隙。
+    """
+
+    beat_order: int | None = Field(default=None, ge=1)
+    chars: int = Field(ge=1)
+    text: str = Field(min_length=1)
+    flagged: bool
+
+    @model_validator(mode='after')
+    def _chars_and_flag_are_sound(self) -> 'BlueprintReviewCoverageSegment':
+        if self.chars != len(self.text):
+            raise ValueError('coverage segment chars 必须等于 text 的码点长度')
+        if self.beat_order is not None and self.flagged:
+            raise ValueError('已覆盖的 beat 分区不许标成空隙异常')
+        return self
+
+
+class BlueprintReviewCoverage(FrozenModel):
+    """一章正文的完整分区账。按 ``segments`` 顺序连接即是整章原文。"""
+
+    text_chars: int = Field(ge=1)
+    covered_chars: int = Field(ge=0)
+    loose_chars: int = Field(ge=0)
+    uncovered_min_chars: int = Field(ge=1)
+    segments: list[BlueprintReviewCoverageSegment] = Field(min_length=1)
+
+    @model_validator(mode='after')
+    def _segments_close_the_complete_chapter(self) -> 'BlueprintReviewCoverage':
+        covered = sum(
+            row.chars for row in self.segments if row.beat_order is not None)
+        loose = sum(
+            row.chars for row in self.segments if row.beat_order is None)
+        if covered != self.covered_chars or loose != self.loose_chars:
+            raise ValueError('coverage 的 covered/loose 分账与 segments 对不上')
+        if covered + loose != self.text_chars:
+            raise ValueError('coverage segments 必须不重不漏覆盖整章原文')
+        for row in self.segments:
+            expected = (
+                row.beat_order is None and row.chars >= self.uncovered_min_chars)
+            if row.flagged != expected:
+                raise ValueError('coverage flagged 必须只标记超阈值原文空隙')
+        return self
+
+
+class BlueprintReviewFact(FrozenModel):
+    """人审真正需要看的事实面；稳定 id 与 locator 由机械报告守。"""
+
+    claim: str = Field(min_length=1)
+    kind: Literal[FACT_ATOM_KINDS]
+    obligation: Literal[FACT_ATOM_OBLIGATIONS]
+    evidence_text: str | None
+    participant_char_ids: list[str]
+
+
+class BlueprintReviewBeat(FrozenModel):
+    """一拍紧凑语义面。``beat_order`` 是工作包内与 coverage 的连接键。"""
+
+    beat_order: int = Field(ge=1)
+    located: bool
+    time_layer: Literal[TIME_LAYERS]
+    place: str | None
+    present_char_ids: list[str]
+    facts: list[BlueprintReviewFact]
+    hinges: list[ReadingHinge]
+
+
+class BlueprintReviewCausalLink(FrozenModel):
+    """因果边的人读投影：直接给 claim → claim，不再逼人回查 fact_id。"""
+
+    before_claim: str = Field(min_length=1)
+    after_claim: str = Field(min_length=1)
+
+
+class BlueprintReviewChapter(FrozenModel):
+    """一章的完整 coverage + 紧凑语义审阅面。"""
+
+    chapter_ordinal: int = Field(ge=1)
+    anomalous: bool
+    attention_rules: list[str]
+    chapter_function: str = Field(min_length=1)
+    coverage: BlueprintReviewCoverage
+    beats: list[BlueprintReviewBeat] = Field(min_length=1)
+    causal_links: list[BlueprintReviewCausalLink]
+    entry_state_claims: list[str]
+    ending_state_claims: list[str]
+    narration: list[ReadingNarrationLine] = Field(min_length=1)
+
+    @model_validator(mode='after')
+    def _chapter_surface_is_closed(self) -> 'BlueprintReviewChapter':
+        if self.anomalous != bool(self.attention_rules):
+            raise ValueError('anomalous 必须与本章 attention_rules 同进同出')
+        orders = [row.beat_order for row in self.beats]
+        if orders != list(range(1, len(orders) + 1)):
+            raise ValueError('Blueprint review beat_order 必须从 1 起连续')
+        known = set(orders)
+        used = {
+            row.beat_order for row in self.coverage.segments
+            if row.beat_order is not None
+        }
+        if used - known:
+            raise ValueError('coverage 引用了本章不存在的 beat_order')
+        return self
+
+
+class BlueprintReviewBinding(FrozenModel):
+    """工作包的精确输入身份；摘要均来自同一次受校验的字节读取。"""
+
+    blueprint_rel: str = Field(min_length=1)
+    subject_kind: Literal[BLUEPRINT_REVIEW_SUBJECT_KINDS]
+    main_text_artifact_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    blueprint_artifact_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    check_report_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    code_version: str = Field(min_length=1)
+    rules_fingerprint: str = Field(min_length=1)
+    chapter_ordinals: list[int] = Field(min_length=1)
+
+    @model_validator(mode='after')
+    def _chapters_are_a_closed_ordered_set(self) -> 'BlueprintReviewBinding':
+        if self.chapter_ordinals != sorted(set(self.chapter_ordinals)):
+            raise ValueError('Blueprint review binding 章号必须升序且去重')
+        return self
+
+
+class BlueprintReviewWorkpack(FrozenModel):
+    """Stage2 Blueprint 的只读、异常优先审阅包。
+
+    它不是审批或产物：没有 actor/state/action，不开任何 gate。
+    ``subject_sha256`` 是当前 Blueprint 完整版本化盘上字节；
+    ``binding_sha256`` 则覆盖除自身外的整份可见工作包。
+    """
+
+    sid: str = Field(min_length=1)
+    title: str = Field(min_length=1)
+    read_only: bool = True
+    auto_decisions: bool = False
+    subject_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    binding_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    binding: BlueprintReviewBinding
+    check: CompactApprovalCheck
+    accounting: list[AccountingLine]
+    mechanical_fields_hidden: list[str] = Field(min_length=1)
+    chapters: list[BlueprintReviewChapter] = Field(min_length=1)
+
+    @model_validator(mode='after')
+    def _read_only_complete_exception_first_surface(self) -> 'BlueprintReviewWorkpack':
+        if not self.read_only or self.auto_decisions:
+            raise ValueError('Blueprint review workpack 只读且绝不自动做决定')
+        if self.subject_sha256 != self.binding.blueprint_artifact_sha256:
+            raise ValueError('subject_sha256 必须精确绑定 Blueprint 盘上字节')
+        ordinals = [row.chapter_ordinal for row in self.chapters]
+        if (len(ordinals) != len(set(ordinals))
+                or set(ordinals) != set(self.binding.chapter_ordinals)):
+            raise ValueError('Blueprint review chapters 必须不重不漏覆盖全部章')
+        seen_normal = False
+        anomalous: list[int] = []
+        normal: list[int] = []
+        for row in self.chapters:
+            if row.anomalous:
+                if seen_normal:
+                    raise ValueError('Blueprint review 必须把异常/命中章放在前面')
+                anomalous.append(row.chapter_ordinal)
+            else:
+                seen_normal = True
+                normal.append(row.chapter_ordinal)
+        if anomalous != sorted(anomalous) or normal != sorted(normal):
+            raise ValueError('异常章与普通章各自必须按章号升序')
+        if len(self.mechanical_fields_hidden) != len(set(self.mechanical_fields_hidden)):
+            raise ValueError('mechanical_fields_hidden 不得重复')
+        return self
+
+
+class BlueprintSeenRequest(StrictModel):
+    """把 ``seen.read`` 精确绑定到用户实际取得的 Blueprint 工作包输入。
+
+    这不是新的审批形状；它只是写现役 seen proof 前的乐观并发条件。
+    ``expected_binding_sha256`` 证明提交方拿到的是完整工作包，而不是从其它
+    读面各抄几枚散装 hash。Blueprint、MainText、代码或规则任一漂移，都必须
+    重新取工作包再确认。
+    """
+
+    expected_binding_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    expected_subject_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    expected_main_text_artifact_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    expected_code_version: str = Field(min_length=1)
+    expected_rules_fingerprint: str = Field(min_length=1)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

@@ -8,6 +8,7 @@ import type {
   Stage5ClosureRequest,
   StructureApprovalRequest,
 } from '@/types/approvals'
+import type { BlueprintSeenRequest } from '@/types/stages'
 import { useSid } from './useRouteParams'
 
 /**
@@ -68,6 +69,10 @@ export function useApprovals(sidOverride?: string) {
     mutationFn: (key: SeenKey) => api.markSeen(sid, key),
     onSuccess: put,
   })
+  const markBlueprintSeen = useMutation({
+    mutationFn: (request: BlueprintSeenRequest) => api.markSeen(sid, 'read', request),
+    onSuccess: put,
+  })
   const startWriting = useMutation({
     mutationFn: () => api.startWriting(sid),
     onSuccess: put,
@@ -85,6 +90,7 @@ export function useApprovals(sidOverride?: string) {
     approveStage5Closure,
     backfill,
     markSeen,
+    markBlueprintSeen,
     startWriting,
   }
 }

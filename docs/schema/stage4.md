@@ -262,8 +262,10 @@ Stage5 prompt 不接收 fact/beat/hinge/secret/rule id、alias、A 策略、结�
 精确性仍由 HARD 守卫关闭。
 
 公开 `ApprovalDoc` 是 v6；服务盘上 `_service/approvals/<sid>.json` 是 v7。旧 v6 只经显式
-`backfill_from_disk` 收进 v7：保留可逐项对证的 s0～s4、seen 与 design/structure/writing typed 历史，
-清除 s5～s7，绝不伪造 Stage5 closure。更早版本同样只经显式逐项对证，普通 GET / 启动不静默迁移；
+`backfill_from_disk` 收进 v7：保留仍能按现役同一 proof 逐项对证的 s0～s4、seen 与
+design/structure/writing typed 历史，清除 s5～s7，绝不伪造 Stage5 closure。旧 read proof 未绑定
+完整 Blueprint 工作包，不能升级成现役 `seen.read`；backfill 也不因产物齐备制造 read/global 或越过
+未审的 s2。更早版本同样只经显式逐项对证，普通 GET / 启动不静默迁移；
 其中旧 v5 的 design history 恒空，绝不从既有 A/B/Plan 或付费记录伪造 A 审阅。只有同时 current 的 Plan v4
 与 bound EvidenceBinding v3（含其 INVALID Plan 的零成本恢复）可继续最终结构审批，未来再次运行 B
 才要求 current A accept。旧 v2 Binding 不迁移、不补字段，须按 A 审阅 → B producer 重建。一次最终结构决定必须提交当前

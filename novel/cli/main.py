@@ -208,6 +208,10 @@ def _parser() -> argparse.ArgumentParser:
     approval_seen.add_argument('view', choices=APPROVAL_SEEN)
     approval_seen.add_argument('sid')
     approval_seen.add_argument('--base', required=True)
+    approval_seen.add_argument(
+        '--input',
+        help='seen.read 必填：BlueprintSeenRequest JSON；传 - 时从 stdin 读取。'
+             'seen.global 不接受此参数')
 
     approval_gate = approval_sub.add_parser(
         'gate', help='批准当前 s0/s1/s2；s4 只接受 typed structure apply，'
@@ -747,6 +751,13 @@ def _run_stage2(ctx: RunContext, flags: list[str]) -> int:
         return X.OK
 
     # ── `stage2.blueprint` ────────────────────────────────────────────────
+    if '--emit-review-workpack' in tokens:
+        from novel.views.stage2 import blueprint_review_workpack
+
+        workpack = blueprint_review_workpack(ctx.novel_dir.parent, ctx.sid)
+        print(workpack.model_dump_json(by_alias=True, indent=2))
+        return X.OK
+
     if '--revalidate' in tokens:
         promoted, report = extract.run_revalidate(
             ctx, actor=_valued(flags, '--actor') or '',
@@ -1648,7 +1659,7 @@ def _approval_input(path: str) -> str:
 def _cmd_approval(a: argparse.Namespace) -> int:
     """可审计审批 CLI：template/show 只读，apply 只落审批账且绝不拉作业。"""
     from contracts.schema.api import (
-        DesignReviewRequest, Stage5ClosureRequest, StructureApprovalRequest,
+        BlueprintSeenRequest, DesignReviewRequest, Stage5ClosureRequest, StructureApprovalRequest,
         WritingApprovalRequest,
     )
     from novel.orchestrator import approvals
@@ -1658,7 +1669,23 @@ def _cmd_approval(a: argparse.Namespace) -> int:
     elif a.approval_action == 'backfill':
         result = approvals.backfill_from_disk(a.base, a.sid)
     elif a.approval_action == 'seen':
-        result = approvals.mark_seen(a.base, a.sid, a.view)
+        if a.view == 'read':
+            if not a.input:
+                raise TerminalState(
+                    'approval seen read 必须给 --input <BlueprintSeenRequest.json>；'
+                    '先输出并审阅 current Blueprint 工作包')
+            try:
+                subject = BlueprintSeenRequest.model_validate_json(
+                    _approval_input(a.input))
+            except ValidationError as exc:
+                raise TerminalState(
+                    f'Blueprint seen JSON 不符合 typed 契约：{exc}') from exc
+            result = approvals.mark_seen(
+                a.base, a.sid, a.view, blueprint_subject=subject)
+        else:
+            if a.input:
+                raise TerminalState('approval seen global 不接受 Blueprint --input')
+            result = approvals.mark_seen(a.base, a.sid, a.view)
     elif a.approval_action == 'gate':
         if a.gate == 's4':  # argparse 已关闭；保留服务调用前的纵深防线。
             raise ApprovalRequired(

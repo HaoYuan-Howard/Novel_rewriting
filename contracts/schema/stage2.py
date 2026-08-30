@@ -719,6 +719,178 @@ class GlobalAgentTurnResponse(StrictModel):
     payload: GlobalAgentPayload
 
 
+# ── stage2.global evidence 闭集实验响应 ────────────────────────────────────
+#
+# ⚠ 这一组故意不继承、不联合上面的 locator 响应模型。实验臂的 wire 边界只
+# 接受 ``evidence_candidate_id``；若把两种 evidence 做成 union，模型继续抄章号 /
+# locator 也会被本地 schema 接受，闭集实验就失去了它唯一要验证的结构性收益。
+# 正式 ``GlobalGrounding`` 与人工 ``GlobalEdit`` 不在这里：前者仍落 SourceSpan，
+# 后者仍收 locator。
+
+class EvidenceCandidateRef(StrictModel):
+    """本次 prompt 已下发证据候选表中的一个不透明引用。"""
+
+    evidence_candidate_id: str = Field(pattern=r'^e[0-9]{6}$')
+
+
+class AddressCandidateResponse(StrictModel):
+    surface: str = Field(min_length=1)
+    by: str = Field(min_length=1)
+    context: Literal[ADDRESS_CONTEXT]
+    from_chapter: ChapterOrdinal
+
+
+class CharacterCandidateResponse(StrictModel):
+    canonical: str = Field(min_length=1)
+    address: list[AddressCandidateResponse] = Field(min_length=1)
+    name_distinctiveness: Literal[NAME_DISTINCTIVENESS]
+    role: str = Field(min_length=1)
+    role_evidence: EvidenceCandidateRef
+    fate: str | None
+    fate_evidence: EvidenceCandidateRef | None
+
+    @model_validator(mode='after')
+    def _fate_and_evidence_agree(self) -> CharacterCandidateResponse:
+        if (self.fate is None) != (self.fate_evidence is None):
+            raise ValueError('fate 与 fate_evidence 必须同时为空或同时非空')
+        return self
+
+
+class RelationCandidateResponse(StrictModel):
+    relation_id: str = Field(pattern=r'^rel_\d{2}$')
+    subject_id: str = Field(min_length=1)
+    object_id: str = Field(min_length=1)
+    predicate: str = Field(min_length=1)
+    predicate_evidence: EvidenceCandidateRef
+    visibility: RelationVisibility
+    valid_from_chapter: ChapterOrdinal
+    valid_through_chapter: ChapterOrdinal | None
+
+    @model_validator(mode='after')
+    def _valid_window_is_ordered(self) -> RelationCandidateResponse:
+        if (self.valid_through_chapter is not None
+                and self.valid_through_chapter < self.valid_from_chapter):
+            raise ValueError('relation 有效截止章早于起章')
+        return self
+
+
+class SettingCandidateResponse(StrictModel):
+    era: str = Field(alias='时代背景', min_length=1)
+    era_evidence: EvidenceCandidateRef
+    worldview: str = Field(alias='世界观', min_length=1)
+    worldview_evidence: EvidenceCandidateRef
+
+
+class WorldRuleVersionCandidateResponse(StrictModel):
+    effective_from_chapter: ChapterOrdinal
+    desc: str = Field(min_length=1)
+    desc_evidence: EvidenceCandidateRef
+
+
+class WorldRuleCandidateResponse(StrictModel):
+    rule_id: str = Field(pattern=r'^wr_\d{2}$')
+    kind: Literal[WORLD_RULE_KINDS]
+    versions: list[WorldRuleVersionCandidateResponse] = Field(min_length=1)
+
+    @model_validator(mode='after')
+    def _version_starts_are_unique(self) -> WorldRuleCandidateResponse:
+        starts = [row.effective_from_chapter for row in self.versions]
+        if len(starts) != len(set(starts)):
+            raise ValueError(f'{self.rule_id}: duplicate effective_from_chapter')
+        return self
+
+
+class KnowledgeEventCandidateResponse(StrictModel):
+    subject: KnowledgeSubject
+    known_from_chapter: ChapterOrdinal
+    evidence: EvidenceCandidateRef
+
+
+class SecretCandidateResponse(StrictModel):
+    secret_id: str = Field(pattern=r'^secret_\d{2}$')
+    fact: str = Field(min_length=1)
+    fact_evidence: EvidenceCandidateRef
+    knowledge_events: list[KnowledgeEventCandidateResponse] = Field(min_length=1)
+    setup: SecretSetup
+    first_reveal_chapter: ChapterOrdinal
+
+    @model_validator(mode='after')
+    def _knowledge_subjects_are_unique(self) -> SecretCandidateResponse:
+        subjects = [
+            (event.subject.kind,
+             getattr(event.subject, 'char_id', None),
+             getattr(event.subject, 'label', None))
+            for event in self.knowledge_events
+        ]
+        if len(subjects) != len(set(subjects)):
+            raise ValueError(f'{self.secret_id}: duplicate knowledge subject')
+        return self
+
+
+class CanonCandidateResponse(StrictModel):
+    setting: SettingCandidateResponse
+    world_rules: list[WorldRuleCandidateResponse]
+    secrets: list[SecretCandidateResponse]
+
+    @model_validator(mode='after')
+    def _stable_ids_are_unique(self) -> CanonCandidateResponse:
+        for label, values in (
+            ('world rule', [row.rule_id for row in self.world_rules]),
+            ('secret', [row.secret_id for row in self.secrets]),
+        ):
+            if len(values) != len(set(values)):
+                raise ValueError(f'duplicate {label} ids')
+        return self
+
+
+class ArcTrackCandidateResponse(StrictModel):
+    subject: str = Field(min_length=1)
+    trajectory: str = Field(min_length=1)
+    trajectory_evidence: EvidenceCandidateRef
+
+
+class ArcCandidateResponse(StrictModel):
+    conflict_stages: list[ConflictStage] = Field(min_length=1)
+    climax: str = Field(min_length=1)
+    ending: str = Field(min_length=1)
+    arc_tracks: list[ArcTrackCandidateResponse] = Field(min_length=1)
+
+
+class EntitiesCandidateResponse(StrictModel):
+    characters: dict[str, CharacterCandidateResponse]
+    relations: list[RelationCandidateResponse]
+
+    @model_validator(mode='after')
+    def _relation_ids_are_unique(self) -> EntitiesCandidateResponse:
+        values = [row.relation_id for row in self.relations]
+        if len(values) != len(set(values)):
+            raise ValueError('duplicate relation ids')
+        return self
+
+
+class GlobalGroundingCandidateResponse(StrictModel):
+    """闭集 evidence 实验臂的不可信响应；不含 locator 或正式 SourceSpan。"""
+
+    entities: EntitiesCandidateResponse
+    canon: CanonCandidateResponse
+    arc: ArcCandidateResponse
+
+
+class GlobalCandidateFullTurn(StrictModel):
+    kind: Literal['full_candidate']
+    candidate: GlobalGroundingCandidateResponse
+
+
+class GlobalCandidateAgentTurnResponse(StrictModel):
+    """闭集实验臂全 session 固定信封；每轮都完整重交候选。
+
+    candidate ID 的格式/成员失败发生在正式候选构造前，没有一份可安全绑定的
+    局部失败账；因此这里故意没有 locator 臂的 ``evidence_patch`` 分支。
+    """
+
+    payload: GlobalCandidateFullTurn
+
+
 class RoleFateResponse(StrictModel):
     role: str = Field(min_length=1)
     fate: str | None
@@ -1285,6 +1457,16 @@ class BlueprintContext(StrictModel):
     past_neighbor_chars_max: int = Field(ge=0)
     continuity_chars_max: int = Field(ge=0)
     past_names_chars_max: int = Field(ge=0)
+
+
+class BlueprintScopeViolation(StrictModel):
+    """``scope_violations[]`` 字符串载体的唯一结构化读写契约。"""
+
+    batch: int
+    requested: list[int]
+    produced: list[int]
+    discarded_chapters: list[int]
+    duplicate_target: int
 
 
 class BlueprintProvenance(LlmProvenance):

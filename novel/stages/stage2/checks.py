@@ -40,6 +40,7 @@ from contracts.invariants import (
 from contracts.rules import REGISTRY
 from contracts.schema.common import Finding
 from contracts.schema.report import finding as _finding
+from contracts.schema.stage2 import BlueprintScopeViolation
 from novel.core.evidence import iter_global_evidence_slots
 from novel.core.facts import heuristic_relation_gates, relation_visibility_gates
 from novel.core.naming import (
@@ -60,23 +61,54 @@ _FIX_CHAPTER_EVIDENCE = (
 
 
 def finding(rule: str, *, detail: str, evidence: list[str], **kwargs) -> Finding:
-    """把本次机器证据里的章号解析成最终 CLI 实参。
+    """把 producer 的 typed 章号铸成最终 CLI 实参。
 
-    报告层不再猜 evidence 格式；推不出时故意不编值，报告会把路由标成
-    unavailable 并说明原因。
+    只有真正书级、但修复需要一个章节集合的旧规则才回退到机器 evidence；
+    章级 finding 的 ``output_ordinal`` 永远优先，报告/view 不猜散文格式。
+    推不出时故意不编值，报告会把路由标成 unavailable 并说明原因。
     """
     row = REGISTRY.get(rule)
     fix_args: dict[str, str] = {}
     if '--chapters' in row.fix_args_from_finding:
-        chapters = {
+        # 章级 producer 已经知道所属章时，修复实参必须以 typed 字段为准。
+        # 例如 hinge_cross_chapter 的 evidence 同时含「所属章的 beat_id」与
+        # 「误引到的另一章」；继续扫 evidence 会把无辜的被引章也塞进付费重跑。
+        output_ordinal = kwargs.get('output_ordinal')
+        chapters = ({output_ordinal} if output_ordinal is not None else {
             int(value)
             for item in evidence
             for pattern in _FIX_CHAPTER_EVIDENCE
             for value in pattern.findall(item)
-        }
+        })
         if chapters:
             fix_args['--chapters'] = ','.join(str(chapter) for chapter in sorted(chapters))
     return _finding(rule, detail=detail, evidence=evidence, fix_args=fix_args, **kwargs)
+
+
+def _output_ordinal(value: Any) -> int | None:
+    """原始候选里的合法阅读序章号；坏形状仍由原判据报告，不让 Finding 自己崩。"""
+    return value if type(value) is int and value >= 1 else None
+
+
+def _group_chapter_evidence(
+        rows: Iterable[tuple[Any, str]],
+) -> list[tuple[int | None, list[str]]]:
+    """按 producer 手里的 typed 章号分组，不从 evidence/detail 反解析。"""
+    grouped: dict[int | None, list[str]] = {}
+    for raw_ordinal, evidence in rows:
+        grouped.setdefault(_output_ordinal(raw_ordinal), []).append(evidence)
+    return sorted(grouped.items(), key=lambda row: (row[0] is None, row[0] or 0))
+
+
+def _scope_violation_ordinal(row: Any) -> int | None:
+    """生产 scope 账是 JSON 字符串；只读其 typed requested 单章，不猜散文。"""
+    try:
+        requested = BlueprintScopeViolation.model_validate_json(row).requested
+    except (TypeError, ValueError):
+        return None
+    if len(requested) != 1:
+        return None
+    return _output_ordinal(requested[0])
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 零、只有本层判据读的几张表
@@ -297,22 +329,37 @@ def _alignment(c: _Ctx) -> list[Outcome]:
     expected = list(c.ords)
     fs: list[Finding] = []
     if (miss := [o for o in expected if o not in got]):
-        fs.append(finding('chapter_coverage', detail=f'缺章（阅读序）{_cut(miss)}',
-                          evidence=[f'missing:{o}' for o in miss]))
+        fs.extend(finding(
+            'chapter_coverage', detail=f'缺章（阅读序）ch{o}',
+            evidence=[f'missing:{o}'], output_ordinal=_output_ordinal(o),
+        ) for o in miss)
     if (extra := [o for o in got if o not in expected]):
-        fs.append(finding('chapter_coverage', detail=f'多余章（不在 main_text）{_cut(extra)}',
-                          evidence=[f'extra:{o}' for o in extra]))
+        fs.extend(finding(
+            'chapter_coverage', detail=f'多余章（不在 main_text）ch{o}',
+            evidence=[f'extra:{o}'], output_ordinal=_output_ordinal(o),
+        ) for o in extra)
     if (dup := sorted({o for o in got if got.count(o) > 1})):
-        fs.append(finding('chapter_coverage', detail=f'重复章 {_cut(dup)}',
-                          evidence=[f'dup:{o}' for o in dup]))
+        fs.extend(finding(
+            'chapter_coverage', detail=f'重复章 ch{o}',
+            evidence=[f'dup:{o}'], output_ordinal=_output_ordinal(o),
+        ) for o in dup)
     out.append(ran('chapter_coverage', fs, scanned=f'{len(got)}/{len(expected)} 章'))
 
     ordered = [o for o in got if o in expected]
+    sorted_ordered = sorted(ordered)
+    misplaced = [
+        (index, actual, wanted)
+        for index, (actual, wanted) in enumerate(
+            zip(ordered, sorted_ordered, strict=True), start=1)
+        if actual != wanted
+    ]
     out.append(ran('chapter_order',
                    [finding('chapter_order',
-                            detail=f'blueprint 章序 {ordered} 与 main_text 章序 {expected} 不一致',
-                            evidence=[f'ch{o}' for o in ordered])]
-                   if ordered != sorted(ordered) else [],
+                            detail=f'blueprint 第 {index} 项是 ch{actual}，应为 ch{wanted}；'
+                                   f'完整章序 {ordered}',
+                            evidence=[f'position:{index}', f'ch{actual}', f'want:ch{wanted}'],
+                            output_ordinal=_output_ordinal(actual))
+                    for index, actual, wanted in misplaced],
                    scanned=f'{len(ordered)} 章'))
     return out
 
@@ -997,15 +1044,19 @@ def _beats(c: _Ctx) -> list[Outcome]:
     # ── `beat_id_unique` ──────────────────────────────────────────────────
     ids = [be.get('beat_id') for _o, be in all_beats]
     dup = sorted({i for i in ids if ids.count(i) > 1})
+    duplicate_by_chapter = _group_chapter_evidence(
+        (o, str(be.get('beat_id'))) for o, be in all_beats
+        if be.get('beat_id') in dup)
     out.append(ran('beat_id_unique',
                    [finding('beat_id_unique',
-                            detail=f'重复 beat_id：{_cut(dup)}',
-                            evidence=[str(i) for i in dup])] if dup else [],
+                            detail=f'ch{o} 含重复 beat_id：{_cut(sorted(set(items)))}',
+                            evidence=sorted(set(items)), output_ordinal=o)
+                    for o, items in duplicate_by_chapter],
                    scanned=f'{len(ids)} 个 beat_id'))
 
     # ── `beat_id_format` ──────────────────────────────────────────────────
     # 三件事一条判据：格式 · 章内序连续 · **章号与所属章一致**。
-    bad_fmt = []
+    bad_fmt: list[tuple[Any, str]] = []
     for x in c.bps:
         o = x.get('chapter_ordinal')
         seq = 0
@@ -1014,15 +1065,17 @@ def _beats(c: _Ctx) -> list[Outcome]:
             bid = str(be.get('beat_id') or '')
             m = _BEAT_ID.match(bid)
             if not m:
-                bad_fmt.append(f'{bid!r} 不是 b<章号>_<序号>')
+                bad_fmt.append((o, f'{bid!r} 不是 b<章号>_<序号>'))
             elif int(m.group(1)) != o:
-                bad_fmt.append(f'{bid} 的章号与所属章 ch{o} 对不上')
+                bad_fmt.append((o, f'{bid} 的章号与所属章 ch{o} 对不上'))
             elif int(m.group(2)) != seq:
-                bad_fmt.append(f'{bid} 章内序不连续（应为 {seq:02d}）')
+                bad_fmt.append((o, f'{bid} 章内序不连续（应为 {seq:02d}）'))
     out.append(ran('beat_id_format',
                    [finding('beat_id_format',
-                            detail=f'{len(bad_fmt)} 处 beat_id 格式或章内序号不符：{_cut(bad_fmt)}',
-                            evidence=sorted(bad_fmt))] if bad_fmt else [],
+                            detail=f'ch{o} 有 {len(items)} 处 beat_id 格式或章内序号不符：'
+                                   f'{_cut(items)}',
+                            evidence=sorted(items), output_ordinal=o)
+                    for o, items in _group_chapter_evidence(bad_fmt)],
                    scanned=f'{len(ids)} 个 beat_id'))
 
     if not c.has_mt:
@@ -1041,7 +1094,8 @@ def _beats(c: _Ctx) -> list[Outcome]:
     out.append(ran('span_unlocatable',
                    [finding('span_unlocatable',
                              detail=f'ch{o} 的 source span 无法按序定位：{prob}',
-                            evidence=[f'ch{o}', prob])
+                            evidence=[f'ch{o}', prob],
+                            output_ordinal=_output_ordinal(o))
                     for o, prob in c.span_problems],
                    scanned=f'{n_hit}/{n_all} 条 beat 定位成功'))
 
@@ -1093,7 +1147,8 @@ def _beats(c: _Ctx) -> list[Outcome]:
                    [finding('edge_hole',
                             detail=f'ch{o} [{a}:{b}] {n} 字落在{where_cn[w]} —— '
                                    f'{ex!r}',
-                            evidence=[f'ch{o}', f'{a}:{b}', w])
+                            evidence=[f'ch{o}', f'{a}:{b}', w],
+                            output_ordinal=_output_ordinal(o))
                     for o, a, b, n, w, ex in edge],
                    scanned=f'{len(holes)} 处 ≥{HOLE_MIN_CHARS} 字的未覆盖区间'))
 
@@ -1104,23 +1159,26 @@ def _beats(c: _Ctx) -> list[Outcome]:
         n = len(c.text_of.get(o, ''))
         k = len(x.get('beats') or [])
         if n >= COARSE_MIN_CHARS and k <= COARSE_MAX_BEATS:
-            collapsed.append(f'ch{o}({n}字/{k}拍)')
+            collapsed.append((o, f'ch{o}({n}字/{k}拍)'))
         if k:
             ratios.append((o, n / k))
     out.append(ran('beats_collapsed',
                    [finding('beats_collapsed',
-                            detail=f'{len(collapsed)} 个 ≥{COARSE_MIN_CHARS} 字的章只有 '
-                                   f'≤{COARSE_MAX_BEATS} 拍：{_cut(collapsed)}',
-                            evidence=sorted(collapsed))] if collapsed else [],
+                            detail=f'ch{o}（≥{COARSE_MIN_CHARS} 字）只有 '
+                                   f'≤{COARSE_MAX_BEATS} 拍：{_cut(items)}',
+                            evidence=sorted(items), output_ordinal=o)
+                    for o, items in _group_chapter_evidence(collapsed)],
                    scanned=f'{len(c.bps)} 章'))
 
     med = statistics.median([r for _o, r in ratios]) if ratios else 0.0
-    coarse = [f'ch{o}({r:.0f}字/拍)' for o, r in ratios if med and r > med * COARSE_MEDIAN_MULT]
+    coarse = [(o, f'ch{o}({r:.0f}字/拍)')
+              for o, r in ratios if med and r > med * COARSE_MEDIAN_MULT]
     out.append(ran('beats_coarse',
                    [finding('beats_coarse',
-                            detail=f'{len(coarse)} 个章的字/拍超过本书中位数 '
-                                   f'{med:.0f} 的 {COARSE_MEDIAN_MULT} 倍：{_cut(coarse)}',
-                            evidence=sorted(coarse))] if coarse else [],
+                            detail=f'ch{o} 的字/拍超过本书中位数 '
+                                   f'{med:.0f} 的 {COARSE_MEDIAN_MULT} 倍：{_cut(items)}',
+                            evidence=sorted(items), output_ordinal=o)
+                    for o, items in _group_chapter_evidence(coarse)],
                    scanned=f'{len(ratios)} 章（本书中位 {med:.0f} 字/拍，'
                            f'最粗 {max((r for _o, r in ratios), default=0):.0f}）'))
 
@@ -1183,17 +1241,37 @@ def _verbatim(c: _Ctx) -> list[Outcome]:
             '所以这里落 `unver` 而不是绿灯（盘上 3/3 本都没有这个键）'))
     else:
         all_failures = list(failures) + list(fact_failures)
-        by_cause: dict[str, int] = {}
+        owner_of: dict[str, Any] = {}
+        for blueprint in c.bps:
+            ordinal = blueprint.get('chapter_ordinal')
+            for beat in (blueprint.get('beats') or []):
+                owner_of[str(beat.get('beat_id'))] = ordinal
+            for atom in (blueprint.get('fact_atoms') or []):
+                owner_of[str(atom.get('fact_id'))] = ordinal
+        by_chapter: dict[int | None, list[tuple[str, str]]] = {}
         for r in all_failures:
             if len(r) >= 3:
-                by_cause[str(r[2])] = by_cause.get(str(r[2]), 0) + 1
-        rows = [f'{r[0]}.{r[1]}: {r[2]}' for r in all_failures if len(r) >= 3]
-        out.append(ran('verbatim_failed',
-                       [finding('verbatim_failed',
-                                detail=f'落盘前的原文回取有 {len(rows)} 处锚不到；'
-                                       f'原因计数 {by_cause}：{_cut(rows, 6)}',
-                                evidence=sorted(rows))] if rows else [],
-                       scanned=f'{len(all_failures)} 条事实/材料证据失败记录'))
+                ordinal = _output_ordinal(owner_of.get(str(r[0])))
+                by_chapter.setdefault(ordinal, []).append(
+                    (f'{r[0]}.{r[1]}: {r[2]}', str(r[2])))
+        fs: list[Finding] = []
+        for o, items in sorted(
+                by_chapter.items(),
+                key=lambda row: (row[0] is None, row[0] or 0)):
+            by_cause: dict[str, int] = {}
+            for _row, cause in items:
+                by_cause[cause] = by_cause.get(cause, 0) + 1
+            rows = sorted(row for row, _cause in items)
+            label = '全书未归属记录' if o is None else f'ch{o}'
+            fs.append(finding(
+                'verbatim_failed',
+                detail=f'{label} 落盘前原文回取有 {len(items)} 处锚不到；'
+                       f'原因计数 {by_cause}：{_cut(rows, 6)}',
+                evidence=rows, output_ordinal=o,
+            ))
+        out.append(ran(
+            'verbatim_failed', fs,
+            scanned=f'{len(all_failures)} 条事实/材料证据失败记录'))
     return out
 
 
@@ -1222,8 +1300,9 @@ def _hinges(c: _Ctx) -> list[Outcome]:
             if not any(be.get('hinges') for be in (x.get('beats') or []))]
     out.append(ran('chapter_no_hinge',
                    [finding('chapter_no_hinge',
-                            detail=f'{len(no_h)} 章没有任何 hinge：ch{no_h}',
-                            evidence=[f'ch{o}' for o in no_h])] if no_h else [],
+                            detail=f'ch{o} 没有任何 hinge',
+                            evidence=[f'ch{o}'], output_ordinal=_output_ordinal(o))
+                    for o in no_h],
                    scanned=f'{len(c.bps)} 章 / {n_h} 条保真材料'))
 
     if not c.has_mt:
@@ -1233,8 +1312,12 @@ def _hinges(c: _Ctx) -> list[Outcome]:
         return out
 
     # ── 锚不到的分流 + 转抄漂移 ───────────────────────────────────────────
-    cascade, hole, void, cross, drift = [], [], [], [], []
-    ambiguous: list[str] = []
+    cascade: list[tuple[Any, str]] = []
+    hole: list[tuple[Any, str]] = []
+    void: list[tuple[Any, str]] = []
+    cross: list[tuple[Any, str, Any]] = []
+    drift: list[tuple[Any, str, Any | None]] = []
+    ambiguous: list[tuple[Any, str]] = []
     failure_cause = {
         str(row[0]): str(row[2])
         for row in (c.prov.get('verbatim_failures') or [])
@@ -1253,7 +1336,7 @@ def _hinges(c: _Ctx) -> list[Outcome]:
                 item = f'{beat_id}:{raw[:16]!r}' if t else beat_id
                 if not t:
                     if beat_id not in by_id:
-                        cascade.append(item)
+                        cascade.append((o, item))
                         continue
                     # ⚠⚠ **按取值面查表，不按中文子串猜。** 这里曾经是
                     #   `if '空档' in cause / elif '本章原文' in cause`——那是产地与判据之间
@@ -1265,61 +1348,70 @@ def _hinges(c: _Ctx) -> list[Outcome]:
                     #   产物不该让读数器崩，但它也不该被静默归进某一条具体的病。
                     route = HINGE_FAILURE_ROUTE.get(failure_cause.get(beat_id, ''))
                     if route == 'hinge_in_hole':
-                        hole.append(item)
+                        hole.append((o, item))
                     elif route == 'hinge_anchor_void':
-                        void.append(item)
+                        void.append((o, item))
                     elif route == 'hinge_ambiguous':
-                        ambiguous.append(item)
+                        ambiguous.append((o, item))
                     else:
-                        drift.append((item, None))
+                        drift.append((o, item, None))
                     continue
                 h_start, h_end, problem = exact_span(
                     source, c.text_of.get(o, ''))
                 if problem is None and s <= h_start and h_end <= e:
                     continue
                 if problem is None:
-                    hole.append(item)
+                    hole.append((o, item))
                     continue
                 # 【两种病，分开报】同一条「不在本 beat 的 span 内」，
                 # 底下是两个完全不同的故障，修法不同——混成一条会让人拿错方子。
                 elsewhere = [ch for ch in c.ords
                              if ch != o and t in content_only(c.text_of.get(ch, ''))]
-                (cross if elsewhere else drift).append(
-                    (item, elsewhere[0] if elsewhere else None))
+                if elsewhere:
+                    cross.append((o, item, elsewhere[0]))
+                else:
+                    drift.append((o, item, None))
 
     out.append(ran('hinge_cross_chapter',
                    [finding('hinge_cross_chapter',
                             detail=f'{item} 引用了 ch{ch} 的原文',
-                            evidence=[item, f'ch{ch}'])
-                    for item, ch in cross],
+                            evidence=[item, f'ch{ch}'],
+                            output_ordinal=_output_ordinal(o))
+                    for o, item, ch in cross],
                    scanned=f'{n_h} 条保真材料'))
     out.append(ran('hinge_in_hole',
                    [finding('hinge_in_hole',
-                            detail=f'{len(hole)} 条 hinge 锚点在本章原文中，'
-                                   f'但不在任何 beat span 内：{_cut(hole)}',
-                            evidence=sorted(hole))] if hole else [],
+                            detail=f'ch{o} 有 {len(items)} 条 hinge 锚点在本章原文中，'
+                                   f'但不在任何 beat span 内：{_cut(items)}',
+                            evidence=sorted(items), output_ordinal=o)
+                    for o, items in _group_chapter_evidence(hole)],
                    scanned=f'{n_h} 条保真材料'))
     out.append(ran('hinge_anchor_void',
                    [finding('hinge_anchor_void',
-                            detail=f'{len(void)} 条 hinge 锚点在本章原文中找不到：{_cut(void)}',
-                            evidence=sorted(void))] if void else [],
+                            detail=f'ch{o} 有 {len(items)} 条 hinge 锚点在本章原文中找不到：'
+                                   f'{_cut(items)}',
+                            evidence=sorted(items), output_ordinal=o)
+                    for o, items in _group_chapter_evidence(void)],
                    scanned=f'{n_h} 条保真材料'))
     out.append(ran('hinge_ambiguous',
                    [finding('hinge_ambiguous',
-                            detail=f'{len(ambiguous)} 条 hinge 短语在所属拍区间内多处命中，'
-                                   f'压在哪几个字上定不下来：{_cut(ambiguous)}',
-                            evidence=sorted(ambiguous))] if ambiguous else [],
+                            detail=f'ch{o} 有 {len(items)} 条 hinge 短语在所属拍区间内多处命中，'
+                                   f'压在哪几个字上定不下来：{_cut(items)}',
+                            evidence=sorted(items), output_ordinal=o)
+                    for o, items in _group_chapter_evidence(ambiguous)],
                    scanned=f'{n_h} 条保真材料'))
     out.append(ran('hinge_cascade',
                    [finding('hinge_cascade',
-                            detail=f'{len(cascade)} 条 hinge 所属 beat 没有可用 span：{_cut(cascade)}',
-                            evidence=sorted(cascade))] if cascade else [],
+                            detail=f'ch{o} 有 {len(items)} 条 hinge 所属 beat 没有可用 span：'
+                                   f'{_cut(items)}',
+                            evidence=sorted(items), output_ordinal=o)
+                    for o, items in _group_chapter_evidence(cascade)],
                    scanned=f'{n_h} 条保真材料'))
     out.append(ran('hinge_drift',
                    [finding('hinge_drift',
                             detail=f'{item} 的 text 不在本 beat span 内，全书也找不到',
-                            evidence=[item])
-                    for item, _ch in drift],
+                            evidence=[item], output_ordinal=_output_ordinal(o))
+                    for o, item, _ch in drift],
                    scanned=f'{n_h} 条保真材料'))
 
     src_tot = sum(len(c.text_of.get(o, '')) for o in c.ords)
@@ -1384,7 +1476,8 @@ def _present(c: _Ctx) -> list[Outcome]:
     out.append(ran('narration_multi',
                    [finding('narration_multi',
                             detail=f'ch{o} 有 {k} 个叙述声音',
-                            evidence=[f'ch{o}', str(k)])
+                            evidence=[f'ch{o}', str(k)],
+                            output_ordinal=_output_ordinal(o))
                     for o, k in multi],
                    scanned=f'{len(c.bps)} 章'))
     out.append(ran('narration_voices', [
@@ -1436,13 +1529,15 @@ def _present(c: _Ctx) -> list[Outcome]:
     if not c.has_gg:
         out.append(unverifiable('present_ids_dangling', _NO_GLOBAL))
     else:
-        bad_pc = [f'{be.get("beat_id")}:{cid}' for _o, be in all_beats
+        bad_pc = [(o, f'{be.get("beat_id")}:{cid}') for o, be in all_beats
                   for cid in (be.get('present_char_ids') or []) if cid not in c.chars]
         n_pc = sum(len(be.get('present_char_ids') or []) for _o, be in all_beats)
         out.append(ran('present_ids_dangling',
                        [finding('present_ids_dangling',
-                                detail=f'{len(bad_pc)} 个 present_char_ids 不在 registry 里：{_cut(bad_pc)}',
-                                evidence=sorted(bad_pc))] if bad_pc else [],
+                                detail=f'ch{o} 有 {len(items)} 个 present_char_ids '
+                                       f'不在 registry 里：{_cut(items)}',
+                                evidence=sorted(items), output_ordinal=o)
+                        for o, items in _group_chapter_evidence(bad_pc)],
                        scanned=f'{n_pc} 个引用 / registry {len(c.chars)} 人'))
 
     # ── 松紧与连续性（宽筛度量 + 窄筛 INFO）───────────────────────────────
@@ -1460,6 +1555,7 @@ def _present(c: _Ctx) -> list[Outcome]:
                     name_owners.setdefault(s, set()).add(cid)
         broad, narrow, n_atoms = 0, [], 0
         for x in c.bps:
+            o = x.get('chapter_ordinal')
             beats = x.get('beats') or []
             atoms_by_beat: dict[str, list[dict[str, Any]]] = {}
             for atom in (x.get('fact_atoms') or []):
@@ -1485,7 +1581,7 @@ def _present(c: _Ctx) -> list[Outcome]:
                     seen.add(key)
                     broad += 1
                     if owners & nearby:
-                        narrow.append(f'{be.get("beat_id")}:{nm}')
+                        narrow.append((o, f'{be.get("beat_id")}:{nm}'))
         out.append(ran('present_broad', [
             finding('present_broad',
                     detail=f'{broad} 处（拍×角色）fact atom 点名某角色而本拍未列；'
@@ -1494,9 +1590,10 @@ def _present(c: _Ctx) -> list[Outcome]:
             scanned=f'{n_atoms} 条事实原子 × {len(name_owners)} 个叫法'))
         out.append(ran('present_continuity',
                        [finding('present_continuity',
-                                detail=f'{len(narrow)} 处「相邻拍同地同层在场、本拍被点名却未列」'
-                                       f'：{_cut(narrow)}',
-                                evidence=sorted(narrow))] if narrow else [],
+                                detail=f'ch{o} 有 {len(items)} 处「相邻拍同地同层在场、'
+                                       f'本拍被点名却未列」：{_cut(items)}',
+                                evidence=sorted(items), output_ordinal=o)
+                        for o, items in _group_chapter_evidence(narrow)],
                        scanned=f'{n_atoms} 条事实原子'))
 
     # ── `present_ungrounded` ──────────────────────────────────────────────
@@ -1526,14 +1623,17 @@ def _present(c: _Ctx) -> list[Outcome]:
                 if cid in narrators:
                     n_narr += 1          # ⚠ **叙述者必须豁免且单独计数**
                     continue
-                ungrounded.append(f'ch{o} {cid}'
-                                  f'({(c.chars.get(cid) or {}).get("canonical") or "?"})'
-                                  f'×{len(bids)}拍')
+                ungrounded.append((
+                    o,
+                    f'ch{o} {cid}'
+                    f'({(c.chars.get(cid) or {}).get("canonical") or "?"})'
+                    f'×{len(bids)}拍'))
         out.append(ran('present_ungrounded',
                        [finding('present_ungrounded',
-                                detail=f'{len(ungrounded)}/{n_pairs} 个（章,在场者）对在本章原文里'
-                                       f'找不到任何字面依据：{_cut(ungrounded)}',
-                                evidence=sorted(ungrounded))] if ungrounded else [],
+                                detail=f'ch{o} 有 {len(items)} 个（章,在场者）对在本章原文里'
+                                       f'找不到任何字面依据：{_cut(items)}',
+                                evidence=sorted(items), output_ordinal=o)
+                        for o, items in _group_chapter_evidence(ungrounded)],
                        scanned=f'{n_pairs} 个（章,在场者）对'
                                f'（另有 {n_narr} 对是本章叙述者，**已豁免**）'))
 
@@ -1566,13 +1666,16 @@ def _present(c: _Ctx) -> list[Outcome]:
                         continue
                     seen_ch.setdefault(cid, []).append(str(be.get('beat_id')))
             for cid, bids in sorted(seen_ch.items()):
-                early_pres.append(f'ch{o} {cid}({(c.chars.get(cid) or {}).get("canonical")})'
-                                  f'×{len(bids)}拍 原文首次指名=ch{first_named[cid]}')
+                early_pres.append((
+                    o,
+                    f'ch{o} {cid}({(c.chars.get(cid) or {}).get("canonical")})'
+                    f'×{len(bids)}拍 原文首次指名=ch{first_named[cid]}'))
         out.append(ran('present_early_named',
                        [finding('present_early_named',
-                                detail=f'{len(early_pres)} 个（章,在场者）对早于该角色在原文里'
-                                       f'被指名的章：{_cut(early_pres)}',
-                                evidence=sorted(early_pres))] if early_pres else [],
+                                detail=f'ch{o} 有 {len(items)} 个（章,在场者）对早于该角色'
+                                       f'在原文里被指名的章：{_cut(items)}',
+                                evidence=sorted(items), output_ordinal=o)
+                        for o, items in _group_chapter_evidence(early_pres)],
                        scanned=f'{n_pairs2} 个（拍,在场者）对'
                                f'（另 {n_narr2} 条是本章叙述者，**已豁免**——'
                                f'第一人称主角通篇写「我」，名字晚出现是常态）'))
@@ -1595,12 +1698,13 @@ def _present(c: _Ctx) -> list[Outcome]:
                 f = c.first_seen([nm])
                 if nm not in body or f is None or f <= o:
                     continue
-                early_txt.append(f'ch{o} 「{nm}」(原文首现=ch{f})')
+                early_txt.append((o, f'ch{o} 「{nm}」(原文首现=ch{f})'))
         out.append(ran('event_early_name',
                        [finding('event_early_name',
-                                 detail=f'{len(early_txt)} 处事实 claim 写出了本章尚未指名的'
-                                       f'角色名：{_cut(early_txt)}',
-                                evidence=sorted(early_txt))] if early_txt else [],
+                                 detail=f'ch{o} 有 {len(items)} 处事实 claim 写出了本章尚未'
+                                        f'指名的角色名：{_cut(items)}',
+                                evidence=sorted(items), output_ordinal=o)
+                        for o, items in _group_chapter_evidence(early_txt)],
                        scanned=f'{len(canon_first)} 个 canonical（已排除通名）× {len(c.bps)} 章'))
 
     # ── `pronoun_surface_unattested` ──────────────────────────────────────
@@ -1615,12 +1719,13 @@ def _present(c: _Ctx) -> list[Outcome]:
                 for s in ((seg or {}).get('pronoun_surfaces') or []):
                     n_pron += 1
                     if norm(s) and norm(s) not in body:
-                        bad_pron.append(f'ch{o} {s!r}')
+                        bad_pron.append((o, f'ch{o} {s!r}'))
         out.append(ran('pronoun_surface_unattested',
                        [finding('pronoun_surface_unattested',
-                                detail=f'{len(bad_pron)}/{n_pron} 个 pronoun_surfaces 在本章原文里'
-                                       f'找不到：{_cut(bad_pron)}',
-                                evidence=sorted(bad_pron))] if bad_pron else [],
+                                detail=f'ch{o} 有 {len(items)} 个 pronoun_surfaces 在本章原文里'
+                                       f'找不到：{_cut(items)}',
+                                evidence=sorted(items), output_ordinal=o)
+                        for o, items in _group_chapter_evidence(bad_pron)],
                        scanned=f'{n_pron} 个自称字面（第三人称交空数组合法）'))
 
     # ── `scope_violation` / `context_scope`（`R-3.16b`）──────────────────
@@ -1632,11 +1737,15 @@ def _present(c: _Ctx) -> list[Outcome]:
             '不发绿灯。⚠ 产地必须**无条件**写这个键（没越界写空列表），'
             '否则缺失字段会被误读成没有越界'))
     else:
+        scoped = _group_chapter_evidence(
+            (_scope_violation_ordinal(row), str(row)) for row in scope)
         out.append(ran('scope_violation',
                        [finding('scope_violation',
-                                detail=f'有 {len(scope)} 条越界记录（某一批没按「本次任务范围」'
-                                       f'产出）：{_cut(list(scope))}',
-                                evidence=[str(x) for x in scope])] if scope else [],
+                                detail=f'{"未归属批次" if o is None else f"ch{o}"} 有 '
+                                       f'{len(items)} 条越界记录（某一批没按「本次任务范围」'
+                                       f'产出）：{_cut(items)}',
+                                evidence=sorted(items), output_ordinal=o)
+                        for o, items in scoped],
                        scanned='`_provenance.scope_violations`'))
 
     cctx = c.prov.get('context')
@@ -1657,16 +1766,18 @@ def _present(c: _Ctx) -> list[Outcome]:
     # ── 结构事实与修复账 ──────────────────────────────────────────────────
     all_atoms = [(x.get('chapter_ordinal'), atom) for x in c.bps
                  for atom in (x.get('fact_atoms') or [])]
-    empty_atoms = [f'ch{o}:{atom.get("fact_id")}' for o, atom in all_atoms
+    empty_atoms = [(o, f'ch{o}:{atom.get("fact_id")}') for o, atom in all_atoms
                    if not (atom.get('claim') or '').strip()]
-    chapters_without_atoms = [f'ch{x.get("chapter_ordinal")}' for x in c.bps
-                              if not (x.get('fact_atoms') or [])]
+    chapters_without_atoms = [
+        (x.get('chapter_ordinal'), f'ch{x.get("chapter_ordinal")}') for x in c.bps
+        if not (x.get('fact_atoms') or [])]
     atom_failures = empty_atoms + chapters_without_atoms
     out.append(ran('fact_atom_empty',
                    [finding('fact_atom_empty',
-                            detail=f'{len(atom_failures)} 处事实原子缺失或 claim 为空：'
-                                   f'{_cut(atom_failures)}',
-                            evidence=sorted(atom_failures))] if atom_failures else [],
+                            detail=f'ch{o} 有 {len(items)} 处事实原子缺失或 claim 为空：'
+                                   f'{_cut(items)}',
+                            evidence=sorted(items), output_ordinal=o)
+                    for o, items in _group_chapter_evidence(atom_failures)],
                    scanned=f'{len(all_atoms)} 条事实原子 / {len(c.bps)} 章'))
 
     return out

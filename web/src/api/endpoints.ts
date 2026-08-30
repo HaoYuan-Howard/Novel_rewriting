@@ -49,6 +49,7 @@ import type { TrashNovelResult } from '@/types/novels'
 import type { RunProgress } from '@/types/run'
 import type {
   CheckReport,
+  BlueprintReviewWorkpack,
   DraftEditPreview,
   DraftEditPreviewRequest,
   DraftEditRequest,
@@ -382,6 +383,8 @@ export const realApi: Api = {
     adaptJob(await post<BackendJobRecord>(n(sid) + '/stage1/partition')),
   getStage1: (sid) => get<Stage1View>(n(sid) + '/stage1'),
   getReading: (sid, o) => get<ReadingResponse>(n(sid) + '/reading/' + o),
+  getBlueprintReviewWorkpack: (sid) =>
+    get<BlueprintReviewWorkpack>(n(sid) + '/stage2/blueprint-review-workpack'),
   getGlobal: async (sid, revealSpoilers = false) =>
     projectGlobalSpoilers(await get<Stage2Global>(n(sid) + '/stage2/global'), revealSpoilers),
   getGlobalReview: (sid) =>
@@ -519,7 +522,8 @@ export const realApi: Api = {
     post<ApprovalDoc>(n(sid) + '/approvals/structure', request),
   backfillApprovals: (sid) =>
     post<ApprovalBackfillResult>(n(sid) + '/approvals/backfill'),
-  markSeen: (sid, key: SeenKey) => post<ApprovalDoc>(n(sid) + '/approvals/seen/' + key),
+  markSeen: (sid, key: SeenKey, request) =>
+    post<ApprovalDoc>(n(sid) + '/approvals/seen/' + key, request),
   startWriting: (sid) => post<ApprovalDoc>(n(sid) + '/approvals/writing'),
   resetBook: (sid) => post<ApprovalDoc>(n(sid) + '/approvals/reset'),
 

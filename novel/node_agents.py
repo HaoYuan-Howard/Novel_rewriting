@@ -25,8 +25,9 @@ from contracts.invariants import (
 from contracts.schema.orchestration import AgentProfile
 from contracts.schema.report import CheckReport
 from contracts.schema.stage2 import (
-    ChapterBlueprints, GlobalAgentTurnResponse, GlobalEvidencePatchTurn,
-    GlobalFullCandidateTurn, GlobalGrounding,
+    ChapterBlueprints, GlobalAgentTurnResponse,
+    GlobalCandidateAgentTurnResponse, GlobalCandidateFullTurn,
+    GlobalEvidencePatchTurn, GlobalFullCandidateTurn, GlobalGrounding,
 )
 from contracts.schema.stage4 import (
     BindingConcern, BlindCandidate, ChapterBindingResponse, EvidenceBinding,
@@ -186,11 +187,11 @@ class Stage2GlobalAgent(NodeExecutorAgent[GlobalGrounding]):
                     turn = self.client.ask_json(
                         prepared.system,
                         prepared.user,
-                        model_cls=GlobalAgentTurnResponse,
+                        model_cls=prepared.agent_response_model,
                         purpose=self.ctx.node,
                         max_tokens=extract.GLOBAL_MAX_TOKENS,
                         validator=(
-                            extract.validate_global_full_candidate_turn
+                            extract.global_full_candidate_validator(prepared)
                             if patch_base is None else
                             extract.global_evidence_patch_validator(
                                 prepared, patch_base)
@@ -215,9 +216,18 @@ class Stage2GlobalAgent(NodeExecutorAgent[GlobalGrounding]):
                     raise
 
                 if patch_base is None:
-                    if not isinstance(turn.payload, GlobalFullCandidateTurn):
+                    if prepared.candidate_only:
+                        if (not isinstance(turn, GlobalCandidateAgentTurnResponse)
+                                or not isinstance(
+                                    turn.payload, GlobalCandidateFullTurn)):
+                            raise ProvenanceRefused(
+                                'stage2.global candidate-only full turn '
+                                '通过 dynamic validator 后分支漂移')
+                    elif (not isinstance(turn, GlobalAgentTurnResponse)
+                          or not isinstance(turn.payload, GlobalFullCandidateTurn)):
                         raise ProvenanceRefused(
-                            'stage2.global full turn 通过 dynamic validator 后分支漂移')
+                            'stage2.global locator full turn '
+                            '通过 dynamic validator 后分支漂移')
                     response = turn.payload.candidate
                 else:
                     if not isinstance(turn.payload, GlobalEvidencePatchTurn):

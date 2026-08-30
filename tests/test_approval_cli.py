@@ -8,6 +8,7 @@ import pytest
 from contracts.invariants import APPROVAL_GATES, APPROVAL_SEEN
 from contracts.schema.api import (
     ApprovalDoc,
+    BlueprintSeenRequest,
     StructureApprovalRequest,
     StructureApprovalView,
     WritingApprovalRequest,
@@ -47,15 +48,27 @@ def test_approval_show_is_a_read_only_json_surface(monkeypatch, capsys, tmp_path
 def test_headless_seen_and_early_gates_reuse_approval_services(
         monkeypatch, capsys, tmp_path):
     calls = []
+    seen_request = BlueprintSeenRequest(
+        expected_binding_sha256='b' * 64,
+        expected_subject_sha256='a' * 64,
+        expected_main_text_artifact_sha256='c' * 64,
+        expected_code_version='test-code',
+        expected_rules_fingerprint='test-rules',
+    )
+    seen_path = tmp_path / 'blueprint-seen.json'
+    seen_path.write_text(seen_request.model_dump_json(indent=2), encoding='utf-8')
     monkeypatch.setattr(
         approvals, 'mark_seen',
-        lambda base, sid, key: calls.append(('seen', base, sid, key)) or _doc())
+        lambda base, sid, key, *, blueprint_subject=None: calls.append((
+            'seen', base, sid, key, blueprint_subject,
+        )) or _doc())
     monkeypatch.setattr(
         approvals, 'approve_gate',
         lambda base, sid, key: calls.append(('gate', base, sid, key)) or _doc())
 
     assert cli.main([
         'approval', 'seen', 'read', SID, '--base', str(tmp_path),
+        '--input', str(seen_path),
     ]) == X.OK
     capsys.readouterr()
     assert cli.main([
@@ -64,9 +77,24 @@ def test_headless_seen_and_early_gates_reuse_approval_services(
     capsys.readouterr()
 
     assert calls == [
-        ('seen', str(tmp_path), SID, 'read'),
+        ('seen', str(tmp_path), SID, 'read', seen_request),
         ('gate', str(tmp_path), SID, 's0'),
     ]
+
+
+def test_headless_read_seen_rejects_an_unbound_cli_confirmation(
+        monkeypatch, capsys, tmp_path):
+    called = []
+    monkeypatch.setattr(
+        approvals, 'mark_seen', lambda *_args, **_kwargs: called.append(True))
+
+    rc = cli.main([
+        'approval', 'seen', 'read', SID, '--base', str(tmp_path),
+    ])
+
+    assert rc == X.TERMINAL_STATE
+    assert '必须给 --input' in capsys.readouterr().err
+    assert called == []
 
 
 def test_headless_generic_gate_never_exposes_s4():

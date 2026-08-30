@@ -21,7 +21,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from typing import Any, Callable, Protocol
 
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 
 from contracts.invariants import BLUEPRINT_ARCHITECTURE
 from contracts.rules import REGISTRY
@@ -31,10 +31,13 @@ from contracts.schema.report import CheckReport
 from contracts.schema.evaluation import GlobalReview
 from contracts.schema.stage1 import MainText
 from contracts.schema.stage2 import (
-    BlueprintCharacterProjection, BlueprintProvenance, ChapterBlueprints,
-    GlobalAgentTurnResponse, GlobalEdit, GlobalEvidencePatchTurn,
-    GlobalFullCandidateTurn, GlobalGrounding, GlobalGroundingResponse,
-    GlobalProvenance, RoleSplitResponse,
+    BlueprintCharacterProjection, BlueprintProvenance, BlueprintScopeViolation,
+    ChapterBlueprints,
+    GlobalAgentTurnResponse, GlobalCandidateAgentTurnResponse,
+    GlobalCandidateFullTurn,
+    GlobalEdit, GlobalEvidencePatchTurn, GlobalFullCandidateTurn,
+    GlobalGrounding, GlobalGroundingCandidateResponse,
+    GlobalGroundingResponse, GlobalProvenance, RoleSplitResponse,
 )
 from novel import paths, prov
 from novel.config import MAX_CONCURRENCY
@@ -57,6 +60,10 @@ from novel.stages.stage2 import checks
 from novel.stages.stage2.character_refs import (
     blueprint_inventory_from_projection,
     materialize_blueprint_character_projection,
+)
+from novel.stages.stage2.global_contract import GlobalEvidenceContractSpec
+from novel.stages.stage2.global_evidence_candidates import (
+    GlobalEvidenceCandidateTable, compile_candidate_evidence,
 )
 from novel.stages.stage2.normalize import (
     EvidenceLocatorCorrection,
@@ -191,8 +198,24 @@ class GlobalCandidateContext:
 
     system: str
     user: str
+    contract_name: str
     _main_text: tuple[dict[str, Any], ...] = field(repr=False)
     _downstream: _GlobalDownstreamGuard = field(repr=False)
+    _contract: GlobalEvidenceContractSpec = field(repr=False)
+    _evidence_candidates: GlobalEvidenceCandidateTable | None = field(
+        repr=False)
+
+    @property
+    def response_model(self) -> type[BaseModel]:
+        return self._contract.response_model
+
+    @property
+    def agent_response_model(self) -> type[BaseModel]:
+        return self._contract.agent_response_model
+
+    @property
+    def candidate_only(self) -> bool:
+        return self._contract.candidate_only
 
 
 @dataclass(frozen=True)
@@ -211,7 +234,8 @@ class GlobalCandidateEvaluation:
     requested_model: str
     adopted_models: tuple[str, ...]
     response_sha256: str
-    _response: GlobalGroundingResponse = field(repr=False)
+    _response: GlobalGroundingResponse | GlobalGroundingCandidateResponse = field(
+        repr=False)
     _evidence_locator_failures: tuple[tuple[str, int, str, str], ...] = field(
         repr=False)
     _evidence_locator_corrections: tuple[EvidenceLocatorCorrection, ...] = field(
@@ -320,15 +344,6 @@ class BlueprintCandidateEvaluation:
             if chapter is None or not row.chapters or chapter in row.chapters
         ]
 
-
-class _ScopeViolationRow(StrictModel):
-    """`scope_violations[]` 内由本模块生成的结构化字符串载体。"""
-
-    batch: int
-    requested: list[int]
-    produced: list[int]
-    discarded_chapters: list[int]
-    duplicate_target: int
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 一、上游与判定 —— **唯一落点**
@@ -826,8 +841,10 @@ def build_prompts(
     if mt is None:
         raise UpstreamMissing(f'{MAIN_TEXT} 不在盘上——先跑 stage1')
     if ctx.node == 'stage2.global':
-        system = with_json_shape(prompts.GLOBAL_SYS, prompts.GLOBAL_HINT)
-        return [(None, system, build_global_user(ctx.title, mt))]
+        spec = _active_global_spec()
+        system, user, _candidates = _build_global_request(
+            ctx.title, mt, spec)
+        return [(None, system, user)]
 
     ordinals = tuple(int(s.get('chapter_ordinal') or 0) for s in mt)
     targets = tuple(chapters) or ordinals
@@ -875,6 +892,12 @@ def build_prompts(
 def _active_spec():
     """本次运行选用的 blueprint 契约（整跑用；修复按基线架构另选）。"""
     from novel.stages.stage2.contract import active_contract
+    return active_contract()
+
+
+def _active_global_spec() -> GlobalEvidenceContractSpec:
+    """本次运行选用的 global evidence wire 契约。"""
+    from novel.stages.stage2.global_contract import active_contract
     return active_contract()
 
 
@@ -1047,40 +1070,87 @@ def blueprint_context(title: str, main_text: list[dict[str, Any]],
     }
 
 
-def build_global_user(title: str, main_text: list[dict[str, Any]]) -> str:
-    """全书那一相的 user。**吃全书原文。**"""
+def build_global_user(
+    title: str,
+    main_text: list[dict[str, Any]],
+    *,
+    evidence_candidates: GlobalEvidenceCandidateTable | None = None,
+) -> str:
+    """全书那一相的 user。**吃全书原文。**
+
+    locator 控制臂保持原有正文块字节；candidate 臂的段标记与 lookup 来自同一张
+    ``GlobalEvidenceCandidateTable``，绝不在这里另切一次段。
+    """
+    body = (
+        _book_text(main_text)
+        if evidence_candidates is None
+        else evidence_candidates.render()
+    )
     return '\n\n'.join([
         f'《{title}》',
         '── 章节索引（一切对章的引用用阅读序章号）──\n' + _chapter_index(main_text),
-        '── 全书正文（不可变原文，按阅读序章号分块）──\n' + _book_text(main_text),
+        ('── 全书正文（不可变原文，按阅读序章号分块）──\n' + body
+         if evidence_candidates is None else
+         '── 全书证据候选（不可变原文；行首 ID 不属于正文）──\n' + body),
     ])
 
 
-def build_global_agent_system() -> str:
-    """为 agent 固定 full/patch 信封；legacy 单发仍沿用 direct global 形状。"""
-    from novel.stages.stage2 import prompts
+def _build_global_request(
+    title: str,
+    main_text: list[dict[str, Any]],
+    spec: GlobalEvidenceContractSpec,
+) -> tuple[str, str, GlobalEvidenceCandidateTable | None]:
+    """从同一份 MainText 构造 system/user/lookup 三元组。"""
+    candidates = (
+        GlobalEvidenceCandidateTable.build(main_text)
+        if spec.candidate_only else None
+    )
+    return (
+        spec.system,
+        build_global_user(
+            title, main_text, evidence_candidates=candidates),
+        candidates,
+    )
+
+
+def build_global_agent_system(
+    spec: GlobalEvidenceContractSpec | None = None,
+) -> str:
+    """为 agent 固定本臂信封；legacy 单发仍沿用 direct global 形状。"""
+    spec = spec or _active_global_spec()
 
     full = {
         'payload': {
             'kind': 'full_candidate',
-            'candidate': prompts.GLOBAL_HINT,
+            'candidate': spec.hint,
         },
     }
-    patch = {
-        'payload': {
-            'kind': 'evidence_patch',
-            'candidate_sha256': '代码反馈给出的64位小写sha256',
-            'changes': [{
-                'claim_path': '只能复制代码反馈 allowed_paths 中的一项',
-                'evidence': {
-                    'chapter_ordinal': 1,
-                    'locator': '指定章内原样出现且唯一的短片段',
-                },
-            }],
-        },
+    if spec.candidate_only:
+        return (
+            spec.instruction
+            + '\n\n最终只沿请求声明的唯一结构化出口提交一份'
+              '符合响应 JSON Schema 的完整对象，不要解释、不要 markdown。'
+              '每一次回答都必须使用 full_candidate 并完整重交 candidate；'
+              '代码反馈指出 evidence_candidate_id 格式、成员或其他 HARD 失败时，'
+              '仍使用同一 full_candidate 形状完整重交，不存在局部修订出口。'
+            + '\n\n完整候选形状：\n'
+            + json.dumps(full, ensure_ascii=False, indent=2)
+        )
+
+    evidence = {
+        'chapter_ordinal': 1,
+        'locator': '指定章内原样出现且唯一的短片段',
     }
+    patch = {'payload': {
+        'kind': 'evidence_patch',
+        'candidate_sha256': '代码反馈给出的64位小写sha256',
+        'changes': [{
+            'claim_path': '只能复制代码反馈 allowed_paths 中的一项',
+            'evidence': evidence,
+        }],
+    }}
     return (
-        prompts.GLOBAL_SYS
+        spec.instruction
         + '\n\n最终只沿请求声明的唯一结构化出口提交一份'
           '符合响应 JSON Schema 的完整对象，不要解释、不要 markdown。'
           '第一次回答必须使用 full_candidate；只有代码反馈明确给出 '
@@ -1185,7 +1255,7 @@ def _scope_split(
     matching = [bp for bp in raw if bp.get('chapter_ordinal') == ordinal]
     violation = None
     if produced != [ordinal]:
-        violation = _ScopeViolationRow(
+        violation = BlueprintScopeViolation(
             batch=batch,
             requested=[ordinal],
             produced=produced,
@@ -1213,7 +1283,9 @@ def _canonical_sha256(value: object) -> str:
     return hashlib.sha256(payload).hexdigest()
 
 
-def global_response_sha256(response: GlobalGroundingResponse) -> str:
+def global_response_sha256(
+    response: GlobalGroundingResponse | GlobalGroundingCandidateResponse,
+) -> str:
     """hash-bound patch 的主体：未归一、无 provenance 的强类型 raw response。"""
     return _canonical_sha256(response.model_dump(by_alias=True, mode='json'))
 
@@ -1235,6 +1307,10 @@ def global_evidence_patch_scope(
     evaluation: GlobalCandidateEvaluation,
 ) -> GlobalEvidencePatchScope | None:
     """仅把纯 ``global_evidence_unlocated`` 收成关闭式 patch allowlist。"""
+    if not isinstance(evaluation._response, GlobalGroundingResponse):
+        # 闭集响应在进入业务判据前已经由 candidate table 铸成精确 SourceSpan，
+        # 不存在 locator 局部修订；其它语义 HARD 仍要求完整候选。
+        return None
     if evaluation.hard_hits != ('global_evidence_unlocated',):
         return None
     if global_response_sha256(evaluation._response) != evaluation.response_sha256:
@@ -1340,6 +1416,8 @@ def apply_global_evidence_patch(
     patch: GlobalEvidencePatchTurn,
 ) -> GlobalGroundingResponse:
     """关闭式合并 evidence patch；返回值仍须再走完整 evaluate/finalize。"""
+    if not isinstance(evaluation._response, GlobalGroundingResponse):
+        raise ValueError('candidate-only 响应不接受 locator evidence patch')
     actual_base_sha256 = global_response_sha256(evaluation._response)
     if actual_base_sha256 != evaluation.response_sha256:
         raise ValueError(
@@ -1394,6 +1472,65 @@ def validate_global_full_candidate_turn(
     if not isinstance(response.payload, GlobalFullCandidateTurn):
         return '本轮只接受 full_candidate；evidence_patch 尚无当前候选可绑定'
     return None
+
+
+def _compile_global_response(
+    prepared: GlobalCandidateContext,
+    response: GlobalGroundingResponse | GlobalGroundingCandidateResponse,
+) -> dict[str, Any]:
+    """把 wire response 收到既有正式前形；candidate ID 绝不穿过此边界。"""
+    if prepared.candidate_only:
+        if not isinstance(response, GlobalGroundingCandidateResponse):
+            raise ValueError('本次只接受 candidate-only global response')
+        if prepared._evidence_candidates is None:
+            raise ProvenanceRefused('candidate-only global request 缺冻结候选表')
+        return compile_candidate_evidence(
+            response.model_dump(by_alias=True, mode='json'),
+            prepared._evidence_candidates,
+        )
+    if not isinstance(response, GlobalGroundingResponse):
+        raise ValueError('locator 控制臂只接受 GlobalGroundingResponse')
+    return response.model_dump(by_alias=True, mode='json')
+
+
+def global_response_validator(
+    prepared: GlobalCandidateContext,
+) -> Callable[[BaseModel, Any], str | None]:
+    """动态闭集成员闸；未知 ID 在 accepted/落盘之前回到同次响应修复。"""
+    def validate(response: BaseModel, _wire: Any) -> str | None:
+        try:
+            _compile_global_response(prepared, response)  # type: ignore[arg-type]
+        except (TypeError, ValueError) as exc:
+            return str(exc)
+        return None
+
+    return validate
+
+
+def global_full_candidate_validator(
+    prepared: GlobalCandidateContext,
+) -> Callable[[BaseModel, Any], str | None]:
+    """agent 首轮/完整重写轮的分支 + candidate membership 联合闸。"""
+    def validate(response: BaseModel, _wire: Any) -> str | None:
+        if prepared.candidate_only:
+            if not isinstance(response, GlobalCandidateAgentTurnResponse):
+                return '本次只接受 candidate-only agent 信封'
+            if not isinstance(response.payload, GlobalCandidateFullTurn):
+                return '本轮只接受 full_candidate；evidence_patch 尚无当前候选可绑定'
+            candidate = response.payload.candidate
+        else:
+            if not isinstance(response, GlobalAgentTurnResponse):
+                return '本次只接受 locator agent 信封'
+            if not isinstance(response.payload, GlobalFullCandidateTurn):
+                return '本轮只接受 full_candidate；evidence_patch 尚无当前候选可绑定'
+            candidate = response.payload.candidate
+        try:
+            _compile_global_response(prepared, candidate)
+        except (TypeError, ValueError) as exc:
+            return str(exc)
+        return None
+
+    return validate
 
 
 def global_evidence_patch_validator(
@@ -1490,20 +1627,24 @@ def prepare_global_candidate(
         raise ValueError(
             f'prepare_global_candidate 只接受 stage2.global，实得 {ctx.node!r}')
     store = ArtifactStore(ctx)
-    requests = build_prompts(ctx)
-    _ordinal, system, user = requests[0]
-    if agent_envelope:
-        system = build_global_agent_system()
     main_text = _read_main_text(store)
     assert main_text is not None
+    spec = _active_global_spec()
+    system, user, evidence_candidates = _build_global_request(
+        ctx.title, main_text, spec)
+    if agent_envelope:
+        system = build_global_agent_system(spec)
     with ctx.validation_reads():
         downstream = _read_global_downstream_guard(
             ctx, store, main_text, observe=True)
     return GlobalCandidateContext(
         system=system,
         user=user,
+        contract_name=spec.name,
         _main_text=tuple(copy.deepcopy(main_text)),
         _downstream=downstream,
+        _contract=spec,
+        _evidence_candidates=evidence_candidates,
     )
 
 
@@ -1589,7 +1730,7 @@ def _global_feedback(
 def _materialize_global_evaluation(
         ctx: RunContext,
         prepared: GlobalCandidateContext,
-        response: GlobalGroundingResponse,
+        response: GlobalGroundingResponse | GlobalGroundingCandidateResponse,
         *, requested_model: str,
         adopted_models: tuple[str, ...],
         source_attempt_id: str | None,
@@ -1598,10 +1739,10 @@ def _materialize_global_evaluation(
     """归一、铸候选来源账并判定；``settle=False`` 时严格无终态副作用。"""
     main_text = copy.deepcopy(list(prepared._main_text))
     data, accounting = normalize_global(
-        response.model_dump(by_alias=True), main_text)
+        _compile_global_response(prepared, response), main_text)
     provenance = ctx.llm_provenance(
         GlobalProvenance,
-        prompts={'GLOBAL_SYS': prepared.system},
+        prompts={prepared._contract.sys_name: prepared.system},
         model=requested_model,
         adopted_models=adopted_models,
         settle=settle,
@@ -1632,7 +1773,7 @@ def evaluate_global_candidate(
         ctx: RunContext,
         source: _GlobalResponseSource,
         prepared: GlobalCandidateContext,
-        response: GlobalGroundingResponse,
+        response: GlobalGroundingResponse | GlobalGroundingCandidateResponse,
 ) -> GlobalCandidateEvaluation:
     """代码评估一轮 agent 候选；不写 formal/INVALID、不归档、不结算 usage。"""
     _assert_global_guard_current(ctx, prepared)
@@ -1920,9 +2061,10 @@ def run_global(ctx: RunContext, client: LlmClient) -> GlobalGrounding:
     response = client.ask_json(
         prepared.system,
         prepared.user,
-        model_cls=GlobalGroundingResponse,
+        model_cls=prepared.response_model,
         purpose=ctx.node,
         max_tokens=GLOBAL_MAX_TOKENS,
+        validator=global_response_validator(prepared),
     )
     evaluation = evaluate_global_candidate(
         ctx, client, prepared, response)
@@ -2279,7 +2421,7 @@ def _run_chapter_requests(
     # checkpoint resume 时仅因线程调度不同就会改变 artifact fingerprint，进而把
     # “formal 已落、committed 未落”的幂等收尾误判成新一轮。
     violations.sort(key=lambda row: (
-        _ScopeViolationRow.model_validate_json(row).batch, row))
+        BlueprintScopeViolation.model_validate_json(row).batch, row))
     return [results[o] for o, _s, _u in concrete if o in results], violations, errors
 
 
@@ -2542,7 +2684,7 @@ def _record_is_targeted(row: Any, targets: set[int]) -> bool:
 
 def _keep_scope_violation(row: str, targets: set[int]) -> bool:
     try:
-        requested = set(_ScopeViolationRow.model_validate_json(row).requested)
+        requested = set(BlueprintScopeViolation.model_validate_json(row).requested)
     except (TypeError, ValueError, ValidationError):
         return True
     return requested.isdisjoint(targets)

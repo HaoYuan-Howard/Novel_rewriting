@@ -746,6 +746,23 @@ BLUEPRINT_ARCHITECTURES: Final = ('extraction-ir-v2', 'extraction-ir-v3.1')
 BLUEPRINT_ARCHITECTURE: Final = 'extraction-ir-v3.1'
 assert BLUEPRINT_ARCHITECTURE in BLUEPRINT_ARCHITECTURES
 
+#: ``stage2.global`` 的模型证据响应契约。两臂最终都编译成同一份
+#: ``GlobalGrounding``（正式证据仍是 ``SourceSpan``），因此这里只是 wire strategy，
+#: 不是 artifact architecture，也不进入盘上 schema 版本。
+#:
+#: ``paragraph-candidate-v1`` 仍是 TODO-45 P2a 的冷缓存 A/B 臂：在固定语料证明
+#: 人审质量不回退、且总 wall/token/成本改善之前，默认必须继续是 locator。
+GLOBAL_EVIDENCE_CONTRACTS: Final = (
+    'locator-v1',
+    'paragraph-candidate-v1',
+)
+GLOBAL_EVIDENCE_CONTRACT: Final = 'locator-v1'
+assert GLOBAL_EVIDENCE_CONTRACT in GLOBAL_EVIDENCE_CONTRACTS
+
+#: Stage2 Blueprint 只读工作包当前绑定的是正式稿还是 live 问题稿。
+#: 只有 formal 工作包能提交 ``seen.read``；invalid 包只辅助修复。
+BLUEPRINT_REVIEW_SUBJECT_KINDS: Final = ('formal', 'invalid')
+
 #: `_provenance.verbatim_failures` 里 `位置 == 'span'` 那一族的根因取值面。
 #: 判据 `verbatim_failed` 只按根因**计数**，不按根因分流，所以这一张表存在的意义是
 #: 「产地只许说这几句话」——措辞漂了，报告上同一种病会分裂成两行。
@@ -1555,8 +1572,8 @@ FREE_ENTRIES: Final = {
     '--validate-edit': '按 stage7 apply-edit 的同一构建与判定链预检人工编辑，不写盘',
     '--emit-review-template': ('向 stdout 输出绑定当前 stage2 全局复核项 hash/evidence 的'
                                '安全 UNVER 决策骨架，不写盘'),
-    '--emit-review-workpack': ('向 stdout 输出 Stage2 逐项主体与原文精确命中上下文；'
-                               '只辅助人工核验，不自动做 PASS/FAIL'),
+    '--emit-review-workpack': ('向 stdout 输出 Stage2 Global 逐项证据包，或 Blueprint '
+                                '异常优先全章包；只辅助人工核验，不自动做决定'),
     '--adopt-residual': '显式采纳可安全应用的 high residual 建议并重放 stage7 确定性链',
     # ⚠ 它**不是**通用 response-repair 的一种：那条路只收 parse/require/schema
     #   （`repair_eligible=True`）。Stage4 的 validator 拒稿明确不在通用修复面
@@ -1939,10 +1956,11 @@ NODES: Final[dict[str, NodeSpec]] = {
     #   `blueprint --chapters`（定向重生成那几章），而它此前只挂在 `stage5.write` 上。
     #   漏了它，那 19 条在 F5-4 注册的那一刻全被 `_validate` ⑧ 拒收。
     'stage2.blueprint': NodeSpec('stage2', 'R-3',  True,  'stage2 逐章抽取',
-                                 flags=('--dry-run', '--check-only', '--renormalize',
-                                        '--chapters', '--patch',
-                                        '--revalidate', '--actor', '--reason',
-                                        '--response-repair'),
+                                  flags=('--dry-run', '--check-only', '--renormalize',
+                                         '--chapters', '--patch',
+                                         '--emit-review-workpack',
+                                         '--revalidate', '--actor', '--reason',
+                                         '--response-repair'),
                                  produces=(artifact_paths.STAGE2_CHAPTER_BLUEPRINTS,)),
     # ⚠⚠ Stage4 两个付费相仍沿用 `deepseek-v4-pro`，但调用拓扑已分开：
     #   A = 一条小型整书策略 + N 条逐章私有 session，代码聚合后跑整书 HARD；

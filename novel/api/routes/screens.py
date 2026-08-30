@@ -21,7 +21,8 @@ from fastapi import APIRouter, Depends, Query
 from fastapi.responses import PlainTextResponse
 
 from contracts.schema.api import (
-    GlobalReviewView, GlobalView, InboxView, ReadingView, ReviewView,
+    BlueprintReviewWorkpack, GlobalReviewView, GlobalView, InboxView,
+    ReadingView, ReviewView,
     Stage4View, Stage5View, Stage6View, Stage7View,
 )
 from novel.api.deps import checked_sid, get_base
@@ -30,7 +31,9 @@ from novel.orchestrator import state
 from novel.stages.stage7 import assemble
 from novel.views.inbox import inbox_view
 from novel.views.global_review import global_review_view
-from novel.views.stage2 import global_view, reading_view
+from novel.views.stage2 import (
+    blueprint_review_workpack, global_view, reading_view,
+)
 from novel.views.stage4 import stage4_view
 from novel.views.stage5 import review_view, stage5_view
 from novel.views.stage6 import stage6_view
@@ -76,6 +79,18 @@ def get_stage2_global(sid: str = Depends(checked_sid),
                       base: str = Depends(get_base)) -> GlobalView:
     """S-05 全局设定。剧透遮蔽是前端的纯展示行为（`R-11.13`），本端点全量下发。"""
     return global_view(base, sid)
+
+
+@router.get(
+    '/{sid}/stage2/blueprint-review-workpack',
+    response_model=BlueprintReviewWorkpack,
+    response_model_by_alias=True,
+)
+def get_stage2_blueprint_review_workpack(
+    sid: str = Depends(checked_sid), base: str = Depends(get_base),
+) -> BlueprintReviewWorkpack:
+    """整本 Blueprint 的异常优先只读面；不产生决定，也不开任何 gate。"""
+    return blueprint_review_workpack(base, sid)
 
 
 @router.get('/{sid}/stage2/global-review', response_model=GlobalReviewView)

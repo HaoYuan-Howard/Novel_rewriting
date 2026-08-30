@@ -26,7 +26,7 @@ from fastapi.testclient import TestClient          # noqa: E402
 
 from contracts.invariants import APPROVAL_GATES   # noqa: E402
 from contracts.schema import decode_artifact      # noqa: E402
-from contracts.schema.api import DraftEditPreview # noqa: E402
+from contracts.schema.api import BlueprintSeenRequest, DraftEditPreview # noqa: E402
 from contracts.schema.stage7 import NameMap        # noqa: E402
 from novel.api.app import UI_HEADER, create_app    # noqa: E402
 from novel.run import RunContext                    # noqa: E402
@@ -186,10 +186,28 @@ def _stamp_chain(box, upto: str) -> None:
     是在摆前置事实，不是绕守卫；`approve_gate` 的链式约束由 approvals 自己的测试守。
     """
     from novel.orchestrator import approvals
+    from novel.views.stage2 import blueprint_review_workpack
 
     assert upto in APPROVAL_GATES, f'不是现役审批闸：{upto}'
     upto_index = APPROVAL_GATES.index(upto)
     required_gates = APPROVAL_GATES[:upto_index + 1]
+    # backfill 只补可由产物确定的 gate，绝不再替 Commander 伪造阅读事实。
+    # 测试前置也必须走与产品相同的 hash-bound seen 入口。
+    approvals.mark_seen(box.root, box.sid, 'global')
+    pack = blueprint_review_workpack(box.root, box.sid)
+    approvals.mark_seen(
+        box.root,
+        box.sid,
+        'read',
+        blueprint_subject=BlueprintSeenRequest(
+            expected_binding_sha256=pack.binding_sha256,
+            expected_subject_sha256=pack.subject_sha256,
+            expected_main_text_artifact_sha256=(
+                pack.binding.main_text_artifact_sha256),
+            expected_code_version=pack.binding.code_version,
+            expected_rules_fingerprint=pack.binding.rules_fingerprint,
+        ),
+    )
     # Explicit backfill creates the same typed/root/freshness proofs as the real
     # product path.  Then trim only the checklist gates beyond the precondition
     # this test needs; never invent legacy v1 booleans against today's files.
@@ -208,6 +226,7 @@ def _stamp_chain(box, upto: str) -> None:
 
 def test_stamp_chain_follows_current_gate_order_without_touching_stage3(monkeypatch):
     from novel.orchestrator import approvals
+    from novel.views import stage2 as stage2_view
 
     current_gates = {gate: True for gate in APPROVAL_GATES}
     record = approvals._fresh_record('book-1').model_copy(update={
@@ -215,6 +234,21 @@ def test_stamp_chain_follows_current_gate_order_without_touching_stage3(monkeypa
         'gate_proofs': {gate: f'proof-{gate}' for gate in APPROVAL_GATES},
     })
     written = []
+    seen = []
+    pack = SimpleNamespace(
+        binding_sha256='b' * 64,
+        subject_sha256='a' * 64,
+        binding=SimpleNamespace(
+            main_text_artifact_sha256='c' * 64,
+            code_version='test-code',
+            rules_fingerprint='test-rules',
+        ),
+    )
+    monkeypatch.setattr(
+        approvals, 'mark_seen',
+        lambda _root, _sid, key, **kwargs: seen.append((key, kwargs)))
+    monkeypatch.setattr(
+        stage2_view, 'blueprint_review_workpack', lambda *_args: pack)
     monkeypatch.setattr(
         approvals, 'backfill_from_disk',
         lambda _root, _sid: SimpleNamespace(
@@ -225,6 +259,8 @@ def test_stamp_chain_follows_current_gate_order_without_touching_stage3(monkeypa
     _stamp_chain(SimpleNamespace(root=Path('unused'), sid='book-1'), 's5')
 
     assert len(written) == 1
+    assert [key for key, _kwargs in seen] == ['global', 'read']
+    assert isinstance(seen[1][1]['blueprint_subject'], BlueprintSeenRequest)
     assert written[0].gate == {
         's0': True, 's1': True, 's2': True, 's4': True,
         's5': True, 's6': False, 's7': False,
@@ -235,6 +271,22 @@ def test_stamp_chain_follows_current_gate_order_without_touching_stage3(monkeypa
 
 
 # ───────────────────────── 一、章节改稿 ─────────────────────────
+
+def test_blueprint_seen_http_body_requires_the_complete_workpack_binding(
+        validation_client):
+    response = validation_client.post(
+        '/api/novels/422/approvals/seen/read',
+        json={
+            'expected_subject_sha256': 'a' * 64,
+            'expected_main_text_artifact_sha256': 'b' * 64,
+            'expected_code_version': 'test-code',
+            'expected_rules_fingerprint': 'test-rules',
+        },
+    )
+
+    assert response.status_code == 422
+    assert 'expected_binding_sha256' in response.text
+
 
 def test_draft_preview_route_returns_the_shared_typed_projection(
         validation_client, monkeypatch):

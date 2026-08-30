@@ -30,7 +30,10 @@ from pathlib import Path
 from typing import Mapping
 from urllib.parse import urlsplit
 
-from contracts.invariants import BLUEPRINT_ARCHITECTURE, BLUEPRINT_ARCHITECTURES
+from contracts.invariants import (
+    BLUEPRINT_ARCHITECTURE, BLUEPRINT_ARCHITECTURES,
+    GLOBAL_EVIDENCE_CONTRACT, GLOBAL_EVIDENCE_CONTRACTS,
+)
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -63,6 +66,10 @@ THINKING_MODES = ('on', 'off')
 #: 这里的默认（`contracts/invariants.py::BLUEPRINT_ARCHITECTURE`），不是取值面。
 #: ⚠ 名字带 `BLUEPRINT`：global 将来可能有自己的契约版本，不占它的命名空间。
 DEFAULT_STAGE2_BLUEPRINT_CONTRACT = BLUEPRINT_ARCHITECTURE
+
+#: ``stage2.global`` 的 evidence wire 契约。candidate 臂只用于独立冷缓存 A/B；
+#: 它不改变正式 GlobalGrounding / GlobalEdit 形状，达标前不得翻默认。
+DEFAULT_STAGE2_GLOBAL_EVIDENCE_CONTRACT = GLOBAL_EVIDENCE_CONTRACT
 
 #: 缓存目录。`.gitignore` 已经盖住它（连同 `Output/` / `Novel_data/` / `.env`）。
 DEFAULT_CACHE_DIRNAME = '.llm_cache'
@@ -99,6 +106,7 @@ ENV_KEYS: dict[str, str] = {
     'backoff_base': 'DEEPSEEK_BACKOFF_BASE',
     'concurrency': 'NOVEL_CONCURRENCY',
     'stage2_blueprint_contract': 'NOVEL_STAGE2_BLUEPRINT_CONTRACT',
+    'stage2_global_evidence_contract': 'NOVEL_STAGE2_GLOBAL_EVIDENCE_CONTRACT',
 }
 
 
@@ -126,6 +134,7 @@ class Config:
     backoff_base: float = DEFAULT_BACKOFF_BASE
     concurrency: int = DEFAULT_CONCURRENCY
     stage2_blueprint_contract: str = DEFAULT_STAGE2_BLUEPRINT_CONTRACT
+    stage2_global_evidence_contract: str = DEFAULT_STAGE2_GLOBAL_EVIDENCE_CONTRACT
 
     def __post_init__(self) -> None:
         """取值面的闸。**放这里不放 `load_config`**，于是手搭一个 `Config` 也拦得住。
@@ -175,6 +184,12 @@ class Config:
                       f'stage2.blueprint 的契约只有 {BLUEPRINT_ARCHITECTURES}'
                       '（大小写敏感）——静默兜底会把一次 A/B 跑成另一个臂，'
                       '而账本里看不出来是拼写错了')
+        if self.stage2_global_evidence_contract not in GLOBAL_EVIDENCE_CONTRACTS:
+            raise bad(
+                'stage2_global_evidence_contract',
+                f'stage2.global evidence 契约只有 {GLOBAL_EVIDENCE_CONTRACTS}'
+                '（大小写敏感）——candidate 臂是受控 A/B，拼错不得静默回 locator',
+            )
 
     @property
     def has_key(self) -> bool:
@@ -187,7 +202,10 @@ class Config:
                  f'base_url={self.base_url!r}, '
                  f'proxy_url=<{"set" if self.proxy_url else "unset"}>, '
                  f'cache_dir={str(self.cache_dir)!r}, timeout={self.timeout}, '
-                f'max_retries={self.max_retries}, concurrency={self.concurrency})')
+                f'max_retries={self.max_retries}, concurrency={self.concurrency}, '
+                f'stage2_blueprint_contract={self.stage2_blueprint_contract!r}, '
+                f'stage2_global_evidence_contract='
+                f'{self.stage2_global_evidence_contract!r})')
 
     __str__ = __repr__
 
@@ -257,4 +275,7 @@ def load_config(*, env: Mapping[str, str] | None = None,
         stage2_blueprint_contract=(
             src.get(ENV_KEYS['stage2_blueprint_contract'])
             or DEFAULT_STAGE2_BLUEPRINT_CONTRACT),
+        stage2_global_evidence_contract=(
+            src.get(ENV_KEYS['stage2_global_evidence_contract'])
+            or DEFAULT_STAGE2_GLOBAL_EVIDENCE_CONTRACT),
     )

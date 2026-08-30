@@ -4,13 +4,15 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, Query
 
 from contracts.schema.api import (
-    ApprovalBackfillResult, ApprovalDoc, ApprovalWorkpack, DesignReviewerKind,
+    ApprovalBackfillResult, ApprovalDoc, ApprovalWorkpack, BlueprintSeenRequest,
+    DesignReviewerKind,
     DesignReviewRequest, DesignReviewTemplate, GateKey, SeenKey,
     Stage5ClosureRequest, Stage5ClosureTemplate,
     Stage6ApprovalWorkpack, Stage7ApprovalWorkpack,
     StructureApprovalRequest, WritingApprovalRequest,
 )
 from novel.api.deps import checked_sid, get_base
+from novel.errors import ApprovalRequired
 from novel.orchestrator import approvals
 from novel.views.stage6 import stage6_approval_workpack
 from novel.views.stage7 import stage7_approval_workpack
@@ -130,9 +132,18 @@ def backfill_approvals(
 
 @router.post('/seen/{key}', response_model=ApprovalDoc)
 def mark_seen(
-    key: SeenKey, sid: str = Depends(checked_sid), base: str = Depends(get_base),
+    key: SeenKey,
+    request: BlueprintSeenRequest | None = None,
+    sid: str = Depends(checked_sid),
+    base: str = Depends(get_base),
 ) -> ApprovalDoc:
-    return approvals.mark_seen(base, sid, key)
+    if key == 'read' and request is None:
+        raise ApprovalRequired(
+            'seen.read 必须携带实际读过的 Blueprint 工作包身份；请刷新阅读页后重试')
+    if key == 'global' and request is not None:
+        raise ApprovalRequired('seen.global 不接受 Blueprint 工作包身份')
+    return approvals.mark_seen(
+        base, sid, key, blueprint_subject=request)
 
 
 @router.post('/writing', response_model=ApprovalDoc)

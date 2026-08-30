@@ -15,15 +15,20 @@ view 不编名字：编出来的名字比一个看得出来的 id 更坏（它�
 """
 from __future__ import annotations
 
+import hashlib
+import json
+import os
+
 from contracts.artifacts import (
     STAGE1_MAIN_TEXT, STAGE2_CHAPTER_BLUEPRINTS, STAGE2_GLOBAL_GROUNDING,
 )
-
-import os
-
 from contracts.schema.api import (
     ArcTrackLine, GlobalAddressLine, GlobalArcView, GlobalCharacterLine,
     GlobalKnowledgeEventLine, GlobalRelationLine, GlobalSecretLine, GlobalView, NameRef,
+    BlueprintReviewBeat, BlueprintReviewBinding, BlueprintReviewCausalLink,
+    BlueprintReviewChapter, BlueprintReviewCoverage,
+    BlueprintReviewCoverageSegment, BlueprintReviewFact, BlueprintReviewWorkpack,
+    CompactApprovalCheck,
     ReadingBeatLine, ReadingFactLine, ReadingHinge, ReadingNarrationLine,
     ReadingSegment, ReadingView,
 )
@@ -246,3 +251,264 @@ def _blueprint_of(store: ArtifactStore, ordinal: int):
     entry: Blueprint | None = next(
         (b for b in art.blueprints if b.chapter_ordinal == ordinal), None)
     return entry, art.provenance if entry is not None else None
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# 四、Blueprint 只读审阅工作包（book-level）
+# ───────────────────────────────────────────────────────────────────────
+
+# 这些字段仍在当前正式产物与生产 CheckReport 里被完整校验，
+# 只是不在紧凑人读面里重复铺开。名单必须随包发出：「没展示」不能
+# 被误读成「没检查」。
+_BLUEPRINT_MECHANICAL_FIELDS_HIDDEN = (
+    'blueprints[].beats[].beat_id',
+    'blueprints[].beats[].span.start/end',
+    'blueprints[].fact_atoms[].fact_id',
+    'blueprints[].fact_atoms[].source_beat_ref',
+    'blueprints[].fact_atoms[].source.start/end',
+    'blueprints[].beats[].hinges[].hinge_id',
+    'blueprints[].beats[].hinges[].source.start/end',
+    'chapter_blueprints._provenance',
+)
+
+
+def _canonical_sha256(value: object) -> str:
+    raw = json.dumps(
+        value, ensure_ascii=False, sort_keys=True, separators=(',', ':'),
+        allow_nan=False,
+    ).encode('utf-8')
+    return hashlib.sha256(raw).hexdigest()
+
+
+def _compact_check(report) -> CompactApprovalCheck:
+    """只裁剪生产 ``CheckReport``，不再跑或重拼任何判据。
+
+    views 层有结构守卫，不许直接 import ``novel.report``；因而这里
+    只做与通用终审工作包同形的无损投影：非 ok 行全留、正常 metric
+    全留，其余绿行由四态计数与扫描总分母证明执行过。
+    """
+    return CompactApprovalCheck(
+        rules_scanned=len(report.rules),
+        counts=report.counts,
+        provenance=report.provenance,
+        attention=[row for row in report.rules if row.status != 'ok'],
+        metrics=[
+            row for row in report.rules
+            if row.sev == 'metric' and row.status == 'ok'
+        ],
+    )
+
+
+def _chapter_attention(report) -> dict[int, list[str]]:
+    """只使用 Finding 的 typed ``output_ordinal``，不从 detail/evidence 散文猜章号。"""
+    by_ordinal: dict[int, list[str]] = {}
+    for row in report.rules:
+        if row.status == 'ok':
+            continue
+        for item in row.findings:
+            if item.output_ordinal is None:
+                continue
+            rules = by_ordinal.setdefault(item.output_ordinal, [])
+            if row.rule not in rules:
+                rules.append(row.rule)
+    return by_ordinal
+
+
+def _review_chapter(
+    section,
+    blueprint: Blueprint,
+    *,
+    attention_rules: list[str],
+) -> BlueprintReviewChapter:
+    text = section.text
+    fact_by_id = {atom.fact_id: atom for atom in blueprint.fact_atoms}
+    facts_by_beat: dict[str, list[BlueprintReviewFact]] = {}
+    for atom in blueprint.fact_atoms:
+        facts_by_beat.setdefault(atom.source_beat_ref, []).append(
+            BlueprintReviewFact(
+                claim=atom.claim,
+                kind=atom.kind,
+                obligation=atom.obligation,
+                evidence_text=(
+                    atom.source.text if atom.source is not None else None),
+                participant_char_ids=list(atom.participant_char_ids),
+            ))
+
+    beat_order = {
+        beat.beat_id: index for index, beat in enumerate(blueprint.beats, 1)
+    }
+    spans = [
+        (beat_order[beat.beat_id], beat.span.start, beat.span.end)
+        for beat in blueprint.beats
+        if (beat.span is not None
+            and 0 <= beat.span.start < beat.span.end <= len(text))
+    ]
+    coverage_segments = [
+        BlueprintReviewCoverageSegment(
+            beat_order=order,
+            chars=end - start,
+            text=text[start:end],
+            flagged=(order is None and end - start >= HOLE_MIN_CHARS),
+        )
+        for order, start, end in walk_segments(len(text), spans)
+    ]
+    covered_chars = sum(
+        row.chars for row in coverage_segments if row.beat_order is not None)
+    loose_chars = sum(
+        row.chars for row in coverage_segments if row.beat_order is None)
+
+    beats = [
+        BlueprintReviewBeat(
+            beat_order=index,
+            located=(
+                beat.span is not None
+                and 0 <= beat.span.start < beat.span.end <= len(text)
+            ),
+            time_layer=beat.time_layer,
+            place=beat.place,
+            present_char_ids=list(beat.present_char_ids),
+            facts=facts_by_beat.get(beat.beat_id, []),
+            hinges=[
+                ReadingHinge(
+                    kind=hinge.kind,
+                    text=(hinge.source.text if hinge.source is not None else None),
+                )
+                for hinge in beat.hinges
+            ],
+        )
+        for index, beat in enumerate(blueprint.beats, 1)
+    ]
+
+    return BlueprintReviewChapter(
+        chapter_ordinal=blueprint.chapter_ordinal,
+        anomalous=bool(attention_rules),
+        attention_rules=list(attention_rules),
+        chapter_function=blueprint.chapter_function,
+        coverage=BlueprintReviewCoverage(
+            text_chars=len(text),
+            covered_chars=covered_chars,
+            loose_chars=loose_chars,
+            uncovered_min_chars=HOLE_MIN_CHARS,
+            segments=coverage_segments,
+        ),
+        beats=beats,
+        causal_links=[
+            BlueprintReviewCausalLink(
+                before_claim=fact_by_id[edge.before].claim,
+                after_claim=fact_by_id[edge.after].claim,
+            )
+            for edge in blueprint.causal_edges
+        ],
+        entry_state_claims=[
+            fact_by_id[ref].claim for ref in blueprint.entry_state_refs
+        ],
+        ending_state_claims=[
+            fact_by_id[ref].claim for ref in blueprint.ending_state_refs
+        ],
+        narration=[
+            ReadingNarrationLine(
+                grammatical_person=row.grammatical_person,
+                narrator_char_id=row.narrator_char_id,
+                focalizer_char_id=row.focalizer_char_id,
+                pronoun_surfaces=list(row.pronoun_surfaces),
+            )
+            for row in blueprint.narration
+        ],
+    )
+
+
+def _blueprint_review_snapshot(
+    store: ArtifactStore,
+    *,
+    title: str,
+) -> BlueprintReviewWorkpack:
+    """从同一次严格读取的主体、字节摘要与生产报告组一份快照。"""
+    from novel.stages.stage2 import extract
+
+    invalid_rel = paths.invalid_of(BP_REL)
+    blueprint_rel = invalid_rel if store.exists(invalid_rel) else BP_REL
+    main, main_sha256 = store.read_own_with_sha256(
+        MainText, MAIN_TEXT, require_current=True)
+    blueprints, blueprint_sha256 = store.read_own_with_sha256(
+        ChapterBlueprints, blueprint_rel, require_current=True)
+    report = extract.run_check_only(store.ctx)
+    if report.provenance.invalid != (blueprint_rel == invalid_rel):
+        raise ArtifactUnreadable(
+            'Blueprint 工作包读取期间 formal/INVALID 主体发生切换；'
+            '请刷新后重试')
+
+    main_by_ordinal = {
+        section.chapter_ordinal: section for section in main.root
+    }
+    blueprint_by_ordinal = {
+        row.chapter_ordinal: row for row in blueprints.blueprints
+    }
+    if (len(main_by_ordinal) != len(main.root)
+            or len(blueprint_by_ordinal) != len(blueprints.blueprints)
+            or set(main_by_ordinal) != set(blueprint_by_ordinal)):
+        # 章覆盖正确与否仍由 report 中的 ``chapter_coverage`` 判；
+        # 这里只拒绝构造一份悠然少章的「完整工作包」。
+        raise ArtifactUnreadable(
+            'Blueprint 审阅工作包要求 MainText/ChapterBlueprints 章集'
+            '完全相等；当前存在缺章、多章或重号，请先查看生产 '
+            'CheckReport.chapter_coverage')
+
+    attention = _chapter_attention(report)
+    chapters = [
+        _review_chapter(
+            main_by_ordinal[ordinal], blueprint_by_ordinal[ordinal],
+            attention_rules=attention.get(ordinal, []),
+        )
+        for ordinal in sorted(main_by_ordinal)
+    ]
+    chapters.sort(key=lambda row: (not row.anomalous, row.chapter_ordinal))
+    report_payload = report.model_dump(by_alias=True, mode='json')
+    binding = BlueprintReviewBinding(
+        blueprint_rel=blueprint_rel,
+        subject_kind='invalid' if blueprint_rel == invalid_rel else 'formal',
+        main_text_artifact_sha256=main_sha256,
+        blueprint_artifact_sha256=blueprint_sha256,
+        check_report_sha256=_canonical_sha256(report_payload),
+        code_version=store.ctx.code,
+        rules_fingerprint=prov.rules_fingerprint('stage2'),
+        chapter_ordinals=sorted(main_by_ordinal),
+    )
+    base = BlueprintReviewWorkpack(
+        sid=store.ctx.sid,
+        title=title,
+        subject_sha256=blueprint_sha256,
+        binding_sha256='0' * 64,
+        binding=binding,
+        check=_compact_check(report),
+        accounting=list(report.accounting),
+        mechanical_fields_hidden=list(_BLUEPRINT_MECHANICAL_FIELDS_HIDDEN),
+        chapters=chapters,
+    )
+    payload = base.model_dump(by_alias=True, mode='json')
+    payload.pop('binding_sha256')
+    return base.model_copy(update={
+        'binding_sha256': _canonical_sha256(payload),
+    })
+
+
+def blueprint_review_workpack(
+    base: str | os.PathLike[str], sid: str,
+) -> BlueprintReviewWorkpack:
+    """生成 book-level 只读 Blueprint 审阅包，并用首尾重读拒绝混合快照。
+
+    本函数不产生 approval 记录、不改 gate，也不写任何 artifact。
+    它只读 current MainText/ChapterBlueprints，并原样消费
+    ``stage2.blueprint --check-only`` 的生产 CheckReport。
+    """
+    novel_dir = paths.resolve_novel_dir(base, sid)
+    ctx = readonly_ctx(novel_dir, BP_NODE, prov.code_version())
+    store = ArtifactStore(ctx)
+    title = paths.title_of(novel_dir)
+
+    first = _blueprint_review_snapshot(store, title=title)
+    second = _blueprint_review_snapshot(store, title=title)
+    if first != second:
+        raise ArtifactUnreadable(
+            'MainText、ChapterBlueprints 或生产 CheckReport 在 Blueprint '
+            '工作包构造期间发生变化；请刷新后重试')
+    return first

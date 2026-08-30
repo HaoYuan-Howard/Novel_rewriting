@@ -22,6 +22,7 @@
 """
 from __future__ import annotations
 
+import copy
 from typing import Any
 
 from contracts.invariants import (
@@ -31,6 +32,7 @@ from contracts.invariants import (
     RELATION_VISIBILITY_KINDS, RESPONSE_TIME_LAYERS, TIME_LAYERS, WORLD_RULE_KINDS,
 )
 from novel.llm.prompts import fill
+from novel.core.evidence import iter_global_evidence_slots
 
 #: 两条抽取臂共用的当前规则前缀。
 #: ⚠ `ROLE_SPLIT_SYS` **不带**这个前缀——它不是抽取，是拿着已有的两栏重划分。
@@ -333,6 +335,36 @@ $ROLE_FATE
 #: `stage2.global` 默认路径（付费）。
 GLOBAL_SYS = RULES_V2 + fill(_GLOBAL_TPL, ROLE_FATE=ROLE_FATE_RULE)
 
+#: candidate 实验臂只替换 evidence wire 的责任边界；其它抽取规则与控制臂逐字
+#: 相同，避免 A/B 同时改变语义提示。替换前先断言旧块恰出现一次，prompt 漂移时
+#: 关闭式失败，不能悄悄发出“候选正文 + locator 指令”的混合契约。
+_GLOBAL_LOCATOR_EVIDENCE_RULE = """\
+· 【七类自由事实必须同交原文定位】role/fate、relation predicate、setting 两格、
+  world-rule desc、secret fact、knowledge event、arc trajectory 都各带自己的 evidence：
+  `{"chapter_ordinal":阅读序章号,"locator":"指定章内原样出现的短片段"}`。
+  · locator 必须是指定章正文里的【原样字节】，不是转述；取能支撑该事实的最短片段，并补足到
+    在该章里只出现一次。不要抄长段落，也不要把 `source/start/end` 交回来——正式 SourceSpan
+    由代码在这一章内唯一回取；零命中或多命中会进入可修复的定位失败态。
+  · setting 的两格分别叫 `era_evidence` / `worldview_evidence`；world-rule 每个
+    `versions[]` 的 `desc` 各有 `desc_evidence`；secret 的事实叫 `fact_evidence`；
+    knowledge_events 每条各有 `evidence`；arc_tracks 每条各有 `trajectory_evidence`。"""
+_GLOBAL_CANDIDATE_EVIDENCE_RULE = """\
+· 【七类自由事实必须从关闭候选表选择证据】role/fate、relation predicate、setting 两格、
+  world-rule desc、secret fact、knowledge event、arc trajectory 都各带自己的 evidence：
+  `{"evidence_candidate_id":"e000001"}`。
+  · 正文每个非空段行首都有全书唯一的 `<eNNNNNN>`；只选择能直接支持该事实的那一段。
+    只返回候选 id，不要返回章号、locator、原文、source/start/end，也不要编候选表外的 id。
+    正式 chapter_ordinal 与 SourceSpan 由代码按同一张候选表直接铸造，不再搜索文字。
+  · setting 的两格分别叫 `era_evidence` / `worldview_evidence`；world-rule 每个
+    `versions[]` 的 `desc` 各有 `desc_evidence`；secret 的事实叫 `fact_evidence`；
+    knowledge_events 每条各有 `evidence`；arc_tracks 每条各有 `trajectory_evidence`。"""
+assert GLOBAL_SYS.count(_GLOBAL_LOCATOR_EVIDENCE_RULE) == 1, \
+    'GLOBAL_SYS 的 locator 指令已漂移；candidate A/B 不得混合两套 evidence 契约'
+GLOBAL_CANDIDATE_SYS = GLOBAL_SYS.replace(
+    _GLOBAL_LOCATOR_EVIDENCE_RULE,
+    _GLOBAL_CANDIDATE_EVIDENCE_RULE,
+)
+
 #: 两段式 v2：边界臂只做一个判断；细节臂在冻结边界上填字段。
 BOUNDARY_SYS_V2 = fill(_BOUNDARY_TPL)
 
@@ -407,6 +439,15 @@ GLOBAL_HINT: dict[str, Any] = {
                         'trajectory_evidence': _EVIDENCE_HINT}],
     },
 }
+
+#: candidate-only 独立结构提示。这里从完整 locator hint 深拷贝后，只经统一
+#: evidence 槽遍历替换证据对象；新增 evidence-bearing 字段时不会漏接一半。
+_EVIDENCE_CANDIDATE_HINT: dict[str, Any] = {
+    'evidence_candidate_id': 'e000001',
+}
+GLOBAL_CANDIDATE_HINT: dict[str, Any] = copy.deepcopy(GLOBAL_HINT)
+for _path, _owner, _field in iter_global_evidence_slots(GLOBAL_CANDIDATE_HINT):
+    _owner[_field] = dict(_EVIDENCE_CANDIDATE_HINT)
 
 BOUNDARY_HINT_V2: dict[str, Any] = {
     'blueprints': [{

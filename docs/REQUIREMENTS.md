@@ -190,7 +190,7 @@ context 引用与章尾闭合改判「读者此刻知不知道 / 本章有没有
 `BlindCandidate` v2 形状不变。随后稳定性修复把 `EvidenceBinding` 升至 v3：模型只能提交
 非阻断 `binding_concerns`，正式 `infeasible` 必须由代码在同一关闭约束集铸造 witness；旧 v2 B
 不迁移，须在 current A 全 accept 后重跑 B。
-**P2a 已完成五项并按 `docs/BACKEND_CONTRACT.md` §十留证**：旧 whole-book validator 拒稿的
+**P2a 已完成六项并按 `docs/BACKEND_CONTRACT.md` §十留证**：旧 whole-book validator 拒稿的
 0-wire adoption（`stage4.design --adopt-rejected`，f138896；不冒充 split-run unit 恢复）；typed failure witness /
 关闭式路由（`R-5.21`，批次 1：A/Stage2/code owner 首轮即停、同 fingerprint 两轮早停、
 审计无正文、witness 入 `_llm_rejected`）；A→formal 零调用预检与审阅元数据归一
@@ -201,12 +201,17 @@ wire 前拒绝、`structure_alignment` metric_only、`structure_delta` 退役、
 checkpoint、聚合重问同步更新 lineage/anchor、hash-bound unit replacement 与同一 compiler/HARD、
 来源账 architecture/unit_lineage additive——公开节点与授权次数不变）；两次审批的异常优先工作包
 （`R-5.25`，批次 5：固定六组、当前 subject、全量 INFO/metric/UNVER/阶段延期披露、changed-first
-coverage、历史 exact accept 标识、服务端 action/effect 与 Inbox `reviewed_retained`，API/CLI/UI 均只读）。
+coverage、历史 exact accept 标识、服务端 action/effect 与 Inbox `reviewed_retained`，API/CLI/UI 均只读）；
+Stage2 Blueprint 的异常优先全书只读工作包（`R-3.16`：绑定 current Blueprint/MainText/完整 check/
+代码/规则，全章保留、机械字段隐藏、语义字段不裁；页面展示与提交只用同一完整 binding，不再因
+打开一章自动写整书 `seen.read`；持久 proof 随完整工作包变化失效，CLI/mock/backfill 均不能代造，
+不新增 approval/gate/artifact）。
 **剩下的 P2a 项**（按对稳定性的贡献排序）：
 
-1. `evidence_candidate_id` 只作为另批冷缓存 A/B：候选表由 `paragraph_spans` 同源渲染与
-   lookup，模型响应使用独立 candidate-only 类型，人工 GlobalEdit 仍用 locator，正式
-   GlobalGrounding 仍落 SourceSpan。对同一固定语料配对比较首轮落盘率、
+1. `evidence_candidate_id` 的**工程实验臂已落地、默认未切**：候选表由 `paragraph_spans` 同源渲染与
+   lookup，模型响应使用独立 candidate-only 类型，未知 ID 在 acceptance/checkpoint/写盘前关闭，
+   人工 GlobalEdit 仍用 locator，正式 GlobalGrounding 仍落 SourceSpan。剩余工作是另批冷缓存 A/B：
+   对同一固定语料配对比较首轮落盘率、
    `global_evidence_unlocated`、总 wall/token 与人审质量；质量无回退且成本/耗时改善前不切默认。
    本项需要单独的正文外发与付费授权，不复用主分支跑书目录或缓存。
 

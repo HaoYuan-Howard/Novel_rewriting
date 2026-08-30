@@ -47,6 +47,8 @@ import type { RunProgress } from './run'
 import type {
   CheckKind,
   CheckReport,
+  BlueprintReviewWorkpack,
+  BlueprintSeenRequest,
   DraftEditPreview,
   DraftEditPreviewRequest,
   DraftEditRequest,
@@ -89,6 +91,7 @@ export interface Api {
   partitionStage1(sid: string): Promise<Job>
   getStage1(sid: string): Promise<Stage1View>
   getReading(sid: string, ordinal: number): Promise<ReadingResponse>
+  getBlueprintReviewWorkpack(sid: string): Promise<BlueprintReviewWorkpack>
   getGlobal(sid: string, revealSpoilers?: boolean): Promise<Stage2Global>
   getGlobalReview(sid: string): Promise<GlobalReviewResponse>
   decideGlobalReview(sid: string, request: GlobalReviewDecisionSet): Promise<Job>
@@ -165,7 +168,7 @@ export interface Api {
   /** Stage4 的专用全书 typed 裁决；只写审批记录，不启动重规划作业。 */
   approveStructure(sid: string, request: StructureApprovalRequest): Promise<ApprovalDoc>
   backfillApprovals(sid: string): Promise<ApprovalBackfillResult>
-  markSeen(sid: string, key: SeenKey): Promise<ApprovalDoc>
+  markSeen(sid: string, key: SeenKey, request?: BlueprintSeenRequest): Promise<ApprovalDoc>
   startWriting(sid: string): Promise<ApprovalDoc>
   resetBook(sid: string): Promise<ApprovalDoc>
 

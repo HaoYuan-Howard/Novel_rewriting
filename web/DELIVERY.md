@@ -175,6 +175,7 @@ export const api: Api = USE_MOCK ? mockApi : realApi
 |---|---|
 | 各屏响应 | TanStack Query |
 | **`gate` / `seen` / `design_review` / `structure` / `writing` / `writing_approval` / `closure`** | 一份公开 v6 `ApprovalDoc`，也走 Query（`['approvals', sid]`）；`design_review` 保存绑定当前 Stage4A 主体的策略级与逐章 typed 裁决，只授权 B；`structure` 保存绑定完整 Stage4 plan + binding concerns 主体的最终逐章裁决；`writing_approval` 是当前 Stage4 主体的 typed 写作授权；`closure` 是绑定 current canonical 全章 + fresh Review + finding/trim 集的 Stage5 Commander 回执，只有 current `closed` 才打开 s5 |
+| Stage2 Blueprint 审阅工作包 | 独立 Query（`['stage2', sid, 'blueprint-review-workpack']`），读取 `/stage2/blueprint-review-workpack`；服务端绑定 current Blueprint/MainText/完整 check/code/rules，异常章优先且全章保留。工作包到达后正文分区与骨架只从该包渲染，确认提交同一包的完整 binding，页面不从另一份 ReadingResponse 或 rows 重拼主体/判定，不写新 approval 或 artifact |
 | Stage4 A/B 审阅工作包 | 两条独立 Query（`['approvals', sid, 'design|structure', 'workpack']`）；分别读取 `/approvals/design/workpack` 与 `/approvals/structure/workpack`，绑定当前 A 候选或 B 结构主体，不从 `ApprovalDoc`、页面 rows 或历史决定重拼 |
 | `job` / `jobLog` | Query + `refetchInterval`（由服务端下发的 `running` 决定） |
 | 确认框里的 argv | Query（`api.previewJob`） |
@@ -208,7 +209,7 @@ Stage4A 表单一次提交当前完整 subject、策略 `accept|request_replan` 
 | `/n/:sid/run` | agent / UI / 持久队列共用的全链运行进度与事件时间线；步骤从 `NODES` 派生，**只观察不判定** |
 | `/n/:sid/stage0` | 整本剔除审阅、编辑与批准；完整原文默认展开、可收起，不重复展示属于 Stage1 的分章预览。Agent 入口放在审批操作栏；浏览器人工动作不要求填写 actor/reason，统一按 `human-ui` 和具体动作理由记审计；Agent/CLI 仍显式自报 |
 | `/n/:sid/stage1` | 顶部合并展示校验结论与切分确认，且不依赖正文查询成功；下方是章节索引和原文切分结果，只读，开篇文案只展示一次，重号/缺号/倒退按服务端章号诊断逐章显式提示 |
-| `/n/:sid/read/:o` | 原文与 stage2 骨架对照 |
+| `/n/:sid/read/:o` | 原文与 stage2 骨架对照；书级工作包先给异常章与完整检查摘要，默认隐藏已由代码校验的 beat/fact/hinge 结构 ID 与字符坐标，仍保留章功能、覆盖原文、事实参与人物、因果、hinge、状态与**全部**叙述声音；打开/切换单章不自动标整本已读，只有正式工作包成功加载后才可显式确认。页面所见与待签主体来自同一工作包，提交时携带整包 binding 及 Blueprint/MainText/code/rules 身份，任一漂移均零写入，后续整包变化使旧 seen 自动过期 |
 | `/n/:sid/global` | stage2 全局人物、关系、规则、秘密 |
 | `/n/:sid/stage4/:o` | Stage4A 盲候选先经策略级与逐章 typed 人审；A/B 各自先显示服务端异常优先工作包（`blocking → semantic_attention → disclosure → metric_only → phase_deferred → coverage`），再由人填写完整 typed 裁决。全接受后才呈现 B/最终结构工作面。常驻展示完整结构 subject SHA-256、全章 `retain/reconstruct`、声明/复算变化与 B 的 nonblocking concerns，选中章再展示计划/上下文细节，并经第二道 typed 表单原子提交最终逐章结构裁决。最终结构批准不等于 Stage5 写作授权 |
 | `/n/:sid/stage5/:o` | canonical 成稿、材料、验收 finding 与修订的合并工作面；顶部常驻服务端 Stage5 Commander 闭合卡：`review_required` 只给一次最终 Review，blocked 工作包可按服务端 `unresolved_trim_items` 批量销账，ready/expired 经 `/approvals/stage5/template` 逐项形成 typed 回执；空状态在付费确认前先写入全书闭卷授权。单章改稿严格走只读 typed preview → 明示 `formal/working_draft` → 双 SHA apply，每次 apply 不自动 Review；fresh Review 的章级/书级 finding 仍可按完整 evidence identity 提交 wontfix |

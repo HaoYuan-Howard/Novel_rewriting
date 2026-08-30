@@ -118,6 +118,12 @@ _WITHHELD: dict[str, str] = {
                           '逐字下限重分配之后**不等于**最终比例，发过去会让前端算出一个'
                           '与产物对不上的数，然后把差异当成 bug 报出来',
     # ── stage2（全书事实底座 / 逐章骨架）──
+    'GLOBAL_EVIDENCE_CONTRACT': (
+        'stage2.global 当前 evidence wire 默认；它只供后端受控 A/B 选臂，'
+        '前端既不选择，也不得拿它判断正式 GlobalGrounding 是否 current'),
+    'GLOBAL_EVIDENCE_CONTRACTS': (
+        'stage2.global 的内部 A/B 取值面；candidate 臂需独立付费/正文外发授权，'
+        '不是浏览器可选配置，发布会绕过实验准入门'),
     # ── 事件拍 ──
     'BLUEPRINT_ARCHITECTURE': '`stage2.blueprint` 那次调用的**模型可见边界身份**，'
                               '是产地写进 `_provenance.context.architecture` 的一笔账。'
