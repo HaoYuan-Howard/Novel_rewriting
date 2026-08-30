@@ -59,6 +59,8 @@ export const qk = {
     ['approvals', sid, 'stage5', 'template', workpackSha256] as const,
   approvalWorkpack: (sid: string, kind: 'design' | 'structure') =>
     ['approvals', sid, kind, 'workpack'] as const,
+  finalApprovalWorkpack: (sid: string, kind: 'stage6' | 'stage7') =>
+    ['approvals', sid, kind, 'workpack'] as const,
   designReviewTemplate: (sid: string, query: DesignReviewTemplateQuery | null) =>
     ['approvals', sid, 'design', 'template', query] as const,
 }

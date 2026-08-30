@@ -24,7 +24,9 @@ from contracts.artifacts import STAGE1_HOOK_COPY, STAGE6_HOOK
 import os
 
 from contracts.invariants import HOOK_SLOTS, slot_of
-from contracts.schema.api import HookApprovedLine, HookCandidateLine, Stage6View
+from contracts.schema.api import (
+    HookApprovedLine, HookCandidateLine, Stage6ApprovalWorkpack, Stage6View,
+)
 from contracts.schema.stage6 import Hook
 from contracts.schema.stage1 import HookCopy
 from novel import paths, prov
@@ -115,3 +117,20 @@ def stage6_view(base: str | os.PathLike[str], sid: str) -> Stage6View:
         ghosts=list(st.ghosts),
         _provenance=art.provenance,
     )
+
+
+def stage6_approval_workpack(
+    base: str | os.PathLike[str], sid: str,
+) -> Stage6ApprovalWorkpack:
+    """当前候选、A/B 证据与机械异常的一次紧凑只读快照。"""
+    from novel.stages.stage6.hook import approval_workpack
+
+    novel_dir = paths.resolve_novel_dir(base, sid)
+    store = ArtifactStore(readonly_ctx(
+        novel_dir, 'stage6.approve', prov.code_version()))
+    live_legacy = legacy_stage5_paths(store)
+    if live_legacy:
+        raise HumanEditProtected(
+            f'legacy_incompatible：发现旧 Stage5 双臂路径 {live_legacy[:8]}。'
+            '不能据此构造 Stage6 当前终审工作包')
+    return approval_workpack(store)

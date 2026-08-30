@@ -545,6 +545,8 @@ def _residual(*, unit, suggest, confidence='high'):
 
 
 def _adoption_harness(monkeypatch, residual, *, fail_write=False):
+    from novel.llm import stage7_runs
+
     art = SimpleNamespace(
         residual=residual,
         extra_subs=[ExtraSub(old='沈家', new='林家', origin='human')],
@@ -557,6 +559,8 @@ def _adoption_harness(monkeypatch, residual, *, fail_write=False):
     retired = []
 
     monkeypatch.setattr(rename, 'ArtifactStore', lambda _ctx: store)
+    monkeypatch.setattr(
+        stage7_runs, 'commit_ownership', lambda _novel_dir: nullcontext())
     monkeypatch.setattr(rename, '_Upstreams', lambda _ctx, _store: object())
     def retire(_store):
         store.events.append('retire')
@@ -574,6 +578,7 @@ def _adoption_harness(monkeypatch, residual, *, fail_write=False):
 
     monkeypatch.setattr(rename, '_build', fake_build)
     ctx = SimpleNamespace(
+        novel_dir=Path('synthetic-book'),
         rewrite_provenance=lambda provenance, *, by: (provenance, by),
     )
     return ctx, store, captured, retired
@@ -724,6 +729,8 @@ class _AtomicStore:
 def _atomic_harness(
         monkeypatch, *, rels, fail_write=False, fail_archive=False,
         blocking=False, input_freshness=None, recorded_inputs=None):
+    from novel.llm import stage7_runs
+
     subject = 'a' * 64
     recorded_inputs = recorded_inputs or {
         rename.GLOBAL_GROUNDING: {'file': 'old-file', 'consumed': 'old-consumed'},
@@ -741,6 +748,8 @@ def _atomic_harness(
     )
     retired = []
     monkeypatch.setattr(rename, 'ArtifactStore', lambda _ctx: store)
+    monkeypatch.setattr(
+        stage7_runs, 'commit_ownership', lambda _novel_dir: nullcontext())
     monkeypatch.setattr(rename, '_Upstreams', lambda _ctx, _store: object())
     monkeypatch.setattr(rename, 'approval_subject_sha256', lambda _art: subject)
     monkeypatch.setattr(rename.paths, 'edit_rel', lambda *_args: rename.EDIT)

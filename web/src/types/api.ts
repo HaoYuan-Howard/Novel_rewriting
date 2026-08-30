@@ -18,6 +18,8 @@ import type {
   StructureApprovalRequest,
   Stage5ClosureRequest,
   Stage5ClosureTemplate,
+  Stage6ApprovalWorkpack,
+  Stage7ApprovalWorkpack,
 } from './approvals'
 import type {
   AgentCapabilitiesResponse,
@@ -144,6 +146,10 @@ export interface Api {
   getDesignApprovalWorkpack(sid: string): Promise<ApprovalWorkpack>
   /** Stage4 B 当前结构主体的异常优先只读工作包；不预填任何审批决定。 */
   getStructureApprovalWorkpack(sid: string): Promise<ApprovalWorkpack>
+  /** Stage6 候选 + A/B 原始证据 + 机械异常的 hash-bound 紧凑终审包。 */
+  getStage6ApprovalWorkpack(sid: string): Promise<Stage6ApprovalWorkpack>
+  /** Stage7 人物决策 + 实际替换命中 + 残留上下文的 hash-bound 紧凑终审包。 */
+  getStage7ApprovalWorkpack(sid: string): Promise<Stage7ApprovalWorkpack>
   /** 当前盘面确定性生成的 Stage5 关闭式回执模板；只读、0 成本。 */
   getStage5ClosureTemplate(sid: string): Promise<Stage5ClosureTemplate>
   /** 原子提交当前 Stage5 Commander 回执；不启动任何付费作业。 */
@@ -183,12 +189,18 @@ export interface Api {
   /** 文案定稿：序号 + 自报身份/理由 + 候选完整 hash 乐观锁。 */
   approveHook(
     sid: string,
-    req: { pick: number; actor: string; reason: string; subject_sha256: string },
+    req: {
+      pick: number
+      actor: string
+      reason: string
+      subject_sha256: string
+      workpack_sha256: string
+    },
   ): Promise<Job>
   /** 人名表定稿：自报身份/理由 + 当前 decision surface 的 hash 乐观锁。 */
   approveNames(
     sid: string,
-    req: { actor: string; reason: string; subject_sha256: string },
+    req: { actor: string; reason: string; subject_sha256: string; workpack_sha256: string },
   ): Promise<Job>
   /** 显式采纳当前可安全应用的 high residual；后端仍会重新校验冲突。 */
   adoptResidual(sid: string, req: { confidence: 'high' }): Promise<Job>

@@ -278,6 +278,9 @@ def _behaviour_errors(
         | set(inv.PAID_FLAGS)
         | set(inv.VALUED_FLAGS)
         | _argparse_options(root / "novel" / "cli" / "main.py")
+        # operator_phase.py 是刻意的薄入口，argparse 唯一落点在生产模块；
+        # 守卫必须读取那个落点，不能因为 wrapper 不重拼 parser 就把合法 flag 判红。
+        | _argparse_options(root / "novel" / "operator_telemetry.py")
         | set().union(*(
             _argparse_options(path)
             for path in sorted((SKILL.parent / "scripts").glob("*.py"))
@@ -467,7 +470,8 @@ def validate(counters: dict[str, int] | None = None,
                 "fix_routes", "cli_subcommands", "status_marks",
                 "template_headings", "evidence_symbols", "notes_files",
                 "notes_chars", "notes_budget", "index_rows", "repo_fn_citations",
-                "open_gap_entries", "stage0_workpack_contract"):
+                "open_gap_entries", "stage0_workpack_contract",
+                "finalizer_contract", "operator_telemetry_contract"):
         counters.setdefault(key, 0)
     errors: list[str] = []
     root = _repo_root()
@@ -568,6 +572,64 @@ def validate(counters: dict[str, int] | None = None,
                            ("maintenance.md", maintenance)):
         if workpack_token not in body_text:
             errors.append(f"{doc} 没有登记 {workpack_token}")
+
+    # canonical 终审必须只 collect 一次，在内存 validate 通过后才 commit，随后另建
+    # fresh delivery 读作用域。这里只核生产函数的调用面，不在守卫里重拼顺序判据。
+    finalizer_path = SKILL_DIR / "scripts" / "finalize_review.py"
+    finalizer_token = "scripts/finalize_review.py"
+    if not finalizer_path.is_file():
+        errors.append("canonical 终审契约指向的 scripts/finalize_review.py 不在盘上")
+    else:
+        counters["finalizer_contract"] += 1
+        tree = ast.parse(finalizer_path.read_text(encoding="utf-8"))
+        calls = {
+            node.func.id
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+        }
+        required_calls = {"collect", "render", "validate", "commit_review", "assess"}
+        missing_calls = sorted(required_calls - calls)
+        if missing_calls:
+            errors.append(
+                "finalize_review.py 没有贯穿 collect/render/validate/commit/fresh assess："
+                f"缺 {missing_calls}"
+            )
+    for doc, body_text in (("SKILL.md", text), ("maintenance.md", maintenance)):
+        if finalizer_token not in body_text:
+            errors.append(f"{doc} 没有登记 canonical {finalizer_token}")
+    if "--with-inbox" not in text:
+        errors.append("SKILL.md 没有使用 invocation-scoped state --with-inbox")
+
+    # operator telemetry 是独立可观测性面：skill 只可经薄入口调用生产唯一落点，且文档
+    # 必须明说宿主模型 usage 不可见，不能把墙钟分解伪装成 token/成本账。
+    telemetry_path = SKILL_DIR / "scripts" / "operator_phase.py"
+    telemetry_token = "scripts/operator_phase.py"
+    if not telemetry_path.is_file():
+        errors.append("operator 遥测契约指向的 scripts/operator_phase.py 不在盘上")
+    else:
+        counters["operator_telemetry_contract"] += 1
+        tree = ast.parse(telemetry_path.read_text(encoding="utf-8"))
+        imported = {
+            alias.name
+            for node in ast.walk(tree)
+            if isinstance(node, ast.ImportFrom)
+            and node.module == "novel.operator_telemetry"
+            for alias in node.names
+        }
+        calls = {
+            node.func.id
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+        }
+        if "cli_main" not in imported or "cli_main" not in calls:
+            errors.append(
+                "operator_phase.py 必须只把 CLI 交给 novel.operator_telemetry.cli_main"
+            )
+    for doc, body_text in (("SKILL.md", text), ("maintenance.md", maintenance)):
+        if telemetry_token not in body_text:
+            errors.append(f"{doc} 没有登记 {telemetry_token}")
+    if "unavailable_host_boundary" not in text:
+        errors.append("SKILL.md 没有声明 Commander 宿主模型 usage 的不可见边界")
 
     # 【断言 D】日期、版本号与无锚的一次性读数——**全部 skill markdown**，不只 SKILL.md。
     # 那条唯一的日期戳能长期活着，就是因为原来只查 SKILL.md 正文。

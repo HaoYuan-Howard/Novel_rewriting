@@ -16,6 +16,7 @@ import os
 import threading
 from collections.abc import Iterator
 from contextlib import contextmanager
+from contextvars import ContextVar
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal
@@ -71,6 +72,8 @@ from contracts.schema.api import (
     WritingApprovalView,
 )
 from contracts.schema.evaluation import GlobalReview
+from contracts.schema.orchestration import NovelOverview
+from contracts.schema.report import CheckReport
 from contracts.schema.stage0 import Stage0Revisions
 from contracts.schema.stage1 import HookCopy, MainText
 from contracts.schema.stage2 import ChapterBlueprints, GlobalGrounding
@@ -94,6 +97,10 @@ from novel.store import ArtifactStore
 
 APPROVALS_DIRNAME = 'approvals'
 _LOCK = threading.RLock()
+_READ_CODE: ContextVar[str | None] = ContextVar(
+    'approval_read_code', default=None)
+_READ_OVERVIEW: ContextVar[NovelOverview | None] = ContextVar(
+    'approval_read_overview', default=None)
 _LEGACY_APPROVAL_GATES = ('s0', 's1', 's2', 's3', 's4', 's5', 's6', 's7')
 
 #: 正在被移入回收站的书。**`_LOCK` 保护它**，与审批写入同一把锁——
@@ -462,6 +469,36 @@ def approval_file_lock(
                     fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
 
+@contextmanager
+def _read_projection(
+    *, overview: NovelOverview | None, code: str | None,
+) -> Iterator[None]:
+    """把同一次 operator 快照限制在当前只读投影调用栈内。"""
+    overview_token = _READ_OVERVIEW.set(overview)
+    code_token = _READ_CODE.set(code)
+    try:
+        yield
+    finally:
+        _READ_CODE.reset(code_token)
+        _READ_OVERVIEW.reset(overview_token)
+
+
+def _projection_code() -> str:
+    """有 invocation-scoped 坐标就复用；普通 API 调用仍现场取指纹。"""
+    return _READ_CODE.get() or prov.code_version()
+
+
+def _validate_read_projection(
+    sid: str, *, overview: NovelOverview | None, code: str | None,
+) -> None:
+    """只接受完整且属于本书的 invocation-scoped 只读坐标。"""
+    if (overview is None) != (code is None):
+        raise ValueError('审批只读投影的 overview/code 必须成对提供')
+    if overview is not None and overview.sid != sid:
+        raise ValueError(
+            f'审批只读投影属于 sid={overview.sid!r}，不是 {sid!r}')
+
+
 def _spawns(base: str | os.PathLike[str], sid: str) -> dict[str, list[ApprovalAction]]:
     """Gate follow-ups that still need to run on the current artifact surface.
 
@@ -478,7 +515,9 @@ def _spawns(base: str | os.PathLike[str], sid: str) -> dict[str, list[ApprovalAc
         's7': [ApprovalAction(
             kind='stage7.assemble', label='\u62fc\u88c5\u6700\u7ec8\u6210\u4e66')],
     }
-    overview = state.overview(base, sid)
+    overview = _READ_OVERVIEW.get()
+    if overview is None:
+        overview = state.overview(base, sid)
     spawns = {
         gate: [action for action in actions
                if state.resume_verdict(overview, action.kind)[0] != state.RESUME_SKIP]
@@ -572,7 +611,7 @@ def _view(
 
 def _planned(base: str | os.PathLike[str], sid: str) -> list[int] | None:
     novel_dir = paths.resolve_novel_dir(base, sid)
-    ctx = state.readonly_ctx(novel_dir, 'stage5.write', prov.code_version())
+    ctx = state.readonly_ctx(novel_dir, 'stage5.write', _projection_code())
     return state.planned_chapters(ArtifactStore(ctx))
 
 
@@ -616,9 +655,19 @@ def _write(
     return _view(base, record)
 
 
-def get(base: str | os.PathLike[str], sid: str) -> ApprovalDoc:
-    with _LOCK:
-        return _view(base, _read_current(base, sid))
+def get(
+    base: str | os.PathLike[str], sid: str, *,
+    overview: NovelOverview | None = None, code: str | None = None,
+) -> ApprovalDoc:
+    """公开审批投影；可安全复用同一次 operator 的只读坐标。
+
+    两项必须成对提供，并且只在当前调用的 ``ContextVar`` 作用域内生效；
+    普通 API/CLI 调用保持原来的现场读取，不形成跨请求缓存。
+    """
+    _validate_read_projection(sid, overview=overview, code=code)
+    with _read_projection(overview=overview, code=code):
+        with _LOCK:
+            return _view(base, _read_current(base, sid))
 
 
 def writing_is_current(base: str | os.PathLike[str], sid: str) -> bool:
@@ -649,7 +698,7 @@ def require_stage2_review(
     一份机械 check 或自行解释 PASS/UNVER。
     """
     novel_dir = paths.resolve_novel_dir(base, sid)
-    ctx = state.readonly_ctx(novel_dir, node, prov.code_version())
+    ctx = state.readonly_ctx(novel_dir, node, _projection_code())
     from novel.stages.stage2 import global_review
     global_review.require_approved(ctx)
 
@@ -1000,7 +1049,7 @@ def _design_preflight_summary(
 
     try:
         ctx = state.readonly_ctx(
-            novel_dir, 'stage4.plan', prov.code_version())
+            novel_dir, 'stage4.plan', _projection_code())
         report = preflight_binding_candidate(ctx)
     except NovelError:
         return None
@@ -1065,7 +1114,7 @@ def _root_clean_sha1(novel_dir: Path) -> str:
 
 
 def _store_for(novel_dir: Path) -> ArtifactStore:
-    ctx = state.readonly_ctx(novel_dir, 'stage0.approve', prov.code_version())
+    ctx = state.readonly_ctx(novel_dir, 'stage0.approve', _projection_code())
     return ArtifactStore(ctx)
 
 
@@ -1513,17 +1562,19 @@ def _proof_for_writing_decision(
 
 def _design_review_view(
     novel_dir: Path, record: _ApprovalRecordV7,
+    *, current: _DesignSubjects | None = None,
 ) -> DesignReviewView:
     """即时投影当前 Stage4A 人审态；旧决定只留历史，不自动拼成新批准。"""
     history = [
         _public_design_decision(decision)
         for decision in record.design_history
     ]
-    try:
-        current = _current_design_subjects(novel_dir)
-    except NovelError:
-        return DesignReviewView(
-            state='unavailable', current_decision=None, history=history)
+    if current is None:
+        try:
+            current = _current_design_subjects(novel_dir)
+        except NovelError:
+            return DesignReviewView(
+                state='unavailable', current_decision=None, history=history)
     latest = record.design_decision
     if latest is None:
         return DesignReviewView(
@@ -1781,17 +1832,38 @@ def approve_stage5_closure(
             and latest.decision_sha256 == digest
             and _same_proof(latest.proof, proof)
         ):
-            return _view(base, record)
+            # closure 决定自身的 proof 绑定工作包；gate.s5 的 proof 还要绑定
+            # typed 决定摘要。两者不是同一个主体。重复提交时也必须经生产
+            # proof builder 重铸 gate proof：既保持幂等不追加历史，也能修复
+            # 已有正确 closure、但 gate proof 缺失/过期的半提交尾窗。
+            gate_proof = _proof_for_gate(novel_dir, 's5', record)
+            if record.gate['s5'] and _same_proof(
+                record.gate_proofs['s5'], gate_proof,
+            ):
+                return _view(base, record)
+            gates = dict(record.gate)
+            gate_proofs = dict(record.gate_proofs)
+            gates['s5'] = True
+            gate_proofs['s5'] = gate_proof
+            return _write(base, record.model_copy(update={
+                'gate': gates, 'gate_proofs': gate_proofs,
+            }))
         public = Stage5ClosureDecision(
             **payload, decision_sha256=digest, decided_at=_now())
         stored = _StoredClosureDecision(**public.model_dump(mode='json'), proof=proof)
+        history = [*record.closure_history, stored]
+        working = record.model_copy(update={
+            'closure_history': history,
+            'closure_decision': stored,
+        })
+        # 不手拼第二份 freshness 口径；首次提交与之后每次公开读取都调用
+        # 同一个 gate proof builder，保证落盘 proof 能被原样重算。
+        gate_proof = _proof_for_gate(novel_dir, 's5', working)
         gates = dict(record.gate)
         gate_proofs = dict(record.gate_proofs)
         gates['s5'] = True
-        gate_proofs['s5'] = proof
-        return _write(base, record.model_copy(update={
-            'closure_history': [*record.closure_history, stored],
-            'closure_decision': stored,
+        gate_proofs['s5'] = gate_proof
+        return _write(base, working.model_copy(update={
             'gate': gates, 'gate_proofs': gate_proofs,
         }))
 
@@ -1862,7 +1934,7 @@ def _require_typed_gate_decision(store: ArtifactStore, gate: str) -> str | None:
         if names.approved is None:
             raise ApprovalRequired('stage7 name map has no typed approved decision')
         from novel.stages.stage7.rename import approval_proof_sha256
-        proof = approval_proof_sha256(names)
+        proof = approval_proof_sha256(store, names)
         if proof is None:
             raise ApprovalRequired(
                 'stage7 typed approval is not bound to the current name decision surface')
@@ -1977,11 +2049,14 @@ def _proof_for_gate(
             }),
         )
     if gate == 's5':
+        # stage5.closure 反向经 approvals 读取 typed 回执；保持局部 import，
+        # 避免模块初始化环，同时让首次提交与公开 freshness 读取共用同一尺子。
+        from novel.stages.stage5.closure import closure_workpack
         decision = record.closure_decision
         if decision is None:
             raise ApprovalRequired(
                 's5 gate 只能由当前 typed closure 回执打开；缺闭合决定')
-        pack = closure_workpack(_store_for(novel_dir))
+        pack = closure_workpack(store)
         if decision.workpack_sha256 != pack.workpack_sha256:
             raise ApprovalRequired(
                 's5 closure 回执绑定的是过期工作包；请重新生成模板并重新裁决')
@@ -2480,7 +2555,16 @@ def design_workpack(
             subject_sha256=current.aggregate_subject_sha256,
             chapter_ordinals=ordinals,
             groups=_design_workpack_groups(record, current, novel_dir),
+            disposition='review_required',
         )
+        # 复用首读 subject；末尾第二读仍是唯一竞态守卫。若在这里再读一次，
+        # 会把「前后两次一致才返回」悄悄扩成无守卫的第三份投影。
+        view = _design_review_view(novel_dir, record, current=current)
+        if view.state == 'accepted' and view.current_decision is not None:
+            workpack = workpack.model_copy(update={
+                'disposition': 'already_current',
+                'current_decision_sha256': view.current_decision.decision_sha256,
+            })
         if _current_design_subjects(novel_dir) != current:
             raise ArtifactUnreadable(
                 'Stage4A 审阅主体在工作包构造期间变化；请刷新后重试')
@@ -2753,35 +2837,67 @@ def _structure_workpack_groups(
 
 
 def structure_workpack(
-    base: str | os.PathLike[str], sid: str,
+    base: str | os.PathLike[str], sid: str, *,
+    overview: NovelOverview | None = None, code: str | None = None,
+    check_report: CheckReport | None = None,
 ) -> ApprovalWorkpack:
-    """只读生成 B 结构审批工作包；subject 不含 Context 相延后规则。"""
-    with _LOCK:
-        record = _read_current(base, sid)
-        novel_dir = paths.resolve_novel_dir(base, sid)
-        snapshot = _structure_workpack_snapshot(novel_dir)
-        from novel.stages.stage4.plan import run_check_only
-        report = run_check_only(state.readonly_ctx(
-            novel_dir, 'stage4.plan', prov.code_version()))
-        after = _structure_workpack_snapshot(novel_dir)
-        if after != snapshot:
-            raise ArtifactUnreadable(
-                'Stage4B 审阅主体在工作包复检期间变化；请刷新后重试')
-        return ApprovalWorkpack(
-            sid=sid,
-            kind='structure',
-            candidate_sha256=None,
-            subject_sha256=snapshot.subject_sha256,
-            chapter_ordinals=snapshot.chapter_ordinals,
-            groups=_structure_workpack_groups(
-                record, novel_dir,
+    """只读生成 B 结构审批工作包；subject 不含 Context 相延后规则。
+
+    operator 的组合快照可以同时传入其 overview/code/Stage4 报告，避免
+    Inbox 再跑一遍同一机械判据。预计算报告必须与坐标成套且明确属于本书、
+    本层、本节点；普通 API/CLI 不传时仍现场 fresh 复检，公共旧调用不变。
+    """
+    _validate_read_projection(sid, overview=overview, code=code)
+    if check_report is not None:
+        if overview is None:
+            raise ValueError('预计算 Stage4 报告必须随 overview/code 坐标提供')
+        if (
+            check_report.sid != sid
+            or check_report.stage != 'stage4'
+            or check_report.node != 'stage4.plan'
+        ):
+            raise ValueError(
+                '预计算报告必须属于当前 sid 的 stage4.plan 复检')
+    with _read_projection(overview=overview, code=code):
+        with _LOCK:
+            record = _read_current(base, sid)
+            novel_dir = paths.resolve_novel_dir(base, sid)
+            snapshot = _structure_workpack_snapshot(novel_dir)
+            if check_report is None:
+                from novel.stages.stage4.plan import run_check_only
+                report = run_check_only(state.readonly_ctx(
+                    novel_dir, 'stage4.plan', _projection_code()))
+            else:
+                report = check_report
+            # view 的读取也必须落在首尾快照之间；放到末读之后会留下一个
+            # 未经 rebound 校验的第三次整读，返回的处置态可能与 groups 混版。
+            view = _structure_view(novel_dir, record)
+            after = _structure_workpack_snapshot(novel_dir)
+            if after != snapshot:
+                raise ArtifactUnreadable(
+                    'Stage4B 审阅主体在工作包复检期间变化；请刷新后重试')
+            workpack = ApprovalWorkpack(
+                sid=sid,
+                kind='structure',
+                candidate_sha256=None,
                 subject_sha256=snapshot.subject_sha256,
-                chapter_subject_sha256=snapshot.chapter_subject_sha256,
-                plan=snapshot.plan,
-                concerns=snapshot.concerns,
-                report=report,
-            ),
-        )
+                chapter_ordinals=snapshot.chapter_ordinals,
+                groups=_structure_workpack_groups(
+                    record, novel_dir,
+                    subject_sha256=snapshot.subject_sha256,
+                    chapter_subject_sha256=snapshot.chapter_subject_sha256,
+                    plan=snapshot.plan,
+                    concerns=snapshot.concerns,
+                    report=report,
+                ),
+            )
+            if view.state == 'accepted' and view.current_decision is not None:
+                workpack = workpack.model_copy(update={
+                    'disposition': 'already_current',
+                    'current_decision_sha256': _decision_sha256(
+                        _structure_decision_payload(view.current_decision)),
+                })
+            return workpack
 
 
 _DESIGN_STRATEGY_TEMPLATE_REASON = \

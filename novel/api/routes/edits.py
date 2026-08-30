@@ -230,7 +230,8 @@ def approve_hook(
         ['--pick', str(request.pick),
          '--actor', request.actor,
          '--reason', request.reason,
-         '--subject-sha256', request.subject_sha256])
+         '--subject-sha256', request.subject_sha256,
+         '--workpack-sha256', request.workpack_sha256])
     if _completed(record):
         _stamp(base, sid, 's6')
     return record
@@ -251,7 +252,8 @@ def approve_names(
         base, 'stage7.approve', sid,
         ['--actor', request.actor,
          '--reason', request.reason,
-         '--subject-sha256', request.subject_sha256])
+         '--subject-sha256', request.subject_sha256,
+         '--workpack-sha256', request.workpack_sha256])
     if _completed(record):
         _stamp(base, sid, 's7')
     return record

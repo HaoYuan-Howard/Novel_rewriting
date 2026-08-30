@@ -70,10 +70,16 @@ def _stage6_semantic_rels(book: str) -> tuple[str, ...]:
 def _name_approval_body(box) -> dict[str, str]:
     raw = json.loads((box.dir / rename.REL).read_text(encoding='utf-8'))
     art = NameMap.model_validate(decode_artifact(rename.REL, raw).payload)
+    from novel.store import ArtifactStore
+    ctx = RunContext.open(
+        str(box.root), box.sid, 'stage7.approve', paid=False,
+        write_ledger=False)
     return {
         'actor': 'reviewer',
         'reason': 'reviewed the complete name decision surface',
         'subject_sha256': rename.approval_subject_sha256(art),
+        'workpack_sha256': rename.approval_workpack(
+            ArtifactStore(ctx)).workpack_sha256,
     }
 
 
@@ -396,14 +402,22 @@ def test_an_illegal_edit_body_is_422_from_the_carrier(validation_client, body, w
 # ───────────────────────── 二、文案定稿 ─────────────────────────
 
 def _approve_body(box, pick: int) -> dict:
+    from novel.stages.stage6 import hook as hook_node
+    from novel.store import ArtifactStore
+
     data = json.loads((box.dir / 'stage6' / 'hook.json').read_text(encoding='utf-8'))
     index = max(0, min(pick - 1, len(data['candidates']) - 1))
     text = data['candidates'][index]['text']
+    ctx = RunContext.open(
+        str(box.root), box.sid, 'stage6.approve', paid=False,
+        write_ledger=False)
     return {
         'pick': pick,
         'actor': 'api-test-editor',
         'reason': '逐项核对了当前候选与全书事实',
         'subject_sha256': hashlib.sha256(text.encode('utf-8')).hexdigest(),
+        'workpack_sha256': hook_node.approval_workpack(
+            ArtifactStore(ctx)).workpack_sha256,
     }
 
 

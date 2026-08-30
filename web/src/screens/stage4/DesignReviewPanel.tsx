@@ -17,7 +17,8 @@ import { Mono } from '@/components/ui/Mono'
 import { Panel } from '@/components/ui/Panel'
 import { GateMark } from '@/components/vocab/Badges'
 import { useDesignReview } from './useDesignReview'
-import { ApprovalWorkpackPanel } from './ApprovalWorkpackPanel'
+import { ApprovalWorkpackEvidence } from './ApprovalWorkpackPanel'
+import { useApprovalWorkpack } from '@/hooks/useApprovalWorkpack'
 
 function reviewRunId(): string {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
@@ -51,6 +52,7 @@ export function DesignReviewPanel() {
   const [runId, setRunId] = useState(reviewRunId)
   const [query, setQuery] = useState<DesignReviewTemplateQuery | null>(null)
   const review = useDesignReview(query)
+  const workpack = useApprovalWorkpack('design')
 
   if (approvals.isLoading) {
     return <Panel className="mx-30 mt-20 mb-4 px-20 py-16 text-body text-ink-4">读取 Stage4A 审阅记录…</Panel>
@@ -68,7 +70,25 @@ export function DesignReviewPanel() {
 
   const view = doc.design_review
   const humanReviewer = enums.data?.design_reviewer_kinds.find((value) => value === 'human') ?? ''
-  const canStart = Boolean(actor.trim() && reason.trim() && humanReviewer && !enums.isLoading)
+  const alreadyCurrent = workpack.data?.disposition === 'already_current'
+  const workpackReviewable = Boolean(
+    !workpack.isLoading && !workpack.isFetching && !workpack.isError &&
+    workpack.data?.disposition === 'review_required',
+  )
+  const workpackDisabledReason = alreadyCurrent
+    ? '同一当前 Stage4A 工作包已有正式接受决定，无需重复整读'
+    : workpack.isError
+      ? '当前 Stage4A 工作包读取失败，不能绑定本轮审阅'
+      : workpack.isFetching
+        ? '正在读取或刷新当前 Stage4A 工作包'
+        : !workpack.data
+          ? '服务端未返回当前 Stage4A 工作包'
+          : workpack.data.disposition !== 'review_required'
+            ? '服务端返回了未知的 Stage4A 工作包处置态'
+            : ''
+  const canStart = Boolean(
+    actor.trim() && reason.trim() && humanReviewer && !enums.isLoading && workpackReviewable,
+  )
   const reset = () => {
     setQuery(null)
     setReason('')
@@ -115,7 +135,7 @@ export function DesignReviewPanel() {
         ) : null}
       </div>
 
-      <ApprovalWorkpackPanel kind="design" />
+      <ApprovalWorkpackEvidence kind="design" query={workpack} />
 
       {view.binding_infeasibility ? (
         <BindingInfeasibilityEvidence evidence={view.binding_infeasibility} />
@@ -182,7 +202,9 @@ export function DesignReviewPanel() {
               action={{ kind: 'approval.design.template', extra: null, paid: false, writes_disk: false }}
               disabled={!canStart}
               disabledReason={
-                enums.isLoading
+                !workpackReviewable
+                  ? workpackDisabledReason
+                  : enums.isLoading
                   ? '正在读取服务端审阅取值面'
                   : enums.error
                     ? '服务端审阅取值面读取失败'
@@ -226,6 +248,8 @@ export function DesignReviewPanel() {
           repairCodes={enums.data?.design_repair_codes ?? []}
           submit={review.submit}
           onReset={reset}
+          workpackReviewable={workpackReviewable}
+          workpackDisabledReason={workpackDisabledReason}
         />
       ) : null}
     </Panel>
@@ -239,6 +263,8 @@ function DesignReviewForm({
   repairCodes,
   submit,
   onReset,
+  workpackReviewable,
+  workpackDisabledReason,
 }: {
   template: DesignReviewTemplate
   strategyDecisions: string[]
@@ -246,6 +272,8 @@ function DesignReviewForm({
   repairCodes: string[]
   submit: ReturnType<typeof useDesignReview>['submit']
   onReset: () => void
+  workpackReviewable: boolean
+  workpackDisabledReason: string
 }) {
   const { notify } = useChrome()
   const [draft, setDraft] = useState(template)
@@ -496,9 +524,11 @@ function DesignReviewForm({
           <LinkButton disabled={submit.isPending} onClick={onReset}>开始新一轮审阅</LinkButton>
           <ActionButton
             action={{ kind: 'approval.design', extra: null, paid: false, writes_disk: true }}
-            disabled={!complete || submit.isPending}
+            disabled={!complete || submit.isPending || !workpackReviewable}
             disabledReason={
-              !enumsReady
+              !workpackReviewable
+                ? workpackDisabledReason
+                : !enumsReady
                   ? '服务端 Stage4A 审阅取值面未就绪'
                 : !complete
                   ? '策略与每章都必须修改真实反馈后显式核对；request_repair 至少选择一个返修码'

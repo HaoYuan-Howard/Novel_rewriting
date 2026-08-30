@@ -141,6 +141,10 @@ def test_prepare_freezes_both_exact_judge_requests_before_wire(monkeypatch):
         'users': {'A': 'user-A', 'B': 'user-B'},
         'response_model': HookSemanticResponse,
         'max_tokens': semantic.SEMANTIC_MAX_TOKENS,
+        'experiment_arm': {
+            'session_policy': 'independent-parallel',
+            'judge_stagger_ms': 0,
+        },
     }
 
 

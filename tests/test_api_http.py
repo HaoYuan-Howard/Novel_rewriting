@@ -312,6 +312,8 @@ def test_the_published_surface_is_exactly_the_current_surface(app):
         '/api/novels/{sid}/stage1': ['GET'],
         '/api/novels/{sid}/approvals': ['GET'],
         '/api/novels/{sid}/approvals/design/workpack': ['GET'],
+        '/api/novels/{sid}/approvals/stage6/workpack': ['GET'],
+        '/api/novels/{sid}/approvals/stage7/workpack': ['GET'],
         '/api/novels/{sid}/approvals/design/template': ['GET'],
         '/api/novels/{sid}/approvals/stage5': ['POST'],
         '/api/novels/{sid}/approvals/stage5/template': ['GET'],

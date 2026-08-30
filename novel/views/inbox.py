@@ -45,25 +45,28 @@ import os
 import re
 
 from contracts.invariants import (
-    INBOX_KIND, NODES, STAGES, STOP_REWRITE_AFTER, review_effect_of, slot_of,)
+    INBOX_KIND, NODES, STAGES, STOP_REWRITE_AFTER, review_effect_of,)
 from contracts.rules import REGISTRY
-from contracts.schema.api import InboxDecision, InboxItem, InboxView
+from contracts.schema.api import (
+    InboxDecision, InboxItem, InboxView,
+    Stage6ApprovalWorkpack, Stage7ApprovalWorkpack,
+)
 from contracts.schema.evaluation import GlobalReview
 from contracts.schema.report import CheckReport
-from contracts.schema.stage6 import Hook
-from contracts.schema.stage7 import NameMap
-from novel import paths, prov, wontfix
+from novel import paths, wontfix
 from novel.quality.global_review import review_item_kind
 from novel.errors import (
     ApprovalRequired, ArtifactUnreadable, TerminalState, UpstreamMissing,
 )
 from novel.orchestrator import approvals
+from novel.orchestrator.inspection import (
+    OperatorReadSnapshot, capture_operator_snapshot, read_surface_seal,
+)
 from novel.orchestrator.nodes import check_node
 from novel.orchestrator.state import (
-    overview, readonly_ctx, stage2_legacy_blueprint_recovery_needed,
+    readonly_ctx, stage2_legacy_blueprint_recovery_needed,
     stage2_projection_recovery_needed,
 )
-from novel.stages import check_only
 from novel.store import ArtifactStore
 
 _CH_RX = re.compile(r'ch(\d+)')
@@ -158,20 +161,23 @@ def _invalid_recovery_how(
 def inbox_view(base: str | os.PathLike[str], sid: str) -> InboxView:
     """一本书的待人工清单。**纯读**：不写一个字节、不发一个请求、不产生新判定。
 
-    ⚠ 它对每个已移植层各跑一次 0 成本复检（stage2/4 会重算判据，大书上是秒级）
-    ——第二阶段挂 HTTP 时若嫌慢，缓存加在路由层，不加在这里。
+    每次调用都新建一次 invocation-scoped 快照；没有跨请求、跨命令或跨写盘缓存。
     """
-    novel_dir = paths.resolve_novel_dir(base, sid)
-    code = prov.code_version()
+    return inbox_from_snapshot(capture_operator_snapshot(base, sid))
+
+
+def inbox_from_snapshot(snapshot: OperatorReadSnapshot) -> InboxView:
+    """从同一次 code/overview/check 快照投影八类清单，不重跑判据。"""
+    base = snapshot.base
+    sid = snapshot.sid
+    novel_dir = snapshot.novel_dir
+    code = snapshot.code
     items: list[InboxItem] = []
     wontfix_total = 0
     trim_audits = _current_trim_audits(novel_dir, code)
 
     for stage in STAGES:
-        # ⚠ 走 `check_node` 而不是 `nodes[0] if nodes else f'{stage}.review'`：
-        #   那条兜底真走到时会**造出一个不存在的节点 id**（`stage6.review`）——
-        #   一个编不出来的节点会一路带进 `readonly_ctx`，把「这层没有复检桥」
-        #   变成「这层有一座谁都找不到的桥」。单数那一格由落点自己把关。
+        # ctx/store 仍用于本层旁路账与活动终态；报告只取 snapshot 中已经跑过的那一份。
         ctx = readonly_ctx(novel_dir, check_node(stage), code)
         store = ArtifactStore(ctx)
 
@@ -191,18 +197,27 @@ def inbox_view(base: str | os.PathLike[str], sid: str) -> InboxView:
             items += _stage5_rejected_revisions(store)
             items += _stage5_stalled(store)
 
-        report = _report_of(ctx, stage)
+        report = snapshot.check(stage).for_view()
         if report is not None:
             items += _report_items_for_inbox(report, stage)
 
     items += _verification_items(novel_dir, code)
-    ov = overview(base, sid)
+    ov = snapshot.overview
     items += _stage2_projection_recovery_items(ov)
     items += _stage2_legacy_blueprint_recovery_items(ov)
     items += _trim_verification_items(novel_dir, code, audits=trim_audits)
-    items += _hook_verification_items(novel_dir, code)
-    items += _stage4_approval_items(base, sid, novel_dir)
-    items += _approval_items(novel_dir, code)
+    stage6_workpack = _stage6_workpack_or_none(novel_dir, code)
+    stage7_workpack = _stage7_workpack_or_none(novel_dir, code)
+    items += _hook_verification_items(
+        novel_dir, code, workpack=stage6_workpack, workpack_checked=True)
+    items += _stage4_approval_items(
+        base, sid, novel_dir, snapshot=snapshot)
+    items += _approval_items(
+        novel_dir, code,
+        stage6_workpack=stage6_workpack,
+        stage7_workpack=stage7_workpack,
+        workpacks_checked=True,
+    )
 
     # “还等不等人”与“挡不挡交付”不能从 kind 在前端重推；由后端在唯一生产口物化。
     items = [_classify(item) for item in items]
@@ -218,9 +233,14 @@ def inbox_view(base: str | os.PathLike[str], sid: str) -> InboxView:
     for item in items:
         attention_counts[item.attention] += 1
         delivery_counts[item.delivery_effect] += 1
-    return InboxView(
+    view = InboxView(
         items=items, counts=counts, attention_counts=attention_counts,
         delivery_counts=delivery_counts, total=len(items), wontfix=wontfix_total)
+    if read_surface_seal(base, sid, code=code) != snapshot.surface_seal:
+        raise ArtifactUnreadable(
+            'Inbox 投影期间本书代码/产物/审批盘面发生变化；'
+            '拒绝返回混合时点清单，请重试')
+    return view
 
 
 def _stage2_projection_recovery_items(ov) -> list[InboxItem]:
@@ -269,15 +289,6 @@ def _classify(item: InboxItem) -> InboxItem:
     return item.model_copy(update={
         'delivery_effect': 'disclosure' if disclosure else 'blocking',
     })
-
-
-def _report_of(ctx, stage: str) -> CheckReport | None:
-    try:
-        return check_only(stage)(ctx)
-    except (UpstreamMissing, ArtifactUnreadable, TerminalState):
-        # 这一层没跑到 / 读不回来：它的处境由产物矩阵与各自的屏呈现，
-        # 清单不替它编条目——「查不了」不是「待办」。
-        return None
 
 
 def _stage_rels(stage: str) -> list[str]:
@@ -577,82 +588,111 @@ def _trim_verification_items(novel_dir, code: str, *, audits=None) -> list[Inbox
     return out
 
 
-def _hook_verification_items(novel_dir, code: str) -> list[InboxItem]:
+def _stage6_workpack_or_none(
+    novel_dir, code: str,
+) -> Stage6ApprovalWorkpack | None:
+    """只建一次与真正 approve 同 node/code 的 Stage6 fresh 工作包。"""
+    from novel.stages.stage6 import hook
+
+    store = ArtifactStore(readonly_ctx(novel_dir, 'stage6.approve', code))
+    if not store.exists(STAGE6_HOOK):
+        return None
+    try:
+        return hook.approval_workpack(store)
+    except (ArtifactUnreadable, TerminalState, UpstreamMissing):
+        return None
+
+
+def _stage7_workpack_or_none(
+    novel_dir, code: str,
+) -> Stage7ApprovalWorkpack | None:
+    """只建一次与真正 approve 同 node/code 的 Stage7 fresh 工作包。"""
+    from novel.stages.stage7 import rename
+
+    store = ArtifactStore(readonly_ctx(novel_dir, 'stage7.approve', code))
+    if not store.exists(STAGE7_NAME_MAP):
+        return None
+    try:
+        return rename.approval_workpack(store)
+    except (ArtifactUnreadable, TerminalState, UpstreamMissing):
+        return None
+
+
+def _hook_verification_items(
+    novel_dir, code: str, *,
+    workpack: Stage6ApprovalWorkpack | None = None,
+    workpack_checked: bool = False,
+) -> list[InboxItem]:
     """每条候选都等着一次 hash 绑定的人工核验——本仓没有自动放行门。
 
     ⚠ 这里曾按 `assessment.human_resolvable` 过滤。`semantic_state` 收成
     `unreviewed` / `uncertain` 两态之后那个谓词恒真，过滤是空转；
     **两个状态都要人看**，差别只在「没人判过」还是「两名判官的带证据结论等着人读」。
     """
-    from novel.stages.stage6 import semantic
-
-    store = ArtifactStore(readonly_ctx(novel_dir, 'stage6.hook', code))
-    if not store.exists(STAGE6_HOOK):
+    if not workpack_checked:
+        workpack = _stage6_workpack_or_none(novel_dir, code)
+    if workpack is None or workpack.disposition == 'already_current':
         return []
-    try:
-        art, _raw = store.read_own(Hook, STAGE6_HOOK)
-        assessments = semantic.current_assessments(store, art)
-    except (ArtifactUnreadable, TerminalState):
-        return []
-    resolved_sha = (
-        art.approved.resolution.subject_sha256
-        if art.approved is not None
-        and art.approved.resolution.basis == 'human_verification'
-        else None)
     out: list[InboxItem] = []
     seen: set[str] = set()
-    for index, candidate in enumerate(art.candidates, 1):
-        subject = semantic.text_sha256(candidate.text)
-        if subject in seen or subject == resolved_sha:
+    for candidate in workpack.candidates:
+        subject = candidate.subject_sha256
+        if subject in seen:
             continue
         seen.add(subject)
-        assessment = assessments[semantic.text_sha1(candidate.text)]
         out.append(InboxItem(
             kind='verification', stage='stage6', chapter=None,
             # ⚠ 收敛键按**位置身份**，不按策略名：同一种策略两条候选会共用一个键，
             #   而那正是「换了个位置的同类问题」被当成同一条的形状。
-            rule=f'reference_boundary:{slot_of(index)}',
-            what=f'候选 {index}（{candidate.approach}）当前为 {assessment.state}：'
-                 f'{assessment.reason}',
-            how=(f'人工核对全书事实后跑 `stage6.approve --pick {index} '
+            rule=f'reference_boundary:{candidate.slot}',
+            what=(f'候选 {candidate.index}（{candidate.approach}）当前为 '
+                  f'{candidate.semantic_state}：{candidate.semantic_reason}'),
+            how=(f'人工读完同一终审工作包的 A/B 与机械证据后跑 '
+                 f'`stage6.approve --pick {candidate.index} '
                  f'--actor <自报身份> --reason <理由> '
-                 f'--subject-sha256 {subject}`；候选字节变化会拒绝旧决定')))
+                 f'--subject-sha256 {subject} '
+                 f'--workpack-sha256 {workpack.workpack_sha256}`；'
+                 '候选、代码、规则或证据变化都会拒绝旧决定')))
     return out
 
 
-def _approval_items(novel_dir, code: str) -> list[InboxItem]:
+def _approval_items(
+    novel_dir, code: str, *,
+    stage6_workpack: Stage6ApprovalWorkpack | None = None,
+    stage7_workpack: Stage7ApprovalWorkpack | None = None,
+    workpacks_checked: bool = False,
+) -> list[InboxItem]:
     """两个「人定稿」闸门。⚠ 它们**不是故障**，但确实该在这张清单上。"""
     out: list[InboxItem] = []
 
-    store6 = ArtifactStore(readonly_ctx(novel_dir, 'stage6.hook', code))
-    if store6.exists(STAGE6_HOOK):
-        try:
-            art, _raw = store6.read_own(Hook, STAGE6_HOOK)
-        except ArtifactUnreadable:
-            art = None
-        if art is not None and art.approved is None:
-            out.append(InboxItem(
-                kind='approval', stage='stage6', chapter=None, rule='stage6.approve',
-                what='开篇文案已产三候选，还没有人定稿——定稿是本层现役的唯一闸门',
-                how=('在文案屏核对语义/机械结论后，跑 '
-                     '`stage6.approve --pick N --actor <自报身份> --reason <理由> '
-                     '--subject-sha256 <屏上当前 hash>`')))
+    if not workpacks_checked:
+        stage6_workpack = _stage6_workpack_or_none(novel_dir, code)
+        stage7_workpack = _stage7_workpack_or_none(novel_dir, code)
 
-    store7 = ArtifactStore(readonly_ctx(novel_dir, 'stage7.rename', code))
-    if store7.exists(STAGE7_NAME_MAP):
-        try:
-            art7, _raw = store7.read_own(NameMap, STAGE7_NAME_MAP)
-        except ArtifactUnreadable:
-            art7 = None
-        if art7 is not None and art7.approved is None:
-            from novel.stages.stage7.rename import approval_subject_sha256
-            subject = approval_subject_sha256(art7)
-            out.append(InboxItem(
-                kind='approval', stage='stage7', chapter=None, rule='stage7.approve',
-                what='人名映射表已产出，还没有人定稿——定稿是给整份盖章',
-                how=('核对新旧对照与「漏网叫法候选」后跑 '
-                     '`stage7.approve --actor <自报身份> --reason <理由> '
-                     f'--subject-sha256 {subject}`；人物决定变化会拒绝旧决定')))
+    if (stage6_workpack is not None
+            and stage6_workpack.disposition != 'already_current'):
+        out.append(InboxItem(
+            kind='approval', stage='stage6', chapter=None, rule='stage6.approve',
+            what=('开篇三候选的当前代码/规则/证据工作包还没有有效人工定稿——'
+                  '定稿是本层现役的唯一闸门'),
+            how=('先读 `approval workpack stage6 <sid> --base <base>`；选择候选 N 后跑 '
+                 '`stage6.approve --pick N --actor <自报身份> --reason <理由> '
+                 '--subject-sha256 <同一工作包 candidates[N].subject_sha256> '
+                 f'--workpack-sha256 {stage6_workpack.workpack_sha256}`。'
+                 '逐候选 verification 行给出可直接复制的精确 subject；同一当前工作包'
+                 '已有批准时本项不会发布')))
+
+    if (stage7_workpack is not None
+            and stage7_workpack.disposition != 'already_current'):
+        out.append(InboxItem(
+            kind='approval', stage='stage7', chapter=None, rule='stage7.approve',
+            what=('人名映射当前代码/规则/人物证据工作包还没有有效人工定稿——'
+                  '定稿是给整份盖章'),
+            how=('核对同一工作包的新旧对照、实际命中、明确保留与残留上下文后跑 '
+                 '`stage7.approve --actor <自报身份> --reason <理由> '
+                 f'--subject-sha256 {stage7_workpack.decision_subject_sha256} '
+                 f'--workpack-sha256 {stage7_workpack.workpack_sha256}`；'
+                 '人物决定、代码、规则或证据变化都会拒绝旧决定')))
     return out
 
 
@@ -680,7 +720,8 @@ def _report_items_for_inbox(
 
 
 def _stage4_approval_items(
-    base: str | os.PathLike[str], sid: str, novel_dir,
+    base: str | os.PathLike[str], sid: str, novel_dir, *,
+    snapshot: OperatorReadSnapshot | None = None,
 ) -> list[InboxItem]:
     """Stage4 A/B 当前态 + 不可擦除的 B 披露审阅证据。
 
@@ -690,7 +731,12 @@ def _stage4_approval_items(
     并携带 typed actor/reason/hash/time；这与「从没看见」不是一个状态。
     """
     del novel_dir  # 路径只由 approvals 的 current-subject 生产口解析。
-    doc = approvals.get(base, sid)
+    doc = (
+        approvals.get(base, sid)
+        if snapshot is None
+        else approvals.get(
+            base, sid, overview=snapshot.overview, code=snapshot.code)
+    )
     out: list[InboxItem] = []
     design = doc.design_review
     if design.state in ('missing', 'expired'):
@@ -764,7 +810,20 @@ def _stage4_approval_items(
         ))
 
     try:
-        workpack = approvals.structure_workpack(base, sid)
+        if snapshot is None:
+            workpack = approvals.structure_workpack(base, sid)
+        else:
+            # 同一调用已经跑过 Stage4 生产复检；不可用就维持上面的 A/B
+            # 当前态，不另起一次 check 把七层快照膨胀成第八次判据执行。
+            report = snapshot.check('stage4').for_view()
+            if report is None:
+                return out
+            workpack = approvals.structure_workpack(
+                base, sid,
+                overview=snapshot.overview,
+                code=snapshot.code,
+                check_report=report,
+            )
     except (UpstreamMissing, TerminalState, ApprovalRequired):
         # Plan/B 还没有到可组 workpack 的相位；上面的 A/B state
         # 仍是当前可读结论。载体损坏则不在此处吞，必须 fail closed。

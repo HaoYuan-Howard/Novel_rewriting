@@ -111,6 +111,18 @@ corpus 回归：尚未用 current-schema 真实整书跑到 Stage7，也没有�
 因此 `default_profiles` 仍为 null，未显式 profile 的 legacy LLM 路仍保留；现在删除或自动改写它会把
 未经真实验收的工程可达性冒充生产迁移完成。
 
+Commander/Executor 的零成本工程收口已补齐以下读面，但**不改变上述真实付费验收缺口**：Stage4/6/7
+审批工作包以代码、规则、产物主体和完整 workpack SHA 绑定，完全相同的 current typed 决定可幂等跳过；
+Stage6/7 页面必须真实展示工作包证据后才允许提交双 hash。`state --with-inbox` 在单次调用内复用冻结
+snapshot，canonical 终审只 collect 一次、内存 sync/validate 通过后原子提交，再由 fresh
+`delivery.assess` 独立关闭。operator phase 遥测只拆 attributed/unattributed 墙钟；Commander 宿主
+模型 usage 仍越不过进程边界，不得由墙钟估 token 或成本。
+
+Stage6 另有默认关闭的 `compact-v1` JSON 与独立 session B-worker 微错峰实验臂；默认请求仍保持
+`pretty-v1 + 0ms`。compact 目前只证明字节语义等价与工程可运行，静态公共前缀也不保证 provider
+cache hit。是否切默认、是否采用错峰，以及账本 prompt/cache/墙钟的真实收益，必须放进下面同一批
+干净代码、干净缓存、多书付费质量回归；不能拿本书单次提速直接定案。
+
 **工作（严格按顺序完成）**：
 
 - 已建立供应商中立 executor / Commander driver、能力探针、精确 profile、追加式 session 审计与
@@ -119,6 +131,8 @@ corpus 回归：尚未用 current-schema 真实整书跑到 Stage7，也没有�
   node/chapter/judge 独占 session，候选、代码反馈、checkpoint、正式提交、adoption 与终验闭合。
 - 已接通 API/前端 capability 驱动的 Commander、默认 executor、逐节点 override、精确模型与
   reasoning effort；preview/start/queue 冻结同一快照，两项授权继续独立，标准代批只走 typed CLI façade。
+- 已接通 hash-bound Stage6/7 审批 workpack、current 决定幂等跳过、invocation-scoped state/inbox
+  snapshot、collect-once finalizer 与 operator phase 遥测；这些都是 0 模型工程能力，不替代付费质量验收。
 - 用 current-schema 真实整书跑到 Stage7 并核对正式产物、双账、会话审计、审批与终审包后，才把
   agent 设为 Commander 主路的默认执行路径。DeepSeek 长期保留为独立、显式且不可自动触发的
   legacy LLM 路径，不作为 agent 的静默 fallback；后续另行把现役 LLM 客户端抽成供应商中立基类，

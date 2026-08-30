@@ -284,6 +284,12 @@ fact/unver 分组与未销账 trim。状态为 `review_required` 或 `blocked` �
 
 ## stage6 代批
 
+先运行 `novel.cli approval workpack stage6 <SID> --base <BASE>` 并完整读取同一份包。它把三条候选
+正文、完整 subject SHA-256、机械异常与读数、两名盲判官各自的 verdict/reason/evidence、A/B 原始
+ranking 和 workpack SHA-256 放在一个关闭式阅读面。若 `disposition=already_current`，当前批准仍
+精确绑定相同代码、规则与产物主体，直接跳过重复 approve；不得为了刷新时间戳或 Commander 会话
+重新签一次。只有 `review_required` 才继续以下裁决。
+
 按候选级而不是总报告级裁决。把 mechanical 与 semantic 中相同 label、相同完整
 SHA-256 主体的结论对齐后，依次筛选：
 
@@ -320,16 +326,23 @@ SHA-256 主体的结论对齐后，依次筛选：
 freshness。确为同输入非确定性时采信更严格的一轮，不用后一次翻绿覆盖前一轮风险；
 把冲突本身写入终审包。
 
-`stage6.approve --pick N --actor <ACTOR> --reason <text> --subject-sha256 <64hex>` 前后同时核对：
+`stage6.approve --pick N --actor <ACTOR> --reason <text> --subject-sha256 <64hex> --workpack-sha256 <64hex>`
+前后同时核对：
 
 - `hook.json.approved.approach/text` 与所选 label 一致；
-- 提交的 hash 是经当前归一链后定稿文本的完整 SHA-256，与页面展示值一致；
+- 提交的 subject hash 是经当前归一链后定稿文本的完整 SHA-256，workpack hash 来自刚刚完整读过的
+  同一份包；任一漂移都必须拒绝旧决定；
 - 最新 semantic 对该文本的决议仍 fresh，并匹配当前 evaluator 指纹；
 - `state` 把 stage6 判为完成。
 
 三者一致才算定稿。总报告因落选候选 HARD 返回 exit 1 时使用 `ready_with_disclosures` 的披露口径，不机械撤销已验证的所选定稿。
 
 ## stage7 代批
+
+先运行 `novel.cli approval workpack stage7 <SID> --base <BASE>`。同一份包必须展示人物表、别名、
+补充映射、kept 明细、逐旧字面的真实替换命中、完整残留上下文、替换计数、机械异常/度量、完整
+decision subject SHA-256 与 workpack SHA-256。若 `disposition=already_current`，当前批准仍绑定相同
+代码、规则与人物决策面，跳过重复 approve；只有 `review_required` 才继续以下审阅和修订。
 
 在运行 `stage7.approve` 前：
 
@@ -364,7 +377,9 @@ freshness。确为同输入非确定性时采信更严格的一轮，不用后�
    不退休成书。预检达到预期后再经 `stage7.rename --apply-edit <绝对路径>` 正式落盘。
 
 任何映射编辑后都重新取当前决策面 SHA-256，运行
-`stage7.approve --actor <ACTOR> --reason <text> --subject-sha256 <64hex>` 与 `stage7.assemble`，
+`approval workpack stage7` 并重读新包，再运行
+`stage7.approve --actor <ACTOR> --reason <text> --subject-sha256 <64hex> --workpack-sha256 <64hex>` 与
+`stage7.assemble`，
 再执行成书逐字对账。旧 approved/book_txt 必须视为已过期，不得复用旧页面 hash、
 旧批准或旧成书指纹。
 

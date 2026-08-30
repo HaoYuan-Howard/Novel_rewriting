@@ -46,7 +46,9 @@ from contracts.invariants import (
     HOOK_SLOTS,
 )
 from contracts.schema.base import Fp10, StrictModel
-from contracts.schema.common import Finding, HashBoundHumanApproval, LlmProvenance
+from contracts.schema.common import (
+    Finding, HashBoundHumanApproval, LlmProvenance, Sha256,
+)
 from contracts.schema.evaluation import EvaluatorFingerprint, SemanticDecision
 from contracts.schema.stage5 import ContextSource, JudgedDraft
 
@@ -136,6 +138,9 @@ class HookApprovalResolution(HashBoundHumanApproval):
     #: 人当时读的是哪一份 semantic 审判。`None` = 定稿时盘上没有可用的当前审判
     #: （那时人是在**没有判官证据**的情况下拍板的，这两件事必须分得开）。
     semantic_review_seq: int | None = Field(default=None, ge=1)
+    #: 终审人实际看到的紧凑工作包。旧盘没有这一格时仍可解码，但不能据此宣称
+    #: ``already_current``；下一次明确批准会补上当前摘要。
+    workpack_sha256: Sha256 | None = None
 
 
 class ApprovedHook(StrictModel):
@@ -189,6 +194,9 @@ class HookParams(StrictModel):
     """初始生成与单候选自动重试当时的输出上限。"""
 
     max_tokens: int = Field(ge=1)
+    #: 动态 JSON 的排版实验臂。默认值兼容现役 pretty 字节；现役 producer
+    #: 仍须显式写入，不能靠默认值让正式产物无法区分付费 A/B。
+    prompt_json_layout: Literal['pretty-v1', 'compact-v1'] = 'pretty-v1'
     candidate_retry_max_tokens: int = Field(default=24000, ge=1)
     # ``0`` is the neutral migration value for v2 artifacts: those artifacts
     # predate candidate retrying and therefore must not claim that a retry was
@@ -483,7 +491,9 @@ class HookSemanticReview(StrictModel):
 class HookEdit(StrictModel):
     """`stage6/hook_edit.json` —— 人手改好的**一条**文案文本（`--apply-edit` 的决策集）。
 
-    `candidate` 指明改哪条候选（**位置身份** `c1`/`c2`/`c3`）；`None` ⇒ 写/替换**定稿**。
+    `candidate` 指明改哪条候选（**位置身份** `c1`/`c2`/`c3`）。`None` 只表示
+    「修改当前定稿的候选前身」：运行时把归一后文本写回原 slot、清掉旧批准，再要求
+    刷新 hash-bound workpack 并重新批准；旧定稿没有候选前身时必须显式给 slot。
     ⚠ 它曾经填策略名。同一种策略采两条样本时策略名不再唯一 ⇒ 选不中那一条。
     ⚠ 只收文本：`mech` / `findings` 由 `_normalize_and_judge` 重算——
     人工稿与生成稿走同一条归一+判定，没有免检写口。
@@ -500,7 +510,7 @@ class HookEdit(StrictModel):
         audit = (self.actor, self.reason, self.subject_sha256)
         if self.candidate is None:
             if any(value is None or not value.strip() for value in audit):
-                raise ValueError('人工定稿必须显式给 actor、reason 和 subject_sha256')
+                raise ValueError('修改既有定稿必须显式给 actor、reason 和 subject_sha256')
             # subject 绑定的是进入正式产物的归一后文本。归一口径依赖本书原作文案的
             # 引号与分段，schema 单独拿到 edit 时算不出来；由 run_apply_edit 在写盘前
             # 用同一条 normalize_hook 链校验，不能在这里误绑 raw upload 字节。

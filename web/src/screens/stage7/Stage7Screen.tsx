@@ -22,6 +22,7 @@ import { Mono } from '@/components/ui/Mono'
 import { Panel, PaneHeader } from '@/components/ui/Panel'
 import { Prose } from '@/components/ui/Prose'
 import { cx } from '@/lib/cx'
+import type { Stage7ApprovalWorkpack } from '@/types/approvals'
 
 /**
  * `extra_subs[].origin` 的人读名。**判定上两者同权**（后端 `ExtraSub.origin` 那一格
@@ -55,6 +56,19 @@ export function Stage7Screen() {
   const [reason, setReason] = useState('')
 
   const q = useQuery({ queryKey: qk.stage7(sid), queryFn: () => api.getStage7(sid), retry: false })
+  const workpackQ = useQuery({
+    queryKey: qk.finalApprovalWorkpack(sid, 'stage7'),
+    queryFn: () => api.getStage7ApprovalWorkpack(sid),
+    retry: false,
+  })
+  const workpackSettled =
+    !workpackQ.isLoading && !workpackQ.isFetching && !workpackQ.isError
+  const workpackReady = Boolean(
+    workpackSettled && workpackQ.data?.disposition === 'review_required',
+  )
+  const workpackCurrent = Boolean(
+    workpackSettled && workpackQ.data?.disposition === 'already_current',
+  )
   const chQ = useQuery({
     queryKey: qk.stage7ch(sid, ordinal ?? 0),
     queryFn: () => api.getStage7Chapter(sid, ordinal!),
@@ -84,13 +98,19 @@ export function Stage7Screen() {
   })
 
   const approve = useMutation({
-    mutationFn: (req: { actor: string; reason: string; subject_sha256: string }) =>
+    mutationFn: (req: {
+      actor: string
+      reason: string
+      subject_sha256: string
+      workpack_sha256: string
+    }) =>
       api.approveNames(sid, req),
     onSuccess: (job) => {
       if (job.state !== 'failed') notify('人名表已定稿')
       void qc.invalidateQueries({ queryKey: qk.stage7(sid) })
       void qc.invalidateQueries({ queryKey: qk.check(sid, 'stage7') })
       void qc.invalidateQueries({ queryKey: qk.approvals(sid) })
+      void qc.invalidateQueries({ queryKey: qk.finalApprovalWorkpack(sid, 'stage7') })
       void qc.invalidateQueries({ queryKey: qk.jobs(sid) })
     },
   })
@@ -102,11 +122,15 @@ export function Stage7Screen() {
       void qc.invalidateQueries({ queryKey: qk.stage7(sid) })
       void qc.invalidateQueries({ queryKey: qk.check(sid, 'stage7') })
       void qc.invalidateQueries({ queryKey: qk.approvals(sid) })
+      void qc.invalidateQueries({ queryKey: qk.finalApprovalWorkpack(sid, 'stage7') })
       void qc.invalidateQueries({ queryKey: qk.jobs(sid) })
     },
   })
 
-  const askApprove = (subjectSha256: string) =>
+  const askApprove = () => {
+    const workpack = workpackQ.data
+    if (!workpackReady || !workpack) return
+    const subjectSha256 = workpack.decision_subject_sha256
     askConfirm({
       req: {
         kind: 'stage7.approve',
@@ -115,6 +139,7 @@ export function Stage7Screen() {
           '--actor', actor.trim(),
           '--reason', reason.trim(),
           '--subject-sha256', subjectSha256,
+          '--workpack-sha256', workpack.workpack_sha256,
         ],
         sid,
         ordinal: null,
@@ -123,8 +148,10 @@ export function Stage7Screen() {
         actor: actor.trim(),
         reason: reason.trim(),
         subject_sha256: subjectSha256,
+        workpack_sha256: workpack.workpack_sha256,
       }),
     })
+  }
 
   const askAdoptResidual = () =>
     askConfirm({
@@ -177,6 +204,8 @@ export function Stage7Screen() {
         {(d) => {
           const rows = chQ.data?.rows ?? null
           const changedRows = rows?.filter((r) => r.changed).length ?? 0
+          const approvalCurrent = workpackCurrent
+          const currentApproval = approvalCurrent ? workpackQ.data?.current_approval : null
 
           return (
             <section className="flex flex-col gap-16 px-30 py-24">
@@ -191,12 +220,16 @@ export function Stage7Screen() {
                   <span
                     className="rounded-chip px-10 py-3 text-body font-semibold"
                     style={
-                      d.approved
+                      approvalCurrent
                         ? { color: FRESH.fresh.color, background: FRESH.fresh.bg }
                         : { color: SEV.unver.color, background: SEV.unver.bg }
                     }
                   >
-                    {d.approved ? '人物表已定稿' : '人物表还没定稿'}
+                    {approvalCurrent
+                      ? '人物表已定稿'
+                      : d.approved
+                        ? '旧定稿未绑定当前工作包 · 需重审'
+                        : '人物表还没定稿'}
                   </span>
                 </div>
               </header>
@@ -205,6 +238,12 @@ export function Stage7Screen() {
                 <div className="rounded-card border border-warn-line bg-warn-bg px-18 py-12 text-body text-warn-ink">
                   定稿失败：{errorBody(approve.error)}
                   <ErrorHint error={approve.error} />
+                </div>
+              ) : null}
+              {workpackQ.isError ? (
+                <div className="rounded-card border border-warn-line bg-warn-bg px-18 py-12 text-body text-warn-ink">
+                  终审工作包读取失败：{errorBody(workpackQ.error)}
+                  <ErrorHint error={workpackQ.error} />
                 </div>
               ) : null}
 
@@ -218,12 +257,16 @@ export function Stage7Screen() {
                     <div>
                       定稿绑定当前姓氏映射、角色决定与人工补充替换的 SHA-256；表面变化后旧审批自动失效。
                     </div>
-                    {d.approved ? (
+                    {currentApproval ? (
                       <div className="text-ink-3">
-                        当前审批：{d.approved.actor} · {d.approved.reason} · subject{' '}
+                        当前审批：{currentApproval.actor} · {currentApproval.reason} · subject{' '}
                         <Mono className="text-micro">
-                          {d.approved.subject_sha256.slice(0, 16)}…
+                          {currentApproval.subject_sha256.slice(0, 16)}…
                         </Mono>
+                      </div>
+                    ) : d.approved ? (
+                      <div className="text-ink-3">
+                        盘上仍可追溯旧审批，但它没有通过当前 workpack 证明，不能充当交付闸。
                       </div>
                     ) : null}
                   </>
@@ -231,14 +274,34 @@ export function Stage7Screen() {
                 actions={
                   <ActionButton
                     action={{ kind: 'stage7.approve', extra: null, paid: false }}
-                    onClick={() => askApprove(d.approval_subject_sha256)}
-                    disabled={!actor.trim() || !reason.trim()}
-                    disabledReason="请先填写自报身份与定稿理由"
+                    onClick={askApprove}
+                    disabled={
+                      !actor.trim() || !reason.trim() || !workpackReady
+                    }
+                    disabledReason={
+                      workpackCurrent
+                        ? '当前代码、规则和人物主体的工作包已经批准，无需重复整读'
+                        : workpackQ.isError
+                          ? '当前终审工作包读取失败，不能绑定本轮审批'
+                          : workpackQ.isFetching
+                            ? '正在读取或刷新当前终审工作包'
+                        : !workpackQ.data
+                          ? '正在读取当前终审工作包'
+                          : workpackQ.data.disposition !== 'review_required'
+                            ? '服务端返回了未知的终审工作包处置态'
+                          : '请先填写自报身份与定稿理由'
+                    }
                   >
-                    {d.approved ? '重新定稿' : '定稿人物表'}
+                    {workpackCurrent
+                      ? '当前工作包已批准 · 跳过'
+                      : d.approved
+                        ? '重新定稿'
+                        : '定稿人物表'}
                   </ActionButton>
                 }
               />
+
+              {workpackQ.data ? <Stage7WorkpackEvidence workpack={workpackQ.data} /> : null}
 
               <div className="prose-cn text-tag text-ink-4">
                 正文只读——改正文回成稿屏。人物表编辑走 CLI（stage7.rename --apply-edit）。
@@ -611,6 +674,146 @@ export function Stage7Screen() {
         }}
       </QueryStates>
     </ScreenFrame>
+  )
+}
+
+function Stage7WorkpackEvidence({ workpack }: { workpack: Stage7ApprovalWorkpack }) {
+  return (
+    <details open className="overflow-hidden rounded-card border border-line-row bg-sunken-2">
+      <summary className="cursor-pointer px-16 py-11 text-body font-semibold text-ink-2">
+        hash-bound 人名终审包 · {workpack.disposition} · {workpack.characters.length} 人
+      </summary>
+      <div className="flex flex-col gap-12 border-t border-line-row px-16 py-12">
+        <Mono className="break-all text-micro text-ink-4">
+          workpack {workpack.workpack_sha256}
+        </Mono>
+        <div className="grid gap-4 text-micro text-ink-4 md:grid-cols-2">
+          <Mono className="break-all">artifact {workpack.artifact_subject_sha256}</Mono>
+          <Mono className="break-all">decision {workpack.decision_subject_sha256}</Mono>
+          <Mono>code {workpack.code_version}</Mono>
+          <Mono>rules {workpack.rules_fingerprint}</Mono>
+        </div>
+        <div className="grid gap-8 md:grid-cols-2">
+          <div className="rounded-btn border border-line-row bg-card px-10 py-8 text-tag">
+            <div className="font-semibold text-ink-2">姓氏映射</div>
+            <div className="text-ink-3">
+              {Object.entries(workpack.surname_map)
+                .map(([old, next]) => `${old}→${next}`).join(' · ') || '（空）'}
+            </div>
+          </div>
+          <div className="rounded-btn border border-line-row bg-card px-10 py-8 text-tag">
+            <div className="font-semibold text-ink-2">
+              人工补充替换（{workpack.extra_subs.length}）
+            </div>
+            <div className="text-ink-3">
+              {workpack.extra_subs
+                .map((item) => `${item.old}→${item.new}（${item.origin}）`).join(' · ') || '（空）'}
+            </div>
+          </div>
+        </div>
+        <div className="grid gap-8 md:grid-cols-2">
+          {workpack.characters.map((character) => (
+            <div key={character.char_id} className="rounded-btn border border-line-row bg-card px-10 py-8 text-tag">
+              <div className="font-semibold text-ink-2">
+                {character.old_canonical} → {character.new_canonical} · 实际命中 {character.hits}
+              </div>
+              <div className="text-ink-4">
+                别名：{character.aliases.map((alias) => `${alias.old}→${alias.new}`).join('、') || '（无）'}
+              </div>
+              <div className="prose-cn text-ink-3">
+                {character.renamed
+                  ? character.reason
+                  : `明确不改：${character.not_renamed_reason ?? '未说明理由'}`}
+              </div>
+            </div>
+          ))}
+        </div>
+        <div className="flex flex-col gap-4 text-tag text-ink-3">
+          <span className="font-semibold">
+            最终替换表 {workpack.subs_count} 项 · 明确保留 {workpack.kept_count} 项
+          </span>
+          <span className="font-semibold">逐章 + hook 单次扫描真实替换命中</span>
+          <span>
+            {Object.entries(workpack.replacement_hits)
+              .map(([old, count]) => `${old} ${count}`).join(' · ') || '0 次'}
+          </span>
+          <span className="font-semibold">明确保留（{workpack.kept_count}）</span>
+          <span>{workpack.kept.join('、') || '（空）'}</span>
+        </div>
+        <div className="grid gap-8 md:grid-cols-2">
+          <div className="rounded-btn border border-line-row bg-card px-10 py-8 text-tag">
+            <div className="font-semibold text-ink-2">姓字覆盖基线</div>
+            {Object.entries(workpack.baselines).map(([stem, baseline]) => (
+              <div key={stem}>
+                {stem}：{baseline.covered}/{baseline.total} · residual {baseline.residual} · ratio{' '}
+                {baseline.ratio === null ? 'unknown' : baseline.ratio.toFixed(3)}
+              </div>
+            ))}
+          </div>
+          <div className="rounded-btn border border-line-row bg-card px-10 py-8 text-tag">
+            <div className="font-semibold text-ink-2">恒等往返基线</div>
+            {workpack.identity ? (
+              <>
+                <div>
+                  {workpack.identity.roundtrip_ok ? '守恒' : '不守恒'} · 扫描{' '}
+                  {workpack.identity.chapters} 章 · mismatch{' '}
+                  {workpack.identity.mismatches.join('、') || '（无）'}
+                </div>
+                <div>盲区：{workpack.identity.blind.join('；')}</div>
+              </>
+            ) : '未运行（不是通过）'}
+          </div>
+        </div>
+        <div className="flex flex-col gap-5 text-tag text-ink-3">
+          <span className="font-semibold">人物表结论（{workpack.book.length}）</span>
+          {workpack.book.map((finding, index) => (
+            <div
+              key={`${finding.rule}:${finding.evidence_key || finding.detail}:${index}`}
+              className="rounded-btn border border-line-row bg-card px-10 py-8"
+            >
+              <Mono>{finding.rule} · {finding.sev}</Mono>
+              <div className="prose-cn text-ink-2">{finding.detail}</div>
+            </div>
+          ))}
+        </div>
+        <div className="flex flex-col gap-7">
+          <span className="text-tag font-semibold text-ink-2">
+            残留上下文（{workpack.residual.length}）
+          </span>
+          {workpack.residual.map((item, index) => (
+            <div key={index} className="rounded-btn border border-line-row bg-card px-10 py-8 text-tag">
+              <Mono>{item.where} · {item.stem} · {item.confidence}</Mono>
+              <div className="prose-cn text-ink-2">{item.context}</div>
+              <div className="text-ink-4">
+                {item.unit ?? item.hit} → {item.suggest ?? '（无建议，需人工判断）'}
+              </div>
+            </div>
+          ))}
+        </div>
+        <div className="text-tag text-ink-4">
+          机械规则 {workpack.check.rules_scanned} 条：ok {workpack.check.counts.ok} · hit{' '}
+          {workpack.check.counts.hit} · unver {workpack.check.counts.unver} · skipped{' '}
+          {workpack.check.counts.skipped}。来源 {workpack.check.provenance.freshness}/
+          {workpack.check.provenance.reason}；异常 {workpack.check.attention.length} 条，
+          metric {workpack.check.metrics.length} 条。
+        </div>
+        {[...workpack.check.attention, ...workpack.check.metrics].map((row) => (
+          <div key={row.rule} className="rounded-btn border border-line-row bg-card px-10 py-8 text-tag">
+            <div className="flex flex-wrap gap-6">
+              <Mono>{row.rule}</Mono>
+              <span>{row.sev}/{row.status}</span>
+              {row.scanned ? <span>扫描：{row.scanned}</span> : null}
+            </div>
+            {row.why ? <div className="prose-cn">{row.why}</div> : null}
+            {row.findings.map((finding, index) => (
+              <div key={`${finding.rule}:${finding.evidence_key || finding.detail}:${index}`} className="prose-cn text-ink-2">
+                {finding.detail}
+              </div>
+            ))}
+          </div>
+        ))}
+      </div>
+    </details>
   )
 }
 

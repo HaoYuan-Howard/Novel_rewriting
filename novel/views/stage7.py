@@ -24,7 +24,7 @@ import os
 import re
 
 from contracts.schema.api import (
-    HookRename, NameDecisionLine, RenameRow, Stage7View,
+    HookRename, NameDecisionLine, RenameRow, Stage7ApprovalWorkpack, Stage7View,
 )
 from contracts.schema.stage6 import Hook
 from contracts.schema.stage7 import NameMap
@@ -35,7 +35,7 @@ from novel.stages.stage5.measure import (
     is_legacy_stage5_rel, legacy_stage5_paths, load_drafts,
 )
 from novel.stages.stage7.subs import apply_subs, sub_table
-from novel.stages.stage7.rename import approval_subject_sha256
+from novel.stages.stage7.rename import approval_decision_line, approval_subject_sha256
 from novel.store import ArtifactStore
 
 NODE = 'stage7.rename'
@@ -86,7 +86,7 @@ def stage7_view(base: str | os.PathLike[str], sid: str,
         sid=paths.derive_source_meta(novel_dir.name)[0],
         title=paths.title_of(novel_dir),
         surname_map=dict(art.surname_map),
-        characters=[_decision_line(d, art) for d in art.characters],
+        characters=[approval_decision_line(d, art) for d in art.characters],
         extra_subs=art.extra_subs,
         subs_count=len(art.subs),
         kept_count=len(art.kept),
@@ -112,17 +112,21 @@ def stage7_view(base: str | os.PathLike[str], sid: str,
     )
 
 
-def _decision_line(d, art: NameMap) -> NameDecisionLine:
-    """一行人物表 + 按人求和的 `hits`（恒等条目产地不计数，这里照旧）。"""
-    faces = {d.old_canonical} | {a.old for a in d.aliases}
-    hits = sum(face.counts.get(f, 0)
-               for face in [*art.applied.chapters.values(), art.applied.hook]
-               for f in faces)
-    return NameDecisionLine(
-        char_id=d.char_id, old_canonical=d.old_canonical,
-        new_canonical=d.new_canonical, renamed=d.renamed,
-        not_renamed_reason=d.not_renamed_reason, reason=d.reason,
-        aliases=d.aliases, hits=hits)
+def stage7_approval_workpack(
+    base: str | os.PathLike[str], sid: str,
+) -> Stage7ApprovalWorkpack:
+    """当前人物决策、真实替换命中与机械异常的一次紧凑只读快照。"""
+    from novel.stages.stage7.rename import approval_workpack
+
+    novel_dir = paths.resolve_novel_dir(base, sid)
+    store = ArtifactStore(readonly_ctx(
+        novel_dir, 'stage7.approve', prov.code_version()))
+    live_legacy = legacy_stage5_paths(store)
+    if live_legacy:
+        raise HumanEditProtected(
+            f'legacy_incompatible：发现旧 Stage5 双臂路径 {live_legacy[:8]}。'
+            '不能据此构造 Stage7 当前终审工作包')
+    return approval_workpack(store)
 
 
 #: 段落切分。**只按换行切**——替换面里没有含换行的字面，逐段替换 ≡ 整章替换。

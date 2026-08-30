@@ -446,10 +446,13 @@ def readonly_ctx(novel_dir: Path, node: str, code: str) -> RunContext:
                       readonly=True)
 
 
-def overview(base: str | os.PathLike[str], sid: str) -> NovelOverview:
-    """一本书跑到哪了。**纯读**：不写一个字节，不发一个请求。"""
-    novel_dir = paths.resolve_novel_dir(base, sid)
-    code = prov.code_version()
+def overview_at(novel_dir: Path, code: str) -> NovelOverview:
+    """用调用方已经冻结的只读坐标构造完成度。
+
+    ``overview`` 仍是普通调用方的公开入口；这一层只供同一次只读调用需要把
+    完成度与复检报告绑定到**同一个**代码指纹时复用。它不缓存，也不把报告
+    塞进 ``NovelOverview``（HTTP 的完成度响应仍然 verdict-free）。
+    """
     legacy = stage5_legacy_paths(novel_dir)
 
     #: 每层挑**本层第一个产它的节点**当提问者，理由见 `readonly_ctx`。
@@ -475,6 +478,12 @@ def overview(base: str | os.PathLike[str], sid: str) -> NovelOverview:
         stage5_legacy_paths=legacy,
         summary=overview_summary(stages),
     )
+
+
+def overview(base: str | os.PathLike[str], sid: str) -> NovelOverview:
+    """一本书跑到哪了。**纯读**：不写一个字节，不发一个请求。"""
+    novel_dir = paths.resolve_novel_dir(base, sid)
+    return overview_at(novel_dir, prov.code_version())
 
 
 # ─────────────────────────────────────────────────────────────────────────────

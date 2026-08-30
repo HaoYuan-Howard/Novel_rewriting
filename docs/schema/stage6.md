@@ -29,7 +29,7 @@ Stage6 生成放在正文前的开篇文案。一次模型调用产三个候选�
 stage6/hook.json             生成候选、机械判定与人工定稿
 stage6/_rounds/hook.rN.json  上一轮 hook.json 的整份归档
 stage6/semantic_N.json       A/B 双盲质量审判；决议按完整 SHA-256 绑定
-stage6/hook_edit.json        人工编辑一条候选或定稿的决策集
+stage6/hook_edit.json        人工编辑一条候选，或修改当前定稿的候选前身
 stage6/wontfix.json          人的「这条我不修」（可选；`--wontfix` 记账，纯 0 成本）
 ```
 
@@ -77,18 +77,24 @@ stage6/wontfix.json          人的「这条我不修」（可选；`--wontfix` 
 
 `ApprovedHook = slot + text + origin='human' + mech + findings + resolution`。`resolution` 必须记录自报
 `actor`（不是认证身份）、非空 `reason`、定稿文本的完整 `subject_sha256`、
+刚读 workpack 的完整 `workpack_sha256`、
 恒为 `human_verification` 的判定基础，以及可用的语义审判序号
 （`semantic_review_seq` 可空——「人在零证据下拍的板」与「人读了第 3 轮判官证据」必须分得开）。`slot` 记的是**从哪一条候选来**（位置身份 `c1`/`c2`/`c3`）；
-`None` = 没有候选前身（人手写）。⚠ 它曾是 `approach`（策略名 + 一个 `human_edit`），
+`None` = 没有候选前身（只可能见于既有的人手写记录；当前 apply-edit 不再新造这种绕过
+三候选工作包的定稿）。⚠ 它曾是 `approach`（策略名 + 一个 `human_edit`），
 而同一种策略采两条样本时策略名**答不出「是哪一条」**——那正是定稿要回答的问题。
 策略名没有丢：由 `candidates[slot].approach` 现算（能 0 成本现算的字段不落盘）。
 「它是不是人写的」由 `origin` 回答，与「有没有前身」是两件事。
-`hook_edit.json` 的 `subject_sha256` 必须绑定经过本书标点、引号与分段归一链后的定稿文本；
+`hook_edit.json` 的 `subject_sha256` 必须绑定经过本书标点、引号与分段归一链后的编辑文本；
 校验发生在 `run_apply_edit` 写盘前，并复用与普通候选批准相同的字节绑定闸，
-不能用 raw 上传字节的哈希绕过。
+不能用 raw 上传字节的哈希绕过。`candidate=null` 只允许修改当前定稿的候选前身：运行时把
+新文本写回原 slot 并清除批准，旧 workpack-bound approval 不再算 current；人须刷新工作包、
+重读后再运行 `stage6.approve`。若旧定稿没有 slot，运行时关闭式拒绝，要求人工显式指定
+`candidate=c1|c2|c3`；这样编辑后的正文一定进入三候选工作包，不存在绕过证据包的「第四条定稿」。
 
 `HookProvenance.params` 除初始 `max_tokens` 外，还冻结单候选重试的 max tokens、固定一次上限、
-`low` effort 与 `thinking=false`；`candidate_retries[]` 逐条保存 `slot`（哪一条候选被重试，不是哪种策略）、失败规则/证据指纹、
+`low` effort、`thinking=false` 与 `prompt_json_layout=pretty-v1｜compact-v1`；默认 `pretty-v1` 保持既有
+请求字节，compact 只删 JSON 语法空白。`candidate_retries[]` 逐条保存 `slot`（哪一条候选被重试，不是哪种策略）、失败规则/证据指纹、
 user/response 指纹、前后 HARD 数、cache policy、状态、是否采纳与失败理由。发生重试时
 `prompts.HOOK_RETRY_SYS` 必须存在；没有脏候选时该键与历史均为空。
 
@@ -111,7 +117,7 @@ HARD 数严格下降且文本不与另两条重复时才替换该候选和整组
 | `reviews` | `HookCandidateReview[]` | 合并后的诊断视图（质量分取 A/B 平均） |
 | `ranking` | `str[]` | 代码从合并决议与平均分确定性派生的真实标签排序 |
 | `judge_rankings` | `{A: str[], B: str[]}` | 两名 judge 各自的原始解匿名排序 |
-| `decisions` | `SemanticDecision[]` | 每份去重文本一条合并 PASS/FAIL/UNVER；唯一运行时判定源 |
+| `decisions` | `SemanticDecision[]` | 每份去重文本一条带 A/B 原始证据的合并 `UNVER`；唯一运行时判定源，不存在自动 PASS/FAIL |
 | `evaluator_fingerprint` | `EvaluatorFingerprint` | 运行时 model/prompt/schema/decoder 四格指纹，**没有 dataset**；prompt SHA 只冻结 `judge_request` 产出的两份实际静态请求面，不冒充逐书动态材料身份 |
 | `judged` | `{stage5/chNN.json: JudgedDraft}` | A/B 当时真正收到的开篇成稿；整文件 sha1 审计，`consumed.text_sha1` 判过期，未下发的后半书章稿不在此表 |
 | `_provenance` | `LlmProvenance` | 本次质量审判来源账 |
@@ -120,6 +126,10 @@ HARD 数严格下降且文本不与另两条重复时才替换该候选和整组
 prompt/input hash 及 `judged` 分别绑定。evaluator fingerprint 只回答静态 evaluator 是否换了 model、
 prompt 模板、响应 schema 或 decoder；把动态正文也混进这里会让“判官实现变了”和“本书输入变了”
 无法区分。
+
+实验 layout 与 B-worker stagger 都进入 semantic decoder fingerprint；默认仍为 `pretty-v1 + 0ms`。
+两名判官继续使用独立 session 并发，stagger 只在 B worker 内等待。静态公共前缀的字节数/SHA 是
+诊断 observation，不写进 semantic artifact，也不保证 provider cache hit；实际命中只认 ledger usage。
 
 `HookCandidateReview`：
 

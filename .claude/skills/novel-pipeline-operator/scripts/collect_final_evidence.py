@@ -24,16 +24,17 @@ if str(ROOT) not in sys.path:
 from contracts.invariants import INBOX_KIND, STAGES  # noqa: E402
 from contracts.schema.stage7 import NameMap  # noqa: E402
 from novel import paths, prov  # noqa: E402
-from novel.llm.ledger import ledger_path  # noqa: E402
+from novel.llm.ledger import ledger_path, read_jsonl_rows  # noqa: E402
 from novel.orchestrator import beacon  # noqa: E402
-from novel.orchestrator.nodes import check_node  # noqa: E402
-from novel.orchestrator.state import overview, readonly_ctx  # noqa: E402
-from novel.stages import check_only  # noqa: E402
+from novel.orchestrator.inspection import (  # noqa: E402
+    OperatorReadSnapshot, capture_operator_snapshot,
+)
+from novel.orchestrator.state import readonly_ctx  # noqa: E402
 from novel.stages.stage2 import global_review  # noqa: E402
 from novel.stages.stage7 import assemble, rename  # noqa: E402
 from novel.stages.stage7.subs import apply_subs  # noqa: E402
 from novel.store import ArtifactStore  # noqa: E402
-from novel.views.inbox import inbox_view  # noqa: E402
+from novel.views.inbox import inbox_from_snapshot  # noqa: E402
 from tools.book_overlap import measure as measure_overlap, split_book  # noqa: E402
 
 
@@ -49,22 +50,7 @@ _META_PATTERNS = {
 
 def _jsonl(path: Path) -> list[dict[str, Any]]:
     """服务日志读取口径：只容忍被 kill 留下的最后一条半行。"""
-    if not path.is_file():
-        return []
-    lines = path.read_bytes().decode('utf-8', errors='replace').splitlines()
-    rows: list[dict[str, Any]] = []
-    for index, line in enumerate(lines):
-        if not line.strip():
-            continue
-        try:
-            row = json.loads(line)
-        except json.JSONDecodeError:
-            if index == len(lines) - 1:
-                break
-            raise
-        if isinstance(row, dict):
-            rows.append(row)
-    return rows
+    return read_jsonl_rows(path)
 
 
 def _sev_summary(report) -> dict[str, dict[str, int]]:
@@ -93,14 +79,13 @@ def _quality_row(stage: str, report: dict[str, Any]) -> str:
             f"passed={str(report['passed']).lower()} |")
 
 
-def _reports(novel_dir: Path, sid: str) -> tuple[dict[str, Any], list[str]]:
-    code = prov.code_version()
+def _reports(snapshot: OperatorReadSnapshot) -> tuple[dict[str, Any], list[str]]:
     reports: dict[str, Any] = {}
     rows: list[str] = []
     for stage in STAGES:
-        node = check_node(stage)
-        try:
-            report = check_only(stage)(readonly_ctx(novel_dir, node, code))
+        observation = snapshot.check(stage)
+        if observation.report is not None:
+            report = observation.report
             data = {
                 'node': report.node,
                 'freshness': report.provenance.freshness,
@@ -110,7 +95,9 @@ def _reports(novel_dir: Path, sid: str) -> tuple[dict[str, Any], list[str]]:
                 'counts': report.counts.model_dump(),
                 'severity': _sev_summary(report),
             }
-        except Exception as exc:  # noqa: BLE001 —— 快照要把不可读取显式收进结果
+        else:
+            assert observation.error is not None
+            exc = observation.error
             data = {'error': {'kind': type(exc).__name__, 'message': str(exc)}}
         reports[stage] = data
         rows.append(_quality_row(stage, data))
@@ -119,6 +106,7 @@ def _reports(novel_dir: Path, sid: str) -> tuple[dict[str, Any], list[str]]:
 
 def _ledger(
         base: Path, sid: str, *, run_ids: set[str] | None = None,
+        rows: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """按 canonical run_id 精确选账，并如实分开 wire 结果与计费结论。
 
@@ -157,7 +145,8 @@ def _ledger(
         return 'unknown'
 
     legacy_ungrouped_rows = 0
-    for row in _jsonl(ledger_path(base)):
+    source_rows = _jsonl(ledger_path(base)) if rows is None else rows
+    for row in source_rows:
         if row.get('sid') != sid:
             continue
         raw_run_id = row.get('run_id')
@@ -264,14 +253,16 @@ def _compact_exits(exits: list[dict[str, Any]]) -> str:
                       for label, count in runs) or '无'
 
 
-def _book_facts(base: Path, sid: str, novel_dir: Path) -> dict[str, Any]:
+def _book_facts(
+    base: Path, sid: str, novel_dir: Path, *, code: str,
+) -> dict[str, Any]:
     book_path = novel_dir / paths.book_txt_rel(novel_dir)
     if not book_path.is_file():
         return {'path': str(book_path), 'exists': False}
     raw = book_path.read_bytes()
     text = raw.decode('utf-8')
     chapters = split_book(text)
-    ctx = readonly_ctx(novel_dir, 'stage7.assemble', prov.code_version())
+    ctx = readonly_ctx(novel_dir, 'stage7.assemble', code)
     store = ArtifactStore(ctx)
     art = store.read_own(NameMap, rename.REL)[0]
     up = rename._Upstreams(ctx, store)
@@ -344,18 +335,19 @@ def _session_run_ids(events: list[Any], sid: str, started_at: int) -> set[str]:
 def collect(base: str | Path, sid: str, *, started_at: int,
             start_code_version: str) -> dict[str, Any]:
     base = Path(base).resolve()
-    current_code = prov.code_version()
+    snapshot = capture_operator_snapshot(base, sid)
+    current_code = snapshot.code
     if prov.CODE_UNKNOWN in (start_code_version, current_code):
         raise ValueError(
             f'代码指纹不可用（start={start_code_version}，current={current_code}）')
     if current_code != start_code_version:
         raise ValueError(
             f'运行期间代码指纹变化：start={start_code_version}，current={current_code}')
-    novel_dir = paths.resolve_novel_dir(base, sid).resolve()
-    ov = overview(base, sid)
-    inbox = inbox_view(base, sid)
+    novel_dir = snapshot.novel_dir
+    ov = snapshot.overview
+    inbox = inbox_from_snapshot(snapshot)
     terminals, edits = _active_files(novel_dir)
-    reports, quality_rows = _reports(novel_dir, sid)
+    reports, quality_rows = _reports(snapshot)
     progress_events = beacon.read_events(base)
     exits = _session_exits(progress_events, sid, started_at)
     session_run_ids = _session_run_ids(progress_events, sid, started_at)
@@ -372,10 +364,10 @@ def collect(base: str | Path, sid: str, *, started_at: int,
         + '；交付：' + ' · '.join(
             f'{key}={value}' for key, value in inbox.delivery_counts.items())
     )
-    book = _book_facts(base, sid, novel_dir)
+    book = _book_facts(base, sid, novel_dir, code=current_code)
     try:
         s2_current, s2_approved, s2_counts = global_review.approval_status(
-            readonly_ctx(novel_dir, 'stage2.global', prov.code_version()))
+            readonly_ctx(novel_dir, 'stage2.global', current_code))
         stage2_review = {
             'current': s2_current, 'approved': s2_approved,
             'counts': s2_counts, 'error': None,
@@ -403,6 +395,7 @@ def collect(base: str | Path, sid: str, *, started_at: int,
     }
     anchor_line = '<!-- novel-final-evidence:' + json.dumps(
         anchor, ensure_ascii=False, sort_keys=True, separators=(',', ':')) + ' -->'
+    ledger_rows = _jsonl(ledger_path(base))
     return {
         'sid': sid, 'title': paths.title_of(novel_dir), 'base': str(base),
         'novel_dir': str(novel_dir), 'state': ov.model_dump(mode='json'),
@@ -410,8 +403,9 @@ def collect(base: str | Path, sid: str, *, started_at: int,
         'reports': reports, 'quality_table_rows': quality_rows,
         'active_terminal_files': terminals, 'active_edit_inputs': edits,
         'book': book,
-        'ledger': _ledger(base, sid, run_ids=session_run_ids),
-        'ledger_cumulative': _ledger(base, sid),
+        'ledger': _ledger(
+            base, sid, run_ids=session_run_ids, rows=ledger_rows),
+        'ledger_cumulative': _ledger(base, sid, rows=ledger_rows),
         'stage2_review': stage2_review,
         'exit_sequence': exits, 'exit_sequence_text': exit_text,
         'exit_sequence_compact_text': exit_compact,

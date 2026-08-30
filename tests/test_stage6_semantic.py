@@ -22,7 +22,7 @@ from novel.errors import TerminalState, UpstreamMissing
 from novel.llm.transport import ChatResponse
 from contracts.invariants import HOOK_APPROACHES, HOOK_SLOTS, slot_of
 from novel.quality.evaluator import double_blind_decision
-from novel.stages.stage6 import semantic
+from novel.stages.stage6 import hook, semantic
 
 WIRE = ChatResponse(content='{}')
 
@@ -73,7 +73,8 @@ def _stored_review(label: str, text: str, *, contradiction: bool = False,
     return HookCandidateReview.model_validate(data)
 
 
-def _art(*, approved: str | None = None, bound_sha256: str | None = None):
+def _art(*, approved: str | None = None, bound_sha256: str | None = None,
+         workpack_sha256: str | None = 'f' * 64):
     candidates = [
         SimpleNamespace(approach='source_architecture', text=TEXT_A, findings=[]),
         SimpleNamespace(approach='payoff_preview', text=TEXT_B, findings=[]),
@@ -88,7 +89,8 @@ def _art(*, approved: str | None = None, bound_sha256: str | None = None):
                         resolution=SimpleNamespace(
                             subject_sha256=(bound_sha256
                                             or semantic.text_sha256(picked.text)),
-                            basis='human_verification'))
+                            basis='human_verification',
+                            workpack_sha256=workpack_sha256))
                     if picked is not None else None)
     return SimpleNamespace(candidates=candidates, approved=approved_obj)
 
@@ -276,7 +278,8 @@ def test_human_edit_and_resolution_contract_require_explicit_hash_binding():
         HookApproveRequest(pick=1)
     with pytest.raises(ValueError, match='空白'):
         HookApproveRequest(
-            pick=1, actor=' ', reason='已核验', subject_sha256=subject)
+            pick=1, actor=' ', reason='已核验', subject_sha256=subject,
+            workpack_sha256='f' * 64)
 
 
 def test_approve_http_adapter_forwards_audited_optimistic_lock(monkeypatch):
@@ -294,13 +297,49 @@ def test_approve_http_adapter_forwards_audited_optimistic_lock(monkeypatch):
         lambda *_args: (_ for _ in ()).throw(AssertionError('失败作业不许盖章')))
     request = HookApproveRequest(
         pick=2, actor='editor-a', reason='核验完成',
-        subject_sha256='a' * 64)
+        subject_sha256='a' * 64, workpack_sha256='b' * 64)
     edits.approve_hook(request, sid='book-a', base='out')
     assert captured == {
         'base': 'out', 'node': 'stage6.approve', 'sid': 'book-a',
         'extra': ['--pick', '2', '--actor', 'editor-a', '--reason', '核验完成',
-                  '--subject-sha256', 'a' * 64],
+                  '--subject-sha256', 'a' * 64,
+                  '--workpack-sha256', 'b' * 64],
     }
+
+
+def test_stage6_workpack_uses_full_sha256_and_keeps_each_ab_judgement(
+    monkeypatch,
+):
+    """工作包外部锁必须是 64 位 SHA-256，且不能把 A/B 压成聚合一句。"""
+    from novel.stages.stage6 import hook as hook_node
+    from tests.test_stage6_style_ab_review import _hook
+
+    art = _hook([TEXT_A, TEXT_B, TEXT_C])
+    semantic_artifact = _semantic_artifact(_all_clean_reviews())
+    semantic_artifact = SimpleNamespace(
+        **vars(semantic_artifact),
+        judge_rankings={
+            'A': ['source_architecture', 'payoff_preview', 'scene_punchline'],
+            'B': ['scene_punchline', 'payoff_preview', 'source_architecture'],
+        },
+    )
+    _install(monkeypatch, semantic_artifact)
+
+    rows = hook_node._approval_candidate_rows(_Store(), art)
+
+    assert [row.subject_sha256 for row in rows] == [
+        semantic.text_sha256(text) for text in (TEXT_A, TEXT_B, TEXT_C)
+    ]
+    assert all(len(row.subject_sha256) == 64 for row in rows)
+    assert all(row.subject_sha256 != semantic.text_sha1(row.text) for row in rows)
+    for row in rows:
+        assert row.semantic_decision is not None
+        judges = row.semantic_decision.judges
+        assert [judge.judge for judge in judges] == ['A', 'B']
+        assert judges[0].reason != judges[1].reason
+        assert all(judge.evidence for judge in judges)
+    assert semantic.current_judge_rankings(_Store(), art) == \
+        semantic_artifact.judge_rankings
 
 
 def test_response_validator_closes_review_and_ranking_coverage():
@@ -645,12 +684,16 @@ def test_a_stale_or_mismatched_review_set_makes_every_candidate_unreviewed(monke
 
 
 def test_downstream_requires_the_current_approved_bytes(monkeypatch):
-    """下游消费闸剩下的那一条：**resolution 必须仍绑着当前进成书的字节。**
+    """下游同时要求当前定稿字节与当前代码/规则/证据工作包。
 
     ⚠ 这条不是「变松了」。原来的三条分支（校准 FAIL 拒绝 / clear 放行 / PASS 漂了兜底）
     全部由 automated 结论驱动，随自动放行门消失；而真正在拦人的一直是这道字节绑定。
     """
     _install(monkeypatch, _semantic_artifact(_all_clean_reviews()))
+    monkeypatch.setattr(
+        hook, '_approval_workpack_snapshot',
+        lambda *_args: (SimpleNamespace(
+            workpack_sha256='f' * 64, disposition='already_current'), None))
     with pytest.raises(TerminalState, match='还没定稿'):
         semantic.require_approved_clear(_Store(), _art())
 
@@ -661,6 +704,19 @@ def test_downstream_requires_the_current_approved_bytes(monkeypatch):
     with pytest.raises(TerminalState, match='不是当前文本字节'):
         semantic.require_approved_clear(
             _Store(), _art(approved='source_architecture', bound_sha256='0' * 64))
+
+    with pytest.raises(TerminalState, match='工作包'):
+        semantic.require_approved_clear(
+            _Store(), _art(
+                approved='source_architecture', workpack_sha256=None))
+
+    monkeypatch.setattr(
+        hook, '_approval_workpack_snapshot',
+        lambda *_args: (SimpleNamespace(
+            workpack_sha256='0' * 64, disposition='review_required'), None))
+    with pytest.raises(TerminalState, match='工作包'):
+        semantic.require_approved_clear(
+            _Store(), _art(approved='source_architecture'))
 
 
 def test_build_prompt_refuses_missing_or_stale_hook(monkeypatch):

@@ -595,12 +595,13 @@ Output/_service/queues.jsonl      持久批量队列 append-only 事件流
 Output/_service/agent_runs.jsonl  headless agent append-only 事件流（含双授权快照）
 Output/_service/agent_sessions.jsonl commander / executor CLI 会话审计（wire v2）
 Output/_service/agent_progress.jsonl agent/runner 的 CLI 步骤观察轨迹
+Output/_service/operator_phases/<session_id>.jsonl Commander/operator 阶段墙钟遥测（每会话一流）
 Output/_service/human_actions.jsonl 已落盘人工动作的 append-only 身份审计（不含正文）
 Output/_service/human_actions_tail_recovery/<sha>.json 被 kill 截断的 human action 尾行隔离证据
 Output/_service/stage5_writer_locks/<book>/book.lock Stage5 CLI writer / API closure 共用总锁
 Output/_service/logs/<job_id>.log 子进程 stdout+stderr，按字节追加
 Output/_service/ledger.jsonl      跨书逐请求成本事实
-Output/_service/*.jsonl.lock      上面七份 JSONL 各自的追加锁载体（见下）
+Output/_service/*.jsonl.lock      上面八类 JSONL 各自的追加锁载体（见下）
 Output/_service/uploads/…         浏览器上传的原始小说字节
 Output/_service/edits/<sid>/…     交给 CLI 的一次性 typed 编辑稿、人工决定或批处理 manifest
 Output/_service/approvals/<sid>.json 人工闸门、已阅状态与 canonical 写作授权（原子替换）
@@ -609,7 +610,7 @@ Output/_service/approvals/<sid>.json 人工闸门、已阅状态与 canonical �
 它们**不是产物**：不进来源账、不进 `_provenance`、`ARTIFACTS` 里没有它们；
 `tests/test_layering.py` 的写口与路由所有权白名单为每一类带着明确理由。
 
-> ### 七份 JSONL 的追加口只有一个：`novel/appendlog.py`
+> ### 八类 JSONL 的追加口只有一个：`novel/appendlog.py`
 >
 > 写入方**不止服务进程**：`agent_progress.jsonl` 由 N 个 agent 各自的
 > `novel.cli mark` 子进程写，`jobs.jsonl` / `queues.jsonl` 由服务进程**和**
@@ -769,6 +770,31 @@ accepted attempt，最后写 `committed`。Stage4 typed infeasible 的 EvidenceB
 primary，照常 journal/adoption 但保持 landed-red；Stage5 rejected/INVALID、Hook/Rename turn 耗尽等
 没有正式 primary 的终态不得伪造 adoption 或 committed，并保留既有 blocked 与 0 成本 revalidate /
 人工恢复语义。该整套 sidecar 都是内部恢复态，不进入公开 HTTP schema。
+
+### 7.0d `operator_phases/<session_id>.jsonl` —— 墙钟归属，不是模型成本账
+
+每个 operator session 独占一条 append-only 流；追加只重放当前 session，不随历史总量线性变慢。
+它与 node beacon、`ledger.jsonl`、`agent_sessions.jsonl` 正交：人工审阅、批准与终审可以被量时，但不会
+因此成为 pipeline node、provider turn 或交付闸。事件 wire 的字段证据如下：
+
+| 字段 | 含义 | 证据 |
+|---|---|---|
+| `wire_version / session_id / sid / source / kind / ts_ms` | 每行公共身份、来源、事件种类与毫秒时间 | 契·码 |
+| `parent_run_id / start_code_version / end_code_version` | session 起点的可选父 run 与起止代码身份；只出现在对应 session 事件 | 契·码 |
+| `phase_execution_id / phase / action / run_id` | 一次 phase 的唯一执行身份、闭集阶段、短 ASCII 动作种类与可选业务 run 联结 | 契·码 |
+| `state / exit_code / elapsed_ms / duration_source` | phase/session 终态、真实退出码与 monotonic/wall-clock 耗时来源 | 契·码 |
+| `evidence_sha256 / error_kind` | 可选无正文证据 hash 与短 ASCII 错误类别；不得装自由理由 | 契·码 |
+
+phase 闭集为 `preflight / inspect / preview / execute / review / approve / finalize / verify`；终态闭集为
+`completed / failed / cancelled / unknown`。折叠时 start/end 必须同 phase/action/run、时间不得倒序，
+failed 必须有 `error_kind`。summary 对已结束 phase 的时间区间取并集，重叠只算一次；会话总墙钟减去
+该并集得到 unattributed。没有 session、未闭合 session 或未闭合 phase 时完整分解保持 unknown。
+读侧只容忍最后一条**无换行**坏尾并把 session 留在未闭合态；完整换行坏行一律报错。写侧发现这种
+截断尾时拒绝继续拼接，保留旧 session 证据并要求另开 session，不能把下一条 JSON 接进半行。
+
+本 wire **刻意没有** node、model、usage、token、price、prompt、正文、reason、argv、路径或密钥。
+Commander 宿主内部模型 usage 没经过仓库边界时，summary 固定给
+`model_usage_state=unavailable_host_boundary`；不得按墙钟、字数或 executor 均价反推成本。
 
 ### 7.1 ⚠ 日志按**字节**存，只在读的时候解码
 

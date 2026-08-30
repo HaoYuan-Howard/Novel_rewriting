@@ -47,10 +47,12 @@ from contracts.invariants import (
     DELIVERY_MODES,
     DESIGN_CHAPTER_DECISIONS,
     APPROVAL_WORKPACK_ACTIONS,
+    APPROVAL_WORKPACK_DISPOSITIONS,
     APPROVAL_WORKPACK_EFFECTS,
     APPROVAL_WORKPACK_GROUP_EFFECTS,
     APPROVAL_WORKPACK_GROUPS,
     APPROVAL_WORKPACK_KINDS,
+    FINAL_APPROVAL_WORKPACK_KINDS,
     DESIGN_PREFLIGHT_STATUSES,
     DESIGN_REPAIR_CODES_RETIRED,
     DESIGN_REPAIR_CONSTRAINT_ARITY,
@@ -63,6 +65,7 @@ from contracts.invariants import (
     GLOBAL_REVIEW_EFFECTS,
     HINGE_KINDS,
     HOOK_APPROACHES,
+    STAGE6_JUDGE_ROLES,
     HOOK_SLOTS,
     slot_of,
     HOOK_SEMANTIC_STATES,
@@ -94,7 +97,7 @@ from contracts.invariants import (
     STAGE5_MUST_APPEAR_RULINGS,)
 from contracts.schema.base import FrozenModel, StrictModel
 from contracts.schema.common import Finding, HashBoundHumanApproval
-from contracts.schema.evaluation import GlobalReviewItem
+from contracts.schema.evaluation import GlobalReviewItem, SemanticDecision
 from contracts.schema.orchestration import (
     AgentProfile, AgentRunRecord, ArtifactCondition, ArtifactState, Freshness,
     FreshnessReason, JobRecord, JobState, NovelOverview, PipelineAgentProfiles,
@@ -116,12 +119,14 @@ from contracts.schema.stage5 import (
 )
 from contracts.schema.stage6 import (
     HookApprovalResolution,
+    HookCandidateReview,
     HookContradiction,
     HookProvenance,
     HookQualityScores,
     HookSources,
     Mech,
 )
+from contracts.schema.report import ProvenanceSection, RuleLine, StatusCounts
 from contracts.schema.stage7 import (
     Alias, ApprovedNameMap, BookTxt, ExtraSub, IdentityBaseline,
     NameMapProvenance, NameMapSources, Residual, StemBaseline,
@@ -148,6 +153,9 @@ ApprovalWorkpackAction = Literal[APPROVAL_WORKPACK_ACTIONS]
 ApprovalWorkpackEffect = Literal[APPROVAL_WORKPACK_EFFECTS]
 ApprovalWorkpackGroupKind = Literal[APPROVAL_WORKPACK_GROUPS]
 ApprovalWorkpackKind = Literal[APPROVAL_WORKPACK_KINDS]
+ApprovalWorkpackDisposition = Literal[APPROVAL_WORKPACK_DISPOSITIONS]
+FinalApprovalWorkpackKind = Literal[FINAL_APPROVAL_WORKPACK_KINDS]
+HookSemanticState = Literal[HOOK_SEMANTIC_STATES]
 # 退役码仍在 Literal 里：盘上历史决定要能解码；新决定在 approve 闸关闭式拒绝。
 DesignRepairCode = Literal[(*DESIGN_REPAIR_CODES, *DESIGN_REPAIR_CODES_RETIRED)]
 DesignReviewState = Literal[DESIGN_REVIEW_STATES]
@@ -1275,9 +1283,16 @@ class ApprovalWorkpack(FrozenModel):
     subject_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
     chapter_ordinals: list[int] = Field(min_length=1)
     groups: list[WorkpackGroup] = Field(min_length=len(APPROVAL_WORKPACK_GROUPS))
+    disposition: ApprovalWorkpackDisposition = 'review_required'
+    current_decision_sha256: str | None = Field(
+        default=None, pattern=r'^[0-9a-f]{64}$')
 
     @model_validator(mode='after')
     def _shape_is_closed_and_covers_every_chapter(self) -> ApprovalWorkpack:
+        if ((self.disposition == 'already_current')
+                != (self.current_decision_sha256 is not None)):
+            raise ValueError(
+                'already_current 与 current_decision_sha256 必须同时出现')
         if [row.group for row in self.groups] != list(APPROVAL_WORKPACK_GROUPS):
             raise ValueError(
                 'workpack 分组必须是固定顺序的全集，不许裁剪或重排')
@@ -1339,6 +1354,144 @@ class ApprovalWorkpack(FrozenModel):
         if changed_ordinals != sorted(changed_ordinals) \
                 or unchanged_ordinals != sorted(unchanged_ordinals):
             raise ValueError('coverage 的 changed / reusable 各段内必须按章号升序')
+        return self
+
+
+class CompactApprovalCheck(FrozenModel):
+    """终审工作包里的 exception-first 机械报告。
+
+    非 ``ok`` 行逐条保留；正常 metric 仍保留读数。其余绿色机械行只由完整分母与
+    四态计数证明已扫描，避免 Commander 再整读一份完整 CheckReport。
+    """
+
+    rules_scanned: int = Field(ge=0)
+    counts: StatusCounts
+    provenance: ProvenanceSection
+    attention: list[RuleLine] = Field(default_factory=list)
+    metrics: list[RuleLine] = Field(default_factory=list)
+
+    @model_validator(mode='after')
+    def _is_an_exact_exception_first_projection(self) -> 'CompactApprovalCheck':
+        if self.rules_scanned != sum(self.counts.model_dump().values()):
+            raise ValueError('rules_scanned 必须等于四态计数之和')
+        if any(row.status == 'ok' for row in self.attention):
+            raise ValueError('attention 只收非 ok 行')
+        if any(row.sev != 'metric' or row.status != 'ok' for row in self.metrics):
+            raise ValueError('metrics 只收正常产出的 metric 读数')
+        return self
+
+
+class Stage6ApprovalCandidate(FrozenModel):
+    """Stage6 终审的一条候选：文本、机械结论与 A/B 原始证据同包。"""
+
+    index: int = Field(ge=1)
+    slot: Literal[HOOK_SLOTS]
+    approach: Literal[HOOK_APPROACHES]
+    chars: int = Field(ge=0)
+    text: str = Field(min_length=1)
+    subject_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    mech: Mech
+    findings: list[Finding]
+    semantic_state: HookSemanticState
+    semantic_reason: str
+    semantic_review_seq: int | None = Field(default=None, ge=1)
+    semantic_review: HookCandidateReview | None = None
+    semantic_decision: SemanticDecision | None = None
+    quality_score: float | None = Field(default=None, ge=0, le=10)
+    quality_rank: int | None = Field(default=None, ge=1)
+
+    @model_validator(mode='after')
+    def _slot_matches_the_visible_index(self) -> 'Stage6ApprovalCandidate':
+        if self.slot != slot_of(self.index):
+            raise ValueError('候选 slot 必须与 1 起 index 使用同一位置身份')
+        if ((self.semantic_review is None)
+                != (self.semantic_decision is None)):
+            raise ValueError('semantic review 与合并 decision 必须同时出现')
+        return self
+
+
+class Stage6ApprovalWorkpack(FrozenModel):
+    """Stage6 当前候选集的紧凑、代码与证据绑定终审包。"""
+
+    v: Literal[1] = 1
+    kind: FinalApprovalWorkpackKind
+    sid: str = Field(min_length=1)
+    code_version: str = Field(min_length=1)
+    rules_fingerprint: str = Field(min_length=1)
+    artifact_subject_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    rationale: str = Field(min_length=1)
+    check: CompactApprovalCheck
+    #: 两名盲评各自的原始完整排序；逐候选 verdict/reason/evidence 在
+    #: ``candidates[].semantic_decision.judges``，两者合起来才是未压扁的 A/B 证据。
+    judge_rankings: dict[Literal[STAGE6_JUDGE_ROLES], list[str]] | None = None
+    candidates: list[Stage6ApprovalCandidate] = Field(min_length=3, max_length=3)
+    workpack_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    disposition: ApprovalWorkpackDisposition
+    current_slot: Literal[HOOK_SLOTS] | None = None
+    current_approval: HookApprovalResolution | None = None
+
+    @model_validator(mode='after')
+    def _currentness_and_candidate_set_are_closed(self) -> 'Stage6ApprovalWorkpack':
+        if self.kind != 'stage6':
+            raise ValueError('Stage6ApprovalWorkpack.kind 必须是 stage6')
+        if [row.index for row in self.candidates] != [1, 2, 3]:
+            raise ValueError('Stage6 workpack 必须按产物顺序完整覆盖 1..3')
+        has_semantic = any(row.semantic_decision is not None for row in self.candidates)
+        if has_semantic != (self.judge_rankings is not None):
+            raise ValueError('当前 A/B decision 与 judge_rankings 必须同进同出')
+        if (self.judge_rankings is not None
+                and set(self.judge_rankings) != set(STAGE6_JUDGE_ROLES)):
+            raise ValueError('judge_rankings 必须恰含 A/B 两名判官')
+        current = self.current_slot is not None and self.current_approval is not None
+        if (self.disposition == 'already_current') != current:
+            raise ValueError('already_current 必须携带当前 slot 与 approval')
+        if self.current_approval is not None \
+                and self.current_approval.workpack_sha256 != self.workpack_sha256:
+            raise ValueError('当前 approval 必须绑定这份 workpack')
+        return self
+
+
+class Stage7ApprovalWorkpack(FrozenModel):
+    """Stage7 当前人物决策面的紧凑、代码与机械证据绑定终审包。"""
+
+    v: Literal[1] = 1
+    kind: FinalApprovalWorkpackKind
+    sid: str = Field(min_length=1)
+    code_version: str = Field(min_length=1)
+    rules_fingerprint: str = Field(min_length=1)
+    artifact_subject_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    decision_subject_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    check: CompactApprovalCheck
+    surname_map: dict[str, str]
+    characters: list['NameDecisionLine'] = Field(min_length=1)
+    extra_subs: list[ExtraSub]
+    subs_count: int = Field(ge=0)
+    kept_count: int = Field(ge=0)
+    kept: list[str]
+    #: 实际单次扫描命中（逐章 + hook 合计），键是被替换的旧字面；不是 ``str.count``。
+    replacement_hits: dict[str, int]
+    residual: list[Residual]
+    baselines: dict[str, StemBaseline]
+    book: list[Finding]
+    identity: IdentityBaseline | None
+    workpack_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    disposition: ApprovalWorkpackDisposition
+    current_approval: ApprovedNameMap | None = None
+
+    @model_validator(mode='after')
+    def _currentness_is_hash_bound(self) -> 'Stage7ApprovalWorkpack':
+        if self.kind != 'stage7':
+            raise ValueError('Stage7ApprovalWorkpack.kind 必须是 stage7')
+        if ((self.disposition == 'already_current')
+                != (self.current_approval is not None)):
+            raise ValueError('already_current 必须携带当前 approval')
+        if self.current_approval is not None \
+                and self.current_approval.workpack_sha256 != self.workpack_sha256:
+            raise ValueError('当前 approval 必须绑定这份 workpack')
+        if self.kept_count != len(self.kept):
+            raise ValueError('kept_count 必须与 kept 明细一致')
+        if any(value < 0 for value in self.replacement_hits.values()):
+            raise ValueError('replacement_hits 不得出现负数')
         return self
 
 
@@ -2672,6 +2825,7 @@ class HookApproveRequest(StrictModel):
     actor: str = Field(min_length=1)
     reason: str = Field(min_length=1)
     subject_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    workpack_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
 
     @model_validator(mode='after')
     def _audit_text_is_not_blank(self) -> 'HookApproveRequest':
@@ -2682,6 +2836,8 @@ class HookApproveRequest(StrictModel):
 
 class NameMapApproveRequest(HashBoundHumanApproval):
     """Stage7 human approval bound to the exact decision surface."""
+
+    workpack_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
 
 class ResidualAdoptionRequest(StrictModel):
     """Explicit, zero-cost adoption; low-confidence residuals are never accepted."""

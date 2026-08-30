@@ -80,6 +80,60 @@ def test_human_only_collects_hits_whose_remediation_is_human():
     assert '--apply-edit' in human[0].how or '--pick' in human[0].how
 
 
+def test_final_approval_inbox_commands_bind_the_same_fresh_workpack():
+    """恢复命令必须从同一份 fresh 包取 subject/workpack 双哈希。"""
+    from novel.views import inbox as I
+
+    candidate = SimpleNamespace(
+        index=2, slot='c2', approach='scene_punchline',
+        subject_sha256='a' * 64,
+        semantic_state='uncertain', semantic_reason='A/B 证据待人工核验',
+    )
+    stage6_pack = SimpleNamespace(
+        disposition='review_required', workpack_sha256='b' * 64,
+        candidates=[candidate],
+    )
+    stage7_pack = SimpleNamespace(
+        disposition='review_required', workpack_sha256='c' * 64,
+        decision_subject_sha256='d' * 64,
+    )
+
+    verification = I._hook_verification_items(
+        '.', 'code', workpack=stage6_pack, workpack_checked=True)
+    approvals = I._approval_items(
+        '.', 'code', stage6_workpack=stage6_pack,
+        stage7_workpack=stage7_pack, workpacks_checked=True)
+
+    assert len(verification) == 1
+    assert '--subject-sha256 ' + 'a' * 64 in verification[0].how
+    assert '--workpack-sha256 ' + 'b' * 64 in verification[0].how
+    by_rule = {row.rule: row for row in approvals}
+    assert set(by_rule) == {'stage6.approve', 'stage7.approve'}
+    assert '--workpack-sha256 ' + 'b' * 64 in by_rule['stage6.approve'].how
+    assert '--subject-sha256 ' + 'd' * 64 in by_rule['stage7.approve'].how
+    assert '--workpack-sha256 ' + 'c' * 64 in by_rule['stage7.approve'].how
+
+
+def test_final_approval_inbox_omits_already_current_actions():
+    """同一当前工作包已经盖章时不再发布重复 approve/verification 动作。"""
+    from novel.views import inbox as I
+
+    stage6_pack = SimpleNamespace(
+        disposition='already_current', workpack_sha256='b' * 64,
+        candidates=[],
+    )
+    stage7_pack = SimpleNamespace(
+        disposition='already_current', workpack_sha256='c' * 64,
+        decision_subject_sha256='d' * 64,
+    )
+
+    assert I._hook_verification_items(
+        '.', 'code', workpack=stage6_pack, workpack_checked=True) == []
+    assert I._approval_items(
+        '.', 'code', stage6_workpack=stage6_pack,
+        stage7_workpack=stage7_pack, workpacks_checked=True) == []
+
+
 def test_conflict_stage_coverage_inbox_points_to_typed_edit_not_paid_resample():
     from contracts.rules import REGISTRY
     from novel.report.builder import remediation_of

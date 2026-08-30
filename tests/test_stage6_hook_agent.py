@@ -237,6 +237,40 @@ def test_agent_replaces_full_response_in_one_session_and_commits(monkeypatch, tm
     assert driver.close_calls == 1
 
 
+def test_agent_commit_preserves_non_idempotent_normalization_account(
+        monkeypatch, tmp_path):
+    upstream = _patch_business(monkeypatch)
+    upstream.src_hook = '「原作文案」。'
+
+    def production_normalize(text: str, _up) -> tuple[str, Mech, list]:
+        normalized, mech = hook.normalize_hook(
+            text, src_hook=upstream.src_hook)
+        return normalized, mech, []
+
+    monkeypatch.setattr(hook, '_normalize_and_judge', production_normalize)
+    raw_candidates = ('“候选甲”。', '“候选乙”。', '“候选丙”。')
+    normalized, first_mech, _findings = production_normalize(
+        raw_candidates[0], upstream)
+    again, second_mech, _findings = production_normalize(normalized, upstream)
+    assert normalized == again == '「候选甲」。'
+    assert first_mech.quotes_fixed == 2
+    assert second_mech.quotes_fixed == 0
+
+    ctx = _ctx(tmp_path)
+    driver = _Driver([_response(*raw_candidates)])
+    result = Stage6HookAgent(ctx, driver=driver, max_turns=1).run()
+
+    assert [candidate.text for candidate in result.artifact.candidates] == [
+        '「候选甲」。', '「候选乙」。', '「候选丙」。']
+    assert [candidate.mech.quotes_fixed
+            for candidate in result.artifact.candidates] == [2, 2, 2]
+    assert (ctx.novel_dir / hook.REL).is_file()
+    assert not (ctx.novel_dir / hook._INVALID).exists()
+    committed = stage6_hook_runs.committed(ctx)
+    assert committed is not None and committed['state'] == 'committed'
+    assert driver.close_calls == 1
+
+
 def test_full_replacement_validator_freezes_other_slots_and_requires_progress(
         monkeypatch):
     upstream = _patch_business(monkeypatch)

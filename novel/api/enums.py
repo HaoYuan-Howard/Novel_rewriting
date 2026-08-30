@@ -72,6 +72,15 @@ _WITHHELD: dict[str, str] = {
         'agent 执行节点属于 driver/model/effort/mode 组合能力面，'
         '唯一公开口是动态 `GET /api/agent/capabilities`；'
         '再经 `/api/enums` 发一份会造成两个可漂移的节点清单'),
+    'STAGE6_JUDGE_ROLES': (
+        '判官角色是 Stage6 workpack/产物的关闭式 schema，不是前端选项；'
+        '工作包已携具体 A/B 键，另发枚举只会制造第二个消费面'),
+    'OPERATOR_PHASES': (
+        'operator telemetry 只由本地 skill/脚本写读，不是 HTTP/UI 取值面'),
+    'OPERATOR_PHASE_EVENT_KINDS': '同上，append-only 事件种类不由前端构造',
+    'OPERATOR_TELEMETRY_SOURCES': '同上，遥测来源由本地入口固定',
+    'OPERATOR_TERMINAL_STATES': '同上，终态由本地 fold 契约解释',
+    'OPERATOR_DURATION_SOURCES': '同上，时长来源由本地计时边界决定',
     'FAILURE_REPAIR_OWNERS': (
         'typed failure 的修复 owner 是流水线内部路由（TODO-45 批次 1），'
         '唯一消费方是 B 的关闭式停止判定；等前端真有按 owner 渲染的界面'

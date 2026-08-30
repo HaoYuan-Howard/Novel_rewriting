@@ -25,6 +25,8 @@ function workpack(kind: 'design' | 'structure'): ApprovalWorkpack {
     candidate_sha256: kind === 'design' ? 'b'.repeat(64) : null,
     subject_sha256: 'a'.repeat(64),
     chapter_ordinals: [3],
+    disposition: 'review_required',
+    current_decision_sha256: null,
     groups: GROUPS.map((group) => ({
       group,
       scanned: '已扫描 ' + group,
@@ -109,6 +111,19 @@ describe('Stage4 exception-first 审阅工作包', () => {
     expect(screen.getByText('阻断 Context · block_context')).toBeVisible()
     expect(structure).toHaveBeenCalledWith('book-1')
     expect(design).not.toHaveBeenCalled()
+  })
+
+  it('明确呈现同一当前工作包已批准及其决定摘要', async () => {
+    vi.spyOn(api, 'getDesignApprovalWorkpack').mockResolvedValue({
+      ...workpack('design'),
+      disposition: 'already_current',
+      current_decision_sha256: '9'.repeat(64),
+    })
+    renderRoute(<ApprovalWorkpackPanel kind="design" />, '/n/book-1/stage4/3')
+
+    expect(await screen.findByText(/同一当前工作包已批准/)).toBeVisible()
+    expect(screen.getByText('当前决定 SHA-256')).toBeVisible()
+    expect(screen.getByText('9'.repeat(64))).toBeVisible()
   })
 
   it('真实 API 缝使用两条只读 workpack 路由', async () => {

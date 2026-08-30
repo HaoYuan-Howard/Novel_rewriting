@@ -117,11 +117,14 @@ def _check(box: sandbox.Sandbox):
 
 
 def _approve(box: sandbox.Sandbox):
+    ctx = _ctx(box, 'stage7.approve')
     art = NameMap.model_validate(box.read(rename.REL))
     return rename.run_approve(
-        _ctx(box, 'stage7.approve'), actor='reviewer',
+        ctx, actor='reviewer',
         reason='reviewed the complete name decision surface',
-        subject_sha256=rename.approval_subject_sha256(art))
+        subject_sha256=rename.approval_subject_sha256(art),
+        workpack_sha256=rename.approval_workpack(
+            ArtifactStore(ctx)).workpack_sha256)
 
 
 def _revalidate(box: sandbox.Sandbox):
@@ -407,10 +410,13 @@ def test_approve_rejects_a_stale_subject_before_any_write_or_archive(box):
     before = {p.relative_to(box.dir).as_posix(): p.read_bytes()
               for p in box.dir.rglob('*') if p.is_file()}
     with pytest.raises(TerminalState, match='审批对象已变化'):
+        ctx = _ctx(box, 'stage7.approve')
         rename.run_approve(
-            _ctx(box, 'stage7.approve'), actor='reviewer',
+            ctx, actor='reviewer',
             reason='reviewed an earlier decision surface',
-            subject_sha256='0' * 64)
+            subject_sha256='0' * 64,
+            workpack_sha256=rename.approval_workpack(
+                ArtifactStore(ctx)).workpack_sha256)
     after = {p.relative_to(box.dir).as_posix(): p.read_bytes()
              for p in box.dir.rglob('*') if p.is_file()}
     assert after == before

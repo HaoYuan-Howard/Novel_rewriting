@@ -881,6 +881,8 @@ export interface HookApproved {
     basis: 'human_verification'
     /** 人当时读的是哪一份审判。`null` = 定稿时没有可用审判，人是在零证据下拍的板。 */
     semantic_review_seq: number | null
+    /** null = 旧批准；下一次终审后才可用于 already_current。 */
+    workpack_sha256: string | null
   }
 }
 
@@ -974,6 +976,8 @@ export interface Stage7Response {
     actor: string
     reason: string
     subject_sha256: string
+    /** null = 旧批准；下一次终审后才可用于 already_current。 */
+    workpack_sha256: string | null
   } | null
   /** Canonical hash of surname_map + characters + extra_subs; approval is locked to this value. */
   approval_subject_sha256: string

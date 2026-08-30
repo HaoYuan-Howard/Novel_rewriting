@@ -1,3 +1,5 @@
+import type { Finding, RuleLine } from './common'
+
 /**
  * 人工验收记录。
  *
@@ -289,6 +291,157 @@ export interface StructureApprovalView {
   binding_concerns: StructureBindingConcern[]
 }
 
+/** Stage6/7 终审包公共绑定面；屏必须先呈现各自完整证据，再提交这个 hash。 */
+export interface FinalApprovalWorkpack {
+  v: 1
+  sid: string
+  code_version: string
+  rules_fingerprint: string
+  artifact_subject_sha256: string
+  workpack_sha256: string
+  disposition: 'review_required' | 'already_current'
+}
+
+export interface ApprovalEvidenceRef {
+  artifact: string
+  subject_sha256: string
+  start: number | null
+  end: number | null
+}
+
+export interface CompactApprovalCheck {
+  rules_scanned: number
+  counts: { ok: number; hit: number; unver: number; skipped: number }
+  provenance: {
+    freshness: string
+    reason: string
+    ghosts: string[]
+    edges: unknown[]
+    invalid: boolean
+    revalidated: boolean | null
+    origin: string | null
+  }
+  attention: RuleLine[]
+  metrics: RuleLine[]
+}
+
+export interface Stage6HookQualityScores {
+  read_on_desire: number
+  body_voice_match: number
+  concrete_scene_and_specificity: number
+  curiosity_and_payoff_promise: number
+  hook_craft: number
+  synopsis_penalty: number
+}
+
+export interface Stage6HookContradiction {
+  assertion: string
+  evidence: string
+  reason: string
+}
+
+export interface Stage6HookCandidateReview {
+  label: string
+  coverage: 'complete' | 'uncertain'
+  uncertainty_reason: string | null
+  contradictions: Stage6HookContradiction[]
+  quality: Stage6HookQualityScores
+  concise_reason: string
+  text_sha1: string
+}
+
+export interface Stage6SemanticDecision {
+  ability: string
+  subject_key: string
+  verdict: 'UNVER'
+  reason: string
+  evidence: ApprovalEvidenceRef[]
+  judges: {
+    judge: string
+    verdict: 'PASS' | 'FAIL' | 'UNVER'
+    reason: string
+    evidence: ApprovalEvidenceRef[]
+  }[]
+}
+
+export interface Stage6WorkpackCandidate {
+  index: number
+  slot: string
+  approach: string
+  chars: number
+  text: string
+  subject_sha256: string
+  mech: { punct_fixed: number; quotes_fixed: number; paras_fixed: number }
+  findings: Finding[]
+  semantic_state: string
+  semantic_reason: string
+  semantic_review_seq: number | null
+  semantic_review: Stage6HookCandidateReview | null
+  semantic_decision: Stage6SemanticDecision | null
+  quality_score: number | null
+  quality_rank: number | null
+}
+
+export interface Stage6ApprovalWorkpack extends FinalApprovalWorkpack {
+  kind: 'stage6'
+  rationale: string
+  check: CompactApprovalCheck
+  judge_rankings: Record<'A' | 'B', string[]> | null
+  candidates: Stage6WorkpackCandidate[]
+  current_slot: string | null
+  current_approval: {
+    actor: string
+    reason: string
+    subject_sha256: string
+    workpack_sha256: string | null
+  } | null
+}
+
+export interface Stage7ApprovalWorkpack extends FinalApprovalWorkpack {
+  kind: 'stage7'
+  decision_subject_sha256: string
+  check: CompactApprovalCheck
+  surname_map: Record<string, string>
+  characters: {
+    char_id: string
+    old_canonical: string
+    new_canonical: string
+    renamed: boolean
+    not_renamed_reason: string | null
+    reason: string
+    aliases: { old: string; new: string }[]
+    hits: number
+  }[]
+  extra_subs: { old: string; new: string; origin: string; note?: string | null }[]
+  subs_count: number
+  kept_count: number
+  kept: string[]
+  replacement_hits: Record<string, number>
+  residual: {
+    stem: string
+    where: string
+    hit: string
+    context: string
+    confidence: string
+    unit: string | null
+    suggest: string | null
+  }[]
+  baselines: Record<string, { total: number; covered: number; residual: number; ratio: number | null }>
+  book: Finding[]
+  identity: {
+    roundtrip_ok: boolean
+    chapters: number
+    mismatches: string[]
+    blind: string[]
+  } | null
+  current_approval: {
+    actor: string
+    reason: string
+    subject_sha256: string
+    workpack_sha256: string | null
+  } | null
+}
+
 /** Stage5 写作授权的 typed 投影；`writing` 仍是服务端给出的最终可执行结论。 */
 export interface WritingApprovalDecision {
   actor: string
@@ -486,4 +639,6 @@ export interface ApprovalWorkpack {
   subject_sha256: string
   chapter_ordinals: number[]
   groups: ApprovalWorkpackGroup[]
+  disposition: 'review_required' | 'already_current'
+  current_decision_sha256: string | null
 }

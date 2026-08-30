@@ -139,6 +139,8 @@ def _parser() -> argparse.ArgumentParser:
     s = sub.add_parser('state', help='这本书跑到哪了')
     s.add_argument('sid')
     s.add_argument('--base', required=True)
+    s.add_argument('--with-inbox', action='store_true',
+                   help='同一次只读快照中继续打印待人工八类清单')
 
     ib = sub.add_parser('inbox', help='待人工八类清单（0 成本纯读）')
     ib.add_argument('sid')
@@ -215,8 +217,9 @@ def _parser() -> argparse.ArgumentParser:
     approval_gate.add_argument('--base', required=True)
 
     approval_workpack = approval_sub.add_parser(
-        'workpack', help='只读输出当前 Stage4 A/B 全章审阅工作包')
-    approval_workpack.add_argument('surface', choices=('design', 'structure'))
+        'workpack', help='只读输出当前 Stage4/6/7 审批工作包')
+    approval_workpack.add_argument(
+        'surface', choices=('design', 'structure', 'stage6', 'stage7'))
     approval_workpack.add_argument('sid')
     approval_workpack.add_argument('--base', required=True)
 
@@ -608,13 +611,16 @@ def _run_stage6(ctx: RunContext, flags: list[str]) -> int:
         actor = _valued(flags, '--actor')
         reason = _valued(flags, '--reason')
         subject_sha256 = _valued(flags, '--subject-sha256')
-        if not actor or not reason or not subject_sha256:
+        workpack_sha256 = _valued(flags, '--workpack-sha256')
+        if not actor or not reason or not subject_sha256 or not workpack_sha256:
             raise TerminalState(
                 'stage6.approve 必须显式给 --actor、--reason 和 '
-                '--subject-sha256；actor 是自报身份，hash 用于防旧页面误批')
+                '--subject-sha256、--workpack-sha256；actor 是自报身份，'
+                '两个 hash 用于防旧页面误批')
         _art, report = hook.run_approve(
             ctx, int(pick), actor=actor, reason=reason,
-            subject_sha256=subject_sha256)
+            subject_sha256=subject_sha256,
+            workpack_sha256=workpack_sha256)
         print(render(report))
         return X.OK if report.passed else X.CHECK_FAILED
 
@@ -1381,31 +1387,22 @@ def _cmd_run(a: argparse.Namespace) -> int:
     return _dispatch(a.node, ctx, flags)
 
 
-def _state_check_report(base: str, sid: str, stage: str):
-    """Compose the CLI state display with the authoritative CheckReport.
-
-    ``NovelOverview`` deliberately remains verdict-free for the HTTP contract;
-    this is a display-layer join, not a second badge calculation.
-    """
-    from novel.stages import check_only
-
-    # ⚠ 走 `check_node` 而不是 `if len(nodes) != 1: return None`：每层恰好一座复检桥是
-    #   被 `tests/test_orchestrator_nodes.py` 钉死的不变量，写成条件判断会让读的人以为
-    #   它可能不是 1。下面那个 `try/except` 是对「这本书还没有报告」的正常降级，保留。
-    novel_dir = paths.resolve_novel_dir(base, sid)
-    ctx = S.readonly_ctx(novel_dir, N.check_node(stage), prov.code_version())
-    try:
-        return check_only(stage)(ctx)
-    except (UpstreamMissing, ArtifactUnreadable, TerminalState):
-        return None
-
-
 def _cmd_state(a: argparse.Namespace) -> int:
-    ov = S.overview(a.base, a.sid)
+    from novel.orchestrator.inspection import capture_operator_snapshot
+
+    snapshot = capture_operator_snapshot(a.base, a.sid)
+    ov = snapshot.overview
+    inbox = None
+    if getattr(a, 'with_inbox', False):
+        from novel.views.inbox import inbox_from_snapshot
+
+        # 先把共享快照完整投影并做末端 seal，再打印任何一半；漂移时不留下
+        # 一段看似完整的 state stdout。
+        inbox = inbox_from_snapshot(snapshot)
     print(f'{ov.title}  ({ov.sid})')
     for st in ov.stages:
         mark = {True: '✓', False: '·', None: '?'}[st.done]
-        report = _state_check_report(a.base, a.sid, st.stage)
+        report = snapshot.check(st.stage).for_view()
         if report is not None:
             hard = sum(1 for row in report.rules
                        if row.sev == 'hard' and row.status == 'hit')
@@ -1425,6 +1422,8 @@ def _cmd_state(a: argparse.Namespace) -> int:
                   f'  {art.freshness}/{art.reason}{flags}')
         if st.chapters_done:
             print(f'      canonical: {len(st.chapters_done)} 章已落盘')
+    if inbox is not None:
+        _print_inbox(inbox)
     return X.OK
 
 
@@ -1439,7 +1438,12 @@ def _cmd_inbox(a: argparse.Namespace) -> int:
     ⚠ 空清单也打首行——「共 0 项」是查过的 0，不打印是没查（LESSONS 第 2 条）。
     """
     from novel.views.inbox import inbox_view
-    view = inbox_view(a.base, a.sid)
+    _print_inbox(inbox_view(a.base, a.sid))
+    return X.OK
+
+
+def _print_inbox(view) -> None:
+    """state --with-inbox 与独立 inbox 共用同一份人读投影。"""
     counts = ' · '.join(f'{kind} {n}' for kind, n in view.counts.items())
     print(f'── 待人工 ── 共 {view.total} 项（{counts}）；'
           f'尚待处理 {view.attention_counts["pending"]} · '
@@ -1453,7 +1457,6 @@ def _cmd_inbox(a: argparse.Namespace) -> int:
               f'[{it.attention}/{it.delivery_effect}]')
         print(f'      {it.what}')
         print(f'      → {it.how}')
-    return X.OK
 
 
 def _cmd_queue(a: argparse.Namespace) -> int:
@@ -1652,11 +1655,16 @@ def _cmd_approval(a: argparse.Namespace) -> int:
                 's4 只接受带 subject/逐章决定的 typed structure apply')
         result = approvals.approve_gate(a.base, a.sid, a.gate)
     elif a.approval_action == 'workpack':
-        result = (
-            approvals.design_workpack(a.base, a.sid)
-            if a.surface == 'design'
-            else approvals.structure_workpack(a.base, a.sid)
-        )
+        if a.surface == 'design':
+            result = approvals.design_workpack(a.base, a.sid)
+        elif a.surface == 'structure':
+            result = approvals.structure_workpack(a.base, a.sid)
+        elif a.surface == 'stage6':
+            from novel.views.stage6 import stage6_approval_workpack
+            result = stage6_approval_workpack(a.base, a.sid)
+        else:
+            from novel.views.stage7 import stage7_approval_workpack
+            result = stage7_approval_workpack(a.base, a.sid)
     elif a.approval_action == 'template':
         try:
             if a.surface == 'design':

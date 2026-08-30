@@ -17,7 +17,8 @@ import { ActorReasonFields } from '@/components/ui/ActorReasonFields'
 import { Mono } from '@/components/ui/Mono'
 import { Panel } from '@/components/ui/Panel'
 import { GateMark } from '@/components/vocab/Badges'
-import { ApprovalWorkpackPanel } from './ApprovalWorkpackPanel'
+import { ApprovalWorkpackEvidence } from './ApprovalWorkpackPanel'
+import { useApprovalWorkpack } from '@/hooks/useApprovalWorkpack'
 
 interface DraftDecision {
   decision: string
@@ -47,6 +48,7 @@ export function StructureApprovalPanel({
   const enums = useEnums()
   const ask = useAskJob()
   const [refreshing, setRefreshing] = useState(false)
+  const workpack = useApprovalWorkpack('structure')
 
   if (approvals.isLoading) {
     return <Panel className="mx-30 mt-20 mb-4 px-20 py-16 text-body text-ink-4">读取 Stage4B 最终计划审批记录…</Panel>
@@ -178,6 +180,22 @@ export function StructureApprovalPanel({
   }
 
   const existing = doc.structure.current_decision
+  const alreadyCurrent = workpack.data?.disposition === 'already_current'
+  const workpackReviewable = Boolean(
+    !workpack.isLoading && !workpack.isFetching && !workpack.isError &&
+    workpack.data?.disposition === 'review_required',
+  )
+  const workpackDisabledReason = alreadyCurrent
+    ? '同一当前 Stage4B 工作包已有全章接受决定，无需重复整读'
+    : workpack.isError
+        ? '当前 Stage4B 工作包读取失败，不能绑定本轮审批'
+      : workpack.isFetching
+        ? '正在读取或刷新当前 Stage4B 工作包'
+        : !workpack.data
+          ? '服务端未返回当前 Stage4B 工作包'
+          : !workpackReviewable
+            ? '服务端返回了未知的 Stage4B 工作包处置态'
+            : ''
   const formKey = [
     subject,
     existing?.decided_at ?? 'undecided',
@@ -197,6 +215,10 @@ export function StructureApprovalPanel({
       replanSpawn={replanSpawn}
       replanAction={replanAction}
       onReplan={startReplan}
+      alreadyCurrent={alreadyCurrent}
+      workpackReviewable={workpackReviewable}
+      workpackDisabledReason={workpackDisabledReason}
+      workpackQuery={workpack}
     />
   )
 }
@@ -213,6 +235,10 @@ function StructureApprovalForm({
   replanSpawn,
   replanAction,
   onReplan,
+  alreadyCurrent,
+  workpackReviewable,
+  workpackDisabledReason,
+  workpackQuery,
 }: {
   doc: ApprovalDoc
   rows: Stage4IndexRow[]
@@ -225,6 +251,10 @@ function StructureApprovalForm({
   replanSpawn: ActionRef | null
   replanAction: ClassifiableAction | null
   onReplan: () => void
+  alreadyCurrent: boolean
+  workpackReviewable: boolean
+  workpackDisabledReason: string
+  workpackQuery: ReturnType<typeof useApprovalWorkpack>
 }) {
   const { notify } = useChrome()
   const existingByChapter = new Map(
@@ -291,7 +321,7 @@ function StructureApprovalForm({
         </div>
       </div>
 
-      <ApprovalWorkpackPanel kind="structure" />
+      <ApprovalWorkpackEvidence kind="structure" query={workpackQuery} />
 
       {replanSpawn ? (
         <div className="flex items-center gap-14 border-b border-warn-line bg-warn-bg px-20 py-14">
@@ -436,9 +466,13 @@ function StructureApprovalForm({
                 paid: false,
                 writes_disk: false,
               }}
-              disabled={!complete || submit.isPending}
+              disabled={!complete || submit.isPending || !workpackReviewable}
               disabledReason={
-                enumsLoading
+                alreadyCurrent
+                  ? '同一当前 Stage4B 工作包已有全章接受决定，无需重复整读'
+                  : !workpackReviewable
+                    ? workpackDisabledReason
+                  : enumsLoading
                   ? '正在读取服务端结构审批取值面'
                   : enumsError
                     ? '服务端结构审批取值面读取失败'

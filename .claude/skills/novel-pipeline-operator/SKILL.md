@@ -55,19 +55,23 @@ description: 作为受托终审代理，使用本仓 novel.cli 将单本中文�
 ## 执行主循环
 
 1. 确认仓根、Python 解释器、书、绝对 `base`；**记录**两项授权取值与代批范围——默认都是 `granted`，这一步是记录事实，不是向用户索要。不要打印密钥。
-2. 首个动作前从仓根运行 `.claude/skills/novel-pipeline-operator/scripts/session_preflight.py --base <BASE> --sid <SID>`；新书改用 `--source <TXT>`。把输出的 `started_at` 固化为 `<STARTED_AT>`、`code_version` 固化为 `<START_CODE>`，后续命令全程逐字复用，不能在收尾时现取一个新值冒充起点。
-3. 对既有 `sid` 先运行 `state` 与 `inbox`；对新书先预览 `stage0.remove`。从盘上事实决定起点。
+2. 首个动作前从仓根运行 `.claude/skills/novel-pipeline-operator/scripts/session_preflight.py --base <BASE> --sid <SID>`；新书改用 `--source <TXT>`。把输出的 `started_at` 固化为 `<STARTED_AT>`、`code_version` 固化为 `<START_CODE>`，后续命令全程逐字复用，不能在收尾时现取一个新值冒充起点。预检后立即运行 `.claude/skills/novel-pipeline-operator/scripts/operator_phase.py session-start --base <BASE> --sid <SID> --start-code-version <START_CODE> --started-at <STARTED_AT> --source skill`，把返回的 `session_id` 固化为 `<OPERATOR_SESSION>`。若这份可观测性账写不成，记录并披露遥测缺口，但不据此跳过、代替或放宽任何产品闸门。
+3. 对既有 `sid` 先运行 `novel.cli state <SID> --base <BASE> --with-inbox`，让一次只读调用内的 state 与 inbox 共用同一份冻结快照；对新书先预览 `stage0.remove`。从盘上事实决定起点。快照只活在该次调用栈内，任何写盘后都重新调用，不跨动作缓存。
 4. 在首个动作前创建终审包草稿，随每次授权判断、闸门裁决、修复与异常更新；不要等到最后凭记忆补写。
 5. 从仓根优先用 `.claude/skills/novel-pipeline-operator/scripts/run_step.py --base <BASE> --sid <SID> --expect-code-version <START_CODE> <node> -- [flags]` 预览生产 `build_steps`；真跑采用同一条命令并把 `--execute` 放在 node 前。需要机器复核 preview 时加 `--evidence-json <PATH>`：它原子记录同一份 Step 的 argv/付费/写盘信息，preview 与 execute 复用同一路径时内容不同会拒绝覆盖。execute 无论是否传该路径，都会把本次真实 Step canonical evidence 的完整 SHA-256 同时写进 start/end 信标 note，供会话证据关闭式核对。headless Commander 下，runner 还会从 append-only started 事件重读并核验冻结的 commander/executor profile、两项授权和代码指纹；为当前 node 选择默认 executor 或逐节点 override，并把同一快照写进带契约身份的 evidence 与子 CLI argv。脚本会逐字执行同一 Step.argv、串起 start/end 信标，并在每一步前后拒绝代码漂移。新书的 `stage0.remove` 省略 runner 的 `--sid`。不要凭文档手拼真实 argv，也不要手加运行期 agent profile 参数。八个 agent executor 已原生执行“候选 → 代码校验反馈 → 同 session resume”，主路**不得**再带 legacy `--response-repair agent`；该 flag 只属于显式 DeepSeek 临时回滚。Stage5 全书写作节点不带选臂参数；定向维护只用 `--chapters`。
 6. 不使用 runner 的特殊诊断命令，仍须执行 `mark start`，取得真实子进程退出码后执行 `mark end --exit <rc>`；`preview` 不打点，并在动作前确认当前代码仍等于 `<START_CODE>`。
 7. 一次只运行一个写盘节点。用退出码判断进程结果，用最新 check badge 与 finding 判断质量结果。
 8. 命中闸门时按代批契约裁决；Stage4A/B 两次裁决都先完整读取当前 hash-bound 的
-   `approval workpack design|structure`，再编辑并提交决定模板。工作包只缩小阅读范围，不自动 accept，
+   `approval workpack design|structure`。Stage6/7 定稿同样先分别读取 `approval workpack stage6|stage7`：
+   Stage6 包内完整展开 A/B 各自 verdict、reason、evidence、ranking；Stage7 包内完整汇总人物、别名、
+   kept、实际替换命中、残留上下文、替换计数和完整主体。若包的 `disposition=already_current`，当前
+   typed 决定已精确绑定相同代码、规则与产物主体，跳过重复提交；否则只把**刚读完的同一份包**里的
+   `subject_sha256` 与 `workpack_sha256` 一起提交给对应 approve。工作包只缩小阅读范围，不自动 accept，
    INFO/metric/UNVER 不制造付费动作。Stage5 最终 Review 与所有 edit/trim/wontfix 收口后，逐项读取
    current closure workpack，再提交 `approval template/apply stage5` 的 typed 回执；不得代签或拿旧 s5
    继续下游。命中失败时按修复状态机收敛；每次决定同时记录证据、被否决方案和复验结果。
-9. `stage7.assemble` 后执行独立成书对账，再刷新 `state`、`inbox` 与活动终态文件；从仓根用 `.claude/skills/novel-pipeline-operator/scripts/collect_final_evidence.py --base <BASE> --sid <SID> --started-at <STARTED_AT> --start-code-version <START_CODE>` 收拢本次会话事实。随后运行同参数的 `.claude/skills/novel-pipeline-operator/scripts/sync_review_evidence.py`，自动同步质量表、会话/累计账本、退出序列与机器锚点，不手抄这些重复事实。
-10. 清除终审包中的其余占位符，从仓根运行同一组会话参数的 `.claude/skills/novel-pipeline-operator/scripts/validate_review.py`，再运行 `.claude/skills/novel-pipeline-operator/scripts/verify_delivery.py --base <BASE> --sid <SID> --start-code-version <START_CODE>`；只有后者返回 `ready*` 才可交付，然后只把成书与终审包交给用户。
+9. `stage7.assemble` 后执行独立成书对账，再用组合 `state --with-inbox` 刷新活动终态。先补完终审包中的人工叙述并清除其余占位符，再从仓根运行 `.claude/skills/novel-pipeline-operator/scripts/finalize_review.py --base <BASE> --sid <SID> --started-at <STARTED_AT> --start-code-version <START_CODE>`。这是 canonical 收尾：只 collect 一次，在内存中 render → validate，验证通过才原子提交终审包；提交后丢弃旧快照，并以 `<START_CODE>` 调用全新读作用域的 `delivery.assess`。旧 `collect_final_evidence.py`、`sync_review_evidence.py`、`validate_review.py` 与 `verify_delivery.py` 保留为诊断/兼容入口，不再串成主路。
+10. 用 `operator_phase.py` 对 `inspect / preview / execute / review / approve / finalize` 的实际窗口逐段记录：每段先 `phase-start`，固化返回的 `phase_execution_id`，结束后用 `phase-end` 记录真实 `completed / failed / cancelled / unknown`、退出码与不含正文的错误类别；不得记录 prompt、正文、reason、argv、路径或密钥。`finalize_review.py` 是一条进程内含 fresh assess 的命令，外部只记一个 `finalize` 窗口；它返回的 `phases.delivery` 证明逻辑终验独立，但不要事后把一个墙钟拆成伪 `verify`。只有另行执行诊断 `verify_delivery.py` 或 launcher 能在调用前后真实打点时才用 `verify`。本 skill 的 preflight 发生在 telemetry session 建立之前，保留为起点后的 unattributed 墙钟，不事后补一条近零时长的伪 `preflight` phase；能在预检前启动遥测的 launcher 才使用那一格。最后 `session-end` 并运行 `summary --base <BASE> --sid <SID> --started-at <STARTED_AT> --session-id <OPERATOR_SESSION>`。summary 只拆墙钟归属；Commander 宿主模型 token 与成本不可见时必须保持 `unavailable_host_boundary`，不得估算。只有 finalizer 的 fresh delivery 结果为 `ready*` 才可交付，然后只把成书与终审包交给用户。
 
 ## 不可突破的边界
 

@@ -143,6 +143,7 @@ def _approved_name_artifact():
         origin='human', actor='service-reviewer',
         reason='reviewed the full current name decision surface',
         subject_sha256=rename.approval_subject_sha256(art),
+        workpack_sha256='f' * 64,
     )
     return art
 
@@ -153,6 +154,15 @@ def _isolated_s7_proof(monkeypatch, holder: dict[str, object]):
             return holder['art'], {}
 
     monkeypatch.setattr(approvals, '_store_for', lambda _novel_dir: Store())
+    monkeypatch.setattr(
+        rename, '_approval_workpack_snapshot',
+        lambda _store, art: (
+            SimpleNamespace(
+                workpack_sha256=art.approved.workpack_sha256,
+                disposition='already_current'),
+            SimpleNamespace(),
+        ),
+    )
     monkeypatch.setattr(
         approvals, '_require_fresh_json', lambda _store, _rel: 'f' * 64)
     monkeypatch.setattr(approvals, '_root_clean_sha1', lambda _novel_dir: 'c' * 40)

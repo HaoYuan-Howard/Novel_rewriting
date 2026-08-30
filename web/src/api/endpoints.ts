@@ -26,6 +26,8 @@ import type {
   StructureApprovalRequest,
   Stage5ClosureRequest,
   Stage5ClosureTemplate,
+  Stage6ApprovalWorkpack,
+  Stage7ApprovalWorkpack,
 } from '@/types/approvals'
 import type { EnumsResponse } from '@/types/enums'
 import type {
@@ -491,6 +493,10 @@ export const realApi: Api = {
     get<ApprovalWorkpack>(n(sid) + '/approvals/design/workpack'),
   getStructureApprovalWorkpack: (sid) =>
     get<ApprovalWorkpack>(n(sid) + '/approvals/structure/workpack'),
+  getStage6ApprovalWorkpack: (sid) =>
+    get<Stage6ApprovalWorkpack>(n(sid) + '/approvals/stage6/workpack'),
+  getStage7ApprovalWorkpack: (sid) =>
+    get<Stage7ApprovalWorkpack>(n(sid) + '/approvals/stage7/workpack'),
   getStage5ClosureTemplate: (sid) =>
     get<Stage5ClosureTemplate>(n(sid) + '/approvals/stage5/template'),
   approveStage5Closure: (sid, request: Stage5ClosureRequest) =>

@@ -560,6 +560,55 @@ def test_approve_closure_opens_gate_s5_and_unblocks_downstream(rig):
         closure.require_stage5_closed(store)
 
 
+def test_current_writing_recomputes_and_repairs_the_typed_s5_gate(
+        rig, monkeypatch):
+    """首次 gate proof 可重算；旧半提交尾窗由同一回执幂等补完。"""
+    ctx, store = rig
+    base, sid = ctx.novel_dir.parent, ctx.sid
+    _open_s4(base, sid)
+    writing_proof = approvals._ApprovalProof(
+        root_clean_sha1='0' * 40,
+        artifacts={'stage4/writer_context.json': 'f' * 64},
+        decision_sha256='1' * 64,
+    )
+    monkeypatch.setattr(
+        approvals, '_proof_for_writing', lambda _novel_dir: writing_proof)
+    record = approvals._read_raw(base, sid).model_copy(update={
+        'writing': True,
+        'writing_proof': writing_proof,
+    })
+    approvals._path(base, sid).write_text(
+        record.model_dump_json(), encoding='utf-8')
+
+    request = _ruling_request(store)
+    first = approvals.approve_stage5_closure(base, sid, request)
+    assert first.gate['s5'] is True
+    current = approvals.get(base, sid)
+    assert current.gate['s5'] is True
+    assert current.closure.state == 'closed'
+
+    # 模拟旧实现：closure 决定已完整落盘，却把决定自身的 proof 错当成
+    # gate proof。公开读取应关闭旧 gate；重交同一 typed 回执只修 proof，
+    # 不追加第二条人工决定。
+    raw = approvals._read_raw(base, sid)
+    assert raw.closure_decision is not None
+    wrong_gate_proofs = dict(raw.gate_proofs)
+    wrong_gate_proofs['s5'] = raw.closure_decision.proof
+    approvals._path(base, sid).write_text(
+        raw.model_copy(update={
+            'gate_proofs': wrong_gate_proofs,
+        }).model_dump_json(),
+        encoding='utf-8',
+    )
+    assert approvals.get(base, sid).gate['s5'] is False
+
+    repaired = approvals.approve_stage5_closure(base, sid, request)
+    assert repaired.gate['s5'] is True
+    assert repaired.closure.state == 'closed'
+    assert len(repaired.closure.history) == 1
+    assert approvals.get(base, sid).gate['s5'] is True
+
+
 def test_closure_submit_holds_the_book_lock_through_the_approval_tail(
         rig, monkeypatch):
     """二次 workpack 到 gate.s5 原子写回之间，任何 Stage5 writer 都不能穿过。"""

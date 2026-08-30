@@ -23,6 +23,7 @@ import hashlib
 import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from functools import wraps
 from typing import Any, Protocol
 
 from contracts.artifacts import (
@@ -34,6 +35,7 @@ from contracts.artifacts import (
 from contracts.invariants import HOOK_APPROACHES, slot_of
 from contracts.rules import REGISTRY
 from contracts.schema.common import Finding
+from contracts.schema.api import Stage6ApprovalCandidate, Stage6ApprovalWorkpack
 from contracts.schema.report import CheckReport
 from contracts.schema.stage2 import GlobalGrounding
 from contracts.schema.stage4 import WriterContext
@@ -55,6 +57,7 @@ from novel.llm.stage6_hook_runs import RECOVERY_POLICY as AGENT_RECOVERY_POLICY
 from novel.llm.transport import TransportError
 from novel.report import build
 from novel.report.findings import Outcome
+from novel.report.workpack import compact_approval_check
 from novel.run import RunContext
 from novel.stages.stage6 import checks, prompts
 from novel.stages.stage6.measure import (
@@ -71,6 +74,17 @@ WRITER_CONTEXT = STAGE4_WRITER_CONTEXT
 
 #: 被闸门拦下的那一份。**从 `REL` 派生，不手写第二个字符串。**
 _INVALID = paths.invalid_of(REL)
+
+
+def _commit_owned(function):
+    """把所有会改正式 Hook 的入口接到 producer 已有的跨进程提交锁。"""
+    @wraps(function)
+    def owned(ctx: RunContext, *args, **kwargs):
+        from novel.llm import stage6_hook_runs
+
+        with stage6_hook_runs.commit_ownership(ctx.novel_dir):
+            return function(ctx, *args, **kwargs)
+    return owned
 
 
 # 本节点的 consumed 投影统一登记在 `novel.consumption`；读写与 freshness 共用同一函数。
@@ -191,7 +205,10 @@ def _judge_artifact(art: Hook, up: _Upstreams, store: ArtifactStore) -> list[Out
         texts=texts, mat=up.mat, secrets=up.secrets, arc=up.arc,
         lead_upto_ch=art.lead_upto,
         hook_chars=up.hook_mechanical.get('chars'),
-        approved=art.approved is not None,
+        # 盘上的 ``approved`` 可能是旧版无 workpack 声明，或在 0 成本改字/重判后
+        # 留下的历史声明。只有 subject + 当前代码/规则/证据工作包同时闭合，才可把
+        # ``hook_not_approved`` 呈成已定稿；否则 state/inbox 必须继续给出重批恢复路。
+        approved=approval_is_current(store, art),
         stale=stale, missing=missing) + semantic.outcomes(store, art)
 
 
@@ -365,6 +382,7 @@ def _judgeable_rules():
             if r.sev in ('hard', 'info') and r.check_kind != 'semantic']
 
 
+@_commit_owned
 def run_recheck(ctx: RunContext) -> tuple[Hook, CheckReport]:
     """`--recheck`：**0 成本但写盘**——三条候选与定稿一起重跑归一与判据，写回。
 
@@ -405,6 +423,7 @@ def run_recheck(ctx: RunContext) -> tuple[Hook, CheckReport]:
     return new, _report(ctx, store, _judge_artifact(new, up, store), new)
 
 
+@_commit_owned
 def run_revalidate(
     ctx: RunContext, *, actor: str, reason: str,
 ) -> tuple[bool, CheckReport]:
@@ -515,6 +534,7 @@ class HookCandidateContext:
     user: str
     input_sha256: str
     _up: _Upstreams
+    prompt_json_layout: str = prompts.PRETTY_JSON_LAYOUT
 
 
 @dataclass(frozen=True)
@@ -592,6 +612,7 @@ def prepare_hook_candidate(ctx: RunContext) -> HookCandidateContext:
         input_sha256=_input_identity(
             ctx, system=system, user=user, up=up),
         _up=up,
+        prompt_json_layout=prompts.prompt_json_layout(),
     )
 
 
@@ -608,7 +629,8 @@ def _assert_prepared_current(
     user = prompts.build_user(current.mat)
     identity = _input_identity(ctx, system=system, user=user, up=current)
     if (identity != prepared.input_sha256
-            or system != prepared.system or user != prepared.user):
+            or system != prepared.system or user != prepared.user
+            or prompts.prompt_json_layout() != prepared.prompt_json_layout):
         raise ProvenanceRefused(
             'stage6.hook 初始 prompt/上游/成稿投影已变化；'
             '拒绝把旧上下文候选写成当前正式产物')
@@ -1239,10 +1261,15 @@ def _materialize_hook_evaluation(
     if batch.initially_dirty and not batch.agent_mode:
         prompt_accounting['HOOK_RETRY_SYS'] = prompts.hook_retry_system()
     params = (
-        HookParams(max_tokens=MAX_TOKENS, candidate_retry_limit=0)
+        HookParams(
+            max_tokens=MAX_TOKENS,
+            prompt_json_layout=prepared.prompt_json_layout,
+            candidate_retry_limit=0,
+        )
         if batch.agent_mode else
         HookParams(
             max_tokens=MAX_TOKENS,
+            prompt_json_layout=prepared.prompt_json_layout,
             candidate_retry_max_tokens=CANDIDATE_RETRY_MAX_TOKENS,
             candidate_retry_limit=CANDIDATE_RETRY_LIMIT,
             candidate_retry_effort=CANDIDATE_RETRY_RUNGS[0][0],
@@ -1340,11 +1367,16 @@ def _verify_hook_artifact(
             f'{freshness.reason}；拒绝 delivered')
     rebuilt: list[Candidate] = []
     for position, candidate in enumerate(landed.candidates, 1):
-        text, mech, findings = _normalize_and_judge(candidate.text, current)
+        text, _second_pass_mech, findings = _normalize_and_judge(
+            candidate.text, current)
+        # ``mech`` 记的是“这一遍归一改了多少处”，不是归一后文本的状态：
+        # 首遍可能非零，拿已归一文本重跑则理应归零。完整 typed readback 已在
+        # 上方逐值守住首遍记账；这里仅重算真正幂等的文本与当前判据，不能用
+        # 第二遍的零计数覆盖或否决那份历史事实。
         rebuilt.append(Candidate(
             approach=candidate.approach,
             text=text,
-            mech=mech,
+            mech=candidate.mech,
             findings=_labelled(slot_of(position), findings),
         ))
     if rebuilt != landed.candidates:
@@ -1658,8 +1690,9 @@ def run_hook(ctx: RunContext, client: LlmClient) -> Hook:
     return finalize_hook_candidate(ctx, client, prepared, evaluation)
 
 
+@_commit_owned
 def run_apply_edit(ctx: RunContext, edit_path: str = '') -> tuple[Hook, CheckReport]:
-    """`--apply-edit`：人手改**一条**文案文本（候选或定稿），0 成本。
+    """`--apply-edit`：人手改**一条候选**；可沿当前定稿的 slot 回填，0 成本。
 
     **必经 `_normalize_and_judge`**（本层唯一的归一+判定落点；`hook_reuses_source`
     那条 HARD 守的正是走这条路的人——人手里有原作文案段，模型没有）。
@@ -1678,7 +1711,7 @@ def run_apply_edit(ctx: RunContext, edit_path: str = '') -> tuple[Hook, CheckRep
     if not store.exists(rel):
         raise TerminalState(
             f'{rel} 不在盘上。⚠ `--apply-edit` 吃的是**人写的决策集**'
-            f'（candidate 指明改哪条候选，null ⇒ 写/替换定稿），'
+            f'（candidate 指明改哪条候选；null 只可改已有定稿的候选前身），'
             f'把它放到这本书的 `stage6/` 下（缺省文件名 `hook_edit.json`）')
     edit = store.read(HookEdit, rel)
     if not store.exists(REL):
@@ -1692,46 +1725,45 @@ def run_apply_edit(ctx: RunContext, edit_path: str = '') -> tuple[Hook, CheckRep
     up = _Upstreams(ctx, store)
 
     text, mech, fs = _normalize_and_judge(edit.text, up)
-    if edit.candidate is not None:
-        slots = [slot_of(position) for position, _c in enumerate(art.candidates, 1)]
-        if edit.candidate not in slots:
+    slots = [slot_of(position) for position, _c in enumerate(art.candidates, 1)]
+    target_slot = edit.candidate
+    if target_slot is None:
+        # 旧入口允许直接把自由文本写进 ``approved``，但 v1 workpack 只冻结三条可选
+        # 候选；那样的新稿永远没有可供 ``stage6.approve`` 绑定的 subject，形成一条
+        # 看似“已定稿”、实则永远过不了下游的死路。已有定稿有候选前身时，把改字
+        # 落回同一槽；随后清批准，刷新 workpack 即可 0 成本重新签字。
+        if art.approved is None or art.approved.slot is None:
             raise TerminalState(
-                f'候选 {edit.candidate!r} 不在这份产物里（有 {slots}）')
-        label = edit.candidate
-        cands = [Candidate(approach=c.approach, text=text, mech=mech,
-                           findings=_labelled(label, fs))
-                 if slot_of(position) == edit.candidate else c
-                 for position, c in enumerate(art.candidates, 1)]
-        _refuse_duplicate_candidates(cands, by='--apply-edit')
-        new = art.model_copy(update={
-            'candidates': cands,
-            'provenance': ctx.rewrite_provenance(art.provenance, by='--apply-edit')})
-    else:
-        # 定稿：有前身则记它是从**哪条候选**改出来的；没有前身 ⇒ `slot is None`。
-        slot = art.approved.slot if art.approved is not None else None
-        label = f'定稿·{slot}' if slot is not None else '定稿·人手写'
+                'candidate=null 只能修改已有且带候选前身的定稿；当前没有可回填槽位。'
+                f'请在 hook_edit.json 显式填写 candidate={slots} 中的一项，'
+                '改完刷新 Stage6 approval workpack 并重跑 stage6.approve（0 成本）')
+        target_slot = art.approved.slot
         from novel.stages.stage6 import semantic
-        assessment, basis = semantic.require_human_resolution(
-            store, art, text, label,
+        semantic.require_human_resolution(
+            store, art, text, target_slot,
             actor=(edit.actor or ''), reason=(edit.reason or ''),
             expected_subject_sha256=(edit.subject_sha256 or ''),
         )
-        new = art.model_copy(update={
-            'approved': ApprovedHook(slot=slot, text=text, origin='human',
-                                     mech=mech, findings=_labelled(label, fs),
-                                     resolution=HookApprovalResolution(
-                                          actor=(edit.actor or '').strip(),
-                                          reason=(edit.reason or '').strip(),
-                                          subject_sha256=semantic.text_sha256(text),
-                                          basis=basis,
-                                          semantic_review_seq=assessment.semantic_review_seq,
-                                      )),
-            'provenance': ctx.rewrite_provenance(art.provenance, by='--apply-edit')})
+    if target_slot not in slots:
+        raise TerminalState(
+            f'候选 {target_slot!r} 不在这份产物里（有 {slots}）')
+    cands = [Candidate(approach=c.approach, text=text, mech=mech,
+                       findings=_labelled(target_slot, fs))
+             if slot_of(position) == target_slot else c
+             for position, c in enumerate(art.candidates, 1)]
+    _refuse_duplicate_candidates(cands, by='--apply-edit')
+    new = art.model_copy(update={
+        'candidates': cands,
+        # 改一个字，原 subject/workpack 声明立即失效。历史仍在 _rounds 与 edit
+        # 决策集里；live 产物只呈现“待重新批准”，不把旧声明冒充 current。
+        'approved': None,
+        'provenance': ctx.rewrite_provenance(art.provenance, by='--apply-edit')})
 
     store.write_round(REL, new)
     return new, _report(ctx, store, _judge_artifact(new, up, store), new)
 
 
+@_commit_owned
 def run_approve(
     ctx: RunContext,
     pick: int,
@@ -1739,6 +1771,7 @@ def run_approve(
     actor: str,
     reason: str,
     subject_sha256: str,
+    workpack_sha256: str,
 ) -> tuple[Hook, CheckReport]:
     """`stage6.approve --pick N`：**人定稿**。0 成本。
 
@@ -1760,6 +1793,17 @@ def run_approve(
             f'--pick {pick} 越界：这份产物有 {len(art.candidates)} 条候选'
             f'（1~{len(art.candidates)}）')
 
+    actor = actor.strip()
+    reason = reason.strip()
+    if not actor or not reason:
+        raise TerminalState('stage6.approve 必须显式给非空 actor 与 reason')
+    pack, report = _approval_workpack_snapshot(store, art)
+    if workpack_sha256 != pack.workpack_sha256:
+        raise TerminalState(
+            '文案审批工作包已变化：'
+            f'提交 {workpack_sha256 or "<空>"}，当前 {pack.workpack_sha256}；'
+            '请刷新 workpack 后重审')
+
     c = art.candidates[pick - 1]
     slot = slot_of(pick)
     mechanical_hard = sorted({f.rule for f in c.findings if _sev_of(f.rule) == 'hard'})
@@ -1767,6 +1811,21 @@ def run_approve(
         raise TerminalState(
             f'候选 {pick} 有阻断级机械问题 {mechanical_hard}，不能定稿。'
             f'请改选干净候选或 --apply-edit 修正')
+    if subject_sha256 != pack.candidates[pick - 1].subject_sha256:
+        raise TerminalState(
+            '文案审批对象已变化：'
+            f'提交 {subject_sha256 or "<空>"}，'
+            f'当前 {pack.candidates[pick - 1].subject_sha256}；请刷新后重审')
+
+    # 正常调用方看见 already_current 就直接跳过；命令重放仍需幂等。只在人工声明
+    # 逐字段完全相同时不写新轮次，不把不同 actor/reason 错折叠成同一份声明。
+    if (pack.disposition == 'already_current'
+            and pack.current_slot == slot_of(pick)
+            and pack.current_approval is not None
+            and pack.current_approval.actor == actor
+            and pack.current_approval.reason == reason
+            and pack.current_approval.subject_sha256 == subject_sha256):
+        return art, report
 
     # 定稿依据只有一种：一条与当前字节绑定的人工 resolution。
     # ⚠ 这里曾是一个二选一（当前校准 PASS 走自动证据，其余记人工）。自动放行门下线后
@@ -1776,20 +1835,158 @@ def run_approve(
     assessment, basis = semantic.require_human_resolution(
         store, art, c.text, slot, actor=actor, reason=reason,
         expected_subject_sha256=subject_sha256)
+    # 锁内重读正式产物，而不是拿初读对象再算一次：直接 CLI/edit 也共用上面的
+    # commit ownership，所以工作包校验与 history write 之间没有可穿越的改稿窗。
+    rebound_art, _raw = store.read_own(Hook, REL)
+    rebound, _rebound_report = _approval_workpack_snapshot(store, rebound_art)
+    if rebound.workpack_sha256 != workpack_sha256:
+        raise TerminalState(
+            '文案证据在批准提交期间变化；未写入定稿，请刷新 workpack 后重审')
+    rebound_candidate = rebound_art.candidates[pick - 1]
+    if (rebound.candidates[pick - 1].subject_sha256 != subject_sha256
+            or rebound_candidate.text != c.text):
+        raise TerminalState(
+            '候选文案在批准提交期间变化；未写入定稿，请刷新 workpack 后重审')
 
-    new = art.model_copy(update={
-        'approved': ApprovedHook(slot=slot, text=c.text, origin='human',
-                                 mech=c.mech, findings=list(c.findings),
+    new = rebound_art.model_copy(update={
+        'approved': ApprovedHook(slot=slot, text=rebound_candidate.text, origin='human',
+                                 mech=rebound_candidate.mech,
+                                 findings=list(rebound_candidate.findings),
                                  resolution=HookApprovalResolution(
-                                     actor=actor.strip(), reason=reason.strip(),
+                                     actor=actor, reason=reason,
                                      subject_sha256=subject_sha256,
                                      basis=basis,
                                      semantic_review_seq=assessment.semantic_review_seq,
+                                     workpack_sha256=workpack_sha256,
                                  )),
     })
     store.write_round(REL, new)
     up = _Upstreams(ctx, store)
     return new, _report(ctx, store, _judge_artifact(new, up, store), new)
+
+
+def _approval_subject_sha256(art: Hook) -> str:
+    """候选终审主体；批准本身是授权后果，不反过来改变工作包。"""
+    body = art.model_dump(by_alias=True, mode='json')
+    body.pop('approved')
+    return _canonical_sha256(body)
+
+
+def _approval_candidate_rows(store: ArtifactStore, art: Hook) \
+        -> list[Stage6ApprovalCandidate]:
+    from novel.stages.stage6 import semantic
+
+    assessments = semantic.current_assessments(store, art)
+    rows: list[Stage6ApprovalCandidate] = []
+    for index, candidate in enumerate(art.candidates, 1):
+        assessment = assessments[semantic.text_sha1(candidate.text)]
+        measured = measure(candidate.text)
+        rows.append(Stage6ApprovalCandidate(
+            index=index,
+            slot=slot_of(index),
+            approach=candidate.approach,
+            chars=measured.chars if measured else 0,
+            text=candidate.text,
+            subject_sha256=semantic.text_sha256(candidate.text),
+            mech=candidate.mech,
+            findings=list(candidate.findings),
+            semantic_state=assessment.state,
+            semantic_reason=assessment.reason,
+            semantic_review_seq=assessment.semantic_review_seq,
+            semantic_review=assessment.review,
+            semantic_decision=assessment.decision,
+            quality_score=assessment.quality_score,
+            quality_rank=assessment.quality_rank,
+        ))
+    return rows
+
+
+def _approval_workpack_snapshot(
+    store: ArtifactStore, art: Hook,
+) -> tuple[Stage6ApprovalWorkpack, CheckReport]:
+    """从一份已读主体构造稳定快照；hash 排除当前 approval/disposition。"""
+    from novel.stages.stage6 import semantic
+
+    # 报告也按候选主体重判。否则 ``approved`` 这项授权后果会令批准前后的
+    # 工作包自我失效，永远不可能得到 already_current。
+    subject = art.model_copy(update={'approved': None})
+    up = _Upstreams(store.ctx, store)
+    report = _report(
+        store.ctx, store, _judge_artifact(subject, up, store), subject)
+    rows = _approval_candidate_rows(store, subject)
+    base = Stage6ApprovalWorkpack(
+        kind='stage6',
+        sid=store.ctx.sid,
+        code_version=store.ctx.code,
+        rules_fingerprint=prov.rules_fingerprint('stage6'),
+        artifact_subject_sha256=_approval_subject_sha256(subject),
+        rationale=subject.rationale,
+        check=compact_approval_check(report),
+        judge_rankings=semantic.current_judge_rankings(store, subject),
+        candidates=rows,
+        workpack_sha256='0' * 64,
+        disposition='review_required',
+    )
+    body = base.model_dump(by_alias=True, mode='json')
+    for key in ('workpack_sha256', 'disposition', 'current_slot', 'current_approval'):
+        body.pop(key)
+    digest = _canonical_sha256(body)
+    current = art.approved
+    current_resolution = current.resolution if current is not None else None
+    current_bound = (
+        current is not None
+        and current.slot is not None
+        and current.resolution.workpack_sha256 == digest
+        and semantic.text_sha256(current.text)
+        == current.resolution.subject_sha256
+        and any(
+            row.slot == current.slot
+            and row.text == current.text
+            and row.subject_sha256 == current.resolution.subject_sha256
+            for row in rows
+        )
+    )
+    return base.model_copy(update={
+        'workpack_sha256': digest,
+        'disposition': 'already_current' if current_bound else 'review_required',
+        'current_slot': current.slot if current_bound and current is not None else None,
+        'current_approval': current_resolution if current_bound else None,
+    }), report
+
+
+def approval_is_current(store: ArtifactStore, art: Hook) -> bool:
+    """当前 Stage6 定稿证明：文本、代码、规则、机械与 A/B 证据必须同包。
+
+    旧盘允许 ``workpack_sha256=None`` 以便保守解码，但它只能触发 0 成本重审，
+    不能让 check/state/UI 宣称“已定稿”。先判空也切断工作包为构造报告而移除
+    ``approved`` 时的递归。
+    """
+    if art.approved is None:
+        return False
+    resolution = art.approved.resolution
+    from novel.stages.stage6 import semantic
+    if resolution.subject_sha256 != semantic.text_sha256(art.approved.text):
+        return False
+    pack, _report = _approval_workpack_snapshot(store, art)
+    return (
+        resolution.workpack_sha256 is not None
+        and resolution.workpack_sha256 == pack.workpack_sha256
+        and pack.disposition == 'already_current'
+    )
+
+
+def approval_workpack(store: ArtifactStore) -> Stage6ApprovalWorkpack:
+    """只读生成 Stage6 紧凑终审包，并用首尾重算拒绝混合快照。"""
+    if not store.exists(REL):
+        raise UpstreamMissing(f'{REL} 不在盘上——先跑 stage6.hook')
+    art, _raw = store.read_own(Hook, REL)
+    first, _report_first = _approval_workpack_snapshot(store, art)
+    rebound, _ = store.read_own(Hook, REL)
+    second, _report_second = _approval_workpack_snapshot(store, rebound)
+    if second != first:
+        raise ArtifactUnreadable(
+            'Stage6 候选、语义证据或机械报告在工作包构造期间变化；请刷新后重试')
+    return first
 
 
 # ── 小工具 ──────────────────────────────────────────────────────────────────

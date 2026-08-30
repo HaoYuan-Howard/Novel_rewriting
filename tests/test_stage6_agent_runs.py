@@ -4,13 +4,14 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from pathlib import Path
 
 import pytest
 from pydantic import BaseModel, ConfigDict
 
 from contracts.schema.orchestration import AgentProfile
-from novel import prov
+from novel import paths, prov
 from novel.agents import (
     AgentDriver, AgentProbe, AgentRequest, AgentTurn, AgentUsage,
     render_structured_agent_stdin,
@@ -32,9 +33,12 @@ class _Driver(AgentDriver):
     driver = 'codex'
     provider = 'openai'
 
-    def __init__(self, content: str, session_id: str) -> None:
+    def __init__(
+            self, content: str, session_id: str, *, cache_hit_tokens: int = 0,
+    ) -> None:
         self.content = content
         self.session_id = session_id
+        self.cache_hit_tokens = cache_hit_tokens
 
     def probe(self) -> AgentProbe:
         return AgentProbe(
@@ -45,7 +49,11 @@ class _Driver(AgentDriver):
         return AgentTurn(
             session_id=self.session_id, content=self.content,
             model='gpt-5.6-sol', actual_reasoning_effort='high',
-            usage=AgentUsage(prompt_tokens=10, completion_tokens=2),
+            usage=AgentUsage(
+                prompt_tokens=10,
+                prompt_cache_hit_tokens=self.cache_hit_tokens,
+                prompt_cache_miss_tokens=10 - self.cache_hit_tokens,
+                completion_tokens=2),
             turn_count=1)
 
     def start(self, profile: AgentProfile, request: AgentRequest) -> AgentTurn:
@@ -94,22 +102,28 @@ _INPUT_SHA = hashlib.sha256(b'stage6-input-projection').hexdigest()
 _MAX_TOKENS = 4096
 
 
-def _ensure(ctx: RunContext) -> dict[str, object]:
+def _ensure(
+        ctx: RunContext, *, judge_stagger_ms: int = 0,
+) -> dict[str, object]:
     return stage6_runs.ensure_run(
         ctx, input_sha256=_INPUT_SHA, system=_SYSTEM, users=_USERS,
-        response_model=_JudgeAnswer, max_tokens=_MAX_TOKENS)
+        response_model=_JudgeAnswer, max_tokens=_MAX_TOKENS,
+        experiment_arm=stage6_runs.semantic_experiment_arm(
+            judge_stagger_ms=judge_stagger_ms))
 
 
 def _produce(
         ctx: RunContext, role: str, value: int, *,
         provider_session_id: str | None = None,
+        cache_hit_tokens: int = 0,
 ) -> tuple[_JudgeAnswer, dict[str, object]]:
     purpose = f'stage6.semantic.{role}'
     client = SessionAgentClient(
         ctx, _profile(),
         _Driver(
             f'{{"value":{value}}}',
-            provider_session_id or f'provider-session-{role}'),
+            provider_session_id or f'provider-session-{role}',
+            cache_hit_tokens=cache_hit_tokens),
         max_turns=3)
     result = client.ask_json(
         _SYSTEM, _USERS[role], model_cls=_JudgeAnswer, purpose=purpose,
@@ -134,6 +148,10 @@ def test_run_freezes_two_role_policy_and_refuses_prompt_or_input_drift(tmp_path)
     assert record['input_sha256'] == _INPUT_SHA
     assert record['request_policy']['recovery_policy'] == 'stage6-semantic-v1'
     assert record['request_policy']['session_isolation'] == 'per-purpose'
+    assert record['experiment_arm'] == {
+        'session_policy': 'independent-parallel',
+        'judge_stagger_ms': 0,
+    }
     assert [row['phase'] for row in record['request_policy']['phases']] == ['A', 'B']
     assert [row['purpose'] for row in record['requests']] == [
         'stage6.semantic.A', 'stage6.semantic.B']
@@ -148,6 +166,67 @@ def test_run_freezes_two_role_policy_and_refuses_prompt_or_input_drift(tmp_path)
             ctx, input_sha256=_INPUT_SHA, system=_SYSTEM,
             users={'A': _USERS['A'], 'B': _USERS['B'] + ' changed'},
             response_model=_JudgeAnswer, max_tokens=_MAX_TOKENS)
+
+
+def test_default_checkpoint_cannot_be_relabelled_as_a_stagger_arm(tmp_path):
+    """0ms 已付费 checkpoint 不能在同 run 下冒充 25ms 实验观测。"""
+    ctx = _ctx(tmp_path)
+    _ensure(ctx, judge_stagger_ms=0)
+    _produce(ctx, 'A', 11)
+
+    restarted = _ctx(tmp_path, run_id=ctx.run_id, code=ctx.code)
+    with pytest.raises(ProvenanceRefused, match='experiment arm.*漂移'):
+        _ensure(restarted, judge_stagger_ms=25)
+
+    # 身份拒绝发生在 restore 之前；旧 checkpoint 原样保留，换新 run 仍可审计。
+    checkpoint = paths.stage6_semantic_checkpoint_path(
+        ctx.novel_dir, ctx.run_id, 'A')
+    assert checkpoint.is_file()
+
+
+def test_legacy_run_without_an_arm_remains_the_default_zero_ms_arm(tmp_path):
+    """优化前的 run.json 没有 arm 字段；只兼容成默认臂，不作通配符。"""
+    ctx = _ctx(tmp_path)
+    _ensure(ctx)
+    run_path = stage6_runs._run_root(ctx) / stage6_runs.RUN_FILE
+    historical = json.loads(run_path.read_text(encoding='utf-8'))
+    historical.pop('experiment_arm')
+    identity = {
+        key: value for key, value in historical.items()
+        if key not in ('identity_sha256', 'created_at')
+    }
+    historical['identity_sha256'] = stage6_runs._sha(identity)
+    run_path.write_text(
+        json.dumps(historical, ensure_ascii=False, indent=2, sort_keys=True) + '\n',
+        encoding='utf-8')
+
+    restarted = _ctx(tmp_path, run_id=ctx.run_id, code=ctx.code)
+    restored = _ensure(restarted)
+    assert restored['experiment_arm']['judge_stagger_ms'] == 0
+    with pytest.raises(ProvenanceRefused, match='experiment arm.*漂移'):
+        _ensure(restarted, judge_stagger_ms=25)
+
+
+def test_same_stagger_arm_restores_checkpoint_without_a_new_wire(tmp_path):
+    """同一非默认臂重启仍走原 checkpoint，并保留 per-purpose session 隔离。"""
+    ctx = _ctx(tmp_path)
+    record = _ensure(ctx, judge_stagger_ms=25)
+    _produce(ctx, 'A', 11)
+    assert record['request_policy']['session_isolation'] == 'per-purpose'
+    assert record['experiment_arm'] == {
+        'session_policy': 'independent-concurrent-stagger/v1',
+        'judge_stagger_ms': 25,
+    }
+
+    restarted = _ctx(tmp_path, run_id=ctx.run_id, code=ctx.code)
+    _ensure(restarted, judge_stagger_ms=25)
+    restored = stage6_runs.restore_checkpoint(
+        restarted, role='A', input_sha256=_INPUT_SHA,
+        system=_SYSTEM, user=_USERS['A'], response_model=_JudgeAnswer,
+        max_tokens=_MAX_TOKENS)
+
+    assert restored is not None and restored[0].value == 11
+    assert restarted.ledger.calls_made == 1
 
 
 def test_claude_run_hashes_each_role_final_structured_stdin(tmp_path):
@@ -187,6 +266,24 @@ def test_each_role_checkpoint_restores_typed_payload_ledger_and_session(tmp_path
     assert restarted.ledger.calls_made == 2
     assert restarted.ledger.attempt_ids_for_purpose('stage6.semantic.A') == (
         restored_a[1]['attempt_id'],)
+
+
+def test_independent_judge_ledger_keeps_provider_cache_hit_observation(tmp_path):
+    """静态公共前缀不等于命中；实验只认每个独立 wire 的 provider usage。"""
+    ctx = _ctx(tmp_path)
+    _ensure(ctx)
+    _a, acceptance_a = _produce(ctx, 'A', 11, cache_hit_tokens=0)
+    _b, acceptance_b = _produce(ctx, 'B', 22, cache_hit_tokens=7)
+
+    rows = [json.loads(line) for line in ctx.ledger.path.read_text(
+        encoding='utf-8').splitlines()]
+    by_purpose = {row['purpose']: row for row in rows}
+    assert by_purpose['stage6.semantic.A']['prompt_cache_hit_tokens'] == 0
+    assert by_purpose['stage6.semantic.A']['prompt_cache_miss_tokens'] == 10
+    assert by_purpose['stage6.semantic.B']['prompt_cache_hit_tokens'] == 7
+    assert by_purpose['stage6.semantic.B']['prompt_cache_miss_tokens'] == 3
+    assert acceptance_a['session_run_id'] != acceptance_b['session_run_id']
+    assert acceptance_a['provider_session_id'] != acceptance_b['provider_session_id']
 
 
 def test_restore_reruns_dynamic_validator_without_calling_provider(tmp_path):

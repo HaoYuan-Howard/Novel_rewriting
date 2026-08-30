@@ -65,6 +65,8 @@ export interface EnumsResponse {
   /** Stage4 A/B 异常优先工作包 v1 的服务端闭集；组件只把本地映射当展示标签。 */
   approval_workpack_groups: string[]
   approval_workpack_kinds: string[]
+  approval_workpack_dispositions: string[]
+  final_approval_workpack_kinds: string[]
   approval_workpack_actions: string[]
   approval_workpack_effects: string[]
   approval_workpack_group_effects: Record<string, string[]>

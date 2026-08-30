@@ -7,10 +7,13 @@ from contracts.schema.api import (
     ApprovalBackfillResult, ApprovalDoc, ApprovalWorkpack, DesignReviewerKind,
     DesignReviewRequest, DesignReviewTemplate, GateKey, SeenKey,
     Stage5ClosureRequest, Stage5ClosureTemplate,
+    Stage6ApprovalWorkpack, Stage7ApprovalWorkpack,
     StructureApprovalRequest, WritingApprovalRequest,
 )
 from novel.api.deps import checked_sid, get_base
 from novel.orchestrator import approvals
+from novel.views.stage6 import stage6_approval_workpack
+from novel.views.stage7 import stage7_approval_workpack
 
 router = APIRouter(prefix='/novels/{sid}/approvals')
 
@@ -36,6 +39,22 @@ def get_structure_workpack(
 ) -> ApprovalWorkpack:
     """当前 Stage4B 结构 subject 的只读全章审批包；不组装 Context。"""
     return approvals.structure_workpack(base, sid)
+
+
+@router.get('/stage6/workpack', response_model=Stage6ApprovalWorkpack)
+def get_stage6_workpack(
+    sid: str = Depends(checked_sid), base: str = Depends(get_base),
+) -> Stage6ApprovalWorkpack:
+    """当前 Stage6 候选集的紧凑、A/B 证据与机械检查绑定终审包。"""
+    return stage6_approval_workpack(base, sid)
+
+
+@router.get('/stage7/workpack', response_model=Stage7ApprovalWorkpack)
+def get_stage7_workpack(
+    sid: str = Depends(checked_sid), base: str = Depends(get_base),
+) -> Stage7ApprovalWorkpack:
+    """当前 Stage7 人物决策面的紧凑、真实命中与机械检查绑定终审包。"""
+    return stage7_approval_workpack(base, sid)
 
 
 @router.get('/design/template', response_model=DesignReviewTemplate)

@@ -1,8 +1,9 @@
-import { screen, waitFor } from '@testing-library/react'
+import { act, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { api, realApi } from '@/api/endpoints'
 import { mockApi } from '@/api/mock'
+import { qk } from '@/api/queryKeys'
 import { renderRoute } from '@/test/render'
 import type {
   ApprovalDoc,
@@ -74,11 +75,16 @@ async function mount(state = 'missing') {
   const doc = approval(state)
   vi.spyOn(api, 'getEnums').mockResolvedValue(await mockApi.getEnums())
   vi.spyOn(api, 'getApprovals').mockResolvedValue(doc)
+  if (!vi.isMockFunction(api.getDesignApprovalWorkpack)) {
+    vi.spyOn(api, 'getDesignApprovalWorkpack').mockResolvedValue(
+      await mockApi.getDesignApprovalWorkpack('book-1'),
+    )
+  }
   const template = vi.spyOn(api, 'getDesignReviewTemplate')
     .mockImplementation((sid, query) => mockApi.getDesignReviewTemplate(sid, query))
   const approve = vi.spyOn(api, 'approveDesignReview')
-  renderRoute(<DesignReviewPanel />, '/n/book-1/stage4/1')
-  return { doc, template, approve }
+  const rendered = renderRoute(<DesignReviewPanel />, '/n/book-1/stage4/1')
+  return { doc, template, approve, queryClient: rendered.queryClient }
 }
 
 async function startReview() {
@@ -335,6 +341,9 @@ describe('Stage4A 正式设计审阅', () => {
     const approveOverHttp = realApi.approveDesignReview.bind(realApi)
     vi.spyOn(api, 'getEnums').mockResolvedValue(await mockApi.getEnums())
     vi.spyOn(api, 'getApprovals').mockResolvedValue(doc)
+    vi.spyOn(api, 'getDesignApprovalWorkpack').mockResolvedValue(
+      await mockApi.getDesignApprovalWorkpack('book-1'),
+    )
     vi.spyOn(api, 'getDesignReviewTemplate')
       .mockImplementation((sid, query) => getTemplateOverHttp(sid, query))
     vi.spyOn(api, 'approveDesignReview')
@@ -453,5 +462,89 @@ describe('Stage4A 正式设计审阅', () => {
     expect(screen.getByLabelText('第 3 章定向返修能力')).toHaveTextContent(
       'committed_rounds 2',
     )
+  })
+
+  it('工作包仍在读取时关闭式禁用模板入口，不允许先点后补绑定', async () => {
+    vi.spyOn(api, 'getDesignApprovalWorkpack').mockImplementation(
+      () => new Promise(() => undefined),
+    )
+    await mount()
+    const user = userEvent.setup()
+    await screen.findByText('Stage4A 正式设计审阅')
+    await user.type(screen.getByLabelText('Stage4A 自报身份 actor'), 'reviewer-a')
+    await user.type(
+      screen.getByLabelText('Stage4A 本轮审阅总理由 reason'),
+      '逐章核对当前证据',
+    )
+
+    const start = screen.getByRole('button', { name: '读取关闭式审阅模板' })
+    expect(start).toBeDisabled()
+    expect(start.parentElement).toHaveAttribute('title', '正在读取或刷新当前 Stage4A 工作包')
+  })
+
+  it('同一当前 Stage4A 工作包已批准时默认跳过重复整读', async () => {
+    const pack = await mockApi.getDesignApprovalWorkpack('book-1')
+    vi.spyOn(api, 'getDesignApprovalWorkpack').mockResolvedValue({
+      ...pack,
+      disposition: 'already_current',
+      current_decision_sha256: '9'.repeat(64),
+    })
+    await mount()
+
+    const start = await screen.findByRole('button', { name: '读取关闭式审阅模板' })
+    expect(start).toBeDisabled()
+    expect(start.parentElement).toHaveAttribute(
+      'title',
+      '同一当前 Stage4A 工作包已有正式接受决定，无需重复整读',
+    )
+    expect(screen.getByText(/默认跳过重复人工整读/)).toBeVisible()
+  })
+
+  it('模板已读后后台刷新工作包时禁用最终保存，刷新失败后也不复开', async () => {
+    const pack = await mockApi.getDesignApprovalWorkpack('book-1')
+    const getWorkpack = vi.spyOn(api, 'getDesignApprovalWorkpack')
+      .mockResolvedValue(pack)
+    const { queryClient } = await mount()
+    const user = await startReview()
+    await user.clear(screen.getByLabelText('Stage4A 整书策略裁决理由'))
+    await user.type(
+      screen.getByLabelText('Stage4A 整书策略裁决理由'),
+      '策略证据不足，要求重规划',
+    )
+    await user.clear(screen.getByLabelText('第 3 章 Stage4A 裁决理由'))
+    await user.type(
+      screen.getByLabelText('第 3 章 Stage4A 裁决理由'),
+      '入口锚点需要定向返修',
+    )
+    await user.click(screen.getByLabelText('Stage4A 整书策略已核对'))
+    await user.click(screen.getByLabelText('第 3 章 Stage4A 已核对'))
+    const save = screen.getByRole('button', { name: /保存 Stage4A 正式审阅/ })
+    await waitFor(() => expect(save).toBeEnabled())
+
+    let rejectRefresh!: (error: Error) => void
+    getWorkpack.mockImplementation(() => new Promise((_resolve, reject) => {
+      rejectRefresh = reject
+    }))
+    const callsBeforeRefresh = getWorkpack.mock.calls.length
+    await act(async () => {
+      void queryClient.refetchQueries({
+        queryKey: qk.approvalWorkpack('book-1', 'design'),
+        type: 'active',
+      })
+    })
+    await waitFor(() => expect(getWorkpack).toHaveBeenCalledTimes(callsBeforeRefresh + 1))
+    await waitFor(() => expect(
+      screen.getByRole('button', { name: /保存 Stage4A 正式审阅/ }),
+    ).toBeDisabled())
+    expect(screen.getByRole('button', { name: /保存 Stage4A 正式审阅/ }).parentElement)
+      .toHaveAttribute('title', '正在读取或刷新当前 Stage4A 工作包')
+    await act(async () => rejectRefresh(new Error('refresh failed')))
+    await waitFor(() => expect(
+      screen.getByRole('button', { name: /保存 Stage4A 正式审阅/ }).parentElement,
+    ).toHaveAttribute(
+      'title',
+      '当前 Stage4A 工作包读取失败，不能绑定本轮审阅',
+    ))
+    expect(screen.getByRole('button', { name: /保存 Stage4A 正式审阅/ })).toBeDisabled()
   })
 })

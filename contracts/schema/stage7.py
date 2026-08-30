@@ -42,7 +42,7 @@ from pydantic import Field, model_validator
 from contracts.invariants import RESIDUAL_CONFIDENCE
 from contracts.schema.base import Fp10, Sha1, StrictModel
 from contracts.schema.common import (
-    Finding, FreeProvenance, HashBoundHumanApproval, LlmProvenance,
+    Finding, FreeProvenance, HashBoundHumanApproval, LlmProvenance, Sha256,
 )
 from contracts.schema.stage5 import ContextSource, JudgedDraft
 
@@ -247,6 +247,9 @@ class ApprovedNameMap(HashBoundHumanApproval):
     """人工定稿；凭据绑定审批时看到的决策 surface。没有 auto approve。"""
 
     origin: Literal['human']
+    #: 终审人实际看到的紧凑工作包；旧批准缺失时只保留历史可读性，不能视为
+    #: 当前工作包已审。
+    workpack_sha256: Sha256 | None = None
 
 
 class BookTxt(StrictModel):

@@ -1,0 +1,272 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""invocation-scoped operator 快照：一次指纹、一次完成度、每层一次复检。"""
+from __future__ import annotations
+
+import json
+from types import SimpleNamespace
+
+import pytest
+
+from contracts.invariants import STAGES
+from novel.errors import ArtifactUnreadable, UpstreamMissing
+from novel.orchestrator import approvals as A
+from novel.orchestrator import inspection as I
+
+
+def test_operator_snapshot_freezes_one_code_and_runs_each_check_once(
+        monkeypatch, tmp_path):
+    code_calls: list[None] = []
+    overview_calls: list[tuple] = []
+    check_calls: list[tuple] = []
+    overview = SimpleNamespace(sid='book-1', stages=[])
+
+    monkeypatch.setattr(
+        I.paths, 'resolve_novel_dir', lambda _base, _sid: tmp_path / 'book')
+    monkeypatch.setattr(
+        I.prov, 'code_version', lambda: code_calls.append(None) or 'code-v1')
+    monkeypatch.setattr(
+        I, 'overview_at',
+        lambda novel_dir, code: overview_calls.append((novel_dir, code)) or overview)
+    monkeypatch.setattr(
+        I, 'readonly_ctx', lambda novel_dir, node, code: (novel_dir, node, code))
+    monkeypatch.setattr(I, 'check_node', lambda stage: f'{stage}.canonical-check')
+    monkeypatch.setattr(
+        I, '_service_facts',
+        lambda *_args, **_kwargs: pytest.fail(
+            '普通 state/inbox seal 不得读取终审 ledger/beacon'))
+
+    def check_only(stage):
+        def run(ctx):
+            check_calls.append((stage, ctx))
+            return SimpleNamespace(node=f'{stage}.canonical-check')
+        return run
+
+    monkeypatch.setattr(I, 'check_only', check_only)
+
+    snapshot = I.capture_operator_snapshot(tmp_path, 'book-1')
+
+    assert len(code_calls) == 1
+    assert overview_calls == [(tmp_path / 'book', 'code-v1')]
+    assert [stage for stage, _ctx in check_calls] == list(STAGES)
+    assert all(ctx[2] == 'code-v1' for _stage, ctx in check_calls)
+    assert snapshot.overview is overview
+    assert all(snapshot.check(stage).report is not None for stage in STAGES)
+    with pytest.raises(TypeError):
+        snapshot.checks['stage0'] = I.CheckObservation()  # type: ignore[index]
+
+
+def test_operator_snapshot_rejects_a_write_crossing_its_seven_checks(
+        monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        I.paths, 'resolve_novel_dir', lambda _base, _sid: tmp_path / 'book')
+    monkeypatch.setattr(I.prov, 'code_version', lambda: 'code-v1')
+    monkeypatch.setattr(
+        I, 'overview_at', lambda _novel_dir, _code: SimpleNamespace(sid='book-1'))
+    monkeypatch.setattr(I, 'readonly_ctx', lambda *_args: object())
+    monkeypatch.setattr(I, 'check_node', lambda stage: f'{stage}.check')
+    monkeypatch.setattr(
+        I, 'check_only',
+        lambda _stage: lambda _ctx: SimpleNamespace(node='synthetic'))
+    seals = iter(('before', 'after'))
+    monkeypatch.setattr(
+        I, 'read_surface_seal',
+        lambda *_args, **_kwargs: next(seals))
+
+    with pytest.raises(ArtifactUnreadable, match='混合时点'):
+        I.capture_operator_snapshot(tmp_path, 'book-1')
+
+
+def test_check_observation_only_downgrades_expected_unavailable_errors():
+    assert I.CheckObservation(
+        error=UpstreamMissing('这一层还没跑到')).for_view() is None
+
+    bug = RuntimeError('判据实现坏了')
+    with pytest.raises(RuntimeError, match='判据实现坏了'):
+        I.CheckObservation(error=bug).for_view()
+
+
+def test_approval_projection_reuses_snapshot_overview_and_code_without_fallback(
+        monkeypatch, tmp_path):
+    overview = SimpleNamespace(sid='book-1')
+    record = SimpleNamespace(sid='book-1')
+    contexts: list[tuple] = []
+
+    monkeypatch.setattr(A, '_read_current', lambda *_args: record)
+    monkeypatch.setattr(
+        A.state, 'overview',
+        lambda *_args: pytest.fail('快照审批投影不得再跑 overview'))
+    monkeypatch.setattr(
+        A.prov, 'code_version',
+        lambda: pytest.fail('快照审批投影不得再取 code_version'))
+    monkeypatch.setattr(
+        A.state, 'resume_verdict', lambda _overview, _node: (A.state.RESUME_SKIP, ''))
+    monkeypatch.setattr(
+        A.state, 'readonly_ctx',
+        lambda novel_dir, node, code: contexts.append((novel_dir, node, code)) or 'ctx')
+    monkeypatch.setattr(A, 'ArtifactStore', lambda ctx: ('store', ctx))
+
+    def view(base, got):
+        assert got is record
+        A._spawns(base, 'book-1')
+        assert A._store_for(tmp_path) == ('store', 'ctx')
+        return 'approval-doc'
+
+    monkeypatch.setattr(A, '_view', view)
+
+    assert A.get(
+        tmp_path, 'book-1', overview=overview, code='code-v1') == 'approval-doc'
+    assert contexts == [(tmp_path, 'stage0.approve', 'code-v1')]
+    assert A._READ_CODE.get() is None
+    assert A._READ_OVERVIEW.get() is None
+
+
+def test_structure_workpack_reuses_the_snapshot_stage4_report_and_code(
+        monkeypatch, tmp_path):
+    overview = SimpleNamespace(sid='book-1')
+    report = SimpleNamespace(
+        sid='book-1', stage='stage4', node='stage4.plan')
+    subject = SimpleNamespace(
+        subject_sha256='a' * 64,
+        chapter_ordinals=[1],
+        chapter_subject_sha256={1: 'b' * 64},
+        plan=SimpleNamespace(output_chapters=[]),
+        concerns=[],
+    )
+    reports: list[object] = []
+
+    monkeypatch.setattr(A, '_read_current', lambda *_args: object())
+    monkeypatch.setattr(
+        A.paths, 'resolve_novel_dir', lambda *_args: tmp_path)
+
+    def snapshot(_novel_dir):
+        assert A._projection_code() == 'code-v1'
+        return subject
+
+    monkeypatch.setattr(A, '_structure_workpack_snapshot', snapshot)
+    monkeypatch.setattr(
+        A, '_structure_workpack_groups',
+        lambda *_args, report, **_kwargs: reports.append(report) or [])
+    monkeypatch.setattr(
+        A, '_structure_view',
+        lambda *_args: SimpleNamespace(state='missing', current_decision=None))
+    monkeypatch.setattr(
+        A, 'ApprovalWorkpack', lambda **values: SimpleNamespace(**values))
+    monkeypatch.setattr(
+        A.prov, 'code_version',
+        lambda: pytest.fail('预计算工作包不得再取 code_version'))
+
+    workpack = A.structure_workpack(
+        tmp_path, 'book-1', overview=overview, code='code-v1',
+        check_report=report)
+
+    assert workpack.subject_sha256 == 'a' * 64
+    assert reports == [report]
+    assert A._READ_CODE.get() is None
+    assert A._READ_OVERVIEW.get() is None
+
+
+def test_approval_projection_requires_a_complete_matching_snapshot_coordinate():
+    overview = SimpleNamespace(sid='book-1')
+    with pytest.raises(ValueError, match='必须成对提供'):
+        A.get('.', 'book-1', overview=overview)
+    with pytest.raises(ValueError, match='不是'):
+        A.get('.', 'other-book', overview=overview, code='code-v1')
+
+
+def test_read_surface_seal_ignores_only_the_review_it_will_replace(
+        monkeypatch, tmp_path):
+    novel_dir = tmp_path / 'FQ_测试书_book-1'
+    (novel_dir / 'stage7').mkdir(parents=True)
+    artifact = novel_dir / 'stage7' / 'name_map.json'
+    artifact.write_text('v1', encoding='utf-8')
+    review = novel_dir / '测试书_review.md'
+    review.write_text('draft v1', encoding='utf-8')
+    monkeypatch.setattr(
+        I.paths, 'resolve_novel_dir', lambda _base, _sid: novel_dir)
+    monkeypatch.setattr(I.paths, 'review_package_path', lambda _dir: review)
+    monkeypatch.setattr(I.prov, 'code_version', lambda: 'code-v1')
+
+    before = I.read_surface_seal(tmp_path, 'book-1')
+    review.write_text('draft v2', encoding='utf-8')
+    assert I.read_surface_seal(tmp_path, 'book-1') == before
+
+    artifact.write_text('artifact changed', encoding='utf-8')
+    assert I.read_surface_seal(tmp_path, 'book-1') != before
+
+
+def test_surface_seal_can_exclude_the_explicit_review_lock_and_unique_temp(
+        monkeypatch, tmp_path):
+    novel_dir = tmp_path / 'FQ_测试书_book-1'
+    novel_dir.mkdir()
+    canonical = novel_dir / '测试书_review.md'
+    canonical.write_text('canonical evidence', encoding='utf-8')
+    custom = novel_dir / '人工终审草稿.md'
+    custom.write_text('draft', encoding='utf-8')
+    monkeypatch.setattr(
+        I.paths, 'resolve_novel_dir', lambda _base, _sid: novel_dir)
+    monkeypatch.setattr(I.paths, 'review_package_path', lambda _dir: canonical)
+    monkeypatch.setattr(I.prov, 'code_version', lambda: 'code-v1')
+
+    before = I.read_surface_seal(
+        tmp_path, 'book-1', excluded_review=custom)
+    custom.write_text('edited draft', encoding='utf-8')
+    custom.with_name(custom.name + '.lock').write_bytes(b'\0')
+    custom.with_name(
+        f'.{custom.name}.operator-sync.abc.tmp').write_text(
+            'pending', encoding='utf-8')
+    assert I.read_surface_seal(
+        tmp_path, 'book-1', excluded_review=custom) == before
+
+    canonical.write_text('changed evidence', encoding='utf-8')
+    assert I.read_surface_seal(
+        tmp_path, 'book-1', excluded_review=custom) != before
+
+
+def test_surface_seal_filters_shared_ledger_and_beacon_by_sid(
+        monkeypatch, tmp_path):
+    novel_dir = tmp_path / 'FQ_测试书_book-1'
+    novel_dir.mkdir()
+    review = novel_dir / '测试书_review.md'
+    review.write_text('draft', encoding='utf-8')
+    monkeypatch.setattr(
+        I.paths, 'resolve_novel_dir', lambda _base, _sid: novel_dir)
+    monkeypatch.setattr(I.paths, 'review_package_path', lambda _dir: review)
+    monkeypatch.setattr(I.prov, 'code_version', lambda: 'code-v1')
+
+    service = tmp_path / '_service'
+    service.mkdir()
+    ledger = service / 'ledger.jsonl'
+    progress = service / 'agent_progress.jsonl'
+
+    def append(path, row):
+        with open(path, 'a', encoding='utf-8', newline='\n') as handle:
+            handle.write(json.dumps(row, ensure_ascii=False) + '\n')
+
+    append(ledger, {'sid': 'other-book', 'run_id': 'other-1'})
+    append(progress, {
+        'ts': 1, 'sid': 'other-book', 'node': 'stage0.remove',
+        'phase': 'start', 'exit_code': None,
+    })
+    before = I.read_surface_seal(
+        tmp_path, 'book-1', include_final_evidence_service=True)
+
+    append(ledger, {'sid': 'other-book', 'run_id': 'other-2'})
+    append(progress, {
+        'ts': 2, 'sid': 'other-book', 'node': 'stage1.main',
+        'phase': 'start', 'exit_code': None,
+    })
+    assert I.read_surface_seal(
+        tmp_path, 'book-1', include_final_evidence_service=True) == before
+
+    append(ledger, {'sid': 'book-1', 'run_id': 'ours-1'})
+    after_ledger = I.read_surface_seal(
+        tmp_path, 'book-1', include_final_evidence_service=True)
+    assert after_ledger != before
+
+    append(progress, {
+        'ts': 3, 'sid': 'book-1', 'node': 'stage7.assemble',
+        'phase': 'end', 'exit_code': 0,
+    })
+    assert I.read_surface_seal(
+        tmp_path, 'book-1', include_final_evidence_service=True) != after_ledger

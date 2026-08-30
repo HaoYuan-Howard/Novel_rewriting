@@ -16,6 +16,7 @@ import { Panel, PaneHeader } from '@/components/ui/Panel'
 import { Prose } from '@/components/ui/Prose'
 import { SevChip, SevMark } from '@/components/vocab/Sev'
 import type { Finding } from '@/types/common'
+import type { CompactApprovalCheck } from '@/types/approvals'
 import { cx } from '@/lib/cx'
 
 /**
@@ -33,12 +34,26 @@ export function Stage6Screen() {
   const [reason, setReason] = useState('')
 
   const q = useQuery({ queryKey: qk.stage6(sid), queryFn: () => api.getStage6(sid), retry: false })
+  const workpackQ = useQuery({
+    queryKey: qk.finalApprovalWorkpack(sid, 'stage6'),
+    queryFn: () => api.getStage6ApprovalWorkpack(sid),
+    retry: false,
+  })
+  const workpackSettled =
+    !workpackQ.isLoading && !workpackQ.isFetching && !workpackQ.isError
+  const workpackReady = Boolean(
+    workpackSettled && workpackQ.data?.disposition === 'review_required',
+  )
+  const workpackCurrent = Boolean(
+    workpackSettled && workpackQ.data?.disposition === 'already_current',
+  )
   const approve = useMutation({
     mutationFn: (req: {
       pick: number
       actor: string
       reason: string
       subject_sha256: string
+      workpack_sha256: string
     }) => api.approveHook(sid, req),
     onSuccess: (job) => {
       if (job.state !== 'failed') {
@@ -48,6 +63,7 @@ export function Stage6Screen() {
       void qc.invalidateQueries({ queryKey: qk.stage6(sid) })
       void qc.invalidateQueries({ queryKey: qk.check(sid, 'stage6') })
       void qc.invalidateQueries({ queryKey: qk.approvals(sid) })
+      void qc.invalidateQueries({ queryKey: qk.finalApprovalWorkpack(sid, 'stage6') })
       void qc.invalidateQueries({ queryKey: qk.jobs(sid) })
     },
   })
@@ -55,7 +71,9 @@ export function Stage6Screen() {
   const askApprove = (candidate: {
     index: number
     subject_sha256: string
-  }) =>
+  }) => {
+    const workpack = workpackQ.data
+    if (!workpackReady || !workpack) return
     askConfirm({
       req: {
         kind: 'stage6.approve',
@@ -65,6 +83,7 @@ export function Stage6Screen() {
           '--actor', actor.trim(),
           '--reason', reason.trim(),
           '--subject-sha256', candidate.subject_sha256,
+          '--workpack-sha256', workpack.workpack_sha256,
         ],
         sid,
         ordinal: null,
@@ -74,27 +93,34 @@ export function Stage6Screen() {
         actor: actor.trim(),
         reason: reason.trim(),
         subject_sha256: candidate.subject_sha256,
+        workpack_sha256: workpack.workpack_sha256,
       }),
     })
+  }
 
   return (
     <ScreenFrame screen="stage6">
       <QueryStates q={q} loadingLabel="读开篇文案候选" missing={{ title: '开篇文案 · stage6' }}>
         {(d) => {
           const approvedIdx = d.candidates.find((c) => c.approved)?.index ?? null
+          const approvalCandidates = workpackQ.data?.candidates ?? []
           // 服务端不再产「可直接定稿」的候选，默认落点改为质量排名第一的那条。
           // ⚠ 它是**排序读数**，不是判定：选谁仍然要人填身份与理由。
-          const recommended = [...d.candidates]
+          const recommended = [...approvalCandidates]
             .sort((a, b) => (a.quality_rank ?? 999) - (b.quality_rank ?? 999))[0]
-          const picked = pick ?? approvedIdx ?? recommended?.index ?? d.candidates[0]?.index ?? 1
-          const cand = d.candidates.find((c) => c.index === picked) ?? d.candidates[0]
-          const finalPhase = !!d.approved && !reopened
-          const body = d.approved?.text ?? cand?.text ?? ''
+          const picked = pick ?? approvedIdx ?? recommended?.index ?? approvalCandidates[0]?.index ?? 1
+          const cand = approvalCandidates.find((c) => c.index === picked) ?? approvalCandidates[0]
+          const currentCandidate = approvalCandidates.find(
+            (c) => c.slot === workpackQ.data?.current_slot,
+          )
+          const approvalCurrent = Boolean(
+            workpackCurrent && workpackQ.data?.current_approval && currentCandidate,
+          )
+          const finalPhase = approvalCurrent && !reopened
+          const body = approvalCurrent ? currentCandidate?.text ?? '' : cand?.text ?? ''
           const origText = d.source_hook_text
-          const approvedSource = d.approved
-            ? d.approved.slot === null
-              ? '人手写（无候选前身）'
-              : `候选 ${approvedIdx ?? d.approved.slot.slice(1)} · ${d.approved.approach}`
+          const approvedSource = approvalCurrent && currentCandidate
+            ? `候选 ${currentCandidate.index} · ${currentCandidate.approach}`
             : null
 
           return (
@@ -108,12 +134,16 @@ export function Stage6Screen() {
                   <span
                     className="rounded-btn px-11 py-4 text-body font-semibold"
                     style={
-                      d.approved
+                      approvalCurrent
                         ? { color: FRESH.fresh.color, background: FRESH.fresh.bg }
                         : { color: SEV.unver.color, background: SEV.unver.bg }
                     }
                   >
-                    {approvedSource ? `已定稿：${approvedSource}（人工核验）` : '还没定稿'}
+                    {approvedSource
+                      ? `已定稿：${approvedSource}（人工核验）`
+                      : d.approved
+                        ? '旧定稿未绑定当前工作包 · 需重审'
+                        : '还没定稿'}
                   </span>
                   {finalPhase ? (
                     <LinkButton onClick={() => setReopened(true)}>回去重挑候选</LinkButton>
@@ -127,6 +157,12 @@ export function Stage6Screen() {
                   <ErrorHint error={approve.error} />
                 </div>
               ) : null}
+              {workpackQ.isError ? (
+                <div className="rounded-card border border-warn-line bg-warn-bg px-18 py-12 text-body text-warn-ink">
+                  终审工作包读取失败：{errorBody(workpackQ.error)}
+                  <ErrorHint error={workpackQ.error} />
+                </div>
+              ) : null}
 
               <div className="prose-cn text-tag text-ink-4">
                 判据只看下发范围（lead_upto 前 {d.lead_upto} 章）；{d.rationale}
@@ -137,6 +173,27 @@ export function Stage6Screen() {
                   <div className="text-section font-semibold">
                     三个候选并排看，选一个定稿（{d.candidates.length} 条）
                   </div>
+                  {workpackQ.data ? (
+                    <div className="prose-cn rounded-block border border-line-row bg-sunken-2 px-14 py-11 text-tag text-ink-3">
+                      <div className="font-semibold">
+                        hash-bound 终审包 · {workpackQ.data.disposition}
+                      </div>
+                      <div>
+                        A 原始排序：{workpackQ.data.judge_rankings?.A.join(' → ') ?? '没有当前 A 审判'}
+                      </div>
+                      <div>
+                        B 原始排序：{workpackQ.data.judge_rankings?.B.join(' → ') ?? '没有当前 B 审判'}
+                      </div>
+                      <Mono className="break-all text-micro">
+                        workpack {workpackQ.data.workpack_sha256}
+                      </Mono>
+                      <Mono className="break-all text-micro">
+                        artifact {workpackQ.data.artifact_subject_sha256} · code{' '}
+                        {workpackQ.data.code_version} · rules {workpackQ.data.rules_fingerprint}
+                      </Mono>
+                      <CompactCheckEvidence check={workpackQ.data.check} />
+                    </div>
+                  ) : null}
                   <ActorReasonFields
                     actor={actor}
                     reason={reason}
@@ -148,11 +205,12 @@ export function Stage6Screen() {
                     className="grid gap-14"
                     style={{ gridTemplateColumns: 'repeat(3, minmax(0,1fr))' }}
                   >
-                    {d.candidates.map((c) => {
+                    {approvalCandidates.map((c) => {
                       const on = picked === c.index
                       const mechanicallyBlocked = c.findings.some((f) => f.sev === 'hard')
                       const approvable =
-                        !mechanicallyBlocked && !!actor.trim() && !!reason.trim()
+                        !mechanicallyBlocked && !!actor.trim() && !!reason.trim() &&
+                        workpackReady
                       return (
                         <div
                           key={c.index}
@@ -198,7 +256,7 @@ export function Stage6Screen() {
                             <div className="prose-cn rounded-block bg-sunken-2 px-10 py-8 text-tag text-ink-3">
                               质量审判：{c.semantic_state} · {c.semantic_reason}
                             </div>
-                            {c.contradictions.map((item, i) => (
+                            {(c.semantic_review?.contradictions ?? []).map((item, i) => (
                               <div
                                 key={'semantic-' + i}
                                 className="prose-cn rounded-block px-10 py-8 text-tag"
@@ -213,6 +271,23 @@ export function Stage6Screen() {
                                 </div>
                                 <div>证据：{item.evidence}</div>
                                 <div>理由：{item.reason}</div>
+                              </div>
+                            ))}
+                            {c.semantic_decision?.judges.map((judge) => (
+                              <div
+                                key={'judge-' + judge.judge}
+                                className="prose-cn rounded-block border border-line-row bg-card px-10 py-8 text-tag text-ink-2"
+                              >
+                                <div className="font-semibold">
+                                  盲评 {judge.judge} · {judge.verdict}
+                                </div>
+                                <div>{judge.reason}</div>
+                                {judge.evidence.map((evidence, index) => (
+                                  <Mono key={index} className="block break-all text-micro text-ink-4">
+                                    证据 {evidence.artifact} · subject {evidence.subject_sha256} ·
+                                    {' '}[{evidence.start ?? '全文'}, {evidence.end ?? '全文'}]
+                                  </Mono>
+                                ))}
                               </div>
                             ))}
                           </div>
@@ -244,11 +319,19 @@ export function Stage6Screen() {
                             >
                               {mechanicallyBlocked
                                 ? '有机械 HARD · 不可定稿'
-                                : !actor.trim() || !reason.trim()
-                                  ? '先填身份与理由'
-                                  : on
-                                    ? '人工核验后定稿'
-                                    : '定这一条'}
+                                : workpackCurrent
+                                  ? '当前工作包已批准 · 跳过'
+                                  : workpackQ.isError
+                                    ? '终审工作包读取失败'
+                                  : workpackQ.isFetching
+                                    ? '终审工作包刷新中'
+                                  : !workpackQ.data
+                                    ? '终审工作包读取中'
+                                    : !actor.trim() || !reason.trim()
+                                      ? '先填身份与理由'
+                                      : on
+                                        ? '人工核验后定稿'
+                                        : '定这一条'}
                             </button>
                           </div>
                         </div>
@@ -326,6 +409,34 @@ export function Stage6Screen() {
         }}
       </QueryStates>
     </ScreenFrame>
+  )
+}
+
+function CompactCheckEvidence({ check }: { check: CompactApprovalCheck }) {
+  const rows = [...check.attention, ...check.metrics]
+  return (
+    <div className="flex flex-col gap-5 border-t border-line-soft pt-7">
+      <span>
+        机械规则 {check.rules_scanned} 条：ok {check.counts.ok} · hit {check.counts.hit} ·
+        {' '}unver {check.counts.unver} · skipped {check.counts.skipped}；来源{' '}
+        {check.provenance.freshness}/{check.provenance.reason}
+      </span>
+      {rows.map((row) => (
+        <div key={row.rule} className="rounded-btn border border-line-row bg-card px-9 py-7">
+          <div className="flex flex-wrap gap-6">
+            <Mono>{row.rule}</Mono>
+            <span>{row.sev}/{row.status}</span>
+            {row.scanned ? <span>扫描：{row.scanned}</span> : null}
+          </div>
+          {row.why ? <div className="prose-cn">{row.why}</div> : null}
+          {row.findings.map((finding) => (
+            <div key={finding.evidence_key ?? finding.detail} className="prose-cn text-ink-2">
+              {finding.detail}
+            </div>
+          ))}
+        </div>
+      ))}
+    </div>
   )
 }
 

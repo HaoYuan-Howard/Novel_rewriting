@@ -105,6 +105,8 @@ const enums: EnumsResponse = {
   approval_workpack_actions: [],
   approval_workpack_effects: [],
   approval_workpack_group_effects: {},
+  approval_workpack_dispositions: [],
+  final_approval_workpack_kinds: [],
   actions: [{
     kind: 'stage2.global',
     label: '提交全局复核',

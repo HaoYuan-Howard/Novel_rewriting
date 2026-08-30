@@ -7,6 +7,8 @@ import argparse
 import os
 import re
 import sys
+import tempfile
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -16,6 +18,7 @@ if str(ROOT) not in sys.path:
 
 from collect_final_evidence import collect  # noqa: E402
 from novel import paths  # noqa: E402
+from novel.appendlog import path_transaction_lock  # noqa: E402
 
 
 QUALITY = ('[[operator-quality:start]]', '[[operator-quality:end]]')
@@ -24,6 +27,14 @@ EXITS = ('[[operator-exits:start]]', '[[operator-exits:end]]')
 ANCHOR = ('[[operator-anchor:start]]', '[[operator-anchor:end]]')
 _ALL_MARKERS = QUALITY + LEDGER + EXITS + ANCHOR
 _QUALITY_HEADER = '| 节点/报告 | freshness | HARD | info | metric | unver | skipped | 结论/处置 |'
+
+
+class ReviewConflictError(RuntimeError):
+    """终审包字节或它所绑定的提交坐标已变化。"""
+
+
+class ReviewCommitError(RuntimeError):
+    """原子替换后的字节与已验证候选不一致。"""
 
 
 def _replace(text: str, markers: tuple[str, str], body: str) -> str:
@@ -165,6 +176,78 @@ def render(text: str, facts: dict[str, Any]) -> str:
     return _replace(text, ANCHOR, facts['review_anchor_line'])
 
 
+def commit_review(
+    review: Path,
+    updated: str,
+    *,
+    expected_original: bytes,
+    precommit_check: Callable[[], None] | None = None,
+) -> bytes:
+    """在同 review 的线程/进程锁内 CAS、原子替换并回读。
+
+    ``precommit_check`` 也在锁内运行；finalizer 用它复核收集面
+    seal，避免“CAS 已过、但提交坐标尚未复核”的窗口。
+    临时文件必须在同目录，且每次唯一：并发进程不共用
+    ``.operator-sync.tmp`` 这个名字。
+    """
+    review = Path(review)
+    payload = updated.encode('utf-8')
+    with path_transaction_lock(review):
+        try:
+            current = review.read_bytes()
+        except FileNotFoundError as exc:
+            raise ReviewConflictError(
+                f'终审包在提交前被删除：{review}') from exc
+        if current != expected_original:
+            raise ReviewConflictError(
+                '终审包在读取后被其他写者修改，拒绝覆盖')
+        if precommit_check is not None:
+            precommit_check()
+
+        review.parent.mkdir(parents=True, exist_ok=True)
+        fd, temp_name = tempfile.mkstemp(
+            prefix=f'.{review.name}.operator-sync.',
+            suffix='.tmp',
+            dir=review.parent,
+        )
+        open_fd = fd
+        try:
+            # 与 render/锚点校验使用同一组 UTF-8 字节；文本模式在
+            # Windows 会把 LF 静默改成 CRLF，使“已验证候选”与真正
+            # 落盘字节分家。
+            handle = os.fdopen(fd, 'wb')
+            open_fd = -1
+            with handle:
+                handle.write(payload)
+                handle.flush()
+                os.fsync(handle.fileno())
+            # sidecar 锁能互斥所有生产写手，但用户编辑器未必认这把锁。
+            # 因此在真正 replace 前再做一次字节 CAS，不覆盖发生在
+            # seal 复核 / temp fsync 期间的人工修改。
+            try:
+                current_before_replace = review.read_bytes()
+            except FileNotFoundError as exc:
+                raise ReviewConflictError(
+                    f'终审包在提交临界区内被删除：{review}') from exc
+            if current_before_replace != expected_original:
+                raise ReviewConflictError(
+                    '终审包在提交临界区内被其他写者修改，'
+                    '拒绝覆盖')
+            os.replace(temp_name, review)
+            landed = review.read_bytes()
+        finally:
+            if open_fd >= 0:
+                os.close(open_fd)
+            try:
+                os.unlink(temp_name)
+            except FileNotFoundError:
+                pass
+        if landed != payload:
+            raise ReviewCommitError(
+                '原子提交后的终审包字节与已验证候选不一致')
+        return landed
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description='同步终审包中的机器事实块')
     parser.add_argument('--base', required=True)
@@ -184,13 +267,16 @@ def main(argv: list[str] | None = None) -> int:
         print(f'FAIL 终审包不存在：{review}')
         return 1
     try:
-        updated = render(review.read_text(encoding='utf-8'), facts)
-    except (OSError, UnicodeDecodeError, ValueError) as exc:
+        original_bytes = review.read_bytes()
+        updated = render(original_bytes.decode('utf-8'), facts)
+        commit_review(
+            review, updated, expected_original=original_bytes)
+    except (
+        OSError, UnicodeDecodeError, ValueError,
+        ReviewConflictError, ReviewCommitError,
+    ) as exc:
         print(f'FAIL {type(exc).__name__}: {exc}')
         return 1
-    temp = review.with_name(review.name + '.operator-sync.tmp')
-    temp.write_text(updated, encoding='utf-8')
-    os.replace(temp, review)
     print(f'PASS 已同步机器事实：{review}')
     return 0
 

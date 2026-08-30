@@ -68,9 +68,11 @@ arc、世界观与 setting evidence 不进入这条指纹，避免无消费者�
   `unit`、`suggest`。
 - `StemBaseline` 必填 `total`、`covered`、`residual`、`ratio`；`ratio` 可为 `null`。
 - `ApprovedNameMap` 必填 `origin=human`、自报 `actor`、非空 `reason` 与完整
-  `subject_sha256`。hash 只绑定审批时看到的决策面：`surname_map`、`characters`、
+  `subject_sha256`，并携刚完整读过的 Stage7 workpack 的 `workpack_sha256`。subject hash 只绑定
+  审批时看到的决策面：`surname_map`、`characters`、
   `extra_subs` 的排序键紧凑 canonical JSON；不绑定 residual、派生替换计数或
-  成书字节。旧页面的 hash 与当前决策面不同时关闭式拒批。
+  成书字节。workpack hash 另绑定代码、规则、产物主体和完整人物/别名/kept/真实替换命中/残留
+  上下文证据；旧页面任一 hash 与当前面不同时关闭式拒批。
 - 服务检查单的 `s7` proof 绑定上述完整决策面和完整 typed `ApprovedNameMap`
   （含 actor/reason/origin/subject），并在每次读取时复核 `subject_sha256` 仍等于当前
   决策面。它不绑定 `book_txt`、residual、book findings 等确定性派生字段：正常

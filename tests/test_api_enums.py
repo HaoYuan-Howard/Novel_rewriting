@@ -83,6 +83,18 @@ def test_prompt_experiment_controls_are_not_published(paid_payload):
                for action in paid_payload['actions'])
 
 
+def test_operator_telemetry_and_judge_internals_are_not_frontend_choices(
+        paid_payload):
+    assert not {
+        'stage6_judge_roles',
+        'operator_phases',
+        'operator_phase_event_kinds',
+        'operator_telemetry_sources',
+        'operator_terminal_states',
+        'operator_duration_sources',
+    } & set(paid_payload)
+
+
 def test_every_action_is_unique_and_buildable(paid_payload):
     actions = paid_payload['actions']
     keys = [(a['kind'], tuple(a['extra'] or ())) for a in actions]

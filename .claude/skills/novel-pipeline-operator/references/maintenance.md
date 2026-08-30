@@ -16,12 +16,14 @@
 | `field-notes.md` | 经验证或明确标态的经验；索引兼入口（超出整读预算后条目分片进 `field-notes/`） | 稳定公共接口、流水账 |
 | `assets/final-review-template.md` | 用户最终审阅界面 | 运行逻辑 |
 | `scripts/session_preflight.py` | 只读固化一次 run 的起始时间、代码指纹、sid 与路径 | 推进节点或替代授权检查 |
+| `scripts/operator_phase.py` | 调用生产遥测唯一落点，追加不含正文的 operator session/phase 墙钟事件并生成归属摘要 | 估算 Commander 宿主模型 token/成本、冒充流水线 node 或成为交付闸 |
 | `scripts/stage0_review_workpack.py` | 只读复用生产 check/审校分区/`scan_text`，固定 Stage0 反向审阅模式并输出紧凑工作包 | 自动审批、自动剔除或复制生产删除判据 |
 | `scripts/run_step.py` | 调用生产 `build_steps`，核对起始代码并给每一步串 start/end 信标 | 重造 argv、判定质量或吞掉节点退出码 |
-| `scripts/collect_final_evidence.py` | 只读调用生产 state/inbox/check/组装/账本出口，按会话收拢终审事实与机器锚点 | 新造质量判据、写盘或替代逐项人工审阅 |
-| `scripts/sync_review_evidence.py` | 只改终审模板稳定标记间的机器事实块 | 改写 agent 的语义判断、代批理由或产物 |
-| `scripts/validate_review.py` | 把终审包实例的锚点、八类余额、质量表、退出序列与当前盘面对账 | 判断小说内容好坏 |
-| `scripts/verify_delivery.py` | 用起始代码指纹调用生产交付终验 | 用结束时当前指纹替代起始事实 |
+| `scripts/finalize_review.py` | canonical 收尾：collect 恰一次、内存 render/validate、验证通过后原子提交，再以全新读作用域调用生产交付终验 | 在写盘后复用旧快照、吞掉校验失败或用结束时当前指纹替代起始事实 |
+| `scripts/collect_final_evidence.py` | finalizer 复用的只读事实收集器；也保留为独立诊断入口 | 新造质量判据、写盘或替代逐项人工审阅 |
+| `scripts/sync_review_evidence.py` | finalizer 复用的稳定机器事实块 renderer/原子提交器；也保留为兼容入口 | 改写 agent 的语义判断、代批理由或产物 |
+| `scripts/validate_review.py` | finalizer 复用的终审实例对账器；也保留为独立诊断入口 | 判断小说内容好坏 |
+| `scripts/verify_delivery.py` | 保留的独立兼容入口；用起始代码指纹调用生产交付终验 | canonical finalizer 之外再串一次重复 collect，或用结束时当前指纹替代起始事实 |
 | `scripts/validate_skill.py` | 静态对账：结构、链接、节点顺序、经验格式，以及「文档声称的行为 vs 代码」 | 代替真实跑书；需要 pydantic 模型实例才能验的事 |
 | `tests/test_skill_operator.py`（仓内） | 把校验器接进默认 pytest 套件；扫描面下界；用真 `render()` 验推荐读法 | 结构与文案本身 |
 

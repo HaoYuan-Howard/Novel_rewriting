@@ -131,6 +131,8 @@ Prompt 选型完成后，`prompt_variants`、`prompt_defaults` 与 `--prompt-var
 | `POST /api/novels/:sid/approvals/gate/:key` | `ApprovalDoc` | 新 |
 | `POST /api/novels/:sid/approvals/seen/:key` | `ApprovalDoc` | 新 |
 | `GET /api/novels/:sid/approvals/structure/workpack` | `ApprovalWorkpack` v1（绑定 current structure subject；异常优先，只读、0 LLM） | 新；完整披露 B concern / INFO / metric / UNVER，不自动裁决 |
+| `GET /api/novels/:sid/approvals/stage6/workpack` | `Stage6ApprovalWorkpack` v1（绑定 current 候选集、代码/规则/产物主体与 A/B 完整证据；只读、0 LLM） | 新；定稿前唯一双 hash 阅读面，不自动 pick |
+| `GET /api/novels/:sid/approvals/stage7/workpack` | `Stage7ApprovalWorkpack` v1（绑定 current 人物决策面、代码/规则/产物主体与完整替换证据；只读、0 LLM） | 新；定稿前唯一双 hash 阅读面，不自动批准 |
 | `POST /api/novels/:sid/approvals/structure` | `ApprovalDoc`（请求体 `StructureApprovalRequest`：完整结构 subject SHA-256、actor、总理由与恰好覆盖全书的逐章 `accept / request_replan`） | 新；typed Stage4 结构裁决，提交本身不启动作业 |
 | `POST /api/novels/:sid/approvals/writing` | `ApprovalDoc`（请求体可省略：空 body 保留旧 UI 的 `begin_writing`；非空必须是 `WritingApprovalRequest` 的 actor、reason 与当前完整 subject SHA-256） | typed 分支只写审批账、不启动作业；Commander 使用 CLI façade，不走空 body 兼容口 |
 | `POST /api/novels/:sid/approvals/reset` | `ApprovalDoc` | 新 |
@@ -157,14 +159,14 @@ Prompt 选型完成后，`prompt_variants`、`prompt_defaults` 与 `--prompt-var
 | `POST /api/novels/:sid/review/:o/edit` | `JobRecord`（请求体 `DraftEditRequest`） | 新 |
 | `POST /api/novels/:sid/stage5/trim/:o/retain-pretrim` | `JobRecord`（请求体 `TrimResolutionRequest`；只允许保留原稿） | 新 |
 | `POST /api/novels/:sid/stage5/trim/retain-pretrim-batch` | `JobRecord`（请求体 `BatchTrimResolutionRequest`） | 整批先核每章 audit/chapter 双 SHA，任一漂移则零写入；同一 manifest 中断后可幂等续写剩余章 |
-| `POST /api/novels/:sid/stage6/approve` | `JobRecord`（请求体 `HookApproveRequest`） | 新 |
-| `POST /api/novels/:sid/stage7/approve` | `JobRecord`（无请求体） | 新 |
+| `POST /api/novels/:sid/stage6/approve` | `JobRecord`（请求体 `HookApproveRequest`：pick/actor/reason + 当前候选 subject SHA-256 + 刚读 workpack SHA-256） | 新 |
+| `POST /api/novels/:sid/stage7/approve` | `JobRecord`（请求体 `NameMapApproveRequest`：actor/reason + 当前 decision subject SHA-256 + 刚读 workpack SHA-256） | 新 |
 
 > #### `ApprovalWorkpack` v1 是只读阅读面，不是决定模板
 >
 > 两个端点共用同一外壳：`v=1`、`sid`、`kind=design｜structure`、当前完整
 > `subject_sha256`、设计面必有而结构面必须没有的 `candidate_sha256`、完整有序
-> `chapter_ordinals[]`，以及固定六组 `groups[]`。六组顺序恒为
+> `chapter_ordinals[]`、`disposition`、可选 `current_decision_sha256`，以及固定六组 `groups[]`。六组顺序恒为
 > `blocking / semantic_attention / disclosure / metric_only / phase_deferred / coverage`；
 > 空组也必须带 `scanned` 分母出线，不能用裁掉空数组暗示「没扫」。
 >
@@ -175,6 +177,23 @@ Prompt 选型完成后，`prompt_variants`、`prompt_defaults` 与 `--prompt-var
 > 不是 argv；INFO、metric、UNVER、skipped 和非 blocking/coverage effect 恒为空。coverage 恰覆盖
 > `chapter_ordinals`，changed 章在前、段内按章号升序；changed 与 exact historical accept reuse
 > 互斥且穷尽。工作包没有 actor/reason/decision 字段，GET 不写审批账、不启动 job，也不替用户签字。
+> `disposition=already_current` 仅在 current typed 决定仍精确绑定同一 candidate/subject、代码、规则与
+> 产物时出现，并必须携 `current_decision_sha256`；否则为 `review_required`。它让 caller 幂等跳过，
+> 不让服务端把不同 actor/reason/typed 声明折成同一决定。
+
+> #### Stage6/7 定稿 workpack 把“看到的证据”与 approve 乐观锁绑在一起
+>
+> 两种包公共携带 `v/kind/sid/code_version/rules_fingerprint/artifact_subject_sha256/check/
+> workpack_sha256/disposition/current_approval?`。`check` 是完整分母 + 四态计数 + provenance + 全部非 ok
+> 行 + 正常 metric 的 exception-first 投影；没有因紧凑而删除异常。digest 排除 disposition/current
+> approval，因此批准或组装不会自废；代码、规则或业务证据变化一定改 hash。
+>
+> Stage6 另携三条完整候选（正文、subject SHA、mech/findings、semantic 状态、合并 decision、每名 judge
+> 的 verdict/reason/evidence、质量分/名次）与 A/B 原始 `judge_rankings`。Stage7 另携完整
+> `decision_subject_sha256`、surname map、characters/aliases、extra subs、kept 明细、逐旧字面的真实
+> `replacement_hits`、residual 上下文/baseline、book findings 与 identity。approve 请求必须同时提交
+> 同一份包的 subject SHA 与 workpack SHA；任一漂移关闭式拒绝。`already_current` 必须携仍绑定本包的
+> current approval，页面不再显示可重复的默认批准动作。
 
 > #### `Stage0Report` 是窄视图
 >

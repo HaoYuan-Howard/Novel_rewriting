@@ -26,7 +26,7 @@ import threading
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Iterable, Mapping
+from typing import Any, Iterable, Mapping
 
 from contracts.schema import Usage
 from novel import run_identity
@@ -88,6 +88,44 @@ def combine_usage(*parts: Usage | None) -> Usage | None:
 def ledger_path(base: str | Path) -> Path:
     """`<Output>` → 账本路径。**唯一落点**——账本只有一个，别按书分账。"""
     return Path(base).joinpath(*LEDGER_REL)
+
+
+def read_jsonl_rows(path: str | Path) -> list[dict[str, Any]]:
+    """读服务 JSONL dict 行；只容忍被 kill 留下的最后一条半行。
+
+    成本聚合与终审 seal 必须共用同一组容错语义，否则一条刚追加到一半的
+    wire 会在「收集事实」与「判盘面是否漂移」两侧被解释成不同状态。
+    """
+    source = Path(path)
+    if not source.is_file():
+        return []
+    lines = source.read_bytes().splitlines(keepends=True)
+    rows: list[dict[str, Any]] = []
+    for index, raw_line in enumerate(lines):
+        complete = raw_line.endswith(b'\n')
+        if not complete:
+            if index == len(lines) - 1:
+                # 换行是 append-only 行的提交标记；无论截断点是否恰好落在
+                # 一个可解析 JSON 后面，未提交的尾都不能进入终审事实。
+                break
+            raise ValueError(
+                f'{source} 第 {index + 1} 行不是 LF 提交的完整事件')
+        payload = raw_line[:-1] if complete else raw_line
+        if payload.endswith(b'\r'):
+            payload = payload[:-1]
+        line = payload.decode('utf-8', errors='strict')
+        if not line.strip():
+            continue
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError:
+            # 有换行的行已经提交；即使它恰好是最后一行，也不能冒充 kill 尾。
+            raise
+        if not isinstance(row, dict):
+            raise ValueError(
+                f'{source} 第 {index + 1} 行不是 JSON object')
+        rows.append(row)
+    return rows
 
 
 def audit_path(base: str | Path) -> Path:

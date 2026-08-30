@@ -38,6 +38,8 @@ import {
   type Stage5ClosureRequest,
   type Stage5ClosureTemplate,
   type Stage5ClosureWorkpack,
+  type Stage6ApprovalWorkpack,
+  type Stage7ApprovalWorkpack,
   type StructureApprovalDecision,
   type StructureApprovalRequest,
 } from '@/types/approvals'
@@ -614,6 +616,12 @@ function mockApprovalWorkpack(
         }],
       },
     ],
+    disposition: kind === 'design'
+      ? loadDoc(sid).design_review.state === 'accepted' ? 'already_current' : 'review_required'
+      : loadDoc(sid).structure.state === 'accepted' ? 'already_current' : 'review_required',
+    current_decision_sha256: kind === 'design'
+      ? loadDoc(sid).design_review.current_decision?.decision_sha256 ?? null
+      : loadDoc(sid).structure.current_decision ? '8'.repeat(64) : null,
   }
 }
 
@@ -1513,6 +1521,7 @@ export const mockApi: Api = {
         actor: string
         reason: string
         subject_sha256: string
+        workpack_sha256: string
       }>('hook.' + sid)
       if (!edit) return base
       const cand = base.candidates.find((c) => c.index === edit.index)
@@ -1535,6 +1544,7 @@ export const mockApi: Api = {
             subject_sha256: edit.subject_sha256,
             basis: 'human_verification' as const,
             semantic_review_seq: cand.semantic_state === 'unreviewed' ? null : 1,
+            workpack_sha256: edit.workpack_sha256,
           },
         },
         candidates: base.candidates.map((c) => ({ ...c, approved: c.index === edit.index })),
@@ -1690,6 +1700,161 @@ export const mockApi: Api = {
 
   getDesignApprovalWorkpack: (sid) => later(mockApprovalWorkpack(sid, 'design')),
   getStructureApprovalWorkpack: (sid) => later(mockApprovalWorkpack(sid, 'structure')),
+  getStage6ApprovalWorkpack: (sid) =>
+    bookOnly(sid, `/novels/${sid}/approvals/stage6/workpack`, () => {
+      const workpack_sha256 = '6'.repeat(64)
+      const current = lsRead<{
+        index: number
+        actor: string
+        reason: string
+        subject_sha256: string
+        workpack_sha256: string
+      }>('hook.' + sid)
+      const view = fx<Stage6Response>('stage6.json')
+      const decisionOf = (subject_sha256: string, text: string) => ({
+        ability: 'reference_boundary',
+        subject_key: subject_sha256,
+        verdict: 'UNVER' as const,
+        reason: 'mock 两名盲评证据交给人工终审，不自动放行',
+        evidence: [{
+          artifact: 'stage6/hook.json', subject_sha256, start: 0, end: text.length,
+        }],
+        judges: ['A', 'B'].map((judge) => ({
+          judge,
+          verdict: 'UNVER' as const,
+          reason: `mock 判官 ${judge}：需人工结合开篇正文核验`,
+          evidence: [{
+            artifact: 'stage6/hook.json', subject_sha256, start: 0, end: text.length,
+          }],
+        })),
+      })
+      return {
+        v: 1,
+        kind: 'stage6',
+        sid,
+        code_version: 'mock-code',
+        rules_fingerprint: 'mock-rules-stage6',
+        artifact_subject_sha256: 'a'.repeat(64),
+        rationale: view.rationale,
+        check: {
+          rules_scanned: 0,
+          counts: { ok: 0, hit: 0, unver: 0, skipped: 0 },
+          provenance: {
+            freshness: 'fresh', reason: 'match', ghosts: [], edges: [],
+            invalid: false, revalidated: null, origin: null,
+          },
+          attention: [], metrics: [],
+        },
+        judge_rankings: {
+          A: view.candidates.map((candidate) => 'c' + candidate.index),
+          B: [...view.candidates].reverse().map((candidate) => 'c' + candidate.index),
+        },
+        candidates: view.candidates.map((candidate) => ({
+          index: candidate.index,
+          slot: 'c' + candidate.index,
+          approach: candidate.approach,
+          chars: candidate.chars,
+          text: candidate.text,
+          subject_sha256: candidate.subject_sha256,
+          mech: candidate.mech,
+          findings: candidate.findings,
+          semantic_state: candidate.semantic_state,
+          semantic_reason: candidate.semantic_reason,
+          semantic_review_seq: candidate.semantic_state === 'unreviewed' ? null : 1,
+          semantic_review: {
+            label: 'c' + candidate.index,
+            coverage: 'complete',
+            uncertainty_reason: null,
+            contradictions: candidate.contradictions,
+            quality: {
+              read_on_desire: 8,
+              body_voice_match: 8,
+              concrete_scene_and_specificity: 8,
+              curiosity_and_payoff_promise: 8,
+              hook_craft: 8,
+              synopsis_penalty: 0,
+            },
+            concise_reason: candidate.semantic_reason,
+            text_sha1: candidate.subject_sha256.slice(0, 10),
+          },
+          semantic_decision: decisionOf(candidate.subject_sha256, candidate.text),
+          quality_score: candidate.quality_score,
+          quality_rank: candidate.quality_rank,
+        })),
+        workpack_sha256,
+        disposition: current?.workpack_sha256 === workpack_sha256
+          ? 'already_current'
+          : 'review_required',
+        current_slot: current?.workpack_sha256 === workpack_sha256
+          ? 'c' + current.index
+          : null,
+        current_approval: current?.workpack_sha256 === workpack_sha256
+          ? {
+              actor: current.actor,
+              reason: current.reason,
+              subject_sha256: current.subject_sha256,
+              workpack_sha256: current.workpack_sha256,
+            }
+          : null,
+      } satisfies Stage6ApprovalWorkpack
+    }),
+  getStage7ApprovalWorkpack: (sid) =>
+    bookOnly(sid, `/novels/${sid}/approvals/stage7/workpack`, () => {
+      const workpack_sha256 = '7'.repeat(64)
+      const current = lsRead<{
+        actor: string
+        reason: string
+        subject_sha256: string
+        workpack_sha256: string
+      }>('names.' + sid)
+      const view = fx<Stage7Response>('stage7.json')
+      return {
+        v: 1,
+        kind: 'stage7',
+        sid,
+        code_version: 'mock-code',
+        rules_fingerprint: 'mock-rules-stage7',
+        artifact_subject_sha256: 'b'.repeat(64),
+        decision_subject_sha256: view.approval_subject_sha256,
+        check: {
+          rules_scanned: 0,
+          counts: { ok: 0, hit: 0, unver: 0, skipped: 0 },
+          provenance: {
+            freshness: 'fresh', reason: 'match', ghosts: [], edges: [],
+            invalid: false, revalidated: null, origin: null,
+          },
+          attention: [], metrics: [],
+        },
+        surname_map: view.surname_map,
+        characters: view.characters,
+        extra_subs: view.extra_subs,
+        subs_count: view.subs_count,
+        kept_count: view.kept_count,
+        kept: Array.from(
+          { length: view.kept_count },
+          (_value, index) => `mock明确保留${index + 1}`,
+        ),
+        replacement_hits: Object.fromEntries(
+          view.characters.map((character) => [character.old_canonical, character.hits]),
+        ),
+        residual: view.residual,
+        baselines: view.baselines,
+        book: view.book,
+        identity: view.identity,
+        workpack_sha256,
+        disposition: current?.workpack_sha256 === workpack_sha256
+          ? 'already_current'
+          : 'review_required',
+        current_approval: current?.workpack_sha256 === workpack_sha256
+          ? {
+              actor: current.actor,
+              reason: current.reason,
+              subject_sha256: current.subject_sha256,
+              workpack_sha256: current.workpack_sha256,
+            }
+          : null,
+      } satisfies Stage7ApprovalWorkpack
+    }),
 
   getStage5ClosureTemplate: (sid): Promise<Stage5ClosureTemplate> => {
     const workpack = loadDoc(sid).closure.workpack
@@ -2046,6 +2211,7 @@ export const mockApi: Api = {
       actor: req.actor,
       reason: req.reason,
       subject_sha256: req.subject_sha256,
+      workpack_sha256: req.workpack_sha256,
     })
     return later(finish({
       kind: 'stage6.approve',
@@ -2055,6 +2221,7 @@ export const mockApi: Api = {
         '--actor', req.actor,
         '--reason', req.reason,
         '--subject-sha256', req.subject_sha256,
+        '--workpack-sha256', req.workpack_sha256,
       ],
       sid,
       ordinal: null,
@@ -2070,6 +2237,7 @@ export const mockApi: Api = {
         '--actor', req.actor,
         '--reason', req.reason,
         '--subject-sha256', req.subject_sha256,
+        '--workpack-sha256', req.workpack_sha256,
       ],
       sid,
       ordinal: null,

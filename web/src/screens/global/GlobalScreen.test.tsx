@@ -171,6 +171,8 @@ describe('GlobalScreen disclosure', () => {
       approval_workpack_actions: [],
       approval_workpack_effects: [],
       approval_workpack_group_effects: {},
+      approval_workpack_dispositions: [],
+      final_approval_workpack_kinds: [],
       actions: [{
         ...blueprint,
         paid: true,
@@ -220,6 +222,8 @@ describe('GlobalScreen disclosure', () => {
       approval_workpack_actions: [],
       approval_workpack_effects: [],
       approval_workpack_group_effects: {},
+      approval_workpack_dispositions: [],
+      final_approval_workpack_kinds: [],
       actions: [],
       spoiler_disclosure: disclosure,
     })
@@ -265,6 +269,8 @@ describe('GlobalScreen disclosure', () => {
       approval_workpack_actions: [],
       approval_workpack_effects: [],
       approval_workpack_group_effects: {},
+      approval_workpack_dispositions: [],
+      final_approval_workpack_kinds: [],
       actions: [],
       spoiler_disclosure: disclosure,
     })
@@ -306,6 +312,8 @@ describe('GlobalScreen disclosure', () => {
       approval_workpack_actions: [],
       approval_workpack_effects: [],
       approval_workpack_group_effects: {},
+      approval_workpack_dispositions: [],
+      final_approval_workpack_kinds: [],
       actions: [],
       spoiler_disclosure: disclosure,
     })

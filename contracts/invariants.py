@@ -391,6 +391,12 @@ APPROVAL_WORKPACK_GROUPS: Final = (
 )
 #: 工作包只有 A / B 两个审阅面；它们都是只读视图，不是作业入口。
 APPROVAL_WORKPACK_KINDS: Final = ('design', 'structure')
+#: 审批工作包相对当前 typed 决定的处置态。``already_current`` 只表示
+#: **同一份工作包摘要**已有当前批准，供调用方跳过重复人工整读；它不把不同
+#: actor/reason 的人工声明折叠成同一件事。
+APPROVAL_WORKPACK_DISPOSITIONS: Final = ('review_required', 'already_current')
+#: Stage6/7 紧凑、hash-bound 终审工作包的两种主体。
+FINAL_APPROVAL_WORKPACK_KINDS: Final = ('stage6', 'stage7')
 #: 工作包条目只能公布现役 typed 审批决定面；它不会把动作翻译成
 #: CLI argv，更不会因为读了一次工作包就启动模型。
 APPROVAL_WORKPACK_ACTIONS: Final = (
@@ -1348,6 +1354,10 @@ HOOK_CURRENT_APPROACHES: Final = tuple(dict.fromkeys(HOOK_RECIPE))
 #: `slot_of(index)` 是唯一的换算口，别在别处再写 `f'c{i}'`。
 HOOK_SLOTS: Final = ('c1', 'c2', 'c3')
 
+#: Stage6 双盲判官的完整角色面。工作包、语义产物与 executor run 都只能出现这两名；
+#: API schema 不得用 ``Literal['A', 'B']`` 另抄一份取值面。
+STAGE6_JUDGE_ROLES: Final = ('A', 'B')
+
 
 def slot_of(index: int) -> str:
     """1 起的候选位置 → 候选身份。**唯一换算口。**
@@ -1654,6 +1664,8 @@ VALUED_FLAGS: Final = {
                        'preview subject 算法；相对路径相对书目录，不写产物'),
     '--response-repair': '结构化拒绝响应恢复模式；当前只接受 `agent`。'
                          '可修复响应先隔离并停给外层受托 agent，同闸复验失败才继续采样',
+    '--workpack-sha256': ('人工批准时看到的紧凑工作包完整 SHA-256；服务端在任何'
+                          '产物写入前按当前盘面重算并拒绝过期提交'),
     '--adopt-rejected': ('要重判并采用的拒绝响应 attempt_id（16 位小写十六进制）；'
                          '人只能编辑隔离区里那份固定的 candidate.json，'
                          '本命令封存 actor/reason 与新旧闸指纹后再走同一套闸'),
@@ -2029,9 +2041,10 @@ NODES: Final[dict[str, NodeSpec]] = {
     #   本节点的 `flags` 从前是空的，注释写着「候选序号是它们的参数，参数名属 F 期」。
     'stage6.approve':   NodeSpec('stage6', 'R-9',  False, 'stage6 文案定稿',
                                  flags=('--pick', '--actor', '--reason',
-                                        '--subject-sha256'),
+                                        '--subject-sha256', '--workpack-sha256'),
                                  required_flags=('--pick', '--actor', '--reason',
-                                                 '--subject-sha256'),
+                                                 '--subject-sha256',
+                                                 '--workpack-sha256'),
                                  produces=(artifact_paths.STAGE6_HOOK,)),
     # ⚠ `--revalidate` 是 F2 补的：本层加了落盘闸门（**任何一条 hard ⇒ `.INVALID`**，
     #   不照 stage6——那一层一次产三份，拦的是「一条干净候选都没有」），
@@ -2046,9 +2059,11 @@ NODES: Final[dict[str, NodeSpec]] = {
     # ⚠⚠ 本层没有候选序号：一本书只有一份人物表，定稿是「给整份盖章」。
     #   但审批动作必须携带统一人工凭据，并用 decision-surface SHA-256 防旧页面误批。
     'stage7.approve':   NodeSpec('stage7', 'R-10', False, 'stage7 人名表定稿',
-                                  flags=('--actor', '--reason', '--subject-sha256'),
+                                  flags=('--actor', '--reason', '--subject-sha256',
+                                         '--workpack-sha256'),
                                   required_flags=('--actor', '--reason',
-                                                  '--subject-sha256'),
+                                                  '--subject-sha256',
+                                                  '--workpack-sha256'),
                                   produces=(artifact_paths.STAGE7_NAME_MAP,)),
     # 成书只能消费已批准的人名表；声明顺序同时是队列和进度屏的唯一顺序权威。
     'stage7.assemble':  NodeSpec('stage7', 'R-10', False, 'stage7 替换与成书',
@@ -2176,6 +2191,17 @@ PROGRESS_PHASES: Final = ('start', 'end')
 #: check 报告的 badge。`landed_red` 保留 exit 1 的「已落盘但判定不通过」，
 #: 不许与 exit 2 / 3 / 70 的「没跑成」压成 `failed`。
 BEACON_STATES: Final = ('pending', 'running', 'ok', 'landed_red', 'failed')
+
+#: Commander/operator 的本地阶段遥测。它与 ``PIPELINE_STEPS`` 正交：这里没有
+#: node id，人工审阅/终审同步也不因此冒充流水线节点或模型调用。
+OPERATOR_PHASE_EVENT_KINDS: Final = (
+    'session_started', 'phase_started', 'phase_ended', 'session_ended')
+OPERATOR_PHASES: Final = (
+    'preflight', 'inspect', 'preview', 'execute', 'review', 'approve',
+    'finalize', 'verify')
+OPERATOR_TELEMETRY_SOURCES: Final = ('interactive', 'headless', 'skill', 'service')
+OPERATOR_TERMINAL_STATES: Final = ('completed', 'failed', 'cancelled', 'unknown')
+OPERATOR_DURATION_SOURCES: Final = ('monotonic', 'wall_clock')
 
 #: agent 代跑事件的三态。与 `JOB_EVENT_KINDS` 分开：这边没有 `step`
 #: （agent 进程内部干什么不由我们记——那是信标的事），只有生死与改判。

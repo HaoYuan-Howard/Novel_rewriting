@@ -1,8 +1,9 @@
-import { screen, waitFor } from '@testing-library/react'
+import { act, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { api } from '@/api/endpoints'
 import { mockApi } from '@/api/mock'
+import { qk } from '@/api/queryKeys'
 import { ConfirmDialog } from '@/components/job/ConfirmDialog'
 import { renderRoute } from '@/test/render'
 import type { ApprovalDoc } from '@/types/approvals'
@@ -75,8 +76,12 @@ function undecided(): ApprovalDoc {
   }
 }
 
-beforeEach(() => {
+beforeEach(async () => {
+  vi.restoreAllMocks()
   sessionStorage.clear()
+  vi.spyOn(api, 'getStructureApprovalWorkpack').mockResolvedValue(
+    await mockApi.getStructureApprovalWorkpack('book-1'),
+  )
 })
 
 describe('Stage4 typed 结构审批', () => {
@@ -367,5 +372,114 @@ describe('Stage4 typed 结构审批', () => {
       expect(getApprovals).toHaveBeenCalledTimes(2)
     })
     expect(approve).not.toHaveBeenCalled()
+  })
+
+  it('工作包读取失败时关闭式禁用 Stage4B 提交并明确原因', async () => {
+    vi.spyOn(api, 'getEnums').mockResolvedValue(await mockApi.getEnums())
+    vi.spyOn(api, 'getApprovals').mockResolvedValue(undecided())
+    vi.spyOn(api, 'getStructureApprovalWorkpack').mockRejectedValue(
+      new Error('workpack unavailable'),
+    )
+    const approve = vi.spyOn(api, 'approveStructure')
+
+    renderRoute(
+      <StructureApprovalPanel
+        rows={rows}
+        identity={false}
+        viewSubject={SUBJECT}
+        onRefreshView={vi.fn()}
+      />,
+      '/n/book-1/stage4/1',
+    )
+
+    const save = await screen.findByRole('button', { name: '保存全书结构裁决' })
+    await waitFor(() => expect(save.parentElement).toHaveAttribute(
+      'title',
+      '当前 Stage4B 工作包读取失败，不能绑定本轮审批',
+    ))
+    expect(save).toBeDisabled()
+    expect(approve).not.toHaveBeenCalled()
+  })
+
+  it('同一当前 Stage4B 工作包已批准时默认跳过重复提交', async () => {
+    const pack = await mockApi.getStructureApprovalWorkpack('book-1')
+    vi.spyOn(api, 'getEnums').mockResolvedValue(await mockApi.getEnums())
+    vi.spyOn(api, 'getApprovals').mockResolvedValue(undecided())
+    vi.spyOn(api, 'getStructureApprovalWorkpack').mockResolvedValue({
+      ...pack,
+      disposition: 'already_current',
+      current_decision_sha256: '8'.repeat(64),
+    })
+
+    renderRoute(
+      <StructureApprovalPanel
+        rows={rows}
+        identity={false}
+        viewSubject={SUBJECT}
+        onRefreshView={vi.fn()}
+      />,
+      '/n/book-1/stage4/1',
+    )
+
+    const save = await screen.findByRole('button', { name: '保存全书结构裁决' })
+    await waitFor(() => expect(save.parentElement).toHaveAttribute(
+      'title',
+      '同一当前 Stage4B 工作包已有全章接受决定，无需重复整读',
+    ))
+    expect(save).toBeDisabled()
+    expect(screen.getByText(/默认跳过重复人工整读/)).toBeVisible()
+  })
+
+  it('表单完成后后台刷新工作包时禁用提交，刷新失败后也不复开', async () => {
+    const pack = await mockApi.getStructureApprovalWorkpack('book-1')
+    const getWorkpack = vi.spyOn(api, 'getStructureApprovalWorkpack')
+      .mockResolvedValue(pack)
+    vi.spyOn(api, 'getEnums').mockResolvedValue(await mockApi.getEnums())
+    vi.spyOn(api, 'getApprovals').mockResolvedValue(undecided())
+
+    const { queryClient } = renderRoute(
+      <StructureApprovalPanel
+        rows={rows}
+        identity={false}
+        viewSubject={SUBJECT}
+        onRefreshView={vi.fn()}
+      />,
+      '/n/book-1/stage4/1',
+    )
+    const user = userEvent.setup()
+    await user.selectOptions(await screen.findByLabelText('第 1 章结构裁决'), 'accept')
+    await user.type(screen.getByLabelText('第 1 章裁决理由'), '已核对线性入口')
+    await user.selectOptions(screen.getByLabelText('第 2 章结构裁决'), 'accept')
+    await user.type(screen.getByLabelText('第 2 章裁决理由'), '已核对重构顺序')
+    await user.type(screen.getByLabelText('自报身份 actor'), 'reviewer-a')
+    await user.type(screen.getByLabelText('本次批准 / 编辑理由 reason'), '逐章核对完成')
+    const save = screen.getByRole('button', { name: '保存全书结构裁决' })
+    await waitFor(() => expect(save).toBeEnabled())
+
+    let rejectRefresh!: (error: Error) => void
+    getWorkpack.mockImplementation(() => new Promise((_resolve, reject) => {
+      rejectRefresh = reject
+    }))
+    const callsBeforeRefresh = getWorkpack.mock.calls.length
+    await act(async () => {
+      void queryClient.refetchQueries({
+        queryKey: qk.approvalWorkpack('book-1', 'structure'),
+        type: 'active',
+      })
+    })
+    await waitFor(() => expect(getWorkpack).toHaveBeenCalledTimes(callsBeforeRefresh + 1))
+    await waitFor(() => expect(
+      screen.getByRole('button', { name: '保存全书结构裁决' }),
+    ).toBeDisabled())
+    expect(screen.getByRole('button', { name: '保存全书结构裁决' }).parentElement)
+      .toHaveAttribute('title', '正在读取或刷新当前 Stage4B 工作包')
+    await act(async () => rejectRefresh(new Error('refresh failed')))
+    await waitFor(() => expect(
+      screen.getByRole('button', { name: '保存全书结构裁决' }).parentElement,
+    ).toHaveAttribute(
+      'title',
+      '当前 Stage4B 工作包读取失败，不能绑定本轮审批',
+    ))
+    expect(screen.getByRole('button', { name: '保存全书结构裁决' })).toBeDisabled()
   })
 })

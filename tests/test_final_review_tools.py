@@ -5,9 +5,16 @@ from __future__ import annotations
 
 import json
 import hashlib
+import subprocess
 import sys
+import threading
+import time
 from pathlib import Path
 from types import SimpleNamespace
+
+import pytest
+
+from novel.llm.ledger import read_jsonl_rows
 
 
 SCRIPT_DIR = (Path(__file__).resolve().parent.parent / '.claude' / 'skills'
@@ -16,6 +23,38 @@ sys.path.insert(0, str(SCRIPT_DIR))
 import validate_review as validator  # noqa: E402
 import collect_final_evidence as collector  # noqa: E402
 import sync_review_evidence as synchronizer  # noqa: E402
+import finalize_review as finalizer  # noqa: E402
+from novel.orchestrator import inspection  # noqa: E402
+
+
+_COMMIT_WORKER = r"""
+import sys, time
+from pathlib import Path
+sys.path.insert(0, sys.argv[1])
+from sync_review_evidence import commit_review, ReviewConflictError
+review = Path(sys.argv[2])
+expected = Path(sys.argv[3]).read_bytes()
+updated = sys.argv[4]
+entered_arg, release_arg = sys.argv[5], sys.argv[6]
+result = Path(sys.argv[7])
+def hold_lock():
+    if entered_arg == '-':
+        return
+    entered = Path(entered_arg)
+    release = Path(release_arg)
+    entered.write_bytes(b'')
+    while not release.exists():
+        time.sleep(0.001)
+try:
+    commit_review(
+        review, updated, expected_original=expected,
+        precommit_check=hold_lock if entered_arg != '-' else None)
+except ReviewConflictError:
+    outcome = 'conflict'
+else:
+    outcome = 'committed'
+result.write_text(outcome, encoding='utf-8')
+"""
 
 
 CURRENT_QUALITY_STAGES = (
@@ -159,6 +198,28 @@ def test_review_validator_distinguishes_disclosures_from_delivery_blockers():
     assert any('交付阻塞余额' in error for error in errors)
 
 
+def test_final_evidence_jsonl_only_tolerates_an_uncommitted_tail(tmp_path):
+    path = tmp_path / 'ledger.jsonl'
+    path.write_bytes(b'{"sid":"book-1"}\n{"partial":')
+    assert read_jsonl_rows(path) == [{'sid': 'book-1'}]
+
+    path.write_bytes(b'{"sid":"book-1"}\n{"broken":true\n')
+    with pytest.raises(json.JSONDecodeError):
+        read_jsonl_rows(path)
+
+    path.write_bytes(b'{"sid":"book-1"}\n[1,2,3]\n')
+    with pytest.raises(ValueError, match='JSON object'):
+        read_jsonl_rows(path)
+
+    path.write_bytes(b'{"sid":"book-1"}\n{"bad":"\xe4\n')
+    with pytest.raises(UnicodeDecodeError):
+        read_jsonl_rows(path)
+
+    path.write_bytes(b'{"sid":"book-1"}\r{"sid":"book-2"}\n')
+    with pytest.raises(ValueError, match='不是 LF 提交'):
+        read_jsonl_rows(path)
+
+
 def test_ledger_uses_beacon_run_ids_and_leaves_legacy_ungrouped(monkeypatch, tmp_path):
     rows = [
         {'sid': 'book-1', 'outcome': 'ok', 'node': 'stage2.global',
@@ -266,3 +327,440 @@ def test_review_evidence_sync_bootstraps_a_legacy_review_without_losing_narrativ
     assert 'agent judgment stays' in updated and 'agent recovery stays' in updated
     assert 'historical:0' not in updated
     assert facts['exit_sequence_compact_text'] in updated
+
+
+def test_review_commit_first_lock_does_not_invalidate_the_surface_seal(
+        monkeypatch, tmp_path):
+    """首次提交前尚无 review.lock；拿锁本身不得制造假漂移。"""
+    novel_dir = tmp_path / 'FQ_测试书_book-1'
+    (novel_dir / 'stage7').mkdir(parents=True)
+    artifact = novel_dir / 'stage7' / 'name_map.json'
+    artifact.write_text('formal artifact', encoding='utf-8')
+    review = novel_dir / '测试书_review.md'
+    original = b'agent narrative\n'
+    review.write_bytes(original)
+    monkeypatch.setattr(
+        inspection.paths, 'resolve_novel_dir', lambda _base, _sid: novel_dir)
+    monkeypatch.setattr(
+        inspection.paths, 'review_package_path', lambda _dir: review)
+    monkeypatch.setattr(inspection.prov, 'code_version', lambda: 'code-v1')
+
+    seal = inspection.read_surface_seal(tmp_path, 'book-1')
+    lock = review.with_name(review.name + '.lock')
+    assert not lock.exists()
+
+    landed = synchronizer.commit_review(
+        review,
+        'validated candidate\n',
+        expected_original=original,
+        precommit_check=lambda: (
+            None if inspection.read_surface_seal(tmp_path, 'book-1') == seal
+            else pytest.fail('拿 review 锁本身不得改变 surface seal')
+        ),
+    )
+
+    assert landed == b'validated candidate\n'
+    assert review.read_bytes() == landed
+    assert lock.is_file()
+    artifact.write_text('changed formal artifact', encoding='utf-8')
+    assert inspection.read_surface_seal(tmp_path, 'book-1') != seal
+
+
+def test_review_commit_serializes_threads_and_loser_cannot_overwrite(tmp_path):
+    review = tmp_path / '测试书_review.md'
+    original = b'agent narrative\n'
+    review.write_bytes(original)
+    legacy_shared_temp = review.with_name(review.name + '.operator-sync.tmp')
+    legacy_shared_temp.write_bytes(b'do not touch')
+    first_inside = threading.Event()
+    release_first = threading.Event()
+    outcomes: list[tuple[str, str]] = []
+
+    def first_check() -> None:
+        first_inside.set()
+        assert release_first.wait(timeout=10)
+
+    def writer(label: str, check=None) -> None:
+        try:
+            synchronizer.commit_review(
+                review,
+                f'candidate {label}\n',
+                expected_original=original,
+                precommit_check=check,
+            )
+        except synchronizer.ReviewConflictError:
+            outcomes.append((label, 'conflict'))
+        else:
+            outcomes.append((label, 'committed'))
+
+    first = threading.Thread(target=writer, args=('first', first_check))
+    second = threading.Thread(target=writer, args=('second',))
+    first.start()
+    assert first_inside.wait(timeout=10)
+    second.start()
+    time.sleep(0.05)
+    second_was_blocked = second.is_alive()
+    release_first.set()
+    first.join(timeout=10)
+    second.join(timeout=10)
+
+    assert not first.is_alive() and not second.is_alive()
+    assert second_was_blocked, '第二个线程应阻塞在同 review 锁上'
+    assert sorted(outcomes) == [('first', 'committed'), ('second', 'conflict')]
+    assert review.read_bytes() == b'candidate first\n'
+    assert legacy_shared_temp.read_bytes() == b'do not touch'
+    assert not list(tmp_path.glob(f'.{review.name}.operator-sync.*.tmp'))
+
+
+def test_review_commit_serializes_processes_and_only_one_candidate_lands(tmp_path):
+    review = tmp_path / '测试书_review.md'
+    original = b'agent narrative\n'
+    review.write_bytes(original)
+    expected = tmp_path / 'expected.bin'
+    expected.write_bytes(original)
+    entered = tmp_path / 'first-inside-lock.flag'
+    release = tmp_path / 'release-first.flag'
+    results = [tmp_path / 'result-a.txt', tmp_path / 'result-b.txt']
+    candidates = ('candidate a\n', 'candidate b\n')
+    first = subprocess.Popen(
+        [
+            sys.executable, '-c', _COMMIT_WORKER, str(SCRIPT_DIR),
+            str(review), str(expected), candidates[0], str(entered),
+            str(release), str(results[0]),
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    deadline = time.monotonic() + 10
+    while not entered.exists() and time.monotonic() < deadline:
+        time.sleep(0.01)
+    if not entered.exists():
+        release.write_bytes(b'')
+        _out, err = first.communicate(timeout=10)
+        pytest.fail(
+            '第一个进程未进入 review 锁临界区：'
+            + err.decode('utf-8', 'replace'))
+    second = subprocess.Popen(
+        [
+            sys.executable, '-c', _COMMIT_WORKER, str(SCRIPT_DIR),
+            str(review), str(expected), candidates[1], '-', '-',
+            str(results[1]),
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    time.sleep(0.25)
+    second_was_blocked = not results[1].exists()
+    review_was_unchanged = review.read_bytes() == original
+    release.write_bytes(b'')
+    procs = [first, second]
+    for proc in procs:
+        _out, err = proc.communicate(timeout=60)
+        assert proc.returncode == 0, err.decode('utf-8', 'replace')
+
+    assert second_was_blocked, '第二个进程应阻塞在同 review 锁上'
+    assert review_was_unchanged
+    assert sorted(path.read_text(encoding='utf-8') for path in results) == [
+        'committed', 'conflict']
+    assert review.read_text(encoding='utf-8') in candidates
+    assert not list(tmp_path.glob(f'.{review.name}.operator-sync.*.tmp'))
+
+
+def _delivery(state: str = 'ready'):
+    payload = {'state': state, 'reason': 'fresh delivery check', 'checked_at': 123}
+    return SimpleNamespace(
+        state=state,
+        reason=payload['reason'],
+        model_dump=lambda **_kwargs: payload,
+    )
+
+
+def _install_finalizer_review(monkeypatch, novel_dir: Path, review: Path) -> None:
+    """让 finalizer 用真实的“书目录 → 唯一终审包”生产关系。"""
+    monkeypatch.setattr(
+        finalizer.paths, 'resolve_novel_dir', lambda *_args: novel_dir)
+    monkeypatch.setattr(
+        finalizer.paths, 'review_package_path', lambda _novel_dir: review)
+
+
+def test_finalizer_collects_once_validates_before_commit_and_then_assesses_fresh(
+        monkeypatch, tmp_path):
+    review = tmp_path / '测试书_review.md'
+    review.write_text('agent narrative', encoding='utf-8')
+    facts = _facts()
+    events: list[str] = []
+    collects: list[tuple] = []
+    seals: list[dict] = []
+
+    monkeypatch.setattr(
+        finalizer, 'collect',
+        lambda *args, **kwargs: collects.append((args, kwargs)) or facts)
+    _install_finalizer_review(monkeypatch, tmp_path, review)
+    monkeypatch.setattr(
+        finalizer, 'read_surface_seal',
+        lambda *_args, **kwargs: seals.append(kwargs) or 'seal-v1')
+    monkeypatch.setattr(
+        finalizer, 'render',
+        lambda text, got: events.append('render') or f'{text}\nmachine facts')
+    monkeypatch.setattr(
+        finalizer, 'validate',
+        lambda text, got, **_kwargs: events.append('validate') or [])
+
+    def commit(path, text, **kwargs):
+        events.append('commit')
+        return synchronizer.commit_review(path, text, **kwargs)
+
+    def assess(*_args, **kwargs):
+        events.append('assess')
+        assert review.read_text(encoding='utf-8').endswith('machine facts')
+        assert kwargs['start_code_version'] == 'code-v1'
+        return _delivery()
+
+    monkeypatch.setattr(finalizer, 'commit_review', commit)
+    monkeypatch.setattr(finalizer, 'assess', assess)
+
+    result = finalizer.finalize(
+        tmp_path, 'book-1', started_at=100,
+        start_code_version='code-v1', review_path=review)
+
+    assert len(collects) == 1
+    assert len(seals) == 4
+    assert all(row == {
+        'include_final_evidence_service': True,
+        'excluded_review': review.resolve(),
+    } for row in seals)
+    assert events == ['render', 'validate', 'commit', 'assess']
+    assert result['state'] == 'ready'
+    assert result['phases']['delivery']['state'] == 'passed'
+
+
+def test_finalizer_validation_failure_keeps_the_original_review_and_skips_delivery(
+        monkeypatch, tmp_path):
+    review = tmp_path / '测试书_review.md'
+    original = b'agent narrative\n'
+    review.write_bytes(original)
+    monkeypatch.setattr(finalizer, 'collect', lambda *_args, **_kwargs: _facts())
+    _install_finalizer_review(monkeypatch, tmp_path, review)
+    monkeypatch.setattr(
+        finalizer, 'read_surface_seal', lambda *_args, **_kwargs: 'seal-v1')
+    monkeypatch.setattr(finalizer, 'render', lambda *_args: 'invalid candidate')
+    monkeypatch.setattr(
+        finalizer, 'validate', lambda *_args, **_kwargs: ['仍有模板占位符'])
+    monkeypatch.setattr(
+        finalizer, 'commit_review',
+        lambda *_args: pytest.fail('校验失败时不得写盘'))
+    monkeypatch.setattr(
+        finalizer, 'assess',
+        lambda *_args, **_kwargs: pytest.fail('校验失败时不得终验'))
+
+    result = finalizer.finalize(
+        tmp_path, 'book-1', started_at=100,
+        start_code_version='code-v1', review_path=review)
+
+    assert result['state'] == 'stopped'
+    assert result['phases']['validate']['state'] == 'failed'
+    assert result['phases']['commit']['state'] == 'skipped'
+    assert review.read_bytes() == original
+
+
+def test_finalizer_refuses_a_surface_that_drifts_between_collect_and_commit(
+        monkeypatch, tmp_path):
+    review = tmp_path / '测试书_review.md'
+    original = b'agent narrative\n'
+    review.write_bytes(original)
+    seals = iter(('seal-stable', 'seal-stable', 'seal-before-commit'))
+    monkeypatch.setattr(finalizer, 'collect', lambda *_args, **_kwargs: _facts())
+    _install_finalizer_review(monkeypatch, tmp_path, review)
+    monkeypatch.setattr(
+        finalizer, 'read_surface_seal',
+        lambda *_args, **_kwargs: next(seals))
+    monkeypatch.setattr(finalizer, 'render', lambda *_args: 'valid candidate')
+    monkeypatch.setattr(finalizer, 'validate', lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(
+        finalizer, 'assess',
+        lambda *_args, **_kwargs: pytest.fail('盘面漂移后不得终验'))
+
+    result = finalizer.finalize(
+        tmp_path, 'book-1', started_at=100,
+        start_code_version='code-v1', review_path=review)
+
+    assert result['state'] == 'stopped'
+    assert result['phases']['commit']['state'] == 'skipped'
+    assert '发生变化' in result['phases']['commit']['detail']
+    assert review.read_bytes() == original
+
+
+def test_finalizer_user_edit_after_render_wins_and_is_never_overwritten(
+        monkeypatch, tmp_path):
+    review = tmp_path / '测试书_review.md'
+    original = b'agent narrative\n'
+    user_edit = b'user edit must win\n'
+    review.write_bytes(original)
+    monkeypatch.setattr(finalizer, 'collect', lambda *_args, **_kwargs: _facts())
+    _install_finalizer_review(monkeypatch, tmp_path, review)
+    monkeypatch.setattr(finalizer, 'render', lambda *_args: 'valid candidate')
+    monkeypatch.setattr(finalizer, 'validate', lambda *_args, **_kwargs: [])
+    seal_calls: list[None] = []
+
+    def surface_seal(*_args, **_kwargs):
+        seal_calls.append(None)
+        if len(seal_calls) == 3:
+            # 模拟不认 sidecar 锁的用户编辑器：它在 finalizer 已经
+            # 进入锁内 precommit seal 时写 review。replace 前的第二次
+            # 字节 CAS 必须仍让这份用户内容获胜。
+            review.write_bytes(user_edit)
+        return 'seal-v1'
+
+    monkeypatch.setattr(finalizer, 'read_surface_seal', surface_seal)
+    monkeypatch.setattr(
+        finalizer, 'assess',
+        lambda *_args, **_kwargs: pytest.fail('用户编辑竞争后不得终验'))
+
+    result = finalizer.finalize(
+        tmp_path, 'book-1', started_at=100,
+        start_code_version='code-v1', review_path=review)
+
+    assert result['state'] == 'stopped'
+    assert result['phases']['commit']['state'] == 'skipped'
+    assert '其他写者修改' in result['phases']['commit']['detail']
+    assert review.read_bytes() == user_edit
+    assert len(seal_calls) == 3
+
+
+def test_finalizer_refuses_a_change_that_happens_inside_collect(
+        monkeypatch, tmp_path):
+    review = tmp_path / '测试书_review.md'
+    original = b'agent narrative\n'
+    review.write_bytes(original)
+    seals = iter(('seal-before-collect', 'seal-after-collect'))
+    collects: list[None] = []
+    monkeypatch.setattr(
+        finalizer, 'collect',
+        lambda *_args, **_kwargs: collects.append(None) or _facts())
+    _install_finalizer_review(monkeypatch, tmp_path, review)
+    monkeypatch.setattr(
+        finalizer, 'read_surface_seal',
+        lambda *_args, **_kwargs: next(seals))
+    monkeypatch.setattr(
+        finalizer, 'render',
+        lambda *_args: pytest.fail('collect 内漂移后不得继续 render'))
+    monkeypatch.setattr(
+        finalizer, 'commit_review',
+        lambda *_args: pytest.fail('collect 内漂移后不得写盘'))
+    monkeypatch.setattr(
+        finalizer, 'assess',
+        lambda *_args, **_kwargs: pytest.fail('collect 内漂移后不得终验'))
+
+    result = finalizer.finalize(
+        tmp_path, 'book-1', started_at=100,
+        start_code_version='code-v1', review_path=review)
+
+    assert collects == [None]
+    assert result['state'] == 'stopped'
+    assert result['phases']['seal']['state'] == 'failed'
+    assert result['phases']['commit']['state'] == 'skipped'
+    assert review.read_bytes() == original
+
+
+def test_finalizer_refuses_a_noncanonical_review_before_collecting_or_writing(
+        monkeypatch, tmp_path):
+    canonical = tmp_path / '测试书_review.md'
+    requested = tmp_path / '旁路_review.md'
+    canonical.write_bytes(b'canonical review\n')
+    requested.write_bytes(b'other review\n')
+    _install_finalizer_review(monkeypatch, tmp_path, canonical)
+    monkeypatch.setattr(
+        finalizer, 'read_surface_seal',
+        lambda *_args, **_kwargs: pytest.fail('非 canonical 路径不得开始 seal'))
+    monkeypatch.setattr(
+        finalizer, 'collect',
+        lambda *_args, **_kwargs: pytest.fail('非 canonical 路径不得收集事实'))
+    monkeypatch.setattr(
+        finalizer, 'commit_review',
+        lambda *_args, **_kwargs: pytest.fail('非 canonical 路径不得写盘'))
+    monkeypatch.setattr(
+        finalizer, 'assess',
+        lambda *_args, **_kwargs: pytest.fail('非 canonical 路径不得终验'))
+
+    result = finalizer.finalize(
+        tmp_path, 'book-1', started_at=100,
+        start_code_version='code-v1', review_path=requested)
+
+    assert result['state'] == 'stopped' and result['delivery'] is None
+    assert result['phases']['review']['state'] == 'failed'
+    assert result['phases']['collect']['state'] == 'skipped'
+    assert result['phases']['commit']['state'] == 'skipped'
+    assert str(canonical.resolve()) in result['phases']['review']['detail']
+    assert canonical.read_bytes() == b'canonical review\n'
+    assert requested.read_bytes() == b'other review\n'
+
+
+def test_finalizer_discards_ready_when_surface_drifts_during_fresh_assess(
+        monkeypatch, tmp_path):
+    review = tmp_path / '测试书_review.md'
+    review.write_bytes(b'agent narrative\n')
+    _install_finalizer_review(monkeypatch, tmp_path, review)
+    seals = iter(('seal-v1', 'seal-v1', 'seal-v1', 'seal-after-assess'))
+    seal_calls: list[dict] = []
+    events: list[str] = []
+    monkeypatch.setattr(finalizer, 'collect', lambda *_args, **_kwargs: _facts())
+
+    def surface_seal(*_args, **kwargs):
+        seal_calls.append(kwargs)
+        return next(seals)
+
+    monkeypatch.setattr(finalizer, 'read_surface_seal', surface_seal)
+    monkeypatch.setattr(finalizer, 'render', lambda *_args: 'valid candidate')
+    monkeypatch.setattr(finalizer, 'validate', lambda *_args, **_kwargs: [])
+
+    def commit(path, text, **kwargs):
+        events.append('commit')
+        return synchronizer.commit_review(path, text, **kwargs)
+
+    monkeypatch.setattr(finalizer, 'commit_review', commit)
+    monkeypatch.setattr(
+        finalizer, 'assess',
+        lambda *_args, **_kwargs: events.append('assess') or _delivery('ready'))
+
+    result = finalizer.finalize(
+        tmp_path, 'book-1', started_at=100,
+        start_code_version='code-v1', review_path=review)
+
+    assert events == ['commit', 'assess']
+    assert len(seal_calls) == 4
+    assert all(row == {
+        'include_final_evidence_service': True,
+        'excluded_review': review.resolve(),
+    } for row in seal_calls)
+    assert review.read_text(encoding='utf-8') == 'valid candidate'
+    assert result['state'] == 'stopped' and result['delivery'] is None
+    assert result['phases']['commit']['state'] == 'passed'
+    assert result['phases']['seal']['state'] == 'failed'
+    assert result['phases']['delivery']['state'] == 'failed'
+    assert '必须重跑 canonical finalizer' in result['phases']['seal']['detail']
+
+
+def test_finalizer_main_only_returns_zero_for_a_fresh_readyish_delivery(
+        monkeypatch, capsys):
+    monkeypatch.setattr(
+        finalizer, 'finalize',
+        lambda *_args, **_kwargs: {
+            'state': 'ready_with_disclosures', 'review': 'review.md',
+            'phases': {}, 'delivery': {},
+        })
+    assert finalizer.main([
+        '--base', 'outputs', '--sid', 'book-1', '--started-at', '100',
+        '--start-code-version', 'code-v1',
+    ]) == 0
+    assert json.loads(capsys.readouterr().out)['state'] == 'ready_with_disclosures'
+
+    monkeypatch.setattr(
+        finalizer, 'finalize',
+        lambda *_args, **_kwargs: {
+            'state': 'unknown', 'review': 'review.md',
+            'phases': {}, 'delivery': {},
+        })
+    assert finalizer.main([
+        '--base', 'outputs', '--sid', 'book-1', '--started-at', '100',
+        '--start-code-version', 'code-v1',
+    ]) == 1

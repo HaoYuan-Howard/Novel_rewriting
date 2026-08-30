@@ -170,6 +170,10 @@ _JSON_READ_ALLOWED = {
         '`_service/agent_sessions.jsonl` 是 append-only 事件流，'
         '只记 profile/session/usage/指纹与双轴终态，不进来源账或 ARTIFACTS；'
         '读侧只容忍被 kill 截断的最后一行，中间坏行关闭式失败'),
+    'novel/operator_telemetry.py': (
+        'Commander / operator 阶段遥测**不是产物、节点或成本账**：'
+        '`_service/operator_phases/*.jsonl` 是不含正文/提示词/token 的逐 session append-only 事件流，'
+        '只记本地阶段身份、耗时与终态；读侧只容忍被 kill 截断的最后一行'),
     'novel/human_actions.py': (
         '人工改稿身份账**不是产物**：'
         '`_service/human_actions.jsonl` 是不含正文的 prepared→committed '

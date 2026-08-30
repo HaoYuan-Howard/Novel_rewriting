@@ -34,6 +34,21 @@ const EFFECT_LABEL: Record<ApprovalWorkpackEffect, string> = {
  */
 export function ApprovalWorkpackPanel({ kind }: { kind: 'design' | 'structure' }) {
   const query = useApprovalWorkpack(kind)
+  return <ApprovalWorkpackEvidence kind={kind} query={query} />
+}
+
+/**
+ * 父审批面已经持有 workpack query 时复用同一 observer 的投影。若在同一屏再挂一次
+ * ``useApprovalWorkpack``，staleTime=0 会在子组件 mount 时立即 background refetch，既
+ * 重扫一次后端证据，也让刚成功读取的提交按钮无故闪回 disabled。
+ */
+export function ApprovalWorkpackEvidence({
+  kind,
+  query,
+}: {
+  kind: 'design' | 'structure'
+  query: ReturnType<typeof useApprovalWorkpack>
+}) {
   const label = kind === 'design' ? 'Stage4A 候选工作包' : 'Stage4B 结构工作包'
 
   if (query.isLoading) {
@@ -72,6 +87,13 @@ export function ApprovalWorkpackPanel({ kind }: { kind: 'design' | 'structure' }
         <span className="text-tag text-ink-4">
           异常优先，只读呈现；不预填裁决、不自动接受、不在此发起作业
         </span>
+        <span className={workpack.disposition === 'already_current'
+          ? 'rounded-tag bg-gate-ok-bg px-8 py-2 text-tag font-semibold text-gate-ok-ink'
+          : 'rounded-tag bg-inset px-8 py-2 text-tag text-ink-3'}>
+          {workpack.disposition === 'already_current'
+            ? '同一当前工作包已批准 · 默认跳过重复人工整读'
+            : '当前工作包需要审阅'}
+        </span>
       </div>
       <div className="flex min-w-0 flex-col gap-3 text-tag text-ink-4">
         {workpack.candidate_sha256 ? (
@@ -82,6 +104,14 @@ export function ApprovalWorkpackPanel({ kind }: { kind: 'design' | 'structure' }
         ) : null}
         <span>工作包主体 SHA-256</span>
         <Mono className="break-all text-mini text-ink-2">{workpack.subject_sha256}</Mono>
+        {workpack.current_decision_sha256 ? (
+          <>
+            <span>当前决定 SHA-256</span>
+            <Mono className="break-all text-mini text-ink-2">
+              {workpack.current_decision_sha256}
+            </Mono>
+          </>
+        ) : null}
         <span>覆盖章节：{workpack.chapter_ordinals.join('、') || '（服务端给出空覆盖）'}</span>
       </div>
 

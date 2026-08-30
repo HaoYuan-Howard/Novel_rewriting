@@ -89,11 +89,14 @@ _ROLE_REQUEST_FIELDS = {
     'role', 'purpose', 'system_sha256', 'user_sha256',
     'initial_prompt_sha256', 'response_schema_sha256',
 }
+_EXPERIMENT_ARM_FIELDS = {'session_policy', 'judge_stagger_ms'}
 _RUN_FIELDS = {
     'version', 'run_id', 'sid', 'node', 'code', 'input_sha256',
     'request_policy', 'request_policy_sha256', 'requests',
+    'experiment_arm',
     'identity_sha256', 'created_at',
 }
+_LEGACY_RUN_FIELDS = _RUN_FIELDS - {'experiment_arm'}
 _CHECKPOINT_EXTRA_FIELDS = {
     'version', 'created_at', 'run_id', 'sid', 'node', 'code',
     'run_sha256', 'role', 'purpose', 'input_sha256', 'response_model',
@@ -152,6 +155,38 @@ def _positive_ceiling(value: int) -> int:
     if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
         raise ProvenanceRefused('Stage6 requested output token ceiling 必须是正整数')
     return value
+
+
+def semantic_experiment_arm(*, judge_stagger_ms: int = 0) -> dict[str, Any]:
+    """冻结不改变请求字节、却会改变 A/B 启动时序的实验臂。
+
+    旧 ``run.json`` 没有这格；它只能解释为历史默认的 0ms 独立并行臂。
+    非默认错峰必须显式进不可变 run 身份，不能借旧 checkpoint 冒充本轮实验。
+    """
+    if (not isinstance(judge_stagger_ms, int)
+            or isinstance(judge_stagger_ms, bool)
+            or judge_stagger_ms < 0):
+        raise ProvenanceRefused('Stage6 semantic judge_stagger_ms 必须是非负整数')
+    return {
+        'session_policy': (
+            'independent-concurrent-stagger/v1'
+            if judge_stagger_ms else 'independent-parallel'),
+        'judge_stagger_ms': judge_stagger_ms,
+    }
+
+
+def _experiment_arm(value: object | None) -> dict[str, Any]:
+    if value is None:
+        return semantic_experiment_arm()
+    if not isinstance(value, dict) or set(value) != _EXPERIMENT_ARM_FIELDS:
+        raise ProvenanceRefused(
+            'Stage6 semantic experiment arm 字段不完整或含未登记字段')
+    stagger = value.get('judge_stagger_ms')
+    expected = semantic_experiment_arm(judge_stagger_ms=stagger)
+    if value != expected:
+        raise ProvenanceRefused(
+            'Stage6 semantic experiment arm 的时序与 session policy 漂移')
+    return expected
 
 
 def _atomic_json(path: Path, payload: Mapping[str, Any]) -> None:
@@ -326,7 +361,7 @@ def _expected_role_request(
 def _expected_run_identity(
         ctx: Any, *, input_sha256: str, system: str,
         users: Mapping[str, str], response_model: type[BaseModel],
-        max_tokens: int,
+        max_tokens: int, experiment_arm: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     if ctx.node != 'stage6.semantic':
         raise ProvenanceRefused(
@@ -343,6 +378,8 @@ def _expected_run_identity(
         'input_sha256': input_sha256,
         'request_policy': policy,
         'request_policy_sha256': _sha(policy),
+        'experiment_arm': _experiment_arm(
+            None if experiment_arm is None else dict(experiment_arm)),
         'requests': _request_rows(
             system, users, response_model,
             driver=str(policy['profile']['driver'])),
@@ -354,10 +391,11 @@ def _validate_run_record(
         response_model: type[BaseModel] | None = None,
         max_tokens: int | None = None,
 ) -> dict[str, Any]:
-    if set(record) != _RUN_FIELDS:
+    fields = set(record)
+    if fields not in (_RUN_FIELDS, _LEGACY_RUN_FIELDS):
         raise ArtifactUnreadable('Stage6 run.json 字段不完整或含未登记字段')
     identity = {
-        key: record[key] for key in _RUN_FIELDS
+        key: record[key] for key in fields
         if key not in ('identity_sha256', 'created_at')
     }
     if record.get('identity_sha256') != _sha(identity):
@@ -394,18 +432,23 @@ def _validate_run_record(
         seen.add(str(row['role']))
     if seen != set(JUDGE_ROLES):
         raise ArtifactUnreadable('Stage6 run.json 的 requests 未恰好覆盖 A/B')
-    return dict(record)
+    normalized = dict(record)
+    # 兼容本优化前已落盘的默认 run：缺字段只代表历史 0ms 并行臂，绝不能
+    # 被解释成“接受当前任意实验配置”。新 run 一律显式物化该格。
+    normalized['experiment_arm'] = _experiment_arm(record.get('experiment_arm'))
+    return normalized
 
 
 def ensure_run(
         ctx: Any, *, input_sha256: str, system: str,
         users: Mapping[str, str], response_model: type[BaseModel],
-        max_tokens: int,
+        max_tokens: int, experiment_arm: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """创建或逐字段核验不可变双盲 run；漂移不能退化成 checkpoint miss。"""
     identity = _expected_run_identity(
         ctx, input_sha256=input_sha256, system=system, users=users,
-        response_model=response_model, max_tokens=max_tokens)
+        response_model=response_model, max_tokens=max_tokens,
+        experiment_arm=experiment_arm)
     target = _run_root(ctx) / RUN_FILE
     with _LOCK:
         with process_append_lock(target):
@@ -418,7 +461,8 @@ def ensure_run(
                 }
                 if comparable != identity:
                     raise ProvenanceRefused(
-                        f'Stage6 run={ctx.run_id} 的输入/prompt/schema/profile 已漂移；'
+                        f'Stage6 run={ctx.run_id} 的输入/prompt/schema/profile/'
+                        'experiment arm 已漂移；'
                         '拒绝恢复旧判官或重新付费')
                 return current
             payload = {
@@ -1398,6 +1442,6 @@ __all__ = [
     'ensure_run', 'mark_committed', 'prepare_commit', 'prepared',
     'refuse_foreign_commit_reservations',
     'refuse_foreign_semantic_prepared',
-    'restore_checkpoint', 'restore_commit_adoptions',
+    'restore_checkpoint', 'restore_commit_adoptions', 'semantic_experiment_arm',
     'verify_commit_artifact', 'verify_commit_finalization', 'write_checkpoint',
 ]

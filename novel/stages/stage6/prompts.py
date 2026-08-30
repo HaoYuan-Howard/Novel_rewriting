@@ -12,15 +12,83 @@ surface habits、逐章风格或 hook style。剧透不再是违规；真正的�
 """
 from __future__ import annotations
 
+import hashlib
 import json
+import os
 from dataclasses import dataclass, field
+from typing import Any, Mapping
 
 from collections import Counter
 
 from contracts.invariants import (
     HOOK_APPROACH_NOTES, HOOK_CURRENT_APPROACHES, HOOK_RECIPE, slot_of,)
 from novel.core.bands import ending_shape, hook_shape_band, sep_band_of_text
+from novel.errors import TerminalState
 from novel.llm.prompts import fill, with_json_shape
+
+
+#: 显式实验面；默认生产字节保持现役 pretty-v1，付费多书质量回归前不切默认。
+STAGE6_PROMPT_JSON_LAYOUT_ENV = 'NOVEL_EXPERIMENT_STAGE6_PROMPT_JSON'
+STAGE6_SEMANTIC_STAGGER_MS_ENV = 'NOVEL_EXPERIMENT_STAGE6_SEMANTIC_STAGGER_MS'
+PRETTY_JSON_LAYOUT = 'pretty-v1'
+COMPACT_JSON_LAYOUT = 'compact-v1'
+PROMPT_JSON_LAYOUTS = (PRETTY_JSON_LAYOUT, COMPACT_JSON_LAYOUT)
+MAX_SEMANTIC_STAGGER_MS = 10_000
+
+
+def prompt_json_layout(environ: Mapping[str, str] | None = None) -> str:
+    """解析 Stage6 JSON 排版臂；未知值在任何模型请求前关闭式停止。"""
+    source = os.environ if environ is None else environ
+    layout = source.get(STAGE6_PROMPT_JSON_LAYOUT_ENV, PRETTY_JSON_LAYOUT)
+    if layout not in PROMPT_JSON_LAYOUTS:
+        raise TerminalState(
+            f'{STAGE6_PROMPT_JSON_LAYOUT_ENV} 只接受 {PROMPT_JSON_LAYOUTS}，'
+            f'实得 {layout!r}')
+    return layout
+
+
+def semantic_stagger_ms(environ: Mapping[str, str] | None = None) -> int:
+    """解析双判官 B 的 opt-in 短错峰；默认 0，且绝不超过 10 秒。"""
+    source = os.environ if environ is None else environ
+    raw = source.get(STAGE6_SEMANTIC_STAGGER_MS_ENV, '0')
+    if not raw.isascii() or not raw.isdecimal():
+        raise TerminalState(
+            f'{STAGE6_SEMANTIC_STAGGER_MS_ENV} 必须是 0~'
+            f'{MAX_SEMANTIC_STAGGER_MS} 的十进制整数毫秒，实得 {raw!r}')
+    value = int(raw)
+    if value > MAX_SEMANTIC_STAGGER_MS:
+        raise TerminalState(
+            f'{STAGE6_SEMANTIC_STAGGER_MS_ENV} 不能超过 '
+            f'{MAX_SEMANTIC_STAGGER_MS}ms，实得 {value}ms')
+    return value
+
+
+def dump_prompt_json(value: Any, *, layout: str | None = None) -> str:
+    """Stage6 动态 JSON 的唯一序列化口。
+
+    ``compact-v1`` 只删除 JSON 语法空白：不排序键、不改字符串、不改数组顺序。
+    默认仍是现役 ``indent=2``；实验臂必须显式指定或设置环境变量。
+    """
+    chosen = prompt_json_layout() if layout is None else layout
+    if chosen == PRETTY_JSON_LAYOUT:
+        return json.dumps(value, ensure_ascii=False, indent=2)
+    if chosen == COMPACT_JSON_LAYOUT:
+        return json.dumps(value, ensure_ascii=False, separators=(',', ':'))
+    raise TerminalState(f'未知 Stage6 prompt JSON layout：{chosen!r}')
+
+
+def prompt_json_observation(value: Any) -> dict[str, dict[str, int | str]]:
+    """给隔离 A/B 的无正文观测：只报字节/字符与 SHA，不估 token 或价格。"""
+    out: dict[str, dict[str, int | str]] = {}
+    for layout in PROMPT_JSON_LAYOUTS:
+        rendered = dump_prompt_json(value, layout=layout)
+        encoded = rendered.encode('utf-8')
+        out[layout] = {
+            'chars': len(rendered),
+            'utf8_bytes': len(encoded),
+            'sha256': hashlib.sha256(encoded).hexdigest(),
+        }
+    return out
 
 
 HOOK_SYS = """\
@@ -204,7 +272,7 @@ def build_material(*, title: str, ctx: dict, hook_mechanical: dict, grounding: d
     }
     blocks = (
         '下面是本书的完整创作包。先理解原始文案为何有效，再写三条新的开篇文案。',
-        json.dumps(packet, ensure_ascii=False, indent=2),
+        dump_prompt_json(packet),
     )
     return Material(
         blocks=blocks,
@@ -242,4 +310,4 @@ def build_retry_user(mat: Material, *, slot: str, approach: str,
             '逐条消除 hard_findings，其余候选文本不许改。'),
     }
     return build_user(mat) + '\n\n── 单候选定向修复 ──\n' \
-        + json.dumps(repair, ensure_ascii=False, indent=2)
+        + dump_prompt_json(repair)

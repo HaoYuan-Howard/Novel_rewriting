@@ -637,6 +637,8 @@ _FLOORS = {
     'notes_budget': 5000,     # 整读预算算不出来（必读集读空）时，那条界会失效
     'repo_fn_citations': 1,   # 仓内确实在按号引用经验，这条反查不是空的
     'stage0_workpack_contract': 1,
+    'finalizer_contract': 1,
+    'operator_telemetry_contract': 1,
 }
 
 

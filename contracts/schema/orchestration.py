@@ -22,7 +22,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import Field, model_validator
+from pydantic import Field, StrictInt, model_validator
 
 from contracts.invariants import (
     AGENT_DELIVERY_OUTCOME,
@@ -30,6 +30,8 @@ from contracts.invariants import (
     ARTIFACT_CONDITION, ARTIFACT_DISPLAY, BEACON_STATES,
     AgentDriver, AgentExecutionMode, AgentReasoningEffort,
     FRESHNESS, FRESHNESS_REASON, JOB_EVENT_KINDS, JOB_STATE, NODES,
+    OPERATOR_DURATION_SOURCES, OPERATOR_PHASE_EVENT_KINDS, OPERATOR_PHASES,
+    OPERATOR_TELEMETRY_SOURCES, OPERATOR_TERMINAL_STATES,
     OVERVIEW_VERDICT, PROGRESS_PHASES, RETIRED_NODES, RETIRED_STAGES, STAGES,
 )
 from contracts.schema.base import FrozenModel, StrictModel
@@ -45,6 +47,11 @@ OverviewVerdict = Literal[OVERVIEW_VERDICT]
 ProgressPhase = Literal[PROGRESS_PHASES]
 BeaconState = Literal[BEACON_STATES]
 AgentDeliveryState = Literal[AGENT_DELIVERY_OUTCOME]
+OperatorPhaseEventKind = Literal[OPERATOR_PHASE_EVENT_KINDS]
+OperatorPhase = Literal[OPERATOR_PHASES]
+OperatorTelemetrySource = Literal[OPERATOR_TELEMETRY_SOURCES]
+OperatorTerminalState = Literal[OPERATOR_TERMINAL_STATES]
+OperatorDurationSource = Literal[OPERATOR_DURATION_SOURCES]
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -382,6 +389,92 @@ class ProgressEvent(FrozenModel):
         if self.phase == 'end' and self.exit_code is None:
             raise ValueError(
                 'end 必须带 exit_code——否则折叠分不出「跑完了」与「还在跑」')
+        return self
+
+
+class OperatorPhaseEvent(FrozenModel):
+    """Commander/operator 本地阶段的一行持久 wire（v1）。
+
+    它不带 node、model、usage、token、prompt、正文或自由理由；``action`` /
+    ``error_kind`` 只接受短小 ASCII kind。这样人工审阅与终审动作既不会污染
+    ``NODES``/成本账，也不能借 telemetry 成为正文外泄暗门。
+    """
+
+    wire_version: Literal[1] = 1
+    session_id: str = Field(pattern=r'^[a-z0-9][a-z0-9_-]{0,127}$')
+    sid: str = Field(min_length=1, max_length=128)
+    source: OperatorTelemetrySource
+    kind: OperatorPhaseEventKind
+    ts_ms: StrictInt = Field(ge=0)
+    parent_run_id: str | None = Field(
+        default=None, pattern=r'^[a-z0-9][a-z0-9_-]{0,127}$')
+    phase_execution_id: str | None = Field(
+        default=None, pattern=r'^[a-z0-9][a-z0-9_-]{0,127}$')
+    phase: OperatorPhase | None = None
+    action: str | None = Field(
+        default=None, pattern=r'^[a-z][a-z0-9_.-]{0,127}$')
+    run_id: str | None = Field(
+        default=None, pattern=r'^[a-z0-9][a-z0-9_-]{0,127}$')
+    state: OperatorTerminalState | None = None
+    exit_code: StrictInt | None = None
+    elapsed_ms: StrictInt | None = Field(default=None, ge=0)
+    duration_source: OperatorDurationSource | None = None
+    evidence_sha256: str | None = Field(
+        default=None, pattern=r'^[0-9a-f]{64}$')
+    error_kind: str | None = Field(
+        default=None, pattern=r'^[a-z][a-z0-9_.-]{0,127}$')
+    start_code_version: str | None = Field(default=None, min_length=1, max_length=256)
+    end_code_version: str | None = Field(default=None, min_length=1, max_length=256)
+
+    @model_validator(mode='after')
+    def _payload_matches_kind(self) -> OperatorPhaseEvent:
+        if self.kind == 'session_started':
+            carried = (
+                self.phase_execution_id, self.phase, self.action, self.run_id,
+                self.state, self.exit_code, self.elapsed_ms, self.duration_source,
+                self.evidence_sha256, self.error_kind, self.end_code_version,
+            )
+            if self.start_code_version is None or any(v is not None for v in carried):
+                raise ValueError(
+                    'session_started 只带 session 静态身份与 start_code_version')
+            return self
+        if self.kind == 'phase_started':
+            if self.phase_execution_id is None or self.phase is None:
+                raise ValueError('phase_started 必须带 phase_execution_id 与 phase')
+            carried = (
+                self.parent_run_id, self.state, self.exit_code, self.elapsed_ms,
+                self.duration_source, self.error_kind, self.start_code_version,
+                self.end_code_version,
+            )
+            if any(v is not None for v in carried):
+                raise ValueError('phase_started 不得提前带终态/耗时/代码终点')
+            return self
+        if self.kind == 'phase_ended':
+            if (self.phase_execution_id is None or self.phase is None
+                    or self.state is None):
+                raise ValueError(
+                    'phase_ended 必须带 phase_execution_id、phase 与 state')
+            if self.elapsed_ms is None or self.duration_source is None:
+                raise ValueError('phase_ended 必须带真实 elapsed_ms 与 duration_source')
+            if any(v is not None for v in (
+                    self.parent_run_id, self.start_code_version,
+                    self.end_code_version)):
+                raise ValueError('phase_ended 不带 session 级代码/父 run 身份')
+            if self.state == 'failed' and self.error_kind is None:
+                raise ValueError('failed phase 必须带 error_kind')
+            return self
+        carried = (
+            self.parent_run_id, self.phase_execution_id, self.phase, self.action,
+            self.run_id, self.exit_code, self.evidence_sha256, self.error_kind,
+            self.start_code_version,
+        )
+        if any(v is not None for v in carried):
+            raise ValueError(
+                'session_ended 只带 session 终态、耗时与 end_code_version')
+        if (self.state is None or self.elapsed_ms is None
+                or self.duration_source is None or self.end_code_version is None):
+            raise ValueError(
+                'session_ended 必须带 state、elapsed_ms、duration_source 与代码终点')
         return self
 
 

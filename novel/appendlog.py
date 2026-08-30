@@ -3,10 +3,10 @@
 """
 appendlog.py —— append-only 事件流的**追加口**。互斥只有这一份实现。
 
-【本仓有七份 append-only JSONL，它们共享同一条纪律】
+【本仓有八份 append-only JSONL，它们共享同一条纪律】
 `_service/` 下的 `ledger.jsonl` · `jobs.jsonl` · `queues.jsonl` ·
 `agent_progress.jsonl` · `agent_runs.jsonl` · `agent_sessions.jsonl` ·
-`human_actions.jsonl`。正常事件共同点是**永不读-改-写**：
+`human_actions.jsonl` · `operator_phases/*.jsonl`。正常事件共同点是**永不读-改-写**：
 并发安全、被 kill 不损坏、可以直接 `grep`。读的那一侧因此只容忍
 **被截断的最后一行**，中间出现坏行一律 `raise`——「记录不全」不许变成静默。
 唯一恢复例外是 human action 两相账：下一次追加会在同一目标锁内先隔离确证的
@@ -103,18 +103,30 @@ def process_append_lock(path: str | os.PathLike[str]):
 
 
 @contextmanager
-def append_transaction(path: str | os.PathLike[str]):
-    """同一目标文件的线程 + 进程事务锁。
+def path_transaction_lock(path: str | os.PathLike[str]):
+    """同一目标路径的线程 + 进程事务锁。
 
-    普通单行追加与“锁内读取判断 → 条件追加”必须共用这一把 per-path 线程锁；
-    后者若在业务模块另造一把锁，同进程另一个普通 ``append_line`` 写手仍可穿过
-    判重窗口。调用方在上下文内只能用 ``append_line_under_process_lock``，避免重入。
+    append-only 账和需要 compare-and-swap 的普通文件必须复用同一套
+    per-path 线程锁 / OS 文件锁语义；后者若只拿进程锁，同进程的两个写手
+    在 Windows 上仍可能同时穿过 CAS 窗口。
     """
     p = Path(os.fspath(path))
     key = os.path.normcase(os.path.abspath(p))
     with _thread_lock_for(key):
         with process_append_lock(p):
             yield
+
+
+@contextmanager
+def append_transaction(path: str | os.PathLike[str]):
+    """同一 append-only 目标文件的事务锁。
+
+    普通单行追加与“锁内读取判断 → 条件追加”必须共用这一把 per-path 线程锁；
+    后者若在业务模块另造一把锁，同进程另一个普通 ``append_line`` 写手仍可穿过
+    判重窗口。调用方在上下文内只能用 ``append_line_under_process_lock``，避免重入。
+    """
+    with path_transaction_lock(path):
+        yield
 
 
 def append_line(path: str | os.PathLike[str], line: str) -> None:
@@ -149,5 +161,5 @@ def append_line_under_process_lock(path: str | os.PathLike[str], line: str) -> N
 
 __all__ = [
     'LOCK_TIMEOUT_SECONDS', 'append_line', 'append_line_under_process_lock',
-    'append_transaction', 'process_append_lock',
+    'append_transaction', 'path_transaction_lock', 'process_append_lock',
 ]

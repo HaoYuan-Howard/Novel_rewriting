@@ -154,6 +154,8 @@ def test_assembly_accepts_an_approval_bound_to_the_current_decision_surface(monk
     monkeypatch.setattr(assemble, '_judged_drift', lambda _art, _up: ([], []))
     monkeypatch.setattr(assemble, '_hook_drift', lambda _art, _up: False)
     monkeypatch.setattr(semantic, 'require_approved_clear', lambda *_args: None)
+    monkeypatch.setattr(
+        assemble, 'approval_proof_sha256', lambda _store, _art: 'f' * 64)
 
     assemble._require_mapping_current(
         SimpleNamespace(), _Store(), art, _upstreams())
@@ -287,11 +289,19 @@ def _atomic_map():
 
 
 def test_stage7_approve_restores_map_and_delivery_when_map_postcondition_fails(
-        monkeypatch):
+        monkeypatch, tmp_path):
     art = _atomic_map()
     store = _TransactionalStore(art, fail_map_write=True)
     monkeypatch.setattr(rename, 'ArtifactStore', lambda _ctx: store)
     monkeypatch.setattr(rename, '_Upstreams', lambda *_args: object())
+    workpack_sha256 = 'f' * 64
+    workpack = SimpleNamespace(
+        workpack_sha256=workpack_sha256,
+        decision_subject_sha256=rename.approval_subject_sha256(art),
+        disposition='review_required', current_approval=None)
+    monkeypatch.setattr(
+        rename, '_approval_workpack_snapshot',
+        lambda *_args: (workpack, SimpleNamespace()))
 
     def retire(_store):
         store.events.append('retire')
@@ -301,8 +311,10 @@ def test_stage7_approve_restores_map_and_delivery_when_map_postcondition_fails(
 
     with pytest.raises(ProvenanceRefused, match='postcondition'):
         rename.run_approve(
-            SimpleNamespace(), actor='reviewer', reason='reviewed current map',
+            SimpleNamespace(novel_dir=tmp_path),
+            actor='reviewer', reason='reviewed current map',
             subject_sha256=rename.approval_subject_sha256(art),
+            workpack_sha256=workpack_sha256,
         )
 
     assert store.art is art and store.book == 'old delivery'
@@ -314,7 +326,7 @@ def test_stage7_approve_restores_map_and_delivery_when_map_postcondition_fails(
     (False, 'stale'),
 ])
 def test_stage7_assemble_restores_map_and_delivery_on_any_half_commit(
-            monkeypatch, fail_map_write, book_freshness):
+            monkeypatch, tmp_path, fail_map_write, book_freshness):
     from novel.stages.stage2 import global_review
     monkeypatch.setattr(global_review, 'require_approved', lambda _ctx: None)
     # 本用例验证的是组装半提交回滚；Stage5 闭合闸自身由 test_stage5_closure
@@ -333,7 +345,7 @@ def test_stage7_assemble_restores_map_and_delivery_on_any_half_commit(
     monkeypatch.setattr(assemble, 'assemble_txt', lambda *_args: 'new delivery\n')
 
     with pytest.raises(ProvenanceRefused):
-        assemble.run_assemble(SimpleNamespace())
+        assemble.run_assemble(SimpleNamespace(novel_dir=tmp_path))
 
     assert store.art is art and store.book == 'old delivery'
     assert store.events == ['book', 'map', 'rollback']

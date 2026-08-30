@@ -22,7 +22,7 @@ from types import SimpleNamespace
 import pytest
 
 from contracts.invariants import (
-    FREE_ENTRIES, NODES, PAID_FLAGS, VALUED_FLAGS, review_effect_of,
+    FREE_ENTRIES, NODES, PAID_FLAGS, STAGES, VALUED_FLAGS, review_effect_of,
 )
 from contracts.schema import decode_artifact
 from contracts.schema.evaluation import GlobalReview, GlobalReviewDecisionSet
@@ -1707,6 +1707,7 @@ def test_state_joins_the_authoritative_check_badge_without_changing_overview(
     import importlib
 
     cli = importlib.import_module('novel.cli.main')
+    inspection = importlib.import_module('novel.orchestrator.inspection')
     overview = SimpleNamespace(
         title='合成书', sid='123',
         stages=[SimpleNamespace(
@@ -1723,8 +1724,12 @@ def test_state_joins_the_authoritative_check_badge_without_changing_overview(
             SimpleNamespace(sev='unver', status='unver'),
         ],
     )
-    monkeypatch.setattr(cli.S, 'overview', lambda _base, _sid: overview)
-    monkeypatch.setattr(cli, '_state_check_report', lambda _base, _sid, _stage: report)
+    snapshot = SimpleNamespace(
+        overview=overview,
+        check=lambda _stage: SimpleNamespace(for_view=lambda: report),
+    )
+    monkeypatch.setattr(
+        inspection, 'capture_operator_snapshot', lambda _base, _sid: snapshot)
 
     assert cli._cmd_state(SimpleNamespace(base='outputs', sid='123')) == X.OK
     out = capsys.readouterr().out
@@ -1736,16 +1741,105 @@ def test_state_marks_an_unavailable_check_as_unknown_instead_of_looking_green(
     import importlib
 
     cli = importlib.import_module('novel.cli.main')
+    inspection = importlib.import_module('novel.orchestrator.inspection')
     overview = SimpleNamespace(
         title='合成书', sid='123',
         stages=[SimpleNamespace(
             done=True, stage='stage5', artifacts=[], chapters_done={})],
     )
-    monkeypatch.setattr(cli.S, 'overview', lambda _base, _sid: overview)
-    monkeypatch.setattr(cli, '_state_check_report', lambda *_args: None)
+    snapshot = SimpleNamespace(
+        overview=overview,
+        check=lambda _stage: SimpleNamespace(for_view=lambda: None),
+    )
+    monkeypatch.setattr(
+        inspection, 'capture_operator_snapshot', lambda _base, _sid: snapshot)
 
     assert cli._cmd_state(SimpleNamespace(base='outputs', sid='123')) == X.OK
     assert '✓ stage5  [check ? 校验未知]' in capsys.readouterr().out
+
+
+def test_state_with_inbox_reuses_the_exact_same_invocation_snapshot(
+        monkeypatch, capsys):
+    import importlib
+
+    cli = importlib.import_module('novel.cli.main')
+    inspection = importlib.import_module('novel.orchestrator.inspection')
+    inbox_module = importlib.import_module('novel.views.inbox')
+    overview = SimpleNamespace(title='合成书', sid='123', stages=[])
+    snapshot = SimpleNamespace(overview=overview)
+    captures = []
+    projections = []
+    view = SimpleNamespace(
+        counts={'invalid': 0}, total=0,
+        attention_counts={'pending': 0, 'reviewed_retained': 0},
+        delivery_counts={'blocking': 0, 'disclosure': 0},
+        wontfix=0, items=[],
+    )
+
+    monkeypatch.setattr(
+        inspection, 'capture_operator_snapshot',
+        lambda base, sid: captures.append((base, sid)) or snapshot)
+    monkeypatch.setattr(
+        inbox_module, 'inbox_from_snapshot',
+        lambda got: projections.append(got) or view)
+
+    assert cli._cmd_state(SimpleNamespace(
+        base='outputs', sid='123', with_inbox=True)) == X.OK
+    out = capsys.readouterr().out
+    assert captures == [('outputs', '123')]
+    assert projections == [snapshot]
+    assert '── 待人工 ── 共 0 项' in out
+
+
+def test_state_with_inbox_calls_one_code_one_overview_and_seven_checks(
+        monkeypatch, capsys, tmp_path):
+    import importlib
+
+    cli = importlib.import_module('novel.cli.main')
+    inspection = importlib.import_module('novel.orchestrator.inspection')
+    inbox_module = importlib.import_module('novel.views.inbox')
+    code_calls: list[None] = []
+    overview_calls: list[tuple] = []
+    check_calls: list[str] = []
+    novel_dir = tmp_path / 'book'
+    novel_dir.mkdir()
+
+    monkeypatch.setattr(
+        inspection.paths, 'resolve_novel_dir',
+        lambda _base, _sid: novel_dir)
+    monkeypatch.setattr(
+        inspection.prov, 'code_version',
+        lambda: code_calls.append(None) or 'code-v1')
+    monkeypatch.setattr(
+        inspection, 'overview_at',
+        lambda got_dir, code: overview_calls.append((got_dir, code))
+        or SimpleNamespace(title='合成书', sid='123', stages=[]))
+    monkeypatch.setattr(
+        inspection, 'readonly_ctx', lambda *_args: object())
+    monkeypatch.setattr(
+        inspection, 'check_node', lambda stage: f'{stage}.check')
+
+    def check_only(stage):
+        return lambda _ctx: check_calls.append(stage) or SimpleNamespace(
+            node=f'{stage}.check')
+
+    monkeypatch.setattr(inspection, 'check_only', check_only)
+    view = SimpleNamespace(
+        counts={'invalid': 0}, total=0,
+        attention_counts={'pending': 0, 'reviewed_retained': 0},
+        delivery_counts={'blocking': 0, 'disclosure': 0},
+        wontfix=0, items=[],
+    )
+    monkeypatch.setattr(
+        inbox_module, 'inbox_from_snapshot', lambda _snapshot: view)
+
+    assert cli._cmd_state(SimpleNamespace(
+        base=tmp_path, sid='123', with_inbox=True)) == X.OK
+
+    assert len(code_calls) == 1
+    assert overview_calls == [(novel_dir, 'code-v1')]
+    assert check_calls == list(STAGES)
+    assert '── 待人工 ── 共 0 项' in capsys.readouterr().out
 
 
 @pytest.mark.corpus

@@ -104,10 +104,6 @@
   "committed_verify",
   "session_end"
  ],
- "stage5_edit_confirmations": [
-  "formal",
-  "working_draft"
- ],
  "stage5_must_appear_rulings": [
   "confirmed_present",
   "accepted_exception"
@@ -261,6 +257,14 @@
  "approval_workpack_kinds": [
   "design",
   "structure"
+ ],
+ "approval_workpack_dispositions": [
+  "review_required",
+  "already_current"
+ ],
+ "final_approval_workpack_kinds": [
+  "stage6",
+  "stage7"
  ],
  "approval_workpack_actions": [
   "accept",
@@ -768,6 +772,10 @@
   "--repair-decision": "按当前正式 Stage4A 审阅决定定向返修被 request_repair 的章节；目标与反馈由 hash-bound 决定派生，不能在命令行另选章节",
   "--patch": "stage2 逐章蓝图 extraction IR 族的字段级修复——逐条失败各调一次模型，量级是条不是章"
  },
+ "stage5_edit_confirmations": [
+  "formal",
+  "working_draft"
+ ],
  "partial_rewrite_flags": [
   "--recheck",
   "--renormalize",
@@ -779,6 +787,7 @@
   "--apply-edit": "人工改好的候选稿路径（必填；相对路径相对**书目录**；绝对路径由节点校验，Stage5 额外接受服务上传的 _service/edits 路径）",
   "--preview-edit": "只读预检 Stage5 人工整章稿；与 --apply-edit 共用归一、判据与preview subject 算法；相对路径相对书目录，不写产物",
   "--response-repair": "结构化拒绝响应恢复模式；当前只接受 `agent`。可修复响应先隔离并停给外层受托 agent，同闸复验失败才继续采样",
+  "--workpack-sha256": "人工批准时看到的紧凑工作包完整 SHA-256；服务端在任何产物写入前按当前盘面重算并拒绝过期提交",
   "--adopt-rejected": "要重判并采用的拒绝响应 attempt_id（16 位小写十六进制）；人只能编辑隔离区里那份固定的 candidate.json，本命令封存 actor/reason 与新旧闸指纹后再走同一套闸",
   "--repair-decision": "当前 Stage4A 正式审阅决定的完整 SHA-256；代码只返修该决定中 request_repair 的章节并复用其余已接受单元",
   "--apply-binding": "完整人工 Stage4 EvidenceBinding 路径（必填；相对路径相对书目录，也接受书目录内的绝对路径）",
@@ -1185,7 +1194,8 @@
     "--pick",
     "--actor",
     "--reason",
-    "--subject-sha256"
+    "--subject-sha256",
+    "--workpack-sha256"
    ],
    "produces": [
     "stage6/hook.json"
@@ -1222,7 +1232,8 @@
    "flags": [
     "--actor",
     "--reason",
-    "--subject-sha256"
+    "--subject-sha256",
+    "--workpack-sha256"
    ],
    "produces": [
     "stage7/name_map.json"
@@ -1960,7 +1971,7 @@
    "free_flag": "--preview-edit",
    "writes": "",
    "writes_disk": false,
-      "needs_value": "只读预检 Stage5 人工整章稿；与 --apply-edit 共用归一、判据与preview subject 算法；相对路径相对书目录，不写产物",
+   "needs_value": "只读预检 Stage5 人工整章稿；与 --apply-edit 共用归一、判据与preview subject 算法；相对路径相对书目录，不写产物",
    "required_inputs": []
   },
   {
@@ -1973,7 +1984,7 @@
    "free_flag": "--apply-edit",
    "writes": "把人工稿落成新的一版，上一版仍可回看（stage0 在 revision 链上，其余归档进 _rounds/）",
    "writes_disk": true,
-      "needs_value": "人工改好的候选稿路径（必填；相对路径相对**书目录**；绝对路径由节点校验，Stage5 额外接受服务上传的 _service/edits 路径）",
+   "needs_value": "人工改好的候选稿路径（必填；相对路径相对**书目录**；绝对路径由节点校验，Stage5 额外接受服务上传的 _service/edits 路径）",
    "required_inputs": [
     {
      "flag": "--actor",
@@ -2350,6 +2361,10 @@
     {
      "flag": "--subject-sha256",
      "description": "人工决定乐观锁定的完整内容 SHA-256"
+    },
+    {
+     "flag": "--workpack-sha256",
+     "description": "人工批准时看到的紧凑工作包完整 SHA-256；服务端在任何产物写入前按当前盘面重算并拒绝过期提交"
     }
    ]
   },
@@ -2365,6 +2380,40 @@
    "writes_disk": true,
    "needs_value": "定稿选第几个候选（1 起）",
    "required_inputs": [
+    {
+     "flag": "--actor",
+     "description": "人工决定的自报身份（不是认证身份）"
+    },
+    {
+     "flag": "--reason",
+     "description": "人工决定的非空理由"
+    },
+    {
+     "flag": "--subject-sha256",
+     "description": "人工决定乐观锁定的完整内容 SHA-256"
+    },
+    {
+     "flag": "--workpack-sha256",
+     "description": "人工批准时看到的紧凑工作包完整 SHA-256；服务端在任何产物写入前按当前盘面重算并拒绝过期提交"
+    }
+   ]
+  },
+  {
+   "kind": "stage6.approve",
+   "label": "stage6 文案定稿 --workpack-sha256",
+   "extra": [
+    "--workpack-sha256"
+   ],
+   "paid": false,
+   "free_flag": null,
+   "writes": "stage6/hook.json",
+   "writes_disk": true,
+   "needs_value": "人工批准时看到的紧凑工作包完整 SHA-256；服务端在任何产物写入前按当前盘面重算并拒绝过期提交",
+   "required_inputs": [
+    {
+     "flag": "--pick",
+     "description": "定稿选第几个候选（1 起）"
+    },
     {
      "flag": "--actor",
      "description": "人工决定的自报身份（不是认证身份）"
@@ -2538,6 +2587,36 @@
    "writes": "stage7/name_map.json",
    "writes_disk": true,
    "needs_value": null,
+   "required_inputs": [
+    {
+     "flag": "--actor",
+     "description": "人工决定的自报身份（不是认证身份）"
+    },
+    {
+     "flag": "--reason",
+     "description": "人工决定的非空理由"
+    },
+    {
+     "flag": "--subject-sha256",
+     "description": "人工决定乐观锁定的完整内容 SHA-256"
+    },
+    {
+     "flag": "--workpack-sha256",
+     "description": "人工批准时看到的紧凑工作包完整 SHA-256；服务端在任何产物写入前按当前盘面重算并拒绝过期提交"
+    }
+   ]
+  },
+  {
+   "kind": "stage7.approve",
+   "label": "stage7 人名表定稿 --workpack-sha256",
+   "extra": [
+    "--workpack-sha256"
+   ],
+   "paid": false,
+   "free_flag": null,
+   "writes": "stage7/name_map.json",
+   "writes_disk": true,
+   "needs_value": "人工批准时看到的紧凑工作包完整 SHA-256；服务端在任何产物写入前按当前盘面重算并拒绝过期提交",
    "required_inputs": [
     {
      "flag": "--actor",

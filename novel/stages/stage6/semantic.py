@@ -15,6 +15,7 @@ from contracts.artifacts import STAGE6_SEMANTIC
 import glob
 import hashlib
 import json
+import time
 import os
 import re
 from collections.abc import Callable, Mapping
@@ -51,7 +52,7 @@ from novel.llm.transport import ChatResponse
 from novel.report.findings import Outcome, ran, unverifiable
 from novel.quality.evaluator import double_blind_decision, runtime_fingerprint
 from novel.run import RunContext
-from novel.stages.stage6 import hook
+from novel.stages.stage6 import hook, prompts as stage6_prompts
 from novel.store import ArtifactStore
 
 SEMANTIC_TPL = STAGE6_SEMANTIC
@@ -163,6 +164,51 @@ def judge_request(system: str, user: str, role: str) -> tuple[str, str]:
     return system, user + JUDGE_ROLE_SUFFIX[role]
 
 
+def judge_prefix_observation(
+        system: str, user: str, *, driver: str,
+        prompt_json_layout: str = stage6_prompts.PRETTY_JSON_LAYOUT,
+        judge_stagger_ms: int = 0,
+) -> dict[str, Any]:
+    """返回双盲首轮真实 stdin 的无正文公共前缀证据。
+
+    这只证明 A/B **具备**逐字节公共前缀，不声称供应商已经命中缓存；命中与
+    未命中仍只认 ledger/session usage。两个请求继续由独立 session 真并发执行。
+    """
+    from novel.agents import render_structured_agent_stdin_bytes
+
+    payloads = {
+        role: render_structured_agent_stdin_bytes(
+            *judge_request(system, user, role), driver=driver)
+        for role in ('A', 'B')
+    }
+    first, second = payloads['A'], payloads['B']
+    common = next(
+        (index for index, pair in enumerate(zip(first, second))
+         if pair[0] != pair[1]),
+        min(len(first), len(second)),
+    )
+    prefix = first[:common]
+    return {
+        'protocol': 'stage6-semantic-independent-prefix/v1',
+        'driver': driver,
+        'prompt_json_layout': prompt_json_layout,
+        'judge_stagger_ms': judge_stagger_ms,
+        'request_bytes': {role: len(payload) for role, payload in payloads.items()},
+        'request_sha256': {
+            role: hashlib.sha256(payload).hexdigest()
+            for role, payload in payloads.items()
+        },
+        'common_prefix_bytes': common,
+        'common_prefix_sha256': hashlib.sha256(prefix).hexdigest(),
+        'cache_hit_guaranteed': False,
+        # 真实命中/未命中仍只认每条独立 wire 的 ledger usage。
+        'provider_cache_usage_source': '_service/ledger.jsonl',
+        'session_policy': (
+            'independent-concurrent-stagger/v1' if judge_stagger_ms else
+            'independent-parallel'),
+    }
+
+
 #: `_provenance.prompts` 的三个键。**两个判官共用一份 SYS**，身份标签单列。
 #:
 #: ⚠ 原来是 `HOOK_SEMANTIC_SYS_A` / `_B` 两个键，各存一份 `SEMANTIC_SYS + 标签`：
@@ -221,6 +267,8 @@ class SemanticCandidateContext:
     judged: Mapping[str, Any]
     input_sha256: str
     hook_file_sha1: str
+    prompt_json_layout: str = stage6_prompts.PRETTY_JSON_LAYOUT
+    judge_stagger_ms: int = 0
 
     def user_for(self, role: str) -> str:
         try:
@@ -252,13 +300,32 @@ def text_sha256(text: str) -> str:
     return hashlib.sha256(text.encode('utf-8')).hexdigest()
 
 
-def _runtime_contract(model: str):
+def _runtime_contract(
+        model: str, *, prompt_json_layout: str | None = None,
+        judge_stagger_ms: int | None = None,
+):
     """The exact static request/decoder surface used by both paid judges.
 
     ⚠ 这里曾是一个二选一：`--advisory` 走无 dataset 的哨兵指纹，默认路走
     `require_enabled('reference_boundary', …)`——那道闸从未在任何宿主上打开过。
     自动放行门下线后只剩一种，flag 也随之删除（恒真的 flag 是误导）。
     """
+    layout = (stage6_prompts.prompt_json_layout()
+              if prompt_json_layout is None else prompt_json_layout)
+    stagger_ms = (stage6_prompts.semantic_stagger_ms()
+                  if judge_stagger_ms is None else judge_stagger_ms)
+    # 默认 pretty-v1 沿用既有 decoder identity，避免零字节变化的默认路平白 stale；
+    # compact 实验臂改变真实 user bytes，必须把 arm 明写进 evaluator fingerprint。
+    decoder_identity = DECODER_IDENTITY
+    if layout != stage6_prompts.PRETTY_JSON_LAYOUT or stagger_ms:
+        decoder_identity = {
+            **DECODER_IDENTITY,
+            'prompt_json_layout': layout,
+            'judge_stagger_ms': stagger_ms,
+            'session_policy': (
+                'independent-concurrent-stagger/v1'
+                if stagger_ms else 'independent-parallel'),
+        }
     return runtime_fingerprint(
         model=model,
         # ⚠ **静态面必须由 `judge_request` 产出**，不在这里重拼一份：它记的是「真发出去的
@@ -267,7 +334,7 @@ def _runtime_contract(model: str):
         prompts=[part for role in ('A', 'B')
                  for part in judge_request(SEMANTIC_SYS, '', role)],
         schemas=[HookSemanticResponse],
-        decoder_identity=DECODER_IDENTITY,
+        decoder_identity=decoder_identity,
     )
 
 
@@ -453,7 +520,7 @@ def build_prompt(ctx: RunContext) -> tuple[str, str, Hook, hook._Upstreams,
     )
     payload = _prompt_payload(art, up, aliases)
     user = ('匿名评审以下候选。先核对实质矛盾，再按留存能力评分与排序。\n\n'
-            + json.dumps(payload, ensure_ascii=False, indent=2))
+            + stage6_prompts.dump_prompt_json(payload))
     return SEMANTIC_SYS, user, art, up, list(aliases)
 
 
@@ -486,6 +553,8 @@ def _context_from_inputs(ctx: RunContext) -> SemanticCandidateContext:
         input_sha256=_canonical_sha256(
             _semantic_input_payload(art, up, aliases)),
         hook_file_sha1=_hook_file_sha1(ArtifactStore(ctx)),
+        prompt_json_layout=stage6_prompts.prompt_json_layout(),
+        judge_stagger_ms=stage6_prompts.semantic_stagger_ms(),
     )
 
 
@@ -510,6 +579,10 @@ def _assert_prepared_memory(prepared: SemanticCandidateContext) -> None:
     if prepared.judge_users != expected_users:
         raise ProvenanceRefused(
             'stage6.semantic prepared judge request 字节发生漂移')
+    if prepared.prompt_json_layout not in stage6_prompts.PROMPT_JSON_LAYOUTS:
+        raise ProvenanceRefused('stage6.semantic prepared JSON layout 未登记')
+    if not 0 <= prepared.judge_stagger_ms <= stage6_prompts.MAX_SEMANTIC_STAGGER_MS:
+        raise ProvenanceRefused('stage6.semantic prepared stagger 超出登记上限')
 
 
 def _assert_prepared_current(
@@ -527,6 +600,8 @@ def _assert_prepared_current(
     if (current.input_sha256 != prepared.input_sha256
             or current.system != prepared.system
             or current.judge_users != prepared.judge_users
+            or current.prompt_json_layout != prepared.prompt_json_layout
+            or current.judge_stagger_ms != prepared.judge_stagger_ms
             or current.hook_file_sha1 != prepared.hook_file_sha1
             or _judged_text_projection(current.judged)
             != _judged_text_projection(prepared.judged)):
@@ -544,6 +619,10 @@ def prepare_semantic_candidate(ctx: RunContext) -> SemanticCandidateContext:
             f'prepare_semantic_candidate 只接受 stage6.semantic，实得 {ctx.node!r}')
     prepared = _context_from_inputs(ctx)
     _assert_prepared_memory(prepared)
+    if prepared.judge_stagger_ms and not _uses_agent_runs(ctx):
+        raise ProvenanceRefused(
+            'Stage6 semantic stagger 实验只支持独立 executor sessions；'
+            'legacy 顺序客户端不能冒充前缀缓存实验')
     if _uses_agent_runs(ctx):
         from novel.llm import stage6_runs
 
@@ -554,6 +633,8 @@ def prepare_semantic_candidate(ctx: RunContext) -> SemanticCandidateContext:
             users=dict(prepared.judge_users),
             response_model=HookSemanticResponse,
             max_tokens=SEMANTIC_MAX_TOKENS,
+            experiment_arm=stage6_runs.semantic_experiment_arm(
+                judge_stagger_ms=prepared.judge_stagger_ms),
         )
     return prepared
 
@@ -633,6 +714,19 @@ def _request_semantic_role(
     return response
 
 
+def _request_semantic_role_after_stagger(
+        ctx: RunContext, source: _SemanticResponseSource,
+        prepared: SemanticCandidateContext, *, role: str,
+        validator: Callable[[HookSemanticResponse, ChatResponse], str | None],
+        stagger_b: bool = True,
+) -> HookSemanticResponse:
+    """两个 worker 同时提交；只让 B 在自己的 worker 内做有界 opt-in 错峰。"""
+    if stagger_b and role == 'B' and prepared.judge_stagger_ms:
+        time.sleep(prepared.judge_stagger_ms / 1000)
+    return _request_semantic_role(
+        ctx, source, prepared, role=role, validator=validator)
+
+
 def request_semantic_candidates(
         ctx: RunContext,
         source: _SemanticResponseSource,
@@ -687,15 +781,19 @@ def request_semantic_candidates(
             # 双判官是两个独立 provider session。共享 RunContext 的来源账不是线程局部，
             # 所以 exact input 只在启动前统一复核；线程里只碰各自 session/checkpoint。
             _assert_prepared_current(ctx, prepared)
+            # 错峰的实验对象是两条同时新发的独立 session。若 A 已从 checkpoint
+            # 恢复、只剩 B，一条 worker 没有可错开的同批 peer，sleep 只会白增墙钟。
+            stagger_b = set(missing_roles) == set(stage6_runs.JUDGE_ROLES)
             with ThreadPoolExecutor(max_workers=len(missing_roles)) as executor:
                 futures = {
                     role: executor.submit(
-                        _request_semantic_role,
+                        _request_semantic_role_after_stagger,
                         ctx,
                         source,
                         prepared,
                         role=role,
                         validator=validate,
+                        stagger_b=stagger_b,
                     )
                     for role in missing_roles
                 }
@@ -899,7 +997,11 @@ def _materialize_semantic_candidate(
         ranking=ranking,
         judge_rankings=judge_rankings,
         decisions=decisions,
-        evaluator_fingerprint=_runtime_contract(source.model),
+        evaluator_fingerprint=_runtime_contract(
+            source.model,
+            prompt_json_layout=prepared.prompt_json_layout,
+            judge_stagger_ms=prepared.judge_stagger_ms,
+        ),
         judged=dict(prepared.judged),
         _provenance=ctx.llm_provenance(
             prompts=judge_prompts(prepared.system),
@@ -1272,6 +1374,17 @@ def current_assessments(store: ArtifactStore, art: Hook) -> dict[str, CandidateA
     return by_sha
 
 
+def current_judge_rankings(
+    store: ArtifactStore, art: Hook,
+) -> dict[str, list[str]] | None:
+    """当前可用语义审判的 A/B 原始排序；不可用时明确为 ``None``。"""
+    artifact, _why, _seq = _current_artifact(store, art)
+    if artifact is None:
+        return None
+    return {judge: list(ranking)
+            for judge, ranking in artifact.judge_rankings.items()}
+
+
 def assessment_for_text(store: ArtifactStore, art: Hook, text: str) -> CandidateAssessment:
     return current_assessments(store, art).get(
         text_sha1(text),
@@ -1312,7 +1425,7 @@ def require_human_resolution(
 
 
 def require_approved_clear(store: ArtifactStore, art: Hook) -> CandidateAssessment:
-    """下游消费闸：**存在定稿，且它的人工消解仍绑着当前字节。**
+    """下游消费闸：定稿同时绑定当前字节与当前代码/规则/证据工作包。
 
     ⚠ 这里曾有三条分支：校准 FAIL 拒绝、`clear` 自动放行、以及「原来的校准 PASS 漂了」
     的兜底 raise。三条都由 automated 结论驱动，随自动放行门一起消失。
@@ -1325,6 +1438,13 @@ def require_approved_clear(store: ArtifactStore, art: Hook) -> CandidateAssessme
     actual = text_sha256(art.approved.text)
     if resolution.subject_sha256 != actual:
         raise TerminalState('定稿 resolution 绑定的不是当前文本字节')
+    pack, _report = hook._approval_workpack_snapshot(store, art)
+    if (resolution.workpack_sha256 is None
+            or resolution.workpack_sha256 != pack.workpack_sha256
+            or pack.disposition != 'already_current'):
+        raise TerminalState(
+            '开篇文案旧批准没有绑定当前代码/规则/机械与 A/B 证据工作包——'
+            '请刷新 Stage6 approval workpack 后重跑 stage6.approve（0 成本）')
     return assessment_for_text(store, art, art.approved.text)
 
 

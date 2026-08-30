@@ -16,6 +16,7 @@ import hashlib
 import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from functools import wraps
 
 from contracts.artifacts import (
     STAGE1_MAIN_TEXT, STAGE2_GLOBAL_GROUNDING, STAGE4_PLAN_CHAPTERS,
@@ -27,6 +28,7 @@ from typing import Any, Protocol
 from pydantic import ValidationError
 
 from contracts.schema.common import Finding
+from contracts.schema.api import NameDecisionLine, Stage7ApprovalWorkpack
 from contracts.schema.report import CheckReport
 from contracts.schema.stage2 import GlobalGrounding
 from contracts.schema.stage4 import PlanChapters, WriterContext
@@ -45,6 +47,7 @@ from novel.llm.client import LlmClient, LlmFailed
 from novel.llm.stage7_runs import RECOVERY_POLICY as AGENT_RECOVERY_POLICY
 from novel.report import build
 from novel.report.findings import Outcome
+from novel.report.workpack import compact_approval_check
 from novel.run import RunContext
 from novel.stages.stage7 import checks, prompts
 from novel.stages.stage7.measure import (
@@ -66,6 +69,17 @@ HOOK = STAGE6_HOOK
 
 #: 被闸门拦下的那一份。**从 `REL` 派生，不手写第二个字符串。**
 _INVALID = paths.invalid_of(REL)
+
+
+def _commit_owned(function):
+    """把所有会改正式人物表/交付账的入口接到现有跨进程提交锁。"""
+    @wraps(function)
+    def owned(ctx: RunContext, *args, **kwargs):
+        from novel.llm import stage7_runs
+
+        with stage7_runs.commit_ownership(ctx.novel_dir):
+            return function(ctx, *args, **kwargs)
+    return owned
 
 
 def book_txt_rel(store: ArtifactStore) -> str:
@@ -167,7 +181,7 @@ def approval_subject_sha256(art: NameMap) -> str:
     return _canonical_sha256(approval_decision_surface(art))
 
 
-def approval_proof_sha256(art: NameMap) -> str | None:
+def approval_proof_sha256(store: ArtifactStore, art: NameMap) -> str | None:
     """Bind a current typed approval to its decision surface for service gates.
 
     ``book_txt`` and every deterministic diagnostic/application field are
@@ -180,10 +194,27 @@ def approval_proof_sha256(art: NameMap) -> str | None:
     subject = _canonical_sha256(surface)
     if approval is None or approval.subject_sha256 != subject:
         return None
+    pack, _report = _approval_workpack_snapshot(store, art)
+    if (approval.workpack_sha256 is None
+            or approval.workpack_sha256 != pack.workpack_sha256
+            or pack.disposition != 'already_current'):
+        return None
     return _canonical_sha256({
         'decision_surface': surface,
         'approved': approval.model_dump(mode='json', by_alias=True),
     })
+
+
+def approval_is_current(store: ArtifactStore, art: NameMap) -> bool:
+    """旧/null/stale workpack 声明可读但不能把 check/state 呈成已定稿。
+
+    工作包构造会先把 ``approved`` 清空再调用 ``_judge``；这里先判空，正好截断
+    ``proof -> workpack -> judge -> proof`` 的递归，同时让检查口与 assemble/服务闸
+    共用同一份 current proof。
+    """
+    if art.approved is None:
+        return False
+    return approval_proof_sha256(store, art) is not None
 
 
 def _input_freshness_before_rewrite(
@@ -455,7 +486,7 @@ def _judge(ctx: RunContext, store: ArtifactStore, art: NameMap,
         baseline_line=_baseline_line(art),
         chapter_scanned=f'{up.planned_chapters} 章计划 × {len(up.recs)} 份成稿',
         txt_state=_txt_state(store, art),
-        approved=art.approved is not None,
+        approved=approval_is_current(store, art),
         stale=stale, missing=missing,
         hook_stale=_hook_drift(art, up),
         identity=(art.identity.model_dump() if art.identity is not None else None),
@@ -613,6 +644,7 @@ def _identity_baseline(up: _Upstreams) -> IdentityBaseline:
         mismatches=mismatches, blind=list(IDENTITY_BLIND))
 
 
+@_commit_owned
 def run_identity(ctx: RunContext) -> tuple[IdentityBaseline, CheckReport]:
     """`--identity`：**恒等基线**——占位符双射往返，验替换器与组装器逐字节守恒。
 
@@ -651,6 +683,7 @@ def run_identity(ctx: RunContext) -> tuple[IdentityBaseline, CheckReport]:
         ctx, store, checks.identity_outcomes(baseline.model_dump()), None)
 
 
+@_commit_owned
 def run_recheck(ctx: RunContext) -> tuple[NameMap, CheckReport]:
     """`--recheck`：**0 成本但写盘**——按当前判据重判盘上这份，写回。
 
@@ -726,6 +759,7 @@ def run_validate_edit(ctx: RunContext, edit_path: str = '') -> tuple[NameMap, Ch
     return new_art, _report(ctx, store, outcomes, new_art)
 
 
+@_commit_owned
 def run_apply_edit(ctx: RunContext, edit_path: str = '') -> tuple[NameMap, CheckReport]:
     """`--apply-edit`：吃人手写的决策集，**0 成本重放整条确定性链**。
 
@@ -765,6 +799,7 @@ def run_apply_edit(ctx: RunContext, edit_path: str = '') -> tuple[NameMap, Check
     return new_art, _report(ctx, store, _judge(ctx, store, new_art, up), new_art)
 
 
+@_commit_owned
 def run_adopt_residual(
     ctx: RunContext, confidence: str,
 ) -> tuple[NameMap, CheckReport]:
@@ -831,6 +866,7 @@ def run_adopt_residual(
     return rebuilt, _report(ctx, store, outcomes, rebuilt)
 
 
+@_commit_owned
 def run_revalidate(
     ctx: RunContext, *, actor: str, reason: str,
 ) -> tuple[bool, CheckReport]:
@@ -1793,8 +1829,10 @@ def run_rename(ctx: RunContext, client: LlmClient) -> NameMap:
     return finalize_rename_candidate(ctx, client, prepared, evaluation)
 
 
+@_commit_owned
 def run_approve(
     ctx: RunContext, *, actor: str, reason: str, subject_sha256: str,
+    workpack_sha256: str,
 ) -> tuple[NameMap, CheckReport]:
     """`stage7.approve`：**人定稿**。0 成本。
 
@@ -1817,6 +1855,12 @@ def run_approve(
     reason = reason.strip()
     if not actor or not reason:
         raise TerminalState('stage7.approve 必须显式给非空 actor 与 reason')
+    pack, report = _approval_workpack_snapshot(store, art)
+    if workpack_sha256 != pack.workpack_sha256:
+        raise TerminalState(
+            '人物表审批工作包已变化：'
+            f'提交 {workpack_sha256 or "<空>"}，当前 {pack.workpack_sha256}；'
+            '请刷新 workpack 后重审')
     actual_subject = approval_subject_sha256(art)
     if subject_sha256 != actual_subject:
         raise TerminalState(
@@ -1830,17 +1874,131 @@ def run_approve(
             hint='stage7.rename --apply-edit <name_map_edit.json 路径> 改一行，'
                  '或 stage7.rename --recheck 按当前判据重判（都 0 成本）')
 
+    # 命令级重放只在声明逐字段相同时幂等；不同 actor/reason 仍是新的人工声明，
+    # 不在服务端被“去重”。正常调用方可直接按 disposition 跳过整个动作。
+    if (pack.disposition == 'already_current'
+            and pack.current_approval is not None
+            and pack.current_approval.actor == actor
+            and pack.current_approval.reason == reason
+            and pack.current_approval.subject_sha256 == actual_subject):
+        return art, report
+
+    # 必须在同一跨进程锁内重读正式产物；对初读对象重算只会重算同一份旧内存。
+    rebound_art, _raw = store.read_own(NameMap, REL)
+    rebound, _rebound_report = _approval_workpack_snapshot(store, rebound_art)
+    if rebound.workpack_sha256 != workpack_sha256:
+        raise TerminalState(
+            '人物表证据在批准提交期间变化；未写入定稿，请刷新 workpack 后重审')
+    if rebound.decision_subject_sha256 != subject_sha256:
+        raise TerminalState(
+            '人物决定在批准提交期间变化；未写入定稿，请刷新 workpack 后重审')
+
     # Existing repositories may contain a pre-fix book assembled before this
     # approval.  Approval never blesses that old byte product retroactively.
-    new = art.model_copy(update={
+    new = rebound_art.model_copy(update={
         'approved': ApprovedNameMap(
             origin='human', actor=actor, reason=reason,
-            subject_sha256=actual_subject),
+            subject_sha256=actual_subject,
+            workpack_sha256=workpack_sha256),
         'book_txt': None})
     with store.history_transaction(REL, book_txt_rel(store)):
         _retire_book_txt(store)
         store.write(REL, new)
     return new, _report(ctx, store, _judge(ctx, store, new, up), new)
+
+
+def _approval_artifact_sha256(art: NameMap) -> str:
+    """人物决策完整主体；审批和派生 txt 都是授权后果，不进入终审 hash。"""
+    body = art.model_dump(by_alias=True, mode='json')
+    body.pop('approved')
+    body.pop('book_txt')
+    return _canonical_sha256(body)
+
+
+def approval_decision_line(decision, art: NameMap) -> NameDecisionLine:
+    """人物表视图与终审工作包共用的按人命中计数投影。"""
+    faces = {decision.old_canonical} | {alias.old for alias in decision.aliases}
+    hits = sum(
+        face.counts.get(old, 0)
+        for face in [*art.applied.chapters.values(), art.applied.hook]
+        for old in faces
+    )
+    return NameDecisionLine(
+        char_id=decision.char_id,
+        old_canonical=decision.old_canonical,
+        new_canonical=decision.new_canonical,
+        renamed=decision.renamed,
+        not_renamed_reason=decision.not_renamed_reason,
+        reason=decision.reason,
+        aliases=decision.aliases,
+        hits=hits,
+    )
+
+
+def _approval_workpack_snapshot(
+    store: ArtifactStore, art: NameMap,
+) -> tuple[Stage7ApprovalWorkpack, CheckReport]:
+    """从一份已读人物表构造稳定快照；hash 排除当前 approval/disposition。"""
+    subject = art.model_copy(update={'approved': None, 'book_txt': None})
+    up = _Upstreams(store.ctx, store)
+    report = _report(
+        store.ctx, store, _judge(store.ctx, store, subject, up), subject)
+    replacement_hits: dict[str, int] = {}
+    for face in [*subject.applied.chapters.values(), subject.applied.hook]:
+        for old, count in face.counts.items():
+            replacement_hits[old] = replacement_hits.get(old, 0) + count
+    base = Stage7ApprovalWorkpack(
+        kind='stage7',
+        sid=store.ctx.sid,
+        code_version=store.ctx.code,
+        rules_fingerprint=prov.rules_fingerprint('stage7'),
+        artifact_subject_sha256=_approval_artifact_sha256(subject),
+        decision_subject_sha256=approval_subject_sha256(subject),
+        check=compact_approval_check(report),
+        surname_map=dict(subject.surname_map),
+        characters=[approval_decision_line(row, subject)
+                    for row in subject.characters],
+        extra_subs=list(subject.extra_subs),
+        subs_count=len(subject.subs),
+        kept_count=len(subject.kept),
+        kept=list(subject.kept),
+        replacement_hits=dict(sorted(replacement_hits.items())),
+        residual=list(subject.residual),
+        baselines=dict(subject.baselines),
+        book=list(subject.book),
+        identity=subject.identity,
+        workpack_sha256='0' * 64,
+        disposition='review_required',
+    )
+    body = base.model_dump(by_alias=True, mode='json')
+    for key in ('workpack_sha256', 'disposition', 'current_approval'):
+        body.pop(key)
+    digest = _canonical_sha256(body)
+    current = art.approved
+    current_bound = (
+        current is not None
+        and current.workpack_sha256 == digest
+        and current.subject_sha256 == base.decision_subject_sha256
+    )
+    return base.model_copy(update={
+        'workpack_sha256': digest,
+        'disposition': 'already_current' if current_bound else 'review_required',
+        'current_approval': current if current_bound else None,
+    }), report
+
+
+def approval_workpack(store: ArtifactStore) -> Stage7ApprovalWorkpack:
+    """只读生成 Stage7 紧凑终审包，并用首尾重算拒绝混合快照。"""
+    if not store.exists(REL):
+        raise UpstreamMissing(f'{REL} 不在盘上——先跑 stage7.rename')
+    art, _raw = store.read_own(NameMap, REL)
+    first, _report_first = _approval_workpack_snapshot(store, art)
+    rebound, _ = store.read_own(NameMap, REL)
+    second, _report_second = _approval_workpack_snapshot(store, rebound)
+    if second != first:
+        raise TerminalState(
+            'Stage7 人物表或机械证据在工作包构造期间变化；请刷新后重试')
+    return first
 
 
 # ── 小工具 ──────────────────────────────────────────────────────────────────

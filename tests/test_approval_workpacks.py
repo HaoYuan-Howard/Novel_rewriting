@@ -274,7 +274,8 @@ def test_design_builder_marks_only_exact_history_and_sorts_changed_first(
         approvals, '_current_design_subjects', lambda _novel_dir: subjects)
     monkeypatch.setattr(
         approvals, '_design_review_view',
-        lambda _novel_dir, _record: DesignReviewView(state='unavailable'))
+        lambda _novel_dir, _record, **_kwargs: DesignReviewView(
+            state='unavailable'))
 
     exact = SimpleNamespace(decision_sha256='d' * 64)
     monkeypatch.setattr(

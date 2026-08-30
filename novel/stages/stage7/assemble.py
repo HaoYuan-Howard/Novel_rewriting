@@ -21,7 +21,8 @@ from novel.errors import (
 from novel.run import RunContext
 from novel.stages.stage7.rename import (
     REL, _INVALID, _Upstreams, _hook_drift, _judge, _judged_drift,
-    _report, approval_subject_sha256, book_txt_rel, stored_blocking_rules,
+    _commit_owned, _report, approval_proof_sha256, approval_subject_sha256,
+    book_txt_rel, stored_blocking_rules,
 )
 from novel.stages.stage7.subs import apply_subs, sub_table
 from novel.store import ArtifactStore
@@ -139,6 +140,13 @@ def _require_mapping_current(
             missing=up.missing, hook_unapproved=not up.hook_text,
             hint='；'.join(todo))
 
+    # 工作包绑定是最后一道人工授权闸，而不是诊断遮罩：HARD、上游漂移、缺章等
+    # 已有 typed 恢复路必须先把真实问题报全；所有分支通过后仍须在写盘前证明当前批准。
+    if approval_proof_sha256(store, art) is None:
+        raise ApprovalRequired(
+            '人物映射旧批准没有绑定当前代码/规则/人物证据工作包',
+            hint='刷新 Stage7 approval workpack 后重跑 stage7.approve（0 成本）')
+
 
 def read_current_book(ctx: RunContext) -> str:
     """Return the delivery only when every approval/freshness binding is current."""
@@ -198,6 +206,17 @@ def run_assemble(ctx: RunContext) -> tuple[str, NameMap, CheckReport]:
     ⚠ 「文案未定稿」也属于交付残缺，而**正因为这道闸挡在前面**，
     「成书里没有开篇文案」这一态**结构上不可达** ⇒ `book_txt.has_hook` 已按待决④ 裁掉。
     """
+    from novel.stages.stage2 import global_review
+    # Stage2 是全链总闸，必须在任何 Stage7 锁/读之前先失败；否则一个没有
+    # novel_dir 的关闭式终态也会被锁包装器误报成进程错误。
+    global_review.require_approved(ctx)
+    return _run_assemble_owned(ctx)
+
+
+@_commit_owned
+def _run_assemble_owned(ctx: RunContext) -> tuple[str, NameMap, CheckReport]:
+    """在 Stage2 已先行放行后，持 Stage7 提交锁完成实际组装。"""
+    # 锁等待期间 Stage2 可能变化；进入提交临界区后再用同一权威闸复核一次。
     from novel.stages.stage2 import global_review
     global_review.require_approved(ctx)
     store = ArtifactStore(ctx)

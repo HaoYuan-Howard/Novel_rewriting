@@ -125,9 +125,9 @@ HARD，并把结构化代码反馈交回同一 provider session；因此 agent �
 | 11 | `stage5.review` | 无 | 最新机械验收完成；HARD 按 remediation 收敛，info/metric/unver 保持原态；所有 edit/trim/wontfix 收口后另提交 current Stage5 typed closure，才可进入 Stage6 |
 | 12 | `stage6.hook` | 无；完整三候选 replacement 在同 session 内修复 | 至少一条候选通过落盘闸；追跑 check 可读正式候选 |
 | 13 | `stage6.semantic` | 无；A/B 独立 session 并发 | 每个去重文本都有两名盲评判官的带证据结论与匿名质量排序；结论按完整 SHA-256 与当前候选对齐 |
-| 14 | `stage6.approve` | `--pick <N> --actor <ACTOR> --reason <text> --subject-sha256 <64hex>` | 所选候选满足代批判据，hash 与当前文本一致，`hook.json.approved` 与最新语义结论一致 |
+| 14 | `stage6.approve` | `--pick <N> --actor <ACTOR> --reason <text> --subject-sha256 <64hex> --workpack-sha256 <64hex>` | 先完整读取 current Stage6 workpack；所选候选满足代批判据，两个 hash 来自同一份包，`hook.json.approved` 与最新语义结论一致；`already_current` 时不重复提交 |
 | 15 | `stage7.rename` | 无；完整映射 replacement 在同 session 内修复 | 人名表正式落盘；追跑 check 的 HARD 清零，info/unver 已人工审阅 |
-| 16 | `stage7.approve` | `--actor <ACTOR> --reason <text> --subject-sha256 <64hex>` | 映射、漏网称呼与语义标记通过代批判据，hash 与当前决策面一致，批准状态落盘 |
+| 16 | `stage7.approve` | `--actor <ACTOR> --reason <text> --subject-sha256 <64hex> --workpack-sha256 <64hex>` | 先完整读取 current Stage7 workpack；映射、别名、替换命中、漏网上下文与语义标记通过代批判据，两个 hash 来自同一份包，批准状态落盘；`already_current` 时不重复提交 |
 | 17 | `stage7.assemble` | 无 | `stage7/<书名>_rewriting.txt` 生成并通过独立成书对账 |
 <!-- pipeline-steps:end -->
 
@@ -188,6 +188,12 @@ preview Stage4A；disclosure 未决项继续披露但不阻断。review 若发�
 ⚠ 跳过这一层与跑了它是两回事：跳过 ⇒ 没有任何判官看过这三条文案，
 `stage6.approve` 只能在零证据下拍板。本节点不接 `--check-only`，也不再有 flag。
 它是全链最小的付费面：两名盲判官各一次调用，不随章数增长。
+
+定稿前运行只读 `approval workpack stage6 <SID> --base <BASE>`。包内按候选展开机械结论、
+两名判官各自的 verdict/reason/evidence 与 A/B 原始 ranking；不得回到分散原始文件中只挑一部分
+证据。提交批准时必须同时复制同一份包里的候选 `subject_sha256` 与顶层 `workpack_sha256`。
+包已给出 `disposition=already_current` 时，当前 typed 批准仍精确绑定这份代码、规则与产物，跳过
+重复批准；任何主体漂移都会令 disposition 回到 `review_required`。
 
 ### Stage5 是 canonical 闭卷单臂
 
