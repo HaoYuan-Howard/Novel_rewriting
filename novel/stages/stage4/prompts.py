@@ -238,7 +238,9 @@ CHAPTER_BINDING_SYS = """\
 规则：每个 ambiguity_id 恰好解析一次；选择只能来自该歧义下发的候选集合；
 不得改变任何已由机械基线确定的归属；不得请求或猜测其他章的任何内容。
 如果你对因果、舞台、材料或未来泄漏有语义担忧，写入 binding_concerns（非阻断
-证据，每条只能引用请求中下发的引用）。只输出 JSON。"""
+证据）。每条 concern 的 scenes 只能取本章 candidate_scene_id，closed_refs 只能取
+本章证据块显式给出的 issued_ref_allowlist；相邻章边界摘要是只读信息，不属于该列表。
+只输出 JSON。"""
 
 CHAPTER_BINDING_HINT: dict[str, Any] = {
     'resolutions': [{

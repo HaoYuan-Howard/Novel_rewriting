@@ -17,8 +17,10 @@ from types import SimpleNamespace
 import pytest
 
 from contracts.invariants import STAGE5_COMMIT_PHASES
+from contracts.schema import InputEdge
 from novel import agent_session_audit as audit
 from novel.errors import ProvenanceRefused
+from novel.run import RunContext
 from novel.stages.stage5 import write
 
 
@@ -245,29 +247,32 @@ def test_commit_phase_refuses_unregistered_phase_names():
 
 
 def test_commit_edges_snapshot_refuses_added_removed_and_changed_edges():
-    # 断言只依赖「同键同值」的相等语义，不需要真的构造 InputEdge；
-    # 守卫必须对任何可比较的边值都出声，而不是只认某一种载体。
-    ctx = SimpleNamespace(inputs={})
-    snapshot = dict(ctx.inputs)  # 生产侧 ctx.inputs 本就返回拷贝，这里同形
+    # 走 RunContext 现役的唯一输入边出口，不在守卫里重造第二个
+    # ``inputs`` 替身接口。否则生产 API 漂移时，此测试仍会全绿。
+    ctx = RunContext.__new__(RunContext)
+    ctx._edges = {}
+    snapshot = ctx.edges
     write._assert_commit_edges_stable(ctx, snapshot, 1, 'committed 终验')
 
-    ctx.inputs['stage4/writer_context.json'] = 'fp-1'
+    first = InputEdge(file='1' * 10, consumed=None)
+    changed = InputEdge(file='2' * 10, consumed=None)
+    ctx.record_edge('stage4/writer_context.json', first)
     with pytest.raises(ProvenanceRefused, match='新增'):
         write._assert_commit_edges_stable(ctx, snapshot, 1, 'committed 终验')
 
-    snapshot['stage5/review_1.json'] = 'fp-2'
+    snapshot = ctx.edges
+    ctx._edges.clear()
     with pytest.raises(ProvenanceRefused, match='消失'):
         write._assert_commit_edges_stable(ctx, snapshot, 1, 'committed 终验')
 
-    snapshot['stage4/writer_context.json'] = 'fp-1'
-    ctx.inputs['stage4/writer_context.json'] = 'fp-3'
+    ctx.record_edge('stage4/writer_context.json', first)
+    snapshot = ctx.edges
+    ctx.record_edge('stage4/writer_context.json', changed)
     with pytest.raises(ProvenanceRefused, match='变更'):
         write._assert_commit_edges_stable(ctx, snapshot, 1, 'committed 终验')
 
 
 def test_run_context_once_is_first_call_only():
-    from novel.run import RunContext
-
     ctx = RunContext.__new__(RunContext)
     ctx._once_keys = set()  # dataclass init=False 字段不经过类属性
     assert ctx.once('stage5.normalize.1') is True

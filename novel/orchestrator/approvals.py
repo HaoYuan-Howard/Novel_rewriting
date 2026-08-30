@@ -1691,6 +1691,14 @@ def _public_closure_decision(
         decision.model_dump(exclude={'proof'}, mode='json'))
 
 
+def _closure_proof_payload(workpack_sha256: str) -> dict[str, str]:
+    """Stage5 typed closure 与 ``gate.s5`` 共用的 proof 决策主体。"""
+    return {
+        'kind': 'closure',
+        'closure_sha256': workpack_sha256,
+    }
+
+
 def _closure_view(novel_dir: Path, record: _ApprovalRecordV7) -> Stage5ClosureView:
     """把当前盘面 + 盘上回执历史折成公开闭合视图；workpack 恒按当前盘面重算。
 
@@ -1772,7 +1780,7 @@ def approve_stage5_closure(
                 'Stage5 盘面在回执提交期间发生变化；请刷新模板后重新裁决')
         proof = _make_proof(
             novel_dir, _stage5_subject_rels(base, sid, record),
-            {'kind': 'closure', 'closure_sha256': request.workpack_sha256})
+            _closure_proof_payload(request.workpack_sha256))
         payload = request.model_dump(mode='json')
         digest = _decision_sha256(payload)
         latest = record.closure_decision
@@ -1977,6 +1985,10 @@ def _proof_for_gate(
             }),
         )
     if gate == 's5':
+        # closure.py 在 require_stage5_closed() 的末端延迟 import approvals；
+        # 这里也必须留在函数内，不能把循环依赖搬到模块 import 时。
+        from novel.stages.stage5.closure import closure_workpack
+
         decision = record.closure_decision
         if decision is None:
             raise ApprovalRequired(
@@ -1987,8 +1999,7 @@ def _proof_for_gate(
                 's5 closure 回执绑定的是过期工作包；请重新生成模板并重新裁决')
         rels = _stage5_subject_rels(novel_dir.parent, record.sid, record)
         return _make_proof(
-            novel_dir, rels,
-            {'kind': 'gate', 'gate': gate, 'closure': decision.decision_sha256})
+            novel_dir, rels, _closure_proof_payload(decision.workpack_sha256))
     rels = list(_GATE_ARTIFACTS[gate])
     return _make_proof(
         novel_dir, rels, {'kind': 'gate', 'gate': gate})

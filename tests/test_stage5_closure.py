@@ -560,6 +560,39 @@ def test_approve_closure_opens_gate_s5_and_unblocks_downstream(rig):
         closure.require_stage5_closed(store)
 
 
+def test_closed_s5_gate_proof_survives_the_next_public_read(
+        rig, monkeypatch):
+    """inbox/get 必须能重算刚提交的 closure proof，不能崩溃或撤销 s5。"""
+    ctx, store = rig
+    base, sid = ctx.novel_dir.parent, ctx.sid
+    _open_s4(base, sid)
+    approvals.approve_stage5_closure(base, sid, _ruling_request(store))
+
+    record = approvals._read_raw(base, sid)
+    current = approvals._proof_for_gate(ctx.novel_dir, 's5', record)
+    assert current == record.gate_proofs['s5']
+
+    # 旧夹具的 writing=False 会让 effective projection 在 s5 前短路，正好
+    # 遮住真实事故；这里显式建立生产中 inbox 遇到的「当前写作授权 + 已闭合」前提。
+    writing_proof = approvals._ApprovalProof(
+        root_clean_sha1='0' * 40,
+        artifacts={'stage4/writer_context.json': 'c' * 64},
+        decision_sha256='d' * 64,
+    )
+    monkeypatch.setattr(
+        approvals, '_proof_for_writing', lambda _novel_dir: writing_proof)
+    persisted = record.model_copy(update={
+        'writing': True,
+        'writing_proof': writing_proof,
+    })
+    approvals._path(base, sid).write_text(
+        persisted.model_dump_json(), encoding='utf-8')
+
+    public = approvals.get(base, sid)
+    assert public.gate['s5'] is True
+    assert public.closure.state == 'closed'
+
+
 def test_closure_submit_holds_the_book_lock_through_the_approval_tail(
         rig, monkeypatch):
     """二次 workpack 到 gate.s5 原子写回之间，任何 Stage5 writer 都不能穿过。"""

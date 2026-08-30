@@ -1726,7 +1726,7 @@ def _assert_commit_edges_stable(
     「前章自有审计污染后章 provenance」那类静默事故的形状。发现即关闭式失败，
     而不是把污染的账落盘。
     """
-    current = ctx.inputs
+    current = ctx.edges
     if current != dict(snapshot):
         added = sorted(set(current) - set(snapshot))
         removed = sorted(set(snapshot) - set(current))
@@ -1794,7 +1794,7 @@ def _finalize_formal_agent_candidate(
                 raise ProvenanceRefused(
                     f'Stage5 第 {prepared.ordinal} 章 prepared journal 已绑定另一份候选')
         # 候选与 provenance 此刻已完全铸定；从这里到提交结束，来源边不得再变。
-        edges_snapshot = ctx.inputs
+        edges_snapshot = ctx.edges
 
         if record.get('state') == 'committed':
             with _commit_phase(diagnostics, 'adoption'):

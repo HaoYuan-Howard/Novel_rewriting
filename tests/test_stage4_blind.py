@@ -923,6 +923,14 @@ def test_constructive_binding_witness_refutes_false_infeasible_and_concerns_do_n
     with pytest.raises(BlindPlanError, match='未下发引用'):
         merge_evidence_bindings(compiled, unknown, catalog)
 
+    # 整书 legacy 闭集仍只接受 opaque alias；章级路径必须在聚合前规范化，
+    # 不能把正式 fact id 偷加进这把全书尺。
+    formal_ref = copy.deepcopy(concerned)
+    formal_ref['binding_concerns'][0]['closed_refs'] = [
+        next(iter(_mapping['fact_aliases'].values()))]
+    with pytest.raises(BlindPlanError, match='未下发引用'):
+        merge_evidence_bindings(compiled, formal_ref, catalog)
+
 
 def test_deterministic_infeasibility_witness_only_covers_closed_code_constraints():
     compiled, _mapping, catalog = _compiled()
