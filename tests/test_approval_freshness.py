@@ -161,6 +161,46 @@ def test_current_writing_proof_binds_stage1_plan_and_context_without_s3(
     assert 'mode' not in todo[0].model_dump()
 
 
+def test_explicit_v6_backfill_preserves_typed_histories_but_clears_stage5_authority(
+    current_book,
+):
+    """v6→v7 只迁可逐项对证的历史，不伪造写后 closure 权限。"""
+    base, _book = current_book
+    _approve_writing(base)
+    request = approvals.writing_template(
+        base,
+        SID,
+        actor='legacy-writer-reviewer',
+        reason='旧 v6 已核对写作主体',
+    )
+    approvals.approve_writing(base, SID, request)
+
+    before = approvals._read_raw(base, SID)
+    assert before.structure_decision is not None
+    assert before.writing_decision is not None
+    payload = before.model_dump(
+        mode='json', exclude={'closure_history', 'closure_decision'})
+    payload['v'] = 6
+    legacy = approvals._ApprovalRecordV6Legacy.model_validate(payload)
+    path = approvals._path(base, SID)
+    path.write_text(legacy.model_dump_json(indent=2), encoding='utf-8')
+
+    result = approvals.backfill_from_disk(base, SID)
+    landed = approvals._read_raw(base, SID)
+
+    assert result.backfilled == ['s4']
+    assert landed.v == 7 and landed.gate['s4']
+    assert not landed.writing and landed.writing_proof is None
+    assert not any(landed.gate[key] for key in ('s5', 's6', 's7'))
+    assert all(landed.gate_proofs[key] is None for key in ('s5', 's6', 's7'))
+    assert landed.structure_history == before.structure_history
+    assert landed.structure_decision == before.structure_decision
+    assert landed.writing_history == before.writing_history
+    assert landed.writing_decision == before.writing_decision
+    assert landed.design_history == before.design_history == []
+    assert landed.closure_history == [] and landed.closure_decision is None
+
+
 def test_explicit_v5_backfill_recasts_current_s4_decision_and_lands_v6(
         current_book, monkeypatch):
     """旧 Plan-only 决定只能显式重铸；落盘 proof/decision 必须同为新主体。"""

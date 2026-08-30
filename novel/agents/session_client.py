@@ -276,6 +276,27 @@ def _attempt_id() -> str:
     return uuid.uuid4().hex[:16]
 
 
+def _typed_audit_rows(row: Mapping[str, object]) -> list[dict[str, object]]:
+    """业务拒稿行里的 typed witness → 无正文审计读数（TODO-45 批次 1）。
+
+    只取 code / chapter_ordinal / fingerprint；refs 与判词文本留在交回
+    provider 的反馈里，不复制进 `_service/llm_audit.jsonl`。
+    """
+    out: list[dict[str, object]] = []
+    for failure in (row.get('typed_failures') or []):
+        if not isinstance(failure, Mapping):
+            continue
+        out.append({
+            'loc': str(failure.get('code') or ''),
+            'type': 'typed_failure',
+            'count': 1,
+            'code': str(failure.get('code') or ''),
+            'chapter_ordinal': failure.get('chapter_ordinal'),
+            'fingerprint': str(failure.get('failure_fingerprint') or ''),
+        })
+    return out
+
+
 def _decode_json(text: str) -> object:
     """解析 provider stdout 候选；它不是盘上 artifact，不经过 ``store``。"""
     return json.JSONDecoder().decode(text)
@@ -348,6 +369,10 @@ class SessionAgentClient:
         self._turn_index = 0
         self._accepted: dict[str, str] = {}
         self._accepted_checkpoint: dict[str, dict[str, Any]] = {}
+        # 只保存“schema 已过、dynamic validator 在最后一轮拒绝”的 stdout
+        # custody 材料。它仍是 rejected gate，不会被普通调用方当成成功响应；
+        # Stage4B 用它把最后一份已付费候选送入 hash-bound response-repair。
+        self._last_json_rejection: dict[str, dict[str, Any]] = {}
         # checkpoint 的 attempt_links 只描述这一只 logical session 实际发生的
         # attempts；CostLedger 同一 run/purpose 还可能含前一只失败 session，不能
         # 靠 purpose 反查把它们静默吸进来。只有显式恢复过的 accepted checkpoint
@@ -514,6 +539,7 @@ class SessionAgentClient:
                 'count': (count if isinstance(count, int)
                           and not isinstance(count, bool) and count >= 0 else 1),
             })
+            safe_detail.extend(_typed_audit_rows(row))
         self.ctx.ledger.note_gate(
             sid=self.ctx.sid, node=self.ctx.node, purpose=purpose,
             attempt_id=attempt_id, source='wire', decision='rejected',
@@ -583,6 +609,7 @@ class SessionAgentClient:
                 'count': (count if isinstance(count, int)
                           and not isinstance(count, bool) and count >= 0 else 1),
             })
+            safe_detail.extend(_typed_audit_rows(row))
         # gate_decision 带稳定 id；若正常路径已在 checkpoint 后写成，这里是零新增，
         # 若崩溃恰好发生在两者之间，这里补齐唯一一行。
         self.ctx.ledger.note_gate(
@@ -1021,7 +1048,7 @@ class SessionAgentClient:
         self._accepted_checkpoint[purpose] = payload
 
     def accepted_checkpoint(self, purpose: str) -> dict[str, Any]:
-        """返回刚通过 wire/schema/dynamic validator 的 agent checkpoint 材料。"""
+        """返回 accepted 或显式 repair-custody stdout 的不可变联结材料。"""
         value = self._accepted_checkpoint.get(purpose)
         if value is None:
             raise ProvenanceRefused(
@@ -1032,6 +1059,17 @@ class SessionAgentClient:
             'accepted_request': dict(value['accepted_request']),
             'attempt_links': [dict(row) for row in value['attempt_links']],
             'recovery_from_attempts': list(value['recovery_from_attempts']),
+        }
+
+    def last_json_rejection(self, purpose: str) -> dict[str, Any] | None:
+        """返回最后一轮 dynamic-validator 拒稿；其他 gate 永不冒充可修候选。"""
+        value = self._last_json_rejection.get(purpose)
+        if value is None:
+            return None
+        return {
+            **value,
+            'payload': dict(value['payload']),
+            'detail': [dict(row) for row in value['detail']],
         }
 
     def restore_checkpoint_acceptance(
@@ -1176,8 +1214,10 @@ class SessionAgentClient:
         progress: RequestProgress | None = None,
         prefer_content_over_reasoning_salvage: bool = False,
         recovery_policy: str | None = None,
+        retain_validator_rejection: bool = False,
         **unsupported: object,
     ) -> M:
+        self._last_json_rejection.pop(purpose, None)
         if unsupported:
             raise LlmFailed(
                 f'{self.ctx.node}/{purpose}: SessionAgentClient 尚未实现参数 '
@@ -1196,6 +1236,8 @@ class SessionAgentClient:
             raise LlmFailed(
                 f'{self.ctx.node}/{purpose}: agent driver 只有 stdout content 通道；'
                 '不能接受 reasoning salvage 偏好后静默忽略')
+        if type(retain_validator_rejection) is not bool:
+            raise LlmFailed('retain_validator_rejection 必须显式给 bool')
         if (recovery_policy is not None
                 and recovery_policy not in _RECOVERY_SESSION_ISOLATION):
             raise LlmFailed(
@@ -1267,6 +1309,7 @@ class SessionAgentClient:
             gate: str | None = None
             details: list[dict[str, object]] = []
             private_feedback: str | None = None
+            typed_rows: list[dict[str, object]] = []
             obj: M | None = None
             try:
                 payload = _decode_json(turn.content)
@@ -1304,8 +1347,16 @@ class SessionAgentClient:
                                 gate = 'validator'
                                 details = [{'loc': '', 'type': 'validator'}]
                                 # dynamic validator 的完整原因只回到同一 provider
-                                # session；审计仍只记上面的稳定类型，避免复制正文。
+                                # session；审计仍只记稳定类型与无正文读数。
                                 private_feedback = why
+                                # Stage4 validator 自带 typed witness（批次 1）：
+                                # 审计追加 code/chapter/fingerprint 读数，反馈带
+                                # 全量结构行；其他 stage 的 validator 没有该属性，
+                                # 行为不变。
+                                for failure in getattr(
+                                        validator, 'typed_failures', ()):
+                                    details.append(failure.audit_row())
+                                    typed_rows.append(failure.to_payload())
             if gate is None:
                 assert obj is not None
                 self.ctx.ledger.note_gate(
@@ -1329,10 +1380,28 @@ class SessionAgentClient:
                 request_mode='agent_session_resume', chapter=self.chapter,
             )
             if not self.can_resume:
+                if (retain_validator_rejection
+                        and gate == 'validator' and obj is not None):
+                    # 动态闸耗尽与 parse/schema 失败不同：stdout 已是一份完整
+                    # response-model 对象，可安全成为“一次人工 replacement”的原稿。
+                    # 这里冻结的仍是供应商原 stdout/attempt；人工候选只会封在
+                    # response-repair resolution，绝不回写这份 acceptance。
+                    self._remember_json_acceptance(
+                        purpose=purpose, turn=turn,
+                        attempt_id=attempt_id, identity=identity)
+                    self._last_json_rejection[purpose] = {
+                        'attempt_id': attempt_id,
+                        'content': turn.content,
+                        'payload': obj.model_dump(by_alias=True, mode='json'),
+                        'gate': gate,
+                        'detail': [dict(row) for row in details],
+                        'why': private_feedback,
+                        'model': turn.model or self.profile.model,
+                    }
                 raise LlmFailed(
                     f'{self.ctx.node}/{purpose}: {gate} 校验连续未通过，'
                     f'已用尽 {self.max_turns} 轮；停止继续花费')
-            self._pending_feedback = json.dumps({
+            feedback_payload: dict[str, object] = {
                 'kind': 'response_validation_failed',
                 'gate': gate,
                 'errors': details,
@@ -1340,7 +1409,12 @@ class SessionAgentClient:
                 'instruction': (
                     '修正上一轮响应；保持事实内容与输出 schema，'
                     '沿请求声明的唯一结构化出口提交完整对象，不要解释。'),
-            }, ensure_ascii=False, sort_keys=True, separators=(',', ':'))
+            }
+            if typed_rows:
+                feedback_payload['typed_failures'] = typed_rows
+            self._pending_feedback = json.dumps(
+                feedback_payload, ensure_ascii=False, sort_keys=True,
+                separators=(',', ':'))
 
     def finish(
         self, *, process_state: str, delivery_state: str,

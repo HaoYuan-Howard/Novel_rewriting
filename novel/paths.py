@@ -797,6 +797,35 @@ def stage4_design_unit_checkpoint_dir(
         novel_dir, run_id, chapter) / 'checkpoints'
 
 
+def stage4_plan_chapter_dirname(chapter: int) -> str:
+    """Stage4B 章级单元的 canonical 目录名（批次 4；章号必为正整数）。"""
+    if (not isinstance(chapter, int) or isinstance(chapter, bool)
+            or chapter < 1):
+        raise PathRefused(
+            f'Stage4 plan 章级单元章号必须是正整数，实得 {chapter!r}')
+    return f'ch{chapter:04d}'
+
+
+def stage4_plan_chapter_run_path(
+        novel_dir: str | os.PathLike[str], run_id: str, chapter: int,
+) -> Path:
+    """``.../<run>/plan/chapters/chNNNN/``。
+
+    B 的歧义章各自占一条 single-session run/checkpoint 链；机械章没有
+    session（由冻结输入确定性重算），不落章级 run。
+    """
+    return (stage4_run_path(novel_dir, run_id, 'stage4.plan') / 'chapters'
+            / stage4_plan_chapter_dirname(chapter))
+
+
+def stage4_plan_chapter_checkpoint_dir(
+        novel_dir: str | os.PathLike[str], run_id: str, chapter: int,
+) -> Path:
+    """Stage4B 歧义章各自的 append-only revision 目录。"""
+    return stage4_plan_chapter_run_path(
+        novel_dir, run_id, chapter) / 'checkpoints'
+
+
 def stage4_commit_lock_path(
         novel_dir: str | os.PathLike[str],
 ) -> Path:

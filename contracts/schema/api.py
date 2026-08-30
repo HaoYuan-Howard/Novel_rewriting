@@ -46,6 +46,13 @@ from contracts.invariants import (
     CHAPTER_LABEL_ANOMALY,
     DELIVERY_MODES,
     DESIGN_CHAPTER_DECISIONS,
+    APPROVAL_WORKPACK_ACTIONS,
+    APPROVAL_WORKPACK_EFFECTS,
+    APPROVAL_WORKPACK_GROUP_EFFECTS,
+    APPROVAL_WORKPACK_GROUPS,
+    APPROVAL_WORKPACK_KINDS,
+    DESIGN_PREFLIGHT_STATUSES,
+    DESIGN_REPAIR_CODES_RETIRED,
     DESIGN_REPAIR_CONSTRAINT_ARITY,
     DESIGN_REPAIR_CODES,
     DESIGN_REVIEWER_KINDS,
@@ -68,6 +75,7 @@ from contracts.invariants import (
     NONBODY_KINDS,
     REMOVED_ORIGIN,
     RESIDUAL_ADOPTION_CONFIDENCE,
+    STATUS,
     SECRET_SETUP_KINDS,
     SEVERITY,
     STAGES,
@@ -136,7 +144,12 @@ StructureApprovalState = Literal[STRUCTURE_APPROVAL_STATES]
 DesignStrategyDecisionKind = Literal[DESIGN_STRATEGY_DECISIONS]
 DesignChapterDecisionKind = Literal[DESIGN_CHAPTER_DECISIONS]
 DesignReviewerKind = Literal[DESIGN_REVIEWER_KINDS]
-DesignRepairCode = Literal[DESIGN_REPAIR_CODES]
+ApprovalWorkpackAction = Literal[APPROVAL_WORKPACK_ACTIONS]
+ApprovalWorkpackEffect = Literal[APPROVAL_WORKPACK_EFFECTS]
+ApprovalWorkpackGroupKind = Literal[APPROVAL_WORKPACK_GROUPS]
+ApprovalWorkpackKind = Literal[APPROVAL_WORKPACK_KINDS]
+# 退役码仍在 Literal 里：盘上历史决定要能解码；新决定在 approve 闸关闭式拒绝。
+DesignRepairCode = Literal[(*DESIGN_REPAIR_CODES, *DESIGN_REPAIR_CODES_RETIRED)]
 DesignReviewState = Literal[DESIGN_REVIEW_STATES]
 
 
@@ -798,6 +811,40 @@ class DesignChapterSubject(FrozenModel):
         return self
 
 
+class DesignPreflightFailure(FrozenModel):
+    """A→formal 零调用预检的一条 typed 失败投影（无模型正文）。
+
+    ``repair_owner`` 是服务端路由读数（A 修订 / 上游修复 / 代码），界面只呈现
+    它，不拿它二次判官（`R-11.4`）。
+    """
+
+    code: str = Field(min_length=1)
+    rule: str = Field(min_length=1)
+    chapter_ordinal: int | None = Field(default=None, ge=1)
+    scene_refs: list[str] = Field(default_factory=list)
+    refs: list[str] = Field(default_factory=list)
+    repair_owner: str = Field(min_length=1)
+    detail: str = ''
+
+
+class DesignPreflightSummary(FrozenModel):
+    """`preflight_binding_candidate` 的内存结论投影；不是产物、不落盘。
+
+    绑定 candidate / blueprint / review contract 三个 SHA；`failures` 只来自
+    构造性绑定（每场 catalog 首项舞台、材料全落首场）跑同一联合 HARD——
+    「B 选得不好」在这个预检里结构性不存在。
+    """
+
+    status: Literal[DESIGN_PREFLIGHT_STATUSES]
+    candidate_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    blueprint_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    review_contract: str = Field(min_length=1)
+    code_version: str = Field(min_length=1)
+    blocked_owners: list[str] = Field(default_factory=list)
+    failures: list[DesignPreflightFailure] = Field(default_factory=list)
+    infeasibility: list[BindingInfeasibilityWitness] = Field(default_factory=list)
+
+
 class DesignBindingInfeasibility(FrozenModel):
     """当前 A 候选对应的 fresh B 关闭式不可行证据。"""
 
@@ -925,6 +972,7 @@ class DesignReviewRequest(StrictModel):
     candidate_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
     aggregate_subject_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
     binding_infeasibility: DesignBindingInfeasibility | None = None
+    preflight: DesignPreflightSummary | None = None
     repair_capability: DesignReviewRepairCapability
     strategy: DesignStrategyReview
     chapters: list[DesignChapterReview] = Field(min_length=1)
@@ -982,6 +1030,7 @@ class DesignReviewView(FrozenModel):
     aggregate_subject_sha256: str | None = Field(
         default=None, pattern=r'^[0-9a-f]{64}$')
     binding_infeasibility: DesignBindingInfeasibility | None = None
+    preflight: DesignPreflightSummary | None = None
     repair_capability: DesignReviewRepairCapability | None = None
     current_decision: DesignReviewDecision | None = None
     history: list[DesignReviewDecision] = Field(default_factory=list)
@@ -1139,6 +1188,157 @@ class StructureApprovalView(FrozenModel):
             raise ValueError('已有旧裁决但不再绑定当前 subject 时应为 expired，不是 missing')
         if self.state == 'expired' and not self.history:
             raise ValueError('没有历史裁决时不能声称 expired')
+        return self
+
+
+class WorkpackItem(FrozenModel):
+    """工作包的一条异常/披露/读数行；只呈现服务端判定，无自算字段。"""
+
+    code: str = Field(min_length=1)
+    rule: str | None = None
+    sev: Literal[SEVERITY] | None = None
+    status: Literal[STATUS] | None = None
+    chapter_ordinal: int | None = Field(default=None, ge=1)
+    scene_refs: list[str] = Field(default_factory=list)
+    refs: list[str] = Field(default_factory=list)
+    repair_owner: str | None = None
+    detail: str = Field(min_length=1)
+    effect: ApprovalWorkpackEffect
+    #: 服务端允许的后续动作（typed 入口名）；INFO/metric/UNVER 恒为空。
+    allowed_actions: list[ApprovalWorkpackAction] = Field(default_factory=list)
+    #: coverage 行只标「当前主体是否还需重审」，不把历史 accept
+    #: 填成当前决定。新主体与从未审过都是 changed=true。
+    changed: bool = False
+    historical_accept_reusable: bool = False
+    source_decision_sha256: str | None = Field(
+        default=None, pattern=r'^[0-9a-f]{64}$')
+
+    @model_validator(mode='after')
+    def _actions_and_history_are_closed(self) -> WorkpackItem:
+        if (self.sev is None) != (self.status is None):
+            raise ValueError('workpack sev/status 必须同进同出')
+        order = {value: index for index, value in enumerate(APPROVAL_WORKPACK_ACTIONS)}
+        if self.allowed_actions != sorted(
+            set(self.allowed_actions), key=order.__getitem__,
+        ):
+            raise ValueError('allowed_actions 必须去重并按契约顺序排列')
+        action_forbidden = (
+            self.sev in ('info', 'metric', 'unver')
+            or self.status in ('unver', 'skipped')
+            or self.effect not in ('block_b', 'block_context', 'coverage')
+        )
+        if action_forbidden and self.allowed_actions:
+            raise ValueError(
+                'INFO/metric/UNVER/skipped 与只读效果不得发布审批动作')
+        if self.historical_accept_reusable != (
+            self.source_decision_sha256 is not None
+        ):
+            raise ValueError(
+                'historical_accept_reusable 必须有精确 source decision SHA')
+        if self.historical_accept_reusable and self.changed:
+            raise ValueError('精确可复用的历史 accept 不能同时标为 changed')
+        return self
+
+
+class WorkpackGroup(FrozenModel):
+    """固定分组之一；空组也必须出现（「没有 blocking」是可读结论）。"""
+
+    group: ApprovalWorkpackGroupKind
+    scanned: str = Field(min_length=1)
+    items: list[WorkpackItem] = Field(default_factory=list)
+
+    @model_validator(mode='after')
+    def _items_match_the_group(self) -> WorkpackGroup:
+        effects = APPROVAL_WORKPACK_GROUP_EFFECTS[self.group]
+        if any(item.effect not in effects for item in self.items):
+            raise ValueError(f'{self.group} 组含有不属于该组的 effect')
+        if self.group != 'coverage' and any(
+            item.changed or item.historical_accept_reusable
+            or item.source_decision_sha256 is not None
+            for item in self.items
+        ):
+            raise ValueError('历史 accept / changed 标记只属于 coverage 行')
+        return self
+
+
+class ApprovalWorkpack(FrozenModel):
+    """exception-first Commander 工作包 v1 的公共外壳（批次 5）。
+
+    只读 façade：绑定当前审阅 subject，不预填任何决定、不启动作业。
+    """
+
+    v: Literal[1] = 1
+    sid: str = Field(min_length=1)
+    kind: ApprovalWorkpackKind
+    candidate_sha256: str | None = Field(
+        default=None, pattern=r'^[0-9a-f]{64}$')
+    subject_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    chapter_ordinals: list[int] = Field(min_length=1)
+    groups: list[WorkpackGroup] = Field(min_length=len(APPROVAL_WORKPACK_GROUPS))
+
+    @model_validator(mode='after')
+    def _shape_is_closed_and_covers_every_chapter(self) -> ApprovalWorkpack:
+        if [row.group for row in self.groups] != list(APPROVAL_WORKPACK_GROUPS):
+            raise ValueError(
+                'workpack 分组必须是固定顺序的全集，不许裁剪或重排')
+        if self.chapter_ordinals != sorted(set(self.chapter_ordinals)):
+            raise ValueError('workpack chapter_ordinals 必须升序去重')
+        if (self.kind == 'design') != (self.candidate_sha256 is not None):
+            raise ValueError('design 必须绑 candidate SHA，structure 不得冒充 A 候选')
+        expected_block = 'block_b' if self.kind == 'design' else 'block_context'
+        blocking = self.groups[0].items
+        if any(item.effect != expected_block for item in blocking):
+            raise ValueError('blocking effect 必须与 A 挡 B / B 挡 Context 一致')
+        if any(
+            'request_repair' in item.allowed_actions
+            for group in self.groups for item in group.items
+        ) and self.kind != 'design':
+            raise ValueError('request_repair 只属于 Stage4A 章级修订面')
+        if any(
+            'accept' in item.allowed_actions and item.effect != 'coverage'
+            for group in self.groups for item in group.items
+        ):
+            raise ValueError('accept 只能出现在全章 coverage，不能被异常行预填')
+        chapter_set = set(self.chapter_ordinals)
+        if any(
+            item.chapter_ordinal is not None
+            and item.chapter_ordinal not in chapter_set
+            for group in self.groups for item in group.items
+        ):
+            raise ValueError('workpack 条目引用了当前主体之外的章号')
+        coverage = self.groups[-1].items
+        ordinals = [item.chapter_ordinal for item in coverage]
+        if any(value is None for value in ordinals) or set(ordinals) != chapter_set \
+                or len(ordinals) != len(chapter_set):
+            raise ValueError('coverage 必须不重不漏覆盖当前全部章')
+        if any(
+            item.sev is not None or item.status is not None
+            or item.changed == item.historical_accept_reusable
+            for item in coverage
+        ):
+            raise ValueError(
+                'coverage 不伪造判定，且 changed / 精确历史复用必须二选一')
+        seen_unchanged = False
+        changed_ordinals: list[int] = []
+        unchanged_ordinals: list[int] = []
+        allowed_for_kind = (
+            {'accept', 'request_repair'}
+            if self.kind == 'design'
+            else {'accept', 'request_replan'}
+        )
+        for item in coverage:
+            if not item.allowed_actions or not set(item.allowed_actions) <= allowed_for_kind:
+                raise ValueError('coverage 动作与 A/B typed 决定面不匹配')
+            if item.changed:
+                if seen_unchanged:
+                    raise ValueError('coverage 必须 changed 异常在前')
+                changed_ordinals.append(int(item.chapter_ordinal))
+            else:
+                seen_unchanged = True
+                unchanged_ordinals.append(int(item.chapter_ordinal))
+        if changed_ordinals != sorted(changed_ordinals) \
+                or unchanged_ordinals != sorted(unchanged_ordinals):
+            raise ValueError('coverage 的 changed / reusable 各段内必须按章号升序')
         return self
 
 

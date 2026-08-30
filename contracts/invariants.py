@@ -19,7 +19,7 @@ prompt 那一份必须是**插值来的**。手抄一份不会报错，它只是
 """
 from __future__ import annotations
 
-from typing import Final, Literal, NamedTuple
+from typing import Final, Literal, Mapping, NamedTuple
 
 import contracts.artifacts as artifact_paths
 
@@ -362,6 +362,9 @@ BLIND_ALIAS_ALGORITHM: Final = 'hmac-sha256-v1'
 #: Stage4A 的逐章私有 session 并发上限。配置可以把它调低，但不能调高；
 #: 这是该节点的供应商稳定性边界，不与全局 ``MAX_CONCURRENCY`` 混成一把尺子。
 STAGE4_DESIGN_MAX_CONCURRENCY: Final = 4
+#: Stage4B 章级 session 的并发上限（批次 4）：与 A 的逐章池同一供应商稳定性
+#: 边界，配置可以调低不能调高。
+STAGE4_PLAN_MAX_CONCURRENCY: Final = 4
 STRUCTURE_APPROVAL_DECISIONS: Final = ('accept', 'request_replan')
 STRUCTURE_APPROVAL_STATES: Final = (
     'unavailable', 'missing', 'accepted', 'replan_requested', 'expired',
@@ -373,9 +376,42 @@ STRUCTURE_APPROVAL_STATES: Final = (
 DESIGN_STRATEGY_DECISIONS: Final = ('accept', 'request_replan')
 DESIGN_CHAPTER_DECISIONS: Final = ('accept', 'request_repair')
 DESIGN_REVIEWER_KINDS: Final = ('human', 'delegated_operator')
-DESIGN_REVIEW_CONTRACT: Final = 'stage4-design-review-v1'
+#: 2026-08-29 升 v2（TODO-45 批次 2）：审阅主体新增 A→formal 零调用预检
+#: 投影，v1 决定按 subject 相等性自然过期；重新审阅 0 成本，历史保留可解码。
+DESIGN_REVIEW_CONTRACT: Final = 'stage4-design-review-v2'
+#: `R-5.22` 预检结论的两态。pass = 构造性绑定过整书联合 HARD；
+#: blocked = 存在 stop-owner 失败或代码铸造的不可行 witness。
+DESIGN_PREFLIGHT_STATUSES: Final = ('pass', 'blocked')
+#: Commander 审阅工作包（TODO-45 批次 5）的固定分组顺序——异常优先：
+#: blocking 永远第一，全章 compact coverage 永远最后。`phase_deferred`
+#: 只登记「Context 落盘后才可判」的规则，不进入结构 subject。
+APPROVAL_WORKPACK_GROUPS: Final = (
+    'blocking', 'semantic_attention', 'disclosure',
+    'metric_only', 'phase_deferred', 'coverage',
+)
+#: 工作包只有 A / B 两个审阅面；它们都是只读视图，不是作业入口。
+APPROVAL_WORKPACK_KINDS: Final = ('design', 'structure')
+#: 工作包条目只能公布现役 typed 审批决定面；它不会把动作翻译成
+#: CLI argv，更不会因为读了一次工作包就启动模型。
+APPROVAL_WORKPACK_ACTIONS: Final = (
+    'accept', 'request_repair', 'request_replan',
+)
+#: 工作包条目的交付效果（服务端下发；前端只呈现，不自算）。
+APPROVAL_WORKPACK_EFFECTS: Final = (
+    'block_b', 'block_context', 'attention', 'disclose', 'read_only',
+    'phase_deferred', 'coverage',
+)
+#: 分组与 effect 的关系也是契约，不许 builder / 前端各猜一份。
+#: blocking 唯一的两个 effect 对应 A 挡 B、B 挡 Context；其余组均是单值。
+APPROVAL_WORKPACK_GROUP_EFFECTS: Final[Mapping[str, tuple[str, ...]]] = {
+    'blocking': ('block_b', 'block_context'),
+    'semantic_attention': ('attention',),
+    'disclosure': ('disclose',),
+    'metric_only': ('read_only',),
+    'phase_deferred': ('phase_deferred',),
+    'coverage': ('coverage',),
+}
 DESIGN_REPAIR_CODES: Final = (
-    'structure_delta',
     'entry_anchor',
     'ending_anchor',
     'fact_grouping',
@@ -384,6 +420,11 @@ DESIGN_REPAIR_CODES: Final = (
     'scene_goal',
     'binding_constraint_unsat',
 )
+#: 退役但仍可**解码**的修复码。`structure_delta` 是泛化重排指令：arity (0,0)
+#: 意味着它可以不带任何 scene/alias 证据提交，等于允许人用一句「重排一下」
+#: 制造不可执行的返修。历史决定保留可读（Literal 与 arity 表都仍收它），
+#: 新决定在 approve 闸关闭式拒绝，具体语义修复码都带 scene/alias 下限。
+DESIGN_REPAIR_CODES_RETIRED: Final = ('structure_delta',)
 #: ``code -> (最少 scene_refs, 最少 opaque_aliases)``。审批 schema 与返修 prompt
 #: 必须共用这一张表；否则一边接受的“具体反馈”会在另一边变成空指令。
 DESIGN_REPAIR_CONSTRAINT_ARITY: Final = {
@@ -416,6 +457,89 @@ DESIGN_REVIEW_STATES: Final = (
     'unavailable', 'missing', 'repair_requested',
     'strategy_replan_requested', 'accepted', 'expired',
 )
+
+# ── Stage4 运行时失败 witness 的关闭式路由（TODO-45 批次 1）────────────────
+#: typed failure 的 ``repair_owner`` 完整取值面。前两个是现役节点 id；
+#: ``stage2.blueprint`` 是上游锚点/目录问题；``human`` 只形成 nonblocking
+#: concern；``code`` 是判据/编译器自身漂移；``infra`` 走传输退避、不计内容重采。
+FAILURE_REPAIR_OWNERS: Final = (
+    'stage4.design', 'stage4.plan', 'stage2.blueprint', 'human', 'code', 'infra',
+)
+#: 这些 owner 的失败**不是 B 在自己的 session 里能修掉的**：B 首轮见到立即
+#: 停止并诚实落盘，不把四轮预算烧在注定失败的重试上。
+FAILURE_STOP_OWNERS: Final = ('stage4.design', 'stage2.blueprint', 'code')
+
+#: Stage4 失败发射点 ``code`` → 修复 owner。**闭合表**：表外的 code 一律
+#: ``code`` owner（停下来给人看），绝不默认成可重试。
+#:
+#: 分域依据（B 只绑定舞台与保真材料；场景设计、预算、目标、状态都是 A 的）：
+#: · A 的设计域（``stage4.design``）：章集/序号/空章、land 事实落场、因果闭合、
+#:   状态承接、首尾目标、预算、写法词、slot/transition、ctx 事实投影与人名。
+#: · B 的绑定域（``stage4.plan``）：舞台引用、材料恰好落一次、材料送达、
+#:   舞台投影，以及 sha 回显 / infeasible 证明 / 绑定编译拒绝这些 B 自己的响应错。
+#: · 上游（``stage2.blueprint``）：人名证据缺位。
+#: · 代码（``code``）：来源边与 A/B 字节绑定是 provenance 机制自身；
+#:   ctx 事实投影的两侧都是代码组装，命中即代码漂移。
+STAGE4_FAILURE_OWNERS: Final[Mapping[str, str]] = {
+    # wire / 编译层（plan.py 的 validator 发射）
+    'candidate_sha256_echo': 'stage4.plan',
+    'infeasible_unproven': 'stage4.plan',
+    'binding_compile_refused': 'stage4.plan',
+    # A 单元自身的发射点（在 A 的 session 里可原地重试）
+    'strategy_chapter_set': 'stage4.design',
+    'strategy_style_words': 'stage4.design',
+    'blind_compile_refused': 'stage4.design',
+    'blind_chapter_problem': 'stage4.design',
+    # 联合 HARD（checks.check 发射）
+    'one_to_one': 'stage4.design',
+    'ordinal_seq': 'stage4.design',
+    'empty_chapter': 'stage4.design',
+    'fact_ref.land': 'stage4.design',
+    'fact_ref.context': 'stage4.design',
+    'fact_ref.state': 'stage4.design',
+    'fact_ref.turn': 'stage4.design',
+    'fact_ref.stage': 'stage4.plan',
+    'fact_ref.material': 'stage4.plan',
+    'fact_coverage': 'stage4.design',
+    'causal_closure': 'stage4.design',
+    'state_closure': 'stage4.design',
+    'material_coverage': 'stage4.plan',
+    'scene_transition': 'stage4.design',
+    'goal_landing': 'stage4.design',
+    'budget_int': 'stage4.design',
+    'budget_band': 'stage4.design',
+    'plan_book_band': 'stage4.design',
+    'style_words': 'stage4.design',
+    'phase_artifact_link': 'code',
+    'context_link': 'code',
+    'ctx_facts_exact': 'code',
+    'ctx_name_attested': 'stage2.blueprint',
+    'ctx_stage_explicit': 'stage4.plan',
+    'ctx_hinge_delivered': 'stage4.plan',
+    # B 不可行证明的两类 witness（批次 2 预检复用同一分类）：关闭目录缺章/
+    # 空舞台allowlist 都是 Stage2 锚点/目录问题，不是 A 的场景设计错。
+    'missing_chapter_catalog': 'stage2.blueprint',
+    'empty_stage_allowlist': 'stage2.blueprint',
+}
+
+
+def stage4_failure_owner(code: str) -> str:
+    """失败发射点 → 修复 owner 的唯一读法；未登记的 code 关闭式归 ``code``。"""
+    owner = STAGE4_FAILURE_OWNERS.get(str(code))
+    if owner is None:
+        return 'code'
+    assert owner in FAILURE_REPAIR_OWNERS
+    return owner
+
+
+def stage4_failure_retryable(code: str, *, surfacing: str) -> bool:
+    """失败只有由能修它的那一方自己发现时才值得原地重试。
+
+    ``surfacing`` 是发现失败的节点 id。``infra`` 例外：传输层失败对任何节点
+    都走退避重试，不计内容重采。
+    """
+    owner = stage4_failure_owner(code)
+    return owner == surfacing or owner == 'infra'
 
 #: 原始 txt 的编码候选，**按尝试顺序**。取值面只能从代码来：
 #: 全语料 163 本**只出现过 `utf-8`，另四个零样本**——样本再多也补不出没发生过的分支。
@@ -1714,8 +1838,10 @@ class NodeSpec(NamedTuple):
     #   flash 判官，账本事后才看得出来。
     # ⚠⚠ **现有两个钉死值，而它们的理由不是同一个**，不许互相援引：
     #   · `stage6.semantic` = **判官给不出有区分度的证据**（质量死刑，2026-08-20）。
-    #   · `stage4.design` / `stage4.plan` = **重采粒度**（2026-08-22）：两相各是
-    #     一次全书调用，一次 `answer_lost` 重采就是整本书；逐章节点的便宜恢复网不适用。
+    #   · `stage4.design` = 小型整书策略 + 逐章私有 session；
+    #     `stage4.plan` = 机械 baseline + 仅歧义章私有 session（最多 4 并发）。
+    #     它们的模型默认是产品裁决，不得再用「两相各一次全书调用」
+    #     解释；B 的新恢复粒度是歧义 unit，零歧义章零模型调用。
     #   两条实测依据都在 `docs/BACKEND_CONTRACT.md` §十。
     model: str = ''
 
@@ -1806,13 +1932,13 @@ NODES: Final[dict[str, NodeSpec]] = {
                                         '--revalidate', '--actor', '--reason',
                                         '--response-repair'),
                                  produces=(artifact_paths.STAGE2_CHAPTER_BLUEPRINTS,)),
-    # ⚠⚠ Stage4 两个付费相仍沿用 `deepseek-v4-pro`，但 2026-08-28 起不能再用
-    #   “两相都是全书一次调用”解释这两个值：A 已拆成一条小型整书策略 + N 条
-    #   逐章请求，代码聚合后再跑整书 HARD；B 仍是一次全书证据绑定调用。
-    #   2026-08-22 的空正文证据直接支持的是 B：`stage4.plan` flash@high
-    #   13/30，pro@high 0/6、全表 pro 0/249；一次 Flash 可用计划累计 completion
-    #   约 67k，Pro 一次过 out 中位约 22.8k。A 拆分后暂不凭架构变化静默翻默认，
-    #   须在相同逐章契约下另行比较首次交付率、HARD、token 与墙钟再裁决。
+    # ⚠⚠ Stage4 两个付费相仍沿用 `deepseek-v4-pro`，但调用拓扑已分开：
+    #   A = 一条小型整书策略 + N 条逐章私有 session，代码聚合后跑整书 HARD；
+    #   B = 机械 baseline 先消除唯一解，只对真歧义章开私有 session（最多 4 并发），
+    #   零歧义章 0-wire 确定性编译（不伪造模型 checkpoint）。当前 B 默认模型的证据面包含历史
+    #   whole-book B 样本与现役歧义 unit，不再声称「一次重采就是整本书」。
+    #   架构改变本身不静默翻默认；后续须在同一 unit 契约下比较首交率、
+    #   HARD、token 与墙钟再裁决。
     'stage4.design':    NodeSpec('stage4', 'R-5',  True,  'stage4 盲场景设计',
                                   flags=('--dry-run', '--replan', '--repair-decision',
                                          '--adopt-rejected',

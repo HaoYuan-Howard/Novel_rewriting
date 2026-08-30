@@ -85,7 +85,9 @@ def test_the_model_response_only_ever_enters_through_the_scene_compiler():
               / 'novel' / 'stages' / 'stage4' / 'plan.py').read_text(encoding='utf-8')
     for retired in ('expand_plan_beats(', 'group_beats(', 'group_map('):
         assert retired not in source
-    assert source.count('adopt_plan_response(') == 2
+    # 批次 2：第三处是 `preflight_binding_candidate` 的零调用构造性绑定——
+    # 同一编译入口的只读复用，模型响应仍只经场景编译器进入。
+    assert source.count('adopt_plan_response(') == 3
 
 
 def test_book_band_can_fail_while_the_chapter_stays_in_its_wider_band():

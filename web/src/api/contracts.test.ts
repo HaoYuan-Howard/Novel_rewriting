@@ -125,6 +125,7 @@ describe('request-shaped cache and diagnostics', () => {
         state: 'missing', candidate_sha256: 'c'.repeat(64),
         aggregate_subject_sha256: 'd'.repeat(64), current_decision: null, history: [],
         binding_infeasibility: null,
+        preflight: null,
         repair_capability: {
           repairable: true, reason_code: 'ready',
           chapters: [{ output_ordinal: 1, committed_rounds: 0, request_repair_available: true }],
@@ -191,6 +192,7 @@ describe('request-shaped cache and diagnostics', () => {
         current_decision: null,
         history: [],
         binding_infeasibility: null,
+        preflight: null,
         repair_capability: confirmed.repair_capability,
       },
       structure: {

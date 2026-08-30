@@ -591,7 +591,12 @@ def judge_payload(
             else:
                 if validator is not None:
                     why, gate = validator(obj, resp), 'validator'
-                    # 调用点自带那道闸只交回一句人话，没有可机器数的结构 ⇒ 不编。
+                    # 调用点自带那道闸多数只交回一句人话 ⇒ 不编 detail。
+                    # 例外：Stage4 validator 自带 typed witness（批次 1），
+                    # 审计追加无正文的 code/chapter/fingerprint 读数。
+                    typed = getattr(validator, 'typed_failures', ())
+                    if typed:
+                        detail = [f.audit_row() for f in typed]
     return obj, why, gate, detail
 
 

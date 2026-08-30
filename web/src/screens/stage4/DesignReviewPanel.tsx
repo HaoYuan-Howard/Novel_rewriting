@@ -17,6 +17,7 @@ import { Mono } from '@/components/ui/Mono'
 import { Panel } from '@/components/ui/Panel'
 import { GateMark } from '@/components/vocab/Badges'
 import { useDesignReview } from './useDesignReview'
+import { ApprovalWorkpackPanel } from './ApprovalWorkpackPanel'
 
 function reviewRunId(): string {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
@@ -113,6 +114,8 @@ export function DesignReviewPanel() {
           </div>
         ) : null}
       </div>
+
+      <ApprovalWorkpackPanel kind="design" />
 
       {view.binding_infeasibility ? (
         <BindingInfeasibilityEvidence evidence={view.binding_infeasibility} />

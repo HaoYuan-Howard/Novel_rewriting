@@ -54,6 +54,7 @@ export interface EnumsResponse {
   /** code -> [minScenes, minOpaqueAliases]；只用于表单提示，最终合法性仍由后端判定。 */
   design_repair_constraint_arity: Record<string, [number, number]>
   design_review_states: string[]
+  design_preflight_statuses: string[]
   /** Stage5 Commander 闭合表单的三张运行时取值面；页面不得复制枚举字面。 */
   stage5_must_appear_rulings: string[]
   stage5_closure_groups: string[]
@@ -61,6 +62,12 @@ export interface EnumsResponse {
   /** Stage4B 语义担忧与代码铸造不可行证明的运行时取值面。 */
   binding_concern_codes: string[]
   binding_infeasibility_codes: string[]
+  /** Stage4 A/B 异常优先工作包 v1 的服务端闭集；组件只把本地映射当展示标签。 */
+  approval_workpack_groups: string[]
+  approval_workpack_kinds: string[]
+  approval_workpack_actions: string[]
+  approval_workpack_effects: string[]
+  approval_workpack_group_effects: Record<string, string[]>
   /**
    * This is an honest display boundary, not an access-control boundary: the server still
    * sends the complete stage2 document and the adapter projects it before a Screen sees it.

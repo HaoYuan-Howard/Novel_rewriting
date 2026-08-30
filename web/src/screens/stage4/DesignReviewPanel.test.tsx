@@ -45,6 +45,7 @@ function approval(state = 'missing'): ApprovalDoc {
       current_decision: null,
       history: [],
       binding_infeasibility: null,
+      preflight: null,
       repair_capability: repairCapability(),
     },
     structure: {
@@ -113,6 +114,7 @@ describe('Stage4A 正式设计审阅', () => {
           current_decision: decision,
           history: [decision],
           binding_infeasibility: request.binding_infeasibility,
+          preflight: request.preflight,
           repair_capability: request.repair_capability,
         },
       }
@@ -130,7 +132,7 @@ describe('Stage4A 正式设计审阅', () => {
 
     expect(screen.getByLabelText('Stage4A 整书策略裁决')).toHaveValue('request_replan')
     expect(screen.getByLabelText('第 3 章 Stage4A 设计裁决')).toHaveValue('request_repair')
-    expect(screen.getByLabelText('第 3 章返修码 structure_delta')).toBeChecked()
+    expect(screen.getByLabelText('第 3 章返修码 entry_anchor')).toBeChecked()
     expect(screen.getAllByText('c03s01').length).toBeGreaterThan(0)
     expect(screen.getAllByText('主角在公开场合取得关键证据。').length).toBeGreaterThan(0)
     expect(screen.getByText('atomic-structure-v2')).toBeVisible()
@@ -169,6 +171,16 @@ describe('Stage4A 正式设计审阅', () => {
       candidate_sha256: CANDIDATE,
       aggregate_subject_sha256: AGGREGATE,
       binding_infeasibility: null,
+      preflight: {
+        status: 'pass',
+        candidate_sha256: CANDIDATE,
+        blueprint_sha256: '6'.repeat(64),
+        review_contract: 'stage4-design-review-v2',
+        code_version: 'mock-code-v1',
+        blocked_owners: [],
+        failures: [],
+        infeasibility: [],
+      },
       strategy: {
         placeholder: false,
         template_token: null,
@@ -183,7 +195,7 @@ describe('Stage4A 正式设计审阅', () => {
         decision: 'request_repair',
         reason: '本章入口锚点仍沿用原结构，需要定向返修',
         source_decision_sha256: null,
-        constraints: [{ code: 'structure_delta', scene_refs: [], opaque_aliases: [] }],
+        constraints: [{ code: 'entry_anchor', scene_refs: [], opaque_aliases: ['a_' + '1'.repeat(16)] }],
       }],
     })
   })
@@ -208,6 +220,7 @@ describe('Stage4A 正式设计审阅', () => {
           current_decision: decision,
           history: [decision],
           binding_infeasibility: request.binding_infeasibility,
+          preflight: request.preflight,
           repair_capability: request.repair_capability,
         },
       }
@@ -217,7 +230,7 @@ describe('Stage4A 正式设计审阅', () => {
     expect(screen.getByText('历史审阅已过期')).toBeVisible()
     await user.selectOptions(screen.getByLabelText('Stage4A 整书策略裁决'), 'accept')
     await user.selectOptions(screen.getByLabelText('第 3 章 Stage4A 设计裁决'), 'accept')
-    expect(screen.queryByLabelText('第 3 章返修码 structure_delta')).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('第 3 章返修码 entry_anchor')).not.toBeInTheDocument()
     await user.click(screen.getByLabelText('Stage4A 整书策略已核对'))
     await user.click(screen.getByLabelText('第 3 章 Stage4A 已核对'))
 
@@ -275,6 +288,7 @@ describe('Stage4A 正式设计审阅', () => {
         },
         history: [],
         binding_infeasibility: request.binding_infeasibility,
+        preflight: request.preflight,
         repair_capability: request.repair_capability,
       },
     }))
@@ -355,6 +369,7 @@ describe('Stage4A 正式设计审阅', () => {
           current_decision: decision,
           history: [decision],
           binding_infeasibility: request.binding_infeasibility,
+          preflight: request.preflight,
           repair_capability: request.repair_capability,
         },
       }), { status: 200, headers: { 'Content-Type': 'application/json' } })

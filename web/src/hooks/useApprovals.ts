@@ -50,6 +50,7 @@ export function useApprovals(sidOverride?: string) {
     onSuccess: (doc) => {
       // 专用结构裁决只写 `_service/approvals`，明确不触发作业。
       cache(doc)
+      void qc.invalidateQueries({ queryKey: qk.approvalWorkpack(sid, 'structure') })
       void qc.invalidateQueries({ queryKey: qk.inbox(sid) })
     },
   })

@@ -498,7 +498,9 @@ def plan_start(node: str, sid: str | None, flags: Sequence[str] = (), *,
                egress_authorized: bool | None = None,
                follow_check: bool = True,
                placeholders: bool = False,
-               steps: Sequence[Step] | None = None) -> JobStart:
+               steps: Sequence[Step] | None = None,
+               run_id: str | None = None,
+               recovered_from_job_id: str | None = None) -> JobStart:
     """一个作业的**全部静态字段**。纯函数：不占键、不落事件、不起进程。
 
     ⚠⚠ **`R-11.8` 在这里从一句纪律变成字面事实。** `run()` 与
@@ -542,13 +544,29 @@ def plan_start(node: str, sid: str | None, flags: Sequence[str] = (), *,
                 raise ValueError('JobStart 与冻结 steps[] 的正文外发授权不一致')
         elif any(value is not egress_authorized for value in step_egress):
             raise ValueError('传入正文外发授权与付费 executor steps[] 不一致')
+    # TODO-45 批次 3（R-13.3）：run 身份与 execution 身份是两根轴。
+    # `run_id` 是业务 run（首跑/恢复/聚合不变，账本、session、checkpoint、
+    # run 目录都以它为键）；`job_id` 是本次进程 attempt。预览形（run_id=None）
+    # 诚实表示「尚未绑定执行身份」——`R-11.8` 的 preview/start 同构是**命令**，
+    # 不是执行身份；执行边界（`run`/`start` 落 started 事件之前）必须解析出
+    # run_id：显式传入优先（恢复续跑带原 run），否则新造，绝不从 job_id 倒推。
     return JobStart(
         sid=sid, node=node, flags=list(flags), steps=plan,
         python=sys.version, code=code_version(),
         paid=any(s.paid for s in plan),
         writes=any(bool(s.writes) for s in plan),
         executor_profile=executor_profile,
-        egress_authorized=egress_authorized)
+        egress_authorized=egress_authorized,
+        run_id=run_identity.check_run_id(run_id) if run_id else None,
+        recovered_from_job_id=recovered_from_job_id)
+
+
+def _resolve_run_identity(start_meta: JobStart) -> JobStart:
+    """执行边界的 run 身份解析：None ⇒ 新造；已带（恢复续跑）原样保留。"""
+    if start_meta.run_id:
+        return start_meta
+    return start_meta.model_copy(
+        update={'run_id': run_identity.new_run_id()})
 
 
 def _require_executor_egress(start_meta: JobStart) -> None:
@@ -562,13 +580,15 @@ def _require_executor_egress(start_meta: JobStart) -> None:
 
 
 def _run_steps(base: str | os.PathLike[str], job_id: str,
-               plan: Sequence[Step], spawn: Spawn) -> int:
+               plan: Sequence[Step], spawn: Spawn, *,
+               run_id: str) -> int:
     p = log_path(base, job_id)
     p.parent.mkdir(parents=True, exist_ok=True)
     rc = 0
     # 一个 job 里的 producer + follow-check 是同一次可恢复运行；
-    # 两步必须继承同一 job_id，且不污染长驻服务进程的环境。
-    env = run_identity.env_with_run_id(job_id, child_env())
+    # 两步必须继承同一 run_id（业务身份）与同一 job_id（进程 attempt），
+    # 且不污染长驻服务进程的环境。
+    env = run_identity.env_with_run_id(run_id, child_env())
     with open(p, 'ab') as log:
         for index, step in enumerate(plan):
             event = JobEvent(job_id=job_id, kind='step',
@@ -585,7 +605,8 @@ def _run_steps(base: str | os.PathLike[str], job_id: str,
 
 def _append_progress(base: str | os.PathLike[str], sid: str | None, node: str,
                      phase: str, *, run_id: str,
-                     exit_code: int | None = None) -> None:
+                     exit_code: int | None = None,
+                     execution_id: str | None = None) -> None:
     """把 UI / 队列作业投影进与 agent CLI 共用的进度信标。
 
     局部 import 避开模块环：`beacon` 复用本模块的 `service_dir`，而作业执行器
@@ -598,7 +619,7 @@ def _append_progress(base: str | os.PathLike[str], sid: str | None, node: str,
 
     beacon.append(base, ProgressEvent(
         ts=int(time.time()), sid=sid, run_id=run_id, node=node, phase=phase,
-        exit_code=exit_code))
+        exit_code=exit_code, execution_id=execution_id))
 
 
 def run(base: str | os.PathLike[str], node: str, sid: str | None, flags: Sequence[str] = (), *,
@@ -607,7 +628,9 @@ def run(base: str | os.PathLike[str], node: str, sid: str | None, flags: Sequenc
         follow_check: bool = True,
         spawn: Spawn = default_spawn, registry: JobRegistry = REGISTRY,
         steps: Sequence[Step] | None = None,
-        job_id: str | None = None) -> JobRecord:
+        job_id: str | None = None,
+        run_id: str | None = None,
+        recovered_from_job_id: str | None = None) -> JobRecord:
     """跑一个作业（**同步**）：占键 → 记 `started` → 逐步起子进程 → 记 `ended` → 还键。
 
     ⚠⚠ **拿到锁之后到真跑起来之前，任何一步抛出去都要把锁还回去**——
@@ -621,10 +644,11 @@ def run(base: str | os.PathLike[str], node: str, sid: str | None, flags: Sequenc
         node, sid, flags, base=base, follow_check=follow_check,
         executor_profile=executor_profile,
         egress_authorized=egress_authorized)
-    start_meta = plan_start(
+    start_meta = _resolve_run_identity(plan_start(
         node, sid, flags, base=base, steps=plan,
         executor_profile=executor_profile,
-        egress_authorized=egress_authorized)
+        egress_authorized=egress_authorized,
+        run_id=run_id, recovered_from_job_id=recovered_from_job_id))
     _require_executor_egress(start_meta)
     _refuse_if_agent_running(sid)
     key = active_key(sid, node)
@@ -637,20 +661,24 @@ def run(base: str | os.PathLike[str], node: str, sid: str | None, flags: Sequenc
             job_id=job_id, kind='started', ts=int(time.time()),
             start=start_meta)
         append_event(base, start_event)
-        _append_progress(base, sid, node, 'start', run_id=job_id)
+        _append_progress(base, sid, node, 'start', run_id=start_meta.run_id,
+                         execution_id=job_id)
         try:
-            rc = _run_steps(base, job_id, plan, spawn)
+            rc = _run_steps(base, job_id, plan, spawn,
+                            run_id=start_meta.run_id)
         except BaseException:
             # 同步入口也必须闭合事件与进度轨迹。否则一次 spawn 异常会让 UI 永久
             # 停在 running，作业账也只能等服务重启后猜成 unknown。
             append_event(base, JobEvent(
                 job_id=job_id, kind='ended', ts=int(time.time()), exit_code=CRASH))
             _append_progress(
-                base, sid, node, 'end', run_id=job_id, exit_code=CRASH)
+                base, sid, node, 'end', run_id=start_meta.run_id,
+                exit_code=CRASH, execution_id=job_id)
             raise
         append_event(base, JobEvent(
             job_id=job_id, kind='ended', ts=int(time.time()), exit_code=rc))
-        _append_progress(base, sid, node, 'end', run_id=job_id, exit_code=rc)
+        _append_progress(base, sid, node, 'end', run_id=start_meta.run_id,
+                         exit_code=rc, execution_id=job_id)
         return next(r for r in fold(read_events(base)) if r.job_id == job_id)
     finally:
         registry.release(key, job_id)
@@ -685,6 +713,8 @@ def start(
     steps: Sequence[Step] | None = None,
     prepare: Callable[[], None] | None = None,
     job_id: str | None = None,
+    run_id: str | None = None,
+    recovered_from_job_id: str | None = None,
 ) -> JobRecord:
     # 无人显式 wait 的 Web 作业在下一次启动时回收；正在 wait 的作业要保留到 join。
     with _THREADS_LOCK:
@@ -695,10 +725,11 @@ def start(
         node, sid, flags, base=base, follow_check=follow_check,
         executor_profile=executor_profile,
         egress_authorized=egress_authorized)
-    start_meta = plan_start(
+    start_meta = _resolve_run_identity(plan_start(
         node, sid, flags, base=base, steps=plan,
         executor_profile=executor_profile,
-        egress_authorized=egress_authorized)
+        egress_authorized=egress_authorized,
+        run_id=run_id, recovered_from_job_id=recovered_from_job_id))
     _require_executor_egress(start_meta)
     _refuse_if_agent_running(sid)
     key = active_key(sid, node)
@@ -713,7 +744,8 @@ def start(
             job_id=job_id, kind='started', ts=int(time.time()),
             start=start_meta)
         append_event(base, start_event)
-        _append_progress(base, sid, node, 'start', run_id=job_id)
+        _append_progress(base, sid, node, 'start', run_id=start_meta.run_id,
+                         execution_id=job_id)
     except Exception:
         registry.release(key, job_id)
         raise
@@ -721,7 +753,8 @@ def start(
     def worker() -> None:
         rc = CRASH
         try:
-            rc = _run_steps(base, job_id, plan, spawn)
+            rc = _run_steps(base, job_id, plan, spawn,
+                            run_id=start_meta.run_id)
         except BaseException:
             error_log = log_path(base, job_id)
             error_log.parent.mkdir(parents=True, exist_ok=True)
@@ -733,7 +766,8 @@ def start(
                     job_id=job_id, kind='ended', ts=int(time.time()),
                     exit_code=rc))
                 _append_progress(
-                    base, sid, node, 'end', run_id=job_id, exit_code=rc)
+                    base, sid, node, 'end', run_id=start_meta.run_id,
+                    exit_code=rc, execution_id=job_id)
             finally:
                 registry.release(key, job_id)
                 # 留给 `wait()` 真正 join 后再移除。worker 自己先 pop 会制造一个
@@ -752,7 +786,8 @@ def start(
         append_event(base, JobEvent(
             job_id=job_id, kind='ended', ts=int(time.time()), exit_code=CRASH))
         _append_progress(
-            base, sid, node, 'end', run_id=job_id, exit_code=CRASH)
+            base, sid, node, 'end', run_id=start_meta.run_id,
+            exit_code=CRASH, execution_id=job_id)
         raise
     return next(
         record for record in fold(read_events(base), live=registry.live())

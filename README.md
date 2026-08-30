@@ -17,7 +17,8 @@
   “审校台”而不是 dashboard：主体动作是并排对照证据，再由人做决定。
 - stage0 批准是全链第一个人工硬闸；Stage4 有两张不同的票：A 候选先经全书策略 + 逐章正式审阅，
   只授权 B；B 编译出的计划再经最终逐章结构批准，才打开 s4。Stage5 的付费写作授权与二者独立；
-  stage6 与 stage7 的人工定稿是各自产物进入下游的语义闸。
+  写作完成后还须以最终 fresh Review、全部 canonical 章和 finding/trim 销账面提交 typed 闭合回执，
+  才打开 s5。stage6 与 stage7 的人工定稿是各自产物进入下游的语义闸。
 - Stage2 称名投影可用后，人可一边复核 global、一边让 blueprint 逐章计算；两支必须在 Stage4A
   前汇合为 current 正式 global + current blueprint、联合 HARD 通过与 current blocking 面全 PASS 人审。同书的
   review / typed edit / producer 写回仍串行，不能把“人机并行”解释成并发改文件。
@@ -39,12 +40,14 @@ stage2  全书级抽取（人物/关系/规则/秘密/弧线）  1 次调用
 stage4  A：1 个公开付费节点/授权；内部 1 份整书策略 + 每章 1 个私有 session
            策略串行先行，逐章最多 4 并发；全部通过后才确定性聚合并原子落盘
         A 正式审阅：全书策略 + 逐章 accept/repair；拒绝章可 hash-bound 定向修订 0 成本审阅
-        B：只给已审阅候选绑定舞台/人物/材料并编译计划 1 次独立调用
+        B：机械基线先解唯一绑定；只给真歧义章开私有 session（最多 4 并发）
+           全机械书 0 wire；逐章闭合后确定性聚合并编译计划
         最终人工逐章结构批准（不自动触发重规划） 0 成本
         写作上下文（最终批准后独立确定性组装，写作的唯一输入） 0 成本
 stage5  全书逐章闭卷写作；正式稿唯一落 `stage5/chNN.json`，默认补齐全部缺章
         最多 32 并发，`--chapters` 只定向重写指定章；旧 Stage5 目录报 `legacy_incompatible`
         全书机械验收（判成品）+ 修订式修复（旧称「反哺」） 0 成本 / 逐章调用
+        最终 Review、edit/trim/wontfix 全部收口后提交 typed 闭合回执，才打开 s5  0 成本
 stage6  开篇文案：一次调用产三候选，人定稿       1 次调用
 stage7  人名替换：一次调用产新人物表（只产决策）  1 次调用
         替换与成书组装                          0 成本
@@ -67,8 +70,17 @@ JSON/schema/动态判据后立即写验证后 checkpoint，再按章启动互相
 组装整书候选，重跑整书级 schema 与全部 HARD，最后才原子写入 `stage4/blind_candidate.json`；任何
 中断或聚合失败都不得留下部分正式候选。候选落盘并不授权 B：必须先提交绑定当前候选的正式设计审阅。
 已接受且主体未变的章可在下一次整书原子决定中复用；被拒章只按关闭式约束定向修订，策略被拒才整书
-重规划。Stage4B 仍是另一个公开节点、另一次授权和一次独立调用；模型声称 `infeasible` 只有经代码
-构造性证明后才能成为正式终态，否则在同一 session 要求返回完整绑定。
+重规划。Stage4B 仍是另一个公开节点和另一次授权，但内部先由代码生成机械基线：唯一可解章不发
+wire，只有真歧义章各开一条私有 session（硬上限 4 并发），每章验证后立即 checkpoint，再按章号
+确定性聚合并走同一 compiler/HARD。单章失败不会抹掉其他已验章；模型声称 `infeasible` 只有经代码
+构造性证明后才能成为正式终态，否则只回对应章 session。无法自动闭合的 unit 走绑定 run/request/code
+与主体 SHA-256 的 0-wire replacement，不重发已经有效的模型输出。
+
+Stage4 两次人审都先读服务端生成的异常优先工作包：CLI 为
+`novel.cli approval workpack design|structure <SID> --base <BASE>`，HTTP 为对应的
+`GET /api/novels/:sid/approvals/{design|structure}/workpack`。工作包固定给出 blocking、语义关注、
+披露、metric、阶段延期与全章 coverage 六组，只缩小阅读面；它不预填决定、不自动接受，
+INFO / metric / UNVER 也不会因此获得付费返工入口。
 
 Stage5 同一 run 的正常中断继续复用原 `run_id` 恢复 checkpoint。若代码已变化、旧 run 已完成
 响应与 checkpoint 却停在 foreign `prepared` 提交尾窗，默认付费写作会在 client/driver 前关闭式
@@ -76,6 +88,9 @@ Stage5 同一 run 的正常中断继续复用原 `run_id` 恢复 checkpoint。�
 提交 hash-bound `--recover-prepared`。该桥完整复验旧 ledger/session/request/sidecar 与当前
 上游/HARD/live baseline，零 driver、零 wire，source sidecar 只读；收口后仍须单独跑
 `stage5.review`。命令与中断恢复细节见 `.claude/skills/novel-pipeline-operator/references/recovery.md`。
+最终 Review 通过并完成所有 edit、trim 与 wontfix 销账后，还必须逐项审阅当前
+`Stage5ClosureWorkpack`，经 `approval template stage5` / `approval apply stage5` 提交 hash-bound
+闭合回执；它与写作前授权不是同一张票，也不能由机械绿灯、旧 s5 或 Commander 身份自动推导。
 
 Stage5 的 canonical v2 产物与单臂工作流已完成工程回归；现役 atom / scene / material 写作契约属于
 设计改进，但没有完成与此前 event-list / beat-material 契约的受控双书付费 A/B，不能据此宣称质量更高、成本更低
@@ -94,7 +109,7 @@ Stage5 的 canonical v2 产物与单臂工作流已完成工程回归；现役 a
 | stage1 | 确定性分章 | 原文与切分并排，确认无漏章、错章、断号 |
 | stage2 | 全书事实底座与逐章事实原子/舞台证据 | 称名投影可用后即可让 blueprint 计算，并与 global 复核重叠；Stage4 前 blocking 面必须全部 PASS，disclosure 未决项继续披露 |
 | stage4 | 盲设计、证据绑定、计划编译与写作上下文 | 先审 A 的全书策略与逐章候选，接受或定向返修；再审 B 编译计划的入口/分组/披露读数、证据落点与 binding concerns |
-| stage5 | canonical 闭卷写作与机械验收 | 材料与成稿、原文与改写、finding 与修订面 |
+| stage5 | canonical 闭卷写作与机械验收 | 材料与成稿、原文与改写、finding 与修订面；最终逐项确认闭合工作包后提交 typed 回执 |
 | stage6 | 生成三个开篇文案候选 | 三候选并排，人选一条定稿 |
 | stage7 | 生成人名决策，确定性替换并组书 | 新旧名表、漏网候选和逐章替换前后；人定稿 |
 
@@ -129,8 +144,8 @@ README 只保留稳定入口和当前能力；“做过什么”由 Git 历史�
 
 - `novel.cli` 可驱动单书七层主链，最终组装成书；完整操作规程位于
   `.claude/skills/novel-pipeline-operator/SKILL.md`。
-- `web/` 默认以 `VITE_USE_MOCK=false` 连接真实服务。九条读屏 GET 与三条人工写回 POST
-  已接通；写操作遵循 preview → 确认 → CLI 作业执行，作业失败由 `JobRecord.state='failed'`
+- `web/` 默认以 `VITE_USE_MOCK=false` 连接真实服务。读屏 GET 与人工写回 POST 已接通；
+  写操作遵循 preview → 确认 → CLI 作业执行，作业失败由 `JobRecord.state='failed'`
   表达，而不是伪装成 HTTP 错误。
 - 服务进程只写 `_service/`，产物变更经 CLI 子进程完成（R-11.3）。`stage6/edit` 与
   `stage7/edit` 因此只走 CLI；浏览器仅提供对应批准入口。

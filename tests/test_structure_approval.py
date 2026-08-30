@@ -49,6 +49,7 @@ def isolated(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     state = {
         'subject': SUBJECT_A,
         'chapters': [1, 2],
+        'chapter_subjects': {1: '1' * 64, 2: '2' * 64},
         'root': 'c' * 40,
         'plan': 'd' * 64,
         'record': approvals._fresh_record(SID),
@@ -61,6 +62,12 @@ def isolated(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     monkeypatch.setattr(
         approvals, '_current_structure_subject_and_chapters',
         lambda _novel_dir: (state['subject'], list(state['chapters'])))
+    monkeypatch.setattr(
+        approvals, '_current_structure_chapter_subject_sha256',
+        lambda _novel_dir: {
+            ordinal: state['chapter_subjects'][ordinal]
+            for ordinal in state['chapters']
+        })
     monkeypatch.setattr(
         approvals, '_current_binding_concerns', lambda _novel_dir: [])
     monkeypatch.setattr(
@@ -197,6 +204,8 @@ def test_all_accept_opens_s4_persists_v6_history_and_is_idempotent(isolated):
     assert state['record'].v == 7
     assert len(state['record'].structure_history) == 1
     assert state['record'].gate_proofs['s4'] == state['record'].structure_decision.proof
+    assert state['record'].structure_decision.chapter_subject_sha256 == \
+        state['chapter_subjects']
 
     second = approvals.approve_structure(base, SID, request)
     assert second == first

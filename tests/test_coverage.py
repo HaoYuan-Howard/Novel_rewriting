@@ -55,8 +55,14 @@ _R_SECTION_SIZES = {
     # reflow shadow、hash-bound 人工改稿与正式提交 same-run sweep。
     # R-8 于 2026-08-30 增至 23：`R-8.17` 冻结 Stage5 整书闭合回执、
     # 批量 trim 的 exact 工作面与 Stage6/7/assemble 硬闸。
+    # R-5 于 2026-08-30 增至 33：`R-5.21` 冻结 Stage4 typed failure witness
+    # 的九字段闭合面、owner 路由表唯一落点与 B 的关闭式首轮停止；
+    # `R-5.22` 冻结 A→formal 零调用预检的四处调用点与审阅元数据归一；
+    # `R-5.23` 冻结 B 机械基线、章级私有 session 与锚章聚合提交；
+    # `R-5.24` 冻结 stage signature conflict 的完整 INFO；`R-5.25` 冻结两份
+    # 异常优先工作包、INFO/metric/UNVER 的无动作边界与 Inbox 投影。
     'R-0': 16, 'R-1': 16, 'R-2': 29, 'R-3': 32, 'R-4': 18,
-    'R-5': 28, 'R-6': 12, 'R-7': 47, 'R-8': 23, 'R-9': 26,
+    'R-5': 33, 'R-6': 12, 'R-7': 47, 'R-8': 23, 'R-9': 26,
     'R-10': 33, 'R-11': 20, 'R-12': 12, 'R-13': 8, 'R-14': 7,
 }
 

@@ -25,6 +25,7 @@ import {
   GATE_KEYS,
   type ActionRef,
   type ApprovalDoc,
+  type ApprovalWorkpack,
   type BatchTrimResolutionRequest,
   type DesignReviewDecision,
   type DesignReviewRequest,
@@ -400,6 +401,16 @@ function mockDesignReviewTemplate(query: DesignReviewTemplateQuery): DesignRevie
     candidate_sha256: MOCK_DESIGN_CANDIDATE,
     aggregate_subject_sha256: MOCK_DESIGN_AGGREGATE,
     binding_infeasibility: null,
+    preflight: {
+      status: enumAt(enums().design_preflight_statuses, 0, 'A 预检状态'),
+      candidate_sha256: MOCK_DESIGN_CANDIDATE,
+      blueprint_sha256: '6'.repeat(64),
+      review_contract: 'stage4-design-review-v2',
+      code_version: 'mock-code-v1',
+      blocked_owners: [],
+      failures: [],
+      infeasibility: [],
+    },
     repair_capability: {
       repairable: true,
       reason_code: 'ready',
@@ -412,7 +423,7 @@ function mockDesignReviewTemplate(query: DesignReviewTemplateQuery): DesignRevie
     strategy: {
       subject: {
         basis: {
-          review_contract: 'stage4-design-review-v1',
+          review_contract: 'stage4-design-review-v2',
           root_clean_sha1: 'a'.repeat(40),
           truth_sha256: '1'.repeat(64),
           alias_algorithm: 'hmac-sha256-v1',
@@ -513,10 +524,96 @@ function mockDesignReviewTemplate(query: DesignReviewTemplateQuery): DesignRevie
       constraints: [{
         code: enumAt(enums().design_repair_codes, 0, 'A 返修码'),
         scene_refs: [],
-        opaque_aliases: [],
+        // `structure_delta` 退役后首个 active 码是 entry_anchor（arity 0,1）：
+        // 泛化重排指令不再可作为不带证据的默认脚手架。
+        opaque_aliases: ['a_' + '1'.repeat(16)],
       }],
       source_decision_sha256: null,
     }],
+  }
+}
+
+function mockApprovalWorkpack(
+  sid: string,
+  kind: 'design' | 'structure',
+): ApprovalWorkpack {
+  const empty = (group: ApprovalWorkpack['groups'][number]['group'], scanned: string) => ({
+    group,
+    scanned,
+    items: [],
+  })
+  return {
+    v: 1,
+    sid,
+    kind,
+    candidate_sha256: kind === 'design' ? MOCK_DESIGN_CANDIDATE : null,
+    subject_sha256: kind === 'design' ? MOCK_DESIGN_AGGREGATE : MOCK_STRUCTURE_SUBJECT,
+    chapter_ordinals: [SAMPLE_ORDINAL],
+    groups: [
+      empty('blocking', '已扫描当前主体的全部 HARD 与预检见证'),
+      {
+        group: 'semantic_attention',
+        scanned: '已扫描全章语义关注面',
+        items: [{
+          code: 'temporal_binding_unknown',
+          rule: 'temporal_binding_unknown',
+          sev: 'unver',
+          status: 'unver',
+          chapter_ordinal: SAMPLE_ORDINAL,
+          scene_refs: ['c03s01'],
+          refs: ['a_' + '1'.repeat(16)],
+          repair_owner: 'human',
+          detail: '第 3 章的倒叙入口仍需人工确认时间层绑定。',
+          effect: 'attention',
+          allowed_actions: [],
+          changed: false,
+          historical_accept_reusable: false,
+          source_decision_sha256: null,
+        }],
+      },
+      {
+        group: 'disclosure',
+        scanned: '已完整投影 INFO 与绑定关注项',
+        items: [{
+          code: 'stage_signature_conflict',
+          rule: 'stage_signature_conflict',
+          sev: 'info',
+          status: 'hit',
+          chapter_ordinal: SAMPLE_ORDINAL,
+          scene_refs: ['c03s01'],
+          refs: ['a_' + '2'.repeat(16)],
+          repair_owner: null,
+          detail: '同一材料在当前章存在多个时空签名，作为完整披露保留。',
+          effect: 'disclose',
+          allowed_actions: [],
+          changed: false,
+          historical_accept_reusable: false,
+          source_decision_sha256: null,
+        }],
+      },
+      empty('metric_only', '已扫描当前主体全部 metric 读数'),
+      empty('phase_deferred', '已登记必须等 stage4.context 后才能判定的规则'),
+      {
+        group: 'coverage',
+        scanned: '全章覆盖：1 / 1',
+        items: [{
+          code: 'chapter_coverage',
+          rule: null,
+          sev: null,
+          status: null,
+          chapter_ordinal: SAMPLE_ORDINAL,
+          scene_refs: [],
+          refs: [],
+          repair_owner: null,
+          detail: '第 3 章已进入本次工作包。',
+          effect: 'coverage',
+          allowed_actions: ['accept'],
+          changed: false,
+          historical_accept_reusable: true,
+          source_decision_sha256: '9'.repeat(64),
+        }],
+      },
+    ],
   }
 }
 
@@ -563,6 +660,7 @@ function freshDoc(sid: string): ApprovalDoc {
       current_decision: null,
       history: [],
       binding_infeasibility: null,
+      preflight: null,
       repair_capability: null,
     },
     structure: {
@@ -610,6 +708,7 @@ function seededDoc(sid: string): ApprovalDoc {
       current_decision: designDecision,
       history: [designDecision],
       binding_infeasibility: null,
+      preflight: designDecision.preflight,
       repair_capability: designDecision.repair_capability,
     },
     structure: {
@@ -618,7 +717,7 @@ function seededDoc(sid: string): ApprovalDoc {
       current_decision: decision,
       history: [decision],
       binding_concerns: [{
-        constraint_code: 'material_overlap',
+        constraint_code: 'material_conflict',
         chapter_ordinal: SAMPLE_ORDINAL,
         scenes: ['c03s01'],
         reason: '两场共用同一事实材料，绑定可行但需要人工确认重复披露风险。',
@@ -1589,6 +1688,9 @@ export const mockApi: Api = {
 
   getApprovals: (sid) => later(loadDoc(sid)),
 
+  getDesignApprovalWorkpack: (sid) => later(mockApprovalWorkpack(sid, 'design')),
+  getStructureApprovalWorkpack: (sid) => later(mockApprovalWorkpack(sid, 'structure')),
+
   getStage5ClosureTemplate: (sid): Promise<Stage5ClosureTemplate> => {
     const workpack = loadDoc(sid).closure.workpack
     if (!workpack) {
@@ -1780,6 +1882,7 @@ export const mockApi: Api = {
         current_decision: decision,
         history: [...doc.design_review.history, decision],
         binding_infeasibility: request.binding_infeasibility,
+        preflight: request.preflight,
         repair_capability: request.repair_capability,
       },
     }))

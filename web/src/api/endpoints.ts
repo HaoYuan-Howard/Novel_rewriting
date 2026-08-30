@@ -16,6 +16,7 @@ import type {
 import type {
   ApprovalBackfillResult,
   ApprovalDoc,
+  ApprovalWorkpack,
   BatchTrimResolutionRequest,
   DesignReviewRequest,
   DesignReviewTemplate,
@@ -486,6 +487,10 @@ export const realApi: Api = {
   getAgentQueue: () => get<AgentQueueView>('/agent/runs/queue'),
 
   getApprovals: (sid) => get<ApprovalDoc>(n(sid) + '/approvals'),
+  getDesignApprovalWorkpack: (sid) =>
+    get<ApprovalWorkpack>(n(sid) + '/approvals/design/workpack'),
+  getStructureApprovalWorkpack: (sid) =>
+    get<ApprovalWorkpack>(n(sid) + '/approvals/structure/workpack'),
   getStage5ClosureTemplate: (sid) =>
     get<Stage5ClosureTemplate>(n(sid) + '/approvals/stage5/template'),
   approveStage5Closure: (sid, request: Stage5ClosureRequest) =>

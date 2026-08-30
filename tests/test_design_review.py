@@ -10,7 +10,8 @@ from contracts.invariants import (
     DESIGN_REVIEW_CONTRACT,
 )
 from contracts.schema.api import (
-    ApprovalDoc, DesignChapterSubject, DesignRepairConstraint, DesignReviewRequest,
+    ApprovalDoc, DesignChapterSubject, DesignPreflightFailure,
+    DesignPreflightSummary, DesignRepairConstraint, DesignReviewRequest,
     DesignStrategySubject, DesignStructureEvidence, StructureApprovalView,
 )
 from contracts.schema.stage4 import BlindCandidateChapter
@@ -23,10 +24,29 @@ FACT = 'a_' + '1' * 16
 PERSON = 'a_' + '2' * 16
 
 
+def _pass_preflight(
+    *, status: str = 'pass',
+    failures: list[DesignPreflightFailure] | None = None,
+) -> DesignPreflightSummary:
+    """合成夹具的预检投影：默认 pass，可显式注入 blocked。"""
+    return DesignPreflightSummary(
+        status=status,  # type: ignore[arg-type]
+        candidate_sha256='c' * 64,
+        blueprint_sha256='e' * 64,
+        review_contract=DESIGN_REVIEW_CONTRACT,
+        code_version='test',
+        blocked_owners=[] if status == 'pass'
+        else sorted({f.repair_owner for f in (failures or [])}),
+        failures=failures or [],
+        infeasibility=[],
+    )
+
+
 def _subjects(
     *, brief: str = '把事实放进一个新场景',
     binding_infeasibility: dict | None = None,
     repair_capability: dict | None = None,
+    preflight: DesignPreflightSummary | None = 'default',
 ) -> approvals._DesignSubjects:
     strategy = DesignStrategySubject(
         basis={
@@ -104,6 +124,8 @@ def _subjects(
             'repair_capability': capability,
         }),
         binding_infeasibility=binding_infeasibility,
+        preflight=(
+            _pass_preflight() if preflight == 'default' else preflight),
         repair_capability=capability,
         strategy=strategy,
         strategy_subject_sha256=strategy_sha,
@@ -166,6 +188,7 @@ def _mixed_repair_subjects() -> approvals._DesignSubjects:
             'repair_capability': capability,
         }),
         binding_infeasibility=None,
+        preflight=_pass_preflight(),
         repair_capability=capability,
         strategy=strategy,
         strategy_subject_sha256=strategy_sha,
@@ -614,8 +637,95 @@ def _template_for_http() -> DesignReviewRequest:
             'template_token': 'e' * 64,
             'decision': 'request_repair', 'reason': '关闭式模板',
             'constraints': [{
-                'code': 'structure_delta', 'scene_refs': [],
-                'opaque_aliases': [],
+                'code': 'scene_goal',
+                'scene_refs': [subject.chapter.scenes[0].candidate_scene_id],
+                'opaque_aliases': [subject.blind_truth.facts[0].fact_alias],
             }],
         }],
     )
+
+
+def _blocked_preflight() -> DesignPreflightSummary:
+    return _pass_preflight(status='blocked', failures=[DesignPreflightFailure(
+        code='fact_coverage', rule='fact_coverage', chapter_ordinal=1,
+        refs=['f_1'], repair_owner='stage4.design',
+        detail='land 事实未恰好落一次（测试注入）')])
+
+
+def test_blocked_preflight_refuses_accept_but_allows_repair(isolated):
+    base, state = isolated
+    state['subjects'] = _subjects(preflight=_blocked_preflight())
+    template = _template(base)
+    with pytest.raises(HumanEditProtected, match='预检 blocked'):
+        approvals.approve_design(base, SID, _accept_all(template))
+    # remedy 不受闸：request_repair 仍可提交。
+    repair_request = template.model_copy(update={
+        'strategy': template.strategy.model_copy(update={
+            'placeholder': False, 'template_token': None,
+            'decision': 'request_replan', 'reason': '预检 blocked，整书重规划',
+            'source_decision_sha256': None}),
+        'chapters': [row.model_copy(update={
+            'placeholder': False, 'template_token': None,
+            'decision': 'request_repair',
+            'reason': '按预检 witness 修订本章',
+            'constraints': [DesignRepairConstraint(
+                code='fact_grouping',
+                scene_refs=[row.subject.chapter.scenes[0].candidate_scene_id],
+                opaque_aliases=[
+                    row.subject.blind_truth.facts[0].fact_alias,
+                    # arity (0,2)：fact_grouping 至少要两个 opaque alias。
+                    row.subject.blind_truth.facts[0].participant_aliases[0],
+                ])],
+            'source_decision_sha256': None}) for row in template.chapters],
+    })
+    doc = approvals.approve_design(base, SID, repair_request)
+    # 策略 replan + 章 repair 的组合态由 view 状态机裁定（replan 优先）。
+    assert doc.design_review.state == 'strategy_replan_requested'
+
+
+def test_preflight_missing_fails_closed_for_accept(isolated):
+    base, state = isolated
+    state['subjects'] = _subjects(preflight=None)
+    template = _template(base)
+    with pytest.raises(HumanEditProtected, match='预检未能产出'):
+        approvals.approve_design(base, SID, _accept_all(template))
+
+
+def test_retired_repair_code_refused_on_new_decision(isolated):
+    base, state = isolated
+    template = _template(base)
+    request = template.model_copy(update={
+        'strategy': template.strategy.model_copy(update={
+            'placeholder': False, 'template_token': None,
+            'decision': 'request_replan', 'reason': '泛化重排不再可提交',
+            'source_decision_sha256': None}),
+        'chapters': [row.model_copy(update={
+            'placeholder': False, 'template_token': None,
+            'decision': 'request_repair', 'reason': '退役码必须被拒',
+            'constraints': [DesignRepairConstraint(
+                code='structure_delta', scene_refs=[], opaque_aliases=[])],
+            'source_decision_sha256': None}) for row in template.chapters],
+    })
+    with pytest.raises(HumanEditProtected, match='退役修复码'):
+        approvals.approve_design(base, SID, request)
+
+
+def test_binding_constraint_unsat_requires_mechanical_witness(isolated):
+    base, state = isolated
+    template = _template(base)
+    request = template.model_copy(update={
+        'strategy': template.strategy.model_copy(update={
+            'placeholder': False, 'template_token': None,
+            'decision': 'request_replan', 'reason': '无 witness 的不可满足主张',
+            'source_decision_sha256': None}),
+        'chapters': [row.model_copy(update={
+            'placeholder': False, 'template_token': None,
+            'decision': 'request_repair', 'reason': '把 B 失败升级为不可满足',
+            'constraints': [DesignRepairConstraint(
+                code='binding_constraint_unsat',
+                scene_refs=[row.subject.chapter.scenes[0].candidate_scene_id],
+                opaque_aliases=[])],
+            'source_decision_sha256': None}) for row in template.chapters],
+    })
+    with pytest.raises(HumanEditProtected, match='缺机械'):
+        approvals.approve_design(base, SID, request)

@@ -224,6 +224,42 @@ def evidence_bind_system() -> str:
     return with_json_shape(EVIDENCE_BIND_SYS, EVIDENCE_BIND_HINT)
 
 
+CHAPTER_BINDING_SYS = """\
+你是 Stage4B 的章级绑定解析器。本章的机械基线已由代码唯一确定：能唯一确定的
+舞台与材料归属不在你的职责内。代码只把**真正解析不了的自由度**交给你，每条
+带一个 16 位十六进制的 ambiguity_id：
+- stage_signature_conflict：该场的候选舞台 time/place/present 签名不同，你从
+  candidates 里为本场选一个 stage_ref；
+- material_multi_scene：这条必须材料可落多个场景，你从 candidates 里选一个
+  candidate_scene_id；
+- material_unplaceable：这条材料没有任何机械可落的场景，你为本章选一个合理
+  的 candidate_scene_id。
+
+规则：每个 ambiguity_id 恰好解析一次；选择只能来自该歧义下发的候选集合；
+不得改变任何已由机械基线确定的归属；不得请求或猜测其他章的任何内容。
+如果你对因果、舞台、材料或未来泄漏有语义担忧，写入 binding_concerns（非阻断
+证据，每条只能引用请求中下发的引用）。只输出 JSON。"""
+
+CHAPTER_BINDING_HINT: dict[str, Any] = {
+    'resolutions': [{
+        'ambiguity_id': '0123456789abcdef',
+        'stage_ref': 'b01_01',
+        'candidate_scene_id': 'c01s01',
+    }],
+    'binding_concerns': [],
+}
+
+BLOCK_CHAPTER_BASELINE = '── 本章机械基线（代码已确定的归属，不得改动）──'
+BLOCK_CHAPTER_AMBIGUITIES = '── 本章待解析歧义（每个 ambiguity_id 恰好解析一次）──'
+BLOCK_CHAPTER_CANDIDATE = '── 本章冻结候选场景（只含本章）──'
+BLOCK_CHAPTER_EVIDENCE = '── 本章关闭式证据目录与相关原文 ──'
+BLOCK_CHAPTER_NEIGHBORS = '── 相邻章边界摘要（只作承接判断，不得引用其正文）──'
+
+
+def chapter_binding_system() -> str:
+    return with_json_shape(CHAPTER_BINDING_SYS, CHAPTER_BINDING_HINT)
+
+
 BLOCK_INDEX = '── 章节索引（阅读序）──'
 BLOCK_FACT_REFS = '── 可引用事实目录（goal.fact_refs 只能从这里选择）──'
 BLOCK_SKELETON = '── Stage2 原子事实契约与舞台目录（只作场景重组输入）──'

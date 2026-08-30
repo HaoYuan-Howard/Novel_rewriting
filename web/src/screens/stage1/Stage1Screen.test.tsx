@@ -52,7 +52,8 @@ describe('Stage1Screen 信息与操作布局', () => {
       writing: false,
       design_review: {
         state: 'unavailable', candidate_sha256: null, aggregate_subject_sha256: null,
-        current_decision: null, history: [], binding_infeasibility: null, repair_capability: null,
+        current_decision: null, history: [], binding_infeasibility: null,
+        preflight: null, repair_capability: null,
       },
       structure: {
         state: 'unavailable', current_subject_sha256: null,
@@ -120,7 +121,8 @@ describe('Stage1Screen 信息与操作布局', () => {
       writing: false,
       design_review: {
         state: 'unavailable', candidate_sha256: null, aggregate_subject_sha256: null,
-        current_decision: null, history: [], binding_infeasibility: null, repair_capability: null,
+        current_decision: null, history: [], binding_infeasibility: null,
+        preflight: null, repair_capability: null,
       },
       structure: {
         state: 'unavailable', current_subject_sha256: null,
@@ -153,7 +155,8 @@ describe('Stage1Screen 信息与操作布局', () => {
       writing: false,
       design_review: {
         state: 'unavailable', candidate_sha256: null, aggregate_subject_sha256: null,
-        current_decision: null, history: [], binding_infeasibility: null, repair_capability: null,
+        current_decision: null, history: [], binding_infeasibility: null,
+        preflight: null, repair_capability: null,
       },
       structure: {
         state: 'unavailable', current_subject_sha256: null,

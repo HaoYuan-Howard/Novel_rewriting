@@ -19,6 +19,7 @@ export function useDesignReview(query: DesignReviewTemplateQuery | null) {
     onSuccess: (doc) => {
       qc.setQueryData(qk.approvals(sid), doc)
       void qc.invalidateQueries({ queryKey: ['approvals', sid, 'design', 'template'] })
+      void qc.invalidateQueries({ queryKey: qk.approvalWorkpack(sid, 'design') })
       void qc.invalidateQueries({ queryKey: qk.inbox(sid) })
     },
   })

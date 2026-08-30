@@ -4,7 +4,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, Query
 
 from contracts.schema.api import (
-    ApprovalBackfillResult, ApprovalDoc, DesignReviewerKind,
+    ApprovalBackfillResult, ApprovalDoc, ApprovalWorkpack, DesignReviewerKind,
     DesignReviewRequest, DesignReviewTemplate, GateKey, SeenKey,
     Stage5ClosureRequest, Stage5ClosureTemplate,
     StructureApprovalRequest, WritingApprovalRequest,
@@ -20,6 +20,22 @@ def get_approvals(
     sid: str = Depends(checked_sid), base: str = Depends(get_base),
 ) -> ApprovalDoc:
     return approvals.get(base, sid)
+
+
+@router.get('/design/workpack', response_model=ApprovalWorkpack)
+def get_design_workpack(
+    sid: str = Depends(checked_sid), base: str = Depends(get_base),
+) -> ApprovalWorkpack:
+    """当前 Stage4A subject 的只读全章审阅包；不代签、不启动 B。"""
+    return approvals.design_workpack(base, sid)
+
+
+@router.get('/structure/workpack', response_model=ApprovalWorkpack)
+def get_structure_workpack(
+    sid: str = Depends(checked_sid), base: str = Depends(get_base),
+) -> ApprovalWorkpack:
+    """当前 Stage4B 结构 subject 的只读全章审批包；不组装 Context。"""
+    return approvals.structure_workpack(base, sid)
 
 
 @router.get('/design/template', response_model=DesignReviewTemplate)

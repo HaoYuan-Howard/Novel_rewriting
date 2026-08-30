@@ -72,6 +72,15 @@ _WITHHELD: dict[str, str] = {
         'agent 执行节点属于 driver/model/effort/mode 组合能力面，'
         '唯一公开口是动态 `GET /api/agent/capabilities`；'
         '再经 `/api/enums` 发一份会造成两个可漂移的节点清单'),
+    'FAILURE_REPAIR_OWNERS': (
+        'typed failure 的修复 owner 是流水线内部路由（TODO-45 批次 1），'
+        '唯一消费方是 B 的关闭式停止判定；等前端真有按 owner 渲染的界面'
+        '（workpack 的 `effect`/`allowed_actions`）再随行下发，'
+        '现在发就是请前端自己判路由'),
+    'FAILURE_STOP_OWNERS': '同上，stop owner 是路由表的派生读法，不是 UI 取值面',
+    'STAGE4_FAILURE_OWNERS': (
+        '发射点 → owner 的闭合表。它是判据域归类，不是前端选项；'
+        '发过去等于把路由判定复制到浏览器'),
     'GLOBAL_REVIEW_DISCLOSURE_KINDS': (
         '它是**分类表**，不是取值面。发过去等于请前端自己判「这一项挡不挡 Stage4」，'
         '而那条判定已经随行下发在 `GlobalReviewRow.effect` 上了（`R-11.4`）。'
@@ -135,6 +144,9 @@ _WITHHELD: dict[str, str] = {
                               '前端只提交模板给出的 subject，不自行判断审阅是否过期',
     'BLIND_ALIAS_ALGORITHM': 'Stage4A 审计用的 opaque alias 算法身份；前端既不生成 alias，'
                              '也不据此判断候选是否可用',
+    'STAGE4_PLAN_MAX_CONCURRENCY': (
+        'Stage4B 章级池的供应商稳定性护栏（批次 4），与 A 的逐章池同因不发：'
+        '它是后端编排参数，不是前端可调取值面'),
     'STAGE4_DESIGN_MAX_CONCURRENCY': 'Stage4A 私有 session 的供应商稳定性护栏；'
                                      '它是后端编排参数，不是前端可调取值面',
     # ── stage7（人名替换与成书）──

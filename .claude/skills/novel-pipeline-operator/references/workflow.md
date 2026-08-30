@@ -85,7 +85,7 @@ spawn 前关闭式拒绝，不能静默落回 DeepSeek。
 八个 agent executor 自身已经把完整候选依次送过 JSON、必需键、schema、调用点 validator 与业务
 HARD，并把结构化代码反馈交回同一 provider session；因此 agent 主路**不得**追加
 `--response-repair agent`。那条 sidecar 只服务显式 DeepSeek 临时回滚：legacy 响应停在
-`ResponseRepairRequired` 时，才按[修复状态机](recovery.md#显式-deepseek-回滚的结构化响应修复)处理隔离候选，
+`ResponseRepairRequired` 时，才按[修复状态机](recovery.md#显式-deepseek-回滚)处理隔离候选，
 并沿用同一 `run_id`。不得让一个 legacy flag 同时冒充 node-agent 的 session 恢复协议。
 
 真跑本身已经打印同一份 fresh 报告时，追检的价值是**复核产物完整性**，不是重读判据（那句「⚠ 自动追跑：退出码 0 也可能是残缺产物」说的就是这件事）：仍必须执行并打点，但只取它的退出码与合计行即可，不必重读全文。
@@ -122,7 +122,7 @@ HARD，并把结构化代码反馈交回同一 provider session；因此 agent �
 | 8 | `stage4.plan` | 仅在当前 A 设计审阅全书 accepted 后重新独立 preview/run | B 只绑定证据；模型的 `binding_concerns` 进入最终人审但不阻断。模型声称 infeasible 只有代码构造性证明后才可正式落盘，否则同 session 返修为完整 bound |
 | 9 | `stage4.context` | B 编译计划机械通过、且最终逐章结构裁决全书 accepted 后单独执行 | `stage4/writer_context.json` 与当前计划投影一致且 fresh；B、`--revalidate`、`--apply-edit`、`--apply-binding` 都不得自动组装它 |
 | 10 | `stage5.write` | 不带 `--chapters` 即写全部缺少的 canonical 章 | `stage5/chNN.json` 恰好覆盖计划章集合；内部重试不等于整节点失败 |
-| 11 | `stage5.review` | 无 | 最新机械验收完成；HARD 按 remediation 收敛，info/metric/unver 保持原态 |
+| 11 | `stage5.review` | 无 | 最新机械验收完成；HARD 按 remediation 收敛，info/metric/unver 保持原态；所有 edit/trim/wontfix 收口后另提交 current Stage5 typed closure，才可进入 Stage6 |
 | 12 | `stage6.hook` | 无；完整三候选 replacement 在同 session 内修复 | 至少一条候选通过落盘闸；追跑 check 可读正式候选 |
 | 13 | `stage6.semantic` | 无；A/B 独立 session 并发 | 每个去重文本都有两名盲评判官的带证据结论与匿名质量排序；结论按完整 SHA-256 与当前候选对齐 |
 | 14 | `stage6.approve` | `--pick <N> --actor <ACTOR> --reason <text> --subject-sha256 <64hex>` | 所选候选满足代批判据，hash 与当前文本一致，`hook.json.approved` 与最新语义结论一致 |
@@ -133,13 +133,15 @@ HARD，并把结构化代码反馈交回同一 provider session；因此 agent �
 
 Stage4 的两次付费调用不得压成一次授权或一次 runner 执行。先对 `stage4.design` 单独 preview/run；
 候选机械通过并正式落盘后，按[代批与终审契约](delegated-review.md#stage4-结构代批)先提交 Stage4A
-完整 typed 设计审阅。只有策略与全章 accepted，才能重新取得 `stage4.plan` 的 preview 并单独 run。
+完整 typed 设计审阅；裁决前先走只读 `approval workpack design`，按 current subject 阅读异常与全章
+coverage。只有策略与全章 accepted，才能重新取得 `stage4.plan` 的 preview 并单独 run。
 若逐章 `request_repair`，只执行服务端给出的 hash-bound `--repair-decision <SHA>`，未变且已接受的章
 由 checkpoint 复用；只有策略 `request_replan` 才可整书重做。自然语言 reason 只进审计，不充当模型
 自由指令。B 的模型负结论不是正式终态；只有代码产出不可行 witness 时 exit 1 才表示负结论已落盘，
 此时不得继续 Context 或 Stage5，也不得替人猜 repair/replan 决定。
 
-计划编译并通过机械检查后，再提交第二份、绑定 Plan 与 B concerns 的完整逐章 typed 最终结构决定。
+计划编译并通过机械检查后，先走只读 `approval workpack structure`，再提交第二份、绑定 Plan 与 B
+concerns 的完整逐章 typed 最终结构决定。工作包里 INFO/metric/UNVER 的 action 为空，只披露不返工。
 通用 s4 gate 不是兼容入口；计划或 concerns 变化后旧决定立即过期。只有全部章 `accept`，才可单独
 运行 0 成本 `stage4.context`；Context current/fresh 后再生成并提交 Stage5 writing 授权，才可执行
 `stage5.write`。
@@ -196,6 +198,13 @@ preview Stage4A；disclosure 未决项继续披露但不阻断。review 若发�
 首次写作前仍须显式授权 current Stage5 全书写作，但授权不再携带章臂分配。若 `state` / `inbox`
 报告旧布局，停在可恢复位置：在新隔离 base 由 `stage5.write` 从冻结 Stage0～4 上游全书重建，
 不要让 runner 把旧快照解释成新命令。
+
+写作授权只允许开始写，不证明成稿已闭合。全部 canonical 章完成后运行最终 `stage5.review`，按
+remediation 收口 HARD，并完成所有 edit、trim resolution 与 wontfix；随后先用 `approval show` 读取
+current closure workpack，再以 `approval template stage5` 取得逐项关闭式模板。必须真实核对
+must-appear 与 fact/unver 分组，填 actor/reason，清除每项 placeholder/token 后，才可
+`approval apply stage5`。只有 current `closure.state=closed` / `gate.s5=true` 才能进入 Stage6/7 或
+assemble；旧 s5、写作前授权、机械 exit 0 与 Commander 身份都不能替代这张写后回执。
 
 `source_overlap_high` 现役含义是 canonical 闭卷逐章 20 字窗重合越过注册阈值的 INFO 异常信号，
 不是臂身份判断；`overlap_report` 与 `dialogue_report` 都按逐章读。后者没有书级汇总，不能用

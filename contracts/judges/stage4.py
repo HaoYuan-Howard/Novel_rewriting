@@ -61,6 +61,12 @@ for rule, item, req in (
 _info('causal_disclosure', '按首次可见场算的披露逆因果读数', 'R-5.16',
       note='逆序可能是合法倒叙，不设无真值阈值。')
 _info('verbatim_starved', '场景预算没有被逐字材料挤满', 'R-5.13')
+_info(
+    'stage_signature_conflict',
+    '同场 land 事实指向多个不同 time/place/present 舞台签名',
+    'R-5.24',
+    note='冲突可能是合法的跨时空组场；全量披露，不设无真值阈值。',
+)
 
 for rule, item, req in (
     ('scene_budget_distribution', '场景预算相对源舞台的分布', 'R-5.9b'),

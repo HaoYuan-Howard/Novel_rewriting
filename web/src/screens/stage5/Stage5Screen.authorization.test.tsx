@@ -75,6 +75,7 @@ describe('Stage5 部分写作授权链', () => {
         state: 'accepted', candidate_sha256: 'c'.repeat(64),
         aggregate_subject_sha256: 'd'.repeat(64), current_decision: null, history: [],
         binding_infeasibility: null,
+        preflight: null,
         repair_capability: {
           repairable: true, reason_code: 'ready',
           chapters: [{ output_ordinal: 3, committed_rounds: 0, request_repair_available: true }],

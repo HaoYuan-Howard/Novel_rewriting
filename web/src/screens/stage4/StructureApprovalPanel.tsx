@@ -17,6 +17,7 @@ import { ActorReasonFields } from '@/components/ui/ActorReasonFields'
 import { Mono } from '@/components/ui/Mono'
 import { Panel } from '@/components/ui/Panel'
 import { GateMark } from '@/components/vocab/Badges'
+import { ApprovalWorkpackPanel } from './ApprovalWorkpackPanel'
 
 interface DraftDecision {
   decision: string
@@ -289,6 +290,8 @@ function StructureApprovalForm({
           <span>Stage5 写作授权（独立）：{doc.writing ? '已授权' : '未授权'}</span>
         </div>
       </div>
+
+      <ApprovalWorkpackPanel kind="structure" />
 
       {replanSpawn ? (
         <div className="flex items-center gap-14 border-b border-warn-line bg-warn-bg px-20 py-14">

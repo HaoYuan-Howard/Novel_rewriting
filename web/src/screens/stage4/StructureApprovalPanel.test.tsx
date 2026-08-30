@@ -52,6 +52,7 @@ function undecided(): ApprovalDoc {
       state: 'accepted', candidate_sha256: 'c'.repeat(64),
       aggregate_subject_sha256: 'd'.repeat(64), current_decision: null, history: [],
       binding_infeasibility: null,
+      preflight: null,
       repair_capability: {
         repairable: true, reason_code: 'ready',
         chapters: [{ output_ordinal: 3, committed_rounds: 0, request_repair_available: true }],
@@ -87,6 +88,7 @@ describe('Stage4 typed 结构审批', () => {
         state: 'expired', candidate_sha256: 'c'.repeat(64),
         aggregate_subject_sha256: 'd'.repeat(64), current_decision: null, history: [],
         binding_infeasibility: null,
+        preflight: null,
         repair_capability: {
           repairable: true, reason_code: 'ready',
           chapters: [{ output_ordinal: 3, committed_rounds: 0, request_repair_available: true }],
@@ -118,7 +120,7 @@ describe('Stage4 typed 结构审批', () => {
       structure: {
         ...undecided().structure,
         binding_concerns: [{
-          constraint_code: 'material_overlap',
+          constraint_code: 'material_conflict',
           chapter_ordinal: 2,
           scenes: ['c02s01', 'c02s03'],
           reason: '两场依赖同一闭合事实，需要人确认不会重复揭示。',
@@ -140,7 +142,7 @@ describe('Stage4 typed 结构审批', () => {
 
     expect(await screen.findByText('Stage4B 绑定关注项')).toBeVisible()
     expect(screen.getByText('非阻断但需人审；数量不会自动改变逐章裁决')).toBeVisible()
-    expect(screen.getByText('material_overlap')).toBeVisible()
+    expect(screen.getByText('material_conflict')).toBeVisible()
     expect(screen.getByText('场景：c02s01、c02s03')).toBeVisible()
     expect(screen.getByText('两场依赖同一闭合事实，需要人确认不会重复揭示。')).toBeVisible()
     expect(screen.getByText('closed_refs：a_1234567890abcdef')).toBeVisible()

@@ -311,6 +311,7 @@ def test_the_published_surface_is_exactly_the_current_surface(app):
         '/api/novels/{sid}/stage1/partition': ['POST'],
         '/api/novels/{sid}/stage1': ['GET'],
         '/api/novels/{sid}/approvals': ['GET'],
+        '/api/novels/{sid}/approvals/design/workpack': ['GET'],
         '/api/novels/{sid}/approvals/design/template': ['GET'],
         '/api/novels/{sid}/approvals/stage5': ['POST'],
         '/api/novels/{sid}/approvals/stage5/template': ['GET'],
@@ -319,6 +320,7 @@ def test_the_published_surface_is_exactly_the_current_surface(app):
         '/api/novels/{sid}/approvals/backfill': ['POST'],
         '/api/novels/{sid}/approvals/seen/{key}': ['POST'],
         '/api/novels/{sid}/approvals/structure': ['POST'],
+        '/api/novels/{sid}/approvals/structure/workpack': ['GET'],
         '/api/novels/{sid}/approvals/writing': ['POST'],
             '/api/novels/{sid}/approvals/reset': ['POST'],
             # 项目级可恢复删除：必须确认 sid，真实移动发生在零成本 CLI 子进程。

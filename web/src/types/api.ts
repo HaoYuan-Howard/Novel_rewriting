@@ -8,6 +8,7 @@
 import type {
   ApprovalBackfillResult,
   ApprovalDoc,
+  ApprovalWorkpack,
   BatchTrimResolutionRequest,
   DesignReviewRequest,
   DesignReviewTemplate,
@@ -139,6 +140,10 @@ export interface Api {
 
   /* 人工验收记录 */
   getApprovals(sid: string): Promise<ApprovalDoc>
+  /** Stage4 A 当前候选的异常优先只读工作包；不预填任何审批决定。 */
+  getDesignApprovalWorkpack(sid: string): Promise<ApprovalWorkpack>
+  /** Stage4 B 当前结构主体的异常优先只读工作包；不预填任何审批决定。 */
+  getStructureApprovalWorkpack(sid: string): Promise<ApprovalWorkpack>
   /** 当前盘面确定性生成的 Stage5 关闭式回执模板；只读、0 成本。 */
   getStage5ClosureTemplate(sid: string): Promise<Stage5ClosureTemplate>
   /** 原子提交当前 Stage5 Commander 回执；不启动任何付费作业。 */

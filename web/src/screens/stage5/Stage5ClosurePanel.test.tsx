@@ -77,6 +77,7 @@ function approvalDoc({
       current_decision: null,
       history: [],
       binding_infeasibility: null,
+      preflight: null,
       repair_capability: null,
     },
     structure: {

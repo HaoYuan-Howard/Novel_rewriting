@@ -21,7 +21,8 @@ inbox.py —— 「待人工」八类清单的**生产者**（BE-04 第一条；
                  （stage4 计划轻重告警自然入列——**UG-11 的闭环**：处置=归人判断）
   · `verification` stage2 全书评测中可由人补证据消解的 `pending` / `UNVER`
   · `upstream`   `sev=hard` 且根因第一嫌疑（`owner`）在**别的层**的命中
-  · `approval`   两个人定稿闸门（stage6 文案 / stage7 人名表）还没盖章
+  · `approval`   Stage4 A/B 当前 subject 及两个人定稿闸门
+                 （stage6 文案 / stage7 人名表）还没盖章
                  （⚠ 按前端契约 v1 不含 stage0——那一闸由审批状态机自己呈现）
 
 【三条纪律】
@@ -53,7 +54,10 @@ from contracts.schema.stage6 import Hook
 from contracts.schema.stage7 import NameMap
 from novel import paths, prov, wontfix
 from novel.quality.global_review import review_item_kind
-from novel.errors import ArtifactUnreadable, TerminalState, UpstreamMissing
+from novel.errors import (
+    ApprovalRequired, ArtifactUnreadable, TerminalState, UpstreamMissing,
+)
+from novel.orchestrator import approvals
 from novel.orchestrator.nodes import check_node
 from novel.orchestrator.state import (
     overview, readonly_ctx, stage2_legacy_blueprint_recovery_needed,
@@ -189,7 +193,7 @@ def inbox_view(base: str | os.PathLike[str], sid: str) -> InboxView:
 
         report = _report_of(ctx, stage)
         if report is not None:
-            items += _report_items(report, stage)
+            items += _report_items_for_inbox(report, stage)
 
     items += _verification_items(novel_dir, code)
     ov = overview(base, sid)
@@ -197,6 +201,7 @@ def inbox_view(base: str | os.PathLike[str], sid: str) -> InboxView:
     items += _stage2_legacy_blueprint_recovery_items(ov)
     items += _trim_verification_items(novel_dir, code, audits=trim_audits)
     items += _hook_verification_items(novel_dir, code)
+    items += _stage4_approval_items(base, sid, novel_dir)
     items += _approval_items(novel_dir, code)
 
     # “还等不等人”与“挡不挡交付”不能从 kind 在前端重推；由后端在唯一生产口物化。
@@ -648,4 +653,164 @@ def _approval_items(novel_dir, code: str) -> list[InboxItem]:
                 how=('核对新旧对照与「漏网叫法候选」后跑 '
                      '`stage7.approve --actor <自报身份> --reason <理由> '
                      f'--subject-sha256 {subject}`；人物决定变化会拒绝旧决定')))
+    return out
+
+
+def _report_items_for_inbox(
+    report: CheckReport,
+    stage: str,
+) -> list[InboxItem]:
+    """Stage4 INFO 只由 B 工作包投影一次，其余既有修复路完整保留。
+
+    Stage4 工作包还负责把同一批 disclosure 在 current typed decision 下统一
+    标成 ``reviewed_retained``。若通用 report 路也发一份，它既会重复，又会
+    永远停在 pending；这里只去掉 INFO/human 那一类，不触碰 HARD 的
+    upstream、repairable 或 human-only。
+    """
+    items = _report_items(report, stage)
+    if stage != 'stage4':
+        return items
+    return [
+        item for item in items
+        if not (
+            item.kind == 'human_only'
+            and REGISTRY.get(item.rule).sev == 'info'
+        )
+    ]
+
+
+def _stage4_approval_items(
+    base: str | os.PathLike[str], sid: str, novel_dir,
+) -> list[InboxItem]:
+    """Stage4 A/B 当前态 + 不可擦除的 B 披露审阅证据。
+
+    workpack 是披露的唯一投影面；Inbox 只把它的 disclosure 组转成
+    人工清单行，不重算 INFO / baseline / concern。当前结构决定已
+    精确绑定同一 subject 时，行仍保留，只转为 ``reviewed_retained``
+    并携带 typed actor/reason/hash/time；这与「从没看见」不是一个状态。
+    """
+    del novel_dir  # 路径只由 approvals 的 current-subject 生产口解析。
+    doc = approvals.get(base, sid)
+    out: list[InboxItem] = []
+    design = doc.design_review
+    if design.state in ('missing', 'expired'):
+        out.append(InboxItem(
+            kind='approval', stage='stage4', chapter=None,
+            rule='stage4.design',
+            what=(
+                'Stage4A 当前盲候选尚未逐项审阅'
+                if design.state == 'missing'
+                else 'Stage4A 旧审阅已不再绑定当前候选 subject'
+            ),
+            how=(
+                '先跑 `approval workpack design <sid> --base <base>` 读完异常与'
+                '全章 coverage，再用 design template/apply 提交完整 typed 决定'),
+        ))
+    elif design.state == 'repair_requested' and design.current_decision is not None:
+        chapters = [
+            row.output_ordinal for row in design.current_decision.chapters
+            if row.decision == 'request_repair'
+        ]
+        out.append(InboxItem(
+            kind='approval', stage='stage4', chapter=None,
+            rule='stage4.design',
+            what=f'Stage4A 当前 typed 决定要求定向修订章 {chapters}',
+            how=(
+                '按当前 decision SHA 运行 `stage4.design --repair-decision '
+                f'{design.current_decision.decision_sha256}`；这一行不会自动启动模型'),
+        ))
+    elif (
+        design.state == 'strategy_replan_requested'
+        and design.current_decision is not None
+    ):
+        out.append(InboxItem(
+            kind='approval', stage='stage4', chapter=None,
+            rule='stage4.design',
+            what='Stage4A 当前 typed 策略决定是 request_replan',
+            how=(
+                '显式运行 `stage4.design --replan`；Inbox/Workpack 只呈现'
+                '已有决定，不会代为发起付费请求'),
+        ))
+
+    structure = doc.structure
+    if structure.state in ('missing', 'expired'):
+        out.append(InboxItem(
+            kind='approval', stage='stage4', chapter=None,
+            rule='stage4.plan',
+            what=(
+                'Stage4B 当前正式计划还没有全章 typed 结构决定'
+                if structure.state == 'missing'
+                else 'Stage4B 旧结构决定已不再绑定当前 Plan+B subject'
+            ),
+            how=(
+                '先跑 `approval workpack structure <sid> --base <base>` 核对阻断、'
+                'UNVER、INFO 与全章 coverage，再用 structure template/apply 提交'),
+        ))
+    elif (
+        structure.state == 'replan_requested'
+        and structure.current_decision is not None
+    ):
+        chapters = [
+            row.output_ordinal for row in structure.current_decision.chapters
+            if row.decision == 'request_replan'
+        ]
+        out.append(InboxItem(
+            kind='approval', stage='stage4', chapter=None,
+            rule='stage4.plan',
+            what=f'Stage4B 当前结构决定要求重规划章 {chapters}',
+            how=(
+                '回到 Stage4A 显式提交 request_replan 并另行启动；'
+                '当前清单不从决定自动 spawn'),
+        ))
+
+    try:
+        workpack = approvals.structure_workpack(base, sid)
+    except (UpstreamMissing, TerminalState, ApprovalRequired):
+        # Plan/B 还没有到可组 workpack 的相位；上面的 A/B state
+        # 仍是当前可读结论。载体损坏则不在此处吞，必须 fail closed。
+        return out
+    disclosure = next(
+        group for group in workpack.groups if group.group == 'disclosure')
+    current_decision = structure.current_decision
+    decision_is_current_for_workpack = (
+        current_decision is not None
+        and current_decision.subject_sha256 == workpack.subject_sha256
+    )
+    decision_by_chapter = (
+        {
+            row.output_ordinal: row.decision
+            for row in current_decision.chapters
+        }
+        if current_decision is not None else {}
+    )
+    for item in disclosure.items:
+        retained = decision_is_current_for_workpack
+        evidence = None
+        if retained and current_decision is not None:
+            evidence = InboxDecision(
+                actor=current_decision.actor,
+                reason=current_decision.reason,
+                subject_sha256=current_decision.subject_sha256,
+                state=(
+                    decision_by_chapter.get(item.chapter_ordinal)
+                    if item.chapter_ordinal is not None
+                    else structure.state
+                ) or structure.state,
+                decided_at=current_decision.decided_at,
+            )
+        out.append(InboxItem(
+            kind='human_only',
+            stage='stage4',
+            chapter=item.chapter_ordinal,
+            rule=item.rule or item.code,
+            what=item.detail,
+            how=(
+                '当前 hash-bound 结构决定已覆盖该披露；保留证据供审计'
+                if retained
+                else '在结构 workpack 中阅读该披露，并用完整全章 '
+                'structure typed decision 表达处置'
+            ),
+            attention='reviewed_retained' if retained else 'pending',
+            decision=evidence,
+        ))
     return out

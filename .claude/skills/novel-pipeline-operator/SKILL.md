@@ -19,7 +19,7 @@ description: 作为受托终审代理，使用本仓 novel.cli 将单本中文�
 | 正文外发授权（`egress_authorized`） | 独立控制小说正文及派生上下文能否发送给外部模型。**交互式会话里同样默认 `granted`**，同样不索要 |
 | 可选约束 | 用户指定的模型实验、定向章节范围、停止条件或审阅偏好 |
 
-把“使用本 skill 端到端跑书”视为一次**完整**委托：`stage0.approve`、Stage2 逐项复核、Stage4A 的全书策略 + 逐章 typed 设计审阅、Stage4B 编译后的最终逐章 typed 结构裁决、独立 Stage5 writing 授权、`stage6.approve`、`stage7.approve` 的代批，加上两项授权。**这些事都不要回头问用户**——本 skill 的产品承诺是“用户只审最终成稿”。Stage2 代批仍必须逐项写入 typed PASS/FAIL/UNVER；“agent 看过”不能替代文件里的决定，更不能让 FAIL/UNVER 越过硬闸。两次 Stage4 审阅的主体与作用不同，任何一次也不能由另一张票、机械绿灯或付费授权代替。用户在本次对话里明确收回某一项时遵从用户范围，并在终审包写明被收回的是哪一项。
+把“使用本 skill 端到端跑书”视为一次**完整**委托：`stage0.approve`、Stage2 逐项复核、Stage4A 的全书策略 + 逐章 typed 设计审阅、Stage4B 编译后的最终逐章 typed 结构裁决、独立 Stage5 writing 授权、最终 Review 后的 Stage5 typed 闭合回执、`stage6.approve`、`stage7.approve` 的代批，加上两项授权。**这些事都不要回头问用户**——本 skill 的产品承诺是“用户只审最终成稿”。Stage2 代批仍必须逐项写入 typed PASS/FAIL/UNVER；“agent 看过”不能替代文件里的决定，更不能让 FAIL/UNVER 越过硬闸。两次 Stage4 审阅、Stage5 写作授权与写后闭合回执的主体及作用都不同，任何一次也不能由另一张票、机械绿灯或付费授权代替。用户在本次对话里明确收回某一项时遵从用户范围，并在终审包写明被收回的是哪一项。
 
 两项授权仍**分别取值**，只是默认值都为真：收回其中一项时，不因另一项仍在而推定它。headless 是唯一的例外，取值以 launcher prompt 原文为准（见[运行环境](references/runtime-profiles.md)）。
 
@@ -61,7 +61,11 @@ description: 作为受托终审代理，使用本仓 novel.cli 将单本中文�
 5. 从仓根优先用 `.claude/skills/novel-pipeline-operator/scripts/run_step.py --base <BASE> --sid <SID> --expect-code-version <START_CODE> <node> -- [flags]` 预览生产 `build_steps`；真跑采用同一条命令并把 `--execute` 放在 node 前。需要机器复核 preview 时加 `--evidence-json <PATH>`：它原子记录同一份 Step 的 argv/付费/写盘信息，preview 与 execute 复用同一路径时内容不同会拒绝覆盖。execute 无论是否传该路径，都会把本次真实 Step canonical evidence 的完整 SHA-256 同时写进 start/end 信标 note，供会话证据关闭式核对。headless Commander 下，runner 还会从 append-only started 事件重读并核验冻结的 commander/executor profile、两项授权和代码指纹；为当前 node 选择默认 executor 或逐节点 override，并把同一快照写进带契约身份的 evidence 与子 CLI argv。脚本会逐字执行同一 Step.argv、串起 start/end 信标，并在每一步前后拒绝代码漂移。新书的 `stage0.remove` 省略 runner 的 `--sid`。不要凭文档手拼真实 argv，也不要手加运行期 agent profile 参数。八个 agent executor 已原生执行“候选 → 代码校验反馈 → 同 session resume”，主路**不得**再带 legacy `--response-repair agent`；该 flag 只属于显式 DeepSeek 临时回滚。Stage5 全书写作节点不带选臂参数；定向维护只用 `--chapters`。
 6. 不使用 runner 的特殊诊断命令，仍须执行 `mark start`，取得真实子进程退出码后执行 `mark end --exit <rc>`；`preview` 不打点，并在动作前确认当前代码仍等于 `<START_CODE>`。
 7. 一次只运行一个写盘节点。用退出码判断进程结果，用最新 check badge 与 finding 判断质量结果。
-8. 命中闸门时按代批契约裁决；命中失败时按修复状态机收敛。每次决定同时记录证据、被否决方案和复验结果。
+8. 命中闸门时按代批契约裁决；Stage4A/B 两次裁决都先完整读取当前 hash-bound 的
+   `approval workpack design|structure`，再编辑并提交决定模板。工作包只缩小阅读范围，不自动 accept，
+   INFO/metric/UNVER 不制造付费动作。Stage5 最终 Review 与所有 edit/trim/wontfix 收口后，逐项读取
+   current closure workpack，再提交 `approval template/apply stage5` 的 typed 回执；不得代签或拿旧 s5
+   继续下游。命中失败时按修复状态机收敛；每次决定同时记录证据、被否决方案和复验结果。
 9. `stage7.assemble` 后执行独立成书对账，再刷新 `state`、`inbox` 与活动终态文件；从仓根用 `.claude/skills/novel-pipeline-operator/scripts/collect_final_evidence.py --base <BASE> --sid <SID> --started-at <STARTED_AT> --start-code-version <START_CODE>` 收拢本次会话事实。随后运行同参数的 `.claude/skills/novel-pipeline-operator/scripts/sync_review_evidence.py`，自动同步质量表、会话/累计账本、退出序列与机器锚点，不手抄这些重复事实。
 10. 清除终审包中的其余占位符，从仓根运行同一组会话参数的 `.claude/skills/novel-pipeline-operator/scripts/validate_review.py`，再运行 `.claude/skills/novel-pipeline-operator/scripts/verify_delivery.py --base <BASE> --sid <SID> --start-code-version <START_CODE>`；只有后者返回 `ready*` 才可交付，然后只把成书与终审包交给用户。
 
@@ -95,7 +99,8 @@ description: 作为受托终审代理，使用本仓 novel.cli 将单本中文�
 - `inbox.delivery_counts.blocking == 0`；`attention_counts` 区分“尚待处理”与“已裁决但记录保留”，不得拿总数冒充失败数。披露项逐类记录。
 - `inbox.counts` 的八类余额必须逐类披露：`invalid`、`rejected`、`repairable`、`human_only`、`verification`、`upstream`、`stalled`、`approval`；类别总数不直接等于阻塞数，阻塞性只读 `delivery_effect`。
 - 活动目录不存在未解释的 `.INVALID`、`.rejected` 或 `.stalled`；历史 `_rounds/` 不计入活动余额。
-- 全部代批均有可追溯依据；Stage4A 当前设计审阅与 Stage4B 最终结构裁决均逐章接受，所选 stage6 候选和 stage7 人名表均通过各自定稿条件。
+- 全部代批均有可追溯依据；Stage4A 当前设计审阅与 Stage4B 最终结构裁决均逐章接受；Stage5
+  `closure.state=closed` 且 `gate.s5` 绑定当前 closure 决定；所选 stage6 候选和 stage7 人名表均通过各自定稿条件。
 - 成书通过 [代批与终审契约](references/delegated-review.md) 的逐字对账，终审包中的统计与盘上事实一致。
 - 终审包的退出序列按 `<STARTED_AT>` 切出本次会话，成本账再按这些 beacon 的 `run_id + node`
   精确联结；旧无 run id 行只作 legacy/ungrouped 累计审计，不能靠时间猜进本轮；起止代码指纹逐字一致。

@@ -246,8 +246,58 @@
   "human",
   "delegated_operator"
  ],
+ "design_preflight_statuses": [
+  "pass",
+  "blocked"
+ ],
+ "approval_workpack_groups": [
+  "blocking",
+  "semantic_attention",
+  "disclosure",
+  "metric_only",
+  "phase_deferred",
+  "coverage"
+ ],
+ "approval_workpack_kinds": [
+  "design",
+  "structure"
+ ],
+ "approval_workpack_actions": [
+  "accept",
+  "request_repair",
+  "request_replan"
+ ],
+ "approval_workpack_effects": [
+  "block_b",
+  "block_context",
+  "attention",
+  "disclose",
+  "read_only",
+  "phase_deferred",
+  "coverage"
+ ],
+ "approval_workpack_group_effects": {
+  "blocking": [
+   "block_b",
+   "block_context"
+  ],
+  "semantic_attention": [
+   "attention"
+  ],
+  "disclosure": [
+   "disclose"
+  ],
+  "metric_only": [
+   "read_only"
+  ],
+  "phase_deferred": [
+   "phase_deferred"
+  ],
+  "coverage": [
+   "coverage"
+  ]
+ },
  "design_repair_codes": [
-  "structure_delta",
   "entry_anchor",
   "ending_anchor",
   "fact_grouping",
@@ -255,6 +305,9 @@
   "noncontiguous_regroup",
   "scene_goal",
   "binding_constraint_unsat"
+ ],
+ "design_repair_codes_retired": [
+  "structure_delta"
  ],
  "design_repair_constraint_arity": {
   "structure_delta": [

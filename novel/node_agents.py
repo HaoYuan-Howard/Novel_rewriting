@@ -19,14 +19,18 @@ from typing import Any, Generic, TypeVar
 
 from pydantic import BaseModel
 
-from contracts.invariants import STAGE4_DESIGN_MAX_CONCURRENCY
+from contracts.invariants import (
+    STAGE4_DESIGN_MAX_CONCURRENCY, STAGE4_PLAN_MAX_CONCURRENCY,
+)
 from contracts.schema.orchestration import AgentProfile
 from contracts.schema.report import CheckReport
 from contracts.schema.stage2 import (
     ChapterBlueprints, GlobalAgentTurnResponse, GlobalEvidencePatchTurn,
     GlobalFullCandidateTurn, GlobalGrounding,
 )
-from contracts.schema.stage4 import BlindCandidate, EvidenceBinding
+from contracts.schema.stage4 import (
+    BindingConcern, BlindCandidate, ChapterBindingResponse, EvidenceBinding,
+)
 from contracts.schema.stage5 import ChapterResponse
 from contracts.schema.stage6 import Hook, HookSemanticReview
 from contracts.schema.stage7 import NameMap
@@ -1854,9 +1858,39 @@ class Stage4DesignAgent(NodeExecutorAgent[BlindCandidate]):
 
 
 class Stage4PlanAgent(NodeExecutorAgent[BaseModel]):
-    """Stage4B 证据绑定/计划编译：typed infeasible 是 landed-red，不洗绿。"""
+    """Stage4B 证据绑定/计划编译：typed infeasible 是 landed-red，不洗绿。
+
+    批次 4 起 agent 主路是**章级池**（`Stage4PlanSessionPool`）：机械章 0
+    wire、歧义章私有 session；`run_plan` 按 ``prepare_chapters`` 识别池并走
+    章级拓扑。legacy 整书单发 client 仅在显式传入时保留。
+    """
 
     node = 'stage4.plan'
+
+    def __init__(self, ctx: RunContext, *, driver: AgentDriver | None = None,
+                 max_turns: int = 4) -> None:
+        if ctx.node != self.node:
+            raise ValueError(
+                f'{type(self).__name__} 只接受 {self.node}，实得 {ctx.node}')
+        if ctx.executor_profile is None:
+            raise ValueError('stage4.plan executor 缺 resolved profile')
+        self.ctx = ctx
+        driver_factory: Stage4DesignDriverFactory | None = None
+        if driver is not None:
+            # 显式传入的单 driver 只能服务一个章 session：任何两章共享同一
+            # provider session 都是隔离破口，第二取用关闭式拒绝。
+            state = {'used': False}
+
+            def _single_use_factory(_purpose: str, _chapter: int | None):
+                if state['used']:
+                    raise ProvenanceRefused(
+                        'stage4.plan 章级池不接受跨章共享同一 driver/session')
+                state['used'] = True
+                return driver
+
+            driver_factory = _single_use_factory
+        self.client = Stage4PlanSessionPool(
+            ctx, driver_factory=driver_factory, max_turns=max_turns)
 
     def run(self) -> NodeAgentResult[BaseModel]:
         try:
@@ -1882,6 +1916,237 @@ class Stage4PlanAgent(NodeExecutorAgent[BaseModel]):
             raise
         finally:
             self.client.close()
+
+
+
+class Stage4PlanSessionPool:
+    """Stage4B 歧义章的私有 session 池（TODO-45 批次 4）。
+
+    机械基线把唯一可解的绑定由代码确定；只有带 ambiguity 的章才需要模型。
+    每章一条 single-session run/checkpoint 链（`stage4_runs.plan_chapter_run_spec`），
+    最多 `STAGE4_PLAN_MAX_CONCURRENCY` 章；任何两章不共享 driver、logical
+    session 或 provider session。机械章（零歧义）由代码确定性重算，**不进入
+    本池**——0 wire、0 checkpoint（checkpoint 的价值是免重付模型调用，
+    确定性重算本身零成本）。
+    """
+
+    def __init__(
+        self,
+        ctx: RunContext,
+        *,
+        driver_factory: Stage4DesignDriverFactory | None = None,
+        max_turns: int = 4,
+        concurrency: int = STAGE4_PLAN_MAX_CONCURRENCY,
+    ) -> None:
+        if ctx.node != 'stage4.plan':
+            raise ValueError(
+                f'Stage4PlanSessionPool 只接受 stage4.plan，实得 {ctx.node!r}')
+        if ctx.executor_profile is None:
+            raise ValueError('stage4.plan executor 缺 resolved profile')
+        if (not isinstance(max_turns, int) or isinstance(max_turns, bool)
+                or not 1 <= max_turns <= 4):
+            raise ValueError('Stage4PlanSessionPool.max_turns 必须在 1..4')
+        if (not isinstance(concurrency, int) or isinstance(concurrency, bool)
+                or concurrency < 1):
+            raise ValueError('Stage4PlanSessionPool.concurrency 必须 >= 1')
+        self.ctx = ctx
+        self.profile: AgentProfile = ctx.executor_profile
+        self.model = self.profile.model
+        self.max_turns = max_turns
+        self.concurrency = min(STAGE4_PLAN_MAX_CONCURRENCY, concurrency)
+        self._driver_factory = driver_factory or (
+            lambda _purpose, _chapter: create_driver(
+                self.profile, role='executor'))
+        self._clients: dict[int, SessionAgentClient] = {}
+        # factory 返回的是 provider session 的所有者，不是可跨章复用的无状态
+        # transport。用对象身份守住最早的共享破口；provider_session_id 的跨对象
+        # 碰撞仍由 agent_session_audit 在首轮真实响应处关闭式拒绝。
+        self._driver_owners: dict[int, int] = {}
+        self._probe: AgentProbe | None = None
+        self._progress: dict[int, RequestProgress] = {}
+        self._closed = False
+        self._lock = threading.RLock()
+
+    def _client(self, chapter: int) -> SessionAgentClient:
+        with self._lock:
+            client = self._clients.get(chapter)
+            if client is not None:
+                return client
+            driver = self._driver_factory(
+                stage4_runs.plan_chapter_purpose(chapter), chapter)
+            owner = self._driver_owners.get(id(driver))
+            if owner is not None and owner != chapter:
+                raise ProvenanceRefused(
+                    'stage4.plan 章级池不接受跨章共享同一 driver/session：'
+                    f'ch{owner} 与 ch{chapter}')
+            self._driver_owners[id(driver)] = chapter
+            if self._probe is None:
+                probe = driver.probe()
+                if not probe.available:
+                    raise ProvenanceRefused(
+                        f'{stage4_runs.plan_chapter_purpose(chapter)}: '
+                        'executor driver 本地探针不可用：'
+                        f'{probe.detail or "unknown"}')
+                if (driver.driver != self.profile.driver
+                        or probe.driver != self.profile.driver
+                        or probe.provider != driver.provider):
+                    raise ProvenanceRefused(
+                        'stage4.plan 章 session driver/probe/profile 身份不闭合')
+                self._probe = probe
+            elif (driver.driver != self._probe.driver
+                  or driver.provider != self._probe.provider):
+                raise ProvenanceRefused(
+                    'stage4.plan 章 session 在同一 pool 内漂移厂商身份')
+            client = SessionAgentClient(
+                self.ctx, self.profile, driver, chapter=chapter,
+                parent_run_id=self.ctx.run_id, max_turns=self.max_turns,
+                preflight_probe=self._probe)
+            self._clients[chapter] = client
+            return client
+
+    def prepare_chapters(self, chapters: Sequence[int]) -> None:
+        """为本批歧义章预建私有 client 与 RequestProgress。
+
+        client 必须在任何 wire 之前全部建好：这样 factory 错把一个有状态 driver
+        发给两章时，会在花钱前失败，而不是并发跑到一半才发现 session 串线。
+        """
+        raw = [int(chapter) for chapter in chapters]
+        normalized = sorted(set(raw))
+        if len(normalized) != len(raw):
+            raise ProvenanceRefused('stage4.plan 章 session 章号重复')
+        if not normalized:
+            raise ProvenanceRefused('stage4.plan 章批次不能为空')
+        total = len(normalized)
+        self._progress = {
+            chapter: RequestProgress(chapter=chapter, index=index, total=total)
+            for index, chapter in enumerate(normalized, 1)
+        }
+        for chapter in normalized:
+            self._client(chapter)
+
+    def restore_chapter(
+            self, chapter: int, request: Any, *,
+            validator: Callable[[Any, Any], str | None] | None = None,
+    ) -> Any | None:
+        """恢复该章 latest accepted checkpoint；缺/漂移返回 None。"""
+        restored = stage4_runs.restore_plan_chapter_checkpoint(
+            self.ctx, request, validator=validator)
+        if restored is None:
+            return None
+        client = self._client(chapter)
+        client.restore_checkpoint_acceptance(
+            stage4_runs.plan_chapter_purpose(chapter),
+            restored.acceptance,
+            system=request.system, user=request.user,
+            max_tokens=request.max_tokens,
+            recovery_policy=stage4_runs.plan_chapter_run_spec(
+                chapter).recovery_policy,
+        )
+        return restored
+
+    def ask_chapter(
+            self, chapter: int, request: Any, *,
+            validator: Callable[[Any, Any], str | None] | None = None,
+    ) -> ChapterBindingResponse:
+        """一章的 wire：ask → 返回 typed 解析；checkpoint 由调用方在业务
+        闭合校验通过后写（`write_chapter_checkpoint`）。"""
+        progress = self._progress.get(chapter)
+        if progress is None:
+            raise ProvenanceRefused(
+                f'{stage4_runs.plan_chapter_purpose(chapter)}: '
+                '章 session 必须先经 prepare_chapters 建立批次进度')
+        client = self._client(chapter)
+        return client.ask_json(
+            request.system, request.user,
+            model_cls=ChapterBindingResponse,
+            purpose=stage4_runs.plan_chapter_purpose(chapter),
+            max_tokens=request.max_tokens,
+            validator=validator,
+            retain_validator_rejection=True,
+            progress=progress,
+            recovery_policy=stage4_runs.plan_chapter_run_spec(
+                chapter).recovery_policy,
+        )
+
+    def write_chapter_checkpoint(
+            self, chapter: int, request: Any, *,
+            response_payload: Mapping[str, Any],
+            state_payload: Mapping[str, Any],
+            revision_key: str = 'terminal',
+    ) -> None:
+        client = self._client(chapter)
+        stage4_runs.write_plan_chapter_checkpoint(
+            self.ctx, request,
+            response_payload=response_payload,
+            acceptance=client.accepted_checkpoint(
+                stage4_runs.plan_chapter_purpose(chapter)),
+            state_payload=state_payload, revision_key=revision_key)
+
+    def queue_chapter_feedback(self, chapter: int, rows: Sequence[Mapping[str, object]]) -> bool:
+        """业务 HARD 反馈回**该章自己的** session；其他章不受影响。"""
+        return self._client(chapter).queue_code_validation_feedback(
+            rows, purpose=stage4_runs.plan_chapter_purpose(chapter))
+
+    def accepted_chapter(self, chapter: int) -> tuple[str, tuple[str, ...]]:
+        client = self._client(chapter)
+        purpose = stage4_runs.plan_chapter_purpose(chapter)
+        return client.accepted_attempt(purpose), tuple(
+            sorted(set(client.accepted_models(purpose))))
+
+    def chapter_acceptance(self, chapter: int) -> dict[str, Any]:
+        """章级 accepted stdout 的完整不可变身份，供 hash-bound 恢复留证。"""
+        return self._client(chapter).accepted_checkpoint(
+            stage4_runs.plan_chapter_purpose(chapter))
+
+    def chapter_rejection(self, chapter: int) -> dict[str, Any] | None:
+        """只暴露最后一轮 schema-valid dynamic-validator 拒稿。"""
+        return self._client(chapter).last_json_rejection(
+            stage4_runs.plan_chapter_purpose(chapter))
+
+    @property
+    def provider_session_id(self) -> str | None:
+        """只投影“本进程是否有 live session”；聚合从不冒充单一 session。"""
+        with self._lock:
+            live = sorted(
+                str(client.provider_session_id)
+                for client in self._clients.values()
+                if client.provider_session_id is not None)
+        return None if not live else '|'.join(live)
+
+    @property
+    def turns_used(self) -> int:
+        with self._lock:
+            return sum(client.turns_used for client in self._clients.values())
+
+    @property
+    def driver_failed(self) -> bool:
+        with self._lock:
+            return any(client.driver_failed
+                       for client in self._clients.values())
+
+    def finish(self, *, process_state: str, delivery_state: str,
+               error_kind: str | None = None) -> None:
+        """与 SessionAgentClient.finish 同形；executor 收口统一走这里。"""
+        self.finish_all(process_state=process_state,
+                        delivery_state=delivery_state,
+                        error_kind=error_kind)
+
+    def finish_all(self, *, process_state: str, delivery_state: str,
+                   error_kind: str | None = None) -> None:
+        with self._lock:
+            clients = list(self._clients.values())
+        for client in clients:
+            client.finish(process_state=process_state,
+                          delivery_state=delivery_state,
+                          error_kind=error_kind)
+
+    def close(self) -> None:
+        with self._lock:
+            clients = list(self._clients.values())
+            self._closed = True
+        for client in clients:
+            client.close()
+
 
 
 Stage5DriverFactory = Callable[[int], AgentDriver]
@@ -3278,6 +3543,7 @@ __all__ = [
     'NodeAgentResult', 'NodeExecutorAgent', 'Stage2BlueprintAgent',
     'Stage2GlobalAgent', 'Stage4DesignAgent', 'Stage4DesignDriverFactory',
     'Stage4DesignSessionPool', 'Stage4PlanAgent',
+    'Stage4PlanSessionPool',
     'Stage5DriverFactory', 'Stage5SessionPool',
     'Stage5WriteAgent', 'SemanticDriverFactory', 'SemanticSessionPool',
     'Stage6HookAgent',

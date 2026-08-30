@@ -187,8 +187,12 @@ def test_sync_run_projects_start_and_end_into_the_progress_beacon(base):
 
 
 def test_job_id_reaches_every_child_env_and_both_progress_events(base):
-    """服务作业的一份身份必须同时进入子进程环境与 start/end 观察轨迹。"""
-    run_id = 'acceptance-run-42'
+    """run 身份进子进程环境与两行信标；execution 身份只标进程 attempt。
+
+    TODO-45 批次 3 拆开两根轴：`run_id` 是业务 run（首跑/恢复/聚合不变，
+    账本、session、checkpoint 都以它为键）；`job_id` 是本次进程 attempt。
+    """
+    job_id = 'acceptance-run-42'
     inherited: list[str | None] = []
 
     def capture_env(argv, cwd, env, log):
@@ -197,13 +201,15 @@ def test_job_id_reaches_every_child_env_and_both_progress_events(base):
 
     rec = J.run(
         base, 'stage3.style', SID, steps=_steps(2), spawn=capture_env,
-        registry=J.JobRegistry(), job_id=run_id)
+        registry=J.JobRegistry(), job_id=job_id)
     events = beacon.read_events(base)
 
-    assert rec.job_id == run_id
-    assert inherited == [run_id, run_id]
-    assert [(event.phase, event.run_id) for event in events] == [
-        ('start', run_id), ('end', run_id)]
+    assert rec.job_id == job_id
+    assert rec.start.run_id
+    assert rec.start.run_id != job_id
+    assert inherited == [rec.start.run_id, rec.start.run_id]
+    assert [(event.phase, event.run_id, event.execution_id) for event in events] == [
+        ('start', rec.start.run_id, job_id), ('end', rec.start.run_id, job_id)]
 
 
 def test_a_registry_only_releases_its_own_lock():
