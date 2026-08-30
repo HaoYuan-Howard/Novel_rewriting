@@ -12,13 +12,14 @@
 | `workflow.md` | 当前 CLI 工作流和状态解释 | 个案修复、审美裁决 |
 | `delegated-review.md` | 闸门政策、候选选择、成书对账、终审包 | CLI 注册表 |
 | `recovery.md` | 稳定修复状态机和正式人工写入面 | 未验证经验 |
-| `runtime-profiles.md` | 宿主差异 | 流水线质量判据 |
+| `runtime-profiles.md` | 宿主差异：授权来源、等待、停止、观察 | executor 选择、transport 诊断、流水线质量判据 |
+| `execution-modes.md` | Agent driver / legacy LLM transport 的选择、预检、恢复与禁止降级 | 交互/headless 权限来源、stage 顺序 |
 | `field-notes.md` | 经验证或明确标态的经验；索引兼入口（超出整读预算后条目分片进 `field-notes/`） | 稳定公共接口、流水账 |
 | `assets/final-review-template.md` | 用户最终审阅界面 | 运行逻辑 |
 | `scripts/session_preflight.py` | 只读固化一次 run 的起始时间、代码指纹、sid 与路径 | 推进节点或替代授权检查 |
 | `scripts/operator_phase.py` | 调用生产遥测唯一落点，追加不含正文的 operator session/phase 墙钟事件并生成归属摘要 | 估算 Commander 宿主模型 token/成本、冒充流水线 node 或成为交付闸 |
 | `scripts/stage0_review_workpack.py` | 只读复用生产 check/审校分区/`scan_text`，固定 Stage0 反向审阅模式并输出紧凑工作包 | 自动审批、自动剔除或复制生产删除判据 |
-| `scripts/run_step.py` | 调用生产 `build_steps`，核对起始代码并给每一步串 start/end 信标 | 重造 argv、判定质量或吞掉节点退出码 |
+| `scripts/run_step.py` | 重铸 exact execution permit，调用生产 `build_steps`，以同一 permit/claim envelope + `step_index` 覆盖 root/follow，并给每一步串 start/end 信标 | 重造 argv、判定质量或吞掉节点退出码 |
 | `scripts/finalize_review.py` | canonical 收尾：collect 恰一次、内存 render/validate、验证通过后原子提交，再以全新读作用域调用生产交付终验 | 在写盘后复用旧快照、吞掉校验失败或用结束时当前指纹替代起始事实 |
 | `scripts/collect_final_evidence.py` | finalizer 复用的只读事实收集器；也保留为独立诊断入口 | 新造质量判据、写盘或替代逐项人工审阅 |
 | `scripts/sync_review_evidence.py` | finalizer 复用的稳定机器事实块 renderer/原子提交器；也保留为兼容入口 | 改写 agent 的语义判断、代批理由或产物 |
@@ -51,6 +52,7 @@
 | 闸门判据或候选选择 | `delegated-review.md` | report/schema、终审模板、真实失败样本 |
 | 修复入口或写入权限 | `recovery.md` | `NODES.flags`、终态文案、schema、真实消费路径 |
 | 新宿主 | `runtime-profiles.md` | launcher 权限、等待/停止机制、日志与恢复测试 |
+| 新 executor/transport 或模式切换规则 | `execution-modes.md` | capability、CLI 控制参数、session/ledger 与禁止降级测试 |
 | 新实战现象 | `field-notes.md` | 先复现和标态，不立即改稳定契约 |
 | 用户终审需求 | 模板 + `delegated-review.md` | 真实终审包是否一屏可读、事实是否可追溯 |
 
@@ -106,7 +108,9 @@ FN-006 就是这么烂掉的，它点名的那个字段整个消失了而条目�
 
 **整读预算不是一个写死的数字**，是「单份经验文件不得比每跑必读集还贵」：文件看起来不大时
 执行者会直接整读，那样“按需检索”就名存实亡。校验器按 `SKILL.md` + `workflow.md` +
-`delegated-review.md` + `runtime-profiles.md` 的当前体量算这条界，用掉七成时提示，超了报错。
+`delegated-review.md` + `runtime-profiles.md` + `execution-modes.md` 的当前体量算这条界，
+用掉七成时提示，超了报错。宿主与执行模式仍只读各自匹配小节；这里用整文件体量是保守上界，
+不是要求把另一模式也加载进上下文。
 
 **超了就分片，不要为了缩体积删经验**：
 
@@ -144,7 +148,8 @@ references/field-notes/cross-cutting.md
 **结构断言**（校验器）：frontmatter 只有 `name` 与 `description`；`SKILL.md` 少于 500 行；
 所有本地链接存在、所有 reference 均从 `SKILL.md` 直接可达；workflow 的节点顺序与
 `PIPELINE_STEPS` 完全一致；经验 ID 唯一且六个字段齐全；终审模板的必需章节存在；
-headless 消费提示词不依赖已删除的章节编号。
+headless 消费提示词不依赖已删除的章节编号；`.agents` 发现 shim 只指向 canonical skill、
+不复制主循环；runtime 只含宿主路由，execution modes 同时覆盖两种 executor 且明确禁止自动降级。
 
 **行为断言**（测的是「文档声称的行为与代码是否一致」，结构检查测不到；真值一律从生产落点
 反查，校验器里不出现第二份清单）：
@@ -158,6 +163,7 @@ headless 消费提示词不依赖已删除的章节编号。
 | 「允许写入面」表与 `NODES[node].flags` **双向**对账 | `NODES` + `FREE_ENTRIES` + `write_effect` | 散文里“本层没有 X”不可判定，转成“表必须覆盖 X”才抓得住 |
 | 判据 `fix` 指名的路由必须被提过 | `contracts.rules.REGISTRY` 的 `Rule.fix` | finding 当场指着一条 skill 里没有的路 |
 | 写出的 `novel.cli <子命令>` 必须注册在案（只做正向） | argparse `add_parser` | 反向会逼着把 queue 系列塞进主循环，那是假红 |
+| `operator next --json` 必须先于 runner，且每次变更后重新调用 | SKILL/workflow 的稳定循环 | 模型从 Stage 表猜下一节点，确定性调度器形同虚设 |
 | 推荐过滤正则接住每一种非 `ok` 状态，且**不**接住 `[OK]` | `render.py::_STATUS_MARK` | 过滤吞掉 `[--]` / 来源行 / `⚠` 就不再是“只改变读法”；反向那半防的是把正则写成 `.*` 换绿灯 |
 | 终审模板的“N 类计数”跟着 `INBOX_KIND` 走 | `INBOX_KIND` | `assets/` 长期不在行为断言面内，上一次十二处对账就漏了模板 |
 | `依据` 里的 `路径::符号` 必须落地 | `ast` 解析目标文件 | 经验的价值等于它的依据能不能回查 |
@@ -189,9 +195,13 @@ headless 消费提示词不依赖已删除的章节编号。
 
 ## 前向测试
 
-重大改版后至少做两种无泄漏验证：
+重大改版后至少做三种无泄漏验证：
 
-1. 给一个全新执行者 `SKILL.md` 路径、sid/base 和明确授权，让其仅凭 skill 说出下一安全动作与所需证据。
-2. 给一个带 `.INVALID`、落选候选 HARD 或 stage7 二次编辑的原始状态，让其完成修复决策和终审包片段。
+1. 给一个全新执行者 `SKILL.md` 路径、sid/base 和明确授权，确认它先调用 `operator next --json`，
+   再消费返回的 action，而不是仅凭 skill 说出或猜出下一节点。
+2. 分别给出 headless + Agent driver、交互式 + legacy transport 两组上下文；前者只读取 headless/Agent
+   小节且绝不运行 DeepSeek doctor，后者只读取交互/legacy 小节且不伪造 started profile。
+3. 给一个带 `.INVALID`、落选候选 HARD 或 stage7 二次编辑的原始状态，让其完成修复决策和终审包片段；
+   修复写盘后必须重新取 next，不能沿用旧 action SHA。
 
 不要告诉验证者预期答案或旧缺陷。对照其实际读取的资源、命令、停机边界和产物；“验证者说文档没写”也要回查文件，不能直接堆入重复说明。

@@ -266,6 +266,7 @@ agent 代跑不是 `NODES` 中的流水线节点，不能塞进 `JobStart`；它
 | `authorized` | `bool` | **是** | 只表示是否允许产生外部调用费用 | **契·码** |
 | `egress_authorized` | `bool` | **是** | 只表示正文及派生上下文能否外发 | **契·码** |
 | `code_version` | `str \| null` | **是** | 启动时仓库代码指纹；历史事件可空 | **契·码** |
+| `skill_sha256` | `str \| null` | **是（可空）** | canonical `novel-pipeline-operator` 的入口与 `references/`、`scripts/`、`assets/` 排序 path + 原始字节整树 SHA-256；旧事件可空且不得用当前 skill 回填，新 run 缺失或运行期间漂移只能 unknown | **契·码** |
 | `profiles` | `PipelineAgentProfiles \| null` | **是（可空）** | Commander + 默认 executor + 节点覆盖的解析后快照；新 run 必为非空，null 只表示旧事件未记录，不得用当前默认回填 | **契·码** |
 
 两项授权不能相互推定。preview 可在任一项为 false 时只读展示；start/batch 在任何 probe/spawn/wire
@@ -279,12 +280,59 @@ Commander 的 stdout/stderr 只形成供应商 observation，不作为业务完�
 但外层 ended 仍尽力落账。child executor 通过 started 事件的 contract SHA 复验相同 base/sid/code/
 profiles/授权；无法复验时不得启动付费节点。
 
+#### 2.4a `commander_admissions.jsonl` —— 顶层退出与子执行之间的持久准入账
+
+只扫 `agent_progress.jsonl` 抓不到“已经决定启动、尚未来得及写 start beacon”的窗口；顶层 Commander
+若在这时退出，空扫描会过早验盘并释放书锁。每条新 run 因此在写 `opened` 前先取得 per-parent OS
+byte-lock owner lease，并持有到 ended/书锁收口的最外层 finally；headless
+`run_step.py --execute` 在 evidence、beacon 与节点子进程前写 `claimed`，完整 Step 序列结束后写
+`released`；typed approval、response-repair、终审与 operator telemetry 等非 node writer 也用
+`write:<operation>` claim 覆盖自己的完整 currentness＋write 窗口。顶层 invocation 返回或异常后写
+`closed`。claim 与 close 共用同一个 append transaction，所以 close 后迟到的 claim 必拒，close 前
+成功的 claim 必留在 active 集合里等待 release。双面 drain 正常闭合后追加 `drained`；只有显式、
+hash-bound 的孤儿恢复才追加 `reconciled`。
+
+`CommanderAdmissionEvent` 的 v1 wire 为：
+
+| 字段 | 类型 | 必填 | 内容 | 证据 |
+|---|---|---|---|---|
+| `wire_version` | `1` | **是** | 当前只写 v1 | **契·码** |
+| `parent_run_id` | `str` | **是** | 所属 Commander run；同一 gate 的六态只认这一格 | **契·码** |
+| `sid` | `str` | **是** | 所属书；同 parent run 漂移即坏账 | **契·码** |
+| `kind` | `str` | **是** | `opened / claimed / released / closed / drained / reconciled` 六态；opened 只能一次，closed 最多一次且可幂等重试 | **契·码** |
+| `ts` | `int` | **是** | epoch 秒 | **契·码** |
+| `claim_id` | `str \| null` | **是（可空）** | claimed/released 必填且成对唯一；其余态为空 | **契·码** |
+| `node` | `str \| null` | **是（可空）** | claimed/released 绑定真实 node，或非 node writer 的 `write:<operation>`；两态必须逐字相同，其余态为空 | **契·码** |
+| `claim_sha256` | `str \| null` | **是（可空）** | claimed/released 绑定 execution permit 或 generic write payload 的 64 位小写 SHA；两态必须逐字相同，其余态为空 | **契·码** |
+| `actor / reason / subject_sha256 / force` | `str / str / str / bool \| null` | **是（可空）** | 仅 reconciled 四格同时非空；subject 绑定同 parent 的 admission 与完整 beacon 生命周期 | **契·码** |
+
+父 worker 在 close 后必须同时等 active claims 与该 run 的 open beacon executions 两面归零，才可
+做 delivery、写 ended 和释放书锁/并发槽。300 秒只是报警与尝试 cancel 的阈值；越线后继续持锁等待，
+最终闭合也只能 unknown。服务重启后，没有 current `drained` 或 `reconciled` seal 的 gate 由
+`admission.unresolved` 继续阻断同书 agent/job/trash/API writer；这份 durable 身份不能由进程内 live
+表替代，queue startup 也必须整 lane 跳过而不读产物、不追加状态、不启动；typed reconcile 后才允许
+操作员显式 resume。reconcile apply 全程先 nonblocking 取得同一 owner lease 的 stopped 证明，`force`
+不能越过 live owner；崩溃由内核自动释放，残留 `.lock` 文件不作为存活依据。reconcile subject 同时绑定 parent 的完整 admission 事件与完整 beacon 生命周期；terminal 后
+出现迟到 release/start/end 等任一事件都会令旧 seal 失效并重新 unresolved，不能让一张旧人工票继续放行。
+
+admission 与 beacon 都只把 LF 结尾行视为 committed；读侧忽略被 kill 截断的最后一行，写侧遇到
+non-LF 尾关闭式拒绝续写。零成本恢复先只读给出 committed prefix 与 tail 的 size/SHA 双身份；apply
+需要 actor/reason/current subject，把坏尾原始字节写入对应
+`_service/commander_admission_tail_repairs/` 或 `_service/agent_progress_tail_repairs/` 并 fsync，再在原 append
+lock 内截回 committed prefix、fsync，并分别追加 `authorized / applied` 的
+`CommanderAdmissionTailRepairRecord` 或 `BeaconTailRepairRecord`。记录另带
+`wire_version / ts / quarantine_name`；不得解析、补全、补 LF 或猜测半条 JSON/end。
+
 `ended` 事件在 `exit_code` 外另带 `outcome`（旧事件缺失时折叠成 `unknown`）。
 `AgentRunRecord.state` 仍只按外层进程退出码折叠；`outcome.state` 的唯一取值面是
 `AGENT_DELIVERY_OUTCOME`：`ready` / `ready_with_disclosures` / `stopped` / `failed` /
 `unknown`。终验从盘面重新核 Stage2 正式 Global + 称名投影 + Blueprint current、联合 HARD 通过、
 global review 的 blocking 面逐项 PASS（disclosure 非 PASS 只披露）、当前可下载成书、终审包、阻塞待办与
 启动/结束代码指纹；不解析 agent 自述。两轴不许互推，尤其 `state=ok` 不推出可交付。
+顶层进程 `exit_code=0` 但 fresh outcome=`stopped` 时，结束检查再读一次 `operator next`：仍为 ready，
+或已 `pipeline_complete` 但 delivery 终验尚未闭合，保持 stopped 并在 session/ledger 写
+`error_kind=commander_early_exit`；next 自身不可读则降 unknown。该检查不自动 resume，也不追加第二个
+模型 turn。
 
 ---
 
@@ -593,15 +641,19 @@ active_key(sid, node) -> str
 Output/_service/jobs.jsonl        append-only 事件流
 Output/_service/queues.jsonl      持久批量队列 append-only 事件流
 Output/_service/agent_runs.jsonl  headless agent append-only 事件流（含双授权快照）
+Output/_service/commander_admissions.jsonl Commander node/generic writer 六态准入账
+Output/_service/commander_owner_leases/<run>.lock per-parent 顶层 Commander OS owner lease 载体（文件存在不代表存活）
+Output/_service/commander_admission_tail_repairs/ non-LF 坏尾原字节与 authorized/applied 两相恢复账
 Output/_service/agent_sessions.jsonl commander / executor CLI 会话审计（wire v2）
 Output/_service/agent_progress.jsonl agent/runner 的 CLI 步骤观察轨迹
+Output/_service/agent_progress_tail_repairs/ beacon non-LF 坏尾原字节与 authorized/applied 两相恢复账
 Output/_service/operator_phases/<session_id>.jsonl Commander/operator 阶段墙钟遥测（每会话一流）
 Output/_service/human_actions.jsonl 已落盘人工动作的 append-only 身份审计（不含正文）
 Output/_service/human_actions_tail_recovery/<sha>.json 被 kill 截断的 human action 尾行隔离证据
 Output/_service/stage5_writer_locks/<book>/book.lock Stage5 CLI writer / API closure 共用总锁
 Output/_service/logs/<job_id>.log 子进程 stdout+stderr，按字节追加
 Output/_service/ledger.jsonl      跨书逐请求成本事实
-Output/_service/*.jsonl.lock      上面八类 JSONL 各自的追加锁载体（见下）
+Output/_service/*.jsonl.lock      上面九类 JSONL 各自的追加锁载体（见下）
 Output/_service/uploads/…         浏览器上传的原始小说字节
 Output/_service/edits/<sid>/…     交给 CLI 的一次性 typed 编辑稿、人工决定或批处理 manifest
 Output/_service/approvals/<sid>.json 人工闸门、已阅状态与 canonical 写作授权（原子替换）
@@ -610,7 +662,7 @@ Output/_service/approvals/<sid>.json 人工闸门、已阅状态与 canonical �
 它们**不是产物**：不进来源账、不进 `_provenance`、`ARTIFACTS` 里没有它们；
 `tests/test_layering.py` 的写口与路由所有权白名单为每一类带着明确理由。
 
-> ### 八类 JSONL 的追加口只有一个：`novel/appendlog.py`
+> ### 九类 JSONL 的追加口只有一个：`novel/appendlog.py`
 >
 > 写入方**不止服务进程**：`agent_progress.jsonl` 由 N 个 agent 各自的
 > `novel.cli mark` 子进程写，`jobs.jsonl` / `queues.jsonl` 由服务进程**和**

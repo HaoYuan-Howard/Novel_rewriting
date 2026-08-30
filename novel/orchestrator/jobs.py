@@ -153,6 +153,20 @@ REGISTRY = JobRegistry()
 #: 条数上限由 `agent.MAX_CONCURRENT` 那道并发闸管，不由这张表管。
 AGENT_REGISTRY = JobRegistry()
 
+#: 作业表与 Commander 表的**跨表协调锁**。
+#:
+#: 两张 ``JobRegistry`` 各自的 ``_lock`` 只能保证「一张表里」的 acquire 原子；
+#: 它保证不了下面这组跨表事务：
+#:
+#:   1. jobs.run/start：确认没有 Commander writer → 占作业 writer；
+#:   2. agent.start：确认没有作业 writer → 占 Commander writer。
+#:
+#: 若两边各自先查、再进各自的表，两个线程可以同时看见空表，然后各占一张，
+#: 同一本书便真的有两个写者。这里不承担整段运行期互斥；它只把「双方检查 +
+#: 一方占锁」收进同一个很短的临界区。运行期仍由拿到的书级 registry entry 守住，
+#: 因此不同书不被这把协调锁串行。
+_WRITER_COORDINATION_LOCK = threading.Lock()
+
 _THREADS_LOCK = threading.Lock()
 _THREADS: dict[str, threading.Thread] = {}
 
@@ -184,7 +198,52 @@ def agent_lock_key(sid: str) -> str:
     return f'{AGENT_LOCK_PREFIX}:{sid}'
 
 
-def _refuse_if_agent_running(sid: str | None) -> None:
+def _refuse_if_unresolved_admission(base: str | os.PathLike[str],
+                                    sid: str | None) -> None:
+    """盘上仍可能有孤儿 writer 时关闭式拒绝；调用方须持协调锁。"""
+    # 内存 AGENT_REGISTRY 会随服务重启清空；durable admission 不会。旧父 run
+    # 仍 open 或仍有 active claim 时，孤儿子进程依然可能迟到写盘。新写手必须
+    # 先从盘上关闭式拒绝，不能把“服务刚重启”误当成“没有 agent”。局部 import
+    # 避免 admission 为复用 service_dir 反向 import 本模块时形成模块加载环。
+    from novel.orchestrator import admission
+    target = admission.admission_path(base)
+    target_lock = target.with_name(target.name + '.lock')
+    if not target.is_file() and not target_lock.is_file():
+        # 同进程 agent.start 与本函数共用 _WRITER_COORDINATION_LOCK，且 agent 在
+        # open_gate 前已占 AGENT_REGISTRY；没有 durable surface 时可直接查内存表，
+        # 不为每个普通 API/telemetry 写入口凭空制造 admission/beacon lock 文件。
+        return
+    # ``active_key`` 把 None/'' 都归到同一 ``_global``。durable 查询必须用
+    # 同一把尺子；把空串原样传入会错误地变成「只查 sid=''」而不是全局扫描。
+    unresolved = admission.unresolved(base, sid or None)
+    if unresolved:
+        runs = ', '.join(item.parent_run_id for item in unresolved[:3])
+        suffix = '' if len(unresolved) <= 3 else f' 等 {len(unresolved)} 个'
+        raise JobConflict(
+            f'盘上仍有未闭合 Commander admission（{runs}{suffix}）；'
+            '服务重启不能证明孤儿执行已停止，须显式核实并 reconcile 后再写盘')
+
+
+def _refuse_if_agent_running_locked(
+        base: str | os.PathLike[str], sid: str | None, *,
+        agent_registry: JobRegistry = AGENT_REGISTRY) -> None:
+    """``_WRITER_COORDINATION_LOCK`` 内检查 durable / in-memory Commander。"""
+    _refuse_if_unresolved_admission(base, sid)
+    if not sid:
+        if agent_registry.live():
+            raise JobConflict(
+                '有 agent 代跑正在跑——摄入要推导目录名，而 agent 可能正在建目录，'
+                '等它结束（或先熄火）再上传')
+        return
+    holder = agent_registry.holder(agent_lock_key(sid))
+    if holder is not None:
+        raise JobConflict(
+            f'这本书有 agent 代跑正在跑（{holder}）——它会自己起 CLI 子进程写盘，'
+            f'等它结束（或先熄火）再起作业')
+
+
+def _refuse_if_agent_running(base: str | os.PathLike[str],
+                             sid: str | None) -> None:
     """**这本书**上有 agent 代跑活着时，它的 API 作业不许起（反向互斥的唯一落点）。
 
     ⚠ 从「有任何 agent 在跑就全拒」收窄成「这本书上有才拒」：agent 放开并发之后，
@@ -194,17 +253,51 @@ def _refuse_if_agent_running(sid: str | None) -> None:
     ⚠ **`sid is None` 仍然一律拒**（摄入那条路，`active_key` 把它归 `'_global'`）：
     上传要推导目录名，而任何一个 agent 都可能正在建目录。这一格宁可严。
     """
-    if sid is None:
-        if AGENT_REGISTRY.live():
+    with _WRITER_COORDINATION_LOCK:
+        _refuse_if_agent_running_locked(base, sid)
+
+
+def acquire_job_writer(
+        base: str | os.PathLike[str], sid: str | None, node: str,
+        writer_id: str, *, registry: JobRegistry = REGISTRY,
+        agent_registry: JobRegistry = AGENT_REGISTRY) -> str:
+    """原子完成「没有 Commander writer + 占作业 writer」，返回唯一互斥键。
+
+    ``sid=None`` 是摄入的 ``_global`` writer：它与任意一本书的 Commander 都冲突。
+    这一格不能只靠 ``JobRegistry`` 的前缀规则，因为 ``_global`` 刻意不是某个 sid
+    的父键；跨表语义只在这个协调口实现一次。
+    """
+    key = active_key(sid, node)
+    with _WRITER_COORDINATION_LOCK:
+        _refuse_if_agent_running_locked(
+            base, sid, agent_registry=agent_registry)
+        registry.acquire(key, writer_id)
+    return key
+
+
+def acquire_agent_writer(
+        base: str | os.PathLike[str], sid: str, run_id: str, *,
+        admit: Callable[[str, str, JobRegistry], None],
+        registry: JobRegistry = AGENT_REGISTRY,
+        job_registry: JobRegistry = REGISTRY) -> str:
+    """原子完成「没有作业 writer + 占 Commander writer」。
+
+    ``admit`` 是 agent 层已有的「并发名额 + registry.acquire」唯一落点；让它在
+    同一协调临界区里执行，既不复制 ``MAX_CONCURRENT``，也不留下跨表竞态。
+    ``_global`` 摄入会挡住任意 sid 的 Commander，反方向由
+    :func:`acquire_job_writer` 对称守住。
+    """
+    key = agent_lock_key(sid)
+    with _WRITER_COORDINATION_LOCK:
+        _refuse_if_unresolved_admission(base, sid)
+        holder = job_registry.holder('_global')
+        if holder is None:
+            holder = job_registry.conflicting_holder(active_key(sid, 'agent.run'))
+        if holder is not None:
             raise JobConflict(
-                '有 agent 代跑正在跑——摄入要推导目录名，而 agent 可能正在建目录，'
-                '等它结束（或先熄火）再上传')
-        return
-    holder = AGENT_REGISTRY.holder(agent_lock_key(sid))
-    if holder is not None:
-        raise JobConflict(
-            f'这本书有 agent 代跑正在跑（{holder}）——它会自己起 CLI 子进程写盘，'
-            f'等它结束（或先熄火）再起作业')
+                f'这本书已有 API 维护/节点作业在跑（{holder}）——等它结束再拉 agent')
+        admit(key, run_id, registry)
+    return key
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -388,7 +481,8 @@ def _default_note(state: str, code: int | None) -> str | None:
 
 
 def reconcile(base: str | os.PathLike[str], *,
-              registry: JobRegistry = REGISTRY) -> list[str]:
+              registry: JobRegistry = REGISTRY,
+              skip_sids: Iterable[str] = ()) -> list[str]:
     """服务启动时调一次：上次没跑完就退出的作业，一律改判 **`unknown`**。
 
     **不是 `ok` 也不是 `failed`** —— 重启前它是死是活我们真的不知道，
@@ -397,9 +491,15 @@ def reconcile(base: str | os.PathLike[str], *,
     ⚠⚠ **改判是追加一条 `reconciled` 事件，不是回去改 `started` 那一行。**
     回去改就毁掉了 append-only 的全部意义，而那正是「被 kill 不损坏」这条性质的来源。
     """
+    skipped = frozenset(skip_sids)
     live = registry.live()
     changed = []
     for rec in fold(read_events(base), live=live):
+        # queue startup 遇到 durable unresolved Commander 时，不得替对应 lane
+        # 读盘推断或追加恢复状态。sid=None 是全局写手；任一书仍 unresolved 时
+        # 同样保守跳过，避免启动恢复把全局控制面先行推进。
+        if skipped and (rec.start.sid is None or rec.start.sid in skipped):
+            continue
         if rec.state == 'unknown' and rec.note == RECONCILE_NOTE:
             append_event(base, JobEvent(job_id=rec.job_id, kind='reconciled',
                                         ts=int(time.time()), note=RECONCILE_NOTE))
@@ -650,12 +750,11 @@ def run(base: str | os.PathLike[str], node: str, sid: str | None, flags: Sequenc
         egress_authorized=egress_authorized,
         run_id=run_id, recovered_from_job_id=recovered_from_job_id))
     _require_executor_egress(start_meta)
-    _refuse_if_agent_running(sid)
-    key = active_key(sid, node)
     job_id = job_id or new_job_id()
     if any(event.job_id == job_id for event in read_events(base)):
         raise JobConflict(f'job_id={job_id!r} already exists')
-    registry.acquire(key, job_id)
+    key = acquire_job_writer(
+        base, sid, node, job_id, registry=registry)
     try:
         start_event = JobEvent(
             job_id=job_id, kind='started', ts=int(time.time()),
@@ -731,12 +830,11 @@ def start(
         egress_authorized=egress_authorized,
         run_id=run_id, recovered_from_job_id=recovered_from_job_id))
     _require_executor_egress(start_meta)
-    _refuse_if_agent_running(sid)
-    key = active_key(sid, node)
     job_id = job_id or new_job_id()
     if any(event.job_id == job_id for event in read_events(base)):
         raise JobConflict(f'job_id={job_id!r} already exists')
-    registry.acquire(key, job_id)
+    key = acquire_job_writer(
+        base, sid, node, job_id, registry=registry)
     try:
         if prepare is not None:
             prepare()

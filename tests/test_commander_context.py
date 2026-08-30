@@ -8,7 +8,7 @@ import pytest
 from contracts.schema.orchestration import (
     AgentProfile, AgentRunRecord, AgentRunStart, PipelineAgentProfiles,
 )
-from novel import commander_context
+from novel import commander_context, skill_contract
 from novel.errors import TerminalState
 
 
@@ -37,6 +37,7 @@ def _start(base: Path, **changes) -> AgentRunStart:
         'authorized': True,
         'egress_authorized': True,
         'code_version': 'code-v1',
+        'skill_sha256': skill_contract.package_sha256(),
         'profiles': _profiles(),
     }
     values.update(changes)
@@ -75,6 +76,8 @@ def test_context_env_is_only_a_pointer_and_round_trips_the_started_snapshot(
     ('sid', '不能执行'),
     ('base', '不能执行'),
     ('code', '代码指纹'),
+    ('skill', 'operator skill'),
+    ('missing_skill', '没有 canonical operator skill'),
 ])
 def test_context_refuses_partial_or_drifted_identity(
         tmp_path, monkeypatch, mutation, match):
@@ -91,6 +94,14 @@ def test_context_refuses_partial_or_drifted_identity(
         sid = '43'
     elif mutation == 'base':
         base = tmp_path / 'other'
+    elif mutation == 'skill':
+        start = _start(tmp_path, skill_sha256='0' * 64)
+        env = commander_context.env_with_context(
+            run_id='commander-1', base=tmp_path, start=start, env={})
+    elif mutation == 'missing_skill':
+        start = _start(tmp_path, skill_sha256=None)
+        env = commander_context.env_with_context(
+            run_id='commander-1', base=tmp_path, start=start, env={})
     monkeypatch.setattr(
         commander_context.prov, 'code_version',
         lambda: 'code-v2' if mutation == 'code' else 'code-v1')

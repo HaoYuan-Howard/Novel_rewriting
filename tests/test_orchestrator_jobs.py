@@ -238,6 +238,87 @@ def test_the_mutex_holds_under_real_threads():
     assert hit == [True]
 
 
+@pytest.mark.parametrize(
+    'job_sid', [SID, None], ids=['same-book-job', 'global-ingest'])
+def test_job_and_agent_writer_admission_is_one_cross_table_transaction(
+        base, job_sid):
+    """真并发复现 check-then-acquire：同书与 ``_global`` 都只能赢一边。
+
+    两张 registry 各自线程安全仍不够；若双方各自「查对面 → 占自己」，barrier 后
+    可以双双读到空表。这个用例让胜者一直持有逻辑 writer，直到败者明确冲突，
+    从而直接守住共享协调临界区，而不是靠线程调度碰巧串行。
+    """
+    job_registry = J.JobRegistry()
+    agent_registry = J.JobRegistry()
+    barrier = threading.Barrier(2)
+    release = threading.Event()
+    acquired = threading.Event()
+    loser_done = threading.Event()
+    winners: list[str] = []
+    conflicts: list[str] = []
+    failures: list[BaseException] = []
+
+    def hold_job() -> None:
+        try:
+            barrier.wait(timeout=2)
+            key = J.acquire_job_writer(
+                base, job_sid, 'stage0.remove' if job_sid is None else
+                'stage3.style', 'job-writer', registry=job_registry,
+                agent_registry=agent_registry)
+        except J.JobConflict:
+            conflicts.append('job')
+            loser_done.set()
+            return
+        except BaseException as exc:  # noqa: BLE001 —— 主线程统一报告线程异常
+            failures.append(exc)
+            loser_done.set()
+            return
+        winners.append('job')
+        acquired.set()
+        try:
+            assert release.wait(2)
+        finally:
+            job_registry.release(key, 'job-writer')
+
+    def hold_agent() -> None:
+        try:
+            barrier.wait(timeout=2)
+            key = J.acquire_agent_writer(
+                base, SID, 'agent-writer', registry=agent_registry,
+                job_registry=job_registry,
+                admit=lambda lock_key, run_id, registry:
+                    registry.acquire(lock_key, run_id))
+        except J.JobConflict:
+            conflicts.append('agent')
+            loser_done.set()
+            return
+        except BaseException as exc:  # noqa: BLE001 —— 主线程统一报告线程异常
+            failures.append(exc)
+            loser_done.set()
+            return
+        winners.append('agent')
+        acquired.set()
+        try:
+            assert release.wait(2)
+        finally:
+            agent_registry.release(key, 'agent-writer')
+
+    threads = [threading.Thread(target=hold_job), threading.Thread(target=hold_agent)]
+    for thread in threads:
+        thread.start()
+    try:
+        assert acquired.wait(1), failures
+        assert loser_done.wait(1), '两张 writer 表同时受理，败者没有产生冲突'
+        assert failures == []
+        assert len(winners) == 1 and len(conflicts) == 1
+        assert winners[0] != conflicts[0]
+    finally:
+        release.set()
+        for thread in threads:
+            thread.join(timeout=2)
+    assert all(not thread.is_alive() for thread in threads)
+
+
 def test_async_start_returns_running_and_refuses_the_same_book(base):
     reg = J.JobRegistry()
     entered = threading.Event()

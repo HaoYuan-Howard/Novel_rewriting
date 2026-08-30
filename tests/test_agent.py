@@ -12,6 +12,7 @@ test_agent.py —— Commander 代跑的提示词/启动计划、事件流与互
 """
 from __future__ import annotations
 
+import io
 import json
 import os
 import threading
@@ -22,14 +23,15 @@ import pytest
 
 from contracts.schema.orchestration import (
     AgentDeliveryOutcome, AgentProfile, AgentRunEvent, AgentRunStart,
-    PipelineAgentProfiles,
+    PipelineAgentProfiles, ProgressEvent, Step,
 )
 from novel import agent_session_audit, commander_context, paths
 from novel.agents.base import AgentUsage
 from novel.commanders import (
     CommanderInvocation, CommanderObservation, CommanderProcessResult,
 )
-from novel.orchestrator import agent, jobs
+from novel.errors import TerminalState
+from novel.orchestrator import admission, agent, beacon, jobs
 from novel.orchestrator.jobs import JobConflict
 
 
@@ -175,7 +177,10 @@ def test_prompt_surfaces_the_headless_safety_sequence(base, book):
         code_version='expected-code-version')
 
     assert '每次 Bash 调用都必须保持在仓根，不得 cd' in text
-    assert 'state 42' in text and 'inbox 42' in text
+    assert 'operator next 42 --json' in text
+    assert '`state` / `inbox` 只用于展开证据' in text
+    assert '`operator permit`' in text and '`run_step.py` preview' in text
+    assert '不得直接调用 `novel.cli run`' in text
     assert '在任何写盘或付费动作前' in text and '创建终审包草稿' in text
     assert 'doctor --llm-transport' in text
     assert 'from novel import prov; print(prov.code_version())' in text
@@ -186,6 +191,9 @@ def test_prompt_surfaces_the_headless_safety_sequence(base, book):
     assert 'logical session' in text and 'durable checkpoint' in text
     assert 'legacy DeepSeek' in text and 'sidecar `response-repair`' in text
     assert '_llm_rejected/**/candidate.json' in text
+    assert '禁止 background、detached' in text
+    assert '持续 wait 到原命令真实终态' in text
+    assert '不得手工补 `mark`' in text
 
 
 def test_prompt_forbids_direct_edits_of_formal_artifacts(base, book):
@@ -368,8 +376,34 @@ def test_start_with_fake_spawn(base, corpus):
     assert done.start.profiles == _PROFILES
     assert done.start.base == os.path.abspath(base)
     assert done.start.code_version
+    assert done.start.skill_sha256 == agent._skill_sha256()
     assert done.outcome is not None and done.outcome.state == 'stopped'
     assert 'fake run' in agent.run_log_path(base, rec.run_id).read_text('utf-8')
+
+
+def test_agent_worker_holds_owner_lease_until_its_outermost_finally(base, corpus):
+    entered = threading.Event()
+    release = threading.Event()
+
+    def blocking_spawn(invocation, env, log):
+        entered.set()
+        assert release.wait(5)
+        return _commander_result(invocation, env)
+
+    rec = agent.start(
+        base, '42', authorized=True, egress_authorized=True,
+        profiles=_PROFILES, spawn=blocking_spawn)
+    try:
+        assert entered.wait(5)
+        with pytest.raises(TerminalState, match='owner lease'):
+            with admission.require_owner_stopped(base, rec.run_id):
+                pytest.fail('live agent 的 owner lease 不得被探针取得')
+    finally:
+        release.set()
+        assert agent.wait(rec.run_id, 10)
+
+    with admission.require_owner_stopped(base, rec.run_id):
+        pass
 
 
 @pytest.mark.parametrize('authorized,egress_authorized', [
@@ -424,6 +458,47 @@ def test_preview_plan_and_start_share_invocation_profiles_and_context_env(
     assert len(env['NOVEL_COMMANDER_CONTRACT_SHA256']) == 64
     assert shown.prompt not in agent.run_log_path(
         base, rec.run_id).read_text('utf-8')
+
+
+def test_default_spawn_cannot_undo_driver_lifecycle_environment(monkeypatch):
+    captured = {}
+
+    class Owner:
+        def run(self, invocation, *, log, run_id):
+            del log, run_id
+            captured.update(invocation.env_overrides)
+            return CommanderProcessResult(
+                exit_code=0,
+                observation=CommanderObservation(
+                    provider_session_id=None, actual_model=None,
+                    actual_effort=None, usage=None))
+
+        def close(self):
+            return None
+
+    monkeypatch.setattr(agent, 'create_commander_driver', lambda *_args: Owner())
+    invocation = CommanderInvocation(
+        argv=('claude', '-p'), stdin_text='任务', cwd=str(agent.REPO_ROOT),
+        env_overrides={'CLAUDE_CODE_DISABLE_BACKGROUND_TASKS': '1'},
+        profile=_CLAUDE, protocol='test-v1')
+    child_env = {
+        'CLAUDE_CODE_DISABLE_BACKGROUND_TASKS': '0',
+        'NOVEL_RUN_ID': 'outer-1',
+        'NOVEL_COMMANDER_RUN_ID': 'outer-1',
+        'NOVEL_COMMANDER_CONTRACT_SHA256': 'a' * 64,
+    }
+
+    try:
+        result = agent._default_spawn('outer-1')(
+            invocation, child_env, io.BytesIO())
+
+        assert result.exit_code == 0
+        assert captured['CLAUDE_CODE_DISABLE_BACKGROUND_TASKS'] == '1'
+        assert captured['NOVEL_RUN_ID'] == 'outer-1'
+        assert captured['NOVEL_COMMANDER_RUN_ID'] == 'outer-1'
+        assert 'outer-1' in agent._COMMANDERS, 'drain 前必须保留可 cancel 的 owner'
+    finally:
+        agent._close_commander_owner('outer-1')
 
 
 def test_commander_session_and_ledger_are_linked_without_fake_node(base, corpus):
@@ -496,6 +571,49 @@ def test_successful_agent_records_the_independent_delivery_outcome(base, corpus,
     assert done.outcome.reason == '强闸已过，保留语义披露'
 
 
+def test_commander_early_exit_is_audited_without_starting_another_turn(
+        base, corpus, monkeypatch):
+    calls = []
+
+    def review(base_arg, sid_arg, outcome, *, process_exit_code):
+        calls.append((base_arg, sid_arg, outcome.state, process_exit_code))
+        return agent.commander_completion.CommanderCompletionReview(
+            outcome=outcome.model_copy(update={'reason': '机器判定仍有 ready 动作'}),
+            error_kind=agent.commander_completion.EARLY_EXIT_ERROR_KIND,
+        )
+
+    spawned = []
+
+    def one_turn_spawn(invocation, env, log):
+        spawned.append(env['NOVEL_COMMANDER_RUN_ID'])
+        return _ok_spawn(invocation, env, log)
+
+    monkeypatch.setattr(
+        agent.commander_completion, 'review_commander_stop', review)
+    rec = agent.start(
+        base, '42', authorized=True, egress_authorized=True,
+        profiles=_PROFILES, spawn=one_turn_spawn)
+    assert agent.wait(rec.run_id, 10)
+
+    [done] = agent.records(base)
+    assert spawned == [rec.run_id], '结束检查不得暗中增加第二个模型 turn'
+    assert calls == [(os.path.abspath(base), '42', 'stopped', 0)]
+    assert done.outcome is not None
+    assert done.outcome.reason == '机器判定仍有 ready 动作'
+
+    [session] = agent_session_audit.fold(
+        agent_session_audit.read_events(base))
+    assert session.end is not None
+    assert session.end.error_kind == 'commander_early_exit'
+    assert session.turns[0].error_kind == 'commander_early_exit'
+
+    rows = [json.loads(line) for line in (
+        Path(base) / '_service' / 'ledger.jsonl').read_text(
+            encoding='utf-8').splitlines()]
+    [row] = [item for item in rows if item.get('role') == 'commander']
+    assert row['error_kind'] == 'commander_early_exit'
+
+
 def test_nonzero_commander_exit_still_runs_delivery_assessment(
         base, corpus, monkeypatch):
     from novel.orchestrator import delivery
@@ -524,6 +642,105 @@ def test_nonzero_commander_exit_still_runs_delivery_assessment(
         agent_session_audit.read_events(base))
     assert session.process_state == 'failed'
     assert session.delivery_state == 'delivered'
+
+
+def test_agent_holds_lock_and_delivery_until_open_execution_closes(
+        base, corpus, monkeypatch):
+    from novel.orchestrator import delivery
+
+    allow_close = threading.Event()
+    closer_threads: list[threading.Thread] = []
+    assessed: list[bool] = []
+
+    def assess(*_args, **_kwargs):
+        assert beacon.open_executions(base, rec.run_id) == ()
+        assessed.append(True)
+        return AgentDeliveryOutcome(
+            state='ready', reason='execution 已闭合后验盘', checked_at=456)
+
+    def spawn(invocation, env, log):
+        parent_run_id = env['NOVEL_COMMANDER_RUN_ID']
+        beacon.append(base, ProgressEvent(
+            ts=int(time.time()), sid='42', run_id=parent_run_id,
+            execution_id='execution-1', node='stage4.design', phase='start'))
+
+        def close_execution():
+            assert allow_close.wait(5)
+            beacon.append(base, ProgressEvent(
+                ts=int(time.time()), sid='42', run_id=parent_run_id,
+                execution_id='execution-1', node='stage4.design',
+                phase='end', exit_code=0))
+
+        thread = threading.Thread(target=close_execution)
+        closer_threads.append(thread)
+        thread.start()
+        return _commander_result(invocation, env)
+
+    monkeypatch.setattr(delivery, 'assess', assess)
+    rec = agent.start(
+        base, '42', authorized=True, egress_authorized=True,
+        profiles=_PROFILES, spawn=spawn)
+
+    assert agent.wait(rec.run_id, 0.05) is False
+    assert assessed == []
+    assert agent.REGISTRY.holder(agent.lock_key('42')) == rec.run_id
+    allow_close.set()
+    assert agent.wait(rec.run_id, 10)
+    for thread in closer_threads:
+        thread.join(5)
+    assert assessed == [True]
+    assert agent.REGISTRY.holder(agent.lock_key('42')) is None
+
+
+def test_execution_timeout_keeps_lock_and_delays_ended_until_exact_closure(
+        base, corpus, monkeypatch):
+    from novel.orchestrator import delivery
+
+    monkeypatch.setattr(agent, '_EXECUTION_CLOSE_TIMEOUT_SECONDS', 0.03)
+    monkeypatch.setattr(agent, '_EXECUTION_CLOSE_POLL_SECONDS', 0.005)
+    assessed: list[bool] = []
+    monkeypatch.setattr(delivery, 'assess', lambda *_args, **_kwargs: assessed.append(True))
+    started = threading.Event()
+    held = {}
+
+    def spawn(invocation, env, log):
+        parent_run_id = env['NOVEL_COMMANDER_RUN_ID']
+        held['claim'] = agent.admission.claim(
+            base, parent_run_id, '42', node='stage4.design',
+            claim_sha256='a' * 64, claim_id='delayed-claim')
+        beacon.append(base, ProgressEvent(
+            ts=int(time.time()), sid='42',
+            run_id=parent_run_id,
+            execution_id='lost-execution', node='stage4.design', phase='start'))
+        started.set()
+        return _commander_result(invocation, env)
+
+    rec = agent.start(
+        base, '42', authorized=True, egress_authorized=True,
+        profiles=_PROFILES, spawn=spawn)
+    assert started.wait(2)
+    time.sleep(0.08)                         # 越过报警阈值，但不能形成 ended
+    assert agent.wait(rec.run_id, 0.01) is False
+    [running] = agent.records(base)
+    assert running.ended is None and running.state == 'running'
+    assert assessed == []
+    assert agent.REGISTRY.holder(agent.lock_key('42')) == rec.run_id
+
+    beacon.append(base, ProgressEvent(
+        ts=int(time.time()), sid='42', run_id=rec.run_id,
+        execution_id='lost-execution', node='stage4.design',
+        phase='end', exit_code=0))
+    agent.admission.release(base, held['claim'])
+    assert agent.wait(rec.run_id, 10)
+    [done] = agent.records(base)
+    assert done.outcome is not None and done.outcome.state == 'unknown'
+    assert '等待 0.03 秒仍未闭合' in done.outcome.reason
+    assert assessed == [], '超时后的最终闭合也不得洗成一次普通 delivery 终验'
+    assert agent.REGISTRY.holder(agent.lock_key('42')) is None
+    [session] = agent_session_audit.fold(
+        agent_session_audit.read_events(base))
+    assert session.end is not None
+    assert session.end.error_kind == 'commander_execution_barrier'
 
 
 @pytest.mark.parametrize('field,value,error_kind', [
@@ -624,6 +841,57 @@ def test_commander_session_start_audit_failure_never_spawns_and_closes_outer_run
     assert done.outcome is not None and done.outcome.state == 'failed'
 
 
+@pytest.mark.parametrize('cleanup_failure', ['close', 'drained'])
+def test_partial_gate_open_cleanup_failure_preserves_original_and_releases_writer(
+        base, corpus, monkeypatch, cleanup_failure):
+    """open 已提交后报错时，close/drained 再坏也不能死锁或遮住首错。"""
+    del corpus
+    actual_open = admission.open_gate
+    actual_close = admission.close_gate
+    actual_mark_drained = admission.mark_drained
+
+    def partial_open(*args, **kwargs):
+        actual_open(*args, **kwargs)
+        raise RuntimeError('original gate-open failure after commit')
+
+    monkeypatch.setattr(admission, 'open_gate', partial_open)
+    if cleanup_failure == 'close':
+        monkeypatch.setattr(
+            admission, 'close_gate',
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                OSError('close cleanup unavailable')))
+    else:
+        monkeypatch.setattr(
+            admission, 'mark_drained',
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                OSError('drained cleanup unavailable')))
+
+    with pytest.raises(
+            RuntimeError, match='original gate-open failure after commit') as caught:
+        agent.start(
+            base, '42', authorized=True, egress_authorized=True,
+            profiles=_PROFILES,
+            spawn=lambda *_args: (_ for _ in ()).throw(
+                AssertionError('partial open 后不得 spawn')))
+
+    [done] = agent.records(base)
+    assert jobs.AGENT_REGISTRY.holder(jobs.agent_lock_key('42')) is None
+    with admission.require_owner_stopped(base, done.run_id):
+        pass
+    assert done.ended is not None and done.exit_code != 0
+    notes = '\n'.join(getattr(caught.value, '__notes__', ()))
+    assert cleanup_failure in notes
+
+    # 用保存的真实函数把本测试刻意留下的 durable gate 收口；不能让 monkeypatch
+    # 的失败形状污染同一 tmp base 上后续断言。
+    snapshot = admission.snapshot(base, done.run_id)
+    if not snapshot.closed:
+        actual_close(base, done.run_id)
+    snapshot = admission.snapshot(base, done.run_id)
+    if snapshot.terminal_kind is None:
+        actual_mark_drained(base, done.run_id)
+
+
 def test_provider_session_reuse_across_commander_runs_closes_delivery(
         base, corpus, monkeypatch):
     from novel.orchestrator import delivery
@@ -716,6 +984,22 @@ def test_one_agent_per_book(base, corpus):
     finally:
         gate.set()
         agent.wait(rec.run_id, 10)
+
+
+def test_durable_unresolved_admission_blocks_new_agent_after_memory_restart(
+        base, corpus):
+    """服务重启会清空内存 registry，但不能因此放行可能仍在写盘的孤儿执行。"""
+    agent.admission.open_gate(base, 'orphan-before-restart', '42')
+    spawned = []
+
+    with pytest.raises(JobConflict, match='未闭合 Commander admission'):
+        agent.start(
+            base, '42', authorized=True, egress_authorized=True,
+            profiles=_PROFILES,
+            spawn=lambda *_args, **_kwargs: spawned.append(True))
+
+    assert spawned == []
+    assert agent.REGISTRY.holder(agent.lock_key('42')) is None
 
 
 def test_different_books_run_in_parallel(base, corpus):
@@ -954,9 +1238,106 @@ def test_ingest_is_still_refused_while_any_agent_runs(base):
     jobs.AGENT_REGISTRY.acquire(jobs.agent_lock_key('42'), 'r-test')
     try:
         with pytest.raises(JobConflict):
-            jobs._refuse_if_agent_running(None)
+            jobs._refuse_if_agent_running(base, None)
     finally:
         jobs.AGENT_REGISTRY.release(jobs.agent_lock_key('42'), 'r-test')
+
+
+@pytest.mark.parametrize('job_entry', ['run', 'start'])
+@pytest.mark.parametrize(
+    'job_sid', ['42', None], ids=['same-book', 'global-ingest'])
+def test_agent_and_job_entrypoints_race_at_one_writer_admission_barrier(
+        base, corpus, monkeypatch, job_entry, job_sid):
+    """真实入口在同一 barrier 后竞争；同书/摄入均只能启动一个 writer。"""
+    del corpus
+    original_job_admit = jobs.acquire_job_writer
+    original_agent_admit = jobs.acquire_agent_writer
+    admission_barrier = threading.Barrier(2)
+    release = threading.Event()
+    entered = threading.Event()
+    loser_done = threading.Event()
+    winners: list[str] = []
+    conflicts: list[str] = []
+    failures: list[BaseException] = []
+    returned: list[tuple[str, object]] = []
+
+    def synchronized_job_admit(*args, **kwargs):
+        admission_barrier.wait(timeout=5)
+        return original_job_admit(*args, **kwargs)
+
+    def synchronized_agent_admit(*args, **kwargs):
+        admission_barrier.wait(timeout=5)
+        return original_agent_admit(*args, **kwargs)
+
+    monkeypatch.setattr(jobs, 'acquire_job_writer', synchronized_job_admit)
+    monkeypatch.setattr(jobs, 'acquire_agent_writer', synchronized_agent_admit)
+
+    def job_spawn(argv, cwd, env, log):
+        del argv, cwd, env, log
+        winners.append('job')
+        entered.set()
+        assert release.wait(5)
+        return 0
+
+    def agent_spawn(invocation, env, log):
+        winners.append('agent')
+        entered.set()
+        assert release.wait(5)
+        return _commander_result(invocation, env)
+
+    steps = [Step(
+        argv=['python', '-c', 'pass'], cwd='.', label='writer-race',
+        paid=False, writes='')]
+
+    def launch_job() -> None:
+        try:
+            launch = getattr(jobs, job_entry)
+            rec = launch(
+                base,
+                'stage0.remove' if job_sid is None else 'stage3.style',
+                job_sid, steps=steps, spawn=job_spawn)
+            returned.append(('job', rec))
+        except JobConflict:
+            conflicts.append('job')
+            loser_done.set()
+        except BaseException as exc:  # noqa: BLE001 —— 主线程统一报告线程异常
+            failures.append(exc)
+            loser_done.set()
+
+    def launch_agent() -> None:
+        try:
+            rec = agent.start(
+                base, '42', authorized=True, egress_authorized=True,
+                profiles=_PROFILES, spawn=agent_spawn)
+            returned.append(('agent', rec))
+        except JobConflict:
+            conflicts.append('agent')
+            loser_done.set()
+        except BaseException as exc:  # noqa: BLE001 —— 主线程统一报告线程异常
+            failures.append(exc)
+            loser_done.set()
+
+    threads = [threading.Thread(target=launch_job),
+               threading.Thread(target=launch_agent)]
+    for thread in threads:
+        thread.start()
+    try:
+        assert entered.wait(3), failures
+        assert loser_done.wait(3), 'agent/job 两边同时受理，没有产生明确冲突'
+        assert failures == []
+        assert len(winners) == 1 and len(conflicts) == 1
+        assert winners[0] != conflicts[0]
+    finally:
+        release.set()
+        for thread in threads:
+            thread.join(timeout=10)
+    assert all(not thread.is_alive() for thread in threads), failures
+    assert failures == []
+    for kind, rec in returned:
+        if kind == 'job':
+            assert jobs.wait(rec.job_id, 10)  # type: ignore[attr-defined]
+        else:
+            assert agent.wait(rec.run_id, 10)  # type: ignore[attr-defined]
 
 
 def test_stop_delegates_only_to_the_driver_that_owns_the_run(base):

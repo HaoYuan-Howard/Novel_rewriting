@@ -1,75 +1,8 @@
-# 运行环境
+# 运行宿主
 
-只读取与当前宿主匹配的小节；主链、判据和修复规则不因宿主改变。
-
-## 共同规则
-
-- cwd 保持仓根；`--base` 永远使用绝对路径。**cwd 会被别的工具改掉**：交互宿主的多个 shell
-  工具可能共享工作目录，此时每次 shell 调用都显式指定/切回仓根；headless launcher 已把
-  子进程 cwd 钉在仓根，且 Bash 白名单要求命令以项目 Python 开头，因此不要在命令前拼 `cd`。
-  两种宿主都不得 `cd` 进产物目录，读产物一律使用绝对路径，否则随后的 `-m novel.cli` 会报
-  `ModuleNotFoundError: No module named 'novel'`。
-- 使用当前项目实际解释器执行 `-X utf8 -u -m novel.cli`，不要切到 base 环境。
-  **这条同样管临时诊断脚本**：读产物 JSON、import `contracts.*` / `novel.*` 的一次性
-  `python -c` 也必须用 `<PY>`。裸 `python` 多半解析到另一套环境，症状是
-  `ModuleNotFoundError: No module named 'pydantic'`——那不是仓库坏了。
-- 直接取得子进程退出码，不在命令后接会覆盖退出码的管道。**文件重定向不是管道**：
-  `> 文件` 不影响退出码，取到退出码之后再过滤那个文件是长报告的推荐读法。
-- `mark start` / 真跑 / `mark end` 在**同一次 shell 调用内串联**，取到真实退出码后再打 end 点，
-  不要拆成三次独立往返。单次 `mark` 只是一次 Python 冷启动，**成本在往返次数不在耗时**：
-  拆开跑等于把全链的往返数乘以三。
-- 一次只运行一个写盘节点；**本次会话**一次只管一本书。⚠ 作用域是会话，不是系统：
-  别书的作业同时在跑不构成障碍（互斥只落在各自 `sid`），也不需要等它。
-- 对长命令使用宿主提供的持久句柄或足够长的前台超时。每 60 秒以内给出一次状态更新，不用短 timeout 杀进程来模拟更新。
-- 任何宿主中断后先运行 `state`/`inbox`，不要从聊天记忆推断落盘位置。
-- agent executor 主路不运行 DeepSeek 的 `<PY> -X utf8 -u -m novel.cli doctor --llm-transport`。
-  Commander 启动契约已经冻结 capability 中的 driver/model/effort，节点 executor 还会在任何正文外发前
-  用同一 driver 做零模型 CLI probe；缺 executable、协议或配置时关闭式失败。只有操作者明确选择
-  **legacy DeepSeek 临时回滚**时才运行上述 doctor：它使用正式代理与超时，但不发送正文、API key，
-  也不产生模型调用；收到任意 HTTP 状态即证明 DNS/TCP/TLS 通路成立。`SSL UNEXPECTED_EOF` 等
-  连接错误应先在 doctor 复现并修代理/TUN 进程环境，不要烧一次正文请求来诊断网络。
-- 任何宿主都先用 `scripts/session_preflight.py` 固化 `<STARTED_AT>` 与 `<START_CODE>`。正常节点走
-  `scripts/run_step.py --expect-code-version <START_CODE>`；特殊诊断/人工入口也在动作前复算并逐字比较。
-  结束时把同一指纹传给终验。`unknown == unknown` 不证明同版；结束时现取当前值也不证明起点。
-
-「打点串联」与「重定向后过滤」合起来在 PowerShell 里的写法（把数十 KB 的报告压到个位数行，
-保留全部命中、非 `ok` 状态、来源与告警行）。`$RUN_ID` 先按 workflow 的手工协议由首个
-`mark start` 生成并记录，或沿用父进程身份；下面三条必须显式复用同一值：
-
-```powershell
-& $PY -X utf8 -u -m novel.cli --run-id $RUN_ID mark $SID --node <node> --phase start --base $B
-& $PY -X utf8 -u -m novel.cli --run-id $RUN_ID run <node> $SID --check-only --base $B > "$SP\out.txt"
-$rc = $LASTEXITCODE
-& $PY -X utf8 -u -m novel.cli --run-id $RUN_ID mark $SID --node <node> --phase end --exit $rc --base $B
-Get-Content "$SP\out.txt" -Encoding UTF8 |
-  Select-String -Pattern '^\s*\[!!\]|^\s*\[\?\?\]|^\s*\[--\]|^\s*\[\?{4}\]|^合计|^──|^\s*⚠|→\s+(PASS|AMBER|FAIL)|revalidated'
-```
-
-⚠ **这条正则只对 `--check-only` 报告有效。** `run` 本身打印的是一两行摘要（成功那行以 `✓` 起头，
-显式终态以 `✗` 起头），套同一条正则会得到**零行输出**——那不是"节点没产出"，是读法用错了。
-`run` 的输出短，直接整读。
-
-这条正则**每一段都在接住一类会改变判定的行**，删任何一段过滤就不再是"只改变读法"：
-
-| 模式 | 接住的行 | 少了它会怎样 |
-|---|---|---|
-| `\[!!\]` `\[\?\?\]` `\[--\]` | 命中 / 够不着 / **没跑成** | `[--]` 是"这条判据根本没跑"，压掉它等于把 skipped 洗成 ok |
-| `\[\?{4}\]` | `[????] <键>：未记录` | "没人说"与"没有"分不开，记账分母失真 |
-| `^──` | `── 来源 ──` / `── 判据 ── N 条` / `── 记账 ── N 个键` | freshness 与两个分母全部消失，绿灯就没了分母 |
-| `^\s*⚠` | `⚠ 判的这一份是 .INVALID 稿`、`⚠ 幽灵边 N 条` | 把 `.INVALID` 稿的结论读成正式结论（见[经验库](field-notes.md) FN-015） |
-| `^合计` `→ (PASS\|AMBER\|FAIL)` `revalidated` | 四态合计、badge、强审计标记 | — |
-
-`inbox` 需要同一种收窄——它会随书变长，`verification` 那一类每项一条、条条同形，
-整读会把首行的八类计数冲出屏幕：
-
-```powershell
-& $PY -X utf8 -u -m novel.cli inbox $SID --base $B |
-  Select-String -Pattern '^── 待人工|^\s*\[(invalid|rejected|stalled|repairable|human_only|upstream|approval)\]' -Context 0,2
-```
-
-首行的八类计数是余额本身，必须留；`-Context 0,2` 带出每条的 detail 与处置行。
-`verification` **刻意不逐条打印**——它按类计数即可（要逐条只在真正销账那一步单独取），
-但计数绝不能省：它进终审包。
+本文件只回答当前 operator 运行在哪一种宿主、权限事实从哪里取得，以及怎样等待或停止进程。
+共同 CLI/打点/报告读法见[工作流契约](workflow.md)，付费节点由哪一种 executor 承接见
+[执行模式](execution-modes.md)。只读取与当前宿主匹配的小节。
 
 ## 交互式主会话
 
@@ -134,7 +67,7 @@ import 期时通常没有写盘，但仍以 `state`、目标产物与信标核�
 - 进程日志与生死记录由 launcher 管理；不要手改 `_service/agent_runs.jsonl` 或日志来改变状态。
 - launcher 记录的进程 `state` 与交付 `outcome` 是两根轴：只有 outcome 为 `ready` 或
   `ready_with_disclosures` 才表示服务端已从盘面复验交付；`exit 0` 本身只表示 Agent 正常退出。
-- 启动 prompt 带代码指纹；先确认它与 `session_preflight.py` 的 `<START_CODE>` 一致，再按共同规则
+- 启动 prompt 带代码指纹；先确认它与 `session_preflight.py` 的 `<START_CODE>` 一致，再按工作流契约
   由 runner 逐步比较。结束终验继续使用这一份起始指纹，跨版本 run 不会被判 ready。
 - launcher 只把 run id 与 contract SHA-256 放进环境；runner 必须重读 started 事件，精确复核 base、sid、
   起始代码指纹、Commander/default executor/逐节点 override 与两项授权。不得拿环境里的自由 JSON

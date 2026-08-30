@@ -10,10 +10,11 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends
 
-from contracts.schema.api import NovelList
+from contracts.schema.api import NovelList, OperatorNext
 from contracts.schema.orchestration import NovelOverview
 from novel import paths
 from novel.api.deps import checked_sid, get_base
+from novel.orchestrator.operator import next_action
 from novel.orchestrator.state import overview
 
 router = APIRouter(prefix='/novels')
@@ -47,3 +48,10 @@ def get_novel(sid: str = Depends(checked_sid),
               base: str = Depends(get_base)) -> NovelOverview:
     """这本书跑到哪了。**产物存在性 + 来源新鲜度**，不靠进度文件（`R-14.1`）。"""
     return overview(base, sid)
+
+
+@router.get('/{sid}/operator-next', response_model=OperatorNext)
+def get_operator_next(sid: str = Depends(checked_sid),
+                      base: str = Depends(get_base)) -> OperatorNext:
+    """同一次 state/check/inbox 快照上的唯一下一动作；纯读、0 成本。"""
+    return next_action(base, sid)

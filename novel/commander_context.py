@@ -23,7 +23,7 @@ from dataclasses import dataclass
 from contracts.schema.orchestration import (
     AgentProfile, AgentRunRecord, AgentRunStart, PipelineAgentProfiles,
 )
-from novel import prov, run_identity
+from novel import prov, run_identity, skill_contract
 from novel.agent_capabilities import validate_pipeline_profiles
 from novel.errors import TerminalState
 
@@ -139,6 +139,19 @@ def load_from_environment(
             'Commander contract SHA-256 与盘上 started 事件不一致；拒绝使用漂移的授权/profile')
     if start.profiles is None:
         raise TerminalState('Commander started 事件没有 resolved profiles；历史运行不能猜成今天的默认')
+    if start.skill_sha256 is None:
+        raise TerminalState(
+            'Commander started 事件没有 canonical operator skill 整树指纹；'
+            '历史运行不能猜成今天的操作契约')
+    try:
+        current_skill_sha256 = skill_contract.package_sha256()
+    except skill_contract.SkillContractError as exc:
+        raise TerminalState(
+            'canonical operator skill 整树不完整，拒绝执行 Commander 动作') from exc
+    if start.skill_sha256 != current_skill_sha256:
+        raise TerminalState(
+            'Commander contract 的 operator skill 整树指纹与当前仓库不一致；'
+            '拒绝在一本书中混用两份操作规程')
     profiles = validate_pipeline_profiles(start.profiles)
     if profiles != start.profiles:
         raise TerminalState('Commander started 事件中的 profiles 不是完整 resolved 快照')

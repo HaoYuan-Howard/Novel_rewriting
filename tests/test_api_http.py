@@ -31,6 +31,7 @@ from fastapi.testclient import TestClient          # noqa: E402
 from contracts.invariants import STAGES            # noqa: E402
 from novel.api.app import HOST, PORT, UI_HEADER, create_app   # noqa: E402
 from novel.api.routes import jobs as JOB_API       # noqa: E402
+from novel.orchestrator import admission as A      # noqa: E402
 from novel.orchestrator import jobs as J           # noqa: E402
 from novel.orchestrator import queue as Q          # noqa: E402
 from novel.orchestrator.nodes import (             # noqa: E402
@@ -129,6 +130,63 @@ def _tree(root) -> set:
             st = os.stat(p)
             out.add((os.path.relpath(p, root), st.st_size, st.st_mtime_ns))
     return out
+
+
+def _empty_book(base, sid: str = '422'):
+    book = base / f'审批守卫测试书_{sid}'
+    (book / 'stage0').mkdir(parents=True)
+    return book
+
+
+# ─────────────────────── 审批 POST 的 writer admission ───────────────────────
+
+def test_approval_post_writes_normally_and_get_stays_read_only(client, base):
+    """正常 POST 落审批账；GET 不为一次读取偷写同名服务状态。"""
+    _empty_book(base)
+    approval = base / '_service' / 'approvals' / '422.json'
+
+    read = client.get('/api/novels/422/approvals')
+    assert read.status_code == 200, read.text
+    assert not approval.exists(), '审批 GET 不得取得 writer 或顺手落初始化记录'
+
+    written = client.post('/api/novels/422/approvals/reset')
+    assert written.status_code == 200, written.text
+    assert approval.is_file()
+    assert J.REGISTRY.conflicting_holder('422') is None
+
+
+def test_approval_post_refuses_a_live_agent_without_writing(client, base):
+    """API approval 与同书 agent 共用协调口；不能各查一次空表后同时落盘。"""
+    _empty_book(base)
+    approval = base / '_service' / 'approvals' / '422.json'
+    key = J.agent_lock_key('422')
+    holder = 'api-approval-live-agent'
+    J.AGENT_REGISTRY.acquire(key, holder)
+    try:
+        response = client.post('/api/novels/422/approvals/reset')
+    finally:
+        J.AGENT_REGISTRY.release(key, holder)
+
+    assert response.status_code == 409, response.text
+    assert response.json()['kind'] == 'JobConflict'
+    assert not approval.exists()
+
+
+def test_approval_post_refuses_an_orphan_admission_without_writing(client, base):
+    """服务重启丢了内存表也不能越过盘上尚未闭合的 Commander writer。"""
+    _empty_book(base)
+    parent_run_id = 'api-approval-orphan'
+    approval = base / '_service' / 'approvals' / '422.json'
+    A.open_gate(base, parent_run_id, '422')
+    try:
+        response = client.post('/api/novels/422/approvals/reset')
+    finally:
+        A.close_gate(base, parent_run_id)
+        A.mark_drained(base, parent_run_id)
+
+    assert response.status_code == 409, response.text
+    assert response.json()['kind'] == 'JobConflict'
+    assert not approval.exists()
 
 
 # ───────────────────────── 一、基础只读端点各一条 200 ─────────────────────────
@@ -290,6 +348,7 @@ def test_the_published_surface_is_exactly_the_current_surface(app):
         '/api/enums': ['GET'],
         '/api/novels': ['GET'],
         '/api/novels/{sid}': ['GET'],
+        '/api/novels/{sid}/operator-next': ['GET'],
         '/api/novels/{sid}/check/{kind}': ['GET'],
         '/api/jobs': ['GET', 'POST'],
         '/api/jobs/{job_id}': ['GET'],

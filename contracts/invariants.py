@@ -48,6 +48,21 @@ OVERVIEW_VERDICT: Final = (
     'broken', 'legacy_incompatible', 'stale', 'pending', 'unknown', 'complete',
 )
 
+#: 单节点续跑判定。``redo`` / ``unknown`` / ``legacy_incompatible`` 都必须
+#: 留给人决定，不能被下一步编排压回 ``run`` 或 ``skip``。
+RESUME_VERDICTS: Final = (
+    'run', 'skip', 'redo', 'unknown', 'legacy_incompatible',
+)
+
+#: operator 的外层下一动作状态。``pipeline_complete`` 只说明 ``NODES`` 已无
+#: 待跑节点，不冒充终审包已经完成或整书已达到 delivery ready。
+OPERATOR_NEXT_STATES: Final = ('ready', 'blocked', 'pipeline_complete')
+
+#: operator 执行许可的两种来源。``ready`` 只许可当前 ``operator next``
+#: 精确给出的 node/flags；``recovery`` 只许可生产策略表登记的阻塞恢复动作。
+#: 两者必须分开：blocked action 的 hash 只描述“为什么停”，不能冒充恢复命令授权。
+EXECUTION_PERMIT_KINDS: Final = ('ready', 'recovery')
+
 #: 一条来源边**为什么**得到那个结论。**用 id 不用措辞**（同 `STAGE0_WARNINGS` 的理由）：
 #: 它要进校验报告的第一节（`Q-4`：来源在前判定在后），而报告不在逐字节验收范围内——
 #: 拿字符串前缀认原因会随一次措辞改动静默断掉。算法唯一落点 `novel/prov.py::freshness`。
@@ -2224,3 +2239,14 @@ OPERATOR_DURATION_SOURCES: Final = ('monotonic', 'wall_clock')
 #: agent 代跑事件的三态。与 `JOB_EVENT_KINDS` 分开：这边没有 `step`
 #: （agent 进程内部干什么不由我们记——那是信标的事），只有生死与改判。
 AGENT_RUN_EVENT_KINDS: Final = ('started', 'ended', 'reconciled')
+
+#: Commander 顶层进程与它准许启动的 ``run_step --execute`` 之间的 admission
+#: 事件。它不是节点进度，也不是 agent 生死：``closed`` 只关掉**新 claim**，
+#: close 前已经取得的 claim 仍须以 ``released`` 精确闭合。
+COMMANDER_ADMISSION_EVENT_KINDS: Final = (
+    'opened', 'claimed', 'released', 'closed', 'drained', 'reconciled')
+
+#: append-only JSONL 被 kill 留下 non-LF 尾时，恢复记录不写回坏账；每个主体在
+#: 独立目录留下 immutable 两相记录，先授权、后确认截断已经 fsync。虽沿用最早
+#: admission 纵切留下的名字，beacon 也共用这一个闭集，不能另长第三种恢复相位。
+COMMANDER_ADMISSION_TAIL_REPAIR_KINDS: Final = ('authorized', 'applied')

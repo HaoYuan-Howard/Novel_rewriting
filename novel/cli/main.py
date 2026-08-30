@@ -9,6 +9,7 @@ main.py —— `python -X utf8 -u -m novel.cli <子命令> …`
     mark <sid> --node N --phase P   进度信标打点（agent 代跑用，0 成本，恒 exit 0）
     state <sid>                     这本书跑到哪了（产物存在性 + 来源新鲜度）
     inbox <sid>                     待人工八类清单（0 成本纯读；有待办≠失败）
+    operator next <sid>             同一快照上的确定性下一动作（0 成本纯读）
     queue <sid…> --until <stage>    建立并执行持久批量队列；含付费项时要 `--yes`
     queue-list                      现有队列一览（0 成本纯读）
     queue-cancel <qid> <index>      取消队列里的某一项
@@ -37,6 +38,7 @@ main.py —— `python -X utf8 -u -m novel.cli <子命令> …`
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sys
 import time
@@ -59,7 +61,7 @@ from novel.errors import (
     ApprovalRequired, ArtifactUnreadable, RefusedByStructure, TerminalState,
     UnsupportedRunMode, UpstreamMissing,
 )
-from novel.orchestrator import beacon
+from novel.orchestrator import admission, beacon
 from novel.orchestrator import nodes as N
 from novel.orchestrator import queue as Q
 from novel.orchestrator import state as S
@@ -146,6 +148,27 @@ def _parser() -> argparse.ArgumentParser:
     ib.add_argument('sid')
     ib.add_argument('--base', required=True)
 
+    operator = sub.add_parser('operator', help='确定性 operator 只读决策与执行许可')
+    operator_sub = operator.add_subparsers(dest='operator_cmd', required=True)
+    operator_next = operator_sub.add_parser(
+        'next', help='同一 state/check/inbox 快照上的唯一下一动作')
+    operator_next.add_argument('sid')
+    operator_next.add_argument('--base', required=True)
+    operator_next.add_argument(
+        '--json', action='store_true',
+        help='输出严格 OperatorNext JSON；适合 headless Commander 消费')
+    operator_permit = operator_sub.add_parser(
+        'permit', help='为 exact node/全部 flags 铸当前只读执行许可')
+    operator_permit.add_argument('sid')
+    operator_permit.add_argument('node', choices=sorted(NODES))
+    operator_permit.add_argument('--base', required=True)
+    operator_permit.add_argument(
+        '--json', action='store_true',
+        help='输出严格 ExecutionPermit JSON；适合 runner 消费')
+    operator_permit.add_argument(
+        'flags', nargs=argparse.REMAINDER,
+        help='节点全部 flags；用显式 `--` 与 operator 控制参数分隔')
+
     q = sub.add_parser('queue', help='建立并执行持久批量队列')
     q.add_argument('sids', nargs='+')
     q.add_argument('--base', required=True)
@@ -173,6 +196,23 @@ def _parser() -> argparse.ArgumentParser:
 
     rc = sub.add_parser('reconcile', help='启动时把「运行中」一律改判「不知道」')
     rc.add_argument('--base', required=True)
+    admission_recovery = rc.add_mutually_exclusive_group()
+    admission_recovery.add_argument(
+        '--admission-parent-run-id', type=_run_id_arg,
+        help='查看/收口一个服务崩溃遗留的 Commander admission；省略仍只改判 jobs')
+    admission_recovery.add_argument(
+        '--admission-repair-tail', action='store_true',
+        help='查看/恢复 commander_admissions.jsonl 的 non-LF 坏尾（0 成本、hash-bound）')
+    admission_recovery.add_argument(
+        '--beacon-repair-tail', action='store_true',
+        help='查看/恢复 agent_progress.jsonl 的 non-LF 坏尾（0 成本、hash-bound）')
+    rc.add_argument('--actor', help='admission apply 必填：执行恢复的人/agent')
+    rc.add_argument('--reason', help='admission apply 必填：为何确认可收口')
+    rc.add_argument(
+        '--subject-sha256', help='admission apply 必填：查看模式给出的当前主体 SHA-256')
+    rc.add_argument(
+        '--force', action='store_true',
+        help='active claim/open execution 尚在时强制人工收口；必须绑定 current subject')
 
     doctor = sub.add_parser('doctor', help='运行环境诊断（0 成本）')
     doctor.add_argument('--llm-transport', action='store_true', required=True,
@@ -256,6 +296,9 @@ def _parser() -> argparse.ArgumentParser:
     mk.add_argument('sid')
     mk.add_argument('--node', required=True, choices=sorted(NODES))
     mk.add_argument('--phase', required=True, choices=list(PROGRESS_PHASES))
+    mk.add_argument(
+        '--execution-id', type=_run_id_arg,
+        help='本次进程 attempt 身份；同一条命令的 start/end 必须逐字相同')
     mk.add_argument('--exit', type=int, default=None,
                     help='phase=end 必填（那条命令的退出码）；start 不许带')
     mk.add_argument('--note', default=None, help='人读的一句附注')
@@ -1021,12 +1064,17 @@ def _run_stage5(ctx: RunContext, flags: list[str]) -> int:
             if not manifest_path:
                 raise TerminalState(
                     '--retain-pretrim-batch 必须给 manifest JSON 路径'
-                    '（相对书目录或书目录内绝对路径；actor/reason 在 manifest 内）')
-            # 与 --apply-edit 同路径规则：相对路径按书目录解释（paths.edit_rel）。
-            manifest_abs = paths.edit_rel(
-                str(ctx.novel_dir), manifest_path,
-                default_rel='--retain-pretrim-batch')
-            raw = Path(manifest_abs).read_text(encoding='utf-8')
+                    '（相对路径按书目录解释；绝对路径原样使用；'
+                    'actor/reason 在 manifest 内）')
+            # API 依 R-11.3 把一次性 manifest 放在书外 `_service/edits/<sid>`。
+            # 相对路径仍按书目录解释；绝对路径保持 producer 既有语义。Commander
+            # 的更窄信任边界由 execution permit 统一收在当前书或 service edit 目录。
+            manifest_arg = Path(manifest_path)
+            manifest_abs = (
+                manifest_arg if manifest_arg.is_absolute()
+                else Path(ctx.novel_dir) / manifest_arg
+            ).resolve()
+            raw = manifest_abs.read_text(encoding='utf-8')
             try:
                 request = BatchTrimResolutionRequest.model_validate_json(raw)
             except ValidationError as exc:
@@ -1288,6 +1336,109 @@ def _cmd_preview(a: argparse.Namespace) -> int:
     return X.OK
 
 
+def _require_commander_execution_permit(
+    a: argparse.Namespace,
+    flags: list[str],
+    parent_context,
+) -> None:
+    """核 active claim + permit envelope + 本 child 的 canonical Step 身份。
+
+    root child（index 0）还要在任何 ``RunContext`` / LLM / producer 之前重铸
+    current permit。root 正常写盘后 surface 必然变化，自动 follow-check 只核同一
+    claim 下的 envelope 与 Step 索引，不能再拿新 surface 误杀预期追检。
+    """
+    from novel.orchestrator import execution_permit as permit_layer
+    from novel.orchestrator import operator as operator_planner
+
+    envelope = permit_layer.load_permit_envelope()
+    has_claim_pointer = admission.CLAIM_ID_ENV in os.environ
+    if parent_context is None:
+        if envelope is not None or has_claim_pointer:
+            raise TerminalState(
+                '发现脱离 Commander contract 的 execution permit/claim envelope；'
+                '拒绝孤儿子进程取得执行权')
+        target_sid = a.sid
+        if (a.node == 'stage0.remove'
+                and '--source' in N.flag_tokens(flags)):
+            source = _valued(flags, '--source')
+            if source:
+                derived_sid = paths.derive_source_meta(source)[0]
+                if a.sid is not None and a.sid != derived_sid:
+                    raise TerminalState(
+                        f'stage0.remove --source 派生 sid={derived_sid!r}，'
+                        f'与显式 sid={a.sid!r} 不一致；不得对错书检查 admission')
+                target_sid = derived_sid
+        if target_sid is not None:
+            unresolved = admission.unresolved(a.base, target_sid)
+            if unresolved:
+                parent_runs = ', '.join(
+                    item.parent_run_id for item in unresolved[:3])
+                suffix = '…' if len(unresolved) > 3 else ''
+                raise TerminalState(
+                    f'sid={target_sid!r} 仍有 durable unresolved Commander '
+                    f'admission（{parent_runs}{suffix}）；直接 novel.cli run 不得在'
+                    '孤儿父执行可能迟到时进入 producer')
+        return
+    if envelope is None:
+        raise TerminalState(
+            'Commander context 下的 node CLI 缺 active admission claim/'
+            'execution permit envelope；'
+            '所有执行必须经当前 operator run_step.py')
+
+    permit, step_index = envelope
+    if permit.sid != a.sid or permit.node != a.node:
+        raise TerminalState(
+            f'execution permit 绑定 {permit.node}/{permit.sid}，'
+            f'不能执行 {a.node}/{a.sid}')
+    actual_base = os.path.normcase(os.path.abspath(os.fspath(a.base)))
+    permit_base = os.path.normcase(os.path.abspath(permit.base))
+    if actual_base != permit_base:
+        raise TerminalState(
+            f'execution permit 属于 base={permit.base!r}，不能执行 base={a.base!r}')
+
+    claim = admission.require_active_claim(
+        a.base, parent_context.run_id, a.sid, permit.node)
+    if claim.claim_sha256 != permit.permit_sha256:
+        raise TerminalState(
+            'active admission claim SHA-256 与 execution permit envelope 不一致')
+
+    root_tokens = frozenset(N.flag_tokens(permit.flags))
+    supported = N.EXECUTOR_PROFILED_RUNS.get(permit.node, ())
+    if root_tokens in supported:
+        root_profile = N.resolve_executor_profile(
+            permit.node, permit.flags,
+            parent_context.executor_profile(permit.node))
+        root_egress = True
+    elif N.is_paid(permit.node, permit.flags):
+        raise TerminalState(
+            f'permit 根动作 {permit.node} {sorted(root_tokens)} 尚未接入 executor agent')
+    else:
+        root_profile = None
+        root_egress = None
+    steps = N.build_steps(
+        permit.node, permit.sid, permit.flags, base=permit.base,
+        executor_profile=root_profile, egress_authorized=root_egress,
+        placeholders=False)
+    if step_index >= len(steps):
+        raise TerminalState(
+            f'execution permit step_index={step_index} 越过 canonical '
+            f'build_steps 长度 {len(steps)}')
+    original_argv = list(getattr(sys, 'orig_argv', ()))
+    expected_argv = list(steps[step_index].argv)
+    if original_argv != expected_argv:
+        raise TerminalState(
+            '当前 child argv 与 execution permit 对应的 canonical '
+            f'build_steps[{step_index}] 不一致；拒绝伪造 step_index/argv')
+
+    if step_index == 0:
+        fresh = operator_planner.permit(
+            permit.base, permit.sid, permit.node, permit.flags)
+        if fresh.permit_sha256 != permit.permit_sha256:
+            raise TerminalState(
+                'execution permit 在 root child 首个副作用前已漂移；'
+                '请重新运行 operator permit 与 run_step preview')
+
+
 def _cmd_run(a: argparse.Namespace) -> int:
     flags = _flags_of(a)
     # 手敲 CLI 不能绕过编排器的节点契约。此前 `stage2.global --check-only`
@@ -1307,7 +1458,9 @@ def _cmd_run(a: argparse.Namespace) -> int:
             raise TerminalState('Commander contract 下的 node run 必须显式给已有书 sid')
         parent_context = commander_context.load_from_environment(a.base, a.sid)
         assert parent_context is not None
-        commander_context.require_execution_authorized(parent_context)
+        # 缺 claim/permit、伪 step_index/argv 与 root permit 漂移都必须先于
+        # executor 选择、RunContext、LLM 与 producer 被拒绝。
+        _require_commander_execution_permit(a, flags, parent_context)
         tokens = frozenset(N.flag_tokens(flags))
         supported = N.EXECUTOR_PROFILED_RUNS.get(a.node, ())
         if tokens in supported:
@@ -1332,6 +1485,10 @@ def _cmd_run(a: argparse.Namespace) -> int:
             raise TerminalState(
                 f'子 CLI NOVEL_RUN_ID={inherited!r} 与 Commander run '
                 f'{parent_context.run_id!r} 不一致')
+    else:
+        _require_commander_execution_permit(a, flags, None)
+    if parent_context is not None:
+        commander_context.require_execution_authorized(parent_context)
     if executor_profile is not None and egress_authorized is not True:
         raise ApprovalRequired(
             'executor 会向所选 provider 外发小说正文；正文外发授权必须显式加 '
@@ -1463,6 +1620,48 @@ def _cmd_inbox(a: argparse.Namespace) -> int:
     return X.OK
 
 
+def _cmd_operator(a: argparse.Namespace) -> int:
+    """确定性 operator façade；blocked/complete 是读到的事实，不是命令失败。"""
+    from novel.orchestrator import operator as operator_planner
+
+    if a.operator_cmd == 'next':
+        result = operator_planner.next_action(a.base, paths.check_sid(a.sid))
+    elif a.operator_cmd == 'permit':
+        flags = list(a.flags)
+        if flags[:1] == ['--']:
+            flags = flags[1:]
+        result = operator_planner.permit(
+            a.base, paths.check_sid(a.sid), a.node, flags)
+        if a.json:
+            print(result.model_dump_json(indent=2))
+            return X.OK
+        print(f'{result.kind}  {result.node} {" ".join(result.flags)}'.rstrip())
+        print(f'  next={result.next_state} · '
+              f'paid={"是" if result.paid else "否"} · '
+              f'writes={result.writes or "否"}')
+        if result.waiting_on:
+            print(f'  waiting_on={result.waiting_on}')
+        print(f'  permit_sha256={result.permit_sha256}')
+        return X.OK
+    else:  # pragma: no cover —— argparse 已闭合集合
+        raise UnsupportedRunMode(f'未知 operator 子命令 {a.operator_cmd!r}')
+    if a.json:
+        print(result.model_dump_json(indent=2))
+        return X.OK
+    print(f'{result.state}  {result.overview.title} ({result.sid})')
+    if result.action is not None:
+        action = result.action
+        print(f'  {action.node} {" ".join(action.flags)}'.rstrip())
+        print(f'  resume={action.resume_verdict} · '
+              f'paid={"是" if action.paid else "否"} · '
+              f'writes={action.writes or "否"}')
+        print(f'  why={action.why}')
+        if action.waiting_on:
+            print(f'  waiting_on={action.waiting_on}')
+        print(f'  action_sha256={action.action_sha256}')
+    return X.OK
+
+
 def _print_inbox(view) -> None:
     """state --with-inbox 与独立 inbox 共用同一份人读投影。"""
     counts = ' · '.join(f'{kind} {n}' for kind, n in view.counts.items())
@@ -1563,6 +1762,97 @@ def _cmd_jobs(a: argparse.Namespace) -> int:
 
 def _cmd_reconcile(a: argparse.Namespace) -> int:
     """`R-11.11`：**服务重启后原本「运行中」的一律改判「不知道」**，不是「成功」。"""
+    if a.beacon_repair_tail:
+        subject = beacon.tail_repair_subject(a.base)
+        supplied = (a.actor, a.reason, a.subject_sha256)
+        if not any(value is not None for value in supplied) and not a.force:
+            print(json.dumps({
+                'subject_sha256': subject.subject_sha256,
+                'committed_size': subject.committed_size,
+                'committed_sha256': subject.committed_sha256,
+                'tail_size': subject.tail_size,
+                'tail_sha256': subject.tail_sha256,
+                'quarantine_path': str(subject.quarantine_path),
+                'apply_requires': ['--actor', '--reason', '--subject-sha256'],
+            }, ensure_ascii=False, indent=2))
+            return X.OK
+        if a.force:
+            raise TerminalState(
+                '--force 不适用于 beacon tail repair；'
+                '恢复只能精确绑定当前 committed-prefix/tail subject')
+        if any(value is None for value in supplied):
+            raise TerminalState(
+                'beacon tail repair apply 必须同时给 '
+                '--actor / --reason / --subject-sha256')
+        done = beacon.repair_tail(
+            a.base, actor=a.actor, reason=a.reason,
+            subject_sha256=a.subject_sha256)
+        print('✓ beacon non-LF 尾已原样隔离并截回 committed prefix：'
+              f'{done.quarantine_path}')
+        return X.OK
+    if a.admission_repair_tail:
+        subject = admission.tail_repair_subject(a.base)
+        supplied = (a.actor, a.reason, a.subject_sha256)
+        if not any(value is not None for value in supplied) and not a.force:
+            print(json.dumps({
+                'subject_sha256': subject.subject_sha256,
+                'committed_size': subject.committed_size,
+                'committed_sha256': subject.committed_sha256,
+                'tail_size': subject.tail_size,
+                'tail_sha256': subject.tail_sha256,
+                'quarantine_path': str(subject.quarantine_path),
+                'apply_requires': ['--actor', '--reason', '--subject-sha256'],
+            }, ensure_ascii=False, indent=2))
+            return X.OK
+        if a.force:
+            raise TerminalState(
+                '--force 不适用于 admission tail repair；'
+                '恢复只能精确绑定当前 committed-prefix/tail subject')
+        if any(value is None for value in supplied):
+            raise TerminalState(
+                'admission tail repair apply 必须同时给 '
+                '--actor / --reason / --subject-sha256')
+        done = admission.repair_tail(
+            a.base, actor=a.actor, reason=a.reason,
+            subject_sha256=a.subject_sha256)
+        print('✓ admission non-LF 尾已原样隔离并截回 committed prefix：'
+              f'{done.quarantine_path}')
+        return X.OK
+    if a.admission_parent_run_id is not None:
+        parent_run_id = a.admission_parent_run_id
+        current = admission.snapshot(a.base, parent_run_id)
+        subject = admission.reconcile_subject(a.base, parent_run_id)
+        opened = beacon.open_executions(a.base, parent_run_id)
+        supplied = (a.actor, a.reason, a.subject_sha256)
+        if not any(value is not None for value in supplied) and not a.force:
+            print(json.dumps({
+                'parent_run_id': parent_run_id,
+                'sid': current.sid,
+                'closed': current.closed,
+                'terminal_kind': current.terminal_kind,
+                'reconcile_invalidated': current.reconcile_invalidated,
+                'active_claim_ids': [item.claim_id for item in current.active_claims],
+                'open_execution_ids': [item.execution_id for item in opened],
+                'subject_sha256': subject,
+                'apply_requires': ['--actor', '--reason', '--subject-sha256'],
+                'force_required_while_open': bool(current.active_claims or opened),
+            }, ensure_ascii=False, indent=2))
+            return X.OK
+        if any(value is None for value in supplied):
+            raise TerminalState(
+                'admission reconcile apply 必须同时给 '
+                '--actor / --reason / --subject-sha256')
+        done = admission.reconcile_gate(
+            a.base, parent_run_id, actor=a.actor, reason=a.reason,
+            subject_sha256=a.subject_sha256, force=bool(a.force))
+        print(f'✓ admission {parent_run_id} 已由 {a.actor} 显式收口'
+              f'（force={bool(a.force)}，sid={done.sid}）')
+        return X.OK
+    if any((a.actor, a.reason, a.subject_sha256, a.force)):
+        raise TerminalState(
+            '--actor/--reason/--subject-sha256/--force 只与 '
+            '--admission-parent-run-id / --admission-repair-tail / '
+            '--beacon-repair-tail 之一成组使用')
     from novel.orchestrator import jobs as J
     changed = J.reconcile(a.base)
     print(f'改判了 {len(changed)} 个作业为「不知道」'
@@ -1589,6 +1879,23 @@ def _cmd_doctor(a: argparse.Namespace) -> int:
 
 
 def _cmd_response_repair(a: argparse.Namespace) -> int:
+    """给非节点 response-repair 写动作持有完整 generic admission。"""
+    from novel.orchestrator.write_admission import operation_scope
+
+    details = {
+        'attempt': a.attempt,
+        'batch': a.batch,
+        'run_id': a.run_id,
+        'decline': bool(a.decline),
+        'decisions_input': a.decisions,
+        'actor': a.actor,
+    }
+    with operation_scope(
+            a.base, a.sid, operation='response-repair', details=details):
+        return _cmd_response_repair_admitted(a)
+
+
+def _cmd_response_repair_admitted(a: argparse.Namespace) -> int:
     """封存受托 agent 的修复/放弃决定；真正复验发生在原节点重跑时。"""
     from novel.llm import response_repair
 
@@ -1656,7 +1963,28 @@ def _approval_input(path: str) -> str:
         raise TerminalState(f'审批输入不可读：{exc}') from exc
 
 
+_APPROVAL_WRITE_ACTIONS = frozenset({'backfill', 'seen', 'gate', 'apply'})
+
+
 def _cmd_approval(a: argparse.Namespace) -> int:
+    """只读 façade 直读；四类写动作持有 generic admission。"""
+    if a.approval_action not in _APPROVAL_WRITE_ACTIONS:
+        return _cmd_approval_admitted(a)
+
+    from novel.orchestrator.write_admission import operation_scope
+
+    details = {'action': a.approval_action}
+    for name in ('surface', 'view', 'gate', 'input'):
+        value = getattr(a, name, None)
+        if value is not None:
+            details[name] = value
+    with operation_scope(
+            a.base, a.sid,
+            operation=f'approval-{a.approval_action}', details=details):
+        return _cmd_approval_admitted(a)
+
+
+def _cmd_approval_admitted(a: argparse.Namespace) -> int:
     """可审计审批 CLI：template/show 只读，apply 只落审批账且绝不拉作业。"""
     from contracts.schema.api import (
         BlueprintSeenRequest, DesignReviewRequest, Stage5ClosureRequest, StructureApprovalRequest,
@@ -1772,15 +2100,55 @@ def _cmd_mark(a: argparse.Namespace) -> int:
         # operator 随后把同一值显式传给 producer 与 end mark。不能写一条 null
         # 再指望成本收尾按时间窗口猜它属于哪次 run。
         print(f'  run_id : {effective_run_id}', file=sys.stderr)
-    beacon.append(a.base, ProgressEvent(
-        ts=int(time.time()), sid=paths.check_sid(a.sid), node=a.node,
-        phase=a.phase, exit_code=a.exit, note=a.note,
-        run_id=effective_run_id))
+    checked_sid = paths.check_sid(a.sid)
+
+    def append_event() -> None:
+        beacon.append(a.base, ProgressEvent(
+            ts=int(time.time()), sid=checked_sid, node=a.node,
+            phase=a.phase, exit_code=a.exit, note=a.note,
+            run_id=effective_run_id, execution_id=a.execution_id))
+
+    parent_context = commander_context.load_from_environment(
+        a.base, checked_sid)
+    if parent_context is not None:
+        if inherited != parent_context.run_id:
+            raise TerminalState(
+                f'progress mark 继承的 NOVEL_RUN_ID={inherited!r} 与 Commander '
+                f'parent run_id={parent_context.run_id!r} 不一致；'
+                '不得用显式参数掩盖父进程身份漂移')
+        if a.execution_id is None:
+            raise TerminalState(
+                'Commander context 下的 progress mark 必须带 --execution-id；'
+                'start/end 要用同一个真实进程 attempt 身份')
+        if effective_run_id != parent_context.run_id:
+            raise TerminalState(
+                f'progress mark run_id={effective_run_id!r} 与 Commander parent '
+                f'run_id={parent_context.run_id!r} 不一致；不得把事件记到别的 run')
+        # start/end mark 都属于 run_step 已经原子取得的 node claim。尤其 end
+        # 可能发生在顶层 Commander 已 close 新 claim 之后；这里必须复用旧 claim，
+        # 不能再开一枚 generic claim，否则会把合法的收尾信标误杀并永久留下 open beacon。
+        admission.require_active_claim(
+            a.base, parent_context.run_id, checked_sid, a.node)
+        append_event()
+        return X.OK
+
+    from novel.orchestrator.write_admission import operation_scope
+    details = {
+        'node': a.node,
+        'phase': a.phase,
+        'execution_id': a.execution_id,
+        'run_id': effective_run_id,
+        'exit_code': a.exit,
+    }
+    with operation_scope(
+            a.base, checked_sid, operation='progress-mark', details=details):
+        append_event()
     return X.OK
 
 
 _CMDS = {'run': _cmd_run, 'preview': _cmd_preview,
-         'state': _cmd_state, 'inbox': _cmd_inbox, 'queue': _cmd_queue,
+         'state': _cmd_state, 'inbox': _cmd_inbox, 'operator': _cmd_operator,
+         'queue': _cmd_queue,
          'queue-list': _cmd_queue_list, 'queue-cancel': _cmd_queue_cancel,
          'queue-resume': _cmd_queue_resume,
          'jobs': _cmd_jobs, 'reconcile': _cmd_reconcile, 'doctor': _cmd_doctor,
@@ -1802,11 +2170,76 @@ def _print_hint(exc: BaseException) -> None:
         print(f'  → 下一条命令：{hint}', file=sys.stderr)
 
 
+def _normalize_operator_permit_argv(argv: list[str]) -> list[str]:
+    """让 permit 控制参数可按公开语法放在 node 后、显式 ``--`` 前。
+
+    ``argparse.REMAINDER`` 会从 node 后吞掉包括 ``--base`` 在内的一切；
+    不在这里把 operator 自己的控制参数提到 sid/node 前，文档给出的规范命令
+    会稳定报“缺 --base”。显式 ``--`` 后百分之百属于节点 flags，不参与搬移。
+    """
+    if argv[:2] != ['operator', 'permit']:
+        return argv
+    split = argv.index('--') if '--' in argv else len(argv)
+    head, flags = argv[:split], argv[split:]
+    controls: list[str] = []
+    body: list[str] = []
+    index = 2
+    while index < len(head):
+        token = head[index]
+        if token == '--json':
+            controls.append(token)
+            index += 1
+            continue
+        if token == '--base' or token.startswith('--base='):
+            controls.append(token)
+            if token == '--base' and index + 1 < len(head):
+                controls.append(head[index + 1])
+                index += 2
+            else:
+                index += 1
+            continue
+        body.append(token)
+        index += 1
+    return argv[:2] + controls + body + flags
+
+
+def _commander_control_mutation(a: argparse.Namespace) -> bool:
+    """Commander 子上下文不可递归操纵队列/恢复控制面；纯读模板仍允许。"""
+    if a.cmd == 'queue':
+        return not bool(a.plan_only)
+    if a.cmd in ('queue-cancel', 'queue-resume'):
+        return True
+    if a.cmd != 'reconcile':
+        return False
+    admission_inspect = bool(
+        a.admission_parent_run_id is not None
+        or a.admission_repair_tail
+        or a.beacon_repair_tail)
+    supplied = any((a.actor, a.reason, a.subject_sha256, a.force))
+    # admission/tail 无 typed apply 参数时只是只读主体模板；普通 jobs reconcile
+    # 即使没有附加参数也会追加事件，所以仍是 mutation。
+    return not admission_inspect or supplied
+
+
+def _refuse_commander_control_mutation(a: argparse.Namespace) -> None:
+    pointer_present = (
+        commander_context.COMMANDER_RUN_ID_ENV in os.environ
+        or commander_context.COMMANDER_CONTRACT_SHA256_ENV in os.environ
+    )
+    if pointer_present and _commander_control_mutation(a):
+        raise TerminalState(
+            f'Commander execution context 下不得执行控制面 mutation `{a.cmd}`；'
+            '请退出该 Commander 子上下文，由外部操作员执行 queue/reconcile 控制动作。'
+            'queue-list、queue --plan-only 与 admission/beacon tail 查看模板仍为只读')
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """**唯一**把异常翻译成退出码的地方。取值面见 `exit_codes.py`。"""
     _force_utf8()
-    a = _parser().parse_args(list(argv) if argv is not None else None)
+    raw = list(sys.argv[1:] if argv is None else argv)
+    a = _parser().parse_args(_normalize_operator_permit_argv(raw))
     try:
+        _refuse_commander_control_mutation(a)
         return _CMDS[a.cmd](a)
     except TerminalState as e:
         # **不是 bug，所以不打栈**：打一段栈会让人以为程序坏了，

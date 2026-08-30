@@ -33,6 +33,7 @@ from novel.errors import (
     UpstreamUnproven,
 )
 from novel import run_identity
+from novel.orchestrator import admission
 from novel.orchestrator import queue as Q
 from novel.orchestrator import jobs as J
 from novel.orchestrator import state as S
@@ -108,6 +109,123 @@ def test_human_nodes_are_exactly_the_ones_a_person_does():
     """定稿节点换候选、`--apply-edit` 改一个字——**机器替不了**。"""
     assert Q.HUMAN_NODES == {'stage0.approve', 'stage0.edit',
                              'stage6.approve', 'stage7.approve'}
+
+
+def test_upstream_stuck_never_builds_downstream_human_commands(
+        queue_base, monkeypatch):
+    """上游阻塞传播到人工节点时只报等待，不索取尚不存在的必填裁决。"""
+    monkeypatch.setattr(
+        Q, 'nodes_up_to',
+        lambda _until: ['stage5.write', 'stage6.approve', 'stage7.approve'])
+    monkeypatch.setattr(
+        Q.st, 'overview', lambda _base, _sid: SimpleNamespace(stages=[]))
+    monkeypatch.setattr(
+        Q.st, 'resume_verdict',
+        lambda _overview, node: (Q.st.RESUME_RUN, f'{node} 尚未完成'))
+    monkeypatch.setattr(Q.approvals, 'writing_is_current', lambda *_args: False)
+
+    real_build_steps = Q.build_steps
+    built: list[str] = []
+
+    def guarded_build_steps(node, *args, **kwargs):
+        built.append(node)
+        if node in Q.HUMAN_NODES:
+            raise AssertionError('上游 stuck 后不应构造人工节点 argv')
+        return real_build_steps(node, *args, **kwargs)
+
+    monkeypatch.setattr(Q, 'build_steps', guarded_build_steps)
+
+    todo, blocked = Q.plan_book(
+        queue_base, 'book-a', until_stage='stage7', follow_check=False)
+
+    assert todo == []
+    assert [item.node for item in blocked] == [
+        'stage5.write', 'stage6.approve', 'stage7.approve']
+    assert all(
+        item.waiting_on == Q.WAITING_ON_WRITING_APPROVAL for item in blocked)
+    assert all(item.steps == [] for item in blocked)
+    assert 'stage6.approve' not in built and 'stage7.approve' not in built
+
+
+@pytest.mark.parametrize(
+    'closure_state',
+    ['missing', 'review_required', 'blocked', 'ready', 'expired'],
+)
+def test_stage6_waits_for_the_production_stage5_closure_view(
+        queue_base, monkeypatch, closure_state):
+    """Review/current artifacts 不能替代 Stage5 typed closure 回执。"""
+    monkeypatch.setattr(Q, 'nodes_up_to', lambda _until: ['stage6.hook'])
+    monkeypatch.setattr(
+        Q.st, 'overview', lambda _base, _sid: SimpleNamespace(stages=[]))
+    monkeypatch.setattr(
+        Q.st, 'resume_verdict',
+        lambda _overview, _node: (Q.st.RESUME_RUN, 'stage6 尚未生成'))
+    monkeypatch.setattr(
+        Q.approvals, 'stage5_closure_view',
+        lambda _base, _sid: SimpleNamespace(state=closure_state))
+
+    todo, blocked = Q.plan_book(
+        queue_base, 'book-a', until_stage='stage6', follow_check=False)
+
+    assert todo == [] and len(blocked) == 1
+    assert blocked[0].node == 'stage6.hook'
+    assert blocked[0].waiting_on == Q.WAITING_ON_STAGE5_CLOSURE
+    assert blocked[0].steps == []
+    assert 'typed closure' in blocked[0].why
+
+
+def test_closed_stage5_closure_allows_stage6_planning(queue_base, monkeypatch):
+    monkeypatch.setattr(Q, 'nodes_up_to', lambda _until: ['stage6.hook'])
+    monkeypatch.setattr(
+        Q.st, 'overview', lambda _base, _sid: SimpleNamespace(stages=[]))
+    monkeypatch.setattr(
+        Q.st, 'resume_verdict',
+        lambda _overview, _node: (Q.st.RESUME_RUN, 'stage6 尚未生成'))
+    monkeypatch.setattr(
+        Q.approvals, 'stage5_closure_view',
+        lambda _base, _sid: SimpleNamespace(state='closed'))
+
+    todo, blocked = Q.plan_book(
+        queue_base, 'book-a', until_stage='stage6', follow_check=False)
+
+    assert blocked == [] and [item.node for item in todo] == ['stage6.hook']
+
+
+@pytest.mark.parametrize(
+    ('node', 'artifact_key'),
+    [
+        ('stage4.design', 'stage4.blind_candidate'),
+        ('stage6.hook', 'stage6.hook'),
+        ('stage7.rename', 'stage7.name_map'),
+    ],
+)
+def test_live_invalid_blocks_default_paid_rerun_without_freezing_argv(
+        queue_base, monkeypatch, node, artifact_key):
+    """generic INVALID 先停 recovery，绝不把 resume 的警告做成付费命令。"""
+    from contracts.artifacts import ARTIFACT_PATHS
+
+    monkeypatch.setattr(Q, 'nodes_up_to', lambda _until: [node])
+    # 只隔离到达本节点前的 typed 闸；本用例要验证的是 live INVALID 本身
+    # 不会被翻译成默认付费重跑，而不是重复测试 Stage2/Stage5 审批。
+    monkeypatch.setattr(
+        Q.approvals, 'require_stage2_review', lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        Q.approvals, 'stage5_closure_view',
+        lambda *_args, **_kwargs: SimpleNamespace(state='closed'))
+    artifact = ArtifactState(
+        rel=ARTIFACT_PATHS[artifact_key], exists=True, bytes=10, mtime=1,
+        freshness='fresh', reason='match', display_freshness='fresh',
+        invalid=True, readable=True, condition='invalid')
+    overview = SimpleNamespace(stages=[StageState(
+        stage=NODES[node].stage, artifacts=[artifact], done=False, reviewable=True)])
+    monkeypatch.setattr(Q.st, 'overview', lambda _base, _sid: overview)
+
+    todo, blocked = Q.plan_book(
+        queue_base, 'book-a', until_stage=NODES[node].stage, follow_check=False)
+
+    assert todo == [] and len(blocked) == 1
+    assert blocked[0].waiting_on == Q.WAITING_ON_INBOX
+    assert blocked[0].steps == []
 
 
 def test_queue_runs_blueprint_then_stops_at_stage4_for_global_review(
@@ -1139,6 +1257,48 @@ def test_service_restart_auto_resumes_an_unchanged_free_snapshot(
     assert Q.wait('q-free-restart', 2)
     assert calls == ['free-call']
     assert Q.records(queue_base, registry=qreg)[0].state == 'ok'
+
+
+def test_service_restart_leaves_durable_unresolved_lane_byte_for_byte_until_typed_resume(
+        queue_base, monkeypatch):
+    _seed(queue_base, 'q-unresolved-startup', [
+        _item('book-a', 'stage0.remove', 'free-call'),
+    ])
+    admission.open_gate(queue_base, 'parent-unresolved-queue', 'book-a')
+    queue_bytes = Q.queue_path(queue_base).read_bytes()
+    qreg, jreg = Q.QueueRegistry(), J.JobRegistry()
+    calls: list[str] = []
+    real_start = Q.start
+    monkeypatch.setattr(
+        Q, '_live_disposition',
+        lambda *_args, **_kwargs: pytest.fail(
+            'durable unresolved lane startup 不得读取产物盘面'))
+    monkeypatch.setattr(
+        Q, '_current_plan_items',
+        lambda *_args, **_kwargs: pytest.fail(
+            'durable unresolved lane startup 不得重新规划'))
+    monkeypatch.setattr(
+        Q, 'start',
+        lambda *_args, **_kwargs: pytest.fail(
+            'durable unresolved lane startup 不得启动'))
+
+    assert Q.resume_incomplete(
+        queue_base, registry=qreg, job_registry=jreg) == []
+    assert Q.queue_path(queue_base).read_bytes() == queue_bytes
+
+    subject = admission.reconcile_subject(
+        queue_base, 'parent-unresolved-queue')
+    admission.reconcile_gate(
+        queue_base, 'parent-unresolved-queue', actor='恢复值守员',
+        reason='已核实原 Commander 进程树不存在', subject_sha256=subject)
+    monkeypatch.setattr(Q, 'start', real_start)
+    monkeypatch.setattr(Q, '_live_disposition', _always_pending)
+    resumed = Q.resume(
+        queue_base, 'q-unresolved-startup', yes=False,
+        spawn=lambda argv, _cwd, _env, _log: calls.append(argv[-1]) or 0,
+        registry=qreg, job_registry=jreg)
+    assert resumed.state == 'ok'
+    assert calls == ['free-call']
 
 
 def test_changed_command_surface_blocks_instead_of_substituting_a_new_command(

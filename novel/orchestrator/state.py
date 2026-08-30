@@ -30,7 +30,7 @@ from contracts.artifacts import (
 import os
 from pathlib import Path
 
-from contracts.invariants import LEGACY_STAGE5_MODES, NODES, STAGES
+from contracts.invariants import LEGACY_STAGE5_MODES, NODES, RESUME_VERDICTS, STAGES
 from contracts.schema import ARTIFACTS, artifact_key, artifact_spec
 from contracts.schema.orchestration import (
     ArtifactState, NovelOverview, OverviewSummary, StageState,
@@ -486,24 +486,48 @@ def overview(base: str | os.PathLike[str], sid: str) -> NovelOverview:
     return overview_at(novel_dir, prov.code_version())
 
 
+def artifacts_for_node(ov: NovelOverview, node: str) -> list[ArtifactState]:
+    """从完成度的现役 ``produces`` 投影取本节点自己的产物行。
+
+    同一 stage 可能有多个节点；直接看整层 ``artifacts`` 会把 Global 的 INVALID
+    错算到 Blueprint 上。``resume_verdict`` 与 queue 的安全关闭式判断共用这一口，
+    不在两个消费者里各重拼一份 node→artifact 关系。
+    """
+    spec = NODES.get(node)
+    if spec is None:
+        return []
+    stage = next((item for item in ov.stages if item.stage == spec.stage), None)
+    if stage is None:
+        return []
+    if node == 'stage5.write':
+        # 逐章路径是模板，Stage5 完成度只把问题章物化进 artifacts。
+        return list(stage.artifacts)
+    selected = [item for item in stage.artifacts if item.rel in spec.produces]
+    return selected or list(stage.artifacts)
+
+
+def live_invalid_artifacts(ov: NovelOverview, node: str) -> list[ArtifactState]:
+    """本节点当前仍在活动面上的 INVALID；不把同 stage 兄弟节点算进来。"""
+    return [item for item in artifacts_for_node(ov, node) if item.invalid]
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # 四、续跑判定（`R-14.4`）
 # ─────────────────────────────────────────────────────────────────────────────
 
-#: 续跑前的四种结论。**「重来」与「续」必须分得开**，那是 `R-14.4` 的全部内容；
-#: 而 `unknown` 与另外三个分得开，是 `Q-2` 那条三态在这一侧的样子。
-RESUME_RUN = 'run'          # 产物不在盘上 / 是 `.INVALID` ⇒ 该跑
-RESUME_SKIP = 'skip'        # 产物在、读得回来、不陈旧 ⇒ 已存在即跳过
-RESUME_REDO = 'redo'        # 上游在中断期间变过 ⇒ **那不是「续」是「重来」**
-RESUME_UNKNOWN = 'unknown'  # 判不了。⚠ **它不许被折进 `run`**——见下
-RESUME_LEGACY = 'legacy_incompatible'  # 旧 Stage5 契约；绝不自动付费重跑
+#: 续跑前的五种结论。**「重来」与「续」必须分得开**，那是 `R-14.4` 的全部内容；
+#: 而 `unknown` 与另外四个分得开，是 `Q-2` 那条三态在这一侧的样子。
+(
+    RESUME_RUN,
+    RESUME_SKIP,
+    RESUME_REDO,
+    RESUME_UNKNOWN,
+    RESUME_LEGACY,
+) = RESUME_VERDICTS
 
 #: ⚠⚠ `unknown` 折进 `run` 的代价是**真金白银**：那意味着队列会去重跑一个
 #: 可能已经写完的付费层。折进 `skip` 更坏（跳过一个根本没跑的层，
 #: 而下游会拿着半份成品继续走）。⇒ 它只能是第四个值，由人来看那句话。
-RESUME_VERDICTS = (RESUME_RUN, RESUME_SKIP, RESUME_REDO, RESUME_UNKNOWN, RESUME_LEGACY)
-
-
 def stage2_global_projection_blocked(ov: NovelOverview) -> bool:
     """最新 Global 的称名 HARD 是否让 Blueprint 投影暂不可消费。"""
     stage = next(
@@ -764,7 +788,7 @@ def resume_verdict(ov: NovelOverview, node: str) -> tuple[str, str]:
         if st.done is True:
             return RESUME_SKIP, (
                 f'{spec.stage} 计划里的每个输出章都有当前、可读的 canonical 成稿了')
-        invalid = [a for a in st.artifacts if a.invalid]
+        invalid = live_invalid_artifacts(ov, node)
         if invalid:
             invalid_rels = [
                 a.rel if paths.is_invalid(a.rel) else paths.invalid_of(a.rel)
@@ -806,7 +830,7 @@ def resume_verdict(ov: NovelOverview, node: str) -> tuple[str, str]:
             f'{spec.stage} 的 canonical 章集合与当前计划不一致，'
             '但没有可安全归类为缺章的项；请先人工核对计划与多余章稿')
 
-    mine = [a for a in st.artifacts if a.rel in spec.produces] or st.artifacts
+    mine = artifacts_for_node(ov, node)
     stale = [a for a in mine if a.freshness == 'stale']
     if stale:
         return RESUME_REDO, (
@@ -816,7 +840,7 @@ def resume_verdict(ov: NovelOverview, node: str) -> tuple[str, str]:
     missing = [a for a in mine if not a.exists]
     if missing:
         return RESUME_RUN, f'产物不在盘上：{", ".join(a.rel for a in missing)}'
-    invalid = [a for a in mine if a.invalid]
+    invalid = live_invalid_artifacts(ov, node)
     if invalid:
         # ⚠ 走到这里时正式稿**在盘上、读得回来、且不陈旧**（上面三道已经先答过了），
         #   所以这份 `.INVALID` 只可能是**比它更晚**的一次被拦下的稿——

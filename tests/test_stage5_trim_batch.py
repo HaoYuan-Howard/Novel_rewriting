@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import hashlib
+import importlib
 import json
 from pathlib import Path
 
@@ -181,3 +182,27 @@ def test_single_item_override_reason(rig):
     second, _ = store.read_own(TrimResolution, 'stage5/trim_resolution_ch02.json')
     assert first.reason == '共享理由'
     assert second.reason == '第二章单独的理由'
+
+
+def test_cli_trim_batch_resolves_relative_to_book_and_keeps_absolute_path(
+        rig, monkeypatch):
+    """direct CLI 保持现役语义；Commander 的绝对路径边界另由 permit 收窄。"""
+    ctx, _store, sha_by_ordinal, audit_sha = rig
+    cli = importlib.import_module('novel.cli.main')
+    relative_request = _request(sha_by_ordinal, audit_sha)
+    relative = ctx.novel_dir / 'relative-trim-batch.json'
+    relative.write_text(relative_request.model_dump_json(), encoding='utf-8')
+    absolute_request = relative_request.model_copy(
+        update={'reason': '绝对路径 manifest'})
+    absolute = ctx.novel_dir.parent / 'absolute-trim-batch.json'
+    absolute.write_text(absolute_request.model_dump_json(), encoding='utf-8')
+    seen = []
+    monkeypatch.setattr(
+        trim_resolution, 'retain_pretrim_batch',
+        lambda _ctx, request: seen.append(request.reason) or [])
+
+    assert cli._run_stage5(
+        ctx, ['--retain-pretrim-batch', relative.name]) == 0
+    assert cli._run_stage5(
+        ctx, ['--retain-pretrim-batch', str(absolute.resolve())]) == 0
+    assert seen == ['两章一并确认保留 pretrim', '绝对路径 manifest']

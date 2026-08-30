@@ -78,6 +78,20 @@ _WITHHELD: dict[str, str] = {
     'OPERATOR_PHASES': (
         'operator telemetry 只由本地 skill/脚本写读，不是 HTTP/UI 取值面'),
     'OPERATOR_PHASE_EVENT_KINDS': '同上，append-only 事件种类不由前端构造',
+    'COMMANDER_ADMISSION_EVENT_KINDS': (
+        'Commander/run_step 的内部 append-only admission wire；'
+        '只由后端生命周期边界构造，不是前端操作选项'),
+    'COMMANDER_ADMISSION_TAIL_REPAIR_KINDS': (
+        'Commander admission 坏尾的内部两相恢复记录；只由 typed CLI 恢复口构造'),
+    'RESUME_VERDICTS': (
+        'operator/queue 内部的断点判定域；前端只消费随 OperatorNext '
+        '返回的具体结论，不自行构造或重算'),
+    'OPERATOR_NEXT_STATES': (
+        'OperatorNext 响应自身已携严格状态；它是只读调度结果，'
+        '不是 /api/enums 供界面构造的动作选项'),
+    'EXECUTION_PERMIT_KINDS': (
+        'ready/recovery 是本地 operator runner 的内部执行许可来源；'
+        '不对 HTTP/UI 发布第二份可执行路由表'),
     'OPERATOR_TELEMETRY_SOURCES': '同上，遥测来源由本地入口固定',
     'OPERATOR_TERMINAL_STATES': '同上，终态由本地 fold 契约解释',
     'OPERATOR_DURATION_SOURCES': '同上，时长来源由本地计时边界决定',

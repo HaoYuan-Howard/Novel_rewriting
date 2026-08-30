@@ -28,6 +28,7 @@ from contracts.invariants import (
     AGENT_DELIVERY_OUTCOME,
     AGENT_EXECUTOR_NODES, AGENT_RUN_EVENT_KINDS,
     ARTIFACT_CONDITION, ARTIFACT_DISPLAY, BEACON_STATES,
+    COMMANDER_ADMISSION_EVENT_KINDS, COMMANDER_ADMISSION_TAIL_REPAIR_KINDS,
     AgentDriver, AgentExecutionMode, AgentReasoningEffort,
     FRESHNESS, FRESHNESS_REASON, JOB_EVENT_KINDS, JOB_STATE, NODES,
     OPERATOR_DURATION_SOURCES, OPERATOR_PHASE_EVENT_KINDS, OPERATOR_PHASES,
@@ -540,9 +541,99 @@ class AgentRunStart(FrozenModel):
     #: unknown；新 run 在结束时必须与当前指纹一致，避免一次跑跨两版代码却冒充可复现。
     code_version: str | None = None
 
+    #: Commander 启动时 canonical operator skill 整树（SKILL + references +
+    #: scripts + assets）的原始字节契约。旧事件没有这一格时为
+    #: ``None``，只能读为未记录，不得拿今天的 skill 回填。
+    skill_sha256: str | None = Field(
+        default=None, pattern=r'^[0-9a-f]{64}$')
+
     #: commander + 默认 executor + 节点覆盖的解析后快照。旧事件没有这一格时为
     #: ``None``，只能显示 unknown，绝不按今天的默认配置回填昨天的运行身份。
     profiles: PipelineAgentProfiles | None = None
+
+
+CommanderAdmissionEventKind = Literal[COMMANDER_ADMISSION_EVENT_KINDS]
+
+
+class CommanderAdmissionEvent(FrozenModel):
+    """Commander execution admission 的一行持久 wire（v1）。
+
+    ``opened/closed`` 管父 run 是否还能接纳新执行；``claimed/released`` 精确
+    标识一个 ``run_step --execute`` 的完整 Step 序列；``drained/reconciled``
+    分别记录正常双面闭合与显式人工恢复。六态共用同一 append-only 文件与同一
+    事务锁，close 和 claim 因而有唯一、可重放的先后关系。
+    """
+
+    wire_version: Literal[1] = 1
+    parent_run_id: str = Field(pattern=r'^[a-z0-9][a-z0-9_-]{0,127}$')
+    sid: str = Field(min_length=1, max_length=128)
+    kind: CommanderAdmissionEventKind
+    ts: int = Field(ge=0)
+    claim_id: str | None = Field(
+        default=None, pattern=r'^[a-z0-9][a-z0-9_-]{0,127}$')
+    node: str | None = Field(default=None, min_length=1)
+    claim_sha256: str | None = Field(
+        default=None, pattern=r'^[0-9a-f]{64}$')
+    actor: str | None = Field(default=None, min_length=1, max_length=256)
+    reason: str | None = Field(default=None, min_length=1, max_length=2000)
+    subject_sha256: str | None = Field(
+        default=None, pattern=r'^[0-9a-f]{64}$')
+    force: bool | None = None
+
+    @model_validator(mode='after')
+    def _payload_matches_kind(self) -> CommanderAdmissionEvent:
+        claim_payload = (self.claim_id, self.node, self.claim_sha256)
+        audit_payload = (self.actor, self.reason, self.subject_sha256, self.force)
+        if self.kind in ('opened', 'closed', 'drained'):
+            if any(value is not None for value in claim_payload + audit_payload):
+                raise ValueError(f'{self.kind} 不得携带 claim/人工 reconcile 载荷')
+            return self
+        if self.kind in ('claimed', 'released'):
+            if any(value is None for value in claim_payload):
+                raise ValueError(f'{self.kind} 必须携带完整 claim_id/node/claim_sha256')
+            if any(value is not None for value in audit_payload):
+                raise ValueError(f'{self.kind} 不得携带人工 reconcile 载荷')
+            return self
+        if any(value is not None for value in claim_payload):
+            raise ValueError('reconciled 不得冒充 claim/release')
+        if any(value is None for value in audit_payload):
+            raise ValueError(
+                'reconciled 必须携带完整 actor/reason/subject_sha256/force')
+        return self
+
+
+CommanderAdmissionTailRepairKind = Literal[
+    COMMANDER_ADMISSION_TAIL_REPAIR_KINDS]
+BeaconTailRepairKind = CommanderAdmissionTailRepairKind
+
+
+class AppendTailRepairRecord(FrozenModel):
+    """non-LF append 尾的 immutable、hash-bound 两相恢复公共形状。"""
+
+    wire_version: Literal[1] = 1
+    kind: Literal['authorized', 'applied']
+    ts: int = Field(ge=0)
+    actor: str = Field(min_length=1, max_length=256)
+    reason: str = Field(min_length=1, max_length=2000)
+    subject_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    committed_size: int = Field(ge=0)
+    committed_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    tail_size: int = Field(gt=0)
+    tail_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    quarantine_name: str = Field(
+        pattern=r'^[0-9a-f]{64}\.tail\.bin$')
+
+
+class CommanderAdmissionTailRepairRecord(AppendTailRepairRecord):
+    """Commander admission 账坏尾的两相恢复记录（v1）。"""
+
+    kind: CommanderAdmissionTailRepairKind
+
+
+class BeaconTailRepairRecord(AppendTailRepairRecord):
+    """进度 beacon 账坏尾的两相恢复记录（v1）。"""
+
+    kind: BeaconTailRepairKind
 
 
 class AgentDeliveryOutcome(FrozenModel):

@@ -21,7 +21,7 @@ description: 作为受托终审代理，使用本仓 novel.cli 将单本中文�
 
 把“使用本 skill 端到端跑书”视为一次**完整**委托：`stage0.approve`、Stage2 逐项复核、Stage4A 的全书策略 + 逐章 typed 设计审阅、Stage4B 编译后的最终逐章 typed 结构裁决、独立 Stage5 writing 授权、最终 Review 后的 Stage5 typed 闭合回执、`stage6.approve`、`stage7.approve` 的代批，加上两项授权。**这些事都不要回头问用户**——本 skill 的产品承诺是“用户只审最终成稿”。Stage2 代批仍必须逐项写入 typed PASS/FAIL/UNVER；“agent 看过”不能替代文件里的决定，更不能让 FAIL/UNVER 越过硬闸。两次 Stage4 审阅、Stage5 写作授权与写后闭合回执的主体及作用都不同，任何一次也不能由另一张票、机械绿灯或付费授权代替。用户在本次对话里明确收回某一项时遵从用户范围，并在终审包写明被收回的是哪一项。
 
-两项授权仍**分别取值**，只是默认值都为真：收回其中一项时，不因另一项仍在而推定它。headless 是唯一的例外，取值以 launcher prompt 原文为准（见[运行环境](references/runtime-profiles.md)）。
+两项授权仍**分别取值**，只是默认值都为真：收回其中一项时，不因另一项仍在而推定它。headless 是唯一的例外，取值以 launcher prompt 原文为准（见[运行宿主](references/runtime-profiles.md)）。
 
 代批与人工修订一律以 `<ACTOR>` = `agent:novel-pipeline-operator` 自报身份。生产只要求这个值非空，形态由本 skill 约定且只在这里约定一次：带前缀才能在账本与审计里一次捞全代批记录，裸串会和人名撞。
 
@@ -38,11 +38,17 @@ description: 作为受托终审代理，使用本仓 novel.cli 将单本中文�
 
 ## 按需加载资源
 
-开始任何跑书或续跑前，完整读取：
+开始任何跑书或续跑前，完整读取两份共享契约：
 
 - [工作流契约](references/workflow.md)：现行命令协议、主节点顺序、成败判定与断点续跑。
 - [代批与终审契约](references/delegated-review.md)：标准人工闸门的判据、成书对账与终审包要求。
-- [运行环境](references/runtime-profiles.md)：只读取与当前宿主相符的交互式或 headless 小节。
+
+然后独立确定两根轴，各只读取一个匹配小节，不加载另一模式的细节：
+
+- [运行宿主](references/runtime-profiles.md)：交互式主会话、headless Commander、只读观察三选一；
+  它只决定授权来源、进程等待与停止方式。
+- [执行模式](references/execution-modes.md)：Agent driver 或 legacy LLM transport 二选一；
+  它只决定付费生成节点由谁承接。headless 的选择来自 started contract，不能临场改成 legacy。
 
 遇到非 happy path 时再读取：
 
@@ -54,14 +60,14 @@ description: 作为受托终审代理，使用本仓 novel.cli 将单本中文�
 
 ## 执行主循环
 
-1. 确认仓根、Python 解释器、书、绝对 `base`；**记录**两项授权取值与代批范围——默认都是 `granted`，这一步是记录事实，不是向用户索要。不要打印密钥。
+1. 确认仓根、Python 解释器、书、绝对 `base`，并分别确定当前运行宿主与执行模式；**记录**两项授权取值与代批范围——默认都是 `granted`，这一步是记录事实，不是向用户索要。不要打印密钥，也不要因某一种 executor 配置缺失阻断另一种已明确选择的模式。
 2. 首个动作前从仓根运行 `.claude/skills/novel-pipeline-operator/scripts/session_preflight.py --base <BASE> --sid <SID>`；新书改用 `--source <TXT>`。把输出的 `started_at` 固化为 `<STARTED_AT>`、`code_version` 固化为 `<START_CODE>`，后续命令全程逐字复用，不能在收尾时现取一个新值冒充起点。预检后立即运行 `.claude/skills/novel-pipeline-operator/scripts/operator_phase.py session-start --base <BASE> --sid <SID> --start-code-version <START_CODE> --started-at <STARTED_AT> --source skill`，把返回的 `session_id` 固化为 `<OPERATOR_SESSION>`。若这份可观测性账写不成，记录并披露遥测缺口，但不据此跳过、代替或放宽任何产品闸门。
-3. 对既有 `sid` 先运行 `novel.cli state <SID> --base <BASE> --with-inbox`，让一次只读调用内的 state 与 inbox 共用同一份冻结快照；对新书先预览 `stage0.remove`。从盘上事实决定起点。快照只活在该次调用栈内，任何写盘后都重新调用，不跨动作缓存。
-4. 在首个动作前创建终审包草稿，随每次授权判断、闸门裁决、修复与异常更新；不要等到最后凭记忆补写。
-5. 从仓根优先用 `.claude/skills/novel-pipeline-operator/scripts/run_step.py --base <BASE> --sid <SID> --expect-code-version <START_CODE> <node> -- [flags]` 预览生产 `build_steps`；真跑采用同一条命令并把 `--execute` 放在 node 前。需要机器复核 preview 时加 `--evidence-json <PATH>`：它原子记录同一份 Step 的 argv/付费/写盘信息，preview 与 execute 复用同一路径时内容不同会拒绝覆盖。execute 无论是否传该路径，都会把本次真实 Step canonical evidence 的完整 SHA-256 同时写进 start/end 信标 note，供会话证据关闭式核对。headless Commander 下，runner 还会从 append-only started 事件重读并核验冻结的 commander/executor profile、两项授权和代码指纹；为当前 node 选择默认 executor 或逐节点 override，并把同一快照写进带契约身份的 evidence 与子 CLI argv。脚本会逐字执行同一 Step.argv、串起 start/end 信标，并在每一步前后拒绝代码漂移。新书的 `stage0.remove` 省略 runner 的 `--sid`。不要凭文档手拼真实 argv，也不要手加运行期 agent profile 参数。八个 agent executor 已原生执行“候选 → 代码校验反馈 → 同 session resume”，主路**不得**再带 legacy `--response-repair agent`；该 flag 只属于显式 DeepSeek 临时回滚。Stage5 全书写作节点不带选臂参数；定向维护只用 `--chapters`。
-6. 不使用 runner 的特殊诊断命令，仍须执行 `mark start`，取得真实子进程退出码后执行 `mark end --exit <rc>`；`preview` 不打点，并在动作前确认当前代码仍等于 `<START_CODE>`。
+3. 新书在 sid 尚未落盘前只预览并执行现有 `stage0.remove --source <TXT>`；取得 sid 后，与既有书一样，**先**运行 `<PY> -X utf8 -u -m novel.cli operator next <SID> --base <BASE> --json`。它以一次冻结 snapshot 返回 `state/overview/inbox/action`；只消费返回的 `action.node`、`action.flags`、`why`、`waiting_on`、`paid`、`writes` 与 `action_sha256`，不从 Stage 表、目录存在性或聊天记忆自行推演下一节点。`state=ready` 时把原样 node/flags 交给 `operator permit`；`state=blocked` 时只尝试当前 `waiting_on` 对应、由生产策略登记的审批或恢复，涉及 node 的动作同样先取 permit；只有 `state=pipeline_complete` 时 `action=null`，进入收尾。blocked action 的 hash 只描述 blocker，绝不是恢复执行权。
+4. 在首个写盘或付费动作前创建终审包草稿，随每次授权判断、闸门裁决、修复与异常更新；不要等到最后凭记忆补写。
+5. 对 exact node/flags，先从仓根运行 `<PY> -X utf8 -u -m novel.cli operator permit <SID> <node> --base <BASE> --json -- [flags]`，再用返回的 `permit_sha256` 调用 `.claude/skills/novel-pipeline-operator/scripts/run_step.py --base <BASE> --sid <SID> --expect-code-version <START_CODE> --operator-permit-sha256 <PERMIT_SHA256> <node> -- [flags]` 预览生产 `build_steps`；真跑采用同一条命令并把 `--execute` 放在 node 前。permit 是纯读且绑定当前代码、surface、next 状态、exact flags、贵贱/写盘效应以及已登记外部输入原始字节；runner 在 preview 与 execute 都重新铸造并逐字核 hash，任何漂移都拒绝旧命令。需要机器复核 preview 时加 `--evidence-json <PATH>`：它原子记录完整 permit 与同一份 Step 的 argv/付费/写盘信息，preview 与 execute 复用同一路径时内容不同会拒绝覆盖。execute 无论是否传该路径，都会把本次真实 Step canonical evidence 的完整 SHA-256 同时写进 start/end 信标 note。headless Commander 下，runner 还会重读 started contract、取得覆盖整个 `build_steps` 的 active claim，并给 root 与自动 `--check-only` 子步骤注入同一 permit envelope 及各自 `step_index`；root 在首个副作用前重铸 current permit，root 落盘后的 follow-check 只核 envelope、claim 与 canonical index/argv，不拿预期已变化的 surface 误杀追检。已有 sid 的**所有 node actions**（包括纯读诊断与 blocked recovery）都必须走这条 runner+permit 主路。新书摄入的 `stage0.remove --source` 在 sid 落盘前省略 runner 的 `--sid` 与 permit。不要凭文档手拼真实 argv，也不要手加运行期 agent profile 参数；Agent driver 与 legacy 的 probe、恢复和禁止降级边界只读[执行模式](references/execution-modes.md)。Stage5 全书写作节点不带选臂参数；定向维护只用 `--chapters`。
+6. 只有不属于 node run 的纯读 façade（`state` / `inbox` / `operator` / `preview`）、typed approval façade 与终态明确点名的 `response-repair` 可不经 runner；在 Commander 下，后两类写入口会从 launcher 提供的父 run 契约自行取得并释放 generic admission claim，不能变成孤儿写手。它们也在动作前确认当前代码等于 `<START_CODE>`。node 的 start/end 信标只由 runner 在原 active claim 内生成，不手工补 `mark`；非 node 动作的执行轨迹使用第 10 步的 `operator_phase.py`，`preview` 不打点。
 7. 一次只运行一个写盘节点。用退出码判断进程结果，用最新 check badge 与 finding 判断质量结果。
-8. 命中闸门时按代批契约裁决；Stage4A/B 两次裁决都先完整读取当前 hash-bound 的
+8. 每次节点、typed approval、人工修订或恢复动作结束后，立即重新调用 `operator next --json`；下一次 node 动作再重新取得 exact `operator permit`，不得沿用动作前的 next、action hash 或 permit。命中闸门时按代批契约裁决；Stage4A/B 两次裁决都先完整读取当前 hash-bound 的
    `approval workpack design|structure`。Stage6/7 定稿同样先分别读取 `approval workpack stage6|stage7`：
    Stage6 包内完整展开 A/B 各自 verdict、reason、evidence、ranking；Stage7 包内完整汇总人物、别名、
    kept、实际替换命中、残留上下文、替换计数和完整主体。若包的 `disposition=already_current`，当前
@@ -70,7 +76,7 @@ description: 作为受托终审代理，使用本仓 novel.cli 将单本中文�
    INFO/metric/UNVER 不制造付费动作。Stage5 最终 Review 与所有 edit/trim/wontfix 收口后，逐项读取
    current closure workpack，再提交 `approval template/apply stage5` 的 typed 回执；不得代签或拿旧 s5
    继续下游。命中失败时按修复状态机收敛；每次决定同时记录证据、被否决方案和复验结果。
-9. `stage7.assemble` 后执行独立成书对账，再用组合 `state --with-inbox` 刷新活动终态。先补完终审包中的人工叙述并清除其余占位符，再从仓根运行 `.claude/skills/novel-pipeline-operator/scripts/finalize_review.py --base <BASE> --sid <SID> --started-at <STARTED_AT> --start-code-version <START_CODE>`。这是 canonical 收尾：只 collect 一次，在内存中 render → validate，验证通过才原子提交终审包；提交后丢弃旧快照，并以 `<START_CODE>` 调用全新读作用域的 `delivery.assess`。旧 `collect_final_evidence.py`、`sync_review_evidence.py`、`validate_review.py` 与 `verify_delivery.py` 保留为诊断/兼容入口，不再串成主路。
+9. `stage7.assemble` 后执行独立成书对账，再调用一次 `operator next --json` 并用组合 `state --with-inbox` 刷新活动终态。先补完终审包中的人工叙述并清除其余占位符，再从仓根运行 `.claude/skills/novel-pipeline-operator/scripts/finalize_review.py --base <BASE> --sid <SID> --started-at <STARTED_AT> --start-code-version <START_CODE>`。这是 canonical 收尾：只 collect 一次，在内存中 render → validate，验证通过才原子提交终审包；提交后丢弃旧快照，并以 `<START_CODE>` 调用全新读作用域的 `delivery.assess`。旧 `collect_final_evidence.py`、`sync_review_evidence.py`、`validate_review.py` 与 `verify_delivery.py` 保留为诊断/兼容入口，不再串成主路。
 10. 用 `operator_phase.py` 对 `inspect / preview / execute / review / approve / finalize` 的实际窗口逐段记录：每段先 `phase-start`，固化返回的 `phase_execution_id`，结束后用 `phase-end` 记录真实 `completed / failed / cancelled / unknown`、退出码与不含正文的错误类别；不得记录 prompt、正文、reason、argv、路径或密钥。`finalize_review.py` 是一条进程内含 fresh assess 的命令，外部只记一个 `finalize` 窗口；它返回的 `phases.delivery` 证明逻辑终验独立，但不要事后把一个墙钟拆成伪 `verify`。只有另行执行诊断 `verify_delivery.py` 或 launcher 能在调用前后真实打点时才用 `verify`。本 skill 的 preflight 发生在 telemetry session 建立之前，保留为起点后的 unattributed 墙钟，不事后补一条近零时长的伪 `preflight` phase；能在预检前启动遥测的 launcher 才使用那一格。最后 `session-end` 并运行 `summary --base <BASE> --sid <SID> --started-at <STARTED_AT> --session-id <OPERATOR_SESSION>`。summary 只拆墙钟归属；Commander 宿主模型 token 与成本不可见时必须保持 `unavailable_host_boundary`，不得估算。只有 finalizer 的 fresh delivery 结果为 `ready*` 才可交付，然后只把成书与终审包交给用户。
 
 ## 不可突破的边界

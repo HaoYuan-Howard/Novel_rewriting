@@ -270,6 +270,21 @@ def test_cli_surface_returns_session_and_phase_ids_for_skill_reuse(tmp_path, cap
     assert summary['completed_phase_count'] == 1
 
 
+def test_session_start_inherits_outer_commander_run_by_default(
+        tmp_path, capsys, monkeypatch):
+    monkeypatch.setenv(T.run_identity.RUN_ID_ENV, 'outer-commander-1')
+
+    assert T.cli_main([
+        'session-start', '--base', str(tmp_path), '--sid', SID,
+        '--start-code-version', 'code-v1',
+    ]) == 0
+    payload = json.loads(capsys.readouterr().out)
+
+    assert payload['parent_run_id'] == 'outer-commander-1'
+    [session] = T.fold(T.read_events(tmp_path))
+    assert session.parent_run_id == 'outer-commander-1'
+
+
 def test_summary_does_not_call_phase_sum_session_wall_when_phases_overlap(tmp_path):
     _start(tmp_path)
     T.begin_phase(

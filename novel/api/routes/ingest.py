@@ -25,9 +25,10 @@ from contracts.schema.api import (
 )
 from contracts.schema.orchestration import JobRecord
 from contracts.schema.stage0 import Stage0CandidatePlan
+from novel.api.approval_stamp import stamp_approval_after_landed
 from novel.api.deps import checked_sid, get_base
 from novel.errors import HumanEditProtected, NovelError, SourcePathRejected
-from novel.orchestrator import approvals, jobs, uploads
+from novel.orchestrator import jobs, uploads
 from novel.views import ingest
 
 router = APIRouter()
@@ -99,7 +100,7 @@ def approve_stage0(
          '--actor', request.actor, '--reason', request.reason],
     )
     if record.state == 'ok':
-        approvals.approve_gate(base, sid, 's0')
+        stamp_approval_after_landed(base, sid, 's0')
     return record
 
 

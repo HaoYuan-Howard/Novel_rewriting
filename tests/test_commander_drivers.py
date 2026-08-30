@@ -23,6 +23,7 @@ from contracts.schema.orchestration import AgentProfile
 from novel.commanders import (
     ClaudeCodeCommanderDriver,
     CodexCommanderDriver,
+    CommanderConfigurationError,
     CommanderInvocation,
     CommanderProtocolError,
     create_commander_driver,
@@ -133,6 +134,31 @@ def test_claude_invocation_is_exact_and_prompt_only_uses_stdin(tmp_path):
     assert invocation.cwd == str(repo.resolve())
     assert invocation.protocol == 'claude-stream-json-v1'
     assert invocation.cli_version == '2.1.test'
+    assert dict(invocation.env_overrides) == {
+        'NOVEL_COMMANDER_PROFILE': 'frozen',
+        'CLAUDE_CODE_DISABLE_BACKGROUND_TASKS': '1',
+        'BASH_DEFAULT_TIMEOUT_MS': str(6 * 60 * 60 * 1000),
+        'BASH_MAX_TIMEOUT_MS': str(23 * 60 * 60 * 1000),
+    }
+
+
+@pytest.mark.parametrize('name', [
+    'CLAUDE_CODE_DISABLE_BACKGROUND_TASKS',
+    'BASH_DEFAULT_TIMEOUT_MS',
+    'BASH_MAX_TIMEOUT_MS',
+])
+def test_claude_lifecycle_environment_cannot_be_overridden(tmp_path, name):
+    repo = tmp_path / 'repo'
+    base = tmp_path / 'base'
+    repo.mkdir()
+    base.mkdir()
+
+    with pytest.raises(CommanderConfigurationError, match='生命周期环境不可覆盖'):
+        ClaudeCodeCommanderDriver(
+            executable='claude.exe', runner=lambda *a, **k: None,
+        ).build_invocation(
+            _profile('claude-code'), '任务', repo=repo, base=base,
+            env_overrides={name: 'caller-controlled'})
 
 
 def test_codex_invocation_is_exact_and_prompt_only_uses_stdin(tmp_path):

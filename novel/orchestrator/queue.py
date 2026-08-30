@@ -38,8 +38,8 @@ from contracts.invariants import (
     stage2_review_required,
 )
 from contracts.schema.orchestration import (
-    QueueCounts, QueueEntry, QueueEvent, QueueItem, QueueLaneCounts, QueuePlan,
-    QueueRun, QueueStart,
+    NovelOverview, QueueCounts, QueueEntry, QueueEvent, QueueItem,
+    QueueLaneCounts, QueuePlan, QueueRun, QueueStart,
 )
 from contracts.schema.stage0 import Stage0Revisions
 from contracts.schema.stage6 import Hook
@@ -80,13 +80,14 @@ WAITING_ON_STAGE4_PHASE_APPROVAL = WAITING_ON_STAGE4_DESIGN_REVIEW
 WAITING_ON_STAGE4_REPLAN = WAITING_ON_STAGE4_BINDING_RESOLUTION
 WAITING_ON_WRITING_APPROVAL = 'approval:stage5-writing'
 WAITING_ON_REVIEW = 'stage5:review-currentness'
+WAITING_ON_STAGE5_CLOSURE = 'approval:stage5-closure'
 WAITING_ON_LEGACY = 'legacy_incompatible'
 WAITING_ON_RESUME_DECISION = 'resume:manual-decision'
 WAITING_ON_RESTART_CONFIRMATION = 'queue:restart-confirmation'
 WAITING_ON_REPLAN = 'queue:plan-changed'
 
 
-def _chapters_from_flags(flags: Sequence[str]) -> list[int] | None:
+def chapters_from_flags(flags: Sequence[str]) -> list[int] | None:
     """取 Stage5 定向章列表；不带则是全书。
 
     队列只会读自己冻结过的命令，但恢复时仍要关闭式校验：旧
@@ -190,8 +191,26 @@ def _stage4_replan_required(base: str | os.PathLike[str], sid: str) -> bool:
 
 def plan_book(base: str | os.PathLike[str], sid: str, *, until_stage: str,
               follow_check: bool = True) -> tuple[list[QueueItem], list[QueueItem]]:
-    """一本书的 `(要跑的, 被挡住的)`。**纯函数**（只读盘，不写、不发请求）。"""
-    ov = st.overview(base, sid)
+    """一本书的 `(要跑的, 被挡住的)`。**纯函数**（只读盘，不写、不发请求）。
+
+    完成度只在这个薄入口读取一次；已经持有 invocation-scoped operator 快照的
+    调用方必须改走 :func:`plan_book_from_overview`，不能为同一个下一步再读一份
+    overview。两条入口以下共享完全相同的节点、闸门与恢复判定。
+    """
+    return plan_book_from_overview(
+        base, sid, st.overview(base, sid), until_stage=until_stage,
+        follow_check=follow_check)
+
+
+def plan_book_from_overview(
+    base: str | os.PathLike[str],
+    sid: str,
+    ov: NovelOverview,
+    *,
+    until_stage: str,
+    follow_check: bool = True,
+) -> tuple[list[QueueItem], list[QueueItem]]:
+    """按一份已冻结完成度规划 lane；判定正文与 :func:`plan_book` 唯一共享。"""
     todo: list[QueueItem] = []
     blocked: list[QueueItem] = []
     #: ⚠ **一旦挡住，其后的项一律跟着挡住**——那才叫「挡住队列」（`R-13.5`）。
@@ -260,6 +279,18 @@ def plan_book(base: str | os.PathLike[str], sid: str, *, until_stage: str,
                 why_blocked = WAITING_ON_INBOX
 
         verdict, why = st.resume_verdict(ov, node)
+        if (
+            why_blocked is None
+            and verdict == st.RESUME_RUN
+            and st.live_invalid_artifacts(ov, node)
+            and not projection_recovery
+            and not legacy_blueprint_recovery
+        ):
+            # ``resume_verdict`` 必须如实描述“默认重跑会发生什么”，但 queue 不能
+            # 把这句警告继续冻结成一条付费 argv。活动 INVALID 先停在已登记的
+            # 0 LLM recovery 面；若该节点没有安全恢复路，也保持 blocked 交给人，
+            # 绝不把“没实现恢复”解释成“同意再付一次钱”。
+            why_blocked = WAITING_ON_INBOX
         if why_blocked is None and node == 'stage4.plan':
             if _stage4_replan_required(base, sid):
                 # B 的负结论已经是正式终态；这份队列不得继续暴露同一个 B argv，
@@ -286,6 +317,21 @@ def plan_book(base: str | os.PathLike[str], sid: str, *, until_stage: str,
                 GateBlocked, UpstreamStale, UpstreamUnproven,
             ):
                 why_blocked = WAITING_ON_STAGE4_STRUCTURE_REVIEW
+        if why_blocked is None and spec.stage == 'stage6':
+            # Stage5 Review 通过仍不等于 Commander 已逐项闭合。只消费审批服务
+            # 的 current view；缺回执、旧主体、blocked workpack 与 read failure
+            # 全部关闭式停在 Stage6 之前。若本次 lane 还会写 Stage5，盘上旧 closed
+            # 也必然会被新主体作废，不能拿来提前放行同一批下游。
+            try:
+                closure_state = approvals.stage5_closure_view(base, sid).state
+            except (
+                ApprovalRequired, UpstreamMissing, ArtifactUnreadable,
+                GateBlocked, UpstreamStale, UpstreamUnproven,
+                BlockingFindingsUnresolved,
+            ):
+                closure_state = 'unreadable'
+            if stage5_write_will_run or closure_state != 'closed':
+                why_blocked = WAITING_ON_STAGE5_CLOSURE
         review_follows_planned_write = (
             node == 'stage5.review'
             and stage5_write_will_run
@@ -350,10 +396,12 @@ def plan_book(base: str | os.PathLike[str], sid: str, *, until_stage: str,
                 steps = []
 
         if why_blocked in (
+            WAITING_ON_INBOX,
             WAITING_ON_STAGE2_REVIEW,
             WAITING_ON_STAGE4_DESIGN_REVIEW,
             WAITING_ON_STAGE4_BINDING_RESOLUTION,
             WAITING_ON_STAGE4_STRUCTURE_REVIEW,
+            WAITING_ON_STAGE5_CLOSURE,
         ):
             # 人审/相位决定完成前，当前队列快照里不放下游付费 argv。状态改变后
             # 必须重新 plan，不能把旧快照重解释为新授权。
@@ -362,7 +410,7 @@ def plan_book(base: str | os.PathLike[str], sid: str, *, until_stage: str,
         if verdict == st.RESUME_LEGACY or why_blocked == WAITING_ON_RESUME_DECISION:
             steps = []
 
-        if steps is None and why_blocked == node and node in HUMAN_NODES:
+        if steps is None and why_blocked is not None and node in HUMAN_NODES:
             # ⚠⚠ **人还没签字之前，这道闸没有一条「诚实的可执行命令」可以快照。**
             # `stage0.approve` / `stage6.approve` / `stage7.approve` 的 argv 必填
             # `--actor` / `--reason`（人此刻还没给出的东西）⇒ `build_steps` 会抛
@@ -373,6 +421,10 @@ def plan_book(base: str | os.PathLike[str], sid: str, *, until_stage: str,
             #   HTTP 400，而真正的事实只是「在等人批准 stage0」。
             # ⇒ 与上面 `stage5.write` 缺写作授权时**同一处置**：留空命令面。
             #   人给出裁决之后命令面本来就会变，那时旧队列本就需要重排。
+            #
+            # `why_blocked` 也可能是更早节点留下的 ``stuck``。此时后续人工节点
+            # 同样不能调用 ``build_steps``：它缺少尚未发生的人类 pick/actor/reason/hash，
+            # 规划器的职责只是把上游阻塞传播到底，而不是提前伪造一条人工命令。
             steps = []
         if steps is None:
             steps = build_steps(
@@ -402,6 +454,12 @@ def _blocked_why(waiting_on: str, verdict_why: str) -> str:
     if waiting_on == WAITING_ON_WRITING_APPROVAL:
         return ('还没有当前 Stage5 全书闭卷写作授权；先在 Stage5 空状态明确授权，'
                 f'队列不会从默认路径反推同意花钱；{verdict_why}')
+    if waiting_on == WAITING_ON_STAGE5_CLOSURE:
+        return (
+            'Stage5 当前 typed closure 尚未 closed：缺回执、Review/章稿漂移或工作包仍有'
+            '阻断项都会停在这里。先经 `approval template stage5` 与审批提交收口；'
+            '需要改稿/重判时只走登记的 0 成本恢复入口，再重算 Review；'
+            f'{verdict_why}')
     if waiting_on == WAITING_ON_STAGE2_REVIEW:
         return (
             'Stage2 尚未在当前完整主体上收口：global/blueprint 可能缺失、过期或有'
@@ -817,11 +875,22 @@ def _command_surface(item: QueueItem) -> tuple[object, ...]:
 
 def _current_plan_items(base: str | os.PathLike[str], start: QueueStart) -> list[QueueItem]:
     """Rebuild the currently required command surface in lane/node order."""
+    return _current_plan_items_for_sids(base, start, start.sids)
+
+
+def _current_plan_items_for_sids(
+        base: str | os.PathLike[str], start: QueueStart,
+        sids: Iterable[str],
+) -> list[QueueItem]:
+    """只重建指定 lane；unresolved lane 的盘面在 startup 中不得触碰。"""
     if start.until_stage in RETIRED_STAGES:
         return []
     rank = {node: index for index, node in enumerate(NODES)}
     out: list[QueueItem] = []
+    selected = frozenset(sids)
     for sid in start.sids:
+        if sid not in selected:
+            continue
         todo, blocked = plan_book(base, sid, until_stage=start.until_stage)
         out.extend(sorted(todo + blocked, key=lambda item: rank[item.node]))
     return out
@@ -1134,7 +1203,7 @@ def _run_lane(base: str | os.PathLike[str], queue_id: str, sid: str, *,
                     prepare = lambda: approvals.authorize_context(
                         base, entry.item.sid)
                 elif entry.item.node == 'stage5.write':
-                    chapters = _chapters_from_flags(entry.item.flags)
+                    chapters = chapters_from_flags(entry.item.flags)
                     prepare = lambda chapters=chapters: approvals.authorize_writing(
                         base, entry.item.sid, chapters)
                 jobs.start(
@@ -1182,8 +1251,13 @@ def _run_lane(base: str | os.PathLike[str], queue_id: str, sid: str, *,
 
 def _execute(base: str | os.PathLike[str], queue_id: str, *,
              spawn: jobs.Spawn, queue_registry: QueueRegistry,
-             job_registry: jobs.JobRegistry) -> QueueRun:
+             job_registry: jobs.JobRegistry,
+             lane_sids: Sequence[str] | None = None) -> QueueRun:
     run = _one(base, queue_id, registry=queue_registry)
+    selected = list(run.start.sids if lane_sids is None else lane_sids)
+    if len(selected) != len(set(selected)) or any(
+            sid not in run.start.sids for sid in selected):
+        raise QueueConflict('queue startup lane_sids 必须是冻结队列 sid 的无重复子集')
     lane_threads = [threading.Thread(
         target=_run_lane,
         kwargs={
@@ -1191,7 +1265,7 @@ def _execute(base: str | os.PathLike[str], queue_id: str, *,
             'queue_registry': queue_registry, 'job_registry': job_registry,
         },
         name=f'novel-queue-{queue_id}-{sid}', daemon=True,
-    ) for sid in run.start.sids]
+    ) for sid in selected]
     for thread in lane_threads:
         thread.start()
     for thread in lane_threads:
@@ -1227,7 +1301,8 @@ def resume(base: str | os.PathLike[str], queue_id: str, *, yes: bool,
 def start(base: str | os.PathLike[str], queue_id: str, *,
           spawn: jobs.Spawn = jobs.default_spawn,
           registry: QueueRegistry = REGISTRY,
-          job_registry: jobs.JobRegistry = jobs.REGISTRY) -> QueueRun:
+          job_registry: jobs.JobRegistry = jobs.REGISTRY,
+          _lane_sids: Sequence[str] | None = None) -> QueueRun:
     """Start a persistent queue runner in the background and return immediately."""
     registry.acquire(queue_id)
 
@@ -1235,7 +1310,7 @@ def start(base: str | os.PathLike[str], queue_id: str, *,
         try:
             _execute(
                 base, queue_id, spawn=spawn, queue_registry=registry,
-                job_registry=job_registry)
+                job_registry=job_registry, lane_sids=_lane_sids)
         except BaseException:
             # Keep the traceback in the service log. Item-level failures are
             # recorded inside _run_lane; this guard prevents a silent thread death.
@@ -1293,14 +1368,28 @@ def resume_incomplete(base: str | os.PathLike[str], *,
     before = records(base, registry=registry)
     if not before:
         return []
-    jobs.reconcile(base, registry=job_registry)
+    from novel.orchestrator import admission
+
+    unresolved_sids = frozenset(
+        current.sid for current in admission.unresolved(base))
+    jobs.reconcile(
+        base, registry=job_registry, skip_sids=unresolved_sids)
     resumed: list[str] = []
     for record in records(base, registry=registry):
         if record.state in ('ok', 'landed_red', 'failed', 'cancelled'):
             continue
+        eligible_sids = tuple(
+            sid for sid in record.start.sids if sid not in unresolved_sids)
+        if not eligible_sids:
+            # durable gate 未闭合时整条 lane 保持原样：不做 artifact 判定、
+            # 不追加 queue 状态、不启动。typed reconcile 后由人显式 resume。
+            continue
+        eligible = frozenset(eligible_sids)
 
         recovered_any = False
         for entry in record.entries:
+            if entry.item.sid not in eligible:
+                continue
             if entry.state not in ('running', 'unknown'):
                 continue
             recovered = _recover_running(
@@ -1317,6 +1406,8 @@ def resume_incomplete(base: str | os.PathLike[str], *,
         if current.state in ('landed_red', 'failed', 'cancelled'):
             continue
         for entry in current.entries:
+            if entry.item.sid not in eligible:
+                continue
             if entry.state not in ('pending', 'blocked', 'done'):
                 continue
             disposition, waiting_on, reason = _live_disposition(base, current, entry)
@@ -1329,15 +1420,22 @@ def resume_incomplete(base: str | os.PathLike[str], *,
             recovered_any = True
 
         current = _one(base, record.queue_id, registry=registry)
-        current_items = _current_plan_items(base, current.start)
+        if len(eligible_sids) == len(current.start.sids):
+            current_items = _current_plan_items(base, current.start)
+        else:
+            current_items = _current_plan_items_for_sids(
+                base, current.start, eligible_sids)
         remaining = [entry.item for entry in current.entries
-                     if entry.state in ('pending', 'blocked', 'unknown', 'running')]
+                     if entry.item.sid in eligible
+                     and entry.state in ('pending', 'blocked', 'unknown', 'running')]
         if ([_command_surface(item) for item in remaining]
                 != [_command_surface(item) for item in current_items]):
             targets = [entry for entry in current.entries
-                       if entry.state in ('pending', 'blocked', 'unknown', 'running')]
+                       if entry.item.sid in eligible
+                       and entry.state in ('pending', 'blocked', 'unknown', 'running')]
             if not targets and current.entries:
-                targets = [current.entries[-1]]
+                targets = [entry for entry in reversed(current.entries)
+                           if entry.item.sid in eligible][:1]
             reason = (
                 '服务重启后重新规划得到的节点/命令集合与创建时未完成快照不同；'
                 '旧队列不会增加、删除或替换命令，请重新预览并创建队列')
@@ -1347,7 +1445,8 @@ def resume_incomplete(base: str | os.PathLike[str], *,
                     waiting_on=WAITING_ON_REPLAN, note=reason)
             continue
 
-        pending = [entry for entry in current.entries if entry.state == 'pending']
+        pending = [entry for entry in current.entries
+                   if entry.item.sid in eligible and entry.state == 'pending']
         paid_pending = [entry for entry in pending
                         if any(step.paid for step in entry.item.steps)]
         if paid_pending:
@@ -1373,12 +1472,13 @@ def resume_incomplete(base: str | os.PathLike[str], *,
 
         current = _one(base, record.queue_id, registry=registry)
         if any(entry.state in ('blocked', 'unknown', 'running')
-               for entry in current.entries):
+               for entry in current.entries if entry.item.sid in eligible):
             continue
-        if any(entry.state == 'pending' for entry in current.entries):
+        if any(entry.state == 'pending' for entry in current.entries
+               if entry.item.sid in eligible):
             start(
                 base, current.queue_id, spawn=spawn, registry=registry,
-                job_registry=job_registry)
+                job_registry=job_registry, _lane_sids=eligible_sids)
             resumed.append(current.queue_id)
         elif recovered_any and current.state == 'ok':
             resumed.append(current.queue_id)

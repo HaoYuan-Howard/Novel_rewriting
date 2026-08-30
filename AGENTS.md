@@ -44,8 +44,9 @@ with code in this repository. **`CLAUDE.md` 是指向本文件的链接——要
 
 **跑书不要手拼命令**：完整操作规程是 `.claude/skills/novel-pipeline-operator/SKILL.md`
 （`novel-pipeline-operator` skill）。CLI 子命令：`run` / `preview` / `state` / `inbox` /
-`queue` / `queue-list` / `queue-cancel` / `queue-resume` / `jobs` / `reconcile` / `doctor` /
-`response-repair` / `mark`。
+`operator` / `queue` / `queue-list` / `queue-cancel` / `queue-resume` / `jobs` / `reconcile` / `doctor` /
+`response-repair` / `approval` / `mark`。`operator next` 只回答当前三态与 blocker；已有 sid 的 node 动作
+必须再取 exact `operator permit` 并交 canonical runner，不能拿 blocked action hash 冒充恢复许可。
 `preview` 是 0 成本的、且它给出的 argv 才是真跑那一条。
 
 ## 架构要点

@@ -12,7 +12,7 @@ import pytest
 from contracts.schema.orchestration import AgentProfile, PipelineAgentProfiles
 from novel.errors import ApprovalFrozen, SourceConflict, UpstreamMissing
 from novel.commanders.base import CommanderInvocation
-from novel.orchestrator import agent, approvals, jobs, trash
+from novel.orchestrator import admission, agent, approvals, jobs, trash
 from novel.orchestrator.jobs import JobConflict
 
 
@@ -54,6 +54,22 @@ def _book(base, *, sid='1001', title='测试书'):
     approval.parent.mkdir(parents=True, exist_ok=True)
     approval.write_text('{"decision":"human"}\n', encoding='utf-8')
     return book, approval
+
+
+def _stale_incomplete(base, *, trash_id='1700000000-0badf00d'):
+    """造一条断电半成品：书仍 live，审批只在回收站，且已过 sweep 宽限期。"""
+    book, approval = _book(base)
+    item = base / '_service' / 'trash' / trash_id
+    item.mkdir(parents=True)
+    (item / 'metadata.json').write_text(json.dumps({
+        '_schema_version': 2, 'sid': '1001', 'title': '测试书',
+        'original_dirname': book.name, 'trashed_at': 1,
+        'approval_archived': True, 'complete': False,
+    }, ensure_ascii=False), encoding='utf-8')
+    (item / 'approval.json').write_text(
+        approval.read_text(encoding='utf-8'), encoding='utf-8')
+    approval.unlink()
+    return book, approval, item
 
 
 def test_execute_moves_the_whole_project_and_approval_into_recoverable_trash(tmp_path):
@@ -299,6 +315,49 @@ def test_approval_writes_work_again_after_the_deletion_finishes(tmp_path):
         with pytest.raises(ApprovalFrozen):
             approvals.reset(tmp_path, '1002')
     approvals.reset(tmp_path, '1002')                     # 出了 with 就恢复
+
+
+def test_sweep_skips_a_book_level_writer_without_moving_the_archived_approval(
+        tmp_path):
+    """恢复器拿不到同书 writer 就整条跳过，不能先搬审批再发现冲突。"""
+    _book_dir, approval, item = _stale_incomplete(tmp_path)
+    registry = jobs.JobRegistry()
+    key = jobs.active_key('1001', 'stage5.write')
+    registry.acquire(key, 'live-job')
+    try:
+        assert trash.sweep_incomplete(tmp_path, registry=registry) == []
+        assert (item / 'approval.json').is_file()
+        assert not approval.exists()
+        assert (item / 'metadata.json').is_file()
+    finally:
+        registry.release(key, 'live-job')
+
+    assert trash.sweep_incomplete(tmp_path, registry=registry) == [item.name]
+    assert approval.read_text(encoding='utf-8') == '{"decision":"human"}\n'
+
+
+def test_sweep_skips_in_memory_and_durable_commander_writers(tmp_path):
+    """内存 agent 锁与重启后 admission 都是 sweep 的关闭式冲突面。"""
+    _book_dir, approval, item = _stale_incomplete(tmp_path)
+    agent_key = jobs.agent_lock_key('1001')
+    jobs.AGENT_REGISTRY.acquire(agent_key, 'live-agent')
+    try:
+        assert trash.sweep_incomplete(tmp_path) == []
+        assert (item / 'approval.json').is_file() and not approval.exists()
+    finally:
+        jobs.AGENT_REGISTRY.release(agent_key, 'live-agent')
+
+    parent_run_id = 'orphan-sweep-admission'
+    admission.open_gate(tmp_path, parent_run_id, '1001')
+    try:
+        assert trash.sweep_incomplete(tmp_path) == []
+        assert (item / 'approval.json').is_file() and not approval.exists()
+    finally:
+        admission.close_gate(tmp_path, parent_run_id)
+        admission.mark_drained(tmp_path, parent_run_id)
+
+    assert trash.sweep_incomplete(tmp_path) == [item.name]
+    assert approval.read_text(encoding='utf-8') == '{"decision":"human"}\n'
 
 
 def test_a_hard_interrupt_between_the_two_moves_is_swept_back(tmp_path):

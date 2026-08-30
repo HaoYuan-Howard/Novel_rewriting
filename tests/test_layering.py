@@ -165,6 +165,10 @@ _JSON_READ_ALLOWED = {
         'agent 代跑记录**不是产物**：与 jobs.jsonl 同一份理由，append-only 事件流'
         '（`_service/agent_runs.jsonl` + `logs/agent-*.log`），'
         '读的一侧要容忍被 kill 截断的最后一行'),
+    'novel/orchestrator/admission.py': (
+        'Commander 子执行准入账**不是产物**：'
+        '`_service/commander_admissions.jsonl` 是 append-only 生命周期事件，'
+        '需以 LF 作提交标记并关闭式解析；它不进来源账或 ARTIFACTS'),
     'novel/agent_session_audit.py': (
         'commander / executor 会话审计**不是产物**：'
         '`_service/agent_sessions.jsonl` 是 append-only 事件流，'
@@ -285,6 +289,18 @@ _WRITE_ALLOWED = {
         '它拥有的两处记录（`_service/jobs.jsonl` · `_service/logs/`）都不是产物，'
         '且都是 append-only：被 kill 最坏只损坏最后一行。'
         '⚠ 直写盘的只剩子进程日志——`jobs.jsonl` 已改走 `novel/appendlog.py`'),
+    'novel/orchestrator/admission.py': (
+        'Commander admission 正常事件仍只经 appendlog 追加；本模块的裸 IO '
+        '只服务于 hash-bound 坏尾恢复：把未以 LF 提交的原始尾字节'
+        '不变隔离，fsync 后截回已提交前缀，再落 authorized/applied 审计回执。'
+        '这些都是 `_service/` 编排恢复证据，不是小说产物'),
+    'novel/orchestrator/append_tail_repair.py': (
+        'admission 与 beacon 共用的 non-LF append 坏尾恢复唯一字节实现。'
+        '它只在调用方已经持有目标 append transaction 时，以 `open(r+b)` 截回'
+        '已提交前缀；`mkdir` / 原子临时文件 / `unlink` 仅用于 `_service/*_tail_repairs/` '
+        '内原样隔离坏尾与落 authorized/applied 回执，并逐项 fsync。'
+        '模块不解析、补全或猜测坏尾 JSON，也不写小说产物；独立成层是为避免两本'
+        '编排账复制出不一致的恢复/CAS 语义'),
     # ⚠ `queue.py` / `beacon.py` / `llm/ledger.py` **刻意不在这张表里**：
     #   它们的追加已经收到 `novel/appendlog.py` 那一个落点，自己不再碰盘。
     #   把它们留在白名单里等于永久豁免——那三个模块下一次真的直写盘时，
@@ -520,10 +536,12 @@ def test_service_mutations_are_narrowly_owned_by_mutation_routes():
         if _service_mutator_hits(path)
     }
     expected = {
+        'novel/api/approval_stamp.py': {
+            ('approvals', 'approve_gate'),
+        },
         'novel/api/routes/ingest.py': {
             ('jobs', 'run'), ('uploads', 'save_upload'),
             ('uploads', 'save_edit_plan'), ('uploads', 'discard_edit_plan'),
-            ('approvals', 'approve_gate'),
         },
         'novel/api/routes/jobs.py': {
             ('jobs', 'start'),
@@ -535,7 +553,7 @@ def test_service_mutations_are_narrowly_owned_by_mutation_routes():
         },
         'novel/api/routes/edits.py': {
             ('jobs', 'run'), ('uploads', 'save_draft_edit'),
-            ('uploads', 'discard_edit_plan'), ('approvals', 'approve_gate'),
+            ('uploads', 'discard_edit_plan'),
         },
         'novel/api/routes/maintenance.py': {('trash', 'run')},
     }

@@ -1,0 +1,239 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""确定性 operator next：共享 lane 判定、严格状态与 CLI/HTTP 只读出口。"""
+from __future__ import annotations
+
+import json
+from pathlib import Path
+from types import MappingProxyType
+
+import pytest
+from pydantic import ValidationError
+
+from contracts.invariants import INBOX_KIND, NODES, OPERATOR_NEXT_STATES, RESUME_VERDICTS
+from contracts.schema.api import InboxView, OperatorAction, OperatorNext
+from contracts.schema.orchestration import (
+    NovelOverview, OverviewSummary, QueueItem, Step,
+)
+from novel.cli import exit_codes as X
+from novel.cli.main import main
+from novel.errors import ArtifactUnreadable
+from novel.orchestrator import operator as O
+from novel.orchestrator import queue as Q
+from novel.orchestrator.inspection import OperatorReadSnapshot
+
+
+def _overview(sid: str = 'book-1') -> NovelOverview:
+    return NovelOverview(
+        sid=sid, title='测试书', dirname=f'平台_测试书_{sid}', stages=[],
+        summary=OverviewSummary(
+            verdict='pending', text='待继续', detail='下一步待判',
+            artifact_count=0, latest_mtime=None),
+    )
+
+
+def _inbox() -> InboxView:
+    return InboxView(
+        items=[], counts={kind: 0 for kind in INBOX_KIND}, total=0, wontfix=0)
+
+
+def _snapshot(tmp_path: Path, *, seal: str = 'a' * 64) -> OperatorReadSnapshot:
+    novel_dir = tmp_path / '平台_测试书_book-1'
+    return OperatorReadSnapshot(
+        base=tmp_path.resolve(), sid='book-1', novel_dir=novel_dir,
+        code='code-v1', surface_seal=seal, overview=_overview(),
+        checks=MappingProxyType({}),
+    )
+
+
+def _step(node: str) -> Step:
+    return Step(
+        argv=['python', '-m', 'novel.cli', 'run', node], cwd='.', label=node,
+        paid=False, writes=NODES[node].produces[0] if NODES[node].produces else node)
+
+
+def _ready(node: str, *, flags: list[str] | None = None) -> QueueItem:
+    return QueueItem(
+        sid='book-1', node=node, flags=flags or [], steps=[_step(node)],
+        why=f'run：{node} 产物缺失')
+
+
+def _blocked(node: str, waiting_on: str) -> QueueItem:
+    return QueueItem(
+        sid='book-1', node=node, flags=[], steps=[],
+        why=f'在等 {waiting_on}', waiting_on=waiting_on)
+
+
+def _wire(
+    monkeypatch: pytest.MonkeyPatch,
+    snapshot: OperatorReadSnapshot,
+    *, todo: list[QueueItem], blocked: list[QueueItem],
+) -> list[object]:
+    calls: list[object] = []
+    monkeypatch.setattr(O, 'capture_operator_snapshot', lambda _base, _sid: snapshot)
+    monkeypatch.setattr(
+        O, 'inbox_from_snapshot',
+        lambda got: calls.append(('inbox', got)) or _inbox())
+
+    def plan(base, sid, overview, *, until_stage, follow_check):
+        calls.append(('plan', base, sid, overview, until_stage, follow_check))
+        return todo, blocked
+
+    monkeypatch.setattr(O.queue, 'plan_book_from_overview', plan)
+    monkeypatch.setattr(
+        O, 'read_surface_seal',
+        lambda base, sid, *, code: calls.append(('seal', base, sid, code))
+        or snapshot.surface_seal)
+    monkeypatch.setattr(
+        O.state, 'resume_verdict', lambda _overview, node: ('run', f'{node} 缺失'))
+    return calls
+
+
+def test_next_uses_one_snapshot_and_the_shared_queue_lane(monkeypatch, tmp_path):
+    snapshot = _snapshot(tmp_path)
+    calls = _wire(
+        monkeypatch, snapshot,
+        todo=[_ready('stage2.global')],
+        blocked=[_blocked('stage0.approve', 'stage0.approve')])
+
+    got = O.next_action(tmp_path, 'book-1')
+
+    assert got.state == 'blocked'
+    assert got.action is not None
+    assert got.action.node == 'stage0.approve'
+    assert got.action.waiting_on == 'stage0.approve'
+    assert got.overview is snapshot.overview
+    assert ('inbox', snapshot) in calls
+    plan_call = next(call for call in calls if call[0] == 'plan')
+    assert plan_call[3] is snapshot.overview
+    assert plan_call[4:] == ('stage7', True)
+    assert calls[-1] == ('seal', snapshot.base, 'book-1', 'code-v1')
+
+
+def test_ready_action_carries_the_canonical_safety_axes_and_stable_hash(
+        monkeypatch, tmp_path):
+    snapshot = _snapshot(tmp_path)
+    _wire(monkeypatch, snapshot, todo=[_ready('stage2.global')], blocked=[])
+
+    first = O.next_action(tmp_path, 'book-1')
+    second = O.next_action(tmp_path, 'book-1')
+
+    assert first.state == 'ready'
+    assert first.action is not None
+    assert first.action.resume_verdict == 'run'
+    assert first.action.paid is True
+    assert first.action.writes == ' · '.join(NODES['stage2.global'].produces)
+    assert first.action.action_sha256 == second.action.action_sha256
+    assert len(first.action.action_sha256) == 64
+
+
+def test_action_hash_binds_the_surface_seal(monkeypatch, tmp_path):
+    first_snapshot = _snapshot(tmp_path, seal='a' * 64)
+    _wire(monkeypatch, first_snapshot, todo=[_ready('stage1.partition')], blocked=[])
+    first = O.next_action(tmp_path, 'book-1')
+
+    second_snapshot = _snapshot(tmp_path, seal='b' * 64)
+    _wire(monkeypatch, second_snapshot, todo=[_ready('stage1.partition')], blocked=[])
+    second = O.next_action(tmp_path, 'book-1')
+
+    assert first.action is not None and second.action is not None
+    assert first.action.action_sha256 != second.action.action_sha256
+
+
+def test_no_lane_item_is_pipeline_complete_not_delivery_ready(monkeypatch, tmp_path):
+    snapshot = _snapshot(tmp_path)
+    _wire(monkeypatch, snapshot, todo=[], blocked=[])
+
+    got = O.next_action(tmp_path, 'book-1')
+
+    assert got.state == 'pipeline_complete'
+    assert got.action is None
+
+
+def test_next_refuses_a_surface_that_changes_during_planning(monkeypatch, tmp_path):
+    snapshot = _snapshot(tmp_path)
+    _wire(monkeypatch, snapshot, todo=[_ready('stage1.partition')], blocked=[])
+    monkeypatch.setattr(O, 'read_surface_seal', lambda *_args, **_kwargs: 'b' * 64)
+
+    with pytest.raises(ArtifactUnreadable, match='混合时点'):
+        O.next_action(tmp_path, 'book-1')
+
+
+def test_operator_states_and_resume_verdicts_are_closed_and_schema_keeps_them():
+    assert OPERATOR_NEXT_STATES == ('ready', 'blocked', 'pipeline_complete')
+    assert RESUME_VERDICTS == (
+        'run', 'skip', 'redo', 'unknown', 'legacy_incompatible')
+    action = OperatorAction(
+        node='stage1.partition', flags=[], resume_verdict='run', why='缺失',
+        waiting_on=None, paid=False, writes='stage1/main_text.json',
+        action_sha256='a' * 64)
+    with pytest.raises(ValidationError, match='pipeline_complete'):
+        OperatorNext(
+            base='E:/Output', sid='book-1', code_version='code-v1',
+            surface_seal='b' * 64, state='pipeline_complete',
+            overview=_overview(), inbox=_inbox(), action=action)
+    with pytest.raises(ValidationError, match='waiting_on'):
+        OperatorNext(
+            base='E:/Output', sid='book-1', code_version='code-v1',
+            surface_seal='b' * 64, state='blocked',
+            overview=_overview(), inbox=_inbox(), action=action)
+
+
+@pytest.mark.parametrize('state', ['blocked', 'pipeline_complete'])
+def test_cli_json_keeps_blocked_and_complete_at_exit_zero(
+        state, monkeypatch, tmp_path, capsys):
+    action = None
+    if state == 'blocked':
+        action = OperatorAction(
+            node='stage0.approve', flags=[], resume_verdict='run', why='等人批准',
+            waiting_on='stage0.approve', paid=False,
+            writes='stage0/revisions.json', action_sha256='c' * 64)
+    result = OperatorNext(
+        base=str(tmp_path), sid='book-1', code_version='code-v1',
+        surface_seal='a' * 64, state=state,
+        overview=_overview(), inbox=_inbox(), action=action)
+    monkeypatch.setattr(O, 'next_action', lambda _base, _sid: result)
+
+    rc = main(['operator', 'next', 'book-1', '--base', str(tmp_path), '--json'])
+
+    assert rc == X.OK
+    assert json.loads(capsys.readouterr().out)['state'] == state
+
+
+def test_http_operator_next_uses_the_same_producer(monkeypatch, tmp_path):
+    pytest.importorskip('fastapi')
+    from fastapi.testclient import TestClient
+    from novel.api.app import create_app
+    from novel.api.routes import novels
+
+    result = OperatorNext(
+        base=str(tmp_path), sid='book-1', code_version='code-v1',
+        surface_seal='a' * 64, state='pipeline_complete',
+        overview=_overview(), inbox=_inbox(), action=None)
+    calls: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        novels, 'next_action',
+        lambda base, sid: calls.append((base, sid)) or result)
+
+    with TestClient(create_app(tmp_path)) as client:
+        response = client.get('/api/novels/book-1/operator-next')
+
+    assert response.status_code == 200
+    assert response.json() == result.model_dump(mode='json')
+    assert calls == [(str(tmp_path), 'book-1')]
+
+
+def test_queue_public_entry_delegates_to_the_shared_overview_planner(
+        monkeypatch, tmp_path):
+    overview = _overview()
+    monkeypatch.setattr(Q.st, 'overview', lambda base, sid: overview)
+    calls: list[tuple] = []
+    monkeypatch.setattr(
+        Q, 'plan_book_from_overview',
+        lambda *args, **kwargs: calls.append((args, kwargs)) or ([], []))
+
+    assert Q.plan_book(tmp_path, 'book-1', until_stage='stage7') == ([], [])
+    assert calls == [(
+        (tmp_path, 'book-1', overview),
+        {'until_stage': 'stage7', 'follow_check': True},
+    )]

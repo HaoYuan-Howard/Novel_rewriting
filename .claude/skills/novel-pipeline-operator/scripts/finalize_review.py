@@ -26,6 +26,7 @@ from novel import paths  # noqa: E402
 from novel.errors import ArtifactUnreadable  # noqa: E402
 from novel.orchestrator.delivery import assess  # noqa: E402
 from novel.orchestrator.inspection import read_surface_seal  # noqa: E402
+from novel.orchestrator.write_admission import operation_scope  # noqa: E402
 
 
 _READY = ('ready', 'ready_with_disclosures')
@@ -36,6 +37,28 @@ def _phase(state: str, detail: str | None = None) -> dict[str, Any]:
 
 
 def finalize(
+    base: str | Path,
+    sid: str,
+    *,
+    started_at: int,
+    start_code_version: str,
+    review_path: str | Path | None = None,
+) -> dict[str, Any]:
+    """在完整 canonical finalize 窗口持有非节点 generic write claim。"""
+    details = {
+        'started_at': started_at,
+        'start_code_version': start_code_version,
+        'review_path': None if review_path is None else str(review_path),
+    }
+    with operation_scope(
+            base, sid, operation='finalize-review', details=details):
+        return _finalize_admitted(
+            base, sid, started_at=started_at,
+            start_code_version=start_code_version,
+            review_path=review_path)
+
+
+def _finalize_admitted(
     base: str | Path,
     sid: str,
     *,

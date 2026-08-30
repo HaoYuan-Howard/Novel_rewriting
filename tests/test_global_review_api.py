@@ -8,6 +8,7 @@ import pytest
 
 from contracts.schema.evaluation import GlobalReviewDecisionSet
 from contracts.schema import decode_artifact
+from novel.api import approval_stamp
 from novel.api.routes import edits
 from novel.errors import (
     ApprovalRequired, ArtifactUnreadable, BlockingFindingsUnresolved,
@@ -112,7 +113,10 @@ def test_all_pass_review_lands_before_stage2_closure_without_rolling_back(
     def stage2_not_closed(*_args, **_kwargs):
         raise closure_error
 
-    monkeypatch.setattr(edits.approvals, 'approve_gate', stage2_not_closed)
+    # `_stamp` 是 `approval_stamp.stamp_approval_after_landed` 的别名；
+    # 守卫要 patch 唯一生产 helper 的真实依赖，不能要求 edits 重新导出旧 seam。
+    monkeypatch.setattr(
+        approval_stamp.approvals, 'approve_gate', stage2_not_closed)
 
     with pytest.warns(RuntimeWarning, match='人工决定已落盘.*s2'):
         result = edits.decide_global_review(

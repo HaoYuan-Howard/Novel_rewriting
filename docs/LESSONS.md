@@ -421,3 +421,38 @@ Windows agent 沙箱可能给新目录写入只对沙箱 SID 有效的显式 ACL
 只有进程被强杀、收尾钩子未执行时，才需要管理员一次性接管并删除遗留目录。回归既要钉辅助函数，
 也要真跑两次同一路径后从普通进程读取 ACL 和执行代码快照——“函数拼出了 icacls argv”不能证明
 退出时序正确。
+
+## 32. 顶层进程退出不等于子执行闭合，下一动作也不能靠执行者记忆
+
+整书 Commander 同时有两处看似“已经决定”的静默缝。第一处是进程：外层 agent 或 shell exit 0 时，
+它启动的节点子进程可能仍在后台写盘；此时立即验盘、记 ended 并释放书锁，会把半成品判成交付完成，
+还允许下一条作业与迟到写入并发。第二处是调度：stage 顺序表只说明产物层，不能表达 queue 的恢复 flags、
+人工闸与当前 `.INVALID`；让模型凭文档或聊天记忆挑下一节点，会在盘面变化后继续执行一条已经过期的命令。
+
+处置要把两种“决定”都变成机器可复核的身份：下一动作从生产 queue planner 与同一次 snapshot 纯读产生，
+显式区分 ready、blocked 与 pipeline complete；但 next 的 action hash 只描述“现在为何停/为何可跑”，
+尤其 blocked 时不能充当恢复授权。真正执行前再把 exact node/flags 交给 production policy 铸 execution
+permit，把 base、sid、代码、读面、贵贱/写盘效果与外部输入字节一起冻结；runner 与 child 都重算，root
+写盘后的 canonical follow-check 则复用同一 permit/claim，只核自己的 step index 与 argv，不能被预期发生的
+surface 变化误杀。
+
+子执行不能只靠 beacon 扫描——“准备启动但尚未写 start”仍是一条空窗；父 run 要先取得由 OS
+byte-lock 证明存活的 per-parent owner lease，再持久打开 admission
+gate，每条 node 执行在任何副作用前与 close 共用同一事务口原子 claim，完整结束后 release。审批、
+response-repair、终审与 telemetry 等非 node writer 也必须持 generic claim；已有 node claim 的 start/end
+mark 复用它，不能在父 gate close 后为合法 end 信标另开一枚必然失败的新 claim。顶层 invocation 一返回
+就 close 新 claim，再同时等 active claim 与唯一 execution id 的 start/end 两面归零；报警阈值不能拿来
+释放书锁，越线后仍要等，最后也只能 unknown。gate 是 durable 账：服务重启后 unresolved 身份仍要阻断
+同书 agent/job/trash/API writer，queue startup 也应整 lane 跳过，不能因内存线程消失就假定旧子进程也消失；显式 reconcile 必须绑定 admission
+与完整 beacon 生命周期的 current subject，之后任何迟到事件都让旧 seal 失效并重新阻断，non-LF 坏尾也要
+先原样隔离再 hash-bound 修复，不能猜最后一条事件；reconcile/坏尾 apply 全程还要持 owner-stopped
+证明，force 也不能覆盖 live owner，残留锁文件不作存活事实。launcher 能关闭后台能力时同时关闭，作为纵深防线。
+正常 exit 0 后还要重读 fresh delivery 与 operator next：仍有 ready 动作就是可审计的 early exit，不应暗中
+追加一次新的模型 turn。操作规程的身份也必须覆盖入口、references、scripts 与 assets 整树，不能只哈希
+一份会继续加载别处指令的 `SKILL.md`。
+
+落点：`novel/orchestrator/operator.py::next_action` / `::permit`、
+`.claude/skills/novel-pipeline-operator/scripts/run_step.py::main`、
+`novel/skill_contract.py::package_sha256`、`novel/orchestrator/admission.py`、
+`novel/orchestrator/write_admission.py::operation_scope`、
+`novel/orchestrator/agent.py::_wait_for_execution_closure`。

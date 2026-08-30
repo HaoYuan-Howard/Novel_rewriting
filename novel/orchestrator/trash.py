@@ -89,7 +89,9 @@ def _metadata_json(sid: str, title: str, original_dirname: str, *,
     }, ensure_ascii=False, indent=2) + '\n'
 
 
-def sweep_incomplete(base: str | os.PathLike[str]) -> list[str]:
+def sweep_incomplete(
+        base: str | os.PathLike[str], *,
+        registry: jobs.JobRegistry = jobs.REGISTRY) -> list[str]:
     """把硬中断留下的半成品回收站条目收干净，返回处理过的 trash_id。
 
     ⚠⚠ **半成品只有一种形状**：没有 `book/` **且** `metadata.complete` 不为真。
@@ -105,8 +107,6 @@ def sweep_incomplete(base: str | os.PathLike[str]) -> list[str]:
     root = paths.trash_dir(base)
     if not root.is_dir():
         return []
-    with _IN_FLIGHT_LOCK:
-        in_flight = set(_IN_FLIGHT)
     now = int(time.time())
     swept: list[str] = []
     for item in sorted(root.iterdir()):
@@ -119,7 +119,9 @@ def sweep_incomplete(base: str | os.PathLike[str]) -> list[str]:
         #   恰好就是半成品的形状；这时把它的归档审批搬回 live，子进程随后的回滚
         #   条件（`not approval.exists()`）就被破坏了。⇒ 本进程发起的那些直接跳过；
         #   别的进程（人手敲 CLI）留下的靠宽限期区分。
-        if item.name in in_flight:
+        with _IN_FLIGHT_LOCK:
+            in_flight = item.name in _IN_FLIGHT
+        if in_flight:
             continue
         meta_path = item / 'metadata.json'
         try:
@@ -139,28 +141,74 @@ def sweep_incomplete(base: str | os.PathLike[str]) -> list[str]:
             # metadata 是回收站里的不可信盘上输入；坏 sid 只能留下人工检查，
             # 不能借恢复路径越出 approvals 目录。
             sid = ''
-        if archived_approval.is_file() and sid:
-            # 与 HTTP/CLI apply 共用审批文件锁。live 是否存在、选择恢复还是
-            # supersede、以及移动本身必须是同一段临界区，不能只锁 os.replace。
-            with approvals.approval_file_lock(base, sid):
-                if not archived_approval.is_file():
-                    # 另一 sweep 已在我们等待锁时收完；后面的幂等清壳继续即可。
-                    continue
-                live = _approval_path(base, sid)
-                if live.exists():
-                    archived_approval.replace(item / 'approval.superseded.json')
-                else:
-                    live.parent.mkdir(parents=True, exist_ok=True)
-                    os.replace(archived_approval, live)
-        try:
-            if meta_path.exists():
-                meta_path.unlink()
-            if not any(item.iterdir()):
-                item.rmdir()
-        except OSError:
-            # 别人正好也在收同一条。审批已经归位是唯一要紧的事，空壳留着无害。
+        if not sid:
+            # 没有可信 sid 就没有可证明正确的书级 writer key；完整保留给人工检查，
+            # 尤其不能先移动 approval 再试图补锁。
             continue
-        swept.append(item.name)
+
+        writer_id = f'trash-sweep-{item.name}'
+        try:
+            key = jobs.acquire_job_writer(
+                base, sid, 'book.trash', writer_id, registry=registry)
+        except jobs.JobConflict:
+            # 同书 writer / durable Commander admission 仍活着：这一轮什么都不动。
+            # sweep 是恢复器，不值得为抢锁破坏一个真实运行；下一次会重新扫描。
+            continue
+        try:
+            # 上面的筛选发生在拿锁前，只能用来决定「值不值得尝试」。拿到书级
+            # writer 后必须从盘上重读：另一个 sweep/删除可能已经完成，metadata
+            # 也可能换了 sid。未经这次复核不得移动任何审批字节。
+            if not item.is_dir() or (item / 'book').exists():
+                continue
+            with _IN_FLIGHT_LOCK:
+                if item.name in _IN_FLIGHT:
+                    continue
+            try:
+                current_meta = json.loads(
+                    meta_path.read_text(encoding='utf-8'))
+            except (OSError, ValueError):
+                continue
+            if current_meta.get('complete') is True:
+                continue
+            current_trashed_at = current_meta.get('trashed_at')
+            if (isinstance(current_trashed_at, int)
+                    and now - current_trashed_at < STALE_AFTER_SECONDS):
+                continue
+            try:
+                current_sid = paths.check_sid(
+                    str(current_meta.get('sid') or ''))
+            except PathRefused:
+                continue
+            if current_sid != sid:
+                continue
+
+            archived_approval = item / 'approval.json'
+            if archived_approval.is_file():
+                # 与 HTTP/CLI apply 共用审批文件锁。live 是否存在、选择恢复还是
+                # supersede、以及移动本身必须是同一段临界区，不能只锁 os.replace。
+                # 外层书级 writer 已经挡住 agent/job；这把只解决审批文件本身。
+                with approvals.approval_file_lock(base, sid):
+                    if not archived_approval.is_file():
+                        # 另一 sweep 已在我们等待锁时收完；后面的幂等清壳继续即可。
+                        continue
+                    live = _approval_path(base, sid)
+                    if live.exists():
+                        archived_approval.replace(
+                            item / 'approval.superseded.json')
+                    else:
+                        live.parent.mkdir(parents=True, exist_ok=True)
+                        os.replace(archived_approval, live)
+            try:
+                if meta_path.exists():
+                    meta_path.unlink()
+                if not any(item.iterdir()):
+                    item.rmdir()
+            except OSError:
+                # 别人正好也在收同一条。审批已经归位是唯一要紧的事，空壳留着无害。
+                continue
+            swept.append(item.name)
+        finally:
+            registry.release(key, writer_id)
     return swept
 
 
@@ -241,20 +289,20 @@ def run(base: str | os.PathLike[str], sid: str, expected_title: str, *,
     sid = paths.check_sid(sid)
     # 上一次删除若被硬中断，盘上会留下半成品条目（审批已归档、书还在原位）。
     # 在开新的一次之前先收干净：否则那本书的审批一直躺在回收站里，读数说不清。
-    sweep_incomplete(base)
+    sweep_incomplete(base, registry=registry)
     trash_id = new_trash_id()
-    key = jobs.active_key(sid, 'book.trash')
-    registry.acquire(key, 'trash-' + trash_id)
+    writer_id = 'trash-' + trash_id
+    key = jobs.acquire_job_writer(
+        base, sid, 'book.trash', writer_id, registry=registry)
     with _IN_FLIGHT_LOCK:
         _IN_FLIGHT.add(trash_id)
     try:
-        # 必须先占书级作业锁，再检查 agent。agent.start 的顺序正好相反：
-        # 先占 agent 锁，再查这把作业锁。两边的 acquire 都不等待，谁先拿到，
-        # 另一边都明确 409；若先查后占，agent 会在两步之间钻进来写盘。
+        # 上面的共享协调口已经在同一个临界区完成「查 Commander + 占书级 writer」。
+        # 两边的 acquire 都不等待，谁先拿到，另一边都明确 409；不能退回各自
+        # 先查后占，否则 agent/trash 可以同时看见空表再各拿一把。
         queued = {item.sid for item in agent.queue_view(base).pending}
         if sid in queued:
             raise jobs.JobConflict('这本书还在 agent 排队中——先取消/等队列处理完再删除')
-        jobs._refuse_if_agent_running(sid)
         novel_dir = paths.resolve_novel_dir(base, sid)
         title = paths.title_of(novel_dir)
         if title != expected_title:
@@ -284,4 +332,4 @@ def run(base: str | os.PathLike[str], sid: str, expected_title: str, *,
     finally:
         with _IN_FLIGHT_LOCK:
             _IN_FLIGHT.discard(trash_id)
-        registry.release(key, 'trash-' + trash_id)
+        registry.release(key, writer_id)

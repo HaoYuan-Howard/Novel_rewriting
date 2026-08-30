@@ -14,6 +14,7 @@ from contracts.schema.api import (
 from novel.api.deps import checked_sid, get_base
 from novel.errors import ApprovalRequired
 from novel.orchestrator import approvals
+from novel.orchestrator.write_admission import operation_scope
 from novel.views.stage6 import stage6_approval_workpack
 from novel.views.stage7 import stage7_approval_workpack
 
@@ -86,7 +87,30 @@ def approve_design_review(
     base: str = Depends(get_base),
 ) -> ApprovalDoc:
     """原子保存 Stage4A typed 盲审；不启动修订或 Stage4B。"""
-    return approvals.approve_design(base, sid, request)
+    details = {
+        'actor': request.actor,
+        'reviewer_kind': request.reviewer_kind,
+        'review_run_id': request.review_run_id,
+        'candidate_sha256': request.candidate_sha256,
+        'aggregate_subject_sha256': request.aggregate_subject_sha256,
+        'strategy': {
+            'subject_sha256': request.strategy.subject_sha256,
+            'decision': request.strategy.decision,
+            'source_decision_sha256': request.strategy.source_decision_sha256,
+        },
+        'chapters': [
+            {
+                'output_ordinal': row.output_ordinal,
+                'subject_sha256': row.subject_sha256,
+                'decision': row.decision,
+                'source_decision_sha256': row.source_decision_sha256,
+            }
+            for row in request.chapters
+        ],
+    }
+    with operation_scope(
+            base, sid, operation='approval-design', details=details):
+        return approvals.approve_design(base, sid, request)
 
 
 @router.get('/stage5/template', response_model=Stage5ClosureTemplate)
@@ -103,14 +127,41 @@ def approve_stage5_closure(
     sid: str = Depends(checked_sid), base: str = Depends(get_base),
 ) -> ApprovalDoc:
     """原子提交 Stage5 闭合回执；通过即打开 gate.s5，不启动任何付费作业。"""
-    return approvals.approve_stage5_closure(base, sid, request)
+    details = {
+        'actor': request.actor,
+        'workpack_sha256': request.workpack_sha256,
+        'review_sha256': request.review_sha256,
+        'must_appear': [
+            {
+                'chapter_ordinal': row.chapter_ordinal,
+                'evidence_key': row.evidence_key,
+                'finding_sha256': row.finding_sha256,
+                'chapter_sha256': row.chapter_sha256,
+                'ruling': row.ruling,
+            }
+            for row in request.must_appear
+        ],
+        'group_acks': [
+            {
+                'group': row.group,
+                'findings_sha256': row.findings_sha256,
+                'items': row.items,
+            }
+            for row in request.group_acks
+        ],
+    }
+    with operation_scope(
+            base, sid, operation='approval-stage5', details=details):
+        return approvals.approve_stage5_closure(base, sid, request)
 
 
 @router.post('/gate/{key}', response_model=ApprovalDoc)
 def approve_gate(
     key: GateKey, sid: str = Depends(checked_sid), base: str = Depends(get_base),
 ) -> ApprovalDoc:
-    return approvals.approve_gate(base, sid, key)
+    with operation_scope(
+            base, sid, operation='approval-gate', details={'key': key}):
+        return approvals.approve_gate(base, sid, key)
 
 
 @router.post('/structure', response_model=ApprovalDoc)
@@ -120,14 +171,28 @@ def approve_structure(
     base: str = Depends(get_base),
 ) -> ApprovalDoc:
     """保存 hash-bound 逐章结构裁决；不在服务进程触发任何重规划作业。"""
-    return approvals.approve_structure(base, sid, request)
+    details = {
+        'actor': request.actor,
+        'subject_sha256': request.subject_sha256,
+        'chapters': [
+            {
+                'output_ordinal': row.output_ordinal,
+                'decision': row.decision,
+            }
+            for row in request.chapters
+        ],
+    }
+    with operation_scope(
+            base, sid, operation='approval-structure', details=details):
+        return approvals.approve_structure(base, sid, request)
 
 
 @router.post('/backfill', response_model=ApprovalBackfillResult)
 def backfill_approvals(
     sid: str = Depends(checked_sid), base: str = Depends(get_base),
 ) -> ApprovalBackfillResult:
-    return approvals.backfill_from_disk(base, sid)
+    with operation_scope(base, sid, operation='approval-backfill'):
+        return approvals.backfill_from_disk(base, sid)
 
 
 @router.post('/seen/{key}', response_model=ApprovalDoc)
@@ -142,8 +207,20 @@ def mark_seen(
             'seen.read 必须携带实际读过的 Blueprint 工作包身份；请刷新阅读页后重试')
     if key == 'global' and request is not None:
         raise ApprovalRequired('seen.global 不接受 Blueprint 工作包身份')
-    return approvals.mark_seen(
-        base, sid, key, blueprint_subject=request)
+    details: dict[str, object] = {'key': key}
+    if request is not None:
+        details.update({
+            'expected_binding_sha256': request.expected_binding_sha256,
+            'expected_subject_sha256': request.expected_subject_sha256,
+            'expected_main_text_artifact_sha256': (
+                request.expected_main_text_artifact_sha256),
+            'expected_code_version': request.expected_code_version,
+            'expected_rules_fingerprint': request.expected_rules_fingerprint,
+        })
+    with operation_scope(
+            base, sid, operation='approval-seen', details=details):
+        return approvals.mark_seen(
+            base, sid, key, blueprint_subject=request)
 
 
 @router.post('/writing', response_model=ApprovalDoc)
@@ -152,15 +229,23 @@ def approve_writing(
     sid: str = Depends(checked_sid), base: str = Depends(get_base),
 ) -> ApprovalDoc:
     """新 typed body 可审计；空 body 只兼容既有 UI，二者都不启动付费作业。"""
-    return (
-        approvals.begin_writing(base, sid)
-        if request is None
-        else approvals.approve_writing(base, sid, request)
-    )
+    details = {
+        'actor': None if request is None else request.actor,
+        'subject_sha256': (
+            None if request is None else request.subject_sha256),
+    }
+    with operation_scope(
+            base, sid, operation='approval-writing', details=details):
+        return (
+            approvals.begin_writing(base, sid)
+            if request is None
+            else approvals.approve_writing(base, sid, request)
+        )
 
 
 @router.post('/reset', response_model=ApprovalDoc)
 def reset_approvals(
     sid: str = Depends(checked_sid), base: str = Depends(get_base),
 ) -> ApprovalDoc:
-    return approvals.reset(base, sid)
+    with operation_scope(base, sid, operation='approval-reset'):
+        return approvals.reset(base, sid)

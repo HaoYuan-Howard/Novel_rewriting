@@ -19,17 +19,22 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from novel import commander_context, paths, prov, run_identity  # noqa: E402
+from contracts.schema.api import ExecutionPermit  # noqa: E402
 from novel.cli import exit_codes as X  # noqa: E402
 from novel.errors import TerminalState  # noqa: E402
+from novel.orchestrator import admission  # noqa: E402
+from novel.orchestrator import execution_permit as permit_layer  # noqa: E402
 from novel.orchestrator import nodes as node_planner  # noqa: E402
+from novel.orchestrator import operator as operator_planner  # noqa: E402
 from novel.orchestrator.nodes import build_steps, shell_line  # noqa: E402
 
 
 _VALUE_OPTIONS = (
     '--base', '--sid', '--expect-code-version', '--evidence-json', '--run-id',
+    '--operator-permit-sha256',
 )
-_EVIDENCE_SCHEMA = 'novel-operator-step-evidence-v1'
-_COMMANDER_EVIDENCE_SCHEMA = 'novel-operator-step-evidence-v2'
+_EVIDENCE_SCHEMA = 'novel-operator-step-evidence-v2'
+_COMMANDER_EVIDENCE_SCHEMA = 'novel-operator-step-evidence-v3'
 _SECRET_MARKER = re.compile(r'api[_-]?key|deepseek_api_key', re.IGNORECASE)
 
 
@@ -110,9 +115,11 @@ def _step_identity(argv: list[str], fallback_sid: str | None) -> tuple[str, str]
 
 def _mark(base: str, sid: str, node: str, phase: str,
           exit_code: int | None = None, *, note: str | None = None,
+          execution_id: str,
           env: dict[str, str] | None = None) -> int:
     argv = [sys.executable, '-B', '-m', 'novel.cli', 'mark', sid,
-            '--node', node, '--phase', phase, '--base', base]
+            '--node', node, '--phase', phase, '--execution-id', execution_id,
+            '--base', base]
     if exit_code is not None:
         argv += ['--exit', str(exit_code)]
     if note is not None:
@@ -124,6 +131,7 @@ def _mark(base: str, sid: str, node: str, phase: str,
 def _evidence_bytes(
     steps: Sequence[Any],
     context: commander_context.CommanderContext | None = None,
+    execution_permit: ExecutionPermit | None = None,
 ) -> bytes:
     """直接投影本次 ``build_steps`` 的对象；不重造 argv 或运行判定。"""
     payload = {
@@ -146,6 +154,9 @@ def _evidence_bytes(
             }
             for step in steps
         ],
+        **({
+            'execution_permit': execution_permit.model_dump(mode='json'),
+        } if execution_permit is not None else {}),
         **({
             'commander': {
                 'run_id': context.run_id,
@@ -221,6 +232,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         '--run-id', type=_run_id_arg,
         help='显式续用原 run_id；不作为 node flag 或缓存键')
+    parser.add_argument(
+        '--operator-permit-sha256',
+        help='operator permit 返回的当前许可哈希；preview/execute 都重铸复核')
     parser.add_argument('--execute', action='store_true')
     parser.add_argument('node')
     parser.add_argument('flags', nargs=argparse.REMAINDER,
@@ -260,59 +274,149 @@ def main(argv: list[str] | None = None) -> int:
                 raise TerminalState(
                     f'Commander 不允许付费跑法 {args.node} {sorted(tokens)} '
                     '落回 legacy LLM；该组合尚未接入 executor agent')
+        current_permit = None
+        if args.operator_permit_sha256 is not None:
+            if (len(args.operator_permit_sha256) != 64
+                    or any(char not in '0123456789abcdef'
+                           for char in args.operator_permit_sha256)):
+                raise TerminalState(
+                    '--operator-permit-sha256 必须是 64 位小写十六进制')
+            if args.sid is None:
+                raise TerminalState(
+                    '--operator-permit-sha256 只能绑定已落盘 sid；'
+                    '新书 stage0.remove --source 不携带它')
+            current_permit = operator_planner.permit(
+                args.base, args.sid, args.node, flags)
+            if current_permit.permit_sha256 != args.operator_permit_sha256:
+                raise TerminalState(
+                    'operator permit SHA-256 已过期；盘面、审批、外部输入字节、'
+                    '代码或 exact node/flags 已变化，请重新运行 operator permit')
+        elif args.sid is not None:
+            raise TerminalState(
+                '已落盘 sid 的 run_step 必须携带 --operator-permit-sha256；'
+                'ready 与 blocked recovery 都不得绕过 execution permit')
         steps = build_steps(
-            args.node, args.sid, flags, base=args.base,
+            args.node, args.sid, flags,
+            base=(current_permit.base if current_permit is not None else args.base),
             executor_profile=profile,
             egress_authorized=egress_authorized,
             placeholders=not args.execute)
-        evidence_data = _evidence_bytes(steps, context)
+        evidence_data = _evidence_bytes(
+            steps, context, current_permit)
         evidence_sha256 = hashlib.sha256(evidence_data).hexdigest()
-        if args.evidence_json:
-            _write_evidence(args.evidence_json, evidence_data)
         if args.execute and context is not None:
             commander_context.require_execution_authorized(context)
     except TerminalState as exc:
         print(f'✗ {exc}', file=sys.stderr)
         return X.TERMINAL_STATE
-    for index, step in enumerate(steps, 1):
-        print(f'[{index}] {step.label}')
-        print(f'    $ {shell_line(step.argv)}')
-        print(f'    花钱={"是" if step.paid else "否"} 写盘={step.writes or "否"}')
-        if step.note:
-            print(f'    ⚠ {step.note}')
-    if not args.execute:
+
+    active_claim: admission.AdmissionClaim | None = None
+    if args.execute and context is not None:
+        # 必须在 evidence 落盘、start beacon 与 node subprocess **之前**
+        # 入账。顶层 Commander 的 close 与这一步共用 append transaction，
+        # 所以迟到的 run_step 不可能穿过“扫描时还没 beacon”的窗口。
+        try:
+            assert args.sid is not None
+            assert current_permit is not None
+            active_claim = admission.claim(
+                args.base, context.run_id, args.sid, node=args.node,
+                claim_sha256=current_permit.permit_sha256)
+        except TerminalState as exc:
+            print(f'✗ {exc}', file=sys.stderr)
+            return X.TERMINAL_STATE
+
+    def execute_or_preview() -> int:
+        try:
+            if args.evidence_json:
+                _write_evidence(args.evidence_json, evidence_data)
+        except TerminalState as exc:
+            print(f'✗ {exc}', file=sys.stderr)
+            return X.TERMINAL_STATE
+        for index, step in enumerate(steps, 1):
+            print(f'[{index}] {step.label}')
+            print(f'    $ {shell_line(step.argv)}')
+            print(f'    花钱={"是" if step.paid else "否"} 写盘={step.writes or "否"}')
+            if step.note:
+                print(f'    ⚠ {step.note}')
+        if not args.execute:
+            return 0
+
+        if context is not None:
+            effective_run_id = context.run_id
+            child_env = commander_context.env_with_context(
+                run_id=context.run_id, base=context.base, start=context.start)
+            assert active_claim is not None
+            child_env = admission.env_with_claim(active_claim, child_env)
+        else:
+            effective_run_id = run_identity.resolve_run_id(args.run_id)
+            child_env = run_identity.env_with_run_id(effective_run_id)
+        print(f'operator run_id={effective_run_id}', file=sys.stderr)
+        evidence_note = f'operator_evidence_sha256={evidence_sha256}'
+        for step_index, step in enumerate(steps):
+            step_env = child_env
+            if context is not None:
+                assert current_permit is not None
+                step_env = permit_layer.env_with_permit(
+                    current_permit, step_index, child_env)
+            if not _code_is_current(
+                    args.expect_code_version, phase=f'{step.label} 执行前'):
+                return X.TERMINAL_STATE
+            node, sid = _step_identity(step.argv, args.sid)
+            execution_id = run_identity.new_run_id()
+            mark_rc = _mark(
+                args.base, sid, node, 'start', note=evidence_note,
+                execution_id=execution_id, env=step_env)
+            if mark_rc != 0:
+                print(
+                    f'信标 start 失败（exit {mark_rc}），为避免未记账执行而停止',
+                    file=sys.stderr)
+                return mark_rc
+            try:
+                rc = subprocess.run(
+                    step.argv, cwd=step.cwd, check=False, env=step_env).returncode
+            except BaseException:
+                end_rc = _mark(
+                    args.base, sid, node, 'end', X.CRASH, note=evidence_note,
+                    execution_id=execution_id, env=step_env)
+                if end_rc != 0:
+                    print(
+                        f'节点启动/执行异常，且 end 信标失败（exit {end_rc}）',
+                        file=sys.stderr)
+                raise
+            end_rc = _mark(
+                args.base, sid, node, 'end', rc, note=evidence_note,
+                execution_id=execution_id, env=step_env)
+            if end_rc != 0:
+                print(f'节点 exit {rc}，但 end 信标失败（exit {end_rc}）', file=sys.stderr)
+                return end_rc
+            if not _code_is_current(
+                    args.expect_code_version, phase=f'{step.label} 执行后'):
+                return X.TERMINAL_STATE
+            if rc != 0:
+                return rc
         return 0
 
-    if context is not None:
-        effective_run_id = context.run_id
-        child_env = commander_context.env_with_context(
-            run_id=context.run_id, base=context.base, start=context.start)
-    else:
-        effective_run_id = run_identity.resolve_run_id(args.run_id)
-        child_env = run_identity.env_with_run_id(effective_run_id)
-    print(f'operator run_id={effective_run_id}', file=sys.stderr)
-    evidence_note = f'operator_evidence_sha256={evidence_sha256}'
-    for step in steps:
-        if not _code_is_current(args.expect_code_version, phase=f'{step.label} 执行前'):
-            return X.TERMINAL_STATE
-        node, sid = _step_identity(step.argv, args.sid)
-        mark_rc = _mark(
-            args.base, sid, node, 'start', note=evidence_note, env=child_env)
-        if mark_rc != 0:
-            print(f'信标 start 失败（exit {mark_rc}），为避免未记账执行而停止', file=sys.stderr)
-            return mark_rc
-        rc = subprocess.run(
-            step.argv, cwd=step.cwd, check=False, env=child_env).returncode
-        end_rc = _mark(
-            args.base, sid, node, 'end', rc, note=evidence_note, env=child_env)
-        if end_rc != 0:
-            print(f'节点 exit {rc}，但 end 信标失败（exit {end_rc}）', file=sys.stderr)
-            return end_rc
-        if not _code_is_current(args.expect_code_version, phase=f'{step.label} 执行后'):
-            return X.TERMINAL_STATE
-        if rc != 0:
-            return rc
-    return 0
+    try:
+        result = execute_or_preview()
+    except BaseException:
+        if active_claim is not None:
+            try:
+                admission.release(args.base, active_claim)
+            except Exception as release_exc:  # noqa: BLE001 —— 原异常不得被遮住
+                print(
+                    f'⚠ 异常收尾时 admission release 失败：'
+                    f'{type(release_exc).__name__}: {release_exc}',
+                    file=sys.stderr)
+        raise
+    if active_claim is not None:
+        try:
+            admission.release(args.base, active_claim)
+        except Exception as exc:  # noqa: BLE001 —— 未 release 不能冒充普通节点终态
+            print(
+                f'✗ admission release 失败：{type(exc).__name__}: {exc}',
+                file=sys.stderr)
+            return X.CRASH
+    return result
 
 
 if __name__ == '__main__':

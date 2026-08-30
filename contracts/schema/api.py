@@ -73,6 +73,10 @@ from contracts.invariants import (
     INBOX_ATTENTION,
     INBOX_DELIVERY_EFFECT,
     INBOX_KIND,
+    NODES,
+    EXECUTION_PERMIT_KINDS,
+    OPERATOR_NEXT_STATES,
+    RESUME_VERDICTS,
     KNOWLEDGE_SUBJECT_KINDS,
     NAME_DISTINCTIVENESS,
     NARRATIVE_PERSON,
@@ -97,7 +101,7 @@ from contracts.invariants import (
     STAGE5_EDIT_CONFIRMATIONS,
     STAGE5_MUST_APPEAR_RULINGS,)
 from contracts.schema.base import FrozenModel, StrictModel
-from contracts.schema.common import Finding, HashBoundHumanApproval
+from contracts.schema.common import Finding, HashBoundHumanApproval, Sha256
 from contracts.schema.evaluation import GlobalReviewItem, SemanticDecision
 from contracts.schema.orchestration import (
     AgentProfile, AgentRunRecord, ArtifactCondition, ArtifactState, Freshness,
@@ -145,6 +149,10 @@ SeenKey = Literal[APPROVAL_SEEN]
 InboxKind = Literal[INBOX_KIND]
 InboxAttention = Literal[INBOX_ATTENTION]
 InboxDeliveryEffect = Literal[INBOX_DELIVERY_EFFECT]
+OperatorNextState = Literal[OPERATOR_NEXT_STATES]
+ResumeVerdict = Literal[RESUME_VERDICTS]
+OperatorNode = Literal[tuple(NODES)]
+ExecutionPermitKind = Literal[EXECUTION_PERMIT_KINDS]
 AnchorCoverageState = Literal[ANCHOR_COVERAGE_STATE]
 Stage5ReviewState = Literal[STAGE5_REVIEW_STATE]
 StructureApprovalDecisionKind = Literal[STRUCTURE_APPROVAL_DECISIONS]
@@ -1930,7 +1938,109 @@ class InboxView(StrictModel):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 二c、S-05 全局设定（`GET /api/novels/:sid/stage2/global`）
+# 二c、确定性 operator 下一动作（CLI 与只读 HTTP 共用）
+# ─────────────────────────────────────────────────────────────────────────────
+
+class OperatorAction(FrozenModel):
+    """当前盘面上最早的一项 lane 决策；不携带可被误执行的 legacy Step。"""
+
+    node: OperatorNode
+    flags: list[str] = Field(default_factory=list)
+    resume_verdict: ResumeVerdict
+    why: str = Field(min_length=1)
+    waiting_on: str | None = None
+    paid: bool
+    writes: str
+    action_sha256: Sha256
+
+
+class OperatorNext(StrictModel):
+    """同一次 operator 快照上的 overview、inbox 与唯一下一动作。"""
+
+    base: str = Field(min_length=1)
+    sid: str = Field(min_length=1)
+    code_version: str = Field(min_length=1)
+    surface_seal: Sha256
+    state: OperatorNextState
+    overview: NovelOverview
+    inbox: InboxView
+    action: OperatorAction | None = None
+
+    @model_validator(mode='after')
+    def _state_matches_the_action(self) -> OperatorNext:
+        if self.overview.sid != self.sid:
+            raise ValueError('OperatorNext.sid 必须与 overview.sid 一致')
+        if self.state == 'pipeline_complete':
+            if self.action is not None:
+                raise ValueError('pipeline_complete 不得携带 action')
+            return self
+        if self.action is None:
+            raise ValueError(f'{self.state} 必须携带 action')
+        if self.state == 'ready':
+            if self.action.waiting_on is not None:
+                raise ValueError('ready action 不得携带 waiting_on')
+            if self.action.resume_verdict != 'run':
+                raise ValueError('ready action 的 resume_verdict 必须是 run')
+        elif not self.action.waiting_on:
+            raise ValueError('blocked action 必须明确 waiting_on')
+        return self
+
+
+class ExecutionPermitInput(FrozenModel):
+    """一份会被节点消费的外部文件；摘要覆盖未经归一的原始字节。"""
+
+    flag: str = Field(pattern=r'^--[a-z][a-z0-9-]*$')
+    argument: str = Field(min_length=1)
+    resolved_path: str = Field(min_length=1)
+    bytes: int = Field(ge=0)
+    sha256: Sha256
+
+
+class ExecutionPermit(FrozenModel):
+    """绑定一次 exact node/flags 与当前 operator 读面的执行许可。
+
+    ``operator_action_sha256`` 只属于 ready：恢复许可必须重新按恢复策略铸
+    ``permit_sha256``，绝不能复用那枚仅描述 blocker 的 action hash。
+    """
+
+    base: str = Field(min_length=1)
+    sid: str = Field(min_length=1)
+    code_version: str = Field(min_length=1)
+    surface_seal: Sha256
+    next_state: OperatorNextState
+    waiting_on: str | None = None
+    kind: ExecutionPermitKind
+    node: OperatorNode
+    flags: list[str] = Field(default_factory=list)
+    paid: bool
+    writes: str
+    operator_action_sha256: Sha256 | None = None
+    external_inputs: list[ExecutionPermitInput] = Field(default_factory=list)
+    permit_sha256: Sha256
+
+    @model_validator(mode='after')
+    def _source_matches_current_next(self) -> ExecutionPermit:
+        if self.kind == 'ready':
+            if self.next_state != 'ready' or self.waiting_on is not None:
+                raise ValueError('ready permit 必须来自无 waiting_on 的 ready next')
+            if self.operator_action_sha256 is None:
+                raise ValueError('ready permit 必须绑定当前 operator action SHA-256')
+        else:
+            if self.next_state != 'blocked' or not self.waiting_on:
+                raise ValueError('recovery permit 必须来自明确 waiting_on 的 blocked next')
+            if self.operator_action_sha256 is not None:
+                raise ValueError('recovery permit 不得复用 blocker action SHA-256')
+        input_flags = [item.flag for item in self.external_inputs]
+        if len(input_flags) != len(set(input_flags)):
+            raise ValueError('同一个外部输入 flag 只能绑定一份字节摘要')
+        for flag in input_flags:
+            if self.flags.count(flag) != 1:
+                raise ValueError(f'外部输入 {flag} 必须在 exact flags 中恰出现一次')
+        return self
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 二d、S-05 全局设定（`GET /api/novels/:sid/stage2/global`）
 # ─────────────────────────────────────────────────────────────────────────────
 
 class NameRef(FrozenModel):

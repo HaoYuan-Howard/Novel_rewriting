@@ -149,7 +149,8 @@ def _subcommands(path: Path) -> set[str]:
 #: 每跑必读的那几份。经验库的**整读预算**由它们的体量算出，不写死一个数字
 #: ——写死就是第二个落点，而必读集本身会随维护变厚变薄。
 _MUST_READ = ('SKILL.md', 'references/workflow.md',
-              'references/delegated-review.md', 'references/runtime-profiles.md')
+              'references/delegated-review.md', 'references/runtime-profiles.md',
+              'references/execution-modes.md')
 
 #: 经验库文件按这个 glob 收。`field-notes.md` 是索引兼入口，
 #: `field-notes/*.md` 是超过整读预算之后的分片（**二层渐进披露只对经验库开放**）。
@@ -395,21 +396,21 @@ def _behaviour_errors(
     #   过滤吞掉 `[--]`、`── 来源 ──` 或 `⚠` 就不再是「只改变读法」了。
     #   真值取 `render.py::_STATUS_MARK`，不在这里手抄第二份标记表。
     marks = _dict_constant(root / "novel" / "report" / "render.py", "_STATUS_MARK")
-    profiles_path = SKILL_DIR / "references" / "runtime-profiles.md"
+    workflow_path = SKILL_DIR / "references" / "workflow.md"
     pattern_match = re.search(
         r"Select-String -Pattern '([^']+)'",
-        profiles_path.read_text(encoding="utf-8") if profiles_path.is_file() else "")
+        workflow_path.read_text(encoding="utf-8") if workflow_path.is_file() else "")
     if not marks:
         errors.append("读不到 render.py::_STATUS_MARK，过滤正则的对账无从谈起")
     elif not pattern_match:
-        errors.append("runtime-profiles.md 里找不到 `Select-String -Pattern '...'` 的推荐过滤")
+        errors.append("workflow.md 里找不到 `Select-String -Pattern '...'` 的推荐过滤")
     else:
         pattern = pattern_match.group(1)
         counters["status_marks"] = len(marks)
         try:
             compiled = re.compile(pattern)
         except re.error as exc:
-            errors.append(f"runtime-profiles.md 的过滤正则编译不过：{exc}")
+            errors.append(f"workflow.md 的过滤正则编译不过：{exc}")
             compiled = None
         if compiled is not None:
             for status, mark in sorted(marks.items()):
@@ -419,7 +420,7 @@ def _behaviour_errors(
                         f"推荐过滤会吞掉 `{mark}`（{status}）那一类行。"
                         f"render.py::_STATUS_MARK 有 {len(marks)} 种标记，"
                         f"而 workflow.md 明写各态「各自保留语义」。"
-                        f"\n    → 改 runtime-profiles.md 里的正则，不要改 render.py"
+                        f"\n    → 改 workflow.md 里的正则，不要改 render.py"
                     )
                 if status == "ok" and hit:
                     errors.append(
@@ -471,7 +472,9 @@ def validate(counters: dict[str, int] | None = None,
                 "template_headings", "evidence_symbols", "notes_files",
                 "notes_chars", "notes_budget", "index_rows", "repo_fn_citations",
                 "open_gap_entries", "stage0_workpack_contract",
-                "finalizer_contract", "operator_telemetry_contract"):
+                "finalizer_contract", "operator_telemetry_contract",
+                "routing_axes", "codex_discovery", "operator_next_contract",
+                "operator_execution_permit_contract"):
         counters.setdefault(key, 0)
     errors: list[str] = []
     root = _repo_root()
@@ -525,10 +528,106 @@ def validate(counters: dict[str, int] | None = None,
                 f"reference 未从 SKILL.md 直接链接：{reference.relative_to(SKILL_DIR)}"
             )
 
+    # 宿主与 executor 是正交两轴。过去 runtime-profiles.md 同时装宿主等待、
+    # DeepSeek doctor 与 agent session 恢复；执行者即使只想读 headless，也会被迫把
+    # 另一 transport 一起装进上下文。这里守文件职责，不复制 capability 枚举。
+    runtime_path = SKILL_DIR / "references" / "runtime-profiles.md"
+    execution_path = SKILL_DIR / "references" / "execution-modes.md"
+    runtime_text = skill_texts.get(runtime_path, "")
+    execution_text = skill_texts.get(execution_path, "")
+    if runtime_text:
+        counters["routing_axes"] += 1
+        for heading in ("## 交互式主会话", "## headless agent", "## 只读进度观察"):
+            if heading not in runtime_text:
+                errors.append(f"runtime-profiles.md 缺宿主小节：{heading}")
+        for forbidden in ("doctor --llm-transport", "response-repair", "ResponseRepairRequired"):
+            if forbidden in runtime_text:
+                errors.append(
+                    f"runtime-profiles.md 仍夹带 executor/transport 过程 `{forbidden}`；"
+                    "移到 execution-modes.md")
+    if execution_text:
+        counters["routing_axes"] += 1
+        for heading in ("## Agent driver", "## Legacy LLM transport"):
+            if heading not in execution_text:
+                errors.append(f"execution-modes.md 缺执行模式小节：{heading}")
+        if "禁止自动降级" not in execution_text:
+            errors.append("execution-modes.md 没有关闭式禁止 Agent/legacy 自动降级")
+
+    # Codex 只原生扫描 `.agents/skills`；Windows core.symlinks=false 会把提交的
+    # 目录 symlink 检出成普通文本，所以守一个极薄发现 shim，canonical 始终只有本目录。
+    codex_entry = (
+        root / ".agents" / "skills" / "novel-pipeline-operator" / "SKILL.md")
+    if not codex_entry.is_file():
+        errors.append("缺少 .agents/skills/novel-pipeline-operator/SKILL.md Codex 发现入口")
+    else:
+        counters["codex_discovery"] += 1
+        shim = codex_entry.read_text(encoding="utf-8")
+        try:
+            shim_frontmatter, shim_body = _frontmatter(shim)
+        except ValueError as exc:
+            errors.append(f"Codex 发现入口 frontmatter 无效：{exc}")
+        else:
+            if shim_frontmatter.get("name") != "novel-pipeline-operator":
+                errors.append("Codex 发现入口 name 与 canonical skill 不一致")
+            canonical_pointer = (
+                "../../../.claude/skills/novel-pipeline-operator/SKILL.md")
+            if canonical_pointer not in shim_body:
+                errors.append("Codex 发现入口没有指向唯一 canonical SKILL.md")
+            for duplicated in ("## 执行主循环", "scripts/run_step.py", "## 完成定义"):
+                if duplicated in shim_body:
+                    errors.append(
+                        f"Codex 发现入口复制了主链内容 `{duplicated}`；只允许保留指针")
+        shim_root = codex_entry.parent
+        for copied_dir in ("references", "scripts", "assets"):
+            if (shim_root / copied_dir).exists():
+                errors.append(
+                    f"Codex 发现入口出现第二份 {copied_dir}/；主链资源只能留在 canonical skill")
+
+    next_command = "novel.cli operator next <SID> --base <BASE> --json"
+    if next_command not in text:
+        errors.append("SKILL.md 主循环没有先调用确定性 `operator next --json`")
+    else:
+        counters["operator_next_contract"] += 1
+        if ("scripts/run_step.py" in text
+                and text.index(next_command) > text.index("scripts/run_step.py")):
+            errors.append("SKILL.md 在取得 operator next action 之前就进入了 run_step")
+    if "每次节点、typed approval、人工修订或恢复动作结束后" not in text:
+        errors.append("SKILL.md 没有要求每次状态变更后重新取得 operator next action")
+    permit_command = (
+        "novel.cli operator permit <SID> <node> --base <BASE> --json -- [flags]")
+    permit_hash_arg = "--operator-permit-sha256 <PERMIT_SHA256>"
+    if permit_command not in text:
+        errors.append("SKILL.md 主路没有为 exact node/flags 调用 operator permit")
+    if permit_hash_arg not in text:
+        errors.append("SKILL.md 的 run_step 主路没有携带 execution permit SHA-256")
+    if permit_command in text and permit_hash_arg in text:
+        counters["operator_execution_permit_contract"] += 1
+
+    workflow_path = SKILL_DIR / "references" / "workflow.md"
+    delegated_path = SKILL_DIR / "references" / "delegated-review.md"
+    workflow = skill_texts.get(workflow_path, "")
+    delegated = skill_texts.get(delegated_path, "")
+    if permit_command not in workflow:
+        errors.append("workflow.md 没有为 exact node/flags 调用 operator permit")
+    if permit_hash_arg not in workflow:
+        errors.append("workflow.md 的 run_step 命令没有携带 execution permit SHA-256")
+    for name, body in (("workflow.md", workflow),
+                       ("delegated-review.md", delegated)):
+        if "scripts/finalize_review.py" not in body:
+            errors.append(f"{name} 没有指向唯一 canonical finalize_review.py 收尾")
+        for legacy_finalizer in (
+                "scripts/collect_final_evidence.py",
+                "scripts/sync_review_evidence.py",
+                "scripts/validate_review.py",
+                "scripts/verify_delivery.py"):
+            if legacy_finalizer in body:
+                errors.append(
+                    f"{name} 仍把兼容脚本 {legacy_finalizer} 写进主操作规程；"
+                    "诊断入口只在 maintenance.md 登记")
+
     # Stage0 快速审阅工作包是一条只读能力契约：文档若提到它，文件、生产读取缝与
     # “不审批/不写盘”必须一起存在。只验调用的生产名字，不在这里复制任何模式词表。
     workpack_path = SKILL_DIR / "scripts" / "stage0_review_workpack.py"
-    delegated_path = SKILL_DIR / "references" / "delegated-review.md"
     maintenance_path = SKILL_DIR / "references" / "maintenance.md"
     delegated = skill_texts.get(delegated_path, "")
     maintenance = skill_texts.get(maintenance_path, "")

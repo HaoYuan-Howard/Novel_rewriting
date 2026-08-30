@@ -73,6 +73,41 @@ def _code_strings(tree: ast.AST) -> list[ast.Constant]:
             and id(n) not in docs]
 
 
+def test_every_approval_post_holds_write_admission_and_gets_stay_read_only():
+    """审批 currentness+write 是一个窗口；纯读 GET 不能顺手取得 writer。"""
+    path = os.path.join(API_DIR, 'routes', 'approvals.py')
+    tree = ast.parse(open(path, encoding='utf-8').read(), filename=path)
+
+    def is_route(function: ast.FunctionDef, method: str) -> bool:
+        return any(
+            isinstance(decorator, ast.Call)
+            and isinstance(decorator.func, ast.Attribute)
+            and decorator.func.attr == method
+            and isinstance(decorator.func.value, ast.Name)
+            and decorator.func.value.id == 'router'
+            for decorator in function.decorator_list
+        )
+
+    functions = [
+        node for node in tree.body if isinstance(node, ast.FunctionDef)]
+    posts = [function for function in functions if is_route(function, 'post')]
+    gets = [function for function in functions if is_route(function, 'get')]
+    assert posts and gets, 'approvals 路由扫描为空，守卫没有查到真实入口'
+
+    def scope_calls(function: ast.FunctionDef) -> list[ast.Call]:
+        return [
+            node for node in ast.walk(function)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == 'operation_scope'
+        ]
+
+    assert all(len(scope_calls(function)) == 1 for function in posts), {
+        function.name: len(scope_calls(function)) for function in posts}
+    assert all(not scope_calls(function) for function in gets), {
+        function.name: len(scope_calls(function)) for function in gets}
+
+
 # ───────────────────────── `R-11.1` 只绑回环 ─────────────────────────
 
 #: 会把服务暴露出去的那几个绑定地址。

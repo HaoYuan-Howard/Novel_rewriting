@@ -19,6 +19,8 @@ if str(ROOT) not in sys.path:
 from collect_final_evidence import collect  # noqa: E402
 from novel import paths  # noqa: E402
 from novel.appendlog import path_transaction_lock  # noqa: E402
+from novel.errors import NovelError  # noqa: E402
+from novel.orchestrator.write_admission import operation_scope  # noqa: E402
 
 
 QUALITY = ('[[operator-quality:start]]', '[[operator-quality:end]]')
@@ -257,22 +259,33 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument('--review', help='默认使用 novel.paths.review_package_path')
     args = parser.parse_args(argv)
 
-    facts = collect(
-        args.base, args.sid, started_at=args.started_at,
-        start_code_version=args.start_code_version)
-    novel_dir = paths.resolve_novel_dir(args.base, args.sid)
-    review = (Path(args.review).resolve() if args.review else
-              paths.review_package_path(novel_dir))
-    if not review.is_file():
-        print(f'FAIL 终审包不存在：{review}')
-        return 1
     try:
-        original_bytes = review.read_bytes()
-        updated = render(original_bytes.decode('utf-8'), facts)
-        commit_review(
-            review, updated, expected_original=original_bytes)
+        novel_dir = paths.resolve_novel_dir(args.base, args.sid)
+        review = (Path(args.review).resolve() if args.review else
+                  paths.review_package_path(novel_dir))
+        details = {
+            'started_at': args.started_at,
+            'start_code_version': args.start_code_version,
+            'review_path': str(review),
+        }
+        # 兼容入口仍可独立使用；Commander 子进程则必须归属 frozen parent，
+        # collect 到 CAS commit 的整个窗口持 generic claim。canonical 新跑法仍是
+        # finalize_review.py，本入口不冒充 execution permit。
+        with operation_scope(
+                args.base, args.sid, operation='sync-review-evidence',
+                details=details):
+            facts = collect(
+                args.base, args.sid, started_at=args.started_at,
+                start_code_version=args.start_code_version)
+            if not review.is_file():
+                print(f'FAIL 终审包不存在：{review}')
+                return 1
+            original_bytes = review.read_bytes()
+            updated = render(original_bytes.decode('utf-8'), facts)
+            commit_review(
+                review, updated, expected_original=original_bytes)
     except (
-        OSError, UnicodeDecodeError, ValueError,
+        NovelError, OSError, UnicodeDecodeError, ValueError,
         ReviewConflictError, ReviewCommitError,
     ) as exc:
         print(f'FAIL {type(exc).__name__}: {exc}')

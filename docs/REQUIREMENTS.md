@@ -118,6 +118,22 @@ snapshot，canonical 终审只 collect 一次、内存 sync/validate 通过后�
 `delivery.assess` 独立关闭。operator phase 遥测只拆 attributed/unattributed 墙钟；Commander 宿主
 模型 usage 仍越不过进程边界，不得由墙钟估 token 或成本。
 
+本批又完成五项**零模型接线**：`operator next` 从 queue 的同一规划落点纯读给出三态下一动作；
+`operator permit` 把 ready exact action 或生产登记的 blocked recovery 铸成独立许可，绑定 current 读面、
+node/flags、贵贱/写盘效应及外部输入原始字节，blocked action hash 本身不再冒充执行权；headless
+`run_step.py` 在 preview/execute 都重铸 permit，claim 覆盖 root 与 canonical follow-check，子 CLI 在任何
+producer/LLM 前复核 active claim、permit envelope、step index 与逐字 argv。一份 canonical skill 以 Agent
+driver / legacy LLM 两个 execution profile 复用，Commander 冻结并复核入口、references、scripts、assets
+的整树字节 hash；Commander spawn 前先取得 per-parent OS owner lease，再打开 durable admission gate，node execute 与 approval、response-repair、
+终审、operator telemetry 等非 node 写入口都在副作用前 claim。顶层返回后 close 并持续等待 active claim
+与 execution beacon 两面归零，300 秒只报警/cancel、仍持书锁与并发槽，越线 run 最终只能 unknown；
+Claude launcher 同时禁用后台任务，服务重启后 unresolved gate 继续阻断同书 agent/job/trash/API 写手并
+让 queue startup 整 lane 跳过；孤儿及 admission/beacon 坏尾只有 hash-bound reconcile 恢复，live owner
+即使 force 也不可越过，迟到事件会使旧 reconcile seal 失效。正常 exit 0 后若 fresh
+delivery 仍 stopped 且 next ready，记 `commander_early_exit`，本批不自动追加模型 turn。新增
+`tools/verify_agent_e2e.py` 把 current 产物、HARD/UNVER、审批、账本、session、adoption、operator phase
+与 fresh delivery 关闭式联结。以上只证明调度、身份与验收器的工程路径，不是一次真实 agent-only 成书。
+
 Stage6 另有默认关闭的 `compact-v1` JSON 与独立 session B-worker 微错峰实验臂；默认请求仍保持
 `pretty-v1 + 0ms`。compact 目前只证明字节语义等价与工程可运行，静态公共前缀也不保证 provider
 cache hit。是否切默认、是否采用错峰，以及账本 prompt/cache/墙钟的真实收益，必须放进下面同一批
@@ -133,6 +149,9 @@ cache hit。是否切默认、是否采用错峰，以及账本 prompt/cache/墙
   reasoning effort；preview/start/queue 冻结同一快照，两项授权继续独立，标准代批只走 typed CLI façade。
 - 已接通 hash-bound Stage6/7 审批 workpack、current 决定幂等跳过、invocation-scoped state/inbox
   snapshot、collect-once finalizer 与 operator phase 遥测；这些都是 0 模型工程能力，不替代付费质量验收。
+- 已接通 queue 同源的确定性 `operator next`、独立 exact execution permit、canonical skill 整树 hash、
+  node/generic admission claim、close + execution beacon 双面 drain、hash-bound reconcile 与
+  `tools/verify_agent_e2e.py` 的 agent-only 整书验收器；它们没有产生模型响应。
 - 用 current-schema 真实整书跑到 Stage7 并核对正式产物、双账、会话审计、审批与终审包后，才把
   agent 设为 Commander 主路的默认执行路径。DeepSeek 长期保留为独立、显式且不可自动触发的
   legacy LLM 路径，不作为 agent 的静默 fallback；后续另行把现役 LLM 客户端抽成供应商中立基类，
@@ -249,6 +268,9 @@ generation packet。TODO-31 的 Stage4→5 减法并入本批。
 
 - 执行面：单臂、agent executor、`max_turns=4`、legacy 路禁用；profile 在首个付费调用前
   由用户批准并写入 manifest，能力不可用就停止、不 fallback。
+- 验收执行面已经有 0 模型纯读入口 `tools/verify_agent_e2e.py`；它只能消费一条真实 Commander run 的
+  `run_id` 并关闭式联结产物、闸门与三本账，不能在尚未开跑时预造 PASS。当前尚无满足本节条件的
+  current-schema Stage7 run，因此本工具没有 P3 通过结果，`default_profiles` 继续为 null。
 - 稳定性读数（全部由 `tools/workflow_metrics.py` 从账本与审计现算，不换算金额）：
   逐逻辑单元**首次交付率**、逐公开节点**首次授权运行正式落盘率**、wire 次数与重采次数、
   内容拒绝次数、`.INVALID` 次数、

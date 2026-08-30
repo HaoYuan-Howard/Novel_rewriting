@@ -154,7 +154,25 @@ schema version 写），不按记忆手抄。
 
 非节点的第九个写入面是终审包 `<novel-dir>/<书名>_review.md`（落书目录根，不在任何 `stageN/` 下；确定路径由启动 prompt 给出）：只供用户读取，可随跑更新，不得承担产物修复功能。
 
-不得直接修改：正式 JSON/TXT、成书、`_service/*.jsonl`、`.llm_cache/`、`_rounds/` 历史、旧 run 的输出目录。`mark` 是写进度信标的唯一入口。
+不得直接修改：正式 JSON/TXT、成书、`_service/*.jsonl`、`.llm_cache/`、`_rounds/` 历史、旧 run 的输出目录。正常信标只由 runner 经 `mark` 写入；坏尾恢复也不能手改 JSONL。
+
+### Append-only 编排账的 non-LF 坏尾
+
+进程若恰在最后一行 LF 提交前被终止，admission 与 beacon 写口都会关闭式拒绝继续拼接。只能由
+**Commander 子上下文之外**的操作员先取当前 committed-prefix/tail 双 hash 主体，再用完整
+`actor + reason + subject_sha256` 应用；不得加 `--force`，不得补 JSON、补 LF 或猜一条 end：
+
+```text
+<PY> -X utf8 -u -m novel.cli reconcile --base <BASE> --beacon-repair-tail
+<PY> -X utf8 -u -m novel.cli reconcile --base <BASE> --beacon-repair-tail --actor <ACTOR> --reason <REASON> --subject-sha256 <SUBJECT_SHA256>
+<PY> -X utf8 -u -m novel.cli reconcile --base <BASE> --admission-repair-tail
+<PY> -X utf8 -u -m novel.cli reconcile --base <BASE> --admission-repair-tail --actor <ACTOR> --reason <REASON> --subject-sha256 <SUBJECT_SHA256>
+```
+
+apply 只把 non-LF 原始字节隔离到 `_service/*_tail_repairs/` 并截回已提交前缀，不代签旧
+execution 或 admission 已完成。Beacon 修复后由真实写手重放缺失的完整 end；孤儿 admission 仍须另取
+`--admission-parent-run-id <RUN_ID>` 的 current subject 并走 typed reconcile。任一主体漂移都重新 inspect，
+不得沿用旧 SHA。
 
 `--apply-edit` 的路径解析**逐层不同，不要当成通则**（见 [经验库](field-notes.md) FN-016）：
 `stage4.plan` / `stage6.hook` / `stage7.rename` 按**书目录**解析相对路径，
@@ -258,16 +276,18 @@ batch，只走 Stage2 定向恢复与 Pro 重建；
 `TARGET_RUN_ID`，并在 emit 与 apply 两步中复用**同一个** target run。仍须经本 skill 的唯一
 runner 先 preview、再执行；下面四条中的 `<RUNNER>` 是
 `.claude/skills/novel-pipeline-operator/scripts/run_step.py`：
+先分别把 emit 与 apply 的 exact node flags 交给 `operator permit`，固化返回的
+`<EMIT_PERMIT_SHA256>` / `<APPLY_PERMIT_SHA256>`；两种动作不得共用一枚许可。
 
 ⚠ 这两个入口刻意不开放给 `POST /api/jobs/preview` 或 `POST /api/jobs`：通用 HTTP 作业每次都会
 生成新的 job/run id，无法复用工作包已经绑定的 target。不要从作业面板启动，也不要删除
 workpack subject 里的 target 绑定；只使用下面可显式传同一个 `--run-id` 的 CLI runner。
 
 ```powershell
-<PY> -X utf8 -u <RUNNER> --base <BASE> --sid <SID> --expect-code-version <START_CODE> --run-id <TARGET_RUN_ID> stage5.write -- --emit-prepared-recovery-workpack <SOURCE_RUN_ID>
-<PY> -X utf8 -u <RUNNER> --base <BASE> --sid <SID> --expect-code-version <START_CODE> --run-id <TARGET_RUN_ID> --execute stage5.write -- --emit-prepared-recovery-workpack <SOURCE_RUN_ID>
-<PY> -X utf8 -u <RUNNER> --base <BASE> --sid <SID> --expect-code-version <START_CODE> --run-id <TARGET_RUN_ID> stage5.write -- --recover-prepared <SOURCE_RUN_ID> --actor <ACTOR> --reason <REASON> --subject-sha256 <WORKPACK_SUBJECT_SHA256>
-<PY> -X utf8 -u <RUNNER> --base <BASE> --sid <SID> --expect-code-version <START_CODE> --run-id <TARGET_RUN_ID> --execute stage5.write -- --recover-prepared <SOURCE_RUN_ID> --actor <ACTOR> --reason <REASON> --subject-sha256 <WORKPACK_SUBJECT_SHA256>
+<PY> -X utf8 -u <RUNNER> --base <BASE> --sid <SID> --expect-code-version <START_CODE> --operator-permit-sha256 <EMIT_PERMIT_SHA256> --run-id <TARGET_RUN_ID> stage5.write -- --emit-prepared-recovery-workpack <SOURCE_RUN_ID>
+<PY> -X utf8 -u <RUNNER> --base <BASE> --sid <SID> --expect-code-version <START_CODE> --operator-permit-sha256 <EMIT_PERMIT_SHA256> --run-id <TARGET_RUN_ID> --execute stage5.write -- --emit-prepared-recovery-workpack <SOURCE_RUN_ID>
+<PY> -X utf8 -u <RUNNER> --base <BASE> --sid <SID> --expect-code-version <START_CODE> --operator-permit-sha256 <APPLY_PERMIT_SHA256> --run-id <TARGET_RUN_ID> stage5.write -- --recover-prepared <SOURCE_RUN_ID> --actor <ACTOR> --reason <REASON> --subject-sha256 <WORKPACK_SUBJECT_SHA256>
+<PY> -X utf8 -u <RUNNER> --base <BASE> --sid <SID> --expect-code-version <START_CODE> --operator-permit-sha256 <APPLY_PERMIT_SHA256> --run-id <TARGET_RUN_ID> --execute stage5.write -- --recover-prepared <SOURCE_RUN_ID> --actor <ACTOR> --reason <REASON> --subject-sha256 <WORKPACK_SUBJECT_SHA256>
 ```
 
 前两条预览并执行纯读 emit，执行结果打印工作包；后两条预览并执行 apply，必须原样提交工作包的

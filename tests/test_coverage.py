@@ -42,10 +42,11 @@ _R_SECTION_SIZES = {
     # `R-3.18` 的 HARD 判据拆开登记。
     # R-5 于 2026-08-25 增至 28：`R-5.10d` 把 compiled 计划的 A/B 完整字节
     # SHA 复核从结构声明闭合为 freshness / HARD / 写盘后置条件。
-    # R-11 于 2026-08-27 增至 20：`R-11.14` 冻结 agent capability 的单一事实源，
+    # R-11 于 2026-08-30 增至 21：`R-11.14` 冻结 agent capability 的单一事实源，
     # `R-11.15` ~ `R-11.17` 依次冻结 Stage2 global / blueprint 与 Stage6 semantic，
     # `R-11.18` 再冻结 Phase5 五个 producer，direct executor 收口为 8 节点 / 12 组合；
-    # `R-11.19` 冻结 provider-neutral Commander、typed 代批与页面双角色配置。
+    # `R-11.19` 冻结 provider-neutral Commander、typed 代批与页面双角色配置；
+    # `R-11.20` 冻结确定性 next/permit、整树 skill 指纹与 node/generic admission 生命周期。
     # R-2 于 2026-08-28 增至 29：`R-2.19` 冻结复核项的 blocking / disclosure 分级。
     # R-12 于 2026-08-28 增至 12：`R-12.2c` 冻结 Claude structured delivery
     # 的唯一出口、真实 stdin hash 与 schema-less fallback 边界。
@@ -67,7 +68,7 @@ _R_SECTION_SIZES = {
     # R-13/R-14 分别增至 9/8：operator phase 遥测与 invocation snapshot/finalizer。
     'R-0': 16, 'R-1': 16, 'R-2': 29, 'R-3': 32, 'R-4': 18,
     'R-5': 33, 'R-6': 12, 'R-7': 47, 'R-8': 23, 'R-9': 28,
-    'R-10': 34, 'R-11': 20, 'R-12': 12, 'R-13': 9, 'R-14': 8,
+    'R-10': 34, 'R-11': 21, 'R-12': 12, 'R-13': 9, 'R-14': 8,
 }
 
 

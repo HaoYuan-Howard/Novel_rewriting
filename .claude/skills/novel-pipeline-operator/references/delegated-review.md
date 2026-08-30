@@ -406,8 +406,9 @@ decision subject SHA-256 与 workpack SHA-256。若 `disposition=already_current
 - 第一屏让用户看见交付状态、成书路径、真正需要审阅的风险和建议结论。
 - 每个 badge 都带命中数/分母、freshness 和活动产物标识。
 - 每个代批决定都包含证据、落选项和不可验证余额。
-- 先用本次 preflight 的 `started_at` 与 `start_code_version` 运行
-  `scripts/sync_review_evidence.py`，由脚本同步质量表、退出序列、机器锚点和账本；不要手抄这些事实。
+- 在运行过程中只补人工内容判断、代批证据与恢复说明；机器质量表、退出序列、机器锚点和账本统一由
+  `scripts/finalize_review.py` 的单次 collect → render → validate → 原子提交主路生成，不先手抄、
+  不另跑一条同步脚本制造第二份机器事实快照。
 - 最终成本只以 `<base>/_service/ledger.jsonl` 为权威源。`started_at` 只选择本次 beacon/退出序列，
   本次表按 canonical `run_id` 精确联结 ledger，再按节点或角色分栏；节点 executor 使用真实 node，
   整书 Commander 明确列为 `role:commander`，绝不塞进 `unknown` 或伪造一个 NODES id。

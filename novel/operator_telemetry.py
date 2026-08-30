@@ -46,6 +46,7 @@ from contracts.schema.orchestration import OperatorPhaseEvent
 from novel import run_identity
 from novel.appendlog import append_line_under_process_lock, append_transaction
 from novel.paths import service_dir
+from novel.orchestrator.write_admission import WriteAdmission, operation_scope
 
 
 OPERATOR_PHASE_DIRNAME = 'operator_phases'
@@ -313,6 +314,33 @@ def fold(events: Sequence[OperatorPhaseEvent]) -> tuple[OperatorSessionRecord, .
     return _fold(events)
 
 
+def _session_start_for_write(
+        base: str | Path, session_id: str) -> OperatorPhaseEvent:
+    """只读 session 首账确定 sid/parent；事务内仍会完整 fold 后再追加。"""
+    path = telemetry_path(base, session_id)
+    start = _decode_session_start(path)
+    if start is None:
+        if path.is_file() and path.stat().st_size:
+            raise ValueError(
+                'operator telemetry 留有被 kill 截断的无换行 session start；'
+                '不能确定写入 sid')
+        raise ValueError(
+            f'operator session {session_id!r} 不存在，不能确定写入 sid')
+    if start.session_id != session_id:
+        raise ValueError('operator session 首账身份与请求 session_id 不一致')
+    return start
+
+
+def _require_session_parent(
+        session: OperatorPhaseEvent, admitted: WriteAdmission) -> None:
+    """Commander 只能续写自己创建的 telemetry session，sid 相同也不能串账。"""
+    if (admitted.parent_run_id is not None
+            and session.parent_run_id != admitted.parent_run_id):
+        raise ValueError(
+            'operator session 的 parent_run_id 与当前 Commander frozen context '
+            '不一致；拒绝跨会话追加')
+
+
 def _append_transactional(
         base: str | Path, session_id: str, build: Any,
 ) -> OperatorPhaseEvent:
@@ -344,12 +372,31 @@ def start_session(
         session_id: str | None = None, started_at_ms: int | None = None,
 ) -> OperatorPhaseEvent:
     session_id = session_id or str(uuid.uuid4())
+    if parent_run_id is None:
+        # Headless Commander 已把唯一外层身份放进 NOVEL_RUN_ID。skill 的固定
+        # session-start 命令不应再手抄一遍；显式参数仍用于交互式恢复/测试。
+        parent_run_id = run_identity.inherited_run_id()
     event = OperatorPhaseEvent(
         session_id=session_id, sid=sid, source=source,
         kind='session_started', ts_ms=_now_ms() if started_at_ms is None else started_at_ms,
         parent_run_id=parent_run_id, start_code_version=start_code_version,
     )
-    return _append_transactional(base, session_id, lambda _events: event)
+    details = {
+        'session_id': session_id,
+        'start_code_version': start_code_version,
+        'source': source,
+        'parent_run_id': parent_run_id,
+        'started_at_ms': started_at_ms,
+    }
+    with operation_scope(
+            base, sid, operation='operator-session-start',
+            details=details) as admitted:
+        if (admitted.parent_run_id is not None
+                and event.parent_run_id != admitted.parent_run_id):
+            raise ValueError(
+                '新 operator session 的 parent_run_id 与当前 Commander '
+                'frozen context 不一致')
+        return _append_transactional(base, session_id, lambda _events: event)
 
 
 def begin_phase(
@@ -360,12 +407,16 @@ def begin_phase(
 ) -> OperatorPhaseEvent:
     checked_session = _identity(session_id, 'session_id')
     phase_execution_id = phase_execution_id or str(uuid.uuid4())
+    session = _session_start_for_write(base, checked_session)
 
     def build(events: list[OperatorPhaseEvent]) -> OperatorPhaseEvent:
         records = {record.session_id: record for record in _fold(events)}
         record = records.get(checked_session)
         if record is None:
             raise ValueError(f'找不到 operator session {checked_session!r}')
+        if (record.sid, record.parent_run_id) != (
+                session.sid, session.parent_run_id):
+            raise ValueError('operator session 的 sid/parent 在 admission 后发生漂移')
         if record.ended_at_ms is not None:
             raise ValueError('operator session 已结束，不能再开始 phase')
         return OperatorPhaseEvent(
@@ -376,7 +427,20 @@ def begin_phase(
             run_id=run_id, evidence_sha256=evidence_sha256,
         )
 
-    return _append_transactional(base, checked_session, build)
+    details = {
+        'session_id': checked_session,
+        'phase_execution_id': phase_execution_id,
+        'phase': phase,
+        'action': action,
+        'run_id': run_id,
+        'evidence_sha256': evidence_sha256,
+        'started_at_ms': started_at_ms,
+    }
+    with operation_scope(
+            base, session.sid, operation='operator-phase-start',
+            details=details) as admitted:
+        _require_session_parent(session, admitted)
+        return _append_transactional(base, checked_session, build)
 
 
 def finish_phase(
@@ -388,12 +452,16 @@ def finish_phase(
 ) -> OperatorPhaseEvent:
     checked_session = _identity(session_id, 'session_id')
     checked_phase = _identity(phase_execution_id, 'phase_execution_id')
+    session = _session_start_for_write(base, checked_session)
 
     def build(events: list[OperatorPhaseEvent]) -> OperatorPhaseEvent:
         records = {record.session_id: record for record in _fold(events)}
         record = records.get(checked_session)
         if record is None:
             raise ValueError(f'找不到 operator session {checked_session!r}')
+        if (record.sid, record.parent_run_id) != (
+                session.sid, session.parent_run_id):
+            raise ValueError('operator session 的 sid/parent 在 admission 后发生漂移')
         matches = [
             item for item in record.phases
             if item.phase_execution_id == checked_phase
@@ -422,7 +490,21 @@ def finish_phase(
             evidence_sha256=evidence_sha256, error_kind=error_kind,
         )
 
-    return _append_transactional(base, checked_session, build)
+    details = {
+        'session_id': checked_session,
+        'phase_execution_id': checked_phase,
+        'state': state,
+        'exit_code': exit_code,
+        'evidence_sha256': evidence_sha256,
+        'error_kind': error_kind,
+        'ended_at_ms': ended_at_ms,
+        'measured_elapsed_ms': measured_elapsed_ms,
+    }
+    with operation_scope(
+            base, session.sid, operation='operator-phase-end',
+            details=details) as admitted:
+        _require_session_parent(session, admitted)
+        return _append_transactional(base, checked_session, build)
 
 
 def finish_session(
@@ -430,12 +512,16 @@ def finish_session(
         end_code_version: str, ended_at_ms: int | None = None,
 ) -> OperatorPhaseEvent:
     checked_session = _identity(session_id, 'session_id')
+    session = _session_start_for_write(base, checked_session)
 
     def build(events: list[OperatorPhaseEvent]) -> OperatorPhaseEvent:
         records = {record.session_id: record for record in _fold(events)}
         record = records.get(checked_session)
         if record is None:
             raise ValueError(f'找不到 operator session {checked_session!r}')
+        if (record.sid, record.parent_run_id) != (
+                session.sid, session.parent_run_id):
+            raise ValueError('operator session 的 sid/parent 在 admission 后发生漂移')
         if record.ended_at_ms is not None:
             raise ValueError('operator session 已结束，不能重复结束')
         ts_ms = _now_ms() if ended_at_ms is None else ended_at_ms
@@ -448,7 +534,17 @@ def finish_session(
             duration_source='wall_clock', end_code_version=end_code_version,
         )
 
-    return _append_transactional(base, checked_session, build)
+    details = {
+        'session_id': checked_session,
+        'state': state,
+        'end_code_version': end_code_version,
+        'ended_at_ms': ended_at_ms,
+    }
+    with operation_scope(
+            base, session.sid, operation='operator-session-end',
+            details=details) as admitted:
+        _require_session_parent(session, admitted)
+        return _append_transactional(base, checked_session, build)
 
 
 def summarize(

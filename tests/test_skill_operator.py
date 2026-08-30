@@ -31,16 +31,20 @@ from types import SimpleNamespace
 import pytest
 
 from contracts.rules import REGISTRY
+from contracts.schema.api import ExecutionPermit
 from contracts.schema.orchestration import AgentProfile, PipelineAgentProfiles
 from contracts.schema.report import finding
 from novel.errors import UpstreamMissing
 from novel.prov import EdgeVerdict, FreshnessReport
 from novel.report import build, render
 from novel.report.findings import ran, unverifiable
+from novel.orchestrator.operator import canonical_sha256
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SKILL_DIR = REPO_ROOT / '.claude' / 'skills' / 'novel-pipeline-operator'
 VALIDATOR = SKILL_DIR / 'scripts' / 'validate_skill.py'
+CODEX_SKILL_ENTRY = (
+    REPO_ROOT / '.agents' / 'skills' / 'novel-pipeline-operator' / 'SKILL.md')
 
 
 def _validator():
@@ -93,6 +97,42 @@ def test_skill_validator_reports_no_drift():
         % len(errors) + '\n'.join(f'  - {e}' for e in errors))
 
 
+def test_codex_discovery_entry_is_a_thin_pointer_to_the_single_canonical_skill():
+    """Windows core.symlinks=false 也能检出的普通文件 shim，不得长成第二套主链。"""
+    assert CODEX_SKILL_ENTRY.is_file()
+    shim = CODEX_SKILL_ENTRY.read_text(encoding='utf-8')
+    assert 'name: novel-pipeline-operator' in shim
+    assert '../../../.claude/skills/novel-pipeline-operator/SKILL.md' in shim
+    for duplicated in ('## 执行主循环', 'scripts/run_step.py', '## 完成定义'):
+        assert duplicated not in shim, f'Codex 发现入口复制了 canonical 内容：{duplicated}'
+    for copied_dir in ('references', 'scripts', 'assets'):
+        assert not (CODEX_SKILL_ENTRY.parent / copied_dir).exists(), \
+            f'.agents 发现入口出现第二份 {copied_dir}/'
+
+
+def test_runtime_host_and_executor_mode_are_two_routed_axes():
+    runtime = (SKILL_DIR / 'references' / 'runtime-profiles.md').read_text(encoding='utf-8')
+    execution = (SKILL_DIR / 'references' / 'execution-modes.md').read_text(encoding='utf-8')
+    skill = (SKILL_DIR / 'SKILL.md').read_text(encoding='utf-8')
+
+    for heading in ('## 交互式主会话', '## headless agent', '## 只读进度观察'):
+        assert heading in runtime
+    for forbidden in ('doctor --llm-transport', 'response-repair', 'ResponseRepairRequired'):
+        assert forbidden not in runtime, f'宿主文档仍夹带执行模式过程：{forbidden}'
+    assert '## Agent driver' in execution and '## Legacy LLM transport' in execution
+    assert '禁止自动降级' in execution
+    assert '(references/runtime-profiles.md)' in skill
+    assert '(references/execution-modes.md)' in skill
+
+
+def test_skill_gets_deterministic_next_action_before_running_a_step():
+    skill = (SKILL_DIR / 'SKILL.md').read_text(encoding='utf-8')
+    command = 'novel.cli operator next <SID> --base <BASE> --json'
+    assert command in skill
+    assert skill.index(command) < skill.index('scripts/run_step.py')
+    assert '每次节点、typed approval、人工修订或恢复动作结束后' in skill
+
+
 def test_run_step_executes_the_production_argv_and_brackets_it_with_beacons(
         monkeypatch):
     """复用 runner 不手拼节点 argv；start/end 信标必须包住同一条生产命令。"""
@@ -115,9 +155,13 @@ def test_run_step_executes_the_production_argv_and_brackets_it_with_beacons(
 
     monkeypatch.setattr(runner.subprocess, 'run', fake_run)
     monkeypatch.setattr(runner.prov, 'code_version', lambda: 'code-v1')
+    permit = _execution_permit()
+    monkeypatch.setattr(
+        runner.operator_planner, 'permit', lambda *_args, **_kwargs: permit)
 
     rc = runner.main([
         '--base', 'E:/outputs', '--sid', '42', '--expect-code-version', 'code-v1',
+        '--operator-permit-sha256', permit.permit_sha256,
         'stage2.global', '--execute', '--run-id', 'resume-42',
     ])
 
@@ -129,16 +173,57 @@ def test_run_step_executes_the_production_argv_and_brackets_it_with_beacons(
     assert 'mark' in calls[2][0]
     assert calls[2][0][calls[2][0].index('--phase') + 1] == 'end'
     assert calls[2][0][calls[2][0].index('--exit') + 1] == '0'
+    start_execution = calls[0][0][calls[0][0].index('--execution-id') + 1]
+    end_execution = calls[2][0][calls[2][0].index('--execution-id') + 1]
+    assert start_execution == end_execution
+    assert runner.run_identity.check_run_id(start_execution) == start_execution
     assert built[0][0] == ('stage2.global', '42', [])
     assert all(
         kwargs['env'][runner.run_identity.RUN_ID_ENV] == 'resume-42'
         for _argv, kwargs in calls)
     expected_note = (
         'operator_evidence_sha256='
-        + runner.hashlib.sha256(runner._evidence_bytes([step])).hexdigest())
+        + runner.hashlib.sha256(
+            runner._evidence_bytes([step], None, permit)).hexdigest())
     assert calls[0][0][calls[0][0].index('--note') + 1] == expected_note
     assert calls[2][0][calls[2][0].index('--note') + 1] == expected_note
     assert all('shell' not in kwargs for _argv, kwargs in calls)
+
+
+def test_run_step_closes_execution_with_crash_when_node_spawn_raises(monkeypatch):
+    runner = _operator_script('run_step')
+    step = SimpleNamespace(
+        label='stage2 全局事实',
+        argv=['python', '-m', 'novel.cli', 'run', 'stage2.global', '42'],
+        cwd=str(REPO_ROOT), paid=True, writes='stage2/global_grounding.json',
+        note=None)
+    calls: list[list[str]] = []
+    monkeypatch.setattr(runner, 'build_steps', lambda *_args, **_kwargs: [step])
+    monkeypatch.setattr(runner.prov, 'code_version', lambda: 'code-v1')
+    permit = _execution_permit()
+    monkeypatch.setattr(
+        runner.operator_planner, 'permit', lambda *_args, **_kwargs: permit)
+
+    def fake_run(argv, **_kwargs):
+        calls.append(list(argv))
+        if 'mark' in argv:
+            return SimpleNamespace(returncode=0)
+        raise OSError('synthetic spawn failure')
+
+    monkeypatch.setattr(runner.subprocess, 'run', fake_run)
+
+    with pytest.raises(OSError, match='synthetic spawn failure'):
+        runner.main([
+            '--base', 'E:/outputs', '--sid', '42',
+            '--expect-code-version', 'code-v1', '--execute',
+            '--operator-permit-sha256', permit.permit_sha256, 'stage2.global',
+        ])
+
+    start, _node, end = calls
+    assert start[start.index('--execution-id') + 1] == (
+        end[end.index('--execution-id') + 1])
+    assert end[end.index('--phase') + 1] == 'end'
+    assert end[end.index('--exit') + 1] == str(runner.X.CRASH)
 
 
 def _commander_profiles() -> PipelineAgentProfiles:
@@ -151,6 +236,31 @@ def _commander_profiles() -> PipelineAgentProfiles:
             reasoning_effort='high', execution_mode='standard'),
         executor_overrides={},
     )
+
+
+def _execution_permit(
+        *, base: str = 'E:/outputs', sid: str = '42',
+        node: str = 'stage2.global', flags: list[str] | None = None,
+        code_version: str = 'code-v1', surface_seal: str = 'a' * 64,
+        operator_action_sha256: str = 'b' * 64) -> ExecutionPermit:
+    """生成可过 canonical envelope 校验的最小 ready permit。"""
+    payload = {
+        'base': base,
+        'sid': sid,
+        'code_version': code_version,
+        'surface_seal': surface_seal,
+        'next_state': 'ready',
+        'waiting_on': None,
+        'kind': 'ready',
+        'node': node,
+        'flags': list(flags or []),
+        'paid': True,
+        'writes': 'stage2/global_grounding.json',
+        'operator_action_sha256': operator_action_sha256,
+        'external_inputs': [],
+    }
+    return ExecutionPermit(
+        **payload, permit_sha256=canonical_sha256(payload))
 
 
 def test_run_step_projects_frozen_executor_and_egress_into_production_steps(
@@ -180,6 +290,9 @@ def test_run_step_projects_frozen_executor_and_egress_into_production_steps(
         runner.commander_context, 'load_from_environment',
         lambda *_args, **_kwargs: context)
     monkeypatch.setattr(runner.prov, 'code_version', lambda: 'code-v1')
+    permit = _execution_permit(base=str(tmp_path.resolve()))
+    monkeypatch.setattr(
+        runner.operator_planner, 'permit', lambda *_args, **_kwargs: permit)
     monkeypatch.setattr(
         runner, 'build_steps',
         lambda *args, **kwargs: built.append((args, kwargs)) or [step])
@@ -188,6 +301,7 @@ def test_run_step_projects_frozen_executor_and_egress_into_production_steps(
     rc = runner.main([
         '--base', str(tmp_path), '--sid', '42',
         '--expect-code-version', 'code-v1', '--evidence-json', str(evidence),
+        '--operator-permit-sha256', permit.permit_sha256,
         'stage2.global',
     ])
 
@@ -195,8 +309,9 @@ def test_run_step_projects_frozen_executor_and_egress_into_production_steps(
     assert built[0][1]['executor_profile'] == profile
     assert built[0][1]['egress_authorized'] is True
     payload = json.loads(evidence.read_bytes())
-    assert payload['schema'] == 'novel-operator-step-evidence-v2'
+    assert payload['schema'] == 'novel-operator-step-evidence-v3'
     assert payload['commander']['run_id'] == 'outer-1'
+    assert payload['execution_permit'] == permit.model_dump(mode='json')
     assert payload['steps'][0]['executor_profile'] == profile.model_dump(mode='json')
     assert payload['steps'][0]['egress_authorized'] is True
 
@@ -224,6 +339,9 @@ def test_run_step_with_frozen_profile_refuses_execute_without_both_authorization
         runner.commander_context, 'load_from_environment',
         lambda *_args, **_kwargs: context)
     monkeypatch.setattr(runner.prov, 'code_version', lambda: 'code-v1')
+    permit = _execution_permit(base=str(tmp_path.resolve()))
+    monkeypatch.setattr(
+        runner.operator_planner, 'permit', lambda *_args, **_kwargs: permit)
     monkeypatch.setattr(runner, 'build_steps', lambda *_args, **_kwargs: [step])
     monkeypatch.setattr(
         runner.subprocess, 'run',
@@ -231,10 +349,255 @@ def test_run_step_with_frozen_profile_refuses_execute_without_both_authorization
 
     rc = runner.main([
         '--base', str(tmp_path), '--sid', '42',
-        '--expect-code-version', 'code-v1', '--execute', 'stage2.global',
+        '--expect-code-version', 'code-v1', '--execute',
+        '--operator-permit-sha256', permit.permit_sha256, 'stage2.global',
     ])
 
     assert rc == 2
+
+
+def test_headless_execute_claims_before_evidence_and_releases_after_steps(
+        monkeypatch, tmp_path):
+    runner = _operator_script('run_step')
+    profiles = _commander_profiles()
+    context = SimpleNamespace(
+        run_id='outer-admission', base=str(tmp_path.resolve()),
+        contract_sha256='a' * 64,
+        start=SimpleNamespace(
+            authorized=True, egress_authorized=True, code_version='code-v1'),
+        profiles=profiles,
+        executor_profile=lambda _node: profiles.executor_default,
+    )
+    permit = _execution_permit(base=str(tmp_path.resolve()))
+    step = SimpleNamespace(
+        label='stage2 全局事实',
+        argv=['python', '-m', 'novel.cli', 'run', 'stage2.global', '42'],
+        cwd=str(REPO_ROOT), paid=True,
+        writes='stage2/global_grounding.json', note=None,
+        executor_profile=profiles.executor_default, egress_authorized=True)
+    runner.admission.open_gate(str(tmp_path), context.run_id, '42')
+    monkeypatch.setenv(runner.commander_context.COMMANDER_RUN_ID_ENV, context.run_id)
+    monkeypatch.setenv(
+        runner.commander_context.COMMANDER_CONTRACT_SHA256_ENV, 'a' * 64)
+    monkeypatch.setattr(
+        runner.commander_context, 'load_from_environment',
+        lambda *_args, **_kwargs: context)
+    monkeypatch.setattr(
+        runner.commander_context, 'env_with_context',
+        lambda **_kwargs: {'PARENT': 'commander'})
+    monkeypatch.setattr(runner.prov, 'code_version', lambda: 'code-v1')
+    monkeypatch.setattr(
+        runner.operator_planner, 'permit', lambda *_args, **_kwargs: permit)
+    monkeypatch.setattr(runner, 'build_steps', lambda *_args, **_kwargs: [step])
+    original_write = runner._write_evidence
+
+    def observed_write(path, data):
+        current = runner.admission.snapshot(str(tmp_path), context.run_id)
+        assert len(current.active_claims) == 1, 'evidence 落盘前必须已经 claim'
+        original_write(path, data)
+
+    monkeypatch.setattr(runner, '_write_evidence', observed_write)
+    calls = []
+
+    def fake_run(argv, **kwargs):
+        calls.append((list(argv), kwargs))
+        claim_id = kwargs['env'][runner.admission.CLAIM_ID_ENV]
+        current = runner.admission.snapshot(str(tmp_path), context.run_id)
+        assert [item.claim_id for item in current.active_claims] == [claim_id]
+        assert kwargs['env'][runner.permit_layer.STEP_INDEX_ENV] == '0'
+        assert json.loads(
+            kwargs['env'][runner.permit_layer.PERMIT_JSON_ENV]
+        ) == permit.model_dump(mode='json')
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(runner.subprocess, 'run', fake_run)
+    evidence = tmp_path / 'claimed-evidence.json'
+    rc = runner.main([
+        '--base', str(tmp_path), '--sid', '42',
+        '--expect-code-version', 'code-v1', '--execute',
+        '--evidence-json', str(evidence),
+        '--operator-permit-sha256', permit.permit_sha256, 'stage2.global'])
+
+    assert rc == 0 and evidence.is_file() and len(calls) == 3
+    assert runner.admission.snapshot(
+        str(tmp_path), context.run_id).active_claims == ()
+
+
+def test_headless_execute_releases_claim_when_node_spawn_raises(
+        monkeypatch, tmp_path):
+    runner = _operator_script('run_step')
+    profiles = _commander_profiles()
+    context = SimpleNamespace(
+        run_id='outer-exception', base=str(tmp_path.resolve()),
+        contract_sha256='b' * 64,
+        start=SimpleNamespace(
+            authorized=True, egress_authorized=True, code_version='code-v1'),
+        profiles=profiles,
+        executor_profile=lambda _node: profiles.executor_default,
+    )
+    permit = _execution_permit(base=str(tmp_path.resolve()))
+    step = SimpleNamespace(
+        label='stage2 全局事实',
+        argv=['python', '-m', 'novel.cli', 'run', 'stage2.global', '42'],
+        cwd=str(REPO_ROOT), paid=True,
+        writes='stage2/global_grounding.json', note=None,
+        executor_profile=profiles.executor_default, egress_authorized=True)
+    runner.admission.open_gate(str(tmp_path), context.run_id, '42')
+    monkeypatch.setenv(runner.commander_context.COMMANDER_RUN_ID_ENV, context.run_id)
+    monkeypatch.setenv(
+        runner.commander_context.COMMANDER_CONTRACT_SHA256_ENV, 'b' * 64)
+    monkeypatch.setattr(
+        runner.commander_context, 'load_from_environment',
+        lambda *_args, **_kwargs: context)
+    monkeypatch.setattr(
+        runner.commander_context, 'env_with_context', lambda **_kwargs: {})
+    monkeypatch.setattr(runner.prov, 'code_version', lambda: 'code-v1')
+    monkeypatch.setattr(
+        runner.operator_planner, 'permit', lambda *_args, **_kwargs: permit)
+    monkeypatch.setattr(runner, 'build_steps', lambda *_args, **_kwargs: [step])
+
+    def fake_run(argv, **_kwargs):
+        if 'mark' in argv:
+            return SimpleNamespace(returncode=0)
+        raise OSError('synthetic admitted spawn failure')
+
+    monkeypatch.setattr(runner.subprocess, 'run', fake_run)
+    with pytest.raises(OSError, match='synthetic admitted spawn failure'):
+        runner.main([
+            '--base', str(tmp_path), '--sid', '42',
+            '--expect-code-version', 'code-v1', '--execute',
+            '--operator-permit-sha256', permit.permit_sha256, 'stage2.global'])
+    assert runner.admission.snapshot(
+        str(tmp_path), context.run_id).active_claims == ()
+
+
+def test_delayed_headless_run_step_after_parent_close_never_writes_or_spawns(
+        monkeypatch, tmp_path):
+    runner = _operator_script('run_step')
+    profiles = _commander_profiles()
+    context = SimpleNamespace(
+        run_id='outer-closed', base=str(tmp_path.resolve()),
+        contract_sha256='c' * 64,
+        start=SimpleNamespace(
+            authorized=True, egress_authorized=True, code_version='code-v1'),
+        profiles=profiles,
+        executor_profile=lambda _node: profiles.executor_default,
+    )
+    permit = _execution_permit(base=str(tmp_path.resolve()))
+    runner.admission.open_gate(str(tmp_path), context.run_id, '42')
+    runner.admission.close_gate(str(tmp_path), context.run_id)
+    monkeypatch.setenv(runner.commander_context.COMMANDER_RUN_ID_ENV, context.run_id)
+    monkeypatch.setenv(
+        runner.commander_context.COMMANDER_CONTRACT_SHA256_ENV, 'c' * 64)
+    monkeypatch.setattr(
+        runner.commander_context, 'load_from_environment',
+        lambda *_args, **_kwargs: context)
+    monkeypatch.setattr(runner.prov, 'code_version', lambda: 'code-v1')
+    monkeypatch.setattr(
+        runner.operator_planner, 'permit', lambda *_args, **_kwargs: permit)
+    monkeypatch.setattr(
+        runner, 'build_steps',
+        lambda *_args, **_kwargs: [SimpleNamespace(
+            label='stage2 全局事实', argv=['python'], cwd=str(REPO_ROOT),
+            paid=True, writes='stage2/global_grounding.json', note=None,
+            executor_profile=profiles.executor_default,
+            egress_authorized=True)])
+    monkeypatch.setattr(
+        runner, '_write_evidence',
+        lambda *_args, **_kwargs: pytest.fail('post-close 不得写 evidence'))
+    monkeypatch.setattr(
+        runner.subprocess, 'run',
+        lambda *_args, **_kwargs: pytest.fail('post-close 不得打 beacon/启动节点'))
+
+    rc = runner.main([
+        '--base', str(tmp_path), '--sid', '42',
+        '--expect-code-version', 'code-v1', '--execute',
+        '--evidence-json', str(tmp_path / 'never.json'),
+        '--operator-permit-sha256', permit.permit_sha256, 'stage2.global'])
+
+    assert rc == 2
+
+
+def test_headless_run_step_requires_a_machine_selected_execution_permit(
+        monkeypatch, tmp_path):
+    runner = _operator_script('run_step')
+    context = SimpleNamespace(
+        run_id='outer-1', base=str(tmp_path.resolve()),
+        contract_sha256='d' * 64,
+        start=SimpleNamespace(
+            authorized=True, egress_authorized=True, code_version='code-v1'),
+        profiles=_commander_profiles(),
+        executor_profile=lambda _node: _commander_profiles().executor_default,
+    )
+    monkeypatch.setenv(runner.commander_context.COMMANDER_RUN_ID_ENV, 'outer-1')
+    monkeypatch.setenv(
+        runner.commander_context.COMMANDER_CONTRACT_SHA256_ENV, 'd' * 64)
+    monkeypatch.setattr(
+        runner.commander_context, 'load_from_environment',
+        lambda *_args, **_kwargs: context)
+    monkeypatch.setattr(runner.prov, 'code_version', lambda: 'code-v1')
+    monkeypatch.setattr(
+        runner, 'build_steps',
+        lambda *_args, **_kwargs: pytest.fail('缺 execution permit 不得构造节点命令'))
+
+    rc = runner.main([
+        '--base', str(tmp_path), '--sid', '42',
+        '--expect-code-version', 'code-v1', 'stage2.global',
+    ])
+
+    assert rc == 2
+
+
+@pytest.mark.parametrize('permit_error', [
+    'exact node/flags 与当前 ready action 不一致',
+    'blocked 只允许登记的 recovery 组合',
+])
+def test_run_step_refuses_an_unmintable_execution_permit_before_building(
+        permit_error, monkeypatch, tmp_path, capsys):
+    runner = _operator_script('run_step')
+    built: list[bool] = []
+    monkeypatch.setattr(runner.prov, 'code_version', lambda: 'code-v1')
+
+    def reject(*_args, **_kwargs):
+        raise runner.TerminalState(permit_error)
+
+    monkeypatch.setattr(runner.operator_planner, 'permit', reject)
+    monkeypatch.setattr(
+        runner, 'build_steps',
+        lambda *_args, **_kwargs: built.append(True) or [])
+
+    rc = runner.main([
+        '--base', str(tmp_path), '--sid', '42',
+        '--expect-code-version', 'code-v1',
+        '--operator-permit-sha256', 'c' * 64, 'stage2.global',
+    ])
+
+    assert rc == 2
+    assert built == []
+    assert permit_error in capsys.readouterr().err
+
+
+def test_run_step_rejects_a_stale_permit_hash_before_building(
+        monkeypatch, tmp_path, capsys):
+    runner = _operator_script('run_step')
+    built: list[bool] = []
+    current = _execution_permit(base=str(tmp_path.resolve()))
+    monkeypatch.setattr(runner.prov, 'code_version', lambda: 'code-v1')
+    monkeypatch.setattr(
+        runner.operator_planner, 'permit', lambda *_args, **_kwargs: current)
+    monkeypatch.setattr(
+        runner, 'build_steps',
+        lambda *_args, **_kwargs: built.append(True) or [])
+
+    rc = runner.main([
+        '--base', str(tmp_path), '--sid', '42',
+        '--expect-code-version', 'code-v1',
+        '--operator-permit-sha256', 'c' * 64, 'stage2.global',
+    ])
+
+    assert rc == 2
+    assert built == []
+    assert '已过期' in capsys.readouterr().err
 
 
 def test_run_step_rejects_an_invalid_run_id_at_the_argument_boundary(capsys):
@@ -285,18 +648,23 @@ def test_run_step_evidence_serializes_the_same_steps_for_preview_and_execute(
         runner, 'build_steps',
         lambda *args, **kwargs: built.append((args, kwargs)) or [step])
     monkeypatch.setattr(runner.prov, 'code_version', lambda: 'code-v1')
+    permit = _execution_permit(node='stage5.write')
+    monkeypatch.setattr(
+        runner.operator_planner, 'permit', lambda *_args, **_kwargs: permit)
     monkeypatch.setattr(
         runner.subprocess, 'run',
         lambda argv, **_kwargs: calls.append(list(argv)) or SimpleNamespace(returncode=0))
 
     common = [
         '--base', 'E:/outputs', '--sid', '42', '--expect-code-version', 'code-v1',
+        '--operator-permit-sha256', permit.permit_sha256,
         'stage5.write', '--evidence-json', str(evidence),
     ]
     assert runner.main(common) == 0
     preview_bytes = evidence.read_bytes()
     assert json.loads(preview_bytes) == {
-        'schema': 'novel-operator-step-evidence-v1',
+        'schema': 'novel-operator-step-evidence-v2',
+        'execution_permit': permit.model_dump(mode='json'),
         'steps': [{
             'argv': step_argv,
             'paid': True,
@@ -339,6 +707,14 @@ def test_run_step_execute_partial_cannot_reuse_full_book_preview_evidence(
     calls = []
     monkeypatch.setattr(runner, 'build_steps', fake_build)
     monkeypatch.setattr(runner.prov, 'code_version', lambda: 'code-v1')
+    full_permit = _execution_permit(node='stage5.write')
+    partial_permit = _execution_permit(
+        node='stage5.write', flags=['--chapters', '1'])
+
+    def mint(_base, _sid, _node, flags):
+        return partial_permit if flags else full_permit
+
+    monkeypatch.setattr(runner.operator_planner, 'permit', mint)
     monkeypatch.setattr(
         runner.subprocess, 'run',
         lambda *args, **kwargs: calls.append((args, kwargs)) or SimpleNamespace(returncode=0))
@@ -346,9 +722,13 @@ def test_run_step_execute_partial_cannot_reuse_full_book_preview_evidence(
         '--base', 'E:/outputs', '--sid', '42', '--expect-code-version', 'code-v1',
         '--evidence-json', str(evidence),
     ]
-    assert runner.main([*common, 'stage5.write']) == 0
     assert runner.main([
-        *common, '--execute', 'stage5.write', '--', '--chapters', '1']) == 2
+        *common, '--operator-permit-sha256', full_permit.permit_sha256,
+        'stage5.write']) == 0
+    assert runner.main([
+        *common, '--execute',
+        '--operator-permit-sha256', partial_permit.permit_sha256,
+        'stage5.write', '--', '--chapters', '1']) == 2
     assert calls == [], 'evidence hash 不同必须在打信标/执行前停止'
 
 
@@ -364,13 +744,17 @@ def test_run_step_evidence_refuses_different_existing_content_before_execution(
         cwd=str(REPO_ROOT), paid=True, writes='stage5/ch{nn}.json', note=None)
     monkeypatch.setattr(runner, 'build_steps', lambda *_args, **_kwargs: [step])
     monkeypatch.setattr(runner.prov, 'code_version', lambda: 'code-v1')
+    permit = _execution_permit(node='stage5.write')
+    monkeypatch.setattr(
+        runner.operator_planner, 'permit', lambda *_args, **_kwargs: permit)
     monkeypatch.setattr(
         runner.subprocess, 'run',
         lambda *_args, **_kwargs: pytest.fail('不同证据不得打信标或执行节点'))
 
     rc = runner.main([
         '--base', 'E:/outputs', '--sid', '42', '--expect-code-version', 'code-v1',
-        '--evidence-json', str(evidence), '--execute', 'stage5.write',
+        '--evidence-json', str(evidence), '--execute',
+        '--operator-permit-sha256', permit.permit_sha256, 'stage5.write',
     ])
 
     assert rc == 2
@@ -387,13 +771,17 @@ def test_run_step_evidence_refuses_a_suspected_key_without_writing_or_execution(
         cwd=str(REPO_ROOT), paid=False, writes='', note=None)
     monkeypatch.setattr(runner, 'build_steps', lambda *_args, **_kwargs: [step])
     monkeypatch.setattr(runner.prov, 'code_version', lambda: 'code-v1')
+    permit = _execution_permit(node='stage5.write')
+    monkeypatch.setattr(
+        runner.operator_planner, 'permit', lambda *_args, **_kwargs: permit)
     monkeypatch.setattr(
         runner.subprocess, 'run',
         lambda *_args, **_kwargs: pytest.fail('疑似密钥不得进入执行路径'))
 
     rc = runner.main([
         '--base', 'E:/outputs', '--sid', '42', '--expect-code-version', 'code-v1',
-        '--evidence-json', str(evidence), '--execute', 'stage5.write',
+        '--evidence-json', str(evidence), '--execute',
+        '--operator-permit-sha256', permit.permit_sha256, 'stage5.write',
     ])
 
     assert rc == 2
@@ -619,7 +1007,7 @@ def test_stage0_workpack_main_returns_stopped_json_for_an_expected_pipeline_term
 #: 它防的是另一件事：正则失配、glob 变空、`NODES` 被改空时，
 #: 「零个都没查」会伪装成「全部一致」。
 _FLOORS = {
-    'markdown_files': 8,      # SKILL + 6 reference + 1 模板
+    'markdown_files': 9,      # SKILL + 7 reference + 1 模板
     'links': 10,
     'inbox_kinds': 8,         # INBOX_KIND 恒为八类
     'exit_codes': 5,          # 0/1/2/3/70
@@ -639,6 +1027,10 @@ _FLOORS = {
     'stage0_workpack_contract': 1,
     'finalizer_contract': 1,
     'operator_telemetry_contract': 1,
+    'routing_axes': 2,
+    'codex_discovery': 1,
+    'operator_next_contract': 1,
+    'operator_execution_permit_contract': 1,
 }
 
 
@@ -655,9 +1047,9 @@ def test_the_validator_actually_scanned_something(key, floor):
 # ───────────────────────── 二、推荐读法的行为守卫 ─────────────────────────
 
 def _documented_filter() -> re.Pattern[str]:
-    text = (SKILL_DIR / 'references' / 'runtime-profiles.md').read_text(encoding='utf-8')
+    text = (SKILL_DIR / 'references' / 'workflow.md').read_text(encoding='utf-8')
     match = re.search(r"Select-String -Pattern '([^']+)'", text)
-    assert match, 'runtime-profiles.md 里找不到推荐过滤正则'
+    assert match, 'workflow.md 里找不到推荐过滤正则'
     return re.compile(match.group(1))
 
 
@@ -713,9 +1105,9 @@ def test_documented_report_filter_keeps_every_decisive_line(needle, why):
     assert source, f'样例报告里就没有 {needle}（{why}）——这份样例造得不对，先修样例'
     kept = [line for line in source if _documented_filter().search(line)]
     assert kept, (
-        f'runtime-profiles.md 的推荐过滤吞掉了 {needle} 那一类行（{why}）。\n'
+        f'workflow.md 的推荐过滤吞掉了 {needle} 那一类行（{why}）。\n'
         f'  被吞的原文：{source[0]!r}\n'
-        f'  → 改 runtime-profiles.md 里的正则，不要改 novel/report/render.py')
+        f'  → 改 workflow.md 里的正则，不要改 novel/report/render.py')
 
 
 def test_the_documented_filter_still_filters():
@@ -725,6 +1117,20 @@ def test_the_documented_filter_still_filters():
     assert ok_lines, '样例报告里没有 [OK] 行，这条反向自检没有被测到'
     assert not [line for line in ok_lines if _documented_filter().search(line)], \
         '推荐过滤连 [OK] 也留下了，那它就没有在过滤'
+
+
+def test_skill_never_teaches_manual_mark_and_documents_typed_tail_recovery():
+    workflow = (
+        SKILL_DIR / 'references' / 'workflow.md').read_text(encoding='utf-8')
+    recovery = (
+        SKILL_DIR / 'references' / 'recovery.md').read_text(encoding='utf-8')
+
+    assert 'mark <SID> --node' not in workflow
+    assert 'operator 不直接调用 `mark`' in workflow
+    assert '--beacon-repair-tail' in recovery
+    assert '--admission-repair-tail' in recovery
+    assert '--subject-sha256 <SUBJECT_SHA256>' in recovery
+    assert '不得加 `--force`' in recovery
 
 
 # ───────────────────────── 三、被 skill 逐字引用的生产事实 ─────────────────────────

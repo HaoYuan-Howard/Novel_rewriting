@@ -25,6 +25,17 @@ from novel.commanders.base import (
 
 _EMPTY_MCP_CONFIG = '{"mcpServers":{}}'
 
+# Claude Code 的后台 Bash 会随顶层 CLI 退出而被清理；整书 Commander 若把
+# ``run_step.py`` 丢进后台，外层却会先收到一个成功 result，随后对仍在写盘的
+# 子进程做终验。这里把「前台执行」冻结成 launcher 事实，不依赖 prompt 自觉。
+# 默认单条 Bash 允许 6 小时，显式 timeout 最多 23 小时；后者刻意短于
+# ``CliCommanderDriver`` 的 24 小时总 timeout，给协议终态与日志泵留出收尾窗口。
+_FROZEN_CLAUDE_ENV = {
+    'CLAUDE_CODE_DISABLE_BACKGROUND_TASKS': '1',
+    'BASH_DEFAULT_TIMEOUT_MS': str(6 * 60 * 60 * 1000),
+    'BASH_MAX_TIMEOUT_MS': str(23 * 60 * 60 * 1000),
+}
+
 
 def _python_rule() -> str:
     """与 commander 实际运行解释器同源，不硬编码 conda 路径。"""
@@ -189,11 +200,22 @@ class ClaudeCodeCommanderDriver(CliCommanderDriver):
         )
         if '--fallback-model' in argv:
             raise AssertionError('Commander 禁止隐式 fallback model')
+        frozen_env = dict(env_overrides or {})
+        conflicts = {
+            key: frozen_env[key]
+            for key, value in _FROZEN_CLAUDE_ENV.items()
+            if key in frozen_env and frozen_env[key] != value
+        }
+        if conflicts:
+            names = '、'.join(sorted(conflicts))
+            raise CommanderConfigurationError(
+                f'Claude Commander 的生命周期环境不可覆盖：{names}')
+        frozen_env.update(_FROZEN_CLAUDE_ENV)
         return CommanderInvocation(
             argv=argv,
             stdin_text=prompt,
             cwd=repo_abs,
-            env_overrides={} if env_overrides is None else env_overrides,
+            env_overrides=frozen_env,
             profile=resolved,
             protocol=self.protocol,
             cli_version=cli_version,

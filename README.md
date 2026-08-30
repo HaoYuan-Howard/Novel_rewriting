@@ -174,6 +174,37 @@ README 只保留稳定入口和当前能力；“做过什么”由 Git 历史�
 conda run -n novel_refactor python -m pytest -q
 conda run -n novel_refactor python -m novel.api --base <Output目录>
 conda run -n novel_refactor python -X utf8 -u -m novel.cli inbox <sid> --base <Output目录>   # 八类待办清单（0 成本）
+conda run -n novel_refactor python -X utf8 -u -m novel.cli operator next <sid> --base <Output目录> --json   # 共享 queue 判定的唯一下一动作（0 成本纯读）
+conda run -n novel_refactor python -X utf8 -u -m novel.cli operator permit <sid> <node> --base <Output目录> --json -- [flags]   # 为 exact node/flags 铸当前执行许可（0 成本纯读）
+conda run -n novel_refactor python -X utf8 tools/verify_agent_e2e.py --base <Output目录> --sid <sid> --run-id <Commander-run-id>   # 对已实际跑完的 agent-only 整书做关闭式纯读验收
+```
+
+Agent driver 与显式 legacy LLM transport 共用**一份**
+`.claude/skills/novel-pipeline-operator/SKILL.md` 和同一条 Stage0～Stage7 主链，只按执行 profile
+区分付费生成节点由谁承接；任一模式失败都不得自动降级到另一模式。两种模式的下一步都只读
+`operator next`，不从 stage 表、目录存在性或聊天记忆自行推演；执行前再用 `operator permit` 把
+current 读面、exact node/flags、贵贱、写盘效果与外部输入字节冻结成一张许可。blocked action 的 hash
+只解释为何停，不是恢复执行权。上面的整书验收器不会发模型请求，也不能替一条尚未发生的真实付费
+run 生成验收证据。
+
+Headless Commander 在 spawn 前先取得 per-parent OS owner lease，再持久打开 admission gate；每次 `run_step.py --execute` 在 evidence、
+beacon 与节点子进程之前用 permit 原子 claim；typed approval、response-repair、终审与 operator telemetry
+等非 node 写入口持 generic claim。顶层 Commander 返回后关闭新 claim，并持续等 active claim 与 open
+execution 两面归零才终验、写 ended、释放书锁。300 秒只报警并尝试 cancel，不释放锁；服务重启后仍
+未闭合的 gate 继续关闭式阻断同书 agent/job/trash/API 写手，启动恢复也整 lane 跳过而不重判盘面。孤儿
+gate 与 admission/beacon 的 non-LF 坏尾只能经 hash-bound `reconcile` 显式收口；apply 即使带
+`--force` 也不能越过仍活的 owner lease，进程崩溃则由内核释放锁，残留锁文件不冒充存活证明。
+reconcile 后任何迟到 lifecycle 事件都会使旧 seal 失效并重新阻断。若进程 exit 0
+但 fresh delivery 为 stopped 且 `operator next` 仍 ready，收尾记 `commander_early_exit`，不会暗中追加
+一次新的模型 turn。
+
+append-only 坏尾先 inspect，再把返回的 current subject 连同 `actor/reason` 交回；两步都必须由
+Commander 子上下文之外的操作员执行，且 tail repair 不接受 `--force`：
+
+```powershell
+python -X utf8 -u -m novel.cli reconcile --base <Output目录> --beacon-repair-tail
+python -X utf8 -u -m novel.cli reconcile --base <Output目录> --beacon-repair-tail --actor <操作者> --reason <依据> --subject-sha256 <上一步SHA>
+python -X utf8 -u -m novel.cli reconcile --base <Output目录> --admission-repair-tail
 ```
 
 pytest 默认复用仓根 `.test_runtime` 与 `.test_cache`，不会随运行次数新增目录。agent 执行时必须

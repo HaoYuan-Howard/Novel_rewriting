@@ -9,6 +9,7 @@ import subprocess
 import sys
 import threading
 import time
+from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -305,6 +306,64 @@ def test_review_evidence_sync_replaces_only_the_machine_blocks():
     assert facts['inbox_counts_text'] in updated
     assert facts['exit_sequence_compact_text'] in updated
     assert facts['review_anchor_line'] in updated
+
+
+def test_compat_sync_holds_generic_claim_from_collect_through_cas_commit(
+        tmp_path, monkeypatch, capsys):
+    novel_dir = tmp_path / 'FQ_测试书_book-1'
+    novel_dir.mkdir()
+    review = novel_dir / '测试书_review.md'
+    review.write_bytes(b'original review')
+    events: list[str] = []
+
+    @contextmanager
+    def guarded(base, sid, *, operation, details):
+        assert Path(base) == tmp_path and sid == 'book-1'
+        assert operation == 'sync-review-evidence'
+        assert details == {
+            'started_at': 100,
+            'start_code_version': 'code-v1',
+            'review_path': str(review.resolve()),
+        }
+        events.append('enter')
+        try:
+            yield SimpleNamespace(parent_run_id='commander-sync-test')
+        finally:
+            events.append('exit')
+
+    def collect_guarded(*_args, **_kwargs):
+        assert events == ['enter']
+        events.append('collect')
+        return {'facts': True}
+
+    def render_guarded(original, facts):
+        assert events == ['enter', 'collect']
+        assert original == 'original review' and facts == {'facts': True}
+        events.append('render')
+        return 'updated review'
+
+    def commit_guarded(path, updated, *, expected_original):
+        assert events == ['enter', 'collect', 'render']
+        assert path == review.resolve()
+        assert updated == 'updated review'
+        assert expected_original == b'original review'
+        events.append('commit')
+        return updated.encode('utf-8')
+
+    monkeypatch.setattr(synchronizer, 'operation_scope', guarded)
+    monkeypatch.setattr(synchronizer, 'collect', collect_guarded)
+    monkeypatch.setattr(synchronizer, 'render', render_guarded)
+    monkeypatch.setattr(synchronizer, 'commit_review', commit_guarded)
+
+    code = synchronizer.main([
+        '--base', str(tmp_path), '--sid', 'book-1',
+        '--started-at', '100', '--start-code-version', 'code-v1',
+        '--review', str(review),
+    ])
+
+    assert code == 0
+    assert events == ['enter', 'collect', 'render', 'commit', 'exit']
+    assert 'PASS 已同步机器事实' in capsys.readouterr().out
 
 
 def test_review_evidence_sync_bootstraps_a_legacy_review_without_losing_narrative():

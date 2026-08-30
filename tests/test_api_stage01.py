@@ -6,6 +6,7 @@ from __future__ import annotations
 import shutil
 import tempfile
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -57,6 +58,59 @@ def _upload(client: TestClient) -> dict:
     assert body['sid'] == '9001'
     assert body['job']['state'] == 'ok'
     return body
+
+
+def test_stage0_landed_job_survives_a_stamp_writer_conflict(
+        client: TestClient, root: Path, monkeypatch):
+    """s0 盖章与 edits 共用 helper；抢锁只披露，不篡改 jobs.run 终态。"""
+    from novel.api import approval_stamp
+    from novel.api.routes import ingest as route
+
+    revision_id = 'a' * 64
+    key = route.jobs.agent_lock_key('9001')
+    holder = 'agent-between-stage0-job-and-stamp'
+    armed = False
+
+    monkeypatch.setattr(
+        route.ingest, 'stage0_report',
+        lambda _base, _sid: SimpleNamespace(revision_id=revision_id))
+
+    def landed_then_agent(base, node, sid, flags, **_kwargs):
+        nonlocal armed
+        route.jobs.AGENT_REGISTRY.acquire(key, holder)
+        armed = True
+        start = route.jobs.plan_start(node, sid, flags, base=base)
+        return route.JobRecord(
+            job_id='stage0-landed-before-stamp-conflict', start=start,
+            started=1, ended=2, exit_code=0, state='ok',
+            steps_started=len(start.steps),
+        )
+
+    monkeypatch.setattr(route.jobs, 'run', landed_then_agent)
+    monkeypatch.setattr(
+        approval_stamp.approvals, 'approve_gate',
+        lambda *_args: pytest.fail('同书 agent 活着时不得写 s0 审批章'))
+    assert (
+        route.stamp_approval_after_landed
+        is approval_stamp.stamp_approval_after_landed)
+    try:
+        with pytest.warns(RuntimeWarning, match='没有并发写盘'):
+            response = client.post(
+                '/api/novels/9001/stage0/approve',
+                headers=UI,
+                json={
+                    'expected_revision_id': revision_id,
+                    'actor': 'api-stage01-stamp-race',
+                    'reason': '确认盖章冲突不篡改已落作业终态',
+                },
+            )
+    finally:
+        if armed:
+            route.jobs.AGENT_REGISTRY.release(key, holder)
+
+    assert response.status_code == 200, response.text
+    assert response.json()['job_id'] == 'stage0-landed-before-stamp-conflict'
+    assert response.json()['state'] == 'ok'
 
 
 def test_real_http_flow_from_upload_through_stage1(client: TestClient, root: Path):

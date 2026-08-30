@@ -4,6 +4,7 @@
 
 - [事实优先级](#事实优先级)
 - [运行前检查](#运行前检查)
+- [运行共同纪律](#运行共同纪律)
 - [命令协议](#命令协议)
 - [主链顺序](#主链顺序)
 - [结果判定](#结果判定)
@@ -14,10 +15,11 @@
 
 把本文件视为操作策略，不把它当第二份可执行注册表。发生冲突时：
 
-1. 以 `preview` 输出的 argv、贵贱和追跑步骤为本次执行事实。
-2. 以 `contracts.invariants.PIPELINE_STEPS` 决定主节点顺序，以 `NODES` 决定节点/flag 取值面。
-3. 以 `novel/cli/exit_codes.py`、最新 check 报告和 finding 原文决定结果与修复入口。
-4. 本文件负责选择主跑法和解释证据；发现漂移时停止手抄，并按维护协议更新。
+1. 对已落盘 sid，以 `operator next --json` 的 `state/action` 决定当前下一动作；skill 不自行推演下一 node。
+2. 以 `preview` 输出的 argv、贵贱和追跑步骤为本次执行事实。
+3. 以 `contracts.invariants.PIPELINE_STEPS` 与 `NODES` 解释 node/flag 取值面，不用它们在 skill 里重写调度器。
+4. 以 `novel/cli/exit_codes.py`、最新 check 报告和 finding 原文决定结果与修复入口。
+5. 本文件负责解释执行协议和证据；发现漂移时停止手抄，并按维护协议更新。
 
 ## 运行前检查
 
@@ -32,9 +34,8 @@
 逐项确认：
 
 1. cwd 是仓根；`<PY> -X utf8 -u -m novel.cli --help` 可用。
-2. headless Commander 已冻结的 commander/executor profile 都能由 capability registry 解析，所选
-   CLI 在本机为可探测状态；不要打印账号、token 或认证材料。`.env` 密钥与 `.llm_cache/` 只在
-   操作者明确选择 legacy DeepSeek 临时回滚时检查，不能拿缺 DeepSeek 配置阻断 agent 主路。
+2. 已按[执行模式](execution-modes.md)确认本次 executor 的来源与对应零模型预检；只检查当前选择
+   真正需要的 executable、协议或 transport，不用另一模式的配置制造假阻塞。不要打印账号、token 或认证材料。
 3. 新跑与续跑使用**同一个** `<BASE>`：隔离靠每本书自己的 `<平台_书名_sid>/` 目录，不靠另建输出根。另建一个根会把同一本书的 `_service/ledger.jsonl` 分裂成两份，而[收尾](#收尾)把它当成本的唯一权威源。不要写入任何历史验收或证据目录。
 4. 源文件或既有书目录存在，`<SID>` 唯一。立即从仓根运行
    `<PY> -X utf8 -u .claude/skills/novel-pipeline-operator/scripts/session_preflight.py --base <BASE> --sid <SID>`；新书把
@@ -46,6 +47,59 @@
    resolved profile、session audit 与账本为准，wire 未回显的实际字段保留 unknown，不拿请求值倒填。
 7. 同一时刻没有**这本书**的其他 API/agent 写盘作业在运行。⚠ 只看这一本：不同 `sid` 的作业互不阻塞（跨书并行是产品明确要求的能力），把别书也算进来会让本条在一次正常的并行跑里永远不成立。
 
+## 运行共同纪律
+
+- cwd 保持仓根；`--base` 永远使用绝对路径。交互宿主的 shell 可能共享并改变工作目录，
+  每次调用都显式指定仓根；headless launcher 已把子进程 cwd 钉在仓根，不要在命令前拼 `cd`。
+  不得 `cd` 进产物目录再运行 `-m novel.cli`。
+- 所有正式命令和临时诊断都使用当前项目实际解释器 `<PY>`，包括读 JSON 与 import
+  `contracts.*` / `novel.*` 的一次性脚本。裸 `python` 指向别的环境时出现的 pydantic 缺失，
+  不是仓库故障。
+- 直接取得子进程退出码，不在真跑后接会覆盖退出码的管道。文件重定向不改变退出码；先保存 rc，
+  再过滤长报告。
+- node 的 start/end 信标只由 `run_step.py --execute` 在同一 active claim 内生成；不要手工补 `mark`。
+  一次只运行一个写盘节点；一个 operator 会话只管一本书，别书的独立会话可以并行。
+- 长命令使用持久句柄或足够长的前台超时，每 60 秒以内汇报一次盘上/进程事实；不要用短 timeout
+  杀进程来模拟更新。任何中断后重新调用 `operator next`，不从聊天记忆猜落盘位置。
+- 会话先由 `scripts/session_preflight.py` 固化 `<STARTED_AT>` 与 `<START_CODE>`。已有 sid 的所有 node
+  actions（含纯读诊断与恢复）都先取 exact `operator permit`，再走
+  `scripts/run_step.py --expect-code-version <START_CODE>`；只有非 node 的只读/typed approval façade 与
+  `response-repair` 可直走，Commander 下的写 façade 会自行取得并释放 generic claim，且也在动作前复算并逐字比较。
+  `unknown == unknown` 不证明同版，结束时现取当前值也不证明起点。
+
+PowerShell 中可在取得真实 rc 后这样收窄 `--check-only` 报告；该正则保留全部命中、非 `ok` 状态、
+来源、分母与告警：
+
+```powershell
+$permit = & $PY -X utf8 -u -m novel.cli operator permit $SID <node> --base $B --json -- --check-only |
+  ConvertFrom-Json
+& $PY -X utf8 -u .claude/skills/novel-pipeline-operator/scripts/run_step.py `
+  --base $B --sid $SID --expect-code-version $START_CODE `
+  --operator-permit-sha256 $permit.permit_sha256 --execute <node> -- --check-only > "$SP\out.txt"
+$rc = $LASTEXITCODE
+Get-Content "$SP\out.txt" -Encoding UTF8 |
+  Select-String -Pattern '^\s*\[!!\]|^\s*\[\?\?\]|^\s*\[--\]|^\s*\[\?{4}\]|^合计|^──|^\s*⚠|→\s+(PASS|AMBER|FAIL)|revalidated'
+```
+
+这条正则只用于 `--check-only` 长报告；`run` 的一两行摘要直接整读。各段分别接住：
+
+| 模式 | 接住的事实 | 少了它会怎样 |
+|---|---|---|
+| `\[!!\]` `\[\?\?\]` `\[--\]` | 命中 / 够不着 / 没跑成 | 把 skipped 洗成 ok |
+| `\[\?{4}\]` | 未记录的记账键 | 把“没人说”读成“没有” |
+| `^──` | freshness、判据与记账分母 | 绿灯失去来源和分母 |
+| `^\s*⚠` | `.INVALID` 稿与幽灵边告警 | 把无效主体当正式结论 |
+| `^合计`、badge、`revalidated` | 四态合计与强审计标记 | 丢失最终判定 |
+
+`inbox` 很长时仍须保留首行八类计数，再按类收窄明细：
+
+```powershell
+& $PY -X utf8 -u -m novel.cli inbox $SID --base $B |
+  Select-String -Pattern '^── 待人工|^\s*\[(invalid|rejected|stalled|repairable|human_only|upstream|approval)\]' -Context 0,2
+```
+
+`verification` 可以只保留类计数，但计数不能省；真正销账时再读取逐项明细。
+
 ## 命令协议
 
 所有 CLI 命令使用：
@@ -54,7 +108,30 @@
 <PY> -X utf8 -u -m novel.cli <subcommand> ... --base <BASE>
 ```
 
-对每个节点先运行：
+sid 已落盘后，每轮的第一条路由命令固定为：
+
+```text
+<PY> -X utf8 -u -m novel.cli operator next <SID> --base <BASE> --json
+```
+
+它是 0 成本纯读，并在同一份 operator snapshot 上返回 `state`、当前盘面摘要与可选 `action`。
+`state=ready` 时至少消费 `action` 的 `node`、`flags`、`why`、`paid`、`writes` 与
+`action_sha256`；`state=blocked` 时 `action` 仍描述 blocker，按 `waiting_on` 进入对应审批或生产登记的
+恢复路，不能把 blocker 的 action hash 当恢复授权。只有 `state=pipeline_complete` 时 `action=null`，
+此时进入收尾；任何状态都不自造下一节点。
+新书在 sid 尚未落盘前只走现有 `stage0.remove --source <TXT>` 摄入；取得 sid 后立即进入上述 next 循环。
+每次写盘、typed approval、人工修订或恢复动作后都重新调用 next，不从下表、目录存在性或聊天记忆
+自行推演后继。
+
+对 ready action 原样 node/flags，或 blocked 当前 blocker 对应的已登记 node 恢复，先铸造执行许可：
+
+```text
+<PY> -X utf8 -u -m novel.cli operator permit <SID> <node> --base <BASE> --json -- [flags]
+```
+
+许可纯读并绑定 current next、代码、surface、exact node/flags、贵贱/写盘效应以及登记的外部输入原始
+字节；ready 只接受 action 原样组合，recovery 只接受生产闭集。任一拒绝都不得改 flags 猜路。
+随后可用普通 `preview` 阅读生产 argv：
 
 ```text
 <PY> -X utf8 -u -m novel.cli preview <node> <SID> [flags] --base <BASE>
@@ -63,51 +140,38 @@
 `stage0.remove --source <txt>` 摄入新书时省略 `<SID>`。`preview` 不接受 `--yes`；它会通过与真跑共用的 `build_argv`，在付费步骤中生成已经带 `--yes` 的真实命令。它打印的命令**已按单引号规则转义**：含空格的取值（`--reason`、带空格的路径）自带引号，可逐字复制粘贴，不需要也不应该再自行改写 argv。
 
 执行 `preview` 输出的**全部步骤**，不只执行第一条。写盘节点可能自动追加 `--check-only`。
-推荐从仓根直接用下面两条调用生产 `build_steps` 并串联信标；不要另抄追跑规则：
+已有 sid 的所有 node actions（包括纯读诊断与恢复）从仓根用下面两条调用生产 `build_steps` 并串联信标；不要另抄追跑规则：
 
 ```text
-<PY> -X utf8 -u .claude/skills/novel-pipeline-operator/scripts/run_step.py --base <BASE> --sid <SID> --expect-code-version <START_CODE> <node> -- [flags]
-<PY> -X utf8 -u .claude/skills/novel-pipeline-operator/scripts/run_step.py --base <BASE> --sid <SID> --expect-code-version <START_CODE> --execute <node> -- [flags]
-<PY> -X utf8 -u .claude/skills/novel-pipeline-operator/scripts/run_step.py --base <BASE> --sid <SID> --expect-code-version <START_CODE> --run-id <RUN_ID> --execute stage2.blueprint -- [原 flags]
+<PY> -X utf8 -u .claude/skills/novel-pipeline-operator/scripts/run_step.py --base <BASE> --sid <SID> --expect-code-version <START_CODE> --operator-permit-sha256 <PERMIT_SHA256> <node> -- [flags]
+<PY> -X utf8 -u .claude/skills/novel-pipeline-operator/scripts/run_step.py --base <BASE> --sid <SID> --expect-code-version <START_CODE> --operator-permit-sha256 <PERMIT_SHA256> --execute <node> -- [flags]
+<PY> -X utf8 -u .claude/skills/novel-pipeline-operator/scripts/run_step.py --base <BASE> --sid <SID> --expect-code-version <START_CODE> --operator-permit-sha256 <PERMIT_SHA256> --run-id <RUN_ID> --execute stage2.blueprint -- [原 flags]
 ```
 
 runner 控制参数在显式 `--` 之前可位于 node 前后，但以上是规范写法；`--` 之后全部属于
 生产节点。新书摄入时省略 runner 的 `--sid`，在 node flags 里传 `--source <TXT>`。
 第三行只用于 Stage2 人工暂停后的同身份 resume：`--run-id` 是 runner 控制参数，不是 node flag，
 初次主跑省略。runner 在构建 Step 前、每一步执行前后逐字核对 `<START_CODE>`；漂移时不再启动下一步。
+preview 与 execute 都会重新铸造 current permit，旧 SHA 不可复用。headless 时一个 permit/claim 覆盖
+`build_steps` 的 root 与自动 follow-check：每个 child 收到完整 envelope + 零基 `step_index`，root 在副作用
+前重铸，root 写盘后的 follow 只按同一 envelope 重建并核其 index/argv，不能因 surface 预期变化被误杀。
 
-headless Commander 不手拼运行期 agent profile 参数：launcher 把 resolved profiles、两项授权、base/sid 与
-起始代码指纹冻结在 append-only started 事件中，runner 只从环境取得 `run_id + contract SHA-256`
-指针并重读该事件。默认 executor 与逐节点 override 由代码选择，付费 producer Step 才携 profile 与
-egress；自动 `--check-only` 等 0 成本 Step 明确不携带。preview、evidence 与 execute 任一不一致都在
-spawn 前关闭式拒绝，不能静默落回 DeepSeek。
-
-八个 agent executor 自身已经把完整候选依次送过 JSON、必需键、schema、调用点 validator 与业务
-HARD，并把结构化代码反馈交回同一 provider session；因此 agent 主路**不得**追加
-`--response-repair agent`。那条 sidecar 只服务显式 DeepSeek 临时回滚：legacy 响应停在
-`ResponseRepairRequired` 时，才按[修复状态机](recovery.md#显式-deepseek-回滚)处理隔离候选，
-并沿用同一 `run_id`。不得让一个 legacy flag 同时冒充 node-agent 的 session 恢复协议。
+当前付费节点怎样绑定 Agent driver 或 legacy LLM transport，只按[执行模式](execution-modes.md)
+中与本次冻结选择相符的一节；不要把 executor 参数或恢复协议混进 node/flag 路由。
 
 真跑本身已经打印同一份 fresh 报告时，追检的价值是**复核产物完整性**，不是重读判据（那句「⚠ 自动追跑：退出码 0 也可能是残缺产物」说的就是这件事）：仍必须执行并打点，但只取它的退出码与合计行即可，不必重读全文。
 
-对每条实际命令，包括自动追跑的 check 与修复命令：
-
-1. 若没有父进程 `NOVEL_RUN_ID`，先运行 `mark <SID> --node <node> --phase start --base <BASE>`；
-   它会生成并打印 `<RUN_ID>`。已有父身份时沿用它；也可从一开始就在 `mark` 前显式给全局
-   `--run-id <RUN_ID>`。
-2. 把同一个值显式用于真实命令：`--run-id <RUN_ID> run ...`，并保存真实子进程退出码。
-   **不要让管道消费退出码**；把 stdout 重定向到文件、取到退出码之后再过滤该文件是允许的，
-   也是长报告的推荐读法（见[结果判定](#结果判定)）。
-3. 用同一身份结束打点：`--run-id <RUN_ID> mark <SID> --node <node> --phase end --exit <rc> --base <BASE>`。
-   start/end 或真实命令任一换 run id，终审成本就无法精确联结，禁止靠时间补猜。
-
-`mark` 只记录观察轨迹，不证明质量通过。不要给 `preview` 打点。
+每条实际 Step（包括自动 follow-check）的 `run_id`、独立 `execution_id`、start/end 与异常 end 都由
+`run_step.py --execute` 在同一 active claim 内生成并闭合；operator 不直接调用 `mark`，也不在
+runner 外补信标。preview 不写信标。信标只记录观察轨迹、不证明质量通过；任何 start/end 身份漂移
+都会令 admission drain 关闭式停止，不能靠时间窗口或手工补行修复。
 
 长节点使用足够长的前台超时或宿主提供的持久 job/cell 句柄，并至少每 60 秒汇报一次进度。不要用极短 shell timeout 模拟 yield；那会终止付费进程。
 
 ## 主链顺序
 
-下表中的节点列由 `.claude/skills/novel-pipeline-operator/scripts/validate_skill.py` 与 `PIPELINE_STEPS` 对账。参数列是本 skill 的主跑策略；实际 argv 始终取自 `preview`。
+下表中的节点列由 `.claude/skills/novel-pipeline-operator/scripts/validate_skill.py` 与 `PIPELINE_STEPS` 对账，
+用于理解全链和复核覆盖面，不作为下一节点选择器。当前动作只取 `operator next`，实际 argv 始终取自 `preview`。
 
 <!-- pipeline-steps:start -->
 | # | 节点 | 主跑参数 | 放行证据 |
@@ -256,7 +320,7 @@ check 报告按设计逐条印出**每一条**判据的设计说明与历史盘�
 **先按状态标记（`[!!]` 命中、`[??]` 够不着、`[--]` 没跑成、`[????]` 没人说）、`合计`、`── 来源 ──`、
 `⚠` 告警与 badge 行过滤，只在需要展开某条命中时读全文。**
 过滤保留全部命中、非 `ok` 状态、来源与告警行，因此不改变任何判定；分母、freshness 与命中数仍以报告原文为准，
-具体写法见[运行环境](runtime-profiles.md#共同规则)。**漏掉 `[--]`、`── 来源 ──` 或 `⚠` 中任何一类，
+具体写法见[运行共同纪律](#运行共同纪律)。**漏掉 `[--]`、`── 来源 ──` 或 `⚠` 中任何一类，
 过滤就变成了改判定**——它们分别承载“没跑成”“这份 fresh 不 fresh”“判的这一份是 `.INVALID` 稿”。
 
 ## 断点续跑
@@ -293,8 +357,6 @@ CLI `state` 会显示共享的 deterministic freshness badge；这个 badge 才�
 完成主链后：
 
 1. 执行代批文档中的逐字成书对账。
-2. 再运行一次 `state` 与 `inbox`，只统计活动目录，排除 `_rounds/` 历史。
-3. 从仓根运行 `.claude/skills/novel-pipeline-operator/scripts/collect_final_evidence.py --base <BASE> --sid <SID> --started-at <STARTED_AT> --start-code-version <START_CODE>`。最终成本只以 `<BASE>/_service/ledger.jsonl` 为权威源：`started_at` 只切本次 beacon/退出序列；脚本从这些 beacon 取得 canonical run id，再按 `run_id + node/role` 精确汇总本次 ledger。节点 executor 使用真实 node，整书 Commander 单列 `role:commander`，不伪装成 NODES 或 `unknown`。无 run id 的历史行只标 `legacy/ungrouped` 并进入同 SID 累计审计，不按时间窗口猜进本轮；本轮与累计两张表不相加。缓存命中与 wire 分开计数，token 合计只累加 `cached == false`；每个非缓存 wire 的 `outcome` 都必须入表，`error` 代表已上线但供应商是否计费未知，单列披露而不冒充确定实付。产物 `_provenance.usage`、控制台日志和历史报告只用于单产物追溯，不得与 ledger 混加或替代它。
-4. 对按模板建立的终审包运行同参数的 `.claude/skills/novel-pipeline-operator/scripts/sync_review_evidence.py`，由脚本更新质量表、两张账本、退出序列与机器锚点；agent 只写内容判断、代批证据和恢复说明。
-5. 清除剩余占位符，用同一组会话参数运行 `.claude/skills/novel-pipeline-operator/scripts/validate_review.py`，再运行 `.claude/skills/novel-pipeline-operator/scripts/verify_delivery.py --base <BASE> --sid <SID> --start-code-version <START_CODE>`。确保每个异常、残红和不可验证项都有“影响、证据、恢复路径”。
-6. 只向用户交付成书与终审包；中间产物仅作为终审包中的可追溯指针。
+2. 再运行一次 `operator next --json` 与组合 `state --with-inbox`，只统计活动目录，排除 `_rounds/` 历史；`pipeline_complete` 只说明节点 lane 已尽，不替代成书、终审包与 fresh delivery 对账。
+3. 补完终审包中的人工叙述并清除全部占位符，然后从仓根只运行这一条 canonical 收尾命令：`.claude/skills/novel-pipeline-operator/scripts/finalize_review.py --base <BASE> --sid <SID> --started-at <STARTED_AT> --start-code-version <START_CODE>`。它在同一进程内只 collect 一次机器事实，以内存快照 render → validate，通过后才原子提交终审包；提交后丢弃旧快照，再按 `<START_CODE>` 开一个全新读作用域执行 `delivery.assess`。最终成本只以 `<BASE>/_service/ledger.jsonl` 为权威源：本次表按 canonical `run_id + node/role` 精确联结，整书 Commander 单列 `role:commander`；无 run id 的历史行只标 `legacy/ungrouped`，本次与累计不相加，缓存与真实 wire 分开，产物 usage/日志不参与混加。
+4. finalizer 的 fresh delivery 结果为 `ready*` 才只向用户交付成书与终审包；任一校验、原子提交或 fresh assess 失败都保留原盘并按其错误收口，不把 `pipeline_complete` 或旧快照写成 ready。中间产物仅作为终审包中的可追溯指针。

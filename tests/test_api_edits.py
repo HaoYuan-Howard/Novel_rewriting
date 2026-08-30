@@ -270,6 +270,78 @@ def test_stamp_chain_follows_current_gate_order_without_touching_stage3(monkeypa
     assert written[0].gate_proofs['s7'] is None
 
 
+def test_stamp_writes_normally_through_the_short_admission_scope(
+        tmp_path, monkeypatch):
+    from novel.api import approval_stamp
+    from novel.api.routes import edits as route
+
+    stamped = []
+    monkeypatch.setattr(
+        approval_stamp.approvals, 'approve_gate',
+        lambda base, sid, gate: stamped.append((base, sid, gate)))
+
+    assert route._stamp is approval_stamp.stamp_approval_after_landed
+    route._stamp(str(tmp_path), '422', 's6')
+
+    assert stamped == [(str(tmp_path), '422', 's6')]
+    assert route.jobs.REGISTRY.conflicting_holder('422') is None
+
+
+@pytest.mark.parametrize('conflict_kind', ['live_agent', 'durable_orphan'])
+def test_landed_job_record_survives_a_stamp_writer_conflict(
+        validation_client, tmp_path, monkeypatch, conflict_kind):
+    """jobs.run 后 writer 抢锁：HTTP 仍返回已落 JobRecord，只披露没盖章。"""
+    from novel.api import approval_stamp
+    from novel.api.routes import edits as route
+    from novel.orchestrator import admission
+
+    key = route.jobs.agent_lock_key('422')
+    holder = 'agent-between-job-and-stamp'
+    parent_run_id = 'orphan-between-job-and-stamp'
+    armed = False
+
+    def landed_then_conflict(base, node, sid, flags, **_kwargs):
+        nonlocal armed
+        if conflict_kind == 'live_agent':
+            route.jobs.AGENT_REGISTRY.acquire(key, holder)
+        else:
+            admission.open_gate(base, parent_run_id, sid)
+        armed = True
+        start = route.jobs.plan_start(node, sid, flags, base=base)
+        return route.JobRecord(
+            job_id=f'landed-before-{conflict_kind}', start=start,
+            started=1, ended=2, exit_code=0, state='ok',
+            steps_started=len(start.steps),
+        )
+
+    monkeypatch.setattr(route.jobs, 'run', landed_then_conflict)
+    monkeypatch.setattr(
+        approval_stamp.approvals, 'approve_gate',
+        lambda *_args: pytest.fail('同书 writer 冲突时不得进入审批写动作'))
+    try:
+        with pytest.warns(RuntimeWarning, match='没有并发写盘'):
+            response = validation_client.post(
+                '/api/novels/422/stage6/approve',
+                json={
+                    'pick': 1,
+                    'actor': 'api-stamp-race-test',
+                    'reason': '确认已落 JobRecord 不被盖章竞态伪装成失败',
+                    'subject_sha256': 'a' * 64,
+                    'workpack_sha256': 'b' * 64,
+                },
+            )
+    finally:
+        if armed and conflict_kind == 'live_agent':
+            route.jobs.AGENT_REGISTRY.release(key, holder)
+        elif armed:
+            admission.close_gate(tmp_path, parent_run_id)
+            admission.mark_drained(tmp_path, parent_run_id)
+
+    assert response.status_code == 200, response.text
+    assert response.json()['job_id'] == f'landed-before-{conflict_kind}'
+    assert response.json()['state'] == 'ok'
+
+
 # ───────────────────────── 一、章节改稿 ─────────────────────────
 
 def test_blueprint_seen_http_body_requires_the_complete_workpack_binding(
