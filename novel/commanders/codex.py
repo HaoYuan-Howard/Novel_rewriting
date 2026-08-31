@@ -159,7 +159,6 @@ class CodexCommanderDriver(CliCommanderDriver):
             # 子进程；开启它的必要消费者是 runner 的 Claude/Codex executor，
             # 实际出站仍须继承 launcher 在双授权后注入的代理环境。
             '--approve-for-me',
-            '--sandbox', 'workspace-write',
             '--config', 'sandbox_workspace_write.network_access=true',
             '--ignore-user-config',
             # user/project execpolicy 是宿主状态，不能让同一冻结 run 因机器上

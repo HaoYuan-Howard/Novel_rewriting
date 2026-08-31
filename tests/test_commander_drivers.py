@@ -181,7 +181,6 @@ def test_codex_invocation_freezes_auto_review_and_executor_egress(tmp_path):
         '--model', 'gpt-5.6-sol',
         '--config', 'model_reasoning_effort="max"',
         '--approve-for-me',
-        '--sandbox', 'workspace-write',
         '--config', 'sandbox_workspace_write.network_access=true',
         '--ignore-user-config',
         '--ignore-rules',
@@ -194,6 +193,8 @@ def test_codex_invocation_freezes_auto_review_and_executor_egress(tmp_path):
     assert prompt not in invocation.argv
     assert invocation.argv[-1] == '-'
     assert 'approval_policy="never"' not in invocation.argv
+    assert '--sandbox' not in invocation.argv, (
+        '--approve-for-me 已固定 workspace-write，Codex 0.148 拒绝再传 --sandbox')
     assert '--dangerously-bypass-approvals-and-sandbox' not in invocation.argv
     assert len(prompt) > 32_767
     assert invocation.cwd == str(repo.resolve())
