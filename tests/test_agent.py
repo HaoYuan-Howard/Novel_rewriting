@@ -15,12 +15,14 @@ from __future__ import annotations
 import io
 import json
 import os
+import re
 import threading
 import time
 from pathlib import Path
 
 import pytest
 
+from contracts.invariants import AGENT_EXECUTOR_NODES
 from contracts.schema.orchestration import (
     AgentDeliveryOutcome, AgentProfile, AgentRunEvent, AgentRunStart,
     PipelineAgentProfiles, ProgressEvent, Step,
@@ -143,6 +145,96 @@ def test_prompt_carries_the_two_authorizations_independently(base, book):
     # 同时钉住人看得懂的那一面：书名 + `_review.md`，且**落在书目录里**。
     assert '测试书_review.md' in yes
     assert 'final_review' not in yes, '终审包已不叫 final_review_<sid>.md，提示词里不该再出现'
+
+
+def _egress_authorization_block(prompt: str) -> str:
+    return prompt.split('正文外发授权：', 1)[1].split(
+        '\n\n本次 agent 选择已经冻结', 1)[0]
+
+
+@pytest.mark.parametrize(
+    ('commander', 'executor_default', 'overrides', 'expected_providers'),
+    [
+        (_CLAUDE, _CLAUDE, {}, {'anthropic'}),
+        (_CODEX, _CODEX, {}, {'openai'}),
+        (_CODEX, _CLAUDE, {}, {'openai', 'anthropic'}),
+        (
+            _CLAUDE,
+            _CODEX,
+            {node: _CLAUDE for node in AGENT_EXECUTOR_NODES},
+            {'anthropic'},
+        ),
+    ],
+)
+def test_prompt_authorizes_only_effective_frozen_third_party_routes(
+        base, commander, executor_default, overrides, expected_providers):
+    """provider 集合来自实际可达路由；被全量 override 的默认项不能扩大授权。"""
+    planned = agent.plan(
+        base, '42', authorized=True, egress_authorized=True,
+        profiles=PipelineAgentProfiles(
+            commander=commander,
+            executor_default=executor_default,
+            executor_overrides=overrides,
+        ),
+    )
+    block = _egress_authorization_block(planned.prompt)
+
+    assert set(re.findall(r'provider=`([^`]+)`', block)) == expected_providers
+    assert '具体第三方目的地已冻结' in block
+    assert '仅覆盖上列 frozen commander 与 node→executor 路由' in block
+    assert '不覆盖任何其他第三方 provider' in block
+    assert '不得把 API key、token、cookie 或其他凭据内容放入模型输入' in block
+
+
+def test_prompt_discloses_frozen_routes_without_granting_them_when_egress_is_false(
+        base):
+    planned = agent.plan(
+        base, '42', authorized=True, egress_authorized=False,
+        profiles=_PROFILES,
+    )
+    block = _egress_authorization_block(planned.prompt)
+
+    assert set(re.findall(r'provider=`([^`]+)`', block)) == {
+        'openai', 'anthropic',
+    }
+    assert '正文外发授权未授予' in block
+    assert '没有任何 provider、driver、model、站点或接收方获得正文外发授权' in block
+    assert '正文外发授权已授予' not in block
+    assert '允许把小说正文' not in block
+    assert '不得把小说正文或其派生上下文发送给外部模型' in block
+
+
+def test_prompt_binds_a_partial_override_to_its_exact_node_and_profile(base):
+    planned = agent.plan(
+        base, '42', authorized=True, egress_authorized=True,
+        profiles=PipelineAgentProfiles(
+            commander=_CODEX,
+            executor_default=_CLAUDE,
+            executor_overrides={'stage6.semantic': _CODEX},
+        ),
+    )
+    executor_lines = [
+        line for line in _egress_authorization_block(planned.prompt).splitlines()
+        if 'role=`executor`' in line
+    ]
+    assert len(executor_lines) == 2
+    routes = {
+        re.search(r'provider=`([^`]+)`', line).group(1): line
+        for line in executor_lines
+    }
+    assert set(routes) == {'anthropic', 'openai'}
+    assert 'nodes=`stage6.semantic`' in routes['openai']
+    assert 'model=`gpt-5.6-sol`' in routes['openai']
+    assert 'reasoning_effort=`high`' in routes['openai']
+    assert 'execution_mode=`standard`' in routes['openai']
+
+    default_nodes = set(AGENT_EXECUTOR_NODES) - {'stage6.semantic'}
+    listed = re.search(r'nodes=`([^`]+)`', routes['anthropic']).group(1).split(',')
+    assert set(listed) == default_nodes
+    assert len(listed) == len(default_nodes), '每个 executor 节点必须恰好落入一个路由'
+    assert 'model=`claude-opus-5`' in routes['anthropic']
+    assert 'reasoning_effort=`max`' in routes['anthropic']
+    assert 'execution_mode=`standard`' in routes['anthropic']
 
 
 def test_prompt_gives_the_rule_when_the_book_dir_is_not_there_yet(base):

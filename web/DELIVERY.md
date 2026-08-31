@@ -52,7 +52,9 @@ agent 授权框。部分失败不回滚成功项，
 「Agent 代跑」→ 确认框摊开
 将拉起的完整 argv 与提示词全文。付费授权与正文外发授权使用两个独立复选框：
 付费默认不勾，正文外发默认勾选，任一变化都会使旧 preview 失效并重新 preview；两项值和声明原文分别留档，
-不会因已获付费授权而推定正文外发同意。完整命令与 prompt 默认折叠、按需展开；弹框限制在
+不会因已获付费授权而推定正文外发同意。正文外发声明须把已选 Commander 与逐节点 executor
+profile 展开成实际可达的具体 provider 路由；被 override 完全遮蔽的默认项不得扩入授权。
+完整命令与 prompt 默认折叠、按需展开；弹框限制在
 视口内，中段独立滚动，底部授权与发起动作始终可见。任一授权缺失时当前只可 preview、不会启动
 Commander；两项同时授予后才显示「授权并开始跑书」。确认后启动
 （`POST /api/agent/runs`，后端按已选 profile 以 Claude Code 或 Codex Commander driver 拉起

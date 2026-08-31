@@ -231,6 +231,8 @@ Prompt 选型完成后，`prompt_variants`、`prompt_defaults` 与 `--prompt-var
 
 只有正文外发轴的 wire 缺省是 `true`，不代表两项授权合并。UI 必须显示两个独立复选框并显式提交
 二者；`AgentRunPreview` 回显两个布尔值，preview 与真跑都由同一 planner 把两段授权原文写入 prompt。
+其中正文外发声明由 capability registry 把冻结 profiles 展开成实际可达的 Commander 与逐节点
+executor 具体 provider 路由；这只是同一 bool 授权的精确接收方边界，不增加第三条授权轴。
 preview 可以在任一项为 false 时 0 成本展开；单本 start 与 batch 则在任何 Commander probe/spawn/wire
 之前同时要求二者为 true。`profiles` 键同样恒在：非空值经 registry 解析并进入真实 Commander；
 `null` 只保留请求兼容形状，当前 `default_profiles=null` 时 preview/start/batch 均关闭式拒绝，不能代选。

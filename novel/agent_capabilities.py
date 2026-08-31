@@ -108,6 +108,14 @@ class AgentProfileRefused(ValueError):
     """profile 的组合不在 registry 中；不得兜底成另一个模型或档位。"""
 
 
+def provider_for_driver(driver: AgentDriver) -> str:
+    """从唯一 capability registry 返回规范 provider id；不探针、不发 wire。"""
+    spec = _DRIVER_BY_ID.get(driver)
+    if spec is None:  # Pydantic 正常入口已会挡住；保留给内部关闭式调用。
+        raise AgentProfileRefused(f'未知 agent driver {driver!r}')
+    return spec.provider
+
+
 def _first_line(stdout: str | None, stderr: str | None) -> str | None:
     for stream in (stdout or '', stderr or ''):
         for line in stream.splitlines():

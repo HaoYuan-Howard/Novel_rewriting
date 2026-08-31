@@ -47,6 +47,8 @@ def test_registry_publishes_exact_ids_labels_and_model_specific_options():
     assert {driver_id: driver.provider for driver_id, driver in drivers.items()} == {
         'claude-code': 'anthropic', 'codex': 'openai',
     }
+    assert capabilities.provider_for_driver('claude-code') == 'anthropic'
+    assert capabilities.provider_for_driver('codex') == 'openai'
     assert all(set(driver.roles) == set(get_args(AgentRole))
                for driver in drivers.values())
     assert set(get_args(AgentAvailability)) == {

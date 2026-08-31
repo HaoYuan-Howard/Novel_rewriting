@@ -33,13 +33,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import BinaryIO, NamedTuple
 
+from contracts.invariants import AGENT_EXECUTOR_NODES
 from contracts.schema.orchestration import (
     AgentDeliveryOutcome, AgentPending, AgentQueueView, AgentRejected, AgentRunEvent,
     AgentProfile, AgentRunRecord, AgentRunStart, PipelineAgentProfiles,
 )
 from novel import agent_session_audit, paths, prov, run_identity, skill_contract
 from novel.agent_capabilities import (
-    AgentProfileRefused, validate_pipeline_profiles,
+    AgentProfileRefused, provider_for_driver, validate_pipeline_profiles,
 )
 from novel.appendlog import append_line
 from novel.cli.exit_codes import CRASH
@@ -101,6 +102,35 @@ RESTART_NOTE = ('服务重启前它是死是活我们不知道——'
 # 一、提示词与 Commander plan（纯函数；preview 与真跑共用——`R-11.8` 同构）
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _agent_egress_routes(profiles: PipelineAgentProfiles) -> str:
+    """展开本次真正可达的第三方路由；被全部 override 的默认项不得扩入授权。"""
+    commander = profiles.commander
+    lines = [
+        '- role=`commander`：第三方接收方 '
+        f'provider=`{provider_for_driver(commander.driver)}`；'
+        f'driver=`{commander.driver}`；model=`{commander.model}`；'
+        f'reasoning_effort=`{commander.reasoning_effort}`；'
+        f'execution_mode=`{commander.execution_mode}`',
+    ]
+    grouped: dict[tuple[str, str, str, str, str | None], list[str]] = {}
+    for node in AGENT_EXECUTOR_NODES:
+        profile = profiles.executor_overrides.get(node, profiles.executor_default)
+        key = (
+            provider_for_driver(profile.driver),
+            profile.driver,
+            profile.model,
+            profile.reasoning_effort,
+            profile.execution_mode,
+        )
+        grouped.setdefault(key, []).append(node)
+    for (provider, driver, model, effort, mode), nodes in grouped.items():
+        lines.append(
+            f'- role=`executor`，nodes=`{",".join(nodes)}`：第三方接收方 '
+            f'provider=`{provider}`；driver=`{driver}`；model=`{model}`；'
+            f'reasoning_effort=`{effort}`；execution_mode=`{mode}`')
+    return '\n'.join(lines)
+
+
 def build_prompt(sid: str, base: str | os.PathLike[str], *,
                  authorized: bool, egress_authorized: bool,
                  profiles: PipelineAgentProfiles,
@@ -136,11 +166,21 @@ def build_prompt(sid: str, base: str | os.PathLike[str], *,
         '**付费授权未授予**：不得执行会产生外部模型调用费用的命令；在第一条付费命令之前停下，'
         '但仍须完成只读的 state、inbox、下一节点 preview 并创建终审包草稿，把「跑到哪、为什么停、'
         '恢复命令」写进去（落点见下），然后结束。')
+    egress_routes = _agent_egress_routes(profiles)
     egress_authorization = (
-        '**正文外发授权已授予**：允许把小说正文及其派生上下文发送给外部模型。'
-        '这项授权不代表已经授予付费授权。'
+        '**正文外发授权已授予（具体第三方目的地已冻结）**：本次 launcher 依据同一启动请求中'
+        '冻结的 `egress_authorized=true` 与 profiles，允许把小说流水线所必需的小说正文及其派生'
+        '上下文仅发送到以下具体第三方接收方：\n'
+        f'{egress_routes}\n'
+        '授权仅覆盖上列 frozen commander 与 node→executor 路由，不覆盖任何其他第三方 provider、'
+        'driver、model、站点或接收方；started contract 与 execution permit 仍须逐项复核。'
+        '不得把 API key、token、cookie 或其他凭据内容放入模型输入、命令参数、日志或产物；'
+        'CLI 只能按自身认证机制使用凭据。这项授权不代表已经授予付费授权。'
         if egress_authorized else
-        '**正文外发授权未授予**：不得把小说正文或其派生上下文发送给外部模型；'
+        '**正文外发授权未授予**：没有任何 provider、driver、model、站点或接收方获得正文外发授权。'
+        '以下冻结路由只供 0 成本 preview 与身份核对，不构成授权：\n'
+        f'{egress_routes}\n'
+        '不得把小说正文或其派生上下文发送给外部模型；'
         '即使付费授权已经授予，也只能先完成只读的 state、inbox、下一节点 preview 与终审包草稿，'
         '并在首个需要正文外发的步骤前停下、写明恢复命令。')
     commander = profiles.commander
