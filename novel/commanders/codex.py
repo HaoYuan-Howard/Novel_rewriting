@@ -155,8 +155,9 @@ class CodexCommanderDriver(CliCommanderDriver):
             f'model_reasoning_effort={json.dumps(resolved.reasoning_effort)}',
             # ``never`` 会把 Windows shell / 仓外解释器的边界请求直接拒绝，
             # Commander 连 canonical runner 都无法启动。CLI 自带的自动审查仍
-            # 固定使用 workspace-write；网络只为 runner 的 Claude/Codex 子进程
-            # 开放，实际出站仍须继承 launcher 在双授权后注入的代理环境。
+            # 固定使用 workspace-write。network=true 会覆盖沙箱内所有命令与
+            # 子进程；开启它的必要消费者是 runner 的 Claude/Codex executor，
+            # 实际出站仍须继承 launcher 在双授权后注入的代理环境。
             '--approve-for-me',
             '--sandbox', 'workspace-write',
             '--config', 'sandbox_workspace_write.network_access=true',
