@@ -161,7 +161,7 @@ def test_claude_lifecycle_environment_cannot_be_overridden(tmp_path, name):
             env_overrides={name: 'caller-controlled'})
 
 
-def test_codex_invocation_is_exact_and_prompt_only_uses_stdin(tmp_path):
+def test_codex_invocation_freezes_auto_review_and_executor_egress(tmp_path):
     repo = tmp_path / 'repo'
     base = tmp_path / 'outputs'
     repo.mkdir()
@@ -180,10 +180,11 @@ def test_codex_invocation_is_exact_and_prompt_only_uses_stdin(tmp_path):
         '--json',
         '--model', 'gpt-5.6-sol',
         '--config', 'model_reasoning_effort="max"',
-        '--config', 'approval_policy="never"',
+        '--approve-for-me',
         '--sandbox', 'workspace-write',
-        '--config', 'sandbox_workspace_write.network_access=false',
+        '--config', 'sandbox_workspace_write.network_access=true',
         '--ignore-user-config',
+        '--ignore-rules',
         '--strict-config',
         '--cd', str(repo.resolve()),
         '--add-dir', str(base.resolve()),
@@ -192,6 +193,8 @@ def test_codex_invocation_is_exact_and_prompt_only_uses_stdin(tmp_path):
     assert invocation.stdin_text == prompt
     assert prompt not in invocation.argv
     assert invocation.argv[-1] == '-'
+    assert 'approval_policy="never"' not in invocation.argv
+    assert '--dangerously-bypass-approvals-and-sandbox' not in invocation.argv
     assert len(prompt) > 32_767
     assert invocation.cwd == str(repo.resolve())
     assert invocation.protocol == 'codex-jsonl-v1'

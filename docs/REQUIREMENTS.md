@@ -111,6 +111,12 @@ corpus 回归：尚未用 current-schema 真实整书跑到 Stage7，也没有�
 因此 `default_profiles` 仍为 null，未显式 profile 的 legacy LLM 路仍保留；现在删除或自动改写它会把
 未经真实验收的工程可达性冒充生产迁移完成。
 
+本次真机验收补上了一个仅 fake argv 看不见的 Windows 边界：Codex Commander 不再用
+`approval_policy="never"` 把 canonical runner 的进程请求直接拒绝，而改由 CLI 的
+workspace-write 自动审查代批；同时忽略宿主 user/project `.rules`，并在已取得正文外发授权的 launcher
+代理环境内为嵌套 Executor 开放网络。写入根仍只有仓库与显式 `--add-dir`，不使用 full-access 绕过。
+这只关闭了 Commander → runner → Executor 的真实启动缝，整书 Stage7 与双账验收仍按下文完成。
+
 Commander/Executor 的零成本工程收口已补齐以下读面，但**不改变上述真实付费验收缺口**：Stage4/6/7
 审批工作包以代码、规则、产物主体和完整 workpack SHA 绑定，完全相同的 current typed 决定可幂等跳过；
 Stage6/7 页面必须真实展示工作包证据后才允许提交双 hash。`state --with-inbox` 在单次调用内复用冻结

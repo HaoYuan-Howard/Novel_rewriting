@@ -484,6 +484,7 @@ def test_default_spawn_cannot_undo_driver_lifecycle_environment(monkeypatch):
         profile=_CLAUDE, protocol='test-v1')
     child_env = {
         'CLAUDE_CODE_DISABLE_BACKGROUND_TASKS': '0',
+        'HTTPS_PROXY': 'http://127.0.0.1:9',
         'NOVEL_RUN_ID': 'outer-1',
         'NOVEL_COMMANDER_RUN_ID': 'outer-1',
         'NOVEL_COMMANDER_CONTRACT_SHA256': 'a' * 64,
@@ -495,6 +496,7 @@ def test_default_spawn_cannot_undo_driver_lifecycle_environment(monkeypatch):
 
         assert result.exit_code == 0
         assert captured['CLAUDE_CODE_DISABLE_BACKGROUND_TASKS'] == '1'
+        assert captured['HTTPS_PROXY'] == 'http://127.0.0.1:9'
         assert captured['NOVEL_RUN_ID'] == 'outer-1'
         assert captured['NOVEL_COMMANDER_RUN_ID'] == 'outer-1'
         assert 'outer-1' in agent._COMMANDERS, 'drain 前必须保留可 cancel 的 owner'

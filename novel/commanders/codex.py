@@ -120,7 +120,7 @@ def _usage(events: Sequence[Mapping[str, Any]]) -> AgentUsage | None:
 
 
 class CodexCommanderDriver(CliCommanderDriver):
-    """Codex 非交互整书 Commander；只允许 workspace-write 且关闭网络。"""
+    """Codex 非交互整书 Commander；workspace-write 内由自动审查代批。"""
 
     driver = 'codex'
     provider = 'openai'
@@ -153,10 +153,17 @@ class CodexCommanderDriver(CliCommanderDriver):
             '--model', resolved.model,
             '--config',
             f'model_reasoning_effort={json.dumps(resolved.reasoning_effort)}',
-            '--config', 'approval_policy="never"',
+            # ``never`` 会把 Windows shell / 仓外解释器的边界请求直接拒绝，
+            # Commander 连 canonical runner 都无法启动。CLI 自带的自动审查仍
+            # 固定使用 workspace-write；网络只为 runner 的 Claude/Codex 子进程
+            # 开放，实际出站仍须继承 launcher 在双授权后注入的代理环境。
+            '--approve-for-me',
             '--sandbox', 'workspace-write',
-            '--config', 'sandbox_workspace_write.network_access=false',
+            '--config', 'sandbox_workspace_write.network_access=true',
             '--ignore-user-config',
+            # user/project execpolicy 是宿主状态，不能让同一冻结 run 因机器上
+            # 历史 ``.rules`` 不同而一台直跑、一台在自动审查前提前拒绝。
+            '--ignore-rules',
             '--strict-config',
             '--cd', repo_abs,
             '--add-dir', base_abs,
