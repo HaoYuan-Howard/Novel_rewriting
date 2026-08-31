@@ -424,7 +424,9 @@ def _build(ctx: RunContext, up: _Upstreams, model_out: dict,
     }
     fs = checks.rename_findings(
         name_map=name_map, subs=subs, problems=problems, applied=applied,
-        residual=residual, baseline=baseline, registry=up.registry,
+        residual=residual, baseline=baseline,
+        # 直接消费本轮实际下发材料，不从 registry 重拼第二份 canonical/alias 规则。
+        dispatched_characters=up.mat.chars,
         pre_target=up.pre_target, source_text=up.source_text,
         residual_keys=res_keys, stem_noise=stem_noise,
         family_members=up.family_members,

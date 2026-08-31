@@ -37,7 +37,8 @@ def _rename(**over) -> list:
     from novel.stages.stage7 import checks
     kw: dict = dict(
         name_map={'characters': [], 'surname_map': {}, 'kept': []},
-        subs={}, problems=[], applied={}, residual=[], baseline={}, registry={},
+        subs={}, problems=[], applied={}, residual=[], baseline={},
+        dispatched_characters={},
         pre_target='', source_text='', residual_keys=set(), stem_noise={},
         family_members={}, missing=[], invalids=[],
         post_units=[], title_line='书名：略')
@@ -283,7 +284,8 @@ CASES: dict[str, Case] = {
         '第一段落的文字要足够长一点。\n第二段落的文字也足够长一点。',
         src_hook='第一段。\n\n第二段。')),
 
-    'rn_llm_shape': Case('stage7', lambda: _rename(registry={'c1': {}})),
+    'rn_llm_shape': Case('stage7', lambda: _rename(
+        dispatched_characters={'c1': {'canonical': '沈凌', 'aliases': []}})),
     'rn_map_coverage': Case('stage7', lambda: _via_build_subs(
         [], universe=frozenset({'狗剩'}))),
     'rn_new_collide': Case('stage7', lambda: _via_build_subs(

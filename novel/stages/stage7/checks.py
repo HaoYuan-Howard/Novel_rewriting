@@ -16,6 +16,7 @@ checks.py —— 34 条判据的**实现**。行在 `contracts/judges/stage7.py`
 from __future__ import annotations
 
 import re
+from collections import Counter
 
 from contracts.invariants import IDENTITY_BLIND, MIN_SURFACE
 from contracts.schema.common import Finding
@@ -105,7 +106,8 @@ def _generic_appellation_was_touched(old: str, new: str, subs: dict[str, str],
 
 def rename_findings(*, name_map: dict, subs: dict[str, str], problems: list[Problem],
                     applied: dict, residual: list[dict], baseline: dict[str, dict],
-                    registry: dict[str, dict], pre_target: str, source_text: str,
+                    dispatched_characters: dict[str, dict],
+                    pre_target: str, source_text: str,
                     residual_keys: set[str], stem_noise: dict[str, int],
                     family_members: dict[str, tuple[str, ...]],
                     missing: list[int],
@@ -118,15 +120,60 @@ def rename_findings(*, name_map: dict, subs: dict[str, str], problems: list[Prob
     chars = name_map.get('characters') or []
 
     # ── ① 映射表自身的结构 ────────────────────────────────────────
-    miss_cid = sorted(set(registry) - {c.get('char_id') for c in chars})
-    extra_cid = sorted({c.get('char_id') for c in chars} - set(registry))
+    char_ids = [c.get('char_id') for c in chars]
+    expected_cids = set(dispatched_characters)
+    miss_cid = sorted(expected_cids - set(char_ids))
+    extra_cid = sorted(set(char_ids) - expected_cids)
+    duplicate_cid = sorted(cid for cid, count in Counter(char_ids).items()
+                           if cid and count > 1)
     bad_shape = [c.get('char_id') for c in chars
                  if c.get('renamed') and not (c.get('new_canonical') or '').strip()]
-    if miss_cid or extra_cid or bad_shape:
+    alias_contract: list[str] = []
+    identity_rename: list[str] = []
+    retained_but_changed: list[str] = []
+    for c in chars:
+        cid = c.get('char_id')
+        aliases = [((a.get('old') or '').strip(), (a.get('new') or '').strip())
+                   for a in (c.get('aliases') or [])]
+        dispatched = dispatched_characters.get(cid) or {}
+        expected = Counter(
+            (row.get('surface') or '').strip()
+            for row in (dispatched.get('aliases') or [])
+            if (row.get('surface') or '').strip()
+        )
+        actual = [old for old, _new in aliases]
+        if Counter(actual) != expected:
+            alias_contract.append(cid)
+
+        canonical_changed = (
+            (c.get('new_canonical') or '').strip()
+            != (dispatched.get('canonical') or '').strip()
+        )
+        # 只有这个角色**真实收到过**的 alias 才能证明改名发生；否则模型可虚构
+        # 一条 `甲→乙`，给 canonical 全恒等的账面决定背书，而正文仍 0 变化。
+        dispatched_alias_changed = any(
+            old in expected and old != new for old, new in aliases
+        )
+        any_alias_changed = any(old != new for old, new in aliases)
+        if c.get('renamed') and not canonical_changed and not dispatched_alias_changed:
+            identity_rename.append(cid)
+        if not c.get('renamed') and (canonical_changed or any_alias_changed):
+            retained_but_changed.append(cid)
+
+    if (miss_cid or extra_cid or duplicate_cid or bad_shape or alias_contract
+            or identity_rename or retained_but_changed):
         fs.append(finding('rn_llm_shape',
                           detail=f'映射表与人物表对不上：漏 {miss_cid[:6]}、多 {extra_cid[:6]}、'
-                                 f'renamed 却没给新名 {bad_shape[:6]}',
-                          evidence=[str(x) for x in miss_cid + extra_cid + bad_shape]))
+                                 f'重复 char_id {duplicate_cid[:6]}、'
+                                 f'renamed 却没给新名 {bad_shape[:6]}、'
+                                 f'alias 未与该角色下发面一一对应 {alias_contract[:6]}、'
+                                 f'renamed 却 canonical/已下发 alias 全部恒等 '
+                                 f'{identity_rename[:6]}、'
+                                 f'renamed=false 却改了字面 {retained_but_changed[:6]}',
+                          evidence=[str(x) for x in
+                                    miss_cid + extra_cid + duplicate_cid + bad_shape
+                                    + alias_contract + identity_rename
+                                    + retained_but_changed]))
     # ── 「为什么不改」这一格的**两侧**（`R-10.13①` 的另一半）──
     #    ⚠ 旧实现只查 `renamed=false` 那一侧，而 `renamed=true` 那一侧盘上同时存在
     #      `null` 与 `''` 两种「没有」，**谁也没在看**。现在 `_build` 把 true 那侧一律

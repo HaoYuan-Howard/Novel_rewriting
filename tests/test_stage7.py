@@ -333,6 +333,7 @@ def test_the_current_system_prompt_is_the_rendered_prompt():
     assert fill(prompts.RENAME_SYS) in rendered, '渲染把 system 本体改写了，不只是补形状'
     assert rendered != prompts.RENAME_SYS, '形状块没接上——`ask_json` 会收到一个没说形状的 prompt'
     assert 'char_id' in rendered, '形状块接上了却不是 `RENAME_HINT`'
+    assert 'canonical 或至少一条 alias 必须真的变化' in rendered
 
 
 def test_the_user_blocks_are_a_byte_for_byte_port_too(box):

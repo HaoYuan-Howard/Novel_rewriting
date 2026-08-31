@@ -18,8 +18,8 @@ Stage 7 负责人物真名替换与最终成书。模型只产改名决定；映
 
 | 字段 | 类型 | 内容 |
 |---|---|---|
-| `surname_map` | `dict[str,str]` | 原姓到新姓。口径是**本书全部改名角色的姓**；【姓氏族群】（字面同姓且 ≥2 人）只是其中必须共姓的子集，单人映射合法 |
-| `characters` | `NameDecision[]` | 每个 `char_id` 的完整决定。⚠ `renamed=true` 时 `not_renamed_reason` **只准是 `null`**（载体强制） |
+| `surname_map` | `dict[str,str]` | 原姓到新姓。口径是**本书全部改名角色的姓**；【姓氏族群】先按完整字面排除纯关系/官职/位号，再以有据同姓且 ≥2 人聚类，只是其中必须共姓的子集，单人映射合法 |
+| `characters` | `NameDecision[]` | 每个 `char_id` 恰好一条的完整决定；逐角色 `aliases[].old` 必须与实际下发 alias 精确对应，不漏、不多、不重复、不串角色。⚠ `renamed=true` 时 `not_renamed_reason` **只准是 `null`**，且 visible canonical 或该角色实际收到的至少一条 alias 必须真实变化；描述 canonical 恒等、带姓 alias 真改合法，全恒等的账面假改名由 `rn_llm_shape` 阻断。`renamed=false` 时 canonical/alias 必须全恒等 |
 | `extra_subs` | `ExtraSub[]` | 补充映射。`origin` 分 `human`（人手写）与 `adopted`（`--adopt-residual` 批量采纳），**判定同权，分开只为审计** |
 | `subs` | `dict[str,str]` | 代码展开后的完整替换表 |
 | `kept` | `str[]` | 必须保持原样的称呼 |

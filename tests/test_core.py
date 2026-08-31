@@ -341,7 +341,7 @@ def test_invented_names_needs_the_left_anchor():
 
 # ── 姓氏族群（stage7 改名）─────────────────────────────────────────────────
 
-#: 五个角色，覆盖 `attested_surname` 三道过滤各自拦下的那一类。
+#: 六个角色，覆盖 `attested_surname` 各道过滤拦下的典型形状。
 _REG = {
     'char_001': {'canonical': '孟青禾', 'address': [{'surface': '阿禾'}]},
     'char_002': {'canonical': '孟青兰', 'address': []},
@@ -363,8 +363,8 @@ def test_strip_distinguisher_has_one_home():
     assert strip_distinguisher('孟青禾') == '孟青禾'
 
 
-def test_attested_surname_四道过滤各拦一类():
-    """⭐ 四道过滤里**只有多主那道**拦得住「书童」——它有据、长度也够。"""
+def test_attested_surname_五道过滤各拦一类():
+    """⭐ 五道过滤里**只有多主那道**拦得住「书童」——它有据、长度也够。"""
     ow = surface_owners(_REG)
     assert sorted(ow['书童']) == ['char_004', 'char_005']
     got = {cid: attested_surname(v, _BOOK, ow) for cid, v in _REG.items()}
@@ -390,8 +390,42 @@ def test_common_titles_that_share_a_first_character_do_not_become_a_family():
     assert acct == {'families': 0, 'singleton_surnames': []}
 
 
+def test_attested_pure_titles_do_not_become_a_family_but_suffixed_names_do():
+    """实跑回归：medium/high 纯位号不能靠共同首字造出幽灵姓氏。
+
+    过滤只认**整串**角色词；`王夫人` / `李将军` 仍须召回真姓，不能因复用
+    同一语义词表而把带姓称谓一起删掉。
+    """
+    reg = {
+        'char_001': {'canonical': '皇帝', 'name_distinctiveness': 'medium', 'address': []},
+        'char_002': {'canonical': '皇后', 'name_distinctiveness': 'high', 'address': []},
+        'char_003': {'canonical': '皇贵夫', 'name_distinctiveness': 'medium', 'address': []},
+        'char_004': {'canonical': '皇太女', 'name_distinctiveness': 'high', 'address': []},
+        'char_005': {'canonical': '王夫人', 'name_distinctiveness': 'medium', 'address': []},
+        'char_006': {'canonical': '王姑娘', 'name_distinctiveness': 'high', 'address': []},
+        'char_007': {'canonical': '李将军', 'name_distinctiveness': 'medium', 'address': []},
+        'char_008': {'canonical': '李大人', 'name_distinctiveness': 'high', 'address': []},
+    }
+    book = '皇帝与皇后召见皇贵夫和皇太女。王夫人与王姑娘同行，李将军向李大人复命。'
+
+    groups, sur, acct = family_groups(reg, book, surface_owners(reg))
+
+    assert sur == {
+        'char_001': None, 'char_002': None, 'char_003': None, 'char_004': None,
+        'char_005': '王', 'char_006': '王',
+        'char_007': '李', 'char_008': '李',
+    }
+    assert sorted(groups.values()) == [
+        ['char_005', 'char_006'], ['char_007', 'char_008'],
+    ]
+    assert acct == {'families': 2, 'singleton_surnames': []}
+    assert attested_surname(
+        {'canonical': '皇甫珩', 'name_distinctiveness': 'high'}, '皇甫珩入殿。') == '皇', \
+        '只能按完整位号相等排除，不能用皇字前缀误杀复姓'
+
+
 def test_family_groups_needs_two_people_and_that_catches_the_fake_surnames():
-    """⭐ 「≥2 人才成族」兜住了三道过滤漏掉的假姓——它们**全是单例**。
+    """⭐ 「≥2 人才成族」兜住剩余过滤漏掉的假姓——当前实测它们**全是单例**。
 
     ⚠ 单例**照样会被改名**，只是不进 `surname_map`。
     别把「不在族群表」读成「不改名」。
@@ -426,6 +460,7 @@ def test_rename_semantic_markers_preserve_rank_number_relationship_and_office():
     assert rename_semantic_markers('李将军') != rename_semantic_markers('沈凌')
     assert rename_semantic_markers('沈凌') != rename_semantic_markers('沈将军'), \
         '新增原本没有的职位同样改变语义'
+    assert 'role:皇太女' in rename_semantic_markers('皇太女')
 
 
 # ── 叫法时点（第四组，stage4 的下发闸门）─────────────────────────────────

@@ -25,6 +25,7 @@ from contracts.schema import decode_artifact
 from contracts.schema.stage7 import ExtraSub, NameDecision, NameMapEdit, Residual
 from novel import prov
 from novel.consumption import stage7_grounding
+from novel.core.naming import family_groups, strip_distinguisher, surface_owners
 from novel.errors import ApprovalRequired, BlockingFindingsUnresolved, TerminalState
 from novel.stages.stage7 import assemble, checks, prompts, rename
 from novel.stages.stage7.subs import (
@@ -48,7 +49,8 @@ def test_derived_alias_probe_catches_name_tail_nickname_without_auto_replacing()
     findings = checks.rename_findings(
         name_map={'surname_map': {}, 'characters': characters,
                   'extra_subs': [], 'subs': {}, 'kept': []},
-        subs={}, problems=[], applied={}, residual=[], baseline={}, registry={},
+        subs={}, problems=[], applied={}, residual=[], baseline={},
+        dispatched_characters={},
         pre_target='', source_text='', residual_keys=set(), stem_noise={},
         family_members={}, missing=[], invalids=[],
         post_units=[('ch6', '箬姐姐替她掩上房门。')], title_line='书名语义需人工确认',
@@ -101,6 +103,32 @@ def test_rename_prompt_receives_the_typed_era_instead_of_an_alias_mismatch():
     assert '"架空古代江南"' in user
     era_block = next(block for block in material.blocks if '时代背景' in block)
     assert '（未知）' not in era_block
+
+
+def test_stage7_material_keeps_pure_titles_but_does_not_dispatch_a_ghost_family():
+    """最终模型材料里人物仍在，但族群表不能把两个纯位号交成「皇姓一家」。"""
+    registry = {
+        'char_001': {'canonical': '皇贵夫', 'name_distinctiveness': 'medium', 'address': []},
+        'char_002': {'canonical': '皇太女', 'name_distinctiveness': 'high', 'address': []},
+        'char_003': {'canonical': '王夫人', 'name_distinctiveness': 'medium', 'address': []},
+        'char_004': {'canonical': '王姑娘', 'name_distinctiveness': 'high', 'address': []},
+    }
+    book = '皇贵夫拜见皇太女，王夫人携王姑娘入宫。'
+    groups, surnames, _accounting = family_groups(
+        registry, book, surface_owners(registry))
+
+    material = prompts.build_material(
+        title='测试书', registry=registry, relations=[], era='架空古代',
+        groups=groups, sur=surnames, book_text=book, targets=[book],
+    )
+    user = prompts.build_user(material)
+
+    assert '皇贵夫' in user and '皇太女' in user
+    assert [row['原姓'] for row in material.groups] == [['王']]
+    assert [member['char_id'] for member in material.groups[0]['成员']] == [
+        'char_003', 'char_004',
+    ]
+    assert json.dumps(material.groups, ensure_ascii=False) in user
 
 
 def test_generic_appellation_wrapper_may_keep_label_and_replace_embedded_name():
@@ -167,16 +195,38 @@ def test_a_character_that_is_not_renamed_contributes_no_exemption():
 
 # ── ①c 姓可以只由别名承载：`rn_surname_split` 的 orphan 那一路 ─────────────
 
-def _split_detail(characters: list[dict], surname_map: dict, subs: dict) -> str | None:
+def _mapping_findings(
+    characters: list[dict], surname_map: dict, subs: dict,
+    *, family_members: dict[str, tuple[str, ...]] | None = None,
+    dispatched_characters: dict[str, dict] | None = None,
+):
     """只跑映射表自身那几条判据；替换器侧入参全给空。"""
-    fs = checks.rename_findings(
+    if dispatched_characters is None:
+        dispatched_characters = {
+            c['char_id']: {
+                'canonical': strip_distinguisher(c.get('old_canonical') or ''),
+                'aliases': [
+                    {'surface': (alias.get('old') or '').strip(), 'count': 0}
+                    for alias in (c.get('aliases') or [])
+                ],
+            }
+            for c in characters
+        }
+    return checks.rename_findings(
         name_map={'surname_map': surname_map, 'characters': characters,
                   'extra_subs': [], 'subs': subs, 'kept': []},
         subs=subs, problems=[], applied={'chapters': {}}, residual=[], baseline={},
-        registry={c['char_id']: {} for c in characters},
+        dispatched_characters=dispatched_characters,
         pre_target='', source_text='', residual_keys=set(), stem_noise={},
-        family_members={}, missing=[], invalids=[], post_units=[],
+        family_members=family_members or {}, missing=[], invalids=[], post_units=[],
         title_line='书名语义需人工确认')
+
+
+def _split_detail(characters: list[dict], surname_map: dict, subs: dict,
+                  *, family_members: dict[str, tuple[str, ...]] | None = None
+                  ) -> str | None:
+    fs = _mapping_findings(
+        characters, surname_map, subs, family_members=family_members)
     return next((f.detail for f in fs if f.rule == 'rn_surname_split'), None)
 
 
@@ -217,10 +267,115 @@ def test_an_identity_alias_does_not_certify_a_surname_mapping():
     assert detail is not None and '陈→陈' in detail
 
 
+def test_a_real_family_cannot_opt_out_by_marking_every_member_unrenamed():
+    """族群由确定性上游给出，模型不能靠把整组都写成 false 来撤掉 HARD。"""
+    chars = [
+        {'char_id': 'char_001', 'old_canonical': '沈知意', 'new_canonical': '沈知意',
+         'renamed': False, 'aliases': [], 'not_renamed_reason': '误判为称谓', 'reason': ''},
+        {'char_id': 'char_002', 'old_canonical': '沈知微', 'new_canonical': '沈知微',
+         'renamed': False, 'aliases': [], 'not_renamed_reason': '误判为称谓', 'reason': ''},
+    ]
+
+    detail = _split_detail(
+        chars, {}, {}, family_members={'沈': ('char_001', 'char_002')})
+
+    assert detail is not None and "漏填 ['沈']" in detail
+
+
+def test_renamed_true_requires_a_real_canonical_or_alias_change():
+    """真实改动必须绑定这个角色**实际收到**的 canonical/alias。"""
+    registry = {
+        'char_001': {
+            'canonical': '胖婶', 'address': [
+                {'surface': '王婶'}, {'surface': '王婶'}, {'surface': '胖婶'},
+            ],
+        },
+        'char_002': {'canonical': '皇贵夫', 'address': []},
+    }
+    mat = prompts.build_material(
+        title='测试书', registry=registry, relations=[], era='架空古代',
+        groups={}, sur={}, book_text='胖婶、王婶与皇贵夫。', targets=[],
+    )
+
+    alias_only = [{
+        'char_id': 'char_001', 'old_canonical': '胖婶', 'new_canonical': '胖婶',
+        'renamed': True, 'aliases': [{'old': '王婶', 'new': '林婶'}],
+        'not_renamed_reason': None, 'reason': '描述词不动，只改带姓别名',
+    }]
+    canonical_change = [{
+        'char_id': 'char_002', 'old_canonical': '皇贵夫', 'new_canonical': '沈知礼',
+        'renamed': True, 'aliases': [], 'not_renamed_reason': None, 'reason': '改名',
+    }]
+    retained = [{
+        'char_id': 'char_001', 'old_canonical': '胖婶', 'new_canonical': '胖婶',
+        'renamed': False, 'aliases': [{'old': '王婶', 'new': '王婶'}],
+        'not_renamed_reason': '只是描述称谓', 'reason': '',
+    }]
+
+    def rules(characters: list[dict]) -> set[str]:
+        return {f.rule for f in _mapping_findings(
+            characters, {}, {}, dispatched_characters=mat.chars)}
+
+    assert 'rn_llm_shape' not in rules(alias_only + canonical_change)
+    assert 'rn_llm_shape' not in rules(retained + canonical_change)
+
+    invalids = {
+        '全恒等 true': [alias_only[0], {
+            **canonical_change[0], 'new_canonical': '皇贵夫',
+        }],
+        '只改虚构 alias': [alias_only[0], {
+            **canonical_change[0], 'new_canonical': '皇贵夫',
+            'aliases': [{'old': '虚构甲', 'new': '虚构乙'}],
+        }],
+        '挪用别人 alias': [alias_only[0], {
+            **canonical_change[0], 'new_canonical': '皇贵夫',
+            'aliases': [{'old': '王婶', 'new': '林婶'}],
+        }],
+        '漏 alias': [{**alias_only[0], 'aliases': []}, canonical_change[0]],
+        '重复 alias': [{
+            **alias_only[0], 'aliases': alias_only[0]['aliases'] * 2,
+        }, canonical_change[0]],
+        'canonical 重列进 alias': [{
+            **alias_only[0],
+            'aliases': alias_only[0]['aliases'] + [{'old': '胖婶', 'new': '林婶'}],
+        }, canonical_change[0]],
+        'false 却改 canonical': [retained[0], {
+            **canonical_change[0], 'renamed': False, 'new_canonical': '沈知礼',
+            'not_renamed_reason': '纯位号',
+        }],
+        'false 却改 alias': [{
+            **retained[0], 'aliases': [{'old': '王婶', 'new': '林婶'}],
+        }, canonical_change[0]],
+        '重复 char_id': [alias_only[0], alias_only[0], canonical_change[0]],
+    }
+    for label, characters in invalids.items():
+        assert 'rn_llm_shape' in rules(characters), label
+
+
+def test_removing_only_a_registry_distinguisher_is_not_a_real_rename():
+    registry = {
+        'char_001': {'canonical': '皇贵夫(宫中消重标签)', 'address': []},
+    }
+    mat = prompts.build_material(
+        title='测试书', registry=registry, relations=[], era='架空古代',
+        groups={}, sur={}, book_text='皇贵夫入殿。', targets=[],
+    )
+    decision = [{
+        'char_id': 'char_001', 'old_canonical': '皇贵夫(宫中消重标签)',
+        'new_canonical': '皇贵夫', 'renamed': True, 'aliases': [],
+        'not_renamed_reason': None, 'reason': '只去内部标签',
+    }]
+
+    rules = {f.rule for f in _mapping_findings(
+        decision, {}, {}, dispatched_characters=mat.chars)}
+    assert 'rn_llm_shape' in rules
+
+
 def test_rename_semantic_marker_finding_catches_rank_change():
     kwargs = dict(
         name_map={'characters': [], 'surname_map': {}},
-        problems=[], applied={}, residual=[], baseline={}, registry={},
+        problems=[], applied={}, residual=[], baseline={},
+        dispatched_characters={},
         pre_target='', source_text='', residual_keys=set(), stem_noise={},
         family_members={}, missing=[], invalids=[],
         post_units=[], title_line='书名语义需人工确认',
@@ -478,7 +633,10 @@ def test_dropping_a_substantive_reason_is_reported_but_dropping_a_blank_is_not()
         fs = checks.rename_findings(
             name_map={'characters': [_decision()], 'surname_map': {}},
             subs={}, problems=[], applied={'chapters': {}, 'hook': {'counts': {}}},
-            residual=[], baseline={}, registry={'char_001': {'canonical': '迟折月'}},
+            residual=[], baseline={},
+            dispatched_characters={
+                'char_001': {'canonical': '迟折月', 'aliases': []},
+            },
             pre_target='', source_text='', residual_keys=set(), stem_noise={},
             family_members={}, missing=[], invalids=[], post_units=[],
             # ⚠ `title_line` 非空是**必需**的：`rn_title_unver` 直接拿它当 detail

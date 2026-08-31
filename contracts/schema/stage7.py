@@ -72,7 +72,9 @@ class NameDecision(StrictModel):
     #: ⚠ `--apply-edit` 的 patch **显式禁止改它**（不在可编辑白名单里）。
     old_canonical: str = Field(min_length=1)
 
-    #: `renamed=false` 时原样填旧名。盘上长度 1~8。
+    #: `renamed=false` 时原样填旧名。`renamed=true` 时可因「描述 canonical + 带姓 alias」
+    #: 保持 canonical，但至少一条 alias 必须真实变化；canonical/alias 全恒等由
+    #: `rn_llm_shape`（HARD）拦住。盘上长度 1~8。
     new_canonical: str = Field(min_length=1)
 
     #: 盘上 32/75 为真。
@@ -91,6 +93,9 @@ class NameDecision(StrictModel):
     #: `novel/stages/stage7/rename.py::_build`（写之前先归零），载体在这里兜底。
     not_renamed_reason: str | None
 
+    #: `old` 必须与该角色**实际下发**的 alias 精确一一对应：
+    #: 不漏、不多、不重复、不串到别的 char_id。这是 `rn_llm_shape`
+    #: 的判据语义，故意不收进 Pydantic：旧 INVALID 还要能进 0-LLM 编辑恢复口。
     aliases: list[Alias]
 
     #: 一句话说明新名为什么贴合。盘上 0~39 字；**空串 11 条，全部落在 `renamed=false`
@@ -393,7 +398,7 @@ class NameMap(StrictModel):
     #: 全部合法通过——**盘上的事实一直是宽口径。**
     #:
     #: ⚠ **宽口径是对的，不要回头收窄。** `R-10.6` 的探针把本字段的**键**并进 `stems`
-    #: （`novel/stages/stage7/rename.py::_build`），而 `attested_surname` 的四道过滤
+    #: （`novel/stages/stage7/rename.py::_build`），而 `attested_surname` 的五道过滤
     #: 必然漏掉真姓（实测两例：只由自造标签承载的姓、撞上亲属字表的姓）——
     #: 模型这张表是唯一能把它们捞回来的地方，注释里记着漏掉那两个姓的代价是
     #: **6 处旧姓活着进了交付的成书**。收窄这一格＝把那条兜底关掉。
@@ -459,6 +464,10 @@ class NameMap(StrictModel):
 
 class NameDecisionResponse(StrictModel):
     """模型写的一条角色决定。**`old_canonical` 不在里面**——它由代码从 registry 回填。
+
+    因此响应载体本身无法比较新旧字面；`_build` 回填之后由 `rn_llm_shape` 要求
+    char_id 及逐角色 alias 与实际下发面精确对应，并要求 `renamed=true` 至少
+    真实改变 visible canonical 或该角色收到的一条 alias，全恒等不能冒充改名。
     """
 
     char_id: str = Field(min_length=1)
@@ -490,7 +499,8 @@ class NameMapResponse(StrictModel):
     """
 
     #: `{原姓: 新姓}`——本书**全部改名角色**的姓；口径与去向见 `NameMap.surname_map`。
-    #: 【姓氏族群】那张表列出的原姓是其中**一个都不能漏**的子集（同族必须共姓）。
+    #: 【姓氏族群】先排除完整纯称谓/位号，再按有据姓氏聚类；表中原姓是其中
+    #: **一个都不能漏**的子集（同族必须共姓）。
     #: ⚠ **必需键**——见上面那张表。空表是合法的（这本书没有一个改名角色带姓），
     #: 而**键不在**不是（那说明模型没照契约答）。
     surname_map: dict[str, str]

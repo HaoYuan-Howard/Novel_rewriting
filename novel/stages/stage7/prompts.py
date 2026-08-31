@@ -65,6 +65,8 @@ RENAME_SYS = """\
 - characters: [{char_id, renamed, new_canonical, not_renamed_reason, aliases:[{old,new}], reason}]
   · char_id 必须沿用给定的编号，一个不漏、不多不少；
   · renamed=false 时 new_canonical 原样填旧名、aliases 全部 old==new、必须写 not_renamed_reason；
+  · renamed=true 时 new_canonical 或至少一条 alias 必须真的变化；若全部恒等就应填 false，
+    不得用「标成已改名、字面却一个没改」的账面决定；
   · reason 一句话，说明这个新名为什么贴合。"""
 
 #: 响应形状提示。**它不是 prompt 文本**，是给 `ask_json` 的 JSON 形状。
