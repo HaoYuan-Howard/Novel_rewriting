@@ -99,6 +99,48 @@ def test_blocked_recovery_gets_a_new_permit_not_the_blocker_hash(
     assert got.permit_sha256 != current.action.action_sha256
 
 
+@pytest.mark.parametrize(
+    'waiting_on',
+    [
+        Q.WAITING_ON_STAGE4_DESIGN_REVIEW,
+        Q.WAITING_ON_STAGE4_BINDING_RESOLUTION,
+        Q.WAITING_ON_STAGE4_STRUCTURE_REVIEW,
+    ],
+)
+def test_blueprint_workpack_remains_reachable_for_stage4_gate_bootstrap(
+        waiting_on, monkeypatch, tmp_path):
+    """Stage2 收口后补 seen.read 时，纯读工作包不能被 Stage4 blocker 锁死。"""
+    _stable(monkeypatch)
+    current = _next(
+        tmp_path, state='blocked', node='stage4.plan', waiting_on=waiting_on)
+
+    got = P.permit_from_next(
+        current, 'stage2.blueprint', ['--emit-review-workpack'])
+
+    assert got.kind == 'recovery'
+    assert got.paid is False
+    assert got.writes == ''
+    assert got.waiting_on == waiting_on
+    assert got.node == 'stage2.blueprint'
+    assert got.flags == ['--emit-review-workpack']
+
+
+@pytest.mark.parametrize(
+    'waiting_on',
+    [Q.WAITING_ON_REVIEW, Q.WAITING_ON_STAGE5_CLOSURE],
+)
+def test_blueprint_workpack_cannot_jump_to_a_stage5_blocker(
+        waiting_on, monkeypatch, tmp_path):
+    """只补 Stage4 bootstrap 缝，不把只读恢复入口无限放宽到下游。"""
+    _stable(monkeypatch)
+    current = _next(
+        tmp_path, state='blocked', node='stage5.write', waiting_on=waiting_on)
+
+    with pytest.raises(UnsupportedRunMode, match='不能处理当前 blocker'):
+        P.permit_from_next(
+            current, 'stage2.blueprint', ['--emit-review-workpack'])
+
+
 def test_pipeline_complete_and_unregistered_paid_recovery_fail_closed(
         monkeypatch, tmp_path):
     _stable(monkeypatch)

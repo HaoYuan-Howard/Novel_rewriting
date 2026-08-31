@@ -146,17 +146,38 @@ workpack；确认完整面成立后，才把 scope 改为 `PASS`，
 Stage4 有两次正式人审，必须按顺序分别落账。
 
 若这本书还没有 `_service/approvals/<SID>.json`，先经同一公开 façade 补齐早期
-阅读/闸门记录；不能由 Commander 运行时 import 私调服务：
+阅读/闸门记录；不能由 Commander 运行时 import 私调服务。`seen.read` 不是一句空确认：
+它必须绑定 agent **实际完整读过**的 current Blueprint 工作包。先按主 skill 的
+`operator next → operator permit → run_step.py` 纪律运行
+`stage2.blueprint --emit-review-workpack`，完整阅读后把工作包顶层与 binding 中的五个值
+逐字写进版本化的 `BlueprintSeenRequest` 输入：
+
+```json
+{
+  "expected_binding_sha256": "<workpack.binding_sha256>",
+  "expected_subject_sha256": "<workpack.subject_sha256>",
+  "expected_main_text_artifact_sha256": "<workpack.binding.main_text_artifact_sha256>",
+  "expected_code_version": "<workpack.binding.code_version>",
+  "expected_rules_fingerprint": "<workpack.binding.rules_fingerprint>"
+}
+```
+
+该只读 producer 在 Stage2 复核 blocker 与全部 Stage4 审批恢复 blocker 下都保持 permit 可达，
+专门避免「Stage2 决策已提交、blocker 已前移，才发现审批账尚未 bootstrap」的死锁；它不在
+Stage5 或更晚 blocker 下开放。输入任一值过期，`seen read` 会在写审批账前关闭式拒绝。
+然后按下面顺序走 façade（`<BLUEPRINT_SEEN.json>` 是刚才人工写出的 typed 输入，不是 workpack
+本身）：
 
 ```text
 novel.cli approval gate s0 <SID> --base <BASE>
 novel.cli approval gate s1 <SID> --base <BASE>
-novel.cli approval seen read <SID> --base <BASE>
+novel.cli approval seen read <SID> --base <BASE> --input <BLUEPRINT_SEEN.json>
 novel.cli approval seen global <SID> --base <BASE>
 novel.cli approval gate s2 <SID> --base <BASE>
 ```
 
 `seen` 会绑定当前 Stage2 视图，`gate` 会绑定当前产物 proof 并逐级检查前置。
+`approval backfill` 不会制造 `seen.read/global` 或 `gate.s2`，不能拿它代替这段阅读事实。
 通用 `approval gate` 只公开 `s0/s1/s2`；s4 必须走下面带完整 subject 与逐章决定的
 typed structure apply，不能匿名盖章。
 

@@ -111,7 +111,12 @@ RECOVERY_RUN_POLICIES: Final[tuple[RecoveryRunPolicy, ...]] = (
     RecoveryRunPolicy('stage2.blueprint', _t('--renormalize'), _W2),
     RecoveryRunPolicy(
         'stage2.blueprint', _t('--revalidate', '--actor', '--reason'), _W2),
-    RecoveryRunPolicy('stage2.blueprint', _t('--emit-review-workpack'), _W2),
+    # ``seen.read`` 绑定整本 Blueprint 工作包，而 Stage4A 的 typed 审阅又以
+    # ``gate.s2`` 为硬前置。新盘若在 Stage2 评测收口后才补审批账，当前 blocker
+    # 已前移到 Stage4；只给 _W2 会让工作包生产者与审批前置形成死锁。该入口纯读，
+    # 因而在全部 Stage4 恢复态继续开放，不放宽任何写盘或付费动作。
+    RecoveryRunPolicy(
+        'stage2.blueprint', _t('--emit-review-workpack'), _W2 | _W4),
 
     RecoveryRunPolicy(
         'stage4.design', _t('--adopt-rejected', '--actor', '--reason'), _W4),
