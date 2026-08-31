@@ -111,6 +111,71 @@ def test_human_nodes_are_exactly_the_ones_a_person_does():
                              'stage6.approve', 'stage7.approve'}
 
 
+@pytest.mark.parametrize(
+    ('node', 'module_name'),
+    [
+        ('stage6.approve', 'novel.stages.stage6.hook'),
+        ('stage7.approve', 'novel.stages.stage7.rename'),
+    ],
+)
+def test_human_gate_uses_the_production_current_workpack_classifier(
+        queue_base, monkeypatch, node, module_name):
+    """盘上有旧 ``approved`` 不等于仍绑定当前代码/规则/证据工作包。"""
+    import importlib
+
+    artifact = SimpleNamespace(approved=object())
+    store = SimpleNamespace(read_own=lambda *_args: (artifact, b'{}'))
+    monkeypatch.setattr(Q.paths, 'resolve_novel_dir', lambda *_args: queue_base)
+    monkeypatch.setattr(Q.st, 'readonly_ctx', lambda *_args: object())
+    monkeypatch.setattr(Q, 'ArtifactStore', lambda _ctx: store)
+    current = importlib.import_module(module_name)
+    calls = []
+    monkeypatch.setattr(
+        current, 'approval_is_current',
+        lambda got_store, got_artifact: calls.append(
+            (got_store, got_artifact)) or False)
+
+    assert Q._human_gate_satisfied(queue_base, 'book-a', node) is False
+    assert calls == [(store, artifact)]
+
+
+def test_stale_stage6_approval_blocks_before_stage7_assemble(
+        queue_base, monkeypatch):
+    """assemble 会拒旧 Stage6 包；queue 必须先暴露可获 permit 的批准 blocker。"""
+    monkeypatch.setattr(
+        Q, 'nodes_up_to',
+        lambda _until: ['stage6.approve', 'stage7.approve', 'stage7.assemble'])
+    overview = SimpleNamespace(stages=[
+        SimpleNamespace(
+            stage='stage6', artifacts=[SimpleNamespace(exists=True, invalid=False)]),
+        SimpleNamespace(
+            stage='stage7', artifacts=[SimpleNamespace(exists=True, invalid=False)]),
+    ])
+    monkeypatch.setattr(Q.st, 'stage2_global_projection_blocked', lambda _ov: False)
+    monkeypatch.setattr(
+        Q.st, 'resume_verdict',
+        lambda _ov, node: (
+            (Q.st.RESUME_RUN, '成书缺失')
+            if node == 'stage7.assemble'
+            else (Q.st.RESUME_SKIP, '产物已存在')))
+    monkeypatch.setattr(
+        Q, '_human_gate_satisfied',
+        lambda _base, _sid, node: node == 'stage7.approve')
+    monkeypatch.setattr(
+        Q.approvals, 'stage5_closure_view',
+        lambda *_args: SimpleNamespace(state='closed'))
+
+    todo, blocked = Q.plan_book_from_overview(
+        queue_base, 'book-a', overview,
+        until_stage='stage7', follow_check=False)
+
+    assert todo == []
+    assert [item.node for item in blocked] == [
+        'stage6.approve', 'stage7.approve', 'stage7.assemble']
+    assert all(item.waiting_on == 'stage6.approve' for item in blocked)
+    assert blocked[0].steps == []
+
+
 def test_upstream_stuck_never_builds_downstream_human_commands(
         queue_base, monkeypatch):
     """上游阻塞传播到人工节点时只报等待，不索取尚不存在的必填裁决。"""

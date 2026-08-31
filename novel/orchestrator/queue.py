@@ -50,7 +50,7 @@ from novel.cli import exit_codes as X
 from novel.cli.exit_codes import CRASH
 from novel.errors import (
     ApprovalRequired, ArtifactUnreadable, BlockingFindingsUnresolved,
-    GateBlocked, QueueConflict, UpstreamMissing, UpstreamStale,
+    GateBlocked, QueueConflict, TerminalState, UpstreamMissing, UpstreamStale,
     UpstreamUnproven,
 )
 from novel.orchestrator import approvals, jobs, state as st
@@ -169,7 +169,13 @@ def _human_gate_satisfied(base: str | os.PathLike[str], sid: str, node: str) -> 
         novel_dir = paths.resolve_novel_dir(base, sid)
         store = ArtifactStore(st.readonly_ctx(novel_dir, node, prov.code_version()))
         artifact, _ = store.read_own(model, rel)
-    except (UpstreamMissing, ArtifactUnreadable):
+        if node == 'stage6.approve':
+            from novel.stages.stage6 import hook
+            return hook.approval_is_current(store, artifact)
+        if node == 'stage7.approve':
+            from novel.stages.stage7 import rename
+            return rename.approval_is_current(store, artifact)
+    except TerminalState:
         return False
     if node == 'stage0.approve':
         # 唯一落点在 eligibility，队列不自己复述批准条件；不具执行资格
@@ -178,7 +184,7 @@ def _human_gate_satisfied(base: str | os.PathLike[str], sid: str, node: str) -> 
         from novel.stages.stage0 import revisions as stage0_revisions
         stage0_revisions.verify_chain(artifact)
         return is_stage0_executable(stage0_revisions.snapshot_of(artifact))
-    return artifact.approved is not None
+    raise AssertionError(f'未登记的人工闸门 current 判定：{node}')
 
 
 def _stage4_replan_required(base: str | os.PathLike[str], sid: str) -> bool:
