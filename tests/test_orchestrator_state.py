@@ -244,7 +244,10 @@ def _chapter_state(*, freshness: str = 'fresh', exists: bool = True,
         reason=('match' if freshness == 'fresh' else 'consumed_changed'
                 if freshness == 'stale' else 'no_provenance'),
         display_freshness=(freshness if exists else 'missing'),
-        invalid=invalid, readable=readable,
+        invalid=invalid,
+        invalid_freshness=('unknown' if invalid else None),
+        invalid_reason=('no_provenance' if invalid else None),
+        readable=readable,
         condition=('invalid' if invalid else 'missing' if not exists else
                    'unreadable' if not readable else 'ready'),
     )
@@ -376,7 +379,11 @@ def _overview(*stages: StageState) -> NovelOverview:
 def _stage2_artifact(
     rel: str, *, exists: bool = True, freshness: str = 'fresh',
     readable: bool = True, invalid: bool = False, reason: str | None = None,
+    invalid_freshness: str | None = None,
+    invalid_reason: str | None = None,
 ) -> ArtifactState:
+    if invalid and invalid_freshness is None and invalid_reason is None:
+        invalid_freshness, invalid_reason = 'unknown', 'no_provenance'
     return ArtifactState(
         rel=rel, exists=exists, bytes=(1 if exists else None),
         mtime=(1 if exists else None),
@@ -384,7 +391,8 @@ def _stage2_artifact(
         reason=(reason or ('match' if freshness == 'fresh' else 'consumed_changed'
                           if freshness == 'stale' else 'no_provenance')),
         display_freshness=(freshness if exists else 'missing'),
-        invalid=invalid, readable=readable,
+        invalid=invalid, invalid_freshness=invalid_freshness,
+        invalid_reason=invalid_reason, readable=readable,
         condition=('invalid' if invalid else 'missing' if not exists else
                    'unreadable' if not readable else 'ready'),
     )
@@ -526,7 +534,7 @@ def test_legacy_v6_blueprint_inputs_route_only_to_free_renormalize():
             _stage2_artifact(STAGE2_BLUEPRINT_CHARACTER_PROJECTION),
             _stage2_artifact(
                 STAGE2_CHAPTER_BLUEPRINTS,
-                freshness='unknown', reason='consumed_unresolved'),
+                freshness='unknown', reason='legacy_blueprint_inputs'),
         ],
         done=True,
         reviewable=True,
@@ -538,6 +546,39 @@ def test_legacy_v6_blueprint_inputs_route_only_to_free_renormalize():
     assert verdict == S.RESUME_RUN
     assert 'stage2.blueprint --renormalize' in why
     assert '0 LLM' in why and '不得重跑付费 Blueprint' in why
+
+
+@pytest.mark.parametrize(('formal_exists', 'formal_readable'), [
+    (False, True),
+    (True, True),
+    (True, False),
+])
+def test_legacy_v6_live_invalid_takes_priority_over_generic_revalidate(
+        formal_exists, formal_readable):
+    """legacy INVALID 自己决定换账路，不能借共存 formal 的可读性作证。"""
+    stage = StageState(
+        stage='stage2',
+        artifacts=[
+            _stage2_artifact(STAGE2_BLUEPRINT_CHARACTER_PROJECTION),
+            _stage2_artifact(
+                STAGE2_CHAPTER_BLUEPRINTS,
+                exists=formal_exists,
+                readable=formal_readable,
+                invalid=True,
+                invalid_freshness='unknown',
+                invalid_reason='legacy_blueprint_inputs'),
+        ],
+        done=False,
+        reviewable=True,
+    )
+    ov = _overview(stage)
+
+    assert S.stage2_legacy_blueprint_recovery_needed(ov)
+    assert not S.stage2_blueprint_invalid_recovery_needed(ov)
+    verdict, why = S.resume_verdict(ov, 'stage2.blueprint')
+    assert verdict == S.RESUME_RUN
+    assert 'stage2.blueprint --renormalize' in why
+    assert '--revalidate' not in why
 
 
 @pytest.mark.parametrize('formal_exists', [False, True])
@@ -679,7 +720,8 @@ def test_stage6_semantic_is_not_answered_by_the_hook_artifact():
     """
     hook = ArtifactState(rel='stage6/hook.json', exists=True, bytes=1, mtime=1,
                          freshness='fresh', reason='match', display_freshness='fresh',
-                         invalid=False, readable=True, condition='ready')
+                         invalid=False, invalid_freshness=None,
+                         invalid_reason=None, readable=True, condition='ready')
     ov = _overview(StageState(stage='stage6', artifacts=[hook], done=True,
                               reviewable=True, rounds_done={'stage6.semantic': []}))
     assert S.resume_verdict(ov, 'stage6.hook')[0] == S.RESUME_SKIP

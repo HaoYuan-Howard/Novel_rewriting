@@ -28,7 +28,7 @@ from novel import prov
 from novel.errors import (
     ArtifactUnreadable, ContextBudgetRefused, GateBlocked, ProvenanceRefused,
     ResponseRepairBatchRequired, ResponseRepairRequired, UpstreamMissing,
-    UpstreamStale,
+    UpstreamStale, TerminalState,
 )
 from novel.llm.budget import enforce_request_budget
 from novel.llm.cache import CachePolicy, ResponseCache
@@ -2055,6 +2055,8 @@ def test_old_v6_global_input_edge_refreshes_to_projection_without_wire(tmp_path)
     assert raw['_schema_version'] == 6
     inputs = raw['_provenance']['inputs']
     old_edge = inputs.pop(extract.BLUEPRINT_CHARACTER_REL)
+    old_edge['file'] = prov.fingerprint_bytes(
+        (book / extract.GLOBAL_REL).read_bytes())
     inputs[extract.GLOBAL_REL] = old_edge
     path.write_text(
         json.dumps(raw, ensure_ascii=False, indent=2) + '\n',
@@ -2064,7 +2066,7 @@ def test_old_v6_global_input_edge_refreshes_to_projection_without_wire(tmp_path)
         _ctx(book, 'stage2.blueprint', paid=False)).freshness(
             extract.BLUEPRINT_REL)
     assert (legacy.state, legacy.reason) == (
-        'unknown', 'consumed_unresolved')
+        'unknown', 'legacy_blueprint_inputs')
 
     recovery_ctx = _ctx(book, 'stage2.blueprint', paid=False)
     report = extract.run_renormalize(recovery_ctx)
@@ -2080,6 +2082,223 @@ def test_old_v6_global_input_edge_refreshes_to_projection_without_wire(tmp_path)
     }
     assert ArtifactStore(recovery_ctx).freshness(
         extract.BLUEPRINT_REL).state == 'fresh'
+
+
+@pytest.mark.parametrize('formal_exists', [False, True])
+def test_old_v6_live_invalid_routes_to_renormalize_without_wire(
+        tmp_path, formal_exists):
+    """INVALID-only / formal+INVALID 都保留精确 legacy marker，且误敲先正常拒绝。"""
+    from novel.orchestrator import state as orchestrator_state
+
+    book = tmp_path / f'旧v6问题稿零成本刷新_{int(formal_exists)}'
+    book.mkdir()
+    global_ctx = _ctx(book, 'stage2.global')
+    ArtifactStore(global_ctx).write(
+        extract.MAIN_TEXT, MainText.model_validate(main_text()))
+    global_client, _ = _client(
+        global_ctx, lambda _req, _index: _ok(_response_global()))
+    extract.run_global(global_ctx, global_client)
+
+    by_ordinal = _response_blueprints()
+    blueprint_ctx = _ctx(book, 'stage2.blueprint')
+    blueprint_client, blueprint_transport = _client(
+        blueprint_ctx,
+        lambda req, _index: _respond_blueprints(req, by_ordinal),
+    )
+    assert extract.run_blueprint(blueprint_ctx, blueprint_client).passed
+    calls_before = len(blueprint_transport.calls)
+
+    formal_path = book / extract.BLUEPRINT_REL
+    raw = json.loads(formal_path.read_text(encoding='utf-8'))
+    old_edge = raw['_provenance']['inputs'].pop(
+        extract.BLUEPRINT_CHARACTER_REL)
+    old_edge['file'] = prov.fingerprint_bytes(
+        (book / extract.GLOBAL_REL).read_bytes())
+    raw['_provenance']['inputs'][extract.GLOBAL_REL] = old_edge
+    invalid_path = book / extract._INVALID
+    invalid_path.write_text(
+        json.dumps(raw, ensure_ascii=False, indent=2) + '\n',
+        encoding='utf-8', newline='\n')
+    if not formal_exists:
+        formal_path.unlink()
+
+    recovery_ctx = _ctx(book, 'stage2.blueprint', paid=False)
+    store = ArtifactStore(recovery_ctx)
+    invalid_freshness = store.freshness(extract._INVALID)
+    assert (invalid_freshness.state, invalid_freshness.reason) == (
+        'unknown', 'legacy_blueprint_inputs')
+    state = orchestrator_state.artifact_state(store, extract.BLUEPRINT_REL)
+    assert state.exists is formal_exists and state.invalid
+    assert (state.invalid_freshness, state.invalid_reason) == (
+        'unknown', 'legacy_blueprint_inputs')
+    if formal_exists:
+        assert (state.freshness, state.reason) == ('fresh', 'match')
+    else:
+        assert (state.freshness, state.reason) == (
+            'unknown', 'no_provenance')
+
+    before = invalid_path.read_bytes()
+    with pytest.raises(TerminalState, match='stage2.blueprint --renormalize'):
+        extract.run_revalidate(
+            recovery_ctx, actor='agent:test', reason='错误入口应在写盘前拒绝')
+    assert invalid_path.read_bytes() == before
+    assert formal_path.exists() is formal_exists
+
+    report = extract.run_renormalize(recovery_ctx)
+
+    assert report.passed
+    assert len(blueprint_transport.calls) == calls_before
+    assert recovery_ctx.ledger.usage() is None
+    assert formal_path.is_file() and not invalid_path.exists()
+    refreshed = store.read_own(ChapterBlueprints, extract.BLUEPRINT_REL)[0]
+    assert set(refreshed.provenance.inputs) == {
+        extract.MAIN_TEXT, extract.BLUEPRINT_CHARACTER_REL,
+    }
+    assert store.freshness(extract.BLUEPRINT_REL).state == 'fresh'
+
+
+@pytest.mark.parametrize('formal_exists', [False, True])
+def test_non_exact_legacy_invalid_never_borrows_the_renormalize_marker(
+        tmp_path, formal_exists):
+    """多一条未来来源边仍是通用 unknown，不能冒充精确旧键形。"""
+    from contracts.schema.orchestration import StageState
+    from novel.orchestrator import state as orchestrator_state
+
+    book = tmp_path / f'非精确旧来源边_{int(formal_exists)}_4582'
+    book.mkdir()
+    global_ctx = _ctx(book, 'stage2.global')
+    ArtifactStore(global_ctx).write(
+        extract.MAIN_TEXT, MainText.model_validate(main_text()))
+    global_client, _ = _client(
+        global_ctx, lambda _req, _index: _ok(_response_global()))
+    extract.run_global(global_ctx, global_client)
+
+    blueprint_ctx = _ctx(book, 'stage2.blueprint')
+    blueprint_client, _transport = _client(
+        blueprint_ctx,
+        lambda req, _index: _respond_blueprints(
+            req, _response_blueprints()),
+    )
+    assert extract.run_blueprint(blueprint_ctx, blueprint_client).passed
+
+    formal_path = book / extract.BLUEPRINT_REL
+    raw = json.loads(formal_path.read_text(encoding='utf-8'))
+    projection_edge = raw['_provenance']['inputs'][
+        extract.BLUEPRINT_CHARACTER_REL]
+    # 保留现役两边不动，并复制称名投影字节，让额外边的 file 指纹仍 match；它声明了 consumed，
+    # 但当前 producer 没登记这条未来投影，因此 aggregate 仍是通用
+    # unknown/consumed_unresolved，恰好覆盖曾被误认成 legacy 的形状。
+    extra_rel = 'stage2/future_projection.json'
+    (book / extra_rel).write_bytes(
+        (book / extract.BLUEPRINT_CHARACTER_REL).read_bytes())
+    raw['_provenance']['inputs'][extra_rel] = copy.deepcopy(projection_edge)
+    invalid_path = book / extract._INVALID
+    invalid_path.write_text(
+        json.dumps(raw, ensure_ascii=False, indent=2) + '\n',
+        encoding='utf-8', newline='\n')
+    if not formal_exists:
+        formal_path.unlink()
+
+    recovery_ctx = _ctx(book, 'stage2.blueprint', paid=False)
+    store = ArtifactStore(recovery_ctx)
+    report = store.freshness(extract._INVALID)
+    assert (report.state, report.reason) == (
+        'unknown', 'consumed_unresolved')
+    assert {edge.key for edge in report.edges} == {
+        extract.MAIN_TEXT, extract.BLUEPRINT_CHARACTER_REL, extra_rel,
+    }
+    blueprint_state = orchestrator_state.artifact_state(
+        store, extract.BLUEPRINT_REL)
+    projection_state = orchestrator_state.artifact_state(
+        store, extract.BLUEPRINT_CHARACTER_REL)
+    ov = SimpleNamespace(stages=[StageState(
+        stage='stage2', artifacts=[projection_state, blueprint_state],
+        done=False, reviewable=True)])
+    assert (blueprint_state.invalid_freshness,
+            blueprint_state.invalid_reason) == (
+                'unknown', 'consumed_unresolved')
+    assert not orchestrator_state.stage2_legacy_blueprint_recovery_needed(ov)
+    assert orchestrator_state.stage2_blueprint_invalid_recovery_needed(ov)
+
+    before = invalid_path.read_bytes()
+    with pytest.raises(ProvenanceRefused) as refused:
+        extract.run_revalidate(
+            recovery_ctx, actor='agent:test', reason='通用未知不得借迁移 marker')
+    assert '--renormalize' not in str(refused.value)
+    assert invalid_path.read_bytes() == before
+    assert formal_path.exists() is formal_exists
+
+
+@pytest.mark.parametrize('invalid_carrier', [False, True])
+def test_exact_legacy_keys_never_hide_a_changed_global_upstream(
+        tmp_path, invalid_carrier):
+    """键形虽旧且精确，Global 字节已漂移时仍必须保持真实 stale。"""
+    from contracts.schema.orchestration import StageState
+    from novel.orchestrator import state as orchestrator_state
+
+    book = tmp_path / f'旧来源边上游漂移_{int(invalid_carrier)}_4583'
+    book.mkdir()
+    global_ctx = _ctx(book, 'stage2.global')
+    ArtifactStore(global_ctx).write(
+        extract.MAIN_TEXT, MainText.model_validate(main_text()))
+    global_client, _ = _client(
+        global_ctx, lambda _req, _index: _ok(_response_global()))
+    extract.run_global(global_ctx, global_client)
+
+    blueprint_ctx = _ctx(book, 'stage2.blueprint')
+    blueprint_client, _transport = _client(
+        blueprint_ctx,
+        lambda req, _index: _respond_blueprints(
+            req, _response_blueprints()),
+    )
+    assert extract.run_blueprint(blueprint_ctx, blueprint_client).passed
+
+    formal_path = book / extract.BLUEPRINT_REL
+    raw = json.loads(formal_path.read_text(encoding='utf-8'))
+    old_edge = raw['_provenance']['inputs'].pop(
+        extract.BLUEPRINT_CHARACTER_REL)
+    old_edge['file'] = prov.fingerprint_bytes(
+        (book / extract.GLOBAL_REL).read_bytes())
+    raw['_provenance']['inputs'][extract.GLOBAL_REL] = old_edge
+    source_path = book / (
+        extract._INVALID if invalid_carrier else extract.BLUEPRINT_REL)
+    source_path.write_text(
+        json.dumps(raw, ensure_ascii=False, indent=2) + '\n',
+        encoding='utf-8', newline='\n')
+    if invalid_carrier:
+        formal_path.unlink()
+
+    # 仅改 JSON 空白，业务 payload 不变，但旧 Blueprint 记录的 Global 文件身份
+    # 已明确漂移；兼容桥不能用 projection 当前值相同来改写这条历史事实。
+    global_path = book / extract.GLOBAL_REL
+    global_path.write_bytes(global_path.read_bytes() + b'\n')
+
+    recovery_ctx = _ctx(book, 'stage2.blueprint', paid=False)
+    store = ArtifactStore(recovery_ctx)
+    report = store.freshness(
+        extract._INVALID if invalid_carrier else extract.BLUEPRINT_REL)
+    assert (report.state, report.reason) == ('stale', 'file_changed')
+
+    blueprint_state = orchestrator_state.artifact_state(
+        store, extract.BLUEPRINT_REL)
+    projection_state = orchestrator_state.artifact_state(
+        store, extract.BLUEPRINT_CHARACTER_REL)
+    ov = SimpleNamespace(stages=[StageState(
+        stage='stage2', artifacts=[projection_state, blueprint_state],
+        done=False, reviewable=True)])
+    assert not orchestrator_state.stage2_legacy_blueprint_recovery_needed(ov)
+    verdict, why = orchestrator_state.resume_verdict(ov, 'stage2.blueprint')
+    assert '--renormalize' not in why
+    if invalid_carrier:
+        assert (blueprint_state.invalid_freshness,
+                blueprint_state.invalid_reason) == ('stale', 'file_changed')
+        assert orchestrator_state.stage2_blueprint_invalid_recovery_needed(ov)
+        assert verdict == orchestrator_state.RESUME_RUN
+        assert '--revalidate' in why
+    else:
+        assert (blueprint_state.freshness,
+                blueprint_state.reason) == ('stale', 'file_changed')
+        assert verdict == orchestrator_state.RESUME_REDO
 
 
 def _cause_for(rule: str) -> str:

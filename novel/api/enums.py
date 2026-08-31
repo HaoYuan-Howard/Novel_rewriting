@@ -173,6 +173,9 @@ _WITHHELD: dict[str, str] = {
                               '前端只提交模板给出的 subject，不自行判断审阅是否过期',
     'BLIND_ALIAS_ALGORITHM': 'Stage4A 审计用的 opaque alias 算法身份；前端既不生成 alias，'
                              '也不据此判断候选是否可用',
+    'STAGE2_BLUEPRINT_MAX_CONCURRENCY': (
+        'Stage2 Blueprint 逐章 Agent session 的供应商稳定性护栏；'
+        '它是后端编排参数，不是前端可调取值面'),
     'STAGE4_PLAN_MAX_CONCURRENCY': (
         'Stage4B 章级池的供应商稳定性护栏（批次 4），与 A 的逐章池同因不发：'
         '它是后端编排参数，不是前端可调取值面'),

@@ -39,6 +39,7 @@
   "consumed_changed",
   "consumed_undeclared",
   "consumed_unresolved",
+  "legacy_blueprint_inputs",
   "global_naming_blocked",
   "match"
  ],

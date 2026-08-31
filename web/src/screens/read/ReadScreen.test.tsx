@@ -92,6 +92,8 @@ function reading(ordinal: number, blueprint = true): ReadingResponse {
       reason: blueprint ? 'fresh' : 'not_run',
       ghosts: [],
       invalid: false,
+      invalid_freshness: null,
+      invalid_reason: null,
       readable: blueprint,
     },
     _provenance: null,

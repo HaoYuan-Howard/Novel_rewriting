@@ -345,6 +345,47 @@ def _ensure_run(
         request_policy=request_policy or _test_request_policy(), refresh=refresh)
 
 
+def _write_single_agent_checkpoint(tmp_path: Path) -> tuple[RunContext, Path]:
+    """写一份可被 standalone 历史证据口完整对证的 Agent checkpoint。"""
+    run_id = new_run_id()
+    purpose = 'stage2.blueprint:ch1'
+    ctx = _ctx(tmp_path, run_id, executor_profile=_AGENT_PROFILE)
+    _ensure_run(
+        ctx, architecture='extraction-ir-v3.1',
+        topology='scaffolded_single', requests=[(1, 'SYSTEM', 'USER')],
+        request_policy=_agent_request_policy(max_tokens=2048))
+    text = '{"blueprints":[{"chapter_ordinal":1}]}'
+    acceptance = _agent_checkpoint_acceptance(
+        ctx, purpose=purpose, system='SYSTEM', user='USER',
+        texts=[('1' * 16, text)], max_tokens=2048)
+    checkpoint = stage2_runs.write_checkpoint(
+        ctx, phase='blueprint', chapter=1, purpose=purpose,
+        architecture='extraction-ir-v3.1', response_model=_ChapterRows,
+        system='SYSTEM', user='USER',
+        response_payload={'blueprints': [{'chapter_ordinal': 1}]},
+        acceptance=acceptance, scope_violation=None)
+    return ctx, checkpoint
+
+
+def _historical_agent_candidates(ctx: RunContext):
+    return stage2_runs.verified_blueprint_recovery_checkpoints(
+        ctx,
+        architecture='extraction-ir-v3.1',
+        response_model=_ChapterRows,
+        system='SYSTEM',
+        artifact_code='test-stage2-runs',
+        accepted_models=[_AGENT_PROFILE.model],
+        artifact_usage={
+            'calls_made': 1,
+            'calls_cached': 0,
+            'prompt_tokens': 10,
+            'completion_tokens': 20,
+            'reasoning_tokens': 15,
+        },
+        chapters=[1],
+    )
+
+
 def test_agent_request_policy_is_discriminated_and_legacy_stays_exact(tmp_path):
     requests = [(1, 'SYSTEM', 'USER')]
     agent = _ctx(
@@ -455,6 +496,61 @@ def test_agent_checkpoint_restores_full_session_and_ledger_with_zero_wire(
         '1' * 16, '2' * 16)
     assert resumed.ledger.request_identity_for_attempt('2' * 16) \
         == stored['attempt_links'][1]
+
+
+@pytest.mark.parametrize(
+    'current_profile',
+    [
+        pytest.param(None, id='zero-cost-context-has-no-profile'),
+        pytest.param(_CLAUDE_AGENT_PROFILE, id='different-current-profile'),
+    ],
+)
+def test_standalone_historical_agent_evidence_is_not_bound_to_current_profile(
+        tmp_path, current_profile):
+    source, checkpoint = _write_single_agent_checkpoint(tmp_path)
+    reader = _ctx(
+        tmp_path, new_run_id(), executor_profile=current_profile)
+
+    candidates = _historical_agent_candidates(reader)
+
+    assert len(candidates) == 1
+    assert candidates[0].run_id == source.run_id
+    assert candidates[0].accepted_model == _AGENT_PROFILE.model
+    assert candidates[0].checkpoint_sha256 == json.loads(
+        checkpoint.read_text(encoding='utf-8'))['checkpoint_sha256']
+    # standalone 扫描只能读历史账，不能把成本 claim 进本次 0 成本 context。
+    assert reader.ledger.calls_made == 0
+
+
+def test_live_agent_checkpoint_restore_still_refuses_current_profile_drift(
+        tmp_path):
+    source, _checkpoint = _write_single_agent_checkpoint(tmp_path)
+    drifted = _ctx(
+        tmp_path, source.run_id, executor_profile=_CLAUDE_AGENT_PROFILE)
+
+    with pytest.raises(ProvenanceRefused, match='resolved profile.*当前 executor'):
+        stage2_runs.restore_checkpoint(
+            drifted, phase='blueprint', chapter=1,
+            purpose='stage2.blueprint:ch1',
+            architecture='extraction-ir-v3.1', response_model=_ChapterRows,
+            system='SYSTEM', user='USER')
+
+
+def test_standalone_historical_agent_evidence_still_rejects_audit_drift(
+        tmp_path):
+    _source, _checkpoint = _write_single_agent_checkpoint(tmp_path)
+    audit_path = agent_session_audit.audit_path(tmp_path)
+    events = [json.loads(line) for line in audit_path.read_text(
+        encoding='utf-8').splitlines() if line.strip()]
+    turn = next(row for row in events if row.get('kind') == 'turn')
+    turn['actual_model'] = _CLAUDE_AGENT_PROFILE.model
+    audit_path.write_text(
+        ''.join(json.dumps(row, ensure_ascii=False, separators=(',', ':')) + '\n'
+                for row in events),
+        encoding='utf-8', newline='')
+    reader = _ctx(tmp_path, new_run_id())
+
+    assert _historical_agent_candidates(reader) == ()
 
 
 def test_claude_checkpoint_audit_hashes_the_final_structured_stdin(tmp_path):

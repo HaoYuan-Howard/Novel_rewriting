@@ -32,7 +32,9 @@ from contracts.schema.api import (
     Stage4View, Stage5View, Stage6View, Stage7View, UploadResult,
 )
 from contracts.schema.api import ReadingBeatLine
-from contracts.schema.orchestration import AgentProfile, AgentRunStart, JobStart, Step
+from contracts.schema.orchestration import (
+    AgentProfile, AgentRunStart, ArtifactState, JobStart, Step,
+)
 from contracts.schema.report import CheckReport
 from contracts.schema.stage5 import ChapterSegment
 
@@ -114,6 +116,32 @@ def test_old_job_and_agent_records_keep_missing_profiles_as_unknown():
     assert step.executor_profile is None and job.executor_profile is None
     assert step.egress_authorized is None and job.egress_authorized is None
     assert agent.profiles is None
+
+
+def test_artifact_state_invalid_source_fields_are_paired_and_never_leak_to_formal_only():
+    base = dict(
+        rel='stage2/chapter_blueprints.json', exists=True, bytes=1, mtime=1,
+        freshness='fresh', display_freshness='fresh', reason='match',
+        invalid=True, readable=True, condition='invalid',
+    )
+    state = ArtifactState(
+        **base,
+        invalid_freshness='unknown', invalid_reason='consumed_unresolved')
+    assert {'invalid_freshness', 'invalid_reason'} <= set(
+        ArtifactState.model_json_schema()['required'])
+    assert (state.freshness, state.reason) == ('fresh', 'match')
+    assert (state.invalid_freshness, state.invalid_reason) == (
+        'unknown', 'consumed_unresolved')
+
+    with pytest.raises(ValidationError, match='必须成对出现'):
+        ArtifactState(
+            **base, invalid_freshness='unknown', invalid_reason=None)
+    with pytest.raises(ValidationError, match='Field required'):
+        ArtifactState(**base)
+    with pytest.raises(ValidationError, match='invalid=False'):
+        ArtifactState(
+            **{**base, 'invalid': False, 'condition': 'ready'},
+            invalid_freshness='unknown', invalid_reason='consumed_unresolved')
 
 
 def test_executor_egress_snapshots_distinguish_old_unknown_from_new_bool():

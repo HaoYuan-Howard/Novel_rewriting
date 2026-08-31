@@ -118,7 +118,18 @@ def artifact_state(store: ArtifactStore, rel: str) -> ArtifactState:
     而它跑过，只是那次把来源账丢了。这两句话对人的下一步是相反的指示。
     """
     p = store.path(rel)
-    invalid = store.exists(paths.invalid_of(rel))
+    invalid_rel = paths.invalid_of(rel)
+    invalid = store.exists(invalid_rel)
+    invalid_freshness = None
+    invalid_reason = None
+    if invalid:
+        try:
+            invalid_report = store.freshness(invalid_rel)
+        except (ArtifactUnreadable, UpstreamMissing):
+            invalid_freshness, invalid_reason = 'unknown', 'no_provenance'
+        else:
+            invalid_freshness = invalid_report.state
+            invalid_reason = invalid_report.reason
     if not p.is_file():
         reason = 'no_provenance'
         if rel == STAGE2_BLUEPRINT_CHARACTER_PROJECTION:
@@ -130,7 +141,9 @@ def artifact_state(store: ArtifactStore, rel: str) -> ArtifactState:
                 reason = report.reason
         return ArtifactState(rel=rel, exists=False, bytes=None, mtime=None,
                              freshness='unknown', reason=reason,
-                             display_freshness='missing', invalid=invalid, readable=True,
+                             display_freshness='missing', invalid=invalid,
+                             invalid_freshness=invalid_freshness,
+                             invalid_reason=invalid_reason, readable=True,
                              condition='invalid' if invalid else 'missing')
 
     st = p.stat()
@@ -163,6 +176,7 @@ def artifact_state(store: ArtifactStore, rel: str) -> ArtifactState:
         rel=rel, exists=True, bytes=st.st_size, mtime=int(st.st_mtime),
         freshness=fresh, reason=reason, ghosts=ghosts,
         display_freshness=fresh, invalid=invalid, readable=readable,
+        invalid_freshness=invalid_freshness, invalid_reason=invalid_reason,
         condition=('invalid' if invalid else 'unreadable' if not readable else 'ready'),
     )
 
@@ -234,6 +248,8 @@ def _malformed_invalid_state(novel_dir: Path, rel: str) -> ArtifactState:
         reason='no_provenance',
         display_freshness='unknown',
         invalid=True,
+        invalid_freshness='unknown',
+        invalid_reason='no_provenance',
         readable=False,
         condition='invalid',
     )
@@ -650,13 +666,26 @@ def stage2_legacy_blueprint_recovery_needed(ov: NovelOverview) -> bool:
     by_rel = {artifact.rel: artifact for artifact in stage.artifacts}
     projection = by_rel.get(STAGE2_BLUEPRINT_CHARACTER_PROJECTION)
     blueprint = by_rel.get(STAGE2_CHAPTER_BLUEPRINTS)
+    carrier_freshness = (
+        blueprint.invalid_freshness
+        if blueprint is not None and blueprint.invalid
+        else blueprint.freshness if blueprint is not None else None
+    )
+    carrier_reason = (
+        blueprint.invalid_reason
+        if blueprint is not None and blueprint.invalid
+        else blueprint.reason if blueprint is not None else None
+    )
     return bool(
         projection is not None and projection.exists and projection.readable
         and projection.freshness == 'fresh'
-        and blueprint is not None and blueprint.exists and blueprint.readable
-        and not blueprint.invalid
-        and blueprint.freshness == 'unknown'
-        and blueprint.reason == 'consumed_unresolved'
+        and blueprint is not None
+        # ``readable`` 属于 formal；live INVALID 的完整可读性由零调用
+        # renormalize 自己关闭式验证，不能拿共存 formal 的状态替它作证或拦路。
+        and (blueprint.invalid or blueprint.readable)
+        and (blueprint.exists or blueprint.invalid)
+        and carrier_freshness == 'unknown'
+        and carrier_reason == 'legacy_blueprint_inputs'
     )
 
 
@@ -674,7 +703,10 @@ def stage2_blueprint_invalid_recovery_needed(ov: NovelOverview) -> bool:
          if artifact.rel == STAGE2_CHAPTER_BLUEPRINTS),
         None,
     )
-    return bool(blueprint is not None and blueprint.invalid)
+    return bool(
+        blueprint is not None and blueprint.invalid
+        and not stage2_legacy_blueprint_recovery_needed(ov)
+    )
 
 
 def resume_verdict(ov: NovelOverview, node: str) -> tuple[str, str]:
@@ -728,19 +760,19 @@ def resume_verdict(ov: NovelOverview, node: str) -> tuple[str, str]:
                 '可只读诊断或尝试 `stage2.global --renormalize`（0 LLM），'
                 '命令若读不回会关闭式失败')
     if (node == 'stage2.blueprint'
-            and stage2_blueprint_invalid_recovery_needed(ov)):
-        return RESUME_RUN, (
-            '盘上有 live `stage2/chapter_blueprints.INVALID.json`；只先运行 '
-            '`stage2.blueprint --revalidate --actor <id> --reason <why>`（0 LLM）'
-            '按当前判据重判。队列不得构造默认付费 Blueprint argv；'
-            '免费提升仍失败时再由人决定是否定向重生成')
-    if (node == 'stage2.blueprint'
             and stage2_legacy_blueprint_recovery_needed(ov)):
         return RESUME_RUN, (
             '当前 ChapterBlueprints v6 仍记录旧 `{MainText, Global}` 来源边；'
             'current/fresh 称名投影已在场，只运行 '
             '`stage2.blueprint --renormalize`（0 LLM）刷新为真实消费边，'
             '不得重跑付费 Blueprint')
+    if (node == 'stage2.blueprint'
+            and stage2_blueprint_invalid_recovery_needed(ov)):
+        return RESUME_RUN, (
+            '盘上有 live `stage2/chapter_blueprints.INVALID.json`；只先运行 '
+            '`stage2.blueprint --revalidate --actor <id> --reason <why>`（0 LLM）'
+            '按当前判据重判。队列不得构造默认付费 Blueprint argv；'
+            '免费提升仍失败时再由人决定是否定向重生成')
 
     if node == 'stage5.review':
         if st.review_state == 'fresh':

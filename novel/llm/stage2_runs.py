@@ -159,10 +159,13 @@ def _is_attempt_id(value: Any) -> bool:
             and all(ch in '0123456789abcdef' for ch in value))
 
 
-def _resolved_profile_dict(
-        ctx: Any, value: Any, *, label: str,
-) -> dict[str, Any]:
-    """证明 policy/checkpoint 保存的是当前 executor 的已物化 profile。"""
+def _materialized_profile_dict(value: Any, *, label: str) -> dict[str, Any]:
+    """证明盘上保存的是当前 registry 认可的已物化 executor profile。
+
+    历史证据只需要回答“当时冻结的是哪一份合法 profile”；它不准备启动
+    provider，也不应要求该 profile 等于本次 0 成本读取上下文的配置。当前
+    executor 的等同性由下面 ``_resolved_profile_dict`` 单独负责。
+    """
     if not isinstance(value, dict):
         raise ProvenanceRefused(f'{label} 缺 resolved agent profile 对象')
     try:
@@ -174,6 +177,14 @@ def _resolved_profile_dict(
     if value != normalized:
         raise ProvenanceRefused(
             f'{label} 的 agent profile 尚未物化 execution_mode，不能冻结')
+    return normalized
+
+
+def _resolved_profile_dict(
+        ctx: Any, value: Any, *, label: str,
+) -> dict[str, Any]:
+    """证明 policy/checkpoint 保存的是当前 executor 的已物化 profile。"""
+    normalized = _materialized_profile_dict(value, label=label)
 
     current = getattr(ctx, 'executor_profile', None)
     if current is None:
@@ -191,9 +202,15 @@ def _resolved_profile_dict(
 
 
 def _normalize_request_policy(
-        ctx: Any, request_policy: Mapping[str, Any],
+        ctx: Any, request_policy: Mapping[str, Any], *,
+        standalone_historical_evidence: bool = False,
 ) -> dict[str, Any]:
-    """按 discriminator 校验 run policy；没有 discriminator 就是逐字 legacy v1。"""
+    """按 discriminator 校验 run policy；没有 discriminator 就是逐字 legacy v1。
+
+    ``standalone_historical_evidence`` 只供 0-wire 历史证据扫描：校验盘上
+    profile 自身已物化且仍在 registry 中，但不把它绑定到本次 ``ctx``。其余
+    写 checkpoint、live restore 与同 run resume 全部走默认严格分支。
+    """
     try:
         normalized = json.loads(_canonical_bytes(dict(request_policy)))
     except (TypeError, ValueError) as exc:
@@ -229,8 +246,12 @@ def _normalize_request_policy(
             or normalized.get('recovery_policy') != 'stage2-blueprint-v1'):
         raise ProvenanceRefused(
             'Stage2 agent run 缺完整、登记过的 node-executor/v1 request policy')
-    _resolved_profile_dict(
-        ctx, normalized.get('profile'), label='Stage2 agent request policy')
+    if standalone_historical_evidence:
+        _materialized_profile_dict(
+            normalized.get('profile'), label='历史 Stage2 agent request policy')
+    else:
+        _resolved_profile_dict(
+            ctx, normalized.get('profile'), label='Stage2 agent request policy')
     phases = normalized.get('phases')
     if not isinstance(phases, list) or not phases:
         raise ProvenanceRefused('Stage2 agent request policy 缺非空 phases')
@@ -1231,7 +1252,8 @@ def _recovery_phase_policy(
     raw_policy = run.get('request_policy')
     if not isinstance(raw_policy, dict):
         raise ProvenanceRefused('历史 Stage2 run 缺 request_policy 对象')
-    policy = _normalize_request_policy(ctx, raw_policy)
+    policy = _normalize_request_policy(
+        ctx, raw_policy, standalone_historical_evidence=True)
     if run.get('request_policy_sha256') != _sha(policy):
         raise ProvenanceRefused('历史 Stage2 run 的 request_policy SHA-256 不闭合')
     rows = [
@@ -1272,8 +1294,8 @@ def _validate_historical_agent_session(
 ) -> None:
     """不 claim 当前 run，仍把 agent checkpoint 联回历史 session turn 链。"""
     acceptance = {key: record.get(key) for key in _AGENT_ACCEPTANCE_FIELDS}
-    profile = _resolved_profile_dict(
-        ctx, policy.get('profile'), label='历史 Stage2 agent request policy')
+    profile = _materialized_profile_dict(
+        policy.get('profile'), label='历史 Stage2 agent request policy')
     binding = acceptance.get('accepted_request')
     schema_sha = _sha(response_model.model_json_schema(by_alias=True))
     ceiling = phase_policy.get('requested_output_token_ceiling')
@@ -1403,8 +1425,8 @@ def _validate_recovery_request_binding(
 ) -> None:
     """复验 accepted_request；checkpoint 自签名不能替代独立 ledger/session。"""
     if policy.get('protocol_version') == AGENT_PROTOCOL_VERSION:
-        profile = _resolved_profile_dict(
-            ctx, policy.get('profile'), label='历史 Stage2 agent request policy')
+        profile = _materialized_profile_dict(
+            policy.get('profile'), label='历史 Stage2 agent request policy')
         for link in links:
             if (link.get('model') != profile['model']
                     or link.get('request_model') != profile['model']

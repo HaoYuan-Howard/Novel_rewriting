@@ -154,6 +154,8 @@
     "reason": "match",
     "ghosts": [],
     "invalid": false,
+    "invalid_freshness": null,
+    "invalid_reason": null,
     "readable": true,
     "condition": "ready"
   },
@@ -167,6 +169,8 @@
     "reason": "match",
     "ghosts": [],
     "invalid": false,
+    "invalid_freshness": null,
+    "invalid_reason": null,
     "readable": true,
     "condition": "ready"
   },

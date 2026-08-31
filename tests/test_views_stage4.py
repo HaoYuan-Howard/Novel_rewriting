@@ -168,12 +168,13 @@ def test_formal_review_surface_hashes_the_single_plan_snapshot(monkeypatch):
             return ArtifactState(
                 rel=rel, exists=True, bytes=1, mtime=1,
                 freshness='fresh', display_freshness='fresh', reason='match',
-                condition='ready',
+                invalid_freshness=None, invalid_reason=None, condition='ready',
             )
         return ArtifactState(
             rel=rel, exists=False, bytes=None, mtime=None,
             freshness='unknown', display_freshness='missing',
-            reason='no_provenance', condition='missing',
+            reason='no_provenance', invalid_freshness=None,
+            invalid_reason=None, condition='missing',
         )
 
     monkeypatch.setattr(view_module.paths, 'resolve_novel_dir',

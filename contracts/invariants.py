@@ -85,6 +85,9 @@ FRESHNESS_REASON: Final = (
     'consumed_changed',     # 本节点真正读到的那部分变了 ⇒ stale
     'consumed_undeclared',  # 边上 consumed=null ⇒ 该边 unknown
     'consumed_unresolved',  # 声明过投影，但这次算不出来（没登记投影函数）⇒ 该边 unknown
+    # 只有 store 亲见 Blueprint 原始 inputs 精确等于 {MainText, Global} 才铸造；
+    # 与通用 consumed_unresolved 分开，防止未来/额外来源边误走零调用迁移。
+    'legacy_blueprint_inputs',
     'global_naming_blocked',  # latest Global 的称名 HARD 使 Blueprint 投影暂不可消费 ⇒ unknown
     'match',                # 取到且相等 ⇒ fresh
 )
@@ -374,6 +377,10 @@ STRUCTURE_CHANGE_KINDS: Final = (
 )
 STRUCTURE_METRIC_CONTRACT: Final = 'atomic-structure-v2'
 BLIND_ALIAS_ALGORITHM: Final = 'hmac-sha256-v1'
+#: Stage2 Blueprint 的逐章 Agent session 并发上限。18 章直接沿用全局 32 会让
+#: Claude CLI 在本机并发拒绝，成功 checkpoint 虽能保住，失败章仍要多轮补跑；
+#: 配置可调低不能调高。只约束 agent pool，不改变 legacy LLM transport。
+STAGE2_BLUEPRINT_MAX_CONCURRENCY: Final = 4
 #: Stage4A 的逐章私有 session 并发上限。配置可以把它调低，但不能调高；
 #: 这是该节点的供应商稳定性边界，不与全局 ``MAX_CONCURRENCY`` 混成一把尺子。
 STAGE4_DESIGN_MAX_CONCURRENCY: Final = 4

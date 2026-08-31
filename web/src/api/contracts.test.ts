@@ -429,6 +429,50 @@ describe('request-shaped cache and diagnostics', () => {
     expect(adapted.chapters).toBe(11)
   })
 
+  it('keeps formal and active INVALID freshness in separate adapter fields', () => {
+    const adapted = adaptNovel({
+      sid: 's',
+      title: 't',
+      dirname: 's',
+      chapters: 1,
+      stages: [{
+        stage: 'stage2',
+        done: false,
+        chapters_done: [],
+        reviewable: true,
+        artifacts: [{
+          rel: 'stage2/chapter_blueprints.json',
+          exists: true,
+          bytes: 1,
+          mtime: 1,
+          freshness: 'fresh',
+          display_freshness: 'fresh',
+          condition: 'invalid',
+          reason: 'match',
+          ghosts: [],
+          invalid: true,
+          invalid_freshness: 'unknown',
+          invalid_reason: 'consumed_unresolved',
+          readable: true,
+        }],
+      }],
+      summary: {
+        verdict: 'pending',
+        text: '',
+        detail: '',
+        artifact_count: 1,
+        latest_mtime: 1,
+      },
+    })
+    expect(adapted.stages.stage2?.[0]).toMatchObject({
+      freshness: 'fresh',
+      reason: 'match',
+      invalid: true,
+      invalid_freshness: 'unknown',
+      invalid_reason: 'consumed_unresolved',
+    })
+  })
+
   it('keeps null, malformed, unknown and error diagnostics expandable', () => {
     const lines = splitLog(
       [

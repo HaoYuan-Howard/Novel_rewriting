@@ -91,6 +91,8 @@ interface BackendArtifactState {
   reason: string
   ghosts: string[]
   invalid: boolean
+  invalid_freshness: Artifact['invalid_freshness']
+  invalid_reason: Artifact['invalid_reason']
   readable: boolean
 }
 
@@ -145,6 +147,8 @@ export function adaptNovel(raw: BackendNovelOverview): NovelOverview {
       reason: artifact.reason,
       ghosts: artifact.ghosts,
       invalid: artifact.invalid,
+      invalid_freshness: artifact.invalid_freshness,
+      invalid_reason: artifact.invalid_reason,
       readable: artifact.readable,
     }))
   }

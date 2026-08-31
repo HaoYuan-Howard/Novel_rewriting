@@ -38,7 +38,8 @@ inbox.py —— 「待人工」八类清单的**生产者**（BE-04 第一条；
 from __future__ import annotations
 
 from contracts.artifacts import (
-    STAGE2_GLOBAL_EDIT, STAGE2_GLOBAL_REVIEW, STAGE6_HOOK, STAGE7_NAME_MAP,
+    STAGE2_CHAPTER_BLUEPRINTS, STAGE2_GLOBAL_EDIT, STAGE2_GLOBAL_REVIEW,
+    STAGE6_HOOK, STAGE7_NAME_MAP,
 )
 
 import os
@@ -175,6 +176,8 @@ def inbox_from_snapshot(snapshot: OperatorReadSnapshot) -> InboxView:
     items: list[InboxItem] = []
     wontfix_total = 0
     trim_audits = _current_trim_audits(novel_dir, code)
+    ov = snapshot.overview
+    legacy_blueprint_recovery = stage2_legacy_blueprint_recovery_needed(ov)
 
     for stage in STAGES:
         # ctx/store 仍用于本层旁路账与活动终态；报告只取 snapshot 中已经跑过的那一份。
@@ -191,7 +194,9 @@ def inbox_from_snapshot(snapshot: OperatorReadSnapshot) -> InboxView:
             # unreadable。这里不猜它有几条，按 0 聚合，保留其余层可用的待办。
             pass
 
-        items += _invalid_items(store, stage)
+        items += _invalid_items(
+            store, stage,
+            suppress_legacy_blueprint=legacy_blueprint_recovery)
         if stage == 'stage5':
             items += _stage5_chapter_invalids(store)
             items += _stage5_rejected_revisions(store)
@@ -202,7 +207,6 @@ def inbox_from_snapshot(snapshot: OperatorReadSnapshot) -> InboxView:
             items += _report_items_for_inbox(report, stage)
 
     items += _verification_items(novel_dir, code)
-    ov = snapshot.overview
     items += _stage2_projection_recovery_items(ov)
     items += _stage2_legacy_blueprint_recovery_items(ov)
     items += _trim_verification_items(novel_dir, code, audits=trim_audits)
@@ -303,9 +307,15 @@ def _stage_rels(stage: str) -> list[str]:
     return list(seen)
 
 
-def _invalid_items(store: ArtifactStore, stage: str) -> list[InboxItem]:
+def _invalid_items(
+        store: ArtifactStore, stage: str, *,
+        suppress_legacy_blueprint: bool = False) -> list[InboxItem]:
     out: list[InboxItem] = []
     for rel in _stage_rels(stage):
+        # 旧来源边的 live INVALID 有唯一的 0-LLM renormalize 路。若这里再产
+        # 一条通用 revalidate，inbox 会同时给出两条互相冲突的操作指令。
+        if suppress_legacy_blueprint and rel == STAGE2_CHAPTER_BLUEPRINTS:
+            continue
         inv = paths.invalid_of(rel)
         if not store.exists(inv):
             continue

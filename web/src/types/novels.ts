@@ -18,6 +18,9 @@ export interface Artifact {
   reason?: string
   ghosts?: string[]
   invalid?: boolean
+  /** 与 formal freshness 分开的活动 `.INVALID` 来源状态。 */
+  invalid_freshness?: Freshness | null
+  invalid_reason?: string | null
   readable?: boolean
 }
 

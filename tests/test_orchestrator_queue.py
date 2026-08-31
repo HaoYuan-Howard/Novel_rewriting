@@ -215,7 +215,8 @@ def test_live_invalid_blocks_default_paid_rerun_without_freezing_argv(
     artifact = ArtifactState(
         rel=ARTIFACT_PATHS[artifact_key], exists=True, bytes=10, mtime=1,
         freshness='fresh', reason='match', display_freshness='fresh',
-        invalid=True, readable=True, condition='invalid')
+        invalid=True, invalid_freshness='unknown',
+        invalid_reason='no_provenance', readable=True, condition='invalid')
     overview = SimpleNamespace(stages=[StageState(
         stage=NODES[node].stage, artifacts=[artifact], done=False, reviewable=True)])
     monkeypatch.setattr(Q.st, 'overview', lambda _base, _sid: overview)
@@ -275,14 +276,18 @@ def test_queue_materializes_missing_projection_without_paid_global(
         freshness=('unknown' if invalid else 'fresh'),
         reason=('no_provenance' if invalid else 'match'),
         display_freshness=('missing' if invalid else 'fresh'),
-        invalid=invalid, readable=True,
+        invalid=invalid,
+        invalid_freshness=('unknown' if invalid else None),
+        invalid_reason=('no_provenance' if invalid else None),
+        readable=True,
         condition=('invalid' if invalid else 'ready'),
     )
     projection = ArtifactState(
         rel=STAGE2_BLUEPRINT_CHARACTER_PROJECTION,
         exists=False, bytes=None, mtime=None,
         freshness='unknown', reason='no_provenance',
-        display_freshness='missing', invalid=False, readable=True,
+        display_freshness='missing', invalid=False,
+        invalid_freshness=None, invalid_reason=None, readable=True,
         condition='missing',
     )
     ov = SimpleNamespace(stages=[StageState(
@@ -313,19 +318,22 @@ def test_queue_stops_naming_blocked_projection_at_human_zero_llm_recovery(
     grounding = ArtifactState(
         rel=STAGE2_GLOBAL_GROUNDING, exists=False, bytes=None, mtime=None,
         freshness='unknown', reason='no_provenance', display_freshness='missing',
-        invalid=True, readable=True, condition='invalid',
+        invalid=True, invalid_freshness='unknown',
+        invalid_reason='no_provenance', readable=True, condition='invalid',
     )
     projection = ArtifactState(
         rel=STAGE2_BLUEPRINT_CHARACTER_PROJECTION,
         exists=False, bytes=None, mtime=None,
         freshness='unknown', reason='global_naming_blocked',
-        display_freshness='missing', invalid=False, readable=True,
+        display_freshness='missing', invalid=False,
+        invalid_freshness=None, invalid_reason=None, readable=True,
         condition='missing',
     )
     blueprint = ArtifactState(
         rel=STAGE2_CHAPTER_BLUEPRINTS, exists=False, bytes=None, mtime=None,
         freshness='unknown', reason='no_provenance', display_freshness='missing',
-        invalid=False, readable=True, condition='missing',
+        invalid=False, invalid_freshness=None, invalid_reason=None,
+        readable=True, condition='missing',
     )
     ov = SimpleNamespace(stages=[StageState(
         stage='stage2', artifacts=[grounding, projection, blueprint],
@@ -353,14 +361,16 @@ def test_queue_never_paid_resamples_unproven_existing_global_for_projection(
     grounding = ArtifactState(
         rel=STAGE2_GLOBAL_GROUNDING, exists=True, bytes=1, mtime=1,
         freshness='unknown', reason='no_provenance',
-        display_freshness='unknown', invalid=False, readable=readable,
+        display_freshness='unknown', invalid=False,
+        invalid_freshness=None, invalid_reason=None, readable=readable,
         condition=('ready' if readable else 'unreadable'),
     )
     projection = ArtifactState(
         rel=STAGE2_BLUEPRINT_CHARACTER_PROJECTION,
         exists=False, bytes=None, mtime=None,
         freshness='unknown', reason='no_provenance',
-        display_freshness='missing', invalid=False, readable=True,
+        display_freshness='missing', invalid=False,
+        invalid_freshness=None, invalid_reason=None, readable=True,
         condition='missing',
     )
     ov = SimpleNamespace(stages=[StageState(
@@ -394,7 +404,10 @@ def test_queue_does_not_paid_rerun_global_invalid_after_projection_is_ready(
             freshness=('fresh' if exists else 'unknown'),
             reason=('match' if exists else 'no_provenance'),
             display_freshness=('fresh' if exists else 'missing'),
-            invalid=invalid, readable=True,
+            invalid=invalid,
+            invalid_freshness=('unknown' if invalid else None),
+            invalid_reason=('no_provenance' if invalid else None),
+            readable=True,
             condition=('invalid' if invalid else 'ready' if exists else 'missing'),
         )
 
@@ -418,8 +431,12 @@ def test_queue_does_not_paid_rerun_global_invalid_after_projection_is_ready(
     assert all(item.node != 'stage2.global' for item in todo)
 
 
+@pytest.mark.parametrize(
+    ('formal_exists', 'invalid'),
+    [(True, False), (False, True), (True, True)],
+)
 def test_queue_refreshes_legacy_v6_blueprint_inputs_without_paid_wire(
-        queue_base, monkeypatch):
+        queue_base, monkeypatch, formal_exists, invalid):
     """旧 Blueprint 来源边只排 --renormalize，不能冻结默认付费 argv。"""
     monkeypatch.setattr(Q, 'nodes_up_to', lambda _until: ['stage2.blueprint'])
 
@@ -427,18 +444,29 @@ def test_queue_refreshes_legacy_v6_blueprint_inputs_without_paid_wire(
         rel=STAGE2_BLUEPRINT_CHARACTER_PROJECTION,
         exists=True, bytes=1, mtime=1,
         freshness='fresh', reason='match', display_freshness='fresh',
-        invalid=False, readable=True, condition='ready',
+        invalid=False, invalid_freshness=None, invalid_reason=None,
+        readable=True, condition='ready',
     )
     blueprint = ArtifactState(
         rel=STAGE2_CHAPTER_BLUEPRINTS,
-        exists=True, bytes=1, mtime=1,
-        freshness='unknown', reason='consumed_unresolved',
-        display_freshness='unknown', invalid=False, readable=True,
-        condition='ready',
+        exists=formal_exists,
+        bytes=(1 if formal_exists else None),
+        mtime=(1 if formal_exists else None),
+        freshness=('unknown' if formal_exists and not invalid else
+                   'fresh' if formal_exists else 'unknown'),
+        reason=('legacy_blueprint_inputs' if formal_exists and not invalid else
+                'match' if formal_exists else 'no_provenance'),
+        display_freshness=(
+            'unknown' if formal_exists and not invalid else
+            'fresh' if formal_exists else 'missing'),
+        invalid=invalid, readable=True,
+        invalid_freshness=('unknown' if invalid else None),
+        invalid_reason=('legacy_blueprint_inputs' if invalid else None),
+        condition=('invalid' if invalid else 'ready'),
     )
     ov = SimpleNamespace(stages=[StageState(
         stage='stage2', artifacts=[projection, blueprint],
-        done=True, reviewable=True,
+        done=not invalid, reviewable=True,
     )])
     monkeypatch.setattr(Q.st, 'overview', lambda _base, _sid: ov)
 
@@ -463,7 +491,8 @@ def test_queue_live_blueprint_invalid_has_no_default_paid_argv(
         rel=STAGE2_BLUEPRINT_CHARACTER_PROJECTION,
         exists=True, bytes=1, mtime=1,
         freshness='fresh', reason='match', display_freshness='fresh',
-        invalid=False, readable=True, condition='ready',
+        invalid=False, invalid_freshness=None, invalid_reason=None,
+        readable=True, condition='ready',
     )
     blueprint = ArtifactState(
         rel=STAGE2_CHAPTER_BLUEPRINTS, exists=formal_exists,
@@ -471,7 +500,8 @@ def test_queue_live_blueprint_invalid_has_no_default_paid_argv(
         freshness=('fresh' if formal_exists else 'unknown'),
         reason=('match' if formal_exists else 'no_provenance'),
         display_freshness=('fresh' if formal_exists else 'missing'),
-        invalid=True, readable=True, condition='invalid',
+        invalid=True, invalid_freshness='unknown',
+        invalid_reason='no_provenance', readable=True, condition='invalid',
     )
     ov = SimpleNamespace(stages=[StageState(
         stage='stage2', artifacts=[projection, blueprint],
@@ -496,7 +526,8 @@ def test_queue_missing_blueprint_without_invalid_keeps_default_paid_plan(
     blueprint = ArtifactState(
         rel=STAGE2_CHAPTER_BLUEPRINTS, exists=False, bytes=None, mtime=None,
         freshness='unknown', reason='no_provenance', display_freshness='missing',
-        invalid=False, readable=True, condition='missing',
+        invalid=False, invalid_freshness=None, invalid_reason=None,
+        readable=True, condition='missing',
     )
     ov = SimpleNamespace(stages=[StageState(
         stage='stage2', artifacts=[blueprint], done=False, reviewable=True,

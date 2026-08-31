@@ -193,9 +193,10 @@ def test_every_reason_in_the_enum_is_reachable():
     """守卫的守卫：`FRESHNESS_REASON` 里出现一个**没有任何路径产得出来**的取值，
     上面那些断言全都照绿——而那正是「取值面在说假话」的形状。
 
-    ``global_naming_blocked`` 不是通用 provenance 比对结果；它由 store 在完整
-    Global 称名 HARD 未收口时生成，专门关闭 Blueprint 消费边，故不要求
-    ``prov.freshness`` 伪造一条可达路径。
+    ``global_naming_blocked`` 与 ``legacy_blueprint_inputs`` 都不是通用
+    provenance 比对结果；前者由 store 的称名闸生成，后者只有 store 亲见
+    Blueprint 原始 inputs 的精确旧键形才铸造，故不要求 ``prov.freshness``
+    伪造可达路径。
     """
     seen = set()
     for r in (prov.freshness(None, file_now=lambda _k: None),
@@ -208,8 +209,9 @@ def test_every_reason_in_the_enum_is_reachable():
               _fresh(_edge(consumed=PROJ_A), now=FP_V1, consumed=PROJ_A)):
         seen.add(r.reason)
         seen |= {e.reason for e in r.edges}
-    generic_reasons = set(FRESHNESS_REASON) - {'global_naming_blocked'}
-    assert 'global_naming_blocked' in FRESHNESS_REASON
+    store_only = {'global_naming_blocked', 'legacy_blueprint_inputs'}
+    generic_reasons = set(FRESHNESS_REASON) - store_only
+    assert store_only <= set(FRESHNESS_REASON)
     assert seen == generic_reasons, (
         f'这些通用取值没有任何路径产得出来：{sorted(generic_reasons - seen)}')
 

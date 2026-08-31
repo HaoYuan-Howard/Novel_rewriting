@@ -230,6 +230,7 @@ _REASON_STATE: dict[str, Freshness] = {
     'consumed_changed': 'stale',
     'consumed_undeclared': 'unknown',
     'consumed_unresolved': 'unknown',
+    'legacy_blueprint_inputs': 'unknown',
     'global_naming_blocked': 'unknown',
     'match': 'fresh',
 }

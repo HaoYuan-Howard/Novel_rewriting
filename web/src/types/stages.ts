@@ -216,7 +216,7 @@ export interface Stage1View {
   anomaly_count: number
 }
 
-/* ------------------------------------------------- 产物处境（六格一次拿全） */
+/* ----------------------------------------- 产物处境（formal / INVALID 分栏） */
 
 /** 一份产物此刻的处境（`contracts/schema/orchestration.py::ArtifactState`）。 */
 export interface ArtifactState {
@@ -228,6 +228,8 @@ export interface ArtifactState {
   reason: string
   ghosts: string[]
   invalid: boolean
+  invalid_freshness: Freshness | null
+  invalid_reason: string | null
   readable: boolean
 }
 

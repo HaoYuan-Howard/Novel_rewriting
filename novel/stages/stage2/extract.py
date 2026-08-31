@@ -769,6 +769,14 @@ def run_revalidate(
             f'{_INVALID} 不在盘上——没有被拦下的逐章问题稿要提升')
     _projection, character_projection = \
         _require_blueprint_character_projection(store)
+    invalid_freshness = store.freshness(_INVALID)
+    if (invalid_freshness.state == 'unknown'
+            and invalid_freshness.reason == 'legacy_blueprint_inputs'):
+        raise TerminalState(
+            'stage2/chapter_blueprints.INVALID.json 仍记录旧 '
+            '`{MainText, Global}` 来源边；`--revalidate` 只能继承原生成来源账，'
+            '不能把旧账伪造成当前消费。请改跑 '
+            '`stage2.blueprint --renormalize`（0 LLM）刷新真实来源边')
     baseline = store.revalidation_baseline(
         BLUEPRINT_REL, ChapterBlueprints, actor=actor, reason=reason)
     artifact, raw = store.read_own(ChapterBlueprints, _INVALID)

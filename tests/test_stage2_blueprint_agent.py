@@ -12,6 +12,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from contracts.invariants import STAGE2_BLUEPRINT_MAX_CONCURRENCY
 from contracts.schema.orchestration import AgentProfile
 from contracts.schema.stage1 import MainText
 from contracts.schema.stage2 import ChapterBlueprints
@@ -71,6 +72,25 @@ def _bad_chapter(chapter: int) -> dict:
     for beat in value['beats']:
         beat['hinges'] = []
     return value
+
+
+def test_blueprint_agent_concurrency_is_clamped_to_provider_stability_limit(
+        tmp_path):
+    """全局 32 不能穿透到 Claude 逐章池；显式更低值仍被保留。"""
+    book = tmp_path / '蓝图Agent并发护栏_600'
+    book.mkdir()
+    ctx = _ctx(tmp_path, book)
+
+    high = BlueprintSessionPool(
+        ctx, driver_factory=lambda *_args: None, concurrency=32)
+    low = BlueprintSessionPool(
+        ctx, driver_factory=lambda *_args: None, concurrency=2)
+    try:
+        assert high.concurrency == STAGE2_BLUEPRINT_MAX_CONCURRENCY == 4
+        assert low.concurrency == 2
+    finally:
+        high.close()
+        low.close()
 
 
 class _Driver(AgentDriver):

@@ -20,6 +20,7 @@ from typing import Any, Generic, Literal, TypeVar
 from pydantic import BaseModel
 
 from contracts.invariants import (
+    STAGE2_BLUEPRINT_MAX_CONCURRENCY,
     STAGE4_DESIGN_MAX_CONCURRENCY, STAGE4_PLAN_MAX_CONCURRENCY,
 )
 from contracts.schema.orchestration import AgentProfile
@@ -506,7 +507,7 @@ class BlueprintSessionPool:
         *,
         driver_factory: BlueprintDriverFactory | None = None,
         max_turns: int = 4,
-        concurrency: int = MAX_CONCURRENCY,
+        concurrency: int = STAGE2_BLUEPRINT_MAX_CONCURRENCY,
     ) -> None:
         if ctx.node != 'stage2.blueprint':
             raise ValueError(
@@ -523,7 +524,7 @@ class BlueprintSessionPool:
         self.profile: AgentProfile = ctx.executor_profile
         self.model = self.profile.model
         self.max_turns = max_turns
-        self.concurrency = min(MAX_CONCURRENCY, concurrency)
+        self.concurrency = min(STAGE2_BLUEPRINT_MAX_CONCURRENCY, concurrency)
         self._contract = active_contract()
         self._driver_factory = driver_factory or (
             lambda _phase, _purpose, _chapter: create_driver(
@@ -1090,7 +1091,7 @@ class Stage2BlueprintAgent(NodeExecutorAgent[ChapterBlueprints]):
         *,
         driver_factory: BlueprintDriverFactory | None = None,
         max_turns: int = 4,
-        concurrency: int = MAX_CONCURRENCY,
+        concurrency: int = STAGE2_BLUEPRINT_MAX_CONCURRENCY,
     ) -> None:
         if ctx.node != self.node:
             raise ValueError(f'{type(self).__name__} 只接受 {self.node}，实得 {ctx.node}')

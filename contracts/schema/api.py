@@ -2507,7 +2507,7 @@ class ReadingView(StrictModel):
     loose: int = Field(ge=0)
     uncovered_min_chars: int = Field(ge=1)
 
-    #: `stage2/chapter_blueprints.json` 的处境（六格一次拿全）。
+    #: `stage2/chapter_blueprints.json` 的处境（formal 与活动 INVALID 分栏一次拿全）。
     #: `blueprint=false` 的两种来路（没跑 / 读不回）靠它分：`exists` 与 `readable`。
     blueprint_state: ArtifactState
 

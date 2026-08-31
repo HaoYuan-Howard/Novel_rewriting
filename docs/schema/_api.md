@@ -397,7 +397,7 @@ S-08（ctx 不在仍 200，`materials=null`）。
 | `narration[]` | 数组 | 是 | 叙述者 / 聚焦者 / 人称面 |
 | `loose` | 整数 | 是 | 没被任何 beat 覆盖的字数——与全部空隙合计**是同一个数**（后置条件） |
 | `uncovered_min_chars` | 整数 | 是 | 「漏」的阈值**随响应自带**，是漏抓还是过渡交人工看摘录判断 |
-| `blueprint_state` | 对象 | 是 | `stage2/chapter_blueprints.json` 的 `ArtifactState`（六格一次拿全）。`blueprint=false` 的两种来路——没跑 / 读不回——靠它的 `exists` 与 `readable` 分 |
+| `blueprint_state` | 对象 | 是 | `stage2/chapter_blueprints.json` 的 `ArtifactState`（formal 与活动 `.INVALID` 分栏一次拿全）。`blueprint=false` 的两种来路——没跑 / 读不回——靠它的 `exists` 与 `readable` 分 |
 | `_provenance` | 对象 或 null | 是 | `BlueprintProvenance`；`blueprint=false` ⇒ `null` |
 
 ## 五d、`Stage4View` —— S-07 计划 ↔ 写作上下文

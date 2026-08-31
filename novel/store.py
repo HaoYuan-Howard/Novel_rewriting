@@ -1349,12 +1349,15 @@ class ArtifactStore:
         by_key = {edge.key: edge for edge in ordinary.edges}
         main_edge = by_key.get(STAGE1_MAIN_TEXT)
         global_edge = by_key.get(STAGE2_GLOBAL_GROUNDING)
-        if main_edge is None or main_edge.state != 'fresh' or global_edge is None:
+        if (main_edge is None or main_edge.state != 'fresh'
+                or global_edge is None
+                or global_edge.state != 'unknown'
+                or global_edge.reason != 'consumed_unresolved'):
             return ordinary
         legacy_global = prov.EdgeVerdict(
             key=global_edge.key,
             state='unknown',
-            reason='consumed_unresolved',
+            reason='legacy_blueprint_inputs',
             recorded_file=global_edge.recorded_file,
             now_file=global_edge.now_file,
             recorded_consumed=global_edge.recorded_consumed,
@@ -1364,7 +1367,9 @@ class ArtifactStore:
             legacy_global if edge.key == STAGE2_GLOBAL_GROUNDING else edge
             for edge in ordinary.edges
         )
-        return FreshnessReport('unknown', 'consumed_unresolved', edges)
+        # edge 与 aggregate 共用专用 reason：FreshnessReport.reason 始终仍是
+        # 最坏边的代表原因，不另造一条脱离 edges 的旁路结论。
+        return FreshnessReport('unknown', 'legacy_blueprint_inputs', edges)
 
     def freshness_of_inputs(self, rel: str, recorded: dict | None) -> FreshnessReport:
         """同 `freshness`，但**来源账由调用方给**——用于还没落盘的那一份。

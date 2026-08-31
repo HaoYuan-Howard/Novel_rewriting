@@ -252,7 +252,9 @@ def plan_book_from_overview(
                 continue                             # 人已经完成这道闸
             why_blocked = node                       # 在等这一步的那个人
         if (why_blocked is None
-                and (projection_blocked or blueprint_invalid_recovery)):
+                and (projection_blocked
+                     or (blueprint_invalid_recovery
+                         and not legacy_blueprint_recovery))):
             # 两种状态都已有可恢复的问题稿，且下一步需要人提供 typed 决策。
             # 队列不能替人造 actor/reason，更不能把 RUN 解释成默认再付一次钱。
             why_blocked = WAITING_ON_INBOX
@@ -361,7 +363,9 @@ def plan_book_from_overview(
             if projection_recovery or legacy_blueprint_recovery else []
         )
         steps = None
-        if (projection_blocked or blueprint_invalid_recovery
+        if (projection_blocked
+                or (blueprint_invalid_recovery
+                    and not legacy_blueprint_recovery)
                 or (naming_projection_blocked
                     and stuck == WAITING_ON_INBOX)):
             # 称名面未收口时，Global 之后的 blocked 项也不能残留被冻结的

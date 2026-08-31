@@ -384,9 +384,10 @@ global review 的 blocking 面逐项 PASS（disclosure 非 PASS 只披露）、�
 | `freshness` | `str` | **是** | `FRESHNESS` 三态 | **三源** |
 | `display_freshness` | `str` | **是** | 界面直接显示的**四态** = `FRESHNESS` 三态 + `missing`。⚠ `missing` **在服务端合并**——前端不许再拿 `!exists` 另算一遍（`R-11.4`） | **契·码** |
 | `condition` | `str` | **是** | `ready` / `missing` / `invalid` / `unreadable`。界面只按这个 id 选文案，不再自己组合 `exists`/`invalid`/`readable` 三个 bool | **契·码** |
-| `reason` | `str` | **是** | `FRESHNESS_REASON` 九值。**用 id 不用措辞** | **契·码** |
+| `reason` | `str` | **是** | `FRESHNESS_REASON` 十值。**用 id 不用措辞**；其中 `legacy_blueprint_inputs` 只由 store 在旧输入键形精确、Main current、Global file match 且仅历史 consumed 投影不可重算时铸造 | **契·码** |
 | `ghosts` | `str[]` | **是** | 指向已不在盘上的那些边，**按名字点名**（`Q-4` 亲自点过的 bug）。空列表也要写 | **盘·码** |
 | `invalid` | `bool` | **是** | 盘上有一份 `.INVALID` 在等人处理 | **盘·码** |
+| `invalid_freshness` / `invalid_reason` | `str \| null` | **是** | 活动 `.INVALID` 自己的来源三态与理由；与 formal 的 `freshness/reason` 分开，避免 formal+INVALID 混主体。二格只陈述来源账，不证明 INVALID 按当前 schema 可读；恢复命令仍负责强类型读取。无 INVALID 时两格均为 `null` | **契·码** |
 | `readable` | `bool` | **是** | 能不能按当前 schema 加载。⚠ 见下面那条 | **盘·码** |
 
 ⚠ **`readable=False` 不等于 `exists=False`。** 盘上真有一份加载不了的产物

@@ -812,6 +812,13 @@ class ArtifactState(StrictModel):
     #: 盘上有一份 `.INVALID` 在等人处理。
     invalid: bool = False
 
+    #: 活动 `.INVALID` 自己的来源状态；与 formal 的 ``freshness/reason`` 分开，
+    #: 避免 formal+INVALID 共存时把两份载体压成一行混主体事实。
+    #: 两格在公共响应中始终存在；``invalid=False`` 时必须同时为 ``null``，
+    #: ``invalid=True`` 时必须同时给出，不能让恢复分类悄悄丢 marker。
+    invalid_freshness: Freshness | None
+    invalid_reason: FreshnessReason | None
+
     #: 能不能按**当前** schema 加载。
     readable: bool = True
 
@@ -820,6 +827,16 @@ class ArtifactState(StrictModel):
 
     @model_validator(mode='after')
     def _absent_artifacts_carry_nothing(self) -> ArtifactState:
+        if ((self.invalid_freshness is None)
+                != (self.invalid_reason is None)):
+            raise ValueError(
+                f'{self.rel}: invalid_freshness/invalid_reason 必须成对出现')
+        if self.invalid and self.invalid_freshness is None:
+            raise ValueError(
+                f'{self.rel}: invalid=True 必须携带 INVALID 来源状态')
+        if not self.invalid and self.invalid_freshness is not None:
+            raise ValueError(
+                f'{self.rel}: invalid=False 却携带 INVALID 来源状态')
         if not self.exists and (self.bytes is not None or self.mtime is not None):
             raise ValueError(f'{self.rel}: exists=False 却带着 bytes/mtime')
         if not self.exists and self.freshness != 'unknown':

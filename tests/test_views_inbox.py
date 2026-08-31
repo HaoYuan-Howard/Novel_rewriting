@@ -191,7 +191,7 @@ def test_legacy_v6_blueprint_inbox_points_only_to_free_renormalize():
     blueprint = SimpleNamespace(
         rel='stage2/chapter_blueprints.json', exists=True,
         readable=True, freshness='unknown', invalid=False,
-        reason='consumed_unresolved',
+        reason='legacy_blueprint_inputs',
     )
     ov = SimpleNamespace(stages=[SimpleNamespace(
         stage='stage2', artifacts=[projection, blueprint])])
@@ -202,6 +202,28 @@ def test_legacy_v6_blueprint_inbox_points_only_to_free_renormalize():
     assert rows[0].rule == 'chapter_blueprints_legacy_inputs'
     assert 'stage2.blueprint --renormalize' in rows[0].how
     assert '0 LLM' in rows[0].how and '不会重采付费 Blueprint' in rows[0].how
+
+
+def test_legacy_v6_live_invalid_suppresses_conflicting_generic_revalidate():
+    """同一 live INVALID 在 inbox 只能有一条恢复指令。"""
+    from contracts.artifacts import STAGE2_CHAPTER_BLUEPRINTS
+    from novel import paths
+    from novel.views import inbox as I
+
+    invalid_rel = paths.invalid_of(STAGE2_CHAPTER_BLUEPRINTS)
+
+    class Store:
+        @staticmethod
+        def exists(rel):
+            return rel == invalid_rel
+
+    generic = I._invalid_items(Store(), 'stage2')
+    suppressed = I._invalid_items(
+        Store(), 'stage2', suppress_legacy_blueprint=True)
+
+    assert len(generic) == 1
+    assert '--revalidate' in generic[0].how
+    assert suppressed == []
 
 
 def test_stage5_band_drift_is_one_book_task_with_chapter_details_preserved():
