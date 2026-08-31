@@ -20,7 +20,7 @@ producer 从来源完整生成、且与盘面精确匹配的无正文 manifest�
 
 **工作**：
 
-- 按 `.claude/skills/novel-pipeline-operator/SKILL.md`，在隔离输出与独立空缓存中，对
+- 按 `.workflow/skills/novel-pipeline-operator/SKILL.md`，在隔离输出与独立空缓存中，对
   `CURRENT_CORPUS_BOOKS` 从来源运行 Stage0～Stage7；人工闸与 typed review 必须留下真实决定，
   不批量盖章，不给旧产物补字段或版本冒充当前 producer。
 - 生成并提交无正文 manifest。逐书记录 sid、source hash、章节数、预期产物及当前版本、代码身份、

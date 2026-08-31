@@ -38,7 +38,7 @@
    真正需要的 executable、协议或 transport，不用另一模式的配置制造假阻塞。不要打印账号、token 或认证材料。
 3. 新跑与续跑使用**同一个** `<BASE>`：隔离靠每本书自己的 `<平台_书名_sid>/` 目录，不靠另建输出根。另建一个根会把同一本书的 `_service/ledger.jsonl` 分裂成两份，而[收尾](#收尾)把它当成本的唯一权威源。不要写入任何历史验收或证据目录。
 4. 源文件或既有书目录存在，`<SID>` 唯一。立即从仓根运行
-   `<PY> -X utf8 -u .claude/skills/novel-pipeline-operator/scripts/session_preflight.py --base <BASE> --sid <SID>`；新书把
+   `<PY> -X utf8 -u .workflow/skills/novel-pipeline-operator/scripts/session_preflight.py --base <BASE> --sid <SID>`；新书把
    `--sid` 换成 `--source <TXT>`。从这一个 JSON 固化 `<STARTED_AT>` 与 `<START_CODE>`，
    也以它解析出的 sid/novel_dir 为准。终验不得在结束时现取新代码指纹冒充起点。
 5. 付费授权与正文外发授权各自取到值：交互式会话两项**默认 `granted`**，本步是记录不是索要；
@@ -73,7 +73,7 @@ PowerShell 中可在取得真实 rc 后这样收窄 `--check-only` 报告；该�
 ```powershell
 $permit = & $PY -X utf8 -u -m novel.cli operator permit $SID <node> --base $B --json -- --check-only |
   ConvertFrom-Json
-& $PY -X utf8 -u .claude/skills/novel-pipeline-operator/scripts/run_step.py `
+& $PY -X utf8 -u .workflow/skills/novel-pipeline-operator/scripts/run_step.py `
   --base $B --sid $SID --expect-code-version $START_CODE `
   --operator-permit-sha256 $permit.permit_sha256 --execute <node> -- --check-only > "$SP\out.txt"
 $rc = $LASTEXITCODE
@@ -143,9 +143,9 @@ sid 已落盘后，每轮的第一条路由命令固定为：
 已有 sid 的所有 node actions（包括纯读诊断与恢复）从仓根用下面两条调用生产 `build_steps` 并串联信标；不要另抄追跑规则：
 
 ```text
-<PY> -X utf8 -u .claude/skills/novel-pipeline-operator/scripts/run_step.py --base <BASE> --sid <SID> --expect-code-version <START_CODE> --operator-permit-sha256 <PERMIT_SHA256> <node> -- [flags]
-<PY> -X utf8 -u .claude/skills/novel-pipeline-operator/scripts/run_step.py --base <BASE> --sid <SID> --expect-code-version <START_CODE> --operator-permit-sha256 <PERMIT_SHA256> --execute <node> -- [flags]
-<PY> -X utf8 -u .claude/skills/novel-pipeline-operator/scripts/run_step.py --base <BASE> --sid <SID> --expect-code-version <START_CODE> --operator-permit-sha256 <PERMIT_SHA256> --run-id <RUN_ID> --execute stage2.blueprint -- [原 flags]
+<PY> -X utf8 -u .workflow/skills/novel-pipeline-operator/scripts/run_step.py --base <BASE> --sid <SID> --expect-code-version <START_CODE> --operator-permit-sha256 <PERMIT_SHA256> <node> -- [flags]
+<PY> -X utf8 -u .workflow/skills/novel-pipeline-operator/scripts/run_step.py --base <BASE> --sid <SID> --expect-code-version <START_CODE> --operator-permit-sha256 <PERMIT_SHA256> --execute <node> -- [flags]
+<PY> -X utf8 -u .workflow/skills/novel-pipeline-operator/scripts/run_step.py --base <BASE> --sid <SID> --expect-code-version <START_CODE> --operator-permit-sha256 <PERMIT_SHA256> --run-id <RUN_ID> --execute stage2.blueprint -- [原 flags]
 ```
 
 runner 控制参数在显式 `--` 之前可位于 node 前后，但以上是规范写法；`--` 之后全部属于
@@ -170,7 +170,7 @@ runner 外补信标。preview 不写信标。信标只记录观察轨迹、不�
 
 ## 主链顺序
 
-下表中的节点列由 `.claude/skills/novel-pipeline-operator/scripts/validate_skill.py` 与 `PIPELINE_STEPS` 对账，
+下表中的节点列由 `.workflow/skills/novel-pipeline-operator/scripts/validate_skill.py` 与 `PIPELINE_STEPS` 对账，
 用于理解全链和复核覆盖面，不作为下一节点选择器。当前动作只取 `operator next`，实际 argv 始终取自 `preview`。
 
 <!-- pipeline-steps:start -->
@@ -358,5 +358,5 @@ CLI `state` 会显示共享的 deterministic freshness badge；这个 badge 才�
 
 1. 执行代批文档中的逐字成书对账。
 2. 再运行一次 `operator next --json` 与组合 `state --with-inbox`，只统计活动目录，排除 `_rounds/` 历史；`pipeline_complete` 只说明节点 lane 已尽，不替代成书、终审包与 fresh delivery 对账。
-3. 补完终审包中的人工叙述并清除全部占位符，然后从仓根只运行这一条 canonical 收尾命令：`.claude/skills/novel-pipeline-operator/scripts/finalize_review.py --base <BASE> --sid <SID> --started-at <STARTED_AT> --start-code-version <START_CODE>`。它在同一进程内只 collect 一次机器事实，以内存快照 render → validate，通过后才原子提交终审包；提交后丢弃旧快照，再按 `<START_CODE>` 开一个全新读作用域执行 `delivery.assess`。最终成本只以 `<BASE>/_service/ledger.jsonl` 为权威源：本次表按 canonical `run_id + node/role` 精确联结，整书 Commander 单列 `role:commander`；无 run id 的历史行只标 `legacy/ungrouped`，本次与累计不相加，缓存与真实 wire 分开，产物 usage/日志不参与混加。
+3. 补完终审包中的人工叙述并清除全部占位符，然后从仓根只运行这一条 canonical 收尾命令：`.workflow/skills/novel-pipeline-operator/scripts/finalize_review.py --base <BASE> --sid <SID> --started-at <STARTED_AT> --start-code-version <START_CODE>`。它在同一进程内只 collect 一次机器事实，以内存快照 render → validate，通过后才原子提交终审包；提交后丢弃旧快照，再按 `<START_CODE>` 开一个全新读作用域执行 `delivery.assess`。最终成本只以 `<BASE>/_service/ledger.jsonl` 为权威源：本次表按 canonical `run_id + node/role` 精确联结，整书 Commander 单列 `role:commander`；无 run id 的历史行只标 `legacy/ungrouped`，本次与累计不相加，缓存与真实 wire 分开，产物 usage/日志不参与混加。
 4. finalizer 的 fresh delivery 结果为 `ready*` 才只向用户交付成书与终审包；任一校验、原子提交或 fresh assess 失败都保留原盘并按其错误收口，不把 `pipeline_complete` 或旧快照写成 ready。中间产物仅作为终审包中的可追溯指针。

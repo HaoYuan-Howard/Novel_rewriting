@@ -25,7 +25,7 @@ from contracts.schema.orchestration import (
     AgentDeliveryOutcome, AgentProfile, AgentRunEvent, AgentRunStart,
     PipelineAgentProfiles, ProgressEvent, Step,
 )
-from novel import agent_session_audit, commander_context, paths
+from novel import agent_session_audit, commander_context, paths, skill_contract
 from novel.agents.base import AgentUsage
 from novel.commanders import (
     CommanderInvocation, CommanderObservation, CommanderProcessResult,
@@ -133,10 +133,11 @@ def test_prompt_carries_the_two_authorizations_independently(base, book):
     assert '付费授权已授予' in yes and '正文外发授权已授予' in yes
     assert '付费授权未授予' in no_paid and '正文外发授权已授予' in no_paid
     assert '付费授权已授予' in no_egress and '正文外发授权未授予' in no_egress
+    canonical_skill = (skill_contract.SKILL_REL / 'SKILL.md').as_posix()
     for text in (yes, no_paid, no_egress):
         assert 'sid=42' in text
-        assert 'novel-pipeline-operator' in text
-        assert 'SKILL.md' in text                     # 双保险：自动加载之外的显式路径
+        assert canonical_skill in text                # 双保险：发现 shim 外的显式 neutral 路径
+        assert '.claude/skills/novel-pipeline-operator/SKILL.md' not in text
         # 落点取生产那一个落点，不在测试里重拼一份（`docs/LESSONS.md` 第 21 条）。
         assert paths.review_package_path(book).as_posix() in text
     # 同时钉住人看得懂的那一面：书名 + `_review.md`，且**落在书目录里**。

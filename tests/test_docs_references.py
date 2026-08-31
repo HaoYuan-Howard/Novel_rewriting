@@ -43,7 +43,7 @@ DOC = reqs.load()
 #: 实测过这个形状的代价：README 那句「双击 `tools\start.cmd`」指着一个不存在的路径活了很久，
 #: 而它没被抓住只是因为写的是**反斜杠**——本文件的 `_PATH` 只认正斜杠。
 #: ⇒ 在这几份文档里写仓内路径时一律用正斜杠，否则等于自愿退出这道守卫。
-#: ⚠ skill 文档也在这张表里。`.claude/skills/*/scripts/validate_skill.py` 查的是
+#: ⚠ skill 文档也在这张表里。`.workflow/skills/*/scripts/validate_skill.py` 查的是
 #: markdown **链接**（`[文字](相对路径)`）的目标存在性与渐进披露闭合；反引号里的
 #: **仓内路径**和 R/Q/B 编号一直无人查，两边的域不重叠、不是重复。
 DOC_GLOBS = (
@@ -54,13 +54,18 @@ DOC_GLOBS = (
     'docs/LESSONS.md',
     'README.md',
     'AGENTS.md',
+    '.workflow/skills/*/SKILL.md',
+    '.workflow/skills/*/references/*.md',
+    '.workflow/skills/*/assets/*.md',
+    '.agents/skills/*/SKILL.md',
     '.claude/skills/*/SKILL.md',
-    '.claude/skills/*/references/*.md',
-    '.claude/skills/*/assets/*.md',
 )
 
 #: 只有这些前缀才当「仓内路径」看。`stage0/clean_text.txt` 这类是**产物路径**，不在仓里。
-REPO_PREFIXES = ('tests/', 'contracts/', 'tools/', 'novel/', 'docs/', '.claude/')
+REPO_PREFIXES = (
+    'tests/', 'contracts/', 'tools/', 'novel/', 'docs/',
+    '.workflow/', '.agents/', '.claude/',
+)
 
 #: **文档明说「它不在仓里」的那几条路径**，逐条登记、逐条写理由。
 #:
@@ -83,8 +88,10 @@ _DECLARED_ABSENT: dict[str, str] = {
 _ID = re.compile(r'`(R-\d+\.\d+[a-z]?|Q-\d+|B-\d+)`')
 #: ⚠ 允许尾随 `::符号` 或 `['键']`：`novel/paths.py::edit_rel` 这种写法在
 #: skill 经验库里是标准形态，只取路径那一段，符号那一段由 skill 校验器自己查。
+_REPO_ROOT_PATTERN = '|'.join(
+    re.escape(prefix.rstrip('/')) for prefix in REPO_PREFIXES)
 _PATH = re.compile(
-    r'`((?:tests|contracts|tools|novel|docs|\.claude)/[A-Za-z0-9_./-]+)'
+    r'`((?:' + _REPO_ROOT_PATTERN + r')/[A-Za-z0-9_./-]+)'
     r'(?:::[A-Za-z0-9_]+(?:\[[^\]]*\])?)?`')
 
 

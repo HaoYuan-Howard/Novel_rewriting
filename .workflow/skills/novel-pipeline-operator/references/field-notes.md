@@ -5,7 +5,7 @@
 **先检索，不要整读。** 按节点、rule id、退出码或报错片段检索整个 reference 目录：
 
 ```text
-rg -n "stage6|hook_para_sep|exit 70" .claude/skills/novel-pipeline-operator/references/
+rg -n "stage6|hook_para_sep|exit 70" .workflow/skills/novel-pipeline-operator/references/
 ```
 
 只把命中的条目作为诊断提示。当前 finding、代码、测试和盘上原始证据优先。`observed` 不能提升为不变量；`open-gap` 不能被写成已支持。
@@ -365,12 +365,12 @@ rg -n "stage6|hook_para_sep|exit 70" .claude/skills/novel-pipeline-operator/refe
   人工复制时很难看出多一个或少一个 `stage5.review:0`。
 - 判断：长重复序列不是适合手抄的证据。相邻同项 RLE（如 `stage5.review:0×52`）可无损展开，
   同时以规范 JSON 的事件数与 SHA-256 锁定完整序列；人读表示、机器摘要与原始 JSONL 三者互证。
-- 处置：从仓根运行 `.claude/skills/novel-pipeline-operator/scripts/collect_final_evidence.py`，复制 `exit_sequence_compact_text` 与
+- 处置：从仓根运行 `.workflow/skills/novel-pipeline-operator/scripts/collect_final_evidence.py`，复制 `exit_sequence_compact_text` 与
   `review_anchor_line`。不要自己计数、拼箭头或从日志截一段冒充全历史序列。
-- 验证：`.claude/skills/novel-pipeline-operator/scripts/validate_review.py` 要求终审包含当前压缩序列，并逐项比较机器锚点中的
+- 验证：`.workflow/skills/novel-pipeline-operator/scripts/validate_review.py` 要求终审包含当前压缩序列，并逐项比较机器锚点中的
   `exit_sequence_count` / `exit_sequence_sha256`；任一事件变化都会失败。
-- 依据：`.claude/skills/novel-pipeline-operator/scripts/collect_final_evidence.py::_compact_exits` 与
-  `.claude/skills/novel-pipeline-operator/scripts/validate_review.py::validate`。
+- 依据：`.workflow/skills/novel-pipeline-operator/scripts/collect_final_evidence.py::_compact_exits` 与
+  `.workflow/skills/novel-pipeline-operator/scripts/validate_review.py::validate`。
 
 ### FN-023 · Stage4B 拒稿先看 owner，再决定等不等
 

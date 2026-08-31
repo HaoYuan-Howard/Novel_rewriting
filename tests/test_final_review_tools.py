@@ -16,10 +16,11 @@ from types import SimpleNamespace
 import pytest
 
 from novel.llm.ledger import read_jsonl_rows
+from novel import skill_contract
 
 
-SCRIPT_DIR = (Path(__file__).resolve().parent.parent / '.claude' / 'skills'
-              / 'novel-pipeline-operator' / 'scripts')
+SCRIPT_DIR = (Path(__file__).resolve().parent.parent
+              / skill_contract.SKILL_REL / 'scripts')
 sys.path.insert(0, str(SCRIPT_DIR))
 import validate_review as validator  # noqa: E402
 import collect_final_evidence as collector  # noqa: E402

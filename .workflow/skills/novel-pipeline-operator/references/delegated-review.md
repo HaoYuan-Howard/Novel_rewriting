@@ -56,7 +56,7 @@
 在运行 `stage0.approve` 前，先从仓根生成只读工作包：
 
 ```text
-<PY> -X utf8 .claude/skills/novel-pipeline-operator/scripts/stage0_review_workpack.py --base <BASE> --sid <SID>
+<PY> -X utf8 .workflow/skills/novel-pipeline-operator/scripts/stage0_review_workpack.py --base <BASE> --sid <SID>
 ```
 
 脚本复用生产 Stage0 check、审校分区与 `scan_text`，不直读产物、不审批、不写盘；

@@ -108,7 +108,7 @@ Stage5 同一 run 的正常中断继续复用原 `run_id` 恢复 checkpoint。�
 拒绝；只能显式先 `--emit-prepared-recovery-workpack <SOURCE_RUN_ID>`，再在同一个新 target run
 提交 hash-bound `--recover-prepared`。该桥完整复验旧 ledger/session/request/sidecar 与当前
 上游/HARD/live baseline，零 driver、零 wire，source sidecar 只读；收口后仍须单独跑
-`stage5.review`。命令与中断恢复细节见 `.claude/skills/novel-pipeline-operator/references/recovery.md`。
+`stage5.review`。命令与中断恢复细节见 `.workflow/skills/novel-pipeline-operator/references/recovery.md`。
 最终 Review 通过并完成所有 edit、trim 与 wontfix 销账后，还必须逐项审阅当前
 `Stage5ClosureWorkpack`，经 `approval template stage5` / `approval apply stage5` 提交 hash-bound
 闭合回执；它与写作前授权不是同一张票，也不能由机械绿灯、旧 s5 或 Commander 身份自动推导。
@@ -164,7 +164,7 @@ README 只保留稳定入口和当前能力；“做过什么”由 Git 历史�
 ## 当前已具备的主路径
 
 - `novel.cli` 可驱动单书七层主链，最终组装成书；完整操作规程位于
-  `.claude/skills/novel-pipeline-operator/SKILL.md`。
+  `.workflow/skills/novel-pipeline-operator/SKILL.md`。
 - `web/` 默认以 `VITE_USE_MOCK=false` 连接真实服务。读屏 GET 与人工写回 POST 已接通；
   写操作遵循 preview → 确认 → CLI 作业执行，作业失败由 `JobRecord.state='failed'`
   表达，而不是伪装成 HTTP 错误。
@@ -201,7 +201,7 @@ conda run -n novel_refactor python -X utf8 tools/verify_agent_e2e.py --base <Out
 ```
 
 Agent driver 与显式 legacy LLM transport 共用**一份**
-`.claude/skills/novel-pipeline-operator/SKILL.md` 和同一条 Stage0～Stage7 主链，只按执行 profile
+`.workflow/skills/novel-pipeline-operator/SKILL.md` 和同一条 Stage0～Stage7 主链，只按执行 profile
 区分付费生成节点由谁承接；任一模式失败都不得自动降级到另一模式。两种模式的下一步都只读
 `operator next`，不从 stage 表、目录存在性或聊天记忆自行推演；执行前再用 `operator permit` 把
 current 读面、exact node/flags、贵贱、写盘效果与外部输入字节冻结成一张许可。blocked action 的 hash
@@ -294,7 +294,9 @@ web/             React + Vite + TypeScript 前端
 docs/schema/     后端产物/API 契约
 tests/           后端与文档守卫
 tools/           探针、对比与 schema 派生工具
-.claude/skills/  agent 端到端操作规程
+.workflow/skills/ agent 端到端操作规程的 neutral canonical 契约
+.agents/skills/  Codex 宿主发现 shim（不承载第二份规程）
+.claude/skills/  Claude 宿主发现 shim（与 Codex 入口逐字节相同）
 ```
 
 本仓无外部目录依赖。早期快速原型仓 `../Novel_refactoring/`（含 163 本语料与 3 本书的

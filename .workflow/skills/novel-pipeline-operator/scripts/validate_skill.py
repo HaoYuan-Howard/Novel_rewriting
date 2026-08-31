@@ -473,7 +473,7 @@ def validate(counters: dict[str, int] | None = None,
                 "notes_chars", "notes_budget", "index_rows", "repo_fn_citations",
                 "open_gap_entries", "stage0_workpack_contract",
                 "finalizer_contract", "operator_telemetry_contract",
-                "routing_axes", "codex_discovery", "operator_next_contract",
+                "routing_axes", "discovery_shims", "operator_next_contract",
                 "operator_execution_permit_contract"):
         counters.setdefault(key, 0)
     errors: list[str] = []
@@ -553,35 +553,51 @@ def validate(counters: dict[str, int] | None = None,
         if "禁止自动降级" not in execution_text:
             errors.append("execution-modes.md 没有关闭式禁止 Agent/legacy 自动降级")
 
-    # Codex 只原生扫描 `.agents/skills`；Windows core.symlinks=false 会把提交的
-    # 目录 symlink 检出成普通文本，所以守一个极薄发现 shim，canonical 始终只有本目录。
-    codex_entry = (
-        root / ".agents" / "skills" / "novel-pipeline-operator" / "SKILL.md")
-    if not codex_entry.is_file():
-        errors.append("缺少 .agents/skills/novel-pipeline-operator/SKILL.md Codex 发现入口")
-    else:
-        counters["codex_discovery"] += 1
-        shim = codex_entry.read_text(encoding="utf-8")
+    # Codex/Claude 各扫描自己的发现目录。宿主可能把 `.agents` 的同名 skill
+    # 物化到 `.claude`；因此两边只能放逐字相同的薄 shim，真实契约必须待在
+    # 不参与宿主同步的 `.workflow`。这样再次覆盖也只是相同字节替换相同字节。
+    expected_canonical = (
+        root / ".workflow" / "skills" / "novel-pipeline-operator")
+    if SKILL_DIR != expected_canonical:
+        errors.append(
+            "canonical skill 必须位于 neutral `.workflow/skills/novel-pipeline-operator`，"
+            "不得放进 `.agents` 或 `.claude` 的宿主同步命名空间")
+    discovery_entries = {
+        "Codex": root / ".agents" / "skills" / "novel-pipeline-operator" / "SKILL.md",
+        "Claude": root / ".claude" / "skills" / "novel-pipeline-operator" / "SKILL.md",
+    }
+    shim_bytes: dict[str, bytes] = {}
+    canonical_pointer = (
+        "../../../.workflow/skills/novel-pipeline-operator/SKILL.md")
+    for host, entry in discovery_entries.items():
+        if not entry.is_file():
+            errors.append(f"缺少 {entry.relative_to(root)} {host} 发现入口")
+            continue
+        counters["discovery_shims"] += 1
+        raw = entry.read_bytes()
+        shim_bytes[host] = raw
         try:
+            shim = raw.decode("utf-8")
             shim_frontmatter, shim_body = _frontmatter(shim)
-        except ValueError as exc:
-            errors.append(f"Codex 发现入口 frontmatter 无效：{exc}")
-        else:
-            if shim_frontmatter.get("name") != "novel-pipeline-operator":
-                errors.append("Codex 发现入口 name 与 canonical skill 不一致")
-            canonical_pointer = (
-                "../../../.claude/skills/novel-pipeline-operator/SKILL.md")
-            if canonical_pointer not in shim_body:
-                errors.append("Codex 发现入口没有指向唯一 canonical SKILL.md")
-            for duplicated in ("## 执行主循环", "scripts/run_step.py", "## 完成定义"):
-                if duplicated in shim_body:
-                    errors.append(
-                        f"Codex 发现入口复制了主链内容 `{duplicated}`；只允许保留指针")
-        shim_root = codex_entry.parent
-        for copied_dir in ("references", "scripts", "assets"):
-            if (shim_root / copied_dir).exists():
+        except (UnicodeDecodeError, ValueError) as exc:
+            errors.append(f"{host} 发现入口无效：{exc}")
+            continue
+        if shim_frontmatter.get("name") != "novel-pipeline-operator":
+            errors.append(f"{host} 发现入口 name 与 canonical skill 不一致")
+        if canonical_pointer not in shim_body:
+            errors.append(f"{host} 发现入口没有指向 neutral canonical SKILL.md")
+        for duplicated in ("## 执行主循环", "scripts/run_step.py", "## 完成定义"):
+            if duplicated in shim_body:
                 errors.append(
-                    f"Codex 发现入口出现第二份 {copied_dir}/；主链资源只能留在 canonical skill")
+                    f"{host} 发现入口复制了主链内容 `{duplicated}`；只允许保留指针")
+        for copied_dir in ("references", "scripts", "assets"):
+            copied = entry.parent / copied_dir
+            if copied.exists() and any(copied.rglob("*")):
+                errors.append(
+                    f"{host} 发现入口出现第二份 {copied_dir}/；"
+                    "主链资源只能留在 neutral canonical skill")
+    if len(shim_bytes) == 2 and len(set(shim_bytes.values())) != 1:
+        errors.append("Codex 与 Claude 发现 shim 必须逐字节相同，防止宿主同步改写语义")
 
     next_command = "novel.cli operator next <SID> --base <BASE> --json"
     if next_command not in text:

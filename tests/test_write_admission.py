@@ -18,8 +18,8 @@ from novel.errors import TerminalState
 from novel.orchestrator import admission, agent, jobs, write_admission
 
 
-SCRIPT_DIR = (Path(__file__).resolve().parent.parent / '.claude' / 'skills'
-              / 'novel-pipeline-operator' / 'scripts')
+SCRIPT_DIR = (Path(__file__).resolve().parent.parent
+              / skill_contract.SKILL_REL / 'scripts')
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 import finalize_review as finalizer  # noqa: E402

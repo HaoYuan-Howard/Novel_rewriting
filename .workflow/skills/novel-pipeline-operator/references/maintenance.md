@@ -137,9 +137,9 @@ references/field-notes/cross-cutting.md
 那条链上有 pydantic；换个解释器会报 `FAIL validator crashed`，不会假绿）：
 
 ```text
-<PY> -X utf8 .claude/skills/novel-pipeline-operator/scripts/validate_skill.py
+<PY> -X utf8 .workflow/skills/novel-pipeline-operator/scripts/validate_skill.py
 <PY> -m pytest tests/test_skill_operator.py
-<PY> <SKILL_CREATOR>/scripts/quick_validate.py .claude/skills/novel-pipeline-operator
+<PY> <SKILL_CREATOR>/scripts/quick_validate.py .workflow/skills/novel-pipeline-operator
 ```
 
 第二条是这套守卫真正生效的地方：校验器**接在默认 pytest 套件里**，skill 漂了会让回归变红。
@@ -148,8 +148,9 @@ references/field-notes/cross-cutting.md
 **结构断言**（校验器）：frontmatter 只有 `name` 与 `description`；`SKILL.md` 少于 500 行；
 所有本地链接存在、所有 reference 均从 `SKILL.md` 直接可达；workflow 的节点顺序与
 `PIPELINE_STEPS` 完全一致；经验 ID 唯一且六个字段齐全；终审模板的必需章节存在；
-headless 消费提示词不依赖已删除的章节编号；`.agents` 发现 shim 只指向 canonical skill、
-不复制主循环；runtime 只含宿主路由，execution modes 同时覆盖两种 executor 且明确禁止自动降级。
+headless 消费提示词不依赖已删除的章节编号；`.agents` / `.claude` 两份宿主发现 shim
+逐字节相同、只指向 `.workflow` neutral canonical，且都不复制 `references/` / `scripts/` /
+`assets/` 或主循环；runtime 只含宿主路由，execution modes 同时覆盖两种 executor 且明确禁止自动降级。
 
 **行为断言**（测的是「文档声称的行为与代码是否一致」，结构检查测不到；真值一律从生产落点
 反查，校验器里不出现第二份清单）：

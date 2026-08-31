@@ -42,7 +42,7 @@ with code in this repository. **`CLAUDE.md` 是指向本文件的链接——要
   ledger 不闭合、新增 skip 一律关闭式失败）。当前 manifest 尚未生成，所以**任何通过数字只能
   称「非 corpus 回归」，不能称「全量绿」**（`docs/REQUIREMENTS.md` TODO-21）。
 
-**跑书不要手拼命令**：完整操作规程是 `.claude/skills/novel-pipeline-operator/SKILL.md`
+**跑书不要手拼命令**：完整操作规程是 `.workflow/skills/novel-pipeline-operator/SKILL.md`
 （`novel-pipeline-operator` skill）。CLI 子命令：`run` / `preview` / `state` / `inbox` /
 `operator` / `queue` / `queue-list` / `queue-cancel` / `queue-resume` / `jobs` / `reconcile` / `doctor` /
 `response-repair` / `approval` / `mark`。`operator next` 只回答当前三态与 blocker；已有 sid 的 node 动作
@@ -187,7 +187,7 @@ tests/contracts/tools/novel/docs 开头的仓内路径必须存在。文档引�
   问题还是守卫自己漂了——典型形状是「守卫重拼了生产的实参」和「守卫断言了一道产品明说不存在的闸」
   （`info` 判据的正确守法是"越线必出声"而不是"不许越线"）。守卫要**调用生产那一个落点**，不要重拼一份。
 - **纯运行型任务**（跑书、断点续跑、查看 `state` / `inbox`、流水线内恢复与代批）不读取
-  `docs/LESSONS.md`，只遵循 `.claude/skills/novel-pipeline-operator/` 内的操作契约和按需经验库。
+  `docs/LESSONS.md`，只遵循 `.workflow/skills/novel-pipeline-operator/` 内的操作契约和按需经验库。
   若运行故障进一步转为仓库代码诊断或修复，再进入前述工程任务流程。
 - 不能用 mock、空数组、普通 404 或本地存储伪装尚未提供的后端能力；类型同型只证明适配器对齐，
   联调要走通「页面动作 → API 方法 → HTTP 路由 → 服务实现 → 最终产物」并检查重启后的状态。

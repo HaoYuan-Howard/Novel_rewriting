@@ -3,13 +3,13 @@
 """
 test_skill_operator.py —— 把 `novel-pipeline-operator` skill 的漂移守卫接进回归套件。
 
-【这份测试存在的理由】`.claude/skills/novel-pipeline-operator/scripts/validate_skill.py`
+【这份测试存在的理由】`.workflow/skills/novel-pipeline-operator/scripts/validate_skill.py`
 写得很全，却**从来没有被任何测试或 CI 调用过**——唯一记载的调用处是它自己的维护协议里
 一句「每次修改后从仓根运行」。于是一次盘点在它全绿的情况下查出十三处残留与漂移，其中
 四条正在损害执行质量。`docs/LESSONS.md` 第 1 条说的就是这个形状：**约束只有落到可执行
 守卫上才算存在**。
 
-【为什么按路径 import 而不是 subprocess】`.claude/skills/*/scripts` 不是包、也不在
+【为什么按路径 import 而不是 subprocess】`.workflow/skills/*/scripts` 不是包、也不在
 `pyproject.toml` 的 `packages` 里，`import` 不到。subprocess 会把失败压成一个退出码加
 一坨 stdout，还要处理 Windows 控制台编码；`importlib` 让 pytest 直接展示逐条 error。
 
@@ -41,10 +41,12 @@ from novel.report.findings import ran, unverifiable
 from novel.orchestrator.operator import canonical_sha256
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-SKILL_DIR = REPO_ROOT / '.claude' / 'skills' / 'novel-pipeline-operator'
+SKILL_DIR = REPO_ROOT / '.workflow' / 'skills' / 'novel-pipeline-operator'
 VALIDATOR = SKILL_DIR / 'scripts' / 'validate_skill.py'
-CODEX_SKILL_ENTRY = (
-    REPO_ROOT / '.agents' / 'skills' / 'novel-pipeline-operator' / 'SKILL.md')
+DISCOVERY_ENTRIES = (
+    REPO_ROOT / '.agents' / 'skills' / 'novel-pipeline-operator' / 'SKILL.md',
+    REPO_ROOT / '.claude' / 'skills' / 'novel-pipeline-operator' / 'SKILL.md',
+)
 
 
 def _validator():
@@ -93,21 +95,28 @@ def test_skill_validator_reports_no_drift():
         '这是 **skill 文档**的问题，不是被它引用的生产代码的问题——\n'
         '不要为了让这条变绿去改 contracts/invariants.py 或 novel/report/render.py。\n'
         '逐条修完后跑：\n'
-        '  <PY> -X utf8 .claude/skills/novel-pipeline-operator/scripts/validate_skill.py\n\n'
+        '  <PY> -X utf8 .workflow/skills/novel-pipeline-operator/scripts/validate_skill.py\n\n'
         % len(errors) + '\n'.join(f'  - {e}' for e in errors))
 
 
-def test_codex_discovery_entry_is_a_thin_pointer_to_the_single_canonical_skill():
-    """Windows core.symlinks=false 也能检出的普通文件 shim，不得长成第二套主链。"""
-    assert CODEX_SKILL_ENTRY.is_file()
-    shim = CODEX_SKILL_ENTRY.read_text(encoding='utf-8')
-    assert 'name: novel-pipeline-operator' in shim
-    assert '../../../.claude/skills/novel-pipeline-operator/SKILL.md' in shim
-    for duplicated in ('## 执行主循环', 'scripts/run_step.py', '## 完成定义'):
-        assert duplicated not in shim, f'Codex 发现入口复制了 canonical 内容：{duplicated}'
-    for copied_dir in ('references', 'scripts', 'assets'):
-        assert not (CODEX_SKILL_ENTRY.parent / copied_dir).exists(), \
-            f'.agents 发现入口出现第二份 {copied_dir}/'
+def test_host_discovery_entries_are_identical_thin_pointers_to_neutral_canonical():
+    """宿主同名同步只能以相同 shim 覆盖相同 shim，不能再触碰真实契约。"""
+    payloads = []
+    for entry in DISCOVERY_ENTRIES:
+        assert entry.is_file()
+        payloads.append(entry.read_bytes())
+        shim = payloads[-1].decode('utf-8')
+        assert 'name: novel-pipeline-operator' in shim
+        assert '../../../.workflow/skills/novel-pipeline-operator/SKILL.md' in shim
+        for duplicated in ('## 执行主循环', 'scripts/run_step.py', '## 完成定义'):
+            assert duplicated not in shim, f'{entry} 复制了 canonical 内容：{duplicated}'
+        for copied_dir in ('references', 'scripts', 'assets'):
+            copied = entry.parent / copied_dir
+            assert not copied.exists() or not any(copied.rglob('*')), \
+                f'{entry.parent} 出现第二份 {copied_dir}/'
+    assert payloads[0] == payloads[1], 'Codex/Claude shim 必须逐字节相同'
+    assert SKILL_DIR.relative_to(REPO_ROOT).as_posix() == (
+        '.workflow/skills/novel-pipeline-operator')
 
 
 def test_runtime_host_and_executor_mode_are_two_routed_axes():
@@ -1028,7 +1037,7 @@ _FLOORS = {
     'finalizer_contract': 1,
     'operator_telemetry_contract': 1,
     'routing_axes': 2,
-    'codex_discovery': 1,
+    'discovery_shims': 2,
     'operator_next_contract': 1,
     'operator_execution_permit_contract': 1,
 }

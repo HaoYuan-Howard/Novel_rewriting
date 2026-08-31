@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+from novel import skill_contract
 from tools.backup_snapshot import (
     BackupRefused, _code_allowed, code_files, create_archive, private_files,
     restore_archive,
@@ -58,7 +59,24 @@ def test_live_code_profile_contains_required_public_config_and_no_private_roots(
     assert {
         '.env.example', 'pyproject.toml', 'web/.env', 'web/package.json',
         'web/package-lock.json', 'tests/fixtures/manifest.json',
+        '.workflow/skills/novel-pipeline-operator/SKILL.md',
+        '.agents/skills/novel-pipeline-operator/SKILL.md',
+        '.claude/skills/novel-pipeline-operator/SKILL.md',
     } <= rels
+    contract_rels = {
+        path.relative_to(repo).as_posix()
+        for path in skill_contract.contract_files(repo)
+    }
+    assert contract_rels <= rels
+    canonical_prefix = '.workflow/skills/novel-pipeline-operator/'
+    assert any(rel.startswith(canonical_prefix + 'references/') for rel in rels)
+    assert any(rel.startswith(canonical_prefix + 'scripts/') for rel in rels)
+    assert any(rel.startswith(canonical_prefix + 'assets/') for rel in rels)
+    for host in ('.agents', '.claude'):
+        shim_prefix = f'{host}/skills/novel-pipeline-operator/'
+        assert {rel for rel in rels if rel.startswith(shim_prefix)} == {
+            shim_prefix + 'SKILL.md',
+        }
     assert '.env' not in rels
     assert '.claude/settings.local.json' not in rels
     assert not any(rel.split('/', 1)[0] in {

@@ -396,9 +396,9 @@ v1.1 保留为显式快速路径，没有因为 v2 翻默认就当场删除。20
 交出起始指纹，不能用结束时当前值作默认。临时编辑只有恢复到原指纹才允许续跑；稳定落到新指纹
 就是另一条 run。
 
-落点：`.claude/skills/novel-pipeline-operator/scripts/session_preflight.py::capture`、
-`.claude/skills/novel-pipeline-operator/scripts/run_step.py::_code_is_current`、
-`.claude/skills/novel-pipeline-operator/scripts/collect_final_evidence.py::collect`、
+落点：`.workflow/skills/novel-pipeline-operator/scripts/session_preflight.py::capture`、
+`.workflow/skills/novel-pipeline-operator/scripts/run_step.py::_code_is_current`、
+`.workflow/skills/novel-pipeline-operator/scripts/collect_final_evidence.py::collect`、
 `novel/orchestrator/delivery.py::assess`。
 
 ## 30. 旁路决定账必须在每个读出口叠加，不能只在重新生成时烘焙
@@ -457,7 +457,7 @@ mark 复用它，不能在父 gate close 后为合法 end 信标另开一枚必�
 一份会继续加载别处指令的 `SKILL.md`。
 
 落点：`novel/orchestrator/operator.py::next_action` / `::permit`、
-`.claude/skills/novel-pipeline-operator/scripts/run_step.py::main`、
+`.workflow/skills/novel-pipeline-operator/scripts/run_step.py::main`、
 `novel/skill_contract.py::package_sha256`、`novel/orchestrator/admission.py`、
 `novel/orchestrator/write_admission.py::operation_scope`、
 `novel/orchestrator/agent.py::_wait_for_execution_closure`。

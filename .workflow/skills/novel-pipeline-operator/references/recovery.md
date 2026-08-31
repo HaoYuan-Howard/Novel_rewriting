@@ -275,7 +275,7 @@ batch，只走 Stage2 定向恢复与 Pro 重建；
 `--chapters`、不要清 sidecar，也不要再授权一次新写作。先选一个不同于 source 的新
 `TARGET_RUN_ID`，并在 emit 与 apply 两步中复用**同一个** target run。仍须经本 skill 的唯一
 runner 先 preview、再执行；下面四条中的 `<RUNNER>` 是
-`.claude/skills/novel-pipeline-operator/scripts/run_step.py`：
+`.workflow/skills/novel-pipeline-operator/scripts/run_step.py`：
 先分别把 emit 与 apply 的 exact node flags 交给 `operator permit`，固化返回的
 `<EMIT_PERMIT_SHA256>` / `<APPLY_PERMIT_SHA256>`；两种动作不得共用一枚许可。
 

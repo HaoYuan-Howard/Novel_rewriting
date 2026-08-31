@@ -60,7 +60,7 @@ RUNS_FILENAME = 'agent_runs.jsonl'
 LOG_PREFIX = 'agent-'
 
 #: 仓根：agent.py → orchestrator → novel → 仓根。agent 的 cwd 钉死在这里——
-#: `.claude/skills/` 的自动加载、`-m novel.cli` 的 import 都吃这个 cwd。
+#: 两侧发现 shim、neutral `.workflow/skills/` 与 `-m novel.cli` 的 import 都吃这个 cwd。
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 #: **表和键都住在 `jobs.py`**（`AGENT_REGISTRY` / `agent_lock_key`）——
@@ -149,6 +149,7 @@ def build_prompt(sid: str, base: str | os.PathLike[str], *,
         f'{node}={profile.driver}/{profile.model}/{profile.reasoning_effort}/'
         f'{profile.execution_mode}'
         for node, profile in sorted(profiles.executor_overrides.items())) or '无'
+    canonical_skill = (skill_contract.SKILL_REL / 'SKILL.md').as_posix()
     return f"""你在仓库 {REPO_ROOT.as_posix()} 的根目录下工作。launcher 已把 cwd 固定在仓根；
 每次 Bash 调用都必须保持在仓根，不得 cd，读取 base 与产物一律使用绝对路径。
 
@@ -173,7 +174,7 @@ run id 与 contract SHA-256 重读 started 事件，核验 permit、active claim
 代码指纹和两项授权。不得直接调用 `novel.cli run`、自行拼模型参数，或拿当前环境变量覆盖冻结选择。
 
 启动顺序（不可跳步）：
-1. 先读 `.claude/skills/novel-pipeline-operator/SKILL.md` 全文，并照它的“按需加载资源”读取
+1. 先读 `{canonical_skill}` 全文，并照它的“按需加载资源”读取
    工作流契约、代批与终审契约及 headless 运行环境；失败时再读修复状态机，按节点名/rule id
    检索经验库。不要依赖旧版章节号或聊天记忆。
 2. 先运行 `operator next {sid} --json`；它是 queue、state 与 inbox 同一冻结读面的唯一下一动作。
