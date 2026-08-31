@@ -681,6 +681,12 @@ Output/_service/approvals/<sid>.json 人工闸门、已阅状态与 canonical �
 不进入正式 artifact provenance，也不参与 cache key。旧行没有该列时仍可读，但只能标为
 legacy / ungrouped；成本汇总不得用时间窗口把它猜进某个新 run。
 
+`tools/workflow_metrics.py --run-id <RUN_ID>` 对 ledger、`llm_audit.jsonl` 与
+`agent_progress.jsonl` 只接受显式且逐字相等的业务 `run_id`；同 sid 的旧 run、缺 `run_id` 的旧行与
+别的 run 全部排除，不能按时间窗口或当前 artifact 倒推归属。产物、人审与结构面仍是当前盘面快照，
+可在同一报告中展示，但它们不携 `run_id`，不得反向加入目标 run 的代码身份；报告顶层必须回显
+所选 `run_id`。不带 `--run-id` 才是跨历史汇总，两种口径不得混称一次 P3 run 的稳定性读数。
+
 `human_actions.jsonl` 当前只写 `HumanEditAction` wire v1 的 `prepared → committed`
 两相行：`request_id` 绑 preview 意图，`action_id` 再绑预期结果 SHA；其余字段是
 `action=stage5_edit`、sid/章号、自报 actor/reason、`formal｜working_draft`、preview 时
@@ -800,17 +806,28 @@ artifact adoption → committed` 收口；foreign prepared 序号不能被 legac
 替代。checkpoint 与 journal 都是 `_stage6_runs/<run_id>/` 内部 sidecar，不是正式 artifact、缓存或
 公开 API 类型。
 
-#### 7.0c Phase5 executor checkpoint / commit journal —— 五个 producer 共用一套 acceptance
+#### 7.0c Phase5 executor checkpoint / commit journal —— 六个 producer 共用一套 acceptance
 
-Stage4 design/plan、Stage5 write、Stage6 hook 与 Stage7 rename 不另造 acceptance 协议；都复用
+Stage2 Global、Stage4 design/plan、Stage5 write、Stage6 hook 与 Stage7 rename 不另造 acceptance
+协议；都复用
 `novel/llm/agent_runs.py` 的 `node-executor/v1`、append-only revision checkpoint 与
 `prepared / committed` journal。各薄 adapter 只登记路径、purpose、recovery policy、session isolation、
-允许触碰的正式/伴生路径和同书 foreign prepared 排斥：Stage4 分别是 `stage4-design-v1` / `stage4-plan-v1`
-且 per-node；Stage5 是 `stage5-write-v1` 且 per-chapter；Hook 是 `stage6-hook-v1`、Rename 是
-`stage7-rename-v1`，后二者均 per-node。
+允许触碰的正式/伴生路径和同书 foreign prepared 排斥：Global 是 `stage2-global-v1` 且 per-node；
+Stage4 分别是 `stage4-design-v1` / `stage4-plan-v1` 且 per-node；Stage5 是 `stage5-write-v1` 且
+per-chapter；Hook 是 `stage6-hook-v1`、Rename 是 `stage7-rename-v1`，后二者均 per-node。
 
-agent schema 固定为 `BlindPlanResponse`、`EvidenceBindingResponse`、`ChapterResponse`、`HookResponse`
-或 `NameMapResponse`；一次 feedback 后仍交完整 replacement，不能换成局部补丁 schema。代码先物化候选，
+Global 的 specialized state 仍归同一通用 checkpoint/journal core：每个 accepted turn 保存完整合并
+candidate、turn kind、可选 patch base、MainText SHA 及 candidate/table 双 SHA 与
+`accepted_role_patch_count`。fresh/restored 共用同一个 role patch reducer；纯 `role_leaks_fate` 才开放
+四字段、双 SHA、精确人物集合的 `role_fate_patch`，最多两次 accepted，开始后 sticky，禁止 full
+candidate re-entry。dynamic-validator 拒稿 custody 按当轮 `expected_turn_kind + base + accepted count`
+封存并与 latest checkpoint 对证；人工 replacement 必须重放同一 validator/applicator。正式尾窗只在
+同书所有权内走 `prepared → Global/review/projection/INVALID touched paths → typed readback + freshness
+→ adoption → committed`；foreign prepared 先拒，新 run 不得覆盖 kill 窗口。
+
+除上述 Global 固定联合信封的窄补丁外，其余 agent schema 固定为 `BlindPlanResponse`、
+`EvidenceBindingResponse`、`ChapterResponse`、`HookResponse` 或 `NameMapResponse`；一次 feedback 后仍交
+完整 replacement，不能换成局部补丁 schema。代码先物化候选，
 再运行当前业务 HARD / scope / identity；反馈只带安全的结构化规则元数据，不把裁决权交回 agent。
 accepted checkpoint 精确绑定当前 profile、subject、prompt/schema、requested ceiling、session/turn、
 accepted stdout/typed payload、attempt links 与 ledger；跨进程恢复复核这些字段，旧 provider session 只作

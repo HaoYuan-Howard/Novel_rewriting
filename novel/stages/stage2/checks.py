@@ -32,10 +32,11 @@ from contracts.artifacts import (
 import re
 import statistics
 from dataclasses import dataclass
-from typing import Any, Iterable
+from typing import Any, Iterable, Mapping
 
 from contracts.invariants import (
-    BARE_PRONOUNS, BLUEPRINT_ARCHITECTURES, HINGE_FAILURE_ROUTE, TIME_LAYERS,
+    BARE_PRONOUNS, BLUEPRINT_ARCHITECTURES, FATE_WORDS, HINGE_FAILURE_ROUTE,
+    TIME_LAYERS,
 )
 from contracts.rules import REGISTRY
 from contracts.schema.common import Finding
@@ -117,7 +118,7 @@ def _scope_violation_ordinal(row: Any) -> int | None:
 # ⚠ 这三张**刻意不进 `contracts/invariants.py`**（形态照 `stage5/checks.py::META_PATTERNS`）：
 #   那张表收的是「**同时**进 prompt 与判据」的枚举，而这三份只有判据一个消费方。
 #   放进去就是给它们造第二个家。
-#   ⚠ **`BARE_PRONOUNS` 是反例**：它有三个消费方（`GLOBAL_SYS` 的禁令 ·
+#   ⚠ **`BARE_PRONOUNS` 是反例**：它有三个消费方（`GLOBAL_CANDIDATE_SYS` 的禁令 ·
 #   `address_bare_pronoun`/`address_has_pronoun`）
 #   ⇒ 它在 `invariants` 里，本模块 import 它、**不手抄子集**。
 
@@ -169,14 +170,6 @@ def _hedge_hits(text: str) -> list[str]:
 REVEAL_MARKS: tuple[str, ...] = (
     '其实', '原来', '竟', '早已', '早就', '根本', '一直', '故意', '安排', '授意',
     '买通', '收买', '假的', '骗', '真相', '实则', '暗中', '背地', '设计', '算计')
-
-#: 「这句话里混进了结局」的词表。逐字搬自原型 `stage2_common.FATE_WORDS`。
-#: ⚠⚠ **它只抓转抄式**：实测某本命中 **0/17 而人读真违规 6/17**
-#: （`char_009.role` 写「…**后成为**李宝珠的下属」，差一个字避开了 `后被`）
-#: ⇒ `role_fate_unverifiable` 必须**无条件**把这句话说出来。
-#: ⚠ 判据与 `--purge-role` 那条修复臂**共用这一份**：两边各写一份词表，
-#: 就是下一次「校验说有问题、修复工具却看不见」的来源。
-FATE_WORDS: tuple[str, ...] = ('最终', '后被', '而死', '下狱', '被处死', '走向', '结局', '沦为')
 
 #: 切分粒度的两条线。逐字搬自原型 `check_blueprints`。
 #: ⚠⚠ **两条都不做跨书比较**，理由原型自己写着：章级 字/拍 最大值在两本健康的书上
@@ -571,6 +564,36 @@ _ROLE_RULES = ('role_missing', 'role_leaks_fate', 'role_repeats_name', 'hedge_wo
                'role_fate_unverifiable', 'fate_report')
 
 
+@dataclass(frozen=True)
+class RoleFateLeakTarget:
+    """``role_leaks_fate`` 的 typed 修订目标；不携 role/fate 正文字节。"""
+
+    char_id: str
+    matched_words: tuple[str, ...]
+
+
+def role_fate_leak_targets(
+        characters: Mapping[str, Mapping[str, Any] | Any],
+) -> tuple[RoleFateLeakTarget, ...]:
+    """按判据唯一词表返回关闭式人物集合，供报告与窄修共同消费。
+
+    返回值只含稳定人物键与命中词；调用方不得再从 Finding.detail/evidence
+    反解析 allowlist。坏形状仍由既有 schema/``role_missing`` 等判据负责，
+    本函数只识别确实是字符串的 ``role``。
+    """
+    targets: list[RoleFateLeakTarget] = []
+    for char_id, raw in sorted(characters.items()):
+        value = raw if isinstance(raw, Mapping) else {}
+        role = value.get('role')
+        if not isinstance(role, str):
+            continue
+        words = tuple(word for word in FATE_WORDS if word in role)
+        if words:
+            targets.append(RoleFateLeakTarget(
+                char_id=str(char_id), matched_words=words))
+    return tuple(targets)
+
+
 def _roles(c: _Ctx) -> list[Outcome]:
     if not c.has_gg:
         return [unverifiable(r, _NO_GLOBAL) for r in _ROLE_RULES]
@@ -586,8 +609,9 @@ def _roles(c: _Ctx) -> list[Outcome]:
                             evidence=sorted(no_role))] if no_role else [],
                    scanned=f'{len(items)} 个角色'))
 
-    leaky = [f'{cid}:{w}' for cid, v in items for w in FATE_WORDS
-             if w in ((v or {}).get('role') or '')]
+    leak_targets = role_fate_leak_targets(c.chars)
+    leaky = [f'{target.char_id}:{word}' for target in leak_targets
+             for word in target.matched_words]
     out.append(ran('role_leaks_fate',
                    [finding('role_leaks_fate',
                             detail=f'role 里出现结局词：{_cut(leaky)}',

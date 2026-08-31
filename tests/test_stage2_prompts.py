@@ -4,55 +4,60 @@
 from __future__ import annotations
 
 from contracts.invariants import (
-    ADDRESS_BY, ADDRESS_CONTEXT, HINGE_KINDS, NAME_DISTINCTIVENESS,
+    ADDRESS_BY, ADDRESS_CONTEXT, FATE_WORDS, HINGE_KINDS, NAME_DISTINCTIVENESS,
     KNOWLEDGE_SUBJECT_KINDS, NARRATIVE_PERSON, RELATION_VISIBILITY_KINDS,
     RESPONSE_TIME_LAYERS, WORLD_RULE_KINDS,
 )
-from contracts.schema.stage2 import EvidenceLocator
 from novel.stages.stage2 import prompts
 
 
 def test_all_current_prompt_arms_are_rendered():
-    assert prompts.GLOBAL_SYS.startswith(prompts.RULES_V2)
+    assert prompts.GLOBAL_CANDIDATE_SYS.startswith(prompts.RULES_V2)
     assert prompts.BLUEPRINT_SYS_V2_REFS.startswith(prompts.RULES_V2)
     assert prompts.BLUEPRINT_SYS_V31.startswith(prompts.RULES_V2)
-    assert prompts.ROLE_FATE_RULE in prompts.GLOBAL_SYS
+    assert prompts.ROLE_FATE_RULE in prompts.GLOBAL_CANDIDATE_SYS
     assert prompts.ROLE_FATE_RULE in prompts.ROLE_SPLIT_SYS
-    rendered = (prompts.GLOBAL_SYS + prompts.BOUNDARY_SYS_V2
+    assert '$FATE_WORDS' not in prompts.ROLE_FATE_RULE
+    assert all(word in prompts.ROLE_FATE_RULE for word in FATE_WORDS)
+    rendered = (prompts.GLOBAL_CANDIDATE_SYS + prompts.BOUNDARY_SYS_V2
                 + prompts.BLUEPRINT_SYS_V2_REFS + prompts.BLUEPRINT_SYS_V31
                 + prompts.ROLE_SPLIT_SYS)
     assert '$' not in rendered
 
 
 def test_global_prompt_requires_an_explicit_exact_chapter_partition():
-    assert '每一章逐个显式列全' in prompts.GLOBAL_SYS
-    assert '每章恰好出现一次' in prompts.GLOBAL_SYS
+    assert '每一章逐个显式列全' in prompts.GLOBAL_CANDIDATE_SYS
+    assert '每章恰好出现一次' in prompts.GLOBAL_CANDIDATE_SYS
 
 
 def test_global_prompt_separates_opening_premises_from_later_hidden_truths():
-    assert '第一章明牌不是秘密' in prompts.GLOBAL_SYS
-    assert '不能因为书中其他角色暂时不知道就收进 secrets' in prompts.GLOBAL_SYS
-    assert '反向扫“早就知道”' in prompts.GLOBAL_SYS
-    assert '收徒那天就知道' in prompts.GLOBAL_SYS
-    assert 'secret 关心的' in prompts.GLOBAL_SYS
-    assert '是读者何时知道' in prompts.GLOBAL_SYS
+    assert '第一章明牌不是秘密' in prompts.GLOBAL_CANDIDATE_SYS
+    assert '不能因为书中其他角色暂时不知道就收进 secrets' in \
+        prompts.GLOBAL_CANDIDATE_SYS
+    assert '反向扫“早就知道”' in prompts.GLOBAL_CANDIDATE_SYS
+    assert '收徒那天就知道' in prompts.GLOBAL_CANDIDATE_SYS
+    assert 'secret 关心的' in prompts.GLOBAL_CANDIDATE_SYS
+    assert '是读者何时知道' in prompts.GLOBAL_CANDIDATE_SYS
 
 
-def test_global_prompt_requests_typed_visibility_knowledge_and_seven_locator_families():
-    assert 'visibility 写【读者】何时能知道这条关系' in prompts.GLOBAL_SYS
-    assert 'knowledge_events' in prompts.GLOBAL_SYS
-    assert 'character_known_by' not in prompts.GLOBAL_SYS
-    assert '七类自由事实必须同交原文定位' in prompts.GLOBAL_SYS
-    assert '零命中或多命中会进入可修复的定位失败态' in prompts.GLOBAL_SYS
+def test_global_prompt_requests_typed_visibility_and_candidate_ids_only():
+    assert 'visibility 写【读者】何时能知道这条关系' in \
+        prompts.GLOBAL_CANDIDATE_SYS
+    assert 'knowledge_events' in prompts.GLOBAL_CANDIDATE_SYS
+    assert 'character_known_by' not in prompts.GLOBAL_CANDIDATE_SYS
+    assert '七类自由事实必须从关闭候选表选择证据' in \
+        prompts.GLOBAL_CANDIDATE_SYS
+    assert '只返回候选 id，不要返回章号、locator、原文' in \
+        prompts.GLOBAL_CANDIDATE_SYS
 
-    hint = prompts.GLOBAL_HINT
+    hint = prompts.GLOBAL_CANDIDATE_HINT
     relations = hint['entities']['relations']
     assert [row['visibility']['kind'] for row in relations] == list(
         RELATION_VISIBILITY_KINDS)
     knowledge = hint['canon']['secrets'][0]['knowledge_events']
     assert [row['subject']['kind'] for row in knowledge] == list(KNOWLEDGE_SUBJECT_KINDS)
 
-    locator_keys = set(EvidenceLocator.model_fields)
+    candidate_ref_keys = {'evidence_candidate_id'}
     seven_families = [
         hint['entities']['characters']['char_001']['role_evidence'],
         relations[0]['predicate_evidence'],
@@ -62,7 +67,7 @@ def test_global_prompt_requests_typed_visibility_knowledge_and_seven_locator_fam
         knowledge[0]['evidence'],
         hint['arc']['arc_tracks'][0]['trajectory_evidence'],
     ]
-    assert all(set(row) == locator_keys for row in seven_families)
+    assert all(set(row) == candidate_ref_keys for row in seven_families)
 
 
 def test_role_split_stays_a_claim_only_judge_without_source_access():
@@ -108,13 +113,15 @@ def test_response_hints_derive_enums_from_the_contract_layer():
     beat = prompts.BLUEPRINT_HINT_V31['blueprints'][0]['beats'][0]
     assert beat['time_layer'] == '|'.join(RESPONSE_TIME_LAYERS)
     assert beat['hinges'][0]['kind'] == '|'.join(HINGE_KINDS)
-    character = prompts.GLOBAL_HINT['entities']['characters']['char_001']
+    character = prompts.GLOBAL_CANDIDATE_HINT[
+        'entities']['characters']['char_001']
     assert character['name_distinctiveness'] == '|'.join(NAME_DISTINCTIVENESS)
     assert character['address'][0]['context'] == '|'.join(ADDRESS_CONTEXT)
     assert character['address'][0]['by'] == 'char_002|' + '|'.join(
         value for value in ADDRESS_BY if value != 'char_id')
-    assert prompts.GLOBAL_HINT['canon']['world_rules'][0]['kind'] == WORLD_RULE_KINDS[0]
-    assert set(prompts.GLOBAL_HINT['arc']['arc_tracks'][0]) == {
+    assert prompts.GLOBAL_CANDIDATE_HINT[
+        'canon']['world_rules'][0]['kind'] == WORLD_RULE_KINDS[0]
+    assert set(prompts.GLOBAL_CANDIDATE_HINT['arc']['arc_tracks'][0]) == {
         'subject', 'trajectory', 'trajectory_evidence'}
 
 

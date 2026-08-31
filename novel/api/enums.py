@@ -133,11 +133,11 @@ _WITHHELD: dict[str, str] = {
                           '与产物对不上的数，然后把差异当成 bug 报出来',
     # ── stage2（全书事实底座 / 逐章骨架）──
     'GLOBAL_EVIDENCE_CONTRACT': (
-        'stage2.global 当前 evidence wire 默认；它只供后端受控 A/B 选臂，'
-        '前端既不选择，也不得拿它判断正式 GlobalGrounding 是否 current'),
-    'GLOBAL_EVIDENCE_CONTRACTS': (
-        'stage2.global 的内部 A/B 取值面；candidate 臂需独立付费/正文外发授权，'
-        '不是浏览器可选配置，发布会绕过实验准入门'),
+        'stage2.global 唯一 provider-wire 身份；它不是选项，前端既不选择，'
+        '也不得拿它判断正式 GlobalGrounding 是否 current'),
+    'FATE_WORDS': (
+        'role 泄漏的生成/判据共享词表；它只是低召回率字面探针，'
+        '发布给前端会诱导浏览器把未命中重算成“没有剧透”'),
     # ── 事件拍 ──
     'BLUEPRINT_ARCHITECTURE': '`stage2.blueprint` 那次调用的**模型可见边界身份**，'
                               '是产地写进 `_provenance.context.architecture` 的一笔账。'

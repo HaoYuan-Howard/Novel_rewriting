@@ -45,7 +45,8 @@ _VOCABULARY = frozenset({
 #: 反射出来的空表会让这条守卫静默失去判别力（判据 3）。
 def _models() -> dict[str, type]:
     from contracts.schema.stage2 import (
-        GlobalAgentTurnResponse, HingePhraseResponse, HingeSelectResponse,
+        GlobalCandidateAgentTurnResponse, HingePhraseResponse,
+        HingeSelectResponse,
     )
     from contracts.schema.stage4 import (
         BlindBookStrategyResponse, BlindChapterDesignResponse,
@@ -61,7 +62,7 @@ def _models() -> dict[str, type]:
     )
 
     return {
-        'stage2.global': GlobalAgentTurnResponse,
+        'stage2.global': GlobalCandidateAgentTurnResponse,
         'stage2.global/role_split': RoleSplitResponse,
         'stage2.blueprint/hinge_select': HingeSelectResponse,
         'stage2.blueprint/hinge_phrase': HingePhraseResponse,
@@ -106,9 +107,9 @@ def test_every_agent_response_schema_only_uses_json_schema_keywords():
 
 def test_the_discriminator_is_actually_present_before_stripping():
     """反向自检：靶子必须真的存在，否则上一条测的是一个不会发生的情况。"""
-    from novel.stages.stage2.extract import GlobalGroundingResponse
+    from contracts.schema.stage2 import GlobalCandidateAgentTurnResponse
 
-    raw = GlobalGroundingResponse.model_json_schema(by_alias=True)
+    raw = GlobalCandidateAgentTurnResponse.model_json_schema(by_alias=True)
     assert 'discriminator' in json.dumps(raw), (
         'pydantic 不再发 discriminator 了？那就确认 CLI 侧的限制是否还在，'
         '而不是顺手删掉归一——删掉之后这条守卫就再也没有判别力')
@@ -116,7 +117,7 @@ def test_the_discriminator_is_actually_present_before_stripping():
 
 def test_stripping_removes_no_structural_constraint():
     """剥掉的只是分支提示：联合分支、必填与类型一格不少。"""
-    from novel.stages.stage2.extract import GlobalGroundingResponse as M
+    from contracts.schema.stage2 import GlobalCandidateAgentTurnResponse as M
 
     raw = M.model_json_schema(by_alias=True)
     sent = agent_json_schema(M)

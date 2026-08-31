@@ -15,7 +15,7 @@ from abc import ABC, abstractmethod
 from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
-from typing import Any, Generic, TypeVar
+from typing import Any, Generic, Literal, TypeVar
 
 from pydantic import BaseModel
 
@@ -25,9 +25,8 @@ from contracts.invariants import (
 from contracts.schema.orchestration import AgentProfile
 from contracts.schema.report import CheckReport
 from contracts.schema.stage2 import (
-    ChapterBlueprints, GlobalAgentTurnResponse,
-    GlobalCandidateAgentTurnResponse, GlobalCandidateFullTurn,
-    GlobalEvidencePatchTurn, GlobalFullCandidateTurn, GlobalGrounding,
+    ChapterBlueprints, GlobalCandidateAgentTurnResponse,
+    GlobalCandidateFullTurn, GlobalGrounding, GlobalRoleFatePatchTurn,
 )
 from contracts.schema.stage4 import (
     BindingConcern, BlindCandidate, ChapterBindingResponse, EvidenceBinding,
@@ -58,6 +57,7 @@ from novel.store import ArtifactStore
 
 
 A = TypeVar('A', bound=BaseModel)
+GlobalPatchKind = Literal['role_fate_patch']
 
 
 @dataclass(frozen=True)
@@ -147,6 +147,20 @@ class Stage2GlobalAgent(NodeExecutorAgent[GlobalGrounding]):
 
     node = 'stage2.global'
 
+    def _finish_restored(
+            self, acceptance: Mapping[str, object], *,
+            delivery_state: str, error_kind: str | None = None,
+    ) -> None:
+        agent_session_audit.finish_restored_session(
+            self.ctx.novel_dir.parent,
+            acceptance,
+            process_state='ok',
+            delivery_state=delivery_state,
+            error_kind=error_kind,
+            end_code_version=prov.code_version(),
+            only_if_open=True,
+        )
+
     def _finalize_rejected(
         self,
         prepared: extract.GlobalCandidateContext,
@@ -176,35 +190,162 @@ class Stage2GlobalAgent(NodeExecutorAgent[GlobalGrounding]):
             raise
         raise AssertionError('HARD 候选 finalize 必须抛 GateBlocked')
 
+    @staticmethod
+    def _repair_transition(
+        prepared: extract.GlobalCandidateContext,
+        evaluation: extract.GlobalCandidateEvaluation,
+        *,
+        role_patch_started: bool,
+        accepted_role_patch_count: int,
+    ) -> tuple[
+        list[dict[str, object]],
+        extract.GlobalCandidateEvaluation | None,
+        GlobalPatchKind | None,
+        bool,
+    ]:
+        """把一份业务 HARD 候选收成唯一下一状态。
+
+        fresh 路与 checkpoint 恢复路必须共用这一只 reducer；否则进程恰好死在
+        accepted checkpoint 后，会因为走了另一套分支而跳过首个窄修、额外开放
+        第三次 patch，或把 mixed HARD 重新扩大成整书 full candidate。
+
+        返回 ``(feedback, next_base, next_kind, terminal_role_failure)``。
+        """
+        if role_patch_started:
+            role_scope = extract.global_role_fate_patch_scope(
+                prepared, evaluation)
+            if role_scope is not None and accepted_role_patch_count < 2:
+                return (
+                    extract.global_role_fate_patch_feedback_rows(
+                        evaluation, role_scope),
+                    evaluation,
+                    'role_fate_patch',
+                    False,
+                )
+            # role patch 一旦开始即 sticky。第二份 accepted patch 仍红，或 patch
+            # 引入 mixed/其它 HARD，都必须原样终态化；通用剩余轮次不能重新扩大
+            # 改写面。终态仍返回完整反馈，供 rejected gate 留无正文计数。
+            return evaluation.feedback_rows(), None, None, True
+        role_scope = extract.global_role_fate_patch_scope(
+            prepared, evaluation)
+        if role_scope is not None:
+            return (
+                extract.global_role_fate_patch_feedback_rows(
+                    evaluation, role_scope),
+                evaluation,
+                'role_fate_patch',
+                False,
+            )
+        return (
+            extract.global_full_candidate_feedback_rows(evaluation),
+            None,
+            None,
+            False,
+        )
+
     def run(self) -> NodeAgentResult[GlobalGrounding]:
         last_rejected: extract.GlobalCandidateEvaluation | None = None
         patch_base: extract.GlobalCandidateEvaluation | None = None
+        patch_kind: GlobalPatchKind | None = None
+        role_patch_started = False
+        accepted_role_patch_count = 0
         try:
             prepared = extract.prepare_global_candidate(
                 self.ctx, agent_envelope=True)
+            extract.ensure_global_agent_run(self.ctx, prepared)
+            extract.adopt_global_validator_resolution_checkpoint(
+                self.ctx, prepared)
+            restored = extract.restore_global_agent_checkpoint(
+                self.ctx, self.client, prepared)
+            if restored is not None:
+                accepted_role_patch_count = restored.accepted_role_patch_count
+                role_patch_started = accepted_role_patch_count > 0
+                evaluation = extract.evaluate_global_candidate(
+                    self.ctx, self.client, prepared, restored.response)
+                if not evaluation.passed:
+                    last_rejected = evaluation
+                    (feedback, patch_base, patch_kind,
+                     terminal_role_failure) = self._repair_transition(
+                        prepared,
+                        evaluation,
+                        role_patch_started=role_patch_started,
+                        accepted_role_patch_count=accepted_role_patch_count,
+                    )
+                    extract.assert_global_main_text_current(self.ctx, prepared)
+                    if not self.client.queue_restored_code_validation_feedback(
+                            feedback,
+                            purpose=self.ctx.node,
+                            allow_resume=not terminal_role_failure):
+                        self._finalize_rejected(prepared, evaluation)
+                else:
+                    try:
+                        artifact = extract.finalize_global_candidate(
+                            self.ctx, self.client, prepared, evaluation)
+                    except GateBlocked:
+                        self._finish_restored(
+                            restored.acceptance,
+                            delivery_state='blocked',
+                            error_kind='artifact_validation')
+                        raise
+                    except Exception:
+                        self._finish_restored(
+                            restored.acceptance,
+                            delivery_state='unknown',
+                            error_kind='artifact_verification')
+                        raise
+                    self._finish_restored(
+                        restored.acceptance, delivery_state='delivered')
+                    return NodeAgentResult(
+                        artifact=artifact, turns=self.client.turns_used,
+                        passed=True)
             while True:
                 try:
+                    if patch_kind is None:
+                        turn_validator = \
+                            extract.global_full_candidate_validator(prepared)
+                    elif patch_base is None:
+                        raise ProvenanceRefused(
+                            f'stage2.global {patch_kind} 缺状态机 base candidate')
+                    elif patch_kind == 'role_fate_patch':
+                        turn_validator = extract.global_role_fate_patch_validator(
+                            prepared, patch_base)
+                    else:
+                        raise ProvenanceRefused(
+                            f'stage2.global 未登记 patch_kind={patch_kind!r}')
                     turn = self.client.ask_json(
                         prepared.system,
                         prepared.user,
                         model_cls=prepared.agent_response_model,
                         purpose=self.ctx.node,
                         max_tokens=extract.GLOBAL_MAX_TOKENS,
-                        validator=(
-                            extract.global_full_candidate_validator(prepared)
-                            if patch_base is None else
-                            extract.global_evidence_patch_validator(
-                                prepared, patch_base)
-                        ),
+                        validator=turn_validator,
+                        recovery_policy='stage2-global-v1',
+                        retain_validator_rejection=True,
                     )
                 except LlmFailed:
                     # 若本 session 至少产出过一份 schema 合格但业务 HARD 的候选，
                     # 后续 parse/schema 轮耗尽时仍把那份最后可恢复候选终态化一次。
                     # driver/subject/code 失败不走这条路，不能拿旧候选掩盖进程失败。
-                    if (last_rejected is not None
-                            and not self.client.driver_failed
+                    if (not self.client.driver_failed
                             and not self.client.can_resume):
-                        self._finalize_rejected(prepared, last_rejected)
+                        expected_turn_kind = (
+                            'full_candidate' if patch_kind is None else
+                            patch_kind)
+                        custody = extract.custody_global_validator_rejection(
+                            self.ctx,
+                            self.client,
+                            prepared,
+                            expected_turn_kind=expected_turn_kind,
+                            base_response=(
+                                None if patch_base is None else
+                                patch_base._response),
+                            accepted_role_patch_count=accepted_role_patch_count,
+                        )
+                        # typed validator rejection 是最后一份已经付费的 stdout，
+                        # 优先进入 hash-bound custody；只有根本没有 typed 稿（例如
+                        # parse/schema 耗尽）时，才终态化上一份业务 HARD 候选。
+                        if custody is None and last_rejected is not None:
+                            self._finalize_rejected(prepared, last_rejected)
                     self.client.finish(
                         process_state=(
                             'failed' if self.client.driver_failed else 'ok'),
@@ -215,32 +356,61 @@ class Stage2GlobalAgent(NodeExecutorAgent[GlobalGrounding]):
                     )
                     raise
 
-                if patch_base is None:
-                    if prepared.candidate_only:
-                        if (not isinstance(turn, GlobalCandidateAgentTurnResponse)
-                                or not isinstance(
-                                    turn.payload, GlobalCandidateFullTurn)):
-                            raise ProvenanceRefused(
-                                'stage2.global candidate-only full turn '
-                                '通过 dynamic validator 后分支漂移')
-                    elif (not isinstance(turn, GlobalAgentTurnResponse)
-                          or not isinstance(turn.payload, GlobalFullCandidateTurn)):
+                if patch_kind is None:
+                    if (not isinstance(turn, GlobalCandidateAgentTurnResponse)
+                            or not isinstance(
+                                turn.payload, GlobalCandidateFullTurn)):
                         raise ProvenanceRefused(
-                            'stage2.global locator full turn '
+                            'stage2.global full turn '
                             '通过 dynamic validator 后分支漂移')
                     response = turn.payload.candidate
-                else:
-                    if not isinstance(turn.payload, GlobalEvidencePatchTurn):
+                    base_evaluation = None
+                    patch_audit: object | None = None
+                elif patch_kind == 'role_fate_patch':
+                    if (not isinstance(turn, GlobalCandidateAgentTurnResponse)
+                            or not isinstance(
+                                turn.payload, GlobalRoleFatePatchTurn)):
                         raise ProvenanceRefused(
-                            'stage2.global patch turn 通过 dynamic validator 后分支漂移')
+                            'stage2.global role/fate patch turn 通过 dynamic '
+                            'validator 后分支漂移')
+                    if patch_base is None:
+                        raise ProvenanceRefused(
+                            'stage2.global role/fate patch 缺状态机 base candidate')
                     base_evaluation = patch_base
-                    response = extract.apply_global_evidence_patch(
+                    applied = extract.apply_global_role_fate_patch(
                         prepared, base_evaluation, turn.payload)
-                    attempt_id = self.client.accepted_attempt(self.ctx.node)
-                    if attempt_id is None:
+                    response = applied.response
+                    accepted_role_patch_count += 1
+                    if accepted_role_patch_count > 2:
                         raise ProvenanceRefused(
-                            'stage2.global evidence patch 已合并但缺当前 accepted attempt')
-                    self.ctx.ledger.note_candidate_patch(
+                            'stage2.global role/fate patch accepted 次数超过 2')
+                    role_patch_started = True
+                    patch_audit = applied
+                else:
+                    raise ProvenanceRefused(
+                        f'stage2.global 未登记 patch_kind={patch_kind!r}')
+                extract.write_global_agent_checkpoint(
+                    self.ctx,
+                    self.client,
+                    prepared,
+                    turn,
+                    response,
+                    base_response=(
+                        None if base_evaluation is None else
+                        base_evaluation._response),
+                    accepted_role_patch_count=accepted_role_patch_count,
+                )
+                # checkpoint 先于审计：若进程死在两者之间，restore 会按同一事件
+                # identity 幂等补尾；反过来不能让审计声称一份尚不可恢复的 patch。
+                if patch_audit is not None:
+                    attempt_id = self.client.accepted_attempt(self.ctx.node)
+                    if attempt_id is None or base_evaluation is None:
+                        raise ProvenanceRefused(
+                            'stage2.global patch 已 checkpoint 但缺 accepted/base 身份')
+                    if not hasattr(patch_audit, 'changed_field_count'):
+                        raise ProvenanceRefused(
+                            'stage2.global role/fate patch 审计载荷漂移')
+                    self.ctx.ledger.note_role_fate_candidate_patch(
                         sid=self.ctx.sid,
                         node=self.ctx.node,
                         purpose=self.ctx.node,
@@ -248,26 +418,30 @@ class Stage2GlobalAgent(NodeExecutorAgent[GlobalGrounding]):
                         base_candidate_sha256=base_evaluation.response_sha256,
                         result_candidate_sha256=extract.global_response_sha256(
                             response),
-                        changed_path_count=len(turn.payload.changes),
+                        evidence_table_sha256=turn.payload.evidence_table_sha256,
+                        changed_field_count=patch_audit.changed_field_count,
                     )
                 patch_base = None
+                patch_kind = None
 
                 evaluation = extract.evaluate_global_candidate(
                     self.ctx, self.client, prepared, response)
                 if not evaluation.passed:
                     last_rejected = evaluation
-                    patch_scope = extract.global_evidence_patch_scope(evaluation)
-                    if patch_scope is None:
-                        feedback = extract.global_full_candidate_feedback_rows(
-                            evaluation)
-                        next_patch_base = None
-                    else:
-                        feedback = extract.global_evidence_patch_feedback_rows(
-                            evaluation, patch_scope)
-                        next_patch_base = evaluation
+                    (feedback, next_patch_base, next_patch_kind,
+                     terminal_role_failure) = self._repair_transition(
+                        prepared,
+                        evaluation,
+                        role_patch_started=role_patch_started,
+                        accepted_role_patch_count=accepted_role_patch_count,
+                    )
+                    extract.assert_global_main_text_current(
+                        self.ctx, prepared)
                     if self.client.queue_code_validation_feedback(
-                            feedback, purpose=self.ctx.node):
+                            feedback, purpose=self.ctx.node,
+                            allow_resume=not terminal_role_failure):
                         patch_base = next_patch_base
+                        patch_kind = next_patch_kind
                         continue
                     # 只有循环预算耗尽才在这里写一次 INVALID；中间轮始终只在内存。
                     self._finalize_rejected(prepared, evaluation)

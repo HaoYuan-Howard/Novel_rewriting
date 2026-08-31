@@ -535,29 +535,6 @@ class BlueprintCharacterProjection(StrictModel):
 # _provenance 更是代码在请求完成后才铸造。若为了省一组模型而把这些字段设成可选，
 # 最终产物的严格契约也会被一起放宽。响应边界因此单独建模，二者各守各的责任。
 
-class AddressResponse(StrictModel):
-    surface: str = Field(min_length=1)
-    by: str = Field(min_length=1)
-    context: Literal[ADDRESS_CONTEXT]
-    from_chapter: ChapterOrdinal
-
-
-class CharacterResponse(StrictModel):
-    canonical: str = Field(min_length=1)
-    address: list[AddressResponse] = Field(min_length=1)
-    name_distinctiveness: Literal[NAME_DISTINCTIVENESS]
-    role: str = Field(min_length=1)
-    role_evidence: EvidenceLocator
-    fate: str | None
-    fate_evidence: EvidenceLocator | None
-
-    @model_validator(mode='after')
-    def _fate_and_evidence_agree(self) -> CharacterResponse:
-        if (self.fate is None) != (self.fate_evidence is None):
-            raise ValueError('fate 与 fate_evidence 必须同时为空或同时非空')
-        return self
-
-
 class RelationResponse(StrictModel):
     relation_id: str = Field(pattern=r'^rel_\d{2}$')
     subject_id: str = Field(min_length=1)
@@ -574,13 +551,6 @@ class RelationResponse(StrictModel):
                 and self.valid_through_chapter < self.valid_from_chapter):
             raise ValueError('relation 有效截止章早于起章')
         return self
-
-
-class SettingResponse(StrictModel):
-    era: str = Field(alias='时代背景', min_length=1)
-    era_evidence: EvidenceLocator
-    worldview: str = Field(alias='世界观', min_length=1)
-    worldview_evidence: EvidenceLocator
 
 
 class WorldRuleVersionResponse(StrictModel):
@@ -629,103 +599,17 @@ class SecretResponse(StrictModel):
         return self
 
 
-class CanonResponse(StrictModel):
-    setting: SettingResponse
-    world_rules: list[WorldRuleResponse]
-    secrets: list[SecretResponse]
-
-    @model_validator(mode='after')
-    def _stable_ids_are_unique(self) -> CanonResponse:
-        for label, values in (
-            ('world rule', [row.rule_id for row in self.world_rules]),
-            ('secret', [row.secret_id for row in self.secrets]),
-        ):
-            if len(values) != len(set(values)):
-                raise ValueError(f'duplicate {label} ids')
-        return self
-
-
 class ArcTrackResponse(StrictModel):
     subject: str = Field(min_length=1)
     trajectory: str = Field(min_length=1)
     trajectory_evidence: EvidenceLocator
 
 
-class ArcResponse(StrictModel):
-    conflict_stages: list[ConflictStage] = Field(min_length=1)
-    climax: str = Field(min_length=1)
-    ending: str = Field(min_length=1)
-    arc_tracks: list[ArcTrackResponse] = Field(min_length=1)
-
-
-class EntitiesResponse(StrictModel):
-    characters: dict[str, CharacterResponse]
-    relations: list[RelationResponse]
-
-    @model_validator(mode='after')
-    def _relation_ids_are_unique(self) -> EntitiesResponse:
-        values = [row.relation_id for row in self.relations]
-        if len(values) != len(set(values)):
-            raise ValueError('duplicate relation ids')
-        return self
-
-
-class GlobalGroundingResponse(StrictModel):
-    """stage2.global 的不可信响应；不含任何代码产字段。"""
-
-    entities: EntitiesResponse
-    canon: CanonResponse
-    arc: ArcResponse
-
-
-class GlobalEvidenceLocatorPatch(StrictModel):
-    """一格全局事实证据的 agent 私有修订；路径只作关闭式槽位标识。"""
-
-    claim_path: str = Field(min_length=1, max_length=240)
-    evidence: EvidenceLocator
-
-
-class GlobalFullCandidateTurn(StrictModel):
-    """stage2.global agent 首轮或非局部 HARD 的完整候选分支。"""
-
-    kind: Literal['full_candidate']
-    candidate: GlobalGroundingResponse
-
-
-class GlobalEvidencePatchTurn(StrictModel):
-    """只允许改当前候选已失败 evidence 槽的 hash-bound 修订分支。"""
-
-    kind: Literal['evidence_patch']
-    candidate_sha256: Sha256
-    changes: list[GlobalEvidenceLocatorPatch] = Field(min_length=1)
-
-    @model_validator(mode='after')
-    def _claim_paths_are_unique(self) -> GlobalEvidencePatchTurn:
-        paths = [change.claim_path for change in self.changes]
-        if len(paths) != len(set(paths)):
-            raise ValueError('evidence patch claim_path 不能重复')
-        return self
-
-
-GlobalAgentPayload = Annotated[
-    GlobalFullCandidateTurn | GlobalEvidencePatchTurn,
-    Field(discriminator='kind'),
-]
-
-
-class GlobalAgentTurnResponse(StrictModel):
-    """stage2.global agent 全 session 固定信封；修复轮不得切换 wire schema。"""
-
-    payload: GlobalAgentPayload
-
-
-# ── stage2.global evidence 闭集实验响应 ────────────────────────────────────
+# ── stage2.global 唯一现役 provider wire ──────────────────────────────────
 #
-# ⚠ 这一组故意不继承、不联合上面的 locator 响应模型。实验臂的 wire 边界只
-# 接受 ``evidence_candidate_id``；若把两种 evidence 做成 union，模型继续抄章号 /
-# locator 也会被本地 schema 接受，闭集实验就失去了它唯一要验证的结构性收益。
-# 正式 ``GlobalGrounding`` 与人工 ``GlobalEdit`` 不在这里：前者仍落 SourceSpan，
-# 后者仍收 locator。
+# provider 边界只接受 ``evidence_candidate_id``，不提供 locator union。正式
+# ``GlobalGrounding`` 仍落 SourceSpan；人工 ``GlobalEdit`` 与存量 ``.INVALID`` 的
+# 0-LLM 恢复仍收 locator，二者不属于 provider wire。
 
 class EvidenceCandidateRef(StrictModel):
     """本次 prompt 已下发证据候选表中的一个不透明引用。"""
@@ -869,7 +753,7 @@ class EntitiesCandidateResponse(StrictModel):
 
 
 class GlobalGroundingCandidateResponse(StrictModel):
-    """闭集 evidence 实验臂的不可信响应；不含 locator 或正式 SourceSpan。"""
+    """stage2.global 不可信响应；不含 locator 或正式 SourceSpan。"""
 
     entities: EntitiesCandidateResponse
     canon: CanonCandidateResponse
@@ -881,14 +765,53 @@ class GlobalCandidateFullTurn(StrictModel):
     candidate: GlobalGroundingCandidateResponse
 
 
-class GlobalCandidateAgentTurnResponse(StrictModel):
-    """闭集实验臂全 session 固定信封；每轮都完整重交候选。
+class RoleFateEvidenceCandidatePatch(StrictModel):
+    """一名泄漏角色的四字段原子替换；证据只能引用本次候选表。"""
 
-    candidate ID 的格式/成员失败发生在正式候选构造前，没有一份可安全绑定的
-    局部失败账；因此这里故意没有 locator 臂的 ``evidence_patch`` 分支。
+    char_id: str = Field(pattern=r'^char_\d{3}$')
+    role: str = Field(min_length=1)
+    role_evidence: EvidenceCandidateRef
+    fate: str | None
+    fate_evidence: EvidenceCandidateRef | None
+
+    @model_validator(mode='after')
+    def _fate_and_evidence_agree(self) -> RoleFateEvidenceCandidatePatch:
+        if (self.fate is None) != (self.fate_evidence is None):
+            raise ValueError('fate 与 fate_evidence 必须同时为空或同时非空')
+        return self
+
+
+class GlobalRoleFatePatchTurn(StrictModel):
+    """只允许修订纯 ``role_leaks_fate`` 的 hash-bound candidate 分支。"""
+
+    kind: Literal['role_fate_patch']
+    candidate_sha256: Sha256
+    evidence_table_sha256: Sha256
+    changes: list[RoleFateEvidenceCandidatePatch] = Field(min_length=1)
+
+    @model_validator(mode='after')
+    def _character_ids_are_unique(self) -> GlobalRoleFatePatchTurn:
+        char_ids = [change.char_id for change in self.changes]
+        if len(char_ids) != len(set(char_ids)):
+            raise ValueError('role/fate patch char_id 不能重复')
+        return self
+
+
+GlobalCandidateAgentPayload = Annotated[
+    GlobalCandidateFullTurn | GlobalRoleFatePatchTurn,
+    Field(discriminator='kind'),
+]
+
+
+class GlobalCandidateAgentTurnResponse(StrictModel):
+    """stage2.global 全 session 固定信封。
+
+    首轮及非局部失败交完整候选；只有代码证明 HARD 集精确为
+    ``role_leaks_fate`` 时，才开放绑定 candidate/table 双 SHA 的四字段窄修。
+    candidate ID 的格式/成员失败仍不得进入此分支。
     """
 
-    payload: GlobalCandidateFullTurn
+    payload: GlobalCandidateAgentPayload
 
 
 class RoleFateResponse(StrictModel):

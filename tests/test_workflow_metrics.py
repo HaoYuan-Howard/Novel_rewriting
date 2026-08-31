@@ -104,6 +104,7 @@ def base(tmp_path: Path) -> Path:
          'reasoning_tokens': 25, 'model': 'm', 'reasoning_effort': 'high'},
         {'sid': SID, 'node': 'stage4.design', 'code': CODE_CLEAN, 'cached': False,
          'outcome': 'error', 'error_kind': 'agent_timeout', 'prompt_tokens': 7,
+         'completion_tokens': 3, 'reasoning_tokens': 1,
          'model': 'm', 'reasoning_effort': 'high'},
         {'sid': SID, 'node': 'stage4.design', 'code': CODE_CLEAN, 'cached': True,
          'outcome': 'ok', 'prompt_tokens': 999, 'completion_tokens': 999,
@@ -168,17 +169,91 @@ def test_ledger_reads_only_this_sid_and_never_adds_reasoning_to_completion(
     assert led['lines'] == 3, '另一本书的行不许混进来'
     assert (led['wire_calls'], led['wire_ok'], led['wire_error']) == (2, 1, 1)
     assert led['cache_hits'] == 1, '缓存命中单独记账，不写成「没有执行过」'
-    # 缓存那一行的 token 不进 ok 合计；reasoning 是 completion 的子口径。
-    assert led['prompt_tokens'] == 100
-    assert led['completion_tokens'] == 40
-    assert led['reasoning_tokens_within_completion'] == 25
+    # 缓存不进 realized；失败 wire 已经发生的 usage 不能被 ok 条件吞掉。
+    assert led['token_verdict'] == 'ok'
+    assert led['prompt_tokens'] == 107
+    assert led['completion_tokens'] == 43
+    assert led['reasoning_tokens_within_completion'] == 26
+    assert led['total_tokens'] == 150, 'reasoning 已含在 completion，不能重复相加'
+    assert led['per_outcome']['error']['prompt_tokens'] == 7
+    assert led['per_node']['stage4.design']['wire_error'] == 1
     assert 'stage4.design:agent_timeout' in led['error_kinds']
+
+
+def test_real_wire_with_null_or_missing_usage_is_explicitly_unver(
+        base: Path) -> None:
+    """未知 usage 仍保留已知小计，但不得用 ``or 0`` 伪装成闭合总量。"""
+    run_id = 'usage-gap-run'
+    rows = [
+        {
+            'sid': SID, 'run_id': run_id, 'node': 'stage2.global',
+            'code': CODE_CLEAN, 'cached': False, 'outcome': 'ok',
+            'prompt_tokens': 10, 'completion_tokens': 4, 'reasoning_tokens': 2,
+            'model': 'm', 'reasoning_effort': 'high',
+        },
+        {
+            'sid': SID, 'run_id': run_id, 'node': 'stage2.global',
+            'code': CODE_CLEAN, 'cached': False, 'outcome': 'error',
+            'error_kind': 'provider_error', 'prompt_tokens': 3,
+            'completion_tokens': None,
+            # reasoning_tokens 刻意缺键；缺失与 null 都不能解释成 0。
+            'model': 'm', 'reasoning_effort': 'high',
+        },
+        {
+            'sid': SID, 'run_id': run_id, 'node': 'stage2.global',
+            'code': CODE_CLEAN, 'cached': True, 'outcome': 'ok',
+            'prompt_tokens': 999, 'completion_tokens': 999, 'reasoning_tokens': 999,
+            'model': 'm', 'reasoning_effort': 'high',
+        },
+        {
+            # 无 run_id 的旧行只参加历史汇总，不猜入目标 run。
+            'sid': SID, 'node': 'stage4.design', 'code': CODE_CLEAN,
+            'cached': False, 'outcome': 'ok', 'prompt_tokens': 8,
+            'completion_tokens': 2, 'reasoning_tokens': 1,
+            'model': 'm', 'reasoning_effort': 'high',
+        },
+        {
+            # cache 身份也未知的旧坏行只能单列，不能因 falsy 猜成 wire。
+            'sid': SID, 'node': 'stage4.design', 'code': CODE_CLEAN,
+            'outcome': 'ok', 'prompt_tokens': 10_000,
+            'completion_tokens': 10_000, 'reasoning_tokens': 10_000,
+            'model': 'm', 'reasoning_effort': 'high',
+        },
+    ]
+    (base / '_service/ledger.jsonl').write_text(
+        '\n'.join(json.dumps(row) for row in rows) + '\n', encoding='utf-8')
+
+    led = W.ledger_metrics(base, SID, run_id=run_id)
+    assert (led['lines'], led['wire_calls'], led['cache_hits']) == (3, 2, 1)
+    assert (led['wire_ok'], led['wire_error']) == (1, 1)
+    assert led['token_verdict'] == 'unver'
+    assert led['token_unver_fields'] == {
+        'completion_tokens': 1, 'reasoning_tokens': 1}
+    assert led['prompt_tokens'] == 13
+    assert led['completion_tokens'] is None
+    assert led['reasoning_tokens_within_completion'] is None
+    assert led['total_tokens'] is None
+    assert led['known_completion_tokens'] == 4
+    assert led['known_reasoning_tokens_within_completion'] == 2
+    assert led['per_outcome']['error']['token_verdict'] == 'unver'
+    assert led['per_outcome']['error']['known_prompt_tokens'] == 3
+
+    aggregate = W.ledger_metrics(base, SID)
+    assert aggregate['wire_calls'] == 3, '未指定 run 时仍兼容旧无 run_id 汇总'
+    assert aggregate['cache_state_unknown'] == 1
 
 
 def test_stage2_narrow_repair_and_zero_wire_rewrite_are_visible(base: Path) -> None:
     audit = W.collect(base, SID)['audit']
     assert audit['candidate_patches_applied'] == 1
+    assert audit['candidate_patches_by_kind'] == {'legacy_unspecified': 1}
     assert audit['candidate_patch_changed_paths'] == 1
+    assert audit['candidate_patch_changed_fields'] == 0
+    assert audit['candidate_patch_changes_by_kind'] == {
+        'legacy_unspecified': {
+            'events': 1, 'changed_paths': 1, 'changed_fields': 0,
+        },
+    }
     assert audit['evidence_locator_rewrites'] == 1
     assert audit['evidence_locator_rewrite_modes'] == {'exact': 1}
 
@@ -190,8 +265,180 @@ def test_cli_track_keeps_every_exit_code_and_never_folds_them_into_a_verdict(
     assert design['exit_codes'] == {'70': 1, '0': 1}, 'exit 0 ≠ 合格，两个码都要留着'
     assert design['paired_runs'] == 2
     assert design['total_seconds'] == 70
+    assert design['closed_segment_seconds'] == 70
+    assert design['first_start_to_final_terminal_seconds'] == 110
+    assert cli['closed_segment_seconds'] == 70
+    assert cli['first_start_to_final_terminal_seconds'] == 110
     assert cli['unfinished_starts'] == 0
     assert 'other-book' not in json.dumps(cli, ensure_ascii=False)
+
+
+def test_cli_separates_closed_runtime_from_elapsed_waiting_gaps(base: Path) -> None:
+    run_id = 'elapsed-run'
+    old_run = 'old-elapsed-run'
+    rows = [
+        {'ts': 10, 'sid': SID, 'run_id': old_run, 'execution_id': 'old',
+         'node': 'stage2.global', 'phase': 'start', 'exit_code': None, 'note': None},
+        {'ts': 999, 'sid': SID, 'run_id': old_run, 'execution_id': 'old',
+         'node': 'stage2.global', 'phase': 'end', 'exit_code': 70, 'note': None},
+        {'ts': 100, 'sid': SID, 'run_id': run_id, 'execution_id': 'e1',
+         'node': 'stage2.global', 'phase': 'start', 'exit_code': None, 'note': None},
+        {'ts': 110, 'sid': SID, 'run_id': run_id, 'execution_id': 'e1',
+         'node': 'stage2.global', 'phase': 'end', 'exit_code': 70, 'note': None},
+        {'ts': 200, 'sid': SID, 'run_id': run_id, 'execution_id': 'e2',
+         'node': 'stage2.global', 'phase': 'start', 'exit_code': None, 'note': None},
+        {'ts': 205, 'sid': SID, 'run_id': run_id, 'execution_id': 'e2',
+         'node': 'stage2.global', 'phase': 'end', 'exit_code': 0, 'note': None},
+    ]
+    (base / '_service/agent_progress.jsonl').write_text(
+        '\n'.join(json.dumps(row) for row in rows) + '\n', encoding='utf-8')
+
+    cli = W.cli_metrics(base, SID, run_id=run_id)
+    node = cli['per_node']['stage2.global']
+    assert cli['events'] == 4
+    assert cli['closed_segments'] == 2
+    assert cli['closed_segment_seconds'] == 15
+    assert cli['first_start_to_final_terminal_seconds'] == 105
+    assert cli['elapsed_verdict'] == 'ok'
+    assert node['closed_segment_seconds'] == 15
+    assert node['first_start_to_final_terminal_seconds'] == 105
+    assert node['exit_codes'] == {'70': 1, '0': 1}
+
+
+def test_run_scope_excludes_old_failures_and_keeps_snapshot_surfaces(
+        base: Path) -> None:
+    """同 sid 的旧 run 再糟，也不能污染本轮成本、闸、CLI 与代码身份。"""
+    current_run = 'current-run'
+    old_run = 'old-run'
+    service = base / '_service'
+
+    old_ledger = [
+        {
+            'sid': SID, 'run_id': old_run, 'node': 'stage2.global',
+            'purpose': 'stage2.global', 'chapter': None,
+            'attempt_id': f'old-attempt-{index}', 'code': f'{CODE_CLEAN}-dirty',
+            'cached': False, 'outcome': 'error', 'error_kind': 'agent_timeout',
+            'prompt_tokens': 10_000, 'completion_tokens': 0,
+            'model': 'old-model', 'reasoning_effort': 'high',
+        }
+        for index in range(20)
+    ]
+    current_ledger = {
+        'sid': SID, 'run_id': current_run, 'node': 'stage2.global',
+        'purpose': 'stage2.global', 'chapter': None,
+        'attempt_id': 'current-attempt', 'code': CODE_CLEAN,
+        'cached': False, 'outcome': 'ok', 'prompt_tokens': 101,
+        'completion_tokens': 41, 'reasoning_tokens': 17,
+        'model': 'current-model', 'reasoning_effort': 'high',
+    }
+    (service / 'ledger.jsonl').write_text(
+        '\n'.join(json.dumps(row) for row in [*old_ledger, current_ledger]) + '\n',
+        encoding='utf-8')
+
+    old_audit = [
+        {
+            'sid': SID, 'run_id': old_run, 'kind': 'gate_decision',
+            'node': 'stage2.global', 'purpose': 'stage2.global', 'chapter': None,
+            'attempt_id': f'old-attempt-{index}', 'source': 'wire',
+            'decision': 'rejected', 'gate': 'validator', 'resample': True,
+        }
+        for index in range(20)
+    ]
+    old_audit.append({
+        'sid': SID, 'run_id': old_run, 'kind': 'candidate_patch_applied',
+        'node': 'stage2.global', 'changed_path_count': 9,
+    })
+    current_audit = [
+        {
+            'sid': SID, 'run_id': current_run, 'kind': 'gate_decision',
+            'node': 'stage2.global', 'purpose': 'stage2.global', 'chapter': None,
+            'attempt_id': 'current-attempt', 'source': 'wire',
+            'decision': 'accepted', 'resample': False,
+        },
+        {
+            'sid': SID, 'run_id': current_run, 'kind': 'artifact_adoption',
+            'node': 'stage2.global', 'purpose': 'stage2.global', 'chapter': None,
+            'attempt_id': 'current-attempt',
+        },
+        {
+            'sid': SID, 'run_id': current_run,
+            'kind': 'candidate_patch_applied', 'node': 'stage2.global',
+            'patch_kind': 'role_fate', 'changed_field_count': 2,
+            'evidence_table_sha256': 'a' * 64,
+        },
+    ]
+    (service / 'llm_audit.jsonl').write_text(
+        '\n'.join(json.dumps(row) for row in [*old_audit, *current_audit]) + '\n',
+        encoding='utf-8')
+
+    progress: list[dict[str, object]] = []
+    for index in range(20):
+        progress += [
+            {
+                'ts': index * 10, 'sid': SID, 'run_id': old_run,
+                'execution_id': f'old-execution-{index}',
+                'node': 'stage2.global', 'phase': 'start',
+                'exit_code': None, 'note': None,
+            },
+            {
+                'ts': index * 10 + 9, 'sid': SID, 'run_id': old_run,
+                'execution_id': f'old-execution-{index}',
+                'node': 'stage2.global', 'phase': 'end',
+                'exit_code': 70, 'note': None,
+            },
+        ]
+    progress += [
+        {
+            'ts': 1_000, 'sid': SID, 'run_id': current_run,
+            'execution_id': 'current-execution', 'node': 'stage2.global',
+            'phase': 'start', 'exit_code': None, 'note': None,
+        },
+        {
+            'ts': 1_005, 'sid': SID, 'run_id': current_run,
+            'execution_id': 'current-execution', 'node': 'stage2.global',
+            'phase': 'end', 'exit_code': 0, 'note': None,
+        },
+    ]
+    (service / 'agent_progress.jsonl').write_text(
+        '\n'.join(json.dumps(row) for row in progress) + '\n', encoding='utf-8')
+
+    # current artifact 是快照，不携 run_id；它仍进 artifact/human 面，却不能
+    # 反向冒充目标 run 的代码身份。
+    grounding_path = base / f'{TITLE}_{SID}/stage2/global_grounding.json'
+    grounding = json.loads(grounding_path.read_text(encoding='utf-8'))
+    grounding['_provenance']['code'] = f'{CODE_CLEAN}-dirty'
+    _write(grounding_path, grounding)
+
+    report = W.collect(base, SID, run_id=current_run)
+    assert report['run_id'] == current_run
+    assert report['ledger']['lines'] == 1
+    assert report['ledger']['wire_error'] == 0
+    assert report['ledger']['prompt_tokens'] == 101
+    assert report['audit']['gate_by_decision'] == {'accepted': 1}
+    assert report['audit']['resamples'] == 0
+    assert report['audit']['first_call_landing']['stage2.global']['first_call'] == 1
+    assert report['audit']['candidate_patches_by_kind'] == {'role_fate': 1}
+    assert report['audit']['candidate_patch_changed_paths'] == 0
+    assert report['audit']['candidate_patch_changed_fields'] == 2
+    assert report['audit']['candidate_patch_changes_by_kind'] == {
+        'role_fate': {
+            'events': 1, 'changed_paths': 0, 'changed_fields': 2,
+        },
+    }
+    assert report['cli']['events'] == 2
+    assert report['cli']['per_node']['stage2.global']['exit_codes'] == {'0': 1}
+    assert report['cli']['per_node']['stage2.global']['total_seconds'] == 5
+    assert report['identity']['code_identities'] == [CODE_CLEAN]
+    assert report['identity']['experiment_valid'] is True
+    assert report['artifacts']['artifacts'], '产物面仍是 current snapshot'
+    assert report['human']['stage2_review_items'] == 2
+
+    aggregate = W.collect(base, SID)['audit']
+    assert aggregate['candidate_patches_by_kind'] == {
+        'legacy_unspecified': 1, 'role_fate': 1,
+    }
+    assert aggregate['candidate_patch_changed_paths'] == 9
+    assert aggregate['candidate_patch_changed_fields'] == 2
 
 
 def test_human_surface_keeps_items_and_decisions_apart(base: Path) -> None:

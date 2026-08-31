@@ -164,12 +164,18 @@ def test_stage2_review_workpack_is_read_only_and_never_auto_decides(reviewed_box
 
     assert rc == X.OK
     workpack = json.loads(capsys.readouterr().out)
-    assert workpack['kind'] == 'stage2-global-review-workpack-v2'
+    assert workpack['kind'] == 'stage2-global-review-workpack-v3'
     assert len(workpack['workpack_sha256']) == 64
     assert workpack['binding']['expected_item_count'] == len(workpack['items'])
     assert workpack['read_only'] is True and workpack['auto_decisions'] is False
     assert workpack['items']
-    assert all('current_state' in row and 'review_note' in row
+    assert sorted(workpack['legend']) == [
+        'decision', 'evidence_mode', 'fate_companion', 'reading_scope']
+    assert all('current_state' in row and 'review_note' not in row
+               and row['reading_scope'] in {'whole_book', 'localized'}
+               and row['evidence_mode'] in {
+                   'unresolved_formal_evidence', 'formal_evidence',
+                   'claim_literal', 'none'}
                and isinstance(row['exact_literal_hits'], list)
                for row in workpack['items'])
     after = {p.relative_to(reviewed_box.dir).as_posix(): p.read_bytes()

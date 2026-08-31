@@ -761,18 +761,10 @@ BLUEPRINT_ARCHITECTURES: Final = ('extraction-ir-v2', 'extraction-ir-v3.1')
 BLUEPRINT_ARCHITECTURE: Final = 'extraction-ir-v3.1'
 assert BLUEPRINT_ARCHITECTURE in BLUEPRINT_ARCHITECTURES
 
-#: ``stage2.global`` 的模型证据响应契约。两臂最终都编译成同一份
-#: ``GlobalGrounding``（正式证据仍是 ``SourceSpan``），因此这里只是 wire strategy，
-#: 不是 artifact architecture，也不进入盘上 schema 版本。
-#:
-#: ``paragraph-candidate-v1`` 仍是 TODO-45 P2a 的冷缓存 A/B 臂：在固定语料证明
-#: 人审质量不回退、且总 wall/token/成本改善之前，默认必须继续是 locator。
-GLOBAL_EVIDENCE_CONTRACTS: Final = (
-    'locator-v1',
-    'paragraph-candidate-v1',
-)
-GLOBAL_EVIDENCE_CONTRACT: Final = 'locator-v1'
-assert GLOBAL_EVIDENCE_CONTRACT in GLOBAL_EVIDENCE_CONTRACTS
+#: ``stage2.global`` 唯一现役模型证据 wire 身份。模型只交段落候选 ID，代码再铸成
+#: 正式 ``SourceSpan``；人工 ``GlobalEdit`` 与存量 ``.INVALID`` 的 locator 恢复不属于
+#: provider wire，也不由本常量选择。
+GLOBAL_EVIDENCE_CONTRACT: Final = 'paragraph-candidate-v1'
 
 #: Stage2 Blueprint 只读工作包当前绑定的是正式稿还是 live 问题稿。
 #: 只有 formal 工作包能提交 ``seen.read``；invalid 包只辅助修复。
@@ -944,7 +936,7 @@ WORLD_RULE_KINDS: Final = (
 #: 裸代词。**`address[].surface` 里一个都不许出现，连在别的字上也不行**（`R-2.3`）。
 #:
 #: 【为什么它必须在契约层而不是 prompt 里】三个消费方：
-#:   · stage2 的 `GLOBAL_SYS`（`$PRONOUNS`，下发给模型的那句禁令）；
+#:   · stage2 的 `GLOBAL_CANDIDATE_SYS`（`$PRONOUNS`，下发给模型的那句禁令）；
 #:   · 判据 `address_bare_pronoun`（**HARD**，盘上 1/3 本命中：三岁 `char_034='她'`）
 #:     与 `address_has_pronoun`（INFO）；
 #:   · 判据 `present_names_pronoun`（度量，盘上 15/176）。
@@ -965,6 +957,16 @@ WORLD_RULE_KINDS: Final = (
 #: `confidence` 那个**分数**的全部输入就是那张表，发过去前端能自己重算一个结论。
 #: 本表没有那个形状（没有从它派生的分数），所以不必登记为不发。
 BARE_PRONOUNS: Final = ('我', '你', '他', '她', '它', '咱')
+
+#: ``role`` 中禁止出现的转抄式结局词。它同时被 Stage2 生成 prompt 的提交前
+#: 自检与 ``role_leaks_fate`` 判据消费，因此必须落在契约层唯一一份；否则模型
+#: 按一张表自检、落盘闸门按另一张表判定时，两边会静默分家。
+#:
+#: ⚠ 这张表只覆盖字面泄漏，不宣称能识别改写式剧透；后者仍由
+#: ``role_fate_unverifiable`` 与 hash-bound 人工复核诚实暴露。
+FATE_WORDS: Final = (
+    '最终', '后被', '而死', '下狱', '被处死', '走向', '结局', '沦为',
+)
 
 #: ── Stage2 全局复核项：取值面与**交付效果**分级 ────────────────────────────
 #:

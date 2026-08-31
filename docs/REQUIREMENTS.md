@@ -157,8 +157,8 @@ cache hit。是否切默认、是否采用错峰，以及账本 prompt/cache/墙
   legacy LLM 路径，不作为 agent 的静默 fallback；后续另行把现役 LLM 客户端抽成供应商中立基类，
   再让 DeepSeek 作为一个具体实现接入，这项后续重构不阻断当前 agent 纵切验收。
 
-**依赖调整（TODO-45）**：TODO-45 P3 的两臂都跑 agent-only、legacy 路禁用，因此候选臂
-那次真实整书**可以**充当本条要的付费验收——前提是它跑在干净 main 的提交上
+**依赖调整（TODO-45）**：TODO-45 P3 已冻结为单臂 agent-only、legacy 路禁用；该次真实整书
+**可以**充当本条要的付费验收——前提是它跑在干净 main 的提交上
 （`experiment_valid=true`，即代码身份唯一且不带 `-dirty`）。脏工作树跑出来的整书不算数。
 
 **验收**：两个 driver 的零成本 wire / resume / 取消测试通过；八节点 registry 闭合且没有 vendor×node
@@ -172,6 +172,11 @@ driver 的真实链路生效。非 corpus 回归与真实付费整书验收分�
 **冻结决策（先读这一段，再看分批）**：
 
 - Stage2 只让高影响事实阻断下游；低影响项目保留审计与披露，不自动 PASS、不消失。
+- 2026-08-31 产品所有者取消 Stage2 Global 的 candidate/locator A/B 与盲审；
+  `paragraph-candidate-v1` 成为唯一现役模型 wire，`locator-v1` 不再可选也不作 fallback，只保留
+  `GlobalEdit` v3 与手改 `.INVALID` 后 `--revalidate` 的 0-LLM 人工恢复。该裁决在首个实验 wire 前
+  以 `CANCELLED_BEFORE_WIRE` 收口，真实 provider wire=0，没有实验 verdict；质量、token、wall 与
+  货币成本均未验证，不得把 sole candidate 改写成性能胜出。
 - Stage4 保留一个公开 `stage4.design` 节点/授权、一个独立 `stage4.plan` 节点/授权和整书结构审批；
   A 内部固定为 1 条整书策略 + N 条逐章私有 session；B 内部固定为机械基线 + 真歧义章私有
   session，两相各自最多 4 并发，**不开放公开的 `--chapters` 定向重规划**。
@@ -189,7 +194,8 @@ driver 的真实链路生效。非 corpus 回归与真实付费整书验收分�
 - 已交付只读读数器 `tools/workflow_metrics.py`：来源逐格唯一（产物体积/重复率取书内
   `stage*/` 顶层 JSON、token/缓存取 ledger、CLI 取 `agent_progress.jsonl`、闸与恢复取
   `llm_audit.jsonl`、结构只调生产 `structure_metrics_of`），输出不含正文/人名/书名/
-  绝对语料路径，`--json` 拒绝写进 base。
+  绝对语料路径，`--json` 拒绝写进 base；指定 `--run-id` 时 ledger/audit/progress 只认显式精确相等
+  的行，同 sid 旧 run 与缺身份旧行都不按时间猜入，current artifact 快照也不倒灌目标 run 代码身份。
 - 已精确复算 v8 基线并标记 `experiment_valid=false`（7 个 `-dirty` 代码身份）。
 - 按行为逐条移植已证实的假拒绝修复，**不移植** worktree 的 Claude transport、
   旧 `run_design/run_plan` 与旧 response contract：`declared_change_kinds` 去重并按冻结顺序
@@ -225,21 +231,13 @@ Stage2 Blueprint 的异常优先全书只读工作包（`R-3.16`：绑定 curren
 代码/规则，全章保留、机械字段隐藏、语义字段不裁；页面展示与提交只用同一完整 binding，不再因
 打开一章自动写整书 `seen.read`；持久 proof 随完整工作包变化失效，CLI/mock/backfill 均不能代造，
 不新增 approval/gate/artifact）。
-**剩下的 P2a 项**（按对稳定性的贡献排序）：
-
-1. `evidence_candidate_id` 的**工程实验臂已落地、默认未切**：候选表由 `paragraph_spans` 同源渲染与
-   lookup，模型响应使用独立 candidate-only 类型，未知 ID 在 acceptance/checkpoint/写盘前关闭，
-   人工 GlobalEdit 仍用 locator，正式 GlobalGrounding 仍落 SourceSpan。剩余工作是另批冷缓存 A/B：
-   对同一固定语料配对比较首轮落盘率、
-   `global_evidence_unlocated`、总 wall/token 与人审质量；质量无回退且成本/耗时改善前不切默认。
-   本项需要单独的正文外发与付费授权，不复用主分支跑书目录或缓存。
 
 **P2（按稳定性优先重排；2026-08-28 用户裁定）**
 
 P2 原本是一个「候选事实分级 + 整书修复 + 上下文瘦身」的大批次。按「稳定跑通优先」
 重排为两段，**先做与稳定性直接相关的那一段**：
 
-- **P2a（先做，不破坏正式盘上形状）**：A/B 的分 unit 生产拓扑、验证后即时 checkpoint、最多
+- **P2a（先做，不破坏正式盘上形状）**：Stage4A/B 的分 unit 生产拓扑、验证后即时 checkpoint、最多
   4 并发、确定性聚合、整书 schema/HARD、aggregate commit journal 与 B 的 hash-bound unit
   replacement 已落地，把「一处错就整书归零」收成「保留全部已验单元」。本段剩余工作是抽出唯一
   `gate_payload` 校验函数供 LlmClient / agent intake / response-repair / adoption / repair 共用，并继续把

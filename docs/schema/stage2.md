@@ -79,10 +79,24 @@ Stage4 下发只认这格；旧的人名/埋点启发式只作 INFO 对账。
 - `ArcTrack`：`subject`、`trajectory`、`trajectory_evidence`。
 - `Arc` 的 `climax` 与 `ending` 均为必填非空文本。
 
-### 1.4 自由事实证据：两套 wire 入口，SourceSpan 只在正式产物
+### 1.4 自由事实证据：唯一 candidate wire，locator 只作 0-LLM 人工恢复
 
-现役默认 `locator-v1` 的模型响应与所有人工 `GlobalEdit` v3 对自由事实只交
-`EvidenceLocator`：
+唯一现役的模型 evidence wire 是 `paragraph-candidate-v1`。代码按全书阅读序只从
+`paragraph_spans` 建立 `e000001` 起的连续候选表，prompt 的带 ID 正文与响应 lookup 共用该表。
+模型对每个证据槽只交 `{evidence_candidate_id}`；
+`GlobalGroundingCandidateResponse` / `GlobalCandidateAgentTurnResponse` 不接受 locator 或
+`SourceSpan`。格式合法但没有出现在本次下发表中的 ID，会在候选 acceptance、checkpoint 与业务
+写盘之前关闭式拒绝；合法 ID 由代码编译成候选行所属章与精确 `SourceSpan`，随后完整复用既有
+normalize、全部 HARD、GlobalReview、provenance、正式 readback 与 adoption。候选 ID 只是一轮
+请求内的 wire 引用，不进入 GlobalGrounding v4、GlobalEdit v3 或正式 provenance。
+
+这套结构只消灭章号/locator 的模型转抄错位，不判断所选段落是否真的支持主张；后者仍由
+GlobalReview 的语义复核承担。2026-08-31 产品所有者在首个实验 wire 前取消 candidate/locator A/B
+与盲审，并把 candidate 收成 sole active；实验状态是 `CANCELLED_BEFORE_WIRE`，真实 provider
+wire=0，没有实验 verdict，质量、token、wall 与货币成本均未验证。`locator-v1` 不再是可选模型臂、
+默认或 fallback，不能把本次产品裁决写成 candidate 已通过性能或质量门。
+
+所有人工 `GlobalEdit` v3 对自由事实仍只交 `EvidenceLocator`，这是保留的 0-LLM 恢复口：
 
 | 字段 | 类型 | 约束 |
 |---|---|---|
@@ -106,23 +120,9 @@ Stage4 下发只认这格；旧的人名/埋点启发式只作 INFO 对账。
 `evidence_locator_rewrite`：claim path、原章、新章与 `exact｜normalized`。该事件不含 locator、
 SourceSpan 或正文。
 
-实验臂 `paragraph-candidate-v1` 不让模型转抄章号或 locator：代码按全书阅读序只从
-`paragraph_spans` 建立 `e000001` 起的连续候选表，prompt 的带 ID 正文与响应 lookup 共用该表。
-模型对每个证据槽只交 `{evidence_candidate_id}`；独立的
-`GlobalGroundingCandidateResponse` / `GlobalCandidateAgentTurnResponse` 不接受 locator 或
-`SourceSpan`。格式合法但没有出现在本次下发表中的 ID，会在候选 acceptance、checkpoint 与业务
-写盘之前关闭式拒绝；合法 ID 由代码编译成候选行所属章与精确 `SourceSpan`，随后完整复用既有
-normalize、全部 HARD、GlobalReview、provenance、正式 readback 与 adoption。候选 ID 只是一轮
-请求内的 wire 引用，不进入 GlobalGrounding v4、GlobalEdit v3 或正式 provenance。
-
-这个实验臂只结构性消灭章号/locator 的转抄错位，不判断所选段落是否真的支持主张；后者仍由
-GlobalReview 的语义复核承担。它通过 `NOVEL_STAGE2_GLOBAL_EVIDENCE_CONTRACT=paragraph-candidate-v1`
-显式启用；默认仍是 `locator-v1`。切默认之前必须另用独立 base/cache 和单独正文外发、付费授权，
-在同一固定语料做冷缓存配对 A/B，并同时满足人审质量无回退与总 wall/token/成本改善。
-
 七类必举证事实是：人物 role/fate、relation predicate、setting 两格、world-rule desc、
-secret fact、每条 knowledge event、arc trajectory。两臂各用独立的 `*Response` 载体，
-都不允许直接填写正式 `SourceSpan`；`--purge-role` 的窄响应仍只交 role/fate，claim 改变后旧证据
+secret fact、每条 knowledge event、arc trajectory。模型 wire 不允许直接填写正式 `SourceSpan`；
+`--purge-role` 的窄响应仍只交 role/fate，claim 改变后旧证据
 会被明确置为 `source=null` 并由 HARD 送入可恢复的 `.INVALID`，不会把旧证据错误绑定到新 claim。
 
 Stage4/5/6 的实际材料与节点 freshness 投影共用代码剥掉全部 evidence：坐标或证据文本单独修订
@@ -130,27 +130,50 @@ Stage4/5/6 的实际材料与节点 freshness 投影共用代码剥掉全部 evi
 
 ### 1.5 agent 私有的固定 turn 信封
 
-agent executor 的 `stage2.global` 在整个 logical/provider session 内固定一套信封，不改变
-legacy 单轮入口：locator 臂使用 `GlobalAgentTurnResponse`，candidate 臂使用完全分离的
-`GlobalCandidateAgentTurnResponse`。
+agent executor 的 `stage2.global` 在整个 logical/provider session 内固定唯一的
+`GlobalCandidateAgentTurnResponse` 联合信封；direct 单发同样只接受
+`GlobalGroundingCandidateResponse`，不存在 locator agent 信封或 `evidence_patch` fallback。
 
-- locator 臂首轮及非局部 HARD 使用 `payload.kind=full_candidate`；仅命中
-  `global_evidence_unlocated` 时才允许 `payload.kind=evidence_patch`，携带当前 raw candidate 的
-  完整 SHA-256 与 `changes[]`，每项只有 canonical `claim_path` 与新的 `EvidenceLocator`；
-- candidate 臂的信封**只有** `payload.kind=full_candidate`。候选 ID 格式/成员失败发生在候选
-  acceptance、checkpoint 与业务写盘之前；同一 session 的下一轮仍用同一个
-  `GlobalCandidateAgentTurnResponse` 完整重交 `GlobalGroundingCandidateResponse`。业务 HARD 亦同，
-  不存在 candidate `evidence_patch`、`candidate_sha256`、`changes[]` 或 patch 审计出口。
+- 首轮与普通业务 HARD 使用 `payload.kind=full_candidate`；候选 ID
+  格式/成员失败仍在 acceptance、checkpoint 与业务写盘之前关闭式拒绝；普通业务 HARD 继续完整重交
+  `GlobalGroundingCandidateResponse`。只有 HARD 集合精确等于 `role_leaks_fate` 时，代码才从生产判据
+  取得完整人物 allowlist，开放 `role_fate_patch` 窄修：每个人必须原子提交 `role`、`role_evidence`、
+  `fate`、`fate_evidence` 四格，并同时绑定当前 raw candidate SHA-256 与本轮 evidence candidate table
+  SHA-256。人物集合必须与 allowlist 精确相等，未知 evidence ID、旧 SHA、role no-op、空 fate 或
+  四字段掩码之外任何变化都关闭式拒绝。`candidate_sha256` 只绑定信封内、归一前
+  `GlobalGroundingCandidateResponse` 的 canonical JSON，不含 turn envelope、provenance 或正式
+  artifact；apply 前重新计算当前 base SHA 与 evidence table SHA。
 
-locator patch 的 `claim_path` 只来自 `iter_global_evidence_slots`，返回集合必须与 validator 的失败路径
-集合精确相等。`candidate_sha256` 只绑定信封内、归一前 `GlobalGroundingResponse` 的 canonical JSON，
-不含 turn envelope、provenance 或正式 artifact。apply 前重新计算当前 base SHA；旧 hash、base 变异、
-重复/缺失/额外路径与 no-op 都关闭式拒绝。代码在候选副本应用后证明非授权投影不变，再完整重跑
-response schema、normalize、全部 HARD 与 downstream guard。中间业务候选不写 formal / `.INVALID` /
-`_rounds`；`candidate_patch_applied` 服务审计只属于 locator patch，只记 patch attempt、前后 raw SHA
-与改动格数，不记 claim path、locator 或正文，也不冒充 adoption。最终经既有 finalize 写盘与正式
-readback 后，唯一 `artifact_adoption` 才绑定最终 locator patch attempt。候选始终归
-`Stage2GlobalAgent` 所有，外层 Commander 不接收或改写。
+代码在候选副本应用后证明非授权投影不变，再完整重跑 response schema、normalize、全部 HARD 与
+downstream guard。中间业务候选不写 formal / `.INVALID` / `_rounds`。role/fate 的
+`candidate_patch_applied` 只记 patch kind、attempt、前后 raw SHA、candidate table SHA 与改动格数，
+不记人物、字段值或正文，也不冒充 adoption。role/fate 窄修最多接受两次；第一次开始后状态 sticky，第二次仍红、
+引入 mixed/其它 HARD 或预算耗尽都直接按当前候选终态化，不得借通用剩余 turn 回到
+`full_candidate`。最终经既有 finalize 写盘与正式 readback 后，唯一 `artifact_adoption` 才绑定最终
+accepted attempt。候选始终归 `Stage2GlobalAgent` 所有，外层 Commander 不接收或改写。
+
+### 1.6 Global agent checkpoint、拒稿 custody 与提交 journal
+
+`stage2.global` 的 agent run 使用 `recovery_policy=stage2-global-v1`。每份通过固定信封与当轮 dynamic
+validator 的 stdout 都先写 append-only revision checkpoint，再写无正文 patch 审计；checkpoint 精确
+保存合并后的完整 typed candidate、turn kind、可选 base candidate、两者 SHA、MainText / candidate
+table SHA、accepted role patch 计数，以及通用 acceptance/session/ledger 身份。恢复时必须重新通过当前
+schema、同一 patch applicator、候选表成员闸、业务 HARD 与 MainText currentness；不能把旧 provider
+session 冒充 live resume。fresh 与 restored 路共用 `Stage2GlobalAgent._repair_transition`：role/fate
+accepted 计数从 checkpoint 恢复，最多两次和 sticky/no-full-re-entry 语义不因 kill 点改变。
+
+若最后一次付费 stdout 已通过 schema、却被当轮 dynamic validator 拒绝，custody 必须绑定当轮
+`expected_turn_kind`、完整 base candidate/SHA 与**拒绝前** accepted role patch 计数，并与最新 durable
+checkpoint 对证；人工 typed replacement 仍重放同一个 validator 与 applicator，role/fate 计数只能
+`0→1` 或 `1→2`，不能把第二次窄修伪装成第一次。fresh/restored 两路在业务状态机已终止时都以
+`allow_resume=false` 关闭通用续轮，最后才写一次 `.INVALID`。
+
+正式 Global bundle 另由 `novel/llm/stage2_global_runs.py` 的同书线程/进程所有权与
+`prepared→正式 Global/review/projection 写入或退休 INVALID→typed readback/freshness→唯一
+artifact adoption→committed` journal 收口。foreign `prepared` 会在任何新 run 覆盖前关闭；kill 后原
+run 只能按已登记 touched-path SHA 幂等补齐 review/projection/readback/adoption/committed，不得再造新轮。
+checkpoint、custody 与 journal 都是书内 `_stage2_runs/<run_id>/global/` 的恢复 sidecar，不是正式
+artifact、普通缓存或公开 API schema。
 
 ## 一之二、`blueprint_character_projection.json`
 
@@ -359,8 +382,8 @@ address 后的新 subject 一律回到 `pending`，旧复合事实的 PASS 不�
 
 ## 四、生成、重算与晋升
 
-- `stage2.global`：主路径生成全书抽取；默认模型交自由事实 locator，实验臂交本次段落候选 ID，
-  两者都由代码回取正式证据且最终产物形状相同；
+- `stage2.global`：主路径只接受本次段落候选 ID，由代码铸成正式 `SourceSpan`；locator 不再是
+  模型选择面，只保留给下述 0-LLM 人工恢复；
   `--purge-role` 付费重划 `role/fate`，其窄响应不重新索要正文 locator，claim 改变时旧 evidence
   明确失效并进入可由 typed edit 修复的 `.INVALID`；
   `--resample` 仅在已有 `global_grounding.INVALID.json` 时绕过同参数缓存，付费重采整份响应；
@@ -417,8 +440,10 @@ address 后的新 subject 一律回到 `pending`，旧复合事实的 PASS 不�
 - `stage2.global --purge-role`: 1 条；
 - `stage2.global --renormalize`: 1 条。
 
-`global_evidence_unlocated` 不再把整份 `--resample` 暴露为默认路由：生成期先做确定性唯一回取，
-agent 期只修失败 evidence 槽；终态报告转人工 typed edit / `--revalidate`，显式整份重采仅作最后手段。
+`global_evidence_unlocated` 不再把整份 `--resample` 暴露为默认路由：candidate wire 的 ID 在
+acceptance 前关闭式校验并直接编译成 `SourceSpan`；普通业务 HARD 仍完整重交，只有 HARD 集合精确为
+`role_leaks_fate` 时才开放 role/fate 窄修。终态 evidence 问题转人工 typed edit / `--revalidate`，
+显式整份重采仅作最后手段。
 `conflict_stage_coverage` 也不再默认指向付费 `--resample`；它转人工用
 `GlobalEdit.conflict_stages_replace` + `stage2.global --apply-edit` 完整重画（0 LLM），
 不在没有稳定行 ID 的数组上伪造逐项机器修复。
@@ -429,5 +454,5 @@ agent 期只修失败 evidence 槽；终态报告转人工 typed edit / `--reval
 判据的权威定义在 `contracts/judges/stage2.py`，注册期会验证规则 id 唯一、严重度、需求落点、
 节点与 flag 的存在性。报告形状见 [`_report.md`](./_report.md)。
 
-三份现役契约的选择口、`--patch` 修复阶梯，以及退役实验臂的历史 A/B 读数，见
+两份现役 Blueprint 契约的选择口、`--patch` 修复阶梯，以及退役 Blueprint 实验臂的历史 A/B 读数，见
 `docs/stage2_contract_experiment.md`（操作手册与实验档案）。

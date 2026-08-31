@@ -343,12 +343,14 @@ def _repair_event_id(
 def _candidate_patch_event_id(
         *, run_id: str, node: str, purpose: str, attempt_id: str,
         base_candidate_sha256: str, result_candidate_sha256: str,
-        changed_path_count: int,
+        patch_kind: str, changed_count_field: str, changed_count: int,
+        evidence_table_sha256: str | None,
 ) -> str:
     """一次 hash-bound 候选窄修的稳定身份；正文与路径明细不进服务账。"""
     canonical = json.dumps(
         [run_id, node, purpose, attempt_id, base_candidate_sha256,
-         result_candidate_sha256, changed_path_count],
+         result_candidate_sha256, patch_kind, changed_count_field,
+         changed_count, evidence_table_sha256],
         ensure_ascii=False, separators=(',', ':'))
     return hashlib.sha256(canonical.encode('utf-8')).hexdigest()
 
@@ -1266,30 +1268,31 @@ class CostLedger:
             return
         self._append_audit(row)
 
-    def note_candidate_patch(
+    def note_role_fate_candidate_patch(
             self, *, sid: str, node: str, purpose: str, attempt_id: str,
             base_candidate_sha256: str, result_candidate_sha256: str,
-            changed_path_count: int) -> None:
-        """记录一次已通过 hash/path/invariance 闸的窄 patch，不复制业务正文。
-
-        这行描述的是 agent 内存候选的状态转移，不等同于最终 artifact adoption；
-        后者仍只允许由 ``note_adoption`` 记一次最终采用的 attempt。
-        """
+            evidence_table_sha256: str, changed_field_count: int) -> None:
+        """记录 role/fate 四字段窄修，不泄露人物键、路径、文本或证据内容。"""
         base_sha = _require_sha256(
             base_candidate_sha256, field='base_candidate_sha256')
         result_sha = _require_sha256(
             result_candidate_sha256, field='result_candidate_sha256')
-        if (not isinstance(changed_path_count, int)
-                or isinstance(changed_path_count, bool)
-                or changed_path_count < 1):
-            raise ProvenanceRefused('changed_path_count 必须是正整数')
+        table_sha = _require_sha256(
+            evidence_table_sha256, field='evidence_table_sha256')
+        if (not isinstance(changed_field_count, int)
+                or isinstance(changed_field_count, bool)
+                or changed_field_count < 1):
+            raise ProvenanceRefused('changed_field_count 必须是正整数')
         if not isinstance(attempt_id, str) or not attempt_id.strip():
             raise ProvenanceRefused('candidate patch attempt_id 必须是非空字符串')
         event_id = _candidate_patch_event_id(
             run_id=self.run_id, node=node, purpose=purpose,
             attempt_id=attempt_id, base_candidate_sha256=base_sha,
             result_candidate_sha256=result_sha,
-            changed_path_count=changed_path_count)
+            patch_kind='role_fate',
+            changed_count_field='changed_field_count',
+            changed_count=changed_field_count,
+            evidence_table_sha256=table_sha)
         self._append_audit_idempotent({
             'kind': 'candidate_patch_applied',
             'at': datetime.now(timezone.utc).isoformat(timespec='seconds'),
@@ -1300,7 +1303,9 @@ class CostLedger:
             'attempt_id': attempt_id,
             'base_candidate_sha256': base_sha,
             'result_candidate_sha256': result_sha,
-            'changed_path_count': changed_path_count,
+            'patch_kind': 'role_fate',
+            'evidence_table_sha256': table_sha,
+            'changed_field_count': changed_field_count,
         }, identity_key='candidate_patch_event_id')
 
     def note_evidence_locator_rewrite(

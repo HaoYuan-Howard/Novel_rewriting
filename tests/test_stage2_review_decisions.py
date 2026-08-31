@@ -12,8 +12,10 @@ test_stage2_review_decisions.py —— `stage2.global --review-decisions` 的决
 """
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
+import shutil
 from types import SimpleNamespace
 
 import pytest
@@ -22,6 +24,7 @@ from novel.errors import HumanEditProtected, PathRefused
 from contracts.artifacts import (
     STAGE2_GLOBAL_GROUNDING, STAGE2_GLOBAL_REVIEW_DECISIONS,
 )
+from contracts.invariants import review_effect_of
 from contracts.schema import encode_artifact
 from contracts.schema.evaluation import EvidenceRef, GlobalReview
 from novel import paths
@@ -29,7 +32,7 @@ from novel.errors import (
     BlockingFindingsUnresolved, GateBlocked, UpstreamMissing, UpstreamStale,
 )
 from novel.orchestrator import approvals
-from novel.quality.global_review import build_review, decide
+from novel.quality.global_review import build_review, decide, subject_sha256
 from novel.stages.stage2 import global_review
 from novel.stages.stage7 import assemble
 from novel.store import ArtifactStore
@@ -135,6 +138,113 @@ def test_the_emitted_template_round_trips_through_a_custom_relative_path():
     # 防止 Commander 只把 UNVER 翻成 PASS 就整批开闸。
     with pytest.raises(HumanEditProtected, match='actor.*占位'):
         global_review.apply_file(ctx, 'stage2/emitted_template.json')
+
+
+def test_v2_workpack_sha_is_rejected_without_disk_mutation_then_v3_can_apply():
+    """旧阅读凭证不能穿过 v3；重新读新包并绑定新 SHA 后才允许写回。
+
+    legacy payload 只在测试里从当前同一批主体重建，用来表示升级前实际 v2 形状；
+    生产应用口仍只现算 v3，不保留第二个旧 workpack builder。
+    """
+    root, book = _sandbox('工作包升级_123')
+    try:
+        _seed(book)
+        ctx = _ctx(book, 'stage2.global', paid=False)
+        current_v3 = global_review.review_workpack(ctx)
+        current_review = ArtifactStore(ctx).read(GlobalReview, global_review.REL)
+
+        legacy = copy.deepcopy(current_v3)
+        legacy.pop('workpack_sha256')
+        legacy['kind'] = 'stage2-global-review-workpack-v2'
+        legacy.pop('legend')
+        legacy_by_id = {row['item_id']: row for row in legacy['items']}
+        legacy['items'] = [
+            legacy_by_id[item.item_id] for item in current_review.items
+            if item.item_id in legacy_by_id
+        ]
+        for row in legacy['items']:
+            reading_scope = row.pop('reading_scope')
+            evidence_mode = row.pop('evidence_mode')
+            row.pop('effect')
+            row.pop('group_key')
+            row.pop('fate_companion', None)
+            if row['formal_evidence']:
+                row['exact_literal_hits'] = [{
+                    'chapter_ordinal': evidence['chapter_ordinal'],
+                    'literal': evidence['literal'],
+                    'start': evidence['start'],
+                    'end': evidence['end'],
+                    'context': evidence['context'],
+                    'origin': 'formal_evidence',
+                    'claim_path': evidence['claim_path'],
+                } for evidence in row['formal_evidence']]
+            base_note = (
+                '集合完整性项必须通读全书核对；0 个精确命中不等于 PASS。'
+                if reading_scope == 'whole_book' else
+                '这些命中只缩小人工阅读范围，不产生 PASS/FAIL/UNVER。')
+            if evidence_mode == 'unresolved_formal_evidence':
+                row['review_note'] = (
+                    '正式 evidence 含 source=None 或无效坐标；必须维持 UNVER，'
+                    '不能用 claim 字面命中代替证据。' + base_note)
+            elif evidence_mode == 'formal_evidence':
+                row['review_note'] = (
+                    '已优先把正式 evidence 转为 hash-bound EvidenceRef 与正文上下文；'
+                    '它仍不自动产生裁决。' + base_note)
+            else:
+                row['review_note'] = base_note
+        legacy_v2_sha = subject_sha256(legacy)
+        assert legacy_v2_sha != current_v3['workpack_sha256']
+
+        template = global_review.review_template(ctx)
+        assert template.blocking_scope is not None
+
+        def decision_bound_to(workpack_sha256: str):
+            return template.model_copy(update={
+                'actor': 'scope-reviewer',
+                'blocking_scope': template.blocking_scope.model_copy(update={
+                    'expected_workpack_sha256': workpack_sha256,
+                    'state': 'PASS',
+                    'reason': '已通读当前工作包并逐卡核对全部 blocking 项',
+                }),
+            })
+
+        decision_path = book / STAGE2_GLOBAL_REVIEW_DECISIONS
+
+        def write_decision(workpack_sha256: str) -> None:
+            supplied = decision_bound_to(workpack_sha256)
+            decision_path.write_text(json.dumps(encode_artifact(
+                STAGE2_GLOBAL_REVIEW_DECISIONS,
+                supplied.model_dump(mode='json', by_alias=True),
+            ), ensure_ascii=False, indent=2), encoding='utf-8', newline='\n')
+
+        rounds = book / 'stage2/_rounds'
+
+        def protected_bytes():
+            return {
+                'formal': (book / STAGE2_GLOBAL_GROUNDING).read_bytes(),
+                'review': (book / global_review.REL).read_bytes(),
+                'rounds': ({
+                    path.relative_to(rounds).as_posix(): path.read_bytes()
+                    for path in rounds.rglob('*') if path.is_file()
+                } if rounds.exists() else {}),
+            }
+
+        write_decision(legacy_v2_sha)
+        before = protected_bytes()
+        with pytest.raises(HumanEditProtected, match='workpack changed'):
+            global_review.apply_file(ctx)
+        assert protected_bytes() == before, \
+            '旧 v2 SHA 拒绝必须发生在 formal/review/_rounds 的首个写盘动作前'
+
+        write_decision(str(current_v3['workpack_sha256']))
+        updated = global_review.apply_file(ctx)
+        assert all(item.state == 'PASS' for item in updated.items
+                   if review_effect_of(item.kind) == 'blocking')
+        assert {item.item_id for item in updated.items} == {
+            item.item_id for item in current_review.items}
+        assert (rounds / 'global_review.r1.json').read_bytes() == before['review']
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
 
 
 def test_downstream_gate_requires_current_blueprint_and_joint_check(tmp_path):
@@ -253,7 +363,8 @@ def test_workpack_prefers_formal_evidence_and_never_fabricates_for_source_none(
                 'char_001': {
                     'canonical': '掌柜', 'name_distinctiveness': 'high',
                     'role': '客栈掌柜', 'role_evidence': valid,
-                    'fate': None, 'fate_evidence': None, 'address': [],
+                    'fate': '后来成为客栈东家', 'fate_evidence': valid,
+                    'address': [],
                 },
                 'char_002': {
                     'canonical': '账房', 'name_distinctiveness': 'high',
@@ -279,7 +390,10 @@ def test_workpack_prefers_formal_evidence_and_never_fabricates_for_source_none(
         },
         'arc': {
             'conflict_stages': [], 'climax': '对质', 'ending': '和解',
-            'arc_tracks': [],
+            'arc_tracks': [{
+                'subject': 'char_001', 'trajectory': '掌柜从守成转为主动担当',
+                'trajectory_evidence': valid,
+            }],
         },
     }
     review = build_review(payload)
@@ -306,18 +420,16 @@ def test_workpack_prefers_formal_evidence_and_never_fabricates_for_source_none(
     monkeypatch.setattr(global_review, 'ArtifactStore', lambda _ctx: FakeStore())
     workpack = global_review.review_workpack(SimpleNamespace(sid='synthetic-book'))
     by_path = {row['subject_path']: row for row in workpack['items']}
+    full_workpack = global_review.review_workpack(
+        SimpleNamespace(sid='synthetic-book'), scope='all')
+    full_by_path = {row['subject_path']: row for row in full_workpack['items']}
 
     role = by_path['entities.characters.char_001.role']
     assert len(role['formal_evidence']) == 1
-    assert role['exact_literal_hits'] == [{
-        'chapter_ordinal': 1,
-        'literal': literal,
-        'start': start,
-        'end': start + len(literal),
-        'context': chapter_text,
-        'origin': 'formal_evidence',
-        'claim_path': 'entities.characters.char_001.role',
-    }]
+    assert role['exact_literal_hits'] == [], \
+        'formal evidence 已含坐标与上下文，不得再复制成 literal hit'
+    assert role['reading_scope'] == 'localized'
+    assert role['evidence_mode'] == 'formal_evidence'
     ref = EvidenceRef.model_validate(role['formal_evidence'][0]['evidence_ref'])
     assert ref.artifact == 'stage1/main_text.json#chapter/1'
     assert ref.subject_sha256 == hashlib.sha256(
@@ -325,11 +437,50 @@ def test_workpack_prefers_formal_evidence_and_never_fabricates_for_source_none(
 
     relation = by_path['entities.relations.rel_01']
     assert 'predicate_evidence' not in relation['subject']
-    assert all(hit['literal'] == literal for hit in relation['exact_literal_hits'])
+    assert relation['exact_literal_hits'] == []
+    assert relation['evidence_mode'] == 'formal_evidence'
 
     worldview = by_path['canon.setting.世界观']
     assert worldview['formal_evidence'] == []
     assert worldview['exact_literal_hits'] == [], \
         'source=None 不得拿恰好出现的 claim 字面制造 evidence'
     assert worldview['unresolved_formal_evidence'][0]['reason'].endswith('source=None')
-    assert '维持 UNVER' in worldview['review_note']
+    assert worldview['evidence_mode'] == 'unresolved_formal_evidence'
+
+    arc = by_path['arc']
+    assert arc['reading_scope'] == 'whole_book'
+    assert arc['evidence_mode'] == 'formal_evidence', \
+        '整书阅读与 evidence 模式是正交轴，不能互相覆盖'
+
+    companion = role['fate_companion']
+    fate_item = next(item for item in review.items
+                     if item.subject_path == 'entities.characters.char_001.fate')
+    assert set(companion) == {
+        'read_only', 'kind', 'item_id', 'subject_path', 'subject_sha256',
+        'current_state', 'effect', 'subject', 'formal_evidence',
+        'unresolved_formal_evidence',
+    }
+    assert companion['read_only'] is True
+    assert companion['kind'] == 'fate'
+    assert companion['item_id'] == fate_item.item_id
+    assert companion['subject_path'] == fate_item.subject_path
+    assert companion['subject_sha256'] == fate_item.subject_sha256
+    assert companion['current_state'] == 'pending'
+    assert companion['effect'] == 'disclosure'
+    assert companion['subject'] == '后来成为客栈东家'
+    assert companion['unresolved_formal_evidence'] == []
+    assert len(companion['formal_evidence']) == 1
+    empty_companion = by_path['entities.characters.char_002.role']['fate_companion']
+    assert empty_companion['subject'] is None
+    assert empty_companion['formal_evidence'] == []
+    assert empty_companion['unresolved_formal_evidence'] == [], \
+        'fate=null 是合法主体，不得伪报成证据回取失败'
+
+    name = full_by_path['entities.characters.char_001.name_distinctiveness']
+    assert name['evidence_mode'] == 'claim_literal'
+    assert name['exact_literal_hits']
+    conflict = by_path['arc.conflict_stages']
+    assert conflict['reading_scope'] == 'whole_book'
+    assert conflict['evidence_mode'] == 'none'
+    assert 'fate_companion' not in full_by_path['entities.characters.char_001.role'], \
+        'all scope 已有同组 fate 正式行，不得再复制一份 companion'

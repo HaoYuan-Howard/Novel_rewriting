@@ -49,7 +49,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from contracts.artifacts import ARTIFACT_PATHS, BOOK_SCOPED_PATHS  # noqa: E402
 from contracts.invariants import STAGES, review_effect_of          # noqa: E402
 from contracts.schema import ARTIFACT_SPECS, artifact_key          # noqa: E402
-from novel import paths                                           # noqa: E402
+from novel import paths, run_identity                             # noqa: E402
 from novel.llm.ledger import audit_path, ledger_path              # noqa: E402
 from novel.orchestrator.beacon import read_events                 # noqa: E402
 from novel.quality.global_review import review_group_key          # noqa: E402
@@ -254,50 +254,129 @@ def _jsonl(path: Path) -> list[dict[str, Any]]:
     return rows
 
 
-def ledger_metrics(base: Path, sid: str) -> dict[str, Any]:
+def _run_rows(
+    rows: list[dict[str, Any]], sid: str, run_id: str | None,
+) -> list[dict[str, Any]]:
+    """按书过滤；指定 run 时只认显式、精确相等的业务身份。
+
+    旧账缺 ``run_id`` 时只能参加未指定 run 的历史汇总。把它按 sid 猜进当前 run
+    会让一次旧失败永久污染以后每次验收，正好违背 run 身份存在的理由。
+    """
+    return [
+        row for row in rows
+        if row.get('sid') == sid
+        and (run_id is None or row.get('run_id') == run_id)
+    ]
+
+
+_TOKEN_FIELDS = ('prompt_tokens', 'completion_tokens', 'reasoning_tokens')
+
+
+def _wire_usage_metrics(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    """汇总一组已确认的真实 wire；未知 usage 绝不折成 0。
+
+    ledger 的三个 token 字段都是必填但可为 ``null``：缺键、``null`` 或
+    非负整数以外的值都表示该列总量不可验证。仍保留该列已经拿到的已知小计，
+    但只有整列无缺口时才给正式总量；reasoning 仍只是 completion 的子口径。
+    """
+    known = {key: 0 for key in _TOKEN_FIELDS}
+    unver_fields: Counter[str] = Counter()
+    complete_wires = 0
+    for row in rows:
+        complete = True
+        for key in _TOKEN_FIELDS:
+            value = row.get(key)
+            if (key not in row or value is None or isinstance(value, bool)
+                    or not isinstance(value, int) or value < 0):
+                unver_fields[key] += 1
+                complete = False
+                continue
+            known[key] += value
+        if complete:
+            complete_wires += 1
+
+    prompt = None if unver_fields['prompt_tokens'] else known['prompt_tokens']
+    completion = (
+        None if unver_fields['completion_tokens'] else known['completion_tokens'])
+    reasoning = (
+        None if unver_fields['reasoning_tokens'] else known['reasoning_tokens'])
+    return {
+        'wire_calls': len(rows),
+        'usage_complete_wires': complete_wires,
+        'usage_incomplete_wires': len(rows) - complete_wires,
+        'token_verdict': 'unver' if unver_fields else 'ok',
+        'token_unver_fields': dict(sorted(unver_fields.items())),
+        'prompt_tokens': prompt,
+        'completion_tokens': completion,
+        # 子口径。永不与 completion 再相加。
+        'reasoning_tokens_within_completion': reasoning,
+        # prompt + completion 才是非重复的 token 总量；任一列不闭合就未知。
+        'total_tokens': (
+            prompt + completion
+            if prompt is not None and completion is not None else None),
+        # 已知小计只用于定位缺口，不得冒充完整总量。
+        'known_prompt_tokens': known['prompt_tokens'],
+        'known_completion_tokens': known['completion_tokens'],
+        'known_reasoning_tokens_within_completion': known['reasoning_tokens'],
+    }
+
+
+def ledger_metrics(
+    base: Path, sid: str, *, run_id: str | None = None,
+) -> dict[str, Any]:
     """token / 缓存的唯一来源。
 
     ⚠ **reasoning 是 completion 的子口径，永不与 completion 相加**（`Q-10` 同源纪律）。
     ⚠ **缓存命中单独记账**，不写成「没有执行过」（判据 18）。
     """
-    rows = [row for row in _jsonl(ledger_path(base)) if row.get('sid') == sid]
-    wire = [row for row in rows if not row.get('cached')]
-    cached = [row for row in rows if row.get('cached')]
+    rows = _run_rows(_jsonl(ledger_path(base)), sid, run_id)
+    # 只有显式 ``cached is False`` 才证明发过 provider。旧坏行缺这一格时
+    # 单列 unknown，不能因为 Python 的 falsy 规则猜成一次真实 wire。
+    wire = [row for row in rows if row.get('cached') is False]
+    cached = [row for row in rows if row.get('cached') is True]
+    cache_state_unknown = [
+        row for row in rows
+        if row.get('cached') is not True and row.get('cached') is not False]
     ok = [row for row in wire if row.get('outcome') == 'ok']
-    failed = [row for row in wire if row.get('outcome') != 'ok']
+    failed = [row for row in wire if row.get('outcome') == 'error']
+    outcome_unknown = [
+        row for row in wire if row.get('outcome') not in ('ok', 'error')]
 
-    def total(subset: list[dict[str, Any]], key: str) -> int:
-        return sum(int(row.get(key) or 0) for row in subset)
-
-    per_node: dict[str, dict[str, int]] = {}
-    for row in ok:
-        node = str(row.get('node') or row.get('purpose') or '?')
-        bucket = per_node.setdefault(node, {
-            'wire_ok': 0, 'prompt_tokens': 0, 'completion_tokens': 0,
-            'reasoning_tokens': 0,
-        })
-        bucket['wire_ok'] += 1
-        for key in ('prompt_tokens', 'completion_tokens', 'reasoning_tokens'):
-            bucket[key] += int(row.get(key) or 0)
+    node_rows: dict[str, list[dict[str, Any]]] = {}
     for row in wire:
         node = str(row.get('node') or row.get('purpose') or '?')
-        per_node.setdefault(node, {
-            'wire_ok': 0, 'prompt_tokens': 0, 'completion_tokens': 0,
-            'reasoning_tokens': 0,
-        })
+        node_rows.setdefault(node, []).append(row)
+
+    def topology(subset: list[dict[str, Any]]) -> dict[str, Any]:
+        return {
+            **_wire_usage_metrics(subset),
+            'wire_ok': sum(row.get('outcome') == 'ok' for row in subset),
+            'wire_error': sum(row.get('outcome') == 'error' for row in subset),
+            'wire_outcome_unknown': sum(
+                row.get('outcome') not in ('ok', 'error') for row in subset),
+        }
+
+    realized = _wire_usage_metrics(wire)
     return {
         'lines': len(rows),
         'wire_calls': len(wire),
         'wire_ok': len(ok),
         'wire_error': len(failed),
+        'wire_outcome_unknown': len(outcome_unknown),
         'cache_hits': len(cached),
+        'cache_state_unknown': len(cache_state_unknown),
         'error_kinds': dict(sorted(Counter(
             f'{row.get("node")}:{row.get("error_kind")}' for row in failed).items())),
-        'prompt_tokens': total(ok, 'prompt_tokens'),
-        'completion_tokens': total(ok, 'completion_tokens'),
-        # 子口径。展示时必须写清它已被 completion 包含。
-        'reasoning_tokens_within_completion': total(ok, 'reasoning_tokens'),
-        'per_node': {node: values for node, values in sorted(per_node.items())},
+        **{key: value for key, value in realized.items() if key != 'wire_calls'},
+        # 成功/失败/未知 outcome 各自保留拓扑与 usage，失败响应已经产生的
+        # token 因而不会再被 ``outcome == ok`` 过滤掉。
+        'per_outcome': {
+            'ok': topology(ok),
+            'error': topology(failed),
+            'unknown': topology(outcome_unknown),
+        },
+        'per_node': {
+            node: topology(subset) for node, subset in sorted(node_rows.items())},
         'models': dict(sorted(Counter(str(row.get('model')) for row in rows).items())),
         'reasoning_efforts': dict(sorted(Counter(
             str(row.get('reasoning_effort')) for row in rows).items())),
@@ -429,9 +508,11 @@ def _first_call_landing(
     return {node: values for node, values in sorted(out.items())}
 
 
-def audit_metrics(base: Path, sid: str) -> dict[str, Any]:
+def audit_metrics(
+    base: Path, sid: str, *, run_id: str | None = None,
+) -> dict[str, Any]:
     """闸决定 / 修复 / 确定性纠正 / 重采 / 采纳的唯一来源。"""
-    rows = [row for row in _jsonl(audit_path(base)) if row.get('sid') == sid]
+    rows = _run_rows(_jsonl(audit_path(base)), sid, run_id)
     gates = [row for row in rows if row.get('kind') == 'gate_decision']
     repairs = [row for row in rows if row.get('kind') == 'response_repair']
     candidate_patches = [
@@ -439,9 +520,21 @@ def audit_metrics(base: Path, sid: str) -> dict[str, Any]:
     locator_rewrites = [
         row for row in rows if row.get('kind') == 'evidence_locator_rewrite']
     adoptions = [row for row in rows if row.get('kind') == 'artifact_adoption']
-    ledger_attempts = [
-        row for row in _jsonl(ledger_path(base)) if row.get('sid') == sid
-    ]
+    ledger_attempts = _run_rows(_jsonl(ledger_path(base)), sid, run_id)
+    patch_kinds = Counter(
+        str(row.get('patch_kind') or 'legacy_unspecified')
+        for row in candidate_patches)
+    patch_changes: dict[str, dict[str, int]] = {}
+    for row in candidate_patches:
+        kind = str(row.get('patch_kind') or 'legacy_unspecified')
+        bucket = patch_changes.setdefault(kind, {
+            'events': 0, 'changed_paths': 0, 'changed_fields': 0,
+        })
+        bucket['events'] += 1
+        # 历史 locator patch 的单位是 JSON path；role/fate patch 的单位是
+        # 原子字段。两种量纲必须分格，绝不能为了一个“总改动数”混加。
+        bucket['changed_paths'] += int(row.get('changed_path_count') or 0)
+        bucket['changed_fields'] += int(row.get('changed_field_count') or 0)
     return {
         'lines': len(rows),
         'gate_decisions': len(gates),
@@ -461,8 +554,13 @@ def audit_metrics(base: Path, sid: str) -> dict[str, Any]:
         'repair_actions': dict(sorted(Counter(
             str(row.get('action')) for row in repairs).items())),
         'candidate_patches_applied': len(candidate_patches),
+        'candidate_patches_by_kind': dict(sorted(patch_kinds.items())),
         'candidate_patch_changed_paths': sum(
             int(row.get('changed_path_count') or 0) for row in candidate_patches),
+        'candidate_patch_changed_fields': sum(
+            int(row.get('changed_field_count') or 0) for row in candidate_patches),
+        'candidate_patch_changes_by_kind': {
+            kind: values for kind, values in sorted(patch_changes.items())},
         'evidence_locator_rewrites': len(locator_rewrites),
         'evidence_locator_rewrite_modes': dict(sorted(Counter(
             str(row.get('match_mode')) for row in locator_rewrites).items())),
@@ -475,43 +573,131 @@ def audit_metrics(base: Path, sid: str) -> dict[str, Any]:
 
 # ── CLI 观察轨迹 ─────────────────────────────────────────────────────────────
 
-def cli_metrics(base: Path, sid: str) -> dict[str, Any]:
+def cli_metrics(
+    base: Path, sid: str, *, run_id: str | None = None,
+) -> dict[str, Any]:
     """CLI 次数、退出码与时长的唯一来源。
 
     ⚠ **`exit 0` 只说进程正常退出**（判据 24 / 26）：本节是观察态，不是交付结论。
-    配对规则与信标语义一致——同 (sid, node) 的 `start` 与随后的第一条 `end` 成一对；
-    没配上的 `start` 单独计为 `unfinished`，不猜它成没成。
+    新信标按 ``(run_id, execution_id)`` 精确配对；只有 run_id / execution_id
+    都不存在的旧历史行，才保留原来的同节点顺序配对。指定 run 时缺 execution_id
+    的行不猜。闭合执行段之和与首 start 到最终 terminal 的端到端 elapsed 分开报，
+    后者保留执行段之间的等待间隔。
     """
-    events = [event for event in read_events(base) if event.sid == sid]
+    events = [
+        event for event in read_events(base)
+        if event.sid == sid and (run_id is None or event.run_id == run_id)
+    ]
     per_node: dict[str, dict[str, Any]] = {}
-    pending: dict[str, int] = {}
-    unfinished = 0
-    for event in events:
-        bucket = per_node.setdefault(event.node, {
+    pending: dict[tuple[str, str | None, str], tuple[int, str]] = {}
+    closed_execution_keys: set[tuple[str, str | None, str]] = set()
+    invalid_execution_keys: set[tuple[str, str | None, str]] = set()
+
+    def bucket_of(node: str) -> dict[str, Any]:
+        return per_node.setdefault(node, {
             'starts': 0, 'ends': 0, 'exit_codes': {}, 'durations_s': [],
+            'start_timestamps': [], 'terminal_timestamps': [],
+            'unmatched_starts': 0, 'unmatched_ends': 0,
         })
+
+    def pairing_key(event: Any) -> tuple[str, str | None, str] | None:
+        if event.execution_id is not None:
+            return ('execution', event.run_id, event.execution_id)
+        # 兼容旧账的未分 run 汇总；一旦行自称属于某 run，就不能拿 node 猜进程身份。
+        if run_id is None and event.run_id is None:
+            return ('legacy-node', None, event.node)
+        return None
+
+    for event in events:
+        bucket = bucket_of(event.node)
+        key = pairing_key(event)
         if event.phase == 'start':
-            if event.node in pending:
-                unfinished += 1
-            pending[event.node] = int(event.ts)
             bucket['starts'] += 1
+            bucket['start_timestamps'].append(int(event.ts))
+            if key is None:
+                bucket['unmatched_starts'] += 1
+                continue
+            if key[0] == 'execution' and (
+                    key in pending or key in closed_execution_keys
+                    or key in invalid_execution_keys):
+                previous = pending.pop(key, None)
+                if previous is not None:
+                    bucket_of(previous[1])['unmatched_starts'] += 1
+                bucket['unmatched_starts'] += 1
+                invalid_execution_keys.add(key)
+                continue
+            pending[key] = (int(event.ts), event.node)
             continue
         bucket['ends'] += 1
+        bucket['terminal_timestamps'].append(int(event.ts))
         code = str(event.exit_code)
         bucket['exit_codes'][code] = bucket['exit_codes'].get(code, 0) + 1
-        started = pending.pop(event.node, None)
-        if started is not None:
-            bucket['durations_s'].append(max(0, int(event.ts) - started))
-    unfinished += len(pending)
+        if key is None or key in invalid_execution_keys:
+            bucket['unmatched_ends'] += 1
+            continue
+        started = pending.pop(key, None)
+        if started is None:
+            bucket['unmatched_ends'] += 1
+            continue
+        started_at, started_node = started
+        if started_node != event.node:
+            bucket_of(started_node)['unmatched_starts'] += 1
+            bucket['unmatched_ends'] += 1
+            invalid_execution_keys.add(key)
+            continue
+        bucket['durations_s'].append(max(0, int(event.ts) - started_at))
+        if key[0] == 'execution':
+            closed_execution_keys.add(key)
+
+    for _key, (_started_at, node) in pending.items():
+        bucket_of(node)['unmatched_starts'] += 1
+
+    all_starts: list[int] = []
+    all_terminals: list[int] = []
+    closed_seconds = 0
+    closed_segments = 0
+    unmatched_starts = 0
+    unmatched_ends = 0
     for bucket in per_node.values():
         spans = sorted(bucket.pop('durations_s'))
+        starts = bucket.pop('start_timestamps')
+        terminals = bucket.pop('terminal_timestamps')
+        all_starts.extend(starts)
+        all_terminals.extend(terminals)
+        node_closed_seconds = sum(spans)
+        node_closed_segments = len(spans)
+        node_unmatched_starts = int(bucket['unmatched_starts'])
+        node_unmatched_ends = int(bucket['unmatched_ends'])
+        elapsed_complete = (
+            bool(spans) and node_unmatched_starts == 0 and node_unmatched_ends == 0)
         bucket['paired_runs'] = len(spans)
-        bucket['total_seconds'] = sum(spans)
+        bucket['total_seconds'] = node_closed_seconds
         bucket['p50_seconds'] = spans[len(spans) // 2] if spans else None
         bucket['max_seconds'] = spans[-1] if spans else None
+        bucket['closed_segments'] = node_closed_segments
+        bucket['closed_segment_seconds'] = node_closed_seconds
+        bucket['first_start_to_final_terminal_seconds'] = (
+            max(0, max(terminals) - min(starts)) if elapsed_complete else None)
+        bucket['elapsed_verdict'] = 'ok' if elapsed_complete else 'unver'
+        closed_seconds += node_closed_seconds
+        closed_segments += node_closed_segments
+        unmatched_starts += node_unmatched_starts
+        unmatched_ends += node_unmatched_ends
+
+    elapsed_complete = (
+        bool(closed_segments) and unmatched_starts == 0 and unmatched_ends == 0)
     return {
         'events': len(events),
-        'unfinished_starts': unfinished,
+        # 旧字段保留为别名；新输出同时把孤儿 end 明确列出。
+        'unfinished_starts': unmatched_starts,
+        'unmatched_starts': unmatched_starts,
+        'unmatched_ends': unmatched_ends,
+        'closed_segments': closed_segments,
+        'closed_segment_seconds': closed_seconds,
+        'first_start_to_final_terminal_seconds': (
+            max(0, max(all_terminals) - min(all_starts))
+            if elapsed_complete else None),
+        'elapsed_verdict': 'ok' if elapsed_complete else 'unver',
         'per_node': {node: values for node, values in sorted(per_node.items())},
     }
 
@@ -615,18 +801,25 @@ def structure_readings(novel_dir: Path) -> dict[str, Any]:
 
 # ── 身份与可复现性 ───────────────────────────────────────────────────────────
 
-def identity_metrics(base: Path, novel_dir: Path, sid: str) -> dict[str, Any]:
+def identity_metrics(
+    base: Path, novel_dir: Path, sid: str, *, run_id: str | None = None,
+) -> dict[str, Any]:
     """代码身份与 `experiment_valid`。**只回答可复现性，不回答质量。**"""
     codes = {
-        str(row.get('code')) for row in _jsonl(ledger_path(base))
-        if row.get('sid') == sid and row.get('code')
+        str(row.get('code'))
+        for row in _run_rows(_jsonl(ledger_path(base)), sid, run_id)
+        if row.get('code')
     }
-    for rel in _stage_json_rels(novel_dir):
-        payload = json.loads((novel_dir / rel).read_text(encoding='utf-8'))
-        code = ((payload or {}).get('_provenance') or {}).get('code') \
-            if isinstance(payload, dict) else None
-        if code:
-            codes.add(str(code))
+    if run_id is None:
+        # 未指定 run 的独立读数保留历史行为：当前 artifact provenance 也是盘面
+        # 可复现性的一部分。指定 run 时它没有 run_id，属于 current snapshot，
+        # 不得倒灌成目标 run 的代码身份。
+        for rel in _stage_json_rels(novel_dir):
+            payload = json.loads((novel_dir / rel).read_text(encoding='utf-8'))
+            code = ((payload or {}).get('_provenance') or {}).get('code') \
+                if isinstance(payload, dict) else None
+            if code:
+                codes.add(str(code))
     reasons: list[str] = []
     if not codes:
         reasons.append('盘上没有任何代码身份：这次跑不能当实验臂')
@@ -662,17 +855,23 @@ def assert_no_book_identity(report: dict[str, Any], novel_dir: Path) -> None:
             '本工具的输出面不许带书身份，请先改掉那份文件的命名')
 
 
-def collect(base: str | os.PathLike[str], sid: str) -> dict[str, Any]:
+def collect(
+    base: str | os.PathLike[str], sid: str, *, run_id: str | None = None,
+) -> dict[str, Any]:
     """一次跑的全部读数。纯读，调用方拿到的是可 JSON 序列化的字典。"""
     base_path = Path(base)
+    checked_run_id = (
+        run_identity.check_run_id(run_id) if run_id is not None else None)
     novel_dir = paths.resolve_novel_dir(base_path, sid)
     report = {
         'sid': sid,
-        'identity': identity_metrics(base_path, novel_dir, sid),
+        'run_id': checked_run_id,
+        'identity': identity_metrics(
+            base_path, novel_dir, sid, run_id=checked_run_id),
         'artifacts': artifact_metrics(novel_dir),
-        'ledger': ledger_metrics(base_path, sid),
-        'audit': audit_metrics(base_path, sid),
-        'cli': cli_metrics(base_path, sid),
+        'ledger': ledger_metrics(base_path, sid, run_id=checked_run_id),
+        'audit': audit_metrics(base_path, sid, run_id=checked_run_id),
+        'cli': cli_metrics(base_path, sid, run_id=checked_run_id),
         'human': human_metrics(novel_dir),
         'structure': structure_readings(novel_dir),
     }
@@ -682,7 +881,9 @@ def collect(base: str | os.PathLike[str], sid: str) -> dict[str, Any]:
 
 def render(report: dict[str, Any]) -> str:
     """人读的 markdown。**书名不出现**，产物按注册表模板指认。"""
-    out: list[str] = [f'# 工作流读数 · sid={report["sid"]}', '']
+    run_scope = (
+        f' · run_id={report["run_id"]}' if report.get('run_id') is not None else '')
+    out: list[str] = [f'# 工作流读数 · sid={report["sid"]}{run_scope}', '']
     identity = report['identity']
     out += [
         '## 身份',
@@ -715,10 +916,17 @@ def render(report: dict[str, Any]) -> str:
     out += [
         '## 账本（唯一成本源）', '',
         f'- 行 {led["lines"]}：wire {led["wire_calls"]}（ok {led["wire_ok"]} / '
-        f'error {led["wire_error"]}）· 缓存命中 {led["cache_hits"]}',
+        f'error {led["wire_error"]} / outcome 未知 {led["wire_outcome_unknown"]}）'
+        f'· 缓存命中 {led["cache_hits"]} · cache 状态未知 {led["cache_state_unknown"]}',
+        f'- token 完整性 **{led["token_verdict"]}**：'
+        f'{led["token_unver_fields"] or "无缺口"}',
         f'- prompt {led["prompt_tokens"]} · completion {led["completion_tokens"]}'
         f'（其中 reasoning {led["reasoning_tokens_within_completion"]}，'
         f'**是子口径，不与 completion 相加**）',
+        f'- 非重复 token 总量 {led["total_tokens"]}；已知字段小计 '
+        f'prompt {led["known_prompt_tokens"]} / '
+        f'completion {led["known_completion_tokens"]} / '
+        f'reasoning {led["known_reasoning_tokens_within_completion"]}',
         f'- 失败分类：{led["error_kinds"] or "无"}', '',
     ]
 
@@ -728,8 +936,10 @@ def render(report: dict[str, Any]) -> str:
         f'- gate 决定 {aud["gate_decisions"]}：{aud["gate_by_decision"]}',
         f'- 重采 {aud["resamples"]} · salvage {aud["salvaged"]} · '
         f'响应修复 {aud["response_repairs"]}{aud["repair_actions"]}',
-        f'- Stage2 候选窄 patch {aud["candidate_patches_applied"]} 次 / '
-        f'{aud["candidate_patch_changed_paths"]} 格 · 确定性跨章纠正 '
+        f'- Stage2 候选窄 patch {aud["candidate_patches_applied"]} 次 '
+        f'{aud["candidate_patches_by_kind"]} / '
+        f'路径 {aud["candidate_patch_changed_paths"]} 格 / '
+        f'字段 {aud["candidate_patch_changed_fields"]} 格 · 确定性跨章纠正 '
         f'{aud["evidence_locator_rewrites"]} 次'
         f'{aud["evidence_locator_rewrite_modes"]}',
         '',
@@ -743,13 +953,24 @@ def render(report: dict[str, Any]) -> str:
 
     cli = report['cli']
     out += ['## CLI 观察轨迹（exit 0 ≠ 合格）', '',
-            '| node | starts | ends | 退出码 | 配对次数 | 合计秒 | P50 秒 |',
-            '|---|---|---|---|---|---|---|']
+            '| node | starts | ends | 退出码 | 闭合段 | 段时长和 | 端到端 elapsed | P50 秒 |',
+            '|---|---|---|---|---|---|---|---|']
     for node, values in cli['per_node'].items():
         out.append(
             f'| {node} | {values["starts"]} | {values["ends"]} | {values["exit_codes"]} | '
-            f'{values["paired_runs"]} | {values["total_seconds"]} | {values["p50_seconds"]} |')
-    out += ['', f'- 未配对 start：{cli["unfinished_starts"]}', '']
+            f'{values["closed_segments"]} | {values["closed_segment_seconds"]} | '
+            f'{values["first_start_to_final_terminal_seconds"]} | '
+            f'{values["p50_seconds"]} |')
+    out += [
+        '',
+        f'- 全 run：闭合段 {cli["closed_segments"]} / 段时长和 '
+        f'{cli["closed_segment_seconds"]} 秒 / 首 start→最终 terminal '
+        f'{cli["first_start_to_final_terminal_seconds"]} 秒 '
+        f'（{cli["elapsed_verdict"]}）',
+        f'- 未配对 start：{cli["unmatched_starts"]} · '
+        f'未配对 end：{cli["unmatched_ends"]}',
+        '',
+    ]
 
     human = report['human']
     out += [
@@ -786,11 +1007,13 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description='只读工作流读数器（不写盘、不发请求）')
     parser.add_argument('--base', required=True, help='含各书目录的那一层')
     parser.add_argument('--sid', required=True)
+    parser.add_argument('--run-id', default=None, type=run_identity.check_run_id,
+                        help='只统计这个业务 run；缺 run_id 的历史行不会猜入')
     parser.add_argument('--json', dest='json_out', default=None,
                         help='把完整读数写到这个 base 之外的路径')
     args = parser.parse_args(argv)
     base = Path(args.base)
-    report = collect(base, paths.check_sid(args.sid))
+    report = collect(base, paths.check_sid(args.sid), run_id=args.run_id)
     if args.json_out:
         out = Path(args.json_out)
         _refuse_output_inside_base(base, out)

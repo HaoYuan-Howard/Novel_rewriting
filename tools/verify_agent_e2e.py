@@ -382,6 +382,13 @@ def linkage_check(
     )
 
 
+def _workflow_metrics_for_run(
+    base: str | Path, sid: str, run_id: str,
+) -> dict[str, Any]:
+    """本轮成本/闸/CLI/身份只认精确 run；产物与人审仍由读数器看 current snapshot。"""
+    return workflow_metrics.collect(base, sid, run_id=run_id)
+
+
 def collect(base: str | Path, sid: str, run_id: str) -> dict[str, Any]:
     """收集一份不含书身份的机读验收报告。"""
     base_path = Path(base).resolve()
@@ -461,7 +468,7 @@ def collect(base: str | Path, sid: str, run_id: str) -> dict[str, Any]:
         closed_gates=closed_gates, missing_gates=missing_gates,
         seen=seen, missing_seen=missing_seen))
 
-    metrics = workflow_metrics.collect(base_path, sid)
+    metrics = _workflow_metrics_for_run(base_path, sid, run_id)
     drifted = sorted(
         row['rel'] for row in metrics['artifacts']['artifacts']
         if row['version_state'] == 'drifted')

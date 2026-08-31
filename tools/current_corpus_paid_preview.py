@@ -55,7 +55,6 @@ from novel.llm.client import (  # noqa: E402
     models_for,
     rungs_from_effort,
 )
-from novel.llm.prompts import with_json_shape  # noqa: E402
 from novel.llm.transport import ChatRequest  # noqa: E402
 from novel.orchestrator.nodes import build_argv  # noqa: E402
 from novel.stages.stage0.removal import remove_bytes  # noqa: E402
@@ -64,7 +63,9 @@ from novel.stages.stage1.partition import partition_text  # noqa: E402
 from novel.stages.stage1.audit import audit_surface  # noqa: E402
 from novel.stages.stage2 import extract as stage2_extract  # noqa: E402
 from novel.stages.stage2.contract import active_contract  # noqa: E402
-from novel.stages.stage2 import prompts as stage2_prompts  # noqa: E402
+from novel.stages.stage2.global_contract import (  # noqa: E402
+    active_contract as active_global_contract,
+)
 from novel.stages.stage4.prompts import (  # noqa: E402
     BLIND_BOOK_STRATEGY_MAX_TOKENS,
     BLIND_CHAPTER_DESIGN_MAX_TOKENS,
@@ -464,8 +465,8 @@ def _global_token_estimate(
     book: dict[str, Any], counter: TokenCounter = count_input_tokens,
 ) -> dict[str, Any]:
     main = [row.model_dump(by_alias=True, mode='json') for row in book['main_text'].root]
-    system = with_json_shape(stage2_prompts.GLOBAL_SYS, stage2_prompts.GLOBAL_HINT)
-    user = stage2_extract.build_global_user(book['title'], main)
+    system, user, _candidates = stage2_extract.build_global_request(
+        book['title'], main, active_global_contract(), agent_envelope=True)
     rungs = rungs_from_effort(NODES['stage2.global'].effort)
     models = models_for(NODES['stage2.global'].model or FIXED_MODEL)
     counts: list[dict[str, Any]] = []

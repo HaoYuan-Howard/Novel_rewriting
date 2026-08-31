@@ -723,6 +723,30 @@ def stage2_blueprint_run_path(
             / check_run_id(run_id) / 'blueprint')
 
 
+def stage2_global_run_path(
+        novel_dir: str | os.PathLike[str], run_id: str,
+) -> Path:
+    """``<书目录>/_stage2_runs/<run_id>/global/``；与逐章恢复空间隔离。"""
+    from novel.run_identity import check_run_id
+
+    return (Path(os.fspath(novel_dir)) / STAGE2_RUNS_DIRNAME
+            / check_run_id(run_id) / 'global')
+
+
+def stage2_global_checkpoint_dir(
+        novel_dir: str | os.PathLike[str], run_id: str,
+) -> Path:
+    """Global append-only checkpoint 目录。"""
+    return stage2_global_run_path(novel_dir, run_id) / 'checkpoints'
+
+
+def stage2_global_commit_lock_path(
+        novel_dir: str | os.PathLike[str],
+) -> Path:
+    """同一本书所有 Global run 共用的正式提交所有权锁。"""
+    return Path(os.fspath(novel_dir)) / STAGE2_RUNS_DIRNAME / '.global-commit-ownership'
+
+
 def stage2_blueprint_checkpoint_path(
         novel_dir: str | os.PathLike[str], run_id: str,
         phase: str, chapter: int,

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 from pathlib import Path
@@ -30,7 +31,7 @@ from novel.errors import (
 from novel.orchestrator.jobs import service_dir
 from novel.quality.global_review import (
     apply_decision_set, blocking_scope_sha256, require_current,
-    review_effect_counts, review_status, subject_sha256,
+    review_effect_counts, review_group_key, review_status, subject_sha256,
     UNBOUND_WORKPACK_SHA256,
 )
 from novel.run import RunContext
@@ -257,6 +258,102 @@ _NO_FORMAL_EVIDENCE_KINDS = frozenset({
 })
 
 
+#: v3 把旧 ``review_note`` 里混在一句话中的两条正交语义拆开：是否必须通读
+#: 全书，与当前展示的是哪一类证据，互不覆盖。legend 只在顶层出现一次；每行只交
+#: 两个闭集标签，避免 100 多行重复同一段安全说明。
+_WORKPACK_LEGEND: Final = {
+    'reading_scope': {
+        'whole_book': '必须通读全书核对；0 个命中不等于 PASS。',
+        'localized': '所列正文上下文只缩小阅读范围，不产生自动裁决。',
+    },
+    'evidence_mode': {
+        'unresolved_formal_evidence': (
+            '正式 evidence 含 source=None、缺失或无效坐标；不得用 claim 字面命中替代。'),
+        'formal_evidence': (
+            '优先展示 hash-bound EvidenceRef、正式坐标与上下文；不重复写入字面命中。'),
+        'claim_literal': (
+            '没有正式 evidence 槽；展示 claim 的正文精确字面命中，仅供定位。'),
+        'none': '没有可展示的正式证据或 claim 字面命中；不得据此自动 PASS。',
+    },
+    'fate_companion': (
+        'blocking role 行附带同人物 fate 的只读主体、状态与正式证据，'
+        '只供成对阅读，不增加或代替任何 decision item。'),
+    'decision': 'workpack 只提供只读材料；PASS/FAIL/UNVER 必须由人显式提交。',
+}
+
+
+def _ordered_workpack_rows(
+    rows: list[dict[str, object]],
+) -> list[dict[str, object]]:
+    """按主体稳定成卡；blocking 卡先行，卡内保持原 review 顺序。
+
+    ``rows`` 来自 ``GlobalReview.items`` 的一次顺序扫描。普通 ``dict`` 的插入序就是
+    每组首次出现的位置，因此同一优先级不另造按字面排序的第二套顺序。
+    """
+    groups: dict[str, list[dict[str, object]]] = {}
+    has_blocking: dict[str, bool] = {}
+    for row in rows:
+        group_key = str(row['group_key'])
+        groups.setdefault(group_key, []).append(row)
+        has_blocking[group_key] = (
+            has_blocking.get(group_key, False) or row['effect'] == 'blocking')
+    keys = [key for key in groups if has_blocking[key]]
+    keys.extend(key for key in groups if not has_blocking[key])
+    return [row for key in keys for row in groups[key]]
+
+
+def _attach_blocking_role_fate_companions(
+    rows: list[dict[str, object]], *, review: GlobalReview,
+    claim_payload: dict[str, object],
+    evidence_slots: list[tuple[str, object]], chapters: dict[int, object],
+) -> None:
+    """给 blocking role 行附上同人物 fate，只供成对阅读，不增加决定项。
+
+    ``enumerate_required`` 保证每个人物各有一条 role 与 fate；这里仍按生产
+    ``review_group_key`` 关闭式核对唯一配对，避免路径截字符串另造第二套人物归属尺子。
+    companion 不复制 claim-literal、registered decision evidence 或 group 元数据，只带
+    fate 主体身份、当前状态及正式证据材料。
+    """
+    fate_by_group: dict[str, list[GlobalReviewItem]] = {}
+    for item in review.items:
+        if item.kind == 'fate':
+            fate_by_group.setdefault(
+                review_group_key(item.subject_path), []).append(item)
+    for row in rows:
+        if row['kind'] != 'role' or row['effect'] != 'blocking':
+            continue
+        group_key = str(row['group_key'])
+        matches = fate_by_group.get(group_key, [])
+        if len(matches) != 1:
+            raise TerminalState(
+                f'blocking role 卡 {group_key!r} 必须恰有一条同人物 fate 复核项，'
+                f'实得 {len(matches)} 条')
+        fate = matches[0]
+        prefix = f'{fate.subject_path}.'
+        relevant_slots = [
+            (path, evidence) for path, evidence in evidence_slots
+            if path == fate.subject_path or path.startswith(prefix)
+        ]
+        formal, unresolved = _formal_materials(relevant_slots, chapters)
+        try:
+            subject = _subject_at(claim_payload, fate.subject_path)
+        except (KeyError, IndexError, StopIteration) as exc:
+            raise TerminalState(
+                f'blocking role 卡 {group_key!r} 的 fate 主体无法从当前 Global 回取') from exc
+        row['fate_companion'] = {
+            'read_only': True,
+            'kind': fate.kind,
+            'item_id': fate.item_id,
+            'subject_path': fate.subject_path,
+            'subject_sha256': fate.subject_sha256,
+            'current_state': fate.state,
+            'effect': review_effect_of(fate.kind),
+            'subject': subject,
+            'formal_evidence': formal,
+            'unresolved_formal_evidence': unresolved,
+        }
+
+
 def review_workpack(
     ctx: RunContext, *, scope: str = DEFAULT_REVIEW_SCOPE,
 ) -> dict[str, object]:
@@ -312,19 +409,7 @@ def review_workpack(
             ]
         formal, unresolved = _formal_materials(relevant_slots, chapters)
         hits: list[dict[str, object]] = []
-        if relevant_slots:
-            # 正式 evidence 是权威坐标；source=None / 坐标无效时保持空，不得再拿
-            # claim 字面搜索制造一条看起来合法的“证据”。
-            hits = [{
-                'chapter_ordinal': row['chapter_ordinal'],
-                'literal': row['literal'],
-                'start': row['start'],
-                'end': row['end'],
-                'context': row['context'],
-                'origin': 'formal_evidence',
-                'claim_path': row['claim_path'],
-            } for row in formal]
-        else:
+        if not relevant_slots:
             for literal in literals:
                 if len(hits) >= 24:
                     break
@@ -345,35 +430,44 @@ def review_workpack(
                             'origin': 'claim_literal',
                         })
                         start = found + max(1, len(literal))
-        base_note = ('集合完整性项必须通读全书核对；0 个精确命中不等于 PASS。'
-                     if item.kind in _WHOLE_BOOK_KINDS else
-                     '这些命中只缩小人工阅读范围，不产生 PASS/FAIL/UNVER。')
+        reading_scope = (
+            'whole_book' if item.kind in _WHOLE_BOOK_KINDS else 'localized')
         if unresolved:
-            note = ('正式 evidence 含 source=None 或无效坐标；必须维持 UNVER，'
-                    '不能用 claim 字面命中代替证据。' + base_note)
+            evidence_mode = 'unresolved_formal_evidence'
         elif formal:
-            note = ('已优先把正式 evidence 转为 hash-bound EvidenceRef 与正文上下文；'
-                    '它仍不自动产生裁决。' + base_note)
+            evidence_mode = 'formal_evidence'
+        elif hits:
+            evidence_mode = 'claim_literal'
         else:
-            note = base_note
+            evidence_mode = 'none'
+        effect = review_effect_of(item.kind)
         rows.append({
             'item_id': item.item_id, 'kind': item.kind,
             'subject_path': item.subject_path,
             'subject_sha256': item.subject_sha256,
             'current_state': item.state,
+            'reading_scope': reading_scope,
+            'evidence_mode': evidence_mode,
+            'effect': effect,
+            'group_key': review_group_key(item.subject_path),
             'subject': subject, 'registered_evidence': [
                 evidence.model_dump(mode='json') for evidence in item.evidence],
             'formal_evidence': formal,
             'unresolved_formal_evidence': unresolved,
             'exact_literal_hits': hits,
-            'review_note': note,
         })
+    if scope == 'blocking':
+        _attach_blocking_role_fate_companions(
+            rows, review=review, claim_payload=claim_payload,
+            evidence_slots=evidence_slots, chapters=chapters)
+    rows = _ordered_workpack_rows(rows)
     payload: dict[str, object] = {
-        'kind': 'stage2-global-review-workpack-v2',
+        'kind': 'stage2-global-review-workpack-v3',
         'sid': ctx.sid,
         'scope': scope,
         'read_only': True,
         'auto_decisions': False,
+        'legend': copy.deepcopy(_WORKPACK_LEGEND),
         # 绑定完整 typed MainText 主体，不只绑定章号或最多 24 个展示命中；
         # 未展示上下文之外改一个字，也必须让旧 workpack/scope 失效。
         'main_text_subject_sha256': main_text_subject_sha256,
@@ -444,27 +538,35 @@ def apply_file(ctx: RunContext, decision_path: str = '') -> GlobalReview:
             decisions = store.read_external(
                 GlobalReviewDecisionSet, DEFAULT_DECISIONS,
                 Path(ctx.novel_dir) / rel)
-    grounding = store.read_own(GlobalGrounding, STAGE2_GLOBAL_GROUNDING)[0]
-    grounding_payload = grounding.model_dump(by_alias=True)
-    current = store.read_own(GlobalReview, REL)[0]
-    require_current(grounding_payload, current)
-    main_text = store.read_own(MainText, STAGE1_MAIN_TEXT)[0]
-    blocking_workpack = (
-        review_workpack(ctx, scope='blocking')
-        if decisions.blocking_scope is not None else None
-    )
-    updated = apply_decision_set(
-        current,
-        decisions,
-        expected_chapter_ordinals=tuple(
-            int(section.chapter_ordinal) for section in main_text.root),
-        expected_workpack_sha256=(
-            str(blocking_workpack['workpack_sha256'])
-            if blocking_workpack is not None else None),
-    )
-    require_current(grounding_payload, updated)
-    store.write_round(REL, updated)
-    return updated
+    from novel.llm import stage2_global_runs
+
+    # review 是 Global commit journal 的伴生 touched path；若绕过 prepared
+    # reservation 单独改它，原 producer 的 frozen baseline/expected 都无法再恢复。
+    # 决策文件先按路径/schema 读入，当前 grounding/review/workpack 则必须在同一
+    # 所有权窗口内读取、校验并写回，避免锁前快照覆盖刚 committed 的新 bundle。
+    with stage2_global_runs.mutation_ownership(ctx):
+        grounding = store.read_own(
+            GlobalGrounding, STAGE2_GLOBAL_GROUNDING)[0]
+        grounding_payload = grounding.model_dump(by_alias=True)
+        current = store.read_own(GlobalReview, REL)[0]
+        require_current(grounding_payload, current)
+        main_text = store.read_own(MainText, STAGE1_MAIN_TEXT)[0]
+        blocking_workpack = (
+            review_workpack(ctx, scope='blocking')
+            if decisions.blocking_scope is not None else None
+        )
+        updated = apply_decision_set(
+            current,
+            decisions,
+            expected_chapter_ordinals=tuple(
+                int(section.chapter_ordinal) for section in main_text.root),
+            expected_workpack_sha256=(
+                str(blocking_workpack['workpack_sha256'])
+                if blocking_workpack is not None else None),
+        )
+        require_current(grounding_payload, updated)
+        store.write_round(REL, updated)
+        return updated
 
 
 def is_approved(ctx: RunContext, review: GlobalReview) -> bool:

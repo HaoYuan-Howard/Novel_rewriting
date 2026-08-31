@@ -25,7 +25,7 @@ from pydantic import BaseModel
 
 from contracts.invariants import (
     ADDRESS_BY, ADDRESS_CONTEXT, BARE_PRONOUNS,
-    BOOK_BAND, HINGE_KINDS, INVENT_ALLOW,
+    BOOK_BAND, FATE_WORDS, HINGE_KINDS, INVENT_ALLOW,
     INVENT_FORBID, INVENT_PRINCIPLE, NAME_DISTINCTIVENESS,
     PLAN_BUDGET_BAND, RESPONSE_CHAPTER_WEIGHTS,
     RESPONSE_DELIVERY_MODES, RESPONSE_GOAL_INTENTS, RESPONSE_STRUCTURAL_ROLES,
@@ -56,6 +56,8 @@ ENUM_BLOCKS: Final[dict[str, str]] = {
     'BY_SPECIAL': '／'.join(f'`"{b}"`' for b in _BY_SPECIAL),
     # `PRONOUNS` 来自 `BARE_PRONOUNS`，由本块与 address 判据共用。
     'PRONOUNS': '／'.join(f'「{p}」' for p in BARE_PRONOUNS),
+    # ``role`` 提交前扫描与落盘判据共用，不允许调用点手抄子集。
+    'FATE_WORDS': ' / '.join(FATE_WORDS),
     # Stage4 预算编译器的确定性取值；A/B 模型都不直接决定整数预算。
     'BANDS': '{:g}~{:g}×'.format(*PLAN_BUDGET_BAND),
     'BOOK_BANDS': '{:g}~{:g}×'.format(*BOOK_BAND),

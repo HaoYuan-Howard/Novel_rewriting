@@ -3,6 +3,8 @@
 """Agent E2E 验收器的零模型身份联结测试。"""
 from __future__ import annotations
 
+import json
+
 from contracts.invariants import AGENT_EXECUTOR_NODES
 from contracts.schema.orchestration import ProgressEvent
 from novel import agent_session_audit as audit
@@ -178,3 +180,88 @@ def test_execution_lifecycle_treats_a_broken_admission_log_as_unknown(tmp_path):
     result = verifier.execution_lifecycle_check(tmp_path, _RUN_ID, _SID)
     assert result['state'] == 'unknown'
     assert result['facts']['error_type']
+
+
+def test_workflow_readings_are_scoped_to_the_requested_run(tmp_path):
+    """验收器传入 run_id；同 sid 的旧失败不能进入本轮 stability 读数。"""
+    old_run = 'old-run'
+    book = tmp_path / f'验收样书_{_SID}'
+    book.mkdir()
+    service = tmp_path / '_service'
+    service.mkdir()
+
+    old_ledger = [
+        {
+            'sid': _SID, 'run_id': old_run, 'node': 'stage2.global',
+            'purpose': 'stage2.global', 'chapter': None,
+            'attempt_id': f'old-{index}', 'code': 'old-code-dirty',
+            'cached': False, 'outcome': 'error', 'error_kind': 'agent_timeout',
+            'prompt_tokens': 50_000, 'completion_tokens': 0,
+            'model': 'old-model', 'reasoning_effort': 'max',
+        }
+        for index in range(25)
+    ]
+    current_ledger = {
+        'sid': _SID, 'run_id': _RUN_ID, 'node': 'stage2.global',
+        'purpose': 'stage2.global', 'chapter': None,
+        'attempt_id': 'current-attempt', 'code': 'clean-code',
+        'cached': False, 'outcome': 'ok', 'prompt_tokens': 73,
+        'completion_tokens': 19, 'reasoning_tokens': 7,
+        'model': _PROFILE['model'], 'reasoning_effort': 'max',
+    }
+    (service / 'ledger.jsonl').write_text(
+        '\n'.join(json.dumps(row) for row in [*old_ledger, current_ledger]) + '\n',
+        encoding='utf-8')
+
+    old_audit = [
+        {
+            'sid': _SID, 'run_id': old_run, 'kind': 'gate_decision',
+            'node': 'stage2.global', 'purpose': 'stage2.global', 'chapter': None,
+            'attempt_id': f'old-{index}', 'source': 'wire',
+            'decision': 'rejected', 'gate': 'validator', 'resample': True,
+        }
+        for index in range(25)
+    ]
+    current_audit = [
+        {
+            'sid': _SID, 'run_id': _RUN_ID, 'kind': 'gate_decision',
+            'node': 'stage2.global', 'purpose': 'stage2.global', 'chapter': None,
+            'attempt_id': 'current-attempt', 'source': 'wire',
+            'decision': 'accepted', 'resample': False,
+        },
+        {
+            'sid': _SID, 'run_id': _RUN_ID, 'kind': 'artifact_adoption',
+            'node': 'stage2.global', 'purpose': 'stage2.global', 'chapter': None,
+            'attempt_id': 'current-attempt',
+        },
+    ]
+    (service / 'llm_audit.jsonl').write_text(
+        '\n'.join(json.dumps(row) for row in [*old_audit, *current_audit]) + '\n',
+        encoding='utf-8')
+
+    for index in range(25):
+        beacon.append(tmp_path, ProgressEvent(
+            sid=_SID, run_id=old_run, execution_id=f'old-execution-{index}',
+            node='stage2.global', phase='start', ts=index * 10))
+        beacon.append(tmp_path, ProgressEvent(
+            sid=_SID, run_id=old_run, execution_id=f'old-execution-{index}',
+            node='stage2.global', phase='end', ts=index * 10 + 9, exit_code=70))
+    beacon.append(tmp_path, ProgressEvent(
+        sid=_SID, run_id=_RUN_ID, execution_id='current-execution',
+        node='stage2.global', phase='start', ts=1_000))
+    beacon.append(tmp_path, ProgressEvent(
+        sid=_SID, run_id=_RUN_ID, execution_id='current-execution',
+        node='stage2.global', phase='end', ts=1_004, exit_code=0))
+
+    metrics = verifier._workflow_metrics_for_run(tmp_path, _SID, _RUN_ID)
+    assert metrics['run_id'] == _RUN_ID
+    assert metrics['ledger']['lines'] == 1
+    assert metrics['ledger']['wire_error'] == 0
+    assert metrics['ledger']['prompt_tokens'] == 73
+    assert metrics['audit']['gate_by_decision'] == {'accepted': 1}
+    assert metrics['audit']['resamples'] == 0
+    assert metrics['audit']['first_call_landing']['stage2.global']['first_call'] == 1
+    assert metrics['cli']['events'] == 2
+    assert metrics['cli']['per_node']['stage2.global']['exit_codes'] == {'0': 1}
+    assert metrics['identity']['code_identities'] == ['clean-code']
+    assert metrics['identity']['experiment_valid'] is True

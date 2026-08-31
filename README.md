@@ -53,6 +53,24 @@ stage7  人名替换：一次调用产新人物表（只产决策）  1 次调�
         替换与成书组装                          0 成本
 ```
 
+Stage2 全局抽取唯一现役的模型 evidence wire 是 `paragraph-candidate-v1`：模型只交本次段落候选 ID，
+代码把它铸成正式 `SourceSpan`。这是 2026-08-31 产品所有者取消候选/locator A/B 与盲审后作出的
+sole-candidate 产品裁决，不是实验 `GO`；实验在首个 wire 前以 `CANCELLED_BEFORE_WIRE` 收口，真实
+provider wire=0，质量、token、wall 与货币成本均未验证。`locator-v1` 不再是可选模型臂、默认或
+fallback；locator 只保留给 `GlobalEdit` v3 与手改 `.INVALID` 后 `--revalidate` 的 0-LLM 人工恢复，
+正式 `GlobalGrounding` 仍只落 `SourceSpan`。candidate agent 只有在 HARD 精确为
+`role_leaks_fate` 时才开放绑定 candidate/table 双 SHA、
+精确人物集合与 `role/role_evidence/fate/fate_evidence` 四字段的窄修；最多接受两次，一旦开始即 sticky，
+不得再回整份候选。每份 accepted turn 先写 run-scoped append-only checkpoint；fresh/restored 共享同一
+状态 reducer，validator 拒稿按当轮 kind/base/count 进入 typed custody。正式 Global/review/projection
+bundle 再由同书 `prepared→readback/freshness→adoption→committed` journal 收口，foreign prepared
+不得由新 run 覆盖。这些 sidecar 不改变 GlobalGrounding v4 / GlobalEdit v3，也不是普通缓存。
+
+对应的人审只读包现为 workpack v3：`reading_scope=whole_book｜localized` 与
+`evidence_mode=unresolved_formal_evidence｜formal_evidence｜claim_literal｜none` 两轴分开，正式证据不
+重复复制成字面命中，未决正式证据不回退；blocking role 卡携同人物 fate 的只读 companion，不增删
+决定项。两轴、分组与 companion 全部绑定 workpack SHA，旧 v2 SHA 必须重发 v3 并重新阅读后再提交。
+
 Stage2 逐章调用以 `run_id` 归组。通过 JSON/schema/动态判据/章节 scope 的成功章会写入书内的
 验证后检查点；同一 run 中断后可在不新增 wire 的情况下重验恢复。一个并发波次的可人工修复响应
 只生成一份 batch workpack、一次原子 resolution 和一次 resume；reasoning 通道里已经完整过闸的
@@ -61,6 +79,9 @@ JSON 直接采用，不再为了取得普通 content 重采。损坏、跨 run�
 不改变 `chapter_blueprints.json` 的 schema，也不改变 `micro_events`、`beats` 或 fact atoms。
 逐章扇出的供应商前缀 warm-up 仍默认开启，未新增关闭型产品 flag；本次不另做付费 A/B，收益只在
 下一次自然跑书按 `run_id` 回读 wire/章、checkpoint restore、repair batch、reasoning token 与墙钟。
+`tools/workflow_metrics.py --run-id <RUN_ID>` 对 ledger、LLM audit 与 CLI progress 只收显式同一
+`run_id` 的行；旧 run 与缺身份行不会按 sid/时间猜入。产物、人审、结构仍显示 current snapshot，
+但不能倒灌成该 run 的代码身份；不带 `--run-id` 才是历史汇总。
 
 Stage4A 对外仍只有一条 `stage4.design` 付费 argv 和一次 `--yes` 授权，不开放公开的
 `--chapters`。内部先让一条小型整书策略请求只决定宏观重构意图与章间权重；策略过

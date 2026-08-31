@@ -503,6 +503,73 @@ def test_the_workpack_follows_the_same_scope_rule():
     assert len(default['main_text_subject_sha256']) == 64
 
 
+def test_workpack_v3_preserves_the_item_set_and_has_stable_group_order_and_sha():
+    book = _book_with_review()
+    ctx = _ctx(book, 'stage2.global', paid=False)
+    review = ArtifactStore(ctx).read(GlobalReview, global_review.REL)
+
+    first = global_review.review_workpack(ctx, scope='all')
+    second = global_review.review_workpack(ctx, scope='all')
+    assert first == second
+    assert first['workpack_sha256'] == second['workpack_sha256']
+    assert first['kind'] == 'stage2-global-review-workpack-v3'
+    first['legend']['decision'] = '调用方本地改写不应污染下一次生成'
+    assert global_review.review_workpack(ctx, scope='all') == second
+
+    rows = first['items']
+    assert len(rows) == len(review.items)
+    assert {row['item_id'] for row in rows} == {
+        item.item_id for item in review.items}
+    original_groups = list(dict.fromkeys(
+        review_group_key(item.subject_path) for item in review.items))
+    has_blocking = {
+        key: any(review_group_key(item.subject_path) == key
+                 and review_effect_of(item.kind) == 'blocking'
+                 for item in review.items)
+        for key in original_groups
+    }
+    expected_groups = [key for key in original_groups if has_blocking[key]]
+    expected_groups.extend(
+        key for key in original_groups if not has_blocking[key])
+    actual_groups = list(dict.fromkeys(str(row['group_key']) for row in rows))
+    assert actual_groups == expected_groups
+    for key in actual_groups:
+        assert [row['item_id'] for row in rows if row['group_key'] == key] == [
+            item.item_id for item in review.items
+            if review_group_key(item.subject_path) == key
+        ], '组内必须保持 GlobalReview.items 原序'
+    assert all(row['effect'] == review_effect_of(row['kind']) for row in rows)
+    assert all(row['group_key'] == review_group_key(row['subject_path'])
+               for row in rows)
+
+    blocking = global_review.review_workpack(ctx)
+    blocking_ids = {
+        item.item_id for item in review.items
+        if review_effect_of(item.kind) == 'blocking'}
+    assert {row['item_id'] for row in blocking['items']} == blocking_ids
+    for role in (row for row in blocking['items'] if row['kind'] == 'role'):
+        companion = role['fate_companion']
+        assert companion['read_only'] is True
+        assert companion['kind'] == 'fate'
+        assert companion['item_id'] not in blocking_ids
+        assert review_group_key(companion['subject_path']) == role['group_key']
+
+
+def test_workpack_group_priority_is_stable_by_first_appearance():
+    rows = [
+        {'item_id': 'd1', 'group_key': 'disclosure-first', 'effect': 'disclosure'},
+        {'item_id': 'b1', 'group_key': 'blocking-second', 'effect': 'blocking'},
+        {'item_id': 'd2', 'group_key': 'disclosure-first', 'effect': 'disclosure'},
+        {'item_id': 'm1', 'group_key': 'mixed-third', 'effect': 'disclosure'},
+        {'item_id': 'm2', 'group_key': 'mixed-third', 'effect': 'blocking'},
+    ]
+
+    ordered = global_review._ordered_workpack_rows(rows)
+
+    assert [row['item_id'] for row in ordered] == [
+        'b1', 'm1', 'm2', 'd1', 'd2']
+
+
 def test_the_api_row_carries_the_server_derived_effect_and_group_key():
     from novel.views.global_review import global_review_view
 

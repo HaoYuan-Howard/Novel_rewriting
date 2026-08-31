@@ -1,20 +1,23 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Stage 2 当前模型调用臂的 system prompt 与响应结构提示。
+"""Stage 2 当前模型调用入口的 system prompt 与响应结构提示。
 
-`stage2.global` 有两种不同形状的付费调用：
+`stage2.global` 有两种不同职责的付费调用：
 
-  · `GLOBAL_SYS`（8682 字）    默认路径：通读全书产 entities / canon / arc
-  · `ROLE_SPLIT_SYS`（2008 字）`--purge-role`：语义判官，把 `role`/`fate` **双向**重划分
+  · `GLOBAL_CANDIDATE_SYS`       通读全书产 entities / canon / arc；证据只选段落候选 ID
+  · `ROLE_SPLIT_SYS`             `--purge-role`：语义判官，把 `role`/`fate` **双向**重划分
 
 ⇒ `_provenance.prompts` 能分别记录这两个指纹键（`stage2.md` §一）。
 `stage2.blueprint` 的多套响应架构由 `novel/stages/stage2/contract.py` 整套选择；
 这里提供各架构的 system 与结构提示，不在调用点手拼第二份。
 
-【`ROLE_FATE_RULE` 是两条臂共用的，落点只有这里】`GLOBAL_SYS` 与 `ROLE_SPLIT_SYS`
-都插它（`$ROLE_FATE`）。它是一段 1527 字的 **prompt 正文**不是枚举 ⇒
+【`ROLE_FATE_RULE` 是两条臂共用的正式 prompt 片段，落点只有这里】私有模板先经
+`fill()` 渲染一次，再由 `GLOBAL_CANDIDATE_SYS` 与 `ROLE_SPLIT_SYS` 都插入它
+（`$ROLE_FATE`）。
+它是一段 **prompt 正文**不是枚举 ⇒
 **刻意不进 `novel/llm/prompts.py::ENUM_BLOCKS`**（那一层不许装某一层的内容，
-`tests/test_layering.py` 的分层守卫要的正是这个），由两条臂各自作为 kwarg 传进 `fill()`。
+`tests/test_layering.py` 的分层守卫要的正是这个）。其中 `$FATE_WORDS` 仍由共享
+`ENUM_BLOCKS` 从契约取值渲染，不在本层抄第二份。
 
 七个枚举占位符（`$KINDS` / `$LAYERS` / `$RULE_KINDS` / `$NAME_DISTINCT` /
 `$CONTEXTS` / `$BY_SPECIAL` / `$PRONOUNS`）
@@ -22,7 +25,6 @@
 """
 from __future__ import annotations
 
-import copy
 from typing import Any
 
 from contracts.invariants import (
@@ -32,9 +34,8 @@ from contracts.invariants import (
     RELATION_VISIBILITY_KINDS, RESPONSE_TIME_LAYERS, TIME_LAYERS, WORLD_RULE_KINDS,
 )
 from novel.llm.prompts import fill
-from novel.core.evidence import iter_global_evidence_slots
 
-#: 两条抽取臂共用的当前规则前缀。
+#: global 唯一抽取入口与各 blueprint 入口共用的当前规则前缀。
 #: ⚠ `ROLE_SPLIT_SYS` **不带**这个前缀——它不是抽取，是拿着已有的两栏重划分。
 RULES_V2 = """\
 你是小说内容抽取器。只抽取原作【已经写出的事实】，做客观描述：不设计新剧情、不新增设定。只描述原文有什么，【不要】给出「改写时应如何处理／不可违反什么」之类的指令或评价。
@@ -52,13 +53,13 @@ RULES_V2 = """\
 - world_rules 带类型 kind；规则正文一律写在 versions[] 里（每版 {effective_from_chapter(阅读序章号), desc}，至少一条）。宅斗社会规则（贞洁/宗法/舆论）属 social_norm。
 只输出 JSON，不要额外解释文字。"""
 
-#: `role` / `fate` 怎么划分（1527 字）。**两条臂共用，唯一落点。**
+#: `role` / `fate` 怎么划分。**两条臂共用，唯一落点。**
 #: ⚠ 判据只有一条而且**不是句法**：「把这句话念给读到这个角色刚登场那一章的读者听，
 #:   他会不会吃惊」。压着六条实测反例（含那个「系统：系统」的自检例）。
 #: ⚠ 它是 `role_leaks_fate`（阻断级，盘上 2/3 本命中）与 `role_fate_unverifiable`
 #:   在生成侧的全部防线——而词表那一侧实测在一本上命中 0/17 而人读真违规 6/17，
 #:   **所以这段文字比那张词表要紧**。
-ROLE_FATE_RULE = """\
+_ROLE_FATE_RULE_TPL = """\
 · `role` = **静态身份与位置**：他是什么人、在哪个位置上、与主角/主线是什么**固定关系**。
   ✓「武将，江家公子，慧贵妃之侄」 ✓「赵家嫡次女，慧贵妃姨女」 ✓「苏清杳的贴身丫鬟」
   ✓「皇帝第三子，署理兵部武库司」 ✓「宫中倒茶宫女」 ✓「长公主生辰宴的宾客」
@@ -93,9 +94,15 @@ ROLE_FATE_RULE = """\
     role 要回答的是「他在这个故事里处于什么位置」，不是「他属于哪一类」（名字已经答了那个）。
     ✗「系统：系统」 ✗「府医：府医」
     ✓「府医：侯府专属医生」 ✓「王婆：媒人，为孟青禾寻找借种郎君和书童」
-    ✓「采草贼：专门侵犯新郎的采花贼」——都是在名字之外说清了他在**这本书里**的位置。"""
+    ✓「采草贼：专门侵犯新郎的采花贼」——都是在名字之外说清了他在**这本书里**的位置。
+· 【提交前逐项扫描】最终输出前逐个检查 role；凡命中以下任一字面，必须把承载的**完整事实**
+  搬进同人物 fate，并让 fate_evidence 指向原文支持段，禁止只删词或换同义词规避：
+  $FATE_WORDS。"""
 
-#: `GLOBAL_SYS` 的模板（原型 `Stage2/n2_global.py:43` 的 `fill()` 实参）。
+#: 两条调用臂实际共用的已渲染正文；公开符号就是可做指纹/包含检查的正式片段。
+ROLE_FATE_RULE = fill(_ROLE_FATE_RULE_TPL)
+
+#: `GLOBAL_CANDIDATE_SYS` 的模板（原型 `Stage2/n2_global.py:43` 的 `fill()` 实参）。
 _GLOBAL_TPL = """\
 
 
@@ -155,12 +162,12 @@ fate(经历与结局|null)+fate_evidence（fate 为 null 时 evidence 也必须�
   搜不到就两种情况：要么改回原文的写法，要么这个"人"本来就是你造出来的、根本不该收。
 · 【role 与 fate 分开写，这两件事不许混在一起】
 $ROLE_FATE
-· 【七类自由事实必须同交原文定位】role/fate、relation predicate、setting 两格、
+· 【七类自由事实必须从关闭候选表选择证据】role/fate、relation predicate、setting 两格、
   world-rule desc、secret fact、knowledge event、arc trajectory 都各带自己的 evidence：
-  `{"chapter_ordinal":阅读序章号,"locator":"指定章内原样出现的短片段"}`。
-  · locator 必须是指定章正文里的【原样字节】，不是转述；取能支撑该事实的最短片段，并补足到
-    在该章里只出现一次。不要抄长段落，也不要把 `source/start/end` 交回来——正式 SourceSpan
-    由代码在这一章内唯一回取；零命中或多命中会进入可修复的定位失败态。
+  `{"evidence_candidate_id":"e000001"}`。
+  · 正文每个非空段行首都有全书唯一的 `<eNNNNNN>`；只选择能直接支持该事实的那一段。
+    只返回候选 id，不要返回章号、locator、原文、source/start/end，也不要编候选表外的 id。
+    正式 chapter_ordinal 与 SourceSpan 由代码按同一张候选表直接铸造，不再搜索文字。
   · setting 的两格分别叫 `era_evidence` / `worldview_evidence`；world-rule 每个
     `versions[]` 的 `desc` 各有 `desc_evidence`；secret 的事实叫 `fact_evidence`；
     knowledge_events 每条各有 `evidence`；arc_tracks 每条各有 `trajectory_evidence`。
@@ -332,38 +339,8 @@ $ROLE_FATE
 # 所以「模板」与「渲染结果」在本层合成一件事——同 stage5 的 `WRITE_SYS`。
 # ⚠ 指纹算在**渲染结果**上（`_common.md` §一）。
 
-#: `stage2.global` 默认路径（付费）。
-GLOBAL_SYS = RULES_V2 + fill(_GLOBAL_TPL, ROLE_FATE=ROLE_FATE_RULE)
-
-#: candidate 实验臂只替换 evidence wire 的责任边界；其它抽取规则与控制臂逐字
-#: 相同，避免 A/B 同时改变语义提示。替换前先断言旧块恰出现一次，prompt 漂移时
-#: 关闭式失败，不能悄悄发出“候选正文 + locator 指令”的混合契约。
-_GLOBAL_LOCATOR_EVIDENCE_RULE = """\
-· 【七类自由事实必须同交原文定位】role/fate、relation predicate、setting 两格、
-  world-rule desc、secret fact、knowledge event、arc trajectory 都各带自己的 evidence：
-  `{"chapter_ordinal":阅读序章号,"locator":"指定章内原样出现的短片段"}`。
-  · locator 必须是指定章正文里的【原样字节】，不是转述；取能支撑该事实的最短片段，并补足到
-    在该章里只出现一次。不要抄长段落，也不要把 `source/start/end` 交回来——正式 SourceSpan
-    由代码在这一章内唯一回取；零命中或多命中会进入可修复的定位失败态。
-  · setting 的两格分别叫 `era_evidence` / `worldview_evidence`；world-rule 每个
-    `versions[]` 的 `desc` 各有 `desc_evidence`；secret 的事实叫 `fact_evidence`；
-    knowledge_events 每条各有 `evidence`；arc_tracks 每条各有 `trajectory_evidence`。"""
-_GLOBAL_CANDIDATE_EVIDENCE_RULE = """\
-· 【七类自由事实必须从关闭候选表选择证据】role/fate、relation predicate、setting 两格、
-  world-rule desc、secret fact、knowledge event、arc trajectory 都各带自己的 evidence：
-  `{"evidence_candidate_id":"e000001"}`。
-  · 正文每个非空段行首都有全书唯一的 `<eNNNNNN>`；只选择能直接支持该事实的那一段。
-    只返回候选 id，不要返回章号、locator、原文、source/start/end，也不要编候选表外的 id。
-    正式 chapter_ordinal 与 SourceSpan 由代码按同一张候选表直接铸造，不再搜索文字。
-  · setting 的两格分别叫 `era_evidence` / `worldview_evidence`；world-rule 每个
-    `versions[]` 的 `desc` 各有 `desc_evidence`；secret 的事实叫 `fact_evidence`；
-    knowledge_events 每条各有 `evidence`；arc_tracks 每条各有 `trajectory_evidence`。"""
-assert GLOBAL_SYS.count(_GLOBAL_LOCATOR_EVIDENCE_RULE) == 1, \
-    'GLOBAL_SYS 的 locator 指令已漂移；candidate A/B 不得混合两套 evidence 契约'
-GLOBAL_CANDIDATE_SYS = GLOBAL_SYS.replace(
-    _GLOBAL_LOCATOR_EVIDENCE_RULE,
-    _GLOBAL_CANDIDATE_EVIDENCE_RULE,
-)
+#: `stage2.global` 唯一现役 provider wire（付费）。
+GLOBAL_CANDIDATE_SYS = RULES_V2 + fill(_GLOBAL_TPL, ROLE_FATE=ROLE_FATE_RULE)
 
 #: 两段式 v2：边界臂只做一个判断；细节臂在冻结边界上填字段。
 BOUNDARY_SYS_V2 = fill(_BOUNDARY_TPL)
@@ -383,14 +360,13 @@ ROLE_SPLIT_SYS = fill(_ROLE_SPLIT_TPL, ROLE_FATE=ROLE_FATE_RULE)
 # ⚠ 全部从 `contracts.invariants` 派生，**一个取值面都不手抄**：
 #   手抄的那一份会与载体分家，而分家的表现是「模型照着提示产出、载体当场拒收」。
 
-#: `stage2.global` 默认路径的结构提示（原型 `n2_global.py:179`）。
-_EVIDENCE_HINT: dict[str, Any] = {
-    'chapter_ordinal': 1,
-    'locator': '指定章内原样出现且唯一的短片段',
+#: `stage2.global` 唯一现役 provider wire 的结构提示。
+_EVIDENCE_CANDIDATE_HINT: dict[str, Any] = {
+    'evidence_candidate_id': 'e000001',
 }
 
 
-GLOBAL_HINT: dict[str, Any] = {
+GLOBAL_CANDIDATE_HINT: dict[str, Any] = {
     'entities': {
         'characters': {'char_001': {
             'canonical': 'str',
@@ -399,35 +375,38 @@ GLOBAL_HINT: dict[str, Any] = {
                          'context': '|'.join(ADDRESS_CONTEXT),
                          'from_chapter': 1}],
             'name_distinctiveness': '|'.join(NAME_DISTINCTIVENESS),
-            'role': 'str', 'role_evidence': _EVIDENCE_HINT,
-            'fate': 'str|null', 'fate_evidence': '_EVIDENCE_HINT|null'}},
+            'role': 'str', 'role_evidence': _EVIDENCE_CANDIDATE_HINT,
+            'fate': 'str|null',
+            'fate_evidence': _EVIDENCE_CANDIDATE_HINT}},
         'relations': [
             {'relation_id': 'rel_01', 'subject_id': 'char_001', 'predicate': 'str',
-             'predicate_evidence': _EVIDENCE_HINT, 'object_id': 'char_002',
+             'predicate_evidence': _EVIDENCE_CANDIDATE_HINT, 'object_id': 'char_002',
              'visibility': {'kind': RELATION_VISIBILITY_KINDS[0], 'from_chapter': 1},
              'valid_from_chapter': 1, 'valid_through_chapter': None},
             {'relation_id': 'rel_02', 'subject_id': 'char_002', 'predicate': 'str',
-             'predicate_evidence': _EVIDENCE_HINT, 'object_id': 'char_001',
+             'predicate_evidence': _EVIDENCE_CANDIDATE_HINT, 'object_id': 'char_001',
              'visibility': {'kind': RELATION_VISIBILITY_KINDS[1],
                             'secret_id': 'secret_01'},
              'valid_from_chapter': 2, 'valid_through_chapter': 3},
         ],
     },
     'canon': {
-        'setting': {'时代背景': 'str', 'era_evidence': _EVIDENCE_HINT,
-                    '世界观': 'str', 'worldview_evidence': _EVIDENCE_HINT},
+        'setting': {'时代背景': 'str', 'era_evidence': _EVIDENCE_CANDIDATE_HINT,
+                    '世界观': 'str', 'worldview_evidence': _EVIDENCE_CANDIDATE_HINT},
         'world_rules': [{'rule_id': 'wr_01', 'kind': WORLD_RULE_KINDS[0],
                          'versions': [{'effective_from_chapter': 1, 'desc': 'str',
-                                       'desc_evidence': _EVIDENCE_HINT}]}],
+                                       'desc_evidence': _EVIDENCE_CANDIDATE_HINT}]}],
         'secrets': [{'secret_id': 'secret_01', 'fact': 'str',
-                     'fact_evidence': _EVIDENCE_HINT,
+                     'fact_evidence': _EVIDENCE_CANDIDATE_HINT,
                      'knowledge_events': [
                          {'subject': {'kind': KNOWLEDGE_SUBJECT_KINDS[0],
                                       'char_id': 'char_001'},
-                          'known_from_chapter': 1, 'evidence': _EVIDENCE_HINT},
+                          'known_from_chapter': 1,
+                          'evidence': _EVIDENCE_CANDIDATE_HINT},
                          {'subject': {'kind': KNOWLEDGE_SUBJECT_KINDS[1],
                                       'label': '在场士兵'},
-                          'known_from_chapter': 2, 'evidence': _EVIDENCE_HINT},
+                          'known_from_chapter': 2,
+                          'evidence': _EVIDENCE_CANDIDATE_HINT},
                      ],
                      'setup': {'kind': 'foreshadowed', 'chapters': [1]},
                      'first_reveal_chapter': 2}],
@@ -436,18 +415,9 @@ GLOBAL_HINT: dict[str, Any] = {
         'conflict_stages': [{'stage': 'str', 'chapters': [1]}],
         'climax': 'str', 'ending': 'str',
         'arc_tracks': [{'subject': 'char_001|reader|rel_01', 'trajectory': 'str',
-                        'trajectory_evidence': _EVIDENCE_HINT}],
+                        'trajectory_evidence': _EVIDENCE_CANDIDATE_HINT}],
     },
 }
-
-#: candidate-only 独立结构提示。这里从完整 locator hint 深拷贝后，只经统一
-#: evidence 槽遍历替换证据对象；新增 evidence-bearing 字段时不会漏接一半。
-_EVIDENCE_CANDIDATE_HINT: dict[str, Any] = {
-    'evidence_candidate_id': 'e000001',
-}
-GLOBAL_CANDIDATE_HINT: dict[str, Any] = copy.deepcopy(GLOBAL_HINT)
-for _path, _owner, _field in iter_global_evidence_slots(GLOBAL_CANDIDATE_HINT):
-    _owner[_field] = dict(_EVIDENCE_CANDIDATE_HINT)
 
 BOUNDARY_HINT_V2: dict[str, Any] = {
     'blueprints': [{

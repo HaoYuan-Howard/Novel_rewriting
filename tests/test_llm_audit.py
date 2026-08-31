@@ -373,26 +373,30 @@ def test_audit_events_survive_in_memory_when_there_is_no_ledger_file():
         transport.calls[0])
 
 
-def test_candidate_patch_audit_is_hash_only_and_idempotent():
-    ledger = CostLedger(run_id='candidate-patch-run')
+def test_role_fate_candidate_patch_audit_separates_field_units_and_table_sha():
+    ledger = CostLedger(run_id='role-fate-patch-run')
     kwargs = dict(
         sid='123', node='stage2.global', purpose='stage2.global',
-        attempt_id='patch-attempt-01',
-        base_candidate_sha256='a' * 64,
-        result_candidate_sha256='b' * 64,
-        changed_path_count=1,
+        attempt_id='patch-attempt-02',
+        base_candidate_sha256='c' * 64,
+        result_candidate_sha256='d' * 64,
+        evidence_table_sha256='e' * 64,
+        changed_field_count=4,
     )
 
-    ledger.note_candidate_patch(**kwargs)
-    ledger.note_candidate_patch(**kwargs)
+    ledger.note_role_fate_candidate_patch(**kwargs)
+    ledger.note_role_fate_candidate_patch(**kwargs)
 
     row, = ledger.audit_events
     assert row['kind'] == 'candidate_patch_applied'
-    assert row['attempt_id'] == 'patch-attempt-01'
-    assert row['changed_path_count'] == 1
-    assert row['base_candidate_sha256'] == 'a' * 64
-    assert row['result_candidate_sha256'] == 'b' * 64
-    assert 'path' not in row and 'locator' not in row
+    assert row['patch_kind'] == 'role_fate'
+    assert row['changed_field_count'] == 4
+    assert row['evidence_table_sha256'] == 'e' * 64
+    assert 'changed_path_count' not in row
+    serialized = json.dumps(row, ensure_ascii=False)
+    assert all(secret not in serialized for secret in (
+        'char_001', 'role_evidence', 'fate_evidence', '正文',
+    ))
 
 
 def test_evidence_locator_rewrite_audit_omits_text_and_binds_artifact_bytes():

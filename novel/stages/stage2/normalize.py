@@ -382,7 +382,7 @@ def _normalize_global_evidence(
 
 def normalize_global(data: dict[str, Any], main_text: list[dict[str, Any]]) \
         -> tuple[dict[str, Any], GlobalNormalizationAccounting]:
-    """把 ``GlobalGroundingResponse`` 的 dict 归一为最终产物字段。"""
+    """把已由编译边界铸成正式 evidence 形状的 dict 归一为最终产物字段。"""
     characters = (((data.get('entities') or {}).get('characters')) or {})
     whole = ''.join(str(section.get('text') or '') for section in main_text)
     chapters = [(int(section.get('chapter_ordinal') or 0), str(section.get('text') or ''))

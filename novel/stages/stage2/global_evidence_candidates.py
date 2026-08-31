@@ -11,6 +11,8 @@
 """
 from __future__ import annotations
 
+import hashlib
+import json
 from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import Any, Mapping, Sequence
@@ -119,6 +121,28 @@ class GlobalEvidenceCandidateTable:
                 text=row.text,
             ))
         return '\n'.join(parts)
+
+    def sha256(self) -> str:
+        """候选表的全宽身份；render、lookup、patch 与恢复只认这一把尺子。
+
+        文本、坐标、章号与 ID 全部参与 canonical JSON。只 hash ``render()`` 会漏掉
+        坐标；只 hash ID 会让同一个 ID 在 MainText 漂移后仍被误认成旧候选。
+        """
+        payload = [
+            {
+                'evidence_candidate_id': row.evidence_candidate_id,
+                'chapter_ordinal': row.chapter_ordinal,
+                'text': row.text,
+                'start': row.start,
+                'end': row.end,
+            }
+            for row in self.rows
+        ]
+        raw = json.dumps(
+            payload, ensure_ascii=False, sort_keys=True,
+            separators=(',', ':'), allow_nan=False,
+        ).encode('utf-8')
+        return hashlib.sha256(raw).hexdigest()
 
     def lookup(self, evidence_candidate_id: str) -> GlobalEvidenceCandidate:
         """按关闭式 ID 取候选；不解析 ID、不猜相邻行。"""

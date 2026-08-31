@@ -423,7 +423,8 @@ def test_new_book_plan_has_null_sid_then_a_derived_sid_check(work):
 def test_prompts_only_expose_the_reading_ordinal():
     """原文章号是 Stage1 人工诊断，不进入任何模型输入。"""
     from novel.core.text import render_book
-    from novel.stages.stage2.extract import _book_text, _chapter_index
+    from novel.stages.stage2.extract import build_global_request
+    from novel.stages.stage2.global_contract import active_contract
 
     main = MainText.model_validate([
         {'chapter_ordinal': i + 1, 'text': f'第{i + 1}段正文。'}
@@ -431,7 +432,9 @@ def test_prompts_only_expose_the_reading_ordinal():
     ])
     raw = main.model_dump(mode='json')
     body, index = render_book(main)
-    rendered = '\n'.join((body, index, _chapter_index(raw), _book_text(raw)))
+    system, user, _candidates = build_global_request(
+        '测试书', raw, active_contract(), agent_envelope=True)
+    rendered = '\n'.join((body, index, system, user))
     assert '原文标号' not in rendered and '原文标记' not in rendered
     assert all(f'阅读序第{i}章' in rendered for i in range(1, 4))
 

@@ -22,7 +22,7 @@ from contracts.schema.evaluation import GlobalReview
 from contracts.schema.stage1 import MainText
 from contracts.schema.stage2 import (
     ChapterBlueprints, ChapterBlueprintsResponseV31,
-    GlobalEvidencePatchTurn, GlobalGrounding, GlobalGroundingResponse,
+    GlobalGrounding, GlobalGroundingCandidateResponse,
 )
 from novel import prov
 from novel.errors import (
@@ -47,6 +47,9 @@ from novel.stages.stage2.compile_v2 import (
 from contracts.invariants import HINGE_FAILURE_ROUTE
 from novel.stages.stage2.normalize import (
     EvidenceLocatorCorrection, normalize_global, normalize_verbatim,
+)
+from novel.stages.stage2.global_evidence_candidates import (
+    GlobalEvidenceCandidateTable,
 )
 from novel.stages.stage2.paragraphs import paragraph_spans
 from novel.store import ArtifactStore
@@ -210,7 +213,28 @@ def test_stage2_uses_one_concurrent_call_per_chapter_up_to_32(chapters, expected
 
 
 def _response_global() -> dict:
-    """正式 v4 fixture → 模型响应形；自由事实证据只交章号 + 短 locator。"""
+    """正式 v4 fixture → 唯一现役 provider candidate-ID 响应形。"""
+    data = copy.deepcopy(global_grounding())
+    data.pop('_provenance')
+    table = GlobalEvidenceCandidateTable.build(main_text())
+    for claim_path, owner, field in iter_global_evidence_slots(data):
+        evidence = owner.get(field)
+        assert isinstance(evidence, dict) and isinstance(evidence.get('source'), dict)
+        matches = [
+            row for row in table.rows
+            if row.chapter_ordinal == evidence['chapter_ordinal']
+            and row.text == evidence['source']['text']
+        ]
+        assert len(matches) == 1, claim_path
+        owner[field] = {
+            'evidence_candidate_id': matches[0].evidence_candidate_id,
+        }
+    return GlobalGroundingCandidateResponse.model_validate(data).model_dump(
+        by_alias=True, mode='json')
+
+
+def _legacy_locator_response_global() -> dict:
+    """人工/旧 ``.INVALID`` 恢复面用 locator；绝不交给 provider。"""
     data = copy.deepcopy(global_grounding())
     data.pop('_provenance')
     for _path, owner, field in iter_global_evidence_slots(data):
@@ -223,9 +247,9 @@ def _response_global() -> dict:
     return data
 
 
-def _response_global_with_every_evidence_kind() -> dict:
-    """补一条非空 fate，使 R-2.20 的九类槽都能逐路径跑同一恢复尺子。"""
-    data = _response_global()
+def _legacy_locator_response_with_every_evidence_kind() -> dict:
+    """补一条非空 fate，使人工恢复的全部证据槽共用同一把尺子。"""
+    data = _legacy_locator_response_global()
     character = data['entities']['characters']['char_001']
     character['fate'] = '最终仍独自承担家中账目'
     character['fate_evidence'] = {
@@ -237,14 +261,14 @@ def _response_global_with_every_evidence_kind() -> dict:
 
 _ALL_GLOBAL_EVIDENCE_PATHS = tuple(
     path for path, _owner, _field in iter_global_evidence_slots(
-        _response_global_with_every_evidence_kind()))
+        _legacy_locator_response_with_every_evidence_kind()))
 
 
 @pytest.mark.parametrize('claim_path', _ALL_GLOBAL_EVIDENCE_PATHS)
 def test_cross_chapter_unique_recovery_covers_every_global_evidence_slot(
     claim_path: str,
 ):
-    response = _response_global_with_every_evidence_kind()
+    response = _legacy_locator_response_with_every_evidence_kind()
     assert len(_ALL_GLOBAL_EVIDENCE_PATHS) == 11
     slots = {
         path: (owner, field)
@@ -307,7 +331,7 @@ def test_global_response_and_formal_artifact_reject_duplicate_stable_ids(
             copy.deepcopy(formal['entities']['relations'][0]))
 
     with pytest.raises(ValidationError, match=message):
-        GlobalGroundingResponse.model_validate(response)
+        GlobalGroundingCandidateResponse.model_validate(response)
     with pytest.raises(ValidationError, match=message):
         GlobalGrounding.model_validate(formal)
 
@@ -332,7 +356,7 @@ def test_global_response_rejects_order_dependent_timelines_and_lossy_values():
     cases.append(blank_group)
 
     string_chapter = _response_global()
-    string_chapter['canon']['secrets'][0]['fact_evidence']['chapter_ordinal'] = '1'
+    string_chapter['canon']['secrets'][0]['first_reveal_chapter'] = '1'
     cases.append(string_chapter)
 
     bool_chapter = _response_global()
@@ -348,7 +372,7 @@ def test_global_response_rejects_order_dependent_timelines_and_lossy_values():
 
     for payload in cases:
         with pytest.raises(ValidationError):
-            GlobalGroundingResponse.model_validate(payload)
+            GlobalGroundingCandidateResponse.model_validate(payload)
 
 
 @pytest.mark.parametrize(
@@ -364,7 +388,7 @@ def test_global_evidence_locator_prefers_named_chapter_then_global_unique(
     failure_fragment: str | None, expected_chapter: int,
 ):
     """原章优先；合法错章仅在全书唯一时确定性纠正。"""
-    response = _response_global()
+    response = _legacy_locator_response_global()
     secret = response['canon']['secrets'][0]
     secret['fact_evidence'] = {'chapter_ordinal': chapter, 'locator': locator}
 
@@ -390,50 +414,6 @@ def test_global_evidence_locator_prefers_named_chapter_then_global_unique(
         assert path == 'canon.secrets.secret_01.fact'
         assert (failed_chapter, failed_locator) == (chapter, locator)
         assert failure_fragment in reason
-
-
-@pytest.mark.parametrize('land_invalid', [False, True])
-def test_cross_chapter_locator_audit_binds_the_landed_formal_or_invalid_bytes(
-    tmp_path, land_invalid: bool,
-):
-    book = tmp_path / ('跨章审计问题稿_121' if land_invalid else '跨章审计正式稿_120')
-    book.mkdir()
-    ctx = _ctx(book, 'stage2.global')
-    store = ArtifactStore(ctx)
-    store.write(extract.MAIN_TEXT, MainText.model_validate(main_text()))
-    response = _response_global()
-    evidence = response['entities']['relations'][0]['predicate_evidence']
-    evidence['chapter_ordinal'] = 1
-    locator = evidence['locator']
-    if land_invalid:
-        response['entities']['characters']['char_002']['canonical'] = \
-            response['entities']['characters']['char_001']['canonical']
-    client, _transport = _client(
-        ctx, lambda _req, _index: _ok(response))
-
-    if land_invalid:
-        with pytest.raises(GateBlocked, match='canonical_unique'):
-            extract.run_global(ctx, client)
-        rel = extract._GLOBAL_INVALID
-    else:
-        artifact = extract.run_global(ctx, client)
-        assert artifact.entities.relations[0].predicate_evidence.chapter_ordinal == 2
-        rel = extract.GLOBAL_REL
-
-    event, = [row for row in ctx.ledger.audit_events
-              if row['kind'] == 'evidence_locator_rewrite']
-    assert event['run_id'] == ctx.run_id
-    assert event['sid'] == ctx.sid
-    assert event['node'] == event['purpose'] == ctx.node
-    assert event['claim_path'] == 'entities.relations.rel_01.predicate'
-    assert (event['original_chapter_ordinal'],
-            event['resolved_chapter_ordinal']) == (1, 2)
-    assert event['match_mode'] == 'exact'
-    assert event['artifact'] == rel
-    assert event['artifact_sha256'] == store.full_sha256_or_none(rel)
-    serialized = json.dumps(event, ensure_ascii=False)
-    assert locator not in serialized
-    assert all(key not in event for key in ('locator', 'source', 'text'))
 
 
 def test_existing_invalid_uses_immutable_failure_ledger_for_zero_llm_revalidate(
@@ -484,6 +464,8 @@ def test_existing_invalid_uses_immutable_failure_ledger_for_zero_llm_revalidate(
     assert next(row for row in report.rules
                 if row.rule == 'global_evidence_unlocated').status == 'ok'
     assert len(transport.calls) == 1
+    assert recovery_ctx.ledger.usage() is None, \
+        '旧 INVALID locator 恢复必须保持本 run 0 wire'
     assert not invalid_path.exists()
     landed = ArtifactStore(recovery_ctx).read(
         GlobalGrounding, extract.GLOBAL_REL)
@@ -548,7 +530,7 @@ def test_formal_span_drift_stays_invalid_across_real_revalidate(tmp_path):
 
 def test_punctuation_only_evidence_locator_becomes_a_recoverable_failure():
     """唯一命中的纯标点也不能先造出没有内容字符的 span。"""
-    response = _response_global()
+    response = _legacy_locator_response_global()
     path = 'canon.secrets.secret_01.fact'
     response['canon']['secrets'][0]['fact_evidence'] = {
         'chapter_ordinal': 1, 'locator': '※',
@@ -1436,7 +1418,7 @@ def test_global_candidate_boundary_keeps_intermediate_hard_in_memory():
         prepared = extract.prepare_global_candidate(ctx)
         first = client.ask_json(
             prepared.system, prepared.user,
-            model_cls=GlobalGroundingResponse,
+            model_cls=prepared.response_model,
             purpose=ctx.node, max_tokens=extract.GLOBAL_MAX_TOKENS)
         rejected = extract.evaluate_global_candidate(
             ctx, client, prepared, first)
@@ -1456,7 +1438,7 @@ def test_global_candidate_boundary_keeps_intermediate_hard_in_memory():
         second = client.ask_json(
             prepared.system,
             prepared.user + '\n\n代码反馈：canonical_unique，请交回完整 JSON。',
-            model_cls=GlobalGroundingResponse,
+            model_cls=prepared.response_model,
             purpose=ctx.node, max_tokens=extract.GLOBAL_MAX_TOKENS)
         accepted = extract.evaluate_global_candidate(
             ctx, client, prepared, second)
@@ -1477,7 +1459,7 @@ def test_global_candidate_boundary_keeps_intermediate_hard_in_memory():
         shutil.rmtree(root, ignore_errors=True)
 
 
-def test_global_patch_and_finalize_refuse_a_mutated_raw_candidate_snapshot():
+def test_global_finalize_refuses_a_mutated_raw_candidate_snapshot():
     root = Path(tempfile.mkdtemp())
     book = root / 'global候选变异防线_4521'
     book.mkdir()
@@ -1485,33 +1467,19 @@ def test_global_patch_and_finalize_refuse_a_mutated_raw_candidate_snapshot():
         ctx = _ctx(book, 'stage2.global')
         ArtifactStore(ctx).write(
             extract.MAIN_TEXT, MainText.model_validate(main_text()))
-        bad = _response_global()
-        bad['entities']['relations'][0]['predicate_evidence']['locator'] = \
-            '全书没有这句关系证据'
-        client, _transport = _client(ctx, lambda _req, _index: _ok(bad))
+        candidate = _response_global()
+        client, _transport = _client(
+            ctx, lambda _req, _index: _ok(candidate))
         prepared = extract.prepare_global_candidate(ctx)
         response = client.ask_json(
             prepared.system, prepared.user,
-            model_cls=GlobalGroundingResponse,
+            model_cls=prepared.response_model,
             purpose=ctx.node, max_tokens=extract.GLOBAL_MAX_TOKENS)
         evaluation = extract.evaluate_global_candidate(
             ctx, client, prepared, response)
-        assert evaluation.hard_hits == ('global_evidence_unlocated',)
-        patch = GlobalEvidencePatchTurn.model_validate({
-            'kind': 'evidence_patch',
-            'candidate_sha256': evaluation.response_sha256,
-            'changes': [{
-                'claim_path': 'entities.relations.rel_01.predicate',
-                'evidence': {
-                    'chapter_ordinal': 2,
-                    'locator': '回来时看见母亲在门口等她。',
-                },
-            }],
-        })
+        assert evaluation.passed
 
         evaluation._response.entities.relations[0].predicate = '评估后篡改的关系'
-        with pytest.raises(ValueError, match='raw candidate 已变异'):
-            extract.apply_global_evidence_patch(prepared, evaluation, patch)
         with pytest.raises(ProvenanceRefused, match='raw candidate 已变异'):
             extract.finalize_global_candidate(
                 ctx, client, prepared, evaluation)
@@ -1537,7 +1505,7 @@ def test_global_candidate_terminal_rejection_writes_invalid_only_once():
         prepared = extract.prepare_global_candidate(ctx)
         response = client.ask_json(
             prepared.system, prepared.user,
-            model_cls=GlobalGroundingResponse,
+            model_cls=prepared.response_model,
             purpose=ctx.node, max_tokens=extract.GLOBAL_MAX_TOKENS)
 
         first = extract.evaluate_global_candidate(
@@ -1590,12 +1558,15 @@ def test_non_name_global_hard_still_materializes_projection_and_blueprint_lands(
     store = ArtifactStore(global_ctx)
     store.write(extract.MAIN_TEXT, MainText.model_validate(main_text()))
     bad = _response_global()
-    bad['entities']['relations'][0]['predicate_evidence']['locator'] = \
-        '全书没有这句关系证据'
+    secret = bad['canon']['secrets'][0]
+    secret['setup'] = {
+        'kind': 'foreshadowed',
+        'chapters': [secret['first_reveal_chapter']],
+    }
     global_client, global_transport = _client(
         global_ctx, lambda _req, _index: _ok(bad))
 
-    with pytest.raises(GateBlocked, match='global_evidence_unlocated'):
+    with pytest.raises(GateBlocked, match='secret_setup_order'):
         extract.run_global(global_ctx, global_client)
 
     assert len(global_transport.calls) == 1
@@ -1688,7 +1659,7 @@ def test_global_candidate_refuses_code_drift_before_settle_or_write(monkeypatch)
         prepared = extract.prepare_global_candidate(ctx)
         response = client.ask_json(
             prepared.system, prepared.user,
-            model_cls=GlobalGroundingResponse,
+            model_cls=prepared.response_model,
             purpose=ctx.node, max_tokens=extract.GLOBAL_MAX_TOKENS)
         evaluation = extract.evaluate_global_candidate(
             ctx, client, prepared, response)

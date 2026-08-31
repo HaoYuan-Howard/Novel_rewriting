@@ -48,6 +48,7 @@ SESSION_PROTOCOL_VERSION = 'node-executor/v1'
 # executor 分别使用 per-chapter / per-purpose / per-node；policy 也同时绑定唯一 node，
 # 不能借同名协议把一个节点的 checkpoint 接到另一个节点。
 _RECOVERY_SESSION_ISOLATION = {
+    'stage2-global-v1': 'per-node',
     'stage2-blueprint-v1': 'per-purpose-chapter',
     'stage4-design-v1': 'per-node',
     'stage4-design-v2': 'per-purpose',
@@ -58,6 +59,7 @@ _RECOVERY_SESSION_ISOLATION = {
     'stage7-rename-v1': 'per-node',
 }
 _RECOVERY_POLICY_NODE = {
+    'stage2-global-v1': 'stage2.global',
     'stage2-blueprint-v1': 'stage2.blueprint',
     'stage4-design-v1': 'stage4.design',
     'stage4-design-v2': 'stage4.design',
@@ -509,12 +511,20 @@ class SessionAgentClient:
         rows: Sequence[Mapping[str, object]],
         *,
         purpose: str | None = None,
+        allow_resume: bool = True,
     ) -> bool:
         """登记业务拒稿，并在还有预算时把完整反馈交回同一 session。
 
         ``llm_audit`` 只留规则位置、类型和数量；带证据的完整反馈只进入下一轮
         stdin，不复制进 ``_service``。返回值表示是否真的排入了 resume。
+
+        ``allow_resume=False`` 用于业务状态机已经到达自己的窄修上限、但通用
+        session 尚有剩余轮次的终态拒稿：它仍登记 accepted candidate 的 rejected
+        gate，却绝不把反馈排入下一次 provider 调用。这样局部修订预算不会被通用
+        ``max_turns`` 偷偷放宽。
         """
+        if type(allow_resume) is not bool:
+            raise ValueError('allow_resume 必须显式给 bool')
         if not self._started or self.provider_session_id is None:
             raise RuntimeError('代码反馈只能接到已经成功建立的 provider session')
         if self._pending_feedback is not None:
@@ -540,15 +550,16 @@ class SessionAgentClient:
                           and not isinstance(count, bool) and count >= 0 else 1),
             })
             safe_detail.extend(_typed_audit_rows(row))
+        will_resume = self.can_resume and allow_resume
         self.ctx.ledger.note_gate(
             sid=self.ctx.sid, node=self.ctx.node, purpose=purpose,
             attempt_id=attempt_id, source='wire', decision='rejected',
             gate='validator', reasoning_effort=self.profile.reasoning_effort,
             thinking=None, rung_index=0, sample=self._turn_index,
-            resample=self.can_resume, reject_detail=safe_detail,
+            resample=will_resume, reject_detail=safe_detail,
             request_mode='agent_session_resume', chapter=self.chapter,
         )
-        if not self.can_resume:
+        if not will_resume:
             return False
         self._pending_feedback = json.dumps({
             'kind': 'code_validation_failed',
@@ -565,17 +576,22 @@ class SessionAgentClient:
         rows: Sequence[Mapping[str, object]],
         *,
         purpose: str | None = None,
+        allow_resume: bool = True,
     ) -> bool:
         """把盘上坏 candidate 交给**新** provider session 继续修。
 
         ``restore_checkpoint_acceptance`` 只恢复已经发生的付费事实、完整 stdout
         与累计 turn，不恢复进程内 provider session。这里因此绝不调用旧 session id，
         而是把旧完整 candidate 与代码反馈组成新 session 的首轮 stdin。返回 ``False``
-        表示旧轮次已经耗尽；调用方应走既有 INVALID/人工恢复终态，不能重置预算。
+        表示旧轮次已经耗尽，或业务窄修状态机已经到达自己的终态；调用方应走
+        既有 INVALID/人工恢复终态，不能重置预算。``allow_resume=False`` 与 fresh
+        candidate 的同名参数语义一致：补齐 rejected gate，但绝不启动新 provider session。
 
         旧 candidate 的 rejected gate decision 由本方法按稳定 id 幂等补尾：正常
         路径若已写成则零新增，崩溃若恰好停在 checkpoint 与拒稿账之间则补唯一一行。
         """
+        if type(allow_resume) is not bool:
+            raise ValueError('allow_resume 必须显式给 bool')
         if self._started or self.provider_session_id is not None:
             raise RuntimeError(
                 'checkpoint 拒稿只能在尚未建立 provider session 的恢复 client 排队')
@@ -595,7 +611,7 @@ class SessionAgentClient:
         if not isinstance(accepted_text, str) or not accepted_text:
             raise RuntimeError(
                 f'{purpose}: restored checkpoint 缺完整 accepted stdout，不能续改')
-        can_continue = self._turn_index < self.max_turns
+        can_continue = self._turn_index < self.max_turns and allow_resume
         safe_detail: list[dict[str, object]] = []
         for row in rows:
             findings = row.get('findings')

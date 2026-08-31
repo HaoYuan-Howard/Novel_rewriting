@@ -319,7 +319,13 @@ def test_profiles_and_human_gates_are_explicit_before_semantic_calls(tmp_path):
 
 
 def test_only_global_prompt_is_exact_before_upstream_generation(tmp_path):
-    plan = P.build_plan(_spec(tmp_path), token_counter=lambda _request: 321)
+    requests = []
+
+    def count(request):
+        requests.append(request)
+        return 321
+
+    plan = P.build_plan(_spec(tmp_path), token_counter=count)
     estimates = plan['token_estimate']['stage2_global_exact_before_generation']
     assert set(estimates) == {
         '2019402867061048656', '1668963766200045568'}
@@ -333,6 +339,11 @@ def test_only_global_prompt_is_exact_before_upstream_generation(tmp_path):
         assert estimate['completion_tokens_ladder_upper_bound'] == (
             _FLASH_MODELS * _RUNGS * MAX_SAMPLES_PER_RUNG * 96_000)
         assert estimate['completion_includes_reasoning'] is True
+    assert requests
+    assert all('第一次回答必须使用 full_candidate' in row.system
+               for row in requests)
+    assert all('role_fate_patch' in row.system for row in requests)
+    assert all('evidence_patch' not in row.system for row in requests)
     assert plan['token_estimate']['downstream_prompt_tokens'] == 'unknown'
     assert '不含费率' in plan['token_estimate']['price']
 

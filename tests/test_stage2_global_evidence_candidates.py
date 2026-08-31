@@ -174,7 +174,7 @@ def test_unknown_or_missing_candidate_id_fails_closed_before_formal_output():
         compile_candidate_evidence(locator, table)
 
 
-def test_candidate_agent_schema_only_accepts_a_complete_full_candidate():
+def test_candidate_agent_schema_accepts_full_or_typed_role_fate_patch_only():
     response = _candidate_response()
     GlobalGroundingCandidateResponse.model_validate(response)
 
@@ -199,6 +199,22 @@ def test_candidate_agent_schema_only_accepts_a_complete_full_candidate():
     with pytest.raises(ValueError):
         GlobalCandidateAgentTurnResponse.model_validate(fake_patch)
 
+    role_fate_patch = GlobalCandidateAgentTurnResponse.model_validate({
+        'payload': {
+            'kind': 'role_fate_patch',
+            'candidate_sha256': 'a' * 64,
+            'evidence_table_sha256': 'b' * 64,
+            'changes': [{
+                'char_id': 'char_001',
+                'role': '侯府专属医生',
+                'role_evidence': {'evidence_candidate_id': 'e000001'},
+                'fate': '后来离开侯府独自行医',
+                'fate_evidence': {'evidence_candidate_id': 'e000002'},
+            }],
+        },
+    })
+    assert role_fate_patch.payload.kind == 'role_fate_patch'
+
     schema = json.dumps(
         GlobalCandidateAgentTurnResponse.model_json_schema(),
         ensure_ascii=False,
@@ -206,5 +222,7 @@ def test_candidate_agent_schema_only_accepts_a_complete_full_candidate():
     # 模型 docstring 会如实解释“为什么没有该分支”；守的是 wire 取值与字段，
     # 不是禁止说明文字提到被关闭的旧能力。
     assert '"const": "evidence_patch"' not in schema
-    assert 'candidate_sha256' not in schema
-    assert 'changes' not in schema
+    assert '"const": "role_fate_patch"' in schema
+    assert 'candidate_sha256' in schema
+    assert 'evidence_table_sha256' in schema
+    assert 'changes' in schema

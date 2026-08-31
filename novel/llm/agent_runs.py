@@ -34,7 +34,7 @@ from novel import agent_session_audit, prov
 from novel.agent_capabilities import validate_profile
 from novel.agents.base import render_structured_agent_stdin_bytes
 from novel.agents.session_client import (
-    SESSION_PROTOCOL_VERSION,
+    SESSION_PROTOCOL_VERSION, agent_json_schema,
     validate_agent_session_request_binding,
 )
 from novel.appendlog import process_append_lock
@@ -334,7 +334,7 @@ def _expected_policy(
             'phase': spec.phase,
             'response_model': response_model.__name__,
             'response_schema_sha256': canonical_sha256(
-                response_model.model_json_schema(by_alias=True)),
+                agent_json_schema(response_model)),
             'requested_output_token_ceiling': _positive_ceiling(max_tokens),
             'prefer_content_over_reasoning_salvage': False,
         }],
@@ -390,7 +390,7 @@ def _request_identity(
             render_structured_agent_stdin_bytes(
                 system, user, driver=driver)),
         'response_schema_sha256': canonical_sha256(
-            response_model.model_json_schema(by_alias=True)),
+            agent_json_schema(response_model)),
     }
 
 
@@ -658,7 +658,7 @@ def _validate_acceptance(
     links = acceptance.get('attempt_links')
     recovery = acceptance.get('recovery_from_attempts')
     turn_index = acceptance.get('accepted_turn_index')
-    schema_sha = canonical_sha256(response_model.model_json_schema(by_alias=True))
+    schema_sha = canonical_sha256(agent_json_schema(response_model))
     binding = acceptance.get('accepted_request')
     if (not _is_attempt_id(attempt_id)
             or not is_sha256(request_fingerprint)

@@ -150,7 +150,7 @@ _hard('address_bare_pronoun', '称谓整条不是代词', 'R-2.3', fix=FIX_RESAM
       note='代词相对说话人，收了它下游必然取到「我妈」这种说法，而它不触发任何终态。'
            '⭐ **盘上 1/3 有真反例**：三岁那本 `char_034` 的 `surface` 整条就是「她」。'
            '词表是 `contracts/invariants.py::BARE_PRONOUNS`（我/你/他/她/它/咱），'
-           '**整份插值进 `GLOBAL_SYS`，不许在这里手抄子集**')
+           '**整份插值进 `GLOBAL_CANDIDATE_SYS`，不许在这里手抄子集**')
 
 _hard('address_all_pronoun', '一个角色有据的叫法不得全都含代词', 'R-2.3',
       fix=FIX_RESAMPLE,

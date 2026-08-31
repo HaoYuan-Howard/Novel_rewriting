@@ -130,6 +130,21 @@ python -m novel.cli run stage2.global <sid> `
   `expected_workpack_sha256` 都是不可提交的占位值；后者只能从实际读过的 workpack 顶层手工复制，
   只改状态、重新生成模板代替阅读或换用旧 workpack 都会关闭式拒绝。
 
+当前只读包为 `stage2-global-review-workpack-v3`。v3 把旧 `review_note` 混写的语义拆成两根正交轴：
+`reading_scope=whole_book｜localized` 表示是否必须通读全书，`evidence_mode=`
+`unresolved_formal_evidence｜formal_evidence｜claim_literal｜none` 表示当前展示材料的来源；顶层
+`legend` 是上述两轴闭集的唯一解释。正式 evidence 在场时不再复制一份 `exact_literal_hits`；正式槽
+存在但 `source=None`、缺失或坐标无效时固定为 `unresolved_formal_evidence`，不得回退到 claim 字面
+命中。每行 `effect` 与 `group_key` 都由生产 `review_effect_of` / `review_group_key` 派生；含 blocking
+项的组优先，同优先级按 `GlobalReview.items` 中该组第一次出现的顺序，组内保持原序。
+
+默认 blocking 包中的每条 `role` 另带同人物 `fate_companion`：只复制 fate 的 item/subject/hash、
+当前状态、delivery effect 与正式/未决 evidence，`read_only=true`，不复制 claim-literal 或另造正文
+材料，也不新增、删除或代替 decision item；无唯一同人物 fate 时生成即关闭。legend、两轴、派生
+分组与 companion 全部纳入 workpack SHA。应用口只现算 v3；旧 v2 SHA 必须在正式
+`global_grounding.json`、`global_review.json` 与 `_rounds/` 的首个写动作前拒绝，人工重新生成并实际复核 v3、绑定新 SHA 后
+才可提交。workpack 版本是阅读凭证版本，不改变 `GlobalReviewDecisionSet` v2 或正式 artifact 版本。
+
 `GlobalReviewDecisionSet` 因新增第二种形状由 v1 升为 v2。旧 v1 没有 scope hash 与正文章全集
 阅读声明，不自动迁移；由 `--emit-review-template` 零成本重发当前模板，人工复核后重新提交。
 
