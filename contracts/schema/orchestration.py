@@ -26,7 +26,8 @@ from pydantic import Field, StrictInt, model_validator
 
 from contracts.invariants import (
     AGENT_DELIVERY_OUTCOME,
-    AGENT_EXECUTOR_NODES, AGENT_RUN_EVENT_KINDS,
+    AGENT_EXECUTOR_NODES, AGENT_RUN_CONTROLS, AGENT_RUN_EVENT_KINDS,
+    AGENT_RUN_EVENT_V2_KINDS, AGENT_RUN_STATE,
     ARTIFACT_CONDITION, ARTIFACT_DISPLAY, BEACON_STATES,
     COMMANDER_ADMISSION_EVENT_KINDS, COMMANDER_ADMISSION_TAIL_REPAIR_KINDS,
     AgentDriver, AgentExecutionMode, AgentReasoningEffort,
@@ -34,6 +35,7 @@ from contracts.invariants import (
     OPERATOR_DURATION_SOURCES, OPERATOR_PHASE_EVENT_KINDS, OPERATOR_PHASES,
     OPERATOR_TELEMETRY_SOURCES, OPERATOR_TERMINAL_STATES,
     OVERVIEW_VERDICT, PROGRESS_PHASES, RETIRED_NODES, RETIRED_STAGES, STAGES,
+    EXECUTION_EPOCH_DRAIN_STATES, EXECUTION_EPOCH_REASONS,
 )
 from contracts.schema.base import FrozenModel, StrictModel
 
@@ -48,6 +50,11 @@ OverviewVerdict = Literal[OVERVIEW_VERDICT]
 ProgressPhase = Literal[PROGRESS_PHASES]
 BeaconState = Literal[BEACON_STATES]
 AgentDeliveryState = Literal[AGENT_DELIVERY_OUTCOME]
+AgentRunState = Literal[AGENT_RUN_STATE]
+AgentRunControl = Literal[AGENT_RUN_CONTROLS]
+AgentRunEventV2Kind = Literal[AGENT_RUN_EVENT_V2_KINDS]
+ExecutionEpochReason = Literal[EXECUTION_EPOCH_REASONS]
+ExecutionEpochDrainState = Literal[EXECUTION_EPOCH_DRAIN_STATES]
 OperatorPhaseEventKind = Literal[OPERATOR_PHASE_EVENT_KINDS]
 OperatorPhase = Literal[OPERATOR_PHASES]
 OperatorTelemetrySource = Literal[OPERATOR_TELEMETRY_SOURCES]
@@ -552,6 +559,72 @@ class AgentRunStart(FrozenModel):
     profiles: PipelineAgentProfiles | None = None
 
 
+class RunContractV2(FrozenModel):
+    """整本书 parent run 真正稳定的不可变契约（wire v2）。
+
+    parent 只绑定书、base、两项授权与解析后的 profiles。命令、prompt、代码和
+    skill 都是可滚动 execution epoch 的事实，不能再混进 parent 内容地址。
+
+    ``legacy_*`` 四格只负责解码本功能落地期间已经写出的早期 v2 started 行；
+    它们在序列化和 contract hash 面上均被排除。新 writer 把首次启动审计快照
+    放在同一 started 事件的 ``start`` 兼容投影中，不再污染 parent identity。
+    """
+
+    wire_version: Literal[2] = 2
+    sid: str = Field(min_length=1)
+    base: str = Field(min_length=1)
+    authorized: bool
+    egress_authorized: bool
+    profiles: PipelineAgentProfiles
+
+    legacy_argv: list[str] | None = Field(
+        default=None, alias='argv', exclude=True)
+    legacy_prompt: str | None = Field(
+        default=None, alias='prompt', exclude=True)
+    legacy_code_version: str | None = Field(
+        default=None, alias='code_version', exclude=True)
+    legacy_skill_sha256: str | None = Field(
+        default=None, alias='skill_sha256', exclude=True,
+        pattern=r'^[0-9a-f]{64}$')
+
+    def legacy_start(self) -> AgentRunStart | None:
+        """把早期 v2 内嵌快照投影回旧 UI；新 contract 永远返回 ``None``。"""
+        if self.legacy_argv is None or self.legacy_prompt is None:
+            return None
+        return AgentRunStart(
+            sid=self.sid, base=self.base,
+            argv=self.legacy_argv, prompt=self.legacy_prompt,
+            authorized=self.authorized,
+            egress_authorized=self.egress_authorized,
+            code_version=self.legacy_code_version,
+            skill_sha256=self.legacy_skill_sha256,
+            profiles=self.profiles)
+
+
+class ExecutionEpoch(FrozenModel):
+    """同一 parent run 内一段身份稳定的 Commander 执行窗口。
+
+    一个 epoch 可以包含多个 provider turn；只要代码、skill 与 Commander
+    profile 身份没有变化，Supervisor 就在同一 epoch 内精确续会。发生代码或
+    skill 漂移时关闭旧 epoch、另开新 epoch，但仍保留同一个 parent run。
+    """
+
+    epoch_id: str = Field(pattern=r'^[a-z0-9][a-z0-9_-]{0,127}$')
+    ordinal: int = Field(ge=1)
+    reason: ExecutionEpochReason
+    argv: list[str] = Field(min_length=1)
+    prompt_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    protocol_version: str = Field(min_length=1)
+    cli_version: str | None = Field(default=None, min_length=1)
+    code_version: str = Field(min_length=1)
+    skill_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    session_run_id: str = Field(pattern=r'^[a-z0-9][a-z0-9_-]{0,127}$')
+
+    #: 新 epoch 若沿用既有供应商会话，必须把精确 id 先写进 opened 事件；
+    #: ``None`` 只表示首次创建 provider session，不能解释成“可任选一个会话”。
+    resume_provider_session_id: str | None = Field(default=None, min_length=1)
+
+
 CommanderAdmissionEventKind = Literal[COMMANDER_ADMISSION_EVENT_KINDS]
 
 
@@ -648,7 +721,7 @@ AgentRunEventKind = Literal[AGENT_RUN_EVENT_KINDS]
 
 
 class AgentRunEvent(FrozenModel):
-    """agent 代跑记录的**一行**。append-only JSONL，与 `JobEvent` 同形同理。
+    """agent 代跑记录的一行；同一文件兼容读取 v1 / v2。
 
     ⚠ **为什么不并进 `jobs.jsonl`**：`JobStart` 的后置条件钉死 `node ∈ NODES`，
     而 agent 代跑不是流水线节点——它是「拉起一个会自己跑节点的进程」。
@@ -656,12 +729,30 @@ class AgentRunEvent(FrozenModel):
     全部派生源头，塞假节点的代价是全链说假话。
     """
 
+    wire_version: Literal[1, 2] = 1
     run_id: str = Field(min_length=1)
-    kind: AgentRunEventKind
+    kind: AgentRunEventKind | AgentRunEventV2Kind
     ts: int = Field(ge=0)
 
-    #: `kind == 'started'` 时必填，其余两态必须为 `None`。
+    #: v1 ``started`` 的权威载荷；v2 ``started`` 也携一份不参加 parent hash 的
+    #: 首 epoch 审计/旧 UI 投影，其余事件必须为 ``None``。
     start: AgentRunStart | None = None
+
+    #: v2 ``started`` 唯一载荷；整书不变事实不再和每个 epoch 的代码身份混写。
+    contract: RunContractV2 | None = None
+
+    #: v2 ``epoch_opened`` 唯一身份载荷。
+    epoch: ExecutionEpoch | None = None
+
+    #: v2 ``epoch_closed`` 指向被关闭的 epoch。
+    epoch_id: str | None = Field(
+        default=None, pattern=r'^[a-z0-9][a-z0-9_-]{0,127}$')
+
+    #: epoch 关闭后的 execution admission 结论；unknown 绝不冒充已 drain。
+    drain_state: ExecutionEpochDrainState | None = None
+
+    #: 该 epoch 最后一次成功观测到的供应商 session id，供下一 turn 精确续会。
+    provider_session_id: str | None = Field(default=None, min_length=1)
 
     #: `kind == 'ended'`：agent 进程的退出码。
     exit_code: int | None = None
@@ -674,15 +765,56 @@ class AgentRunEvent(FrozenModel):
 
     @model_validator(mode='after')
     def _payload_matches_the_kind(self) -> AgentRunEvent:
-        """一种事件恰好带一种载荷（与 `JobEvent` 那条逐字同理）。"""
-        want = {'started': 'start', 'ended': 'exit_code',
-                'reconciled': 'note'}[self.kind]
-        carried = {k for k in ('start', 'exit_code', 'note')
-                   if getattr(self, k) is not None}
-        if carried != {want}:
-            raise ValueError(
-                f'{self.kind} 事件该带且只该带 {want!r}，实得 {sorted(carried)}')
-        if self.outcome is not None and self.kind != 'ended':
+        """一种事件只携带自己的载荷；v1 旧行仍逐字兼容。"""
+        if self.wire_version == 1:
+            if self.kind not in AGENT_RUN_EVENT_KINDS:
+                raise ValueError(f'wire v1 不认识 kind={self.kind!r}')
+            want = {'started': 'start', 'ended': 'exit_code',
+                    'reconciled': 'note'}[self.kind]
+            carried = {k for k in ('start', 'exit_code', 'note')
+                       if getattr(self, k) is not None}
+            if carried != {want}:
+                raise ValueError(
+                    f'{self.kind} 事件该带且只该带 {want!r}，实得 {sorted(carried)}')
+            if any(value is not None for value in (
+                    self.contract, self.epoch, self.epoch_id,
+                    self.drain_state, self.provider_session_id)):
+                raise ValueError('wire v1 不得携带 v2 contract/epoch 载荷')
+            if self.outcome is not None and self.kind != 'ended':
+                raise ValueError('只有 ended 事件可以带 outcome')
+            return self
+
+        if self.kind not in AGENT_RUN_EVENT_V2_KINDS:
+            raise ValueError(f'wire v2 不认识 kind={self.kind!r}')
+        if self.kind == 'started':
+            if self.contract is None:
+                raise ValueError('wire v2 started 必须携带 RunContractV2')
+        elif self.contract is not None or self.start is not None:
+            raise ValueError('只有 wire v2 started 可以携带 contract/start 审计投影')
+        if self.kind == 'epoch_opened':
+            if self.epoch is None:
+                raise ValueError('epoch_opened 必须携带 ExecutionEpoch')
+        elif self.epoch is not None:
+            raise ValueError('只有 epoch_opened 可以携带 epoch')
+        if self.kind == 'epoch_closed':
+            if self.epoch_id is None or self.exit_code is None \
+                    or self.drain_state is None:
+                raise ValueError(
+                    'epoch_closed 必须携带 epoch_id/exit_code/drain_state')
+        elif any(value is not None for value in (
+                self.epoch_id, self.drain_state, self.provider_session_id)):
+            raise ValueError('只有 epoch_closed 可以携带 epoch 关闭载荷')
+        if self.kind in ('paused', 'resumed', 'reconciled'):
+            if self.note is None:
+                raise ValueError(f'{self.kind} 必须携带原因 note')
+        elif self.note is not None:
+            raise ValueError(f'{self.kind} 不得携带 note')
+        if self.kind == 'ended':
+            if self.exit_code is None or self.outcome is None:
+                raise ValueError('wire v2 ended 必须携带 exit_code 与 outcome')
+        elif self.kind != 'epoch_closed' and self.exit_code is not None:
+            raise ValueError(f'{self.kind} 不得携带 exit_code')
+        if self.kind != 'ended' and self.outcome is not None:
             raise ValueError('只有 ended 事件可以带 outcome')
         return self
 
@@ -693,6 +825,16 @@ class AgentRunRecord(StrictModel):
     run_id: str = Field(min_length=1)
     start: AgentRunStart
 
+    #: 新运行携带 v2 immutable parent contract；旧账为 ``None``。
+    contract: RunContractV2 | None = None
+
+    #: 已打开过的 execution epoch，按 ordinal 排列；这里只存身份，不伪造关闭结论。
+    epochs: list[ExecutionEpoch] = Field(default_factory=list)
+
+    #: 当前仍开放的 epoch；没有时显式为 ``None``。
+    active_epoch_id: str | None = Field(
+        default=None, pattern=r'^[a-z0-9][a-z0-9_-]{0,127}$')
+
     started: int = Field(ge=0)
 
     #: 必填但可为 `null`——`null` = 还没结束、或不知道，不是 0。
@@ -701,13 +843,16 @@ class AgentRunRecord(StrictModel):
 
     #: `JobState` 那五态。**`unknown` 是真状态，不是缺省值**（`R-11.11` 同构）：
     #: 服务重启后，子进程是死是活我们真的不知道。
-    state: JobState
+    state: AgentRunState
 
     #: `reconciled` 那一条的原因。`None` = 键不在。
     note: str | None = None
 
     #: 与 `state` 正交：前者只讲进程，后者讲盘面是否真正可交付。
     outcome: AgentDeliveryOutcome | None = None
+
+    #: 控制能力由服务端按 wire/liveness 投影；前端不得从相似的状态名猜。
+    allowed_controls: list[AgentRunControl] = Field(default_factory=list)
 
     @model_validator(mode='after')
     def _state_matches_the_events(self) -> AgentRunRecord:
@@ -725,8 +870,30 @@ class AgentRunRecord(StrictModel):
                                  f'实得 {self.state!r}')
         if self.state == 'unknown' and not self.note:
             raise ValueError('state=unknown 必须说出原因（R-11.11）')
+        if self.state == 'running' and self.contract is not None \
+                and self.active_epoch_id is None:
+            raise ValueError('wire v2 running 必须指向 active_epoch_id')
+        if self.state == 'paused' and self.exit_code is not None:
+            raise ValueError('paused 是非终态，不得携带 exit_code')
+        if self.exit_code is not None and self.active_epoch_id is not None:
+            raise ValueError('终态 AgentRun 不得仍指向 active execution epoch')
+        if self.active_epoch_id is not None and not any(
+                epoch.epoch_id == self.active_epoch_id for epoch in self.epochs):
+            raise ValueError('active_epoch_id 必须来自 epochs')
         if self.outcome is not None and self.exit_code is None:
             raise ValueError('没有 ended/exit_code 时不得声称已有交付终验')
+        if self.contract is None:
+            expected_controls = ['stop'] if self.state == 'running' else []
+        elif self.state in ('pending', 'running'):
+            expected_controls = ['pause', 'stop']
+        elif self.state == 'paused':
+            expected_controls = ['resume', 'stop']
+        else:
+            expected_controls = []
+        if self.allowed_controls != expected_controls:
+            raise ValueError(
+                'allowed_controls 必须由 wire 与当前状态唯一投影：'
+                f'expected={expected_controls!r}, got={self.allowed_controls!r}')
         return self
 
 
@@ -822,11 +989,22 @@ class ArtifactState(StrictModel):
     #: 能不能按**当前** schema 加载。
     readable: bool = True
 
+    #: 当前 schema 明确拒读、但由专用只读适配器证明仍精确绑定既有人审主体。
+    #: 这不是迁移或 ``readable=True`` 的别名；正常 producer 仍必须拒绝该载体。
+    legacy_frozen: bool = False
+    legacy_contract: str | None = Field(default=None, min_length=1)
+
     #: 缺席/可用/隔离/读不回。界面只按这个 id 选文案，不再组合 exists/invalid/readable。
     condition: ArtifactCondition
 
     @model_validator(mode='after')
     def _absent_artifacts_carry_nothing(self) -> ArtifactState:
+        if self.legacy_frozen != (self.legacy_contract is not None):
+            raise ValueError(
+                f'{self.rel}: legacy_frozen/legacy_contract 必须同时出现或同时缺席')
+        if self.legacy_frozen and (not self.exists or self.readable):
+            raise ValueError(
+                f'{self.rel}: frozen legacy 必须在盘且仍不可按 current schema 读取')
         if ((self.invalid_freshness is None)
                 != (self.invalid_reason is None)):
             raise ValueError(
@@ -955,8 +1133,11 @@ class StageState(StrictModel):
             return self
         if self.done is None:
             return self          # 逐章类的层：判据在别处（见 `chapters_done`）
-        want = all(a.exists and a.readable and a.freshness != 'stale' and not a.invalid
-                   for a in self.artifacts)
+        want = all(
+            a.exists and (a.readable or a.legacy_frozen)
+            and a.freshness != 'stale' and not a.invalid
+            for a in self.artifacts
+        )
         if self.done != want:
             raise ValueError(
                 f'{self.stage}: done={self.done} 与逐份算出来的 {want} 对不上。'

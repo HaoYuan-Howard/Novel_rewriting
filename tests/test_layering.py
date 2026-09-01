@@ -184,23 +184,30 @@ _JSON_READ_ALLOWED = {
         'append-only 恢复/审计事件流，不进来源账或 ARTIFACTS；'
         '读侧要区分完整坏行与被 kill 截断的尾行'),
     'novel/orchestrator/trash.py': (
-        '回收站条目的 `metadata.json` **不是产物**：`ARTIFACTS` 里没有它、'
-        '不进来源账、不进 `_provenance`，它只回答「这条删除完成了没有」'
-        '（`sweep_incomplete` 的硬中断恢复判据）。'
+        '回收站的 metadata/manifest/receipt **不是产物**：`ARTIFACTS` 里没有它们、'
+        '不进来源账、不进 `_provenance`；它们只证明 book/approval/service run '
+        '是否同一边界完整归档、恢复或过期回收。'
         '⚠ 更要紧的是它**读的时候一定坏得起**——半成品条目正是进程被硬中断留下的，'
         '写到一半的 JSON 必须当成「没有 metadata」继续往下判，'
         '而产物读路的纪律恰恰相反：坏 JSON 一律关闭式失败'),
+    'novel/orchestrator/service_lifecycle.py': (
+        '显式 retention plan 与 lifecycle/run/trash receipt 是 `_service/` 内部维护证据，'
+        '不是小说产物。它们的 JSON 读入只用于 preview token、CAS、commit/delivery '
+        '证明和恢复回执复核；字段、版本或自哈希不闭合就拒绝应用，'
+        '不经 ArtifactStore 读写正式产物'),
     'novel/llm/stage2_runs.py': (
         'Stage2 验证后章节检查点与一次性 repair workpack 不是正式产物或普通缓存；'
-        '它们跟书走、按 run_id 关闭式恢复，读取后仍须重跑当前 schema/validator/scope/HARD。'
+        '它们在 `_service/runs/<sid>/stage2/` 按书、run_id 关闭式恢复，读取后仍须重跑'
+        '当前 schema/validator/scope/HARD；旧书内路径只读兼容。'
         '单独成模块正是为了不给 extract.py/client.py 开裸 IO 豁免'),
     'novel/llm/stage6_runs.py': (
         'Stage6 双判官检查点与 prepared→committed 提交账不是正式产物；'
-        '它们跟书走、按 run_id/role 关闭式恢复，读取后仍须复验'
+        '它们在 `_service/runs/<sid>/stage6/` 按 run_id/role 关闭式恢复，读取后仍须复验'
         '当前 schema/validator/input/profile/session/ledger/audit，正式写盘仍回 semantic producer'),
     'novel/llm/agent_runs.py': (
         '逐节点 executor 的通用 run/checkpoint/commit journal 不是正式产物；'
-        '它只读书内 `_stage*_runs/<run_id>/` 的不可变恢复账，并在恢复时重新闭合'
+        '它只向 `_service/runs/<sid>/stageN/<run_id>/` 追加，并可只读接入旧书内'
+        '`_stage*_runs/<run_id>/` 的不可变恢复账；恢复时重新闭合'
         'profile/prompt/schema/code/ledger/session audit。正式 artifact 仍只能由 stage producer '
         '经 ArtifactStore 读写'),
 }
@@ -269,18 +276,26 @@ _WRITE_ALLOWED = {
         '单独成模块是为了不把 `client.py` 整体加入写盘白名单'),
     'novel/llm/stage2_runs.py': (
         'Stage2 验证后章节检查点与一次性 batch resolution。它不是正式 artifact 或普通缓存，'
-        '只写书内 `_stage2_runs/<run_id>/blueprint/`，正式采纳仍回 producer 的完整编译/HARD/写盘口。'
+        '只写 `_service/runs/<sid>/stage2/<run_id>/blueprint/`，旧书内路径只读；'
+        '正式采纳仍回 producer 的完整编译/HARD/写盘口。'
         '单独成模块是为了不把 extract.py/client.py 整体加入写盘白名单'),
     'novel/llm/stage6_runs.py': (
-        'Stage6 双判官验证后 checkpoint 与 commit journal，只写书内 '
-        '`_stage6_runs/<run_id>/semantic/`；它们不是正式 artifact，'
+        'Stage6 双判官验证后 checkpoint 与 commit journal，只写 '
+        '`_service/runs/<sid>/stage6/<run_id>/semantic/`；它们不是正式 artifact，'
         '正式 semantic 产物、typed readback、双 adoption 与终验仍由 producer 完成。'
         '独立模块让恢复账的裸 IO 豁免不扩散到 semantic.py'),
     'novel/llm/agent_runs.py': (
-        '逐节点 executor 的 provider-neutral 恢复核心只原子写书内 '
-        '`_stage*_runs/<run_id>/run.json`、append-only checkpoint revision 与 commit journal；'
+        '逐节点 executor 的 provider-neutral 恢复核心只原子写 '
+        '`_service/runs/<sid>/stageN/<run_id>/run.json`、append-only checkpoint revision 与 '
+        'commit journal；旧书内 `_stage*_runs` 只读接入；'
         '这些 sidecar 不是正式 artifact，候选仍须回到对应 stage producer 的 schema/HARD/'
         'ArtifactStore/readback/adoption 终验后才能 delivered'),
+    'novel/orchestrator/service_lifecycle.py': (
+        '受管 scratch 生命周期只写 `_service/scratch/<sid>/<session>/`；创建与显式 finish '
+        '均绑定精确 session，TTL sweep 先排除活跃 owner 再有界扫描。其余维护只经'
+        '显式 preview/apply：允许回收已 ended 日志、已闭合 telemetry、完整 v3 trash，'
+        '以及 delivery+commit+当前正式字节可逐项对证的 checkpoint 正文。回执、manifest、'
+        'ledger、admission/beacon/agent/job/session 小账永久保留；四项 TTL 默认关闭'),
     'novel/orchestrator/jobs.py': (
         '作业记录与子进程日志。⚠ **`R-11.3` 已于 2026-08-11（骨架 D）'
         '收窄成「绝不落**产物**盘」**，理由是一句话：'
@@ -313,9 +328,10 @@ _WRITE_ALLOWED = {
         '人工闸门与深度选章只写 Output/_service/approvals/。它们控制作业是否可启动，'
         '不是小说产物，不进 ARTIFACTS / provenance；原子替换防止并发读到半份状态'),
     'novel/orchestrator/trash.py': (
-        '项目删除的 CLI 子进程把整本书目录与审批状态原子移入 Output/_service/trash/。'
-        '它不改写任何产物字节；回收站保留原目录、元数据与恢复路径，父服务进程只负责互斥'
-        '和拉起该子进程'),
+        '项目删除的 CLI 子进程把整本书目录、审批状态与该 sid 的 service run '
+        '同界移入 `Output/_service/trash/`，并先写无正文 manifest。显式 restore 持同书'
+        'writer 与 approval file lock 恢复三面；显式 TTL purge 先写永久 receipt。'
+        '它不改写任何正式产物字节，半恢复和 legacy 条目一律保持关闭式'),
     'novel/orchestrator/agent.py': (
         'agent 代跑的**子进程日志** `Output/_service/logs/agent-*.log` 按字节追加；'
         '它与 jobs.py 写 _service 同一份理由（「子进程被杀」这条记录只有父进程写得出来），'
@@ -487,10 +503,13 @@ _SERVICE_MUTATORS = {
     ('uploads', 'discard_edit_plan'),
     ('approvals', 'approve_gate'),
     ('approvals', 'mark_seen'),
-    ('approvals', 'begin_writing'),
+    ('approvals', 'approve_writing'),
     ('approvals', 'reset'),
     ('approvals', 'backfill_from_disk'),
     ('trash', 'run'),
+    ('trash', 'run_restore'),
+    ('trash', 'reconcile_pending_restores'),
+    ('service_lifecycle', 'apply_retention'),
 }
 
 
@@ -501,13 +520,16 @@ def _service_mutator_hits(path: str) -> list[tuple[str, str]]:
     for node in ast.walk(tree):
         if isinstance(node, ast.ImportFrom) and node.module == 'novel.orchestrator':
             for alias in node.names:
-                if alias.name in ('jobs', 'uploads', 'approvals', 'trash'):
+                if alias.name in (
+                        'jobs', 'uploads', 'approvals', 'trash',
+                        'service_lifecycle'):
                     module_aliases[alias.asname or alias.name] = alias.name
         elif isinstance(node, ast.ImportFrom) and node.module in (
             'novel.orchestrator.jobs',
             'novel.orchestrator.uploads',
             'novel.orchestrator.approvals',
             'novel.orchestrator.trash',
+            'novel.orchestrator.service_lifecycle',
         ):
             module = node.module.rsplit('.', 1)[-1]
             for alias in node.names:
@@ -529,13 +551,16 @@ def _service_mutator_hits(path: str) -> list[tuple[str, str]]:
 
 
 def test_service_mutations_are_narrowly_owned_by_mutation_routes():
-    """API 只准备 `_service` 输入并起作业/回收子进程；视图层保持纯读。新增写入口必须显式改表。"""
+    """API 只写受管 `_service` 状态或起作业/回收恢复子进程；新增入口须显式改表。"""
     hits = {
         _rel(path): _service_mutator_hits(path)
         for path in _api_files() + _view_files()
         if _service_mutator_hits(path)
     }
     expected = {
+        'novel/api/app.py': {
+            ('trash', 'reconcile_pending_restores'),
+        },
         'novel/api/approval_stamp.py': {
             ('approvals', 'approve_gate'),
         },
@@ -548,14 +573,17 @@ def test_service_mutations_are_narrowly_owned_by_mutation_routes():
         },
         'novel/api/routes/approvals.py': {
             ('approvals', 'approve_gate'), ('approvals', 'mark_seen'),
-            ('approvals', 'begin_writing'),
+            ('approvals', 'approve_writing'),
             ('approvals', 'reset'), ('approvals', 'backfill_from_disk'),
         },
         'novel/api/routes/edits.py': {
             ('jobs', 'run'), ('uploads', 'save_draft_edit'),
             ('uploads', 'discard_edit_plan'),
         },
-        'novel/api/routes/maintenance.py': {('trash', 'run')},
+        'novel/api/routes/maintenance.py': {
+            ('trash', 'run'), ('trash', 'run_restore'),
+            ('service_lifecycle', 'apply_retention'),
+        },
     }
     assert set(hits) == set(expected)
     assert {path: set(values) for path, values in hits.items()} == expected

@@ -428,15 +428,25 @@ def test_job_conflict_maps_and_returns_409(monkeypatch):
         '/api/novels/{sid}/stage7/approve',
         '/api/novels/{sid}/stage7/adopt-residual',
         '/api/novels/{sid}/stage2/global-review',
+        # Stage2 v7 关系集合的 0-wire 完整替换与同尺 preview。
+        '/api/novels/{sid}/stage2/relations/edit',
+        '/api/novels/{sid}/stage2/relations/edit/preview',
         # agent 代跑（行为在 `tests/test_api_agent.py`；preview 是 0 成本但仍是 POST）
         '/api/agent/runs',
         '/api/agent/runs/preview',
+        '/api/agent/runs/{run_id}/pause',
+        '/api/agent/runs/{run_id}/resume',
         '/api/agent/runs/{run_id}/stop',
         #: 批量入口：一次交 N 本，超出并发闸的排队。**一次点击可以起 N 份付费进程**，
         #: 所以它和单本入口一样属于要显式登记的那一面。
         '/api/agent/runs/batch',
         # 项目级可恢复删除：真实目录移动发生在零成本 CLI 子进程。
         '/api/novels/{sid}/trash',
+        # service lifecycle：preview 固结 token/CAS，apply 显式确认；恢复仍走 CLI child。
+        '/api/maintenance/retention/preview',
+        '/api/maintenance/retention/apply',
+        '/api/maintenance/trash/restore/preview',
+        '/api/maintenance/trash/restore/apply',
     }
     assert '/api/jobs' in posts
 

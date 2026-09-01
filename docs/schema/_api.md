@@ -113,6 +113,8 @@ Prompt 选型完成后，`prompt_variants`、`prompt_defaults` 与 `--prompt-var
 | `POST /api/queues/:id/items/:index/cancel` | `QueueRun`（只取消尚未开始项） | **复用** `_orchestration.md` |
 | `POST /api/upload?filename=` | `UploadResult`（请求体为原始字节） | 新 |
 | `POST /api/novels/:sid/trash` | `TrashNovelResult`（请求体 `TrashNovelRequest.expected_title`；整本项目移入 `_service/trash/`） | 新 |
+| `POST /api/maintenance/retention/preview` / `apply` | `RetentionPlanView` / `RetentionApplyResultView`；apply 原样回传完整 plan + `confirmed=true` | 新 |
+| `POST /api/maintenance/trash/restore/preview` / `apply` | `TrashRestorePlanView` / `TrashRestoreResultView`；apply 原样回传完整 plan + `confirmed=true`，真实移动走 CLI child | 新 |
 | `GET /api/novels/:sid/stage0/report` | `Stage0Report` | 从 `stage0/revisions.json` 派生的窄视图，见下 |
 | `GET /api/novels/:sid/stage0/segments` | `Stage0Segments` | 新 |
 | `POST /api/novels/:sid/stage0/edit` | `JobRecord`（请求体 `Stage0EditRequest`） | 新 |
@@ -124,21 +126,21 @@ Prompt 选型完成后，`prompt_variants`、`prompt_defaults` 与 `--prompt-var
 | `GET /api/novels/:sid/stage1` | `Stage1View`（一次返回连续分区、原文章号诊断与 `anomaly_count`；全部由当前 clean 复扫） | 新 |
 | `GET /api/novels/:sid/approvals` | `ApprovalDoc` | 新 |
 | `GET /api/novels/:sid/approvals/stage5/template` | `Stage5ClosureTemplate` | 只读、0 成本；按当前整书主体生成带 placeholder/token 的关闭式模板，不代签 |
-| `POST /api/novels/:sid/approvals/stage5` | `ApprovalDoc`（请求体 `Stage5ClosureRequest`） | 原子保存 hash-bound Stage5 整书闭合回执；成功才打开 `gate.s5`，不启动作业 |
+| `POST /api/novels/:sid/approvals/stage5` | `ApprovalDoc`（请求体 `Stage5ClosureRequest`：actor/reason + opaque `review_token` + typed must-appear/group rulings） | 服务端重建当前完整 closure workpack 后原子保存回执；成功才打开 `gate.s5`，不启动作业 |
 | `GET /api/novels/:sid/approvals/design/workpack` | `ApprovalWorkpack` v1（绑定 current A candidate + 完整 design subject；异常优先，只读、0 LLM） | 新；Commander/前端审阅入口，不预填决定 |
 | `GET /api/novels/:sid/approvals/design/template?actor=&reviewer_kind=&review_run_id=&reason=` | `DesignReviewTemplate` | 四项 query 均必填；按当前 A 生成关闭式全书模板，可逐章复用仍完全绑定的历史 accept，但不代签；fresh B infeasible 时发布当前证明并禁止复用旧 accept |
-| `POST /api/novels/:sid/approvals/design` | `ApprovalDoc`（请求体 `DesignReviewRequest`） | 原子保存 Stage4A 全书策略 + 逐章 typed 审阅；不启动修订、B 或任何作业 |
+| `POST /api/novels/:sid/approvals/design` | `ApprovalDoc`（请求体 `DesignReviewRequest`：actor/reviewer/run/reason + opaque `review_token` + 策略/逐章 typed rulings） | 服务端重建当前 Design workpack 与内部全部 SHA 后原子保存；不启动修订、B 或任何作业 |
 | `POST /api/novels/:sid/approvals/gate/:key` | `ApprovalDoc` | 新 |
-| `POST /api/novels/:sid/approvals/seen/:key` | `ApprovalDoc` | `key=read` 必须带 `BlueprintSeenRequest`（`expected_binding_sha256` + 实际读过的 Blueprint/MainText/code/rules 身份）；服务端重建同一完整工作包并复验，漂移零写入，持久 proof 随完整工作包过期；`key=global` 保持空 body |
+| `POST /api/novels/:sid/approvals/seen/:key` | `ApprovalDoc` | `key=read` 必须带 `BlueprintSeenRequest.review_token`；服务端重建同一完整工作包并复验，漂移零写入。raw 阅读事实只绑 review subject/contract，代码/规则漂移时 effective proof 暂不可用，复检通过且审阅身份未变则自动恢复；`key=global` 保持空 body |
 | `GET /api/novels/:sid/approvals/structure/workpack` | `ApprovalWorkpack` v1（绑定 current structure subject；异常优先，只读、0 LLM） | 新；完整披露 B concern / INFO / metric / UNVER，不自动裁决 |
-| `GET /api/novels/:sid/approvals/stage6/workpack` | `Stage6ApprovalWorkpack` v1（绑定 current 候选集、代码/规则/产物主体与 A/B 完整证据；只读、0 LLM） | 新；定稿前唯一双 hash 阅读面，不自动 pick |
-| `GET /api/novels/:sid/approvals/stage7/workpack` | `Stage7ApprovalWorkpack` v1（绑定 current 人物决策面、代码/规则/产物主体与完整替换证据；只读、0 LLM） | 新；定稿前唯一双 hash 阅读面，不自动批准 |
-| `POST /api/novels/:sid/approvals/structure` | `ApprovalDoc`（请求体 `StructureApprovalRequest`：完整结构 subject SHA-256、actor、总理由与恰好覆盖全书的逐章 `accept / request_replan`） | 新；typed Stage4 结构裁决，提交本身不启动作业 |
-| `POST /api/novels/:sid/approvals/writing` | `ApprovalDoc`（请求体可省略：空 body 保留旧 UI 的 `begin_writing`；非空必须是 `WritingApprovalRequest` 的 actor、reason 与当前完整 subject SHA-256） | typed 分支只写审批账、不启动作业；Commander 使用 CLI façade，不走空 body 兼容口 |
+| `GET /api/novels/:sid/approvals/stage6/workpack` | `Stage6ApprovalWorkpack` v3（绑定 current review identity、opaque validation seal 与 A/B 完整证据；只读、0 LLM；不输出 code/rules 原料） | 定稿前唯一 `s6r3_` opaque-token 阅读面，不自动 pick；旧 v2 包只读 |
+| `GET /api/novels/:sid/approvals/stage7/workpack` | `Stage7ApprovalWorkpack` v3（绑定 current review identity、opaque validation seal 与完整替换证据；只读、0 LLM；不输出 code/rules 原料） | 定稿前唯一 `s7r3_` opaque-token 阅读面，不自动批准；旧 v2 包只读 |
+| `POST /api/novels/:sid/approvals/structure` | `ApprovalDoc`（请求体 `StructureApprovalRequest`：actor/reason + opaque `review_token` + 恰好覆盖全书的逐章 `accept / request_replan`） | 服务端在同书锁内重建 current structure subject；typed 裁决不启动作业 |
+| `POST /api/novels/:sid/approvals/writing` | `ApprovalDoc`（请求体 `WritingApprovalRequest`：actor/reason + opaque `review_token`） | 服务端重建当前 Stage1/Plan/WriterContext/测量契约主体；不接受空 body 或 caller 自算 subject，不启动作业 |
 | `POST /api/novels/:sid/approvals/reset` | `ApprovalDoc` | 新 |
 | `POST /api/novels/:sid/approvals/backfill` | `ApprovalBackfillResult`（按盘面显式补录，不在 GET 时静默发生） | 新 |
 | `GET /api/novels/:sid/reading/:o` | `ReadingView` | 新 |
-| `GET /api/novels/:sid/stage2/blueprint-review-workpack` | `BlueprintReviewWorkpack` | 绑定 current formal/INVALID Blueprint、MainText、完整 check、代码与规则；异常优先但全章保留，只读、不自动决定 |
+| `GET /api/novels/:sid/stage2/blueprint-review-workpack` | `BlueprintReviewWorkpack` | 绑定 current formal/INVALID Blueprint、MainText、完整可见 check 与审阅契约，另携 validation seal 和 opaque review token；异常优先但全章保留，只读、不自动决定 |
 | `GET /api/novels/:sid/stage2/global` | `GlobalView` | 新 |
 | `GET /api/novels/:sid/stage2/global-review` | `GlobalReviewView`（含当前完整 subject 重算状态与逐项审计） | 新 |
 | `POST /api/novels/:sid/stage2/global-review` | `JobRecord`（请求体 `GlobalReviewDecisionSet` v2：逐项决定，或绑定 source/scope/workpack hash 与正文章全集的 blocking scope + 逐项例外；仅全部 blocking PASS 的 exit 0 可盖 s2） | 新 |
@@ -155,18 +157,20 @@ Prompt 选型完成后，`prompt_variants`、`prompt_defaults` 与 `--prompt-var
 | `POST /api/agent/runs` | `AgentRunRecord`（202；请求体 `AgentRunRequest`） | **复用** `_orchestration.md` |
 | `GET /api/agent/runs?sid=` | `AgentRunList` | 新 |
 | `GET /api/agent/runs/:id/log?offset=N` | `LogChunk`（与作业日志同一形状） | 新 |
-| `POST /api/agent/runs/:id/stop` | `AgentRunRecord`（熄火：terminate 子进程树） | 新 |
+| `POST /api/agent/runs/:id/stop` | `AgentRunRecord`（202） | 只受理永久终止：后台先关 admission gate、terminate 全部 Commander/Executor 子进程树并 drain，闭合后才追加 ended；stop 后不可 resume，HTTP 返回不冒充 drain 已完成 |
+| `POST /api/agent/runs/:id/pause` | `AgentRunRecord`（202） | 只受理暂停：立即停止接纳新节点，后台等待当前 claim/beacon 闭合后才追加 paused；不取消正常付费节点，HTTP 返回不冒充已 paused |
+| `POST /api/agent/runs/:id/resume` | `AgentRunRecord`（202） | 受理后由后台同身份续 current epoch/provider session；代码或 skill 漂移时同 parent run 开新 epoch并免费复检 |
 | `POST /api/novels/:sid/review/:o/edit/preview` | `DraftEditPreview`（请求体 `DraftEditPreviewRequest`） | 同步、只读、0 成本；与正式 apply 共用归一/判据/subject 构造，不写一次性文件、产物或 Review |
 | `POST /api/novels/:sid/review/:o/edit` | `JobRecord`（请求体 `DraftEditRequest`） | 新 |
 | `POST /api/novels/:sid/stage5/trim/:o/retain-pretrim` | `JobRecord`（请求体 `TrimResolutionRequest`；只允许保留原稿） | 新 |
 | `POST /api/novels/:sid/stage5/trim/retain-pretrim-batch` | `JobRecord`（请求体 `BatchTrimResolutionRequest`） | 整批先核每章 audit/chapter 双 SHA，任一漂移则零写入；同一 manifest 中断后可幂等续写剩余章 |
-| `POST /api/novels/:sid/stage6/approve` | `JobRecord`（请求体 `HookApproveRequest`：pick/actor/reason + 当前候选 subject SHA-256 + 刚读 workpack SHA-256） | 新 |
-| `POST /api/novels/:sid/stage7/approve` | `JobRecord`（请求体 `NameMapApproveRequest`：actor/reason + 当前 decision subject SHA-256 + 刚读 workpack SHA-256） | 新 |
+| `POST /api/novels/:sid/stage6/approve` | `JobRecord`（请求体 `HookApproveRequest`：pick/actor/reason + opaque `review_token`） | 新 |
+| `POST /api/novels/:sid/stage7/approve` | `JobRecord`（请求体 `NameMapApproveRequest`：actor/reason + opaque `review_token`） | 新 |
 
 > #### `ApprovalWorkpack` v1 是只读阅读面，不是决定模板
 >
-> 两个端点共用同一外壳：`v=1`、`sid`、`kind=design｜structure`、当前完整
-> `subject_sha256`、设计面必有而结构面必须没有的 `candidate_sha256`、完整有序
+> 两个端点共用现役 v1 外壳：`v=1`、`sid`、`kind=design｜structure`、当前完整
+> `subject_sha256`、封装该 subject 的 `review_token`、设计面必有而结构面必须没有的 `candidate_sha256`、完整有序
 > `chapter_ordinals[]`、`disposition`、可选 `current_decision_sha256`，以及固定六组 `groups[]`。六组顺序恒为
 > `blocking / semantic_attention / disclosure / metric_only / phase_deferred / coverage`；
 > 空组也必须带 `scanned` 分母出线，不能用裁掉空数组暗示「没扫」。
@@ -178,22 +182,28 @@ Prompt 选型完成后，`prompt_variants`、`prompt_defaults` 与 `--prompt-var
 > 不是 argv；INFO、metric、UNVER、skipped 和非 blocking/coverage effect 恒为空。coverage 恰覆盖
 > `chapter_ordinals`，changed 章在前、段内按章号升序；changed 与 exact historical accept reuse
 > 互斥且穷尽。工作包没有 actor/reason/decision 字段，GET 不写审批账、不启动 job，也不替用户签字。
-> `disposition=already_current` 仅在 current typed 决定仍精确绑定同一 candidate/subject、代码、规则与
-> 产物时出现，并必须携 `current_decision_sha256`；否则为 `review_required`。它让 caller 幂等跳过，
-> 不让服务端把不同 actor/reason/typed 声明折成同一决定。
+> Stage4 工作包 disposition 为 `review_required / already_current / suspended`。`suspended` 只属于
+> Design exact frozen-v6：raw all-accept 已绑定当前主体落账，但缺 v7 relation/preflight validation
+> authority，因而不重复审阅、不授权 B、不发布 Structure approval、`s4rr1`、`s4er1` 或 paid/execution
+> token；Stage6/7 的 disposition 仍只有前两态。frozen-v6 的真实 `request_repair` 只在相应章行发布
+> 零 wire `s4er1`，不发布 `s4rr1`。盘上 raw typed 决定不会因前置闸暂时失效被删除；重新闭合且
+> subject/contract 未变时可恢复 `already_current` 并携 `current_decision_sha256`。Design/Structure POST 只回交本 workpack
+> 的 opaque `review_token` 与 typed rulings；Stage4A 完整章 edit 使用独立 `s4er1_…` token。三者都由
+> 服务端现场重建内部 subject/contract/validation 身份，不共享也不要求调用方搬运多枚 SHA。
 
 > #### Stage6/7 定稿 workpack 把“看到的证据”与 approve 乐观锁绑在一起
 >
-> 两种包公共携带 `v/kind/sid/code_version/rules_fingerprint/artifact_subject_sha256/check/
-> workpack_sha256/disposition/current_approval?`。`check` 是完整分母 + 四态计数 + provenance + 全部非 ok
-> 行 + 正常 metric 的 exception-first 投影；没有因紧凑而删除异常。digest 排除 disposition/current
-> approval，因此批准或组装不会自废；代码、规则或业务证据变化一定改 hash。
+> 两种包公共携带 `v/kind/sid/review_identity_sha256/review_contract_version/validation_seal_sha256/
+> review_token/check/disposition/current_approval?`。`check` 是完整分母 + 四态计数 + provenance +
+> 全部非 ok 行 + 正常 metric 的 exception-first 投影；没有因紧凑而删除异常。review identity 排除
+> disposition/current approval 与纯机械身份，批准或组装不会自废；代码/规则变化只滚 validation seal，
+> 业务证据、可见 finding 或审阅契约变化才改变人审适用性。
 >
 > Stage6 另携三条完整候选（正文、subject SHA、mech/findings、semantic 状态、合并 decision、每名 judge
 > 的 verdict/reason/evidence、质量分/名次）与 A/B 原始 `judge_rankings`。Stage7 另携完整
-> `decision_subject_sha256`、surname map、characters/aliases、extra subs、kept 明细、逐旧字面的真实
+> 内部 decision subject、surname map、characters/aliases、extra subs、kept 明细、逐旧字面的真实
 > `replacement_hits`、residual 上下文/baseline、book findings 与 identity。approve 请求必须同时提交
-> 同一份包的 subject SHA 与 workpack SHA；任一漂移关闭式拒绝。`already_current` 必须携仍绑定本包的
+> 同一份包的 opaque `review_token`；服务端重建后任一漂移关闭式拒绝。`already_current` 必须携仍绑定本包的
 > current approval，页面不再显示可重复的默认批准动作。
 
 > #### `Stage0Report` 是窄视图
@@ -282,7 +292,7 @@ Phase 5 后，当前 API 只接受以下 **8 节点 / 13 种 flag-token 组合**
 |---|---|
 | `stage2.global` | `[]` |
 | `stage2.blueprint` | `[]` |
-| `stage4.design` | `[]`、`[--replan]`、`[--repair-decision]` |
+| `stage4.design` | `[]`、`[--review-token]`、`[--replan, --review-token]` |
 | `stage4.plan` | `[]` |
 | `stage5.write` | `[]`、`[--chapters]`、`[--revise]`、`[--revise,--chapters]` |
 | `stage6.hook` | `[]` |
@@ -326,14 +336,16 @@ current writing 授权、Review 状态与旧布局，不存在另一个按臂的
 |---|---|---|
 | `NovelList` | `base` · `novels[]`（`NovelOverview`） | 抓包 `novels.json` 的顶层就是 `{base, novels}`。⚠ **复用 `NovelOverview`，不另造一张轻量清单**——原型 `Web/novels.py` 那张第二清单的代价是 stage5 被迫整个排除在外，于是「有没有陈旧产物」那个徽章不覆盖成稿 |
 | `TrashNovelResult` | `sid` · `title` · `trash_id` · `trash_rel` | `novel/orchestrator/trash.py` 的 CLI 子进程完成同盘移动后返回；`trash_rel` 是可恢复位置，不把“从语料库消失”偷换成“字节已永久销毁” |
+| `RetentionPlanView` | `wire_version` · `generated_at` · `policy` · `examined` · `candidates[]` · `plan_token` | preview 完整冻结策略、扫描分母与每项路径/mtime/size/SHA；apply 不接受前端重拼的候选 |
+| `TrashRestorePlanView` | `wire_version` · `generated_at` · `trash_id` · `sid` · `title` · `original_dirname` · metadata/manifest 三枚 SHA · `plan_token` | book/approval/service run 三面由 manifest 闭合；持锁后再次核 token/CAS，拒绝覆盖 live 位置 |
 | `ApprovalBackfillResult` | `approvals` · `backfilled[]` | `backfilled` 是本次**按正式盘面补录**的 gate id，空数组表示无事可补；界面必须明确这些不是用户逐屏点过的验收记录。该入口不制造 `seen.read/global`，也不因 Stage2 产物齐备越过未审的 s2 |
-| `BlueprintReviewWorkpack / BlueprintSeenRequest` | 工作包：整包 `binding_sha256`、Blueprint/MainText/check/code/rules 身份与全章语义面；请求：`expected_binding_sha256`、`expected_subject_sha256`、`expected_main_text_artifact_sha256`、`expected_code_version`、`expected_rules_fingerprint` | 请求五项全必填。页面展示与提交必须来自同一份 workpack；服务端重建后逐项相等才写 `seen.read`。盘上 proof 绑定完整 binding，Global/联合 check 或其它可见工作包变化均使旧 seen 失效 |
-| `ApprovalDoc` | `v=6` · `sid` · `gate` · `seen` · `writing` · `design_review` · `structure` · `writing_approval` · `closure` · `spawns` | HTTP v6 不等于 `_service/approvals/<sid>.json` 的盘上 v7。公开 gate 没有 s3；`design_review` 是 A 的独立相位，不是 gate：给出当前 candidate/aggregate hash、typed 当前决定、历史与 `unavailable / missing / repair_requested / strategy_replan_requested / accepted / expired`，只有 current `accepted` 才能授权 B。`structure` 是 B 编译 Plan 后的另一张票，另给当前 subject、B `binding_concerns`、typed 当前裁决、历史与 `unavailable / missing / accepted / replan_requested / expired`；`gate.s4=true` 只可能来自这张当前 `accepted`。`writing_approval` 同样给出 available、current subject、typed current decision/history；新 typed writing 决定绑定 Stage1 正文、Stage4 Plan、fresh WriterContext 与测量契约。`closure` 是 Stage5 当前整书工作包、typed 决定与不可擦除历史，`gate.s5=true` 只可能来自 current `closed`。旧盘 v6 只经显式 backfill 收成 v7：仅保留能按现役 proof 对证的 s0～s4、seen 与 typed 历史，清除 s5～s7，不伪造 closure；旧 read proof 不升级成完整 Blueprint 工作包阅读事实，普通 GET 不迁移 |
+| `BlueprintReviewWorkpack / BlueprintSeenRequest` | 工作包：内部 review identity、`stage2-blueprint-review-v4`、opaque validation seal、`bpr3_` review token 与全章语义面（含逐章完整 `narrative_relations`）；请求：`review_token` | 页面展示与提交必须来自同一份 workpack；服务端在同书锁内重建后核 token 才写 raw `seen.read`。公开包不输出 seal 的 `code_version` / `rules_fingerprint` 原料。代码/规则变化只使 effective seen 暂停，免费复检后人实际看到的内容/finding 未变则自动复活；Blueprint/MainText、关系或其它可见 finding 变化才要求重读。旧 `bpr2_` 包只读，不接受新提交 |
+| `ApprovalDoc` | `v=6` · `sid` · `gate` · `seen` · `writing` · `design_review` · `structure` · `writing_approval` · `closure` · `spawns` | HTTP v6 不等于 `_service/approvals/<sid>.json` 的盘上 v7。公开 gate 没有 s3；`design_review` 是 A 的独立相位，不是 gate：给出当前 candidate/aggregate hash、typed 当前决定、历史与 `unavailable / missing / repair_requested / strategy_replan_requested / accepted / suspended / expired`；只有 current `accepted` 才能授权 B，`suspended` 保留当前 raw 决定但不携 action token。`structure` 是 B 编译 Plan 后的另一张票，另给当前 subject、B `binding_concerns`、typed 当前裁决、历史与 `unavailable / missing / accepted / replan_requested / expired`；`gate.s4=true` 只可能来自这张当前 `accepted`。`writing_approval` 同样给出 available、current subject、typed current decision/history；新 typed writing 决定绑定 Stage1 正文、Stage4 Plan、fresh WriterContext 与测量契约。`closure` 是 Stage5 当前整书工作包、typed 决定与不可擦除历史，`gate.s5=true` 只可能来自 current `closed`。旧盘 v6 只经显式 backfill 收成 v7：仅保留能按现役 proof 对证的 s0～s4、seen 与 typed 历史，清除 s5～s7，不伪造 closure；旧 read proof 不升级成完整 Blueprint 工作包阅读事实，普通 GET 不迁移 |
 | `Stage5ClosureView / Workpack` | `state` · `workpack?` · `next_step?` · `current_decision?` · `history[]`；工作包含 Review 身份、`planned/missing`、`chapter_subjects[]`、`.INVALID` / HARD、`unresolved_trim_items[]`、逐项 must-appear、fact/unver 组、披露/已处置计数与 `workpack_sha256` | `state ∈ missing｜review_required｜blocked｜ready｜closed｜expired`，只由服务端重算，页面不得按计数重判。`review_required` 表示没有可接受的 current 最终 Review，不能携 current workpack/decision，且 `next_step` 必须指出重跑；`chapter_subjects[]` 精确覆盖全部当前 canonical 计划章；`unresolved_trim_items[]` 是章号、audit SHA 与正文 SHA 的精确批量提交面，章号投影必须等于 `unresolved_trim_chapters`。决定或正文漂移后旧决定只留 history，不能继续充当 current |
-| `Stage5ClosureTemplate / Request / Decision` | `actor` · `reason` · `workpack_sha256` · `review_sha256` · `must_appear[]` · `group_acks[]`；decision 另有 `decision_sha256/decided_at` | must-appear 逐项绑定章号、evidence key、finding SHA 与 chapter SHA，只接受 `confirmed_present` 或理由非空的 `accepted_exception`；fact landing / 其余 UNVER 按完整 finding-set SHA 与条数整组确认。模板行带 `placeholder=true + template_token`，原样提交关闭式拒绝；正式决定不得保留 placeholder/token，确认不会把 UNVER 改写成 PASS |
+| `Stage5ClosureTemplate / Request / Decision` | Template 是服务端完整 materialized workpack + `review_token`；Request 只有 `actor/reason/review_token/must_appear[]/group_acks[]`；Decision 在 Request 上加 `decision_sha256/decided_at` | must-appear 与 group 的 finding/chapter/review/workpack SHA 只在模板和盘上完整决定中物化；调用方只提交 token 与 typed ruling。服务端展开 current workpack 后要求 ruling 精确覆盖；模板 placeholder/token 不进入 Request，确认不会把 UNVER 改写成 PASS |
 | `BatchTrimResolutionRequest` | `actor` · 共享 `reason` · `items[{output_ordinal,audit_sha256,chapter_sha256,reason}]` | actor/共享理由非空，章号升序去重；单项空理由沿用共享理由。服务端在任何写入前重读并核完整批次，按章幂等落 hash-bound resolution；浏览器只复制当前 closure workpack 的 exact item，不自行计算 SHA |
-| `DesignReviewTemplate / Request` | `actor` · `reviewer_kind` · `review_run_id` · `general_reason` · `candidate_sha256` · `aggregate_subject_sha256` · `binding_infeasibility?` · `repair_capability` · `strategy` · `chapters[]` | 一次提交必须覆盖当前完整策略与升序全章集。策略决定为 `accept / request_replan`；逐章决定为 `accept / request_repair`。repair 章必须给至少一条 `{code, scene_refs[], opaque_aliases[]}` 关闭式约束，accept 章不得夹带约束。GET 中每个未审行带 `placeholder=true + template_token`；显式确认须同时改为 `false + null`，且不能把默认 decision/reason/constraints sentinel 原样提交。`binding_infeasibility` 为 `{candidate_sha256,binding_concerns[],infeasibility_proof[]}`，仅发布当前 fresh B 负结论并进入 aggregate。`repair_capability={repairable,reason_code,chapters[{output_ordinal,committed_rounds,request_repair_available}]}` 由当前候选的 durable split lineage 唯一判定并进入 aggregate；legacy/untracked 或已提交 2 轮的章不得形成 `request_repair`。subject 只公开 opaque alias 的盲真相、候选业务面与服务端现场复算的结构证据，不公开 formal fact/person id；自然语言 reason 只作审计，不进入修订 prompt |
-| `DesignReviewDecision / View` | request 全字段 + `decision_sha256` · `decided_at`；view 另含 state/current hashes/`binding_infeasibility?`/current/history | 历史 accept 只有在全局 basis、策略主体、本章主体且 B 证据面仍逐字相同时才能由 `source_decision_sha256` 复用；仍须对当前整书重新原子提交。全局 basis 或策略变化使全章过期，单章业务变化只使该章过期；fresh B infeasible 使旧决定过期并要求重新逐项审阅，拒绝决定不会自动变成 accept |
+| `DesignReviewTemplate / Request` | Template 是服务端完整 materialized subject + `review_token`；Request 只有 `actor/reviewer_kind/review_run_id/general_reason/review_token/strategy/chapters[]` | 一次提交必须覆盖当前完整策略与升序全章集。策略决定为 `accept / request_replan`；逐章决定为 `accept / request_repair`，关系 repair 使用 typed relation effect。candidate/aggregate/chapter subject、binding infeasibility、repair capability、placeholder 与历史 reuse 只在 Template 展示并由服务端重建，不让 caller 回传。subject 只公开 opaque alias 的盲真相与现场结构证据；自然语言 reason 只作审计，不进入修订 prompt |
+| `DesignReviewDecision / View` | Decision 是服务端 materialized 的完整 candidate/aggregate/chapter subject、review contract、typed rulings、actor/reviewer/run/reason + `decision_sha256/decided_at`；View 另含 state/current hashes/`binding_infeasibility?`/current/history | POST 的 opaque token 只用于找到并复验本次 exact materialized subject，不能删减盘上审计。历史 accept 只有在全局 basis、strategy epoch、本章主体及可见 B 证据仍相同时才可显式复用；拒绝不会自动变 accept |
 | `JobList` | `jobs[]`（`JobRecord`） | 抓包 `jobs.json` 就是 `{"jobs":[]}`——**一个样本都没有**，所以元素形状只能从 `_orchestration.md` 来 |
 | `LogChunk` | `text` · `next_byte` | 按**字节**续读。⚠ 中文一字跨 3 字节，**只在读的一侧解码**（写的一侧按字节追加，见 `_orchestration.md`）。`next_byte` 原样回传给下一次 `?offset=` |
 | `LogStreamEvent` | `text` · `next_byte` · `done` · `state` | SSE 的 `id` 与 `next_byte` 相同；普通 `log` 事件为 `done=false,state=null`，唯一的 `end` 事件为 `done=true,state=ok|landed_red|failed|unknown` 并随即释放连接。断线时浏览器用 `Last-Event-ID` 续读；显式 query offset 与它取较大者，避免刷新倒退 |
@@ -413,7 +425,7 @@ S-08（ctx 不在仍 200，`materials=null`）。
 | 字段 | 类型 | 必填 | 说明 |
 |---|---|---|---|
 | `identity_plan` | 布尔 | 是 | `true` = 本屏是恒等基线。此时计划侧三个 typed goal 的 `intent` / `fact_refs[]` 指向恒等事实，**不是真决策** |
-| `structure_subject_sha256` | SHA-256 或 null | 是 | 正式计划时由**本次读出的同一个 `PlanChapters` 对象**计算，并与 `index[]` / `plan_chapter` 同快照；恒等基线只能为 null。它标识完整 canonical subject，但本 view **不是该 subject 的逐字段序列化**。前端只有在它与 `ApprovalDoc.structure.current_subject_sha256` 完全相同时才可提交结构裁决，避免看 A 行却给 B 主体签字 |
+| `structure_subject_sha256` | SHA-256 或 null | 是 | 正式计划时由**本次读出的同一个 `PlanChapters` 对象**计算，并与 `index[]` / `plan_chapter` 同快照；恒等基线只能为 null。它只供显示与 currentness 对照；正式结构裁决必须从 Structure ApprovalWorkpack 取得 opaque `review_token`，不能拿本 view 的 SHA 自建提交载荷 |
 | `chapters` / `ordinal` | | 是 | `ordinal ∈ chapters`（后置条件） |
 | `index[]` | 数组 | 是 | 章索引；每行带 `chapter_goal`、完整 `structure_decision`、预算与场数，供一次提交时核对全章集合与逐章裁决，不额外发 N 次请求；它**不是**完整 canonical subject 的公开展开。⚠ **没有 `in_band` / `style_hits` / `span_chars` / `hidden`**；判据结论只来自 `/check/stage4`，派生结构向量由服务端 view 现场计算 |
 | `plan_chapter` | 对象 | 是 | 章级三个 typed goal、`retain/reconstruct` 声明、从当前 blueprint 派生的语义契约、改写 brief 与有序 `scenes[]`；`computed_change_kinds` 同样只在 API view 派生，不写回计划。每场只展示 purpose/role/delivery/transition、land/context/turn facts、state refs 与预算 |
@@ -529,8 +541,8 @@ HTTP 进程只写 `_service/`（一次性人工稿）。
 | `POST /api/novels/:sid/stage0/candidate/adopt` / `dismiss` | `Stage0CandidateDecisionRequest`（`candidate_revision_id` + `expected_revision_id` 乐观锁 + actor/reason） | 页面上要决定的是**整版留哪一版**，不是逐个冲突选边——聚合根是 `{原文身份, 正文, 剔除账本, 告警}` 整团（`stage0.md` §2.5），只对正文做 diff3 保证不了整个聚合一致。`adopt` 落一条 `human_adopt` revision 并把审批退回 pending；`dismiss` 当前稿一字不动、候选进 `dismissed[]`（否则同一候选每跑一次机器就复活一次）。⚠ 「采纳后再编辑」不是第三个端点，是 adopt 之后照常 `POST /stage0/edit`。决定按内容寻址保留，崩溃后同一请求幂等重放；只有 `ok/landed_red` 才清理一次性 plan |
 | `POST /api/novels/:sid/review/:o/edit/preview` | `DraftEditPreviewRequest`（完整 `segments[{slot,text}]`）→ `DraftEditPreview` | 只读同步预览；slot 在请求层先唯一，producer 再要求完整覆盖计划 slot 并按计划排序、归一、用当前 `_judge` 全量重判。响应给 `output_ordinal`、归一后的完整 segments、全部 findings、current/introduced/resolved HARD、`current_chapter_sha256`、`preview_subject_sha256` 与 `required_confirmation`。preview subject 精确绑定章号、current canonical 完整文件 SHA、Stage5 规则指纹、归一稿及上述 finding 集；不调用模型、不写上传文件、产物、Review 或人工账 |
 | `POST /api/novels/:sid/review/:o/edit` | `DraftEditRequest`（完整 `segments` + `actor/reason` + `current_chapter_sha256` + `preview_subject_sha256` + `confirmation`） | typed segments 落 `_service/edits/` 一次性 JSON 稿，CLI 以文件名认章；apply 重新走 preview 的唯一纯评估口并核两枚 SHA，同书总锁→逐章跨进程锁内再核 current 文件 SHA。`confirmation` 只能是 `formal｜working_draft` 且必须等于本次预览要求：无新增 HARD 才是 formal；新增一般 HARD 必须明示 working draft；`paragraph_budget_missed` 两态都拒绝。成功稿始终落新的 canonical human 轮、旧轮归档，**不落 `.INVALID`**；一般 HARD 由 stale Review / closure / 下游闸继续阻断。无正文的 `_service/human_actions.jsonl` 先落 prepared，写后读回/report 成功再落 committed；kill 尾窗按 request + result SHA 补账，未换行坏尾先隔离原字节后重建 committed，都不造新轮。每次 apply 不自动追跑 Review，多章连续编辑结束后只跑一次最终全书 Review |
-| `POST /api/novels/:sid/stage6/approve` | `HookApproveRequest`（`pick`、`actor`、`reason`、`subject_sha256`） | **不收文本**；完整 hash 与当前候选乐观绑定，actor 是自报而非认证身份。改字是另一个节点（`stage6.hook --apply-edit`），契约把编辑文件钉死在书目录内，`R-11.3` 禁止服务进程写产物盘。**`stage6/edit` / `stage7/edit` 刻意不在 HTTP**，走 CLI |
-| `POST /api/novels/:sid/stage7/approve` | `NameMapApproveRequest`（`actor`、`reason`、`subject_sha256`） | 一本书只有一份人物表，因此不带候选序号；完整 hash 乐观绑定 `surname_map + characters + extra_subs` 决策面。成功后服务 s7 proof 同时绑定完整 typed 审批凭据，但不绑定 `book_txt` 等派生账，正常 assemble 不会自废批准 |
+| `POST /api/novels/:sid/stage6/approve` | `HookApproveRequest`（`pick`、`actor`、`reason`、opaque `review_token`） | **不收文本**；服务端在同书锁内重建完整候选 workpack 并核 token。改字是另一个节点（`stage6.hook --apply-edit`）；**`stage6/edit` / `stage7/edit` 刻意不在 HTTP**，走 CLI |
+| `POST /api/novels/:sid/stage7/approve` | `NameMapApproveRequest`（`actor`、`reason`、opaque `review_token`） | 一本书只有一份人物表，因此不带候选序号；服务端重建决策面与可见 evidence 后核 token。成功后 s7 proof 绑定完整 typed 审批凭据，但不绑定 `book_txt` 等派生账，正常 assemble 不会自废批准 |
 
 定稿类动作**落了**（退出码 0/1——先写后判：approve 落了，只是报告可能有红行）
 才盖审批章；盖不盖章看「落没落」，红不红由 check 屏呈现，两件事不许混。

@@ -135,6 +135,26 @@ def _book_subjects():
         beats=[b11, b12],
         fact_atoms=[f11, f12],
         causal_edges=[SimpleNamespace(before=f11.fact_id, after=f12.fact_id)],
+        narrative_relations=[
+            SimpleNamespace(
+                kind='story_before', enforcement='hard',
+                before_fact_ref=f11.fact_id, after_fact_ref=f12.fact_id,
+            ),
+            SimpleNamespace(
+                kind='response_to', enforcement='review',
+                stimulus_fact_ref=f11.fact_id, response_fact_ref=f12.fact_id,
+            ),
+            SimpleNamespace(
+                kind='same_scene', enforcement='hard',
+                left_fact_ref=f11.fact_id, right_fact_ref=f12.fact_id,
+            ),
+            SimpleNamespace(
+                kind='observes', enforcement='review',
+                observer_char_id='char_001',
+                observed_fact_ref=f11.fact_id,
+                observation_fact_ref=f12.fact_id,
+            ),
+        ],
         entry_state_refs=[f11.fact_id],
         ending_state_refs=[f12.fact_id],
         narration=[SimpleNamespace(
@@ -149,6 +169,7 @@ def _book_subjects():
         chapter_ordinal=2,
         chapter_function='封闭退路',
         beats=[b21], fact_atoms=[f21], causal_edges=[],
+        narrative_relations=[],
         entry_state_refs=[], ending_state_refs=[f21.fact_id],
         narration=[SimpleNamespace(
             grammatical_person='third', narrator_char_id=None,
@@ -158,7 +179,7 @@ def _book_subjects():
         SimpleNamespace(chapter_ordinal=1, text=text1),
         SimpleNamespace(chapter_ordinal=2, text=text2),
     ])
-    blueprints = SimpleNamespace(blueprints=[bp1, bp2])
+    blueprints = _DumpNamespace(blueprints=[bp1, bp2])
     return main, blueprints, {1: text1, 2: text2}
 
 
@@ -171,11 +192,31 @@ def _namespace(value):
     return value
 
 
+def _plain(value):
+    """把测试只读 namespace 投影成生产 ``model_dump`` 的 JSON 形状。"""
+    if isinstance(value, SimpleNamespace):
+        return {key: _plain(item) for key, item in vars(value).items()}
+    if isinstance(value, list):
+        return [_plain(item) for item in value]
+    return value
+
+
+class _DumpNamespace(SimpleNamespace):
+    """只补替身真实缺少的 Pydantic 读面，不重拼生产身份算法。"""
+
+    def model_dump(self, *, exclude=None, **_kwargs):
+        body = _plain(self)
+        for key in exclude or ():
+            body.pop(key, None)
+        return body
+
+
 class _Store:
     def __init__(self, main, blueprints) -> None:
         self.ctx = SimpleNamespace(
             sid='1234567890123456789', code='test-code', readonly=True,
             node='stage2.blueprint')
+        self.rules_fingerprint = 'rules-fp'
         self.main = main
         self.blueprints = blueprints
         self.main_sha = 'a' * 64
@@ -202,8 +243,9 @@ def _install(monkeypatch, store: _Store, report: CheckReport):
         view.paths, 'resolve_novel_dir',
         lambda _base, _sid: Path('平台_测试书_1234567890123456789'))
     monkeypatch.setattr(view.paths, 'title_of', lambda _novel_dir: '测试书')
-    monkeypatch.setattr(view.prov, 'code_version', lambda: 'test-code')
-    monkeypatch.setattr(view.prov, 'rules_fingerprint', lambda _stage: 'rules-fp')
+    monkeypatch.setattr(view.prov, 'code_version', lambda: store.ctx.code)
+    monkeypatch.setattr(
+        view.prov, 'rules_fingerprint', lambda _stage: store.rules_fingerprint)
     monkeypatch.setattr(view, 'readonly_ctx', lambda *_args: store.ctx)
     monkeypatch.setattr(view, 'ArtifactStore', lambda _ctx: store)
 
@@ -228,11 +270,18 @@ def test_workpack_is_complete_exception_first_and_semantic_not_id_first(
     assert len(calls) == 2, '首尾重算生产 CheckReport 才能拒绝混合快照'
     assert all(ctx.readonly for ctx in calls), '工作包必须只读，不能借复检写盘'
     assert pack.read_only is True and pack.auto_decisions is False
-    assert pack.subject_sha256 == store.blueprint_sha
+    assert pack.review_contract_version == 'stage2-blueprint-review-v4'
+    assert pack.subject_sha256 == view._canonical_sha256(
+        blueprints.model_dump(exclude={'provenance'}))
+    assert pack.review_token == 'bpr3_' + pack.binding_sha256
+    assert len(pack.review_identity_sha256) == 64
+    assert len(pack.validation_seal_sha256) == 64
     assert pack.binding.main_text_artifact_sha256 == store.main_sha
     assert pack.binding.blueprint_artifact_sha256 == store.blueprint_sha
     assert pack.binding.check_report_sha256 == view._canonical_sha256(
         report.model_dump(by_alias=True, mode='json'))
+    assert 'code_version' not in pack.binding.model_dump(mode='json')
+    assert 'rules_fingerprint' not in pack.binding.model_dump(mode='json')
 
     # ch2 有 typed output_ordinal 命中，所以它排在 ch1 前；两章仍一章不少。
     assert [row.chapter_ordinal for row in pack.chapters] == [2, 1]
@@ -243,6 +292,28 @@ def test_workpack_is_complete_exception_first_and_semantic_not_id_first(
             == texts[chapter.chapter_ordinal]
         assert (chapter.coverage.covered_chars + chapter.coverage.loose_chars
                 == chapter.coverage.text_chars)
+    chapter1 = next(row for row in pack.chapters if row.chapter_ordinal == 1)
+    assert [row.model_dump(mode='json') for row in chapter1.narrative_relations] == [
+        {
+            'kind': 'story_before', 'enforcement': 'hard',
+            'before_claim': '甲已在门外', 'after_claim': '甲进城',
+        },
+        {
+            'kind': 'response_to', 'enforcement': 'review',
+            'stimulus_claim': '甲已在门外', 'response_claim': '甲进城',
+        },
+        {
+            'kind': 'same_scene', 'enforcement': 'hard',
+            'left_claim': '甲已在门外', 'right_claim': '甲进城',
+        },
+        {
+            'kind': 'observes', 'enforcement': 'review',
+            'observer_char_id': 'char_001',
+            'observed_claim': '甲已在门外', 'observation_claim': '甲进城',
+        },
+    ]
+    assert 'f01_001' not in chapter1.model_dump_json(), \
+        '人读关系必须直接展开 claim，不能让审阅者回查机械 fact id'
 
     # 非 ok 与 unver 原行全留，正常 metric 原行全留，分母/四态不丢。
     assert [row.rule for row in pack.check.attention] == [
@@ -269,7 +340,60 @@ def test_workpack_is_complete_exception_first_and_semantic_not_id_first(
     assert 'blueprints[].beats[].beat_id' in pack.mechanical_fields_hidden
     unsigned = dict(body)
     unsigned.pop('binding_sha256')
+    unsigned.pop('review_token')
     assert pack.binding_sha256 == view._canonical_sha256(unsigned)
+
+
+def test_code_or_rules_roll_only_validation_seal_and_exact_review_token(
+    monkeypatch,
+) -> None:
+    main, blueprints, _texts = _book_subjects()
+    store = _Store(main, blueprints)
+    _install(monkeypatch, store, _report())
+    before = view.blueprint_review_workpack('ignored', store.ctx.sid)
+
+    store.ctx.code = 'next-code'
+    store.rules_fingerprint = 'next-rules'
+    after = view.blueprint_review_workpack('ignored', store.ctx.sid)
+
+    assert after.subject_sha256 == before.subject_sha256
+    assert after.review_identity_sha256 == before.review_identity_sha256
+    assert after.validation_seal_sha256 != before.validation_seal_sha256
+    assert after.review_token != before.review_token
+
+
+def test_seen_request_refuses_the_legacy_workpack_token() -> None:
+    """旧 bpr2 包可留档阅读，但不能再制造新的 seen.read。"""
+    with pytest.raises(ValueError):
+        BlueprintSeenRequest(review_token='bpr2_' + 'f' * 64)
+
+
+def test_visible_blueprint_content_or_finding_rolls_review_identity(
+    monkeypatch,
+) -> None:
+    main, blueprints, _texts = _book_subjects()
+    store = _Store(main, blueprints)
+    report = _report()
+    _install(monkeypatch, store, report)
+    baseline = view.blueprint_review_workpack('ignored', store.ctx.sid)
+
+    blueprints.blueprints[0].fact_atoms[0].claim = '甲仍在城外等待'
+    content_changed = view.blueprint_review_workpack('ignored', store.ctx.sid)
+    assert content_changed.subject_sha256 != baseline.subject_sha256
+    assert content_changed.review_identity_sha256 != baseline.review_identity_sha256
+
+    blueprints.blueprints[0].fact_atoms[0].claim = '甲已在门外'
+    changed_finding = report.rules[1].findings[0].model_copy(update={
+        'detail': '审阅者可见的新诊断',
+    })
+    changed_rule = report.rules[1].model_copy(update={'findings': [changed_finding]})
+    changed_report = report.model_copy(update={
+        'rules': [report.rules[0], changed_rule, report.rules[2], report.rules[3]],
+    })
+    _install(monkeypatch, store, changed_report)
+    finding_changed = view.blueprint_review_workpack('ignored', store.ctx.sid)
+    assert finding_changed.subject_sha256 == baseline.subject_sha256
+    assert finding_changed.review_identity_sha256 != baseline.review_identity_sha256
 
 
 def test_production_checks_drive_multichapter_anomaly_priority_in_workpack(
@@ -300,7 +424,7 @@ def test_production_checks_drive_multichapter_anomaly_priority_in_workpack(
     ]
 
     main = SimpleNamespace(root=_namespace(main_raw))
-    blueprints = SimpleNamespace(
+    blueprints = _DumpNamespace(
         blueprints=_namespace(blueprint_raw['blueprints']))
     store = _Store(main, blueprints)
     _install(monkeypatch, store, report)
@@ -410,42 +534,36 @@ def test_seen_read_rechecks_the_workpack_subject_before_writing(
     monkeypatch,
 ) -> None:
     sid = '1234567890123456789'
-    blueprint_sha = 'b' * 64
-    main_sha = 'a' * 64
     binding_sha = 'f' * 64
+    review_token = 'bpr3_' + binding_sha
+    review_identity = 'b' * 64
+    validation_seal = 'c' * 64
     record = approvals._fresh_record(sid)
     proof = approvals._ApprovalProof(
         root_clean_sha1='e' * 40,
-        artifacts={
-            STAGE2_CHAPTER_BLUEPRINTS: blueprint_sha,
-            STAGE1_MAIN_TEXT: main_sha,
-        },
+        artifacts={STAGE2_CHAPTER_BLUEPRINTS: review_identity},
         decision_sha256='d' * 64,
     )
     writes = []
     monkeypatch.setattr(
         approvals, 'approval_file_lock', lambda *_args: nullcontext())
-    monkeypatch.setattr(approvals, '_read_current', lambda *_args: record)
+    monkeypatch.setattr(approvals, '_read_state', lambda *_args: (record, record))
     monkeypatch.setattr(
         approvals.paths, 'resolve_novel_dir', lambda *_args: Path('book'))
     workpack = SimpleNamespace(
         binding_sha256=binding_sha,
-        subject_sha256=blueprint_sha,
-        binding=SimpleNamespace(
-            subject_kind='formal',
-            main_text_artifact_sha256=main_sha,
-            code_version='test-code',
-            rules_fingerprint='test-rules',
-        ),
+        review_token=review_token,
+        review_identity_sha256=review_identity,
+        validation_seal_sha256=validation_seal,
+        review_contract_version='stage2-blueprint-review-v4',
+        binding=SimpleNamespace(subject_kind='formal'),
     )
     monkeypatch.setattr(
         view, 'blueprint_review_workpack', lambda *_args: workpack)
     identity = {
-        'binding': binding_sha,
-        'subject': blueprint_sha,
-        'main_text': main_sha,
-        'code': 'test-code',
-        'rules': 'test-rules',
+        'review_token': review_token,
+        'review_identity': review_identity,
+        'validation_seal': validation_seal,
     }
     proof_reader = lambda *_args: (proof, dict(identity))
     monkeypatch.setattr(approvals, '_blueprint_seen_proof', proof_reader)
@@ -453,13 +571,7 @@ def test_seen_read_rechecks_the_workpack_subject_before_writing(
     monkeypatch.setattr(
         approvals, '_write', lambda _base, updated: writes.append(updated) or updated)
 
-    request = BlueprintSeenRequest(
-        expected_binding_sha256=binding_sha,
-        expected_subject_sha256=blueprint_sha,
-        expected_main_text_artifact_sha256=main_sha,
-        expected_code_version='test-code',
-        expected_rules_fingerprint='test-rules',
-    )
+    request = BlueprintSeenRequest(review_token=review_token)
     with pytest.raises(ApprovalRequired, match='必须携带实际读过'):
         approvals.mark_seen('base', sid, 'read')
     assert writes == []
@@ -469,88 +581,67 @@ def test_seen_read_rechecks_the_workpack_subject_before_writing(
     assert updated.seen['read'] is True
     assert len(writes) == 1
 
-    stale = request.model_copy(update={
-        'expected_subject_sha256': 'c' * 64,
-    })
+    stale = request.model_copy(update={'review_token': 'bpr3_' + 'd' * 64})
     with pytest.raises(ApprovalRequired, match='工作包已过期'):
         approvals.mark_seen('base', sid, 'read', blueprint_subject=stale)
     assert len(writes) == 1, '主体漂移时审批账必须零写入'
 
 
-def test_seen_read_persistent_proof_includes_the_full_workpack_binding(
+def test_seen_read_persistent_proof_ignores_validation_epoch_but_not_visible_identity(
     monkeypatch,
 ) -> None:
-    def make_proof(_novel_dir, _rels, decision):
-        return approvals._ApprovalProof(
-            root_clean_sha1='e' * 40,
-            artifacts={
-                STAGE2_CHAPTER_BLUEPRINTS: 'b' * 64,
-                STAGE1_MAIN_TEXT: 'a' * 64,
-            },
-            decision_sha256=approvals._decision_sha256(decision),
-        )
-
-    def pack(binding: str):
+    def pack(
+        token_body: str,
+        *,
+        identity: str = 'b' * 64,
+        contract: str = 'stage2-blueprint-review-v4',
+    ):
         return SimpleNamespace(
-            binding_sha256=binding,
-            subject_sha256='b' * 64,
-            binding=SimpleNamespace(
-                subject_kind='formal',
-                main_text_artifact_sha256='a' * 64,
-                code_version='test-code',
-                rules_fingerprint='test-rules',
-            ),
+            review_token='bpr3_' + token_body,
+            review_identity_sha256=identity,
+            validation_seal_sha256=token_body,
+            review_contract_version=contract,
+            binding=SimpleNamespace(subject_kind='formal'),
         )
 
-    monkeypatch.setattr(approvals, '_make_proof', make_proof)
+    monkeypatch.setattr(approvals, '_root_clean_sha1', lambda _path: 'e' * 40)
 
     first, first_identity = approvals._blueprint_seen_proof(
         Path('book'), pack('c' * 64))
-    changed, changed_identity = approvals._blueprint_seen_proof(
+    revalidated, revalidated_identity = approvals._blueprint_seen_proof(
         Path('book'), pack('d' * 64))
+    visible_changed, _ = approvals._blueprint_seen_proof(
+        Path('book'), pack('e' * 64, identity='a' * 64))
+    legacy_contract, _ = approvals._blueprint_seen_proof(
+        Path('book'), pack(
+            'c' * 64, contract='stage2-blueprint-review-v2'))
 
-    assert first_identity['subject'] == changed_identity['subject']
-    assert first_identity['main_text'] == changed_identity['main_text']
-    assert first_identity['binding'] != changed_identity['binding']
-    assert first != changed, (
-        'Global/联合检查改变可见工作包时，即使 Blueprint/MainText 未变，'
-        '持久 seen.read proof 也必须过期')
+    assert first == revalidated, '只换 validation seal/token 不得撤销人工已读事实'
+    assert first_identity != revalidated_identity, '提交窗口身份仍须精确变化'
+    assert first != visible_changed, '可见内容/finding identity 变化必须使 proof 过期'
+    assert first != legacy_contract, 'v2 没展示关系，旧 seen proof 不得在 v3 自动复活'
 
 
 def test_seen_read_rejects_the_workpack_to_first_proof_race(
     monkeypatch,
 ) -> None:
     sid = '1234567890123456789'
-    request = BlueprintSeenRequest(
-        expected_binding_sha256='f' * 64,
-        expected_subject_sha256='b' * 64,
-        expected_main_text_artifact_sha256='a' * 64,
-        expected_code_version='test-code',
-        expected_rules_fingerprint='test-rules',
-    )
+    request = BlueprintSeenRequest(review_token='bpr3_' + 'f' * 64)
     workpack = SimpleNamespace(
-        binding_sha256=request.expected_binding_sha256,
-        subject_sha256=request.expected_subject_sha256,
-        binding=SimpleNamespace(
-            subject_kind='formal',
-            main_text_artifact_sha256=request.expected_main_text_artifact_sha256,
-            code_version=request.expected_code_version,
-            rules_fingerprint=request.expected_rules_fingerprint,
-        ),
+        review_token=request.review_token,
+        binding=SimpleNamespace(subject_kind='formal'),
     )
     changed_proof = approvals._ApprovalProof(
         root_clean_sha1='e' * 40,
-        artifacts={
-            STAGE2_CHAPTER_BLUEPRINTS: 'c' * 64,
-            STAGE1_MAIN_TEXT: 'a' * 64,
-        },
+        artifacts={STAGE2_CHAPTER_BLUEPRINTS: 'c' * 64},
         decision_sha256='d' * 64,
     )
     writes = []
     monkeypatch.setattr(
         approvals, 'approval_file_lock', lambda *_args: nullcontext())
     monkeypatch.setattr(
-        approvals, '_read_current', lambda *_args: approvals._fresh_record(sid))
+        approvals, '_read_state', lambda *_args: (
+            approvals._fresh_record(sid), approvals._fresh_record(sid)))
     monkeypatch.setattr(
         approvals.paths, 'resolve_novel_dir', lambda *_args: Path('book'))
     monkeypatch.setattr(
@@ -558,11 +649,9 @@ def test_seen_read_rejects_the_workpack_to_first_proof_race(
     monkeypatch.setattr(
         approvals, '_blueprint_seen_proof',
         lambda *_args: (changed_proof, {
-            'binding': 'e' * 64,
-            'subject': 'c' * 64,
-            'main_text': 'a' * 64,
-            'code': 'test-code',
-            'rules': 'test-rules',
+            'review_token': 'bpr3_' + 'e' * 64,
+            'review_identity': 'c' * 64,
+            'validation_seal': 'd' * 64,
         }))
     monkeypatch.setattr(
         approvals, '_write', lambda *_args: writes.append(True))

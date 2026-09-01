@@ -28,6 +28,7 @@ import type {
   Stage5ClosureTemplate,
   Stage6ApprovalWorkpack,
   Stage7ApprovalWorkpack,
+  WritingApprovalRequest,
 } from '@/types/approvals'
 import type { EnumsResponse } from '@/types/enums'
 import type {
@@ -47,6 +48,13 @@ import type {
 import type { Artifact, NovelOverview, NovelsResponse } from '@/types/novels'
 import type { TrashNovelResult } from '@/types/novels'
 import type { RunProgress } from '@/types/run'
+import type {
+  RetentionApplyResult,
+  RetentionPlan,
+  RetentionPolicy,
+  TrashRestorePlan,
+  TrashRestoreResult,
+} from '@/types/maintenance'
 import type {
   CheckReport,
   BlueprintReviewWorkpack,
@@ -492,6 +500,10 @@ export const realApi: Api = {
     get<AgentRunLogChunk>('/agent/runs/' + encodeURIComponent(runId) + '/log?offset=' + offset),
   stopAgentRun: (runId) =>
     post<AgentRunRecord>('/agent/runs/' + encodeURIComponent(runId) + '/stop'),
+  pauseAgentRun: (runId) =>
+    post<AgentRunRecord>('/agent/runs/' + encodeURIComponent(runId) + '/pause'),
+  resumeAgentRun: (runId) =>
+    post<AgentRunRecord>('/agent/runs/' + encodeURIComponent(runId) + '/resume'),
   startAgentBatch: (req) => post<AgentQueueView>('/agent/runs/batch', req),
   getAgentQueue: () => get<AgentQueueView>('/agent/runs/queue'),
 
@@ -528,7 +540,8 @@ export const realApi: Api = {
     post<ApprovalBackfillResult>(n(sid) + '/approvals/backfill'),
   markSeen: (sid, key: SeenKey, request) =>
     post<ApprovalDoc>(n(sid) + '/approvals/seen/' + key, request),
-  startWriting: (sid) => post<ApprovalDoc>(n(sid) + '/approvals/writing'),
+  startWriting: (sid, request: WritingApprovalRequest) =>
+    post<ApprovalDoc>(n(sid) + '/approvals/writing', request),
   resetBook: (sid) => post<ApprovalDoc>(n(sid) + '/approvals/reset'),
 
   previewDraftEdit: (sid, o, req: DraftEditPreviewRequest) =>
@@ -556,6 +569,17 @@ export const realApi: Api = {
   },
   trashNovel: (sid, expectedTitle) =>
     post<TrashNovelResult>(n(sid) + '/trash', { expected_title: expectedTitle }),
+  previewRetention: (policy: RetentionPolicy) =>
+    post<RetentionPlan>('/maintenance/retention/preview', policy),
+  applyRetention: (plan, confirmed) =>
+    post<RetentionApplyResult>('/maintenance/retention/apply', { plan, confirmed }),
+  previewTrashRestore: (trashId, expectedTitle) =>
+    post<TrashRestorePlan>('/maintenance/trash/restore/preview', {
+      trash_id: trashId,
+      expected_title: expectedTitle,
+    }),
+  applyTrashRestore: (plan, confirmed) =>
+    post<TrashRestoreResult>('/maintenance/trash/restore/apply', { plan, confirmed }),
 }
 
 /** 编译期常量：VITE_USE_MOCK 会被 Vite 替换成字面量，于是这个三元能被静态折叠 */

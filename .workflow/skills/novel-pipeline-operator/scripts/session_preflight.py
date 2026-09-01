@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""在任何跑书动作前固化本次会话坐标；只读、0 LLM、JSON stdout。"""
+"""固化跑书会话坐标并管理它的 service scratch；0 LLM、JSON stdout。"""
 from __future__ import annotations
 
 import argparse
 import json
 import sys
 import time
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -15,10 +16,13 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from novel import paths, prov  # noqa: E402
+from novel.errors import NovelError  # noqa: E402
+from novel.orchestrator import service_lifecycle  # noqa: E402
 
 
 def capture(base: str | Path, *, sid: str | None = None,
-            source: str | Path | None = None) -> dict[str, object]:
+            source: str | Path | None = None,
+            session_id: str | None = None) -> dict[str, object]:
     """返回后续 runner、证据收集器与终验共用的起始坐标。"""
     if (sid is None) == (source is None):
         raise ValueError('sid 与 source 必须且只能给一个')
@@ -48,30 +52,53 @@ def capture(base: str | Path, *, sid: str | None = None,
     code = prov.code_version()
     if code == prov.CODE_UNKNOWN:
         raise RuntimeError('当前代码指纹为 unknown，不能开始一条可验收的 run')
+    session = session_id or f'operator-{started_at}-{uuid.uuid4().hex[:12]}'
+    scratch = service_lifecycle.open_scratch_session(
+        base_path, str(sid), session)
     return {
-        'schema': 'novel-operator-session-v1',
+        'schema': 'novel-operator-session-v2',
         'started_at': started_at,
         'started_at_iso': datetime.fromtimestamp(
             started_at, tz=timezone.utc).isoformat(),
         'code_version': code,
         'base': str(base_path), 'sid': sid, 'novel_dir': str(novel_dir),
+        'session_id': session, 'scratch_dir': str(scratch.resolve()),
         'source': source_facts,
     }
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description='只读固化本次跑书的 started_at 与 code_version')
+        description='固化本次跑书坐标并管理精确 session scratch')
     parser.add_argument('--base', required=True)
+    parser.add_argument('--finish-session',
+                        help='精确收尾并清理该 session scratch')
+    parser.add_argument('--session-id',
+                        help='预检时显式指定 session id（默认随机唯一）')
     target = parser.add_mutually_exclusive_group(required=True)
     target.add_argument('--sid')
     target.add_argument('--source')
     args = parser.parse_args(argv)
     try:
-        facts = capture(args.base, sid=args.sid, source=args.source)
-    except (OSError, RuntimeError, ValueError) as exc:
+        if args.finish_session is not None:
+            if args.source is not None or args.sid is None or args.session_id is not None:
+                raise ValueError(
+                    '--finish-session 必须与 --sid 同用，不能与 --source/--session-id 同用')
+            removed = service_lifecycle.finish_scratch_session(
+                args.base, args.sid, args.finish_session)
+            facts = {
+                'schema': 'novel-operator-session-v2',
+                'state': 'finished', 'base': str(Path(args.base).resolve()),
+                'sid': args.sid, 'session_id': args.finish_session,
+                'scratch_removed': removed,
+            }
+        else:
+            facts = capture(
+                args.base, sid=args.sid, source=args.source,
+                session_id=args.session_id)
+    except (NovelError, OSError, RuntimeError, ValueError) as exc:
         print(json.dumps({
-            'schema': 'novel-operator-session-v1', 'state': 'stopped',
+            'schema': 'novel-operator-session-v2', 'state': 'stopped',
             'error': f'{type(exc).__name__}: {exc}',
         }, ensure_ascii=False, indent=2))
         return 1

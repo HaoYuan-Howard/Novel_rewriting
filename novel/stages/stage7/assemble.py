@@ -15,8 +15,9 @@ from contracts.invariants import BOOK_BLOCK_SEP, BOOK_CHAPTER_SEP
 from contracts.schema.report import CheckReport
 from contracts.schema.stage7 import BookTxt, NameMap
 from novel.errors import (
-    ApprovalRequired, BlockingFindingsUnresolved, DeliveryIncomplete, GateBlocked,
-    ProvenanceRefused, UpstreamMissing, UpstreamStale, UpstreamUnproven,
+    ApprovalRequired, ArtifactUnreadable, BlockingFindingsUnresolved,
+    DeliveryIncomplete, GateBlocked, ProvenanceRefused, UpstreamMissing,
+    UpstreamStale, UpstreamUnproven,
 )
 from novel.run import RunContext
 from novel.stages.stage7.rename import (
@@ -75,7 +76,8 @@ def _require_mapping_current(
     if art.approved is None:
         raise ApprovalRequired(
             '人物映射还没定稿',
-            hint='stage7.approve --actor <id> --reason <why> --subject-sha256 <当前决策面>')
+            hint='先读取当前 Stage7 approval workpack，再运行 stage7.approve '
+                 '--actor <id> --reason <why> --review-token <当前工作包 token>')
     freshness = store.freshness(REL)
     # ⚠ **`stale` 与 `unknown` 抛的不是同一条**：前者是一句可复算的断言（哪条边变了），
     #   后者只是「来源账证明不了」。合成一句 `!= fresh`，报告就会替一件算不出来的事
@@ -96,8 +98,8 @@ def _require_mapping_current(
     if art.approved.subject_sha256 != current_subject:
         raise ApprovalRequired(
             '人物映射的人工批准不再绑定当前决策面',
-            hint='刷新人物表后重跑 stage7.approve --actor <id> --reason <why> '
-                 '--subject-sha256 <当前决策面>')
+            hint='先读取当前 Stage7 approval workpack，再运行 stage7.approve '
+                 '--actor <id> --reason <why> --review-token <当前工作包 token>')
     hard = stored_blocking_rules(art)
     if hard:
         raise BlockingFindingsUnresolved(
@@ -148,11 +150,60 @@ def _require_mapping_current(
             hint='刷新 Stage7 approval workpack 后重跑 stage7.approve（0 成本）')
 
 
-def read_current_book(ctx: RunContext) -> str:
+def require_stage2_delivery_approved(ctx: RunContext) -> None:
+    """Stage7 组装/下载共用的 Stage2 总闸，含唯一 frozen-v6 例外。
+
+    默认先走 current-v7 的完整人工 + 联合 HARD 闸。只有它明确因为 canonical
+    Blueprint 的精确 v6→v7 shape break 拒读时，才继续证明历史 A 主体以及
+    EvidenceBinding/Plan/WriterContext 三份下游逐字闭合，并要求盘上本来就有、
+    由同一 exact content proof 自动复活的 s2 人工决定。该路径不迁移、不补关系、
+    不开放任何 producer；其他失败原样抛出。
+    """
+    from novel.stages.stage2 import global_review
+
+    try:
+        global_review.require_approved(ctx)
+        return
+    except ArtifactUnreadable as exc:
+        from novel.stages.stage2.frozen_v6 import (
+            is_exact_frozen_v6_shape_break,
+            require_frozen_v6_delivery_subject,
+        )
+
+        if not is_exact_frozen_v6_shape_break(exc):
+            raise
+
+    store = ArtifactStore(ctx)
+    with ctx.validation_reads():
+        require_frozen_v6_delivery_subject(store)
+
+    # frozen v6 没有 current-v7 人审面，只能恢复旧盘已经存在、且当前 effective
+    # 投影仍能逐项对证的 s2 决定；这里绝不替它新盖章。
+    from novel.orchestrator import approvals
+
+    approval = approvals.get(
+        ctx.novel_dir.parent,
+        ctx.sid,
+        include_spawns=False,
+    )
+    if not approval.gate['s2']:
+        raise ApprovalRequired(
+            '冻结 Stage2 v6 没有可逐项对证并自动复活的既有 s2 人工决定；'
+            '拒绝用兼容证明新造审批',
+            hint='保留旧书与审批原始记录；若 exact subject 已变化，只能在 clean base '
+                 '由 Stage2 v7 producer 重建并重新审阅')
+
+
+def read_current_book(
+    ctx: RunContext, *, allow_frozen_v6: bool = False,
+) -> str:
     """Return the delivery only when every approval/freshness binding is current."""
     # 下载是交付的一部分；已有 txt 不能绕过后来变红/变旧的 Stage2 人工闸。
-    from novel.stages.stage2 import global_review
-    global_review.require_approved(ctx)
+    if allow_frozen_v6:
+        require_stage2_delivery_approved(ctx)
+    else:
+        from novel.stages.stage2 import global_review
+        global_review.require_approved(ctx)
     store = ArtifactStore(ctx)
     if not store.exists(REL):
         raise UpstreamMissing(f'{REL} 不在盘上', hint='先跑 stage7.rename')
@@ -206,19 +257,18 @@ def run_assemble(ctx: RunContext) -> tuple[str, NameMap, CheckReport]:
     ⚠ 「文案未定稿」也属于交付残缺，而**正因为这道闸挡在前面**，
     「成书里没有开篇文案」这一态**结构上不可达** ⇒ `book_txt.has_hook` 已按待决④ 裁掉。
     """
-    from novel.stages.stage2 import global_review
     # Stage2 是全链总闸，必须在任何 Stage7 锁/读之前先失败；否则一个没有
     # novel_dir 的关闭式终态也会被锁包装器误报成进程错误。
-    global_review.require_approved(ctx)
+    require_stage2_delivery_approved(ctx)
     return _run_assemble_owned(ctx)
 
 
 @_commit_owned
 def _run_assemble_owned(ctx: RunContext) -> tuple[str, NameMap, CheckReport]:
     """在 Stage2 已先行放行后，持 Stage7 提交锁完成实际组装。"""
-    # 锁等待期间 Stage2 可能变化；进入提交临界区后再用同一权威闸复核一次。
-    from novel.stages.stage2 import global_review
-    global_review.require_approved(ctx)
+    # 锁等待期间 Stage2/frozen 下游 proof 可能变化；进入提交临界区后再用
+    # 同一权威闸完整复核一次。
+    require_stage2_delivery_approved(ctx)
     store = ArtifactStore(ctx)
     # 组装是交付落盘的最后边界：除了 Stage2/Stage5 产物级闸，这里再守一次
     # Stage5 typed 闭合回执（与 CLI 运行边界同一把尺子），旧文件不充当通行证。

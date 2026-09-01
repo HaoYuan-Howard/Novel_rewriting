@@ -8,12 +8,69 @@ import { renderRoute } from '@/test/render'
 import type {
   ApprovalDoc,
   DesignReviewDecision,
+  DesignReviewRequest,
   DesignReviewTemplate,
 } from '@/types/approvals'
 import { DesignReviewPanel } from './DesignReviewPanel'
 
 const CANDIDATE = 'e'.repeat(64)
 const AGGREGATE = 'd'.repeat(64)
+
+function materializeDecision(
+  request: DesignReviewRequest,
+  template: DesignReviewTemplate,
+  decisionSha: string,
+): DesignReviewDecision {
+  return {
+    ...template,
+    actor: request.actor,
+    reviewer_kind: request.reviewer_kind,
+    review_run_id: request.review_run_id,
+    general_reason: request.general_reason,
+    strategy: {
+      ...template.strategy,
+      placeholder: false,
+      template_token: null,
+      decision: request.strategy.decision,
+      reason: request.strategy.reason,
+      replan_constraints: request.strategy.replan_constraints.map((row) => ({
+        ...row,
+        subject_sha256: template.strategy.subject_sha256,
+      })),
+    },
+    chapters: template.chapters.map((chapter) => {
+      const ruling = request.chapters.find(
+        (row) => row.output_ordinal === chapter.output_ordinal,
+      )!
+      return {
+        ...chapter,
+        placeholder: false,
+        template_token: null,
+        decision: ruling.decision,
+        reason: ruling.reason,
+        constraints: ruling.constraints,
+      }
+    }),
+    decision_sha256: decisionSha,
+    decided_at: '2026-08-28T12:00:00+00:00',
+  }
+}
+
+function historyEntry(decision: DesignReviewDecision) {
+  return {
+    actor: decision.actor,
+    reviewer_kind: decision.reviewer_kind,
+    review_run_id: decision.review_run_id,
+    general_reason: decision.general_reason,
+    review_token: 's4dr1_' + AGGREGATE,
+    strategy_decision: decision.strategy.decision,
+    chapter_decisions: Object.fromEntries(
+      decision.chapters.map((row) => [row.output_ordinal, row.decision]),
+    ),
+    decision_sha256: decision.decision_sha256,
+    decided_at: decision.decided_at,
+  }
+}
 
 function repairCapability({
   repairable = true,
@@ -106,22 +163,24 @@ describe('Stage4A 正式设计审阅', () => {
   it('用同一 human run id 读取关闭式模板，逐项写入真实反馈并显式确认后提交', async () => {
     const { template, approve, doc } = await mount()
     approve.mockImplementation(async (_sid, request) => {
-      const decision: DesignReviewDecision = {
-        ...request,
-        decision_sha256: '9'.repeat(64),
-        decided_at: '2026-08-28T12:00:00+00:00',
-      }
+      const materialized = await mockApi.getDesignReviewTemplate(_sid, {
+        actor: request.actor,
+        reviewer_kind: request.reviewer_kind,
+        review_run_id: request.review_run_id,
+        reason: request.general_reason,
+      })
+      const decision = materializeDecision(request, materialized, '9'.repeat(64))
       return {
         ...doc,
         design_review: {
           state: 'strategy_replan_requested',
-          candidate_sha256: request.candidate_sha256,
-          aggregate_subject_sha256: request.aggregate_subject_sha256,
+          candidate_sha256: materialized.candidate_sha256,
+          aggregate_subject_sha256: materialized.aggregate_subject_sha256,
           current_decision: decision,
-          history: [decision],
-          binding_infeasibility: request.binding_infeasibility,
-          preflight: request.preflight,
-          repair_capability: request.repair_capability,
+          history: [historyEntry(decision)],
+          binding_infeasibility: materialized.binding_infeasibility,
+          preflight: materialized.preflight,
+          repair_capability: materialized.repair_capability,
         },
       }
     })
@@ -174,33 +233,15 @@ describe('Stage4A 正式设计审阅', () => {
       reviewer_kind: 'human',
       review_run_id: query?.review_run_id,
       general_reason: '逐章核对盲证据与结构变化',
-      candidate_sha256: CANDIDATE,
-      aggregate_subject_sha256: AGGREGATE,
-      binding_infeasibility: null,
-      preflight: {
-        status: 'pass',
-        candidate_sha256: CANDIDATE,
-        blueprint_sha256: '6'.repeat(64),
-        review_contract: 'stage4-design-review-v2',
-        code_version: 'mock-code-v1',
-        blocked_owners: [],
-        failures: [],
-        infeasibility: [],
-      },
+      review_token: 's4dr1_' + AGGREGATE,
       strategy: {
-        placeholder: false,
-        template_token: null,
         decision: 'request_replan',
         reason: '策略未能给出可靠的全书重构次序，要求重规划',
-        source_decision_sha256: null,
       },
       chapters: [{
         output_ordinal: 3,
-        placeholder: false,
-        template_token: null,
         decision: 'request_repair',
         reason: '本章入口锚点仍沿用原结构，需要定向返修',
-        source_decision_sha256: null,
         constraints: [{ code: 'entry_anchor', scene_refs: [], opaque_aliases: ['a_' + '1'.repeat(16)] }],
       }],
     })
@@ -209,11 +250,13 @@ describe('Stage4A 正式设计审阅', () => {
   it('逐项接受后仍只呈现服务端 accepted 结论，B 最终计划票保持独立', async () => {
     const { approve, doc } = await mount('expired')
     approve.mockImplementation(async (_sid, request) => {
-      const decision: DesignReviewDecision = {
-        ...request,
-        decision_sha256: '8'.repeat(64),
-        decided_at: '2026-08-28T12:10:00+00:00',
-      }
+      const materialized = await mockApi.getDesignReviewTemplate(_sid, {
+        actor: request.actor,
+        reviewer_kind: request.reviewer_kind,
+        review_run_id: request.review_run_id,
+        reason: request.general_reason,
+      })
+      const decision = materializeDecision(request, materialized, '8'.repeat(64))
       return {
         ...doc,
         spawns: {
@@ -221,13 +264,13 @@ describe('Stage4A 正式设计审阅', () => {
         },
         design_review: {
           state: 'accepted',
-          candidate_sha256: request.candidate_sha256,
-          aggregate_subject_sha256: request.aggregate_subject_sha256,
+          candidate_sha256: materialized.candidate_sha256,
+          aggregate_subject_sha256: materialized.aggregate_subject_sha256,
           current_decision: decision,
-          history: [decision],
-          binding_infeasibility: request.binding_infeasibility,
-          preflight: request.preflight,
-          repair_capability: request.repair_capability,
+          history: [historyEntry(decision)],
+          binding_infeasibility: materialized.binding_infeasibility,
+          preflight: materialized.preflight,
+          repair_capability: materialized.repair_capability,
         },
       }
     })
@@ -243,8 +286,8 @@ describe('Stage4A 正式设计审阅', () => {
     await user.click(screen.getByRole('button', { name: /保存 Stage4A 正式审阅/ }))
     await waitFor(() => expect(approve).toHaveBeenCalledTimes(1))
     expect(approve.mock.calls[0]?.[1]).toMatchObject({
-      strategy: { placeholder: false, template_token: null, decision: 'accept' },
-      chapters: [{ placeholder: false, template_token: null, decision: 'accept', constraints: [] }],
+      strategy: { decision: 'accept' },
+      chapters: [{ decision: 'accept', constraints: [] }],
     })
     expect(await screen.findByText(/服务端判定：当前 A 已接受，可进入 Stage4B/)).toBeVisible()
     expect(screen.getByText(/最终计划仍须独立审批/)).toBeVisible()
@@ -281,23 +324,22 @@ describe('Stage4A 正式设计审阅', () => {
       })),
     }
     template.mockResolvedValue(reused)
-    approve.mockImplementation(async (_sid, request) => ({
-      ...doc,
-      design_review: {
-        state: 'accepted',
-        candidate_sha256: request.candidate_sha256,
-        aggregate_subject_sha256: request.aggregate_subject_sha256,
-        current_decision: {
-          ...request,
-          decision_sha256: '3'.repeat(64),
-          decided_at: '2026-08-28T12:20:00+00:00',
+    approve.mockImplementation(async (_sid, request) => {
+      const decision = materializeDecision(request, reused, '3'.repeat(64))
+      return {
+        ...doc,
+        design_review: {
+          state: 'accepted',
+          candidate_sha256: reused.candidate_sha256,
+          aggregate_subject_sha256: reused.aggregate_subject_sha256,
+          current_decision: decision,
+          history: [historyEntry(decision)],
+          binding_infeasibility: reused.binding_infeasibility,
+          preflight: reused.preflight,
+          repair_capability: reused.repair_capability,
         },
-        history: [],
-        binding_infeasibility: request.binding_infeasibility,
-        preflight: request.preflight,
-        repair_capability: request.repair_capability,
-      },
-    }))
+      }
+    })
 
     const user = await startReview()
     expect(screen.getByLabelText('Stage4A 整书策略已核对')).toBeChecked()
@@ -316,14 +358,10 @@ describe('Stage4A 正式设计审阅', () => {
     await waitFor(() => expect(approve).toHaveBeenCalledTimes(1))
     expect(approve.mock.calls[0]?.[1]).toMatchObject({
       strategy: {
-        placeholder: false,
-        template_token: null,
-        source_decision_sha256: null,
+        decision: 'accept',
       },
       chapters: [{
-        placeholder: false,
-        template_token: null,
-        source_decision_sha256: null,
+        decision: 'accept',
       }],
     })
   })
@@ -363,23 +401,19 @@ describe('Stage4A 正式设计审阅', () => {
           headers: { 'Content-Type': 'application/json' },
         })
       }
-      const request = JSON.parse(String(init?.body)) as DesignReviewTemplate
-      const decision: DesignReviewDecision = {
-        ...request,
-        decision_sha256: '2'.repeat(64),
-        decided_at: '2026-08-28T12:30:00+00:00',
-      }
+      const request = JSON.parse(String(init?.body)) as DesignReviewRequest
+      const decision = materializeDecision(request, seed, '2'.repeat(64))
       return new Response(JSON.stringify({
         ...doc,
         design_review: {
           state: 'strategy_replan_requested',
-          candidate_sha256: request.candidate_sha256,
-          aggregate_subject_sha256: request.aggregate_subject_sha256,
+          candidate_sha256: seed.candidate_sha256,
+          aggregate_subject_sha256: seed.aggregate_subject_sha256,
           current_decision: decision,
-          history: [decision],
-          binding_infeasibility: request.binding_infeasibility,
-          preflight: request.preflight,
-          repair_capability: request.repair_capability,
+          history: [historyEntry(decision)],
+          binding_infeasibility: seed.binding_infeasibility,
+          preflight: seed.preflight,
+          repair_capability: seed.repair_capability,
         },
       }), { status: 200, headers: { 'Content-Type': 'application/json' } })
     })
@@ -400,8 +434,9 @@ describe('Stage4A 正式设计审阅', () => {
     const [postUrl, postInit] = send.mock.calls.find(([, init]) => init?.method === 'POST')!
     expect(postUrl).toBe('/api/novels/book-1/approvals/design')
     expect(JSON.parse(String(postInit?.body))).toMatchObject({
-      strategy: { placeholder: false, template_token: null },
-      chapters: [{ placeholder: false, template_token: null }],
+      review_token: 's4dr1_' + AGGREGATE,
+      strategy: { decision: 'request_replan' },
+      chapters: [{ decision: 'request_repair' }],
     })
   })
 
@@ -498,6 +533,28 @@ describe('Stage4A 正式设计审阅', () => {
       '同一当前 Stage4A 工作包已有正式接受决定，无需重复整读',
     )
     expect(screen.getByText(/默认跳过重复人工整读/)).toBeVisible()
+  })
+
+  it('frozen-v6 raw 决定 suspended 时不重复审阅也不呈现 B 动作', async () => {
+    const pack = await mockApi.getDesignApprovalWorkpack('book-1')
+    vi.spyOn(api, 'getDesignApprovalWorkpack').mockResolvedValue({
+      ...pack,
+      disposition: 'suspended',
+      current_decision_sha256: '7'.repeat(64),
+    })
+    const doc = approval('suspended')
+    doc.spawns = {}
+    vi.spyOn(api, 'getApprovals').mockResolvedValue(doc)
+    await mount('suspended')
+
+    const start = await screen.findByRole('button', { name: '读取关闭式审阅模板' })
+    expect(start).toBeDisabled()
+    expect(start.parentElement).toHaveAttribute(
+      'title',
+      '当前 raw Stage4A 决定已记录；缺 v7 relation/preflight 验证权威，无需重复审阅且不能授权 Stage4B',
+    )
+    expect(screen.getByText(/缺验证权威，暂停下游授权/)).toBeVisible()
+    expect(screen.queryByRole('button', { name: /Stage4B/ })).not.toBeInTheDocument()
   })
 
   it('模板已读后后台刷新工作包时禁用最终保存，刷新失败后也不复开', async () => {

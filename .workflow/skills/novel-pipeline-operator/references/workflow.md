@@ -29,7 +29,7 @@
 - `<BASE>`：输出根的绝对路径。
 - `<SID>`：从既有目录读取，或由 `stage0.remove --source` 的源文件名尾部数字推导。
 - `<STARTED_AT>`：本次会话开始的 epoch 秒。
-- `<START_CODE>`：本次会话开始时的完整代码指纹。
+- `<START_CODE>`：当前 execution epoch 的完整代码指纹；parent run 可以跨多个 epoch。
 
 逐项确认：
 
@@ -37,10 +37,11 @@
 2. 已按[执行模式](execution-modes.md)确认本次 executor 的来源与对应零模型预检；只检查当前选择
    真正需要的 executable、协议或 transport，不用另一模式的配置制造假阻塞。不要打印账号、token 或认证材料。
 3. 新跑与续跑使用**同一个** `<BASE>`：隔离靠每本书自己的 `<平台_书名_sid>/` 目录，不靠另建输出根。另建一个根会把同一本书的 `_service/ledger.jsonl` 分裂成两份，而[收尾](#收尾)把它当成本的唯一权威源。不要写入任何历史验收或证据目录。
-4. 源文件或既有书目录存在，`<SID>` 唯一。立即从仓根运行
+4. 源文件或既有书目录存在，`<SID>` 唯一。直接交互式运行立即从仓根运行
    `<PY> -X utf8 -u .workflow/skills/novel-pipeline-operator/scripts/session_preflight.py --base <BASE> --sid <SID>`；新书把
    `--sid` 换成 `--source <TXT>`。从这一个 JSON 固化 `<STARTED_AT>` 与 `<START_CODE>`，
-   也以它解析出的 sid/novel_dir 为准。终验不得在结束时现取新代码指纹冒充起点。
+   也以它解析出的 sid/novel_dir 为准。headless 正式路由由 RunSupervisor 打开 parent run 与当前
+   execution epoch；两种宿主都不得在结束时现取新代码指纹冒充旧 epoch。
 5. 付费授权与正文外发授权各自取到值：交互式会话两项**默认 `granted`**，本步是记录不是索要；
    headless 取 launcher prompt 原文。两项不是同一授权，任何一项都不由另一项推定。
 6. 不覆盖 launcher started 事件冻结的 commander / executor 模型与思考配置；运行时请求身份以
@@ -57,13 +58,15 @@
   不是仓库故障。
 - 直接取得子进程退出码，不在真跑后接会覆盖退出码的管道。文件重定向不改变退出码；先保存 rc，
   再过滤长报告。
-- node 的 start/end 信标只由 `run_step.py --execute` 在同一 active claim 内生成；不要手工补 `mark`。
+- node 的 start/end 信标只由 `run_step.py --execute` 在同一 active claim 内生成；phase、ledger 联结与
+  异常由 RunSupervisor 自动记录，不要手工补 `mark` 或 telemetry。
   一次只运行一个写盘节点；一个 operator 会话只管一本书，别书的独立会话可以并行。
 - 长命令使用持久句柄或足够长的前台超时，每 60 秒以内汇报一次盘上/进程事实；不要用短 timeout
   杀进程来模拟更新。任何中断后重新调用 `operator next`，不从聊天记忆猜落盘位置。
-- 会话先由 `scripts/session_preflight.py` 固化 `<STARTED_AT>` 与 `<START_CODE>`。已有 sid 的所有 node
-  actions（含纯读诊断与恢复）都先取 exact `operator permit`，再走
-  `scripts/run_step.py --expect-code-version <START_CODE>`；只有非 node 的只读/typed approval façade 与
+- 会话先由 `scripts/session_preflight.py` 固化 `<STARTED_AT>` 与 `<START_CODE>`。已有 sid 的 ready node
+  actions（含纯读诊断）直接复用同一次 `operator next` 返回的完整 execution token；blocked recovery
+  才为 exact node/flags 另取 `operator permit`。两者都走
+  `scripts/run_step.py --expect-code-version <START_CODE> --operator-permit-file <NEXT_FILE>`；只有非 node 的只读/typed approval façade 与
   `response-repair` 可直走，Commander 下的写 façade 会自行取得并释放 generic claim，且也在动作前复算并逐字比较。
   `unknown == unknown` 不证明同版，结束时现取当前值也不证明起点。
 
@@ -71,11 +74,11 @@ PowerShell 中可在取得真实 rc 后这样收窄 `--check-only` 报告；该�
 来源、分母与告警：
 
 ```powershell
-$permit = & $PY -X utf8 -u -m novel.cli operator permit $SID <node> --base $B --json -- --check-only |
-  ConvertFrom-Json
+$nextFile = Join-Path $SP 'operator-next.json'
+& $PY -X utf8 -u -m novel.cli operator next $SID --base $B --json > $nextFile
 & $PY -X utf8 -u .workflow/skills/novel-pipeline-operator/scripts/run_step.py `
   --base $B --sid $SID --expect-code-version $START_CODE `
-  --operator-permit-sha256 $permit.permit_sha256 --execute <node> -- --check-only > "$SP\out.txt"
+  --operator-permit-file $nextFile --execute <node> -- --check-only > "$SP\out.txt"
 $rc = $LASTEXITCODE
 Get-Content "$SP\out.txt" -Encoding UTF8 |
   Select-String -Pattern '^\s*\[!!\]|^\s*\[\?\?\]|^\s*\[--\]|^\s*\[\?{4}\]|^合计|^──|^\s*⚠|→\s+(PASS|AMBER|FAIL)|revalidated'
@@ -115,22 +118,27 @@ sid 已落盘后，每轮的第一条路由命令固定为：
 ```
 
 它是 0 成本纯读，并在同一份 operator snapshot 上返回 `state`、当前盘面摘要与可选 `action`。
-`state=ready` 时至少消费 `action` 的 `node`、`flags`、`why`、`paid`、`writes` 与
-`action_sha256`；`state=blocked` 时 `action` 仍描述 blocker，按 `waiting_on` 进入对应审批或生产登记的
-恢复路，不能把 blocker 的 action hash 当恢复授权。只有 `state=pipeline_complete` 时 `action=null`，
-此时进入收尾；任何状态都不自造下一节点。
+stdout 原样保存为 scratch 内的 `<NEXT_FILE>`。`state=ready` 时同时携带完整 opaque
+`execution_token`；调用方只读取 action 的路由字段，token 不拆开、不手搬 SHA，整份 `<NEXT_FILE>`
+直接交 runner。`state=blocked` 时 `action` 仍只描述 blocker，按 `waiting_on` 进入对应审批或生产登记的
+恢复路，不能把 blocker 的 action hash 当恢复授权。只有 `state=pipeline_complete` 时 `action=null` 且
+无 token，此时进入收尾；任何状态都不自造下一节点。
 新书在 sid 尚未落盘前只走现有 `stage0.remove --source <TXT>` 摄入；取得 sid 后立即进入上述 next 循环。
 每次写盘、typed approval、人工修订或恢复动作后都重新调用 next，不从下表、目录存在性或聊天记忆
 自行推演后继。
 
-对 ready action 原样 node/flags，或 blocked 当前 blocker 对应的已登记 node 恢复，先铸造执行许可：
+ready action 的完整许可已经由上述同一次 snapshot 铸好，不再调用第二次 planner。只有 blocked 当前
+blocker 对应的已登记 node 恢复，才显式铸造执行许可：
 
 ```text
 <PY> -X utf8 -u -m novel.cli operator permit <SID> <node> --base <BASE> --json -- [flags]
 ```
 
-许可纯读并绑定 current next、代码、surface、exact node/flags、贵贱/写盘效应以及登记的外部输入原始
-字节；ready 只接受 action 原样组合，recovery 只接受生产闭集。任一拒绝都不得改 flags 猜路。
+许可纯读并绑定 current next、代码、active surface、exact node/flags、贵贱/写盘效应以及登记的外部输入原始
+字节；recovery 只接受生产闭集。把 stdout 的完整 ExecutionPermit JSON
+原样保存为本轮 `<PERMIT_FILE>`；它只允许位于系统临时目录或
+`_service/scratch/<sid>/<当前 session>/`，execute 结束即删除，证据文件随 session TTL 清理，
+不得再污染仓根或书目录。任一拒绝都不得改 flags 猜路。
 随后可用普通 `preview` 阅读生产 argv：
 
 ```text
@@ -143,18 +151,21 @@ sid 已落盘后，每轮的第一条路由命令固定为：
 已有 sid 的所有 node actions（包括纯读诊断与恢复）从仓根用下面两条调用生产 `build_steps` 并串联信标；不要另抄追跑规则：
 
 ```text
-<PY> -X utf8 -u .workflow/skills/novel-pipeline-operator/scripts/run_step.py --base <BASE> --sid <SID> --expect-code-version <START_CODE> --operator-permit-sha256 <PERMIT_SHA256> <node> -- [flags]
-<PY> -X utf8 -u .workflow/skills/novel-pipeline-operator/scripts/run_step.py --base <BASE> --sid <SID> --expect-code-version <START_CODE> --operator-permit-sha256 <PERMIT_SHA256> --execute <node> -- [flags]
-<PY> -X utf8 -u .workflow/skills/novel-pipeline-operator/scripts/run_step.py --base <BASE> --sid <SID> --expect-code-version <START_CODE> --operator-permit-sha256 <PERMIT_SHA256> --run-id <RUN_ID> --execute stage2.blueprint -- [原 flags]
+<PY> -X utf8 -u .workflow/skills/novel-pipeline-operator/scripts/run_step.py --base <BASE> --sid <SID> --expect-code-version <START_CODE> --operator-permit-file <NEXT_FILE> <node> -- [flags]
+<PY> -X utf8 -u .workflow/skills/novel-pipeline-operator/scripts/run_step.py --base <BASE> --sid <SID> --expect-code-version <START_CODE> --operator-permit-file <NEXT_FILE> --execute <node> -- [flags]
+<PY> -X utf8 -u .workflow/skills/novel-pipeline-operator/scripts/run_step.py --base <BASE> --sid <SID> --expect-code-version <START_CODE> --operator-permit-file <PERMIT_FILE> --run-id <RUN_ID> --execute stage2.blueprint -- [原 flags]
 ```
 
 runner 控制参数在显式 `--` 之前可位于 node 前后，但以上是规范写法；`--` 之后全部属于
 生产节点。新书摄入时省略 runner 的 `--sid`，在 node flags 里传 `--source <TXT>`。
 第三行只用于 Stage2 人工暂停后的同身份 resume：`--run-id` 是 runner 控制参数，不是 node flag，
 初次主跑省略。runner 在构建 Step 前、每一步执行前后逐字核对 `<START_CODE>`；漂移时不再启动下一步。
-preview 与 execute 都会重新铸造 current permit，旧 SHA 不可复用。headless 时一个 permit/claim 覆盖
+ready 的 preview 与 execute 复用同一份原样 next wrapper；blocked recovery 则复用显式 permit 文件。
+runner 从两者提取同一种完整 token：preview 只解析一次并冻结渲染，不重新运行 planner；execute
+在取得 claim 后、首个副作用前对 active surface 做一次 CAS。SHA-only 兼容参数会在 preview/execute
+重新运行 planner，只保留给诊断旧脚本，不得写进默认主路。headless 时一个 permit/claim 覆盖
 `build_steps` 的 root 与自动 follow-check：每个 child 收到完整 envelope + 零基 `step_index`，root 在副作用
-前重铸，root 写盘后的 follow 只按同一 envelope 重建并核其 index/argv，不能因 surface 预期变化被误杀。
+前完成唯一 CAS，root 写盘后的 follow 只按同一 envelope 重建并核其 index/argv，不能因 surface 预期变化被误杀。
 
 当前付费节点怎样绑定 Agent driver 或 legacy LLM transport，只按[执行模式](execution-modes.md)
 中与本次冻结选择相符的一节；不要把 executor 参数或恢复协议混进 node/flag 路由。
@@ -181,17 +192,17 @@ runner 外补信标。preview 不写信标。信标只记录观察轨迹、不�
 | 3 | `stage0.edit` | 仅当代批发现剔除错误时用 typed edit/edit-plan；无修改则 `state` 跳过 | 人工修订经同一 Stage0 闸门重判，不直改正式文本 |
 | 4 | `stage1.partition` | 无 | 追跑 check 无 HARD；章节 ordinal 唯一且覆盖 `1..N` |
 | 5 | `stage2.global` | 无；agent executor 原生同 session 修复 | 最新 Global 候选通过 schema 后即物化 current 称名投影；Global HARD 可让候选暂留 `.INVALID`，但只要投影 current/fresh 就不阻塞 blueprint 计算 |
-| 6 | `stage2.blueprint` | current/fresh 称名投影可读后独立 preview/run，不等 Global 正式稿 | 逐章蓝图正式落盘；Stage4 前再汇合 current 正式 global、唯一 Stage2 `--check-only` 联合 HARD 无命中，以及 current review 的 blocking 面逐项 PASS |
-| 7 | `stage4.design` | 首轮无参数；只有当前正式 A 审阅明确拒绝时，才另行执行服务端给出的 `--repair-decision <SHA>` 或 `--replan` | 只产生当前盲候选；本相未读取原文顺序、证据位置或必须材料，且不会顺带启动下一相。机械通过后还须提交全书策略 + 逐章正式设计审阅 |
+| 6 | `stage2.blueprint` | current/fresh 称名投影可读后独立 preview/run，不等 Global 正式稿；新关系只经 `--emit-edit-template` → `--apply-edit` 完整集合替换 | 逐章蓝图正式落盘；Stage4 前再汇合 current 正式 global、唯一 Stage2 `--check-only` 联合 HARD 无命中，以及 current review 的 blocking 面逐项 PASS |
+| 7 | `stage4.design` | 首轮无参数；当前正式 A 审阅拒绝时只执行服务端给出的 `--review-token <opaque>`；单章模型 repair 耗尽可 `--apply-edit` 完整章，显式策略驳回则同时带 `--replan` | 只产生当前盲候选；本相未读取原文顺序、证据位置或必须材料，且不会顺带启动下一相。机械通过后还须提交全书策略 + 逐章正式设计审阅 |
 | 8 | `stage4.plan` | 仅在当前 A 设计审阅全书 accepted 后重新独立 preview/run | B 只绑定证据；模型的 `binding_concerns` 进入最终人审但不阻断。模型声称 infeasible 只有代码构造性证明后才可正式落盘，否则同 session 返修为完整 bound |
 | 9 | `stage4.context` | B 编译计划机械通过、且最终逐章结构裁决全书 accepted 后单独执行 | `stage4/writer_context.json` 与当前计划投影一致且 fresh；B、`--revalidate`、`--apply-edit`、`--apply-binding` 都不得自动组装它 |
 | 10 | `stage5.write` | 不带 `--chapters` 即写全部缺少的 canonical 章 | `stage5/chNN.json` 恰好覆盖计划章集合；内部重试不等于整节点失败 |
 | 11 | `stage5.review` | 无 | 最新机械验收完成；HARD 按 remediation 收敛，info/metric/unver 保持原态；所有 edit/trim/wontfix 收口后另提交 current Stage5 typed closure，才可进入 Stage6 |
 | 12 | `stage6.hook` | 无；完整三候选 replacement 在同 session 内修复 | 至少一条候选通过落盘闸；追跑 check 可读正式候选 |
 | 13 | `stage6.semantic` | 无；A/B 独立 session 并发 | 每个去重文本都有两名盲评判官的带证据结论与匿名质量排序；结论按完整 SHA-256 与当前候选对齐 |
-| 14 | `stage6.approve` | `--pick <N> --actor <ACTOR> --reason <text> --subject-sha256 <64hex> --workpack-sha256 <64hex>` | 先完整读取 current Stage6 workpack；所选候选满足代批判据，两个 hash 来自同一份包，`hook.json.approved` 与最新语义结论一致；`already_current` 时不重复提交 |
+| 14 | `stage6.approve` | `--pick <N> --actor <ACTOR> --reason <text> --review-token <opaque>` | 先完整读取 current Stage6 workpack；所选候选满足代批判据，opaque token 来自同一不可变包，`hook.json.approved` 与最新语义结论一致；`already_current` 时不重复提交 |
 | 15 | `stage7.rename` | 无；完整映射 replacement 在同 session 内修复 | 人名表正式落盘；追跑 check 的 HARD 清零，info/unver 已人工审阅 |
-| 16 | `stage7.approve` | `--actor <ACTOR> --reason <text> --subject-sha256 <64hex> --workpack-sha256 <64hex>` | 先完整读取 current Stage7 workpack；映射、别名、替换命中、漏网上下文与语义标记通过代批判据，两个 hash 来自同一份包，批准状态落盘；`already_current` 时不重复提交 |
+| 16 | `stage7.approve` | `--actor <ACTOR> --reason <text> --review-token <opaque>` | 先完整读取 current Stage7 workpack；映射、别名、替换命中、漏网上下文与语义标记通过代批判据，opaque token 来自同一不可变包，批准状态落盘；`already_current` 时不重复提交 |
 | 17 | `stage7.assemble` | 无 | `stage7/<书名>_rewriting.txt` 生成并通过独立成书对账 |
 <!-- pipeline-steps:end -->
 
@@ -199,8 +210,13 @@ Stage4 的两次付费调用不得压成一次授权或一次 runner 执行。�
 候选机械通过并正式落盘后，按[代批与终审契约](delegated-review.md#stage4-结构代批)先提交 Stage4A
 完整 typed 设计审阅；裁决前先走只读 `approval workpack design`，按 current subject 阅读异常与全章
 coverage。只有策略与全章 accepted，才能重新取得 `stage4.plan` 的 preview 并单独 run。
-若逐章 `request_repair`，只执行服务端给出的 hash-bound `--repair-decision <SHA>`，未变且已接受的章
-由 checkpoint 复用；只有策略 `request_replan` 才可整书重做。自然语言 reason 只进审计，不充当模型
+若逐章 `request_repair`，只执行服务端给出的 `--review-token <opaque>`，未变且已接受的章
+由 checkpoint 复用；每轮 repair 必须携带当前问题和全部尚未关闭的历史 typed constraints，关闭状态也要
+显式保留。同策略单章两轮模型 repair 耗尽时，允许为该章打开新的 repair epoch，或用
+`stage4.design --apply-edit <stage4/blind_chapter_edit.json>` 预览并提交一份完整章响应；后者 0 wire，
+仍走相同 compiler、schema、dynamic validator 与全书 HARD，且非目标章业务字节必须恒等。**单章耗尽
+不得自动升级成整书 replan**；只有策略决定本身显式 `request_replan` 才可整书重做，并且要携带累计
+策略/章节失败反馈，复用 effective input 未变的 accepted 章。自然语言 reason 只进审计，不充当模型
 自由指令。B 的模型负结论不是正式终态；只有代码产出不可行 witness 时 exit 1 才表示负结论已落盘，
 此时不得继续 Context 或 Stage5，也不得替人猜 repair/replan 决定。
 
@@ -225,6 +241,13 @@ preview Stage4A；disclosure 未决项继续披露但不阻断。review 若发�
 提前完成的 review 可以保存，但缺 blueprint 时 Stage2 仍未收口。机械测量不是独立节点：Stage5/6
 会从各自已读的 Stage1 文本即时计算，operator
 不需要预跑、确认或修复机械缓存。
+
+新 clean base 的 Blueprint 关系契约使用 `narrative_relations`。producer 可提出关系，但 high-impact/HARD
+关系须经 Stage2 typed review 才 binding；含糊关系只进入 Commander workpack。需要人工订正时先运行
+`stage2.blueprint --emit-edit-template`，在当前 `review_token` 下只填写目标章的**完整关系集合**，再用
+`stage2.blueprint --apply-edit <stage2/blueprint_relation_edit.json>` 预览、执行。它是 0 模型入口，所有
+端点闭引用、无向规范排序、时序 DAG、观察者与全书 HARD 仍关闭式校验；不能拿字段 patch、手补旧版
+Blueprint 或“同一 source beat”自动推断 `same_scene`。旧 Blueprint 不自动迁移到新关系契约。
 
 ### 零剔除的书同样要过 stage0 闸门
 
@@ -256,8 +279,9 @@ preview Stage4A；disclosure 未决项继续披露但不阻断。review 若发�
 定稿前运行只读 `approval workpack stage6 <SID> --base <BASE>`。包内按候选展开机械结论、
 两名判官各自的 verdict/reason/evidence 与 A/B 原始 ranking；不得回到分散原始文件中只挑一部分
 证据。提交批准时必须同时复制同一份包里的候选 `subject_sha256` 与顶层 `workpack_sha256`。
-包已给出 `disposition=already_current` 时，当前 typed 批准仍精确绑定这份代码、规则与产物，跳过
-重复批准；任何主体漂移都会令 disposition 回到 `review_required`。
+包已给出 `disposition=already_current` 时，当前 typed 批准仍绑定相同 review subject 与显式 review
+contract，跳过重复批准；代码/机械规则变化只滚动 validation seal 与 execution epoch，免费复检通过且
+可见内容/finding 未变时 raw 决定自动恢复。真正主体漂移才令 disposition 回到 `review_required`。
 
 ### Stage5 是 canonical 闭卷单臂
 
@@ -352,11 +376,18 @@ CLI `state` 会显示共享的 deterministic freshness badge；这个 badge 才�
 不是普通 cache miss，应关闭式停止。`--resample` / `--chapters` 表示主动刷新，绝不能带旧 run 身份
 去绕过刷新。改变其他参数同样意味着新调用语义，必须重新 preview 和记账。
 
+正式 headless run 的 `pause` 只停止接纳新节点并等待当前 claim/beacon 安全闭合，不取消正在正常执行的
+付费节点；同一 epoch resume 精确续用 Commander provider session。代码或 skill 身份变化时，
+RunSupervisor 在同一 parent run 内关闭旧 epoch、打开新 epoch、先免费复检并创建新的 Commander
+provider session；旧 provider context 与 execution token 均不得复用。`stop` 是永久终止：取消该 run
+拥有的 Commander/Executor 进程树、drain 后写 ended，不能 resume。服务重启后无法证明进程状态时保持
+`unknown`，不得自动洗成 paused 或自行恢复。
+
 ## 收尾
 
 完成主链后：
 
 1. 执行代批文档中的逐字成书对账。
 2. 再运行一次 `operator next --json` 与组合 `state --with-inbox`，只统计活动目录，排除 `_rounds/` 历史；`pipeline_complete` 只说明节点 lane 已尽，不替代成书、终审包与 fresh delivery 对账。
-3. 补完终审包中的人工叙述并清除全部占位符，然后从仓根只运行这一条 canonical 收尾命令：`.workflow/skills/novel-pipeline-operator/scripts/finalize_review.py --base <BASE> --sid <SID> --started-at <STARTED_AT> --start-code-version <START_CODE>`。它在同一进程内只 collect 一次机器事实，以内存快照 render → validate，通过后才原子提交终审包；提交后丢弃旧快照，再按 `<START_CODE>` 开一个全新读作用域执行 `delivery.assess`。最终成本只以 `<BASE>/_service/ledger.jsonl` 为权威源：本次表按 canonical `run_id + node/role` 精确联结，整书 Commander 单列 `role:commander`；无 run id 的历史行只标 `legacy/ungrouped`，本次与累计不相加，缓存与真实 wire 分开，产物 usage/日志不参与混加。
+3. 此前不增量维护 Markdown；此时才从模板一次补完终审包中的必要人读叙述并清除全部占位符，然后从仓根只运行这一条 canonical 收尾命令：`.workflow/skills/novel-pipeline-operator/scripts/finalize_review.py --base <BASE> --sid <SID> --started-at <STARTED_AT> --start-code-version <START_CODE>`。它在同一进程内只 collect 一次机器事实，以内存快照 render → validate，通过后才原子提交终审包；提交后丢弃旧快照，再开一个全新读作用域执行 `delivery.assess`。最终成本只以 `<BASE>/_service/ledger.jsonl` 为权威源：本次表按 canonical `run_id + node/role` 精确联结，整书 Commander 单列 `role:commander`；无 run id 的历史行只标 `legacy/ungrouped`，本次与累计不相加，缓存与真实 wire 分开，产物 usage/日志不参与混加。
 4. finalizer 的 fresh delivery 结果为 `ready*` 才只向用户交付成书与终审包；任一校验、原子提交或 fresh assess 失败都保留原盘并按其错误收口，不把 `pipeline_complete` 或旧快照写成 ready。中间产物仅作为终审包中的可追溯指针。

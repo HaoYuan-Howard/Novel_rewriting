@@ -67,12 +67,12 @@ arc、世界观与 setting evidence 不进入这条指纹，避免无消费者�
 - `Residual` 必填 `stem`、`where`、`hit`、`context`、`confidence=high｜low`、
   `unit`、`suggest`。
 - `StemBaseline` 必填 `total`、`covered`、`residual`、`ratio`；`ratio` 可为 `null`。
-- `ApprovedNameMap` 必填 `origin=human`、自报 `actor`、非空 `reason` 与完整
-  `subject_sha256`，并携刚完整读过的 Stage7 workpack 的 `workpack_sha256`。subject hash 只绑定
-  审批时看到的决策面：`surname_map`、`characters`、
-  `extra_subs` 的排序键紧凑 canonical JSON；不绑定 residual、派生替换计数或
-  成书字节。workpack hash 另绑定代码、规则、产物主体和完整人物/别名/kept/真实替换命中/残留
-  上下文证据；旧页面任一 hash 与当前面不同时关闭式拒批。
+- `ApprovedNameMap` 必填 `origin=human`、自报 `actor`、非空 `reason` 与服务端解析得到的
+  `subject_sha256`；新决定另存 `review_identity_sha256` 和刚读工作包的 `workpack_sha256`。
+  调用方不手搬这些 SHA，只提交工作包给出的 `review_token`。长期适用性只绑定人实际看见的
+  `surname_map`、`characters`、`extra_subs`、可见 finding 与显式审阅契约；代码、规则、
+  provenance 和免费机械复检结果属于 `validation_seal`，不再级联撤销内容未变的人工决定。
+  提交时服务端仍在同书锁内重建 exact workpack，旧 token 关闭式拒绝。
 - 服务检查单的 `s7` proof 绑定上述完整决策面和完整 typed `ApprovedNameMap`
   （含 actor/reason/origin/subject），并在每次读取时复核 `subject_sha256` 仍等于当前
   决策面。它不绑定 `book_txt`、residual、book findings 等确定性派生字段：正常
@@ -162,7 +162,7 @@ v1 骨架为：
 | `--apply-edit <路径>` | 0 | 应用严格人工编辑输入并开新人工修订轮。路径相对**书目录**，也接受书目录内的绝对路径；目录外（含 `..` 穿越）是显式终态（`novel/paths.py::edit_rel`，stage2/4/6/7 共用） |
 | `--adopt-residual high` | 0 | 把当前高置信残留作为新决策输入重判；其他参数关闭式拒绝 |
 | `--revalidate --actor <id> --reason <text>` | 0 | 对 `.INVALID` 做强审计，记录 hash 差异并在合格后提升；不开新生成轮 |
-| `stage7.approve --actor <id> --reason <text> --subject-sha256 <64hex>` | 0 | 人工定稿；hash 必须与当前决策面完全一致 |
+| `stage7.approve --actor <id> --reason <text> --review-token <s7r3_…>` | 0 | 人工定稿；opaque token 绑定刚读的公开 v3 工作包，内部决策主体、代码/规则与机械复检面由服务端重建；公开包不输出 `code_version` / `rules_fingerprint`，旧 v2 包只读 |
 | `stage7.assemble` | 0 | 在前置条件满足时写成书 |
 | `--check-only` | 0 | 只读复检当前正式产物 |
 

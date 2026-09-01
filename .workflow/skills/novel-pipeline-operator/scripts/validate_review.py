@@ -27,6 +27,7 @@ REQUIRED_HEADINGS = (
 QUALITY_HEADER = '| 节点/报告 | freshness | HARD | info | metric | unver | skipped | 结论/处置 |'
 QUALITY_STAGES = STAGES
 ANCHOR_RE = re.compile(r'<!-- novel-final-evidence:(\{[^\n]*\}) -->')
+PLACEHOLDER_RE = re.compile(r'<(?!\!--)[^>\r\n]+>')
 
 
 def validate(text: str, facts: dict[str, Any], *, template_text: str = '') -> list[str]:
@@ -62,8 +63,16 @@ def validate(text: str, facts: dict[str, Any], *, template_text: str = '') -> li
         if required and str(required) not in text:
             errors.append(f'终审包缺当前事实：{required}')
 
-    template_tokens = set(re.findall(r'<[^>\n]+>', template_text))
-    left = sorted(token for token in template_tokens if token in text)
+    # 模板原生 token 里有跨行说明；旧 Commander 草稿又可能
+    # 留下模板不含的 ``<待填>``。两面都要扫，但机器锚点
+    # ``<!-- ... -->`` 是正式证据，不能被当占位符。
+    template_tokens = set(re.findall(
+        r'<[^>]+>', template_text, flags=re.DOTALL))
+    left = {
+        token for token in template_tokens if token in text
+    }
+    left.update(match.group(0) for match in PLACEHOLDER_RE.finditer(text))
+    left = sorted(left)
     if left:
         errors.append(f'仍有模板占位符：{left}')
 

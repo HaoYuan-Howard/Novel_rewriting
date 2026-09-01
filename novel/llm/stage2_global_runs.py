@@ -46,6 +46,10 @@ def _run_spec() -> agent_runs.SingleSessionRunSpec:
             ctx.novel_dir, ctx.run_id),
         checkpoint_dir=lambda ctx: paths.stage2_global_checkpoint_dir(
             ctx.novel_dir, ctx.run_id),
+        legacy_run_path=lambda ctx: paths.legacy_stage2_global_run_path(
+            ctx.novel_dir, ctx.run_id),
+        legacy_checkpoint_dir=lambda ctx: paths.legacy_stage2_global_checkpoint_dir(
+            ctx.novel_dir, ctx.run_id),
     )
 
 
@@ -160,11 +164,14 @@ def _refuse_commit_reservations(
         ctx: Any, *, include_current: bool,
 ) -> None:
     _require_ownership(ctx)
-    root = Path(ctx.novel_dir) / paths.STAGE2_RUNS_DIRNAME
     current = _commit_spec().commit_path(ctx).resolve()
-    if not root.is_dir():
-        return
-    for target in root.glob(f'*/global/{agent_runs.COMMIT_FILE}'):
+    targets: dict[str, Path] = {}
+    for root in paths.stage_run_read_roots(ctx.novel_dir, 'stage2'):
+        if not root.is_dir():
+            continue
+        for candidate in root.glob(f'*/global/{agent_runs.COMMIT_FILE}'):
+            targets.setdefault(candidate.parent.parent.name, candidate)
+    for target in targets.values():
         is_current = target.resolve() == current
         if is_current and not include_current:
             continue

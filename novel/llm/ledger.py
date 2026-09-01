@@ -369,6 +369,19 @@ def _evidence_locator_rewrite_id(
     return hashlib.sha256(canonical.encode('utf-8')).hexdigest()
 
 
+def _human_typed_edit_id(
+        *, run_id: str, sid: str, node: str, purpose: str,
+        subject_sha256: str, result_sha256: str,
+        actor: str, reason: str, chapters: Iterable[int],
+) -> str:
+    """零 wire typed edit 的稳定身份；正文与完整请求不进入服务审计账。"""
+    canonical = json.dumps(
+        [run_id, sid, node, purpose, subject_sha256, result_sha256,
+         actor, reason, list(chapters)],
+        ensure_ascii=False, separators=(',', ':'))
+    return hashlib.sha256(canonical.encode('utf-8')).hexdigest()
+
+
 def _require_sha256(value: str, *, field: str) -> str:
     if (not isinstance(value, str) or len(value) != 64
             or any(char not in '0123456789abcdef' for char in value)):
@@ -1376,6 +1389,46 @@ class CostLedger:
             'artifact_fingerprint': artifact_fingerprint,
             'chapter': chapter,
         }, identity_key='adoption_id')
+
+    def note_human_typed_edit(
+            self, *, sid: str, node: str, purpose: str,
+            subject_sha256: str, result_sha256: str,
+            actor: str, reason: str, artifact: str,
+            chapters: Iterable[int], summary: Mapping[str, int],
+    ) -> None:
+        """记录一次人工 typed edit 的身份与计数摘要，不复制业务正文。"""
+        subject = _require_sha256(subject_sha256, field='subject_sha256')
+        result = _require_sha256(result_sha256, field='result_sha256')
+        actor = actor.strip()
+        reason = reason.strip()
+        if not actor or not reason:
+            raise ProvenanceRefused('human typed edit 的 actor/reason 不能为空')
+        chapter_rows = tuple(int(value) for value in chapters)
+        if chapter_rows != tuple(sorted(set(chapter_rows))) \
+                or any(value < 1 for value in chapter_rows):
+            raise ProvenanceRefused('human typed edit 的 chapters 必须升序、唯一且 >=1')
+        counts = {str(key): int(value) for key, value in summary.items()}
+        if any(value < 0 for value in counts.values()):
+            raise ProvenanceRefused('human typed edit 的 summary 计数不能为负')
+        edit_id = _human_typed_edit_id(
+            run_id=self.run_id, sid=sid, node=node, purpose=purpose,
+            subject_sha256=subject, result_sha256=result,
+            actor=actor, reason=reason, chapters=chapter_rows)
+        self._append_audit_idempotent({
+            'kind': 'human_typed_edit',
+            'at': datetime.now(timezone.utc).isoformat(timespec='seconds'),
+            'human_typed_edit_id': edit_id,
+            'sid': sid,
+            'node': node,
+            'purpose': purpose,
+            'subject_sha256': subject,
+            'result_sha256': result,
+            'actor': actor,
+            'reason': reason,
+            'artifact': artifact,
+            'chapters': list(chapter_rows),
+            'summary': dict(sorted(counts.items())),
+        }, identity_key='human_typed_edit_id', require_equal=True)
 
     def note_prepared_recovery_adoption(
             self, *, sid: str, purpose: str, chapter: int,

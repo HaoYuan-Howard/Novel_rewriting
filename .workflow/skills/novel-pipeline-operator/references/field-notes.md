@@ -193,9 +193,10 @@ rg -n "stage6|hook_para_sep|exit 70" .workflow/skills/novel-pipeline-operator/re
   那才是真有问题，要重跑或转人工细读）是两回事。合并 `reason` 会逐句说明属于哪一种，
   其中「A/B 同判且各自证据闭合」是信息量最大的一条，别把它读成“没有结论”。
 - 处置：读 `judges` 两侧各自的 verdict / reason / evidence，取得带证据的 `UNVER`
-  与匿名质量排序后，按
-  `stage6.approve --pick N --actor <ACTOR> --reason <理由> --subject-sha256 <完整 SHA-256>`
-  收口。不因结论是 `UNVER` 就停机，也不在零语义产物的情况下直接写核验结论。
+  与匿名质量排序后，完整读取 current immutable workpack，再按
+  `stage6.approve --pick N --actor <ACTOR> --reason <理由> --review-token <opaque>`
+  收口。Commander 不手工搬运多枚 SHA；不因结论是 `UNVER` 就停机，也不在零语义产物的情况下
+  直接写核验结论。
 - 验证：`stage6/semantic_<n>.json` 落盘且 fresh；批准后的 resolution 记
   `basis='human_verification'`；终审包记为“判官证据 + 人工核验”，不记为机器绿灯。
 - 依据：`novel/quality/evaluator.py::double_blind_decision`（合并恒 `UNVER`，并给出四选一的

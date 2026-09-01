@@ -184,13 +184,14 @@ def _accepted_structure_view(record):
         return StructureApprovalView(state='unavailable')
     current = {
         'actor': decision.actor, 'reason': decision.reason,
-        'subject_sha256': decision.subject_sha256,
+        'review_token': f's4sr1_{decision.subject_sha256}',
         'chapters': [row.model_dump(mode='json') for row in decision.chapters],
         'decided_at': decision.decided_at,
     }
     return StructureApprovalView.model_validate({
         'state': 'accepted',
         'current_subject_sha256': decision.subject_sha256,
+        'review_token': f's4sr1_{decision.subject_sha256}',
         'current_decision': current,
         'history': [current],
     })
@@ -241,20 +242,16 @@ def _ruling_request(store, *, actor='commander', reason='整书闭合'):
     rows = [{
         'chapter_ordinal': row.chapter_ordinal,
         'evidence_key': row.evidence_key,
-        'finding_sha256': row.finding_sha256,
-        'chapter_sha256': row.chapter_sha256,
         'ruling': 'confirmed_present',
         'reason': '改写已承载该材料',
     } for row in pack.must_appear]
     acks = [{
-        'group': group.group, 'findings_sha256': group.findings_sha256,
-        'items': group.items,
+        'group': group.group, 'acknowledged': True,
     } for group in (pack.fact_group, pack.unver_group) if group is not None]
     from contracts.schema.api import Stage5ClosureRequest
     return Stage5ClosureRequest.model_validate({
         'actor': actor, 'reason': reason,
-        'workpack_sha256': pack.workpack_sha256,
-        'review_sha256': pack.review_sha256,
+        'review_token': pack.review_token,
         'must_appear': rows, 'group_acks': acks,
     })
 
@@ -318,7 +315,7 @@ def test_missing_review_after_stage5_started_keeps_history_and_requires_review(
     history = [
         {
             'actor': 'commander', 'reason': '旧轮完整复核',
-            'workpack_sha256': 'a' * 64, 'review_sha256': 'b' * 64,
+            'review_token': 's5cr1_' + 'a' * 64,
             'must_appear': [], 'group_acks': [],
             'decision_sha256': 'c' * 64,
             'decided_at': '2026-08-29T00:00:00+00:00',
@@ -464,12 +461,9 @@ def test_complete_ruling_submission_passes(rig):
 def test_submission_refuses_stale_workpack_and_missing_rulings(rig):
     _ctx, store = rig
     request = _ruling_request(store)
-    stale = request.model_copy(update={'workpack_sha256': 'f' * 64})
+    stale = request.model_copy(update={'review_token': 's5cr1_' + 'f' * 64})
     with pytest.raises(TerminalState, match='过期工作包'):
         closure.validate_closure_request(store, stale)
-    drifted_review = request.model_copy(update={'review_sha256': 'f' * 64})
-    with pytest.raises(TerminalState, match='新一轮'):
-        closure.validate_closure_request(store, drifted_review)
     pack = closure.closure_workpack(store)
     incomplete = request.model_copy(update={'must_appear': []})
     with pytest.raises(TerminalState, match='缺裁决'):
@@ -482,10 +476,10 @@ def test_submission_refuses_stale_workpack_and_missing_rulings(rig):
 def test_accepted_exception_requires_reason_at_the_type_level():
     with pytest.raises(ValidationError, match='理由'):
         closure  # noqa: F841 —— 占位保证导入语义
-        from contracts.schema.api import Stage5MustAppearDecision
-        Stage5MustAppearDecision(
-            chapter_ordinal=1, evidence_key='k', finding_sha256='a' * 64,
-            chapter_sha256='b' * 64, ruling='accepted_exception', reason='  ')
+        from contracts.schema.api import Stage5MustAppearRulingInput
+        Stage5MustAppearRulingInput(
+            chapter_ordinal=1, evidence_key='k',
+            ruling='accepted_exception', reason='  ')
 
 
 def test_blockers_refuse_submission(rig):
@@ -496,13 +490,8 @@ def test_blockers_refuse_submission(rig):
     request = _ruling_request(store)
     # 工作包 SHA 已随盘面变化，先按当前盘面重建请求，再验证阻断优先于裁决。
     request = _ruling_request(store)
-    from contracts.schema.api import Stage5ClosureRequest
-    stale_block_request = Stage5ClosureRequest.model_validate({
-        **request.model_dump(mode='json'),
-        'workpack_sha256': pack.workpack_sha256,
-    })
     with pytest.raises(GateBlocked, match='INVALID'):
-        closure.validate_closure_request(store, stale_block_request)
+        closure.validate_closure_request(store, request)
 
 
 # ── 审批服务：模板、原子提交与统一闭合闸 ────────────────────────────────────
@@ -525,11 +514,24 @@ def test_template_requires_s4_and_carries_placeholders(rig):
     assert all(row.template_token for row in template.must_appear)
 
 
-def test_approve_closure_opens_gate_s5_and_unblocks_downstream(rig):
+def test_approve_closure_opens_gate_s5_and_unblocks_downstream(rig, monkeypatch):
     ctx, store = rig
     base = ctx.novel_dir.parent
     sid = ctx.sid
     _open_s4(base, sid)
+    writing_proof = approvals._ApprovalProof(
+        root_clean_sha1='0' * 40,
+        artifacts={'stage4/writer_context.json': 'c' * 64},
+        decision_sha256='d' * 64,
+    )
+    monkeypatch.setattr(
+        approvals, '_proof_for_writing', lambda _novel_dir: writing_proof)
+    record = approvals._read_raw(base, sid).model_copy(update={
+        'writing': True,
+        'writing_proof': writing_proof,
+    })
+    approvals._path(base, sid).write_text(
+        record.model_dump_json(), encoding='utf-8')
 
     # 提交前：下游闭合闸关闭式拒绝。
     with pytest.raises(TerminalState, match='尚未闭合'):
@@ -548,8 +550,10 @@ def test_approve_closure_opens_gate_s5_and_unblocks_downstream(rig):
     assert len(again.closure.history) == len(doc.closure.history)
 
     # 提交后：统一闭合闸放行（产物级闸已被夹具放行）。
-    assert closure.require_stage5_closed(store).workpack_sha256 \
-        == doc.closure.current_decision.workpack_sha256
+    assert (
+        f's5cr1_{closure.require_stage5_closed(store).workpack_sha256}'
+        == doc.closure.current_decision.review_token
+    )
 
     # 盘面漂移 ⇒ 过期，闸重新关闭；旧决定只留在历史。
     (store.path('stage5/ch01.json')).write_text(
@@ -724,8 +728,9 @@ def test_api_closure_book_lock_lives_only_under_service(rig):
 
     assert target.is_relative_to(base / '_service')
     assert target.with_name(target.name + '.lock').is_file()
-    assert not (ctx.novel_dir / paths.STAGE5_RUNS_DIRNAME / '.commit-book').exists()
-    assert not (ctx.novel_dir / paths.STAGE5_RUNS_DIRNAME / '.commit-book.lock').exists()
+    run_root = paths.service_stage_runs_dir(ctx.novel_dir, 'stage5')
+    assert not (run_root / '.commit-book').exists()
+    assert not (run_root / '.commit-book.lock').exists()
 
 
 @pytest.mark.parametrize('blocker', ['invalid', 'trim'])
@@ -766,7 +771,7 @@ def test_new_blocker_takes_priority_over_an_expired_old_decision(
 
     # 即使异常旧记录声称绑定当前 blocker workpack，当前盘面事实仍必须优先。
     forged = old.model_copy(update={
-        'workpack_sha256': view.workpack.workpack_sha256,
+        'review_token': view.workpack.review_token,
     })
     direct = closure.closure_view(
         store, record_history=[forged], record_current=forged)

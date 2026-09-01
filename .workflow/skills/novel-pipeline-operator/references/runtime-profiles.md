@@ -48,13 +48,20 @@ shell 的而非真跑的。判断真伪只看三样，全部指向盘上而不�
 判据：`git status` 显示 `novel/` 下有未提交改动，且报错文件正在其中。
 处置：**不改仓库代码**（那是本 skill 的硬边界），也不把当前新指纹追认为本次起点。
 等对方编辑完成；只有代码逐字恢复到 `<START_CODE>` 才能在同一会话重试，并重新取乐观锁 hash。
-若稳定落在另一指纹，本次以 `stopped` 收口，重新运行 preflight 后才开始另一条 run。命令崩在
-import 期时通常没有写盘，但仍以 `state`、目标产物与信标核实，不从栈形状猜。把干扰如实记进
-终审包，不要读成本书的产物问题。
+若稳定落在另一指纹，纯交互式旧路以 `stopped` 收口并重新 preflight；正式 headless 路则由
+RunSupervisor 暂停接纳新节点，在同一 parent run 内关闭旧 execution epoch、打开新 epoch、免费复检，
+并创建新的 Commander provider session。旧 provider context 与 execution token 不得跨 epoch 复用；
+内容与 review contract 未变的 raw 人工决定在复检通过后恢复有效。命令崩在 import 期时通常没有写盘，
+但仍以 `state`、目标产物与信标核实，不从栈形状猜。把干扰如实记进终审包，不要读成本书的产物问题。
 
 ## headless agent
 
 把启动 prompt 与 append-only started contract 一起当作本次权限/身份事实，不从 UI 行为或字段默认推定：
+
+- 正式工作流的模型角色只有 Commander/Reviewer 与 Executor。RunSupervisor 是 orchestrator 内的确定性
+  状态机，负责 parent run、书锁、owner lease、admission、permit、节点调度、epoch、自动遥测和最终报告；
+  它不调用 LLM、不审小说，也不是第三个 agent。正式运行没有外层 root；交互式 root 只用于开发调试、
+  安全暂停和修复代码，不得在候选落盘后另行接管审批。
 
 - 新 launcher 在任何 Commander probe/spawn 前同时要求付费授权与正文外发授权；任一不足只允许
   API/UI 做 0 成本 preview，**不会产生一个 headless 进程**。因此新启动 prompt 中两项都应为 granted；
@@ -67,8 +74,9 @@ import 期时通常没有写盘，但仍以 `state`、目标产物与信标核�
 - 进程日志与生死记录由 launcher 管理；不要手改 `_service/agent_runs.jsonl` 或日志来改变状态。
 - launcher 记录的进程 `state` 与交付 `outcome` 是两根轴：只有 outcome 为 `ready` 或
   `ready_with_disclosures` 才表示服务端已从盘面复验交付；`exit 0` 本身只表示 Agent 正常退出。
-- 启动 prompt 带代码指纹；先确认它与 `session_preflight.py` 的 `<START_CODE>` 一致，再按工作流契约
-  由 runner 逐步比较。结束终验继续使用这一份起始指纹，跨版本 run 不会被判 ready。
+- 启动 prompt 带 parent contract 与当前 epoch 代码指纹；先确认它与当前 `<START_CODE>` 一致，再按
+  工作流契约由 runner 逐步比较。同 epoch resume 精确复用 Commander provider session；代码/skill
+  变化只滚动 execution epoch，不创建新 parent run，并且新 epoch 必须新建 provider session。
 - launcher 只把 run id 与 contract SHA-256 放进环境；runner 必须重读 started 事件，精确复核 base、sid、
   起始代码指纹、Commander/default executor/逐节点 override 与两项授权。不得拿环境里的自由 JSON
   或当前 capability 替换已冻结快照。
@@ -78,6 +86,11 @@ import 期时通常没有写盘，但仍以 `state`、目标产物与信标核�
 `authorized` 的产品默认值是 `false`。这只影响 preview 初态；start/batch 的产品闸是两项都为 true。
 preview、成功启动的 prompt 与新事件记录必须始终把两项值分别物化；不得因其中一项为真推定另一项。
 历史事件若该字段为 `null`，只表示当时未采集，按未知处理，不能追认为已授权。
+
+生命周期由 RunSupervisor 执行：`pause` 停止接纳新节点，等待当前 claim/beacon 安全闭合，不取消
+正常执行中的付费节点；`resume` 在同 epoch 续精确 provider session，在新 epoch 先免费复检再开新
+session。`stop` 永久取消该 run 拥有的 Commander/Executor 进程树并 drain，之后不能 resume。服务
+重启后无法证明子进程状态时保持 `unknown`，不得自动恢复或洗成 paused。
 
 ## 只读进度观察
 

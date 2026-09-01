@@ -76,7 +76,7 @@ Phase 5 后 direct executor 的**现役精确面**为 8 节点 / 13 种 flag-tok
 |---|---|---|
 | `stage2.global` | `[]` | 1 个付费 producer Step |
 | `stage2.blueprint` | `[]` | producer 带 profile；自动 `--check-only` Step 不带 |
-| `stage4.design` | `[]`、`[--replan]`、`[--repair-decision]` | 1 个付费 producer Step；后两者分别消费当前正式策略驳回或逐章返修决定，不能裸调用 |
+| `stage4.design` | `[]`、`[--review-token]`、`[--replan, --review-token]` | 1 个付费 producer Step；后两者分别消费当前逐章返修或正式策略驳回的 opaque token，不能裸调用 |
 | `stage4.plan` | `[]` | producer 带 profile；自动 `--check-only` Step 不带 |
 | `stage5.write` | `[]`、`[--chapters]`、`[--revise]`、`[--revise,--chapters]` | `--chapters` 的章号是 flag 值，不另算 token；逐章 session |
 | `stage6.hook` | `[]` | producer 带 profile；自动 `--check-only` Step 不带 |
@@ -90,25 +90,27 @@ phase/purpose/chapter 隔离；Stage5 按章隔离；Stage6 semantic 管理 A/B 
 节点均按 node 隔离。agent 只交 fixed typed 候选，代码掌握 schema / HARD、结构化反馈、正式归一、
 checkpoint、提交 journal/readback/adoption 与终验。显式 profile 不得落回 DeepSeek。
 
-**两根身份轴（TODO-45 批次 3）**：`JobStart.run_id` 是**业务 run**——同一业务节点从
+**三根运行身份轴**：`JobStart.run_id` 是**业务 run**——同一业务节点从
 首跑、恢复到聚合始终不变，账本行、agent session 审计、`_stage*_runs/<run_id>/`
 checkpoint 与 run 目录都以它为键；`job_id`（进度行里的 `execution_id`）是**本次进程
 attempt**，每次启动唯一。恢复续跑（队列重启确认或原授权自动续跑）= 新 `job_id` +
 `JobStart.recovered_from_job_id` 联结 + **原 `run_id`** 经 `NOVEL_RUN_ID` 传给 CLI/
 ledger/session/checkpoint。旧盘记录没有这三列（可缺、不回填、不按时间猜）；新 writer
 必填。旧 orphan attempt 永久保持 `reconciled/unknown`，不根据新 execution 伪造旧
-`ended`。
+`ended`。整书 headless 路在此之外再有稳定 `parent_run_id` 与可滚动 `execution_epoch`：代码、skill、
+provider session 和 admission 属于 epoch，不得反向写进稳定 parent contract。
 
 direct job 另有一条正交授权链：`PreviewRequest.egress_authorized` 默认 false，profile 非空的新计划必须
 显式冻结 bool 到 `JobStart` 与付费 executor `Step`；只有 true 才在 argv 加 `--allow-egress`。false
 允许 0 成本 preview 摊开不可执行命令，真 start 与手敲 CLI 会在 job/driver/probe/wire 前拒绝；无
 profile 时 false 归一为 `null`，true 反而拒绝。它不是 `NodeSpec.flags`，也不能由 `--yes` 推导。
-Phase 6 已把公开 agent run 的非空 `PipelineAgentProfiles` 接进真实 provider-neutral Commander。
-preview/start/batch 共用一份 plan；规范化 base、起始代码指纹、完整 resolved profiles、stdin-only
-invocation 与两项授权一起冻结。`profiles=null` 只保留旧请求形状，当前无服务端默认时关闭式拒绝。
+公开 agent run 的非空 `PipelineAgentProfiles` 已接进 provider-neutral Commander。
+preview/start/batch 共用一份 plan；规范化 base、完整 resolved profiles 与两项授权冻结进
+`RunContractV2`，起始代码、skill、stdin-only invocation、admission 与 provider session 冻结进可滚动
+`ExecutionEpoch`。`profiles=null` 只保留旧请求形状，当前无服务端默认时关闭式拒绝。
 页面从 capability 动态构造 Commander、默认 executor 与逐节点 override，成功 preview 保存的完整请求
 对象就是 start 唯一可消费的快照；配置、授权或 capability 变化会使它失效，不重新取默认。Commander
-child 只持 run id + contract SHA-256，从 append-only started 事件复核快照；`run_step.py` 再按 exact
+child 只持 run id + contract SHA-256 + epoch id，从 append-only 事件复核快照；`run_step.py` 再按 exact
 node/flags 选择 executor profile。Phase 1～6 结论来自 fake driver、本机零模型 CLI 检查与非 corpus
 回归，**真实 provider 模型请求仍为 0，没有质量、速度、entitlement 或 current-schema corpus 实证**。
 
@@ -239,11 +241,12 @@ argv 的形态是：
 崩溃是 **`70`（结论未知，是 bug，栈在 stderr）**，与 `jobs.py` worker 的数同源。
 取值面唯一落点 `novel/cli/exit_codes.py`（五个数）。
 
-### 2.4 `AgentRunStart` —— headless agent 代跑的授权快照
+### 2.4 `RunContractV2` / `ExecutionEpoch` —— headless agent 的稳定合同与可滚动执行身份
 
 agent 代跑不是 `NODES` 中的流水线节点，不能塞进 `JobStart`；它使用独立的
-`Output/_service/agent_runs.jsonl` 事件流，但沿用 append-only、折叠五态与全文留档原则。
-`started` 事件中的 `AgentRunStart` 记录：
+`Output/_service/agent_runs.jsonl` append-only 事件流。RunSupervisor 只是 orchestrator 内的确定性
+状态机，不调用模型；模型角色仍只有 Commander / Executor。`started` 保存稳定 parent contract，
+`epoch_opened` 保存本 epoch 的可执行身份：
 
 > **并发模型**：锁**按书**分（`jobs.agent_lock_key`，同书不并行），
 > 同时在跑的总数由 `agent.MAX_CONCURRENT`（默认 3）单独限；两者是两件事，
@@ -259,26 +262,35 @@ agent 代跑不是 `NODES` 中的流水线节点，不能塞进 `JobStart`；它
 
 | 字段 | 类型 | 必填 | 内容 | 证据 |
 |---|---|---|---|---|
-| `sid` | `str` | **是** | 被代跑的书 id | **设计** |
-| `base` | `str \| null` | **是（可空）** | 新 started 事件冻结规范化绝对 base；旧事件缺格为 null，不用当前服务配置回填 | **契·码** |
-| `argv` | `str[]` | **是** | 拉起所选 Commander driver 的完整解析后命令行；不含 prompt | **设计** |
-| `prompt` | `str` | **是** | 发给 Commander 的全文，只经 stdin 传入；必须分别写明付费授权与正文外发授权 | **设计** |
-| `authorized` | `bool` | **是** | 只表示是否允许产生外部调用费用 | **契·码** |
-| `egress_authorized` | `bool` | **是** | 只表示正文及派生上下文能否外发 | **契·码** |
-| `code_version` | `str \| null` | **是** | 启动时仓库代码指纹；历史事件可空 | **契·码** |
-| `skill_sha256` | `str \| null` | **是（可空）** | canonical `novel-pipeline-operator` 的入口与 `references/`、`scripts/`、`assets/` 排序 path + 原始字节整树 SHA-256；旧事件可空且不得用当前 skill 回填，新 run 缺失或运行期间漂移只能 unknown | **契·码** |
-| `profiles` | `PipelineAgentProfiles \| null` | **是（可空）** | Commander + 默认 executor + 节点覆盖的解析后快照；新 run 必为非空，null 只表示旧事件未记录，不得用当前默认回填 | **契·码** |
+| `sid / base` | `str / str` | **是** | v2 parent run 的书与规范化 base；v1 旧事件缺 base 仍不用当前配置回填 | **契·码** |
+| `authorized / egress_authorized` | `bool / bool` | **是** | 稳定 parent run 的付费与正文外发授权，二者正交 | **契·码** |
+| `profiles` | `PipelineAgentProfiles` | **是** | 稳定 Commander + 默认 Executor + 节点 override；v1 旧 null 不回填，也不能构造 v2 contract | **契·码** |
+| `argv / prompt / code_version / skill_sha256` | 首 epoch 审计投影 / `ExecutionEpoch` | **否（不属于 parent contract）** | 新 v2 started 把首次 argv/prompt 放在不参加 parent hash 的 `start` 兼容投影；code/skill 与实际 invocation 身份只属于 `ExecutionEpoch`。早期 v2 内嵌字段仅由 reader 保守解码，重新序列化与 contract hash 均排除 | **契·码** |
+| `epoch_id` | `str` | **epoch 必填** | 同一 parent run 内单调打开的 execution epoch 身份 | **契·码** |
+| `argv / prompt_sha256` | `str[] / SHA-256` | **epoch 必填** | 本 epoch 的 Commander invocation 与 stdin prompt 身份；prompt 正文不复制进 epoch | **契·码** |
+| `code_version / skill_sha256 / protocol_version` | `str` | **epoch 必填** | 本 epoch 的代码、skill 与协议身份；无法证明不得打开 epoch | **契·码** |
+| `cli_version` | `str \| null` | **epoch 必填（可空）** | provider CLI 未观测时为 null，不用请求值倒填 | **契·码** |
+| `session_run_id / resume_provider_session_id` | `str / str \| null` | **epoch 必填** | Commander session run 与同 epoch exact resume 身份；新 epoch 因代码/skill 漂移时禁止复用旧 provider context | **契·码** |
 
 两项授权不能相互推定。preview 可在任一项为 false 时只读展示；start/batch 在任何 probe/spawn/wire
 前同时要求二者为 true。API 请求可以有 wire 默认，但核心 prompt 构造与 `started` 事件必须显式取得
 两项值。排队项 `AgentPending.profiles` 是必填的 resolved 深快照；出队不重新读 capability、默认值或
 原请求，避免等待期间配置漂移。
 
+生命周期事件闭集为 `started / epoch_opened / paused / resumed / epoch_closed / ended / reconciled`；
+agent state 闭集独立为 `pending / running / paused / ok / landed_red / failed / unknown`，不借用
+`JOB_STATE`。公开 pause/resume/stop 路由统一返回 202，只确认 Supervisor 已受理，不同步等待生命周期
+终态：pause 先关新 admission，后台等待当前 claim/beacon 闭合后才追加 paused，且不 cancel 正常付费
+节点；resume 在后台同身份续当前 epoch 和 provider session，代码/skill 漂移则同 parent run 开新 epoch、
+免费复检并新建 provider session；stop 在后台 cancel 全进程树并 drain，闭合后才永久 ended，且不可
+resume。内部阻塞 helper 只供诊断/测试，不改变公开异步语义。重启后证明不了存活状态仍为 unknown，
+不自动洗成 paused。
+
 Commander 的 stdout/stderr 只形成供应商 observation，不作为业务完成事实。`role=commander,node=null`
 的 session/ledger 以 attempt id 联结；actual model/effort/provider session id 缺失保持 unknown，不拿请求值
 倒填。身份漂移、provider session 跨 logical session 复用或账/审计失败会把 delivery 降为 unknown，
-但外层 ended 仍尽力落账。child executor 通过 started 事件的 contract SHA 复验相同 base/sid/code/
-profiles/授权；无法复验时不得启动付费节点。
+但 outer state 仍尽力落账。child executor 通过 parent contract SHA 与 current epoch identity 复验相同
+base/sid/profiles/授权/code/skill/provider context；无法复验时不得启动付费节点。
 
 #### 2.4a `commander_admissions.jsonl` —— 顶层退出与子执行之间的持久准入账
 
@@ -287,10 +299,12 @@ profiles/授权；无法复验时不得启动付费节点。
 byte-lock owner lease，并持有到 ended/书锁收口的最外层 finally；headless
 `run_step.py --execute` 在 evidence、beacon 与节点子进程前写 `claimed`，完整 Step 序列结束后写
 `released`；typed approval、response-repair、终审与 operator telemetry 等非 node writer 也用
-`write:<operation>` claim 覆盖自己的完整 currentness＋write 窗口。顶层 invocation 返回或异常后写
-`closed`。claim 与 close 共用同一个 append transaction，所以 close 后迟到的 claim 必拒，close 前
-成功的 claim 必留在 active 集合里等待 release。双面 drain 正常闭合后追加 `drained`；只有显式、
-hash-bound 的孤儿恢复才追加 `reconciled`。
+`write:<operation>` claim 覆盖自己的完整 currentness＋write 窗口。一次 execution turn 返回或异常后
+关闭该 execution 的 claim 窗；claim 与 close 共用同一个 append transaction，所以 close 后迟到 claim
+必拒，close 前成功 claim 必留在 active 集合里等待 release。双面 drain 正常闭合后追加 `drained`；
+RunSupervisor 随后重读 `operator next`：仍 ready 时由确定性主路直接消费同快照 execution token，
+不会启动或续跑 Commander；只有命中关闭 `reviewer_tasks` 注册表的 blocker 才以 immutable workpack
+进入同 epoch 的 Commander exact-resume turn。只有显式、hash-bound 的孤儿恢复才追加 `reconciled`。
 
 `CommanderAdmissionEvent` 的 v1 wire 为：
 
@@ -329,10 +343,11 @@ lock 内截回 committed prefix、fsync，并分别追加 `authorized / applied`
 `unknown`。终验从盘面重新核 Stage2 正式 Global + 称名投影 + Blueprint current、联合 HARD 通过、
 global review 的 blocking 面逐项 PASS（disclosure 非 PASS 只披露）、当前可下载成书、终审包、阻塞待办与
 启动/结束代码指纹；不解析 agent 自述。两轴不许互推，尤其 `state=ok` 不推出可交付。
-顶层进程 `exit_code=0` 但 fresh outcome=`stopped` 时，结束检查再读一次 `operator next`：仍为 ready，
-或已 `pipeline_complete` 但 delivery 终验尚未闭合，保持 stopped 并在 session/ledger 写
-`error_kind=commander_early_exit`；next 自身不可读则降 unknown。该检查不自动 resume，也不追加第二个
-模型 turn。
+一次 Commander reviewer turn `exit_code=0` 但 fresh outcome=`stopped` 时，RunSupervisor 再读一次
+`operator next`：ready 交确定性 execution-token 主路；只有下一个状态仍是登记的 reviewer blocker 才在
+同 epoch 精确续用 provider session。不存在任意 reviewer turn 数上限，但预算、授权、pause/stop、
+current blocker 与 admission 仍关闭式生效。已经 `pipeline_complete` 而
+delivery 终验未闭合时只运行确定性 finalizer/verify，不追加无关模型 turn；next 自身不可读则降 unknown。
 
 ---
 
@@ -804,8 +819,9 @@ prompt/schema、typed validator、ledger 与 `_service/agent_sessions.jsonl`；*
 artifact adoption → committed` 收口；foreign prepared 序号不能被 legacy 或另一 run 抢走，尾窗恢复
 必须复验 journal 的 artifact/finalization SHA 与两份 ledger identity。双盲响应的 schema/dynamic 校验、
 匿名标签闭合、合并、当前输入与代码漂移检查、最终交付验证都由代码承担，agent 自述或进程成功不能
-替代。checkpoint 与 journal 都是 `_stage6_runs/<run_id>/` 内部 sidecar，不是正式 artifact、缓存或
-公开 API 类型。
+替代。checkpoint 与 journal 都是
+`<base>/_service/runs/<sid>/stage6/<run_id>/` 内部 sidecar，不是正式 artifact、缓存或
+公开 API 类型。旧书内 `_stage6_runs` 只读兼容，不再接受新 checkpoint/journal。
 
 #### 7.0c Phase5 executor checkpoint / commit journal —— 六个 producer 共用一套 acceptance
 
@@ -841,11 +857,14 @@ primary，照常 journal/adoption 但保持 landed-red；Stage5 rejected/INVALID
 没有正式 primary 的终态不得伪造 adoption 或 committed，并保留既有 blocked 与 0 成本 revalidate /
 人工恢复语义。该整套 sidecar 都是内部恢复态，不进入公开 HTTP schema。
 
-### 7.0d `operator_phases/<session_id>.jsonl` —— 墙钟归属，不是模型成本账
+### 7.0d `operator_phases/<session_id>.jsonl` —— legacy 诊断墙钟，不是主路权威账
 
-每个 operator session 独占一条 append-only 流；追加只重放当前 session，不随历史总量线性变慢。
-它与 node beacon、`ledger.jsonl`、`agent_sessions.jsonl` 正交：人工审阅、批准与终审可以被量时，但不会
-因此成为 pipeline node、provider turn 或交付闸。事件 wire 的字段证据如下：
+正常主路的权威时间线来自 RunSupervisor lifecycle events、admission claims、node beacon、
+`ledger.jsonl` 与 `agent_sessions.jsonl`；这些由生产动作自动形成。Commander/Executor 不在 prompt、skill
+或正常主路里手工埋点。`operator_phases` 只保留 legacy/显式诊断兼容：缺失、未闭合或无法与权威账
+联结时，完整 phase 墙钟分解必须是 unknown，不能阻断运行或洗成 0。若显式使用，每个 session 仍独占
+append-only 流；人工审阅、批准与终审可以被量时，但不会因此成为 pipeline node、provider turn 或
+交付闸。事件 wire 的字段证据如下：
 
 | 字段 | 含义 | 证据 |
 |---|---|---|
@@ -865,6 +884,36 @@ failed 必须有 `error_kind`。summary 对已结束 phase 的时间区间取并
 本 wire **刻意没有** node、model、usage、token、price、prompt、正文、reason、argv、路径或密钥。
 Commander 宿主内部模型 usage 没经过仓库边界时，summary 固定给
 `model_usage_state=unavailable_host_boundary`；不得按墙钟、字数或 executor 均价反推成本。
+
+### 7.0e `_service/runs`、scratch、trash 与 retention
+
+新 writer 的 run/checkpoint/history 唯一根为 `_service/runs/<sid>/stageN`。旧书内
+`_stage*_runs` 不迁移、不追加，只能由具体 producer 的 legacy reader 在逐字校验通过后兼容读取。
+operator 临时材料落 `_service/scratch/<sid>/<session>`；正常收尾只删除本 session，不能按 sid 或
+scratch 根递归猜目标。
+
+服务维护使用 `novel.cli.service_lifecycle preview|apply` 两相口。policy 的
+`log_ttl_seconds / telemetry_ttl_seconds / trash_ttl_seconds / checkpoint_ttl_seconds` 默认全是
+`null`，即关闭；`max_entries` 同时限制扫描量与候选量。preview 只读生成内容绑定的 plan token；apply
+必须显式 `--yes`，逐 sid 取 writer ownership，并对每个目标重核路径、symlink、owner、TTL 和冻结
+tree/file identity。日志只收已 ended owner，legacy telemetry 只收已 closed session；checkpoint 还须
+同时证明 parent delivered、run committed、正式文件 SHA 对得上，并在删除前永久写
+`_service/run_receipts/` 的无正文 receipt。ledger、admission、beacon、agent/job/session 事件及恢复
+manifest/receipt 永不进入候选。
+
+apply 先写 aggregate prepared，再为每项写自哈希 item prepared；删除成功后逐项 committed，最后
+aggregate committed。中途崩溃后，同一个 plan 可凭逐项证据区分“本次已删”与“外部拿走”，幂等补尾；
+缺 prepared 的目标消失仍关闭式失败。trash purge 同样先写永久 receipt，v3 trash 的 book、approval 与
+该 sid service run 是一个回收边界。retention 与 restore 都有正式 preview/apply HTTP/UI；restore apply
+仍只由受控 CLI 子进程移动产物。restore 在首个移动前写永久 v2 prepared receipt，逐面保存无正文
+manifest、archive/live 精确路径与 SHA/tree 身份；hard-kill 后，显式重放或 trash sweep 只有在每面恰好
+一侧存在且身份匹配时才幂等补尾；服务启动只作有界 receipt 扫描并拉同一受控 CLI child，不在服务
+进程内移动书。双份、缺失、漂移或陌生 trash 壳条目一律关闭式留盘，且不阻断恢复 UI 启动。
+`ArtifactStore` 仍把 numbered `_rounds` 当作原字节恢复面；未编辑 `.INVALID` 归档后，若其
+locator-bound `_revalidation` 创建基线与 numbered 轮次逐字相同，只把重复正文压成绑定 numbered 路径
+与 raw SHA-256 的小引用；恢复把该轮搬回 live 时，仅在 live SHA 精确匹配时解析为创建基线。人工编辑
+导致两份内容不同则完整保留；旧 full baseline 继续由读取口兼容，不使用 symlink/hardlink，也不递归
+扫描或删除历史目录。
 
 ### 7.1 ⚠ 日志按**字节**存，只在读的时候解码
 

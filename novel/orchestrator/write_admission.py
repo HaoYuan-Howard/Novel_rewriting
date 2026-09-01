@@ -159,12 +159,12 @@ def operation_scope(
         return
 
     claim = admission.claim(
-        base_abs, context.run_id, checked_sid,
+        base_abs, context.execution_id, checked_sid,
         node=f'write:{checked_operation}', claim_sha256=claim_sha)
     receipt = WriteAdmission(
         protocol=WRITE_ADMISSION_PROTOCOL, base=base_abs,
         sid=checked_sid, operation=checked_operation,
-        claim_sha256=claim_sha, parent_run_id=context.run_id,
+        claim_sha256=claim_sha, parent_run_id=context.execution_id,
         claim_id=claim.claim_id)
     body_error: BaseException | None = None
     try:

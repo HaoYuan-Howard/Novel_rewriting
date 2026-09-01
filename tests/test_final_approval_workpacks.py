@@ -8,8 +8,11 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from pydantic import ValidationError
 
-from contracts.schema.api import CompactApprovalCheck
+from contracts.schema.api import (
+    CompactApprovalCheck, Stage6ApprovalWorkpack, Stage7ApprovalWorkpack,
+)
 from contracts.schema.stage6 import ApprovedHook, HookApprovalResolution
 from contracts.schema.stage7 import (
     ApprovedNameMap, ExtraSub, NameDecision, Residual, StemBaseline,
@@ -28,6 +31,13 @@ def _compact_check() -> CompactApprovalCheck:
     )
 
 
+class _Report(SimpleNamespace):
+    """工作包的 validation seal 需要完整报告载荷；测试桩也必须交出同一接口。"""
+
+    def model_dump(self, **_kwargs) -> dict[str, object]:
+        return {'node': getattr(self, 'node', 'synthetic-approval-check')}
+
+
 def _stage6_snapshot_env(monkeypatch):
     art = _hook([TEXT_A, TEXT_B, TEXT_C])
     monkeypatch.setattr(
@@ -42,7 +52,7 @@ def _stage6_snapshot_env(monkeypatch):
     monkeypatch.setattr(hook, '_Upstreams', lambda *_args: object())
     monkeypatch.setattr(hook, '_judge_artifact', lambda *_args: [])
     monkeypatch.setattr(
-        hook, '_report', lambda *_args, **_kwargs: SimpleNamespace())
+        hook, '_report', lambda *_args, **_kwargs: _Report(node='stage6.approve'))
     monkeypatch.setattr(
         hook, 'compact_approval_check', lambda _report: _compact_check())
     monkeypatch.setattr(
@@ -56,12 +66,21 @@ def test_stage6_workpack_hash_is_stable_after_approval_and_old_approval_is_not_c
 ) -> None:
     store, art = _stage6_snapshot_env(monkeypatch)
     before, _ = hook._approval_workpack_snapshot(store, art)
+    public = before.model_dump(mode='json')
+    assert before.v == 3
+    assert before.review_contract_version == 'stage6-final-review-v3'
+    assert 'code_version' not in public and 'rules_fingerprint' not in public
+    with pytest.raises(ValidationError, match='Stage4A frozen-v6'):
+        Stage6ApprovalWorkpack.model_validate({
+            **public, 'disposition': 'suspended',
+        })
     candidate = art.candidates[0]
     resolution = HookApprovalResolution(
         actor='reviewer-a', reason='逐项核验 A/B 与机械证据',
         subject_sha256=before.candidates[0].subject_sha256,
         basis='human_verification',
         workpack_sha256=before.workpack_sha256,
+        review_identity_sha256=before.review_identity_sha256,
     )
     approved = ApprovedHook(
         slot='c1', text=candidate.text, origin='human',
@@ -87,7 +106,9 @@ def test_stage6_workpack_hash_is_stable_after_approval_and_old_approval_is_not_c
     assert tampered.disposition == 'review_required'
     assert tampered.current_approval is None
 
-    legacy_resolution = resolution.model_copy(update={'workpack_sha256': None})
+    legacy_resolution = resolution.model_copy(update={
+        'review_identity_sha256': None,
+    })
     legacy, _ = hook._approval_workpack_snapshot(
         store, art.model_copy(update={'approved': approved.model_copy(update={
             'resolution': legacy_resolution,
@@ -100,7 +121,9 @@ def test_stage6_workpack_hash_is_stable_after_approval_and_old_approval_is_not_c
     changed_code, _ = hook._approval_workpack_snapshot(
         store, art.model_copy(update={'approved': approved}))
     assert changed_code.workpack_sha256 != before.workpack_sha256
-    assert changed_code.disposition == 'review_required'
+    assert changed_code.validation_seal_sha256 != before.validation_seal_sha256
+    assert changed_code.review_identity_sha256 == before.review_identity_sha256
+    assert changed_code.disposition == 'already_current'
 
 
 def test_stage6_workpack_pins_its_report_node_when_rechecked_by_stage7(
@@ -113,13 +136,88 @@ def test_stage6_workpack_pins_its_report_node_when_rechecked_by_stage7(
 
     def capture_report(*_args, report_node=None, **_kwargs):
         seen['report_node'] = report_node
-        return SimpleNamespace()
+        return _Report(node=report_node)
 
     monkeypatch.setattr(hook, '_report', capture_report)
 
     hook._approval_workpack_snapshot(store, art)
 
     assert seen == {'report_node': 'stage6.approve'}
+
+
+def test_stage6_current_check_reuses_candidate_baseline_in_one_invocation(
+    monkeypatch,
+) -> None:
+    """已有定稿只补判定稿文本；三个候选沿用同调用栈的去 approval 基准。"""
+    judge_artifact = hook._judge_artifact
+    store, base_art = _stage6_snapshot_env(monkeypatch)
+    candidate = base_art.candidates[0]
+    resolution = HookApprovalResolution(
+        actor='reviewer-a', reason='逐项复核同一不可变工作包',
+        subject_sha256=semantic.text_sha256(candidate.text),
+        basis='human_verification',
+        review_identity_sha256='e' * 64,
+    )
+    art = base_art.model_copy(update={'approved': ApprovedHook(
+        slot='c1', text=candidate.text, origin='human',
+        mech=candidate.mech, findings=list(candidate.findings),
+        resolution=resolution,
+    )})
+    report = _Report(node='stage6.approve')
+    baseline = hook._ApprovalBaseline(
+        store=store,
+        artifact_subject_sha256=hook._approval_subject_sha256(base_art),
+        texts=tuple(
+            (f'c{index}', row.text, tuple())
+            for index, row in enumerate(base_art.candidates, 1)
+        ),
+        stale=(), missing=(), report=report,
+    )
+    normalized: list[str] = []
+    observed: dict[str, object] = {}
+
+    def normalize(text, _up):
+        normalized.append(text)
+        return text, candidate.mech, []
+
+    def outcomes(_art, _up, _store, rows, **kwargs):
+        observed['rows'] = rows
+        observed['approved'] = kwargs['approved']
+        return []
+
+    monkeypatch.setattr(hook, '_normalize_and_judge', normalize)
+    monkeypatch.setattr(hook, '_outcomes_for_rows', outcomes)
+    monkeypatch.setattr(
+        hook, 'approval_is_current',
+        lambda _store, _art, *, approval_baseline=None:
+        approval_baseline is baseline,
+    )
+
+    assert judge_artifact(
+        art, object(), store, approval_baseline=baseline) == []
+    assert normalized == [candidate.text]
+    assert len(observed['rows']) == 4
+    assert observed['approved'] is True
+
+
+def test_stage6_workpack_consumes_exact_invocation_baseline_without_rejudge(
+    monkeypatch,
+) -> None:
+    store, art = _stage6_snapshot_env(monkeypatch)
+    report = _Report(node='stage6.approve')
+    baseline = hook._ApprovalBaseline(
+        store=store,
+        artifact_subject_sha256=hook._approval_subject_sha256(art),
+        texts=(), stale=(), missing=(), report=report,
+    )
+    monkeypatch.setattr(
+        hook, '_judge_artifact',
+        lambda *_args, **_kwargs: pytest.fail('exact baseline 不应重新 judge'))
+
+    _pack, got_report = hook._approval_workpack_snapshot_uncached(
+        store, art, approval_baseline=baseline)
+
+    assert got_report is report
 
 
 class _Stage6Store:
@@ -138,6 +236,10 @@ class _Stage6Store:
         self.writes.append(art)
         self.art = art
 
+    def write(self, _rel: str, art) -> None:
+        self.writes.append(art)
+        self.art = art
+
 
 def test_stage6_exact_replay_is_idempotent_but_a_new_reason_is_a_new_statement(
     monkeypatch, tmp_path,
@@ -151,6 +253,7 @@ def test_stage6_exact_replay_is_idempotent_but_a_new_reason_is_a_new_statement(
         subject_sha256=review_pack.candidates[0].subject_sha256,
         basis='human_verification',
         workpack_sha256=review_pack.workpack_sha256,
+        review_identity_sha256=review_pack.review_identity_sha256,
     )
     art = base_art.model_copy(update={'approved': ApprovedHook(
         slot='c1', text=candidate.text, origin='human',
@@ -177,8 +280,7 @@ def test_stage6_exact_replay_is_idempotent_but_a_new_reason_is_a_new_statement(
     common = {
         'pick': 1,
         'actor': 'reviewer-a',
-        'subject_sha256': resolution.subject_sha256,
-        'workpack_sha256': current_pack.workpack_sha256,
+        'review_token': current_pack.review_token,
     }
     same, _ = hook.run_approve(
         SimpleNamespace(novel_dir=tmp_path), reason='第一份人工声明', **common)
@@ -190,6 +292,87 @@ def test_stage6_exact_replay_is_idempotent_but_a_new_reason_is_a_new_statement(
     assert len(store.writes) == 1
     assert changed.approved is not None
     assert changed.approved.resolution.reason == '补充说明：重新核对了证据范围'
+
+
+def _legacy_stage6_approval(monkeypatch):
+    snapshot_store, art = _stage6_snapshot_env(monkeypatch)
+    pack, _report = hook._approval_workpack_snapshot(snapshot_store, art)
+    candidate = art.candidates[0]
+    resolution = HookApprovalResolution(
+        actor='legacy-reviewer', reason='旧契约下逐项核过三候选与语义证据',
+        subject_sha256=pack.candidates[0].subject_sha256,
+        basis='human_verification',
+        semantic_review_seq=pack.candidates[0].semantic_review_seq,
+        workpack_sha256=pack.workpack_sha256,
+        review_identity_sha256=None,
+    )
+    approved = ApprovedHook(
+        slot='c1', text=candidate.text, origin='human',
+        mech=candidate.mech, findings=list(candidate.findings),
+        resolution=resolution,
+    )
+    return art.model_copy(update={'approved': approved})
+
+
+def test_stage6_legacy_rebind_only_adds_stable_identity_and_preserves_statement(
+        monkeypatch, tmp_path) -> None:
+    legacy = _legacy_stage6_approval(monkeypatch)
+    store = _Stage6Store(legacy)
+    monkeypatch.setattr(hook, 'ArtifactStore', lambda _ctx: store)
+
+    before_candidates = list(legacy.candidates)
+    before_provenance = legacy.provenance
+    before_approval = legacy.approved
+    before_resolution = legacy.approved.resolution
+    rebound, _report = hook.run_rebind_review(
+        SimpleNamespace(novel_dir=tmp_path))
+
+    assert len(store.writes) == 1
+    assert rebound.candidates == before_candidates
+    assert rebound.provenance == before_provenance
+    assert rebound.approved is not None
+    resolution = rebound.approved.resolution
+    assert (resolution.actor, resolution.reason, resolution.subject_sha256) == (
+        before_resolution.actor,
+        before_resolution.reason,
+        before_resolution.subject_sha256,
+    )
+    assert resolution.basis == before_resolution.basis
+    assert resolution.semantic_review_seq == before_resolution.semantic_review_seq
+    assert resolution.workpack_sha256 == before_resolution.workpack_sha256
+    assert resolution.review_identity_sha256 is not None
+    assert before_approval is not None
+    assert rebound.approved.model_copy(update={
+        'resolution': resolution.model_copy(update={
+            'review_identity_sha256': None,
+        }),
+    }) == before_approval
+    assert hook.approval_is_current(store, rebound)
+
+
+def test_stage6_legacy_rebind_refuses_visible_evidence_drift_without_writing(
+        monkeypatch, tmp_path) -> None:
+    from novel.errors import TerminalState
+
+    legacy = _legacy_stage6_approval(monkeypatch)
+    candidate = legacy.candidates[0]
+    changed = candidate.model_copy(update={
+        'mech': candidate.mech.model_copy(update={
+            'quotes_fixed': candidate.mech.quotes_fixed + 1,
+        }),
+    })
+    drifted = legacy.model_copy(update={
+        'candidates': [changed, *legacy.candidates[1:]],
+    })
+    store = _Stage6Store(drifted)
+    monkeypatch.setattr(hook, 'ArtifactStore', lambda _ctx: store)
+    before = drifted.model_dump(by_alias=True, mode='json')
+
+    with pytest.raises(TerminalState, match='机械证据'):
+        hook.run_rebind_review(SimpleNamespace(novel_dir=tmp_path))
+
+    assert store.writes == []
+    assert store.art.model_dump(by_alias=True, mode='json') == before
 
 
 def _json_value(value: Any) -> Any:
@@ -257,7 +440,8 @@ def _stage7_snapshot_env(monkeypatch):
     rules = {'value': 'rules-stage7'}
     monkeypatch.setattr(rename, '_Upstreams', lambda *_args: object())
     monkeypatch.setattr(rename, '_judge', lambda *_args: [])
-    monkeypatch.setattr(rename, '_report', lambda *_args: SimpleNamespace())
+    monkeypatch.setattr(
+        rename, '_report', lambda *_args: _Report(node='stage7.approve'))
     monkeypatch.setattr(
         rename, 'compact_approval_check', lambda _report: _compact_check())
     monkeypatch.setattr(
@@ -271,6 +455,14 @@ def test_stage7_workpack_keeps_real_hits_residual_context_and_stable_subject(
 ) -> None:
     store, art, rules = _stage7_snapshot_env(monkeypatch)
     before, _ = rename._approval_workpack_snapshot(store, art)
+    with pytest.raises(ValidationError, match='Stage4A frozen-v6'):
+        Stage7ApprovalWorkpack.model_validate({
+            **before.model_dump(mode='json'), 'disposition': 'suspended',
+        })
+    public = before.model_dump(mode='json')
+    assert before.v == 3
+    assert before.review_contract_version == 'stage7-final-review-v3'
+    assert 'code_version' not in public and 'rules_fingerprint' not in public
 
     assert before.kept == ['沈大娘'] and before.kept_count == 1
     assert before.replacement_hits == {'沈姑娘': 3, '沈府': 3, '沈月': 3}
@@ -281,6 +473,7 @@ def test_stage7_workpack_keeps_real_hits_residual_context_and_stable_subject(
         origin='human', actor='reviewer-seven', reason='逐项核验人物与残留',
         subject_sha256=before.decision_subject_sha256,
         workpack_sha256=before.workpack_sha256,
+        review_identity_sha256=before.review_identity_sha256,
     )
     approved_art = art.model_copy(update={'approved': approval})
     current, _ = rename._approval_workpack_snapshot(store, approved_art)
@@ -296,20 +489,24 @@ def test_stage7_workpack_keeps_real_hits_residual_context_and_stable_subject(
 
     legacy, _ = rename._approval_workpack_snapshot(
         store, art.model_copy(update={'approved': approval.model_copy(update={
-            'workpack_sha256': None,
+            'review_identity_sha256': None,
         })}))
     assert legacy.disposition == 'review_required'
 
     store.ctx.code = 'code-7-next'
     changed_code, _ = rename._approval_workpack_snapshot(store, approved_art)
     assert changed_code.workpack_sha256 != before.workpack_sha256
-    assert changed_code.disposition == 'review_required'
+    assert changed_code.validation_seal_sha256 != before.validation_seal_sha256
+    assert changed_code.review_identity_sha256 == before.review_identity_sha256
+    assert changed_code.disposition == 'already_current'
 
     store.ctx.code = 'code-7'
     rules['value'] = 'rules-stage7-next'
     changed_rules, _ = rename._approval_workpack_snapshot(store, approved_art)
     assert changed_rules.workpack_sha256 != before.workpack_sha256
-    assert changed_rules.disposition == 'review_required'
+    assert changed_rules.validation_seal_sha256 != before.validation_seal_sha256
+    assert changed_rules.review_identity_sha256 == before.review_identity_sha256
+    assert changed_rules.disposition == 'already_current'
 
     rules['value'] = 'rules-stage7'
     changed_artifact, _ = rename._approval_workpack_snapshot(
@@ -327,17 +524,81 @@ def test_stage7_proof_refuses_legacy_or_noncurrent_workpack_approval(
         origin='human', actor='reviewer-seven', reason='逐项核验人物证据',
         subject_sha256=pack.decision_subject_sha256,
         workpack_sha256=pack.workpack_sha256,
+        review_identity_sha256=pack.review_identity_sha256,
     )
     current = art.model_copy(update={'approved': approval})
     assert rename.approval_proof_sha256(store, current) is not None
 
     legacy = current.model_copy(update={'approved': approval.model_copy(update={
-        'workpack_sha256': None,
+        'review_identity_sha256': None,
     })})
     assert rename.approval_proof_sha256(store, legacy) is None
 
     store.ctx.code = 'code-7-next'
-    assert rename.approval_proof_sha256(store, current) is None
+    assert rename.approval_proof_sha256(store, current) is not None
+
+
+def _legacy_stage7_approval(monkeypatch):
+    snapshot_store, art, _rules = _stage7_snapshot_env(monkeypatch)
+    pack, _report = rename._approval_workpack_snapshot(snapshot_store, art)
+    approval = ApprovedNameMap(
+        origin='human', actor='legacy-name-reviewer',
+        reason='旧契约下逐人核过替换命中、残留与人物决定',
+        subject_sha256=pack.decision_subject_sha256,
+        workpack_sha256=pack.workpack_sha256,
+        review_identity_sha256=None,
+    )
+    return art.model_copy(update={
+        'approved': approval,
+        'book_txt': {'sha1': 'd' * 40, 'chars': 321, 'chapters': 2},
+    })
+
+
+def test_stage7_legacy_rebind_refuses_when_old_visible_evidence_was_not_persisted(
+        monkeypatch, tmp_path) -> None:
+    from novel.errors import TerminalState
+
+    legacy = _legacy_stage7_approval(monkeypatch)
+    ctx = SimpleNamespace(novel_dir=tmp_path, sid='book-7', code='code-7')
+    store = _Stage7Store(ctx, legacy)
+    monkeypatch.setattr(rename, 'ArtifactStore', lambda _ctx: store)
+    monkeypatch.setattr(
+        rename, '_retire_book_txt',
+        lambda *_args: pytest.fail('rebind 绝不能退休既有成书'))
+    delivered = tmp_path / 'book.txt'
+    delivered.write_bytes('既有成书字节\n'.encode('utf-8'))
+    before_bytes = delivered.read_bytes()
+    before_artifact = legacy.model_dump(mode='json', by_alias=True)
+
+    with pytest.raises(TerminalState, match='immutable workpack / stable evidence digest'):
+        rename.run_rebind_review(ctx)
+
+    assert store.writes == []
+    assert delivered.read_bytes() == before_bytes
+    assert store.art.model_dump(mode='json', by_alias=True) == before_artifact
+
+
+def test_stage7_legacy_rebind_refuses_decision_subject_drift_without_writing(
+        monkeypatch, tmp_path) -> None:
+    from novel.errors import TerminalState
+
+    legacy = _legacy_stage7_approval(monkeypatch)
+    changed_character = legacy.characters[0].model_copy(update={
+        'new_canonical': '顾月',
+    })
+    drifted = legacy.model_copy(update={
+        'characters': [changed_character],
+    })
+    ctx = SimpleNamespace(novel_dir=tmp_path, sid='book-7', code='code-7')
+    store = _Stage7Store(ctx, drifted)
+    monkeypatch.setattr(rename, 'ArtifactStore', lambda _ctx: store)
+    before = drifted.model_dump(mode='json', by_alias=True)
+
+    with pytest.raises(TerminalState, match='决策主体已变化'):
+        rename.run_rebind_review(ctx)
+
+    assert store.writes == []
+    assert store.art.model_dump(mode='json', by_alias=True) == before
 
 
 def test_stage6_approve_rechecks_after_shared_lock_and_never_overwrites_edit(
@@ -364,8 +625,7 @@ def test_stage6_approve_rechecks_after_shared_lock_and_never_overwrites_edit(
             hook.run_approve(
                 SimpleNamespace(novel_dir=tmp_path), 1,
                 actor='reviewer', reason='核验旧工作包',
-                subject_sha256=old_pack.candidates[0].subject_sha256,
-                workpack_sha256=old_pack.workpack_sha256,
+                review_token=old_pack.review_token,
             )
         except BaseException as exc:  # thread boundary: carry exact terminal back
             outcome.append(exc)
@@ -397,6 +657,10 @@ class _Stage7Store:
     def read_own(self, _model, _rel: str):
         return self.art, b'raw'
 
+    def write(self, _rel: str, art) -> None:
+        self.writes.append(art)
+        self.art = art
+
 
 def test_stage7_approve_rechecks_after_shared_lock_and_never_overwrites_edit(
     monkeypatch, tmp_path,
@@ -423,8 +687,7 @@ def test_stage7_approve_rechecks_after_shared_lock_and_never_overwrites_edit(
         try:
             rename.run_approve(
                 ctx, actor='reviewer', reason='核验旧工作包',
-                subject_sha256=old_pack.decision_subject_sha256,
-                workpack_sha256=old_pack.workpack_sha256,
+                review_token=old_pack.review_token,
             )
         except BaseException as exc:
             outcome.append(exc)

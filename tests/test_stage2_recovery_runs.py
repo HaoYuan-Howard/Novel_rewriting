@@ -2206,7 +2206,7 @@ def test_manifest_and_single_resolution_race_has_exactly_one_authority(
     assert manifest_path.is_file() is (winner == 'manifest')
     assert single_path.is_file() is (winner == 'single')
     assert not (manifest_path.is_file() and single_path.is_file())
-    assert (ctx.novel_dir / stage2_runs.paths.STAGE2_RUNS_DIRNAME
+    assert (stage2_runs.paths.service_stage_runs_dir(ctx.novel_dir, 'stage2')
             / f'{stage2_runs.OWNERSHIP_LOCK_TARGET}.lock').is_file()
 
 

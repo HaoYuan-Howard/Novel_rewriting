@@ -20,8 +20,12 @@ from pathlib import Path
 from contracts.schema.stage0 import Stage0CandidatePlan, Stage0EditPlan
 from contracts.schema.evaluation import GlobalReviewDecisionSet
 from contracts.schema import encode_artifact
-from contracts.artifacts import STAGE2_GLOBAL_REVIEW_DECISIONS
+from contracts.artifacts import (
+    STAGE2_BLUEPRINT_RELATION_EDIT,
+    STAGE2_GLOBAL_REVIEW_DECISIONS,
+)
 from contracts.schema.api import BatchTrimResolutionRequest
+from contracts.schema.stage2 import BlueprintRelationEdit
 from contracts.schema.stage5 import ChapterResponse
 from novel import paths
 from novel.errors import (
@@ -230,6 +234,43 @@ def save_global_review_decisions(
         os.replace(tmp, target)
     except OSError as exc:
         raise ArtifactUnreadable(f'保存 stage2 复核决策失败：{exc!r}') from exc
+    finally:
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
+    return target.resolve()
+
+
+def save_blueprint_relation_edit(
+    base: str | os.PathLike[str],
+    sid: str,
+    request: BlueprintRelationEdit,
+) -> Path:
+    """把 Stage2 v7 typed relation request 落到 SID 专属的一次性目录。
+
+    HTTP 进程只写 ``_service/edits``；正式 Blueprint 仍只能由
+    ``stage2.blueprint --apply-edit`` 子进程经 schema/HARD/归档口写回。
+    """
+    try:
+        paths.check_sid(sid)
+    except PathRefused as exc:
+        raise SourcePathRejected(f'关系编辑的书 id 不合法：{exc}') from exc
+    root = service_dir(base) / EDITS_DIRNAME / sid
+    root.mkdir(parents=True, exist_ok=True)
+    target = root / f'blueprint-relations-{uuid.uuid4().hex}.json'
+    tmp = target.with_suffix('.tmp')
+    payload = encode_artifact(
+        STAGE2_BLUEPRINT_RELATION_EDIT,
+        request.model_dump(mode='json', by_alias=True),
+    )
+    try:
+        tmp.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + NL,
+            encoding='utf-8')
+        os.replace(tmp, target)
+    except OSError as exc:
+        raise ArtifactUnreadable(f'保存 Stage2 关系编辑请求失败：{exc!r}') from exc
     finally:
         try:
             tmp.unlink(missing_ok=True)

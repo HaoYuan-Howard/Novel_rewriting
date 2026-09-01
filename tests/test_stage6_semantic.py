@@ -75,7 +75,8 @@ def _stored_review(label: str, text: str, *, contradiction: bool = False,
 
 
 def _art(*, approved: str | None = None, bound_sha256: str | None = None,
-         workpack_sha256: str | None = 'f' * 64):
+         workpack_sha256: str | None = 'f' * 64,
+         review_identity_sha256: str | None = 'e' * 64):
     candidates = [
         SimpleNamespace(approach='source_architecture', text=TEXT_A, findings=[]),
         SimpleNamespace(approach='payoff_preview', text=TEXT_B, findings=[]),
@@ -91,7 +92,8 @@ def _art(*, approved: str | None = None, bound_sha256: str | None = None,
                             subject_sha256=(bound_sha256
                                             or semantic.text_sha256(picked.text)),
                             basis='human_verification',
-                            workpack_sha256=workpack_sha256))
+                            workpack_sha256=workpack_sha256,
+                            review_identity_sha256=review_identity_sha256))
                     if picked is not None else None)
     return SimpleNamespace(candidates=candidates, approved=approved_obj)
 
@@ -263,7 +265,7 @@ def test_runtime_contract_binds_the_exact_request_surface_and_nothing_else():
     assert semantic._runtime_contract('other-model') != current
 
 
-def test_human_edit_and_resolution_contract_require_explicit_hash_binding():
+def test_human_edit_resolution_and_approval_require_explicit_binding():
     subject = semantic.text_sha256(TEXT_A)
     with pytest.raises(ValueError, match='actor'):
         HookEdit(text=TEXT_A)
@@ -293,8 +295,12 @@ def test_human_edit_and_resolution_contract_require_explicit_hash_binding():
         HookApproveRequest(pick=1)
     with pytest.raises(ValueError, match='空白'):
         HookApproveRequest(
-            pick=1, actor=' ', reason='已核验', subject_sha256=subject,
-            workpack_sha256='f' * 64)
+            pick=1, actor=' ', reason='已核验',
+            review_token='s6r3_' + 'f' * 64)
+    with pytest.raises(ValueError):
+        HookApproveRequest(
+            pick=1, actor='reviewer', reason='旧包只读',
+            review_token='s6r2_' + 'f' * 64)
 
 
 def test_approve_http_adapter_forwards_audited_optimistic_lock(monkeypatch):
@@ -312,13 +318,12 @@ def test_approve_http_adapter_forwards_audited_optimistic_lock(monkeypatch):
         lambda *_args: (_ for _ in ()).throw(AssertionError('失败作业不许盖章')))
     request = HookApproveRequest(
         pick=2, actor='editor-a', reason='核验完成',
-        subject_sha256='a' * 64, workpack_sha256='b' * 64)
+        review_token='s6r3_' + 'b' * 64)
     edits.approve_hook(request, sid='book-a', base='out')
     assert captured == {
         'base': 'out', 'node': 'stage6.approve', 'sid': 'book-a',
         'extra': ['--pick', '2', '--actor', 'editor-a', '--reason', '核验完成',
-                  '--subject-sha256', 'a' * 64,
-                  '--workpack-sha256', 'b' * 64],
+                  '--review-token', 's6r3_' + 'b' * 64],
     }
 
 
@@ -698,8 +703,8 @@ def test_a_stale_or_mismatched_review_set_makes_every_candidate_unreviewed(monke
     assert {row.state for row in assessments.values()} == {'unreviewed'}
 
 
-def test_downstream_requires_the_current_approved_bytes(monkeypatch):
-    """下游同时要求当前定稿字节与当前代码/规则/证据工作包。
+def test_downstream_requires_current_bytes_and_stable_review_identity(monkeypatch):
+    """代码/规则复检可换 workpack token，但可见证据 identity 不能变。
 
     ⚠ 这条不是「变松了」。原来的三条分支（校准 FAIL 拒绝 / clear 放行 / PASS 漂了兜底）
     全部由 automated 结论驱动，随自动放行门消失；而真正在拦人的一直是这道字节绑定。
@@ -708,7 +713,9 @@ def test_downstream_requires_the_current_approved_bytes(monkeypatch):
     monkeypatch.setattr(
         hook, '_approval_workpack_snapshot',
         lambda *_args: (SimpleNamespace(
-            workpack_sha256='f' * 64, disposition='already_current'), None))
+            workpack_sha256='0' * 64,
+            review_identity_sha256='e' * 64,
+            disposition='already_current'), None))
     with pytest.raises(TerminalState, match='还没定稿'):
         semantic.require_approved_clear(_Store(), _art())
 
@@ -720,16 +727,18 @@ def test_downstream_requires_the_current_approved_bytes(monkeypatch):
         semantic.require_approved_clear(
             _Store(), _art(approved='source_architecture', bound_sha256='0' * 64))
 
-    with pytest.raises(TerminalState, match='工作包'):
+    with pytest.raises(TerminalState, match='审阅身份|审阅契约'):
         semantic.require_approved_clear(
             _Store(), _art(
-                approved='source_architecture', workpack_sha256=None))
+                approved='source_architecture', review_identity_sha256=None))
 
     monkeypatch.setattr(
         hook, '_approval_workpack_snapshot',
         lambda *_args: (SimpleNamespace(
-            workpack_sha256='0' * 64, disposition='review_required'), None))
-    with pytest.raises(TerminalState, match='工作包'):
+            workpack_sha256='0' * 64,
+            review_identity_sha256='d' * 64,
+            disposition='review_required'), None))
+    with pytest.raises(TerminalState, match='审阅身份|审阅契约'):
         semantic.require_approved_clear(
             _Store(), _art(approved='source_architecture'))
 
@@ -741,7 +750,9 @@ def test_downstream_approval_recheck_does_not_leak_validation_reads(monkeypatch)
     def snapshot(current_store, _art):
         current_store.ctx.reads.append('stage1/hook_copy.json')
         return SimpleNamespace(
-            workpack_sha256='f' * 64, disposition='already_current'), None
+            workpack_sha256='0' * 64,
+            review_identity_sha256='e' * 64,
+            disposition='already_current'), None
 
     monkeypatch.setattr(hook, '_approval_workpack_snapshot', snapshot)
     monkeypatch.setattr(

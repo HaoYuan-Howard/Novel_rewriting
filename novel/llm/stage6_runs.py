@@ -58,6 +58,17 @@ _OWNERSHIP_REGISTRY_LOCK = threading.Lock()
 _OWNERSHIP_THREAD_LOCKS: dict[str, threading.RLock] = {}
 _OWNERSHIP_LOCAL = threading.local()
 
+
+def _history_files(ctx: Any, pattern: str) -> tuple[Path, ...]:
+    """Stage6 service/legacy 历史只读合并，service 优先。"""
+    found: dict[str, Path] = {}
+    for root in paths.stage_run_read_roots(ctx.novel_dir, 'stage6'):
+        if not root.is_dir():
+            continue
+        for target in root.glob(pattern):
+            found.setdefault(target.relative_to(root).as_posix(), target)
+    return tuple(found[key] for key in sorted(found))
+
 _AGENT_POLICY_FIELDS = {
     'protocol_version', 'profile', 'session_isolation',
     'recovery_policy', 'phases',
@@ -227,8 +238,39 @@ def _read_json(path: Path) -> dict[str, Any]:
 
 
 def _run_root(ctx: Any) -> Path:
-    return paths.stage6_semantic_run_path(
-        ctx.novel_dir, check_run_id(ctx.run_id))
+    run_id = check_run_id(ctx.run_id)
+    current = paths.stage6_semantic_run_path(ctx.novel_dir, run_id)
+    legacy = paths.legacy_stage6_semantic_run_path(ctx.novel_dir, run_id)
+    candidates = [legacy / RUN_FILE, legacy / COMMIT_FILE]
+    candidates.extend(
+        paths.legacy_stage6_semantic_checkpoint_path(
+            ctx.novel_dir, run_id, role)
+        for role in JUDGE_ROLES)
+    sources = [source for source in candidates if source.is_file()]
+    if sources:
+        with process_append_lock(current / '.legacy-adoption'):
+            for source in sources:
+                relative = source.relative_to(legacy)
+                target = current / relative
+                raw = source.read_bytes()
+                if target.is_file():
+                    continue
+                target.parent.mkdir(parents=True, exist_ok=True)
+                fd, temp_name = tempfile.mkstemp(
+                    prefix=f'.{target.name}.', suffix='.tmp', dir=str(target.parent))
+                try:
+                    with os.fdopen(fd, 'wb') as handle:
+                        handle.write(raw)
+                        handle.flush()
+                        os.fsync(handle.fileno())
+                    os.replace(temp_name, target)
+                except BaseException:
+                    try:
+                        os.unlink(temp_name)
+                    except FileNotFoundError:
+                        pass
+                    raise
+    return current
 
 
 def _resolved_profile(ctx: Any, value: object, *, label: str) -> dict[str, Any]:
@@ -1157,14 +1199,11 @@ def _refuse_foreign_commit_reservation(ctx: Any, artifact: str) -> None:
     任一 foreign prepared 都会阻止新 journal；foreign committed 只在调用方仍选到
     同一 artifact 时证明 seq 选择已过期。
     """
-    root = Path(ctx.novel_dir) / paths.STAGE6_RUNS_DIRNAME
     current = (_run_root(ctx) / COMMIT_FILE).resolve()
-    if not root.is_dir():
-        return
-    for target in root.glob(f'*/semantic/{COMMIT_FILE}'):
-        if target.resolve() == current:
-            continue
+    for target in _history_files(ctx, f'*/semantic/{COMMIT_FILE}'):
         foreign_run_id = target.parent.parent.name
+        if foreign_run_id == ctx.run_id or target.resolve() == current:
+            continue
         try:
             check_run_id(foreign_run_id)
             with process_append_lock(target):
@@ -1193,11 +1232,10 @@ def _refuse_foreign_commit_reservation(ctx: Any, artifact: str) -> None:
 def refuse_foreign_semantic_prepared(ctx: Any) -> None:
     """供共用 Stage6 锁内的 hook producer 拒绝 semantic prepared 尾窗。"""
     _require_ownership(ctx)
-    root = Path(ctx.novel_dir) / paths.STAGE6_RUNS_DIRNAME
-    if not root.is_dir():
-        return
-    for target in root.glob(f'*/semantic/{COMMIT_FILE}'):
+    for target in _history_files(ctx, f'*/semantic/{COMMIT_FILE}'):
         foreign_run_id = target.parent.parent.name
+        # 即使 run_id 相同，semantic 与 hook 仍是两个独立写 lane：semantic
+        # prepared 已冻结当前 hook 输入，hook 不能借“同 run”越过尾窗。
         try:
             check_run_id(foreign_run_id)
             with process_append_lock(target):
@@ -1223,11 +1261,10 @@ def _refuse_foreign_hook_prepared(ctx: Any) -> None:
     """semantic 提交前拒绝另一 hook run 的通用 prepared journal。"""
     from novel.llm import agent_runs
 
-    root = Path(ctx.novel_dir) / paths.STAGE6_RUNS_DIRNAME
-    if not root.is_dir():
-        return
-    for target in root.glob(f'*/hook/{agent_runs.COMMIT_FILE}'):
+    for target in _history_files(ctx, f'*/hook/{agent_runs.COMMIT_FILE}'):
         run_id = target.parent.parent.name
+        # 同一 parent/run 下的 hook prepared 也会冻结 semantic 输入；这里只
+        # 比的是跨 lane 所有权，不能套用同 lane 幂等恢复的 run_id 豁免。
         record = agent_runs.validate_foreign_commit_envelope(
             target, label='Stage6 hook foreign commit', run_id=run_id,
             sid=ctx.sid, node='stage6.hook')

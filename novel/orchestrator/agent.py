@@ -25,7 +25,9 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import subprocess
 import sys
+import tempfile
 import threading
 import time
 from collections.abc import Callable, Sequence
@@ -34,26 +36,41 @@ from pathlib import Path
 from typing import BinaryIO, NamedTuple
 
 from contracts.invariants import AGENT_EXECUTOR_NODES
+from contracts.schema.api import ExecutionPermit, OperatorNext
 from contracts.schema.orchestration import (
     AgentDeliveryOutcome, AgentPending, AgentQueueView, AgentRejected, AgentRunEvent,
-    AgentProfile, AgentRunRecord, AgentRunStart, PipelineAgentProfiles,
+    AgentProfile, AgentRunRecord, AgentRunStart, ExecutionEpoch,
+    PipelineAgentProfiles, RunContractV2,
 )
 from novel import agent_session_audit, paths, prov, run_identity, skill_contract
 from novel.agent_capabilities import (
     AgentProfileRefused, provider_for_driver, validate_pipeline_profiles,
 )
-from novel.appendlog import append_line
-from novel.cli.exit_codes import CRASH
+from novel.appendlog import (
+    append_line, append_line_under_process_lock, append_transaction,
+)
+from novel.cli.exit_codes import CRASH, landed
 from novel.commander_context import (
-    COMMANDER_CONTRACT_SHA256_ENV, COMMANDER_RUN_ID_ENV, env_with_context,
+    COMMANDER_ADMISSION_ID_ENV, COMMANDER_CONTRACT_SHA256_ENV,
+    COMMANDER_EPOCH_ID_ENV,
+    COMMANDER_EPOCH_SHA256_ENV, COMMANDER_RUN_ID_ENV, env_with_context,
 )
 from novel.commanders import (
     CommanderConfigurationError, CommanderDriver, CommanderInvocation,
     CommanderObservation, CommanderProcessResult, create_commander_driver,
 )
-from novel.errors import ApprovalRequired, UnsupportedRunMode, UpstreamMissing
+from novel.agents.base import _signal_process_tree
+from novel.errors import (
+    ApprovalRequired, TerminalState, UnsupportedRunMode, UpstreamMissing,
+)
 from novel.llm.ledger import append_commander_call
-from novel.orchestrator import admission, commander_completion, jobs
+from novel.orchestrator import (
+    admission, commander_completion, jobs, operator, reviewer_tasks,
+    service_lifecycle,
+)
+from novel.orchestrator.agent_supervisor import (
+    CommanderTurnResult, LaunchTicket, RunSupervisor, SupervisorActionResult,
+)
 from novel.orchestrator.jobs import JobConflict, JobRegistry, service_dir
 from novel.orchestrator.nodes import shell_line
 
@@ -92,6 +109,10 @@ _THREADS_LOCK = threading.Lock()
 _THREADS: dict[str, threading.Thread] = {}
 _COMMANDERS_LOCK = threading.Lock()
 _COMMANDERS: dict[str, CommanderDriver] = {}
+_ACTIONS_LOCK = threading.Lock()
+_ACTIONS: dict[str, subprocess.Popen[bytes]] = {}
+_SUPERVISORS_LOCK = threading.Lock()
+_SUPERVISORS: dict[str, RunSupervisor] = {}
 
 #: `R-11.11` 在这边的样子：服务重启后，agent 子进程是死是活我们真的不知道。
 RESTART_NOTE = ('服务重启前它是死是活我们不知道——'
@@ -161,11 +182,11 @@ def build_prompt(sid: str, base: str | os.PathLike[str], *,
              f'平台前缀与 `_{sid}` 尾巴的那一段）')
     payment_authorization = (
         '**付费授权已授予**：本会话允许产生外部模型调用费用，工作流契约中的付费命令逐条直接执行、'
-        '不再询问；每条付费命令的判据读数仍逐条留痕并进终审包。'
+        '不再询问；节点、用量与判据读数由 Supervisor 和权威账自动留痕。'
         if authorized else
         '**付费授权未授予**：不得执行会产生外部模型调用费用的命令；在第一条付费命令之前停下，'
-        '但仍须完成只读的 state、inbox、下一节点 preview 并创建终审包草稿，把「跑到哪、为什么停、'
-        '恢复命令」写进去（落点见下），然后结束。')
+        '但仍须完成只读的 state、inbox 与下一节点 preview；停止原因与恢复坐标由 Supervisor '
+        '写入权威账，然后结束。')
     egress_routes = _agent_egress_routes(profiles)
     egress_authorization = (
         '**正文外发授权已授予（具体第三方目的地已冻结）**：本次 launcher 依据同一启动请求中'
@@ -181,8 +202,8 @@ def build_prompt(sid: str, base: str | os.PathLike[str], *,
         '以下冻结路由只供 0 成本 preview 与身份核对，不构成授权：\n'
         f'{egress_routes}\n'
         '不得把小说正文或其派生上下文发送给外部模型；'
-        '即使付费授权已经授予，也只能先完成只读的 state、inbox、下一节点 preview 与终审包草稿，'
-        '并在首个需要正文外发的步骤前停下、写明恢复命令。')
+        '即使付费授权已经授予，也只能先完成只读的 state、inbox 与下一节点 preview，'
+        '并在首个需要正文外发的步骤前停下。')
     commander = profiles.commander
     executor = profiles.executor_default
     overrides = ', '.join(
@@ -190,64 +211,28 @@ def build_prompt(sid: str, base: str | os.PathLike[str], *,
         f'{profile.execution_mode}'
         for node, profile in sorted(profiles.executor_overrides.items())) or '无'
     canonical_skill = (skill_contract.SKILL_REL / 'SKILL.md').as_posix()
-    return f"""你在仓库 {REPO_ROOT.as_posix()} 的根目录下工作。launcher 已把 cwd 固定在仓根；
-每次 Bash 调用都必须保持在仓根，不得 cd，读取 base 与产物一律使用绝对路径。
+    return f"""你是小说工作流的 Commander/Reviewer，不是调度器。仓根是
+`{REPO_ROOT.as_posix()}`，审阅对象属于 sid={sid}、base=`{base_abs}`。
 
-任务：把 sid={sid} 这本书端到端跑到 `{book_target}`。
-本次启动代码指纹：`{code_version}`。每个写盘节点或付费节点都须在执行前用
-`{py} -X utf8 -c "from novel import prov; print(prov.code_version())"`
-复算并逐字比较；不一致立即停下并在终审包披露。服务端结束终验也会再次比较，
-跨版本运行不会被判为 ready。
-base 目录（--base 恒用下面这个绝对路径）：
-{base_abs}
+确定性 RunSupervisor 独占状态机、execution token、节点调度、Executor 调度、遥测与终审报告；
+你只会在一个已登记的 reviewer blocker 上被唤醒。每一轮实际提示都会内嵌同一时点冻结的
+immutable workpack 与唯一 typed request 落点。先逐项审阅，再做一次跨项复核，最后只提交
+一份 typed 判断。不得启动任何小说节点或 Executor，不得修改正式产物、服务账或 Markdown，
+不得从目录存在性、旧对话或退出码猜测 PASS；证据不足时保留 UNVER 或拒绝。
+
+本次 parent contract 的审计起点：code_version=`{code_version}`；成书目标=`{book_target}`；
+终审包目标=`{review_target}`。这些目标仅供识别对象，不授予写权限。
 
 付费授权：{payment_authorization}
 正文外发授权：{egress_authorization}
 
-本次 agent 选择已经冻结进 append-only run contract：
+冻结角色：
 - Commander：{commander.driver}/{commander.model}/{commander.reasoning_effort}/{commander.execution_mode}
-- 默认 executor：{executor.driver}/{executor.model}/{executor.reasoning_effort}/{executor.execution_mode}
-- 节点覆盖：{overrides}
-所有 node 动作（包括 0 成本复检与恢复）都必须先取当前 `operator next`，再为 exact
-node/flags 取得 execution permit，并经 operator 的 ``run_step.py`` 执行；它会用父进程注入的
-run id 与 contract SHA-256 重读 started 事件，核验 permit、active claim、executor profile、
-代码指纹和两项授权。不得直接调用 `novel.cli run`、自行拼模型参数，或拿当前环境变量覆盖冻结选择。
+- 默认 Executor：{executor.driver}/{executor.model}/{executor.reasoning_effort}/{executor.execution_mode}
+- Executor 节点覆盖：{overrides}
 
-启动顺序（不可跳步）：
-1. 先读 `{canonical_skill}` 全文，并照它的“按需加载资源”读取
-   工作流契约、代批与终审契约及 headless 运行环境；失败时再读修复状态机，按节点名/rule id
-   检索经验库。不要依赖旧版章节号或聊天记忆。
-2. 先运行 `operator next {sid} --json`；它是 queue、state 与 inbox 同一冻结读面的唯一下一动作。
-   `state` / `inbox` 只用于展开证据，不得代替 next，也不得从 Stage 表、目录存在性或旧记忆反推节点。
-3. 在任何写盘或付费动作前，按 skill 模板创建终审包草稿；以后每次授权判断、闸门裁决、
-   修复与异常都立即更新，不要等结束时凭记忆补写。
-4. `operator next` 为 ready，或 blocked 但 skill 登记了 exact recovery 时，先调用
-   `operator permit`；把返回的 permit SHA 原样交给 `run_step.py` preview，再执行同一 runner 命令。
-   每次动作后都重新取 next 与 permit，旧 hash 不得复用。下一步将调用外部模型时，先按 capability
-   与冻结 profile 核对对应 CLI 的本机可探测状态；节点 executor 会在正文外发前再用同一 driver
-   做零模型 probe。陈述付费/外发边界，再执行 preview 给出的完整步骤并复验。agent executor
-   主路不带 `--response-repair agent`；候选被拒或传输中断时，使用该节点同一 logical session
-   与 durable checkpoint 续跑。只有显式选择 legacy DeepSeek 临时回滚、且已到终态时，
-   才先按 skill 运行 `doctor --llm-transport`，再用 sidecar `response-repair` 处理终态点名的
-   `_llm_rejected/**/candidate.json`；不得自动切到该回滚路。
-
-无人值守纪律：
-- 没有用户可以提问。任何 redo/unknown 或闸门争议，按 skill 的修复状态机与代批契约
-  处置并把依据写进终审包；无法安全处置就写清现状后停下——停机是合法结局。
-- 没有可定位证据时必须保留 `UNVER` 或以 `stopped` 结束；不得猜测 PASS、删除 finding、
-  为了“全绿”自行发明阈值，或把 exit 0 当成交付 ready。
-- 所有 shell/`run_step.py` 都必须前台同步执行；禁止 background、detached、
-  `run_in_background`、`Start-Process` 或先退出外层 shell 再留子进程继续写盘。工具若返回
-  可等待的 session/cell id，必须持续 wait 到原命令真实终态，不能把“已启动”当“已结束”。
-- node 的 start/end 信标只由 `run_step.py --execute` 在同一 active claim 内生成，不得手工补 `mark`
-  或后台延迟打点。typed approval、response-repair、operator telemetry 与 canonical finalizer 不是 node，
-  只走 skill 指定 façade；它们各自持 generic write claim。被唤起先重新取 `operator next` 再续跑。
-- 命令形态：一律以 `{py}` 前缀开头（权限白名单只认这一个 Bash 形态）；
-  正式 stage JSON/TXT、成书、`_service/*.jsonl`、`.llm_cache/`、`_rounds/` 与旧 run 输出严禁
-  直接编辑，正式变更只经 `novel.cli`。Write/Edit 只用于 skill 明列的 typed 人工输入和下面
-  唯一终审包，且不得超出 base（其余路径权限层直接拒）。
-- 持续填写并在结束前完成终审包，落点就是这一条路径（不要另起文件名）：
-  {review_target}"""
+审阅规范以 `{canonical_skill}` 及当前 workpack 明示的 review contract 为准；若两者与当前
+typed schema 冲突，关闭式拒绝并让本轮结束，不自行发明兼容写法。"""
 
 
 def _freeze_profiles(profiles: PipelineAgentProfiles | None,
@@ -397,17 +382,44 @@ def fold(events: list[AgentRunEvent], *, live: set[str] | None = None) -> list[A
     order: list[str] = []
     acc: dict[str, dict] = {}
     for e in events:
-        slot = acc.setdefault(e.run_id, {'start': None, 'started': None,
-                                         'ended': None, 'exit_code': None,
-                                         'note': None, 'outcome': None})
+        slot = acc.setdefault(e.run_id, {
+            'start': None, 'contract': None, 'epochs': [],
+            'active_epoch_id': None, 'last_kind': None,
+            'started': None, 'ended': None, 'exit_code': None,
+            'note': None, 'outcome': None,
+        })
         if e.run_id not in order:
             order.append(e.run_id)
         if e.kind == 'started':
-            slot.update(start=e.start, started=e.ts)
+            if e.wire_version == 2:
+                assert e.contract is not None
+                start = e.start or e.contract.legacy_start()
+                if start is None:
+                    # started 没有首次审计投影时无法为旧 UI/CLI 伪造 argv/prompt；
+                    # 早期 v2 行只有在 contract 内确实留有 legacy 字节时才可恢复。
+                    continue
+                slot.update(
+                    start=start,
+                    contract=e.contract, started=e.ts)
+            else:
+                slot.update(start=e.start, started=e.ts)
+        elif e.kind == 'epoch_opened':
+            assert e.epoch is not None
+            slot['epochs'].append(e.epoch)
+            slot['active_epoch_id'] = e.epoch.epoch_id
+        elif e.kind == 'epoch_closed':
+            if slot['active_epoch_id'] == e.epoch_id:
+                slot['active_epoch_id'] = None
         elif e.kind == 'ended':
-            slot.update(ended=e.ts, exit_code=e.exit_code, outcome=e.outcome)
+            # ended 是 parent 的永久终态。若坏尾/异常路径漏写 epoch_closed，
+            # 不能继续向外投影一个“已结束但仍有 active epoch”的不可能状态；
+            # 丢失的 drain 证据仍由 outcome/note 保持 unknown，而不是伪造关闭事件。
+            slot.update(
+                ended=e.ts, exit_code=e.exit_code, outcome=e.outcome,
+                active_epoch_id=None)
         else:
             slot['note'] = e.note
+        slot['last_kind'] = e.kind
     out: list[AgentRunRecord] = []
     for run_id in reversed(order):              # 新的在前（同 JobList 的约定）
         slot = acc[run_id]
@@ -423,14 +435,31 @@ def fold(events: list[AgentRunEvent], *, live: set[str] | None = None) -> list[A
                     state='unknown', checked_at=slot['ended'],
                     reason='历史 ended 事件没有交付终验载荷，不能从进程退出码补推可交付')
         elif run_id in live:
-            state = 'running'
+            if slot['last_kind'] == 'paused':
+                state = 'paused'
+            elif slot['contract'] is not None \
+                    and slot['active_epoch_id'] is None:
+                state = 'pending'
+            else:
+                state = 'running'
         else:
             state = 'unknown'
             slot['note'] = slot['note'] or RESTART_NOTE
+        if slot['contract'] is None:
+            allowed_controls = ['stop'] if state == 'running' else []
+        elif state in ('pending', 'running'):
+            allowed_controls = ['pause', 'stop']
+        elif state == 'paused':
+            allowed_controls = ['resume', 'stop']
+        else:
+            allowed_controls = []
         out.append(AgentRunRecord(
             run_id=run_id, start=slot['start'], started=slot['started'],
+            contract=slot['contract'], epochs=slot['epochs'],
+            active_epoch_id=slot['active_epoch_id'],
             ended=slot['ended'], exit_code=slot['exit_code'],
-            state=state, note=slot['note'], outcome=slot['outcome']))
+            state=state, note=slot['note'], outcome=slot['outcome'],
+            allowed_controls=allowed_controls))
     return out
 
 
@@ -439,10 +468,70 @@ def records(base: str | os.PathLike[str], *, registry: JobRegistry = REGISTRY,
     return fold(read_events(base), live=registry.live())
 
 
+def reconcile_run(
+        base: str | os.PathLike[str], run_id: str, *, actor: str,
+        reason: str, subject_sha256: str, force: bool = False,
+) -> AgentRunRecord:
+    """复用 admission 的 owner/CAS 收口，并为同一 v2 AgentRun 落真实事件。
+
+    ``reconciled`` 不是第二套恢复判定：admission seal 才是权威。这里仅在 seal
+    当前仍绑定同一 subject 时追加生命周期投影；若进程恰死在两账之间，重试会
+    识别已提交 seal 并幂等补上 AgentRun 事件。
+    """
+    checked = run_identity.check_run_id(run_id)
+    rec = next((item for item in records(base) if item.run_id == checked), None)
+    if rec is None:
+        raise UpstreamMissing(f'没有 run_id={checked!r} 的 agent 代跑记录')
+    if rec.contract is None:
+        raise JobConflict('只有 wire v2 AgentRun 可与 Commander admission 联合 reconcile')
+    if not actor.strip() or not reason.strip():
+        raise TerminalState('AgentRun reconcile 的 actor/reason 不得为空')
+    note = (
+        f'{actor.strip()}：{reason.strip()} '
+        f'[admission_subject={subject_sha256}]')
+    try:
+        admission.reconcile_gate(
+            base, checked, actor=actor, reason=reason,
+            subject_sha256=subject_sha256, force=force)
+    except TerminalState:
+        current = admission.snapshot(base, checked)
+        if (current.terminal_kind != 'reconciled'
+                or current.reconcile_invalidated
+                or current.terminal_subject_sha256 != subject_sha256):
+            raise
+
+    # retry 补尾也必须重新证明 owner 已停；force 从不越过这枚 OS lease。
+    with admission.require_owner_stopped(base, checked):
+        current = admission.snapshot(base, checked)
+        if (current.terminal_kind != 'reconciled'
+                or current.reconcile_invalidated
+                or current.terminal_subject_sha256 != subject_sha256):
+            raise TerminalState('admission reconcile seal 已变化，拒绝补 AgentRun 事件')
+        event = AgentRunEvent(
+            wire_version=2, run_id=checked, kind='reconciled',
+            ts=int(time.time()), note=note)
+        path = runs_path(base)
+        with append_transaction(path):
+            if not any(
+                    existing.wire_version == 2
+                    and existing.run_id == checked
+                    and existing.kind == 'reconciled'
+                    and existing.note == note
+                    for existing in read_events(base)):
+                append_line_under_process_lock(
+                    path, json.dumps(
+                        event.model_dump(mode='json'), ensure_ascii=False))
+    done = next((item for item in records(base) if item.run_id == checked), None)
+    if done is None:
+        raise UpstreamMissing(f'AgentRun reconciled 事件落盘后记录消失：{checked!r}')
+    return done
+
+
 def active_run(base: str | os.PathLike[str], *, registry: JobRegistry = REGISTRY,
                ) -> AgentRunRecord | None:
     """此刻在跑的 agent 代跑（全局一把锁 ⇒ 至多一个）。**给 jobs 路由的反向互斥用**。"""
-    return next((r for r in records(base, registry=registry) if r.state == 'running'),
+    return next((r for r in records(base, registry=registry)
+                 if r.state in ('pending', 'running', 'paused')),
                 None)
 
 
@@ -455,7 +544,8 @@ Spawn = Callable[
 ]
 
 
-def _default_spawn(run_id: str) -> Spawn:
+def _default_spawn(
+        run_id: str, *, on_registered: Callable[[], None] | None = None) -> Spawn:
     """由选定 driver 拉起一棵 Commander 进程树，并只登记这一个 owner。"""
 
     def go(invocation: CommanderInvocation, env: dict[str, str],
@@ -468,7 +558,12 @@ def _default_spawn(run_id: str) -> Spawn:
         for key in (
                 run_identity.RUN_ID_ENV,
                 COMMANDER_RUN_ID_ENV,
-                COMMANDER_CONTRACT_SHA256_ENV):
+                COMMANDER_CONTRACT_SHA256_ENV,
+                COMMANDER_EPOCH_ID_ENV,
+                COMMANDER_EPOCH_SHA256_ENV,
+                COMMANDER_ADMISSION_ID_ENV):
+            if key not in env:
+                continue
             runtime_env[key] = env[key]
         runtime_invocation = CommanderInvocation(
             argv=invocation.argv,
@@ -478,10 +573,18 @@ def _default_spawn(run_id: str) -> Spawn:
             profile=invocation.profile,
             protocol=invocation.protocol,
             cli_version=invocation.cli_version,
+            resume_provider_session_id=(
+                invocation.resume_provider_session_id),
         )
         driver = create_commander_driver(runtime_invocation.profile)
         with _COMMANDERS_LOCK:
             _COMMANDERS[run_id] = driver
+        if on_registered is not None:
+            setter = getattr(driver, 'set_launch_callback', None)
+            if setter is None:
+                raise CommanderConfigurationError(
+                    'Commander driver 不支持 Popen 后 launch ticket')
+            setter(on_registered)
         # owner 故意不在顶层 invocation 返回时移除：worker 接下来还要 drain
         # close 前 claim / beacon。300 秒阈值与人工 stop 都应尽可能仍能向这棵
         # driver 进程树发 cancel。真正 close 在 durable drain 闭合之后统一完成。
@@ -510,6 +613,43 @@ def _cancel_commander_owner(run_id: str) -> str:
         return f'Commander cancel 异常：{type(exc).__name__}: {exc}'
     return ('Commander driver 已确认 cancel 请求'
             if confirmed else 'Commander driver 未确认 cancel 请求')
+
+
+def _cancel_action_owner(run_id: str) -> bool:
+    """取消 Supervisor 直接启动的 canonical runner/finalizer 进程树。"""
+    with _ACTIONS_LOCK:
+        process = _ACTIONS.get(run_id)
+    if process is None or process.poll() is not None:
+        return False
+    return _signal_process_tree(process, force=True)
+
+
+def _write_scratch_bytes(path: Path, payload: bytes) -> None:
+    """同目录原子落一份本 run scratch；不同字节不覆盖。"""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.exists():
+        if path.read_bytes() == payload:
+            return
+        raise JobConflict(f'scratch 已存在且字节不同，拒绝覆盖：{path}')
+    fd, temporary = tempfile.mkstemp(
+        prefix=f'.{path.name}.', suffix='.tmp', dir=path.parent)
+    try:
+        with os.fdopen(fd, 'wb') as handle:
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        if path.exists():
+            if path.read_bytes() != payload:
+                raise JobConflict(f'scratch 并发落下不同字节：{path}')
+            return
+        os.replace(temporary, path)
+        temporary = ''
+    finally:
+        if temporary:
+            try:
+                os.unlink(temporary)
+            except FileNotFoundError:
+                pass
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -883,7 +1023,8 @@ def _append_lifecycle_warning(base: str, parent_run_id: str, message: str) -> No
 
 
 def _wait_for_execution_closure(
-        base: str, parent_run_id: str) -> _ExecutionDrainResult:
+        base: str, admission_id: str, *,
+        beacon_run_id: str | None = None) -> _ExecutionDrainResult:
     """先关闭 admission，再等 claim 与 beacon 两面精确闭合。
 
     300 秒只触发一次报警/cancel。越线后仍无限持有本书锁与 queue slot，且不做
@@ -892,6 +1033,8 @@ def _wait_for_execution_closure(
     durable unresolved admission 继续关闭式挡住。
     """
     from novel.orchestrator import beacon
+
+    parent_run_id = beacon_run_id or admission_id
 
     timeout = _EXECUTION_CLOSE_TIMEOUT_SECONDS
     if timeout <= 0:
@@ -908,10 +1051,10 @@ def _wait_for_execution_closure(
             # 第一次循环发生在顶层 invocation 刚 return/raise 的 finally 边界；
             # close 与 run_step.claim 使用同一个 append transaction。重试幂等，
             # 短暂 I/O 故障恢复后仍能把 gate 真正关上，而不是凭内存布尔值猜。
-            admission.close_gate(base, parent_run_id)
+            admission.close_gate(base, admission_id)
             # close_gate 的事务只管 admission 顺序；随后取联合快照，才能看见
             # reconciled 之后新增的任一 beacon 对旧 seal 的反证。
-            gate = admission.snapshot(base, parent_run_id)
+            gate = admission.snapshot(base, admission_id)
         except Exception as exc:  # noqa: BLE001 —— 证明不了 close 就继续持锁
             gate_error = exc
         if gate is not None:
@@ -941,7 +1084,7 @@ def _wait_for_execution_closure(
             # “双面此刻为空”要物化成 durable 终态；否则服务恰在 delivery/ended
             # 前崩溃，重启后无法区分“已安全 drain”与“只看过一次空快照”。
             try:
-                admission.mark_drained(base, parent_run_id)
+                admission.mark_drained(base, admission_id)
             except Exception as exc:  # noqa: BLE001 —— 没写成 durable 终态仍须持锁
                 gate_error = exc
             else:
@@ -974,7 +1117,11 @@ def _wait_for_execution_closure(
                 parts.append(f'open executions：{detail}{suffix}')
             if not parts:
                 parts.append('admission/beacon 尚未形成可证闭合状态')
-            cancel_note = _cancel_commander_owner(parent_run_id)
+            commander_cancel = _cancel_commander_owner(parent_run_id)
+            action_cancel = _cancel_action_owner(parent_run_id)
+            cancel_note = (
+                f'{commander_cancel}；canonical action cancel='
+                f'{"已确认" if action_cancel else "无活动 owner"}')
             timeout_reason = (
                 f'Commander 顶层进程退出后等待 {timeout:g} 秒仍未闭合（'
                 + '；'.join(parts) + f'）；{cancel_note}。'
@@ -1041,7 +1188,7 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
         invocation, prompt=plan.prompt, profile=plan.profiles.commander)
     run_id = jobs.new_job_id()
     session_run_id = jobs.new_job_id()
-    attempt_id = jobs.new_job_id()
+    parent_started_at = int(time.time())
     prompt_sha256 = _sha256_bytes(plan.prompt.encode('utf-8'))
     schema_sha256 = _sha256_bytes(
         f'commander-observation:{invocation.protocol}'.encode('utf-8'))
@@ -1052,6 +1199,17 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
         egress_authorized=plan.egress_authorized,
         code_version=code_version, skill_sha256=skill_sha256,
         profiles=plan.profiles)
+    contract_payload = RunContractV2(
+        sid=sid, base=base,
+        authorized=plan.authorized,
+        egress_authorized=plan.egress_authorized,
+        profiles=plan.profiles)
+    initial_epoch = ExecutionEpoch(
+        epoch_id=run_id, ordinal=1, reason='initial',
+        argv=list(invocation.argv), prompt_sha256=prompt_sha256,
+        protocol_version=invocation.protocol,
+        cli_version=invocation.cli_version, code_version=code_version,
+        skill_sha256=skill_sha256, session_run_id=session_run_id)
     key = jobs.acquire_agent_writer(
         base, sid, run_id, admit=_admit, registry=registry)
     owner_guard = admission.owner_lease(base, run_id)
@@ -1067,7 +1225,6 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
         owner_guard.__exit__(None, None, None)
 
     outer_started = False
-    gate_open_attempted = False
     try:
         # ⚠ 「书还在不在」必须**占锁之后**再查，而且要单独查一次。
         #   上面的共享 writer 只覆盖「删除**正在进行**」（`trash.run` 持
@@ -1085,43 +1242,21 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
         with owner_guard_lock:
             owner_guard_active = True
         append(base, AgentRunEvent(
-            run_id=run_id, kind='started', ts=int(time.time()),
+            wire_version=2, run_id=run_id, kind='started',
+            ts=parent_started_at, contract=contract_payload,
             start=start_payload))
         outer_started = True
-        agent_session_audit.append_event(
-            base,
-            agent_session_audit.AgentSessionEvent(
-                session_run_id=session_run_id,
-                parent_run_id=run_id,
-                role='commander', node=None, chapter=None,
-                subject_sha256=prompt_sha256,
-                profile=plan.profiles.commander,
-                requested_model=plan.profiles.commander.model,
-                requested_effort=plan.profiles.commander.reasoning_effort,
-                cli_version=invocation.cli_version,
-                protocol_version=invocation.protocol,
-                start_code_version=code_version,
-                skill_sha256=skill_sha256,
-                prompt_sha256=prompt_sha256,
-                schema_sha256=schema_sha256,
-                kind='started', ts=int(time.time()),
-            ),
-        )
-        # 必须先于 Commander spawn 持久化；后续 close/claim 在这同一文件的
-        # append transaction 上排序，顶层退出后才启动的迟到 run_step 因而必拒。
-        # 先记 attempted：append 可能已经提交一整行、却在返回前抛 I/O 异常；
-        # 那种“调用方没拿到返回值”不能被误读成“盘上一定没 gate”。
-        gate_open_attempted = True
-        admission.open_gate(base, run_id, sid)
+        append(base, AgentRunEvent(
+            wire_version=2, run_id=run_id, kind='epoch_opened',
+            ts=int(time.time()), epoch=initial_epoch))
     except BaseException as original:
         cleanup_failures: list[str] = []
         try:
-            if gate_open_attempted:
-                _close_failed_start_gate(base, run_id, original)
             if outer_started:
                 try:
                     append(base, AgentRunEvent(
-                        run_id=run_id, kind='ended', ts=int(time.time()),
+                        wire_version=2, run_id=run_id, kind='ended',
+                        ts=int(time.time()),
                         exit_code=CRASH,
                         outcome=AgentDeliveryOutcome(
                             state='failed', checked_at=int(time.time()),
@@ -1146,7 +1281,396 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                               + '；'.join(cleanup_failures))
         raise
 
-    def worker() -> None:
+    epoch_invocations: dict[str, CommanderInvocation] = {
+        initial_epoch.epoch_id: invocation,
+    }
+    active_admission_lock = threading.Lock()
+    active_admission_id: str | None = None
+    admission_quiesced = False
+    epoch_action_counts: dict[str, int] = {}
+    epoch_drain_states: dict[str, str] = {}
+    turn_index = 0
+    latest_observation = CommanderObservation(
+        provider_session_id=None, actual_model=None,
+        actual_effort=None, usage=None)
+    latest_outcome = AgentDeliveryOutcome(
+        state='unknown', checked_at=int(time.time()),
+        reason='Supervisor 尚未完成 Commander turn')
+    latest_rc = CRASH
+    latest_error_kind: str | None = None
+    latest_commander_outcome = latest_outcome
+    latest_commander_rc = CRASH
+    latest_commander_error_kind: str | None = None
+    provider_turn_recorded = False
+    current_session_code_version = code_version
+    current_session_skill_sha256 = skill_sha256
+    current_session_invocation = invocation
+    current_session_prompt_sha256 = prompt_sha256
+    # 创建 parent/epoch 不等于调用过模型；只有 reviewer 真正启动前才开
+    # Commander logical session，ready-only 的 clean run 不制造一对假 started/ended。
+    session_started = False
+    session_ended = False
+    pending_reviewer_action: reviewer_tasks.ReviewerAction | None = None
+    pending_reviewer_binding: tuple[str, str] | None = None
+    reviewed_blockers: set[tuple[str, str]] = set()
+
+    def _resume_prompt(epoch: ExecutionEpoch) -> str:
+        return (
+            '继续同一 immutable workpack。先重新读取当前 operator next；'
+            '只执行仍为 ready 的 exact action，所有写盘仍须重新取得 permit。'
+            f'当前 execution epoch={epoch.epoch_id}，'
+            f'code_version={epoch.code_version}。'
+        )
+
+    def _resume_invocation(
+            epoch: ExecutionEpoch, provider_session_id: str,
+            *, full_prompt: bool = False) -> CommanderInvocation:
+        prompt = (
+            epoch_invocations[epoch.epoch_id].stdin_text
+            if full_prompt else _resume_prompt(epoch))
+        driver: CommanderDriver | None = None
+        try:
+            driver = create_commander_driver(plan.profiles.commander)
+            resumed = driver.build_invocation(
+                plan.profiles.commander, prompt,
+                repo=REPO_ROOT, base=base,
+                cli_version=epoch.cli_version,
+                resume_provider_session_id=provider_session_id)
+            _validate_invocation(
+                resumed, prompt=prompt, profile=plan.profiles.commander)
+            if resumed.resume_provider_session_id != provider_session_id:
+                raise UnsupportedRunMode(
+                    'Commander driver 没有把 exact provider session id '
+                    '冻结进 resume invocation')
+            return resumed
+        finally:
+            if driver is not None:
+                driver.close()
+
+    def _review_invocation(
+            epoch: ExecutionEpoch, prompt: str,
+            provider_session_id: str | None) -> CommanderInvocation:
+        """为一份 frozen reviewer task 构造新 turn 或 exact resume。"""
+        driver: CommanderDriver | None = None
+        try:
+            driver = create_commander_driver(plan.profiles.commander)
+            reviewed = driver.build_invocation(
+                plan.profiles.commander, prompt,
+                repo=REPO_ROOT, base=base,
+                cli_version=epoch.cli_version,
+                resume_provider_session_id=provider_session_id)
+            _validate_invocation(
+                reviewed, prompt=prompt, profile=plan.profiles.commander)
+            if reviewed.resume_provider_session_id != provider_session_id:
+                raise UnsupportedRunMode(
+                    'Commander reviewer invocation 没有精确冻结 provider session id')
+            return reviewed
+        finally:
+            if driver is not None:
+                driver.close()
+
+    def _make_epoch(
+            reason: str, ordinal: int,
+            provider_session_id: str | None) -> ExecutionEpoch:
+        nonlocal session_run_id, turn_index, provider_turn_recorded
+        nonlocal latest_observation, latest_outcome, latest_rc, latest_error_kind
+        nonlocal latest_commander_outcome, latest_commander_rc
+        nonlocal latest_commander_error_kind
+        nonlocal current_session_code_version, current_session_skill_sha256
+        nonlocal current_session_invocation, current_session_prompt_sha256
+        nonlocal session_started, session_ended
+        nonlocal pending_reviewer_action, pending_reviewer_binding
+        current_code = prov.code_version()
+        _require_reproducible_code_version(current_code)
+        current_skill = _skill_sha256()
+        epoch_id = jobs.new_job_id()
+        if provider_session_id is None:
+            # 身份漂移后从新 provider session 进入，但 workpack 仍是 parent
+            # contract 那一份，不把授权/profile 重新解释一遍。
+            # 若这是“暂停后无法取得 provider id”的恢复，而不是 code drift，
+            # 旧 logical session 尚未由 close_epoch 封存；先诚实结束它，再开新会话。
+            _end_current_session(
+                outcome=latest_commander_outcome, rc=latest_commander_rc,
+                error_kind=(latest_commander_error_kind
+                            or 'provider_session_unavailable'),
+                end_code_version=current_code)
+            # 新 execution epoch 必须从当前代码/skill 重新构造 Commander
+            # 启动包；只换一枚 code 指纹、却继续发送旧 prompt，会把“滚 epoch”
+            # 变成审计假象。授权与 profiles 仍只取稳定 parent contract。
+            epoch_plan = _plan_resolved(
+                base, sid, authorized=plan.authorized,
+                egress_authorized=plan.egress_authorized,
+                profiles=plan.profiles, code_version=current_code)
+            epoch_invocation = epoch_plan.invocation
+            session_run_id = jobs.new_job_id()
+            turn_index = 0
+            provider_turn_recorded = False
+            latest_observation = CommanderObservation(
+                provider_session_id=None, actual_model=None,
+                actual_effort=None, usage=None)
+            latest_outcome = AgentDeliveryOutcome(
+                state='unknown', checked_at=int(time.time()),
+                reason='新 execution epoch 尚未完成 Commander turn')
+            latest_rc = CRASH
+            latest_error_kind = None
+            latest_commander_outcome = latest_outcome
+            latest_commander_rc = CRASH
+            latest_commander_error_kind = None
+            current_session_code_version = current_code
+            current_session_skill_sha256 = current_skill
+            current_session_invocation = epoch_invocation
+            current_session_prompt_sha256 = _sha256_bytes(
+                epoch_invocation.stdin_text.encode('utf-8'))
+            session_started = False
+            session_ended = False
+            pending_reviewer_action = None
+            pending_reviewer_binding = None
+            reviewed_blockers.clear()
+        else:
+            provisional = ExecutionEpoch(
+                epoch_id=epoch_id, ordinal=ordinal, reason=reason,
+                argv=list(plan.invocation.argv),
+                prompt_sha256=current_session_prompt_sha256,
+                protocol_version=current_session_invocation.protocol,
+                cli_version=current_session_invocation.cli_version,
+                code_version=current_code,
+                skill_sha256=current_skill,
+                session_run_id=session_run_id,
+                resume_provider_session_id=provider_session_id)
+            epoch_invocation = _resume_invocation(
+                provisional, provider_session_id)
+        epoch = ExecutionEpoch(
+            epoch_id=epoch_id, ordinal=ordinal, reason=reason,
+            argv=list(epoch_invocation.argv),
+            prompt_sha256=_sha256_bytes(
+                epoch_invocation.stdin_text.encode('utf-8')),
+            protocol_version=epoch_invocation.protocol,
+            cli_version=epoch_invocation.cli_version,
+            code_version=current_code,
+            skill_sha256=current_skill,
+            session_run_id=session_run_id,
+            resume_provider_session_id=provider_session_id)
+        epoch_invocations[epoch_id] = epoch_invocation
+        return epoch
+
+    def _open_epoch(
+            epoch: ExecutionEpoch, *, actual_prompt_sha256: str | None = None,
+    ) -> None:
+        # admission 按 provider turn 单独开 gate；epoch 自身只管身份。
+        nonlocal session_started, current_session_prompt_sha256
+        if session_started:
+            return
+        if actual_prompt_sha256 is not None:
+            current_session_prompt_sha256 = actual_prompt_sha256
+        agent_session_audit.append_event(
+            base,
+            agent_session_audit.AgentSessionEvent(
+                session_run_id=epoch.session_run_id,
+                parent_run_id=run_id,
+                role='commander', node=None, chapter=None,
+                subject_sha256=current_session_prompt_sha256,
+                profile=plan.profiles.commander,
+                requested_model=plan.profiles.commander.model,
+                requested_effort=plan.profiles.commander.reasoning_effort,
+                cli_version=current_session_invocation.cli_version,
+                protocol_version=current_session_invocation.protocol,
+                start_code_version=current_session_code_version,
+                skill_sha256=current_session_skill_sha256,
+                prompt_sha256=current_session_prompt_sha256,
+                schema_sha256=schema_sha256,
+                kind='started', ts=int(time.time()),
+            ),
+        )
+        session_started = True
+
+    def _end_current_session(
+            *, outcome: AgentDeliveryOutcome, rc: int,
+            error_kind: str | None, end_code_version: str) -> None:
+        """闭合当前 identity session；pause 不结束 epoch 或同一续会。"""
+        nonlocal session_ended
+        if not session_started or session_ended:
+            return
+        owned_provider_session_id = (
+            latest_observation.provider_session_id
+            if provider_turn_recorded else None)
+        agent_session_audit.append_event(
+            base,
+            agent_session_audit.AgentSessionEvent(
+                session_run_id=session_run_id,
+                parent_run_id=run_id,
+                role='commander', node=None, chapter=None,
+                subject_sha256=current_session_prompt_sha256,
+                profile=plan.profiles.commander,
+                provider_session_id=owned_provider_session_id,
+                requested_model=plan.profiles.commander.model,
+                actual_model=latest_observation.actual_model,
+                requested_effort=plan.profiles.commander.reasoning_effort,
+                actual_effort=latest_observation.actual_effort,
+                cli_version=current_session_invocation.cli_version,
+                protocol_version=current_session_invocation.protocol,
+                start_code_version=current_session_code_version,
+                end_code_version=end_code_version,
+                skill_sha256=current_session_skill_sha256,
+                prompt_sha256=current_session_prompt_sha256,
+                schema_sha256=schema_sha256,
+                process_state=('ok' if rc == 0 else 'failed'),
+                delivery_state=_session_delivery(outcome),
+                error_kind=error_kind,
+                kind='ended', ts=int(time.time()),
+            ),
+        )
+        session_ended = True
+
+    def _close_epoch(
+            epoch: ExecutionEpoch,
+            turn: CommanderTurnResult) -> str:
+        if not _epoch_identity_current(epoch):
+            try:
+                end_code = prov.code_version()
+            except Exception:
+                end_code = prov.CODE_UNKNOWN
+            drift_kind = (
+                'code_version_drift'
+                if end_code != epoch.code_version
+                else 'skill_version_drift')
+            _end_current_session(
+                outcome=AgentDeliveryOutcome(
+                    state='unknown', checked_at=int(time.time()),
+                    reason='execution epoch 身份漂移，旧 provider session 已封存'),
+                rc=latest_commander_rc,
+                error_kind=(latest_commander_error_kind or drift_kind),
+                end_code_version=end_code)
+        drain_state = epoch_drain_states.get(
+            epoch.epoch_id,
+            'drained' if epoch_action_counts.get(epoch.epoch_id, 0) == 0
+            else 'unknown')
+        if drain_state == 'drained':
+            service_lifecycle.finish_scratch_session(
+                base, sid, epoch.epoch_id)
+        return drain_state
+
+    def _epoch_identity_current(epoch: ExecutionEpoch) -> bool:
+        try:
+            return (
+                prov.code_version() == epoch.code_version
+                and _skill_sha256() == epoch.skill_sha256)
+        except Exception:  # noqa: BLE001 —— 取不到身份就必须滚 epoch
+            return False
+
+    def _cancel_active() -> bool:
+        _cancel_commander_owner(run_id)
+        _cancel_action_owner(run_id)
+        # 安全边界上没有活动 owner 时，stop 仍已通过 launch ticket 阻止新 spawn；
+        # 这里的布尔只表示取消请求已送达或当下无需取消，不决定 drain。
+        return True
+
+    def _set_commander_quiesced(value: bool) -> bool:
+        """pause/stop 只封新 claim；已有 claim 由 turn finally 等到 release。"""
+        nonlocal admission_quiesced
+        with active_admission_lock:
+            admission_quiesced = value
+            current = active_admission_id
+        if value and current is not None:
+            admission.close_gate(base, current)
+        return True
+
+    def _open_action_admission(epoch: ExecutionEpoch) -> str:
+        """给 ready/reviewer/finalizer 共用一条严格递增的 admission 序列。"""
+        nonlocal active_admission_id
+        count = epoch_action_counts.get(epoch.epoch_id, 0) + 1
+        epoch_action_counts[epoch.epoch_id] = count
+        admission_id = (
+            epoch.epoch_id if count == 1 else f'{epoch.epoch_id}-t{count}')
+        try:
+            admission.open_gate(base, admission_id, sid)
+        except BaseException as original:
+            _close_failed_start_gate(base, admission_id, original)
+            raise
+        with active_admission_lock:
+            active_admission_id = admission_id
+            close_immediately = admission_quiesced
+        if close_immediately:
+            admission.close_gate(base, admission_id)
+        return admission_id
+
+    def _run_supervisor_process(
+            epoch: ExecutionEpoch, argv: Sequence[str],
+            launch_ticket: LaunchTicket, *, label: str) -> tuple[int, bool]:
+        """启动并 drain 一条 Supervisor canonical 子进程；Popen 后才 commit。"""
+        nonlocal active_admission_id
+        admission_id = _open_action_admission(epoch)
+        process: subprocess.Popen[bytes] | None = None
+        drain = _ExecutionDrainResult(timed_out=False)
+        rc = CRASH
+        try:
+            log_path = run_log_path(base, run_id)
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+            child_env = env_with_context(
+                run_id=run_id, base=base, start=start_payload,
+                contract=contract_payload, epoch=epoch,
+                admission_id=admission_id, env=os.environ)
+            options: dict[str, object] = {}
+            if os.name == 'nt':
+                options['creationflags'] = (
+                    subprocess.CREATE_NO_WINDOW
+                    | subprocess.CREATE_NEW_PROCESS_GROUP)
+            else:
+                options['start_new_session'] = True
+            with open(log_path, 'ab') as fh:
+                fh.write((f'$ [{label}] ' + shell_line(argv) + '\n').encode('utf-8'))
+                fh.flush()
+                process = subprocess.Popen(
+                    list(argv), cwd=str(REPO_ROOT), env=child_env,
+                    stdin=subprocess.DEVNULL, stdout=fh, stderr=fh,
+                    shell=False, **options)
+                with _ACTIONS_LOCK:
+                    if run_id in _ACTIONS:
+                        _signal_process_tree(process, force=True)
+                        raise JobConflict(
+                            f'run_id={run_id!r} 已有 canonical action owner')
+                    _ACTIONS[run_id] = process
+                launch_ticket.commit()
+                rc = int(process.wait())
+        except BaseException:
+            if process is not None and process.poll() is None:
+                _signal_process_tree(process, force=True)
+                process.wait()
+            raise
+        finally:
+            drain = _wait_for_execution_closure(
+                base, admission_id, beacon_run_id=run_id)
+            with _ACTIONS_LOCK:
+                if _ACTIONS.get(run_id) is process:
+                    _ACTIONS.pop(run_id, None)
+            with active_admission_lock:
+                if active_admission_id == admission_id:
+                    active_admission_id = None
+            epoch_drain_states[epoch.epoch_id] = (
+                'unknown' if drain.timed_out else 'drained')
+        return rc, drain.timed_out
+
+    def _run_commander_turn(
+            epoch: ExecutionEpoch,
+            provider_session_id: str | None,
+            *, reviewer_prompt: str | None = None,
+            launch_ticket: LaunchTicket | None = None,
+            ) -> CommanderTurnResult:
+        nonlocal turn_index, latest_observation, latest_outcome
+        nonlocal latest_rc, latest_error_kind, provider_turn_recorded
+        nonlocal latest_commander_outcome, latest_commander_rc
+        nonlocal latest_commander_error_kind
+        nonlocal active_admission_id
+
+        if reviewer_prompt is not None:
+            turn_invocation = _review_invocation(
+                epoch, reviewer_prompt, provider_session_id)
+        elif provider_session_id is None:
+            turn_invocation = epoch_invocations[epoch.epoch_id]
+        else:
+            turn_invocation = _resume_invocation(
+                epoch, provider_session_id)
+        admission_id = _open_action_admission(epoch)
+        attempt_id = jobs.new_job_id()
         rc = CRASH
         observation = CommanderObservation(
             provider_session_id=None, actual_model=None,
@@ -1155,31 +1679,43 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
         integrity_error_kind: str | None = None
         lifecycle_error_kind: str | None = None
         completion_error_kind: str | None = None
-        lifecycle_error_reason: str | None = None
-        provider_reuse_owner: str | None = None
-        provider_turn_recorded = False
         invoked = False
+        drain = _ExecutionDrainResult(timed_out=False)
         try:
             log = run_log_path(base, run_id)
             log.parent.mkdir(parents=True, exist_ok=True)
             with open(log, 'ab') as fh:
-                # prompt 只走 stdin；这一行可公开诊断 argv 而不会复制任务正文。
-                fh.write(('$ ' + shell_line(invocation.argv) + '\n').encode('utf-8'))
+                fh.write(('$ ' + shell_line(turn_invocation.argv) + '\n').encode('utf-8'))
                 fh.flush()
                 child_env = env_with_context(
                     run_id=run_id, base=base, start=start_payload,
-                    env=os.environ)
+                    contract=contract_payload, epoch=epoch,
+                    admission_id=admission_id, env=os.environ)
                 invoked = True
-                try:
-                    result = (spawn or _default_spawn(run_id))(
-                        invocation, child_env, fh)
-                finally:
-                    # invocation 的 return/raise 边界立刻 close。失败只表示盘上还
-                    # 不能证明 close；下面的 drain 会持锁重试，绝不凭内存猜已关。
-                    try:
-                        admission.close_gate(base, run_id)
-                    except Exception:  # noqa: BLE001 —— drain 负责报警、重试与持锁
-                        pass
+                if spawn is None:
+                    def reviewer_started() -> None:
+                        if reviewer_prompt is not None:
+                            _open_epoch(
+                                epoch,
+                                actual_prompt_sha256=_sha256_bytes(
+                                    turn_invocation.stdin_text.encode('utf-8')),
+                            )
+                        if launch_ticket is not None:
+                            launch_ticket.commit()
+
+                    commander_spawn = _default_spawn(
+                        run_id,
+                        on_registered=(
+                            reviewer_started
+                            if (launch_ticket is not None
+                                or reviewer_prompt is not None) else None))
+                else:
+                    if launch_ticket is not None:
+                        # custom spawn 是测试/legacy 注入缝；生产 v2 只走上面的
+                        # driver owner 登记后 commit 路。
+                        launch_ticket.commit()
+                    commander_spawn = spawn
+                result = commander_spawn(turn_invocation, child_env, fh)
                 if not isinstance(result, CommanderProcessResult):
                     raise TypeError(
                         'Commander spawn 必须返回 CommanderProcessResult，'
@@ -1190,238 +1726,472 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                         'CommanderObservation，不能传自由 dict')
                 rc = result.exit_code
                 observation = result.observation
-        except BaseException as exc:            # noqa: BLE001 —— 崩了也要记 ended
+        except BaseException as exc:  # noqa: BLE001 —— 崩了也要闭合本 turn
             known_rc = getattr(exc, 'returncode', None)
             if isinstance(known_rc, int) and not isinstance(known_rc, bool):
                 rc = known_rc
             runtime_error_kind = 'commander_runtime'
+            _append_safe_traceback(base, run_id, prompt=turn_invocation.stdin_text)
+        finally:
+            drain = _wait_for_execution_closure(
+                base, admission_id, beacon_run_id=run_id)
+            with active_admission_lock:
+                if active_admission_id == admission_id:
+                    active_admission_id = None
+            epoch_drain_states[epoch.epoch_id] = (
+                'unknown' if drain.timed_out else 'drained')
+            try:
+                _close_commander_owner(run_id)
+            except Exception:  # noqa: BLE001 —— audit 仍须继续
+                _append_safe_traceback(
+                    base, run_id, prompt=turn_invocation.stdin_text)
+
+        if drain.timed_out:
+            lifecycle_error_kind = 'commander_execution_barrier'
+            outcome = AgentDeliveryOutcome(
+                state='unknown', checked_at=int(time.time()),
+                reason=(drain.timeout_reason
+                        or 'Commander execution drain 曾超过报警阈值'))
+        else:
+            outcome = _assess_delivery(
+                base, sid, code_version=epoch.code_version)
+
+        if (observation.actual_model is not None
+                and observation.actual_model
+                != plan.profiles.commander.model):
+            integrity_error_kind = 'commander_model_drift'
+        if (observation.actual_effort is not None
+                and observation.actual_effort
+                != plan.profiles.commander.reasoning_effort):
+            integrity_error_kind = (
+                integrity_error_kind or 'commander_effort_drift')
+
+        continue_ready = False
+        if (lifecycle_error_kind is None
+                and integrity_error_kind is None
+                and runtime_error_kind is None):
+            completion = commander_completion.review_commander_stop(
+                base, sid, outcome, process_exit_code=rc)
+            outcome = completion.outcome
+            completion_error_kind = completion.error_kind
+            continue_ready = completion.continue_ready
+            if not _epoch_identity_current(epoch) and rc == 0:
+                try:
+                    continue_ready = commander_completion.ready_action_remains(
+                        base, sid)
+                except Exception as exc:  # noqa: BLE001
+                    continue_ready = False
+                    integrity_error_kind = 'commander_next_action_unavailable'
+                    outcome = AgentDeliveryOutcome(
+                        state='unknown', checked_at=int(time.time()),
+                        reason=(
+                            'execution epoch 身份漂移后无法读取 operator next：'
+                            f'{type(exc).__name__}: {exc}'))
+
+        error_kind = (
+            lifecycle_error_kind or integrity_error_kind
+            or completion_error_kind or runtime_error_kind
+            or (None if rc == 0 else 'commander_process_exit'))
+
+        if invoked:
+            try:
+                append_commander_call(
+                    base, run_id=run_id,
+                    session_run_id=epoch.session_run_id,
+                    sid=sid, attempt_id=attempt_id,
+                    request_model=plan.profiles.commander.model,
+                    requested_effort=(
+                        plan.profiles.commander.reasoning_effort),
+                    code=epoch.code_version,
+                    protocol_version=turn_invocation.protocol,
+                    actual_model=observation.actual_model,
+                    actual_effort=observation.actual_effort,
+                    provider_session_id=(
+                        observation.provider_session_id),
+                    cli_version=turn_invocation.cli_version,
+                    usage=_usage_dict(observation),
+                    outcome=('ok' if rc == 0 else 'error'),
+                    exit_code=rc, error_kind=error_kind)
+            except Exception:  # noqa: BLE001
+                integrity_error_kind = 'commander_ledger'
+                error_kind = integrity_error_kind
+                _append_safe_traceback(
+                    base, run_id, prompt=turn_invocation.stdin_text)
+
+        provider_reuse_owner: str | None = None
+        this_turn_recorded = False
+        if observation.provider_session_id is not None:
+            turn_index += 1
+            try:
+                provider_reuse_owner = (
+                    agent_session_audit.append_commander_turn(
+                        base,
+                        agent_session_audit.AgentSessionEvent(
+                            session_run_id=epoch.session_run_id,
+                            parent_run_id=run_id,
+                            role='commander', node=None, chapter=None,
+                            subject_sha256=current_session_prompt_sha256,
+                            profile=plan.profiles.commander,
+                            provider_session_id=(
+                                observation.provider_session_id),
+                            turn_index=turn_index,
+                            attempt_id=attempt_id,
+                            requested_model=(
+                                plan.profiles.commander.model),
+                            actual_model=observation.actual_model,
+                            requested_effort=(
+                                plan.profiles.commander.reasoning_effort),
+                            actual_effort=observation.actual_effort,
+                            cli_version=turn_invocation.cli_version,
+                            protocol_version=turn_invocation.protocol,
+                            start_code_version=epoch.code_version,
+                            skill_sha256=epoch.skill_sha256,
+                            prompt_sha256=_sha256_bytes(
+                                turn_invocation.stdin_text.encode('utf-8')),
+                            schema_sha256=schema_sha256,
+                            usage=_session_usage(observation),
+                            error_kind=error_kind,
+                            kind='turn', ts=int(time.time()),
+                        ),
+                    )
+                )
+                this_turn_recorded = provider_reuse_owner is None
+                provider_turn_recorded = (
+                    provider_turn_recorded or this_turn_recorded)
+            except Exception:  # noqa: BLE001
+                integrity_error_kind = 'commander_session_audit'
+                error_kind = integrity_error_kind
+                continue_ready = False
+                _append_safe_traceback(
+                    base, run_id, prompt=turn_invocation.stdin_text)
+
+        if provider_reuse_owner is not None:
+            integrity_error_kind = (
+                agent_session_audit.PROVIDER_SESSION_REUSED)
+            error_kind = integrity_error_kind
+            continue_ready = False
+            outcome = AgentDeliveryOutcome(
+                state='unknown', checked_at=int(time.time()),
+                reason=(
+                    'Commander 返回的 provider session '
+                    f'已属于 logical session {provider_reuse_owner!r}；'
+                    '拒绝把串会话的运行判为可交付'))
+        elif integrity_error_kind is not None:
+            outcome = AgentDeliveryOutcome(
+                state='unknown', checked_at=int(time.time()),
+                reason=(
+                    '盘面终验已经执行，但 Commander 身份/审计链不闭合：'
+                    f'{integrity_error_kind}；拒绝把运行判为可交付'))
+
+        latest_observation = observation
+        latest_outcome = outcome
+        latest_rc = rc
+        latest_error_kind = error_kind
+        latest_commander_outcome = outcome
+        latest_commander_rc = rc
+        latest_commander_error_kind = error_kind
+        return CommanderTurnResult(
+            exit_code=rc,
+            provider_session_id=(
+                observation.provider_session_id
+                if this_turn_recorded else None),
+            continue_ready=continue_ready,
+            outcome=outcome)
+
+    def _action_outcome(
+            epoch: ExecutionEpoch, rc: int, timed_out: bool,
+            *, label: str) -> SupervisorActionResult:
+        nonlocal latest_outcome, latest_rc, latest_error_kind
+        latest_rc = rc
+        if timed_out:
+            latest_error_kind = f'{label}_execution_barrier'
+            latest_outcome = AgentDeliveryOutcome(
+                state='unknown', checked_at=int(time.time()),
+                reason=f'{label} 的 admission/beacon drain 无法证明闭合')
+            return SupervisorActionResult(
+                exit_code=rc, outcome=latest_outcome, continue_ready=False)
+        latest_outcome = _assess_delivery(
+            base, sid, code_version=epoch.code_version)
+        latest_error_kind = None if rc in (0, 1, 2) else f'{label}_process_exit'
+        return SupervisorActionResult(
+            exit_code=rc, outcome=latest_outcome,
+            # 只有 0/1 能证明本次正式动作已经落盘，才允许重新规划下一步。
+            # 2 是显式终态、3 是结构拒绝、70 是崩溃；继续循环会在盘面
+            # 未变化时重复执行同一个 ready token，付费节点尤其危险。
+            continue_ready=landed(rc))
+
+    def _run_token(
+            epoch: ExecutionEpoch, permit: ExecutionPermit,
+            launch_ticket: LaunchTicket, *, stem: str) -> SupervisorActionResult:
+        scratch = service_lifecycle.open_scratch_session(
+            base, sid, epoch.epoch_id)
+        token_path = scratch / f'{stem}.execution-token.json'
+        _write_scratch_bytes(
+            token_path,
+            (permit.model_dump_json(indent=2) + '\n').encode('utf-8'))
+        runner = (
+            REPO_ROOT / '.workflow' / 'skills' / 'novel-pipeline-operator'
+            / 'scripts' / 'run_step.py')
+        argv = [
+            sys.executable, '-B', str(runner),
+            '--base', base, '--sid', sid,
+            '--expect-code-version', epoch.code_version,
+            '--operator-permit-file', str(token_path), '--execute',
+            permit.node, '--', *permit.flags,
+        ]
+        rc, timed_out = _run_supervisor_process(
+            epoch, argv, launch_ticket, label=stem)
+        return _action_outcome(
+            epoch, rc, timed_out, label=stem)
+
+    def _read_operator_next(epoch: ExecutionEpoch) -> OperatorNext:
+        # Supervisor 已在本调用前后各核一次 epoch identity；这里复用同一 code，
+        # 避免每个节点再为整棵 dirty worktree 启三次 git 子进程。
+        return operator.next_action_at_code(
+            base, sid, code=epoch.code_version)
+
+    def _run_ready_action(
+            epoch: ExecutionEpoch, current: OperatorNext,
+            launch_ticket: LaunchTicket) -> SupervisorActionResult:
+        if current.execution_token is None:
+            raise RuntimeError('ready next 缺 execution token')
+        return _run_token(
+            epoch, current.execution_token, launch_ticket,
+            stem=f'ready-{current.execution_token.node}')
+
+    def _run_approval_action(
+            epoch: ExecutionEpoch,
+            action: reviewer_tasks.ReviewerApprovalAction,
+            launch_ticket: LaunchTicket) -> SupervisorActionResult:
+        scratch = service_lifecycle.open_scratch_session(
+            base, sid, epoch.epoch_id)
+        payload_path = scratch / f'reviewer-{action.surface}-input.json'
+        _write_scratch_bytes(
+            payload_path,
+            (json.dumps(
+                action.payload, ensure_ascii=False, indent=2,
+                sort_keys=True) + '\n').encode('utf-8'))
+        if action.surface == 'blueprint_seen':
+            tail = [
+                'approval', 'seen', 'read', sid, '--base', base,
+                '--input', str(payload_path)]
+        else:
+            tail = [
+                'approval', 'apply', action.surface, sid, '--base', base,
+                '--input', str(payload_path)]
+        rc, timed_out = _run_supervisor_process(
+            epoch, [sys.executable, '-B', '-m', 'novel.cli', *tail],
+            launch_ticket, label=f'reviewer-{action.surface}')
+        return _action_outcome(
+            epoch, rc, timed_out, label=f'reviewer-{action.surface}')
+
+    def _run_node_review_action(
+            epoch: ExecutionEpoch,
+            action: reviewer_tasks.ReviewerNodeAction,
+            launch_ticket: LaunchTicket) -> SupervisorActionResult:
+        flags = list(action.flags)
+        if action.input_payload is not None:
+            scratch = service_lifecycle.open_scratch_session(
+                base, sid, epoch.epoch_id)
+            payload_path = scratch / 'reviewer-node-input.json'
+            _write_scratch_bytes(
+                payload_path,
+                (json.dumps(
+                    action.input_payload, ensure_ascii=False, indent=2,
+                    sort_keys=True) + '\n').encode('utf-8'))
+            flags = [str(payload_path) if value == '@reviewer-input' else value
+                     for value in flags]
+        permit = operator.permit(base, sid, action.node, flags)
+        return _run_token(
+            epoch, permit, launch_ticket,
+            stem=f'reviewer-{action.node}')
+
+    def _run_reviewer(
+            epoch: ExecutionEpoch, current: OperatorNext,
+            provider_session_id: str | None,
+            launch_ticket: LaunchTicket) -> CommanderTurnResult | None:
+        nonlocal pending_reviewer_action, pending_reviewer_binding
+        nonlocal latest_outcome, latest_rc, latest_error_kind
+        assert current.action is not None
+        waiting_on = current.action.waiting_on
+        assert waiting_on is not None
+        binding = (current.surface_seal, waiting_on)
+
+        if pending_reviewer_action is not None:
+            if pending_reviewer_binding != binding:
+                pending_reviewer_action = None
+                pending_reviewer_binding = None
+                return None
+            action = pending_reviewer_action
+            pending_reviewer_action = None
+            pending_reviewer_binding = None
+            if isinstance(action, reviewer_tasks.ReviewerNodeAction):
+                result = _run_node_review_action(
+                    epoch, action, launch_ticket)
+            else:
+                result = _run_approval_action(
+                    epoch, action, launch_ticket)
+            return CommanderTurnResult(
+                exit_code=result.exit_code,
+                provider_session_id=provider_session_id,
+                continue_ready=result.continue_ready,
+                outcome=result.outcome)
+
+        if binding in reviewed_blockers:
+            return None
+        scratch = service_lifecycle.open_scratch_session(
+            base, sid, epoch.epoch_id)
+        request_path = scratch / (
+            f'reviewer-request-{current.action.action_sha256[:16]}.json')
+        task = reviewer_tasks.build_task(
+            base, sid, current, request_path, epoch_id=epoch.epoch_id)
+        if task is None:
+            return None
+        reviewed_blockers.add(binding)
+        turn = _run_commander_turn(
+            epoch, provider_session_id,
+            reviewer_prompt=task.prompt, launch_ticket=launch_ticket)
+        if turn.exit_code != 0:
+            return turn
+        try:
+            pending_reviewer_action = reviewer_tasks.load_action(
+                request_path, current)
+        except reviewer_tasks.ReviewerTaskError as exc:
+            latest_rc = 2
+            latest_error_kind = 'commander_reviewer_request'
+            latest_outcome = AgentDeliveryOutcome(
+                state='stopped', checked_at=int(time.time()),
+                reason=f'Commander reviewer typed request 未闭合：{exc}')
+            return CommanderTurnResult(
+                exit_code=2,
+                provider_session_id=turn.provider_session_id,
+                continue_ready=False, outcome=latest_outcome)
+        pending_reviewer_binding = binding
+        return CommanderTurnResult(
+            exit_code=turn.exit_code,
+            provider_session_id=turn.provider_session_id,
+            continue_ready=True, outcome=turn.outcome)
+
+    def _finalize_run(
+            epoch: ExecutionEpoch,
+            launch_ticket: LaunchTicket) -> SupervisorActionResult:
+        script = (
+            REPO_ROOT / '.workflow' / 'skills' / 'novel-pipeline-operator'
+            / 'scripts' / 'finalize_review.py')
+        argv = [
+            sys.executable, '-B', str(script), '--base', base, '--sid', sid,
+            '--started-at', str(parent_started_at),
+            '--start-code-version', epoch.code_version,
+        ]
+        rc, timed_out = _run_supervisor_process(
+            epoch, argv, launch_ticket, label='finalize-review')
+        return _action_outcome(
+            epoch, rc, timed_out, label='finalize-review')
+
+    deterministic_callbacks = ({
+        'read_operator_next': _read_operator_next,
+        'run_ready_action': _run_ready_action,
+        'run_reviewer': _run_reviewer,
+        'finalize_run': _finalize_run,
+    } if spawn is None else {})
+    supervisor = RunSupervisor(
+        run_id=run_id,
+        append_event=lambda event: append(base, event),
+        make_epoch=_make_epoch,
+        # v2 epoch 本身不是 Commander session；首个 reviewer Popen 后才由
+        # launch callback 调 `_open_epoch`。custom spawn 保留旧测试缝。
+        open_epoch=(lambda _epoch: None) if spawn is None else _open_epoch,
+        close_epoch=_close_epoch,
+        run_commander_turn=_run_commander_turn,
+        epoch_identity_current=_epoch_identity_current,
+        cancel_commander=_cancel_active,
+        set_commander_quiesced=_set_commander_quiesced,
+        initial_epoch=initial_epoch,
+        **deterministic_callbacks)
+    with _SUPERVISORS_LOCK:
+        _SUPERVISORS[run_id] = supervisor
+
+    def worker() -> None:
+        nonlocal latest_outcome, latest_rc, latest_error_kind
+        try:
+            supervised = supervisor.run()
+            # Supervisor 的最后 typed 事实是 parent ended 的权威输入。
+            # 未登记 blocker 等分支不经过 action callback；若不在这里投影，
+            # epoch_closed=2/stopped 会与 ended=70/unknown 串账。
+            if supervised.turn is not None:
+                latest_rc = supervised.turn.exit_code
+                latest_outcome = supervised.turn.outcome
+            if supervised.stopped:
+                latest_outcome = AgentDeliveryOutcome(
+                    state='stopped', checked_at=int(time.time()),
+                    reason='外层操作员请求停止 AgentRun；execution 已关闭并 drain')
+                latest_error_kind = latest_error_kind or 'commander_stopped'
+                if supervised.turn is None:
+                    latest_rc = CRASH
+        except BaseException:  # noqa: BLE001 —— Supervisor 崩溃也必须写 ended
+            latest_rc = CRASH
+            latest_error_kind = latest_error_kind or 'commander_supervisor'
+            latest_outcome = AgentDeliveryOutcome(
+                state='unknown', checked_at=int(time.time()),
+                reason='RunSupervisor 生命周期异常；拒绝猜测交付状态')
             _append_safe_traceback(base, run_id, prompt=plan.prompt)
         finally:
             try:
-                drain = _wait_for_execution_closure(base, run_id)
-                if drain.timed_out:
-                    lifecycle_error_kind = 'commander_execution_barrier'
-                    lifecycle_error_reason = (
-                        drain.timeout_reason
-                        or 'Commander execution drain 曾超过报警阈值')
-                    outcome = AgentDeliveryOutcome(
-                        state='unknown', checked_at=int(time.time()),
-                        reason=lifecycle_error_reason)
-                else:
-                    try:
-                        end_skill_sha256 = _skill_sha256()
-                    except Exception:  # noqa: BLE001 —— skill 终点不可读不能冒充同契约
-                        integrity_error_kind = 'operator_skill_unavailable'
-                        outcome = AgentDeliveryOutcome(
-                            state='unknown', checked_at=int(time.time()),
-                            reason=(
-                                'Commander 结束时 canonical operator skill 整树'
-                                '无法重新取指纹；拒绝声称同一份操作契约'))
-                    else:
-                        if end_skill_sha256 != skill_sha256:
-                            integrity_error_kind = 'operator_skill_drift'
-                            outcome = AgentDeliveryOutcome(
-                                state='unknown', checked_at=int(time.time()),
-                                reason=(
-                                    'Commander 运行期间 canonical operator skill '
-                                    '整树指纹发生变化；拒绝混用两份操作契约'))
-                        else:
-                            outcome = _assess_delivery(
-                                base, sid, code_version=code_version)
-                if (observation.actual_model is not None
-                        and observation.actual_model
-                        != plan.profiles.commander.model):
-                    integrity_error_kind = (
-                        integrity_error_kind or 'commander_model_drift')
-                if (observation.actual_effort is not None
-                        and observation.actual_effort
-                        != plan.profiles.commander.reasoning_effort):
-                    integrity_error_kind = (
-                        integrity_error_kind or 'commander_effort_drift')
-                if (lifecycle_error_kind is None
-                        and integrity_error_kind is None
-                        and runtime_error_kind is None):
-                    completion = commander_completion.review_commander_stop(
-                        base, sid, outcome, process_exit_code=rc)
-                    outcome = completion.outcome
-                    completion_error_kind = completion.error_kind
-                # 每一次已经尝试的 Commander invocation 都有成本行；usage 未回显
-                # 就是 null。它与 session turn 共用 attempt_id，但缺 provider id 时
-                # 后者不会被伪造。
-                if invoked:
-                    try:
-                        append_commander_call(
-                            base, run_id=run_id,
-                            session_run_id=session_run_id,
-                            sid=sid, attempt_id=attempt_id,
-                            request_model=plan.profiles.commander.model,
-                            requested_effort=(
-                                plan.profiles.commander.reasoning_effort),
-                            code=code_version,
-                            protocol_version=invocation.protocol,
-                            actual_model=observation.actual_model,
-                            actual_effort=observation.actual_effort,
-                            provider_session_id=(
-                                observation.provider_session_id),
-                            cli_version=invocation.cli_version,
-                            usage=_usage_dict(observation),
-                            outcome=('ok' if rc == 0 else 'error'),
-                            exit_code=rc,
-                            error_kind=(lifecycle_error_kind
-                                        or integrity_error_kind
-                                        or completion_error_kind
-                                        or runtime_error_kind or (
-                                None if rc == 0 else 'commander_process_exit')),
-                        )
-                    except Exception:  # noqa: BLE001 —— 成本账失败不能吞掉 ended
-                        integrity_error_kind = 'commander_ledger'
-                        _append_safe_traceback(
-                            base, run_id, prompt=plan.prompt)
-
-                if observation.provider_session_id is not None:
-                    try:
-                        provider_reuse_owner = (
-                            agent_session_audit.append_commander_turn(
-                                base,
-                                agent_session_audit.AgentSessionEvent(
-                                    session_run_id=session_run_id,
-                                    parent_run_id=run_id,
-                                    role='commander', node=None, chapter=None,
-                                    subject_sha256=prompt_sha256,
-                                    profile=plan.profiles.commander,
-                                    provider_session_id=(
-                                        observation.provider_session_id),
-                                    turn_index=1,
-                                    attempt_id=attempt_id,
-                                    requested_model=(
-                                        plan.profiles.commander.model),
-                                    actual_model=observation.actual_model,
-                                    requested_effort=(
-                                        plan.profiles.commander.reasoning_effort),
-                                    actual_effort=observation.actual_effort,
-                                    cli_version=invocation.cli_version,
-                                    protocol_version=invocation.protocol,
-                                    start_code_version=code_version,
-                                    skill_sha256=skill_sha256,
-                                    prompt_sha256=prompt_sha256,
-                                    schema_sha256=schema_sha256,
-                                    usage=_session_usage(observation),
-                                    error_kind=(lifecycle_error_kind
-                                                or integrity_error_kind
-                                                or completion_error_kind
-                                                or runtime_error_kind),
-                                    kind='turn', ts=int(time.time()),
-                                ),
-                            )
-                        )
-                        provider_turn_recorded = provider_reuse_owner is None
-                    except Exception:  # noqa: BLE001 —— 审计失败关闭交付，不丢 ended
-                        integrity_error_kind = 'commander_session_audit'
-                        _append_safe_traceback(
-                            base, run_id, prompt=plan.prompt)
-
-                if provider_reuse_owner is not None:
-                    integrity_error_kind = (
-                        agent_session_audit.PROVIDER_SESSION_REUSED)
-                    outcome = AgentDeliveryOutcome(
-                        state='unknown', checked_at=int(time.time()),
-                        reason=(
-                            'Commander 返回的 provider session '
-                            f'已属于 logical session {provider_reuse_owner!r}；'
-                            '拒绝把串会话的运行判为可交付'))
-
-                if (lifecycle_error_reason is not None
-                        and provider_reuse_owner is None):
-                    outcome = AgentDeliveryOutcome(
-                        state='unknown', checked_at=int(time.time()),
-                        reason=lifecycle_error_reason)
-                elif (integrity_error_kind is not None
-                      and provider_reuse_owner is None):
-                    outcome = AgentDeliveryOutcome(
-                        state='unknown', checked_at=int(time.time()),
-                        reason=(
-                            '盘面终验已经执行，但 Commander 身份/审计链不闭合：'
-                            f'{integrity_error_kind}；拒绝把运行判为可交付'))
-
                 try:
                     end_code_version = prov.code_version()
-                except Exception:  # noqa: BLE001 —— 指纹器崩也要留 ended
+                except Exception:
                     end_code_version = prov.CODE_UNKNOWN
-                delivery_state = _session_delivery(outcome)
+                delivery_state = _session_delivery(latest_outcome)
+                # 交付只与最后执行 epoch 的代码比较；parent contract 的首次指纹
+                # 是审计起点，不再把一次合法 epoch rollover 判成整条 run 失效。
+                current_epochs = next(
+                    (record.epochs for record in records(base)
+                     if record.run_id == run_id), [])
+                expected_end_code = (
+                    current_epochs[-1].code_version
+                    if current_epochs else code_version)
                 if (delivery_state == 'delivered'
-                        and end_code_version != code_version):
+                        and end_code_version != expected_end_code):
                     delivery_state = 'unknown'
-                    integrity_error_kind = (
-                        integrity_error_kind or 'code_version_drift')
-                    outcome = AgentDeliveryOutcome(
+                    latest_error_kind = (
+                        latest_error_kind or 'code_version_drift')
+                    latest_outcome = AgentDeliveryOutcome(
                         state='unknown', checked_at=int(time.time()),
-                        reason='Commander 运行期间代码指纹漂移；拒绝判为可交付')
-                owned_provider_session_id = (
-                    observation.provider_session_id
-                    if provider_turn_recorded else None)
+                        reason='最后 execution epoch 结束后代码指纹又发生漂移')
                 try:
-                    agent_session_audit.append_event(
-                        base,
-                        agent_session_audit.AgentSessionEvent(
-                            session_run_id=session_run_id,
-                            parent_run_id=run_id,
-                            role='commander', node=None, chapter=None,
-                            subject_sha256=prompt_sha256,
-                            profile=plan.profiles.commander,
-                            provider_session_id=owned_provider_session_id,
-                            requested_model=plan.profiles.commander.model,
-                            actual_model=observation.actual_model,
-                            requested_effort=(
-                                plan.profiles.commander.reasoning_effort),
-                            actual_effort=observation.actual_effort,
-                            cli_version=invocation.cli_version,
-                            protocol_version=invocation.protocol,
-                            start_code_version=code_version,
-                            end_code_version=end_code_version,
-                            skill_sha256=skill_sha256,
-                            prompt_sha256=prompt_sha256,
-                            schema_sha256=schema_sha256,
-                            process_state=('ok' if rc == 0 else 'failed'),
-                            delivery_state=delivery_state,
-                            error_kind=(integrity_error_kind
-                                        or lifecycle_error_kind
-                                        or completion_error_kind
-                                        or runtime_error_kind or (
-                                            None if rc == 0 else
-                                            'commander_process_exit')),
-                            kind='ended', ts=int(time.time()),
-                        ),
-                    )
-                except Exception:  # noqa: BLE001 —— outer ended 仍必须落账
-                    integrity_error_kind = 'commander_session_audit'
-                    outcome = AgentDeliveryOutcome(
+                    # code/skill rollover 已在 epoch_close 把旧 logical session
+                    # 封存；这里只闭合最后仍活动的那一个，不能写第二条 ended。
+                    _end_current_session(
+                        outcome=latest_commander_outcome,
+                        rc=latest_commander_rc,
+                        error_kind=latest_commander_error_kind,
+                        end_code_version=end_code_version)
+                except Exception:  # noqa: BLE001
+                    latest_outcome = AgentDeliveryOutcome(
                         state='unknown', checked_at=int(time.time()),
                         reason='Commander ended 审计未能闭合；拒绝判为可交付')
-                    _append_safe_traceback(
-                        base, run_id, prompt=plan.prompt)
-                finally:
-                    append(base, AgentRunEvent(
-                        run_id=run_id, kind='ended', ts=int(time.time()),
-                        exit_code=rc, outcome=outcome))
+                    _append_safe_traceback(base, run_id, prompt=plan.prompt)
+                append(base, AgentRunEvent(
+                    wire_version=2, run_id=run_id, kind='ended',
+                    ts=int(time.time()), exit_code=latest_rc,
+                    outcome=latest_outcome))
             finally:
                 try:
                     _close_commander_owner(run_id)
-                except Exception:  # noqa: BLE001 —— owner close 不得吃掉互斥释放
+                except Exception:
                     _append_safe_traceback(base, run_id, prompt=plan.prompt)
                 finally:
                     try:
                         registry.release(key, run_id)
                         with _THREADS_LOCK:
                             _THREADS.pop(run_id, None)
-                        # ⚠ 位置有讲究：锁**已经还掉**才轮到下一个进场，否则 `_drain`
-                        # 看到的仍是满的，队列会一直等到下一次事件才动。
+                        with _SUPERVISORS_LOCK:
+                            _SUPERVISORS.pop(run_id, None)
                         _drain(registry=registry)
                     finally:
-                        # 这才是 worker 的最外层终点：delivery/ended、driver close、
-                        # 进程内 writer 和排队 drain 任一步异常都必须释放 OS lease。
                         try:
                             release_owner_lease()
-                        except BaseException:  # noqa: BLE001 —— OS close 失败仍留诊断
+                        except BaseException:
                             _append_safe_traceback(
                                 base, run_id, prompt=plan.prompt)
 
@@ -1434,48 +2204,28 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
     except BaseException as original:
         with _THREADS_LOCK:
             _THREADS.pop(run_id, None)
-        # thread 根本没起来，不会有 claim；仍把 spawn 前建立的 durable gate
-        # 明确 close，避免服务重启后把它读成可能存在孤儿执行。
+        with _SUPERVISORS_LOCK:
+            _SUPERVISORS.pop(run_id, None)
+        # v2 只在真实 action launch 时开 admission；线程没起来时没有空 gate。
+        # 但 epoch_opened 已经 durable append，仍必须在 ended 前以
+        # 70/unknown 闭合，不能把“无 action”误写成一枚存活 active epoch。
         try:
-            _close_failed_start_gate(base, run_id, original)
+            failed = AgentDeliveryOutcome(
+                state='failed', checked_at=int(time.time()),
+                reason='RunSupervisor worker 线程未能启动')
+            append(base, AgentRunEvent(
+                wire_version=2, run_id=run_id, kind='epoch_closed',
+                ts=int(time.time()), epoch_id=initial_epoch.epoch_id,
+                exit_code=CRASH, drain_state='drained',
+                provider_session_id=None))
+            append(base, AgentRunEvent(
+                wire_version=2, run_id=run_id, kind='ended',
+                ts=int(time.time()), exit_code=CRASH, outcome=failed))
         finally:
             try:
-                failed = AgentDeliveryOutcome(
-                    state='failed', checked_at=int(time.time()),
-                    reason='Commander worker 线程未能启动')
-                try:
-                    agent_session_audit.append_event(
-                        base,
-                        agent_session_audit.AgentSessionEvent(
-                            session_run_id=session_run_id,
-                            parent_run_id=run_id,
-                            role='commander', node=None, chapter=None,
-                            subject_sha256=prompt_sha256,
-                            profile=plan.profiles.commander,
-                            requested_model=plan.profiles.commander.model,
-                            requested_effort=(
-                                plan.profiles.commander.reasoning_effort),
-                            cli_version=invocation.cli_version,
-                            protocol_version=invocation.protocol,
-                            start_code_version=code_version,
-                            end_code_version=prov.code_version(),
-                            skill_sha256=skill_sha256,
-                            prompt_sha256=prompt_sha256,
-                            schema_sha256=schema_sha256,
-                            process_state='failed', delivery_state='failed',
-                            error_kind='commander_thread_start',
-                            kind='ended', ts=int(time.time()),
-                        ),
-                    )
-                finally:
-                    append(base, AgentRunEvent(
-                        run_id=run_id, kind='ended', ts=int(time.time()),
-                        exit_code=CRASH, outcome=failed))
+                release_owner_lease()
             finally:
-                try:
-                    release_owner_lease()
-                finally:
-                    registry.release(key, run_id)
+                registry.release(key, run_id)
         raise
     return next(r for r in records(base, registry=registry)
                 if r.run_id == run_id)
@@ -1491,20 +2241,91 @@ def wait(run_id: str, timeout: float | None = None) -> bool:
     return not thread.is_alive()
 
 
+def request_stop(base: str | os.PathLike[str], run_id: str) -> AgentRunRecord:
+    """异步请求 Supervisor 熄火；只确认请求已交给当前 owner。
+
+    公开 HTTP 不能用一个很短的请求超时冒充进程树已经 drain。这里先关闭
+    admission、触发精确 cancel，再返回当前 durable 投影；最终 ``ended`` 仍只由
+    worker 在 claims / beacons 收净后写入。
+    """
+    with _SUPERVISORS_LOCK:
+        supervisor = _SUPERVISORS.get(run_id)
+    if supervisor is None:
+        # v1 进程内兼容：升级过程中已经登记 driver、尚未登记 Supervisor
+        # 的 run 仍可精确熄火；服务重启后二者都会丢失，依旧关闭式拒绝。
+        with _COMMANDERS_LOCK:
+            driver = _COMMANDERS.get(run_id)
+        if driver is None:
+            raise JobConflict(
+                f'run_id={run_id!r} 没有本进程拥有的 Supervisor/driver（已结束，'
+                '或服务重启后句柄已丢）')
+        if not driver.cancel(run_id):
+            raise JobConflict(
+                f'run_id={run_id!r} 的 Commander driver 未确认 cancel')
+    else:
+        supervisor.request_stop()
+    rec = next((r for r in records(base) if r.run_id == run_id), None)
+    if rec is None:
+        raise UpstreamMissing(f'没有 run_id={run_id!r} 的 agent 代跑记录')
+    return rec
+
+
 def stop(base: str | os.PathLike[str], run_id: str) -> AgentRunRecord:
-    """熄火：只让拥有该 run 的 Commander driver 终止自己那棵进程树。"""
-    with _COMMANDERS_LOCK:
-        driver = _COMMANDERS.get(run_id)
-    if driver is None:
-        raise JobConflict(  # 复用「流程说这一步现在不该发生」的那一族，不是 bug
-            f'run_id={run_id!r} 没有在跑的子进程（已结束，或服务重启后句柄已丢）')
-    if not driver.cancel(run_id):
-        raise JobConflict(
-            f'run_id={run_id!r} 的 Commander driver 没有确认终止它拥有的进程树')
+    """请求 Supervisor 熄火并短等终态；仅供测试与同步诊断入口。"""
+    request_stop(base, run_id)
     if not wait(run_id, 10):
         raise JobConflict(
-            f'run_id={run_id!r} 已发熄火命令，但 worker 尚未完成终态落账')
+            f'run_id={run_id!r} 已发 stop，但 worker 尚未完成 drain/终态落账')
     rec = next((r for r in records(base) if r.run_id == run_id), None)
+    if rec is None:
+        raise UpstreamMissing(f'没有 run_id={run_id!r} 的 agent 代跑记录')
+    return rec
+
+
+def request_pause(base: str | os.PathLike[str], run_id: str) -> AgentRunRecord:
+    """异步请求协作式暂停；不取消已取得 claim 的付费节点。"""
+    with _SUPERVISORS_LOCK:
+        supervisor = _SUPERVISORS.get(run_id)
+    if supervisor is None:
+        raise JobConflict(
+            f'run_id={run_id!r} 没有本进程拥有的 Supervisor；'
+            '服务重启后的 unknown 不能假装可 pause')
+    supervisor.request_pause()
+    rec = next((item for item in records(base)
+                if item.run_id == run_id), None)
+    if rec is None:
+        raise UpstreamMissing(f'没有 run_id={run_id!r} 的 agent 代跑记录')
+    return rec
+
+
+def pause(base: str | os.PathLike[str], run_id: str,
+          *, timeout: float = 10.0) -> AgentRunRecord:
+    """协作式暂停并短等 paused；仅供测试与同步诊断入口。"""
+    request_pause(base, run_id)
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        rec = next((item for item in records(base)
+                    if item.run_id == run_id), None)
+        if rec is None:
+            raise UpstreamMissing(f'没有 run_id={run_id!r} 的 agent 代跑记录')
+        if rec.state == 'paused' or rec.ended is not None:
+            return rec
+        time.sleep(0.05)
+    raise JobConflict(
+        f'run_id={run_id!r} 已请求 pause，但当前 turn 尚未完成 drain')
+
+
+def resume(base: str | os.PathLike[str], run_id: str) -> AgentRunRecord:
+    """恢复本进程仍持有书锁的 paused run；重启后的 unknown 不自动认领。"""
+    with _SUPERVISORS_LOCK:
+        supervisor = _SUPERVISORS.get(run_id)
+    if supervisor is None:
+        raise JobConflict(
+            f'run_id={run_id!r} 没有本进程拥有的 Supervisor；'
+            '服务重启后的 unknown 只能先人工核实')
+    supervisor.request_resume()
+    rec = next((item for item in records(base)
+                if item.run_id == run_id), None)
     if rec is None:
         raise UpstreamMissing(f'没有 run_id={run_id!r} 的 agent 代跑记录')
     return rec

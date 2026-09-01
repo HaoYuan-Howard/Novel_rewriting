@@ -34,9 +34,10 @@ import json
 import os
 import tempfile
 from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Iterable, Iterator, TypeVar
+from typing import Any, Callable, Iterable, Iterator, TypeVar, cast
 
 from pydantic import BaseModel, ValidationError
 
@@ -46,7 +47,7 @@ from contracts.artifacts import (
     STAGE2_BLUEPRINT_CHARACTER_PROJECTION, STAGE2_CHAPTER_BLUEPRINTS,
     STAGE2_GLOBAL_GROUNDING, STAGE2_GLOBAL_REVIEW,
     RETIRED_STAGE3_STYLE_GROUNDING,
-    STAGE4_PLAN_CHAPTERS, STAGE4_WRITER_CONTEXT,
+    STAGE4_BLIND_CANDIDATE, STAGE4_PLAN_CHAPTERS, STAGE4_WRITER_CONTEXT,
     STAGE7_NAME_MAP,
 )
 from contracts.schema import (
@@ -54,10 +55,14 @@ from contracts.schema import (
     artifact_spec, decode_artifact, encode_artifact,
 )
 from contracts.schema.legacy_stage3 import LegacyStyleGrounding, decode_legacy_stage3_v2
+from contracts.schema.legacy_stage2 import (
+    FrozenChapterBlueprintsV6, decode_frozen_stage2_blueprints_v6,
+)
 from novel import paths, prov
 from novel.consumption import (
     canonical_rel, context_inputs_for, legacy_stage3_projection_for,
-    producer_node, project_consumed, projection_for,
+    frozen_v6_stage4_design_blueprints, producer_node, project_consumed,
+    projection_for,
 )
 from novel.errors import (
     ApprovalRequired, ArtifactUnreadable, ByteFormRefused, PathRefused,
@@ -67,11 +72,13 @@ from novel.prov import FreshnessReport
 from novel.run import RunContext
 
 M = TypeVar('M', bound=BaseModel)
+T = TypeVar('T')
 
 #: 产物里那个来源账字段的**盘上键名**。模型侧字段叫 `provenance`（`_` 开头在 Pydantic 里
 #: 是私有属性），靠 `Field(alias='_provenance')` 对上；这里按 alias 找，不按字段名猜。
 PROVENANCE_KEY = '_provenance'
 REVALIDATION_DIRNAME = '_revalidation'
+REVALIDATION_REFERENCE_VERSION = 1
 
 #: 提升时可从 ``artifact_override`` 带入的**确定性归一账**。
 #: 生成来源（prompts/model/inputs/usage/round）仍强制取不可变创建基线；
@@ -101,6 +108,84 @@ SELF_FRESH_DETERMINISTIC = frozenset({
 })
 
 
+@dataclass
+class _ReadonlySnapshotMemo:
+    """One operator snapshot's immutable read memo; discarded after its CAS.
+
+    This is deliberately not an ``lru_cache``.  It only exists while a caller
+    holds the before/after active-surface seal, and only readonly RunContexts may
+    consume the parsed/freshness maps.  A later invocation therefore cannot see
+    bytes from an earlier filesystem state.
+    """
+
+    novel_dir: Path
+    code: str | None = None
+    raw: dict[Path, bytes] = field(default_factory=dict)
+    projections: dict[str, tuple[bool, object]] = field(default_factory=dict)
+    consumed: dict[tuple[str, str], str | None] = field(default_factory=dict)
+    freshness: dict[tuple[str, str], FreshnessReport] = field(default_factory=dict)
+    validated: dict[tuple[type[BaseModel], str], bytes] = field(
+        default_factory=dict)
+    values: dict[tuple[object, ...], object] = field(default_factory=dict)
+
+
+_READONLY_SNAPSHOT_MEMO: ContextVar[_ReadonlySnapshotMemo | None] = ContextVar(
+    'novel_store_readonly_snapshot_memo', default=None)
+
+
+@contextmanager
+def readonly_snapshot_memo(
+    novel_dir: Path, *, code: str | None = None,
+) -> Iterator[None]:
+    """Reuse identical readonly bytes/projections inside one sealed snapshot.
+
+    Public operator invocations may not nest.  Reusing an outer memo whose bytes
+    were captured before this invocation's surface seal would let stale memory
+    survive both sides of the CAS.  Internal consumers share the map directly;
+    they never open a second context manager.
+    """
+    root = Path(os.path.abspath(os.fspath(novel_dir)))
+    current = _READONLY_SNAPSHOT_MEMO.get()
+    if current is not None:
+        raise ValueError(
+            'readonly snapshot memo already active; a new operator invocation '
+            'must start from an empty memo')
+    token = _READONLY_SNAPSHOT_MEMO.set(_ReadonlySnapshotMemo(root, code=code))
+    try:
+        yield
+    finally:
+        _READONLY_SNAPSHOT_MEMO.reset(token)
+
+
+def _memo_for_context(ctx: RunContext) -> _ReadonlySnapshotMemo | None:
+    """Return the active memo only for its exact readonly book/epoch context."""
+    if not getattr(ctx, 'readonly', False):
+        return None
+    memo = _READONLY_SNAPSHOT_MEMO.get()
+    if memo is None:
+        return None
+    root = Path(os.path.abspath(os.fspath(ctx.novel_dir)))
+    if root != memo.novel_dir:
+        raise ValueError(
+            f'readonly snapshot memo belongs to {memo.novel_dir}, not {root}')
+    if memo.code is not None and ctx.code != memo.code:
+        raise ValueError(
+            f'readonly snapshot memo code is {memo.code}, not {ctx.code}')
+    return memo
+
+
+def readonly_snapshot_value(
+    ctx: RunContext, key: tuple[object, ...], factory: Callable[[], T],
+) -> T:
+    """Memoize one pure readonly projection inside the active snapshot only."""
+    memo = _memo_for_context(ctx)
+    if memo is None:
+        return factory()
+    if key not in memo.values:
+        memo.values[key] = copy.deepcopy(factory())
+    return cast(T, copy.deepcopy(memo.values[key]))
+
+
 def _canonical_json_bytes(value: Any) -> bytes:
     """Canonical logical JSON used only for audit comparison and hashing."""
     return json.dumps(
@@ -120,8 +205,21 @@ def _filesystem_path(path: Path) -> str:
 
 
 def _read_file_bytes(path: Path) -> bytes:
+    memo = _READONLY_SNAPSHOT_MEMO.get()
+    key = Path(os.path.abspath(os.fspath(path)))
+    if memo is not None:
+        try:
+            key.relative_to(memo.novel_dir)
+        except ValueError:
+            memo = None
+        else:
+            if key in memo.raw:
+                return memo.raw[key]
     with open(_filesystem_path(path), 'rb') as stream:
-        return stream.read()
+        raw = stream.read()
+    if memo is not None:
+        memo.raw[key] = raw
+    return raw
 
 
 def _is_file(path: Path) -> bool:
@@ -233,6 +331,12 @@ class ArtifactStore:
     """一次跑的读写口。**它只由 `RunContext` 造**，因为记账要落在那个实例上。"""
 
     def __init__(self, ctx: RunContext) -> None:
+        if _READONLY_SNAPSHOT_MEMO.get() is not None:
+            if not ctx.readonly:
+                raise ValueError(
+                    'writable ArtifactStore cannot run inside a readonly '
+                    'operator snapshot memo')
+            _memo_for_context(ctx)
         self.ctx = ctx
         # Each active history transaction records exact paths it may mutate.
         # Content-addressed paths are registered lazily by `_write_immutable`;
@@ -290,9 +394,7 @@ class ArtifactStore:
         hash-bound decision from bypassing input-edge accounting.
         """
         key = paths.input_key(rel)          # ← 两级键；三级路径在这里就被拒（见 `PathRefused`）
-        raw = self._read_bytes(rel)
-        data = self._loads(rel, raw)
-        obj, data = self._validate_payload(model, rel, data)
+        obj, data, raw = self._validated_read(model, rel)
         self._record_artifact_root(rel, obj)
         self.ctx.record_edge(key, InputEdge(
             file=prov.fingerprint_bytes(raw),
@@ -313,9 +415,7 @@ class ArtifactStore:
         **完整相对路径** + 指纹，并与普通上游边分开。
         """
         paths.check_rel_deep(rel)
-        raw = self._read_bytes(rel)
-        data = self._loads(rel, raw)
-        obj, data = self._validate_payload(model, rel, data)
+        obj, data, raw = self._validated_read(model, rel)
         self._record_artifact_root(rel, obj)
         if require_current and not self.ctx.readonly:
             self._refuse_stale_upstream(rel)
@@ -420,13 +520,35 @@ class ArtifactStore:
         replaced_input_keys: Iterable[str],
     ) -> tuple[M, Any, bytes]:
         """``read_own*`` 的唯一字节、解码、schema、根与 currentness 入口。"""
-        raw = self._read_bytes(rel)
-        data = self._loads(rel, raw)
-        obj, payload = self._validate_payload(model, rel, data)
+        obj, payload, raw = self._validated_read(model, rel)
         self._record_artifact_root(rel, obj)
         if require_current:
             self._refuse_stale_upstream(
                 rel, replaced_input_keys=replaced_input_keys)
+        return obj, payload, raw
+
+    def _validated_read(
+        self, model: type[M], rel: str,
+    ) -> tuple[M, Any, bytes]:
+        """Decode/validate one independent object from sealed snapshot bytes.
+
+        Production contexts never use this memo.  The readonly cache deliberately
+        keeps only immutable raw bytes, not a mutable model/payload prototype.  A
+        hit therefore parses and validates again: every caller receives fresh
+        containers without paying Python's much slower recursive ``deepcopy`` over
+        the same large artifact graph.
+        """
+        key = paths.check_rel_deep(rel)
+        memo = _memo_for_context(self.ctx)
+        cache_key = (model, key)
+        if memo is not None and cache_key in memo.validated:
+            raw = memo.validated[cache_key]
+        else:
+            raw = self._read_bytes(key)
+        data = self._loads(key, raw)
+        obj, payload = self._validate_payload(model, key, data)
+        if memo is not None:
+            memo.validated[cache_key] = raw
         return obj, payload, raw
 
     def schema_version(self, rel: str) -> int | None:
@@ -450,6 +572,39 @@ class ArtifactStore:
             return decode_legacy_stage3_v2(data)
         except (ValidationError, ValueError) as exc:
             raise ArtifactUnreadable(f'{rel} 不是可读的冻结 v2：{exc}') from exc
+
+    def read_frozen_stage2_blueprints_v6(
+        self,
+        rel: str = STAGE2_CHAPTER_BLUEPRINTS,
+        *,
+        record_stage4_design_edge: bool = False,
+    ) -> tuple[FrozenChapterBlueprintsV6, dict[str, Any], str]:
+        """只读一份精确 v6 Blueprint；不把它升级成活动 ``ChapterBlueprints``。
+
+        唯一允许记普通来源边的消费方是 ``stage4.design`` 的**零 wire 完整章人工
+        替换**。它沿用 v6 当时的 consumed 投影，让新的人工作品仍绑定原始 v6
+        真相；普通 design/repair/replan 不调用本口，继续由 current decoder 拒绝。
+        """
+        if rel != STAGE2_CHAPTER_BLUEPRINTS:
+            raise ArtifactUnreadable(
+                '冻结 Stage2 v6 reader 只接受 canonical chapter_blueprints 路径')
+        raw = self._read_bytes(rel)
+        data = self._loads(rel, raw)
+        try:
+            artifact, payload = decode_frozen_stage2_blueprints_v6(data)
+        except (ValidationError, ValueError) as exc:
+            raise ArtifactUnreadable(str(exc)) from exc
+        self._record_artifact_root(rel, artifact)
+        if record_stage4_design_edge:
+            if self.ctx.node != 'stage4.design':
+                raise ArtifactUnreadable(
+                    '冻结 v6 来源边只允许由 stage4.design 的零 wire human edit 记录')
+            key = paths.input_key(rel)
+            consumed = prov.projection_fingerprint(
+                frozen_v6_stage4_design_blueprints(payload))
+            self.ctx.record_edge(key, InputEdge(
+                file=prov.fingerprint_bytes(raw), consumed=consumed))
+        return artifact, payload, hashlib.sha256(raw).hexdigest()
 
     def read_external(self, model: type[M], contract_rel: str,
                       path: str | os.PathLike[str]) -> M:
@@ -1225,7 +1380,59 @@ class ArtifactStore:
             #   原件和归档，而下一次归档会撞上已存在的目标、把这条路堵死。
             #   `_rounds/` 与产物同卷，`replace` 在这里是原子的。
             os.replace(_filesystem_path(src), _filesystem_path(dest))
+            self._deduplicate_archived_revalidation(rel, dest)
         return dest
+
+    def _deduplicate_archived_revalidation(self, rel: str, archived: Path) -> None:
+        """Compact a byte-identical INVALID baseline into a verified round ref.
+
+        A live ``.INVALID`` needs its immutable ``_revalidation`` baseline so a
+        later human edit can be audited.  Once that live file has been moved to
+        its numbered ``_rounds`` path, an *unedited* INVALID used to leave two
+        complete copies of the same bytes.  The numbered archive is the public
+        recovery surface, so keep it byte-for-byte and replace only the exact,
+        locator-bound duplicate baseline with a small content-addressed ref.
+
+        Existing baselines remain a read-only compatible input to
+        ``_revalidation_material``.  Edited INVALIDs deliberately keep both
+        files because their creation baseline and archived candidate are
+        different evidence.  No link, directory sweep, or guessed filename is
+        involved: the ref binds the exact numbered path and raw SHA-256.  If a
+        crash recovery later moves that round back to live INVALID, the resolver
+        accepts live bytes only while the same SHA still matches.  Failure to
+        compact merely retains the safe duplicate and must not fail the archive.
+        """
+        if not paths.is_invalid(rel):
+            return
+        try:
+            archived_raw = _read_file_bytes(archived)
+            encoded = self._loads(rel, archived_raw)
+            payload = decode_artifact(rel, encoded).payload
+            if not isinstance(payload, dict):
+                return
+            source = payload.get(PROVENANCE_KEY)
+            locator = source.get('invalid_baseline_sha256') \
+                if isinstance(source, dict) else None
+            if not isinstance(locator, str):
+                return
+            baseline = self.path(self._revalidation_baseline_rel(rel, locator))
+            if (not _is_file(baseline)
+                    or _read_file_bytes(baseline) != archived_raw):
+                return
+            self._track_history_path(baseline)
+            reference = json.dumps({
+                '_snapshot_ref_version': REVALIDATION_REFERENCE_VERSION,
+                'raw_sha256': hashlib.sha256(archived_raw).hexdigest(),
+                'round_rel': archived.relative_to(
+                    self.ctx.novel_dir).as_posix(),
+            }, ensure_ascii=False, sort_keys=True,
+                separators=(',', ':')).encode('utf-8') + b'\n'
+            self._replace_atomically(baseline, reference)
+        except (ArtifactUnreadable, ArtifactVersionError, OSError,
+                ProvenanceRefused):
+            # Deduplication is storage hygiene, never an excuse to make the
+            # already-landed numbered recovery archive unavailable.
+            return
 
     def retire_bytes(self, rel: str, destination: str) -> Path:
         """Move live bytes to an immutable, content-addressed archive idempotently.
@@ -1267,7 +1474,7 @@ class ArtifactStore:
         if not p.is_file():
             return None
         try:
-            raw_data = json.loads(p.read_bytes().decode('utf-8'))
+            raw_data = json.loads(_read_file_bytes(p).decode('utf-8'))
             data = decode_artifact(rel, raw_data).payload
         except (OSError, UnicodeDecodeError, json.JSONDecodeError, ArtifactVersionError):
             return None
@@ -1279,6 +1486,18 @@ class ArtifactStore:
     # ── 新鲜度 ────────────────────────────────────────────────────────────
 
     def freshness(self, rel: str) -> FreshnessReport:
+        """Return currentness, memoized only inside a sealed readonly snapshot."""
+        rel = paths.check_rel_deep(rel)
+        memo = _memo_for_context(self.ctx)
+        key = (self.ctx.node, rel)
+        if memo is not None and key in memo.freshness:
+            return copy.deepcopy(memo.freshness[key])
+        report = self._freshness_uncached(rel)
+        if memo is not None:
+            memo.freshness[key] = copy.deepcopy(report)
+        return report
+
+    def _freshness_uncached(self, rel: str) -> FreshnessReport:
         """这份产物是拿**盘上现在这几份**上游产的吗？算法在 `novel/prov.py::freshness`。
 
         ⚠ **读原始 dict，不过模型。** 一份陈旧产物很可能已经不合当前 schema
@@ -1286,7 +1505,6 @@ class ArtifactStore:
         而「它是不是陈旧的」恰恰是这时候最该答得出来的问题。
         让新鲜度依赖校验通过，等于在最需要它的那一刻把它关掉。
         """
-        rel = paths.check_rel_deep(rel)
         p = self.path(rel)
         if not _is_file(p):
             # 称名 HARD 时 producer **有意不发布** projection；这不是普通 missing，
@@ -1329,6 +1547,36 @@ class ArtifactStore:
         report = self.freshness_of_inputs(rel, recorded)
         if canonical_rel(rel) == STAGE2_CHAPTER_BLUEPRINTS:
             report = self._legacy_blueprint_inputs_freshness(recorded, report)
+        if (canonical_rel(rel) == STAGE4_BLIND_CANDIDATE
+                and rel == STAGE4_BLIND_CANDIDATE
+                and report.state == 'unknown'):
+            # 专用 frozen-v6 证明只在已有 Stage4A 主体上恢复历史 consumed 边；
+            # Blueprint producer 与 Stage4 paid 路仍走 current decoder，不会经此口。
+            try:
+                from novel.stages.stage2.frozen_v6 import (
+                    require_frozen_v6_stage4_subject,
+                )
+                frozen = require_frozen_v6_stage4_subject(self)
+            except (ArtifactUnreadable, UpstreamMissing, UpstreamStale,
+                    OSError, ValueError):
+                pass
+            else:
+                candidate_edge = (
+                    frozen.candidate.provenance.inputs or {}
+                ).get(paths.input_key(STAGE2_CHAPTER_BLUEPRINTS))
+                if candidate_edge is not None:
+                    now_consumed = prov.projection_fingerprint(
+                        frozen_v6_stage4_design_blueprints(
+                            frozen.blueprint_payload))
+                    edge = prov.EdgeVerdict(
+                        key=paths.input_key(STAGE2_CHAPTER_BLUEPRINTS),
+                        state='fresh', reason='match',
+                        recorded_file=candidate_edge.file,
+                        now_file=candidate_edge.file,
+                        recorded_consumed=candidate_edge.consumed,
+                        now_consumed=now_consumed,
+                    )
+                    return FreshnessReport('fresh', 'match', (edge,))
         if canonical_rel(rel) == STAGE4_PLAN_CHAPTERS and isinstance(data, dict):
             return self._stage4_plan_phase_freshness(data, report)
         return report
@@ -1794,7 +2042,7 @@ class ArtifactStore:
         if not p.is_file():
             return None
         try:
-            raw = json.loads(p.read_bytes().decode('utf-8'))
+            raw = json.loads(_read_file_bytes(p).decode('utf-8'))
             payload = decode_artifact(rel, raw).payload
         except (OSError, UnicodeDecodeError, json.JSONDecodeError,
                 ArtifactVersionError) as e:
@@ -1806,7 +2054,7 @@ class ArtifactStore:
         if not p.is_file():
             return None
         try:
-            return prov.content_sha1(p.read_bytes())
+            return prov.content_sha1(_read_file_bytes(p))
         except OSError as e:
             raise ArtifactUnreadable(f'{self.ctx.node}: 读不了 {rel} 的内容指纹：{e!r}') from e
 
@@ -1837,7 +2085,7 @@ class ArtifactStore:
             return None
         p = self.ctx.novel_dir.joinpath(*parts)
         try:
-            return prov.fingerprint_bytes(p.read_bytes())
+            return prov.fingerprint_bytes(_read_file_bytes(p))
         except OSError:
             return None
 
@@ -1877,12 +2125,48 @@ class ArtifactStore:
     #   ⚠ 长名正是当初撞 Windows MAX_PATH 的原因（见上面 `_revalidation_baseline_rel`
     #   的注释）：真要恢复它，等于把那个已知缺陷一起恢复。
 
+    def _revalidation_snapshot_bytes(
+            self, snapshot: Path, *, fallback: bytes | None = None,
+    ) -> bytes:
+        """Resolve a legacy full baseline or a v1 content-addressed round ref."""
+        raw = _read_file_bytes(snapshot)
+        try:
+            reference = json.loads(raw.decode('utf-8'))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            return raw
+        if (not isinstance(reference, dict)
+                or '_snapshot_ref_version' not in reference):
+            return raw
+        if (set(reference) != {
+                '_snapshot_ref_version', 'raw_sha256', 'round_rel'}
+                or reference.get('_snapshot_ref_version')
+                != REVALIDATION_REFERENCE_VERSION):
+            raise ProvenanceRefused(
+                f'重验证基线引用版本或字段不闭合：{snapshot}')
+        round_rel = paths.check_rel_deep(str(reference.get('round_rel') or ''))
+        expected_sha = str(reference.get('raw_sha256') or '')
+        if (len(expected_sha) != 64
+                or any(ch not in '0123456789abcdef' for ch in expected_sha)
+                or '/_rounds/' not in f'/{round_rel}'):
+            raise ProvenanceRefused(f'重验证基线引用身份不合法：{snapshot}')
+        target = self.path(round_rel)
+        archived = _read_file_bytes(target) if _is_file(target) else None
+        for candidate in (archived, fallback):
+            if (candidate is not None
+                    and hashlib.sha256(candidate).hexdigest() == expected_sha):
+                return candidate
+        raise ProvenanceRefused(
+            f'重验证基线引用的 numbered round 缺失/漂移，'
+            f'且 live 候选不匹配：{round_rel}')
+
     def _write_immutable(self, destination: Path, data: bytes) -> None:
         """Create a content-addressed audit snapshot; never replace history."""
         self._track_history_path(destination)
         if os.path.exists(_filesystem_path(destination)):
             try:
-                same = _is_file(destination) and _read_file_bytes(destination) == data
+                same = (_is_file(destination)
+                        and self._revalidation_snapshot_bytes(
+                            destination, fallback=data) == data)
             except OSError as exc:
                 raise ArtifactUnreadable(
                     f'读不了既有重验证基线 {destination}：{exc!r}') from exc
@@ -1923,7 +2207,8 @@ class ArtifactStore:
                 f'{inv_rel} 声明的不可变基线不存在：{baseline_rel}；'
                 '没有对照物就不能形成重验证审计账')
         try:
-            baseline_raw = _read_file_bytes(baseline_path)
+            baseline_raw = self._revalidation_snapshot_bytes(
+                baseline_path, fallback=current_raw)
         except OSError as exc:
             raise ArtifactUnreadable(f'读不了重验证基线 {baseline_rel}：{exc!r}') from exc
         baseline_encoded = self._loads(inv_rel, baseline_raw)
@@ -2002,9 +2287,16 @@ class ArtifactStore:
         if node is None:
             return None
         if lookup is projection_for:
+            memo = _memo_for_context(self.ctx)
+            memo_key = (node, key)
+            if memo is not None and memo_key in memo.consumed:
+                return memo.consumed[memo_key]
             loaded, data = self._projection_payload(key)
-            return (self._consumed_fingerprint(node, key, data)
-                    if loaded else None)
+            if not loaded:
+                if memo is not None:
+                    memo.consumed[memo_key] = None
+                return None
+            return self._consumed_fingerprint(node, key, data)
         if (project := lookup(node, key)) is None:
             return None
         return self._project_current(key, project)
@@ -2013,24 +2305,36 @@ class ArtifactStore:
         self, node: str, key: str, data: object,
     ) -> str | None:
         """current 投影的唯一执行口；读边与 freshness 共用。"""
+        memo = _memo_for_context(self.ctx)
+        memo_key = (node, key)
+        if memo is not None and memo_key in memo.consumed:
+            return memo.consumed[memo_key]
         related: dict[str, object] = {}
         for related_key in context_inputs_for(node, key):
             loaded, value = self._projection_payload(related_key)
             if not loaded:
+                if memo is not None:
+                    memo.consumed[memo_key] = None
                 return None
             related[related_key] = value
         resolved, value = project_consumed(
             node, key, data, related=related)
-        return prov.projection_fingerprint(value) if resolved else None
+        result = prov.projection_fingerprint(value) if resolved else None
+        if memo is not None:
+            memo.consumed[memo_key] = result
+        return result
 
     def _projection_payload(self, key: str) -> tuple[bool, object]:
         """为 consumed 重算读 current 载体；不记新来源边。"""
+        memo = _memo_for_context(self.ctx)
+        if memo is not None and key in memo.projections:
+            return copy.deepcopy(memo.projections[key])
         parts = str(key).replace(chr(92), '/').split('/')
         if not parts or any(part in ('', '.', '..') for part in parts):
             return False, None
         p = self.ctx.novel_dir.joinpath(*parts)
         try:
-            raw = p.read_bytes()
+            raw = _read_file_bytes(p)
             if p.suffix.lower() == '.json':
                 decoded_json = json.loads(raw.decode('utf-8'))
                 data: object = (
@@ -2040,11 +2344,14 @@ class ArtifactStore:
                 )
             else:
                 data = raw.decode('utf-8')
-            return True, data
+            result = (True, data)
         except (OSError, UnicodeDecodeError, json.JSONDecodeError,
                 AttributeError, KeyError, IndexError, TypeError, ValueError,
                 ArtifactVersionError):
-            return False, None
+            result = (False, None)
+        if memo is not None:
+            memo.projections[key] = copy.deepcopy(result)
+        return result
 
     def _project_current(self, key: str, project: Callable[[Any], Any]) -> str | None:
         loaded, data = self._projection_payload(key)

@@ -405,6 +405,32 @@ def test_a_nonlinear_branch_entry_is_unverifiable_rather_than_a_violation():
     assert reading and 'state_unknown_findings' in reading[0].detail
 
 
+def test_story_before_uses_typed_story_time_instead_of_disclosure_order():
+    plan = _compiled()
+    blueprints = _blueprints()
+    # 计划先披露拒绝 f002，再用 earlier 回到邀请 f001。真实时序仍是邀请在前。
+    blueprints['blueprints'][0]['narrative_relations'] = [{
+        'kind': 'story_before', 'enforcement': 'hard',
+        'before_fact_ref': 'f01_001', 'after_fact_ref': 'f01_002',
+    }]
+    outcome_by_rule = {row.rule: row for row in checks.check(
+        plan, blueprints=blueprints, main_text=_main())}
+    relation = outcome_by_rule['narrative_relation']
+    assert list(relation.findings) == []
+    assert relation.unver_why is None
+
+    # 数组顺序看似 f002 在 f001 前，若契约反过来声称 f002 的故事时间更早，
+    # X_EARLIER 提供的 typed 时层会证明它实际反向，必须 HARD 红。
+    blueprints['blueprints'][0]['narrative_relations'] = [{
+        'kind': 'story_before', 'enforcement': 'hard',
+        'before_fact_ref': 'f01_002', 'after_fact_ref': 'f01_001',
+    }]
+    reversed_outcome = {row.rule: row for row in checks.check(
+        plan, blueprints=blueprints, main_text=_main())}['narrative_relation']
+    assert reversed_outcome.findings
+    assert '故事时序反向' in reversed_outcome.findings[0].detail
+
+
 def test_a_continue_scene_that_drops_the_previous_exit_state_is_still_hard():
     """放宽的只有非线性边界；`continue` 那一条一格没松。"""
     plan = _compiled()

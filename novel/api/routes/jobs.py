@@ -98,19 +98,19 @@ def start_job(req: PreviewRequest, base: str = Depends(get_base)) -> JobRecord:
     # A 的付费返修/重规划必须消费当前 hash-bound typed 决定；默认首次设计没有
     # 这张票。占住书锁后先解析一次可执行 scope，CLI 仍在 subprocess 内终验。
     if req.node == 'stage4.design' and (
-        '--repair-decision' in tokens or '--replan' in tokens
+        '--review-token' in tokens or '--replan' in tokens
     ):
         if sid is None:
             raise UnsupportedRunMode('stage4.design repair requires a novel sid')
-        if '--repair-decision' in tokens:
-            decision_sha256 = nodes.flag_value(
-                req.flags, '--repair-decision')
-            prepares.append(lambda decision_sha256=decision_sha256: (
+        review_token = nodes.flag_value(req.flags, '--review-token')
+        if '--replan' not in tokens:
+            prepares.append(lambda review_token=review_token: (
                 approvals.resolve_design_action(
-                    base, sid, decision_sha256, expected='repair')))
+                    base, sid, review_token, expected='repair')))
         else:
-            prepares.append(lambda: approvals.resolve_design_action(
-                base, sid, None, expected='replan'))
+            prepares.append(lambda review_token=review_token: (
+                approvals.resolve_design_action(
+                    base, sid, review_token, expected='replan')))
     elif req.node == 'stage4.design' and not tokens:
         if sid is None:
             raise UnsupportedRunMode('stage4.design requires a novel sid')

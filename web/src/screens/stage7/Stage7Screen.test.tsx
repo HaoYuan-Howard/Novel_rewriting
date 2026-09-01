@@ -25,6 +25,7 @@ describe('Stage7Screen download', () => {
         reason: view.approved!.reason,
         subject_sha256: pack.decision_subject_sha256,
         workpack_sha256: pack.workpack_sha256,
+        review_identity_sha256: pack.review_identity_sha256,
       },
     })
     const download = vi
@@ -50,7 +51,7 @@ describe('Stage7Screen download', () => {
     expect(revokeUrl).toHaveBeenCalledWith('blob:test')
   })
 
-  it('previews and submits auditable hash-bound name-map approval', async () => {
+  it('previews and submits an auditable opaque-token name-map approval', async () => {
     const fixture = await mockApi.getStage7(SAMPLE_SID)
     const workpack = await mockApi.getStage7ApprovalWorkpack(SAMPLE_SID)
     const subject = 'a'.repeat(64)
@@ -114,8 +115,7 @@ describe('Stage7Screen download', () => {
     await waitFor(() => expect(approve).toHaveBeenCalledWith(SAMPLE_SID, {
       actor: 'reviewer-seven',
       reason: '已逐项核对别称、亲属后缀与高置信残留',
-      subject_sha256: subject,
-      workpack_sha256: workpack.workpack_sha256,
+      review_token: workpack.review_token,
     }))
   })
 
@@ -134,6 +134,7 @@ describe('Stage7Screen download', () => {
         reason: '已逐项核对人物表',
         subject_sha256: current.decision_subject_sha256,
         workpack_sha256: current.workpack_sha256,
+        review_identity_sha256: current.review_identity_sha256,
       },
     })
     vi.spyOn(api, 'getJobs').mockResolvedValue({ jobs: [], running: null })
@@ -218,6 +219,7 @@ describe('Stage7Screen download', () => {
         reason: '已逐项核对人物表',
         subject_sha256: pack.decision_subject_sha256,
         workpack_sha256: pack.workpack_sha256,
+        review_identity_sha256: pack.review_identity_sha256,
       },
     }
     vi.spyOn(api, 'getStage7').mockResolvedValue(fixture)

@@ -3,7 +3,7 @@
 Stage4 由两个隔离的付费相和一个确定性上下文相组成：
 
 ```text
-Stage2 v6
+Stage2 v7
   ├─ 章功能/计数 ─ stage4.design（A，付费）─ 整书策略 checkpoint
   │                                      └─ 冻结策略 + 单章去序真相 ─ N 个私有 session（≤4 并发）
   │                                                                      └─ 单章 checkpoints
@@ -31,12 +31,15 @@ Context 只能在该决定全书接受后独立生成。`stage4.plan --identity`
 | 路径 | 模型 / 版本 | 生产者 | 责任 | 证据 |
 |---|---|---|---|---|
 | `stage4/blind_candidate.json` | `BlindCandidate` v2 | `stage4.design` | 保存 A 的 N+1 个已验 unit 确定性聚合后的盲场景候选、编译映射与聚合来源账 | 码·契 |
+| `stage4/blind_chapter_edit.json` | `BlindChapterEditRequest` v1 | 人工输入 | Stage4A 的 hash-bound、零模型完整章替换请求；不是 Executor 产物，也不进入正式展示面 | 码·契 |
 | `stage4/evidence_binding.json` | `EvidenceBinding` v3 | `stage4.plan` / `--apply-binding` | 保存 B 的完整绑定、非阻断 concerns，或仅由代码铸造 witness 的 typed `infeasible` | 码·契 |
 | `stage4/plan_chapters.json` | `PlanChapters` v4 | `stage4.plan` 的编译段 | 保存 Stage5 真正消费的结构计划与 A/B 完整字节哈希 | 码·契 |
 | `stage4/plan_edit.json` | `PlanEdit` v4 | 人工输入 | 人工整份替换计划的 typed 入口 | 码·契 |
 | `stage4/writer_context.json` | `WriterContext` v4 | `stage4.context` | 把计划引用和当前 Stage2 真相投影成人话 | 三源 |
 
-旧 Blind v1、Evidence v1/v2、Plan/Edit v3、WriterContext v3 均关闭式拒读，不迁移、不手补版本号。
+旧 Blueprint v6 不自动迁移到 v7；现有旧书只走其冻结的 v6 恢复面，新 v7 关系契约只在 clean base
+由 producer 重建。旧 Blind v1、Evidence v1/v2、Plan/Edit v3、WriterContext v3 均关闭式拒读，
+不迁移、不手补版本号。
 compiled 计划从 `stage4.design` → `stage4.plan` 重建；人工稿提交 v4 `PlanEdit`；上下文用
 `stage4.context` 在最终结构审批后免费重建。旧 `stage4/writer_context.identity.json` 已退役：不登记路径、不发现、
 不读取，也不主动删除用户盘上的历史文件。
@@ -53,7 +56,11 @@ Stage4A 不是一份全书事实请求。首个整书策略 session 只看按阅
 claim/kind/obligation、因果边与章首/章尾状态；不会看见其他章真相。
 事实与人物引用使用该章独有的短 local alias（`f_*` / `p_*`）：由 root 身份、章号和正式 alias
 确定性 HMAC 派生，碰撞时只延长摘要，因此跨恢复稳定且不携带源序；数组继续按 alias 稳定排序。
-因果边是真相约束，不是源披露顺序，因此在本章请求中保留。
+因果边是真相约束，不是源披露顺序，因此在本章请求中保留。Stage2 v7 的 `enforcement=hard`
+叙事关系也按同一 local alias 投影；`enforcement=review` 只进 Commander workpack，不成为 Executor
+指令。普通相邻、同一 source beat 或数组位置都不会自动生成关系。尤其 `story_before` 表示故事世界
+真实时间，不是 scenes 披露顺序：机械复检只认 transition 能直接证明的偏序；同场内部、parallel、
+歧义支路或偏序不足时必须报 `UNVER` 交 Commander，不能拿数组先后猜 PASS/FAIL。
 
 两类 session 都看不到原文、SourceSpan、`source_beat_ref`、beat/stage、材料、正式 fact id 或源出现
 顺序。local→正式 alias 映射只供确定性编译和审计，不能拼回 A 的 user message。正式算法仍为
@@ -105,25 +112,48 @@ unit checkpoint 不是正式 artifact。只有策略和全部章节齐全，代�
 单章动态闸与整书全部 HARD。通过后才由 commit journal 原子写 `blind_candidate.json`；中断、缺章、
 聚合失败或 HARD 命中都不得留下部分正式文件，也不得覆盖旧正式候选。
 
-### 2.4 正式 A 设计审阅与定向修订
+### 2.4 正式 A 设计审阅与收敛修订
 
 A 的 schema/HARD 通过只说明候选可读、引用闭合，不替人判断它是否实现了足够的结构重构。审批服务对
 当前 A 构造完整 review subject：全局 basis 绑定 root/truth/alias/review contract；策略 subject 绑定
-重构策略与章权重；每章 subject 绑定同一策略摘要、安全的本章盲真相、候选业务面，以及服务端调用
+重构策略与章权重；`stage4-design-review-v3` 另把宏观策略冻结为 strategy epoch，并让每章只绑定
+该 epoch 与**本章自己的 weight**，其他章权重变化不再污染本章 checkpoint。每章 subject 绑定
+安全的本章盲真相、候选业务面，以及服务端调用
 `structure_metrics_of` 现场计算的声明/实际/已实现/未实现/未声明变化和无 id 标量读数。formal fact/person
 id 与来源位置不公开；opaque alias 只在本章 subject 内闭合。
 
 一次 `DesignReviewRequest` 必须原子覆盖当前策略和全部章：策略 `accept / request_replan`，逐章
-`accept / request_repair`。repair 章必须给关闭式 `{code, scene_refs[], opaque_aliases[]}` constraints，
-各 code 的最小引用数只定义在 `DESIGN_REPAIR_CONSTRAINT_ARITY`；reason 只作审计，不发给模型。
+`accept / request_repair`。repair 章必须给关闭式 constraint；既有 anchor/grouping/order/scene-goal
+约束仍用 `scene_refs/opaque_aliases`，新增 `narrative_relation` 必须携与 Stage2 同构、
+`enforcement=hard` 的 typed effect，端点不得再复制进无类型数组。各 code 的最小引用数只定义在
+`DESIGN_REPAIR_CONSTRAINT_ARITY`；reason 只作审计，不发给模型。
 全局 basis 或策略变化使全章旧决定过期；单章业务变化只使该章过期。同一策略下、subject 完全相同的
 历史 accept 可由模板带 `source_decision_sha256` 复用，但仍须对当前整书重新提交一次，不静默代签。
 
-逐章拒绝只允许 `stage4.design --repair-decision <当前决定 SHA-256>`：重跑 request_repair 章，其他章
-引用既有已验 checkpoint；正式 provenance 记录 parent candidate、决定摘要与逐 unit lineage。旧首轮
+逐章拒绝只允许 `stage4.design --review-token <opaque>`：服务端现场展开当前决定，重跑 request_repair 章，其他章
+引用既有已验 checkpoint；正式 provenance 记录 parent candidate、决定摘要与逐 unit lineage。
+每轮 Executor 输入同时携本轮新增约束和该 strategy epoch 下尚未关闭的**累计 typed constraints**，
+只消费最新一轮而遗忘旧失败会被 constraint-set hash 拒绝。一个 repair epoch 最多两次模型 content
+turn；耗尽只结束该 epoch，不把一章失败升级成整书策略失败。新 hash-bound typed 决定可在同一
+strategy epoch 打开新的单章 repair epoch，也可直接走下述 0-wire 完整章替换。
+
+`stage4.design --validate-edit <path>` 与 `--apply-edit <path>` 读取同一
+`BlindChapterEditRequest` v1：外部只提交单一 opaque `review_token`、actor/reason、目标章号与一份完整
+`BlindChapterResponse`，不接受字段 patch。服务端从当前 immutable workpack 现场重建并核对 current
+candidate、整书/目标章 subject、设计决定、strategy epoch、本章 strategy 与累计 constraint set；这些
+内部 SHA 不要求 Commander、skill 或 UI 手工搬运。preview 与 apply 共用同一编译器、schema、dynamic validator、章级和全书 HARD；
+apply 前后二次核 candidate，且非目标章业务字节必须完全相同。成功来源记 `origin=human`，不伪造
+模型、prompt 或 usage；请求文件只是外部 typed 输入，不成为新的正式展示产物。apply 同时提交一份
+确定性 human-evolution journal，内联封存目标章响应并继承其余 unit source，因此下一轮 agent
+repair / strategy replan 仍能从该候选唯一恢复 lineage，而不会把人工章伪装成 checkpoint 或模型 attempt。
+
+旧首轮
 候选尚无 lineage 时，core 以正式 candidate 完整 SHA、业务主体和 committed aggregate journal 唯一反查
-基线 run；零或多匹配关闭式拒绝。策略被拒才允许 `--replan` 整书重做。两条付费路都只产新 A，之后
-必须重新审阅；任何审批提交本身都不启动作业。
+基线 run；零或多匹配关闭式拒绝。策略被拒才允许 `--replan`：策略决定必须给
+`replace_reconstruction_strategy｜change_chapter_weights` typed 约束，replan 输入携累计策略约束、
+历次章失败与旧 accepted 章身份，自由文本 reason 不进 prompt。只有 effective strategy/input digest
+变化的章才可重跑；未变 accepted 章继续作为约束和 checkpoint 复用依据。所有生成/修订路都只产新 A，
+之后必须重新审阅；任何审批提交本身都不启动作业。
 
 ## 三、Stage4B：`evidence_binding.json` v3
 
@@ -268,8 +298,9 @@ design/structure/writing typed 历史，清除 s5～s7，绝不伪造 Stage5 clo
 未审的 s2。更早版本同样只经显式逐项对证，普通 GET / 启动不静默迁移；
 其中旧 v5 的 design history 恒空，绝不从既有 A/B/Plan 或付费记录伪造 A 审阅。只有同时 current 的 Plan v4
 与 bound EvidenceBinding v3（含其 INVALID Plan 的零成本恢复）可继续最终结构审批，未来再次运行 B
-才要求 current A accept。旧 v2 Binding 不迁移、不补字段，须按 A 审阅 → B producer 重建。一次最终结构决定必须提交当前
-subject SHA-256、actor、全书理由及与计划章集精确相等的逐章 accept/request_replan。全章 accept 才
+才要求 current A accept。旧 v2 Binding 不迁移、不补字段，须按 A 审阅 → B producer 重建。一次最终结构决定只提交
+Structure workpack 的 opaque `review_token`、actor、全书理由及与计划章集精确相等的逐章
+accept/request_replan；服务端在同书锁内重建 current subject 与全部内部 SHA。全章 accept 才
 打开 s4；任何 request_replan 都关闭 s4、保留 typed 决定并撤销旧 writing/下游证明，但不自动启动
 付费 A/B。计划变化后旧决定进入 history，当前态变 expired。
 
@@ -277,8 +308,9 @@ subject SHA-256、actor、全书理由及与计划章集精确相等的逐章 ac
 
 | 状态 | 允许的恢复 | 禁止的捷径 | 证据 |
 |---|---|---|---|
-| A 的策略或单章响应暂停/拒收 | 同一 `run_id` 恢复，只补失败/缺失 unit；旧 whole-book validator 拒稿才可走 `--adopt-rejected`，当前 split-run unit 仍按活动待办收口 | 重发已验 unit、公开 `--chapters`、拿旧整书入口冒充 unit adoption、补字段或部分聚合冒充正式候选 | 码·契 |
-| A 正式审阅逐章拒绝 | 当前 decision SHA 绑定的 `--repair-decision` 只返修 request_repair 章；策略拒绝才 `--replan` | 把默认模板理由当真实反馈、自然语言自由指令、无决定随机重采整书 | 码·契 |
+| A 的策略或单章响应暂停/拒收 | 同一 `run_id` 恢复，只补失败/缺失 unit；旧 whole-book validator 拒稿才可走 `--adopt-rejected` | 重发已验 unit、公开 `--chapters`、拿旧整书入口冒充 unit adoption、补字段或部分聚合冒充正式候选 | 码·契 |
+| A 正式审阅逐章拒绝 | 当前 opaque `--review-token` 由服务端展开决定，只返修 request_repair 章；每个 repair epoch 最多两轮，累计约束不可遗忘；耗尽后可新开同策略 repair epoch或走完整章 preview/apply | 把单章耗尽自动升级成整书 replan、把默认模板理由当真实反馈、字段 patch、无决定随机重采整书 | 码·契 |
+| A 正式审阅策略拒绝 | `--replan` 携 typed 累计策略/章节失败反馈和 accepted 章约束；只重跑 effective 输入变化的章 | 丢掉失败史重新采样、让未变已验章重发 wire、把自由文本 reason 当执行约束 | 码·契 |
 | 模型声称 B `infeasible` | 同 session 结构化反馈要求 bound；真实代码 witness 可落正式终态；亦可提交 `--apply-binding` 或完整 v4 人工计划 | 信任模型自证、B 私改 A、自动生成 A2、要求已有 Plan 才给首次恢复 | 码·契 |
 | 计划落 `.INVALID` | 修订 v4 `plan_edit.json` 后 `--apply-edit`，或 `--revalidate --actor --reason` | 改名提升、绕过 schema/判据/归档 | 三源 |
 | Context 缺失或 stale | 最终结构全章 accept 后用 `stage4.context` 免费重建 | B/计划修复时提前代写，或用旧上下文继续写 | 三源 |
@@ -286,11 +318,11 @@ subject SHA-256、actor、全书理由及与计划章集精确相等的逐章 ac
 
 ## 八、现行判据
 
-当前注册表共 **33 条**：**20 hard、3 info、10 metric**。
+当前注册表共 **34 条**：**21 hard、3 info、10 metric**。
 
 | 分组 | 当前规则 id |
 |---|---|
-| 章场与事实安全 | `one_to_one` · `ordinal_seq` · `empty_chapter` · `fact_ref` · `fact_coverage` · `causal_closure` · `state_closure` · `material_coverage` · `scene_transition` · `goal_landing` |
+| 章场与事实安全 | `one_to_one` · `ordinal_seq` · `empty_chapter` · `fact_ref` · `fact_coverage` · `causal_closure` · `narrative_relation` · `state_closure` · `material_coverage` · `scene_transition` · `goal_landing` |
 | 预算与文本策略 | `budget_int` · `budget_band` · `plan_book_band` · `style_words` · `verbatim_starved` |
 | A/B 与 Context | `phase_artifact_link` · `context_link` · `ctx_facts_exact` · `ctx_name_attested` · `ctx_stage_explicit` · `ctx_hinge_delivered` |
 | 因果与舞台提示 | `causal_disclosure` · `stage_signature_conflict` |

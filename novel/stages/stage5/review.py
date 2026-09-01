@@ -54,6 +54,7 @@ from novel.report.builder import build
 from novel.run import RunContext
 from novel.stages.stage5 import checks
 from novel.stages.stage5 import measure as M
+from novel.snapshot_clone import readonly_snapshot_clone
 from novel.store import ArtifactStore
 
 MAIN_TEXT = STAGE1_MAIN_TEXT
@@ -206,6 +207,17 @@ def legacy_versioned_paths(store: ArtifactStore) -> list[str]:
 def review_status(ctx: RunContext, store: ArtifactStore | None = None) -> ReviewStatus:
     """一次关闭式判定：旧布局、旧 schema、RULES、上游或正文漂移都不 fresh。"""
     store = store or ArtifactStore(ctx)
+    if getattr(ctx, 'readonly', False):
+        return readonly_snapshot_clone(
+            ctx, ('stage5-review-status',),
+            lambda: _review_status_uncached(ctx, store),
+        )
+    return _review_status_uncached(ctx, store)
+
+
+def _review_status_uncached(
+    ctx: RunContext, store: ArtifactStore,
+) -> ReviewStatus:
     legacy_layout = M.legacy_stage5_paths(store)
     seqs = review_seqs(store)
     seq = seqs[-1] if seqs else None

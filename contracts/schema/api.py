@@ -26,6 +26,7 @@ api.py —— 对应 `docs/schema/_api.md`。**一次 HTTP 响应长什么样。
 """
 from __future__ import annotations
 
+import json
 import re
 from typing import Annotated, Literal, TypeAlias
 
@@ -43,6 +44,7 @@ from contracts.invariants import (
     ANCHOR_COVERAGE_WARN,
     APPROVAL_GATES,
     APPROVAL_SEEN,
+    BLUEPRINT_REVIEW_CONTRACT,
     BLUEPRINT_REVIEW_SUBJECT_KINDS,
     CHAPTER_LABEL_ANOMALY,
     DELIVERY_MODES,
@@ -53,13 +55,17 @@ from contracts.invariants import (
     APPROVAL_WORKPACK_GROUP_EFFECTS,
     APPROVAL_WORKPACK_GROUPS,
     APPROVAL_WORKPACK_KINDS,
+    BLUEPRINT_RELATION_REVIEW_CONTRACT,
     FINAL_APPROVAL_WORKPACK_KINDS,
     DESIGN_PREFLIGHT_STATUSES,
     DESIGN_REPAIR_CODES_RETIRED,
     DESIGN_REPAIR_CONSTRAINT_ARITY,
     DESIGN_REPAIR_CODES,
+    DESIGN_REVIEW_CONTRACT,
+    FROZEN_V6_DESIGN_REVIEW_CONTRACT,
     DESIGN_REVIEWER_KINDS,
     DESIGN_REVIEW_STATES,
+    DESIGN_STRATEGY_REPLAN_CONSTRAINTS,
     DESIGN_STRATEGY_DECISIONS,
     FACT_ATOM_KINDS,
     FACT_ATOM_OBLIGATIONS,
@@ -67,12 +73,16 @@ from contracts.invariants import (
     HINGE_KINDS,
     HOOK_APPROACHES,
     STAGE6_JUDGE_ROLES,
+    STAGE6_REVIEW_CONTRACT,
+    STAGE7_REVIEW_CONTRACT,
     HOOK_SLOTS,
     slot_of,
     HOOK_SEMANTIC_STATES,
     INBOX_ATTENTION,
     INBOX_DELIVERY_EFFECT,
     INBOX_KIND,
+    NARRATIVE_RELATION_ENFORCEMENTS,
+    NARRATIVE_RELATION_KINDS,
     NODES,
     EXECUTION_PERMIT_KINDS,
     OPERATOR_NEXT_STATES,
@@ -82,6 +92,7 @@ from contracts.invariants import (
     NARRATIVE_PERSON,
     NONBODY_KINDS,
     REMOVED_ORIGIN,
+    RETENTION_CANDIDATE_KINDS,
     RESIDUAL_ADOPTION_CONFIDENCE,
     STATUS,
     SECRET_SETUP_KINDS,
@@ -99,7 +110,9 @@ from contracts.invariants import (
     TEMPORAL_LINKS,
     STAGE5_CLOSURE_GROUPS, STAGE5_CLOSURE_STATES,
     STAGE5_EDIT_CONFIRMATIONS,
-    STAGE5_MUST_APPEAR_RULINGS,)
+    STAGE5_MUST_APPEAR_RULINGS,
+)
+
 from contracts.schema.base import FrozenModel, StrictModel
 from contracts.schema.common import Finding, HashBoundHumanApproval, Sha256
 from contracts.schema.evaluation import GlobalReviewItem, SemanticDecision
@@ -440,6 +453,80 @@ class TrashNovelResult(StrictModel):
     trash_rel: str = Field(min_length=1)
 
 
+class RetentionPolicyRequest(StrictModel):
+    """服务空间维护策略；``None`` 明确表示该类 TTL 关闭。"""
+
+    log_ttl_seconds: int | None = Field(default=None, gt=0)
+    telemetry_ttl_seconds: int | None = Field(default=None, gt=0)
+    trash_ttl_seconds: int | None = Field(default=None, gt=0)
+    checkpoint_ttl_seconds: int | None = Field(default=None, gt=0)
+    max_entries: int = Field(default=512, ge=1)
+
+
+class RetentionCandidateView(FrozenModel):
+    kind: Literal[RETENTION_CANDIDATE_KINDS]
+    sid: str = Field(min_length=1)
+    rel: str = Field(min_length=1)
+    observed_mtime_ns: int = Field(ge=0)
+    observed_size: int = Field(ge=0)
+    observed_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    evidence: dict[str, object]
+
+
+class RetentionPlanView(StrictModel):
+    """preview 返回的完整冻结计划；apply 原样交回，不拆 token 内部身份。"""
+
+    wire_version: Literal[1]
+    generated_at: int = Field(ge=0)
+    policy: RetentionPolicyRequest
+    examined: int = Field(ge=0)
+    candidates: list[RetentionCandidateView]
+    plan_token: str = Field(pattern=r'^[0-9a-f]{64}$')
+
+
+class RetentionApplyRequest(StrictModel):
+    plan: RetentionPlanView
+    confirmed: bool = False
+
+
+class RetentionApplyResultView(StrictModel):
+    plan_token: str = Field(pattern=r'^[0-9a-f]{64}$')
+    removed: list[str]
+    receipts: list[str]
+
+
+class TrashRestorePreviewRequest(StrictModel):
+    trash_id: str = Field(pattern=r'^[0-9]{10}-[0-9a-f]{8}$')
+    expected_title: str = Field(min_length=1)
+
+
+class TrashRestorePlanView(StrictModel):
+    """book/approval/service run 三面恢复的不可变 preview CAS。"""
+
+    wire_version: Literal[1]
+    generated_at: int = Field(ge=0)
+    trash_id: str = Field(pattern=r'^[0-9]{10}-[0-9a-f]{8}$')
+    sid: str = Field(min_length=1)
+    title: str = Field(min_length=1)
+    original_dirname: str = Field(min_length=1)
+    metadata_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    manifest_file_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    manifest_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    plan_token: str = Field(pattern=r'^[0-9a-f]{64}$')
+
+
+class TrashRestoreApplyRequest(StrictModel):
+    plan: TrashRestorePlanView
+    confirmed: bool = False
+
+
+class TrashRestoreResultView(StrictModel):
+    sid: str = Field(min_length=1)
+    title: str = Field(min_length=1)
+    trash_id: str = Field(min_length=1)
+    book_rel: str = Field(min_length=1)
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # 二、列表与作业（`_api.md` §五）
 # ─────────────────────────────────────────────────────────────────────────────
@@ -738,6 +825,48 @@ class DesignBlindCausalEdge(FrozenModel):
     after_alias: str = Field(pattern=r'^a_[0-9a-f]{16,64}$')
 
 
+class DesignBlindStoryBefore(FrozenModel):
+    kind: Literal[NARRATIVE_RELATION_KINDS[0]]
+    enforcement: Literal[NARRATIVE_RELATION_ENFORCEMENTS]
+    before_alias: str = Field(pattern=r'^a_[0-9a-f]{16,64}$')
+    after_alias: str = Field(pattern=r'^a_[0-9a-f]{16,64}$')
+
+
+class DesignBlindResponseTo(FrozenModel):
+    kind: Literal[NARRATIVE_RELATION_KINDS[1]]
+    enforcement: Literal[NARRATIVE_RELATION_ENFORCEMENTS]
+    stimulus_alias: str = Field(pattern=r'^a_[0-9a-f]{16,64}$')
+    response_alias: str = Field(pattern=r'^a_[0-9a-f]{16,64}$')
+
+
+class DesignBlindSameScene(FrozenModel):
+    kind: Literal[NARRATIVE_RELATION_KINDS[2]]
+    enforcement: Literal[NARRATIVE_RELATION_ENFORCEMENTS]
+    left_alias: str = Field(pattern=r'^a_[0-9a-f]{16,64}$')
+    right_alias: str = Field(pattern=r'^a_[0-9a-f]{16,64}$')
+
+    @model_validator(mode='after')
+    def _pair_is_canonical(self) -> DesignBlindSameScene:
+        if self.left_alias >= self.right_alias:
+            raise ValueError('blind same_scene alias 必须升序且不能自指')
+        return self
+
+
+class DesignBlindObserves(FrozenModel):
+    kind: Literal[NARRATIVE_RELATION_KINDS[3]]
+    enforcement: Literal[NARRATIVE_RELATION_ENFORCEMENTS]
+    observer_alias: str = Field(pattern=r'^a_[0-9a-f]{16,64}$')
+    observed_alias: str = Field(pattern=r'^a_[0-9a-f]{16,64}$')
+    observation_alias: str = Field(pattern=r'^a_[0-9a-f]{16,64}$')
+
+
+DesignBlindNarrativeRelation = Annotated[
+    DesignBlindStoryBefore | DesignBlindResponseTo
+    | DesignBlindSameScene | DesignBlindObserves,
+    Field(discriminator='kind'),
+]
+
+
 class DesignBlindChapterTruth(FrozenModel):
     """由当前 Stage2 blueprint 现场重建的 A 可见去序真相章。"""
 
@@ -745,6 +874,10 @@ class DesignBlindChapterTruth(FrozenModel):
     chapter_function: str = Field(min_length=1)
     facts: list[DesignBlindFact] = Field(min_length=1)
     causal_edges: list[DesignBlindCausalEdge]
+    # v1/v2 已存人审历史没有这一面；新 v3 producer 显式
+    # 填写，历史解码则诚实视为“当时未可见”，不反向猜关系。
+    narrative_relations: list[DesignBlindNarrativeRelation] = Field(
+        default_factory=list)
     entry_state_aliases: list[str]
     ending_state_aliases: list[str]
 
@@ -761,8 +894,23 @@ class DesignBlindChapterTruth(FrozenModel):
             alias for edge in self.causal_edges
             for alias in (edge.before_alias, edge.after_alias)
         } | set(self.entry_state_aliases) | set(self.ending_state_aliases)
+        for relation in self.narrative_relations:
+            if isinstance(relation, DesignBlindStoryBefore):
+                referenced.update((relation.before_alias, relation.after_alias))
+            elif isinstance(relation, DesignBlindResponseTo):
+                referenced.update((relation.stimulus_alias, relation.response_alias))
+            elif isinstance(relation, DesignBlindSameScene):
+                referenced.update((relation.left_alias, relation.right_alias))
+            else:
+                referenced.update((relation.observed_alias, relation.observation_alias))
         if not referenced.issubset(fact_set):
             raise ValueError('blind truth 因果/状态 alias 必须属于本章 facts')
+        relation_keys = [json.dumps(
+            row.model_dump(mode='json'), ensure_ascii=False,
+            sort_keys=True, separators=(',', ':'),
+        ) for row in self.narrative_relations]
+        if relation_keys != sorted(set(relation_keys)):
+            raise ValueError('blind truth narrative_relations 必须规范排序且不重复')
         for label, values in (
             ('entry_state_aliases', self.entry_state_aliases),
             ('ending_state_aliases', self.ending_state_aliases),
@@ -813,13 +961,33 @@ class DesignStructureEvidence(FrozenModel):
 class DesignChapterSubject(FrozenModel):
     """一章可独立复用的人审业务面；不暴露任何 formal id。"""
 
-    strategy_subject_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    # v1/v2 历史决定把整份策略 subject SHA 复制到每一章。它仍
+    # 可解码，但 v3 新模板不再产生：其他章的 weight 变化不应让
+    # 本章已接受 checkpoint 过期。
+    strategy_subject_sha256: str | None = Field(
+        default=None, pattern=r'^[0-9a-f]{64}$')
+    strategy_epoch_sha256: str | None = Field(
+        default=None, pattern=r'^[0-9a-f]{64}$')
+    chapter_strategy_sha256: str | None = Field(
+        default=None, pattern=r'^[0-9a-f]{64}$')
     blind_truth: DesignBlindChapterTruth
     chapter: BlindCandidateChapter
     structure_evidence: DesignStructureEvidence
 
     @model_validator(mode='after')
     def _ordinals_match(self) -> DesignChapterSubject:
+        legacy = self.strategy_subject_sha256 is not None
+        current = (
+            self.strategy_epoch_sha256 is not None
+            and self.chapter_strategy_sha256 is not None
+        )
+        if (self.strategy_epoch_sha256 is None) != (
+                self.chapter_strategy_sha256 is None):
+            raise ValueError('strategy_epoch/chapter_strategy SHA-256 必须同进同出')
+        if legacy == current:
+            raise ValueError(
+                'design chapter subject 必须且只能使用 legacy strategy subject '
+                '或 v3 strategy epoch/chapter strategy 身份')
         if self.chapter.output_ordinal != self.blind_truth.chapter_ordinal:
             raise ValueError('design chapter 与 blind truth 章号必须一致')
         if (
@@ -875,14 +1043,40 @@ class DesignBindingInfeasibility(FrozenModel):
 class DesignChapterRepairCapability(FrozenModel):
     output_ordinal: int = Field(ge=1)
     committed_rounds: int = Field(ge=0)
-    request_repair_available: bool
+    #: v1/v2 历史字段；当时人工完整章替换尚未建模。
+    request_repair_available: bool | None = None
+    #: v3 将会发 wire 的 agent repair 与零 wire 的完整章替换分开。
+    agent_repair_available: bool | None = None
+    full_chapter_edit_available: bool | None = None
+
+    @model_validator(mode='after')
+    def _capability_family_is_unambiguous(self) -> DesignChapterRepairCapability:
+        legacy = self.request_repair_available is not None
+        current = (
+            self.agent_repair_available is not None
+            and self.full_chapter_edit_available is not None
+        )
+        if (self.agent_repair_available is None) != (
+                self.full_chapter_edit_available is None):
+            raise ValueError('agent/full-chapter-edit capability 必须同进同出')
+        if legacy == current:
+            raise ValueError(
+                'design chapter repair capability 必须且只能是 legacy 或 v3 形状')
+        return self
 
 
 class DesignReviewRepairCapability(FrozenModel):
-    """当前候选的 split-checkpoint targeted repair 可执行面。"""
+    """当前候选的两条恢复路；旧 v2 历史仍可读。"""
 
-    repairable: bool
-    reason_code: str = Field(min_length=1)
+    #: v1/v2 历史形状。
+    repairable: bool | None = None
+    reason_code: str | None = Field(default=None, min_length=1)
+    #: v3 形状：agent 依赖 split lineage/轮数；完整章替换只依赖
+    #: current candidate + typed decision，两者不得再压成一个布尔值。
+    agent_repairable: bool | None = None
+    agent_reason_code: str | None = Field(default=None, min_length=1)
+    full_chapter_editable: bool | None = None
+    full_chapter_edit_reason_code: str | None = Field(default=None, min_length=1)
     chapters: list[DesignChapterRepairCapability] = Field(min_length=1)
 
     @model_validator(mode='after')
@@ -890,11 +1084,67 @@ class DesignReviewRepairCapability(FrozenModel):
         ordinals = [row.output_ordinal for row in self.chapters]
         if ordinals != sorted(set(ordinals)):
             raise ValueError('design repair capability 章号必须升序且不重复')
+        legacy = self.repairable is not None or self.reason_code is not None
+        current_fields = (
+            self.agent_repairable, self.agent_reason_code,
+            self.full_chapter_editable, self.full_chapter_edit_reason_code,
+        )
+        current = any(value is not None for value in current_fields)
+        if legacy and (
+                self.repairable is None or self.reason_code is None):
+            raise ValueError('legacy repairable/reason_code 必须同进同出')
+        if current and any(value is None for value in current_fields):
+            raise ValueError('v3 agent/full-chapter-edit capability 与两个 reason 必须齐全')
+        if legacy == current:
+            raise ValueError('design repair capability 必须且只能是 legacy 或 v3 形状')
         for row in self.chapters:
-            expected = self.repairable and row.committed_rounds < 2
-            if row.request_repair_available != expected:
-                raise ValueError(
-                    'request_repair_available 必须由 lineage 与 committed_rounds 推导')
+            if legacy:
+                expected = bool(self.repairable) and row.committed_rounds < 2
+                if row.request_repair_available != expected:
+                    raise ValueError(
+                        'request_repair_available 必须由 lineage 与 committed_rounds 推导')
+                if row.agent_repair_available is not None \
+                        or row.full_chapter_edit_available is not None:
+                    raise ValueError('legacy capability 不得夹带 v3 章行')
+            else:
+                if row.request_repair_available is not None:
+                    raise ValueError('v3 capability 不得夹带 legacy 章行')
+                if row.agent_repair_available and not self.agent_repairable:
+                    raise ValueError(
+                        '章级 agent repair 不得超出全书 agent capability')
+                if row.full_chapter_edit_available != self.full_chapter_editable:
+                    raise ValueError(
+                        'full_chapter_edit_available 必须与全书 edit capability 一致')
+        if current and bool(self.agent_repairable) != any(
+                bool(row.agent_repair_available) for row in self.chapters):
+            raise ValueError('agent_repairable 必须等于章级 agent capability 的并集')
+        return self
+
+    @property
+    def is_v3(self) -> bool:
+        return self.agent_repairable is not None
+
+
+class DesignStrategyReplanConstraint(FrozenModel):
+    """策略 replan 真正进 Executor prompt 的 typed 反馈。
+
+    它只能指向策略 wire 真正拥有的两个变量。人写的 ``reason`` 仍只入
+    审计；不得从自由文本反推章号或修改面。
+    """
+
+    kind: Literal[DESIGN_STRATEGY_REPLAN_CONSTRAINTS]
+    subject_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    chapter_ordinals: list[int] = Field(default_factory=list)
+
+    @model_validator(mode='after')
+    def _scope_matches_kind(self) -> DesignStrategyReplanConstraint:
+        if self.chapter_ordinals != sorted(set(self.chapter_ordinals)) or any(
+                value < 1 for value in self.chapter_ordinals):
+            raise ValueError('strategy replan chapter_ordinals 必须是升序不重复正整数')
+        if self.kind == 'replace_reconstruction_strategy' and self.chapter_ordinals:
+            raise ValueError('全局策略替换不得伪装成局部章集')
+        if self.kind == 'change_chapter_weights' and not self.chapter_ordinals:
+            raise ValueError('权重修订必须指明受影响章')
         return self
 
 
@@ -908,6 +1158,10 @@ class DesignStrategyReview(FrozenModel):
         default=None, pattern=r'^[0-9a-f]{64}$')
     decision: DesignStrategyDecisionKind
     reason: str = Field(min_length=1)
+    #: v3 的 request_replan 必须带非空 typed 约束；v1/v2 历史缺字段
+    #: 仍可解码，但不能直接变成新的 replan scope。
+    replan_constraints: list[DesignStrategyReplanConstraint] = Field(
+        default_factory=list)
     source_decision_sha256: str | None = Field(
         default=None, pattern=r'^[0-9a-f]{64}$')
 
@@ -922,7 +1176,44 @@ class DesignStrategyReview(FrozenModel):
     def _template_marker_matches_placeholder(self) -> DesignStrategyReview:
         if self.placeholder != (self.template_token is not None):
             raise ValueError('Stage4A 策略 placeholder 与 template_token 必须同进同出')
+        keys = [json.dumps(
+            row.model_dump(mode='json'), ensure_ascii=False,
+            sort_keys=True, separators=(',', ':'),
+        ) for row in self.replan_constraints]
+        if keys != sorted(set(keys)):
+            raise ValueError('strategy replan constraints 必须规范排序且不重复')
+        current = self.subject.basis.review_contract in {
+            DESIGN_REVIEW_CONTRACT, FROZEN_V6_DESIGN_REVIEW_CONTRACT,
+        }
+        if self.decision == 'accept' and self.replan_constraints:
+            raise ValueError('accept 策略不得夹带 replan constraints')
+        if current and self.decision == 'request_replan' \
+                and not self.replan_constraints:
+            raise ValueError('v3 request_replan 必须给出 typed strategy constraint')
         return self
+
+
+class DesignRepairStoryBefore(DesignBlindStoryBefore):
+    enforcement: Literal[NARRATIVE_RELATION_ENFORCEMENTS[0]]
+
+
+class DesignRepairResponseTo(DesignBlindResponseTo):
+    enforcement: Literal[NARRATIVE_RELATION_ENFORCEMENTS[0]]
+
+
+class DesignRepairSameScene(DesignBlindSameScene):
+    enforcement: Literal[NARRATIVE_RELATION_ENFORCEMENTS[0]]
+
+
+class DesignRepairObserves(DesignBlindObserves):
+    enforcement: Literal[NARRATIVE_RELATION_ENFORCEMENTS[0]]
+
+
+DesignRepairRelationEffect = Annotated[
+    DesignRepairStoryBefore | DesignRepairResponseTo
+    | DesignRepairSameScene | DesignRepairObserves,
+    Field(discriminator='kind'),
+]
 
 
 class DesignRepairConstraint(FrozenModel):
@@ -931,6 +1222,7 @@ class DesignRepairConstraint(FrozenModel):
     code: DesignRepairCode
     scene_refs: list[str] = Field(default_factory=list)
     opaque_aliases: list[str] = Field(default_factory=list)
+    effect: DesignRepairRelationEffect | None = None
 
     @model_validator(mode='after')
     def _refs_are_unique_without_destroying_order(self) -> DesignRepairConstraint:
@@ -938,6 +1230,14 @@ class DesignRepairConstraint(FrozenModel):
             raise ValueError('design constraint scene_refs 不得重复')
         if len(self.opaque_aliases) != len(set(self.opaque_aliases)):
             raise ValueError('design constraint opaque_aliases 不得重复')
+        if self.code == 'narrative_relation':
+            if self.effect is None:
+                raise ValueError('narrative_relation repair 必须携带 typed HARD effect')
+            if self.scene_refs or self.opaque_aliases:
+                raise ValueError(
+                    'narrative_relation 端点只存 effect，不得再复制到无类型数组')
+        elif self.effect is not None:
+            raise ValueError('只有 narrative_relation repair 可携带 relation effect')
         min_scenes, min_aliases = DESIGN_REPAIR_CONSTRAINT_ARITY[self.code]
         if len(self.scene_refs) < min_scenes or len(self.opaque_aliases) < min_aliases:
             raise ValueError(
@@ -967,7 +1267,10 @@ class DesignChapterReview(FrozenModel):
         if not self.reason.strip():
             raise ValueError('Stage4A 逐章裁决理由不能只含空白')
         fingerprints = [
-            (row.code, tuple(row.scene_refs), tuple(row.opaque_aliases))
+            json.dumps(
+                row.model_dump(mode='json'), ensure_ascii=False,
+                sort_keys=True, separators=(',', ':'),
+            )
             for row in self.constraints
         ]
         if len(fingerprints) != len(set(fingerprints)):
@@ -981,8 +1284,8 @@ class DesignChapterReview(FrozenModel):
         return self
 
 
-class DesignReviewRequest(StrictModel):
-    """对当前完整 Stage4A 候选作出的原子全书盲审提交。"""
+class DesignReviewMaterialized(StrictModel):
+    """服务端重建的完整 Stage4A 审阅材料；不是外部写入载荷。"""
 
     actor: str = Field(min_length=1)
     reviewer_kind: DesignReviewerKind
@@ -997,7 +1300,7 @@ class DesignReviewRequest(StrictModel):
     chapters: list[DesignChapterReview] = Field(min_length=1)
 
     @model_validator(mode='after')
-    def _submission_is_a_complete_book(self) -> DesignReviewRequest:
+    def _submission_is_a_complete_book(self) -> DesignReviewMaterialized:
         if not self.actor.strip() or not self.review_run_id.strip() \
                 or not self.general_reason.strip():
             raise ValueError('design review actor/run/general reason 不能只含空白')
@@ -1009,19 +1312,134 @@ class DesignReviewRequest(StrictModel):
             raise ValueError('design review 章集必须与策略章权重表精确一致')
         if [row.output_ordinal for row in self.repair_capability.chapters] != ordinals:
             raise ValueError('design repair capability 必须精确覆盖本次审阅章集')
-        if any(
-            row.subject.strategy_subject_sha256 != self.strategy.subject_sha256
-            for row in self.chapters
-        ):
-            raise ValueError('每章 subject 必须绑定本次策略 subject SHA-256')
+        current = self.strategy.subject.basis.review_contract in {
+            DESIGN_REVIEW_CONTRACT, FROZEN_V6_DESIGN_REVIEW_CONTRACT,
+        }
+        if current:
+            if not self.repair_capability.is_v3:
+                raise ValueError('v3 design review 必须发布分离的 repair/edit capability')
+            epochs = {
+                row.subject.strategy_epoch_sha256 for row in self.chapters
+            }
+            if None in epochs or len(epochs) != 1:
+                raise ValueError('v3 每章 subject 必须绑定同一 strategy epoch')
+            if any(
+                row.subject.chapter_strategy_sha256 is None
+                or row.subject.strategy_subject_sha256 is not None
+                for row in self.chapters
+            ):
+                raise ValueError('v3 每章 subject 必须只使用 chapter strategy 身份')
+            if any(
+                self.strategy.subject_sha256 != constraint.subject_sha256
+                for constraint in self.strategy.replan_constraints
+            ):
+                raise ValueError('strategy replan constraint 必须绑定本次策略 subject')
+        else:
+            if self.repair_capability.is_v3:
+                raise ValueError('legacy design review 不得夹带 v3 repair capability')
+            if any(
+                row.subject.strategy_subject_sha256 != self.strategy.subject_sha256
+                or row.subject.strategy_epoch_sha256 is not None
+                or row.subject.chapter_strategy_sha256 is not None
+                for row in self.chapters
+            ):
+                raise ValueError('历史每章 subject 必须绑定本次策略 subject SHA-256')
         return self
 
 
-class DesignReviewTemplate(DesignReviewRequest):
-    """服务端按当前候选生成的关闭式模板；可直接编辑后作为 request 提交。"""
+class DesignStrategyReplanRuling(StrictModel):
+    kind: Literal[DESIGN_STRATEGY_REPLAN_CONSTRAINTS]
+    chapter_ordinals: list[int] = Field(default_factory=list)
+
+    @model_validator(mode='after')
+    def _scope_matches_kind(self) -> DesignStrategyReplanRuling:
+        if self.chapter_ordinals != sorted(set(self.chapter_ordinals)) or any(
+                value < 1 for value in self.chapter_ordinals):
+            raise ValueError('strategy replan chapter_ordinals 必须升序不重复')
+        if self.kind == 'replace_reconstruction_strategy' and self.chapter_ordinals:
+            raise ValueError('全局策略替换不得夹带章集')
+        if self.kind == 'change_chapter_weights' and not self.chapter_ordinals:
+            raise ValueError('权重修订必须指明受影响章')
+        return self
 
 
-class DesignReviewDecision(DesignReviewRequest):
+class DesignStrategyRuling(StrictModel):
+    """Stage4A 策略的外部裁决；主体由 review token 在服务端展开。"""
+
+    decision: DesignStrategyDecisionKind
+    reason: str = Field(min_length=1)
+    replan_constraints: list[DesignStrategyReplanRuling] = Field(default_factory=list)
+
+    @model_validator(mode='after')
+    def _ruling_is_closed(self) -> DesignStrategyRuling:
+        if not self.reason.strip():
+            raise ValueError('Stage4A 策略裁决理由不能只含空白')
+        keys = [json.dumps(
+            row.model_dump(mode='json'), ensure_ascii=False,
+            sort_keys=True, separators=(',', ':'),
+        ) for row in self.replan_constraints]
+        if keys != sorted(set(keys)):
+            raise ValueError('Stage4A 策略约束必须规范排序且不重复')
+        if self.decision == 'accept' and self.replan_constraints:
+            raise ValueError('accept 策略不得夹带 replan constraints')
+        if self.decision == 'request_replan' and not self.replan_constraints:
+            raise ValueError('request_replan 必须给出 typed strategy constraint')
+        return self
+
+
+class DesignChapterRuling(StrictModel):
+    """Stage4A 一章的外部裁决；不复制章 subject。"""
+
+    output_ordinal: int = Field(ge=1)
+    decision: DesignChapterDecisionKind
+    reason: str = Field(min_length=1)
+    constraints: list[DesignRepairConstraint] = Field(default_factory=list)
+
+    @model_validator(mode='after')
+    def _ruling_is_closed(self) -> DesignChapterRuling:
+        if not self.reason.strip():
+            raise ValueError('Stage4A 逐章裁决理由不能只含空白')
+        keys = [json.dumps(
+            row.model_dump(mode='json'), ensure_ascii=False,
+            sort_keys=True, separators=(',', ':'),
+        ) for row in self.constraints]
+        if keys != sorted(set(keys)):
+            raise ValueError('Stage4A 逐章 constraints 必须规范排序且不重复')
+        if self.decision == 'accept' and self.constraints:
+            raise ValueError('accept 章不得夹带 repair constraint')
+        if self.decision == 'request_repair' and not self.constraints:
+            raise ValueError('request_repair 章必须给出至少一条 constraint')
+        return self
+
+
+class DesignReviewRequest(StrictModel):
+    """Stage4A 唯一写入载荷：一枚 opaque token 加 typed 裁决。"""
+
+    actor: str = Field(min_length=1)
+    reviewer_kind: DesignReviewerKind
+    review_run_id: str = Field(pattern=r'^[a-z0-9][a-z0-9_-]{0,127}$')
+    general_reason: str = Field(min_length=1)
+    review_token: str = Field(pattern=r'^s4dr1_[0-9a-f]{64}$')
+    strategy: DesignStrategyRuling
+    chapters: list[DesignChapterRuling] = Field(min_length=1)
+
+    @model_validator(mode='after')
+    def _request_is_canonical(self) -> DesignReviewRequest:
+        if not self.actor.strip() or not self.general_reason.strip():
+            raise ValueError('design review actor/general reason 不能只含空白')
+        ordinals = [row.output_ordinal for row in self.chapters]
+        if ordinals != sorted(set(ordinals)):
+            raise ValueError('design review 章号必须升序且不重复')
+        return self
+
+
+class DesignReviewTemplate(DesignReviewMaterialized):
+    """服务端只读关闭式材料；POST 时只投影 token 与 typed rulings。"""
+
+    review_token: str = Field(pattern=r'^s4dr1_[0-9a-f]{64}$')
+
+
+class DesignReviewDecision(DesignReviewMaterialized):
     """服务端已落盘的人审决定；摘要与决定时间均不接受客户端代填。"""
 
     decision_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
@@ -1051,8 +1469,10 @@ class DesignReviewView(FrozenModel):
     binding_infeasibility: DesignBindingInfeasibility | None = None
     preflight: DesignPreflightSummary | None = None
     repair_capability: DesignReviewRepairCapability | None = None
+    action_review_token: str | None = Field(
+        default=None, pattern=r'^s4rr1_[0-9a-f]{64}$')
     current_decision: DesignReviewDecision | None = None
-    history: list[DesignReviewDecision] = Field(default_factory=list)
+    history: list[DesignReviewHistoryEntry] = Field(default_factory=list)
 
     @model_validator(mode='after')
     def _state_matches_current_subject(self) -> DesignReviewView:
@@ -1065,10 +1485,12 @@ class DesignReviewView(FrozenModel):
         if available != (self.repair_capability is not None):
             raise ValueError('design review 可用态与 repair capability 必须同进同出')
         decided_states = {
-            'accepted', 'repair_requested', 'strategy_replan_requested',
+            'accepted', 'suspended',
+            'repair_requested', 'strategy_replan_requested',
         }
         if (self.state in decided_states) != (self.current_decision is not None):
             raise ValueError('design review 当前决定必须与 decided state 同进同出')
+        frozen_without_validation_authority = False
         if self.current_decision is not None:
             if (
                 self.current_decision.candidate_sha256 != self.candidate_sha256
@@ -1081,29 +1503,157 @@ class DesignReviewView(FrozenModel):
             ):
                 raise ValueError(
                     'design review 当前决定必须绑定 current candidate/aggregate/B evidence')
-            if not self.history or self.current_decision != self.history[-1]:
-                raise ValueError('design review current_decision 必须是 history 最后一项')
+            if not self.history or (
+                self.current_decision.decision_sha256
+                != self.history[-1].decision_sha256
+            ):
+                raise ValueError('design review current_decision 必须对应 history 最后一项')
             wants_replan = self.current_decision.strategy.decision == 'request_replan'
             wants_repair = any(
                 row.decision == 'request_repair'
                 for row in self.current_decision.chapters)
+            frozen_without_validation_authority = (
+                self.current_decision.strategy.subject.basis.review_contract
+                == FROZEN_V6_DESIGN_REVIEW_CONTRACT
+            )
             expected = (
                 'strategy_replan_requested' if wants_replan else
                 'repair_requested' if wants_repair else 'accepted'
             )
+            if expected == 'accepted' and frozen_without_validation_authority:
+                expected = 'suspended'
             if self.state != expected:
                 raise ValueError('design review state 与策略/逐章决定不一致')
         if self.state == 'missing' and self.history:
             raise ValueError('已有旧 design review 时当前无决定应为 expired')
         if self.state == 'expired' and not self.history:
             raise ValueError('没有 design review 历史时不能声称 expired')
+        # frozen v6 的 request_repair 只有工作包逐章 ``s4er1`` 完整章
+        # edit 票；没有 relation/preflight authority，不能再把同一 raw
+        # 决定铸成会进入 agent/paid lane 的 ``s4rr1`` action token。
+        # current-v7 的两种修订态仍严格要求该 token。
+        actionable = (
+            self.state in ('repair_requested', 'strategy_replan_requested')
+            and not frozen_without_validation_authority
+        )
+        if actionable != (self.action_review_token is not None):
+            raise ValueError('Stage4A 修订态必须且只能发布一枚 action review token')
         return self
 
 
 class DesignRepairChapterScope(FrozenModel):
     output_ordinal: int = Field(ge=1)
     subject_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
-    constraints: list[DesignRepairConstraint] = Field(min_length=1)
+    #: v1/v2 临时恢复面只保存当前决定，没有历史累计语义。
+    constraints: list[DesignRepairConstraint] = Field(default_factory=list)
+    #: v3 的两条正交轴：本轮新决定与本 strategy epoch 全部未关闭
+    #: 累计约束。Executor 永远消费 accumulated，不得只看 new。
+    new_constraints: list[DesignRepairConstraint] = Field(default_factory=list)
+    accumulated_constraints: list[DesignRepairConstraint] = Field(default_factory=list)
+    constraint_set_sha256: str | None = Field(
+        default=None, pattern=r'^[0-9a-f]{64}$')
+
+    @property
+    def is_v3(self) -> bool:
+        """这行是否使用累计约束族；供外围 scope 的世代闭合校验复用。"""
+        return self.constraint_set_sha256 is not None
+
+    @model_validator(mode='after')
+    def _constraint_family_is_closed(self) -> DesignRepairChapterScope:
+        current = bool(
+            self.new_constraints or self.accumulated_constraints
+            or self.constraint_set_sha256 is not None
+        )
+        if self.constraints and current:
+            raise ValueError('repair chapter scope 不得混用 legacy/v3 constraints')
+        if not self.constraints and not current:
+            raise ValueError('repair chapter scope 必须携带一种约束形状')
+        if current:
+            if not self.new_constraints or not self.accumulated_constraints \
+                    or self.constraint_set_sha256 is None:
+                raise ValueError(
+                    'v3 repair chapter scope 必须同时携带 new/accumulated/constraint_set')
+            new_rows = [
+                json.dumps(row.model_dump(mode='json'), ensure_ascii=False,
+                           sort_keys=True, separators=(',', ':'))
+                for row in self.new_constraints
+            ]
+            accumulated = [
+                json.dumps(row.model_dump(mode='json'), ensure_ascii=False,
+                           sort_keys=True, separators=(',', ':'))
+                for row in self.accumulated_constraints
+            ]
+            if new_rows != sorted(set(new_rows)) \
+                    or accumulated != sorted(set(accumulated)):
+                raise ValueError('v3 repair constraints 必须规范排序且不重复')
+            if not set(new_rows).issubset(set(accumulated)):
+                raise ValueError('new_constraints 必须完整包含在 accumulated_constraints')
+        else:
+            keys = [json.dumps(
+                row.model_dump(mode='json'), ensure_ascii=False,
+                sort_keys=True, separators=(',', ':'),
+            ) for row in self.constraints]
+            if len(keys) != len(set(keys)):
+                raise ValueError('legacy repair constraints 不得重复')
+        return self
+
+
+class DesignReviewHistoryEntry(FrozenModel):
+    """公开历史摘要；大 subject 永远只存在于当次 immutable workpack。"""
+
+    actor: str = Field(min_length=1)
+    reviewer_kind: DesignReviewerKind
+    review_run_id: str = Field(pattern=r'^[a-z0-9][a-z0-9_-]{0,127}$')
+    general_reason: str = Field(min_length=1)
+    review_token: str = Field(pattern=r'^s4dr1_[0-9a-f]{64}$')
+    strategy_decision: DesignStrategyDecisionKind
+    chapter_decisions: dict[int, DesignChapterDecisionKind]
+    decision_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    decided_at: str = Field(min_length=1)
+
+
+class DesignAcceptedChapterConstraint(FrozenModel):
+    """replan 时必须保留的旧 accepted 章身份。"""
+
+    output_ordinal: int = Field(ge=1)
+    subject_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    chapter_strategy_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+
+
+class DesignStrategyReplanFeedback(FrozenModel):
+    """策略 replan 的累计 typed 反馈；不携带人写的 reason。"""
+
+    new_constraints: list[DesignStrategyReplanConstraint] = Field(min_length=1)
+    accumulated_constraints: list[DesignStrategyReplanConstraint] = Field(
+        min_length=1)
+    constraint_set_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    accepted_chapters: list[DesignAcceptedChapterConstraint] = Field(
+        default_factory=list)
+    chapter_failures: list[DesignRepairChapterScope] = Field(default_factory=list)
+
+    @model_validator(mode='after')
+    def _feedback_is_canonical(self) -> DesignStrategyReplanFeedback:
+        def keys(rows: list[object]) -> list[str]:
+            return [json.dumps(
+                row.model_dump(mode='json'), ensure_ascii=False,
+                sort_keys=True, separators=(',', ':'),
+            ) for row in rows]
+
+        new = keys(self.new_constraints)
+        accumulated = keys(self.accumulated_constraints)
+        if new != sorted(set(new)) or accumulated != sorted(set(accumulated)):
+            raise ValueError('strategy replan constraints 必须规范排序且不重复')
+        if not set(new).issubset(set(accumulated)):
+            raise ValueError('strategy new constraints 必须包含在 accumulated 中')
+        accepted = [row.output_ordinal for row in self.accepted_chapters]
+        failed = [row.output_ordinal for row in self.chapter_failures]
+        if accepted != sorted(set(accepted)) or failed != sorted(set(failed)):
+            raise ValueError('replan accepted/failure 章必须分别升序且不重复')
+        if set(accepted) & set(failed):
+            raise ValueError('同一章不得同时标为 accepted 与 failed')
+        if any(not row.is_v3 for row in self.chapter_failures):
+            raise ValueError('v3 replan 只能携带累计后的 v3 章失败约束')
+        return self
 
 
 class DesignRepairScope(FrozenModel):
@@ -1114,7 +1664,10 @@ class DesignRepairScope(FrozenModel):
     decision_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
     binding_infeasibility: DesignBindingInfeasibility | None = None
     repair_capability: DesignReviewRepairCapability
+    strategy_epoch_sha256: str | None = Field(
+        default=None, pattern=r'^[0-9a-f]{64}$')
     strategy_replan: bool
+    replan_feedback: DesignStrategyReplanFeedback | None = None
     target_chapters: list[int] = Field(default_factory=list)
     chapters: list[DesignRepairChapterScope] = Field(default_factory=list)
 
@@ -1127,13 +1680,30 @@ class DesignRepairScope(FrozenModel):
             raise ValueError('策略级 replan 不得夹带逐章 repair scope')
         if not self.strategy_replan and not ordinals:
             raise ValueError('逐章 repair 必须带非空 target_chapters')
-        available = {
-            row.output_ordinal
-            for row in self.repair_capability.chapters
-            if row.request_repair_available
-        }
+        current = self.strategy_epoch_sha256 is not None
+        if current != self.repair_capability.is_v3:
+            raise ValueError('repair scope 的 strategy epoch 必须与 capability 世代一致')
+        if current:
+            if self.strategy_replan != (self.replan_feedback is not None):
+                raise ValueError('v3 strategy replan 与 typed feedback 必须同进同出')
+            if not self.strategy_replan and any(not row.is_v3 for row in self.chapters):
+                raise ValueError('v3 targeted repair 必须携带累计约束 scope')
+            available = {
+                row.output_ordinal
+                for row in self.repair_capability.chapters
+                if row.agent_repair_available
+            }
+        else:
+            if self.replan_feedback is not None or any(
+                    row.is_v3 for row in self.chapters):
+                raise ValueError('legacy repair scope 不得夹带 v3 feedback')
+            available = {
+                row.output_ordinal
+                for row in self.repair_capability.chapters
+                if row.request_repair_available
+            }
         if not self.strategy_replan and not set(ordinals).issubset(available):
-            raise ValueError('逐章 repair scope 包含当前不可执行 request_repair 的章')
+            raise ValueError('逐章 repair scope 包含当前不可执行 agent repair 的章')
         return self
 
 
@@ -1152,13 +1722,18 @@ class StructureChapterDecision(FrozenModel):
         return value
 
 
-class StructureApprovalRequest(HashBoundHumanApproval):
-    """一次原子的全书 Stage4 结构裁决；章集必须由服务端再与当前计划精确对账。"""
+class StructureApprovalRequest(StrictModel):
+    """一次原子的全书 Stage4 结构裁决；主体只由 opaque token 携带。"""
 
+    actor: str = Field(min_length=1)
+    reason: str = Field(min_length=1)
+    review_token: str = Field(pattern=r'^s4sr1_[0-9a-f]{64}$')
     chapters: list[StructureChapterDecision] = Field(min_length=1)
 
     @model_validator(mode='after')
     def _chapters_are_sorted_unique(self) -> StructureApprovalRequest:
+        if not self.actor.strip() or not self.reason.strip():
+            raise ValueError('结构裁决 actor/reason 不能只含空白')
         ordinals = [row.output_ordinal for row in self.chapters]
         if ordinals != sorted(set(ordinals)):
             raise ValueError('结构裁决章号必须升序、去重')
@@ -1177,6 +1752,8 @@ class StructureApprovalView(FrozenModel):
     state: StructureApprovalState
     current_subject_sha256: str | None = Field(
         default=None, pattern=r'^[0-9a-f]{64}$')
+    review_token: str | None = Field(
+        default=None, pattern=r'^s4sr1_[0-9a-f]{64}$')
     binding_concerns: list[BindingConcern] = Field(default_factory=list)
     current_decision: StructureApprovalDecision | None = None
     history: list[StructureApprovalDecision] = Field(default_factory=list)
@@ -1188,11 +1765,16 @@ class StructureApprovalView(FrozenModel):
         if self.state in ('missing', 'accepted', 'replan_requested') \
                 and self.current_subject_sha256 is None:
             raise ValueError(f'{self.state} 结构态必须带当前 subject')
+        available = self.current_subject_sha256 is not None
+        if available != (self.review_token is not None):
+            raise ValueError('结构 current subject 与 review_token 必须同进同出')
+        if available and self.review_token != f's4sr1_{self.current_subject_sha256}':
+            raise ValueError('结构 review_token 必须封装当前 subject')
         if self.state in ('accepted', 'replan_requested'):
             if self.current_decision is None:
                 raise ValueError(f'{self.state} 结构态必须带当前 typed decision')
-            if self.current_decision.subject_sha256 != self.current_subject_sha256:
-                raise ValueError('当前结构裁决必须绑定当前 subject')
+            if self.current_decision.review_token != self.review_token:
+                raise ValueError('当前结构裁决必须绑定当前 review token')
             wants_replan = any(
                 row.decision == 'request_replan'
                 for row in self.current_decision.chapters)
@@ -1231,6 +1813,10 @@ class WorkpackItem(FrozenModel):
     historical_accept_reusable: bool = False
     source_decision_sha256: str | None = Field(
         default=None, pattern=r'^[0-9a-f]{64}$')
+    #: Stage4A 完整章人工替换的单一外部 TOCTOU 票；内部多摘要不让
+    #: Commander/skill/UI 手工搬运。
+    review_token: str | None = Field(
+        default=None, pattern=r'^s4er1_[0-9a-f]{64}$')
 
     @model_validator(mode='after')
     def _actions_and_history_are_closed(self) -> WorkpackItem:
@@ -1256,6 +1842,8 @@ class WorkpackItem(FrozenModel):
                 'historical_accept_reusable 必须有精确 source decision SHA')
         if self.historical_accept_reusable and self.changed:
             raise ValueError('精确可复用的历史 accept 不能同时标为 changed')
+        if self.review_token is not None and self.chapter_ordinal is None:
+            raise ValueError('Stage4 edit review_token 必须绑定明确目标章')
         return self
 
 
@@ -1292,6 +1880,7 @@ class ApprovalWorkpack(FrozenModel):
     candidate_sha256: str | None = Field(
         default=None, pattern=r'^[0-9a-f]{64}$')
     subject_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    review_token: str = Field(pattern=r'^s4[ds]r1_[0-9a-f]{64}$')
     chapter_ordinals: list[int] = Field(min_length=1)
     groups: list[WorkpackGroup] = Field(min_length=len(APPROVAL_WORKPACK_GROUPS))
     disposition: ApprovalWorkpackDisposition = 'review_required'
@@ -1300,10 +1889,15 @@ class ApprovalWorkpack(FrozenModel):
 
     @model_validator(mode='after')
     def _shape_is_closed_and_covers_every_chapter(self) -> ApprovalWorkpack:
-        if ((self.disposition == 'already_current')
-                != (self.current_decision_sha256 is not None)):
+        has_current_decision = self.disposition in {
+            'already_current', 'suspended',
+        }
+        if has_current_decision != (self.current_decision_sha256 is not None):
             raise ValueError(
-                'already_current 与 current_decision_sha256 必须同时出现')
+                'already_current/suspended 与 current_decision_sha256 '
+                '必须同时出现')
+        if self.disposition == 'suspended' and self.kind != 'design':
+            raise ValueError('suspended 只属于缺验证权威的 Stage4A 审阅')
         if [row.group for row in self.groups] != list(APPROVAL_WORKPACK_GROUPS):
             raise ValueError(
                 'workpack 分组必须是固定顺序的全集，不许裁剪或重排')
@@ -1311,6 +1905,9 @@ class ApprovalWorkpack(FrozenModel):
             raise ValueError('workpack chapter_ordinals 必须升序去重')
         if (self.kind == 'design') != (self.candidate_sha256 is not None):
             raise ValueError('design 必须绑 candidate SHA，structure 不得冒充 A 候选')
+        prefix = 's4dr1_' if self.kind == 'design' else 's4sr1_'
+        if self.review_token != f'{prefix}{self.subject_sha256}':
+            raise ValueError('Stage4 workpack review_token 必须封装当前 exact subject')
         expected_block = 'block_b' if self.kind == 'design' else 'block_context'
         blocking = self.groups[0].items
         if any(item.effect != expected_block for item in blocking):
@@ -1320,6 +1917,17 @@ class ApprovalWorkpack(FrozenModel):
             for group in self.groups for item in group.items
         ) and self.kind != 'design':
             raise ValueError('request_repair 只属于 Stage4A 章级修订面')
+        token_items = [
+            item for group in self.groups for item in group.items
+            if item.review_token is not None
+        ]
+        if token_items and self.kind != 'design':
+            raise ValueError('s4er1 review_token 只属于 Stage4A workpack')
+        if any(
+            not item.code.startswith('design_repair_requested:ch')
+            for item in token_items
+        ):
+            raise ValueError('s4er1 review_token 只发布在当前 repair 决定行')
         if any(
             'accept' in item.allowed_actions and item.effect != 'coverage'
             for group in self.groups for item in group.items
@@ -1422,13 +2030,20 @@ class Stage6ApprovalCandidate(FrozenModel):
 
 
 class Stage6ApprovalWorkpack(FrozenModel):
-    """Stage6 当前候选集的紧凑、代码与证据绑定终审包。"""
+    """Stage6 当前候选集的紧凑终审包。
 
-    v: Literal[1] = 1
+    ``workpack/review_token`` 只负责本次提交的精确 TOCTOU；长期人工适用性
+    只看 ``review_identity`` 与显式审阅契约。validation seal 仍可关闭式重验，
+    但 execution code / rules 只在服务端参与 seal，不再作为公开字段外发。
+    """
+
+    v: Literal[3] = 3
     kind: FinalApprovalWorkpackKind
     sid: str = Field(min_length=1)
-    code_version: str = Field(min_length=1)
-    rules_fingerprint: str = Field(min_length=1)
+    review_contract_version: Literal[STAGE6_REVIEW_CONTRACT] = STAGE6_REVIEW_CONTRACT
+    review_identity_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    validation_seal_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    review_token: str = Field(pattern=r'^s6r3_[0-9a-f]{64}$')
     artifact_subject_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
     rationale: str = Field(min_length=1)
     check: CompactApprovalCheck
@@ -1445,6 +2060,10 @@ class Stage6ApprovalWorkpack(FrozenModel):
     def _currentness_and_candidate_set_are_closed(self) -> 'Stage6ApprovalWorkpack':
         if self.kind != 'stage6':
             raise ValueError('Stage6ApprovalWorkpack.kind 必须是 stage6')
+        if self.disposition == 'suspended':
+            raise ValueError('suspended 是 Stage4A frozen-v6 专用处置态')
+        if self.review_token != f's6r3_{self.workpack_sha256}':
+            raise ValueError('Stage6 review_token 必须封装当前 exact workpack')
         if [row.index for row in self.candidates] != [1, 2, 3]:
             raise ValueError('Stage6 workpack 必须按产物顺序完整覆盖 1..3')
         has_semantic = any(row.semantic_decision is not None for row in self.candidates)
@@ -1457,19 +2076,22 @@ class Stage6ApprovalWorkpack(FrozenModel):
         if (self.disposition == 'already_current') != current:
             raise ValueError('already_current 必须携带当前 slot 与 approval')
         if self.current_approval is not None \
-                and self.current_approval.workpack_sha256 != self.workpack_sha256:
-            raise ValueError('当前 approval 必须绑定这份 workpack')
+                and self.current_approval.review_identity_sha256 \
+                != self.review_identity_sha256:
+            raise ValueError('当前 approval 必须绑定这份长期 review identity')
         return self
 
 
 class Stage7ApprovalWorkpack(FrozenModel):
-    """Stage7 当前人物决策面的紧凑、代码与机械证据绑定终审包。"""
+    """Stage7 当前人物决策面的紧凑终审包；身份分层同 Stage6。"""
 
-    v: Literal[1] = 1
+    v: Literal[3] = 3
     kind: FinalApprovalWorkpackKind
     sid: str = Field(min_length=1)
-    code_version: str = Field(min_length=1)
-    rules_fingerprint: str = Field(min_length=1)
+    review_contract_version: Literal[STAGE7_REVIEW_CONTRACT] = STAGE7_REVIEW_CONTRACT
+    review_identity_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    validation_seal_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    review_token: str = Field(pattern=r'^s7r3_[0-9a-f]{64}$')
     artifact_subject_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
     decision_subject_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
     check: CompactApprovalCheck
@@ -1493,12 +2115,17 @@ class Stage7ApprovalWorkpack(FrozenModel):
     def _currentness_is_hash_bound(self) -> 'Stage7ApprovalWorkpack':
         if self.kind != 'stage7':
             raise ValueError('Stage7ApprovalWorkpack.kind 必须是 stage7')
+        if self.disposition == 'suspended':
+            raise ValueError('suspended 是 Stage4A frozen-v6 专用处置态')
+        if self.review_token != f's7r3_{self.workpack_sha256}':
+            raise ValueError('Stage7 review_token 必须封装当前 exact workpack')
         if ((self.disposition == 'already_current')
                 != (self.current_approval is not None)):
             raise ValueError('already_current 必须携带当前 approval')
         if self.current_approval is not None \
-                and self.current_approval.workpack_sha256 != self.workpack_sha256:
-            raise ValueError('当前 approval 必须绑定这份 workpack')
+                and self.current_approval.review_identity_sha256 \
+                != self.review_identity_sha256:
+            raise ValueError('当前 approval 必须绑定这份长期 review identity')
         if self.kept_count != len(self.kept):
             raise ValueError('kept_count 必须与 kept 明细一致')
         if any(value < 0 for value in self.replacement_hits.values()):
@@ -1506,8 +2133,18 @@ class Stage7ApprovalWorkpack(FrozenModel):
         return self
 
 
-class WritingApprovalRequest(HashBoundHumanApproval):
-    """对当前整本 Stage5 写作主体作出的、可归责且 hash-bound 的授权请求。"""
+class WritingApprovalRequest(StrictModel):
+    """对当前整本 Stage5 写作主体作出的单 token 授权请求。"""
+
+    actor: str = Field(min_length=1)
+    reason: str = Field(min_length=1)
+    review_token: str = Field(pattern=r'^s5wr1_[0-9a-f]{64}$')
+
+    @model_validator(mode='after')
+    def _identity_is_not_blank(self) -> WritingApprovalRequest:
+        if not self.actor.strip() or not self.reason.strip():
+            raise ValueError('写作授权 actor/reason 不能只含空白')
+        return self
 
 
 class WritingApprovalDecision(WritingApprovalRequest):
@@ -1528,6 +2165,8 @@ class WritingApprovalView(FrozenModel):
     available: bool = False
     current_subject_sha256: str | None = Field(
         default=None, pattern=r'^[0-9a-f]{64}$')
+    review_token: str | None = Field(
+        default=None, pattern=r'^s5wr1_[0-9a-f]{64}$')
     current_decision: WritingApprovalDecision | None = None
     history: list[WritingApprovalDecision] = Field(default_factory=list)
 
@@ -1535,9 +2174,13 @@ class WritingApprovalView(FrozenModel):
     def _subject_and_current_decision_agree(self) -> WritingApprovalView:
         if self.available != (self.current_subject_sha256 is not None):
             raise ValueError('writing available 与 current subject 必须同进同出')
+        if self.available != (self.review_token is not None):
+            raise ValueError('writing available 与 review_token 必须同进同出')
+        if self.available and self.review_token != f's5wr1_{self.current_subject_sha256}':
+            raise ValueError('writing review_token 必须封装当前 subject')
         if self.current_decision is not None:
-            if self.current_decision.subject_sha256 != self.current_subject_sha256:
-                raise ValueError('当前写作授权必须绑定当前 subject')
+            if self.current_decision.review_token != self.review_token:
+                raise ValueError('当前写作授权必须绑定当前 review token')
             if not self.history or self.current_decision != self.history[-1]:
                 raise ValueError('current_decision 必须是 writing history 最后一项')
         return self
@@ -1632,8 +2275,8 @@ class Stage5TrimWorkItem(FrozenModel):
     chapter_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
 
 
-class Stage5ClosureRequest(StrictModel):
-    """对当前整书 Stage5 主体作出的原子闭合提交。"""
+class Stage5ClosureMaterialized(StrictModel):
+    """只读模板使用的完整 Stage5 闭合材料；不是外部提交载荷。"""
 
     actor: str = Field(min_length=1)
     reason: str = Field(min_length=1)
@@ -1643,7 +2286,7 @@ class Stage5ClosureRequest(StrictModel):
     group_acks: list[Stage5FindingGroupAck] = Field(default_factory=list)
 
     @model_validator(mode='after')
-    def _submission_has_no_duplicate_targets(self) -> Stage5ClosureRequest:
+    def _submission_has_no_duplicate_targets(self) -> Stage5ClosureMaterialized:
         if not self.actor.strip() or not self.reason.strip():
             raise ValueError('closure actor/reason 不能只含空白')
         seen_rows = {
@@ -1656,12 +2299,56 @@ class Stage5ClosureRequest(StrictModel):
         return self
 
 
-class Stage5ClosureTemplate(Stage5ClosureRequest):
-    """服务端按当前盘面生成的关闭式模板；可直接编辑后作为 request 提交。
+class Stage5MustAppearRulingInput(StrictModel):
+    """外部 must-appear 裁决；finding/正文摘要由 token 在服务端展开。"""
+
+    chapter_ordinal: int = Field(ge=1)
+    evidence_key: str = Field(min_length=1)
+    ruling: Stage5MustAppearRuling
+    reason: str = ''
+
+    @model_validator(mode='after')
+    def _exception_needs_reason(self) -> Stage5MustAppearRulingInput:
+        if self.ruling == 'accepted_exception' and not self.reason.strip():
+            raise ValueError('accepted_exception 必须写明接受缺项的理由')
+        return self
+
+
+class Stage5FindingGroupRuling(StrictModel):
+    group: Stage5ClosureGroup
+    acknowledged: Literal[True]
+
+
+class Stage5ClosureRequest(StrictModel):
+    """Stage5 闭合唯一写入载荷：opaque token 与 typed rulings。"""
+
+    actor: str = Field(min_length=1)
+    reason: str = Field(min_length=1)
+    review_token: str = Field(pattern=r'^s5cr1_[0-9a-f]{64}$')
+    must_appear: list[Stage5MustAppearRulingInput] = Field(default_factory=list)
+    group_acks: list[Stage5FindingGroupRuling] = Field(default_factory=list)
+
+    @model_validator(mode='after')
+    def _submission_is_canonical(self) -> Stage5ClosureRequest:
+        if not self.actor.strip() or not self.reason.strip():
+            raise ValueError('closure actor/reason 不能只含空白')
+        targets = [(row.chapter_ordinal, row.evidence_key) for row in self.must_appear]
+        if targets != sorted(set(targets)):
+            raise ValueError('must_appear 裁决必须按章/证据排序且唯一')
+        groups = [row.group for row in self.group_acks]
+        if groups != sorted(set(groups)):
+            raise ValueError('finding group acknowledgement 必须排序且唯一')
+        return self
+
+
+class Stage5ClosureTemplate(Stage5ClosureMaterialized):
+    """服务端按当前盘面生成的只读材料；POST 只投影 token 与 typed rulings。
 
     模板的每条 must_appear / 整组确认都带 ``placeholder=True`` 与一次性
     ``template_token``；原样提交会被关闭式拒绝，必须由人逐项裁决。
     """
+
+    review_token: str = Field(pattern=r'^s5cr1_[0-9a-f]{64}$')
 
 
 class Stage5ClosureDecision(Stage5ClosureRequest):
@@ -1669,17 +2356,6 @@ class Stage5ClosureDecision(Stage5ClosureRequest):
 
     decision_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
     decided_at: str = Field(min_length=1)
-
-    @model_validator(mode='after')
-    def _decision_contains_no_template_placeholders(self) -> Stage5ClosureDecision:
-        if any(row.placeholder or row.template_token is not None
-               for row in self.must_appear):
-            raise ValueError('正式 closure decision 不得保留 must_appear placeholder')
-        if any(ack.placeholder or ack.template_token is not None
-               for ack in self.group_acks):
-            raise ValueError('正式 closure decision 不得保留整组确认 placeholder')
-        return self
-
 
 class Stage5MustAppearRow(StrictModel):
     """workpack 里一条待裁决的 ``must_appear_missing``；只读证据面。"""
@@ -1732,9 +2408,12 @@ class Stage5ClosureWorkpack(FrozenModel):
     disclosure: dict[str, int] = Field(default_factory=dict)
     resolved: dict[str, int] = Field(default_factory=dict)
     workpack_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    review_token: str = Field(pattern=r'^s5cr1_[0-9a-f]{64}$')
 
     @model_validator(mode='after')
     def _subject_sets_are_closed(self) -> 'Stage5ClosureWorkpack':
+        if self.review_token != f's5cr1_{self.workpack_sha256}':
+            raise ValueError('Stage5 closure review_token 必须封装当前 workpack')
         planned = set(self.planned_chapters)
         missing = set(self.missing_chapters)
         subjects = [row.output_ordinal for row in self.chapter_subjects]
@@ -1806,10 +2485,12 @@ class Stage5ClosureView(FrozenModel):
             decision = self.current_decision
             if decision is None:
                 raise ValueError('closed 态必须有当前决定')
-            if decision.workpack_sha256 != self.workpack.workpack_sha256:
-                raise ValueError('closed 决定必须绑定当前 workpack')
-            if not self.history or decision != self.history[-1]:
-                raise ValueError('closed 当前决定必须是 history 最后一项')
+            if decision.review_token != self.workpack.review_token:
+                raise ValueError('closed 决定必须绑定当前 workpack token')
+            if not self.history or (
+                decision.decision_sha256 != self.history[-1].decision_sha256
+            ):
+                raise ValueError('closed 当前决定必须对应 history 最后一项')
         if self.state == 'expired' and self.current_decision is not None:
             raise ValueError('expired 态的旧决定只能留在 history')
         return self
@@ -1954,38 +2635,6 @@ class OperatorAction(FrozenModel):
     action_sha256: Sha256
 
 
-class OperatorNext(StrictModel):
-    """同一次 operator 快照上的 overview、inbox 与唯一下一动作。"""
-
-    base: str = Field(min_length=1)
-    sid: str = Field(min_length=1)
-    code_version: str = Field(min_length=1)
-    surface_seal: Sha256
-    state: OperatorNextState
-    overview: NovelOverview
-    inbox: InboxView
-    action: OperatorAction | None = None
-
-    @model_validator(mode='after')
-    def _state_matches_the_action(self) -> OperatorNext:
-        if self.overview.sid != self.sid:
-            raise ValueError('OperatorNext.sid 必须与 overview.sid 一致')
-        if self.state == 'pipeline_complete':
-            if self.action is not None:
-                raise ValueError('pipeline_complete 不得携带 action')
-            return self
-        if self.action is None:
-            raise ValueError(f'{self.state} 必须携带 action')
-        if self.state == 'ready':
-            if self.action.waiting_on is not None:
-                raise ValueError('ready action 不得携带 waiting_on')
-            if self.action.resume_verdict != 'run':
-                raise ValueError('ready action 的 resume_verdict 必须是 run')
-        elif not self.action.waiting_on:
-            raise ValueError('blocked action 必须明确 waiting_on')
-        return self
-
-
 class ExecutionPermitInput(FrozenModel):
     """一份会被节点消费的外部文件；摘要覆盖未经归一的原始字节。"""
 
@@ -2036,6 +2685,75 @@ class ExecutionPermit(FrozenModel):
         for flag in input_flags:
             if self.flags.count(flag) != 1:
                 raise ValueError(f'外部输入 {flag} 必须在 exact flags 中恰出现一次')
+        return self
+
+
+class OperatorNextDecision(StrictModel):
+    """一份冻结快照上的 lane 判断；许可层消费它，不向调用方单独发放。"""
+
+    base: str = Field(min_length=1)
+    sid: str = Field(min_length=1)
+    code_version: str = Field(min_length=1)
+    surface_seal: Sha256
+    state: OperatorNextState
+    overview: NovelOverview
+    inbox: InboxView
+    action: OperatorAction | None = None
+
+    @model_validator(mode='after')
+    def _state_matches_the_action(self) -> OperatorNextDecision:
+        if self.overview.sid != self.sid:
+            raise ValueError('OperatorNext.sid 必须与 overview.sid 一致')
+        if self.state == 'pipeline_complete':
+            if self.action is not None:
+                raise ValueError('pipeline_complete 不得携带 action')
+            return self
+        if self.action is None:
+            raise ValueError(f'{self.state} 必须携带 action')
+        if self.state == 'ready':
+            if self.action.waiting_on is not None:
+                raise ValueError('ready action 不得携带 waiting_on')
+            if self.action.resume_verdict != 'run':
+                raise ValueError('ready action 的 resume_verdict 必须是 run')
+        elif not self.action.waiting_on:
+            raise ValueError('blocked action 必须明确 waiting_on')
+        return self
+
+
+class OperatorNext(OperatorNextDecision):
+    """同一次 operator 快照上的判断与 ready execution token。
+
+    token 对调用方是不拆解的 opaque envelope：ready 时一次随 next 返回，
+    blocked 恢复因 exact flags 尚未确定而继续由显式 ``operator permit`` 铸造。
+    """
+
+    execution_token: ExecutionPermit | None = None
+
+    @model_validator(mode='after')
+    def _execution_token_matches_the_decision(self) -> OperatorNext:
+        if self.state != 'ready':
+            if self.execution_token is not None:
+                raise ValueError(f'{self.state} 不得携带 execution_token')
+            return self
+        if self.execution_token is None:
+            raise ValueError('ready next 必须在同一快照内携带 execution_token')
+        assert self.action is not None  # 父类 validator 已守
+        token = self.execution_token
+        if (
+            token.base != self.base
+            or token.sid != self.sid
+            or token.code_version != self.code_version
+            or token.surface_seal != self.surface_seal
+            or token.next_state != self.state
+            or token.kind != 'ready'
+            or token.waiting_on is not None
+            or token.node != self.action.node
+            or token.flags != self.action.flags
+            or token.paid != self.action.paid
+            or token.writes != self.action.writes
+            or token.operator_action_sha256 != self.action.action_sha256
+        ):
+            raise ValueError('execution_token 必须逐项绑定同一份 ready decision')
         return self
 
 
@@ -2614,6 +3332,42 @@ class BlueprintReviewCausalLink(FrozenModel):
     after_claim: str = Field(min_length=1)
 
 
+class BlueprintReviewStoryBefore(FrozenModel):
+    kind: Literal[NARRATIVE_RELATION_KINDS[0]]
+    enforcement: Literal[tuple(NARRATIVE_RELATION_ENFORCEMENTS)]
+    before_claim: str = Field(min_length=1)
+    after_claim: str = Field(min_length=1)
+
+
+class BlueprintReviewResponseTo(FrozenModel):
+    kind: Literal[NARRATIVE_RELATION_KINDS[1]]
+    enforcement: Literal[tuple(NARRATIVE_RELATION_ENFORCEMENTS)]
+    stimulus_claim: str = Field(min_length=1)
+    response_claim: str = Field(min_length=1)
+
+
+class BlueprintReviewSameScene(FrozenModel):
+    kind: Literal[NARRATIVE_RELATION_KINDS[2]]
+    enforcement: Literal[tuple(NARRATIVE_RELATION_ENFORCEMENTS)]
+    left_claim: str = Field(min_length=1)
+    right_claim: str = Field(min_length=1)
+
+
+class BlueprintReviewObserves(FrozenModel):
+    kind: Literal[NARRATIVE_RELATION_KINDS[3]]
+    enforcement: Literal[tuple(NARRATIVE_RELATION_ENFORCEMENTS)]
+    observer_char_id: str = Field(min_length=1)
+    observed_claim: str = Field(min_length=1)
+    observation_claim: str = Field(min_length=1)
+
+
+BlueprintReviewNarrativeRelation = Annotated[
+    BlueprintReviewStoryBefore | BlueprintReviewResponseTo
+    | BlueprintReviewSameScene | BlueprintReviewObserves,
+    Field(discriminator='kind'),
+]
+
+
 class BlueprintReviewChapter(FrozenModel):
     """一章的完整 coverage + 紧凑语义审阅面。"""
 
@@ -2624,6 +3378,7 @@ class BlueprintReviewChapter(FrozenModel):
     coverage: BlueprintReviewCoverage
     beats: list[BlueprintReviewBeat] = Field(min_length=1)
     causal_links: list[BlueprintReviewCausalLink]
+    narrative_relations: list[BlueprintReviewNarrativeRelation]
     entry_state_claims: list[str]
     ending_state_claims: list[str]
     narration: list[ReadingNarrationLine] = Field(min_length=1)
@@ -2653,8 +3408,6 @@ class BlueprintReviewBinding(FrozenModel):
     main_text_artifact_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
     blueprint_artifact_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
     check_report_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
-    code_version: str = Field(min_length=1)
-    rules_fingerprint: str = Field(min_length=1)
     chapter_ordinals: list[int] = Field(min_length=1)
 
     @model_validator(mode='after')
@@ -2668,14 +3421,19 @@ class BlueprintReviewWorkpack(FrozenModel):
     """Stage2 Blueprint 的只读、异常优先审阅包。
 
     它不是审批或产物：没有 actor/state/action，不开任何 gate。
-    ``subject_sha256`` 是当前 Blueprint 完整版本化盘上字节；
-    ``binding_sha256`` 则覆盖除自身外的整份可见工作包。
+    ``subject_sha256`` 是排除 provenance 的当前 Blueprint 业务主体；
+    ``review_identity_sha256`` 覆盖人实际看到的内容与 finding；
+    ``binding_sha256/review_token`` 覆盖本次精确工作包，用于提交竞态。
     """
 
     sid: str = Field(min_length=1)
     title: str = Field(min_length=1)
     read_only: bool = True
     auto_decisions: bool = False
+    review_contract_version: Literal[BLUEPRINT_REVIEW_CONTRACT] = BLUEPRINT_REVIEW_CONTRACT
+    review_identity_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    validation_seal_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    review_token: str = Field(pattern=r'^bpr3_[0-9a-f]{64}$')
     subject_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
     binding_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
     binding: BlueprintReviewBinding
@@ -2688,8 +3446,8 @@ class BlueprintReviewWorkpack(FrozenModel):
     def _read_only_complete_exception_first_surface(self) -> 'BlueprintReviewWorkpack':
         if not self.read_only or self.auto_decisions:
             raise ValueError('Blueprint review workpack 只读且绝不自动做决定')
-        if self.subject_sha256 != self.binding.blueprint_artifact_sha256:
-            raise ValueError('subject_sha256 必须精确绑定 Blueprint 盘上字节')
+        if self.review_token != f'bpr3_{self.binding_sha256}':
+            raise ValueError('Blueprint review_token 必须封装当前 exact workpack')
         ordinals = [row.chapter_ordinal for row in self.chapters]
         if (len(ordinals) != len(set(ordinals))
                 or set(ordinals) != set(self.binding.chapter_ordinals)):
@@ -2716,16 +3474,11 @@ class BlueprintSeenRequest(StrictModel):
     """把 ``seen.read`` 精确绑定到用户实际取得的 Blueprint 工作包输入。
 
     这不是新的审批形状；它只是写现役 seen proof 前的乐观并发条件。
-    ``expected_binding_sha256`` 证明提交方拿到的是完整工作包，而不是从其它
-    读面各抄几枚散装 hash。Blueprint、MainText、代码或规则任一漂移，都必须
-    重新取工作包再确认。
+    token 证明提交方拿到的是一份完整 immutable workpack。内部 SHA 仍在审计
+    面分层保存，但 Commander/UI 不再搬运五枚可相互矛盾的散装摘要。
     """
 
-    expected_binding_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
-    expected_subject_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
-    expected_main_text_artifact_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
-    expected_code_version: str = Field(min_length=1)
-    expected_rules_fingerprint: str = Field(min_length=1)
+    review_token: str = Field(pattern=r'^bpr3_[0-9a-f]{64}$')
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -3103,6 +3856,39 @@ class DraftEditPreview(FrozenModel):
     required_confirmation: Literal[STAGE5_EDIT_CONFIRMATIONS]
 
 
+class BlueprintRelationEditPreview(FrozenModel):
+    """Stage2 v7 完整章关系替换的只读候选结果。
+
+    ``review_token`` 仍是请求绑定的当前审阅主体；
+    ``result_subject_sha256`` 则是同一编译器生成的候选主体。
+    预览只回答“这份 typed request 现在会变成什么”，
+    不归档、不写 INVALID、不记成本或人工审计行。
+    """
+
+    review_token: str = Field(pattern=r'^brt1_[0-9a-f]{64}$')
+    review_contract_version: Literal[BLUEPRINT_RELATION_REVIEW_CONTRACT] = (
+        BLUEPRINT_RELATION_REVIEW_CONTRACT)
+    result_subject_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    changed_chapters: list[int] = Field(min_length=1)
+    relations_total: int = Field(ge=0)
+    relations_hard: int = Field(ge=0)
+    relations_review: int = Field(ge=0)
+    hard_hits: list[str]
+    would_apply: bool
+
+    @model_validator(mode='after')
+    def _preview_is_closed(self) -> 'BlueprintRelationEditPreview':
+        if self.changed_chapters != sorted(set(self.changed_chapters)):
+            raise ValueError('changed_chapters 必须升序且不重复')
+        if any(value < 1 for value in self.changed_chapters):
+            raise ValueError('changed_chapters 章号必须 >=1')
+        if self.relations_hard + self.relations_review != self.relations_total:
+            raise ValueError('关系 hard/review 计数之和必须等于 total')
+        if self.would_apply != (not self.hard_hits):
+            raise ValueError('would_apply 必须与 hard_hits 是否为空严格对应')
+        return self
+
+
 class TrimResolutionRequest(StrictModel):
     """Retain the pretrim text for the current hash-bound trim audit.
 
@@ -3124,7 +3910,7 @@ class HookApproveRequest(StrictModel):
     """`POST /api/novels/:sid/stage6/approve` —— 文案定稿（`--pick`，1 起）。
 
     ⚠ **不收文本**（2026-08-17 用户裁决）：改字是另一个节点。除候选序号外，
-    必须收 actor/reason 和候选完整 SHA-256，用于自报身份的人工审计与乐观锁。
+    必须收 actor/reason 和 opaque workpack token，用于自报身份审计与乐观锁。
     改字由 `stage6.hook --apply-edit` 承接，且契约把编辑文件钉死在书目录内（`_edit_rel`）、
     R-11.3 禁止服务进程写产物盘 ⇒ 浏览器文本没有合规通道落成 `hook_edit.json`。
     改字走 CLI；S-11 的产品语义本来就只有「定稿按钮」（人选那一下是唯一闸门）。
@@ -3133,8 +3919,7 @@ class HookApproveRequest(StrictModel):
     pick: int = Field(ge=1)
     actor: str = Field(min_length=1)
     reason: str = Field(min_length=1)
-    subject_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
-    workpack_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    review_token: str = Field(pattern=r'^s6r3_[0-9a-f]{64}$')
 
     @model_validator(mode='after')
     def _audit_text_is_not_blank(self) -> 'HookApproveRequest':
@@ -3143,10 +3928,18 @@ class HookApproveRequest(StrictModel):
         return self
 
 
-class NameMapApproveRequest(HashBoundHumanApproval):
-    """Stage7 human approval bound to the exact decision surface."""
+class NameMapApproveRequest(StrictModel):
+    """Stage7 human approval bound to one exact immutable workpack."""
 
-    workpack_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    actor: str = Field(min_length=1)
+    reason: str = Field(min_length=1)
+    review_token: str = Field(pattern=r'^s7r3_[0-9a-f]{64}$')
+
+    @model_validator(mode='after')
+    def _audit_text_is_not_blank(self) -> 'NameMapApproveRequest':
+        if not self.actor.strip() or not self.reason.strip():
+            raise ValueError('actor/reason 不得只有空白')
+        return self
 
 class ResidualAdoptionRequest(StrictModel):
     """Explicit, zero-cost adoption; low-confidence residuals are never accepted."""

@@ -91,19 +91,14 @@ def approve_design_review(
         'actor': request.actor,
         'reviewer_kind': request.reviewer_kind,
         'review_run_id': request.review_run_id,
-        'candidate_sha256': request.candidate_sha256,
-        'aggregate_subject_sha256': request.aggregate_subject_sha256,
+        'review_token': request.review_token,
         'strategy': {
-            'subject_sha256': request.strategy.subject_sha256,
             'decision': request.strategy.decision,
-            'source_decision_sha256': request.strategy.source_decision_sha256,
         },
         'chapters': [
             {
                 'output_ordinal': row.output_ordinal,
-                'subject_sha256': row.subject_sha256,
                 'decision': row.decision,
-                'source_decision_sha256': row.source_decision_sha256,
             }
             for row in request.chapters
         ],
@@ -129,14 +124,11 @@ def approve_stage5_closure(
     """原子提交 Stage5 闭合回执；通过即打开 gate.s5，不启动任何付费作业。"""
     details = {
         'actor': request.actor,
-        'workpack_sha256': request.workpack_sha256,
-        'review_sha256': request.review_sha256,
+        'review_token': request.review_token,
         'must_appear': [
             {
                 'chapter_ordinal': row.chapter_ordinal,
                 'evidence_key': row.evidence_key,
-                'finding_sha256': row.finding_sha256,
-                'chapter_sha256': row.chapter_sha256,
                 'ruling': row.ruling,
             }
             for row in request.must_appear
@@ -144,8 +136,7 @@ def approve_stage5_closure(
         'group_acks': [
             {
                 'group': row.group,
-                'findings_sha256': row.findings_sha256,
-                'items': row.items,
+                'acknowledged': row.acknowledged,
             }
             for row in request.group_acks
         ],
@@ -173,7 +164,7 @@ def approve_structure(
     """保存 hash-bound 逐章结构裁决；不在服务进程触发任何重规划作业。"""
     details = {
         'actor': request.actor,
-        'subject_sha256': request.subject_sha256,
+        'review_token': request.review_token,
         'chapters': [
             {
                 'output_ordinal': row.output_ordinal,
@@ -209,14 +200,7 @@ def mark_seen(
         raise ApprovalRequired('seen.global 不接受 Blueprint 工作包身份')
     details: dict[str, object] = {'key': key}
     if request is not None:
-        details.update({
-            'expected_binding_sha256': request.expected_binding_sha256,
-            'expected_subject_sha256': request.expected_subject_sha256,
-            'expected_main_text_artifact_sha256': (
-                request.expected_main_text_artifact_sha256),
-            'expected_code_version': request.expected_code_version,
-            'expected_rules_fingerprint': request.expected_rules_fingerprint,
-        })
+        details['review_token'] = request.review_token
     with operation_scope(
             base, sid, operation='approval-seen', details=details):
         return approvals.mark_seen(
@@ -225,22 +209,17 @@ def mark_seen(
 
 @router.post('/writing', response_model=ApprovalDoc)
 def approve_writing(
-    request: WritingApprovalRequest | None = None,
+    request: WritingApprovalRequest,
     sid: str = Depends(checked_sid), base: str = Depends(get_base),
 ) -> ApprovalDoc:
-    """新 typed body 可审计；空 body 只兼容既有 UI，二者都不启动付费作业。"""
+    """typed token 授权只写审批账；不启动任何付费作业。"""
     details = {
-        'actor': None if request is None else request.actor,
-        'subject_sha256': (
-            None if request is None else request.subject_sha256),
+        'actor': request.actor,
+        'review_token': request.review_token,
     }
     with operation_scope(
             base, sid, operation='approval-writing', details=details):
-        return (
-            approvals.begin_writing(base, sid)
-            if request is None
-            else approvals.approve_writing(base, sid, request)
-        )
+        return approvals.approve_writing(base, sid, request)
 
 
 @router.post('/reset', response_model=ApprovalDoc)

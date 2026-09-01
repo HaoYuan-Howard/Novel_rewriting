@@ -72,6 +72,9 @@ _WITHHELD: dict[str, str] = {
         'agent 执行节点属于 driver/model/effort/mode 组合能力面，'
         '唯一公开口是动态 `GET /api/agent/capabilities`；'
         '再经 `/api/enums` 发一份会造成两个可漂移的节点清单'),
+    'RETENTION_CANDIDATE_KINDS': (
+        'retention preview 已随每条候选返回服务端判定出的 kind；它不是维护策略选项，'
+        '浏览器不得据此重算是否应清理，另经 `/api/enums` 发布会制造第二个消费面'),
     'STAGE6_JUDGE_ROLES': (
         '判官角色是 Stage6 workpack/产物的关闭式 schema，不是前端选项；'
         '工作包已携具体 A/B 键，另发枚举只会制造第二个消费面'),
@@ -171,6 +174,18 @@ _WITHHELD: dict[str, str] = {
                                  '前端只展示当前计划的决定与审批态，不自行判断算法新旧',
     'DESIGN_REVIEW_CONTRACT': 'Stage4A 正式审阅 subject 的算法版本；后端已把它折进完整 hash，'
                               '前端只提交模板给出的 subject，不自行判断审阅是否过期',
+    'FROZEN_V6_DESIGN_REVIEW_CONTRACT': (
+        '两本冻结 v6 旧书的只读恢复契约；只供后端证明旧候选与旧 Blueprint '
+        '精确绑定，前端不得选择该版本或据此放行付费恢复'),
+    'BLUEPRINT_RELATION_REVIEW_CONTRACT': (
+        'Stage2 typed relation edit 的内部审阅身份；请求 schema 已固定该值，'
+        '前端不选择版本也不自行判断迁移'),
+    'BLUEPRINT_REVIEW_CONTRACT': (
+        'Stage2 Blueprint workpack 已随包携带此显式版本；UI 只回传 opaque token'),
+    'STAGE6_REVIEW_CONTRACT': (
+        'Stage6 workpack 已随包携带；UI 只回传 opaque token，不自行重算身份'),
+    'STAGE7_REVIEW_CONTRACT': (
+        'Stage7 workpack 已随包携带；UI 只回传 opaque token，不自行重算身份'),
     'BLIND_ALIAS_ALGORITHM': 'Stage4A 审计用的 opaque alias 算法身份；前端既不生成 alias，'
                              '也不据此判断候选是否可用',
     'STAGE2_BLUEPRINT_MAX_CONCURRENCY': (
@@ -349,6 +364,7 @@ def actions() -> list[dict[str, Any]]:
     # ``job_kinds[].flags``，并经下方 ``required_inputs`` 挂到真正需要它们的动作。
     credential_flags = {
         '--actor', '--reason', '--subject-sha256',
+        '--review-token',
         '--expected-revision-id',
         '--current-chapter-sha256', '--preview-subject-sha256',
         '--edit-confirmation',

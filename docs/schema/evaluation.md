@@ -73,8 +73,13 @@
 ### 1.4 收口
 
 `stage6.semantic` 产的结论一律进入 `verification` 待办。唯一的收口是
-`stage6.approve --pick N --actor --reason --subject-sha256`，落 `basis='human_verification'`
+`stage6.approve --pick N --actor --reason --review-token <s6r3_…>`，落
+`basis='human_verification'`
 的 hash-bound resolution；下游 `require_approved_clear` 校验那份 resolution 仍绑着当前字节。
+
+调用方只搬运工作包给出的 opaque `review_token`。服务端在同书提交锁内重建工作包，内部同时
+复核候选内容、可见 finding、显式审阅契约与当前机械 `validation_seal`；代码或规则变化只要求
+免费机械复检，若长期 `review_identity` 未变，既有人工决定自动恢复适用，不要求人重签。
 
 ⚠ **产品含义要说明白**：横在「有矛盾的文案」与成书之间的，只剩人在批准时读判官证据这一道。
 本仓不再有任何机制能替人否决一个候选，也不再有任何机制能替人放行一个候选。

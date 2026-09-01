@@ -65,8 +65,8 @@ EXECUTOR_PROFILED_RUNS: dict[str, tuple[frozenset[str], ...]] = {
     'stage2.blueprint': (frozenset(),),
     'stage4.design': (
         frozenset(),
-        frozenset({'--replan'}),
-        frozenset({'--repair-decision'}),
+        frozenset({'--replan', '--review-token'}),
+        frozenset({'--review-token'}),
     ),
     'stage4.plan': (frozenset(),),
     'stage5.write': (
@@ -92,8 +92,14 @@ EXECUTOR_PROFILED_NODES = tuple(EXECUTOR_PROFILED_RUNS)
 #: 可能被排在后面的 ``--dry-run`` / ``--check-only`` 盖成“不写盘”，preview 就会
 #: 对实际写盘说假话。这里关闭式拒收，展示与执行共用同一道门。
 _PRIMARY_OPERATIONS = {
+    'stage2.blueprint': frozenset({
+        '--dry-run', '--check-only', '--renormalize', '--patch',
+        '--revalidate', '--emit-review-workpack', '--emit-edit-template',
+        '--validate-edit', '--apply-edit',
+    }),
     'stage4.design': frozenset({
-        '--dry-run', '--replan', '--repair-decision', '--adopt-rejected',
+        '--dry-run', '--replan', '--adopt-rejected',
+        '--validate-edit', '--apply-edit',
     }),
     'stage4.plan': frozenset({
         '--dry-run', '--check-only', '--revalidate', '--names-only',
@@ -106,6 +112,15 @@ _PRIMARY_OPERATIONS = {
     }),
     'stage5.review': frozenset({
         '--retain-pretrim', '--wontfix', '--check-only',
+    }),
+    'stage6.hook': frozenset({
+        '--dry-run', '--check-only', '--identity', '--recheck', '--revalidate',
+        '--apply-edit', '--wontfix', '--rebind-review',
+    }),
+    'stage7.rename': frozenset({
+        '--dry-run', '--check-only', '--identity', '--recheck', '--revalidate',
+        '--apply-edit', '--emit-edit-template', '--adopt-residual',
+        '--validate-edit', '--rebind-review',
     }),
 }
 

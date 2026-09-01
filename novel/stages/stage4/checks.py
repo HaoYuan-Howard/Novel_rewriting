@@ -248,6 +248,157 @@ def causal_scene_findings(
     return missing, reversed_order
 
 
+def narrative_relation_scene_findings(
+    relations: list[dict[str, Any]],
+    positions: dict[str, list[int]],
+    *,
+    suffix: str = '',
+) -> list[str]:
+    """返回显式 ``enforcement=hard`` 关系在场景布局中的可判违例。
+
+    关系来自 Stage2 v7 的 typed review，不从 source beat、数组邻接或源叙述
+    顺序推断。``review`` 关系只进入人审 workpack，不在这里升级成机械闸。
+    ``suffix`` 让 A 相 opaque alias 与正式 fact ref 共用同一把尺子。
+
+    ``story_before`` 描述故事世界时间，不是披露数组顺序。它的故事时序由
+    :func:`narrative_story_time_findings` 依据显式 ``transition`` 的可判部分另行
+    判断；context 端点可以在章前已成立，不要求为了过闸而重复塞进场景。把
+    ``min(scene position)`` 当故事时间会稳定假拒合法倒叙。
+    """
+    bad: list[str] = []
+
+    def field(row: dict[str, Any], name: str) -> str:
+        return str(row.get(f'{name}{suffix}') or '')
+
+    def require_positions(kind: str, refs: list[str]) -> bool:
+        missing = sorted(ref for ref in refs if ref not in positions)
+        if missing:
+            bad.append(f'{kind}:端点未入场景:{missing}')
+            return False
+        return True
+
+    for relation in relations:
+        if relation.get('enforcement') != 'hard':
+            continue
+        kind = str(relation.get('kind') or '')
+        if kind == 'story_before':
+            # 故事时点是另一条 typed 尺子；这里没有可按披露位置判断的结构约束。
+            continue
+        elif kind == 'response_to':
+            stimulus = field(relation, 'stimulus')
+            response = field(relation, 'response')
+            if require_positions(kind, [stimulus, response]) \
+                    and min(positions[response]) < min(positions[stimulus]):
+                bad.append(f'{kind}:{response}<{stimulus}')
+        elif kind == 'same_scene':
+            left = field(relation, 'left')
+            right = field(relation, 'right')
+            if require_positions(kind, [left, right]) \
+                    and not set(positions[left]).intersection(positions[right]):
+                bad.append(f'{kind}:{left}!={right}')
+        elif kind == 'observes':
+            observed = field(relation, 'observed')
+            observation = field(relation, 'observation')
+            if require_positions(kind, [observed, observation]) \
+                    and min(positions[observation]) < min(positions[observed]):
+                bad.append(f'{kind}:{observation}<{observed}')
+        else:
+            # schema 应先关闭 kind；走到这里说明 producer/读取边界漂移。
+            bad.append(f'unknown:{kind}')
+    return bad
+
+
+def narrative_story_time_findings(
+    relations: list[dict[str, Any]],
+    scenes: list[dict[str, Any]],
+    *,
+    suffix: str = '',
+    land_key: str,
+) -> tuple[list[str], list[str]]:
+    """判定 ``story_before`` 的故事时序，返回 ``(违例, 不可验证)``。
+
+    当前 Stage4 schema 只有相邻披露场的 ``transition``，没有绝对时间戳、branch
+    id 或层级。因此只使用能被 transition **直接证明**的偏序：``continue/later``
+    向前、``earlier`` 向后，以及唯一无歧义支路的 ``return`` 回到锚点之后。
+    ``parallel``、同场、嵌套/歧义支路都必须落入不可验证，不能猜成 PASS。
+    """
+    graph: dict[int, set[int]] = {index: set() for index in range(len(scenes))}
+    branch_anchor: int | None = None
+    branch_ambiguous = False
+    for index, scene in enumerate(scenes):
+        if index == 0:
+            continue
+        transition = _canonical_transition(scene.get('transition'))
+        previous = index - 1
+        if transition in {'continue', 'later'}:
+            graph[previous].add(index)
+            if transition == 'later' and branch_anchor is not None:
+                branch_ambiguous = True
+        elif transition == 'earlier':
+            graph[index].add(previous)
+            if branch_anchor is None and not branch_ambiguous:
+                branch_anchor = previous
+            else:
+                branch_ambiguous = True
+        elif transition == 'parallel':
+            if branch_anchor is None and not branch_ambiguous:
+                branch_anchor = previous
+            else:
+                branch_ambiguous = True
+        elif transition == 'return':
+            if branch_anchor is not None and not branch_ambiguous:
+                graph[branch_anchor].add(index)
+            branch_anchor = None
+            branch_ambiguous = False
+
+    # 小图确定性闭包；只传播已经证明的严格先后，不为未知边补关系。
+    changed = True
+    while changed:
+        changed = False
+        for before in tuple(graph):
+            expanded = set().union(*(
+                graph.get(after, set()) for after in tuple(graph[before])))
+            if not expanded.issubset(graph[before]):
+                graph[before].update(expanded)
+                changed = True
+
+    land_positions: dict[str, list[int]] = {}
+    for index, scene in enumerate(scenes):
+        for ref in scene.get(land_key) or []:
+            land_positions.setdefault(str(ref), []).append(index)
+
+    def field(row: dict[str, Any], name: str) -> str:
+        return str(row.get(f'{name}{suffix}') or '')
+
+    bad: list[str] = []
+    unknown: list[str] = []
+    for relation in relations:
+        if relation.get('enforcement') != 'hard' \
+                or relation.get('kind') != 'story_before':
+            continue
+        before = field(relation, 'before')
+        after = field(relation, 'after')
+        before_positions = land_positions.get(before, [])
+        after_positions = land_positions.get(after, [])
+        if len(before_positions) != 1 or len(after_positions) != 1:
+            unknown.append(
+                f'story_before:{before}<{after}:端点没有唯一 land 故事时点')
+            continue
+        before_scene = before_positions[0]
+        after_scene = after_positions[0]
+        if before_scene == after_scene:
+            unknown.append(
+                f'story_before:{before}<{after}:同场内部先后未建模')
+        elif after_scene in graph[before_scene]:
+            continue
+        elif before_scene in graph[after_scene]:
+            bad.append(f'story_before:{before}!<{after}:故事时序反向')
+        else:
+            unknown.append(
+                f'story_before:{before}<{after}:当前 transition 偏序不可判')
+    return bad, unknown
+
+
 def context_ref_findings(
     scenes: list[dict[str, Any]],
     *,
@@ -624,6 +775,8 @@ def check(plan: dict[str, Any], *, blueprints: dict[str, Any],
     ref_bad: list[tuple[int, str]] = []
     coverage_bad: list[tuple[int, str]] = []
     causal_bad: list[tuple[int, str]] = []
+    narrative_relation_bad: list[tuple[int, str]] = []
+    narrative_relation_unknown: list[str] = []
     state_bad: list[tuple[int, str]] = []
     state_unknown: list[str] = []
     material_bad: list[tuple[int, str]] = []
@@ -796,6 +949,43 @@ def check(plan: dict[str, Any], *, blueprints: dict[str, Any],
         for row in edge_missing:
             witness.add(code='causal_closure', rule='causal_closure',
                         chapter_ordinal=ordinal, refs=[row])
+        relation_bad = narrative_relation_scene_findings(
+            list(bp.get('narrative_relations') or []),
+            positions, suffix='_fact_ref')
+        story_time_bad, story_time_unknown = narrative_story_time_findings(
+            list(bp.get('narrative_relations') or []), scenes,
+            suffix='_fact_ref', land_key='land_fact_refs')
+        relation_bad.extend(story_time_bad)
+        narrative_relation_unknown.extend(
+            f'ch{ordinal}:{row}' for row in story_time_unknown)
+        for relation in bp.get('narrative_relations') or []:
+            if relation.get('kind') != 'observes' \
+                    or relation.get('enforcement') != 'hard':
+                continue
+            observer = str(relation.get('observer_char_id') or '')
+            observation = str(relation.get('observation_fact_ref') or '')
+            observation_scenes = [
+                (index, scene) for index, scene in enumerate(scenes)
+                if observation in {
+                    str(ref) for ref in scene.get('land_fact_refs') or []}
+            ]
+            for index, scene in observation_scenes:
+                present = {
+                    str(char_id)
+                    for stage_ref in scene.get('stage_refs') or []
+                    for char_id in (bidx.get(str(stage_ref)) or {}).get(
+                        'present_char_ids', [])
+                }
+                if observer not in present:
+                    relation_bad.append(
+                        f'observes:{observation}@'
+                        f'{scene.get("slot") or index + 1}:observer={observer}不在场')
+        narrative_relation_bad.extend(
+            (ordinal, f'ch{ordinal}:{row}') for row in relation_bad)
+        for row in relation_bad:
+            witness.add(
+                code='narrative_relation', rule='narrative_relation',
+                chapter_ordinal=ordinal, refs=[row])
 
     def book_rows(rule_bad: list[str], label: str) -> list[tuple[str, list[str]]]:
         return [(f'{len(rule_bad)} 处{label}：{rule_bad[:8]}', rule_bad)] if rule_bad else []
@@ -821,6 +1011,7 @@ def check(plan: dict[str, Any], *, blueprints: dict[str, Any],
         ('fact_ref', ref_bad, '场景引用越界'),
         ('fact_coverage', coverage_bad, 'land 事实未恰好落一次'),
         ('causal_closure', causal_bad, '因果边漂移'),
+        ('narrative_relation', narrative_relation_bad, 'HARD 叙事关系漂移'),
         ('state_closure', state_bad, '可判故事时态的状态冲突'),
         ('material_coverage', material_bad, '材料未恰好落一次'),
         ('scene_transition', transition_bad, 'slot/transition 不可执行'),
@@ -828,9 +1019,25 @@ def check(plan: dict[str, Any], *, blueprints: dict[str, Any],
         ('budget_int', budget_bad, '预算不是正整数'),
         ('budget_band', chapter_budget_bad, '章预算出带'),
     ):
-        if rule != 'state_closure':
+        if rule not in {'state_closure', 'narrative_relation'}:
             outcomes.append(
                 scoped_outcome(rule, bad, label, f'{len(chapters)} 章'))
+            continue
+        if rule == 'narrative_relation':
+            if narrative_relation_bad:
+                outcomes.append(scoped_outcome(
+                    rule, narrative_relation_bad, label,
+                    f'{len(chapters)} 章；另有 {len(narrative_relation_unknown)} 条'
+                    ' story_before 故事时序需人工判断'))
+            elif narrative_relation_unknown:
+                outcomes.append(unverifiable(
+                    rule,
+                    f'{len(narrative_relation_unknown)} 条 story_before 在当前'
+                    ' transition 偏序下不可验证；不得用披露数组顺序代替故事时间；'
+                    '逐项证据见 semantic_closure_reading',
+                    scanned=f'{len(chapters)} 章'))
+            else:
+                outcomes.append(outcome(rule, [], f'{len(chapters)} 章'))
             continue
         # ⚠ 「机器够不着的边界」不许洗成绿：可判的红照红，全部可判都干净但仍有
         #   非线性边界时落 `unver` 并带分母（判据 2 / 4），交 hash-bound 结构人审。
@@ -981,6 +1188,8 @@ def check(plan: dict[str, Any], *, blueprints: dict[str, Any],
             # ⚠ **不截断**：UNVER 的全部价值在于把机器够不着的边界完整交给人，
             #   截断会静默丢掉后章证据，正好重演「绿灯没有扫描分母」那个错误。
             'state_unknown_findings': state_unknown,
+            'narrative_relation_unknown': len(narrative_relation_unknown),
+            'narrative_relation_unknown_findings': narrative_relation_unknown,
             'material_bad': len(material_bad),
         }, ensure_ascii=False, sort_keys=True, separators=(',', ':')),
         'ctx_source': ctx_source or '未提供 writer_context 来源账',

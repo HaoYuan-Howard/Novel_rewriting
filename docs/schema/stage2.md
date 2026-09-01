@@ -1,19 +1,23 @@
 # Stage 2 当前契约
 
-Stage 2 产出四份严格 JSON，另收两份人产的决策集：
+Stage 2 产出四份严格 JSON，另收三份人产的 typed 请求/决策集：
 
 | 路径 | 模型 | 生产节点 | 内容 |
 |---|---|---|---|
 | `stage2/global_grounding.json` | `GlobalGrounding` v4 | `stage2.global` | 全书人物、关系、设定、规则、秘密、弧线及代码回取证据 |
 | `stage2/blueprint_character_projection.json` | `BlueprintCharacterProjection` v1 | `stage2.global` | 从最新 schema-valid global（formal 或 `.INVALID`）与 MainText 确定性物化的、Blueprint 唯一消费的逐章称名闭集 |
-| `stage2/chapter_blueprints.json` | `ChapterBlueprints` v6 | `stage2.blueprint` | 逐章语义功能、原子事实/因果/状态契约、精确证据区间、保真材料、舞台与叙述信息 |
+| `stage2/chapter_blueprints.json` | `ChapterBlueprints` v7 | `stage2.blueprint` | 逐章语义功能、原子事实/因果/叙事关系/状态契约、精确证据区间、保真材料、舞台与叙述信息 |
 | `stage2/global_review.json` | `GlobalReview` | `stage2.global` | 由当前全局底座确定性枚举的逐项人工复核；详见 `docs/schema/evaluation.md` |
 | `stage2/global_review_decisions.json` | `GlobalReviewDecisionSet` v2 | 人工输入 | actor、逐项 subject hash 决定，或绑定完整 blocking scope/正文章全集的默认决定 + 逐项例外；也可经同形 API 提交 |
 | `stage2/global_edit.json` | `GlobalEdit` v3 | 人工输入 | Stage2 typed 订正决策集（`stage2.global --apply-edit` 吃它） |
+| `stage2/blueprint_relation_edit.json` | `BlueprintRelationEdit` v1 | 人工输入 | hash-bound 的指定章完整叙事关系集合；`stage2.blueprint --apply-edit` 吃它，不是 producer 产物 |
 
-四份正式产物与两份人工决策集都使用当前 Pydantic `StrictModel`，未知字段拒收。运行时不升级旧形状，也不为
-缺失字段补默认值；需要保留的输入必须先按本文件的当前 schema 重新生成。旧
-GlobalGrounding / ChapterBlueprints 由各自 producer 重建；GlobalEdit v1/v2 由人按 v3
+四份正式产物与三份人工输入都使用当前 Pydantic `StrictModel`，未知字段拒收。运行时不升级旧形状，也不为
+缺失字段补默认值；需要进入普通 producer 的输入必须先按本文件的当前 schema 重新生成。旧
+GlobalGrounding 由 producer 重建；ChapterBlueprints v6 不迁移、不自动补空关系数组。只有它与现存
+Stage4A v1 truth/mapping、原始来源边及白名单下游正式制品逐字闭合时，冻结 reader 才供状态、审批、
+交付披露与零 wire 完整章 edit 使用；普通 producer、付费 repair/replan 与 Stage4B 不得消费该内存形状，
+也不得回写 v6。新的 clean base 只由 `stage2.blueprint` 生成 v7。GlobalEdit v1/v2 由人按 v3
 重写，本批之前已经合法的 v3 无须补 `conflict_stages_replace` 仍可原样读取。
 
 ## 一、`global_grounding.json`
@@ -172,8 +176,9 @@ checkpoint 对证；人工 typed replacement 仍重放同一个 validator 与 ap
 `prepared→正式 Global/review/projection 写入或退休 INVALID→typed readback/freshness→唯一
 artifact adoption→committed` journal 收口。foreign `prepared` 会在任何新 run 覆盖前关闭；kill 后原
 run 只能按已登记 touched-path SHA 幂等补齐 review/projection/readback/adoption/committed，不得再造新轮。
-checkpoint、custody 与 journal 都是书内 `_stage2_runs/<run_id>/global/` 的恢复 sidecar，不是正式
-artifact、普通缓存或公开 API schema。
+checkpoint、custody 与 journal 都是
+`<base>/_service/runs/<sid>/stage2/<run_id>/global/` 的恢复 sidecar，不是正式
+artifact、普通缓存或公开 API schema。旧书内 `_stage2_runs` 只读恢复，继续写入先原字节接入 service run。
 
 ## 一之二、`blueprint_character_projection.json`
 
@@ -211,6 +216,7 @@ global 的非称名 HARD 仍然会阻止它自身正式落盘，但不会让已�
 | `beats` | `Beat[]` | 非空并按原文证据顺序排列；只承担区间、舞台与材料归属 |
 | `fact_atoms` | `FactAtom[]` | 非空；本章唯一事实源 |
 | `causal_edges` | `CausalEdge[]` | 颠倒会改变剧情的因果边；引用闭合、无自环/环 |
+| `narrative_relations` | `NarrativeRelation[]` | 明确的故事先后、回应、同场或观察关系；引用闭合、规范排序，不从源相邻关系自动推导 |
 | `entry_state_refs` | `fact_id[]` | 只能引用 `obligation=context` |
 | `ending_state_refs` | `fact_id[]` | 只能引用 `obligation=land` |
 | `narration` | `Narration[]` | 至少一项 |
@@ -240,6 +246,41 @@ global 的非称名 HARD 仍然会阻止它自身正式落盘，但不会让已�
 
 `CausalEdge` 只有 `before` 与 `after` 两个 fact_id。数组顺序只记录证据位置，**不是 Stage4/5
 的写作顺序**；同一源 beat 可拆成多个 atom 分到不同新场景，不相邻 atom 也可在 Stage4 合成一场。
+
+### 2.1a `narrative_relations`：显式关系，不是源顺序副本
+
+四类关系使用 `kind` 判别联合，且都带 `enforcement=review｜hard`：
+
+| `kind` | 端点 | 语义 |
+|---|---|---|
+| `story_before` | `before_fact_ref / after_fact_ref` | 两件事在故事世界中的真实先后，不等于读者披露顺序 |
+| `response_to` | `stimulus_fact_ref / response_fact_ref` | 回应必须仍指向它真正回应的刺激事实 |
+| `same_scene` | `left_fact_ref / right_fact_ref` | 两事实在语义上必须同场；端点按 fact id 严格升序 |
+| `observes` | `observer_char_id / observed_fact_ref / observation_fact_ref` | 指定人物通过 observation fact 见证 observed fact |
+
+全部事实端点必须指向同章 `fact_atoms`，不得自环或重复；`causal_edges + story_before` 合并后不得
+成环。`observes.observer_char_id` 必须属于本章人物闭集，且 observation fact 必须把 observer 列入
+参与者。`same_scene` 只在语义确实要求不可拆场时出现；同一 source beat、相邻证据或数组位置本身
+都不生成关系。
+
+producer 只能提出 `enforcement=review`。明确且高影响的关系须经 0 模型 typed edit 晋升为 `hard`，
+才会在 Stage4A 变成确定性落盘闸；review 关系仍完整进入 Commander 工作包，但不自动阻断模型。
+Stage4A 只收到 opaque aliases 与这些显式关系，不收到 `SourceSpan`、source beat 或完整源叙述顺序。
+
+Commander 的 Blueprint workpack 使用 `BLUEPRINT_REVIEW_CONTRACT=stage2-blueprint-review-v4`。
+每章可见业务面必须原样投影完整 `narrative_relations`（含 kind、enforcement 与各 typed 端点），并把
+这组可见关系计入 `review_identity_sha256`；不能只在 v7 artifact 中保存、却从人审包里漏掉。代码/
+规则与机械复检仍只进入 `validation_seal_sha256`，公开包不再输出其原料 `code_version` /
+`rules_fingerprint`。关系或其它可见 finding 变化要求重读，纯 validation 变化在免费复检后可复活
+原 raw `seen.read`。公开提交继续只收 `bpr3_…` token；旧 `bpr2_…` 包只可留作历史阅读，不能
+提交新的已读证明。
+
+人工修订不使用字段 patch。先运行 `stage2.blueprint --emit-edit-template` 得到当前 v1 请求，填写
+`actor/reason`，并为目标章提交**完整** `narrative_relations` 集合，再用
+`stage2.blueprint --apply-edit <path>` 应用。请求中的 opaque `brt1_…` review token 绑定当前完整
+Blueprint 内容与 `blueprint-relations-v1` 审阅契约；过期 token、未知章、非法闭包、时序环、非法
+观察者或非目标章业务漂移都在正式写盘前拒绝。成功稿记 `origin=human`，复用当前 Stage2 schema、
+全部 HARD、轮次归档与 freshness，不伪造模型、prompt 或 usage。
 
 ### 2.2 精确原文区间
 
@@ -404,11 +445,14 @@ address 后的新 subject 一律回到 `pending`，旧复合事实的 PASS 不�
   validator、compile 与 provenance 只读 MainText + 称名投影，不伪造一条 canonical
   global 输入边。两种现役契约的拓扑显式登记在 `ContractSpec.topology`，预览、整跑与定向修复共用
   该分派，不从可空 system 字段猜。`--emit-review-workpack` 零调用输出绑定当前 Blueprint、
-  MainText、完整联合检查、代码与规则指纹的全书只读工作包；异常章先排，但不省略正常章或语义
-  消费字段，也不创建审批、决定或新 artifact。
+  MainText、`stage2-blueprint-review-v4` 与完整 `narrative_relations`，并把免费机械复检另记为
+  validation seal；对外只交 opaque review token。异常章先排，但不省略正常章、关系或语义消费字段，
+  也不创建审批、决定或新 artifact。
 - 正式写入前先跑严格载体校验与联合 HARD 闸门；失败响应进入 `.INVALID`，不会覆盖正式产物。
-- 本层没有旧 schema 迁移入口、字段别名或双形状读取路径。旧生成产物由 producer 重建，
-  GlobalEdit v1/v2 只由人重写为 v3；旧 v3 即使没有新增的可缺字段也仍可读。
+- producer/正式 artifact registry 没有旧 schema 迁移入口、字段别名或双形状读取路径；旧生成产物
+  默认由 producer 重建。唯一例外是上文精确 Stage4A-bound v6 的冻结只读证明，它不返回 current
+  `ChapterBlueprints`、不写回也不开放付费 consumer。GlobalEdit v1/v2 只由人重写为 v3；旧 v3
+  即使没有新增的可缺字段也仍可读。
 
 `--resample` 必须单独执行，并使用 `refresh-write`：不读同参数缓存，但合格的新响应仍写回缓存，
 避免下一次正常运行再次付费。请求或响应契约失败发生在写盘前，当前正式稿与问题稿都不动；新候选

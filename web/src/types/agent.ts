@@ -2,8 +2,6 @@
  * agent 代跑（POST /api/agent/runs 一族）的形状。snake_case 照后端原样，
  * 与 run.ts / jobs.ts 的 Backend* 同款做法：数据缝只做适配，不改名。
  */
-import type { JobState } from '@/constants/vocabulary'
-
 /**
  * Agent 组合由后端 capability registry 发布。driver/model/effort/mode 都保留为
  * 字符串，前端不能用联合类型复制一份供应商能力表。
@@ -76,15 +74,53 @@ export interface AgentRunPreview {
 
 export interface AgentRunStart {
   sid: string
+  /** 规范化绝对 base；旧事件可能没有。 */
+  base?: string | null
   argv: string[]
   prompt: string
   authorized: boolean
   egress_authorized: boolean
   /** 启动时仓库代码指纹；历史记录可能没有。 */
   code_version: string | null
+  /** 启动时 operator skill 整树身份；历史记录可能没有。 */
+  skill_sha256?: string | null
   /** 历史缺失只能表示 unknown，不能按今天的默认倒推。 */
   profiles: PipelineAgentProfiles | null
 }
+
+export interface RunContractV2 {
+  wire_version: 2
+  sid: string
+  base: string
+  authorized: boolean
+  egress_authorized: boolean
+  profiles: PipelineAgentProfiles
+}
+
+export interface ExecutionEpoch {
+  epoch_id: string
+  ordinal: number
+  reason: string
+  argv: string[]
+  prompt_sha256: string
+  protocol_version: string
+  cli_version: string | null
+  code_version: string
+  skill_sha256: string
+  session_run_id: string
+  resume_provider_session_id: string | null
+}
+
+export type AgentRunState =
+  | 'pending'
+  | 'running'
+  | 'paused'
+  | 'ok'
+  | 'landed_red'
+  | 'failed'
+  | 'unknown'
+
+export type AgentRunControl = 'pause' | 'resume' | 'stop'
 
 export type AgentDeliveryState =
   | 'ready'
@@ -102,19 +138,25 @@ export interface AgentDeliveryOutcome {
 
 /**
  * 一次 agent 代跑的记录。
- * state 复用作业四态：服务重启后原本 running 的一律改判 unknown —— 不是 ok。
+ * state 是整书 Supervisor 生命周期，不复用单节点 JobState。
  */
 export interface AgentRunRecord {
   run_id: string
   start: AgentRunStart
+  /** v1 历史为 null；v2 的稳定 parent contract。 */
+  contract: RunContractV2 | null
+  epochs: ExecutionEpoch[]
+  active_epoch_id: string | null
   /** unix 秒 */
   started: number
   ended: number | null
   exit_code: number | null
-  state: JobState
+  state: AgentRunState
   note: string | null
   /** 与进程 state 正交；null 只会出现在仍运行/被 reconcile 的记录。 */
   outcome: AgentDeliveryOutcome | null
+  /** UI 只显示服务端明确开放的动作，不按 state 猜。 */
+  allowed_controls: AgentRunControl[]
 }
 
 /** GET /api/agent/runs?sid= 的返回。新的在前。 */

@@ -611,12 +611,18 @@ def validate(counters: dict[str, int] | None = None,
         errors.append("SKILL.md 没有要求每次状态变更后重新取得 operator next action")
     permit_command = (
         "novel.cli operator permit <SID> <node> --base <BASE> --json -- [flags]")
-    permit_hash_arg = "--operator-permit-sha256 <PERMIT_SHA256>"
+    next_file_arg = "--operator-permit-file <NEXT_FILE>"
     if permit_command not in text:
-        errors.append("SKILL.md 主路没有为 exact node/flags 调用 operator permit")
-    if permit_hash_arg not in text:
-        errors.append("SKILL.md 的 run_step 主路没有携带 execution permit SHA-256")
-    if permit_command in text and permit_hash_arg in text:
+        errors.append("SKILL.md 没有保留 blocked recovery 的 exact operator permit")
+    if next_file_arg not in text:
+        errors.append("SKILL.md 的 ready run_step 没有原样复用 operator next token 文件")
+    if "ready action 不再第二次调用 `operator permit`" not in text:
+        errors.append("SKILL.md 的 ready 主路仍可能重复调用 operator permit/full snapshot")
+    if "--operator-permit-sha256" in text:
+        errors.append(
+            "SKILL.md 仍把 SHA-only execution permit 写进默认主路；"
+            "该参数只保留给旧脚本诊断兼容")
+    if permit_command in text and next_file_arg in text:
         counters["operator_execution_permit_contract"] += 1
 
     workflow_path = SKILL_DIR / "references" / "workflow.md"
@@ -624,9 +630,15 @@ def validate(counters: dict[str, int] | None = None,
     workflow = skill_texts.get(workflow_path, "")
     delegated = skill_texts.get(delegated_path, "")
     if permit_command not in workflow:
-        errors.append("workflow.md 没有为 exact node/flags 调用 operator permit")
-    if permit_hash_arg not in workflow:
-        errors.append("workflow.md 的 run_step 命令没有携带 execution permit SHA-256")
+        errors.append("workflow.md 没有保留 blocked recovery 的 exact operator permit")
+    if next_file_arg not in workflow:
+        errors.append("workflow.md 的 ready run_step 没有复用原样 operator next 文件")
+    if "只有 blocked" not in workflow:
+        errors.append("workflow.md 没有把显式 operator permit 限定到 blocked recovery")
+    if "--operator-permit-sha256" in workflow:
+        errors.append(
+            "workflow.md 仍把 SHA-only execution permit 写进默认命令；"
+            "兼容慢路只能在维护/诊断说明中出现")
     for name, body in (("workflow.md", workflow),
                        ("delegated-review.md", delegated)):
         if "scripts/finalize_review.py" not in body:
@@ -715,8 +727,8 @@ def validate(counters: dict[str, int] | None = None,
     if "--with-inbox" not in text:
         errors.append("SKILL.md 没有使用 invocation-scoped state --with-inbox")
 
-    # operator telemetry 是独立可观测性面：skill 只可经薄入口调用生产唯一落点，且文档
-    # 必须明说宿主模型 usage 不可见，不能把墙钟分解伪装成 token/成本账。
+    # operator_phase.py 只保留为可选诊断薄入口。正式主路由 RunSupervisor 自动记录；
+    # 守卫验证 wrapper 没重拼实现，但**不得**反过来要求 Commander 每动作调用它。
     telemetry_path = SKILL_DIR / "scripts" / "operator_phase.py"
     telemetry_token = "scripts/operator_phase.py"
     if not telemetry_path.is_file():
@@ -740,9 +752,15 @@ def validate(counters: dict[str, int] | None = None,
             errors.append(
                 "operator_phase.py 必须只把 CLI 交给 novel.operator_telemetry.cli_main"
             )
-    for doc, body_text in (("SKILL.md", text), ("maintenance.md", maintenance)):
-        if telemetry_token not in body_text:
-            errors.append(f"{doc} 没有登记 {telemetry_token}")
+    if telemetry_token not in maintenance:
+        errors.append("maintenance.md 没有登记可选诊断 scripts/operator_phase.py")
+    for manual_token in ("phase-start", "phase-end", "session-start", "session-end"):
+        if manual_token in text:
+            errors.append(
+                f"SKILL.md 默认主循环仍要求 Commander 手工 `{manual_token}`；"
+                "正式 phase/ledger 联结应由 RunSupervisor 自动记录")
+    if "RunSupervisor" not in text or "确定性状态机" not in text:
+        errors.append("SKILL.md 没有声明 RunSupervisor 是不做模型推理的确定性状态机")
     if "unavailable_host_boundary" not in text:
         errors.append("SKILL.md 没有声明 Commander 宿主模型 usage 的不可见边界")
 

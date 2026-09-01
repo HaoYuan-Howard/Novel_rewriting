@@ -47,6 +47,10 @@ def _run_spec() -> agent_runs.SingleSessionRunSpec:
             ctx.novel_dir, ctx.run_id),
         checkpoint_dir=lambda ctx: paths.stage7_rename_checkpoint_dir(
             ctx.novel_dir, ctx.run_id),
+        legacy_run_path=lambda ctx: paths.legacy_stage7_rename_run_path(
+            ctx.novel_dir, ctx.run_id),
+        legacy_checkpoint_dir=lambda ctx: paths.legacy_stage7_rename_checkpoint_dir(
+            ctx.novel_dir, ctx.run_id),
     )
 
 
@@ -165,14 +169,15 @@ def committed(ctx: Any) -> dict[str, Any] | None:
 def refuse_foreign_commit_reservations(ctx: Any) -> None:
     """另一 rename run 的 prepared 尾窗必须先由原 run 补完。"""
     _require_ownership(ctx)
-    root = Path(ctx.novel_dir) / paths.STAGE7_RUNS_DIRNAME
     current = _commit_spec(ctx).commit_path(ctx).resolve()
-    if not root.is_dir():
-        return
-    for target in root.glob(f'*/rename/{agent_runs.COMMIT_FILE}'):
-        if target.resolve() == current:
+    found: dict[str, Path] = {}
+    for root in paths.stage_run_read_roots(ctx.novel_dir, 'stage7'):
+        if root.is_dir():
+            for target in root.glob(f'*/rename/{agent_runs.COMMIT_FILE}'):
+                found.setdefault(target.parent.parent.name, target)
+    for run_id, target in sorted(found.items()):
+        if run_id == ctx.run_id or target.resolve() == current:
             continue
-        run_id = target.parent.parent.name
         try:
             with process_append_lock(target):
                 record = agent_runs.validate_foreign_commit_envelope(

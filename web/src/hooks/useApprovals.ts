@@ -7,6 +7,7 @@ import type {
   SeenKey,
   Stage5ClosureRequest,
   StructureApprovalRequest,
+  WritingApprovalRequest,
 } from '@/types/approvals'
 import type { BlueprintSeenRequest } from '@/types/stages'
 import { useSid } from './useRouteParams'
@@ -74,7 +75,7 @@ export function useApprovals(sidOverride?: string) {
     onSuccess: put,
   })
   const startWriting = useMutation({
-    mutationFn: () => api.startWriting(sid),
+    mutationFn: (request: WritingApprovalRequest) => api.startWriting(sid, request),
     onSuccess: put,
   })
 

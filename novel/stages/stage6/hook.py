@@ -32,7 +32,7 @@ from contracts.artifacts import (
 )
 
 
-from contracts.invariants import HOOK_APPROACHES, slot_of
+from contracts.invariants import HOOK_APPROACHES, STAGE6_REVIEW_CONTRACT, slot_of
 from contracts.rules import REGISTRY
 from contracts.schema.common import Finding
 from contracts.schema.api import Stage6ApprovalCandidate, Stage6ApprovalWorkpack
@@ -63,7 +63,7 @@ from novel.stages.stage6 import checks, prompts
 from novel.stages.stage6.measure import (
     lead_drafts, lead_upto, normalize_hook, quote_problems_of,
 )
-from novel.store import ArtifactStore
+from novel.store import ArtifactStore, readonly_snapshot_value
 
 REL = STAGE6_HOOK
 #: `--apply-edit` 的缺省决策集路径。形状是契约（`ARTIFACTS` 里登记着 `HookEdit`）。
@@ -187,29 +187,104 @@ def _texts_of(art: Hook) -> list[tuple[str, str]]:
     return out
 
 
-def _judge_artifact(art: Hook, up: _Upstreams, store: ArtifactStore) -> list[Outcome]:
+_JudgedTextRow = tuple[str, str, tuple[Finding, ...]]
+
+
+@dataclass(frozen=True)
+class _ApprovalBaseline:
+    """一次 ``run_check_only`` 调用内的去 approval 审阅基准。
+
+    它既不进入 invocation memo，也不跨调用存活。``store`` 的对象身份与
+    ``artifact_subject_sha256`` 共同防止调用点把另一份书、另一份 Hook 的
+    report 塞进当前 workpack；候选判定行只在当前调用栈内复用，向
+    ``checks.check`` 传入时重新构造 list，外部拿不到共享可变容器。
+    """
+
+    store: ArtifactStore
+    artifact_subject_sha256: str
+    texts: tuple[_JudgedTextRow, ...]
+    stale: tuple[str, ...]
+    missing: tuple[str, ...]
+    report: CheckReport
+
+
+def _judged_text_rows(art: Hook, up: _Upstreams) -> tuple[_JudgedTextRow, ...]:
+    rows: list[_JudgedTextRow] = []
+    for label, text in _texts_of(art):
+        _t, _m, findings = _normalize_and_judge(text, up)
+        rows.append((label, text, tuple(_labelled(label, findings))))
+    return tuple(rows)
+
+
+def _outcomes_for_rows(
+    art: Hook,
+    up: _Upstreams,
+    store: ArtifactStore,
+    rows: tuple[_JudgedTextRow, ...],
+    *,
+    approved: bool,
+    stale: tuple[str, ...],
+    missing: tuple[str, ...],
+) -> list[Outcome]:
+    from novel.stages.stage6 import semantic
+
+    return checks.check(
+        texts=[(label, text, list(findings))
+               for label, text, findings in rows],
+        mat=up.mat, secrets=up.secrets, arc=up.arc,
+        lead_upto_ch=art.lead_upto,
+        hook_chars=up.hook_mechanical.get('chars'),
+        approved=approved, stale=list(stale), missing=list(missing),
+    ) + semantic.outcomes(store, art)
+
+
+def _require_matching_approval_baseline(
+    store: ArtifactStore, art: Hook, baseline: _ApprovalBaseline,
+) -> None:
+    if baseline.store is not store:
+        raise ArtifactUnreadable('Stage6 approval baseline 不属于当前只读 store 调用')
+    if baseline.artifact_subject_sha256 != _approval_subject_sha256(art):
+        raise ArtifactUnreadable('Stage6 approval baseline 与当前 Hook 主体不一致')
+
+
+def _judge_artifact(
+    art: Hook,
+    up: _Upstreams,
+    store: ArtifactStore,
+    *,
+    approval_baseline: _ApprovalBaseline | None = None,
+) -> list[Outcome]:
     """一份产物 → 机械判据 + 质量语义判据。`--check-only` 与落盘闸门共用。
 
     ⚠ 语义判据由 `semantic.outcomes` 产（读盘上最近一次付费审判，按文本 sha1 绑定；
     缺产物/过期/文本未审 ⇒ unver）——**六条路一处合并**，漏并会被 builder 判 `skipped`。
     """
-    from novel.stages.stage6 import semantic   # 局部导入：semantic 顶层 import 本模块
+    if approval_baseline is None or art.approved is None:
+        rows = _judged_text_rows(art, up)
+        stale, missing = _judged_drift(art, up)
+        return _outcomes_for_rows(
+            art, up, store, rows,
+            # 盘上的 ``approved`` 可能是旧版无 workpack 声明，或在 0 成本
+            # 改字/重判后留下的历史声明。只有 subject + 当前代码/规则/证据
+            # 工作包同时闭合，才可把 ``hook_not_approved`` 呈成已定稿。
+            approved=approval_is_current(store, art),
+            stale=tuple(stale), missing=tuple(missing),
+        )
 
-    texts: list[tuple[str, str, list[Finding]]] = []
-    for label, text in _texts_of(art):
-        _t, _m, fs = _normalize_and_judge(text, up)
-        texts.append((label, text, _labelled(label, fs)))
-
-    stale, missing = _judged_drift(art, up)
-    return checks.check(
-        texts=texts, mat=up.mat, secrets=up.secrets, arc=up.arc,
-        lead_upto_ch=art.lead_upto,
-        hook_chars=up.hook_mechanical.get('chars'),
-        # 盘上的 ``approved`` 可能是旧版无 workpack 声明，或在 0 成本改字/重判后
-        # 留下的历史声明。只有 subject + 当前代码/规则/证据工作包同时闭合，才可把
-        # ``hook_not_approved`` 呈成已定稿；否则 state/inbox 必须继续给出重批恢复路。
-        approved=approval_is_current(store, art),
-        stale=stale, missing=missing) + semantic.outcomes(store, art)
+    _require_matching_approval_baseline(store, art, approval_baseline)
+    # baseline 已判完三个候选；当前报告只补真正新增的定稿文本。定稿仍会
+    # 重新归一/机械判定，semantic 也仍按含 approved 的当前主体完整重算。
+    label = _approved_label(art.approved)
+    _text, _mech, findings = _normalize_and_judge(art.approved.text, up)
+    rows = (*approval_baseline.texts, (
+        label, art.approved.text, tuple(_labelled(label, findings))))
+    return _outcomes_for_rows(
+        art, up, store, rows,
+        approved=approval_is_current(
+            store, art, approval_baseline=approval_baseline),
+        stale=approval_baseline.stale,
+        missing=approval_baseline.missing,
+    )
 
 
 def _judged_drift(art: Hook, up: _Upstreams) -> tuple[list[str], list[str]]:
@@ -276,6 +351,29 @@ def _accounting_of(prov: dict) -> dict:
             if k in prov}
 
 
+def _build_approval_baseline(
+    store: ArtifactStore, art: Hook, up: _Upstreams,
+) -> _ApprovalBaseline:
+    """为当前调用构造一次不含批准后果的稳定工作包基准。"""
+    subject = art.model_copy(update={'approved': None})
+    rows = _judged_text_rows(subject, up)
+    stale, missing = _judged_drift(subject, up)
+    outcomes = _outcomes_for_rows(
+        subject, up, store, rows,
+        approved=False, stale=tuple(stale), missing=tuple(missing),
+    )
+    report = _report(
+        store.ctx, store, outcomes, subject, report_node='stage6.approve')
+    return _ApprovalBaseline(
+        store=store,
+        artifact_subject_sha256=_approval_subject_sha256(subject),
+        texts=rows,
+        stale=tuple(stale),
+        missing=tuple(missing),
+        report=report,
+    )
+
+
 # ── 六条路 ──────────────────────────────────────────────────────────────────
 
 def run_check_only(ctx: RunContext) -> CheckReport:
@@ -285,7 +383,18 @@ def run_check_only(ctx: RunContext) -> CheckReport:
         raise UpstreamMissing(f'{REL} 不在盘上——先跑 stage6.hook')
     up = _Upstreams(ctx, store)
     art, _raw = store.read_own(Hook, REL)
-    return _report(ctx, store, _judge_artifact(art, up, store), art)
+    # 未定稿时 ``approval_is_current`` 会立即返回 False，本来就没有第二次
+    # workpack 判定；只给已有批准的书构造本次调用栈内基准。
+    baseline = (
+        _build_approval_baseline(store, art, up)
+        if art.approved is not None else None
+    )
+    return _report(
+        ctx, store,
+        _judge_artifact(
+            art, up, store, approval_baseline=baseline),
+        art,
+    )
 
 
 def run_wontfix(ctx: RunContext, spec: str) -> CheckReport:
@@ -1775,8 +1884,7 @@ def run_approve(
     *,
     actor: str,
     reason: str,
-    subject_sha256: str,
-    workpack_sha256: str,
+    review_token: str,
 ) -> tuple[Hook, CheckReport]:
     """`stage6.approve --pick N`：**人定稿**。0 成本。
 
@@ -1803,10 +1911,10 @@ def run_approve(
     if not actor or not reason:
         raise TerminalState('stage6.approve 必须显式给非空 actor 与 reason')
     pack, report = _approval_workpack_snapshot(store, art)
-    if workpack_sha256 != pack.workpack_sha256:
+    if review_token != pack.review_token:
         raise TerminalState(
             '文案审批工作包已变化：'
-            f'提交 {workpack_sha256 or "<空>"}，当前 {pack.workpack_sha256}；'
+            f'提交 {review_token or "<空>"}，当前 {pack.review_token}；'
             '请刷新 workpack 后重审')
 
     c = art.candidates[pick - 1]
@@ -1816,11 +1924,7 @@ def run_approve(
         raise TerminalState(
             f'候选 {pick} 有阻断级机械问题 {mechanical_hard}，不能定稿。'
             f'请改选干净候选或 --apply-edit 修正')
-    if subject_sha256 != pack.candidates[pick - 1].subject_sha256:
-        raise TerminalState(
-            '文案审批对象已变化：'
-            f'提交 {subject_sha256 or "<空>"}，'
-            f'当前 {pack.candidates[pick - 1].subject_sha256}；请刷新后重审')
+    subject_sha256 = pack.candidates[pick - 1].subject_sha256
 
     # 正常调用方看见 already_current 就直接跳过；命令重放仍需幂等。只在人工声明
     # 逐字段完全相同时不写新轮次，不把不同 actor/reason 错折叠成同一份声明。
@@ -1844,7 +1948,7 @@ def run_approve(
     # commit ownership，所以工作包校验与 history write 之间没有可穿越的改稿窗。
     rebound_art, _raw = store.read_own(Hook, REL)
     rebound, _rebound_report = _approval_workpack_snapshot(store, rebound_art)
-    if rebound.workpack_sha256 != workpack_sha256:
+    if rebound.review_token != review_token:
         raise TerminalState(
             '文案证据在批准提交期间变化；未写入定稿，请刷新 workpack 后重审')
     rebound_candidate = rebound_art.candidates[pick - 1]
@@ -1862,12 +1966,77 @@ def run_approve(
                                      subject_sha256=subject_sha256,
                                      basis=basis,
                                      semantic_review_seq=assessment.semantic_review_seq,
-                                     workpack_sha256=workpack_sha256,
+                                     workpack_sha256=rebound.workpack_sha256,
+                                     review_identity_sha256=(
+                                         rebound.review_identity_sha256),
                                  )),
     })
     store.write_round(REL, new)
     up = _Upstreams(ctx, store)
     return new, _report(ctx, store, _judge_artifact(new, up, store), new)
+
+
+@_commit_owned
+def run_rebind_review(ctx: RunContext) -> tuple[Hook, CheckReport]:
+    """把旧 workpack-bound 定稿显式收进稳定 review identity，0 wire。
+
+    这不是一次新人工签字：actor/reason/subject/basis/semantic seq 全部保持原值。
+    它只服务于本次契约切换，并关闭式要求旧批准确实存在、所选候选字节与
+    当时随批准固化的机械结果仍逐字段相同、当前 semantic seq 未变化且当前
+    候选仍无 HARD。审阅判据若发生语义变化必须 bump review contract，不能走本口。
+    """
+    store = ArtifactStore(ctx)
+    if not store.exists(REL):
+        raise UpstreamMissing(f'{REL} 不在盘上——先跑 stage6.hook')
+    art, _raw = store.read_own(Hook, REL)
+    approved = art.approved
+    if approved is None:
+        raise TerminalState('没有旧 Stage6 人工定稿可 rebind')
+    resolution = approved.resolution
+    pack, report = _approval_workpack_snapshot(store, art)
+    if resolution.review_identity_sha256 is not None:
+        if approval_is_current(store, art):
+            return art, report
+        raise TerminalState(
+            'Stage6 定稿已有 stable review identity，但当前主体/可见证据不再匹配；'
+            '必须重新审阅，不能用 legacy rebind 覆盖')
+    if resolution.workpack_sha256 is None:
+        raise TerminalState('旧 Stage6 定稿没有 workpack proof，不能机械 rebind')
+    if approved.slot is None:
+        raise TerminalState('无候选前身的旧人工文案不能由 legacy rebind 猜测审阅面')
+    selected = next(
+        (row for row in pack.candidates if row.slot == approved.slot), None)
+    if selected is None:
+        raise TerminalState('旧 Stage6 定稿 slot 已不在当前候选集')
+    if (selected.text != approved.text
+            or selected.subject_sha256 != resolution.subject_sha256
+            or selected.mech != approved.mech
+            or selected.findings != approved.findings
+            or selected.semantic_review_seq != resolution.semantic_review_seq):
+        raise TerminalState(
+            '旧 Stage6 定稿的主体、机械证据或 semantic seq 与当前工作包不同；'
+            '必须重新审阅')
+    hard = sorted({
+        finding.rule for finding in selected.findings
+        if _sev_of(finding.rule) == 'hard'
+    })
+    if hard:
+        raise TerminalState(f'旧 Stage6 所选候选当前有 HARD {hard}，不能 rebind')
+    rebound = art.model_copy(update={
+        'approved': approved.model_copy(update={
+            'resolution': resolution.model_copy(update={
+                'review_identity_sha256': pack.review_identity_sha256,
+            }),
+        }),
+    })
+    # 只补审批身份，不改候选、provenance 或轮次；避免为契约迁移制造一份正文历史。
+    store.write(REL, rebound)
+    current_pack, _ = _approval_workpack_snapshot(store, rebound)
+    if current_pack.disposition != 'already_current':
+        raise TerminalState('Stage6 legacy rebind 写后复验未成为 current')
+    up = _Upstreams(ctx, store)
+    return rebound, _report(
+        ctx, store, _judge_artifact(rebound, up, store), rebound)
 
 
 def _approval_subject_sha256(art: Hook) -> str:
@@ -1907,34 +2076,81 @@ def _approval_candidate_rows(store: ArtifactStore, art: Hook) \
 
 
 def _approval_workpack_snapshot(
-    store: ArtifactStore, art: Hook,
+    store: ArtifactStore, art: Hook, *,
+    approval_baseline: _ApprovalBaseline | None = None,
 ) -> tuple[Stage6ApprovalWorkpack, CheckReport]:
     """从一份已读主体构造稳定快照；hash 排除当前 approval/disposition。"""
+    if getattr(store.ctx, 'readonly', False):
+        artifact_key = _canonical_sha256(
+            art.model_dump(by_alias=True, mode='json'))
+        return readonly_snapshot_value(
+            store.ctx,
+            ('stage6-approval-workpack', store.ctx.code, artifact_key),
+            lambda: _approval_workpack_snapshot_uncached(
+                store, art, approval_baseline=approval_baseline),
+        )
+    return _approval_workpack_snapshot_uncached(
+        store, art, approval_baseline=approval_baseline)
+
+
+def _approval_workpack_snapshot_uncached(
+    store: ArtifactStore, art: Hook, *,
+    approval_baseline: _ApprovalBaseline | None = None,
+) -> tuple[Stage6ApprovalWorkpack, CheckReport]:
     from novel.stages.stage6 import semantic
 
     # 报告也按候选主体重判。否则 ``approved`` 这项授权后果会令批准前后的
     # 工作包自我失效，永远不可能得到 already_current。
     subject = art.model_copy(update={'approved': None})
-    up = _Upstreams(store.ctx, store)
-    report = _report(
-        store.ctx, store, _judge_artifact(subject, up, store), subject,
-        report_node='stage6.approve')
+    if approval_baseline is None:
+        up = _Upstreams(store.ctx, store)
+        report = _report(
+            store.ctx, store, _judge_artifact(subject, up, store), subject,
+            report_node='stage6.approve')
+    else:
+        _require_matching_approval_baseline(
+            store, subject, approval_baseline)
+        report = approval_baseline.report
     rows = _approval_candidate_rows(store, subject)
+    check = compact_approval_check(report)
+    judge_rankings = semantic.current_judge_rankings(store, subject)
+    artifact_subject_sha256 = _approval_subject_sha256(subject)
+    identity_body = {
+        'review_contract_version': STAGE6_REVIEW_CONTRACT,
+        'kind': 'stage6',
+        'sid': store.ctx.sid,
+        'rationale': subject.rationale,
+        'check': check.model_dump(mode='json'),
+        'judge_rankings': judge_rankings,
+        'candidates': [row.model_dump(mode='json') for row in rows],
+    }
+    review_identity_sha256 = _canonical_sha256(identity_body)
+    rules_fingerprint = prov.rules_fingerprint('stage6')
+    validation_seal_sha256 = _canonical_sha256({
+        'code_version': store.ctx.code,
+        'rules_fingerprint': rules_fingerprint,
+        'artifact_subject_sha256': artifact_subject_sha256,
+        'report': report.model_dump(by_alias=True, mode='json'),
+    })
     base = Stage6ApprovalWorkpack(
         kind='stage6',
         sid=store.ctx.sid,
-        code_version=store.ctx.code,
-        rules_fingerprint=prov.rules_fingerprint('stage6'),
-        artifact_subject_sha256=_approval_subject_sha256(subject),
+        review_identity_sha256=review_identity_sha256,
+        validation_seal_sha256=validation_seal_sha256,
+        review_token='s6r3_' + '0' * 64,
+        artifact_subject_sha256=artifact_subject_sha256,
         rationale=subject.rationale,
-        check=compact_approval_check(report),
-        judge_rankings=semantic.current_judge_rankings(store, subject),
+        check=check,
+        judge_rankings=judge_rankings,
         candidates=rows,
         workpack_sha256='0' * 64,
         disposition='review_required',
     )
     body = base.model_dump(by_alias=True, mode='json')
-    for key in ('workpack_sha256', 'disposition', 'current_slot', 'current_approval'):
+    for key in (
+        'workpack_sha256', 'review_token', 'disposition',
+        'current_slot', 'current_approval',
+    ):
         body.pop(key)
     digest = _canonical_sha256(body)
     current = art.approved
@@ -1942,7 +2158,7 @@ def _approval_workpack_snapshot(
     current_bound = (
         current is not None
         and current.slot is not None
-        and current.resolution.workpack_sha256 == digest
+        and current.resolution.review_identity_sha256 == review_identity_sha256
         and semantic.text_sha256(current.text)
         == current.resolution.subject_sha256
         and any(
@@ -1954,18 +2170,22 @@ def _approval_workpack_snapshot(
     )
     return base.model_copy(update={
         'workpack_sha256': digest,
+        'review_token': f's6r3_{digest}',
         'disposition': 'already_current' if current_bound else 'review_required',
         'current_slot': current.slot if current_bound and current is not None else None,
         'current_approval': current_resolution if current_bound else None,
     }), report
 
 
-def approval_is_current(store: ArtifactStore, art: Hook) -> bool:
-    """当前 Stage6 定稿证明：文本、代码、规则、机械与 A/B 证据必须同包。
+def approval_is_current(
+    store: ArtifactStore, art: Hook, *,
+    approval_baseline: _ApprovalBaseline | None = None,
+) -> bool:
+    """当前 Stage6 定稿证明：文本与人实际看到的机械/A/B 证据必须同包。
 
-    旧盘允许 ``workpack_sha256=None`` 以便保守解码，但它只能触发 0 成本重审，
-    不能让 check/state/UI 宣称“已定稿”。先判空也切断工作包为构造报告而移除
-    ``approved`` 时的递归。
+    代码/规则只属于 validation seal；换 execution epoch 后免费重验结果未变，
+    旧人工决定自动恢复。旧盘没有 stable identity 时只触发 0 成本显式 rebind，
+    不凭 subject 猜人当时看过哪些证据。
     """
     if art.approved is None:
         return False
@@ -1973,10 +2193,15 @@ def approval_is_current(store: ArtifactStore, art: Hook) -> bool:
     from novel.stages.stage6 import semantic
     if resolution.subject_sha256 != semantic.text_sha256(art.approved.text):
         return False
-    pack, _report = _approval_workpack_snapshot(store, art)
+    pack, _report = (
+        _approval_workpack_snapshot(store, art)
+        if approval_baseline is None else
+        _approval_workpack_snapshot(
+            store, art, approval_baseline=approval_baseline)
+    )
     return (
-        resolution.workpack_sha256 is not None
-        and resolution.workpack_sha256 == pack.workpack_sha256
+        resolution.review_identity_sha256 is not None
+        and resolution.review_identity_sha256 == pack.review_identity_sha256
         and pack.disposition == 'already_current'
     )
 

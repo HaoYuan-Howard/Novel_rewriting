@@ -20,6 +20,7 @@ import type {
   Stage5ClosureTemplate,
   Stage6ApprovalWorkpack,
   Stage7ApprovalWorkpack,
+  WritingApprovalRequest,
 } from './approvals'
 import type {
   AgentCapabilitiesResponse,
@@ -44,6 +45,13 @@ import type {
 import type { NovelOverview, NovelsResponse } from './novels'
 import type { TrashNovelResult } from './novels'
 import type { RunProgress } from './run'
+import type {
+  RetentionApplyResult,
+  RetentionPlan,
+  RetentionPolicy,
+  TrashRestorePlan,
+  TrashRestoreResult,
+} from './maintenance'
 import type {
   CheckKind,
   CheckReport,
@@ -135,6 +143,10 @@ export interface Api {
   getAgentRunLog(runId: string, offset: number): Promise<AgentRunLogChunk>
   /** 熄火：没在跑 409 */
   stopAgentRun(runId: string): Promise<AgentRunRecord>
+  /** 协作式暂停：关闭新 claim，当前节点自然闭合后进入 paused。 */
+  pauseAgentRun(runId: string): Promise<AgentRunRecord>
+  /** 只恢复服务端仍持有 owner/书锁且明确开放 resume 的 run。 */
+  resumeAgentRun(runId: string): Promise<AgentRunRecord>
   /**
    * 一次交 N 本：闸内的立刻跑，超出的排队。**部分失败不回滚**——
    * 起不来的进 rejected，其余照常受理，逐本落点全在返回值里。
@@ -169,7 +181,7 @@ export interface Api {
   approveStructure(sid: string, request: StructureApprovalRequest): Promise<ApprovalDoc>
   backfillApprovals(sid: string): Promise<ApprovalBackfillResult>
   markSeen(sid: string, key: SeenKey, request?: BlueprintSeenRequest): Promise<ApprovalDoc>
-  startWriting(sid: string): Promise<ApprovalDoc>
+  startWriting(sid: string, request: WritingApprovalRequest): Promise<ApprovalDoc>
   resetBook(sid: string): Promise<ApprovalDoc>
 
   /* 写（三条人工写回走专用路由，返回真实作业记录——真实模式不写 localStorage 充成功） */
@@ -189,25 +201,30 @@ export interface Api {
   retainPretrim(sid: string, ordinal: number, req: TrimResolutionRequest): Promise<Job>
   /** 整批预检后按章幂等销账；identity 逐项原样来自 closure workpack。 */
   retainPretrimBatch(sid: string, req: BatchTrimResolutionRequest): Promise<Job>
-  /** 文案定稿：序号 + 自报身份/理由 + 候选完整 hash 乐观锁。 */
+  /** 文案定稿：序号 + 自报身份/理由 + immutable workpack token。 */
   approveHook(
     sid: string,
     req: {
       pick: number
       actor: string
       reason: string
-      subject_sha256: string
-      workpack_sha256: string
+      review_token: string
     },
   ): Promise<Job>
-  /** 人名表定稿：自报身份/理由 + 当前 decision surface 的 hash 乐观锁。 */
+  /** 人名表定稿：自报身份/理由 + immutable workpack token。 */
   approveNames(
     sid: string,
-    req: { actor: string; reason: string; subject_sha256: string; workpack_sha256: string },
+    req: { actor: string; reason: string; review_token: string },
   ): Promise<Job>
   /** 显式采纳当前可安全应用的 high residual；后端仍会重新校验冲突。 */
   adoptResidual(sid: string, req: { confidence: 'high' }): Promise<Job>
   uploadCorpus(file: File): Promise<UploadResponse>
   /** 可恢复删除：整本项目移入 `_service/trash/`，确认绑定当前书名。 */
   trashNovel(sid: string, expectedTitle: string): Promise<TrashNovelResult>
+
+  /* service 生命周期维护：preview 与 apply 必须传递同一份完整 token/CAS。 */
+  previewRetention(policy: RetentionPolicy): Promise<RetentionPlan>
+  applyRetention(plan: RetentionPlan, confirmed: boolean): Promise<RetentionApplyResult>
+  previewTrashRestore(trashId: string, expectedTitle: string): Promise<TrashRestorePlan>
+  applyTrashRestore(plan: TrashRestorePlan, confirmed: boolean): Promise<TrashRestoreResult>
 }

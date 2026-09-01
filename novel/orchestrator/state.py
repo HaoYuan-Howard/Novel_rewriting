@@ -24,7 +24,9 @@ from contracts.artifacts import (
     ARTIFACT_PATHS, BOOK_SCOPED_PATHS, STAGE1_MAIN_TEXT,
     STAGE2_BLUEPRINT_CHARACTER_PROJECTION, STAGE2_CHAPTER_BLUEPRINTS,
     STAGE2_GLOBAL_GROUNDING,
-    STAGE4_PLAN_CHAPTERS, STAGE5_CHAPTER, artifact_rel,
+    STAGE4_BLIND_CANDIDATE, STAGE4_EVIDENCE_BINDING,
+    STAGE4_PLAN_CHAPTERS, STAGE4_WRITER_CONTEXT,
+    STAGE5_CHAPTER, artifact_rel,
 )
 
 import os
@@ -36,11 +38,15 @@ from contracts.schema.orchestration import (
     ArtifactState, NovelOverview, OverviewSummary, StageState,
 )
 from novel import paths, prov
-from novel.errors import ArtifactUnreadable, UpstreamMissing
+from novel.errors import ArtifactUnreadable, UpstreamMissing, UpstreamStale
 from novel.llm.cache import CachePolicy
 from novel.llm.ledger import CostLedger
 from novel.run import RunContext
 from novel.stages.stage5.measure import legacy_stage5_paths as stage5_legacy_paths
+from novel.stages.stage2.frozen_v6 import (
+    LEGACY_FROZEN_CONTRACT, frozen_v6_stage4_subject_or_none,
+    require_frozen_v6_downstream_subject,
+)
 from novel.store import ArtifactStore
 
 #: `produces` 里带 `{}` 的那些：逐份不定，存在性不能靠一次 `is_file()`。
@@ -155,12 +161,15 @@ def artifact_state(store: ArtifactStore, rel: str) -> ArtifactState:
         fresh, reason, ghosts = 'unknown', 'no_provenance', []
 
     readable = True
+    legacy_frozen = False
     spec = artifact_spec(rel)
     if spec is not None:
         try:
             obj, _raw = store.read_own(spec.model, rel)
         except ArtifactUnreadable:
             readable = False
+            if rel == STAGE2_CHAPTER_BLUEPRINTS:
+                legacy_frozen = frozen_v6_stage4_subject_or_none(store) is not None
         else:
             # Schema 只知道 ``output_ordinal >= 1``；文件名与主体的跨路径绑定
             # 必须在读盘边界另查。否则 ``ch01.json`` 里装一份合法的第 2 章，
@@ -172,12 +181,43 @@ def artifact_state(store: ArtifactStore, rel: str) -> ArtifactState:
                     and rel == artifact_rel('stage5.chapter', nn=output_ordinal)
                 )
 
+    # Stage4A 自身是 current schema；它的普通 freshness 只因 current decoder
+    # 不认识所绑定的 v6 Blueprint 而 unknown 时，用同一 frozen 证明恢复这条
+    # 历史 consumed 边。Blueprint 本体仍保持 unreadable/legacy_frozen。
+    if (rel == STAGE4_BLIND_CANDIDATE and readable and fresh == 'unknown'):
+        frozen = frozen_v6_stage4_subject_or_none(store)
+        if (frozen is not None
+                and store.full_sha256_or_none(rel) == frozen.candidate_sha256):
+            fresh, reason, ghosts = 'fresh', 'match', []
+
+    # 冻结 v6 的现存 B/Plan/Context 仍是 current-schema 产物；普通投影只因
+    # Blueprint v7 shape break 无法重算 consumed。复用同一专用证明逐项核原始
+    # v6 字节、A 主体、其余来源边与当前正式字节，成功才把这一格恢复为 fresh。
+    # 该桥只影响“消费现存下游”，绝不让 v6 进入新的付费 B producer。
+    if (
+        rel in {
+            STAGE4_EVIDENCE_BINDING,
+            STAGE4_PLAN_CHAPTERS,
+            STAGE4_WRITER_CONTEXT,
+        }
+        and readable
+        and fresh == 'unknown'
+    ):
+        try:
+            require_frozen_v6_downstream_subject(store, rel)
+        except (ArtifactUnreadable, UpstreamMissing, UpstreamStale, OSError, ValueError):
+            pass
+        else:
+            fresh, reason, ghosts = 'fresh', 'match', []
+
     return ArtifactState(
         rel=rel, exists=True, bytes=st.st_size, mtime=int(st.st_mtime),
         freshness=fresh, reason=reason, ghosts=ghosts,
         display_freshness=fresh, invalid=invalid, readable=readable,
         invalid_freshness=invalid_freshness, invalid_reason=invalid_reason,
         condition=('invalid' if invalid else 'unreadable' if not readable else 'ready'),
+        legacy_frozen=legacy_frozen,
+        legacy_contract=(LEGACY_FROZEN_CONTRACT if legacy_frozen else None),
     )
 
 
@@ -381,9 +421,11 @@ def stage_state(store: ArtifactStore, stage: str) -> StageState:
             review_rel=review.review_rel,
         )
 
-    done = all(a.exists and a.readable and a.freshness != 'stale' and not a.invalid
+    done = all(a.exists and (a.readable or a.legacy_frozen)
+               and a.freshness != 'stale' and not a.invalid
                for a in arts) if arts else None
-    reviewable = done is True or any(a.exists and a.readable for a in arts)
+    reviewable = done is True or any(
+        a.exists and (a.readable or a.legacy_frozen) for a in arts)
     legacy = _legacy_ghosts(arts)
     return StageState(stage=stage, artifacts=arts, done=done,
                       rounds_done=rounds, reviewable=reviewable,
@@ -397,12 +439,14 @@ def overview_summary(stages: list[StageState]) -> OverviewSummary:
     # 它不是正式产物清单，不能让“修好一个问题章”反而把 artifact_count 减一。
     counted_artifacts = [artifact for stage in stages if stage.stage != 'stage5'
                          for artifact in stage.artifacts]
-    broken = [a for a in artifacts if a.condition in ('invalid', 'unreadable')]
+    broken = [a for a in artifacts
+              if a.condition in ('invalid', 'unreadable') and not a.legacy_frozen]
     legacy = [p for stage in stages for p in stage.legacy_paths]
     stale = [a for a in artifacts if a.display_freshness == 'stale']
     pending = next((stage for stage in stages if stage.done is False), None)
     unknown = [a for a in artifacts
-               if a.exists and a.display_freshness == 'unknown']
+               if a.exists and a.display_freshness == 'unknown'
+               and not a.legacy_frozen]
     missing = [a for a in artifacts if a.display_freshness == 'missing']
     unknown_stages = [stage for stage in stages if stage.done is None]
     existing = [a for a in counted_artifacts if a.exists]
@@ -709,6 +753,25 @@ def stage2_blueprint_invalid_recovery_needed(ov: NovelOverview) -> bool:
     )
 
 
+def stage2_frozen_v6_subject_validated(ov: NovelOverview) -> bool:
+    """Stage2 Blueprint 是否是已绑定 Stage4A 主体的只读 frozen v6。"""
+    stage = next(
+        (candidate for candidate in getattr(ov, 'stages', ())
+         if candidate.stage == 'stage2'),
+        None,
+    )
+    if stage is None:
+        return False
+    blueprint = next((
+        artifact for artifact in stage.artifacts
+        if artifact.rel == STAGE2_CHAPTER_BLUEPRINTS
+    ), None)
+    return bool(
+        blueprint is not None and blueprint.exists and blueprint.legacy_frozen
+        and not blueprint.invalid
+    )
+
+
 def resume_verdict(ov: NovelOverview, node: str) -> tuple[str, str]:
     """这个节点该不该跑，以及**为什么**。返回 `(结论, 一句话)`。
 
@@ -773,6 +836,11 @@ def resume_verdict(ov: NovelOverview, node: str) -> tuple[str, str]:
             '`stage2.blueprint --revalidate --actor <id> --reason <why>`（0 LLM）'
             '按当前判据重判。队列不得构造默认付费 Blueprint argv；'
             '免费提升仍失败时再由人决定是否定向重生成')
+    if node == 'stage2.blueprint' and stage2_frozen_v6_subject_validated(ov):
+        return RESUME_SKIP, (
+            'ChapterBlueprints 是已由现存 Stage4A v1 truth 精确绑定的冻结 schema v6；'
+            '只读恢复允许跳过付费 Blueprint，但它不等于 current v7，且没有 '
+            'narrative_relations 权威面')
 
     if node == 'stage5.review':
         if st.review_state == 'fresh':

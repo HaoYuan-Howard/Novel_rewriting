@@ -227,9 +227,9 @@ def test_commander_context_direct_node_cli_without_claim_is_refused_before_run(
         cli._cmd_run(args)
 
 
-def test_one_claim_and_permit_cover_root_and_follow_but_only_root_remints(
+def test_one_claim_and_permit_cover_root_and_follow_without_planner_remint(
         tmp_path, monkeypatch):
-    """root 落盘令 surface 变化后，follow 仍按原 envelope 的 index/argv 执行。"""
+    """child 只验冻结 envelope/claim/index/argv，不再重跑全链 planner。"""
     cli = importlib.import_module('novel.cli.main')
     base = str(tmp_path.resolve())
     permit = _ready_permit(base)
@@ -246,18 +246,17 @@ def test_one_claim_and_permit_cover_root_and_follow_but_only_root_remints(
     assert len(steps) == 2 and '--check-only' in steps[1].argv
     args = SimpleNamespace(base=base, sid=permit.sid, node=permit.node)
 
-    # root 必须在首个副作用前重铸当前 permit。
+    # active-surface CAS 已由 runner 在 claim 后、首个副作用前完成；root child
+    # 只能核同一 envelope，不能再拍一次完整 operator snapshot。
     _install_child_envelope(monkeypatch, permit, claim, 0)
     monkeypatch.setattr(sys, 'orig_argv', list(steps[0].argv))
-    reminted = []
     monkeypatch.setattr(
         operator, 'permit',
-        lambda *call: reminted.append(call) or permit)
+        lambda *_args, **_kwargs: pytest.fail('root child 不得重铸 operator permit'))
     cli._require_commander_execution_permit(args, permit.flags, parent)
-    assert reminted == [(permit.base, permit.sid, permit.node, permit.flags)]
 
-    # 模拟 root 已写盘、current surface 因而不再能铸出旧 permit。follow 不得重铸，
-    # 只应复验同一 claim/envelope 与 canonical build_steps[1]。
+    # root 落盘后 surface 已变；follow 仍只复验同一 claim/envelope 与
+    # canonical build_steps[1]，不会拿旧 surface 再做一次错误 CAS。
     _install_child_envelope(monkeypatch, permit, claim, 1)
     monkeypatch.setattr(sys, 'orig_argv', list(steps[1].argv))
     monkeypatch.setattr(

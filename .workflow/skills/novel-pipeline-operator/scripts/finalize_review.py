@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -30,10 +31,165 @@ from novel.orchestrator.write_admission import operation_scope  # noqa: E402
 
 
 _READY = ('ready', 'ready_with_disclosures')
+_UNKNOWN = 'unknown（权威账未提供该叙述）'
+_STATUS_LINE = re.compile(r'(?m)^>\s*交付状态：[^\r\n]*\r?$')
+_STATUS_VALUE = re.compile(
+    r'(?m)^>\s*交付状态：`([^`\r\n]+)`\r?$')
+_RECOMMENDATION_LINE = re.compile(r'(?m)^>\s*建议结论：[^\r\n]*\r?$')
+_BOOK_LINE = re.compile(r'(?m)^>\s*成书：[^\r\n]*\r?$')
+_BOOK_SHA1_LINE = re.compile(r'(?m)^>\s*本包对应成书 SHA1：[^\r\n]*\r?$')
+_RUN_COORDINATE_LINE = re.compile(r'(?m)^>\s*本次运行坐标：[^\r\n]*\r?$')
+_PLACEHOLDER = re.compile(r'<(?!\!--)[^>\r\n]+>')
 
 
 def _phase(state: str, detail: str | None = None) -> dict[str, Any]:
     return {'state': state, 'detail': detail}
+
+
+def _desired_review_state(facts: dict[str, Any]) -> str:
+    counts = facts.get('review_anchor', {}).get('inbox_delivery_counts', {})
+    if counts.get('blocking') != 0:
+        return 'stopped'
+    return (
+        'ready_with_disclosures'
+        if counts.get('disclosure') else 'ready')
+
+
+def _replace_unique_line(
+        text: str, pattern: re.Pattern[str], replacement: str, *,
+        required: bool = False) -> str:
+    matches = list(pattern.finditer(text))
+    if len(matches) > 1:
+        raise ValueError(
+            f'终审包机器页眉重复：{pattern.pattern} '
+            f'实际匹配 {len(matches)} 处')
+    if matches:
+        match = matches[0]
+        return text[:match.start()] + replacement + text[match.end():]
+    if not required:
+        return text
+    heading = re.search(r'(?m)^#\s+[^\r\n]+\r?$', text)
+    if heading is None:
+        # 先补状态，再让后面的完整模板校验精确报出
+        # 缺少哪些章节；不在这里用“无标题”掩盖真错。
+        return f'{replacement}\n\n{text}'
+    return text[:heading.end()] + f'\n\n{replacement}' + text[heading.end():]
+
+
+def _clear_placeholders(
+        text: str, template_text: str, facts: dict[str, Any]) -> str:
+    """清理旧草稿中的模板令牌，不覆盖已填的人工叙述。
+
+    可从同一份 facts 确定的路径直接落实；其余显式写 unknown，
+    避免把 ``<待填>`` 当成真实终审结论。
+    """
+    book = facts.get('book', {})
+    replacements = {
+        '<书名>': str(facts.get('title') or _UNKNOWN),
+        '<sid>': str(facts.get('sid') or _UNKNOWN),
+        '<base>': str(facts.get('base') or _UNKNOWN),
+        '<novel-dir>': str(facts.get('novel_dir') or _UNKNOWN),
+        '<绝对路径>': str(facts.get('novel_dir') or _UNKNOWN),
+        '<绝对路径或未生成>': str(book.get('path') or '未生成'),
+        '<sha1 或不适用>': str(book.get('sha1') or '不适用'),
+    }
+    for token, value in replacements.items():
+        text = text.replace(token, value)
+
+    # 模板里有为了可读性换行的尖括号说明；先按完整
+    # token 清理，再收口旧 Commander 留下的单行 ``<待填>``。
+    template_tokens = sorted(
+        set(re.findall(r'<[^>]+>', template_text, flags=re.DOTALL)),
+        key=len, reverse=True)
+    for token in template_tokens:
+        text = text.replace(token, _UNKNOWN)
+    return _PLACEHOLDER.sub(_UNKNOWN, text)
+
+
+def _replace_draft_recommendation(text: str, state: str) -> str:
+    matches = list(_RECOMMENDATION_LINE.finditer(text))
+    if len(matches) > 1:
+        raise ValueError(
+            f'终审包建议结论重复：实际匹配 {len(matches)} 处')
+    if not matches:
+        return text
+    old = matches[0].group(0)
+    if not any(marker in old for marker in (
+            '<', '运行进行中', '尚未形成', '草稿', '待最终')):
+        return text
+    if state == 'ready':
+        conclusion = '建议接收并阅读成书。'
+    elif state == 'ready_with_disclosures':
+        conclusion = '建议接收成书，同时优先审阅第 5 节披露项。'
+    else:
+        conclusion = '暂不建议接收成书；请先按第 7 节恢复路径收口。'
+    return _replace_unique_line(
+        text, _RECOMMENDATION_LINE, f'> 建议结论：{conclusion}')
+
+
+def _review_seed(
+        source_text: str, template_text: str, facts: dict[str, Any], *,
+        state: str) -> str:
+    """把缺失模板或历史运行草稿投影为当前终审候选。"""
+    book = facts.get('book', {})
+    anchor = facts.get('review_anchor', {})
+    text = source_text.replace(
+        '<ready | ready_with_disclosures | stopped>', state)
+    text = _replace_unique_line(
+        text, _STATUS_LINE, f'> 交付状态：`{state}`', required=True)
+    text = _replace_draft_recommendation(text, state)
+
+    text = _replace_unique_line(
+        text, _BOOK_LINE,
+        f"> 成书：`{book.get('path') or '未生成'}`")
+    text = _replace_unique_line(
+        text, _BOOK_SHA1_LINE,
+        f"> 本包对应成书 SHA1：`{book.get('sha1') or '不适用'}`")
+    text = _replace_unique_line(
+        text, _RUN_COORDINATE_LINE,
+        '> 本次运行坐标：'
+        f"`started_at={anchor.get('session_started_at', _UNKNOWN)}`；"
+        f"`start_code_version={anchor.get('start_code_version', _UNKNOWN)}`；"
+        f"`run_ids={anchor.get('session_run_ids', [])}`")
+    return _clear_placeholders(text, template_text, facts)
+
+
+def _new_review_seed(
+        template_text: str, facts: dict[str, Any], *, state: str) -> str:
+    """从模板确定性创建人读主体；只填可推导事实，其余明确写 unknown。"""
+    return _review_seed(
+        template_text, template_text, facts, state=state)
+
+
+def _new_review_candidate(
+        template_text: str,
+        facts: dict[str, Any]) -> tuple[str, list[str], str]:
+    return _review_candidate(template_text, template_text, facts)
+
+
+def _review_candidate(
+        source_text: str, template_text: str,
+        facts: dict[str, Any]) -> tuple[str, list[str], str]:
+    desired = _desired_review_state(facts)
+
+    def build(state: str) -> tuple[str, list[str]]:
+        candidate = render(_review_seed(
+            source_text, template_text, facts, state=state), facts)
+        errors = validate(candidate, facts, template_text=template_text)
+        status = _STATUS_VALUE.search(candidate)
+        if status is None or status.group(1) != state:
+            errors.append(
+                '终审候选页眉与本次选定终态不一致：'
+                f'chosen={state}, rendered='
+                f'{None if status is None else status.group(1)}')
+        return candidate, errors
+
+    candidate, errors = build(desired)
+    # 禁止把 ready 候选的校验失败洗成一份可提交的
+    # stopped Markdown，然后又用 fresh assess 对外返回 ready。
+    # desired 本身已由同一份 inbox facts 关闭式派生；它验不过
+    # 就整次 finalizer stopped，不写盘、不运行 delivery assess。
+    return candidate, errors, desired
 
 
 def finalize(
@@ -107,17 +263,18 @@ def _finalize_admitted(
             'delivery': None,
         }
     phases['seal'] = _phase('collected_stable', seal)
-    if not review.is_file():
-        phases['render'] = _phase('failed', f'终审包不存在：{review}')
-        return {
-            'state': 'stopped', 'review': str(review), 'phases': phases,
-            'delivery': None,
-        }
-
+    template = Path(__file__).resolve().parent.parent / 'assets' / 'final-review-template.md'
     try:
-        original_bytes = review.read_bytes()
-        original = original_bytes.decode('utf-8')
-        candidate = render(original, facts)
+        template_text = template.read_text(encoding='utf-8')
+        if review.is_file():
+            original_bytes: bytes | None = review.read_bytes()
+            original = original_bytes.decode('utf-8')
+            candidate, errors, candidate_state = _review_candidate(
+                original, template_text, facts)
+        else:
+            original_bytes = None
+            candidate, errors, candidate_state = _new_review_candidate(
+                template_text, facts)
     except (OSError, UnicodeDecodeError, ValueError) as exc:
         phases['render'] = _phase('failed', f'{type(exc).__name__}: {exc}')
         return {
@@ -126,12 +283,6 @@ def _finalize_admitted(
         }
     phases['render'] = _phase('passed')
 
-    template = Path(__file__).resolve().parent.parent / 'assets' / 'final-review-template.md'
-    try:
-        template_text = template.read_text(encoding='utf-8')
-        errors = validate(candidate, facts, template_text=template_text)
-    except (OSError, UnicodeDecodeError, ValueError) as exc:
-        errors = [f'{type(exc).__name__}: {exc}']
     if errors:
         phases['validate'] = _phase('failed', '；'.join(errors))
         phases['commit'] = _phase('skipped', '候选终审包未通过校验，原文件未改动')
@@ -182,6 +333,18 @@ def _finalize_admitted(
     phases['commit'] = _phase(
         'passed', hashlib.sha256(landed).hexdigest())
 
+    landed_status = _STATUS_VALUE.search(landed.decode('utf-8'))
+    if landed_status is None or landed_status.group(1) != candidate_state:
+        phases['delivery'] = _phase(
+            'skipped',
+            '原子提交回读的终态与候选终态不一致：'
+            f'chosen={candidate_state}, landed='
+            f'{None if landed_status is None else landed_status.group(1)}')
+        return {
+            'state': 'stopped', 'review': str(review), 'phases': phases,
+            'delivery': None,
+        }
+
     # review 已写盘：上面的 facts/snapshot 到此作废。交付结论必须重新读当前盘面。
     # assess 本身不消费 ledger/progress；若它运行期间这份 final-evidence surface
     # 漂移，哪怕它返回 ready，也不能拿旧机器事实块冒充当前终审证据。
@@ -208,6 +371,17 @@ def _finalize_admitted(
             '已提交终审包绑定的是旧盘面，必须重跑 canonical finalizer')
         phases['delivery'] = _phase(
             'failed', 'fresh delivery 结论已作废；没有暴露为 ready')
+        return {
+            'state': 'stopped', 'review': str(review), 'phases': phases,
+            'delivery': None,
+        }
+    if outcome.state != candidate_state:
+        phases['seal'] = _phase('passed', seal)
+        phases['delivery'] = _phase(
+            'failed',
+            '已提交终审包与 fresh delivery 终验不是同一终态：'
+            f'review={candidate_state}, delivery={outcome.state}；'
+            '拒绝暴露 ready，请重跑 canonical finalizer')
         return {
             'state': 'stopped', 'review': str(review), 'phases': phases,
             'delivery': None,

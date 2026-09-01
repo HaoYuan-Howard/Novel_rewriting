@@ -12,6 +12,7 @@ import { Mono } from '@/components/ui/Mono'
 import { Panel, PaneHeader } from '@/components/ui/Panel'
 import { ActionButton, LinkButton } from '@/components/ui/ActionButton'
 import { cx } from '@/lib/cx'
+import type { BlueprintReviewNarrativeRelation } from '@/types/stages'
 import { useReadScreen, type BeatView, type SegView } from './useReadScreen'
 
 /**
@@ -138,6 +139,20 @@ export function ReadScreen() {
   )
 }
 
+function narrativeRelationText(row: BlueprintReviewNarrativeRelation): string {
+  const level = row.enforcement === 'hard' ? 'HARD' : '待复核'
+  switch (row.kind) {
+    case 'story_before':
+      return `${level} · 故事先后：${row.before_claim} → ${row.after_claim}`
+    case 'response_to':
+      return `${level} · 回应：${row.response_claim} ← ${row.stimulus_claim}`
+    case 'same_scene':
+      return `${level} · 必须同场：${row.left_claim} ↔ ${row.right_claim}`
+    case 'observes':
+      return `${level} · ${row.observer_char_id} 通过「${row.observation_claim}」观察到「${row.observed_claim}」`
+  }
+}
+
 function BlueprintReviewWorkpackSummary({
   review,
   ordinal,
@@ -218,6 +233,11 @@ function BlueprintReviewWorkpackSummary({
           <div>
             因果链：{current.causal_links.length
               ? current.causal_links.map((row) => row.before_claim + ' → ' + row.after_claim).join('；')
+              : '无声明'}
+          </div>
+          <div className="col-span-3">
+            叙事关系：{current.narrative_relations.length
+              ? current.narrative_relations.map(narrativeRelationText).join('；')
               : '无声明'}
           </div>
         </div>

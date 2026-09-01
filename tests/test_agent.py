@@ -13,19 +13,21 @@ test_agent.py —— Commander 代跑的提示词/启动计划、事件流与互
 from __future__ import annotations
 
 import io
+import hashlib
 import json
 import os
 import re
 import threading
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from contracts.invariants import AGENT_EXECUTOR_NODES
 from contracts.schema.orchestration import (
     AgentDeliveryOutcome, AgentProfile, AgentRunEvent, AgentRunStart,
-    PipelineAgentProfiles, ProgressEvent, Step,
+    ExecutionEpoch, PipelineAgentProfiles, ProgressEvent, RunContractV2, Step,
 )
 from novel import agent_session_audit, commander_context, paths, skill_contract
 from novel.agents.base import AgentUsage
@@ -56,10 +58,15 @@ class _PlanningDriver:
 
     def build_invocation(self, profile, prompt, *, repo, base, **_kwargs):
         del base
+        resume_id = _kwargs.get('resume_provider_session_id')
+        argv = [profile.driver, 'headless', '--model', profile.model]
+        if resume_id is not None:
+            argv.extend(('--resume', resume_id))
         return CommanderInvocation(
-            argv=(profile.driver, 'headless', '--model', profile.model),
+            argv=tuple(argv),
             stdin_text=prompt, cwd=str(repo), env_overrides={},
-            profile=profile, protocol=f'{profile.driver}-test-v1')
+            profile=profile, protocol=f'{profile.driver}-test-v1',
+            resume_provider_session_id=resume_id)
 
     def close(self):
         return None
@@ -70,6 +77,14 @@ def no_real_commander_cli(monkeypatch):
     monkeypatch.setattr(
         agent, 'create_commander_driver',
         lambda profile, **_kwargs: _PlanningDriver(profile))
+    # 本文件绝大多数 fake 只验证锁/审计/异常，不会推进 operator 盘面；若让
+    # production completion classifier 看见同一个 ready action，它会按新契约
+    # 正确地持续 exact resume。需要验证续会的用例会显式覆盖这一格。
+    monkeypatch.setattr(
+        agent.commander_completion, 'review_commander_stop',
+        lambda _base, _sid, outcome, **_kwargs:
+        agent.commander_completion.CommanderCompletionReview(
+            outcome=outcome, error_kind=None, continue_ready=False))
 
 
 @pytest.fixture
@@ -262,31 +277,23 @@ def test_prompt_never_hardcodes_a_book_filename(base):
     assert '_rewriting.txt' in text
 
 
-def test_prompt_surfaces_the_headless_safety_sequence(base, book):
-    """高风险边界必须出现在启动 prompt，不能只埋在 agent 之后才读的长 skill 里。"""
+def test_prompt_is_reviewer_only_and_contains_no_control_plane_instructions(base, book):
+    """v2 bootstrap 只冻结角色边界；确定性控制命令不得再交给 Commander。"""
     text = agent.build_prompt(
         '42', base, authorized=True, egress_authorized=True,
         profiles=_PROFILES,
         code_version='expected-code-version')
 
-    assert '每次 Bash 调用都必须保持在仓根，不得 cd' in text
-    assert 'operator next 42 --json' in text
-    assert '`state` / `inbox` 只用于展开证据' in text
-    assert '`operator permit`' in text and '`run_step.py` preview' in text
-    assert '不得直接调用 `novel.cli run`' in text
-    assert '在任何写盘或付费动作前' in text and '创建终审包草稿' in text
-    assert 'doctor --llm-transport' in text
-    assert 'from novel import prov; print(prov.code_version())' in text
+    assert 'Commander/Reviewer，不是调度器' in text
+    assert 'RunSupervisor 独占状态机' in text
+    assert 'immutable workpack' in text and '一份 typed 判断' in text
+    assert '不得启动任何小说节点或 Executor' in text
+    assert '不得修改正式产物、服务账或 Markdown' in text
     assert 'expected-code-version' in text
-    assert '没有可定位证据时必须保留 `UNVER`' in text
-    assert '不得猜测 PASS' in text and '把 exit 0 当成交付 ready' in text
-    assert '主路不带 `--response-repair agent`' in text
-    assert 'logical session' in text and 'durable checkpoint' in text
-    assert 'legacy DeepSeek' in text and 'sidecar `response-repair`' in text
-    assert '_llm_rejected/**/candidate.json' in text
-    assert '禁止 background、detached' in text
-    assert '持续 wait 到原命令真实终态' in text
-    assert '不得手工补 `mark`' in text
+    assert '证据不足时保留 UNVER' in text
+    assert 'run_step' not in text
+    assert 'operator next' not in text
+    assert 'finalizer' not in text
 
 
 def test_prompt_forbids_direct_edits_of_formal_artifacts(base, book):
@@ -294,19 +301,19 @@ def test_prompt_forbids_direct_edits_of_formal_artifacts(base, book):
     text = agent.build_prompt(
         '42', base, authorized=True, egress_authorized=True, profiles=_PROFILES)
 
-    assert '正式 stage JSON/TXT' in text
-    assert '正式变更只经 `novel.cli`' in text
-    assert 'Write/Edit 只用于 skill 明列的 typed 人工输入' in text
-    assert '`_service/*.jsonl`' in text and '唯一终审包' in text
+    assert '不得修改正式产物、服务账或 Markdown' in text
+    assert '不得启动任何小说节点或 Executor' in text
+    assert 'immutable workpack' in text and '唯一 typed request 落点' in text
 
 
 def test_prompt_without_authorization_still_collects_recovery_evidence(base, book):
-    """未授权不是一句话就退出：必须留下盘面事实、精确 preview 与恢复包。"""
+    """未授权不是一句话就退出：Supervisor 仍保留盘面事实与恢复坐标。"""
     text = agent.build_prompt(
         '42', base, authorized=False, egress_authorized=False, profiles=_PROFILES)
 
-    assert '只读的 state、inbox、下一节点 preview' in text
-    assert '终审包草稿' in text
+    assert '只读的 state、inbox 与下一节点 preview' in text
+    assert '停止原因与恢复坐标由 Supervisor' in text
+    assert '终审包草稿' not in text
     assert '首个需要正文外发的步骤前停下' in text
 
 
@@ -408,6 +415,7 @@ def test_append_read_fold_roundtrip(base):
     assert rec.state == 'ok' and rec.exit_code == 0
     assert rec.start.authorized is True
     assert rec.start.egress_authorized is True
+    assert rec.allowed_controls == []
     assert rec.outcome is not None and rec.outcome.state == 'unknown'
     assert '历史 ended 事件' in rec.outcome.reason
 
@@ -429,6 +437,65 @@ def test_fold_running_vs_unknown(base):
     assert rec.state == 'running'
     [rec] = agent.fold(agent.read_events(base), live=set())
     assert rec.state == 'unknown' and rec.note                    # unknown 必须带原因
+
+
+def test_restart_leaves_an_unended_v2_run_unknown_and_all_controls_closed(base):
+    """进程内 Supervisor/owner 丢失后，盘上的 opened epoch 不是恢复凭据。"""
+    start = _start()
+    contract = RunContractV2(**start.model_dump(mode='json'))
+    epoch = ExecutionEpoch(
+        epoch_id='epoch-before-restart', ordinal=1, reason='initial',
+        argv=['codex', 'headless'], prompt_sha256='1' * 64,
+        protocol_version='codex-test-v1', cli_version='test-cli',
+        code_version='test-code-version', skill_sha256='2' * 64,
+        session_run_id='session-before-restart')
+    agent.append(base, AgentRunEvent(
+        wire_version=2, run_id='run-before-restart', kind='started', ts=10,
+        contract=contract, start=start))
+    agent.append(base, AgentRunEvent(
+        wire_version=2, run_id='run-before-restart', kind='epoch_opened', ts=11,
+        epoch=epoch))
+
+    [rec] = agent.fold(agent.read_events(base), live=set())
+
+    assert rec.state == 'unknown' and rec.note
+    assert rec.active_epoch_id == epoch.epoch_id, (
+        '丢失 owner 不能伪造 epoch_closed')
+    assert rec.allowed_controls == []
+    for control in (agent.request_pause, agent.resume, agent.request_stop):
+        with pytest.raises(JobConflict, match='本进程|句柄已丢'):
+            control(base, rec.run_id)
+
+
+def test_v2_ended_view_never_exposes_an_active_epoch(base):
+    """异常尾窗缺 epoch_closed 时，parent 终态也不能保留矛盾 active 指针。"""
+    start = _start()
+    contract = RunContractV2(**start.model_dump(mode='json'))
+    epoch = ExecutionEpoch(
+        epoch_id='epoch-ended-tail', ordinal=1, reason='initial',
+        argv=['codex', 'headless'], prompt_sha256='1' * 64,
+        protocol_version='codex-test-v1', cli_version='test-cli',
+        code_version='test-code-version', skill_sha256='2' * 64,
+        session_run_id='session-ended-tail')
+    events = [
+        AgentRunEvent(
+            wire_version=2, run_id='run-ended-tail', kind='started', ts=10,
+            contract=contract, start=start),
+        AgentRunEvent(
+            wire_version=2, run_id='run-ended-tail', kind='epoch_opened', ts=11,
+            epoch=epoch),
+        AgentRunEvent(
+            wire_version=2, run_id='run-ended-tail', kind='ended', ts=12,
+            exit_code=70,
+            outcome=AgentDeliveryOutcome(
+                state='unknown', reason='异常尾窗', checked_at=12)),
+    ]
+
+    [rec] = agent.fold(events, live=set())
+
+    assert rec.state == 'failed'
+    assert rec.active_epoch_id is None
+    assert rec.allowed_controls == []
 
 
 def test_read_tolerates_a_truncated_last_line(base):
@@ -457,7 +524,14 @@ def _ok_spawn(invocation, env, log):
     return _commander_result(invocation, env)
 
 
-def test_start_with_fake_spawn(base, corpus):
+def test_start_with_fake_spawn(base, corpus, monkeypatch):
+    # 这个 smoke fake 不会真的推进盘面；显式把它声明成当前已到合法停点，
+    # 避免“operator next 仍 ready”触发真实产品语义的精确续会循环。
+    monkeypatch.setattr(
+        agent.commander_completion, 'review_commander_stop',
+        lambda _base, _sid, outcome, **_kwargs:
+        agent.commander_completion.CommanderCompletionReview(
+            outcome=outcome, error_kind=None, continue_ready=False))
     rec = agent.start(base, '42', authorized=True, egress_authorized=True,
                       profiles=_PROFILES, spawn=_ok_spawn)
     assert rec.state in ('running', 'ok')   # fake spawn 转瞬即完，两态都合法
@@ -472,6 +546,331 @@ def test_start_with_fake_spawn(base, corpus):
     assert done.start.skill_sha256 == agent._skill_sha256()
     assert done.outcome is not None and done.outcome.state == 'stopped'
     assert 'fake run' in agent.run_log_path(base, rec.run_id).read_text('utf-8')
+
+
+def test_unregistered_deterministic_blocker_keeps_epoch_and_parent_end_in_sync(
+        base, corpus, monkeypatch):
+    """表外 blocker 关闭式停止时，parent 不得保留启动时的 70/unknown。"""
+    current = SimpleNamespace(
+        state='blocked', code_version='test-code-version',
+        surface_seal='c' * 64, execution_token=None,
+        action=SimpleNamespace(
+            waiting_on='manual-unregistered-blocker',
+            action_sha256='d' * 64,
+        ),
+    )
+    monkeypatch.setattr(
+        agent.operator, 'next_action_at_code',
+        lambda _base, _sid, *, code: current)
+
+    rec = agent.start(
+        base, '42', authorized=True, egress_authorized=True,
+        profiles=_PROFILES, spawn=None)
+    assert agent.wait(rec.run_id, 10)
+
+    events = [row for row in agent.read_events(base) if row.run_id == rec.run_id]
+    [closed] = [row for row in events if row.kind == 'epoch_closed']
+    [ended] = [row for row in events if row.kind == 'ended']
+    assert closed.exit_code == ended.exit_code == 2
+    assert ended.outcome is not None and ended.outcome.state == 'stopped'
+    assert '没有登记' in ended.outcome.reason
+
+
+def test_ready_action_exact_resumes_same_commander_session(
+        base, corpus, monkeypatch):
+    reviews = 0
+    invocations = []
+
+    def review(_base, _sid, outcome, **_kwargs):
+        nonlocal reviews
+        reviews += 1
+        return agent.commander_completion.CommanderCompletionReview(
+            outcome=outcome.model_copy(update={
+                'state': ('stopped' if reviews == 1 else 'ready'),
+                'reason': ('仍有 ready action' if reviews == 1 else '已完成'),
+            }),
+            error_kind=(
+                agent.commander_completion.EARLY_EXIT_ERROR_KIND
+                if reviews == 1 else None),
+            continue_ready=reviews == 1)
+
+    def spawn(invocation, env, log):
+        invocations.append(invocation)
+        log.write(b'fake supervised turn\n')
+        return CommanderProcessResult(
+            exit_code=0,
+            observation=CommanderObservation(
+                provider_session_id='provider-exact-1',
+                actual_model=invocation.profile.model,
+                actual_effort=invocation.profile.reasoning_effort,
+                usage=None))
+
+    monkeypatch.setattr(
+        agent.commander_completion, 'review_commander_stop', review)
+    rec = agent.start(
+        base, '42', authorized=True, egress_authorized=True,
+        profiles=_PROFILES, spawn=spawn)
+    assert agent.wait(rec.run_id, 10)
+
+    assert len(invocations) == 2
+    assert invocations[0].resume_provider_session_id is None
+    assert invocations[1].resume_provider_session_id == 'provider-exact-1'
+    [session] = agent_session_audit.fold(
+        agent_session_audit.read_events(base))
+    assert [turn.turn_index for turn in session.turns] == [1, 2]
+    events = agent.read_events(base)
+    assert [event.kind for event in events].count('epoch_opened') == 1
+    assert [event.kind for event in events].count('epoch_closed') == 1
+
+
+def test_code_drift_rolls_epoch_and_starts_a_new_logical_session(
+        base, corpus, monkeypatch):
+    identity = {'code': 'code-v1'}
+    invocations = []
+    reviews = 0
+
+    monkeypatch.setattr(
+        agent.prov, 'code_version', lambda: identity['code'])
+    monkeypatch.setattr(
+        agent.commander_completion, 'ready_action_remains',
+        lambda _base, _sid: True)
+
+    def review(_base, _sid, outcome, **_kwargs):
+        nonlocal reviews
+        reviews += 1
+        return agent.commander_completion.CommanderCompletionReview(
+            outcome=outcome, error_kind=None,
+            continue_ready=reviews == 1)
+
+    def spawn(invocation, env, log):
+        invocations.append(invocation)
+        provider = ('provider-before-code-change'
+                    if len(invocations) == 1 else 'provider-after-code-change')
+        if len(invocations) == 1:
+            identity['code'] = 'code-v2'
+        return CommanderProcessResult(
+            exit_code=0,
+            observation=CommanderObservation(
+                provider_session_id=provider,
+                actual_model=invocation.profile.model,
+                actual_effort=invocation.profile.reasoning_effort,
+                usage=None))
+
+    monkeypatch.setattr(
+        agent.commander_completion, 'review_commander_stop', review)
+    rec = agent.start(
+        base, '42', authorized=True, egress_authorized=True,
+        profiles=_PROFILES, spawn=spawn)
+    assert agent.wait(rec.run_id, 10)
+
+    events = agent.read_events(base)
+    assert {event.run_id for event in events} == {rec.run_id}, (
+        'epoch rollover 必须留在同一个 parent run')
+    assert sum(event.kind == 'started' for event in events) == 1
+    epochs = [event.epoch for event in events
+              if event.kind == 'epoch_opened']
+    assert len(epochs) == 2
+    assert epochs[0] is not None and epochs[1] is not None
+    assert epochs[0].session_run_id != epochs[1].session_run_id
+    assert epochs[1].reason == 'code_change'
+    assert [item.resume_provider_session_id for item in invocations] == [None, None]
+    assert 'code-v2' in invocations[1].stdin_text
+    assert epochs[1].prompt_sha256 == hashlib.sha256(
+        invocations[1].stdin_text.encode('utf-8')).hexdigest()
+    assert epochs[1].cli_version == invocations[1].cli_version
+    assert epochs[1].protocol_version == invocations[1].protocol
+    sessions = agent_session_audit.fold(
+        agent_session_audit.read_events(base))
+    assert len(sessions) == 2
+    assert all(session.end is not None for session in sessions)
+    assert {session.start.start_code_version for session in sessions} == {
+        'code-v1', 'code-v2'}
+    [done] = [row for row in agent.records(base) if row.run_id == rec.run_id]
+    assert done.contract is not None
+    assert 'code_version' not in done.contract.model_dump(mode='json')
+    assert 'prompt' not in done.contract.model_dump(mode='json')
+    assert [epoch.code_version for epoch in done.epochs] == [
+        'code-v1', 'code-v2']
+
+
+def test_skill_drift_rolls_epoch_without_resuming_the_old_provider_session(
+        base, corpus, monkeypatch):
+    """skill 与代码同属 execution identity，但不创建第二个 parent run。"""
+    identity = {'skill': 'a' * 64}
+    invocations = []
+    reviews = 0
+
+    monkeypatch.setattr(agent, '_skill_sha256', lambda: identity['skill'])
+    monkeypatch.setattr(
+        agent.commander_completion, 'ready_action_remains',
+        lambda _base, _sid: True)
+
+    def review(_base, _sid, outcome, **_kwargs):
+        nonlocal reviews
+        reviews += 1
+        return agent.commander_completion.CommanderCompletionReview(
+            outcome=outcome, error_kind=None,
+            continue_ready=reviews == 1)
+
+    def spawn(invocation, env, log):
+        invocations.append(invocation)
+        provider = (
+            'provider-before-skill-change' if len(invocations) == 1
+            else 'provider-after-skill-change')
+        if len(invocations) == 1:
+            identity['skill'] = 'b' * 64
+        return CommanderProcessResult(
+            exit_code=0,
+            observation=CommanderObservation(
+                provider_session_id=provider,
+                actual_model=invocation.profile.model,
+                actual_effort=invocation.profile.reasoning_effort,
+                usage=None))
+
+    monkeypatch.setattr(
+        agent.commander_completion, 'review_commander_stop', review)
+    rec = agent.start(
+        base, '42', authorized=True, egress_authorized=True,
+        profiles=_PROFILES, spawn=spawn)
+    assert agent.wait(rec.run_id, 10)
+
+    events = agent.read_events(base)
+    assert {event.run_id for event in events} == {rec.run_id}
+    assert sum(event.kind == 'started' for event in events) == 1
+    epochs = [event.epoch for event in events
+              if event.kind == 'epoch_opened']
+    assert len(epochs) == 2 and all(epoch is not None for epoch in epochs)
+    assert [epoch.skill_sha256 for epoch in epochs] == ['a' * 64, 'b' * 64]
+    assert epochs[0].session_run_id != epochs[1].session_run_id
+    assert [item.resume_provider_session_id for item in invocations] == [
+        None, None]
+
+
+def test_pause_drains_holds_book_lock_and_resume_keeps_exact_session(
+        base, corpus, monkeypatch):
+    entered = threading.Event()
+    release_claim = threading.Event()
+    invocations = []
+    active_claim = []
+
+    def review(_base, _sid, outcome, **_kwargs):
+        return agent.commander_completion.CommanderCompletionReview(
+            # pause 关闭 gate 后的 Commander 可能拿不到新 claim；这枚 False
+            # 不能抢在已受理 pause 前把 parent 结束。
+            outcome=outcome.model_copy(update={
+                'state': 'stopped', 'reason': '暂停边界尚有后续动作'}),
+            error_kind=None, continue_ready=False)
+
+    def spawn(invocation, env, log):
+        invocations.append(invocation)
+        if len(invocations) == 1:
+            admission_id = env[
+                commander_context.COMMANDER_ADMISSION_ID_ENV]
+            claim = admission.claim(
+                base, admission_id, '42', node='stage2.blueprint',
+                claim_sha256='a' * 64, claim_id='paid-node-in-flight')
+            active_claim.append(claim)
+            entered.set()
+            assert release_claim.wait(5)
+            admission.release(base, claim)
+        return CommanderProcessResult(
+            exit_code=0,
+            observation=CommanderObservation(
+                provider_session_id='provider-pause-1',
+                actual_model=invocation.profile.model,
+                actual_effort=invocation.profile.reasoning_effort,
+                usage=None))
+
+    monkeypatch.setattr(
+        agent.commander_completion, 'review_commander_stop', review)
+    monkeypatch.setattr(
+        agent, '_cancel_commander_owner',
+        lambda _run_id: pytest.fail('pause 不得取消正在自然闭合的 Commander'))
+    rec = agent.start(
+        base, '42', authorized=True, egress_authorized=True,
+        profiles=_PROFILES, spawn=spawn)
+    assert entered.wait(5)
+    requested = agent.request_pause(base, rec.run_id)
+    assert requested.state == 'running', (
+        'active claim 尚未自然 release 时不得提前写 paused')
+    closed = admission.snapshot(base, rec.run_id)
+    assert closed.closed and closed.active_claims == tuple(active_claim)
+    with pytest.raises(TerminalState, match='关闭 admission'):
+        admission.claim(
+            base, rec.run_id, '42', node='stage2.blueprint',
+            claim_sha256='b' * 64, claim_id='late-after-pause')
+    paused: list = []
+    waiter = threading.Thread(
+        target=lambda: paused.append(agent.pause(base, rec.run_id)))
+    waiter.start()
+    assert waiter.is_alive(), 'pause 必须等待已经取得的 claim 自然闭合'
+    release_claim.set()
+    waiter.join(10)
+
+    assert paused and paused[0].state == 'paused'
+    assert paused[0].allowed_controls == ['resume', 'stop']
+    assert agent.REGISTRY.holder(agent.lock_key('42')) == rec.run_id
+    assert admission.snapshot(base, rec.run_id).terminal_kind == 'drained'
+    resumed = agent.resume(base, rec.run_id)
+    assert resumed.state in ('paused', 'pending', 'running')
+    assert set(resumed.allowed_controls) in ({'resume', 'stop'}, {'pause', 'stop'})
+    assert agent.wait(rec.run_id, 10)
+    assert len(invocations) == 2
+    assert invocations[1].resume_provider_session_id == 'provider-pause-1'
+    assert agent.REGISTRY.holder(agent.lock_key('42')) is None
+    lifecycle = agent.read_events(base)
+    kinds = [event.kind for event in lifecycle]
+    assert 'paused' in kinds and 'resumed' in kinds
+    assert kinds.count('epoch_opened') == 1
+    assert kinds.count('epoch_closed') == 1
+    done = next(row for row in agent.records(base) if row.run_id == rec.run_id)
+    assert done.allowed_controls == []
+
+
+def test_stop_cancels_the_live_owner_but_ended_is_written_only_after_drain(
+        base, corpus, monkeypatch):
+    """stop 是异步终止请求；cancel 不能替 worker 猜 execution 已经闭合。"""
+    entered = threading.Event()
+    cancel_requested = threading.Event()
+    allow_process_exit = threading.Event()
+    cancelled_run_ids: list[str] = []
+
+    def spawn(invocation, env, log):
+        entered.set()
+        assert cancel_requested.wait(5)
+        assert allow_process_exit.wait(5)
+        return CommanderProcessResult(
+            exit_code=130,
+            observation=CommanderObservation(
+                provider_session_id=(
+                    f"provider-{env['NOVEL_COMMANDER_RUN_ID']}"),
+                actual_model=invocation.profile.model,
+                actual_effort=invocation.profile.reasoning_effort,
+                usage=None))
+
+    def cancel(run_id):
+        cancelled_run_ids.append(run_id)
+        cancel_requested.set()
+        return 'Commander driver 已确认 cancel 请求'
+
+    monkeypatch.setattr(agent, '_cancel_commander_owner', cancel)
+    rec = agent.start(
+        base, '42', authorized=True, egress_authorized=True,
+        profiles=_PROFILES, spawn=spawn)
+    assert entered.wait(5)
+
+    accepted = agent.request_stop(base, rec.run_id)
+
+    assert cancelled_run_ids == [rec.run_id]
+    assert accepted.ended is None
+    assert not agent.wait(rec.run_id, 0.05), (
+        'cancel 请求被确认不等于 Commander/claims 已经 drain')
+    allow_process_exit.set()
+    assert agent.wait(rec.run_id, 10)
+    done = next(row for row in agent.records(base) if row.run_id == rec.run_id)
+    assert done.ended is not None and done.exit_code == 130
+    assert done.outcome is not None and done.outcome.state == 'stopped'
+    assert done.allowed_controls == []
 
 
 def test_agent_worker_holds_owner_lease_until_its_outermost_finally(base, corpus):
@@ -925,21 +1324,21 @@ def test_commander_session_start_audit_failure_never_spawns_and_closes_outer_run
         lambda *_args, **_kwargs: (_ for _ in ()).throw(
             OSError('session start audit unavailable')))
 
-    with pytest.raises(OSError, match='session start audit unavailable'):
-        agent.start(
-            base, '42', authorized=True, egress_authorized=True,
-            profiles=_PROFILES,
-            spawn=lambda *_args: spawned.append(True))
+    rec = agent.start(
+        base, '42', authorized=True, egress_authorized=True,
+        profiles=_PROFILES,
+        spawn=lambda *_args: spawned.append(True))
+    assert agent.wait(rec.run_id, 10)
     assert spawned == []
     [done] = agent.records(base)
     assert done.ended is not None and done.exit_code != 0
-    assert done.outcome is not None and done.outcome.state == 'failed'
+    assert done.outcome is not None and done.outcome.state == 'unknown'
 
 
 @pytest.mark.parametrize('cleanup_failure', ['close', 'drained'])
 def test_partial_gate_open_cleanup_failure_preserves_original_and_releases_writer(
         base, corpus, monkeypatch, cleanup_failure):
-    """open 已提交后报错时，close/drained 再坏也不能死锁或遮住首错。"""
+    """open 已提交后报错时，close/drained 再坏也不能遮住首错。"""
     del corpus
     actual_open = admission.open_gate
     actual_close = admission.close_gate
@@ -961,30 +1360,21 @@ def test_partial_gate_open_cleanup_failure_preserves_original_and_releases_write
             lambda *_args, **_kwargs: (_ for _ in ()).throw(
                 OSError('drained cleanup unavailable')))
 
-    with pytest.raises(
-            RuntimeError, match='original gate-open failure after commit') as caught:
-        agent.start(
-            base, '42', authorized=True, egress_authorized=True,
-            profiles=_PROFILES,
-            spawn=lambda *_args: (_ for _ in ()).throw(
-                AssertionError('partial open 后不得 spawn')))
-
-    [done] = agent.records(base)
-    assert jobs.AGENT_REGISTRY.holder(jobs.agent_lock_key('42')) is None
-    with admission.require_owner_stopped(base, done.run_id):
-        pass
-    assert done.ended is not None and done.exit_code != 0
-    notes = '\n'.join(getattr(caught.value, '__notes__', ()))
+    gate_id = 'partial-open-test-gate'
+    actual_open(base, gate_id, '42')
+    original = RuntimeError('original gate-open failure after commit')
+    agent._close_failed_start_gate(base, gate_id, original)
+    notes = '\n'.join(getattr(original, '__notes__', ()))
     assert cleanup_failure in notes
 
     # 用保存的真实函数把本测试刻意留下的 durable gate 收口；不能让 monkeypatch
     # 的失败形状污染同一 tmp base 上后续断言。
-    snapshot = admission.snapshot(base, done.run_id)
+    snapshot = admission.snapshot(base, gate_id)
     if not snapshot.closed:
-        actual_close(base, done.run_id)
-    snapshot = admission.snapshot(base, done.run_id)
+        actual_close(base, gate_id)
+    snapshot = admission.snapshot(base, gate_id)
     if snapshot.terminal_kind is None:
-        actual_mark_drained(base, done.run_id)
+        actual_mark_drained(base, gate_id)
 
 
 def test_provider_session_reuse_across_commander_runs_closes_delivery(

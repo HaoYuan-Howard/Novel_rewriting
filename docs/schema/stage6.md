@@ -234,15 +234,17 @@ validator 必须确认：
    开篇投影及其余 prompt 输入没变，不得让未下发正文继续制造假 stale。
 
 批准动作 `stage6.approve --pick N --actor <id> --reason <why>
---subject-sha256 <hash>` 在归档和写盘之前执行两道硬检查：
+--review-token <s6r3_…>` 在归档和写盘之前执行两道硬检查：
 
 - 该候选没有机械 HARD；
-- 请求里的完整 SHA-256 与候选当前字节一致，不允许旧页面误批。
+- 服务端在同书锁内重建工作包，opaque token 必须同时绑定当前 review identity 与本次
+  validation seal，不允许旧页面误批。公开 v3 工作包只输出 opaque seal，不输出
+  `code_version` / `rules_fingerprint` 原料；旧 v2 包只读，不能再提交批准。
 
 ⚠ 这里曾有第三道（所以上面那句原本写作“三道”）：「当前合并决议不是校准 FAIL，
 也不存在与本文本绑定的历史校准 FAIL」。
 它的输入是 automated FAIL，随自动放行门一并消失。**⇒ 没有任何机制会替人否决一个候选。**
-全部语义结论进 `verification` 清单，人逐项核对后以 actor/reason/hash 路径记
+全部语义结论进 `verification` 清单，人逐项核对后以 actor/reason/review-token 路径记
 `human_verification`；矛盾线索仍逐条呈现（三条候选各一行，凭据键 `<候选>:<文本指纹>`，
 可逐条 wontfix），但它们**报**而不**拦**。
 

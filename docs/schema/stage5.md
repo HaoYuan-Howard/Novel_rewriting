@@ -64,10 +64,10 @@ workpack subject 的 target；不得通过删除 target 绑定来迁就通用作
 apply 不 probe/start、不读缓存、不发 wire，也不改 source run 的任何 sidecar。它以 source
 自己的 code/profile/session/ledger 复验 run、request、checkpoint 与 commit 的 raw file SHA 和
 semantic self-hash，再以 target 当前代码复算输入、prompt、schema、HARD 与 live baseline。
-target 的 `_stage5_runs/<TARGET>/prepared_recovery.json` 冻结整书 workpack/action，逐章
+target 的 `_service/runs/<sid>/stage5/<TARGET>/prepared_recovery.json` 冻结整书 workpack/action，逐章
 `prepared_recovery.json` 走 `prepared → committed`；只有 replacement journal、全局 adoption
 audit 与 live canonical 三者精确闭合，旧 foreign reservation 才算 superseded。写回会令旧
-Review stale，因此恢复成功后必须**另跑** `stage5.review`。
+Review stale，因此恢复成功后必须**另跑** `stage5.review`。旧书内 `_stage5_runs` 仅作只读恢复来源。
 
 ### 1.1 Stage5 从 Stage1 即时计算正文机械基线
 
@@ -273,12 +273,15 @@ workpack/decision，但不擦除 history。fresh Review 下先看 blockers：任
 | `fact_group/unver_group` | `Stage5FindingGroup` / null | 是 | 各绑定组名、完整 finding-set SHA、条数与规则闭集；确认不把 UNVER 改成 PASS | **契·码** |
 | `disclosure/resolved` | `{rule:int}` | 是 | INFO/metric 披露计数与 wontfix/typed 已处置计数，不是放行判定 | **契·码** |
 | `workpack_sha256` | SHA-256 | 是 | 绑定除自身外全部当前工作包字段；模板、提交与过期判定共用 | **契·码** |
+| `review_token` | `s5cr1_<64hex>` | 是 | 封装本次 exact workpack；调用方只回交此 token，不搬运 review/workpack/chapter/finding 多枚 SHA | **契·码** |
 
-`Stage5ClosureRequest` 必填 actor/reason、workpack/review 双 SHA、逐项 `must_appear[]` 与整组
-`group_acks[]`。must-appear 只接受 `confirmed_present` 或理由非空的 `accepted_exception`；finding
-与 chapter SHA 任一漂移即整份过期。fact landing / 其余 UNVER 按完整集合 digest 与条数确认。
-`Stage5ClosureTemplate` 的每条待裁决行带 `placeholder=true + template_token`，原样提交关闭式拒绝；
-`Stage5ClosureDecision` 由服务端另加 `decision_sha256/decided_at`，不得保留 placeholder/token。
+`Stage5ClosureRequest` 必填 actor/reason、一枚 opaque `review_token`、逐项 `must_appear[]` typed ruling 与
+整组 `group_acks[]`；不接受 workpack/review/finding/chapter SHA。must-appear 只接受
+`confirmed_present` 或理由非空的 `accepted_exception`。服务端在同书锁内重建 current workpack，
+用 token 找到完整 finding/chapter/review 身份并要求提交集合精确覆盖；任一漂移即整份过期。
+fact landing / 其余 UNVER 仍按服务端物化的完整集合 digest 与条数确认。Template 的 placeholder/
+template token 只属于只读材料，不作为 Request 字段；`Stage5ClosureDecision` 由服务端另加
+`decision_sha256/decided_at`，盘上审计继续保存完整 materialized 身份。
 缺章、`.INVALID`、HARD 或 unresolved trim 任一非空都不得提交。历史 must-appear 预填只在 finding
 SHA 与 chapter SHA 同时不变时复用；`gate.s5`、Stage6/7 写效果与 assemble 都消费同一 current closure。
 

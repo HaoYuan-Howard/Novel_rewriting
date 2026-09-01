@@ -59,9 +59,9 @@ describe('Stage5 部分写作授权链', () => {
     ])
     const subject = 'a'.repeat(64)
     const structureDecision = {
-      subject_sha256: subject,
       actor: 'reviewer',
       reason: '已核对全书结构',
+      review_token: 's4sr1_' + subject,
       chapters: [{ output_ordinal: 3, decision: 'accept', reason: '第 3 章可执行' }],
       decided_at: '2026-08-25T00:00:00+00:00',
     }
@@ -83,10 +83,12 @@ describe('Stage5 部分写作授权链', () => {
       },
       structure: {
         state: 'accepted', current_subject_sha256: subject,
+        review_token: 's4sr1_' + subject,
         current_decision: structureDecision, history: [structureDecision], binding_concerns: [],
       },
       writing_approval: {
-        available: true, current_subject_sha256: subject, current_decision: null, history: [],
+        available: true, current_subject_sha256: subject,
+        review_token: 's5wr1_' + subject, current_decision: null, history: [],
       },
       closure: {
         state: 'missing', workpack: null, next_step: null, current_decision: null, history: [],
@@ -141,11 +143,22 @@ describe('Stage5 部分写作授权链', () => {
 
     renderScreen()
 
+    const actorInputs = await screen.findAllByLabelText('自报身份 actor')
+    const reasonInputs = await screen.findAllByLabelText('本次批准 / 编辑理由 reason')
+    fireEvent.change(actorInputs[0]!, { target: { value: 'commander-a' } })
+    fireEvent.change(reasonInputs[0]!, { target: { value: '核对当前写作主体' } })
+    fireEvent.click(screen.getByRole('button', { name: /授权当前 Stage5 写作/ }))
+    await waitFor(() => expect(writingSpy).toHaveBeenCalledTimes(1))
+
     fireEvent.click(await screen.findByRole('button', { name: '全书闭卷写作 --chapters' }))
     fireEvent.click(await screen.findByRole('button', { name: '确认发起（花钱）' }))
 
     await waitFor(() => expect(startSpy).toHaveBeenCalledTimes(1))
-    expect(writingSpy).toHaveBeenCalledWith(SAMPLE_SID)
+    expect(writingSpy).toHaveBeenCalledWith(SAMPLE_SID, {
+      actor: 'commander-a',
+      reason: '核对当前写作主体',
+      review_token: 's5wr1_' + subject,
+    })
     expect(startSpy).toHaveBeenCalledWith(expect.objectContaining({
       kind: 'stage5.write',
       extra: ['--chapters'],

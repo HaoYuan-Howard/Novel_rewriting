@@ -9,7 +9,7 @@ from types import SimpleNamespace
 import pytest
 
 from contracts.schema import encode_artifact
-from contracts.schema.api import StructureApprovalDecision, StructureApprovalRequest
+from contracts.schema.api import StructureApprovalRequest
 from contracts.schema.stage1 import MainText
 from contracts.schema.stage4 import PlanChapters, PlanProvenance
 from contracts.artifacts import STAGE4_EVIDENCE_BINDING, STAGE4_WRITER_CONTEXT
@@ -111,20 +111,24 @@ def current_book(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path,
 
 
 def _approve_writing(base: Path) -> None:
-    novel_dir = approvals.paths.resolve_novel_dir(base, SID)
-    subject, chapters = approvals._current_structure_subject_and_chapters(novel_dir)
+    template = approvals.structure_template(
+        base,
+        SID,
+        actor='freshness-reviewer',
+        reason='核对当前结构主体与精确章集',
+    )
     approvals.approve_structure(
         base,
         SID,
         StructureApprovalRequest(
-            actor='freshness-reviewer',
-            reason='核对当前结构主体与精确章集',
-            subject_sha256=subject,
+            actor=template.actor,
+            reason=template.reason,
+            review_token=template.review_token,
             chapters=[{
-                'output_ordinal': ordinal,
+                'output_ordinal': row.output_ordinal,
                 'decision': 'accept',
-                'reason': f'第 {ordinal} 章结构已逐项核对',
-            } for ordinal in chapters],
+                'reason': f'第 {row.output_ordinal} 章结构已逐项核对',
+            } for row in template.chapters],
         ),
     )
     approvals.begin_writing(base, SID)
@@ -209,20 +213,26 @@ def test_explicit_v5_backfill_recasts_current_s4_decision_and_lands_v6(
     base, book = current_book
     store = approvals._store_for(book)
     plan, _raw = store.read_own(PlanChapters, PLAN_REL)
-    old_public = StructureApprovalDecision(
+    legacy_subject = structure_subject_sha256(plan)
+    old_request = StructureApprovalRequest(
         actor='legacy-reviewer',
         reason='旧版已逐章核对同一份正式计划',
-        subject_sha256=structure_subject_sha256(plan),
+        review_token=f's4sr1_{legacy_subject}',
         chapters=[{
             'output_ordinal': 1,
             'decision': 'accept',
             'reason': '旧版第一章结构已核对',
         }],
-        decided_at='2026-08-26T00:00:00+00:00',
     )
-    old_proof = approvals._proof_for_legacy_structure(book, old_public)
+    old_proof = approvals._proof_for_legacy_structure(book, old_request)
     old_stored = approvals._StoredStructureDecision(
-        **old_public.model_dump(mode='json'), proof=old_proof)
+        actor=old_request.actor,
+        reason=old_request.reason,
+        subject_sha256=legacy_subject,
+        chapters=old_request.chapters,
+        decided_at='2026-08-26T00:00:00+00:00',
+        proof=old_proof,
+    )
 
     fake_gate_proofs = {
         gate: approvals._ApprovalProof(
@@ -278,7 +288,7 @@ def test_explicit_v5_backfill_recasts_current_s4_decision_and_lands_v6(
     assert result.approvals.v == 6 and result.approvals.gate['s4']
     assert 's4' in result.backfilled and raw['v'] == 7
     assert raw['structure_decision']['subject_sha256'] == \
-        result.approvals.structure.current_subject_sha256
+        result.approvals.structure.review_token.removeprefix('s4sr1_')
     assert raw['gate_proofs']['s4'] == raw['structure_decision']['proof']
     assert set(raw['structure_decision']['proof']['artifacts']) == {
         PLAN_REL, STAGE4_EVIDENCE_BINDING}
@@ -290,35 +300,54 @@ def test_explicit_v5_backfill_recasts_current_s4_decision_and_lands_v6(
 def test_current_subject_changes_revoke_writing(current_book, monkeypatch, mutation):
     base, book = current_book
     _approve_writing(base)
+    original: bytes | None = None
 
     if mutation == 'root':
-        (book / 'stage0' / 'clean_text.txt').write_text(
+        changed = book / 'stage0' / 'clean_text.txt'
+        original = changed.read_bytes()
+        changed.write_text(
             '另一版正文根。', encoding='utf-8', newline='')
     elif mutation == 'main':
+        changed = book / MAIN_REL
+        original = changed.read_bytes()
         _disk_json(book, MAIN_REL, [
             {'chapter_ordinal': 1, 'text': '上游正文已经变化。'},
             {'chapter_ordinal': 2, 'text': '另一章保持不变。'},
         ])
     elif mutation == 'plan':
-        path = book / PLAN_REL
-        data = json.loads(path.read_text(encoding='utf-8'))
+        changed = book / PLAN_REL
+        original = changed.read_bytes()
+        data = json.loads(changed.read_text(encoding='utf-8'))
         data['output_chapters'][0]['chapter_rewrite_brief'] = '当前计划字节已由人改动。'
-        path.write_text(json.dumps(data, ensure_ascii=False), encoding='utf-8', newline='')
+        changed.write_text(
+            json.dumps(data, ensure_ascii=False), encoding='utf-8', newline='')
     elif mutation == 'context':
-        (book / STAGE4_WRITER_CONTEXT).write_text(
+        changed = book / STAGE4_WRITER_CONTEXT
+        original = changed.read_bytes()
+        changed.write_text(
             '{"changed":true}', encoding='utf-8')
     else:
-        invalid = book / 'stage4' / 'plan_chapters.INVALID.json'
-        invalid.write_bytes((book / PLAN_REL).read_bytes())
+        changed = book / 'stage4' / 'plan_chapters.INVALID.json'
+        changed.write_bytes((book / PLAN_REL).read_bytes())
 
     assert not approvals.get(base, SID).writing
     assert not approvals.has_record(base, SID)
+    raw = approvals._read_raw(base, SID)
+    assert raw.writing and raw.writing_proof is not None
+    assert raw.gate['s4'] and raw.gate_proofs['s4'] is not None
 
     _queue_stage5(monkeypatch)
     todo, blocked = Q.plan_book(base, SID, until_stage='stage5')
     assert todo == [] and len(blocked) == 1
     assert blocked[0].waiting_on == Q.WAITING_ON_WRITING_APPROVAL
     assert blocked[0].steps == []
+
+    if original is None:
+        changed.unlink()
+    else:
+        changed.write_bytes(original)
+    assert approvals.get(base, SID).writing
+    assert approvals.has_record(base, SID)
 
 
 def test_writing_requires_current_typed_s4_only(current_book, monkeypatch):
@@ -338,9 +367,15 @@ def test_writing_requires_current_typed_s4_only(current_book, monkeypatch):
 def test_measurement_contract_change_revokes_writing(current_book, monkeypatch):
     base, _book = current_book
     _approve_writing(base)
+    original = approvals.STYLE_MEASUREMENT_CONTRACT
     monkeypatch.setattr(
         approvals, 'STYLE_MEASUREMENT_CONTRACT', 'stage3-measurable-v999')
     assert not approvals.get(base, SID).writing
+    raw = approvals._read_raw(base, SID)
+    assert raw.writing and raw.writing_proof is not None
+
+    monkeypatch.setattr(approvals, 'STYLE_MEASUREMENT_CONTRACT', original)
+    assert approvals.get(base, SID).writing
 
 
 def test_retired_stage3_bytes_do_not_participate_in_current_v5(current_book):

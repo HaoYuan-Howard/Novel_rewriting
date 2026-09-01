@@ -704,7 +704,7 @@ def test_design_repair_identity_normalization_does_not_erase_lineage_drift(
     assert capability.reason_code == 'checkpoint_lineage_unavailable'
 
 
-def test_targeted_design_repair_stops_third_chapter_round_before_any_wire(
+def test_targeted_design_repair_opens_new_typed_epoch_after_two_committed_rounds(
         tmp_path: Path,
 ) -> None:
     book = _book(tmp_path)
@@ -781,8 +781,8 @@ def test_targeted_design_repair_stops_third_chapter_round_before_any_wire(
         'candidate_sha256': third_sha,
         'aggregate_subject_sha256': '8' * 64,
         'decision_sha256': '9' * 64,
-        # 故意模拟上层给了一份过时/造假的 availability；core 仍须按 journal
-        # 现算两轮已耗尽并在任何 wire 前关闭。
+        # v3 的 committed_rounds 只是审计读数；新的 hash-bound typed
+        # decision 打开同 strategy epoch 的新 repair epoch，不得自动升级为整书 replan。
         'repair_capability': {
             'repairable': True, 'reason_code': 'ready',
             'chapters': [{
@@ -800,21 +800,34 @@ def test_targeted_design_repair_stops_third_chapter_round_before_any_wire(
         }],
     })
     third_ctx = _ctx(book, 'stage4.design')
+    def third_factory(_purpose: str, chapter: int | None) -> _RequestDriver:
+        assert chapter == 1
+
+        def respond(request: AgentRequest) -> dict[str, Any]:
+            lines = request.prompt.splitlines()
+            marker = lines.index(plan.prompts.BLOCK_PREVIOUS_CHAPTER_RESPONSE)
+            return json.loads(lines[marker + 1])['response']
+
+        return _RequestDriver(respond, session_id='provider-targeted-new-epoch')
+
     third_pool = Stage4DesignSessionPool(
+        third_ctx, driver_factory=third_factory, max_turns=2)
+    third = plan.run_design(
         third_ctx,
-        driver_factory=lambda _purpose, _chapter: (_ for _ in ()).throw(
-            AssertionError('第三轮必须在构造 driver/session 前关闭')),
-        max_turns=2,
+        third_pool,
+        repair_decision_sha256=third_scope.decision_sha256,
+        repair_scope=third_scope,
     )
-    with pytest.raises(ProvenanceRefused, match='2 个 committed repair'):
-        plan.run_design(
-            third_ctx,
-            third_pool,
-            repair_decision_sha256=third_scope.decision_sha256,
-            repair_scope=third_scope,
-        )
+    third_pool.finish_all(delivered=True)
     third_pool.close()
-    assert not paths.stage4_run_path(
+    capability = stage4_runs.inspect_design_repair_capability(
+        third_ctx,
+        candidate_payload=third.model_dump(by_alias=True, mode='json'),
+        candidate_file_sha256=hashlib.sha256(
+            (book / STAGE4_BLIND_CANDIDATE).read_bytes()).hexdigest(),
+    )
+    assert dict(capability.chapter_repair_rounds)[1] == 3
+    assert paths.stage4_run_path(
         book, third_ctx.run_id, 'stage4.design').exists()
 
 
@@ -952,8 +965,8 @@ def test_plan_false_infeasible_is_repaired_to_bound_in_same_session(
     assert driver.requests[1].system is None
     assert '构造出了完整 bound' in driver.requests[1].prompt
     plan_checkpoint_path = (
-        book / '_stage4_runs' / plan_ctx.run_id / 'plan'
-        / 'checkpoints' / 'rev-0001.json')
+        paths.stage4_checkpoint_dir(book, plan_ctx.run_id, 'stage4.plan')
+        / 'rev-0001.json')
     plan_checkpoint = json.loads(plan_checkpoint_path.read_text(encoding='utf-8'))
     assert plan_checkpoint['provider_session_id'] == 'provider-plan-one-session'
     assert plan_checkpoint['accepted_turn_index'] == 2
@@ -1030,8 +1043,8 @@ def test_plan_agent_exhaustion_commits_binding_and_invalid_then_recovers_zero_wi
     assert len(hard_driver.requests) == 2
     assert hard_driver.requests[1].system is None
     assert 'code_validation_failed' in hard_driver.requests[1].prompt
-    checkpoint_dir = (
-        book / '_stage4_runs' / hard_ctx.run_id / 'plan' / 'checkpoints')
+    checkpoint_dir = paths.stage4_checkpoint_dir(
+        book, hard_ctx.run_id, 'stage4.plan')
     assert [path.name for path in checkpoint_dir.glob('*.json')] == [
         'rev-0001.json', 'rev-0002.json']
     latest_checkpoint = json.loads((checkpoint_dir / 'rev-0002.json').read_text(

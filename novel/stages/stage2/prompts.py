@@ -455,6 +455,13 @@ _ATOMIC_FACT_RULE = """\
 
 章级另交 `chapter_function`，用一句话说明本章对全书推进的语义功能；再交
 `causal_edges[{before,after}]`，只记录颠倒后会改变剧情的因果，不把普通相邻都连边；
+`narrative_relations[]` 只记录重构时不可丢失的显式关系，绝不因相邻或同一原文拍自动补边：
+- `story_before`：真实故事时间先后；
+- `response_to`：哪条 response_fact_ref 回应哪条 stimulus_fact_ref；
+- `same_scene`：语义上必须同场的两个事实，端点按 atom_key 升序；
+- `observes`：observer_char_id 通过 observation_fact_ref 见证 observed_fact_ref。
+模型提出的每条关系都必须写 `enforcement="review"`；只有后续 typed 人审能把明确且高影响的
+关系晋升为 hard。普通相邻、仅仅来自同一 beat、含糊眼神或可自由调度的动作不要立关系；
 `entry_state_refs[]` 只能引用 context 原子，`ending_state_refs[]` 只能引用 land 原子。
 这些引用只用 atom_key。因果图不得自环或成环。事实原子的数组位置是证据位置，不是未来写作顺序。
 """
@@ -506,6 +513,10 @@ BLUEPRINT_HINT_V2_REFS = {
                    'hinges': [{'kind': '|'.join(HINGE_KINDS),
                                'phrase': '本拍内原样且唯一的字'}]}],
         'causal_edges': [{'before': 'a01', 'after': 'a02'}],
+        'narrative_relations': [{
+            'kind': 'response_to', 'enforcement': 'review',
+            'stimulus_fact_ref': 'a01', 'response_fact_ref': 'a02',
+        }],
         'entry_state_refs': [], 'ending_state_refs': ['a02'],
         'narration': [{'grammatical_person': NARRATIVE_PERSON[0],
                        'narrator_char_id': 'char_001|null',
@@ -522,6 +533,10 @@ BLUEPRINT_HINT_V31 = {
                    'hinges': [{'kind': '|'.join(HINGE_KINDS),
                                'candidate_id': 'h001'}]}],
         'causal_edges': [{'before': 'a01', 'after': 'a02'}],
+        'narrative_relations': [{
+            'kind': 'response_to', 'enforcement': 'review',
+            'stimulus_fact_ref': 'a01', 'response_fact_ref': 'a02',
+        }],
         'entry_state_refs': [], 'ending_state_refs': ['a02'],
         'narration': [{'grammatical_person': NARRATIVE_PERSON[0],
                        'narrator_char_id': 'char_001|null',

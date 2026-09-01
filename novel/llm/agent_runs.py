@@ -128,6 +128,10 @@ class SingleSessionRunSpec:
     run_path: Callable[[Any], Path]
     checkpoint_dir: Callable[[Any], Path]
     incompatible_session_nodes: tuple[str, ...] = ()
+    # 旧书曾把 run/checkpoint 写在书目录内。这两个只读口只用于
+    # 把旧链复验并接到当前 service run；所有新写入始终使用上面两口。
+    legacy_run_path: Callable[[Any], Path] | None = None
+    legacy_checkpoint_dir: Callable[[Any], Path] | None = None
 
 
 @dataclass(frozen=True)
@@ -274,18 +278,46 @@ def _atomic_json(path: Path, payload: Mapping[str, Any]) -> None:
         raise
 
 
-def _read_json(path: Path, *, label: str) -> dict[str, Any]:
+def _atomic_bytes(path: Path, data: bytes) -> None:
+    """原字节物化 legacy 内部记录，保持 checkpoint 绑定的文件 SHA。"""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, temp_name = tempfile.mkstemp(
+        prefix=f'.{path.name}.', suffix='.tmp', dir=str(path.parent))
     try:
-        raw = path.read_bytes()
+        with os.fdopen(fd, 'wb') as handle:
+            handle.write(data)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temp_name, path)
+    except BaseException:
+        try:
+            os.unlink(temp_name)
+        except FileNotFoundError:
+            pass
+        raise
+
+
+def _decode_json_bytes(
+        raw: bytes, *, path: Path, label: str,
+) -> dict[str, Any]:
+    try:
         value = json.loads(raw.decode('utf-8'))
-    except FileNotFoundError:
-        raise UpstreamMissing(f'{path} 不在盘上') from None
-    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+    except (UnicodeError, json.JSONDecodeError) as exc:
         raise ArtifactUnreadable(f'{label} {path} 读不出来：{exc}') from exc
     if not isinstance(value, dict) or value.get('version') != VERSION:
         raise ArtifactUnreadable(
             f'{label} {path} 不是当前内部 v{VERSION} 对象；不猜旧形状')
     return value
+
+
+def _read_json(path: Path, *, label: str) -> dict[str, Any]:
+    try:
+        raw = path.read_bytes()
+    except FileNotFoundError:
+        raise UpstreamMissing(f'{path} 不在盘上') from None
+    except OSError as exc:
+        raise ArtifactUnreadable(f'{label} {path} 读不出来：{exc}') from exc
+    return _decode_json_bytes(raw, path=path, label=label)
 
 
 def _resolved_profile(ctx: Any, value: object, *, label: str) -> dict[str, Any]:
@@ -456,6 +488,58 @@ def _validate_run_record(
     return dict(record)
 
 
+def _legacy_run_file(ctx: Any, spec: SingleSessionRunSpec) -> Path | None:
+    if spec.legacy_run_path is None:
+        return None
+    return spec.legacy_run_path(ctx) / RUN_FILE
+
+
+def _read_run_file(ctx: Any, spec: SingleSessionRunSpec) -> Path:
+    """读口优先当前 service run，仅在它不存在时回读 legacy。"""
+    current = spec.run_path(ctx) / RUN_FILE
+    if current.is_file():
+        return current
+    legacy = _legacy_run_file(ctx, spec)
+    if legacy is not None and legacy.is_file():
+        return legacy
+    return current
+
+
+def _materialize_legacy_run(
+        ctx: Any, spec: SingleSessionRunSpec, *,
+        response_model: type[BaseModel] | None = None,
+        max_tokens: int | None = None,
+) -> Path:
+    """把通过当前校验的 legacy run.json 原字节复制到 service 空间。
+
+    旧文件始终只读；继续 checkpoint/commit 的所有新写入都围绕
+    service 路径。原字节复制是因为 checkpoint 绑定的是 run.json 文件 SHA。
+    """
+    current = spec.run_path(ctx) / RUN_FILE
+    if current.is_file():
+        return current
+    legacy = _legacy_run_file(ctx, spec)
+    if legacy is None or not legacy.is_file():
+        return current
+    try:
+        raw = legacy.read_bytes()
+    except OSError as exc:
+        raise ArtifactUnreadable(
+            f'{spec.label} legacy {legacy} 读不出来：{exc}') from exc
+    record = _validate_run_record(
+        ctx, spec, _decode_json_bytes(
+            raw, path=legacy, label=f'{spec.label} legacy'),
+        response_model=response_model, max_tokens=max_tokens)
+    with process_append_lock(current):
+        if current.is_file():
+            if current.read_bytes() != raw:
+                raise ProvenanceRefused(
+                    f'{current} 已物化为另一份 run.json，拒绝覆盖')
+        else:
+            _atomic_bytes(current, raw)
+    return current
+
+
 def ensure_run(
         ctx: Any, spec: SingleSessionRunSpec, *, input_sha256: str,
         system: str, user: str, response_model: type[BaseModel], max_tokens: int,
@@ -467,6 +551,23 @@ def ensure_run(
     target = spec.run_path(ctx) / RUN_FILE
     with _LOCK:
         with process_append_lock(target):
+            if not target.is_file():
+                legacy = _legacy_run_file(ctx, spec)
+                if legacy is not None and legacy.is_file():
+                    try:
+                        raw = legacy.read_bytes()
+                    except OSError as exc:
+                        raise ArtifactUnreadable(
+                            f'{spec.label} legacy {legacy} 读不出来：{exc}') from exc
+                    current = _validate_run_record(
+                        ctx, spec, _decode_json_bytes(
+                            raw, path=legacy, label=f'{spec.label} legacy'),
+                        response_model=response_model, max_tokens=max_tokens)
+                    if {key: current.get(key) for key in identity} != identity:
+                        raise ProvenanceRefused(
+                            f'{spec.label} legacy run={ctx.run_id} '
+                            '输入/prompt/schema/profile 漂移；拒绝恢复')
+                    _atomic_bytes(target, raw)
             if target.is_file():
                 current = _validate_run_record(
                     ctx, spec, _read_json(target, label=spec.label),
@@ -488,7 +589,7 @@ def _validate_request_against_run(
         ctx: Any, spec: SingleSessionRunSpec, *, input_sha256: str,
         system: str, user: str, response_model: type[BaseModel], max_tokens: int,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
-    run_path = spec.run_path(ctx) / RUN_FILE
+    run_path = _read_run_file(ctx, spec)
     run = _validate_run_record(
         ctx, spec, _read_json(run_path, label=spec.label),
         response_model=response_model, max_tokens=max_tokens)
@@ -812,6 +913,20 @@ def _checkpoint_lock_path(spec: SingleSessionRunSpec, ctx: Any) -> Path:
     return spec.checkpoint_dir(ctx) / '.revisions'
 
 
+def _checkpoint_read_dirs(
+        spec: SingleSessionRunSpec, ctx: Any,
+) -> tuple[Path, ...]:
+    current = spec.checkpoint_dir(ctx)
+    if spec.legacy_checkpoint_dir is None:
+        return (current,)
+    legacy = spec.legacy_checkpoint_dir(ctx)
+    if legacy == current:
+        return (current,)
+    # legacy 先放入，当前 service 链在 revision 冲突时必须与它字节相同；
+    # 新 revision 只可出现在 current。
+    return (legacy, current)
+
+
 def _validate_checkpoint_envelope(
         ctx: Any, spec: SingleSessionRunSpec, path: Path,
         record: Mapping[str, Any], *, run_sha: str, revision: int,
@@ -831,7 +946,7 @@ def _validate_checkpoint_envelope(
     }
     if {key: record.get(key) for key in expected} != expected:
         raise ProvenanceRefused(f'{path} 不属于当前 run/sid/node/code/run.json')
-    run_path = spec.run_path(ctx) / RUN_FILE
+    run_path = _read_run_file(ctx, spec)
     run = _validate_run_record(
         ctx, spec, _read_json(run_path, label=spec.label))
     if (canonical_sha256(run_path.read_bytes()) != run_sha
@@ -918,27 +1033,37 @@ def _read_checkpoint_chain(
         ctx: Any, spec: SingleSessionRunSpec, *, run_sha: str,
 ) -> list[tuple[Path, dict[str, Any]]]:
     """读取严格无缺口的 revision 链；多一份陌生 JSON 也拒绝猜。"""
-    directory = spec.checkpoint_dir(ctx)
-    if not directory.is_dir():
-        return []
     numbered: dict[int, Path] = {}
-    try:
-        children = tuple(directory.iterdir())
-    except OSError as exc:
-        raise ArtifactUnreadable(
-            f'{spec.label} checkpoint 目录不可读：{exc}') from exc
-    for child in children:
-        if not child.is_file() or child.suffix != '.json':
+    for directory in _checkpoint_read_dirs(spec, ctx):
+        if not directory.is_dir():
             continue
-        match = _REVISION_FILE_RX.fullmatch(child.name)
-        if match is None:
+        try:
+            children = tuple(directory.iterdir())
+        except OSError as exc:
             raise ArtifactUnreadable(
-                f'{spec.label} checkpoint 目录含未登记 JSON：{child}')
-        revision = int(match.group(1))
-        if revision in numbered:
-            raise ArtifactUnreadable(
-                f'{spec.label} checkpoint revision={revision} 重复')
-        numbered[revision] = child
+                f'{spec.label} checkpoint 目录不可读：{exc}') from exc
+        for child in children:
+            if not child.is_file() or child.suffix != '.json':
+                continue
+            match = _REVISION_FILE_RX.fullmatch(child.name)
+            if match is None:
+                raise ArtifactUnreadable(
+                    f'{spec.label} checkpoint 目录含未登记 JSON：{child}')
+            revision = int(match.group(1))
+            existing = numbered.get(revision)
+            if existing is not None:
+                try:
+                    identical = existing.read_bytes() == child.read_bytes()
+                except OSError as exc:
+                    raise ArtifactUnreadable(
+                        f'{spec.label} checkpoint revision={revision} 冲突不可读：'
+                        f'{exc}') from exc
+                if not identical:
+                    raise ArtifactUnreadable(
+                        f'{spec.label} legacy/service checkpoint '
+                        f'revision={revision} 字节冲突')
+                # current 是现役空间；字节相同时以它作返回路径。
+            numbered[revision] = child
     if not numbered:
         return []
     expected_numbers = list(range(1, max(numbered) + 1))
@@ -949,7 +1074,7 @@ def _read_checkpoint_chain(
     previous: str | None = None
     for revision in expected_numbers:
         path = numbered[revision]
-        expected_path = _checkpoint_revision_path(directory, revision)
+        expected_path = _checkpoint_revision_path(path.parent, revision)
         if path.name != expected_path.name:
             raise ArtifactUnreadable(
                 f'{path} checkpoint revision 文件名不是 canonical 形状')
@@ -971,6 +1096,34 @@ def _latest_checkpoint(
     return records[-1] if records else None
 
 
+def _materialize_checkpoint_chain(
+        spec: SingleSessionRunSpec, ctx: Any,
+        records: Sequence[tuple[Path, Mapping[str, Any]]],
+) -> None:
+    """把已完整验过的 legacy revisions 原字节复制到 service 链。"""
+    current = spec.checkpoint_dir(ctx)
+    for source, record in records:
+        target = current / source.name
+        if source == target:
+            continue
+        try:
+            raw = source.read_bytes()
+        except OSError as exc:
+            raise ArtifactUnreadable(
+                f'{spec.label} legacy checkpoint {source} 读不出来：{exc}') from exc
+        if _decode_json_bytes(
+                raw, path=source, label=f'{spec.label} legacy checkpoint',
+        ) != dict(record):
+            raise ProvenanceRefused(
+                f'{source} 在校验与物化之间发生变化')
+        if target.is_file():
+            if target.read_bytes() != raw:
+                raise ProvenanceRefused(
+                    f'{spec.label}: legacy/service checkpoint 冲突 {source.name}')
+            continue
+        _atomic_bytes(target, raw)
+
+
 def write_checkpoint(
         ctx: Any, spec: SingleSessionRunSpec, *, input_sha256: str,
         system: str, user: str, response_model: type[BaseModel], max_tokens: int,
@@ -987,6 +1140,8 @@ def write_checkpoint(
     state = dict(state_payload)
     # 在取锁前就拒绝不能 canonical 的业务状态。
     canonical_bytes(state)
+    _materialize_legacy_run(
+        ctx, spec, response_model=response_model, max_tokens=max_tokens)
     _validate_request_against_run(
         ctx, spec, input_sha256=input_sha256, system=system, user=user,
         response_model=response_model, max_tokens=max_tokens)
@@ -1068,13 +1223,17 @@ def restore_checkpoint(
         system: str, user: str, response_model: type[M], max_tokens: int,
         validator: Callable[[M, ChatResponse], str | None] | None = None,
 ) -> RestoredCheckpoint[M] | None:
+    _materialize_legacy_run(
+        ctx, spec, response_model=response_model, max_tokens=max_tokens)
     _validate_request_against_run(
         ctx, spec, input_sha256=input_sha256, system=system, user=user,
         response_model=response_model, max_tokens=max_tokens)
-    run_path = spec.run_path(ctx) / RUN_FILE
+    run_path = _read_run_file(ctx, spec)
     run_sha = canonical_sha256(run_path.read_bytes())
     with process_append_lock(_checkpoint_lock_path(spec, ctx)):
         records = _read_checkpoint_chain(ctx, spec, run_sha=run_sha)
+        if records:
+            _materialize_checkpoint_chain(spec, ctx, records)
     if not records:
         return None
     target, record = records[-1]
@@ -1126,7 +1285,7 @@ def restore_historical_run(
         'novel_dir': Path(current_ctx.novel_dir),
         'run_id': source,
     })()
-    run_path = spec.run_path(bootstrap) / RUN_FILE
+    run_path = _read_run_file(bootstrap, spec)
     record = _read_json(run_path, label=f'{spec.label} historical run')
     if set(record) != _RUN_FIELDS:
         raise ArtifactUnreadable(f'{run_path} historical run.json 字段漂移')
@@ -1240,7 +1399,7 @@ def _validate_commit_state(
         raise ProvenanceRefused(f'{target} 不属于当前 run/sid/node/code')
     if record.get('state') not in ('prepared', 'committed'):
         raise ArtifactUnreadable(f'{target} commit state 非法')
-    run_path = run_spec.run_path(ctx) / RUN_FILE
+    run_path = _read_run_file(ctx, run_spec)
     run = _validate_run_record(
         ctx, run_spec, _read_json(run_path, label=run_spec.label))
     run_sha = canonical_sha256(run_path.read_bytes())
@@ -1295,8 +1454,42 @@ def _validate_commit_state(
     return record
 
 
-def commit_state(ctx: Any, spec: CommitBundleSpec) -> dict[str, Any] | None:
+def _legacy_commit_file(ctx: Any, spec: CommitBundleSpec) -> Path | None:
+    legacy = spec.run.legacy_run_path
+    return None if legacy is None else legacy(ctx) / COMMIT_FILE
+
+
+def _materialize_legacy_commit(ctx: Any, spec: CommitBundleSpec) -> Path:
+    """把 legacy prepared/committed journal 原字节接入 service run。"""
     target = spec.commit_path(ctx)
+    if target.is_file():
+        return target
+    legacy = _legacy_commit_file(ctx, spec)
+    if legacy is None or not legacy.is_file():
+        return target
+    _materialize_legacy_run(ctx, spec.run)
+    record = _validate_commit_state(ctx, spec, legacy)
+    try:
+        raw = legacy.read_bytes()
+    except OSError as exc:
+        raise ArtifactUnreadable(
+            f'{spec.run.label} legacy commit {legacy} 读不出来：{exc}') from exc
+    if _decode_json_bytes(
+            raw, path=legacy, label=f'{spec.run.label} legacy commit',
+    ) != record:
+        raise ProvenanceRefused(f'{legacy} 在校验与物化之间发生变化')
+    with process_append_lock(target):
+        if target.is_file():
+            if target.read_bytes() != raw:
+                raise ProvenanceRefused(
+                    f'{target} 已物化为另一份 commit journal')
+        else:
+            _atomic_bytes(target, raw)
+    return target
+
+
+def commit_state(ctx: Any, spec: CommitBundleSpec) -> dict[str, Any] | None:
+    target = _materialize_legacy_commit(ctx, spec)
     return _validate_commit_state(ctx, spec, target) if target.is_file() else None
 
 
@@ -1332,7 +1525,7 @@ def prepare_commit(
     touched = _normalized_touched(spec, touched_paths)
     if not _is_attempt_id(attempt_id):
         raise ProvenanceRefused(f'{run_spec.label}: attempt_id 不合法')
-    run_path = run_spec.run_path(ctx) / RUN_FILE
+    run_path = _materialize_legacy_run(ctx, run_spec)
     _validate_run_record(
         ctx, run_spec, _read_json(run_path, label=run_spec.label))
     run_sha = canonical_sha256(run_path.read_bytes())
@@ -1368,7 +1561,7 @@ def prepare_commit(
         'landed_payload_sha256s': None, 'post_file_sha256s': None,
     }
     payload['commit_sha256'] = _commit_hash(payload)
-    target = spec.commit_path(ctx)
+    target = _materialize_legacy_commit(ctx, spec)
     with _LOCK:
         with process_append_lock(target):
             if target.is_file():

@@ -17,9 +17,9 @@
 | `field-notes.md` | 经验证或明确标态的经验；索引兼入口（超出整读预算后条目分片进 `field-notes/`） | 稳定公共接口、流水账 |
 | `assets/final-review-template.md` | 用户最终审阅界面 | 运行逻辑 |
 | `scripts/session_preflight.py` | 只读固化一次 run 的起始时间、代码指纹、sid 与路径 | 推进节点或替代授权检查 |
-| `scripts/operator_phase.py` | 调用生产遥测唯一落点，追加不含正文的 operator session/phase 墙钟事件并生成归属摘要 | 估算 Commander 宿主模型 token/成本、冒充流水线 node 或成为交付闸 |
+| `scripts/operator_phase.py` | 开发者需要时调用生产遥测唯一落点的**可选诊断兼容入口** | 默认主路逐动作打点、估算 Commander 宿主模型 token/成本、冒充流水线 node 或成为交付闸；正式 RunSupervisor 已自动记录 phase/ledger 联结 |
 | `scripts/stage0_review_workpack.py` | 只读复用生产 check/审校分区/`scan_text`，固定 Stage0 反向审阅模式并输出紧凑工作包 | 自动审批、自动剔除或复制生产删除判据 |
-| `scripts/run_step.py` | 重铸 exact execution permit，调用生产 `build_steps`，以同一 permit/claim envelope + `step_index` 覆盖 root/follow，并给每一步串 start/end 信标 | 重造 argv、判定质量或吞掉节点退出码 |
+| `scripts/run_step.py` | 解析完整 execution token，调用生产 `build_steps`，preview 冻结渲染；execute 在 claim 后做一次 active-surface CAS，并以同一 envelope + `step_index` 覆盖 primary/follow、串起每一步 start/end 信标 | 默认走 SHA-only 重新规划、重造 argv、判定质量或吞掉节点退出码 |
 | `scripts/finalize_review.py` | canonical 收尾：collect 恰一次、内存 render/validate、验证通过后原子提交，再以全新读作用域调用生产交付终验 | 在写盘后复用旧快照、吞掉校验失败或用结束时当前指纹替代起始事实 |
 | `scripts/collect_final_evidence.py` | finalizer 复用的只读事实收集器；也保留为独立诊断入口 | 新造质量判据、写盘或替代逐项人工审阅 |
 | `scripts/sync_review_evidence.py` | finalizer 复用的稳定机器事实块 renderer/原子提交器；也保留为兼容入口 | 改写 agent 的语义判断、代批理由或产物 |
@@ -165,6 +165,8 @@ headless 消费提示词不依赖已删除的章节编号；`.agents` / `.claude
 | 判据 `fix` 指名的路由必须被提过 | `contracts.rules.REGISTRY` 的 `Rule.fix` | finding 当场指着一条 skill 里没有的路 |
 | 写出的 `novel.cli <子命令>` 必须注册在案（只做正向） | argparse `add_parser` | 反向会逼着把 queue 系列塞进主循环，那是假红 |
 | `operator next --json` 必须先于 runner，且每次变更后重新调用 | SKILL/workflow 的稳定循环 | 模型从 Stage 表猜下一节点，确定性调度器形同虚设 |
+| ready 的 `operator next --json` 必须同快照携带完整 opaque token 并由 preview/execute 原样复用；blocked recovery 才显式 `operator permit`，SHA-only 只可出现在兼容诊断说明 | `OperatorNext` / `ExecutionPermit` / `run_step.py` | next 与 permit 各跑一次全量 snapshot，或 preview/execute 把冻结步骤变回移动目标 |
+| 默认主循环不得要求 Commander 调 `operator_phase.py`；正式 phase/ledger 联结由 RunSupervisor 自动记录 | `agent_supervisor.py` / `run_step.py` | Commander 把大量时间花在与小说无关的手工控制账上 |
 | 推荐过滤正则接住每一种非 `ok` 状态，且**不**接住 `[OK]` | `render.py::_STATUS_MARK` | 过滤吞掉 `[--]` / 来源行 / `⚠` 就不再是“只改变读法”；反向那半防的是把正则写成 `.*` 换绿灯 |
 | 终审模板的“N 类计数”跟着 `INBOX_KIND` 走 | `INBOX_KIND` | `assets/` 长期不在行为断言面内，上一次十二处对账就漏了模板 |
 | `依据` 里的 `路径::符号` 必须落地 | `ast` 解析目标文件 | 经验的价值等于它的依据能不能回查 |

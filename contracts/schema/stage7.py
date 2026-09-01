@@ -255,6 +255,9 @@ class ApprovedNameMap(HashBoundHumanApproval):
     #: 终审人实际看到的紧凑工作包；旧批准缺失时只保留历史可读性，不能视为
     #: 当前工作包已审。
     workpack_sha256: Sha256 | None = None
+    #: 与 ``workpack_sha256`` 的 TOCTOU 身份分开：本字段只覆盖人实际看到的
+    #: 决策、finding 与显式审阅契约，用于跨 execution epoch 的适用性。
+    review_identity_sha256: Sha256 | None = None
 
 
 class BookTxt(StrictModel):

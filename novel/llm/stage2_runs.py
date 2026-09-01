@@ -7,9 +7,10 @@ stage2_runs.py —— Stage2 blueprint 的验证后章节检查点与一次性 r
 注册表都不看它；只有**同一个 canonical run_id** 的 Stage2 producer 会在重新执行当前
 schema、动态 validator、章节 scope、整书 compile 与联合 HARD 的前提下恢复它。
 
-为什么单独成模块：检查点会直接保存模型响应正文，必须跟书走；但它又不能借
-``ArtifactStore`` 冒充正式产物。把所有裸 IO 收进这一处，分层守卫便能给这一种内部
-状态一个窄豁免，而不必把最长的 ``extract.py`` 或 ``client.py`` 整体放进写盘白名单。
+为什么单独成模块：检查点会直接保存模型响应正文，必须按 sid 隔离在
+``_service/runs/<sid>/stage2``，且不能借 ``ArtifactStore`` 冒充正式产物。把所有裸 IO
+收进这一处，分层守卫便能给这一种内部状态一个窄豁免，而不必把最长的
+``extract.py`` 或 ``client.py`` 整体放进写盘白名单。旧书内 ``_stage2_runs`` 只读接入。
 """
 from __future__ import annotations
 
@@ -30,7 +31,9 @@ from contracts.schema.orchestration import AgentProfile
 from novel import agent_session_audit, paths
 from novel.agent_capabilities import validate_profile
 from novel.agents.base import render_structured_agent_stdin_bytes
-from novel.agents.session_client import validate_agent_session_request_binding
+from novel.agents.session_client import (
+    agent_json_schema, validate_agent_session_request_binding,
+)
 from novel.config import ENV_KEYS
 from novel.appendlog import process_append_lock
 from novel.errors import (
@@ -127,7 +130,7 @@ def repair_ownership_lock(novel_dir: Path):
     锁顺序恒为 ownership thread → ownership process → 各自状态文件锁；调用方
     不得在已持有单项/manifest 文件锁时反向进入这里。
     """
-    target = Path(novel_dir) / paths.STAGE2_RUNS_DIRNAME / OWNERSHIP_LOCK_TARGET
+    target = paths.service_stage_runs_dir(novel_dir, 'stage2') / OWNERSHIP_LOCK_TARGET
     with _ownership_thread_lock(target):
         with process_append_lock(target):
             yield
@@ -307,7 +310,11 @@ def _agent_phase_policy(
         raise ProvenanceRefused(
             f'{run_path} 对 phase={phase!r} 必须恰有一份 agent policy')
     row = rows[0]
-    current_schema_sha = _sha(response_model.model_json_schema(by_alias=True))
+    # Agent 的身份必须绑定真正下发给 CLI 的 schema。该构造口会剥掉
+    # AJV strict 不接受、但不改变分支约束的 discriminator；直接对
+    # Pydantic 原始 schema 求 SHA 会在出现 discriminated union 时把
+    # 同一份契约误判成漂移。
+    current_schema_sha = _sha(agent_json_schema(response_model))
     if (row.get('response_model') != response_model.__name__
             or row.get('response_schema_sha256') != current_schema_sha):
         raise ProvenanceRefused(
@@ -499,8 +506,44 @@ def _read_json(path: Path) -> dict[str, Any]:
     return value
 
 
+def _materialize_run_root(novel_dir: Path, run_id: str) -> Path:
+    run_id = check_run_id(run_id)
+    current = paths.stage2_blueprint_run_path(novel_dir, run_id)
+    legacy = paths.legacy_stage2_blueprint_run_path(novel_dir, run_id)
+    if legacy == current:
+        return current
+    # legacy 目录从此只读。仅物化本协议登记的四份状态与
+    # checkpoint JSON，不递归搬运临时文件或未知形状。
+    evidence = _existing_run_state(legacy)
+    if evidence:
+        lock = current / '.legacy-adoption'
+        with process_append_lock(lock):
+            for source in evidence:
+                relative = source.relative_to(legacy)
+                target = current / relative
+                raw = source.read_bytes()
+                if target.is_file():
+                    continue
+                target.parent.mkdir(parents=True, exist_ok=True)
+                fd, temp_name = tempfile.mkstemp(
+                    prefix=f'.{target.name}.', suffix='.tmp', dir=str(target.parent))
+                try:
+                    with os.fdopen(fd, 'wb') as fh:
+                        fh.write(raw)
+                        fh.flush()
+                        os.fsync(fh.fileno())
+                    os.replace(temp_name, target)
+                except BaseException:
+                    try:
+                        os.unlink(temp_name)
+                    except FileNotFoundError:
+                        pass
+                    raise
+    return current
+
+
 def _run_root(ctx: Any) -> Path:
-    return paths.stage2_blueprint_run_path(ctx.novel_dir, check_run_id(ctx.run_id))
+    return _materialize_run_root(Path(ctx.novel_dir), check_run_id(ctx.run_id))
 
 
 def _existing_run_state(root: Path) -> tuple[Path, ...]:
@@ -739,7 +782,14 @@ def _repair_resolution_binding(
         source_path = owner[0].with_name(RESOLUTION_FILE)
     root = Path(novel_dir).resolve()
     try:
-        source_rel = source_path.resolve().relative_to(root).as_posix()
+        source_abs = source_path.resolve()
+        try:
+            # 旧 run 的 resolution 仍在书目录内，保留原有相对身份。
+            source_rel = source_abs.relative_to(root).as_posix()
+        except ValueError:
+            # 新 run 已迁到同一 output base 的受管 `_service/runs/<sid>`。
+            # 只放宽到书目录的父目录，不能把任意外部文件登记成恢复依据。
+            source_rel = source_abs.relative_to(root.parent).as_posix()
         source_raw = source_path.read_bytes()
     except (ValueError, OSError) as exc:
         raise ProvenanceRefused(
@@ -808,8 +858,7 @@ def _validated_agent_acceptance(
         raise ProvenanceRefused(
             f'{purpose}: agent acceptance 缺完整 stdout/session/request/成本身份')
 
-    current_schema_sha = _sha(
-        response_model.model_json_schema(by_alias=True))
+    current_schema_sha = _sha(agent_json_schema(response_model))
     expected_binding = {
         'node': ctx.node,
         'chapter': int(chapter),
@@ -1269,7 +1318,10 @@ def _recovery_phase_policy(
         if policy.get('protocol_version') == AGENT_PROTOCOL_VERSION
         else _LEGACY_PHASE_FIELDS
     )
-    current_schema_sha = _sha(response_model.model_json_schema(by_alias=True))
+    current_schema_sha = _sha(
+        agent_json_schema(response_model)
+        if policy.get('protocol_version') == AGENT_PROTOCOL_VERSION
+        else response_model.model_json_schema(by_alias=True))
     if (set(row) != expected_fields
             or row.get('response_model') != response_model.__name__
             or row.get('response_schema_sha256') != current_schema_sha):
@@ -1297,7 +1349,7 @@ def _validate_historical_agent_session(
     profile = _materialized_profile_dict(
         policy.get('profile'), label='历史 Stage2 agent request policy')
     binding = acceptance.get('accepted_request')
-    schema_sha = _sha(response_model.model_json_schema(by_alias=True))
+    schema_sha = _sha(agent_json_schema(response_model))
     ceiling = phase_policy.get('requested_output_token_ceiling')
     expected_binding = {
         'node': 'stage2.blueprint',
@@ -1819,24 +1871,31 @@ def verified_blueprint_recovery_checkpoints(
     models = frozenset(str(model) for model in accepted_models if str(model))
     if not wanted or not models:
         return ()
-    root = Path(ctx.novel_dir) / paths.STAGE2_RUNS_DIRNAME
+    run_dir_by_id: dict[str, Path] = {}
     try:
-        run_dirs = sorted(
-            (path for path in root.iterdir() if path.is_dir()),
-            key=lambda path: path.name,
-        ) if root.is_dir() else []
+        for root in paths.stage_run_read_roots(ctx.novel_dir, 'stage2'):
+            if root.is_dir():
+                for path in root.iterdir():
+                    if not path.is_dir() or path.name in run_dir_by_id:
+                        continue
+                    run_dir_by_id[path.name] = path
     except OSError:
         return ()
+    run_dirs = [run_dir_by_id[key] for key in sorted(run_dir_by_id)]
 
     found: list[VerifiedBlueprintCheckpoint] = []
-    current_schema_sha = _sha(response_model.model_json_schema(by_alias=True))
     for run_dir in run_dirs:
         try:
             run_id = check_run_id(run_dir.name)
-            run_root = paths.stage2_blueprint_run_path(ctx.novel_dir, run_id)
+            run_root = run_dir / 'blueprint'
             run = _read_json(run_root / RUN_FILE)
             policy = run.get('request_policy')
             phases = policy.get('phases') if isinstance(policy, dict) else None
+            current_schema_sha = _sha(
+                agent_json_schema(response_model)
+                if isinstance(policy, dict)
+                and policy.get('protocol_version') == AGENT_PROTOCOL_VERSION
+                else response_model.model_json_schema(by_alias=True))
             if ({
                     'run_id': run.get('run_id'),
                     'sid': run.get('sid'),
@@ -2045,10 +2104,16 @@ def _create_repair_manifest_locked(
 
 
 def _manifest_paths(novel_dir: Path) -> Iterable[Path]:
-    root = novel_dir / paths.STAGE2_RUNS_DIRNAME
-    if not root.is_dir():
-        return ()
-    return tuple(sorted(root.glob(f'*/blueprint/{MANIFEST_FILE}')))
+    found: dict[str, Path] = {}
+    for root in paths.stage_run_read_roots(novel_dir, 'stage2'):
+        if root.is_dir():
+            for target in root.glob(f'*/blueprint/{MANIFEST_FILE}'):
+                run_id = target.parent.parent.name
+                prior = found.get(run_id)
+                if prior is not None:
+                    continue
+                found[run_id] = target
+    return tuple(found[key] for key in sorted(found))
 
 
 def batch_owner(novel_dir: Path, attempt_id: str) -> tuple[Path, dict[str, Any]] | None:
@@ -2156,7 +2221,7 @@ def _validate_manifest_sources(
 
 
 def human_batch_resolved(novel_dir: Path, run_id: str) -> bool:
-    root = paths.stage2_blueprint_run_path(novel_dir, run_id)
+    root = _materialize_run_root(Path(novel_dir), run_id)
     manifest_path = root / MANIFEST_FILE
     resolution_path = root / RESOLUTION_FILE
     if not manifest_path.is_file() or not resolution_path.is_file():
@@ -2177,17 +2242,19 @@ def submit_batch(
     if not actor:
         raise TerminalState('批量响应修复必须显式给非空 actor')
     root = Path(novel_dir).resolve()
-    manifest_path = Path(manifest_path).resolve()
-    try:
-        relative = manifest_path.relative_to(root)
-    except ValueError:
-        raise TerminalState(f'batch manifest {manifest_path} 不在当前书目录 {root} 内') from None
-    if (len(relative.parts) != 4
-            or relative.parts[0] != paths.STAGE2_RUNS_DIRNAME
-            or relative.parts[2:] != ('blueprint', MANIFEST_FILE)):
-        raise TerminalState(f'{manifest_path} 不是登记的 Stage2 blueprint manifest 落点')
+    supplied = Path(manifest_path).resolve()
+    # 先从 manifest 外壳取 run_id，再用路径唯一落点重锚；legacy
+    # 请求会先原字节物化到 service，resolution 绝不回写书内旧目录。
+    supplied_manifest = _validate_manifest(supplied)
+    run_id = check_run_id(str(supplied_manifest.get('run_id') or ''))
+    current_root = _materialize_run_root(root, run_id).resolve()
+    current_manifest = current_root / MANIFEST_FILE
+    legacy_manifest = paths.legacy_stage2_blueprint_run_path(
+        root, run_id).resolve() / MANIFEST_FILE
+    if supplied not in (current_manifest.resolve(), legacy_manifest.resolve()):
+        raise TerminalState(f'{supplied} 不是登记的 Stage2 blueprint manifest 落点')
+    manifest_path = current_manifest.resolve()
     manifest = _validate_manifest(manifest_path)
-    run_id = check_run_id(str(manifest.get('run_id') or ''))
     if paths.stage2_blueprint_run_path(root, run_id) != manifest_path.parent:
         raise ProvenanceRefused(f'{manifest_path} 自报 run_id 与路径不一致')
     run_path = manifest_path.with_name(RUN_FILE)
@@ -2414,9 +2481,10 @@ def prepare_commit(
         'artifact_fingerprint': artifact_fingerprint,
         'artifact_sha256': _sha(dict(artifact_payload)),
         'finalization_sha256': _sha(dict(finalization_payload)),
-        # 候选正文只许跟书走，因此封存在书内 `_stage2_runs`，
-        # 不进 `_service`。只存 hash 会在 prepare→formal 崩溃时丢掉
-        # 那份已付费、已通过代码校验的唯一候选，重启后无法零 wire 收尾。
+        # 候选正文封存在按 sid 隔离的 `_service/runs/<sid>/stage2`，
+        # 不混入正式 artifact。只存 hash 会在 prepare→formal 崩溃时丢掉
+        # 那份已付费、已通过代码校验的唯一候选，重启后无法零 wire 收尾；
+        # 因此它属于默认不删的恢复 checkpoint，而不是可随意轮转的日志。
         'artifact_payload': copy.deepcopy(dict(artifact_payload)),
         'finalization_payload': copy.deepcopy(dict(finalization_payload)),
         'attempts': attempts,

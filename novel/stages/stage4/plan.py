@@ -27,13 +27,16 @@ from dataclasses import dataclass, field
 
 from contracts.artifacts import (
     STAGE1_MAIN_TEXT, STAGE2_CHAPTER_BLUEPRINTS, STAGE2_GLOBAL_GROUNDING,
-    STAGE4_BLIND_CANDIDATE, STAGE4_EVIDENCE_BINDING, STAGE4_PLAN_CHAPTERS,
+    STAGE4_BLIND_CANDIDATE, STAGE4_BLIND_CHAPTER_EDIT,
+    STAGE4_EVIDENCE_BINDING, STAGE4_PLAN_CHAPTERS,
     STAGE4_PLAN_EDIT, STAGE4_WRITER_CONTEXT,
 )
 
 from typing import Any
 
-from contracts.invariants import BLIND_ALIAS_ALGORITHM, FAILURE_STOP_OWNERS
+from contracts.invariants import (
+    BLIND_ALIAS_ALGORITHM, DESIGN_REVIEW_CONTRACT, FAILURE_STOP_OWNERS,
+)
 from contracts.schema import artifact_spec
 from contracts.schema.api import (
     DesignRepairChapterScope, DesignRepairConstraint, DesignRepairScope,
@@ -42,7 +45,8 @@ from contracts.schema.report import CheckReport
 from contracts.schema.stage1 import MainText
 from contracts.schema.stage2 import ChapterBlueprints, GlobalGrounding
 from contracts.schema.stage4 import (
-    BlindBookStrategyResponse, BlindCandidate, BlindCandidateProvenance,
+    BlindBookStrategyResponse, BlindCandidate, BlindCandidateHumanProvenance,
+    BlindCandidateProvenance, BlindChapterEditRequest,
     BlindChapterDesignResponse, BlindPlanResponse, BindingConcern,
     ChapterBindingResponse,
     EvidenceBindingCompiledProvenance,
@@ -53,7 +57,8 @@ from contracts.schema.stage4 import (
 )
 from novel import paths, prov
 from novel.errors import (
-    ApprovalRequired, ArtifactUnreadable, GateBlocked, RefusedByStructure,
+    ApprovalRequired, ArtifactUnreadable, GateBlocked, HumanEditProtected,
+    RefusedByStructure,
     TerminalState, UpstreamMissing, UpstreamStale, UpstreamUnproven,
     ProvenanceRefused,
 )
@@ -64,9 +69,11 @@ from novel.core.naming import display_names_at
 from novel.stages.stage4 import checks, prompts
 from novel.stages.stage4.blind import (
     BlindPlanError, assemble_blind_candidate, build_blind_chapter_projection,
-    build_blind_projection, build_blind_strategy_projection,
+    build_blind_executor_projection, build_blind_projection,
+    build_blind_strategy_projection,
     build_evidence_catalog, candidate_subject_sha256,
     compile_blind_candidate, compile_blind_chapter_design,
+    compile_blind_chapter_edit,
     construct_feasible_binding_witness, merge_evidence_bindings,
     prove_binding_infeasible, validate_infeasible_binding,
 )
@@ -76,6 +83,12 @@ from novel.stages.stage4.baseline import (
 from novel.stages.stage4.beats import beat_index
 from novel.stages.stage4.context import build_writer_context
 from novel.stages.stage4.fact_refs import catalog as fact_catalog, validate_plan_refs
+from novel.stages.stage4.design_evolution import (
+    DesignEvolutionError, chapter_strategy_sha256,
+    evaluate_relation_constraints, non_target_chapter_drift,
+    replace_candidate_chapters, replan_affected_chapters,
+    strategy_epoch_sha256,
+)
 from novel.stages.stage4.measure import (
     adopt_plan_response, budget_basis, identity_plan, source_chars_table,
 )
@@ -105,6 +118,7 @@ BLUEPRINTS = STAGE2_CHAPTER_BLUEPRINTS
 
 #: `--apply-edit` 的缺省决策集路径。形状是契约（`ARTIFACTS` 里登记着 `PlanEdit`）。
 EDIT = STAGE4_PLAN_EDIT
+DESIGN_EDIT = STAGE4_BLIND_CHAPTER_EDIT
 
 #: 被闸门拦下的那一份。**从 `REL` 派生，不手写第二个字符串。**
 _INVALID = paths.invalid_of(REL)
@@ -175,6 +189,7 @@ class DesignCandidateContext:
     input_sha256: str
     strategy_input_sha256: str
     validator: Any = field(repr=False, compare=False)
+    strategy_feedback: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -187,6 +202,8 @@ class DesignChapterContext:
     user: str
     projection: dict[str, Any]
     local_mapping: dict[str, Any] = field(repr=False, compare=False)
+    strategy_epoch_sha256: str
+    chapter_strategy_sha256: str
     input_sha256: str
     validator: Any = field(repr=False, compare=False)
 
@@ -227,6 +244,19 @@ class DesignRepairEvaluation:
     target_adoptions: tuple[DesignAdoption, ...]
     input_sha256: str
     candidate_sha256: str
+
+
+@dataclass(frozen=True)
+class DesignChapterEditEvaluation:
+    """完整章人工替换的 preview 结果；apply 只接受这份已闭合快照。"""
+
+    request: BlindChapterEditRequest
+    request_rel: str
+    parent_file_sha256: str
+    parent_run_id: str | None
+    parent_sources: tuple[Any, ...]
+    artifact: BlindCandidate
+    artifact_sha256: str
 
 
 @dataclass(frozen=True)
@@ -494,7 +524,8 @@ def _legacy_design_request(
         up.blueprints, root_clean_sha1=ctx.root_clean_sha1)
     system = prompts.blind_design_system()
     user = prompts.BLOCK_BLIND_TRUTH + '\n' + json.dumps(
-        truth, ensure_ascii=False, sort_keys=True, separators=(',', ':'))
+        build_blind_executor_projection(truth),
+        ensure_ascii=False, sort_keys=True, separators=(',', ':'))
     return system, user, store, up, truth, mapping
 
 
@@ -510,7 +541,7 @@ def build_design_prompt(ctx: RunContext) -> tuple[str, str]:
 
 
 def _require_definitive_design_candidate(
-        store: ArtifactStore, rel: str,
+        store: ArtifactStore, rel: str, *, allow_frozen_v6: bool = False,
 ) -> tuple[BlindCandidate, str]:
     """强类型读取一份 A，并把 stale/unknown 保留为不同显式终态。"""
     with store.ctx.validation_reads():
@@ -520,6 +551,16 @@ def _require_definitive_design_candidate(
     if freshness.state == 'stale':
         raise UpstreamStale(
             f'{rel} 已过期（{freshness.reason}）；不得把它当成空槽位覆盖')
+    if freshness.state == 'unknown' and allow_frozen_v6 and rel == CANDIDATE_REL:
+        from novel.stages.stage2.frozen_v6 import (
+            LEGACY_FROZEN_REVIEW_CONTRACT,
+            require_frozen_v6_stage4_subject,
+        )
+        frozen = require_frozen_v6_stage4_subject(store)
+        if frozen.candidate_sha256 != file_sha256:
+            raise UpstreamUnproven(
+                '冻结 v6 证明绑定的 Stage4A candidate 与本次读取字节不同')
+        freshness = frozen.source_freshness
     if freshness.state == 'unknown':
         raise UpstreamUnproven(
             f'{rel} 的来源无法证明为当前（{freshness.reason}）；'
@@ -554,7 +595,7 @@ def require_initial_design_slot(store: ArtifactStore) -> None:
     raise ApprovalRequired(
         f'当前 fresh {CANDIDATE_REL} 已存在；裸 stage4.design 不得覆盖。'
         '请先提交/处理 hash-bound typed Stage4A 审阅：接受后进入 stage4.plan，'
-        '逐章驳回走 --repair-decision，策略驳回走 --replan')
+        '逐章驳回走 --review-token，策略驳回走 --replan + --review-token')
 
 
 def _require_design_action_subject(
@@ -581,10 +622,10 @@ def _require_design_action_subject(
 
 
 def require_targeted_design_executor(ctx: RunContext) -> None:
-    """公开 ``--repair-decision`` 的执行能力前置；legacy client 不可假装可跑。"""
+    """公开 token-bound 定向返修的执行能力前置；legacy client 不可假装可跑。"""
     if not _uses_agent_runs(ctx):
         raise TerminalState(
-            'stage4.design --repair-decision 只支持带 executor profile 的 '
+            'stage4.design --review-token 定向返修只支持带 executor profile 的 '
             'Stage4DesignAgent：它需要逐章私有 session、durable checkpoint 与 '
             '跨 run lineage；legacy 单 LlmClient 在 preview/启动前即拒绝')
 
@@ -612,14 +653,28 @@ def _blind_chapter_problems(
             f'ch{ordinal} land 必须恰落一次：expected={sorted(land)},got={sorted(landed)}')
     # A 相就把「因果端点根本没进任何场」挡下来，别等到 B 之后才发现整书要重出。
     # 逆序只在正式计划上作 INFO 报读数，A 相不据此拒稿（倒叙本来就合法）。
+    positions = checks.causal_scene_positions(
+        scenes, land_key='land_fact_aliases',
+        context_key='context_fact_aliases')
     missing_causal, _reversed_causal = checks.causal_scene_findings(
         list(source.get('causal_edges') or []),
-        checks.causal_scene_positions(
-            scenes, land_key='land_fact_aliases',
-            context_key='context_fact_aliases'),
+        positions,
         before_key='before_alias', after_key='after_alias')
     if missing_causal:
         problems.append(f'ch{ordinal} 因果端点未入候选场：{missing_causal}')
+    hard_relations = [
+        row for row in list(source.get('narrative_relations') or [])
+        if row.get('enforcement') == 'hard'
+    ]
+    relation_bad = checks.narrative_relation_scene_findings(
+        hard_relations,
+        positions, suffix='_alias')
+    story_time_bad, _story_time_unknown = checks.narrative_story_time_findings(
+        hard_relations, scenes,
+        suffix='_alias', land_key='land_fact_aliases')
+    relation_bad.extend(story_time_bad)
+    if relation_bad:
+        problems.append(f'ch{ordinal} HARD 叙事关系未满足：{relation_bad}')
     problems.extend(
         f'ch{ordinal}.{row} context 越界' for row in checks.context_ref_findings(
             scenes, context_obligation_refs=context,
@@ -1186,6 +1241,69 @@ class _ChapterBindingIssue:
         payload['closed_refs'] = canonical_refs
         return payload
 
+
+class _ReplanStrategyValidator:
+    """策略 replan 的 typed 变量面；拒绝无反馈随机刷新和越界改动。"""
+
+    def __init__(
+        self, base: _BlindStrategyValidator, *,
+        previous: BlindBookStrategyResponse,
+        feedback: Mapping[str, Any],
+    ) -> None:
+        self.base = base
+        self.previous = previous
+        self.feedback = dict(feedback)
+        self.typed_failures: tuple[TypedFailure, ...] = ()
+
+    def __call__(
+        self, response: BlindBookStrategyResponse, wire: Any,
+    ) -> str | None:
+        why = self.base(response, wire)
+        self.typed_failures = self.base.typed_failures
+        if why is not None:
+            return why
+        old = self.previous
+        old_weights = {
+            row.chapter_ordinal: row.weight for row in old.chapter_weights}
+        new_weights = {
+            row.chapter_ordinal: row.weight for row in response.chapter_weights}
+        constraints = list(
+            self.feedback.get('accumulated_constraints') or [])
+        replace_global = any(
+            row.get('kind') == 'replace_reconstruction_strategy'
+            for row in constraints if isinstance(row, Mapping))
+        allowed_weights = {
+            int(ordinal)
+            for row in constraints if isinstance(row, Mapping)
+            and row.get('kind') == 'change_chapter_weights'
+            for ordinal in row.get('chapter_ordinals') or []
+        }
+        changed_weights = {
+            ordinal for ordinal in old_weights
+            if old_weights[ordinal] != new_weights.get(ordinal)
+        }
+        global_changed = (
+            old.reconstruction_strategy != response.reconstruction_strategy)
+        problems: list[str] = []
+        if global_changed != replace_global:
+            problems.append(
+                '宏观 reconstruction_strategy 改动面与 typed '
+                'replace_reconstruction_strategy 不符')
+        if changed_weights != allowed_weights:
+            problems.append(
+                f'chapter weight 改动集必须精确等于 typed 章集：'
+                f'expected={sorted(allowed_weights)},actual={sorted(changed_weights)}')
+        if not global_changed and not changed_weights:
+            problems.append('typed replan 不得返回完全 no-op 策略')
+        if not problems:
+            return None
+        witness_sha = _response_witness_sha(response)
+        self.typed_failures = (typed_failures.make(
+            candidate_sha256=witness_sha,
+            code='strategy_typed_feedback_unclosed',
+            rule='strategy_typed_feedback_unclosed',
+            surfacing='stage4.design', refs=problems[:8]),)
+        return '；'.join(problems)
 
 def _chapter_binding_issue(
         ctx: RunContext, up: _Upstreams, candidate_raw: dict[str, Any],
@@ -1827,7 +1945,8 @@ def _refuse_foreign_before_wire(ctx: RunContext) -> None:
     """legacy/agent 共用正式路径，不能踩过另一 run 的 prepared。"""
     from novel.llm import stage4_runs
     if (not _uses_agent_runs(ctx)
-            and not (ctx.novel_dir / paths.STAGE4_RUNS_DIRNAME).is_dir()):
+            and not any(root.is_dir() for root in paths.stage_run_read_roots(
+                ctx.novel_dir, 'stage4'))):
         return
     with stage4_runs.commit_ownership(ctx.novel_dir):
         stage4_runs.refuse_foreign_commit_reservations(ctx)
@@ -1844,11 +1963,23 @@ def _assert_design_current(
         'architecture': 'book_strategy_chapters_v1',
         'truth': truth, 'mapping': mapping,
     })
-    strategy_input = _canonical_sha256({
+    expected_user = user
+    if prepared.strategy_feedback is not None:
+        expected_user = '\n'.join((
+            user,
+            '【TYPED_REPLAN_FEEDBACK_JSON】',
+            json.dumps(
+                prepared.strategy_feedback, ensure_ascii=False,
+                sort_keys=True, separators=(',', ':')),
+        ))
+    strategy_identity = {
         'root_input_sha256': current_input,
         'strategy_projection': projection,
-    })
-    if (system != prepared.system or user != prepared.user
+    }
+    if prepared.strategy_feedback is not None:
+        strategy_identity['strategy_feedback'] = prepared.strategy_feedback
+    strategy_input = _canonical_sha256(strategy_identity)
+    if (system != prepared.system or expected_user != prepared.user
             or truth != prepared.truth or mapping != prepared.mapping
             or projection != prepared.strategy_projection
             or current_input != prepared.input_sha256
@@ -1919,6 +2050,60 @@ def prepare_design_candidate(
     return prepared
 
 
+def _prepare_design_replan_candidate(
+    ctx: RunContext, scope: DesignRepairScope,
+    previous: BlindBookStrategyResponse,
+) -> DesignCandidateContext:
+    if scope.replan_feedback is None or scope.strategy_epoch_sha256 is None:
+        raise ProvenanceRefused('v3 strategy replan 缺 typed feedback/strategy epoch')
+    base = prepare_design_candidate(
+        ctx, ensure_strategy_unit=False,
+        _existing_candidate_authorized=True)
+    feedback = scope.replan_feedback.model_dump(mode='json')
+    prompt_feedback = {
+        'previous_strategy': previous.model_dump(mode='json'),
+        'typed_feedback': feedback,
+    }
+    user = '\n'.join((
+        base.user,
+        '【TYPED_REPLAN_FEEDBACK_JSON】',
+        json.dumps(
+            prompt_feedback, ensure_ascii=False,
+            sort_keys=True, separators=(',', ':')),
+    ))
+    identity = {
+        'root_input_sha256': base.input_sha256,
+        'strategy_projection': base.strategy_projection,
+        'strategy_feedback': prompt_feedback,
+    }
+    chapters = tuple(sorted(
+        int(row.get('chapter_ordinal') or 0)
+        for row in (base.truth.get('chapters') or [])))
+    prepared = DesignCandidateContext(
+        system=base.system,
+        user=user,
+        store=base.store,
+        upstream=base.upstream,
+        truth=base.truth,
+        mapping=base.mapping,
+        strategy_projection=base.strategy_projection,
+        input_sha256=base.input_sha256,
+        strategy_input_sha256=_canonical_sha256(identity),
+        validator=_ReplanStrategyValidator(
+            _BlindStrategyValidator(chapters),
+            previous=previous,
+            feedback=feedback,
+        ),
+        strategy_feedback=prompt_feedback,
+    )
+    _assert_design_current(ctx, prepared)
+    if _uses_agent_runs(ctx):
+        from novel.llm import stage4_runs
+        stage4_runs.ensure_design_unit_run(
+            ctx, _design_strategy_unit(prepared))
+    return prepared
+
+
 def _design_strategy_checkpoint_state(
         response: BlindBookStrategyResponse,
 ) -> dict[str, Any]:
@@ -1956,8 +2141,12 @@ def _design_chapter_contexts(
         int(row.get('chapter_ordinal') or 0): row
         for row in (prepared.truth.get('chapters') or [])
     }
-    strategy_payload = strategy.model_dump(by_alias=True, mode='json')
-    strategy_sha = _canonical_sha256(strategy_payload)
+    epoch = strategy_epoch_sha256({
+        'review_contract': DESIGN_REVIEW_CONTRACT,
+        'root_clean_sha1': ctx.root_clean_sha1,
+        'truth_sha256': str(prepared.mapping['truth_sha256']),
+        'alias_algorithm': BLIND_ALIAS_ALGORITHM,
+    }, strategy.reconstruction_strategy)
     contexts: list[DesignChapterContext] = []
     for ordinal in sorted(truth_by):
         projection, local_mapping = build_blind_chapter_projection(
@@ -1977,12 +2166,16 @@ def _design_chapter_contexts(
             json.dumps(projection, ensure_ascii=False, sort_keys=True,
                        separators=(',', ':')),
         ))
+        own_strategy_sha = chapter_strategy_sha256(
+            epoch, ordinal, weights[ordinal])
         input_sha = _canonical_sha256({
             'root_input_sha256': prepared.input_sha256,
-            'strategy_response_sha256': strategy_sha,
+            # 真正进入本章 prompt 的只有宏观 strategy + 本章 weight。其他章
+            # weight 不得污染本章 checkpoint 身份。
+            'strategy_epoch_sha256': epoch,
+            'chapter_strategy_sha256': own_strategy_sha,
             'chapter_projection': projection,
             'local_mapping': local_mapping,
-            'chapter_weight': weights[ordinal],
         })
         contexts.append(DesignChapterContext(
             chapter_ordinal=ordinal,
@@ -1991,6 +2184,8 @@ def _design_chapter_contexts(
             user=user,
             projection=projection,
             local_mapping=local_mapping,
+            strategy_epoch_sha256=epoch,
+            chapter_strategy_sha256=own_strategy_sha,
             input_sha256=input_sha,
             validator=_BlindChapterValidator(
                 truth_chapter=truth_by[ordinal],
@@ -2644,6 +2839,7 @@ _REPAIR_INSTRUCTION_TEMPLATES = {
     'noncontiguous_regroup': '将给定 opaque_aliases 做非相邻重组，并保持因果/状态边界。',
     'scene_goal': '只调整 scene_refs 指向场景的目标，必须覆盖给定 opaque_aliases。',
     'binding_constraint_unsat': '调整 scene_refs 指向场景的结构，使其可在后续关闭式证据绑定中实现。',
+    'narrative_relation': '必须满足 typed HARD relation effect，不得用自由文本改写其端点或语义。',
 }
 
 
@@ -2668,10 +2864,24 @@ def _repair_instruction_rows(
             for local_alias, global_alias in local_to_global.items()
         })
     rows: list[dict[str, Any]] = []
-    for constraint in scope.constraints:
+    active_constraints = (
+        scope.accumulated_constraints if scope.is_v3 else scope.constraints)
+    for constraint in active_constraints:
         unknown_scenes = sorted(set(constraint.scene_refs) - allowed_scenes)
         unknown_aliases = sorted(
             set(constraint.opaque_aliases) - set(global_to_local))
+        effect = None
+        if constraint.effect is not None:
+            raw_effect = constraint.effect.model_dump(mode='json')
+            effect = {}
+            for key, value in raw_effect.items():
+                if key.endswith('_alias'):
+                    if value not in global_to_local:
+                        unknown_aliases.append(str(value))
+                    else:
+                        effect[key] = global_to_local[str(value)]
+                else:
+                    effect[key] = value
         if unknown_scenes or unknown_aliases:
             raise ProvenanceRefused(
                 f'ch{scope.output_ordinal} repair constraint={constraint.code} '
@@ -2682,9 +2892,49 @@ def _repair_instruction_rows(
             # 顺序不排序：disclosure/anchor 契约明示它就是目标顺序。
             'opaque_aliases': [
                 global_to_local[alias] for alias in constraint.opaque_aliases],
+            'effect': effect,
             'instruction': _REPAIR_INSTRUCTION_TEMPLATES[constraint.code],
         })
     return rows
+
+
+def _assert_repair_constraint_set(
+    scope: DesignRepairChapterScope, *, strategy_epoch: str,
+    chapter: Mapping[str, Any] | None = None,
+) -> None:
+    """运行时独立复核累计集身份，并让 typed relation 真正成为落盘 HARD。"""
+    if not scope.is_v3:
+        return
+    expected = _canonical_sha256({
+        'kind': 'stage4-design-repair-constraint-set-v1',
+        'strategy_epoch_sha256': strategy_epoch,
+        'output_ordinal': scope.output_ordinal,
+        'constraints': [
+            item.model_dump(mode='json')
+            for item in scope.accumulated_constraints
+        ],
+    })
+    if expected != scope.constraint_set_sha256:
+        raise ProvenanceRefused(
+            f'ch{scope.output_ordinal} repair constraint_set SHA 与累计内容不符')
+    if chapter is None:
+        return
+    relations = [
+        item.effect.model_dump(mode='json')
+        for item in scope.accumulated_constraints
+        if item.effect is not None
+    ]
+    if not relations:
+        return
+    try:
+        verdict = evaluate_relation_constraints(relations, chapter)
+    except DesignEvolutionError as exc:
+        raise ProvenanceRefused(
+            f'ch{scope.output_ordinal} 累计 typed relation 无法判定：{exc}') from exc
+    if verdict.unclosed:
+        raise ProvenanceRefused(
+            f'ch{scope.output_ordinal} 仍未关闭累计 typed relation：'
+            f'{[row.constraint_sha256 for row in verdict.unclosed]}')
 
 
 def _repair_chapter_context(
@@ -2719,6 +2969,8 @@ def _repair_chapter_context(
         user=user,
         projection=normal.projection,
         local_mapping=normal.local_mapping,
+        strategy_epoch_sha256=normal.strategy_epoch_sha256,
+        chapter_strategy_sha256=normal.chapter_strategy_sha256,
         input_sha256=_canonical_sha256({
             'architecture': 'book_strategy_targeted_repair_v1',
             'normal_input_sha256': normal.input_sha256,
@@ -2727,6 +2979,7 @@ def _repair_chapter_context(
             'parent_source_run_id': parent_source.source_run_id,
             'parent_checkpoint_sha256': parent_source.checkpoint_sha256,
             'constraints': rows,
+            'constraint_set_sha256': scope.constraint_set_sha256,
         }),
         validator=normal.validator,
     )
@@ -2770,16 +3023,9 @@ def _prepare_design_repair(
             raise ProvenanceRefused(
                 'targeted repair 缺可执行 split lineage：'
                 f'{capability.reason_code}；必须走 strategy replan')
-        prior_rounds = dict(capability.chapter_repair_rounds)
-        exhausted = [
-            chapter for chapter in scope.target_chapters
-            if prior_rounds.get(chapter, 0) >= 2
-        ]
-        if exhausted:
-            raise ProvenanceRefused(
-                f'targeted repair 章 {exhausted} 已各有 2 个 committed repair '
-                'round；第三轮已在任何 session/wire 前关闭，'
-                '必须走 strategy replan')
+        # 历史 committed rounds 只作审计读数，不再把单章永久锁死。每份新的
+        # hash-bound typed decision 都开启同一 strategy epoch 下的新 repair
+        # epoch；本 epoch 的模型 content turns 仍由 agent.max_turns == 2 封顶。
         parent_run_id, parent_payload, inherited_sources = \
             stage4_runs.resolve_committed_design_sources(
                 ctx,
@@ -2827,6 +3073,11 @@ def _prepare_design_repair(
         raise ProvenanceRefused(f'parent strategy 在当前 truth 下失效：{why}')
     normal_contexts = _design_chapter_contexts(
         ctx, prepared, strategy, ensure_units=False)
+    epochs = {row.strategy_epoch_sha256 for row in normal_contexts}
+    if scope.strategy_epoch_sha256 is not None \
+            and epochs != {scope.strategy_epoch_sha256}:
+        raise ProvenanceRefused(
+            'repair scope strategy epoch 与当前候选真实消费面不符')
     parent_chapters = {
         int(row.output_ordinal): row.model_dump(by_alias=True, mode='json')
         for row in parent.output_chapters
@@ -2859,6 +3110,8 @@ def _prepare_design_repair(
         raise ProvenanceRefused(f'repair scope 含未知章：{unknown}')
     targets: list[DesignChapterContext] = []
     for ordinal in sorted(scope_by):
+        _assert_repair_constraint_set(
+            scope_by[ordinal], strategy_epoch=normal_by[ordinal].strategy_epoch_sha256)
         repaired = _repair_chapter_context(
             ctx, prepared, normal_by[ordinal], scope_by[ordinal],
             parent_responses[ordinal], parent_chapters[ordinal],
@@ -2906,6 +3159,16 @@ def _materialize_design_repair(
             raise ProvenanceRefused(
                 f'repair ch{chapter.chapter_ordinal} 绕过编译闸：'
                 f'{why or "未编译"}')
+        scoped = next((
+            row for row in scope.chapters
+            if row.output_ordinal == chapter.chapter_ordinal
+        ), None)
+        if scoped is not None:
+            _assert_repair_constraint_set(
+                scoped,
+                strategy_epoch=chapter.strategy_epoch_sha256,
+                chapter=chapter.validator.compiled,
+            )
         compiled.append(chapter.validator.compiled)
     business = assemble_blind_candidate(
         responses.strategy.model_dump(by_alias=True), compiled,
@@ -2931,13 +3194,16 @@ def _materialize_design_repair(
     }
     final_sources = tuple(
         current_sources.get(old.chapter, old) for old in sources)
-    adopted_models = tuple(sorted({row.model for row in final_sources}))
+    adopted_models = tuple(sorted({
+        row.model for row in final_sources if row.model is not None}))
     lineage = [{
         'chapter_ordinal': row.chapter,
         'source_run_id': row.source_run_id,
         'purpose': row.purpose,
         'attempt_id': row.attempt_id,
         'source_kind': row.source_kind,
+        'origin': row.origin,
+        'source_ref': row.source_ref,
     } for row in final_sources]
     provenance = ctx.llm_provenance(
         BlindCandidateProvenance,
@@ -2979,6 +3245,7 @@ def _design_repair_finalization(
             'chapter': row.chapter, 'source_run': row.source_run_id,
             'purpose': row.purpose, 'attempt': row.attempt_id,
             'source_kind': row.source_kind,
+            'origin': row.origin, 'source_ref': row.source_ref,
         } for row in sources]),
         'candidate_sha256': _canonical_sha256(
             artifact.model_dump(by_alias=True, mode='json')),
@@ -3089,6 +3356,534 @@ def _run_design_repair(
         return landed
 
 
+def _materialize_design_replan(
+    ctx: RunContext, source: Any, prepared: DesignCandidateContext,
+    scope: DesignRepairScope, responses: DesignCandidateResponses,
+    parent: BlindCandidate, sources: tuple[Any, ...],
+    affected: tuple[int, ...], *, settle: bool,
+) -> BlindCandidate:
+    contexts = _design_chapter_contexts(
+        ctx, prepared, responses.strategy, ensure_units=False)
+    response_by = dict(responses.chapters)
+    compiled: list[dict[str, Any]] = []
+    for chapter in contexts:
+        response = response_by.get(chapter.chapter_ordinal)
+        if response is None:
+            raise ProvenanceRefused(
+                f'replan 聚合缺 ch{chapter.chapter_ordinal} response')
+        why = chapter.validator(response, None)
+        if why is not None or chapter.validator.compiled is None:
+            raise ProvenanceRefused(
+                f'replan ch{chapter.chapter_ordinal} 绕过编译闸：'
+                f'{why or "未编译"}')
+        compiled.append(chapter.validator.compiled)
+    business = assemble_blind_candidate(
+        responses.strategy.model_dump(by_alias=True), compiled,
+        prepared.mapping, truth=prepared.truth)
+    if why := _blind_candidate_problem(business, prepared.truth):
+        raise ProvenanceRefused(f'replan 全书 HARD 未闭合：{why}')
+    parent_business = _candidate_business(parent)
+    drifted = non_target_chapter_drift(
+        parent_business, business, affected)
+    if drifted:
+        raise ProvenanceRefused(
+            f'replan 改动了 effective input 未变章：{list(drifted)}')
+    adopted_models = tuple(sorted({
+        row.model for row in sources if row.model is not None}))
+    lineage = [{
+        'chapter_ordinal': row.chapter,
+        'source_run_id': row.source_run_id,
+        'purpose': row.purpose,
+        'attempt_id': row.attempt_id,
+        'source_kind': row.source_kind,
+        'origin': row.origin,
+        'source_ref': row.source_ref,
+    } for row in sources]
+    from novel.llm import stage4_runs
+    units = (
+        _design_strategy_unit(prepared),
+        *(_design_chapter_unit(row) for row in contexts
+          if row.chapter_ordinal in set(affected)),
+    )
+    provenance = ctx.llm_provenance(
+        BlindCandidateProvenance,
+        prompts={
+            'BLIND_BOOK_STRATEGY_SYS': prepared.system,
+            'BLIND_CHAPTER_DESIGN_SYS': (
+                contexts[0].system if contexts
+                else prompts.blind_chapter_design_system()),
+        },
+        model=source.model,
+        adopted_models=adopted_models,
+        settle=settle,
+        usage_override=stage4_runs.design_replan_usage(ctx, units),
+        alias_algorithm=BLIND_ALIAS_ALGORITHM,
+        truth_sha256=str(prepared.mapping['truth_sha256']),
+        architecture='book_strategy_replan_v1',
+        parent_candidate_sha256=_canonical_sha256(
+            parent.model_dump(by_alias=True, mode='json')),
+        repair_decision_sha256=scope.decision_sha256,
+        unit_lineage=lineage,
+    )
+    return BlindCandidate.model_validate({
+        **business, '_provenance': provenance,
+    })
+
+
+def _run_design_replan(
+    ctx: RunContext, source: Any, scope: DesignRepairScope,
+) -> BlindCandidate:
+    """typed strategy replan：只 wire 宏观策略与 effective input 真变化章。"""
+    if not _uses_agent_runs(ctx):
+        raise ProvenanceRefused('typed strategy replan 只接受可恢复 executor run')
+    current = _require_design_action_subject(ctx, scope)
+    current_payload = current.model_dump(by_alias=True, mode='json')
+    store = ArtifactStore(ctx)
+    _same, current_file_sha = store.read_own_with_sha256(
+        BlindCandidate, CANDIDATE_REL, require_current=True)
+    from novel.llm import agent_runs, stage4_runs
+    parent_run_id, parent_payload, inherited = \
+        stage4_runs.resolve_committed_design_sources(
+            ctx,
+            candidate_payload=current_payload,
+            candidate_file_sha256=current_file_sha,
+        )
+    parent = BlindCandidate.model_validate(parent_payload)
+    source_by = {row.chapter: row for row in inherited}
+    try:
+        previous_strategy = BlindBookStrategyResponse.model_validate(
+            source_by[None].response_payload)
+    except (KeyError, ValueError) as exc:
+        raise ProvenanceRefused(
+            f'replan parent strategy checkpoint 不可恢复：{exc}') from exc
+
+    # 先证明父候选确实由其 checkpoints 构成，再发任何新请求。
+    parent_prepared = prepare_design_candidate(
+        ctx, ensure_strategy_unit=False,
+        _existing_candidate_authorized=True)
+    parent_contexts = _design_chapter_contexts(
+        ctx, parent_prepared, previous_strategy, ensure_units=False)
+    rebuilt_chapters: list[dict[str, Any]] = []
+    parent_responses: dict[int, BlindChapterDesignResponse] = {}
+    for chapter in parent_contexts:
+        row = source_by.get(chapter.chapter_ordinal)
+        if row is None:
+            raise ProvenanceRefused(
+                f'replan parent 缺 ch{chapter.chapter_ordinal} checkpoint')
+        response = BlindChapterDesignResponse.model_validate(
+            row.response_payload)
+        why = chapter.validator(response, None)
+        if why is not None or chapter.validator.compiled is None:
+            raise ProvenanceRefused(
+                f'replan parent ch{chapter.chapter_ordinal} 当前编译失效：'
+                f'{why or "未编译"}')
+        parent_responses[chapter.chapter_ordinal] = response
+        rebuilt_chapters.append(chapter.validator.compiled)
+    rebuilt_parent = assemble_blind_candidate(
+        previous_strategy.model_dump(by_alias=True), rebuilt_chapters,
+        parent_prepared.mapping, truth=parent_prepared.truth)
+    if rebuilt_parent != _candidate_business(parent):
+        raise ProvenanceRefused('replan parent candidate 与 checkpoints 不可重建为同一主体')
+
+    prepared = _prepare_design_replan_candidate(
+        ctx, scope, previous_strategy)
+    replacement_strategy = _request_design_strategy(
+        ctx, source, prepared)
+    try:
+        affected = replan_affected_chapters(
+            previous_strategy.model_dump(mode='json'),
+            replacement_strategy.model_dump(mode='json'))
+    except DesignEvolutionError as exc:
+        raise ProvenanceRefused(f'typed replan 策略改动面不闭合：{exc}') from exc
+    if not affected:
+        raise ProvenanceRefused('typed replan 返回 no-op，不得覆盖当前候选')
+
+    contexts = _design_chapter_contexts(
+        ctx, prepared, replacement_strategy, ensure_units=False)
+    context_by = {row.chapter_ordinal: row for row in contexts}
+    parent_context_by = {row.chapter_ordinal: row for row in parent_contexts}
+    target_contexts = tuple(context_by[ordinal] for ordinal in affected)
+    for chapter in target_contexts:
+        stage4_runs.ensure_design_unit_run(
+            ctx, _design_chapter_unit(chapter))
+    for ordinal in sorted(set(context_by) - set(affected)):
+        if (context_by[ordinal].input_sha256
+                != parent_context_by[ordinal].input_sha256):
+            raise ProvenanceRefused(
+                f'replan ch{ordinal} 声称未受影响，但 effective input digest 已变')
+        why = context_by[ordinal].validator(parent_responses[ordinal], None)
+        if why is not None:
+            raise ProvenanceRefused(
+                f'replan ch{ordinal} 未变 checkpoint 在新策略下失效：{why}')
+    changed_responses = dict(_request_design_chapters(
+        ctx, source, prepared, target_contexts))
+    response_by = dict(parent_responses)
+    response_by.update(changed_responses)
+    responses = DesignCandidateResponses(
+        strategy=replacement_strategy,
+        chapters=tuple(sorted(response_by.items())),
+    )
+
+    current_units = (
+        _design_strategy_unit(prepared),
+        *(_design_chapter_unit(row) for row in target_contexts),
+    )
+    current_sources = {
+        unit.chapter: stage4_runs.current_design_unit_source(ctx, unit)
+        for unit in current_units
+    }
+    final_sources = tuple(
+        current_sources.get(row.chapter, row) for row in inherited)
+    provisional = _materialize_design_replan(
+        ctx, source, prepared, scope, responses, parent,
+        final_sources, affected, settle=False)
+    with stage4_runs.commit_ownership(ctx.novel_dir):
+        _assert_design_current(ctx, prepared)
+        stage4_runs.refuse_foreign_commit_reservations(ctx)
+        journal = stage4_runs.design_repair_aggregate_state(ctx)
+        if journal is None:
+            artifact = _materialize_design_replan(
+                ctx, source, prepared, scope, responses, parent,
+                final_sources, affected, settle=True)
+            payload = artifact.model_dump(by_alias=True, mode='json')
+            if payload != provisional.model_dump(by_alias=True, mode='json'):
+                raise ProvenanceRefused('replan provisional/final candidate 漂移')
+            finalization = {
+                'delivery_kind': 'design-strategy-replan',
+                'architecture': 'book_strategy_replan_v1',
+                'input_sha256': prepared.input_sha256,
+                'strategy_input_sha256': prepared.strategy_input_sha256,
+                'parent_run_id': parent_run_id,
+                'parent_candidate_file_sha256': scope.candidate_sha256,
+                'parent_candidate_payload_sha256': _canonical_sha256(parent_payload),
+                'repair_decision_sha256': scope.decision_sha256,
+                'feedback_sha256': scope.replan_feedback.constraint_set_sha256
+                if scope.replan_feedback is not None else None,
+                'target_chapters': list(affected),
+                'candidate_sha256': _canonical_sha256(payload),
+            }
+            journal = stage4_runs.prepare_design_repair_aggregate_commit(
+                ctx,
+                parent_run_id=parent_run_id,
+                parent_candidate_sha256=_canonical_sha256(parent_payload),
+                repair_decision_sha256=scope.decision_sha256,
+                target_chapters=affected,
+                sources=final_sources,
+                primary_payload=payload,
+                finalization_payload=finalization,
+            )
+        else:
+            sealed, finalization = \
+                stage4_runs.restore_design_repair_aggregate_payloads(
+                    ctx, journal)
+            artifact = BlindCandidate.model_validate(sealed)
+            if sealed != provisional.model_dump(by_alias=True, mode='json'):
+                raise ProvenanceRefused('replan aggregate 封存候选与当前重建不等')
+        payload = artifact.model_dump(by_alias=True, mode='json')
+        expected_file_sha = agent_runs.canonical_sha256(
+            prepared.store._render(CANDIDATE_REL, artifact))
+        state = stage4_runs.design_repair_aggregate_target_state(
+            ctx, journal, expected_file_sha256=expected_file_sha)
+        if state == 'baseline':
+            prepared.store.write(CANDIDATE_REL, artifact)
+        landed = verify_design_delivery(ctx, prepared, artifact)
+        for row in final_sources:
+            if row.source_kind == 'repair':
+                _note_adoption_attempt(
+                    ctx, purpose=row.purpose, attempt_id=row.attempt_id,
+                    rel=CANDIDATE_REL, artifact=landed, chapter=row.chapter)
+        stage4_runs.mark_design_repair_aggregate_committed(
+            ctx,
+            primary_payload=landed.model_dump(by_alias=True, mode='json'),
+            finalization_payload=finalization,
+        )
+        return landed
+
+
+def validate_design_chapter_edit(
+    ctx: RunContext, edit_path: str = '',
+) -> DesignChapterEditEvaluation:
+    """0-wire preview：与 apply 共用的 schema/编译/dynamic/HARD 唯一实现。"""
+    if ctx.node != 'stage4.design':
+        raise ValueError('Stage4A 完整章 edit 只属于 stage4.design')
+    store = ArtifactStore(ctx)
+    rel = paths.edit_rel(ctx.novel_dir, edit_path, DESIGN_EDIT)
+    if not store.exists(rel):
+        raise TerminalState(
+            f'{rel} 不在盘上；--apply-edit/--validate-edit 需要一份完整 '
+            'BlindChapterEditRequest，不接受字段 patch')
+    request = store.read(BlindChapterEditRequest, rel)
+    from novel.orchestrator import approvals
+    authorization = approvals.resolve_design_edit_action(
+        ctx.novel_dir.parent, ctx.sid, request)
+    scope = authorization.scope
+    candidate, candidate_file_sha = _require_definitive_design_candidate(
+        store, CANDIDATE_REL, allow_frozen_v6=True)
+    if candidate_file_sha != authorization.candidate_sha256:
+        raise ApprovalRequired('Stage4A edit 绑定的 candidate 已变化')
+
+    strategy = BlindBookStrategyResponse.model_validate({
+        'reconstruction_strategy': candidate.reconstruction_strategy,
+        'chapter_weights': [{
+            'chapter_ordinal': row.output_ordinal,
+            'weight': row.weight,
+        } for row in candidate.output_chapters],
+    })
+    if store.schema_version(BLUEPRINTS) == 6:
+        from novel.stages.stage2.frozen_v6 import (
+            require_frozen_v6_stage4_subject,
+        )
+        frozen = require_frozen_v6_stage4_subject(
+            store, record_human_edit_edge=True)
+        truth = frozen.truth
+        mapping = frozen.mapping
+        # v6 没有关系权威面；即使 alias 形式上可解析，也不能把新关系倒签成
+        # “Stage2 已确认”。完整章人工替换仍可执行旧 review 的普通 typed 约束。
+        active_constraints = (
+            scope.accumulated_constraints if scope.is_v3 else scope.constraints)
+        if any(
+            item.code == 'narrative_relation' or item.effect is not None
+            for item in active_constraints
+        ):
+            raise HumanEditProtected(
+                '冻结 Stage2 v6 没有 narrative_relations 权威面；'
+                '不得对它铸 relation membership 或执行 relation repair')
+        epoch = strategy_epoch_sha256({
+            'review_contract': LEGACY_FROZEN_REVIEW_CONTRACT,
+            'root_clean_sha1': ctx.root_clean_sha1,
+            'truth_sha256': str(mapping['truth_sha256']),
+            'alias_algorithm': BLIND_ALIAS_ALGORITHM,
+        }, strategy.reconstruction_strategy)
+        weights = {
+            row.chapter_ordinal: row.weight for row in strategy.chapter_weights}
+        chapter_weight = weights.get(request.output_ordinal)
+        if chapter_weight is None:
+            raise ProvenanceRefused(
+                f'Stage4A edit 目标章 {request.output_ordinal} 不在当前策略中')
+        chapter_strategy = chapter_strategy_sha256(
+            epoch, request.output_ordinal, chapter_weight)
+    else:
+        prepared = prepare_design_candidate(
+            ctx, ensure_strategy_unit=False,
+            _existing_candidate_authorized=True)
+        truth = prepared.truth
+        mapping = prepared.mapping
+        contexts = _design_chapter_contexts(
+            ctx, prepared, strategy, ensure_units=False)
+        chapter_ctx = next((
+            row for row in contexts
+            if row.chapter_ordinal == request.output_ordinal
+        ), None)
+        if chapter_ctx is None:
+            raise ProvenanceRefused(
+                f'Stage4A edit 目标章 {request.output_ordinal} 不在当前策略中')
+        epoch = chapter_ctx.strategy_epoch_sha256
+        chapter_strategy = chapter_ctx.chapter_strategy_sha256
+        chapter_weight = chapter_ctx.chapter_weight
+    if (
+        epoch != authorization.strategy_epoch_sha256
+        or chapter_strategy != authorization.chapter_strategy_sha256
+    ):
+        raise HumanEditProtected(
+            'Stage4A edit strategy epoch/本章 weight 身份已变化')
+    truth_by = {
+        int(row.get('chapter_ordinal') or 0): row
+        for row in truth.get('chapters') or []
+    }
+    try:
+        compiled = compile_blind_chapter_edit(
+            request.chapter.model_dump(mode='json'),
+            mapping,
+            truth_chapter=truth_by[request.output_ordinal],
+            expected_weight=chapter_weight,
+        )
+    except (BlindPlanError, KeyError) as exc:
+        raise HumanEditProtected(
+            f'Stage4A 完整章 edit 未通过正式编译器：{exc}') from exc
+    problems = _blind_chapter_problems(
+        compiled, truth_by[request.output_ordinal])
+    if problems:
+        raise HumanEditProtected(
+            f'Stage4A 完整章 edit 未通过章级 HARD：{problems[:8]}')
+    _assert_repair_constraint_set(
+        scope,
+        strategy_epoch=epoch,
+        chapter=compiled,
+    )
+
+    parent_payload = candidate.model_dump(by_alias=True, mode='json')
+    parent_payload_sha = _canonical_sha256(parent_payload)
+    if candidate.provenance.architecture in (None, 'whole_book_v1'):
+        parent_run_id = None
+        parent_sources = stage4_runs.candidate_snapshot_design_sources(
+            ctx, parent_payload,
+            parent_candidate_sha256=parent_payload_sha)
+    else:
+        parent_run_id, resolved_parent, parent_sources = \
+            stage4_runs.resolve_committed_design_sources(
+                ctx,
+                candidate_payload=parent_payload,
+                candidate_file_sha256=candidate_file_sha,
+            )
+        if resolved_parent != parent_payload:
+            raise ProvenanceRefused(
+                'Stage4A human edit 解析的 parent lineage 与当前候选漂移')
+    parent_business = {
+        key: value for key, value in parent_payload.items()
+        if key != '_provenance'
+    }
+    try:
+        replaced = replace_candidate_chapters(
+            parent_business, [compiled],
+            target_chapters=(request.output_ordinal,))
+    except DesignEvolutionError as exc:
+        raise HumanEditProtected(
+            f'Stage4A 完整章替换不闭合：{exc}') from exc
+    if why := _blind_candidate_problem(replaced, truth):
+        raise HumanEditProtected(
+            f'Stage4A 完整章 edit 未通过全书 HARD：{why}')
+    drifted = non_target_chapter_drift(
+        parent_business, replaced, (request.output_ordinal,))
+    if drifted:
+        raise ProvenanceRefused(
+            f'Stage4A edit 改动了非目标章业务字节：{list(drifted)}')
+
+    request_sha = _canonical_sha256(
+        request.model_dump(by_alias=True, mode='json'))
+    provenance = ctx.free_provenance(
+        BlindCandidateHumanProvenance,
+        origin='human',
+        alias_algorithm=BLIND_ALIAS_ALGORITHM,
+        truth_sha256=str(mapping['truth_sha256']),
+        parent_candidate_sha256=parent_payload_sha,
+        review_token=authorization.review_token,
+        review_decision_sha256=authorization.decision_sha256,
+        output_ordinal=request.output_ordinal,
+        chapter_subject_sha256=authorization.chapter_subject_sha256,
+        strategy_epoch_sha256=authorization.strategy_epoch_sha256,
+        chapter_strategy_sha256=authorization.chapter_strategy_sha256,
+        constraint_set_sha256=scope.constraint_set_sha256,
+        edit_request_sha256=request_sha,
+        actor=request.actor,
+        reason=request.reason,
+    )
+    # 完整章来自人提交的 typed response，本动作没有“生成调用”。ledger 仍由
+    # free_provenance 正常结算，但产物不能把 0 次 usage 伪装成它的创作来源。
+    provenance = provenance.model_copy(update={'usage': None})
+    artifact = BlindCandidate.model_validate({
+        **replaced, '_provenance': provenance.model_dump(
+            by_alias=True, mode='json'),
+    })
+    return DesignChapterEditEvaluation(
+        request=request,
+        request_rel=rel,
+        parent_file_sha256=candidate_file_sha,
+        parent_run_id=parent_run_id,
+        parent_sources=parent_sources,
+        artifact=artifact,
+        artifact_sha256=_canonical_sha256(
+            artifact.model_dump(by_alias=True, mode='json')),
+    )
+
+
+def run_apply_design_chapter_edit(
+    ctx: RunContext, edit_path: str = '',
+) -> BlindCandidate:
+    """preview 后 apply；两步共享 ``validate_design_chapter_edit`` 的唯一尺子。"""
+    store = ArtifactStore(ctx)
+    rel = paths.edit_rel(ctx.novel_dir, edit_path, DESIGN_EDIT)
+    if not store.exists(rel):
+        raise TerminalState(
+            f'{rel} 不在盘上；--apply-edit 需要完整 BlindChapterEditRequest')
+    supplied = store.read(BlindChapterEditRequest, rel)
+    supplied_sha = _canonical_sha256(
+        supplied.model_dump(by_alias=True, mode='json'))
+    tail = stage4_runs.design_human_evolution_state(ctx)
+    if tail is not None:
+        with stage4_runs.commit_ownership(ctx.novel_dir):
+            tail = stage4_runs.design_human_evolution_state(ctx)
+            if tail is None:  # pragma: no cover —— ownership 内只会同值或报漂移
+                raise ProvenanceRefused('human evolution journal 读取期消失')
+            if tail['edit_request_sha256'] != supplied_sha:
+                raise ProvenanceRefused(
+                    '当前 run 的 human evolution journal 已绑定另一份 edit request')
+            sealed = BlindCandidate.model_validate(tail['primary_payload'])
+            expected_file_sha = hashlib.sha256(
+                store._render(CANDIDATE_REL, sealed)).hexdigest()
+            target_state = stage4_runs.design_human_evolution_target_state(
+                ctx, tail, expected_file_sha256=expected_file_sha)
+            if target_state == 'expected':
+                with ctx.validation_reads():
+                    landed, _raw = store.read_own(
+                        BlindCandidate, CANDIDATE_REL, require_current=True)
+                if landed != sealed:
+                    raise ProvenanceRefused(
+                        'human evolution 尾窗正式候选与 journal 封存稿不等')
+                stage4_runs.mark_design_human_evolution_committed(
+                    ctx, primary_payload=tail['primary_payload'])
+                return landed
+            if tail['state'] == 'committed':
+                raise ProvenanceRefused(
+                    '已 committed human evolution 的正式候选被回退，拒绝静默重放')
+
+    evaluation = validate_design_chapter_edit(ctx, edit_path)
+    with stage4_runs.commit_ownership(ctx.novel_dir):
+        stage4_runs.refuse_foreign_commit_reservations(ctx)
+        # preview 结束后审批可能在 candidate 不变的情况下被新决定替换；apply
+        # 写前再次现场展开同一 opaque token，不能只靠 candidate SHA 防竞态。
+        from novel.orchestrator import approvals
+        approvals.resolve_design_edit_action(
+            ctx.novel_dir.parent, ctx.sid, evaluation.request)
+        _candidate, current_sha = _require_definitive_design_candidate(
+            store, CANDIDATE_REL)
+        if current_sha != evaluation.parent_file_sha256:
+            raise HumanEditProtected(
+                'Stage4A edit 在 preview→apply 之间 candidate 发生变化')
+        payload = evaluation.artifact.model_dump(by_alias=True, mode='json')
+        provenance = evaluation.artifact.provenance
+        if not isinstance(provenance, BlindCandidateHumanProvenance):
+            raise ProvenanceRefused('human edit evaluation 没有 human provenance')
+        journal = stage4_runs.prepare_design_human_evolution_commit(
+            ctx,
+            parent_run_id=evaluation.parent_run_id,
+            parent_candidate_sha256=provenance.parent_candidate_sha256,
+            review_token=provenance.review_token,
+            review_decision_sha256=provenance.review_decision_sha256,
+            output_ordinal=provenance.output_ordinal,
+            chapter_subject_sha256=provenance.chapter_subject_sha256,
+            strategy_epoch_sha256=provenance.strategy_epoch_sha256,
+            chapter_strategy_sha256=provenance.chapter_strategy_sha256,
+            constraint_set_sha256=provenance.constraint_set_sha256,
+            edit_request_sha256=provenance.edit_request_sha256,
+            human_response_payload=evaluation.request.chapter.model_dump(
+                mode='json'),
+            parent_sources=evaluation.parent_sources,
+            primary_payload=payload,
+        )
+        expected_file_sha = hashlib.sha256(
+            store._render(CANDIDATE_REL, evaluation.artifact)).hexdigest()
+        target_state = stage4_runs.design_human_evolution_target_state(
+            ctx, journal, expected_file_sha256=expected_file_sha)
+        # 人工完整章算新的正式候选轮；不覆盖/伪造任何模型 checkpoint。
+        if target_state == 'baseline':
+            store.write_round(CANDIDATE_REL, evaluation.artifact)
+        with ctx.validation_reads():
+            landed, _raw = store.read_own(
+                BlindCandidate, CANDIDATE_REL, require_current=True)
+            freshness = store.freshness(CANDIDATE_REL)
+        if landed.model_dump(by_alias=True, mode='json') != \
+                evaluation.artifact.model_dump(by_alias=True, mode='json'):
+            raise ProvenanceRefused(
+                'Stage4A human edit 正式 readback 与 preview 候选不等')
+        if freshness.state != 'fresh':
+            raise ProvenanceRefused(
+                f'Stage4A human edit readback 不 fresh：'
+                f'{freshness.state}/{freshness.reason}')
+        stage4_runs.mark_design_human_evolution_committed(
+            ctx, primary_payload=payload)
+        return landed
+
+
 def run_design(
         ctx: RunContext, client: Any, *,
         repair_decision_sha256: str | None = None,
@@ -3102,12 +3897,7 @@ def run_design(
         return finalize_design_candidate(ctx, client, prepared, evaluation)
     if (repair_scope is not None and repair_scope.strategy_replan
             and repair_decision_sha256 is None):
-        _require_design_action_subject(ctx, repair_scope)
-        prepared = prepare_design_candidate(
-            ctx, _existing_candidate_authorized=True)
-        response = request_design_candidate(ctx, client, prepared)
-        evaluation = evaluate_design_candidate(ctx, client, prepared, response)
-        return finalize_design_candidate(ctx, client, prepared, evaluation)
+        return _run_design_replan(ctx, client, repair_scope)
     if (repair_decision_sha256 is None or repair_scope is None
             or repair_scope.strategy_replan
             or repair_scope.decision_sha256 != repair_decision_sha256):

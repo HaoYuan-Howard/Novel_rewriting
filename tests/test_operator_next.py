@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from types import MappingProxyType
+from types import MappingProxyType, SimpleNamespace
 
 import pytest
 from pydantic import ValidationError
@@ -18,6 +18,8 @@ from contracts.schema.orchestration import (
 from novel.cli import exit_codes as X
 from novel.cli.main import main
 from novel.errors import ArtifactUnreadable
+from novel.orchestrator import approvals as A
+from novel.orchestrator import execution_permit as P
 from novel.orchestrator import operator as O
 from novel.orchestrator import queue as Q
 from novel.orchestrator.inspection import OperatorReadSnapshot
@@ -64,18 +66,66 @@ def _blocked(node: str, waiting_on: str) -> QueueItem:
         why=f'在等 {waiting_on}', waiting_on=waiting_on)
 
 
+def test_precomputed_approval_projection_rejects_cross_book_reuse(tmp_path):
+    snapshot = _snapshot(tmp_path)
+    wrong = SimpleNamespace(sid='other-book')
+
+    with pytest.raises(ValueError, match='other-book'):
+        O.inbox_from_snapshot(snapshot, approval_doc=wrong)
+    with pytest.raises(ValueError, match='other-book'):
+        Q.plan_book_from_overview(
+            tmp_path, snapshot.sid, snapshot.overview,
+            until_stage='stage0', approval_doc=wrong)
+
+
 def _wire(
     monkeypatch: pytest.MonkeyPatch,
     snapshot: OperatorReadSnapshot,
     *, todo: list[QueueItem], blocked: list[QueueItem],
 ) -> list[object]:
     calls: list[object] = []
-    monkeypatch.setattr(O, 'capture_operator_snapshot', lambda _base, _sid: snapshot)
+    frozen_approval_doc = object()
     monkeypatch.setattr(
-        O, 'inbox_from_snapshot',
-        lambda got: calls.append(('inbox', got)) or _inbox())
+        O.paths, 'resolve_novel_dir',
+        lambda base, sid: snapshot.novel_dir)
+    monkeypatch.setattr(
+        O, 'capture_operator_snapshot',
+        lambda base, sid: calls.append(('capture', base, sid)) or snapshot)
+    monkeypatch.setattr(
+        P.prov, 'code_version',
+        lambda: pytest.fail('ready next 不得重算第二次仓库 code fingerprint'))
+    def approval_get(
+            base, sid, *, overview, code, include_spawns,
+            operator_projection,
+    ):
+        assert (
+            base, sid, overview, code, include_spawns, operator_projection,
+        ) == (
+            snapshot.base, snapshot.sid, snapshot.overview, snapshot.code,
+            False, True,
+        )
+        assert A.projection_code() == snapshot.code
+        return frozen_approval_doc
 
-    def plan(base, sid, overview, *, until_stage, follow_check):
+    monkeypatch.setattr(O.approvals, 'get', approval_get)
+
+    def inbox(got, *, approval_doc: object, _final_cas_owner: object):
+        assert A.projection_code() == snapshot.code
+        assert A._READ_OVERVIEW.get() is snapshot.overview
+        assert approval_doc is frozen_approval_doc
+        assert _final_cas_owner is O._OPERATOR_FINAL_CAS
+        calls.append(('inbox', got))
+        return _inbox()
+
+    monkeypatch.setattr(O, 'inbox_from_snapshot', inbox)
+
+    def plan(
+            base, sid, overview, *, until_stage, follow_check,
+            approval_doc: object,
+    ):
+        assert A.projection_code() == snapshot.code
+        assert A._READ_OVERVIEW.get() is snapshot.overview
+        assert approval_doc is frozen_approval_doc
         calls.append(('plan', base, sid, overview, until_stage, follow_check))
         return todo, blocked
 
@@ -102,12 +152,32 @@ def test_next_uses_one_snapshot_and_the_shared_queue_lane(monkeypatch, tmp_path)
     assert got.action is not None
     assert got.action.node == 'stage0.approve'
     assert got.action.waiting_on == 'stage0.approve'
-    assert got.overview is snapshot.overview
+    assert got.overview == snapshot.overview
+    assert len([call for call in calls if call[0] == 'capture']) == 1
     assert ('inbox', snapshot) in calls
     plan_call = next(call for call in calls if call[0] == 'plan')
     assert plan_call[3] is snapshot.overview
     assert plan_call[4:] == ('stage7', True)
-    assert calls[-1] == ('seal', snapshot.base, 'book-1', 'code-v1')
+    assert [call for call in calls if call[0] == 'seal'] == [
+        ('seal', snapshot.base, 'book-1', 'code-v1')]
+    assert A._READ_CODE.get() is None
+    assert A._READ_OVERVIEW.get() is None
+
+
+def test_frozen_v6_validation_suspension_has_no_execution_token(
+        monkeypatch, tmp_path):
+    snapshot = _snapshot(tmp_path)
+    blocker = _blocked(
+        'stage4.plan', Q.WAITING_ON_FROZEN_V6_DESIGN_AUTHORITY)
+    _wire(monkeypatch, snapshot, todo=[], blocked=[blocker])
+
+    got = O.next_action(tmp_path, 'book-1')
+
+    assert got.state == 'blocked'
+    assert got.execution_token is None
+    assert got.action is not None
+    assert got.action.waiting_on == Q.WAITING_ON_FROZEN_V6_DESIGN_AUTHORITY
+    assert got.action.waiting_on != Q.WAITING_ON_STAGE4_DESIGN_REVIEW
 
 
 def test_ready_action_carries_the_canonical_safety_axes_and_stable_hash(
@@ -125,6 +195,11 @@ def test_ready_action_carries_the_canonical_safety_axes_and_stable_hash(
     assert first.action.writes == ' · '.join(NODES['stage2.global'].produces)
     assert first.action.action_sha256 == second.action.action_sha256
     assert len(first.action.action_sha256) == 64
+    assert first.execution_token is not None
+    assert first.execution_token == second.execution_token
+    assert first.execution_token.node == first.action.node
+    assert first.execution_token.flags == first.action.flags
+    assert first.execution_token.operator_action_sha256 == first.action.action_sha256
 
 
 def test_action_hash_binds_the_surface_seal(monkeypatch, tmp_path):
@@ -138,6 +213,8 @@ def test_action_hash_binds_the_surface_seal(monkeypatch, tmp_path):
 
     assert first.action is not None and second.action is not None
     assert first.action.action_sha256 != second.action.action_sha256
+    assert first.execution_token is not None and second.execution_token is not None
+    assert first.execution_token.permit_sha256 != second.execution_token.permit_sha256
 
 
 def test_no_lane_item_is_pipeline_complete_not_delivery_ready(monkeypatch, tmp_path):
@@ -176,6 +253,11 @@ def test_operator_states_and_resume_verdicts_are_closed_and_schema_keeps_them():
         OperatorNext(
             base='E:/Output', sid='book-1', code_version='code-v1',
             surface_seal='b' * 64, state='blocked',
+            overview=_overview(), inbox=_inbox(), action=action)
+    with pytest.raises(ValidationError, match='execution_token'):
+        OperatorNext(
+            base='E:/Output', sid='book-1', code_version='code-v1',
+            surface_seal='b' * 64, state='ready',
             overview=_overview(), inbox=_inbox(), action=action)
 
 

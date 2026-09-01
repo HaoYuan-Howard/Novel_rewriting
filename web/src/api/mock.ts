@@ -42,6 +42,7 @@ import {
   type Stage7ApprovalWorkpack,
   type StructureApprovalDecision,
   type StructureApprovalRequest,
+  type WritingApprovalRequest,
 } from '@/types/approvals'
 import type { EnumsResponse } from '@/types/enums'
 import type { Job, JobLogResponse, JobPreview, JobRequest, JobsResponse } from '@/types/jobs'
@@ -336,6 +337,10 @@ const MOCK_DESIGN_STRATEGY = 'c'.repeat(64)
 const MOCK_DESIGN_CHAPTER = 'b'.repeat(64)
 const MOCK_STAGE5_WORKPACK = '7'.repeat(64)
 const MOCK_STAGE5_REVIEW = '6'.repeat(64)
+const MOCK_DESIGN_REVIEW_TOKEN = 's4dr1_' + MOCK_DESIGN_AGGREGATE
+const MOCK_STRUCTURE_REVIEW_TOKEN = 's4sr1_' + MOCK_STRUCTURE_SUBJECT
+const MOCK_WRITING_REVIEW_TOKEN = 's5wr1_' + MOCK_STRUCTURE_SUBJECT
+const MOCK_STAGE5_REVIEW_TOKEN = 's5cr1_' + MOCK_STAGE5_WORKPACK
 
 function mockStage5Workpack(): Stage5ClosureWorkpack {
   return {
@@ -358,6 +363,7 @@ function mockStage5Workpack(): Stage5ClosureWorkpack {
     disclosure: {},
     resolved: {},
     workpack_sha256: MOCK_STAGE5_WORKPACK,
+    review_token: MOCK_STAGE5_REVIEW_TOKEN,
   }
 }
 
@@ -365,8 +371,7 @@ function mockStage5ClosureDecision(): Stage5ClosureDecision {
   return {
     actor: 'mock-commander',
     reason: 'mock 样本已完成整书闭合复核',
-    workpack_sha256: MOCK_STAGE5_WORKPACK,
-    review_sha256: MOCK_STAGE5_REVIEW,
+    review_token: MOCK_STAGE5_REVIEW_TOKEN,
     must_appear: [],
     group_acks: [],
     decision_sha256: '5'.repeat(64),
@@ -384,9 +389,9 @@ function enumAt(values: string[], index: number, label: string): string {
 
 function seededStructureDecision(): StructureApprovalDecision {
   return {
-    subject_sha256: MOCK_STRUCTURE_SUBJECT,
     actor: 'mock-reviewer',
     reason: 'mock 样本已核对全书结构',
+    review_token: MOCK_STRUCTURE_REVIEW_TOKEN,
     chapters: [{
       output_ordinal: SAMPLE_ORDINAL,
       decision: enumAt(enums().structure_approval_decisions, 0, '结构审批决定'),
@@ -404,6 +409,7 @@ function mockDesignReviewTemplate(query: DesignReviewTemplateQuery): DesignRevie
     general_reason: query.reason,
     candidate_sha256: MOCK_DESIGN_CANDIDATE,
     aggregate_subject_sha256: MOCK_DESIGN_AGGREGATE,
+    review_token: MOCK_DESIGN_REVIEW_TOKEN,
     binding_infeasibility: null,
     preflight: {
       status: enumAt(enums().design_preflight_statuses, 0, 'A 预检状态'),
@@ -440,6 +446,7 @@ function mockDesignReviewTemplate(query: DesignReviewTemplateQuery): DesignRevie
       template_token: '7'.repeat(64),
       decision: enumAt(enums().design_strategy_decisions, 1, 'A 策略审阅决定'),
       reason: '关闭式模板：尚未核实整书策略，保持 request_replan',
+      replan_constraints: [],
       source_decision_sha256: null,
     },
     chapters: [{
@@ -552,6 +559,9 @@ function mockApprovalWorkpack(
     kind,
     candidate_sha256: kind === 'design' ? MOCK_DESIGN_CANDIDATE : null,
     subject_sha256: kind === 'design' ? MOCK_DESIGN_AGGREGATE : MOCK_STRUCTURE_SUBJECT,
+    review_token: kind === 'design'
+      ? MOCK_DESIGN_REVIEW_TOKEN
+      : MOCK_STRUCTURE_REVIEW_TOKEN,
     chapter_ordinals: [SAMPLE_ORDINAL],
     groups: [
       empty('blocking', '已扫描当前主体的全部 HARD 与预检见证'),
@@ -619,7 +629,11 @@ function mockApprovalWorkpack(
       },
     ],
     disposition: kind === 'design'
-      ? loadDoc(sid).design_review.state === 'accepted' ? 'already_current' : 'review_required'
+      ? loadDoc(sid).design_review.state === 'accepted'
+        ? 'already_current'
+        : loadDoc(sid).design_review.state === 'suspended'
+          ? 'suspended'
+          : 'review_required'
       : loadDoc(sid).structure.state === 'accepted' ? 'already_current' : 'review_required',
     current_decision_sha256: kind === 'design'
       ? loadDoc(sid).design_review.current_decision?.decision_sha256 ?? null
@@ -656,6 +670,22 @@ function seededDesignReviewDecision(): DesignReviewDecision {
   }
 }
 
+function mockDesignHistoryEntry(decision: DesignReviewDecision) {
+  return {
+    actor: decision.actor,
+    reviewer_kind: decision.reviewer_kind,
+    review_run_id: decision.review_run_id,
+    general_reason: decision.general_reason,
+    review_token: MOCK_DESIGN_REVIEW_TOKEN,
+    strategy_decision: decision.strategy.decision,
+    chapter_decisions: Object.fromEntries(
+      decision.chapters.map((row) => [row.output_ordinal, row.decision]),
+    ),
+    decision_sha256: decision.decision_sha256,
+    decided_at: decision.decided_at,
+  }
+}
+
 function freshDoc(sid: string): ApprovalDoc {
   return {
     v: 6,
@@ -667,6 +697,7 @@ function freshDoc(sid: string): ApprovalDoc {
       state: enumAt(enums().design_review_states, 0, 'A 审阅状态'),
       candidate_sha256: null,
       aggregate_subject_sha256: null,
+      action_review_token: null,
       current_decision: null,
       history: [],
       binding_infeasibility: null,
@@ -676,6 +707,7 @@ function freshDoc(sid: string): ApprovalDoc {
     structure: {
       state: enumAt(enums().structure_approval_states, 0, '结构审批状态'),
       current_subject_sha256: null,
+      review_token: null,
       current_decision: null,
       history: [],
       binding_concerns: [],
@@ -683,6 +715,7 @@ function freshDoc(sid: string): ApprovalDoc {
     writing_approval: {
       available: false,
       current_subject_sha256: null,
+      review_token: null,
       current_decision: null,
       history: [],
     },
@@ -715,8 +748,9 @@ function seededDoc(sid: string): ApprovalDoc {
       state: enumAt(enums().design_review_states, 4, 'A 审阅状态'),
       candidate_sha256: MOCK_DESIGN_CANDIDATE,
       aggregate_subject_sha256: MOCK_DESIGN_AGGREGATE,
+      action_review_token: null,
       current_decision: designDecision,
-      history: [designDecision],
+      history: [mockDesignHistoryEntry(designDecision)],
       binding_infeasibility: null,
       preflight: designDecision.preflight,
       repair_capability: designDecision.repair_capability,
@@ -724,6 +758,7 @@ function seededDoc(sid: string): ApprovalDoc {
     structure: {
       state: enumAt(enums().structure_approval_states, 2, '结构审批状态'),
       current_subject_sha256: MOCK_STRUCTURE_SUBJECT,
+      review_token: MOCK_STRUCTURE_REVIEW_TOKEN,
       current_decision: decision,
       history: [decision],
       binding_concerns: [{
@@ -737,6 +772,7 @@ function seededDoc(sid: string): ApprovalDoc {
     writing_approval: {
       available: true,
       current_subject_sha256: MOCK_STRUCTURE_SUBJECT,
+      review_token: MOCK_WRITING_REVIEW_TOKEN,
       current_decision: null,
       history: [],
     },
@@ -1271,23 +1307,56 @@ function mockAgentRunPreview(req: AgentRunRequest): AgentRunPreview {
 
 function mockAgentRunRecord(req: AgentRunRequest): AgentRunRecord {
   const preview = mockAgentRunPreview(req)
+  const start = {
+    sid: req.sid,
+    base: '/mock/base',
+    argv: preview.argv,
+    prompt: preview.prompt,
+    authorized: preview.authorized,
+    egress_authorized: preview.egress_authorized,
+    code_version: 'mock-code-version',
+    skill_sha256: 'a'.repeat(64),
+    profiles: preview.profiles,
+  }
   return {
     run_id: 'agentrun_mock',
-    start: {
-      sid: req.sid,
-      argv: preview.argv,
-      prompt: preview.prompt,
-      authorized: preview.authorized,
-      egress_authorized: preview.egress_authorized,
-      code_version: 'mock-code-version',
-      profiles: preview.profiles,
+    start,
+    contract: {
+      wire_version: 2,
+      sid: start.sid,
+      base: start.base,
+      authorized: start.authorized,
+      egress_authorized: start.egress_authorized,
+      profiles: req.profiles,
     },
+    epochs: [],
+    active_epoch_id: null,
     started: Math.floor(Date.now() / 1000),
     ended: null,
     exit_code: null,
     state: 'running',
     note: null,
     outcome: null,
+    allowed_controls: ['pause', 'stop'],
+  }
+}
+
+function mockControlledAgentRun(runId: string, state: 'paused' | 'unknown'): AgentRunRecord {
+  const profiles = fx<AgentCapabilitiesResponse>('agent_capabilities.json').default_profiles
+  if (profiles === null) throw new Error('mock agent capability 必须提供 default_profiles')
+  const record = mockAgentRunRecord({
+    sid: SAMPLE_SID,
+    authorized: false,
+    egress_authorized: true,
+    profiles,
+  })
+  return {
+    ...record,
+    run_id: runId,
+    state,
+    note: state === 'unknown' ? 'mock：熄火后结局不明，不改判 ok' : 'mock：安全暂停',
+    allowed_controls: state === 'paused' ? ['resume', 'stop'] : [],
+    ended: state === 'unknown' ? Math.floor(Date.now() / 1000) : null,
   }
 }
 
@@ -1338,6 +1407,10 @@ function mockBlueprintReviewWorkpack(sid: string): BlueprintReviewWorkpack {
     title: reading.title,
     read_only: true,
     auto_decisions: false,
+    review_contract_version: 'stage2-blueprint-review-v4',
+    review_identity_sha256: 'e'.repeat(64),
+    validation_seal_sha256: 'f'.repeat(64),
+    review_token: 'bpr3_' + 'c'.repeat(64),
     subject_sha256: subject,
     binding_sha256: 'c'.repeat(64),
     binding: {
@@ -1346,8 +1419,6 @@ function mockBlueprintReviewWorkpack(sid: string): BlueprintReviewWorkpack {
       main_text_artifact_sha256: 'a'.repeat(64),
       blueprint_artifact_sha256: subject,
       check_report_sha256: 'd'.repeat(64),
-      code_version: 'mock-sample',
-      rules_fingerprint: 'mock-rules',
       chapter_ordinals: [reading.chapter_ordinal],
     },
     check: {
@@ -1400,6 +1471,7 @@ function mockBlueprintReviewWorkpack(sid: string): BlueprintReviewWorkpack {
         hinges: beat.hinges,
       })),
       causal_links: [],
+      narrative_relations: [],
       entry_state_claims: [],
       ending_state_claims: [],
       narration: reading.narration,
@@ -1408,21 +1480,13 @@ function mockBlueprintReviewWorkpack(sid: string): BlueprintReviewWorkpack {
 }
 
 const BLUEPRINT_SEEN_FIELDS = [
-  'expected_binding_sha256',
-  'expected_subject_sha256',
-  'expected_main_text_artifact_sha256',
-  'expected_code_version',
-  'expected_rules_fingerprint',
+  'review_token',
 ] as const satisfies readonly (keyof BlueprintSeenRequest)[]
 
 function expectedBlueprintSeenRequest(sid: string): BlueprintSeenRequest {
   const workpack = mockBlueprintReviewWorkpack(sid)
   return {
-    expected_binding_sha256: workpack.binding_sha256,
-    expected_subject_sha256: workpack.subject_sha256,
-    expected_main_text_artifact_sha256: workpack.binding.main_text_artifact_sha256,
-    expected_code_version: workpack.binding.code_version,
-    expected_rules_fingerprint: workpack.binding.rules_fingerprint,
+    review_token: workpack.review_token,
   }
 }
 
@@ -1786,23 +1850,15 @@ export const mockApi: Api = {
   getAgentRuns: () => later<AgentRunsResponse>({ runs: [] }),
   getAgentRunLog: () => later<AgentRunLogChunk>({ text: '', next_byte: 0 }),
   stopAgentRun: (runId) =>
+    later<AgentRunRecord>(mockControlledAgentRun(runId, 'unknown')),
+  pauseAgentRun: (runId) =>
+    later<AgentRunRecord>(mockControlledAgentRun(runId, 'paused')),
+  resumeAgentRun: (runId) =>
     later<AgentRunRecord>({
-      run_id: runId,
-      start: {
-        sid: SAMPLE_SID,
-        argv: ['agent-cli', '--sid', SAMPLE_SID, '--base', '/mock/base'],
-        prompt: 'mock 历史运行没有保存 Agent profile，不能按今天的能力表倒推。',
-        authorized: false,
-        egress_authorized: true,
-        code_version: 'mock-code-version',
-        profiles: null,
-      },
-      started: Math.floor(Date.now() / 1000) - 1,
-      ended: Math.floor(Date.now() / 1000),
-      exit_code: null,
-      state: 'unknown',
-      note: 'mock：熄火后结局不明，不改判 ok',
-      outcome: null,
+      ...mockControlledAgentRun(runId, 'paused'),
+      state: 'running',
+      note: 'mock：沿同一 execution epoch 精确续会',
+      allowed_controls: ['pause', 'stop'],
     }),
 
   /* 批量：闸写死 3（真实模式由服务端下发）。前 3 本算在跑，其余按提交顺序排队。
@@ -1832,12 +1888,14 @@ export const mockApi: Api = {
   getStage6ApprovalWorkpack: (sid) =>
     bookOnly(sid, `/novels/${sid}/approvals/stage6/workpack`, () => {
       const workpack_sha256 = '6'.repeat(64)
+      const review_identity_sha256 = '8'.repeat(64)
       const current = lsRead<{
         index: number
         actor: string
         reason: string
         subject_sha256: string
         workpack_sha256: string
+        review_identity_sha256: string
       }>('hook.' + sid)
       const view = fx<Stage6Response>('stage6.json')
       const decisionOf = (subject_sha256: string, text: string) => ({
@@ -1858,11 +1916,13 @@ export const mockApi: Api = {
         })),
       })
       return {
-        v: 1,
+        v: 3,
         kind: 'stage6',
         sid,
-        code_version: 'mock-code',
-        rules_fingerprint: 'mock-rules-stage6',
+        review_contract_version: 'stage6-final-review-v3',
+        review_identity_sha256,
+        validation_seal_sha256: '9'.repeat(64),
+        review_token: 's6r3_' + workpack_sha256,
         artifact_subject_sha256: 'a'.repeat(64),
         rationale: view.rationale,
         check: {
@@ -1911,18 +1971,19 @@ export const mockApi: Api = {
           quality_rank: candidate.quality_rank,
         })),
         workpack_sha256,
-        disposition: current?.workpack_sha256 === workpack_sha256
+        disposition: current?.review_identity_sha256 === review_identity_sha256
           ? 'already_current'
           : 'review_required',
-        current_slot: current?.workpack_sha256 === workpack_sha256
+        current_slot: current?.review_identity_sha256 === review_identity_sha256
           ? 'c' + current.index
           : null,
-        current_approval: current?.workpack_sha256 === workpack_sha256
+        current_approval: current?.review_identity_sha256 === review_identity_sha256
           ? {
               actor: current.actor,
               reason: current.reason,
               subject_sha256: current.subject_sha256,
               workpack_sha256: current.workpack_sha256,
+              review_identity_sha256: current.review_identity_sha256,
             }
           : null,
       } satisfies Stage6ApprovalWorkpack
@@ -1930,19 +1991,23 @@ export const mockApi: Api = {
   getStage7ApprovalWorkpack: (sid) =>
     bookOnly(sid, `/novels/${sid}/approvals/stage7/workpack`, () => {
       const workpack_sha256 = '7'.repeat(64)
+      const review_identity_sha256 = 'a'.repeat(64)
       const current = lsRead<{
         actor: string
         reason: string
         subject_sha256: string
         workpack_sha256: string
+        review_identity_sha256: string
       }>('names.' + sid)
       const view = fx<Stage7Response>('stage7.json')
       return {
-        v: 1,
+        v: 3,
         kind: 'stage7',
         sid,
-        code_version: 'mock-code',
-        rules_fingerprint: 'mock-rules-stage7',
+        review_contract_version: 'stage7-final-review-v3',
+        review_identity_sha256,
+        validation_seal_sha256: 'b'.repeat(64),
+        review_token: 's7r3_' + workpack_sha256,
         artifact_subject_sha256: 'b'.repeat(64),
         decision_subject_sha256: view.approval_subject_sha256,
         check: {
@@ -1971,15 +2036,16 @@ export const mockApi: Api = {
         book: view.book,
         identity: view.identity,
         workpack_sha256,
-        disposition: current?.workpack_sha256 === workpack_sha256
+        disposition: current?.review_identity_sha256 === review_identity_sha256
           ? 'already_current'
           : 'review_required',
-        current_approval: current?.workpack_sha256 === workpack_sha256
+        current_approval: current?.review_identity_sha256 === review_identity_sha256
           ? {
               actor: current.actor,
               reason: current.reason,
               subject_sha256: current.subject_sha256,
               workpack_sha256: current.workpack_sha256,
+              review_identity_sha256: current.review_identity_sha256,
             }
           : null,
       } satisfies Stage7ApprovalWorkpack
@@ -1995,6 +2061,7 @@ export const mockApi: Api = {
     const template: Stage5ClosureTemplate = {
       actor: '(填写执行人)',
       reason: '(填写整书闭合理由)',
+      review_token: workpack.review_token,
       workpack_sha256: workpack.workpack_sha256,
       review_sha256: workpack.review_sha256,
       must_appear: workpack.must_appear.map((row) => ({
@@ -2024,10 +2091,13 @@ export const mockApi: Api = {
     const doc = loadDoc(sid)
     const workpack = doc.closure.workpack
     const invalid = !workpack
-      || request.workpack_sha256 !== workpack.workpack_sha256
-      || request.review_sha256 !== workpack.review_sha256
-      || request.must_appear.some((row) => row.placeholder || row.template_token !== null)
-      || request.group_acks.some((row) => row.placeholder || row.template_token !== null)
+      || request.review_token !== workpack.review_token
+      || request.must_appear.length !== workpack.must_appear.length
+      || request.must_appear.some((row) => !workpack.must_appear.some((current) => (
+        current.chapter_ordinal === row.chapter_ordinal
+        && current.evidence_key === row.evidence_key
+      )))
+      || request.group_acks.some((row) => row.acknowledged !== true)
     if (invalid) {
       return fail(new ApiError('server', '/novels/' + sid + '/approvals/stage5', {
         message: 'Stage5 闭合模板已过期或仍含未确认 placeholder',
@@ -2096,10 +2166,13 @@ export const mockApi: Api = {
 
   approveDesignReview: (sid, request: DesignReviewRequest) => {
     const doc = loadDoc(sid)
-    if (
-      request.candidate_sha256 !== MOCK_DESIGN_CANDIDATE
-      || request.aggregate_subject_sha256 !== MOCK_DESIGN_AGGREGATE
-    ) {
+    const materialized = mockDesignReviewTemplate({
+      actor: request.actor,
+      reviewer_kind: request.reviewer_kind,
+      review_run_id: request.review_run_id,
+      reason: request.general_reason,
+    })
+    if (request.review_token !== materialized.review_token) {
       return fail(new ApiError('server', '/novels/' + sid + '/approvals/design', {
         message: 'Stage4A 审阅对象已变化；请刷新关闭式模板后重审',
       }))
@@ -2107,47 +2180,12 @@ export const mockApi: Api = {
     const acceptedStrategy = enumAt(enums().design_strategy_decisions, 0, 'A 策略审阅决定')
     const acceptedChapter = enumAt(enums().design_chapter_decisions, 0, 'A 逐章审阅决定')
     const requestRepair = enumAt(enums().design_chapter_decisions, 1, 'A 逐章审阅决定')
-    if (
-      request.strategy.placeholder
-      || request.strategy.template_token !== null
-      || request.chapters.some((chapter) => (
-        chapter.placeholder || chapter.template_token !== null
-      ))
-    ) {
-      return fail(new ApiError('server', '/novels/' + sid + '/approvals/design', {
-        message: 'Stage4A 完整提交仍含未逐项确认的 template placeholder/token',
-      }))
-    }
-    const sentinel = mockDesignReviewTemplate({
-      actor: request.actor,
-      reviewer_kind: request.reviewer_kind,
-      review_run_id: request.review_run_id,
-      reason: request.general_reason,
-    })
-    const sentinelStrategy = request.strategy.source_decision_sha256 === null
-      && request.strategy.decision === sentinel.strategy.decision
-      && request.strategy.reason === sentinel.strategy.reason
-    const sentinelChapter = request.chapters.some((chapter) => {
-      if (chapter.source_decision_sha256 !== null) return false
-      const original = sentinel.chapters.find(
-        (row) => row.output_ordinal === chapter.output_ordinal,
-      )
-      return original !== undefined
-        && chapter.decision === original.decision
-        && chapter.reason === original.reason
-        && JSON.stringify(chapter.constraints) === JSON.stringify(original.constraints)
-    })
-    if (sentinelStrategy || sentinelChapter) {
-      return fail(new ApiError('server', '/novels/' + sid + '/approvals/design', {
-        message: 'Stage4A 不能把关闭式模板默认反馈原样冒充人工裁决',
-      }))
-    }
     const invalidChapter = request.chapters.some((chapter) => (
       (chapter.decision === acceptedChapter && chapter.constraints.length > 0)
       || (chapter.decision === requestRepair && chapter.constraints.length === 0)
       || (
         chapter.decision === requestRepair
-        && !request.repair_capability.chapters.find(
+        && !materialized.repair_capability.chapters.find(
           (row) => row.output_ordinal === chapter.output_ordinal,
         )?.request_repair_available
       )
@@ -2158,7 +2196,35 @@ export const mockApi: Api = {
       }))
     }
     const decision: DesignReviewDecision = {
-      ...request,
+      ...materialized,
+      actor: request.actor,
+      reviewer_kind: request.reviewer_kind,
+      review_run_id: request.review_run_id,
+      general_reason: request.general_reason,
+      strategy: {
+        ...materialized.strategy,
+        placeholder: false,
+        template_token: null,
+        decision: request.strategy.decision,
+        reason: request.strategy.reason,
+        replan_constraints: request.strategy.replan_constraints.map((row) => ({
+          ...row,
+          subject_sha256: materialized.strategy.subject_sha256,
+        })),
+      },
+      chapters: materialized.chapters.map((chapter) => {
+        const ruling = request.chapters.find(
+          (row) => row.output_ordinal === chapter.output_ordinal,
+        )!
+        return {
+          ...chapter,
+          placeholder: false,
+          template_token: null,
+          decision: ruling.decision,
+          reason: ruling.reason,
+          constraints: ruling.constraints,
+        }
+      }),
       decision_sha256: '8'.repeat(64),
       decided_at: new Date().toISOString(),
     }
@@ -2171,13 +2237,14 @@ export const mockApi: Api = {
       ...doc,
       design_review: {
         state: enumAt(enums().design_review_states, stateIndex, 'A 审阅状态'),
-        candidate_sha256: request.candidate_sha256,
-        aggregate_subject_sha256: request.aggregate_subject_sha256,
+        candidate_sha256: materialized.candidate_sha256,
+        aggregate_subject_sha256: materialized.aggregate_subject_sha256,
+        action_review_token: stateIndex === 4 ? null : 's4rr1_' + decision.decision_sha256,
         current_decision: decision,
-        history: [...doc.design_review.history, decision],
-        binding_infeasibility: request.binding_infeasibility,
-        preflight: request.preflight,
-        repair_capability: request.repair_capability,
+        history: [...doc.design_review.history, mockDesignHistoryEntry(decision)],
+        binding_infeasibility: materialized.binding_infeasibility,
+        preflight: materialized.preflight,
+        repair_capability: materialized.repair_capability,
       },
     }))
   },
@@ -2200,7 +2267,7 @@ export const mockApi: Api = {
     const expectedChapters = doc.structure.current_decision?.chapters
       .map((row) => row.output_ordinal) ?? [SAMPLE_ORDINAL]
     const submittedChapters = request.chapters.map((row) => row.output_ordinal)
-    if (subject === null || request.subject_sha256 !== subject) {
+    if (subject === null || request.review_token !== doc.structure.review_token) {
       return fail(new ApiError('server', '/novels/' + sid + '/approvals/structure', {
         message: 'Stage4 结构审批对象已变化；请刷新后重审',
       }))
@@ -2234,6 +2301,7 @@ export const mockApi: Api = {
           '结构审批状态',
         ),
         current_subject_sha256: subject,
+        review_token: MOCK_STRUCTURE_REVIEW_TOKEN,
         current_decision: decision,
         history: [...doc.structure.history, decision],
         binding_concerns: doc.structure.binding_concerns,
@@ -2280,9 +2348,26 @@ export const mockApi: Api = {
     return later(saveDoc({ ...doc, seen: { ...doc.seen, [key]: true } }))
   },
 
-  startWriting: (sid) => {
+  startWriting: (sid, request: WritingApprovalRequest) => {
     const doc = loadDoc(sid)
-    return later(saveDoc({ ...doc, writing: true }))
+    if (request.review_token !== doc.writing_approval.review_token) {
+      return fail(new ApiError('server', '/novels/' + sid + '/approvals/writing', {
+        message: 'Stage5 写作授权对象已变化；请刷新后重试',
+      }))
+    }
+    const decision = {
+      ...request,
+      decided_at: new Date().toISOString(),
+    }
+    return later(saveDoc({
+      ...doc,
+      writing: true,
+      writing_approval: {
+        ...doc.writing_approval,
+        current_decision: decision,
+        history: [...doc.writing_approval.history, decision],
+      },
+    }))
   },
 
   resetBook: (sid) => later(saveDoc(freshDoc(sid))),
@@ -2352,12 +2437,20 @@ export const mockApi: Api = {
   },
 
   approveHook: (sid, req) => {
+    const candidate = fx<Stage6Response>('stage6.json').candidates.find(
+      (row) => row.index === req.pick)
+    if (!candidate || req.review_token !== 's6r3_' + '6'.repeat(64)) {
+      return fail(new ApiError('server', `/novels/${sid}/stage6/approve`, {
+        message: 'review token 已过期',
+      }))
+    }
     lsWrite('hook.' + sid, {
       index: req.pick,
       actor: req.actor,
       reason: req.reason,
-      subject_sha256: req.subject_sha256,
-      workpack_sha256: req.workpack_sha256,
+      subject_sha256: candidate.subject_sha256,
+      workpack_sha256: '6'.repeat(64),
+      review_identity_sha256: '8'.repeat(64),
     })
     return later(finish({
       kind: 'stage6.approve',
@@ -2366,8 +2459,7 @@ export const mockApi: Api = {
         '--pick', String(req.pick),
         '--actor', req.actor,
         '--reason', req.reason,
-        '--subject-sha256', req.subject_sha256,
-        '--workpack-sha256', req.workpack_sha256,
+        '--review-token', req.review_token,
       ],
       sid,
       ordinal: null,
@@ -2375,15 +2467,25 @@ export const mockApi: Api = {
   },
 
   approveNames: (sid, req) => {
-    lsWrite('names.' + sid, { origin: 'human', ...req })
+    const view = fx<Stage7Response>('stage7.json')
+    if (req.review_token !== 's7r3_' + '7'.repeat(64)) {
+      return fail(new ApiError('server', `/novels/${sid}/stage7/approve`, {
+        message: 'review token 已过期',
+      }))
+    }
+    lsWrite('names.' + sid, {
+      origin: 'human', actor: req.actor, reason: req.reason,
+      subject_sha256: view.approval_subject_sha256,
+      workpack_sha256: '7'.repeat(64),
+      review_identity_sha256: 'a'.repeat(64),
+    })
     return later(finish({
       kind: 'stage7.approve',
       label: '人名表定稿',
       extra: [
         '--actor', req.actor,
         '--reason', req.reason,
-        '--subject-sha256', req.subject_sha256,
-        '--workpack-sha256', req.workpack_sha256,
+        '--review-token', req.review_token,
       ],
       sid,
       ordinal: null,
@@ -2415,4 +2517,9 @@ export const mockApi: Api = {
   },
   // 冻结样本不提供可恢复的目录移动，明确答 nosample，不伪装已经删除。
   trashNovel: (sid) => noBook('/novels/' + sid + '/trash'),
+  // service 生命周期维护只属于真实本地服务；mock 不伪造 preview token 或删除结果。
+  previewRetention: () => noBook('/maintenance/retention/preview'),
+  applyRetention: () => noBook('/maintenance/retention/apply'),
+  previewTrashRestore: () => noBook('/maintenance/trash/restore/preview'),
+  applyTrashRestore: () => noBook('/maintenance/trash/restore/apply'),
 }

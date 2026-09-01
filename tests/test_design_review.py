@@ -4,24 +4,49 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
 from contracts.invariants import (
     APPROVAL_GATES, APPROVAL_SEEN, BLIND_ALIAS_ALGORITHM,
-    DESIGN_REVIEW_CONTRACT,
+    DESIGN_REVIEW_CONTRACT, FROZEN_V6_DESIGN_REVIEW_CONTRACT,
 )
 from contracts.schema.api import (
     ApprovalDoc, DesignChapterSubject, DesignPreflightFailure,
-    DesignPreflightSummary, DesignRepairConstraint, DesignReviewRequest,
+    DesignPreflightSummary, DesignRepairConstraint, DesignReviewHistoryEntry,
+    DesignReviewRequest, DesignReviewTemplate,
     DesignStrategySubject, DesignStructureEvidence, StructureApprovalView,
 )
-from contracts.schema.stage4 import BlindCandidateChapter
-from novel.errors import HumanEditProtected, UpstreamMissing
+from contracts.schema.stage4 import BlindCandidateChapter, BlindChapterEditRequest
+from novel.errors import ApprovalRequired, HumanEditProtected, UpstreamMissing
 from novel.orchestrator import approvals
+from novel.stages.stage4.design_evolution import (
+    chapter_strategy_sha256, strategy_epoch_sha256,
+)
 
 
 SID = '123'
 FACT = 'a_' + '1' * 16
 PERSON = 'a_' + '2' * 16
+
+
+def test_design_history_summary_constructs_and_roundtrips_without_workpack_copy():
+    entry = DesignReviewHistoryEntry(
+        actor='reviewer', reviewer_kind='human', review_run_id='run-1',
+        general_reason='已完成逐章与跨章复核',
+        review_token='s4dr1_' + 'a' * 64,
+        strategy_decision='accept', chapter_decisions={1: 'accept'},
+        decision_sha256='b' * 64, decided_at='2026-09-01T00:00:00+00:00',
+    )
+
+    restored = DesignReviewHistoryEntry.model_validate_json(
+        entry.model_dump_json())
+
+    assert restored == entry
+    assert set(restored.model_dump()) == {
+        'actor', 'reviewer_kind', 'review_run_id', 'general_reason',
+        'review_token', 'strategy_decision', 'chapter_decisions',
+        'decision_sha256', 'decided_at',
+    }
 
 
 def _pass_preflight(
@@ -47,10 +72,12 @@ def _subjects(
     binding_infeasibility: dict | None = None,
     repair_capability: dict | None = None,
     preflight: DesignPreflightSummary | None = 'default',
+    review_contract: str = DESIGN_REVIEW_CONTRACT,
+    legacy_frozen_v6: bool = False,
 ) -> approvals._DesignSubjects:
     strategy = DesignStrategySubject(
         basis={
-            'review_contract': DESIGN_REVIEW_CONTRACT,
+            'review_contract': review_contract,
             'root_clean_sha1': 'a' * 40,
             'truth_sha256': 'b' * 64,
             'alias_algorithm': BLIND_ALIAS_ALGORITHM,
@@ -62,6 +89,10 @@ def _subjects(
         'kind': 'stage4_design_strategy_subject',
         'subject': strategy.model_dump(mode='json'),
     })
+    strategy_epoch = strategy_epoch_sha256(
+        strategy.basis.model_dump(mode='json'),
+        strategy.reconstruction_strategy,
+    )
     chapter = BlindCandidateChapter.model_validate({
         'output_ordinal': 1,
         'structure_decision': {
@@ -84,7 +115,9 @@ def _subjects(
         }],
     })
     subject = DesignChapterSubject(
-        strategy_subject_sha256=strategy_sha,
+        strategy_epoch_sha256=strategy_epoch,
+        chapter_strategy_sha256=chapter_strategy_sha256(
+            strategy_epoch, 1, chapter.weight),
         blind_truth={
             'chapter_ordinal': 1,
             'chapter_function': '建立冲突',
@@ -108,15 +141,19 @@ def _subjects(
         'subject': subject.model_dump(mode='json'),
     })
     capability = repair_capability or {
-        'repairable': True,
-        'reason_code': 'ready',
+        'agent_repairable': True,
+        'agent_reason_code': 'same_strategy_epoch_ready',
+        'full_chapter_editable': True,
+        'full_chapter_edit_reason_code': 'current_typed_decision',
         'chapters': [{
             'output_ordinal': 1,
             'committed_rounds': 0,
-            'request_repair_available': True,
+            'agent_repair_available': True,
+            'full_chapter_edit_available': True,
         }],
     }
     return approvals._DesignSubjects(
+        legacy_frozen_v6=legacy_frozen_v6,
         candidate_sha256='c' * 64,
         aggregate_subject_sha256=approvals._decision_sha256({
             'strategy': strategy_sha, 'chapter': chapter_sha,
@@ -129,8 +166,30 @@ def _subjects(
         repair_capability=capability,
         strategy=strategy,
         strategy_subject_sha256=strategy_sha,
+        strategy_epoch_sha256=strategy_epoch,
         chapters=[subject],
         chapter_subject_sha256={1: chapter_sha},
+    )
+
+
+def _frozen_subjects() -> approvals._DesignSubjects:
+    """frozen v6 只有零 wire 章替换能力，不伪造 agent lane。"""
+    return _subjects(
+        review_contract=FROZEN_V6_DESIGN_REVIEW_CONTRACT,
+        legacy_frozen_v6=True,
+        preflight=None,
+        repair_capability={
+            'agent_repairable': False,
+            'agent_reason_code': 'legacy_frozen_v6_human_edit_only',
+            'full_chapter_editable': True,
+            'full_chapter_edit_reason_code': 'current_typed_decision',
+            'chapters': [{
+                'output_ordinal': 1,
+                'committed_rounds': 2,
+                'agent_repair_available': False,
+                'full_chapter_edit_available': True,
+            }],
+        },
     )
 
 
@@ -147,8 +206,14 @@ def _mixed_repair_subjects() -> approvals._DesignSubjects:
         'kind': 'stage4_design_strategy_subject',
         'subject': strategy.model_dump(mode='json'),
     })
+    strategy_epoch = strategy_epoch_sha256(
+        strategy.basis.model_dump(mode='json'),
+        strategy.reconstruction_strategy,
+    )
     first = one.chapters[0].model_copy(update={
-        'strategy_subject_sha256': strategy_sha,
+        'strategy_epoch_sha256': strategy_epoch,
+        'chapter_strategy_sha256': chapter_strategy_sha256(
+            strategy_epoch, 1, 'CH_EVEN'),
     })
     second_chapter = first.chapter.model_copy(update={
         'output_ordinal': 2,
@@ -157,7 +222,8 @@ def _mixed_repair_subjects() -> approvals._DesignSubjects:
         })],
     })
     second = first.model_copy(update={
-        'strategy_subject_sha256': strategy_sha,
+        'chapter_strategy_sha256': chapter_strategy_sha256(
+            strategy_epoch, 2, 'CH_EVEN'),
         'blind_truth': first.blind_truth.model_copy(update={
             'chapter_ordinal': 2,
         }),
@@ -171,13 +237,17 @@ def _mixed_repair_subjects() -> approvals._DesignSubjects:
         for ordinal, subject in ((1, first), (2, second))
     }
     capability = {
-        'repairable': True,
-        'reason_code': 'ready',
+        'agent_repairable': True,
+        'agent_reason_code': 'same_strategy_epoch_ready',
+        'full_chapter_editable': True,
+        'full_chapter_edit_reason_code': 'current_typed_decision',
         'chapters': [
             {'output_ordinal': 1, 'committed_rounds': 1,
-             'request_repair_available': True},
+             'agent_repair_available': True,
+             'full_chapter_edit_available': True},
             {'output_ordinal': 2, 'committed_rounds': 2,
-             'request_repair_available': False},
+             'agent_repair_available': False,
+             'full_chapter_edit_available': True},
         ],
     }
     return approvals._DesignSubjects(
@@ -192,6 +262,7 @@ def _mixed_repair_subjects() -> approvals._DesignSubjects:
         repair_capability=capability,
         strategy=strategy,
         strategy_subject_sha256=strategy_sha,
+        strategy_epoch_sha256=strategy_epoch,
         chapters=[first, second],
         chapter_subject_sha256=chapter_hashes,
     )
@@ -227,8 +298,19 @@ def isolated(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     monkeypatch.setattr(
         approvals, '_read_current', lambda _base, _sid: state['record'])
     monkeypatch.setattr(
+        approvals, '_read_state',
+        lambda _base, _sid: (state['record'], state['record']))
+    monkeypatch.setattr(
         approvals, '_current_design_subjects', lambda _novel_dir: state['subjects'])
     monkeypatch.setattr(approvals, '_proof_for_design', lambda _dir, decision: _proof(decision))
+    monkeypatch.setattr(
+        approvals, '_make_proof',
+        lambda _dir, _artifacts, payload: approvals._ApprovalProof(
+            root_clean_sha1='a' * 40,
+            artifacts={'stage4/blind_candidate.json': 'd' * 64},
+            decision_sha256=approvals._decision_sha256(payload),
+        ),
+    )
     monkeypatch.setattr(approvals, '_spawns', lambda _base, _sid: {})
     monkeypatch.setattr(
         approvals, '_current_structure_subject_and_chapters',
@@ -246,18 +328,52 @@ def isolated(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     return tmp_path, state
 
 
-def _template(base: Path) -> DesignReviewRequest:
+def _template(base: Path) -> DesignReviewTemplate:
     return approvals.design_template(
         base, SID, actor='reviewer', reviewer_kind='human',
         review_run_id='review-1', reason='逐项核对当前 A 候选')
 
 
-def _accept_all(template: DesignReviewRequest) -> DesignReviewRequest:
+def _compact_request(template: DesignReviewTemplate) -> DesignReviewRequest:
+    """只投影公网 POST 真正接受的 token + typed rulings。"""
+    return DesignReviewRequest.model_validate({
+        'actor': template.actor,
+        'reviewer_kind': template.reviewer_kind,
+        'review_run_id': template.review_run_id,
+        'general_reason': template.general_reason,
+        'review_token': template.review_token,
+        'strategy': {
+            'decision': template.strategy.decision,
+            'reason': template.strategy.reason,
+            'replan_constraints': [
+                {
+                    'kind': row.kind,
+                    'chapter_ordinals': row.chapter_ordinals,
+                }
+                for row in template.strategy.replan_constraints
+            ],
+        },
+        'chapters': [
+            {
+                'output_ordinal': row.output_ordinal,
+                'decision': row.decision,
+                'reason': row.reason,
+                'constraints': [
+                    item.model_dump(mode='json') for item in row.constraints
+                ],
+            }
+            for row in template.chapters
+        ],
+    })
+
+
+def _accept_all(template: DesignReviewTemplate) -> DesignReviewRequest:
     updated = template.model_copy(update={
         'strategy': template.strategy.model_copy(update={
             'placeholder': False,
             'template_token': None,
             'decision': 'accept', 'reason': '整书策略可进入 B',
+            'replan_constraints': [],
             'source_decision_sha256': None,
         }),
         'chapters': [row.model_copy(update={
@@ -267,7 +383,7 @@ def _accept_all(template: DesignReviewRequest) -> DesignReviewRequest:
             'constraints': [], 'source_decision_sha256': None,
         }) for row in template.chapters],
     })
-    return DesignReviewRequest.model_validate(updated.model_dump(mode='json'))
+    return _compact_request(updated)
 
 
 def test_design_apply_decided_view_and_plan_authorization_are_current(isolated):
@@ -286,6 +402,116 @@ def test_design_apply_decided_view_and_plan_authorization_are_current(isolated):
     assert approvals._view(base, state['record']).design_review.state == 'accepted'
 
 
+def test_frozen_v6_raw_all_accept_is_suspended_without_any_action_token(
+    isolated,
+) -> None:
+    base, state = isolated
+    state['subjects'] = _frozen_subjects()
+    template = _template(base)
+
+    replan = _compact_request(template.model_copy(update={
+        'strategy': template.strategy.model_copy(update={
+            'placeholder': False,
+            'template_token': None,
+            'decision': 'request_replan',
+            'reason': '尝试重规划冻结书',
+            'source_decision_sha256': None,
+        }),
+        'chapters': [row.model_copy(update={
+            'placeholder': False,
+            'template_token': None,
+            'decision': 'request_repair',
+            'reason': '即使各章另有真实修订，冻结策略也不得付费重规划',
+            'constraints': [DesignRepairConstraint(
+                code='scene_goal', scene_refs=['c01s01'],
+                opaque_aliases=[FACT])],
+            'source_decision_sha256': None,
+        }) for row in template.chapters],
+    }))
+    with pytest.raises(HumanEditProtected, match='不开放付费 strategy replan'):
+        approvals.approve_design(base, SID, replan)
+    assert state['record'].design_decision is None
+
+    doc = approvals.approve_design(base, SID, _accept_all(template))
+
+    assert state['record'].design_decision is not None, 'raw typed 决定必须落盘'
+    assert len(state['record'].design_history) == 1
+    assert doc.design_review.state == 'suspended'
+    assert doc.design_review.current_decision is not None
+    assert doc.design_review.action_review_token is None
+    assert doc.spawns.get('s4', []) == []
+    assert approvals.design_review_is_current(base, SID) is False
+    with pytest.raises(ApprovalRequired, match='state=suspended'):
+        approvals.authorize_plan(base, SID)
+
+    workpack = approvals.design_workpack(base, SID)
+    assert workpack.disposition == 'suspended'
+    assert workpack.current_decision_sha256 \
+        == doc.design_review.current_decision.decision_sha256
+    assert all(
+        item.review_token is None
+        for group in workpack.groups for item in group.items
+    ), 'raw all-accept 不得签发 s4er1 完整章替换票'
+
+
+def test_frozen_v6_real_repair_still_mints_only_zero_wire_edit_token(
+    isolated,
+) -> None:
+    base, state = isolated
+    state['subjects'] = _frozen_subjects()
+    template = _template(base)
+    request = _compact_request(template.model_copy(update={
+        'strategy': template.strategy.model_copy(update={
+            'placeholder': False,
+            'template_token': None,
+            'decision': 'accept',
+            'reason': '整书策略可保留，仅修当前章',
+            'replan_constraints': [],
+            'source_decision_sha256': None,
+        }),
+        'chapters': [template.chapters[0].model_copy(update={
+            'placeholder': False,
+            'template_token': None,
+            'decision': 'request_repair',
+            'reason': '当前场景目标与事实锚点不一致',
+            'constraints': [DesignRepairConstraint(
+                code='scene_goal', scene_refs=['c01s01'],
+                opaque_aliases=[FACT])],
+            'source_decision_sha256': None,
+        })],
+    }))
+
+    doc = approvals.approve_design(base, SID, request)
+
+    assert doc.design_review.state == 'repair_requested'
+    assert doc.design_review.current_decision is not None
+    assert doc.design_review.action_review_token is None
+    assert doc.spawns.get('s4', []) == []
+    workpack = approvals.design_workpack(base, SID)
+    repair_item = next(
+        item for item in workpack.groups[0].items
+        if item.code == 'design_repair_requested:ch1')
+    assert repair_item.review_token is not None
+    assert repair_item.review_token.startswith('s4er1_')
+
+    chapter = template.chapters[0].subject.chapter.model_dump(mode='json')
+    for scene in chapter['scenes']:
+        scene.pop('candidate_scene_id')
+    edit = BlindChapterEditRequest.model_validate({
+        'actor': 'human:reviewer',
+        'reason': '按 typed constraint 提交完整章响应',
+        'review_token': repair_item.review_token,
+        'output_ordinal': 1,
+        'chapter': chapter,
+    })
+    authorization = approvals.resolve_design_edit_action(base, SID, edit)
+    assert authorization.review_token == repair_item.review_token
+    with pytest.raises(HumanEditProtected, match='只开放零 wire 完整章替换'):
+        approvals.resolve_design_action(
+            base, SID, doc.design_review.action_review_token,
+            expected='repair')
+
+
 def test_design_template_cannot_be_applied_while_placeholders_remain(isolated):
     base, _state = isolated
     template = _template(base)
@@ -294,21 +520,21 @@ def test_design_template_cannot_be_applied_while_placeholders_remain(isolated):
     assert template.strategy.template_token is not None
     assert all(row.placeholder for row in template.chapters)
     assert all(row.template_token is not None for row in template.chapters)
-    with pytest.raises(HumanEditProtected, match='template placeholder'):
-        approvals.approve_design(base, SID, template)
+    with pytest.raises(ValidationError, match='Extra inputs are not permitted'):
+        DesignReviewRequest.model_validate(template.model_dump(mode='json'))
 
 
 def test_clearing_template_markers_alone_cannot_submit_default_sentinels(isolated):
     base, _state = isolated
     template = _template(base)
-    copied = DesignReviewRequest.model_validate(template.model_copy(update={
+    copied = _compact_request(template.model_copy(update={
         'strategy': template.strategy.model_copy(update={
             'placeholder': False, 'template_token': None,
         }),
         'chapters': [row.model_copy(update={
             'placeholder': False, 'template_token': None,
         }) for row in template.chapters],
-    }).model_dump(mode='json'))
+    }))
 
     with pytest.raises(HumanEditProtected, match='template sentinel'):
         approvals.approve_design(base, SID, copied)
@@ -350,7 +576,7 @@ def test_fresh_b_infeasibility_is_visible_bound_and_disables_accept_reuse(isolat
         == '8' * 64
     )
 
-    reviewed = DesignReviewRequest.model_validate(template.model_copy(update={
+    reviewed = _compact_request(template.model_copy(update={
         'strategy': template.strategy.model_copy(update={
             'placeholder': False, 'template_token': None,
             'reason': '代码证明 B 不可行，整书策略必须重建',
@@ -359,29 +585,33 @@ def test_fresh_b_infeasibility_is_visible_bound_and_disables_accept_reuse(isolat
             'placeholder': False, 'template_token': None,
             'reason': '本章随整书策略重建后重新审阅',
         }) for row in template.chapters],
-    }).model_dump(mode='json'))
+    }))
     decided = approvals.approve_design(base, SID, reviewed)
     current = decided.design_review.current_decision
     assert current is not None and current.binding_infeasibility is not None
-    scope = approvals.resolve_design_action(base, SID, None, expected='replan')
+    scope = approvals.resolve_design_action(
+        base, SID, approvals._design_action_review_token(
+            current.decision_sha256), expected='replan')
     assert scope.binding_infeasibility == current.binding_infeasibility
 
 
-def test_mixed_repair_capability_templates_and_resolves_only_non_exhausted_chapter(
+def test_mixed_repair_capability_resolves_only_agent_available_chapter(
         isolated):
     base, state = isolated
     state['subjects'] = _mixed_repair_subjects()
     template = _template(base)
 
-    assert [row.request_repair_available
+    assert [row.agent_repair_available
             for row in template.repair_capability.chapters] == [True, False]
-    assert template.chapters[0].decision == 'request_repair'
-    assert template.chapters[1].decision == 'accept'
-    assert template.chapters[1].constraints == []
-    reviewed = DesignReviewRequest.model_validate(template.model_copy(update={
+    assert [row.full_chapter_edit_available
+            for row in template.repair_capability.chapters] == [True, True]
+    assert [row.decision for row in template.chapters] == [
+        'request_repair', 'request_repair']
+    reviewed = _compact_request(template.model_copy(update={
         'strategy': template.strategy.model_copy(update={
             'placeholder': False, 'template_token': None,
             'decision': 'accept', 'reason': '策略本身可执行，仅第一章需定向返修',
+            'replan_constraints': [],
         }),
         'chapters': [
             template.chapters[0].model_copy(update={
@@ -394,48 +624,56 @@ def test_mixed_repair_capability_templates_and_resolves_only_non_exhausted_chapt
             }),
             template.chapters[1].model_copy(update={
                 'placeholder': False, 'template_token': None,
-                'reason': '第二章已耗尽 targeted repair，当前结构可接受',
+                'reason': '第二章只走零 wire 完整章替换，不得误发 agent',
             }),
         ],
-    }).model_dump(mode='json'))
+    }))
     doc = approvals.approve_design(base, SID, reviewed)
     decision = doc.design_review.current_decision
     assert decision is not None
     scope = approvals.resolve_design_action(
-        base, SID, decision.decision_sha256, expected='repair')
+        base, SID, approvals._design_action_review_token(
+            decision.decision_sha256), expected='repair')
     assert scope.target_chapters == [1]
     assert scope.repair_capability.chapters[1].committed_rounds == 2
 
 
 @pytest.mark.parametrize(('capability', 'reason_code'), [
     ({
-        'repairable': False,
-        'reason_code': 'legacy_or_untracked_candidate',
+        'agent_repairable': False,
+        'agent_reason_code': 'legacy_or_untracked_candidate',
+        'full_chapter_editable': True,
+        'full_chapter_edit_reason_code': 'current_typed_decision',
         'chapters': [{
             'output_ordinal': 1, 'committed_rounds': 0,
-            'request_repair_available': False,
+            'agent_repair_available': False,
+            'full_chapter_edit_available': True,
         }],
     }, 'legacy_or_untracked_candidate'),
     ({
-        'repairable': True,
-        'reason_code': 'ready',
+        'agent_repairable': False,
+        'agent_reason_code': 'agent_epoch_unavailable',
+        'full_chapter_editable': True,
+        'full_chapter_edit_reason_code': 'current_typed_decision',
         'chapters': [{
             'output_ordinal': 1, 'committed_rounds': 2,
-            'request_repair_available': False,
+            'agent_repair_available': False,
+            'full_chapter_edit_available': True,
         }],
-    }, 'ready'),
+    }, 'agent_epoch_unavailable'),
 ])
-def test_untracked_or_exhausted_chapter_cannot_form_request_repair(
+def test_full_edit_only_chapter_cannot_be_sent_to_agent(
         isolated, capability, reason_code):
     base, state = isolated
     state['subjects'] = _subjects(repair_capability=capability)
     template = _template(base)
-    assert template.repair_capability.reason_code == reason_code
-    assert template.chapters[0].decision == 'accept'
-    attempted = DesignReviewRequest.model_validate(template.model_copy(update={
+    assert template.repair_capability.agent_reason_code == reason_code
+    assert template.chapters[0].decision == 'request_repair'
+    attempted = _compact_request(template.model_copy(update={
         'strategy': template.strategy.model_copy(update={
             'placeholder': False, 'template_token': None,
             'decision': 'accept', 'reason': '策略可保留',
+            'replan_constraints': [],
         }),
         'chapters': [template.chapters[0].model_copy(update={
             'placeholder': False, 'template_token': None,
@@ -445,10 +683,15 @@ def test_untracked_or_exhausted_chapter_cannot_form_request_repair(
                 opaque_aliases=[FACT],
             )],
         })],
-    }).model_dump(mode='json'))
+    }))
 
-    with pytest.raises(HumanEditProtected, match='无可执行 split lineage|耗尽'):
-        approvals.approve_design(base, SID, attempted)
+    doc = approvals.approve_design(base, SID, attempted)
+    decision = doc.design_review.current_decision
+    assert decision is not None
+    with pytest.raises(approvals.ApprovalRequired, match='零 wire 完整章替换'):
+        approvals.resolve_design_action(
+            base, SID, approvals._design_action_review_token(
+                decision.decision_sha256), expected='repair')
 
 
 def test_authorize_design_initial_delegates_to_core_slot_capability(
@@ -466,11 +709,12 @@ def test_authorize_design_initial_delegates_to_core_slot_capability(
 def test_repair_resolver_requires_exact_current_sha_and_returns_only_constraints(isolated):
     base, _state = isolated
     template = _template(base)
-    request = DesignReviewRequest.model_validate(template.model_copy(update={
+    request = _compact_request(template.model_copy(update={
         'strategy': template.strategy.model_copy(update={
             'placeholder': False,
             'template_token': None,
             'decision': 'accept', 'reason': '策略可保留',
+            'replan_constraints': [],
         }),
         'chapters': [template.chapters[0].model_copy(update={
             'placeholder': False,
@@ -481,24 +725,101 @@ def test_repair_resolver_requires_exact_current_sha_and_returns_only_constraints
                 opaque_aliases=[FACT],
             )],
         })],
-    }).model_dump(mode='json'))
+    }))
     doc = approvals.approve_design(base, SID, request)
     decision = doc.design_review.current_decision
     assert decision is not None
+    assert doc.design_review.action_review_token == \
+        approvals._design_action_review_token(decision.decision_sha256)
     with pytest.raises(HumanEditProtected, match='不等于当前'):
         approvals.resolve_design_action(
-            base, SID, '0' * 64, expected='repair')
+            base, SID, 's4rr1_' + '0' * 64, expected='repair')
     scope = approvals.resolve_design_action(
-        base, SID, decision.decision_sha256, expected='repair')
+        base, SID, approvals._design_action_review_token(
+            decision.decision_sha256), expected='repair')
     assert scope.target_chapters == [1]
-    assert scope.chapters[0].constraints == request.chapters[0].constraints
+    assert scope.chapters[0].constraints == []
+    assert scope.chapters[0].new_constraints == request.chapters[0].constraints
+    assert scope.chapters[0].accumulated_constraints \
+        == request.chapters[0].constraints
+    assert scope.chapters[0].constraint_set_sha256 is not None
     assert 'reason' not in scope.model_dump(mode='json')
+
+
+def test_repair_constraints_accumulate_and_complete_edit_uses_one_opaque_token(
+        isolated):
+    base, _state = isolated
+    first_template = _template(base)
+    first_request = _compact_request(
+        first_template.model_copy(update={
+            'strategy': first_template.strategy.model_copy(update={
+                'placeholder': False, 'template_token': None,
+                'decision': 'accept', 'reason': '宏观策略保持不变',
+                'replan_constraints': [],
+            }),
+            'chapters': [first_template.chapters[0].model_copy(update={
+                'placeholder': False, 'template_token': None,
+                'reason': '先收紧场景目标',
+                'constraints': [DesignRepairConstraint(
+                    code='scene_goal', scene_refs=['c01s01'],
+                    opaque_aliases=[FACT])],
+            })],
+        }))
+    approvals.approve_design(base, SID, first_request)
+
+    second_template = _template(base)
+    second_request = _compact_request(
+        second_template.model_copy(update={
+            'chapters': [second_template.chapters[0].model_copy(update={
+                'placeholder': False, 'template_token': None,
+                'reason': '第二轮补充事实组合，第一轮约束仍未关闭',
+                'constraints': [DesignRepairConstraint(
+                    code='fact_grouping', scene_refs=[],
+                    opaque_aliases=[FACT, PERSON])],
+            })],
+        }))
+    doc = approvals.approve_design(base, SID, second_request)
+    decision = doc.design_review.current_decision
+    assert decision is not None
+    resolved = approvals.resolve_design_action(
+        base, SID, approvals._design_action_review_token(
+            decision.decision_sha256), expected='repair')
+    chapter_scope = resolved.chapters[0]
+    assert chapter_scope.new_constraints == second_request.chapters[0].constraints
+    assert {row.code for row in chapter_scope.accumulated_constraints} == {
+        'scene_goal', 'fact_grouping'}
+
+    chapter = second_template.chapters[0].subject.chapter.model_dump(mode='json')
+    for scene in chapter['scenes']:
+        scene.pop('candidate_scene_id')
+    review_token = approvals._design_chapter_edit_review_token(
+        decision, decision.chapters[0], chapter_scope)
+    workpack = approvals.design_workpack(base, SID)
+    repair_item = next(
+        item for item in workpack.groups[0].items
+        if item.code == 'design_repair_requested:ch1')
+    assert repair_item.review_token == review_token
+    assert decision.decision_sha256 not in repair_item.detail
+    assert chapter_scope.constraint_set_sha256 not in repair_item.detail
+    edit = BlindChapterEditRequest.model_validate({
+        'actor': 'human:reviewer', 'reason': '提交完整章 typed response',
+        'review_token': review_token,
+        'output_ordinal': 1,
+        'chapter': chapter,
+    })
+    authorization = approvals.resolve_design_edit_action(base, SID, edit)
+    assert authorization.scope == chapter_scope
+    assert authorization.review_token == review_token
+    assert authorization.candidate_sha256 == decision.candidate_sha256
+    stale = edit.model_copy(update={'review_token': 's4er1_' + '0' * 64})
+    with pytest.raises(HumanEditProtected, match='opaque review_token'):
+        approvals.resolve_design_edit_action(base, SID, stale)
 
 
 def test_strategy_replan_scope_has_no_chapters(isolated):
     base, _state = isolated
     template = _template(base)
-    reviewed = DesignReviewRequest.model_validate(template.model_copy(update={
+    reviewed = _compact_request(template.model_copy(update={
         'strategy': template.strategy.model_copy(update={
             'placeholder': False, 'template_token': None,
             'reason': '整书策略需重新组织后再审',
@@ -510,9 +831,13 @@ def test_strategy_replan_scope_has_no_chapters(isolated):
             })
             for row in template.chapters
         ],
-    }).model_dump(mode='json'))
+    }))
     doc = approvals.approve_design(base, SID, reviewed)
-    scope = approvals.resolve_design_action(base, SID, None, expected='replan')
+    decision = doc.design_review.current_decision
+    assert decision is not None
+    scope = approvals.resolve_design_action(
+        base, SID, approvals._design_action_review_token(
+            decision.decision_sha256), expected='replan')
     assert doc.design_review.state == 'strategy_replan_requested'
     assert scope.strategy_replan and scope.target_chapters == [] and scope.chapters == []
 
@@ -537,11 +862,12 @@ def test_template_reuses_only_unchanged_accept_subjects(isolated):
 def test_constraint_refs_must_belong_to_the_reviewed_chapter(isolated):
     base, _state = isolated
     template = _template(base)
-    request = DesignReviewRequest.model_validate(template.model_copy(update={
+    request = _compact_request(template.model_copy(update={
         'strategy': template.strategy.model_copy(update={
             'placeholder': False,
             'template_token': None,
             'decision': 'accept', 'reason': '策略可保留',
+            'replan_constraints': [],
         }),
         'chapters': [template.chapters[0].model_copy(update={
             'placeholder': False,
@@ -552,7 +878,7 @@ def test_constraint_refs_must_belong_to_the_reviewed_chapter(isolated):
                 opaque_aliases=[FACT],
             )],
         })],
-    }).model_dump(mode='json'))
+    }))
     with pytest.raises(HumanEditProtected, match='constraint 越界'):
         approvals.approve_design(base, SID, request)
 
@@ -584,11 +910,12 @@ def test_design_http_routes_keep_template_read_only_and_apply_typed(
     from novel.api.app import UI_HEADER, create_app
     from novel.api.routes import approvals as route
 
-    request = _accept_all(_template_for_http())
+    template = _template_for_http()
+    request = _accept_all(template)
     calls = []
     monkeypatch.setattr(
         route.approvals, 'design_template',
-        lambda base, sid, **kwargs: calls.append(('get', sid, kwargs)) or request)
+        lambda base, sid, **kwargs: calls.append(('get', sid, kwargs)) or template)
     response = ApprovalDoc(
         sid=SID,
         gate={key: False for key in APPROVAL_GATES},
@@ -615,12 +942,13 @@ def test_design_http_routes_keep_template_read_only_and_apply_typed(
     assert calls[0][0] == 'get' and calls[1][0] == 'post'
 
 
-def _template_for_http() -> DesignReviewRequest:
+def _template_for_http() -> DesignReviewTemplate:
     current = _subjects()
     subject = current.chapters[0]
-    return DesignReviewRequest(
+    return DesignReviewTemplate(
         actor='reviewer', reviewer_kind='human', review_run_id='review-1',
-        general_reason='完整审阅', candidate_sha256=current.candidate_sha256,
+        general_reason='完整审阅', review_token='s4dr1_' + 'f' * 64,
+        candidate_sha256=current.candidate_sha256,
         aggregate_subject_sha256=current.aggregate_subject_sha256,
         repair_capability=current.repair_capability,
         strategy={
@@ -629,6 +957,10 @@ def _template_for_http() -> DesignReviewRequest:
             'placeholder': True,
             'template_token': 'd' * 64,
             'decision': 'request_replan', 'reason': '关闭式模板',
+            'replan_constraints': [{
+                'kind': 'replace_reconstruction_strategy',
+                'subject_sha256': current.strategy_subject_sha256,
+            }],
         },
         chapters=[{
             'output_ordinal': 1, 'subject': subject,
@@ -659,7 +991,7 @@ def test_blocked_preflight_refuses_accept_but_allows_repair(isolated):
     with pytest.raises(HumanEditProtected, match='预检 blocked'):
         approvals.approve_design(base, SID, _accept_all(template))
     # remedy 不受闸：request_repair 仍可提交。
-    repair_request = template.model_copy(update={
+    repair_request = _compact_request(template.model_copy(update={
         'strategy': template.strategy.model_copy(update={
             'placeholder': False, 'template_token': None,
             'decision': 'request_replan', 'reason': '预检 blocked，整书重规划',
@@ -677,7 +1009,7 @@ def test_blocked_preflight_refuses_accept_but_allows_repair(isolated):
                     row.subject.blind_truth.facts[0].participant_aliases[0],
                 ])],
             'source_decision_sha256': None}) for row in template.chapters],
-    })
+    }))
     doc = approvals.approve_design(base, SID, repair_request)
     # 策略 replan + 章 repair 的组合态由 view 状态机裁定（replan 优先）。
     assert doc.design_review.state == 'strategy_replan_requested'
@@ -694,7 +1026,7 @@ def test_preflight_missing_fails_closed_for_accept(isolated):
 def test_retired_repair_code_refused_on_new_decision(isolated):
     base, state = isolated
     template = _template(base)
-    request = template.model_copy(update={
+    request = _compact_request(template.model_copy(update={
         'strategy': template.strategy.model_copy(update={
             'placeholder': False, 'template_token': None,
             'decision': 'request_replan', 'reason': '泛化重排不再可提交',
@@ -705,7 +1037,7 @@ def test_retired_repair_code_refused_on_new_decision(isolated):
             'constraints': [DesignRepairConstraint(
                 code='structure_delta', scene_refs=[], opaque_aliases=[])],
             'source_decision_sha256': None}) for row in template.chapters],
-    })
+    }))
     with pytest.raises(HumanEditProtected, match='退役修复码'):
         approvals.approve_design(base, SID, request)
 
@@ -713,7 +1045,7 @@ def test_retired_repair_code_refused_on_new_decision(isolated):
 def test_binding_constraint_unsat_requires_mechanical_witness(isolated):
     base, state = isolated
     template = _template(base)
-    request = template.model_copy(update={
+    request = _compact_request(template.model_copy(update={
         'strategy': template.strategy.model_copy(update={
             'placeholder': False, 'template_token': None,
             'decision': 'request_replan', 'reason': '无 witness 的不可满足主张',
@@ -726,6 +1058,6 @@ def test_binding_constraint_unsat_requires_mechanical_witness(isolated):
                 scene_refs=[row.subject.chapter.scenes[0].candidate_scene_id],
                 opaque_aliases=[])],
             'source_decision_sha256': None}) for row in template.chapters],
-    })
+    }))
     with pytest.raises(HumanEditProtected, match='缺机械'):
         approvals.approve_design(base, SID, request)

@@ -43,6 +43,10 @@ def _run_spec() -> agent_runs.SingleSessionRunSpec:
             ctx.novel_dir, ctx.run_id),
         checkpoint_dir=lambda ctx: paths.stage6_hook_checkpoint_dir(
             ctx.novel_dir, ctx.run_id),
+        legacy_run_path=lambda ctx: paths.legacy_stage6_hook_run_path(
+            ctx.novel_dir, ctx.run_id),
+        legacy_checkpoint_dir=lambda ctx: paths.legacy_stage6_hook_checkpoint_dir(
+            ctx.novel_dir, ctx.run_id),
         incompatible_session_nodes=('stage6.semantic',),
     )
 
@@ -135,14 +139,12 @@ def refuse_foreign_commit_reservations(ctx: Any) -> None:
     # hook.json 是 semantic 的冻结输入；另一 semantic run 已 prepared 时，
     # 本节点即使拿到了活锁也不能改写它脚下的主体。
     stage6_runs.refuse_foreign_semantic_prepared(ctx)
-    root = Path(ctx.novel_dir) / paths.STAGE6_RUNS_DIRNAME
     current = _commit_spec().commit_path(ctx).resolve()
-    if not root.is_dir():
-        return
-    for target in root.glob(f'*/hook/{agent_runs.COMMIT_FILE}'):
-        if target.resolve() == current:
-            continue
+    for target in stage6_runs._history_files(
+            ctx, f'*/hook/{agent_runs.COMMIT_FILE}'):
         run_id = target.parent.parent.name
+        if run_id == ctx.run_id or target.resolve() == current:
+            continue
         record = agent_runs.validate_foreign_commit_envelope(
             target, label='Stage6 hook foreign commit', run_id=run_id,
             sid=ctx.sid, node='stage6.hook')

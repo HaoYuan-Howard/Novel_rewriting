@@ -589,6 +589,14 @@ TRASH_DIRNAME = 'trash'
 #: 目录名**就是内容地址**，产地只有一个：`novel/orchestrator/uploads.py::save_upload`。
 UPLOADS_DIRNAME = 'uploads'
 
+#: 非正式 run/checkpoint/history 的服务落点。按不可变 sid 分区，
+#: 不再把带模型 stdout 的内部恢复空间散在每本书的展示目录里。
+RUNS_DIRNAME = 'runs'
+
+#: operator 会话级临时请求/许可/预览证据。只允许显式会话收尾或
+#: 显式 TTL 维护入口清理，路径函数本身绝不扫盘。
+SCRATCH_DIRNAME = 'scratch'
+
 #: 内容地址的形状。认死 64 位小写十六进制——**认不出就不是上传目录**，
 #: 与其猜一个不如答「不知道」（`novel/core/source.py` 的重锚以此为前提）。
 _CONTENT_ADDRESS = re.compile(r'[0-9a-f]{64}')
@@ -610,6 +618,51 @@ def trash_dir(base: str | os.PathLike[str]) -> Path:
 def uploads_dir(base: str | os.PathLike[str]) -> Path:
     """`<base>/_service/uploads/`。界面上传的原文长期留在这儿供 stage0 审校屏取回。"""
     return service_dir(base) / UPLOADS_DIRNAME
+
+
+def service_runs_dir(base: str | os.PathLike[str]) -> Path:
+    """`<base>/_service/runs/`；只放非正式恢复记录。"""
+    return service_dir(base) / RUNS_DIRNAME
+
+
+def scratch_dir(base: str | os.PathLike[str]) -> Path:
+    """`<base>/_service/scratch/`；会话临时空间的唯一根。"""
+    return service_dir(base) / SCRATCH_DIRNAME
+
+
+def _service_segment(value: str, *, label: str) -> str:
+    """服务目录的单段准入。
+
+    session 可以是 provider/Commander 身份，不强迫它伪装成
+    ``run_id``；但它仍然只能是一段，不允许绝对路径、穿越或控制字符。
+    """
+    text = str(value)
+    if (not text or text != text.strip() or len(text) > 160
+            or text in ('.', '..')
+            or '/' in text or '\\' in text
+            or _CTRL.search(text)
+            or re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._-]*', text) is None):
+        raise PathRefused(f'{label}不是合法的服务目录单段：{value!r}')
+    return text
+
+
+def scratch_session_dir(
+        base: str | os.PathLike[str], sid: str, session_id: str,
+) -> Path:
+    """`<base>/_service/scratch/<sid>/<session>/`；不摸盘。"""
+    return (scratch_dir(base) / check_sid(sid)
+            / _service_segment(session_id, label='scratch session id'))
+
+
+def service_book_runs_dir(novel_dir: str | os.PathLike[str]) -> Path:
+    """`<base>/_service/runs/<sid>/`；从权威书目录反解 sid。
+
+    传入的是书目录而不是一枚可任意拼路径的 sid，因此这里不
+    新增第二份「书目录如何定位」规则。
+    """
+    root = Path(os.fspath(novel_dir))
+    sid, _title, _platform = derive_source_meta(root.name)
+    return service_runs_dir(root.parent) / check_sid(sid)
 
 
 def uploaded_source_tail(recorded: str | os.PathLike[str]) -> tuple[str, str] | None:
@@ -649,7 +702,8 @@ def uploaded_source_tail(recorded: str | os.PathLike[str]) -> tuple[str, str] | 
 #:
 #: ⚠⚠ **它刻意【不】进 `<base>/_service/`。** 那份推理里装的是**这本书的正文**
 #: （答案本来就该写进 `content`，只是走错了通道）⇒ 跟书走：删书即删证据，
-#: 而跨书的服务目录里至今一个字正文都没有——这条不该由一份诊断来打破。
+#: `_service/runs/<sid>` 已是按书隔离、可恢复的受管模型 sidecar；
+#: 而 answer-lost 是不能直接采纳、可能含逸出推理的诊断证据，仍然跟书删除边界走。
 #: `_` 前缀与 `_rounds` / `_revalidation` 同类：它不是产物，完成度与阶段视图不看它。
 #:
 #: 对自由文本 `ask_text`，留证仍只作诊断而不从 reasoning 抠正文；对结构化
@@ -663,29 +717,70 @@ ANSWER_LOST_DIRNAME = '_answer_lost'
 #: 因此目录名仍用 `_` 隔离于正式产物，路径构造也必须拒绝外部传入的穿越片段。
 REJECTED_RESPONSE_DIRNAME = '_llm_rejected'
 
-#: Stage2 逐章响应在正式整书产物提交前的验证后检查点。它不是正式 artifact、
-#: 不进完成度与来源账，也不是会被普通请求直接命中的 `.llm_cache`。目录跟书走，
-#: 因为其中封存了模型响应正文；`run_id` 只负责把一次首轮、人工修复与唯一 resume
-#: 绑成同一条恢复链。
+#: 以下 `_stage*_runs` 是旧版书内恢复空间的**只读兼容名**。
+#: 新 run/checkpoint/history 一律写入 `<base>/_service/runs/<sid>/stageN/`；
+#: 恢复器可以显式回读这些 legacy 路径，但绝不向其追加或搬动现有文件。
 STAGE2_RUNS_DIRNAME = '_stage2_runs'
 
-#: Stage4 design/plan executor 的验证后响应与提交尾窗 journal。两节点各占
-#: 独立目录，但正式写盘共用同一本书的所有权锁。
+#: Stage4 legacy 根名；新 design/plan 位于 service stage4 根。
 STAGE4_RUNS_DIRNAME = '_stage4_runs'
 
-#: Stage5 逐章 executor 的验证后响应与正式提交尾窗 journal。每章各占一份
-#: run/checkpoint/ownership 空间；同批章节可并发，但任何两章都不能共享 session。
+#: Stage5 legacy 根名；新逐章链位于 service stage5 根。
 STAGE5_RUNS_DIRNAME = '_stage5_runs'
 
-#: Stage6 hook executor 与双盲 semantic executor 的验证后响应及提交尾窗
-#: journal。两类 node 各占独立子目录、共用一本书的提交所有权锁；其中含模型
-#: stdout，必须跟书走，不是正式 artifact，也不参加完成度扫描。
+#: Stage6 legacy 根名；新 hook/semantic 链位于 service stage6 根。
 STAGE6_RUNS_DIRNAME = '_stage6_runs'
 
-#: Stage7 rename executor 的完整人物表 replacement、验证后 checkpoint 与正式
-#: 提交尾窗 journal。目录里含模型 stdout，必须跟书走；它不是正式 artifact，
-#: 也不参加完成度或下载路径扫描。
+#: Stage7 legacy 根名；新 rename 链位于 service stage7 根。
 STAGE7_RUNS_DIRNAME = '_stage7_runs'
+
+
+def _service_stage_runs_dir(
+        novel_dir: str | os.PathLike[str], stage: str,
+) -> Path:
+    """新内部恢复空间：`<base>/_service/runs/<sid>/<stage>/`。"""
+    if re.fullmatch(r'stage[24567]', stage) is None:
+        raise PathRefused(f'内部 run stage 不在登记集：{stage!r}')
+    return service_book_runs_dir(novel_dir) / stage
+
+
+def _legacy_stage_runs_dir(
+        novel_dir: str | os.PathLike[str], dirname: str,
+) -> Path:
+    """旧书内 run 根；只给恢复读口使用。"""
+    return Path(os.fspath(novel_dir)) / dirname
+
+
+def service_stage_runs_dir(
+        novel_dir: str | os.PathLike[str], stage: str,
+) -> Path:
+    """供 foreign/history 有界扫描使用的当前 stage run 根。"""
+    return _service_stage_runs_dir(novel_dir, stage)
+
+
+def legacy_stage_runs_dir(
+        novel_dir: str | os.PathLike[str], stage: str,
+) -> Path:
+    """供兼容读口使用的旧书内 stage run 根。"""
+    dirname = {
+        'stage2': STAGE2_RUNS_DIRNAME,
+        'stage4': STAGE4_RUNS_DIRNAME,
+        'stage5': STAGE5_RUNS_DIRNAME,
+        'stage6': STAGE6_RUNS_DIRNAME,
+        'stage7': STAGE7_RUNS_DIRNAME,
+    }.get(stage)
+    if dirname is None:
+        raise PathRefused(f'内部 run stage 不在登记集：{stage!r}')
+    return _legacy_stage_runs_dir(novel_dir, dirname)
+
+
+def stage_run_read_roots(
+        novel_dir: str | os.PathLike[str], stage: str,
+) -> tuple[Path, ...]:
+    """当前 service 根 + legacy 只读根；写口绝不使用本函数选路。"""
+    current = service_stage_runs_dir(novel_dir, stage)
+    legacy = legacy_stage_runs_dir(novel_dir, stage)
+    return (current,) if current == legacy else (current, legacy)
 
 
 def answer_lost_rel(attempt_id: str) -> str:
@@ -716,20 +811,40 @@ def rejected_response_path(novel_dir: str | os.PathLike[str], chain_id: str,
 def stage2_blueprint_run_path(
         novel_dir: str | os.PathLike[str], run_id: str,
 ) -> Path:
-    """`<书目录>/_stage2_runs/<run_id>/blueprint/`；run id 先过唯一身份闸。"""
+    """`<base>/_service/runs/<sid>/stage2/<run_id>/blueprint/`。"""
     from novel.run_identity import check_run_id
 
-    return (Path(os.fspath(novel_dir)) / STAGE2_RUNS_DIRNAME
+    return (_service_stage_runs_dir(novel_dir, 'stage2')
+            / check_run_id(run_id) / 'blueprint')
+
+
+def legacy_stage2_blueprint_run_path(
+        novel_dir: str | os.PathLike[str], run_id: str,
+) -> Path:
+    """旧 `<书目录>/_stage2_runs/<run_id>/blueprint/`；只读恢复。"""
+    from novel.run_identity import check_run_id
+
+    return (_legacy_stage_runs_dir(novel_dir, STAGE2_RUNS_DIRNAME)
             / check_run_id(run_id) / 'blueprint')
 
 
 def stage2_global_run_path(
         novel_dir: str | os.PathLike[str], run_id: str,
 ) -> Path:
-    """``<书目录>/_stage2_runs/<run_id>/global/``；与逐章恢复空间隔离。"""
+    """Stage2 global 的新 service run 空间。"""
     from novel.run_identity import check_run_id
 
-    return (Path(os.fspath(novel_dir)) / STAGE2_RUNS_DIRNAME
+    return (_service_stage_runs_dir(novel_dir, 'stage2')
+            / check_run_id(run_id) / 'global')
+
+
+def legacy_stage2_global_run_path(
+        novel_dir: str | os.PathLike[str], run_id: str,
+) -> Path:
+    """Stage2 global 的旧书内路径；只读恢复。"""
+    from novel.run_identity import check_run_id
+
+    return (_legacy_stage_runs_dir(novel_dir, STAGE2_RUNS_DIRNAME)
             / check_run_id(run_id) / 'global')
 
 
@@ -740,11 +855,17 @@ def stage2_global_checkpoint_dir(
     return stage2_global_run_path(novel_dir, run_id) / 'checkpoints'
 
 
+def legacy_stage2_global_checkpoint_dir(
+        novel_dir: str | os.PathLike[str], run_id: str,
+) -> Path:
+    return legacy_stage2_global_run_path(novel_dir, run_id) / 'checkpoints'
+
+
 def stage2_global_commit_lock_path(
         novel_dir: str | os.PathLike[str],
 ) -> Path:
     """同一本书所有 Global run 共用的正式提交所有权锁。"""
-    return Path(os.fspath(novel_dir)) / STAGE2_RUNS_DIRNAME / '.global-commit-ownership'
+    return _service_stage_runs_dir(novel_dir, 'stage2') / '.global-commit-ownership'
 
 
 def stage2_blueprint_checkpoint_path(
@@ -760,10 +881,22 @@ def stage2_blueprint_checkpoint_path(
             / f'{phase}-ch{int(chapter):04d}.json')
 
 
+def legacy_stage2_blueprint_checkpoint_path(
+        novel_dir: str | os.PathLike[str], run_id: str,
+        phase: str, chapter: int,
+) -> Path:
+    """旧书内 Stage2 checkpoint；参数复用当前路径准入。"""
+    # 让当前构造器先完成 phase/chapter 的唯一校验，再只替换根。
+    current = stage2_blueprint_checkpoint_path(
+        novel_dir, run_id, phase, chapter)
+    return (legacy_stage2_blueprint_run_path(novel_dir, run_id)
+            / current.relative_to(stage2_blueprint_run_path(novel_dir, run_id)))
+
+
 def stage4_run_path(
         novel_dir: str | os.PathLike[str], run_id: str, node: str,
 ) -> Path:
-    """``<书目录>/_stage4_runs/<run_id>/<design|plan>/``。
+    """``<base>/_service/runs/<sid>/stage4/<run_id>/<design|plan>/``。
 
     节点名不是自由路径片段；两个付费节点必须落在不同目录，不能共享一份
     provider session 或把 design stdout 当成 plan checkpoint。
@@ -777,8 +910,20 @@ def stage4_run_path(
     if phase is None:
         raise PathRefused(
             f'Stage4 agent run 节点必须是 stage4.design/stage4.plan，实得 {node!r}')
-    return (Path(os.fspath(novel_dir)) / STAGE4_RUNS_DIRNAME
+    return (_service_stage_runs_dir(novel_dir, 'stage4')
             / check_run_id(run_id) / phase)
+
+
+def legacy_stage4_run_path(
+        novel_dir: str | os.PathLike[str], run_id: str, node: str,
+) -> Path:
+    """旧书内 Stage4 run；只读恢复。"""
+    from novel.run_identity import check_run_id
+
+    current = stage4_run_path(novel_dir, run_id, node)
+    run_root = _service_stage_runs_dir(novel_dir, 'stage4') / check_run_id(run_id)
+    return (_legacy_stage_runs_dir(novel_dir, STAGE4_RUNS_DIRNAME)
+            / check_run_id(run_id) / current.relative_to(run_root))
 
 
 def stage4_checkpoint_dir(
@@ -786,6 +931,12 @@ def stage4_checkpoint_dir(
 ) -> Path:
     """Stage4 每个节点的 append-only checkpoint revision 目录。"""
     return stage4_run_path(novel_dir, run_id, node) / 'checkpoints'
+
+
+def legacy_stage4_checkpoint_dir(
+        novel_dir: str | os.PathLike[str], run_id: str, node: str,
+) -> Path:
+    return legacy_stage4_run_path(novel_dir, run_id, node) / 'checkpoints'
 
 
 def stage4_design_unit_dirname(chapter: int | None) -> str:
@@ -812,12 +963,28 @@ def stage4_design_unit_run_path(
             / stage4_design_unit_dirname(chapter))
 
 
+def legacy_stage4_design_unit_run_path(
+        novel_dir: str | os.PathLike[str], run_id: str,
+        chapter: int | None,
+) -> Path:
+    return (legacy_stage4_run_path(novel_dir, run_id, 'stage4.design') / 'units'
+            / stage4_design_unit_dirname(chapter))
+
+
 def stage4_design_unit_checkpoint_dir(
         novel_dir: str | os.PathLike[str], run_id: str,
         chapter: int | None,
 ) -> Path:
     """Stage4 design 策略/单章各自的 append-only revision 目录。"""
     return stage4_design_unit_run_path(
+        novel_dir, run_id, chapter) / 'checkpoints'
+
+
+def legacy_stage4_design_unit_checkpoint_dir(
+        novel_dir: str | os.PathLike[str], run_id: str,
+        chapter: int | None,
+) -> Path:
+    return legacy_stage4_design_unit_run_path(
         novel_dir, run_id, chapter) / 'checkpoints'
 
 
@@ -842,6 +1009,13 @@ def stage4_plan_chapter_run_path(
             / stage4_plan_chapter_dirname(chapter))
 
 
+def legacy_stage4_plan_chapter_run_path(
+        novel_dir: str | os.PathLike[str], run_id: str, chapter: int,
+) -> Path:
+    return (legacy_stage4_run_path(novel_dir, run_id, 'stage4.plan') / 'chapters'
+            / stage4_plan_chapter_dirname(chapter))
+
+
 def stage4_plan_chapter_checkpoint_dir(
         novel_dir: str | os.PathLike[str], run_id: str, chapter: int,
 ) -> Path:
@@ -850,12 +1024,18 @@ def stage4_plan_chapter_checkpoint_dir(
         novel_dir, run_id, chapter) / 'checkpoints'
 
 
+def legacy_stage4_plan_chapter_checkpoint_dir(
+        novel_dir: str | os.PathLike[str], run_id: str, chapter: int,
+) -> Path:
+    return legacy_stage4_plan_chapter_run_path(
+        novel_dir, run_id, chapter) / 'checkpoints'
+
+
 def stage4_commit_lock_path(
         novel_dir: str | os.PathLike[str],
 ) -> Path:
     """同一本书 design/plan 的正式写盘与恢复共用的所有权锁目标。"""
-    return (Path(os.fspath(novel_dir)) / STAGE4_RUNS_DIRNAME
-            / '.commit-ownership')
+    return _service_stage_runs_dir(novel_dir, 'stage4') / '.commit-ownership'
 
 
 def _stage5_chapter_dirname(chapter: int) -> str:
@@ -869,10 +1049,20 @@ def _stage5_chapter_dirname(chapter: int) -> str:
 def stage5_chapter_run_path(
         novel_dir: str | os.PathLike[str], run_id: str, chapter: int,
 ) -> Path:
-    """``<书目录>/_stage5_runs/<run_id>/chNNNN/``；一章一条恢复链。"""
+    """Stage5 逐章 service run；一章一条恢复链。"""
     from novel.run_identity import check_run_id
 
-    return (Path(os.fspath(novel_dir)) / STAGE5_RUNS_DIRNAME
+    return (_service_stage_runs_dir(novel_dir, 'stage5')
+            / check_run_id(run_id) / _stage5_chapter_dirname(chapter))
+
+
+def legacy_stage5_chapter_run_path(
+        novel_dir: str | os.PathLike[str], run_id: str, chapter: int,
+) -> Path:
+    """旧书内 Stage5 章 run；只读恢复。"""
+    from novel.run_identity import check_run_id
+
+    return (_legacy_stage_runs_dir(novel_dir, STAGE5_RUNS_DIRNAME)
             / check_run_id(run_id) / _stage5_chapter_dirname(chapter))
 
 
@@ -883,13 +1073,29 @@ def stage5_chapter_checkpoint_dir(
     return stage5_chapter_run_path(novel_dir, run_id, chapter) / 'checkpoints'
 
 
+def legacy_stage5_chapter_checkpoint_dir(
+        novel_dir: str | os.PathLike[str], run_id: str, chapter: int,
+) -> Path:
+    return legacy_stage5_chapter_run_path(
+        novel_dir, run_id, chapter) / 'checkpoints'
+
+
 def stage5_prepared_recovery_manifest_path(
         novel_dir: str | os.PathLike[str], run_id: str,
 ) -> Path:
     """target run 的整书 prepared recovery 不可变 manifest。"""
     from novel.run_identity import check_run_id
 
-    return (Path(os.fspath(novel_dir)) / STAGE5_RUNS_DIRNAME
+    return (_service_stage_runs_dir(novel_dir, 'stage5')
+            / check_run_id(run_id) / 'prepared_recovery.json')
+
+
+def legacy_stage5_prepared_recovery_manifest_path(
+        novel_dir: str | os.PathLike[str], run_id: str,
+) -> Path:
+    from novel.run_identity import check_run_id
+
+    return (_legacy_stage_runs_dir(novel_dir, STAGE5_RUNS_DIRNAME)
             / check_run_id(run_id) / 'prepared_recovery.json')
 
 
@@ -901,11 +1107,18 @@ def stage5_chapter_recovery_journal_path(
             / 'prepared_recovery.json')
 
 
+def legacy_stage5_chapter_recovery_journal_path(
+        novel_dir: str | os.PathLike[str], run_id: str, chapter: int,
+) -> Path:
+    return (legacy_stage5_chapter_run_path(novel_dir, run_id, chapter)
+            / 'prepared_recovery.json')
+
+
 def stage5_chapter_commit_lock_path(
         novel_dir: str | os.PathLike[str], chapter: int,
 ) -> Path:
     """同一本书同一章的正式写盘与 crash 恢复共用所有权锁。"""
-    return (Path(os.fspath(novel_dir)) / STAGE5_RUNS_DIRNAME
+    return (_service_stage_runs_dir(novel_dir, 'stage5')
             / f'.commit-{_stage5_chapter_dirname(chapter)}')
 
 
@@ -920,20 +1133,38 @@ def stage5_book_commit_lock_path(
 def stage6_semantic_run_path(
         novel_dir: str | os.PathLike[str], run_id: str,
 ) -> Path:
-    """``<书目录>/_stage6_runs/<run_id>/semantic/``；run id 先过唯一身份闸。"""
+    """Stage6 semantic 的新 service run 空间。"""
     from novel.run_identity import check_run_id
 
-    return (Path(os.fspath(novel_dir)) / STAGE6_RUNS_DIRNAME
+    return (_service_stage_runs_dir(novel_dir, 'stage6')
+            / check_run_id(run_id) / 'semantic')
+
+
+def legacy_stage6_semantic_run_path(
+        novel_dir: str | os.PathLike[str], run_id: str,
+) -> Path:
+    from novel.run_identity import check_run_id
+
+    return (_legacy_stage_runs_dir(novel_dir, STAGE6_RUNS_DIRNAME)
             / check_run_id(run_id) / 'semantic')
 
 
 def stage6_hook_run_path(
         novel_dir: str | os.PathLike[str], run_id: str,
 ) -> Path:
-    """``<书目录>/_stage6_runs/<run_id>/hook/``；不与 semantic 共 session。"""
+    """Stage6 hook 的新 service run 空间；不与 semantic 共 session。"""
     from novel.run_identity import check_run_id
 
-    return (Path(os.fspath(novel_dir)) / STAGE6_RUNS_DIRNAME
+    return (_service_stage_runs_dir(novel_dir, 'stage6')
+            / check_run_id(run_id) / 'hook')
+
+
+def legacy_stage6_hook_run_path(
+        novel_dir: str | os.PathLike[str], run_id: str,
+) -> Path:
+    from novel.run_identity import check_run_id
+
+    return (_legacy_stage_runs_dir(novel_dir, STAGE6_RUNS_DIRNAME)
             / check_run_id(run_id) / 'hook')
 
 
@@ -942,6 +1173,12 @@ def stage6_hook_checkpoint_dir(
 ) -> Path:
     """Stage6 hook 完整 replacement 的 append-only checkpoint 目录。"""
     return stage6_hook_run_path(novel_dir, run_id) / 'checkpoints'
+
+
+def legacy_stage6_hook_checkpoint_dir(
+        novel_dir: str | os.PathLike[str], run_id: str,
+) -> Path:
+    return legacy_stage6_hook_run_path(novel_dir, run_id) / 'checkpoints'
 
 
 def stage6_semantic_checkpoint_path(
@@ -954,12 +1191,19 @@ def stage6_semantic_checkpoint_path(
             / f'judge-{role}.json')
 
 
+def legacy_stage6_semantic_checkpoint_path(
+        novel_dir: str | os.PathLike[str], run_id: str, role: str,
+) -> Path:
+    current = stage6_semantic_checkpoint_path(novel_dir, run_id, role)
+    return (legacy_stage6_semantic_run_path(novel_dir, run_id)
+            / current.relative_to(stage6_semantic_run_path(novel_dir, run_id)))
+
+
 def stage6_commit_lock_path(
         novel_dir: str | os.PathLike[str],
 ) -> Path:
     """同一本书 Stage6 hook 写盘与 semantic 选 seq 共用的所有权锁目标。"""
-    return (Path(os.fspath(novel_dir)) / STAGE6_RUNS_DIRNAME
-            / '.commit-ownership')
+    return _service_stage_runs_dir(novel_dir, 'stage6') / '.commit-ownership'
 
 
 def stage6_semantic_commit_lock_path(
@@ -979,10 +1223,19 @@ def stage6_hook_commit_lock_path(
 def stage7_rename_run_path(
         novel_dir: str | os.PathLike[str], run_id: str,
 ) -> Path:
-    """``<书目录>/_stage7_runs/<run_id>/rename/``；run id 先过唯一身份闸。"""
+    """Stage7 rename 的新 service run 空间。"""
     from novel.run_identity import check_run_id
 
-    return (Path(os.fspath(novel_dir)) / STAGE7_RUNS_DIRNAME
+    return (_service_stage_runs_dir(novel_dir, 'stage7')
+            / check_run_id(run_id) / 'rename')
+
+
+def legacy_stage7_rename_run_path(
+        novel_dir: str | os.PathLike[str], run_id: str,
+) -> Path:
+    from novel.run_identity import check_run_id
+
+    return (_legacy_stage_runs_dir(novel_dir, STAGE7_RUNS_DIRNAME)
             / check_run_id(run_id) / 'rename')
 
 
@@ -993,9 +1246,14 @@ def stage7_rename_checkpoint_dir(
     return stage7_rename_run_path(novel_dir, run_id) / 'checkpoints'
 
 
+def legacy_stage7_rename_checkpoint_dir(
+        novel_dir: str | os.PathLike[str], run_id: str,
+) -> Path:
+    return legacy_stage7_rename_run_path(novel_dir, run_id) / 'checkpoints'
+
+
 def stage7_rename_commit_lock_path(
         novel_dir: str | os.PathLike[str],
 ) -> Path:
     """同一本书所有 rename run 的正式写盘与 crash 恢复共用所有权锁。"""
-    return (Path(os.fspath(novel_dir)) / STAGE7_RUNS_DIRNAME
-            / '.commit-ownership')
+    return _service_stage_runs_dir(novel_dir, 'stage7') / '.commit-ownership'

@@ -9,7 +9,8 @@ app.py —— 服务本体。**全仓只有本模块与 `__main__.py` 许可 imp
   · `R-11.2` **CSRF**：非安全方法要求 `X-Novel-UI: 1` 且来源是回环。
     做成**中间件**不是依赖，理由见 `_csrf` —— 依赖会被忘，中间件忘不掉。
   · `R-11.3` **服务进程绝不落产物盘**。流水线变更只经 `jobs.run` / `jobs.start`，
-    项目回收只经 `trash.run`，两者都启 CLI 子进程；HTTP 进程自身只在 `_service/`
+    项目回收/恢复只经 `trash.run` / `trash.run_restore`，都启 CLI 子进程；
+    HTTP 进程自身只在 `_service/`
     保存上传原文、作业事件、日志、一次性编辑计划与人工审批状态。
     只读路由 + preview 仍由行为断言保证整棵树逐字节不变。
 
@@ -36,6 +37,7 @@ from novel.api.routes import (
     maintenance, novels, queues, run, screens,
 )
 from novel.errors import NovelError
+from novel.orchestrator import trash
 from novel.orchestrator import queue as queue_runner
 
 #: `R-11.1` 的**唯一落点**。四条各自独立成立的理由（`docs/BACKEND_CONTRACT.md` 的 `R-11.1` 那一行）：
@@ -146,6 +148,10 @@ def create_app(base: str | os.PathLike[str],
     """
     @asynccontextmanager
     async def lifespan(app: FastAPI):
+        # restore child 被 hard-kill 后，prepared/committed receipt 是唯一恢复
+        # 身份。启动先做有界扫描并仍只拉受控 CLI child；冲突项留给同一服务的
+        # maintenance preview/apply，不因一条坏 receipt 让恢复 UI 自己起不来。
+        trash.reconcile_pending_restores(app.state.base)
         # A queue's spending authorization and exact commands were persisted at
         # creation.  Startup only resumes those frozen commands after job and
         # artifact reconciliation; it never creates a new paid plan.

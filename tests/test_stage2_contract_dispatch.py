@@ -147,11 +147,18 @@ def test_the_v31_scaffolded_contract_has_closed_references():
     assert v31.uses_hinge_candidates
     assert set(prompts.BLUEPRINT_HINT_V31['blueprints'][0]) == {
         'chapter_ordinal', 'chapter_function', 'micro_events', 'beats',
-        'causal_edges', 'entry_state_refs', 'ending_state_refs', 'narration'}
+        'causal_edges', 'narrative_relations', 'entry_state_refs',
+        'ending_state_refs', 'narration'}
     assert set(prompts.BLUEPRINT_HINT_V31['blueprints'][0]['micro_events'][0]) == {
         'end_para', 'cue'}
     narration = prompts.BLUEPRINT_HINT_V31['blueprints'][0]['narration'][0]
     assert 'narrator_char_id' in narration and 'narrator_name' not in narration
+    relation = prompts.BLUEPRINT_HINT_V31['blueprints'][0][
+        'narrative_relations'][0]
+    assert relation == {
+        'kind': 'response_to', 'enforcement': 'review',
+        'stimulus_fact_ref': 'a01', 'response_fact_ref': 'a02',
+    }
     assert 'candidate_id' in str(prompts.BLUEPRINT_HINT_V31)
     assert '不要再写一条复合 event 摘要' in prompts.BLUEPRINT_SYS_V31
     assert '一个动作、决定、结果、揭示或状态变化各自拆开' \

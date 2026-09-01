@@ -42,8 +42,8 @@ def _executor_flags(node: str, tokens: frozenset[str]) -> list[str]:
     for flag in ordered:
         if flag == '--chapters':
             out += [flag, '1,3']
-        elif flag == '--repair-decision':
-            out += [flag, 'a' * 64]
+        elif flag == '--review-token':
+            out += [flag, 's4rr1_' + 'a' * 64]
         else:
             out.append(flag)
     return out

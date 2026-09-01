@@ -24,7 +24,8 @@ SUBJECT_B = 'b' * 64
 
 def _request(*decisions: str, subject: str = SUBJECT_A) -> StructureApprovalRequest:
     return StructureApprovalRequest(
-        actor='reviewer', reason='逐章核对当前结构计划', subject_sha256=subject,
+        actor='reviewer', reason='逐章核对当前结构计划',
+        review_token=f's4sr1_{subject}',
         chapters=[{
             'output_ordinal': ordinal,
             'decision': decision,
@@ -77,11 +78,27 @@ def isolated(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     monkeypatch.setattr(approvals, '_now', lambda: '2026-08-25T12:00:00+00:00')
     monkeypatch.setattr(
         approvals, '_read_current', lambda _base, _sid: state['record'])
+    monkeypatch.setattr(
+        approvals, '_read_state',
+        lambda _base, _sid: (state['record'], state['record']))
 
     def write(base, record):
         record = approvals._ApprovalRecordV7.model_validate(record.model_dump())
         state['record'] = record
-        return approvals._view(base, record)
+        effective = record
+        if not record.gate['s4']:
+            gates = dict(record.gate)
+            gate_proofs = dict(record.gate_proofs)
+            for gate in ('s5', 's6', 's7'):
+                gates[gate] = False
+                gate_proofs[gate] = None
+            effective = record.model_copy(update={
+                'gate': gates,
+                'gate_proofs': gate_proofs,
+                'writing': False,
+                'writing_proof': None,
+            })
+        return approvals._view(base, effective)
 
     monkeypatch.setattr(approvals, '_write', write)
     return tmp_path, book, state
@@ -90,7 +107,7 @@ def isolated(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
 def test_request_is_strict_and_requires_sorted_unique_chapters_and_real_reasons():
     with pytest.raises(ValidationError, match='升序、去重'):
         StructureApprovalRequest(
-            actor='reviewer', reason='book', subject_sha256=SUBJECT_A,
+            actor='reviewer', reason='book', review_token=f's4sr1_{SUBJECT_A}',
             chapters=[
                 {'output_ordinal': 2, 'decision': 'accept', 'reason': 'ok'},
                 {'output_ordinal': 1, 'decision': 'accept', 'reason': 'ok'},
@@ -102,7 +119,7 @@ def test_request_is_strict_and_requires_sorted_unique_chapters_and_real_reasons(
         })
     with pytest.raises(ValidationError):
         StructureApprovalRequest(
-            actor='reviewer', reason='book', subject_sha256=SUBJECT_A,
+            actor='reviewer', reason='book', review_token=f's4sr1_{SUBJECT_A}',
             chapters=[{'output_ordinal': 1, 'decision': 'maybe', 'reason': 'no'}])
 
 
@@ -126,7 +143,7 @@ def test_structure_template_is_current_and_fail_closed_by_default(isolated):
     template = approvals.structure_template(
         base, SID, actor='commander-reviewer', reason='逐章人工复核前的关闭式模板')
 
-    assert template.subject_sha256 == SUBJECT_A
+    assert template.review_token == f's4sr1_{SUBJECT_A}'
     assert [row.output_ordinal for row in template.chapters] == [1, 2]
     assert all(row.decision == 'request_replan' for row in template.chapters)
     assert all('尚未逐章核实' in row.reason for row in template.chapters)
@@ -176,7 +193,7 @@ def test_typed_writing_approval_persists_actor_reason_subject_and_history(
     monkeypatch.setattr(approvals, '_proof_for_writing_decision', decision_proof)
     request = WritingApprovalRequest(
         actor='commander-reviewer', reason='完整核对当前写作主体',
-        subject_sha256=SUBJECT_B)
+        review_token=f's5wr1_{SUBJECT_B}')
 
     first = approvals.approve_writing(base, SID, request)
     second = approvals.approve_writing(base, SID, request)
@@ -185,13 +202,14 @@ def test_typed_writing_approval_persists_actor_reason_subject_and_history(
     assert first.writing_approval.current_decision is not None
     assert first.writing_approval.current_decision.actor == 'commander-reviewer'
     assert first.writing_approval.current_decision.reason == '完整核对当前写作主体'
-    assert first.writing_approval.current_decision.subject_sha256 == SUBJECT_B
+    assert first.writing_approval.current_decision.review_token == f's5wr1_{SUBJECT_B}'
     assert len(state['record'].writing_history) == 1
     assert state['record'].writing_decision == state['record'].writing_history[-1]
 
-    with pytest.raises(HumanEditProtected, match='审批对象已变化'):
+    with pytest.raises(HumanEditProtected, match='opaque review_token'):
         approvals.approve_writing(
-            base, SID, request.model_copy(update={'subject_sha256': SUBJECT_A}))
+            base, SID, request.model_copy(update={
+                'review_token': f's5wr1_{SUBJECT_A}'}))
 
 
 def test_all_accept_opens_s4_persists_v6_history_and_is_idempotent(isolated):
@@ -212,7 +230,7 @@ def test_all_accept_opens_s4_persists_v6_history_and_is_idempotent(isolated):
     assert len(state['record'].structure_history) == 1
 
 
-def test_request_replan_is_a_saved_decision_but_closes_s4_writing_and_downstream(isolated):
+def test_request_replan_suspends_but_does_not_erase_raw_downstream_facts(isolated):
     base, _book, state = isolated
     approvals.approve_structure(base, SID, _request('accept', 'accept'))
     record = state['record']
@@ -221,11 +239,19 @@ def test_request_replan_is_a_saved_decision_but_closes_s4_writing_and_downstream
     for gate in ('s5', 's6', 's7'):
         gates[gate] = True
         proofs[gate] = _proof(_request('accept', 'accept'))
+    closure = approvals._StoredClosureDecision(
+        actor='reviewer', reason='已逐项闭合 Stage5 findings',
+        workpack_sha256='4' * 64, review_sha256='5' * 64,
+        must_appear=[], group_acks=[], decision_sha256='6' * 64,
+        decided_at='2026-08-25T12:00:00+00:00', proof=proofs['s5'],
+    )
     state['record'] = record.model_copy(update={
         'gate': gates,
         'gate_proofs': proofs,
         'writing': True,
         'writing_proof': _proof(_request('accept', 'accept')),
+        'closure_history': [closure],
+        'closure_decision': closure,
     })
 
     doc = approvals.approve_structure(
@@ -234,9 +260,17 @@ def test_request_replan_is_a_saved_decision_but_closes_s4_writing_and_downstream
     assert not doc.gate['s4'] and not doc.writing
     assert not any(doc.gate[gate] for gate in ('s5', 's6', 's7'))
     assert len(state['record'].structure_history) == 2
+    assert state['record'].writing is True
+    assert state['record'].writing_proof is not None
+    assert all(state['record'].gate[gate] for gate in ('s5', 's6', 's7'))
+    assert all(state['record'].gate_proofs[gate] is not None
+               for gate in ('s5', 's6', 's7'))
     # 最终结构拒绝只关闭 gate；A 的 repair/replan 必须来自独立 design review，
     # 不能把 B 审阅意见伪装成一条未经 hash 绑定的 Stage4A 重跑授权。
     assert doc.spawns.get('s4', []) == []
+
+    # 本夹具不构造完整 Stage5 closure workpack；这里只守 raw 不可擦除。
+    # exact subject + closure proof 的 effective 自动复活由审批/闭合纵向测试覆盖。
 
 
 def test_fresh_infeasible_binding_requires_typed_resolution_and_hides_reused_b(
@@ -388,7 +422,7 @@ def test_subject_root_or_full_plan_change_expires_without_erasing_history(
 def test_stale_hash_or_inexact_chapter_set_is_rejected_without_writing(isolated):
     base, _book, state = isolated
     before = state['record']
-    with pytest.raises(HumanEditProtected, match='审批对象已变化'):
+    with pytest.raises(HumanEditProtected, match='opaque review_token'):
         approvals.approve_structure(
             base, SID, _request('accept', 'accept', subject=SUBJECT_B))
     with pytest.raises(HumanEditProtected, match='章集必须精确等于当前计划'):
@@ -445,7 +479,8 @@ def test_structure_route_accepts_the_typed_body(monkeypatch, tmp_path):
         gate={key: False for key in APPROVAL_GATES},
         seen={key: False for key in APPROVAL_SEEN},
         structure=StructureApprovalView(
-            state='missing', current_subject_sha256=SUBJECT_A),
+            state='missing', current_subject_sha256=SUBJECT_A,
+            review_token=f's4sr1_{SUBJECT_A}'),
         spawns={},
     )
 
@@ -472,12 +507,13 @@ def _empty_approval_response() -> ApprovalDoc:
         gate={key: False for key in APPROVAL_GATES},
         seen={key: False for key in APPROVAL_SEEN},
         structure=StructureApprovalView(
-            state='missing', current_subject_sha256=SUBJECT_A),
+            state='missing', current_subject_sha256=SUBJECT_A,
+            review_token=f's4sr1_{SUBJECT_A}'),
         spawns={},
     )
 
 
-def test_writing_route_keeps_the_existing_empty_body_ui_branch(monkeypatch, tmp_path):
+def test_writing_route_rejects_the_retired_empty_body_branch(monkeypatch, tmp_path):
     pytest.importorskip('fastapi')
     from fastapi.testclient import TestClient
     from novel.api.app import UI_HEADER, create_app
@@ -495,8 +531,8 @@ def test_writing_route_keeps_the_existing_empty_body_ui_branch(monkeypatch, tmp_
         got = client.post(
             f'/api/novels/{SID}/approvals/writing', headers={UI_HEADER: '1'})
 
-    assert got.status_code == 200, got.text
-    assert called and called[0][1] == SID
+    assert got.status_code == 422, got.text
+    assert called == []
 
 
 def test_writing_route_dispatches_a_typed_body_without_starting_a_job(monkeypatch, tmp_path):
@@ -517,7 +553,7 @@ def test_writing_route_dispatches_a_typed_body_without_starting_a_job(monkeypatc
         lambda *_args: pytest.fail('typed body 不得降级成匿名旧 UI 分支'))
     request = WritingApprovalRequest(
         actor='commander-reviewer', reason='核对当前全书写作主体后授权',
-        subject_sha256=SUBJECT_B)
+        review_token=f's5wr1_{SUBJECT_B}')
 
     with TestClient(create_app(tmp_path)) as client:
         got = client.post(

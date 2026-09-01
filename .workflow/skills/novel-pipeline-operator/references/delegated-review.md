@@ -36,7 +36,8 @@
 
 ## 通用裁决格式
 
-每次代批立即在终审包草稿中记录：
+每次代批立即把下列证据写入对应 typed 决定、provenance 或审批账；不要同步改写终审包 Markdown。
+节点链闭合后，finalizer 从这些权威记录一次批量渲染机器事实，人读叙述也只在收尾时补一次：
 
 ```text
 闸门：<node>
@@ -147,24 +148,22 @@ Stage4 有两次正式人审，必须按顺序分别落账。
 
 若这本书还没有 `_service/approvals/<SID>.json`，先经同一公开 façade 补齐早期
 阅读/闸门记录；不能由 Commander 运行时 import 私调服务。`seen.read` 不是一句空确认：
-它必须绑定 agent **实际完整读过**的 current Blueprint 工作包。先按主 skill 的
-`operator next → operator permit → run_step.py` 纪律运行
-`stage2.blueprint --emit-review-workpack`，完整阅读后把工作包顶层与 binding 中的五个值
+它必须绑定 agent **实际完整读过**的 current Blueprint 工作包。先按主 skill 的 ready
+`operator next → run_step.py`（blocked recovery 才在中间显式铸 permit）纪律运行
+`stage2.blueprint --emit-review-workpack`，完整阅读后把工作包顶层 opaque token
 逐字写进版本化的 `BlueprintSeenRequest` 输入：
 
 ```json
 {
-  "expected_binding_sha256": "<workpack.binding_sha256>",
-  "expected_subject_sha256": "<workpack.subject_sha256>",
-  "expected_main_text_artifact_sha256": "<workpack.binding.main_text_artifact_sha256>",
-  "expected_code_version": "<workpack.binding.code_version>",
-  "expected_rules_fingerprint": "<workpack.binding.rules_fingerprint>"
+  "review_token": "<workpack.review_token>"
 }
 ```
 
 该只读 producer 在 Stage2 复核 blocker 与全部 Stage4 审批恢复 blocker 下都保持 permit 可达，
 专门避免「Stage2 决策已提交、blocker 已前移，才发现审批账尚未 bootstrap」的死锁；它不在
-Stage5 或更晚 blocker 下开放。输入任一值过期，`seen read` 会在写审批账前关闭式拒绝。
+Stage5 或更晚 blocker 下开放。token 内部绑定人实际看见的内容与 review contract；任一主体过期，
+`seen read` 会在写审批账前关闭式拒绝。代码与机械规则只滚动 validation seal/execution epoch，
+不要求 Commander 手工搬运 SHA；免费复检通过且内容/contract 未变时既有 raw 决定恢复有效。
 然后按下面顺序走 façade（`<BLUEPRINT_SEEN.json>` 是刚才人工写出的 typed 输入，不是 workpack
 本身）：
 
@@ -206,21 +205,35 @@ exact historical accept 可复用章之前，但 `historical_accept_reusable=tru
 形成的拒绝理由。每个未审行还带 `placeholder=true + template_token`；显式确认时必须改为
 `false + null`，且至少真实改写该行的决定、理由或约束，原样 sentinel 不能提交。若当前 A 已有 fresh
 B infeasible 终态，模板与 view 会同时发布其 concerns 和代码 proof 并纳入 aggregate subject；旧 accept
-不得替人复用。`repair_capability` 另由 durable split lineage 现场判定每章能否 targeted repair：
-legacy/untracked 候选和已提交 2 轮 repair 的章不能选择 `request_repair`，只能确认接受或把策略裁成
-`request_replan`；前端/Commander 不自行按目录猜轮次。逐项阅读模板中的安全盲真相、候选场景与
-服务端现场复算的结构对证后再编辑：
+不得替人复用。`repair_capability` 由 durable split lineage 分别给出
+`agent_repair_available` 与 `full_chapter_edit_available`；前端/Commander 不自行按目录猜轮次。
+单章两轮模型 repair 耗尽只关闭该章的 agent repair，不得借机把策略判成整书 replan；仍可在同策略
+下打开新 repair epoch，或用 hash-bound 的
+`stage4.design --apply-edit <stage4/blind_chapter_edit.json>` 提交一份完整 `BlindChapterResponse`。
+后者先 preview 再 apply，两次走同一 compiler、schema、dynamic validator 与全书 HARD；只替换目标章，
+非目标章业务字节必须恒等，provenance 记 `origin=human` 且不伪造 prompt/model/usage。逐项阅读模板中的
+安全盲真相、候选场景与服务端现场复算的结构对证后再编辑：
 
 1. 策略只决定 `accept / request_replan`。只有策略本身无法指导全书结构重构时才拒绝；单章问题不得
    借策略决定放大成整书重跑。
 2. 每章决定 `accept / request_repair`。拒绝理由必须指出该章可核证的问题；约束只选服务端枚举的
-   repair code，并填写属于本章 subject 的 `scene_refs / opaque_aliases`。不得凭空补证据，不得把
-   自然语言 reason 当自由 prompt。
+   repair code，并填写属于本章 subject 的 `scene_refs / opaque_aliases` 或与 Stage2 同构的 typed
+   关系。每轮 repair 都携带当前问题与全部尚未关闭的历史约束；已关闭约束显式保留状态，不得静默
+   遗忘。不得凭空补证据，不得把自然语言 reason 当自由 prompt。
 3. 已接受且 subject 未变的历史章可由模板携带 `source_decision_sha256` 复用，但仍须核对并对当前
    整书主体原子提交；策略、truth/root/alias/review contract 变化使全章复用失效，单章变化只失效该章。
 4. 提交后只认 `design_review.state`。`repair_requested` 时执行服务端 action 中的
-   `stage4.design --repair-decision <decision_sha256>`；`strategy_replan_requested` 时才执行
-   `stage4.design --replan`。两者都需重新 preview/付费确认，修订 A 后还要再提交一份当前完整 A 审阅。
+   `stage4.design --review-token <opaque>`；单章耗尽只走该章新 repair epoch 或上述 0-wire
+   完整章 edit。`strategy_replan_requested` 时才执行 `stage4.design --replan`，并携带累计失败反馈；
+   effective strategy/input digest 未变的 accepted 章保留 checkpoint，不得重发 wire。模型修订仍需
+   重新 preview/付费确认，修订 A 后还要再提交一份当前完整 A 审阅。
+
+exact legacy-frozen 主体是唯一例外：真实全章 accept 仍必须提交 raw typed 决定，但公开 Design workpack 与
+`design_review` 随后投影为 `suspended`。这等同 `already_current` 地跳过重复 Commander 审阅，却绝不
+授权 B，也不得取 recovery permit、`s4rr1`、`s4er1` 或任何 repair/replan/B action。只有审阅中确有
+`request_repair` 的章才在 immutable workpack 对应行取得 `s4er1`，走零 wire 完整章 edit；不得为获得
+edit token 伪造问题，frozen 路也始终不得生成 `s4rr1` 或 paid spawn。需要新 B 时只在 clean current base
+重建。operator 若报 legacy frozen validation suspension，不把它当 reviewer blocker 再次唤起 Commander。
 
 只有 `design_review.state=accepted` 才能预览/执行 B。A 审阅只授权 B，不打开 s4，也不替代下面的
 最终计划裁决。
@@ -307,9 +320,10 @@ fact/unver 分组与未销账 trim。状态为 `review_required` 或 `blocked` �
 
 先运行 `novel.cli approval workpack stage6 <SID> --base <BASE>` 并完整读取同一份包。它把三条候选
 正文、完整 subject SHA-256、机械异常与读数、两名盲判官各自的 verdict/reason/evidence、A/B 原始
-ranking 和 workpack SHA-256 放在一个关闭式阅读面。若 `disposition=already_current`，当前批准仍
-精确绑定相同代码、规则与产物主体，直接跳过重复 approve；不得为了刷新时间戳或 Commander 会话
-重新签一次。只有 `review_required` 才继续以下裁决。
+ranking 与 opaque `review_token` 放在一个关闭式阅读面。若 `disposition=already_current`，当前批准仍
+精确绑定相同 review subject 与显式 review contract，直接跳过重复 approve；不得为了刷新时间戳、
+代码 SHA 或 Commander 会话重新签一次。validation seal/execution epoch 漂移先免费机械复检，内容与
+可见 finding 未变时 raw 决定自动恢复。只有 `review_required` 才继续以下裁决。
 
 按候选级而不是总报告级裁决。把 mechanical 与 semantic 中相同 label、相同完整
 SHA-256 主体的结论对齐后，依次筛选：
@@ -347,12 +361,12 @@ SHA-256 主体的结论对齐后，依次筛选：
 freshness。确为同输入非确定性时采信更严格的一轮，不用后一次翻绿覆盖前一轮风险；
 把冲突本身写入终审包。
 
-`stage6.approve --pick N --actor <ACTOR> --reason <text> --subject-sha256 <64hex> --workpack-sha256 <64hex>`
+`stage6.approve --pick N --actor <ACTOR> --reason <text> --review-token <opaque>`
 前后同时核对：
 
 - `hook.json.approved.approach/text` 与所选 label 一致；
-- 提交的 subject hash 是经当前归一链后定稿文本的完整 SHA-256，workpack hash 来自刚刚完整读过的
-  同一份包；任一漂移都必须拒绝旧决定；
+- opaque token 来自刚刚完整读过的同一份 immutable workpack；内部 review subject/contract 任一
+  漂移都必须拒绝旧决定，Commander 不再手工搬运多枚 SHA；
 - 最新 semantic 对该文本的决议仍 fresh，并匹配当前 evaluator 指纹；
 - `state` 把 stage6 判为完成。
 
@@ -361,9 +375,10 @@ freshness。确为同输入非确定性时采信更严格的一轮，不用后�
 ## stage7 代批
 
 先运行 `novel.cli approval workpack stage7 <SID> --base <BASE>`。同一份包必须展示人物表、别名、
-补充映射、kept 明细、逐旧字面的真实替换命中、完整残留上下文、替换计数、机械异常/度量、完整
-decision subject SHA-256 与 workpack SHA-256。若 `disposition=already_current`，当前批准仍绑定相同
-代码、规则与人物决策面，跳过重复 approve；只有 `review_required` 才继续以下审阅和修订。
+补充映射、kept 明细、逐旧字面的真实替换命中、完整残留上下文、替换计数、机械异常/度量、内部
+review subject 与 opaque `review_token`。若 `disposition=already_current`，当前批准仍绑定相同
+review subject/contract，跳过重复 approve；代码或机械规则变化先滚动 validation seal/epoch，免费
+复检通过且可见内容/finding 未变时 raw 决定自动恢复。只有 `review_required` 才继续以下审阅和修订。
 
 在运行 `stage7.approve` 前：
 
@@ -397,9 +412,9 @@ decision subject SHA-256 与 workpack SHA-256。若 `disposition=already_current
    `stage7.rename --validate-edit <绝对路径>`；它与 apply 共用完整构建/判定链但不归档、不覆盖、
    不退休成书。预检达到预期后再经 `stage7.rename --apply-edit <绝对路径>` 正式落盘。
 
-任何映射编辑后都重新取当前决策面 SHA-256，运行
+任何映射编辑后都重新运行
 `approval workpack stage7` 并重读新包，再运行
-`stage7.approve --actor <ACTOR> --reason <text> --subject-sha256 <64hex> --workpack-sha256 <64hex>` 与
+`stage7.approve --actor <ACTOR> --reason <text> --review-token <opaque>` 与
 `stage7.assemble`，
 再执行成书逐字对账。旧 approved/book_txt 必须视为已过期，不得复用旧页面 hash、
 旧批准或旧成书指纹。
@@ -422,7 +437,8 @@ decision subject SHA-256 与 workpack SHA-256。若 `disposition=already_current
 
 ## 终审包
 
-从 [终审包模板](../assets/final-review-template.md) 复制结构，在运行过程中持续填写。终稿必须做到：
+节点链闭合后才从 [终审包模板](../assets/final-review-template.md) 一次准备人读叙述，再由 canonical
+finalizer 批量渲染并原子提交机器事实；运行中不增量维护 Markdown。终稿必须做到：
 
 - 第一屏让用户看见交付状态、成书路径、真正需要审阅的风险和建议结论。
 - 每个 badge 都带命中数/分母、freshness 和活动产物标识。

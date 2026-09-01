@@ -45,6 +45,26 @@ from novel.stages.stage2.paragraphs import (
 from novel.stages.stage2.references import hinge_candidates_by_chapter
 
 
+def _narrative_relation_sort_key(row: dict[str, Any]) -> tuple[str, ...]:
+    kind = str(row.get('kind') or '')
+    if kind == 'story_before':
+        refs = (str(row.get('before_fact_ref') or ''),
+                str(row.get('after_fact_ref') or ''))
+    elif kind == 'response_to':
+        refs = (str(row.get('stimulus_fact_ref') or ''),
+                str(row.get('response_fact_ref') or ''))
+    elif kind == 'same_scene':
+        refs = (str(row.get('left_fact_ref') or ''),
+                str(row.get('right_fact_ref') or ''))
+    else:
+        refs = (
+            str(row.get('observer_char_id') or ''),
+            str(row.get('observed_fact_ref') or ''),
+            str(row.get('observation_fact_ref') or ''),
+        )
+    return (kind, *refs, str(row.get('enforcement') or ''))
+
+
 #: 护栏式边界外扩的两个帽子（层0 确定性恢复，7A 实测立的）。
 #:
 #: 【为什么有这条恢复】7A 六章冒烟的 4 例 HARD 是**同一个根因**：模型的 `end_para`
@@ -324,6 +344,43 @@ def _compile_semantic_contract(
         {'before': ref_of(edge.get('before')), 'after': ref_of(edge.get('after'))}
         for edge in (blueprint.get('causal_edges') or [])
     ]
+
+    relations: list[dict[str, Any]] = []
+    for relation in (blueprint.get('narrative_relations') or []):
+        kind = str(relation.get('kind') or '')
+        compiled: dict[str, Any] = {
+            'kind': kind,
+            'enforcement': relation.get('enforcement'),
+        }
+        if kind == 'story_before':
+            compiled.update(
+                before_fact_ref=ref_of(relation.get('before_fact_ref')),
+                after_fact_ref=ref_of(relation.get('after_fact_ref')),
+            )
+        elif kind == 'response_to':
+            compiled.update(
+                stimulus_fact_ref=ref_of(relation.get('stimulus_fact_ref')),
+                response_fact_ref=ref_of(relation.get('response_fact_ref')),
+            )
+        elif kind == 'same_scene':
+            left = ref_of(relation.get('left_fact_ref'))
+            right = ref_of(relation.get('right_fact_ref'))
+            compiled.update(
+                left_fact_ref=min(left, right),
+                right_fact_ref=max(left, right),
+            )
+        elif kind == 'observes':
+            compiled.update(
+                observer_char_id=relation.get('observer_char_id'),
+                observed_fact_ref=ref_of(relation.get('observed_fact_ref')),
+                observation_fact_ref=ref_of(relation.get('observation_fact_ref')),
+            )
+        else:
+            raise ValueError(f'ch{ordinal} 未知 narrative relation kind：{kind!r}')
+        relations.append(compiled)
+    blueprint['narrative_relations'] = sorted(
+        relations, key=_narrative_relation_sort_key,
+    )
     blueprint['entry_state_refs'] = [
         ref_of(ref) for ref in (blueprint.get('entry_state_refs') or [])]
     blueprint['ending_state_refs'] = [
@@ -381,6 +438,7 @@ def canonical_ir_projection(blueprint: dict[str, Any],
         'chapter_function': blueprint.get('chapter_function'),
         'beats': [],
         'causal_edges': [],
+        'narrative_relations': [],
         'entry_state_refs': [],
         'ending_state_refs': [],
         'narration': [],
@@ -432,6 +490,43 @@ def canonical_ir_projection(blueprint: dict[str, Any],
          'after': atom_key_of.get(str(edge.get('after')))}
         for edge in (blueprint.get('causal_edges') or [])
     ]
+    for relation in (blueprint.get('narrative_relations') or []):
+        kind = str(relation.get('kind') or '')
+        projected: dict[str, Any] = {
+            'kind': kind,
+            'enforcement': relation.get('enforcement'),
+        }
+        if kind == 'story_before':
+            projected.update(
+                before_fact_ref=atom_key_of.get(str(relation.get('before_fact_ref'))),
+                after_fact_ref=atom_key_of.get(str(relation.get('after_fact_ref'))),
+            )
+        elif kind == 'response_to':
+            projected.update(
+                stimulus_fact_ref=atom_key_of.get(
+                    str(relation.get('stimulus_fact_ref'))),
+                response_fact_ref=atom_key_of.get(
+                    str(relation.get('response_fact_ref'))),
+            )
+        elif kind == 'same_scene':
+            pair = sorted((
+                atom_key_of.get(str(relation.get('left_fact_ref'))),
+                atom_key_of.get(str(relation.get('right_fact_ref'))),
+            ))
+            projected.update(left_fact_ref=pair[0], right_fact_ref=pair[1])
+        elif kind == 'observes':
+            projected.update(
+                observer_char_id=relation.get('observer_char_id'),
+                observed_fact_ref=atom_key_of.get(
+                    str(relation.get('observed_fact_ref'))),
+                observation_fact_ref=atom_key_of.get(
+                    str(relation.get('observation_fact_ref'))),
+            )
+        else:
+            raise ValueError(f'未知 narrative relation kind：{kind!r}')
+        out['narrative_relations'].append(projected)
+    out['narrative_relations'].sort(
+        key=_narrative_relation_sort_key)
     out['entry_state_refs'] = [
         atom_key_of.get(str(ref)) for ref in (blueprint.get('entry_state_refs') or [])]
     out['ending_state_refs'] = [

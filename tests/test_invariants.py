@@ -237,10 +237,12 @@ def test_stage4_replan_is_an_explicit_paid_design_action_only():
     assert '--replan' not in inv.FREE_ENTRIES
 
 
-def test_stage4_targeted_repair_is_hash_bound_paid_and_not_publicly_chaptered():
-    assert '--repair-decision' in inv.PAID_FLAGS
-    assert '--repair-decision' in inv.VALUED_FLAGS
-    assert '--repair-decision' in inv.NODES['stage4.design'].flags
+def test_stage4_targeted_repair_uses_one_opaque_token_and_is_not_publicly_chaptered():
+    assert '--review-token' in inv.VALUED_FLAGS
+    assert '--review-token' in inv.NODES['stage4.design'].flags
+    assert '--repair-decision' not in inv.PAID_FLAGS
+    assert '--repair-decision' not in inv.VALUED_FLAGS
+    assert '--repair-decision' not in inv.NODES['stage4.design'].flags
     assert '--chapters' not in inv.NODES['stage4.design'].flags
     assert '--apply-binding' in inv.FREE_ENTRIES
     assert '--apply-binding' in inv.VALUED_FLAGS

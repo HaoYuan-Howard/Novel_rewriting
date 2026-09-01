@@ -270,6 +270,27 @@ def _bad_context4(rule: str) -> list:
     return _find4(plan, ctx=ctx)
 
 
+def _bad_narrative_relation4() -> list:
+    """给既有三场绿底座增加一条明确不成立的 HARD 同场关系。"""
+    from novel.stages.stage4 import checks
+    from novel.stages.stage4.measure import identity_plan
+
+    blueprints = copy.deepcopy(_BPS4)
+    blueprints['blueprints'][0]['narrative_relations'] = [{
+        'kind': 'same_scene',
+        'enforcement': 'hard',
+        'left_fact_ref': 'f01_001',
+        'right_fact_ref': 'f01_003',
+    }]
+    plan = identity_plan(blueprints, _MAIN4)
+    outcomes = checks.check(
+        plan, blueprints=blueprints, main_text=_MAIN4,
+        ctx=_ctx4(plan), ctx_link=('ok', 'same plan'),
+        phase_links=_phase_links4(),
+    )
+    return [finding_ for outcome in outcomes for finding_ in outcome.findings]
+
+
 # ═══ 登记表 ═══════════════════════════════════════════════════════════════════
 
 CASES: dict[str, Case] = {
@@ -321,6 +342,7 @@ CASES: dict[str, Case] = {
         _clean_plan4(), ctx_link=('stale', '上下文照的是另一版计划'))),
     'phase_artifact_link': Case('stage4', lambda: _find4(
         _clean_plan4(), phase_links=_phase_links4(mismatch=True))),
+    'narrative_relation': Case('stage4', _bad_narrative_relation4),
     **{rule: Case('stage4', lambda rule=rule: _bad_context4(rule)) for rule in (
         'ctx_facts_exact', 'ctx_name_attested', 'ctx_stage_explicit',
         'ctx_hinge_delivered',

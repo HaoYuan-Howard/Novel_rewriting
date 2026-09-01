@@ -49,7 +49,7 @@ from contracts.invariants import (
     INBOX_KIND, NODES, STAGES, STOP_REWRITE_AFTER, review_effect_of,)
 from contracts.rules import REGISTRY
 from contracts.schema.api import (
-    InboxDecision, InboxItem, InboxView,
+    ApprovalDoc, InboxDecision, InboxItem, InboxView,
     Stage6ApprovalWorkpack, Stage7ApprovalWorkpack,
 )
 from contracts.schema.evaluation import GlobalReview
@@ -66,6 +66,7 @@ from novel.orchestrator.inspection import (
 from novel.orchestrator.nodes import check_node
 from novel.orchestrator.state import (
     readonly_ctx, stage2_legacy_blueprint_recovery_needed,
+    stage2_frozen_v6_subject_validated,
     stage2_projection_recovery_needed,
 )
 from novel.store import ArtifactStore
@@ -98,7 +99,8 @@ def _human_how(stage: str, rule: str | None = None) -> str:
 
     ⚠⚠ **从 `NODES` 派生还不够——粒度也得对。** 这里原来把整层的 flag 并成一个集合
     （`spec.stage == stage`）再报**裸 flag 名**。`stage2` 是全仓唯一一个两个节点入口
-    **不同**的层（`stage2.global` 有 `--apply-edit`，`stage2.blueprint` 没有），
+    **不同**的层；当时只有 `stage2.global` 有 `--apply-edit`，Blueprint 的 typed
+    关系整章写回尚未上线，
     于是 `present_continuity`（blueprint 的 info 判据）拿到的处置行是
     「0 成本人工路：`--apply-edit` 改内容」——把 global 的入口**借给了** blueprint，
     照着跑仍旧被 `build_argv` 当场拒收。**同一种病，只是从「层」降到了「节点」。**
@@ -167,10 +169,24 @@ def inbox_view(base: str | os.PathLike[str], sid: str) -> InboxView:
     return inbox_from_snapshot(capture_operator_snapshot(base, sid))
 
 
-def inbox_from_snapshot(snapshot: OperatorReadSnapshot) -> InboxView:
-    """从同一次 code/overview/check 快照投影八类清单，不重跑判据。"""
+_OPERATOR_FINAL_CAS = object()
+
+
+def inbox_from_snapshot(
+    snapshot: OperatorReadSnapshot, *, approval_doc: ApprovalDoc | None = None,
+    _final_cas_owner: object | None = None,
+) -> InboxView:
+    """从同一次 code/overview/check 快照投影八类清单，不重跑判据。
+
+    standalone 调用始终在返回前复核 surface。唯一例外是 ``operator next``
+    传入本模块私有 capability，并在 inbox、queue 全部投影完成后执行更外层的
+    同一 CAS；普通 bool/任意对象都不能关闭这道自检。
+    """
     base = snapshot.base
     sid = snapshot.sid
+    if approval_doc is not None and approval_doc.sid != sid:
+        raise ValueError(
+            f'审批投影属于 {approval_doc.sid!r}，不是当前书 {sid!r}')
     novel_dir = snapshot.novel_dir
     code = snapshot.code
     items: list[InboxItem] = []
@@ -209,13 +225,14 @@ def inbox_from_snapshot(snapshot: OperatorReadSnapshot) -> InboxView:
     items += _verification_items(novel_dir, code)
     items += _stage2_projection_recovery_items(ov)
     items += _stage2_legacy_blueprint_recovery_items(ov)
+    items += _stage2_frozen_v6_disclosure_items(ov)
     items += _trim_verification_items(novel_dir, code, audits=trim_audits)
     stage6_workpack = _stage6_workpack_or_none(novel_dir, code)
     stage7_workpack = _stage7_workpack_or_none(novel_dir, code)
     items += _hook_verification_items(
         novel_dir, code, workpack=stage6_workpack, workpack_checked=True)
     items += _stage4_approval_items(
-        base, sid, novel_dir, snapshot=snapshot)
+        base, sid, novel_dir, snapshot=snapshot, approval_doc=approval_doc)
     items += _approval_items(
         novel_dir, code,
         stage6_workpack=stage6_workpack,
@@ -240,7 +257,10 @@ def inbox_from_snapshot(snapshot: OperatorReadSnapshot) -> InboxView:
     view = InboxView(
         items=items, counts=counts, attention_counts=attention_counts,
         delivery_counts=delivery_counts, total=len(items), wontfix=wontfix_total)
-    if read_surface_seal(base, sid, code=code) != snapshot.surface_seal:
+    if (
+        _final_cas_owner is not _OPERATOR_FINAL_CAS
+        and read_surface_seal(base, sid, code=code) != snapshot.surface_seal
+    ):
         raise ArtifactUnreadable(
             'Inbox 投影期间本书代码/产物/审批盘面发生变化；'
             '拒绝返回混合时点清单，请重试')
@@ -272,6 +292,22 @@ def _stage2_legacy_blueprint_recovery_items(ov) -> list[InboxItem]:
               '称名投影已经 current/fresh，旧账不能证明真实消费 freshness'),
         how=('跑 `stage2.blueprint --renormalize`：只重编译并刷新来源边，'
              '0 LLM、不会重采付费 Blueprint'),
+    )]
+
+
+def _stage2_frozen_v6_disclosure_items(ov) -> list[InboxItem]:
+    """旧书可续不等于 v7：永久披露缺失的关系权威面。"""
+    if not stage2_frozen_v6_subject_validated(ov):
+        return []
+    return [InboxItem(
+        kind='human_only', stage='stage2', chapter=None,
+        rule='chapter_blueprints_frozen_v6_disclosure',
+        what=(
+            'ChapterBlueprints 是已由现存 Stage4A v1 truth 精确绑定的冻结 schema v6；'
+            '来源与既有候选仍匹配，但当时没有 v7 narrative_relations 权威面'),
+        how=(
+            '只允许保留既有审阅决定或走 Stage4A 零 wire 完整章替换；不得手补关系、'
+            '自动迁移、启动付费 relation repair/replan，交付必须保留本披露'),
     )]
 
 
@@ -660,9 +696,9 @@ def _hook_verification_items(
             how=(f'人工读完同一终审工作包的 A/B 与机械证据后跑 '
                  f'`stage6.approve --pick {candidate.index} '
                  f'--actor <自报身份> --reason <理由> '
-                 f'--subject-sha256 {subject} '
-                 f'--workpack-sha256 {workpack.workpack_sha256}`；'
-                 '候选、代码、规则或证据变化都会拒绝旧决定')))
+                 f'--review-token {workpack.review_token}`；'
+                 'token 在内部绑定 exact 工作包，长期决定只绑定实际可见内容与'
+                 '显式审阅契约；候选或可见证据变化会拒绝旧决定')))
     return out
 
 
@@ -687,9 +723,8 @@ def _approval_items(
                   '定稿是本层现役的唯一闸门'),
             how=('先读 `approval workpack stage6 <sid> --base <base>`；选择候选 N 后跑 '
                  '`stage6.approve --pick N --actor <自报身份> --reason <理由> '
-                 '--subject-sha256 <同一工作包 candidates[N].subject_sha256> '
-                 f'--workpack-sha256 {stage6_workpack.workpack_sha256}`。'
-                 '逐候选 verification 行给出可直接复制的精确 subject；同一当前工作包'
+                 f'--review-token {stage6_workpack.review_token}`。'
+                 '候选主体与多枚内部 SHA 由 opaque token 关闭式绑定；同一当前工作包'
                  '已有批准时本项不会发布')))
 
     if (stage7_workpack is not None
@@ -700,9 +735,9 @@ def _approval_items(
                   '定稿是给整份盖章'),
             how=('核对同一工作包的新旧对照、实际命中、明确保留与残留上下文后跑 '
                  '`stage7.approve --actor <自报身份> --reason <理由> '
-                 f'--subject-sha256 {stage7_workpack.decision_subject_sha256} '
-                 f'--workpack-sha256 {stage7_workpack.workpack_sha256}`；'
-                 '人物决定、代码、规则或证据变化都会拒绝旧决定')))
+                 f'--review-token {stage7_workpack.review_token}`；'
+                 '人物决定或可见证据变化会拒绝旧决定；仅 execution epoch '
+                 '代码漂移不会要求重新签字')))
     return out
 
 
@@ -732,6 +767,7 @@ def _report_items_for_inbox(
 def _stage4_approval_items(
     base: str | os.PathLike[str], sid: str, novel_dir, *,
     snapshot: OperatorReadSnapshot | None = None,
+    approval_doc: ApprovalDoc | None = None,
 ) -> list[InboxItem]:
     """Stage4 A/B 当前态 + 不可擦除的 B 披露审阅证据。
 
@@ -741,7 +777,7 @@ def _stage4_approval_items(
     并携带 typed actor/reason/hash/time；这与「从没看见」不是一个状态。
     """
     del novel_dir  # 路径只由 approvals 的 current-subject 生产口解析。
-    doc = (
+    doc = approval_doc or (
         approvals.get(base, sid)
         if snapshot is None
         else approvals.get(
@@ -749,7 +785,11 @@ def _stage4_approval_items(
     )
     out: list[InboxItem] = []
     design = doc.design_review
-    if design.state in ('missing', 'expired'):
+    structure = doc.structure
+    if (
+        design.state in ('missing', 'expired')
+        and structure.state != 'accepted'
+    ):
         out.append(InboxItem(
             kind='approval', stage='stage4', chapter=None,
             rule='stage4.design',
@@ -763,17 +803,52 @@ def _stage4_approval_items(
                 '全章 coverage，再用 design template/apply 提交完整 typed 决定'),
         ))
     elif design.state == 'repair_requested' and design.current_decision is not None:
+        decision = design.current_decision
         chapters = [
             row.output_ordinal for row in design.current_decision.chapters
             if row.decision == 'request_repair'
         ]
+        capability = {
+            row.output_ordinal: row
+            for row in decision.repair_capability.chapters
+        }
+        agent_chapters = [
+            ordinal for ordinal in chapters
+            if (
+                bool(capability[ordinal].agent_repair_available)
+                if decision.repair_capability.is_v3
+                else bool(capability[ordinal].request_repair_available)
+            )
+        ]
+        edit_chapters = [
+            ordinal for ordinal in chapters
+            if (
+                bool(capability[ordinal].full_chapter_edit_available)
+                if decision.repair_capability.is_v3 else False
+            )
+        ]
+        routes: list[str] = []
+        if agent_chapters:
+            routes.append(
+                f'可发 agent 的章 {agent_chapters} 按服务端当前 action token 运行 '
+                '`stage4.design --review-token '
+                f'{design.action_review_token}`')
+        if edit_chapters:
+            routes.append(
+                f'章 {edit_chapters} 也可从 design immutable workpack 取该章单一 '
+                'review_token，提交完整 BlindChapterEditRequest JSON，先 '
+                '`stage4.design --validate-edit <路径>`，再 '
+                '`stage4.design --apply-edit <路径>`（两步均为 0 次模型调用）')
+        if not routes:
+            routes.append('当前决定没有可执行恢复路，请刷新 immutable workpack')
         out.append(InboxItem(
             kind='approval', stage='stage4', chapter=None,
             rule='stage4.design',
             what=f'Stage4A 当前 typed 决定要求定向修订章 {chapters}',
             how=(
-                '按当前 decision SHA 运行 `stage4.design --repair-decision '
-                f'{design.current_decision.decision_sha256}`；这一行不会自动启动模型'),
+                '；'.join(routes)
+                + '；两条路都只替换目标章，不会把单章耗尽自动升级为整书 replan；'
+                '这一行只呈现已有决定，不会自动启动模型'),
         ))
     elif (
         design.state == 'strategy_replan_requested'
@@ -784,12 +859,15 @@ def _stage4_approval_items(
             rule='stage4.design',
             what='Stage4A 当前 typed 策略决定是 request_replan',
             how=(
-                '显式运行 `stage4.design --replan`；Inbox/Workpack 只呈现'
+                '显式运行 `stage4.design --replan --review-token '
+                f'{design.action_review_token}`；Inbox/Workpack 只呈现'
                 '已有决定，不会代为发起付费请求'),
         ))
 
-    structure = doc.structure
-    if structure.state in ('missing', 'expired'):
+    if (
+        structure.state in ('missing', 'expired')
+        and design.state != 'suspended'
+    ):
         out.append(InboxItem(
             kind='approval', stage='stage4', chapter=None,
             rule='stage4.plan',
@@ -819,6 +897,15 @@ def _stage4_approval_items(
                 '当前清单不从决定自动 spawn'),
         ))
 
+    if (
+        design.state == 'suspended'
+        and structure.state in ('unavailable', 'missing', 'expired')
+    ):
+        # raw A 已审完但 frozen validation authority 永久不足；既没有可读 B
+        # workpack，也没有新的 reviewer 动作。继续调用 structure_workpack 只会
+        # 把同一兼容边界重新包装成异常或审批待办。
+        return out
+
     try:
         if snapshot is None:
             workpack = approvals.structure_workpack(base, sid)
@@ -843,7 +930,7 @@ def _stage4_approval_items(
     current_decision = structure.current_decision
     decision_is_current_for_workpack = (
         current_decision is not None
-        and current_decision.subject_sha256 == workpack.subject_sha256
+        and current_decision.review_token == workpack.review_token
     )
     decision_by_chapter = (
         {
@@ -859,7 +946,7 @@ def _stage4_approval_items(
             evidence = InboxDecision(
                 actor=current_decision.actor,
                 reason=current_decision.reason,
-                subject_sha256=current_decision.subject_sha256,
+                subject_sha256=workpack.subject_sha256,
                 state=(
                     decision_by_chapter.get(item.chapter_ordinal)
                     if item.chapter_ordinal is not None

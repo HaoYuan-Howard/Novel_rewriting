@@ -27,12 +27,16 @@ function running(req: AgentBatchRequest, sid: string): AgentRunRecord {
       code_version: 'code-dynamic',
       profiles: req.profiles,
     },
+    contract: null,
+    epochs: [],
+    active_epoch_id: null,
     started: 1,
     ended: null,
     exit_code: null,
     state: 'running',
     note: null,
     outcome: null,
+    allowed_controls: ['stop'],
   }
 }
 

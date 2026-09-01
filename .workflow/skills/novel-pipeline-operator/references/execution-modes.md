@@ -21,11 +21,13 @@
 
 1. capability registry 是 driver/provider/model/effort/mode 与本机可探测状态的唯一选项源；不得取数组首项、
    环境默认或聊天记忆代选。
-2. headless 下所有 node actions（包括纯读诊断与 blocked recovery）都先取得 exact `operator permit`，再经
+2. headless 下 ready node actions（包括纯读诊断）直接使用同一次 `operator next` 携带的 opaque
+   execution token；blocked recovery 才为 exact node/flags 显式取得 `operator permit`，随后都经
    `scripts/run_step.py`。runner 从 `run_id + contract SHA-256` 重读 append-only started 事件，为当前
    permit 的 node/flags 选择默认 profile 或逐节点 override，并把完整 permit、claim、profile 与
-   `build_steps` 的逐 child `step_index` 写入 evidence/真实子 CLI；只有 root 重铸 current permit，
-   自动 follow-check 复用同一 envelope 并核 canonical argv。
+   `build_steps` 的逐 child `step_index` 写入 evidence/真实子 CLI；preview 不重跑 planner，execute 的
+   primary step 在 claim 后只做一次 active-surface CAS，自动 follow-check 复用同一 envelope 并核
+   canonical argv。
 3. 节点 executor 会在正文外发前用同一 driver 做零模型 probe。缺 executable、协议、配置、两项授权，
    或当前 flag 组合尚未迁移时，必须在首个 wire 前停止；不得落回 DeepSeek。
 4. Agent executor 自身完成“候选 → 代码校验反馈 → 同一 logical session resume”。主路不带 legacy

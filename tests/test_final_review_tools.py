@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import hashlib
+import re
 import subprocess
 import sys
 import threading
@@ -139,6 +140,12 @@ def _review(facts: dict, status: str = 'ready') -> str:
 def test_review_validator_accepts_an_exact_current_instance():
     facts = _facts()
     assert validator.validate(_review(facts), facts) == []
+
+
+def test_review_validator_rejects_a_legacy_draft_placeholder_not_in_template():
+    facts = _facts()
+    errors = validator.validate(_review(facts) + '\n<待填>\n', facts)
+    assert any('<待填>' in error for error in errors)
 
 
 def test_review_validator_uses_seven_current_stages_and_keeps_stage3_retired():
@@ -594,6 +601,85 @@ def test_finalizer_collects_once_validates_before_commit_and_then_assesses_fresh
     assert result['phases']['delivery']['state'] == 'passed'
 
 
+def test_finalizer_deterministically_creates_a_missing_canonical_review(
+        monkeypatch, tmp_path):
+    """缺 review 不再召回 Commander；从权威事实创建，叙述空白明示 unknown。"""
+    review = tmp_path / '测试书_review.md'
+    facts = _facts()
+    facts.update({'sid': 'book-1', 'title': '测试书'})
+    _install_finalizer_review(monkeypatch, tmp_path, review)
+    monkeypatch.setattr(finalizer, 'collect', lambda *_args, **_kwargs: facts)
+    monkeypatch.setattr(
+        finalizer, 'read_surface_seal', lambda *_args, **_kwargs: 'seal-v1')
+    monkeypatch.setattr(finalizer, 'render', lambda text, _facts: text)
+    monkeypatch.setattr(finalizer, 'validate', lambda *_args, **_kwargs: [])
+    commits: list[bytes | None] = []
+
+    def commit(path, text, **kwargs):
+        commits.append(kwargs['expected_original'])
+        return synchronizer.commit_review(path, text, **kwargs)
+
+    monkeypatch.setattr(finalizer, 'commit_review', commit)
+    monkeypatch.setattr(finalizer, 'assess', lambda *_args, **_kwargs: _delivery())
+
+    result = finalizer.finalize(
+        tmp_path, 'book-1', started_at=100,
+        start_code_version='code-v1', review_path=review)
+
+    landed = review.read_text(encoding='utf-8')
+    assert result['state'] == 'ready'
+    assert commits == [None]
+    assert finalizer._UNKNOWN in landed
+    assert not re.findall(r'<[^>]+>', landed, flags=re.DOTALL)
+
+
+def test_finalizer_normalizes_an_existing_draft_before_render(
+        monkeypatch, tmp_path):
+    review = tmp_path / '测试书_review.md'
+    facts = _facts()
+    facts.update({
+        'sid': 'book-1', 'title': '测试书',
+        'base': str(tmp_path.resolve()),
+        'novel_dir': str(tmp_path.resolve()),
+    })
+    draft = '\n'.join([
+        '# 终审包 · 测试书（book-1）',
+        '> 交付状态：`草稿（运行中）`',
+        '> 建议结论：运行进行中，尚未形成结论。',
+        '> 成书：`未生成`',
+        '> 本包对应成书 SHA1：`不适用`',
+        '> 本次运行坐标：`started_at=1`；'
+        '`start_code_version=old`；`run_ids=<待填>`',
+        '人工已填叙述必须保留。',
+        '账本：`<base>/_service/ledger.jsonl`',
+        '其他：<待填>',
+    ])
+    review.write_text(draft, encoding='utf-8')
+    _install_finalizer_review(monkeypatch, tmp_path, review)
+    monkeypatch.setattr(finalizer, 'collect', lambda *_args, **_kwargs: facts)
+    monkeypatch.setattr(
+        finalizer, 'read_surface_seal', lambda *_args, **_kwargs: 'seal-v1')
+    monkeypatch.setattr(finalizer, 'render', lambda text, _facts: text)
+    monkeypatch.setattr(finalizer, 'validate', lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(finalizer, 'assess', lambda *_args, **_kwargs: _delivery())
+
+    result = finalizer.finalize(
+        tmp_path, 'book-1', started_at=100,
+        start_code_version='code-v1', review_path=review)
+
+    landed = review.read_text(encoding='utf-8')
+    assert result['state'] == 'ready'
+    assert '> 交付状态：`ready`' in landed
+    assert '> 建议结论：建议接收并阅读成书。' in landed
+    assert f"> 成书：`{facts['book']['path']}`" in landed
+    assert f"> 本包对应成书 SHA1：`{facts['book']['sha1']}`" in landed
+    assert "`started_at=100`；`start_code_version=code-v1`；" in landed
+    assert str(tmp_path.resolve()) + '/_service/ledger.jsonl' in landed
+    assert '人工已填叙述必须保留。' in landed
+    assert '<待填>' not in landed and '<base>' not in landed
+    assert finalizer._UNKNOWN in landed
+
+
 def test_finalizer_validation_failure_keeps_the_original_review_and_skips_delivery(
         monkeypatch, tmp_path):
     review = tmp_path / '测试书_review.md'
@@ -623,6 +709,62 @@ def test_finalizer_validation_failure_keeps_the_original_review_and_skips_delive
     assert review.read_bytes() == original
 
 
+def test_finalizer_never_falls_back_to_a_committable_stopped_review(
+        monkeypatch, tmp_path):
+    review = tmp_path / '测试书_review.md'
+    original = b'# review\n> delivery draft\n'
+    review.write_bytes(original)
+    monkeypatch.setattr(finalizer, 'collect', lambda *_args, **_kwargs: _facts())
+    _install_finalizer_review(monkeypatch, tmp_path, review)
+    monkeypatch.setattr(
+        finalizer, 'read_surface_seal', lambda *_args, **_kwargs: 'seal-v1')
+    monkeypatch.setattr(finalizer, 'render', lambda text, _facts: text)
+
+    def validate(text, *_args, **_kwargs):
+        return ['ready candidate failed'] if '`ready`' in text else []
+
+    monkeypatch.setattr(finalizer, 'validate', validate)
+    monkeypatch.setattr(
+        finalizer, 'commit_review',
+        lambda *_args, **_kwargs: pytest.fail('不得提交 stopped fallback'))
+    monkeypatch.setattr(
+        finalizer, 'assess',
+        lambda *_args, **_kwargs: pytest.fail('候选校验失败不得终验'))
+
+    result = finalizer.finalize(
+        tmp_path, 'book-1', started_at=100,
+        start_code_version='code-v1', review_path=review)
+
+    assert result['state'] == 'stopped' and result['delivery'] is None
+    assert result['phases']['validate']['state'] == 'failed'
+    assert 'ready candidate failed' in result['phases']['validate']['detail']
+    assert review.read_bytes() == original
+
+
+def test_finalizer_refuses_to_expose_a_delivery_state_different_from_review(
+        monkeypatch, tmp_path):
+    review = tmp_path / '测试书_review.md'
+    review.write_text('# review\n', encoding='utf-8')
+    monkeypatch.setattr(finalizer, 'collect', lambda *_args, **_kwargs: _facts())
+    _install_finalizer_review(monkeypatch, tmp_path, review)
+    monkeypatch.setattr(
+        finalizer, 'read_surface_seal', lambda *_args, **_kwargs: 'seal-v1')
+    monkeypatch.setattr(finalizer, 'render', lambda text, _facts: text)
+    monkeypatch.setattr(finalizer, 'validate', lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(
+        finalizer, 'assess',
+        lambda *_args, **_kwargs: _delivery('ready_with_disclosures'))
+
+    result = finalizer.finalize(
+        tmp_path, 'book-1', started_at=100,
+        start_code_version='code-v1', review_path=review)
+
+    assert result['state'] == 'stopped' and result['delivery'] is None
+    assert result['phases']['delivery']['state'] == 'failed'
+    assert 'review=ready, delivery=ready_with_disclosures' in (
+        result['phases']['delivery']['detail'])
+
+
 def test_finalizer_refuses_a_surface_that_drifts_between_collect_and_commit(
         monkeypatch, tmp_path):
     review = tmp_path / '测试书_review.md'
@@ -634,7 +776,9 @@ def test_finalizer_refuses_a_surface_that_drifts_between_collect_and_commit(
     monkeypatch.setattr(
         finalizer, 'read_surface_seal',
         lambda *_args, **_kwargs: next(seals))
-    monkeypatch.setattr(finalizer, 'render', lambda *_args: 'valid candidate')
+    monkeypatch.setattr(
+        finalizer, 'render',
+        lambda *_args: '> 交付状态：`ready`\nvalid candidate')
     monkeypatch.setattr(finalizer, 'validate', lambda *_args, **_kwargs: [])
     monkeypatch.setattr(
         finalizer, 'assess',
@@ -658,7 +802,9 @@ def test_finalizer_user_edit_after_render_wins_and_is_never_overwritten(
     review.write_bytes(original)
     monkeypatch.setattr(finalizer, 'collect', lambda *_args, **_kwargs: _facts())
     _install_finalizer_review(monkeypatch, tmp_path, review)
-    monkeypatch.setattr(finalizer, 'render', lambda *_args: 'valid candidate')
+    monkeypatch.setattr(
+        finalizer, 'render',
+        lambda *_args: '> 交付状态：`ready`\nvalid candidate')
     monkeypatch.setattr(finalizer, 'validate', lambda *_args, **_kwargs: [])
     seal_calls: list[None] = []
 
@@ -770,7 +916,9 @@ def test_finalizer_discards_ready_when_surface_drifts_during_fresh_assess(
         return next(seals)
 
     monkeypatch.setattr(finalizer, 'read_surface_seal', surface_seal)
-    monkeypatch.setattr(finalizer, 'render', lambda *_args: 'valid candidate')
+    monkeypatch.setattr(
+        finalizer, 'render',
+        lambda *_args: '> 交付状态：`ready`\nvalid candidate')
     monkeypatch.setattr(finalizer, 'validate', lambda *_args, **_kwargs: [])
 
     def commit(path, text, **kwargs):
@@ -792,7 +940,8 @@ def test_finalizer_discards_ready_when_surface_drifts_during_fresh_assess(
         'include_final_evidence_service': True,
         'excluded_review': review.resolve(),
     } for row in seal_calls)
-    assert review.read_text(encoding='utf-8') == 'valid candidate'
+    assert review.read_text(encoding='utf-8') == (
+        '> 交付状态：`ready`\nvalid candidate')
     assert result['state'] == 'stopped' and result['delivery'] is None
     assert result['phases']['commit']['state'] == 'passed'
     assert result['phases']['seal']['state'] == 'failed'

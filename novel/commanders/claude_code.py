@@ -172,6 +172,7 @@ class ClaudeCodeCommanderDriver(CliCommanderDriver):
         allowed_tools: Sequence[str] = (),
         env_overrides: Mapping[str, str] | None = None,
         cli_version: str | None = None,
+        resume_provider_session_id: str | None = None,
     ) -> CommanderInvocation:
         resolved = self._resolved_profile(profile)
         if not isinstance(prompt, str) or not prompt.strip():
@@ -181,7 +182,7 @@ class ClaudeCodeCommanderDriver(CliCommanderDriver):
         if any(not isinstance(item, str) or not item.strip() for item in tools):
             raise CommanderConfigurationError(
                 'Claude --allowedTools 每一项都必须是非空字符串')
-        argv = (
+        argv = [
             self.executable,
             '-p',
             '--input-format', 'text',
@@ -194,10 +195,14 @@ class ClaudeCodeCommanderDriver(CliCommanderDriver):
             '--mcp-config', _EMPTY_MCP_CONFIG,
             '--strict-mcp-config',
             '--add-dir', base_abs,
-            # 必须留在末尾：Claude 将其后各项都解释为白名单，不再追加 prompt。
-            '--allowedTools',
-            *tools,
-        )
+        ]
+        if resume_provider_session_id is not None:
+            if not resume_provider_session_id.strip():
+                raise CommanderConfigurationError(
+                    'Claude resume provider session id 不得为空')
+            argv.extend(('--resume', resume_provider_session_id))
+        # 必须留在末尾：Claude 将其后各项都解释为白名单，不再追加 prompt。
+        argv.extend(('--allowedTools', *tools))
         if '--fallback-model' in argv:
             raise AssertionError('Commander 禁止隐式 fallback model')
         frozen_env = dict(env_overrides or {})
@@ -212,13 +217,14 @@ class ClaudeCodeCommanderDriver(CliCommanderDriver):
                 f'Claude Commander 的生命周期环境不可覆盖：{names}')
         frozen_env.update(_FROZEN_CLAUDE_ENV)
         return CommanderInvocation(
-            argv=argv,
+            argv=tuple(argv),
             stdin_text=prompt,
             cwd=repo_abs,
             env_overrides=frozen_env,
             profile=resolved,
             protocol=self.protocol,
             cli_version=cli_version,
+            resume_provider_session_id=resume_provider_session_id,
         )
 
     def _decode(
@@ -227,6 +233,7 @@ class ClaudeCodeCommanderDriver(CliCommanderDriver):
         *,
         profile: AgentProfile,
         exit_code: int,
+        expected_provider_session_id: str | None,
     ) -> CommanderObservation:
         del profile
         events = jsonl_events(
@@ -240,6 +247,11 @@ class ClaudeCodeCommanderDriver(CliCommanderDriver):
             )
         terminal = [event for event in events if event.get('type') == 'result']
         session_id = _session_id(events)
+        if (expected_provider_session_id is not None
+                and session_id is not None
+                and session_id != expected_provider_session_id):
+            raise CommanderProtocolError(
+                'Claude Commander resume 返回了不同 session_id；拒绝串错会话')
         failed_event = next(
             (event for event in events
              if event.get('type') == 'result'

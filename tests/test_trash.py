@@ -6,12 +6,15 @@ from __future__ import annotations
 import json
 import threading
 from contextlib import contextmanager
+from pathlib import Path
 
 import pytest
 
 from contracts.schema.orchestration import AgentProfile, PipelineAgentProfiles
-from novel.errors import ApprovalFrozen, SourceConflict, UpstreamMissing
 from novel.commanders.base import CommanderInvocation
+from novel.errors import (
+    ApprovalFrozen, BookTrashFailed, SourceConflict, UpstreamMissing,
+)
 from novel.orchestrator import admission, agent, approvals, jobs, trash
 from novel.orchestrator.jobs import JobConflict
 
@@ -84,6 +87,238 @@ def test_execute_moves_the_whole_project_and_approval_into_recoverable_trash(tmp
     metadata = json.loads((item / 'metadata.json').read_text(encoding='utf-8'))
     assert metadata['sid'] == '1001' and metadata['title'] == '测试书'
     assert result.trash_rel == '_service/trash/1700000000-deadbeef/book'
+
+
+def test_v3_trash_and_restore_keep_book_approval_and_service_runs_together(
+        tmp_path):
+    book, approval = _book(tmp_path)
+    service_run = (
+        tmp_path / '_service' / 'runs' / '1001' / 'stage5' / 'run-a')
+    service_run.mkdir(parents=True)
+    (service_run / 'run.json').write_text(
+        '{"state":"committed"}\n', encoding='utf-8')
+    trash_id = '1700000000-f00dbabe'
+
+    trash.execute(tmp_path, '1001', '测试书', trash_id)
+
+    item = tmp_path / '_service' / 'trash' / trash_id
+    assert not book.exists() and not approval.exists() and not service_run.exists()
+    assert (item / 'service_runs' / 'stage5' / 'run-a' / 'run.json').is_file()
+    proof = trash.complete_item_proof(tmp_path, trash_id, max_entries=64)
+    assert proof is not None and proof['sid'] == '1001'
+
+    restored = trash.restore(tmp_path, trash_id, '测试书')
+
+    assert restored['sid'] == '1001'
+    assert book.is_dir() and approval.is_file() and service_run.is_dir()
+    assert not item.exists()
+    receipt = (
+        tmp_path / '_service' / 'trash_receipts'
+        / f'{trash_id}.restore.json')
+    restored_receipt = json.loads(receipt.read_text(encoding='utf-8'))
+    assert restored_receipt['state'] == 'committed'
+
+
+class _SimulatedRestoreHardKill(BaseException):
+    """Bypass ordinary compensation exactly like process termination."""
+
+
+def _trashed_with_service_run(tmp_path, trash_id):
+    book, approval = _book(tmp_path)
+    service_run = (
+        tmp_path / '_service' / 'runs' / '1001' / 'stage5' / 'run-a')
+    service_run.mkdir(parents=True)
+    (service_run / 'run.json').write_text(
+        '{"state":"committed"}\n', encoding='utf-8')
+    trash.execute(tmp_path, '1001', '测试书', trash_id)
+    return book, approval, service_run, tmp_path / '_service' / 'trash' / trash_id
+
+
+def test_restore_prepared_receipt_reconciles_a_hard_kill_per_surface(
+        tmp_path, monkeypatch):
+    trash_id = '1700000000-f00dba01'
+    book, approval, service_run, item = _trashed_with_service_run(
+        tmp_path, trash_id)
+    plan = trash.preview_restore(tmp_path, trash_id, '测试书', now=123)
+
+    def kill_after_runs(point):
+        if point == 'after_service_runs':
+            raise _SimulatedRestoreHardKill('kill after first surface')
+
+    monkeypatch.setattr(trash, '_restore_fault', kill_after_runs)
+    with pytest.raises(_SimulatedRestoreHardKill, match='first surface'):
+        trash.apply_restore(tmp_path, plan)
+
+    receipt_path = (
+        tmp_path / '_service' / 'trash_receipts'
+        / f'{trash_id}.restore.json')
+    prepared = json.loads(receipt_path.read_text(encoding='utf-8'))
+    assert prepared['state'] == 'prepared'
+    assert [surface['name'] for surface in prepared['surfaces']] == [
+        'service_runs', 'approval', 'book']
+    assert service_run.is_dir() and not (item / 'service_runs').exists()
+    assert not book.exists() and not approval.exists()
+    assert (item / 'book').is_dir() and (item / 'approval.json').is_file()
+
+    monkeypatch.setattr(trash, '_restore_fault', lambda _point: None)
+    restored = trash.reconcile_restore(
+        tmp_path, trash_id, expected_title='测试书')
+    assert restored['sid'] == '1001'
+    assert book.is_dir() and approval.is_file() and service_run.is_dir()
+    assert not item.exists()
+    assert json.loads(receipt_path.read_text(encoding='utf-8'))[
+        'state'] == 'committed'
+    assert trash.reconcile_restore(
+        tmp_path, trash_id, expected_title='测试书') == restored
+
+
+def test_sweep_automatically_finishes_a_proved_restore_hard_kill(
+        tmp_path, monkeypatch):
+    trash_id = '1700000000-f00dba02'
+    book, approval, service_run, item = _trashed_with_service_run(
+        tmp_path, trash_id)
+    plan = trash.preview_restore(tmp_path, trash_id, '测试书', now=123)
+
+    def kill_after_approval(point):
+        if point == 'after_approval':
+            raise _SimulatedRestoreHardKill('kill after second surface')
+
+    monkeypatch.setattr(trash, '_restore_fault', kill_after_approval)
+    with pytest.raises(_SimulatedRestoreHardKill):
+        trash.apply_restore(tmp_path, plan)
+
+    monkeypatch.setattr(trash, '_restore_fault', lambda _point: None)
+    assert trash.sweep_incomplete(tmp_path) == [trash_id]
+    assert book.is_dir() and approval.is_file() and service_run.is_dir()
+    assert not item.exists()
+
+
+def test_service_startup_reconcile_uses_the_cli_boundary_and_is_bounded(
+        tmp_path, monkeypatch):
+    trash_id = '1700000000-f00dba04'
+    book, approval, service_run, _item = _trashed_with_service_run(
+        tmp_path, trash_id)
+    plan = trash.preview_restore(tmp_path, trash_id, '测试书', now=123)
+
+    def kill_after_runs(point):
+        if point == 'after_service_runs':
+            raise _SimulatedRestoreHardKill('kill')
+
+    monkeypatch.setattr(trash, '_restore_fault', kill_after_runs)
+    with pytest.raises(_SimulatedRestoreHardKill):
+        trash.apply_restore(tmp_path, plan)
+    monkeypatch.setattr(trash, '_restore_fault', lambda _point: None)
+    resumed_plan = trash.preview_restore(
+        tmp_path, trash_id, '测试书', now=456)
+    assert resumed_plan.metadata_sha256 == plan.metadata_sha256
+    assert resumed_plan.manifest_file_sha256 == plan.manifest_file_sha256
+    seen_argv = []
+
+    def child(argv, _cwd, _env):
+        seen_argv.append(list(argv))
+        restored = trash.restore(
+            tmp_path, argv[argv.index('--trash-id') + 1],
+            argv[argv.index('--expected-title') + 1])
+        return 0, json.dumps(restored, ensure_ascii=False).encode('utf-8')
+
+    result = trash.reconcile_pending_restores(
+        tmp_path, spawn=child, max_receipts=8)
+    assert result.examined == 1
+    assert result.reconciled == (trash_id,) and result.blocked == ()
+    assert seen_argv and 'novel.cli.trash_restore' in seen_argv[0]
+    assert book.is_dir() and approval.is_file() and service_run.is_dir()
+    receipts = tmp_path / '_service' / 'trash_receipts'
+    (receipts / 'unrelated.json').write_text('{}\n', encoding='utf-8')
+    bounded = trash.reconcile_pending_restores(
+        tmp_path, spawn=lambda *_args: pytest.fail('超限扫描不得启动 child'),
+        max_receipts=1)
+    assert bounded.reconciled == ()
+    assert bounded.blocked == ('scan_limit_exceeded',)
+
+
+def test_restore_reconcile_refuses_a_duplicate_surface_without_moving_more(
+        tmp_path, monkeypatch):
+    trash_id = '1700000000-f00dba03'
+    book, approval, service_run, item = _trashed_with_service_run(
+        tmp_path, trash_id)
+    plan = trash.preview_restore(tmp_path, trash_id, '测试书', now=123)
+
+    def kill_after_runs(point):
+        if point == 'after_service_runs':
+            raise _SimulatedRestoreHardKill('kill')
+
+    monkeypatch.setattr(trash, '_restore_fault', kill_after_runs)
+    with pytest.raises(_SimulatedRestoreHardKill):
+        trash.apply_restore(tmp_path, plan)
+
+    duplicate = item / 'service_runs' / 'stage5' / 'run-a'
+    duplicate.mkdir(parents=True)
+    (duplicate / 'run.json').write_text(
+        '{"state":"committed"}\n', encoding='utf-8')
+    monkeypatch.setattr(trash, '_restore_fault', lambda _point: None)
+
+    with pytest.raises(BookTrashFailed, match='两侧同时存在'):
+        trash.reconcile_restore(
+            tmp_path, trash_id, expected_title='测试书')
+    assert not book.exists() and not approval.exists()
+    assert (item / 'book').is_dir() and (item / 'approval.json').is_file()
+    assert service_run.is_dir() and duplicate.is_dir()
+    assert trash.sweep_incomplete(tmp_path) == [], \
+        '自动 reconcile 遇到歧义必须留盘，不能转交 legacy delete sweep 猜测'
+
+
+def test_purge_resumes_when_process_dies_after_rmtree_before_commit(
+        tmp_path, monkeypatch):
+    _book(tmp_path)
+    trash_id = '1700000000-a11ce123'
+    trash.execute(tmp_path, '1001', '测试书', trash_id)
+    proof = trash.complete_item_proof(tmp_path, trash_id, max_entries=64)
+    assert proof is not None
+    item = tmp_path / '_service' / 'trash' / trash_id
+    receipt = tmp_path / '_service' / 'trash_receipts' / f'{trash_id}.json'
+
+    original_rmtree = trash.shutil.rmtree
+    interrupted = False
+
+    def rmtree_then_interrupt(path, *args, **kwargs):
+        nonlocal interrupted
+        result = original_rmtree(path, *args, **kwargs)
+        if Path(path) == item and not interrupted:
+            interrupted = True
+            raise RuntimeError('fault after rmtree')
+        return result
+
+    monkeypatch.setattr(trash.shutil, 'rmtree', rmtree_then_interrupt)
+    with pytest.raises(RuntimeError, match='fault after rmtree'):
+        trash.purge_complete_item(
+            tmp_path, trash_id,
+            expected_manifest_sha256=str(proof['manifest_file_sha256']),
+            max_entries=64)
+
+    assert not item.exists()
+    assert json.loads(receipt.read_text(encoding='utf-8'))['state'] == 'prepared'
+
+    monkeypatch.setattr(trash.shutil, 'rmtree', original_rmtree)
+    completed = trash.purge_complete_item(
+        tmp_path, trash_id,
+        expected_manifest_sha256=str(proof['manifest_file_sha256']),
+        max_entries=64)
+    assert completed == receipt
+    assert json.loads(receipt.read_text(encoding='utf-8'))['state'] == 'committed'
+    assert trash.purge_complete_item(
+        tmp_path, trash_id,
+        expected_manifest_sha256=str(proof['manifest_file_sha256']),
+        max_entries=64) == receipt
+
+
+def test_purge_does_not_treat_unproved_missing_item_as_success(tmp_path):
+    trash_id = '1700000000-a11ce124'
+
+    with pytest.raises(BookTrashFailed, match='没有 prepared proof'):
+        trash.purge_complete_item(
+            tmp_path, trash_id,
+            expected_manifest_sha256='a' * 64,
+            max_entries=64)
 
 
 def test_execute_holds_the_same_approval_file_lock_for_both_moves(

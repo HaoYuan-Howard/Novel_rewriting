@@ -320,7 +320,7 @@ def test_s2_service_approval_cannot_outvote_a_joint_hard_failure(
         'seen': {'global': True, 'read': True},
     })
     monkeypatch.setattr(
-        approvals, '_read_current', lambda _base, _sid: record)
+        approvals, '_read_state', lambda _base, _sid: (record, record))
 
     from novel.stages.stage2 import extract
     monkeypatch.setattr(extract, 'run_check_only', lambda _ctx_: SimpleNamespace(

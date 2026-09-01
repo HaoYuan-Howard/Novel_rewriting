@@ -40,6 +40,14 @@ agent 授权框。部分失败不回滚成功项，
 `<base>/_service/trash/<trash_id>/`；上传原文、ledger、作业与 agent 审计继续保留。
 正在运行或位于 agent 队列中的书拒绝删除，成功后自动刷新语料库查询。
 
+**服务维护**：语料库页头「维护」打开 retention / 回收站恢复面板。Retention 四类 TTL 默认都关闭；
+留空就是 `null`，界面不得解释成 0 秒。两类动作都先调用只读 preview，展示扫描分母、候选或恢复的
+sid/title 及完整 token；表单任何一格变化都作废旧 preview。Apply 必须勾选显式确认并把服务端返回的
+完整计划原样交回，不能只搬 token 或在前端重拼候选。Retention apply 只写 `_service`；trash restore
+的 book/approval/service run 移动仍由受控 CLI 子进程完成，浏览器和 HTTP 服务进程不直接改产物树。
+端点为 `POST /api/maintenance/retention/{preview,apply}` 与
+`POST /api/maintenance/trash/restore/{preview,apply}`。
+
 **跑书进度屏**：`/n/:sid/run`（左导航「进度」按钮）。agent 的 `novel.cli mark`
 与 UI / 持久队列共用 `<base>/_service/agent_progress.jsonl`：作业执行器在每个节点开始、
 结束时自动打点，界面按 `NODES` 的真实顺序折成进度 + 事件时间线；有步在跑时 2.5s 轮询，
@@ -252,6 +260,10 @@ hash-bound 的策略级与逐章裁决；候选、证据、允许的 repair code
 `changed / historical_accept_reusable / source_decision_sha256`。面板不按 severity 或文案重判、不据
 空组宣称通过、不预填 accept；`allowed_actions` 只作为 `accept|request_repair|request_replan` 的 typed
 入口披露，INFO、metric、UNVER、skipped 等只读项不会因此长出付费按钮。
+Design workpack 的 `disposition=suspended` 专门呈现 exact frozen-v6 的 raw all-accept：页面明确显示
+“已记录但缺 v7 relation/preflight 验证权威”，与 `already_current` 一样禁用重复模板入口，但绝不显示
+“可进入 B”，也不渲染 repair/replan/B 动作。只有真实 `request_repair` 的章行可携 `s4er1` 零 wire
+完整章 edit token；`suspended` 本身不携 action/edit/execution token。Stage6/7 workpack 不接受该处置态。
 
 Stage5 屏顶部另有 `screens/stage5/Stage5ClosurePanel`。它只消费 `ApprovalDoc.closure` 的
 `state/workpack/next_step`，不会拿旧 Review、历史回执或 finding 数量自行补成 ready/closed。

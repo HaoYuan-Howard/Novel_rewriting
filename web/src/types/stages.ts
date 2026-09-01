@@ -325,6 +325,33 @@ export interface BlueprintReviewBeat {
   hinges: ReadingHinge[]
 }
 
+export type BlueprintReviewNarrativeRelation =
+  | {
+      kind: 'story_before'
+      enforcement: 'hard' | 'review'
+      before_claim: string
+      after_claim: string
+    }
+  | {
+      kind: 'response_to'
+      enforcement: 'hard' | 'review'
+      stimulus_claim: string
+      response_claim: string
+    }
+  | {
+      kind: 'same_scene'
+      enforcement: 'hard' | 'review'
+      left_claim: string
+      right_claim: string
+    }
+  | {
+      kind: 'observes'
+      enforcement: 'hard' | 'review'
+      observer_char_id: string
+      observed_claim: string
+      observation_claim: string
+    }
+
 export interface BlueprintReviewChapter {
   chapter_ordinal: number
   anomalous: boolean
@@ -339,6 +366,7 @@ export interface BlueprintReviewChapter {
   }
   beats: BlueprintReviewBeat[]
   causal_links: { before_claim: string; after_claim: string }[]
+  narrative_relations: BlueprintReviewNarrativeRelation[]
   entry_state_claims: string[]
   ending_state_claims: string[]
   narration: ReadingNarration[]
@@ -349,6 +377,10 @@ export interface BlueprintReviewWorkpack {
   title: string
   read_only: true
   auto_decisions: false
+  review_contract_version: 'stage2-blueprint-review-v4'
+  review_identity_sha256: string
+  validation_seal_sha256: string
+  review_token: string
   subject_sha256: string
   binding_sha256: string
   binding: {
@@ -357,8 +389,6 @@ export interface BlueprintReviewWorkpack {
     main_text_artifact_sha256: string
     blueprint_artifact_sha256: string
     check_report_sha256: string
-    code_version: string
-    rules_fingerprint: string
     chapter_ordinals: number[]
   }
   check: CompactApprovalCheck
@@ -369,11 +399,7 @@ export interface BlueprintReviewWorkpack {
 }
 
 export interface BlueprintSeenRequest {
-  expected_binding_sha256: string
-  expected_subject_sha256: string
-  expected_main_text_artifact_sha256: string
-  expected_code_version: string
-  expected_rules_fingerprint: string
+  review_token: string
 }
 
 /* ------------------------------------------------- stage2 · 全局设定 */

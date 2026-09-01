@@ -288,6 +288,7 @@ def blueprints() -> dict[str, Any]:
     for chapter in doc['blueprints']:
         chapter['fact_atoms'] = [beat.pop('_fact_atom') for beat in chapter['beats']]
         chapter['causal_edges'] = []
+        chapter['narrative_relations'] = []
         chapter['entry_state_refs'] = []
         chapter['ending_state_refs'] = []
     return doc

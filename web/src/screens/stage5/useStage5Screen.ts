@@ -178,6 +178,8 @@ export function useStage5Screen() {
   const [chaptersArg, setChaptersArg] = useState(String(ordinal))
   const [trimActor, setTrimActor] = useState('')
   const [trimReason, setTrimReason] = useState('')
+  const [writingActor, setWritingActor] = useState('')
+  const [writingReason, setWritingReason] = useState('')
   const [wontfixReason, setWontfixReason] = useState('')
   const [submittedWontfix, setSubmittedWontfix] = useState<{
     key: string
@@ -408,6 +410,26 @@ export function useStage5Screen() {
     trimReason,
     setTrimReason,
     retainPretrim,
+    writingActor,
+    setWritingActor,
+    writingReason,
+    setWritingReason,
+    writingAuthorized: approvals.doc?.writing === true,
+    writingApprovalAvailable: Boolean(
+      approvals.doc?.writing_approval.available
+      && approvals.doc.writing_approval.review_token,
+    ),
+    authorizeWriting: () => {
+      const reviewToken = approvals.doc?.writing_approval.review_token
+      if (!reviewToken || !writingActor.trim() || !writingReason.trim()) {
+        throw new Error('写作授权必须填写 actor/reason 并绑定当前 review token')
+      }
+      return approvals.startWriting.mutateAsync({
+        actor: writingActor.trim(),
+        reason: writingReason.trim(),
+        review_token: reviewToken,
+      })
+    },
 
     counts: d
       ? '计划 ' +
@@ -615,7 +637,17 @@ export function useStage5Screen() {
       stage5WritingBefore(
         action,
         approvals.doc?.writing,
-        () => approvals.startWriting.mutateAsync(),
+        () => {
+          const reviewToken = approvals.doc?.writing_approval.review_token
+          if (!reviewToken || !writingActor.trim() || !writingReason.trim()) {
+            throw new Error('请先填写写作授权 actor/reason 并刷新当前 token')
+          }
+          return approvals.startWriting.mutateAsync({
+            actor: writingActor.trim(),
+            reason: writingReason.trim(),
+            review_token: reviewToken,
+          })
+        },
       ),
     /**
      * 全书验收动作。**它不在 `writeActions` 里，那是对的**——那个盒子只喂

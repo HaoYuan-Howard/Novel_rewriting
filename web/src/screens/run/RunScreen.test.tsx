@@ -10,6 +10,38 @@ import { READY_PROFILES } from '@/test/agent'
 import { RunScreen } from './RunScreen'
 
 describe('RunScreen 交付终验', () => {
+  it('只按服务端 allowed_controls 展示并调用 resume', async () => {
+    const run = await mockApi.getRunProgress(SAMPLE_SID)
+    const active = await mockApi.startAgentRun({
+      sid: SAMPLE_SID,
+      authorized: true,
+      egress_authorized: true,
+      profiles: READY_PROFILES,
+    })
+    const paused = {
+      ...active,
+      state: 'paused' as const,
+      note: '当前 claim 已安全闭合',
+      allowed_controls: ['resume', 'stop'] as const,
+    }
+    vi.spyOn(api, 'getRunProgress').mockResolvedValue(run)
+    vi.spyOn(api, 'getCheck').mockResolvedValue(null)
+    vi.spyOn(api, 'getAgentRuns').mockResolvedValue({
+      runs: [{ ...paused, allowed_controls: [...paused.allowed_controls] }],
+    })
+    const resume = vi.spyOn(api, 'resumeAgentRun').mockResolvedValue({
+      ...active,
+      run_id: paused.run_id,
+    })
+
+    renderRoute(<RunScreen />, `/n/${SAMPLE_SID}/run`)
+
+    const button = await screen.findByRole('button', { name: '继续' })
+    expect(screen.queryByRole('button', { name: '暂停' })).not.toBeInTheDocument()
+    fireEvent.click(button)
+    await waitFor(() => expect(resume).toHaveBeenCalledWith(paused.run_id))
+  })
+
   it('交付失败的判定依据可聚焦、可展开——不只挂在 title 上', async () => {
     // ⭐ `reason` 曾经只有 `title`。`title` 只在鼠标悬停时出现：触摸与键盘用户
     //    一个字都读不到，而它是「为什么没交付、下一步做什么」的**唯一**出口。
@@ -28,6 +60,9 @@ describe('RunScreen 交付终验', () => {
           code_version: 'abc',
           profiles: null,
         },
+        contract: null,
+        epochs: [],
+        active_epoch_id: null,
         started: 1,
         ended: 2,
         exit_code: 0,
@@ -38,6 +73,7 @@ describe('RunScreen 交付终验', () => {
           reason: 'Stage2 复核闸未打开：current=True，counts={"pending": 3}',
           checked_at: 3,
         },
+        allowed_controls: [],
       }],
     })
 
@@ -81,12 +117,16 @@ describe('RunScreen 交付终验', () => {
             },
           },
         },
+        contract: null,
+        epochs: [],
+        active_epoch_id: null,
         started: 1,
         ended: null,
         exit_code: null,
         state: 'running',
         note: null,
         outcome: null,
+        allowed_controls: ['stop'],
       }],
     })
 

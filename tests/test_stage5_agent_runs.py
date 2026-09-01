@@ -81,6 +81,11 @@ def test_run_spec_freezes_one_chapter_owner_policy_and_paths(tmp_path, monkeypat
         ctx.novel_dir, ctx.run_id, 7)
     assert spec.checkpoint_dir(ctx) == paths.stage5_chapter_checkpoint_dir(
         ctx.novel_dir, ctx.run_id, 7)
+    assert spec.legacy_run_path(ctx) == paths.legacy_stage5_chapter_run_path(
+        ctx.novel_dir, ctx.run_id, 7)
+    assert spec.legacy_checkpoint_dir(ctx) == \
+        paths.legacy_stage5_chapter_checkpoint_dir(
+            ctx.novel_dir, ctx.run_id, 7)
 
 
 def test_checkpoint_revision_uses_accepted_turn_and_does_not_copy_core_validator(

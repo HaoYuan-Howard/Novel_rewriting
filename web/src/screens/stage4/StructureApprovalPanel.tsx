@@ -481,9 +481,9 @@ function StructureApprovalForm({
                       : ''
               }
               onClick={() => submit.mutate({
-                subject_sha256: subject,
                 actor: actor.trim(),
                 reason: reason.trim(),
+                review_token: workpackQuery.data?.review_token ?? '',
                 chapters: chapters.map((row) => ({ ...row, reason: row.reason.trim() })),
               }, {
                 onSuccess: (next) => notify(

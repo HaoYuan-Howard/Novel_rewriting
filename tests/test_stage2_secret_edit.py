@@ -884,12 +884,22 @@ def test_the_entry_is_registered_everywhere_it_has_to_be():
     assert '--apply-edit' in FREE_ENTRIES and '--apply-edit' in VALUED_FLAGS
 
 
-def test_the_blueprint_node_has_no_secret_edit_entry():
-    """`--apply-edit` 只挂 `stage2.global`。逐章蓝图的人工路是 `--chapters` 定向重生成
-    ——两个节点两份产物，一个 flag 不许同时代表两件事。"""
-    from contracts.invariants import NODES
+def test_the_blueprint_node_has_a_distinct_typed_relation_edit_entry():
+    """Blueprint 现役 ``--apply-edit`` 只替换指定章的完整关系集。
 
-    assert '--apply-edit' not in NODES['stage2.blueprint'].flags
+    Global 同名 flag 仍只吃 ``GlobalEdit``；两条路由各自的注册载体、
+    producer 和上游边分开，不再靠“一个 flag 全仓只能有一个语义”的旧断言。
+    """
+    from contracts.artifacts import STAGE2_BLUEPRINT_RELATION_EDIT
+    from contracts.invariants import NODES
+    from contracts.schema import ARTIFACTS
+    from contracts.schema.stage2 import BlueprintRelationEdit
+
+    assert {'--emit-edit-template', '--validate-edit', '--apply-edit'} <= set(
+        NODES['stage2.blueprint'].flags)
+    assert ARTIFACTS[STAGE2_BLUEPRINT_RELATION_EDIT] is BlueprintRelationEdit
+
+    # 同名 flag 没有让 Global producer 窃取 Blueprint 语义。
     root, book = _sandbox('走错节点_011')
     try:
         _seed(book)

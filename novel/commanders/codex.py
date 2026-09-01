@@ -137,6 +137,7 @@ class CodexCommanderDriver(CliCommanderDriver):
         allowed_tools: Sequence[str] = (),
         env_overrides: Mapping[str, str] | None = None,
         cli_version: str | None = None,
+        resume_provider_session_id: str | None = None,
     ) -> CommanderInvocation:
         if allowed_tools:
             raise CommanderConfigurationError(
@@ -146,9 +147,19 @@ class CodexCommanderDriver(CliCommanderDriver):
         if not isinstance(prompt, str) or not prompt.strip():
             raise CommanderConfigurationError('commander prompt 不得为空')
         repo_abs, base_abs = self._paths(repo, base)
-        argv = (
+        argv = [
             self.executable,
             'exec',
+        ]
+        if resume_provider_session_id is not None:
+            if not resume_provider_session_id.strip():
+                raise CommanderConfigurationError(
+                    'Codex resume provider session id 不得为空')
+        # ``--approve-for-me`` / ``--cd`` / ``--add-dir`` 是 ``exec`` 父命令
+        # 选项，不属于 ``exec resume`` 子命令；必须全部放在 ``resume`` 前。
+        # 放反后真实 CLI 会在第二 turn 报 unknown option，单看 argv 含 session id
+        # 的测试抓不到这类假续会。
+        argv.extend((
             '--json',
             '--model', resolved.model,
             '--config',
@@ -167,17 +178,20 @@ class CodexCommanderDriver(CliCommanderDriver):
             '--strict-config',
             '--cd', repo_abs,
             '--add-dir', base_abs,
-            # 官方 ``PROMPT=-``：多行任务只从 stdin 进入，绝不受 argv 长度影响。
-            '-',
-        )
+        ))
+        if resume_provider_session_id is not None:
+            argv.extend(('resume', resume_provider_session_id))
+        # 官方 ``PROMPT=-``：多行任务只从 stdin 进入，绝不受 argv 长度影响。
+        argv.append('-')
         return CommanderInvocation(
-            argv=argv,
+            argv=tuple(argv),
             stdin_text=prompt,
             cwd=repo_abs,
             env_overrides={} if env_overrides is None else env_overrides,
             profile=resolved,
             protocol=self.protocol,
             cli_version=cli_version,
+            resume_provider_session_id=resume_provider_session_id,
         )
 
     def _decode(
@@ -186,6 +200,7 @@ class CodexCommanderDriver(CliCommanderDriver):
         *,
         profile: AgentProfile,
         exit_code: int,
+        expected_provider_session_id: str | None,
     ) -> CommanderObservation:
         del profile
         events = jsonl_events(
@@ -198,6 +213,11 @@ class CodexCommanderDriver(CliCommanderDriver):
                 usage=None,
             )
         thread_id = _thread_id(events)
+        if (expected_provider_session_id is not None
+                and thread_id is not None
+                and thread_id != expected_provider_session_id):
+            raise CommanderProtocolError(
+                'Codex Commander resume 返回了不同 thread id；拒绝串错会话')
         completed_turns = sum(
             event.get('type') == 'turn.completed' for event in events)
         failed = next(

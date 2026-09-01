@@ -346,6 +346,11 @@ def test_the_published_surface_is_exactly_the_current_surface(app):
     """
     assert _surface(app) == {
         '/api/enums': ['GET'],
+        # 批次四维护面：preview 只读，apply 必须带同一份 CAS token。
+        '/api/maintenance/retention/preview': ['POST'],
+        '/api/maintenance/retention/apply': ['POST'],
+        '/api/maintenance/trash/restore/preview': ['POST'],
+        '/api/maintenance/trash/restore/apply': ['POST'],
         '/api/novels': ['GET'],
         '/api/novels/{sid}': ['GET'],
         '/api/novels/{sid}/operator-next': ['GET'],
@@ -391,6 +396,8 @@ def test_the_published_surface_is_exactly_the_current_surface(app):
         '/api/novels/{sid}/stage2/global': ['GET'],
         '/api/novels/{sid}/stage2/blueprint-review-workpack': ['GET'],
         '/api/novels/{sid}/stage2/global-review': ['GET', 'POST'],
+        '/api/novels/{sid}/stage2/relations/edit': ['POST'],
+        '/api/novels/{sid}/stage2/relations/edit/preview': ['POST'],
         '/api/novels/{sid}/stage6': ['GET'],
         '/api/novels/{sid}/stage7': ['GET'],
         '/api/novels/{sid}/stage7/book.txt': ['GET'],
@@ -421,6 +428,8 @@ def test_the_published_surface_is_exactly_the_current_surface(app):
         '/api/agent/runs/batch': ['POST'],
         '/api/agent/runs/queue': ['GET'],
         '/api/agent/runs/{run_id}/log': ['GET'],
+        '/api/agent/runs/{run_id}/pause': ['POST'],
+        '/api/agent/runs/{run_id}/resume': ['POST'],
         '/api/agent/runs/{run_id}/stop': ['POST'],
         '/api/novels/{sid}/run': ['GET'],
     }
@@ -500,8 +509,8 @@ _EXECUTOR_PROFILE_HTTP_CASES = (
     ('stage2.global', (), 1),
     ('stage2.blueprint', (), 2),
     ('stage4.design', (), 1),
-    ('stage4.design', ('--replan',), 1),
-    ('stage4.design', ('--repair-decision', 'a' * 64), 1),
+    ('stage4.design', ('--replan', '--review-token', 's4rr1_' + 'a' * 64), 1),
+    ('stage4.design', ('--review-token', 's4rr1_' + 'a' * 64), 1),
     ('stage4.plan', (), 2),
     ('stage5.write', (), 1),
     ('stage5.write', ('--chapters', '1'), 1),
@@ -878,8 +887,10 @@ def test_stage4_plan_new_outputs_require_design_review_but_recovery_does_not(
 
 @pytest.mark.parametrize(('flags', 'expected'), [
     ([], None),
-    (['--repair-decision', 'a' * 64], ('a' * 64, 'repair')),
-    (['--replan'], (None, 'replan')),
+    (['--review-token', 's4rr1_' + 'a' * 64],
+     ('s4rr1_' + 'a' * 64, 'repair')),
+    (['--replan', '--review-token', 's4rr1_' + 'a' * 64],
+     ('s4rr1_' + 'a' * 64, 'replan')),
 ])
 def test_stage4_design_recovery_decision_is_resolved_under_the_job_lock(
         client, monkeypatch, flags, expected):

@@ -84,6 +84,9 @@ def _sample_workpack(
         sid=SID, kind=kind,
         candidate_sha256='c' * 64 if kind == 'design' else None,
         subject_sha256='a' * 64,
+        review_token=(
+            ('s4dr1_' if kind == 'design' else 's4sr1_') + 'a' * 64
+        ),
         chapter_ordinals=[1],
         groups=_groups([
             _coverage_item(1, kind=kind, changed=True),
@@ -114,6 +117,7 @@ def test_info_metric_unver_and_skipped_cannot_publish_actions(
 def test_workpack_schema_closes_groups_effects_and_full_chapter_coverage() -> None:
     valid = ApprovalWorkpack(
         sid=SID, kind='structure', subject_sha256='a' * 64,
+        review_token='s4sr1_' + 'a' * 64,
         chapter_ordinals=[1, 2],
         groups=_groups([
             _coverage_item(1, kind='structure', changed=True),
@@ -125,15 +129,24 @@ def test_workpack_schema_closes_groups_effects_and_full_chapter_coverage() -> No
     assert [row.chapter_ordinal for row in valid.groups[-1].items] == [1, 2]
     assert not hasattr(valid.groups[-1].items[1], 'decision')
 
+    with pytest.raises(ValidationError, match='suspended 只属于'):
+        ApprovalWorkpack.model_validate({
+            **valid.model_dump(mode='json'),
+            'disposition': 'suspended',
+            'current_decision_sha256': 'c' * 64,
+        })
+
     with pytest.raises(ValidationError, match='coverage 必须不重不漏'):
         ApprovalWorkpack(
             sid=SID, kind='structure', subject_sha256='a' * 64,
+            review_token='s4sr1_' + 'a' * 64,
             chapter_ordinals=[1, 2], groups=_groups([
                 _coverage_item(1, kind='structure', changed=True),
             ]))
     with pytest.raises(ValidationError, match='changed 异常在前'):
         ApprovalWorkpack(
             sid=SID, kind='structure', subject_sha256='a' * 64,
+            review_token='s4sr1_' + 'a' * 64,
             chapter_ordinals=[1, 2], groups=_groups([
                 _coverage_item(
                     2, kind='structure', changed=False, source='b' * 64),
@@ -291,6 +304,13 @@ def test_design_builder_marks_only_exact_history_and_sorts_changed_first(
     assert coverage[1].historical_accept_reusable and not coverage[1].changed
     assert coverage[1].source_decision_sha256 == 'd' * 64
     assert all(not hasattr(row, 'decision') for row in coverage)
+    semantic = workpack.groups[1].items
+    assert len(semantic) == 2
+    focus = json.loads(semantic[0].detail)
+    assert focus['facts'][0]['claim'] == '她发现门已经打开。'
+    assert 'narrative_relations' in focus
+    assert focus['fact_scene_positions'][focus['facts'][0]['fact_alias']] \
+        == ['c01s01']
 
 
 def test_structure_groups_focus_unknown_disclosures_and_exact_history(
@@ -336,7 +356,7 @@ def test_structure_groups_focus_unknown_disclosures_and_exact_history(
         approvals, '_baseline_signature_items', lambda **_kwargs: [signature])
     historic = StructureApprovalDecision(
         actor='reviewer', reason='上一轮逐章已核对',
-        subject_sha256='0' * 64,
+        review_token='s4sr1_' + '0' * 64,
         chapters=[
             {'output_ordinal': 1, 'decision': 'accept', 'reason': '核对第 1 章'},
             {'output_ordinal': 2, 'decision': 'accept', 'reason': '核对第 2 章'},
@@ -350,7 +370,8 @@ def test_structure_groups_focus_unknown_disclosures_and_exact_history(
             approvals._structure_decision_payload(historic)),
     )
     stored = approvals._StoredStructureDecision(
-        **historic.model_dump(mode='json'), proof=proof,
+        **historic.model_dump(mode='json', exclude={'review_token'}),
+        subject_sha256='0' * 64, proof=proof,
         chapter_subject_sha256={1: '1' * 64, 2: '2' * 64},
     )
     record = approvals._fresh_record(SID).model_copy(update={
@@ -487,13 +508,59 @@ def _approval_doc(
     )
 
 
+def test_inbox_separates_agent_and_zero_wire_design_repair_routes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    capability = SimpleNamespace(
+        is_v3=True,
+        chapters=[
+            SimpleNamespace(
+                output_ordinal=1, agent_repair_available=True,
+                full_chapter_edit_available=True),
+            SimpleNamespace(
+                output_ordinal=2, agent_repair_available=False,
+                full_chapter_edit_available=True),
+        ],
+    )
+    decision = SimpleNamespace(
+        decision_sha256='d' * 64,
+        repair_capability=capability,
+        chapters=[
+            SimpleNamespace(output_ordinal=1, decision='request_repair'),
+            SimpleNamespace(output_ordinal=2, decision='request_repair'),
+        ],
+    )
+    monkeypatch.setattr(
+        inbox_view.approvals, 'get',
+        lambda _base, _sid: SimpleNamespace(
+            design_review=SimpleNamespace(
+                state='repair_requested', current_decision=decision,
+                action_review_token='s4rr1_' + 'd' * 64),
+            structure=SimpleNamespace(
+                state='unavailable', current_decision=None),
+        ))
+    monkeypatch.setattr(
+        inbox_view.approvals, 'structure_workpack',
+        lambda _base, _sid: (_ for _ in ()).throw(
+            approvals.UpstreamMissing('plan 尚未生成')),
+    )
+    items = inbox_view._stage4_approval_items('.', SID, Path('.'))
+    row = next(item for item in items if item.rule == 'stage4.design')
+    assert '可发 agent 的章 [1]' in row.how
+    assert 's4rr1_' + 'd' * 64 in row.how
+    assert '章 [1, 2] 也可从 design immutable workpack' in row.how
+    assert '--validate-edit <路径>' in row.how
+    assert '--apply-edit <路径>' in row.how
+    assert '不会把单章耗尽自动升级为整书 replan' in row.how
+
+
 def test_inbox_retains_disclosure_only_with_current_typed_structure_decision(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     subjects = _mixed_repair_subjects()
     decision = StructureApprovalDecision(
         actor='commander-reviewer', reason='已全章核对 INFO 与绑定担忧',
-        subject_sha256='a' * 64,
+        review_token='s4sr1_' + 'a' * 64,
         chapters=[{
             'output_ordinal': 1, 'decision': 'accept',
             'reason': '第 1 章已核对',
@@ -502,6 +569,7 @@ def test_inbox_retains_disclosure_only_with_current_typed_structure_decision(
     )
     current = StructureApprovalView(
         state='accepted', current_subject_sha256='a' * 64,
+        review_token='s4sr1_' + 'a' * 64,
         current_decision=decision, history=[decision])
     monkeypatch.setattr(
         inbox_view.approvals, 'get',
@@ -520,7 +588,10 @@ def test_inbox_retains_disclosure_only_with_current_typed_structure_decision(
     # get() 与 structure_workpack() 各自只读当前盘面，中间仍可能发生提交；
     # 旧决定绝不能给新 subject 的披露冒充 reviewed_retained。
     changed_workpack = _sample_workpack(disclosure=True).model_copy(
-        update={'subject_sha256': 'b' * 64})
+        update={
+            'subject_sha256': 'b' * 64,
+            'review_token': 's4sr1_' + 'b' * 64,
+        })
     monkeypatch.setattr(
         inbox_view.approvals, 'structure_workpack',
         lambda _base, _sid: changed_workpack)
@@ -532,6 +603,7 @@ def test_inbox_retains_disclosure_only_with_current_typed_structure_decision(
 
     expired = StructureApprovalView(
         state='expired', current_subject_sha256='f' * 64,
+        review_token='s4sr1_' + 'f' * 64,
         current_decision=None, history=[decision])
     monkeypatch.setattr(
         inbox_view.approvals, 'get',

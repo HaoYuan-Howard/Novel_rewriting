@@ -45,8 +45,10 @@ with code in this repository. **`CLAUDE.md` 是指向本文件的链接——要
 **跑书不要手拼命令**：完整操作规程是 `.workflow/skills/novel-pipeline-operator/SKILL.md`
 （`novel-pipeline-operator` skill）。CLI 子命令：`run` / `preview` / `state` / `inbox` /
 `operator` / `queue` / `queue-list` / `queue-cancel` / `queue-resume` / `jobs` / `reconcile` / `doctor` /
-`response-repair` / `approval` / `mark`。`operator next` 只回答当前三态与 blocker；已有 sid 的 node 动作
-必须再取 exact `operator permit` 并交 canonical runner，不能拿 blocked action hash 冒充恢复许可。
+`response-repair` / `approval` / `mark`。`operator next` 在同一份冻结快照上回答当前三态与
+blocker；`ready` 直接携带 exact execution token 交 canonical runner，不得再取一次 permit
+重扫全链。`operator permit` 只保留给 blocked recovery 与诊断兼容，不能拿 blocked
+action hash 冒充恢复许可。
 `preview` 是 0 成本的、且它给出的 argv 才是真跑那一条。
 
 ## 架构要点
@@ -137,7 +139,10 @@ provenance 的口相同。
 破坏形状就 `current_version` +1 并同批回答「存量产物由谁重建」，并在
 `tests/test_artifact_versions.py::_SHAPE_BREAKS` 里显式登记那一次破坏）。
 现役 `stage2/global_grounding.json` / `global_edit.json` 为 v4 / v3，
-`stage2/chapter_blueprints.json` 为 v6（2026-08-26 删除无下游作用的展示/过程字段）。
+`stage2/chapter_blueprints.json` 当前为 v7（新增分级叙事关系契约）。已冻结的
+v6 书不迁移、不手补新字段；只有与现存 Stage4A v1 truth、来源边及下游正式制品逐字闭合时，
+才走冻结只读兼容面供状态/审批/零 wire 完整章 edit，普通 producer、付费 repair/replan 与 Stage4B
+不得借此消费 v6。新 v7 只能由 producer 在 clean base 重建。
 Stage4 `blind_candidate.json` / `evidence_binding.json` 为 v2 / v3，
 `plan_chapters.json` / `plan_edit.json` 与 writer context 为 v4；identity artifact 已退役。旧 Stage4
 计划不迁移，必须先跑 `stage4.design`、再跑 `stage4.plan` 重建。Stage5 canonical 章稿、Review、
@@ -193,7 +198,8 @@ tests/contracts/tools/novel/docs 开头的仓内路径必须存在。文档引�
   联调要走通「页面动作 → API 方法 → HTTP 路由 → 服务实现 → 最终产物」并检查重启后的状态。
 - 语义判据在没有标定过真值前，倾向 `unver` / 人工裁决；**没有 ground truth 时多一条语义判据可能更危险**。
   本仓因此**不设**自动放行门：`stage6.semantic` 的双盲判官只产**带证据的 UNVER**，
-  收口一律走 `stage6.approve` 的 `actor + reason + 完整 subject SHA-256`。
+  收口一律走 `stage6.approve` 的 `actor + reason + opaque review_token`；完整 subject/workpack/
+  validation SHA 由服务端在同书锁内重建，不交调用方手搬。
   不要为了「让它变绿」去恢复 evaluator profile 那套装置——它已整批下线，
   连同 stage5 的收缩臂（超上限章现在零调用转人工）。
 - commit 用中文 Conventional Commit 主题（`feat(stage6): …` / `fix(cli): …` / `docs: …`），按 stage

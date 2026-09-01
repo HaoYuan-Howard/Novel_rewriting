@@ -26,7 +26,9 @@ ARTIFACT_PATHS: Final[dict[str, str]] = {
     'stage2.global_edit': 'stage2/global_edit.json',
     'stage2.blueprint_character_projection': 'stage2/blueprint_character_projection.json',
     'stage2.chapter_blueprints': 'stage2/chapter_blueprints.json',
+    'stage2.blueprint_relation_edit': 'stage2/blueprint_relation_edit.json',
     'stage4.blind_candidate': 'stage4/blind_candidate.json',
+    'stage4.blind_chapter_edit': 'stage4/blind_chapter_edit.json',
     'stage4.evidence_binding': 'stage4/evidence_binding.json',
     'stage4.plan_chapters': 'stage4/plan_chapters.json',
     'stage4.plan_edit': 'stage4/plan_edit.json',
@@ -100,8 +102,10 @@ STAGE2_GLOBAL_EDIT = artifact_rel('stage2.global_edit')
 STAGE2_BLUEPRINT_CHARACTER_PROJECTION = artifact_rel(
     'stage2.blueprint_character_projection')
 STAGE2_CHAPTER_BLUEPRINTS = artifact_rel('stage2.chapter_blueprints')
+STAGE2_BLUEPRINT_RELATION_EDIT = artifact_rel('stage2.blueprint_relation_edit')
 RETIRED_STAGE3_STYLE_GROUNDING = RETIRED_ARTIFACT_PATHS['stage3.style_grounding']
 STAGE4_BLIND_CANDIDATE = artifact_rel('stage4.blind_candidate')
+STAGE4_BLIND_CHAPTER_EDIT = artifact_rel('stage4.blind_chapter_edit')
 STAGE4_EVIDENCE_BINDING = artifact_rel('stage4.evidence_binding')
 STAGE4_PLAN_CHAPTERS = artifact_rel('stage4.plan_chapters')
 STAGE4_PLAN_EDIT = artifact_rel('stage4.plan_edit')

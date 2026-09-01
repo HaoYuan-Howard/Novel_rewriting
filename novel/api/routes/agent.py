@@ -103,9 +103,24 @@ def get_run_log(run_id: str, offset: int = Query(default=0, ge=0),
     return LogChunk(text=text, next_byte=nxt)
 
 
-@router.post('/{run_id}/stop', response_model=AgentRunRecord)
+@router.post('/{run_id}/stop', response_model=AgentRunRecord, status_code=202)
 def stop_run(run_id: str, base: str = Depends(get_base)) -> AgentRunRecord:
-    """熄火。**付费进程的必备闸**：精确找到该 run 的 Commander driver，
-    由供应商驱动结束它拥有的整棵进程树；路由层不猜平台命令。"""
+    """异步熄火。**202 只表示已受理**：精确 driver 先取消进程树，
+    worker 完成 claim/beacon drain 后才写最终 ended；路由层不用 10 秒超时
+    把“仍在安全收尾”伪报成失败。"""
     _one(base, run_id)
-    return agent.stop(base, run_id)
+    return agent.request_stop(base, run_id)
+
+
+@router.post('/{run_id}/pause', response_model=AgentRunRecord, status_code=202)
+def pause_run(run_id: str, base: str = Depends(get_base)) -> AgentRunRecord:
+    """异步暂停：立即挡住新 claim，已执行节点自然闭合后才进入 paused。"""
+    _one(base, run_id)
+    return agent.request_pause(base, run_id)
+
+
+@router.post('/{run_id}/resume', response_model=AgentRunRecord, status_code=202)
+def resume_run(run_id: str, base: str = Depends(get_base)) -> AgentRunRecord:
+    """只恢复本服务进程仍持有 writer/owner lease 的 paused run。"""
+    _one(base, run_id)
+    return agent.resume(base, run_id)

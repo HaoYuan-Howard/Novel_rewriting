@@ -58,6 +58,21 @@ _OWNERSHIP_THREAD_LOCKS: dict[str, threading.RLock] = {}
 _OWNERSHIP_LOCAL = threading.local()
 
 
+def _history_files(ctx: Any, pattern: str) -> tuple[Path, ...]:
+    """Stage5 service/legacy 只读合并，当前空间优先。"""
+    found: dict[str, Path] = {}
+    for root in paths.stage_run_read_roots(ctx.novel_dir, 'stage5'):
+        if not root.is_dir():
+            continue
+        for target in root.glob(pattern):
+            key = target.relative_to(root).as_posix()
+            prior = found.get(key)
+            if prior is not None:
+                continue
+            found[key] = target
+    return tuple(found[key] for key in sorted(found))
+
+
 @dataclass(frozen=True)
 class HistoricalPrepared:
     """通过 source 自身 code/profile/session/ledger 与当前请求双重校验的 checkpoint。"""
@@ -93,6 +108,10 @@ def _run_spec(chapter: int) -> agent_runs.SingleSessionRunSpec:
         run_path=lambda ctx: paths.stage5_chapter_run_path(
             ctx.novel_dir, ctx.run_id, ordinal),
         checkpoint_dir=lambda ctx: paths.stage5_chapter_checkpoint_dir(
+            ctx.novel_dir, ctx.run_id, ordinal),
+        legacy_run_path=lambda ctx: paths.legacy_stage5_chapter_run_path(
+            ctx.novel_dir, ctx.run_id, ordinal),
+        legacy_checkpoint_dir=lambda ctx: paths.legacy_stage5_chapter_checkpoint_dir(
             ctx.novel_dir, ctx.run_id, ordinal),
     )
 
@@ -289,21 +308,17 @@ def source_prepared_envelopes(
     source = check_run_id(source_run_id)
     if source == ctx.run_id:
         raise ProvenanceRefused('prepared recovery source run 必须不同于当前 target run')
-    root = Path(ctx.novel_dir) / paths.STAGE5_RUNS_DIRNAME / source
-    if not root.is_dir():
-        raise ProvenanceRefused(f'Stage5 source run={source} 不存在')
     out: dict[int, dict[str, Any]] = {}
-    for child in sorted(root.iterdir(), key=lambda path: path.name):
-        if not child.is_dir() or not child.name.startswith('ch'):
-            continue
-        suffix = child.name[2:]
+    targets = _history_files(ctx, f'{source}/ch*/{agent_runs.COMMIT_FILE}')
+    if not targets:
+        raise ProvenanceRefused(f'Stage5 source run={source} 不存在')
+    for target in targets:
+        child = target.parent
+        suffix = child.name[2:] if child.name.startswith('ch') else ''
         if len(suffix) != 4 or not suffix.isdigit() or int(suffix) < 1:
             raise ArtifactUnreadable(
                 f'Stage5 source run 含非 canonical 章节目录：{child}')
         ordinal = int(suffix)
-        target = child / agent_runs.COMMIT_FILE
-        if not target.is_file():
-            continue
         with process_append_lock(target):
             record = agent_runs.validate_foreign_commit_envelope(
                 target, label='Stage5 source commit', run_id=source,
@@ -456,13 +471,30 @@ def _validated_manifest(path: Path) -> PreparedRecoveryManifest:
     return manifest
 
 
+def _recovery_manifest_path(
+        novel_dir: Path, run_id: str, *, materialize: bool = True,
+) -> Path:
+    """target manifest 的 service 落点；legacy 只读原字节接入。"""
+    current = paths.stage5_prepared_recovery_manifest_path(novel_dir, run_id)
+    if current.is_file() or not materialize:
+        return current
+    legacy = paths.legacy_stage5_prepared_recovery_manifest_path(
+        novel_dir, run_id)
+    if not legacy.is_file():
+        return current
+    _validated_manifest(legacy)
+    with process_append_lock(current):
+        if not current.is_file():
+            agent_runs._atomic_bytes(current, legacy.read_bytes())
+    return current
+
+
 def write_recovery_manifest(
         ctx: Any, manifest: PreparedRecoveryManifest,
 ) -> Path:
     """首次 apply 原子落不可变 manifest；同 target run 只允许逐字幂等。"""
     require_workpack_subject(manifest.workpack)
-    target = paths.stage5_prepared_recovery_manifest_path(
-        ctx.novel_dir, ctx.run_id)
+    target = _recovery_manifest_path(ctx.novel_dir, ctx.run_id)
     if (manifest.workpack.target_run_id != ctx.run_id
             or manifest.workpack.target_code != ctx.code
             or manifest.workpack.sid != ctx.sid):
@@ -493,8 +525,7 @@ def write_recovery_manifest(
 
 
 def read_recovery_manifest(ctx: Any) -> PreparedRecoveryManifest | None:
-    target = paths.stage5_prepared_recovery_manifest_path(
-        ctx.novel_dir, ctx.run_id)
+    target = _recovery_manifest_path(ctx.novel_dir, ctx.run_id)
     if not target.is_file():
         return None
     manifest = _validated_manifest(target)
@@ -603,7 +634,15 @@ def recovery_state(ctx: Any, chapter: int) -> PreparedRecoveryJournal | None:
     target = paths.stage5_chapter_recovery_journal_path(
         ctx.novel_dir, ctx.run_id, ordinal)
     if not target.is_file():
-        return None
+        legacy = paths.legacy_stage5_chapter_recovery_journal_path(
+            ctx.novel_dir, ctx.run_id, ordinal)
+        if not legacy.is_file():
+            return None
+        # 先验 legacy，再原字节物化；后续 prepared -> committed 只写 service。
+        _validated_recovery_journal(legacy)
+        with process_append_lock(target):
+            if not target.is_file():
+                agent_runs._atomic_bytes(target, legacy.read_bytes())
     current = _validated_recovery_journal(target)
     if (current.sid != ctx.sid or current.node != 'stage5.write'
             or current.target_run_id != ctx.run_id or current.code != ctx.code):
@@ -615,13 +654,10 @@ def _matching_recovery_journals(
         ctx: Any, *, source_run_id: str, chapter: int,
         source_commit_sha256: str,
 ) -> list[tuple[Path, PreparedRecoveryJournal]]:
-    root = Path(ctx.novel_dir) / paths.STAGE5_RUNS_DIRNAME
     dirname = f'ch{_chapter(chapter):04d}'
     matches: list[tuple[Path, PreparedRecoveryJournal]] = []
-    if not root.is_dir():
-        return matches
-    for target in root.glob(
-            f'*/{dirname}/{paths.stage5_chapter_recovery_journal_path(ctx.novel_dir, ctx.run_id, chapter).name}'):
+    for target in _history_files(
+            ctx, f'*/{dirname}/prepared_recovery.json'):
         journal = _validated_recovery_journal(target)
         if journal.sid != ctx.sid or journal.node != 'stage5.write':
             raise ArtifactUnreadable(f'{target} recovery journal 跨书/节点')
@@ -802,7 +838,7 @@ def _recovery_manifest_closes_journal(
     current = manifest
     if current is None:
         current = _validated_manifest(
-            paths.stage5_prepared_recovery_manifest_path(
+            _recovery_manifest_path(
                 ctx.novel_dir, journal.target_run_id))
     rows = [
         row for row in current.workpack.chapters
@@ -835,7 +871,7 @@ def preclaim_recovery_adoption(
     current_manifest = manifest
     if current_manifest is None:
         current_manifest = _validated_manifest(
-            paths.stage5_prepared_recovery_manifest_path(
+            _recovery_manifest_path(
                 ctx.novel_dir, ctx.run_id))
     if (current_manifest.workpack.sid != ctx.sid
             or current_manifest.workpack.target_run_id != ctx.run_id
@@ -900,7 +936,7 @@ def preclaim_recovery_journal(
     ordinal = _chapter(journal.output_ordinal)
     _require_ownership(ctx, ordinal)
     manifest = _validated_manifest(
-        paths.stage5_prepared_recovery_manifest_path(
+        _recovery_manifest_path(
             ctx.novel_dir, journal.target_run_id))
     rows = [
         row for row in manifest.workpack.chapters
@@ -1327,18 +1363,15 @@ def refuse_foreign_commit_reservations(ctx: Any, chapter: int) -> None:
     """同章 foreign prepared 仅可由精确 committed recovery supersede。"""
     ordinal = _chapter(chapter)
     _require_ownership(ctx, ordinal)
-    root = Path(ctx.novel_dir) / paths.STAGE5_RUNS_DIRNAME
     current = _commit_spec(ordinal).commit_path(ctx).resolve()
-    if not root.is_dir():
-        return
     dirname = f'ch{ordinal:04d}'
-    for target in root.glob(f'*/{dirname}/{agent_runs.COMMIT_FILE}'):
-        if target.resolve() == current:
-            continue
+    for target in _history_files(ctx, f'*/{dirname}/{agent_runs.COMMIT_FILE}'):
         if target.parent.name != dirname:
             raise ProvenanceRefused(
                 f'Stage5 foreign commit 章节目录不闭合：{target}')
         run_id = target.parent.parent.name
+        if run_id == ctx.run_id or target.resolve() == current:
+            continue
         try:
             with process_append_lock(target):
                 record = agent_runs.validate_foreign_commit_envelope(
@@ -1383,11 +1416,8 @@ def refuse_foreign_prepared_before_wire(
             raise ProvenanceRefused(f'--chapters 含非整数：{chapters!r}') from exc
         if not selected:
             raise ProvenanceRefused('--chapters 不能为空')
-    root = Path(ctx.novel_dir) / paths.STAGE5_RUNS_DIRNAME
-    if not root.is_dir():
-        return
     found: set[int] = set()
-    for target in root.glob(f'*/ch*/{agent_runs.COMMIT_FILE}'):
+    for target in _history_files(ctx, f'*/ch*/{agent_runs.COMMIT_FILE}'):
         if target.parent.parent.name == ctx.run_id:
             continue
         suffix = target.parent.name[2:] if target.parent.name.startswith('ch') else ''

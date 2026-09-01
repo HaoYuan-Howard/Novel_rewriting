@@ -5,8 +5,10 @@
 正式 A/B Pydantic 形状在 :mod:`contracts.schema.stage4`；本模块只处理普通 dict，
 让运行时可以在模型响应载体之外复用同一套确定性投影、乐观锁与关闭式 join。
 
-``build_blind_projection`` 的两个返回值是安全边界：第一个才允许进入 A prompt；
-第二个含正式 fact/participant 引用，只能写进候选审计产物并交给 B/编译器。
+``build_blind_projection`` 返回 Commander 可审的完整盲真相（含 ``review`` 关系）
+与私有正式映射。Executor 只能消费 ``build_blind_executor_projection`` 或
+``build_blind_chapter_projection``：两者都会机械剔除 ``review``，只留下 HARD。
+第二个返回值含正式 fact/participant 引用，只能写进候选审计产物并交给 B/编译器。
 """
 from __future__ import annotations
 
@@ -26,9 +28,10 @@ from contracts.schema.stage2 import FACT_ID_PATTERN
 from novel.stages.stage4.checks import derive_effective_states
 
 
-BLIND_CONTRACT: Final = 'stage4-blind-truth-graph-v1'
+BLIND_CONTRACT: Final = 'stage4-blind-truth-graph-v2'
+FROZEN_V6_BLIND_CONTRACT: Final = 'stage4-blind-truth-graph-v1'
 BLIND_BOOK_STRATEGY_CONTRACT: Final = 'stage4-blind-book-strategy-v1'
-BLIND_CHAPTER_CONTRACT: Final = 'stage4-blind-chapter-v1'
+BLIND_CHAPTER_CONTRACT: Final = 'stage4-blind-chapter-v2'
 _ROOT_SHA1_RE: Final = re.compile(r'^[0-9a-f]{40}$')
 _SHA256_RE: Final = re.compile(r'^[0-9a-f]{64}$')
 _ALIAS_RE: Final = re.compile(r'^a_[0-9a-f]{16,64}$')
@@ -177,10 +180,12 @@ def _opaque_alias(root_clean_sha1: str, kind: str, owner: str) -> str:
     return 'a_' + _digest(root_clean_sha1, f'{kind}-alias', owner)[:16]
 
 
-def build_blind_projection(
+def _build_blind_projection(
     blueprints: object,
     *,
     root_clean_sha1: str,
+    contract: str,
+    include_narrative_relations: bool,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """构造 A 可见去序真相图与正式 alias 映射。
 
@@ -305,6 +310,84 @@ def build_blind_projection(
         if len(causal) != len({(edge['before_alias'], edge['after_alias']) for edge in causal}):
             raise BlindPlanError(f'ch{chapter}.causal_edges 不能重复')
 
+        narrative_relations: list[dict[str, str]] = []
+        relation_values = (
+            raw_chapter.get('narrative_relations', [])
+            if include_narrative_relations else []
+        )
+        for index, raw_relation in enumerate(_list(
+                relation_values,
+                f'ch{chapter}.narrative_relations')):
+            relation = _mapping(
+                raw_relation, f'ch{chapter}.narrative_relations[{index}]')
+            kind = _text(
+                relation.get('kind'),
+                f'ch{chapter}.narrative_relations[{index}].kind')
+            enforcement = _text(
+                relation.get('enforcement'),
+                f'ch{chapter}.narrative_relations[{index}].enforcement')
+            common = {'kind': kind, 'enforcement': enforcement}
+            if kind == 'story_before':
+                projected_relation = {
+                    **common,
+                    'before_alias': fact_alias(
+                        relation.get('before_fact_ref'),
+                        f'ch{chapter}.narrative_relations[{index}].before_fact_ref'),
+                    'after_alias': fact_alias(
+                        relation.get('after_fact_ref'),
+                        f'ch{chapter}.narrative_relations[{index}].after_fact_ref'),
+                }
+            elif kind == 'response_to':
+                projected_relation = {
+                    **common,
+                    'stimulus_alias': fact_alias(
+                        relation.get('stimulus_fact_ref'),
+                        f'ch{chapter}.narrative_relations[{index}].stimulus_fact_ref'),
+                    'response_alias': fact_alias(
+                        relation.get('response_fact_ref'),
+                        f'ch{chapter}.narrative_relations[{index}].response_fact_ref'),
+                }
+            elif kind == 'same_scene':
+                left = fact_alias(
+                    relation.get('left_fact_ref'),
+                    f'ch{chapter}.narrative_relations[{index}].left_fact_ref')
+                right = fact_alias(
+                    relation.get('right_fact_ref'),
+                    f'ch{chapter}.narrative_relations[{index}].right_fact_ref')
+                left, right = sorted((left, right))
+                projected_relation = {
+                    **common,
+                    'left_alias': left,
+                    'right_alias': right,
+                }
+            elif kind == 'observes':
+                observer = _text(
+                    relation.get('observer_char_id'),
+                    f'ch{chapter}.narrative_relations[{index}].observer_char_id')
+                observer_alias = participant_to_alias.get(observer)
+                if observer_alias is None:
+                    raise BlindPlanError(
+                        f'ch{chapter}.narrative_relations[{index}] '
+                        f'引用了本章事实未登记的人物 {observer}')
+                projected_relation = {
+                    **common,
+                    'observer_alias': observer_alias,
+                    'observed_alias': fact_alias(
+                        relation.get('observed_fact_ref'),
+                        f'ch{chapter}.narrative_relations[{index}].observed_fact_ref'),
+                    'observation_alias': fact_alias(
+                        relation.get('observation_fact_ref'),
+                        f'ch{chapter}.narrative_relations[{index}].observation_fact_ref'),
+                }
+            else:
+                raise BlindPlanError(
+                    f'ch{chapter}.narrative_relations[{index}] 含未知 kind {kind}')
+            narrative_relations.append(projected_relation)
+        narrative_relations.sort(key=lambda row: _canonical_bytes(row))
+        if len(narrative_relations) != len({
+                _canonical_bytes(row) for row in narrative_relations}):
+            raise BlindPlanError(f'ch{chapter}.narrative_relations 不能重复')
+
         def state_aliases(field: str) -> list[str]:
             refs = _unique_strings(raw_chapter.get(field, []), f'ch{chapter}.{field}')
             return sorted(fact_alias(ref, f'ch{chapter}.{field}') for ref in refs)
@@ -318,16 +401,19 @@ def build_blind_projection(
             chapter_function,
             formal_refs=formal_refs,
             where=f'ch{chapter}.chapter_function')
-        prompt_chapters.append({
+        projected_chapter = {
             'chapter_ordinal': chapter,
             'chapter_function': chapter_function,
             'facts': projected_atoms,
             'causal_edges': causal,
             'entry_state_aliases': state_aliases('entry_state_refs'),
             'ending_state_aliases': state_aliases('ending_state_refs'),
-        })
+        }
+        if include_narrative_relations:
+            projected_chapter['narrative_relations'] = narrative_relations
+        prompt_chapters.append(projected_chapter)
 
-    prompt = {'blind_contract': BLIND_CONTRACT, 'chapters': prompt_chapters}
+    prompt = {'blind_contract': contract, 'chapters': prompt_chapters}
     formal_mapping = {
         'alias_algorithm': BLIND_ALIAS_ALGORITHM,
         'truth_sha256': _sha256(prompt),
@@ -337,6 +423,42 @@ def build_blind_projection(
         },
     }
     return prompt, formal_mapping
+
+
+def build_blind_projection(
+    blueprints: object,
+    *,
+    root_clean_sha1: str,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """构造 current v2 盲真相；只接受含显式关系面的活动 Blueprint。"""
+    return _build_blind_projection(
+        blueprints,
+        root_clean_sha1=root_clean_sha1,
+        contract=BLIND_CONTRACT,
+        include_narrative_relations=True,
+    )
+
+
+def build_frozen_v6_blind_projection(
+    blueprints: object,
+    *,
+    root_clean_sha1: str,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """复刻 v6 当时的 v1 truth；只供旧候选/hash-bound 人工作品对证。
+
+    任何章已经含 ``narrative_relations`` 都拒绝，避免 current v7 借这个入口
+    丢弃关系后冒充历史主体。返回的 v1 truth 也不得进入普通 producer/wire。
+    """
+    rows = _blueprint_rows(blueprints)
+    if any('narrative_relations' in row for row in rows):
+        raise BlindPlanError(
+            '冻结 v6 blind projection 拒绝含 narrative_relations 的 Blueprint')
+    return _build_blind_projection(
+        blueprints,
+        root_clean_sha1=root_clean_sha1,
+        contract=FROZEN_V6_BLIND_CONTRACT,
+        include_narrative_relations=False,
+    )
 
 
 def _truth_chapter_rows(truth: object) -> dict[int, Mapping[str, Any]]:
@@ -360,6 +482,42 @@ def _truth_chapter_rows(truth: object) -> dict[int, Mapping[str, Any]]:
             raise BlindPlanError(f'blind_truth chapter_ordinal 重号：{chapter}')
         indexed[chapter] = row
     return indexed
+
+
+def build_blind_executor_projection(truth: object) -> dict[str, Any]:
+    """把 Commander 完整盲真相收窄成 Executor 可见的 HARD 投影。
+
+    ``review`` 关系是提醒审阅者核对的含糊语义，不是生成约束；静默把它发给
+    Executor 会让 Stage2 尚未确认的关系变成事实。这里仍完整校验 enforcement，
+    只做显式降维，不把未知值当作 review 吞掉。
+    """
+    raw = _mapping(truth, 'blind_truth')
+    chapters = _truth_chapter_rows(raw)
+    projected = copy.deepcopy(dict(raw))
+    projected_rows = {
+        int(row['chapter_ordinal']): row
+        for row in _list(projected.get('chapters'), 'blind_truth.chapters')
+    }
+    for chapter, source in chapters.items():
+        relations = _list(
+            source.get('narrative_relations', []),
+            f'ch{chapter}.narrative_relations')
+        kept: list[dict[str, Any]] = []
+        for index, value in enumerate(relations):
+            relation = _mapping(
+                value, f'ch{chapter}.narrative_relations[{index}]')
+            enforcement = _text(
+                relation.get('enforcement'),
+                f'ch{chapter}.narrative_relations[{index}].enforcement')
+            if enforcement not in {'hard', 'review'}:
+                raise BlindPlanError(
+                    f'ch{chapter}.narrative_relations[{index}].enforcement '
+                    f'必须是 hard/review，实得 {enforcement!r}')
+            if enforcement == 'hard':
+                kept.append(copy.deepcopy(dict(relation)))
+        projected_rows[chapter]['narrative_relations'] = kept
+    _canonical_bytes(projected)
+    return projected
 
 
 def build_blind_strategy_projection(truth: object) -> dict[str, Any]:
@@ -518,6 +676,67 @@ def build_blind_chapter_projection(
                 f'ch{chapter}.causal_edges[{index}] 含未知事实别名 {exc.args[0]}') from exc
     projected_edges.sort(key=lambda edge: (edge['before_alias'], edge['after_alias']))
 
+    projected_relations: list[dict[str, str]] = []
+    for index, value in enumerate(_list(
+            source.get('narrative_relations', []),
+            f'ch{chapter}.narrative_relations')):
+        relation = _mapping(value, f'ch{chapter}.narrative_relations[{index}]')
+        kind = _text(
+            relation.get('kind'), f'ch{chapter}.narrative_relations[{index}].kind')
+        common = {
+            'kind': kind,
+            'enforcement': _text(
+                relation.get('enforcement'),
+                f'ch{chapter}.narrative_relations[{index}].enforcement'),
+        }
+        if common['enforcement'] not in {'hard', 'review'}:
+            raise BlindPlanError(
+                f'ch{chapter}.narrative_relations[{index}].enforcement '
+                f'必须是 hard/review，实得 {common["enforcement"]!r}')
+        try:
+            if kind == 'story_before':
+                projected_relation = {
+                    **common,
+                    'before_alias': fact_to_local[str(relation['before_alias'])],
+                    'after_alias': fact_to_local[str(relation['after_alias'])],
+                }
+            elif kind == 'response_to':
+                projected_relation = {
+                    **common,
+                    'stimulus_alias': fact_to_local[str(relation['stimulus_alias'])],
+                    'response_alias': fact_to_local[str(relation['response_alias'])],
+                }
+            elif kind == 'same_scene':
+                left, right = sorted((
+                    fact_to_local[str(relation['left_alias'])],
+                    fact_to_local[str(relation['right_alias'])],
+                ))
+                projected_relation = {
+                    **common,
+                    'left_alias': left,
+                    'right_alias': right,
+                }
+            elif kind == 'observes':
+                projected_relation = {
+                    **common,
+                    'observer_alias': participant_to_local[
+                        str(relation['observer_alias'])],
+                    'observed_alias': fact_to_local[str(relation['observed_alias'])],
+                    'observation_alias': fact_to_local[
+                        str(relation['observation_alias'])],
+                }
+            else:
+                raise BlindPlanError(
+                    f'ch{chapter}.narrative_relations[{index}] 含未知 kind {kind}')
+        except KeyError as exc:
+            raise BlindPlanError(
+                f'ch{chapter}.narrative_relations[{index}] 含未知别名 '
+                f'{exc.args[0]}') from exc
+        # review 关系只属于 Commander workpack；Executor 的单章 truth 不得看见。
+        if common['enforcement'] == 'hard':
+            projected_relations.append(projected_relation)
+    projected_relations.sort(key=lambda row: _canonical_bytes(row))
+
     def project_states(field: str) -> list[str]:
         aliases = _unique_strings(source.get(field), f'ch{chapter}.{field}')
         try:
@@ -534,6 +753,7 @@ def build_blind_chapter_projection(
                 source.get('chapter_function'), f'ch{chapter}.chapter_function'),
             'facts': projected_facts,
             'causal_edges': projected_edges,
+            'narrative_relations': projected_relations,
             'entry_state_aliases': project_states('entry_state_aliases'),
             'ending_state_aliases': project_states('ending_state_aliases'),
         },
@@ -933,6 +1153,44 @@ def compile_blind_chapter_design(
         fact_aliases=formal_facts,
         chapter_entry_refs=list(source.get('entry_state_aliases') or []),
         where=f'ch{chapter}.translated_response',
+    )
+
+
+def compile_blind_chapter_edit(
+    response: object,
+    formal_mapping: object,
+    *,
+    truth_chapter: object,
+    expected_weight: str,
+) -> dict[str, Any]:
+    """把一份完整 global-alias 人工章稿编译成正式候选章。
+
+    人工路不能手填 ``candidate_scene_id`` 或跳过状态派生；它与模型章稿共用
+    :func:`_compile_global_blind_chapter`，由场景数组顺序重铸 id，并调用同一
+    ``derive_effective_states``。章号与 weight 都是当前策略身份的一部分，编辑稿只能
+    复述，不能借完整章替换顺带改策略。
+    """
+    source = _mapping(truth_chapter, 'truth_chapter')
+    chapter = _ordinal(
+        source.get('chapter_ordinal'), 'truth_chapter.chapter_ordinal')
+    raw = _mapping(response, f'ch{chapter}.human_chapter_edit')
+    response_chapter = _ordinal(
+        raw.get('output_ordinal'),
+        f'ch{chapter}.human_chapter_edit.output_ordinal')
+    if response_chapter != chapter:
+        raise BlindPlanError(
+            f'人工完整章属于第 {response_chapter} 章，truth_chapter 却是第 {chapter} 章')
+    weight = _text(expected_weight, 'expected_weight')
+    if raw.get('weight') != weight:
+        raise BlindPlanError(
+            f'ch{chapter} 人工完整章 weight 与当前策略不一致：'
+            f'expected={weight!r}, got={raw.get("weight")!r}')
+    _truth_sha, formal_facts, _participants = _formal_maps(formal_mapping)
+    return _compile_global_blind_chapter(
+        raw,
+        fact_aliases=formal_facts,
+        chapter_entry_refs=list(source.get('entry_state_aliases') or []),
+        where=f'ch{chapter}.human_chapter_edit',
     )
 
 
@@ -1498,9 +1756,12 @@ def merge_evidence_bindings(
 
 
 __all__ = [
-    'BLIND_CONTRACT', 'BLIND_BOOK_STRATEGY_CONTRACT',
+    'BLIND_CONTRACT', 'FROZEN_V6_BLIND_CONTRACT',
+    'BLIND_BOOK_STRATEGY_CONTRACT',
     'BLIND_CHAPTER_CONTRACT', 'BlindPlanError',
-    'build_blind_projection', 'build_blind_strategy_projection',
+    'build_blind_projection', 'build_frozen_v6_blind_projection',
+    'build_blind_executor_projection',
+    'build_blind_strategy_projection',
     'build_blind_chapter_projection',
     'compile_blind_candidate', 'compile_blind_chapter_design',
     'assemble_blind_candidate',

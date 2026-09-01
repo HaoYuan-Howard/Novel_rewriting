@@ -247,7 +247,7 @@ describe('Stage4 typed 结构审批', () => {
     await user.click(screen.getByRole('button', { name: '保存全书结构裁决' }))
 
     await waitFor(() => expect(approve).toHaveBeenCalledWith('book-1', {
-      subject_sha256: SUBJECT,
+      review_token: 's4sr1_' + 'f'.repeat(64),
       actor: 'reviewer-a',
       reason: '已逐章核对结构报告',
       chapters: [

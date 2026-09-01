@@ -6,7 +6,8 @@ from pathlib import Path
 import pytest
 
 from contracts.schema.orchestration import (
-    AgentProfile, AgentRunRecord, AgentRunStart, PipelineAgentProfiles,
+    AgentProfile, AgentRunRecord, AgentRunStart, ExecutionEpoch,
+    PipelineAgentProfiles, RunContractV2,
 )
 from novel import commander_context, skill_contract
 from novel.errors import TerminalState
@@ -47,7 +48,8 @@ def _start(base: Path, **changes) -> AgentRunStart:
 def _record(start: AgentRunStart, run_id: str = 'commander-1') -> AgentRunRecord:
     return AgentRunRecord(
         run_id=run_id, start=start, started=1,
-        ended=None, exit_code=None, state='running')
+        ended=None, exit_code=None, state='running',
+        allowed_controls=['stop'])
 
 
 def test_context_env_is_only_a_pointer_and_round_trips_the_started_snapshot(
@@ -68,6 +70,50 @@ def test_context_env_is_only_a_pointer_and_round_trips_the_started_snapshot(
     serialized_env = '\n'.join(f'{key}={value}' for key, value in env.items())
     assert 'claude-opus-5' not in serialized_env
     assert 'gpt-5.6-sol' not in serialized_env
+
+
+def test_v2_parent_compatibility_snapshots_do_not_override_epoch_identity(
+        tmp_path, monkeypatch):
+    """parent hash 固定 started 字节；执行 currentness 只认当前 epoch。"""
+    initial = _start(
+        tmp_path, argv=['old-commander', '-'], prompt='首次启动提示',
+        code_version='code-v1', skill_sha256='0' * 64)
+    contract = RunContractV2(**initial.model_dump(mode='json'))
+    assert contract.model_dump(mode='json') == {
+        'wire_version': 2,
+        'sid': initial.sid,
+        'base': initial.base,
+        'authorized': True,
+        'egress_authorized': True,
+        'profiles': initial.profiles.model_dump(mode='json'),
+    }
+    current_skill = skill_contract.package_sha256()
+    epoch = ExecutionEpoch(
+        epoch_id='epoch-v2', ordinal=2, reason='code_change',
+        argv=['new-commander', '-'], prompt_sha256='1' * 64,
+        protocol_version='commander-v2', cli_version='cli-v2',
+        code_version='code-v2', skill_sha256=current_skill,
+        session_run_id='session-v2')
+    record = AgentRunRecord(
+        run_id='commander-v2', start=initial, contract=contract,
+        epochs=[epoch], active_epoch_id=epoch.epoch_id,
+        started=1, ended=None, exit_code=None, state='running',
+        allowed_controls=['pause', 'stop'])
+    env = commander_context.env_with_context(
+        run_id=record.run_id, base=tmp_path, start=initial,
+        contract=contract, epoch=epoch, admission_id=epoch.epoch_id, env={})
+    parent_sha = env[commander_context.COMMANDER_CONTRACT_SHA256_ENV]
+    monkeypatch.setattr(commander_context.prov, 'code_version', lambda: 'code-v2')
+
+    loaded = commander_context.load_from_environment(
+        tmp_path, '42', env=env, records=[record])
+
+    assert loaded is not None and loaded.epoch == epoch
+    assert loaded.start.code_version == 'code-v1'
+    assert loaded.start.skill_sha256 == '0' * 64
+    assert loaded.contract_sha256 == parent_sha
+    assert commander_context.contract_v2_sha256(
+        run_id=record.run_id, base=tmp_path, contract=contract) == parent_sha
 
 
 @pytest.mark.parametrize('mutation,match', [

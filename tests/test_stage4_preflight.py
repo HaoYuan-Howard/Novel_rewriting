@@ -21,6 +21,7 @@ from typing import Any
 
 import pytest
 
+from contracts.invariants import DESIGN_REVIEW_CONTRACT
 from contracts.rules import REGISTRY
 from novel import prov
 from novel.errors import TerminalState
@@ -61,7 +62,7 @@ def test_preflight_pass_on_clean_book_and_writes_nothing(tmp_path: Path) -> None
     assert report.candidate_sha256 == candidate_subject_sha256(
         candidate.model_dump(by_alias=True, mode='json', exclude={'provenance'}))
     assert len(report.blueprint_sha256) == 64
-    assert report.review_contract == 'stage4-design-review-v2'
+    assert report.review_contract == DESIGN_REVIEW_CONTRACT
     # 预检是纯内存结论：一个字节都不落盘。
     assert before == after
     # 绑定身份与失败投影可序列化，且不含模型正文（无 prose 键）。

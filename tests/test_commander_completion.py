@@ -35,7 +35,7 @@ def test_blocked_is_a_legal_zero_model_stop(monkeypatch):
     assert reviewed.outcome.reason == '原始 fresh delivery 结论'
 
 
-def test_ready_is_recorded_as_commander_early_exit(monkeypatch):
+def test_ready_is_marked_for_supervisor_exact_resume(monkeypatch):
     action = SimpleNamespace(
         node='stage4.design', flags=['--replan'], action_sha256='a' * 64)
     monkeypatch.setattr(
@@ -46,7 +46,8 @@ def test_ready_is_recorded_as_commander_early_exit(monkeypatch):
     assert reviewed.error_kind == completion.EARLY_EXIT_ERROR_KIND
     assert reviewed.outcome.state == 'stopped'
     assert 'stage4.design --replan' in reviewed.outcome.reason
-    assert '没有自动恢复' in reviewed.outcome.reason
+    assert '精确续会' in reviewed.outcome.reason
+    assert reviewed.continue_ready is True
 
 
 def test_pipeline_complete_but_delivery_stopped_is_early_exit(monkeypatch):

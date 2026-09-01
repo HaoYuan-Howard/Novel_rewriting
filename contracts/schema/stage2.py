@@ -33,9 +33,11 @@ from pydantic import Field, StringConstraints, model_validator
 
 from contracts.invariants import (
     ADDRESS_BY, ADDRESS_CONTEXT, BLUEPRINT_ARCHITECTURES,
+    BLUEPRINT_RELATION_REVIEW_CONTRACT,
     FACT_ATOM_KINDS, FACT_ATOM_OBLIGATIONS, HINGE_KINDS,
     KNOWLEDGE_SUBJECT_KINDS, RELATION_VISIBILITY_KINDS, SECRET_SETUP_KINDS,
     NAME_DISTINCTIVENESS, NARRATIVE_PERSON, RESPONSE_TIME_LAYERS,
+    NARRATIVE_RELATION_ENFORCEMENTS, NARRATIVE_RELATION_KINDS,
     TIME_LAYERS, WORLD_RULE_KINDS,
 )
 from contracts.schema.base import Fp10, StrictModel
@@ -1114,6 +1116,72 @@ class CausalEdge(StrictModel):
     after: str = Field(pattern=FACT_ID_PATTERN)
 
 
+class StoryBeforeRelation(StrictModel):
+    """两个事实在故事世界中的真实先后；不是未来披露顺序。"""
+
+    kind: Literal[NARRATIVE_RELATION_KINDS[0]]
+    enforcement: Literal[tuple(NARRATIVE_RELATION_ENFORCEMENTS)]
+    before_fact_ref: str = Field(pattern=FACT_ID_PATTERN)
+    after_fact_ref: str = Field(pattern=FACT_ID_PATTERN)
+
+
+class ResponseToRelation(StrictModel):
+    """一条回应必须仍指向它真正回应的刺激事实。"""
+
+    kind: Literal[NARRATIVE_RELATION_KINDS[1]]
+    enforcement: Literal[tuple(NARRATIVE_RELATION_ENFORCEMENTS)]
+    stimulus_fact_ref: str = Field(pattern=FACT_ID_PATTERN)
+    response_fact_ref: str = Field(pattern=FACT_ID_PATTERN)
+
+
+class SameSceneRelation(StrictModel):
+    """语义上不可拆场的一对事实；左右端点按 fact id 规范排序。"""
+
+    kind: Literal[NARRATIVE_RELATION_KINDS[2]]
+    enforcement: Literal[tuple(NARRATIVE_RELATION_ENFORCEMENTS)]
+    left_fact_ref: str = Field(pattern=FACT_ID_PATTERN)
+    right_fact_ref: str = Field(pattern=FACT_ID_PATTERN)
+
+    @model_validator(mode='after')
+    def _pair_is_canonical(self) -> SameSceneRelation:
+        if self.left_fact_ref >= self.right_fact_ref:
+            raise ValueError('same_scene 端点必须按 fact_ref 严格升序规范化')
+        return self
+
+
+class ObservesRelation(StrictModel):
+    """某人物通过一条观察事实见证另一条事实。"""
+
+    kind: Literal[NARRATIVE_RELATION_KINDS[3]]
+    enforcement: Literal[tuple(NARRATIVE_RELATION_ENFORCEMENTS)]
+    observer_char_id: str = Field(min_length=1)
+    observed_fact_ref: str = Field(pattern=FACT_ID_PATTERN)
+    observation_fact_ref: str = Field(pattern=FACT_ID_PATTERN)
+
+
+NarrativeRelation = Annotated[
+    StoryBeforeRelation | ResponseToRelation | SameSceneRelation | ObservesRelation,
+    Field(discriminator='kind'),
+]
+
+
+def narrative_relation_sort_key(relation: NarrativeRelation) -> tuple[str, ...]:
+    """关系集合的唯一规范顺序；hash-bound review/edit 与 producer 共用。"""
+    if relation.kind == 'story_before':
+        refs = (relation.before_fact_ref, relation.after_fact_ref)
+    elif relation.kind == 'response_to':
+        refs = (relation.stimulus_fact_ref, relation.response_fact_ref)
+    elif relation.kind == 'same_scene':
+        refs = (relation.left_fact_ref, relation.right_fact_ref)
+    else:
+        refs = (
+            relation.observer_char_id,
+            relation.observed_fact_ref,
+            relation.observation_fact_ref,
+        )
+    return (relation.kind, *refs, relation.enforcement)
+
+
 class Narration(StrictModel):
     """一段叙述。**盘上 31 章全是单段，所以多段分支整段是零样本。**
 
@@ -1164,6 +1232,7 @@ class Blueprint(StrictModel):
     #: 章级语义真相。`land` 原子必须在 Stage4 恰落一个场景，`context` 原子可复用。
     fact_atoms: list[FactAtom] = Field(min_length=1)
     causal_edges: list[CausalEdge]
+    narrative_relations: list[NarrativeRelation]
     entry_state_refs: list[str]
     ending_state_refs: list[str]
 
@@ -1173,6 +1242,9 @@ class Blueprint(StrictModel):
     @model_validator(mode='after')
     def _semantic_refs_are_closed(self) -> Blueprint:
         fact_ids = [fact.fact_id for fact in self.fact_atoms]
+        if self.narrative_relations != sorted(
+                self.narrative_relations, key=narrative_relation_sort_key):
+            raise ValueError('narrative_relations 必须按 kind/端点/enforcement 规范排序')
         if len(fact_ids) != len(set(fact_ids)):
             raise ValueError('fact_atom.fact_id 必须在章内唯一')
         beat_ids = {beat.beat_id for beat in self.beats}
@@ -1182,12 +1254,72 @@ class Blueprint(StrictModel):
             raise ValueError(f'fact_atom 引用了本章外或不存在的 beat：{bad_beats}')
         refs = set(fact_ids)
         used = [ref for edge in self.causal_edges for ref in (edge.before, edge.after)]
+        relation_keys: list[tuple[object, ...]] = []
+        story_edges: list[tuple[str, str]] = [
+            (edge.before, edge.after) for edge in self.causal_edges]
+        observers = {
+            char_id
+            for beat in self.beats for char_id in beat.present_char_ids
+        } | {
+            char_id
+            for fact in self.fact_atoms for char_id in fact.participant_char_ids
+        }
+        participants_by_fact = {
+            fact.fact_id: set(fact.participant_char_ids) for fact in self.fact_atoms
+        }
+        for relation in self.narrative_relations:
+            if relation.kind == 'story_before':
+                pair = (relation.before_fact_ref, relation.after_fact_ref)
+                used.extend(pair)
+                story_edges.append(pair)
+                key = (relation.kind, *pair)
+            elif relation.kind == 'response_to':
+                pair = (relation.stimulus_fact_ref, relation.response_fact_ref)
+                used.extend(pair)
+                key = (relation.kind, *pair)
+            elif relation.kind == 'same_scene':
+                pair = (relation.left_fact_ref, relation.right_fact_ref)
+                used.extend(pair)
+                key = (relation.kind, *pair)
+            else:
+                pair = (relation.observed_fact_ref, relation.observation_fact_ref)
+                used.extend(pair)
+                if relation.observer_char_id not in observers:
+                    raise ValueError(
+                        f'observes 的 observer 不在本章人物闭集：'
+                        f'{relation.observer_char_id}')
+                if relation.observer_char_id not in participants_by_fact.get(
+                        relation.observation_fact_ref, set()):
+                    raise ValueError('observes 的 observation fact 必须把 observer 列为参与者')
+                key = (relation.kind, relation.observer_char_id, *pair)
+            if pair[0] == pair[1]:
+                raise ValueError(f'{relation.kind} 不能自环')
+            relation_keys.append(key)
+        if len(relation_keys) != len(set(relation_keys)):
+            raise ValueError('narrative_relations 不能重复或只用 enforcement 制造重复')
         used += list(self.entry_state_refs) + list(self.ending_state_refs)
         missing = sorted(set(used) - refs)
         if missing:
             raise ValueError(f'章级语义引用不存在：{missing}')
         if any(edge.before == edge.after for edge in self.causal_edges):
             raise ValueError('causal_edge 不能自环')
+        graph: dict[str, set[str]] = {fact_id: set() for fact_id in fact_ids}
+        indegree = {fact_id: 0 for fact_id in fact_ids}
+        for before, after in story_edges:
+            if after not in graph[before]:
+                graph[before].add(after)
+                indegree[after] += 1
+        queue = [fact_id for fact_id, degree in indegree.items() if degree == 0]
+        seen = 0
+        while queue:
+            current = queue.pop()
+            seen += 1
+            for after in graph[current]:
+                indegree[after] -= 1
+                if indegree[after] == 0:
+                    queue.append(after)
+        if seen != len(fact_ids):
+            raise ValueError('causal_edges 与 story_before 合并后存在时序环')
         entry = set(self.entry_state_refs)
         ending = set(self.ending_state_refs)
         obligation = {fact.fact_id: fact.obligation for fact in self.fact_atoms}
@@ -1212,6 +1344,48 @@ class FactAtomResponse(StrictModel):
 class CausalEdgeResponse(StrictModel):
     before: str = Field(pattern=ATOM_KEY_PATTERN)
     after: str = Field(pattern=ATOM_KEY_PATTERN)
+
+
+class StoryBeforeRelationResponse(StrictModel):
+    kind: Literal[NARRATIVE_RELATION_KINDS[0]]
+    enforcement: Literal[NARRATIVE_RELATION_ENFORCEMENTS[1]]
+    before_fact_ref: str = Field(pattern=ATOM_KEY_PATTERN)
+    after_fact_ref: str = Field(pattern=ATOM_KEY_PATTERN)
+
+
+class ResponseToRelationResponse(StrictModel):
+    kind: Literal[NARRATIVE_RELATION_KINDS[1]]
+    enforcement: Literal[NARRATIVE_RELATION_ENFORCEMENTS[1]]
+    stimulus_fact_ref: str = Field(pattern=ATOM_KEY_PATTERN)
+    response_fact_ref: str = Field(pattern=ATOM_KEY_PATTERN)
+
+
+class SameSceneRelationResponse(StrictModel):
+    kind: Literal[NARRATIVE_RELATION_KINDS[2]]
+    enforcement: Literal[NARRATIVE_RELATION_ENFORCEMENTS[1]]
+    left_fact_ref: str = Field(pattern=ATOM_KEY_PATTERN)
+    right_fact_ref: str = Field(pattern=ATOM_KEY_PATTERN)
+
+    @model_validator(mode='after')
+    def _pair_is_canonical(self) -> SameSceneRelationResponse:
+        if self.left_fact_ref >= self.right_fact_ref:
+            raise ValueError('same_scene 端点必须按 atom_key 严格升序规范化')
+        return self
+
+
+class ObservesRelationResponse(StrictModel):
+    kind: Literal[NARRATIVE_RELATION_KINDS[3]]
+    enforcement: Literal[NARRATIVE_RELATION_ENFORCEMENTS[1]]
+    observer_char_id: str = Field(min_length=1)
+    observed_fact_ref: str = Field(pattern=ATOM_KEY_PATTERN)
+    observation_fact_ref: str = Field(pattern=ATOM_KEY_PATTERN)
+
+
+NarrativeRelationResponse = Annotated[
+    StoryBeforeRelationResponse | ResponseToRelationResponse
+    | SameSceneRelationResponse | ObservesRelationResponse,
+    Field(discriminator='kind'),
+]
 
 
 class HingeResponseV2(StrictModel):
@@ -1281,6 +1455,7 @@ class BlueprintResponseV2Refs(StrictModel):
     chapter_function: str = Field(min_length=1)
     beats: list[BeatResponseV2Refs] = Field(min_length=1)
     causal_edges: list[CausalEdgeResponse]
+    narrative_relations: list[NarrativeRelationResponse]
     entry_state_refs: list[str]
     ending_state_refs: list[str]
     narration: list[NarrationResponseRefs] = Field(min_length=1)
@@ -1335,6 +1510,7 @@ class ScaffoldedBlueprintResponseV31(StrictModel):
     micro_events: list[MicroEventResponse] = Field(min_length=1)
     beats: list[BeatResponseV31Refs] = Field(min_length=1)
     causal_edges: list[CausalEdgeResponse]
+    narrative_relations: list[NarrativeRelationResponse]
     entry_state_refs: list[str]
     ending_state_refs: list[str]
     narration: list[NarrationResponseRefs] = Field(min_length=1)
@@ -1390,6 +1566,39 @@ class BlueprintScopeViolation(StrictModel):
     produced: list[int]
     discarded_chapters: list[int]
     duplicate_target: int
+
+
+class BlueprintRelationChapterEdit(StrictModel):
+    """指定章的完整关系集合；不是字段级 patch。"""
+
+    chapter_ordinal: int = Field(ge=1)
+    narrative_relations: list[NarrativeRelation]
+
+
+class BlueprintRelationEdit(StrictModel):
+    """Stage2 关系的 hash-bound、零模型人工修订请求。"""
+
+    actor: str = Field(min_length=1)
+    reason: str = Field(min_length=1)
+    review_token: str = Field(pattern=r'^brt1_[0-9a-f]{64}$')
+    review_contract_version: Literal[BLUEPRINT_RELATION_REVIEW_CONTRACT] = (
+        BLUEPRINT_RELATION_REVIEW_CONTRACT)
+    chapters: list[BlueprintRelationChapterEdit] = Field(min_length=1)
+
+    @model_validator(mode='after')
+    def _chapters_are_canonical(self) -> BlueprintRelationEdit:
+        if not self.actor.strip() or not self.reason.strip():
+            raise ValueError('Blueprint relation edit 的 actor/reason 不能只含空白')
+        ordinals = [row.chapter_ordinal for row in self.chapters]
+        if ordinals != sorted(set(ordinals)):
+            raise ValueError('Blueprint relation edit 章号必须升序且不重复')
+        for chapter in self.chapters:
+            if chapter.narrative_relations != sorted(
+                    chapter.narrative_relations,
+                    key=narrative_relation_sort_key):
+                raise ValueError(
+                    f'Blueprint relation edit 第 {chapter.chapter_ordinal} 章关系未规范排序')
+        return self
 
 
 class BlueprintProvenance(LlmProvenance):

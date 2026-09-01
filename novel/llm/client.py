@@ -666,7 +666,8 @@ class LlmClient:
         self._adopt_lock = threading.Lock()
         self._accepted: dict[str, str] = {}
         #: 章节检查点所需的 accepted-channel 原文与精确成本联结。它只在内存里活到
-        #: producer 把验证后的 payload 原子写进书内 `_stage2_runs/`；不进普通 cache。
+        #: producer 把验证后的 payload 原子写进按书隔离的
+        #: `_service/runs/<sid>/stage2/`；不进普通 cache 或正式产物。
         self._accepted_checkpoint: dict[str, dict[str, Any]] = {}
 
     # ── 两个入口 ──────────────────────────────────────────────────────────

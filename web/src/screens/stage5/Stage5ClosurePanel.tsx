@@ -712,13 +712,17 @@ function Stage5ClosureForm({
                 void onSubmit({
                   actor: actor.trim(),
                   reason: reason.trim(),
-                  workpack_sha256: template.workpack_sha256,
-                  review_sha256: template.review_sha256,
+                  review_token: template.review_token,
                   must_appear: decisions.map((row) => ({
-                    ...row,
+                    chapter_ordinal: row.chapter_ordinal,
+                    evidence_key: row.evidence_key,
+                    ruling: row.ruling,
                     reason: row.reason.trim(),
                   })),
-                  group_acks: acks,
+                  group_acks: acks.map((row) => ({
+                    group: row.group,
+                    acknowledged: true,
+                  })),
                 })
               }}
             >

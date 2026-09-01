@@ -96,8 +96,8 @@ def test_stage7_edit_template_is_stdout_only_and_round_trips(
     assert list(novel_dir.iterdir()) == []
 
 
-def test_stage7_approve_cli_forwards_both_hash_bound_locks(monkeypatch):
-    """预览列出的两把锁必须真的穿过 CLI；否则正式命令会在落盘前 exit 70。"""
+def test_stage7_approve_cli_forwards_the_opaque_review_token(monkeypatch):
+    """预览列出的 opaque token 必须真的穿过 CLI。"""
     from novel.cli import main as M
     from novel.stages.stage7 import rename
 
@@ -113,8 +113,7 @@ def test_stage7_approve_cli_forwards_both_hash_bound_locks(monkeypatch):
     ctx = SimpleNamespace(node='stage7.approve')
     flags = [
         '--actor', 'reviewer-a', '--reason', '逐项核验完成',
-        '--subject-sha256', 'a' * 64,
-        '--workpack-sha256', 'b' * 64,
+        '--review-token', 's7r3_' + 'b' * 64,
     ]
 
     assert M._run_stage7(ctx, flags) == X.OK
@@ -122,12 +121,35 @@ def test_stage7_approve_cli_forwards_both_hash_bound_locks(monkeypatch):
         'ctx': ctx,
         'actor': 'reviewer-a',
         'reason': '逐项核验完成',
-        'subject_sha256': 'a' * 64,
-        'workpack_sha256': 'b' * 64,
+        'review_token': 's7r3_' + 'b' * 64,
     }
 
-    with pytest.raises(TerminalState, match='--workpack-sha256'):
+    with pytest.raises(TerminalState, match='--review-token'):
         M._run_stage7(ctx, flags[:-2])
+
+
+def test_stage6_and_stage7_rebind_flags_dispatch_only_to_zero_wire_recovery(
+        monkeypatch) -> None:
+    """同一个无值 flag 必须命中两层显式迁移口，不能跌回默认付费 producer。"""
+    from novel.cli import main as M
+    from novel.stages.stage6 import hook
+    from novel.stages.stage7 import rename
+
+    report = SimpleNamespace(passed=True)
+    calls: list[tuple[str, object]] = []
+    monkeypatch.setattr(
+        hook, 'run_rebind_review',
+        lambda ctx: calls.append(('stage6', ctx)) or (object(), report))
+    monkeypatch.setattr(
+        rename, 'run_rebind_review',
+        lambda ctx: calls.append(('stage7', ctx)) or (object(), report))
+    monkeypatch.setattr(M, 'render', lambda actual: 'REPORT' if actual is report else '')
+    stage6_ctx = SimpleNamespace(node='stage6.hook')
+    stage7_ctx = SimpleNamespace(node='stage7.rename')
+
+    assert M._run_stage6(stage6_ctx, ['--rebind-review']) == X.OK
+    assert M._run_stage7(stage7_ctx, ['--rebind-review']) == X.OK
+    assert calls == [('stage6', stage6_ctx), ('stage7', stage7_ctx)]
 
 
 def test_stage2_emit_review_template_binds_current_rows_and_stays_closed(
@@ -511,7 +533,8 @@ def test_batch_repair_resumes_with_the_manifest_run_id_and_original_flags(
     from novel.cli import main as M
     from novel.llm import stage2_runs
 
-    target = tmp_path / 'book' / '_stage2_runs' / 'manifest-run' / 'blueprint' / 'batch_resolution.json'
+    target = (tmp_path / '_service' / 'runs' / 'book' / 'stage2'
+              / 'manifest-run' / 'blueprint' / 'batch_resolution.json')
     submitted: list[tuple[object, ...]] = []
     monkeypatch.setattr(M.paths, 'resolve_novel_dir', lambda *_args: tmp_path / 'book')
     monkeypatch.setattr(
@@ -703,10 +726,12 @@ def test_stage4_replan_requires_a_current_strategy_rejection_and_refreshes_only_
         plan, 'run_plan',
         lambda *_args, **_kwargs: pytest.fail('replan 只产 A，不得自动串 B'))
 
-    assert N.is_paid('stage4.design', ['--replan']) is True
-    assert M._run_stage4(ctx, ['--replan']) == X.OK
+    token = 's4rr1_' + 'a' * 64
+    flags = ['--replan', '--review-token', token]
+    assert N.is_paid('stage4.design', flags) is True
+    assert M._run_stage4(ctx, flags) == X.OK
     assert events == [('refresh-write', 'design-client')]
-    assert resolved == [(tmp_path, '123', None, 'replan')]
+    assert resolved == [(tmp_path, '123', token, 'replan')]
 
 
 def test_profiled_stage4_replan_passes_the_resolved_scope_to_agent(
@@ -739,7 +764,9 @@ def test_profiled_stage4_replan_passes_the_resolved_scope_to_agent(
         node_agents, 'build_node_agent',
         lambda _ctx, **kwargs: captured.append(kwargs) or Agent())
 
-    assert M._dispatch('stage4.design', ctx, ['--replan']) == X.OK
+    assert M._dispatch(
+        'stage4.design', ctx,
+        ['--replan', '--review-token', 's4rr1_' + 'a' * 64]) == X.OK
     assert captured == [{
         'concurrency': DEFAULT_CONCURRENCY,
         'repair_decision_sha256': None,
@@ -755,7 +782,7 @@ def test_targeted_design_preview_refuses_legacy_executor_before_rendering(
         M.paths, 'resolve_novel_dir', lambda _base, _sid: tmp_path / 'book')
     rc = _run(
         'preview', 'stage4.design', '123',
-        '--repair-decision', 'a' * 64, '--base', str(tmp_path))
+        '--review-token', 's4rr1_' + 'a' * 64, '--base', str(tmp_path))
 
     assert rc == X.TERMINAL_STATE
     err = capsys.readouterr().err

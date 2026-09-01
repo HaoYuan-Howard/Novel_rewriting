@@ -391,21 +391,24 @@ def _dispatch(node: str, ctx: RunContext, flags: list[str]) -> int:
                 from novel.orchestrator import approvals
                 approvals.authorize_design_initial(
                     ctx.novel_dir.parent, ctx.sid)
-            repair_sha = _valued(flags, '--repair-decision')
+            review_token = _valued(flags, '--review-token')
             repair_scope = None
-            if repair_sha is not None:
+            if review_token is not None and '--replan' not in design_tokens:
                 from novel.orchestrator import approvals
                 repair_scope = approvals.resolve_design_action(
-                    ctx.novel_dir.parent, ctx.sid, repair_sha, expected='repair')
+                    ctx.novel_dir.parent, ctx.sid, review_token, expected='repair')
                 kwargs.update({
-                    'repair_decision_sha256': repair_sha,
+                    'repair_decision_sha256': repair_scope.decision_sha256,
                     'repair_scope': repair_scope,
                 })
             if '--replan' in design_tokens:
                 from novel.orchestrator import approvals
                 repair_scope = approvals.resolve_design_action(
-                    ctx.novel_dir.parent, ctx.sid, None, expected='replan')
+                    ctx.novel_dir.parent, ctx.sid, review_token, expected='replan')
                 kwargs.update({
+                    # replan 的决定身份已经封装在 typed scope 内；这个独立
+                    # 参数只属于 targeted repair。把它同时传给 replan 会被
+                    # ``run_design`` 正确地视为两种恢复模式混用并关闭式拒绝。
                     'repair_decision_sha256': None,
                     'repair_scope': repair_scope,
                 })
@@ -657,17 +660,14 @@ def _run_stage6(ctx: RunContext, flags: list[str]) -> int:
             raise TerminalState(f'--pick {pick!r} 不是一个候选序号（1 起的整数）')
         actor = _valued(flags, '--actor')
         reason = _valued(flags, '--reason')
-        subject_sha256 = _valued(flags, '--subject-sha256')
-        workpack_sha256 = _valued(flags, '--workpack-sha256')
-        if not actor or not reason or not subject_sha256 or not workpack_sha256:
+        review_token = _valued(flags, '--review-token')
+        if not actor or not reason or not review_token:
             raise TerminalState(
                 'stage6.approve 必须显式给 --actor、--reason 和 '
-                '--subject-sha256、--workpack-sha256；actor 是自报身份，'
-                '两个 hash 用于防旧页面误批')
+                '--review-token；actor 是自报身份，opaque token 防旧页面误批')
         _art, report = hook.run_approve(
             ctx, int(pick), actor=actor, reason=reason,
-            subject_sha256=subject_sha256,
-            workpack_sha256=workpack_sha256)
+            review_token=review_token)
         print(render(report))
         return X.OK if report.passed else X.CHECK_FAILED
 
@@ -695,6 +695,12 @@ def _run_stage6(ctx: RunContext, flags: list[str]) -> int:
     if '--recheck' in tokens:
         _art, report = hook.run_recheck(ctx)
         print(render(report))
+        return X.OK if report.passed else X.CHECK_FAILED
+
+    if '--rebind-review' in tokens:
+        _art, report = hook.run_rebind_review(ctx)
+        print(render(report))
+        print('  ✓ 旧 Stage6 人工决定已保留原 actor/reason 并绑定稳定 review identity')
         return X.OK if report.passed else X.CHECK_FAILED
 
     if '--revalidate' in tokens:
@@ -801,6 +807,39 @@ def _run_stage2(ctx: RunContext, flags: list[str]) -> int:
         print(workpack.model_dump_json(by_alias=True, indent=2))
         return X.OK
 
+    if '--emit-edit-template' in tokens:
+        from novel.stages.stage2.relation_edit import edit_template_json
+
+        print(edit_template_json(ctx), end='')
+        return X.OK
+
+    if '--validate-edit' in tokens:
+        from novel.stages.stage2.relation_edit import validate_edit
+
+        preview = validate_edit(
+            ctx, _valued(flags, '--validate-edit') or '')
+        print(preview.model_dump_json(indent=2))
+        print('  只读预检完成：与 apply 共用 schema、全书 Stage2 HARD '
+              '与非目标章恒等守卫；未归档、未写 INVALID、未记费用')
+        # 预览成功本身即是 OK；候选能否应用由 typed
+        # ``would_apply/hard_hits`` 表达。纯预览不能返回语义为
+        # “正式结果已落盘但红”的 exit 1。
+        return X.OK
+
+    if '--apply-edit' in tokens:
+        from novel.stages.stage2.relation_edit import apply_edit
+
+        artifact, report = apply_edit(
+            ctx, _valued(flags, '--apply-edit') or '')
+        print(render(report))
+        hard = sum(
+            relation.enforcement == 'hard'
+            for chapter in artifact.blueprints
+            for relation in chapter.narrative_relations)
+        print(f'  ✓ Stage2 v7 叙事关系已按 typed request 更新（HARD={hard}）；'
+              '未调用模型，Stage4 只会按真实消费变化转 stale')
+        return X.OK if report.passed else X.CHECK_FAILED
+
     if '--revalidate' in tokens:
         promoted, report = extract.run_revalidate(
             ctx, actor=_valued(flags, '--actor') or '',
@@ -886,6 +925,20 @@ def _run_stage4(ctx: RunContext, flags: list[str]) -> int:
         return X.OK if report.passed else X.CHECK_FAILED
 
     if ctx.node == 'stage4.design':
+        if '--validate-edit' in tokens:
+            evaluation = plan.validate_design_chapter_edit(
+                ctx, _valued(flags, '--validate-edit') or '')
+            print(
+                f'  ✓ Stage4A 完整章 edit preview 通过：'
+                f'ch{evaluation.request.output_ordinal}（0 次调用，未写盘）')
+            return X.OK
+        if '--apply-edit' in tokens:
+            artifact = plan.run_apply_design_chapter_edit(
+                ctx, _valued(flags, '--apply-edit') or '')
+            print(
+                f'  ✓ Stage4A 完整章 edit 已经同一 preview/HARD '
+                f'尺子落盘：{len(artifact.output_chapters)} 章（0 次调用）')
+            return X.OK
         if '--adopt-rejected' in tokens:
             # 0 次调用：只消费隔离区里那份封存候选，走同一套四道闸重判。
             artifact = plan.run_adopt_rejected(
@@ -905,32 +958,35 @@ def _run_stage4(ctx: RunContext, flags: list[str]) -> int:
             print(f'── system（{len(system)} 字）──\n{system}')
             print(f'\n── user（{len(user)} 字；不含原文/源序/beat/材料）──\n{user}')
             return X.OK
-        repair_sha = _valued(flags, '--repair-decision')
+        review_token = _valued(flags, '--review-token')
         repair_scope = None
         if not tokens:
             from novel.orchestrator import approvals
             approvals.authorize_design_initial(
                 ctx.novel_dir.parent, ctx.sid)
-        if repair_sha is not None:
+        if review_token is not None and '--replan' not in tokens:
             from novel.orchestrator import approvals
             repair_scope = approvals.resolve_design_action(
-                ctx.novel_dir.parent, ctx.sid, repair_sha, expected='repair')
+                ctx.novel_dir.parent, ctx.sid, review_token, expected='repair')
         if '--replan' in tokens:
             # 整书策略重采也必须消费一份当前正式的策略驳回，不能把旧的
             # ``--replan`` 留成无反馈随机刷新按钮。这条命令仍只产 A。
             from novel.orchestrator import approvals
             repair_scope = approvals.resolve_design_action(
-                ctx.novel_dir.parent, ctx.sid, None, expected='replan')
+                ctx.novel_dir.parent, ctx.sid, review_token, expected='replan')
             from novel.llm.cache import CachePolicy
             ctx.cache = CachePolicy.refresh()
         artifact = plan.run_design(
             ctx,
             _llm_client(ctx),
-            repair_decision_sha256=repair_sha,
+            repair_decision_sha256=(
+                repair_scope.decision_sha256
+                if repair_scope is not None and not repair_scope.strategy_replan
+                else None),
             repair_scope=repair_scope,
         )
-        if repair_sha is not None:
-            action = f'已按决定 {repair_sha[:12]}… 定向返修并落盘'
+        if review_token is not None and '--replan' not in tokens:
+            action = f'已按 review token {review_token[:18]}… 定向返修并落盘'
         else:
             action = '已按策略驳回整书重采并落盘' if '--replan' in tokens else '已落盘'
         print(f'  ✓ Stage4A 盲结构候选{action}：{len(artifact.output_chapters)} 章。'
@@ -1207,19 +1263,16 @@ def _run_stage7(ctx: RunContext, flags: list[str]) -> int:
     if ctx.node == 'stage7.approve':
         actor = _valued(flags, '--actor')
         reason = _valued(flags, '--reason')
-        subject_sha256 = _valued(flags, '--subject-sha256')
-        workpack_sha256 = _valued(flags, '--workpack-sha256')
-        if not actor or not reason or not subject_sha256 or not workpack_sha256:
+        review_token = _valued(flags, '--review-token')
+        if not actor or not reason or not review_token:
             raise TerminalState(
                 'stage7.approve 必须显式给 --actor、--reason 和 '
-                '--subject-sha256、--workpack-sha256；actor 是自报身份，'
-                '两个 hash 用于防旧页面误批')
+                '--review-token；actor 是自报身份，opaque token 防旧页面误批')
         _art, report = rename.run_approve(
             ctx,
             actor=actor,
             reason=reason,
-            subject_sha256=subject_sha256,
-            workpack_sha256=workpack_sha256,
+            review_token=review_token,
         )
         print(render(report))
         return X.OK if report.passed else X.CHECK_FAILED
@@ -1261,6 +1314,12 @@ def _run_stage7(ctx: RunContext, flags: list[str]) -> int:
     if '--recheck' in tokens:
         _art, report = rename.run_recheck(ctx)
         print(render(report))
+        return X.OK if report.passed else X.CHECK_FAILED
+
+    if '--rebind-review' in tokens:
+        _art, report = rename.run_rebind_review(ctx)
+        print(render(report))
+        print('  ✓ 旧 Stage7 人工决定已保留，既有成书字节未退休')
         return X.OK if report.passed else X.CHECK_FAILED
 
     if '--revalidate' in tokens:
@@ -1309,10 +1368,10 @@ def _valued(flags: list[str], name: str) -> str | None:
 def _cmd_preview(a: argparse.Namespace) -> int:
     flags = _flags_of(a)
     executor_profile = _executor_profile_of(a)
-    if a.node == 'stage4.design' and '--repair-decision' in N.flag_tokens(flags):
+    if a.node == 'stage4.design' and '--review-token' in N.flag_tokens(flags):
         if a.sid is None:
             raise TerminalState(
-                'stage4.design --repair-decision preview 必须给已有书 sid')
+                'stage4.design --review-token preview 必须给已有书 sid')
         from novel.stages.stage4 import plan
         preview_ctx = S.readonly_ctx(
             paths.resolve_novel_dir(a.base, a.sid), a.node, prov.code_version())
@@ -1348,7 +1407,6 @@ def _require_commander_execution_permit(
     claim 下的 envelope 与 Step 索引，不能再拿新 surface 误杀预期追检。
     """
     from novel.orchestrator import execution_permit as permit_layer
-    from novel.orchestrator import operator as operator_planner
 
     envelope = permit_layer.load_permit_envelope()
     has_claim_pointer = admission.CLAIM_ID_ENV in os.environ
@@ -1397,7 +1455,8 @@ def _require_commander_execution_permit(
             f'execution permit 属于 base={permit.base!r}，不能执行 base={a.base!r}')
 
     claim = admission.require_active_claim(
-        a.base, parent_context.run_id, a.sid, permit.node)
+        a.base, getattr(parent_context, 'execution_id', parent_context.run_id),
+        a.sid, permit.node)
     if claim.claim_sha256 != permit.permit_sha256:
         raise TerminalState(
             'active admission claim SHA-256 与 execution permit envelope 不一致')
@@ -1430,13 +1489,9 @@ def _require_commander_execution_permit(
             '当前 child argv 与 execution permit 对应的 canonical '
             f'build_steps[{step_index}] 不一致；拒绝伪造 step_index/argv')
 
-    if step_index == 0:
-        fresh = operator_planner.permit(
-            permit.base, permit.sid, permit.node, permit.flags)
-        if fresh.permit_sha256 != permit.permit_sha256:
-            raise TerminalState(
-                'execution permit 在 root child 首个副作用前已漂移；'
-                '请重新运行 operator permit 与 run_step preview')
+    # active-surface CAS 已由 canonical run_step 在 admission claim 成功后、
+    # evidence/beacon/subprocess 之前执行。child 只核 active claim、完整 envelope、
+    # canonical step/index/argv；这里不得再调用 operator planner 做七层复检。
 
 
 def _cmd_run(a: argparse.Namespace) -> int:
@@ -1453,6 +1508,9 @@ def _cmd_run(a: argparse.Namespace) -> int:
     if (
         commander_context.COMMANDER_RUN_ID_ENV in os.environ
         or commander_context.COMMANDER_CONTRACT_SHA256_ENV in os.environ
+        or commander_context.COMMANDER_EPOCH_ID_ENV in os.environ
+        or commander_context.COMMANDER_EPOCH_SHA256_ENV in os.environ
+        or commander_context.COMMANDER_ADMISSION_ID_ENV in os.environ
     ):
         if a.sid is None:
             raise TerminalState('Commander contract 下的 node run 必须显式给已有书 sid')
@@ -1532,8 +1590,16 @@ def _cmd_run(a: argparse.Namespace) -> int:
     # （手敲 CLI、前端 jobs、headless agent）最终都要经过这里；0 成本复检/人工修复
     # 仍可在闸关闭时运行，否则人连开闸的恢复路都进不去。
     if stage2_review_required(a.node, paid=paid):
-        from novel.stages.stage2 import global_review
-        global_review.require_approved(ctx)
+        if a.node == 'stage7.assemble':
+            # Stage7 的唯一 frozen-v6 兼容面必须与产地/下载共用同一判据；
+            # 这里不能先用通用 v7 闸把 exact 旧书挡死，也不能在 CLI 重拼证明。
+            from novel.stages.stage7.assemble import (
+                require_stage2_delivery_approved,
+            )
+            require_stage2_delivery_approved(ctx)
+        else:
+            from novel.stages.stage2 import global_review
+            global_review.require_approved(ctx)
     # API 的 prepare 只做早反馈；手敲 CLI 也必须经过同一座权威门，且要在
     # `_dispatch` 构造任何 LLM 请求之前同时证明：当前结构逐章已接受、writing
     # 已独立授权、选章没有越过当前计划。0 成本恢复 flag 的 ``paid=False`` 不进来。
@@ -1842,9 +1908,24 @@ def _cmd_reconcile(a: argparse.Namespace) -> int:
             raise TerminalState(
                 'admission reconcile apply 必须同时给 '
                 '--actor / --reason / --subject-sha256')
-        done = admission.reconcile_gate(
-            a.base, parent_run_id, actor=a.actor, reason=a.reason,
-            subject_sha256=a.subject_sha256, force=bool(a.force))
+        # AgentRun v2 的 lifecycle 投影必须来自同一份 admission owner/CAS，
+        # 不能另造一条“看起来像 reconcile”的平行状态。非 AgentRun 的历史
+        # admission 仍走原核心兼容口。
+        from novel.orchestrator import agent as agent_runner
+        run_record = next((
+            item for item in agent_runner.records(a.base)
+            if item.run_id == parent_run_id and item.contract is not None), None)
+        if run_record is None:
+            done = admission.reconcile_gate(
+                a.base, parent_run_id, actor=a.actor, reason=a.reason,
+                subject_sha256=a.subject_sha256, force=bool(a.force))
+        else:
+            reconciled = agent_runner.reconcile_run(
+                a.base, parent_run_id, actor=a.actor, reason=a.reason,
+                subject_sha256=a.subject_sha256, force=bool(a.force))
+            done = admission.snapshot(a.base, parent_run_id)
+            if reconciled.note is None:
+                raise RuntimeError('AgentRun reconciled 后没有 lifecycle note')
         print(f'✓ admission {parent_run_id} 已由 {a.actor} 显式收口'
               f'（force={bool(a.force)}，sid={done.sid}）')
         return X.OK
@@ -2072,8 +2153,8 @@ def _cmd_approval_admitted(a: argparse.Namespace) -> int:
         elif a.surface == 'stage5':
             result = approvals.approve_stage5_closure(a.base, a.sid, request)
         else:
-            # Commander 只有这一条入口：request 类型保证 actor/reason/full current SHA
-            # 一个都不能省；旧 UI 的空 body 兼容缝不暴露在 CLI。
+            # Commander 只有这一条入口：request 只搬 opaque token 与
+            # actor/reason，多摘要一律由服务端现场重建。
             result = approvals.approve_writing(a.base, a.sid, request)
     print(result.model_dump_json(indent=2))
     return X.OK
@@ -2128,7 +2209,8 @@ def _cmd_mark(a: argparse.Namespace) -> int:
         # 可能发生在顶层 Commander 已 close 新 claim 之后；这里必须复用旧 claim，
         # 不能再开一枚 generic claim，否则会把合法的收尾信标误杀并永久留下 open beacon。
         admission.require_active_claim(
-            a.base, parent_context.run_id, checked_sid, a.node)
+            a.base, getattr(parent_context, 'execution_id', parent_context.run_id),
+            checked_sid, a.node)
         append_event()
         return X.OK
 
@@ -2225,6 +2307,9 @@ def _refuse_commander_control_mutation(a: argparse.Namespace) -> None:
     pointer_present = (
         commander_context.COMMANDER_RUN_ID_ENV in os.environ
         or commander_context.COMMANDER_CONTRACT_SHA256_ENV in os.environ
+        or commander_context.COMMANDER_EPOCH_ID_ENV in os.environ
+        or commander_context.COMMANDER_EPOCH_SHA256_ENV in os.environ
+        or commander_context.COMMANDER_ADMISSION_ID_ENV in os.environ
     )
     if pointer_present and _commander_control_mutation(a):
         raise TerminalState(

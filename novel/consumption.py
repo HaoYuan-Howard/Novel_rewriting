@@ -23,7 +23,8 @@ from contracts.artifacts import (
     STAGE0_CLEAN_TEXT, STAGE0_REVISIONS, STAGE1_HOOK_COPY, STAGE1_MAIN_TEXT,
     STAGE2_BLUEPRINT_CHARACTER_PROJECTION, STAGE2_CHAPTER_BLUEPRINTS,
     STAGE2_GLOBAL_EDIT, STAGE2_GLOBAL_GROUNDING,
-    RETIRED_STAGE3_STYLE_GROUNDING, STAGE4_BLIND_CANDIDATE, STAGE4_EVIDENCE_BINDING,
+    RETIRED_STAGE3_STYLE_GROUNDING, STAGE4_BLIND_CANDIDATE,
+    STAGE4_BLIND_CHAPTER_EDIT, STAGE4_EVIDENCE_BINDING,
     STAGE4_PLAN_CHAPTERS, STAGE4_PLAN_EDIT,
     STAGE4_WRITER_CONTEXT, STAGE5_REVIEW, STAGE5_TRIM_AUDIT,
     STAGE6_HOOK, STAGE6_HOOK_EDIT,
@@ -120,9 +121,33 @@ def _stage4_contract(blueprint: dict) -> tuple:
         _stage4_atoms(blueprint),
         tuple((edge.get('before'), edge.get('after'))
               for edge in (blueprint.get('causal_edges') or []) if isinstance(edge, dict)),
+        _stage4_narrative_relations(blueprint),
         tuple(blueprint.get('entry_state_refs') or []),
         tuple(blueprint.get('ending_state_refs') or []),
     )
+
+
+def _stage4_narrative_relations(blueprint: dict) -> tuple:
+    """Stage4 真正消费的 typed 关系；不携带任何 SourceSpan。"""
+    fields = {
+        'story_before': ('before_fact_ref', 'after_fact_ref'),
+        'response_to': ('stimulus_fact_ref', 'response_fact_ref'),
+        'same_scene': ('left_fact_ref', 'right_fact_ref'),
+        'observes': (
+            'observer_char_id', 'observed_fact_ref', 'observation_fact_ref'),
+    }
+    rows = []
+    for relation in blueprint.get('narrative_relations') or []:
+        if not isinstance(relation, dict):
+            rows.append(('?', None, repr(relation)))
+            continue
+        kind = relation.get('kind')
+        rows.append((
+            kind,
+            relation.get('enforcement'),
+            *(relation.get(field) for field in fields.get(kind, ())),
+        ))
+    return tuple(sorted(rows, key=repr))
 
 
 def stage4_plan_blueprints(data: object) -> object:
@@ -131,6 +156,29 @@ def stage4_plan_blueprints(data: object) -> object:
         return None
     return sorted(
         (b.get('chapter_ordinal'), _stage4_contract(b), _stage4_stages(b))
+        for b in (data.get('blueprints') or []) if isinstance(b, dict))
+
+
+def _frozen_v6_stage4_contract(blueprint: dict) -> tuple:
+    """v6 当时供 Plan/Context 消费的契约形状；没有 relations 槽位。"""
+    return (
+        blueprint.get('chapter_function'),
+        _stage4_atoms(blueprint),
+        tuple((edge.get('before'), edge.get('after'))
+              for edge in (blueprint.get('causal_edges') or [])
+              if isinstance(edge, dict)),
+        tuple(blueprint.get('entry_state_refs') or []),
+        tuple(blueprint.get('ending_state_refs') or []),
+    )
+
+
+def frozen_v6_stage4_plan_blueprints(data: object) -> object:
+    """冻结 v6 的 Stage4B consumed；只供现存正式制品的 exact 对证。"""
+    if not isinstance(data, dict):
+        return None
+    return sorted(
+        (b.get('chapter_ordinal'), _frozen_v6_stage4_contract(b),
+         _stage4_stages(b))
         for b in (data.get('blueprints') or []) if isinstance(b, dict))
 
 
@@ -154,6 +202,42 @@ def stage4_design_blueprints(data: object) -> object:
         rows.append((
             blueprint.get('chapter_ordinal'), blueprint.get('chapter_function'),
             tuple(atoms), tuple(edges),
+            _stage4_narrative_relations(blueprint),
+            tuple(sorted(blueprint.get('entry_state_refs') or [])),
+            tuple(sorted(blueprint.get('ending_state_refs') or [])),
+        ))
+    return sorted(rows)
+
+
+def frozen_v6_stage4_design_blueprints(data: object) -> object:
+    """冻结 v6 的 Stage4A consumed 投影；只供历史主体对证。
+
+    v7 把 ``narrative_relations`` 加进活动投影后，即便旧书在内存里补一个空数组，
+    tuple 形状也会变化，旧候选记录的 consumed 指纹便永远对不上。这里逐字保留
+    v6 当时的投影形状，不登记进普通 ``PROJECTIONS``，因此现役 producer 不可能
+    因为这个兼容口而把 v6 当成 v7 消费。
+    """
+    if not isinstance(data, dict):
+        return None
+    rows = []
+    for blueprint in (data.get('blueprints') or []):
+        if not isinstance(blueprint, dict):
+            continue
+        atoms = sorted(
+            (atom.get('fact_id'), atom.get('claim'), atom.get('kind'),
+             atom.get('obligation'),
+             tuple(sorted(atom.get('participant_char_ids') or [])))
+            for atom in (blueprint.get('fact_atoms') or [])
+            if isinstance(atom, dict)
+        )
+        edges = sorted(
+            (edge.get('before'), edge.get('after'))
+            for edge in (blueprint.get('causal_edges') or [])
+            if isinstance(edge, dict)
+        )
+        rows.append((
+            blueprint.get('chapter_ordinal'), blueprint.get('chapter_function'),
+            tuple(atoms), tuple(edges),
             tuple(sorted(blueprint.get('entry_state_refs') or [])),
             tuple(sorted(blueprint.get('ending_state_refs') or [])),
         ))
@@ -170,6 +254,19 @@ def stage4_context_blueprints(data: object) -> object:
                 n.get('focalizer_char_id'), tuple(n.get('pronoun_surfaces') or []))
                for n in (b.get('narration') or []) if isinstance(n, dict)),
           _stage4_contract(b), _stage4_stages(b))
+        for b in (data.get('blueprints') or []) if isinstance(b, dict))
+
+
+def frozen_v6_stage4_context_blueprints(data: object) -> object:
+    """冻结 v6 的 Context consumed；不注册给活动 producer。"""
+    if not isinstance(data, dict):
+        return None
+    return sorted(
+        (b.get('chapter_ordinal'),
+         tuple((n.get('grammatical_person'), n.get('narrator_char_id'),
+                n.get('focalizer_char_id'), tuple(n.get('pronoun_surfaces') or []))
+               for n in (b.get('narration') or []) if isinstance(n, dict)),
+         _frozen_v6_stage4_contract(b), _stage4_stages(b))
         for b in (data.get('blueprints') or []) if isinstance(b, dict))
 
 
@@ -595,6 +692,7 @@ CONSUMED_PROJECTIONS: Final[dict[str, dict[str, Projection]]] = {
     },
     'stage4.design': {
         STAGE2_CHAPTER_BLUEPRINTS: stage4_design_blueprints,
+        STAGE4_BLIND_CHAPTER_EDIT: artifact_payload,
     },
     'stage4.plan': {
         STAGE1_MAIN_TEXT: stage4_main_text,

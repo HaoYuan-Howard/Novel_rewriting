@@ -21,7 +21,14 @@ import type { RunBeacon, RunEvent } from '@/types/run'
 import { CHECK_KINDS, type CheckReport } from '@/types/stages'
 import { useRunProgress } from '@/hooks/useRunProgress'
 import { useSid } from '@/hooks/useRouteParams'
-import { useAgentRunLog, useAgentRuns, useStopAgentRun } from '@/hooks/useAgentRuns'
+import {
+  useAgentRunLog,
+  useAgentRuns,
+  usePauseAgentRun,
+  useResumeAgentRun,
+  useStopAgentRun,
+} from '@/hooks/useAgentRuns'
+import type { AgentRunState } from '@/types/agent'
 import { useSampleCoverage } from '@/hooks/useSample'
 import { QueryStates } from '@/components/state/QueryStates'
 import { Mono } from '@/components/ui/Mono'
@@ -208,11 +215,21 @@ function EventRow({ e }: { e: RunEvent }) {
 function AgentRunBlock() {
   const runs = useAgentRuns()
   const latest = runs.data?.runs[0] ?? null
-  const running = latest?.state === 'running'
   const [logOpen, setLogOpen] = useState(false)
   const [confirmingStop, setConfirmingStop] = useState(false)
   const log = useAgentRunLog(logOpen ? latest : null)
+  const pause = usePauseAgentRun()
+  const resume = useResumeAgentRun()
   const stop = useStopAgentRun()
+
+  const stateChip = (state: AgentRunState) => {
+    if (state !== 'pending' && state !== 'paused') return <JobStateChip state={state} />
+    return (
+      <span className="rounded-full border border-line px-9 py-3 text-tag text-ink-4">
+        {state === 'pending' ? '等待启动' : '已暂停'}
+      </span>
+    )
+  }
 
   return (
     <Panel>
@@ -229,7 +246,7 @@ function AgentRunBlock() {
         <div className="flex flex-col gap-10 px-18 py-14">
           <div className="flex flex-wrap items-center gap-10">
             {latest.outcome ? <DeliveryChip outcome={latest.outcome} /> : null}
-            <JobStateChip state={latest.state} />
+            {stateChip(latest.state)}
             <AuthorizationChip value={latest.start.authorized} label="付费授权" />
             <AuthorizationChip
               value={latest.start.egress_authorized}
@@ -245,7 +262,33 @@ function AgentRunBlock() {
               <LinkButton onClick={() => setLogOpen((v) => !v)}>
                 {logOpen ? '收起日志' : '日志尾部'}
               </LinkButton>
-              {running && !confirmingStop ? (
+              {latest.allowed_controls.includes('pause') && !confirmingStop ? (
+                <button
+                  type="button"
+                  disabled={pause.isPending}
+                  onClick={() => pause.mutate(latest.run_id)}
+                  className={cx(
+                    'rounded-btn border border-line bg-card px-12 py-6 text-body text-ink-3',
+                    pause.isPending ? 'cursor-not-allowed opacity-40' : 'cursor-pointer',
+                  )}
+                >
+                  暂停
+                </button>
+              ) : null}
+              {latest.allowed_controls.includes('resume') && !confirmingStop ? (
+                <button
+                  type="button"
+                  disabled={resume.isPending}
+                  onClick={() => resume.mutate(latest.run_id)}
+                  className={cx(
+                    'rounded-btn border-none bg-ink px-12 py-6 text-body font-semibold text-card',
+                    resume.isPending ? 'cursor-not-allowed opacity-40' : 'cursor-pointer',
+                  )}
+                >
+                  继续
+                </button>
+              ) : null}
+              {latest.allowed_controls.includes('stop') && !confirmingStop ? (
                 <button
                   type="button"
                   onClick={() => setConfirmingStop(true)}
@@ -254,7 +297,7 @@ function AgentRunBlock() {
                   熄火
                 </button>
               ) : null}
-              {running && confirmingStop ? (
+              {latest.allowed_controls.includes('stop') && confirmingStop ? (
                 <>
                   <span className="text-tag text-warn-ink">确认熄火？agent 进程会被杀掉。</span>
                   <button
@@ -287,10 +330,10 @@ function AgentRunBlock() {
                     : '（还没有输出）'}
             </pre>
           ) : null}
-          {stop.isError ? (
+          {pause.isError || resume.isError || stop.isError ? (
             <div className="rounded-block border border-warn-line bg-warn-bg px-13 py-9 text-body text-warn-ink">
-              {errorBody(stop.error)}
-              <ErrorHint error={stop.error} />
+              {errorBody(pause.error ?? resume.error ?? stop.error)}
+              <ErrorHint error={pause.error ?? resume.error ?? stop.error} />
             </div>
           ) : null}
         </div>

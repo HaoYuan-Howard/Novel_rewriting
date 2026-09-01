@@ -182,7 +182,7 @@ def commit_review(
     review: Path,
     updated: str,
     *,
-    expected_original: bytes,
+    expected_original: bytes | None,
     precommit_check: Callable[[], None] | None = None,
 ) -> bytes:
     """在同 review 的线程/进程锁内 CAS、原子替换并回读。
@@ -195,14 +195,18 @@ def commit_review(
     review = Path(review)
     payload = updated.encode('utf-8')
     with path_transaction_lock(review):
-        try:
-            current = review.read_bytes()
-        except FileNotFoundError as exc:
-            raise ReviewConflictError(
-                f'终审包在提交前被删除：{review}') from exc
-        if current != expected_original:
-            raise ReviewConflictError(
-                '终审包在读取后被其他写者修改，拒绝覆盖')
+        if expected_original is None:
+            if review.exists():
+                raise ReviewConflictError('终审包在 create 前已由其他写者创建')
+        else:
+            try:
+                current = review.read_bytes()
+            except FileNotFoundError as exc:
+                raise ReviewConflictError(
+                    f'终审包在提交前被删除：{review}') from exc
+            if current != expected_original:
+                raise ReviewConflictError(
+                    '终审包在读取后被其他写者修改，拒绝覆盖')
         if precommit_check is not None:
             precommit_check()
 
@@ -226,15 +230,19 @@ def commit_review(
             # sidecar 锁能互斥所有生产写手，但用户编辑器未必认这把锁。
             # 因此在真正 replace 前再做一次字节 CAS，不覆盖发生在
             # seal 复核 / temp fsync 期间的人工修改。
-            try:
-                current_before_replace = review.read_bytes()
-            except FileNotFoundError as exc:
-                raise ReviewConflictError(
-                    f'终审包在提交临界区内被删除：{review}') from exc
-            if current_before_replace != expected_original:
-                raise ReviewConflictError(
-                    '终审包在提交临界区内被其他写者修改，'
-                    '拒绝覆盖')
+            if expected_original is None:
+                if review.exists():
+                    raise ReviewConflictError(
+                        '终审包在 create 临界区内已由其他写者创建')
+            else:
+                try:
+                    current_before_replace = review.read_bytes()
+                except FileNotFoundError as exc:
+                    raise ReviewConflictError(
+                        f'终审包在提交临界区内被删除：{review}') from exc
+                if current_before_replace != expected_original:
+                    raise ReviewConflictError(
+                        '终审包在提交临界区内被其他写者修改，拒绝覆盖')
             os.replace(temp_name, review)
             landed = review.read_bytes()
         finally:

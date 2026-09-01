@@ -20,16 +20,20 @@ import pytest
 from pydantic import ValidationError
 
 import contracts.judges.stage5  # noqa: F401  # 注册现役 Stage5 判据供 fixture 对账
-from contracts.invariants import AGENT_EXECUTOR_NODES, APPROVAL_GATES
+from contracts.invariants import (
+    AGENT_EXECUTOR_NODES, APPROVAL_GATES, RETENTION_CANDIDATE_KINDS,
+)
 from contracts.rules import REGISTRY
 from contracts.schema.api import (
     AgentCapabilitiesResponse, AgentDriverCapability, AgentModelCapability,
     AgentRunRequest, ApprovalDoc, DraftAlignView, DraftView, ErrorBody, GlobalView,
     JobList, LogChunk, LogStreamEvent, NovelList, PreviewRequest, ReadingView,
+    RetentionApplyRequest, RetentionPlanView, RetentionPolicyRequest,
     ReviewChapterView, ReviewView,
     Stage0EditRequest, Stage0EditResult, Stage0Segment, Stage0Segments,
     Stage1Segment, Stage1View,
-    Stage4View, Stage5View, Stage6View, Stage7View, UploadResult,
+    Stage4View, Stage5View, Stage6View, Stage7View,
+    TrashRestoreApplyRequest, TrashRestorePlanView, UploadResult,
 )
 from contracts.schema.api import ReadingBeatLine
 from contracts.schema.orchestration import (
@@ -41,6 +45,30 @@ from contracts.schema.stage5 import ChapterSegment
 
 ROOT = Path(__file__).parents[1]
 API_PY = ROOT / 'contracts' / 'schema' / 'api.py'
+
+
+def test_service_maintenance_apply_requires_complete_preview_shapes():
+    retention = RetentionPlanView(
+        wire_version=1, generated_at=1,
+        policy=RetentionPolicyRequest(), examined=0, candidates=[],
+        plan_token='1' * 64)
+    assert RetentionApplyRequest(plan=retention).confirmed is False
+    restore = TrashRestorePlanView(
+        wire_version=1, generated_at=1,
+        trash_id='1700000000-deadbeef', sid='42', title='测试书',
+        original_dirname='测试书_42', metadata_sha256='2' * 64,
+        manifest_file_sha256='3' * 64, manifest_sha256='4' * 64,
+        plan_token='5' * 64)
+    assert TrashRestoreApplyRequest(plan=restore).confirmed is False
+
+
+def test_retention_candidate_kind_uses_the_invariant_value_domain():
+    import typing
+
+    from contracts.schema.api import RetentionCandidateView
+
+    assert typing.get_args(RetentionCandidateView.model_fields['kind'].annotation) == \
+        RETENTION_CANDIDATE_KINDS
 
 
 def test_active_global_fixture_is_a_v3_view_and_every_located_span_matches_chapter_text():

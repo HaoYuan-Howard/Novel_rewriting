@@ -7,6 +7,12 @@ description: 作为受托终审代理，使用本仓 novel.cli 将单本中文�
 
 把用户界面收敛为两份最终交付：成书与终审包。自行处理流水线内可委托的人工闸门，保留每次裁决的证据，不把中间正常审批重新抛给用户。
 
+正式工作流只有两个模型角色：Executor 生成或修复指定逻辑单元，Commander/Reviewer 阅读不可变
+workpack 并提交 typed 决定。RunSupervisor 是现有 orchestrator 内的**确定性状态机**，只负责锁、
+admission、execution permit、节点调度、epoch、自动遥测与最终报告；它不调用模型、不参与语义判断，
+也不是第三个模型角色。正式运行没有“外层 root”；交互式 root 只用于开发调试、安全暂停和修复代码，
+不能在正常跑书时二次代批或套一层 Commander。
+
 ## 接口契约
 
 接受以下输入；从仓库与盘上状态能确定的值自行解析，不重复询问。
@@ -61,30 +67,40 @@ description: 作为受托终审代理，使用本仓 novel.cli 将单本中文�
 ## 执行主循环
 
 1. 确认仓根、Python 解释器、书、绝对 `base`，并分别确定当前运行宿主与执行模式；**记录**两项授权取值与代批范围——默认都是 `granted`，这一步是记录事实，不是向用户索要。不要打印密钥，也不要因某一种 executor 配置缺失阻断另一种已明确选择的模式。
-2. 首个动作前从仓根运行 `.workflow/skills/novel-pipeline-operator/scripts/session_preflight.py --base <BASE> --sid <SID>`；新书改用 `--source <TXT>`。把输出的 `started_at` 固化为 `<STARTED_AT>`、`code_version` 固化为 `<START_CODE>`，后续命令全程逐字复用，不能在收尾时现取一个新值冒充起点。预检后立即运行 `.workflow/skills/novel-pipeline-operator/scripts/operator_phase.py session-start --base <BASE> --sid <SID> --start-code-version <START_CODE> --started-at <STARTED_AT> --source skill`，把返回的 `session_id` 固化为 `<OPERATOR_SESSION>`。若这份可观测性账写不成，记录并披露遥测缺口，但不据此跳过、代替或放宽任何产品闸门。
-3. 新书在 sid 尚未落盘前只预览并执行现有 `stage0.remove --source <TXT>`；取得 sid 后，与既有书一样，**先**运行 `<PY> -X utf8 -u -m novel.cli operator next <SID> --base <BASE> --json`。它以一次冻结 snapshot 返回 `state/overview/inbox/action`；只消费返回的 `action.node`、`action.flags`、`why`、`waiting_on`、`paid`、`writes` 与 `action_sha256`，不从 Stage 表、目录存在性或聊天记忆自行推演下一节点。`state=ready` 时把原样 node/flags 交给 `operator permit`；`state=blocked` 时只尝试当前 `waiting_on` 对应、由生产策略登记的审批或恢复，涉及 node 的动作同样先取 permit；只有 `state=pipeline_complete` 时 `action=null`，进入收尾。blocked action 的 hash 只描述 blocker，绝不是恢复执行权。
-4. 在首个写盘或付费动作前创建终审包草稿，随每次授权判断、闸门裁决、修复与异常更新；不要等到最后凭记忆补写。
-5. 对 exact node/flags，先从仓根运行 `<PY> -X utf8 -u -m novel.cli operator permit <SID> <node> --base <BASE> --json -- [flags]`，再用返回的 `permit_sha256` 调用 `.workflow/skills/novel-pipeline-operator/scripts/run_step.py --base <BASE> --sid <SID> --expect-code-version <START_CODE> --operator-permit-sha256 <PERMIT_SHA256> <node> -- [flags]` 预览生产 `build_steps`；真跑采用同一条命令并把 `--execute` 放在 node 前。permit 是纯读且绑定当前代码、surface、next 状态、exact flags、贵贱/写盘效应以及已登记外部输入原始字节；runner 在 preview 与 execute 都重新铸造并逐字核 hash，任何漂移都拒绝旧命令。需要机器复核 preview 时加 `--evidence-json <PATH>`：它原子记录完整 permit 与同一份 Step 的 argv/付费/写盘信息，preview 与 execute 复用同一路径时内容不同会拒绝覆盖。execute 无论是否传该路径，都会把本次真实 Step canonical evidence 的完整 SHA-256 同时写进 start/end 信标 note。headless Commander 下，runner 还会重读 started contract、取得覆盖整个 `build_steps` 的 active claim，并给 root 与自动 `--check-only` 子步骤注入同一 permit envelope 及各自 `step_index`；root 在首个副作用前重铸 current permit，root 落盘后的 follow-check 只核 envelope、claim 与 canonical index/argv，不拿预期已变化的 surface 误杀追检。已有 sid 的**所有 node actions**（包括纯读诊断与 blocked recovery）都必须走这条 runner+permit 主路。新书摄入的 `stage0.remove --source` 在 sid 落盘前省略 runner 的 `--sid` 与 permit。不要凭文档手拼真实 argv，也不要手加运行期 agent profile 参数；Agent driver 与 legacy 的 probe、恢复和禁止降级边界只读[执行模式](references/execution-modes.md)。Stage5 全书写作节点不带选臂参数；定向维护只用 `--chapters`。
-6. 只有不属于 node run 的纯读 façade（`state` / `inbox` / `operator` / `preview`）、typed approval façade 与终态明确点名的 `response-repair` 可不经 runner；在 Commander 下，后两类写入口会从 launcher 提供的父 run 契约自行取得并释放 generic admission claim，不能变成孤儿写手。它们也在动作前确认当前代码等于 `<START_CODE>`。node 的 start/end 信标只由 runner 在原 active claim 内生成，不手工补 `mark`；非 node 动作的执行轨迹使用第 10 步的 `operator_phase.py`，`preview` 不打点。
+2. 首个动作前从仓根运行 `.workflow/skills/novel-pipeline-operator/scripts/session_preflight.py --base <BASE> --sid <SID>`；新书改用 `--source <TXT>`。把输出的 `started_at` 固化为 `<STARTED_AT>`、`code_version` 固化为当前 `<START_CODE>`。headless 正式路由由 RunSupervisor、admission、beacon 与 ledger 自动留下 parent/epoch/node 的权威生命周期和联结；它们不伪造 inspect/review 等语义阶段的精确起止，缺少显式诊断账时该分解就是 `unknown`。Commander 不手工维护 phase/telemetry。直接交互式运行把这两格当成本轮 epoch 的坐标，代码漂移时停止旧 token，按[运行宿主](references/runtime-profiles.md)打开新 epoch，不能在收尾时现取一个新值冒充旧 epoch。
+3. 新书在 sid 尚未落盘前只预览并执行现有 `stage0.remove --source <TXT>`；取得 sid 后，与既有书一样，**先**运行 `<PY> -X utf8 -u -m novel.cli operator next <SID> --base <BASE> --json`，把 stdout 原样保存为 scratch 内的 `<NEXT_FILE>`。它以一次冻结 snapshot 返回 `state/overview/inbox/action/execution_token`；只消费返回的状态与 action 路由字段，不拆、不手搬 token 内部 SHA，也不从 Stage 表、目录存在性或聊天记忆自行推演下一节点。`state=ready` 时完整 token 已在同一 JSON 内，ready action 不再第二次调用 `operator permit`；`state=blocked` 时 `<NEXT_FILE>` 只描述 blocker，只尝试当前 `waiting_on` 对应、由生产策略登记的审批或恢复，涉及 node 的恢复动作才显式铸 recovery permit；只有 `state=pipeline_complete` 时 `action=null` 且无 token，进入收尾。blocked action 的 hash 绝不是恢复执行权。
+4. 审阅、授权、修复与异常都写进各自的 typed 决定、provenance、ledger 和 Supervisor 事件；运行中不创建、
+   不逐动作改写 `<书名>_review.md`。节点链闭合后才按模板一次补齐必须的人读叙述，再由 finalizer 从
+   权威账批量渲染机器事实，避免 Commander 维护第二份流水账。
+5. 对 ready 的 exact node/flags，preview 与 execute 直接复用上一步原样 `<NEXT_FILE>`：`.workflow/skills/novel-pipeline-operator/scripts/run_step.py --base <BASE> --sid <SID> --expect-code-version <START_CODE> --operator-permit-file <NEXT_FILE> <node> -- [flags]`；真跑只在同一命令中把 `--execute` 放到 node 前。只有 blocked recovery 才从仓根运行 `<PY> -X utf8 -u -m novel.cli operator permit <SID> <node> --base <BASE> --json -- [flags]`，把完整恢复许可原样保存为 `<PERMIT_FILE>`，并用同一 runner 参数替换 `<NEXT_FILE>`。两类文件只能落操作系统临时目录或 `_service/scratch/<sid>/<当前 session>/`，execute 结束即删除；不得再把 `tmp_next/state/permit` 留在仓根或书目录。preview 只解析冻结 token 并渲染 `build_steps`，不重跑 planner；execute 在取得 claim 后、首个副作用前只做一次 active-surface CAS。任一代码、active artifact、审批 head、登记外部输入或 exact flags 漂移都拒绝旧 token，回到 `operator next` 重新铸造。SHA-only 参数只保留诊断兼容，不能作为默认主路。需要机器复核 preview 时加 `--evidence-json <PATH>`：它原子记录完整 permit 与同一份 Step 的 argv/付费/写盘信息；该证据也只落上述 scratch 并随 session TTL 清理。headless Commander 下，同一 envelope 覆盖 root 与自动 `--check-only` 子步骤并给每个 child 注入 canonical `step_index`；root 落盘后的 follow-check 只核 envelope、claim 与 canonical index/argv。已有 sid 的**所有 node actions**（包括纯读诊断与 blocked recovery）都必须走这条 runner+完整 token 主路。新书摄入的 `stage0.remove --source` 在 sid 落盘前省略 runner 的 `--sid` 与 permit。不要凭文档手拼真实 argv，也不要手加运行期 agent profile 参数；Agent driver 与 legacy 的 probe、恢复和禁止降级边界只读[执行模式](references/execution-modes.md)。Stage5 全书写作节点不带选臂参数；定向维护只用 `--chapters`。
+6. 只有不属于 node run 的纯读 façade（`state` / `inbox` / `operator` / `preview`）、typed approval façade 与终态明确点名的 `response-repair` 可不经 runner；在 Commander 下，后两类写入口会从 launcher 提供的父 run 契约自行取得并释放 generic admission claim，不能变成孤儿写手。node 的 claim/beacon、进程结果、ledger 联结和异常由权威账自动记录；语义 phase 没有证据时保持 unknown，Commander 不手工补 `mark` 或 telemetry。
 7. 一次只运行一个写盘节点。用退出码判断进程结果，用最新 check badge 与 finding 判断质量结果。
-8. 每次节点、typed approval、人工修订或恢复动作结束后，立即重新调用 `operator next --json`；下一次 node 动作再重新取得 exact `operator permit`，不得沿用动作前的 next、action hash 或 permit。命中闸门时按代批契约裁决；Stage4A/B 两次裁决都先完整读取当前 hash-bound 的
+8. 每次节点、typed approval、人工修订或恢复动作结束后，立即重新调用 `operator next --json` 并原样保存新的 `<NEXT_FILE>`；下一次 ready node 直接使用其中的新 token，blocked recovery 才另取 exact permit，不得沿用动作前的 next、action hash 或 token。命中闸门时按代批契约裁决；Stage4A/B 两次裁决都先完整读取当前 hash-bound 的
    `approval workpack design|structure`。Stage6/7 定稿同样先分别读取 `approval workpack stage6|stage7`：
    Stage6 包内完整展开 A/B 各自 verdict、reason、evidence、ranking；Stage7 包内完整汇总人物、别名、
    kept、实际替换命中、残留上下文、替换计数和完整主体。若包的 `disposition=already_current`，当前
-   typed 决定已精确绑定相同代码、规则与产物主体，跳过重复提交；否则只把**刚读完的同一份包**里的
-   `subject_sha256` 与 `workpack_sha256` 一起提交给对应 approve。工作包只缩小阅读范围，不自动 accept，
+   review subject 与 review contract 未变且当前 validation seal 免费复检通过，raw typed 决定仍适用，跳过重复提交；代码变化本身不撤销人审。若 **Stage4 Design** 包为 `suspended`，同样跳过重复提交，但必须明确停在 legacy-frozen 缺 relation/preflight validation authority：它不授权 B，不取 recovery permit，也不执行 repair/replan/B；该态没有 `s4rr1`、`s4er1` 或 execution token。否则只把**刚读完的同一份包**里的
+   opaque `review_token` 提交给对应 approve。工作包只缩小阅读范围，不自动 accept，
    INFO/metric/UNVER 不制造付费动作。Stage5 最终 Review 与所有 edit/trim/wontfix 收口后，逐项读取
    current closure workpack，再提交 `approval template/apply stage5` 的 typed 回执；不得代签或拿旧 s5
    继续下游。命中失败时按修复状态机收敛；每次决定同时记录证据、被否决方案和复验结果。
 9. `stage7.assemble` 后执行独立成书对账，再调用一次 `operator next --json` 并用组合 `state --with-inbox` 刷新活动终态。先补完终审包中的人工叙述并清除其余占位符，再从仓根运行 `.workflow/skills/novel-pipeline-operator/scripts/finalize_review.py --base <BASE> --sid <SID> --started-at <STARTED_AT> --start-code-version <START_CODE>`。这是 canonical 收尾：只 collect 一次，在内存中 render → validate，验证通过才原子提交终审包；提交后丢弃旧快照，并以 `<START_CODE>` 调用全新读作用域的 `delivery.assess`。旧 `collect_final_evidence.py`、`sync_review_evidence.py`、`validate_review.py` 与 `verify_delivery.py` 保留为诊断/兼容入口，不再串成主路。
-10. 用 `operator_phase.py` 对 `inspect / preview / execute / review / approve / finalize` 的实际窗口逐段记录：每段先 `phase-start`，固化返回的 `phase_execution_id`，结束后用 `phase-end` 记录真实 `completed / failed / cancelled / unknown`、退出码与不含正文的错误类别；不得记录 prompt、正文、reason、argv、路径或密钥。`finalize_review.py` 是一条进程内含 fresh assess 的命令，外部只记一个 `finalize` 窗口；它返回的 `phases.delivery` 证明逻辑终验独立，但不要事后把一个墙钟拆成伪 `verify`。只有另行执行诊断 `verify_delivery.py` 或 launcher 能在调用前后真实打点时才用 `verify`。本 skill 的 preflight 发生在 telemetry session 建立之前，保留为起点后的 unattributed 墙钟，不事后补一条近零时长的伪 `preflight` phase；能在预检前启动遥测的 launcher 才使用那一格。最后 `session-end` 并运行 `summary --base <BASE> --sid <SID> --started-at <STARTED_AT> --session-id <OPERATOR_SESSION>`。summary 只拆墙钟归属；Commander 宿主模型 token 与成本不可见时必须保持 `unavailable_host_boundary`，不得估算。只有 finalizer 的 fresh delivery 结果为 `ready*` 才可交付，然后只把成书与终审包交给用户。
+10. RunSupervisor/lifecycle、admission、beacon 与 ledger 自动记录可证明的 parent/epoch/node/费用事实；
+    它们不把事件间隔猜成 `inspect / preview / review / approve / finalize` 窗口。Commander 不调用
+    `operator_phase.py`；该薄脚本只保留给开发者做可选诊断，不得成为交付闸，也不得事后补伪窗口。
+    没有完整诊断账时 phase 墙钟分解保持 `unknown`。Commander 宿主模型 token 与成本不可见时保持
+    `unavailable_host_boundary`，不得估算。只有 finalizer 的 fresh delivery 结果为 `ready*` 才可交付，
+    然后只把成书与终审包交给用户。
 
 ## 不可突破的边界
 
 - 不修改仓库代码、历史证据目录、LLM 缓存、账本或 `_rounds/` 来“修好”某本书。
 - 不直接编辑正式生成产物或成书。改动一律经终审包与 [修复状态机](references/recovery.md) 明列的**受托编辑面**——那张表上的入口（含整章正文、开篇文案与 `_llm_rejected` 中终态点名的 `candidate.json`）就是留给本 skill 用的，不是留给用户的；让 CLI 完成校验、归档和正式落盘。
 - **本次会话内**不并行运行两本书，也不在同一本书上并行两个写盘节点。会串的是证据、闸门裁决与终审包，它们都长在单个会话里。⚠ 这**不是**「系统不支持多书并行」：跨书并行是产品明确要求的能力，做法是每本书一个 agent 会话（批量入口与队列 lane 各自代跑一本），互斥只落在各自 `sid`。
-- 会话开始后不换代码版本；任何写盘/付费步骤前后都必须仍等于 `<START_CODE>`。临时编辑只有恢复到原指纹才能续跑；稳定落到新指纹时以 `stopped` 结束本会话，重新预检后才是另一条 run。
+- 一个 execution epoch 内不换代码版本；任何写盘/付费步骤前后都必须仍等于该 epoch 的 `<START_CODE>`。
+  代码稳定变化时暂停接纳新节点，关闭旧 epoch，并在**同一 parent run** 内打开新 epoch、免费机械复检、
+  创建新的 Commander provider session；不得把旧 provider context 或旧 execution token 带进新 epoch。
+  内容与 review contract 未变的 raw 人工决定在复检通过后恢复有效，不因代码 SHA 单独变化要求重签。
 - 不覆盖 launcher started 事件冻结的 commander / executor 模型、思考强度、execution mode 或逐节点 override；直接交互式 legacy 路也不改项目默认，除非用户明确要求一次独立实验。
 - 不把 `unver`、`skipped`、分母为零或落选候选的状态改写成 `ok`。绿灯必须带分母和 freshness。
 - 不估算或换算金额。只报告账本中的调用次数、缓存命中、token 与耗时事实。

@@ -46,10 +46,15 @@ class _PlanningDriver:
 
     def build_invocation(self, profile, prompt, *, repo, base, **_kwargs):
         del base
+        resume_id = _kwargs.get('resume_provider_session_id')
+        argv = [profile.driver, 'headless', '--model', profile.model]
+        if resume_id is not None:
+            argv.extend(('--resume', resume_id))
         return CommanderInvocation(
-            argv=(profile.driver, 'headless', '--model', profile.model),
+            argv=tuple(argv),
             stdin_text=prompt, cwd=str(repo), env_overrides={},
-            profile=profile, protocol=f'{profile.driver}-test-v1')
+            profile=profile, protocol=f'{profile.driver}-test-v1',
+            resume_provider_session_id=resume_id)
 
     def close(self):
         return None
@@ -60,6 +65,13 @@ def no_real_commander_cli(monkeypatch):
     monkeypatch.setattr(
         agent, 'create_commander_driver',
         lambda profile, **_kwargs: _PlanningDriver(profile))
+    # HTTP 用例的 fake 只覆盖路由、锁与审计，不会真的推进 operator 盘面；
+    # 因此显式终止续会，避免 production 按 ready action 正确地继续拉 Commander。
+    monkeypatch.setattr(
+        agent.commander_completion, 'review_commander_stop',
+        lambda _base, _sid, outcome, **_kwargs:
+        agent.commander_completion.CommanderCompletionReview(
+            outcome=outcome, error_kind=None, continue_ready=False))
 
 
 #: 这一族用例真去拉 agent，而 `agent.start` / `enqueue` 现在**拒绝一本不在盘上的书**
@@ -91,6 +103,17 @@ def _result(invocation, env, *, exit_code=0):
 def _ok_spawn(invocation, env, log):
     log.write(b'fake agent output\n')
     return _result(invocation, env)
+
+
+def _inject_legacy_spawn(monkeypatch, fake_spawn):
+    """HTTP/互斥用例只替换 Commander 进程，不误触确定性节点 runner。"""
+    start_planned = agent._start_planned
+
+    def injected(plan, *, spawn=None, registry=agent.REGISTRY):
+        del spawn
+        return start_planned(plan, spawn=fake_spawn, registry=registry)
+
+    monkeypatch.setattr(agent, '_start_planned', injected)
 
 
 def test_preview_shows_the_exact_argv_and_prompt(client):
@@ -157,7 +180,7 @@ def test_invalid_profile_combination_is_refused(client):
 
 def test_start_list_log_and_stop_gate(client, monkeypatch):
     c, base = client
-    monkeypatch.setattr(agent, '_default_spawn', lambda run_id: _ok_spawn)
+    _inject_legacy_spawn(monkeypatch, _ok_spawn)
 
     r = c.post('/api/agent/runs', json={
         'sid': '42', 'authorized': True, 'egress_authorized': True,
@@ -181,6 +204,87 @@ def test_start_list_log_and_stop_gate(client, monkeypatch):
 
     # 已结束 ⇒ 没东西可熄 ⇒ 409（显式终态，不是 500）
     assert c.post(f'/api/agent/runs/{run_id}/stop', headers=UI).status_code == 409
+
+
+def test_pause_resume_stop_are_async_202_and_stop_ends_in_background(
+        client, monkeypatch):
+    """HTTP 只受理控制请求；节点自然闭合/取消后的 ended 由 worker 独占。"""
+    c, base = client
+    first_entered = threading.Event()
+    release_first = threading.Event()
+    second_entered = threading.Event()
+    release_second = threading.Event()
+    cancel_requested = threading.Event()
+    invocations = []
+
+    monkeypatch.setattr(
+        agent.commander_completion, 'review_commander_stop',
+        lambda _base, _sid, outcome, **_kwargs:
+        agent.commander_completion.CommanderCompletionReview(
+            outcome=outcome, error_kind=None, continue_ready=True))
+
+    def controlled_spawn(invocation, env, log):
+        invocations.append(invocation)
+        if len(invocations) == 1:
+            first_entered.set()
+            assert release_first.wait(5)
+        else:
+            second_entered.set()
+            assert release_second.wait(5)
+        return _result(invocation, env)
+
+    def cancel(run_id):
+        del run_id
+        cancel_requested.set()
+        return 'Commander driver 已确认 cancel 请求'
+
+    _inject_legacy_spawn(monkeypatch, controlled_spawn)
+    monkeypatch.setattr(agent, '_cancel_commander_owner', cancel)
+    started = c.post('/api/agent/runs', json={
+        'sid': '42', 'authorized': True, 'egress_authorized': True,
+        'profiles': _PIPELINE_PROFILES,
+    }, headers=UI)
+    assert started.status_code == 202
+    run_id = started.json()['run_id']
+    try:
+        assert first_entered.wait(5)
+        paused_request = c.post(
+            f'/api/agent/runs/{run_id}/pause', headers=UI)
+        assert paused_request.status_code == 202
+        assert paused_request.json()['ended'] is None
+        release_first.set()
+        assert agent.pause(base, run_id, timeout=5).state == 'paused'
+
+        resumed_request = c.post(
+            f'/api/agent/runs/{run_id}/resume', headers=UI)
+        assert resumed_request.status_code == 202
+        assert second_entered.wait(5)
+        assert invocations[0].resume_provider_session_id is None
+        assert invocations[1].resume_provider_session_id == f'provider-{run_id}'
+
+        stopped_request = c.post(
+            f'/api/agent/runs/{run_id}/stop', headers=UI)
+        assert stopped_request.status_code == 202
+        assert cancel_requested.is_set()
+        assert stopped_request.json()['ended'] is None
+        assert not agent.wait(run_id, 0.05), (
+            '202 stop 不得同步等待并伪装 execution 已经 drain')
+    finally:
+        if not cancel_requested.is_set():
+            try:
+                agent.request_stop(base, run_id)
+            except Exception:
+                pass
+        release_first.set()
+        release_second.set()
+        agent.wait(run_id, 10)
+
+    [done] = [row for row in c.get(
+        '/api/agent/runs?sid=42').json()['runs']
+              if row['run_id'] == run_id]
+    assert done['ended'] is not None
+    assert done['outcome']['state'] == 'stopped'
+    assert done['allowed_controls'] == []
 
 
 def test_csrf_guard_covers_the_mutation(client):
@@ -234,7 +338,7 @@ def test_both_directions_of_the_mutex(client, monkeypatch):
         gate.wait(10)
         return _result(invocation, env)
 
-    monkeypatch.setattr(agent, '_default_spawn', lambda run_id: slow)
+    _inject_legacy_spawn(monkeypatch, slow)
     r = c.post('/api/agent/runs', json={
         'sid': '42', 'authorized': True, 'egress_authorized': True,
         'profiles': _PIPELINE_PROFILES,
@@ -287,7 +391,7 @@ def test_batch_starts_what_it_can_and_queues_the_rest(client, monkeypatch):
         gate.wait(10)
         return _result(invocation, env)
 
-    monkeypatch.setattr(agent, '_default_spawn', lambda run_id: slow)
+    _inject_legacy_spawn(monkeypatch, slow)
     started = []
     try:
         r = c.post('/api/agent/runs/batch', json={
@@ -331,7 +435,7 @@ def test_batch_rejects_a_book_that_already_has_an_agent(client, monkeypatch):
         gate.wait(10)
         return _result(invocation, env)
 
-    monkeypatch.setattr(agent, '_default_spawn', lambda run_id: slow)
+    _inject_legacy_spawn(monkeypatch, slow)
     first = c.post('/api/agent/runs', json={
         'sid': '42', 'authorized': True, 'egress_authorized': True,
         'profiles': _PIPELINE_PROFILES,

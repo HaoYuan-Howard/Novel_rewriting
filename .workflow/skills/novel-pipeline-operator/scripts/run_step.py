@@ -31,7 +31,7 @@ from novel.orchestrator.nodes import build_steps, shell_line  # noqa: E402
 
 _VALUE_OPTIONS = (
     '--base', '--sid', '--expect-code-version', '--evidence-json', '--run-id',
-    '--operator-permit-sha256',
+    '--operator-permit-file', '--operator-permit-sha256',
 )
 _EVIDENCE_SCHEMA = 'novel-operator-step-evidence-v2'
 _COMMANDER_EVIDENCE_SCHEMA = 'novel-operator-step-evidence-v3'
@@ -233,8 +233,13 @@ def main(argv: list[str] | None = None) -> int:
         '--run-id', type=_run_id_arg,
         help='显式续用原 run_id；不作为 node flag 或缓存键')
     parser.add_argument(
+        '--operator-permit-file',
+        help='ready 的原样 operator next --json wrapper，或 blocked recovery 的'
+             '完整 ExecutionPermit 文件；主路只提取 token 一次，execute 在 claim 后'
+             '做 active-surface CAS，不重跑 planner')
+    parser.add_argument(
         '--operator-permit-sha256',
-        help='operator permit 返回的当前许可哈希；preview/execute 都重铸复核')
+        help='兼容旧脚本的 SHA-only 慢路；preview/execute 会重新运行 planner')
     parser.add_argument('--execute', action='store_true')
     parser.add_argument('node')
     parser.add_argument('flags', nargs=argparse.REMAINDER,
@@ -250,14 +255,26 @@ def main(argv: list[str] | None = None) -> int:
         context = None
         if os.environ.get(commander_context.COMMANDER_RUN_ID_ENV) is not None \
                 or os.environ.get(
-                    commander_context.COMMANDER_CONTRACT_SHA256_ENV) is not None:
+                    commander_context.COMMANDER_CONTRACT_SHA256_ENV) is not None \
+                or os.environ.get(
+                    commander_context.COMMANDER_EPOCH_ID_ENV) is not None \
+                or os.environ.get(
+                    commander_context.COMMANDER_EPOCH_SHA256_ENV) is not None \
+                or os.environ.get(
+                    commander_context.COMMANDER_ADMISSION_ID_ENV) is not None:
             if args.sid is None:
                 raise TerminalState('Commander contract 只属于一本文书，run_step 必须显式给 --sid')
             context = commander_context.load_from_environment(args.base, args.sid)
             assert context is not None
-            if args.expect_code_version != context.start.code_version:
+            # v1 context 没有 epoch/execution_id 三格；读取兼容面仍把 parent
+            # run 当作唯一 execution。v2 才按当前 turn admission 精确封口。
+            context_epoch = getattr(context, 'epoch', None)
+            expected_context_code = (
+                context_epoch.code_version
+                if context_epoch is not None else context.start.code_version)
+            if args.expect_code_version != expected_context_code:
                 raise TerminalState(
-                    '--expect-code-version 必须逐字等于 Commander started 事件的起始指纹')
+                    '--expect-code-version 必须逐字等于当前 Commander epoch 指纹')
             if args.run_id is not None and args.run_id != context.run_id:
                 raise TerminalState(
                     f'run_step --run-id={args.run_id!r} 与 Commander run '
@@ -275,7 +292,30 @@ def main(argv: list[str] | None = None) -> int:
                     f'Commander 不允许付费跑法 {args.node} {sorted(tokens)} '
                     '落回 legacy LLM；该组合尚未接入 executor agent')
         current_permit = None
-        if args.operator_permit_sha256 is not None:
+        if (args.operator_permit_file is not None
+                and args.operator_permit_sha256 is not None):
+            raise TerminalState(
+                '--operator-permit-file 与 legacy --operator-permit-sha256 '
+                '只能选择一个')
+        if args.operator_permit_file is not None:
+            if args.sid is None:
+                raise TerminalState(
+                    '--operator-permit-file 只能绑定已落盘 sid；'
+                    '新书 stage0.remove --source 不携带它')
+            current_permit = permit_layer.load_execution_permit_file(
+                args.operator_permit_file)
+            if current_permit.code_version != args.expect_code_version:
+                raise TerminalState(
+                    'execution token 的代码身份与 --expect-code-version 不一致')
+            if (os.path.normcase(os.path.abspath(current_permit.base))
+                    != os.path.normcase(os.path.abspath(args.base))):
+                raise TerminalState('execution token.base 与 run_step --base 不一致')
+            if (current_permit.sid != args.sid
+                    or current_permit.node != args.node
+                    or current_permit.flags != flags):
+                raise TerminalState(
+                    'execution token 与 run_step 的 exact sid/node/flags 不一致')
+        elif args.operator_permit_sha256 is not None:
             if (len(args.operator_permit_sha256) != 64
                     or any(char not in '0123456789abcdef'
                            for char in args.operator_permit_sha256)):
@@ -293,7 +333,7 @@ def main(argv: list[str] | None = None) -> int:
                     '代码或 exact node/flags 已变化，请重新运行 operator permit')
         elif args.sid is not None:
             raise TerminalState(
-                '已落盘 sid 的 run_step 必须携带 --operator-permit-sha256；'
+                '已落盘 sid 的 run_step 必须携带 --operator-permit-file；'
                 'ready 与 blocked recovery 都不得绕过 execution permit')
         steps = build_steps(
             args.node, args.sid, flags,
@@ -319,7 +359,8 @@ def main(argv: list[str] | None = None) -> int:
             assert args.sid is not None
             assert current_permit is not None
             active_claim = admission.claim(
-                args.base, context.run_id, args.sid, node=args.node,
+                args.base, getattr(context, 'execution_id', context.run_id),
+                args.sid, node=args.node,
                 claim_sha256=current_permit.permit_sha256)
         except TerminalState as exc:
             print(f'✗ {exc}', file=sys.stderr)
@@ -327,6 +368,13 @@ def main(argv: list[str] | None = None) -> int:
 
     def execute_or_preview() -> int:
         try:
+            if args.execute and current_permit is not None:
+                # Commander 主路已在上方先取得 admission claim；这一步是首个
+                # evidence/beacon/subprocess 副作用前唯一一次 active-surface CAS。
+                # 它不运行 operator next / queue / 七层 check-only。
+                permit_layer.revalidate_active_execution_surface(
+                    current_permit, base=args.base, sid=args.sid,
+                    node=args.node, flags=flags)
             if args.evidence_json:
                 _write_evidence(args.evidence_json, evidence_data)
         except TerminalState as exc:
@@ -344,7 +392,10 @@ def main(argv: list[str] | None = None) -> int:
         if context is not None:
             effective_run_id = context.run_id
             child_env = commander_context.env_with_context(
-                run_id=context.run_id, base=context.base, start=context.start)
+                run_id=context.run_id, base=context.base, start=context.start,
+                contract=getattr(context, 'contract', None),
+                epoch=getattr(context, 'epoch', None),
+                admission_id=getattr(context, 'admission_id', None))
             assert active_claim is not None
             child_env = admission.env_with_claim(active_claim, child_env)
         else:

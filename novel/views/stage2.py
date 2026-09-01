@@ -22,12 +22,16 @@ import os
 from contracts.artifacts import (
     STAGE1_MAIN_TEXT, STAGE2_CHAPTER_BLUEPRINTS, STAGE2_GLOBAL_GROUNDING,
 )
+from contracts.invariants import BLUEPRINT_REVIEW_CONTRACT
 from contracts.schema.api import (
     ArcTrackLine, GlobalAddressLine, GlobalArcView, GlobalCharacterLine,
     GlobalKnowledgeEventLine, GlobalRelationLine, GlobalSecretLine, GlobalView, NameRef,
     BlueprintReviewBeat, BlueprintReviewBinding, BlueprintReviewCausalLink,
     BlueprintReviewChapter, BlueprintReviewCoverage,
-    BlueprintReviewCoverageSegment, BlueprintReviewFact, BlueprintReviewWorkpack,
+    BlueprintReviewCoverageSegment, BlueprintReviewFact,
+    BlueprintReviewNarrativeRelation, BlueprintReviewObserves,
+    BlueprintReviewResponseTo, BlueprintReviewSameScene,
+    BlueprintReviewStoryBefore, BlueprintReviewWorkpack,
     CompactApprovalCheck,
     ReadingBeatLine, ReadingFactLine, ReadingHinge, ReadingNarrationLine,
     ReadingSegment, ReadingView,
@@ -379,6 +383,38 @@ def _review_chapter(
         for index, beat in enumerate(blueprint.beats, 1)
     ]
 
+    relations: list[BlueprintReviewNarrativeRelation] = []
+    for relation in blueprint.narrative_relations:
+        common = {
+            'kind': relation.kind,
+            'enforcement': relation.enforcement,
+        }
+        if relation.kind == 'story_before':
+            relations.append(BlueprintReviewStoryBefore(
+                **common,
+                before_claim=fact_by_id[relation.before_fact_ref].claim,
+                after_claim=fact_by_id[relation.after_fact_ref].claim,
+            ))
+        elif relation.kind == 'response_to':
+            relations.append(BlueprintReviewResponseTo(
+                **common,
+                stimulus_claim=fact_by_id[relation.stimulus_fact_ref].claim,
+                response_claim=fact_by_id[relation.response_fact_ref].claim,
+            ))
+        elif relation.kind == 'same_scene':
+            relations.append(BlueprintReviewSameScene(
+                **common,
+                left_claim=fact_by_id[relation.left_fact_ref].claim,
+                right_claim=fact_by_id[relation.right_fact_ref].claim,
+            ))
+        else:
+            relations.append(BlueprintReviewObserves(
+                **common,
+                observer_char_id=relation.observer_char_id,
+                observed_claim=fact_by_id[relation.observed_fact_ref].claim,
+                observation_claim=fact_by_id[relation.observation_fact_ref].claim,
+            ))
+
     return BlueprintReviewChapter(
         chapter_ordinal=blueprint.chapter_ordinal,
         anomalous=bool(attention_rules),
@@ -399,6 +435,7 @@ def _review_chapter(
             )
             for edge in blueprint.causal_edges
         ],
+        narrative_relations=relations,
         entry_state_claims=[
             fact_by_id[ref].claim for ref in blueprint.entry_state_refs
         ],
@@ -463,31 +500,58 @@ def _blueprint_review_snapshot(
     ]
     chapters.sort(key=lambda row: (not row.anomalous, row.chapter_ordinal))
     report_payload = report.model_dump(by_alias=True, mode='json')
+    blueprint_subject = blueprints.model_dump(
+        by_alias=True, mode='json', exclude={'provenance'})
+    subject_sha256 = _canonical_sha256(blueprint_subject)
+    check = _compact_check(report)
+    accounting = list(report.accounting)
+    review_identity_sha256 = _canonical_sha256({
+        'review_contract_version': BLUEPRINT_REVIEW_CONTRACT,
+        'sid': store.ctx.sid,
+        'subject_kind': 'invalid' if blueprint_rel == invalid_rel else 'formal',
+        'subject_sha256': subject_sha256,
+        'check': check.model_dump(mode='json'),
+        'accounting': [row.model_dump(mode='json') for row in accounting],
+        'mechanical_fields_hidden': list(_BLUEPRINT_MECHANICAL_FIELDS_HIDDEN),
+        'chapters': [row.model_dump(mode='json') for row in chapters],
+    })
+    rules_fingerprint = prov.rules_fingerprint('stage2')
+    validation_seal_sha256 = _canonical_sha256({
+        'code_version': store.ctx.code,
+        'rules_fingerprint': rules_fingerprint,
+        'main_text_artifact_sha256': main_sha256,
+        'blueprint_artifact_sha256': blueprint_sha256,
+        'check_report_sha256': _canonical_sha256(report_payload),
+    })
     binding = BlueprintReviewBinding(
         blueprint_rel=blueprint_rel,
         subject_kind='invalid' if blueprint_rel == invalid_rel else 'formal',
         main_text_artifact_sha256=main_sha256,
         blueprint_artifact_sha256=blueprint_sha256,
         check_report_sha256=_canonical_sha256(report_payload),
-        code_version=store.ctx.code,
-        rules_fingerprint=prov.rules_fingerprint('stage2'),
         chapter_ordinals=sorted(main_by_ordinal),
     )
     base = BlueprintReviewWorkpack(
         sid=store.ctx.sid,
         title=title,
-        subject_sha256=blueprint_sha256,
+        review_identity_sha256=review_identity_sha256,
+        validation_seal_sha256=validation_seal_sha256,
+        review_token='bpr3_' + '0' * 64,
+        subject_sha256=subject_sha256,
         binding_sha256='0' * 64,
         binding=binding,
-        check=_compact_check(report),
-        accounting=list(report.accounting),
+        check=check,
+        accounting=accounting,
         mechanical_fields_hidden=list(_BLUEPRINT_MECHANICAL_FIELDS_HIDDEN),
         chapters=chapters,
     )
     payload = base.model_dump(by_alias=True, mode='json')
     payload.pop('binding_sha256')
+    payload.pop('review_token')
+    binding_sha256 = _canonical_sha256(payload)
     return base.model_copy(update={
-        'binding_sha256': _canonical_sha256(payload),
+        'binding_sha256': binding_sha256,
+        'review_token': f'bpr3_{binding_sha256}',
     })
 
 

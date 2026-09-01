@@ -76,6 +76,9 @@ class CommanderInvocation:
     profile: AgentProfile
     protocol: str
     cli_version: str | None = None
+    #: ``None`` 表示创建新会话；非空时 driver 必须使用供应商的 exact resume
+    #: 参数，并校验 wire 返回的 id 逐字相同。
+    resume_provider_session_id: str | None = None
 
     def __post_init__(self) -> None:
         argv = tuple(self.argv)
@@ -94,6 +97,11 @@ class CommanderInvocation:
                 or not self.cli_version.strip()):
             raise CommanderConfigurationError(
                 'cli_version 若出现就必须是非空字符串')
+        if self.resume_provider_session_id is not None and (
+                not isinstance(self.resume_provider_session_id, str)
+                or not self.resume_provider_session_id.strip()):
+            raise CommanderConfigurationError(
+                'resume_provider_session_id 若出现就必须是非空字符串')
         try:
             snapshot = dict(self.env_overrides)
         except (TypeError, ValueError) as exc:
@@ -188,6 +196,10 @@ class _CallableRunner:
     def __init__(self, call: RunnerCallable) -> None:
         self._call = call
         self._closed = False
+        self._launch_callback: Callable[[], None] | None = None
+
+    def set_launch_callback(self, callback: Callable[[], None]) -> None:
+        self._launch_callback = callback
 
     def run(
         self,
@@ -200,6 +212,9 @@ class _CallableRunner:
         del run_id
         if self._closed:
             raise CommanderConfigurationError('commander runner 已关闭')
+        callback, self._launch_callback = self._launch_callback, None
+        if callback is not None:
+            callback()
         env = os.environ.copy()
         env.update(invocation.env_overrides)
         completed = self._call(
@@ -233,7 +248,15 @@ class _SubprocessCommanderRunner:
         self._state_lock = threading.Lock()
         self._log_lock = threading.Lock()
         self._active: tuple[subprocess.Popen[bytes], str | None] | None = None
+        self._cancel_before_start: set[str | None] = set()
+        self._launch_callback: Callable[[], None] | None = None
         self._closed = False
+
+    def set_launch_callback(self, callback: Callable[[], None]) -> None:
+        with self._state_lock:
+            if self._active is not None or self._launch_callback is not None:
+                raise CommanderBusyError('Commander launch callback 已占用')
+            self._launch_callback = callback
 
     def run(
         self,
@@ -249,6 +272,11 @@ class _SubprocessCommanderRunner:
             if self._active is not None:
                 raise CommanderBusyError(
                     '同一 CommanderDriver 实例不能并发启动两棵进程树')
+            if run_id in self._cancel_before_start:
+                self._cancel_before_start.discard(run_id)
+                raise CommanderCommandError(
+                    'commander CLI 在 Popen 前已收到 stop，拒绝启动进程树',
+                    returncode=130)
             options: dict[str, Any] = {}
             if os.name == 'nt':
                 options['creationflags'] = (
@@ -263,6 +291,17 @@ class _SubprocessCommanderRunner:
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                 cwd=invocation.cwd, env=env, shell=False, **options)
             self._active = (process, run_id)
+            callback, self._launch_callback = self._launch_callback, None
+
+        if callback is not None:
+            try:
+                callback()
+            except BaseException:
+                _signal_process_tree(process, force=True)
+                with self._state_lock:
+                    if self._active is not None and self._active[0] is process:
+                        self._active = None
+                raise
 
         stdout = bytearray()
         stderr = bytearray()
@@ -357,7 +396,11 @@ class _SubprocessCommanderRunner:
         with self._state_lock:
             active = self._active
             if active is None:
-                return False
+                # driver owner 先于 Popen 登记，stop 可能恰落在这条窄缝。
+                # 记住精确 run_id，让随后的 run 在同一 state lock 内关闭式拒绝；
+                # 否则 cancel 返回时看不见进程，下一行却能把它启动出来。
+                self._cancel_before_start.add(run_id)
+                return True
             process, active_run_id = active
             if run_id is not None and run_id != active_run_id:
                 return False
@@ -366,6 +409,8 @@ class _SubprocessCommanderRunner:
     def close(self) -> None:
         with self._state_lock:
             self._closed = True
+            self._cancel_before_start.clear()
+            self._launch_callback = None
             active = self._active
         if active is not None:
             _signal_process_tree(active[0], force=True)
@@ -430,6 +475,7 @@ class CommanderDriver(ABC):
         allowed_tools: Sequence[str] = (),
         env_overrides: Mapping[str, str] | None = None,
         cli_version: str | None = None,
+        resume_provider_session_id: str | None = None,
     ) -> CommanderInvocation:
         """冻结展示与真跑共用的唯一 invocation。"""
 
@@ -511,6 +557,7 @@ class CliCommanderDriver(CommanderDriver):
         *,
         profile: AgentProfile,
         exit_code: int,
+        expected_provider_session_id: str | None,
     ) -> CommanderObservation:
         """把供应商协议归一；不读取 stderr 猜身份。"""
 
@@ -542,12 +589,22 @@ class CliCommanderDriver(CommanderDriver):
                 f'commander CLI 无法启动：{type(exc).__name__}') from exc
         exit_code = int(completed.returncode)
         observation = self._decode(
-            _text(completed.stdout), profile=profile, exit_code=exit_code)
+            _text(completed.stdout), profile=profile, exit_code=exit_code,
+            expected_provider_session_id=(
+                invocation.resume_provider_session_id))
         return CommanderProcessResult(
             exit_code=exit_code, observation=observation)
 
     def cancel(self, run_id: str | None = None) -> bool:
         return self._runner.cancel(run_id)
+
+    def set_launch_callback(self, callback: Callable[[], None]) -> None:
+        """只给 Supervisor launch ticket 使用；默认 runner 在 Popen 后回调。"""
+        setter = getattr(self._runner, 'set_launch_callback', None)
+        if setter is None:
+            raise CommanderConfigurationError(
+                '当前 Commander runner 不支持 launch ticket')
+        setter(callback)
 
     def close(self) -> None:
         self._runner.close()

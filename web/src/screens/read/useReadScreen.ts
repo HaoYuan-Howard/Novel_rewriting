@@ -87,12 +87,7 @@ export function useReadScreen() {
     confirm: () => {
       if (!reviewPack || reviewPack.binding.subject_kind !== 'formal') return
       markBlueprintSeen.mutate({
-        expected_binding_sha256: reviewPack.binding_sha256,
-        expected_subject_sha256: reviewPack.subject_sha256,
-        expected_main_text_artifact_sha256:
-          reviewPack.binding.main_text_artifact_sha256,
-        expected_code_version: reviewPack.binding.code_version,
-        expected_rules_fingerprint: reviewPack.binding.rules_fingerprint,
+        review_token: reviewPack.review_token,
       })
     },
   }

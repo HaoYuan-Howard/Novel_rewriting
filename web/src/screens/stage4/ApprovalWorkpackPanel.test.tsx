@@ -24,6 +24,7 @@ function workpack(kind: 'design' | 'structure'): ApprovalWorkpack {
     kind,
     candidate_sha256: kind === 'design' ? 'b'.repeat(64) : null,
     subject_sha256: 'a'.repeat(64),
+    review_token: (kind === 'design' ? 's4dr1_' : 's4sr1_') + 'a'.repeat(64),
     chapter_ordinals: [3],
     disposition: 'review_required',
     current_decision_sha256: null,
@@ -124,6 +125,19 @@ describe('Stage4 exception-first 审阅工作包', () => {
     expect(await screen.findByText(/同一当前工作包已批准/)).toBeVisible()
     expect(screen.getByText('当前决定 SHA-256')).toBeVisible()
     expect(screen.getByText('9'.repeat(64))).toBeVisible()
+  })
+
+  it('明确呈现 frozen-v6 raw 决定被暂停且无需重复整读', async () => {
+    vi.spyOn(api, 'getDesignApprovalWorkpack').mockResolvedValue({
+      ...workpack('design'),
+      disposition: 'suspended',
+      current_decision_sha256: '7'.repeat(64),
+    })
+    renderRoute(<ApprovalWorkpackPanel kind="design" />, '/n/book-1/stage4/3')
+
+    expect(await screen.findByText(/raw 审阅已记录/)).toBeVisible()
+    expect(screen.getByText(/暂停下游授权且无需重复整读/)).toBeVisible()
+    expect(screen.queryByRole('button')).not.toBeInTheDocument()
   })
 
   it('真实 API 缝使用两条只读 workpack 路由', async () => {

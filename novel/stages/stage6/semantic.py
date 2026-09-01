@@ -1425,7 +1425,7 @@ def require_human_resolution(
 
 
 def require_approved_clear(store: ArtifactStore, art: Hook) -> CandidateAssessment:
-    """下游消费闸：定稿同时绑定当前字节与当前代码/规则/证据工作包。
+    """下游消费闸：定稿绑定当前字节、可见证据与显式审阅契约。
 
     ⚠ 这里曾有三条分支：校准 FAIL 拒绝、`clear` 自动放行、以及「原来的校准 PASS 漂了」
     的兜底 raise。三条都由 automated 结论驱动，随自动放行门一起消失。
@@ -1443,12 +1443,13 @@ def require_approved_clear(store: ArtifactStore, art: Hook) -> CandidateAssessme
     # 避免 Stage7 rename、assemble 或未来新调用方漏包后污染自己的 provenance。
     with store.ctx.validation_reads():
         pack, _report = hook._approval_workpack_snapshot(store, art)
-        if (resolution.workpack_sha256 is None
-                or resolution.workpack_sha256 != pack.workpack_sha256
+        if (resolution.review_identity_sha256 is None
+                or resolution.review_identity_sha256
+                != pack.review_identity_sha256
                 or pack.disposition != 'already_current'):
             raise TerminalState(
-                '开篇文案旧批准没有绑定当前代码/规则/机械与 A/B 证据工作包——'
-                '请刷新 Stage6 approval workpack 后重跑 stage6.approve（0 成本）')
+                '开篇文案旧批准没有绑定当前可见机械/A/B 证据与审阅契约——'
+                '请走 Stage6 旧审批显式 rebind；只换代码或规则实现不得重新签字')
         return assessment_for_text(store, art, art.approved.text)
 
 

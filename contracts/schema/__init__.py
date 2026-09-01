@@ -35,9 +35,10 @@ from pydantic import BaseModel
 
 from contracts.artifacts import (
     STAGE0_REVISIONS, STAGE1_HOOK_COPY, STAGE1_MAIN_TEXT,
-    STAGE2_BLUEPRINT_CHARACTER_PROJECTION, STAGE2_CHAPTER_BLUEPRINTS, STAGE2_GLOBAL_EDIT,
+    STAGE2_BLUEPRINT_CHARACTER_PROJECTION, STAGE2_BLUEPRINT_RELATION_EDIT,
+    STAGE2_CHAPTER_BLUEPRINTS, STAGE2_GLOBAL_EDIT,
     STAGE2_GLOBAL_GROUNDING, STAGE2_GLOBAL_REVIEW, STAGE2_GLOBAL_REVIEW_DECISIONS,
-    STAGE4_BLIND_CANDIDATE, STAGE4_EVIDENCE_BINDING,
+    STAGE4_BLIND_CANDIDATE, STAGE4_BLIND_CHAPTER_EDIT, STAGE4_EVIDENCE_BINDING,
     STAGE4_PLAN_CHAPTERS, STAGE4_PLAN_EDIT, STAGE4_WRITER_CONTEXT,
     STAGE5_CHAPTER, STAGE5_REJECTED_REVISION,
     STAGE5_REVIEW, STAGE5_TRIM_AUDIT, STAGE5_TRIM_RESOLUTION,
@@ -139,6 +140,7 @@ from contracts.schema.stage1 import HookCopy, MainText, MainTextSection
 from contracts.schema.stage2 import (
     Address, AddressContextPatch, Arc, ArcTrack, ArcTrackPatch, Beat, Blueprint, Canon,
     BlueprintCharacterProjection, BlueprintCharacterProjectionChapter,
+    BlueprintRelationEdit,
     ChapterBlueprints, Character,
     CharacterAddressReplacement, CharacterRef, ConflictStage, Entities, EvidenceLocator,
     CausalEdge, FactAtom, FactEvidence, GlobalEdit, GlobalGrounding, GlobalCharacterPatch,
@@ -148,7 +150,7 @@ from contracts.schema.stage2 import (
     WorldRulePatch, WorldRuleVersion,
 )
 from contracts.schema.stage4 import (
-    BlindCandidate, CtxChapter, CtxFacts, CtxGoal, CtxScene,
+    BlindCandidate, BlindChapterEditRequest, CtxChapter, CtxFacts, CtxGoal, CtxScene,
     EvidenceBinding, FactRef, PlanChapter, PlanChapters, PlanEdit, PlanGoal,
     PlanScene, WriterContext,
 )
@@ -266,9 +268,14 @@ ARTIFACT_SPECS: dict[str, ArtifactSpec] = {
     # v6 删除摘要、人物显示名、重复父键与无消费者 provenance 账；由
     # `stage2.blueprint` 整跑（付费）重建，不迁移或手补。称名投影
     # 只改通用 `inputs` 的运行时键，没改 BlueprintProvenance 载体形状，不升版。
-    STAGE2_CHAPTER_BLUEPRINTS: ArtifactSpec(ChapterBlueprints, 6),
+    STAGE2_CHAPTER_BLUEPRINTS: ArtifactSpec(ChapterBlueprints, 7),
+    # v1：外部 hash-bound typed request；只被 CLI/API 读取，不是 producer 产物。
+    STAGE2_BLUEPRINT_RELATION_EDIT: ArtifactSpec(BlueprintRelationEdit),
     # v2 删除 goal rationale；A 仍保留重构策略与预算权重，供 B/编译器消费。
     STAGE4_BLIND_CANDIDATE: ArtifactSpec(BlindCandidate, 2),
+    # v1：外部 hash-bound 完整章替换请求；只被 Stage4A CLI/API 读取，
+    # 不是 Executor 产物，也不进入正式产物展示面。
+    STAGE4_BLIND_CHAPTER_EDIT: ArtifactSpec(BlindChapterEditRequest),
     # v2 删除可由绑定舞台 present 唯一推出的 participant_refs。
     STAGE4_EVIDENCE_BINDING: ArtifactSpec(EvidenceBinding, 3),
     # v4 删除 A 相过程字段、Stage2 重复契约、派生结构向量与编译参数快照。
@@ -454,9 +461,10 @@ __all__ = [
     'ArcTrackPatch', 'GlobalCharacterPatch',
     'AddressContextPatch', 'CharacterAddressReplacement', 'Arc', 'ConflictStage',
     'ArcTrack', 'ChapterBlueprints', 'Blueprint', 'Beat', 'FactAtom', 'CausalEdge',
+    'BlueprintRelationEdit',
     'SourceSpan', 'Hinge', 'Narration',
     'RoleSplitResponse',
-    'BlindCandidate', 'EvidenceBinding',
+    'BlindCandidate', 'BlindChapterEditRequest', 'EvidenceBinding',
     'PlanChapters', 'PlanChapter', 'PlanScene', 'FactRef', 'PlanGoal', 'PlanEdit',
     'WriterContext',
     'CtxChapter', 'CtxScene', 'CtxFacts', 'CtxGoal',

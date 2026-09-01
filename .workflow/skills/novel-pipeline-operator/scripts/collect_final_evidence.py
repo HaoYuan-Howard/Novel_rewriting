@@ -287,7 +287,11 @@ def _book_facts(
     meta = {name: len(re.findall(pattern, text, flags=re.IGNORECASE))
             for name, pattern in _META_PATTERNS.items()}
     try:
-        current = assemble.read_current_book(ctx)
+        # 终审收集与正式下载必须共用同一道 Stage2 交付闸。
+        # 这个入口先走 current v7，只在精确 v6→v7 shape break 且
+        # 完整 frozen proof 闭合时才放行旧书；不能让 finalizer 把
+        # 同一本已可下载的书记成 ``current_delivery_readable=false``。
+        current = assemble.read_current_book(ctx, allow_frozen_v6=True)
         current_error = None
     except Exception as exc:  # noqa: BLE001
         current = None

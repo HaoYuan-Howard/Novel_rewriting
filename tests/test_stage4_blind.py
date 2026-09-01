@@ -22,6 +22,7 @@ from novel.stages.stage4.blind import (
     BlindPlanError,
     assemble_blind_candidate,
     build_blind_chapter_projection,
+    build_blind_executor_projection,
     build_blind_projection,
     build_blind_strategy_projection,
     build_evidence_catalog,
@@ -106,6 +107,7 @@ def _blueprints() -> dict:
                     {'before': 'f01_002', 'after': 'f01_003'},
                     {'before': 'f01_001', 'after': 'f01_003'},
                 ],
+                'narrative_relations': [],
                 'entry_state_refs': ['f01_001'],
                 'ending_state_refs': ['f01_003'],
                 'beats': [
@@ -123,6 +125,7 @@ def _blueprints() -> dict:
                     _atom(2, 2, '甲决定隐瞒邀请', participants=['char_001', 'char_003']),
                 ],
                 'causal_edges': [{'before': 'f02_001', 'after': 'f02_002'}],
+                'narrative_relations': [],
                 'entry_state_refs': [],
                 'ending_state_refs': ['f02_002'],
                 'beats': [
@@ -387,6 +390,43 @@ def test_blind_projection_is_order_invariant_and_hides_formal_ids_from_a():
         'char_001', 'char_002', 'char_003',
     }
     assert re.fullmatch(r'[0-9a-f]{64}', mapping['truth_sha256'])
+
+
+def test_executor_projection_keeps_hard_and_hides_review_relations():
+    """含糊关系只进 Commander workpack，不能静默升级成 Executor 约束。"""
+    blueprints = _blueprints()
+    blueprints['blueprints'][0]['narrative_relations'] = [
+        {
+            'kind': 'story_before', 'enforcement': 'hard',
+            'before_fact_ref': 'f01_001', 'after_fact_ref': 'f01_002',
+        },
+        {
+            'kind': 'response_to', 'enforcement': 'review',
+            'stimulus_fact_ref': 'f01_002', 'response_fact_ref': 'f01_003',
+        },
+    ]
+    truth, mapping = build_blind_projection(
+        blueprints, root_clean_sha1=ROOT)
+    commander_relations = truth['chapters'][0]['narrative_relations']
+    assert {row['enforcement'] for row in commander_relations} == {
+        'hard', 'review'}
+
+    executor_truth = build_blind_executor_projection(truth)
+    assert [
+        row['enforcement']
+        for row in executor_truth['chapters'][0]['narrative_relations']
+    ] == ['hard']
+
+    chapter_truth, _local = build_blind_chapter_projection(
+        truth, mapping, chapter_ordinal=1, root_clean_sha1=ROOT)
+    relations = chapter_truth['chapter']['narrative_relations']
+    assert len(relations) == 1
+    assert relations[0]['kind'] == 'story_before'
+    assert relations[0]['enforcement'] == 'hard'
+    serialized = json.dumps(chapter_truth, ensure_ascii=False, sort_keys=True)
+    assert 'response_to' not in serialized
+    # 完整 review truth 仍绑定 mapping；Executor 降维投影不得冒充新的 truth 身份。
+    assert mapping['truth_sha256'] != blind_core._sha256(executor_truth)
 
 
 @pytest.mark.parametrize(

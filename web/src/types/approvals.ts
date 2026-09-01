@@ -126,6 +126,18 @@ export interface DesignRepairConstraint {
   code: string
   scene_refs: string[]
   opaque_aliases: string[]
+  effect?: unknown | null
+}
+
+export interface DesignStrategyReplanConstraint {
+  kind: string
+  subject_sha256: string
+  chapter_ordinals: number[]
+}
+
+export interface DesignStrategyReplanRuling {
+  kind: string
+  chapter_ordinals: number[]
 }
 
 export interface DesignStrategyReview {
@@ -137,6 +149,7 @@ export interface DesignStrategyReview {
   template_token: string | null
   decision: string
   reason: string
+  replan_constraints: DesignStrategyReplanConstraint[]
   /** 复用旧 accept 时由服务端填；前端原样回传，不自行寻找历史决定。 */
   source_decision_sha256: string | null
 }
@@ -177,7 +190,7 @@ export interface DesignPreflightSummary {
   infeasibility: BindingInfeasibilityWitness[]
 }
 
-export interface DesignReviewRequest {
+export interface DesignReviewMaterialized {
   actor: string
   reviewer_kind: string
   review_run_id: string
@@ -194,8 +207,34 @@ export interface DesignReviewRequest {
   chapters: DesignChapterReview[]
 }
 
-/** GET 返回的关闭式模板；形状与 POST 相同，但仍含待确认 placeholder/token。 */
-export interface DesignReviewTemplate extends DesignReviewRequest {}
+export interface DesignStrategyRuling {
+  decision: string
+  reason: string
+  replan_constraints: DesignStrategyReplanRuling[]
+}
+
+export interface DesignChapterRuling {
+  output_ordinal: number
+  decision: string
+  reason: string
+  constraints: DesignRepairConstraint[]
+}
+
+/** POST 只搬一枚 opaque token 与 typed 裁决；subject 由服务端现场重建。 */
+export interface DesignReviewRequest {
+  actor: string
+  reviewer_kind: string
+  review_run_id: string
+  general_reason: string
+  review_token: string
+  strategy: DesignStrategyRuling
+  chapters: DesignChapterRuling[]
+}
+
+/** GET 返回完整只读材料；它不是可原样 POST 的写入载荷。 */
+export interface DesignReviewTemplate extends DesignReviewMaterialized {
+  review_token: string
+}
 
 /** GET template 的四个必填审阅会话参数；reason 会投影为响应 general_reason。 */
 export interface DesignReviewTemplateQuery {
@@ -205,7 +244,19 @@ export interface DesignReviewTemplateQuery {
   reason: string
 }
 
-export interface DesignReviewDecision extends DesignReviewRequest {
+export interface DesignReviewDecision extends DesignReviewMaterialized {
+  decision_sha256: string
+  decided_at: string
+}
+
+export interface DesignReviewHistoryEntry {
+  actor: string
+  reviewer_kind: string
+  review_run_id: string
+  general_reason: string
+  review_token: string
+  strategy_decision: string
+  chapter_decisions: Record<number, string>
   decision_sha256: string
   decided_at: string
 }
@@ -216,7 +267,9 @@ export interface DesignReviewView {
   candidate_sha256: string | null
   aggregate_subject_sha256: string | null
   current_decision: DesignReviewDecision | null
-  history: DesignReviewDecision[]
+  history: DesignReviewHistoryEntry[]
+  /** 新服务端必给；可选只为读取旧前端缓存/fixture，动作仍关闭式要求真 token。 */
+  action_review_token?: string | null
   /** 当前、fresh 且由代码铸造的 Stage4B 不可行证据；其余状态一律为 null。 */
   binding_infeasibility: DesignBindingInfeasibility | null
   /** 当前候选的 A→formal 生产预检；不可用态为 null。 */
@@ -263,9 +316,9 @@ export interface StructureChapterApproval {
 }
 
 export interface StructureApprovalRequest {
-  subject_sha256: string
   actor: string
   reason: string
+  review_token: string
   chapters: StructureChapterApproval[]
 }
 
@@ -285,18 +338,22 @@ export interface StructureApprovalView {
   /** 取值面来自 `/api/enums.structure_approval_states`。 */
   state: string
   current_subject_sha256: string | null
+  /** 新服务端必给；旧只读快照缺失时按 unavailable 处理。 */
+  review_token?: string | null
   current_decision: StructureApprovalDecision | null
   history: StructureApprovalDecision[]
   /** Stage4B 下发的非阻断关注项；只展示给人审，不由前端改判。 */
   binding_concerns: StructureBindingConcern[]
 }
 
-/** Stage6/7 终审包公共绑定面；屏必须先呈现各自完整证据，再提交这个 hash。 */
+/** Stage6/7 终审包公共绑定面；屏只提交 opaque review token。 */
 export interface FinalApprovalWorkpack {
-  v: 1
+  v: 3
   sid: string
-  code_version: string
-  rules_fingerprint: string
+  review_contract_version: string
+  review_identity_sha256: string
+  validation_seal_sha256: string
+  review_token: string
   artifact_subject_sha256: string
   workpack_sha256: string
   disposition: 'review_required' | 'already_current'
@@ -394,6 +451,7 @@ export interface Stage6ApprovalWorkpack extends FinalApprovalWorkpack {
     reason: string
     subject_sha256: string
     workpack_sha256: string | null
+    review_identity_sha256: string | null
   } | null
 }
 
@@ -439,20 +497,26 @@ export interface Stage7ApprovalWorkpack extends FinalApprovalWorkpack {
     reason: string
     subject_sha256: string
     workpack_sha256: string | null
+    review_identity_sha256: string | null
   } | null
 }
 
 /** Stage5 写作授权的 typed 投影；`writing` 仍是服务端给出的最终可执行结论。 */
-export interface WritingApprovalDecision {
+export interface WritingApprovalRequest {
   actor: string
   reason: string
-  subject_sha256: string
+  review_token: string
+}
+
+export interface WritingApprovalDecision extends WritingApprovalRequest {
   decided_at: string
 }
 
 export interface WritingApprovalView {
   available: boolean
   current_subject_sha256: string | null
+  /** 新服务端必给；旧只读快照缺失时不得发授权。 */
+  review_token?: string | null
   current_decision: WritingApprovalDecision | null
   history: WritingApprovalDecision[]
 }
@@ -493,7 +557,7 @@ export interface Stage5FindingGroupAck {
   template_token: string | null
 }
 
-export interface Stage5ClosureRequest {
+export interface Stage5ClosureMaterialized {
   actor: string
   reason: string
   workpack_sha256: string
@@ -502,8 +566,30 @@ export interface Stage5ClosureRequest {
   group_acks: Stage5FindingGroupAck[]
 }
 
-/** GET `/approvals/stage5/template` 的关闭式模板；逐项确认前仍带 placeholder/token。 */
-export interface Stage5ClosureTemplate extends Stage5ClosureRequest {}
+export interface Stage5MustAppearRulingInput {
+  chapter_ordinal: number
+  evidence_key: string
+  ruling: string
+  reason: string
+}
+
+export interface Stage5FindingGroupRuling {
+  group: string
+  acknowledged: true
+}
+
+export interface Stage5ClosureRequest {
+  actor: string
+  reason: string
+  review_token: string
+  must_appear: Stage5MustAppearRulingInput[]
+  group_acks: Stage5FindingGroupRuling[]
+}
+
+/** GET 返回完整只读材料；POST 只投影 token 与 typed rulings。 */
+export interface Stage5ClosureTemplate extends Stage5ClosureMaterialized {
+  review_token: string
+}
 
 export interface Stage5ClosureDecision extends Stage5ClosureRequest {
   decision_sha256: string
@@ -544,6 +630,7 @@ export interface Stage5ClosureWorkpack {
   disclosure: Record<string, number>
   resolved: Record<string, number>
   workpack_sha256: string
+  review_token: string
 }
 
 export interface Stage5ClosureView {
@@ -637,8 +724,9 @@ export interface ApprovalWorkpack {
   kind: 'design' | 'structure'
   candidate_sha256?: string | null
   subject_sha256: string
+  review_token: string
   chapter_ordinals: number[]
   groups: ApprovalWorkpackGroup[]
-  disposition: 'review_required' | 'already_current'
+  disposition: 'review_required' | 'already_current' | 'suspended'
   current_decision_sha256: string | null
 }

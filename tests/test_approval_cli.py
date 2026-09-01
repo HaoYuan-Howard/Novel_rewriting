@@ -28,7 +28,8 @@ def _doc() -> ApprovalDoc:
         gate={key: False for key in APPROVAL_GATES},
         seen={key: False for key in APPROVAL_SEEN},
         structure=StructureApprovalView(
-            state='missing', current_subject_sha256=SUBJECT),
+            state='missing', current_subject_sha256=SUBJECT,
+            review_token=f's4sr1_{SUBJECT}'),
         spawns={},
     )
 
@@ -48,13 +49,7 @@ def test_approval_show_is_a_read_only_json_surface(monkeypatch, capsys, tmp_path
 def test_headless_seen_and_early_gates_reuse_approval_services(
         monkeypatch, capsys, tmp_path):
     calls = []
-    seen_request = BlueprintSeenRequest(
-        expected_binding_sha256='b' * 64,
-        expected_subject_sha256='a' * 64,
-        expected_main_text_artifact_sha256='c' * 64,
-        expected_code_version='test-code',
-        expected_rules_fingerprint='test-rules',
-    )
+    seen_request = BlueprintSeenRequest(review_token='bpr3_' + 'b' * 64)
     seen_path = tmp_path / 'blueprint-seen.json'
     seen_path.write_text(seen_request.model_dump_json(indent=2), encoding='utf-8')
     monkeypatch.setattr(
@@ -113,7 +108,7 @@ def test_approval_template_forwards_required_identity_and_prints_typed_json(
         return StructureApprovalRequest(
             actor=actor,
             reason=reason,
-            subject_sha256=SUBJECT,
+            review_token=f's4sr1_{SUBJECT}',
             chapters=[{
                 'output_ordinal': 1,
                 'decision': 'request_replan',
@@ -129,6 +124,7 @@ def test_approval_template_forwards_required_identity_and_prints_typed_json(
 
     assert rc == X.OK
     body = StructureApprovalRequest.model_validate_json(capsys.readouterr().out)
+    assert body.review_token == f's4sr1_{SUBJECT}'
     assert body.chapters[0].decision == 'request_replan'
     assert captured['actor'] == 'commander' and captured['reason'] == '待逐章核验'
 
@@ -137,7 +133,7 @@ def test_approval_apply_reads_typed_writing_body_and_never_uses_legacy_branch(
         monkeypatch, capsys, tmp_path):
     request = WritingApprovalRequest(
         actor='commander', reason='已核对完整 current subject',
-        subject_sha256=SUBJECT)
+        review_token=f's5wr1_{SUBJECT}')
     source = tmp_path / 'writing-approval.json'
     source.write_text(request.model_dump_json(indent=2), encoding='utf-8')
     captured = {}

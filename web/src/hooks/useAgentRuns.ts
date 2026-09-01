@@ -29,7 +29,9 @@ export function useAgentRuns(sidOverride?: string) {
     queryFn: () => api.getAgentRuns(sid),
     enabled: !!sid,
     refetchInterval: (q) =>
-      q.state.data?.runs.some((run) => run.state === 'running') ? 2500 : false,
+      q.state.data?.runs.some((run) => run.state === 'pending' || run.state === 'running')
+        ? 2500
+        : false,
   })
 }
 
@@ -62,6 +64,32 @@ export function useStopAgentRun(sidOverride?: string) {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: (runId: string) => api.stopAgentRun(runId),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: qk.agentRuns(sid) })
+    },
+  })
+}
+
+/** 协作式暂停：不取消已取得 claim 的付费节点。 */
+export function usePauseAgentRun(sidOverride?: string) {
+  const routeSid = useSid()
+  const sid = sidOverride ?? routeSid
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (runId: string) => api.pauseAgentRun(runId),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: qk.agentRuns(sid) })
+    },
+  })
+}
+
+/** 恢复同一 parent run；同 epoch 由后端精确续 provider session。 */
+export function useResumeAgentRun(sidOverride?: string) {
+  const routeSid = useSid()
+  const sid = sidOverride ?? routeSid
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (runId: string) => api.resumeAgentRun(runId),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: qk.agentRuns(sid) })
     },

@@ -121,14 +121,7 @@ def _approve_for_writing(box: sandbox.Sandbox) -> None:
         box.root,
         box.sid,
         'read',
-        blueprint_subject=BlueprintSeenRequest(
-            expected_binding_sha256=pack.binding_sha256,
-            expected_subject_sha256=pack.subject_sha256,
-            expected_main_text_artifact_sha256=(
-                pack.binding.main_text_artifact_sha256),
-            expected_code_version=pack.binding.code_version,
-            expected_rules_fingerprint=pack.binding.rules_fingerprint,
-        ),
+        blueprint_subject=BlueprintSeenRequest(review_token=pack.review_token),
     )
     approvals.approve_gate(box.root, box.sid, 's2')
     subject, chapters = approvals._current_structure_subject_and_chapters(box.dir)
@@ -153,11 +146,13 @@ def _approved_name_artifact():
         surname_map={'沈': '陆'}, characters=[], extra_subs=[],
         approved=None, book_txt=None, residual=[], book=[],
     )
+    subject = rename.approval_subject_sha256(art)
     art.approved = ApprovedNameMap(
         origin='human', actor='service-reviewer',
         reason='reviewed the full current name decision surface',
-        subject_sha256=rename.approval_subject_sha256(art),
+        subject_sha256=subject,
         workpack_sha256='f' * 64,
+        review_identity_sha256=subject,
     )
     return art
 
@@ -173,6 +168,7 @@ def _isolated_s7_proof(monkeypatch, holder: dict[str, object]):
         lambda _store, art: (
             SimpleNamespace(
                 workpack_sha256=art.approved.workpack_sha256,
+                review_identity_sha256=rename.approval_subject_sha256(art),
                 disposition='already_current'),
             SimpleNamespace(),
         ),
@@ -444,6 +440,69 @@ def test_retired_draft_in_old_s5_proof_revokes_s5_and_downstream(
     assert all(effective.gate[gate] for gate in ('s0', 's1', 's2', 's4'))
     assert all(not effective.gate[gate] for gate in ('s5', 's6', 's7'))
     assert all(effective.gate_proofs[gate] is None for gate in ('s5', 's6', 's7'))
+
+
+def test_mutation_writes_raw_and_suspended_downstream_reactivates(
+        tmp_path, monkeypatch):
+    """前置暂失效只 suspend；一次无关写入不得把下游 proof 永久清盘。"""
+    novel_dir = tmp_path / '书名_123'
+    novel_dir.mkdir()
+    monkeypatch.setattr(
+        approvals.paths, 'resolve_novel_dir', lambda *_args: novel_dir)
+    monkeypatch.setattr(approvals, '_refuse_if_frozen', lambda _sid: None)
+
+    old_s0 = approvals._ApprovalProof(
+        root_clean_sha1='0' * 40,
+        artifacts={'s0.json': 'a' * 64},
+        decision_sha256='b' * 64,
+    )
+    old_s1 = approvals._ApprovalProof(
+        root_clean_sha1='0' * 40,
+        artifacts={'s1.json': 'c' * 64},
+        decision_sha256='d' * 64,
+    )
+    blank = approvals._fresh_record('123')
+    gates = dict(blank.gate)
+    proofs = dict(blank.gate_proofs)
+    gates.update({'s0': True, 's1': True})
+    proofs.update({'s0': old_s0, 's1': old_s1})
+    stored = blank.model_copy(update={'gate': gates, 'gate_proofs': proofs})
+    approval_path = approvals._path(tmp_path, '123')
+    approval_path.parent.mkdir(parents=True, exist_ok=True)
+    approval_path.write_text(stored.model_dump_json(indent=2), encoding='utf-8')
+
+    suspended = {'value': True}
+
+    def effective(_novel_dir, raw):
+        if not suspended['value']:
+            return raw
+        projected_gates = dict(raw.gate)
+        projected_proofs = dict(raw.gate_proofs)
+        projected_gates.update({'s0': False, 's1': False})
+        projected_proofs.update({'s0': None, 's1': None})
+        return raw.model_copy(update={
+            'gate': projected_gates, 'gate_proofs': projected_proofs,
+        })
+
+    monkeypatch.setattr(approvals, '_effective_record', effective)
+    fresh_s0 = old_s0.model_copy(update={'decision_sha256': 'e' * 64})
+    monkeypatch.setattr(
+        approvals, '_require_artifacts',
+        lambda _base, _sid, _gate, _record: fresh_s0)
+
+    projected = approvals.approve_gate(tmp_path, '123', 's0')
+    assert projected.gate['s0'] is False
+    raw = approvals._read_raw(tmp_path, '123')
+    assert raw.gate['s0'] is True
+    assert raw.gate['s1'] is True
+    assert raw.gate_proofs['s0'] == fresh_s0
+    assert raw.gate_proofs['s1'] == old_s1
+
+    suspended['value'] = False
+    restored = approvals._read_current(tmp_path, '123')
+    assert restored.gate['s0'] is True
+    assert restored.gate['s1'] is True
+    assert restored.gate_proofs['s1'] == old_s1
 
 
 @_corpus_test

@@ -30,15 +30,21 @@ from types import SimpleNamespace
 
 import pytest
 
+from contracts.invariants import INBOX_KIND
 from contracts.rules import REGISTRY
-from contracts.schema.api import ExecutionPermit
-from contracts.schema.orchestration import AgentProfile, PipelineAgentProfiles
+from contracts.schema.api import (
+    ExecutionPermit, InboxView, OperatorAction, OperatorNext,
+)
+from contracts.schema.orchestration import (
+    AgentProfile, NovelOverview, OverviewSummary, PipelineAgentProfiles,
+)
 from contracts.schema.report import finding
 from novel.errors import UpstreamMissing
 from novel.prov import EdgeVerdict, FreshnessReport
 from novel.report import build, render
 from novel.report.findings import ran, unverifiable
 from novel.orchestrator.operator import canonical_sha256
+from novel.orchestrator.nodes import is_paid, write_effect
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SKILL_DIR = REPO_ROOT / '.workflow' / 'skills' / 'novel-pipeline-operator'
@@ -142,8 +148,34 @@ def test_skill_gets_deterministic_next_action_before_running_a_step():
     assert '每次节点、typed approval、人工修订或恢复动作结束后' in skill
 
 
+def test_skill_reuses_one_complete_execution_token_for_preview_and_execute():
+    """ready 主路原样复用 next wrapper；blocked 才另铸 recovery token。"""
+    skill = (SKILL_DIR / 'SKILL.md').read_text(encoding='utf-8')
+    workflow = (
+        SKILL_DIR / 'references' / 'workflow.md').read_text(encoding='utf-8')
+    for body in (skill, workflow):
+        assert '--operator-permit-file <NEXT_FILE>' in body
+        assert '--operator-permit-sha256' not in body
+        assert 'operator next <SID> --base <BASE> --json' in body
+    assert 'state=ready` 时把原样 node/flags 交给 `operator permit`' not in skill
+    assert 'ready action 不再第二次调用 `operator permit`' in skill
+    assert 'preview 只解析冻结 token' in skill
+    assert '首个副作用前只做一次 active-surface CAS' in skill
+
+
+def test_skill_leaves_control_accounting_to_deterministic_supervisor():
+    """Commander 不再维护逐动作 telemetry 或增量 review.md 第二份流水账。"""
+    skill = (SKILL_DIR / 'SKILL.md').read_text(encoding='utf-8')
+    assert '正式工作流只有两个模型角色' in skill
+    assert 'RunSupervisor' in skill and '确定性状态机' in skill
+    assert '正式运行没有“外层 root”' in skill
+    assert '运行中不创建' in skill and '不逐动作改写' in skill
+    for manual in ('phase-start', 'phase-end', 'session-start', 'session-end'):
+        assert manual not in skill
+
+
 def test_run_step_executes_the_production_argv_and_brackets_it_with_beacons(
-        monkeypatch):
+        monkeypatch, tmp_path):
     """复用 runner 不手拼节点 argv；start/end 信标必须包住同一条生产命令。"""
     runner = _operator_script('run_step')
     step_argv = [
@@ -165,16 +197,21 @@ def test_run_step_executes_the_production_argv_and_brackets_it_with_beacons(
     monkeypatch.setattr(runner.subprocess, 'run', fake_run)
     monkeypatch.setattr(runner.prov, 'code_version', lambda: 'code-v1')
     permit = _execution_permit()
+    permit_file = tmp_path / 'execution-permit.json'
+    permit_file.write_text(permit.model_dump_json(indent=2), encoding='utf-8')
+    cas: list[tuple] = []
     monkeypatch.setattr(
-        runner.operator_planner, 'permit', lambda *_args, **_kwargs: permit)
+        runner.permit_layer, 'revalidate_active_execution_surface',
+        lambda *args, **kwargs: cas.append((args, kwargs)))
 
     rc = runner.main([
         '--base', 'E:/outputs', '--sid', '42', '--expect-code-version', 'code-v1',
-        '--operator-permit-sha256', permit.permit_sha256,
+        '--operator-permit-file', str(permit_file),
         'stage2.global', '--execute', '--run-id', 'resume-42',
     ])
 
     assert rc == 0
+    assert len(cas) == 1
     assert built and built[0][1]['placeholders'] is False
     assert 'mark' in calls[0][0] and '--phase' in calls[0][0]
     assert calls[0][0][calls[0][0].index('--phase') + 1] == 'start'
@@ -199,7 +236,8 @@ def test_run_step_executes_the_production_argv_and_brackets_it_with_beacons(
     assert all('shell' not in kwargs for _argv, kwargs in calls)
 
 
-def test_run_step_closes_execution_with_crash_when_node_spawn_raises(monkeypatch):
+def test_run_step_closes_execution_with_crash_when_node_spawn_raises(
+        monkeypatch, tmp_path):
     runner = _operator_script('run_step')
     step = SimpleNamespace(
         label='stage2 全局事实',
@@ -210,8 +248,11 @@ def test_run_step_closes_execution_with_crash_when_node_spawn_raises(monkeypatch
     monkeypatch.setattr(runner, 'build_steps', lambda *_args, **_kwargs: [step])
     monkeypatch.setattr(runner.prov, 'code_version', lambda: 'code-v1')
     permit = _execution_permit()
+    permit_file = tmp_path / 'execution-permit.json'
+    permit_file.write_text(permit.model_dump_json(indent=2), encoding='utf-8')
     monkeypatch.setattr(
-        runner.operator_planner, 'permit', lambda *_args, **_kwargs: permit)
+        runner.permit_layer, 'revalidate_active_execution_surface',
+        lambda *_args, **_kwargs: None)
 
     def fake_run(argv, **_kwargs):
         calls.append(list(argv))
@@ -225,7 +266,7 @@ def test_run_step_closes_execution_with_crash_when_node_spawn_raises(monkeypatch
         runner.main([
             '--base', 'E:/outputs', '--sid', '42',
             '--expect-code-version', 'code-v1', '--execute',
-            '--operator-permit-sha256', permit.permit_sha256, 'stage2.global',
+            '--operator-permit-file', str(permit_file), 'stage2.global',
         ])
 
     start, _node, end = calls
@@ -263,13 +304,131 @@ def _execution_permit(
         'kind': 'ready',
         'node': node,
         'flags': list(flags or []),
-        'paid': True,
-        'writes': 'stage2/global_grounding.json',
+        'paid': is_paid(node, flags or []),
+        'writes': write_effect(node, flags or []),
         'operator_action_sha256': operator_action_sha256,
         'external_inputs': [],
     }
     return ExecutionPermit(
         **payload, permit_sha256=canonical_sha256(payload))
+
+
+def _write_execution_token(path: Path, permit: ExecutionPermit) -> Path:
+    path.write_text(permit.model_dump_json(), encoding='utf-8')
+    return path
+
+
+def _write_ready_next(path: Path, permit: ExecutionPermit) -> Path:
+    """模拟 CLI 的原样 ready next JSON；调用方不拆 execution token。"""
+    assert permit.operator_action_sha256 is not None
+    overview = NovelOverview(
+        sid=permit.sid, title='测试书', dirname=f'平台_测试书_{permit.sid}',
+        stages=[], summary=OverviewSummary(
+            verdict='pending', text='待继续', detail='下一步待判',
+            artifact_count=0, latest_mtime=None),
+    )
+    inbox = InboxView(
+        items=[], counts={kind: 0 for kind in INBOX_KIND}, total=0, wontfix=0)
+    action = OperatorAction(
+        node=permit.node, flags=permit.flags, resume_verdict='run', why='测试',
+        waiting_on=None, paid=permit.paid, writes=permit.writes,
+        action_sha256=permit.operator_action_sha256,
+    )
+    wrapper = OperatorNext(
+        base=permit.base, sid=permit.sid, code_version=permit.code_version,
+        surface_seal=permit.surface_seal, state='ready', overview=overview,
+        inbox=inbox, action=action, execution_token=permit,
+    )
+    path.write_text(wrapper.model_dump_json(), encoding='utf-8')
+    return path
+
+
+def test_run_step_permit_file_preview_never_remints_or_revalidates(
+        monkeypatch, tmp_path) -> None:
+    """完整 token 已冻结 preview；渲染步骤不能再跑七层 planner/CAS。"""
+    runner = _operator_script('run_step')
+    permit = _execution_permit(base=str(tmp_path.resolve()))
+    token = _write_ready_next(tmp_path / 'operator-next.json', permit)
+    step = SimpleNamespace(
+        label='stage2 全局事实',
+        argv=['python', '-m', 'novel.cli', 'run', 'stage2.global', '42'],
+        cwd=str(REPO_ROOT), paid=True,
+        writes=write_effect('stage2.global', []), note=None,
+    )
+    built: list[tuple] = []
+    monkeypatch.setattr(runner.prov, 'code_version', lambda: 'code-v1')
+    monkeypatch.setattr(
+        runner.operator_planner, 'permit',
+        lambda *_args, **_kwargs: pytest.fail('完整 token preview 不得重新铸 permit'))
+    monkeypatch.setattr(
+        runner.permit_layer, 'revalidate_active_execution_surface',
+        lambda *_args, **_kwargs: pytest.fail('preview 不做 execute-side CAS'))
+    monkeypatch.setattr(
+        runner, 'build_steps',
+        lambda *args, **kwargs: built.append((args, kwargs)) or [step])
+
+    rc = runner.main([
+        '--base', str(tmp_path), '--sid', '42',
+        '--expect-code-version', 'code-v1',
+        '--operator-permit-file', str(token), 'stage2.global',
+    ])
+
+    assert rc == 0
+    assert built == [(('stage2.global', '42', []), {
+        'base': str(tmp_path.resolve()),
+        'executor_profile': None,
+        'egress_authorized': None,
+        'placeholders': True,
+    })]
+
+
+def test_run_step_permit_file_refuses_tampering_before_building(
+        monkeypatch, tmp_path, capsys) -> None:
+    runner = _operator_script('run_step')
+    permit = _execution_permit(base=str(tmp_path.resolve()))
+    tampered = permit.model_dump(mode='json')
+    tampered['surface_seal'] = 'f' * 64
+    token = tmp_path / 'tampered-token.json'
+    token.write_text(json.dumps(tampered), encoding='utf-8')
+    monkeypatch.setattr(runner.prov, 'code_version', lambda: 'code-v1')
+    monkeypatch.setattr(
+        runner, 'build_steps',
+        lambda *_args, **_kwargs: pytest.fail('坏 token 不得构造生产步骤'))
+    monkeypatch.setattr(
+        runner.operator_planner, 'permit',
+        lambda *_args, **_kwargs: pytest.fail('坏完整 token 也不得退回 remint'))
+
+    rc = runner.main([
+        '--base', str(tmp_path), '--sid', '42',
+        '--expect-code-version', 'code-v1',
+        '--operator-permit-file', str(token), 'stage2.global',
+    ])
+
+    assert rc == 2
+    assert 'canonical SHA-256' in capsys.readouterr().err
+
+
+def test_run_step_permit_file_refuses_exact_coordinate_drift_before_building(
+        monkeypatch, tmp_path, capsys) -> None:
+    runner = _operator_script('run_step')
+    permit = _execution_permit(base=str(tmp_path.resolve()))
+    token = _write_execution_token(tmp_path / 'execution-token.json', permit)
+    monkeypatch.setattr(runner.prov, 'code_version', lambda: 'code-v1')
+    monkeypatch.setattr(
+        runner, 'build_steps',
+        lambda *_args, **_kwargs: pytest.fail('坐标不等不得构造生产步骤'))
+    monkeypatch.setattr(
+        runner.operator_planner, 'permit',
+        lambda *_args, **_kwargs: pytest.fail('坐标错不得退回 remint'))
+
+    rc = runner.main([
+        '--base', str(tmp_path), '--sid', 'other-book',
+        '--expect-code-version', 'code-v1',
+        '--operator-permit-file', str(token), 'stage2.global',
+    ])
+
+    assert rc == 2
+    assert 'exact sid/node/flags' in capsys.readouterr().err
 
 
 def test_run_step_projects_frozen_executor_and_egress_into_production_steps(
@@ -378,6 +537,7 @@ def test_headless_execute_claims_before_evidence_and_releases_after_steps(
         executor_profile=lambda _node: profiles.executor_default,
     )
     permit = _execution_permit(base=str(tmp_path.resolve()))
+    token = _write_execution_token(tmp_path / 'execution-token.json', permit)
     step = SimpleNamespace(
         label='stage2 全局事实',
         argv=['python', '-m', 'novel.cli', 'run', 'stage2.global', '42'],
@@ -396,19 +556,40 @@ def test_headless_execute_claims_before_evidence_and_releases_after_steps(
         lambda **_kwargs: {'PARENT': 'commander'})
     monkeypatch.setattr(runner.prov, 'code_version', lambda: 'code-v1')
     monkeypatch.setattr(
-        runner.operator_planner, 'permit', lambda *_args, **_kwargs: permit)
+        runner.operator_planner, 'permit',
+        lambda *_args, **_kwargs: pytest.fail(
+            '完整 token execute 不得重新运行 operator planner'))
     monkeypatch.setattr(runner, 'build_steps', lambda *_args, **_kwargs: [step])
     original_write = runner._write_evidence
+    order: list[str] = []
+
+    def observed_revalidate(got, **coordinates):
+        current = runner.admission.snapshot(str(tmp_path), context.run_id)
+        assert len(current.active_claims) == 1, 'active-surface CAS 必须发生在 claim 之后'
+        assert got == permit
+        assert coordinates == {
+            'base': str(tmp_path),
+            'sid': '42',
+            'node': 'stage2.global',
+            'flags': [],
+        }
+        order.append('revalidate')
+
+    monkeypatch.setattr(
+        runner.permit_layer, 'revalidate_active_execution_surface',
+        observed_revalidate)
 
     def observed_write(path, data):
         current = runner.admission.snapshot(str(tmp_path), context.run_id)
         assert len(current.active_claims) == 1, 'evidence 落盘前必须已经 claim'
+        order.append('evidence')
         original_write(path, data)
 
     monkeypatch.setattr(runner, '_write_evidence', observed_write)
     calls = []
 
     def fake_run(argv, **kwargs):
+        order.append('subprocess')
         calls.append((list(argv), kwargs))
         claim_id = kwargs['env'][runner.admission.CLAIM_ID_ENV]
         current = runner.admission.snapshot(str(tmp_path), context.run_id)
@@ -425,9 +606,11 @@ def test_headless_execute_claims_before_evidence_and_releases_after_steps(
         '--base', str(tmp_path), '--sid', '42',
         '--expect-code-version', 'code-v1', '--execute',
         '--evidence-json', str(evidence),
-        '--operator-permit-sha256', permit.permit_sha256, 'stage2.global'])
+        '--operator-permit-file', str(token), 'stage2.global'])
 
     assert rc == 0 and evidence.is_file() and len(calls) == 3
+    assert order[:2] == ['revalidate', 'evidence']
+    assert order.count('revalidate') == 1
     assert runner.admission.snapshot(
         str(tmp_path), context.run_id).active_claims == ()
 
@@ -461,8 +644,11 @@ def test_headless_execute_releases_claim_when_node_spawn_raises(
     monkeypatch.setattr(
         runner.commander_context, 'env_with_context', lambda **_kwargs: {})
     monkeypatch.setattr(runner.prov, 'code_version', lambda: 'code-v1')
+    permit_file = tmp_path / 'execution-permit.json'
+    permit_file.write_text(permit.model_dump_json(indent=2), encoding='utf-8')
     monkeypatch.setattr(
-        runner.operator_planner, 'permit', lambda *_args, **_kwargs: permit)
+        runner.permit_layer, 'revalidate_active_execution_surface',
+        lambda *_args, **_kwargs: None)
     monkeypatch.setattr(runner, 'build_steps', lambda *_args, **_kwargs: [step])
 
     def fake_run(argv, **_kwargs):
@@ -475,7 +661,7 @@ def test_headless_execute_releases_claim_when_node_spawn_raises(
         runner.main([
             '--base', str(tmp_path), '--sid', '42',
             '--expect-code-version', 'code-v1', '--execute',
-            '--operator-permit-sha256', permit.permit_sha256, 'stage2.global'])
+            '--operator-permit-file', str(permit_file), 'stage2.global'])
     assert runner.admission.snapshot(
         str(tmp_path), context.run_id).active_claims == ()
 
@@ -658,15 +844,18 @@ def test_run_step_evidence_serializes_the_same_steps_for_preview_and_execute(
         lambda *args, **kwargs: built.append((args, kwargs)) or [step])
     monkeypatch.setattr(runner.prov, 'code_version', lambda: 'code-v1')
     permit = _execution_permit(node='stage5.write')
+    permit_file = tmp_path / 'execution-permit.json'
+    permit_file.write_text(permit.model_dump_json(indent=2), encoding='utf-8')
     monkeypatch.setattr(
-        runner.operator_planner, 'permit', lambda *_args, **_kwargs: permit)
+        runner.permit_layer, 'revalidate_active_execution_surface',
+        lambda *_args, **_kwargs: None)
     monkeypatch.setattr(
         runner.subprocess, 'run',
         lambda argv, **_kwargs: calls.append(list(argv)) or SimpleNamespace(returncode=0))
 
     common = [
         '--base', 'E:/outputs', '--sid', '42', '--expect-code-version', 'code-v1',
-        '--operator-permit-sha256', permit.permit_sha256,
+        '--operator-permit-file', str(permit_file),
         'stage5.write', '--evidence-json', str(evidence),
     ]
     assert runner.main(common) == 0
@@ -805,12 +994,38 @@ def test_session_preflight_materializes_one_reusable_run_coordinate(
     monkeypatch.setattr(preflight.prov, 'code_version', lambda: 'code-v1')
     monkeypatch.setattr(preflight.time, 'time', lambda: 1234567890)
 
-    facts = preflight.capture(tmp_path, sid='42')
+    facts = preflight.capture(tmp_path, sid='42', session_id='session-1')
 
     assert facts['started_at'] == 1234567890
     assert facts['code_version'] == 'code-v1'
     assert facts['sid'] == '42'
     assert Path(str(facts['novel_dir'])) == book.resolve()
+    assert facts['session_id'] == 'session-1'
+    assert Path(str(facts['scratch_dir'])) == (
+        tmp_path / '_service' / 'scratch' / '42' / 'session-1').resolve()
+    assert Path(str(facts['scratch_dir'])).is_dir()
+
+
+def test_session_preflight_finish_removes_only_the_named_scratch(
+        tmp_path, monkeypatch, capsys):
+    preflight = _operator_script('session_preflight')
+    book = tmp_path / 'book_42'
+    book.mkdir()
+    monkeypatch.setattr(preflight.prov, 'code_version', lambda: 'code-v1')
+    first = preflight.capture(tmp_path, sid='42', session_id='session-1')
+    second = preflight.capture(tmp_path, sid='42', session_id='session-2')
+
+    rc = preflight.main([
+        '--base', str(tmp_path), '--sid', '42',
+        '--finish-session', 'session-1',
+    ])
+
+    assert rc == 0
+    assert not Path(str(first['scratch_dir'])).exists()
+    assert Path(str(second['scratch_dir'])).is_dir()
+    result = json.loads(capsys.readouterr().out)
+    assert result['state'] == 'finished'
+    assert result['scratch_removed'] is True
 
 
 def test_delivery_verifier_requires_the_start_code_version():

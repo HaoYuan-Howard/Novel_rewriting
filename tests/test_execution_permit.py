@@ -11,19 +11,22 @@ import pytest
 from pydantic import ValidationError
 
 from contracts.invariants import (
-    EXECUTION_PERMIT_KINDS, INBOX_KIND, NODES,
+    EXECUTION_PERMIT_KINDS, FREE_ENTRIES, INBOX_KIND, NODES,
+    STAGE5_CLOSED_EXEMPT_FLAGS, VALUED_FLAGS,
 )
 from contracts.schema.api import (
     ExecutionPermit, InboxView, OperatorAction, OperatorNext,
+    OperatorNextDecision,
 )
 from contracts.schema.orchestration import NovelOverview, OverviewSummary
 from novel.cli import exit_codes as X
 from novel.cli.main import main
-from novel.errors import TerminalState, UnsupportedRunMode
+from novel.errors import ArtifactUnreadable, TerminalState, UnsupportedRunMode
 from novel.orchestrator import execution_permit as P
 from novel.orchestrator import operator as O
 from novel.orchestrator import queue as Q
 from novel.orchestrator.nodes import EXECUTOR_PROFILED_RUNS
+from novel.orchestrator import nodes as NODE_POLICY
 
 
 SID = 'book-1'
@@ -46,15 +49,17 @@ def _inbox() -> InboxView:
 def _next(
     base: Path, *, state: str, node: str | None = None,
     flags: list[str] | None = None, waiting_on: str | None = None,
-) -> OperatorNext:
+) -> OperatorNextDecision:
     action = None
     if node is not None:
         action = OperatorAction(
             node=node, flags=flags or [], resume_verdict='run', why='测试盘面',
-            waiting_on=waiting_on, paid=NODES[node].paid,
-            writes=' · '.join(NODES[node].produces), action_sha256='c' * 64,
+            waiting_on=waiting_on,
+            paid=NODE_POLICY.is_paid(node, flags or []),
+            writes=NODE_POLICY.write_effect(node, flags or []),
+            action_sha256='c' * 64,
         )
-    return OperatorNext(
+    return OperatorNextDecision(
         base=str(base.resolve()), sid=SID, code_version='code-v1',
         surface_seal='a' * 64, state=state,
         overview=_overview(), inbox=_inbox(), action=action,
@@ -158,8 +163,10 @@ def test_pipeline_complete_and_unregistered_paid_recovery_fail_closed(
 @pytest.mark.parametrize(
     ('node', 'flags', 'expected'),
     [
-        ('stage4.design', ['--replan'], 'replan'),
-        ('stage4.design', ['--repair-decision', 'd' * 64], 'repair'),
+        ('stage4.design', [
+            '--replan', '--review-token', 's4rr1_' + 'd' * 64], 'replan'),
+        ('stage4.design', [
+            '--review-token', 's4rr1_' + 'd' * 64], 'repair'),
     ],
 )
 def test_paid_stage4_recovery_reuses_the_typed_production_authorizer(
@@ -179,7 +186,7 @@ def test_paid_stage4_recovery_reuses_the_typed_production_authorizer(
     assert got.paid is True and got.kind == 'recovery'
     assert calls == [(
         str(tmp_path.resolve()), SID,
-        ('d' * 64 if expected == 'repair' else None), expected,
+        's4rr1_' + 'd' * 64, expected,
     )]
 
 
@@ -207,6 +214,30 @@ def test_external_input_hash_binds_raw_bytes_and_changes_the_permit(
     assert bound.bytes == len(b'{"value":1}\n')
     assert Path(bound.resolved_path) == edit.resolve()
     assert first.permit_sha256 != second.permit_sha256
+
+
+@pytest.mark.parametrize('flag', ['--validate-edit', '--apply-edit'])
+def test_stage4_chapter_edit_binds_book_request_raw_bytes(
+        flag, monkeypatch, tmp_path):
+    _stable(monkeypatch)
+    novel_dir = tmp_path / f'平台_测试书_{SID}'
+    edit = novel_dir / 'stage4' / 'blind_chapter_edit.json'
+    edit.parent.mkdir(parents=True)
+    edit.write_bytes(b'{"review_token":"s4er1_draft"}\n')
+    current = _next(
+        tmp_path, state='blocked', node='stage4.plan',
+        waiting_on=Q.WAITING_ON_STAGE4_DESIGN_REVIEW)
+
+    permit = P.permit_from_next(
+        current, 'stage4.design', [flag, str(edit)])
+
+    assert len(permit.external_inputs) == 1
+    bound = permit.external_inputs[0]
+    assert bound.flag == flag
+    assert bound.sha256 == hashlib.sha256(edit.read_bytes()).hexdigest()
+    edit.write_bytes(b'{"review_token":"s4er1_changed"}\n')
+    with pytest.raises(ArtifactUnreadable, match='外部输入'):
+        P.revalidate_active_execution_surface(permit)
 
 
 def test_stage5_external_edit_is_limited_to_book_or_service_sid(
@@ -301,8 +332,8 @@ def test_policy_tables_are_closed_and_paid_rows_are_exactly_profiled():
                for row in P.RECOVERY_RUN_POLICIES)
     paid = {(row.node, row.tokens) for row in P.RECOVERY_RUN_POLICIES if row.paid}
     assert paid == {
-        ('stage4.design', frozenset({'--replan'})),
-        ('stage4.design', frozenset({'--repair-decision'})),
+        ('stage4.design', frozenset({'--replan', '--review-token'})),
+        ('stage4.design', frozenset({'--review-token'})),
         ('stage5.write', frozenset({'--revise'})),
         ('stage5.write', frozenset({'--revise', '--chapters'})),
     }
@@ -313,6 +344,10 @@ def test_policy_tables_are_closed_and_paid_rows_are_exactly_profiled():
         ('stage0.edit', '--apply-candidate-plan'),
         ('stage2.global', '--apply-edit'),
         ('stage2.global', '--review-decisions'),
+        ('stage2.blueprint', '--validate-edit'),
+        ('stage2.blueprint', '--apply-edit'),
+        ('stage4.design', '--validate-edit'),
+        ('stage4.design', '--apply-edit'),
         ('stage4.plan', '--apply-edit'),
         ('stage4.plan', '--apply-binding'),
         ('stage5.write', '--preview-edit'),
@@ -328,6 +363,25 @@ def test_policy_tables_are_closed_and_paid_rows_are_exactly_profiled():
                for node, flag in expected_files)
 
 
+def test_legacy_review_rebind_is_one_closed_zero_wire_write_path_per_stage():
+    """恢复口在贵贱、主操作、闭合豁免与 permit 表上必须是同一个 token。"""
+    expected = {
+        'stage6.hook': 'stage6/hook.json',
+        'stage7.rename': 'stage7/name_map.json',
+    }
+    assert '--rebind-review' in FREE_ENTRIES
+    assert '--rebind-review' not in VALUED_FLAGS
+    assert '--rebind-review' in STAGE5_CLOSED_EXEMPT_FLAGS
+    for node, writes in expected.items():
+        assert '--rebind-review' in NODES[node].flags
+        assert '--rebind-review' in NODE_POLICY._PRIMARY_OPERATIONS[node]
+        NODE_POLICY.validate_run(node, ['--rebind-review'])
+        assert NODE_POLICY.is_paid(node, ['--rebind-review']) is False
+        assert NODE_POLICY.write_effect(node, ['--rebind-review']) == writes
+        assert (node, frozenset({'--rebind-review'})) \
+            in P.RECOVERY_RUN_POLICY_INDEX
+
+
 def test_execution_permit_schema_forbids_reusing_blocker_hash():
     with pytest.raises(ValidationError, match='不得复用'):
         ExecutionPermit(
@@ -339,20 +393,26 @@ def test_execution_permit_schema_forbids_reusing_blocker_hash():
         )
 
 
-def test_operator_permit_reads_next_once_then_uses_the_permit_layer(
+def test_operator_permit_captures_one_snapshot_then_uses_the_permit_layer(
         monkeypatch, tmp_path):
     current = _next(tmp_path, state='pipeline_complete')
     calls = []
     monkeypatch.setattr(
-        O, 'next_action',
-        lambda base, sid: calls.append(('next', base, sid)) or current)
+        O.paths, 'resolve_novel_dir', lambda _base, _sid: tmp_path)
+    monkeypatch.setattr(
+        O, 'capture_operator_snapshot',
+        lambda base, sid: calls.append(('capture', base, sid)) or 'snapshot')
+    monkeypatch.setattr(
+        O, '_next_from_snapshot',
+        lambda snapshot: calls.append(('next', snapshot)) or current)
     monkeypatch.setattr(
         P, 'permit_from_next',
         lambda got, node, flags: calls.append(('permit', got, node, flags)) or 'ok')
 
     assert O.permit(tmp_path, SID, 'stage7.rename', ['--recheck']) == 'ok'
     assert calls == [
-        ('next', tmp_path, SID),
+        ('capture', tmp_path, SID),
+        ('next', 'snapshot'),
         ('permit', current, 'stage7.rename', ['--recheck']),
     ]
 
@@ -400,6 +460,88 @@ def test_execution_permit_envelope_round_trips_and_rejects_tampering(
     env[P.STEP_INDEX_ENV] = '01'
     with pytest.raises(TerminalState, match='前导零'):
         P.load_permit_envelope(env)
+
+
+def test_complete_permit_file_uses_the_same_pure_canonical_parser(
+        monkeypatch, tmp_path):
+    _stable(monkeypatch)
+    current = _next(
+        tmp_path, state='ready', node='stage2.global',
+        flags=['--renormalize'])
+    minted = P.permit_from_next(
+        current, 'stage2.global', ['--renormalize'])
+    token = tmp_path / 'execution-token.json'
+    token.write_text(minted.model_dump_json(), encoding='utf-8')
+
+    assert P.parse_execution_permit(minted.model_dump(mode='json')) == minted
+    assert P.load_execution_permit_file(token) == minted
+
+    tampered = minted.model_dump(mode='json')
+    tampered['writes'] = '伪造写面'
+    token.write_text(json.dumps(tampered), encoding='utf-8')
+    with pytest.raises(TerminalState, match='canonical SHA-256'):
+        P.load_execution_permit_file(token)
+
+
+def test_ready_operator_next_wrapper_is_the_opaque_execution_token_file(
+        monkeypatch, tmp_path):
+    """调用方原样保存 next JSON；loader 提取 token，不要求人工搬运 SHA。"""
+    _stable(monkeypatch)
+    decision = _next(
+        tmp_path, state='ready', node='stage2.global',
+        flags=['--renormalize'])
+    minted = P.permit_from_next(
+        decision, 'stage2.global', ['--renormalize'])
+    wrapper = OperatorNext(
+        **decision.model_dump(mode='python'), execution_token=minted)
+    token = tmp_path / 'operator-next.json'
+    token.write_text(wrapper.model_dump_json(), encoding='utf-8')
+
+    assert P.load_execution_permit_file(token) == minted
+
+    tampered = wrapper.model_dump(mode='json')
+    tampered['execution_token']['writes'] = '伪造写面'
+    token.write_text(json.dumps(tampered), encoding='utf-8')
+    with pytest.raises(TerminalState, match='无效'):
+        P.load_execution_permit_file(token)
+
+
+def test_claim_side_revalidation_is_lightweight_and_binds_external_bytes(
+        monkeypatch, tmp_path):
+    _stable(monkeypatch)
+    novel_dir = tmp_path / f'平台_测试书_{SID}'
+    novel_dir.mkdir()
+    edit = tmp_path / '_service' / 'edits' / SID / 'relations.json'
+    edit.parent.mkdir(parents=True)
+    edit.write_bytes(b'{"chapters":[]}\n')
+    current = _next(
+        tmp_path, state='blocked', node='stage4.design',
+        waiting_on=Q.WAITING_ON_STAGE2_REVIEW)
+    minted = P.permit_from_next(
+        current, 'stage2.blueprint', ['--apply-edit', str(edit)])
+
+    # 本口只有 registry/code/seal/input CAS，没有 next/queue/check-only 参数。
+    P.revalidate_active_execution_surface(
+        minted, base=tmp_path, sid=SID, node='stage2.blueprint',
+        flags=['--apply-edit', str(edit)])
+
+    edit.write_bytes(b'{"chapters":[1]}\n')
+    with pytest.raises(ArtifactUnreadable, match='外部输入'):
+        P.revalidate_active_execution_surface(minted)
+
+
+def test_claim_side_revalidation_rejects_active_surface_drift(
+        monkeypatch, tmp_path):
+    _stable(monkeypatch)
+    current = _next(
+        tmp_path, state='ready', node='stage2.global',
+        flags=['--renormalize'])
+    minted = P.permit_from_next(
+        current, 'stage2.global', ['--renormalize'])
+    monkeypatch.setattr(P, 'read_surface_seal', lambda *_a, **_k: 'b' * 64)
+
+    with pytest.raises(ArtifactUnreadable, match='active artifact'):
+        P.revalidate_active_execution_surface(minted)
 
 
 def test_stage5_trim_batch_manifest_is_bound_only_in_book_or_service_edit(

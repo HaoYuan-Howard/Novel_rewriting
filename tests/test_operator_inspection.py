@@ -56,6 +56,33 @@ def test_operator_snapshot_freezes_one_code_and_runs_each_check_once(
         snapshot.checks['stage0'] = I.CheckObservation()  # type: ignore[index]
 
 
+def test_operator_snapshot_accepts_prevalidated_epoch_code_without_rehashing_repo(
+        monkeypatch, tmp_path):
+    overview = SimpleNamespace(sid='book-1', stages=[])
+    monkeypatch.setattr(
+        I.paths, 'resolve_novel_dir', lambda _base, _sid: tmp_path / 'book')
+    monkeypatch.setattr(
+        I.prov, 'code_version',
+        lambda: pytest.fail('Supervisor 快照不得重算整仓 code fingerprint'))
+    monkeypatch.setattr(
+        I, 'read_surface_seal',
+        lambda _base, _sid, *, code: f'seal:{code}')
+    monkeypatch.setattr(
+        I, 'overview_at',
+        lambda _novel_dir, code: overview if code == 'epoch-code' else None)
+    monkeypatch.setattr(I, 'readonly_ctx', lambda *_args: object())
+    monkeypatch.setattr(I, 'check_node', lambda stage: f'{stage}.check')
+    monkeypatch.setattr(
+        I, 'check_only',
+        lambda stage: lambda _ctx: SimpleNamespace(node=f'{stage}.check'))
+
+    snapshot = I.capture_operator_snapshot(
+        tmp_path, 'book-1', code='epoch-code')
+
+    assert snapshot.code == 'epoch-code'
+    assert snapshot.surface_seal == 'seal:epoch-code'
+
+
 def test_operator_snapshot_rejects_a_write_crossing_its_seven_checks(
         monkeypatch, tmp_path):
     monkeypatch.setattr(
@@ -106,8 +133,10 @@ def test_approval_projection_reuses_snapshot_overview_and_code_without_fallback(
         lambda novel_dir, node, code: contexts.append((novel_dir, node, code)) or 'ctx')
     monkeypatch.setattr(A, 'ArtifactStore', lambda ctx: ('store', ctx))
 
-    def view(base, got):
+    def view(base, got, *, include_spawns, operator_projection):
         assert got is record
+        assert include_spawns is True
+        assert operator_projection is False
         A._spawns(base, 'book-1')
         assert A._store_for(tmp_path) == ('store', 'ctx')
         return 'approval-doc'
@@ -195,7 +224,7 @@ def test_read_surface_seal_ignores_only_the_review_it_will_replace(
     assert I.read_surface_seal(tmp_path, 'book-1') != before
 
 
-def test_surface_seal_can_exclude_the_explicit_review_lock_and_unique_temp(
+def test_surface_seal_ignores_review_control_files_but_keeps_active_artifact(
         monkeypatch, tmp_path):
     novel_dir = tmp_path / 'FQ_测试书_book-1'
     novel_dir.mkdir()
@@ -220,7 +249,77 @@ def test_surface_seal_can_exclude_the_explicit_review_lock_and_unique_temp(
 
     canonical.write_text('changed evidence', encoding='utf-8')
     assert I.read_surface_seal(
+        tmp_path, 'book-1', excluded_review=custom) == before
+
+    active = novel_dir / 'stage7' / 'name_map.json'
+    active.parent.mkdir(exist_ok=True)
+    active.write_text('{}', encoding='utf-8')
+    assert I.read_surface_seal(
         tmp_path, 'book-1', excluded_review=custom) != before
+
+
+def test_surface_seal_ignores_rounds_scratch_and_approval_history(
+        monkeypatch, tmp_path):
+    novel_dir = tmp_path / 'FQ_测试书_book-1'
+    active = novel_dir / 'stage4' / 'plan_chapters.json'
+    active.parent.mkdir(parents=True)
+    active.write_text('{"active":1}', encoding='utf-8')
+    rounds = novel_dir / 'stage4' / '_rounds' / 'plan_chapters.r1.json'
+    rounds.parent.mkdir()
+    rounds.write_text('{"history":1}', encoding='utf-8')
+    scratch = novel_dir / 'stage4' / '_executor' / 'attempt.json'
+    scratch.parent.mkdir()
+    scratch.write_text('{"attempt":1}', encoding='utf-8')
+    external_request = novel_dir / 'stage4' / 'plan_edit.json'
+    external_request.write_text('{"request":1}', encoding='utf-8')
+    chapter_edit_request = novel_dir / 'stage4' / 'blind_chapter_edit.json'
+    chapter_edit_request.write_text('{"request":1}', encoding='utf-8')
+    approval = tmp_path / '_service' / 'approvals' / 'book-1.json'
+    approval.parent.mkdir(parents=True)
+    proof = A._ApprovalProof(
+        root_clean_sha1='0' * 40,
+        artifacts={'stage4/plan_chapters.json': '1' * 64},
+        decision_sha256='2' * 64,
+    )
+    current_decision = A._StoredStructureDecision(
+        actor='reviewer', reason='当前结构结论', subject_sha256='3' * 64,
+        chapters=[{
+            'output_ordinal': 1,
+            'decision': 'accept',
+            'reason': '当前章可接受',
+        }],
+        decided_at='2026-09-01T00:00:00+00:00', proof=proof,
+    )
+    old_decision = current_decision.model_copy(update={
+        'reason': '历史结构结论',
+        'subject_sha256': '4' * 64,
+    })
+    record = A._fresh_record('book-1').model_copy(update={
+        'structure_history': [current_decision],
+        'structure_decision': current_decision,
+    })
+    approval.write_text(record.model_dump_json(), encoding='utf-8')
+    monkeypatch.setattr(
+        I.paths, 'resolve_novel_dir', lambda _base, _sid: novel_dir)
+    monkeypatch.setattr(I.prov, 'code_version', lambda: 'code-v1')
+
+    before = I.read_surface_seal(tmp_path, 'book-1')
+    rounds.write_text('{"history":2}', encoding='utf-8')
+    scratch.write_text('{"attempt":2}', encoding='utf-8')
+    external_request.write_text('{"request":2}', encoding='utf-8')
+    chapter_edit_request.write_text('{"request":2}', encoding='utf-8')
+    changed_history = record.model_copy(update={
+        'structure_history': [old_decision, current_decision],
+    })
+    approval.write_text(changed_history.model_dump_json(), encoding='utf-8')
+    assert I.read_surface_seal(tmp_path, 'book-1') == before
+
+    changed_current = record.model_copy(update={
+        'structure_history': [current_decision, old_decision],
+        'structure_decision': old_decision,
+    })
+    approval.write_text(changed_current.model_dump_json(), encoding='utf-8')
+    assert I.read_surface_seal(tmp_path, 'book-1') != before
 
 
 def test_surface_seal_filters_shared_ledger_and_beacon_by_sid(

@@ -27,6 +27,7 @@ from typing import Any, Protocol
 
 from pydantic import ValidationError
 
+from contracts.invariants import STAGE7_REVIEW_CONTRACT
 from contracts.schema.common import Finding
 from contracts.schema.api import NameDecisionLine, Stage7ApprovalWorkpack
 from contracts.schema.report import CheckReport
@@ -57,7 +58,7 @@ from novel.stages.stage7.measure import (
 from novel.stages.stage7.subs import (
     apply_subs, derived_alias_scan, residual_scan, sub_table, unclaimed_residual_keys,
 )
-from novel.store import ArtifactStore
+from novel.store import ArtifactStore, readonly_snapshot_value
 
 REL = STAGE7_NAME_MAP
 EDIT = STAGE7_NAME_MAP_EDIT
@@ -195,8 +196,8 @@ def approval_proof_sha256(store: ArtifactStore, art: NameMap) -> str | None:
     if approval is None or approval.subject_sha256 != subject:
         return None
     pack, _report = _approval_workpack_snapshot(store, art)
-    if (approval.workpack_sha256 is None
-            or approval.workpack_sha256 != pack.workpack_sha256
+    if (approval.review_identity_sha256 is None
+            or approval.review_identity_sha256 != pack.review_identity_sha256
             or pack.disposition != 'already_current'):
         return None
     return _canonical_sha256({
@@ -1833,8 +1834,7 @@ def run_rename(ctx: RunContext, client: LlmClient) -> NameMap:
 
 @_commit_owned
 def run_approve(
-    ctx: RunContext, *, actor: str, reason: str, subject_sha256: str,
-    workpack_sha256: str,
+    ctx: RunContext, *, actor: str, reason: str, review_token: str,
 ) -> tuple[NameMap, CheckReport]:
     """`stage7.approve`：**人定稿**。0 成本。
 
@@ -1858,16 +1858,12 @@ def run_approve(
     if not actor or not reason:
         raise TerminalState('stage7.approve 必须显式给非空 actor 与 reason')
     pack, report = _approval_workpack_snapshot(store, art)
-    if workpack_sha256 != pack.workpack_sha256:
+    if review_token != pack.review_token:
         raise TerminalState(
             '人物表审批工作包已变化：'
-            f'提交 {workpack_sha256 or "<空>"}，当前 {pack.workpack_sha256}；'
+            f'提交 {review_token or "<空>"}，当前 {pack.review_token}；'
             '请刷新 workpack 后重审')
     actual_subject = approval_subject_sha256(art)
-    if subject_sha256 != actual_subject:
-        raise TerminalState(
-            '人物表审批对象已变化：'
-            f'提交 {subject_sha256 or "<空>"}，当前 {actual_subject}；请刷新后重审')
     hard = stored_blocking_rules(art)
     if hard:
         raise BlockingFindingsUnresolved(
@@ -1888,10 +1884,10 @@ def run_approve(
     # 必须在同一跨进程锁内重读正式产物；对初读对象重算只会重算同一份旧内存。
     rebound_art, _raw = store.read_own(NameMap, REL)
     rebound, _rebound_report = _approval_workpack_snapshot(store, rebound_art)
-    if rebound.workpack_sha256 != workpack_sha256:
+    if rebound.review_token != review_token:
         raise TerminalState(
             '人物表证据在批准提交期间变化；未写入定稿，请刷新 workpack 后重审')
-    if rebound.decision_subject_sha256 != subject_sha256:
+    if rebound.decision_subject_sha256 != actual_subject:
         raise TerminalState(
             '人物决定在批准提交期间变化；未写入定稿，请刷新 workpack 后重审')
 
@@ -1901,12 +1897,49 @@ def run_approve(
         'approved': ApprovedNameMap(
             origin='human', actor=actor, reason=reason,
             subject_sha256=actual_subject,
-            workpack_sha256=workpack_sha256),
+            workpack_sha256=rebound.workpack_sha256,
+            review_identity_sha256=rebound.review_identity_sha256),
         'book_txt': None})
     with store.history_transaction(REL, book_txt_rel(store)):
         _retire_book_txt(store)
         store.write(REL, new)
     return new, _report(ctx, store, _judge(ctx, store, new, up), new)
+
+
+@_commit_owned
+def run_rebind_review(ctx: RunContext) -> tuple[NameMap, CheckReport]:
+    """验证 stable proof；旧 Stage7 缺证据正文时关闭式要求重新审阅。"""
+    store = ArtifactStore(ctx)
+    if not store.exists(REL):
+        raise UpstreamMissing(f'{REL} 不在盘上——先跑 stage7.rename')
+    art, _raw = store.read_own(NameMap, REL)
+    approval = art.approved
+    if approval is None:
+        raise TerminalState('没有旧 Stage7 人工定稿可 rebind')
+    pack, report = _approval_workpack_snapshot(store, art)
+    if approval.review_identity_sha256 is not None:
+        if approval_is_current(store, art):
+            return art, report
+        raise TerminalState(
+            'Stage7 定稿已有 stable review identity，但当前人物决定或可见证据已变；'
+            '必须重新审阅')
+    if approval.workpack_sha256 is None:
+        raise TerminalState('旧 Stage7 定稿没有 workpack proof，不能机械 rebind')
+    if approval.subject_sha256 != pack.decision_subject_sha256:
+        raise TerminalState('旧 Stage7 批准绑定的人物决策主体已变化，不能 rebind')
+    hard = stored_blocking_rules(art)
+    if hard:
+        raise BlockingFindingsUnresolved(
+            f'人物表当前仍有 HARD {hard}，旧批准不能 rebind', rules=hard)
+    # 旧 Stage7 只持久化了 decision subject 与混入 code/rules 的 workpack SHA；
+    # 没有保存审阅者当时看到的 replacement hits、残留上下文、计数与 check 摘要。
+    # 因而即使人物决定未变，也不能证明“可见证据未变”。把今天重算的 identity
+    # 直接塞回旧声明会伪造一次从未发生的审阅。Stage6 的旧 resolution 自带这些
+    # 字段，可以机械 rebind；Stage7 必须读取当前 workpack 后用 review_token 重审。
+    raise TerminalState(
+        '旧 Stage7 定稿没有可复验的 immutable workpack / stable evidence digest，'
+        '不能机械 rebind；请读取当前 Stage7 approval workpack，并用其中 '
+        'review_token 重新提交一次零模型人工审阅')
 
 
 def _approval_artifact_sha256(art: NameMap) -> str:
@@ -1941,6 +1974,20 @@ def _approval_workpack_snapshot(
     store: ArtifactStore, art: NameMap,
 ) -> tuple[Stage7ApprovalWorkpack, CheckReport]:
     """从一份已读人物表构造稳定快照；hash 排除当前 approval/disposition。"""
+    if getattr(store.ctx, 'readonly', False):
+        artifact_key = _canonical_sha256(
+            art.model_dump(by_alias=True, mode='json'))
+        return readonly_snapshot_value(
+            store.ctx,
+            ('stage7-approval-workpack', store.ctx.code, artifact_key),
+            lambda: _approval_workpack_snapshot_uncached(store, art),
+        )
+    return _approval_workpack_snapshot_uncached(store, art)
+
+
+def _approval_workpack_snapshot_uncached(
+    store: ArtifactStore, art: NameMap,
+) -> tuple[Stage7ApprovalWorkpack, CheckReport]:
     subject = art.model_copy(update={'approved': None, 'book_txt': None})
     up = _Upstreams(store.ctx, store)
     report = _report(
@@ -1949,17 +1996,53 @@ def _approval_workpack_snapshot(
     for face in [*subject.applied.chapters.values(), subject.applied.hook]:
         for old, count in face.counts.items():
             replacement_hits[old] = replacement_hits.get(old, 0) + count
+    check = compact_approval_check(report)
+    artifact_subject_sha256 = _approval_artifact_sha256(subject)
+    decision_subject_sha256 = approval_subject_sha256(subject)
+    character_rows = [
+        approval_decision_line(row, subject) for row in subject.characters]
+    identity_body = {
+        'review_contract_version': STAGE7_REVIEW_CONTRACT,
+        'kind': 'stage7',
+        'sid': store.ctx.sid,
+        'decision_subject_sha256': decision_subject_sha256,
+        'check': check.model_dump(mode='json'),
+        'surname_map': dict(subject.surname_map),
+        'characters': [row.model_dump(mode='json') for row in character_rows],
+        'extra_subs': [row.model_dump(mode='json') for row in subject.extra_subs],
+        'subs_count': len(subject.subs),
+        'kept_count': len(subject.kept),
+        'kept': list(subject.kept),
+        'replacement_hits': dict(sorted(replacement_hits.items())),
+        'residual': [row.model_dump(mode='json') for row in subject.residual],
+        'baselines': {
+            key: value.model_dump(mode='json')
+            for key, value in sorted(subject.baselines.items())
+        },
+        'book': [row.model_dump(mode='json') for row in subject.book],
+        'identity': (
+            subject.identity.model_dump(mode='json')
+            if subject.identity is not None else None),
+    }
+    review_identity_sha256 = _canonical_sha256(identity_body)
+    rules_fingerprint = prov.rules_fingerprint('stage7')
+    validation_seal_sha256 = _canonical_sha256({
+        'code_version': store.ctx.code,
+        'rules_fingerprint': rules_fingerprint,
+        'artifact_subject_sha256': artifact_subject_sha256,
+        'report': report.model_dump(by_alias=True, mode='json'),
+    })
     base = Stage7ApprovalWorkpack(
         kind='stage7',
         sid=store.ctx.sid,
-        code_version=store.ctx.code,
-        rules_fingerprint=prov.rules_fingerprint('stage7'),
-        artifact_subject_sha256=_approval_artifact_sha256(subject),
-        decision_subject_sha256=approval_subject_sha256(subject),
-        check=compact_approval_check(report),
+        review_identity_sha256=review_identity_sha256,
+        validation_seal_sha256=validation_seal_sha256,
+        review_token='s7r3_' + '0' * 64,
+        artifact_subject_sha256=artifact_subject_sha256,
+        decision_subject_sha256=decision_subject_sha256,
+        check=check,
         surname_map=dict(subject.surname_map),
-        characters=[approval_decision_line(row, subject)
-                    for row in subject.characters],
+        characters=character_rows,
         extra_subs=list(subject.extra_subs),
         subs_count=len(subject.subs),
         kept_count=len(subject.kept),
@@ -1973,17 +2056,20 @@ def _approval_workpack_snapshot(
         disposition='review_required',
     )
     body = base.model_dump(by_alias=True, mode='json')
-    for key in ('workpack_sha256', 'disposition', 'current_approval'):
+    for key in (
+        'workpack_sha256', 'review_token', 'disposition', 'current_approval',
+    ):
         body.pop(key)
     digest = _canonical_sha256(body)
     current = art.approved
     current_bound = (
         current is not None
-        and current.workpack_sha256 == digest
+        and current.review_identity_sha256 == review_identity_sha256
         and current.subject_sha256 == base.decision_subject_sha256
     )
     return base.model_copy(update={
         'workpack_sha256': digest,
+        'review_token': f's7r3_{digest}',
         'disposition': 'already_current' if current_bound else 'review_required',
         'current_approval': current if current_bound else None,
     }), report

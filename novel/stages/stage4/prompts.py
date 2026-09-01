@@ -45,6 +45,13 @@ BLIND_CHAPTER_DESIGN_SYS = """\
 叙述顺序；你没有原文、源舞台、source_beat_ref 或逐字材料。输入中的全书策略与本章权重
 已经冻结；不要在响应中回显或修改它们，章号也由请求身份确定，不在响应中回显。
 
+输入的 narrative_relations 是上游显式标注的语义关系，不是从数组邻接或同一 source beat
+猜出的源顺序。enforcement=hard 必须满足：story_before 表示 before 事实在故事世界中
+先于 after，但允许用 X_EARLIER 等倒叙先披露 after，不得把数组位置当故事时间；
+response_to 的 response 不得早于 stimulus；same_scene 两端必须落在同一场；observes 的
+observation 不得早于 observed。enforcement=review 只作为需要你谨慎核对的审阅证据，不要
+擅自把它硬化，也不要因为没有列关系就推断两个事实可以任意互换。
+
 先按事实因果、人物状态和读者信息设计场景分组与披露顺序，再选择结构决定：
 - retain：本章适合直接、线性的真相推进，不主动声明结构变化；declared_change_kinds 必须为空；
 - reconstruct：本章有真实重构空间，必须声明至少两类变化。可选值及唯一合法排列顺序是：

@@ -2030,8 +2030,8 @@ def test_stage2_blueprint_renormalize_does_not_invent_character_refs():
         shutil.rmtree(root, ignore_errors=True)
 
 
-def test_old_v6_global_input_edge_refreshes_to_projection_without_wire(tmp_path):
-    """v6 载体不升版；旧 global provenance 诚实 unknown，再免费换成真实输入。"""
+def test_old_global_input_edge_refreshes_current_v7_without_wire(tmp_path):
+    """v7 载体不升版；旧 global provenance 诚实 unknown，再免费换成真实输入。"""
     book = tmp_path / '旧v6来源边零成本刷新_4581'
     book.mkdir()
     global_ctx = _ctx(book, 'stage2.global')
@@ -2052,7 +2052,7 @@ def test_old_v6_global_input_edge_refreshes_to_projection_without_wire(tmp_path)
 
     path = book / extract.BLUEPRINT_REL
     raw = json.loads(path.read_text(encoding='utf-8'))
-    assert raw['_schema_version'] == 6
+    assert raw['_schema_version'] == 7
     inputs = raw['_provenance']['inputs']
     old_edge = inputs.pop(extract.BLUEPRINT_CHARACTER_REL)
     old_edge['file'] = prov.fingerprint_bytes(
@@ -2076,7 +2076,7 @@ def test_old_v6_global_input_edge_refreshes_to_projection_without_wire(tmp_path)
     assert recovery_ctx.ledger.usage() is None
     refreshed = ArtifactStore(recovery_ctx).read_own(
         ChapterBlueprints, extract.BLUEPRINT_REL)[0]
-    assert json.loads(path.read_text(encoding='utf-8'))['_schema_version'] == 6
+    assert json.loads(path.read_text(encoding='utf-8'))['_schema_version'] == 7
     assert set(refreshed.provenance.inputs) == {
         extract.MAIN_TEXT, extract.BLUEPRINT_CHARACTER_REL,
     }

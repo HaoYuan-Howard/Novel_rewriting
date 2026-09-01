@@ -11,7 +11,7 @@ from contracts.schema.stage1 import MainText
 from contracts.schema.stage2 import (
     ChapterBlueprints, ChapterBlueprintsResponseV31, GlobalGrounding,
 )
-from novel import prov
+from novel import paths, prov
 from novel.errors import GateBlocked, ProvenanceRefused
 from novel.llm import stage2_runs
 from novel.llm.transport import ChatRequest, ChatResponse
@@ -119,8 +119,10 @@ def test_blueprint_hard_candidate_stays_in_memory_until_terminal(tmp_path):
     assert not (book / extract._INVALID).exists()
     assert not list((book / 'stage2/_rounds').glob(
         'chapter_blueprints*.json'))
-    assert list(book.rglob('checkpoints/*.json')), \
-        '候选边界继续复用现有逐章 checkpoint，不另造恢复账'
+    assert all(paths.stage2_blueprint_checkpoint_path(
+        book, ctx.run_id, 'blueprint', chapter).is_file()
+        for chapter in by_ordinal), \
+        '候选边界继续复用受管 _service/runs 逐章 checkpoint，不另造恢复账'
 
     with pytest.raises(GateBlocked):
         extract.finalize_blueprint_candidate(ctx, client, batch, second)

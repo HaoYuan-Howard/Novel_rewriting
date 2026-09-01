@@ -116,9 +116,9 @@ async function seedScreen({
   ])
   const subject = 'a'.repeat(64)
   const structureDecision = {
-    subject_sha256: subject,
     actor: 'reviewer',
     reason: '已核对全书结构',
+    review_token: 's4sr1_' + subject,
     chapters: [{ output_ordinal: 3, decision: 'accept', reason: '第 3 章可执行' }],
     decided_at: '2026-08-25T00:00:00+00:00',
   }
@@ -140,10 +140,12 @@ async function seedScreen({
     },
     structure: {
       state: 'accepted', current_subject_sha256: subject,
+      review_token: 's4sr1_' + subject,
       current_decision: structureDecision, history: [structureDecision], binding_concerns: [],
     },
     writing_approval: {
-      available: true, current_subject_sha256: subject, current_decision: null, history: [],
+      available: true, current_subject_sha256: subject,
+      review_token: 's5wr1_' + subject, current_decision: null, history: [],
     },
     closure: {
       state: 'missing', workpack: null, next_step: null, current_decision: null, history: [],

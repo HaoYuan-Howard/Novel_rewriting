@@ -36,7 +36,8 @@ from typing import Any
 
 from contracts.rules import REGISTRY
 from contracts.schema.api import (
-    Stage5ChapterSubject, Stage5ClosureRequest, Stage5ClosureTemplate,
+    Stage5ChapterSubject, Stage5ClosureMaterialized, Stage5ClosureRequest,
+    Stage5ClosureTemplate,
     Stage5ClosureView, Stage5ClosureWorkpack, Stage5FindingGroup,
     Stage5MustAppearRow, Stage5TrimWorkItem,
 )
@@ -50,6 +51,7 @@ from novel.store import ArtifactStore
 __all__ = [
     'closure_workpack', 'closure_view', 'require_stage5_closed',
     'closure_template', 'validate_closure_request',
+    'materialize_closure_request',
     'review_file_sha256', 'finding_sha256',
 ]
 
@@ -287,12 +289,18 @@ def closure_workpack(
         disclosure=dict(sorted(disclosure.items())),
         resolved=dict(sorted(resolved.items())),
         workpack_sha256='0' * 64,
+        review_token='s5cr1_' + '0' * 64,
     )
     # 自引用前的字面占位（'0'*64）是 schema 校验需要的形状；真实摘要绑定
     # 除摘要格以外的全部内容，模板与过期判定用同一把尺子复算。
     body = pack.model_dump(by_alias=True, mode='json')
     body.pop('workpack_sha256')
-    pack = pack.model_copy(update={'workpack_sha256': _sha256_of(body)})
+    body.pop('review_token')
+    digest = _sha256_of(body)
+    pack = pack.model_copy(update={
+        'workpack_sha256': digest,
+        'review_token': f's5cr1_{digest}',
+    })
     # 构包会逐章读取完整 canonical 字节；第一次 freshness 与最后一章摘要之间
     # 仍有窗口。结束前再走 Review 唯一 currentness 判据，并核同一 Review 文件身份，
     # 防止返回“旧 findings + 新章 SHA”或“Review_1 内容 + Review_2 currentness”的混合包。
@@ -364,6 +372,7 @@ def closure_template(store: ArtifactStore) -> Stage5ClosureTemplate:
         reason='(填写整书闭合理由)',
         workpack_sha256=pack.workpack_sha256,
         review_sha256=pack.review_sha256,
+        review_token=pack.review_token,
         must_appear=rows,
         group_acks=acks,
     )
@@ -389,16 +398,14 @@ def validate_closure_request(
     """按**当前**盘面复核一份闭合提交；任何漂移都是显式终态。
 
     返回复核时实际使用的工作包。要求：
-    workpack/review 两个 SHA 未漂移；HARD/INVALID/缺章/trim 全部为 0；
-    must_appear 裁决逐条精确覆盖当前工作包（finding+chapter 双 SHA 一致）；
+    opaque token 未漂移；HARD/INVALID/缺章/trim 全部为 0；
+    must_appear 裁决逐条精确覆盖当前工作包；
     非空分组逐一整组确认。
     """
     pack = pack or closure_workpack(store)
-    if request.workpack_sha256 != pack.workpack_sha256:
+    if request.review_token != pack.review_token:
         raise TerminalState(
             'closure 回执绑定的是过期工作包：请重新生成模板后按当前盘面重新裁决')
-    if request.review_sha256 != pack.review_sha256:
-        raise TerminalState('closure 回执绑定的 Review 已被新一轮取代；请重新生成模板')
     _require_submittable(pack, store)
 
     current_rows = {
@@ -411,17 +418,6 @@ def validate_closure_request(
         raise TerminalState(
             'must_appear 裁决与当前工作包不一致：'
             f'缺裁决={missing_rulings} 多余={unknown_rulings}')
-    for key, row in current_rows.items():
-        got = submitted[key]
-        if got.finding_sha256 != row.finding_sha256:
-            raise TerminalState(
-                f'must_appear 第 {row.chapter_ordinal} 章 {row.evidence_key!r} '
-                '的 finding SHA 与当前工作包不一致')
-        if got.chapter_sha256 != row.chapter_sha256:
-            raise TerminalState(
-                f'must_appear 第 {row.chapter_ordinal} 章正文已变化；'
-                '请改稿并重算 Review 后重新生成模板')
-
     expected_acks = {
         group.group: group
         for group in (pack.fact_group, pack.unver_group) if group is not None}
@@ -431,13 +427,40 @@ def validate_closure_request(
     if missing_groups or unknown_groups:
         raise TerminalState(
             f'整组确认与当前工作包不一致：缺={missing_groups} 多余={unknown_groups}')
-    for group, expected in expected_acks.items():
-        got = got_acks[group]
-        if got.findings_sha256 != expected.findings_sha256 or got.items != expected.items:
-            raise TerminalState(
-                f'{group} 分组的 finding digest 与当前工作包不一致；'
-                '该组内容已变化，请重新生成模板')
     return pack
+
+
+def materialize_closure_request(
+    request: Stage5ClosureRequest, pack: Stage5ClosureWorkpack,
+) -> Stage5ClosureMaterialized:
+    """把紧凑 typed rulings 与服务端已验证的 exact workpack 合并供内部审计。"""
+    rows = {
+        (row.chapter_ordinal, row.evidence_key): row for row in pack.must_appear}
+    groups = {
+        row.group: row for row in (pack.fact_group, pack.unver_group)
+        if row is not None
+    }
+    return Stage5ClosureMaterialized(
+        actor=request.actor,
+        reason=request.reason,
+        workpack_sha256=pack.workpack_sha256,
+        review_sha256=pack.review_sha256,
+        must_appear=[{
+            **rows[(row.chapter_ordinal, row.evidence_key)].model_dump(
+                mode='json', exclude={'detail'}),
+            'ruling': row.ruling,
+            'reason': row.reason,
+            'placeholder': False,
+            'template_token': None,
+        } for row in request.must_appear],
+        group_acks=[{
+            'group': row.group,
+            'findings_sha256': groups[row.group].findings_sha256,
+            'items': groups[row.group].items,
+            'placeholder': False,
+            'template_token': None,
+        } for row in request.group_acks],
+    )
 
 
 # ── 下游统一闸 ───────────────────────────────────────────────────────────────
@@ -475,6 +498,7 @@ def closure_view(
     *,
     record_history: list[Any] | None = None,
     record_current: Any = None,
+    record_current_workpack_sha256: str | None = None,
 ) -> Stage5ClosureView:
     """把当前盘面折成公开闭合视图；历史由审批服务注入，这里不解释它。"""
     status = review.review_status(store.ctx, store)
@@ -511,7 +535,8 @@ def closure_view(
             state='blocked', workpack=pack,
             next_step='销账 trim / 修复阻断级后零成本重跑 stage5.review',
             history=list(record_history or []))
-    if record_current is not None and record_current.workpack_sha256 == pack.workpack_sha256:
+    if (record_current is not None
+            and record_current_workpack_sha256 == pack.workpack_sha256):
         return Stage5ClosureView(
             state='closed', workpack=pack, current_decision=record_current,
             history=list(record_history or []))

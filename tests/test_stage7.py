@@ -118,13 +118,11 @@ def _check(box: sandbox.Sandbox):
 
 def _approve(box: sandbox.Sandbox):
     ctx = _ctx(box, 'stage7.approve')
-    art = NameMap.model_validate(box.read(rename.REL))
+    pack = rename.approval_workpack(ArtifactStore(ctx))
     return rename.run_approve(
         ctx, actor='reviewer',
         reason='reviewed the complete name decision surface',
-        subject_sha256=rename.approval_subject_sha256(art),
-        workpack_sha256=rename.approval_workpack(
-            ArtifactStore(ctx)).workpack_sha256)
+        review_token=pack.review_token)
 
 
 def _revalidate(box: sandbox.Sandbox):
@@ -275,9 +273,11 @@ def test_assemble_refuses_an_unapproved_name_map_without_touching_old_book(
     before = target.read_bytes()
     _allow_hook_quality(monkeypatch)
 
-    with pytest.raises(TerminalState, match='人物映射还没定稿'):
+    with pytest.raises(TerminalState, match='人物映射还没定稿') as blocked:
         assemble.run_assemble(_ctx(box, 'stage7.assemble'))
     assert target.read_bytes() == before
+    assert '--review-token' in (blocked.value.hint or '')
+    assert '--subject-sha256' not in (blocked.value.hint or '')
 
 
 def test_the_identity_baseline_is_byte_lossless(box):
@@ -405,22 +405,29 @@ def test_approve_refuses_while_a_hard_rule_is_still_hit(box):
     assert '--apply-edit' not in str(blocked.value)
 
 
-def test_approve_rejects_a_stale_subject_before_any_write_or_archive(box):
+def test_approve_rejects_a_stale_review_token_before_any_write_or_archive(box):
     from novel.errors import TerminalState
 
     before = {p.relative_to(box.dir).as_posix(): p.read_bytes()
               for p in box.dir.rglob('*') if p.is_file()}
-    with pytest.raises(TerminalState, match='审批对象已变化'):
+    with pytest.raises(TerminalState, match='审批工作包已变化'):
         ctx = _ctx(box, 'stage7.approve')
         rename.run_approve(
             ctx, actor='reviewer',
             reason='reviewed an earlier decision surface',
-            subject_sha256='0' * 64,
-            workpack_sha256=rename.approval_workpack(
-                ArtifactStore(ctx)).workpack_sha256)
+            review_token='s7r3_' + '0' * 64)
     after = {p.relative_to(box.dir).as_posix(): p.read_bytes()
              for p in box.dir.rglob('*') if p.is_file()}
     assert after == before
+
+
+def test_approve_request_refuses_the_legacy_workpack_token():
+    from contracts.schema.api import NameMapApproveRequest
+
+    with pytest.raises(ValueError):
+        NameMapApproveRequest(
+            actor='reviewer', reason='旧包只读',
+            review_token='s7r2_' + '0' * 64)
 
 
 def test_recheck_reproduces_every_stored_conclusion(box):

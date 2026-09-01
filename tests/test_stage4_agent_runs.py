@@ -161,12 +161,18 @@ def test_stage4_design_unit_paths_specs_and_plan_legacy_are_isolated(
     novel_dir = tmp_path / 'book'
     assert paths.stage4_design_unit_run_path(
         novel_dir, run_id, None) == (
-            novel_dir / '_stage4_runs' / run_id / 'design' / 'units'
+            tmp_path / '_service' / 'runs' / 'book' / 'stage4'
+            / run_id / 'design' / 'units'
             / 'strategy')
     assert paths.stage4_design_unit_checkpoint_dir(
         novel_dir, run_id, 12) == (
-            novel_dir / '_stage4_runs' / run_id / 'design' / 'units'
+            tmp_path / '_service' / 'runs' / 'book' / 'stage4'
+            / run_id / 'design' / 'units'
             / 'ch0012' / 'checkpoints')
+    assert paths.legacy_stage4_design_unit_run_path(
+        novel_dir, run_id, None) == (
+            novel_dir / '_stage4_runs' / run_id / 'design' / 'units'
+            / 'strategy')
     with pytest.raises(PathRefused, match='正整数'):
         paths.stage4_design_unit_run_path(novel_dir, run_id, 0)
     with pytest.raises(PathRefused, match='正整数'):
@@ -181,13 +187,19 @@ def test_stage4_design_unit_paths_specs_and_plan_legacy_are_isolated(
     assert chapter.recovery_policy == stage4_runs.DESIGN_UNIT_RECOVERY_POLICY
     assert stage4_runs.DESIGN_MAX_CONCURRENCY == 4
 
-    # plan 仍是旧的单会话 run/checkpoint，没有被 design v2 路径改写。
+    # plan 仍是单会话协议；新写入与 design unit 一样进入 service，
+    # 旧书内路径仅登记为恢复读源。
     plan = stage4_runs._run_spec('stage4.plan')
     fake_ctx = type('Ctx', (), {'novel_dir': novel_dir, 'run_id': run_id})()
     assert plan.run_path(fake_ctx) == (
-        novel_dir / '_stage4_runs' / run_id / 'plan')
+        tmp_path / '_service' / 'runs' / 'book' / 'stage4'
+        / run_id / 'plan')
     assert plan.checkpoint_dir(fake_ctx) == (
-        novel_dir / '_stage4_runs' / run_id / 'plan' / 'checkpoints')
+        tmp_path / '_service' / 'runs' / 'book' / 'stage4'
+        / run_id / 'plan' / 'checkpoints')
+    assert plan.legacy_run_path is not None
+    assert plan.legacy_run_path(fake_ctx) == (
+        novel_dir / '_stage4_runs' / run_id / 'plan')
     assert plan.recovery_policy == 'stage4-plan-v1'
     assert plan.session_isolation == 'per-node'
 

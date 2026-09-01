@@ -25,9 +25,7 @@ fastapi = pytest.importorskip(
 from fastapi.testclient import TestClient          # noqa: E402
 
 from contracts.invariants import APPROVAL_GATES   # noqa: E402
-from contracts.schema import decode_artifact      # noqa: E402
 from contracts.schema.api import BlueprintSeenRequest, DraftEditPreview # noqa: E402
-from contracts.schema.stage7 import NameMap        # noqa: E402
 from novel.api.app import UI_HEADER, create_app    # noqa: E402
 from novel.run import RunContext                    # noqa: E402
 from novel.stages.stage7 import assemble, rename    # noqa: E402
@@ -68,18 +66,15 @@ def _stage6_semantic_rels(book: str) -> tuple[str, ...]:
 
 
 def _name_approval_body(box) -> dict[str, str]:
-    raw = json.loads((box.dir / rename.REL).read_text(encoding='utf-8'))
-    art = NameMap.model_validate(decode_artifact(rename.REL, raw).payload)
     from novel.store import ArtifactStore
     ctx = RunContext.open(
         str(box.root), box.sid, 'stage7.approve', paid=False,
         write_ledger=False)
+    pack = rename.approval_workpack(ArtifactStore(ctx))
     return {
         'actor': 'reviewer',
         'reason': 'reviewed the complete name decision surface',
-        'subject_sha256': rename.approval_subject_sha256(art),
-        'workpack_sha256': rename.approval_workpack(
-            ArtifactStore(ctx)).workpack_sha256,
+        'review_token': pack.review_token,
     }
 
 
@@ -199,14 +194,7 @@ def _stamp_chain(box, upto: str) -> None:
         box.root,
         box.sid,
         'read',
-        blueprint_subject=BlueprintSeenRequest(
-            expected_binding_sha256=pack.binding_sha256,
-            expected_subject_sha256=pack.subject_sha256,
-            expected_main_text_artifact_sha256=(
-                pack.binding.main_text_artifact_sha256),
-            expected_code_version=pack.binding.code_version,
-            expected_rules_fingerprint=pack.binding.rules_fingerprint,
-        ),
+        blueprint_subject=BlueprintSeenRequest(review_token=pack.review_token),
     )
     # Explicit backfill creates the same typed/root/freshness proofs as the real
     # product path.  Then trim only the checklist gates beyond the precondition
@@ -236,13 +224,7 @@ def test_stamp_chain_follows_current_gate_order_without_touching_stage3(monkeypa
     written = []
     seen = []
     pack = SimpleNamespace(
-        binding_sha256='b' * 64,
-        subject_sha256='a' * 64,
-        binding=SimpleNamespace(
-            main_text_artifact_sha256='c' * 64,
-            code_version='test-code',
-            rules_fingerprint='test-rules',
-        ),
+        review_token='bpr3_' + 'b' * 64,
     )
     monkeypatch.setattr(
         approvals, 'mark_seen',
@@ -326,8 +308,7 @@ def test_landed_job_record_survives_a_stamp_writer_conflict(
                     'pick': 1,
                     'actor': 'api-stamp-race-test',
                     'reason': '确认已落 JobRecord 不被盖章竞态伪装成失败',
-                    'subject_sha256': 'a' * 64,
-                    'workpack_sha256': 'b' * 64,
+                    'review_token': 's6r3_' + 'b' * 64,
                 },
             )
     finally:
@@ -344,7 +325,7 @@ def test_landed_job_record_survives_a_stamp_writer_conflict(
 
 # ───────────────────────── 一、章节改稿 ─────────────────────────
 
-def test_blueprint_seen_http_body_requires_the_complete_workpack_binding(
+def test_blueprint_seen_http_body_requires_the_opaque_workpack_token(
         validation_client):
     response = validation_client.post(
         '/api/novels/422/approvals/seen/read',
@@ -357,7 +338,7 @@ def test_blueprint_seen_http_body_requires_the_complete_workpack_binding(
     )
 
     assert response.status_code == 422
-    assert 'expected_binding_sha256' in response.text
+    assert 'review_token' in response.text
 
 
 def test_draft_preview_route_returns_the_shared_typed_projection(
@@ -529,19 +510,15 @@ def _approve_body(box, pick: int) -> dict:
     from novel.stages.stage6 import hook as hook_node
     from novel.store import ArtifactStore
 
-    data = json.loads((box.dir / 'stage6' / 'hook.json').read_text(encoding='utf-8'))
-    index = max(0, min(pick - 1, len(data['candidates']) - 1))
-    text = data['candidates'][index]['text']
     ctx = RunContext.open(
         str(box.root), box.sid, 'stage6.approve', paid=False,
         write_ledger=False)
+    pack = hook_node.approval_workpack(ArtifactStore(ctx))
     return {
         'pick': pick,
         'actor': 'api-test-editor',
         'reason': '逐项核对了当前候选与全书事实',
-        'subject_sha256': hashlib.sha256(text.encode('utf-8')).hexdigest(),
-        'workpack_sha256': hook_node.approval_workpack(
-            ArtifactStore(ctx)).workpack_sha256,
+        'review_token': pack.review_token,
     }
 
 
@@ -604,7 +581,9 @@ def test_picking_a_hook_candidate_approves_and_stamps_the_gate(client, box):
     assert resolution['basis'] == 'human_verification'
     assert resolution['actor'] == body['actor']
     assert resolution['reason'] == body['reason']
-    assert resolution['subject_sha256'] == body['subject_sha256']
+    assert resolution['subject_sha256'] == hashlib.sha256(
+        before['candidates'][pick - 1]['text'].encode('utf-8')).hexdigest()
+    assert resolution['review_identity_sha256']
     doc = client.get(f'/api/novels/{box.sid}/approvals').json()
     assert doc['gate']['s6'] is True
 
@@ -620,7 +599,7 @@ def test_an_approve_before_the_chain_still_lands_in_the_artifact(client, box):
     after = json.loads((box.dir / 'stage6' / 'hook.json').read_text(encoding='utf-8'))
     assert after['approved'] is not None, '定稿没落——链只是检查单，不该拦产物'
     assert after['approved']['resolution']['basis'] == 'human_verification'
-    assert after['approved']['resolution']['subject_sha256'] == body['subject_sha256']
+    assert after['approved']['resolution']['review_identity_sha256']
     doc = client.get(f'/api/novels/{box.sid}/approvals').json()
     assert doc['gate']['s6'] is False, '链没到位却盖了章——前置约束被绕过了'
 
@@ -651,7 +630,7 @@ def test_a_zero_pick_is_422_from_the_carrier(validation_client):
         'pick': 0,
         'actor': 'api-test-editor',
         'reason': 'exercise the carrier lower bound',
-        'subject_sha256': '0' * 64,
+        'review_token': 's6r3_' + '0' * 64,
     }
     assert validation_client.post(
         '/api/novels/422/stage6/approve', json=body).status_code == 422
@@ -677,7 +656,10 @@ def test_approving_the_name_map_stamps_s7_and_assembly_keeps_it_current(
     assert r.status_code == 200, r.text[:300]
     assert r.json()['exit_code'] in (0, 1), r.text[:300]
     after = json.loads((box.dir / 'stage7' / 'name_map.json').read_text(encoding='utf-8'))
-    assert after['approved'] == {'origin': 'human', **body}
+    assert after['approved']['origin'] == 'human'
+    assert after['approved']['actor'] == body['actor']
+    assert after['approved']['reason'] == body['reason']
+    assert after['approved']['review_identity_sha256']
     assert client.get(f'/api/novels/{box.sid}/approvals').json()['gate']['s7'] is True
 
     monkeypatch.setattr(semantic, 'require_approved_clear', lambda *_args: None)
@@ -689,10 +671,10 @@ def test_approving_the_name_map_stamps_s7_and_assembly_keeps_it_current(
     assert client.get(f'/api/novels/{box.sid}/approvals').json()['gate']['s7'] is True
 
 
-def test_approving_names_with_an_old_subject_fails_without_stamping(client, box):
+def test_approving_names_with_an_old_review_token_fails_without_stamping(client, box):
     before = (box.dir / 'stage7' / 'name_map.json').read_bytes()
     body = _name_approval_body(box)
-    body['subject_sha256'] = '0' * 64
+    body['review_token'] = 's7r3_' + '0' * 64
 
     r = client.post(f'/api/novels/{box.sid}/stage7/approve', json=body)
 

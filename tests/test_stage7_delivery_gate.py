@@ -54,6 +54,37 @@ def _approved_art():
     return art
 
 
+def test_stage7_currentness_uses_review_identity_not_epoch_workpack_hash(
+        monkeypatch):
+    art = SimpleNamespace(
+        surname_map={'沈': '陆'}, characters=[], extra_subs=[],
+        approved=None, book=[],
+    )
+    subject = rename.approval_subject_sha256(art)
+    art.approved = ApprovedNameMap(
+        origin='human', actor='reviewer', reason='逐项核对当前人物决策',
+        subject_sha256=subject,
+        workpack_sha256='f' * 64,
+        review_identity_sha256='e' * 64,
+    )
+    monkeypatch.setattr(
+        rename, '_approval_workpack_snapshot',
+        lambda *_args: (SimpleNamespace(
+            workpack_sha256='0' * 64,
+            review_identity_sha256='e' * 64,
+            disposition='already_current'), None))
+
+    assert rename.approval_proof_sha256(SimpleNamespace(), art) is not None
+
+    monkeypatch.setattr(
+        rename, '_approval_workpack_snapshot',
+        lambda *_args: (SimpleNamespace(
+            workpack_sha256='0' * 64,
+            review_identity_sha256='d' * 64,
+            disposition='review_required'), None))
+    assert rename.approval_proof_sha256(SimpleNamespace(), art) is None
+
+
 @pytest.mark.parametrize('entry', [assemble.read_current_book, assemble.run_assemble])
 def test_r_2_15_stage2_gate_precedes_every_stage7_delivery_read_or_write(
         monkeypatch, entry):
@@ -167,9 +198,12 @@ def test_assembly_refuses_an_approval_bound_to_an_older_decision_surface(monkeyp
     monkeypatch.setattr(assemble, '_judged_drift', lambda _art, _up: ([], []))
     monkeypatch.setattr(assemble, '_hook_drift', lambda _art, _up: False)
 
-    with pytest.raises(ApprovalRequired, match='批准不再绑定当前决策面'):
+    with pytest.raises(
+            ApprovalRequired, match='批准不再绑定当前决策面') as blocked:
         assemble._require_mapping_current(
             SimpleNamespace(), _Store(), art, _upstreams())
+    assert '--review-token' in (blocked.value.hint or '')
+    assert '--subject-sha256' not in (blocked.value.hint or '')
 
 
 def test_an_incomplete_book_reports_every_missing_piece_at_once(monkeypatch):
@@ -297,6 +331,8 @@ def test_stage7_approve_restores_map_and_delivery_when_map_postcondition_fails(
     workpack_sha256 = 'f' * 64
     workpack = SimpleNamespace(
         workpack_sha256=workpack_sha256,
+        review_token='s7r3_' + workpack_sha256,
+        review_identity_sha256='e' * 64,
         decision_subject_sha256=rename.approval_subject_sha256(art),
         disposition='review_required', current_approval=None)
     monkeypatch.setattr(
@@ -313,8 +349,7 @@ def test_stage7_approve_restores_map_and_delivery_when_map_postcondition_fails(
         rename.run_approve(
             SimpleNamespace(novel_dir=tmp_path),
             actor='reviewer', reason='reviewed current map',
-            subject_sha256=rename.approval_subject_sha256(art),
-            workpack_sha256=workpack_sha256,
+            review_token=workpack.review_token,
         )
 
     assert store.art is art and store.book == 'old delivery'

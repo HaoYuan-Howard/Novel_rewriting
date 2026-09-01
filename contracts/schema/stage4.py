@@ -454,6 +454,32 @@ class BlindChapterResponse(StrictModel):
     scenes: list[BlindSceneResponse] = Field(min_length=1)
 
 
+class BlindChapterEditRequest(StrictModel):
+    """Stage4A 零模型完整章替换请求（外部 artifact v1）。
+
+    这不是字段 patch：``chapter`` 必须是一份完整
+    :class:`BlindChapterResponse`。运行时仍要用与 agent 路相同的编译器、
+    schema、dynamic validator 与整书 HARD；本载体只冻结人审/候选的
+    TOCTOU 身份，不铸造 prompt、model 或 usage。外部只搬一枚 opaque
+    ``review_token``；candidate / 决定 / 目标章 subject / strategy / 累计约束
+    的多重摘要由服务端现场重建，不进入人工请求。
+    """
+
+    actor: str = Field(min_length=1)
+    reason: str = Field(min_length=1)
+    review_token: str = Field(pattern=r'^s4er1_[0-9a-f]{64}$')
+    output_ordinal: int = Field(ge=1)
+    chapter: BlindChapterResponse
+
+    @model_validator(mode='after')
+    def _request_is_explicit_and_single_chapter(self) -> BlindChapterEditRequest:
+        if not self.actor.strip() or not self.reason.strip():
+            raise ValueError('Stage4A 完整章 edit 的 actor/reason 不能只含空白')
+        if self.chapter.output_ordinal != self.output_ordinal:
+            raise ValueError('Stage4A edit 目标章必须与完整 chapter.output_ordinal 一致')
+        return self
+
+
 class BlindPlanResponse(StrictModel):
     reconstruction_strategy: str = Field(min_length=1)
     output_chapters: list[BlindChapterResponse] = Field(min_length=1)
@@ -497,8 +523,23 @@ class DesignUnitLineage(StrictModel):
     chapter_ordinal: int | None = Field(default=None, ge=1)
     source_run_id: str = Field(min_length=1)
     purpose: str = Field(min_length=1)
-    attempt_id: str = Field(pattern=r'^[0-9a-f]{16}$')
-    source_kind: Literal['inherited', 'repair']
+    attempt_id: str | None = Field(default=None, pattern=r'^[0-9a-f]{16}$')
+    source_kind: Literal['inherited', 'repair', 'human']
+    origin: Literal['agent', 'human', 'candidate_snapshot'] = 'agent'
+    source_ref: Sha256 | None = None
+
+    @model_validator(mode='after')
+    def _origin_is_honest(self) -> DesignUnitLineage:
+        if self.origin == 'agent':
+            if self.attempt_id is None or self.source_ref is not None:
+                raise ValueError('agent lineage 必须有 attempt_id 且不得伪造 source_ref')
+        elif self.attempt_id is not None or self.source_ref is None:
+            raise ValueError('deterministic lineage 只用 source_ref，不得伪造 attempt_id')
+        if self.source_kind == 'human' and self.origin != 'human':
+            raise ValueError('source_kind=human 必须对应 human origin')
+        if self.source_kind == 'repair' and self.origin != 'agent':
+            raise ValueError('本轮 repair source 必须来自真实 agent checkpoint')
+        return self
 
 
 class BlindCandidateProvenance(LlmProvenance):
@@ -509,6 +550,7 @@ class BlindCandidateProvenance(LlmProvenance):
     architecture: Literal[
         'whole_book_v1', 'book_strategy_chapters_v1',
         'book_strategy_targeted_repair_v1',
+        'book_strategy_replan_v1',
     ] | None = None
 
     parent_candidate_sha256: Sha256 | None = None
@@ -522,7 +564,9 @@ class BlindCandidateProvenance(LlmProvenance):
 
     @model_validator(mode='after')
     def _repair_lineage_is_closed(self) -> BlindCandidateProvenance:
-        repair = self.architecture == 'book_strategy_targeted_repair_v1'
+        repair = self.architecture in {
+            'book_strategy_targeted_repair_v1', 'book_strategy_replan_v1',
+        }
         fields = (
             self.parent_candidate_sha256,
             self.repair_decision_sha256,
@@ -530,13 +574,39 @@ class BlindCandidateProvenance(LlmProvenance):
         )
         if repair:
             if any(value is None for value in fields) or not self.unit_lineage:
-                raise ValueError('targeted repair provenance 缺 parent/decision/unit lineage')
+                raise ValueError('design evolution provenance 缺 parent/decision/unit lineage')
             keys = [row.chapter_ordinal for row in self.unit_lineage]
             chapters = sorted(value for value in keys if value is not None)
             if keys.count(None) != 1 or chapters != list(range(1, len(chapters) + 1)):
-                raise ValueError('targeted repair unit_lineage 必须恰覆盖 strategy + 1..N')
+                raise ValueError('design evolution unit_lineage 必须恰覆盖 strategy + 1..N')
         elif any(value is not None for value in fields):
             raise ValueError('非 targeted repair 候选不得夹带 repair lineage')
+        return self
+
+
+class BlindCandidateHumanProvenance(FreeProvenance):
+    """零 wire 完整章替换的真实来源账；结构上没有 model/prompt/usage 假身份。"""
+
+    origin: Literal['human'] = 'human'
+    alias_algorithm: Literal[BLIND_ALIAS_ALGORITHM]
+    truth_sha256: Sha256
+    architecture: Literal['human_chapter_edit_v1'] = 'human_chapter_edit_v1'
+    parent_candidate_sha256: Sha256
+    review_token: str = Field(pattern=r'^s4er1_[0-9a-f]{64}$')
+    review_decision_sha256: Sha256
+    output_ordinal: int = Field(ge=1)
+    chapter_subject_sha256: Sha256
+    strategy_epoch_sha256: Sha256
+    chapter_strategy_sha256: Sha256
+    constraint_set_sha256: Sha256
+    edit_request_sha256: Sha256
+    actor: str = Field(min_length=1)
+    reason: str = Field(min_length=1)
+
+    @model_validator(mode='after')
+    def _human_identity_is_nonblank(self) -> BlindCandidateHumanProvenance:
+        if not self.actor.strip() or not self.reason.strip():
+            raise ValueError('Stage4A human edit actor/reason 不能只含空白')
         return self
 
 
@@ -547,7 +617,8 @@ class BlindCandidate(StrictModel):
     participant_aliases: dict[str, str]
     reconstruction_strategy: str = Field(min_length=1)
     output_chapters: list[BlindCandidateChapter] = Field(min_length=1)
-    provenance: BlindCandidateProvenance = Field(alias='_provenance')
+    provenance: BlindCandidateProvenance | BlindCandidateHumanProvenance = Field(
+        alias='_provenance')
 
     @model_validator(mode='after')
     def _alias_maps_are_bijective(self) -> BlindCandidate:

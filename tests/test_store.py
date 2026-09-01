@@ -43,12 +43,14 @@ from novel.errors import (
     ApprovalRequired, ArtifactUnreadable, ByteFormRefused, PathRefused,
     ProvenanceRefused, UpstreamMissing,
 )
-from novel import paths, prov
+from novel import paths, prov, store as store_module
 from novel.llm.cache import CachePolicy
 from novel.llm.ledger import CostLedger, ledger_path
 from novel.orchestrator.uploads import save_upload
+from novel.orchestrator import state as orchestrator_state
 from novel.quality.global_review import build_review
 from novel.run import RunContext
+from novel.snapshot_clone import readonly_snapshot_clone
 from novel.store import (
     ArtifactStore, SELF_FRESH_DETERMINISTIC, _json_pointer_diff,
 )
@@ -58,6 +60,114 @@ from tests import corpus, sandbox
 PLAN_REL = 'stage4/plan_chapters.json'
 UPSTREAM = 'stage1/main_text.json'
 REVALIDATION = {'actor': 'test-reviewer', 'reason': '逐项复核当前判据'}
+
+
+def test_readonly_snapshot_memo_never_crosses_operator_invocations(
+        tmp_path: Path) -> None:
+    base = _book(root=tmp_path)
+    book = paths.resolve_novel_dir(base, '123')
+    target = book / 'stage0' / 'clean_text.txt'
+
+    with store_module.readonly_snapshot_memo(book):
+        assert store_module._read_file_bytes(target) == b'fixture clean root\n'
+        target.write_bytes(b'changed during the same sealed snapshot\n')
+        assert store_module._read_file_bytes(target) == b'fixture clean root\n'
+
+    with store_module.readonly_snapshot_memo(book):
+        assert store_module._read_file_bytes(target) == b'changed during the same sealed snapshot\n'
+
+
+def test_readonly_snapshot_memo_returns_independent_validated_objects(
+        tmp_path: Path) -> None:
+    base = _book(root=tmp_path)
+    book = paths.resolve_novel_dir(base, '123')
+    ctx = orchestrator_state.readonly_ctx(book, 'stage4.context', 'code-a')
+
+    with store_module.readonly_snapshot_memo(book, code='code-a'):
+        store = ArtifactStore(ctx)
+        first, first_payload, _raw = store._validated_read(Loose, UPSTREAM)
+        first.sections.append({'mutated': True})
+        first_payload['sections'].append({'mutated': True})
+
+        second, second_payload, _raw = store._validated_read(Loose, UPSTREAM)
+        assert second.sections == []
+        assert second_payload['sections'] == []
+
+
+def test_readonly_snapshot_memo_reuses_only_scalar_consumed_fingerprint(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    base = _book(root=tmp_path)
+    book = paths.resolve_novel_dir(base, '123')
+    calls = 0
+
+    def project_once(node, key, data, *, related):
+        nonlocal calls
+        calls += 1
+        assert node == 'stage4.context'
+        assert key == UPSTREAM
+        assert related == {}
+        return True, {'section_count': len(data['sections'])}
+
+    monkeypatch.setattr(store_module, 'project_consumed', project_once)
+    ctx = orchestrator_state.readonly_ctx(book, 'stage4.context', 'code-a')
+    with store_module.readonly_snapshot_memo(book, code='code-a'):
+        store = ArtifactStore(ctx)
+        first = store.read(Loose, UPSTREAM)
+        first.sections.append({'mutated': True})
+        second = store.read(Loose, UPSTREAM)
+        assert second.sections == []
+        assert calls == 1
+
+    # A public invocation gets a new byte/scalar memo and recomputes against its
+    # own sealed surface; no consumed result crosses the invocation boundary.
+    with store_module.readonly_snapshot_memo(book, code='code-a'):
+        ArtifactStore(ctx).read(Loose, UPSTREAM)
+    assert calls == 2
+
+
+def test_readonly_snapshot_clone_returns_independent_objects_and_stays_local(
+        tmp_path: Path) -> None:
+    base = _book(root=tmp_path)
+    book = paths.resolve_novel_dir(base, '123')
+    ctx = orchestrator_state.readonly_ctx(book, 'stage4.context', 'code-a')
+    calls = 0
+
+    def factory() -> dict[str, list[str]]:
+        nonlocal calls
+        calls += 1
+        return {'rows': ['sealed']}
+
+    with store_module.readonly_snapshot_memo(book, code='code-a'):
+        first = readonly_snapshot_clone(ctx, ('heavy-proof',), factory)
+        first['rows'].append('mutated')
+        second = readonly_snapshot_clone(ctx, ('heavy-proof',), factory)
+        assert second == {'rows': ['sealed']}
+        assert calls == 1
+
+    with store_module.readonly_snapshot_memo(book, code='code-a'):
+        assert readonly_snapshot_clone(
+            ctx, ('heavy-proof',), factory) == {'rows': ['sealed']}
+    assert calls == 2
+
+
+def test_readonly_snapshot_memo_rejects_cross_book_nested_and_writable_use(
+        tmp_path: Path) -> None:
+    base_a = _book(sid='a', root=tmp_path / 'a')
+    base_b = _book(sid='b', root=tmp_path / 'b')
+    book_a = paths.resolve_novel_dir(base_a, 'a')
+    book_b = paths.resolve_novel_dir(base_b, 'b')
+    readonly_b = orchestrator_state.readonly_ctx(
+        book_b, 'stage4.context', 'code-a')
+    writable_a = _ctx(base_a, sid='a')
+
+    with store_module.readonly_snapshot_memo(book_a, code='code-a'):
+        with pytest.raises(ValueError, match='belongs to .* not '):
+            ArtifactStore(readonly_b)
+        with pytest.raises(ValueError, match='writable ArtifactStore'):
+            ArtifactStore(writable_a)
+        with pytest.raises(ValueError, match='already active'):
+            with store_module.readonly_snapshot_memo(book_a, code='code-a'):
+                raise AssertionError('nested memo body must not run')
 
 
 class Loose(BaseModel):
@@ -2366,6 +2476,10 @@ def test_promotion_keeps_the_original_phase_bindings_and_archives_the_invalid():
     base = _book()
     ctx, inv = _write_invalid(base, ['name_leak'], compiled=True)
     was = _prov_on_disk(inv)
+    invalid_bytes = inv.read_bytes()
+    locator = was['invalid_baseline_sha256']
+    baseline = next((inv.parent / '_revalidation').glob(
+        f'*.{locator}.snapshot'))
 
     # 提升走的是一次 **0 成本**的跑（`--revalidate` 在 `FREE_ENTRIES` 里）
     ctx2 = _plan_ctx(base, paid=False)
@@ -2392,6 +2506,16 @@ def test_promotion_keeps_the_original_phase_bindings_and_archives_the_invalid():
     archived = sorted(p.name for p in (base / '书名_123' / 'stage4' / '_rounds').iterdir())
     assert archived == ['plan_chapters.INVALID.r1.json'], \
         '⚠ 原型归档叫 `*.INVALID.superseded.json`（**没有编号**），第二次会静默覆盖第一次'
+    numbered = inv.parent / '_rounds' / 'plan_chapters.INVALID.r1.json'
+    assert numbered.read_bytes() == invalid_bytes, '正式 numbered 归档的读取语义不得改变'
+    reference = json.loads(baseline.read_text(encoding='utf-8'))
+    assert reference == {
+        '_snapshot_ref_version': 1,
+        'raw_sha256': hashlib.sha256(invalid_bytes).hexdigest(),
+        'round_rel': 'stage4/_rounds/plan_chapters.INVALID.r1.json',
+    }
+    assert baseline.stat().st_size < len(invalid_bytes), \
+        '未编辑 INVALID 应只留可验证内容引用，不再复制整份 baseline'
 
 
 def test_promotion_discards_a_registered_legacy_formal_without_polluting_rounds():
@@ -2438,6 +2562,9 @@ def test_revalidation_records_immutable_baseline_hashes_and_json_pointer_diff():
     disk_audit = _prov_on_disk(out)['revalidation_audit']
     assert disk_audit == audit.model_dump(mode='json')
     assert baseline.read_bytes() == baseline_before, '提升过程改写了不可变基线'
+    archived = inv.parent / '_rounds' / 'plan_chapters.INVALID.r1.json'
+    assert archived.read_bytes() != baseline_before, \
+        '人工编辑后的 numbered 轮次与创建基线不是重复内容，两份证据都必须保留'
 
 
 def test_revalidation_distinguishes_raw_only_edits_from_logical_edits():

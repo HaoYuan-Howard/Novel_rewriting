@@ -14,6 +14,7 @@ import { useSampleCoverage } from '@/hooks/useSample'
 import { AgentRunDialog } from '@/components/agent/AgentRunDialog'
 import { AgentBatchDialog } from '@/components/agent/AgentBatchDialog'
 import { DeleteBookDialog } from '@/components/corpus/DeleteBookDialog'
+import { MaintenanceDialog } from '@/components/corpus/MaintenanceDialog'
 import { useAgentQueue } from '@/hooks/useAgentRuns'
 import { cx } from '@/lib/cx'
 import { useCorpusScreen, type BookView } from './useCorpusScreen'
@@ -68,6 +69,7 @@ export function CorpusScreen() {
   const [picked, setPicked] = useState<string[]>([])
   const [batchBooks, setBatchBooks] = useState<UploadedBook[] | null>(null)
   const [deleteBook, setDeleteBook] = useState<UploadedBook | null>(null)
+  const [maintenanceOpen, setMaintenanceOpen] = useState(false)
   const [filter, setFilter] = useState('')
   const input = useRef<HTMLInputElement>(null)
   const queue = useAgentQueue()
@@ -184,6 +186,7 @@ export function CorpusScreen() {
           <Mono className="text-tag text-ink-4">{vm.base}</Mono>
         </div>
         <div className="flex items-center gap-10">
+          <LinkButton onClick={() => setMaintenanceOpen(true)}>维护</LinkButton>
           <input
             value={filter}
             onChange={(e) => setFilter(e.target.value)}
@@ -473,6 +476,15 @@ export function CorpusScreen() {
           onClose={() => setDeleteBook(null)}
           onDeleted={(result) => {
             setPicked((current) => current.filter((sid) => sid !== result.sid))
+            void qc.invalidateQueries({ queryKey: qk.novels() })
+          }}
+        />
+      ) : null}
+
+      {maintenanceOpen ? (
+        <MaintenanceDialog
+          onClose={() => setMaintenanceOpen(false)}
+          onRestored={() => {
             void qc.invalidateQueries({ queryKey: qk.novels() })
           }}
         />

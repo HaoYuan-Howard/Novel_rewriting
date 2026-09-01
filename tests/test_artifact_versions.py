@@ -130,7 +130,7 @@ _SHAPE_BREAKS: dict[str, tuple[int, str, str]] = {
         '只能作为历史输入，当前运行时关闭式拒读',
     ),
     'stage2/chapter_blueprints.json': (
-        6,
+        7,
         '四次破坏。2026-08-19 bounded-fidelity-v2 → v3：beat 的区间改由段号'
         '算出，SourceSpan.recovery 去掉 lcs，BlueprintProvenance.verbatim_recovered '
         '删除。2026-08-23：BlueprintContext.architecture 从七值收窄为 '
@@ -138,10 +138,12 @@ _SHAPE_BREAKS: dict[str, tuple[int, str, str]] = {
         '2026-08-24：再收窄为 v2 / v3.1 两值，退役 v1.1。2026-08-25：删除复合 '
         '`Beat.event` 事实源，新增章级 `chapter_function`、`fact_atoms`、`causal_edges`、'
         '`entry_state_refs` 与 `ending_state_refs`；hinge 新增稳定 id。2026-08-26 v6 删除'
-        'summary、present_names、叙述显示名、hinge 重复父键与无消费者 provenance 账',
+        'summary、present_names、叙述显示名、hinge 重复父键与无消费者 provenance 账。'
+        '2026-09-01 v7 新增 typed narrative_relations（故事时序、回应、必须同场、观察），'
+        '并把 hard/review 分级写入正式关系契约',
         'stage2.blueprint 整跑（付费）；.INVALID 与 _rounds/ 一律作废，'
         '不手补字段冒充当前产地。仓内没有迁移机制，任何 v3 信封'
-        '都必须由 producer 重建为当前 v6',
+        '都必须由 producer 重建为当前 v7；两本既有恢复样本不自动迁移',
     ),
     'stage4/plan_chapters.json': (
         4,

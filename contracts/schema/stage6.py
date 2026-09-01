@@ -141,6 +141,9 @@ class HookApprovalResolution(HashBoundHumanApproval):
     #: 终审人实际看到的紧凑工作包。旧盘没有这一格时仍可解码，但不能据此宣称
     #: ``already_current``；下一次明确批准会补上当前摘要。
     workpack_sha256: Sha256 | None = None
+    #: 长期适用性只绑定人实际看到的内容/证据与显式审阅契约；代码、规则实现
+    #: 与产物 provenance 属 validation/execution 身份，不得再级联撤销人工决定。
+    review_identity_sha256: Sha256 | None = None
 
 
 class ApprovedHook(StrictModel):

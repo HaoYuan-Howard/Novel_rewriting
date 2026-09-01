@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-'''人工写回三条：章节改稿、文案定稿、人名定稿。
+'''人工写回入口：关系、章节改稿、文案定稿与人名定稿。
 
-三条都是**单步 0 成本作业**：产物变更一律经 `jobs.run` 起 CLI 子进程（`R-11.3`），
+所有写回都是**单步 0 成本作业**：产物变更一律经 `jobs.run` 起 CLI 子进程（`R-11.3`），
 HTTP 进程只写 `_service/`（一次性人工稿）。CLI 内失败（越界 pick、章号不在计划等）
 = **HTTP 200 + `JobRecord.state='failed'`**——作业失败不是 HTTP 错误
 （`stage0.edit` 同形），前端读 state 与日志。
@@ -20,12 +20,14 @@ from fastapi import APIRouter, Depends
 
 from contracts.schema.api import (
     BatchTrimResolutionRequest,
+    BlueprintRelationEditPreview,
     DraftEditPreview, DraftEditPreviewRequest, DraftEditRequest,
     HookApproveRequest, NameMapApproveRequest,
     ResidualAdoptionRequest, TrimResolutionRequest,
 )
 from contracts.schema.evaluation import GlobalReviewDecisionSet
 from contracts.schema.orchestration import JobRecord
+from contracts.schema.stage2 import BlueprintRelationEdit
 from contracts.schema.stage5 import ChapterResponse
 from novel.api.approval_stamp import stamp_approval_after_landed as _stamp
 from novel.api.deps import checked_sid, get_base
@@ -35,6 +37,7 @@ from novel.errors import (
 )
 from novel.orchestrator import jobs, uploads
 from novel.run import RunContext
+from novel.stages.stage2 import relation_edit
 from novel.stages.stage5 import write
 
 router = APIRouter(prefix='/novels')
@@ -120,6 +123,56 @@ def preview_draft_edit(
         raise
 
 
+@router.post(
+    '/{sid}/stage2/relations/edit/preview',
+    response_model=BlueprintRelationEditPreview,
+)
+def preview_blueprint_relations(
+    request: BlueprintRelationEdit,
+    sid: str = Depends(checked_sid),
+    base: str = Depends(get_base),
+) -> BlueprintRelationEditPreview:
+    """Stage2 v7 关系整章集合替换的只读预检。"""
+    ctx = RunContext.open(
+        base, sid, 'stage2.blueprint', paid=False, write_ledger=False)
+    try:
+        return relation_edit.prepare_edit(ctx, request).preview()
+    except TerminalState as exc:
+        if type(exc) is TerminalState:
+            raise SourceConflict(str(exc)) from exc
+        raise
+
+
+@router.post(
+    '/{sid}/stage2/relations/edit',
+    response_model=JobRecord,
+)
+def apply_blueprint_relations(
+    request: BlueprintRelationEdit,
+    sid: str = Depends(checked_sid),
+    base: str = Depends(get_base),
+) -> JobRecord:
+    """typed request → service 一次性文件 → canonical CLI 子进程。"""
+    path = uploads.save_blueprint_relation_edit(base, sid, request)
+    try:
+        return jobs.run(
+            base,
+            'stage2.blueprint',
+            sid,
+            ['--apply-edit', str(path)],
+            follow_check=False,
+        )
+    finally:
+        try:
+            uploads.discard_edit_plan(base, path)
+        except NovelError as exc:
+            warnings.warn(
+                f'Stage2 关系编辑作业已结束，但一次性请求清理失败：{exc}',
+                RuntimeWarning,
+                stacklevel=2,
+            )
+
+
 @router.post('/{sid}/stage2/global-review', response_model=JobRecord)
 def decide_global_review(
     request: GlobalReviewDecisionSet,
@@ -192,7 +245,7 @@ def approve_hook(
     sid: str = Depends(checked_sid),
     base: str = Depends(get_base),
 ) -> JobRecord:
-    '''文案定稿：候选序号 + actor/reason + 完整内容 hash 乐观锁。
+    '''文案定稿：候选序号 + actor/reason + opaque workpack token。
 
     定稿**落了**（exit 0/1）才盖 `s6` 审批章；越界 pick / 无 hook.json（exit 2/3）
     不留半个脚印。报告红不红另说——那归 `/check/stage6` 呈现。
@@ -202,8 +255,7 @@ def approve_hook(
         ['--pick', str(request.pick),
          '--actor', request.actor,
          '--reason', request.reason,
-         '--subject-sha256', request.subject_sha256,
-         '--workpack-sha256', request.workpack_sha256])
+         '--review-token', request.review_token])
     if _completed(record):
         _stamp(base, sid, 's6')
     return record
@@ -215,17 +267,16 @@ def approve_names(
     sid: str = Depends(checked_sid),
     base: str = Depends(get_base),
 ) -> JobRecord:
-    '''人名表定稿：actor/reason + 当前决策面 SHA-256 乐观锁。
+    '''人名表定稿：actor/reason + opaque workpack token 乐观锁。
 
-    后端会在任何归档/写盘前复核 subject SHA-256，并拒绝仍有 HARD 的人物表；
+    后端会在任何归档/写盘前复核 token，并拒绝仍有 HARD 的人物表；
     只有审批作业实际完成才盖 `s7`。
     '''
     record = jobs.run(
         base, 'stage7.approve', sid,
         ['--actor', request.actor,
          '--reason', request.reason,
-         '--subject-sha256', request.subject_sha256,
-         '--workpack-sha256', request.workpack_sha256])
+         '--review-token', request.review_token])
     if _completed(record):
         _stamp(base, sid, 's7')
     return record

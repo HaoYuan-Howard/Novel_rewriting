@@ -81,7 +81,7 @@ def test_human_only_collects_hits_whose_remediation_is_human():
 
 
 def test_final_approval_inbox_commands_bind_the_same_fresh_workpack():
-    """恢复命令必须从同一份 fresh 包取 subject/workpack 双哈希。"""
+    """恢复命令只搬运同一份 fresh workpack 的 opaque token。"""
     from novel.views import inbox as I
 
     candidate = SimpleNamespace(
@@ -91,10 +91,12 @@ def test_final_approval_inbox_commands_bind_the_same_fresh_workpack():
     )
     stage6_pack = SimpleNamespace(
         disposition='review_required', workpack_sha256='b' * 64,
+        review_token='s6r3_' + 'b' * 64,
         candidates=[candidate],
     )
     stage7_pack = SimpleNamespace(
         disposition='review_required', workpack_sha256='c' * 64,
+        review_token='s7r3_' + 'c' * 64,
         decision_subject_sha256='d' * 64,
     )
 
@@ -105,13 +107,13 @@ def test_final_approval_inbox_commands_bind_the_same_fresh_workpack():
         stage7_workpack=stage7_pack, workpacks_checked=True)
 
     assert len(verification) == 1
-    assert '--subject-sha256 ' + 'a' * 64 in verification[0].how
-    assert '--workpack-sha256 ' + 'b' * 64 in verification[0].how
+    assert '--review-token s6r3_' + 'b' * 64 in verification[0].how
+    assert '--subject-sha256' not in verification[0].how
+    assert '--workpack-sha256' not in verification[0].how
     by_rule = {row.rule: row for row in approvals}
     assert set(by_rule) == {'stage6.approve', 'stage7.approve'}
-    assert '--workpack-sha256 ' + 'b' * 64 in by_rule['stage6.approve'].how
-    assert '--subject-sha256 ' + 'd' * 64 in by_rule['stage7.approve'].how
-    assert '--workpack-sha256 ' + 'c' * 64 in by_rule['stage7.approve'].how
+    assert '--review-token s6r3_' + 'b' * 64 in by_rule['stage6.approve'].how
+    assert '--review-token s7r3_' + 'c' * 64 in by_rule['stage7.approve'].how
 
 
 def test_final_approval_inbox_omits_already_current_actions():
@@ -120,10 +122,12 @@ def test_final_approval_inbox_omits_already_current_actions():
 
     stage6_pack = SimpleNamespace(
         disposition='already_current', workpack_sha256='b' * 64,
+        review_token='s6r3_' + 'b' * 64,
         candidates=[],
     )
     stage7_pack = SimpleNamespace(
         disposition='already_current', workpack_sha256='c' * 64,
+        review_token='s7r3_' + 'c' * 64,
         decision_subject_sha256='d' * 64,
     )
 
@@ -132,6 +136,21 @@ def test_final_approval_inbox_omits_already_current_actions():
     assert I._approval_items(
         '.', 'code', stage6_workpack=stage6_pack,
         stage7_workpack=stage7_pack, workpacks_checked=True) == []
+
+
+def test_frozen_v6_design_suspension_does_not_publish_repeat_a_or_b_approval():
+    """缺 v7 validation authority 是永久兼容边界，不是新的 reviewer 待办。"""
+    from novel.views import inbox as I
+
+    doc = SimpleNamespace(
+        design_review=SimpleNamespace(
+            state='suspended', current_decision=SimpleNamespace()),
+        structure=SimpleNamespace(
+            state='missing', current_decision=None),
+    )
+
+    assert I._stage4_approval_items(
+        '.', 'book-1', object(), approval_doc=doc) == []
 
 
 def test_conflict_stage_coverage_inbox_points_to_typed_edit_not_paid_resample():

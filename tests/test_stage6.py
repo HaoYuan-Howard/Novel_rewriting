@@ -86,9 +86,9 @@ def _mechanically_clean_pick(box: sandbox.Sandbox) -> int:
     raise AssertionError('现役 hook 产物没有可定稿候选，语料本身违反落盘闸契约')
 
 
-def _approval_workpack_sha(ctx: RunContext) -> str:
-    """批准请求绑定调用前真实看见的同一份 Stage6 终审包。"""
-    return hook.approval_workpack(ArtifactStore(ctx)).workpack_sha256
+def _approval_review_token(ctx: RunContext) -> str:
+    """批准请求只搬运调用前真实看见的 opaque Stage6 token。"""
+    return hook.approval_workpack(ArtifactStore(ctx)).review_token
 
 
 # ── 报告的形状：由 `build()` 遍历注册表保证 ─────────────────────────────────
@@ -269,8 +269,7 @@ def test_approve_copies_the_candidate_and_leaves_provenance_alone(box, monkeypat
             'human_verification'))
     new, rep = hook.run_approve(
         ctx, pick, actor='test-editor', reason='已核验',
-        subject_sha256=semantic.text_sha256(chosen['text']),
-        workpack_sha256=_approval_workpack_sha(ctx))
+        review_token=_approval_review_token(ctx))
     after = box.read('stage6/hook.json')
     assert after['_provenance'] == before, '定稿改动了来源账'
     assert new.approved is not None
@@ -303,9 +302,7 @@ def test_approve_checks_quality_before_archiving_or_writing(box, monkeypatch):
     with pytest.raises(TerminalState, match='实质矛盾'):
         hook.run_approve(
             ctx, pick, actor='test-editor', reason='已核验',
-            subject_sha256=semantic.text_sha256(
-                box.read('stage6/hook.json')['candidates'][pick - 1]['text']),
-            workpack_sha256=_approval_workpack_sha(ctx))
+            review_token=_approval_review_token(ctx))
 
     assert box.read('stage6/hook.json') == before
     assert sorted((box.dir / 'stage6' / '_rounds').glob('hook.r*.json')) == rounds_before
@@ -319,7 +316,7 @@ def test_approve_refuses_an_out_of_range_pick(box, pick):
     with pytest.raises(TerminalState, match='候选'):
         hook.run_approve(
             ctx, pick, actor='test-editor', reason='已核验',
-            subject_sha256='0' * 64, workpack_sha256='0' * 64)
+            review_token='s6r3_' + '0' * 64)
 
 
 # ── 落盘闸门与提升路：**盘上零样本，只能合成** ──────────────────────────────

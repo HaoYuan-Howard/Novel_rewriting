@@ -52,6 +52,7 @@ function workpack({ trim = false, mustAppear = false } = {}): Stage5ClosureWorkp
     disclosure: mustAppear ? { fact_landing_unver: 1 } : {},
     resolved: {},
     workpack_sha256: sha('e'),
+    review_token: 's5cr1_' + sha('e'),
   }
 }
 
@@ -248,6 +249,7 @@ describe('Stage5 Commander 闭合面', () => {
     const template: Stage5ClosureTemplate = {
       actor: '',
       reason: '',
+      review_token: pack.review_token,
       workpack_sha256: pack.workpack_sha256,
       review_sha256: pack.review_sha256,
       must_appear: [{
@@ -294,24 +296,16 @@ describe('Stage5 Commander 闭合面', () => {
     await waitFor(() => expect(submitSpy).toHaveBeenCalledWith(SID, {
       actor: 'commander-c',
       reason: '已完成全书 Commander 闭合核对',
-      workpack_sha256: sha('e'),
-      review_sha256: sha('9'),
+      review_token: 's5cr1_' + sha('e'),
       must_appear: [{
         chapter_ordinal: 1,
         evidence_key: 'ch1:must-appear',
-        finding_sha256: sha('f'),
-        chapter_sha256: sha('1'),
         ruling: 'confirmed_present',
         reason: '',
-        placeholder: false,
-        template_token: null,
       }],
       group_acks: [{
         group: 'fact_landing',
-        findings_sha256: sha('6'),
-        items: 1,
-        placeholder: false,
-        template_token: null,
+        acknowledged: true,
       }],
     }))
   })

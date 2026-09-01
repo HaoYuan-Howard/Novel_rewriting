@@ -107,9 +107,9 @@ describe('request-shaped cache and diagnostics', () => {
   it('sends the full typed Stage4 decision through the one real HTTP seam', async () => {
     const subject = 'a'.repeat(64)
     const request = {
-      subject_sha256: subject,
       actor: 'reviewer-a',
       reason: '已逐章核对结构',
+      review_token: 's4sr1_' + subject,
       chapters: [{ output_ordinal: 1, decision: 'accept', reason: '本章可执行' }],
     }
     const response = {
@@ -285,12 +285,19 @@ describe('request-shaped cache and diagnostics', () => {
     const template = {
       actor: '',
       reason: '',
+      review_token: 's5cr1_' + '3'.repeat(64),
       workpack_sha256: '3'.repeat(64),
       review_sha256: '4'.repeat(64),
       must_appear: [],
       group_acks: [],
     }
-    const closure = { ...template, actor: 'commander-a', reason: '全书已复核' }
+    const closure = {
+      actor: 'commander-a',
+      reason: '全书已复核',
+      review_token: template.review_token,
+      must_appear: [],
+      group_acks: [],
+    }
     const trim = {
       actor: 'commander-a',
       reason: '逐章保留 pretrim',

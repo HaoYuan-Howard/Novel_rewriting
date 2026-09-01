@@ -3503,7 +3503,7 @@ def _boundary_validator(ordinal: int, paragraph_count: int) \
 
 
 def _fact_contract_error(ordinal: int, blueprint: Any, allowed: set[str]) -> str | None:
-    """响应侧临时 atom_key 的闭包、义务与因果 DAG 动态闸。"""
+    """响应侧临时 atom_key、叙事关系与因果 DAG 的动态闸。"""
     atoms = [atom for beat in blueprint.beats for atom in beat.fact_atoms]
     keys = [str(atom.atom_key) for atom in atoms]
     if len(keys) != len(set(keys)):
@@ -3517,6 +3517,45 @@ def _fact_contract_error(ordinal: int, blueprint: Any, allowed: set[str]) -> str
         return f'ch{ordinal} fact atom 参与者含清单外 char_id：{invalid_chars}'
     refs = [str(ref) for edge in blueprint.causal_edges
             for ref in (edge.before, edge.after)]
+    relation_keys: list[tuple[str, ...]] = []
+    story_edges = [
+        (str(edge.before), str(edge.after)) for edge in blueprint.causal_edges]
+    atom_by_key = {str(atom.atom_key): atom for atom in atoms}
+    for relation in blueprint.narrative_relations:
+        kind = str(relation.kind)
+        if str(relation.enforcement) != 'review':
+            return (f'ch{ordinal} producer 只能提出 enforcement=review 的关系；'
+                    'HARD 必须由 hash-bound Stage2 typed review 提升')
+        if kind == 'story_before':
+            pair = (str(relation.before_fact_ref), str(relation.after_fact_ref))
+            story_edges.append(pair)
+            identity = (kind, *pair)
+        elif kind == 'response_to':
+            pair = (str(relation.stimulus_fact_ref), str(relation.response_fact_ref))
+            identity = (kind, *pair)
+        elif kind == 'same_scene':
+            pair = (str(relation.left_fact_ref), str(relation.right_fact_ref))
+            identity = (kind, *pair)
+        elif kind == 'observes':
+            pair = (str(relation.observed_fact_ref),
+                    str(relation.observation_fact_ref))
+            observer = str(relation.observer_char_id)
+            if observer not in allowed:
+                return f'ch{ordinal} observes 含清单外 observer_char_id：{observer}'
+            observation = atom_by_key.get(pair[1])
+            if observation is not None and observer not in {
+                    str(value) for value in observation.participant_char_ids}:
+                return (f'ch{ordinal} observes 的 observation fact '
+                        f'{pair[1]} 未把 observer {observer} 列为参与者')
+            identity = (kind, observer, *pair)
+        else:
+            return f'ch{ordinal} narrative_relations 含未知 kind：{kind}'
+        if pair[0] == pair[1]:
+            return f'ch{ordinal} {kind} 存在自环：{pair[0]}'
+        refs.extend(pair)
+        relation_keys.append(identity)
+    if len(relation_keys) != len(set(relation_keys)):
+        return f'ch{ordinal} narrative_relations 存在重复关系'
     refs += [str(ref) for ref in blueprint.entry_state_refs]
     refs += [str(ref) for ref in blueprint.ending_state_refs]
     missing = sorted(set(refs) - known)
@@ -3527,14 +3566,14 @@ def _fact_contract_error(ordinal: int, blueprint: Any, allowed: set[str]) -> str
         return f'ch{ordinal} entry_state_refs 只能引用 context 原子'
     if any(obligation[str(ref)] != 'land' for ref in blueprint.ending_state_refs):
         return f'ch{ordinal} ending_state_refs 只能引用 land 原子'
-    graph: dict[str, list[str]] = {key: [] for key in keys}
+    graph: dict[str, set[str]] = {key: set() for key in keys}
     indegree = {key: 0 for key in keys}
-    for edge in blueprint.causal_edges:
-        before, after = str(edge.before), str(edge.after)
+    for before, after in story_edges:
         if before == after:
-            return f'ch{ordinal} causal_edges 存在自环：{before}'
-        graph[before].append(after)
-        indegree[after] += 1
+            return f'ch{ordinal} 因果/故事时序存在自环：{before}'
+        if after not in graph[before]:
+            graph[before].add(after)
+            indegree[after] += 1
     queue = [key for key, degree in indegree.items() if degree == 0]
     seen = 0
     while queue:
@@ -3545,7 +3584,7 @@ def _fact_contract_error(ordinal: int, blueprint: Any, allowed: set[str]) -> str
             if indegree[after] == 0:
                 queue.append(after)
     if seen != len(keys):
-        return f'ch{ordinal} causal_edges 不是 DAG'
+        return f'ch{ordinal} causal_edges 与 story_before 合并后不是 DAG'
     return None
 
 
@@ -4372,7 +4411,7 @@ def request_blueprints(ctx: RunContext, client: _BlueprintRequestSource, *,
 
     ``checkpoints=False`` 只供这个明确承诺“书目录零改动”的付费诊断工具使用；
     正式 producer 保持默认开启。诊断响应仍按普通 cache/ledger/audit 留账，但不创建
-    一个之后没有正式 commit/resume 消费者的孤立 `_stage2_runs`。
+    一个之后没有正式 commit/resume 消费者的孤立 service run。
     """
     store = ArtifactStore(ctx)
     main_text = _read_main_text(store)

@@ -52,8 +52,7 @@ export function Stage6Screen() {
       pick: number
       actor: string
       reason: string
-      subject_sha256: string
-      workpack_sha256: string
+      review_token: string
     }) => api.approveHook(sid, req),
     onSuccess: (job) => {
       if (job.state !== 'failed') {
@@ -82,8 +81,7 @@ export function Stage6Screen() {
           '--pick', String(candidate.index),
           '--actor', actor.trim(),
           '--reason', reason.trim(),
-          '--subject-sha256', candidate.subject_sha256,
-          '--workpack-sha256', workpack.workpack_sha256,
+          '--review-token', workpack.review_token,
         ],
         sid,
         ordinal: null,
@@ -92,8 +90,7 @@ export function Stage6Screen() {
         pick: candidate.index,
         actor: actor.trim(),
         reason: reason.trim(),
-        subject_sha256: candidate.subject_sha256,
-        workpack_sha256: workpack.workpack_sha256,
+        review_token: workpack.review_token,
       }),
     })
   }
@@ -188,8 +185,7 @@ export function Stage6Screen() {
                         workpack {workpackQ.data.workpack_sha256}
                       </Mono>
                       <Mono className="break-all text-micro">
-                        artifact {workpackQ.data.artifact_subject_sha256} · code{' '}
-                        {workpackQ.data.code_version} · rules {workpackQ.data.rules_fingerprint}
+                        artifact {workpackQ.data.artifact_subject_sha256}
                       </Mono>
                       <CompactCheckEvidence check={workpackQ.data.check} />
                     </div>

@@ -129,6 +129,12 @@ function workpack(): BlueprintReviewWorkpack {
       hinges: [{ kind: 'b2_hinge', text: 'B2 工作包铰链' }],
     }],
     causal_links: [],
+    narrative_relations: ordinal === 1 ? [{
+      kind: 'response_to' as const,
+      enforcement: 'review' as const,
+      stimulus_claim: '门外传来脚步声',
+      response_claim: '甲立即回头',
+    }] : [],
     entry_state_claims: ordinal === 1 ? ['前提成立'] : [],
     ending_state_claims: ordinal === 2 ? ['转折落地'] : [],
     narration: [{
@@ -148,6 +154,10 @@ function workpack(): BlueprintReviewWorkpack {
     title: '测试书',
     read_only: true,
     auto_decisions: false,
+    review_contract_version: 'stage2-blueprint-review-v4',
+    review_identity_sha256: 'e'.repeat(64),
+    validation_seal_sha256: 'f'.repeat(64),
+    review_token: 'bpr3_' + 'c'.repeat(64),
     subject_sha256: 'b'.repeat(64),
     binding_sha256: 'c'.repeat(64),
     binding: {
@@ -156,8 +166,6 @@ function workpack(): BlueprintReviewWorkpack {
       main_text_artifact_sha256: 'a'.repeat(64),
       blueprint_artifact_sha256: 'b'.repeat(64),
       check_report_sha256: 'd'.repeat(64),
-      code_version: 'test',
-      rules_fingerprint: 'rules',
       chapter_ordinals: [1, 2],
     },
     check: {
@@ -261,11 +269,7 @@ describe('ReadScreen 整本 Blueprint 审阅确认', () => {
     fireEvent.click(confirm)
 
     await waitFor(() => expect(markSeen).toHaveBeenCalledWith(SID, 'read', {
-      expected_binding_sha256: 'c'.repeat(64),
-      expected_subject_sha256: 'b'.repeat(64),
-      expected_main_text_artifact_sha256: 'a'.repeat(64),
-      expected_code_version: 'test',
-      expected_rules_fingerprint: 'rules',
+      review_token: 'bpr3_' + 'c'.repeat(64),
     }))
     expect(await screen.findByText('已记录：本书 Blueprint 已整本审阅。')).toBeVisible()
     expect(screen.getByRole('button', { name: /已确认审阅本书 Blueprint/ })).toBeDisabled()
@@ -357,6 +361,9 @@ describe('ReadScreen 整本 Blueprint 审阅确认', () => {
     expect(screen.getByText('B2 工作包正文')).toBeVisible()
     expect(screen.getByText('B2 工作包地点')).toBeVisible()
     expect(screen.getByText('B2 工作包铰链')).toBeVisible()
+    expect(screen.getByText(
+      '叙事关系：待复核 · 回应：甲立即回头 ← 门外传来脚步声',
+    )).toBeVisible()
     expect(screen.getByText('参与人物：B2_参与者甲、B2_参与者乙')).toBeVisible()
     expect(screen.getByText(
       '声音 1 · 第一人称 · 叙述者 B2_叙述者甲 · 聚焦者 B2_聚焦者甲 · 代词「我/咱」',
@@ -374,23 +381,19 @@ describe('ReadScreen 整本 Blueprint 审阅确认', () => {
 })
 
 describe('mock Blueprint 审阅审批契约', () => {
-  it('read 只接受逐项匹配当前工作包的完整 binding，global 只接受空 request', async () => {
+  it('read 只接受当前工作包的 opaque token，global 只接受空 request', async () => {
     await mockApi.resetBook(SID)
     const pack = workpack()
     const request = {
-      expected_binding_sha256: pack.binding_sha256,
-      expected_subject_sha256: pack.subject_sha256,
-      expected_main_text_artifact_sha256: pack.binding.main_text_artifact_sha256,
-      expected_code_version: 'mock-sample',
-      expected_rules_fingerprint: 'mock-rules',
+      review_token: pack.review_token,
     }
 
-    await expect(mockApi.markSeen(SID, 'read')).rejects.toThrow(/逐项绑定当前 Blueprint 工作包/)
+    await expect(mockApi.markSeen(SID, 'read')).rejects.toThrow(/当前 Blueprint 工作包/)
     await Promise.all(Object.keys(request).map(async (field) => {
       await expect(mockApi.markSeen(SID, 'read', {
         ...request,
         [field]: 'mismatch',
-      })).rejects.toThrow(/逐项绑定当前 Blueprint 工作包/)
+      })).rejects.toThrow(/当前 Blueprint 工作包/)
     }))
 
     const read = await mockApi.markSeen(SID, 'read', request)

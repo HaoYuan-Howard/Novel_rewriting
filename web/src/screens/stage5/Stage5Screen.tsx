@@ -204,6 +204,51 @@ export function Stage5Screen() {
               ) : null}
             </header>
 
+            {!vm.writingAuthorized ? (
+              <div className="px-30 pt-14">
+                <Panel className="px-18 py-14">
+                  <ActorReasonFields
+                    actor={vm.writingActor}
+                    reason={vm.writingReason}
+                    onActor={vm.setWritingActor}
+                    onReason={vm.setWritingReason}
+                    reasonPlaceholder="说明为何批准当前冻结上下文进入付费写作"
+                    note="写作授权只提交一枚 opaque review token 与自报身份/理由；服务端现场重建当前不可变工作包。"
+                    actions={
+                      <ActionButton
+                        action={{
+                          kind: 'approval.writing',
+                          extra: null,
+                          paid: false,
+                          writes_disk: true,
+                        }}
+                        disabled={
+                          !vm.writingApprovalAvailable
+                          || !vm.writingActor.trim()
+                          || !vm.writingReason.trim()
+                          || vm.approvals.startWriting.isPending
+                        }
+                        disabledReason={
+                          !vm.writingApprovalAvailable
+                            ? '服务端尚未发布当前写作 review token'
+                            : '请填写 actor 与授权理由'
+                        }
+                        onClick={() => { void vm.authorizeWriting() }}
+                      >
+                        {vm.approvals.startWriting.isPending ? '授权中…' : '授权当前 Stage5 写作'}
+                      </ActionButton>
+                    }
+                  />
+                  {vm.approvals.startWriting.isError ? (
+                    <div className="mt-10 text-body text-warn-ink">
+                      写作授权失败：{errorBody(vm.approvals.startWriting.error)}
+                      <ErrorHint error={vm.approvals.startWriting.error} />
+                    </div>
+                  ) : null}
+                </Panel>
+              </div>
+            ) : null}
+
             {vm.trimAudit ? (
               <div className="px-30 pt-14">
                 <Panel>

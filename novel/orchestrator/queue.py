@@ -37,6 +37,7 @@ from contracts.invariants import (
     LEGACY_STAGE5_MODES, NODES, RETIRED_NODES, RETIRED_STAGES, STAGES,
     stage2_review_required,
 )
+from contracts.schema.api import ApprovalDoc
 from contracts.schema.orchestration import (
     NovelOverview, QueueCounts, QueueEntry, QueueEvent, QueueItem,
     QueueLaneCounts, QueuePlan, QueueRun, QueueStart,
@@ -73,8 +74,11 @@ OPTIONAL_HUMAN_NODES: frozenset[str] = frozenset({'stage0.edit'})
 WAITING_ON_INBOX = 'inbox:invalid'
 WAITING_ON_STAGE2_REVIEW = 'approval:stage2-global-review'
 WAITING_ON_STAGE4_DESIGN_REVIEW = 'approval:stage4-design-review'
+WAITING_ON_FROZEN_V6_DESIGN_AUTHORITY = \
+    'legacy_frozen_v6_design_authority_unavailable'
 WAITING_ON_STAGE4_BINDING_RESOLUTION = 'approval:stage4-binding-resolution'
 WAITING_ON_STAGE4_STRUCTURE_REVIEW = 'approval:stage4-structure-review'
+WAITING_ON_FROZEN_V6_CONTEXT = 'legacy_frozen_v6_context_unavailable'
 # 兼容只 import 常量名的旧调用者；值已收敛到两张真实决定面。
 WAITING_ON_STAGE4_PHASE_APPROVAL = WAITING_ON_STAGE4_DESIGN_REVIEW
 WAITING_ON_STAGE4_REPLAN = WAITING_ON_STAGE4_BINDING_RESOLUTION
@@ -167,7 +171,8 @@ def _human_gate_satisfied(base: str | os.PathLike[str], sid: str, node: str) -> 
     model, rel = model_rel
     try:
         novel_dir = paths.resolve_novel_dir(base, sid)
-        store = ArtifactStore(st.readonly_ctx(novel_dir, node, prov.code_version()))
+        store = ArtifactStore(st.readonly_ctx(
+            novel_dir, node, approvals.projection_code()))
         artifact, _ = store.read_own(model, rel)
         if node == 'stage6.approve':
             from novel.stages.stage6 import hook
@@ -191,7 +196,7 @@ def _stage4_replan_required(base: str | os.PathLike[str], sid: str) -> bool:
     """B 已对当前 A 落下 fresh 负结论时，队列只能停给显式 A 重规划。"""
     novel_dir = paths.resolve_novel_dir(base, sid)
     store = ArtifactStore(st.readonly_ctx(
-        novel_dir, 'stage4.plan', prov.code_version()))
+        novel_dir, 'stage4.plan', approvals.projection_code()))
     return current_infeasible_binding(store) is not None
 
 
@@ -215,8 +220,12 @@ def plan_book_from_overview(
     *,
     until_stage: str,
     follow_check: bool = True,
+    approval_doc: ApprovalDoc | None = None,
 ) -> tuple[list[QueueItem], list[QueueItem]]:
     """按一份已冻结完成度规划 lane；判定正文与 :func:`plan_book` 唯一共享。"""
+    if approval_doc is not None and approval_doc.sid != sid:
+        raise ValueError(
+            f'审批投影属于 {approval_doc.sid!r}，不是当前书 {sid!r}')
     todo: list[QueueItem] = []
     blocked: list[QueueItem] = []
     #: ⚠ **一旦挡住，其后的项一律跟着挡住**——那才叫「挡住队列」（`R-13.5`）。
@@ -271,7 +280,8 @@ def plan_book_from_overview(
         # closure 的一种 typed 终态；若先压成 `inbox:invalid`，规定的
         # `approval:stage2-global-review` 阻塞项与恢复文案就永远到不了。
         if (why_blocked is None and node == 'stage4.design'
-                and stage2_review_required(node, paid=spec.paid)):
+                and stage2_review_required(node, paid=spec.paid)
+                and not st.stage2_frozen_v6_subject_validated(ov)):
             try:
                 approvals.require_stage2_review(base, sid, node)
             except (
@@ -287,6 +297,7 @@ def plan_book_from_overview(
                 why_blocked = WAITING_ON_INBOX
 
         verdict, why = st.resume_verdict(ov, node)
+        frozen_v6 = st.stage2_frozen_v6_subject_validated(ov)
         if (
             why_blocked is None
             and verdict == st.RESUME_RUN
@@ -312,32 +323,86 @@ def plan_book_from_overview(
                 # B 必须等 A 落盘、人看过候选后重新 plan/preview/--yes；
                 # 否则“队列一次确认”会偷偷合并产品明定的两次付费决定。
                 why_blocked = WAITING_ON_STAGE4_DESIGN_REVIEW
-            if (
-                why_blocked is None
-                and not approvals.design_review_is_current(base, sid)
-            ):
-                why_blocked = WAITING_ON_STAGE4_DESIGN_REVIEW
+            if why_blocked is None:
+                frozen_approval_doc = approval_doc
+                design_state = None
+                frozen_existing_b = bool(
+                    verdict == st.RESUME_SKIP
+                    and st.stage2_frozen_v6_subject_validated(ov)
+                )
+                if approval_doc is not None:
+                    design_state = approval_doc.design_review.state
+                    design_current = design_state == 'accepted'
+                elif frozen_v6:
+                    # 普通 queue 入口没有 operator 已冻结的审批投影。只在这条
+                    # 冻结 v6 窄例外里补读一次完整 effective view；
+                    # 除了既有 B 例外，还要区分「尚未审阅」与「raw all-accept
+                    # 已落账但验证权威暂停」。否则后者会被误报成重复审批待办。
+                    # 其余书仍沿用原来的单项 currentness 读取，避免把所有 queue
+                    # 调用都扩张成一次全审批物化。design 与 structure/gate
+                    # 必须同时派生自这一份 doc，不能跨两次锁窗口拼成混合时点。
+                    frozen_approval_doc = approvals.get(
+                        base, sid, include_spawns=False,
+                        operator_projection=True)
+                    if frozen_approval_doc.sid != sid:
+                        raise ValueError(
+                            f'审批投影属于 {frozen_approval_doc.sid!r}，'
+                            f'不是当前书 {sid!r}')
+                    design_state = frozen_approval_doc.design_review.state
+                    design_current = design_state == 'accepted'
+                else:
+                    design_current = approvals.design_review_is_current(
+                        base, sid)
+                frozen_existing_b_is_accepted = bool(
+                    frozen_existing_b
+                    and frozen_approval_doc is not None
+                    and frozen_approval_doc.gate['s4']
+                    and frozen_approval_doc.structure.state == 'accepted'
+                )
+                if not design_current and not frozen_existing_b_is_accepted:
+                    why_blocked = (
+                        WAITING_ON_FROZEN_V6_DESIGN_AUTHORITY
+                        if frozen_v6 and design_state == 'suspended'
+                        else WAITING_ON_STAGE4_DESIGN_REVIEW
+                    )
         if why_blocked is None and node == 'stage4.context':
-            try:
-                approvals.authorize_context(base, sid)
-            except (
-                ApprovalRequired, UpstreamMissing, ArtifactUnreadable,
-                GateBlocked, UpstreamStale, UpstreamUnproven,
-            ):
+            if frozen_v6 and verdict != st.RESUME_SKIP:
+                # 冻结桥只能消费已经存在且逐字可证的 Context，不能拿 v6 Blueprint
+                # 调 current v7 producer。发布一条必然失败的免费动作仍会浪费一轮
+                # Commander，并让“只读兼容”看起来像迁移能力。
+                why_blocked = WAITING_ON_FROZEN_V6_CONTEXT
+            context_current = (
+                approval_doc is not None
+                and approval_doc.gate['s4']
+                and approval_doc.structure.state == 'accepted'
+            )
+            if approval_doc is None:
+                try:
+                    approvals.authorize_context(base, sid)
+                    context_current = True
+                except (
+                    ApprovalRequired, UpstreamMissing, ArtifactUnreadable,
+                    GateBlocked, UpstreamStale, UpstreamUnproven,
+                ):
+                    context_current = False
+            if why_blocked is None and not context_current:
                 why_blocked = WAITING_ON_STAGE4_STRUCTURE_REVIEW
         if why_blocked is None and spec.stage == 'stage6':
             # Stage5 Review 通过仍不等于 Commander 已逐项闭合。只消费审批服务
             # 的 current view；缺回执、旧主体、blocked workpack 与 read failure
             # 全部关闭式停在 Stage6 之前。若本次 lane 还会写 Stage5，盘上旧 closed
             # 也必然会被新主体作废，不能拿来提前放行同一批下游。
-            try:
-                closure_state = approvals.stage5_closure_view(base, sid).state
-            except (
-                ApprovalRequired, UpstreamMissing, ArtifactUnreadable,
-                GateBlocked, UpstreamStale, UpstreamUnproven,
-                BlockingFindingsUnresolved,
-            ):
-                closure_state = 'unreadable'
+            if approval_doc is not None:
+                closure_state = approval_doc.closure.state
+            else:
+                try:
+                    closure_state = approvals.stage5_closure_view(base, sid).state
+                except (
+                    ApprovalRequired, UpstreamMissing, ArtifactUnreadable,
+                    GateBlocked, UpstreamStale, UpstreamUnproven,
+                    BlockingFindingsUnresolved,
+                ):
+                    closure_state = 'unreadable'
             if stage5_write_will_run or closure_state != 'closed':
                 why_blocked = WAITING_ON_STAGE5_CLOSURE
         review_follows_planned_write = (
@@ -386,7 +451,11 @@ def plan_book_from_overview(
             review_not_current = bool(
                 stage5_state is not None
                 and stage5_state.review_state not in (None, 'missing', 'fresh'))
-            writing_not_current = not approvals.writing_is_current(base, sid)
+            writing_not_current = not (
+                bool(approval_doc.writing and approval_doc.gate['s4'])
+                if approval_doc is not None
+                else approvals.writing_is_current(base, sid)
+            )
 
             # 本层三个闸的顺序是恢复成本顺序：先处理 0 LLM INVALID，再免费重跑
             # Review，最后才向人索取付费写作授权。真正的上游 stuck / legacy /
@@ -411,6 +480,8 @@ def plan_book_from_overview(
             WAITING_ON_STAGE4_DESIGN_REVIEW,
             WAITING_ON_STAGE4_BINDING_RESOLUTION,
             WAITING_ON_STAGE4_STRUCTURE_REVIEW,
+            WAITING_ON_FROZEN_V6_DESIGN_AUTHORITY,
+            WAITING_ON_FROZEN_V6_CONTEXT,
             WAITING_ON_STAGE5_CLOSURE,
         ):
             # 人审/相位决定完成前，当前队列快照里不放下游付费 argv。状态改变后
@@ -444,7 +515,8 @@ def plan_book_from_overview(
         item = QueueItem(
             sid=sid, node=node, flags=flags, steps=steps,
             why=(f'{verdict}：{why}' if why_blocked is None
-                 else _blocked_why(why_blocked, why)),
+                 else _blocked_why(
+                     why_blocked, why, legacy_frozen_v6=frozen_v6)),
             waiting_on=why_blocked,
         )
         (blocked if why_blocked else todo).append(item)
@@ -455,7 +527,9 @@ def plan_book_from_overview(
     return todo, blocked
 
 
-def _blocked_why(waiting_on: str, verdict_why: str) -> str:
+def _blocked_why(
+    waiting_on: str, verdict_why: str, *, legacy_frozen_v6: bool = False,
+) -> str:
     if waiting_on == WAITING_ON_INBOX:
         return (
             '上游或本层有被闸门拦下的稿要人处理（0 LLM 提升路是 '
@@ -478,6 +552,14 @@ def _blocked_why(waiting_on: str, verdict_why: str) -> str:
             '付费调用与最终成书都不会越过这道门；处理完具体终态后请重新预览队列；'
             f'{verdict_why}')
     if waiting_on == WAITING_ON_STAGE4_DESIGN_REVIEW:
+        if legacy_frozen_v6:
+            return (
+                '冻结 v6 Blueprint 没有 v7 relation/preflight authority；本次 A 人审'
+                '可如实提交 raw all-accept，但 effective 投影保持 suspended，'
+                '不能授权新 B。只有真实 request_repair 才会签发零 wire '
+                'full-chapter edit 票，不得为获票伪造问题。'
+                '需要新 B 时必须在 clean v7 base 重建；'
+                f'{verdict_why}')
         return (
             'Stage4A 尚无当前全书 all-accept typed 盲审；若候选尚未落盘，本次'
             '队列只能跑 A。A 落盘后请完成策略与逐章审阅，再重新预览并明确批准'
@@ -494,6 +576,18 @@ def _blocked_why(waiting_on: str, verdict_why: str) -> str:
             'Stage4B 的最终 Plan 尚未在当前主体上逐章 all-accept；免费 '
             '`stage4.context` 也必须等这张最终结构票，审批后重新预览才会出现；'
             f'{verdict_why}')
+    if waiting_on == WAITING_ON_FROZEN_V6_DESIGN_AUTHORITY:
+        return (
+            '冻结 v6 的当前 Stage4A raw all-accept 已如实落账，无需重复'
+            '审阅；但该主体缺 v7 narrative_relations/preflight validation '
+            'authority，effective design review 因此保持 suspended。本路径不签发 '
+            's4er1，不开放付费 repair/replan 或 Stage4B；需要新 B 时只能在 '
+            f'clean v7 base 重建；{verdict_why}')
+    if waiting_on == WAITING_ON_FROZEN_V6_CONTEXT:
+        return (
+            '冻结 v6 只读桥只允许消费逐字可证的既有 WriterContext；当前 Context '
+            '缺失或不匹配，不能调用 v7 producer 冒充迁移。需要新 Context/B 时必须'
+            f'在 clean v7 base 重建；{verdict_why}')
     if waiting_on == WAITING_ON_REVIEW:
         return ('Stage5 Review 不是 fresh，旧结论不得驱动付费作业；'
                 f'先零成本运行 `stage5.review`；{verdict_why}')

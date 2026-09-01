@@ -72,7 +72,7 @@ describe('Stage6Screen audited approval', () => {
     })
   })
 
-  it('previews and sends actor, reason, and the exact candidate SHA-256', async () => {
+  it('previews and sends actor, reason, pick, and the exact opaque review token', async () => {
     const fixture = await mockApi.getStage6(SAMPLE_SID)
     const workpack = await mockApi.getStage6ApprovalWorkpack(SAMPLE_SID)
     const candidate = workpack.candidates[0]
@@ -130,8 +130,7 @@ describe('Stage6Screen audited approval', () => {
       pick: candidate.index,
       actor: 'reviewer-a',
       reason: '逐项核对人物关系与关键因果',
-      subject_sha256: candidate.subject_sha256,
-      workpack_sha256: workpack.workpack_sha256,
+      review_token: workpack.review_token,
     }))
   })
 
@@ -152,6 +151,7 @@ describe('Stage6Screen audited approval', () => {
         reason: '已逐项核对',
         subject_sha256: current.candidates[0].subject_sha256,
         workpack_sha256: current.workpack_sha256,
+        review_identity_sha256: current.review_identity_sha256,
       },
     })
     vi.spyOn(api, 'getJobs').mockResolvedValue({ jobs: [], running: null })
@@ -199,6 +199,7 @@ describe('Stage6Screen audited approval', () => {
         reason: '核验第三条同策略候选',
         subject_sha256: candidates[2].subject_sha256,
         workpack_sha256: pack.workpack_sha256,
+        review_identity_sha256: pack.review_identity_sha256,
       },
     })
     vi.spyOn(api, 'getJobs').mockResolvedValue({ jobs: [], running: null })
@@ -222,6 +223,7 @@ describe('Stage6Screen audited approval', () => {
         reason: '已逐项核对',
         subject_sha256: pack.candidates[0].subject_sha256,
         workpack_sha256: pack.workpack_sha256,
+        review_identity_sha256: pack.review_identity_sha256,
       },
     }
     vi.spyOn(api, 'getStage6').mockResolvedValue(fixture)

@@ -101,8 +101,7 @@ export function Stage7Screen() {
     mutationFn: (req: {
       actor: string
       reason: string
-      subject_sha256: string
-      workpack_sha256: string
+      review_token: string
     }) =>
       api.approveNames(sid, req),
     onSuccess: (job) => {
@@ -130,7 +129,6 @@ export function Stage7Screen() {
   const askApprove = () => {
     const workpack = workpackQ.data
     if (!workpackReady || !workpack) return
-    const subjectSha256 = workpack.decision_subject_sha256
     askConfirm({
       req: {
         kind: 'stage7.approve',
@@ -138,8 +136,7 @@ export function Stage7Screen() {
         extra: [
           '--actor', actor.trim(),
           '--reason', reason.trim(),
-          '--subject-sha256', subjectSha256,
-          '--workpack-sha256', workpack.workpack_sha256,
+          '--review-token', workpack.review_token,
         ],
         sid,
         ordinal: null,
@@ -147,8 +144,7 @@ export function Stage7Screen() {
       run: () => approve.mutateAsync({
         actor: actor.trim(),
         reason: reason.trim(),
-        subject_sha256: subjectSha256,
-        workpack_sha256: workpack.workpack_sha256,
+        review_token: workpack.review_token,
       }),
     })
   }
@@ -690,8 +686,6 @@ function Stage7WorkpackEvidence({ workpack }: { workpack: Stage7ApprovalWorkpack
         <div className="grid gap-4 text-micro text-ink-4 md:grid-cols-2">
           <Mono className="break-all">artifact {workpack.artifact_subject_sha256}</Mono>
           <Mono className="break-all">decision {workpack.decision_subject_sha256}</Mono>
-          <Mono>code {workpack.code_version}</Mono>
-          <Mono>rules {workpack.rules_fingerprint}</Mono>
         </div>
         <div className="grid gap-8 md:grid-cols-2">
           <div className="rounded-btn border border-line-row bg-card px-10 py-8 text-tag">

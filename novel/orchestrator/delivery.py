@@ -11,12 +11,16 @@ import time
 from pathlib import Path
 
 from contracts.schema.orchestration import AgentDeliveryOutcome
+from contracts.schema.stage2 import ChapterBlueprints
+from contracts.artifacts import STAGE2_CHAPTER_BLUEPRINTS
 from novel import paths, prov
 from novel.errors import ArtifactUnreadable, TerminalState
 from novel.orchestrator.state import readonly_ctx
 from novel.prov import CODE_UNKNOWN
 from novel.stages.stage2 import global_review
+from novel.stages.stage2.frozen_v6 import frozen_v6_stage4_subject_or_none
 from novel.stages.stage7 import assemble
+from novel.store import ArtifactStore
 from novel.views.inbox import inbox_view
 
 
@@ -75,15 +79,40 @@ def assess(base: str | Path, sid: str, *, start_code_version: str | None,
 
     try:
         novel_dir = paths.resolve_novel_dir(base, sid)
-        s2ctx = readonly_ctx(novel_dir, 'stage2.global', current_code)
-        current, approved, counts = global_review.approval_status(s2ctx)
-        if not approved:
-            return _outcome(
-                'stopped',
-                f'Stage2 复核闸未打开：current={current}，counts={counts}')
+        blueprint_store = ArtifactStore(readonly_ctx(
+            novel_dir, 'stage2.blueprint', current_code))
+        blueprint_version = blueprint_store.schema_version(
+            STAGE2_CHAPTER_BLUEPRINTS)
+        frozen_v6 = False
+        if blueprint_version == 6:
+            frozen_v6 = frozen_v6_stage4_subject_or_none(
+                blueprint_store) is not None
+            if not frozen_v6:
+                return _outcome(
+                    'stopped',
+                    'Stage2 Blueprint 是 schema v6，但无法证明它仍精确绑定当前 '
+                    'Stage4A v1 truth/候选；拒绝把旧版不可读产物交付')
+            # 冻结书不能送进 current-v7 Stage2 联合判官。只承认 raw 盘本来
+            # 就有、且 approvals 依据 exact content proof 自动复活的 s2 事实。
+            from novel.orchestrator import approvals
+            if not approvals.get(base, sid).gate['s2']:
+                return _outcome(
+                    'stopped',
+                    '冻结 Stage2 v6 没有可逐项对证并自动复活的既有 s2 人工决定')
+        else:
+            # current v7 仍走活动 decoder；未来版、坏信封与缺失全部关闭式失败。
+            blueprint_store.read_own(
+                ChapterBlueprints, STAGE2_CHAPTER_BLUEPRINTS,
+                require_current=True)
+            s2ctx = readonly_ctx(novel_dir, 'stage2.global', current_code)
+            current, approved, counts = global_review.approval_status(s2ctx)
+            if not approved:
+                return _outcome(
+                    'stopped',
+                    f'Stage2 复核闸未打开：current={current}，counts={counts}')
 
         book_ctx = readonly_ctx(novel_dir, 'stage7.assemble', current_code)
-        assemble.read_current_book(book_ctx)
+        assemble.read_current_book(book_ctx, allow_frozen_v6=frozen_v6)
         refused = _review_package_refused(novel_dir)
         if refused is not None:
             return _outcome('stopped', refused)
@@ -95,6 +124,11 @@ def assess(base: str | Path, sid: str, *, start_code_version: str | None,
                               for item in blocking[:5])
             return _outcome(
                 'stopped', f'仍有 {len(blocking)} 条交付阻塞待办：{sample}')
+        if frozen_v6:
+            return _outcome(
+                'ready_with_disclosures',
+                '成书与强闸均通过；Stage2 Blueprint 为已绑定既有 Stage4A 主体的'
+                '冻结 schema v6，没有 v7 narrative_relations 权威面，必须保留披露')
         if inbox.items:
             return _outcome(
                 'ready_with_disclosures',

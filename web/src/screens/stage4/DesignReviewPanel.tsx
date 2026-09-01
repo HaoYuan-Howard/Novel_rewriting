@@ -6,8 +6,9 @@ import { useAskJob, useChrome } from '@/hooks/useChrome'
 import { useEnums } from '@/hooks/useEnums'
 import type {
   DesignChapterReview,
+  DesignReviewMaterialized,
   DesignRepairConstraint,
-  DesignReviewRequest,
+  DesignStrategyReview,
   DesignReviewTemplate,
   DesignReviewTemplateQuery,
 } from '@/types/approvals'
@@ -37,6 +38,7 @@ function stateLabel(state: string): string {
     case 'repair_requested': return '当前候选已要求逐章返修'
     case 'strategy_replan_requested': return '当前候选已要求整书重规划'
     case 'accepted': return '当前候选已正式接受'
+    case 'suspended': return 'raw 审阅已记录；缺验证权威，暂停下游授权'
     case 'expired': return '历史审阅已过期'
     default: return '服务端状态 ' + state
   }
@@ -71,12 +73,15 @@ export function DesignReviewPanel() {
   const view = doc.design_review
   const humanReviewer = enums.data?.design_reviewer_kinds.find((value) => value === 'human') ?? ''
   const alreadyCurrent = workpack.data?.disposition === 'already_current'
+  const suspended = workpack.data?.disposition === 'suspended'
   const workpackReviewable = Boolean(
     !workpack.isLoading && !workpack.isFetching && !workpack.isError &&
     workpack.data?.disposition === 'review_required',
   )
   const workpackDisabledReason = alreadyCurrent
     ? '同一当前 Stage4A 工作包已有正式接受决定，无需重复整读'
+    : suspended
+      ? '当前 raw Stage4A 决定已记录；缺 v7 relation/preflight 验证权威，无需重复审阅且不能授权 Stage4B'
     : workpack.isError
       ? '当前 Stage4A 工作包读取失败，不能绑定本轮审阅'
       : workpack.isFetching
@@ -283,7 +288,7 @@ function DesignReviewForm({
     draft.repair_capability.chapters.map((row) => [row.output_ordinal, row]),
   )
 
-  const setStrategy = (patch: Partial<DesignReviewRequest['strategy']>) => {
+  const setStrategy = (patch: Partial<DesignStrategyReview>) => {
     setDraft((current) => ({
       ...current,
       strategy: {
@@ -535,12 +540,24 @@ function DesignReviewForm({
                   : ''
             }
             onClick={() => submit.mutate({
-              ...draft,
+              actor: draft.actor,
+              reviewer_kind: draft.reviewer_kind,
+              review_run_id: draft.review_run_id,
               general_reason: draft.general_reason.trim(),
-              strategy: { ...draft.strategy, reason: draft.strategy.reason.trim() },
+              review_token: draft.review_token,
+              strategy: {
+                decision: draft.strategy.decision,
+                reason: draft.strategy.reason.trim(),
+                replan_constraints: draft.strategy.replan_constraints.map((row) => ({
+                  kind: row.kind,
+                  chapter_ordinals: row.chapter_ordinals,
+                })),
+              },
               chapters: draft.chapters.map((chapter) => ({
-                ...chapter,
+                output_ordinal: chapter.output_ordinal,
+                decision: chapter.decision,
                 reason: chapter.reason.trim(),
+                constraints: chapter.constraints,
               })),
             }, {
               onSuccess: (next) => notify(
@@ -585,7 +602,7 @@ function ChapterReviewEditor({
   repairCodes: string[]
   acceptedDecision: string
   repairDecision: string
-  repairCapability: DesignReviewRequest['repair_capability']['chapters'][number] | null
+  repairCapability: DesignReviewMaterialized['repair_capability']['chapters'][number] | null
   candidateRepairable: boolean
   capabilityReason: string
   disabled: boolean
@@ -819,7 +836,7 @@ function RepairCapabilitySummary({
   capability,
   embedded = false,
 }: {
-  capability: DesignReviewRequest['repair_capability']
+  capability: DesignReviewMaterialized['repair_capability']
   embedded?: boolean
 }) {
   return (
@@ -852,7 +869,7 @@ function ChapterRepairCapability({
   candidateRepairable,
   reasonCode,
 }: {
-  capability: DesignReviewRequest['repair_capability']['chapters'][number] | null
+  capability: DesignReviewMaterialized['repair_capability']['chapters'][number] | null
   candidateRepairable: boolean
   reasonCode: string
 }) {
@@ -890,7 +907,7 @@ function ChapterRepairCapability({
 function BindingInfeasibilityEvidence({
   evidence,
 }: {
-  evidence: NonNullable<DesignReviewRequest['binding_infeasibility']>
+  evidence: NonNullable<DesignReviewMaterialized['binding_infeasibility']>
 }) {
   return (
     <div className="flex flex-col gap-9 border-b border-warn-line bg-warn-bg px-20 py-14">

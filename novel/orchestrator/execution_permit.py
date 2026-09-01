@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""operator execution permit：把“下一步”与“允许执行”拆成两次纯读判断。
+"""operator execution permit：一次 next 铸 ready token，blocked 恢复显式铸造。
 
-``operator next`` 只回答当前 lane 的最早状态；它在 blocked 时携带的 action hash
-描述的是 blocker，不是恢复命令。真正执行前，调用方必须把 exact node + 全部 flags
-交到本模块：ready 只接受 next 原样动作；blocked 只接受本文件策略表登记的恢复组合。
+``operator next`` 在同一冻结 snapshot 内为 ready 原样动作铸造 opaque execution
+token；blocked action 只描述 blocker，恢复命令的 exact node + 全部 flags 仍须显式
+交到本模块。ready 只接受 next 原样动作；blocked 只接受本文件策略表登记的恢复组合。
 许可还绑定代码、读面、贵贱、写盘效应，以及已登记外部输入文件的原始字节摘要。
 
 本模块不写服务账、不启动进程、不发请求。付费恢复只调用现役审批层的只读授权口，
@@ -19,11 +19,11 @@ import os
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Final, Literal
+from typing import Any, Final, Literal
 
 from contracts.invariants import NODES
 from contracts.schema.api import (
-    ExecutionPermit, ExecutionPermitInput, OperatorNext,
+    ExecutionPermit, ExecutionPermitInput, OperatorNext, OperatorNextDecision,
 )
 from novel import paths, prov
 from novel.errors import (
@@ -117,9 +117,17 @@ RECOVERY_RUN_POLICIES: Final[tuple[RecoveryRunPolicy, ...]] = (
     # 因而在全部 Stage4 恢复态继续开放，不放宽任何写盘或付费动作。
     RecoveryRunPolicy(
         'stage2.blueprint', _t('--emit-review-workpack'), _W2 | _W4),
+    RecoveryRunPolicy(
+        'stage2.blueprint', _t('--emit-edit-template'), _W2 | _W4),
+    RecoveryRunPolicy(
+        'stage2.blueprint', _t('--validate-edit'), _W2 | _W4),
+    RecoveryRunPolicy(
+        'stage2.blueprint', _t('--apply-edit'), _W2 | _W4),
 
     RecoveryRunPolicy(
         'stage4.design', _t('--adopt-rejected', '--actor', '--reason'), _W4),
+    RecoveryRunPolicy('stage4.design', _t('--validate-edit'), _W4),
+    RecoveryRunPolicy('stage4.design', _t('--apply-edit'), _W4),
     RecoveryRunPolicy('stage4.plan', _t('--check-only'), _W4),
     RecoveryRunPolicy('stage4.plan', _t('--names-only'), _W4),
     RecoveryRunPolicy('stage4.plan', _t('--identity'), _W4),
@@ -165,10 +173,10 @@ RECOVERY_RUN_POLICIES: Final[tuple[RecoveryRunPolicy, ...]] = (
         'stage6.hook', _t('--revalidate', '--actor', '--reason'), _W6),
     RecoveryRunPolicy('stage6.hook', _t('--apply-edit'), _W6),
     RecoveryRunPolicy('stage6.hook', _t('--wontfix'), _W6),
+    RecoveryRunPolicy('stage6.hook', _t('--rebind-review'), _W6),
     RecoveryRunPolicy(
         'stage6.approve',
-        _t('--pick', '--actor', '--reason', '--subject-sha256',
-           '--workpack-sha256'),
+        _t('--pick', '--actor', '--reason', '--review-token'),
         frozenset({_STAGE6_APPROVE}),
     ),
 
@@ -181,16 +189,18 @@ RECOVERY_RUN_POLICIES: Final[tuple[RecoveryRunPolicy, ...]] = (
     RecoveryRunPolicy('stage7.rename', _t('--emit-edit-template'), _W7),
     RecoveryRunPolicy('stage7.rename', _t('--validate-edit'), _W7),
     RecoveryRunPolicy('stage7.rename', _t('--adopt-residual'), _W7),
+    RecoveryRunPolicy('stage7.rename', _t('--rebind-review'), _W7),
     RecoveryRunPolicy(
         'stage7.approve',
-        _t('--actor', '--reason', '--subject-sha256', '--workpack-sha256'),
+        _t('--actor', '--reason', '--review-token'),
         frozenset({_STAGE7_APPROVE}),
     ),
 
     # 付费恢复只开放 executor 已完整迁移且另有 typed 授权的三族。
-    RecoveryRunPolicy('stage4.design', _t('--replan'), _W4, paid=True),
     RecoveryRunPolicy(
-        'stage4.design', _t('--repair-decision'), _W4, paid=True),
+        'stage4.design', _t('--replan', '--review-token'), _W4, paid=True),
+    RecoveryRunPolicy(
+        'stage4.design', _t('--review-token'), _W4, paid=True),
     RecoveryRunPolicy('stage5.write', _t('--revise'), _W5, paid=True),
     RecoveryRunPolicy(
         'stage5.write', _t('--revise', '--chapters'), _W5, paid=True),
@@ -222,6 +232,14 @@ EXTERNAL_INPUT_POLICIES: Final[
     ('stage0.edit', '--apply-candidate-plan'): 'repo',
     ('stage2.global', '--apply-edit'): 'book',
     ('stage2.global', '--review-decisions'): 'book_or_service_edit',
+    ('stage2.blueprint', '--validate-edit'): 'book_or_service_edit',
+    ('stage2.blueprint', '--apply-edit'): 'book_or_service_edit',
+    # Stage4A producer 用 ``paths.edit_rel`` + ArtifactStore 读 typed request，
+    # 因此现役真实路径只能在书目录内。未接 HTTP upload 前不能
+    # 在 permit 层谎称 `_service/edits` 可达，否则 token 会放行一条
+    # producer 必然拒绝的伪恢复路。
+    ('stage4.design', '--validate-edit'): 'book',
+    ('stage4.design', '--apply-edit'): 'book',
     ('stage4.plan', '--apply-edit'): 'book',
     ('stage4.plan', '--apply-binding'): 'book',
     ('stage5.write', '--preview-edit'): 'book_or_service_edit',
@@ -234,9 +252,18 @@ EXTERNAL_INPUT_POLICIES: Final[
 
 
 def _resolve_external_path(
-    *, current: OperatorNext, node: str, flag: str, raw: str,
+    *, current: OperatorNextDecision, node: str, flag: str, raw: str,
 ) -> Path:
-    novel_dir = paths.resolve_novel_dir(current.base, current.sid).resolve()
+    return _resolve_external_path_at(
+        base=current.base, sid=current.sid, node=node, flag=flag, raw=raw)
+
+
+def _resolve_external_path_at(
+    *, base: str | os.PathLike[str], sid: str, node: str, flag: str, raw: str,
+) -> Path:
+    """按 permit 自身坐标解析外部输入，不需要重建 OperatorNext。"""
+    base_path = Path(base).resolve()
+    novel_dir = paths.resolve_novel_dir(base_path, sid).resolve()
     scope = EXTERNAL_INPUT_POLICIES[(node, flag)]
     candidate = Path(raw)
     if scope == 'repo':
@@ -247,7 +274,7 @@ def _resolve_external_path(
     if scope != 'book_or_service_edit':  # pragma: no cover —— Literal + closed table
         raise AssertionError(f'未知 external input scope：{scope}')
     target = (candidate if candidate.is_absolute() else novel_dir / candidate).resolve()
-    allowed = (paths.service_dir(current.base) / 'edits' / current.sid).resolve()
+    allowed = (paths.service_dir(base_path) / 'edits' / sid).resolve()
     # 相对路径也可能用 ``..`` 逃出书目录；必须在 resolve 后统一核边界，
     # 不能把“不是 absolute”误当成“必在当前书”。
     if not any(_is_within(target, root) for root in (novel_dir, allowed)):
@@ -265,7 +292,7 @@ def _is_within(path: Path, root: Path) -> bool:
 
 
 def _external_inputs(
-    current: OperatorNext, node: str, flags: tuple[str, ...],
+    current: OperatorNextDecision, node: str, flags: tuple[str, ...],
 ) -> list[ExecutionPermitInput]:
     out: list[ExecutionPermitInput] = []
     for flag in flag_tokens(flags):
@@ -291,7 +318,7 @@ def _external_inputs(
 
 
 def _require_recovery_policy(
-    current: OperatorNext, node: str, flags: tuple[str, ...],
+    current: OperatorNextDecision, node: str, flags: tuple[str, ...],
 ) -> RecoveryRunPolicy:
     if current.action is None or current.state != 'blocked':
         raise UnsupportedRunMode('recovery permit 只在 operator next=blocked 时存在')
@@ -335,17 +362,18 @@ def _require_recovery_policy(
 
 
 def _require_paid_recovery_authorized(
-    current: OperatorNext, node: str, flags: tuple[str, ...],
+    current: OperatorNextDecision, node: str, flags: tuple[str, ...],
 ) -> None:
     tokens = set(flag_tokens(flags))
     if node == 'stage4.design':
-        if '--repair-decision' in tokens:
+        review_token = flag_value(flags, '--review-token')
+        if '--replan' not in tokens:
             approvals.resolve_design_action(
                 current.base, current.sid,
-                flag_value(flags, '--repair-decision'), expected='repair')
+                review_token, expected='repair')
         else:
             approvals.resolve_design_action(
-                current.base, current.sid, None, expected='replan')
+                current.base, current.sid, review_token, expected='replan')
         return
     if node == 'stage5.write' and '--revise' in tokens:
         chapters = queue.chapters_from_flags(flags)
@@ -378,10 +406,15 @@ def _require_paid_recovery_authorized(
         f'{node} {sorted(tokens)} 不是已登记的 typed paid recovery')
 
 
-def permit_from_next(
-    current: OperatorNext, node: str, flags: tuple[str, ...] | list[str] = (),
+def _permit_from_decision(
+    current: OperatorNextDecision,
+    node: str,
+    flags: tuple[str, ...] | list[str],
+    *,
+    recheck_code: bool,
+    recheck_surface: bool,
 ) -> ExecutionPermit:
-    """对一份刚读取的 ``OperatorNext`` 铸 exact execution permit。"""
+    """从冻结 decision 铸 permit；是否重读 surface 由调用边界决定。"""
     exact_flags = tuple(flags)
     validate_run(node, exact_flags)
     tokens = flag_tokens(exact_flags)
@@ -405,10 +438,10 @@ def permit_from_next(
         raise UnsupportedRunMode(
             'pipeline_complete 没有 node execution permit；先按 delivery 终验定位问题')
 
-    if prov.code_version() != current.code_version:
+    if recheck_code and prov.code_version() != current.code_version:
         raise ArtifactUnreadable('execution permit 期间代码版本发生变化；请重新取 next')
     inputs = _external_inputs(current, node, exact_flags)
-    if read_surface_seal(
+    if recheck_surface and read_surface_seal(
         current.base, current.sid, code=current.code_version,
     ) != current.surface_seal:
         raise ArtifactUnreadable(
@@ -436,6 +469,34 @@ def permit_from_next(
         **payload, permit_sha256=canonical_sha256(payload))
 
 
+def ready_execution_token_from_next(
+    current: OperatorNextDecision,
+) -> ExecutionPermit:
+    """给 ``operator next`` 同快照铸 ready token，不再读取 active surface。
+
+    调用者必须在本函数读取 exact external inputs 之后，对最初 snapshot 的
+    ``surface_seal`` 做那一次规划期 CAS。code 直接绑定该 snapshot，不再运行昂贵的
+    第二次仓库指纹；execute 会在 claim 后逐字重验 code 与 active surface。这样
+    整个 ready 分发只有一次完整 snapshot、一次规划期 surface CAS。
+    """
+    if current.state != 'ready' or current.action is None:
+        raise UnsupportedRunMode('只有 ready next 能在同快照内铸 execution token')
+    return _permit_from_decision(
+        current, current.action.node, current.action.flags,
+        recheck_code=False, recheck_surface=False,
+    )
+
+
+def permit_from_next(
+    current: OperatorNextDecision,
+    node: str,
+    flags: tuple[str, ...] | list[str] = (),
+) -> ExecutionPermit:
+    """显式铸 exact permit；主要用于 blocked recovery 与诊断兼容。"""
+    return _permit_from_decision(
+        current, node, flags, recheck_code=True, recheck_surface=True)
+
+
 def verify_permit_sha256(permit: ExecutionPermit) -> None:
     """重算 canonical permit hash；环境 JSON 不能靠自报摘要取得执行权。"""
     payload = permit.model_dump(mode='json')
@@ -445,6 +506,131 @@ def verify_permit_sha256(permit: ExecutionPermit) -> None:
     if claimed != expected:
         raise TerminalState(
             'execution permit envelope 的 canonical SHA-256 与载荷不一致')
+
+
+def parse_execution_permit(
+    raw: ExecutionPermit | str | bytes | bytearray | Mapping[str, Any],
+) -> ExecutionPermit:
+    """纯函数：解析完整 permit 并复算 canonical SHA-256。
+
+    文件、环境 envelope 与 HTTP body 都走这一把尺子。此函数不读代码、不看
+    盘面、不运行 operator planner；因此 preview 可以只渲染 token 冻结的步骤。
+    """
+    try:
+        if isinstance(raw, ExecutionPermit):
+            permit = raw
+        elif isinstance(raw, Mapping):
+            permit = ExecutionPermit.model_validate(dict(raw))
+        elif isinstance(raw, (str, bytes, bytearray)):
+            permit = ExecutionPermit.model_validate_json(raw)
+        else:
+            raise TypeError(f'不支持的 execution permit 载荷：{type(raw).__name__}')
+    except (TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise TerminalState('execution permit JSON/shape 无效') from exc
+    verify_permit_sha256(permit)
+    return permit
+
+
+def load_execution_permit_file(path: str | os.PathLike[str]) -> ExecutionPermit:
+    """读取完整 token，或从原样 ``OperatorNext`` wrapper 提取 ready token。
+
+    调用方只保存和转交整份 JSON，不需要搬运任何 SHA。两种形态最终都进入
+    ``parse_execution_permit`` 这一把 canonical hash 尺子。
+    """
+    source = Path(path).resolve()
+    try:
+        raw = source.read_bytes()
+    except OSError as exc:
+        raise TerminalState(f'读不了 execution permit 文件：{source}: {exc!r}') from exc
+    try:
+        current = OperatorNext.model_validate_json(raw)
+    except (UnicodeDecodeError, ValueError):
+        current = None
+    if current is not None:
+        if current.execution_token is None:  # schema 已守；关闭 model_construct 绕过
+            raise TerminalState('operator next wrapper 没有 ready execution token')
+        return parse_execution_permit(current.execution_token)
+    return parse_execution_permit(raw)
+
+
+def _current_external_inputs(permit: ExecutionPermit) -> list[ExecutionPermitInput]:
+    """按登记表重读 exact flags 指向的当前原始字节。"""
+    out: list[ExecutionPermitInput] = []
+    for flag in flag_tokens(tuple(permit.flags)):
+        if (permit.node, flag) not in EXTERNAL_INPUT_POLICIES:
+            continue
+        raw = flag_value(tuple(permit.flags), flag)
+        if raw is None:
+            raise TerminalState(f'{permit.node} {flag} 缺外部输入路径')
+        target = _resolve_external_path_at(
+            base=permit.base, sid=permit.sid, node=permit.node,
+            flag=flag, raw=raw)
+        if not target.is_file():
+            raise ArtifactUnreadable(
+                f'execution permit 的外部输入已缺失：{permit.node} {flag} {target}')
+        try:
+            before = target.stat()
+            payload = target.read_bytes()
+            after = target.stat()
+        except OSError as exc:
+            raise ArtifactUnreadable(
+                f'execution permit 的外部输入不可读：{target}: {exc!r}') from exc
+        coordinate = lambda stat: (
+            stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns)
+        if coordinate(before) != coordinate(after) or len(payload) != after.st_size:
+            raise ArtifactUnreadable(
+                f'execution permit 的外部输入读取期间变化：{target}')
+        out.append(ExecutionPermitInput(
+            flag=flag, argument=raw, resolved_path=os.fspath(target),
+            bytes=len(payload), sha256=hashlib.sha256(payload).hexdigest(),
+        ))
+    return out
+
+
+def revalidate_active_execution_surface(
+    permit: ExecutionPermit, *,
+    base: str | os.PathLike[str] | None = None,
+    sid: str | None = None,
+    node: str | None = None,
+    flags: tuple[str, ...] | list[str] | None = None,
+) -> None:
+    """claim 后、首个副作用前做一次轻量 CAS，不运行七层 planner。
+
+    校验范围只有 token 自身、caller 坐标、当前代码、active surface 与登记
+    external inputs。它刻意不调用 ``operator next`` / queue / check-only；旧的
+    SHA-only runner 可以继续走 ``operator.permit`` 慢路，新 token runner 应调用本口。
+    """
+    permit = parse_execution_permit(permit)
+    expected_base = Path(permit.base).resolve()
+    if base is not None and Path(base).resolve() != expected_base:
+        raise TerminalState('execution permit.base 与 runner --base 不一致')
+    if sid is not None and sid != permit.sid:
+        raise TerminalState('execution permit.sid 与 runner --sid 不一致')
+    if node is not None and node != permit.node:
+        raise TerminalState('execution permit.node 与 runner node 不一致')
+    if flags is not None and list(flags) != permit.flags:
+        raise TerminalState('execution permit.flags 与 runner exact flags 不一致')
+
+    exact_flags = tuple(permit.flags)
+    validate_run(permit.node, exact_flags)
+    if permit.paid != is_paid(permit.node, exact_flags):
+        raise TerminalState('execution permit 的 paid 判定与当前节点注册表不一致')
+    if permit.writes != write_effect(permit.node, exact_flags):
+        raise TerminalState('execution permit 的 writes 判定与当前节点注册表不一致')
+
+    current_code = prov.code_version()
+    if current_code != permit.code_version:
+        raise ArtifactUnreadable(
+            'execution permit 的 execution epoch 代码已变化；请打开新 epoch 复检')
+    current_inputs = _current_external_inputs(permit)
+    if current_inputs != permit.external_inputs:
+        raise ArtifactUnreadable(
+            'execution permit 的登记外部输入路径或原始字节已变化；请重新铸 token')
+    if read_surface_seal(
+        expected_base, permit.sid, code=permit.code_version,
+    ) != permit.surface_seal:
+        raise ArtifactUnreadable(
+            'execution permit 的 active artifact/approval head 已变化；请重新铸 token')
 
 
 def env_with_permit(
@@ -474,11 +660,7 @@ def load_permit_envelope(
     if not raw_permit or raw_index is None:
         raise TerminalState(
             'execution permit envelope 必须同时携带 permit JSON 与 step_index')
-    try:
-        permit = ExecutionPermit.model_validate_json(raw_permit)
-    except (ValueError, json.JSONDecodeError) as exc:
-        raise TerminalState('execution permit envelope JSON 无效') from exc
-    verify_permit_sha256(permit)
+    permit = parse_execution_permit(raw_permit)
     if not raw_index.isascii() or not raw_index.isdecimal():
         raise TerminalState('execution permit step_index 必须是 canonical 非负整数')
     step_index = int(raw_index)
@@ -490,5 +672,8 @@ def load_permit_envelope(
 __all__ = [
     'EXTERNAL_INPUT_POLICIES', 'PERMIT_JSON_ENV', 'RECOVERY_RUN_POLICIES',
     'RECOVERY_RUN_POLICY_INDEX', 'STEP_INDEX_ENV', 'env_with_permit',
-    'load_permit_envelope', 'permit_from_next', 'verify_permit_sha256',
+    'load_execution_permit_file', 'load_permit_envelope',
+    'parse_execution_permit', 'permit_from_next',
+    'ready_execution_token_from_next', 'revalidate_active_execution_surface',
+    'verify_permit_sha256',
 ]
