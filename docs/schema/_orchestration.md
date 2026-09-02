@@ -46,7 +46,7 @@
 
 ---
 
-## 零、agent 双角色配置 —— 形状稳定，能力组合由 registry 决定
+## 零、Commander 与 executor backend —— 模式由判别字段决定
 
 `AgentProfile` 只记录一次选择，不自己声明“哪些组合可用”。可选 driver、角色、model、
 reasoning effort 与 execution mode 的唯一公开来源是 `GET /api/agent/capabilities`；组合校验由
@@ -59,18 +59,40 @@ reasoning effort 与 execution mode 的唯一公开来源是 `GET /api/agent/cap
 | `reasoning_effort` | `str` | **是** | 必须属于该 driver + model 发布的 effort，不在前端维护全局联合类型 | **契·码** |
 | `execution_mode` | `str \| null` | **是（可空）** | 与 effort 正交；`null` 交给 registry 使用普通执行模式，显式值仍须由该 model 发布。当前只宣称 `standard`，不宣称 `ultra` | **契·码** |
 
-一次整书代跑用 `PipelineAgentProfiles`：
+直接 LLM API 使用另一份不含密钥的 `LegacyLlmProfile`。`legacy` 在这里表示“本进程直接调用
+LLM API”，不是“无契约旧代码”；provider 的模型、thinking、effort、节点适用面与 client 工厂统一
+登记在 `novel/llm/providers.py::LegacyLlmDriver`。以后接入 GLM 必须新增完整 driver，不能只换
+DeepSeek base URL 后继续复用它的模型回退、tokenizer、thinking wire 或预算规则。
+
+| `LegacyLlmProfile` 字段 | 类型 | 必填 | 内容 | 证据 |
+|---|---|---|---|---|
+| `provider` | `str` | **是** | 稳定 adapter id；当前只发布 `deepseek`，不拿 URL 代替 provider 身份 | **契·码** |
+| `model` | `str` | **是** | provider 发布的精确模型 id | **契·码** |
+| `reasoning_effort` | `str` | **是** | 必须属于该 model + thinking mode 的能力组合 | **契·码** |
+| `thinking_mode` | `str` | **是** | provider 自己定义并发布的思考协议；不得套用 Agent execution mode | **契·码** |
+
+`ExecutorBackend` 是唯一模式选择器：
+
+| `kind` | `profile` | 执行边界 |
+|---|---|---|
+| `agent` | `AgentProfile` | 经 `AgentDriver` / 节点 agent 执行；当前可扩展 Claude Code 与 Codex |
+| `legacy` | `LegacyLlmProfile` | 经 `LegacyLlmDriver` / 直接 API client 执行；当前为 DeepSeek，未来 GLM 独立登记 |
+
+两种 variant 都必须同时携带 `kind + profile`，不得再用“有没有 AgentProfile”推断模式，也不得自动
+降级到另一种 backend。一次整书代跑用 `PipelineAgentProfiles` v2：
 
 | 字段 | 类型 | 必填 | 内容 | 证据 |
 |---|---|---|---|---|
-| `commander` | `AgentProfile` | **是** | 全程指挥、人审代批与 skill 接入的 agent 身份 | **契·码** |
-| `executor_default` | `AgentProfile` | **是** | 现役付费 agent 节点的默认执行者身份 | **契·码** |
-| `executor_overrides` | `{node: AgentProfile}` | 否；默认 `{}` | 只写逐节点差异；键严格属于 `AGENT_EXECUTOR_NODES`。stage 名、代码节点与退役节点一律拒绝 | **契·码** |
+| `schema_version` | `2` | **是** | v1 的裸 `AgentProfile` 只在读边界无损迁移为 `kind=agent`；所有新写入只发 v2 | **契·码** |
+| `commander` | `AgentProfile` | **是** | 全程指挥、人审代批与 skill 接入的 agent 身份；Commander 本身不走 legacy API | **契·码** |
+| `executor_default` | `ExecutorBackend` | **是** | 所有未覆盖付费 executor 节点的默认 backend | **契·码** |
+| `executor_overrides` | `{node: ExecutorBackend}` | 否；默认 `{}` | 只写逐节点差异；键严格属于 `AGENT_EXECUTOR_NODES`。stage 名、代码节点与退役节点一律拒绝 | **契·码** |
 
 `None` / `null` 只服务旧历史与迁移期尚未指定的请求，**不表示 capability 数组第一项**。
-服务端 capability 的 `default_profiles=null` 表示当前还没有 provider-neutral 默认；UI 已消费该响应，
-但仍必须显式选择，不能替用户猜。Phase 2～4 依次接通 Stage2 global、blueprint 与 Stage6 semantic；
-Phase 5 后 direct executor 的**现役精确面**为 8 节点 / 13 种 flag-token 组合：
+服务端 capability 的 `default_profiles=null` 表示当前还没有通过 TODO-45 真实整书验收的**产品预置
+配置**；它不是 Agent/Legacy 模式开关。UI 已消费该响应，但仍必须显式选择。用户在设置页保存的
+常用配置与产品预置分开，既可以选择 Agent，也可以选择 Legacy。Agent backend 的 direct executor
+现役精确面为 8 节点 / 13 种 flag-token 组合：
 
 | node | 接受非空 profile 的 `flags` token 集 | Step 说明 |
 |---|---|---|
@@ -83,12 +105,17 @@ Phase 5 后 direct executor 的**现役精确面**为 8 节点 / 13 种 flag-tok
 | `stage6.semantic` | `[]` | A/B 两个独立 executor session |
 | `stage7.rename` | `[]` | producer 带 profile；自动 `--check-only` Step 不带 |
 
-矩阵之外的 direct executor 组合仍关闭式拒绝。八条纵切共用一条身份链：`preview/start` → `Step/JobStart` → `argv` →
-`CLI` → `RunContext` → 节点自己的 executor。registry 在 argv builder 边界物化 `execution_mode`；
-快照与四个 CLI 参数必须逐字一致。Stage2 global 复用一条 logical session；blueprint 按
+Agent 矩阵之外的 direct 组合仍关闭式拒绝。Legacy backend 则按 provider registry 发布的精确
+model/node 能力关闭式校验：DeepSeek V4 Flash 不承接契约钉死 Pro 的 `stage4.design`、`stage4.plan`、
+`stage6.semantic`，必须改用 Pro 或逐节点覆盖；DeepSeek V4 Pro 承接现役八个 executor 节点。
+
+两种 backend 共用一条身份链：`preview/start` → `Step/JobStart` → `argv` → `CLI` → `RunContext` →
+按 `kind` 选择的 executor。Agent registry 在 argv builder 边界物化 `execution_mode`；Legacy registry
+同样校验 provider/model/effort/thinking/node。Stage2 global 复用一条 logical session；blueprint 按
 phase/purpose/chapter 隔离；Stage5 按章隔离；Stage6 semantic 管理 A/B 两条独立 session；其余 Phase5
 节点均按 node 隔离。agent 只交 fixed typed 候选，代码掌握 schema / HARD、结构化反馈、正式归一、
-checkpoint、提交 journal/readback/adoption 与终验。显式 profile 不得落回 DeepSeek。
+checkpoint、提交 journal/readback/adoption 与终验。显式 Agent backend 不得落回 Legacy；显式 Legacy
+backend 也不得改走 Agent。
 
 **三根运行身份轴**：`JobStart.run_id` 是**业务 run**——同一业务节点从
 首跑、恢复到聚合始终不变，账本行、agent session 审计、`_stage*_runs/<run_id>/`
@@ -100,10 +127,10 @@ ledger/session/checkpoint。旧盘记录没有这三列（可缺、不回填、�
 `ended`。整书 headless 路在此之外再有稳定 `parent_run_id` 与可滚动 `execution_epoch`：代码、skill、
 provider session 和 admission 属于 epoch，不得反向写进稳定 parent contract。
 
-direct job 另有一条正交授权链：`PreviewRequest.egress_authorized` 默认 false，profile 非空的新计划必须
+direct job 另有一条正交授权链：`PreviewRequest.egress_authorized` 默认 false，backend 非空的新计划必须
 显式冻结 bool 到 `JobStart` 与付费 executor `Step`；只有 true 才在 argv 加 `--allow-egress`。false
 允许 0 成本 preview 摊开不可执行命令，真 start 与手敲 CLI 会在 job/driver/probe/wire 前拒绝；无
-profile 时 false 归一为 `null`，true 反而拒绝。它不是 `NodeSpec.flags`，也不能由 `--yes` 推导。
+backend 时 false 归一为 `null`，true 反而拒绝。它不是 `NodeSpec.flags`，也不能由 `--yes` 推导。
 公开 agent run 的非空 `PipelineAgentProfiles` 已接进 provider-neutral Commander。
 preview/start/batch 共用一份 plan；规范化 base、完整 resolved profiles 与两项授权冻结进
 `RunContractV2`，起始代码、skill、stdin-only invocation、admission 与 provider session 冻结进可滚动
@@ -111,7 +138,7 @@ preview/start/batch 共用一份 plan；规范化 base、完整 resolved profile
 页面从 capability 动态构造 Commander、默认 executor 与逐节点 override，成功 preview 保存的完整请求
 对象就是 start 唯一可消费的快照；配置、授权或 capability 变化会使它失效，不重新取默认。Commander
 child 只持 run id + contract SHA-256 + epoch id，从 append-only 事件复核快照；`run_step.py` 再按 exact
-node/flags 选择 executor profile。Phase 1～6 结论来自 fake driver、本机零模型 CLI 检查与非 corpus
+node/flags 选择 executor backend。现有结论来自 fake driver、本机零模型 CLI 检查与非 corpus
 回归，**真实 provider 模型请求仍为 0，没有质量、速度、entitlement 或 current-schema corpus 实证**。
 
 ---
@@ -129,8 +156,8 @@ node/flags 选择 executor profile。Phase 1～6 结论来自 fake driver、本�
 | `paid` | `bool` | **是** | 这一步会不会花钱。**唯一落点 `novel/orchestrator/nodes.py::is_paid`**（`R-11.7`：贵贱只有一处算） | **盘·码** |
 | `writes` | `str` | **是** | ⭐ 这一步会往盘上写什么。**空串 = 不写盘。** 见 §1.2 | **设计** |
 | `note` | `str \| 键不在` | 否 | 这一步的特别提醒（例：追跑的那条 `--check-only` 为什么在） | **契·码** |
-| `executor_profile` | `AgentProfile \| null` | 否；旧盘可缺 | 本步真正解析后的 executor 快照。现役仅限上表 8 节点 / 13 组合的付费 producer Step 可非空；blueprint、Stage4 plan、Hook、Rename 自动追跑的 0 成本 `--check-only` Step 必须为 `null`。`null` / 缺失只能显示 unknown，不按今天默认倒推昨天身份 | **契·码** |
-| `egress_authorized` | `bool \| null` | 否；旧盘可缺 | 独立正文外发授权快照。新付费 executor Step 必须为 bool，并与 argv 是否含 `--allow-egress` 逐字一致；profile 为空的 legacy/代码/追跑 Step 必须为 `null`。旧盘 `null` 只表示未记录，不倒推 | **契·码** |
+| `executor_backend` | `ExecutorBackend \| null` | 否；旧盘可缺 | 本步真正解析后的 executor 快照。付费 producer Step 可非空；自动追跑的 0 成本 `--check-only` Step 必须为 `null`。旧 `executor_profile` 只在读边界包成 `kind=agent`；新序列化不再发旧字段。两格都缺只能显示 unknown，不按今天默认倒推昨天身份 | **契·码** |
+| `egress_authorized` | `bool \| null` | 否；旧盘可缺 | 独立正文外发授权快照。新付费 executor Step 必须为 bool，并与 argv 是否含 `--allow-egress` 逐字一致；backend 为空的兼容/代码/追跑 Step 必须为 `null`。旧盘 `null` 只表示未记录，不倒推 | **契·码** |
 
 ### 1.1 ⚠ `--base` 用绝对路径，但 `-m novel.cli` 仍然吃 cwd
 
@@ -138,14 +165,17 @@ argv 的形态是：
 
 ```
 <sys.executable> -X utf8 -u -m novel.cli run <node> <sid> [flags…]
-  [--executor-driver <id> --executor-model <id> --executor-effort <id> --executor-mode <id>]
+  [--executor-backend agent
+   --executor-driver <id> --executor-model <id> --executor-effort <id> --executor-mode <id>]
+  [--executor-backend legacy
+   --legacy-provider <id> --legacy-model <id> --legacy-effort <id> --legacy-thinking <id>]
   [--allow-egress] --base <绝对路径> [--yes]
 ```
 
-方括号里的 executor 四元组只在 resolved profile 非空时由 builder 整组加入；CLI 不接受半份选择。
-`--allow-egress` 也只可跟在这组 profile 后，且只在独立授权为 true 时出现；它与 `--yes` 分别回答
-正文能否外发、能否付费。当前只有上表 8 节点 / 13 组合会生成这组参数，不能把 argv 的可选形状
-误解为任意节点或任意 flag 都已迁移。
+两个 backend 参数组互斥，builder 只生成其中一组；CLI 不接受半份选择或混搭参数。旧复制命令若只有
+完整的四个 `--executor-*` 参数，可在读边界无损解释为 `kind=agent`，但所有新命令都显式写
+`--executor-backend`。`--allow-egress` 只可跟在非空 backend 后，且只在独立授权为 true 时出现；它与
+`--yes` 分别回答正文能否外发、能否付费。
 
 `--base` 用绝对路径是原型定下来的，理由是「**好让 argv 与 cwd 无关**」。
 但 `-m novel.cli` 这一段**本身**要求 cwd 在仓根（`pythonpath=["."]` 只对 pytest 生效）。
@@ -214,8 +244,8 @@ argv 的形态是：
 | `code` | `str` | **是** | `git describe --always --dirty`。哪版代码跑的（同 `_provenance.code`，全链一个实现） | **三源** |
 | `paid` | `bool` | **是** | 整个作业花不花钱 = 任一步花钱 | **盘·码** |
 | `writes` | `bool` | **是** | 整个作业写不写盘 = 任一步写盘 | **设计** |
-| `executor_profile` | `AgentProfile \| null` | 否；旧盘可缺 | 直接节点作业解析后的 executor 快照；与付费 producer `steps[].executor_profile` 同源。现役仅上表 8 节点 / 13 组合可非空；未迁移组合不得冻结一份 profile 后仍走旧 backend | **契·码** |
-| `egress_authorized` | `bool \| null` | 否；旧盘可缺 | 与所有付费 executor Step 同源的独立正文外发授权。新 profile 作业必须冻结 bool；无 profile 时必须 `null`。false 是“可预览、不可执行”，不是 unknown；旧盘 `null` 才是未记录 | **契·码** |
+| `executor_backend` | `ExecutorBackend \| null` | 否；旧盘可缺 | 直接节点作业解析后的 executor 快照；与付费 producer `steps[].executor_backend` 同源。旧 `executor_profile` 只读迁移为 Agent variant；新写入用判别联合，不能冻结一种 backend 后执行另一种 | **契·码** |
+| `egress_authorized` | `bool \| null` | 否；旧盘可缺 | 与所有付费 executor Step 同源的独立正文外发授权。新 backend 作业必须冻结 bool；无 backend 时必须 `null`。false 是“可预览、不可执行”，不是 unknown；旧盘 `null` 才是未记录 | **契·码** |
 | `started` | `int` | **是** | epoch 秒 | **盘·码** |
 | `ended` | `int \| null` | **是** | 必填但可为 `null`——**`null` = 还没结束或不知道**，不是 0 | **盘·码** |
 | `exit_code` | `int \| null` | **是** | 同上。⚠ **`exit_code == 0` 不等于成功**，见 §2.3 | **盘·码** |

@@ -219,9 +219,9 @@ export function SettingsScreen() {
           <div>
             <div className="text-body font-semibold text-ink-2">两类 Executor</div>
             <div className="mt-4 text-body text-ink-4">
-              本页管理已有供应商中立驱动的 Agent Executor（Claude Code / Codex）。
-              Legacy API 当前仍是显式 DeepSeek 回滚路径；在 provider 策略、token 预算和响应契约
-              完整抽象并接入前，不放一个看似可选、实际无人消费的控件。
+              Agent CLI 使用 Claude Code / Codex；Legacy API 当前发布 DeepSeek。
+              每个默认与节点覆盖都保存显式 <Mono>kind + profile</Mono>，运行时不会再靠
+              profile 是否为空猜模式。以后增加 GLM 时由后端 capability 发布新 provider。
             </div>
           </div>
           {capabilities.data.default_profiles === null ? (

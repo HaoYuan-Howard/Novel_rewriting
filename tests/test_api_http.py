@@ -524,7 +524,7 @@ _EXECUTOR_PROFILE_HTTP_CASES = (
 )
 
 
-def test_executor_profile_http_matrix_covers_current_run_registry():
+def test_executor_backend_http_matrix_covers_current_run_registry():
     """HTTP 纵切必须覆盖生产注册表的每一种 token 组合，不能手工漏节点。"""
     covered: dict[str, list[frozenset[str]]] = {}
     for node, flags, _step_count in _EXECUTOR_PROFILE_HTTP_CASES:
@@ -538,7 +538,7 @@ def test_executor_profile_http_matrix_covers_current_run_registry():
     _EXECUTOR_PROFILE_HTTP_CASES,
     ids=lambda value: str(value),
 )
-def test_executor_profile_is_identical_in_preview_and_start(
+def test_executor_backend_is_identical_in_preview_and_start(
         client, base, monkeypatch, node, flags, step_count):
     profile = {
         'driver': 'codex', 'model': 'gpt-5.6-sol',
@@ -546,21 +546,21 @@ def test_executor_profile_is_identical_in_preview_and_start(
     }
     request = {
         'sid': '42', 'node': node, 'flags': list(flags),
-        'executor_profile': profile,
+        'executor_backend': {'kind': 'agent', 'profile': profile},
         'egress_authorized': True,
     }
     captured = {}
 
     def start_without_thread(
             run_base, node, sid, run_flags, *, steps,
-            executor_profile=None, egress_authorized=None, prepare=None):
+            executor_backend=None, egress_authorized=None, prepare=None):
         assert (prepare is None) is node.startswith('stage2.')
-        captured['executor_profile'] = executor_profile
+        captured['executor_backend'] = executor_backend
         captured['egress_authorized'] = egress_authorized
         captured['steps'] = steps
         return _started_record(
             run_base, node, sid, run_flags, steps,
-            executor_profile=executor_profile,
+            executor_backend=executor_backend,
             egress_authorized=egress_authorized)
 
     monkeypatch.setattr(JOB_API.jobs, 'start', start_without_thread)
@@ -572,19 +572,22 @@ def test_executor_profile_is_identical_in_preview_and_start(
     preview_start = preview.json()
     started_start = started.json()['start']
     assert started_start == preview_start
-    resolved = preview_start['executor_profile']
-    assert resolved == {**profile, 'execution_mode': 'standard'}
+    resolved = preview_start['executor_backend']
+    assert resolved == {
+        'kind': 'agent',
+        'profile': {**profile, 'execution_mode': 'standard'},
+    }
     assert len(preview_start['steps']) == step_count
-    assert preview_start['steps'][0]['executor_profile'] == resolved
+    assert preview_start['steps'][0]['executor_backend'] == resolved
     assert preview_start['egress_authorized'] is True
     assert preview_start['steps'][0]['egress_authorized'] is True
-    assert captured['executor_profile'].model_dump(mode='json') == resolved
+    assert captured['executor_backend'].model_dump(mode='json') == resolved
     assert captured['egress_authorized'] is True
     assert [step.model_dump(mode='json') for step in captured['steps']] == \
         preview_start['steps']
     expected_steps = build_steps(
         node, '42', list(flags), base=base,
-        executor_profile=captured['executor_profile'],
+        executor_backend=captured['executor_backend'],
         egress_authorized=True,
     )
     assert [step.model_dump(mode='json') for step in expected_steps] == \
@@ -596,7 +599,7 @@ def test_executor_profile_is_identical_in_preview_and_start(
     assert argv[argv.index('--executor-mode') + 1] == 'standard'
     assert '--allow-egress' in argv
     for follow in preview_start['steps'][1:]:
-        assert follow['executor_profile'] is None
+        assert follow['executor_backend'] is None
         assert follow['egress_authorized'] is None
         assert '--check-only' in follow['argv']
         assert not any(token.startswith('--executor-') for token in follow['argv'])
@@ -699,11 +702,11 @@ def test_old_job_mode_is_not_serialized_by_public_http(client, base):
 
 
 def _started_record(
-        base, node, sid, flags, steps, *, executor_profile=None,
+        base, node, sid, flags, steps, *, executor_backend=None,
         egress_authorized=None):
     start = J.plan_start(
         node, sid, flags, base=base, steps=steps,
-        executor_profile=executor_profile,
+        executor_backend=executor_backend,
         egress_authorized=egress_authorized)
     return J.JobRecord(
         job_id='job-stage5-authorization',
@@ -733,9 +736,9 @@ def test_free_stage5_recovery_jobs_do_not_request_writing_authorization(
 
     def start_without_thread(
             run_base, node, sid, run_flags, *, steps,
-            executor_profile=None, egress_authorized=None, prepare=None):
+            executor_backend=None, egress_authorized=None, prepare=None):
         assert prepare is None
-        assert executor_profile is None
+        assert executor_backend is None
         assert egress_authorized is None
         return _started_record(run_base, node, sid, run_flags, steps)
 
@@ -798,9 +801,9 @@ def test_paid_blueprint_can_start_while_global_review_is_pending(
 
     def start_without_thread(
             run_base, node, sid, run_flags, *, steps,
-            executor_profile=None, egress_authorized=None, prepare=None):
+            executor_backend=None, egress_authorized=None, prepare=None):
         assert prepare is None
-        assert executor_profile is None
+        assert executor_backend is None
         assert egress_authorized is None
         return _started_record(run_base, node, sid, run_flags, steps)
 
@@ -836,9 +839,9 @@ def test_stage2_review_is_checked_for_paid_and_free_consumers_under_the_book_loc
 
     def start_without_thread(
             run_base, run_node, sid, run_flags, *, steps,
-            executor_profile=None, egress_authorized=None, prepare=None):
+            executor_backend=None, egress_authorized=None, prepare=None):
         assert prepare is not None
-        assert executor_profile is None
+        assert executor_backend is None
         assert egress_authorized is None
         prepare()
         return _started_record(run_base, run_node, sid, run_flags, steps)
@@ -873,7 +876,7 @@ def test_stage4_plan_new_outputs_require_design_review_but_recovery_does_not(
 
     def start_without_thread(
             run_base, node, sid, run_flags, *, steps,
-            executor_profile=None, egress_authorized=None, prepare=None):
+            executor_backend=None, egress_authorized=None, prepare=None):
         if prepare is not None:
             prepare()
         return _started_record(run_base, node, sid, run_flags, steps)
@@ -909,7 +912,7 @@ def test_stage4_design_recovery_decision_is_resolved_under_the_job_lock(
 
     def start_without_thread(
             run_base, node, sid, run_flags, *, steps,
-            executor_profile=None, egress_authorized=None, prepare=None):
+            executor_backend=None, egress_authorized=None, prepare=None):
         if prepare is not None:
             prepare()
         return _started_record(run_base, node, sid, run_flags, steps)
@@ -935,9 +938,9 @@ def test_paid_stage5_job_authorizes_selected_chapters_before_start(
 
     def start_without_thread(
             run_base, node, sid, run_flags, *, steps,
-            executor_profile=None, egress_authorized=None, prepare=None):
+            executor_backend=None, egress_authorized=None, prepare=None):
         assert prepare is not None
-        assert executor_profile is None
+        assert executor_backend is None
         assert egress_authorized is None
         prepare()
         return _started_record(run_base, node, sid, run_flags, steps)

@@ -20,6 +20,9 @@ if str(ROOT) not in sys.path:
 
 from novel import commander_context, paths, prov, run_identity  # noqa: E402
 from contracts.schema.api import ExecutionPermit  # noqa: E402
+from contracts.schema.orchestration import (  # noqa: E402
+    AgentExecutorBackend, LegacyExecutorBackend,
+)
 from novel.cli import exit_codes as X  # noqa: E402
 from novel.errors import TerminalState  # noqa: E402
 from novel.orchestrator import admission  # noqa: E402
@@ -34,7 +37,7 @@ _VALUE_OPTIONS = (
     '--operator-permit-file', '--operator-permit-sha256',
 )
 _EVIDENCE_SCHEMA = 'novel-operator-step-evidence-v2'
-_COMMANDER_EVIDENCE_SCHEMA = 'novel-operator-step-evidence-v3'
+_COMMANDER_EVIDENCE_SCHEMA = 'novel-operator-step-evidence-v4'
 _SECRET_MARKER = re.compile(r'api[_-]?key|deepseek_api_key', re.IGNORECASE)
 
 
@@ -145,9 +148,9 @@ def _evidence_bytes(
                 'label': step.label,
                 'note': step.note,
                 **({
-                    'executor_profile': (
-                        step.executor_profile.model_dump(mode='json')
-                        if getattr(step, 'executor_profile', None) is not None
+                    'executor_backend': (
+                        step.executor_backend.model_dump(mode='json')
+                        if getattr(step, 'executor_backend', None) is not None
                         else None),
                     'egress_authorized': getattr(step, 'egress_authorized', None),
                 } if context is not None else {}),
@@ -279,18 +282,33 @@ def main(argv: list[str] | None = None) -> int:
                 raise TerminalState(
                     f'run_step --run-id={args.run_id!r} 与 Commander run '
                     f'{context.run_id!r} 不一致')
-        profile = None
+        executor_backend = None
         egress_authorized = None
         if context is not None:
             tokens = frozenset(node_planner.flag_tokens(flags))
-            supported = node_planner.EXECUTOR_PROFILED_RUNS.get(args.node, ())
-            if tokens in supported:
-                profile = context.executor_profile(args.node)
+            if node_planner.is_paid(args.node, flags):
+                backend_of = getattr(context, 'executor_backend', None)
+                if backend_of is not None:
+                    executor_backend = backend_of(args.node)
+                else:
+                    # v1 CommanderContext / 测试桩只公开 AgentProfile。只允许
+                    # 无损包成 agent，绝不把 profile 缺席解释成 legacy。
+                    legacy_value = context.executor_profile(args.node)
+                    executor_backend = (
+                        legacy_value
+                        if isinstance(
+                            legacy_value,
+                            (AgentExecutorBackend, LegacyExecutorBackend),
+                        )
+                        else AgentExecutorBackend(profile=legacy_value)
+                    )
+                supported = node_planner.EXECUTOR_PROFILED_RUNS.get(args.node, ())
+                if (isinstance(executor_backend, AgentExecutorBackend)
+                        and tokens not in supported):
+                    raise TerminalState(
+                        f'Commander 不允许 agent 执行尚未迁移的付费跑法 '
+                        f'{args.node} {sorted(tokens)}')
                 egress_authorized = context.start.egress_authorized
-            elif node_planner.is_paid(args.node, flags):
-                raise TerminalState(
-                    f'Commander 不允许付费跑法 {args.node} {sorted(tokens)} '
-                    '落回 legacy LLM；该组合尚未接入 executor agent')
         current_permit = None
         if (args.operator_permit_file is not None
                 and args.operator_permit_sha256 is not None):
@@ -338,7 +356,7 @@ def main(argv: list[str] | None = None) -> int:
         steps = build_steps(
             args.node, args.sid, flags,
             base=(current_permit.base if current_permit is not None else args.base),
-            executor_profile=profile,
+            executor_backend=executor_backend,
             egress_authorized=egress_authorized,
             placeholders=not args.execute)
         evidence_data = _evidence_bytes(

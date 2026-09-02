@@ -12,7 +12,10 @@ from pydantic import ValidationError
 from contracts.invariants import (
     AGENT_EXECUTOR_NODES, NODES, AgentAvailability, AgentDriver, AgentRole,
 )
-from contracts.schema.orchestration import AgentProfile, PipelineAgentProfiles
+from contracts.schema.orchestration import (
+    AgentExecutorBackend, AgentProfile, LegacyExecutorBackend, LegacyLlmProfile,
+    PipelineAgentProfiles,
+)
 from novel import agent_capabilities as capabilities
 
 
@@ -75,6 +78,12 @@ def test_registry_publishes_exact_ids_labels_and_model_specific_options():
     assert all('ultra' not in model.reasoning_efforts
                and 'ultra' not in model.execution_modes
                for driver in drivers.values() for model in driver.models)
+    assert [provider.id for provider in response.legacy_providers] == ['deepseek']
+    deepseek = response.legacy_providers[0]
+    assert [model.id for model in deepseek.models] == [
+        'deepseek-v4-flash', 'deepseek-v4-pro',
+    ]
+    assert set(deepseek.models[1].executor_nodes) == set(AGENT_EXECUTOR_NODES)
 
 
 def test_profile_validation_is_closed_over_driver_model_effort_and_mode():
@@ -111,9 +120,33 @@ def test_executor_overrides_reject_code_and_approval_nodes():
     resolved = capabilities.validate_pipeline_profiles(profiles)
     assert resolved is not profiles
     assert resolved.commander.execution_mode == 'standard'
-    assert resolved.executor_default.execution_mode == 'standard'
-    assert resolved.executor_overrides['stage6.semantic'].execution_mode == 'standard'
+    assert isinstance(resolved.executor_default, AgentExecutorBackend)
+    assert resolved.executor_default.profile.execution_mode == 'standard'
+    override = resolved.executor_overrides['stage6.semantic']
+    assert isinstance(override, AgentExecutorBackend)
+    assert override.profile.execution_mode == 'standard'
     assert profiles.commander.execution_mode is None, '请求对象不应被原地改写'
+
+
+def test_legacy_backend_is_closed_over_provider_model_thinking_effort_and_node():
+    pro = LegacyExecutorBackend(profile=LegacyLlmProfile(
+        provider='deepseek', model='deepseek-v4-pro',
+        reasoning_effort='high', thinking_mode='on'))
+    assert capabilities.validate_executor_backend(
+        pro, node='stage6.semantic') == pro
+
+    flash = LegacyExecutorBackend(profile=LegacyLlmProfile(
+        provider='deepseek', model='deepseek-v4-flash',
+        reasoning_effort='high', thinking_mode='on'))
+    with pytest.raises(capabilities.AgentProfileRefused, match='钉死 deepseek-v4-pro'):
+        capabilities.validate_executor_backend(flash, node='stage6.semantic')
+    with pytest.raises(capabilities.AgentProfileRefused, match='reasoning_effort'):
+        capabilities.validate_executor_backend(
+            LegacyExecutorBackend(profile=LegacyLlmProfile(
+                provider='deepseek', model='deepseek-v4-pro',
+                reasoning_effort='high', thinking_mode='off')),
+            node='stage6.semantic',
+        )
 
 
 def test_capability_probe_and_runtime_share_the_same_safe_windows_entry(tmp_path):

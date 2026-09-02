@@ -7,8 +7,9 @@
 
 - 执行模式是一次 run 的输入事实，不由模型临场猜。headless Commander 只使用 started contract
   冻结的默认 executor 与逐节点 override；直接交互式运行则以本次明确选择和生产 preview 为准。
-- profile 存在时走 Agent driver；没有 profile 的直接交互式付费节点才走 legacy LLM transport。
-  两者共用相同 node、flags、schema、校验、落盘与 ledger 契约，不是两条 Stage0～Stage7 流水线。
+- 模式只看 `executor_backend.kind`：`agent` 携 `AgentProfile`，`legacy` 携 `LegacyLlmProfile`。不得再用
+  profile 是否存在推断模式。两者共用相同 node、flags、schema、校验、落盘与 ledger 契约，不是两条
+  Stage0～Stage7 流水线。省略 backend 的 DeepSeek 入口只服务旧独立 CLI/客户端兼容，不是新 run 默认。
 - **禁止自动降级。** Agent driver 的 executable、协议、配置或受支持 flag 组合不可用时关闭式停止；
   legacy transport 失败时也不暗换 Agent driver。切换模式必须开始一条选择明确的新 run，并在终审包披露。
 - 0 成本 check、typed approval、人工修订、state/inbox/operator next/permit 与最终机械对账不绑定任何
@@ -17,19 +18,19 @@
 
 ## Agent driver
 
-在 headless Commander，或直接交互式命令已经显式冻结完整 executor profile 时读取本节。
+在 headless Commander 或直接交互式命令已冻结 `kind=agent` backend 时读取本节。
 
 1. capability registry 是 driver/provider/model/effort/mode 与本机可探测状态的唯一选项源；不得取数组首项、
    环境默认或聊天记忆代选。
 2. headless 下 ready node actions（包括纯读诊断）直接使用同一次 `operator next` 携带的 opaque
    execution token；blocked recovery 才为 exact node/flags 显式取得 `operator permit`，随后都经
    `scripts/run_step.py`。runner 从 `run_id + contract SHA-256` 重读 append-only started 事件，为当前
-   permit 的 node/flags 选择默认 profile 或逐节点 override，并把完整 permit、claim、profile 与
+   permit 的 node/flags 选择默认 backend 或逐节点 override，并把完整 permit、claim、backend 与
    `build_steps` 的逐 child `step_index` 写入 evidence/真实子 CLI；preview 不重跑 planner，execute 的
    primary step 在 claim 后只做一次 active-surface CAS，自动 follow-check 复用同一 envelope 并核
    canonical argv。
 3. 节点 executor 会在正文外发前用同一 driver 做零模型 probe。缺 executable、协议、配置、两项授权，
-   或当前 flag 组合尚未迁移时，必须在首个 wire 前停止；不得落回 DeepSeek。
+   或当前 flag 组合尚未迁移时，必须在首个 wire 前停止；不得落回 Legacy API。
 4. Agent executor 自身完成“候选 → 代码校验反馈 → 同一 logical session resume”。主路不带 legacy
    `--response-repair agent`，也不运行 DeepSeek 的 `doctor --llm-transport`。
 5. provider session 中断或候选被拒时，只使用该节点现有 durable checkpoint 与同一 session 恢复；
@@ -37,7 +38,8 @@
 
 ## Legacy LLM transport
 
-仅在直接交互式 run 没有 executor profile，或操作者明确选择 DeepSeek 临时回滚时读取本节。
+在 run 已冻结 `kind=legacy` backend 时读取本节。当前 provider 为 DeepSeek；以后 GLM 必须作为独立
+`LegacyLlmDriver` 登记模型、thinking/effort、节点适用面和 client，不能只替换 base URL。
 
 1. 首个正文请求前运行
    `<PY> -X utf8 -u -m novel.cli doctor --llm-transport`。它使用正式代理与超时，但不发送正文、

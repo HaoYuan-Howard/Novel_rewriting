@@ -24,9 +24,15 @@ from contracts.invariants import (
 )
 from contracts.schema.api import (
     AgentCapabilitiesResponse, AgentDriverCapability, AgentModelCapability,
+    LegacyModelCapability, LegacyProviderCapability, LegacyThinkingCapability,
 )
-from contracts.schema.orchestration import AgentProfile, PipelineAgentProfiles
+from contracts.schema.orchestration import (
+    AgentExecutorBackend, AgentProfile, ExecutorBackend, LegacyExecutorBackend,
+    PipelineAgentProfiles,
+)
 from novel.agents.base import AgentConfigurationError, resolve_cli_entry
+from novel.errors import UnsupportedRunMode
+from novel.llm.providers import provider_specs, validate_legacy_profile
 
 
 _PROBE_TIMEOUT_SECONDS = 3.0
@@ -224,8 +230,34 @@ def get_agent_capabilities(
                 for model in spec.models
             ],
         ))
+    legacy_providers = [
+        LegacyProviderCapability(
+            id=provider.id,
+            label=provider.label,
+            models=[
+                LegacyModelCapability(
+                    id=model.id,
+                    label=model.label,
+                    thinking_modes=[
+                        LegacyThinkingCapability(
+                            id=mode.id,
+                            label=mode.label,
+                            reasoning_efforts=list(mode.reasoning_efforts),
+                        )
+                        for mode in model.thinking_modes
+                    ],
+                    executor_nodes=list(model.executor_nodes),
+                )
+                for model in provider.models
+            ],
+        )
+        for provider in provider_specs()
+    ]
     return AgentCapabilitiesResponse(
-        drivers=drivers, executor_nodes=list(AGENT_EXECUTOR_NODES))
+        drivers=drivers,
+        legacy_providers=legacy_providers,
+        executor_nodes=list(AGENT_EXECUTOR_NODES),
+    )
 
 
 def validate_profile(profile: AgentProfile, *, role: AgentRole) -> AgentProfile:
@@ -267,13 +299,43 @@ def validate_profile(profile: AgentProfile, *, role: AgentRole) -> AgentProfile:
 
 def validate_pipeline_profiles(
         profiles: PipelineAgentProfiles) -> PipelineAgentProfiles:
-    """一次校验 commander、默认 executor 与全部节点覆盖。"""
+    """一次校验 commander、默认 backend 与全部节点覆盖。
+
+    默认 backend 必须逐个通过所有未覆盖节点；否则一份 Flash 默认会在
+    Stage4/Stage6 的 Pro 钉死节点直到真跑才失败。设置保存和 preview 就应把这类
+    半份配置拦住，并明确要求节点覆盖。
+    """
+    commander = validate_profile(profiles.commander, role='commander')
+    overrides = {
+        node: validate_executor_backend(backend, node=node)
+        for node, backend in profiles.executor_overrides.items()
+    }
+    default_nodes = [
+        node for node in AGENT_EXECUTOR_NODES
+        if node not in overrides
+    ]
+    default_backend = profiles.executor_default
+    for node in default_nodes:
+        default_backend = validate_executor_backend(default_backend, node=node)
     return PipelineAgentProfiles(
-        commander=validate_profile(profiles.commander, role='commander'),
-        executor_default=validate_profile(
-            profiles.executor_default, role='executor'),
-        executor_overrides={
-            node: validate_profile(profile, role='executor')
-            for node, profile in profiles.executor_overrides.items()
-        },
+        commander=commander,
+        executor_default=default_backend,
+        executor_overrides=overrides,
     )
+
+
+def validate_executor_backend(
+    backend: ExecutorBackend, *, node: str | None = None,
+) -> ExecutorBackend:
+    """按显式 discriminator 校验 executor；两类 driver 不共享隐式 fallback。"""
+    if isinstance(backend, AgentExecutorBackend):
+        return AgentExecutorBackend(
+            profile=validate_profile(backend.profile, role='executor'))
+    if isinstance(backend, LegacyExecutorBackend):
+        try:
+            profile = validate_legacy_profile(backend.profile, node=node)
+        except UnsupportedRunMode as exc:
+            raise AgentProfileRefused(str(exc)) from exc
+        return LegacyExecutorBackend(profile=profile)
+    raise AgentProfileRefused(
+        f'未知 executor backend 类型 {type(backend).__name__}')

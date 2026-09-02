@@ -5,7 +5,7 @@ import { useChrome } from '@/hooks/useChrome'
 import { useJobLog, useJobs } from '@/hooks/useJobs'
 import { useSid } from '@/hooks/useRouteParams'
 import { JobStateChip } from '@/components/vocab/Badges'
-import { AgentProfileSnapshot } from '@/components/agent/AgentProfilesSnapshot'
+import { ExecutorBackendSnapshot } from '@/components/agent/AgentProfilesSnapshot'
 import { cx } from '@/lib/cx'
 
 /**
@@ -148,7 +148,7 @@ export function JobDrawer() {
                       <span className="ml-auto font-mono text-micro text-ink-5">{selected.id}</span>
                     </div>
                     <div className="flex flex-wrap items-center gap-9 border-b border-line-soft bg-card px-18 py-6">
-                      <AgentProfileSnapshot profile={selected.executor_profile} />
+                      <ExecutorBackendSnapshot backend={selected.executor_backend} />
                       <span className="text-mini text-ink-4">
                         正文外发：{selected.egress_authorized == null
                           ? 'unknown'

@@ -45,8 +45,10 @@ blocked recovery 和诊断兼容，blocked action hash 本身不是恢复许可�
 `operator`、`queue`、`queue-list`、`queue-cancel`、`queue-resume`、`jobs`、`reconcile`、
 `response-repair`、`approval` 与 `mark`；先以 skill 当前说明为准，不从这张列表反推参数。
 
-Agent driver 与显式 legacy LLM transport 共用同一条 Stage0～Stage7 主链，只按 execution profile 区分
-付费节点由谁承接；任一模式失败都不得自动降级到另一模式。正文外发授权与费用确认彼此独立。
+Agent driver 与显式 legacy LLM transport 共用同一条 Stage0～Stage7 主链。付费节点由判别联合
+`executor_backend` 决定：`kind=agent` 携 `AgentProfile`，`kind=legacy` 携 `LegacyLlmProfile`；不得再用
+profile 是否存在推断模式。任一模式失败都不得自动降级到另一模式。当前 Legacy provider 为 DeepSeek；
+未来 GLM 必须作为独立 provider driver 接入。正文外发授权与费用确认彼此独立。
 
 对实际结束的 agent-only 整书做关闭式、0 模型请求验收：
 

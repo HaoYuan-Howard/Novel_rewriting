@@ -84,14 +84,14 @@ function backendJobRecord(node: string, flags: string[]): BackendJobRecord {
         paid: false,
         writes: '人工审计账',
         note: null,
-        executor_profile: null,
+        executor_backend: null,
         egress_authorized: null,
       }],
       python: 'python',
       code: 'abc123',
       paid: false,
       writes: true,
-      executor_profile: null,
+      executor_backend: null,
       egress_authorized: null,
     },
     started: 1,
@@ -406,6 +406,7 @@ describe('request-shaped cache and diagnostics', () => {
   it('gets agent capabilities through the single HTTP seam', async () => {
     const capabilities = {
       drivers: [],
+      legacy_providers: [],
       executor_nodes: [],
       default_profiles: null,
     }

@@ -33,9 +33,14 @@ from contracts.invariants import (
     REQUIRED_PLACEHOLDER_PREFIX, STAGE5_EDIT_CONFIRMATIONS, VALUED_FLAGS,
     WRITE_EFFECTS,
 )
-from contracts.schema.orchestration import AgentProfile, Step
+from contracts.schema.orchestration import (
+    AgentExecutorBackend, AgentProfile, ExecutorBackend, LegacyExecutorBackend,
+    Step,
+)
 from novel import paths as novel_paths
-from novel.agent_capabilities import AgentProfileRefused, validate_profile
+from novel.agent_capabilities import (
+    AgentProfileRefused, validate_executor_backend, validate_profile,
+)
 from novel.errors import UnsupportedRunMode
 
 #: 仓根。`build_argv` 里的 `-m novel.cli` 要求 cwd 在这里。
@@ -454,6 +459,7 @@ def child_env(env: Mapping[str, str] | None = None) -> dict[str, str]:
 
 def build_argv(node: str, sid: str | None, flags: Sequence[str] = (), *,
                base: str | os.PathLike[str],
+               executor_backend: ExecutorBackend | None = None,
                executor_profile: AgentProfile | None = None,
                egress_authorized: bool | None = None,
                placeholders: bool = False) -> list[str]:
@@ -478,9 +484,11 @@ def build_argv(node: str, sid: str | None, flags: Sequence[str] = (), *,
             filled += [flag, placeholder_for(flag)]
         flags = filled
     tokens = validate_run(node, flags, allow_placeholders=placeholders)
-    executor_profile = resolve_executor_profile(node, flags, executor_profile)
+    executor_backend = _coalesce_executor_backend(
+        executor_backend, executor_profile)
+    executor_backend = resolve_executor_backend(node, flags, executor_backend)
     egress_authorized = resolve_executor_egress(
-        executor_profile, egress_authorized)
+        executor_backend, egress_authorized)
     if sid is None:
         if node != 'stage0.remove' or '--source' not in tokens:
             raise UnsupportedRunMode(
@@ -492,10 +500,12 @@ def build_argv(node: str, sid: str | None, flags: Sequence[str] = (), *,
     if sid is not None:
         argv.append(sid)
     argv += list(flags)
-    if executor_profile is not None:
+    if isinstance(executor_backend, AgentExecutorBackend):
+        executor_profile = executor_backend.profile
         if executor_profile.execution_mode is None:  # pragma: no cover —— registry 后置条件
             raise AssertionError('resolved executor_profile 缺 execution_mode')
         argv += [
+            '--executor-backend', 'agent',
             '--executor-driver', executor_profile.driver,
             '--executor-model', executor_profile.model,
             '--executor-effort', executor_profile.reasoning_effort,
@@ -503,6 +513,17 @@ def build_argv(node: str, sid: str | None, flags: Sequence[str] = (), *,
         ]
         if egress_authorized:
             # 运行控制参数，不属于 NodeSpec flag：它不改变节点身份、贵贱或写盘语义。
+            argv.append('--allow-egress')
+    elif isinstance(executor_backend, LegacyExecutorBackend):
+        profile = executor_backend.profile
+        argv += [
+            '--executor-backend', 'legacy',
+            '--legacy-provider', profile.provider,
+            '--legacy-model', profile.model,
+            '--legacy-effort', profile.reasoning_effort,
+            '--legacy-thinking', profile.thinking_mode,
+        ]
+        if egress_authorized:
             argv.append('--allow-egress')
     argv += ['--base', os.path.abspath(os.fspath(base))]
     if is_paid(node, flags):
@@ -596,23 +617,65 @@ def resolve_executor_profile(
         raise UnsupportedRunMode(f'executor_profile 不可执行：{exc}') from exc
 
 
+def _coalesce_executor_backend(
+    backend: ExecutorBackend | None,
+    legacy_profile: AgentProfile | None,
+) -> ExecutorBackend | None:
+    """兼容旧 Python 调用签名；新调用不得同时交两份事实。"""
+    if legacy_profile is None:
+        return backend
+    old = AgentExecutorBackend(profile=legacy_profile)
+    if backend is None:
+        return old
+    if backend != old:
+        raise UnsupportedRunMode(
+            '不能同时提交 executor_backend 与不一致的旧 executor_profile')
+    return backend
+
+
+def resolve_executor_backend(
+    node: str, flags: Sequence[str], backend: ExecutorBackend | None,
+) -> ExecutorBackend | None:
+    """按 discriminator 校验 executor；不再用 profile 是否为空推断模式。"""
+    if backend is None:
+        return None
+    if isinstance(backend, AgentExecutorBackend):
+        # 继续复用 agent 纵切的精确 node/flag 契约及拒绝文案；这既保护旧调用方，
+        # 也避免先用宽泛的“0 成本”错误吞掉真正的“该 flag 尚未迁移”证据。
+        profile = resolve_executor_profile(node, flags, backend.profile)
+        assert profile is not None
+        return AgentExecutorBackend(profile=profile)
+    if not is_paid(node, flags):
+        raise UnsupportedRunMode(
+            'executor_backend 只属于真正付费生成步，0 成本恢复步不接 executor')
+    try:
+        return validate_executor_backend(backend, node=node)
+    except AgentProfileRefused as exc:
+        raise UnsupportedRunMode(f'executor_backend 不可执行：{exc}') from exc
+
+
 def resolve_executor_egress(
-    profile: AgentProfile | None, egress_authorized: bool | None,
+    backend: ExecutorBackend | AgentProfile | None,
+    egress_authorized: bool | None,
 ) -> bool | None:
-    """把请求默认收成执行快照；正文外发授权不能脱离 executor 存在。"""
-    if profile is None:
+    """把请求默认收成执行快照；正文外发授权不能脱离 executor backend。"""
+    if isinstance(backend, AgentProfile):
+        backend = AgentExecutorBackend(profile=backend)
+    if backend is None:
         if egress_authorized is None or egress_authorized is False:
             return None
         raise UnsupportedRunMode(
-            '--allow-egress 只授权显式 executor；没有 executor_profile 时不能伪造外发授权')
+            '--allow-egress 只授权显式 executor；没有 executor_profile / '
+            'executor_backend 时不能伪造外发授权')
     if type(egress_authorized) is not bool:
         raise UnsupportedRunMode(
-            'executor_profile 必须显式给 bool 正文外发授权；预览可给 false，执行必须为 true')
+            'executor_backend 必须显式给 bool 正文外发授权；预览可给 false，执行必须为 true')
     return egress_authorized
 
 
 def _step(node: str, sid: str | None, flags: Sequence[str], *, base: str | os.PathLike[str],
           note: str | None = None,
+          executor_backend: ExecutorBackend | None = None,
           executor_profile: AgentProfile | None = None,
           egress_authorized: bool | None = None,
           placeholders: bool = False) -> Step:
@@ -628,13 +691,16 @@ def _step(node: str, sid: str | None, flags: Sequence[str], *, base: str | os.Pa
                          for f in missing)
         said = f'必填项已渲染成占位符，执行前逐个替换：{said}'
         note = f'{note}\n    ⚠ {said}' if note else said
-    resolved_profile = resolve_executor_profile(node, filled, executor_profile)
+    resolved_backend = resolve_executor_backend(
+        node, filled,
+        _coalesce_executor_backend(executor_backend, executor_profile),
+    )
     resolved_egress = resolve_executor_egress(
-        resolved_profile, egress_authorized)
+        resolved_backend, egress_authorized)
     return Step(
         argv=build_argv(
             node, sid, filled, base=base,
-            executor_profile=resolved_profile,
+            executor_backend=resolved_backend,
             egress_authorized=resolved_egress,
             placeholders=placeholders),
         cwd=str(REPO_ROOT),
@@ -642,13 +708,14 @@ def _step(node: str, sid: str | None, flags: Sequence[str], *, base: str | os.Pa
         paid=is_paid(node, filled),
         writes=write_effect(node, filled),
         note=note,
-        executor_profile=resolved_profile,
+        executor_backend=resolved_backend,
         egress_authorized=resolved_egress,
     )
 
 
 def build_steps(node: str, sid: str | None, flags: Sequence[str] = (), *,
                 base: str | os.PathLike[str],
+                executor_backend: ExecutorBackend | None = None,
                 executor_profile: AgentProfile | None = None,
                 egress_authorized: bool | None = None,
                 follow_check: bool = True,
@@ -665,7 +732,9 @@ def build_steps(node: str, sid: str | None, flags: Sequence[str] = (), *,
     追一条它拒收的命令，作业会在第二步无缘无故失败，而第一步可能已经花过钱了。
     """
     first = _step(
-        node, sid, flags, base=base, executor_profile=executor_profile,
+        node, sid, flags, base=base,
+        executor_backend=executor_backend,
+        executor_profile=executor_profile,
         egress_authorized=egress_authorized,
         placeholders=placeholders)
     steps = [first]

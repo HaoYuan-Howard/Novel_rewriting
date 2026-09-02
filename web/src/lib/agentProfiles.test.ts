@@ -10,6 +10,7 @@ import {
   materializePipelineAgentProfiles,
   pipelineDraftOf,
   pipelineProfilesEqual,
+  withBackendKind,
   withProfileDriver,
   withProfileModel,
 } from './agentProfiles'
@@ -21,7 +22,10 @@ describe('agent profile draft/materialize', () => {
     expect(empty).toEqual(emptyPipelineAgentProfilesDraft())
     expect(materializePipelineAgentProfiles(capabilities, empty)).toMatchObject({
       profiles: null,
-      errors: expect.arrayContaining(['指挥大脑：请选择 driver', '默认执行者：请选择 driver']),
+      errors: expect.arrayContaining([
+        '指挥大脑：请选择 driver',
+        '默认执行者：请选择 Agent 或 Legacy API',
+      ]),
     })
 
     const complete = pipelineDraftOf(READY_PROFILES)
@@ -52,17 +56,34 @@ describe('agent profile draft/materialize', () => {
     capabilities.drivers[0].availability = 'unknown'
     capabilities.drivers[0].availability_reason = '探针没有结论'
     const draft = pipelineDraftOf(READY_PROFILES)
-    const validExecutor = { ...draft.executor_default }
-    draft.executor_default = {
+    const validExecutor = {
       ...draft.executor_default,
-      reasoning_effort: 'not-published',
+      agent_profile: { ...draft.executor_default.agent_profile },
+      legacy_profile: { ...draft.executor_default.legacy_profile },
     }
-    draft.executor_overrides['node.dynamic-a'] = { ...draft.commander }
+    draft.executor_default = {
+      ...validExecutor,
+      agent_profile: {
+        ...validExecutor.agent_profile,
+        reasoning_effort: 'not-published',
+      },
+    }
+    draft.executor_overrides['node.dynamic-a'] = {
+      ...validExecutor,
+      agent_profile: { ...draft.commander },
+    }
     draft.executor_overrides['node.dynamic-b'] = {
       ...validExecutor,
-      model: 'not-this-driver',
+      agent_profile: {
+        ...validExecutor.agent_profile,
+        model: 'not-this-driver',
+      },
     }
-    draft.executor_overrides['unknown.node'] = validExecutor
+    draft.executor_overrides['unknown.node'] = {
+      ...validExecutor,
+      agent_profile: { ...validExecutor.agent_profile },
+      legacy_profile: { ...validExecutor.legacy_profile },
+    }
     const result = materializePipelineAgentProfiles(capabilities, draft)
     expect(result.profiles).toBeNull()
     expect(result.errors.join('\n')).toMatch(/探针没有结论/)
@@ -76,19 +97,63 @@ describe('agent profile draft/materialize', () => {
     const left = {
       ...READY_PROFILES,
       executor_overrides: {
-        b: { ...EXECUTOR_PROFILE },
-        a: { ...EXECUTOR_PROFILE },
+        b: { kind: 'agent' as const, profile: { ...EXECUTOR_PROFILE } },
+        a: { kind: 'agent' as const, profile: { ...EXECUTOR_PROFILE } },
       },
     }
     const right = {
       ...READY_PROFILES,
       executor_overrides: {
-        a: { ...EXECUTOR_PROFILE },
-        b: { ...EXECUTOR_PROFILE },
+        a: { kind: 'agent' as const, profile: { ...EXECUTOR_PROFILE } },
+        b: { kind: 'agent' as const, profile: { ...EXECUTOR_PROFILE } },
       },
     }
     expect(pipelineProfilesEqual(left, right)).toBe(true)
-    right.executor_overrides.a.reasoning_effort = 'drift'
+    right.executor_overrides.a.profile.reasoning_effort = 'drift'
     expect(pipelineProfilesEqual(left, right)).toBe(false)
+  })
+
+  it('legacy 默认按节点能力校验，显式 Pro 覆盖后可冻结判别联合', () => {
+    const capabilities = agentCapabilities(null)
+    const draft = pipelineDraftOf(READY_PROFILES)
+    draft.executor_default = withBackendKind(draft.executor_default, 'legacy')
+    draft.executor_default.legacy_profile = {
+      provider: 'deepseek',
+      model: 'deepseek-v4-flash',
+      thinking_mode: 'on',
+      reasoning_effort: 'high',
+    }
+
+    const refused = materializePipelineAgentProfiles(capabilities, draft)
+    expect(refused.profiles).toBeNull()
+    expect(refused.errors.join('\n')).toMatch(/不支持节点 node\.dynamic-b/)
+
+    draft.executor_overrides['node.dynamic-b'] = {
+      ...withBackendKind(draft.executor_default, 'legacy'),
+      agent_profile: { ...draft.executor_default.agent_profile },
+      legacy_profile: {
+        provider: 'deepseek',
+        model: 'deepseek-v4-pro',
+        thinking_mode: 'on',
+        reasoning_effort: 'high',
+      },
+    }
+    expect(materializePipelineAgentProfiles(capabilities, draft)).toEqual({
+      profiles: {
+        schema_version: 2,
+        commander: COMMANDER_PROFILE,
+        executor_default: {
+          kind: 'legacy',
+          profile: draft.executor_default.legacy_profile,
+        },
+        executor_overrides: {
+          'node.dynamic-b': {
+            kind: 'legacy',
+            profile: draft.executor_overrides['node.dynamic-b'].legacy_profile,
+          },
+        },
+      },
+      errors: [],
+    })
   })
 })

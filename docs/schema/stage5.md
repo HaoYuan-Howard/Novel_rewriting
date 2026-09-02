@@ -53,7 +53,7 @@ prepared recovery 是默认付费续跑的关闭式例外，不是第二条写�
 checkpoint、但进程停在 canonical 提交后的 `prepared` 尾窗，默认 `stage5.write` 会在构造
 client/driver 前拒绝，并给出显式恢复命令。操作员先以一个**不同于 source、且 emit/apply
 两次完全相同**的 `--run-id <TARGET_RUN_ID>` 运行只读 workpack；审阅后把打印出的完整
-`subject_sha256` 与 `actor/reason` 交给 `--recover-prepared`。两条 flag 禁止与 executor profile、
+`subject_sha256` 与 `actor/reason` 交给 `--recover-prepared`。两条 flag 禁止与 executor backend、
 egress、`--chapters`、`--revise` 或 response repair 混用；apply 覆盖 source run 当时全部
 unresolved prepared 章，不能挑章。
 

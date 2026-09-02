@@ -109,7 +109,7 @@ clean v7 base 继续。只有真实 `request_repair` 才保留该章零 wire 完
 workpack，只有 typed 确认的 hard 关系以 opaque alias 进入 Stage4A；`same_scene` 不因同 source beat 自动
 生成，Executor 不见 SourceSpan/source beat/完整源顺序。正常运行只有确定性 RunSupervisor 调度
 Commander/Executor，外层 root 介入为 0；同一 parent run 必须跨 pause/resume 和至少一次 execution
-epoch rollover 完成：同 epoch 精确续 provider session，新 epoch 新建 session。legacy LLM 路显式禁用且
+epoch rollover 完成：同 epoch 精确续 provider session，新 epoch 新建 session。`kind=legacy` backend 显式禁用且
 不作 fallback；付费与正文外发在首 wire 前分别授权。该 run 同时承担 TODO-32 的剩余真机验收；
 `default_profiles` 在此验收前保持 null。
 

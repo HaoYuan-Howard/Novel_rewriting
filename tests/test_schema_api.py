@@ -28,6 +28,7 @@ from contracts.schema.api import (
     AgentCapabilitiesResponse, AgentDriverCapability, AgentModelCapability,
     AgentRunRequest, ApprovalDoc, DraftAlignView, DraftView, ErrorBody, GlobalView,
     JobList, LogChunk, LogStreamEvent, NovelList, PreviewRequest, ReadingView,
+    LegacyModelCapability, LegacyProviderCapability, LegacyThinkingCapability,
     RetentionApplyRequest, RetentionPlanView, RetentionPolicyRequest,
     ReviewChapterView, ReviewView,
     Stage0EditRequest, Stage0EditResult, Stage0Segment, Stage0Segments,
@@ -184,6 +185,11 @@ def test_executor_egress_snapshots_distinguish_old_unknown_from_new_bool():
     old_job = JobStart(
         sid='old', node='stage2.global', steps=[old_step], python='3.11', code='old',
         paid=True, writes=True, executor_profile=profile)
+    assert old_step.executor_backend is not None
+    assert old_step.executor_backend.kind == 'agent'
+    assert 'executor_profile' not in old_step.model_dump(mode='json')
+    assert old_step.model_dump(mode='json')['executor_backend']['profile'] == \
+        profile.model_dump(mode='json')
     assert old_step.egress_authorized is None
     assert old_job.egress_authorized is None
 
@@ -220,15 +226,25 @@ def test_agent_capability_response_keeps_ids_labels_and_options_separate():
         availability='unknown', availability_reason='只做了本机版本探针',
         models=[model],
     )
+    legacy = LegacyProviderCapability(
+        id='deepseek', label='DeepSeek API', models=[LegacyModelCapability(
+            id='deepseek-v4-pro', label='DeepSeek V4 Pro',
+            thinking_modes=[LegacyThinkingCapability(
+                id='on', label='开启思考', reasoning_efforts=['high'])],
+            executor_nodes=list(AGENT_EXECUTOR_NODES),
+        )],
+    )
     response = AgentCapabilitiesResponse(
-        drivers=[driver], executor_nodes=list(AGENT_EXECUTOR_NODES))
+        drivers=[driver], legacy_providers=[legacy],
+        executor_nodes=list(AGENT_EXECUTOR_NODES))
 
     assert response.drivers[0].models[0].id == 'gpt-5.6-sol'
     assert response.drivers[0].models[0].label == 'GPT-5.6 Sol'
     assert response.drivers[0].provider == 'openai'
     with pytest.raises(ValidationError, match='不得重复'):
         AgentCapabilitiesResponse(
-            drivers=[driver, driver], executor_nodes=list(AGENT_EXECUTOR_NODES))
+            drivers=[driver, driver], legacy_providers=[legacy],
+            executor_nodes=list(AGENT_EXECUTOR_NODES))
 
 
 def test_stage0_continuous_view_rejects_a_gap_and_duplicate_ids():

@@ -211,7 +211,7 @@ producer 在归一后、落盘前再守一次正式文本唯一性。这里**不
 （唯一拼装口 `novel/stages/stage6/semantic.py::judge_request`）。这是一条**成本判据**：
 供应商按 `<BOS>{system}<｜User｜>{user}…` 的字节前缀做上下文缓存，后缀一旦回到 system 末尾，
 前缀就在那里分叉、judge B 那一份约 45k token 的匿名材料**全额 miss**——而两份材料逐字节相同。
-现役显式 executor profile 路径为 A/B 各建独立 driver/session/cwd/provider session，并发请求缺失角色；
+现役显式 Agent executor backend 路径为 A/B 各建独立 driver/session/cwd/provider session，并发请求缺失角色；
 legacy `LlmClient` 包装仍按 A 后 B 顺序执行。后缀位置只保证公共前缀不会被代码确定性拆断，实际是否
 命中供应商缓存仍取决于调度和供应商，不能把并发回归写成 cache hit 实证。双盲语义由「两次独立请求」
 承担，不由后缀落在哪一侧或串并行承担。守卫见 `tests/test_stage6_semantic.py`、

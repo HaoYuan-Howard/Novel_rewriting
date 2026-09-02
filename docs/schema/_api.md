@@ -249,19 +249,24 @@ preview 可以在任一项为 false 时 0 成本展开；单本 start 与 batch 
 之前同时要求二者为 true。`profiles` 键同样恒在：非空值经 registry 解析并进入真实 Commander；
 `null` 只保留请求兼容形状，当前 `default_profiles=null` 时 preview/start/batch 均关闭式拒绝，不能代选。
 
-`GET /api/agent/capabilities` 是 agent 选择面的唯一公开数据源：
+`GET /api/agent/capabilities` 是 Commander 与 executor backend 选择面的唯一公开数据源：
 
 | 模型 | 字段 | 约束 |
 |---|---|---|
-| `AgentCapabilitiesResponse` | `drivers[]` · `executor_nodes[]` · `default_profiles` | `executor_nodes` 按 `AGENT_EXECUTOR_NODES` 完整有序发布，前端不维护第二份节点表。`default_profiles` 当前明确为 `null`：尚无 provider-neutral 默认，不能取 `drivers[0]` 猜；Phase 7 服务端冻结唯一默认后才可非空 |
+| `AgentCapabilitiesResponse` | `drivers[]` · `legacy_providers[]` · `executor_nodes[]` · `default_profiles` | `executor_nodes` 按 `AGENT_EXECUTOR_NODES` 完整有序发布，前端不维护第二份节点表。`default_profiles` 是经整书验收后才可发布的产品预置配置，不是 backend 模式选择器；当前明确为 `null`，不能取任一数组首项猜 |
 | `AgentDriverCapability` | `id` · `provider` · `label` · `roles[]` · `availability` · `availability_reason` · `version` · `models[]` | `id` 是可执行 driver 身份，`provider` 只是供应商元数据，`label` 只展示。可用性四态为 `ready / missing / unknown / unauthenticated` |
 | `AgentModelCapability` | `id` · `label` · `reasoning_efforts[]` · `execution_modes[]` | 精确 `id` 进入 argv/审计，label 可改；effort 与 execution mode 正交，只能提交该 model 实际发布的组合 |
 | `AgentProfile` | `driver` · `model` · `reasoning_effort` · `execution_mode` | schema 只承载选择；driver/角色/model/effort/mode 的组合由同一个 capability registry 关闭式校验，客户端不得自造笛卡尔积 |
-| `PipelineAgentProfiles` | `commander` · `executor_default` · `executor_overrides{node: profile}` | override 键只接受响应中的 executor 节点；代码节点、stage 名与退役节点不能伪装 executor |
+| `LegacyProviderCapability` | `id` · `label` · `models[]` | 直接 LLM API adapter 的稳定身份；当前只发布 DeepSeek，模型能力里继续给出 thinking/effort 与精确 `executor_nodes[]`，前端不得按模型名猜节点适用面 |
+| `LegacyLlmProfile` | `provider` · `model` · `reasoning_effort` · `thinking_mode` | 只保存改变模型行为的稳定选择，不保存 API key、base URL、代理、超时或缓存目录 |
+| `ExecutorBackend` | `{kind:'agent',profile:AgentProfile}` 或 `{kind:'legacy',profile:LegacyLlmProfile}` | `kind` 是唯一模式选择器；两套 profile 不得混搭，运行中也不得自动降级到另一种 backend |
+| `PipelineAgentProfiles` | `schema_version=2` · `commander` · `executor_default` · `executor_overrides{node: backend}` | Commander 固定使用 AgentProfile；默认 executor 和逐节点覆盖使用 `ExecutorBackend`。override 键只接受响应中的 executor 节点 |
 
-探针只在本机解析 CLI 并读取版本，**不发模型请求、不产生费用**；因此 `ready` 只证明可执行文件与
+Agent 探针只在本机解析 CLI 并读取版本，**不发模型请求、不产生费用**；因此 `ready` 只证明可执行文件与
 版本探针成功，不证明账号认证、模型 entitlement 或真实调用可用。当前 registry 只发布实际受测的
 execution mode；`ultra` 既不是 reasoning effort，也尚未被发布，调用方不得凭 UI 文案自行放开。
+Legacy capability 是 provider driver 的静态关闭表，也不读取密钥、不联网；它同样不证明账号、额度或
+真实请求可用。
 
 用户常用配置与上述 `default_profiles` 分开建模：
 
@@ -270,37 +275,20 @@ execution mode；`ultra` 既不是 reasoning effort，也尚未被发布，调�
 | `AgentProfileSettingsView` | `state` · `profiles` · `revision` · `updated_at` · `issue` | `configured` 才携完整 profiles；从未配置或显式清空为 `unset`；文件字节存在但不合当前契约为 `unreadable`，携原始字节 revision 与不回显正文的诊断。读取失败不得静默回退 |
 | `AgentProfileSettingsUpdate` | `profiles` · `expected_revision` | profiles 非空时再次经 capability registry 关闭式校验并显式物化 execution mode；null 表示清空。revision 不等返回 409 `AgentProfileSettingsConflict`，不得最后写入者覆盖 |
 
-设置文件固定为 `<base>/_service/agent_profile_settings.json`，只保存 driver/model/effort/mode；API key、
-CLI 登录态、付费授权、正文外发授权与 prompt 均不进入该文件。设置只初始化未来运行表单：单次运行仍可
+设置文件固定为 `<base>/_service/agent_profile_settings.json`。v2 保存 Commander 的 AgentProfile，以及
+默认/逐节点 executor 的显式 `kind + profile`；API key、CLI 登录态、base URL、代理、付费授权、正文外发
+授权与 prompt 均不进入该文件。旧 v1 裸 AgentProfile 只在读边界无损包成 `kind=agent`，读取不会擅自
+重写，下一次成功保存才发 v2。设置只初始化未来运行表单：单次运行仍可
 临时覆盖，start/batch 仍逐次要求两项独立授权并冻结自己的 profiles，已启动、已排队和历史 run 不读取
 当前设置。`default_profiles` 继续保持产品验收状态，用户保存偏好不得使它从 null 变成非空。
 
-Phase 1 冻结上述能力响应与 nullable 配置槽；Phase 2 当时只开放一条窄纵切：直接
-`POST /api/jobs/preview` / `POST /api/jobs` 在 `node=stage2.global` 且 `flags=[]` 时可携带非空
-`executor_profile`。两端点共用 `plan_start`，registry 解析后的精确选择依次冻结进
-`Step.executor_profile`、`JobStart.executor_profile` 与 `steps[].argv` 的 executor CLI 参数；子进程
-CLI 再把同一选择交给 `RunContext`，由该节点自己的 executor 在同一 logical session 内循环接受代码
-校验反馈，直至正式产物提交与终验。显式 profile 绝不回退 DeepSeek。
+直接 `POST /api/jobs/preview` / `POST /api/jobs` 共用 `plan_start`，把解析后的
+`executor_backend` 同时冻结进 `Step.executor_backend`、`JobStart.executor_backend` 与 argv；子 CLI
+再把同一选择交给 `RunContext`。旧请求里的 `executor_profile` 只在输入边界无损迁移为 Agent variant，
+公开响应和新请求不再发旧字段。独立旧 CLI/客户端省略 backend 的 DeepSeek 路只作兼容，新 AgentRun、
+设置页和新 preview/start 都不得靠字段缺失猜 Legacy。
 
-Phase 3 把相同 API 纵切扩到 `node=stage2.blueprint, flags=[]`。同一 profile 只进入付费 producer
-Step；自动追加的 0 成本 `--check-only` Step 仍为 `executor_profile=null`。CLI 后由逐章 executor
-按 phase/purpose/chapter 隔离 session，验证后的 checkpoint 严格联结 run policy、profile、prompt/schema、
-session audit、accepted stdout/typed payload 与成本账；跨 CLI 恢复须复验并认领 prior attempts，完整命中
-不产生新 wire。整书 compile、联合 HARD、正式提交、readback 和自动终验仍由代码决定。
-
-Phase 4 再把 direct profile 扩到 `node=stage6.semantic, flags=[]`，同时增加与 `--yes`
-正交的正文外发授权。direct `PreviewRequest.egress_authorized` 默认 false（不要与上方 outer
-`AgentRunRequest` 当前默认 true 混读）；resolved profile 非空时 builder 必须收到显式 bool，并将它与
-profile 同源冻结进 `JobStart` 和付费 `Step`，只有 true 才把运行控制参数 `--allow-egress` 加进 argv。
-false 的 preview 仍返回完整但不可执行的 argv；`POST /api/jobs` 与手敲 CLI 在 job、probe、driver、wire
-之前拒绝。profile 为空时 false 归一为 `null`，true 关闭式拒绝，不能从付费确认或 profile 选择倒推授权。
-
-Stage6 A/B 各用独立 driver 对象、logical session、临时 cwd 与 provider session id，缺失角色并发；
-逐角色 checkpoint 支持完整或单边恢复，恢复的历史 provider session 只作 adoption 身份，不冒充 live
-resume。正式交付由代码在同一提交所有权内执行 prepared journal、artifact write、typed readback、
-两条 adoption 与 committed，并继续承担双盲响应校验、合并和当前输入终验。
-
-Phase 5 后，当前 API 只接受以下 **8 节点 / 13 种 flag-token 组合**的非空 profile：
+Agent backend 当前只接受以下 **8 节点 / 13 种 flag-token 组合**：
 
 | node | token 组合 |
 |---|---|
@@ -313,17 +301,28 @@ Phase 5 后，当前 API 只接受以下 **8 节点 / 13 种 flag-token 组合**
 | `stage6.semantic` | `[]` |
 | `stage7.rename` | `[]` |
 
-`--chapters` 后的章号是值，不是第十三种 token。Phase5 五个新增 producer 固定 typed 完整 replacement；
+`--chapters` 后的章号是值，不是第十三种 token。各 producer 固定 typed 完整 replacement；
 agent 只交候选，代码负责业务 HARD、结构化 feedback、append-only checkpoint、正式 journal、typed
-readback、current/fresh 终验和 accepted-attempt adoption。显式 profile 的节点 dispatch 先于 legacy
-client 构造，不能静默回退 DeepSeek。
+readback、current/fresh 终验和 accepted-attempt adoption。`kind=agent` 的节点 dispatch 先于 Legacy
+client 构造，不能静默回退直接 API。
 
-矩阵之外的 direct executor 组合仍在 wire/dispatch 前拒绝。Phase 6 后，outer
-`AgentRunRequest.profiles` 已接入 provider-neutral Commander：preview/start/batch 共用唯一 plan，
+Legacy backend 不借用 Agent 的 flag 矩阵，而由 `LegacyLlmDriver` 对 provider/model/thinking/effort/node
+关闭式校验，并继续服从节点本身的合法 flags、schema、HARD 与提交契约。当前 DeepSeek V4 Flash 不支持
+契约钉死 Pro 的 `stage4.design`、`stage4.plan`、`stage6.semantic`；V4 Pro 支持现役八个 executor 节点。
+两种 backend 任一失败都不自动切换。
+
+direct `PreviewRequest.egress_authorized` 默认 false（不要与上方 outer `AgentRunRequest` 当前默认 true
+混读）；resolved backend 非空时 builder 必须收到显式 bool，并将它同源冻结进 `JobStart` 和付费
+`Step`，只有 true 才把 `--allow-egress` 加进 argv。false preview 可返回完整但不可执行的命令，真 start
+与手敲 CLI 在 job、probe、driver、wire 前拒绝。backend 为空时 false 归一为 `null`，true 关闭式拒绝。
+Stage6 A/B 的 session/checkpoint/两阶段提交与代码裁决不因 backend 种类改变。
+
+outer `AgentRunRequest.profiles` 已接入 provider-neutral Commander 和显式 executor backend：
+preview/start/batch 共用唯一 plan，
 把规范化 base、起始代码指纹、resolved profiles、stdin-only invocation 与两项授权冻结进 started/queue；
 排队出队不重读 capability 或默认。Commander child 只持 run id 与 contract SHA-256，再从 append-only
 started 事件复核整份配置；operator runner 按 exact node/flags 选 default executor 或 override，不能手拼
-`--executor-*`。Claude Code / Codex Commander 的 prompt 只走 stdin，argv/env/log 不复制全文；Commander
+任一 backend 参数。Claude Code / Codex Commander 的 prompt 只走 stdin，argv/env/log 不复制全文；Commander
 本身另记 `role=commander,node=null` 的 session 与 ledger，实际模型/effort 缺失保持 unknown，漂移、串
 provider session 或账/审计不闭合只可把 delivery 降成 unknown。进程 state 与盘面 delivery outcome 正交。
 
@@ -331,7 +330,7 @@ provider session 或账/审计不闭合只可把 delivery 降成 unknown。进�
 `configured` 用户常用配置，其次才用非空产品默认，两者都没有时必须显式选全，不取数组第一项；设置
 不可读或请求失败时关闭预览/启动。单本与批量 start 直接消费最后一次成功 preview 保存的同一请求快照；
 profiles、两项授权或 capability 有任何漂移都先使 preview 失效，不能用新默认重解释旧确认。历史 run 的
-`profiles=null` 只显示 unknown；direct Job 的 executor profile / egress 只读展示仍与 outer Commander
+`profiles=null` 只显示 unknown；direct Job 的 executor backend / egress 只读展示仍与 outer Commander
 分开。Phase 1～6 的工程验证仍没有真实 provider 模型请求或 current-schema corpus 验收，不能据此宣称
 模型质量、速度、账号认证或 entitlement 已验证。
 
@@ -366,15 +365,15 @@ current writing 授权、Review 状态与旧布局，不存在另一个按臂的
 | `LogStreamEvent` | `text` · `next_byte` · `done` · `state` | SSE 的 `id` 与 `next_byte` 相同；普通 `log` 事件为 `done=false,state=null`，唯一的 `end` 事件为 `done=true,state=ok|landed_red|failed|unknown` 并随即释放连接。断线时浏览器用 `Last-Event-ID` 续读；显式 query offset 与它取较大者，避免刷新倒退 |
 
 `PreviewRequest`：`sid`（已有书为非空字符串；首次 `stage0.remove --source` 为 `null`）·
-`node` · `flags[]` · `executor_profile`（`AgentProfile \| null`；迁移期未指定为 `null`）·
+`node` · `flags[]` · `executor_backend`（`ExecutorBackend \| null`；迁移期未指定为 `null`）·
 `egress_authorized`（`bool`，默认 false；只授权 direct executor 外发正文）。
 请求外壳是 strict，任何旧 `mode` 键都返回 422；老
 `jobs.jsonl` 的兼容解码只在服务内部磁盘边界发生，不进入本请求或公开响应模型。
-现役只允许 `_orchestration.md` 精确表中的 8 节点 / 13 组合提交非空 `executor_profile`；blueprint、Stage4 plan、Hook、Rename
-自动追跑的 `--check-only` Step 不继承 profile。其余组合均以 `UnsupportedRunMode` 拒绝，不能接收后
-再改走旧 LLM。Phase 2～4 的三条是历史增量，Phase 5 闭合当前矩阵。非空 profile 必须显式携带
-bool egress：false 允许预览
-但真启动返回 `ApprovalRequired`，true 才进入 argv；无 profile 时 false 归一成响应快照 `null`，true 拒绝。
+旧客户端提交 `executor_profile` 时只无损迁移成 `kind=agent`，新响应不再发旧字段。Agent variant 只允许
+`_orchestration.md` 精确表中的 8 节点 / 13 组合；Legacy variant 按 provider/model/node 能力表关闭式
+校验。自动追跑的 `--check-only` Step 不继承 backend。非空 backend 必须显式携带 bool egress：false
+允许预览但真启动返回 `ApprovalRequired`，true 才进入 argv；无 backend 时 false 归一成响应快照
+`null`，true 拒绝。
 ⚠ `flags` 里的**带值 flag 要带上值**（`--apply-edit <路径>`）——
 `/api/enums` 的 `actions[].needs_value` 就是用来告诉前端「这个按钮要先要一个文件」的。
 

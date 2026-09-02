@@ -2,7 +2,7 @@ import { api } from '@/api/endpoints'
 import { act, fireEvent, screen, waitFor } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import { renderRoute } from '@/test/render'
-import { EXECUTOR_PROFILE } from '@/test/agent'
+import { EXECUTOR_BACKEND } from '@/test/agent'
 import { JobDrawer } from './JobDrawer'
 
 describe('JobDrawer 作业概览', () => {
@@ -21,7 +21,7 @@ describe('JobDrawer 作业概览', () => {
           finished: 2,
           sid: 'book-1',
           ordinal: null,
-          executor_profile: EXECUTOR_PROFILE,
+          executor_backend: EXECUTOR_BACKEND,
           egress_authorized: false,
         },
         {

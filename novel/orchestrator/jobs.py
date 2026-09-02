@@ -37,7 +37,7 @@ from typing import BinaryIO
 
 from contracts.invariants import LEGACY_STAGE5_MODES
 from contracts.schema.orchestration import (
-    AgentProfile,
+    AgentExecutorBackend, AgentProfile, ExecutorBackend,
     JobEvent, JobRecord, JobStart, ProgressEvent, Step,
 )
 from novel import run_identity
@@ -46,7 +46,7 @@ from novel.cli import exit_codes as X
 from novel.cli.exit_codes import CRASH
 from novel.errors import ApprovalRequired, TerminalState
 from novel.orchestrator.nodes import (
-    build_steps, child_env, resolve_executor_egress, resolve_executor_profile,
+    build_steps, child_env, resolve_executor_backend, resolve_executor_egress,
     shell_line,
 )
 from novel.paths import SERVICE_DIRNAME, service_dir
@@ -594,6 +594,7 @@ def new_job_id(now: float | None = None) -> str:
 
 def plan_start(node: str, sid: str | None, flags: Sequence[str] = (), *,
                base: str | os.PathLike[str],
+               executor_backend: ExecutorBackend | None = None,
                executor_profile: AgentProfile | None = None,
                egress_authorized: bool | None = None,
                follow_check: bool = True,
@@ -614,22 +615,29 @@ def plan_start(node: str, sid: str | None, flags: Sequence[str] = (), *,
     """
     plan = list(steps) if steps is not None else build_steps(
         node, sid, flags, base=base, follow_check=follow_check,
+        executor_backend=executor_backend,
         executor_profile=executor_profile,
         egress_authorized=egress_authorized,
         placeholders=placeholders)
-    step_profiles = [
-        step.executor_profile for step in plan
-        if step.executor_profile is not None
+    step_backends = [
+        step.executor_backend for step in plan
+        if step.executor_backend is not None
     ]
-    if executor_profile is None and step_profiles:
-        executor_profile = step_profiles[0]
     if executor_profile is not None:
-        executor_profile = resolve_executor_profile(
-            node, flags, executor_profile)
-        if any(profile != executor_profile for profile in step_profiles):
-            raise ValueError('传入 executor_profile 与冻结 steps[] 不一致')
+        old_backend = AgentExecutorBackend(profile=executor_profile)
+        if executor_backend is None:
+            executor_backend = old_backend
+        elif executor_backend != old_backend:
+            raise ValueError('executor_backend 与旧 executor_profile 不一致')
+    if executor_backend is None and step_backends:
+        executor_backend = step_backends[0]
+    if executor_backend is not None:
+        executor_backend = resolve_executor_backend(
+            node, flags, executor_backend)
+        if any(backend != executor_backend for backend in step_backends):
+            raise ValueError('传入 executor_backend 与冻结 steps[] 不一致')
     profiled_steps = [
-        step for step in plan if step.executor_profile is not None
+        step for step in plan if step.executor_backend is not None
     ]
     step_egress = [step.egress_authorized for step in profiled_steps]
     if egress_authorized is None:
@@ -637,8 +645,8 @@ def plan_start(node: str, sid: str | None, flags: Sequence[str] = (), *,
         if explicit_step_egress:
             egress_authorized = explicit_step_egress[0]
     egress_authorized = resolve_executor_egress(
-        executor_profile, egress_authorized)
-    if executor_profile is not None:
+        executor_backend, egress_authorized)
+    if executor_backend is not None:
         if egress_authorized is None:
             if any(value is not None for value in step_egress):
                 raise ValueError('JobStart 与冻结 steps[] 的正文外发授权不一致')
@@ -655,7 +663,7 @@ def plan_start(node: str, sid: str | None, flags: Sequence[str] = (), *,
         python=sys.version, code=code_version(),
         paid=any(s.paid for s in plan),
         writes=any(bool(s.writes) for s in plan),
-        executor_profile=executor_profile,
+        executor_backend=executor_backend,
         egress_authorized=egress_authorized,
         run_id=run_identity.check_run_id(run_id) if run_id else None,
         recovered_from_job_id=recovered_from_job_id)
@@ -671,7 +679,7 @@ def _resolve_run_identity(start_meta: JobStart) -> JobStart:
 
 def _require_executor_egress(start_meta: JobStart) -> None:
     """真执行前的独立正文外发闸；preview 仍可冻结 false 命令。"""
-    if (start_meta.executor_profile is not None
+    if (start_meta.executor_backend is not None
             and start_meta.egress_authorized is not True):
         raise ApprovalRequired(
             'executor 会向所选 provider 外发小说正文；正文外发授权必须显式给 '
@@ -723,6 +731,7 @@ def _append_progress(base: str | os.PathLike[str], sid: str | None, node: str,
 
 
 def run(base: str | os.PathLike[str], node: str, sid: str | None, flags: Sequence[str] = (), *,
+        executor_backend: ExecutorBackend | None = None,
         executor_profile: AgentProfile | None = None,
         egress_authorized: bool | None = None,
         follow_check: bool = True,
@@ -742,10 +751,12 @@ def run(base: str | os.PathLike[str], node: str, sid: str | None, flags: Sequenc
     """
     plan = list(steps) if steps is not None else build_steps(
         node, sid, flags, base=base, follow_check=follow_check,
+        executor_backend=executor_backend,
         executor_profile=executor_profile,
         egress_authorized=egress_authorized)
     start_meta = _resolve_run_identity(plan_start(
         node, sid, flags, base=base, steps=plan,
+        executor_backend=executor_backend,
         executor_profile=executor_profile,
         egress_authorized=egress_authorized,
         run_id=run_id, recovered_from_job_id=recovered_from_job_id))
@@ -804,6 +815,7 @@ def start(
     sid: str | None,
     flags: Sequence[str] = (),
     *,
+    executor_backend: ExecutorBackend | None = None,
     executor_profile: AgentProfile | None = None,
     egress_authorized: bool | None = None,
     follow_check: bool = True,
@@ -822,10 +834,12 @@ def start(
                 _THREADS.pop(finished_id, None)
     plan = list(steps) if steps is not None else build_steps(
         node, sid, flags, base=base, follow_check=follow_check,
+        executor_backend=executor_backend,
         executor_profile=executor_profile,
         egress_authorized=egress_authorized)
     start_meta = _resolve_run_identity(plan_start(
         node, sid, flags, base=base, steps=plan,
+        executor_backend=executor_backend,
         executor_profile=executor_profile,
         egress_authorized=egress_authorized,
         run_id=run_id, recovered_from_job_id=recovered_from_job_id))

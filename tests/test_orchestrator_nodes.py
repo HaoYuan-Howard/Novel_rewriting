@@ -20,7 +20,9 @@ from contracts.invariants import (
     AGENT_EXECUTOR_NODES, FREE_ENTRIES, NODES, NODE_WRITE_EFFECTS, STAGES,
     VALUED_FLAGS, WRITE_EFFECTS,
 )
-from contracts.schema.orchestration import AgentProfile
+from contracts.schema.orchestration import (
+    AgentProfile, LegacyExecutorBackend, LegacyLlmProfile,
+)
 from novel.errors import UnsupportedRunMode
 from novel.orchestrator import nodes as N
 
@@ -425,6 +427,35 @@ def test_absent_executor_profile_preserves_the_legacy_argv_shape():
     argv = N.build_argv('stage2.global', SID, base=BASE)
     assert not any(token.startswith('--executor-') for token in argv)
     assert '--allow-egress' not in argv
+
+
+def test_explicit_legacy_backend_freezes_provider_profile_into_argv_and_step():
+    backend = LegacyExecutorBackend(profile=LegacyLlmProfile(
+        provider='deepseek', model='deepseek-v4-pro',
+        reasoning_effort='high', thinking_mode='on'))
+    [step] = N.build_steps(
+        'stage6.semantic', SID, base=BASE,
+        executor_backend=backend, egress_authorized=True)
+
+    assert step.executor_backend == backend
+    assert step.executor_profile is None, 'legacy 不得伪装成 AgentProfile'
+    assert step.argv[step.argv.index('--executor-backend') + 1] == 'legacy'
+    assert step.argv[step.argv.index('--legacy-provider') + 1] == 'deepseek'
+    assert step.argv[step.argv.index('--legacy-model') + 1] == 'deepseek-v4-pro'
+    assert step.argv[step.argv.index('--legacy-effort') + 1] == 'high'
+    assert step.argv[step.argv.index('--legacy-thinking') + 1] == 'on'
+    assert '--executor-driver' not in step.argv
+    assert '--allow-egress' in step.argv
+
+
+def test_legacy_flash_refuses_nodes_whose_contract_pins_pro():
+    backend = LegacyExecutorBackend(profile=LegacyLlmProfile(
+        provider='deepseek', model='deepseek-v4-flash',
+        reasoning_effort='high', thinking_mode='on'))
+    with pytest.raises(UnsupportedRunMode, match='钉死 deepseek-v4-pro'):
+        N.build_steps(
+            'stage6.semantic', SID, base=BASE,
+            executor_backend=backend, egress_authorized=True)
 
 
 def test_no_current_node_takes_a_mode_and_stage5_rejects_retired_flags():

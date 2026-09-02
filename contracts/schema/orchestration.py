@@ -20,7 +20,8 @@ orchestration.py —— 对应 `docs/schema/_orchestration.md`。作业 · 完�
 """
 from __future__ import annotations
 
-from typing import Literal
+from collections.abc import Mapping
+from typing import Annotated, Any, Literal
 
 from pydantic import Field, StrictInt, model_validator
 
@@ -31,6 +32,7 @@ from contracts.invariants import (
     ARTIFACT_CONDITION, ARTIFACT_DISPLAY, BEACON_STATES,
     COMMANDER_ADMISSION_EVENT_KINDS, COMMANDER_ADMISSION_TAIL_REPAIR_KINDS,
     AgentDriver, AgentExecutionMode, AgentReasoningEffort,
+    LegacyLlmProvider,
     FRESHNESS, FRESHNESS_REASON, JOB_EVENT_KINDS, JOB_STATE, NODES,
     OPERATOR_DURATION_SOURCES, OPERATOR_PHASE_EVENT_KINDS, OPERATOR_PHASES,
     OPERATOR_TELEMETRY_SOURCES, OPERATOR_TERMINAL_STATES,
@@ -84,17 +86,85 @@ class AgentProfile(FrozenModel):
     execution_mode: AgentExecutionMode | None = None
 
 
-class PipelineAgentProfiles(FrozenModel):
-    """一次整书代跑的 commander 与 executor 选择。
+class LegacyLlmProfile(FrozenModel):
+    """一个直接 LLM API executor 的精确、无密钥运行配置。
 
-    默认 executor 覆盖付费 agent 节点；节点覆盖只写差异。键必须属于
-    ``AGENT_EXECUTOR_NODES``，不能拿 stage 名、代码节点或退役节点冒充。
-    角色能力与每个 profile 的组合仍由 registry 校验。
+    ``provider`` 是稳定 adapter id，不是 base URL；密钥、代理、超时与重试仍由
+    provider 自己的安全运行配置管理，不能写进设置或历史事件。model / effort /
+    thinking 的组合由 ``novel.llm.providers`` 关闭式校验，使未来 GLM driver 不会
+    意外继承 DeepSeek 的模型兜底、tokenizer 或请求参数。
     """
 
+    provider: LegacyLlmProvider
+    model: str = Field(min_length=1)
+    reasoning_effort: str = Field(min_length=1)
+    thinking_mode: str = Field(min_length=1)
+
+
+class AgentExecutorBackend(FrozenModel):
+    """由本地 Agent CLI 承接 executor。"""
+
+    kind: Literal['agent'] = 'agent'
+    profile: AgentProfile
+
+
+class LegacyExecutorBackend(FrozenModel):
+    """由直接 LLM API adapter 承接 executor。"""
+
+    kind: Literal['legacy'] = 'legacy'
+    profile: LegacyLlmProfile
+
+
+ExecutorBackend = Annotated[
+    AgentExecutorBackend | LegacyExecutorBackend,
+    Field(discriminator='kind'),
+]
+
+
+def _backend_from_legacy_profile(value: Any) -> Any:
+    """旧 ``AgentProfile`` wire → 显式 agent backend；只做无损形状迁移。"""
+    if isinstance(value, AgentProfile):
+        return AgentExecutorBackend(profile=value)
+    if isinstance(value, Mapping) and 'kind' not in value and 'driver' in value:
+        return {'kind': 'agent', 'profile': dict(value)}
+    return value
+
+
+class PipelineAgentProfiles(FrozenModel):
+    """一次整书代跑的 commander 与显式 executor backend 选择。
+
+    ``schema_version=2`` 起 executor 不再用 ``AgentProfile | None`` 暗示模式：
+    ``agent`` 携 ``AgentProfile``，``legacy`` 携 ``LegacyLlmProfile``。旧 v1
+    profile 只会被无损包成 ``kind=agent``，新序列化永远写显式分辨字段。
+
+    默认 backend 覆盖付费 executor 节点；节点覆盖只写差异。键必须属于
+    ``AGENT_EXECUTOR_NODES``，不能拿 stage 名、代码节点或退役节点冒充。
+    角色能力与每个 backend/profile 的组合仍由 registry 校验。
+    """
+
+    schema_version: Literal[2] = 2
     commander: AgentProfile
-    executor_default: AgentProfile
-    executor_overrides: dict[str, AgentProfile] = Field(default_factory=dict)
+    executor_default: ExecutorBackend
+    executor_overrides: dict[str, ExecutorBackend] = Field(default_factory=dict)
+
+    @model_validator(mode='before')
+    @classmethod
+    def _migrate_v1_agent_profiles(cls, value: Any) -> Any:
+        if not isinstance(value, Mapping):
+            return value
+        data = dict(value)
+        if data.get('schema_version') in (None, 1):
+            data['schema_version'] = 2
+        if 'executor_default' in data:
+            data['executor_default'] = _backend_from_legacy_profile(
+                data['executor_default'])
+        overrides = data.get('executor_overrides')
+        if isinstance(overrides, Mapping):
+            data['executor_overrides'] = {
+                str(node): _backend_from_legacy_profile(profile)
+                for node, profile in overrides.items()
+            }
+        return data
 
     @model_validator(mode='after')
     def _overrides_are_current_nodes(self) -> PipelineAgentProfiles:
@@ -147,25 +217,45 @@ class Step(FrozenModel):
     #: 这一步的特别提醒（例：追跑的那条 `--check-only` 为什么在）。`None` = 键不在。
     note: str | None = None
 
-    #: 本步真正解析后的 executor 配置。旧 ``steps`` 没有这一格时为 ``None``，
-    #: 不得拿当前默认值倒推历史；新执行会在命令 builder 边界补齐。
-    executor_profile: AgentProfile | None = None
+    #: 本步真正解析后的 executor backend。旧 ``steps.executor_profile`` 会在读取
+    #: 边界无损包成 ``kind=agent``；旧 legacy 记录两格都缺，只能保持 unknown，
+    #: 不得拿当前默认值倒推历史。新 AgentRun 执行在 builder 边界显式补齐。
+    executor_backend: ExecutorBackend | None = None
 
     #: 本步是否拿到独立的正文外发授权。旧记录没有这一格时为 ``None``；新 executor
-    #: 步必须显式冻结 bool，未接 executor 的代码/legacy 步则不得伪造授权快照。
+    #: 步必须显式冻结 bool，未接 executor 的代码/兼容步则不得伪造授权快照。
     egress_authorized: bool | None = None
+
+    @model_validator(mode='before')
+    @classmethod
+    def _migrate_executor_profile(cls, value: Any) -> Any:
+        if not isinstance(value, Mapping) or 'executor_profile' not in value:
+            return value
+        data = dict(value)
+        old = data.pop('executor_profile')
+        if old is not None:
+            if data.get('executor_backend') is not None:
+                raise ValueError('Step 不能同时携带 executor_backend 与旧 executor_profile')
+            data['executor_backend'] = _backend_from_legacy_profile(old)
+        return data
+
+    @property
+    def executor_profile(self) -> AgentProfile | None:
+        """旧 Python 消费方的只读投影；分流必须改看 ``executor_backend.kind``。"""
+        backend = self.executor_backend
+        return backend.profile if isinstance(backend, AgentExecutorBackend) else None
 
     @model_validator(mode='after')
     def _executor_egress_shape(self) -> Step:
         argv_authorized = '--allow-egress' in self.argv
-        if self.executor_profile is None:
+        if self.executor_backend is None:
             if self.egress_authorized is not None:
-                raise ValueError('没有 executor_profile 的 Step 不能携带正文外发授权')
+                raise ValueError('没有 executor_backend 的 Step 不能携带正文外发授权')
             if argv_authorized:
-                raise ValueError('没有 executor_profile 的 Step.argv 不能夹带 --allow-egress')
+                raise ValueError('没有 executor_backend 的 Step.argv 不能夹带 --allow-egress')
             return self
         if not self.paid:
-            raise ValueError('0 成本 step 不能携带 executor_profile')
+            raise ValueError('0 成本 step 不能携带 executor_backend')
         # ``None`` 既要读旧盘，也会由旧记录的公共 HTTP 投影显式发成 null；不能靠
         # fields_set 猜它来自哪一边。新执行的“必须显式 bool”由唯一 builder 边界守。
         if argv_authorized is not (self.egress_authorized is True):
@@ -201,9 +291,9 @@ class JobStart(StrictModel):
     paid: bool
     writes: bool
 
-    #: 本次直接节点作业的 executor 选择。``None`` 只承接旧记录或尚未指定的请求；
-    #: 新执行须把解析后的 profile 同时快照到本格与 ``steps[]``。
-    executor_profile: AgentProfile | None = None
+    #: 本次直接节点作业的 executor 选择。旧 ``executor_profile`` 只读迁移成
+    #: agent backend；新执行须把解析后的 backend 同时快照到本格与 ``steps[]``。
+    executor_backend: ExecutorBackend | None = None
 
     #: 与付费 executor Step 同源的正文外发授权快照。旧记录缺字段时为 ``None``；
     #: 新执行必须显式冻结 bool，且不得拿请求默认或今天的配置倒推历史。
@@ -218,6 +308,25 @@ class JobStart(StrictModel):
     #: 恢复续跑必须同时携带原 ``run_id``，两个身份不得互相冒充。
     recovered_from_job_id: str | None = Field(default=None, min_length=1)
 
+    @model_validator(mode='before')
+    @classmethod
+    def _migrate_executor_profile(cls, value: Any) -> Any:
+        if not isinstance(value, Mapping) or 'executor_profile' not in value:
+            return value
+        data = dict(value)
+        old = data.pop('executor_profile')
+        if old is not None:
+            if data.get('executor_backend') is not None:
+                raise ValueError('JobStart 不能同时携带 executor_backend 与旧 executor_profile')
+            data['executor_backend'] = _backend_from_legacy_profile(old)
+        return data
+
+    @property
+    def executor_profile(self) -> AgentProfile | None:
+        """旧 Python 消费方的只读 agent 投影。"""
+        backend = self.executor_backend
+        return backend.profile if isinstance(backend, AgentExecutorBackend) else None
+
     @model_validator(mode='after')
     def _postconditions(self) -> JobStart:
         if self.recovered_from_job_id is not None and self.run_id is None:
@@ -231,27 +340,27 @@ class JobStart(StrictModel):
             raise ValueError(f'paid={self.paid} 与逐步折叠出来的对不上')
         if self.writes != any(bool(s.writes) for s in self.steps):
             raise ValueError(f'writes={self.writes} 与逐步折叠出来的对不上')
-        step_profiles = [
-            step.executor_profile for step in self.steps
-            if step.executor_profile is not None
+        step_backends = [
+            step.executor_backend for step in self.steps
+            if step.executor_backend is not None
         ]
-        if self.executor_profile is None:
-            if step_profiles:
-                raise ValueError('JobStart 缺 executor_profile，但 step 已带 profile')
+        if self.executor_backend is None:
+            if step_backends:
+                raise ValueError('JobStart 缺 executor_backend，但 step 已带 backend')
         else:
-            if not step_profiles:
-                raise ValueError('JobStart 带 executor_profile，但没有执行 step 承接')
-            if any(profile != self.executor_profile for profile in step_profiles):
-                raise ValueError('JobStart.executor_profile 与 steps[] 快照不一致')
-        if any(step.executor_profile is not None and not step.paid
+            if not step_backends:
+                raise ValueError('JobStart 带 executor_backend，但没有执行 step 承接')
+            if any(backend != self.executor_backend for backend in step_backends):
+                raise ValueError('JobStart.executor_backend 与 steps[] 快照不一致')
+        if any(step.executor_backend is not None and not step.paid
                for step in self.steps):
-            raise ValueError('0 成本 step 不能携带 executor_profile')
+            raise ValueError('0 成本 step 不能携带 executor_backend')
         profiled_steps = [
-            step for step in self.steps if step.executor_profile is not None
+            step for step in self.steps if step.executor_backend is not None
         ]
-        if self.executor_profile is None:
+        if self.executor_backend is None:
             if self.egress_authorized is not None:
-                raise ValueError('没有 executor_profile 的 JobStart 不能携带正文外发授权')
+                raise ValueError('没有 executor_backend 的 JobStart 不能携带正文外发授权')
         elif self.egress_authorized is None:
             if any(step.egress_authorized is not None for step in profiled_steps):
                 raise ValueError('历史 JobStart 缺外发授权，但 step 已带授权快照')

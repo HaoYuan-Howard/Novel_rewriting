@@ -1,6 +1,7 @@
 import type {
   AgentCapabilitiesResponse,
   AgentProfile,
+  ExecutorBackend,
   PipelineAgentProfiles,
 } from '@/types/agent'
 
@@ -25,20 +26,36 @@ export const OVERRIDE_PROFILE: AgentProfile = {
   execution_mode: 'worker-dynamic',
 }
 
+export const EXECUTOR_BACKEND: ExecutorBackend = {
+  kind: 'agent',
+  profile: EXECUTOR_PROFILE,
+}
+
+export const OVERRIDE_BACKEND: ExecutorBackend = {
+  kind: 'agent',
+  profile: OVERRIDE_PROFILE,
+}
+
 export const READY_PROFILES: PipelineAgentProfiles = {
+  schema_version: 2,
   commander: COMMANDER_PROFILE,
-  executor_default: EXECUTOR_PROFILE,
+  executor_default: EXECUTOR_BACKEND,
   executor_overrides: {},
 }
 
 function cloneProfiles(profiles: PipelineAgentProfiles): PipelineAgentProfiles {
   return {
+    schema_version: 2,
     commander: { ...profiles.commander },
-    executor_default: { ...profiles.executor_default },
+    executor_default: profiles.executor_default.kind === 'agent'
+      ? { kind: 'agent', profile: { ...profiles.executor_default.profile } }
+      : { kind: 'legacy', profile: { ...profiles.executor_default.profile } },
     executor_overrides: Object.fromEntries(
-      Object.entries(profiles.executor_overrides).map(([node, profile]) => [
+      Object.entries(profiles.executor_overrides).map(([node, backend]) => [
         node,
-        { ...profile },
+        backend.kind === 'agent'
+          ? { kind: 'agent', profile: { ...backend.profile } }
+          : { kind: 'legacy', profile: { ...backend.profile } },
       ]),
     ),
   }
@@ -92,6 +109,32 @@ export function agentCapabilities(
             label: '动态执行模型八',
             reasoning_efforts: ['fast-dynamic'],
             execution_modes: ['worker-dynamic'],
+          },
+        ],
+      },
+    ],
+    legacy_providers: [
+      {
+        id: 'deepseek',
+        label: 'DeepSeek API',
+        models: [
+          {
+            id: 'deepseek-v4-flash',
+            label: 'DeepSeek V4 Flash',
+            thinking_modes: [
+              { id: 'on', label: '开启思考', reasoning_efforts: ['low', 'high', 'max'] },
+              { id: 'off', label: '关闭思考', reasoning_efforts: ['low'] },
+            ],
+            executor_nodes: ['node.dynamic-a'],
+          },
+          {
+            id: 'deepseek-v4-pro',
+            label: 'DeepSeek V4 Pro',
+            thinking_modes: [
+              { id: 'on', label: '开启思考', reasoning_efforts: ['low', 'high', 'max'] },
+              { id: 'off', label: '关闭思考', reasoning_efforts: ['low'] },
+            ],
+            executor_nodes: ['node.dynamic-a', 'node.dynamic-b'],
           },
         ],
       },

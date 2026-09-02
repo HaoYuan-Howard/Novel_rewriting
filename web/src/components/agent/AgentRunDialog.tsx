@@ -216,7 +216,7 @@ export function AgentRunDialog({
             />
             <span className="text-body text-ink-2">
               允许本会话产生外部模型调用费用。它只控制付费授权，不会顺带开启正文外发；
-              指挥与执行者的真实费用均由所选 Agent/模型产生。
+              指挥与执行者的真实费用由所选 Agent CLI 或 Legacy API 模型产生。
             </span>
           </label>
 

@@ -36,7 +36,8 @@ from contracts.schema.api import (
     ExecutionPermit, InboxView, OperatorAction, OperatorNext,
 )
 from contracts.schema.orchestration import (
-    AgentProfile, NovelOverview, OverviewSummary, PipelineAgentProfiles,
+    AgentExecutorBackend, AgentProfile, NovelOverview, OverviewSummary,
+    PipelineAgentProfiles,
 )
 from contracts.schema.report import finding
 from novel.errors import UpstreamMissing
@@ -281,9 +282,9 @@ def _commander_profiles() -> PipelineAgentProfiles:
         commander=AgentProfile(
             driver='claude-code', model='claude-opus-5',
             reasoning_effort='high', execution_mode='standard'),
-        executor_default=AgentProfile(
+        executor_default=AgentExecutorBackend(profile=AgentProfile(
             driver='codex', model='gpt-5.6-sol',
-            reasoning_effort='high', execution_mode='standard'),
+            reasoning_effort='high', execution_mode='standard')),
         executor_overrides={},
     )
 
@@ -376,7 +377,7 @@ def test_run_step_permit_file_preview_never_remints_or_revalidates(
     assert rc == 0
     assert built == [(('stage2.global', '42', []), {
         'base': str(tmp_path.resolve()),
-        'executor_profile': None,
+        'executor_backend': None,
         'egress_authorized': None,
         'placeholders': True,
     })]
@@ -440,7 +441,7 @@ def test_run_step_projects_frozen_executor_and_egress_into_production_steps(
     context = SimpleNamespace(
         run_id='outer-1', base=str(tmp_path.resolve()),
         contract_sha256='a' * 64, start=start, profiles=profiles,
-        executor_profile=lambda node: profiles.executor_overrides.get(
+        executor_backend=lambda node: profiles.executor_overrides.get(
             node, profiles.executor_default),
     )
     built: list[tuple] = []
@@ -450,7 +451,7 @@ def test_run_step_projects_frozen_executor_and_egress_into_production_steps(
         argv=['python', '-m', 'novel.cli', 'run', 'stage2.global', '42'],
         cwd=str(REPO_ROOT), paid=True,
         writes='stage2/global_grounding.json', note=None,
-        executor_profile=profile, egress_authorized=True)
+        executor_backend=profile, egress_authorized=True)
     monkeypatch.setenv(runner.commander_context.COMMANDER_RUN_ID_ENV, 'outer-1')
     monkeypatch.setenv(
         runner.commander_context.COMMANDER_CONTRACT_SHA256_ENV, 'a' * 64)
@@ -474,13 +475,13 @@ def test_run_step_projects_frozen_executor_and_egress_into_production_steps(
     ])
 
     assert rc == 0
-    assert built[0][1]['executor_profile'] == profile
+    assert built[0][1]['executor_backend'] == profile
     assert built[0][1]['egress_authorized'] is True
     payload = json.loads(evidence.read_bytes())
-    assert payload['schema'] == 'novel-operator-step-evidence-v3'
+    assert payload['schema'] == 'novel-operator-step-evidence-v4'
     assert payload['commander']['run_id'] == 'outer-1'
     assert payload['execution_permit'] == permit.model_dump(mode='json')
-    assert payload['steps'][0]['executor_profile'] == profile.model_dump(mode='json')
+    assert payload['steps'][0]['executor_backend'] == profile.model_dump(mode='json')
     assert payload['steps'][0]['egress_authorized'] is True
 
 
@@ -494,12 +495,12 @@ def test_run_step_with_frozen_profile_refuses_execute_without_both_authorization
         start=SimpleNamespace(
             authorized=True, egress_authorized=False, code_version='code-v1'),
         profiles=profiles,
-        executor_profile=lambda _node: profiles.executor_default,
+        executor_backend=lambda _node: profiles.executor_default,
     )
     step = SimpleNamespace(
         label='stage2 全局事实', argv=['python'], cwd=str(REPO_ROOT),
         paid=True, writes='stage2/global_grounding.json', note=None,
-        executor_profile=profiles.executor_default, egress_authorized=False)
+        executor_backend=profiles.executor_default, egress_authorized=False)
     monkeypatch.setenv(runner.commander_context.COMMANDER_RUN_ID_ENV, 'outer-1')
     monkeypatch.setenv(
         runner.commander_context.COMMANDER_CONTRACT_SHA256_ENV, 'b' * 64)
@@ -534,7 +535,7 @@ def test_headless_execute_claims_before_evidence_and_releases_after_steps(
         start=SimpleNamespace(
             authorized=True, egress_authorized=True, code_version='code-v1'),
         profiles=profiles,
-        executor_profile=lambda _node: profiles.executor_default,
+        executor_backend=lambda _node: profiles.executor_default,
     )
     permit = _execution_permit(base=str(tmp_path.resolve()))
     token = _write_execution_token(tmp_path / 'execution-token.json', permit)
@@ -543,7 +544,7 @@ def test_headless_execute_claims_before_evidence_and_releases_after_steps(
         argv=['python', '-m', 'novel.cli', 'run', 'stage2.global', '42'],
         cwd=str(REPO_ROOT), paid=True,
         writes='stage2/global_grounding.json', note=None,
-        executor_profile=profiles.executor_default, egress_authorized=True)
+        executor_backend=profiles.executor_default, egress_authorized=True)
     runner.admission.open_gate(str(tmp_path), context.run_id, '42')
     monkeypatch.setenv(runner.commander_context.COMMANDER_RUN_ID_ENV, context.run_id)
     monkeypatch.setenv(
@@ -625,7 +626,7 @@ def test_headless_execute_releases_claim_when_node_spawn_raises(
         start=SimpleNamespace(
             authorized=True, egress_authorized=True, code_version='code-v1'),
         profiles=profiles,
-        executor_profile=lambda _node: profiles.executor_default,
+        executor_backend=lambda _node: profiles.executor_default,
     )
     permit = _execution_permit(base=str(tmp_path.resolve()))
     step = SimpleNamespace(
@@ -633,7 +634,7 @@ def test_headless_execute_releases_claim_when_node_spawn_raises(
         argv=['python', '-m', 'novel.cli', 'run', 'stage2.global', '42'],
         cwd=str(REPO_ROOT), paid=True,
         writes='stage2/global_grounding.json', note=None,
-        executor_profile=profiles.executor_default, egress_authorized=True)
+        executor_backend=profiles.executor_default, egress_authorized=True)
     runner.admission.open_gate(str(tmp_path), context.run_id, '42')
     monkeypatch.setenv(runner.commander_context.COMMANDER_RUN_ID_ENV, context.run_id)
     monkeypatch.setenv(
@@ -676,7 +677,7 @@ def test_delayed_headless_run_step_after_parent_close_never_writes_or_spawns(
         start=SimpleNamespace(
             authorized=True, egress_authorized=True, code_version='code-v1'),
         profiles=profiles,
-        executor_profile=lambda _node: profiles.executor_default,
+        executor_backend=lambda _node: profiles.executor_default,
     )
     permit = _execution_permit(base=str(tmp_path.resolve()))
     runner.admission.open_gate(str(tmp_path), context.run_id, '42')
@@ -695,7 +696,7 @@ def test_delayed_headless_run_step_after_parent_close_never_writes_or_spawns(
         lambda *_args, **_kwargs: [SimpleNamespace(
             label='stage2 全局事实', argv=['python'], cwd=str(REPO_ROOT),
             paid=True, writes='stage2/global_grounding.json', note=None,
-            executor_profile=profiles.executor_default,
+            executor_backend=profiles.executor_default,
             egress_authorized=True)])
     monkeypatch.setattr(
         runner, '_write_evidence',
@@ -722,7 +723,7 @@ def test_headless_run_step_requires_a_machine_selected_execution_permit(
         start=SimpleNamespace(
             authorized=True, egress_authorized=True, code_version='code-v1'),
         profiles=_commander_profiles(),
-        executor_profile=lambda _node: _commander_profiles().executor_default,
+        executor_backend=lambda _node: _commander_profiles().executor_default,
     )
     monkeypatch.setenv(runner.commander_context.COMMANDER_RUN_ID_ENV, 'outer-1')
     monkeypatch.setenv(

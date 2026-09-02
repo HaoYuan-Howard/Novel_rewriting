@@ -3,7 +3,7 @@
 """
 jobs.py —— 作业面板 P-01：列表 / 详情 / 日志 / 预览 / 异步启动。
 
-通用启动只接收结构化 `{sid,node,flags,executor_profile?,egress_authorized?}`，
+通用启动只接收结构化 `{sid,node,flags,executor_backend?,egress_authorized?}`，
 先用与预览相同的 `plan_start()` 构造命令，再交给后台执行器。同一本书的第二个请求
 由书级锁返回 409；不同小说互不阻塞。
 """
@@ -82,7 +82,7 @@ def start_job(req: PreviewRequest, base: str = Depends(get_base)) -> JobRecord:
     _refuse_prepared_recovery_api(req.node, req.flags)
     planned = jobs.plan_start(
         req.node, sid, req.flags, base=base,
-        executor_profile=req.executor_profile,
+        executor_backend=req.executor_backend,
         egress_authorized=req.egress_authorized)
     prepares: list[Callable[[], None]] = []
     # API 只做占住同书锁后的早反馈；CLI 仍是所有调用方共用的最终执行门。
@@ -145,7 +145,7 @@ def start_job(req: PreviewRequest, base: str = Depends(get_base)) -> JobRecord:
 
     return jobs.start(
         base, req.node, sid, req.flags,
-        executor_profile=planned.executor_profile,
+        executor_backend=planned.executor_backend,
         egress_authorized=planned.egress_authorized,
         steps=planned.steps, prepare=prepare if prepares else None)
 
@@ -256,7 +256,7 @@ def preview_job(req: PreviewRequest, base: str = Depends(get_base)) -> JobStart:
     # missing values and rejects the placeholder tokens themselves.
     return jobs.plan_start(
         req.node, sid, req.flags, base=base,
-        executor_profile=req.executor_profile,
+        executor_backend=req.executor_backend,
         egress_authorized=req.egress_authorized,
         placeholders=True,
     )

@@ -5,10 +5,17 @@ import type {
 } from '@/types/agent'
 import type {
   AgentProfileDraft,
+  ExecutorBackendDraft,
+  LegacyLlmProfileDraft,
   PipelineAgentProfilesDraft,
 } from '@/lib/agentProfiles'
 import {
   driverForDraft,
+  legacyProviderForDraft,
+  withBackendKind,
+  withLegacyModel,
+  withLegacyProvider,
+  withLegacyThinking,
   withProfileDriver,
   withProfileModel,
 } from '@/lib/agentProfiles'
@@ -150,6 +157,168 @@ export function AgentProfileFields({
   )
 }
 
+function LegacyLlmProfileFields({
+  capabilities,
+  label,
+  idPrefix,
+  value,
+  onChange,
+  disabled = false,
+}: {
+  capabilities: AgentCapabilitiesResponse
+  label: string
+  idPrefix: string
+  value: LegacyLlmProfileDraft
+  onChange: (next: LegacyLlmProfileDraft) => void
+  disabled?: boolean
+}) {
+  const provider = legacyProviderForDraft(capabilities, value)
+  const model = provider?.models.find((candidate) => candidate.id === value.model) ?? null
+  const thinking = model?.thinking_modes.find(
+    (candidate) => candidate.id === value.thinking_mode,
+  ) ?? null
+
+  return (
+    <fieldset
+      disabled={disabled}
+      className="m-0 flex flex-col gap-9 rounded-block border border-line bg-sunken-2 px-13 py-11"
+    >
+      <legend className="px-4 text-body font-semibold text-ink-2">{label}</legend>
+      <div className="grid grid-cols-2 gap-9">
+        <Field label="API Provider" htmlFor={idPrefix + '-provider'}>
+          <select
+            id={idPrefix + '-provider'}
+            aria-label={label + ' provider'}
+            value={value.provider}
+            onChange={(event) => onChange(withLegacyProvider(value, event.target.value))}
+            className="w-full rounded-btn border border-line-btn bg-card px-9 py-7 text-body text-ink"
+          >
+            <option value="">请选择</option>
+            {capabilities.legacy_providers.map((candidate) => (
+              <option key={candidate.id} value={candidate.id}>{candidate.label}</option>
+            ))}
+          </select>
+        </Field>
+
+        <Field label="模型" htmlFor={idPrefix + '-model'}>
+          <select
+            id={idPrefix + '-model'}
+            aria-label={label + ' 模型'}
+            value={value.model}
+            disabled={disabled || provider === null}
+            onChange={(event) => onChange(withLegacyModel(value, event.target.value))}
+            className="w-full rounded-btn border border-line-btn bg-card px-9 py-7 text-body text-ink disabled:bg-inset disabled:text-ink-5"
+          >
+            <option value="">请选择</option>
+            {(provider?.models ?? []).map((candidate) => (
+              <option key={candidate.id} value={candidate.id}>{candidate.label}</option>
+            ))}
+          </select>
+        </Field>
+
+        <Field label="思考模式" htmlFor={idPrefix + '-thinking'}>
+          <select
+            id={idPrefix + '-thinking'}
+            aria-label={label + ' 思考模式'}
+            value={value.thinking_mode}
+            disabled={disabled || model === null}
+            onChange={(event) => onChange(withLegacyThinking(value, event.target.value))}
+            className="w-full rounded-btn border border-line-btn bg-card px-9 py-7 text-body text-ink disabled:bg-inset disabled:text-ink-5"
+          >
+            <option value="">请选择</option>
+            {(model?.thinking_modes ?? []).map((candidate) => (
+              <option key={candidate.id} value={candidate.id}>{candidate.label}</option>
+            ))}
+          </select>
+        </Field>
+
+        <Field label="思考强度" htmlFor={idPrefix + '-effort'}>
+          <select
+            id={idPrefix + '-effort'}
+            aria-label={label + ' 思考强度'}
+            value={value.reasoning_effort}
+            disabled={disabled || thinking === null}
+            onChange={(event) => onChange({ ...value, reasoning_effort: event.target.value })}
+            className="w-full rounded-btn border border-line-btn bg-card px-9 py-7 text-body text-ink disabled:bg-inset disabled:text-ink-5"
+          >
+            <option value="">请选择</option>
+            {(thinking?.reasoning_efforts ?? []).map((effort) => (
+              <option key={effort} value={effort}>{effort}</option>
+            ))}
+          </select>
+        </Field>
+      </div>
+      {model ? (
+        <div className="rounded-tag border border-line-btn bg-card px-9 py-6 text-tag text-ink-4">
+          可承接节点：{model.executor_nodes.join('、')}
+        </div>
+      ) : null}
+    </fieldset>
+  )
+}
+
+function ExecutorBackendFields({
+  capabilities,
+  label,
+  idPrefix,
+  value,
+  onChange,
+  disabled = false,
+}: {
+  capabilities: AgentCapabilitiesResponse
+  label: string
+  idPrefix: string
+  value: ExecutorBackendDraft
+  onChange: (next: ExecutorBackendDraft) => void
+  disabled?: boolean
+}) {
+  return (
+    <div className="flex flex-col gap-8 rounded-block border border-line-btn bg-card px-12 py-11">
+      <label className="flex items-center gap-10 text-body font-semibold text-ink-2">
+        <span>{label}后端</span>
+        <select
+          aria-label={label + ' 后端'}
+          value={value.kind}
+          disabled={disabled}
+          onChange={(event) => onChange(withBackendKind(
+            value,
+            event.target.value as ExecutorBackendDraft['kind'],
+          ))}
+          className="ml-auto rounded-btn border border-line-btn bg-card px-9 py-7 text-body font-normal text-ink"
+        >
+          <option value="">请选择</option>
+          <option value="agent">Agent CLI</option>
+          <option value="legacy">Legacy LLM API</option>
+        </select>
+      </label>
+      {value.kind === 'agent' ? (
+        <AgentProfileFields
+          capabilities={capabilities}
+          role="executor"
+          label={label + ' · Agent CLI'}
+          idPrefix={idPrefix + '-agent'}
+          value={value.agent_profile}
+          disabled={disabled}
+          onChange={(agentProfile) => onChange({ ...value, agent_profile: agentProfile })}
+        />
+      ) : value.kind === 'legacy' ? (
+        <LegacyLlmProfileFields
+          capabilities={capabilities}
+          label={label + ' · Legacy API'}
+          idPrefix={idPrefix + '-legacy'}
+          value={value.legacy_profile}
+          disabled={disabled}
+          onChange={(legacyProfile) => onChange({ ...value, legacy_profile: legacyProfile })}
+        />
+      ) : (
+        <div className="rounded-btn border border-line bg-inset px-10 py-8 text-tag text-ink-5">
+          先选择执行后端；两种 profile 不会混用。
+        </div>
+      )}
+    </div>
+  )
+}
+
 function Field({
   label,
   htmlFor,
@@ -191,9 +360,8 @@ export function PipelineAgentProfilesForm({
         disabled={disabled}
         onChange={(commander) => onChange({ ...value, commander })}
       />
-      <AgentProfileFields
+      <ExecutorBackendFields
         capabilities={capabilities}
-        role="executor"
         label="默认执行者"
         idPrefix="agent-executor-default"
         value={value.executor_default}
@@ -243,18 +411,17 @@ export function PipelineAgentProfilesForm({
                 </summary>
                 {override ? (
                   <div className="mt-9">
-                    <AgentProfileFields
+                    <ExecutorBackendFields
                       capabilities={capabilities}
-                      role="executor"
                       label={node + ' 执行者'}
                       idPrefix={'agent-override-' + node.replaceAll('.', '-')}
                       value={override}
                       disabled={disabled}
-                      onChange={(profile) => onChange({
+                      onChange={(backend) => onChange({
                         ...value,
                         executor_overrides: {
                           ...value.executor_overrides,
-                          [node]: profile,
+                          [node]: backend,
                         },
                       })}
                     />

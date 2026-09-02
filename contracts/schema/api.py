@@ -28,7 +28,8 @@ from __future__ import annotations
 
 import json
 import re
-from typing import Annotated, Literal, TypeAlias
+from collections.abc import Mapping
+from typing import Annotated, Any, Literal, TypeAlias
 
 from pydantic import Field, field_validator, model_validator
 
@@ -119,9 +120,9 @@ from contracts.schema.base import FrozenModel, StrictModel
 from contracts.schema.common import Finding, HashBoundHumanApproval, Sha256
 from contracts.schema.evaluation import GlobalReviewItem, SemanticDecision
 from contracts.schema.orchestration import (
-    AgentProfile, AgentRunRecord, ArtifactCondition, ArtifactState, Freshness,
-    FreshnessReason, JobRecord, JobState, NovelOverview, PipelineAgentProfiles,
-    QueueRun,
+    AgentExecutorBackend, AgentProfile, AgentRunRecord, ArtifactCondition,
+    ArtifactState, ExecutorBackend, Freshness, FreshnessReason, JobRecord,
+    JobState, NovelOverview, PipelineAgentProfiles, QueueRun,
 )
 from contracts.schema.stage0 import Stage0RevisionOrigin, Stage0Warning
 from contracts.schema.stage2 import (
@@ -608,13 +609,33 @@ class PreviewRequest(StrictModel):
     node: str = Field(min_length=1)
     flags: list[str] = Field(default_factory=list)
 
-    #: 直接节点作业只需要 executor。``None`` 为旧客户端兼容面；真正启动前由
-    #: builder 按服务端 registry 解析默认并把 resolved profile 留档。
-    executor_profile: AgentProfile | None = None
+    #: 直接节点作业只需要 executor。新客户端提交显式判别联合；旧客户端的
+    #: ``executor_profile`` 只会无损迁移为 ``kind=agent``。``None`` 仍承接尚未
+    #: 迁移的独立 legacy CLI/API，不得用于 AgentRun 的 Commander 链。
+    executor_backend: ExecutorBackend | None = None
 
-    #: 正文外发授权与付费确认相互独立。请求层默认未授权；无 profile 的 legacy
+    #: 正文外发授权与付费确认相互独立。请求层默认未授权；无 backend 的兼容
     #: 路径会在 builder 边界归一成 ``None``，不得把这个默认值伪造成历史快照。
     egress_authorized: bool = False
+
+    @model_validator(mode='before')
+    @classmethod
+    def _migrate_executor_profile(cls, value: Any) -> Any:
+        if not isinstance(value, Mapping) or 'executor_profile' not in value:
+            return value
+        data = dict(value)
+        old = data.pop('executor_profile')
+        if old is not None:
+            if data.get('executor_backend') is not None:
+                raise ValueError(
+                    'PreviewRequest 不能同时携带 executor_backend 与旧 executor_profile')
+            data['executor_backend'] = {'kind': 'agent', 'profile': old}
+        return data
+
+    @property
+    def executor_profile(self) -> AgentProfile | None:
+        backend = self.executor_backend
+        return backend.profile if isinstance(backend, AgentExecutorBackend) else None
 
 
 class QueueCreateRequest(StrictModel):
@@ -744,15 +765,62 @@ class AgentDriverCapability(FrozenModel):
         return self
 
 
+class LegacyThinkingCapability(FrozenModel):
+    """一种 legacy thinking wire 及其非笛卡尔积 effort 取值。"""
+
+    id: str = Field(min_length=1)
+    label: str = Field(min_length=1)
+    reasoning_efforts: list[str] = Field(min_length=1)
+
+    @model_validator(mode='after')
+    def _efforts_are_unique(self) -> LegacyThinkingCapability:
+        if len(self.reasoning_efforts) != len(set(self.reasoning_efforts)):
+            raise ValueError('legacy reasoning_efforts 不得重复')
+        return self
+
+
+class LegacyModelCapability(FrozenModel):
+    id: str = Field(min_length=1)
+    label: str = Field(min_length=1)
+    thinking_modes: list[LegacyThinkingCapability] = Field(min_length=1)
+    executor_nodes: list[str] = Field(min_length=1)
+
+    @model_validator(mode='after')
+    def _domains_are_unique(self) -> LegacyModelCapability:
+        mode_ids = [item.id for item in self.thinking_modes]
+        if len(mode_ids) != len(set(mode_ids)):
+            raise ValueError(f'legacy model={self.id!r} 的 thinking mode 不得重复')
+        if len(self.executor_nodes) != len(set(self.executor_nodes)):
+            raise ValueError(f'legacy model={self.id!r} 的 executor_nodes 不得重复')
+        unknown = sorted(set(self.executor_nodes) - set(AGENT_EXECUTOR_NODES))
+        if unknown:
+            raise ValueError(f'legacy model={self.id!r} 含未知 executor 节点 {unknown}')
+        return self
+
+
+class LegacyProviderCapability(FrozenModel):
+    id: str = Field(min_length=1)
+    label: str = Field(min_length=1)
+    models: list[LegacyModelCapability] = Field(min_length=1)
+
+    @model_validator(mode='after')
+    def _models_are_unique(self) -> LegacyProviderCapability:
+        ids = [item.id for item in self.models]
+        if len(ids) != len(set(ids)):
+            raise ValueError(f'legacy provider={self.id!r} 的 model id 不得重复')
+        return self
+
+
 class AgentCapabilitiesResponse(StrictModel):
     """``GET /api/agent/capabilities``：前端 agent 选择器的唯一数据源。"""
 
     drivers: list[AgentDriverCapability] = Field(min_length=1)
+    legacy_providers: list[LegacyProviderCapability] = Field(min_length=1)
     executor_nodes: list[str] = Field(min_length=1)
 
-    #: 服务端已冻结的双角色默认；``None`` 明确表示迁移期尚无 provider-neutral
-    #: 默认，调用方必须显式选择，不能拿 capability 数组第一项猜。Phase7 切换唯一
-    #: agent 默认时才会变为非空。
+    #: 服务端经真实整书验收后才能发布的产品预置；它不选择 backend 模式。
+    #: ``None`` 表示尚无合格预置，调用方必须显式选择，不能拿任一 capability
+    #: 数组第一项猜。TODO-45 验收并作出产品裁决后才可变为非空。
     default_profiles: PipelineAgentProfiles | None = None
 
     @model_validator(mode='after')
@@ -760,6 +828,9 @@ class AgentCapabilitiesResponse(StrictModel):
         ids = [driver.id for driver in self.drivers]
         if len(ids) != len(set(ids)):
             raise ValueError('driver id 不得重复')
+        providers = [provider.id for provider in self.legacy_providers]
+        if len(providers) != len(set(providers)):
+            raise ValueError('legacy provider id 不得重复')
         if self.executor_nodes != list(AGENT_EXECUTOR_NODES):
             raise ValueError(
                 'executor_nodes 必须按 AGENT_EXECUTOR_NODES 的完整顺序发布，'

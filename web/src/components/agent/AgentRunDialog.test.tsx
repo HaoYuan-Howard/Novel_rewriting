@@ -11,6 +11,7 @@ import type {
   AgentProfileSettingsView,
   AgentRunRecord,
   AgentRunRequest,
+  PipelineAgentProfiles,
 } from '@/types/agent'
 import { act, fireEvent, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
@@ -82,14 +83,23 @@ describe('AgentRunDialog', () => {
   })
 
   it('用户常用配置优先于产品默认，并作为本次 preview 的完整快照', async () => {
-    const savedProfiles = {
+    const savedProfiles: PipelineAgentProfiles = {
+      schema_version: 2,
       commander: {
         driver: 'commander-dynamic' as const,
         model: 'commander-model-v10',
         reasoning_effort: 'new-effort-dynamic',
         execution_mode: 'new-mode-dynamic',
       },
-      executor_default: { ...READY_PROFILES.executor_default },
+      executor_default: READY_PROFILES.executor_default.kind === 'agent'
+        ? {
+            kind: 'agent',
+            profile: { ...READY_PROFILES.executor_default.profile },
+          }
+        : {
+            kind: 'legacy',
+            profile: { ...READY_PROFILES.executor_default.profile },
+          },
       executor_overrides: {},
     }
     vi.mocked(api.getAgentProfileSettings).mockResolvedValue({
@@ -207,19 +217,23 @@ describe('AgentRunDialog', () => {
       'interactive-dynamic',
     )
     await user.selectOptions(
-      screen.getByRole('combobox', { name: '默认执行者 driver' }),
+      screen.getByRole('combobox', { name: '默认执行者 后端' }),
+      'agent',
+    )
+    await user.selectOptions(
+      screen.getByRole('combobox', { name: '默认执行者 · Agent CLI driver' }),
       'executor-dynamic',
     )
     await user.selectOptions(
-      screen.getByRole('combobox', { name: '默认执行者 模型' }),
+      screen.getByRole('combobox', { name: '默认执行者 · Agent CLI 模型' }),
       'executor-model-v7',
     )
     await user.selectOptions(
-      screen.getByRole('combobox', { name: '默认执行者 思考强度' }),
+      screen.getByRole('combobox', { name: '默认执行者 · Agent CLI 思考强度' }),
       'deep-dynamic',
     )
     await user.selectOptions(
-      screen.getByRole('combobox', { name: '默认执行者 执行模式' }),
+      screen.getByRole('combobox', { name: '默认执行者 · Agent CLI 执行模式' }),
       'worker-dynamic',
     )
 
@@ -231,26 +245,26 @@ describe('AgentRunDialog', () => {
     await user.click(screen.getByRole('checkbox', { name: '单独配置 node.dynamic-a' }))
     await waitFor(() => expect(preview).toHaveBeenCalledTimes(2))
     await user.selectOptions(
-      screen.getByRole('combobox', { name: 'node.dynamic-a 执行者 模型' }),
+      screen.getByRole('combobox', { name: 'node.dynamic-a 执行者 · Agent CLI 模型' }),
       'executor-model-v8',
     )
     // 模型切换后 effort/mode 已清空；这份半成品不准触发下一次 preview。
     expect(screen.getByRole('combobox', {
-      name: 'node.dynamic-a 执行者 思考强度',
+      name: 'node.dynamic-a 执行者 · Agent CLI 思考强度',
     })).toHaveValue('')
     expect(screen.getByRole('combobox', {
-      name: 'node.dynamic-a 执行者 执行模式',
+      name: 'node.dynamic-a 执行者 · Agent CLI 执行模式',
     })).toHaveValue('')
     expect(screen.getByRole('button', {
       name: '需先授权模型调用费用',
     })).toBeDisabled()
 
     await user.selectOptions(
-      screen.getByRole('combobox', { name: 'node.dynamic-a 执行者 思考强度' }),
+      screen.getByRole('combobox', { name: 'node.dynamic-a 执行者 · Agent CLI 思考强度' }),
       'fast-dynamic',
     )
     await user.selectOptions(
-      screen.getByRole('combobox', { name: 'node.dynamic-a 执行者 执行模式' }),
+      screen.getByRole('combobox', { name: 'node.dynamic-a 执行者 · Agent CLI 执行模式' }),
       'worker-dynamic',
     )
     await waitFor(() => expect(preview).toHaveBeenCalledTimes(3))
@@ -268,8 +282,11 @@ describe('AgentRunDialog', () => {
       profiles: {
         executor_overrides: {
           'node.dynamic-a': {
-            model: 'executor-model-v8',
-            reasoning_effort: 'fast-dynamic',
+            kind: 'agent',
+            profile: {
+              model: 'executor-model-v8',
+              reasoning_effort: 'fast-dynamic',
+            },
           },
         },
       },

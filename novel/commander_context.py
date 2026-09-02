@@ -21,8 +21,8 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
 from contracts.schema.orchestration import (
-    AgentProfile, AgentRunRecord, AgentRunStart, ExecutionEpoch,
-    PipelineAgentProfiles, RunContractV2,
+    AgentExecutorBackend, AgentProfile, AgentRunRecord, AgentRunStart,
+    ExecutionEpoch, ExecutorBackend, PipelineAgentProfiles, RunContractV2,
 )
 from novel import prov, run_identity, skill_contract
 from novel.agent_capabilities import validate_pipeline_profiles
@@ -156,9 +156,17 @@ class CommanderContext:
             return self.admission_id
         return self.run_id if self.epoch is None else self.epoch.epoch_id
 
-    def executor_profile(self, node: str) -> AgentProfile:
+    def executor_backend(self, node: str) -> ExecutorBackend:
         return self.profiles.executor_overrides.get(
             node, self.profiles.executor_default)
+
+    def executor_profile(self, node: str) -> AgentProfile:
+        """旧 operator 测试/调用方投影；legacy backend 必须改走显式方法。"""
+        backend = self.executor_backend(node)
+        if not isinstance(backend, AgentExecutorBackend):
+            raise TerminalState(
+                f'{node} 配置的是 legacy executor，不能投影成 AgentProfile')
+        return backend.profile
 
 
 @dataclass(frozen=True)

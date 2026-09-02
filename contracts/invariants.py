@@ -216,6 +216,13 @@ AgentRole = Literal['commander', 'executor']
 AgentAvailability = Literal['ready', 'missing', 'unknown', 'unauthenticated']
 AgentProfileSettingsState = Literal['unset', 'configured', 'unreadable']
 
+#: executor 是本地 agent CLI 还是直接 LLM API。这里只冻结稳定 provider id；
+#: provider → model / effort / thinking 的组合能力仍由动态 capability registry 发布，
+#: 不能把四张平面枚举交给浏览器任意做笛卡尔积。新增 GLM 等 legacy provider 时，
+#: 必须同时补 provider driver、预算闸、传输层与 capability，不能只扩这个 Literal。
+ExecutorBackendKind = Literal['agent', 'legacy']
+LegacyLlmProvider = Literal['deepseek']
+
 #: ``ultra`` 不是 reasoning effort。它若将来开放，必须作为执行模式由具体
 #: model capability 显式列出；不能塞进 effort 后再由某个 driver 静默翻译。
 AgentReasoningEffort = Literal['none', 'low', 'medium', 'high', 'xhigh', 'max']

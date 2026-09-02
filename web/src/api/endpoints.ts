@@ -202,7 +202,7 @@ function adaptJob(record: BackendJobRecord, sidOverride?: string): Job {
     finished: record.ended,
     sid: sidOverride ?? record.start.sid,
     ordinal: null,
-    executor_profile: record.start.executor_profile,
+    executor_backend: record.start.executor_backend,
     egress_authorized: record.start.egress_authorized,
   }
 }
@@ -213,14 +213,14 @@ function adaptPreview(start: BackendJobStart): JobPreview {
     paid: start.paid,
     label: labelOf(start),
     kind: start.node,
-    executor_profile: start.executor_profile,
+    executor_backend: start.executor_backend,
     egress_authorized: start.egress_authorized,
     steps: start.steps.map((step) => ({
       label: step.label,
       paid: step.paid,
       writes: step.writes,
       argv: step.argv.map(quoteArg).join(' '),
-      executor_profile: step.executor_profile,
+      executor_backend: step.executor_backend,
       egress_authorized: step.egress_authorized,
     })),
   }

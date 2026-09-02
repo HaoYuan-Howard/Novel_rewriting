@@ -1,4 +1,4 @@
-import type { AgentProfile, PipelineAgentProfiles } from '@/types/agent'
+import type { AgentProfile, ExecutorBackend, PipelineAgentProfiles } from '@/types/agent'
 import { Mono } from '@/components/ui/Mono'
 
 function profileText(profile: AgentProfile): string {
@@ -8,6 +8,31 @@ function profileText(profile: AgentProfile): string {
     'effort=' + profile.reasoning_effort,
     'mode=' + (profile.execution_mode ?? 'null'),
   ].join(' · ')
+}
+
+function backendText(backend: ExecutorBackend): string {
+  if (backend.kind === 'agent') return 'agent · ' + profileText(backend.profile)
+  return [
+    'legacy',
+    backend.profile.provider,
+    backend.profile.model,
+    'effort=' + backend.profile.reasoning_effort,
+    'thinking=' + backend.profile.thinking_mode,
+  ].join(' · ')
+}
+
+export function ExecutorBackendSnapshot({
+  backend,
+  unknownLabel = 'Executor 后端未知 · 历史未记录或该节点不调用模型',
+}: {
+  backend: ExecutorBackend | null | undefined
+  unknownLabel?: string
+}) {
+  return backend ? (
+    <Mono className="text-mini text-ink-3">{backendText(backend)}</Mono>
+  ) : (
+    <span className="text-tag text-ink-5">? {unknownLabel}</span>
+  )
 }
 
 export function AgentProfileSnapshot({
@@ -53,13 +78,13 @@ export function AgentProfilesSnapshot({
     >
       <div className={compact ? 'flex flex-wrap gap-x-12 gap-y-3' : 'grid gap-4'}>
         <span><strong>指挥：</strong><Mono>{profileText(profiles.commander)}</Mono></span>
-        <span><strong>默认执行：</strong><Mono>{profileText(profiles.executor_default)}</Mono></span>
+        <span><strong>默认执行：</strong><Mono>{backendText(profiles.executor_default)}</Mono></span>
       </div>
       {overrides.length > 0 ? (
         <div className="mt-5 grid gap-3 border-t border-line-soft pt-5">
-          {overrides.map(([node, profile]) => (
+          {overrides.map(([node, backend]) => (
             <span key={node}>
-              <Mono>{node}</Mono> → <Mono>{profileText(profile)}</Mono>
+              <Mono>{node}</Mono> → <Mono>{backendText(backend)}</Mono>
             </span>
           ))}
         </div>

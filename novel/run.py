@@ -30,7 +30,10 @@ from typing import Any, Callable, Iterable, Iterator, TypeVar
 from contracts.invariants import NODES
 from contracts.schema import InputEdge, Provenance, Usage
 from contracts.schema.common import FreeProvenance, LlmProvenance
-from contracts.schema.orchestration import AgentProfile
+from contracts.schema.orchestration import (
+    AgentExecutorBackend, AgentProfile, ExecutorBackend, LegacyExecutorBackend,
+    LegacyLlmProfile,
+)
 from contracts.artifacts import STAGE0_CLEAN_TEXT
 from novel import paths, prov, run_identity
 from novel.errors import ProvenanceRefused
@@ -60,9 +63,12 @@ class RunContext:
     cache: CachePolicy
     ledger: CostLedger
 
-    #: 本次付费节点若由 executor agent 承接，这里保存 builder 已关闭式校验并
-    #: 物化过的精确快照。``None`` 在迁移期仍表示走旧 DeepSeek 路；不得在深处
-    #: 根据环境变量偷偷选另一个 provider。
+    #: 本次付费节点的显式执行后端。新 AgentRun 路径必须非空；``None`` 只承接
+    #: 尚未迁移的独立 legacy CLI。分流只看 ``kind``，不再看 profile 是否为空。
+    executor_backend: ExecutorBackend | None = None
+
+    #: 旧节点 agent 实现的只读/构造兼容投影。``__post_init__`` 会与
+    #: ``executor_backend`` 归一并校验；顶层分流不得再以本格是否为空判模式。
     executor_profile: AgentProfile | None = None
 
     #: 这一次跑的跨进程联结键。它只进运行时账/观测/恢复状态，
@@ -119,6 +125,17 @@ class RunContext:
         return True
 
     def __post_init__(self) -> None:
+        if self.executor_profile is not None:
+            old_backend = AgentExecutorBackend(profile=self.executor_profile)
+            if self.executor_backend is None:
+                self.executor_backend = old_backend
+            elif self.executor_backend != old_backend:
+                raise ValueError(
+                    'RunContext 的 executor_backend 与旧 executor_profile 不一致')
+        if isinstance(self.executor_backend, AgentExecutorBackend):
+            self.executor_profile = self.executor_backend.profile
+        elif isinstance(self.executor_backend, LegacyExecutorBackend):
+            self.executor_profile = None
         # 手搭 context 常先构造 ``CostLedger()``；未显式给 run_id 时
         # 直接沿用那本账已有的身份，不在同一次跑里再生第二个。
         self.run_id = run_identity.check_run_id(self.run_id or self.ledger.run_id)
@@ -155,6 +172,11 @@ class RunContext:
     def stage(self) -> str:
         """本节点的产物层。`stage5.write` → `stage5`。"""
         return NODES[self.node].stage
+
+    @property
+    def legacy_llm_profile(self) -> LegacyLlmProfile | None:
+        backend = self.executor_backend
+        return backend.profile if isinstance(backend, LegacyExecutorBackend) else None
 
     # ── 来源账（由 store 调，节点不直接碰） ────────────────────────────────
 
@@ -473,6 +495,7 @@ class RunContext:
              paid: bool, cache: CachePolicy | None = None,
              ledger: CostLedger | None = None, write_ledger: bool = True,
              repair_rejected_responses: bool = False,
+             executor_backend: ExecutorBackend | None = None,
              executor_profile: AgentProfile | None = None,
              run_id: str | None = None) -> RunContext:
         """按 `<Output>` + 书 id 开一次跑。**找不到书目录 ⇒ 显式终态**（`UpstreamMissing`）。
@@ -494,6 +517,7 @@ class RunContext:
                 path=ledger_path(base) if write_ledger else None,
                 run_id=resolved_run_id),
             run_id=resolved_run_id,
+            executor_backend=executor_backend,
             executor_profile=executor_profile,
             repair_rejected_responses=repair_rejected_responses,
         )

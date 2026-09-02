@@ -13,11 +13,31 @@ export interface AgentProfile {
   execution_mode: string | null
 }
 
+export interface LegacyLlmProfile {
+  provider: string
+  model: string
+  reasoning_effort: string
+  thinking_mode: string
+}
+
+export interface AgentExecutorBackend {
+  kind: 'agent'
+  profile: AgentProfile
+}
+
+export interface LegacyExecutorBackend {
+  kind: 'legacy'
+  profile: LegacyLlmProfile
+}
+
+export type ExecutorBackend = AgentExecutorBackend | LegacyExecutorBackend
+
 export interface PipelineAgentProfiles {
+  schema_version: 2
   commander: AgentProfile
-  executor_default: AgentProfile
+  executor_default: ExecutorBackend
   /** 键同样由 capability 响应的 executor_nodes 给出，前端不保存节点副本。 */
-  executor_overrides: Record<string, AgentProfile>
+  executor_overrides: Record<string, ExecutorBackend>
 }
 
 export type AgentRole = 'commander' | 'executor'
@@ -44,10 +64,31 @@ export interface AgentDriverCapability {
   models: AgentModelCapability[]
 }
 
+export interface LegacyThinkingCapability {
+  id: string
+  label: string
+  reasoning_efforts: string[]
+}
+
+export interface LegacyModelCapability {
+  id: string
+  label: string
+  thinking_modes: LegacyThinkingCapability[]
+  /** 该精确模型真正允许承接的节点；前端不按模型名猜产品钉死规则。 */
+  executor_nodes: string[]
+}
+
+export interface LegacyProviderCapability {
+  id: string
+  label: string
+  models: LegacyModelCapability[]
+}
+
 export interface AgentCapabilitiesResponse {
   drivers: AgentDriverCapability[]
+  legacy_providers: LegacyProviderCapability[]
   executor_nodes: string[]
-  /** null = 服务端尚无 provider-neutral 默认，调用方不得拿 drivers[0] 猜。 */
+  /** null = 尚无通过整书验收的产品预置；不是 backend 开关，也不得取任一 capability 首项猜。 */
   default_profiles: PipelineAgentProfiles | null
 }
 
@@ -206,6 +247,7 @@ export interface AgentPending {
   sid: string
   /** 排在第几，1 起算。 */
   position: number
+  profiles: PipelineAgentProfiles
 }
 
 /** 批量受理时没被收下的一本，连同原因。部分失败不回滚，所以要逐本说明。 */

@@ -234,11 +234,11 @@ dynamic validator、确定性聚合、整书 compiler 与全部 HARD；正式计
 
 八个现役 agent executor 的主跑**不带** `--response-repair agent`：候选解析、schema、动态判据与
 业务 HARD 都由代码把结构化反馈交回同一 provider session，append-only checkpoint 与正式提交
-journal 负责崩溃恢复。不要在 Commander 或直接 executor profile 的 argv 上补这个 flag；它不是
+journal 负责崩溃恢复。不要在 Commander 或直接 executor backend 的 argv 上补这个 flag；它不是
 Claude Code/Codex executor 的能力开关，补上只会改变作业身份并被关闭式拒绝。
 
 下面到“其他 legacy 结构化节点”为止只属于独立保留的**显式 DeepSeek 回滚路径**。只有操作者明确选择 legacy DeepSeek、
-没有携带 executor profile，且当前终态逐字给出该 sidecar 时，主跑才可带
+没有携带 executor backend，且当前终态逐字给出该 sidecar 时，主跑才可带
 `--response-repair agent`。被拒响应保留在书目录
 `_llm_rejected/<chain>/<attempt>/`。终态点名的 `candidate.json` 是**唯一允许直接编辑**的响应文件；
 `original.txt`、`rejection.json`、`resolution.json`、`outcome.json` 与 Stage2 run sidecar 都是审计/
@@ -314,7 +314,7 @@ workpack subject 里的 target 绑定；只使用下面可显式传同一个 `--
 
 前两条预览并执行纯读 emit，执行结果打印工作包；后两条预览并执行 apply，必须原样提交工作包的
 `subject_sha256`，并一次覆盖 source run 全部 unresolved prepared，不能用 `--chapters` 挑选。
-两种入口都禁止 executor profile、egress、`--revise`、response repair，不会构造 driver、probe、
+两种入口都禁止 executor backend、egress、`--revise`、response repair，不会构造 driver、probe、
 命中缓存或发 wire。apply 会在 target current
 code 下复验 source run/profile/request/schema/checkpoint/session/ledger/commit、当前上游授权、
 HARD 与 live baseline；source sidecar 始终只读。中断后只可用同一 target run、同一 actor/reason/

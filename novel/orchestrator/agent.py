@@ -45,7 +45,8 @@ from contracts.schema.evaluation import GlobalReviewDecisionSet
 from contracts.schema.stage2 import GlobalEdit
 from contracts.schema.orchestration import (
     AgentDeliveryOutcome, AgentPending, AgentQueueView, AgentRejected, AgentRunEvent,
-    AgentProfile, AgentRunRecord, AgentRunStart, ExecutionEpoch,
+    AgentExecutorBackend, AgentProfile, AgentRunRecord, AgentRunStart,
+    ExecutionEpoch, ExecutorBackend,
     PipelineAgentProfiles, RunContractV2,
 )
 from novel import agent_session_audit, paths, prov, run_identity, skill_contract
@@ -144,23 +145,45 @@ def _agent_egress_routes(profiles: PipelineAgentProfiles) -> str:
         f'reasoning_effort=`{commander.reasoning_effort}`；'
         f'execution_mode=`{commander.execution_mode}`',
     ]
-    grouped: dict[tuple[str, str, str, str, str | None], list[str]] = {}
+    grouped: dict[tuple[str, str, str, str, str, str | None], list[str]] = {}
     for node in AGENT_EXECUTOR_NODES:
-        profile = profiles.executor_overrides.get(node, profiles.executor_default)
-        key = (
-            provider_for_driver(profile.driver),
-            profile.driver,
-            profile.model,
-            profile.reasoning_effort,
-            profile.execution_mode,
-        )
+        backend = profiles.executor_overrides.get(node, profiles.executor_default)
+        if isinstance(backend, AgentExecutorBackend):
+            profile = backend.profile
+            key = (
+                'agent', provider_for_driver(profile.driver), profile.driver,
+                profile.model, profile.reasoning_effort, profile.execution_mode,
+            )
+        else:
+            profile = backend.profile
+            key = (
+                'legacy', profile.provider, '-', profile.model,
+                profile.reasoning_effort, profile.thinking_mode,
+            )
         grouped.setdefault(key, []).append(node)
-    for (provider, driver, model, effort, mode), nodes in grouped.items():
+    for (kind, provider, driver, model, effort, mode), nodes in grouped.items():
+        tail = (
+            f'driver=`{driver}`；execution_mode=`{mode}`'
+            if kind == 'agent'
+            else f'thinking_mode=`{mode}`'
+        )
         lines.append(
-            f'- role=`executor`，nodes=`{",".join(nodes)}`：第三方接收方 '
-            f'provider=`{provider}`；driver=`{driver}`；model=`{model}`；'
-            f'reasoning_effort=`{effort}`；execution_mode=`{mode}`')
+            f'- role=`executor`，kind=`{kind}`，nodes=`{",".join(nodes)}`：'
+            f'第三方接收方 provider=`{provider}`；model=`{model}`；'
+            f'reasoning_effort=`{effort}`；{tail}')
     return '\n'.join(lines)
+
+
+def _backend_label(backend: ExecutorBackend) -> str:
+    if isinstance(backend, AgentExecutorBackend):
+        profile = backend.profile
+        return (
+            f'agent:{profile.driver}/{profile.model}/'
+            f'{profile.reasoning_effort}/{profile.execution_mode}')
+    profile = backend.profile
+    return (
+        f'legacy:{profile.provider}/{profile.model}/'
+        f'{profile.reasoning_effort}/{profile.thinking_mode}')
 
 
 def build_prompt(sid: str, base: str | os.PathLike[str], *,
@@ -218,9 +241,8 @@ def build_prompt(sid: str, base: str | os.PathLike[str], *,
     commander = profiles.commander
     executor = profiles.executor_default
     overrides = ', '.join(
-        f'{node}={profile.driver}/{profile.model}/{profile.reasoning_effort}/'
-        f'{profile.execution_mode}'
-        for node, profile in sorted(profiles.executor_overrides.items())) or '无'
+        f'{node}={_backend_label(backend)}'
+        for node, backend in sorted(profiles.executor_overrides.items())) or '无'
     canonical_skill = (skill_contract.SKILL_REL / 'SKILL.md').as_posix()
     return f"""你是小说工作流的 Commander/Reviewer，不是调度器。仓根是
 `{REPO_ROOT.as_posix()}`，审阅对象属于 sid={sid}、base=`{base_abs}`。
@@ -239,7 +261,7 @@ immutable workpack 与唯一 typed request 落点。先逐项审阅，再做一�
 
 冻结角色：
 - Commander：{commander.driver}/{commander.model}/{commander.reasoning_effort}/{commander.execution_mode}
-- 默认 Executor：{executor.driver}/{executor.model}/{executor.reasoning_effort}/{executor.execution_mode}
+- 默认 Executor：{_backend_label(executor)}
 - Executor 节点覆盖：{overrides}
 
 审阅规范以 `{canonical_skill}` 及当前 workpack 明示的 review contract 为准；若两者与当前

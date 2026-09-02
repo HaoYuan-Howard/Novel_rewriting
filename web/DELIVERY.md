@@ -74,48 +74,51 @@ Stage2 typed 闸、当前成书、终审包和 inbox 阻塞轴判 `ready` / `rea
 `stopped` / `failed` / `unknown`，界面不得从退出码补推“可下载”。
 互斥两个方向都拦：agent 在跑时起任何 API 作业 409，反之亦然。
 
-**Agent capability / executor / Commander Phase 1–6 边界**：后端提供动态 `GET /api/agent/capabilities`，发布
-driver/provider 元数据、角色、model id 与 label、各模型实际 effort / execution mode、本机 CLI/版本
-探针结果、executor 节点和 `default_profiles`。该响应不归 `/api/enums`，前端不得另写供应商能力表。
+**Agent capability / executor / Commander 边界**：后端提供动态 `GET /api/agent/capabilities`，发布
+Agent driver/provider 元数据、角色、model id 与 label、各模型实际 effort / execution mode、本机 CLI/版本
+探针结果、Legacy provider/model/thinking/effort/node 能力、executor 节点和 `default_profiles`。该响应不归
+`/api/enums`，前端不得另写供应商能力表。
 `AgentRunDialog` / `AgentBatchDialog` 现已消费这个端点，动态呈现 Commander、默认 executor 与逐节点
-override 的 driver/model/effort/mode；driver/model 改动会清空失效的下游选择。`default_profiles=null`
-明确表示尚无经整书验收的 provider-neutral 产品默认，不能取 `drivers[0]` 自动代选。`/settings` 另经
+override。每个 executor 先显式选择 `kind=agent|legacy`，再分别呈现 AgentProfile 或 LegacyLlmProfile；
+上游选择改动会清空失效的下游字段。`default_profiles=null` 明确表示尚无经整书验收的产品预置配置，
+不是 backend 开关，也不能取任何 capability 数组首项自动代选。`/settings` 另经
 `GET/POST /api/settings/agent-profiles` 管理当前 output base 的用户常用配置：保存后单本与批量表单优先
 载入，表单内仍可只为本次临时覆盖。用户偏好不改产品默认，不改已受理 run；unset/configured/unreadable、
 读取失败与 CAS 冲突都显式呈现。设置不保存 key、CLI 登录态或两项授权，付费与正文外发仍逐次确认。
 `ready / missing / unknown / unauthenticated` 四态和服务端 reason 原样显示，非 ready 不能选；CLI/版本
 探针不发模型请求，`ready` 也不等于账号或具体模型已验证。
 
-Phase 2 后端当时只接通一条**尚无页面入口**的直接作业纵切：`stage2.global + flags=[]`。
-Phase 3 以相同的 `POST /api/jobs/preview` / `POST /api/jobs` 边界增加
-`stage2.blueprint + flags=[]`；同一 resolved profile 经 Step / JobStart / argv / CLI / RunContext 传到
-节点 executor。blueprint 只有付费 producer Step 带 profile，自动 0 成本 `--check-only` Step 不带；
-逐章 session/checkpoint、联合 HARD、正式提交和终验均由后端闭合，不由页面或 agent 自述补判。
+直接 `POST /api/jobs/preview` / `POST /api/jobs` 把同一 resolved `executor_backend` 经 Step / JobStart /
+argv / CLI / RunContext 传到节点 executor；自动 0 成本 `--check-only` Step 不继承 backend。旧请求里的
+`executor_profile` 只读迁移为 `kind=agent`，新 UI 与响应都使用判别联合。
 
 Phase 4 增加 `stage6.semantic + flags=[]`，并为 direct executor 纵切接通独立正文外发授权：
-请求默认 false，preview 可回显 profile / egress 快照及没有 `--allow-egress` 的不可执行 argv；真 start
-只有显式 true 才可在 job/driver/probe 前越过授权闸。它与 `--yes` 付费确认正交，无 profile 时不能
+请求默认 false，preview 可回显 backend / egress 快照及没有 `--allow-egress` 的不可执行 argv；真 start
+只有显式 true 才可在 job/driver/probe 前越过授权闸。它与 `--yes` 付费确认正交，无 backend 时不能
 伪造 egress。Stage6 A/B 使用两个独立 driver/session/cwd/provider session，缺失角色并发；逐角色
 checkpoint 可完整或单边恢复，代码以 prepared journal → 正式写盘 → typed readback → 双 adoption →
 committed 收口并做最终校验，不由 agent 自述补判，也不回退 DeepSeek。
 
-Phase 5 把后端 direct profile 收口为 **8 节点 / 13 种 flag-token 组合**：
+Agent backend 的 direct 面收口为 **8 节点 / 13 种 flag-token 组合**：
 
 - Stage2：`stage2.global []`、`stage2.blueprint []`；
-- Stage4：`stage4.design [] / [--replan] / [--repair-decision]`、`stage4.plan []`；
+- Stage4：`stage4.design [] / [--review-token] / [--replan,--review-token]`、`stage4.plan []`；
 - Stage5：`stage5.write [] / [--chapters] / [--revise] / [--revise,--chapters]`；
 - Stage6：`stage6.hook []`、`stage6.semantic []`；
 - Stage7：`stage7.rename []`。
 
 `--chapters` 的章号是值，不另算 token。Stage4 design/plan、Stage5、Hook、Rename 均由 agent 交固定
 typed 完整候选，代码负责 HARD、结构化 feedback、checkpoint、正式 journal/readback/adoption 与终验；
-显式 profile 不回退 DeepSeek；矩阵外 direct executor 组合仍关闭式拒绝。
+显式 Agent backend 不回退 Legacy API；矩阵外 Agent 组合仍关闭式拒绝。Legacy backend 由服务端 provider
+能力表校验，DeepSeek Flash 在三个钉死 Pro 的节点必须改用 Pro 或逐节点覆盖；任一 variant 失败都不自动
+切到另一种。
 
 Phase 6 同时接通 outer Commander：preview/start/batch 共用后端唯一 planner，页面将完整 profiles 与
 两项授权组成请求，并把最后一次成功 preview 的**同一个请求快照**保存到确认态；start 不从当前表单
 重拼。表单、授权、服务端回显或 capability 刷新任一漂移都会关闭启动。batch 受理后保存整批快照；
 历史 run 的 `profiles=null` 显示 unknown，不按今天的选择倒推。direct Job adapter/确认框/抽屉仍独立
-展示该次 executor profile 与 egress，不把它和 outer Commander 合并。后端 started 还冻结 base、代码
+展示该次 executor backend（Agent + AgentProfile 或 Legacy + LegacyLlmProfile）与 egress，不把它和 outer
+Commander 合并。后端 started 还冻结 base、代码
 指纹与 resolved profiles，child 通过 contract SHA 复核后才给节点 executor；进程状态与盘面 delivery
 终验继续正交。Phase 1～6 验证使用 fake driver、零模型 CLI 检查与非 corpus 回归，**真实模型请求数
 仍为 0，没有真实 Claude / Codex 调用、质量/速度/entitlement 或 current-schema corpus 实证**。

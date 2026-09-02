@@ -1186,14 +1186,14 @@ def _auto_resume_block_reason(
     if prior_start.code != prov.code_version():
         return (f'代码身份漂移：原 run 是 {prior_start.code}，当前是 '
                 f'{prov.code_version()}；恢复必须 replan，不自动续跑')
-    step_profiles = [
-        step.executor_profile for step in entry.item.steps
-        if step.executor_profile is not None]
-    if (prior_start.executor_profile is not None and step_profiles
-            and any(profile != prior_start.executor_profile
-                    for profile in step_profiles)):
-        return 'executor profile/模型/effort 与原 execution 不一致；不自动续跑'
-    if (any(step.executor_profile for step in entry.item.steps)
+    step_backends = [
+        step.executor_backend for step in entry.item.steps
+        if step.executor_backend is not None]
+    if (prior_start.executor_backend is not None and step_backends
+            and any(backend != prior_start.executor_backend
+                    for backend in step_backends)):
+        return 'executor backend/provider/模型/effort 与原 execution 不一致；不自动续跑'
+    if (any(step.executor_backend for step in entry.item.steps)
             and prior_start.egress_authorized is not True):
         return '原 execution 未持久化正文外发授权；不自动续跑'
     return None

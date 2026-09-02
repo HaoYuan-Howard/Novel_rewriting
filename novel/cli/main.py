@@ -54,7 +54,10 @@ from contracts.invariants import (
     STAGES, STAGE5_CLOSED_EXEMPT_FLAGS, VALUED_FLAGS,
     stage2_review_required,
 )
-from contracts.schema.orchestration import AgentProfile, ProgressEvent
+from contracts.schema.orchestration import (
+    AgentExecutorBackend, AgentProfile, ExecutorBackend, LegacyExecutorBackend,
+    LegacyLlmProfile, ProgressEvent,
+)
 from novel import commander_context, paths, prov, run_identity
 from novel.cli import exit_codes as X
 from novel.errors import (
@@ -114,8 +117,11 @@ def _parser() -> argparse.ArgumentParser:
             else:
                 p.add_argument(f, action='store_true',
                                help=FREE_ENTRIES.get(f) or PAID_FLAGS.get(f))
-        # executor profile 是运行控制面，不是 NodeSpec flag：它不改变节点身份、贵贱或
-        # 写盘语义，也绝不能混进 ``_flags_of``。可选组合只由 capability registry 校验。
+        # executor backend 是运行控制面，不是 NodeSpec flag：它不改变节点身份、
+        # 贵贱或写盘语义，也绝不能混进 ``_flags_of``。组合只由 capability 校验。
+        p.add_argument(
+            '--executor-backend', choices=('agent', 'legacy'), default=None,
+            help='显式 executor 类型；agent 与 legacy 各自携一套 profile')
         p.add_argument('--executor-driver', default=None,
                        help='executor driver 精确 id（与 model/effort 成组）')
         p.add_argument('--executor-model', default=None,
@@ -124,6 +130,14 @@ def _parser() -> argparse.ArgumentParser:
                        help='该 model capability 发布的 reasoning effort')
         p.add_argument('--executor-mode', default=None,
                        help='可选 execution mode；省略时由 registry 物化普通模式')
+        p.add_argument('--legacy-provider', default=None,
+                       help='legacy LLM adapter 稳定 id（当前为 deepseek）')
+        p.add_argument('--legacy-model', default=None,
+                       help='legacy provider 的精确 model id')
+        p.add_argument('--legacy-effort', default=None,
+                       help='legacy provider 发布的 reasoning effort')
+        p.add_argument('--legacy-thinking', default=None,
+                       help='legacy provider 发布的 thinking mode')
         p.add_argument(
             '--allow-egress', action='store_true',
             help='独立确认允许 executor 向所选 provider 外发小说正文')
@@ -345,6 +359,52 @@ def _executor_profile_of(a: argparse.Namespace) -> AgentProfile | None:
         raise UnsupportedRunMode(f'executor profile 形状无效：{exc}') from exc
 
 
+def _executor_backend_of(a: argparse.Namespace) -> ExecutorBackend | None:
+    """解析 CLI 的显式判别联合；两套 profile 不得混用或半填。"""
+    kind = getattr(a, 'executor_backend', None)
+    agent_values = {
+        'driver': getattr(a, 'executor_driver', None),
+        'model': getattr(a, 'executor_model', None),
+        'reasoning_effort': getattr(a, 'executor_effort', None),
+        'execution_mode': getattr(a, 'executor_mode', None),
+    }
+    legacy_values = {
+        'provider': getattr(a, 'legacy_provider', None),
+        'model': getattr(a, 'legacy_model', None),
+        'reasoning_effort': getattr(a, 'legacy_effort', None),
+        'thinking_mode': getattr(a, 'legacy_thinking', None),
+    }
+    has_agent = any(value is not None for value in agent_values.values())
+    has_legacy = any(value is not None for value in legacy_values.values())
+    # 旧复制命令只有四个 agent flag；它的语义无歧义，可以无损补 discriminator。
+    if kind is None and has_agent and not has_legacy:
+        kind = 'agent'
+    if kind is None:
+        if has_legacy:
+            raise UnsupportedRunMode(
+                'legacy profile 必须显式给 --executor-backend legacy')
+        return None
+    if kind == 'agent':
+        if has_legacy:
+            raise UnsupportedRunMode('agent backend 不能夹带 --legacy-* 参数')
+        profile = _executor_profile_of(a)
+        if profile is None:
+            raise UnsupportedRunMode(
+                'agent backend 必须携带完整 --executor-driver/model/effort')
+        return AgentExecutorBackend(profile=profile)
+    if has_agent:
+        raise UnsupportedRunMode('legacy backend 不能夹带 --executor-driver/model/effort/mode')
+    missing = [name for name, value in legacy_values.items() if not value]
+    if missing:
+        raise UnsupportedRunMode(
+            'legacy profile 必须同时给 --legacy-provider/model/effort/thinking；'
+            f'缺少 {missing}')
+    try:
+        return LegacyExecutorBackend(profile=LegacyLlmProfile(**legacy_values))  # type: ignore[arg-type]
+    except ValueError as exc:
+        raise UnsupportedRunMode(f'legacy profile 形状无效：{exc}') from exc
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # 节点派发 —— 取值面要全，能不能跑是另一件事
 # ─────────────────────────────────────────────────────────────────────────────
@@ -363,10 +423,20 @@ def runnable_stages() -> frozenset[str]:
 
 def _dispatch(node: str, ctx: RunContext, flags: list[str]) -> int:
     """跑一个当前节点；`NODES` 与 `_runners` 的覆盖关系由契约测试钉住。"""
-    # 显式 profile 是不可降级的执行决定：在进入任何 stage runner、尤其是
-    # ``_llm_client`` 之前统一分流到该节点自己的短生命周期 agent。
-    if profile := getattr(ctx, 'executor_profile', None):
-        ctx.executor_profile = N.resolve_executor_profile(node, flags, profile)
+    # discriminator 是不可降级的执行决定：只有 ``kind=agent`` 进入短生命周期
+    # node agent；``kind=legacy`` 由 stage runner 里的 provider factory 构造 API client。
+    backend = getattr(ctx, 'executor_backend', None)
+    if backend is None:
+        # 只兼容升级前的 Python RunContext/fake；CLI wire 一旦解析出 backend 就会
+        # 走上面的显式字段。这里不能把 profile=None 解释成 legacy。
+        old_profile = getattr(ctx, 'executor_profile', None)
+        if old_profile is not None:
+            backend = AgentExecutorBackend(profile=old_profile)
+    if isinstance(backend, AgentExecutorBackend):
+        resolved = N.resolve_executor_backend(node, flags, backend)
+        assert isinstance(resolved, AgentExecutorBackend)
+        ctx.executor_backend = resolved
+        ctx.executor_profile = resolved.profile
         from novel.node_agents import build_node_agent
 
         kwargs: dict[str, object] = {}
@@ -457,6 +527,14 @@ def _dispatch(node: str, ctx: RunContext, flags: list[str]) -> int:
 
 def _llm_client(ctx: RunContext):
     """运行期 LLM 客户端的唯一构造口；所有 CLI 节点共用配置与持久化缓存。"""
+    backend = getattr(ctx, 'executor_backend', None)
+    if isinstance(backend, AgentExecutorBackend):
+        raise AssertionError('agent backend 不得进入 legacy LLM client 构造口')
+    if isinstance(backend, LegacyExecutorBackend):
+        from novel.llm.providers import create_legacy_client
+        return create_legacy_client(ctx, backend.profile)
+
+    # 无 discriminator 只承接升级前的独立 CLI/作业记录；新的 AgentRun 链不会到这里。
     from novel.config import load_config
     from novel.llm.cache import ResponseCache
     from novel.llm.client import LlmClient
@@ -1376,7 +1454,8 @@ def _valued(flags: list[str], name: str) -> str | None:
 
 def _cmd_preview(a: argparse.Namespace) -> int:
     flags = _flags_of(a)
-    executor_profile = _executor_profile_of(a)
+    executor_backend = N.resolve_executor_backend(
+        a.node, flags, _executor_backend_of(a))
     if a.node == 'stage4.design' and '--review-token' in N.flag_tokens(flags):
         if a.sid is None:
             raise TerminalState(
@@ -1384,14 +1463,17 @@ def _cmd_preview(a: argparse.Namespace) -> int:
         from novel.stages.stage4 import plan
         preview_ctx = S.readonly_ctx(
             paths.resolve_novel_dir(a.base, a.sid), a.node, prov.code_version())
-        preview_ctx.executor_profile = executor_profile
+        preview_ctx.executor_backend = executor_backend
+        preview_ctx.executor_profile = (
+            executor_backend.profile
+            if isinstance(executor_backend, AgentExecutorBackend) else None)
         plan.require_targeted_design_executor(preview_ctx)
     # ⚠ `placeholders=True` **只在这一趟**：preview 要摊开的是一条形状完整的命令。
     # 缺必填项时渲染占位符并标注，而不是摊开一条真跑必然 exit 2 的半截命令
     # （2026-08-16 复盘 §六.1）。占位符本身在真跑那一趟仍会被 `validate_run` 拒。
     for i, step in enumerate(N.build_steps(a.node, a.sid, flags,
                                            base=a.base,
-                                           executor_profile=executor_profile,
+                                           executor_backend=executor_backend,
                                            egress_authorized=bool(a.allow_egress),
                                            placeholders=True)):
         print(f'[{i + 1}] {step.label}')
@@ -1471,21 +1553,21 @@ def _require_commander_execution_permit(
             'active admission claim SHA-256 与 execution permit envelope 不一致')
 
     root_tokens = frozenset(N.flag_tokens(permit.flags))
-    supported = N.EXECUTOR_PROFILED_RUNS.get(permit.node, ())
-    if root_tokens in supported:
-        root_profile = N.resolve_executor_profile(
-            permit.node, permit.flags,
-            parent_context.executor_profile(permit.node))
+    if N.is_paid(permit.node, permit.flags):
+        root_backend = parent_context.executor_backend(permit.node)
+        if (isinstance(root_backend, AgentExecutorBackend)
+                and root_tokens not in N.EXECUTOR_PROFILED_RUNS.get(permit.node, ())):
+            raise TerminalState(
+                f'permit 根动作 {permit.node} {sorted(root_tokens)} 尚未接入 executor agent')
+        root_backend = N.resolve_executor_backend(
+            permit.node, permit.flags, root_backend)
         root_egress = True
-    elif N.is_paid(permit.node, permit.flags):
-        raise TerminalState(
-            f'permit 根动作 {permit.node} {sorted(root_tokens)} 尚未接入 executor agent')
     else:
-        root_profile = None
+        root_backend = None
         root_egress = None
     steps = N.build_steps(
         permit.node, permit.sid, permit.flags, base=permit.base,
-        executor_profile=root_profile, egress_authorized=root_egress,
+        executor_backend=root_backend, egress_authorized=root_egress,
         placeholders=False)
     if step_index >= len(steps):
         raise TerminalState(
@@ -1509,10 +1591,10 @@ def _cmd_run(a: argparse.Namespace) -> int:
     # （该节点不接受这条跑法）先被 `is_paid` 倒向“会花钱”，显示成“加 --yes”；
     # 真加了又会落到默认付费分支。入口先走与 preview 共用的节点校验。
     N.validate_run(a.node, flags)
-    executor_profile = N.resolve_executor_profile(
-        a.node, flags, _executor_profile_of(a))
+    executor_backend = N.resolve_executor_backend(
+        a.node, flags, _executor_backend_of(a))
     egress_authorized = N.resolve_executor_egress(
-        executor_profile, bool(a.allow_egress))
+        executor_backend, bool(a.allow_egress))
     parent_context = None
     if (
         commander_context.COMMANDER_RUN_ID_ENV in os.environ
@@ -1529,21 +1611,22 @@ def _cmd_run(a: argparse.Namespace) -> int:
         # executor 选择、RunContext、LLM 与 producer 被拒绝。
         _require_commander_execution_permit(a, flags, parent_context)
         tokens = frozenset(N.flag_tokens(flags))
-        supported = N.EXECUTOR_PROFILED_RUNS.get(a.node, ())
-        if tokens in supported:
-            expected_profile = N.resolve_executor_profile(
-                a.node, flags, parent_context.executor_profile(a.node))
-        else:
-            if N.is_paid(a.node, flags):
+        if N.is_paid(a.node, flags):
+            expected_backend = parent_context.executor_backend(a.node)
+            if (isinstance(expected_backend, AgentExecutorBackend)
+                    and tokens not in N.EXECUTOR_PROFILED_RUNS.get(a.node, ())):
                 raise TerminalState(
-                    f'Commander 不允许付费跑法 {a.node} {sorted(tokens)} '
-                    '落回 legacy LLM；该组合尚未接入 executor agent')
-            expected_profile = None
-        if executor_profile != expected_profile:
+                    f'Commander 不允许 agent 执行尚未迁移的付费跑法 '
+                    f'{a.node} {sorted(tokens)}')
+            expected_backend = N.resolve_executor_backend(
+                a.node, flags, expected_backend)
+        else:
+            expected_backend = None
+        if executor_backend != expected_backend:
             raise TerminalState(
-                '子 CLI executor profile 与 Commander started 事件的 resolved 选择不一致；'
-                '拒绝静默换 driver/model/effort')
-        expected_egress = True if expected_profile is not None else None
+                '子 CLI executor backend 与 Commander started 事件的 resolved 选择不一致；'
+                '拒绝静默换 kind/provider/driver/model/effort')
+        expected_egress = True if expected_backend is not None else None
         if egress_authorized != expected_egress:
             raise TerminalState(
                 '子 CLI egress 控制与 Commander started 事件及本 Step 的角色不一致')
@@ -1556,7 +1639,7 @@ def _cmd_run(a: argparse.Namespace) -> int:
         _require_commander_execution_permit(a, flags, None)
     if parent_context is not None:
         commander_context.require_execution_authorized(parent_context)
-    if executor_profile is not None and egress_authorized is not True:
+    if executor_backend is not None and egress_authorized is not True:
         raise ApprovalRequired(
             'executor 会向所选 provider 外发小说正文；正文外发授权必须显式加 '
             '--allow-egress。'
@@ -1589,7 +1672,10 @@ def _cmd_run(a: argparse.Namespace) -> int:
         repair_rejected_responses=(
             repair_mode == 'agent'
             or (paid and a.node == 'stage2.blueprint')),
-        executor_profile=executor_profile,
+        executor_backend=executor_backend,
+        executor_profile=(
+            executor_backend.profile
+            if isinstance(executor_backend, AgentExecutorBackend) else None),
         run_id=a.run_id)
     # stdout 有 JSON 模板等机读消费者；身份打 stderr，人在终端仍能第一时间看到。
     # 测试里的最小 fake context 可能不带新字段，生产 RunContext 则结构上必有。

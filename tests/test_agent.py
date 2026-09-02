@@ -35,7 +35,8 @@ from contracts.schema.evaluation import GlobalReviewDecisionSet
 from contracts.schema.stage2 import GlobalEdit
 from contracts.schema.orchestration import (
     AgentDeliveryOutcome, AgentProfile, AgentRunEvent, AgentRunStart,
-    ExecutionEpoch, PipelineAgentProfiles, ProgressEvent, RunContractV2, Step,
+    ExecutionEpoch, LegacyExecutorBackend, LegacyLlmProfile,
+    PipelineAgentProfiles, ProgressEvent, RunContractV2, Step,
 )
 from novel import agent_session_audit, commander_context, paths, skill_contract
 from novel.agents.base import AgentUsage
@@ -210,6 +211,30 @@ def test_prompt_authorizes_only_effective_frozen_third_party_routes(
     assert '仅覆盖上列 frozen commander 与 node→executor 路由' in block
     assert '不覆盖任何其他第三方 provider' in block
     assert '不得把 API key、token、cookie 或其他凭据内容放入模型输入' in block
+
+
+def test_plan_freezes_and_discloses_an_explicit_legacy_executor_backend(base):
+    backend = LegacyExecutorBackend(profile=LegacyLlmProfile(
+        provider='deepseek', model='deepseek-v4-pro',
+        reasoning_effort='high', thinking_mode='on'))
+    planned = agent.plan(
+        base, '42', authorized=True, egress_authorized=True,
+        profiles=PipelineAgentProfiles(
+            commander=_CODEX,
+            executor_default=backend,
+            executor_overrides={},
+        ),
+    )
+
+    assert planned.profiles.executor_default == backend
+    block = _egress_authorization_block(planned.prompt)
+    legacy_line = next(
+        line for line in block.splitlines() if 'kind=`legacy`' in line)
+    assert 'provider=`deepseek`' in legacy_line
+    assert 'model=`deepseek-v4-pro`' in legacy_line
+    assert 'reasoning_effort=`high`' in legacy_line
+    assert 'thinking_mode=`on`' in legacy_line
+    assert 'driver=' not in legacy_line
 
 
 def test_prompt_discloses_frozen_routes_without_granting_them_when_egress_is_false(
@@ -530,7 +555,8 @@ def test_plan_deep_freezes_nested_profile_overrides(base):
         profiles=requested)
 
     requested.executor_overrides['stage5.write'] = _CODEX
-    assert planned.profiles.executor_overrides['stage5.write'] == _CLAUDE
+    frozen = planned.profiles.executor_overrides['stage5.write']
+    assert frozen.kind == 'agent' and frozen.profile == _CLAUDE
 
 
 def test_plan_refuses_missing_profiles_while_preview_remains_zero_cost(base):
@@ -2174,7 +2200,8 @@ def test_the_queue_starts_the_next_book_when_one_ends(base, corpus, monkeypatch)
                          egress_authorized=True, profiles=requested, spawn=slow)
     assert [r.start.sid for r in view.running] == ['42']
     assert [p.sid for p in view.pending] == ['43'] and view.pending[0].position == 1
-    assert view.pending[0].profiles.executor_overrides['stage5.write'] == _CLAUDE
+    pending_backend = view.pending[0].profiles.executor_overrides['stage5.write']
+    assert pending_backend.kind == 'agent' and pending_backend.profile == _CLAUDE
     # response model 也不得与内部 pending plan 共享可变 overrides。
     view.pending[0].profiles.executor_overrides['stage5.write'] = _CODEX
     requested.executor_overrides['stage5.write'] = _CODEX
@@ -2199,7 +2226,8 @@ def test_the_queue_starts_the_next_book_when_one_ends(base, corpus, monkeypatch)
     assert '43' in {r.start.sid for r in agent.records(base)}, '队列没有把下一本带起来'
     second = next(r for r in agent.records(base) if r.start.sid == '43')
     assert second.start.profiles is not None
-    assert second.start.profiles.executor_overrides['stage5.write'] == _CLAUDE
+    second_backend = second.start.profiles.executor_overrides['stage5.write']
+    assert second_backend.kind == 'agent' and second_backend.profile == _CLAUDE
     for rec in agent.records(base):
         agent.wait(rec.run_id, 10)
 

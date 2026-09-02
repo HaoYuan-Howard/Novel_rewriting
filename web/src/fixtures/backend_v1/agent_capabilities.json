@@ -47,6 +47,35 @@
       ]
     }
   ],
+  "legacy_providers": [
+    {
+      "id": "deepseek",
+      "label": "DeepSeek API",
+      "models": [
+        {
+          "id": "deepseek-v4-flash",
+          "label": "DeepSeek V4 Flash",
+          "thinking_modes": [
+            {"id": "on", "label": "开启思考", "reasoning_efforts": ["low", "high", "max"]},
+            {"id": "off", "label": "关闭思考", "reasoning_efforts": ["low"]}
+          ],
+          "executor_nodes": ["stage2.global", "stage2.blueprint", "stage5.write", "stage6.hook", "stage7.rename"]
+        },
+        {
+          "id": "deepseek-v4-pro",
+          "label": "DeepSeek V4 Pro",
+          "thinking_modes": [
+            {"id": "on", "label": "开启思考", "reasoning_efforts": ["low", "high", "max"]},
+            {"id": "off", "label": "关闭思考", "reasoning_efforts": ["low"]}
+          ],
+          "executor_nodes": [
+            "stage2.global", "stage2.blueprint", "stage4.design", "stage4.plan",
+            "stage5.write", "stage6.hook", "stage6.semantic", "stage7.rename"
+          ]
+        }
+      ]
+    }
+  ],
   "executor_nodes": [
     "stage2.global",
     "stage2.blueprint",

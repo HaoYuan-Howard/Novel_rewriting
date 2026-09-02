@@ -34,8 +34,9 @@ _PROFILE = {
     'execution_mode': 'standard',
 }
 _PIPELINE_PROFILES = {
+    'schema_version': 2,
     'commander': _PROFILE,
-    'executor_default': _PROFILE,
+    'executor_default': {'kind': 'agent', 'profile': _PROFILE},
     'executor_overrides': {},
 }
 

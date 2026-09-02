@@ -964,7 +964,7 @@ function mockJobPreview(req: JobRequest): JobPreview {
     paid: paidOf(req),
     label: req.label,
     kind: req.kind,
-    executor_profile: null,
+    executor_backend: null,
     egress_authorized: null,
     steps: previewStepsOf(planned),
   }
@@ -976,7 +976,7 @@ function previewStepsOf(req: JobRequest): JobPreview['steps'] {
     paid: paidOf(req),
     writes: 'mock 产物',
     argv: argvOf(req),
-    executor_profile: null,
+    executor_backend: null,
     egress_authorized: null,
   }
   const checkArgv = (kind: string) =>
@@ -989,7 +989,7 @@ function previewStepsOf(req: JobRequest): JobPreview['steps'] {
         paid: false,
         writes: '',
         argv: checkArgv('stage5.write'),
-        executor_profile: null,
+        executor_backend: null,
         egress_authorized: null,
       },
     ]
@@ -1090,7 +1090,7 @@ function spawn(req: JobRequest, label?: string): Job {
     finished: null,
     sid: req.sid,
     ordinal: req.ordinal ?? null,
-    executor_profile: null,
+    executor_backend: null,
     egress_authorized: null,
     log: ['$ ' + argv],
   }
@@ -1140,7 +1140,7 @@ function stripLog(j: MockJob): Job {
     finished: j.finished,
     sid: j.sid,
     ordinal: j.ordinal,
-    executor_profile: j.executor_profile ?? null,
+    executor_backend: j.executor_backend ?? null,
     egress_authorized: j.egress_authorized ?? null,
   }
 }
@@ -1357,13 +1357,18 @@ let mockAgentProfileSettings: AgentProfileSettingsView = {
 
 function cloneMockProfiles(profiles: AgentProfileSettingsView['profiles']) {
   if (profiles === null) return null
+  const cloneBackend = (backend: typeof profiles.executor_default) =>
+    backend.kind === 'agent'
+      ? { kind: 'agent' as const, profile: { ...backend.profile } }
+      : { kind: 'legacy' as const, profile: { ...backend.profile } }
   return {
+    schema_version: 2 as const,
     commander: { ...profiles.commander },
-    executor_default: { ...profiles.executor_default },
+    executor_default: cloneBackend(profiles.executor_default),
     executor_overrides: Object.fromEntries(
-      Object.entries(profiles.executor_overrides).map(([node, profile]) => [
+      Object.entries(profiles.executor_overrides).map(([node, backend]) => [
         node,
-        { ...profile },
+        cloneBackend(backend),
       ]),
     ),
   }
@@ -1933,7 +1938,11 @@ export const mockApi: Api = {
           profiles: req.profiles,
         }),
       ),
-      pending: req.sids.slice(3).map((sid, i) => ({ sid, position: i + 1 })),
+      pending: req.sids.slice(3).map((sid, i) => ({
+        sid,
+        position: i + 1,
+        profiles: cloneMockProfiles(req.profiles)!,
+      })),
       rejected: [],
       max_concurrent: 3,
     }),

@@ -1,9 +1,11 @@
 import { api } from '@/api/endpoints'
 import {
   agentCapabilities,
+  OVERRIDE_BACKEND,
   OVERRIDE_PROFILE,
   READY_PROFILES,
 } from '@/test/agent'
+import { clonePipelineAgentProfiles } from '@/lib/agentProfiles'
 import type {
   AgentBatchRequest,
   AgentProfileSettingsView,
@@ -78,11 +80,7 @@ describe('AgentBatchDialog', () => {
 
   it('整批按受理瞬间冻结同一份 profiles 与两项授权，包含逐节点覆盖', async () => {
     const user = userEvent.setup()
-    const defaults = {
-      commander: { ...READY_PROFILES.commander },
-      executor_default: { ...READY_PROFILES.executor_default },
-      executor_overrides: {},
-    }
+    const defaults = clonePipelineAgentProfiles(READY_PROFILES)
     vi.spyOn(api, 'getAgentCapabilities').mockResolvedValue(agentCapabilities(defaults))
     vi.spyOn(api, 'getAgentQueue').mockResolvedValue({
       running: [], pending: [], rejected: [], max_concurrent: 3,
@@ -90,7 +88,11 @@ describe('AgentBatchDialog', () => {
     const start = vi.spyOn(api, 'startAgentBatch').mockImplementation(async (req) => {
       const result: AgentQueueView = {
         running: [running(req, req.sids[0])],
-        pending: req.sids.slice(1).map((sid, index) => ({ sid, position: index + 1 })),
+        pending: req.sids.slice(1).map((sid, index) => ({
+          sid,
+          position: index + 1,
+          profiles: clonePipelineAgentProfiles(req.profiles),
+        })),
         rejected: [],
         max_concurrent: 1,
       }
@@ -108,18 +110,18 @@ describe('AgentBatchDialog', () => {
       '/n/book-1/stage0',
     )
 
-    await screen.findByRole('combobox', { name: '默认执行者 模型' })
+    await screen.findByRole('combobox', { name: '默认执行者 · Agent CLI 模型' })
     await user.click(screen.getByRole('checkbox', { name: '单独配置 node.dynamic-b' }))
     await user.selectOptions(
-      screen.getByRole('combobox', { name: 'node.dynamic-b 执行者 模型' }),
+      screen.getByRole('combobox', { name: 'node.dynamic-b 执行者 · Agent CLI 模型' }),
       OVERRIDE_PROFILE.model,
     )
     await user.selectOptions(
-      screen.getByRole('combobox', { name: 'node.dynamic-b 执行者 思考强度' }),
+      screen.getByRole('combobox', { name: 'node.dynamic-b 执行者 · Agent CLI 思考强度' }),
       OVERRIDE_PROFILE.reasoning_effort,
     )
     await user.selectOptions(
-      screen.getByRole('combobox', { name: 'node.dynamic-b 执行者 执行模式' }),
+      screen.getByRole('combobox', { name: 'node.dynamic-b 执行者 · Agent CLI 执行模式' }),
       OVERRIDE_PROFILE.execution_mode ?? '',
     )
     await user.click(screen.getByRole('checkbox', { name: /允许这一批产生外部模型调用费用/ }))
@@ -139,13 +141,17 @@ describe('AgentBatchDialog', () => {
       authorized: true,
       egress_authorized: true,
       profiles: {
-        executor_overrides: { 'node.dynamic-b': OVERRIDE_PROFILE },
+        executor_overrides: { 'node.dynamic-b': OVERRIDE_BACKEND },
       },
     })
     expect(request?.profiles).not.toBe(defaults)
 
-    defaults.executor_default.model = 'later-default-drift'
-    expect(request?.profiles.executor_default.model).toBe('executor-model-v7')
+    if (defaults.executor_default.kind !== 'agent') throw new Error('fixture 必须是 agent')
+    defaults.executor_default.profile.model = 'later-default-drift'
+    expect(request?.profiles.executor_default).toMatchObject({
+      kind: 'agent',
+      profile: { model: 'executor-model-v7' },
+    })
     expect(await screen.findByText(/本批受理时的冻结配置/)).toBeVisible()
     expect(screen.getByTestId('agent-profiles-snapshot')).toHaveTextContent('node.dynamic-b')
     expect(screen.getByText('排队中（1）')).toBeVisible()

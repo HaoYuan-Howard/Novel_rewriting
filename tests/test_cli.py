@@ -26,7 +26,9 @@ from contracts.invariants import (
 )
 from contracts.schema import decode_artifact
 from contracts.schema.evaluation import GlobalReview, GlobalReviewDecisionSet
-from contracts.schema.orchestration import AgentProfile
+from contracts.schema.orchestration import (
+    AgentProfile, LegacyExecutorBackend, LegacyLlmProfile,
+)
 from contracts.schema.stage7 import NameMapEdit
 from novel.cli import exit_codes as X
 from novel.cli.main import main
@@ -1347,6 +1349,61 @@ def test_profiled_argv_round_trips_through_cli_into_run_context(
     assert resolved.execution_mode == 'standard'
     assert captured['dispatch'] == (node, resolved, list(flags))
     assert resolved == N.resolve_executor_profile(node, flags, profile)
+
+
+def test_explicit_legacy_argv_round_trips_without_becoming_an_agent_profile(
+        tmp_path, monkeypatch):
+    from novel.cli import main as M
+
+    backend = LegacyExecutorBackend(profile=LegacyLlmProfile(
+        provider='deepseek', model='deepseek-v4-pro',
+        reasoning_effort='high', thinking_mode='on'))
+    argv = N.build_argv(
+        'stage2.global', 'book-1', base=tmp_path,
+        executor_backend=backend, egress_authorized=True)
+    captured = {}
+
+    def open_context(base, sid, node, **kwargs):
+        captured.update(base=base, sid=sid, node=node, **kwargs)
+        return SimpleNamespace(
+            node=node,
+            run_id='legacy-round-trip',
+            executor_backend=kwargs['executor_backend'],
+            executor_profile=kwargs['executor_profile'],
+        )
+
+    def dispatch(node, ctx, flags):
+        captured['dispatch'] = (
+            node, ctx.executor_backend, ctx.executor_profile, list(flags))
+        return X.OK
+
+    monkeypatch.setattr(M, 'RunContext', SimpleNamespace(open=open_context))
+    monkeypatch.setattr(M, '_dispatch', dispatch)
+
+    assert _run(*argv[argv.index('run'):]) == X.OK
+    assert captured['executor_backend'] == backend
+    assert captured['executor_profile'] is None
+    assert captured['dispatch'] == (
+        'stage2.global', backend, None, [])
+
+
+def test_legacy_backend_uses_provider_factory_instead_of_implicit_deepseek(
+        monkeypatch):
+    from novel.cli import main as M
+    from novel.llm import providers
+
+    backend = LegacyExecutorBackend(profile=LegacyLlmProfile(
+        provider='deepseek', model='deepseek-v4-pro',
+        reasoning_effort='high', thinking_mode='on'))
+    ctx = SimpleNamespace(node='stage6.semantic', executor_backend=backend)
+    sentinel = object()
+    seen = []
+    monkeypatch.setattr(
+        providers, 'create_legacy_client',
+        lambda actual_ctx, profile: seen.append((actual_ctx, profile)) or sentinel)
+
+    assert M._llm_client(ctx) is sentinel
+    assert seen == [(ctx, backend.profile)]
 
 
 @pytest.mark.parametrize(

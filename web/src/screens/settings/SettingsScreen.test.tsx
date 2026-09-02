@@ -107,6 +107,53 @@ describe('SettingsScreen', () => {
     expect(save.mock.calls[0]?.[0].expected_revision).toBe('a'.repeat(64))
   })
 
+  it('可把默认 Executor 显式切到 Legacy DeepSeek 并保存独立 profile', async () => {
+    const user = userEvent.setup()
+    const save = vi.spyOn(api, 'saveAgentProfileSettings').mockImplementation(async (req) =>
+      saved(req),
+    )
+
+    renderRoute(<SettingsScreen />, '/n/book-1/settings')
+    await screen.findByText('已配置')
+    await user.selectOptions(
+      screen.getByRole('combobox', { name: '默认执行者 后端' }),
+      'legacy',
+    )
+    await user.selectOptions(
+      screen.getByRole('combobox', { name: '默认执行者 · Legacy API provider' }),
+      'deepseek',
+    )
+    await user.selectOptions(
+      screen.getByRole('combobox', { name: '默认执行者 · Legacy API 模型' }),
+      'deepseek-v4-pro',
+    )
+    await user.selectOptions(
+      screen.getByRole('combobox', { name: '默认执行者 · Legacy API 思考模式' }),
+      'on',
+    )
+    await user.selectOptions(
+      screen.getByRole('combobox', { name: '默认执行者 · Legacy API 思考强度' }),
+      'high',
+    )
+    await user.click(screen.getByRole('button', { name: '保存常用配置' }))
+
+    await waitFor(() => expect(save).toHaveBeenCalledTimes(1))
+    expect(save.mock.calls[0]?.[0]).toMatchObject({
+      profiles: {
+        schema_version: 2,
+        executor_default: {
+          kind: 'legacy',
+          profile: {
+            provider: 'deepseek',
+            model: 'deepseek-v4-pro',
+            reasoning_effort: 'high',
+            thinking_mode: 'on',
+          },
+        },
+      },
+    })
+  })
+
   it('不可读设置可凭原始 revision 清空修复', async () => {
     const user = userEvent.setup()
     vi.mocked(api.getAgentProfileSettings).mockResolvedValue({

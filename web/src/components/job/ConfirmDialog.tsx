@@ -7,7 +7,7 @@ import { useChrome } from '@/hooks/useChrome'
 import { useJobs, useStartJob } from '@/hooks/useJobs'
 import { SCRIM } from '@/constants/vocabulary'
 import { ErrorHint } from '@/components/state/States'
-import { AgentProfileSnapshot } from '@/components/agent/AgentProfilesSnapshot'
+import { ExecutorBackendSnapshot } from '@/components/agent/AgentProfilesSnapshot'
 import { cx } from '@/lib/cx'
 
 /**
@@ -213,7 +213,7 @@ export function ConfirmDialog() {
                     <span className="text-mini text-ink-4">
                       {step.writes ? '写盘：' + step.writes : '不写盘'}
                     </span>
-                    <AgentProfileSnapshot profile={step.executor_profile} />
+                    <ExecutorBackendSnapshot backend={step.executor_backend} />
                     <span className="text-mini text-ink-4">
                       正文外发：{step.egress_authorized == null
                         ? 'unknown'
