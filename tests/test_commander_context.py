@@ -116,6 +116,49 @@ def test_v2_parent_compatibility_snapshots_do_not_override_epoch_identity(
         run_id=record.run_id, base=tmp_path, contract=contract) == parent_sha
 
 
+@pytest.mark.parametrize('drift,match', [
+    ('code', '代码指纹'),
+    ('skill', 'operator skill'),
+])
+def test_execution_close_loader_keeps_old_epoch_pointer_but_cannot_authorize_work(
+        tmp_path, monkeypatch, drift, match):
+    """漂移只能放行旧 execution 收尾；严格执行 loader 仍关闭式拒绝。"""
+    initial = _start(tmp_path)
+    contract = RunContractV2(**initial.model_dump(mode='json'))
+    current_skill = skill_contract.package_sha256()
+    epoch = ExecutionEpoch(
+        epoch_id='epoch-close', ordinal=1, reason='initial',
+        argv=['commander', '-'], prompt_sha256='1' * 64,
+        protocol_version='commander-v2', cli_version='cli-v2',
+        code_version='code-v1',
+        skill_sha256=('0' * 64 if drift == 'skill' else current_skill),
+        session_run_id='session-close')
+    record = AgentRunRecord(
+        run_id='commander-close', start=initial, contract=contract,
+        epochs=[epoch], active_epoch_id=epoch.epoch_id,
+        started=1, ended=None, exit_code=None, state='running',
+        allowed_controls=['pause', 'stop'])
+    env = commander_context.env_with_context(
+        run_id=record.run_id, base=tmp_path, start=initial,
+        contract=contract, epoch=epoch, admission_id=epoch.epoch_id, env={})
+    monkeypatch.setattr(
+        commander_context.prov, 'code_version',
+        lambda: 'code-v2' if drift == 'code' else 'code-v1')
+
+    with pytest.raises(TerminalState, match=match):
+        commander_context.load_from_environment(
+            tmp_path, '42', env=env, records=[record])
+
+    closing = commander_context.load_for_execution_close_from_environment(
+        tmp_path, '42', env=env, records=[record])
+    assert isinstance(
+        closing, commander_context.CommanderExecutionCloseContext)
+    assert closing.run_id == record.run_id
+    assert closing.epoch == epoch
+    assert closing.execution_id == epoch.epoch_id
+    assert not hasattr(closing, 'start') and not hasattr(closing, 'profiles')
+
+
 @pytest.mark.parametrize('mutation,match', [
     ('half', '同时携带'),
     ('sha', '不一致'),

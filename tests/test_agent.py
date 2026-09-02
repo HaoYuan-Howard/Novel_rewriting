@@ -21,6 +21,7 @@ import threading
 import time
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import pytest
 
@@ -41,6 +42,7 @@ from novel.agents.base import AgentUsage
 from novel.commanders import (
     CommanderInvocation, CommanderObservation, CommanderProcessResult,
 )
+from novel.cli.main import main as cli_main
 from novel.errors import TerminalState
 from novel.orchestrator import (
     admission, agent, beacon, execution_permit, jobs, nodes,
@@ -1207,6 +1209,7 @@ def test_code_drift_rolls_epoch_and_starts_a_new_logical_session(
         base, corpus, monkeypatch):
     identity = {'code': 'code-v1'}
     invocations = []
+    mark_exit_codes = []
     reviews = 0
 
     monkeypatch.setattr(
@@ -1227,7 +1230,37 @@ def test_code_drift_rolls_epoch_and_starts_a_new_logical_session(
         provider = ('provider-before-code-change'
                     if len(invocations) == 1 else 'provider-after-code-change')
         if len(invocations) == 1:
-            identity['code'] = 'code-v2'
+            parent_run_id = env[commander_context.COMMANDER_RUN_ID_ENV]
+            admission_id = env[commander_context.COMMANDER_ADMISSION_ID_ENV]
+            claim = admission.claim(
+                base, admission_id, '42', node='stage2.blueprint',
+                claim_sha256='a' * 64, claim_id='claim-before-code-change')
+            child_env = admission.env_with_claim(claim, env)
+            execution_id = 'execution-before-code-change'
+            start_argv = [
+                'mark', '42', '--node', 'stage2.blueprint', '--phase', 'start',
+                '--execution-id', execution_id, '--base', base,
+            ]
+            end_argv = [
+                'mark', '42', '--node', 'stage2.blueprint', '--phase', 'end',
+                '--execution-id', execution_id, '--exit', '2', '--base', base,
+            ]
+            try:
+                with patch.dict(os.environ, child_env, clear=False):
+                    start_rc = cli_main(start_argv)
+                    mark_exit_codes.append(start_rc)
+                    identity['code'] = 'code-v2'
+                    end_rc = cli_main(end_argv)
+                    mark_exit_codes.append(end_rc)
+                # 若回归失败，先用测试夹具精确清掉 open beacon，避免后台 worker
+                # 因 300 秒生命周期屏障把真正断言拖成超时。
+                if start_rc == 0 and end_rc != 0:
+                    beacon.append_execution_end(base, ProgressEvent(
+                        ts=int(time.time()), sid='42', run_id=parent_run_id,
+                        execution_id=execution_id, node='stage2.blueprint',
+                        phase='end', exit_code=2))
+            finally:
+                admission.release(base, claim)
         return CommanderProcessResult(
             exit_code=0,
             observation=CommanderObservation(
@@ -1254,6 +1287,10 @@ def test_code_drift_rolls_epoch_and_starts_a_new_logical_session(
     assert epochs[0].session_run_id != epochs[1].session_run_id
     assert epochs[1].reason == 'code_change'
     assert [item.resume_provider_session_id for item in invocations] == [None, None]
+    assert mark_exit_codes == [0, 0]
+    assert beacon.open_executions(base, rec.run_id) == ()
+    assert [event.phase for event in beacon.read_events(base)
+            if event.run_id == rec.run_id] == ['start', 'end']
     assert 'code-v2' in invocations[1].stdin_text
     assert epochs[1].prompt_sha256 == hashlib.sha256(
         invocations[1].stdin_text.encode('utf-8')).hexdigest()

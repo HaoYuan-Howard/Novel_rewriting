@@ -93,6 +93,62 @@ def test_commander_mark_reuses_a_preclose_node_claim_after_gate_closed(
     admission.release(tmp_path, claim)
 
 
+def test_commander_end_closes_exact_open_execution_through_drift_loader(
+        monkeypatch, tmp_path):
+    parent_run_id = 'parent-close'
+    admission.open_gate(tmp_path, parent_run_id, '42')
+    claim = admission.claim(
+        tmp_path, parent_run_id, '42', node='stage2.blueprint',
+        claim_sha256='b' * 64)
+    beacon.append(tmp_path, C.ProgressEvent(
+        ts=1, sid='42', node='stage2.blueprint', phase='start',
+        run_id=parent_run_id, execution_id='execution-close'))
+    monkeypatch.setenv(admission.CLAIM_ID_ENV, claim.claim_id)
+    monkeypatch.setenv(C.run_identity.RUN_ID_ENV, parent_run_id)
+
+    def strict_loader(*_args, **_kwargs):
+        raise AssertionError('phase=end 不得再走会被当前 code/skill 漂移阻断的执行 loader')
+
+    monkeypatch.setattr(
+        C.commander_context, 'load_from_environment', strict_loader)
+    monkeypatch.setattr(
+        C.commander_context, 'load_for_execution_close_from_environment',
+        lambda *_args, **_kwargs: SimpleNamespace(run_id=parent_run_id))
+    args = SimpleNamespace(
+        base=str(tmp_path), sid='42', node='stage2.blueprint', phase='end',
+        execution_id='execution-close', exit=2, note='code drift',
+        run_id=parent_run_id)
+
+    assert C._cmd_mark(args) == 0
+    assert [event.phase for event in beacon.read_events(tmp_path)] == [
+        'start', 'end']
+    assert beacon.open_executions(tmp_path, parent_run_id) == ()
+    admission.release(tmp_path, claim)
+
+
+def test_commander_end_drift_loader_cannot_append_an_orphan_execution(
+        monkeypatch, tmp_path):
+    parent_run_id = 'parent-orphan'
+    admission.open_gate(tmp_path, parent_run_id, '42')
+    claim = admission.claim(
+        tmp_path, parent_run_id, '42', node='stage2.blueprint',
+        claim_sha256='c' * 64)
+    monkeypatch.setenv(admission.CLAIM_ID_ENV, claim.claim_id)
+    monkeypatch.setenv(C.run_identity.RUN_ID_ENV, parent_run_id)
+    monkeypatch.setattr(
+        C.commander_context, 'load_for_execution_close_from_environment',
+        lambda *_args, **_kwargs: SimpleNamespace(run_id=parent_run_id))
+    args = SimpleNamespace(
+        base=str(tmp_path), sid='42', node='stage2.blueprint', phase='end',
+        execution_id='execution-never-started', exit=2, note=None,
+        run_id=parent_run_id)
+
+    with pytest.raises(TerminalState, match='恰有一个未闭合 start'):
+        C._cmd_mark(args)
+    assert beacon.read_events(tmp_path) == []
+    admission.release(tmp_path, claim)
+
+
 def test_contextless_mark_uses_writer_coordination_scope(monkeypatch, tmp_path):
     admitted = []
     events = []

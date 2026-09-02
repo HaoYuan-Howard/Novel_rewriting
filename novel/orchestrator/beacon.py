@@ -34,6 +34,7 @@ from novel.appendlog import (
     append_line_under_process_lock, append_transaction,
 )
 from novel.cli import exit_codes as X
+from novel.errors import TerminalState
 from novel.orchestrator import append_tail_repair
 from novel.orchestrator import nodes as N
 from novel.orchestrator.jobs import service_dir
@@ -101,6 +102,38 @@ def append(base: str | os.PathLike[str], event: ProgressEvent) -> None:
         append_line_under_process_lock(path, rendered)
 
 
+def append_execution_end(
+        base: str | os.PathLike[str], event: ProgressEvent) -> None:
+    """只为同 parent 下唯一尚未闭合的 exact start 追加 execution end。
+
+    Commander 的 code/skill 可能在节点返回前已经漂移；end 是清理事实，不是新
+    执行。调用方会另验旧 epoch 指针与 active claim，这里再把 start/end 配对与
+    append 放进同一跨进程事务，避免两个迟到写手都把同一 execution 关一次。
+    """
+    if event.phase != 'end':
+        raise ValueError('append_execution_end 只接受 phase=end')
+    if event.run_id is None or event.execution_id is None:
+        raise TerminalState('Commander execution end 必须携带 parent run 与 execution id')
+    checked_run_id = run_identity.check_run_id(event.run_id)
+    path = beacon_path(base)
+    rendered = json.dumps(event.model_dump(mode='json'), ensure_ascii=False)
+    with append_transaction(path):
+        require_appendable_under_transaction(base)
+        opened = _open_executions_from_events(
+            read_events(base), checked_run_id)
+        matches = [start for start in opened
+                   if start.execution_id == event.execution_id]
+        if len(matches) != 1:
+            raise TerminalState(
+                f'execution_id {event.execution_id!r} 必须恰有一个未闭合 start，'
+                f'实得 {len(matches)} 个')
+        start = matches[0]
+        if (start.sid, start.node) != (event.sid, event.node):
+            raise TerminalState(
+                f'execution_id {event.execution_id!r} 的 end sid/node 与 start 不一致')
+        append_line_under_process_lock(path, rendered)
+
+
 def read_events(base: str | os.PathLike[str]) -> list[ProgressEvent]:
     """读回事件流。**半截的最后一行当没有，不当失败**（同 `jobs.read_events`）。
 
@@ -158,22 +191,14 @@ def repair_tail(
         reason=reason, subject_sha256=subject_sha256)
 
 
-def open_executions(
-        base: str | os.PathLike[str], parent_run_id: str,
+def _open_executions_from_events(
+    events: list[ProgressEvent], checked_run_id: str,
 ) -> tuple[ProgressEvent, ...]:
-    """返回一个父 run 下尚未 ``end`` 的精确进程 attempt。
-
-    这是 Commander 生命周期屏障使用的唯一折叠口。它按
-    ``(run_id, execution_id)`` 配对，不拿 node 的最后一行猜：同一节点可以恢复多次，
-    也可以先后产生多个进程 attempt。当前父 run 若出现缺 execution 身份的事件、
-    孤儿 end、重复 start/end 或 start/end 的 sid/node 漂移，均关闭式报错；旧历史
-    仍能由 ``fold`` 展示，但不能拿来证明一个正在结束的 Commander 已经没有子进程。
-    """
-    checked_run_id = run_identity.check_run_id(parent_run_id)
+    """在调用方提供的同一账本快照上折叠 open execution。"""
     starts: dict[str, ProgressEvent] = {}
     closed: set[str] = set()
     order: list[str] = []
-    for event in read_events(base):
+    for event in events:
         if event.run_id != checked_run_id:
             continue
         execution_id = event.execution_id
@@ -199,6 +224,21 @@ def open_executions(
                 f'execution_id {execution_id!r} 的 start/end sid 或 node 漂移')
         closed.add(execution_id)
     return tuple(starts[item] for item in order if item not in closed)
+
+
+def open_executions(
+        base: str | os.PathLike[str], parent_run_id: str,
+) -> tuple[ProgressEvent, ...]:
+    """返回一个父 run 下尚未 ``end`` 的精确进程 attempt。
+
+    这是 Commander 生命周期屏障使用的唯一折叠口。它按
+    ``(run_id, execution_id)`` 配对，不拿 node 的最后一行猜：同一节点可以恢复多次，
+    也可以先后产生多个进程 attempt。当前父 run 若出现缺 execution 身份的事件、
+    孤儿 end、重复 start/end 或 start/end 的 sid/node 漂移，均关闭式报错；旧历史
+    仍能由 ``fold`` 展示，但不能拿来证明一个正在结束的 Commander 已经没有子进程。
+    """
+    checked_run_id = run_identity.check_run_id(parent_run_id)
+    return _open_executions_from_events(read_events(base), checked_run_id)
 
 
 def fold(events: list[ProgressEvent], *, now: int | None = None) -> list[RunStepView]:

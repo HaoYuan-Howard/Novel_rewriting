@@ -2192,14 +2192,19 @@ def _cmd_mark(a: argparse.Namespace) -> int:
         print(f'  run_id : {effective_run_id}', file=sys.stderr)
     checked_sid = paths.check_sid(a.sid)
 
-    def append_event() -> None:
-        beacon.append(a.base, ProgressEvent(
-            ts=int(time.time()), sid=checked_sid, node=a.node,
-            phase=a.phase, exit_code=a.exit, note=a.note,
-            run_id=effective_run_id, execution_id=a.execution_id))
+    event = ProgressEvent(
+        ts=int(time.time()), sid=checked_sid, node=a.node,
+        phase=a.phase, exit_code=a.exit, note=a.note,
+        run_id=effective_run_id, execution_id=a.execution_id)
 
-    parent_context = commander_context.load_from_environment(
-        a.base, checked_sid)
+    # 已经落过 start 的 exact execution 必须能在 code/skill 漂移后写完 end，
+    # 否则 Supervisor 会把一个已经退出的进程永久显示为 running。这里只放宽
+    # 冻结 pointer 的 currentness；下方 active claim 与 beacon exact-start 双闸
+    # 仍然阻止任何新 execution、孤儿 end 或业务写盘。
+    context_loader = (
+        commander_context.load_for_execution_close_from_environment
+        if a.phase == 'end' else commander_context.load_from_environment)
+    parent_context = context_loader(a.base, checked_sid)
     if parent_context is not None:
         if inherited != parent_context.run_id:
             raise TerminalState(
@@ -2220,7 +2225,10 @@ def _cmd_mark(a: argparse.Namespace) -> int:
         admission.require_active_claim(
             a.base, getattr(parent_context, 'execution_id', parent_context.run_id),
             checked_sid, a.node)
-        append_event()
+        if a.phase == 'end':
+            beacon.append_execution_end(a.base, event)
+        else:
+            beacon.append(a.base, event)
         return X.OK
 
     from novel.orchestrator.write_admission import operation_scope
@@ -2233,7 +2241,7 @@ def _cmd_mark(a: argparse.Namespace) -> int:
     }
     with operation_scope(
             a.base, checked_sid, operation='progress-mark', details=details):
-        append_event()
+        beacon.append(a.base, event)
     return X.OK
 
 
