@@ -7,6 +7,7 @@
 import type { Api } from '@/types/api'
 import type {
   AgentCapabilitiesResponse,
+  AgentProfileSettingsView,
   AgentQueueView,
   AgentRunLogChunk,
   AgentRunPreview,
@@ -493,6 +494,10 @@ export const realApi: Api = {
 
   /* agent 代跑：响应已是视图形状（snake_case 原样），数据缝不做适配 */
   getAgentCapabilities: () => get<AgentCapabilitiesResponse>('/agent/capabilities'),
+  getAgentProfileSettings: () =>
+    get<AgentProfileSettingsView>('/settings/agent-profiles'),
+  saveAgentProfileSettings: (req) =>
+    post<AgentProfileSettingsView>('/settings/agent-profiles', req),
   previewAgentRun: (req) => post<AgentRunPreview>('/agent/runs/preview', req),
   startAgentRun: (req) => post<AgentRunRecord>('/agent/runs', req),
   getAgentRuns: (sid) => get<AgentRunsResponse>('/agent/runs?sid=' + encodeURIComponent(sid)),

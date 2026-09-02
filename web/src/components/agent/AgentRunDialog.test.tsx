@@ -8,12 +8,13 @@ import {
 } from '@/test/agent'
 import type {
   AgentCapabilitiesResponse,
+  AgentProfileSettingsView,
   AgentRunRecord,
   AgentRunRequest,
 } from '@/types/agent'
 import { act, fireEvent, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { renderRoute } from '@/test/render'
 import { AgentRunDialog } from './AgentRunDialog'
 
@@ -67,7 +68,55 @@ function fourStateCapabilities(): AgentCapabilitiesResponse {
   }
 }
 
+const UNSET_SETTINGS: AgentProfileSettingsView = {
+  state: 'unset',
+  profiles: null,
+  revision: '0'.repeat(64),
+  updated_at: null,
+  issue: null,
+}
+
 describe('AgentRunDialog', () => {
+  beforeEach(() => {
+    vi.spyOn(api, 'getAgentProfileSettings').mockResolvedValue(UNSET_SETTINGS)
+  })
+
+  it('用户常用配置优先于产品默认，并作为本次 preview 的完整快照', async () => {
+    const savedProfiles = {
+      commander: {
+        driver: 'commander-dynamic' as const,
+        model: 'commander-model-v10',
+        reasoning_effort: 'new-effort-dynamic',
+        execution_mode: 'new-mode-dynamic',
+      },
+      executor_default: { ...READY_PROFILES.executor_default },
+      executor_overrides: {},
+    }
+    vi.mocked(api.getAgentProfileSettings).mockResolvedValue({
+      state: 'configured',
+      profiles: savedProfiles,
+      revision: 'a'.repeat(64),
+      updated_at: 1,
+      issue: null,
+    })
+    vi.spyOn(api, 'getAgentCapabilities').mockResolvedValue(agentCapabilities())
+    const preview = vi.spyOn(api, 'previewAgentRun').mockImplementation(async (req) =>
+      previewOf(req.profiles, req.authorized, req.egress_authorized),
+    )
+
+    renderRoute(
+      <AgentRunDialog sid="book-1" onClose={vi.fn()} onStarted={vi.fn()} />,
+      '/n/book-1/stage0',
+    )
+
+    expect(await screen.findByText(/已载入设置页保存的常用配置/)).toBeVisible()
+    await waitFor(() => expect(preview).toHaveBeenCalledTimes(1))
+    expect(screen.getByRole('combobox', { name: '指挥大脑 模型' })).toHaveValue(
+      'commander-model-v10',
+    )
+    expect(preview.mock.calls[0]?.[0].profiles).toEqual(savedProfiles)
+  })
+
   it('capability 加载期间关闭预览；ready 后才用服务端默认初始化一次', async () => {
     let resolveCapabilities!: (value: AgentCapabilitiesResponse) => void
     vi.spyOn(api, 'getAgentCapabilities').mockReturnValue(new Promise((resolve) => {
@@ -81,7 +130,7 @@ describe('AgentRunDialog', () => {
       <AgentRunDialog sid="book-1" onClose={vi.fn()} onStarted={vi.fn()} />,
       '/n/book-1/stage0',
     )
-    expect(screen.getByText(/正在探测本机 Agent 能力/)).toBeVisible()
+    expect(screen.getByText(/正在读取常用配置并探测本机 Agent 能力/)).toBeVisible()
     expect(preview).not.toHaveBeenCalled()
     expect(screen.getByRole('button', {
       name: '需先授权模型调用费用',
@@ -107,7 +156,7 @@ describe('AgentRunDialog', () => {
       '/n/book-1/stage0',
     )
 
-    expect(await screen.findByText(/服务端尚未发布默认 Agent 配置/)).toBeVisible()
+    expect(await screen.findByText(/尚未保存常用 Agent 配置/)).toBeVisible()
     expect(capabilityCall).toHaveBeenCalledTimes(1)
     expect(preview).not.toHaveBeenCalled()
     expect(screen.getByRole('button', {

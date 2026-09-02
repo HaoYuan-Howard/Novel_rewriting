@@ -421,6 +421,8 @@ def test_the_published_surface_is_exactly_the_current_surface(app):
         #    §3 的屏幕职责表也已登记，而这张清单没跟着改 ⇒ 全量跑时它红着。
         #    补进来就是那次「显式的决定」；它们的行为归 `tests/test_api_agent.py`。
         '/api/agent/capabilities': ['GET'],
+        # 用户偏好与 capability 产品默认分开；行为归 `tests/test_agent_settings.py`。
+        '/api/settings/agent-profiles': ['GET', 'POST'],
         '/api/agent/runs': ['GET', 'POST'],
         '/api/agent/runs/preview': ['POST'],
         #: 批量受理 N 本 + 队列全景。放开 agent 并发之后新增的那一面

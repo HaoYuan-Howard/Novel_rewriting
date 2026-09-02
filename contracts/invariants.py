@@ -214,6 +214,7 @@ STAGE5_CLOSED_EXEMPT_FLAGS: Final = (
 AgentDriver = Literal['claude-code', 'codex']
 AgentRole = Literal['commander', 'executor']
 AgentAvailability = Literal['ready', 'missing', 'unknown', 'unauthenticated']
+AgentProfileSettingsState = Literal['unset', 'configured', 'unreadable']
 
 #: ``ultra`` 不是 reasoning effort。它若将来开放，必须作为执行模式由具体
 #: model capability 显式列出；不能塞进 effort 后再由某个 driver 静默翻译。

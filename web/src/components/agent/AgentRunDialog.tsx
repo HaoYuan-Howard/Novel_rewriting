@@ -1,9 +1,14 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
+import { useNavigate } from 'react-router-dom'
 import { api } from '@/api/endpoints'
 import { qk } from '@/api/queryKeys'
 import { errorBody, isApiError } from '@/api/errors'
-import { useAgentCapabilities, useStartAgentRun } from '@/hooks/useAgentRuns'
+import {
+  useAgentCapabilities,
+  useAgentProfileSettings,
+  useStartAgentRun,
+} from '@/hooks/useAgentRuns'
 import { SCRIM } from '@/constants/vocabulary'
 import { Mono } from '@/components/ui/Mono'
 import { ErrorHint } from '@/components/state/States'
@@ -55,14 +60,21 @@ export function AgentRunDialog({
   const [promptOpen, setPromptOpen] = useState(false)
   const [profilesInitialized, setProfilesInitialized] = useState(false)
   const [profileDraft, setProfileDraft] = useState(emptyPipelineAgentProfilesDraft)
+  const navigate = useNavigate()
   const capabilities = useAgentCapabilities()
+  const settings = useAgentProfileSettings()
   const start = useStartAgentRun(sid)
 
   useEffect(() => {
-    if (!capabilities.data || profilesInitialized) return
-    setProfileDraft(pipelineDraftOf(capabilities.data.default_profiles))
+    if (!capabilities.data || !settings.data || profilesInitialized) return
+    const preferred = settings.data.state === 'configured'
+      ? settings.data.profiles
+      : settings.data.state === 'unset'
+        ? capabilities.data.default_profiles
+        : null
+    setProfileDraft(pipelineDraftOf(preferred))
     setProfilesInitialized(true)
-  }, [capabilities.data, profilesInitialized])
+  }, [capabilities.data, profilesInitialized, settings.data])
 
   const materialized = useMemo(
     () => capabilities.data
@@ -136,20 +148,52 @@ export function AgentRunDialog({
           data-testid="agent-run-dialog-body"
           className="flex min-h-0 flex-col gap-12 overflow-y-auto px-22 py-18"
         >
-          {capabilities.isPending ? (
+          {capabilities.isPending || settings.isPending ? (
             <div className="rounded-block border border-line bg-inset px-14 py-11 text-body text-ink-4">
-              正在探测本机 Agent 能力；拿到服务端 capability 前不会预览或启动…
+              正在读取常用配置并探测本机 Agent 能力；两份都拿到前不会预览或启动…
             </div>
           ) : capabilities.isError ? (
             <div className="rounded-block border border-warn-line bg-warn-bg px-14 py-11 text-body text-warn-ink">
               取不到本机 Agent capability，因此不会预览或启动。
               <ErrorHint error={capabilities.error} />
             </div>
-          ) : capabilities.data ? (
+          ) : settings.isError ? (
+            <div className="rounded-block border border-warn-line bg-warn-bg px-14 py-11 text-body text-warn-ink">
+              取不到设置页保存的常用配置，因此不会用产品默认替它猜一份。
+              <ErrorHint error={settings.error} />
+            </div>
+          ) : capabilities.data && settings.data ? (
             <>
-              {capabilities.data.default_profiles === null ? (
+              {settings.data.state === 'configured' ? (
+                <div className="flex items-center gap-10 rounded-block border border-gate-ok-line bg-gate-ok-bg px-14 py-10 text-body text-gate-ok-ink">
+                  <span>已载入设置页保存的常用配置；下方改动只影响本次运行。</span>
+                  <LinkButton
+                    className="ml-auto"
+                    onClick={() => { onClose(); navigate('/settings') }}
+                  >
+                    管理常用配置
+                  </LinkButton>
+                </div>
+              ) : settings.data.state === 'unreadable' ? (
+                <div className="flex items-center gap-10 rounded-block border border-warn-line bg-warn-bg px-14 py-10 text-body text-warn-ink">
+                  <span>{settings.data.issue}</span>
+                  <LinkButton
+                    className="ml-auto"
+                    onClick={() => { onClose(); navigate('/settings') }}
+                  >
+                    去修复设置
+                  </LinkButton>
+                </div>
+              ) : capabilities.data.default_profiles === null ? (
                 <div className="rounded-block border border-warn-line bg-warn-bg px-14 py-10 text-body text-warn-ink">
-                  服务端尚未发布默认 Agent 配置；请显式选完指挥大脑与执行者。界面不会猜第一项。
+                  尚未保存常用 Agent 配置，服务端也没有发布产品默认；请在这里临时选择，
+                  或到设置页保存后复用。界面不会猜第一项。
+                  <LinkButton
+                    className="ml-10"
+                    onClick={() => { onClose(); navigate('/settings') }}
+                  >
+                    打开设置
+                  </LinkButton>
                 </div>
               ) : null}
               <PipelineAgentProfilesForm

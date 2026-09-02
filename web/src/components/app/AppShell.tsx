@@ -26,7 +26,13 @@ const SCREENS = new Set<string>([
 function useWhere() {
   const m = useMatch('/n/:sid/*')
   const { pathname } = useLocation()
-  if (!m?.params.sid) return { sid: null, screen: 'corpus' as ScreenName, ordinal: null }
+  if (!m?.params.sid) {
+    return {
+      sid: null,
+      screen: (pathname === '/settings' ? 'settings' : 'corpus') as ScreenName,
+      ordinal: null,
+    }
+  }
   const parts = pathname.split('/').filter(Boolean) // n, sid, screen, [o]
   const seg = parts[2] ?? ''
   const o = Number(parts[3])

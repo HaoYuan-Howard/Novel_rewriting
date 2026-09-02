@@ -25,6 +25,8 @@ import type {
 import type {
   AgentCapabilitiesResponse,
   AgentBatchRequest,
+  AgentProfileSettingsUpdate,
+  AgentProfileSettingsView,
   AgentQueueView,
   AgentRunLogChunk,
   AgentRunPreview,
@@ -134,6 +136,10 @@ export interface Api {
   /* agent 代跑（互斥归服务端：冲突 409 / ErrorBody.kind = JobConflict） */
   /** 本机 CLI/模型能力动态探针；响应与查询缓存都按 no-store 对待。 */
   getAgentCapabilities(): Promise<AgentCapabilitiesResponse>
+  /** 当前 output base 的用户常用配置；不含凭据与两项逐次授权。 */
+  getAgentProfileSettings(): Promise<AgentProfileSettingsView>
+  /** CAS 保存/清空常用配置；不改变任何历史或排队中的 run 快照。 */
+  saveAgentProfileSettings(req: AgentProfileSettingsUpdate): Promise<AgentProfileSettingsView>
   /** 0 成本预览：与真跑同一构造函数。两项授权都进 prompt，任一勾选变化都重新 preview。 */
   previewAgentRun(req: AgentRunRequest): Promise<AgentRunPreview>
   startAgentRun(req: AgentRunRequest): Promise<AgentRunRecord>

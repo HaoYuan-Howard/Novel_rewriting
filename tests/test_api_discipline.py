@@ -434,6 +434,8 @@ def test_job_conflict_maps_and_returns_409(monkeypatch):
         # agent 代跑（行为在 `tests/test_api_agent.py`；preview 是 0 成本但仍是 POST）
         '/api/agent/runs',
         '/api/agent/runs/preview',
+        # 当前 output base 的用户常用 profiles；只写 _service，且用 revision CAS。
+        '/api/settings/agent-profiles',
         '/api/agent/runs/{run_id}/pause',
         '/api/agent/runs/{run_id}/resume',
         '/api/agent/runs/{run_id}/stop',

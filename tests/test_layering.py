@@ -195,6 +195,10 @@ _JSON_READ_ALLOWED = {
         '不是小说产物。它们的 JSON 读入只用于 preview token、CAS、commit/delivery '
         '证明和恢复回执复核；字段、版本或自哈希不闭合就拒绝应用，'
         '不经 ArtifactStore 读写正式产物'),
+    'novel/orchestrator/agent_settings.py': (
+        '用户常用 Agent profiles 是当前 output base 的 `_service/` 设置，不是小说产物；'
+        '读取保留 unset/configured/unreadable 三态并以原始字节 SHA-256 做 CAS，'
+        '不进入 provenance，也不经 ArtifactStore 倒充 artifact'),
     'novel/llm/stage2_runs.py': (
         'Stage2 验证后章节检查点与一次性 repair workpack 不是正式产物或普通缓存；'
         '它们在 `_service/runs/<sid>/stage2/` 按书、run_id 关闭式恢复，读取后仍须重跑'
@@ -296,6 +300,10 @@ _WRITE_ALLOWED = {
         '显式 preview/apply：允许回收已 ended 日志、已闭合 telemetry、完整 v3 trash，'
         '以及 delivery+commit+当前正式字节可逐项对证的 checkpoint 正文。回执、manifest、'
         'ledger、admission/beacon/agent/job/session 小账永久保留；四项 TTL 默认关闭'),
+    'novel/orchestrator/agent_settings.py': (
+        '用户常用 Agent profiles 只原子写 `_service/agent_profile_settings.json`；'
+        '它不是小说产物、不进入 ARTIFACTS/provenance，写前由 capability registry '
+        '关闭式校验并在同一路径事务锁内核对原始字节 revision'),
     'novel/orchestrator/jobs.py': (
         '作业记录与子进程日志。⚠ **`R-11.3` 已于 2026-08-11（骨架 D）'
         '收窄成「绝不落**产物**盘」**，理由是一句话：'

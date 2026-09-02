@@ -79,7 +79,10 @@ driver/provider 元数据、角色、model id 与 label、各模型实际 effort
 探针结果、executor 节点和 `default_profiles`。该响应不归 `/api/enums`，前端不得另写供应商能力表。
 `AgentRunDialog` / `AgentBatchDialog` 现已消费这个端点，动态呈现 Commander、默认 executor 与逐节点
 override 的 driver/model/effort/mode；driver/model 改动会清空失效的下游选择。`default_profiles=null`
-明确表示尚无 provider-neutral 默认，界面要求逐项显式完成，不能取 `drivers[0]` 自动代选。
+明确表示尚无经整书验收的 provider-neutral 产品默认，不能取 `drivers[0]` 自动代选。`/settings` 另经
+`GET/POST /api/settings/agent-profiles` 管理当前 output base 的用户常用配置：保存后单本与批量表单优先
+载入，表单内仍可只为本次临时覆盖。用户偏好不改产品默认，不改已受理 run；unset/configured/unreadable、
+读取失败与 CAS 冲突都显式呈现。设置不保存 key、CLI 登录态或两项授权，付费与正文外发仍逐次确认。
 `ready / missing / unknown / unauthenticated` 四态和服务端 reason 原样显示，非 ready 不能选；CLI/版本
 探针不发模型请求，`ready` 也不等于账号或具体模型已验证。
 
@@ -136,7 +139,7 @@ Phase 6 同时接通 outer Commander：preview/start/batch 共用后端唯一 pl
 - real 与 mock 适配器满足同一 TypeScript 接口；真实模式不允许缺端点时回退 mock。
 - 写请求携带 `X-Novel-UI: 1`；服务进程只写 `_service/`，产物变更经 CLI 子进程。
 - action、枚举、付费与写盘语义由服务端 `/api/enums` 和 preview 返回；前端不保存第二份判定表。
-- agent driver / model / effort / execution mode 由 `/api/agent/capabilities` 发布；`useAgentCapabilities` 使用 no-store 语义，页面按响应动态构造 Commander / 默认 executor / 节点 override，null 不代选。后端 8 节点 / 13 组合 direct job 纵切及独立 egress 快照仍原样保留。
+- agent driver / model / effort / execution mode 由 `/api/agent/capabilities` 发布；`useAgentCapabilities` 使用 no-store 语义，页面按响应动态构造 Commander / 默认 executor / 节点 override，null 不代选。用户常用 profile 由 `/api/settings/agent-profiles` 按三态 + CAS 单独持久化，不能混成 capability 产品默认或浏览器 localStorage。后端 8 节点 / 13 组合 direct job 纵切及独立 egress 快照仍原样保留。
 - 底部作业抽屉只消费 `/api/jobs`，逐条展示全部作业的最新状态，不订阅或展示命令、stdout/stderr；
   详情统一跳到本书运行进度页。日志能力仍由 `/api/jobs/:id/stream` SSE 提供给专用详情消费者：
   事件 `id` 等于 UTF-8 `next_byte`，断线用 `Last-Event-ID` 续读，终态先排空日志、再发唯一 `end`。
@@ -184,6 +187,7 @@ export const api: Api = USE_MOCK ? mockApi : realApi
 | 状态 | 家 |
 |---|---|
 | 各屏响应 | TanStack Query |
+| Agent 跑书用户常用 profiles | 当前 output base 的 `_service/agent_profile_settings.json`；页面只持读取 revision 与未保存草稿，POST 以 CAS 提交 |
 | **`gate` / `seen` / `design_review` / `structure` / `writing` / `writing_approval` / `closure`** | 一份公开 v6 `ApprovalDoc`，也走 Query（`['approvals', sid]`）；`design_review` 保存绑定当前 Stage4A 主体的策略级与逐章 typed 裁决，只授权 B；`structure` 保存绑定完整 Stage4 plan + binding concerns 主体的最终逐章裁决；`writing_approval` 是当前 Stage4 主体的 typed 写作授权；`closure` 是绑定 current canonical 全章 + fresh Review + finding/trim 集的 Stage5 Commander 回执，只有 current `closed` 才打开 s5 |
 | Stage2 Blueprint 审阅工作包 | 独立 Query（`['stage2', sid, 'blueprint-review-workpack']`），读取 `/stage2/blueprint-review-workpack`；服务端绑定 current Blueprint/MainText/完整 check/code/rules，异常章优先且全章保留。工作包到达后正文分区与骨架只从该包渲染，确认提交同一包的完整 binding，页面不从另一份 ReadingResponse 或 rows 重拼主体/判定，不写新 approval 或 artifact |
 | Stage4 A/B 审阅工作包 | 两条独立 Query（`['approvals', sid, 'design|structure', 'workpack']`）；分别读取 `/approvals/design/workpack` 与 `/approvals/structure/workpack`，绑定当前 A 候选或 B 结构主体，不从 `ApprovalDoc`、页面 rows 或历史决定重拼 |
@@ -215,6 +219,7 @@ Stage4A 表单一次提交当前完整 subject、策略 `accept|request_replan` 
 | 路由 | 屏幕职责 |
 |---|---|
 | `/` | 语料库、上传与逐书阶段状态；勾选多本一次交给 agent 批量代跑；项目可在 sid 二次确认后移入可恢复回收站（闸与排队归服务端，界面不写死上限） |
+| `/settings` | 管理当前 output base 的 Commander、默认 Executor 与逐节点 override 常用 profiles；选项只来自 capability，保存/清空走 revision CAS，不保存凭据或逐次授权 |
 | `/n/:sid` | 进入该书并重定向到 stage0（新书先审非正文；已有产物仍可从左栏直达各层） |
 | `/n/:sid/run` | agent / UI / 持久队列共用的全链运行进度与事件时间线；步骤从 `NODES` 派生，**只观察不判定** |
 | `/n/:sid/stage0` | 整本剔除审阅、编辑与批准；完整原文默认展开、可收起，不重复展示属于 Stage1 的分章预览。Agent 入口放在审批操作栏；浏览器人工动作不要求填写 actor/reason，统一按 `human-ui` 和具体动作理由记审计；Agent/CLI 仍显式自报 |
@@ -248,6 +253,7 @@ components/
           EmptyIsSuspicious  EmptyIsGood  HatchNote  QueryStates
   gate/   GateBar        check/  CheckPanel        job/  JobDrawer  ConfirmDialog
   agent/  AgentBatchDialog  AgentRunDialog
+  screens/settings/  SettingsScreen（用户常用 Agent profiles；三态 + CAS）
 ```
 
 Stage4 屏另有两块专用审批面板。`screens/stage4/DesignReviewPanel` 对当前 Stage4A 候选提交

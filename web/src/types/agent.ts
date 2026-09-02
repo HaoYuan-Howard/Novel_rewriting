@@ -51,6 +51,25 @@ export interface AgentCapabilitiesResponse {
   default_profiles: PipelineAgentProfiles | null
 }
 
+export type AgentProfileSettingsState = 'unset' | 'configured' | 'unreadable'
+
+/** 当前 output base 的用户常用配置；与 capability 的产品默认分开。 */
+export interface AgentProfileSettingsView {
+  state: AgentProfileSettingsState
+  profiles: PipelineAgentProfiles | null
+  /** 设置文件当前字节身份；保存时用于防多标签页静默覆盖。 */
+  revision: string
+  /** unix 秒；从未保存或文件不可读时为 null。 */
+  updated_at: number | null
+  issue: string | null
+}
+
+export interface AgentProfileSettingsUpdate {
+  /** null = 显式清空用户常用配置，不影响已启动/排队的 run。 */
+  profiles: PipelineAgentProfiles | null
+  expected_revision: string
+}
+
 /** 发起参数。两项授权彼此独立，都会原样进入 prompt 与审计记录。 */
 export interface AgentRunRequest {
   sid: string

@@ -597,6 +597,10 @@ RUNS_DIRNAME = 'runs'
 #: 显式 TTL 维护入口清理，路径函数本身绝不扫盘。
 SCRATCH_DIRNAME = 'scratch'
 
+#: 当前 output base 的用户常用 Agent 配置。它是服务设置，不是小说产物，
+#: 也不含 API key、登录凭据、付费授权或正文外发授权。
+AGENT_PROFILE_SETTINGS_FILENAME = 'agent_profile_settings.json'
+
 #: 内容地址的形状。认死 64 位小写十六进制——**认不出就不是上传目录**，
 #: 与其猜一个不如答「不知道」（`novel/core/source.py` 的重锚以此为前提）。
 _CONTENT_ADDRESS = re.compile(r'[0-9a-f]{64}')
@@ -628,6 +632,11 @@ def service_runs_dir(base: str | os.PathLike[str]) -> Path:
 def scratch_dir(base: str | os.PathLike[str]) -> Path:
     """`<base>/_service/scratch/`；会话临时空间的唯一根。"""
     return service_dir(base) / SCRATCH_DIRNAME
+
+
+def agent_profile_settings_path(base: str | os.PathLike[str]) -> Path:
+    """``<base>/_service/agent_profile_settings.json``；只声明路径，不摸盘。"""
+    return service_dir(base) / AGENT_PROFILE_SETTINGS_FILENAME
 
 
 def _service_segment(value: str, *, label: str) -> str:

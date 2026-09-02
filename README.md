@@ -61,6 +61,7 @@ Windows 下双击 `scripts\start.cmd`：脚本按需构建前端、启动本机�
 
 - `novel.cli` 可驱动七层单书主链并组装成书；前端默认以 `VITE_USE_MOCK=false` 连接真实服务。
 - 服务进程只写 `_service/`，产物变化由 CLI 子进程完成；页面写操作遵循 preview → 确认 → 作业执行。
+- 左栏“设置”可保存当前输出目录常用的 Commander、默认 Executor 与逐节点覆盖；跑书时自动载入，付费与正文外发授权仍须逐次确认。
 - 人工闸可以按规则委托 agent 审阅，依据持续写入书目录根的 `<书名>_review.md`。
 - 默认 pytest 刻意排除 corpus；仓内 current-schema manifest 尚未完成。只有按 `tests/README.md` 运行
   `--require-corpus` 并闭合精确盘面后，才可以称“全量语料绿”。

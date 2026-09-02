@@ -14,6 +14,7 @@
 import type { Api } from '@/types/api'
 import type {
   AgentCapabilitiesResponse,
+  AgentProfileSettingsView,
   AgentQueueView,
   AgentRunLogChunk,
   AgentRunPreview,
@@ -1345,6 +1346,29 @@ function mockAgentRunRecord(req: AgentRunRequest): AgentRunRecord {
   }
 }
 
+let mockAgentSettingsSequence = 0
+let mockAgentProfileSettings: AgentProfileSettingsView = {
+  state: 'unset',
+  profiles: null,
+  revision: '0'.repeat(64),
+  updated_at: null,
+  issue: null,
+}
+
+function cloneMockProfiles(profiles: AgentProfileSettingsView['profiles']) {
+  if (profiles === null) return null
+  return {
+    commander: { ...profiles.commander },
+    executor_default: { ...profiles.executor_default },
+    executor_overrides: Object.fromEntries(
+      Object.entries(profiles.executor_overrides).map(([node, profile]) => [
+        node,
+        { ...profile },
+      ]),
+    ),
+  }
+}
+
 function mockControlledAgentRun(runId: string, state: 'paused' | 'unknown'): AgentRunRecord {
   const profiles = fx<AgentCapabilitiesResponse>('agent_capabilities.json').default_profiles
   if (profiles === null) throw new Error('mock agent capability 必须提供 default_profiles')
@@ -1855,6 +1879,31 @@ export const mockApi: Api = {
 
   /* agent 代跑：静态样例 —— 列表恒空（mock 不养 agent 进程），start 回一条 running 记录 */
   getAgentCapabilities: () => later(fx<AgentCapabilitiesResponse>('agent_capabilities.json')),
+  getAgentProfileSettings: () => later({
+    ...mockAgentProfileSettings,
+    profiles: cloneMockProfiles(mockAgentProfileSettings.profiles),
+  }),
+  saveAgentProfileSettings: (req) => {
+    if (req.expected_revision !== mockAgentProfileSettings.revision) {
+      return fail(new ApiError('server', '/settings/agent-profiles', {
+        status: 409,
+        backendKind: 'AgentProfileSettingsConflict',
+        message: '常用 Agent 配置已被另一个页面更新；请重读后再保存',
+      }))
+    }
+    mockAgentSettingsSequence += 1
+    mockAgentProfileSettings = {
+      state: req.profiles === null ? 'unset' : 'configured',
+      profiles: cloneMockProfiles(req.profiles),
+      revision: mockAgentSettingsSequence.toString(16).padStart(64, '0'),
+      updated_at: Date.now() / 1000,
+      issue: null,
+    }
+    return later({
+      ...mockAgentProfileSettings,
+      profiles: cloneMockProfiles(mockAgentProfileSettings.profiles),
+    })
+  },
   previewAgentRun: (req) => later(mockAgentRunPreview(req)),
   startAgentRun: (req) => later(mockAgentRunRecord(req)),
   getAgentRuns: () => later<AgentRunsResponse>({ runs: [] }),

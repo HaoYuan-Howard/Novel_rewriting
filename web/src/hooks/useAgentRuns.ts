@@ -1,7 +1,12 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/api/endpoints'
 import { qk } from '@/api/queryKeys'
-import type { AgentBatchRequest, AgentRunRecord, AgentRunRequest } from '@/types/agent'
+import type {
+  AgentBatchRequest,
+  AgentProfileSettingsUpdate,
+  AgentRunRecord,
+  AgentRunRequest,
+} from '@/types/agent'
 import { useSid } from './useRouteParams'
 
 /**
@@ -16,6 +21,28 @@ export function useAgentCapabilities() {
     gcTime: 0,
     refetchOnMount: 'always',
     refetchOnWindowFocus: 'always',
+  })
+}
+
+/** 用户常用配置是服务端事实；不放 localStorage，也不与产品默认混成一格。 */
+export function useAgentProfileSettings() {
+  return useQuery({
+    queryKey: qk.agentProfileSettings(),
+    queryFn: () => api.getAgentProfileSettings(),
+    staleTime: 0,
+    gcTime: 0,
+    refetchOnMount: 'always',
+    refetchOnWindowFocus: 'always',
+  })
+}
+
+export function useSaveAgentProfileSettings() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (req: AgentProfileSettingsUpdate) => api.saveAgentProfileSettings(req),
+    onSuccess: (next) => {
+      qc.setQueryData(qk.agentProfileSettings(), next)
+    },
   })
 }
 

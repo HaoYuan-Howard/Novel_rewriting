@@ -34,7 +34,7 @@ from contracts.schema.api import ErrorBody
 from novel.api.errors import CSRF_REFUSED, status_of
 from novel.api.routes import (
     agent, agent_capabilities, approvals, checks, edits, enums, ingest, jobs,
-    maintenance, novels, queues, run, screens,
+    maintenance, novels, queues, run, screens, settings,
 )
 from novel.errors import NovelError
 from novel.orchestrator import trash
@@ -215,7 +215,8 @@ def create_app(base: str | os.PathLike[str],
     for router in (
         enums.router, novels.router, checks.router, jobs.router, queues.router,
         ingest.router, approvals.router, screens.router, edits.router,
-        run.router, agent_capabilities.router, agent.router, maintenance.router,
+        run.router, agent_capabilities.router, agent.router, settings.router,
+        maintenance.router,
     ):
         app.include_router(router, prefix='/api')
 

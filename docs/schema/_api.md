@@ -95,7 +95,9 @@ Prompt 选型完成后，`prompt_variants`、`prompt_defaults` 与 `--prompt-var
 | 端点 | 响应 | 新旧 |
 |---|---|---|
 | `GET /api/enums` | 无模型（见 §二） | 新 |
-| `GET /api/agent/capabilities` | `AgentCapabilitiesResponse`（registry 能力 + 本机 CLI/版本只读探针） | 新；Phase 1 发布，现役 UI 仍未消费 |
+| `GET /api/agent/capabilities` | `AgentCapabilitiesResponse`（registry 能力 + 本机 CLI/版本只读探针） | Agent 表单与设置页的唯一选项源；no-store |
+| `GET /api/settings/agent-profiles` | `AgentProfileSettingsView`（当前 output base 的用户常用配置） | no-store；保留 unset/configured/unreadable 三态 |
+| `POST /api/settings/agent-profiles` | `AgentProfileSettingsView`（请求体 `AgentProfileSettingsUpdate`） | CSRF 保护；按 expected revision CAS 保存或清空，只写 `_service/` |
 | `GET /api/novels` | `NovelList` | 新 |
 | `GET /api/novels/:sid` | `NovelOverview` | **复用** `_orchestration.md` |
 | `GET /api/novels/:sid/check/:kind` | `CheckReport` | **复用** `_report.md` |
@@ -261,6 +263,18 @@ preview 可以在任一项为 false 时 0 成本展开；单本 start 与 batch 
 版本探针成功，不证明账号认证、模型 entitlement 或真实调用可用。当前 registry 只发布实际受测的
 execution mode；`ultra` 既不是 reasoning effort，也尚未被发布，调用方不得凭 UI 文案自行放开。
 
+用户常用配置与上述 `default_profiles` 分开建模：
+
+| 模型 | 字段 | 约束 |
+|---|---|---|
+| `AgentProfileSettingsView` | `state` · `profiles` · `revision` · `updated_at` · `issue` | `configured` 才携完整 profiles；从未配置或显式清空为 `unset`；文件字节存在但不合当前契约为 `unreadable`，携原始字节 revision 与不回显正文的诊断。读取失败不得静默回退 |
+| `AgentProfileSettingsUpdate` | `profiles` · `expected_revision` | profiles 非空时再次经 capability registry 关闭式校验并显式物化 execution mode；null 表示清空。revision 不等返回 409 `AgentProfileSettingsConflict`，不得最后写入者覆盖 |
+
+设置文件固定为 `<base>/_service/agent_profile_settings.json`，只保存 driver/model/effort/mode；API key、
+CLI 登录态、付费授权、正文外发授权与 prompt 均不进入该文件。设置只初始化未来运行表单：单次运行仍可
+临时覆盖，start/batch 仍逐次要求两项独立授权并冻结自己的 profiles，已启动、已排队和历史 run 不读取
+当前设置。`default_profiles` 继续保持产品验收状态，用户保存偏好不得使它从 null 变成非空。
+
 Phase 1 冻结上述能力响应与 nullable 配置槽；Phase 2 当时只开放一条窄纵切：直接
 `POST /api/jobs/preview` / `POST /api/jobs` 在 `node=stage2.global` 且 `flags=[]` 时可携带非空
 `executor_profile`。两端点共用 `plan_start`，registry 解析后的精确选择依次冻结进
@@ -313,8 +327,9 @@ started 事件复核整份配置；operator runner 按 exact node/flags 选 defa
 本身另记 `role=commander,node=null` 的 session 与 ledger，实际模型/effort 缺失保持 unknown，漂移、串
 provider session 或账/审计不闭合只可把 delivery 降成 unknown。进程 state 与盘面 delivery outcome 正交。
 
-页面现已从 capability 动态构造 Commander、默认 executor 与逐节点 override 表单；`default_profiles=null`
-时必须显式选全，不取数组第一项。单本与批量 start 直接消费最后一次成功 preview 保存的同一请求快照；
+页面现已从 capability 动态构造 Commander、默认 executor 与逐节点 override 表单；新表单优先载入
+`configured` 用户常用配置，其次才用非空产品默认，两者都没有时必须显式选全，不取数组第一项；设置
+不可读或请求失败时关闭预览/启动。单本与批量 start 直接消费最后一次成功 preview 保存的同一请求快照；
 profiles、两项授权或 capability 有任何漂移都先使 preview 失效，不能用新默认重解释旧确认。历史 run 的
 `profiles=null` 只显示 unknown；direct Job 的 executor profile / egress 只读展示仍与 outer Commander
 分开。Phase 1～6 的工程验证仍没有真实 provider 模型请求或 current-schema corpus 验收，不能据此宣称

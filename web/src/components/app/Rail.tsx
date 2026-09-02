@@ -249,8 +249,28 @@ export function Rail({
         </div>
       ) : null}
 
+      <div className={cx('mt-auto flex flex-col gap-2', collapsed ? 'px-6' : 'px-10')}>
+        <button
+          type="button"
+          aria-label="设置"
+          title={collapsed ? '设置' : undefined}
+          aria-current={screen === 'settings' ? 'page' : undefined}
+          onClick={() => nav('/settings')}
+          className={cx(
+            'flex cursor-pointer items-center rounded-btn border-none py-8 text-left text-body',
+            collapsed ? 'justify-center px-0' : 'gap-8 px-12',
+            screen === 'settings'
+              ? 'bg-card font-semibold text-ink shadow-current'
+              : 'bg-transparent text-ink-3',
+          )}
+        >
+          <span aria-hidden className="w-12 text-center font-mono text-mini text-ink-5">⚙</span>
+          {collapsed ? null : <span>设置</span>}
+        </button>
+      </div>
+
       {collapsed ? null : (
-        <div className="mt-auto px-16 pt-10 pb-14 text-micro text-ink-5">←/→ 翻章 · Esc 关闭</div>
+        <div className="px-16 pt-10 pb-14 text-micro text-ink-5">←/→ 翻章 · Esc 关闭</div>
       )}
     </nav>
   )

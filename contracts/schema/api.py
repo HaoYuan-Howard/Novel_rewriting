@@ -38,6 +38,7 @@ from contracts.invariants import (
     AgentAvailability,
     AgentDriver,
     AgentExecutionMode,
+    AgentProfileSettingsState,
     AgentReasoningEffort,
     AgentRole,
     ANCHOR_COVERAGE_STATE,
@@ -764,6 +765,43 @@ class AgentCapabilitiesResponse(StrictModel):
                 'executor_nodes 必须按 AGENT_EXECUTOR_NODES 的完整顺序发布，'
                 '不能让前端再维护一份节点清单')
         return self
+
+
+class AgentProfileSettingsView(StrictModel):
+    """当前 output base 的用户常用 Agent 配置。
+
+    它与 capability 的 ``default_profiles`` 不是同一个概念：后者是服务端经整书
+    验收后才能发布的产品默认；本对象只是用户主动保存的偏好。历史 run 仍只认
+    自己冻结的 profile 快照，绝不拿这里的当前值倒推。
+    """
+
+    state: AgentProfileSettingsState
+    profiles: PipelineAgentProfiles | None
+    revision: Sha256
+    updated_at: float | None = Field(default=None, ge=0)
+    issue: str | None = Field(default=None, min_length=1)
+
+    @model_validator(mode='after')
+    def _state_matches_payload(self) -> AgentProfileSettingsView:
+        if self.state == 'configured':
+            if self.profiles is None or self.updated_at is None or self.issue is not None:
+                raise ValueError('configured 必须带 profiles/updated_at 且不得带 issue')
+        elif self.state == 'unset':
+            if self.profiles is not None or self.issue is not None:
+                raise ValueError('unset 不得带 profiles 或 issue')
+        elif self.state == 'unreadable':
+            if self.profiles is not None or self.issue is None:
+                raise ValueError('unreadable 必须只带 issue，不得带 profiles')
+            if self.updated_at is not None:
+                raise ValueError('unreadable 的更新时间无法可信读取，必须为 null')
+        return self
+
+
+class AgentProfileSettingsUpdate(StrictModel):
+    """保存或清空常用配置；revision 是防多标签页静默覆盖的 CAS。"""
+
+    profiles: PipelineAgentProfiles | None
+    expected_revision: Sha256
 
 
 class AgentRunList(StrictModel):

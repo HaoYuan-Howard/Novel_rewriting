@@ -28,6 +28,13 @@ function uploaded(sid: string): UploadResponse {
 
 function renderCorpus(novels: NovelRow[] = []) {
   vi.spyOn(api, 'getNovels').mockResolvedValue({ base: 'E:/outputs', novels })
+  vi.spyOn(api, 'getAgentProfileSettings').mockResolvedValue({
+    state: 'unset',
+    profiles: null,
+    revision: '0'.repeat(64),
+    updated_at: null,
+    issue: null,
+  })
   vi.spyOn(api, 'getAgentQueue').mockResolvedValue({
     running: [],
     pending: [],

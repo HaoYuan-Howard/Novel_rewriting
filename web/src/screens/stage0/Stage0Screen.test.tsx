@@ -28,6 +28,13 @@ describe('Stage0Screen 新书起跑入口', () => {
     })
     vi.spyOn(api, 'getStage0Candidate').mockResolvedValue(null)
     vi.spyOn(api, 'getAgentCapabilities').mockResolvedValue(agentCapabilities())
+    vi.spyOn(api, 'getAgentProfileSettings').mockResolvedValue({
+      state: 'unset',
+      profiles: null,
+      revision: '0'.repeat(64),
+      updated_at: null,
+      issue: null,
+    })
     const preview = vi.spyOn(api, 'previewAgentRun').mockImplementation(async (req) => ({
       ...previewOf(req.profiles, req.authorized, req.egress_authorized),
       prompt: '从当前盘面续跑',

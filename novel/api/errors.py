@@ -22,6 +22,7 @@ errors.py —— 异常 → HTTP 状态码的**唯一落点**。纯函数，**�
 from __future__ import annotations
 
 from novel.errors import (
+    AgentProfileSettingsConflict,
     ApprovalFrozen,
     AccountingKeyUnregistered,
     ApprovalRequired,
@@ -116,6 +117,7 @@ STATUS: dict[type[NovelError], int] = {
     #: ⚠ 单本入口才会看到它；批量入口 `POST /api/agent/runs/batch` 把它接住改成排队。
     AgentBusy: 409,
     QueueConflict: 409,
+    AgentProfileSettingsConflict: 409,
     #: 人敲了一条这个节点没有的跑法 ⇒ 产地是**客户端**。
     UnsupportedRunMode: 400,
     # ── 代码自相矛盾（`RefusedByStructure`）。**是 bug，栈要留全** ──

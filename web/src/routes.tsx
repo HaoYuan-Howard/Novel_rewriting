@@ -12,6 +12,7 @@ import { Stage6Screen } from '@/screens/stage6/Stage6Screen'
 import { Stage7Screen } from '@/screens/stage7/Stage7Screen'
 import { InboxScreen } from '@/screens/inbox/InboxScreen'
 import { RunScreen } from '@/screens/run/RunScreen'
+import { SettingsScreen } from '@/screens/settings/SettingsScreen'
 
 /** 换书 / 换章都整棵重挂：屏内的选中、开关、编辑中的文本不会跟过去 */
 function Keyed({ children }: { children: React.ReactNode }) {
@@ -49,6 +50,7 @@ export function AppRoutes() {
     <Routes>
       <Route element={<AppShell />}>
         <Route path="/" element={<CorpusScreen />} />
+        <Route path="/settings" element={<SettingsScreen />} />
 
         <Route path="/n/:sid" element={<BookLayout />}>
           <Route index element={<Navigate to="stage0" replace />} />

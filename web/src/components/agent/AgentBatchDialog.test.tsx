@@ -6,12 +6,13 @@ import {
 } from '@/test/agent'
 import type {
   AgentBatchRequest,
+  AgentProfileSettingsView,
   AgentQueueView,
   AgentRunRecord,
 } from '@/types/agent'
 import { screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { renderRoute } from '@/test/render'
 import { AgentBatchDialog } from './AgentBatchDialog'
 
@@ -40,7 +41,19 @@ function running(req: AgentBatchRequest, sid: string): AgentRunRecord {
   }
 }
 
+const UNSET_SETTINGS: AgentProfileSettingsView = {
+  state: 'unset',
+  profiles: null,
+  revision: '0'.repeat(64),
+  updated_at: null,
+  issue: null,
+}
+
 describe('AgentBatchDialog', () => {
+  beforeEach(() => {
+    vi.spyOn(api, 'getAgentProfileSettings').mockResolvedValue(UNSET_SETTINGS)
+  })
+
   it('default_profiles=null 时不受理，也不拿第一项填充整批配置', async () => {
     vi.spyOn(api, 'getAgentCapabilities').mockResolvedValue(agentCapabilities(null))
     vi.spyOn(api, 'getAgentQueue').mockResolvedValue({
@@ -53,7 +66,7 @@ describe('AgentBatchDialog', () => {
       '/n/book-1/stage0',
     )
 
-    expect(await screen.findByText(/服务端尚未发布默认 Agent 配置/)).toBeVisible()
+    expect(await screen.findByText(/尚未保存常用 Agent 配置/)).toBeVisible()
     expect(screen.getByRole('combobox', { name: '指挥大脑 driver' })).toHaveValue('')
     const button = screen.getByRole('button', {
       name: '需先授权模型调用费用',
