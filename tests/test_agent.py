@@ -24,7 +24,14 @@ from types import SimpleNamespace
 
 import pytest
 
+from contracts.artifacts import (
+    STAGE2_GLOBAL_EDIT, STAGE2_GLOBAL_REVIEW_DECISIONS,
+)
 from contracts.invariants import AGENT_EXECUTOR_NODES
+from contracts.schema import decode_artifact, encode_artifact
+from contracts.schema.api import ExecutionPermit
+from contracts.schema.evaluation import GlobalReviewDecisionSet
+from contracts.schema.stage2 import GlobalEdit
 from contracts.schema.orchestration import (
     AgentDeliveryOutcome, AgentProfile, AgentRunEvent, AgentRunStart,
     ExecutionEpoch, PipelineAgentProfiles, ProgressEvent, RunContractV2, Step,
@@ -35,7 +42,9 @@ from novel.commanders import (
     CommanderInvocation, CommanderObservation, CommanderProcessResult,
 )
 from novel.errors import TerminalState
-from novel.orchestrator import admission, agent, beacon, jobs
+from novel.orchestrator import (
+    admission, agent, beacon, execution_permit, jobs, nodes,
+)
 from novel.orchestrator.jobs import JobConflict
 
 
@@ -294,6 +303,181 @@ def test_prompt_is_reviewer_only_and_contains_no_control_plane_instructions(base
     assert 'run_step' not in text
     assert 'operator next' not in text
     assert 'finalizer' not in text
+
+
+def test_stage2_reviewer_node_input_uses_service_edit_path_until_run_finishes(
+        base, book, monkeypatch):
+    """同 epoch 多轮 reviewer 的 permit 与 CLI 各消费自己的 service edit。"""
+    logical = {
+        'actor': 'agent:novel-pipeline-operator',
+        'decisions': [],
+        'blocking_scope': {
+            'expected_source_sha256': '1' * 64,
+            'expected_blocking_scope_sha256': '2' * 64,
+            'expected_workpack_sha256': '3' * 64,
+            'expected_item_count': 1,
+            'reviewed_chapter_ordinals': [1],
+            'state': 'UNVER',
+            'reason': '已阅读当前工作包；证据不足，保持关闭式结论',
+            'evidence': [],
+        },
+    }
+    payload = encode_artifact(STAGE2_GLOBAL_REVIEW_DECISIONS, logical)
+    action = agent.reviewer_tasks.ReviewerNodeAction(
+        kind='node', node='stage2.global',
+        flags=('--review-decisions', '@reviewer-input'),
+        input_payload=payload,
+    )
+    epoch = ExecutionEpoch(
+        epoch_id='same-epoch-stage2-review', ordinal=1, reason='initial',
+        argv=['commander', 'headless'], prompt_sha256='4' * 64,
+        protocol_version='test-protocol', cli_version='test-cli',
+        code_version='test-code-version', skill_sha256='5' * 64,
+        session_run_id='same-session-stage2-review')
+    input_paths: list[Path] = []
+    token_paths: list[Path] = []
+    completed = SimpleNamespace(exit_code=0)
+
+    def mint(actual_base, actual_sid, actual_node, flags):
+        assert (actual_base, actual_sid, actual_node) == (
+            base, '42', 'stage2.global')
+        path = Path(flags[1]).resolve()
+        input_paths.append(path)
+        assert flags[0] == '--review-decisions'
+        assert path.is_relative_to(
+            (Path(base) / '_service' / 'edits' / '42').resolve())
+        assert not path.is_relative_to(paths.scratch_dir(base).resolve())
+        assert execution_permit._resolve_external_path_at(
+            base=base, sid='42', node='stage2.global',
+            flag='--review-decisions', raw=str(path)) == path
+        raw_bytes = path.read_bytes()
+        decoded = decode_artifact(
+            STAGE2_GLOBAL_REVIEW_DECISIONS, json.loads(raw_bytes))
+        GlobalReviewDecisionSet.model_validate(decoded.payload)
+        permit_payload = {
+            'base': os.path.abspath(base),
+            'sid': '42',
+            'code_version': epoch.code_version,
+            'surface_seal': '6' * 64,
+            'next_state': 'blocked',
+            'waiting_on': 'stage2_global_review',
+            'kind': 'recovery',
+            'node': actual_node,
+            'flags': list(flags),
+            'paid': nodes.is_paid(actual_node, flags),
+            'writes': nodes.write_effect(actual_node, flags),
+            'operator_action_sha256': None,
+            'external_inputs': [{
+                'flag': '--review-decisions',
+                'argument': flags[1],
+                'resolved_path': str(path),
+                'bytes': len(raw_bytes),
+                'sha256': hashlib.sha256(raw_bytes).hexdigest(),
+            }],
+        }
+        return ExecutionPermit(
+            **permit_payload,
+            permit_sha256=agent.operator.canonical_sha256(permit_payload))
+
+    def run_token(actual_permit):
+        assert Path(actual_permit.external_inputs[0].resolved_path).is_file()
+        argv = agent._run_step_argv(
+            base, '42', epoch, actual_permit,
+            stem='reviewer-stage2.global')
+        token_path = Path(argv[argv.index('--operator-permit-file') + 1])
+        token_paths.append(token_path)
+        assert actual_permit.permit_sha256[:20] in token_path.name
+        assert agent._run_step_argv(
+            base, '42', epoch, actual_permit,
+            stem='reviewer-stage2.global') == argv
+        assert execution_permit.load_execution_permit_file(
+            token_path) == actual_permit
+        assert argv[argv.index('--execute') + 1:] == [
+            actual_permit.node, '--', *actual_permit.flags]
+        return completed
+
+    monkeypatch.setattr(agent.operator, 'permit', mint)
+    for _ in range(2):
+        assert agent._execute_reviewer_node_action(
+            base, '42', action, run_token) is completed
+        assert not input_paths[-1].exists()
+
+    assert len(set(input_paths)) == len(set(token_paths)) == 2
+    assert all(path.is_file() for path in token_paths)
+    assert token_paths[0].read_bytes() != token_paths[1].read_bytes()
+
+    with pytest.raises(RuntimeError, match='模拟 permit 失败'):
+        def fail_after_permit(actual_permit):
+            run_token(actual_permit)
+            raise RuntimeError('模拟 permit 失败')
+
+        agent._execute_reviewer_node_action(
+            base, '42', action, fail_after_permit)
+    assert not input_paths[-1].exists()
+
+
+def test_action_failure_detail_prefers_the_exact_terminal_line(tmp_path):
+    log = tmp_path / 'agent.log'
+    prefix = '较早的 Commander 输出\n'.encode('utf-8')
+    log.write_bytes(prefix + (
+        "[stderr]\n✗ 人工 Stage2 订正被落盘闸门拦下："
+        "['role_repeats_name']\n[1] 后续命令摘要\n").encode('utf-8'))
+
+    detail = agent._action_failure_detail(log, len(prefix))
+
+    assert detail == (
+        "✗ 人工 Stage2 订正被落盘闸门拦下：['role_repeats_name']")
+
+
+def test_same_epoch_reviewer_approval_inputs_keep_each_typed_payload(base):
+    """同一 surface 重审时保留两份输入；相同 payload 仍幂等复用。"""
+    epoch = ExecutionEpoch(
+        epoch_id='same-epoch-design-review', ordinal=1, reason='initial',
+        argv=['commander', 'headless'], prompt_sha256='7' * 64,
+        protocol_version='test-protocol', cli_version='test-cli',
+        code_version='test-code-version', skill_sha256='8' * 64,
+        session_run_id='same-session-design-review')
+    first = agent.reviewer_tasks.ReviewerApprovalAction(
+        kind='approval', surface='design', payload={'decision': 'first'})
+    second = agent.reviewer_tasks.ReviewerApprovalAction(
+        kind='approval', surface='design', payload={'decision': 'second'})
+
+    first_argv = agent._reviewer_approval_argv(base, '42', epoch, first)
+    second_argv = agent._reviewer_approval_argv(base, '42', epoch, second)
+    repeated_argv = agent._reviewer_approval_argv(base, '42', epoch, first)
+    first_path = Path(first_argv[first_argv.index('--input') + 1])
+    second_path = Path(second_argv[second_argv.index('--input') + 1])
+
+    assert first_path != second_path
+    assert repeated_argv == first_argv
+    assert json.loads(first_path.read_text('utf-8')) == first.payload
+    assert json.loads(second_path.read_text('utf-8')) == second.payload
+
+
+def test_stage2_reviewer_global_edit_uses_the_same_typed_service_transport(
+        base, book):
+    edit = GlobalEdit.model_validate({
+        'characters': [{
+            'char_id': 'char_001',
+            'name_distinctiveness': 'high',
+        }],
+    })
+    action = agent.reviewer_tasks.ReviewerNodeAction(
+        kind='node', node='stage2.global',
+        flags=('--apply-edit', '@reviewer-input'),
+        input_payload=encode_artifact(
+            STAGE2_GLOBAL_EDIT,
+            edit.model_dump(mode='json', by_alias=True, exclude_unset=True)),
+    )
+
+    with agent._reviewer_node_flags(base, '42', action) as flags:
+        path = Path(flags[1])
+        assert flags[0] == '--apply-edit'
+        assert path.is_relative_to(
+            (Path(base) / '_service' / 'edits' / '42').resolve())
+        decoded = decode_artifact(STAGE2_GLOBAL_EDIT, json.loads(path.read_bytes()))
+        assert GlobalEdit.model_validate(decoded.payload) == edit
+    assert not path.exists(), '完整同步执行结束后只清理本次 UUID service edit'
 
 
 def test_prompt_forbids_direct_edits_of_formal_artifacts(base, book):
@@ -574,6 +758,402 @@ def test_unregistered_deterministic_blocker_keeps_epoch_and_parent_end_in_sync(
     assert closed.exit_code == ended.exit_code == 2
     assert ended.outcome is not None and ended.outcome.state == 'stopped'
     assert '没有登记' in ended.outcome.reason
+
+
+def test_non_stage2_invalid_reviewer_request_and_exit2_resume_same_commander_session(
+        base, corpus, monkeypatch):
+    """非 Stage2 reviewer 仍可紧凑纠错；两轮硬预算只属于 global。"""
+    current = SimpleNamespace(
+        state='blocked', code_version='test-code-version',
+        surface_seal='c' * 64, execution_token=None,
+        action=SimpleNamespace(
+            waiting_on='stage6.approve',
+            action_sha256='d' * 64,
+        ),
+    )
+    monkeypatch.setattr(
+        agent.operator, 'next_action_at_code',
+        lambda _base, _sid, *, code: current)
+    outcome = AgentDeliveryOutcome(
+        state='stopped', reason='Stage2 仍待审阅', checked_at=1)
+    monkeypatch.setattr(agent, '_assess_delivery', lambda *_args, **_kwargs: outcome)
+
+    task_box = {}
+
+    def build_task(_base, _sid, _current, request_path, *, epoch_id):
+        del epoch_id
+        task = agent.reviewer_tasks.ReviewerTask(
+            waiting_on='stage6.approve',
+            surface_seal=current.surface_seal,
+            business_sha256='e' * 64,
+            request_path=Path(request_path),
+            prompt='INITIAL LARGE IMMUTABLE WORKPACK',
+            submission_options=(),
+        )
+        task_box['task'] = task
+        return task
+
+    monkeypatch.setattr(agent.reviewer_tasks, 'build_task', build_task)
+    loaded = 0
+    actions = (
+        agent.reviewer_tasks.ReviewerNodeAction(
+            kind='node', node='stage6.approve', flags=('--pick', '1')),
+        agent.reviewer_tasks.ReviewerNodeAction(
+            kind='node', node='stage6.approve', flags=('--pick', '2')),
+    )
+
+    def load_action(_path, _current, *, submission_options):
+        nonlocal loaded
+        assert submission_options == ()
+        loaded += 1
+        if loaded == 1:
+            raise agent.reviewer_tasks.ReviewerTaskError(
+                'patch subject 多出了 secret_08')
+        return actions[loaded - 2]
+
+    monkeypatch.setattr(agent.reviewer_tasks, 'load_action', load_action)
+    executed = 0
+
+    def execute(_base, _sid, action, _run_token):
+        nonlocal executed
+        assert action is actions[executed]
+        executed += 1
+        return agent.SupervisorActionResult(
+            exit_code=(2 if executed == 1 else 0),
+            outcome=outcome, continue_ready=False)
+
+    monkeypatch.setattr(agent, '_execute_reviewer_node_action', execute)
+    invocations = []
+
+    def default_spawn(_run_id, *, on_registered=None):
+        def spawn(invocation, env, log):
+            del env, log
+            invocations.append(invocation)
+            assert on_registered is not None
+            on_registered()
+            task = task_box['task']
+            task.request_path.parent.mkdir(parents=True, exist_ok=True)
+            task.request_path.write_text(
+                json.dumps({'commander_turn': len(invocations)}),
+                encoding='utf-8')
+            return CommanderProcessResult(
+                exit_code=0,
+                observation=CommanderObservation(
+                    provider_session_id='provider-review-correction',
+                    actual_model=invocation.profile.model,
+                    actual_effort=invocation.profile.reasoning_effort,
+                    usage=None))
+        return spawn
+
+    monkeypatch.setattr(agent, '_default_spawn', default_spawn)
+    rec = agent.start(
+        base, '42', authorized=True, egress_authorized=True,
+        profiles=_PROFILES, spawn=None)
+    assert agent.wait(rec.run_id, 10)
+
+    assert executed == 2 and loaded == 3
+    assert [row.resume_provider_session_id for row in invocations] == [
+        None, 'provider-review-correction', 'provider-review-correction']
+    assert invocations[0].stdin_text == 'INITIAL LARGE IMMUTABLE WORKPACK'
+    assert 'patch subject 多出了 secret_08' in invocations[1].stdin_text
+    assert 'INITIAL LARGE IMMUTABLE WORKPACK' not in invocations[1].stdin_text
+    assert '返回 exit 2' in invocations[2].stdin_text
+    [done] = [row for row in agent.records(base) if row.run_id == rec.run_id]
+    assert done.exit_code == 0
+    [session] = agent_session_audit.fold(
+        agent_session_audit.read_events(base))
+    assert [turn.turn_index for turn in session.turns] == [1, 2, 3]
+
+
+def test_stage2_exit2_corrects_before_invalid_surface_can_replace_reviewer(
+        base, corpus, monkeypatch):
+    """真实故障回归：HARD 留 INVALID 后仍先 exact-resume 最后一轮纠错。"""
+    review_current = SimpleNamespace(
+        state='blocked', code_version='test-code-version',
+        surface_seal='c' * 64, execution_token=None,
+        action=SimpleNamespace(
+            waiting_on=agent.queue.WAITING_ON_STAGE2_REVIEW,
+            action_sha256='d' * 64,
+        ),
+    )
+    changed_current = SimpleNamespace(
+        state='blocked', code_version='test-code-version',
+        surface_seal='1' * 64, execution_token=None,
+        action=SimpleNamespace(
+            waiting_on=agent.queue.WAITING_ON_RESUME_DECISION,
+            action_sha256='2' * 64,
+        ),
+    )
+    next_calls = 0
+
+    def next_action(_base, _sid, *, code):
+        nonlocal next_calls
+        assert code == 'test-code-version'
+        next_calls += 1
+        return review_current if next_calls <= 2 else changed_current
+
+    monkeypatch.setattr(agent.operator, 'next_action_at_code', next_action)
+    blocked = AgentDeliveryOutcome(
+        state='stopped', reason='Stage2 仍待审阅', checked_at=1)
+    ready = AgentDeliveryOutcome(
+        state='ready', reason='Stage2 纠错已落盘', checked_at=2)
+    monkeypatch.setattr(agent, '_assess_delivery', lambda *_args, **_kwargs: blocked)
+    task_box = {}
+
+    def build_task(_base, _sid, _current, request_path, *, epoch_id):
+        del epoch_id
+        task = agent.reviewer_tasks.ReviewerTask(
+            waiting_on=agent.queue.WAITING_ON_STAGE2_REVIEW,
+            surface_seal=review_current.surface_seal,
+            business_sha256='e' * 64,
+            request_path=Path(request_path),
+            prompt='STAGE2 IMMUTABLE REVIEW WORKPACK',
+            submission_options=(),
+        )
+        task_box['task'] = task
+        return task
+
+    monkeypatch.setattr(agent.reviewer_tasks, 'build_task', build_task)
+    actions = (
+        agent.reviewer_tasks.ReviewerNodeAction(
+            kind='node', node='stage2.global',
+            flags=('--apply-edit', 'first')),
+        agent.reviewer_tasks.ReviewerNodeAction(
+            kind='node', node='stage2.global',
+            flags=('--apply-edit', 'corrected')),
+    )
+    loaded = 0
+
+    def load_action(_path, current, *, submission_options):
+        nonlocal loaded
+        assert current is review_current
+        assert submission_options == ()
+        action = actions[loaded]
+        loaded += 1
+        return action
+
+    monkeypatch.setattr(agent.reviewer_tasks, 'load_action', load_action)
+    executed = 0
+
+    def execute(_base, _sid, action, _run_token):
+        nonlocal executed
+        assert action is actions[executed]
+        executed += 1
+        if executed == 1:
+            return agent.SupervisorActionResult(
+                exit_code=2, outcome=blocked, continue_ready=False,
+                failure_detail=(
+                    '✗ 人工 Stage2 订正被落盘闸门拦下：'
+                    "['role_repeats_name']"))
+        return agent.SupervisorActionResult(
+            exit_code=0, outcome=ready, continue_ready=False)
+
+    monkeypatch.setattr(agent, '_execute_reviewer_node_action', execute)
+    invocations = []
+
+    def default_spawn(_run_id, *, on_registered=None):
+        def spawn(invocation, env, log):
+            del env, log
+            invocations.append(invocation)
+            assert on_registered is not None
+            on_registered()
+            task = task_box['task']
+            task.request_path.parent.mkdir(parents=True, exist_ok=True)
+            task.request_path.write_text(
+                json.dumps({'commander_turn': len(invocations)}),
+                encoding='utf-8')
+            return CommanderProcessResult(
+                exit_code=0,
+                observation=CommanderObservation(
+                    provider_session_id='provider-stage2-correction',
+                    actual_model=invocation.profile.model,
+                    actual_effort=invocation.profile.reasoning_effort,
+                    usage=None))
+        return spawn
+
+    monkeypatch.setattr(agent, '_default_spawn', default_spawn)
+    rec = agent.start(
+        base, '42', authorized=True, egress_authorized=True,
+        profiles=_PROFILES, spawn=None)
+    assert agent.wait(rec.run_id, 10)
+
+    assert next_calls == 2, 'exit 2 后不应先让 changed surface 抢走 reviewer'
+    assert loaded == executed == len(invocations) == 2
+    assert [row.resume_provider_session_id for row in invocations] == [
+        None, 'provider-stage2-correction']
+    assert 'role_repeats_name' in invocations[1].stdin_text
+    assert 'STAGE2 IMMUTABLE REVIEW WORKPACK' not in invocations[1].stdin_text
+    [done] = [row for row in agent.records(base) if row.run_id == rec.run_id]
+    assert done.exit_code == 0
+
+
+def test_stage2_global_never_starts_a_third_commander_turn(
+        base, corpus, monkeypatch):
+    """即使两次 typed 输出都坏，硬预算也按真实模型调用计数并停止。"""
+    current = SimpleNamespace(
+        state='blocked', code_version='test-code-version',
+        surface_seal='c' * 64, execution_token=None,
+        action=SimpleNamespace(
+            waiting_on=agent.queue.WAITING_ON_STAGE2_REVIEW,
+            action_sha256='d' * 64,
+        ),
+    )
+    monkeypatch.setattr(
+        agent.operator, 'next_action_at_code',
+        lambda _base, _sid, *, code: current)
+    outcome = AgentDeliveryOutcome(
+        state='stopped', reason='Stage2 仍待审阅', checked_at=1)
+    monkeypatch.setattr(agent, '_assess_delivery', lambda *_args, **_kwargs: outcome)
+    task_box = {}
+
+    def build_task(_base, _sid, _current, request_path, *, epoch_id):
+        del epoch_id
+        task = agent.reviewer_tasks.ReviewerTask(
+            waiting_on=agent.queue.WAITING_ON_STAGE2_REVIEW,
+            surface_seal=current.surface_seal,
+            business_sha256='e' * 64,
+            request_path=Path(request_path),
+            prompt='STAGE2 FULL REVIEW',
+            submission_options=(),
+        )
+        task_box['task'] = task
+        return task
+
+    monkeypatch.setattr(agent.reviewer_tasks, 'build_task', build_task)
+    loaded = 0
+
+    def load_action(_path, _current, *, submission_options):
+        nonlocal loaded
+        assert submission_options == ()
+        loaded += 1
+        raise agent.reviewer_tasks.ReviewerTaskError(
+            f'第 {loaded} 次 typed 请求仍不合法')
+
+    monkeypatch.setattr(agent.reviewer_tasks, 'load_action', load_action)
+    invocations = []
+
+    def default_spawn(_run_id, *, on_registered=None):
+        def spawn(invocation, env, log):
+            del env, log
+            invocations.append(invocation)
+            assert on_registered is not None
+            on_registered()
+            task = task_box['task']
+            task.request_path.parent.mkdir(parents=True, exist_ok=True)
+            task.request_path.write_text(
+                json.dumps({'commander_turn': len(invocations)}),
+                encoding='utf-8')
+            return CommanderProcessResult(
+                exit_code=0,
+                observation=CommanderObservation(
+                    provider_session_id='provider-stage2-two-turns',
+                    actual_model=invocation.profile.model,
+                    actual_effort=invocation.profile.reasoning_effort,
+                    usage=None))
+        return spawn
+
+    monkeypatch.setattr(agent, '_default_spawn', default_spawn)
+    rec = agent.start(
+        base, '42', authorized=True, egress_authorized=True,
+        profiles=_PROFILES, spawn=None)
+    assert agent.wait(rec.run_id, 10)
+
+    assert loaded == 2
+    assert len(invocations) == 2
+    assert [row.resume_provider_session_id for row in invocations] == [
+        None, 'provider-stage2-two-turns']
+    [done] = [row for row in agent.records(base) if row.run_id == rec.run_id]
+    assert done.exit_code == 2
+    assert done.outcome is not None
+    assert '拒绝启动第三轮' in done.outcome.reason
+    [session] = agent_session_audit.fold(
+        agent_session_audit.read_events(base))
+    assert [turn.turn_index for turn in session.turns] == [1, 2]
+
+
+def test_durable_stage2_correction_has_only_the_final_commander_turn(
+        base, corpus, monkeypatch):
+    """重启从 reviewed-edit INVALID 恢复时，不能重新发放两轮预算。"""
+    current = SimpleNamespace(
+        state='blocked', code_version='test-code-version',
+        surface_seal='c' * 64, execution_token=None,
+        action=SimpleNamespace(
+            waiting_on=agent.queue.WAITING_ON_STAGE2_EDIT_CORRECTION,
+            action_sha256='d' * 64,
+        ),
+    )
+    monkeypatch.setattr(
+        agent.operator, 'next_action_at_code',
+        lambda _base, _sid, *, code: current)
+    stopped = AgentDeliveryOutcome(
+        state='stopped', reason='Stage2 最终纠正仍被拒绝', checked_at=1)
+    monkeypatch.setattr(agent, '_assess_delivery', lambda *_args, **_kwargs: stopped)
+    task_box = {}
+
+    def build_task(_base, _sid, _current, request_path, *, epoch_id):
+        del epoch_id
+        task = agent.reviewer_tasks.ReviewerTask(
+            waiting_on=agent.queue.WAITING_ON_STAGE2_EDIT_CORRECTION,
+            surface_seal=current.surface_seal,
+            business_sha256='e' * 64,
+            request_path=Path(request_path),
+            prompt='STAGE2 FINAL DURABLE CORRECTION',
+            submission_options=(),
+        )
+        task_box['task'] = task
+        return task
+
+    monkeypatch.setattr(agent.reviewer_tasks, 'build_task', build_task)
+    action = agent.reviewer_tasks.ReviewerNodeAction(
+        kind='node', node='stage2.global',
+        flags=('--apply-edit', 'final-correction'))
+    monkeypatch.setattr(
+        agent.reviewer_tasks, 'load_action',
+        lambda _path, _current, *, submission_options: action)
+    executed = 0
+
+    def execute(_base, _sid, got, _run_token):
+        nonlocal executed
+        assert got is action
+        executed += 1
+        return agent.SupervisorActionResult(
+            exit_code=2, outcome=stopped, continue_ready=False,
+            failure_detail="✗ 仍命中 ['role_repeats_name']")
+
+    monkeypatch.setattr(agent, '_execute_reviewer_node_action', execute)
+    invocations = []
+
+    def default_spawn(_run_id, *, on_registered=None):
+        def spawn(invocation, env, log):
+            del env, log
+            invocations.append(invocation)
+            assert on_registered is not None
+            on_registered()
+            task = task_box['task']
+            task.request_path.parent.mkdir(parents=True, exist_ok=True)
+            task.request_path.write_text(
+                json.dumps({'commander_turn': 1}), encoding='utf-8')
+            return CommanderProcessResult(
+                exit_code=0,
+                observation=CommanderObservation(
+                    provider_session_id='provider-stage2-final',
+                    actual_model=invocation.profile.model,
+                    actual_effort=invocation.profile.reasoning_effort,
+                    usage=None))
+        return spawn
+
+    monkeypatch.setattr(agent, '_default_spawn', default_spawn)
+    rec = agent.start(
+        base, '42', authorized=True, egress_authorized=True,
+        profiles=_PROFILES, spawn=None)
+    assert agent.wait(rec.run_id, 10)
+
+    assert executed == 1
+    assert len(invocations) == 1
+    [done] = [row for row in agent.records(base) if row.run_id == rec.run_id]
+    assert done.exit_code == 2
+    assert done.outcome is not None
+    assert '拒绝启动第三轮' in done.outcome.reason
 
 
 def test_ready_action_exact_resumes_same_commander_session(
@@ -1905,6 +2485,48 @@ def test_a_current_non_empty_review_package_passes(base):
 
     d = _delivery_book(base, review='# 终审包\n结论：可交付\n')
     assert delivery._review_package_refused(d) is None
+
+
+def test_delivery_reports_quarantined_stage2_unver_as_disclosure_not_failure(
+        base, monkeypatch):
+    from novel.orchestrator import delivery
+    from novel.quality.global_review import GenerationSafety
+
+    novel_dir = Path(base) / 'FQ_隔离交付_77'
+    novel_dir.mkdir()
+
+    class BlueprintStore:
+        @staticmethod
+        def schema_version(_rel):
+            return 7
+
+        @staticmethod
+        def read_own(_model, _rel, **_kwargs):
+            return SimpleNamespace(), {}
+
+    monkeypatch.setattr(delivery.prov, 'code_version', lambda: 'same-code')
+    monkeypatch.setattr(
+        delivery.paths, 'resolve_novel_dir', lambda _base, _sid: novel_dir)
+    monkeypatch.setattr(delivery, 'ArtifactStore', lambda _ctx: BlueprintStore())
+    monkeypatch.setattr(
+        delivery.global_review, 'generation_status',
+        lambda _ctx: (
+            GenerationSafety(
+                current=True, safe=True, all_pass=False,
+                quarantined_groups=('secret:secret_01',),
+                blocking_item_ids=()),
+            {'UNVER': 1},
+        ))
+    monkeypatch.setattr(
+        delivery.assemble, 'read_current_book', lambda *_args, **_kwargs: '成书')
+    monkeypatch.setattr(delivery, '_review_package_refused', lambda _dir: None)
+    monkeypatch.setattr(
+        delivery, 'inbox_view', lambda _base, _sid: SimpleNamespace(items=[]))
+
+    outcome = delivery.assess(
+        base, '77', start_code_version='same-code')
+    assert outcome.state == 'ready_with_disclosures'
+    assert 'secret:secret_01' in outcome.reason
 
 
 def test_an_unknown_code_fingerprint_is_never_read_as_the_same_code(base, monkeypatch):

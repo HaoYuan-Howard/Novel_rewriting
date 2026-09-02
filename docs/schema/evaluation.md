@@ -113,7 +113,10 @@ Global producer 实际读取的 MainText 输入身份；正文变化会重开这
 完整 typed subject。普通事实的旧决定只在 `(item_id, kind, subject_path, subject_sha256)` 四项完全不变时
 继承；上述六个整书项还须 MainText 输入身份不变，变过的项回到 `pending`。读 API 与 s2 gate 不信任盘上 `approved` 推论，而是从当前
 `GlobalGrounding` 重算完整 subject SHA 和现役必审 item surface：hash 过期、缺任一必审项、
-顺序/身份不一致或 blocking 面存在非 PASS 项，`approved=false`，不能开 gate；disclosure 未决项继续披露。
+顺序/身份不一致或 blocking 面存在非 PASS 项，`approved=false`；这格继续只表示“真值面全部
+PASS”，不得把 UNVER 改名。生成闸另算 `generation_safe`：除 PASS 外，只接受逐项携带
+`generation_disposition={action: quarantine_group, reason}`、且所属完整组在服务端删除白名单内的
+blocking UNVER；disclosure 未决项继续披露。
 
 真实决策入口为：
 
@@ -125,7 +128,8 @@ python -m novel.cli run stage2.global <sid> `
 同形服务入口为 `POST /api/novels/:sid/stage2/global-review`，读面为对应 GET。请求有两种关闭式形状：
 
 - 逐项 `decisions[]`：每项恰好一次，并带非空 `reason`、显式 `evidence[]` 与
-  `expected_subject_sha256`；
+  `expected_subject_sha256`；只有 `state=UNVER` 可选带
+  `generation_disposition={action: quarantine_group, reason}`，PASS/FAIL 在 schema 上不能携带；
 - 压缩 `blocking_scope`：绑定当前 `source_sha256`、完整 blocking
   `(item_id, subject_sha256)` 集合 SHA、项目数、正文章全集与实际只读 workpack SHA-256，
   给未列入 `decisions[]` 的 blocking
@@ -150,10 +154,24 @@ python -m novel.cli run stage2.global <sid> `
 `global_grounding.json`、`global_review.json` 与 `_rounds/` 的首个写动作前拒绝，人工重新生成并实际复核 v3、绑定新 SHA 后
 才可提交。workpack 版本是阅读凭证版本，不改变 `GlobalReviewDecisionSet` v2 或正式 artifact 版本。
 
+Stage2 global 的 Commander 闭环固定为最多两次真实模型调用：“首轮完整审阅 → 第二轮合并 typed
+GlobalEdit 与 `post_edit_review` 自审 → 收口”。FAIL 与人物、setting、arc、集合完整性等不可隔离
+UNVER 必须在首轮一次列全；第二轮执行 `stage2.global --emit-edit-template` 取得当前 v3 骨架，再通过
+`--apply-edit` 修改真实事实并提交绑定首轮 source/正文章全集的修后证明。producer 只把证明展开到本次
+edit 新打开的 blocking pending 项，未变化的旧红项不能被默认 PASS 洗绿；原样/no-op 模板、未闭合
+blocking 与漂移证明都在 Global/review 原子写盘前拒绝，且不启动第三轮。只有 `secret:<id>`、
+`relation:<id>`、`world_rule:<id>` 三类完整组可以选择 quarantine。隔离只生成下游内存视图：原始
+`global_grounding.json`、`global_review.json`
+及其 UNVER 审计不改写；下游 provenance 同时记录 grounding 与 review，并从写作视图删除完整组，
+秘密被删时还级联删除引用它的 `via_secret` relation。隔离后必须重新通过 `GlobalGrounding` schema，
+否则仍关闭并回到 GlobalEdit。
+
 `GlobalReviewDecisionSet` 因新增第二种形状由 v1 升为 v2。旧 v1 没有 scope hash 与正文章全集
 阅读声明，不自动迁移；由 `--emit-review-template` 零成本重发当前模板，人工复核后重新提交。
 
 两种形状都必须带自报 `actor`；这些字段是乐观锁与审计声明，不是认证身份。CLI 在写前再次读取当前完整底座并拒绝
-过期/缺项 review。POST 只有 CLI exit `0`（当前 blocking 面全部 PASS）才尝试盖 s2 章；exit `1`
-表示决定已落盘但仍有 FAIL/UNVER/pending，作业为 `landed_red`，gate 保持关闭。Inbox 把三种
-未闭合状态都列为 `verification`，GlobalScreen 提供逐项或批量提交入口。
+过期/缺项 review。CLI exit `0` 表示当前 blocking 面已 generation-safe：可能是全部 PASS，也可能
+仍有显式隔离的 UNVER；后者不能冒充 `approved=true`，交付态固定为
+`ready_with_disclosures`。exit `1` 表示决定已落盘但仍有 FAIL/pending、未处置或不可隔离 UNVER，
+作业为 `landed_red`，gate 保持关闭。Inbox 始终保留非 PASS verification；已隔离 UNVER 标为
+`reviewed_retained + disclosure`，GlobalScreen 提供逐项或批量提交入口。

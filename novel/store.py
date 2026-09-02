@@ -895,6 +895,27 @@ class ArtifactStore:
         """
         return self._write_formal(rel, artifact, retire_invalid=True)
 
+    def write_sparse_input(self, rel: str, artifact: BaseModel) -> Path:
+        """原子写一份字段出现性有语义的注册人工输入，不冒充正式 producer。
+
+        ``GlobalEdit`` 一类 patch model 用 ``model_fields_set`` 区分 absent 与显式
+        ``null``；普通正式产物渲染必须保留完整字段，不能全仓改成
+        ``exclude_unset``。这条窄口只接受不带 provenance 的输入模型，并在落盘前
+        走同一注册表 envelope 与 round-trip 校验。
+        """
+        key = paths.check_rel(rel)
+        if paths.is_invalid(key):
+            raise PathRefused(f'{key} 是 `.INVALID`，不能作为 sparse input 写入')
+        if provenance_field(type(artifact)) is not None:
+            raise ProvenanceRefused(
+                f'{key} 带 provenance；正式 producer 产物不能走 sparse input 写口')
+        data = self._render(key, artifact, exclude_unset=True)
+        self._verify_round_trip(key, type(artifact), data)
+        target = self.path(key)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        self._replace_atomically(target, data)
+        return target
+
     def refresh_formal(self, rel: str, artifact: BaseModel) -> Path:
         """只刷新一份**已经存在**的正式产物，不宣称它取代同名 ``.INVALID``。
 
@@ -2406,14 +2427,16 @@ class ArtifactStore:
                 f'代价是三份产物的来源账各漏各的，而没有任何一层出声')
 
     def _render(self, rel: str, artifact: BaseModel, *,
-                prov_override: Provenance | None = None) -> bytes:
+                prov_override: Provenance | None = None,
+                exclude_unset: bool = False) -> bytes:
         """产物 → **将要落盘的那串字节**。过写盘口那道闸，但一个字节都不写。
 
         ⚠ 抽出来是给 `promote_invalid` 用的：它要在**动归档之前**知道自己将要写什么，
         才能回答「盘上那份会不会被销毁」。见那边第②步。
         """
         name = provenance_field(type(artifact))
-        payload = artifact.model_dump(by_alias=True, mode='json')
+        payload = artifact.model_dump(
+            by_alias=True, mode='json', exclude_unset=exclude_unset)
         if name is not None:
             src = prov_override if prov_override is not None else getattr(artifact, name)
             self._refuse_bad_provenance(rel, src)

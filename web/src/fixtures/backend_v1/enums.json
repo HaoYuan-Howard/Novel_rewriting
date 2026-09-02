@@ -610,6 +610,9 @@
   "blocking",
   "disclosure"
  ],
+ "global_review_generation_dispositions": [
+  "quarantine_group"
+ ],
  "cache_policy": [
   "default",
   "refresh-write",
@@ -814,7 +817,8 @@
   "--wontfix": "把一条「这条我不修」记进 <stage>/wontfix.json，纯记账、不调用",
   "--retain-pretrim": "人工确认保留当前 trim audit 对应的原稿；只写 hash-bound resolution，0 次 LLM 调用（不是 0 人工成本）",
   "--retain-pretrim-batch": "按显式 manifest 一次销账多章 trim；整批预检、按章幂等写hash-bound resolution，0 次 LLM 调用",
-  "--emit-edit-template": "向 stdout 输出带当前 schema version 的 stage7 人工编辑空壳，不写盘",
+  "--emit-edit-template": "向 stdout 输出带当前 schema version 的人工编辑骨架；适用于 Stage2 GlobalEdit、Blueprint 与 Stage7，不写盘",
+  "--emit-edit-correction-workpack": "向 stdout 输出被 HARD 拒绝且仍绑定当前 INVALID 的 reviewed Stage2 GlobalEdit、精确失败事实与字节身份；只用于中断后的最后一次 Commander 纠正，不写盘",
   "--validate-edit": "按所属节点 apply-edit 的同一编译/判定链预检人工编辑，不写盘",
   "--emit-review-template": "向 stdout 输出绑定当前 stage2 全局复核项 hash/evidence 的安全 UNVER 决策骨架，不写盘",
   "--emit-review-workpack": "向 stdout 输出 Stage2 Global 逐项证据包，或 Blueprint 异常优先全章包；只辅助人工核验，不自动做决定",
@@ -876,6 +880,7 @@
   "--check-only": "",
   "--names-only": "",
   "--emit-edit-template": "",
+  "--emit-edit-correction-workpack": "",
   "--validate-edit": "",
   "--emit-review-template": "",
   "--emit-review-workpack": "",
@@ -1082,6 +1087,8 @@
     "--revalidate",
     "--apply-edit",
     "--review-decisions",
+    "--emit-edit-template",
+    "--emit-edit-correction-workpack",
     "--emit-review-template",
     "--emit-review-workpack",
     "--review-scope",
@@ -1582,6 +1589,32 @@
    "writes": "stage2/global_grounding.json · stage2/global_review.json · stage2/blueprint_character_projection.json",
    "writes_disk": true,
    "needs_value": "stage2/global_review 的人工决策集（相对当前书目录）",
+   "required_inputs": []
+  },
+  {
+   "kind": "stage2.global",
+   "label": "stage2 全书级抽取 --emit-edit-template",
+   "extra": [
+    "--emit-edit-template"
+   ],
+   "paid": false,
+   "free_flag": "--emit-edit-template",
+   "writes": "",
+   "writes_disk": false,
+   "needs_value": null,
+   "required_inputs": []
+  },
+  {
+   "kind": "stage2.global",
+   "label": "stage2 全书级抽取 --emit-edit-correction-workpack",
+   "extra": [
+    "--emit-edit-correction-workpack"
+   ],
+   "paid": false,
+   "free_flag": "--emit-edit-correction-workpack",
+   "writes": "",
+   "writes_disk": false,
+   "needs_value": null,
    "required_inputs": []
   },
   {

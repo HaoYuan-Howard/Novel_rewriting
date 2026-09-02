@@ -92,6 +92,11 @@ EXECUTOR_PROFILED_NODES = tuple(EXECUTOR_PROFILED_RUNS)
 #: 可能被排在后面的 ``--dry-run`` / ``--check-only`` 盖成“不写盘”，preview 就会
 #: 对实际写盘说假话。这里关闭式拒收，展示与执行共用同一道门。
 _PRIMARY_OPERATIONS = {
+    'stage2.global': frozenset({
+        '--renormalize', '--purge-role', '--resample', '--revalidate',
+        '--apply-edit', '--review-decisions', '--emit-edit-template',
+        '--emit-review-template', '--emit-review-workpack',
+    }),
     'stage2.blueprint': frozenset({
         '--dry-run', '--check-only', '--renormalize', '--patch',
         '--revalidate', '--emit-review-workpack', '--emit-edit-template',

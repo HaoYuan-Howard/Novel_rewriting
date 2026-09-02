@@ -39,6 +39,8 @@ rg -n "stage6|hook_para_sep|exit 70" .workflow/skills/novel-pipeline-operator/re
 | FN-021 | METRIC/UNVER 重复出现不是 stalled | contract-confirmed | `stalled`, `unresolved_rounds`, `metric`, `unver` | 只让 HARD/INFO 进入 stalled；不要给读数编修复任务 |
 | FN-022 | 长退出序列用无损 RLE 与完整摘要双重锁定 | contract-confirmed | `exit_sequence_compact_text`, `exit_sequence_sha256`, 终审包 | 复制收集器输出，不手抄连续同项 |
 | FN-023 | Stage4B 拒稿先看 owner，再决定等不等 | contract-confirmed | `typed_failures`, `repair_owner`, `_llm_rejected`, `GateBlocked` | 按 witness 的 owner 走 revalidate / A 返修 / 上游修复，不重跑 B |
+| FN-024 | GlobalEdit patch 不能借合法格式发明新 subject | contract-confirmed | `stage2.global`, `GlobalEdit`, 不存在的 subject, exit 2 | patch 保留模板 identity；新增/拆分等 `set_complete=FAIL` 后走完整 replacement |
+| FN-025 | Reviewed GlobalEdit 的 HARD 拒绝必须先于 Blueprint redo 恢复 | contract-confirmed | `global_edit.json`, current `.INVALID`, stale Blueprint | 绑定失败 edit/INVALID 给最终 Commander；重启不重置两轮预算 |
 
 ### FN-001 · stage0 批准前的预期红灯
 
@@ -78,13 +80,15 @@ rg -n "stage6|hook_para_sep|exit 70" .workflow/skills/novel-pipeline-operator/re
   完成度；review 的 blocking 面收口也只证明人审支路完成。Blueprint 只等待 current/fresh 称名投影：
   非称名 HARD 留下的 schema-valid Global `.INVALID` 可先物化投影并继续计算；称名 HARD 未收口则投影为
   `unknown/global_naming_blocked`，只能先 typed edit / `--revalidate`（0 LLM），不能 renormalize 或付费重采。
-  只有正式 blueprint 编译并通过联合 HARD，且 current review 的 blocking 面逐项 PASS，两支才真正汇合。
+  只有正式 blueprint 编译并通过联合 HARD，且 current review 的 blocking 面 generation-safe
+  （逐项 PASS，或仅余显式隔离的 secret/relation/world-rule 完整组），两支才真正汇合。
   disclosure 非 PASS 保留披露但不挡汇合。已经验证并 checkpoint 的章不应因别章失败重新付费。
 - 处置：先 `state` 看正式产物。manifest 点名恢复时必须使用同一 `run_id` resume，让成功章复验恢复；
   没有可恢复 sidecar 才按当前 preview 补跑缺失节点。global review 可与 blueprint 计算重叠，但必须在
   Stage4 前收齐；旧 style 不补跑、不迁移。
 - 验证：恢复章出现 `checkpoint_restored` 且新增 wire 为零；`stage2.blueprint --check-only` fresh 且无
-  HARD，review current 且 blocking 面逐项 PASS，`state` 显示 Stage2 完成；disclosure 未决项仍在 inbox /
+  HARD，review current 且 blocking 面 generation-safe，`state` 显示 Stage2 完成；隔离 UNVER 与
+  disclosure 未决项仍在 inbox /
   终审包披露。
 - 依据：`novel/llm/stage2_runs.py::restore_checkpoint`；
   `novel/stages/stage2/extract.py::_raise_response_repair`；
@@ -391,3 +395,47 @@ rg -n "stage6|hook_para_sep|exit 70" .workflow/skills/novel-pipeline-operator/re
   正反例都在 `contracts/invariants.py::STAGE4_FAILURE_OWNERS`。
 - 依据：`novel/stages/stage4/plan.py::run_plan` 与 `::_keep_business_witness`；
   `novel/llm/typed_failures.py`。
+
+### FN-024 · GlobalEdit patch 不能借合法格式发明新 subject
+
+- 状态：`contract-confirmed`
+- 触发：同一 Stage2 reviewer session 的第二轮 `stage2.global` GlobalEdit 看似符合 schema，却在 producer
+  报“编辑文件指向盘上不存在的 subject”；真实案例是在只含 `secret_06/secret_07` 的 patch
+  模板中追加了 `secret_08`。
+- 判断：`secret_08` 的格式合法只证明 schema 合法，不证明它是当前 patch 的可编辑主体。
+  patch 是对盘上既有稳定 ID 的局部更新；新增、删除或拆分只能走完整 `*_replace`。Stage2 只有
+  两次 Commander 调用，所以集合漏抽必须在首轮完整审阅时一并把 `set_complete` 判 FAIL，让第二轮
+  生产模板直接开放 replacement；若第二轮才发现而当前模板没有该写口，只能保留明确拒绝事实并停止，
+  不能靠第三次复审补救。把“新增 ID 格式”写进 patch binding 会误导 Commander。
+- 处置：`submission_options` 的 patch 行数、顺序、subject id、字段集合机械绑定；第二轮在同一
+  Commander provider session 中提交合并 edit 与 `post_edit_review`。非法请求或 canonical action 的
+  未落盘 exit 2 可以紧凑反馈，但真实纠错调用仍占两次总预算；相同字节或预算耗尽立即停止，等价已拒
+  业务动作也由 fingerprint 拦住。
+- 验证：`tests/test_reviewer_tasks.py::test_stage2_global_edit_cannot_invent_a_patch_subject` 与
+  `tests/test_agent.py::test_non_stage2_invalid_reviewer_request_and_exit2_resume_same_commander_session`、
+  `tests/test_agent.py::test_stage2_global_never_starts_a_third_commander_turn`。
+- 依据：真实 agent run `1788331093-cdc3607e` 的第二轮 typed action 在正式写盘前 exit 2；
+  `novel/orchestrator/reviewer_tasks.py::_validate_global_edit_binding`；
+  `novel/orchestrator/agent.py::_run_reviewer`。
+
+### FN-025 · Reviewed GlobalEdit 的 HARD 拒绝必须先于 Blueprint redo 恢复
+
+- 状态：`contract-confirmed`
+- 触发：Commander 已提交带 `post_edit_review` 的 `global_edit.json`，producer 在完整代码判据中生成 current
+  `.INVALID`；随后 Global 投影变化又让旧 Blueprint stale。若 planner 只看“Global formal 已存在”，会直接
+  落到 `resume:manual-decision`，精确拒绝原因与最后一次返工机会一起丢失。
+- 判断：这是 reviewer action 的持久未完成态，不是新的 Blueprint 决策，更不是再跑一次 Executor。
+  失败 edit、current INVALID、revalidation baseline 与正式 review 四者能逐字对证时，队列必须先返回
+  `recovery:stage2-global-reviewed-edit`。同进程沿用 Commander provider session；进程或代码身份变化不能
+  冒充可续旧上下文，但也不能把两轮预算清零，只剩最终一次定向调用。
+- 处置：只发 combined correction workpack：正式 Global review + 失败 edit/INVALID 的 SHA 和具体 HARD；
+  不载入 Blueprint，不重读无关完整包。修正仍走原 GlobalEdit producer，成功后再按 freshness 决定是否
+  REDO Blueprint；失败则稳定停止，不开第三次 Commander。
+- 验证：`tests/test_orchestrator_queue.py::test_reviewed_global_edit_invalid_recovers_final_correction_before_blueprint`、
+  `tests/test_reviewer_tasks.py::test_stage2_durable_correction_uses_failed_edit_without_loading_blueprint`、
+  `tests/test_agent.py::test_durable_stage2_correction_has_only_the_final_commander_turn`；真实 run
+  `1788344824-47a4f45b` 的 `role_repeats_name` 拒绝经 run `1788349637-5aef1649` 一次 Commander、零
+  Executor 修正后，`stage2.global` canonical action exit 0。
+- 依据：`novel/orchestrator/state.py::stage2_reviewed_edit_correction_needed`；
+  `novel/orchestrator/queue.py::WAITING_ON_STAGE2_EDIT_CORRECTION`；
+  `novel/stages/stage2/extract.py::global_edit_correction_workpack`。

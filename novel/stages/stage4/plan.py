@@ -154,8 +154,9 @@ class _Upstreams:
             ChapterBlueprints, BLUEPRINTS).model_dump(by_alias=True)
         self.global_g: dict[str, Any] | None = None
         if need_grounding:
-            self.global_g = store.read(
-                GlobalGrounding, GLOBAL_GROUNDING).model_dump(by_alias=True)
+            from novel.stages.stage2 import global_review as stage2_global_review
+            self.global_g = stage2_global_review.generation_grounding(
+                store).model_dump(by_alias=True)
         self.bidx = beat_index(self.blueprints, self.main_text)
 
 

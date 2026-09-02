@@ -1200,12 +1200,48 @@ def test_projection_registry_resolves_dynamic_and_invalid_artifact_paths():
         'stage1/main_text.json',
         'stage2/chapter_blueprints.json',
         'stage2/global_grounding.json',
+        'stage2/global_review.json',
         'stage4/plan_chapters.json',
     }
     assert projection_for('stage3.style', UPSTREAM) is None
     assert legacy_stage3_projection_for(
         'stage3.style', 'stage1/main_text.INVALID.json'
     ) is legacy_stage3_projection_for('stage3.style', UPSTREAM)
+
+
+def test_stage2_review_projection_tracks_generation_semantics_not_reason_wording():
+    projection = projection_for('stage4.context', STAGE2_GLOBAL_REVIEW)
+    assert projection is not None
+    before = {
+        'source_sha256': 'a' * 64,
+        'items': [
+            {
+                'item_id': 'blocking-secret', 'kind': 'secret',
+                'subject_sha256': 'b' * 64, 'state': 'UNVER',
+                'reason': '证据不足', 'evidence': [],
+                'generation_disposition': None,
+            },
+            {
+                'item_id': 'disclosure-fate', 'kind': 'fate',
+                'subject_sha256': 'c' * 64, 'state': 'pending',
+                'reason': None, 'evidence': [],
+                'generation_disposition': None,
+            },
+        ],
+    }
+    wording = copy.deepcopy(before)
+    wording['items'][0]['reason'] = '仍然证据不足，但补充了审阅说明'
+    assert projection(before) == projection(wording)
+
+    quarantined = copy.deepcopy(wording)
+    quarantined['items'][0]['generation_disposition'] = {
+        'action': 'quarantine_group', 'reason': '隔离完整组'}
+    assert projection(before) != projection(quarantined)
+
+    disclosure_changed = copy.deepcopy(before)
+    disclosure_changed['items'][1]['state'] = 'FAIL'
+    assert projection(before) == projection(disclosure_changed), \
+        'disclosure 从不进入写作视图，不能制造下游 stale'
 
 
 def test_stage5_review_tracks_context_code_without_overinvalidating_writing():

@@ -8,8 +8,8 @@ Stage 2 产出四份严格 JSON，另收三份人产的 typed 请求/决策集�
 | `stage2/blueprint_character_projection.json` | `BlueprintCharacterProjection` v1 | `stage2.global` | 从最新 schema-valid global（formal 或 `.INVALID`）与 MainText 确定性物化的、Blueprint 唯一消费的逐章称名闭集 |
 | `stage2/chapter_blueprints.json` | `ChapterBlueprints` v7 | `stage2.blueprint` | 逐章语义功能、原子事实/因果/叙事关系/状态契约、精确证据区间、保真材料、舞台与叙述信息 |
 | `stage2/global_review.json` | `GlobalReview` | `stage2.global` | 由当前全局底座确定性枚举的逐项人工复核；详见 `docs/schema/evaluation.md` |
-| `stage2/global_review_decisions.json` | `GlobalReviewDecisionSet` v2 | 人工输入 | actor、逐项 subject hash 决定，或绑定完整 blocking scope/正文章全集的默认决定 + 逐项例外；也可经同形 API 提交 |
-| `stage2/global_edit.json` | `GlobalEdit` v3 | 人工输入 | Stage2 typed 订正决策集（`stage2.global --apply-edit` 吃它） |
+| `stage2/global_review_decisions.json` | `GlobalReviewDecisionSet` v2 | 人工输入 | actor、逐项 subject hash 决定，或绑定完整 blocking scope/正文章全集的默认决定 + 逐项例外；UNVER 可显式请求完整组隔离，也可经同形 API 提交 |
+| `stage2/global_edit.json` | `GlobalEdit` v3 | 人工输入 | Stage2 typed 订正决策集（`stage2.global --emit-edit-template` 生成当前骨架，`--apply-edit` 消费） |
 | `stage2/blueprint_relation_edit.json` | `BlueprintRelationEdit` v1 | 人工输入 | hash-bound 的指定章完整叙事关系集合；`stage2.blueprint --apply-edit` 吃它，不是 producer 产物 |
 
 四份正式产物与三份人工输入都使用当前 Pydantic `StrictModel`，未知字段拒收。运行时不升级旧形状，也不为
@@ -370,18 +370,22 @@ hinge 那一侧的 LCS 兜底本来就是禁的 ⇒ 那笔账**结构性恒空**
 | `setting` | `SettingPatch｜null` | 逐格改时代/世界观；每个 claim 与自己的 locator 成对 |
 | `arc_tracks` | `ArcTrackPatch[]` | 按稳定 `track_index` 改弧线格；trajectory 与 locator 成对 |
 | `addresses` | `AddressContextPatch[]` | 按 `char_id + address_index` 改已有项的 `context` |
+| `characters_replace` | `dict[char_id, CharacterResponse] \| null` | 完整替换人物集合；可新增/删除人物，并为 role/fate 提交 locator；用于 `character_set_complete` 的漏抽恢复 |
 | `secrets_replace` | `SecretResponse[] \| null` | 完整替换 secrets；可拆分、新增、删除，事实与知情事件交 locator |
 | `world_rules_replace` | `WorldRuleResponse[] \| null` | 完整替换 world rules；可新增、删除，desc 交 locator |
 | `relations_replace` | `RelationResponse[] \| null` | 完整替换 relations；ID 唯一，predicate 交 locator |
 | `conflict_stages_replace` | `ConflictStage[] \| null` | 完整重画 `arc.conflict_stages`；至少一段，缺/重/越界与 producer 的 `conflict_stage_coverage` 共用同一覆盖量尺，并在赋值前原子拒绝 |
 | `arc_tracks_replace` | `ArcTrackResponse[] \| null` | 完整替换 arc tracks；至少一项，trajectory 交 locator |
+| `arc_replace` | `ArcResponse \| null` | 完整替换 conflict stages、climax、ending 与 arc tracks；用于整组 `arc_analysis` 恢复 |
 | `addresses_replace` | `CharacterAddressReplacement[]` | 每项按 `char_id` 完整替换其 `address`；列表至少一条，可改 `surface/by/context/from_chapter` |
+| `post_edit_review` | `GlobalEditReviewAttestation \| null` | 第二次 Commander 调用对本次精确 edit 的自审绑定：首轮 source、正文章全集、默认 PASS、理由及可选安全隔离组；单独出现不算编辑 |
 
 集合 replacement 的 `null` 表示「没动」，允许为空的集合用显式 `[]` 表示「经复核删除全集」；
-两者不能合成默认空列表。`conflict_stages_replace`、`arc_tracks_replace` 与
-`addresses_replace[].address` 不允许空，因为正式 `Arc.conflict_stages` / `Arc.arc_tracks` /
-`Character.address` 至少一项。相同集合不能同时 patch+replace；相同 address
-不能既按下标 patch 又整组 replace。
+两者不能合成默认空列表。`characters_replace`、`conflict_stages_replace`、
+`arc_tracks_replace`、`arc_replace` 与 `addresses_replace[].address` 不允许空，因为正式人物集合、
+`Arc.conflict_stages` / `Arc.arc_tracks` / `Character.address` 至少一项。相同集合不能同时
+patch+replace；`characters_replace` 不能与人物/address patch 或 address replacement 混用，
+`arc_replace` 不能与任一 arc 局部 patch/replacement 混用。
 
 所有载体/目标/外键/章号/窗口拒收都发生在调用者对象修改、正式写盘、`.INVALID` 与
 `_rounds/` 归档**之前**：实现先在深拷贝候选上应用全部 patch/replace，再对**应用后的完整图**
@@ -392,6 +396,7 @@ hinge 那一侧的 LCS 兜底本来就是禁的 ⇒ 那笔账**结构性恒空**
 |---|---|---|
 | 未知字段 / 空编辑 / 重复 ID 或 subject | 载体（`GlobalEdit`） | 顺序不能决定哪份人工决定生效 |
 | 同一 secret/world-rule/relation/arc-track 集合既逐项 patch 又完整 replace | 载体（`GlobalEdit`） | 两个写口争同一 subject，结果依赖应用顺序 |
+| 完整人物/arc replacement 与同组任一局部写口混用 | 载体（`GlobalEdit`） | 完整替换会改变成员或下标身份，必须二选一 |
 | 同一人物的 address 既按下标 patch 又完整 replace | 载体（`GlobalEdit`） | replacement 会改变下标含义，必须二选一 |
 | 逐项 patch 的目标不存在；replacement 的人物目标不存在 | `TerminalState` | 错的是决策集，不该给它建 `.INVALID` |
 | `conflict_stages_replace` 缺章、重章或越界 | `TerminalState` | 错的是 replacement；只在该字段出现时用 `checks.measure_conflict_stage_coverage` 预检，通过前不赋给候选，也不动正式稿、`.INVALID` 或 `_rounds/` |
@@ -405,12 +410,27 @@ hinge 那一侧的 LCS 兜底本来就是禁的 ⇒ 那笔账**结构性恒空**
 本次真读到的（含 `stage2/global_edit.json` 那条边）、标 `partial_rewrite`——这一份此后是
 **混版的**，未编辑字段出自当初那次付费产出，被替换/订正的 typed facts 是人给的。
 
+HTTP/Commander 的一次性输入落在 `_service/edits/<sid>/global-edit-<uuid>.json`；permit 与 producer
+都只接受当前书或这个**同 SID** 根，scratch/兄弟 SID 不构成第三种输入语义。producer 先解码 typed
+edit、在内存应用并归一；no-op 在 canonical 写入前拒绝。确有变化时才以保留字段出现性的
+`exclude_unset` 形状原子写入书内 `stage2/global_edit.json`，后续 provenance 只绑定这份长期可复算
+输入；同步执行返回后可精确删除一次性 UUID 文件。
+
 成功落盘会从新 `GlobalGrounding` 重新枚举 `global_review` 必审 surface。人工决定只在
 `item_id + kind + subject_path + subject_sha256` 四者均未变时继承；拆分 secret、新增规则或重建
 address 后的新 subject 一律回到 `pending`，旧复合事实的 PASS 不能跟随到新时间线。
 
-`global_edit.json` 当前为 schema v3。`conflict_stages_replace` 是可缺的兼容加法，
-旧 v3 决策集仍能原样读取，因此没有为它升版。它与 GlobalGrounding v4 一样只保留
+Agent 的 Stage2 global 语义闭环最多使用两次真实 Commander 调用。首轮完整审阅并落 hash-bound
+PASS/FAIL/UNVER；第二轮是唯一返工，必须在同一 provider session 中一次提交完整 typed edit 和
+`post_edit_review`。producer 先在内存应用、归一和重枚举，只把证明展开到**本次 edit 新打开的
+blocking pending 项**；未变化的旧 FAIL/UNVER 继续保持原状态，不能被默认 PASS 洗绿。证明绑定的
+source 或正文章全集漂移、存在未消解 blocking、或者隔离组不属于本次新打开且登记可隔离的
+secret/relation/world-rule 时，整份 Global/review 在写盘前原子拒绝，并明确不启动第三轮 Commander。
+没有 `post_edit_review` 的公开人工 GlobalEdit 仍按旧语义重枚举 pending，不代替人工复核。
+
+`global_edit.json` 当前为 schema v3。`characters_replace`、`arc_replace`、
+`post_edit_review` 与 `conflict_stages_replace` 都是可缺的兼容加法，旧 v3 决策集仍能原样读取，
+因此没有为它升版。它与 GlobalGrounding v4 一样只保留
 `first_reveal_chapter` 和无标签弧线；本仓没有迁移器，只有旧 v1/v2
 决策集必须由人核对后按 v3 重写。
 
@@ -418,8 +438,9 @@ address 后的新 subject 一律回到 `pending`，旧复合事实的 PASS 不�
 （HARD）断言的正是那个裁剪计数 ⇒ **照样进 `.INVALID`**，0 成本出路是 `--renormalize`。
 这不是人工路的特例，`stage2.global` 主路径在同一份数据上是同一个下场。
 
-**路径口径**（stage2/3/4/6/7 共用 `novel/paths.py::edit_rel`）：相对路径按**当前书目录**
-解释，不按进程 cwd；书目录内的绝对路径同样接受；落在书目录之外（含 `..` 穿越）是显式终态。
+**路径口径**：相对路径按**当前书目录**解释，不按进程 cwd；书目录内的绝对路径同样接受。
+Stage2 GlobalEdit/Review 决策还接受 `_service/edits/<same sid>` 的一次性绝对路径；其他书、scratch
+与任意根外路径都显式拒绝。
 
 ## 四、生成、重算与晋升
 
@@ -429,6 +450,7 @@ address 后的新 subject 一律回到 `pending`，旧复合事实的 PASS 不�
   明确失效并进入可由 typed edit 修复的 `.INVALID`；
   `--resample` 仅在已有 `global_grounding.INVALID.json` 时绕过同参数缓存，付费重采整份响应；
   `--renormalize` 仅对**已符合当前 schema**的产物重算代码派生字段；
+  `--emit-edit-template` stdout-only 按当前 FAIL/未处置 UNVER 生成可执行但默认 no-op 的 v3 骨架；
   `--apply-edit <路径>` 吃 `global_edit.json` 落 Stage2 typed facts 的 0 成本人工订正（见 §三之二）；
   `--emit-review-template` stdout-only 从当前 `global_review.json` 投影逐项 hash/evidence，
   默认全部 `UNVER`，原样应用也不会打开事实闸。每次 formal 或

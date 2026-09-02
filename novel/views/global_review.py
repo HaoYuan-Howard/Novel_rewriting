@@ -10,7 +10,7 @@ from novel import paths, prov
 from novel.errors import UpstreamMissing
 from novel.orchestrator import state
 from novel.quality.global_review import (
-    review_effect_counts, review_group_key, review_status,
+    generation_safety, review_effect_counts, review_group_key, review_status,
 )
 from novel.store import ArtifactStore
 
@@ -24,13 +24,16 @@ def global_review_view(base: str, sid: str) -> GlobalReviewView:
         raise UpstreamMissing(f'{STAGE2_GLOBAL_GROUNDING} 不在盘上')
     review = store.read_own(GlobalReview, STAGE2_GLOBAL_REVIEW)[0]
     grounding = store.read_own(GlobalGrounding, STAGE2_GLOBAL_GROUNDING)[0]
-    subject, current, approved = review_status(
-        grounding.model_dump(by_alias=True), review)
+    grounding_payload = grounding.model_dump(by_alias=True)
+    subject, current, approved = review_status(grounding_payload, review)
+    safety = generation_safety(grounding_payload, review)
     return GlobalReviewView(
         source_sha256=review.source_sha256,
         current_subject_sha256=subject,
         current=current,
         approved=approved,
+        generation_safe=safety.safe,
+        quarantined_groups=list(safety.quarantined_groups),
         effect_counts=review_effect_counts(review),
         # 两格由服务端派生后随行下发；界面不复制分类表，也不自己解析 subject_path。
         items=[

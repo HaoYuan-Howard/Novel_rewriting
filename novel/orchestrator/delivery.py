@@ -84,6 +84,7 @@ def assess(base: str | Path, sid: str, *, start_code_version: str | None,
         blueprint_version = blueprint_store.schema_version(
             STAGE2_CHAPTER_BLUEPRINTS)
         frozen_v6 = False
+        quarantined_groups: tuple[str, ...] = ()
         if blueprint_version == 6:
             frozen_v6 = frozen_v6_stage4_subject_or_none(
                 blueprint_store) is not None
@@ -105,11 +106,13 @@ def assess(base: str | Path, sid: str, *, start_code_version: str | None,
                 ChapterBlueprints, STAGE2_CHAPTER_BLUEPRINTS,
                 require_current=True)
             s2ctx = readonly_ctx(novel_dir, 'stage2.global', current_code)
-            current, approved, counts = global_review.approval_status(s2ctx)
-            if not approved:
+            safety, counts = global_review.generation_status(s2ctx)
+            quarantined_groups = safety.quarantined_groups
+            if not safety.safe:
                 return _outcome(
                     'stopped',
-                    f'Stage2 复核闸未打开：current={current}，counts={counts}')
+                    f'Stage2 复核闸未打开：current={safety.current}，'
+                    f'blocking_items={list(safety.blocking_item_ids)}，counts={counts}')
 
         book_ctx = readonly_ctx(novel_dir, 'stage7.assemble', current_code)
         assemble.read_current_book(book_ctx, allow_frozen_v6=frozen_v6)
@@ -129,11 +132,16 @@ def assess(base: str | Path, sid: str, *, start_code_version: str | None,
                 'ready_with_disclosures',
                 '成书与强闸均通过；Stage2 Blueprint 为已绑定既有 Stage4A 主体的'
                 '冻结 schema v6，没有 v7 narrative_relations 权威面，必须保留披露')
+        if quarantined_groups:
+            return _outcome(
+                'ready_with_disclosures',
+                '成书与强闸均通过；Stage2 仍有 UNVER，但写作消费面已确定性隔离 '
+                f'{list(quarantined_groups)}，终审包与 inbox 必须保留披露')
         if inbox.items:
             return _outcome(
                 'ready_with_disclosures',
                 f'成书与强闸均通过；仍保留 {len(inbox.items)} 条非阻塞人工披露')
-        return _outcome('ready', 'Stage2 全 PASS、成书当前可下载、终审包非空且不早于成书、无待办余额')
+        return _outcome('ready', 'Stage2 blocking 面全 PASS、成书当前可下载、终审包非空且不早于成书、无待办余额')
     except (ArtifactUnreadable, TerminalState, OSError, ValueError) as exc:
         return _outcome('stopped', f'交付条件未满足：{type(exc).__name__}: {exc}')
     except Exception as exc:  # noqa: BLE001 —— 终验自己失败不能冒充产品失败或成功

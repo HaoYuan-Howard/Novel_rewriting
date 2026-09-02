@@ -1,12 +1,19 @@
 from __future__ import annotations
 
+import copy
+from types import SimpleNamespace
+
 import pytest
 from pydantic import ValidationError
 
+from contracts.invariants import review_effect_of
 from contracts.schema import ArtifactVersionError, decode_artifact, encode_artifact
 from contracts.schema.stage2 import ConflictStage, GlobalEdit, Relation
 from novel.errors import TerminalState
-from novel.stages.stage2.extract import _apply_secret_patches
+from novel.stages.stage2.extract import (
+    _apply_secret_patches, _review_after_global_edit,
+)
+from tests.factories import approved_global_review
 
 
 def _locator(chapter: int = 1, text: str = '证据原文') -> dict:
@@ -205,6 +212,173 @@ def test_complete_replacements_can_split_secrets_replace_rules_and_rebuild_addre
         {'surface': '掌柜', 'by': 'narration', 'context': 'reference', 'from_chapter': 2},
     ]
     assert changed == ['canon.secrets', 'canon.world_rules', 'char_001.address']
+
+
+def test_complete_character_replacement_can_add_a_missing_person_and_relation():
+    data = _grounding()
+    edit = GlobalEdit.model_validate({
+        'characters_replace': {
+            'char_001': {
+                'canonical': '沈青',
+                'address': data['entities']['characters']['char_001']['address'],
+                'name_distinctiveness': 'high',
+                'role': '沈家账房', 'role_evidence': _locator(),
+                'fate': None, 'fate_evidence': None,
+            },
+            'char_002': {
+                'canonical': '周衡',
+                'address': [{
+                    'surface': '周衡', 'by': 'public', 'context': 'reference',
+                    'from_chapter': 2,
+                }],
+                'name_distinctiveness': 'high',
+                'role': '第二章出场并协助核账的人', 'role_evidence': _locator(2),
+                'fate': None, 'fate_evidence': None,
+            },
+        },
+        'relations_replace': [{
+            'relation_id': 'rel_01', 'subject_id': 'char_001',
+            'object_id': 'char_002', 'predicate': '共同核账',
+            'predicate_evidence': _locator(2),
+            'visibility': {'kind': 'public', 'from_chapter': 2},
+            'valid_from_chapter': 2, 'valid_through_chapter': None,
+        }],
+    })
+
+    changed = _apply_secret_patches(data, edit, {1, 2})
+
+    assert sorted(data['entities']['characters']) == ['char_001', 'char_002']
+    assert data['entities']['relations'][0]['object_id'] == 'char_002'
+    assert changed == ['entities.characters', 'entities.relations']
+
+
+def test_complete_arc_replacement_covers_climax_ending_and_tracks():
+    data = _grounding()
+    edit = GlobalEdit.model_validate({'arc_replace': {
+        'conflict_stages': [
+            {'stage': '线索出现', 'chapters': [1]},
+            {'stage': '当面对账', 'chapters': [2]},
+        ],
+        'climax': '第二章当面对账时揭开账目差异',
+        'ending': '沈青与周衡确认真实账目并保留证据',
+        'arc_tracks': [{
+            'subject': 'char_001',
+            'trajectory': '从独自核账到愿意与周衡共同查证',
+            'trajectory_evidence': _locator(2),
+        }],
+    }})
+
+    changed = _apply_secret_patches(data, edit, {1, 2})
+
+    assert data['arc']['ending'] == '沈青与周衡确认真实账目并保留证据'
+    assert changed == ['arc']
+
+
+def test_reviewed_edit_passes_only_the_blocking_subjects_that_it_reopened():
+    before = _grounding()
+    previous = approved_global_review(before)
+    target = next(item for item in previous.items
+                  if item.kind == 'world_rule_version')
+    previous = previous.model_copy(update={'items': [
+        item.model_copy(update={
+            'state': 'FAIL', 'actor': 'reviewer',
+            'decided_at': '2026-09-02T00:00:00+00:00',
+            'reason': '规则主体写错',
+        }) if item.item_id == target.item_id else item
+        for item in previous.items
+    ]})
+    after = copy.deepcopy(before)
+    after['canon']['world_rules'][0]['versions'][0]['desc'] = '修正后的完整规则'
+    edit = GlobalEdit.model_validate({
+        'world_rules': [{
+            'rule_id': 'wr_01',
+            'versions': [{
+                'effective_from_chapter': 1,
+                'desc': '修正后的完整规则',
+                'desc_evidence': _locator(),
+            }],
+        }],
+        'post_edit_review': {
+            'actor': 'agent:novel-pipeline-operator',
+            'expected_source_sha256': previous.source_sha256,
+            'reviewed_chapter_ordinals': [1, 2],
+            'default_state': 'PASS',
+            'reason': '已复核精确返工后的完整 blocking 主体',
+            'quarantine_groups': [],
+        },
+    })
+    artifact = SimpleNamespace(model_dump=lambda **_kwargs: copy.deepcopy(after))
+
+    reviewed = _review_after_global_edit(
+        artifact, previous, edit, [1, 2])
+
+    assert reviewed is not None
+    assert all(item.state == 'PASS' for item in reviewed.items
+               if review_effect_of(item.kind) == 'blocking')
+
+
+def test_reviewed_edit_refuses_to_wash_an_unchanged_fail_green():
+    before = _grounding()
+    previous = approved_global_review(before)
+    target = next(item for item in previous.items
+                  if item.kind == 'world_rule_version')
+    previous = previous.model_copy(update={'items': [
+        item.model_copy(update={
+            'state': 'FAIL', 'actor': 'reviewer',
+            'decided_at': '2026-09-02T00:00:00+00:00',
+            'reason': '规则主体写错',
+        }) if item.item_id == target.item_id else item
+        for item in previous.items
+    ]})
+    edit = GlobalEdit.model_validate({
+        'characters': [{
+            'char_id': 'char_001', 'name_distinctiveness': 'medium'}],
+        'post_edit_review': {
+            'actor': 'agent:novel-pipeline-operator',
+            'expected_source_sha256': previous.source_sha256,
+            'reviewed_chapter_ordinals': [1, 2],
+            'default_state': 'PASS',
+            'reason': '只改了无关人物字段，不能覆盖旧 FAIL',
+            'quarantine_groups': [],
+        },
+    })
+    artifact = SimpleNamespace(model_dump=lambda **_kwargs: copy.deepcopy(before))
+
+    with pytest.raises(TerminalState, match='不再启动第三轮'):
+        _review_after_global_edit(artifact, previous, edit, [1, 2])
+
+
+def test_reviewed_edit_refuses_to_wash_an_unchanged_pending_item_green():
+    before = _grounding()
+    previous = approved_global_review(before)
+    target = next(item for item in previous.items
+                  if item.kind == 'world_rule_version')
+    previous = previous.model_copy(update={'items': [
+        item.model_copy(update={
+            'state': 'pending', 'actor': None, 'decided_at': None,
+            'reason': None,
+        }) if item.item_id == target.item_id else item
+        for item in previous.items
+    ]})
+    after = copy.deepcopy(before)
+    after['entities']['characters']['char_001'][
+        'name_distinctiveness'] = 'medium'
+    edit = GlobalEdit.model_validate({
+        'characters': [{
+            'char_id': 'char_001', 'name_distinctiveness': 'medium'}],
+        'post_edit_review': {
+            'actor': 'agent:novel-pipeline-operator',
+            'expected_source_sha256': previous.source_sha256,
+            'reviewed_chapter_ordinals': [1, 2],
+            'default_state': 'PASS',
+            'reason': '不能用无关编辑替尚未审阅的旧主体背书',
+            'quarantine_groups': [],
+        },
+    })
+    artifact = SimpleNamespace(model_dump=lambda **_kwargs: copy.deepcopy(after))
+
+    with pytest.raises(TerminalState, match='不再启动第三轮'):
+        _review_after_global_edit(artifact, previous, edit, [1, 2])
 
 
 def test_conflict_stages_are_replaced_as_one_nonempty_partition():

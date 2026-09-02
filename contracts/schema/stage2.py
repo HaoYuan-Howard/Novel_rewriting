@@ -537,6 +537,29 @@ class BlueprintCharacterProjection(StrictModel):
 # _provenance 更是代码在请求完成后才铸造。若为了省一组模型而把这些字段设成可选，
 # 最终产物的严格契约也会被一起放宽。响应边界因此单独建模，二者各守各的责任。
 
+class CharacterResponse(StrictModel):
+    """人工完整替换 ``entities.characters`` 时的一条人物记录。
+
+    正式 ``Character`` 已把证据归一成 ``FactEvidence``；人工恢复入口仍收
+    locator，随后与其他 GlobalEdit 字段一起由 ``normalize_global`` 回取
+    SourceSpan。``char_id`` 仍是外层映射键，避免同一身份抄两份。
+    """
+
+    canonical: str = Field(min_length=1)
+    address: list[Address] = Field(min_length=1)
+    name_distinctiveness: Literal[NAME_DISTINCTIVENESS]
+    role: str = Field(min_length=1)
+    role_evidence: EvidenceLocator
+    fate: str | None
+    fate_evidence: EvidenceLocator | None
+
+    @model_validator(mode='after')
+    def _fate_and_evidence_agree(self) -> CharacterResponse:
+        if (self.fate is None) != (self.fate_evidence is None):
+            raise ValueError('fate 与 fate_evidence 必须同时为空或同时非空')
+        return self
+
+
 class RelationResponse(StrictModel):
     relation_id: str = Field(pattern=r'^rel_\d{2}$')
     subject_id: str = Field(min_length=1)
@@ -605,6 +628,15 @@ class ArcTrackResponse(StrictModel):
     subject: str = Field(min_length=1)
     trajectory: str = Field(min_length=1)
     trajectory_evidence: EvidenceLocator
+
+
+class ArcResponse(StrictModel):
+    """人工完整替换解读层；arc_analysis 不能只改 tracks 冒充整组已修。"""
+
+    conflict_stages: list[ConflictStage] = Field(min_length=1)
+    climax: str = Field(min_length=1)
+    ending: str = Field(min_length=1)
+    arc_tracks: list[ArcTrackResponse] = Field(min_length=1)
 
 
 # ── stage2.global 唯一现役 provider wire ──────────────────────────────────
@@ -997,6 +1029,48 @@ class CharacterAddressReplacement(StrictModel):
     address: list[Address] = Field(min_length=1)
 
 
+class GlobalEditQuarantineGroup(StrictModel):
+    """第二轮自检仍无法证实、但可从写作视图整组删除的事实。"""
+
+    group_key: str = Field(pattern=r'^(?:secret|relation|world_rule):.+$')
+    reason: str = Field(min_length=1)
+
+    @model_validator(mode='after')
+    def _reason_has_visible_text(self) -> GlobalEditQuarantineGroup:
+        if not self.reason.strip():
+            raise ValueError('quarantine group reason must not be blank')
+        return self
+
+
+class GlobalEditReviewAttestation(StrictModel):
+    """第二轮 Commander 对自己提交的精确 GlobalEdit 所作的闭合证明。
+
+    producer 在 mutation lock 内先把 edit 应用到内存候选，再将本证明展开到
+    **该候选新产生的 pending blocking 项**。旧 FAIL 若没有被真正改变仍保持
+    FAIL，整份 edit 会在写盘前被拒；因此这不是把任意旧红项批量改绿。
+    """
+
+    actor: str = Field(min_length=1)
+    expected_source_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    reviewed_chapter_ordinals: list[int] = Field(min_length=1)
+    default_state: Literal['PASS']
+    reason: str = Field(min_length=1)
+    quarantine_groups: list[GlobalEditQuarantineGroup] = Field(default_factory=list)
+
+    @model_validator(mode='after')
+    def _complete_and_unique(self) -> GlobalEditReviewAttestation:
+        if not self.actor.strip() or not self.reason.strip():
+            raise ValueError('post-edit review actor/reason must not be blank')
+        chapters = self.reviewed_chapter_ordinals
+        if chapters != sorted(set(chapters)) or any(chapter < 1 for chapter in chapters):
+            raise ValueError(
+                'post-edit reviewed_chapter_ordinals 必须是去重升序的正整数全集')
+        groups = [row.group_key for row in self.quarantine_groups]
+        if len(groups) != len(set(groups)):
+            raise ValueError('post-edit quarantine group 不得重复')
+        return self
+
+
 class GlobalEdit(StrictModel):
     """`stage2/global_edit.json` —— 全局事实的 0 LLM typed 恢复面。"""
 
@@ -1007,23 +1081,29 @@ class GlobalEdit(StrictModel):
     setting: SettingPatch | None = None
     arc_tracks: list[ArcTrackPatch] = Field(default_factory=list)
     addresses: list[AddressContextPatch] = Field(default_factory=list)
+    characters_replace: dict[str, CharacterResponse] | None = Field(
+        default=None, min_length=1)
     secrets_replace: list[SecretResponse] | None = None
     world_rules_replace: list[WorldRuleResponse] | None = None
     relations_replace: list[RelationResponse] | None = None
     conflict_stages_replace: list[ConflictStage] | None = Field(
         default=None, min_length=1)
     arc_tracks_replace: list[ArcTrackResponse] | None = Field(default=None, min_length=1)
+    arc_replace: ArcResponse | None = None
     addresses_replace: list[CharacterAddressReplacement] = Field(default_factory=list)
+    post_edit_review: GlobalEditReviewAttestation | None = None
 
     @model_validator(mode='after')
     def _one_patch_per_subject(self) -> GlobalEdit:
         if not (
             self.secrets or self.world_rules or self.characters or self.relations
             or self.setting is not None or self.arc_tracks or self.addresses
+            or self.characters_replace is not None
             or self.secrets_replace is not None or self.world_rules_replace is not None
             or self.relations_replace is not None
             or self.conflict_stages_replace is not None
             or self.arc_tracks_replace is not None
+            or self.arc_replace is not None
             or self.addresses_replace
         ):
             raise ValueError('global edit must contain at least one typed patch')
@@ -1035,6 +1115,14 @@ class GlobalEdit(StrictModel):
         ):
             if replacement is not None and patch:
                 raise ValueError(f'{label} cannot be patched and completely replaced together')
+        if self.characters_replace is not None and (
+                self.characters or self.addresses or self.addresses_replace):
+            raise ValueError(
+                'entities.characters cannot be patched and completely replaced together')
+        if self.arc_replace is not None and (
+                self.conflict_stages_replace is not None
+                or self.arc_tracks or self.arc_tracks_replace is not None):
+            raise ValueError('arc cannot be patched and completely replaced together')
         for label, keys in (
             ('secret', [p.secret_id for p in self.secrets]),
             ('world rule', [p.rule_id for p in self.world_rules]),

@@ -91,6 +91,26 @@ def test_a_book_dir_absolute_decision_path_is_accepted():
     assert decided[items[0]['item_id']] == 'PASS'
 
 
+def test_a_same_sid_service_edit_decision_path_is_accepted():
+    """Supervisor/API 共用的书外一次性输入必须能穿过真实 producer。"""
+    root, book = _sandbox('书_123')
+    try:
+        _seed(book)
+        items = _current_items(book)
+        path = root / '_service' / 'edits' / '123' / 'global-review.json'
+        path.parent.mkdir(parents=True)
+        path.write_text(
+            _versioned_decisions(items), encoding='utf-8', newline='\n')
+
+        updated = global_review.apply_file(
+            _ctx(book, 'stage2.global', paid=False), str(path.resolve()))
+
+        decided = {item.item_id: item.state for item in updated.items}
+        assert decided[items[0]['item_id']] == 'PASS'
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
 def test_an_outside_absolute_decision_path_is_still_refused(tmp_path):
     _root, book = _sandbox('书_123')
     _seed(book)
@@ -457,7 +477,8 @@ def test_workpack_prefers_formal_evidence_and_never_fabricates_for_source_none(
                      if item.subject_path == 'entities.characters.char_001.fate')
     assert set(companion) == {
         'read_only', 'kind', 'item_id', 'subject_path', 'subject_sha256',
-        'current_state', 'effect', 'subject', 'formal_evidence',
+        'current_state', 'current_reason', 'generation_disposition',
+        'effect', 'subject', 'formal_evidence',
         'unresolved_formal_evidence',
     }
     assert companion['read_only'] is True
@@ -466,6 +487,8 @@ def test_workpack_prefers_formal_evidence_and_never_fabricates_for_source_none(
     assert companion['subject_path'] == fate_item.subject_path
     assert companion['subject_sha256'] == fate_item.subject_sha256
     assert companion['current_state'] == 'pending'
+    assert companion['current_reason'] is None
+    assert companion['generation_disposition'] is None
     assert companion['effect'] == 'disclosure'
     assert companion['subject'] == '后来成为客栈东家'
     assert companion['unresolved_formal_evidence'] == []

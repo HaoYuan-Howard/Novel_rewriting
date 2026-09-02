@@ -143,7 +143,7 @@ Prompt 选型完成后，`prompt_variants`、`prompt_defaults` 与 `--prompt-var
 | `GET /api/novels/:sid/stage2/blueprint-review-workpack` | `BlueprintReviewWorkpack` | 绑定 current formal/INVALID Blueprint、MainText、完整可见 check 与审阅契约，另携 validation seal 和 opaque review token；异常优先但全章保留，只读、不自动决定 |
 | `GET /api/novels/:sid/stage2/global` | `GlobalView` | 新 |
 | `GET /api/novels/:sid/stage2/global-review` | `GlobalReviewView`（含当前完整 subject 重算状态与逐项审计） | 新 |
-| `POST /api/novels/:sid/stage2/global-review` | `JobRecord`（请求体 `GlobalReviewDecisionSet` v2：逐项决定，或绑定 source/scope/workpack hash 与正文章全集的 blocking scope + 逐项例外；仅全部 blocking PASS 的 exit 0 可盖 s2） | 新 |
+| `POST /api/novels/:sid/stage2/global-review` | `JobRecord`（请求体 `GlobalReviewDecisionSet` v2：逐项决定，或绑定 source/scope/workpack hash 与正文章全集的 blocking scope + 逐项例外；exit 0 要求 blocking generation-safe：全部 PASS，或仅余显式完整组隔离的 secret/relation/world-rule UNVER） | 新 |
 | `GET /api/novels/:sid/stage4/:o` | `Stage4View` | 新 |
 | `GET /api/novels/:sid/stage5/:o` | `Stage5View` | 新 |
 | `GET /api/novels/:sid/review/:o` | `ReviewView` | 新 |

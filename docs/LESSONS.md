@@ -461,3 +461,30 @@ mark 复用它，不能在父 gate close 后为合法 end 信标另开一枚必�
 `novel/skill_contract.py::package_sha256`、`novel/orchestrator/admission.py`、
 `novel/orchestrator/write_admission.py::operation_scope`、
 `novel/orchestrator/agent.py::_wait_for_execution_closure`。
+
+## 33. 模型轮次上限要数真实调用；最后一次返工必须把修复与自审绑成一个原子动作
+
+“最多两轮”若只写进 prompt，确定性状态机仍可能把 typed loader 纠错、修后 pending 复审或新 surface
+当成下一次合法 reviewer turn，结果就是同一业务主体连续三四次读整包。真正的预算边界必须在唯一模型
+调用缝计数：只数实际 Commander invocation，0-wire review/edit 不占轮次；pause/resume 沿用同一
+provider session 与计数，达到上限后返回稳定终态，任何纠错分支都不能旁路第三次调用。
+
+若最后一次调用既要修复又要关闭人审，不能先落 edit、再期待一次复审。应让同一 typed 动作携带
+hash-bound 修后自审：绑定修前 source 与完整阅读章集合，producer 在内存应用、归一和重新枚举后，只把
+证明展开到**该 edit 新打开的 blocking 项**。未改变的旧 FAIL/UNVER 必须继承原红态，安全隔离也只能走
+登记的完整事实组；任一 blocking 未闭合就整组拒绝写盘并停止。这样“两轮”不会以放宽审核为代价，
+也不会让模型自述越过代码判据。
+
+落点：`novel/orchestrator/agent.py::_start_planned`、
+`novel/orchestrator/reviewer_tasks.py::_reviewed_global_edit_template`、
+`novel/stages/stage2/extract.py::_review_after_global_edit`。
+
+最后一次 typed edit 若被完整 producer 判据拦下，拒绝事实还必须成为**可重建的持久状态**，不能只放在
+进程内 callback 或日志里。尤其当该 edit 同时改变了下游 freshness 时，普通 planner 很容易先看见 stale
+下游并要求重做，把上游精确拒绝原因淹没。正确顺序是从 formal edit、current INVALID、revalidation
+baseline 与原 review 重建窄 correction blocker；先消耗仅余的一次模型预算，再重新规划下游。服务/代码
+身份变化可以禁止复用旧 provider session，但不能重置业务轮次预算。
+
+补充落点：`novel/orchestrator/state.py::stage2_reviewed_edit_correction_needed`、
+`novel/orchestrator/queue.py::WAITING_ON_STAGE2_EDIT_CORRECTION`、
+`novel/stages/stage2/extract.py::global_edit_correction_workpack`。

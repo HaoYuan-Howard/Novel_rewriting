@@ -18,18 +18,26 @@ from __future__ import annotations
 
 import json
 import copy
+import shutil
 
 import pytest
+from pydantic import ValidationError
 
 from contracts.invariants import (
     GLOBAL_REVIEW_DISCLOSURE_KINDS, GLOBAL_REVIEW_KINDS, review_effect_of,
 )
-from contracts.schema.evaluation import GlobalReview, GlobalReviewDecision
+from contracts.artifacts import (
+    STAGE2_GLOBAL_GROUNDING, STAGE2_GLOBAL_REVIEW,
+)
+from contracts.schema.evaluation import (
+    GlobalReview, GlobalReviewDecision, GlobalReviewGenerationDisposition,
+)
+from contracts.schema.stage2 import GlobalGrounding
 from novel.errors import HumanEditProtected
 from novel.quality.global_review import (
     apply_decision_set, blocking_scope_sha256, build_review, decide,
-    review_effect_counts, review_group_key, review_status, subject_sha256,
-    UNBOUND_WORKPACK_SHA256,
+    generation_safety, review_effect_counts, review_group_key, review_status,
+    subject_sha256, UNBOUND_WORKPACK_SHA256,
 )
 from novel.stages.stage2 import global_review
 from novel.store import ArtifactStore
@@ -47,6 +55,21 @@ def _decide_all(review: GlobalReview, kinds, state: str = 'PASS') -> GlobalRevie
             expected_subject_sha256=item.subject_sha256,
             state=state, actor='tester', reason='逐项对照原文后裁决',
             now='2026-08-27T00:00:00+00:00')
+    return review
+
+
+def _quarantine_group(review: GlobalReview, group_key: str) -> GlobalReview:
+    disposition = GlobalReviewGenerationDisposition(
+        action='quarantine_group', reason='证据不足；从写作消费面移除完整事实组')
+    for item in tuple(review.items):
+        if (review_effect_of(item.kind) == 'blocking'
+                and review_group_key(item.subject_path) == group_key):
+            review = decide(
+                review, item_id=item.item_id,
+                expected_subject_sha256=item.subject_sha256,
+                state='UNVER', actor='tester', reason='当前原文不足以确认该事实',
+                generation_disposition=disposition,
+                now='2026-09-02T00:00:00+00:00')
     return review
 
 
@@ -126,6 +149,69 @@ def test_one_missing_blocking_decision_still_holds_the_gate_closed():
         for item in every.items
     ]})
     assert review_status(grounding, reopened)[2] is False
+
+
+def test_generation_safety_keeps_unver_but_allows_only_closed_group_quarantine():
+    grounding = _global()
+    all_pass = _decide_all(
+        build_review(grounding), set(GLOBAL_REVIEW_KINDS))
+    safe = generation_safety(grounding, all_pass)
+    assert safe.safe and safe.all_pass and safe.quarantined_groups == ()
+
+    quarantined = _quarantine_group(all_pass, 'secret:secret_01')
+    safe = generation_safety(grounding, quarantined)
+    assert safe.safe is True
+    assert safe.all_pass is False, 'UNVER 必须继续叫 UNVER，不能洗成 PASS'
+    assert safe.quarantined_groups == ('secret:secret_01',)
+    assert safe.blocking_item_ids == ()
+
+    undecided = decide(
+        all_pass,
+        item_id=next(item.item_id for item in all_pass.items
+                     if review_group_key(item.subject_path) == 'secret:secret_01'
+                     and review_effect_of(item.kind) == 'blocking'),
+        expected_subject_sha256=next(
+            item.subject_sha256 for item in all_pass.items
+            if review_group_key(item.subject_path) == 'secret:secret_01'
+            and review_effect_of(item.kind) == 'blocking'),
+        state='UNVER', actor='tester', reason='证据不足',
+        now='2026-09-02T00:00:00+00:00')
+    assert generation_safety(grounding, undecided).safe is False
+
+
+def test_generation_safety_never_quarantines_core_structure_or_fail():
+    grounding = _global()
+    all_pass = _decide_all(
+        build_review(grounding), set(GLOBAL_REVIEW_KINDS))
+    setting = next(
+        item for item in all_pass.items
+        if item.subject_path == 'canon.setting.时代背景')
+    disposition = GlobalReviewGenerationDisposition(
+        action='quarantine_group', reason='请求隔离 setting')
+    unsafe = decide(
+        all_pass, item_id=setting.item_id,
+        expected_subject_sha256=setting.subject_sha256,
+        state='UNVER', actor='tester', reason='证据不足',
+        generation_disposition=disposition,
+        now='2026-09-02T00:00:00+00:00')
+    assert generation_safety(grounding, unsafe).safe is False
+
+    failed = decide(
+        all_pass, item_id=setting.item_id,
+        expected_subject_sha256=setting.subject_sha256,
+        state='FAIL', actor='tester', reason='与原文冲突',
+        now='2026-09-02T00:00:00+00:00')
+    assert generation_safety(grounding, failed).safe is False
+
+
+def test_generation_disposition_is_structurally_unavailable_to_pass_or_fail():
+    with pytest.raises(ValidationError, match='只有 UNVER'):
+        GlobalReviewDecision(
+            item_id='item-1', expected_subject_sha256='a' * 64,
+            state='PASS', reason='核验通过', evidence=[],
+            generation_disposition={
+                'action': 'quarantine_group', 'reason': '非法处置'},
+        )
 
 
 def test_a_failed_disclosure_item_is_carried_not_swallowed():
@@ -576,6 +662,9 @@ def test_the_api_row_carries_the_server_derived_effect_and_group_key():
     book = _book_with_review()
     view = global_review_view(str(book.parent), book.name.split('_')[-1])
 
+    assert view.approved is False
+    assert view.generation_safe is False
+    assert view.quarantined_groups == []
     assert sorted(view.effect_counts) == ['blocking', 'disclosure']
     assert view.effect_counts['disclosure']['pending'] > 0
     for row in view.items:
@@ -606,3 +695,62 @@ def test_disclosure_items_stay_in_the_inbox_with_a_disclosure_effect():
                for row in rows if row.delivery_effect == 'disclosure')
     # 阻断数只读 delivery_effect，不拿类别总数冒充。
     assert view.delivery_counts['disclosure'] >= by_effect['disclosure']
+
+
+def test_quarantined_secret_is_removed_from_generation_but_retained_in_inbox():
+    """隔离只改下游内存视图；正式事实、UNVER 与审计卡片都必须留下。"""
+    root, book = _sandbox('安全隔离_901')
+    try:
+        _seed(book)
+        stage2_ctx = _ctx(book, 'stage2.global', paid=False)
+        store = ArtifactStore(stage2_ctx)
+        grounding = store.read_own(
+            GlobalGrounding, STAGE2_GLOBAL_GROUNDING)[0]
+        payload = grounding.model_dump(mode='json', by_alias=True)
+        payload['entities']['relations'][0]['visibility'] = {
+            'kind': 'via_secret', 'secret_id': 'secret_01'}
+        grounding = GlobalGrounding.model_validate(payload)
+        store.write(STAGE2_GLOBAL_GROUNDING, grounding)
+
+        review = _decide_all(
+            build_review(payload), set(GLOBAL_REVIEW_KINDS))
+        review = _quarantine_group(review, 'secret:secret_01')
+        store.write(STAGE2_GLOBAL_REVIEW, review)
+
+        from novel.views.global_review import global_review_view
+        public = global_review_view(root, '901')
+        assert public.approved is False, 'UNVER 事实不能被 UI/API 洗成 PASS'
+        assert public.generation_safe is True
+        assert public.quarantined_groups == ['secret:secret_01']
+
+        downstream_ctx = _ctx(book, 'stage4.plan', paid=False)
+        generated = global_review.generation_grounding(
+            ArtifactStore(downstream_ctx))
+        assert generated.canon.secrets == []
+        assert generated.entities.relations == [], \
+            '引用已隔离 secret 的 via_secret relation 也必须级联移除'
+        assert set(downstream_ctx.edges) >= {
+            STAGE2_GLOBAL_GROUNDING, STAGE2_GLOBAL_REVIEW}
+
+        persisted = ArtifactStore(stage2_ctx).read_own(
+            GlobalGrounding, STAGE2_GLOBAL_GROUNDING)[0]
+        assert [row.secret_id for row in persisted.canon.secrets] == ['secret_01']
+
+        from novel.views.inbox import inbox_view
+        inbox = inbox_view(root, '901')
+        quarantined_ids = {
+            item.item_id for item in review.items
+            if item.state == 'UNVER'
+            and review_group_key(item.subject_path) == 'secret:secret_01'
+        }
+        rows = [row for row in inbox.items if row.rule in quarantined_ids]
+        assert {row.rule for row in rows} == quarantined_ids
+        assert all(row.delivery_effect == 'disclosure' for row in rows)
+        assert all(row.attention == 'reviewed_retained' for row in rows)
+        assert all(
+            row.decision is not None
+            and row.decision.state == 'UNVER'
+            and row.decision.generation_disposition == 'quarantine_group'
+            for row in rows)
+    finally:
+        shutil.rmtree(root)

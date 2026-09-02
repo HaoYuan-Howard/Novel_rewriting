@@ -1637,8 +1637,13 @@ def test_name_change_with_interrupted_projection_write_closes_blueprint_and_stag
     from novel.stages.stage2 import global_review
 
     monkeypatch.setattr(
-        global_review, 'approval_status',
-        lambda _ctx: (True, True, {'PASS': 1}),
+        global_review, 'generation_status',
+        lambda _ctx: (
+            SimpleNamespace(
+                safe=True, current=True, blocking_item_ids=(),
+            ),
+            {'PASS': 1},
+        ),
     )
     with pytest.raises(UpstreamStale, match='blueprint_character_projection'):
         global_review.require_approved(
@@ -1808,6 +1813,7 @@ def test_stage2_global_over_limit_stops_before_transport_cache_ledger_or_artifac
 
 def test_stage4_plan_over_limit_with_candidate_stops_before_b_transport_or_outputs():
     from novel.stages.stage4 import plan as stage4_plan
+    from tests.factories import approved_global_review
     from tests.test_stage4_v3_integration import _split_a_responder
 
     root = Path(tempfile.mkdtemp())
@@ -1821,6 +1827,13 @@ def test_stage4_plan_over_limit_with_candidate_stops_before_b_transport_or_outpu
         global_client, _ = _client(
             global_ctx, lambda _request, _index: _ok(_response_global()))
         extract.run_global(global_ctx, global_client)
+        global_store = ArtifactStore(global_ctx)
+        current_global = global_store.read_own(
+            GlobalGrounding, extract.GLOBAL_REL)[0]
+        global_store.write(
+            extract.GLOBAL_REVIEW_REL,
+            approved_global_review(current_global),
+        )
 
         by_ordinal = _response_blueprints()
 

@@ -19,7 +19,9 @@ from typing import Literal
 
 from pydantic import Field, model_validator
 
-from contracts.invariants import GLOBAL_REVIEW_KINDS
+from contracts.invariants import (
+    GLOBAL_REVIEW_GENERATION_DISPOSITIONS, GLOBAL_REVIEW_KINDS,
+)
 from contracts.schema.base import StrictModel
 from contracts.schema.common import FreeProvenance
 
@@ -93,6 +95,24 @@ class SemanticDecision(StrictModel):
 GlobalReviewState = Literal['pending', 'PASS', 'FAIL', 'UNVER']
 
 
+class GlobalReviewGenerationDisposition(StrictModel):
+    """证据仍不足时，对写作消费面的显式、可审计处置。
+
+    这不是把 ``UNVER`` 洗成 ``PASS``。当前唯一动作只允许下游确定性移除该
+    item 所属的完整事实组；哪些组可安全移除由运行时闭集判断，Commander 不能
+    在载荷里自报一个任意 group 来扩大权限。
+    """
+
+    action: Literal[GLOBAL_REVIEW_GENERATION_DISPOSITIONS]
+    reason: str = Field(min_length=1)
+
+    @model_validator(mode='after')
+    def _reason_has_visible_text(self) -> 'GlobalReviewGenerationDisposition':
+        if not self.reason.strip():
+            raise ValueError('generation disposition reason must not be blank')
+        return self
+
+
 class GlobalReviewItem(StrictModel):
     item_id: str = Field(min_length=1)
     #: ⚠ **加一个值是放宽**（旧字节照样读得进来）⇒ 不升产物版本；**少一个值却等于
@@ -116,6 +136,7 @@ class GlobalReviewItem(StrictModel):
     actor: str | None = None
     decided_at: str | None = None
     reason: str | None = None
+    generation_disposition: GlobalReviewGenerationDisposition | None = None
 
     @model_validator(mode='after')
     def _decision_has_audit_fields(self) -> 'GlobalReviewItem':
@@ -125,6 +146,9 @@ class GlobalReviewItem(StrictModel):
             raise ValueError('decided global-review item requires actor, decided_at, and reason')
         if not decided and any(value is not None for value in values):
             raise ValueError('pending global-review item cannot claim decision audit fields')
+        if self.state != 'UNVER' and self.generation_disposition is not None:
+            raise ValueError(
+                'generation disposition 只属于 UNVER；PASS/FAIL/pending 不能携带')
         return self
 
 
@@ -151,6 +175,13 @@ class GlobalReviewDecision(StrictModel):
     state: Literal['PASS', 'FAIL', 'UNVER']
     reason: str = Field(min_length=1)
     evidence: list[EvidenceRef]
+    generation_disposition: GlobalReviewGenerationDisposition | None = None
+
+    @model_validator(mode='after')
+    def _disposition_belongs_to_unver(self) -> 'GlobalReviewDecision':
+        if self.state != 'UNVER' and self.generation_disposition is not None:
+            raise ValueError('只有 UNVER 决定可以携带 generation disposition')
+        return self
 
 
 class GlobalReviewBlockingScopeDecision(StrictModel):

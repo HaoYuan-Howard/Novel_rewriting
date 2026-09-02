@@ -30,13 +30,19 @@ import sys
 import tempfile
 import threading
 import time
+import warnings
 from collections.abc import Callable, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import BinaryIO, NamedTuple
+from typing import BinaryIO, Iterator, NamedTuple
 
+from contracts.artifacts import STAGE2_GLOBAL_EDIT, STAGE2_GLOBAL_REVIEW_DECISIONS
 from contracts.invariants import AGENT_EXECUTOR_NODES
+from contracts.schema import decode_artifact
 from contracts.schema.api import ExecutionPermit, OperatorNext
+from contracts.schema.evaluation import GlobalReviewDecisionSet
+from contracts.schema.stage2 import GlobalEdit
 from contracts.schema.orchestration import (
     AgentDeliveryOutcome, AgentPending, AgentQueueView, AgentRejected, AgentRunEvent,
     AgentProfile, AgentRunRecord, AgentRunStart, ExecutionEpoch,
@@ -61,12 +67,13 @@ from novel.commanders import (
 )
 from novel.agents.base import _signal_process_tree
 from novel.errors import (
-    ApprovalRequired, TerminalState, UnsupportedRunMode, UpstreamMissing,
+    ApprovalRequired, NovelError, TerminalState, UnsupportedRunMode,
+    UpstreamMissing,
 )
 from novel.llm.ledger import append_commander_call
 from novel.orchestrator import (
-    admission, commander_completion, jobs, operator, reviewer_tasks,
-    service_lifecycle,
+    admission, commander_completion, jobs, operator, queue, reviewer_tasks,
+    service_lifecycle, uploads,
 )
 from novel.orchestrator.agent_supervisor import (
     CommanderTurnResult, LaunchTicket, RunSupervisor, SupervisorActionResult,
@@ -104,6 +111,10 @@ MAX_CONCURRENT = 3
 # unknown，不把“后来终于结束”改写成“生命周期始终可证”。
 _EXECUTION_CLOSE_TIMEOUT_SECONDS = 300.0
 _EXECUTION_CLOSE_POLL_SECONDS = 0.25
+_MAX_REVIEWER_CORRECTIONS = 2
+_MAX_STAGE2_COMMANDER_TURNS = 2
+_ACTION_FAILURE_TAIL_BYTES = 16 * 1024
+_ACTION_FAILURE_DETAIL_CHARS = 4096
 
 _THREADS_LOCK = threading.Lock()
 _THREADS: dict[str, threading.Thread] = {}
@@ -652,6 +663,153 @@ def _write_scratch_bytes(path: Path, payload: bytes) -> None:
                 pass
 
 
+def _action_failure_detail(path: Path, start_offset: int) -> str | None:
+    """从本次 canonical action 的有界日志片段提取明确拒绝事实。"""
+    try:
+        size = path.stat().st_size
+        begin = max(start_offset, size - _ACTION_FAILURE_TAIL_BYTES)
+        with path.open('rb') as stream:
+            stream.seek(begin)
+            raw = stream.read(_ACTION_FAILURE_TAIL_BYTES)
+    except OSError:
+        return None
+    lines = [line.strip() for line in raw.decode(
+        'utf-8', errors='replace').splitlines() if line.strip()]
+    if not lines:
+        return None
+    explicit = [line for line in lines if line.startswith('✗')]
+    detail = explicit[-1] if explicit else '\n'.join(lines[-8:])
+    return detail[-_ACTION_FAILURE_DETAIL_CHARS:]
+
+
+def _write_identity_bound_scratch(
+        directory: Path, *, stem: str, kind: str,
+        identity_sha256: str, payload: bytes) -> Path:
+    """按执行身份给同一 epoch 的多轮输入分配互不覆盖的文件名。
+
+    Reviewer 可以在同一个 execution epoch 内多次处理同一 node/surface；固定
+    文件名会把后一次合法的新 permit 或 typed 决定误判成覆盖。摘要前缀进入
+    文件名后，相同身份仍幂等复用，不同身份各自保留；极低概率的前缀碰撞仍由
+    底层写一次保护关闭式拒绝，不会覆盖旧证据。
+    """
+    path = directory / f'{stem}-{identity_sha256[:20]}.{kind}.json'
+    _write_scratch_bytes(path, payload)
+    return path
+
+
+@contextmanager
+def _stage2_reviewer_input(
+        base: str, sid: str, action: reviewer_tasks.ReviewerNodeAction,
+) -> Iterator[Path]:
+    """把 Commander 的一次性 Stage2 typed 输入放进 producer 认可的服务根。
+
+    scratch 只承载本 epoch 的 prompt、request 与 execution token；
+    ``stage2.global --review-decisions`` 的生产路径契约则只接受当前书或
+    ``_service/edits/<sid>``。这里复用 HTTP 同一个 typed 保存口，避免 permit
+    放行后又在 producer 处因路径口径不同而失败。
+    """
+    payload = action.input_payload
+    if payload is None:  # pragma: no cover —— 调用方只在有 payload 时进入
+        raise RuntimeError('Stage2 reviewer input 缺 typed payload')
+    tokens = set(action.flags)
+    if '--review-decisions' in tokens and '--apply-edit' not in tokens:
+        decoded = decode_artifact(STAGE2_GLOBAL_REVIEW_DECISIONS, payload)
+        decisions = GlobalReviewDecisionSet.model_validate(decoded.payload)
+        path = uploads.save_global_review_decisions(base, sid, decisions)
+    elif '--apply-edit' in tokens and '--review-decisions' not in tokens:
+        decoded = decode_artifact(STAGE2_GLOBAL_EDIT, payload)
+        edit = GlobalEdit.model_validate(decoded.payload)
+        path = uploads.save_global_edit(base, sid, edit)
+    else:
+        raise RuntimeError(
+            'Stage2 reviewer input 必须恰好属于 review-decisions 或 apply-edit')
+    try:
+        yield path
+    finally:
+        try:
+            uploads.discard_edit_plan(base, path)
+        except NovelError as exc:
+            warnings.warn(
+                f'reviewer 节点已结束，但一次性 Stage2 typed 输入清理失败：{exc}',
+                RuntimeWarning, stacklevel=2)
+
+
+@contextmanager
+def _reviewer_node_flags(
+        base: str, sid: str, action: reviewer_tasks.ReviewerNodeAction,
+) -> Iterator[list[str]]:
+    """把可信 typed payload 物化成 permit 与真实 CLI 共用的 exact flags。"""
+    flags = list(action.flags)
+    if action.input_payload is None:
+        yield flags
+        return
+    if action.node != 'stage2.global':
+        raise RuntimeError(f'{action.node} 尚未登记 reviewer 外部输入物化入口')
+    with _stage2_reviewer_input(base, sid, action) as payload_path:
+        materialized = [
+            str(payload_path) if value == '@reviewer-input' else value
+            for value in flags
+        ]
+        if materialized == flags:
+            raise RuntimeError('reviewer input_payload 缺 @reviewer-input flag 占位符')
+        yield materialized
+
+
+def _execute_reviewer_node_action(
+        base: str, sid: str, action: reviewer_tasks.ReviewerNodeAction,
+        run_token: Callable[[ExecutionPermit], SupervisorActionResult],
+) -> SupervisorActionResult:
+    """在一次性输入仍存活时铸 permit 并同步跑完整 canonical runner。"""
+    with _reviewer_node_flags(base, sid, action) as flags:
+        permit = operator.permit(base, sid, action.node, flags)
+        return run_token(permit)
+
+
+def _run_step_argv(
+        base: str, sid: str, epoch: ExecutionEpoch, permit: ExecutionPermit,
+        *, stem: str) -> list[str]:
+    """物化完整 permit，并构造 Supervisor 唯一的 canonical runner argv。"""
+    scratch = service_lifecycle.open_scratch_session(
+        base, sid, epoch.epoch_id)
+    token_path = _write_identity_bound_scratch(
+        scratch, stem=stem, kind='execution-token',
+        identity_sha256=permit.permit_sha256,
+        payload=(permit.model_dump_json(indent=2) + '\n').encode('utf-8'))
+    runner = (
+        REPO_ROOT / '.workflow' / 'skills' / 'novel-pipeline-operator'
+        / 'scripts' / 'run_step.py')
+    return [
+        sys.executable, '-B', str(runner),
+        '--base', base, '--sid', sid,
+        '--expect-code-version', epoch.code_version,
+        '--operator-permit-file', str(token_path), '--execute',
+        permit.node, '--', *permit.flags,
+    ]
+
+
+def _reviewer_approval_argv(
+        base: str, sid: str, epoch: ExecutionEpoch,
+        action: reviewer_tasks.ReviewerApprovalAction) -> list[str]:
+    """给同一 surface 的每轮 typed 决定保留独立输入，再构造公开 CLI argv。"""
+    scratch = service_lifecycle.open_scratch_session(
+        base, sid, epoch.epoch_id)
+    payload = (json.dumps(
+        action.payload, ensure_ascii=False, indent=2,
+        sort_keys=True) + '\n').encode('utf-8')
+    payload_path = _write_identity_bound_scratch(
+        scratch, stem=f'reviewer-{action.surface}', kind='input',
+        identity_sha256=hashlib.sha256(payload).hexdigest(), payload=payload)
+    if action.surface == 'blueprint_seen':
+        tail = [
+            'approval', 'seen', 'read', sid, '--base', base,
+            '--input', str(payload_path)]
+    else:
+        tail = [
+            'approval', 'apply', action.surface, sid, '--base', base,
+            '--input', str(payload_path)]
+    return [sys.executable, '-B', '-m', 'novel.cli', *tail]
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # 三、并发闸与排队
 # ─────────────────────────────────────────────────────────────────────────────
@@ -921,6 +1079,14 @@ def queue_view(base: str | os.PathLike[str], *,
 
 def _sha256_bytes(value: bytes) -> str:
     return hashlib.sha256(value).hexdigest()
+
+
+def _reviewer_request_sha256(path: Path) -> str:
+    """给失败请求一个稳定身份；读不到也不能让纠错循环失去上限。"""
+    try:
+        return _sha256_bytes(path.read_bytes())
+    except OSError as exc:
+        return f'unreadable:{type(exc).__name__}'
 
 
 def _skill_sha256() -> str:
@@ -1312,7 +1478,17 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
     session_ended = False
     pending_reviewer_action: reviewer_tasks.ReviewerAction | None = None
     pending_reviewer_binding: tuple[str, str] | None = None
+    pending_reviewer_business_sha256: str | None = None
+    pending_reviewer_source_task: reviewer_tasks.ReviewerTask | None = None
+    reviewer_correction_task: reviewer_tasks.ReviewerTask | None = None
+    reviewer_correction_binding: tuple[str, str] | None = None
+    reviewer_correction_reason: str | None = None
+    reviewer_correction_request_sha256: str | None = None
+    reviewer_correction_attempts = 0
+    stage2_commander_turns = 0
     reviewed_blockers: set[tuple[str, str]] = set()
+    completed_reviewer_business_actions: set[tuple[str, str]] = set()
+    rejected_reviewer_business_actions: set[tuple[str, str]] = set()
 
     def _resume_prompt(epoch: ExecutionEpoch) -> str:
         return (
@@ -1380,6 +1556,10 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
         nonlocal current_session_invocation, current_session_prompt_sha256
         nonlocal session_started, session_ended
         nonlocal pending_reviewer_action, pending_reviewer_binding
+        nonlocal pending_reviewer_business_sha256, pending_reviewer_source_task
+        nonlocal reviewer_correction_task, reviewer_correction_binding
+        nonlocal reviewer_correction_reason, reviewer_correction_request_sha256
+        nonlocal reviewer_correction_attempts, stage2_commander_turns
         current_code = prov.code_version()
         _require_reproducible_code_version(current_code)
         current_skill = _skill_sha256()
@@ -1425,7 +1605,17 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
             session_ended = False
             pending_reviewer_action = None
             pending_reviewer_binding = None
+            pending_reviewer_business_sha256 = None
+            pending_reviewer_source_task = None
+            reviewer_correction_task = None
+            reviewer_correction_binding = None
+            reviewer_correction_reason = None
+            reviewer_correction_request_sha256 = None
+            reviewer_correction_attempts = 0
+            stage2_commander_turns = 0
             reviewed_blockers.clear()
+            completed_reviewer_business_actions.clear()
+            rejected_reviewer_business_actions.clear()
         else:
             provisional = ExecutionEpoch(
                 epoch_id=epoch_id, ordinal=ordinal, reason=reason,
@@ -1595,16 +1785,20 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
 
     def _run_supervisor_process(
             epoch: ExecutionEpoch, argv: Sequence[str],
-            launch_ticket: LaunchTicket, *, label: str) -> tuple[int, bool]:
+            launch_ticket: LaunchTicket, *,
+            label: str) -> tuple[int, bool, str | None]:
         """启动并 drain 一条 Supervisor canonical 子进程；Popen 后才 commit。"""
         nonlocal active_admission_id
         admission_id = _open_action_admission(epoch)
         process: subprocess.Popen[bytes] | None = None
         drain = _ExecutionDrainResult(timed_out=False)
         rc = CRASH
+        log_path = run_log_path(base, run_id)
+        log_start = 0
         try:
-            log_path = run_log_path(base, run_id)
             log_path.parent.mkdir(parents=True, exist_ok=True)
+            if log_path.exists():
+                log_start = log_path.stat().st_size
             child_env = env_with_context(
                 run_id=run_id, base=base, start=start_payload,
                 contract=contract_payload, epoch=epoch,
@@ -1647,7 +1841,9 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                     active_admission_id = None
             epoch_drain_states[epoch.epoch_id] = (
                 'unknown' if drain.timed_out else 'drained')
-        return rc, drain.timed_out
+        detail = (
+            _action_failure_detail(log_path, log_start) if rc != 0 else None)
+        return rc, drain.timed_out, detail
 
     def _run_commander_turn(
             epoch: ExecutionEpoch,
@@ -1900,7 +2096,8 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
 
     def _action_outcome(
             epoch: ExecutionEpoch, rc: int, timed_out: bool,
-            *, label: str) -> SupervisorActionResult:
+            *, label: str,
+            failure_detail: str | None = None) -> SupervisorActionResult:
         nonlocal latest_outcome, latest_rc, latest_error_kind
         latest_rc = rc
         if timed_out:
@@ -1909,7 +2106,8 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                 state='unknown', checked_at=int(time.time()),
                 reason=f'{label} 的 admission/beacon drain 无法证明闭合')
             return SupervisorActionResult(
-                exit_code=rc, outcome=latest_outcome, continue_ready=False)
+                exit_code=rc, outcome=latest_outcome, continue_ready=False,
+                failure_detail=failure_detail)
         latest_outcome = _assess_delivery(
             base, sid, code_version=epoch.code_version)
         latest_error_kind = None if rc in (0, 1, 2) else f'{label}_process_exit'
@@ -1918,31 +2116,17 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
             # 只有 0/1 能证明本次正式动作已经落盘，才允许重新规划下一步。
             # 2 是显式终态、3 是结构拒绝、70 是崩溃；继续循环会在盘面
             # 未变化时重复执行同一个 ready token，付费节点尤其危险。
-            continue_ready=landed(rc))
+            continue_ready=landed(rc), failure_detail=failure_detail)
 
     def _run_token(
             epoch: ExecutionEpoch, permit: ExecutionPermit,
             launch_ticket: LaunchTicket, *, stem: str) -> SupervisorActionResult:
-        scratch = service_lifecycle.open_scratch_session(
-            base, sid, epoch.epoch_id)
-        token_path = scratch / f'{stem}.execution-token.json'
-        _write_scratch_bytes(
-            token_path,
-            (permit.model_dump_json(indent=2) + '\n').encode('utf-8'))
-        runner = (
-            REPO_ROOT / '.workflow' / 'skills' / 'novel-pipeline-operator'
-            / 'scripts' / 'run_step.py')
-        argv = [
-            sys.executable, '-B', str(runner),
-            '--base', base, '--sid', sid,
-            '--expect-code-version', epoch.code_version,
-            '--operator-permit-file', str(token_path), '--execute',
-            permit.node, '--', *permit.flags,
-        ]
-        rc, timed_out = _run_supervisor_process(
+        argv = _run_step_argv(base, sid, epoch, permit, stem=stem)
+        rc, timed_out, failure_detail = _run_supervisor_process(
             epoch, argv, launch_ticket, label=stem)
         return _action_outcome(
-            epoch, rc, timed_out, label=stem)
+            epoch, rc, timed_out, label=stem,
+            failure_detail=failure_detail)
 
     def _read_operator_next(epoch: ExecutionEpoch) -> OperatorNext:
         # Supervisor 已在本调用前后各核一次 epoch identity；这里复用同一 code，
@@ -1963,74 +2147,223 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
             epoch: ExecutionEpoch,
             action: reviewer_tasks.ReviewerApprovalAction,
             launch_ticket: LaunchTicket) -> SupervisorActionResult:
-        scratch = service_lifecycle.open_scratch_session(
-            base, sid, epoch.epoch_id)
-        payload_path = scratch / f'reviewer-{action.surface}-input.json'
-        _write_scratch_bytes(
-            payload_path,
-            (json.dumps(
-                action.payload, ensure_ascii=False, indent=2,
-                sort_keys=True) + '\n').encode('utf-8'))
-        if action.surface == 'blueprint_seen':
-            tail = [
-                'approval', 'seen', 'read', sid, '--base', base,
-                '--input', str(payload_path)]
-        else:
-            tail = [
-                'approval', 'apply', action.surface, sid, '--base', base,
-                '--input', str(payload_path)]
-        rc, timed_out = _run_supervisor_process(
-            epoch, [sys.executable, '-B', '-m', 'novel.cli', *tail],
+        rc, timed_out, failure_detail = _run_supervisor_process(
+            epoch, _reviewer_approval_argv(base, sid, epoch, action),
             launch_ticket, label=f'reviewer-{action.surface}')
         return _action_outcome(
-            epoch, rc, timed_out, label=f'reviewer-{action.surface}')
+            epoch, rc, timed_out, label=f'reviewer-{action.surface}',
+            failure_detail=failure_detail)
 
     def _run_node_review_action(
             epoch: ExecutionEpoch,
             action: reviewer_tasks.ReviewerNodeAction,
             launch_ticket: LaunchTicket) -> SupervisorActionResult:
-        flags = list(action.flags)
-        if action.input_payload is not None:
-            scratch = service_lifecycle.open_scratch_session(
-                base, sid, epoch.epoch_id)
-            payload_path = scratch / 'reviewer-node-input.json'
-            _write_scratch_bytes(
-                payload_path,
-                (json.dumps(
-                    action.input_payload, ensure_ascii=False, indent=2,
-                    sort_keys=True) + '\n').encode('utf-8'))
-            flags = [str(payload_path) if value == '@reviewer-input' else value
-                     for value in flags]
-        permit = operator.permit(base, sid, action.node, flags)
-        return _run_token(
-            epoch, permit, launch_ticket,
-            stem=f'reviewer-{action.node}')
+        return _execute_reviewer_node_action(
+            base, sid, action,
+            lambda permit: _run_token(
+                epoch, permit, launch_ticket,
+                stem=f'reviewer-{action.node}'))
 
     def _run_reviewer(
             epoch: ExecutionEpoch, current: OperatorNext,
             provider_session_id: str | None,
             launch_ticket: LaunchTicket) -> CommanderTurnResult | None:
         nonlocal pending_reviewer_action, pending_reviewer_binding
+        nonlocal pending_reviewer_business_sha256, pending_reviewer_source_task
+        nonlocal reviewer_correction_task, reviewer_correction_binding
+        nonlocal reviewer_correction_reason, reviewer_correction_request_sha256
+        nonlocal reviewer_correction_attempts, stage2_commander_turns
         nonlocal latest_outcome, latest_rc, latest_error_kind
         assert current.action is not None
         waiting_on = current.action.waiting_on
         assert waiting_on is not None
         binding = (current.surface_seal, waiting_on)
 
+        def run_reviewer_turn(prompt: str) -> CommanderTurnResult:
+            """Stage2 的模型调用预算是产品边界；确定性动作不占轮次。"""
+            nonlocal stage2_commander_turns
+            nonlocal latest_outcome, latest_rc, latest_error_kind
+            if waiting_on in queue.STAGE2_REVIEWER_WAITING_ON:
+                if (waiting_on == queue.WAITING_ON_STAGE2_EDIT_CORRECTION
+                        and stage2_commander_turns == 0):
+                    # 盘上 durable correction 证明第一次 Commander 修改已经执行到
+                    # HARD 闸；新进程只能领取剩下的最后一格，不能重置为两轮。
+                    stage2_commander_turns = 1
+                if stage2_commander_turns >= _MAX_STAGE2_COMMANDER_TURNS:
+                    latest_rc = 2
+                    latest_error_kind = 'stage2_global_turn_budget'
+                    latest_outcome = AgentDeliveryOutcome(
+                        state='stopped', checked_at=int(time.time()),
+                        reason=(
+                            'Stage2 global 已用完 2 次 Commander 调用；'
+                            '拒绝启动第三轮。第二轮返工没有闭合时请人工检查 typed 输入，'
+                            '而不是继续消耗模型'))
+                    return CommanderTurnResult(
+                        exit_code=2,
+                        provider_session_id=provider_session_id,
+                        continue_ready=False,
+                        outcome=latest_outcome)
+                stage2_commander_turns += 1
+            return _run_commander_turn(
+                epoch, provider_session_id,
+                reviewer_prompt=prompt, launch_ticket=launch_ticket)
+
+        if reviewer_correction_task is not None:
+            if reviewer_correction_binding != binding:
+                reviewer_correction_task = None
+                reviewer_correction_binding = None
+                reviewer_correction_reason = None
+                reviewer_correction_request_sha256 = None
+                reviewer_correction_attempts = 0
+                return None
+            task = reviewer_correction_task
+            reason = reviewer_correction_reason
+            previous_request_sha256 = reviewer_correction_request_sha256
+            if reason is None or previous_request_sha256 is None:
+                raise RuntimeError('pending reviewer correction 缺拒绝事实')
+            attempt = reviewer_correction_attempts + 1
+            turn = run_reviewer_turn(reviewer_tasks.correction_prompt(
+                task, reason, attempt=attempt))
+            if turn.exit_code != 0 or turn.provider_session_id is None:
+                return turn
+            request_sha256 = _reviewer_request_sha256(task.request_path)
+            if request_sha256 == previous_request_sha256:
+                reviewer_correction_task = None
+                reviewer_correction_binding = None
+                reviewer_correction_reason = None
+                reviewer_correction_request_sha256 = None
+                reviewer_correction_attempts = 0
+                latest_rc = 2
+                latest_error_kind = 'commander_reviewer_no_progress'
+                latest_outcome = AgentDeliveryOutcome(
+                    state='stopped', checked_at=int(time.time()),
+                    reason=(
+                        'Commander 收到 typed 拒绝反馈后没有改变请求字节；'
+                        '已阻止无效纠错循环'))
+                return CommanderTurnResult(
+                    exit_code=2,
+                    provider_session_id=turn.provider_session_id,
+                    continue_ready=False, outcome=latest_outcome)
+            try:
+                corrected_action = reviewer_tasks.load_action(
+                    task.request_path, current,
+                    submission_options=task.submission_options)
+            except reviewer_tasks.ReviewerTaskError as exc:
+                if attempt >= _MAX_REVIEWER_CORRECTIONS:
+                    reviewer_correction_task = None
+                    reviewer_correction_binding = None
+                    reviewer_correction_reason = None
+                    reviewer_correction_request_sha256 = None
+                    reviewer_correction_attempts = 0
+                    latest_rc = 2
+                    latest_error_kind = 'commander_reviewer_request'
+                    latest_outcome = AgentDeliveryOutcome(
+                        state='stopped', checked_at=int(time.time()),
+                        reason=(
+                            'Commander reviewer typed request 连续纠正后仍未闭合：'
+                            f'{exc}'))
+                    return CommanderTurnResult(
+                        exit_code=2,
+                        provider_session_id=turn.provider_session_id,
+                        continue_ready=False, outcome=latest_outcome)
+                reviewer_correction_reason = str(exc)
+                reviewer_correction_request_sha256 = request_sha256
+                reviewer_correction_attempts = attempt
+                return CommanderTurnResult(
+                    exit_code=turn.exit_code,
+                    provider_session_id=turn.provider_session_id,
+                    continue_ready=True, outcome=turn.outcome,
+                    continue_reviewer=True)
+
+            reviewer_correction_task = None
+            reviewer_correction_binding = None
+            reviewer_correction_reason = None
+            reviewer_correction_request_sha256 = None
+            reviewer_correction_attempts = 0
+            pending_reviewer_action = corrected_action
+            pending_reviewer_binding = binding
+            pending_reviewer_business_sha256 = task.business_sha256
+            pending_reviewer_source_task = task
+            return CommanderTurnResult(
+                exit_code=turn.exit_code,
+                provider_session_id=turn.provider_session_id,
+                continue_ready=True, outcome=turn.outcome,
+                continue_reviewer=True)
+
         if pending_reviewer_action is not None:
             if pending_reviewer_binding != binding:
                 pending_reviewer_action = None
                 pending_reviewer_binding = None
+                pending_reviewer_business_sha256 = None
+                pending_reviewer_source_task = None
                 return None
             action = pending_reviewer_action
+            business_sha256 = pending_reviewer_business_sha256
+            source_task = pending_reviewer_source_task
             pending_reviewer_action = None
             pending_reviewer_binding = None
+            pending_reviewer_business_sha256 = None
+            pending_reviewer_source_task = None
+            if business_sha256 is None or source_task is None:
+                raise RuntimeError('pending reviewer action 缺业务主体或 workpack')
+            action_sha256 = reviewer_tasks.action_business_sha256(action)
+            business_action = (business_sha256, action_sha256)
+            if (business_action in completed_reviewer_business_actions
+                    or business_action in rejected_reviewer_business_actions):
+                latest_rc = 2
+                latest_error_kind = 'commander_reviewer_no_progress'
+                latest_outcome = AgentDeliveryOutcome(
+                    state='stopped', checked_at=int(time.time()),
+                    reason=(
+                        'Commander 在同一 Stage2 业务主体上重复提交了已经执行或拒绝的'
+                        '等价 typed 动作；'
+                        '仅 review surface/workpack 变化不构成修复进展，已阻止无效循环'))
+                return CommanderTurnResult(
+                    exit_code=2,
+                    provider_session_id=provider_session_id,
+                    continue_ready=False,
+                    outcome=latest_outcome)
             if isinstance(action, reviewer_tasks.ReviewerNodeAction):
                 result = _run_node_review_action(
                     epoch, action, launch_ticket)
             else:
                 result = _run_approval_action(
                     epoch, action, launch_ticket)
+            if landed(result.exit_code):
+                completed_reviewer_business_actions.add(business_action)
+            elif result.exit_code == 2 and provider_session_id is not None:
+                # Reviewer 的 typed 动作由 Commander 负责修正。显式终态证明没有
+                # landed；只要 blocker/surface 未变，就把拒绝事实送回同一 provider
+                # session，而不是结束整书 parent。等价动作由上面的业务摘要关闭式拦住。
+                rejected_reviewer_business_actions.add(business_action)
+                rejection = result.failure_detail or (
+                    f'canonical {action.kind} action 返回 exit 2，正式产物未落盘')
+                if (waiting_on in queue.STAGE2_REVIEWER_WAITING_ON
+                        and stage2_commander_turns
+                        >= _MAX_STAGE2_COMMANDER_TURNS):
+                    latest_rc = 2
+                    latest_error_kind = 'stage2_global_second_action_rejected'
+                    latest_outcome = AgentDeliveryOutcome(
+                        state='stopped', checked_at=int(time.time()),
+                        reason=(
+                            'Stage2 global 第二次 Commander 返工仍被确定性边界拒绝；'
+                            f'拒绝启动第三轮。{rejection}'))
+                    return CommanderTurnResult(
+                        exit_code=2,
+                        provider_session_id=provider_session_id,
+                        continue_ready=False, outcome=latest_outcome)
+                reviewer_correction_task = source_task
+                reviewer_correction_binding = binding
+                reviewer_correction_reason = (
+                    f'{rejection}；请按原 workpack 只修正上一份 typed 动作')
+                reviewer_correction_request_sha256 = _reviewer_request_sha256(
+                    source_task.request_path)
+                reviewer_correction_attempts = 0
+                return CommanderTurnResult(
+                    exit_code=result.exit_code,
+                    provider_session_id=provider_session_id,
+                    continue_ready=True, outcome=result.outcome,
+                    continue_reviewer=True)
             return CommanderTurnResult(
                 exit_code=result.exit_code,
                 provider_session_id=provider_session_id,
@@ -2048,25 +2381,38 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
         if task is None:
             return None
         reviewed_blockers.add(binding)
-        turn = _run_commander_turn(
-            epoch, provider_session_id,
-            reviewer_prompt=task.prompt, launch_ticket=launch_ticket)
+        turn = run_reviewer_turn(task.prompt)
         if turn.exit_code != 0:
             return turn
         try:
             pending_reviewer_action = reviewer_tasks.load_action(
-                request_path, current)
+                request_path, current,
+                submission_options=task.submission_options)
         except reviewer_tasks.ReviewerTaskError as exc:
-            latest_rc = 2
-            latest_error_kind = 'commander_reviewer_request'
-            latest_outcome = AgentDeliveryOutcome(
-                state='stopped', checked_at=int(time.time()),
-                reason=f'Commander reviewer typed request 未闭合：{exc}')
+            if turn.provider_session_id is None:
+                latest_rc = 2
+                latest_error_kind = 'commander_reviewer_request'
+                latest_outcome = AgentDeliveryOutcome(
+                    state='stopped', checked_at=int(time.time()),
+                    reason=f'Commander reviewer typed request 未闭合：{exc}')
+                return CommanderTurnResult(
+                    exit_code=2,
+                    provider_session_id=None,
+                    continue_ready=False, outcome=latest_outcome)
+            reviewer_correction_task = task
+            reviewer_correction_binding = binding
+            reviewer_correction_reason = str(exc)
+            reviewer_correction_request_sha256 = _reviewer_request_sha256(
+                task.request_path)
+            reviewer_correction_attempts = 0
             return CommanderTurnResult(
-                exit_code=2,
+                exit_code=turn.exit_code,
                 provider_session_id=turn.provider_session_id,
-                continue_ready=False, outcome=latest_outcome)
+                continue_ready=True, outcome=turn.outcome,
+                continue_reviewer=True)
         pending_reviewer_binding = binding
+        pending_reviewer_business_sha256 = task.business_sha256
+        pending_reviewer_source_task = task
         return CommanderTurnResult(
             exit_code=turn.exit_code,
             provider_session_id=turn.provider_session_id,
@@ -2083,10 +2429,11 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
             '--started-at', str(parent_started_at),
             '--start-code-version', epoch.code_version,
         ]
-        rc, timed_out = _run_supervisor_process(
+        rc, timed_out, failure_detail = _run_supervisor_process(
             epoch, argv, launch_ticket, label='finalize-review')
         return _action_outcome(
-            epoch, rc, timed_out, label='finalize-review')
+            epoch, rc, timed_out, label='finalize-review',
+            failure_detail=failure_detail)
 
     deterministic_callbacks = ({
         'read_operator_next': _read_operator_next,

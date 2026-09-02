@@ -745,6 +745,12 @@ def _run_stage2(ctx: RunContext, flags: list[str]) -> int:
     tokens = set(N.flag_tokens(flags))
 
     if ctx.node == 'stage2.global':
+        if '--emit-edit-correction-workpack' in tokens:
+            print(extract.global_edit_correction_workpack_json(ctx))
+            return X.OK
+        if '--emit-edit-template' in tokens:
+            print(extract.global_edit_template_json(ctx))
+            return X.OK
         if '--emit-review-template' in tokens or '--emit-review-workpack' in tokens:
             from novel.stages.stage2 import global_review
             # 默认只出 blocking 面。裁剪的是**阅读范围**，不是评测面：没进输出的
@@ -779,14 +785,17 @@ def _run_stage2(ctx: RunContext, flags: list[str]) -> int:
             from novel.stages.stage2 import global_review
             review = global_review.apply_file(
                 ctx, _valued(flags, '--review-decisions') or '')
-            passed = global_review.is_approved(ctx, review)
-            print(f'  {"✓" if passed else "⚠"} stage2 全局复核：'
+            generation_safe = global_review.is_generation_safe(ctx, review)
+            all_pass = global_review.is_approved(ctx, review)
+            print(f'  {"✓" if generation_safe else "⚠"} stage2 全局复核：'
                   f'{sum(item.state == "PASS" for item in review.items)}/'
                   f'{len(review.items)} 项 PASS；'
-                  + ('global review 支路已收口；仍需 current blueprint 与联合 HARD '
-                     '通过才打开 s2 gate' if passed else
-                     '仍有非 PASS 项，s2 gate 保持关闭'))
-            return X.OK if passed else X.CHECK_FAILED
+                  + ('全部 blocking 项为 PASS；仍需 current blueprint 与联合 HARD '
+                     '通过才打开 s2 gate' if all_pass else
+                     'blocking UNVER 已逐项隔离并保留披露；写作只消费净化视图，'
+                     '仍需 current blueprint 与联合 HARD 通过' if generation_safe else
+                     '仍有 pending/FAIL 或不可安全隔离的 UNVER，s2 gate 保持关闭'))
+            return X.OK if generation_safe else X.CHECK_FAILED
         if '--resample' in tokens:
             extract.run_resample(ctx, _llm_client(ctx))
             print('  ✓ stage2 全书事实底座已绕过问题缓存重新采样并落盘')

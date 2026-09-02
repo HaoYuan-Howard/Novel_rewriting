@@ -15,7 +15,7 @@ from novel.run import RunContext
 from novel.stages.stage6 import checks, hook, prompts
 from novel.store import ArtifactStore
 from novel.stages.stage6.measure import normalize_hook, quote_problems_of
-from tests import corpus, sandbox
+from tests import corpus, factories, sandbox
 from tests.markers import corpus_params
 
 #: 一条 stage6 纵切跑起来要的五份。
@@ -647,8 +647,8 @@ def test_paid_hook_prompt_excludes_global_source_spans(monkeypatch):
     from types import SimpleNamespace
 
     from novel.core.evidence import iter_global_evidence_slots
+    from novel.stages.stage2 import global_review as stage2_global_review
     from novel.stages.stage5 import review as stage5_review
-    from tests import factories
     from tests.test_stage2 import global_grounding
 
     seed = factories.stage5_book()
@@ -682,6 +682,7 @@ def test_paid_hook_prompt_excludes_global_source_spans(monkeypatch):
 
     stored = {
         hook.GLOBAL_GROUNDING: Dumped(grounding),
+        stage2_global_review.REL: factories.approved_global_review(grounding),
         hook.WRITER_CONTEXT: Dumped(seed.ctx),
         hook.HOOK_COPY: SimpleNamespace(text='原作开篇文案。'),
     }

@@ -36,12 +36,18 @@
 .PARAMETER Install
     强制重装 web 依赖（默认只在 node_modules 缺失时装）。
 
+.PARAMETER Restart
+    8765 已有本审校台服务时，先确认没有 running/paused Agent、待启动 Agent 或
+    running API 作业，再停止旧 Python 进程并用当前代码重新启动。默认不传时仍复用旧服务。
+
 .EXAMPLE
     .\scripts\start.ps1
 .EXAMPLE
     .\scripts\start.ps1 -Base D:\另一个语料根
 .EXAMPLE
     .\scripts\start.ps1 -Dev
+.EXAMPLE
+    .\scripts\start.ps1 -Restart
 #>
 [CmdletBinding()]
 param(
@@ -50,7 +56,8 @@ param(
     [switch] $Dev,
     [switch] $NoBuild,
     [switch] $NoOpen,
-    [switch] $Install
+    [switch] $Install,
+    [switch] $Restart
 )
 
 $ErrorActionPreference = 'Stop'
@@ -70,9 +77,136 @@ function Write-Note([string]$m) { Write-Host "    $m" -ForegroundColor DarkGray 
 function Write-Warn([string]$m) { Write-Host "!!  $m" -ForegroundColor Yellow }
 function Write-Bad ([string]$m) { Write-Host "xx  $m" -ForegroundColor Red }
 
+function Get-ListeningTcpProcess([int]$p) {
+    <#
+      Get-NetTCPConnection 在部分普通用户 / agent 沙箱里会直接 AccessDenied；若把那个
+      失败吞成「端口没监听」，下一步只会再起一个必然撞端口的 uvicorn。netstat 是这里
+      更窄的读面：只解析 TCP LISTENING 行，并把 PID 与本地地址一起保留给重启身份检查。
+    #>
+    $seen = @{}
+    $netstat = Join-Path $env:SystemRoot 'System32\netstat.exe'
+    foreach ($line in (& $netstat -ano -p TCP 2>$null)) {
+        $fields = @($line.Trim() -split '\s+')
+        if ($fields.Count -lt 5 -or $fields[0] -ne 'TCP' -or
+            $fields[3] -ne 'LISTENING' -or
+            -not $fields[1].EndsWith(":$p")) {
+            continue
+        }
+        $listenerPid = 0
+        if (-not [int]::TryParse($fields[4], [ref]$listenerPid)) { continue }
+        $identity = "$($fields[1])|$listenerPid"
+        if ($seen.ContainsKey($identity)) { continue }
+        $seen[$identity] = $true
+        [pscustomobject]@{
+            LocalAddress = $fields[1]
+            ProcessId = $listenerPid
+        }
+    }
+}
+
 function Test-PortListening([int]$p) {
-    $c = Get-NetTCPConnection -State Listen -LocalPort $p -ErrorAction SilentlyContinue
-    return $null -ne $c
+    return @(Get-ListeningTcpProcess $p).Count -gt 0
+}
+
+function Get-NovelServiceActivity([int]$p) {
+    <#
+      HTTP 形状同时证明「这是审校台」与「当前可安全停」。不能只凭 python.exe + 8765
+      就杀进程：同一解释器可以承载别的本机服务，而进程名不是产品身份。
+    #>
+    $root = "http://127.0.0.1:$p/api"
+    try {
+        $agentQueue = Invoke-RestMethod -Method Get -TimeoutSec 5 `
+            -Uri "$root/agent/runs/queue"
+        $agentRuns = Invoke-RestMethod -Method Get -TimeoutSec 5 `
+            -Uri "$root/agent/runs"
+        $jobs = Invoke-RestMethod -Method Get -TimeoutSec 5 -Uri "$root/jobs"
+    } catch {
+        throw "端口 $p 上的服务无法通过审校台只读 API 验明身份：$($_.Exception.Message)"
+    }
+    $shapeChecks = @(
+        [pscustomobject]@{ Value = $agentQueue; Names = @('running', 'pending') },
+        [pscustomobject]@{ Value = $agentRuns; Names = @('runs') },
+        [pscustomobject]@{ Value = $jobs; Names = @('jobs') }
+    )
+    foreach ($required in $shapeChecks) {
+        $value = $required.Value
+        foreach ($name in $required.Names) {
+            if ($null -eq $value -or
+                -not ($value.PSObject.Properties.Name -contains $name)) {
+                throw "端口 $p 返回的不是当前审校台 API 形状（缺 $name）"
+            }
+        }
+    }
+    $activeAgents = @($agentRuns.runs | Where-Object {
+        $_.state -in @('pending', 'running', 'paused')
+    })
+    $pendingAgents = @($agentQueue.pending)
+    $activeJobs = @($jobs.jobs | Where-Object {
+        $_.state -in @('pending', 'running')
+    })
+    return [pscustomobject]@{
+        ActiveAgents = $activeAgents
+        PendingAgents = $pendingAgents
+        ActiveJobs = $activeJobs
+    }
+}
+
+function Stop-IdleNovelService([int]$p, [string]$expectedPython) {
+    $listeners = @(Get-ListeningTcpProcess $p)
+    if ($listeners.Count -ne 1) {
+        throw "端口 $p 应恰有一个监听进程，实际 $($listeners.Count) 个；拒绝猜测该停谁"
+    }
+    $listener = $listeners[0]
+    if ($listener.LocalAddress -ne "127.0.0.1:$p") {
+        throw "端口 $p 的监听地址是 $($listener.LocalAddress)，不是审校台冻结的 127.0.0.1；拒绝停止"
+    }
+
+    $activity = Get-NovelServiceActivity $p
+    if ($activity.ActiveAgents.Count -gt 0 -or
+        $activity.PendingAgents.Count -gt 0 -or
+        $activity.ActiveJobs.Count -gt 0) {
+        throw (
+            "拒绝重启：active agent=$($activity.ActiveAgents.Count)，" +
+            "queued agent=$($activity.PendingAgents.Count)，" +
+            "active API job=$($activity.ActiveJobs.Count)。先在界面安全闭合这些任务。")
+    }
+
+    try {
+        $process = Get-Process -Id $listener.ProcessId -ErrorAction Stop
+    } catch {
+        throw "监听进程 PID $($listener.ProcessId) 在身份检查后消失；请重新执行 -Restart"
+    }
+    if ($process.ProcessName -ne 'python') {
+        throw "PID $($listener.ProcessId) 是 $($process.ProcessName)，不是审校台 Python；拒绝停止"
+    }
+    if ($expectedPython) {
+        $actualPath = $process.Path
+        if (-not $actualPath -or
+            -not [string]::Equals(
+                [IO.Path]::GetFullPath($actualPath),
+                [IO.Path]::GetFullPath($expectedPython),
+                [StringComparison]::OrdinalIgnoreCase)) {
+            throw "PID $($listener.ProcessId) 的解释器不是环境 $CondaEnv；拒绝停止"
+        }
+    }
+
+    # 最后一刻重读 listener，避免 HTTP 检查期间 PID/端口换主后杀到新进程。
+    $current = @(Get-ListeningTcpProcess $p)
+    if ($current.Count -ne 1 -or
+        $current[0].ProcessId -ne $listener.ProcessId -or
+        $current[0].LocalAddress -ne $listener.LocalAddress) {
+        throw "端口 $p 的监听身份在检查期间变化；请重新执行 -Restart"
+    }
+
+    Write-Step "[2/3] 停止旧审校台：PID $($listener.ProcessId)"
+    Stop-Process -Id $listener.ProcessId -ErrorAction Stop
+    for ($i = 0; $i -lt 50 -and (Test-PortListening $p); $i++) {
+        Start-Sleep -Milliseconds 200
+    }
+    if (Test-PortListening $p) {
+        throw "PID $($listener.ProcessId) 已收到停止请求，但端口 $p 在 10 秒后仍监听"
+    }
+    Write-Note '旧服务已停止；下面会用当前磁盘代码启动新进程。'
 }
 
 function Resolve-Npm {
@@ -268,11 +402,25 @@ if ($Dev) {
 $apiArgs = @('-X', 'utf8', '-u', '-m', 'novel.api', '--base', $Base)
 
 if (Test-PortListening $ApiPort) {
-    # 已经有一个在跑。⚠ 不再起第二个：那只会得到一个「端口被占用」的堆栈，
-    # 而人想要的显然是「把已经开着的那个给我看」。
-    Write-Note "[2/3] $ApiPort 上已经有服务在听，复用它（没有起新进程）。"
-    $alreadyUp = $true
+    if ($Restart) {
+        try {
+            Stop-IdleNovelService $ApiPort $Python
+        } catch {
+            Write-Bad $_.Exception.Message
+            exit 3
+        }
+        $alreadyUp = $false
+    } else {
+        # 默认双击仍只「启动或打开」：若正在付费跑书，第二次双击不能把它当残留进程杀掉。
+        # 后端代码变化后要显式使用 -Restart；它会先验服务身份与三类活动任务。
+        Write-Note "[2/3] $ApiPort 上已经有服务在听，复用它（没有起新进程）。"
+        Write-Note '要加载新的后端代码，请运行 scripts\start.cmd -Restart，或双击 scripts\restart.cmd。'
+        $alreadyUp = $true
+    }
 } else {
+    if ($Restart) {
+        Write-Note "[2/3] $ApiPort 没有旧服务；直接用当前代码启动。"
+    }
     $alreadyUp = $false
 }
 

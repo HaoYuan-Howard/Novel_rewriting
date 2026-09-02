@@ -4,6 +4,7 @@ rem ---------------------------------------------------------------------------
 rem Double-click this file to start the console. Arguments pass through:
 rem     scripts\start.cmd -Dev
 rem     scripts\start.cmd -Base D:\another_corpus_root
+rem     scripts\start.cmd -Restart
 rem
 rem ASCII ONLY IN THIS FILE. cmd.exe parses .cmd bytes in the console codepage
 rem (936/GBK here), so UTF-8 Chinese in a rem line decodes short and swallows

@@ -822,6 +822,7 @@ function freshGlobalReview(): GlobalReviewResponse {
     actor: 'mock-reviewer',
     decided_at: '2026-08-16T00:00:00+00:00',
     reason: 'mock 样本已经逐项核对',
+    generation_disposition: null,
   }
   // ⚠ `effect` / `group_key` 由服务端派生，mock 只是**转录**后端会下发的值——
   //   这里不许现算一份分类逻辑，那正是屏幕侧被禁止的第二个判官。
@@ -830,6 +831,8 @@ function freshGlobalReview(): GlobalReviewResponse {
     current_subject_sha256: MOCK_SHA.source,
     current: true,
     approved: true,
+    generation_safe: true,
+    quarantined_groups: [],
     effect_counts: {
       blocking: { pending: 0, PASS: 4, FAIL: 0, UNVER: 0 },
       disclosure: { pending: 1, PASS: 0, FAIL: 0, UNVER: 0 },
@@ -884,6 +887,7 @@ function freshGlobalReview(): GlobalReviewResponse {
         actor: null,
         decided_at: null,
         reason: null,
+        generation_disposition: null,
       },
     ],
   }
@@ -1675,7 +1679,13 @@ export const mockApi: Api = {
     const blocking = items.filter((item) => item.effect === 'blocking')
     const approved = review.current && blocking.length > 0
       && blocking.every((item) => item.state === 'PASS')
-    saveGlobalReview(sid, { ...review, items, approved })
+    saveGlobalReview(sid, {
+      ...review,
+      items,
+      approved,
+      generation_safe: approved,
+      quarantined_groups: [],
+    })
     const job = finish({
       kind: 'stage2.global',
       label: 'stage2 全局复核决策',

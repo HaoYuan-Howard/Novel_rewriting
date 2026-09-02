@@ -84,7 +84,8 @@ def load_book(ctx: RunContext, store: ArtifactStore) -> M.Book:
         if not store.exists(rel):
             raise UpstreamMissing(f'{rel} 不在盘上——先跑 {rel.split("/")[0]}')
     main = store.read(_main_text_model(), MAIN_TEXT)
-    gg = store.read(GlobalGrounding, GLOBAL_GROUNDING)
+    from novel.stages.stage2 import global_review as stage2_global_review
+    gg = stage2_global_review.generation_grounding(store)
     wc = store.read(WriterContext, WRITER_CONTEXT)
     measurable = body_style_metrics(measure_body(main))
     global_projected = without_global_evidence(gg.model_dump(by_alias=True))

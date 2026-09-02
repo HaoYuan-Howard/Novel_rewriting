@@ -114,8 +114,8 @@ workpack；确认完整面成立后，才把 scope 改为 `PASS`，
 要逐项裁 disclosure 时改用 `--review-scope all` 的完整骨架。裁决口径不变：
 
 1. `PASS`：主体与原文逐项一致，且集合完整性已做正向与反向核对；scope 总理由与逐项例外理由都写明分母和核验位置。
-2. `FAIL`：存在可指向的冲突、错抽或漏抽；先走 typed Stage2 编辑/重建，再生成新模板。不能用“已知问题”把 FAIL 当成披露放行。
-3. `UNVER`：证据不足以安全判断；如实保留并以 `stopped` 结束。Agent 代批权限不包括把未知改写成已通过。
+2. `FAIL`：存在可指向的冲突、错抽或漏抽；首轮必须把全部问题一次列全。第二轮从 `stage2.global --emit-edit-template` 取得当前 typed GlobalEdit，在同一 Commander resume 上下文里一次提交合并修复与 `post_edit_review` 自审。patch 数组只能修改模板已有行，行数、顺序、subject id 与字段集合全部绑定；新增/拆分 subject 只走生产模板明确提供的完整 `*_replace`。producer 只把自审展开到本 edit 新打开的 blocking 项，未变化的旧 FAIL 仍红；第二轮不闭合也不启动第三轮。不能重复提交同一 review，也不能用“已知问题”把 FAIL 当成披露放行。
+3. `UNVER`：证据不足以安全判断；绝不改写成 PASS。若当前 submission option 明确给出 `quarantine_group`，可在阅读完整组后填写隔离理由：状态仍为 UNVER，原始事实与审计保留，下游写作视图删除完整组；否则先用 GlobalEdit 修复。只有 GlobalEdit 无法表达、且该组不能安全隔离时才以 `stopped` 结束。
 
 ### blocking 与 disclosure 是两轴，不是两档优先级
 
@@ -123,7 +123,9 @@ workpack；确认完整面成立后，才把 scope 改为 `PASS`，
 范围，不是评测面：没进输出的 `disclosure` 项在盘上仍是 `pending`，仍逐条出现在 `inbox`
 （`delivery_effect='disclosure'`）与终审包。
 
-- `blocking`（当前 95/145 那一类的口径）：判错会让下游造出一本假书 ⇒ 逐项 PASS 才开 Stage4。
+- `blocking`（当前 95/145 那一类的口径）：判错会让下游造出一本假书 ⇒ 逐项 PASS；或对
+  `secret:<id>` / `relation:<id>` / `world_rule:<id>` 完整组显式 quarantine 并从写作视图删除，
+  才开 Stage4。人物、setting、arc 与集合完整性不在隔离白名单。
 - `disclosure`（`name_distinctiveness` / `address_context` / `fate` 三类）：不挡 Stage4，
   但**不许自动 PASS、不许从终审包消失**。终审包必须逐条列出它们的 subject_path 与状态。
 
@@ -136,11 +138,21 @@ workpack；确认完整面成立后，才把 scope 改为 `PASS`，
 只改未消费字段则以 freshness 结论复用。review 早于 blueprint 完成也可以保存，但 Stage2 状态仍关闭，
 不得把“已有人审”冒充整层已收口。
 
-提交 `--review-decisions` 后重新读取当前 review，并运行 Stage2 唯一显式复检
+Stage2 global 最多两次真实 Commander 调用：首轮完整审阅；第二轮在同一 provider session 中把
+GlobalEdit 与修后自审合为一份 typed 动作。两次之间的 review/edit 执行都是 0-wire，不新建 Executor
+模型会话也不占模型轮次。业务主体未变化却重复等价 typed 动作时由 Supervisor 关闭式停止，不能靠
+review surface 自变循环。typed request 被 loader 拒绝，或 canonical reviewer action 以 exit 2 在写盘前
+终止时，可以把精确拒绝原因紧凑送回同一 provider session，但这次纠错仍计入两次上限；已用完预算就
+保留拒绝事实并停止，不重发整份 workpack、不新开会话、不启动第三次。若 action 已产生绑定当前
+`global_edit.json` 的 `.INVALID`，该失败不是瞬时日志：队列必须在 Blueprint redo 之前暴露
+`recovery:stage2-global-reviewed-edit`，最终 correction workpack 只带正式 review 与失败 edit/INVALID
+的精确 HARD；同进程沿用 provider session，服务/代码身份变化后的安全恢复虽新开 session，仍把首轮计入
+预算，只剩一次调用。pause/resume 保留上下文与计数，进程重启也不得重置预算。
+随后运行 Stage2 唯一显式复检
 `stage2.blueprint --check-only`：只有 global 与 blueprint 均 current、联合 HARD 通过、评测面 current
-且**每一个 blocking 项**都是 PASS，才可运行 Stage4A 或任何后续付费/组装/下载路径。CLI、API、队列、组装与下载
-会重复执行同一道硬闸；外层 Agent `exit 0` 不会覆盖该结论。`FAIL` / `UNVER` / pending 仍全部阻断，
-人审只是从 blueprint 的串行前置移到 Stage4 前的汇合点，没有被删除。
+且 blocking 面 generation-safe，才可运行 Stage4A 或任何后续付费/组装/下载路径。CLI、API、队列、
+组装与下载会重复执行同一道闸；外层 Agent `exit 0` 不覆盖结论。pending、FAIL、未处置或不可隔离
+UNVER 仍阻断；已隔离 UNVER 仍进 inbox/终审包并把最终态限制为 `ready_with_disclosures`。
 
 ## Stage4 结构代批
 

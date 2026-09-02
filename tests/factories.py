@@ -3,9 +3,31 @@
 """Small, deterministic builders for tests that do not need the local corpus."""
 from __future__ import annotations
 
+from typing import Any
+
+from contracts.schema.evaluation import GlobalReview
 from contracts.schema.stage1 import MainText
 from novel.core.measure import body_style_metrics, measure_body
+from novel.quality.global_review import build_review
 from novel.stages.stage5.measure import Book
+
+
+def approved_global_review(grounding: Any) -> GlobalReview:
+    """用生产 review builder 铸造测试下游所需的 current 全 PASS 前置事实。"""
+    payload = (
+        grounding.model_dump(by_alias=True, mode='json')
+        if hasattr(grounding, 'model_dump') else grounding
+    )
+    expected = build_review(payload)
+    return expected.model_copy(update={'items': [
+        item.model_copy(update={
+            'state': 'PASS',
+            'actor': 'test-reviewer',
+            'decided_at': '2026-09-02T00:00:00+00:00',
+            'reason': '测试下游的显式 current Stage2 前置事实',
+        })
+        for item in expected.items
+    ]})
 
 
 def stage5_book() -> Book:

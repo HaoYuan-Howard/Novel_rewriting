@@ -259,7 +259,8 @@ class _Upstreams:
         for rel in (GLOBAL_GROUNDING, MAIN_TEXT, PLAN_CHAPTERS, WRITER_CONTEXT):
             if not store.exists(rel):
                 raise UpstreamMissing(f'{rel} 不在盘上——先跑 {rel.split("/")[0]}')
-        gg = store.read(GlobalGrounding, GLOBAL_GROUNDING)
+        from novel.stages.stage2 import global_review as stage2_global_review
+        gg = stage2_global_review.generation_grounding(store)
         main_text = store.read(paths_model(MAIN_TEXT), MAIN_TEXT)
         plan_art = store.read(PlanChapters, PLAN_CHAPTERS)
         writer_context = store.read(WriterContext, WRITER_CONTEXT)

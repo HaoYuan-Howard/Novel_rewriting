@@ -73,6 +73,11 @@ OPTIONAL_HUMAN_NODES: frozenset[str] = frozenset({'stage0.edit'})
 #: 待人工清单非空时挡队列的那个理由（`INBOX_KIND` 的 `invalid`）。
 WAITING_ON_INBOX = 'inbox:invalid'
 WAITING_ON_STAGE2_REVIEW = 'approval:stage2-global-review'
+WAITING_ON_STAGE2_EDIT_CORRECTION = 'recovery:stage2-global-reviewed-edit'
+STAGE2_REVIEWER_WAITING_ON = frozenset({
+    WAITING_ON_STAGE2_REVIEW,
+    WAITING_ON_STAGE2_EDIT_CORRECTION,
+})
 WAITING_ON_STAGE4_DESIGN_REVIEW = 'approval:stage4-design-review'
 WAITING_ON_FROZEN_V6_DESIGN_AUTHORITY = \
     'legacy_frozen_v6_design_authority_unavailable'
@@ -238,6 +243,8 @@ def plan_book_from_overview(
     # blocked writer 仍由 ``stuck`` 传递，不伪装成会在本次改变主体。
     stage5_write_will_run = False
     naming_projection_blocked = st.stage2_global_projection_blocked(ov)
+    reviewed_edit_correction = st.stage2_reviewed_edit_correction_needed(
+        base, sid, ov)
 
     for node in nodes_up_to(until_stage):
         spec = NODES[node]
@@ -266,6 +273,12 @@ def plan_book_from_overview(
             if _human_gate_satisfied(base, sid, node):
                 continue                             # 人已经完成这道闸
             why_blocked = node                       # 在等这一步的那个人
+        if (why_blocked is None and node == 'stage2.global'
+                and reviewed_edit_correction):
+            # reviewed GlobalEdit 已经执行到 HARD 闸、但 Commander 的最后一次纠正
+            # 尚未落地。必须先恢复这一个逻辑动作；若让最新 INVALID 投影把 planner
+            # 推到 Blueprint REDO，既丢原 reviewer 上下文，也会把一次纠正扩成新任务。
+            why_blocked = WAITING_ON_STAGE2_EDIT_CORRECTION
         if (why_blocked is None
                 and (projection_blocked
                      or (blueprint_invalid_recovery
@@ -477,6 +490,7 @@ def plan_book_from_overview(
         if why_blocked in (
             WAITING_ON_INBOX,
             WAITING_ON_STAGE2_REVIEW,
+            WAITING_ON_STAGE2_EDIT_CORRECTION,
             WAITING_ON_STAGE4_DESIGN_REVIEW,
             WAITING_ON_STAGE4_BINDING_RESOLUTION,
             WAITING_ON_STAGE4_STRUCTURE_REVIEW,
@@ -575,6 +589,13 @@ def _blocked_why(
         return (
             'Stage4B 的最终 Plan 尚未在当前主体上逐章 all-accept；免费 '
             '`stage4.context` 也必须等这张最终结构票，审批后重新预览才会出现；'
+            f'{verdict_why}')
+    if waiting_on == WAITING_ON_STAGE2_EDIT_CORRECTION:
+        return (
+            '上一份带 post_edit_review 的 Stage2 GlobalEdit 已执行，但被确定性 HARD '
+            '闸拒绝；盘上的 edit、INVALID 与不可变基线仍精确闭合。当前只允许恢复为'
+            '同一逻辑任务的第二次、也是最后一次 Commander 纠正，不重跑 Blueprint，'
+            '也不重新发放两轮模型预算；'
             f'{verdict_why}')
     if waiting_on == WAITING_ON_FROZEN_V6_DESIGN_AUTHORITY:
         return (
@@ -1591,7 +1612,8 @@ def resume_incomplete(base: str | os.PathLike[str], *,
 
 __all__ = [
     'HUMAN_NODES', 'OPTIONAL_HUMAN_NODES', 'WAITING_ON_INBOX',
-    'WAITING_ON_STAGE2_REVIEW',
+    'WAITING_ON_STAGE2_REVIEW', 'WAITING_ON_STAGE2_EDIT_CORRECTION',
+    'STAGE2_REVIEWER_WAITING_ON',
     'WAITING_ON_STAGE4_DESIGN_REVIEW',
     'WAITING_ON_STAGE4_BINDING_RESOLUTION',
     'WAITING_ON_STAGE4_STRUCTURE_REVIEW',

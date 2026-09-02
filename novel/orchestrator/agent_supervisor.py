@@ -33,6 +33,10 @@ class CommanderTurnResult:
     provider_session_id: str | None
     continue_ready: bool
     outcome: AgentDeliveryOutcome
+    # canonical reviewer 动作若在正式写入前被拒，下一启动窗口必须先完成
+    # 同一 immutable workpack 的紧凑纠错；不能先重取全局 next，让失败尝试
+    # 留下的 INVALID/stale surface 抢走原 reviewer 会话。
+    continue_reviewer: bool = False
 
 
 @dataclass(frozen=True)
@@ -50,6 +54,7 @@ class SupervisorActionResult:
     exit_code: int
     outcome: AgentDeliveryOutcome
     continue_ready: bool = True
+    failure_detail: str | None = None
 
 
 class LaunchTicket:
@@ -500,6 +505,7 @@ class RunSupervisor:
                     active_epoch_closed = False
                     self._open_epoch(epoch)
                 epoch_last: CommanderTurnResult | None = None
+                reviewer_continuation: OperatorNext | None = None
 
                 while True:
                     if not self._identity_current(epoch):
@@ -525,7 +531,14 @@ class RunSupervisor:
                             close_epoch(epoch, epoch_last)
                             return SupervisorResult(turn=last, stopped=True)
 
-                    current = self._read_next(epoch)
+                    if reviewer_continuation is None:
+                        current = self._read_next(epoch)
+                    else:
+                        # 只跨 reviewer 的下一启动窗口保留一次。执行动作本身仍由
+                        # callback 现场铸 live permit；这里保留的是 typed request 的
+                        # immutable workpack binding，不是执行授权。
+                        current = reviewer_continuation
+                        reviewer_continuation = None
                     if (current.code_version != epoch.code_version
                             or not self._identity_current(epoch)):
                         identity_turn = epoch_last or CommanderTurnResult(
@@ -589,6 +602,8 @@ class RunSupervisor:
                                 raise RuntimeError(
                                     'Commander exact resume 返回不同 provider session id')
                             provider_session_id = turn.provider_session_id
+                        if turn.continue_reviewer:
+                            reviewer_continuation = current
 
                     with self._condition:
                         pause_requested = self._pause_requested

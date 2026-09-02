@@ -22,7 +22,7 @@ from typing import Any, Callable, Final, Mapping
 from contracts.artifacts import (
     STAGE0_CLEAN_TEXT, STAGE0_REVISIONS, STAGE1_HOOK_COPY, STAGE1_MAIN_TEXT,
     STAGE2_BLUEPRINT_CHARACTER_PROJECTION, STAGE2_CHAPTER_BLUEPRINTS,
-    STAGE2_GLOBAL_EDIT, STAGE2_GLOBAL_GROUNDING,
+    STAGE2_GLOBAL_EDIT, STAGE2_GLOBAL_GROUNDING, STAGE2_GLOBAL_REVIEW,
     RETIRED_STAGE3_STYLE_GROUNDING, STAGE4_BLIND_CANDIDATE,
     STAGE4_BLIND_CHAPTER_EDIT, STAGE4_EVIDENCE_BINDING,
     STAGE4_PLAN_CHAPTERS, STAGE4_PLAN_EDIT,
@@ -30,7 +30,7 @@ from contracts.artifacts import (
     STAGE6_HOOK, STAGE6_HOOK_EDIT,
     STAGE7_NAME_MAP_EDIT,
 )
-from contracts.invariants import NODES, STYLE_MEASUREMENT_CONTRACT
+from contracts.invariants import NODES, STYLE_MEASUREMENT_CONTRACT, review_effect_of
 from novel.core.evidence import without_global_evidence
 
 Projection = Callable[[object], object]
@@ -41,6 +41,33 @@ def artifact_payload(data: object) -> object:
     if isinstance(data, dict):
         return {key: value for key, value in data.items() if key != '_provenance'}
     return data
+
+
+def stage2_generation_review(data: object) -> object:
+    """下游只消费会改变写作视图的 blocking 决定与隔离动作。
+
+    actor、判词措辞或展示 evidence 改字不会改变模型能看到的事实；state、主体身份
+    与 disposition 改变则必须让既有下游 stale。披露项本来就不进写作视图。
+    """
+    if not isinstance(data, dict):
+        return None
+    rows = []
+    for item in data.get('items') or []:
+        if not isinstance(item, dict):
+            continue
+        kind = item.get('kind')
+        if not isinstance(kind, str) or review_effect_of(kind) != 'blocking':
+            continue
+        rows.append({
+            'item_id': item.get('item_id'),
+            'subject_sha256': item.get('subject_sha256'),
+            'state': item.get('state'),
+            'generation_disposition': item.get('generation_disposition'),
+        })
+    return {
+        'source_sha256': data.get('source_sha256'),
+        'blocking_items': rows,
+    }
 
 
 def stage2_main_text(data: object) -> object:
@@ -698,6 +725,7 @@ CONSUMED_PROJECTIONS: Final[dict[str, dict[str, Projection]]] = {
         STAGE1_MAIN_TEXT: stage4_main_text,
         STAGE2_CHAPTER_BLUEPRINTS: stage4_plan_blueprints,
         STAGE2_GLOBAL_GROUNDING: stage4_grounding,
+        STAGE2_GLOBAL_REVIEW: stage2_generation_review,
         STAGE4_BLIND_CANDIDATE: artifact_payload,
         # B 的正式 binding 是最终 v3 计划的直接编译输入；不登记这一边，producer
         # 虽然会如实把它写进 provenance，刚写完的 freshness 却只能报
@@ -709,16 +737,19 @@ CONSUMED_PROJECTIONS: Final[dict[str, dict[str, Projection]]] = {
         STAGE1_MAIN_TEXT: stage4_main_text,
         STAGE2_CHAPTER_BLUEPRINTS: stage4_context_blueprints,
         STAGE2_GLOBAL_GROUNDING: stage4_grounding,
+        STAGE2_GLOBAL_REVIEW: stage2_generation_review,
         STAGE4_PLAN_CHAPTERS: artifact_payload,
     },
     'stage5.write': {
         STAGE1_MAIN_TEXT: stage5_main_text,
         STAGE2_GLOBAL_GROUNDING: stage5_grounding,
+        STAGE2_GLOBAL_REVIEW: stage2_generation_review,
         STAGE4_WRITER_CONTEXT: stage5_context,
     },
     'stage5.review': {
         STAGE1_MAIN_TEXT: stage5_main_text,
         STAGE2_GLOBAL_GROUNDING: stage5_review_grounding,
+        STAGE2_GLOBAL_REVIEW: stage2_generation_review,
         STAGE4_WRITER_CONTEXT: stage5_review_context,
         # retain_pretrim 的人工裁决绑定完整 audit bytes；任一审计事实变化都应过期。
         STAGE5_TRIM_AUDIT: artifact_payload,
@@ -726,18 +757,21 @@ CONSUMED_PROJECTIONS: Final[dict[str, dict[str, Projection]]] = {
     'stage6.hook': {
         STAGE1_HOOK_COPY: stage6_hook_copy,
         STAGE2_GLOBAL_GROUNDING: stage6_grounding,
+        STAGE2_GLOBAL_REVIEW: stage2_generation_review,
         STAGE4_WRITER_CONTEXT: stage6_context,
         STAGE6_HOOK_EDIT: artifact_payload,
     },
     'stage6.semantic': {
         STAGE1_HOOK_COPY: stage6_hook_copy,
         STAGE2_GLOBAL_GROUNDING: stage6_grounding,
+        STAGE2_GLOBAL_REVIEW: stage2_generation_review,
         STAGE4_WRITER_CONTEXT: stage6_context,
         STAGE6_HOOK: stage6_semantic_hook,
     },
     'stage7.rename': {
         STAGE1_MAIN_TEXT: stage7_main_text,
         STAGE2_GLOBAL_GROUNDING: stage7_grounding,
+        STAGE2_GLOBAL_REVIEW: stage2_generation_review,
         STAGE4_PLAN_CHAPTERS: stage7_plan,
         STAGE4_WRITER_CONTEXT: stage7_context,
         STAGE6_HOOK: stage7_hook,

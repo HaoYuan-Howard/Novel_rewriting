@@ -22,10 +22,11 @@ from contracts.schema.evaluation import GlobalReviewDecisionSet
 from contracts.schema import encode_artifact
 from contracts.artifacts import (
     STAGE2_BLUEPRINT_RELATION_EDIT,
+    STAGE2_GLOBAL_EDIT,
     STAGE2_GLOBAL_REVIEW_DECISIONS,
 )
 from contracts.schema.api import BatchTrimResolutionRequest
-from contracts.schema.stage2 import BlueprintRelationEdit
+from contracts.schema.stage2 import BlueprintRelationEdit, GlobalEdit
 from contracts.schema.stage5 import ChapterResponse
 from novel import paths
 from novel.errors import (
@@ -234,6 +235,42 @@ def save_global_review_decisions(
         os.replace(tmp, target)
     except OSError as exc:
         raise ArtifactUnreadable(f'保存 stage2 复核决策失败：{exc!r}') from exc
+    finally:
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
+    return target.resolve()
+
+
+def save_global_edit(
+    base: str | os.PathLike[str],
+    sid: str,
+    edit: GlobalEdit,
+) -> Path:
+    """把 Commander 的一次性 Stage2 typed 修订原子落进 SID 专属服务根。"""
+    try:
+        paths.check_sid(sid)
+    except PathRefused as exc:
+        raise SourcePathRejected(f'全局修订的书 id 不合法：{exc}') from exc
+    root = service_dir(base) / EDITS_DIRNAME / sid
+    root.mkdir(parents=True, exist_ok=True)
+    target = root / f'global-edit-{uuid.uuid4().hex}.json'
+    tmp = target.with_suffix('.tmp')
+    payload = encode_artifact(
+        STAGE2_GLOBAL_EDIT,
+        # GlobalEdit 的「字段是否出现」就是 patch 语义；补出的显式 null 会被
+        # nested patch 校验器正确拒绝，不能在运输层把 absent 改写成 null。
+        edit.model_dump(
+            mode='json', by_alias=True, exclude_unset=True),
+    )
+    try:
+        tmp.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + NL,
+            encoding='utf-8')
+        os.replace(tmp, target)
+    except OSError as exc:
+        raise ArtifactUnreadable(f'保存 Stage2 全局修订失败：{exc!r}') from exc
     finally:
         try:
             tmp.unlink(missing_ok=True)

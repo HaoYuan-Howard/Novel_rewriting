@@ -14,6 +14,8 @@ const review: GlobalReviewResponse = {
   current_subject_sha256: 'd'.repeat(64),
   current: true,
   approved: false,
+  generation_safe: false,
+  quarantined_groups: [],
   effect_counts: {
     blocking: { pending: 1, PASS: 0, FAIL: 1, UNVER: 1 },
     disclosure: { pending: 1, PASS: 0, FAIL: 0, UNVER: 0 },
@@ -29,6 +31,7 @@ const review: GlobalReviewResponse = {
       actor: null,
       decided_at: null,
       reason: null,
+      generation_disposition: null,
       effect: 'blocking',
       group_key: 'set:world_rules',
     },
@@ -42,6 +45,7 @@ const review: GlobalReviewResponse = {
       actor: 'reviewer-old',
       decided_at: '2026-08-16T00:00:00Z',
       reason: '疑似漏抽',
+      generation_disposition: null,
       effect: 'blocking',
       group_key: 'set:secrets',
     },
@@ -55,6 +59,7 @@ const review: GlobalReviewResponse = {
       actor: 'reviewer-old',
       decided_at: '2026-08-16T00:00:00Z',
       reason: '证据不足',
+      generation_disposition: null,
       effect: 'blocking',
       group_key: 'secret:secret_01',
     },
@@ -68,6 +73,7 @@ const review: GlobalReviewResponse = {
       actor: null,
       decided_at: null,
       reason: null,
+      generation_disposition: null,
       effect: 'disclosure',
       group_key: 'character:char_001',
     },
@@ -136,6 +142,31 @@ function Harness() {
 }
 
 describe('GlobalReviewPanel', () => {
+  it('keeps quarantined UNVER visible while showing that generation may continue', async () => {
+    vi.spyOn(api, 'getEnums').mockResolvedValue(enums)
+    vi.spyOn(api, 'getGlobalReview').mockResolvedValue({
+      ...review,
+      generation_safe: true,
+      quarantined_groups: ['secret:secret_01'],
+      items: review.items.map((item) => item.item_id === 'known-by'
+        ? {
+            ...item,
+            generation_disposition: {
+              action: 'quarantine_group' as const,
+              reason: '证据不足，整组退出写作输入',
+            },
+          }
+        : item),
+    })
+    renderRoute(<GlobalReviewPanel sid="book-1" />)
+
+    expect(await screen.findByText('可继续：隔离 UNVER 后安全')).toBeVisible()
+    expect(screen.getByText('secret:secret_01')).toBeVisible()
+    expect(screen.getByText(/写作处置：隔离完整事实组/)).toBeVisible()
+    expect(screen.getAllByText('UNVER').some((element) => element.tagName === 'SPAN')).toBe(true)
+    expect(screen.queryByText('阻断面：全部 PASS')).not.toBeInTheDocument()
+  })
+
   it('loads every unresolved state and submits an optimistic hash-bound decision with evidence', async () => {
     vi.spyOn(api, 'getEnums').mockResolvedValue(enums)
     vi.spyOn(api, 'getGlobalReview').mockResolvedValue(review)

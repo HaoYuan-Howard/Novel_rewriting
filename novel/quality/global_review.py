@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
@@ -11,13 +12,30 @@ from contracts.invariants import (
     GLOBAL_REVIEW_EFFECTS, GLOBAL_REVIEW_KINDS, review_effect_of,
 )
 from contracts.schema.evaluation import (
-    GlobalReview, GlobalReviewDecisionSet, GlobalReviewItem,
+    GlobalReview, GlobalReviewDecisionSet, GlobalReviewGenerationDisposition,
+    GlobalReviewItem,
 )
 from novel.core.evidence import iter_global_evidence_slots, without_global_evidence
 from novel.errors import HumanEditProtected
 
 
 UNBOUND_WORKPACK_SHA256 = '0' * 64
+
+# 只有删除整组后仍能由 ``GlobalGrounding`` schema 关闭式复验、且不会删掉
+# 人物/主线骨架的三类事实可以隔离。集合完整性、人物、setting 与 arc 都不在
+# 这里：它们必须经 typed GlobalEdit 修正，不能借 UNVER 处置静默越过。
+QUARANTINABLE_REVIEW_GROUP_PREFIXES = ('secret:', 'relation:', 'world_rule:')
+
+
+@dataclass(frozen=True)
+class GenerationSafety:
+    """Stage2 人审对写作消费面的独立结论；不覆盖真值审阅状态。"""
+
+    current: bool
+    safe: bool
+    all_pass: bool
+    quarantined_groups: tuple[str, ...]
+    blocking_item_ids: tuple[str, ...]
 
 
 def _canonical(value: Any) -> bytes:
@@ -372,6 +390,55 @@ def review_status(
     return expected.source_sha256, current, approved
 
 
+def quarantined_group(item: GlobalReviewItem) -> str | None:
+    """返回一条当前 UNVER 决定可被确定性隔离的组；否则 ``None``。"""
+    disposition = item.generation_disposition
+    if item.state != 'UNVER' or disposition is None:
+        return None
+    if disposition.action != 'quarantine_group':  # pragma: no cover —— Literal
+        return None
+    group = review_group_key(item.subject_path)
+    if not group.startswith(QUARANTINABLE_REVIEW_GROUP_PREFIXES):
+        return None
+    return group
+
+
+def generation_safety(
+    global_grounding: dict[str, Any], review: GlobalReview,
+) -> GenerationSafety:
+    """判断能否继续写作，同时保留 ``all_pass`` 这一条正交真值事实。
+
+    PASS 是可信事实；UNVER 仍是不确定事实。后者只有逐项携带处置、且所属完整
+    group 可从下游视图确定性删除时才不阻断“产出一本书”。任何 pending/FAIL、
+    不可隔离组、缺处置或 stale surface 都保持关闭。
+    """
+    _expected, current, approved = review_status(global_grounding, review)
+    blocking = [
+        item for item in review.items
+        if review_effect_of(item.kind) == 'blocking'
+    ]
+    rejected: list[str] = []
+    groups: set[str] = set()
+    if current and blocking:
+        for item in blocking:
+            if item.state == 'PASS':
+                continue
+            group = quarantined_group(item)
+            if item.state == 'UNVER' and group is not None:
+                groups.add(group)
+                continue
+            rejected.append(item.item_id)
+    else:
+        rejected.extend(item.item_id for item in blocking)
+    return GenerationSafety(
+        current=current,
+        safe=current and bool(blocking) and not rejected,
+        all_pass=approved,
+        quarantined_groups=tuple(sorted(groups)),
+        blocking_item_ids=tuple(rejected),
+    )
+
+
 def require_current(global_grounding: dict[str, Any], review: GlobalReview) -> None:
     """Reject decisions against a stale or incomplete review surface."""
     _subject, current, _approved = review_status(global_grounding, review)
@@ -390,6 +457,7 @@ def decide(
     actor: str,
     reason: str,
     evidence: list[dict[str, Any]] | None = None,
+    generation_disposition: GlobalReviewGenerationDisposition | None = None,
     now: str | None = None,
 ) -> GlobalReview:
     actor = actor.strip()
@@ -415,6 +483,9 @@ def decide(
             'reason': reason,
             'decided_at': now or datetime.now(timezone.utc).isoformat(),
             'evidence': evidence or [],
+            'generation_disposition': (
+                generation_disposition.model_dump(mode='json')
+                if generation_disposition is not None else None),
         }))
     if not found:
         raise HumanEditProtected(
@@ -491,6 +562,7 @@ def apply_decision_set(
                 actor=decision_set.actor,
                 reason=scope.reason,
                 evidence=[ref.model_dump() for ref in scope.evidence],
+                generation_disposition=None,
                 now=timestamp,
             )
     for row in decision_set.decisions:
@@ -502,6 +574,7 @@ def apply_decision_set(
             actor=decision_set.actor,
             reason=row.reason,
             evidence=[ref.model_dump() for ref in row.evidence],
+            generation_disposition=row.generation_disposition,
             now=timestamp,
         )
     return result

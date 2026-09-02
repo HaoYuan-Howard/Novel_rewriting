@@ -21,6 +21,7 @@ from contracts.artifacts import (
     STAGE2_BLUEPRINT_CHARACTER_PROJECTION,
     STAGE2_CHAPTER_BLUEPRINTS,
     STAGE2_GLOBAL_GROUNDING,
+    STAGE2_GLOBAL_REVIEW,
 )
 from contracts.schema.stage1 import MainText
 from contracts.schema.stage2 import (
@@ -51,6 +52,7 @@ from novel.stages.stage4.blind import (
     candidate_subject_sha256,
 )
 from novel.store import ArtifactStore
+from tests.factories import approved_global_review
 from tests.test_stage2 import blueprints, global_grounding, main_text
 
 
@@ -103,6 +105,10 @@ def _seed_current_stage2(book: Path) -> ChapterBlueprints:
         '_provenance': global_provenance,
     })
     global_store.write(STAGE2_GLOBAL_GROUNDING, global_artifact)
+    global_store.write(
+        STAGE2_GLOBAL_REVIEW,
+        approved_global_review(global_artifact),
+    )
     projection = materialize_blueprint_character_projection(
         global_artifact.model_dump(
             by_alias=True, mode='json')['entities']['characters'],
@@ -463,10 +469,11 @@ def test_run_plan_binds_evidence_then_compiles_plan_without_context(designed):
 
     binding_inputs = {
         plan.CANDIDATE_REL,
-        STAGE1_MAIN_TEXT,
-        STAGE2_CHAPTER_BLUEPRINTS,
-        STAGE2_GLOBAL_GROUNDING,
-    }
+            STAGE1_MAIN_TEXT,
+            STAGE2_CHAPTER_BLUEPRINTS,
+            STAGE2_GLOBAL_GROUNDING,
+            STAGE2_GLOBAL_REVIEW,
+        }
     assert set(binding.provenance.inputs) == binding_inputs
     assert len(binding.provenance.inputs) == len(binding_inputs), '重复读 A 不得双计来源边'
     assert binding.provenance.candidate_sha256 == candidate_subject_sha256(

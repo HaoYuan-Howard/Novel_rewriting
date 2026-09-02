@@ -7,6 +7,8 @@ import json
 from pathlib import Path
 from typing import Final
 
+from pydantic import ValidationError
+
 from contracts.artifacts import (
     STAGE1_MAIN_TEXT, STAGE2_BLUEPRINT_CHARACTER_PROJECTION,
     STAGE2_CHAPTER_BLUEPRINTS, STAGE2_GLOBAL_GROUNDING, STAGE2_GLOBAL_REVIEW,
@@ -31,8 +33,8 @@ from novel.errors import (
 from novel.orchestrator.jobs import service_dir
 from novel.quality.global_review import (
     apply_decision_set, blocking_scope_sha256, require_current,
-    review_effect_counts, review_group_key, review_status, subject_sha256,
-    UNBOUND_WORKPACK_SHA256,
+    GenerationSafety, generation_safety, review_effect_counts,
+    review_group_key, review_status, subject_sha256, UNBOUND_WORKPACK_SHA256,
 )
 from novel.run import RunContext
 from novel.store import ArtifactStore
@@ -347,6 +349,10 @@ def _attach_blocking_role_fate_companions(
             'subject_path': fate.subject_path,
             'subject_sha256': fate.subject_sha256,
             'current_state': fate.state,
+            'current_reason': fate.reason,
+            'generation_disposition': (
+                None if fate.generation_disposition is None
+                else fate.generation_disposition.model_dump(mode='json')),
             'effect': review_effect_of(fate.kind),
             'subject': subject,
             'formal_evidence': formal,
@@ -356,15 +362,21 @@ def _attach_blocking_role_fate_companions(
 
 def review_workpack(
     ctx: RunContext, *, scope: str = DEFAULT_REVIEW_SCOPE,
+    replaced_input_keys: tuple[str, ...] = (),
 ) -> dict[str, object]:
     """只读人工核验材料；精确命中是证据候选，不是自动裁决。
 
     ⚠ 与 `review_template` 同一条 `scope` 纪律：默认只出 blocking 面，
     裁剪的是**阅读范围**而不是评测面；披露项没进 workpack 不等于被放行。
+
+    ``replaced_input_keys`` 只供 reviewed GlobalEdit 被 HARD 拒绝后的中断恢复：
+    正式 Global 仍是该次审阅的原主体，只是书内 edit 输入已经换成失败动作。
+    普通工作包不给这个参数，不能把任意 stale Global 伪装成 current。
     """
     store = ArtifactStore(ctx)
     grounding = store.read_own(
-        GlobalGrounding, STAGE2_GLOBAL_GROUNDING, require_current=True)[0]
+        GlobalGrounding, STAGE2_GLOBAL_GROUNDING, require_current=True,
+        replaced_input_keys=replaced_input_keys)[0]
     review = store.read_own(GlobalReview, REL, require_current=True)[0]
     main = store.read_own(MainText, STAGE1_MAIN_TEXT, require_current=True)[0]
     main_text_subject_sha256 = subject_sha256(
@@ -446,6 +458,10 @@ def review_workpack(
             'subject_path': item.subject_path,
             'subject_sha256': item.subject_sha256,
             'current_state': item.state,
+            'current_reason': item.reason,
+            'generation_disposition': (
+                None if item.generation_disposition is None
+                else item.generation_disposition.model_dump(mode='json')),
             'reading_scope': reading_scope,
             'evidence_mode': evidence_mode,
             'effect': effect,
@@ -577,6 +593,23 @@ def is_approved(ctx: RunContext, review: GlobalReview) -> bool:
         grounding.model_dump(by_alias=True), review)[2]
 
 
+def is_generation_safe(ctx: RunContext, review: GlobalReview) -> bool:
+    """是否可把当前 review 经确定性隔离后交给写作消费方。"""
+    grounding = ArtifactStore(ctx).read_own(
+        GlobalGrounding, STAGE2_GLOBAL_GROUNDING)[0]
+    return generation_safety(
+        grounding.model_dump(by_alias=True), review).safe
+
+
+def _counts(review: GlobalReview) -> dict[str, int]:
+    counts = {state: 0 for state in ('pending', 'PASS', 'FAIL', 'UNVER')}
+    for item in review.items:
+        counts[item.state] += 1
+    for effect, states in review_effect_counts(review).items():
+        counts.update({f'{effect}.{state}': n for state, n in states.items()})
+    return counts
+
+
 def approval_status(ctx: RunContext) -> tuple[bool, bool, dict[str, int]]:
     """返回 ``(评测面当前, blocking 面逐项 PASS, 计数)``；闸门与终验共用这一处。
 
@@ -589,12 +622,79 @@ def approval_status(ctx: RunContext) -> tuple[bool, bool, dict[str, int]]:
     review = store.read_own(GlobalReview, REL)[0]
     _subject, current, approved = review_status(
         grounding.model_dump(by_alias=True), review)
-    counts = {state: 0 for state in ('pending', 'PASS', 'FAIL', 'UNVER')}
-    for item in review.items:
-        counts[item.state] += 1
-    for effect, states in review_effect_counts(review).items():
-        counts.update({f'{effect}.{state}': n for state, n in states.items()})
-    return current, approved, counts
+    return current, approved, _counts(review)
+
+
+def generation_status(ctx: RunContext) -> tuple[GenerationSafety, dict[str, int]]:
+    """返回写作安全结论与完整四态计数；不把隔离过的 UNVER 改名为 PASS。"""
+    store = ArtifactStore(ctx)
+    grounding = store.read_own(GlobalGrounding, STAGE2_GLOBAL_GROUNDING)[0]
+    review = store.read_own(GlobalReview, REL)[0]
+    return (
+        generation_safety(grounding.model_dump(by_alias=True), review),
+        _counts(review),
+    )
+
+
+def generation_grounding(store: ArtifactStore) -> GlobalGrounding:
+    """读取下游唯一可消费的 Stage2 视图，并如实记录 review 输入边。
+
+    正式 ``global_grounding.json`` 仍保留完整审计事实；这里不迁移、不覆写它。
+    对已逐项处置的 UNVER，只从本次下游内存视图删除所属 secret/relation/world-rule
+    完整组，再以 ``GlobalGrounding`` schema 复验。这样终审仍看得到原事实与决定，
+    写作模型却不可能收到被隔离的未知事实。
+    """
+    grounding = store.read(GlobalGrounding, STAGE2_GLOBAL_GROUNDING)
+    review = store.read(GlobalReview, REL)
+    safety = generation_safety(
+        grounding.model_dump(by_alias=True), review)
+    if not safety.safe:
+        raise ApprovalRequired(
+            'Stage2 写作视图未收口：仍有 pending/FAIL、不可隔离 UNVER，'
+            f'或 review 已过期；current={safety.current}，'
+            f'blocking_items={list(safety.blocking_item_ids)}')
+    if not safety.quarantined_groups:
+        return grounding
+
+    payload = grounding.model_dump(mode='json', by_alias=True)
+    entities = payload['entities']
+    canon = payload['canon']
+    secret_ids = {
+        group.split(':', 1)[1] for group in safety.quarantined_groups
+        if group.startswith('secret:')
+    }
+    relation_ids = {
+        group.split(':', 1)[1] for group in safety.quarantined_groups
+        if group.startswith('relation:')
+    }
+    world_rule_ids = {
+        group.split(':', 1)[1] for group in safety.quarantined_groups
+        if group.startswith('world_rule:')
+    }
+    canon['secrets'] = [
+        row for row in canon['secrets']
+        if row['secret_id'] not in secret_ids
+    ]
+    canon['world_rules'] = [
+        row for row in canon['world_rules']
+        if row['rule_id'] not in world_rule_ids
+    ]
+    # 一条 via_secret relation 在秘密被隔离后也必须一起消失；留下悬空引用
+    # 既过不了 schema，也会从关系通道把同一未知事实重新泄给写手。
+    entities['relations'] = [
+        row for row in entities['relations']
+        if row['relation_id'] not in relation_ids
+        and not (
+            row['visibility']['kind'] == 'via_secret'
+            and row['visibility']['secret_id'] in secret_ids
+        )
+    ]
+    try:
+        return GlobalGrounding.model_validate(payload)
+    except ValidationError as exc:  # 校验细节不应变成一条模糊的继续路径
+        raise GateBlocked(
+            'Stage2 UNVER 隔离后的写作视图不再符合 GlobalGrounding；'
+            '该组不能安全降级，必须用 GlobalEdit 修复') from exc
 
 
 def require_approved(ctx: RunContext) -> None:
@@ -618,15 +718,18 @@ def require_approved(ctx: RunContext) -> None:
             invalid_path=str(store.path(global_invalid)),
             hint='stage2.global --revalidate --actor <id> --reason <why>（0 成本）')
 
-    current, approved, counts = approval_status(ctx)
-    if not approved:
+    safety, counts = generation_status(ctx)
+    if not safety.safe:
         raise ApprovalRequired(
-            'stage2 全局复核未打开：必须是当前完整评测面，且**全部 blocking 项**逐项 '
-            f'PASS；current={current}，counts={counts}',
+            'stage2 全局复核未打开：必须是当前完整评测面，且 blocking 项要么逐项 '
+            'PASS，要么是带 hash-bound quarantine_group 的可隔离 UNVER；'
+            f'current={safety.current}，blocking_items='
+            f'{list(safety.blocking_item_ids)}，counts={counts}',
             hint=('先运行 `stage2.global --emit-review-template`（默认只出 blocking 面，'
                   '要整份加 `--review-scope all`），逐项核验后用 '
                   '`stage2.global --review-decisions <书内json>` 提交；'
-                  'FAIL/UNVER 不会被 Agent 退出码覆盖。'
+                  'FAIL 必须经 typed GlobalEdit 修复；UNVER 只有可确定性隔离的 '
+                  'secret/relation/world_rule 组能显式 quarantine，不能改名为 PASS。'
                   'disclosure 项（名字区分度 / 称谓场合 / 结局）不挡门，'
                   '但仍必须在 inbox 与终审包里逐条披露，不许自动 PASS'))
 

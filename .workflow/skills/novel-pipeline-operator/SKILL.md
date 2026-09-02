@@ -25,7 +25,7 @@ admission、execution permit、节点调度、epoch、自动遥测与最终报�
 | 正文外发授权（`egress_authorized`） | 独立控制小说正文及派生上下文能否发送给外部模型。**交互式会话里同样默认 `granted`**，同样不索要 |
 | 可选约束 | 用户指定的模型实验、定向章节范围、停止条件或审阅偏好 |
 
-把“使用本 skill 端到端跑书”视为一次**完整**委托：`stage0.approve`、Stage2 逐项复核、Stage4A 的全书策略 + 逐章 typed 设计审阅、Stage4B 编译后的最终逐章 typed 结构裁决、独立 Stage5 writing 授权、最终 Review 后的 Stage5 typed 闭合回执、`stage6.approve`、`stage7.approve` 的代批，加上两项授权。**这些事都不要回头问用户**——本 skill 的产品承诺是“用户只审最终成稿”。Stage2 代批仍必须逐项写入 typed PASS/FAIL/UNVER；“agent 看过”不能替代文件里的决定，更不能让 FAIL/UNVER 越过硬闸。两次 Stage4 审阅、Stage5 写作授权与写后闭合回执的主体及作用都不同，任何一次也不能由另一张票、机械绿灯或付费授权代替。用户在本次对话里明确收回某一项时遵从用户范围，并在终审包写明被收回的是哪一项。
+把“使用本 skill 端到端跑书”视为一次**完整**委托：`stage0.approve`、Stage2 逐项复核、Stage4A 的全书策略 + 逐章 typed 设计审阅、Stage4B 编译后的最终逐章 typed 结构裁决、独立 Stage5 writing 授权、最终 Review 后的 Stage5 typed 闭合回执、`stage6.approve`、`stage7.approve` 的代批，加上两项授权。**这些事都不要回头问用户**——本 skill 的产品承诺是“用户只审最终成稿”。Stage2 代批仍必须逐项写入 typed PASS/FAIL/UNVER；“agent 看过”不能替代文件里的决定。FAIL 必须经 GlobalEdit 改真实事实；UNVER 仍不得改名为 PASS，只有生产选项明确给出 `quarantine_group` 的完整可删组能从写作视图隔离并以 disclosure 继续。两次 Stage4 审阅、Stage5 写作授权与写后闭合回执的主体及作用都不同，任何一次也不能由另一张票、机械绿灯或付费授权代替。用户在本次对话里明确收回某一项时遵从用户范围，并在终审包写明被收回的是哪一项。
 
 两项授权仍**分别取值**，只是默认值都为真：收回其中一项时，不因另一项仍在而推定它。headless 是唯一的例外，取值以 launcher prompt 原文为准（见[运行宿主](references/runtime-profiles.md)）。
 
@@ -81,7 +81,8 @@ admission、execution permit、节点调度、epoch、自动遥测与最终报�
    kept、实际替换命中、残留上下文、替换计数和完整主体。若包的 `disposition=already_current`，当前
    review subject 与 review contract 未变且当前 validation seal 免费复检通过，raw typed 决定仍适用，跳过重复提交；代码变化本身不撤销人审。若 **Stage4 Design** 包为 `suspended`，同样跳过重复提交，但必须明确停在 legacy-frozen 缺 relation/preflight validation authority：它不授权 B，不取 recovery permit，也不执行 repair/replan/B；该态没有 `s4rr1`、`s4er1` 或 execution token。否则只把**刚读完的同一份包**里的
    opaque `review_token` 提交给对应 approve。工作包只缩小阅读范围，不自动 accept，
-   INFO/metric/UNVER 不制造付费动作。Stage5 最终 Review 与所有 edit/trim/wontfix 收口后，逐项读取
+   INFO/metric/判据型 UNVER 不制造付费动作；Stage2 typed review 的 FAIL/UNVER 按下述专用
+   GlobalEdit/隔离闭环处理。Stage5 最终 Review 与所有 edit/trim/wontfix 收口后，逐项读取
    current closure workpack，再提交 `approval template/apply stage5` 的 typed 回执；不得代签或拿旧 s5
    继续下游。命中失败时按修复状态机收敛；每次决定同时记录证据、被否决方案和复验结果。
 9. `stage7.assemble` 后执行独立成书对账，再调用一次 `operator next --json` 并用组合 `state --with-inbox` 刷新活动终态。先补完终审包中的人工叙述并清除其余占位符，再从仓根运行 `.workflow/skills/novel-pipeline-operator/scripts/finalize_review.py --base <BASE> --sid <SID> --started-at <STARTED_AT> --start-code-version <START_CODE>`。这是 canonical 收尾：只 collect 一次，在内存中 render → validate，验证通过才原子提交终审包；提交后丢弃旧快照，并以 `<START_CODE>` 调用全新读作用域的 `delivery.assess`。旧 `collect_final_evidence.py`、`sync_review_evidence.py`、`validate_review.py` 与 `verify_delivery.py` 保留为诊断/兼容入口，不再串成主路。
@@ -108,9 +109,18 @@ admission、execution permit、节点调度、epoch、自动遥测与最终报�
 - 不为追求“全绿”改写无关内容。只处理阻塞所选定稿、成书完整性或用户终审判断的事项。
 - **只有 HARD 或当前 hash-bound 的 Stage4A typed `request_repair / request_replan` 能触发付费修订。**
   后者必须来自真实逐章阅读并带关闭式约束，不得把默认拒绝模板原样提交来制造付费理由。
-  `info`、`metric` 与 `unver` 本身一律只披露：`unver` 是判据
+  `info`、`metric` 与判据严重度 `unver` 本身一律只披露：`unver` 是判据
   诚实地说自己这次够不着（现役例子是 Stage4 `state_closure` 的章内非线性边界），
   看到它去重跑 `stage4.design` 就是拿一次整书付费换一份本来就在如实说话的报告。
+  Stage2 `GlobalReviewItem.state=UNVER` 是另一套 typed 人审状态：可安全删除的完整
+  secret/relation/world-rule 组显式 quarantine 后继续，其余用 0-wire GlobalEdit 修复；不得混用。
+  GlobalEdit patch 只能改当前模板已有 subject；新增/拆分必须等 `set_complete=FAIL` 后走模板
+  明示的完整 `*_replace`。Stage2 global 最多两次真实 Commander 调用：首轮完整审阅，第二轮在同一
+  resume 上下文中一次完成合并 GlobalEdit 与 `post_edit_review` 自审；0-wire typed 动作不计轮次，
+  typed 请求被拒也不得借纠错启动第三次。若 reviewed edit 被 canonical HARD 拦成当前 `.INVALID`，
+  必须先走持久 `recovery:stage2-global-reviewed-edit`，用绑定失败 edit/INVALID 的紧凑 workpack 消耗仅余
+  的最终调用；不得先切到 stale Blueprint，也不得因重启把预算重置成两次。最终调用仍未闭合时停止并
+  保留具体恢复事实，不重读整包。
   判据表的 `sev` 是唯一权威，见[修复状态机](references/recovery.md)。
 
 ## 完成定义
@@ -119,7 +129,9 @@ admission、execution permit、节点调度、epoch、自动遥测与最终报�
 
 - `state` 显示主链完成且所有消费中的正式产物 fresh/match；已解释的诊断噪声单列披露。
 - Stage2 global 与 blueprint 均 current、唯一联合 check 无 HARD，且全局复核面 current、
-  **blocking 面逐项 PASS**；这是 `ready` 与 `ready_with_disclosures` 的共同硬前提。
+  **blocking 面 generation-safe**：逐项 PASS，或仅余带 hash-bound `quarantine_group` 的
+  secret/relation/world-rule UNVER。全 PASS 才可 `ready`；存在隔离项只能
+  `ready_with_disclosures`，且写作只消费确定性净化视图。
   人审可与 blueprint 计算重叠，但不能缺席。`disclosure` 的三类不挡门，
   却必须在终审包里逐条披露——「不阻断」不等于「不列出」。
 - `inbox.delivery_counts.blocking == 0`；`attention_counts` 区分“尚待处理”与“已裁决但记录保留”，不得拿总数冒充失败数。披露项逐类记录。

@@ -23,7 +23,7 @@ from __future__ import annotations
 from contracts.artifacts import (
     ARTIFACT_PATHS, BOOK_SCOPED_PATHS, STAGE1_MAIN_TEXT,
     STAGE2_BLUEPRINT_CHARACTER_PROJECTION, STAGE2_CHAPTER_BLUEPRINTS,
-    STAGE2_GLOBAL_GROUNDING,
+    STAGE2_GLOBAL_EDIT, STAGE2_GLOBAL_GROUNDING,
     STAGE4_BLIND_CANDIDATE, STAGE4_EVIDENCE_BINDING,
     STAGE4_PLAN_CHAPTERS, STAGE4_WRITER_CONTEXT,
     STAGE5_CHAPTER, artifact_rel,
@@ -37,8 +37,9 @@ from contracts.schema import ARTIFACTS, artifact_key, artifact_spec
 from contracts.schema.orchestration import (
     ArtifactState, NovelOverview, OverviewSummary, StageState,
 )
+from contracts.schema.stage2 import GlobalEdit, GlobalGrounding
 from novel import paths, prov
-from novel.errors import ArtifactUnreadable, UpstreamMissing, UpstreamStale
+from novel.errors import ArtifactUnreadable, TerminalState, UpstreamMissing, UpstreamStale
 from novel.llm.cache import CachePolicy
 from novel.llm.ledger import CostLedger
 from novel.run import RunContext
@@ -662,6 +663,56 @@ def stage2_invalid_projection_ready(ov: NovelOverview) -> bool:
         and projection is not None and projection.exists and projection.readable
         and projection.freshness == 'fresh'
     )
+
+
+def stage2_reviewed_edit_correction_needed(
+    base: str | os.PathLike[str], sid: str, ov: NovelOverview,
+) -> bool:
+    """是否有一份尚未完成第二轮纠正的 reviewed GlobalEdit。
+
+    普通 Global ``.INVALID`` 仍按既有契约让 Blueprint 先推进、到 Stage4 汇合；
+    这里只识别一个更窄的崩溃恢复态：当前 INVALID 精确绑定书内
+    ``global_edit.json``，该 edit 带第二轮自检证明，而且 live INVALID 自创建后
+    没有人直接改过。它说明 Commander 的第一次修改已执行但被 HARD 拒绝，下一步
+    应是同一逻辑任务的**最后一次纠正**，不能被 Blueprint REDO 抢走。
+
+    完成度仍不读 ``_service``，也不从作业日志猜状态；全部证据都在书内 typed
+    产物、INVALID provenance/freshness 与不可变 revalidation baseline 中。
+    """
+    if not stage2_invalid_projection_ready(ov):
+        return False
+    stage = next(
+        (candidate for candidate in getattr(ov, 'stages', ())
+         if candidate.stage == 'stage2'),
+        None,
+    )
+    if stage is None:
+        return False
+    grounding = next(
+        (artifact for artifact in stage.artifacts
+         if artifact.rel == STAGE2_GLOBAL_GROUNDING),
+        None,
+    )
+    if grounding is None or grounding.invalid_freshness != 'fresh':
+        return False
+
+    novel_dir = paths.resolve_novel_dir(base, sid)
+    store = ArtifactStore(readonly_ctx(
+        novel_dir, 'stage2.global', prov.code_version()))
+    if not store.exists(STAGE2_GLOBAL_EDIT):
+        return False
+    try:
+        edit, _raw = store.read_own(GlobalEdit, STAGE2_GLOBAL_EDIT)
+        if edit.post_edit_review is None:
+            return False
+        audit = store.revalidation_audit(
+            STAGE2_GLOBAL_GROUNDING, GlobalGrounding,
+            actor='system:stage2-correction-probe',
+            reason='只读识别 reviewed GlobalEdit 的中断恢复态',
+        )
+    except TerminalState:
+        return False
+    return not audit.edited_by_human
 
 
 def stage2_projection_source_unproven(ov: NovelOverview) -> str | None:

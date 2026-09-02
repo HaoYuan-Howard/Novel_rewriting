@@ -101,7 +101,8 @@ class _Upstreams:
         for rel in (GLOBAL_GROUNDING, WRITER_CONTEXT):
             if not store.exists(rel):
                 raise UpstreamMissing(f'{rel} 不在盘上——先跑 {rel.split("/")[0]}')
-        gg = store.read(GlobalGrounding, GLOBAL_GROUNDING)
+        from novel.stages.stage2 import global_review as stage2_global_review
+        gg = stage2_global_review.generation_grounding(store)
         wc = store.read(WriterContext, WRITER_CONTEXT)
         # ⚠ 原作文案段**允许缺**吗？`R-1.12` 已把无文案段的书挡在 stage1 ⇒ 走不到。
         # 但它是**上游产物**不是本层的不变量，缺了就是显式终态而不是一句兜底。

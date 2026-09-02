@@ -324,7 +324,14 @@ def _classify(item: InboxItem) -> InboxItem:
         item.kind == 'human_only'
         or (item.kind == 'verification' and item.stage == 'stage6')
         or (item.kind == 'verification' and item.stage == 'stage2'
-            and review_effect_of(review_item_kind(item.rule)) == 'disclosure')
+            and (
+                review_effect_of(review_item_kind(item.rule)) == 'disclosure'
+                or (
+                    item.decision is not None
+                    and item.decision.generation_disposition
+                    == 'quarantine_group'
+                )
+            ))
     )
     return item.model_copy(update={
         'delivery_effect': 'disclosure' if disclosure else 'blocking',
@@ -579,8 +586,12 @@ def _verification_items(novel_dir, code: str) -> list[InboxItem]:
             'UNVER': '证据不足（UNVER）',
         }[row.state]
         reason = f'；上次理由：{row.reason}' if row.reason else ''
-        scope = ('' if review_effect_of(row.kind) == 'blocking'
-                 else '（只披露，不挡 Stage4）')
+        disposition = row.generation_disposition
+        if disposition is not None:
+            scope = '（仍为 UNVER；所属事实组已从写作视图确定性隔离，保留终审披露）'
+        else:
+            scope = ('' if review_effect_of(row.kind) == 'blocking'
+                     else '（只披露，不挡 Stage4）')
         out.append(InboxItem(
             kind='verification', stage='stage2', chapter=None,
             rule=row.item_id,
@@ -589,12 +600,19 @@ def _verification_items(novel_dir, code: str) -> list[InboxItem]:
                  '提交 PASS/FAIL/UNVER；也可跑 '
                  '`stage2.global --review-decisions <书内json>`'
                  '（模板默认只出 blocking 面，要整份加 `--review-scope all`）；'
+                 'FAIL 用 typed GlobalEdit 修复；可隔离 UNVER 的 quarantine_group '
+                 '不会改名为 PASS，仍在本清单和终审包披露；'
                  'subject hash 已变的旧决策会被拒绝'),
             attention=('pending' if row.state == 'pending' else 'reviewed_retained'),
             decision=(None if row.state == 'pending' else InboxDecision(
                 actor=row.actor or '', reason=row.reason or '',
                 subject_sha256=row.subject_sha256, state=row.state,
-                decided_at=row.decided_at or ''))))
+                decided_at=row.decided_at or '',
+                generation_disposition=(
+                    None if disposition is None else disposition.action),
+                generation_disposition_reason=(
+                    None if disposition is None else disposition.reason),
+            ))))
     return out
 
 

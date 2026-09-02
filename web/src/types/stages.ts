@@ -545,6 +545,11 @@ export type GlobalReviewKind =
 /** Server-side verdict: does this item hold Stage4 closed, or is it audit-only? */
 export type GlobalReviewEffect = 'blocking' | 'disclosure'
 
+export interface GlobalReviewGenerationDisposition {
+  action: 'quarantine_group'
+  reason: string
+}
+
 export interface GlobalReviewItem {
   item_id: string
   kind: GlobalReviewKind
@@ -555,6 +560,8 @@ export interface GlobalReviewItem {
   actor: string | null
   decided_at: string | null
   reason: string | null
+  /** Explicit audit decision for generation; UNVER remains UNVER. */
+  generation_disposition: GlobalReviewGenerationDisposition | null
   /**
    * Derived by the server. Never recompute it here: a local copy of the
    * classification table becomes a second judge, and a newly added
@@ -572,8 +579,12 @@ export interface GlobalReviewResponse {
   /** Hash recomputed from the current complete GlobalGrounding. */
   current_subject_sha256: string
   current: boolean
-  /** Blocking surface only — that is the Stage4 gate's own reading. */
+  /** Blocking surface only — the strict truth result, not the generation gate. */
   approved: boolean
+  /** Current downstream view is safe after deterministic quarantine, if any. */
+  generation_safe: boolean
+  /** Complete fact groups omitted from generation; their raw UNVER rows remain below. */
+  quarantined_groups: string[]
   /** `{effect: {state: n}}`; both key levels always present, zeros included. */
   effect_counts: Record<GlobalReviewEffect, Record<GlobalReviewState, number>>
   items: GlobalReviewItem[]
@@ -585,6 +596,7 @@ export interface GlobalReviewDecision {
   state: Exclude<GlobalReviewState, 'pending'>
   reason: string
   evidence: EvidenceRef[]
+  generation_disposition?: GlobalReviewGenerationDisposition | null
 }
 
 export interface GlobalReviewBlockingScopeDecision {

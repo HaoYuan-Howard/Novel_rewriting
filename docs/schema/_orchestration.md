@@ -341,12 +341,23 @@ lock 内截回 committed prefix、fsync，并分别追加 `authorized / applied`
 `AgentRunRecord.state` 仍只按外层进程退出码折叠；`outcome.state` 的唯一取值面是
 `AGENT_DELIVERY_OUTCOME`：`ready` / `ready_with_disclosures` / `stopped` / `failed` /
 `unknown`。终验从盘面重新核 Stage2 正式 Global + 称名投影 + Blueprint current、联合 HARD 通过、
-global review 的 blocking 面逐项 PASS（disclosure 非 PASS 只披露）、当前可下载成书、终审包、阻塞待办与
+global review 的 generation-safe 面（blocking 逐项 PASS，或仅含已显式完整组隔离的
+secret/relation/world-rule UNVER；后者仍是 disclosure-ready 而不是 PASS）、当前可下载成书、终审包、阻塞待办与
 启动/结束代码指纹；不解析 agent 自述。两轴不许互推，尤其 `state=ok` 不推出可交付。
 一次 Commander reviewer turn `exit_code=0` 但 fresh outcome=`stopped` 时，RunSupervisor 再读一次
 `operator next`：ready 交确定性 execution-token 主路；只有下一个状态仍是登记的 reviewer blocker 才在
-同 epoch 精确续用 provider session。不存在任意 reviewer turn 数上限，但预算、授权、pause/stop、
-current blocker 与 admission 仍关闭式生效。已经 `pipeline_complete` 而
+同 epoch 精确续用同一 provider session。Stage2 global 的产品预算是**最多两次真实 Commander 调用**：
+首轮完整审阅，第二轮提交合并 GlobalEdit 并在同一 typed 输入中自审精确结果；中间 0-wire review/edit
+动作不计模型轮次，也不创建 Executor 会话。第二轮结束后无论 typed 请求或 blocking 是否仍未闭合，
+Supervisor 都停止并给出稳定 `stage2_global_turn_budget`/具体拒绝事实，绝不启动第三轮 Commander。
+付费 Executor 自己的候选/修复仍在节点 logical session 内 resume checkpoint。
+`submission_options` 同时是可执行 binding：Stage2 patch 的行数、顺序、subject id 与字段集合都必须
+逐字保留；新增/拆分只能等集合完整性被判 FAIL 后使用生产模板明确给出的完整 `*_replace`。typed loader
+拒绝或 reviewer canonical action 以 exit 2 在写盘前终止时，Supervisor 不结束 parent，而以同一
+provider session、同一 request 落点发送不重复 workpack 的紧凑纠错提示；相同请求字节立即停。该机制
+对 Stage2 同样占用上述两次真实调用预算，不能借“纠错”名义追加第三次；其他 reviewer blocker 最多接受
+两次不同纠正。重复业务主体上的等价已执行/已拒动作也由 progress fingerprint 拒绝，不能靠 review
+surface 自变制造循环。预算、授权、pause/stop、current blocker 与 admission 仍关闭式生效。已经 `pipeline_complete` 而
 delivery 终验未闭合时只运行确定性 finalizer/verify，不追加无关模型 turn；next 自身不可读则降 unknown。
 
 ---

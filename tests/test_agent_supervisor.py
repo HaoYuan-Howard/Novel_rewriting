@@ -128,6 +128,127 @@ def test_v2_supervisor_routes_ready_review_and_complete_without_commander_dispat
     assert [event.kind for event in events] == ['epoch_closed']
 
 
+def test_v2_supervisor_resumes_one_commander_across_review_edit_and_rereview():
+    """三相都属同一业务上下文；surface 变化不能重开 Commander session。"""
+    events: list[AgentRunEvent] = []
+    snapshots = [
+        SimpleNamespace(
+            state='blocked', code_version='code-1', surface_seal='1' * 64,
+            action=SimpleNamespace(
+                node='stage2.global', waiting_on='stage2_global_review',
+                action_sha256='2' * 64, phase='review'),
+            execution_token=None),
+        SimpleNamespace(
+            state='blocked', code_version='code-1', surface_seal='3' * 64,
+            action=SimpleNamespace(
+                node='stage2.global', waiting_on='stage2_global_review',
+                action_sha256='4' * 64, phase='edit'),
+            execution_token=None),
+        SimpleNamespace(
+            state='blocked', code_version='code-1', surface_seal='5' * 64,
+            action=SimpleNamespace(
+                node='stage2.global', waiting_on='stage2_global_review',
+                action_sha256='6' * 64, phase='rereview'),
+            execution_token=None),
+        SimpleNamespace(
+            state='pipeline_complete', code_version='code-1',
+            surface_seal='7' * 64, action=None, execution_token=None),
+    ]
+    reviews: list[tuple[str, str, str | None]] = []
+
+    def reviewer(_epoch, current, resume, ticket):
+        reviews.append((
+            current.action.phase, current.surface_seal, resume))
+        ticket.commit()
+        snapshots.pop(0)
+        return CommanderTurnResult(
+            exit_code=0, provider_session_id='provider-stage2-review',
+            continue_ready=True, outcome=_outcome())
+
+    def finalize(_epoch, ticket):
+        ticket.commit()
+        snapshots.pop(0)
+        return SupervisorActionResult(0, _outcome('ready'), False)
+
+    supervisor = RunSupervisor(
+        run_id='run-repeat-reviewer-node', append_event=events.append,
+        make_epoch=lambda *_args: pytest.fail('同代码身份的重复 node 不得滚 epoch'),
+        open_epoch=lambda _epoch: None,
+        close_epoch=lambda _epoch, _turn: 'drained',
+        run_commander_turn=lambda *_args: pytest.fail('v2 不走 legacy Commander'),
+        epoch_identity_current=lambda _epoch: True,
+        cancel_commander=lambda: True,
+        initial_epoch=_epoch('epoch-repeat-reviewer-node', 1, 'initial'),
+        read_operator_next=lambda _epoch: snapshots[0],
+        run_ready_action=lambda *_args: pytest.fail('本例没有 ready node'),
+        run_reviewer=reviewer,
+        finalize_run=finalize)
+
+    result = supervisor.run()
+
+    assert result.stopped is False
+    assert reviews == [
+        ('review', '1' * 64, None),
+        ('edit', '3' * 64, 'provider-stage2-review'),
+        ('rereview', '5' * 64, 'provider-stage2-review'),
+    ]
+    assert snapshots == []
+    assert [event.kind for event in events] == ['epoch_closed']
+
+
+def test_reviewer_correction_keeps_frozen_workpack_before_global_replan():
+    """动作 exit 2 后 INVALID/stale next 不能抢走同会话的紧凑纠错。"""
+    events: list[AgentRunEvent] = []
+    frozen = SimpleNamespace(
+        state='blocked', code_version='code-1', surface_seal='1' * 64,
+        action=SimpleNamespace(
+            waiting_on='stage2_global_review', action_sha256='2' * 64),
+        execution_token=None)
+    changed = SimpleNamespace(
+        state='blocked', code_version='code-1', surface_seal='3' * 64,
+        action=SimpleNamespace(
+            waiting_on='resume:manual-decision', action_sha256='4' * 64),
+        execution_token=None)
+    reads = 0
+    reviews: list[tuple[object, str | None]] = []
+
+    def read_next(_epoch):
+        nonlocal reads
+        reads += 1
+        return frozen if reads == 1 else changed
+
+    def reviewer(_epoch, current, resume, ticket):
+        reviews.append((current, resume))
+        ticket.commit()
+        if len(reviews) == 1:
+            return CommanderTurnResult(
+                2, 'provider-correction', True, _outcome(),
+                continue_reviewer=True)
+        return CommanderTurnResult(
+            0, 'provider-correction', False, _outcome('ready'))
+
+    supervisor = RunSupervisor(
+        run_id='run-reviewer-correction', append_event=events.append,
+        make_epoch=lambda *_args: pytest.fail('同代码身份不得滚 epoch'),
+        open_epoch=lambda _epoch: None,
+        close_epoch=lambda _epoch, _turn: 'drained',
+        run_commander_turn=lambda *_args: pytest.fail('v2 不走 legacy Commander'),
+        epoch_identity_current=lambda _epoch: True,
+        cancel_commander=lambda: True,
+        initial_epoch=_epoch('epoch-reviewer-correction', 1, 'initial'),
+        read_operator_next=read_next,
+        run_ready_action=lambda *_args: pytest.fail('本例没有 ready node'),
+        run_reviewer=reviewer,
+        finalize_run=lambda *_args: pytest.fail('本例不进入 finalizer'))
+
+    result = supervisor.run()
+
+    assert result.stopped is False
+    assert reads == 1
+    assert reviews == [(frozen, None), (frozen, 'provider-correction')]
+    assert [event.kind for event in events] == ['epoch_closed']
+
+
 @pytest.mark.parametrize('control', ['pause', 'stop'])
 def test_launch_ticket_never_accepts_control_before_process_is_registered(control):
     """pause/stop 返回即代表它已经看见本次 Popen，不能随后再冒出新进程。"""

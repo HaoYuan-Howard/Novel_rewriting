@@ -70,6 +70,7 @@ from contracts.invariants import (
     FACT_ATOM_KINDS,
     FACT_ATOM_OBLIGATIONS,
     GLOBAL_REVIEW_EFFECTS,
+    GLOBAL_REVIEW_GENERATION_DISPOSITIONS,
     HINGE_KINDS,
     HOOK_APPROACHES,
     STAGE6_JUDGE_ROLES,
@@ -2544,6 +2545,23 @@ class InboxDecision(FrozenModel):
     subject_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
     state: str = Field(min_length=1)
     decided_at: str = Field(min_length=1)
+    generation_disposition: Literal[GLOBAL_REVIEW_GENERATION_DISPOSITIONS] | None = None
+    generation_disposition_reason: str | None = None
+
+    @model_validator(mode='after')
+    def _generation_disposition_is_explicit_unver(self) -> 'InboxDecision':
+        paired = (
+            self.generation_disposition is None,
+            self.generation_disposition_reason is None,
+        )
+        if paired[0] != paired[1]:
+            raise ValueError('generation disposition 与其 reason 必须同进同出')
+        if self.generation_disposition is not None:
+            if self.state != 'UNVER':
+                raise ValueError('只有 UNVER inbox decision 可以携带隔离处置')
+            if not self.generation_disposition_reason.strip():
+                raise ValueError('generation disposition reason 不能为空')
+        return self
 
 
 class InboxItem(FrozenModel):
@@ -2913,15 +2931,18 @@ class GlobalReviewView(StrictModel):
     persisted review alone, because the current ``GlobalGrounding`` or required
     review surface may have changed since a person decided the rows.
 
-    ⚠ ``approved`` 只回答 **blocking 面**是否逐项 PASS——那是 Stage4 那道闸的口径。
-    `disclosure` 的未决项一条不少地留在 `items` 与 `effect_counts` 里；
-    界面必须把它们画出来，只是不画成「Stage4 被它挡住」。
+    ⚠ ``approved`` 只回答 blocking 面是否逐项 PASS，是严格真值结论；
+    ``generation_safe`` 才回答当前写作消费面能否继续。后者允许显式隔离安全
+    UNVER 组，但绝不把它们改写成 PASS。``disclosure`` 未决项及隔离组一条
+    不少地留在 ``items`` / ``effect_counts`` / ``quarantined_groups`` 里。
     """
 
     source_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
     current_subject_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
     current: bool
     approved: bool
+    generation_safe: bool
+    quarantined_groups: list[str] = Field(default_factory=list)
 
     #: ``{effect: {四态: n}}``。两层键都**恒全出**（0 也出）：
     #: 「没有这个键」与「值是 0」不许混（同 `InboxView.counts`）。

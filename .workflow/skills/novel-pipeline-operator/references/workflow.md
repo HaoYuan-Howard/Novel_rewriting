@@ -192,7 +192,7 @@ runner 外补信标。preview 不写信标。信标只记录观察轨迹、不�
 | 3 | `stage0.edit` | 仅当代批发现剔除错误时用 typed edit/edit-plan；无修改则 `state` 跳过 | 人工修订经同一 Stage0 闸门重判，不直改正式文本 |
 | 4 | `stage1.partition` | 无 | 追跑 check 无 HARD；章节 ordinal 唯一且覆盖 `1..N` |
 | 5 | `stage2.global` | 无；agent executor 原生同 session 修复 | 最新 Global 候选通过 schema 后即物化 current 称名投影；Global HARD 可让候选暂留 `.INVALID`，但只要投影 current/fresh 就不阻塞 blueprint 计算 |
-| 6 | `stage2.blueprint` | current/fresh 称名投影可读后独立 preview/run，不等 Global 正式稿；新关系只经 `--emit-edit-template` → `--apply-edit` 完整集合替换 | 逐章蓝图正式落盘；Stage4 前再汇合 current 正式 global、唯一 Stage2 `--check-only` 联合 HARD 无命中，以及 current review 的 blocking 面逐项 PASS |
+| 6 | `stage2.blueprint` | current/fresh 称名投影可读后独立 preview/run，不等 Global 正式稿；新关系只经 `--emit-edit-template` → `--apply-edit` 完整集合替换 | 逐章蓝图正式落盘；Stage4 前再汇合 current 正式 global、唯一 Stage2 `--check-only` 联合 HARD 无命中，以及 current review 的 generation-safe blocking 面 |
 | 7 | `stage4.design` | 首轮无参数；当前正式 A 审阅拒绝时只执行服务端给出的 `--review-token <opaque>`；单章模型 repair 耗尽可 `--apply-edit` 完整章，显式策略驳回则同时带 `--replan` | 只产生当前盲候选；本相未读取原文顺序、证据位置或必须材料，且不会顺带启动下一相。机械通过后还须提交全书策略 + 逐章正式设计审阅 |
 | 8 | `stage4.plan` | 仅在当前 A 设计审阅全书 accepted 后重新独立 preview/run | B 只绑定证据；模型的 `binding_concerns` 进入最终人审但不阻断。模型声称 infeasible 只有代码构造性证明后才可正式落盘，否则同 session 返修为完整 bound |
 | 9 | `stage4.context` | B 编译计划机械通过、且最终逐章结构裁决全书 accepted 后单独执行 | `stage4/writer_context.json` 与当前计划投影一致且 fresh；B、`--revalidate`、`--apply-edit`、`--apply-binding` 都不得自动组装它 |
@@ -235,8 +235,17 @@ Global 正式落盘后，
 hash（不得靠重发模板刷新阅读凭证），同时阅读原文、填写 decisions。这里的“并行”不放宽同书写盘
 互斥：真正的 `--review-decisions`、typed edit 与 producer 落盘仍应错峰提交。review 若无需改 global，
 提交后以 `stage2.blueprint --check-only` 做全局 + 逐章唯一联合复检；只有 current 正式 global、
-current/fresh 投影与 blueprint、联合 HARD 无命中且 review current/**blocking 面逐项 PASS**，才能
-preview Stage4A；disclosure 未决项继续披露但不阻断。review 若发现 global 要改，先走 typed edit；
+current/fresh 投影与 blueprint、联合 HARD 无命中且 review current/**blocking 面 generation-safe**，才能
+preview Stage4A；disclosure 未决项继续披露但不阻断。review 若发现 FAIL 或不可隔离 UNVER，第二次、
+也是最后一次 Commander 调用用 `stage2.global --emit-edit-template` 取得当前 typed 骨架，经
+`--apply-edit` 同时提交合并事实修改与 `post_edit_review` 自审。producer 只关闭本 edit 新打开的
+blocking 项，未变化旧 FAIL 仍红；可删的 secret/relation/world-rule 完整组可显式
+`quarantine_group`，但状态仍是 UNVER，写作视图删除该组且
+最终交付只能 `ready_with_disclosures`。人物、setting、arc、集合完整性不能隔离。
+若这份 reviewed edit 通过 schema 却被 canonical HARD 拦成当前 `.INVALID`，队列先暴露
+`recovery:stage2-global-reviewed-edit`：最终 correction workpack 绑定失败 edit/INVALID 原始字节，只反馈
+具体 HARD，不重新载入 Blueprint 或整份无关材料；同进程精确 resume Commander，安全重启则仍只保留
+最后一次调用预算。修正通过后才重新计算 Blueprint freshness。
 共享人物称名 inventory 改变时 blueprint 会 stale，必须重建，未消费字段变化则按 freshness 结果复用。
 提前完成的 review 可以保存，但缺 blueprint 时 Stage2 仍未收口。机械测量不是独立节点：Stage5/6
 会从各自已读的 Stage1 文本即时计算，operator
@@ -377,9 +386,13 @@ CLI `state` 会显示共享的 deterministic freshness badge；这个 badge 才�
 去绕过刷新。改变其他参数同样意味着新调用语义，必须重新 preview 和记账。
 
 正式 headless run 的 `pause` 只停止接纳新节点并等待当前 claim/beacon 安全闭合，不取消正在正常执行的
-付费节点；同一 epoch resume 精确续用 Commander provider session。代码或 skill 身份变化时，
+付费节点；同一 epoch resume 精确续用 Commander provider session。Stage2 global 固定为首轮完整审阅、
+第二轮合并编辑与自审，最多两次真实 Commander 调用；0-wire typed 动作不占轮次。Executor 的候选→反馈
+修复继续复用各节点 logical/provider session 与 checkpoint；Stage2 人工 GlobalEdit
+是 0-wire 确定性动作，不另起一个模型 Executor。代码或 skill 身份变化时，
 RunSupervisor 在同一 parent run 内关闭旧 epoch、打开新 epoch、先免费复检并创建新的 Commander
-provider session；旧 provider context 与 execution token 均不得复用。`stop` 是永久终止：取消该 run
+provider session；旧 provider context 与 execution token 均不得复用，但盘上可证明的 Stage2 reviewed-edit
+失败仍只获得第二次/最终 Commander 预算。`stop` 是永久终止：取消该 run
 拥有的 Commander/Executor 进程树、drain 后写 ended，不能 resume。服务重启后无法证明进程状态时保持
 `unknown`，不得自动洗成 paused 或自行恢复。
 

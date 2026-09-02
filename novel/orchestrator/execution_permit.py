@@ -58,6 +58,7 @@ def _t(*tokens: str) -> frozenset[str]:
 _INBOX = queue.WAITING_ON_INBOX
 _RESUME = queue.WAITING_ON_RESUME_DECISION
 _STAGE2_REVIEW = queue.WAITING_ON_STAGE2_REVIEW
+_STAGE2_EDIT_CORRECTION = queue.WAITING_ON_STAGE2_EDIT_CORRECTION
 _STAGE4_DESIGN = queue.WAITING_ON_STAGE4_DESIGN_REVIEW
 _STAGE4_BINDING = queue.WAITING_ON_STAGE4_BINDING_RESOLUTION
 _STAGE4_STRUCTURE = queue.WAITING_ON_STAGE4_STRUCTURE_REVIEW
@@ -68,7 +69,7 @@ _STAGE6_APPROVE = 'stage6.approve'
 _STAGE7_APPROVE = 'stage7.approve'
 
 _W0 = frozenset({_INBOX, _RESUME, _STAGE0_APPROVE})
-_W2 = frozenset({_INBOX, _RESUME, _STAGE2_REVIEW})
+_W2 = frozenset({_INBOX, _RESUME, _STAGE2_REVIEW, _STAGE2_EDIT_CORRECTION})
 _W4 = frozenset({
     _INBOX, _RESUME, _STAGE4_DESIGN, _STAGE4_BINDING, _STAGE4_STRUCTURE,
 })
@@ -101,6 +102,9 @@ RECOVERY_RUN_POLICIES: Final[tuple[RecoveryRunPolicy, ...]] = (
         'stage2.global', _t('--revalidate', '--actor', '--reason'), _W2),
     RecoveryRunPolicy('stage2.global', _t('--apply-edit'), _W2),
     RecoveryRunPolicy('stage2.global', _t('--review-decisions'), _W2),
+    RecoveryRunPolicy('stage2.global', _t('--emit-edit-template'), _W2),
+    RecoveryRunPolicy(
+        'stage2.global', _t('--emit-edit-correction-workpack'), _W2),
     RecoveryRunPolicy('stage2.global', _t('--emit-review-template'), _W2),
     RecoveryRunPolicy(
         'stage2.global', _t('--emit-review-template', '--review-scope'), _W2),
@@ -230,7 +234,7 @@ EXTERNAL_INPUT_POLICIES: Final[
     ('stage0.edit', '--apply-edit'): 'repo',
     ('stage0.edit', '--apply-edit-plan'): 'repo',
     ('stage0.edit', '--apply-candidate-plan'): 'repo',
-    ('stage2.global', '--apply-edit'): 'book',
+    ('stage2.global', '--apply-edit'): 'book_or_service_edit',
     ('stage2.global', '--review-decisions'): 'book_or_service_edit',
     ('stage2.blueprint', '--validate-edit'): 'book_or_service_edit',
     ('stage2.blueprint', '--apply-edit'): 'book_or_service_edit',

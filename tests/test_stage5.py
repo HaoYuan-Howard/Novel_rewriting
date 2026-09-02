@@ -876,6 +876,7 @@ def test_paid_writer_prompt_excludes_global_source_spans(monkeypatch, tmp_path):
     from types import SimpleNamespace
 
     from novel.core.evidence import iter_global_evidence_slots
+    from novel.stages.stage2 import global_review as stage2_global_review
     from novel.stages.stage5 import review, write
     from tests.test_stage2 import global_grounding
 
@@ -925,6 +926,7 @@ def test_paid_writer_prompt_excludes_global_source_spans(monkeypatch, tmp_path):
             for ordinal, text in source_text.items()
         ]),
         review.GLOBAL_GROUNDING: Dumped(grounding),
+        stage2_global_review.REL: factories.approved_global_review(grounding),
         review.WRITER_CONTEXT: Dumped(writer_context),
     }
 

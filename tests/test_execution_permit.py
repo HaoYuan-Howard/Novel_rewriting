@@ -566,3 +566,79 @@ def test_stage5_trim_batch_manifest_is_bound_only_in_book_or_service_edit(
         current, 'stage5.review',
         ['--retain-pretrim-batch', str(service)])
     assert Path(got.external_inputs[0].resolved_path) == service.resolve()
+
+
+def test_stage2_review_decisions_bind_service_edit_but_reject_scratch(
+        monkeypatch, tmp_path):
+    """Reviewer 输入复用正式 service edit；scratch 不能变成第三种 producer 路径。"""
+    _stable(monkeypatch)
+    novel_dir = tmp_path / f'平台_测试书_{SID}'
+    novel_dir.mkdir()
+    current = _next(
+        tmp_path, state='blocked', node='stage4.design',
+        waiting_on=Q.WAITING_ON_STAGE2_REVIEW)
+
+    scratch = (
+        tmp_path / '_service' / 'scratch' / SID / 'epoch-1'
+        / 'reviewer-node-input.json')
+    scratch.parent.mkdir(parents=True)
+    scratch.write_bytes(b'{"_schema_version":2}\n')
+    with pytest.raises(UnsupportedRunMode, match='当前书'):
+        P.permit_from_next(
+            current, 'stage2.global',
+            ['--review-decisions', str(scratch)])
+
+    other_sid = (
+        tmp_path / '_service' / 'edits' / 'book-2'
+        / 'global-review.json')
+    other_sid.parent.mkdir(parents=True)
+    other_sid.write_bytes(b'{"_schema_version":2}\n')
+    with pytest.raises(UnsupportedRunMode, match='当前书'):
+        P.permit_from_next(
+            current, 'stage2.global',
+            ['--review-decisions', str(other_sid)])
+
+    service = (
+        tmp_path / '_service' / 'edits' / SID
+        / 'global-review.json')
+    service.parent.mkdir(parents=True)
+    service.write_bytes(b'{"_schema_version":2}\n')
+    got = P.permit_from_next(
+        current, 'stage2.global',
+        ['--review-decisions', str(service)])
+
+    assert Path(got.external_inputs[0].resolved_path) == service.resolve()
+    assert got.external_inputs[0].sha256 == hashlib.sha256(
+        service.read_bytes()).hexdigest()
+
+
+def test_stage2_global_edit_uses_the_same_sid_scoped_service_root(
+        monkeypatch, tmp_path):
+    _stable(monkeypatch)
+    (tmp_path / f'平台_测试书_{SID}').mkdir()
+    current = _next(
+        tmp_path, state='blocked', node='stage4.design',
+        waiting_on=Q.WAITING_ON_STAGE2_REVIEW)
+    edit = tmp_path / '_service' / 'edits' / SID / 'global-edit.json'
+    edit.parent.mkdir(parents=True)
+    edit.write_bytes(b'{"_schema_version":3}\n')
+
+    got = P.permit_from_next(
+        current, 'stage2.global', ['--apply-edit', str(edit)])
+    assert Path(got.external_inputs[0].resolved_path) == edit.resolve()
+
+    scratch = (
+        tmp_path / '_service' / 'scratch' / SID / 'epoch-1'
+        / 'global-edit.json')
+    scratch.parent.mkdir(parents=True)
+    scratch.write_bytes(edit.read_bytes())
+    with pytest.raises(UnsupportedRunMode, match='当前书'):
+        P.permit_from_next(
+            current, 'stage2.global', ['--apply-edit', str(scratch)])
+
+    sibling = tmp_path / '_service' / 'edits' / 'other' / 'global-edit.json'
+    sibling.parent.mkdir(parents=True)
+    sibling.write_bytes(edit.read_bytes())
+    with pytest.raises(UnsupportedRunMode, match='当前书'):
+        P.permit_from_next(
+            current, 'stage2.global', ['--apply-edit', str(sibling)])

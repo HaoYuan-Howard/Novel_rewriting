@@ -1081,6 +1081,9 @@ GLOBAL_REVIEW_DISCLOSURE_KINDS: Final = (
 #: 复核项对**交付**的效果。两个取值与 `InboxDeliveryEffect` 同名同义，不另造第三套词。
 GLOBAL_REVIEW_EFFECTS: Final = ('blocking', 'disclosure')
 
+#: UNVER 对写作消费面的显式处置。取值面集中在这里，schema / API 只引用。
+GLOBAL_REVIEW_GENERATION_DISPOSITIONS: Final = ('quarantine_group',)
+
 
 def review_effect_of(kind: str) -> str:
     """一个复核项该不该拦下游。**全仓唯一的分类落点。**
@@ -1661,7 +1664,11 @@ FREE_ENTRIES: Final = {
                          '0 次 LLM 调用（不是 0 人工成本）'),
     '--retain-pretrim-batch': ('按显式 manifest 一次销账多章 trim；整批预检、按章幂等写'
                                'hash-bound resolution，0 次 LLM 调用'),
-    '--emit-edit-template': '向 stdout 输出带当前 schema version 的 stage7 人工编辑空壳，不写盘',
+    '--emit-edit-template': ('向 stdout 输出带当前 schema version 的人工编辑骨架；'
+                             '适用于 Stage2 GlobalEdit、Blueprint 与 Stage7，不写盘'),
+    '--emit-edit-correction-workpack': (
+        '向 stdout 输出被 HARD 拒绝且仍绑定当前 INVALID 的 reviewed Stage2 GlobalEdit、'
+        '精确失败事实与字节身份；只用于中断后的最后一次 Commander 纠正，不写盘'),
     '--validate-edit': ('按所属节点 apply-edit 的同一编译/判定链预检'
                         '人工编辑，不写盘'),
     '--emit-review-template': ('向 stdout 输出绑定当前 stage2 全局复核项 hash/evidence 的'
@@ -1867,6 +1874,7 @@ WRITE_EFFECTS: Final = {
     #   （`Q-3`）。实测确认过一次才补上这一行。
     '--names-only': '',
     '--emit-edit-template': '',
+    '--emit-edit-correction-workpack': '',
     '--validate-edit': '',
     '--emit-review-template': '',
     '--emit-review-workpack': '',
@@ -2040,6 +2048,8 @@ NODES: Final[dict[str, NodeSpec]] = {
                                  flags=('--renormalize', '--purge-role', '--resample',
                                          '--revalidate',
                                          '--apply-edit', '--review-decisions',
+                                         '--emit-edit-template',
+                                         '--emit-edit-correction-workpack',
                                          '--emit-review-template', '--emit-review-workpack',
                                          '--review-scope',
                                          '--actor', '--reason', '--response-repair'),

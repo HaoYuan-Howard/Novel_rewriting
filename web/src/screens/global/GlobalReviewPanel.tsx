@@ -210,7 +210,7 @@ export function GlobalReviewPanel({ sid }: { sid: string }) {
     <Panel>
       <PaneHeader
         title="全局逐项复核"
-        meta="逐章骨架可先生成；只有当前阻断面全部 PASS 才允许进入 Stage4，披露项继续留在审计面"
+        meta="严格 PASS 与写作安全分开呈现；安全隔离的 UNVER 仍留在审计面，但不再拖死成书"
       />
       <QueryStates
         q={review}
@@ -222,11 +222,15 @@ export function GlobalReviewPanel({ sid }: { sid: string }) {
             <div className="flex flex-wrap items-center gap-8 text-body">
               <span
                 className="rounded-tag border px-8 py-2 font-semibold"
-                style={data.approved
+                style={data.generation_safe
                   ? { color: SEV.info.color, borderColor: SEV.info.border }
                   : { color: SEV.unver.color, borderColor: SEV.unver.border }}
               >
-                {data.approved ? '阻断面：全部 PASS' : 'Stage4 保持关闭'}
+                {data.approved
+                  ? '阻断面：全部 PASS'
+                  : data.generation_safe
+                    ? '可继续：隔离 UNVER 后安全'
+                    : 'Stage4 保持关闭'}
               </span>
               <span className="text-ink-4">
                 阻断 PASS {data.effect_counts.blocking.PASS}/
@@ -245,6 +249,28 @@ export function GlobalReviewPanel({ sid }: { sid: string }) {
                 current {data.current_subject_sha256.slice(0, 16)}…
               </Mono>
             </div>
+
+            {data.quarantined_groups.length > 0 ? (
+              <div
+                className="rounded-block border px-14 py-10 text-body"
+                style={{
+                  color: SEV.unver.color,
+                  borderColor: SEV.unver.border,
+                  background: SEV.unver.bg,
+                }}
+              >
+                <div className="font-semibold">
+                  以下 UNVER 事实组仅从写作消费视图隔离，原始审计结论未改为 PASS：
+                </div>
+                <div className="mt-5 flex flex-wrap gap-6">
+                  {data.quarantined_groups.map((group) => (
+                    <Mono key={group} className="rounded-tag bg-card px-7 py-2 text-micro">
+                      {group}
+                    </Mono>
+                  ))}
+                </div>
+              </div>
+            ) : null}
 
             {!data.current ? (
               <div
@@ -345,6 +371,11 @@ export function GlobalReviewPanel({ sid }: { sid: string }) {
                         </div>
                         {item.reason ? (
                           <div className="mt-5 text-tag text-ink-4">上次理由：{item.reason}</div>
+                        ) : null}
+                        {item.generation_disposition ? (
+                          <div className="mt-5 text-tag text-ink-4">
+                            写作处置：隔离完整事实组（{item.generation_disposition.reason}）
+                          </div>
                         ) : null}
 
                         <div className="mt-10 grid gap-8" style={{ gridTemplateColumns: '150px minmax(280px,1fr)' }}>

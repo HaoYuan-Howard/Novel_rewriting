@@ -496,6 +496,46 @@ def test_queue_does_not_paid_rerun_global_invalid_after_projection_is_ready(
     assert all(item.node != 'stage2.global' for item in todo)
 
 
+def test_reviewed_global_edit_invalid_recovers_final_correction_before_blueprint(
+        queue_base, monkeypatch):
+    """失败的 Commander 动作不能被 INVALID 引发的 Blueprint REDO 抢走。"""
+    monkeypatch.setattr(
+        Q, 'nodes_up_to',
+        lambda _until: ['stage2.global', 'stage2.blueprint'])
+    monkeypatch.setattr(
+        Q.st, 'stage2_reviewed_edit_correction_needed',
+        lambda _base, _sid, _ov: True)
+    monkeypatch.setattr(
+        Q.st, 'stage2_global_projection_blocked', lambda _ov: False)
+    monkeypatch.setattr(
+        Q.st, 'stage2_projection_recovery_needed', lambda _ov: False)
+    monkeypatch.setattr(
+        Q.st, 'stage2_blueprint_invalid_recovery_needed', lambda _ov: False)
+    monkeypatch.setattr(
+        Q.st, 'stage2_legacy_blueprint_recovery_needed', lambda _ov: False)
+    monkeypatch.setattr(
+        Q.st, 'stage2_frozen_v6_subject_validated', lambda _ov: False)
+    monkeypatch.setattr(
+        Q.st, 'resume_verdict',
+        lambda _ov, node: (
+            (Q.st.RESUME_SKIP, 'reviewed edit INVALID 投影已就绪')
+            if node == 'stage2.global'
+            else (Q.st.RESUME_REDO, 'Blueprint 被新投影置 stale')))
+    ov = SimpleNamespace(stages=[])
+
+    todo, blocked = Q.plan_book_from_overview(
+        queue_base, 'book-a', ov, until_stage='stage2', follow_check=False)
+
+    assert todo == []
+    assert [item.node for item in blocked] == [
+        'stage2.global', 'stage2.blueprint']
+    assert all(
+        item.waiting_on == Q.WAITING_ON_STAGE2_EDIT_CORRECTION
+        for item in blocked)
+    assert blocked[0].steps == []
+    assert '第二次、也是最后一次 Commander' in blocked[0].why
+
+
 @pytest.mark.parametrize(
     ('formal_exists', 'invalid'),
     [(True, False), (False, True), (True, True)],
