@@ -1,7 +1,7 @@
 # 活动待办
 
 本文件是项目唯一的活动待办清单，只保留尚未完成、仍值得推进且有明确验收条件的事项。
-已完成能力、撤回方案与实验过程由 Git 和 `docs/BACKEND_CONTRACT.md` §十回答；产品规格、
+已完成能力、撤回方案与实验过程由 Git 和 `docs/DECISIONS.md` 回答；产品规格、
 冻结契约与证据基线见 `docs/BACKEND_CONTRACT.md`，可迁移经验见 `docs/LESSONS.md`。
 
 **编号不重排。** 已删除的编号保持空缺，避免历史提交中的引用改指另一件事。
@@ -62,7 +62,7 @@ B 只绑定证据，不静默改变 A 的场景顺序、事实分组、首尾锚
 
 **验收**：事实、因果、人物状态和保真材料仍闭合；每章明确记 retain/reconstruct；人工能指出具体
 入口、组合或披露差异；每项 metric 最终得到“继续只报不挡 / 候选阈值需产品裁决 / 当前不可判”之一，
-证据写入 `docs/BACKEND_CONTRACT.md` §十。`R-5.25` 工作包只缩小阅读范围，不制造盲评标签。
+证据写入 `docs/DECISIONS.md`。`R-5.25` 工作包只缩小阅读范围，不制造盲评标签。
 
 ### TODO-31 · 下一次新 base 同批收紧 Stage4→5 盘上契约
 
@@ -83,7 +83,7 @@ Stage5 写作、recheck/revalidate、Review、trim、s5 审批及 Stage6/7 只�
 TODO-32 的剩余真实 agent-only 验收已并入本条，旧编号删除。已经落地的 RunSupervisor、四类身份、
 raw/effective 审批、opaque token、Stage2 v7 关系和 Stage4 v3 repair/edit/replan 不再作为活动叙述重复；
 冻结行为见 `R-3.16`、`R-3.21`、`R-5.26`、`R-11.19`～`R-11.21`、`R-12.7`、`R-13.8`、
-`R-14.7`，工程证据见 `docs/BACKEND_CONTRACT.md` §十。本条只追踪尚未完成的实书恢复、运行验收与
+`R-14.7`，工程证据见 `docs/DECISIONS.md`。本条只追踪尚未完成的实书恢复、运行验收与
 目录生命周期。
 
 **批次一：第一本书零模型最小恢复。** 对 SID `2067848088279168820` 在 current code 下重建
@@ -115,7 +115,7 @@ epoch rollover 完成：同 epoch 精确续 provider session，新 epoch 新建 
 
 **批次四：现实生命周期验收。** `_service/runs`、scratch、两相 retention、v3 trash、
 round/revalidation 精确去重、restore hard-kill reconcile、维护 API/UI 与 AgentRun `reconciled` 的工程面
-已经完成，证据移入 `docs/BACKEND_CONTRACT.md` §十，不再作为活动施工项。当前只剩在现实运行中演练
+已经完成，证据移入 `docs/DECISIONS.md`，不再作为活动施工项。当前只剩在现实运行中演练
 TTL preview/apply、部分删除与进程崩溃补尾、trash restore，以及一个 parent run 跨 pause/resume 与多个
 epoch 交付；服务崩溃、坏尾、迟到 child 与并发 resume 必须继续关闭式处理。
 
@@ -147,4 +147,4 @@ epoch 交付；服务崩溃、坏尾、迟到 child 与并发 resume 必须继�
 1. 开工前补足可复现输入、预期最终状态、成本与受影响守卫。
 2. 改动覆盖真实消费者、失败与恢复路径、文档和测试，不以类型或占位入口存在为完成。
 3. 验收通过或经证据裁定不再值得推进时，立即从本文件删除；历史只回写 Git 与
-   `docs/BACKEND_CONTRACT.md` §十。
+   `docs/DECISIONS.md`。

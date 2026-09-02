@@ -4,7 +4,7 @@
 test_agent.py —— Commander 代跑的提示词/启动计划、事件流与互斥。
 
 【不在这里测的】真拉起 Claude/Codex CLI——那要账号与模型配额，归
-端到端实战（`docs/BACKEND_CONTRACT.md` §十那一档）。这里全部走 fake spawn；
+端到端实战（`docs/DECISIONS.md` 那一档）。这里全部走 fake spawn；
 两个供应商的 stdin/argv 与 JSON 协议边界由 `tests/test_commander_drivers.py` 的零成本
 子进程探针独立覆盖。
 

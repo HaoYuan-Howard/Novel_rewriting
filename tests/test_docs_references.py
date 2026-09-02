@@ -30,7 +30,7 @@ DOC = reqs.load()
 
 #: 扫哪些文档。产品 U/S 规格已并入冻结契约；本正则只识别后端 R/Q/B 编号。
 #:
-#: ⚠ `docs/LESSONS.md` 在这张表里，而它**多数条目都点名代码落点**（「唯一落点是 X」）
+#: ⚠ `docs/LESSONS.md` 在这张表里，而它的原则条目会点名现役代码落点
 #: ——那正是本文件第 ② 条要查的东西。一份「经验」文档指着一个已经改名的模块，
 #: 比没有这条经验更坏：读的人会去找它，然后按自己的猜测把它读通。
 #: ⚠ `docs/AUDIT_*.md` 是**临时销账清单**（跑完一次全链之后逐条修，修完删文件），
@@ -38,20 +38,23 @@ DOC = reqs.load()
 #: 一份指着已改名模块的修复清单，比没有这份清单更坏：照着改的人会先去找那个文件。
 #: 通配符而不是逐份登记：文件删掉之后这条 glob 自己就空了，不会留下死配置。
 #: ⚠ `AGENTS.md` 是 agent 的入口摘要（`CLAUDE.md` 是指向它的符号链接，glob 只 match 实体
-#: 那一份，不会重复扫）。它必须在这张表里，因为**它是本仓引用密度最高的文档**：
-#: 一整张「单一落点」表逐格点名模块，而读它的人（或模型）会拿这些路径当第一手线索去改代码。
+#: 那一份，不会重复扫）。它虽已收窄为路由与关键不变量，读它的人仍会把其中路径当第一手线索。
 #: 实测过这个形状的代价：README 那句「双击 `tools\start.cmd`」指着一个不存在的路径活了很久，
 #: 而它没被抓住只是因为写的是**反斜杠**——本文件的 `_PATH` 只认正斜杠。
 #: ⇒ 在这几份文档里写仓内路径时一律用正斜杠，否则等于自愿退出这道守卫。
 #: ⚠ skill 文档也在这张表里。`.workflow/skills/*/scripts/validate_skill.py` 查的是
 #: markdown **链接**（`[文字](相对路径)`）的目标存在性与渐进披露闭合；反引号里的
 #: **仓内路径**和 R/Q/B 编号一直无人查，两边的域不重叠、不是重复。
+#: ⚠ `docs/DECISIONS.md` 与 `docs/OPERATIONS.md` 是从入口文档拆出的永久文档，不走
+#: `docs/AUDIT_*.md` 的临时生命周期；必须显式进入扫描面，避免拆分后反而失去引用守卫。
 DOC_GLOBS = (
     'docs/schema/*.md',
     'docs/AUDIT_*.md',
     'docs/BACKEND_CONTRACT.md',
+    'docs/DECISIONS.md',
     'docs/REQUIREMENTS.md',
     'docs/LESSONS.md',
+    'docs/OPERATIONS.md',
     'README.md',
     'AGENTS.md',
     '.workflow/skills/*/SKILL.md',

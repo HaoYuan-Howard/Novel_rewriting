@@ -491,7 +491,7 @@ canonical `stage5/ch*.json` 给；文件名只做发现，每份仍须通过当�
 ⚠ **必须排除 `.INVALID.json`**——原型这里踩过；把被拦下的那份数进去就把语义反过来了：
 续跑会跳过一章**根本没写成的**稿子，而那一章的钱到时候还得花。
 
-### 4.1 续跑判定（`R-14.4`）——四态，`unknown` 同样不许折进别人
+### 4.1 续跑判定（`R-14.4`）——五态，`unknown` 同样不许折进别人
 
 `resume_verdict(overview, node)` → `(结论, 一句话)`：
 
@@ -501,10 +501,19 @@ canonical `stage5/ch*.json` 给；文件名只做发现，每份仍须通过当�
 | `run` | 产物不在盘上，或盘上是一份被闸门拦下的 `.INVALID`；后者在队列里先停为 `inbox:invalid`，由人优先尝试 0 成本 `--revalidate`，不会直接重跑付费命令 |
 | `redo` | **上游在中断期间变过** ⇒ **这不是「续」是「重来」** |
 | `unknown` | 判不了；Stage5 章按当前 schema/version 读不回或 freshness 未知也停在这里，不折成付费重跑 |
+| `legacy_incompatible` | 旧契约只作历史证据；不迁移、不冒充 missing，也不静默触发付费重建 |
 
-⚠ `redo` / `unknown` **都不自动执行**：它们是一句话，不是一个动作。前者意味着
-可能重新付费，后者连正确动作都尚不能判定；队列统一落空 `steps` 的
-`resume:manual-decision` 阻塞项，只负责**说出来并停下**。
+⚠ 普通 durable 多步队列对 `redo` / `unknown` **都不自动执行**：前者可能重新付费，
+后者连正确动作都尚不能判定；它们统一落空 `steps` 的 `resume:manual-decision`，
+只负责**说出来并停下**。AgentRun 的 operator 是窄例外，因为它每落一步都会重新采
+完整快照：有正式产物的 producer 只有在产物仍可读、没有 INVALID 或盘上既有却 unknown 的输出、每份 stale
+输出的权威汇总 reason 都是 `consumed_changed`，且节点在 `NodeSpec.operator_redo` 登记
+了唯一策略时，才把
+原结论仍为 `redo` 的动作变成 ready 并铸 exact execution token。书级节点用默认完整重建；
+Stage5 写作必须从完成度行导出 stale/missing 的精确 `--chapters`，不能拿空 flags 冒充
+重写；同一 producer 的缺失输出可由 canonical 动作一并补齐。Stage5 Review 是另一条登记的
+零成本编号新增策略，只要求专用 currentness 已明确
+stale。producer 输出汇总为 `file_changed`、策略未登记或参数不唯一仍停给人。
 
 > ⭐ **这一节在捡回一个被静默弄丢的能力。**
 > 原型退役的 `_legacy/run_book.py:14-22` 有过真正的续跑：
@@ -561,12 +570,12 @@ not_run: M  它后面那些，一步都没跑
 |---|---|
 | stage0 未批准（`APPROVAL_STATE != 'approved'`） | `stage0.approve` |
 | stage5 尚未授权 current canonical 全书写作 | `approval:stage5-writing` |
-| Stage5 Review 不是 `missing/fresh`，旧结论不能驱动写作续跑 | `stage5:review-currentness` |
+| Stage5 Review 不是 `missing/fresh`，且本次不是已证明的上游 consumed-change 精确重写；旧结论不能驱动普通写作续跑 | `stage5:review-currentness` |
 | 发现旧 `stage5/deep|shallow/` 布局 | `legacy_incompatible` |
 | 文案未定稿 | `stage6.approve` |
 | 人名表未定稿 | `stage7.approve` |
 | inbox 非空（包括本层 current `.INVALID`、被驳回、连续未消） | `inbox:<kind>` |
-| 续跑判为 `redo` / `unknown`，不能自动构造安全命令 | `resume:manual-decision` |
+| 普通队列的 `redo/unknown`，或 operator 无法证明唯一 canonical REDO 命令 | `resume:manual-decision` |
 | 服务重启后旧快照仍含付费项、等人重新确认 | `queue:restart-confirmation` |
 | 当前命令面与创建时快照不同、必须重建队列 | `queue:plan-changed` |
 

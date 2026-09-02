@@ -179,7 +179,7 @@ _unver('no_secrets_in_book', '这本书有可查的秘密', 'R-7.18',
 # ⚠⚠ `semantic_secret_leak`（R-7.18b）与 `semantic_secret_coverage`（R-7.18c）
 #   随 `stage5.semantic` 节点于 2026-08-17 一并下线（用户裁决，见
 #   `contracts/invariants.py` 该节点位置的注释与
-#   `docs/BACKEND_CONTRACT.md` §十 2026-08-17 那一行）。
+#   `docs/DECISIONS.md` 2026-08-17 那一行）。
 #   ⇒ **本层书级剧透防线现在是确定性的那一组**：stage2 的 `event_early_name` /
 #   `present_early_named` / `present_names_late` 在标注层拦截后见之明，
 #   成书逐字对账的「上游 info 下游投影」在交付前复核它有没有传导进成书。

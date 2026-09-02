@@ -12,7 +12,7 @@ stage5/review_<n>.json           确定性验收报告（**0 成本，不调 LLM
 stage5/wontfix.json              人的「这条我不修」
 ```
 ⚠ 这张图上曾列着 `stage5/semantic_<n>.json`（书级语义审判）。`stage5.semantic`
-已于 2026-08-17 **整节点下线**（裁决与实跑证据见 `docs/BACKEND_CONTRACT.md` §十），
+已于 2026-08-17 **整节点下线**（裁决与实跑证据见 `docs/DECISIONS.md`），
 产物、路径登记与两条判据一并删除——本层现在**没有任何付费的语义审判**。
 
 【五条贯穿本层的事实】

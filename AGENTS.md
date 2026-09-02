@@ -1,210 +1,82 @@
 # AGENTS.md
 
-This file provides guidance to Claude Code (claude.ai/code) and other coding agents when working
-with code in this repository. **`CLAUDE.md` 是指向本文件的链接——要改在这里改，不要改那一份。**
+本文件是 coding agent 的仓库入口；`CLAUDE.md` 是指向它的链接，只改本文件。仓内文档、注释、
+commit 与对用户的工程回复统一使用中文。
 
-（本仓所有文档、注释、commit 都是中文，回复与新增文档保持中文。本文件与
-`docs/BACKEND_CONTRACT.md` 冲突时，以后者为准：它是冻结契约，本文件是入口摘要。）
+## 项目与权威顺序
 
-## 这个系统是什么
+本系统把一部中文网络小说经 stage0、stage1、stage2、stage4～stage7 七个现役产物层处理成一本
+新书：保留情节骨架，全文重写，替换人名，最终交付 `stage7/<书名>_rewriting.txt`。
 
-把一本中文网络小说经 stage0、stage1、stage2、stage4～stage7 七个现役层处理成**一本新书**
-（Stage3 编号保留为空洞）：情节骨架保留、文字全部重写、
-人名全部替换，交付 `stage7/<书名>_rewriting.txt`（交付物按书名命名；路径落点唯一在
-`novel/paths.py::book_txt_rel`）。产品边界、处理链与成本见 `README.md`。
+最高风险不是程序崩溃，而是错误剧情被静默接受。实现与评审都优先保护证据关系、未知状态和人工
+裁决边界，不为“全绿”伪造结论。
 
-**最高风险不是「出不了书」，是「错误的剧情被静默接受」**——模型的错误不会崩溃，它会造一个
-读起来毫无破绽的假事实。仓里绝大多数看起来"过度设计"的机制（三态建模、单一落点、先校验后落盘、
-守卫的守卫）都是为这一条服务的，改动前先理解它想防什么。
+发生冲突时按以下顺序判断：
 
-## 常用命令
+1. `docs/BACKEND_CONTRACT.md`：冻结 R/Q/B 契约、守卫归属与修复路由。
+2. `contracts/` 与 `docs/schema/`：现役取值域、schema、路径和 API 形状。
+3. `README.md` 与 `web/DELIVERY.md`：产品边界、人类任务与界面规格。
+4. `docs/REQUIREMENTS.md`：唯一活动待办；未受用户点名的新工程只从仍存在的条目开工。
+5. `docs/DECISIONS.md`：历史裁决和实测证据，只解释缘由，不覆盖现役契约。
 
-命令细节的唯一落点：后端运行与验证见 `README.md`「运行与验证」，前端命令见
-`web/DELIVERY.md` 开头。agent 高频提醒两条：
+## 任务路由
 
-- 后端一律用 conda 环境 `novel_refactor`（**不是 Miniconda base**，base 里连 pydantic 都没有）。
-- `docs/BACKEND_CONTRACT.md` §9.5 的最小验证命令直接写死解释器路径
-  `D:\Miniconda\envs\novel_refactor\python.exe`，改判据/schema/节点/API 时先跑那五个文件。
+### 工程修改
 
-跑 pytest 的三个坑：
+1. 先看 `git status --short`，保留工作区已有改动；冲突无法绕开时再请用户决定。
+2. 阅读相关代码、模块头、契约与测试，不把现状自动当成正确设计。
+3. 按 `docs/LESSONS.md` 开头的任务索引，只读与本次改动相关的经验条目；不再要求每项工程全文通读。
+4. 修改完整消费链：契约、producer、consumer、恢复路、测试和文档属于同一行为时必须同批闭合。
+5. 验证真实消费者与最终盘面；单函数存在、能 import 或单测通过都不等于完成。
 
-- **必须绕开 agent 沙箱**。沙箱会把 `.test_runtime` / `.test_cache` 的 ACL 写坏，且非管理员
-  修不回来。默认直接复用 `pyproject.toml` 登记的这两个固定目录；**不许**按批次、测试名或时间戳
-  另造 `.rt_*` / `pt_*`。只有仓库路径过长时才显式改用固定的仓外短路径
-  `--basetemp=E:\_tr`，后续每次仍复用同一个名字——pytest 会在开跑时清空它，无须加新后缀。
-  正常退出时 `tests/conftest.py::pytest_unconfigure` 会在创建者进程仍有权限时恢复普通用户 ACL；
-  进程若被强杀，遗留目录仍须一次性提权修 ACL 后删除，不能靠继续换名字回避。同文件会按 Stage0
-  最长归档路径预检 `MAX_PATH`，深目录会给出 `pytest.UsageError` 这种假红。
-- **汇总行到不了工具输出**，要核 passed/skipped 就数进度点，别指望抓 `N passed`。
-- **语料用例有两道闸**：`addopts` 默认 `-m "not corpus"` 会整批 deselect；即使加 `-m corpus`，
-  不设 `NOVEL_OUTPUT` 还会整批 skip。最终硬验收是
-  `--require-corpus` + `NOVEL_OUTPUT` + `NOVEL_CORPUS_MANIFEST`（缺书、缺产物、版本漂移、
-  ledger 不闭合、新增 skip 一律关闭式失败）。当前 manifest 尚未生成，所以**任何通过数字只能
-  称「非 corpus 回归」，不能称「全量绿」**（`docs/REQUIREMENTS.md` TODO-21）。
+### 纯运行任务
 
-**跑书不要手拼命令**：完整操作规程是 `.workflow/skills/novel-pipeline-operator/SKILL.md`
-（`novel-pipeline-operator` skill）。CLI 子命令：`run` / `preview` / `state` / `inbox` /
-`operator` / `queue` / `queue-list` / `queue-cancel` / `queue-resume` / `jobs` / `reconcile` / `doctor` /
-`response-repair` / `approval` / `mark`。`operator next` 在同一份冻结快照上回答当前三态与
-blocker；`ready` 直接携带 exact execution token 交 canonical runner，不得再取一次 permit
-重扫全链。`operator permit` 只保留给 blocked recovery 与诊断兼容，不能拿 blocked
-action hash 冒充恢复许可。
-`preview` 是 0 成本的、且它给出的 argv 才是真跑那一条。
+跑书、断点续跑、`state` / `inbox`、流水线恢复和 agent 代批只遵循
+`.workflow/skills/novel-pipeline-operator/SKILL.md` 及其按需 references，不读工程经验全集，也不手拼
+生产命令。只有故障转为代码诊断或修复时，才切回工程修改流程。
 
-## 架构要点
+## 不可破坏的系统不变量
 
-### 两根正交的轴：`stage` 与 `node`
+- `stage` 是产物层，`node` 是作业 id；节点唯一登记在 `contracts/invariants.py::NODES`。Stage3 已退役，
+  复检用 `--check-only` flag，不造 `check` 节点。章唯一键是阅读序整数 `chapter_ordinal`，输出章号恒等
+  于源章号，不合并、不删、不拆、不重排。
+- 依赖只能单向流动：`contracts.artifacts → contracts.invariants → contracts.rules/schema → novel.*`。
+  产物读写只经 `novel/store.py`，路径只经 `novel/paths.py`，服务层与前端不能另造第二套判定或 argv。
+- “不知道、没运行、缺失、空结果、没问题”必须分开。退出码 1（已落盘但不通过）、2（显式终态未落盘）、
+  70（崩溃、结论未知）不得互相洗白；是否落盘只调用 `novel/cli/exit_codes.py::landed`。
+- artifact 只接受 `contracts/schema/__init__.py::ARTIFACT_SPECS` 登记的当前版本。本仓没有通用迁移机制；
+  破坏形状时升版，并同批明确存量由哪个 producer 重建和需要什么授权，禁止手补旧文件冒充新产地。
+- 付费授权与正文外发授权正交。付费命令必须显式 `--yes`；成本只认 `<base>/_service/ledger.jsonl`，
+  缓存命中单列，不能写成“没有执行”。服务进程本身不能发付费模型请求。
+- 校验修复只走登记的 `deterministic / llm / human / none` 路由。新增落盘硬闸时必须同批提供 0 成本
+  `--revalidate`、人工编辑或等价恢复面；生成、人工写回与提升共享 schema、归一、判据、归档和 provenance。
+- 服务进程只写 `_service/`；产物变化经 CLI 子进程。前端只呈现后端判定，unknown 保持 unknown，屏与组件
+  只经 hooks → `api.*`，不直接 fetch、不 import mock、不硬编码后端枚举。
+- 未经标定的语义判断保持 `unver` 或人工裁决。Stage6 双盲 judge 只产带证据的 UNVER；收口走
+  `stage6.approve` 的 typed 人工决定，不复活已退役的 evaluator profile 或 Stage5 收缩臂。
 
-`stage0`~`stage7` **只做产物层**（目录 / schema / `Rule.stage` / 校验报告路由），永不用作作业 id。
-作业 id 是 `<stage>.<动词>`（`stage2.global`、`stage5.write`、`stage7.assemble` …），
-唯一落点 `contracts/invariants.py::NODES`，label 从 NODES 派生不手写。两者**不是 1:1**：
-stage2 两个节点、stage4 三个节点（两个付费相共属结构设计、一个 0 成本上下文组装）、
-stage5 写作与验收两相、stage0 三个人参与的动作。
+## 运行与验证入口
 
-三条容易踩的推论：**没有 `check` 节点**（复检一律是 `--check-only` flag，作业 kind 是
-`(node, flags)` 二元组）；**Stage5 只有一条 canonical 闭卷写作路**（默认补齐计划中的全部缺章，
-`--chapters` 只用于定向重写）；**正向覆盖率不许写成 `'R-' + stage.removeprefix('stage')`**，
-`STAGE_SECTIONS` 从 `NODES` 派生。
+- 后端固定使用 conda 环境 `novel_refactor`，不要用 base。启动、测试、网络诊断、备份与恢复命令统一见
+  `docs/OPERATIONS.md`；前端开发命令见 `web/DELIVERY.md`。
+- pytest 默认 `-m "not corpus"`，且当前 current-schema manifest 尚未完成。只有按 `tests/README.md` 使用
+  `--require-corpus` 并闭合精确 manifest/ledger/skip 面，才可称“全量语料绿”；其余只能称非 corpus 回归。
+- agent 跑 pytest 必须绕开文件系统沙箱，复用 `pyproject.toml` 的 `.test_runtime` / `.test_cache`；路径过长时
+  固定复用 `E:\_tr`，不按测试或时间另造目录。异常强杀留下坏 ACL 时按 `docs/OPERATIONS.md` 一次性恢复。
+- 修改 R/Q/B、schema、节点或 API 时先跑 `docs/BACKEND_CONTRACT.md` §9.5 的五文件，再补受影响测试；
+  不从汇总行缺失推断测试结果，必要时用 JUnit 或进度点核对。
 
-章的唯一键恒是阅读序整数 `chapter_ordinal`，**输出章号恒等于源章号**（不合并、不重排、不删、不拆）。
+## 文档与代码纪律
 
-### 分层，由测试守而不是靠约定
-
-```
-contracts.artifacts   路径叶子，只 import typing
-  ↑ contracts.invariants   取值域叶子，不知道 pydantic 的存在
-  ↑ contracts.rules / contracts.schema.*   契约层，可单独 import（base 依赖只有 pydantic）
-  ↑ novel.*   运行时，单向依赖 contracts
-```
-
-单一落点清单（改这些之前先读对应模块头的注释，那里写着"为什么不能用更直观的写法"）：
-
-| 只有一份的东西 | 落点 | 守卫 |
-|---|---|---|
-| 产物读写（`json.load` 只许出现在这里） | `novel/store.py` | `tests/test_layering.py` |
-| 路径运算与书名↔目录名双向尺子 | `novel/paths.py` | 同上 |
-| 一次跑的来源账（**实例字段，不是进程全局**） | `novel/run.py::RunContext` | 同上 |
-| 退出码 0/1/2/3/70 与 `landed()` | `novel/cli/exit_codes.py` | 同上 |
-| 节点、flag、取值域、`STOP_REWRITE_AFTER` | `contracts/invariants.py` | `tests/test_invariants.py` |
-| 修复路由 | `novel/report/builder.py::remediation_of` | `tests/test_rules_registry.py` |
-| 八类待办清单 | `novel/views/inbox.py::inbox_view` | `tests/test_views_inbox.py` |
-| 前端唯一 fetch 缝 / 唯一状态色出口 | `web/src/api/endpoints.ts` / `src/constants/vocabulary.ts` | `npm run seams` |
-
-`tests/test_layering.py` 与 `tests/test_api_discipline.py` 机械地守着：contracts 不 import 运行时、
-orchestrator 不 import web 栈、API/view 不直写产物、**服务进程不能花钱**、API 不造第二个 argv
-builder、完成度不偷看作业记录、loopback、无 CORS、同书 409。绕过这些不会"省事"，只会红。
-
-### 状态必须分开建模
-
-「不知道」「没运行」「缺失」「空结果」「没问题」是五件事，不许用 `false`/`null`/空数组压成一个值。
-退出码同理：`1`（跑完了但判定不通过，**已落盘**）与 `2`（显式终态，没落盘）与 `70`（崩了，结论未知）
-必须分开；`landed()` 是唯一的"这次落没落盘"谓词。`unver` / `skipped` / 分母为零**不得洗成 `ok`**，
-绿灯必须带扫描分母和 freshness。
-
-### 钱与授权
-
-`NodeSpec.paid` 决定基线；`FREE_ENTRIES`（把付费节点变 0 成本的 flag）、`PAID_FLAGS`（反向）、
-`VALUED_FLAGS`（带值的参数，**不是入口**）三张表在 `contracts/invariants.py`，`is_paid` 只有一个。
-付费跑法必须 `--yes`。成本的唯一权威源是 `<base>/_service/ledger.jsonl`，不与产物 `usage` 或日志混加；
-缓存命中（`.llm_cache/`）单独记账，不能写成"没有执行过"。
-**付费授权与正文外发授权是两件独立的事**，任一缺失时仍可跑 0 成本的 `state`/`inbox`/`preview`。
-审批服务的盘上 `_service/approvals/<sid>.json` 是 **v7**（Stage4A `design_review` 只授权 B；B 后
-`structure_decision/history` 才打开 s4，Stage5 的 `writing/writing_proof` 与 typed `closure` 又是各自
-独立的授权/闭合面），公开 API `ApprovalDoc` 是 **v6**；两个版本面独立。旧盘 v6 只能经显式
-`backfill_from_disk` 保守收进 v7：保留可逐项对证的 s0～s4、seen 与 design/structure/writing typed
-历史，清除 s5～s7，绝不伪造 Stage5 闭合回执；更早记录最多恢复可逐项对证的闸，普通 GET 不得
-静默迁移或代开 s4/s5。
-
-### 修复路由与恢复路
-
-校验结论按 `remediation` 分四类：`deterministic`（代码修，一次免费命令）、`llm`（只接受
-`repair == UNIQUE` 且 `unresolved_rounds < 2`）、`human`（typed apply-edit / pick / hash-bound
-resolution / wontfix 收口）、`none`（metric 只报读数）。处理顺序：首轮生成 → 机械检查 →
-deterministic 先修 → UNIQUE 才可付费修 → 连续两轮未消转人 → 全规则回归 → 机械干净且 fresh
-后再跑需要的语义审判（现役只有 `stage6.semantic`，Stage5 只有 0 成本机械 Review）。
-
-**加落盘闸门必须同批提供 0 成本恢复路**（`--revalidate` 或人工编辑入口），否则一次有效付费产出会被
-`.INVALID` 永久锁死。人工写回与生成路径共享同一把尺子：输入来源不同，schema、归一、判据、归档、
-provenance 的口相同。
-
-### 产物、schema 与目录
-
-盘上布局是 `<base>/<平台_书名_sid>/stage0..stage7/`，服务自己的账在 `<base>/_service/`
-（`ledger.jsonl` / `agent_progress.jsonl`），终审包是 `<平台_书名_sid>/<书名>_review.md`
-（落书目录根、不是产物，落点唯一落在 `novel/paths.py::review_package_path`）。
-
-路径字面只登记在 `contracts/artifacts.py::ARTIFACT_PATHS`；`contracts/schema/__init__.py::ARTIFACT_SPECS`
-为 JSON 子集叠加当前模型与 schema version。产物带 `_schema_version` 信封，**只接受注册表声明的当前
-版本**，无标记/低版本/高版本都明确拒读——**本仓没有迁移机制**（仍以注册表为准，
-破坏形状就 `current_version` +1 并同批回答「存量产物由谁重建」，并在
-`tests/test_artifact_versions.py::_SHAPE_BREAKS` 里显式登记那一次破坏）。
-现役 `stage2/global_grounding.json` / `global_edit.json` 为 v4 / v3，
-`stage2/chapter_blueprints.json` 当前为 v7（新增分级叙事关系契约）。已冻结的
-v6 书不迁移、不手补新字段；只有与现存 Stage4A v1 truth、来源边及下游正式制品逐字闭合时，
-才走冻结只读兼容面供状态/审批/零 wire 完整章 edit，普通 producer、付费 repair/replan 与 Stage4B
-不得借此消费 v6。新 v7 只能由 producer 在 clean base 重建。
-Stage4 `blind_candidate.json` / `evidence_binding.json` 为 v2 / v3，
-`plan_chapters.json` / `plan_edit.json` 与 writer context 为 v4；identity artifact 已退役。旧 Stage4
-计划不迁移，必须先跑 `stage4.design`、再跑 `stage4.plan` 重建。Stage5 canonical 章稿、Review、
-trim audit/resolution 均为 v2。旧 `stage5/deep|shallow/` 只作历史证据，读模型必须明确报
-`legacy_incompatible`，不允许原地选臂、迁移或触发付费重建；其余产物版本以注册表为准；
-旧产物**不手补字段冒充当前产地**，要从 producer 重建。
-`novel/` 里加一层包，`pyproject.toml` 的 `[tool.setuptools] packages` 要同步加一行——漏了没有任何测试
-会出声（`pythonpath=["."]` 让 pytest 照样 import 得到），只有非 editable 安装才崩。
-
-产物 schema 的人读源在 `docs/schema/*.md`，每个字段带「证据」列（`三源` / `盘·码` / `契·码` / `⚠冲突`）。
-**「盘上 3/3」不等于必填**，盘上零样本的字段要回代码或全语料确认；有人工修订路的层，`_rounds/` 归档
-必须一起反推，否则会把只在修之前出现的取值定成零样本分支。
-
-### 前端
-
-界面规格的唯一落点是 `web/DELIVERY.md`（三道缝、路由表、U-01～U-20、seam 红线）。agent 最常踩的三条：
-
-- 屏与组件只经 hooks → `api.*`，不直接 fetch、不 import mock；枚举运行时从 `/api/enums` 取，不硬编码。
-- **前端只呈现判定，不补后端没给的结论**：服务端没给结论时显示原始读数或 unknown。
-- **服务进程只写 `_service/`，产物变更一律经 CLI 子进程**（`R-11.3`）——`stage6/edit` 与
-  `stage7/edit` 因此只走 CLI，浏览器只提供批准入口。
-
-### 文档是可执行的
-
-`contracts/requirements.py` **直接解析** `docs/BACKEND_CONTRACT.md`：R 节须以 `### R-N` 开头、
-R 条目须是至少三列的 `| R-N.m | 要求 | 谁在查 |`、Q 须 `### Q-N`、B 须 `| **B-NN** | ... |`。
-把表格改成更自然的散文会让覆盖率静默归零。`tests/test_docs_references.py` 扫本文档、`LESSONS.md`、
-`REQUIREMENTS.md`、README 与 `docs/schema/*.md`：反引号里的 R/Q/B 编号必须存在，以
-tests/contracts/tools/novel/docs 开头的仓内路径必须存在。文档引用用稳定编号或`仓内路径::符号`，不用行号。
-
-## 编码风格
-
-全仓没有配置 formatter，靠 typecheck、seam 守卫和"与相邻代码一致"约束。
-
-- **Python**：4 空格、`snake_case` 模块与函数、`PascalCase` 类；保留类型标注；不要破坏
-  store / orchestration 既有的落盘边界。模块头那段中文注释是"为什么不能用更直观的写法"的
-  证据，改动前先读，别当装饰删掉。
-- **TypeScript**：2 空格、单引号、无分号、`PascalCase` 组件、`useXxx` hooks。屏与组件只消费
-  hooks / API 适配器，**不直接 `fetch`、不 import mock**。
-
-## 工作纪律
-
-- **`docs/REQUIREMENTS.md` 是唯一活动待办**，只从仍存在的条目开工，验收通过即删条目；
-  已完成的历史归 Git 与 `docs/BACKEND_CONTRACT.md` §十。文档职责分工见 README 的表。
-- **工程任务**（修改仓库代码、契约、测试、工程文档或维护 skill）动手前完整读取
-  `docs/LESSONS.md`（编号化的可迁移经验），尤其第 21 条：**守卫也会假红**。红了先分清是产物
-  问题还是守卫自己漂了——典型形状是「守卫重拼了生产的实参」和「守卫断言了一道产品明说不存在的闸」
-  （`info` 判据的正确守法是"越线必出声"而不是"不许越线"）。守卫要**调用生产那一个落点**，不要重拼一份。
-- **纯运行型任务**（跑书、断点续跑、查看 `state` / `inbox`、流水线内恢复与代批）不读取
-  `docs/LESSONS.md`，只遵循 `.workflow/skills/novel-pipeline-operator/` 内的操作契约和按需经验库。
-  若运行故障进一步转为仓库代码诊断或修复，再进入前述工程任务流程。
-- 不能用 mock、空数组、普通 404 或本地存储伪装尚未提供的后端能力；类型同型只证明适配器对齐，
-  联调要走通「页面动作 → API 方法 → HTTP 路由 → 服务实现 → 最终产物」并检查重启后的状态。
-- 语义判据在没有标定过真值前，倾向 `unver` / 人工裁决；**没有 ground truth 时多一条语义判据可能更危险**。
-  本仓因此**不设**自动放行门：`stage6.semantic` 的双盲判官只产**带证据的 UNVER**，
-  收口一律走 `stage6.approve` 的 `actor + reason + opaque review_token`；完整 subject/workpack/
-  validation SHA 由服务端在同书锁内重建，不交调用方手搬。
-  不要为了「让它变绿」去恢复 evaluator profile 那套装置——它已整批下线，
-  连同 stage5 的收缩臂（超上限章现在零调用转人工）。
-- commit 用中文 Conventional Commit 主题（`feat(stage6): …` / `fix(cli): …` / `docs: …`），按 stage
-  或子系统收敛。PR 要说明行为与契约影响、列出跑过的验证命令、引用 R/Q/B 或 TODO 编号、带 UI 截图；
-  **付费或真实 LLM 路径的验证必须显式点名**，不能混在"测试已过"里。
-- 不提交 `.env`、`outputs/`、`Test_data/`、`.llm_cache/`、`.test_runtime/` 与任何正文语料。
-  证据一律取 `outputs/` 下的批次产物；需要原始语料的工具必须显式指路
-  （`NOVEL_DATA` / `NOVEL_CORPUS` / `NOVEL_OUTPUT`），指不到就明说"没查"。
+- `contracts/requirements.py` 直接解析 `docs/BACKEND_CONTRACT.md`。R 标题、三列表格、Q/B 形状和“谁在查”
+  记号都是接口；文档引用用稳定编号或 `仓内路径::符号`，不用行号。
+- 新增 `novel/` 子包时同步更新 `pyproject.toml` 的 `[tool.setuptools] packages`；pytest 的 `pythonpath=["."]`
+  不会替非 editable 安装发现这个遗漏。
+- Python 保留类型标注、4 空格、snake_case/PascalCase；TypeScript 2 空格、单引号、无分号、PascalCase
+  组件与 `useXxx` hooks。沿用相邻代码，不删除解释“为什么不能用更直观写法”的模块头注释。
+- 不用 mock、空数组、普通 404 或 localStorage 伪装尚未提供的后端能力。联调覆盖页面动作 → API → HTTP
+  路由 → 服务 → 最终产物，并检查重启后的状态。
+- commit 使用中文 Conventional Commit；PR 说明契约影响、验证命令和 R/Q/B/TODO，UI 改动带截图；真实
+  LLM/付费路径是否验证必须单列，不能混进“测试已过”。
+- 不提交 `.env`、`outputs/`、`Test_data/`、`.llm_cache/`、`.test_runtime/` 或正文语料。需要语料的工具必须
+  显式读取 `NOVEL_DATA` / `NOVEL_CORPUS` / `NOVEL_OUTPUT`，取不到就明确写“没查”。

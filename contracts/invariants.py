@@ -1500,7 +1500,7 @@ HOOK_SEMANTIC_STATES: Final = ('uncertain', 'unreviewed')
 #: 加一种写法而忘了写说明，`fill()` 当场抛 `KeyError`（缺值不渲染成空串）。
 #: ⚠ **退场的写法不再有说明，键里也不留**：说明是发给模型的东西，退场就是不再发它。
 #: 想知道 `source_architecture` 当初是什么意思，去 `HOOK_RETIRED_APPROACHES` 的注释
-#: 与 §十 的 A/B 记录里查——那是**史料**，不是下发面。
+#: 与 `docs/DECISIONS.md` 的 A/B 记录里查——那是**史料**，不是下发面。
 #: 这几种写法来自 2026-08-15 的三书 A/B：最佳实验候选对当前定稿的匿名主编分
 #: 8.78 vs 4.88，且 3/3 本获胜。它们分别允许用后期兑现制造期待、以及强制落到
 #: 可视可听的场面；不再按「泄底多少」切策略。
@@ -1980,7 +1980,7 @@ class NodeSpec(NamedTuple):
     #     `stage4.plan` = 机械 baseline + 仅歧义章私有 session（最多 4 并发）。
     #     它们的模型默认是产品裁决，不得再用「两相各一次全书调用」
     #     解释；B 的新恢复粒度是歧义 unit，零歧义章零模型调用。
-    #   两条实测依据都在 `docs/BACKEND_CONTRACT.md` §十。
+    #   两条实测依据都在 `docs/DECISIONS.md`。
     model: str = ''
     # AgentRun 的 operator 每执行一个动作就重新采完整快照，因此只有它可以在
     # ``redo`` 已被证明来自 declared consumed projection 变化时，按这里登记的
@@ -2143,7 +2143,7 @@ NODES: Final[dict[str, NodeSpec]] = {
                                  produces=(artifact_paths.STAGE5_REVIEW,),
                                  operator_redo='review'),
     # ⚠⚠ **`stage5.semantic` 已于 2026-08-17 整节点下线**（用户裁决，见
-    #   `docs/BACKEND_CONTRACT.md` §十 2026-08-17 那一行）。裁决依据是实跑证据而非偏好：
+    #   `docs/DECISIONS.md` 2026-08-17 那一行）。裁决依据是实跑证据而非偏好：
     #     · 本项目的重构**不跨章重组**（实测 18/18 章 `from_source_ordinals == [自身]`），
     #       书级剧透那条主风险面在计划形态上几乎不存在；
     #     · 剧透的可查通道在 stage2 已有确定性判据（`event_early_name` /
