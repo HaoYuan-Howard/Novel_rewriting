@@ -20,7 +20,7 @@ from pydantic import ValidationError
 
 from contracts.artifacts import (
     STAGE2_BLUEPRINT_CHARACTER_PROJECTION, STAGE2_CHAPTER_BLUEPRINTS,
-    STAGE2_GLOBAL_GROUNDING,
+    STAGE2_GLOBAL_GROUNDING, artifact_rel,
 )
 from contracts.invariants import NODES, STAGES
 from contracts.schema.orchestration import (
@@ -927,6 +927,86 @@ def test_queue_never_turns_redo_or_unknown_into_a_runnable_paid_command(
     assert blocked[0].waiting_on == Q.WAITING_ON_RESUME_DECISION
     assert blocked[0].steps == []
     assert verdict.upper() in blocked[0].why
+
+
+def test_operator_lane_replays_stale_blueprint_but_normal_queue_still_blocks(
+        queue_base, monkeypatch):
+    """同一 planner、两种快照寿命：普通队列停，单步 operator 确定性重建。"""
+    monkeypatch.setattr(Q, 'nodes_up_to', lambda _until: ['stage2.blueprint'])
+    projection = ArtifactState(
+        rel=STAGE2_BLUEPRINT_CHARACTER_PROJECTION,
+        exists=True, bytes=1, mtime=1,
+        freshness='fresh', reason='match', display_freshness='fresh',
+        invalid=False, invalid_freshness=None, invalid_reason=None,
+        readable=True, condition='ready',
+    )
+    blueprint = ArtifactState(
+        rel=STAGE2_CHAPTER_BLUEPRINTS,
+        exists=True, bytes=1, mtime=1,
+        freshness='stale', reason='consumed_changed',
+        display_freshness='stale',
+        invalid=False, invalid_freshness=None, invalid_reason=None,
+        readable=True, condition='ready',
+    )
+    overview = SimpleNamespace(stages=[StageState(
+        stage='stage2', artifacts=[projection, blueprint],
+        done=False, reviewable=True,
+    )])
+
+    todo, blocked = Q.plan_book_from_overview(
+        queue_base, 'book-a', overview,
+        until_stage='stage2', follow_check=False)
+    assert todo == [] and blocked[0].waiting_on == Q.WAITING_ON_RESUME_DECISION
+
+    todo, blocked = Q.plan_book_from_overview(
+        queue_base, 'book-a', overview,
+        until_stage='stage2', follow_check=False,
+        allow_deterministic_redo=True)
+    assert blocked == [] and len(todo) == 1
+    assert todo[0].node == 'stage2.blueprint'
+    assert todo[0].flags == []
+    assert todo[0].steps and todo[0].steps[0].paid is True
+    assert todo[0].waiting_on is None and todo[0].why.startswith('redo：')
+
+
+def test_operator_lane_derives_stage5_rewrite_flags_and_ignores_old_review(
+        queue_base, monkeypatch):
+    """上游变更时旧 Review 属于旧主体；精确重写章不能再被它反向卡死。"""
+    monkeypatch.setattr(Q, 'nodes_up_to', lambda _until: ['stage5.write'])
+    stale = ArtifactState(
+        rel=artifact_rel('stage5.chapter', nn=1),
+        exists=True, bytes=1, mtime=1,
+        freshness='stale', reason='consumed_changed',
+        display_freshness='stale',
+        invalid=False, invalid_freshness=None, invalid_reason=None,
+        readable=True, condition='ready',
+    )
+    missing = ArtifactState(
+        rel=artifact_rel('stage5.chapter', nn=2),
+        exists=False, bytes=None, mtime=None,
+        freshness='unknown', reason='no_provenance',
+        display_freshness='missing',
+        invalid=False, invalid_freshness=None, invalid_reason=None,
+        readable=True, condition='missing',
+    )
+    overview = SimpleNamespace(stages=[StageState(
+        stage='stage5', artifacts=[stale, missing], done=False,
+        chapters_done=[1], reviewable=True,
+        review_state='stale', review_reasons=['上游主体已变'],
+        review_rel='stage5/review_1.json',
+    )])
+    monkeypatch.setattr(
+        Q.approvals, 'writing_is_current', lambda _base, _sid: True)
+
+    todo, blocked = Q.plan_book_from_overview(
+        queue_base, 'book-a', overview,
+        until_stage='stage5', follow_check=False,
+        allow_deterministic_redo=True)
+
+    assert blocked == [] and len(todo) == 1
+    assert todo[0].flags == ['--chapters', '1,2']
+    assert todo[0].steps and todo[0].steps[0].paid is True
+    assert todo[0].waiting_on is None
 
 
 @pytest.mark.parametrize('writing_current', (True, False))

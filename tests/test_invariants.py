@@ -139,6 +139,39 @@ def test_node_schema_has_no_modes_and_legacy_modes_are_detection_only():
     assert 'stage5/draft.md' not in inv.NODES['stage5.write'].produces
 
 
+def test_operator_redo_strategies_are_closed_and_explicit_per_node():
+    """自动 REDO 是 AgentRun 的产品授权面，不能从 paid/default flags 猜。"""
+    registered = {
+        node: spec.operator_redo
+        for node, spec in inv.NODES.items()
+        if spec.operator_redo is not None
+    }
+    assert registered == {
+        'stage1.partition': 'canonical',
+        'stage2.global': 'canonical',
+        'stage2.blueprint': 'canonical',
+        'stage4.design': 'canonical',
+        'stage4.plan': 'canonical',
+        'stage4.context': 'canonical',
+        'stage5.write': 'stale_chapters',
+        'stage5.review': 'review',
+        'stage6.hook': 'canonical',
+        'stage7.rename': 'canonical',
+        'stage7.assemble': 'canonical',
+    }
+    assert set(registered.values()) <= set(inv.OPERATOR_REDO_STRATEGIES)
+    assert all(
+        not inv.NODES[node].required_flags
+        for node, strategy in registered.items()
+        if strategy == 'canonical'
+    )
+    assert all(
+        inv.NODES[node].operator_redo is None
+        for node in ('stage0.approve', 'stage0.edit',
+                     'stage6.approve', 'stage7.approve')
+    )
+
+
 def test_unmeasured_nodes_keep_the_default_high_effort():
     # ⚠ 取值面只有 low / high：`medium` / `xhigh` 被服务端静默映射回 `high`
     #   （放行 = 允许一个「降了档、实际一档没降」的配置），`max` 是升档且还没补回官方

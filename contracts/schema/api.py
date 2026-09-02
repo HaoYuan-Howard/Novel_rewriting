@@ -2731,8 +2731,12 @@ class OperatorNextDecision(StrictModel):
         if self.state == 'ready':
             if self.action.waiting_on is not None:
                 raise ValueError('ready action 不得携带 waiting_on')
-            if self.action.resume_verdict != 'run':
-                raise ValueError('ready action 的 resume_verdict 必须是 run')
+            # ``redo`` 不改名成 ``run``：operator planner 已在同一冻结快照上
+            # 证明 NodeSpec 策略与 exact flags，schema 这里只守 ready 的闭集。
+            # skip/unknown/legacy 仍绝不能携执行许可。
+            if self.action.resume_verdict not in ('run', 'redo'):
+                raise ValueError(
+                    'ready action 的 resume_verdict 必须是 run 或已准入的 redo')
         elif not self.action.waiting_on:
             raise ValueError('blocked action 必须明确 waiting_on')
         return self

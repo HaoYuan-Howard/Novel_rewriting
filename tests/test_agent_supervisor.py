@@ -128,6 +128,70 @@ def test_v2_supervisor_routes_ready_review_and_complete_without_commander_dispat
     assert [event.kind for event in events] == ['epoch_closed']
 
 
+def test_stage2_review_can_continue_into_ready_blueprint_redo():
+    """Global 上游更新后，Supervisor 应执行确定性 REDO，不再 exit 2 停在手工断点。"""
+    events: list[AgentRunEvent] = []
+    snapshots = [
+        SimpleNamespace(
+            state='blocked', code_version='code-1', surface_seal='1' * 64,
+            action=SimpleNamespace(
+                node='stage2.global',
+                waiting_on='approval:stage2-global-review',
+                action_sha256='2' * 64),
+            execution_token=None),
+        SimpleNamespace(
+            state='ready', code_version='code-1', surface_seal='3' * 64,
+            action=SimpleNamespace(
+                node='stage2.blueprint', waiting_on=None,
+                resume_verdict='redo', action_sha256='4' * 64),
+            execution_token=SimpleNamespace(node='stage2.blueprint')),
+        SimpleNamespace(
+            state='pipeline_complete', code_version='code-1',
+            surface_seal='5' * 64, action=None, execution_token=None),
+    ]
+    calls: list[str] = []
+
+    def reviewer(_epoch, _current, _resume, ticket):
+        calls.append('review')
+        ticket.commit()
+        snapshots.pop(0)
+        return CommanderTurnResult(
+            0, 'provider-stage2-review', True, _outcome())
+
+    def ready(_epoch, current, ticket):
+        assert current.action.resume_verdict == 'redo'
+        calls.append(f'redo:{current.execution_token.node}')
+        ticket.commit()
+        snapshots.pop(0)
+        return SupervisorActionResult(0, _outcome(), True)
+
+    def finalize(_epoch, ticket):
+        calls.append('finalize')
+        ticket.commit()
+        snapshots.pop(0)
+        return SupervisorActionResult(0, _outcome('ready'), False)
+
+    supervisor = RunSupervisor(
+        run_id='run-stage2-redo', append_event=events.append,
+        make_epoch=lambda *_args: pytest.fail('同代码身份不得滚 epoch'),
+        open_epoch=lambda _epoch: None,
+        close_epoch=lambda _epoch, _turn: 'drained',
+        run_commander_turn=lambda *_args: pytest.fail('v2 不走 legacy Commander'),
+        epoch_identity_current=lambda _epoch: True,
+        cancel_commander=lambda: True,
+        initial_epoch=_epoch('epoch-stage2-redo', 1, 'initial'),
+        read_operator_next=lambda _epoch: snapshots[0],
+        run_ready_action=ready,
+        run_reviewer=reviewer,
+        finalize_run=finalize)
+
+    result = supervisor.run()
+
+    assert result.stopped is False
+    assert calls == ['review', 'redo:stage2.blueprint', 'finalize']
+    assert snapshots == []
+
+
 def test_v2_supervisor_resumes_one_commander_across_review_edit_and_rereview():
     """三相都属同一业务上下文；surface 变化不能重开 Commander session。"""
     events: list[AgentRunEvent] = []

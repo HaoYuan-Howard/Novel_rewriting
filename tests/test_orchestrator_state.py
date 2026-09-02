@@ -17,7 +17,7 @@ import pytest
 from contracts.artifacts import (
     ARTIFACT_PATHS, BOOK_SCOPED_PATHS,
     STAGE2_BLUEPRINT_CHARACTER_PROJECTION, STAGE2_CHAPTER_BLUEPRINTS,
-    STAGE2_GLOBAL_GROUNDING,
+    STAGE2_GLOBAL_GROUNDING, artifact_rel,
 )
 from contracts.invariants import NODES, STAGES
 from contracts.schema import ARTIFACTS
@@ -623,6 +623,27 @@ def test_missing_blueprint_without_invalid_remains_a_normal_paid_run():
     assert '产物不在盘上' in why
 
 
+@pytest.mark.parametrize(
+    ('reason', 'expected'),
+    [('consumed_changed', ()), ('file_changed', None)],
+)
+def test_operator_only_replays_blueprint_when_declared_consumption_changed(
+        reason, expected):
+    """Global 投影真变可重建；文件级漂移仍保持人工断点。"""
+    stage = StageState(
+        stage='stage2',
+        artifacts=[_stage2_artifact(
+            STAGE2_CHAPTER_BLUEPRINTS,
+            freshness='stale', reason=reason)],
+        done=False,
+        reviewable=True,
+    )
+    ov = _overview(stage)
+
+    assert S.resume_verdict(ov, 'stage2.blueprint')[0] == S.RESUME_REDO
+    assert S.operator_redo_flags(ov, 'stage2.blueprint') == expected
+
+
 @pytest.mark.parametrize(('projection_freshness', 'reason'), [
     ('stale', 'consumed_unresolved'),
     ('fresh', 'no_provenance'),
@@ -696,6 +717,26 @@ def test_a_stale_review_is_redo_even_when_a_round_exists():
     verdict, why = S.resume_verdict(ov, 'stage5.review')
     assert verdict == S.RESUME_REDO
     assert 'RULES 指纹已变' in why and '零成本' in why
+    assert S.operator_redo_flags(ov, 'stage5.review') == ()
+
+
+def test_operator_derives_exact_stage5_chapters_for_upstream_redo():
+    """Stage5 空 flags 只补缺章；REDO 必须同时点名 stale 与 missing 章。"""
+    stale = _chapter_state(freshness='stale').model_copy(
+        update={'rel': artifact_rel('stage5.chapter', nn=1)})
+    missing = _chapter_state(exists=False).model_copy(
+        update={'rel': artifact_rel('stage5.chapter', nn=2)})
+    stage = StageState(
+        stage='stage5', artifacts=[stale, missing], done=False,
+        chapters_done=[1], reviewable=True,
+        review_state='stale', review_reasons=['上游主体已变'],
+        review_rel='stage5/review_1.json',
+    )
+    ov = _overview(stage)
+
+    assert S.resume_verdict(ov, 'stage5.write')[0] == S.RESUME_REDO
+    assert S.operator_redo_flags(ov, 'stage5.write') == (
+        '--chapters', '1,2')
 
 
 def test_legacy_stage5_is_never_treated_as_missing_or_paid_resume():

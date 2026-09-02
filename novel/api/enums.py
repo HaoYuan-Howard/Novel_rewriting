@@ -89,6 +89,9 @@ _WITHHELD: dict[str, str] = {
     'RESUME_VERDICTS': (
         'operator/queue 内部的断点判定域；前端只消费随 OperatorNext '
         '返回的具体结论，不自行构造或重算'),
+    'OPERATOR_REDO_STRATEGIES': (
+        'AgentRun 对 REDO 的内部关闭式重放策略；前端只消费 OperatorNext '
+        '已经判定出的 exact flags 与 execution token，不自行选择或重算策略'),
     'OPERATOR_NEXT_STATES': (
         'OperatorNext 响应自身已携严格状态；它是只读调度结果，'
         '不是 /api/enums 供界面构造的动作选项'),

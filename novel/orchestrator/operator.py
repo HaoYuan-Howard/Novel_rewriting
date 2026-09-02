@@ -87,7 +87,10 @@ def _next_from_snapshot(snapshot: OperatorReadSnapshot) -> OperatorNext:
         todo, blocked = queue.plan_book_from_overview(
             snapshot.base, sid, snapshot.overview,
             until_stage=STAGES[-1], follow_check=True,
-            approval_doc=approval_doc)
+            approval_doc=approval_doc,
+            # AgentRun 每个 action 落盘后都会重新进入本函数采新快照；因此能消费
+            # queue/state 共同证明的 canonical REDO，不会冻结一串旧下游 argv。
+            allow_deterministic_redo=True)
     rank = {node: index for index, node in enumerate(NODES)}
     selected = min(
         (*todo, *blocked),

@@ -32,7 +32,9 @@ from contracts.artifacts import (
 import os
 from pathlib import Path
 
-from contracts.invariants import LEGACY_STAGE5_MODES, NODES, RESUME_VERDICTS, STAGES
+from contracts.invariants import (
+    LEGACY_STAGE5_MODES, NODES, OPERATOR_REDO_STRATEGIES, RESUME_VERDICTS, STAGES,
+)
 from contracts.schema import ARTIFACTS, artifact_key, artifact_spec
 from contracts.schema.orchestration import (
     ArtifactState, NovelOverview, OverviewSummary, StageState,
@@ -833,8 +835,9 @@ def resume_verdict(ov: NovelOverview, node: str) -> tuple[str, str]:
     原型没有这条，因为它连续跑都没有。
 
     ⚠ 结论是五态闭集：``run / skip / redo / unknown / legacy_incompatible``。
-    `redo` / `unknown` / `legacy_incompatible` **都不自动执行**；是否重来或
-    重建是人的决定（可能意味着重新付费），编排层只负责**说出来并停下**。
+    本函数只如实分类，不把 `redo` 压成 `run`。普通队列仍对后三态关闭式停止；
+    AgentRun 的单步 operator 只能再经 :func:`operator_redo_flags` 证明存在唯一的
+    canonical 重放参数，且每执行一步后重新采快照，才允许执行其中一小部分 `redo`。
     """
     spec = NODES.get(node)
     if spec is None:
@@ -1020,3 +1023,82 @@ def resume_verdict(ov: NovelOverview, node: str) -> tuple[str, str]:
             '⚠ UNKNOWN 不能折成 SKIP，也不能折成默认付费 RUN；先走对应的'
             '零成本诊断/恢复路或人工核对')
     return RESUME_SKIP, f'{spec.stage} 已完成且不陈旧——已存在即跳过'
+
+
+def _stage5_chapter_ordinal(rel: str) -> int | None:
+    """从路径注册表的模板反解 canonical Stage5 章号；不重抄路径字面。"""
+    prefix, marker, suffix = STAGE5_CHAPTER.partition('{nn}')
+    if not marker or not rel.startswith(prefix) or not rel.endswith(suffix):
+        return None
+    end = len(rel) - len(suffix) if suffix else len(rel)
+    raw = rel[len(prefix):end]
+    if not raw.isdigit():
+        return None
+    ordinal = int(raw)
+    if ordinal < 1 or artifact_rel('stage5.chapter', nn=ordinal) != rel:
+        return None
+    return ordinal
+
+
+def _consumed_redo_surface(artifacts: list[ArtifactState]) -> bool:
+    """每份 stale 输出都汇总为消费变更，且既有输出没有未知、坏稿或恢复面。"""
+    stale = [artifact for artifact in artifacts if artifact.freshness == 'stale']
+    if not stale or any(artifact.reason != 'consumed_changed' for artifact in stale):
+        return False
+    return not any(
+        artifact.invalid
+        or (artifact.exists and not artifact.readable)
+        or (artifact.exists and artifact.freshness == 'unknown')
+        for artifact in artifacts
+    )
+
+
+def operator_redo_flags(ov: NovelOverview, node: str) -> tuple[str, ...] | None:
+    """给 AgentRun 单步 operator 导出唯一、安全的 REDO flags。
+
+    ``None`` 是关闭式拒绝，不是空 flags；``()`` 才表示已证明默认 producer 会完整
+    重建本节点。普通 durable queue 不调用本函数，因为它会冻结多步快照；AgentRun
+    每落一个节点都重新规划，所以下游只会消费刚落盘的新主体。
+
+    有正式产物的 producer 自动准入刻意要求每份 stale 输出的权威汇总 reason 都是
+    ``consumed_changed``。汇总为 ``file_changed`` 可能来自未声明消费、旧契约或人工改
+    字节，unreadable/盘上既有却 unknown/INVALID 又各有自己的恢复路；把这些状态猜成
+    重采会重新花钱，还可能覆盖唯一问题稿。缺失输出可由同一 canonical producer 一并
+    补齐。Stage5 Review 是单独登记的零成本、编号新增策略，其专用 currentness 明确为
+    stale 时可直接重算。
+    """
+    spec = NODES.get(node)
+    strategy = spec.operator_redo if spec is not None else None
+    if strategy is None:
+        return None
+    if strategy not in OPERATOR_REDO_STRATEGIES:
+        raise AssertionError(f'{node} 登记了未知 operator_redo 策略 {strategy!r}')
+    verdict, _why = resume_verdict(ov, node)
+    if verdict != RESUME_REDO:
+        return None
+
+    if strategy == 'review':
+        stage = next(
+            (candidate for candidate in ov.stages if candidate.stage == spec.stage),
+            None,
+        )
+        return () if stage is not None and stage.review_state == 'stale' else None
+
+    artifacts = artifacts_for_node(ov, node)
+    if not _consumed_redo_surface(artifacts):
+        return None
+    if strategy == 'canonical':
+        return ()
+
+    assert strategy == 'stale_chapters'
+    targets = [
+        artifact for artifact in artifacts
+        if not artifact.exists or artifact.freshness == 'stale'
+    ]
+    ordinals = [_stage5_chapter_ordinal(artifact.rel) for artifact in targets]
+    if not ordinals or any(ordinal is None for ordinal in ordinals):
+        return None
+    exact = sorted({int(ordinal) for ordinal in ordinals if ordinal is not None})
+    if len(exact) != len(ordinals):
+        return None
+    return '--chapters', ','.join(str(ordinal) for ordinal in exact)

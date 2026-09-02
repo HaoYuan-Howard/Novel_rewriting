@@ -1937,6 +1937,13 @@ NODE_WRITE_EFFECTS: Final = {
 # label、需求节、完成度和写入面都从本表派生，避免在多个消费者中手写平行清单。
 
 
+OPERATOR_REDO_STRATEGIES: Final = (
+    'canonical',          # 默认 flags 会完整重建本节点当前正式输出
+    'stale_chapters',     # 从 stale/missing 章行导出精确 ``--chapters``
+    'review',             # Stage5 Review 的 currentness 已由专用状态面回答
+)
+
+
 class NodeSpec(NamedTuple):
     """一个可跑的作业单元。
 
@@ -1975,6 +1982,11 @@ class NodeSpec(NamedTuple):
     #     解释；B 的新恢复粒度是歧义 unit，零歧义章零模型调用。
     #   两条实测依据都在 `docs/BACKEND_CONTRACT.md` §十。
     model: str = ''
+    # AgentRun 的 operator 每执行一个动作就重新采完整快照，因此只有它可以在
+    # ``redo`` 已被证明来自 declared consumed projection 变化时，按这里登记的
+    # 唯一策略铸下一张 execution token。普通 durable queue 不消费这格，仍停给人；
+    # 未登记 = 没有唯一、安全的重放 argv，绝不能从 ``paid`` 或空 flags 猜。
+    operator_redo: str | None = None
 
 
 #: 全部作业单元。⚠ 顺序即处理链顺序，队列与断点续跑都按它排。
@@ -2039,7 +2051,8 @@ NODES: Final[dict[str, NodeSpec]] = {
     'stage1.partition': NodeSpec('stage1', 'R-1',  False, 'stage1 分章',
                                  flags=('--dry-run', '--check-only'),
                                  produces=(artifact_paths.STAGE1_MAIN_TEXT,
-                                           artifact_paths.STAGE1_HOOK_COPY)),
+                                           artifact_paths.STAGE1_HOOK_COPY),
+                                 operator_redo='canonical'),
     # ⚠ `--apply-edit` 是 TODO-05 补的，而它补的是一个**契约内的空洞**：
     #   `reader_reveal_events` / 知情人 / secret 事实抽错时，此前唯一的路是手改产物
     #   ——没有 schema 管形状，来源账上也留不下「这是人改的」。
@@ -2055,7 +2068,8 @@ NODES: Final[dict[str, NodeSpec]] = {
                                          '--actor', '--reason', '--response-repair'),
                                  produces=(artifact_paths.STAGE2_GLOBAL_GROUNDING,
                                            artifact_paths.STAGE2_GLOBAL_REVIEW,
-                                           artifact_paths.STAGE2_BLUEPRINT_CHARACTER_PROJECTION)),
+                                           artifact_paths.STAGE2_BLUEPRINT_CHARACTER_PROJECTION),
+                                 operator_redo='canonical'),
     # ⚠⚠ **`--chapters` 是这一列里最容易漏的那一个**：§5.1 有 **19 条**判据的修法是
     #   `blueprint --chapters`（定向重生成那几章），而它此前只挂在 `stage5.write` 上。
     #   漏了它，那 19 条在 F5-4 注册的那一刻全被 `_validate` ⑧ 拒收。
@@ -2067,7 +2081,8 @@ NODES: Final[dict[str, NodeSpec]] = {
                                          '--apply-edit',
                                          '--revalidate', '--actor', '--reason',
                                          '--response-repair'),
-                                 produces=(artifact_paths.STAGE2_CHAPTER_BLUEPRINTS,)),
+                                  produces=(artifact_paths.STAGE2_CHAPTER_BLUEPRINTS,),
+                                  operator_redo='canonical'),
     # ⚠⚠ Stage4 两个付费相仍沿用 `deepseek-v4-pro`，但调用拓扑已分开：
     #   A = 一条小型整书策略 + N 条逐章私有 session，代码聚合后跑整书 HARD；
     #   B = 机械 baseline 先消除唯一解，只对真歧义章开私有 session（最多 4 并发），
@@ -2081,7 +2096,8 @@ NODES: Final[dict[str, NodeSpec]] = {
                                          '--apply-edit',
                                          '--actor', '--reason', '--response-repair'),
                                   produces=(artifact_paths.STAGE4_BLIND_CANDIDATE,),
-                                  model='deepseek-v4-pro'),
+                                  model='deepseek-v4-pro',
+                                  operator_redo='canonical'),
     'stage4.plan':      NodeSpec('stage4', 'R-5',  True,  'stage4 证据绑定与计划编译',
                                   flags=('--dry-run', '--check-only',
                                          '--revalidate', '--names-only', '--identity',
@@ -2090,11 +2106,13 @@ NODES: Final[dict[str, NodeSpec]] = {
                                          '--response-repair'),
                                   produces=(artifact_paths.STAGE4_EVIDENCE_BINDING,
                                             artifact_paths.STAGE4_PLAN_CHAPTERS),
-                                  model='deepseek-v4-pro'),
+                                  model='deepseek-v4-pro',
+                                  operator_redo='canonical'),
     # ⚠ `flags=()` 在这一格是【终态】不是待定：本节点**本身**就是那个动作
     #   `stage4.context` 本身就是该动作，因此不再另设同义 flag。
     'stage4.context':   NodeSpec('stage4', 'R-6',  False, 'stage4 写作上下文组装',
-                                 produces=(artifact_paths.STAGE4_WRITER_CONTEXT,)),
+                                 produces=(artifact_paths.STAGE4_WRITER_CONTEXT,),
+                                 operator_redo='canonical'),
     # ⚠ `--revise` 是 F4 从 `stage5.review` **挪过来**的（用户裁决，见本表下方那段）。
     # ⚠ Stage5 的 canonical 主体只有逐章 JSON。全书 Markdown 投影已退役；
     #   完成度直接比较计划章集与 canonical 章集，避免让展示副本参与状态判断。
@@ -2111,7 +2129,8 @@ NODES: Final[dict[str, NodeSpec]] = {
                                          '--edit-confirmation',
                                          '--emit-prepared-recovery-workpack',
                                          '--recover-prepared', '--response-repair'),
-                                 produces=(artifact_paths.STAGE5_CHAPTER,)),
+                                  produces=(artifact_paths.STAGE5_CHAPTER,),
+                                  operator_redo='stale_chapters'),
     # ⚠ `--wontfix` 是**参数**不是 0 成本入口（见 `VALUED_FLAGS`），形态同 `--pick`。
     # ⚠⚠ `stage5/wontfix.json` **刻意不进 `produces`**，而它确实是本节点写的：
     #   这一列的消费方是 `state.required_artifacts`（「这一层跑完了盘上该有哪几份」），
@@ -2121,7 +2140,8 @@ NODES: Final[dict[str, NodeSpec]] = {
                                  flags=('--check-only', '--wontfix', '--retain-pretrim',
                                         '--retain-pretrim-batch',
                                         '--chapters', '--actor', '--reason'),
-                                 produces=(artifact_paths.STAGE5_REVIEW,)),
+                                 produces=(artifact_paths.STAGE5_REVIEW,),
+                                 operator_redo='review'),
     # ⚠⚠ **`stage5.semantic` 已于 2026-08-17 整节点下线**（用户裁决，见
     #   `docs/BACKEND_CONTRACT.md` §十 2026-08-17 那一行）。裁决依据是实跑证据而非偏好：
     #     · 本项目的重构**不跨章重组**（实测 18/18 章 `from_source_ordinals == [自身]`），
@@ -2148,7 +2168,8 @@ NODES: Final[dict[str, NodeSpec]] = {
                                         '--wontfix', '--rebind-review',
                                         '--actor', '--reason',
                                         '--response-repair'),
-                                 produces=(artifact_paths.STAGE6_HOOK,)),
+                                 produces=(artifact_paths.STAGE6_HOOK,),
+                                 operator_redo='canonical'),
     # 付费语义审判是字面探针的 companion（R-9.19/R-9.20）：
     # 不接 `--check-only`，否则一层两个复检节点、HTTP kind 路由产生歧义。
     # ⚠ 它是全链**唯一**的语义审判节点（stage5 那一个已于 2026-08-17 下线）。
@@ -2181,7 +2202,8 @@ NODES: Final[dict[str, NodeSpec]] = {
                                           '--rebind-review',
                                           '--validate-edit',
                                          '--actor', '--reason', '--response-repair'),
-                                  produces=(artifact_paths.STAGE7_NAME_MAP,)),
+                                  produces=(artifact_paths.STAGE7_NAME_MAP,),
+                                  operator_redo='canonical'),
     # ⚠⚠ 本层没有候选序号：一本书只有一份人物表，定稿是「给整份盖章」。
     #   但审批动作必须携带统一人工凭据，并用 decision-surface SHA-256 防旧页面误批。
     'stage7.approve':   NodeSpec('stage7', 'R-10', False, 'stage7 人名表定稿',
@@ -2191,7 +2213,8 @@ NODES: Final[dict[str, NodeSpec]] = {
                                   produces=(artifact_paths.STAGE7_NAME_MAP,)),
     # 成书只能消费已批准的人名表；声明顺序同时是队列和进度屏的唯一顺序权威。
     'stage7.assemble':  NodeSpec('stage7', 'R-10', False, 'stage7 替换与成书',
-                                 produces=(artifact_paths.STAGE7_BOOK,)),
+                                 produces=(artifact_paths.STAGE7_BOOK,),
+                                 operator_redo='canonical'),
 }
 
 #: 允许配置 executor agent 的现役节点。这里只列**真正调用生成/审判模型**的八个

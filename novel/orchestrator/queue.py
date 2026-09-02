@@ -226,8 +226,13 @@ def plan_book_from_overview(
     until_stage: str,
     follow_check: bool = True,
     approval_doc: ApprovalDoc | None = None,
+    allow_deterministic_redo: bool = False,
 ) -> tuple[list[QueueItem], list[QueueItem]]:
-    """按一份已冻结完成度规划 lane；判定正文与 :func:`plan_book` 唯一共享。"""
+    """按一份已冻结完成度规划 lane；判定正文与 :func:`plan_book` 唯一共享。
+
+    ``allow_deterministic_redo`` 只供每步后都会重新采快照的 AgentRun operator。
+    普通多步队列保持默认 ``False``，不能把一份冻结计划扩张成后续重采授权。
+    """
     if approval_doc is not None and approval_doc.sid != sid:
         raise ValueError(
             f'审批投影属于 {approval_doc.sid!r}，不是当前书 {sid!r}')
@@ -310,6 +315,7 @@ def plan_book_from_overview(
                 why_blocked = WAITING_ON_INBOX
 
         verdict, why = st.resume_verdict(ov, node)
+        deterministic_redo_flags: tuple[str, ...] | None = None
         frozen_v6 = st.stage2_frozen_v6_subject_validated(ov)
         if (
             why_blocked is None
@@ -434,16 +440,25 @@ def plan_book_from_overview(
 
         if why_blocked is None and verdict == st.RESUME_LEGACY:
             why_blocked = WAITING_ON_LEGACY
-        if why_blocked is None and verdict in (st.RESUME_REDO, st.RESUME_UNKNOWN):
-            # `resume_verdict` 的这两态都明确禁止自动执行：REDO 可能重新付费，
-            # UNKNOWN 更不能被猜成 RUN。只把句子写出来却仍造 runnable argv，
-            # 等于队列在真实消费面把四态重新压回二态。
+        if (why_blocked is None and verdict == st.RESUME_REDO
+                and allow_deterministic_redo):
+            deterministic_redo_flags = st.operator_redo_flags(ov, node)
+        if (why_blocked is None and verdict == st.RESUME_UNKNOWN) or (
+            why_blocked is None
+            and verdict == st.RESUME_REDO
+            and deterministic_redo_flags is None
+        ):
+            # UNKNOWN 永远不能猜成 RUN。REDO 在普通队列也一律停；只有 AgentRun
+            # 单步 operator 能拿到 state 登记并证明过的 canonical flags。仅仅把
+            # ``allow`` 打开并不放宽 file_changed/unreadable/INVALID 等关闭式分支。
             why_blocked = WAITING_ON_RESUME_DECISION
 
         # 称名投影是 Global 的确定性伴生产物。缺/坏/stale 时只冻结免费物化
         # 命令，绝不能因 ``produces`` 少一份而把默认付费 Global argv 排进队列。
         flags: list[str] = (
-            ['--renormalize']
+            list(deterministic_redo_flags)
+            if deterministic_redo_flags is not None
+            else ['--renormalize']
             if projection_recovery or legacy_blueprint_recovery else []
         )
         steps = None
@@ -464,27 +479,31 @@ def plan_book_from_overview(
             review_not_current = bool(
                 stage5_state is not None
                 and stage5_state.review_state not in (None, 'missing', 'fresh'))
+            review_blocks_paid_write = bool(
+                review_not_current and deterministic_redo_flags is None)
             writing_not_current = not (
                 bool(approval_doc.writing and approval_doc.gate['s4'])
                 if approval_doc is not None
                 else approvals.writing_is_current(base, sid)
             )
 
-            # 本层三个闸的顺序是恢复成本顺序：先处理 0 LLM INVALID，再免费重跑
-            # Review，最后才向人索取付费写作授权。真正的上游 stuck / legacy /
-            # REDO / UNKNOWN 已在上面先占住 why_blocked，不被本层理由覆盖。
+            # 本层三个闸的顺序是恢复成本顺序：先处理 0 LLM INVALID；普通续写再
+            # 免费重跑旧 Review；最后才向人索取付费写作授权。若 operator 已证明
+            # 上游 consumed-change 并导出精确重写章，旧 Review 绑定的是旧正文，
+            # 不能反向卡住重建；新章落盘后下一轮自然会免费重算 Review。
+            # 其余上游 stuck / legacy / REDO / UNKNOWN 已在上面占住 blocker。
             if why_blocked is None and has_live_invalid:
                 # canonical 与更新的 INVALID 可并存；默认写作只补缺章，无法处理
                 # 这份候选，反而会以“没有要写的章”结束。actor/reason 又只能由
                 # 人提供，所以队列停在 0 LLM revalidate 入口，不冻结一条假命令。
                 why_blocked = WAITING_ON_INBOX
-            if why_blocked is None and review_not_current:
+            if why_blocked is None and review_blocks_paid_write:
                 why_blocked = WAITING_ON_REVIEW
             if why_blocked is None and writing_not_current:
                 # Stage5 v2 只有一条全书 canonical 闭卷写作命令。授权是独立人工决定；
                 # 队列不从「默认全书」反推出同意花钱。
                 why_blocked = WAITING_ON_WRITING_APPROVAL
-            if has_live_invalid or review_not_current or writing_not_current:
+            if has_live_invalid or review_blocks_paid_write or writing_not_current:
                 steps = []
 
         if why_blocked in (

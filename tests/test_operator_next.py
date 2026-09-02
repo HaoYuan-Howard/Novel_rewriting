@@ -11,7 +11,9 @@ import pytest
 from pydantic import ValidationError
 
 from contracts.invariants import INBOX_KIND, NODES, OPERATOR_NEXT_STATES, RESUME_VERDICTS
-from contracts.schema.api import InboxView, OperatorAction, OperatorNext
+from contracts.schema.api import (
+    InboxView, OperatorAction, OperatorNext, OperatorNextDecision,
+)
 from contracts.schema.orchestration import (
     NovelOverview, OverviewSummary, QueueItem, Step,
 )
@@ -121,12 +123,15 @@ def _wire(
 
     def plan(
             base, sid, overview, *, until_stage, follow_check,
-            approval_doc: object,
+            approval_doc: object, allow_deterministic_redo: bool,
     ):
         assert A.projection_code() == snapshot.code
         assert A._READ_OVERVIEW.get() is snapshot.overview
         assert approval_doc is frozen_approval_doc
-        calls.append(('plan', base, sid, overview, until_stage, follow_check))
+        assert allow_deterministic_redo is True
+        calls.append((
+            'plan', base, sid, overview, until_stage, follow_check,
+            allow_deterministic_redo))
         return todo, blocked
 
     monkeypatch.setattr(O.queue, 'plan_book_from_overview', plan)
@@ -157,7 +162,7 @@ def test_next_uses_one_snapshot_and_the_shared_queue_lane(monkeypatch, tmp_path)
     assert ('inbox', snapshot) in calls
     plan_call = next(call for call in calls if call[0] == 'plan')
     assert plan_call[3] is snapshot.overview
-    assert plan_call[4:] == ('stage7', True)
+    assert plan_call[4:] == ('stage7', True, True)
     assert [call for call in calls if call[0] == 'seal'] == [
         ('seal', snapshot.base, 'book-1', 'code-v1')]
     assert A._READ_CODE.get() is None
@@ -202,6 +207,28 @@ def test_ready_action_carries_the_canonical_safety_axes_and_stable_hash(
     assert first.execution_token.operator_action_sha256 == first.action.action_sha256
 
 
+def test_ready_redo_keeps_its_verdict_and_gets_an_execution_token(
+        monkeypatch, tmp_path):
+    """REDO 被安全准入后仍叫 REDO，不靠改名成 RUN 绕过五态契约。"""
+    snapshot = _snapshot(tmp_path)
+    item = QueueItem(
+        sid='book-1', node='stage2.blueprint', flags=[],
+        steps=[_step('stage2.blueprint')],
+        why='redo：Global 的实际消费投影已更新')
+    _wire(monkeypatch, snapshot, todo=[item], blocked=[])
+    monkeypatch.setattr(
+        O.state, 'resume_verdict',
+        lambda _overview, _node: ('redo', 'Global 的实际消费投影已更新'))
+
+    got = O.next_action(tmp_path, 'book-1')
+
+    assert got.state == 'ready'
+    assert got.action is not None and got.action.resume_verdict == 'redo'
+    assert got.action.waiting_on is None
+    assert got.execution_token is not None
+    assert got.execution_token.node == 'stage2.blueprint'
+
+
 def test_action_hash_binds_the_surface_seal(monkeypatch, tmp_path):
     first_snapshot = _snapshot(tmp_path, seal='a' * 64)
     _wire(monkeypatch, first_snapshot, todo=[_ready('stage1.partition')], blocked=[])
@@ -244,6 +271,15 @@ def test_operator_states_and_resume_verdicts_are_closed_and_schema_keeps_them():
         node='stage1.partition', flags=[], resume_verdict='run', why='缺失',
         waiting_on=None, paid=False, writes='stage1/main_text.json',
         action_sha256='a' * 64)
+    unknown = OperatorAction(
+        node='stage1.partition', flags=[], resume_verdict='unknown', why='判不了',
+        waiting_on=None, paid=False, writes='stage1/main_text.json',
+        action_sha256='d' * 64)
+    with pytest.raises(ValidationError, match='run 或已准入的 redo'):
+        OperatorNextDecision(
+            base='E:/Output', sid='book-1', code_version='code-v1',
+            surface_seal='b' * 64, state='ready',
+            overview=_overview(), inbox=_inbox(), action=unknown)
     with pytest.raises(ValidationError, match='pipeline_complete'):
         OperatorNext(
             base='E:/Output', sid='book-1', code_version='code-v1',
