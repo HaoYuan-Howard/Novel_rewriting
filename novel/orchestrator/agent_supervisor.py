@@ -110,6 +110,9 @@ ReadOperatorNext = Callable[[ExecutionEpoch], OperatorNext]
 RunReadyAction = Callable[
     [ExecutionEpoch, OperatorNext, LaunchTicket], SupervisorActionResult,
 ]
+RunBlockedAction = Callable[
+    [ExecutionEpoch, OperatorNext, LaunchTicket], SupervisorActionResult,
+]
 RunReviewer = Callable[
     [ExecutionEpoch, OperatorNext, str | None, LaunchTicket],
     CommanderTurnResult | None,
@@ -132,6 +135,8 @@ class RunSupervisor:
         initial_epoch: ExecutionEpoch | None = None,
         read_operator_next: ReadOperatorNext | None = None,
         run_ready_action: RunReadyAction | None = None,
+        run_blocked_action: RunBlockedAction | None = None,
+        deterministic_blockers: frozenset[str] = frozenset(),
         run_reviewer: RunReviewer | None = None,
         finalize_run: FinalizeRun | None = None,
     ) -> None:
@@ -150,8 +155,17 @@ class RunSupervisor:
         if any(callback is not None for callback in deterministic) and not all(
                 callback is not None for callback in deterministic):
             raise ValueError('Supervisor 确定性主路的四个 callback 必须同时提供')
+        if (run_blocked_action is not None or deterministic_blockers) and not all(
+                callback is not None for callback in deterministic):
+            raise ValueError(
+                '确定性 blocked 路由只能随完整 Supervisor 主路提供')
+        if (run_blocked_action is None) != (not deterministic_blockers):
+            raise ValueError(
+                'run_blocked_action 与 deterministic_blockers 必须成对提供')
         self._read_next = read_operator_next
         self._run_ready = run_ready_action
+        self._run_blocked = run_blocked_action
+        self._deterministic_blockers = deterministic_blockers
         self._run_reviewer = run_reviewer
         self._finalize = finalize_run
         self._condition = threading.Condition()
@@ -620,34 +634,45 @@ class RunSupervisor:
                         action_pause_note = None
                         assert current.action is not None
                         assert current.action.waiting_on is not None
-                        reviewed = self._launch(
-                            lambda ticket: self._run_reviewer(
-                                epoch, current, provider_session_id, ticket))
-                        if reviewed is None:
-                            stopped = CommanderTurnResult(
-                                exit_code=2,
-                                provider_session_id=provider_session_id,
-                                continue_ready=False,
-                                outcome=AgentDeliveryOutcome(
-                                    state='stopped', checked_at=int(time.time()),
-                                    reason=(
-                                        '当前 blocker 没有登记为 Commander reviewer task：'
-                                        f'{current.action.waiting_on}')))
-                            last = epoch_last = active_epoch_last = stopped
-                            close_epoch(epoch, stopped)
-                            return SupervisorResult(turn=stopped, stopped=False)
-                        turn = reviewed
-                        last = epoch_last = active_epoch_last = turn
-                        if turn.provider_session_id is not None:
-                            if (provider_session_id is not None
-                                    and turn.provider_session_id
-                                    != provider_session_id):
-                                close_epoch(epoch, turn)
-                                raise RuntimeError(
-                                    'Commander exact resume 返回不同 provider session id')
-                            provider_session_id = turn.provider_session_id
-                        if turn.continue_reviewer:
-                            reviewer_continuation = current
+                        if (current.action.waiting_on
+                                in self._deterministic_blockers):
+                            assert self._run_blocked is not None
+                            recovered = self._launch(
+                                lambda ticket: self._run_blocked(
+                                    epoch, current, ticket))
+                            assert isinstance(recovered, SupervisorActionResult)
+                            turn = action_turn(recovered)
+                            last = epoch_last = active_epoch_last = turn
+                            action_pause_note = recovered.pause_note
+                        else:
+                            reviewed = self._launch(
+                                lambda ticket: self._run_reviewer(
+                                    epoch, current, provider_session_id, ticket))
+                            if reviewed is None:
+                                stopped = CommanderTurnResult(
+                                    exit_code=2,
+                                    provider_session_id=provider_session_id,
+                                    continue_ready=False,
+                                    outcome=AgentDeliveryOutcome(
+                                        state='stopped', checked_at=int(time.time()),
+                                        reason=(
+                                            '当前 blocker 没有登记为 Commander reviewer task：'
+                                            f'{current.action.waiting_on}')))
+                                last = epoch_last = active_epoch_last = stopped
+                                close_epoch(epoch, stopped)
+                                return SupervisorResult(turn=stopped, stopped=False)
+                            turn = reviewed
+                            last = epoch_last = active_epoch_last = turn
+                            if turn.provider_session_id is not None:
+                                if (provider_session_id is not None
+                                        and turn.provider_session_id
+                                        != provider_session_id):
+                                    close_epoch(epoch, turn)
+                                    raise RuntimeError(
+                                        'Commander exact resume 返回不同 provider session id')
+                                provider_session_id = turn.provider_session_id
+                            if turn.continue_reviewer:
+                                reviewer_continuation = current
 
                     with self._condition:
                         pause_requested = self._pause_requested

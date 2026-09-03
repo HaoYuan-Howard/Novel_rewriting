@@ -36,7 +36,9 @@ from contracts.invariants import (
     FRESHNESS, FRESHNESS_REASON, JOB_EVENT_KINDS, JOB_STATE, NODES,
     OPERATOR_DURATION_SOURCES, OPERATOR_PHASE_EVENT_KINDS, OPERATOR_PHASES,
     OPERATOR_TELEMETRY_SOURCES, OPERATOR_TERMINAL_STATES,
-    OVERVIEW_VERDICT, PROGRESS_PHASES, RETIRED_NODES, RETIRED_STAGES, STAGES,
+    OVERVIEW_VERDICT, PROGRESS_PHASES, RESUME_VERDICTS,
+    RETIRED_NODES, RETIRED_STAGES, RUN_NEXT_HANDLERS,
+    RUN_RESUME_FRONTIER_STATES, STAGES,
     EXECUTION_EPOCH_DRAIN_STATES, EXECUTION_EPOCH_REASONS,
 )
 from contracts.schema.base import FrozenModel, StrictModel
@@ -62,6 +64,9 @@ OperatorPhase = Literal[OPERATOR_PHASES]
 OperatorTelemetrySource = Literal[OPERATOR_TELEMETRY_SOURCES]
 OperatorTerminalState = Literal[OPERATOR_TERMINAL_STATES]
 OperatorDurationSource = Literal[OPERATOR_DURATION_SOURCES]
+RunResumeFrontierState = Literal[RUN_RESUME_FRONTIER_STATES]
+RunNextHandler = Literal[RUN_NEXT_HANDLERS]
+RunResumeVerdict = Literal[RESUME_VERDICTS]
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -609,10 +614,83 @@ class RunStepView(StrictModel):
     elapsed: int | None
 
 
+class RunResumeFrontierView(StrictModel):
+    """运行页的权威续跑前沿；只投影 operator，不从信标历史猜。"""
+
+    state: RunResumeFrontierState
+    node: str | None = None
+    seq: int | None = Field(default=None, ge=1)
+    label: str | None = None
+    resume_verdict: RunResumeVerdict | None = None
+    why: str = Field(min_length=1)
+    waiting_on: str | None = None
+    paid: bool | None = None
+    writes: str | None = None
+    next_handler: RunNextHandler
+    #: 当前同一 planner 快照明确判为无需再次执行、且位于续跑点之前的节点。
+    verified_skipped_nodes: list[str] = Field(default_factory=list)
+    verified_skipped_count: int = Field(ge=0)
+
+    @model_validator(mode='after')
+    def _frontier_is_closed(self) -> RunResumeFrontierView:
+        if self.verified_skipped_count != len(self.verified_skipped_nodes):
+            raise ValueError('verified_skipped_count 与节点列表不一致')
+        rank = {name: index for index, name in enumerate(NODES)}
+        if (
+            len(self.verified_skipped_nodes)
+            != len(set(self.verified_skipped_nodes))
+            or any(node not in rank for node in self.verified_skipped_nodes)
+            or self.verified_skipped_nodes != sorted(
+                self.verified_skipped_nodes, key=rank.__getitem__)
+        ):
+            raise ValueError('verified skipped 节点必须来自 NODES、按序且不重复')
+        action_values = (
+            self.node, self.seq, self.label, self.resume_verdict,
+            self.paid, self.writes,
+        )
+        if self.state in ('unknown', 'pipeline_complete'):
+            if any(value is not None for value in action_values) \
+                    or self.waiting_on is not None:
+                raise ValueError(f'{self.state} 不得携带伪造的下一动作')
+            expected = 'unknown' if self.state == 'unknown' else 'none'
+            if self.next_handler != expected:
+                raise ValueError(f'{self.state} 的 next_handler 必须是 {expected}')
+            expected_skipped = [] if self.state == 'unknown' else list(NODES)
+            if self.verified_skipped_nodes != expected_skipped:
+                raise ValueError(
+                    f'{self.state} 的 verified skipped 前缀不完整')
+            return self
+        if any(value is None for value in action_values):
+            raise ValueError(f'{self.state} 必须携带完整下一动作')
+        assert self.node is not None and self.seq is not None
+        if self.node not in rank or self.seq != rank[self.node] + 1:
+            raise ValueError('续跑点 node/seq 必须与 NODES 的唯一顺序一致')
+        if self.label != NODES[self.node].label:
+            raise ValueError('续跑点 label 必须来自 NODES，不能由调用方另造')
+        if any(rank[node] >= rank[self.node]
+               for node in self.verified_skipped_nodes):
+            raise ValueError('verified skipped 节点必须位于续跑点之前')
+        if self.verified_skipped_nodes != list(NODES)[:rank[self.node]]:
+            raise ValueError('verified skipped 必须是续跑点之前的完整 NODES 前缀')
+        if self.state == 'ready' and self.waiting_on is not None:
+            raise ValueError('ready 续跑点不得携带 waiting_on')
+        if self.state == 'ready':
+            expected = 'executor' if self.paid else 'code'
+            if self.next_handler != expected:
+                raise ValueError(f'ready 的 next_handler 必须是 {expected}')
+        if self.state == 'blocked' and not self.waiting_on:
+            raise ValueError('blocked 续跑点必须明确 waiting_on')
+        if self.state == 'blocked' and self.next_handler not in {
+                'commander', 'executor', 'human'}:
+            raise ValueError('blocked 的 next_handler 必须是 commander/executor/human')
+        return self
+
+
 class RunProgressView(StrictModel):
     """`GET /api/novels/{sid}/run` 的响应：信标折叠 + 产物盘的完成度，两栏并排。"""
 
     sid: str = Field(min_length=1)
+    resume_frontier: RunResumeFrontierView
     steps: list[RunStepView]
     #: `STAGES` → done 三态。书目录还不存在时全 `None`
     #: （stage0.remove 打点先于书目录落地，进度屏那时也得开得开）。

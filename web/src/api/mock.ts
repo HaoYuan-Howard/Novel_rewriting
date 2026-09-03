@@ -1250,6 +1250,7 @@ const PIPELINE_STEPS: { node: string; label: string; paid: boolean }[] = [
   { node: 'stage1.partition', label: 'stage1 分章', paid: false },
   { node: 'stage2.global', label: 'stage2 全书级抽取', paid: true },
   { node: 'stage2.blueprint', label: 'stage2 逐章抽取', paid: true },
+  { node: 'stage4.design', label: 'stage4 盲场景设计', paid: true },
   { node: 'stage4.plan', label: 'stage4 重构计划', paid: true },
   { node: 'stage4.context', label: 'stage4 写作上下文组装', paid: false },
   { node: 'stage5.write', label: 'stage5 逐章写作', paid: true },
@@ -1266,6 +1267,20 @@ const PIPELINE_STEPS: { node: string; label: string; paid: boolean }[] = [
 function mockRunProgress(sid: string): RunProgress {
   return {
     sid,
+    resume_frontier: {
+      state: 'ready',
+      node: 'stage0.remove',
+      seq: 1,
+      label: 'stage0 非正文剔除',
+      resume_verdict: 'run',
+      why: 'mock：stage0 产物尚未形成',
+      waiting_on: null,
+      paid: false,
+      writes: 'artifact',
+      next_handler: 'code',
+      verified_skipped_nodes: [],
+      verified_skipped_count: 0,
+    },
     steps: PIPELINE_STEPS.map((s, i) => ({
       seq: i + 1,
       node: s.node,

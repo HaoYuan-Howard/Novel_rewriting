@@ -872,6 +872,112 @@ def test_stage4_context_waits_for_a_new_snapshot_after_final_structure_review(
     assert blocked[0].steps == []
 
 
+@pytest.mark.parametrize(
+    ('state', 'expected_flags'),
+    [
+        ('repair_requested', ['--review-token', 's4rr1_' + 'a' * 64]),
+        ('strategy_replan_requested', [
+            '--replan', '--review-token', 's4rr1_' + 'a' * 64]),
+    ],
+)
+def test_stage4_typed_design_decision_routes_to_exact_executor_recovery(
+        queue_base, monkeypatch, state, expected_flags):
+    """A 的 typed 修订票已存在时，不能再唤 Commander 或跳到 B。"""
+    monkeypatch.setattr(
+        Q, 'nodes_up_to', lambda _until: ['stage4.design', 'stage4.plan'])
+    overview = SimpleNamespace(stages=[])
+    monkeypatch.setattr(
+        Q.st, 'resume_verdict',
+        lambda _overview, node: (
+            (Q.st.RESUME_SKIP, 'blind candidate 当前有效')
+            if node == 'stage4.design'
+            else (Q.st.RESUME_RUN, 'B 待重建')))
+    monkeypatch.setattr(Q.st, 'stage2_global_projection_blocked', lambda _ov: False)
+    monkeypatch.setattr(
+        Q.st, 'stage2_reviewed_edit_correction_needed',
+        lambda *_args: False)
+    monkeypatch.setattr(
+        Q.st, 'stage2_frozen_v6_subject_validated', lambda _ov: False)
+    monkeypatch.setattr(Q.approvals, 'require_stage2_review', lambda *_args: None)
+    approval_doc = SimpleNamespace(
+        sid='book-a',
+        design_review=SimpleNamespace(
+            state=state, action_review_token='s4rr1_' + 'a' * 64),
+        structure=SimpleNamespace(state='missing'),
+        gate={'s2': True, 's4': False},
+    )
+
+    todo, blocked = Q.plan_book_from_overview(
+        queue_base, 'book-a', overview,
+        until_stage='stage4', follow_check=False,
+        approval_doc=approval_doc)
+
+    assert todo == []
+    assert [item.node for item in blocked] == ['stage4.design', 'stage4.plan']
+    recovery = blocked[0]
+    assert recovery.waiting_on == Q.WAITING_ON_STAGE4_DESIGN_ACTION
+    assert recovery.flags == expected_flags
+    assert recovery.steps and all(step.paid for step in recovery.steps)
+    assert blocked[1].steps == []
+    assert '不再调用 Commander' in recovery.why
+    assert QueuePlan(
+        items=[], blocked=blocked,
+        paid_items=sum(any(step.paid for step in item.steps)
+                       for item in blocked),
+    ).paid_items == 1
+
+
+def test_stage4_structure_replan_routes_back_to_a_resolution_not_same_b_review(
+        queue_base, monkeypatch):
+    """B 人审 request_replan 是新的 A 裁决入口，不是重开同一结构 reviewer。"""
+    monkeypatch.setattr(
+        Q, 'nodes_up_to', lambda _until: ['stage4.context'])
+    overview = SimpleNamespace(stages=[])
+    monkeypatch.setattr(
+        Q.st, 'resume_verdict',
+        lambda _overview, _node: (Q.st.RESUME_RUN, 'Context 尚未落盘'))
+    monkeypatch.setattr(Q.st, 'stage2_global_projection_blocked', lambda _ov: False)
+    monkeypatch.setattr(
+        Q.st, 'stage2_reviewed_edit_correction_needed',
+        lambda *_args: False)
+    monkeypatch.setattr(
+        Q.st, 'stage2_frozen_v6_subject_validated', lambda _ov: False)
+    approval_doc = SimpleNamespace(
+        sid='book-a',
+        design_review=SimpleNamespace(
+            state='accepted', action_review_token=None),
+        structure=SimpleNamespace(state='replan_requested'),
+        gate={'s2': True, 's4': False},
+    )
+
+    todo, blocked = Q.plan_book_from_overview(
+        queue_base, 'book-a', overview,
+        until_stage='stage4', follow_check=False,
+        approval_doc=approval_doc)
+
+    assert todo == [] and len(blocked) == 1
+    assert blocked[0].waiting_on == Q.WAITING_ON_STAGE4_STRUCTURE_REPLAN
+    assert blocked[0].waiting_on != Q.WAITING_ON_STAGE4_STRUCTURE_REVIEW
+    assert blocked[0].steps == []
+    assert '不能再次审同一份 B' in blocked[0].why
+
+    # 老的批量 queue 调用方不会传 operator 的冻结 approval_doc；它也必须
+    # 读取 typed B 状态并走同一条 A resolution，不能退化成重复 B 审阅。
+    reads = []
+    monkeypatch.setattr(
+        Q.approvals, 'get',
+        lambda base, sid, **kwargs: reads.append(
+            (base, sid, kwargs)) or approval_doc)
+    todo, blocked = Q.plan_book_from_overview(
+        queue_base, 'book-a', overview,
+        until_stage='stage4', follow_check=False)
+    assert todo == [] and len(blocked) == 1
+    assert blocked[0].waiting_on == Q.WAITING_ON_STAGE4_STRUCTURE_REPLAN
+    assert reads == [(
+        queue_base, 'book-a',
+        {'include_spawns': False, 'operator_projection': True},
+    )]
+
 def test_stage5_plan_uses_one_authorized_whole_book_command(
         queue_base, monkeypatch):
     monkeypatch.setattr(Q, 'nodes_up_to', lambda _until: ['stage5.write'])

@@ -121,7 +121,10 @@ sid 已落盘后，每轮的第一条路由命令固定为：
 stdout 原样保存为 scratch 内的 `<NEXT_FILE>`。`state=ready` 时同时携带完整 opaque
 `execution_token`；调用方只读取 action 的路由字段，token 不拆开、不手搬 SHA，整份 `<NEXT_FILE>`
 直接交 runner。`state=blocked` 时 `action` 仍只描述 blocker，按 `waiting_on` 进入对应审批或生产登记的
-恢复路，不能把 blocker 的 action hash 当恢复授权。只有 `state=pipeline_complete` 时 `action=null` 且
+恢复路，不能把 blocker 的 action hash 当恢复授权。其中 `recovery:stage4-design-action` 表示新的
+hash-bound typed A 决定已经落盘：headless RunSupervisor 会按 action 的 exact node/flags 现场铸
+recovery permit 并直接交 Executor，不再启动 Commander；普通交互式运行才照下文显式取 permit、
+preview 与确认。只有 `state=pipeline_complete` 时 `action=null` 且
 无 token，此时进入收尾；任何状态都不自造下一节点。
 新书在 sid 尚未落盘前只走现有 `stage0.remove --source <TXT>` 摄入；取得 sid 后立即进入上述 next 循环。
 每次写盘、typed approval、人工修订或恢复动作后都重新调用 next，不从下表、目录存在性或聊天记忆
@@ -224,7 +227,10 @@ coverage。只有策略与全章 accepted，才能重新取得 `stage4.plan` 的
 concerns 的完整逐章 typed 最终结构决定。工作包里 INFO/metric/UNVER 的 action 为空，只披露不返工。
 通用 s4 gate 不是兼容入口；计划或 concerns 变化后旧决定立即过期。只有全部章 `accept`，才可单独
 运行 0 成本 `stage4.context`；Context current/fresh 后再生成并提交 Stage5 writing 授权，才可执行
-`stage5.write`。
+`stage5.write`。若任一章为 `request_replan`，这份 B 决定本身仍只落账、不启动作业；下一次 operator
+必须发布不同的 `approval:stage4-structure-replan`。Commander 交叉读取该 B 决定/证据与当前 A 工作包，
+形成一份新的 current typed A `request_repair / request_replan`，不得再次审同一份 B，也不得全量
+accept 来绕开 B 的拒绝。新 A 决定落盘后，确定性恢复按 opaque token 只交 Executor 精确执行。
 
 Stage2 有两条可重叠的支路，而不是一条全串行链：最新 Global 候选只要通过当前 schema，并物化出
 current/fresh 称名投影，就可立即启动 blueprint；不必等待 Global 正式稿。Global HARD 可以把候选

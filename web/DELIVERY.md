@@ -54,7 +54,10 @@ sid/title 及完整 token；表单任何一格变化都作废旧 preview。Apply
 闲置 10s。节点没有 beacon 时显示「无运行记录」，只表示该条命令没有独立打点；可选节点未执行、
 上传或人工流程从别的入口完成，都不能据此改写所属阶段的完成状态。它是**观察屏不是判定屏**——
 「这层过没过」仍归各层屏的 badge（R-13.6）。后端路由：`GET /api/novels/:sid/run`
-（`novel/api/routes/run.py`，书目录不存在也 200）。
+（`novel/api/routes/run.py`，书目录不存在也 200）。同一响应另带由 operator 当前快照直接投影的
+`resume_frontier`：明确显示真实续跑节点、下一处理者是 code / Commander / Executor / human、
+贵贱与 blocker；planner 已确认无需再跑的前序节点默认折叠、可展开审计。前端不得从 beacon、
+Stage badge 或步骤位置自行推导该前沿。
 
 **agent 一键跑书**：语料库屏每本书的「Agent」，或 Stage0 审批操作栏的
 「Agent 代跑」→ 确认框摊开
@@ -224,7 +227,7 @@ Stage4A 表单一次提交当前完整 subject、策略 `accept|request_replan` 
 | `/` | 语料库、上传与逐书阶段状态；勾选多本一次交给 agent 批量代跑；项目可在 sid 二次确认后移入可恢复回收站（闸与排队归服务端，界面不写死上限） |
 | `/settings` | 管理当前 output base 的 Commander、默认 Executor 与逐节点 override 常用 profiles；选项只来自 capability，保存/清空走 revision CAS，不保存凭据或逐次授权 |
 | `/n/:sid` | 进入该书并重定向到 stage0（新书先审非正文；已有产物仍可从左栏直达各层） |
-| `/n/:sid/run` | agent / UI / 持久队列共用的全链运行进度与事件时间线；步骤从 `NODES` 派生，**只观察不判定** |
+| `/n/:sid/run` | agent / UI / 持久队列共用的全链运行进度与事件时间线；步骤从 `NODES` 派生，`resume_frontier` 从 operator 同快照投影，前序已确认跳过项默认折叠；界面**只观察不判定** |
 | `/n/:sid/stage0` | 整本剔除审阅、编辑与批准；完整原文默认展开、可收起，不重复展示属于 Stage1 的分章预览。Agent 入口放在审批操作栏；浏览器人工动作不要求填写 actor/reason，统一按 `human-ui` 和具体动作理由记审计；Agent/CLI 仍显式自报 |
 | `/n/:sid/stage1` | 顶部合并展示校验结论与切分确认，且不依赖正文查询成功；下方是章节索引和原文切分结果，只读，开篇文案只展示一次，重号/缺号/倒退按服务端章号诊断逐章显式提示 |
 | `/n/:sid/read/:o` | 原文与 stage2 骨架对照；书级工作包先给异常章与完整检查摘要，默认隐藏已由代码校验的 beat/fact/hinge 结构 ID 与字符坐标，仍保留章功能、覆盖原文、事实参与人物、因果、hinge、状态与**全部**叙述声音；打开/切换单章不自动标整本已读，只有正式工作包成功加载后才可显式确认。页面所见与待签主体来自同一工作包，提交时携带整包 binding 及 Blueprint/MainText/code/rules 身份，任一漂移均零写入，后续整包变化使旧 seen 自动过期 |

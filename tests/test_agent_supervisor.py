@@ -128,6 +128,61 @@ def test_v2_supervisor_routes_ready_review_and_complete_without_commander_dispat
     assert [event.kind for event in events] == ['epoch_closed']
 
 
+def test_v2_supervisor_runs_registered_blocked_recovery_without_commander():
+    """已有 typed 决定的 blocker 直接恢复 Executor，不占一轮 reviewer。"""
+    events: list[AgentRunEvent] = []
+    calls: list[str] = []
+    states = ['blocked', 'pipeline_complete']
+
+    def current():
+        if states[0] == 'pipeline_complete':
+            return SimpleNamespace(
+                state='pipeline_complete', code_version='code-1')
+        return SimpleNamespace(
+            state='blocked', code_version='code-1', surface_seal='c' * 64,
+            action=SimpleNamespace(
+                node='stage4.design',
+                flags=['--review-token', 's4rr1_' + 'd' * 64],
+                waiting_on='recovery:stage4-design-action',
+                action_sha256='a' * 64),
+            execution_token=None)
+
+    def blocked(_epoch, snapshot, ticket):
+        calls.append(f"recovery:{snapshot.action.node}")
+        ticket.commit()
+        states.pop(0)
+        return SupervisorActionResult(0, _outcome(), True)
+
+    def finalize(_epoch, ticket):
+        calls.append('finalize')
+        ticket.commit()
+        states.pop(0)
+        return SupervisorActionResult(0, _outcome('ready'), False)
+
+    supervisor = RunSupervisor(
+        run_id='run-v2-recovery', append_event=events.append,
+        make_epoch=lambda *_args: pytest.fail('身份未漂移不应滚 epoch'),
+        open_epoch=lambda _epoch: None,
+        close_epoch=lambda _epoch, _turn: 'drained',
+        run_commander_turn=lambda *_args: pytest.fail('不得落回 legacy Commander'),
+        epoch_identity_current=lambda _epoch: True,
+        cancel_commander=lambda: True,
+        initial_epoch=_epoch('epoch-v2-recovery', 1, 'initial'),
+        read_operator_next=lambda _epoch: current(),
+        run_ready_action=lambda *_args: pytest.fail('本例没有 ready node'),
+        run_blocked_action=blocked,
+        deterministic_blockers=frozenset({'recovery:stage4-design-action'}),
+        run_reviewer=lambda *_args: pytest.fail('恢复动作不得启动 reviewer'),
+        finalize_run=finalize)
+
+    result = supervisor.run()
+
+    assert result.stopped is False
+    assert calls == ['recovery:stage4.design', 'finalize']
+    assert states == []
+    assert [event.kind for event in events] == ['epoch_closed']
+
+
 def test_v2_operator_read_failure_after_code_drift_rolls_epoch():
     """读 next 期间发生代码漂移时，旧 epoch 应换代而不是把 parent 打成 70。"""
     events: list[AgentRunEvent] = []

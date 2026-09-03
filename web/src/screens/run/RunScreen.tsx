@@ -17,7 +17,12 @@ import {
 } from '@/constants/vocabulary'
 import { errorBody } from '@/api/errors'
 import { ErrorHint } from '@/components/state/States'
-import type { RunBeacon, RunEvent } from '@/types/run'
+import type {
+  RunBeacon,
+  RunEvent,
+  RunNextHandler,
+  RunResumeFrontier,
+} from '@/types/run'
 import { CHECK_KINDS, type CheckReport } from '@/types/stages'
 import { useRunProgress } from '@/hooks/useRunProgress'
 import { useSid } from '@/hooks/useRouteParams'
@@ -358,6 +363,60 @@ function nodeScreen(node: string): ScreenName | null {
   return STAGE_SCREEN[stage] ?? null
 }
 
+const NEXT_HANDLER_LABEL: Record<RunNextHandler, string> = {
+  code: '代码（0 成本）',
+  commander: 'Commander（形成新裁决）',
+  executor: 'Executor（执行既有决定）',
+  human: '等待人工处理',
+  none: '没有后续节点',
+  unknown: '尚不可判',
+}
+
+function ResumeFrontier({ frontier }: { frontier: RunResumeFrontier }) {
+  const title =
+    frontier.state === 'unknown'
+      ? '续跑点尚不可判'
+      : frontier.state === 'pipeline_complete'
+        ? '流水线节点已全部越过'
+        : `续跑从 ${frontier.label} 开始`
+  return (
+    <Panel>
+      <PaneHeader
+        title="实际续跑点"
+        meta="来自后端 operator 的同一快照，不按信标历史猜测"
+      />
+      <div data-testid="resume-frontier" className="flex flex-col gap-9 px-18 py-14">
+        <div className="flex flex-wrap items-center gap-9">
+          <span className="text-section font-semibold text-ink">{title}</span>
+          {frontier.node ? (
+            <Mono className="text-mini text-ink-4">{frontier.node}</Mono>
+          ) : null}
+          <span className="rounded-tag border border-line bg-inset px-8 py-3 text-tag font-semibold text-ink-3">
+            下一处理者：{NEXT_HANDLER_LABEL[frontier.next_handler]}
+          </span>
+          <span className="rounded-tag border border-line bg-card px-8 py-3 text-tag text-ink-4">
+            当前快照已确认无需重跑 {frontier.verified_skipped_count} 项
+          </span>
+          {frontier.paid !== null ? (
+            <span
+              className="text-tag font-semibold"
+              style={frontier.paid ? { color: SPEND_INK } : undefined}
+            >
+              {frontier.paid ? '节点执行：付费' : '节点执行：0 成本'}
+            </span>
+          ) : null}
+        </div>
+        <div className="prose-cn max-w-[82em] text-body leading-relaxed text-ink-3">
+          {frontier.why}
+        </div>
+        {frontier.waiting_on ? (
+          <Mono className="text-mini text-ink-5">waiting_on: {frontier.waiting_on}</Mono>
+        ) : null}
+      </div>
+    </Panel>
+  )
+}
+
 /**
  * 跑书进度。
  *
@@ -370,6 +429,7 @@ export function RunScreen() {
   const q = useRunProgress()
   const { defaultOrdinal } = useSampleCoverage()
   const stepsRef = useRef<HTMLDivElement>(null)
+  const [priorStepsOpen, setPriorStepsOpen] = useState(false)
 
   const nodePath = (node: string): string | null => {
     const screen = nodeScreen(node)
@@ -383,9 +443,9 @@ export function RunScreen() {
     )
   }
 
-  const scrollToRunning = () =>
+  const scrollToCurrent = () =>
     stepsRef.current
-      ?.querySelector<HTMLElement>('[data-running]')
+      ?.querySelector<HTMLElement>('[data-frontier]')
       ?.scrollIntoView?.({ block: 'center', behavior: 'smooth' })
 
   const checks = useQueries({
@@ -415,6 +475,8 @@ export function RunScreen() {
       <QueryStates q={q} loadingLabel="读跑书进度">
         {(d) => (
           <>
+            <ResumeFrontier frontier={d.resume_frontier} />
+
             {/* NODES 清单：seq / 节点 / 付费标记 / 信标 / 最近退出码 / 耗时 */}
             <Panel>
               <PaneHeader
@@ -422,21 +484,40 @@ export function RunScreen() {
                 meta="每行是一条命令记录；无记录不代表阶段未完成"
                 right={
                   <LinkButton
-                    disabled={!d.steps.some((s) => s.beacon === 'running')}
-                    title="滚到正在跑的那一行"
-                    onClick={scrollToRunning}
+                    disabled={!d.resume_frontier.node}
+                    title="滚到后端判定的真实续跑点"
+                    onClick={scrollToCurrent}
                   >
                     跳到当前步
                   </LinkButton>
                 }
               />
               <div ref={stepsRef}>
-                {d.steps.map((s) => {
+                {d.resume_frontier.verified_skipped_count > 0 ? (
+                  <button
+                    type="button"
+                    aria-expanded={priorStepsOpen}
+                    onClick={() => setPriorStepsOpen((value) => !value)}
+                    className="flex w-full cursor-pointer items-center gap-8 border-x-0 border-t-0 border-b border-line-row bg-inset px-18 py-9 text-left text-body text-ink-3"
+                  >
+                    <span aria-hidden>{priorStepsOpen ? '▾' : '▸'}</span>
+                    当前快照已确认无需重跑 {d.resume_frontier.verified_skipped_count} 个前置节点
+                    <span className="text-tag text-ink-5">
+                      {priorStepsOpen ? '收起' : '展开查看'}
+                    </span>
+                  </button>
+                ) : null}
+                {d.steps.filter(
+                  (step) =>
+                    priorStepsOpen ||
+                    !d.resume_frontier.verified_skipped_nodes.includes(step.node),
+                ).map((s) => {
                   const to = nodePath(s.node)
                   return (
                     <div
                       key={s.seq}
                       data-running={s.beacon === 'running' ? '' : undefined}
+                      data-frontier={s.node === d.resume_frontier.node ? '' : undefined}
                       className={cx(
                         'flex items-center gap-12 border-b border-line-row px-18 py-10',
                         s.beacon === 'running' && 'bg-accent-bg',

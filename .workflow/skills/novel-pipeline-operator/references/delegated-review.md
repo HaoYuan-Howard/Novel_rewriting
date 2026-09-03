@@ -251,7 +251,9 @@ B infeasible 终态，模板与 view 会同时发布其 concerns 和代码 proof
    `stage4.design --review-token <opaque>`；单章耗尽只走该章新 repair epoch 或上述 0-wire
    完整章 edit。`strategy_replan_requested` 时才执行 `stage4.design --replan`，并携带累计失败反馈；
    effective strategy/input digest 未变的 accepted 章保留 checkpoint，不得重发 wire。模型修订仍需
-   重新 preview/付费确认，修订 A 后还要再提交一份当前完整 A 审阅。
+   重新 preview/付费确认，修订 A 后还要再提交一份当前完整 A 审阅。headless AgentRun 在 typed
+   决定落盘后由 RunSupervisor 精确执行该 action，不再调用 Commander；交互式操作者仍显式
+   preview/确认，但不得自行改 node、flags 或 token。
 
 exact legacy-frozen 主体是唯一例外：真实全章 accept 仍必须提交 raw typed 决定，但公开 Design workpack 与
 `design_review` 随后投影为 `suspended`。这等同 `already_current` 地跳过重复 Commander 审阅，却绝不
@@ -300,6 +302,14 @@ novel.cli approval apply structure <SID> --base <BASE> --input <决定文件或 
 提交后必须重新 `approval show` 核对 current subject 与决定。工作包中的全部 B concern、
 `stage_signature_conflict` INFO、metric 与非线性 UNVER 都要保留披露；当前 hash-bound 决定已经覆盖的
 项目在 inbox 中可以是 `reviewed_retained`，但不得被删除或改回 pending。
+
+若 current Structure 决定含 `request_replan`，下一次 operator 的 blocker 必须是
+`approval:stage4-structure-replan`，不是再次派发 `approval:stage4-structure-review`。Commander 此时
+交叉读取已拒绝 B 的逐章理由/证据和当前 Design 工作包，只能提交一份新的 current typed A
+`request_repair / request_replan`；全量 accept 会被 loader 拒绝，B 的自然语言理由也不能直接变成
+Executor prompt。决定落盘后 operator 转为 `recovery:stage4-design-action`，RunSupervisor 不再调用
+Commander，只把 action 的 opaque token 与 exact flags 交给 Executor。A 修订完成并重新全书审阅后，
+B 仍需新的独立付费授权与最终结构裁决。
 
 ## Stage5 写作授权
 

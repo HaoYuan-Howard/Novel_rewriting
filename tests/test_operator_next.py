@@ -15,7 +15,7 @@ from contracts.schema.api import (
     InboxView, OperatorAction, OperatorNext, OperatorNextDecision,
 )
 from contracts.schema.orchestration import (
-    NovelOverview, OverviewSummary, QueueItem, Step,
+    NovelOverview, OverviewSummary, QueueItem, RunResumeFrontierView, Step,
 )
 from novel.cli import exit_codes as X
 from novel.cli.main import main
@@ -252,6 +252,56 @@ def test_no_lane_item_is_pipeline_complete_not_delivery_ready(monkeypatch, tmp_p
 
     assert got.state == 'pipeline_complete'
     assert got.action is None
+
+
+@pytest.mark.parametrize(
+    ('item', 'expected_handler'),
+    [
+        (
+            _blocked(
+                'stage4.context', Q.WAITING_ON_STAGE4_STRUCTURE_REPLAN),
+            'commander',
+        ),
+        (
+            QueueItem(
+                sid='book-1', node='stage4.design',
+                flags=['--review-token', 's4rr1_' + 'a' * 64],
+                steps=[_step('stage4.design')],
+                why='已有 current typed A 修订决定',
+                waiting_on=Q.WAITING_ON_STAGE4_DESIGN_ACTION,
+            ),
+            'executor',
+        ),
+    ],
+)
+def test_progress_snapshot_projects_authoritative_frontier_and_handler(
+        monkeypatch, tmp_path, item, expected_handler):
+    """运行页看 operator 当前 lane，不从空 beacon 猜成 Stage0 重跑。"""
+    snapshot = _snapshot(tmp_path)
+    _wire(monkeypatch, snapshot, todo=[], blocked=[item])
+
+    overview, frontier = O.progress_snapshot(tmp_path, 'book-1')
+
+    assert overview is snapshot.overview
+    assert frontier.state == 'blocked'
+    assert frontier.node == item.node
+    assert frontier.seq == list(NODES).index(item.node) + 1
+    assert frontier.label == NODES[item.node].label
+    assert frontier.waiting_on == item.waiting_on
+    assert frontier.next_handler == expected_handler
+    assert frontier.verified_skipped_nodes == list(NODES)[:frontier.seq - 1]
+    assert frontier.verified_skipped_count == frontier.seq - 1
+
+
+def test_resume_frontier_rejects_a_frontend_invented_node_label():
+    with pytest.raises(ValidationError, match='label 必须来自 NODES'):
+        RunResumeFrontierView(
+            state='ready', node='stage1.partition', seq=4,
+            label='前端自造标签', resume_verdict='run', why='产物缺失',
+            paid=False, writes='stage1/main_text.json', next_handler='code',
+            verified_skipped_nodes=list(NODES)[:3],
+            verified_skipped_count=3,
+        )
 
 
 def test_next_refuses_a_surface_that_changes_during_planning(monkeypatch, tmp_path):

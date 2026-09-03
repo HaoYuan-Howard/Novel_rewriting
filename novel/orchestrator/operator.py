@@ -12,12 +12,16 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+from dataclasses import dataclass
 
 from contracts.invariants import NODES, STAGES
 from contracts.schema.api import (
-    ExecutionPermit, OperatorAction, OperatorNext, OperatorNextDecision,
+    ApprovalDoc, ExecutionPermit, OperatorAction, OperatorNext,
+    OperatorNextDecision,
 )
-from contracts.schema.orchestration import NovelOverview, QueueItem
+from contracts.schema.orchestration import (
+    NovelOverview, QueueItem, RunResumeFrontierView,
+)
 from novel import paths
 from novel.errors import ArtifactUnreadable
 from novel.orchestrator import approvals, queue, state
@@ -69,28 +73,25 @@ def _action(
     )
 
 
-def _next_from_snapshot(snapshot: OperatorReadSnapshot) -> OperatorNext:
-    """只消费一份已冻结快照规划 next，并为 ready 同次铸 execution token。"""
+@dataclass(frozen=True)
+class _LanePlan:
+    state: str
+    action: OperatorAction | None
+    verified_skipped_nodes: tuple[str, ...]
+
+
+def _lane_from_snapshot(
+    snapshot: OperatorReadSnapshot, approval_doc: ApprovalDoc,
+) -> _LanePlan:
+    """从同一 overview/approval 坐标选最早动作，并保留被 planner 跳过的前缀。"""
     sid = snapshot.sid
-    # inbox、queue 与审批 currentness 必须共享这一个 invocation 坐标。
-    # 之前这里只复用了 overview，却让每个 gate 单独重跑整仓 code_version；
-    # 一本后期书会在一次 next 内 fork 出二十多个代码时点与 git 子进程。
-    with approvals.read_projection(
-            overview=snapshot.overview, code=snapshot.code):
-        approval_doc = approvals.get(
-            snapshot.base, sid,
-            overview=snapshot.overview, code=snapshot.code,
-            include_spawns=False, operator_projection=True)
-        inbox = inbox_from_snapshot(
-            snapshot, approval_doc=approval_doc,
-            _final_cas_owner=_OPERATOR_FINAL_CAS)
-        todo, blocked = queue.plan_book_from_overview(
-            snapshot.base, sid, snapshot.overview,
-            until_stage=STAGES[-1], follow_check=True,
-            approval_doc=approval_doc,
-            # AgentRun 每个 action 落盘后都会重新进入本函数采新快照；因此能消费
-            # queue/state 共同证明的 canonical REDO，不会冻结一串旧下游 argv。
-            allow_deterministic_redo=True)
+    todo, blocked = queue.plan_book_from_overview(
+        snapshot.base, sid, snapshot.overview,
+        until_stage=STAGES[-1], follow_check=True,
+        approval_doc=approval_doc,
+        # AgentRun 每个 action 落盘后都会重新进入本函数采新快照；因此能消费
+        # queue/state 共同证明的 canonical REDO，不会冻结一串旧下游 argv。
+        allow_deterministic_redo=True)
     rank = {node: index for index, node in enumerate(NODES)}
     selected = min(
         (*todo, *blocked),
@@ -107,11 +108,48 @@ def _next_from_snapshot(snapshot: OperatorReadSnapshot) -> OperatorNext:
             overview=snapshot.overview, item=selected)
         next_state = 'blocked' if selected.waiting_on else 'ready'
 
+    frontier = len(NODES) if selected is None else rank[selected.node]
+    planned = {item.node for item in (*todo, *blocked)}
+    skipped = tuple(
+        node for node in list(NODES)[:frontier]
+        if node not in planned
+    )
+    return _LanePlan(
+        state=next_state, action=action,
+        verified_skipped_nodes=skipped)
+
+
+def _require_snapshot_current(snapshot: OperatorReadSnapshot) -> None:
+    if read_surface_seal(
+        snapshot.base, snapshot.sid, code=snapshot.code,
+    ) != snapshot.surface_seal:
+        raise ArtifactUnreadable(
+            'operator next 规划期间本书代码/产物/审批盘面发生变化；'
+            '拒绝返回混合时点的下一动作，请重试')
+
+
+def _next_from_snapshot(snapshot: OperatorReadSnapshot) -> OperatorNext:
+    """只消费一份已冻结快照规划 next，并为 ready 同次铸 execution token。"""
+    sid = snapshot.sid
+    # inbox、queue 与审批 currentness 必须共享这一个 invocation 坐标。
+    # 之前这里只复用了 overview，却让每个 gate 单独重跑整仓 code_version；
+    # 一本后期书会在一次 next 内 fork 出二十多个代码时点与 git 子进程。
+    with approvals.read_projection(
+            overview=snapshot.overview, code=snapshot.code):
+        approval_doc = approvals.get(
+            snapshot.base, sid,
+            overview=snapshot.overview, code=snapshot.code,
+            include_spawns=False, operator_projection=True)
+        inbox = inbox_from_snapshot(
+            snapshot, approval_doc=approval_doc,
+            _final_cas_owner=_OPERATOR_FINAL_CAS)
+        lane = _lane_from_snapshot(snapshot, approval_doc)
+
     decision = OperatorNextDecision(
         base=os.fspath(snapshot.base), sid=sid,
         code_version=snapshot.code, surface_seal=snapshot.surface_seal,
-        state=next_state, overview=snapshot.overview, inbox=inbox,
-        action=action,
+        state=lane.state, overview=snapshot.overview, inbox=inbox,
+        action=lane.action,
     )
     execution_token = None
     if decision.state == 'ready':
@@ -123,16 +161,52 @@ def _next_from_snapshot(snapshot: OperatorReadSnapshot) -> OperatorNext:
         )
         execution_token = ready_execution_token_from_next(decision)
 
-    if read_surface_seal(
-        snapshot.base, sid, code=snapshot.code,
-    ) != snapshot.surface_seal:
-        raise ArtifactUnreadable(
-            'operator next 规划期间本书代码/产物/审批盘面发生变化；'
-            '拒绝返回混合时点的下一动作，请重试')
+    _require_snapshot_current(snapshot)
 
     return OperatorNext(
         **decision.model_dump(mode='python'),
         execution_token=execution_token,
+    )
+
+
+def _frontier_view(lane: _LanePlan) -> RunResumeFrontierView:
+    action = lane.action
+    if lane.state == 'pipeline_complete':
+        return RunResumeFrontierView(
+            state='pipeline_complete',
+            why='当前快照下现役节点已全部越过；最终交付仍以终验包为准',
+            next_handler='none',
+            verified_skipped_nodes=list(lane.verified_skipped_nodes),
+            verified_skipped_count=len(lane.verified_skipped_nodes),
+        )
+    if action is None:  # pragma: no cover —— _LanePlan 构造边界已闭合
+        raise RuntimeError(f'{lane.state} lane 缺 action')
+    if lane.state == 'ready':
+        handler = 'executor' if action.paid else 'code'
+    elif action.waiting_on in queue.DETERMINISTIC_RECOVERY_WAITING_ON:
+        handler = 'executor'
+    else:
+        # 延迟导入：reviewer_tasks 本身依赖 queue/schema，不让 operator 顶层形成环。
+        from novel.orchestrator import reviewer_tasks
+        handler = (
+            'commander'
+            if action.waiting_on is not None
+            and reviewer_tasks.is_registered(action.waiting_on)
+            else 'human'
+        )
+    return RunResumeFrontierView(
+        state=lane.state,
+        node=action.node,
+        seq=list(NODES).index(action.node) + 1,
+        label=NODES[action.node].label,
+        resume_verdict=action.resume_verdict,
+        why=action.why,
+        waiting_on=action.waiting_on,
+        paid=action.paid,
+        writes=action.writes,
+        next_handler=handler,
+        verified_skipped_nodes=list(lane.verified_skipped_nodes),
+        verified_skipped_count=len(lane.verified_skipped_nodes),
     )
 
 
@@ -141,6 +215,24 @@ def next_action(base: str | os.PathLike[str], sid: str) -> OperatorNext:
     novel_dir = paths.resolve_novel_dir(base, sid).resolve()
     with readonly_snapshot_memo(novel_dir):
         return _next_from_snapshot(capture_operator_snapshot(base, sid))
+
+
+def progress_snapshot(
+    base: str | os.PathLike[str], sid: str,
+) -> tuple[NovelOverview, RunResumeFrontierView]:
+    """给运行页复用一份 overview + operator lane，不生成沉重 Inbox。"""
+    novel_dir = paths.resolve_novel_dir(base, sid).resolve()
+    with readonly_snapshot_memo(novel_dir):
+        snapshot = capture_operator_snapshot(base, sid)
+        with approvals.read_projection(
+                overview=snapshot.overview, code=snapshot.code):
+            approval_doc = approvals.get(
+                snapshot.base, sid,
+                overview=snapshot.overview, code=snapshot.code,
+                include_spawns=False, operator_projection=True)
+            lane = _lane_from_snapshot(snapshot, approval_doc)
+        _require_snapshot_current(snapshot)
+        return snapshot.overview, _frontier_view(lane)
 
 
 def next_action_at_code(
@@ -173,4 +265,7 @@ def permit(
     return permit_from_next(current, node, flags)
 
 
-__all__ = ['canonical_sha256', 'next_action', 'next_action_at_code', 'permit']
+__all__ = [
+    'canonical_sha256', 'next_action', 'next_action_at_code', 'permit',
+    'progress_snapshot',
+]

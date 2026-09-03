@@ -47,6 +47,20 @@ def test_empty_base_is_all_pending(client):
     assert set(d['stage_done']) == set(STAGES)
     assert all(v is None for v in d['stage_done'].values())
     assert d['events_tail'] == []
+    assert d['resume_frontier'] == {
+        'state': 'unknown',
+        'node': None,
+        'seq': None,
+        'label': None,
+        'resume_verdict': None,
+        'why': '书目录尚未形成，当前无法判定续跑点',
+        'waiting_on': None,
+        'paid': None,
+        'writes': None,
+        'next_handler': 'unknown',
+        'verified_skipped_nodes': [],
+        'verified_skipped_count': 0,
+    }
 
 
 def test_beacon_events_fold_into_steps(client):
@@ -77,6 +91,10 @@ def test_existing_book_dir_gives_real_stage_done(client):
     # 一份产物都没有：非逐章层 done=False；stage5 读不回计划 ⇒ None（判不了≠False）
     assert d['stage_done']['stage0'] is False
     assert d['stage_done']['stage5'] is None
+    assert d['resume_frontier']['state'] == 'ready'
+    assert d['resume_frontier']['node'] == 'stage0.remove'
+    assert d['resume_frontier']['next_handler'] == 'code'
+    assert d['resume_frontier']['verified_skipped_count'] == 0
 
 
 def test_stage2_chapter_fix_route_reaches_http_preview(client):

@@ -4,7 +4,7 @@
 run.py —— `GET /api/novels/:sid/run`。agent 代跑时的进度屏数据。
 
 【这一层只【组装】别人算好的东西】信标折叠在 `orchestrator/beacon.py::fold`，
-完成度在 `orchestrator/state.py::overview`——本路由不新造任何判定
+完成度与续跑前沿在 `orchestrator/operator.py::progress_snapshot`——本路由不新造任何判定
 （`checks.py` 头那条 `R-11.4` 的同构纪律）。信标是**观察轨迹**：
 `beacon='ok'` 只说「那条命令 exit 0」，「这层过没过」的唯一判官仍是
 check 报告的 badge（`R-13.6`）。
@@ -14,10 +14,10 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends
 
 from contracts.invariants import STAGES
-from contracts.schema.orchestration import RunProgressView
+from contracts.schema.orchestration import RunProgressView, RunResumeFrontierView
 from novel.api.deps import checked_sid, get_base
 from novel.errors import UpstreamMissing
-from novel.orchestrator import beacon, state
+from novel.orchestrator import beacon, operator
 
 router = APIRouter(prefix='/novels')
 
@@ -33,12 +33,20 @@ def get_run_progress(sid: str = Depends(checked_sid),
     """
     events = [e for e in beacon.read_events(base) if e.sid == sid]
     try:
-        ov = state.overview(base, sid)
+        ov, resume_frontier = operator.progress_snapshot(base, sid)
         stage_done = {st.stage: st.done for st in ov.stages}
     except UpstreamMissing:
         stage_done = {s: None for s in STAGES}
+        resume_frontier = RunResumeFrontierView(
+            state='unknown',
+            why='书目录尚未形成，当前无法判定续跑点',
+            next_handler='unknown',
+            verified_skipped_nodes=[],
+            verified_skipped_count=0,
+        )
     return RunProgressView(
         sid=sid,
+        resume_frontier=resume_frontier,
         steps=beacon.fold(events),
         stage_done=stage_done,
         events_tail=events[-beacon.TAIL:],

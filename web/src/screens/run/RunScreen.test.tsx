@@ -144,6 +144,47 @@ describe('RunScreen 交付终验', () => {
 })
 
 describe('RunScreen check composition', () => {
+  it('默认折叠 operator 已确认无需重跑的前缀，并显示真实续跑处理者', async () => {
+    const run = await mockApi.getRunProgress(SAMPLE_SID)
+    const next = run.steps.find((step) => step.node === 'stage4.context')
+    if (!next) throw new Error('mock pipeline 缺 stage4.context')
+    const skipped = run.steps
+      .filter((step) => step.seq < next.seq)
+      .map((step) => step.node)
+    run.resume_frontier = {
+      state: 'blocked',
+      node: next.node,
+      seq: next.seq,
+      label: next.label,
+      resume_verdict: 'run',
+      why: 'Stage4B 当前决定要求回到 A 形成新的 typed 修订决定',
+      waiting_on: 'approval:stage4-structure-replan',
+      paid: false,
+      writes: 'artifact',
+      next_handler: 'commander',
+      verified_skipped_nodes: skipped,
+      verified_skipped_count: skipped.length,
+    }
+    vi.spyOn(api, 'getRunProgress').mockResolvedValue(run)
+    vi.spyOn(api, 'getAgentRuns').mockResolvedValue({ runs: [] })
+    vi.spyOn(api, 'getCheck').mockResolvedValue(null)
+
+    renderRoute(<RunScreen />, `/n/${SAMPLE_SID}/run`)
+
+    const frontier = await screen.findByTestId('resume-frontier')
+    expect(frontier).toHaveTextContent(/续跑从 stage4 写作上下文组装\s*开始/)
+    expect(frontier).toHaveTextContent('下一处理者：Commander（形成新裁决）')
+    expect(screen.getByRole('button', { name: '跳到当前步' })).toBeEnabled()
+    expect(screen.queryAllByTitle('stage0.remove')).toHaveLength(0)
+
+    const toggle = screen.getByRole('button', { name: /当前快照已确认无需重跑/ })
+    expect(toggle).toHaveAttribute('aria-expanded', 'false')
+    fireEvent.click(toggle)
+
+    expect(toggle).toHaveAttribute('aria-expanded', 'true')
+    expect(screen.getAllByTitle('stage0.remove')[0]).toBeVisible()
+  })
+
   it('renders exit 1 as landed_red instead of a failed command', async () => {
     const run = await mockApi.getRunProgress(SAMPLE_SID)
     run.steps[0] = { ...run.steps[0], beacon: 'landed_red', last_exit: 1 }

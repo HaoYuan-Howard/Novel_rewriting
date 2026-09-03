@@ -73,8 +73,8 @@ from novel.errors import (
 )
 from novel.llm.ledger import append_commander_call
 from novel.orchestrator import (
-    admission, commander_completion, jobs, operator, queue, reviewer_tasks,
-    service_lifecycle, uploads,
+    admission, commander_completion, execution_permit, jobs, operator, queue,
+    reviewer_tasks, service_lifecycle, uploads,
 )
 from novel.orchestrator.agent_supervisor import (
     CommanderTurnResult, LaunchTicket, RunSupervisor, SupervisorActionResult,
@@ -2222,6 +2222,20 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
             epoch, current.execution_token, launch_ticket,
             stem=f'ready-{current.execution_token.node}')
 
+    def _run_blocked_action(
+            epoch: ExecutionEpoch, current: OperatorNext,
+            launch_ticket: LaunchTicket) -> SupervisorActionResult:
+        """执行 Supervisor 已按关闭注册表选中的 deterministic recovery。"""
+        action = current.action
+        if (current.state != 'blocked' or action is None
+                or action.waiting_on not in queue.DETERMINISTIC_RECOVERY_WAITING_ON):
+            raise RuntimeError('Supervisor 交入了未登记的 deterministic blocker')
+        permit = execution_permit.permit_from_next(
+            current, action.node, action.flags)
+        return _run_token(
+            epoch, permit, launch_ticket,
+            stem=f'recovery-{permit.node}')
+
     def _run_approval_action(
             epoch: ExecutionEpoch,
             action: reviewer_tasks.ReviewerApprovalAction,
@@ -2517,6 +2531,8 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
     deterministic_callbacks = ({
         'read_operator_next': _read_operator_next,
         'run_ready_action': _run_ready_action,
+        'run_blocked_action': _run_blocked_action,
+        'deterministic_blockers': queue.DETERMINISTIC_RECOVERY_WAITING_ON,
         'run_reviewer': _run_reviewer,
         'finalize_run': _finalize_run,
     } if spawn is None else {})

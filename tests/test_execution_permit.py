@@ -173,8 +173,8 @@ def test_paid_stage4_recovery_reuses_the_typed_production_authorizer(
         node, flags, expected, monkeypatch, tmp_path):
     _stable(monkeypatch)
     current = _next(
-        tmp_path, state='blocked', node='stage4.plan',
-        waiting_on=Q.WAITING_ON_STAGE4_DESIGN_REVIEW)
+        tmp_path, state='blocked', node='stage4.design',
+        waiting_on=Q.WAITING_ON_STAGE4_DESIGN_ACTION)
     calls = []
     monkeypatch.setattr(
         P.approvals, 'resolve_design_action',

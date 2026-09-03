@@ -10,6 +10,9 @@
  * 合不合格永远看各层屏的 badge，这一屏不做判定。
  */
 export type RunBeacon = 'pending' | 'running' | 'ok' | 'landed_red' | 'failed'
+export type RunResumeFrontierState = 'ready' | 'blocked' | 'pipeline_complete' | 'unknown'
+export type RunNextHandler = 'code' | 'commander' | 'executor' | 'human' | 'none' | 'unknown'
+export type RunResumeVerdict = 'run' | 'skip' | 'redo' | 'unknown' | 'legacy_incompatible'
 
 export interface RunStep {
   seq: number
@@ -38,8 +41,26 @@ export interface RunEvent {
   note: string | null
 }
 
+/** 后端 operator 在同一快照上给出的续跑点；前端不从信标或 paid 字段反推。 */
+export interface RunResumeFrontier {
+  state: RunResumeFrontierState
+  node: string | null
+  seq: number | null
+  label: string | null
+  resume_verdict: RunResumeVerdict | null
+  why: string
+  waiting_on: string | null
+  paid: boolean | null
+  writes: string | null
+  next_handler: RunNextHandler
+  verified_skipped_nodes: string[]
+  verified_skipped_count: number
+}
+
 export interface RunProgress {
   sid: string
+  /** 当前真正续跑点、已越过前缀与下一处理者，全部由后端 operator 判定。 */
+  resume_frontier: RunResumeFrontier
   /** 与后端 NODES 逐项一致，按处理链顺序。 */
   steps: RunStep[]
   /** 来自产物盘的真实完成度；书目录还没建时全是 null（不 404，进度屏照样能开） */

@@ -31,6 +31,20 @@
   "unknown",
   "complete"
  ],
+ "run_resume_frontier_states": [
+  "ready",
+  "blocked",
+  "pipeline_complete",
+  "unknown"
+ ],
+ "run_next_handlers": [
+  "code",
+  "commander",
+  "executor",
+  "human",
+  "none",
+  "unknown"
+ ],
  "freshness_reason": [
   "no_provenance",
   "no_inputs",

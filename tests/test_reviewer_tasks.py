@@ -114,6 +114,102 @@ def test_design_template_projects_to_compact_single_token_request() -> None:
     assert 'candidate_sha256' not in json.dumps(payload)
 
 
+def test_stage4_structure_replan_is_a_design_resolution_task() -> None:
+    assert reviewer_tasks.is_registered(
+        queue.WAITING_ON_STAGE4_STRUCTURE_REPLAN) is True
+    assert reviewer_tasks._APPROVAL_FOR_BLOCKER[
+        queue.WAITING_ON_STAGE4_STRUCTURE_REPLAN] == {'design'}
+
+
+def test_stage4_structure_replan_workpack_cross_reads_b_decision_and_a(
+        monkeypatch) -> None:
+    calls: list[list[str]] = []
+    current_b = {
+        'review_token': 's4sr1_' + 'b' * 64,
+        'chapters': [{
+            'output_ordinal': 4,
+            'decision': 'request_replan',
+            'reason': '当前动作与台词的因果顺序不成立',
+        }],
+    }
+
+    def command(argv: list[str]):
+        calls.append(argv)
+        joined = ' '.join(argv)
+        if 'workpack design' in joined:
+            return {'kind': 'design-workpack'}
+        if 'template design' in joined:
+            return {'kind': 'design-template'}
+        if 'workpack structure' in joined:
+            return {'kind': 'structure-workpack'}
+        if 'approval show' in joined:
+            return {'structure': {
+                'state': 'replan_requested',
+                'current_decision': current_b,
+                'history': [current_b],
+            }}
+        raise AssertionError(argv)
+
+    monkeypatch.setattr(reviewer_tasks, '_json_command', command)
+    pack = reviewer_tasks._workpack(
+        'base', '42', queue.WAITING_ON_STAGE4_STRUCTURE_REPLAN,
+        review_run_id='review-run')
+
+    assert pack['design'] == {'kind': 'design-workpack'}
+    assert pack['structure'] == {'kind': 'structure-workpack'}
+    assert pack['structure_replan_decision'] == current_b
+    assert '_design_template' in pack
+    assert sum('approval show' in ' '.join(argv) for argv in calls) == 1
+
+
+def test_stage4_resolution_loader_rejects_noop_accept_and_accepts_typed_replan(
+        tmp_path) -> None:
+    """回到 A 必须形成新修订票；原样接受不能制造“已处理”的假进展。"""
+    current = _current(queue.WAITING_ON_STAGE4_STRUCTURE_REPLAN)
+    request = reviewer_tasks._request_wrapper(
+        current, queue.WAITING_ON_STAGE4_STRUCTURE_REPLAN, {
+            'kind': 'approval',
+            'surface': 'design',
+            'payload': {
+                'actor': 'agent:novel-pipeline-operator',
+                'reviewer_kind': 'delegated_operator',
+                'review_run_id': 'supervisor-stage4-resolution',
+                'general_reason': '已交叉复核 B 结构拒绝与当前 A 主体',
+                'review_token': 's4dr1_' + 'c' * 64,
+                'strategy': {
+                    'decision': 'accept',
+                    'reason': '策略主体不变',
+                    'replan_constraints': [],
+                },
+                'chapters': [{
+                    'output_ordinal': 1,
+                    'decision': 'accept',
+                    'reason': '当前章不改',
+                    'constraints': [],
+                }],
+            },
+        })
+    path = tmp_path / 'stage4-resolution.json'
+    path.write_text(json.dumps(request), encoding='utf-8')
+
+    with pytest.raises(reviewer_tasks.ReviewerTaskError, match='all-accept'):
+        reviewer_tasks.load_action(path, current)
+
+    request['action']['payload']['strategy'] = {
+        'decision': 'request_replan',
+        'reason': 'B 的逐章结构拒绝证明整书策略需要重建',
+        'replan_constraints': [{
+            'kind': 'replace_reconstruction_strategy',
+            'chapter_ordinals': [],
+        }],
+    }
+    path.write_text(json.dumps(request), encoding='utf-8')
+
+    action = reviewer_tasks.load_action(path, current)
+    assert action.surface == 'design'
+    assert action.payload['strategy']['decision'] == 'request_replan'
+
+
 def test_stage5_template_projects_only_current_targets_and_human_rulings() -> None:
     template = Stage5ClosureTemplate.model_validate({
         'actor': '(填写执行人)', 'reason': '(填写整书闭合理由)',

@@ -337,8 +337,10 @@ byte-lock owner lease，并持有到 ended/书锁收口的最外层 finally；he
 关闭该 execution 的 claim 窗；claim 与 close 共用同一个 append transaction，所以 close 后迟到 claim
 必拒，close 前成功 claim 必留在 active 集合里等待 release。双面 drain 正常闭合后追加 `drained`；
 RunSupervisor 随后重读 `operator next`：仍 ready 时由确定性主路直接消费同快照 execution token，
-不会启动或续跑 Commander；只有命中关闭 `reviewer_tasks` 注册表的 blocker 才以 immutable workpack
-进入同 epoch 的 Commander exact-resume turn。只有显式、hash-bound 的孤儿恢复才追加 `reconciled`。
+不会启动或续跑 Commander；命中 `DETERMINISTIC_RECOVERY_WAITING_ON` 的 blocker 时现场铸 exact
+recovery permit 并直接交 Executor，同样不启动 Commander；只有命中关闭 `reviewer_tasks` 注册表的
+blocker 才以 immutable workpack 进入同 epoch 的 Commander exact-resume turn。只有显式、hash-bound
+的孤儿恢复才追加 `reconciled`。
 
 `CommanderAdmissionEvent` 的 v1 wire 为：
 
@@ -556,6 +558,27 @@ stale。producer 输出汇总为 `file_changed`、策略未登记或参数不唯
 > 且没有任何文档说明是有意放弃**——今天原型的 `n5_write <book>` 缺省就是
 > 全部输出章重新付费，唯一兜底是 `.llm_cache/`。
 > `skip` 是那条「已存在即跳过」，`redo` 是那条「漂移检测」。
+
+### 4.2 运行页的权威续跑前沿
+
+`GET /api/novels/:sid/run` 除信标时间线外必须返回 `resume_frontier`。它与 `operator next`
+复用同一次 `NovelOverview + ApprovalDoc + queue planner` 快照；信标只回答历史命令有没有打点，
+不能用来猜“现在从哪续”。书目录尚未形成时唯一允许的状态是 `unknown`。
+
+| 字段 | 内容 |
+|---|---|
+| `state` | `ready / blocked / pipeline_complete / unknown`；前三项来自 operator lane，最后一项只表示尚无法形成书级快照 |
+| `node / seq / label` | 当前真实续跑点，必须逐字来自 `NODES`；完成或 unknown 时全为空 |
+| `resume_verdict / why / waiting_on` | planner 对当前动作的判定、证据说明与 blocker；UI 不重算 |
+| `paid / writes` | exact node/flags 的登记贵贱与写盘效果；不是前端估算 |
+| `next_handler` | 后端闭合投影：免费 ready=`code`、付费 ready=`executor`、登记的确定性恢复=`executor`、reviewer blocker=`commander`、其余 blocker=`human`、终态=`none`、未知=`unknown` |
+| `verified_skipped_nodes / verified_skipped_count` | 同一 planner 快照已明确无需再次执行、且严格位于续跑点之前的有序前缀；只能来自 `NODES`，数量必须一致 |
+
+运行页默认折叠 `verified_skipped_nodes`，但允许展开审计；这只是呈现压缩，不删除步骤和信标历史。
+例如 Stage4B 的 `request_replan` 会先显示 `stage4.context` 上的
+`approval:stage4-structure-replan / commander`，形成新的 typed A 决定后再显示
+`stage4.design / recovery:stage4-design-action / executor`。它不会把 Stage0～Stage2 的历史 pending
+信标画成“必须从头执行”，也不会把既有 typed 决定误报成再次调用 Commander。
 
 ---
 

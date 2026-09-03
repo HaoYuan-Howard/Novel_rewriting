@@ -82,6 +82,8 @@ WAITING_ON_STAGE4_DESIGN_REVIEW = 'approval:stage4-design-review'
 WAITING_ON_FROZEN_V6_DESIGN_AUTHORITY = \
     'legacy_frozen_v6_design_authority_unavailable'
 WAITING_ON_STAGE4_BINDING_RESOLUTION = 'approval:stage4-binding-resolution'
+WAITING_ON_STAGE4_STRUCTURE_REPLAN = 'approval:stage4-structure-replan'
+WAITING_ON_STAGE4_DESIGN_ACTION = 'recovery:stage4-design-action'
 WAITING_ON_STAGE4_STRUCTURE_REVIEW = 'approval:stage4-structure-review'
 WAITING_ON_FROZEN_V6_CONTEXT = 'legacy_frozen_v6_context_unavailable'
 # 兼容只 import 常量名的旧调用者；值已收敛到两张真实决定面。
@@ -94,6 +96,13 @@ WAITING_ON_LEGACY = 'legacy_incompatible'
 WAITING_ON_RESUME_DECISION = 'resume:manual-decision'
 WAITING_ON_RESTART_CONFIRMATION = 'queue:restart-confirmation'
 WAITING_ON_REPLAN = 'queue:plan-changed'
+
+#: 已有 typed 人审决定、只差按它执行的 blocker。它不是新的 Commander 任务：
+#: Supervisor 必须现场铸 recovery permit，再把 exact node/flags 交给 Executor。
+#: 独立成闭集，避免任何普通人工 blocker 因“碰巧带 steps”被自动执行。
+DETERMINISTIC_RECOVERY_WAITING_ON: frozenset[str] = frozenset({
+    WAITING_ON_STAGE4_DESIGN_ACTION,
+})
 
 
 def chapters_from_flags(flags: Sequence[str]) -> list[int] | None:
@@ -253,6 +262,7 @@ def plan_book_from_overview(
 
     for node in nodes_up_to(until_stage):
         spec = NODES[node]
+        stage4_design_action_flags: tuple[str, ...] | None = None
         projection_recovery = (
             node == 'stage2.global'
             and st.stage2_projection_recovery_needed(ov)
@@ -326,6 +336,40 @@ def plan_book_from_overview(
         verdict, why = st.resume_verdict(ov, node)
         deterministic_redo_flags: tuple[str, ...] | None = None
         frozen_v6 = st.stage2_frozen_v6_subject_validated(ov)
+        if (why_blocked is None and node == 'stage4.design'
+                and verdict == st.RESUME_SKIP):
+            # A 候选仍 current 不代表 A 相已经结束：若最新 typed 决定要求 repair /
+            # replan，真正下一步是按 opaque action token 精确恢复 A。这个状态此前会
+            # 被通用 SKIP 吞掉，随后 planner 前移到 B/结构人审，续跑便反复唤醒
+            # Commander。operator 路复用冻结审批投影；普通 queue 入口只读补取一份。
+            design_doc = approval_doc
+            if design_doc is None:
+                try:
+                    design_doc = approvals.get(
+                        base, sid, include_spawns=False,
+                        operator_projection=True)
+                except (
+                    ApprovalRequired, UpstreamMissing, ArtifactUnreadable,
+                    GateBlocked, UpstreamStale, UpstreamUnproven,
+                    BlockingFindingsUnresolved,
+                ):
+                    # 普通多步 queue 入口的残缺/混合盘面仍沿既有 plan 阻塞面；
+                    # operator 已传冻结投影，不会走到这一兼容分支。
+                    design_doc = None
+            design_view = (
+                None if design_doc is None else design_doc.design_review)
+            if design_view is not None and design_view.state in (
+                    'repair_requested', 'strategy_replan_requested'):
+                token = design_view.action_review_token
+                if token is None:
+                    raise ArtifactUnreadable(
+                        'Stage4A typed 修订态缺 action review token')
+                stage4_design_action_flags = (
+                    ('--replan', '--review-token', token)
+                    if design_view.state == 'strategy_replan_requested'
+                    else ('--review-token', token)
+                )
+                why_blocked = WAITING_ON_STAGE4_DESIGN_ACTION
         if (
             why_blocked is None
             and verdict == st.RESUME_RUN
@@ -399,12 +443,27 @@ def plan_book_from_overview(
                 # 调 current v7 producer。发布一条必然失败的免费动作仍会浪费一轮
                 # Commander，并让“只读兼容”看起来像迁移能力。
                 why_blocked = WAITING_ON_FROZEN_V6_CONTEXT
+            context_approval_doc = approval_doc
+            if context_approval_doc is None:
+                # 普通 queue 入口不像 operator 那样自带冻结审批投影，但仍要
+                # 区分「B 尚未审」与「B 已明确 request_replan」。只调用
+                # authorize_context 会把两者都压成 ApprovalRequired，随后又把
+                # 后者错送回同一份 B 给 Commander 重审。
+                try:
+                    context_approval_doc = approvals.get(
+                        base, sid, include_spawns=False,
+                        operator_projection=True)
+                except (
+                    ApprovalRequired, UpstreamMissing, ArtifactUnreadable,
+                    GateBlocked, UpstreamStale, UpstreamUnproven,
+                ):
+                    context_approval_doc = None
             context_current = (
-                approval_doc is not None
-                and approval_doc.gate['s4']
-                and approval_doc.structure.state == 'accepted'
+                context_approval_doc is not None
+                and context_approval_doc.gate['s4']
+                and context_approval_doc.structure.state == 'accepted'
             )
-            if approval_doc is None:
+            if context_approval_doc is None:
                 try:
                     approvals.authorize_context(base, sid)
                     context_current = True
@@ -414,7 +473,14 @@ def plan_book_from_overview(
                 ):
                     context_current = False
             if why_blocked is None and not context_current:
-                why_blocked = WAITING_ON_STAGE4_STRUCTURE_REVIEW
+                structure_state = (
+                    context_approval_doc.structure.state
+                    if context_approval_doc is not None else None)
+                why_blocked = (
+                    WAITING_ON_STAGE4_STRUCTURE_REPLAN
+                    if structure_state == 'replan_requested'
+                    else WAITING_ON_STAGE4_STRUCTURE_REVIEW
+                )
         if why_blocked is None and spec.stage == 'stage6':
             # Stage5 Review 通过仍不等于 Commander 已逐项闭合。只消费审批服务
             # 的 current view；缺回执、旧主体、blocked workpack 与 read failure
@@ -465,7 +531,9 @@ def plan_book_from_overview(
         # 称名投影是 Global 的确定性伴生产物。缺/坏/stale 时只冻结免费物化
         # 命令，绝不能因 ``produces`` 少一份而把默认付费 Global argv 排进队列。
         flags: list[str] = (
-            list(deterministic_redo_flags)
+            list(stage4_design_action_flags)
+            if stage4_design_action_flags is not None
+            else list(deterministic_redo_flags)
             if deterministic_redo_flags is not None
             else ['--renormalize']
             if projection_recovery or legacy_blueprint_recovery else []
@@ -521,6 +589,7 @@ def plan_book_from_overview(
             WAITING_ON_STAGE2_EDIT_CORRECTION,
             WAITING_ON_STAGE4_DESIGN_REVIEW,
             WAITING_ON_STAGE4_BINDING_RESOLUTION,
+            WAITING_ON_STAGE4_STRUCTURE_REPLAN,
             WAITING_ON_STAGE4_STRUCTURE_REVIEW,
             WAITING_ON_FROZEN_V6_DESIGN_AUTHORITY,
             WAITING_ON_FROZEN_V6_CONTEXT,
@@ -528,6 +597,11 @@ def plan_book_from_overview(
         ):
             # 人审/相位决定完成前，当前队列快照里不放下游付费 argv。状态改变后
             # 必须重新 plan，不能把旧快照重解释为新授权。
+            steps = []
+        if (why_blocked == WAITING_ON_STAGE4_DESIGN_ACTION
+                and node != 'stage4.design'):
+            # 只有当前 A 恢复动作本身携带 exact argv；同一 blocker 向下游传播时
+            # 仍不得提前冻结 B/写作等命令或把它们计入本轮付费面。
             steps = []
 
         if verdict == st.RESUME_LEGACY or why_blocked == WAITING_ON_RESUME_DECISION:
@@ -613,6 +687,19 @@ def _blocked_why(
             'Stage4B 已对当前 Stage4A 候选落盘 fresh typed infeasible 结论；'
             '队列不会再次暴露或执行同一个 B，也不会替人猜 repair/replan。'
             '请先提交当前 hash-bound design resolution，执行对应 A 修订后再单独确认 B；'
+            f'{verdict_why}')
+    if waiting_on == WAITING_ON_STAGE4_STRUCTURE_REPLAN:
+        return (
+            'Stage4B 当前最终结构决定已有 request_replan；不能再次审同一份 B，'
+            '也不能把结构理由直接当模型指令。先由 Commander 在当前 A 工作包上'
+            '提交新的 typed request_repair/request_replan 决定；决定落盘后只由 '
+            'Executor 按 opaque token 精确恢复 Stage4A；'
+            f'{verdict_why}')
+    if waiting_on == WAITING_ON_STAGE4_DESIGN_ACTION:
+        return (
+            'Stage4A 已有当前 hash-bound typed 修订决定；不再调用 Commander。'
+            '下一步只按该决定发布的 opaque token 启动 Executor 精确 repair/replan，'
+            '完成后再重新规划并单独确认 Stage4B；'
             f'{verdict_why}')
     if waiting_on == WAITING_ON_STAGE4_STRUCTURE_REVIEW:
         return (
@@ -1645,10 +1732,13 @@ __all__ = [
     'STAGE2_REVIEWER_WAITING_ON',
     'WAITING_ON_STAGE4_DESIGN_REVIEW',
     'WAITING_ON_STAGE4_BINDING_RESOLUTION',
+    'WAITING_ON_STAGE4_STRUCTURE_REPLAN',
+    'WAITING_ON_STAGE4_DESIGN_ACTION',
     'WAITING_ON_STAGE4_STRUCTURE_REVIEW',
     'WAITING_ON_STAGE4_PHASE_APPROVAL', 'WAITING_ON_STAGE4_REPLAN',
     'WAITING_ON_WRITING_APPROVAL', 'WAITING_ON_REVIEW', 'WAITING_ON_LEGACY',
     'WAITING_ON_RESUME_DECISION', 'WAITING_ON_RESTART_CONFIRMATION', 'WAITING_ON_REPLAN',
+    'DETERMINISTIC_RECOVERY_WAITING_ON',
     'QueueRegistry', 'append_event', 'cancel', 'confirm', 'create', 'fold',
     'fold_counts', 'frozen_resume_commands', 'new_queue_id', 'nodes_up_to', 'plan', 'plan_book',
     'queue_path', 'read_events', 'records', 'resume_incomplete', 'run', 'start',

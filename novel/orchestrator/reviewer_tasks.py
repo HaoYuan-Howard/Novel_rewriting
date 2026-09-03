@@ -101,12 +101,20 @@ _NODE_FOR_BLOCKER: dict[str, frozenset[str]] = {
 _APPROVAL_FOR_BLOCKER: dict[str, frozenset[str]] = {
     queue.WAITING_ON_STAGE2_REVIEW: frozenset({'blueprint_seen'}),
     queue.WAITING_ON_STAGE4_DESIGN_REVIEW: frozenset({'design'}),
+    queue.WAITING_ON_STAGE4_BINDING_RESOLUTION: frozenset({'design'}),
+    queue.WAITING_ON_STAGE4_STRUCTURE_REPLAN: frozenset({'design'}),
     queue.WAITING_ON_STAGE4_STRUCTURE_REVIEW: frozenset({'structure'}),
     queue.WAITING_ON_WRITING_APPROVAL: frozenset({'writing'}),
     queue.WAITING_ON_STAGE5_CLOSURE: frozenset({'stage5'}),
 }
 
 _REGISTERED = frozenset(_NODE_FOR_BLOCKER) | frozenset(_APPROVAL_FOR_BLOCKER)
+
+_STAGE4_DESIGN_DECISION_BLOCKERS = frozenset({
+    queue.WAITING_ON_STAGE4_DESIGN_REVIEW,
+    queue.WAITING_ON_STAGE4_BINDING_RESOLUTION,
+    queue.WAITING_ON_STAGE4_STRUCTURE_REPLAN,
+})
 
 
 def is_registered(waiting_on: str) -> bool:
@@ -142,6 +150,25 @@ def _approval_view(cli: list[str], base: str, sid: str, key: str) -> Any:
     # history 是审计面，不是当前 Commander 的阅读面。
     return {name: item for name, item in value.items()
             if name not in {'history', 'current_decision'}}
+
+
+def _approval_current_decision(
+    cli: list[str], base: str, sid: str, key: str, *, expected_state: str,
+) -> dict[str, Any]:
+    """只取一个当前决定；历史与其他审批面都不进入 Commander 材料。"""
+    shown = _json_command([
+        *cli, 'approval', 'show', sid, '--base', base])
+    if not isinstance(shown, dict) or not isinstance(shown.get(key), dict):
+        raise ReviewerTaskError(f'approval show 缺少 {key} 视图')
+    value = shown[key]
+    if value.get('state') != expected_state:
+        raise ReviewerTaskError(
+            f'approval show.{key}.state 已不是 {expected_state!r}')
+    decision = value.get('current_decision')
+    if not isinstance(decision, dict):
+        raise ReviewerTaskError(
+            f'approval show.{key} 缺当前 {expected_state} 决定')
+    return decision
 
 
 def _workpack(
@@ -219,8 +246,8 @@ def _workpack(
                 *cli, 'run', 'stage2.blueprint', sid, '--base', base,
                 '--emit-review-workpack'])
         return pack
-    if waiting_on == queue.WAITING_ON_STAGE4_DESIGN_REVIEW:
-        return {
+    if waiting_on in _STAGE4_DESIGN_DECISION_BLOCKERS:
+        pack = {
             'design': _json_command([
                 *cli, 'approval', 'workpack', 'design', sid, '--base', base]),
             # 只供确定性封装层投影 compact POST；不再进 prompt
@@ -232,6 +259,18 @@ def _workpack(
                 '--review-run-id', review_run_id,
             ]),
         }
+        if waiting_on == queue.WAITING_ON_STAGE4_STRUCTURE_REPLAN:
+            # B 的正式 workpack 与人类逐章拒绝理由是“为什么要回 A”的证据；
+            # 它们只供 Commander 形成新的 closed typed A 决定，不能直接进 Executor。
+            pack.update({
+                'structure': _json_command([
+                    *cli, 'approval', 'workpack', 'structure', sid,
+                    '--base', base]),
+                'structure_replan_decision': _approval_current_decision(
+                    cli, base, sid, 'structure',
+                    expected_state='replan_requested'),
+            })
+        return pack
     if waiting_on == queue.WAITING_ON_STAGE4_STRUCTURE_REVIEW:
         return {
             'structure': _json_command([
@@ -605,7 +644,7 @@ def _submission_options(
                 'action.surface', 'action.payload.review_token'],
         )]
 
-    if waiting_on == queue.WAITING_ON_STAGE4_DESIGN_REVIEW:
+    if waiting_on in _STAGE4_DESIGN_DECISION_BLOCKERS:
         source = DesignReviewTemplate.model_validate(pack['_design_template'])
         payload = _compact_design_payload(source)
         request = _request_wrapper(current, waiting_on, {
@@ -660,6 +699,12 @@ def _submission_options(
                     for code in DESIGN_REPAIR_CODES
                 },
                 'narrative_relation.effect_by_kind': relation_effects,
+                'resolution_requirement': (
+                    '当前不是首次 A 审阅；必须至少提交一项 request_repair，或把策略'
+                    '提交为 request_replan。原样 all-accept 不会关闭当前恢复 blocker。'
+                    if waiting_on != queue.WAITING_ON_STAGE4_DESIGN_REVIEW
+                    else '按当前 A 主体逐项审阅，可接受或提交 typed 修订决定。'
+                ),
             },
         )]
 
@@ -823,6 +868,16 @@ def build_task(
                 'failed_edit_sha256': correction.get('failed_edit_sha256'),
                 'invalid_sha256': correction.get('invalid_sha256'),
             })
+    elif waiting_on in {
+        queue.WAITING_ON_STAGE4_BINDING_RESOLUTION,
+        queue.WAITING_ON_STAGE4_STRUCTURE_REPLAN,
+    }:
+        # action_sha 包含运输 surface；恢复判重认的应是 A/B 业务材料本身。
+        # 两种 resolution 都只提交新的 design 决定，不把 B 理由直接送 Executor。
+        business = {
+            'waiting_on': waiting_on,
+            'materials': _visible_materials(pack),
+        }
     else:
         business = {
             'waiting_on': waiting_on,
@@ -837,6 +892,18 @@ def build_task(
         '也是最后一次真实 Commander 调用；只修 submission_options 中那份失败 edit，'
         '不要从头生成，不会再有第三次纠正。\n'
         if waiting_on == queue.WAITING_ON_STAGE2_EDIT_CORRECTION else '')
+    stage4_resolution_instruction = (
+        '\n当前不是再次审阅同一份 Stage4B。请把 materials 中已经落盘的 B '
+        '不可行证据或最终结构 request_replan 决定，与当前 Stage4A design 工作包'
+        '交叉阅读，形成一份新的 Stage4A typed 决定。必须至少有一章 '
+        'request_repair，或策略为 request_replan；原样 all-accept 是无进展动作，'
+        '会被确定性 loader 拒绝。只使用模板发布的 closed constraint、scene 与 '
+        'opaque alias，不把自由文本理由改写成 Executor 指令。决定落盘后 '
+        'Supervisor 会另取精确恢复许可，本轮 Commander 不启动 Executor。\n'
+        if waiting_on in {
+            queue.WAITING_ON_STAGE4_BINDING_RESOLUTION,
+            queue.WAITING_ON_STAGE4_STRUCTURE_REPLAN,
+        } else '')
     instructions = f"""你是本轮唯一 Commander/Reviewer，只审阅下面这份不可变工作包。
 先逐项审阅，再做一次跨项复核；两遍完成后只提交一个 typed 判断。你不是流水线调度器：
 不得启动任何小说节点，不得启动 Executor，不得维护 Markdown 报告，不得调用遥测，
@@ -863,6 +930,7 @@ approval:blueprint_seen；Supervisor 会用你实际读过的 Blueprint token �
 Supervisor 在两轮之间精确 resume 同一 Commander provider session；不要重新定位
 已经读过的材料。
 {correction_instruction}
+{stage4_resolution_instruction}
 """
     # 只守我们自己的静态能力边界；正文/证据是不可信数据，不能因其合法出现
     # 工具名就让 reviewer 主路假红。
@@ -1236,6 +1304,20 @@ def load_action(
         except (KeyError, ValidationError) as exc:
             raise ReviewerTaskError(
                 f'{surface} reviewer payload 不符合 typed 契约') from exc
+        if (
+            surface == 'design'
+            and waiting_on in {
+                queue.WAITING_ON_STAGE4_BINDING_RESOLUTION,
+                queue.WAITING_ON_STAGE4_STRUCTURE_REPLAN,
+            }
+            and payload['strategy']['decision'] == 'accept'
+            and all(
+                row['decision'] == 'accept' for row in payload['chapters']
+            )
+        ):
+            raise ReviewerTaskError(
+                'Stage4 resolution 不能原样提交 all-accept；必须形成至少一项 '
+                'typed request_repair 或 request_replan')
         return ReviewerApprovalAction(
             kind='approval', surface=surface, payload=payload)
     raise ReviewerTaskError('reviewer request.action.kind 只能是 node 或 approval')

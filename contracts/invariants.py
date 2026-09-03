@@ -58,6 +58,17 @@ RESUME_VERDICTS: Final = (
 #: 待跑节点，不冒充终审包已经完成或整书已达到 delivery ready。
 OPERATOR_NEXT_STATES: Final = ('ready', 'blocked', 'pipeline_complete')
 
+#: 运行页对确定性 operator 下一动作的只读投影。书目录尚未形成时保留
+#: ``unknown``，不能把“还判不了”冒充从 stage0 开始；其余三态逐字复用
+#: ``OPERATOR_NEXT_STATES``。
+RUN_RESUME_FRONTIER_STATES: Final = (*OPERATOR_NEXT_STATES, 'unknown')
+
+#: 下一动作真正由谁承接。``code`` 是 0 成本确定性节点，``human`` 是没有
+#: 登记 Commander 任务的人工/恢复边界；前端只呈现，不从 paid/waiting_on 猜。
+RUN_NEXT_HANDLERS: Final = (
+    'code', 'commander', 'executor', 'human', 'none', 'unknown',
+)
+
 #: operator 执行许可的两种来源。``ready`` 只许可当前 ``operator next``
 #: 精确给出的 node/flags；``recovery`` 只许可生产策略表登记的阻塞恢复动作。
 #: 两者必须分开：blocked action 的 hash 只描述“为什么停”，不能冒充恢复命令授权。
