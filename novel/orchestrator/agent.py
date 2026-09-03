@@ -1336,6 +1336,58 @@ def _assess_delivery(base: str, sid: str, *, code_version: str,
                     f'{type(exc).__name__}: {exc}'))
 
 
+def _delivery_pause_note(
+        base: str, sid: str, epoch: ExecutionEpoch,
+        node: str, rc: int,
+) -> str | None:
+    """只从 producer 自己落下并严格校验的凭据开放同 run resume。"""
+    if rc != 2 or node not in ('stage2.blueprint', 'stage4.plan'):
+        return None
+    novel_dir = paths.find_novel_dir(base, sid)
+    if novel_dir is None:
+        return None
+    if node == 'stage2.blueprint':
+        from novel.llm import stage2_runs
+        recovery = stage2_runs.read_delivery_recovery(
+            novel_dir, epoch.epoch_id, sid=sid, code=epoch.code_version)
+        label = 'Stage2 blueprint'
+        unit = '章'
+    else:
+        from novel.llm import stage4_runs
+        recovery = stage4_runs.read_plan_delivery_recovery(
+            novel_dir, epoch.epoch_id, sid=sid, code=epoch.code_version)
+        label = 'Stage4 plan'
+        unit = '个歧义章'
+    if recovery is None:
+        return None
+    completed = recovery['completed_chapters']
+    pending = recovery['pending_chapters']
+    failures = recovery['failures']
+    kind_labels = {
+        'authentication': '登录状态失效',
+        'connection': '网络连接中断',
+        'provider_transient': '供应商瞬时拒绝',
+        'rate_limit': '供应商限流',
+        'server_error': '供应商服务异常',
+        'timeout': '请求超时',
+        'usage_limit': '账号用量窗口已满',
+    }
+    failure_labels = '、'.join(sorted({
+        f'{kind_labels.get(str(row["error_kind"]), row["error_kind"])}'
+        f'{"/HTTP " + str(row["status"]) if row["status"] else ""}'
+        f'/已尝试 {row["attempts"]} 次'
+        for row in failures
+    }))
+    pending_text = '、'.join(str(chapter) for chapter in pending[:12])
+    if len(pending) > 12:
+        pending_text += '…'
+    return (
+        f'{label} 的 Agent 交付暂不可用（{failure_labels}）；本轮已保留 '
+        f'{len(completed)}/{recovery["total_chapters"]} {unit} checkpoint，'
+        f'待补第 {pending_text} 章。当前 parent/epoch 保持不变；'
+        '确认账号、额度或网络恢复后点“继续”，只请求缺章。')
+
+
 def start(base: str | os.PathLike[str], sid: str, *, authorized: bool,
           egress_authorized: bool,
           profiles: PipelineAgentProfiles | None,
@@ -2142,46 +2194,6 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
             continue_ready=landed(rc), failure_detail=failure_detail,
             pause_note=pause_note)
 
-    def _stage2_delivery_pause_note(
-            epoch: ExecutionEpoch, node: str, rc: int) -> str | None:
-        """只从 Stage2 自己落下并校验过的恢复凭据开放同 run resume。"""
-        if node != 'stage2.blueprint' or rc != 2:
-            return None
-        novel_dir = paths.find_novel_dir(base, sid)
-        if novel_dir is None:
-            return None
-        from novel.llm import stage2_runs
-        recovery = stage2_runs.read_delivery_recovery(
-            novel_dir, epoch.epoch_id, sid=sid, code=epoch.code_version)
-        if recovery is None:
-            return None
-        completed = recovery['completed_chapters']
-        pending = recovery['pending_chapters']
-        failures = recovery['failures']
-        kind_labels = {
-            'authentication': '登录状态失效',
-            'connection': '网络连接中断',
-            'provider_transient': '供应商瞬时拒绝',
-            'rate_limit': '供应商限流',
-            'server_error': '供应商服务异常',
-            'timeout': '请求超时',
-            'usage_limit': '账号用量窗口已满',
-        }
-        failure_labels = '、'.join(sorted({
-            f'{kind_labels.get(str(row["error_kind"]), row["error_kind"])}'
-            f'{"/HTTP " + str(row["status"]) if row["status"] else ""}'
-            f'/已尝试 {row["attempts"]} 次'
-            for row in failures
-        }))
-        pending_text = '、'.join(str(chapter) for chapter in pending[:12])
-        if len(pending) > 12:
-            pending_text += '…'
-        return (
-            f'Stage2 blueprint 的 Agent 交付暂不可用（{failure_labels}）；本相已保留 '
-            f'{len(completed)}/{recovery["total_chapters"]} 章 checkpoint，'
-            f'待补第 {pending_text} 章。当前 parent/epoch 保持不变；'
-            '确认账号、额度或网络恢复后点“继续”，只请求缺章。')
-
     def _run_token(
             epoch: ExecutionEpoch, permit: ExecutionPermit,
             launch_ticket: LaunchTicket, *, stem: str) -> SupervisorActionResult:
@@ -2190,7 +2202,7 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
             epoch, argv, launch_ticket, label=stem)
         pause_note = (
             None if timed_out else
-            _stage2_delivery_pause_note(epoch, permit.node, rc))
+            _delivery_pause_note(base, sid, epoch, permit.node, rc))
         return _action_outcome(
             epoch, rc, timed_out, label=stem,
             failure_detail=failure_detail, pause_note=pause_note)

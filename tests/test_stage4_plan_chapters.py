@@ -26,8 +26,12 @@ from contracts.artifacts import (
 from contracts.schema.stage1 import MainText
 from contracts.schema.stage4 import EvidenceBinding
 from novel import paths, prov
-from novel.agents import AgentDriver, AgentProbe, AgentRequest, AgentTurn, AgentUsage
-from novel.llm import stage4_runs
+from novel.agents import (
+    AgentCommandError, AgentDriver, AgentProbe, AgentRequest, AgentTurn,
+    AgentUsage,
+)
+from novel.agents.session_client import AgentDeliveryUnavailable
+from novel.llm import agent_runs, stage4_runs
 from novel.llm import response_repair
 from novel.llm import typed_failures
 from novel.errors import ProvenanceRefused, TerminalState
@@ -712,6 +716,320 @@ def test_ambiguous_chapters_really_run_concurrently_and_aggregate_in_order(
         EvidenceBinding, STAGE4_EVIDENCE_BINDING)
     assert [row.output_ordinal for row in binding.chapters or []] == sorted(
         row.output_ordinal for row in binding.chapters or [])
+
+
+class _DeliveryRecoveryDriver(AgentDriver):
+    """按章返回合法响应，或模拟 Claude 五小时窗口已满。"""
+
+    driver = 'codex'
+    provider = 'openai'
+
+    def __init__(
+            self, chapter: int, *, outcome: str = 'success',
+            fixed_response: dict[str, Any] | None = None,
+            session_id: str | None = None,
+    ) -> None:
+        self.chapter = chapter
+        self.outcome = outcome
+        self.calls = 0
+        self.start_calls = 0
+        self.resume_calls = 0
+        self.session_id = session_id or f'provider-delivery-{chapter}'
+        self.fixed_response = fixed_response
+        self.last_response: dict[str, Any] | None = None
+
+    def probe(self) -> AgentProbe:
+        return AgentProbe(
+            driver='codex', provider='openai', executable='fake-codex',
+            available=True, version='0.test')
+
+    def _answer(self, request: AgentRequest) -> AgentTurn:
+        if self.outcome == 'forbid':
+            raise AssertionError(
+                f'ch{self.chapter} checkpoint/adoption 恢复不得 start wire')
+        if self.outcome in {'usage_limit', 'resume_usage_limit'}:
+            raise AgentCommandError(
+                'Claude session limit', returncode=1,
+                usage=AgentUsage(), error_kind='usage_limit',
+                status=429, retryable=False)
+        if self.fixed_response is None:
+            lines = request.prompt.splitlines()
+            ambiguities = json.loads(lines[
+                lines.index(plan.prompts.BLOCK_CHAPTER_AMBIGUITIES) + 1])
+            resolutions = []
+            for row in ambiguities:
+                value: dict[str, Any] = {'ambiguity_id': row['ambiguity_id']}
+                if row['kind'] == 'stage_signature_conflict':
+                    value['stage_ref'] = row['candidates'][0]
+                else:
+                    value['candidate_scene_id'] = row['candidates'][0]
+                resolutions.append(value)
+            payload = {'resolutions': resolutions, 'binding_concerns': []}
+        else:
+            payload = self.fixed_response
+        self.last_response = json.loads(json.dumps(payload))
+        return AgentTurn(
+            session_id=self.session_id,
+            content=json.dumps(payload,
+                ensure_ascii=False, sort_keys=True, separators=(',', ':')),
+            model='gpt-5.6-sol', actual_reasoning_effort='high',
+            usage=AgentUsage(prompt_tokens=10, completion_tokens=5),
+            turn_count=1)
+
+    def start(self, profile, request) -> AgentTurn:
+        self.calls += 1
+        self.start_calls += 1
+        if self.outcome == 'resume_usage_limit':
+            original = self.outcome
+            self.outcome = 'success'
+            try:
+                return self._answer(request)
+            finally:
+                self.outcome = original
+        return self._answer(request)
+
+    def resume(self, profile, session_id, request) -> AgentTurn:
+        self.calls += 1
+        self.resume_calls += 1
+        if self.outcome != 'resume_usage_limit':
+            raise AssertionError('本例不应 resume provider session')
+        return self._answer(request)
+
+    def cancel(self, session_id=None) -> bool:
+        return False
+
+    def close(self) -> None:
+        return None
+
+
+def _delivery_recovery_book(tmp_path, monkeypatch):
+    book = _book(tmp_path)
+    blueprints = _seed_current_stage2(book)
+    bp_raw = blueprints.model_dump(by_alias=True, mode='json')
+    _land_design(book, bp_raw)
+    monkeypatch.setattr(
+        plan, 'build_mechanical_baseline',
+        _inject_stage_ambiguities(plan.build_mechanical_baseline, (1, 2, 3)))
+    return book
+
+
+def test_mixed_batch_failure_does_not_hide_non_delivery_error() -> None:
+    delivery = AgentDeliveryUnavailable(
+        'Claude session limit', error_kind='usage_limit', attempts=1,
+        status=429, same_run_resumable=True)
+    integrity = ProvenanceRefused('checkpoint identity drift')
+    with pytest.raises(ProvenanceRefused, match='identity drift'):
+        plan._raise_plan_batch_error(
+            [(1, delivery), (2, integrity)], delivery_paused=False)
+
+
+def test_delivery_limit_stops_new_admission_and_same_run_only_fills_pending(
+        tmp_path, monkeypatch,
+) -> None:
+    book = _delivery_recovery_book(tmp_path, monkeypatch)
+    first_ctx = _ctx(book, 'stage4.plan')
+    first_drivers = {
+        1: _DeliveryRecoveryDriver(1),
+        2: _DeliveryRecoveryDriver(2, outcome='usage_limit'),
+        3: _DeliveryRecoveryDriver(3, outcome='forbid'),
+    }
+    first_pool = Stage4PlanSessionPool(
+        first_ctx,
+        driver_factory=lambda _purpose, chapter: first_drivers[int(chapter)],
+        concurrency=1)
+    with pytest.raises(AgentDeliveryUnavailable) as stopped:
+        plan.run_plan(first_ctx, first_pool)
+    first_pool.finish(
+        process_state='failed', delivery_state='unknown',
+        error_kind=stopped.value.error_kind)
+    first_pool.close()
+
+    assert [first_drivers[index].calls for index in (1, 2, 3)] == [1, 1, 0]
+    recovery = stage4_runs.read_plan_delivery_recovery(
+        book, first_ctx.run_id, sid=first_ctx.sid, code=first_ctx.code)
+    assert recovery is not None
+    assert recovery['completed_chapters'] == [1]
+    assert recovery['pending_chapters'] == [2, 3]
+    assert recovery['deferred_chapters'] == [3]
+    assert recovery['failures'] == [{
+        'chapter': 2, 'error_kind': 'usage_limit',
+        'status': 429, 'attempts': 1,
+    }]
+    run_file = (paths.stage4_plan_chapter_run_path(
+        book, first_ctx.run_id, 2) / agent_runs.RUN_FILE)
+    original_run_file = run_file.read_bytes()
+    run_file.write_bytes(original_run_file + b'\n')
+    with pytest.raises(ProvenanceRefused, match=r'ch2 run\.json.*漂移'):
+        stage4_runs.read_plan_delivery_recovery(
+            book, first_ctx.run_id, sid=first_ctx.sid, code=first_ctx.code)
+    run_file.write_bytes(original_run_file)
+    from novel.orchestrator.agent import _delivery_pause_note
+    pause_note = _delivery_pause_note(
+        str(book.parent), first_ctx.sid,
+        SimpleNamespace(
+            epoch_id=first_ctx.run_id, code_version=first_ctx.code),
+        'stage4.plan', 2)
+    assert pause_note is not None
+    assert 'Stage4 plan' in pause_note
+    assert '账号用量窗口已满/HTTP 429/已尝试 1 次' in pause_note
+    assert '待补第 2、3 章' in pause_note
+    assert not ArtifactStore(first_ctx).exists(STAGE4_EVIDENCE_BINDING)
+    assert not ArtifactStore(first_ctx).exists(STAGE4_PLAN_CHAPTERS)
+
+    resumed_ctx = _ctx(
+        book, 'stage4.plan', run_id=first_ctx.run_id, code=first_ctx.code)
+    resumed_drivers = {
+        1: _DeliveryRecoveryDriver(1, outcome='forbid'),
+        2: _DeliveryRecoveryDriver(2),
+        3: _DeliveryRecoveryDriver(3),
+    }
+    resumed_pool = Stage4PlanSessionPool(
+        resumed_ctx,
+        driver_factory=lambda _purpose, chapter: resumed_drivers[int(chapter)],
+        concurrency=1)
+    report = plan.run_plan(resumed_ctx, resumed_pool)
+    resumed_pool.finish(process_state='ok', delivery_state='delivered')
+    resumed_pool.close()
+
+    assert report.passed
+    assert [resumed_drivers[index].calls for index in (1, 2, 3)] == [0, 1, 1]
+    assert stage4_runs.read_plan_delivery_recovery(
+        book, first_ctx.run_id, sid=first_ctx.sid, code=first_ctx.code) is None
+
+
+def test_delivery_pause_during_b_owner_reask_resumes_from_checkpoint_in_new_session(
+        tmp_path, monkeypatch,
+) -> None:
+    book = _delivery_recovery_book(tmp_path, monkeypatch)
+    first_ctx = _ctx(book, 'stage4.plan')
+    first_drivers = {
+        1: _DeliveryRecoveryDriver(1, outcome='resume_usage_limit'),
+        2: _DeliveryRecoveryDriver(2),
+        3: _DeliveryRecoveryDriver(3),
+    }
+    real_evaluate = plan.evaluate_plan_candidate
+    inject_failures = 1
+
+    def inject_one_b_failure(*args, **kwargs):
+        nonlocal inject_failures
+        evaluation = real_evaluate(*args, **kwargs)
+        if inject_failures == 0:
+            return evaluation
+        inject_failures -= 1
+        failure = typed_failures.make(
+            candidate_sha256=evaluation.binding_sha256,
+            code='fact_ref.stage', rule='fact_ref.stage',
+            chapter_ordinal=1, refs=['test-only'],
+            surfacing='stage4.plan')
+        return replace(
+            evaluation, hard_hits=('fact_ref.stage',),
+            typed_failures=(failure,),
+            feedback=({'rule': 'fact_ref.stage'},))
+
+    monkeypatch.setattr(plan, 'evaluate_plan_candidate', inject_one_b_failure)
+    first_pool = Stage4PlanSessionPool(
+        first_ctx,
+        driver_factory=lambda _purpose, chapter: first_drivers[int(chapter)],
+        concurrency=1)
+    with pytest.raises(AgentDeliveryUnavailable) as stopped:
+        plan.run_plan(first_ctx, first_pool)
+    first_pool.finish(
+        process_state='failed', delivery_state='unknown',
+        error_kind=stopped.value.error_kind)
+    first_pool.close()
+    assert first_drivers[1].start_calls == 1
+    assert first_drivers[1].resume_calls == 1
+    recovery = stage4_runs.read_plan_delivery_recovery(
+        book, first_ctx.run_id, sid=first_ctx.sid, code=first_ctx.code)
+    assert recovery is not None
+    assert recovery['completed_chapters'] == [2, 3]
+    assert recovery['pending_chapters'] == [1]
+
+    inject_failures = 1
+    resumed_ctx = _ctx(
+        book, 'stage4.plan', run_id=first_ctx.run_id, code=first_ctx.code)
+    resumed_drivers = {
+        1: _DeliveryRecoveryDriver(
+            1, fixed_response=first_drivers[1].last_response,
+            session_id='provider-delivery-recovered-1'),
+        2: _DeliveryRecoveryDriver(2, outcome='forbid'),
+        3: _DeliveryRecoveryDriver(3, outcome='forbid'),
+    }
+    resumed_pool = Stage4PlanSessionPool(
+        resumed_ctx,
+        driver_factory=lambda _purpose, chapter: resumed_drivers[int(chapter)],
+        concurrency=1)
+    report = plan.run_plan(resumed_ctx, resumed_pool)
+    resumed_pool.finish(process_state='ok', delivery_state='delivered')
+    resumed_pool.close()
+
+    assert report.passed
+    assert resumed_drivers[1].start_calls == 1
+    assert resumed_drivers[1].resume_calls == 0
+    assert resumed_drivers[2].calls == resumed_drivers[3].calls == 0
+    assert stage4_runs.read_plan_delivery_recovery(
+        book, first_ctx.run_id, sid=first_ctx.sid, code=first_ctx.code) is None
+
+
+def test_new_run_adopts_unique_valid_partial_history_without_copying_checkpoint(
+        tmp_path, monkeypatch,
+) -> None:
+    book = _delivery_recovery_book(tmp_path, monkeypatch)
+    source_ctx = _ctx(book, 'stage4.plan')
+    source_drivers = {
+        1: _DeliveryRecoveryDriver(1),
+        2: _DeliveryRecoveryDriver(2, outcome='usage_limit'),
+        3: _DeliveryRecoveryDriver(3, outcome='forbid'),
+    }
+    source_pool = Stage4PlanSessionPool(
+        source_ctx,
+        driver_factory=lambda _purpose, chapter: source_drivers[int(chapter)],
+        concurrency=1)
+    with pytest.raises(AgentDeliveryUnavailable) as stopped:
+        plan.run_plan(source_ctx, source_pool)
+    source_pool.finish(
+        process_state='failed', delivery_state='unknown',
+        error_kind=stopped.value.error_kind)
+    source_pool.close()
+    # 模拟修复前已经 ended、没有 Stage4 delivery sidecar 的真实失败 run。
+    stage4_runs.clear_plan_delivery_recovery(source_ctx)
+
+    target_ctx = _ctx(book, 'stage4.plan')
+    target_drivers = {
+        1: _DeliveryRecoveryDriver(1, outcome='forbid'),
+        2: _DeliveryRecoveryDriver(2),
+        3: _DeliveryRecoveryDriver(3),
+    }
+    target_pool = Stage4PlanSessionPool(
+        target_ctx,
+        driver_factory=lambda _purpose, chapter: target_drivers[int(chapter)],
+        concurrency=1)
+    report = plan.run_plan(target_ctx, target_pool)
+    target_pool.finish(process_state='ok', delivery_state='delivered')
+    target_pool.close()
+
+    assert report.passed
+    assert [target_drivers[index].calls for index in (1, 2, 3)] == [0, 1, 1]
+    assert not paths.stage4_plan_chapter_checkpoint_dir(
+        book, target_ctx.run_id, 1).exists(), '历史 checkpoint 不得复制成 target 事实'
+    manifest = (paths.stage4_run_path(
+        book, target_ctx.run_id, 'stage4.plan')
+        / stage4_runs.PLAN_HISTORICAL_ADOPTION_FILE)
+    assert manifest.is_file()
+    binding, _raw = ArtifactStore(target_ctx).read_own(
+        EvidenceBinding, STAGE4_EVIDENCE_BINDING)
+    provenance = binding.provenance.model_dump(by_alias=True, mode='json')
+    lineage = {row['chapter_ordinal']: row
+               for row in provenance['unit_lineage']}
+    assert lineage[1]['origin'] == 'historical_checkpoint'
+    assert lineage[1]['source_run_id'] == source_ctx.run_id
+    assert lineage[2]['origin'] == lineage[3]['origin'] == 'current_run'
+    assert provenance['usage']['calls_made'] == 3
+    malformed = binding.model_dump(by_alias=True, mode='json')
+    malformed['_provenance']['unit_lineage'][0].pop(
+        'source_checkpoint_sha256')
+    with pytest.raises(ValueError, match='historical unit_lineage'):
+        EvidenceBinding.model_validate(malformed)
 
 
 def test_dynamic_validator_tail_window_submit_and_same_run_zero_wire_resume(

@@ -313,11 +313,12 @@ agent state 闭集独立为 `pending / running / paused / ok / landed_red / fail
 终态：pause 先关新 admission，后台等待当前 claim/beacon 闭合后才追加 paused，且不 cancel 正常付费
 节点；resume 在后台同身份续当前 epoch 和 provider session，代码/skill 漂移则同 parent run 开新 epoch、
 免费复检并新建 provider session；stop 在后台 cancel 全进程树并 drain，闭合后才永久 ended，且不可
-resume。Stage2 blueprint 还有一条生产者举证的系统暂停：仅当 exit 2 同时留下绑定当前 epoch/run/code、
-完整章节集合和可恢复交付失败的 `delivery_recovery.json`，Supervisor 才追加带缺章摘要的 paused；前端
-继续消费同一 `allowed_controls=resume`，恢复时保持 parent/epoch 并只补 checkpoint 缺章。普通 exit 2 或
-凭据缺失、损坏、漂移不得开放 resume。内部阻塞 helper 只供诊断/测试，不改变公开异步语义。重启后
-证明不了存活状态仍为 unknown，不自动洗成 paused。
+resume。Stage2 blueprint 与 Stage4B plan 各有一条生产者举证的系统暂停：仅当 exit 2 同时留下绑定当前
+epoch/run/code、完整请求章集合和可恢复交付失败的 `delivery_recovery.json`，Supervisor 才追加带缺章
+摘要的 paused；前端继续消费同一 `allowed_controls=resume`，恢复时保持 parent/epoch 并只补 checkpoint
+缺章。普通 exit 2 或凭据缺失、损坏、漂移不得开放 resume。已经 ended 的 Stage4B 历史 run 也不得由
+Supervisor 复活；其已验章只能由后续新 run 的 producer 按下述只读 adoption 契约采用。内部阻塞 helper
+只供诊断/测试，不改变公开异步语义。重启后证明不了存活状态仍为 unknown，不自动洗成 paused。
 
 Commander 的 stdout/stderr 只形成供应商 observation，不作为业务完成事实。`role=commander,node=null`
 的 session/ledger 以 attempt id 联结；actual model/effort/provider session id 缺失保持 unknown，不拿请求值
@@ -862,11 +863,22 @@ attempt，不消耗第二个 semantic turn，也不建立可恢复的 provider t
 `403 Request not allowed` 且供应商 token 明确全为 0 时，首发失败后最多按 2/4/8 秒再发三次；每次
 真实发送各占 ledger 一行并写 `attempt/max_attempts/retryable/will_retry/backoff_ms/status/error_kind`。
 未形成可采纳回答的失败不进入 `agent_sessions.jsonl` 的 turn，也不进入 checkpoint `attempt_links`。
-五小时用量窗口与登录过期不作秒级热重试，其他 403 作为永久权限错误停止。若一批所有缺章都只因
-登记的可恢复交付错误结束，producer 在逐章 future 全部 drain 后原子写 `delivery_recovery.json`；该文件
-只含 run/code/phase、completed/pending 章、稳定错误类别/status/attempts 与 `run.json` SHA，不保存错误
-正文。下一轮同 run 启动先撤销旧等待标记，再逐份严格恢复成功 checkpoint；本轮仍失败才重铸标记，
-全部成功则保持删除。它不是正式 artifact、缓存或跨代码迁移面。
+五小时用量窗口（包括 Claude 的 `session limit`、`rateLimitType=five_hour`、`out_of_credits` 与带 reset
+时刻的信封）与登录过期不作秒级热重试，其他 403 作为永久权限错误停止。若一批所有缺章都只因登记的
+可恢复交付错误结束，producer 在逐章 future 全部 drain 后原子写 `delivery_recovery.json`；该文件只含
+run/code/phase、completed/pending/deferred 章、稳定错误类别/status/attempts、请求全集身份与 `run.json`
+SHA，不保存错误正文。下一轮同 run 启动先撤销旧等待标记，再逐份严格恢复成功 checkpoint；本轮仍失败
+才重铸标记，全部成功则保持删除。Stage4B 不一次性向 executor 提交整本 future：只维持并发窗，首个
+可恢复交付失败后停止接纳新章并 drain 已在途章，因此尚未发 wire 的 deferred 章可以在恢复后再请求。
+该 sidecar 不是正式 artifact、缓存或跨代码迁移面。
+
+若 Stage4B 旧 run 已经 ended、无法保持原 parent/epoch，则新 run 可在发 wire 前扫描历史章 checkpoint；
+只有某一个历史 run 提供唯一最大的**不完整**章集合，并且 source run/profile/request/schema/checkpoint/
+session/ledger、当前候选主体、完整请求集合与每章现役动态 validator 全部复验通过，才写 immutable
+`historical-checkpoint-adoption.json` 并采用。零个或并列多个来源都不猜；完整历史集合若缺当前 target
+checkpoint 也不采用，因为正式 commit 必须有本 run anchor。采用只读 source checkpoint，不复制成 target
+事实、不 resume source provider session；正式 `unit_lineage` 保存 source-stable run/checkpoint/attempt
+身份，aggregate usage 从 source 与 target 的 ledger 精确合并，历史 manifest 任一漂移都关闭式拒绝。
 
 #### 7.0b Stage6 semantic A/B checkpoint 与 commit journal —— 双盲恢复态，不是公开 HTTP 模型
 

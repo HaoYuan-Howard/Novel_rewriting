@@ -327,6 +327,12 @@ def test_claude_requires_cli_session_id_and_keeps_failure_usage(tmp_path):
                 'usage_limit', None, False,
             ),
             (
+                "You've hit your session limit · resets 3:50pm "
+                '(Asia/Shanghai) rateLimitType=five_hour '
+                'apiErrorStatus=429 error=rate_limit out_of_credits',
+                'usage_limit', 429, False,
+            ),
+            (
                 'network request failed: connection reset by peer',
                 'connection', None, True,
             ),

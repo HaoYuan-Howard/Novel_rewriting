@@ -21,8 +21,8 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Mapping
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from collections.abc import Iterable, Mapping, Sequence
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, as_completed, wait
 from dataclasses import dataclass, field
 
 from contracts.artifacts import (
@@ -32,7 +32,7 @@ from contracts.artifacts import (
     STAGE4_PLAN_EDIT, STAGE4_WRITER_CONTEXT,
 )
 
-from typing import Any
+from typing import Any, NoReturn
 
 from contracts.invariants import (
     BLIND_ALIAS_ALGORITHM, DESIGN_REVIEW_CONTRACT, FAILURE_STOP_OWNERS,
@@ -96,7 +96,9 @@ from novel.stages.stage4.phase_binding import verify_plan_phase_artifacts
 from novel.stages.stage4.phase_state import current_infeasible_binding
 from novel.llm import response_repair, typed_failures
 from novel.llm import stage4_runs
+from novel.agents.session_client import AgentDeliveryUnavailable
 from novel.llm.client import LlmFailed, judge_payload
+from novel.llm.ledger import combine_usage
 from novel.llm.json_text import normalize_json_text as _strip_fences
 from novel.llm.prompts import required_top_level
 from novel.llm.transport import ChatResponse
@@ -1843,6 +1845,9 @@ def _live_code_guard(ctx: RunContext, *, where: str) -> None:
 def _accepted_identity(
         ctx: RunContext, source: Any,
 ) -> tuple[str, tuple[str, ...]]:
+    require_history = getattr(source, 'require_history_current', None)
+    if callable(require_history):
+        require_history()
     attempt_id = source.accepted_attempt(ctx.node)
     if not isinstance(attempt_id, str) or not attempt_id:
         raise ProvenanceRefused(f'{ctx.node}: 候选缺 accepted attempt')
@@ -1912,8 +1917,13 @@ def _finish_restored_agent_session(
             if client.provider_session_id is not None:
                 closed_any = True
                 continue
+            purpose = stage4_runs.plan_chapter_purpose(chapter)
+            if client.accepted_attempt(purpose) is None:
+                # 历史 adoption 的章没有在 target run 伪造 acceptance；空 client
+                # 只承担 wire 前 driver 隔离预检，不存在需要收口的 logical session。
+                continue
             checkpoint = client.accepted_checkpoint(
-                stage4_runs.plan_chapter_purpose(chapter))
+                purpose)
             closed_any = agent_session_audit.finish_restored_session(
                 ctx.novel_dir.parent, checkpoint,
                 process_state='ok', delivery_state=delivery_state,
@@ -4164,6 +4174,13 @@ def _materialize_binding(
         prompts.chapter_binding_system()
         if architecture == 'chapter_baseline_v1'
         else prepared.system)
+    provenance_kwargs: dict[str, Any] = {}
+    aggregate_usage = getattr(source, 'aggregate_usage', None)
+    if architecture == 'chapter_baseline_v1':
+        if not callable(aggregate_usage):
+            raise ProvenanceRefused(
+                'stage4.plan 章级聚合 source 缺精确 usage bridge')
+        provenance_kwargs['usage_override'] = aggregate_usage()
     provenance = ctx.llm_provenance(
         EvidenceBindingProvenance,
         prompts={prompt_name: prompt_text},
@@ -4172,6 +4189,7 @@ def _materialize_binding(
         settle=settle,
         candidate_sha256=prepared.subject_sha256,
         **lineage_kwargs,
+        **provenance_kwargs,
     )
     binding = EvidenceBinding.model_validate({
         **response.model_dump(by_alias=True),
@@ -4668,7 +4686,8 @@ def _plan_commit_spec(
         return None
     chapter_rows = [
         row for row in (evaluation.unit_lineage or [])
-        if row.get('kind') == 'chapter_session'
+        if (row.get('kind') == 'chapter_session'
+            and row.get('origin') != 'historical_checkpoint')
     ]
     if not chapter_rows:
         return None
@@ -5017,6 +5036,17 @@ def _queue_plan_validation_feedback(
 
 
 @dataclass(frozen=True)
+class _PlanChapterWork:
+    """主线程预先冻结的一章请求；熔断后未 admission 的章也有请求身份。"""
+
+    chapter_ordinal: int
+    chapter_baseline: Any = field(repr=False, compare=False)
+    issue: _ChapterBindingIssue = field(repr=False, compare=False)
+    request: stage4_runs.PlanChapterRequest = field(repr=False, compare=False)
+    validator: Any = field(repr=False, compare=False)
+
+
+@dataclass(frozen=True)
 class _PlanChapterUnit:
     """一章已通过 wire 闸并可参与整书聚合的当前版本。"""
 
@@ -5031,6 +5061,12 @@ class _PlanChapterUnit:
     # 聚合采纳版本，不等同 checkpoint 文件 revision：首轮/恢复=0，
     # 每次 B-owner 返问 +1，人工 replacement 也 +1。
     revision: int = 0
+    acceptance: dict[str, Any] | None = field(
+        default=None, repr=False, compare=False)
+    source_run_id: str | None = None
+    source_context: Any | None = field(default=None, repr=False, compare=False)
+    source_lineage: dict[str, Any] | None = field(
+        default=None, repr=False, compare=False)
     replacement: Any | None = field(default=None, repr=False, compare=False)
 
 
@@ -5049,12 +5085,17 @@ class _PlanChapterAggregateSource:
     #: finalize 收尾钩子按此标记走章级池分支（真身是 _pool）。
     plan_chapter_pool = True
 
-    def __init__(self, pool: Any, anchor_attempt: str | None,
-                 anchor_models: tuple[str, ...]) -> None:
+    def __init__(self, pool: Any, units: Mapping[int, _PlanChapterUnit],
+                 anchor_attempt: str | None,
+                 anchor_models: tuple[str, ...], *,
+                 historical_adoption_file_sha256: str | None = None) -> None:
         self._pool = pool
+        self._units = dict(units)
         self.model = pool.model
         self._anchor_attempt = anchor_attempt
         self._anchor_models = anchor_models
+        self._historical_adoption_file_sha256 = \
+            historical_adoption_file_sha256
 
     def accepted_attempt(self, purpose: str) -> str:
         if not self._anchor_attempt:
@@ -5066,6 +5107,53 @@ class _PlanChapterAggregateSource:
         if not self._anchor_models:
             raise ProvenanceRefused('stage4.plan 章级聚合缺 actual accepted model')
         return self._anchor_models
+
+    def require_history_current(self) -> None:
+        stage4_runs.require_plan_historical_adoption_file(
+            self._pool.ctx, self._historical_adoption_file_sha256)
+
+    def aggregate_usage(self):
+        """按 source run 分组核完整 purpose 成本，再合并为本 binding 用量。"""
+        grouped: dict[str, dict[str, Any]] = {}
+        for chapter, unit in sorted(self._units.items()):
+            acceptance = unit.acceptance
+            if not isinstance(acceptance, dict):
+                raise ProvenanceRefused(
+                    f'stage4.plan ch{chapter} 缺 usage 所需 acceptance')
+            source_ctx = unit.source_context or self._pool.ctx
+            source_run_id = unit.source_run_id or source_ctx.run_id
+            if source_run_id != source_ctx.run_id:
+                raise ProvenanceRefused(
+                    f'stage4.plan ch{chapter} source run/context 漂移')
+            bucket = grouped.setdefault(source_run_id, {
+                'ctx': source_ctx, 'purposes': [], 'identities': []})
+            if bucket['ctx'].code != source_ctx.code:
+                raise ProvenanceRefused(
+                    f'stage4.plan source run={source_run_id} code 漂移')
+            purpose = stage4_runs.plan_chapter_purpose(chapter)
+            bucket['purposes'].append(purpose)
+            links = acceptance.get('attempt_links')
+            if (not isinstance(links, list) or not links
+                    or any(not isinstance(row, Mapping) for row in links)):
+                raise ProvenanceRefused(
+                    f'stage4.plan ch{chapter} acceptance 的 attempt_links 不闭合')
+            bucket['identities'].extend(
+                (purpose, dict(row)) for row in links)
+        parts = []
+        for source_run_id, bucket in sorted(grouped.items()):
+            source_ctx = bucket['ctx']
+            usage = source_ctx.ledger.usage_for_complete_purposes(
+                bucket['purposes'], sid=source_ctx.sid, node='stage4.plan',
+                required_identities=bucket['identities'])
+            if usage is None:
+                raise ProvenanceRefused(
+                    f'stage4.plan source run={source_run_id} 有 accepted '
+                    'checkpoints 但精确 usage 为空')
+            parts.append(usage)
+        usage = combine_usage(*parts)
+        if usage is None:
+            raise ProvenanceRefused('stage4.plan 章级聚合 usage 无法闭合')
+        return usage
 
     @property
     def driver_failed(self) -> bool:
@@ -5269,18 +5357,35 @@ def _keep_plan_chapter_wire_rejection(
             f'stage4.plan ch{chapter} validator 拒稿留证失败：{error}')
 
 
-def _load_plan_chapter_unit(
-        ctx: RunContext, pool: Any, prepared: PlanCandidateContext,
+def _prepare_plan_chapter_work(
+        ctx: RunContext, prepared: PlanCandidateContext,
         chapter_baseline, chapter_ordinal: int,
-) -> _PlanChapterUnit:
-    """一章的 worker：恢复/首问 → 同闸校验 → **立即** checkpoint。"""
+) -> _PlanChapterWork:
     issue = _chapter_binding_issue(
         ctx, prepared.upstream, prepared.candidate_raw,
         chapter_baseline, chapter_ordinal)
     request = _plan_chapter_request(
         ctx, prepared, chapter_baseline, chapter_ordinal, issue)
+    return _PlanChapterWork(
+        chapter_ordinal=chapter_ordinal,
+        chapter_baseline=chapter_baseline,
+        issue=issue,
+        request=request,
+        validator=_chapter_wire_validator(chapter_baseline, issue),
+    )
+
+
+def _load_plan_chapter_unit(
+        ctx: RunContext, pool: Any, prepared: PlanCandidateContext,
+        work: _PlanChapterWork,
+) -> _PlanChapterUnit:
+    """一章的 worker：恢复/首问 → 同闸校验 → **立即** checkpoint。"""
+    chapter_ordinal = work.chapter_ordinal
+    chapter_baseline = work.chapter_baseline
+    issue = work.issue
+    request = work.request
+    validator = work.validator
     stage4_runs.ensure_plan_chapter_run(ctx, request)
-    validator = _chapter_wire_validator(chapter_baseline, issue)
     identity = _plan_chapter_replacement_identity(ctx, prepared, request)
     replacement_records = response_repair.records_for_chain(
         ctx.novel_dir, _canonical_sha256(identity))
@@ -5347,10 +5452,12 @@ def _load_plan_chapter_unit(
         int(restored.state_payload.get('aggregate_revision') or 0)
         if restored is not None else 0)
     attempt_id, models = pool.accepted_chapter(chapter_ordinal)
+    acceptance = pool.chapter_acceptance(chapter_ordinal)
     unit = _PlanChapterUnit(
         chapter_ordinal=chapter_ordinal, request=request,
         response=response, issue=issue, rows=[], attempt_id=attempt_id,
-        models=models, restored=restored is not None, revision=revision)
+        models=models, restored=restored is not None, revision=revision,
+        acceptance=acceptance, source_run_id=ctx.run_id)
     if restored is None:
         rows = apply_chapter_resolutions(
             chapter_baseline,
@@ -5377,7 +5484,8 @@ def _load_plan_chapter_unit(
         return _PlanChapterUnit(
             chapter_ordinal=chapter_ordinal, request=request,
             response=response, issue=issue, rows=rows, attempt_id=attempt_id,
-            models=models, restored=restored is not None, revision=revision)
+            models=models, restored=restored is not None, revision=revision,
+            acceptance=acceptance, source_run_id=ctx.run_id)
     replacement_rows = apply_chapter_resolutions(
         chapter_baseline,
         [row.model_dump(by_alias=True, mode='json')
@@ -5386,7 +5494,8 @@ def _load_plan_chapter_unit(
         chapter_ordinal=chapter_ordinal, request=request,
         response=replacement_response, issue=issue, rows=replacement_rows,
         attempt_id=attempt_id, models=models, restored=True,
-        revision=revision + 1,
+        revision=revision + 1, acceptance=acceptance,
+        source_run_id=ctx.run_id,
         replacement=replacement)
 
 
@@ -5415,6 +5524,7 @@ def _reask_plan_chapter_unit(
         [row.model_dump(by_alias=True, mode='json')
          for row in response.resolutions])
     attempt_id, models = pool.accepted_chapter(previous.chapter_ordinal)
+    acceptance = pool.chapter_acceptance(previous.chapter_ordinal)
     pool.write_chapter_checkpoint(
         previous.chapter_ordinal, previous.request,
         response_payload=response.model_dump(by_alias=True, mode='json'),
@@ -5428,7 +5538,8 @@ def _reask_plan_chapter_unit(
         chapter_ordinal=previous.chapter_ordinal, request=previous.request,
         response=response, issue=previous.issue, rows=rows,
         attempt_id=attempt_id,
-        models=models, restored=False, revision=previous.revision + 1)
+        models=models, restored=False, revision=previous.revision + 1,
+        acceptance=acceptance, source_run_id=ctx.run_id)
 
 
 def _plan_unit_lineage(
@@ -5447,7 +5558,13 @@ def _plan_unit_lineage(
             'models': list(unit.models),
             'revision': unit.revision,
             'ambiguities': len(chapter.ambiguities),
+            'origin': (
+                'historical_checkpoint'
+                if unit.source_context is not None else 'current_run'),
+            'source_run_id': unit.source_run_id,
         }
+        if unit.source_lineage is not None:
+            row.update(unit.source_lineage)
         if unit.replacement is not None:
             resolution = unit.replacement.resolution or {}
             row.update({
@@ -5463,16 +5580,32 @@ def _plan_unit_lineage(
 
 
 def _plan_aggregate_source(
-        pool: Any, units: Mapping[int, _PlanChapterUnit],
+        pool: Any, units: Mapping[int, _PlanChapterUnit], *,
+        historical_adoption_file_sha256: str | None = None,
 ) -> _PlanChapterAggregateSource:
     ordered = [units[key] for key in sorted(units)]
     if not ordered:
-        return _PlanChapterAggregateSource(pool, None, ())
+        return _PlanChapterAggregateSource(
+            pool, units, None, (),
+            historical_adoption_file_sha256=
+            historical_adoption_file_sha256)
     models = tuple(sorted({model for unit in ordered for model in unit.models}))
-    anchor = max(ordered, key=lambda unit: (
+    target_run_id = getattr(getattr(pool, 'ctx', None), 'run_id', None)
+    current = [
+        unit for unit in ordered
+        if unit.source_context is None
+        and (target_run_id is None
+             or unit.source_run_id in (None, target_run_id))]
+    if not current:
+        raise ProvenanceRefused(
+            'stage4.plan 历史 adoption 覆盖了全部歧义章；'
+            '聚合提交缺 target run checkpoint 锚')
+    anchor = max(current, key=lambda unit: (
         unit.revision, unit.chapter_ordinal))
     return _PlanChapterAggregateSource(
-        pool, anchor.attempt_id, models)
+        pool, units, anchor.attempt_id, models,
+        historical_adoption_file_sha256=
+        historical_adoption_file_sha256)
 
 
 def _keep_plan_chapter_replacements(
@@ -5572,6 +5705,110 @@ def _assert_plan_chapter_failure_scopes(
             f'应按 code failure 修判据发射点：{sorted(invalid)}')
 
 
+def _execute_plan_chapter_batch(
+        chapters: Sequence[int], *, concurrency: int,
+        worker: Any, stop_on_error: Any | None = None,
+) -> tuple[dict[int, _PlanChapterUnit], list[tuple[int, Exception]], list[int]]:
+    """有界 admission：首个异常后不再启动排队章，只 drain 已在途 future。"""
+    ordered = sorted(set(int(chapter) for chapter in chapters))
+    if len(ordered) != len(chapters) or not ordered:
+        raise ProvenanceRefused('Stage4B batch 章集合必须非空、唯一')
+    results: dict[int, _PlanChapterUnit] = {}
+    errors: list[tuple[int, Exception]] = []
+    next_index = 0
+    stop_admission = False
+    with ThreadPoolExecutor(max_workers=min(concurrency, len(ordered))) as executor:
+        futures: dict[Any, int] = {}
+        while next_index < len(ordered) or futures:
+            while (not stop_admission and next_index < len(ordered)
+                   and len(futures) < concurrency):
+                chapter = ordered[next_index]
+                next_index += 1
+                futures[executor.submit(worker, chapter)] = chapter
+            if not futures:
+                break
+            done, _pending = wait(
+                tuple(futures), return_when=FIRST_COMPLETED)
+            for future in sorted(done, key=lambda item: futures[item]):
+                chapter = futures.pop(future)
+                try:
+                    results[chapter] = future.result()
+                except Exception as exc:
+                    errors.append((chapter, exc))
+                    if stop_on_error is None or stop_on_error(exc):
+                        stop_admission = True
+    return results, errors, ordered[next_index:] if stop_admission else []
+
+
+def _write_plan_delivery_pause(
+        ctx: RunContext, prepared: PlanCandidateContext, *,
+        requests: Sequence[stage4_runs.PlanChapterRequest],
+        all_chapters: Sequence[int], completed_chapters: Iterable[int],
+        errors: Sequence[tuple[int, Exception]],
+        deferred_chapters: Iterable[int],
+        historical_chapters: Iterable[int],
+        historical_adoption_file_sha256: str | None,
+) -> bool:
+    """若且仅若本批全是 typed 同 run 可恢复失败，落凭据并返回 True。"""
+    delivery = [
+        (chapter, exc) for chapter, exc in errors
+        if isinstance(exc, AgentDeliveryUnavailable)
+        and exc.same_run_resumable]
+    if not errors or len(delivery) != len(errors):
+        stage4_runs.clear_plan_delivery_recovery(ctx)
+        return False
+    failed = {chapter for chapter, _exc in delivery}
+    deferred = set(int(chapter) for chapter in deferred_chapters)
+    completed = set(int(chapter) for chapter in completed_chapters)
+    expected_completed = set(all_chapters) - failed - deferred
+    if completed != expected_completed:
+        raise ProvenanceRefused(
+            'Stage4B delivery pause 的 completed/pending 计算不闭合')
+    recovery = stage4_runs.write_plan_delivery_recovery(
+        ctx,
+        candidate_subject_sha256=prepared.subject_sha256,
+        requests=requests,
+        completed_chapters=completed,
+        failures=[{
+            'chapter': chapter,
+            'error_kind': exc.error_kind,
+            'status': exc.status,
+            'attempts': exc.attempts,
+        } for chapter, exc in delivery],
+        deferred_chapters=deferred,
+        historical_chapters=(set(historical_chapters) & completed),
+        historical_adoption_file_sha256=
+            historical_adoption_file_sha256,
+    )
+    ctx.observe(
+        'stage4_plan_delivery_waiting',
+        completed_chapters=recovery['completed_chapters'],
+        pending_chapters=recovery['pending_chapters'],
+        failure_kinds=sorted({
+            row['error_kind'] for row in recovery['failures']}),
+    )
+    return True
+
+
+def _raise_plan_batch_error(
+        errors: Sequence[tuple[int, Exception]], *, delivery_paused: bool,
+) -> NoReturn:
+    """混合失败不让可恢复 delivery 异常遮住业务/来源/代码失败。"""
+    candidates = list(errors)
+    if not delivery_paused:
+        non_delivery = [
+            row for row in candidates
+            if not (isinstance(row[1], AgentDeliveryUnavailable)
+                    and row[1].same_run_resumable)
+        ]
+        if non_delivery:
+            candidates = non_delivery
+    first = sorted(candidates, key=lambda row: row[0])[0][1]
+    if isinstance(first, _PlanChapterRepairPending):
+        raise TerminalState(str(first)) from first
+    raise first
+
+
 def _run_plan_with_chapters(
         ctx: RunContext, pool: Any, prepared: PlanCandidateContext,
 ) -> CheckReport | EvidenceBinding:
@@ -5594,27 +5831,85 @@ def _run_plan_with_chapters(
             ambiguous.append(chapter.chapter_ordinal)
 
     units: dict[int, _PlanChapterUnit] = {}
+    historical_adoption_file_sha256: str | None = None
+    historical_chapters: set[int] = set()
     if ambiguous:
+        works = {
+            chapter: _prepare_plan_chapter_work(
+                ctx, prepared, baseline.chapter(chapter), chapter)
+            for chapter in ambiguous
+        }
+        requests = [works[chapter].request for chapter in ambiguous]
+        current_checkpoint_chapters = {
+            chapter for chapter in ambiguous
+            if stage4_runs.plan_chapter_checkpoint_exists(ctx, chapter)
+        }
+        historical = stage4_runs.restore_or_select_plan_historical_adoption(
+            ctx,
+            requests=requests,
+            candidate_subject_sha256=prepared.subject_sha256,
+            eligible_chapters=(
+                set(ambiguous) - current_checkpoint_chapters),
+            validators={
+                chapter: works[chapter].validator for chapter in ambiguous},
+        )
+        if historical is not None:
+            historical_adoption_file_sha256 = \
+                historical.manifest_file_sha256
+            for chapter, restored in historical.restored:
+                work = works[chapter]
+                response = restored.checkpoint.value
+                rows = apply_chapter_resolutions(
+                    work.chapter_baseline,
+                    [row.model_dump(by_alias=True, mode='json')
+                     for row in response.resolutions])
+                acceptance = restored.checkpoint.acceptance
+                units[chapter] = _PlanChapterUnit(
+                    chapter_ordinal=chapter,
+                    request=work.request,
+                    response=response,
+                    issue=work.issue,
+                    rows=rows,
+                    attempt_id=str(acceptance['attempt_id']),
+                    models=(str(acceptance['model']),),
+                    restored=True,
+                    revision=int(restored.checkpoint.state_payload[
+                        'aggregate_revision']),
+                    acceptance=acceptance,
+                    source_run_id=historical.source_run_id,
+                    source_context=restored.context,
+                    source_lineage=stage4_runs.plan_historical_source_lineage(
+                        chapter, restored),
+                )
+                historical_chapters.add(chapter)
+
+        target_chapters = sorted(set(ambiguous) - historical_chapters)
+        if not target_chapters:
+            raise ProvenanceRefused(
+                'stage4.plan historical adoption 不得覆盖全部歧义章')
+        # 熔断后未 admission 的章也必须先有 immutable run.json；恢复凭据
+        # 才能绑定完整请求集，而不是只描述已经碰巧启动的 future。
+        for chapter in target_chapters:
+            stage4_runs.ensure_plan_chapter_run(ctx, works[chapter].request)
+        # 历史采用章也预建空 client，只做 driver/session 隔离 preflight；除非
+        # 后续整书 HARD 指回该章，否则不会 start wire，也不会伪造 acceptance。
         pool.prepare_chapters(ambiguous)
-        errors: list[tuple[int, Exception]] = []
-        with ThreadPoolExecutor(max_workers=min(
-                pool.concurrency, len(ambiguous))) as executor:
-            futures = {
-                executor.submit(
-                    _load_plan_chapter_unit, ctx, pool, prepared,
-                    baseline.chapter(chapter), chapter): chapter
-                for chapter in ambiguous}
-            for future in as_completed(futures):
-                chapter = futures[future]
-                try:
-                    units[chapter] = future.result()
-                except Exception as exc:  # 所有 worker 完成，保住已落 checkpoint
-                    errors.append((chapter, exc))
+        stage4_runs.clear_plan_delivery_recovery(ctx)
+        loaded, errors, deferred = _execute_plan_chapter_batch(
+            target_chapters, concurrency=pool.concurrency,
+            worker=lambda chapter: _load_plan_chapter_unit(
+                ctx, pool, prepared, works[chapter]))
+        units.update(loaded)
         if errors:
-            first = sorted(errors, key=lambda row: row[0])[0][1]
-            if isinstance(first, _PlanChapterRepairPending):
-                raise TerminalState(str(first)) from first
-            raise first
+            paused = _write_plan_delivery_pause(
+                ctx, prepared, requests=requests,
+                all_chapters=ambiguous, completed_chapters=units,
+                errors=errors, deferred_chapters=deferred,
+                historical_chapters=historical_chapters,
+                historical_adoption_file_sha256=
+                    historical_adoption_file_sha256)
+            _raise_plan_batch_error(errors, delivery_paused=paused)
+        stage4_runs.clear_plan_delivery_recovery(ctx)
         resolved_rows.update({chapter: unit.rows
                               for chapter, unit in units.items()})
 
@@ -5643,7 +5938,10 @@ def _run_plan_with_chapters(
     pending_wire_replacements: set[int] = set()
     while True:
         lineage = _plan_unit_lineage(baseline, units)
-        source = _plan_aggregate_source(pool, units)
+        source = _plan_aggregate_source(
+            pool, units,
+            historical_adoption_file_sha256=
+            historical_adoption_file_sha256)
         response_obj = EvidenceBindingResponse.model_validate(_aggregate())
         evaluation = evaluate_plan_candidate(
             ctx, source, prepared, response_obj,
@@ -5688,6 +5986,45 @@ def _run_plan_with_chapters(
             all_b_owned = bool(by_chapter) and len(
                 evaluation.typed_failures) == sum(
                     len(rows) for rows in by_chapter.values())
+            historical_retryable = sorted(
+                chapter for chapter in by_chapter
+                if chapter not in exhausted_chapters
+                and chapter not in pending_wire_replacements
+                and units[chapter].source_context is not None)
+            if all_b_owned and historical_retryable:
+                # source provider session 属于 ended 的旧 run，绝不跨 run resume。
+                # 先在 target run 对这些章各取一份 fresh 初始响应；下一轮若整书
+                # HARD 仍在，再按普通 current unit 把 typed feedback 回本章。
+                for chapter in historical_retryable:
+                    stage4_runs.ensure_plan_chapter_run(
+                        ctx, works[chapter].request)
+                refreshed, refresh_errors, refresh_deferred = \
+                    _execute_plan_chapter_batch(
+                        historical_retryable,
+                        concurrency=pool.concurrency,
+                        worker=lambda chapter: _load_plan_chapter_unit(
+                            ctx, pool, prepared, works[chapter]))
+                units.update(refreshed)
+                historical_chapters.difference_update(refreshed)
+                resolved_rows.update({
+                    chapter: unit.rows
+                    for chapter, unit in refreshed.items()})
+                if refresh_errors:
+                    failed = {chapter for chapter, _exc in refresh_errors}
+                    paused = _write_plan_delivery_pause(
+                        ctx, prepared, requests=requests,
+                        all_chapters=ambiguous,
+                        completed_chapters=(
+                            set(ambiguous) - failed - set(refresh_deferred)),
+                        errors=refresh_errors,
+                        deferred_chapters=refresh_deferred,
+                        historical_chapters=historical_chapters,
+                        historical_adoption_file_sha256=
+                            historical_adoption_file_sha256)
+                    _raise_plan_batch_error(
+                        refresh_errors, delivery_paused=paused)
+                if refreshed:
+                    continue
             retryable = (
                 set(by_chapter) - exhausted_chapters
                 - pending_wire_replacements
@@ -5700,31 +6037,45 @@ def _run_plan_with_chapters(
                 else:
                     exhausted_chapters.add(chapter)
             if all_b_owned and queued:
-                updated: dict[int, _PlanChapterUnit] = {}
+                updated, reask_errors, reask_deferred = \
+                    _execute_plan_chapter_batch(
+                        sorted(queued), concurrency=pool.concurrency,
+                        worker=lambda chapter: _reask_plan_chapter_unit(
+                            ctx, pool, prepared,
+                            baseline.chapter(chapter), units[chapter]),
+                        stop_on_error=lambda exc: (
+                            isinstance(exc, AgentDeliveryUnavailable)
+                            or not isinstance(
+                                exc, (_PlanChapterRepairPending, LlmFailed))),
+                    )
                 hard_errors: list[tuple[int, Exception]] = []
-                with ThreadPoolExecutor(max_workers=min(
-                        pool.concurrency, len(queued))) as executor:
-                    futures = {
-                        executor.submit(
-                            _reask_plan_chapter_unit, ctx, pool, prepared,
-                            baseline.chapter(chapter), units[chapter]): chapter
-                        for chapter in queued}
-                    for future in as_completed(futures):
-                        chapter = futures[future]
-                        try:
-                            updated[chapter] = future.result()
-                        except _PlanChapterRepairPending:
-                            pending_wire_replacements.add(chapter)
-                            exhausted_chapters.add(chapter)
-                        except LlmFailed:
-                            exhausted_chapters.add(chapter)
-                        except Exception as exc:
-                            hard_errors.append((chapter, exc))
+                for chapter, exc in reask_errors:
+                    if isinstance(exc, _PlanChapterRepairPending):
+                        pending_wire_replacements.add(chapter)
+                        exhausted_chapters.add(chapter)
+                    elif isinstance(exc, AgentDeliveryUnavailable):
+                        hard_errors.append((chapter, exc))
+                    elif isinstance(exc, LlmFailed):
+                        exhausted_chapters.add(chapter)
+                    else:
+                        hard_errors.append((chapter, exc))
                 units.update(updated)
                 resolved_rows.update({chapter: unit.rows
                                       for chapter, unit in updated.items()})
                 if hard_errors:
-                    raise sorted(hard_errors, key=lambda row: row[0])[0][1]
+                    failed = {chapter for chapter, _exc in reask_errors}
+                    paused = _write_plan_delivery_pause(
+                        ctx, prepared, requests=requests,
+                        all_chapters=ambiguous,
+                        completed_chapters=(
+                            set(ambiguous) - failed - set(reask_deferred)),
+                        errors=reask_errors,
+                        deferred_chapters=reask_deferred,
+                        historical_chapters=historical_chapters,
+                        historical_adoption_file_sha256=
+                            historical_adoption_file_sha256)
+                    _raise_plan_batch_error(
+                        reask_errors, delivery_paused=paused)
                 if updated:
                     continue
             if all_b_owned:

@@ -175,6 +175,19 @@ checkpoint，后章失败不能取消或抹掉此前已验章。聚合始终按�
 路由到一章，只回该章原 session；新响应通过后同时替换 checkpoint、accepted attempt、unit lineage 与
 commit anchor，不能让正式来源账继续指向旧稿。A/Stage2/code owner 立即停止，不消耗该章后续轮次。
 
+章池只维持有界并发窗，不预提交全部歧义章。首个 `usage_limit` 等登记的可恢复 delivery failure 会关闭
+新 admission、drain 已在途任务，并写严格绑定当前 run/code/候选主体/请求全集/各章 `run.json` 的
+`delivery_recovery.json`；已经通过的 checkpoint 保留，未发 wire 的章显式列为 deferred，同 run 继续时
+只补 pending。该 sidecar 不含供应商错误正文，也不是正式 artifact。普通 schema/HARD/业务失败、混合
+失败或凭据漂移不形成系统暂停。
+
+若旧 run 已经 ended，新 run 不伪造 live resume，而可在首个 wire 前按只读历史采用恢复。只有一个历史
+run 给出唯一最大的**不完整**可用章集合，且旧 run/profile/request/schema/checkpoint/session/ledger、
+当前候选主体、请求全集与现役单章 validator 全部闭合时，才生成不可变
+`historical-checkpoint-adoption.json`。历史 checkpoint 不复制到 target 目录、不续旧 provider session；
+正式 lineage 保留来源 run/checkpoint/attempt/model 哈希，aggregate usage 精确合并 source 与 target ledger。
+并列最大来源、完整但无 target commit anchor 的来源或任一身份漂移都不采用，改由当前 run 正常请求。
+
 章 prompt 只含本章候选、相关原文/hinge 文本、本章 blueprint 与关闭目录、机械歧义，以及相邻章一行
 边界摘要；不得携带其他章正文。时间层冲突无法闭合时不选任意 fallback，保留其他章 checkpoint，转
 hash-bound unit replacement。人工 replacement 与模型章响应复用同一个 `ChapterBindingResponse`
@@ -188,7 +201,7 @@ validator、聚合 compiler 与全书 HARD；它只消费已封存且绑定原 r
 | `chapters` | 非空；章场集精确匹配候选 | `null` | 码·契 |
 | `binding_concerns[]` | 可空；非阻断语义担忧 | 模型主张阶段必须非空；正式稿保留作审阅证据 | 码·契 |
 | `infeasibility_proof[]` | `null` | 非空、由代码铸造的关闭式 witness | 码·契 |
-| `_provenance` | `architecture=chapter_baseline_v1` 时含 baseline/chapter session 的逐章 `unit_lineage`；全机械书明确 0 模型；旧整书路为 `whole_book_v1`；`--apply-binding` 为 human 免费来源账 | 同左 | 码·契 |
+| `_provenance` | `architecture=chapter_baseline_v1` 时含 baseline/chapter session 的逐章 `unit_lineage`；新章 session 明确 `origin=current_run`，历史采用明确 `origin=historical_checkpoint` 及 source-stable run/checkpoint/attempt 身份；全机械书明确 0 模型；旧整书路为 `whole_book_v1`；`--apply-binding` 为 human 免费来源账 | 同左 | 码·契 |
 
 `bound.chapters[].scenes[]` 只含 `candidate_scene_id`、`stage_refs`、`material_refs`。每个候选场恰绑定
 一次，每条材料全章恰落一次；返回数组顺序不产生叙事语义，编译始终沿 A 顺序。
@@ -311,6 +324,7 @@ accept/request_replan；服务端在同书锁内重建 current subject 与全部
 | A 的策略或单章响应暂停/拒收 | 同一 `run_id` 恢复，只补失败/缺失 unit；旧 whole-book validator 拒稿才可走 `--adopt-rejected` | 重发已验 unit、公开 `--chapters`、拿旧整书入口冒充 unit adoption、补字段或部分聚合冒充正式候选 | 码·契 |
 | A 正式审阅逐章拒绝 | 当前 opaque `--review-token` 由服务端展开决定，只返修 request_repair 章；每个 repair epoch 最多两轮，累计约束不可遗忘；耗尽后可新开同策略 repair epoch或走完整章 preview/apply | 把单章耗尽自动升级成整书 replan、把默认模板理由当真实反馈、字段 patch、无决定随机重采整书 | 码·契 |
 | A 正式审阅策略拒绝 | `--replan` 携 typed 累计策略/章节失败反馈和 accepted 章约束；只重跑 effective 输入变化的章 | 丢掉失败史重新采样、让未变已验章重发 wire、把自由文本 reason 当执行约束 | 码·契 |
+| B 章池遇到可恢复交付失败 | 当前 run 由严格 `delivery_recovery.json` 系统暂停并只补 pending；已 ended 的旧 run 只允许新 run 经 immutable historical adoption 采用唯一、严格复验的不完整 checkpoint 集合 | 预提交全部章节、把普通 exit 2 洗成 paused、复活 ended parent、复制 checkpoint、续旧 provider session、在多个最大来源间猜一个、漏记历史 usage | 码·契 |
 | 模型声称 B `infeasible` | 同 session 结构化反馈要求 bound；真实代码 witness 可落正式终态；亦可提交 `--apply-binding` 或完整 v4 人工计划 | 信任模型自证、B 私改 A、自动生成 A2、要求已有 Plan 才给首次恢复 | 码·契 |
 | 计划落 `.INVALID` | 修订 v4 `plan_edit.json` 后 `--apply-edit`，或 `--revalidate --actor --reason` | 改名提升、绕过 schema/判据/归档 | 三源 |
 | Context 缺失或 stale | 最终结构全章 accept 后用 `stage4.context` 免费重建 | B/计划修复时提前代写，或用旧上下文继续写 | 三源 |

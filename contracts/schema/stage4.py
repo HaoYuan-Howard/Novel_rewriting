@@ -782,6 +782,44 @@ class EvidenceBindingProvenance(LlmProvenance):
         unknown = kinds - {'baseline', 'chapter_session'}
         if unknown:
             raise ValueError(f'unit_lineage kind 越界：{sorted(unknown)}')
+        for row in value:
+            if row.get('kind') != 'chapter_session':
+                continue
+            origin = row.get('origin')
+            if origin is None:
+                # additive 字段上线前的 current-schema 产物仍可读；新 producer
+                # 一律写出明确 origin，不能由缺字段反推历史采用。
+                continue
+            source_run_id = row.get('source_run_id')
+            if (origin not in {'current_run', 'historical_checkpoint'}
+                    or not isinstance(source_run_id, str)
+                    or re.fullmatch(
+                        r'[a-z0-9][a-z0-9_-]{0,127}', source_run_id) is None):
+                raise ValueError('unit_lineage source origin/run_id 不合法')
+            if origin == 'current_run':
+                continue
+            sha_fields = (
+                'source_run_identity_sha256', 'source_run_file_sha256',
+                'source_checkpoint_sha256', 'source_request_fingerprint',
+                'source_response_sha256',
+            )
+            if (any(not isinstance(row.get(field), str)
+                    or re.fullmatch(r'[0-9a-f]{64}', row[field]) is None
+                    for field in sha_fields)
+                    or not isinstance(row.get('source_code'), str)
+                    or not row['source_code']
+                    or not isinstance(row.get('source_model'), str)
+                    or not row['source_model']
+                    or not isinstance(row.get('source_checkpoint_revision'), int)
+                    or isinstance(row.get('source_checkpoint_revision'), bool)
+                    or row['source_checkpoint_revision'] < 1
+                    or not isinstance(row.get('source_attempt_id'), str)
+                    or re.fullmatch(
+                        r'[0-9a-f]{16}', row['source_attempt_id']) is None
+                    or row.get('attempt_id') != row['source_attempt_id']):
+                raise ValueError(
+                    'historical unit_lineage 缺 source-stable '
+                    'run/checkpoint/attempt 身份')
         return self
 
 

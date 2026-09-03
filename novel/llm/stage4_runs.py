@@ -16,7 +16,7 @@ import copy
 import json
 import os
 import threading
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -33,6 +33,7 @@ from contracts.invariants import STAGE4_DESIGN_MAX_CONCURRENCY
 from contracts.schema import Usage
 from contracts.schema.stage4 import BlindCandidate
 from novel import paths, prov
+from novel.agents.session_client import SAME_RUN_RESUMABLE_AGENT_FAILURES
 from novel.appendlog import process_append_lock
 from novel.errors import ArtifactUnreadable, ProvenanceRefused
 from novel.llm import agent_runs
@@ -220,6 +221,33 @@ def design_unit_run_spec(chapter: int | None) -> agent_runs.SingleSessionRunSpec
 #: per-purpose 隔离，任何两章不共享 provider session。
 PLAN_CHAPTER_RECOVERY_POLICY = RECOVERY_POLICIES['stage4.plan']
 PLAN_CHAPTER_REPLACEMENT_PROTOCOL = 'stage4-plan-chapter-replacement/v1'
+PLAN_DELIVERY_RECOVERY_FILE = 'delivery_recovery.json'
+PLAN_HISTORICAL_ADOPTION_FILE = 'historical-checkpoint-adoption.json'
+
+_PLAN_DELIVERY_RECOVERY_VERSION = 1
+_PLAN_HISTORICAL_ADOPTION_VERSION = 1
+_PLAN_HISTORICAL_ADOPTION_KIND = 'stage4-plan-historical-adoption/v1'
+_PLAN_HISTORICAL_ADOPTION_FIELDS = {
+    'version', 'kind', 'state', 'target_run_id', 'sid', 'node', 'code',
+    'candidate_subject_sha256', 'request_set_sha256', 'source_run_id',
+    'source_chapters', 'sources', 'created_at', 'manifest_sha256',
+}
+_PLAN_HISTORICAL_SOURCE_FIELDS = {
+    'chapter', 'source_code', 'source_run_identity_sha256',
+    'source_run_file_sha256', 'source_checkpoint_revision',
+    'source_checkpoint_sha256', 'source_attempt_id',
+    'source_request_fingerprint', 'source_response_sha256', 'source_model',
+}
+_PLAN_DELIVERY_RECOVERY_FIELDS = {
+    'version', 'state', 'run_id', 'sid', 'node', 'code',
+    'candidate_subject_sha256', 'request_set_sha256', 'total_chapters',
+    'completed_chapters', 'pending_chapters', 'failures',
+    'deferred_chapters', 'historical_chapters',
+    'historical_adoption_file_sha256', 'run_files', 'updated_at',
+}
+_PLAN_DELIVERY_RUN_FIELDS = {
+    'chapter', 'run_identity_sha256', 'run_file_sha256',
+}
 
 
 @dataclass(frozen=True)
@@ -232,6 +260,18 @@ class PlanChapterRequest:
     user: str
     response_model: type[BaseModel]
     max_tokens: int
+
+
+@dataclass(frozen=True)
+class PlanHistoricalAdoption:
+    """当前 target run 采用的一组只读历史章 checkpoint。"""
+
+    manifest_file_sha256: str
+    source_run_id: str
+    restored: tuple[tuple[int, agent_runs.RestoredHistoricalRun[Any]], ...]
+
+    def by_chapter(self) -> dict[int, agent_runs.RestoredHistoricalRun[Any]]:
+        return dict(self.restored)
 
 
 def plan_chapter_purpose(chapter: int) -> str:
@@ -333,6 +373,587 @@ def restore_plan_chapter_checkpoint(
         response_model=request.response_model,
         max_tokens=request.max_tokens,
         validator=validator)
+
+
+def _normalized_plan_requests(
+        requests: Sequence[PlanChapterRequest],
+) -> tuple[PlanChapterRequest, ...]:
+    if not isinstance(requests, Sequence) or isinstance(requests, (str, bytes)):
+        raise ProvenanceRefused('Stage4B 章请求必须是非空序列')
+    by_chapter: dict[int, PlanChapterRequest] = {}
+    for request in requests:
+        if not isinstance(request, PlanChapterRequest):
+            raise ProvenanceRefused(
+                'Stage4B 章请求每项必须是 PlanChapterRequest')
+        chapter = request.chapter
+        if chapter in by_chapter:
+            raise ProvenanceRefused(f'Stage4B 章请求重复 ch{chapter}')
+        by_chapter[chapter] = request
+    if not by_chapter:
+        raise ProvenanceRefused('Stage4B 章请求不能为空')
+    return tuple(by_chapter[chapter] for chapter in sorted(by_chapter))
+
+
+def _plan_request_row(request: PlanChapterRequest) -> dict[str, Any]:
+    return {
+        'chapter': request.chapter,
+        'input_sha256': request.input_sha256,
+        'system_sha256': agent_runs.canonical_sha256(
+            request.system.encode('utf-8')),
+        'user_sha256': agent_runs.canonical_sha256(
+            request.user.encode('utf-8')),
+        'response_model': request.response_model.__name__,
+        'response_schema_sha256': agent_runs.canonical_sha256(
+            agent_runs.agent_json_schema(request.response_model)),
+        'max_tokens': request.max_tokens,
+    }
+
+
+def _plan_request_set_sha256(
+        requests: Sequence[PlanChapterRequest],
+) -> str:
+    return agent_runs.canonical_sha256([
+        _plan_request_row(request)
+        for request in _normalized_plan_requests(requests)
+    ])
+
+
+def _plan_root(ctx: Any, run_id: str | None = None) -> Path:
+    return paths.stage4_run_path(
+        ctx.novel_dir, check_run_id(run_id or ctx.run_id), 'stage4.plan')
+
+
+def _plan_historical_adoption_path(ctx: Any) -> Path:
+    return _plan_root(ctx) / PLAN_HISTORICAL_ADOPTION_FILE
+
+
+def _plan_delivery_recovery_path(ctx: Any) -> Path:
+    return _plan_root(ctx) / PLAN_DELIVERY_RECOVERY_FILE
+
+
+def _plan_history_hash(payload: Mapping[str, Any]) -> str:
+    return agent_runs.canonical_sha256({
+        key: value for key, value in payload.items()
+        if key not in ('created_at', 'manifest_sha256')
+    })
+
+
+def _historical_source_row(
+        chapter: int, historical: agent_runs.RestoredHistoricalRun[Any],
+) -> dict[str, Any]:
+    acceptance = historical.checkpoint.acceptance
+    return {
+        'chapter': chapter,
+        'source_code': historical.context.code,
+        'source_run_identity_sha256':
+            historical.run_record['identity_sha256'],
+        'source_run_file_sha256': historical.run_sha256,
+        'source_checkpoint_revision': historical.checkpoint.revision,
+        'source_checkpoint_sha256': historical.checkpoint.checkpoint_sha256,
+        'source_attempt_id': acceptance['attempt_id'],
+        'source_request_fingerprint': acceptance['request_fingerprint'],
+        'source_response_sha256': acceptance['ledger_response_sha256'],
+        'source_model': acceptance['model'],
+    }
+
+
+def _restore_plan_historical_chapter(
+        ctx: Any, *, source_run_id: str, request: PlanChapterRequest,
+        validator: Callable[[BaseModel, ChatResponse], str | None] | None,
+) -> agent_runs.RestoredHistoricalRun[Any]:
+    historical = agent_runs.restore_historical_run(
+        ctx, plan_chapter_run_spec(request.chapter),
+        source_run_id=source_run_id,
+        input_sha256=request.input_sha256,
+        system=request.system,
+        user=request.user,
+        response_model=request.response_model,
+        max_tokens=request.max_tokens,
+        validator=validator,
+    )
+    state = historical.checkpoint.state_payload
+    if (set(state) != {
+            'chapter_ordinal', 'aggregate_revision', 'ambiguity_ids'}
+            or state.get('chapter_ordinal') != request.chapter
+            or not isinstance(state.get('aggregate_revision'), int)
+            or isinstance(state.get('aggregate_revision'), bool)
+            or state['aggregate_revision'] < 0
+            or not isinstance(state.get('ambiguity_ids'), list)
+            or any(not isinstance(value, str) or not value
+                   for value in state['ambiguity_ids'])):
+        raise ProvenanceRefused(
+            f'Stage4B ch{request.chapter} 历史 checkpoint 不是普通已通过章单元')
+    return historical
+
+
+def _plan_source_run_ids(ctx: Any) -> tuple[str, ...]:
+    found: set[str] = set()
+    for root in paths.stage_run_read_roots(ctx.novel_dir, 'stage4'):
+        if not root.is_dir():
+            continue
+        try:
+            children = tuple(root.iterdir())
+        except OSError as exc:
+            raise ArtifactUnreadable(
+                f'Stage4 历史 run 根不可读 {root}：{exc}') from exc
+        for child in children:
+            if not child.is_dir():
+                continue
+            try:
+                source = check_run_id(child.name)
+            except ValueError:
+                continue
+            if source != check_run_id(ctx.run_id):
+                found.add(source)
+    return tuple(sorted(found))
+
+
+def _source_has_plan_checkpoint(
+        ctx: Any, source_run_id: str, chapter: int,
+) -> bool:
+    source = check_run_id(source_run_id)
+    dirname = paths.stage4_plan_chapter_dirname(chapter)
+    for root in paths.stage_run_read_roots(ctx.novel_dir, 'stage4'):
+        checkpoint_dir = root / source / 'plan' / 'chapters' / dirname / 'checkpoints'
+        if checkpoint_dir.is_dir() and any(
+                child.is_file() and child.suffix == '.json'
+                for child in checkpoint_dir.iterdir()):
+            return True
+    return False
+
+
+def plan_chapter_checkpoint_exists(
+        ctx: Any, chapter: int, *, run_id: str | None = None,
+) -> bool:
+    """只判断 revision 是否存在；真正采用仍必须走完整 restore 校验。"""
+    return _source_has_plan_checkpoint(
+        ctx, check_run_id(run_id or ctx.run_id), chapter)
+
+
+def plan_historical_source_lineage(
+        chapter: int, historical: agent_runs.RestoredHistoricalRun[Any],
+) -> dict[str, Any]:
+    """投影进正式 provenance 的 source-stable 历史采用身份。"""
+    return {
+        key: value for key, value in _historical_source_row(
+            chapter, historical).items()
+        if key != 'chapter'
+    }
+
+
+def _read_plan_historical_adoption(
+        ctx: Any, *, requests: Sequence[PlanChapterRequest],
+        candidate_subject_sha256: str,
+        eligible_chapters: Iterable[int],
+        validators: Mapping[
+            int, Callable[[BaseModel, ChatResponse], str | None] | None],
+) -> PlanHistoricalAdoption | None:
+    target = _plan_historical_adoption_path(ctx)
+    if not target.is_file():
+        return None
+    record = _read_object(target, label='Stage4B historical adoption')
+    if (set(record) != _PLAN_HISTORICAL_ADOPTION_FIELDS
+            or record.get('version') != _PLAN_HISTORICAL_ADOPTION_VERSION
+            or record.get('kind') != _PLAN_HISTORICAL_ADOPTION_KIND
+            or record.get('state') != 'selected'
+            or record.get('manifest_sha256') != _plan_history_hash(record)):
+        raise ArtifactUnreadable(
+            f'{target} 不是闭合的 Stage4B historical adoption manifest')
+    normalized = _normalized_plan_requests(requests)
+    request_by = {request.chapter: request for request in normalized}
+    eligible = sorted({int(chapter) for chapter in eligible_chapters})
+    expected = {
+        'target_run_id': check_run_id(ctx.run_id),
+        'sid': ctx.sid,
+        'node': 'stage4.plan',
+        'code': ctx.code,
+        'candidate_subject_sha256': candidate_subject_sha256,
+        'request_set_sha256': _plan_request_set_sha256(normalized),
+    }
+    if ({key: record.get(key) for key in expected} != expected
+            or not isinstance(record.get('created_at'), str)
+            or not record['created_at']):
+        raise ProvenanceRefused(
+            f'{target} 与当前 target run/code/subject/request set 漂移')
+    source_run_id = record.get('source_run_id')
+    chapters = record.get('source_chapters')
+    rows = record.get('sources')
+    if (not isinstance(source_run_id, str)
+            or check_run_id(source_run_id) == check_run_id(ctx.run_id)
+            or not isinstance(chapters, list) or chapters != sorted(chapters)
+            or not chapters or len(chapters) != len(set(chapters))
+            or any(chapter not in request_by for chapter in chapters)
+            or not isinstance(rows, list) or len(rows) != len(chapters)):
+        raise ProvenanceRefused(
+            f'{target} 的 source run/chapters 已不适用于当前恢复面')
+    restored: list[tuple[int, agent_runs.RestoredHistoricalRun[Any]]] = []
+    for chapter, row in zip(chapters, rows, strict=True):
+        if (not isinstance(row, dict)
+                or set(row) != _PLAN_HISTORICAL_SOURCE_FIELDS
+                or row.get('chapter') != chapter):
+            raise ArtifactUnreadable(f'{target} 的 source row 形状漂移')
+        historical = _restore_plan_historical_chapter(
+            ctx, source_run_id=source_run_id,
+            request=request_by[chapter], validator=validators.get(chapter))
+        if row != _historical_source_row(chapter, historical):
+            raise ProvenanceRefused(
+                f'{target} 的 ch{chapter} source run/checkpoint/ledger 漂移')
+        # target run 后续可能已为某个历史章生成更新 checkpoint；manifest
+        # 仍保持 immutable 并完整复验，但该章从此由 target 事实接管，不能
+        # 因旧选择文件存在而覆盖新 checkpoint。
+        if chapter in eligible:
+            restored.append((chapter, historical))
+    return PlanHistoricalAdoption(
+        manifest_file_sha256=agent_runs.canonical_sha256(target.read_bytes()),
+        source_run_id=source_run_id,
+        restored=tuple(restored),
+    )
+
+
+def restore_or_select_plan_historical_adoption(
+        ctx: Any, *, requests: Sequence[PlanChapterRequest],
+        candidate_subject_sha256: str,
+        eligible_chapters: Iterable[int],
+        validators: Mapping[
+            int, Callable[[BaseModel, ChatResponse], str | None] | None],
+) -> PlanHistoricalAdoption | None:
+    """恢复 target 已选来源；首次则只采用唯一覆盖最多的合法 partial run。
+
+    旧 run 只读，并用自己的 code/profile/ledger/session 复验；响应还必须通过
+    当前请求和当前业务 validator。来源并列时不猜，直接放弃复用并走新 wire。
+    """
+    normalized = _normalized_plan_requests(requests)
+    if not agent_runs.is_sha256(candidate_subject_sha256):
+        raise ProvenanceRefused('Stage4B historical adoption 缺候选主体 SHA-256')
+    request_by = {request.chapter: request for request in normalized}
+    eligible = sorted({int(chapter) for chapter in eligible_chapters})
+    if any(chapter not in request_by for chapter in eligible):
+        raise ProvenanceRefused('Stage4B historical adoption eligible 章越界')
+    existing = _read_plan_historical_adoption(
+        ctx, requests=normalized,
+        candidate_subject_sha256=candidate_subject_sha256,
+        eligible_chapters=eligible, validators=validators)
+    if existing is not None:
+        return existing
+
+    candidates: list[
+        tuple[str, tuple[tuple[int, agent_runs.RestoredHistoricalRun[Any]], ...]]
+    ] = []
+    for source_run_id in _plan_source_run_ids(ctx):
+        source_chapters = [
+            chapter for chapter in eligible
+            if _source_has_plan_checkpoint(ctx, source_run_id, chapter)]
+        if not source_chapters:
+            continue
+        # 没有任何 current checkpoint 时，不能全量采用历史单元：普通 commit
+        # 必须仍锚在 target run 的一条真实 checkpoint/adoption 链上。
+        if (len(eligible) == len(normalized)
+                and len(source_chapters) == len(normalized)):
+            continue
+        restored: list[tuple[int, agent_runs.RestoredHistoricalRun[Any]]] = []
+        try:
+            for chapter in source_chapters:
+                restored.append((chapter, _restore_plan_historical_chapter(
+                    ctx, source_run_id=source_run_id,
+                    request=request_by[chapter],
+                    validator=validators.get(chapter))))
+        except (ArtifactUnreadable, ProvenanceRefused, ValueError):
+            continue
+        candidates.append((source_run_id, tuple(restored)))
+    if not candidates:
+        return None
+    best_size = max(len(rows) for _source, rows in candidates)
+    best = [(source, rows) for source, rows in candidates
+            if len(rows) == best_size]
+    if len(best) != 1:
+        ctx.observe(
+            'stage4_plan_historical_adoption_ambiguous',
+            candidate_count=len(best), checkpoint_count=best_size)
+        return None
+    source_run_id, restored = best[0]
+    source_rows = [
+        _historical_source_row(chapter, historical)
+        for chapter, historical in restored]
+    payload: dict[str, Any] = {
+        'version': _PLAN_HISTORICAL_ADOPTION_VERSION,
+        'kind': _PLAN_HISTORICAL_ADOPTION_KIND,
+        'state': 'selected',
+        'target_run_id': check_run_id(ctx.run_id),
+        'sid': ctx.sid,
+        'node': 'stage4.plan',
+        'code': ctx.code,
+        'candidate_subject_sha256': candidate_subject_sha256,
+        'request_set_sha256': _plan_request_set_sha256(normalized),
+        'source_run_id': source_run_id,
+        'source_chapters': [chapter for chapter, _row in restored],
+        'sources': source_rows,
+        'created_at': _now(),
+    }
+    payload['manifest_sha256'] = _plan_history_hash(payload)
+    target = _plan_historical_adoption_path(ctx)
+    with _DESIGN_AGGREGATE_LOCK, process_append_lock(target):
+        if target.is_file():
+            return _read_plan_historical_adoption(
+                ctx, requests=normalized,
+                candidate_subject_sha256=candidate_subject_sha256,
+                eligible_chapters=eligible, validators=validators)
+        _atomic_json(target, payload)
+    ctx.observe(
+        'stage4_plan_historical_checkpoint_adopted',
+        source_run_id=source_run_id,
+        chapters=[chapter for chapter, _row in restored])
+    return PlanHistoricalAdoption(
+        manifest_file_sha256=agent_runs.canonical_sha256(target.read_bytes()),
+        source_run_id=source_run_id,
+        restored=restored,
+    )
+
+
+def require_plan_historical_adoption_file(
+        ctx: Any, expected_file_sha256: str | None,
+) -> None:
+    """在 provisional/final 两次铸 provenance 前复核来源选择未漂移。"""
+    target = _plan_historical_adoption_path(ctx)
+    actual = (
+        agent_runs.canonical_sha256(target.read_bytes())
+        if target.is_file() else None)
+    if actual != expected_file_sha256:
+        raise ProvenanceRefused(
+            'Stage4B historical adoption manifest 在运行期间出现、消失或漂移')
+
+
+def clear_plan_delivery_recovery(ctx: Any) -> None:
+    """清掉当前 Stage4B run 的瞬态等待标记；账本/checkpoint 不动。"""
+    target = _plan_delivery_recovery_path(ctx)
+    with _DESIGN_AGGREGATE_LOCK, process_append_lock(target):
+        agent_runs._remove_sidecar(target)
+
+
+def write_plan_delivery_recovery(
+        ctx: Any, *, candidate_subject_sha256: str,
+        requests: Sequence[PlanChapterRequest],
+        completed_chapters: Iterable[int],
+        failures: Sequence[Mapping[str, Any]],
+        deferred_chapters: Iterable[int],
+        historical_chapters: Iterable[int],
+        historical_adoption_file_sha256: str | None,
+) -> dict[str, Any]:
+    """冻结 Stage4B 熔断后的同 run 恢复凭据，不保存异常正文。"""
+    normalized = _normalized_plan_requests(requests)
+    requested = [request.chapter for request in normalized]
+    request_by = {request.chapter: request for request in normalized}
+    completed = sorted({int(chapter) for chapter in completed_chapters})
+    deferred = sorted({int(chapter) for chapter in deferred_chapters})
+    historical = sorted({int(chapter) for chapter in historical_chapters})
+    if (not agent_runs.is_sha256(candidate_subject_sha256)
+            or any(chapter not in request_by for chapter in completed + deferred)
+            or any(chapter not in completed for chapter in historical)):
+        raise ProvenanceRefused(
+            'Stage4B delivery recovery 的主体或章节集合越界')
+    normalized_failures: list[dict[str, Any]] = []
+    for row in failures:
+        chapter = row.get('chapter')
+        kind = row.get('error_kind')
+        status = row.get('status')
+        attempts = row.get('attempts')
+        if (not isinstance(chapter, int) or isinstance(chapter, bool)
+                or chapter not in request_by or chapter in completed
+                or chapter in deferred
+                or kind not in SAME_RUN_RESUMABLE_AGENT_FAILURES
+                or not isinstance(attempts, int) or isinstance(attempts, bool)
+                or attempts < 1
+                or (status is not None and (
+                    not isinstance(status, int) or isinstance(status, bool)
+                    or not 100 <= status <= 599))):
+            raise ProvenanceRefused(
+                f'Stage4B delivery recovery failure 身份不合法：{row!r}')
+        normalized_failures.append({
+            'chapter': chapter, 'error_kind': kind,
+            'status': status, 'attempts': attempts,
+        })
+    normalized_failures.sort(key=lambda row: row['chapter'])
+    failed = [row['chapter'] for row in normalized_failures]
+    pending = sorted(failed + deferred)
+    if (not failed or len(pending) != len(set(pending))
+            or sorted(completed + pending) != sorted(requested)):
+        raise ProvenanceRefused(
+            'Stage4B delivery recovery 的 completed/pending 未精确覆盖请求章')
+
+    history_target = _plan_historical_adoption_path(ctx)
+    actual_history_sha = (
+        agent_runs.canonical_sha256(history_target.read_bytes())
+        if history_target.is_file() else None)
+    if actual_history_sha != historical_adoption_file_sha256:
+        raise ProvenanceRefused(
+            'Stage4B delivery recovery 绑定的 historical adoption 已漂移')
+    if historical and actual_history_sha is None:
+        raise ProvenanceRefused(
+            'Stage4B delivery recovery 的历史章节与 adoption manifest 不闭合')
+
+    run_files: list[dict[str, Any]] = []
+    for chapter in sorted(set(requested) - set(historical)):
+        run = ensure_plan_chapter_run(ctx, request_by[chapter])
+        run_path = (paths.stage4_plan_chapter_run_path(
+            ctx.novel_dir, ctx.run_id, chapter) / agent_runs.RUN_FILE)
+        run_files.append({
+            'chapter': chapter,
+            'run_identity_sha256': run['identity_sha256'],
+            'run_file_sha256': agent_runs.canonical_sha256(
+                run_path.read_bytes()),
+        })
+    payload: dict[str, Any] = {
+        'version': _PLAN_DELIVERY_RECOVERY_VERSION,
+        'state': 'waiting',
+        'run_id': check_run_id(ctx.run_id),
+        'sid': ctx.sid,
+        'node': 'stage4.plan',
+        'code': ctx.code,
+        'candidate_subject_sha256': candidate_subject_sha256,
+        'request_set_sha256': _plan_request_set_sha256(normalized),
+        'total_chapters': len(requested),
+        'completed_chapters': completed,
+        'pending_chapters': pending,
+        'failures': normalized_failures,
+        'deferred_chapters': deferred,
+        'historical_chapters': historical,
+        'historical_adoption_file_sha256': actual_history_sha,
+        'run_files': run_files,
+        'updated_at': _now(),
+    }
+    target = _plan_delivery_recovery_path(ctx)
+    with _DESIGN_AGGREGATE_LOCK, process_append_lock(target):
+        _atomic_json(target, payload)
+    return payload
+
+
+def read_plan_delivery_recovery(
+        novel_dir: Path, run_id: str, *, sid: str, code: str,
+) -> dict[str, Any] | None:
+    """严格核验 Supervisor 可据以暂停的 Stage4B 恢复凭据。"""
+    source = check_run_id(run_id)
+    root = paths.stage4_run_path(novel_dir, source, 'stage4.plan')
+    target = root / PLAN_DELIVERY_RECOVERY_FILE
+    if not target.is_file():
+        return None
+    record = _read_object(target, label='Stage4B delivery recovery')
+    if (set(record) != _PLAN_DELIVERY_RECOVERY_FIELDS
+            or record.get('version') != _PLAN_DELIVERY_RECOVERY_VERSION
+            or record.get('state') != 'waiting'):
+        raise ArtifactUnreadable(
+            f'{target} 不是当前 Stage4B delivery recovery 形状')
+    expected = {
+        'run_id': source, 'sid': sid, 'node': 'stage4.plan', 'code': code}
+    if {key: record.get(key) for key in expected} != expected:
+        raise ProvenanceRefused(f'{target} 与当前 execution 身份不一致')
+    total = record.get('total_chapters')
+    completed = record.get('completed_chapters')
+    pending = record.get('pending_chapters')
+    failures = record.get('failures')
+    deferred = record.get('deferred_chapters')
+    historical = record.get('historical_chapters')
+    run_files = record.get('run_files')
+    history_sha = record.get('historical_adoption_file_sha256')
+    if (not agent_runs.is_sha256(record.get('candidate_subject_sha256'))
+            or not agent_runs.is_sha256(record.get('request_set_sha256'))
+            or not isinstance(record.get('updated_at'), str)
+            or not record['updated_at']
+            or not isinstance(total, int) or isinstance(total, bool) or total < 1
+            or any(not isinstance(rows, list) for rows in (
+                completed, pending, failures, deferred, historical, run_files))
+            or any(not isinstance(chapter, int) or isinstance(chapter, bool)
+                   or chapter < 1
+                   for chapter in completed + pending + deferred + historical)
+            or completed != sorted(completed) or pending != sorted(pending)
+            or deferred != sorted(deferred) or historical != sorted(historical)
+            or len(completed) + len(pending) != total
+            or len(set(completed + pending)) != total
+            or set(completed).intersection(pending)
+            or not set(deferred).issubset(pending)
+            or not set(historical).issubset(completed)
+            or (history_sha is not None and not agent_runs.is_sha256(history_sha))
+            or (historical and history_sha is None)):
+        raise ArtifactUnreadable(f'{target} 的章节计数或哈希不闭合')
+    normalized_failures: list[dict[str, Any]] = []
+    for row in failures:
+        if not isinstance(row, dict):
+            raise ArtifactUnreadable(f'{target} 的 failures 含非对象')
+        chapter = row.get('chapter')
+        status = row.get('status')
+        attempts = row.get('attempts')
+        if (set(row) != {'chapter', 'error_kind', 'status', 'attempts'}
+                or chapter not in pending or chapter in deferred
+                or row.get('error_kind') not in SAME_RUN_RESUMABLE_AGENT_FAILURES
+                or not isinstance(attempts, int) or isinstance(attempts, bool)
+                or attempts < 1
+                or (status is not None and (
+                    not isinstance(status, int) or isinstance(status, bool)
+                    or not 100 <= status <= 599))):
+            raise ArtifactUnreadable(f'{target} 的 failure 身份不合法')
+        normalized_failures.append(row)
+    failed = sorted(row['chapter'] for row in normalized_failures)
+    if (not failed or len(failed) != len(set(failed))
+            or sorted(failed + deferred) != pending):
+        raise ArtifactUnreadable(
+            f'{target} 的 failure/deferred 与 pending 章不闭合')
+
+    run_chapters: list[int] = []
+    for row in run_files:
+        if (not isinstance(row, dict)
+                or set(row) != _PLAN_DELIVERY_RUN_FIELDS
+                or not isinstance(row.get('chapter'), int)
+                or isinstance(row.get('chapter'), bool)
+                or not agent_runs.is_sha256(row.get('run_identity_sha256'))
+                or not agent_runs.is_sha256(row.get('run_file_sha256'))):
+            raise ArtifactUnreadable(f'{target} 的 run_files 身份不合法')
+        chapter = row['chapter']
+        run_path = (paths.stage4_plan_chapter_run_path(
+            novel_dir, source, chapter) / agent_runs.RUN_FILE)
+        run = _read_object(run_path, label='Stage4B delivery run')
+        identity = {
+            key: run[key] for key in agent_runs._RUN_FIELDS
+            if key not in ('identity_sha256', 'created_at')
+        } if set(run) == agent_runs._RUN_FIELDS else {}
+        if (run.get('run_id') != source or run.get('sid') != sid
+                or run.get('node') != 'stage4.plan'
+                or run.get('code') != code or run.get('chapter') != chapter
+                or run.get('identity_sha256') != agent_runs.canonical_sha256(identity)
+                or row['run_identity_sha256'] != run.get('identity_sha256')
+                or row['run_file_sha256'] != agent_runs.canonical_sha256(
+                    run_path.read_bytes())):
+            raise ProvenanceRefused(
+                f'{target} 绑定的 ch{chapter} run.json 已缺失或漂移')
+        run_chapters.append(chapter)
+    if (run_chapters != sorted(run_chapters)
+            or len(run_chapters) != len(set(run_chapters))
+            or sorted(run_chapters + historical)
+            != sorted(completed + pending)):
+        raise ArtifactUnreadable(
+            f'{target} 的 current/historical run 覆盖不闭合')
+    history_target = root / PLAN_HISTORICAL_ADOPTION_FILE
+    if history_sha is not None:
+        if (not history_target.is_file()
+                or history_sha != agent_runs.canonical_sha256(
+                    history_target.read_bytes())):
+            raise ProvenanceRefused(
+                f'{target} 绑定的 historical adoption 已缺失或漂移')
+        history = _read_object(
+            history_target, label='Stage4B historical adoption')
+        if (history.get('target_run_id') != source
+                or history.get('sid') != sid
+                or history.get('node') != 'stage4.plan'
+                or history.get('code') != code
+                or history.get('candidate_subject_sha256')
+                != record['candidate_subject_sha256']
+                or history.get('request_set_sha256')
+                != record['request_set_sha256']
+                or not set(historical).issubset(
+                    set(history.get('source_chapters') or []))):
+            raise ProvenanceRefused(
+                f'{target} 与 historical adoption 身份不闭合')
+    elif history_target.exists():
+        raise ProvenanceRefused(
+            f'{target} 未绑定但盘上出现 historical adoption')
+    return record
 
 
 def ensure_design_unit_run(
@@ -2860,9 +3481,13 @@ __all__ = [
     'DESIGN_HUMAN_EVOLUTION_COMMIT_FILE',
     'DESIGN_MAX_CONCURRENCY', 'DESIGN_UNIT_RECOVERY_POLICY',
     'DesignRepairCapability', 'DesignUnitRequest', 'DesignUnitSource',
-    'PlanChapterRequest', 'PLAN_CHAPTER_REPLACEMENT_PROTOCOL',
+    'PlanChapterRequest', 'PlanHistoricalAdoption',
+    'PLAN_CHAPTER_REPLACEMENT_PROTOCOL', 'PLAN_DELIVERY_RECOVERY_FILE',
+    'PLAN_HISTORICAL_ADOPTION_FILE',
+    'clear_plan_delivery_recovery',
     'plan_chapter_commit_spec', 'plan_chapter_replacement_chain',
-    'plan_chapter_replacement_identity',
+    'plan_chapter_replacement_identity', 'plan_chapter_checkpoint_exists',
+    'plan_historical_source_lineage',
     'RECOVERY_POLICIES',
     'commit_ownership', 'committed', 'design_aggregate_committed',
     'design_aggregate_prepared', 'design_aggregate_state',
@@ -2879,6 +3504,9 @@ __all__ = [
     'prepare_design_aggregate_commit', 'prepare_design_human_evolution_commit',
     'prepare_design_repair_aggregate_commit', 'prepared', 'recovery_policy',
     'refuse_foreign_commit_reservations', 'restore_checkpoint',
+    'read_plan_delivery_recovery',
+    'require_plan_historical_adoption_file',
+    'restore_or_select_plan_historical_adoption',
     'restore_commit_adoption', 'restore_design_aggregate_adoptions',
     'restore_design_aggregate_payloads',
     'restore_design_repair_aggregate_payloads',
@@ -2887,6 +3515,7 @@ __all__ = [
     'verify_committed_delivery', 'verify_design_aggregate_committed_delivery',
     'verify_design_aggregate_finalization', 'verify_design_aggregate_primary',
     'write_checkpoint', 'write_design_unit_checkpoint',
+    'write_plan_delivery_recovery',
     'mark_design_human_evolution_committed',
     'mark_design_repair_aggregate_committed',
 ]

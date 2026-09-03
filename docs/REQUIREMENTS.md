@@ -130,7 +130,9 @@ epoch 交付；服务崩溃、坏尾、迟到 child 与并发 resume 必须继�
 - 必测：代码变化只滚 epoch/validation seal；raw 下游决定不被前置失效擦除；内容/关系/可见 finding
   只使受影响范围过期；每节点最多一次完整 operator snapshot 和一次 execute CAS；pause/stop API 只以
   202 异步受理，后台 drain 后才分别落 paused/ended，stop 永久；第二轮 repair 继承第一轮未关闭约束；人工完整章替换零 wire且非目标章字节恒等；真策略
-  replan 有累计反馈并只重跑 effective input 变化章；INFO/metric/UNVER 不产生付费动作。
+  replan 有累计反馈并只重跑 effective input 变化章；Stage4B 首个用量窗口失败停止新章 admission、同 run
+  只补 pending，ended 历史 run 只经严格且唯一的只读 checkpoint adoption 接续；INFO/metric/UNVER
+  不产生付费动作。
 
 **性能验收（相同模型、effort、并发与冷缓存）**：
 

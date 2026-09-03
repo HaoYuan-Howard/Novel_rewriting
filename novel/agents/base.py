@@ -259,8 +259,10 @@ def classify_agent_command_failure(
 
     # 账号窗口耗尽要等外部状态变化；秒级热重试只会制造四次相同失败。
     if any(marker in text for marker in (
-            'usage limit', 'five-hour', 'five hour',
-            '5-hour', '5 hour', 'resets at', 'reset at')):
+            'usage limit', 'session limit', 'five-hour', 'five hour',
+            'five_hour', '5-hour', '5 hour', 'out_of_credits',
+            'resets at', 'reset at')) or re.search(
+                r'\bresets?\s+(?:at\s+)?\d{1,2}:\d{2}', text):
         return 'usage_limit', status, False
 
     if any(marker in text for marker in (

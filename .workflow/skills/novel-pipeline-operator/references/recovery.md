@@ -328,15 +328,24 @@ source adoption id 拒绝。全部收口后单独运行 `stage5.review`，旧 Re
 
 1. 先查 `state` 与目标产物；账本写入不证明产物完整。
 2. 目标缺失或残缺时，用**完全相同参数**重跑，优先命中 `.llm_cache`。
-3. Stage2 blueprint 若已经产生 run sidecar，必须复用终态打印的同一 `run_id`。通过全部单章闸的
-   checkpoint 会在当前 schema/validator/scope 复验后恢复，命中记 `checkpoint_restored`、新增 wire 为零；
-   它不是 `.llm_cache`。`--chapters` 主动刷新只有在本轮唯一 batch resolution 已完整封存后才接受
-   这次同 run resume；普通重复执行不能冒充 resume。损坏、跨 run、输入/SHA/ledger 漂移必须停机，
-   不能把它当 miss 后再付一次。
-4. 不为“确保重跑”修改章节范围、模型、思考参数或 prompt；那会改变请求身份并形成新付费调用。
-5. 只有 finding 或 current hash-bound typed 决定明确要求重新采样时才使用刷新入口：`stage2.global --resample` 重采整份响应，`stage2.blueprint --chapters <N>` 只重算目标章；首次执行都不得命中旧 checkpoint，后者仅可在已封存 batch 后恢复本轮 checkpoint。Stage4A 逐章拒绝只执行服务端给出的 `stage4.design --review-token <opaque>`，仅重跑 `request_repair` 章并引用其余已验 checkpoint；策略 `request_replan` 则在同一 token 命令上增加 `--replan`。两者都必须重新 preview/付费确认，修订后重新完成 A 全书原子审阅，B 仍另行确认。
-6. 连接错误使用实现内有界退避；实现耗尽后不要再叠加无限外层重试。
-7. **上游正式产物一旦变更，下游缓存全废。** `--revalidate` 提升、`--apply-edit` 新轮、定向重采样都算变更：以它为输入的下游节点缓存键随之失效，下一次运行是**实付**而不是回放，而且是整层重付、与该层首跑同量级。选择修复层之前先估算下游重算面：同一问题在下游有等价的正式修复入口时优先在下游修；只能在上游修时（如 `present_names_invented` 只有 stage2 有入口），在终审包把这笔重算记成**修复的直接代价**，不要读成重复付费。
+3. Stage2 blueprint 或 Stage4 plan 若 live Supervisor 已凭 producer 的严格 `delivery_recovery.json` 进入
+   系统 paused，只使用页面/agent 的既有 `resume` 继续同一 parent/epoch/run；不要另开命令或手填
+   `run_id`。通过全部单章闸的 checkpoint 会在当前 schema/validator/scope 复验后恢复，新增 wire 为零；
+   它不是 `.llm_cache`。Stage4 plan 首个可恢复交付失败后会停止新章 admission，恢复只请求凭据里的
+   pending/deferred 章。`--chapters` 主动刷新只有在 Stage2 本轮唯一 batch resolution 已完整封存后才接受
+   这次同 run resume；普通重复执行不能冒充 resume。损坏、输入/SHA/ledger 漂移必须停机，不能把它
+   当 miss 后再付一次。
+4. 已经 ended 的 parent/epoch 不得复活，也不要手工复制 checkpoint 或恢复 sidecar。Stage4 plan 的正常
+   新 run 会在首个 wire 前自动检查历史：只有一个旧 run 提供唯一最大的**不完整**可用章集合，且
+   source run/profile/request/schema/checkpoint/session/ledger、当前候选主体、请求全集和现役 validator
+   全部复验通过时，才写 immutable `historical-checkpoint-adoption.json` 并只请求余章。采用章的正式
+   lineage 与 usage 保留旧来源，旧 provider session 不会继续；零个或并列来源都按当前 run 正常请求。
+   不得编辑 adoption manifest 来强选来源。
+5. 不为“确保重跑”修改章节范围、模型、思考参数或 prompt；那会改变请求身份并形成新付费调用。
+6. 只有 finding 或 current hash-bound typed 决定明确要求重新采样时才使用刷新入口：`stage2.global --resample` 重采整份响应，`stage2.blueprint --chapters <N>` 只重算目标章；首次执行都不得命中旧 checkpoint，后者仅可在已封存 batch 后恢复本轮 checkpoint。Stage4A 逐章拒绝只执行服务端给出的 `stage4.design --review-token <opaque>`，仅重跑 `request_repair` 章并引用其余已验 checkpoint；策略 `request_replan` 则在同一 token 命令上增加 `--replan`。两者都必须重新 preview/付费确认，修订后重新完成 A 全书原子审阅，B 仍另行确认。
+7. 连接错误使用实现内有界退避；实现耗尽后不要再叠加无限外层重试。Claude 的 `session limit`、
+   `rateLimitType=five_hour`、`out_of_credits` 或带 reset 时刻的错误属于等待窗口，不作秒级热重试。
+8. **上游正式产物一旦变更，下游缓存全废。** `--revalidate` 提升、`--apply-edit` 新轮、定向重采样都算变更：以它为输入的下游节点缓存键随之失效，下一次运行是**实付**而不是回放，而且是整层重付、与该层首跑同量级。选择修复层之前先估算下游重算面：同一问题在下游有等价的正式修复入口时优先在下游修；只能在上游修时（如 `present_names_invented` 只有 stage2 有入口），在终审包把这笔重算记成**修复的直接代价**，不要读成重复付费。
 
 stage5 调用次数高于接受章数可以来自传输重试、内建重采 / 降档，或后来显式授权的付费
 `--revise` / 定向重写；现役没有自动长度收缩臂。最终调用/token 成本的唯一权威源是

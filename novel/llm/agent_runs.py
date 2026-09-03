@@ -297,6 +297,14 @@ def _atomic_bytes(path: Path, data: bytes) -> None:
         raise
 
 
+def _remove_sidecar(path: Path) -> None:
+    """删除瞬态 service sidecar；正式 artifact 绝不经这个内部写口。"""
+    try:
+        os.unlink(path)
+    except FileNotFoundError:
+        pass
+
+
 def _decode_json_bytes(
         raw: bytes, *, path: Path, label: str,
 ) -> dict[str, Any]:

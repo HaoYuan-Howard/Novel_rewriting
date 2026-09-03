@@ -38,7 +38,9 @@ from contracts.schema.stage7 import NameMap
 from novel import agent_session_audit, paths, prov
 from novel.agents import AgentDriver, AgentProbe
 from novel.agents.factory import create_driver
-from novel.agents.session_client import SESSION_PROTOCOL_VERSION, SessionAgentClient
+from novel.agents.session_client import (
+    SESSION_PROTOCOL_VERSION, AgentDeliveryUnavailable, SessionAgentClient,
+)
 from novel.config import MAX_CONCURRENCY
 from novel.errors import GateBlocked, ProvenanceRefused
 from novel.llm import stage4_runs, stage5_runs
@@ -123,6 +125,10 @@ class NodeExecutorAgent(ABC, Generic[A]):
             self.client.finish(
                 process_state='ok', delivery_state='unknown',
                 error_kind='artifact_verification')
+        elif isinstance(exc, AgentDeliveryUnavailable):
+            self.client.finish(
+                process_state=('failed' if self.client.driver_failed else 'ok'),
+                delivery_state='unknown', error_kind=exc.error_kind)
         elif isinstance(exc, LlmFailed):
             self.client.finish(
                 process_state=('failed' if self.client.driver_failed else 'ok'),
@@ -2270,8 +2276,12 @@ class Stage4PlanSessionPool:
 
     def queue_chapter_feedback(self, chapter: int, rows: Sequence[Mapping[str, object]]) -> bool:
         """业务 HARD 反馈回**该章自己的** session；其他章不受影响。"""
-        return self._client(chapter).queue_code_validation_feedback(
-            rows, purpose=stage4_runs.plan_chapter_purpose(chapter))
+        client = self._client(chapter)
+        purpose = stage4_runs.plan_chapter_purpose(chapter)
+        if client.provider_session_id is None:
+            return client.queue_restored_code_validation_feedback(
+                rows, purpose=purpose)
+        return client.queue_code_validation_feedback(rows, purpose=purpose)
 
     def accepted_chapter(self, chapter: int) -> tuple[str, tuple[str, ...]]:
         client = self._client(chapter)
