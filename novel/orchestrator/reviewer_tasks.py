@@ -857,7 +857,9 @@ FAIL/不可隔离 UNVER 是第二轮、也是最后一轮返工。返工必须�
 显式自检，不会替未改变的旧 FAIL 洗绿，也不会再启动第三轮。证据仍不足的 UNVER
 不得改名为 PASS：只有可整组删除的 secret/relation/world_rule 才能写进
 post_edit_review.quarantine_groups，写作侧会删除完整事实组并在终审保留披露。
-global 写作面已安全、只缺 Blueprint 阅读事实时才选 approval:blueprint_seen。
+global 写作面已安全、只缺完整 Stage2 阅读/闸门 proof 恢复时才选
+approval:blueprint_seen；Supervisor 会用你实际读过的 Blueprint token 确定性收口
+其余早期 proof，你不得自行运行审批命令。
 Supervisor 在两轮之间精确 resume 同一 Commander provider session；不要重新定位
 已经读过的材料。
 {correction_instruction}

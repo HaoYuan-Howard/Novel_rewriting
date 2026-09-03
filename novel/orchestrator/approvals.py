@@ -5195,6 +5195,24 @@ def mark_seen(
         }))
 
 
+def close_stage2_review(
+    base: str | os.PathLike[str], sid: str,
+    blueprint_subject: BlueprintSeenRequest,
+) -> ApprovalDoc:
+    """按公开审批服务的固定顺序收口一次 headless Stage2 阅读事实。
+
+    Commander 只提交它实际读过的 Blueprint opaque token；本函数不生成 review
+    决定，也不碰小说 artifact。五步各自仍执行原有 currentness、typed review 与
+    TOCTOU 校验。若中途失败，已经落下的 raw proof 也是可审计、可幂等恢复的事实，
+    最后的 ``s2`` 不会在前置项失效时被误开。
+    """
+    approve_gate(base, sid, 's0')
+    approve_gate(base, sid, 's1')
+    mark_seen(base, sid, 'read', blueprint_subject=blueprint_subject)
+    mark_seen(base, sid, 'global')
+    return approve_gate(base, sid, 's2')
+
+
 def _has_stage5_work(novel_dir: Path) -> bool:
     stage5 = novel_dir / 'stage5'
     return bool(

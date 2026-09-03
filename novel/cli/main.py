@@ -18,7 +18,7 @@ main.py —— `python -X utf8 -u -m novel.cli <子命令> …`
     reconcile                       启动时把「运行中」一律改判「不知道」
     doctor --llm-transport          0 成本探测 DeepSeek DNS/TCP/TLS/HTTP；不发正文/密钥
     response-repair <sid>           0 成本：提交/放弃一份隔离的结构化响应修复稿
-    approval <show|backfill|seen|gate|template|apply>  0 成本：headless 审批 façade
+    approval <show|backfill|seen|gate|close-stage2|template|apply>  0 成本审批 façade
 
 ⚠ **这张表就是 `--help` 打印出来的那一份**（argparse 的 `description` 直接取本 docstring），
 而操作规程让执行者第一步就跑 `--help`。少列一条 = 那条路对读它的人不存在。
@@ -273,6 +273,15 @@ def _parser() -> argparse.ArgumentParser:
     approval_gate.add_argument('gate', choices=('s0', 's1', 's2'))
     approval_gate.add_argument('sid')
     approval_gate.add_argument('--base', required=True)
+
+    approval_close_stage2 = approval_sub.add_parser(
+        'close-stage2',
+        help='用已读 Blueprint opaque token 顺序恢复 s0/s1/seen.read/global/s2')
+    approval_close_stage2.add_argument('sid')
+    approval_close_stage2.add_argument('--base', required=True)
+    approval_close_stage2.add_argument(
+        '--input', required=True,
+        help='BlueprintSeenRequest JSON；传 - 时从 stdin 读取')
 
     approval_workpack = approval_sub.add_parser(
         'workpack', help='只读输出当前 Stage4/6/7 审批工作包')
@@ -2155,7 +2164,9 @@ def _approval_input(path: str) -> str:
         raise TerminalState(f'审批输入不可读：{exc}') from exc
 
 
-_APPROVAL_WRITE_ACTIONS = frozenset({'backfill', 'seen', 'gate', 'apply'})
+_APPROVAL_WRITE_ACTIONS = frozenset({
+    'backfill', 'seen', 'gate', 'close-stage2', 'apply',
+})
 
 
 def _cmd_approval(a: argparse.Namespace) -> int:
@@ -2211,6 +2222,14 @@ def _cmd_approval_admitted(a: argparse.Namespace) -> int:
             raise ApprovalRequired(
                 's4 只接受带 subject/逐章决定的 typed structure apply')
         result = approvals.approve_gate(a.base, a.sid, a.gate)
+    elif a.approval_action == 'close-stage2':
+        try:
+            subject = BlueprintSeenRequest.model_validate_json(
+                _approval_input(a.input))
+        except ValidationError as exc:
+            raise TerminalState(
+                f'Stage2 收口 JSON 不符合 BlueprintSeenRequest 契约：{exc}') from exc
+        result = approvals.close_stage2_review(a.base, a.sid, subject)
     elif a.approval_action == 'workpack':
         if a.surface == 'design':
             result = approvals.design_workpack(a.base, a.sid)

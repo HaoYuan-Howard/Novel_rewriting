@@ -158,8 +158,9 @@ UNVER 仍阻断；已隔离 UNVER 仍进 inbox/终审包并把最终态限制为
 
 Stage4 有两次正式人审，必须按顺序分别落账。
 
-若这本书还没有 `_service/approvals/<SID>.json`，先经同一公开 façade 补齐早期
-阅读/闸门记录；不能由 Commander 运行时 import 私调服务。`seen.read` 不是一句空确认：
+若这本书还没有 `_service/approvals/<SID>.json`，或已有 raw 记录因当前主体更新而
+投影为 suspended/false，先经同一公开 façade 补齐早期阅读/闸门记录；不能由 Commander
+运行时 import 私调服务。`seen.read` 不是一句空确认：
 它必须绑定 agent **实际完整读过**的 current Blueprint 工作包。先按主 skill 的 ready
 `operator next → run_step.py`（blocked recovery 才在中间显式铸 permit）纪律运行
 `stage2.blueprint --emit-review-workpack`，完整阅读后把工作包顶层 opaque token
@@ -191,6 +192,18 @@ novel.cli approval gate s2 <SID> --base <BASE>
 `approval backfill` 不会制造 `seen.read/global` 或 `gate.s2`，不能拿它代替这段阅读事实。
 通用 `approval gate` 只公开 `s0/s1/s2`；s4 必须走下面带完整 subject 与逐章决定的
 typed structure apply，不能匿名盖章。
+
+在 AgentRun 的标准 reviewer 路径中，Commander 仍只提交同一份
+`BlueprintSeenRequest`；RunSupervisor 用一枚 launch ticket 启动唯一的：
+
+```text
+novel.cli approval close-stage2 <SID> --base <BASE> --input <BLUEPRINT_SEEN.json>
+```
+
+该 façade 在同一个可取消进程内严格复用上面的五步服务顺序。它不省略任何校验，
+不生成 Global review、不替 Commander 阅读，也不修改小说 artifact；其目的只是避免
+Supervisor 在一枚单次 ticket 内继续启动五棵独立子进程。人工/诊断路径仍可逐步执行
+上面的五条命令。
 
 ### A 候选设计审阅
 

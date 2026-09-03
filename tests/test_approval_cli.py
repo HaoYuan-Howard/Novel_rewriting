@@ -77,6 +77,55 @@ def test_headless_seen_and_early_gates_reuse_approval_services(
     ]
 
 
+def test_headless_stage2_closure_parses_one_typed_input(
+        monkeypatch, capsys, tmp_path):
+    request = BlueprintSeenRequest(review_token='bpr3_' + 'b' * 64)
+    source = tmp_path / 'blueprint-seen.json'
+    source.write_text(request.model_dump_json(indent=2), encoding='utf-8')
+    calls = []
+    monkeypatch.setattr(
+        approvals, 'close_stage2_review',
+        lambda base, sid, subject: calls.append(
+            (base, sid, subject)) or _doc())
+
+    rc = cli.main([
+        'approval', 'close-stage2', SID, '--base', str(tmp_path),
+        '--input', str(source),
+    ])
+
+    assert rc == X.OK
+    assert json.loads(capsys.readouterr().out)['sid'] == SID
+    assert calls == [(str(tmp_path), SID, request)]
+
+
+def test_stage2_closure_reuses_the_five_existing_services_in_order(monkeypatch):
+    request = BlueprintSeenRequest(review_token='bpr3_' + 'b' * 64)
+    calls = []
+    final = _doc()
+
+    def gate(base, sid, key):
+        calls.append(('gate', base, sid, key))
+        return final
+
+    def seen(base, sid, key, *, blueprint_subject=None):
+        calls.append(('seen', base, sid, key, blueprint_subject))
+        return final
+
+    monkeypatch.setattr(approvals, 'approve_gate', gate)
+    monkeypatch.setattr(approvals, 'mark_seen', seen)
+
+    got = approvals.close_stage2_review('base', SID, request)
+
+    assert got is final
+    assert calls == [
+        ('gate', 'base', SID, 's0'),
+        ('gate', 'base', SID, 's1'),
+        ('seen', 'base', SID, 'read', request),
+        ('seen', 'base', SID, 'global', None),
+        ('gate', 'base', SID, 's2'),
+    ]
+
+
 def test_headless_read_seen_rejects_an_unbound_cli_confirmation(
         monkeypatch, capsys, tmp_path):
     called = []

@@ -330,6 +330,39 @@ def test_queue_runs_blueprint_then_stops_at_stage4_for_global_review(
     assert 'global 与 blueprint' in blocked[0].why
 
 
+def test_operator_projection_routes_expired_s2_proof_back_before_stage4_review(
+        queue_base, monkeypatch):
+    """真实回归：旧 seen/gate proof 不能把 Commander 送进必然拒绝的 A 模板。"""
+    monkeypatch.setattr(
+        Q, 'nodes_up_to', lambda _until: ['stage4.design', 'stage4.plan'])
+    overview = SimpleNamespace(stages=[])
+
+    def verdict(_overview, node):
+        return (
+            (Q.st.RESUME_SKIP, 'Stage4A current candidate 已落盘')
+            if node == 'stage4.design'
+            else (Q.st.RESUME_RUN, 'Stage4B plan 缺失')
+        )
+
+    monkeypatch.setattr(Q.st, 'resume_verdict', verdict)
+    monkeypatch.setattr(
+        Q.approvals, 'require_stage2_review', lambda *_args: None)
+    projection = SimpleNamespace(
+        sid='book-a', gate={'s2': False})
+
+    todo, blocked = Q.plan_book_from_overview(
+        queue_base, 'book-a', overview,
+        until_stage='stage4', follow_check=False,
+        approval_doc=projection)
+
+    assert todo == []
+    assert [item.node for item in blocked] == ['stage4.design', 'stage4.plan']
+    assert all(
+        item.waiting_on == Q.WAITING_ON_STAGE2_REVIEW for item in blocked)
+    assert all(item.steps == [] for item in blocked)
+    assert 'seen/gate.s2 proof' in blocked[0].why
+
+
 @pytest.mark.parametrize('invalid', [False, True])
 def test_queue_materializes_missing_projection_without_paid_global(
         queue_base, monkeypatch, invalid):

@@ -481,6 +481,28 @@ def test_same_epoch_reviewer_approval_inputs_keep_each_typed_payload(base):
     assert json.loads(second_path.read_text('utf-8')) == second.payload
 
 
+def test_blueprint_seen_uses_one_admitted_stage2_closure_process(base):
+    """一枚 launch ticket 只启动一个 façade 进程，不在 callback 内串起五棵子进程。"""
+    epoch = ExecutionEpoch(
+        epoch_id='stage2-close-epoch', ordinal=1, reason='initial',
+        argv=['commander', 'headless'], prompt_sha256='7' * 64,
+        protocol_version='test-protocol', cli_version='test-cli',
+        code_version='test-code-version', skill_sha256='8' * 64,
+        session_run_id='stage2-close-session')
+    action = agent.reviewer_tasks.ReviewerApprovalAction(
+        kind='approval', surface='blueprint_seen',
+        payload={'review_token': 'bpr3_' + '9' * 64})
+
+    argv = agent._reviewer_approval_argv(base, '42', epoch, action)
+    input_path = Path(argv[argv.index('--input') + 1])
+
+    assert argv[:5] == [
+        agent.sys.executable, '-B', '-m', 'novel.cli', 'approval']
+    assert argv[5:8] == ['close-stage2', '42', '--base']
+    assert argv[8] == base
+    assert json.loads(input_path.read_text('utf-8')) == action.payload
+
+
 def test_stage2_reviewer_global_edit_uses_the_same_typed_service_transport(
         base, book):
     edit = GlobalEdit.model_validate({

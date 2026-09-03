@@ -823,7 +823,7 @@ def _reviewer_approval_argv(
         identity_sha256=hashlib.sha256(payload).hexdigest(), payload=payload)
     if action.surface == 'blueprint_seen':
         tail = [
-            'approval', 'seen', 'read', sid, '--base', base,
+            'approval', 'close-stage2', sid, '--base', base,
             '--input', str(payload_path)]
     else:
         tail = [

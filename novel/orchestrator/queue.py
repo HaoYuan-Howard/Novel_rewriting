@@ -308,6 +308,15 @@ def plan_book_from_overview(
                 BlockingFindingsUnresolved,
             ):
                 why_blocked = WAITING_ON_STAGE2_REVIEW
+            else:
+                # Global typed review current 仍不等于完整 Stage2 审批链 current。
+                # Blueprint/Global 在 review 后重建会让 raw seen/gate proof 暂停；
+                # operator 已经冻结了同一时点的完整审批投影，就必须先把这项
+                # 恢复路由交回 Stage2 reviewer。否则队列会前移到 Stage4A，
+                # 而 design workpack/template 又按生产闸正确拒绝缺失 gate.s2，
+                # 形成一个无法由 Commander 自己越过的确定性死锁。
+                if approval_doc is not None and not approval_doc.gate['s2']:
+                    why_blocked = WAITING_ON_STAGE2_REVIEW
 
         if why_blocked is None:
             ghosts = _upstream_invalid(ov, spec.stage)
@@ -580,7 +589,8 @@ def _blocked_why(
     if waiting_on == WAITING_ON_STAGE2_REVIEW:
         return (
             'Stage2 尚未在当前完整主体上收口：global/blueprint 可能缺失、过期或有'
-            '问题稿/联合 HARD，也可能是全局逐项复核尚未全部 PASS。global 与 blueprint '
+            '问题稿/联合 HARD，也可能是全局逐项复核尚未全部 PASS，或 current '
+            'seen/gate.s2 proof 尚未随最新主体恢复。global 与 blueprint '
             '可以先后生成并在人工阅读期间并行推进，但 Stage4A/B、写作上下文、后续'
             '付费调用与最终成书都不会越过这道门；处理完具体终态后请重新预览队列；'
             f'{verdict_why}')
