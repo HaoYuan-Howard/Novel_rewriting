@@ -32,7 +32,8 @@ from novel import agent_session_audit, paths
 from novel.agent_capabilities import validate_profile
 from novel.agents.base import render_structured_agent_stdin_bytes
 from novel.agents.session_client import (
-    agent_json_schema, validate_agent_session_request_binding,
+    SAME_RUN_RESUMABLE_AGENT_FAILURES, agent_json_schema,
+    validate_agent_session_request_binding,
 )
 from novel.config import ENV_KEYS
 from novel.appendlog import process_append_lock
@@ -47,6 +48,7 @@ RUN_FILE = 'run.json'
 MANIFEST_FILE = 'repair_manifest.json'
 RESOLUTION_FILE = 'batch_resolution.json'
 COMMITTED_FILE = 'committed.json'
+DELIVERY_RECOVERY_FILE = 'delivery_recovery.json'
 
 _LOCK = threading.RLock()
 _OWNERSHIP_REGISTRY_LOCK = threading.Lock()
@@ -512,7 +514,7 @@ def _materialize_run_root(novel_dir: Path, run_id: str) -> Path:
     legacy = paths.legacy_stage2_blueprint_run_path(novel_dir, run_id)
     if legacy == current:
         return current
-    # legacy 目录从此只读。仅物化本协议登记的四份状态与
+    # legacy 目录从此只读。仅物化本协议登记的状态与
     # checkpoint JSON，不递归搬运临时文件或未知形状。
     evidence = _existing_run_state(legacy)
     if evidence:
@@ -558,6 +560,7 @@ def _existing_run_state(root: Path) -> tuple[Path, ...]:
         root / MANIFEST_FILE,
         root / RESOLUTION_FILE,
         root / COMMITTED_FILE,
+        root / DELIVERY_RECOVERY_FILE,
     ]
     checkpoint_dir = root / 'checkpoints'
     try:
@@ -697,6 +700,184 @@ def ensure_run(
             payload = {**identity, 'created_at': _now()}
             _atomic_json(target, payload)
             return payload
+
+
+def clear_delivery_recovery(ctx: Any) -> None:
+    """清掉当前 run 的瞬态交付等待标记；逐次失败事实仍完整留在 ledger。"""
+    target = _run_root(ctx) / DELIVERY_RECOVERY_FILE
+    with _LOCK:
+        with process_append_lock(target):
+            try:
+                target.unlink()
+            except FileNotFoundError:
+                pass
+
+
+def write_delivery_recovery(
+    ctx: Any,
+    *,
+    phase: str,
+    chapters: Sequence[int],
+    completed_chapters: Iterable[int],
+    failures: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    """冻结 Stage2 Agent 交付失败的同 run 恢复面，不保存异常正文。"""
+    ordered = [int(chapter) for chapter in chapters]
+    completed = sorted({int(chapter) for chapter in completed_chapters})
+    if not ordered or len(ordered) != len(set(ordered)):
+        raise ProvenanceRefused('Stage2 delivery recovery 的章节集合为空或重复')
+    if any(chapter not in ordered for chapter in completed):
+        raise ProvenanceRefused('Stage2 delivery recovery 的 completed 章越出本批请求')
+    normalized_failures: list[dict[str, Any]] = []
+    for row in failures:
+        chapter = row.get('chapter')
+        kind = row.get('error_kind')
+        attempts = row.get('attempts')
+        status = row.get('status')
+        if (not isinstance(chapter, int) or isinstance(chapter, bool)
+                or chapter not in ordered or chapter in completed
+                or kind not in SAME_RUN_RESUMABLE_AGENT_FAILURES
+                or not isinstance(attempts, int) or isinstance(attempts, bool)
+                or attempts < 1
+                or (status is not None and (
+                    not isinstance(status, int) or isinstance(status, bool)
+                    or status < 100 or status > 599))):
+            raise ProvenanceRefused(
+                f'Stage2 delivery recovery failure 身份不合法：{row!r}')
+        normalized_failures.append({
+            'chapter': chapter,
+            'error_kind': kind,
+            'status': status,
+            'attempts': attempts,
+        })
+    normalized_failures.sort(key=lambda row: row['chapter'])
+    pending = [row['chapter'] for row in normalized_failures]
+    if len(pending) != len(set(pending)) or sorted(completed + pending) != sorted(ordered):
+        raise ProvenanceRefused(
+            'Stage2 delivery recovery 的 completed/pending 未精确覆盖本批章节')
+
+    run_path = _run_root(ctx) / RUN_FILE
+    run = _read_json(run_path)
+    identity = {
+        'run_id': check_run_id(ctx.run_id),
+        'sid': ctx.sid,
+        'node': ctx.node,
+        'code': ctx.code,
+    }
+    if {key: run.get(key) for key in identity} != identity:
+        raise ProvenanceRefused(
+            'Stage2 delivery recovery 不能绑定漂移或外来的 run.json')
+    policy = run.get('request_policy')
+    policy_phases = (
+        policy.get('phases') if isinstance(policy, Mapping) else None)
+    phase_names = {
+        row.get('phase') for row in policy_phases or ()
+        if isinstance(row, Mapping)
+    }
+    if not isinstance(phase, str) or not phase or phase not in phase_names:
+        raise ProvenanceRefused(
+            'Stage2 delivery recovery 的 phase 未登记在当前 run policy')
+    payload = {
+        'version': VERSION,
+        'state': 'waiting',
+        **identity,
+        'phase': str(phase),
+        'total_chapters': len(ordered),
+        'completed_chapters': completed,
+        'pending_chapters': pending,
+        'failures': normalized_failures,
+        'run_sha256': _sha(run_path.read_bytes()),
+        'updated_at': _now(),
+    }
+    target = _run_root(ctx) / DELIVERY_RECOVERY_FILE
+    with _LOCK:
+        with process_append_lock(target):
+            _atomic_json(target, payload)
+    return payload
+
+
+def read_delivery_recovery(
+    novel_dir: Path,
+    run_id: str,
+    *,
+    sid: str,
+    code: str,
+) -> dict[str, Any] | None:
+    """读取并严格核验 Supervisor 可据以暂停的 Stage2 恢复凭据。"""
+    root = _materialize_run_root(Path(novel_dir), check_run_id(run_id))
+    target = root / DELIVERY_RECOVERY_FILE
+    if not target.is_file():
+        return None
+    payload = _read_json(target)
+    required = {
+        'version', 'state', 'run_id', 'sid', 'node', 'code', 'phase',
+        'total_chapters', 'completed_chapters', 'pending_chapters',
+        'failures', 'run_sha256', 'updated_at',
+    }
+    if set(payload) != required or payload.get('state') != 'waiting':
+        raise ArtifactUnreadable(
+            f'{target} 不是当前 Stage2 delivery recovery 形状')
+    expected = {
+        'run_id': check_run_id(run_id), 'sid': sid,
+        'node': 'stage2.blueprint', 'code': code,
+    }
+    if {key: payload.get(key) for key in expected} != expected:
+        raise ProvenanceRefused(f'{target} 与当前 execution 身份不一致')
+    run_path = root / RUN_FILE
+    if not run_path.is_file():
+        raise ProvenanceRefused(f'{target} 绑定的 run.json 已缺失或漂移')
+    run_bytes = run_path.read_bytes()
+    if payload.get('run_sha256') != _sha(run_bytes):
+        raise ProvenanceRefused(f'{target} 绑定的 run.json 已缺失或漂移')
+    run = _read_json(run_path)
+    total = payload.get('total_chapters')
+    completed = payload.get('completed_chapters')
+    pending = payload.get('pending_chapters')
+    failures = payload.get('failures')
+    phase = payload.get('phase')
+    policy = run.get('request_policy')
+    policy_phases = (
+        policy.get('phases') if isinstance(policy, Mapping) else None)
+    phase_names = {
+        row.get('phase') for row in policy_phases or ()
+        if isinstance(row, Mapping)
+    }
+    if (not isinstance(phase, str) or not phase or phase not in phase_names
+            or not _is_sha256(payload.get('run_sha256'))
+            or not isinstance(payload.get('updated_at'), str)
+            or not payload['updated_at']
+            or not isinstance(total, int) or isinstance(total, bool) or total < 1
+            or not isinstance(completed, list) or not isinstance(pending, list)
+            or not isinstance(failures, list)
+            or any(not isinstance(chapter, int) or isinstance(chapter, bool)
+                   or chapter < 1 for chapter in completed + pending)
+            or completed != sorted(completed) or pending != sorted(pending)
+            or len(completed) + len(pending) != total
+            or len(set(completed + pending)) != total
+            or set(completed).intersection(pending)
+            or len(failures) != len(pending)):
+        raise ArtifactUnreadable(f'{target} 的章节计数不闭合')
+    normalized_failures: list[dict[str, Any]] = []
+    for row in failures:
+        if not isinstance(row, dict):
+            raise ArtifactUnreadable(f'{target} 的 failures 含非对象')
+        chapter = row.get('chapter')
+        kind = row.get('error_kind')
+        status = row.get('status')
+        attempts = row.get('attempts')
+        if (set(row) != {'chapter', 'error_kind', 'status', 'attempts'}
+                or chapter not in pending
+                or kind not in SAME_RUN_RESUMABLE_AGENT_FAILURES
+                or not isinstance(attempts, int) or isinstance(attempts, bool)
+                or attempts < 1
+                or (status is not None and (
+                    not isinstance(status, int) or isinstance(status, bool)
+                    or status < 100 or status > 599))):
+            raise ArtifactUnreadable(f'{target} 的 failure 身份不合法')
+        normalized_failures.append(row)
+    if sorted(row['chapter'] for row in normalized_failures) != sorted(pending):
+        raise ArtifactUnreadable(f'{target} 的 failure 与 pending 章不闭合')
+    return payload
 
 
 def _checkpoint_identity(

@@ -311,6 +311,65 @@ def test_claude_requires_cli_session_id_and_keeps_failure_usage(tmp_path):
     assert 'private detail' not in str(caught.value)
 
 
+@pytest.mark.parametrize(
+    ('result', 'expected_kind', 'expected_status', 'retryable'),
+    [
+        (
+            'Failed to authenticate. API Error: 403 Request not allowed',
+            'provider_transient', 403, True,
+        ),
+        (
+            'API Error: 403 model access forbidden for this account',
+            'permission', 403, False,
+        ),
+            (
+                'Claude usage limit reached; resets at 14:00',
+                'usage_limit', None, False,
+            ),
+            (
+                'network request failed: connection reset by peer',
+                'connection', None, True,
+            ),
+            (
+                'OAuth access token has expired; re-authenticate',
+                'authentication', None, False,
+            ),
+        ],
+)
+def test_claude_failure_envelope_distinguishes_transient_and_permanent_403(
+        tmp_path, result, expected_kind, expected_status, retryable):
+    raw = json.loads(_claude_wrapper(session_id='failed-session'))
+    raw.update({
+        'is_error': True,
+        'result': result,
+        'structured_output': None,
+        'modelUsage': {
+            'claude-opus-5-20260801': {
+                'inputTokens': 0,
+                'cacheReadInputTokens': 0,
+                'cacheCreationInputTokens': 0,
+                'outputTokens': 0,
+            },
+        },
+        'usage': {'output_tokens_details': {'thinking_tokens': 0}},
+    })
+    driver = ClaudeCodeDriver(
+        executable='claude.exe',
+        runner=lambda argv, **_kwargs: _completed(
+            argv, json.dumps(raw), returncode=1))
+
+    with pytest.raises(AgentCommandError) as caught:
+        driver.start(
+            _profile('claude-code'), _request(tmp_path, prompt='开始'))
+
+    assert caught.value.error_kind == expected_kind
+    assert caught.value.status == expected_status
+    assert caught.value.retryable is retryable
+    assert caught.value.usage is not None
+    assert caught.value.usage.total_tokens == 0
+    assert result not in str(caught.value)
+
+
 def test_claude_schema_requires_structured_output_but_schema_less_can_use_result(
         tmp_path):
     raw = json.loads(_claude_wrapper())
@@ -514,6 +573,25 @@ def test_codex_startup_error_without_thread_keeps_failure_usage(tmp_path):
     assert caught.value.usage.prompt_cache_hit_tokens == 4
     assert caught.value.usage.total_tokens == 11
     assert 'private' not in str(caught.value) and '私密内容' not in str(caught.value)
+
+
+def test_codex_nonzero_exit_uses_private_stderr_only_for_retry_classification(
+        tmp_path):
+    stdout = json.dumps({
+        'type': 'thread.started', 'thread_id': 'network-failed-thread',
+    })
+    private_stderr = 'network request failed: connection reset private-detail'
+    driver = CodexDriver(
+        executable='codex.exe',
+        runner=lambda argv, **_kwargs: _completed(
+            argv, stdout, returncode=1, stderr=private_stderr))
+
+    with pytest.raises(AgentCommandError) as caught:
+        driver.start(_profile('codex'), _request(tmp_path, prompt='开始'))
+
+    assert caught.value.error_kind == 'connection'
+    assert caught.value.retryable is True
+    assert private_stderr not in str(caught.value)
 
 
 def test_codex_failed_turn_usage_is_counted_without_claiming_completion(tmp_path):

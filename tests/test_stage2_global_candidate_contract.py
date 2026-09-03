@@ -51,7 +51,7 @@ def _full(candidate: dict) -> str:
 def _session_client(ctx, driver, *, max_turns: int = 2) -> SessionAgentClient:
     return SessionAgentClient(
         ctx, _profile(), driver,
-        parent_run_id=ctx.run_id, max_turns=max_turns)
+        parent_run_id=ctx.run_id, max_semantic_turns=max_turns)
 
 
 def _role_leak_candidate() -> dict:

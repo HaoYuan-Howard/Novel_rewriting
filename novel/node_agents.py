@@ -107,7 +107,7 @@ class NodeExecutorAgent(ABC, Generic[A]):
             ctx.executor_profile, role='executor')
         self.client = SessionAgentClient(
             ctx, ctx.executor_profile, self.driver,
-            parent_run_id=ctx.run_id, max_turns=max_turns)
+            parent_run_id=ctx.run_id, max_semantic_turns=max_turns)
 
     @abstractmethod
     def run(self) -> NodeAgentResult[A]:
@@ -630,7 +630,7 @@ class BlueprintSessionPool:
                 driver,
                 chapter=chapter,
                 parent_run_id=self.ctx.run_id,
-                max_turns=self.max_turns,
+                max_semantic_turns=self.max_turns,
                 preflight_probe=self._probe,
             )
         except Exception:
@@ -1491,7 +1491,7 @@ class Stage4DesignSessionPool:
                 driver,
                 chapter=chapter,
                 parent_run_id=self.ctx.run_id,
-                max_turns=self.max_turns,
+                max_semantic_turns=self.max_turns,
                 preflight_probe=self._probe,
             )
         except BaseException:
@@ -2184,7 +2184,8 @@ class Stage4PlanSessionPool:
                     'stage4.plan 章 session 在同一 pool 内漂移厂商身份')
             client = SessionAgentClient(
                 self.ctx, self.profile, driver, chapter=chapter,
-                parent_run_id=self.ctx.run_id, max_turns=self.max_turns,
+                parent_run_id=self.ctx.run_id,
+                max_semantic_turns=self.max_turns,
                 preflight_probe=self._probe)
             self._clients[chapter] = client
             return client
@@ -2493,7 +2494,7 @@ class Stage5SessionPool:
                 driver,
                 chapter=chapter,
                 parent_run_id=self.ctx.run_id,
-                max_turns=self.max_turns,
+                max_semantic_turns=self.max_turns,
                 preflight_probe=self._probe,
             )
         except Exception:
@@ -3173,7 +3174,7 @@ class SemanticSessionPool:
                 self.profile,
                 driver,
                 parent_run_id=self.ctx.run_id,
-                max_turns=self.max_turns,
+                max_semantic_turns=self.max_turns,
                 preflight_probe=self._probe,
             )
         except Exception:

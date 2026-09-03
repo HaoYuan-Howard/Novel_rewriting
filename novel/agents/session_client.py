@@ -31,6 +31,7 @@ from novel.agents import (
     AgentError, AgentProbe, AgentRequest, AgentTurn, AgentUsage,
     agent_delivery_protocol,
 )
+from novel.config import DEFAULT_BACKOFF_BASE, DEFAULT_MAX_RETRIES
 from novel.errors import ProvenanceRefused
 from novel.llm.client import LlmFailed
 from novel.llm.json_text import normalize_json_text
@@ -42,6 +43,27 @@ from novel.run import RunContext
 
 M = TypeVar('M', bound=BaseModel)
 SESSION_PROTOCOL_VERSION = 'node-executor/v1'
+
+# 这些失败没有形成一份可交付模型响应；同 run 的 checkpoint 仍可在外部状态
+# 恢复后继续消费。未知 CLI/protocol 错误不在这里，避免把代码 bug 冒充网络波动。
+SAME_RUN_RESUMABLE_AGENT_FAILURES = frozenset({
+    'authentication', 'connection', 'provider_transient', 'rate_limit',
+    'server_error', 'timeout', 'usage_limit',
+})
+
+
+class AgentDeliveryUnavailable(LlmFailed):
+    """Agent 交付未形成；调用方可据 typed 字段决定是否保留同 run。"""
+
+    def __init__(
+        self, message: str, *, error_kind: str, attempts: int,
+        status: int | None, same_run_resumable: bool,
+    ) -> None:
+        super().__init__(message)
+        self.error_kind = error_kind
+        self.attempts = attempts
+        self.status = status
+        self.same_run_resumable = same_run_resumable
 
 # 恢复策略与会话隔离是一对冻结语义，不能只把新 policy 名字塞进 allowlist 后
 # 继续沿用 Stage2 的逐章含义。逐章写作、Stage6 的 A/B 判官，以及书级单节点
@@ -348,11 +370,18 @@ class SessionAgentClient:
         *,
         chapter: int | None = None,
         parent_run_id: str | None = None,
-        max_turns: int = 4,
+        max_semantic_turns: int = 4,
+        max_delivery_retries: int = DEFAULT_MAX_RETRIES,
+        delivery_backoff_base: float = DEFAULT_BACKOFF_BASE,
+        sleep: Callable[[float], None] = time.sleep,
         preflight_probe: AgentProbe | None = None,
     ) -> None:
-        if max_turns < 1:
-            raise ValueError('max_turns 必须 >= 1')
+        if max_semantic_turns < 1:
+            raise ValueError('max_semantic_turns 必须 >= 1')
+        if max_delivery_retries < 0:
+            raise ValueError('max_delivery_retries 必须 >= 0')
+        if delivery_backoff_base < 0:
+            raise ValueError('delivery_backoff_base 必须 >= 0')
         self.ctx = ctx
         self.profile = validate_profile(profile, role='executor')
         self.driver = driver
@@ -361,7 +390,12 @@ class SessionAgentClient:
             raise ValueError(
                 'executor session 的 parent_run_id 必须等于 RunContext.run_id')
         self.parent_run_id = ctx.run_id
-        self.max_turns = max_turns
+        # 语义修订轮与 CLI 交付尝试是两套正交预算。前者只在一轮新的
+        # candidate/反馈修订开始时消耗；后者只在同一轮未取得回答时消耗。
+        self.max_semantic_turns = max_semantic_turns
+        self.max_delivery_retries = max_delivery_retries
+        self.delivery_backoff_base = delivery_backoff_base
+        self._sleep = sleep
         self.model = self.profile.model
 
         self.session_run_id = str(uuid.uuid4())
@@ -410,7 +444,11 @@ class SessionAgentClient:
 
     @property
     def can_resume(self) -> bool:
-        return self._started and not self._ended and self._turn_index < self.max_turns
+        return (
+            self._started
+            and not self._ended
+            and self._turn_index < self.max_semantic_turns
+        )
 
     @property
     def driver_failed(self) -> bool:
@@ -521,7 +559,7 @@ class SessionAgentClient:
         ``allow_resume=False`` 用于业务状态机已经到达自己的窄修上限、但通用
         session 尚有剩余轮次的终态拒稿：它仍登记 accepted candidate 的 rejected
         gate，却绝不把反馈排入下一次 provider 调用。这样局部修订预算不会被通用
-        ``max_turns`` 偷偷放宽。
+        ``max_semantic_turns`` 偷偷放宽。
         """
         if type(allow_resume) is not bool:
             raise ValueError('allow_resume 必须显式给 bool')
@@ -611,7 +649,8 @@ class SessionAgentClient:
         if not isinstance(accepted_text, str) or not accepted_text:
             raise RuntimeError(
                 f'{purpose}: restored checkpoint 缺完整 accepted stdout，不能续改')
-        can_continue = self._turn_index < self.max_turns and allow_resume
+        can_continue = (
+            self._turn_index < self.max_semantic_turns and allow_resume)
         safe_detail: list[dict[str, object]] = []
         for row in rows:
             findings = row.get('findings')
@@ -748,6 +787,10 @@ class SessionAgentClient:
         purpose: str, latency_ms: int, outcome: str,
         error_kind: str | None, prompt_sha256: str, schema_sha256: str,
         usage: AgentUsage, progress: RequestProgress | None,
+        delivery_attempt: int, max_delivery_attempts: int,
+        status: int | None = None, retryable: bool | None = None,
+        will_retry: bool = False, backoff_ms: int | None = None,
+        link_provider_turn: bool = True,
     ) -> str | None:
         actual_model = None if turn is None else turn.model
         actual_effort = None if turn is None else turn.actual_reasoning_effort
@@ -773,14 +816,21 @@ class SessionAgentClient:
             reasoning_effort=self.profile.reasoning_effort,
             thinking=None, json_mode=True, max_tokens=None,
             finish_reason=None,
-            attempt=self._turn_index, max_attempts=self.max_turns,
+            attempt=delivery_attempt, max_attempts=max_delivery_attempts,
             latency_ms=latency_ms, error_kind=error_kind,
-            retryable=False, will_retry=False,
+            status=status, retryable=retryable, will_retry=will_retry,
+            backoff_ms=backoff_ms,
             progress=progress,
         )
+        if not link_provider_turn:
+            # 没有形成可采纳回答的传输拒绝只是一笔 delivery attempt，不是
+            # provider turn。它留在逐次 ledger 中（超时也可能有费用），但不能
+            # 被 checkpoint 的 attempt_links 冒充为一份可恢复回答。
+            return None
         # 只有 ledger.record 成功后，这一 attempt 才有资格进入 acceptance 联结。
-        # 不能稍后再按 purpose 扫整只 ledger：并发 pool/失败重启会共享 purpose，
-        # 那会把另一只 logical session 的费用事实误写成当前 session 的轮次。
+        # 这里只联结真正形成 provider turn 的 attempt；传输拒绝仍由 ledger 独立
+        # 留证。不能稍后按 purpose 扫整只 ledger：并发 pool/失败重启会共享
+        # purpose，那会把另一只 logical session 的费用事实误写进当前 checkpoint。
         self._logical_session_attempts.append((purpose, attempt_id))
         if provider_session_id is None:
             return None
@@ -834,12 +884,12 @@ class SessionAgentClient:
             raise LlmFailed(
                 f'{self.ctx.node}: executor session 运行期间代码版本发生漂移；'
                 '已在下一次模型请求前停止，必须用新代码新建 session')
-        if self._turn_index >= self.max_turns:
+        if self._turn_index >= self.max_semantic_turns:
             raise LlmFailed(
-                f'{self.ctx.node}: executor 已用尽 {self.max_turns} 轮上限；'
+                f'{self.ctx.node}: executor 已用尽 '
+                f'{self.max_semantic_turns} 轮语义修订上限；'
                 '停止继续花费，保留最新 candidate/INVALID 供人工查看')
         self._turn_index += 1
-        attempt_id = _attempt_id()
         schema = request.output_schema
         if schema is None:
             raise LlmFailed(
@@ -861,56 +911,111 @@ class SessionAgentClient:
             purpose=purpose,
             turn_index=self._turn_index,
         )
-        self.ctx.require_observed_roots_current()
-        started = time.perf_counter()
-        heartbeat = AttemptHeartbeat(
-            self.ctx.observe, purpose=purpose, attempt=self._turn_index,
-            max_attempts=self.max_turns, progress=progress)
-        heartbeat.start()
-        try:
-            if self.provider_session_id is None:
-                turn = self.driver.start(self.profile, request)
+        max_delivery_attempts = self.max_delivery_retries + 1
+        turn: AgentTurn | None = None
+        attempt_id = ''
+        delivery_attempt = 0
+        started = 0.0
+        for delivery_attempt in range(1, max_delivery_attempts + 1):
+            # 退避期间代码/输入可能已变化；每次真正重发前都重新守一次来源根。
+            self.ctx.require_observed_roots_current()
+            attempt_id = _attempt_id()
+            started = time.perf_counter()
+            heartbeat = AttemptHeartbeat(
+                self.ctx.observe, purpose=purpose, attempt=delivery_attempt,
+                max_attempts=max_delivery_attempts, progress=progress)
+            heartbeat.start()
+            try:
+                if self.provider_session_id is None:
+                    turn = self.driver.start(self.profile, request)
+                else:
+                    turn = self.driver.resume(
+                        self.profile, self.provider_session_id, request)
+            except (AgentConfigurationError, AgentBusyError) as exc:
+                self._driver_failed = True
+                heartbeat.finish(outcome='failed', error_kind='agent_not_started')
+                # driver 明确声明子进程尚未成功进入供应商调用；不能给成本账增加
+                # calls_made，也不能伪造一个没有 provider session id 的 turn。
+                raise LlmFailed(
+                    f'{self.ctx.node}: agent 在启动前拒绝请求：{exc}') from exc
+            except AgentCommandError as exc:
+                usage = exc.usage or AgentUsage()
+                will_retry = exc.retryable and delivery_attempt < max_delivery_attempts
+                backoff_seconds = (
+                    max(
+                        self.delivery_backoff_base * (2 ** (delivery_attempt - 1)),
+                        exc.retry_after_seconds or 0.0,
+                    ) if will_retry else None)
+                # 命令失败没有形成可采纳 provider turn；即使 CLI 给了实际模型、
+                # usage 或临时 session id，也只能用于本次 ledger 结算，不能拿它
+                # resume 或塞进 checkpoint/session lineage。
+                try:
+                    self._record_turn(
+                        turn=exc.partial_turn,
+                        attempt_id=attempt_id,
+                        request_fingerprint=request_fingerprint,
+                        response_sha256=None, purpose=purpose,
+                        latency_ms=max(
+                            0, round((time.perf_counter() - started) * 1000)),
+                        outcome='error', error_kind=exc.error_kind,
+                        prompt_sha256=prompt_sha256, schema_sha256=schema_sha256,
+                        usage=usage, progress=progress,
+                        delivery_attempt=delivery_attempt,
+                        max_delivery_attempts=max_delivery_attempts,
+                        status=exc.status, retryable=exc.retryable,
+                        will_retry=will_retry,
+                        backoff_ms=(None if backoff_seconds is None else
+                                    round(backoff_seconds * 1000)),
+                        link_provider_turn=False,
+                    )
+                finally:
+                    heartbeat.finish(
+                        outcome='failed', error_kind=exc.error_kind)
+                if will_retry:
+                    assert backoff_seconds is not None
+                    # 与旧 LLM transport 一致，退避发生在请求执行之外；逐章线程
+                    # 可以各自等待，不占供应商进程 owner。
+                    self._sleep(backoff_seconds)
+                    continue
+                self._driver_failed = True
+                message = (
+                    f'{self.ctx.node}: agent CLI 交付失败：{exc}；'
+                    f'delivery attempt {delivery_attempt}/{max_delivery_attempts}')
+                if exc.error_kind in SAME_RUN_RESUMABLE_AGENT_FAILURES:
+                    raise AgentDeliveryUnavailable(
+                        message, error_kind=exc.error_kind,
+                        attempts=delivery_attempt, status=exc.status,
+                        same_run_resumable=True) from exc
+                raise LlmFailed(message) from exc
+            except AgentError as exc:
+                self._driver_failed = True
+                # 没有可信 provider session/usage 的协议失败只落成本失败事实；
+                # 不能伪造 provider turn，也不能进入自动恢复状态。
+                try:
+                    self._record_turn(
+                        turn=None, attempt_id=attempt_id,
+                        request_fingerprint=request_fingerprint,
+                        response_sha256=None, purpose=purpose,
+                        latency_ms=max(
+                            0, round((time.perf_counter() - started) * 1000)),
+                        outcome='error', error_kind='agent_protocol',
+                        prompt_sha256=prompt_sha256, schema_sha256=schema_sha256,
+                        usage=AgentUsage(), progress=progress,
+                        delivery_attempt=delivery_attempt,
+                        max_delivery_attempts=max_delivery_attempts,
+                        retryable=False, link_provider_turn=False,
+                    )
+                finally:
+                    heartbeat.finish(
+                        outcome='failed', error_kind='agent_protocol')
+                raise LlmFailed(f'{self.ctx.node}: agent 协议失败：{exc}') from exc
+            except BaseException:
+                heartbeat.finish(outcome='failed', error_kind='unexpected')
+                raise
             else:
-                turn = self.driver.resume(
-                    self.profile, self.provider_session_id, request)
-        except (AgentConfigurationError, AgentBusyError) as exc:
-            self._driver_failed = True
-            heartbeat.finish(outcome='failed', error_kind='agent_not_started')
-            # driver 明确声明子进程尚未成功进入供应商调用；不能给成本账增加
-            # calls_made，也不能伪造一个没有 provider session id 的 turn。
-            raise LlmFailed(
-                f'{self.ctx.node}: agent 在启动前拒绝请求：{exc}') from exc
-        except AgentCommandError as exc:
-            self._driver_failed = True
-            heartbeat.finish(outcome='failed', error_kind='agent_command')
-            partial = exc.partial_turn
-            usage = exc.usage or AgentUsage()
-            self._record_turn(
-                turn=partial, attempt_id=attempt_id,
-                request_fingerprint=request_fingerprint,
-                response_sha256=None, purpose=purpose,
-                latency_ms=max(0, round((time.perf_counter() - started) * 1000)),
-                outcome='error', error_kind='agent_command',
-                prompt_sha256=prompt_sha256, schema_sha256=schema_sha256,
-                usage=usage, progress=progress,
-            )
-            raise LlmFailed(f'{self.ctx.node}: agent CLI 执行失败：{exc}') from exc
-        except AgentError as exc:
-            self._driver_failed = True
-            heartbeat.finish(outcome='failed', error_kind='agent_protocol')
-            # 没有可信 provider session/usage 的协议失败只落成本失败事实；不能伪造 turn。
-            self._record_turn(
-                turn=None, attempt_id=attempt_id,
-                request_fingerprint=request_fingerprint,
-                response_sha256=None, purpose=purpose,
-                latency_ms=max(0, round((time.perf_counter() - started) * 1000)),
-                outcome='error', error_kind='agent_protocol',
-                prompt_sha256=prompt_sha256, schema_sha256=schema_sha256,
-                usage=AgentUsage(), progress=progress,
-            )
-            raise LlmFailed(f'{self.ctx.node}: agent 协议失败：{exc}') from exc
-        else:
-            heartbeat.finish(outcome='ok')
+                heartbeat.finish(outcome='ok')
+                break
+        assert turn is not None and attempt_id
 
         if (self.provider_session_id is not None
                 and turn.session_id != self.provider_session_id):
@@ -924,6 +1029,9 @@ class SessionAgentClient:
                 outcome='error', error_kind='provider_session_mismatch',
                 prompt_sha256=prompt_sha256, schema_sha256=schema_sha256,
                 usage=turn.usage, progress=progress,
+                delivery_attempt=delivery_attempt,
+                max_delivery_attempts=max_delivery_attempts,
+                retryable=False,
             )
             raise LlmFailed(
                 f'{self.ctx.node}: resume 返回了不同 provider session id；'
@@ -937,6 +1045,8 @@ class SessionAgentClient:
             outcome='ok', error_kind=None,
             prompt_sha256=prompt_sha256, schema_sha256=schema_sha256,
             usage=turn.usage, progress=progress,
+            delivery_attempt=delivery_attempt,
+            max_delivery_attempts=max_delivery_attempts,
         )
         if conflict_owner is not None:
             self._driver_failed = True
@@ -1168,12 +1278,14 @@ class SessionAgentClient:
         prior_turns = record.get('accepted_turn_index')
         prior_links = record.get('attempt_links')
         if (not isinstance(prior_turns, int) or isinstance(prior_turns, bool)
-                or prior_turns < 1 or prior_turns > self.max_turns
+                or prior_turns < 1
+                or prior_turns > self.max_semantic_turns
                 or not isinstance(prior_links, list)
                 or prior_turns != len(prior_links)):
             raise ProvenanceRefused(
                 f'{purpose}: checkpoint accepted_turn_index={prior_turns!r} '
-                f'与 attempt_links/当前 max_turns={self.max_turns} 不闭合')
+                f'与 attempt_links/当前 '
+                f'max_semantic_turns={self.max_semantic_turns} 不闭合')
         restored_links: list[dict[str, object]] = []
         restored_attempts: set[str] = set()
         for link in prior_links:
@@ -1416,7 +1528,7 @@ class SessionAgentClient:
                     }
                 raise LlmFailed(
                     f'{self.ctx.node}/{purpose}: {gate} 校验连续未通过，'
-                    f'已用尽 {self.max_turns} 轮；停止继续花费')
+                    f'已用尽 {self.max_semantic_turns} 轮语义修订；停止继续花费')
             feedback_payload: dict[str, object] = {
                 'kind': 'response_validation_failed',
                 'gate': gate,
@@ -1484,6 +1596,8 @@ class SessionAgentClient:
 
 
 __all__ = [
+    'AgentDeliveryUnavailable',
+    'SAME_RUN_RESUMABLE_AGENT_FAILURES',
     'SESSION_PROTOCOL_VERSION',
     'SessionAgentClient',
     'agent_request_fingerprint',

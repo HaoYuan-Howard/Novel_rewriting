@@ -914,7 +914,7 @@ class _NameMapResponseSource(Protocol):
 
     model: str
     turns_used: int
-    max_turns: int
+    max_semantic_turns: int
     driver_failed: bool
 
     def ask_json(self, system: str, user: str, **kwargs: Any) -> Any: ...
@@ -1323,11 +1323,13 @@ def _agent_rename_candidate(
             )
         except LlmFailed:
             turns_used = getattr(source, 'turns_used', None)
-            max_turns = getattr(source, 'max_turns', None)
+            max_semantic_turns = getattr(
+                source, 'max_semantic_turns', None)
             exhausted = (
                 isinstance(turns_used, int) and not isinstance(turns_used, bool)
-                and isinstance(max_turns, int) and not isinstance(max_turns, bool)
-                and turns_used >= max_turns)
+                and isinstance(max_semantic_turns, int)
+                and not isinstance(max_semantic_turns, bool)
+                and turns_used >= max_semantic_turns)
             if bool(getattr(source, 'driver_failed', False)) or not exhausted:
                 raise
             break

@@ -1293,11 +1293,13 @@ def _agent_hook_candidates(
             # checkpoint 仍是唯一可终态化候选；driver 或尚有预算的异常不能
             # 被旧候选掩盖，继续向 executor 抛出。
             turns_used = getattr(source, 'turns_used', None)
-            max_turns = getattr(source, 'max_turns', None)
+            max_semantic_turns = getattr(
+                source, 'max_semantic_turns', None)
             exhausted = (
                 isinstance(turns_used, int) and not isinstance(turns_used, bool)
-                and isinstance(max_turns, int) and not isinstance(max_turns, bool)
-                and turns_used >= max_turns
+                and isinstance(max_semantic_turns, int)
+                and not isinstance(max_semantic_turns, bool)
+                and turns_used >= max_semantic_turns
             )
             if bool(getattr(source, 'driver_failed', False)) or not exhausted:
                 raise

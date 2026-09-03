@@ -126,7 +126,7 @@ def _land_unit(
                 [json.dumps({'other': 0}), json.dumps({'value': value})]
                 if retry_once else json.dumps({'value': value}))),
         chapter=request.chapter,
-        max_turns=2,
+        max_semantic_turns=2,
     )
     kwargs = {}
     if request.chapter is not None:
@@ -337,7 +337,7 @@ def test_design_aggregate_usage_includes_failed_process_without_checkpoint(
     failed = SessionAgentClient(
         first, _profile(),
         _Driver(session_id='provider-ch0001-failed', content='{"other": 0}'),
-        chapter=1, max_turns=1)
+        chapter=1, max_semantic_turns=1)
     with pytest.raises(LlmFailed, match='已用尽 1 轮'):
         failed.ask_json(
             chapter.system, chapter.user, model_cls=_Answer,

@@ -182,7 +182,7 @@ def test_revision_chain_restores_latest_and_old_corruption_cannot_hide(
     _ensure(ctx)
     client = SessionAgentClient(
         ctx, _profile(), _Driver(['{"value":1}', '{"value":2}']),
-        max_turns=4)
+        max_semantic_turns=4)
     first, first_acceptance = _accept(ctx, client)
     first_path = _write(ctx, first, first_acceptance, state_value='first')
     second, second_acceptance = _accept(ctx, client)
@@ -233,7 +233,7 @@ def test_revision_is_idempotent_per_attempt_and_refuses_state_or_gap(
     ctx = _ctx(tmp_path)
     _ensure(ctx)
     client = SessionAgentClient(
-        ctx, _profile(), _Driver(['{"value":1}']), max_turns=3)
+        ctx, _profile(), _Driver(['{"value":1}']), max_semantic_turns=3)
     value, acceptance = _accept(ctx, client)
     path = _write(ctx, value, acceptance, state_value='stable')
     assert _write(ctx, value, acceptance, state_value='stable') == path
@@ -261,7 +261,7 @@ def test_new_revision_requires_monotonic_turn_and_all_prior_attempts(
     _ensure(ctx)
     client = SessionAgentClient(
         ctx, _profile(), _Driver(['{"value":1}', '{"value":2}']),
-        max_turns=4)
+        max_semantic_turns=4)
     first, first_acceptance = _accept(ctx, client)
     _write(ctx, first, first_acceptance, state_value='first')
     second, second_acceptance = _accept(ctx, client)
@@ -292,7 +292,7 @@ def test_clean_session_cannot_self_consistently_replace_original_prompt_hash(
     ctx = _ctx(tmp_path)
     _ensure(ctx)
     client = SessionAgentClient(
-        ctx, _profile(), _Driver(['{"value":1}']), max_turns=2)
+        ctx, _profile(), _Driver(['{"value":1}']), max_semantic_turns=2)
     value, acceptance = _accept(ctx, client)
     wrong_sha = 'f' * 64
     events = agent_runs.agent_session_audit.read_events(ctx.novel_dir.parent)
@@ -318,7 +318,7 @@ def test_trailing_rejected_turn_does_not_replace_last_accepted_checkpoint(
     _ensure(ctx)
     client = SessionAgentClient(
         ctx, _profile(), _Driver(['{"value":1}', '{"other":2}']),
-        max_turns=2)
+        max_semantic_turns=2)
     value, acceptance = _accept(ctx, client)
     with pytest.raises(LlmFailed, match='已用尽 2 轮'):
         client.ask_json(
@@ -400,7 +400,7 @@ def test_commit_target_states_and_formal_adoption_are_exact(tmp_path: Path) -> N
     ctx = _ctx(tmp_path)
     _ensure(ctx)
     client = SessionAgentClient(
-        ctx, _profile(), _Driver(['{"value":7}']), max_turns=3)
+        ctx, _profile(), _Driver(['{"value":7}']), max_semantic_turns=3)
     value, acceptance = _accept(ctx, client)
     _write(ctx, value, acceptance, state_value='terminal')
     client.finish(process_state='ok', delivery_state='delivered')

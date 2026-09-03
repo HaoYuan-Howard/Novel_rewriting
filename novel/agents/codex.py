@@ -31,6 +31,7 @@ from novel.agents.base import (
     Runner,
     RunnerCallable,
     compact_schema,
+    classify_agent_command_failure,
     decode_wire_json,
     integer,
 )
@@ -179,6 +180,38 @@ def _agent_message(events: Sequence[Mapping[str, Any]]) -> str:
     return messages[-1] if messages else ''
 
 
+def _failure_detail(event: Mapping[str, Any] | None) -> str:
+    """只读取失败事件登记的错误格，不扫描 agent message / tool 输出。"""
+    if event is None:
+        return ''
+    values: list[str] = []
+    for key in ('error', 'message', 'code', 'status'):
+        value = event.get(key)
+        if isinstance(value, str) and value.strip():
+            values.append(value[:2048])
+        elif isinstance(value, int) and not isinstance(value, bool):
+            values.append(str(value))
+        elif isinstance(value, Mapping):
+            for nested in ('type', 'code', 'message', 'status'):
+                item = value.get(nested)
+                if isinstance(item, (str, int)) and not isinstance(item, bool):
+                    values.append(str(item)[:512])
+    return ' '.join(values)
+
+
+def _failure_status(event: Mapping[str, Any] | None) -> int | None:
+    if event is None:
+        return None
+    for source in (event, event.get('error')):
+        if not isinstance(source, Mapping):
+            continue
+        for key in ('status', 'status_code'):
+            value = integer(source.get(key))
+            if value is not None and 100 <= value <= 599:
+                return value
+    return None
+
+
 def _summary(events: Sequence[Mapping[str, Any]]) -> tuple[dict[str, Any], ...]:
     """保留事件骨架，不复制 agent_message、command 输出或错误正文。"""
     rows: list[dict[str, Any]] = []
@@ -324,12 +357,21 @@ class CodexDriver(CliAgentDriver):
             raw_event_summary=_summary(events)))
         if failed:
             kind = None if failed_event is None else failed_event.get('type')
+            failure_detail = (
+                _failure_detail(failed_event)
+                if failed_event is not None else (completed.stderr or '')[:2048]
+            )
+            error_kind, status, retryable = classify_agent_command_failure(
+                failure_detail, usage=usage,
+                status=_failure_status(failed_event))
             raise AgentCommandError(
-                f'Codex CLI 失败（exit={completed.returncode}，event={kind!r}）',
+                f'Codex CLI 失败（exit={completed.returncode}，event={kind!r}，'
+                f'kind={error_kind!r}，status={status!r}）',
                 returncode=completed.returncode,
                 # 失败事件前可能已经吐过 agent_message；只保留 usage/session 供结算。
                 partial_turn=(None if turn is None else replace(turn, content='')),
-                usage=usage)
+                usage=usage, error_kind=error_kind, status=status,
+                retryable=retryable)
         if session_id is None:
             raise AgentProtocolError(
                 'Codex 成功事件流没有 thread.started.thread_id')

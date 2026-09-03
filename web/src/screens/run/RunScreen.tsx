@@ -318,6 +318,15 @@ function AgentRunBlock() {
               ) : null}
             </span>
           </div>
+          {latest.note ? (
+            <div
+              role="note"
+              data-testid="agent-run-note"
+              className="rounded-block border border-line-btn bg-inset px-13 py-9 text-body leading-relaxed text-ink-3"
+            >
+              {latest.note}
+            </div>
+          ) : null}
           <AgentProfilesSnapshot profiles={latest.start.profiles} compact />
           {logOpen ? (
             <pre className="m-0 max-h-[220px] overflow-y-auto rounded-btn-lg border border-line bg-inset px-14 py-12 font-mono text-mini leading-[1.9] whitespace-pre-wrap text-ink-2">

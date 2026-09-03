@@ -3297,11 +3297,19 @@ def _run_chapter_requests(
     results: dict[int, dict[str, Any]] = {}
     violations: list[str] = []
     errors: list[Exception] = []
+    request_failures: dict[int, Exception] = {}
     should_restore = checkpoints if restore_checkpoints is None else restore_checkpoints
 
     concrete = [(int(o), s, u) for o, s, u in requests if o is not None]
     if not concrete:
         return [], violations, errors
+    if checkpoints:
+        # delivery_recovery 只描述“上一只子进程已完整收尾后的当前等待态”。
+        # 新一轮一旦开始便先撤销旧标记；本轮若仍只有可恢复交付失败，会在所有
+        # future drain 完成后重新铸一份。这样早期 schema/代码异常不能借旧标记
+        # 被 Supervisor 错认成同一场网络波动。
+        from novel.llm import stage2_runs
+        stage2_runs.clear_delivery_recovery(ctx)
     tracker = ChapterProgressTracker(ctx.observe, [o for o, _s, _u in concrete])
     restored_material: dict[
         int, tuple[list[dict[str, Any]], dict[str, Any]],
@@ -3352,6 +3360,9 @@ def _run_chapter_requests(
             except Exception as exc:
                 preflight_failures[ordinal] = exc
         if preflight_failures:
+            if checkpoints:
+                from novel.llm import stage2_runs
+                stage2_runs.clear_delivery_recovery(ctx)
             errors.extend(
                 preflight_failures[ordinal]
                 for ordinal, _system, _user in concrete
@@ -3429,6 +3440,7 @@ def _run_chapter_requests(
                     )
             except Exception as exc:  # 已成功的章仍必须保留。
                 errors.append(exc)
+                request_failures[ordinal] = exc
                 tracker.finish(
                     ordinal, outcome='failed',
                     detail=f'{type(exc).__name__}: {str(exc).splitlines()[0]}')
@@ -3448,6 +3460,37 @@ def _run_chapter_requests(
     # “formal 已落、committed 未落”的幂等收尾误判成新一轮。
     violations.sort(key=lambda row: (
         BlueprintScopeViolation.model_validate_json(row).batch, row))
+    if checkpoints:
+        from novel.agents.session_client import AgentDeliveryUnavailable
+        from novel.llm import stage2_runs
+        concrete_chapters = [ordinal for ordinal, _system, _user in concrete]
+        recoverable = (
+            bool(request_failures)
+            and set(results).union(request_failures) == set(concrete_chapters)
+            and all(
+                isinstance(exc, AgentDeliveryUnavailable)
+                and exc.same_run_resumable
+                for exc in request_failures.values()
+            )
+        )
+        if recoverable:
+            stage2_runs.write_delivery_recovery(
+                ctx,
+                phase=phase,
+                chapters=concrete_chapters,
+                completed_chapters=results,
+                failures=[{
+                    'chapter': ordinal,
+                    'error_kind': exc.error_kind,
+                    'status': exc.status,
+                    'attempts': exc.attempts,
+                } for ordinal, exc in request_failures.items()
+                if isinstance(exc, AgentDeliveryUnavailable)],
+            )
+        else:
+            # 上次等待态不能让本次无关的 schema/业务失败被 Supervisor 错认成
+            # 同一场网络抖动；真实 delivery attempts 已经留在 ledger。
+            stage2_runs.clear_delivery_recovery(ctx)
     return [results[o] for o, _s, _u in concrete if o in results], violations, errors
 
 

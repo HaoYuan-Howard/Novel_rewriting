@@ -29,6 +29,7 @@ from novel.agents.base import (
     Runner,
     RunnerCallable,
     compact_schema,
+    classify_agent_command_failure,
     decode_wire_json,
     integer,
 )
@@ -143,6 +144,35 @@ def _summary(raw: Mapping[str, Any], usage: AgentUsage,
     },)
 
 
+def _failure_detail(raw: Mapping[str, Any]) -> str:
+    """只拼供应商信封的已知错误格；不把 structured output 当诊断。"""
+    values: list[str] = []
+    for key in ('error', 'error_type', 'code', 'result'):
+        value = raw.get(key)
+        if isinstance(value, str) and value.strip():
+            values.append(value[:2048])
+        elif isinstance(value, Mapping):
+            for nested in ('type', 'code', 'message', 'status'):
+                item = value.get(nested)
+                if isinstance(item, (str, int)) and not isinstance(item, bool):
+                    values.append(str(item)[:512])
+    return ' '.join(values)
+
+
+def _failure_status(raw: Mapping[str, Any]) -> int | None:
+    for key in ('status', 'error_status', 'status_code'):
+        value = integer(raw.get(key))
+        if value is not None and 100 <= value <= 599:
+            return value
+    error = raw.get('error')
+    if isinstance(error, Mapping):
+        for key in ('status', 'status_code'):
+            value = integer(error.get(key))
+            if value is not None and 100 <= value <= 599:
+                return value
+    return None
+
+
 class ClaudeCodeDriver(CliAgentDriver):
     """Claude Code 的一次实例只拥有当前一只 CLI 子进程。"""
 
@@ -233,12 +263,19 @@ class ClaudeCodeDriver(CliAgentDriver):
         )
         if (completed.returncode != 0 or raw.get('subtype') != 'success'
                 or raw.get('is_error') is not False):
+            failure_detail = ' '.join(filter(None, (
+                _failure_detail(raw), (completed.stderr or '')[:2048],
+            )))
+            error_kind, status, retryable = classify_agent_command_failure(
+                failure_detail, usage=usage, status=_failure_status(raw))
             raise AgentCommandError(
                 f'Claude Code 返回失败信封（exit={completed.returncode}，'
-                f'subtype={raw.get("subtype")!r}，is_error={raw.get("is_error")!r}）',
+                f'subtype={raw.get("subtype")!r}，is_error={raw.get("is_error")!r}，'
+                f'kind={error_kind!r}，status={status!r}）',
                 returncode=completed.returncode,
                 # 失败信封可以带看似完整的 result；只留结算证据，绝不让它成为候选。
-                partial_turn=replace(turn, content=''))
+                partial_turn=replace(turn, content=''),
+                error_kind=error_kind, status=status, retryable=retryable)
         if expects_structured_output and structured is None:
             raise AgentProtocolError(
                 'Claude Code --json-schema 成功信封缺 structured_output；'

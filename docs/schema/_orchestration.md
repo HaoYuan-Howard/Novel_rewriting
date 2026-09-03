@@ -313,8 +313,11 @@ agent state 闭集独立为 `pending / running / paused / ok / landed_red / fail
 终态：pause 先关新 admission，后台等待当前 claim/beacon 闭合后才追加 paused，且不 cancel 正常付费
 节点；resume 在后台同身份续当前 epoch 和 provider session，代码/skill 漂移则同 parent run 开新 epoch、
 免费复检并新建 provider session；stop 在后台 cancel 全进程树并 drain，闭合后才永久 ended，且不可
-resume。内部阻塞 helper 只供诊断/测试，不改变公开异步语义。重启后证明不了存活状态仍为 unknown，
-不自动洗成 paused。
+resume。Stage2 blueprint 还有一条生产者举证的系统暂停：仅当 exit 2 同时留下绑定当前 epoch/run/code、
+完整章节集合和可恢复交付失败的 `delivery_recovery.json`，Supervisor 才追加带缺章摘要的 paused；前端
+继续消费同一 `allowed_controls=resume`，恢复时保持 parent/epoch 并只补 checkpoint 缺章。普通 exit 2 或
+凭据缺失、损坏、漂移不得开放 resume。内部阻塞 helper 只供诊断/测试，不改变公开异步语义。重启后
+证明不了存活状态仍为 unknown，不自动洗成 paused。
 
 Commander 的 stdout/stderr 只形成供应商 observation，不作为业务完成事实。`role=commander,node=null`
 的 session/ledger 以 attempt id 联结；actual model/effort/provider session id 缺失保持 unknown，不拿请求值
@@ -848,6 +851,22 @@ prompt/schema 与 requested/actual model/effort，再与 ledger 的 attempt/fing
 的 live client；联合 HARD 后确需修订时另开新 session。checkpoint 首次写入不可覆盖，最终整书 compile、
 联合 HARD、正式 artifact/`.INVALID`、commit journal 与 readback 终验仍只由 producer 代码决定。
 该 checkpoint 会保存被接受的 stdout；上方 session audit 仍只存 hash 与计量，两者不能混读。
+
+Agent CLI 的 delivery attempt 与上述语义 turn 正交：实现中分别命名为
+`max_delivery_retries`（默认 3 次重试，即首发在内共 `max_attempts=4`）和
+`max_semantic_turns`（默认最多 4 轮候选/纠错）。首轮语义请求走 `start`；已有可信 provider session 后的
+语义纠错走同一 session 的 `resume`，不是独立重采。交付失败发生在取得可采纳回答之前，只消耗 delivery
+attempt，不消耗第二个 semantic turn，也不建立可恢复的 provider turn。
+
+429、408/425/5xx、已识别连接/timeout，以及
+`403 Request not allowed` 且供应商 token 明确全为 0 时，首发失败后最多按 2/4/8 秒再发三次；每次
+真实发送各占 ledger 一行并写 `attempt/max_attempts/retryable/will_retry/backoff_ms/status/error_kind`。
+未形成可采纳回答的失败不进入 `agent_sessions.jsonl` 的 turn，也不进入 checkpoint `attempt_links`。
+五小时用量窗口与登录过期不作秒级热重试，其他 403 作为永久权限错误停止。若一批所有缺章都只因
+登记的可恢复交付错误结束，producer 在逐章 future 全部 drain 后原子写 `delivery_recovery.json`；该文件
+只含 run/code/phase、completed/pending 章、稳定错误类别/status/attempts 与 `run.json` SHA，不保存错误
+正文。下一轮同 run 启动先撤销旧等待标记，再逐份严格恢复成功 checkpoint；本轮仍失败才重铸标记，
+全部成功则保持删除。它不是正式 artifact、缓存或跨代码迁移面。
 
 #### 7.0b Stage6 semantic A/B checkpoint 与 commit journal —— 双盲恢复态，不是公开 HTTP 模型
 

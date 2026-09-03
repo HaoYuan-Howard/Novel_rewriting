@@ -19,7 +19,9 @@ from pydantic import BaseModel, Field
 from contracts.schema.orchestration import AgentProfile
 from novel import agent_session_audit, paths
 from novel.agents.base import render_structured_agent_stdin
-from novel.agents.session_client import agent_request_fingerprint
+from novel.agents.session_client import (
+    AgentDeliveryUnavailable, agent_request_fingerprint,
+)
 from novel.errors import (
     ArtifactUnreadable, ProvenanceRefused, ResponseRepairBatchRequired,
     ResponseRepairRequired, TerminalState,
@@ -144,6 +146,33 @@ class _SyntheticChapterClient:
 
     def restore_checkpoint_acceptance(self, _purpose, _record, **_kwargs):
         raise AssertionError('本测试不走 restore')
+
+
+class _DeliveryFailureChapterClient(_SyntheticChapterClient):
+    def ask_json(self, system, user, *, model_cls, purpose, **kwargs):
+        ordinal = int(purpose.rsplit('ch', 1)[1])
+        if ordinal == 2:
+            raise AgentDeliveryUnavailable(
+                'synthetic delivery exhausted',
+                error_kind='provider_transient', attempts=4, status=403,
+                same_run_resumable=True)
+        return super().ask_json(
+            system, user, model_cls=model_cls, purpose=purpose, **kwargs)
+
+
+class _ResumingChapterClient(_SyntheticChapterClient):
+    def __init__(self, ctx: RunContext) -> None:
+        super().__init__(ctx)
+        self.asked: list[int] = []
+        self.restored: list[str] = []
+
+    def ask_json(self, system, user, *, model_cls, purpose, **kwargs):
+        self.asked.append(int(purpose.rsplit('ch', 1)[1]))
+        return super().ask_json(
+            system, user, model_cls=model_cls, purpose=purpose, **kwargs)
+
+    def restore_checkpoint_acceptance(self, purpose, _record, **_kwargs):
+        self.restored.append(purpose)
 
 
 def _ctx(
@@ -1478,6 +1507,82 @@ def test_checkpoint_write_remains_enabled_when_old_restore_is_disabled(tmp_path)
     assert errors == [] and rows == [{'chapter_ordinal': 1}]
     assert stage2_runs.paths.stage2_blueprint_checkpoint_path(
         ctx.novel_dir, ctx.run_id, 'blueprint', 1).is_file()
+
+
+def test_delivery_exhaustion_preserves_same_run_and_only_resends_missing_chapter(
+        tmp_path):
+    run_id = new_run_id()
+    requests = [(1, 'SYSTEM', 'USER 1'), (2, 'SYSTEM', 'USER 2')]
+    first = _ctx(tmp_path, run_id)
+    _ensure_run(
+        first, architecture='extraction-ir-v3.1',
+        topology='scaffolded_single', requests=requests)
+
+    rows, violations, errors = extract._run_chapter_requests(
+        first, _DeliveryFailureChapterClient(first), requests,
+        model_cls=_ChapterRows, checkpoints=True, restore_checkpoints=False,
+        architecture='extraction-ir-v3.1')
+
+    assert rows == [{'chapter_ordinal': 1}]
+    assert violations == []
+    assert len(errors) == 1
+    assert isinstance(errors[0], AgentDeliveryUnavailable)
+    recovery = stage2_runs.read_delivery_recovery(
+        first.novel_dir, run_id, sid=first.sid, code=first.code)
+    assert recovery is not None
+    assert recovery['completed_chapters'] == [1]
+    assert recovery['pending_chapters'] == [2]
+    assert recovery['failures'] == [{
+        'chapter': 2,
+        'error_kind': 'provider_transient',
+        'status': 403,
+        'attempts': 4,
+    }]
+
+    resumed = _ctx(tmp_path, run_id)
+    resumed_client = _ResumingChapterClient(resumed)
+    rows, violations, errors = extract._run_chapter_requests(
+        resumed, resumed_client, requests,
+        model_cls=_ChapterRows, checkpoints=True, restore_checkpoints=True,
+        architecture='extraction-ir-v3.1')
+
+    assert errors == [] and violations == []
+    assert [row['chapter_ordinal'] for row in rows] == [1, 2]
+    assert resumed_client.restored == ['stage2.blueprint:ch1']
+    assert resumed_client.asked == [2]
+    assert stage2_runs.read_delivery_recovery(
+        resumed.novel_dir, run_id, sid=resumed.sid, code=resumed.code) is None
+
+
+def test_delivery_recovery_refuses_permission_error_and_drifted_run(tmp_path):
+    run_id = new_run_id()
+    requests = [(1, 'SYSTEM', 'USER 1'), (2, 'SYSTEM', 'USER 2')]
+    ctx = _ctx(tmp_path, run_id)
+    _ensure_run(
+        ctx, architecture='extraction-ir-v3.1',
+        topology='scaffolded_single', requests=requests)
+
+    with pytest.raises(ProvenanceRefused, match='failure 身份不合法'):
+        stage2_runs.write_delivery_recovery(
+            ctx, phase='blueprint', chapters=[1, 2],
+            completed_chapters=[1], failures=[{
+                'chapter': 2, 'error_kind': 'permission',
+                'status': 403, 'attempts': 1,
+            }])
+
+    stage2_runs.write_delivery_recovery(
+        ctx, phase='blueprint', chapters=[1, 2],
+        completed_chapters=[1], failures=[{
+            'chapter': 2, 'error_kind': 'provider_transient',
+            'status': 403, 'attempts': 4,
+        }])
+    run_path = (paths.stage2_blueprint_run_path(ctx.novel_dir, run_id)
+                / stage2_runs.RUN_FILE)
+    run_path.write_bytes(run_path.read_bytes() + b' ')
+
+    with pytest.raises(ProvenanceRefused, match='run.json.*漂移'):
+        stage2_runs.read_delivery_recovery(
+            ctx.novel_dir, run_id, sid=ctx.sid, code=ctx.code)
 
 
 def test_refresh_cannot_reuse_run_with_checkpoint_before_any_wire(tmp_path):

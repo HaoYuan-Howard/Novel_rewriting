@@ -124,7 +124,7 @@ def _produce(
             f'{{"value":{value}}}',
             provider_session_id or f'provider-session-{role}',
             cache_hit_tokens=cache_hit_tokens),
-        max_turns=3)
+        max_semantic_turns=3)
     result = client.ask_json(
         _SYSTEM, _USERS[role], model_cls=_JudgeAnswer, purpose=purpose,
         max_tokens=_MAX_TOKENS,

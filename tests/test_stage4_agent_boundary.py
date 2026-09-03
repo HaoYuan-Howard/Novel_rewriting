@@ -168,7 +168,7 @@ def _client(
         ctx: RunContext, driver: AgentDriver, *, max_turns: int = 4,
 ) -> SessionAgentClient:
     return SessionAgentClient(
-        ctx, _profile(), driver, max_turns=max_turns)
+        ctx, _profile(), driver, max_semantic_turns=max_turns)
 
 
 def _design_pool(

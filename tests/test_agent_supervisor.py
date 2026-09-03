@@ -192,6 +192,80 @@ def test_stage2_review_can_continue_into_ready_blueprint_redo():
     assert snapshots == []
 
 
+def test_recoverable_action_failure_pauses_and_resumes_the_same_epoch():
+    """有 typed 恢复凭据的 exit 2 不结束 parent；继续后仍用原 epoch。"""
+    events: list[AgentRunEvent] = []
+    quiesced: list[bool] = []
+    calls: list[str] = []
+    state = 'ready'
+    epoch = _epoch('epoch-stage2-delivery-retry', 1, 'initial')
+
+    def current():
+        if state == 'ready':
+            return SimpleNamespace(
+                state='ready', code_version='code-1', surface_seal='3' * 64,
+                action=SimpleNamespace(
+                    node='stage2.blueprint', waiting_on=None,
+                    resume_verdict='run', action_sha256='4' * 64),
+                execution_token=SimpleNamespace(node='stage2.blueprint'))
+        return SimpleNamespace(
+            state='pipeline_complete', code_version='code-1',
+            surface_seal='5' * 64, action=None, execution_token=None)
+
+    def ready(current_epoch, _current, ticket):
+        nonlocal state
+        assert current_epoch is epoch
+        ticket.commit()
+        calls.append(current_epoch.epoch_id)
+        if len(calls) == 1:
+            return SupervisorActionResult(
+                2, _outcome(), False,
+                pause_note='已保留 13/15 章 checkpoint，只补第 7、9 章')
+        state = 'complete'
+        return SupervisorActionResult(0, _outcome(), True)
+
+    def finalize(current_epoch, ticket):
+        assert current_epoch is epoch
+        ticket.commit()
+        return SupervisorActionResult(0, _outcome('ready'), False)
+
+    supervisor = RunSupervisor(
+        run_id='run-stage2-delivery-retry', append_event=events.append,
+        make_epoch=lambda *_args: pytest.fail('同 run 恢复不得滚 epoch'),
+        open_epoch=lambda _epoch: None,
+        close_epoch=lambda _epoch, _turn: 'drained',
+        run_commander_turn=lambda *_args: pytest.fail('v2 不走 legacy Commander'),
+        epoch_identity_current=lambda _epoch: True,
+        cancel_commander=lambda: True,
+        set_commander_quiesced=lambda value: quiesced.append(value) or True,
+        initial_epoch=epoch,
+        read_operator_next=lambda _epoch: current(),
+        run_ready_action=ready,
+        run_reviewer=lambda *_args: None,
+        finalize_run=finalize)
+    result_box: list[object] = []
+    worker = threading.Thread(target=lambda: result_box.append(supervisor.run()))
+    worker.start()
+    deadline = time.time() + 5
+    while time.time() < deadline and not supervisor.paused:
+        time.sleep(0.01)
+
+    assert supervisor.paused
+    assert calls == [epoch.epoch_id]
+    assert [event.kind for event in events] == ['paused']
+    assert events[0].note == '已保留 13/15 章 checkpoint，只补第 7、9 章'
+
+    supervisor.request_resume()
+    worker.join(5)
+
+    assert not worker.is_alive()
+    assert calls == [epoch.epoch_id, epoch.epoch_id]
+    assert [event.kind for event in events] == [
+        'paused', 'resumed', 'epoch_closed']
+    assert quiesced == [True, False]
+    assert result_box and result_box[0].stopped is False
+
+
 def test_v2_supervisor_resumes_one_commander_across_review_edit_and_rereview():
     """三相都属同一业务上下文；surface 变化不能重开 Commander session。"""
     events: list[AgentRunEvent] = []

@@ -137,10 +137,18 @@ class AgentCommandError(AgentError):
 
     def __init__(self, message: str, *, returncode: int | None = None,
                  partial_turn: AgentTurn | None = None,
-                 usage: AgentUsage | None = None) -> None:
+                 usage: AgentUsage | None = None,
+                 error_kind: str = 'agent_command',
+                 status: int | None = None,
+                 retryable: bool = False,
+                 retry_after_seconds: float | None = None) -> None:
         super().__init__(message)
         self.returncode = returncode
         self.partial_turn = partial_turn
+        self.error_kind = error_kind
+        self.status = status
+        self.retryable = retryable
+        self.retry_after_seconds = retry_after_seconds
         # 启动在供应商 session id 出现前失败时不能伪造 ``AgentTurn``，但已经发生的
         # 计量仍须能进入成本账。成功取得 partial turn 时以它为唯一事实源。
         self.usage = partial_turn.usage if partial_turn is not None else usage
@@ -215,6 +223,71 @@ class AgentUsage:
     completion_tokens: int | None = None
     reasoning_tokens: int | None = None
     total_tokens: int | None = None
+
+
+def classify_agent_command_failure(
+    detail: object,
+    *,
+    usage: AgentUsage | None = None,
+    status: int | None = None,
+) -> tuple[str, int | None, bool]:
+    """把 CLI 的已知错误摘要归一为可执行的重试事实。
+
+    403 不是一个统一语义：登录过期、模型权限和供应商瞬时拒绝不能共用策略。
+    这里只把已实测的 ``403 Request not allowed`` 且供应商明确回显 0 token 的
+    形态视为瞬态；其余 403 保守地按权限错误停止热重试。错误正文只在内存中
+    参与分类，调用方仍只把稳定 kind/status 写进成本账。
+    """
+    text = str(detail or '').casefold()
+    if status is None:
+        match = re.search(r'(?:api error|status|http)\s*[:=]?\s*(\d{3})\b', text)
+        if match is not None:
+            status = int(match.group(1))
+
+    usage_values = () if usage is None else (
+        usage.prompt_tokens,
+        usage.prompt_cache_hit_tokens,
+        usage.prompt_cache_miss_tokens,
+        usage.completion_tokens,
+        usage.reasoning_tokens,
+        usage.total_tokens,
+    )
+    usage_is_confirmed_zero = (
+        any(value is not None for value in usage_values)
+        and all(value in (None, 0) for value in usage_values)
+    )
+
+    # 账号窗口耗尽要等外部状态变化；秒级热重试只会制造四次相同失败。
+    if any(marker in text for marker in (
+            'usage limit', 'five-hour', 'five hour',
+            '5-hour', '5 hour', 'resets at', 'reset at')):
+        return 'usage_limit', status, False
+
+    if any(marker in text for marker in (
+            'oauth access token has expired', 're-authenticate',
+            'reauthenticate', 'invalid api key', 'not logged in',
+            'login required', 'authentication required')) or status == 401:
+        return 'authentication', status, False
+
+    if (status == 403 and 'request not allowed' in text
+            and usage_is_confirmed_zero):
+        return 'provider_transient', status, True
+    if status == 403:
+        return 'permission', status, False
+    if status == 429 or 'too many requests' in text:
+        return 'rate_limit', status, True
+    if any(marker in text for marker in (
+            'connection reset', 'connection refused', 'connection aborted',
+            'network error', 'network request failed', 'failed to fetch',
+            'socket hang up', 'econnreset', 'econnrefused', 'enotfound',
+            'dns lookup', 'name resolution', 'tls handshake timeout')):
+        return 'connection', status, True
+    if 'timed out' in text or 'timeout' in text:
+        return 'timeout', status, True
+    if (status in (408, 425)
+            or (status is not None and 500 <= status <= 599)):
+        return ('timeout' if status == 408 else 'server_error'), status, True
+    return 'agent_command', status, False
 
 
 @dataclass(frozen=True)
@@ -693,7 +766,8 @@ class CliAgentDriver(AgentDriver):
                 timeout=self.timeout, session_id=session_id)
         except subprocess.TimeoutExpired as exc:
             raise AgentCommandError(
-                f'{self.driver} CLI 超过 {self.timeout:g}s，已终止本实例当前进程') from exc
+                f'{self.driver} CLI 超过 {self.timeout:g}s，已终止本实例当前进程',
+                error_kind='timeout', retryable=True) from exc
         except AgentError:
             raise
         except (OSError, subprocess.SubprocessError) as exc:
@@ -705,10 +779,14 @@ class CliAgentDriver(AgentDriver):
                         partial_turn: AgentTurn | None = None) -> None:
         if completed.returncode == 0:
             return
+        kind, status, retryable = classify_agent_command_failure(
+            completed.stderr, usage=(
+                None if partial_turn is None else partial_turn.usage))
         raise AgentCommandError(
             f'{self.driver} CLI exit={completed.returncode}：'
             f'{_short_detail(completed.stderr)}',
-            returncode=completed.returncode, partial_turn=partial_turn)
+            returncode=completed.returncode, partial_turn=partial_turn,
+            error_kind=kind, status=status, retryable=retryable)
 
     def cancel(self, session_id: str | None = None) -> bool:
         return self._runner.cancel(session_id)

@@ -38,6 +38,9 @@ describe('RunScreen 交付终验', () => {
 
     const button = await screen.findByRole('button', { name: '继续' })
     expect(screen.queryByRole('button', { name: '暂停' })).not.toBeInTheDocument()
+    expect(screen.getByTestId('agent-run-note')).toHaveTextContent(
+      '当前 claim 已安全闭合',
+    )
     fireEvent.click(button)
     await waitFor(() => expect(resume).toHaveBeenCalledWith(paused.run_id))
   })

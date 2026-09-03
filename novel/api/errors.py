@@ -163,6 +163,8 @@ UNREACHABLE_OVER_HTTP: dict[str, str] = {
                               '零成本 response-repair sidecar 只封存决定、不抛这类暂停',
     'ResponseRepairBatchRequired': 'Stage2 并发波次在下一采前汇成一份人工 workpack。'
                                    '它只在付费 CLI 子进程内抛出，HTTP 父进程只看到终态退出码',
+    'AgentDeliveryUnavailable': 'Agent CLI 没有形成可采纳回答；它只由付费节点子进程抛出。'
+                                '父进程只看到退出码，并另验 Stage2 的同 run 恢复凭据',
     'LlmFailed': '主模型与允许的兜底模型均没拿到可用结果。它在**子进程**里抛，父进程只看到退出码',
     'TransportError': '一次请求没发成功（429/5xx/超时）。同上——服务进程结构上发不出请求',
     'MissingApiKey': '要发真请求了而没有 key。⚠ 它恰恰**证明**了那条边界：'

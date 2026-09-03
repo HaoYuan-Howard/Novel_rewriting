@@ -15,10 +15,12 @@ from novel import agent_session_audit, prov
 from novel.agents import (
     CLAUDE_STRUCTURED_DELIVERY_FOOTER_V1,
     CLAUDE_STRUCTURED_DELIVERY_V1,
-    AgentConfigurationError, AgentDriver, AgentProbe, AgentRequest, AgentTurn,
-    AgentUsage,
+    AgentCommandError, AgentConfigurationError, AgentDriver, AgentProbe,
+    AgentRequest, AgentTurn, AgentUsage,
 )
-from novel.agents.session_client import SessionAgentClient
+from novel.agents.session_client import (
+    AgentDeliveryUnavailable, SessionAgentClient,
+)
 from novel.errors import ProvenanceRefused
 from novel.llm.cache import CachePolicy
 from novel.llm.client import LlmFailed
@@ -126,7 +128,8 @@ def _canonical_sha(value: object) -> str:
 def test_parse_failure_resumes_same_session_and_links_both_ledgers(tmp_path):
     ctx = _ctx(tmp_path)
     driver = _FakeDriver(['not-json', '{"value":7}'])
-    client = SessionAgentClient(ctx, _profile(), driver, max_turns=3)
+    client = SessionAgentClient(
+        ctx, _profile(), driver, max_semantic_turns=3)
 
     result = client.ask_json(
         '稳定系统约束', '原始任务正文', model_cls=_Answer,
@@ -179,7 +182,7 @@ def test_fresh_session_does_not_adopt_failed_same_purpose_attempts(tmp_path):
     ctx = _ctx(tmp_path)
     failed = SessionAgentClient(
         ctx, _profile(), SessionDriver(['not-json'], 'provider-failed'),
-        max_turns=1)
+        max_semantic_turns=1)
     with pytest.raises(LlmFailed, match='已用尽 1 轮'):
         failed.ask_json(
             'SYS', 'same subject', model_cls=_Answer,
@@ -192,7 +195,7 @@ def test_fresh_session_does_not_adopt_failed_same_purpose_attempts(tmp_path):
 
     succeeded = SessionAgentClient(
         ctx, _profile(), SessionDriver(['{"value":7}'], 'provider-succeeded'),
-        max_turns=1)
+        max_semantic_turns=1)
     assert succeeded.ask_json(
         'SYS', 'same subject', model_cls=_Answer,
         purpose='stage2.global').value == 7
@@ -215,7 +218,8 @@ def test_fresh_session_does_not_adopt_failed_same_purpose_attempts(tmp_path):
 def test_business_rejection_only_sends_feedback_on_resume(tmp_path):
     ctx = _ctx(tmp_path)
     driver = _FakeDriver(['{"value":1}', '{"value":2}'])
-    client = SessionAgentClient(ctx, _profile(), driver, max_turns=2)
+    client = SessionAgentClient(
+        ctx, _profile(), driver, max_semantic_turns=2)
 
     first = client.ask_json(
         '稳定系统约束', '含正文的原始任务', model_cls=_Answer,
@@ -255,7 +259,8 @@ def test_claude_structured_footer_is_once_and_hashes_exact_final_stdin(tmp_path)
     profile = _claude_profile()
     ctx = _ctx(tmp_path, profile=profile)
     driver = _ClaudeDriver(['{"value":1}', '{"value":2}'])
-    client = SessionAgentClient(ctx, profile, driver, max_turns=2)
+    client = SessionAgentClient(
+        ctx, profile, driver, max_semantic_turns=2)
 
     client.ask_json(
         '稳定系统约束', '含正文的原始任务', model_cls=_Answer,
@@ -325,7 +330,8 @@ def test_claude_structured_footer_is_once_and_hashes_exact_final_stdin(tmp_path)
 def test_subject_change_is_refused_before_another_provider_turn(tmp_path):
     ctx = _ctx(tmp_path)
     driver = _FakeDriver(['{"value":1}', '{"value":2}'])
-    client = SessionAgentClient(ctx, _profile(), driver, max_turns=3)
+    client = SessionAgentClient(
+        ctx, _profile(), driver, max_semantic_turns=3)
     client.ask_json(
         'SYS', 'original subject', model_cls=_Answer,
         purpose='stage2.global')
@@ -345,7 +351,8 @@ def test_reused_provider_session_is_audited_without_claiming_or_corrupting_log(
         tmp_path):
     ctx = _ctx(tmp_path)
     first = SessionAgentClient(
-        ctx, _profile(), _FakeDriver(['{"value":1}']), max_turns=1)
+        ctx, _profile(), _FakeDriver(['{"value":1}']),
+        max_semantic_turns=1)
     assert first.ask_json(
         'SYS', 'first subject', model_cls=_Answer,
         purpose='stage2.global').value == 1
@@ -353,7 +360,8 @@ def test_reused_provider_session_is_audited_without_claiming_or_corrupting_log(
     first.close()
 
     second = SessionAgentClient(
-        ctx, _profile(), _FakeDriver(['{"value":2}']), max_turns=1)
+        ctx, _profile(), _FakeDriver(['{"value":2}']),
+        max_semantic_turns=1)
     with pytest.raises(ProvenanceRefused, match='偷接旧 session'):
         second.ask_json(
             'SYS', 'second subject', model_cls=_Answer,
@@ -379,7 +387,7 @@ def test_chapter_progress_and_agent_checkpoint_are_exact(tmp_path):
     driver = _FakeDriver(['{"value":7}'])
     progress = RequestProgress(chapter=7, index=3, total=9)
     client = SessionAgentClient(
-        ctx, _profile(), driver, chapter=7, max_turns=3)
+        ctx, _profile(), driver, chapter=7, max_semantic_turns=3)
 
     result = client.ask_json(
         'BLUEPRINT SYS', 'chapter seven subject', model_cls=_Answer,
@@ -458,6 +466,144 @@ def test_configuration_failure_before_spawn_does_not_increment_calls(tmp_path):
 
     assert ctx.ledger.calls_made == 0
     assert _rows(ledger_path(tmp_path)) == []
+
+
+def test_transient_delivery_retry_is_separate_from_semantic_turn_budget(tmp_path):
+    class TransientThenOk(_FakeDriver):
+        def __init__(self) -> None:
+            super().__init__(['{"value":7}'])
+            self.failures = 1
+
+        def start(self, profile: AgentProfile, request: AgentRequest) -> AgentTurn:
+            self.calls.append(('start', None, request))
+            if self.failures:
+                self.failures -= 1
+                raise AgentCommandError(
+                    'synthetic transient 403', returncode=1,
+                    usage=AgentUsage(total_tokens=0),
+                    error_kind='provider_transient', status=403,
+                    retryable=True)
+            return self._turn()
+
+    sleeps: list[float] = []
+    ctx = _ctx(tmp_path)
+    driver = TransientThenOk()
+    client = SessionAgentClient(
+        ctx, _profile(), driver, max_semantic_turns=1,
+        max_delivery_retries=3, delivery_backoff_base=2,
+        sleep=sleeps.append)
+
+    result = client.ask_json(
+        'SYS', 'subject', model_cls=_Answer, purpose='stage2.global')
+    checkpoint = client.accepted_checkpoint('stage2.global')
+    client.finish(process_state='ok', delivery_state='delivered')
+    client.close()
+
+    assert result.value == 7
+    assert client.max_semantic_turns == 1
+    assert client.turns_used == 1
+    assert [kind for kind, _sid, _request in driver.calls] == ['start', 'start']
+    assert sleeps == [2]
+    rows = _rows(ledger_path(tmp_path))
+    assert [row['attempt'] for row in rows] == [1, 2]
+    assert [row['max_attempts'] for row in rows] == [4, 4]
+    assert [row['retryable'] for row in rows] == [True, None]
+    assert [row['will_retry'] for row in rows] == [True, False]
+    assert [row['backoff_ms'] for row in rows] == [2000, None]
+    assert checkpoint['accepted_turn_index'] == 1
+    assert [row['attempt_id'] for row in checkpoint['attempt_links']] == [
+        rows[1]['attempt_id']]
+    [session] = agent_session_audit.fold(
+        agent_session_audit.read_events(tmp_path))
+    assert [turn.turn_index for turn in session.turns] == [1]
+    assert session.turns[0].attempt_id == rows[1]['attempt_id']
+
+
+def test_transient_delivery_stops_after_initial_plus_three_retries(tmp_path):
+    class AlwaysTransient(_FakeDriver):
+        def __init__(self) -> None:
+            super().__init__([])
+
+        def start(self, profile: AgentProfile, request: AgentRequest) -> AgentTurn:
+            self.calls.append(('start', None, request))
+            raise AgentCommandError(
+                'synthetic transient 403', returncode=1,
+                usage=AgentUsage(total_tokens=0),
+                error_kind='provider_transient', status=403,
+                retryable=True)
+
+    sleeps: list[float] = []
+    ctx = _ctx(tmp_path)
+    driver = AlwaysTransient()
+    client = SessionAgentClient(
+        ctx, _profile(), driver, max_semantic_turns=1,
+        max_delivery_retries=3, delivery_backoff_base=2,
+        sleep=sleeps.append)
+
+    with pytest.raises(AgentDeliveryUnavailable) as caught:
+        client.ask_json(
+            'SYS', 'subject', model_cls=_Answer, purpose='stage2.global')
+    client.finish(
+        process_state='failed', delivery_state='unknown',
+        error_kind='agent_driver')
+    client.close()
+
+    assert caught.value.error_kind == 'provider_transient'
+    assert caught.value.attempts == 4
+    assert caught.value.same_run_resumable is True
+    assert len(driver.calls) == 4
+    assert client.turns_used == 1
+    assert sleeps == [2, 4, 8]
+    rows = _rows(ledger_path(tmp_path))
+    assert [row['attempt'] for row in rows] == [1, 2, 3, 4]
+    assert [row['will_retry'] for row in rows] == [True, True, True, False]
+    assert all(row['error_kind'] == 'provider_transient' for row in rows)
+    [session] = agent_session_audit.fold(
+        agent_session_audit.read_events(tmp_path))
+    assert not session.turns
+
+
+@pytest.mark.parametrize(
+    ('kind', 'resumable'),
+    [('permission', False), ('usage_limit', True)],
+)
+def test_nonretryable_agent_failures_do_not_hot_retry(
+        tmp_path, kind, resumable):
+    class Refusing(_FakeDriver):
+        def __init__(self) -> None:
+            super().__init__([])
+
+        def start(self, profile: AgentProfile, request: AgentRequest) -> AgentTurn:
+            self.calls.append(('start', None, request))
+            raise AgentCommandError(
+                'synthetic refusal', returncode=1,
+                usage=AgentUsage(total_tokens=0), error_kind=kind,
+                status=403, retryable=False)
+
+    sleeps: list[float] = []
+    ctx = _ctx(tmp_path)
+    driver = Refusing()
+    client = SessionAgentClient(
+        ctx, _profile(), driver, max_delivery_retries=3,
+        sleep=sleeps.append)
+
+    with pytest.raises(LlmFailed) as caught:
+        client.ask_json(
+            'SYS', 'subject', model_cls=_Answer, purpose='stage2.global')
+    client.finish(
+        process_state='failed', delivery_state='unknown',
+        error_kind='agent_driver')
+    client.close()
+
+    assert len(driver.calls) == 1
+    assert sleeps == []
+    assert isinstance(caught.value, AgentDeliveryUnavailable) is resumable
+    [row] = _rows(ledger_path(tmp_path))
+    assert row['attempt'] == 1 and row['max_attempts'] == 4
+    assert row['retryable'] is False and row['will_retry'] is False
+    [session] = agent_session_audit.fold(
+        agent_session_audit.read_events(tmp_path))
+    assert not session.turns
 
 
 def test_agent_request_policy_does_not_invent_legacy_thinking_or_hard_limit():
@@ -578,7 +724,8 @@ def test_missing_actual_effort_remains_unknown_but_does_not_block(tmp_path):
 def test_restored_acceptance_consumes_prior_turn_budget(tmp_path):
     ctx = _ctx(tmp_path, 'stage6.semantic')
     first = SessionAgentClient(
-        ctx, _profile(), _FakeDriver(['{"value":7}']), max_turns=1)
+        ctx, _profile(), _FakeDriver(['{"value":7}']),
+        max_semantic_turns=1)
     first.ask_json(
         'SYS', 'subject', model_cls=_Answer, purpose='stage6.semantic.A',
         max_tokens=4096, recovery_policy='stage6-semantic-v1')
@@ -587,14 +734,14 @@ def test_restored_acceptance_consumes_prior_turn_budget(tmp_path):
     first.close()
 
     restored = SessionAgentClient(
-        ctx, _profile(), _FakeDriver([]), max_turns=1)
+        ctx, _profile(), _FakeDriver([]), max_semantic_turns=1)
     restored.restore_checkpoint_acceptance(
         'stage6.semantic.A', checkpoint, system='SYS', user='subject',
         max_tokens=4096, recovery_policy='stage6-semantic-v1')
 
     assert restored.turns_used == 1
     assert restored.can_resume is False
-    with pytest.raises(LlmFailed, match='已用尽 1 轮上限'):
+    with pytest.raises(LlmFailed, match='已用尽 1 轮语义修订上限'):
         restored.ask_json(
             'SYS', 'subject', model_cls=_Answer, purpose='stage6.semantic.A',
             max_tokens=4096, recovery_policy='stage6-semantic-v1')
@@ -609,7 +756,7 @@ def test_restored_bad_candidate_starts_new_session_with_remaining_budget(tmp_pat
     ctx = _ctx(tmp_path, 'stage5.write')
     first_driver = _FakeDriver(['{"value":1}'])
     first = SessionAgentClient(
-        ctx, _profile(), first_driver, chapter=3, max_turns=2)
+        ctx, _profile(), first_driver, chapter=3, max_semantic_turns=2)
     progress = RequestProgress(chapter=3, index=1, total=1)
     first.ask_json(
         'SYS', 'chapter subject', model_cls=_Answer,
@@ -630,7 +777,7 @@ def test_restored_bad_candidate_starts_new_session_with_remaining_budget(tmp_pat
 
     driver = NewSessionDriver(['{"value":2}'])
     restored = SessionAgentClient(
-        ctx, _profile(), driver, chapter=3, max_turns=2)
+        ctx, _profile(), driver, chapter=3, max_semantic_turns=2)
     restored.restore_checkpoint_acceptance(
         'stage5.write·ch3', checkpoint, system='SYS', user='chapter subject',
         max_tokens=4096, recovery_policy='stage5-write-v1')
@@ -669,7 +816,8 @@ def test_restored_bad_candidate_starts_new_session_with_remaining_budget(tmp_pat
 def test_restored_bad_candidate_does_not_reset_exhausted_turn_budget(tmp_path):
     ctx = _ctx(tmp_path, 'stage6.hook')
     first = SessionAgentClient(
-        ctx, _profile(), _FakeDriver(['{"value":1}']), max_turns=1)
+        ctx, _profile(), _FakeDriver(['{"value":1}']),
+        max_semantic_turns=1)
     first.ask_json(
         'SYS', 'hook subject', model_cls=_Answer, purpose='stage6.hook',
         max_tokens=4096, recovery_policy='stage6-hook-v1')
@@ -678,7 +826,8 @@ def test_restored_bad_candidate_does_not_reset_exhausted_turn_budget(tmp_path):
     first.close()
 
     driver = _FakeDriver([])
-    restored = SessionAgentClient(ctx, _profile(), driver, max_turns=1)
+    restored = SessionAgentClient(
+        ctx, _profile(), driver, max_semantic_turns=1)
     restored.restore_checkpoint_acceptance(
         'stage6.hook', checkpoint, system='SYS', user='hook subject',
         max_tokens=4096, recovery_policy='stage6-hook-v1')
@@ -693,7 +842,8 @@ def test_restored_bad_candidate_does_not_reset_exhausted_turn_budget(tmp_path):
 def test_restored_business_rejection_repairs_gate_audit_idempotently(tmp_path):
     ctx = _ctx(tmp_path, 'stage6.hook')
     first = SessionAgentClient(
-        ctx, _profile(), _FakeDriver(['{"value":1}']), max_turns=2)
+        ctx, _profile(), _FakeDriver(['{"value":1}']),
+        max_semantic_turns=2)
     first.ask_json(
         'SYS', 'hook subject', model_cls=_Answer, purpose='stage6.hook',
         max_tokens=4096, recovery_policy='stage6-hook-v1')
@@ -704,7 +854,7 @@ def test_restored_business_rejection_repairs_gate_audit_idempotently(tmp_path):
     rows = [{'rule': 'stage6.hook.clean_before_bad', 'count': 1}]
     for _ in range(2):
         restored = SessionAgentClient(
-            ctx, _profile(), _FakeDriver([]), max_turns=2)
+            ctx, _profile(), _FakeDriver([]), max_semantic_turns=2)
         restored.restore_checkpoint_acceptance(
             'stage6.hook', checkpoint, system='SYS', user='hook subject',
             max_tokens=4096, recovery_policy='stage6-hook-v1')

@@ -55,6 +55,16 @@ class SupervisorActionResult:
     outcome: AgentDeliveryOutcome
     continue_ready: bool = True
     failure_detail: str | None = None
+    # 只有 action 已经自行落下可验证的同 run 恢复凭据时才出现。Supervisor
+    # 据此保持当前 epoch/书锁并开放 resume；普通 exit 2 仍永久结束本次 parent。
+    pause_note: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.pause_note is not None:
+            if not self.pause_note.strip():
+                raise ValueError('pause_note 若出现必须是非空文本')
+            if self.continue_ready:
+                raise ValueError('pause_note 与 continue_ready=true 互相矛盾')
 
 
 class LaunchTicket:
@@ -201,6 +211,14 @@ class RunSupervisor:
         # stop 与 pause 不同：既封住新 claim，也取消顶层 Commander。
         self._set_quiesced(True)
         self._cancel()
+
+    def _request_recovery_pause(self) -> None:
+        """action 在安全边界请求内部暂停；与用户 pause 共用唯一 barrier。"""
+        with self._condition:
+            if self._stop_requested:
+                return
+            self._pause_requested = True
+        self._set_quiesced(True)
 
     def _pause_barrier(self, *, note: str) -> bool:
         """返回 True 表示 stop 已取代 resume，调用方应结束循环。"""
@@ -508,6 +526,7 @@ class RunSupervisor:
                 reviewer_continuation: OperatorNext | None = None
 
                 while True:
+                    resumed_from_action_pause = False
                     if not self._identity_current(epoch):
                         identity_turn = epoch_last or CommanderTurnResult(
                             exit_code=0,
@@ -573,7 +592,9 @@ class RunSupervisor:
                         assert isinstance(executed, SupervisorActionResult)
                         turn = action_turn(executed)
                         last = epoch_last = active_epoch_last = turn
+                        action_pause_note = executed.pause_note
                     else:
+                        action_pause_note = None
                         assert current.action is not None
                         assert current.action.waiting_on is not None
                         reviewed = self._launch(
@@ -611,6 +632,12 @@ class RunSupervisor:
                     if stop_requested:
                         close_epoch(epoch, turn)
                         return SupervisorResult(turn=turn, stopped=True)
+                    if action_pause_note is not None:
+                        self._request_recovery_pause()
+                        if self._pause_barrier(note=action_pause_note):
+                            close_epoch(epoch, turn)
+                            return SupervisorResult(turn=turn, stopped=True)
+                        resumed_from_action_pause = True
                     if pause_requested:
                         if self._pause_barrier(
                                 note='用户请求 pause；当前 execution 已关闭并 drain'):
@@ -621,7 +648,7 @@ class RunSupervisor:
                         provider_session_id = None
                         reason = 'code_change'
                         break
-                    if not turn.continue_ready:
+                    if not turn.continue_ready and not resumed_from_action_pause:
                         close_epoch(epoch, turn)
                         return SupervisorResult(turn=turn, stopped=False)
         finally:
