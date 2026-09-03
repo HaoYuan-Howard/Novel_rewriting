@@ -322,7 +322,8 @@ Supervisor 复活；其已验章只能由后续新 run 的 producer 按下述只
 
 Commander 的 stdout/stderr 只形成供应商 observation，不作为业务完成事实。`role=commander,node=null`
 的 session/ledger 以 attempt id 联结；actual model/effort/provider session id 缺失保持 unknown，不拿请求值
-倒填。身份漂移、provider session 跨 logical session 复用或账/审计失败会把 delivery 降为 unknown，
+倒填。ledger 行的 `latency_ms` 记该轮 Commander 子进程墙钟（含其内部全部模型往返与工具调用，不含之后的
+execution drain），进程未启动为 `null`。身份漂移、provider session 跨 logical session 复用或账/审计失败会把 delivery 降为 unknown，
 但 outer state 仍尽力落账。child executor 通过 parent contract SHA 与 current epoch identity 复验相同
 base/sid/profiles/授权/code/skill/provider context；无法复验时不得启动付费节点。
 

@@ -210,7 +210,8 @@ def append_commander_call(
         cli_version: str | None = None,
         usage: Mapping[str, int | None] | None = None,
         outcome: str, exit_code: int,
-        error_kind: str | None = None) -> None:
+        error_kind: str | None = None,
+        latency_ms: int | None = None) -> None:
     """追加一次整书 Commander 调用的成本事实。
 
     Commander 不是 ``NODES`` 的成员，故意以 ``role='commander'``、``node=null``
@@ -222,6 +223,11 @@ def append_commander_call(
     ``attempt_id`` 同时写入 agent session 的可得 turn，是两账的联结键。供应商没有
     回 provider session id 时仍诚实记一次调用，但 session audit 不得据此伪造 turn。
     实际 model/effort 没回显就保持 ``null``，绝不拿请求值补齐。
+
+    ``latency_ms`` 是这一轮 Commander CLI 子进程从启动到退出的单调时钟墙钟，
+    包含它内部全部模型往返与工具调用，不含之后的 execution drain 等待；进程
+    没有启动时保持 ``null``。它与逐节点行的 ``latency_ms`` 同名同单位，供终审
+    账本把 ``role:commander`` 的耗时单列，不能拿节点行的传输耗时冒充。
     """
     run_id = run_identity.check_run_id(run_id)
     session_run_id = run_identity.check_run_id(session_run_id)
@@ -245,6 +251,10 @@ def append_commander_call(
                 or any(ord(char) < 32 for char in value)):
             raise ProvenanceRefused(
                 f'commander ledger {name} 必须是非空、无控制字符的字符串或 null')
+    if latency_ms is not None and (
+            isinstance(latency_ms, bool) or not isinstance(latency_ms, int)
+            or latency_ms < 0):
+        raise ProvenanceRefused('commander ledger latency_ms 必须是非负整数或 null')
 
     usage_values: dict[str, int | None] = {
         'prompt_tokens': None,
@@ -296,7 +306,7 @@ def append_commander_call(
         'finish_reason': None,
         'attempt': 1,
         'max_attempts': 1,
-        'latency_ms': None,
+        'latency_ms': latency_ms,
         'error_kind': error_kind,
         'retryable': False,
         'will_retry': False,

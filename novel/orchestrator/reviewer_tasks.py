@@ -1131,6 +1131,11 @@ approval:blueprint_seen；Supervisor 会用你实际读过的 Blueprint token �
 其余早期 proof，你不得自行运行审批命令。
 Supervisor 在两轮之间精确 resume 同一 Commander provider session；不要重新定位
 已经读过的材料。
+
+materials 已包含裁决所需的全部材料。不需要也不得读取 operator skill、仓库源码、测试
+或盘上产物来补充材料；不得运行任何 shell/PowerShell/Python 命令读取材料或产物，唯一
+允许的文件操作是写出上述请求文件。材料确实不足以裁决某一项时，保持模板的关闭式默认值
+（request_replan / request_repair / UNVER）并在对应 reason 写明缺的是什么；不得猜 accept。
 {correction_instruction}
 {stage4_resolution_instruction}
 """
@@ -1141,7 +1146,7 @@ Supervisor 在两轮之间精确 resume 同一 Commander provider session；不�
         raise AssertionError('reviewer 静态指令意外包含调度/收尾指令')
     prompt = f"""{instructions}
 <immutable-workpack>
-{json.dumps(envelope, ensure_ascii=False, indent=2, sort_keys=True)}
+{json.dumps(envelope, ensure_ascii=False, sort_keys=True, separators=(',', ':'))}
 </immutable-workpack>
 """
     return ReviewerTask(

@@ -1957,6 +1957,7 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
         lifecycle_error_kind: str | None = None
         completion_error_kind: str | None = None
         invoked = False
+        turn_latency_ms: int | None = None
         drain = _ExecutionDrainResult(timed_out=False)
         try:
             log = run_log_path(base, run_id)
@@ -1992,7 +1993,14 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                         # driver owner 登记后 commit 路。
                         launch_ticket.commit()
                     commander_spawn = spawn
-                result = commander_spawn(turn_invocation, child_env, fh)
+                # 只量 Commander 子进程本身：模型往返与它内部的工具调用都在
+                # 这段墙钟里；之后的 execution drain 属于 Supervisor，不混进来。
+                spawn_started = time.monotonic()
+                try:
+                    result = commander_spawn(turn_invocation, child_env, fh)
+                finally:
+                    turn_latency_ms = int(
+                        (time.monotonic() - spawn_started) * 1000)
                 if not isinstance(result, CommanderProcessResult):
                     raise TypeError(
                         'Commander spawn 必须返回 CommanderProcessResult，'
@@ -2088,7 +2096,8 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                     cli_version=turn_invocation.cli_version,
                     usage=_usage_dict(observation),
                     outcome=('ok' if rc == 0 else 'error'),
-                    exit_code=rc, error_kind=error_kind)
+                    exit_code=rc, error_kind=error_kind,
+                    latency_ms=turn_latency_ms)
             except Exception:  # noqa: BLE001
                 integrity_error_kind = 'commander_ledger'
                 error_kind = integrity_error_kind

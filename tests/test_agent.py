@@ -1705,6 +1705,41 @@ def test_commander_session_and_ledger_are_linked_without_fake_node(base, corpus)
     assert row['run_id'] == rec.run_id
     assert row['session_run_id'] == session.session_run_id
     assert row['attempt_id'] == turn.attempt_id
+    # 逐轮墙钟入账：fake spawn 立即返回，只能断言是非负整数而不是 null。
+    assert isinstance(row['latency_ms'], int)
+    assert not isinstance(row['latency_ms'], bool)
+    assert row['latency_ms'] >= 0
+
+
+def test_commander_ledger_latency_measures_the_spawned_turn(base, corpus):
+    def slow_ok_spawn(invocation, env, log):
+        time.sleep(0.05)
+        return _ok_spawn(invocation, env, log)
+
+    rec = agent.start(
+        base, '42', authorized=True, egress_authorized=True,
+        profiles=_PROFILES, spawn=slow_ok_spawn)
+    assert agent.wait(rec.run_id, 10)
+    rows = [json.loads(line) for line in (
+        Path(base) / '_service' / 'ledger.jsonl').read_text(
+            encoding='utf-8').splitlines()]
+    [row] = [item for item in rows if item.get('role') == 'commander']
+    assert row['latency_ms'] >= 40
+
+
+def test_commander_ledger_rejects_bad_latency(base):
+    from novel.errors import ProvenanceRefused
+
+    for bad in (-1, True, 1.5, '12'):
+        with pytest.raises(ProvenanceRefused):
+            agent.append_commander_call(
+                base, run_id='1700000000-abcdef12',
+                session_run_id='1700000000-abcdef13', sid='42',
+                attempt_id='attempt-1', request_model='m',
+                requested_effort='high', code='c' * 40,
+                protocol_version='codex-jsonl-v1', outcome='ok',
+                exit_code=0, latency_ms=bad)
+    assert not (Path(base) / '_service' / 'ledger.jsonl').exists()
 
 
 def test_missing_provider_session_does_not_fabricate_a_turn(base, corpus):

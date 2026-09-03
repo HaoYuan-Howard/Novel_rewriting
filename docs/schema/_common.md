@@ -395,7 +395,7 @@ stage5 / stage6 / stage7 **逐字段相同**。
 |---|---|
 | `attempt` / `max_attempts` | 本次真实发送是重试窗口里的第几次；缓存命中为 `null` |
 | `finish_reason` | 供应商返回的结束原因；未收到响应时为 `null` |
-| `latency_ms` | 仅真实传输调用的单调时钟耗时；缓存命中为 `null` |
+| `latency_ms` | 仅真实传输调用的单调时钟耗时；缓存命中为 `null`。`role=commander` 行记整轮 Commander CLI 子进程墙钟（含其内部全部模型往返与工具调用，不含之后的 execution drain），进程未启动为 `null` |
 | `error_kind` | 传输常见值为 `timeout｜connection｜rate_limit｜conflict｜server_error｜http_error｜transport`；Agent CLI 另登记 `provider_transient｜authentication｜usage_limit｜permission｜agent_command｜agent_protocol`，未知值不反推成已知类别 |
 | `retryable` / `will_retry` | 错误本身是否可重试，以及本次之后是否真的还会重试 |
 | `backoff_ms` | 下一次发送前计划执行的退避；没有下一次时为 `null` |

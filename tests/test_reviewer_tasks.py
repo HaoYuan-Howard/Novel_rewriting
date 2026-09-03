@@ -82,6 +82,11 @@ def test_dynamic_workpack_may_contain_tool_names_without_tripping_static_guard(
     assert payload['submission_options'][0]['exact_request']['action'] == {
         'kind': 'approval', 'surface': 'design', 'payload': {}}
     assert 'payload_json_schema' not in task.prompt and '$defs' not in task.prompt
+    # prompt 内的 workpack 用紧凑 JSON：缩进只多花 token，不多给信息。
+    assert '\n  "' not in envelope and '": ' not in envelope
+    # Reviewer 只审随包下发的材料，不再被引导去读 skill / 仓库 / 盘上产物。
+    assert '不得读取 operator skill、仓库源码、测试' in task.prompt
+    assert '允许的文件操作是写出上述请求文件' in task.prompt
 
 
 def test_design_template_projects_to_compact_single_token_request() -> None:
