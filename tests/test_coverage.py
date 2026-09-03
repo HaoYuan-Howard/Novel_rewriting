@@ -68,9 +68,12 @@ _R_SECTION_SIZES = {
     # R-13/R-14 分别增至 9/8：operator phase 遥测与 invocation snapshot/finalizer。
     # 2026-09-01：R-3.21 / R-5.26 / R-11.21 / R-12.7 分别冻结
     # narrative relations、Stage4 收敛、RunSupervisor 与四类身份拆分。
+    # 2026-09-03：R-5 新增 exact-SHA reason 分流、Stage4 reviewer 单快照/delta
+    # 与 targeted-repair historical adoption；R-11 新增 clean execution identity
+    # 和运行页三事实分层；R-12 明确跨 run adoption 不属于 live restore。
     'R-0': 16, 'R-1': 16, 'R-2': 29, 'R-3': 34, 'R-4': 18,
-    'R-5': 34, 'R-6': 12, 'R-7': 47, 'R-8': 23, 'R-9': 28,
-    'R-10': 34, 'R-11': 23, 'R-12': 13, 'R-13': 9, 'R-14': 8,
+    'R-5': 37, 'R-6': 12, 'R-7': 47, 'R-8': 23, 'R-9': 28,
+    'R-10': 34, 'R-11': 25, 'R-12': 14, 'R-13': 9, 'R-14': 8,
 }
 
 
@@ -169,6 +172,21 @@ _CODE_SITE = re.compile(r'`((?:[\w.\-]+/)+[\w.\-]+\.\w+)::(\w+)`')
 _BARE_PATH = re.compile(r'`((?:[\w.\-]+/)+[\w.\-]+\.(?:py|md|json|toml|yml))`')
 
 
+def _definition_pattern(path: Path, name: str) -> str:
+    """按文件语言给出「这个名字在这里定义得出来」的正则。
+
+    Python 只认 `def` / `class` / 模块级赋值；前端 `结构` 行（`R-11.24`）点名的是
+    `.tsx` 组件，TypeScript 的定义形态是 `function NAME` / `const NAME =` 一族，
+    用 Python 的形态去扫会把真存在的组件报成「定义不出」。
+    """
+    if path.suffix in ('.ts', '.tsx'):
+        return (
+            rf'^\s*(?:export\s+)?(?:default\s+)?(?:async\s+)?(?:function|class)\s+{name}\b'
+            rf'|^\s*(?:export\s+)?(?:const|let|var|type|interface|enum)\s+{name}\b'
+        )
+    return rf'^\s*(?:def|class)\s+{name}\b|^{name}\s*[:=]'
+
+
 def test_structural_rows_that_name_a_repo_path_actually_point_at_it():
     """上一条查「有没有反引号」，本条查**反引号里那个东西在不在**。
 
@@ -198,7 +216,7 @@ def test_structural_rows_that_name_a_repo_path_actually_point_at_it():
             if not p.exists():
                 unresolved.append(f'{rid}: `{rel}::{name}` —— 文件不在仓里')
                 continue
-            if not re.search(rf'^\s*(?:def|class)\s+{name}\b|^{name}\s*[:=]',
+            if not re.search(_definition_pattern(p, name),
                              p.read_text(encoding='utf-8'), re.M):
                 unresolved.append(f'{rid}: `{rel}::{name}` —— {rel} 里定义不出 {name}')
         with_name = {rel for rel, _ in sites}

@@ -895,6 +895,14 @@ SHA，不保存错误正文。下一轮同 run 启动先撤销旧等待标记，
 可恢复交付失败后停止接纳新章并 drain 已在途章，因此尚未发 wire 的 deferred 章可以在恢复后再请求。
 该 sidecar 不是正式 artifact、缓存或跨代码迁移面。
 
+Stage4A 的普通 live checkpoint 恢复同样只认当前 run。代码/skill 漂移打开新 epoch 后，只有 typed
+targeted repair 的目标章可以走显式 historical response adoption：target 先创建自己的 immutable run
+identity，再逐字段对证 source/target profile、完整请求、schema、input、ceiling 与恢复协议，并用 source
+自己的 code/session/checkpoint/attempt/ledger 加当前动态 validator 复验响应。只有唯一最大来源可写
+target `design/historical-checkpoint-adoption.json`；并列或零来源直接不采用、由 target 新发 wire。旧
+provider session 不注册进 target pool，source revision 不复制，正式 lineage 和 usage 分别保留 manifest
+指针与 source/target 分账。策略 unit、普通首轮和 strategy replan 不在该桥内。
+
 若 Stage4B 旧 run 已经 ended、无法保持原 parent/epoch，则新 run 可在发 wire 前扫描历史章 checkpoint；
 只有某一个历史 run 提供唯一最大的**不完整**章集合，并且 source run/profile/request/schema/checkpoint/
 session/ledger、当前候选主体、完整请求集合与每章现役动态 validator 全部复验通过，才写 immutable

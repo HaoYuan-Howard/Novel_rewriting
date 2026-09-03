@@ -62,6 +62,20 @@ class _PlanningDriver:
 
 
 @pytest.fixture(autouse=True)
+def stable_code_version(monkeypatch):
+    """HTTP 用例测路由、锁与审计，不把宿主 Git 状态混进来。
+
+    ``R-11.23`` 让付费 start 拒绝 dirty/unknown 代码身份；若这里照实读仓库指纹，
+    开发者工作树一有未提交改动，本文件的 202 用例就整批变成 400。代码指纹与
+    dirty 拒绝各由 ``tests/test_prov.py`` / ``tests/test_agent.py`` 独立覆盖，
+    这里固定一个干净的非 unknown 身份；个别用例再按需覆盖成 unknown 或 dirty。
+    """
+    from novel import prov
+
+    monkeypatch.setattr(prov, 'code_version', lambda: 'test-api-code-version')
+
+
+@pytest.fixture(autouse=True)
 def no_real_commander_cli(monkeypatch):
     monkeypatch.setattr(
         agent, 'create_commander_driver',
@@ -328,6 +342,33 @@ def test_http_start_refuses_unknown_code_before_spawn(client, monkeypatch):
     assert response.status_code == 400
     assert response.json()['kind'] == 'UnsupportedRunMode'
     assert '代码指纹不可用' in response.json()['message']
+    assert spawned == []
+
+
+def test_http_start_refuses_dirty_code_but_preview_shows_it(client, monkeypatch):
+    """`R-11.23`：dirty digest 可预览，付费 start 在 spawn 前 400。"""
+    from novel import prov
+
+    c, _ = client
+    spawned = []
+    dirty = 'a' * 40 + '-dirty.' + 'b' * 16
+    monkeypatch.setattr(prov, 'code_version', lambda: dirty)
+    monkeypatch.setattr(
+        agent, '_default_spawn', lambda _run_id: spawned.append(True))
+    preview = c.post('/api/agent/runs/preview', json={
+        'sid': '42', 'authorized': True, 'egress_authorized': True,
+        'profiles': _PIPELINE_PROFILES,
+    }, headers=UI)
+    assert preview.status_code == 200
+    # 公开 preview 不单列 code_version 字段；代码身份只在 Commander prompt 的审计起点里。
+    assert f'code_version=`{dirty}`' in preview.json()['prompt']
+    response = c.post('/api/agent/runs', json={
+        'sid': '42', 'authorized': True, 'egress_authorized': True,
+        'profiles': _PIPELINE_PROFILES,
+    }, headers=UI)
+    assert response.status_code == 400
+    assert response.json()['kind'] == 'UnsupportedRunMode'
+    assert '未提交改动' in response.json()['message']
     assert spawned == []
 
 

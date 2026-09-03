@@ -1693,7 +1693,16 @@ class ArtifactStore:
             if link.state == 'match':
                 continue
             current = edges[positions[link.key]] if link.key in positions else None
-            reason = 'ghost' if link.state == 'ghost' else 'file_changed'
+            # compiled 计划额外绑定 A/B 完整字节，但不能把普通 freshness 已经
+            # 证明的 declared projection 变化洗成手工 ``file_changed``：那会把
+            # 本可由 producer 0 歧义重做的 consumed_changed 错送人工恢复。只有
+            # 普通投影仍 match、而未消费字节单独变化时，才是真 file_changed。
+            reason = (
+                'ghost' if link.state == 'ghost'
+                else 'consumed_changed'
+                if current is not None and current.reason == 'consumed_changed'
+                else 'file_changed'
+            )
             state = 'unknown' if reason == 'ghost' else 'stale'
             exact = prov.EdgeVerdict(
                 key=link.key,

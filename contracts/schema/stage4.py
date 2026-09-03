@@ -525,7 +525,9 @@ class DesignUnitLineage(StrictModel):
     purpose: str = Field(min_length=1)
     attempt_id: str | None = Field(default=None, pattern=r'^[0-9a-f]{16}$')
     source_kind: Literal['inherited', 'repair', 'human']
-    origin: Literal['agent', 'human', 'candidate_snapshot'] = 'agent'
+    origin: Literal[
+        'agent', 'historical_checkpoint', 'human', 'candidate_snapshot',
+    ] = 'agent'
     source_ref: Sha256 | None = None
 
     @model_validator(mode='after')
@@ -533,12 +535,18 @@ class DesignUnitLineage(StrictModel):
         if self.origin == 'agent':
             if self.attempt_id is None or self.source_ref is not None:
                 raise ValueError('agent lineage 必须有 attempt_id 且不得伪造 source_ref')
+        elif self.origin == 'historical_checkpoint':
+            if self.attempt_id is None or self.source_ref is None:
+                raise ValueError(
+                    'historical checkpoint lineage 必须同时绑定 attempt_id 与 adoption manifest')
         elif self.attempt_id is not None or self.source_ref is None:
             raise ValueError('deterministic lineage 只用 source_ref，不得伪造 attempt_id')
         if self.source_kind == 'human' and self.origin != 'human':
             raise ValueError('source_kind=human 必须对应 human origin')
-        if self.source_kind == 'repair' and self.origin != 'agent':
-            raise ValueError('本轮 repair source 必须来自真实 agent checkpoint')
+        if self.source_kind == 'repair' and self.origin not in {
+            'agent', 'historical_checkpoint',
+        }:
+            raise ValueError('本轮 repair source 必须来自可核验 agent checkpoint')
         return self
 
 

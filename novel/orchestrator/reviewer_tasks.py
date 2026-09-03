@@ -9,6 +9,7 @@
 """
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import os
@@ -171,12 +172,93 @@ def _approval_current_decision(
     return decision
 
 
+def _stage4_workpack(
+    base: str,
+    sid: str,
+    waiting_on: str,
+    *,
+    review_run_id: str,
+    current: OperatorNext,
+) -> dict[str, Any]:
+    """在一个进程、一个 operator 坐标内生成 Stage4 reviewer 全包。
+
+    旧路径依次启动 design workpack/template、structure workpack、approval show
+    四个 Python CLI；每个进程都会重新扫描代码与书面。这里复用 Supervisor 已经
+    冻结的 overview/code，并用首尾 surface seal CAS 保证不是混合时点。
+    """
+    from novel.orchestrator import approvals, inspection, state
+    from novel.stages.stage4.plan import run_check_only
+    from novel.store import readonly_snapshot_memo
+
+    base_abs = os.path.abspath(base)
+    if (
+        current.sid != sid
+        or os.path.abspath(current.base) != base_abs
+        or current.overview.sid != sid
+    ):
+        raise ReviewerTaskError('Stage4 reviewer 的 operator 快照不属于当前书')
+    novel_dir = paths.resolve_novel_dir(base_abs, sid).resolve()
+    with readonly_snapshot_memo(novel_dir):
+        before = inspection.read_surface_seal(
+            base_abs, sid, code=current.code_version)
+        if before != current.surface_seal:
+            raise ReviewerTaskError(
+                'Stage4 reviewer 启动前 operator surface 已变化；请刷新 next')
+        with approvals.read_projection(
+                overview=current.overview, code=current.code_version):
+            design = approvals.design_workpack(
+                base_abs, sid, overview=current.overview,
+                code=current.code_version).model_dump(mode='json')
+            template = approvals.design_template(
+                base_abs, sid,
+                actor=_ACTOR, reason=_REASON,
+                reviewer_kind='delegated_operator',
+                review_run_id=review_run_id,
+                overview=current.overview,
+                code=current.code_version,
+            ).model_dump(mode='json')
+            pack: dict[str, Any] = {
+                'design': design,
+                # 只供确定性封装层投影 compact POST；不重复进入阅读面。
+                '_design_template': template,
+            }
+            if waiting_on == queue.WAITING_ON_STAGE4_STRUCTURE_REPLAN:
+                report = run_check_only(state.readonly_ctx(
+                    novel_dir, 'stage4.plan', current.code_version))
+                structure = approvals.structure_workpack(
+                    base_abs, sid,
+                    overview=current.overview, code=current.code_version,
+                    check_report=report,
+                ).model_dump(mode='json')
+                approval_doc = approvals.get(
+                    base_abs, sid,
+                    overview=current.overview, code=current.code_version,
+                    include_spawns=False, operator_projection=True)
+                view = approval_doc.structure
+                if (view.state != 'replan_requested'
+                        or view.current_decision is None):
+                    raise ReviewerTaskError(
+                        'Stage4 structure 当前已不是 replan_requested')
+                pack.update({
+                    'structure': structure,
+                    'structure_replan_decision':
+                        view.current_decision.model_dump(mode='json'),
+                })
+        after = inspection.read_surface_seal(
+            base_abs, sid, code=current.code_version)
+        if after != before:
+            raise ReviewerTaskError(
+                'Stage4 reviewer workpack 构造期间 surface 变化；请重试')
+    return pack
+
+
 def _workpack(
     base: str,
     sid: str,
     waiting_on: str,
     *,
     review_run_id: str,
+    current: OperatorNext | None = None,
 ) -> dict[str, Any]:
     py = sys.executable
     root = Path(__file__).resolve().parents[2]
@@ -247,30 +329,11 @@ def _workpack(
                 '--emit-review-workpack'])
         return pack
     if waiting_on in _STAGE4_DESIGN_DECISION_BLOCKERS:
-        pack = {
-            'design': _json_command([
-                *cli, 'approval', 'workpack', 'design', sid, '--base', base]),
-            # 只供确定性封装层投影 compact POST；不再进 prompt
-            # 重复 workpack 已有的整本 subject。
-            '_design_template': _json_command([
-                *cli, 'approval', 'template', 'design', sid, '--base', base,
-                '--actor', _ACTOR, '--reason', _REASON,
-                '--reviewer-kind', 'delegated_operator',
-                '--review-run-id', review_run_id,
-            ]),
-        }
-        if waiting_on == queue.WAITING_ON_STAGE4_STRUCTURE_REPLAN:
-            # B 的正式 workpack 与人类逐章拒绝理由是“为什么要回 A”的证据；
-            # 它们只供 Commander 形成新的 closed typed A 决定，不能直接进 Executor。
-            pack.update({
-                'structure': _json_command([
-                    *cli, 'approval', 'workpack', 'structure', sid,
-                    '--base', base]),
-                'structure_replan_decision': _approval_current_decision(
-                    cli, base, sid, 'structure',
-                    expected_state='replan_requested'),
-            })
-        return pack
+        if current is None:
+            raise ReviewerTaskError('Stage4 reviewer workpack 缺 operator 冻结快照')
+        return _stage4_workpack(
+            base, sid, waiting_on, review_run_id=review_run_id,
+            current=current)
     if waiting_on == queue.WAITING_ON_STAGE4_STRUCTURE_REVIEW:
         return {
             'structure': _json_command([
@@ -383,6 +446,144 @@ def _visible_materials(pack: dict[str, Any]) -> dict[str, Any]:
     """下划线材料只用来铸 skeleton，不重复进模型阅读面。"""
     return {key: value for key, value in pack.items()
             if not key.startswith('_')}
+
+
+def _canonical_json_sha256(value: Any) -> str:
+    return hashlib.sha256(json.dumps(
+        value, ensure_ascii=False, sort_keys=True,
+        separators=(',', ':'), allow_nan=False,
+    ).encode('utf-8')).hexdigest()
+
+
+def _stage4_structure_replan_materials(
+    pack: dict[str, Any],
+) -> dict[str, Any]:
+    """把 B→A 回审压成“完整 A + 被拒 B 增量”，并绑定完整 B 哈希。
+
+    当前 B typed 决定仍完整保留；B workpack 只保留全局证据和被点名章，已经
+    accept 的逐章 coverage 不再重复发送。完整 workpack 哈希让判重与审计仍绑定
+    原始材料，而不是把压缩阅读面误当成新的业务主体。
+    """
+    design = pack.get('design')
+    structure = pack.get('structure')
+    decision = pack.get('structure_replan_decision')
+    if not isinstance(design, dict) or not isinstance(structure, dict) \
+            or not isinstance(decision, dict):
+        raise ReviewerTaskError('Stage4 structure replan 缺 A/B/typed 决定')
+    rows = decision.get('chapters')
+    if not isinstance(rows, list):
+        raise ReviewerTaskError('Stage4 structure replan 决定缺 chapters')
+    requested = sorted({
+        row.get('output_ordinal') for row in rows
+        if isinstance(row, dict) and row.get('decision') == 'request_replan'
+        and isinstance(row.get('output_ordinal'), int)
+        and not isinstance(row.get('output_ordinal'), bool)
+    })
+    if not requested:
+        raise ReviewerTaskError('Stage4 structure replan 决定没有 request_replan 章')
+    groups = structure.get('groups')
+    ordinals = structure.get('chapter_ordinals')
+    if not isinstance(groups, list) or not isinstance(ordinals, list):
+        raise ReviewerTaskError('Stage4 structure workpack 缺 groups/chapter_ordinals')
+    compact_groups: list[dict[str, Any]] = []
+    kept_items = 0
+    full_items = 0
+    for group in groups:
+        if not isinstance(group, dict) or not isinstance(group.get('items'), list):
+            raise ReviewerTaskError('Stage4 structure workpack group 形状漂移')
+        items = group['items']
+        full_items += len(items)
+        kept = [
+            copy.deepcopy(item) for item in items
+            if isinstance(item, dict)
+            and (item.get('chapter_ordinal') is None
+                 or item.get('chapter_ordinal') in requested)
+        ]
+        kept_items += len(kept)
+        compact_groups.append({
+            **{key: copy.deepcopy(value) for key, value in group.items()
+               if key not in {'items', 'scanned'}},
+            'scanned': (
+                f'仅发送 request_replan 章 {requested} 与全局项；'
+                f'完整组由 full_workpack_sha256 绑定'),
+            'items': kept,
+        })
+    accepted = sorted({
+        value for value in ordinals
+        if isinstance(value, int) and not isinstance(value, bool)
+        and value not in requested
+    })
+    structure_identity = {
+        key: copy.deepcopy(value) for key, value in structure.items()
+        if key != 'groups'
+    }
+    return {
+        'design': copy.deepcopy(design),
+        'structure_replan': {
+            'kind': 'stage4-structure-replan-delta-v1',
+            'full_workpack_sha256': _canonical_json_sha256(structure),
+            'structure_identity': structure_identity,
+            'requested_replan_chapters': requested,
+            'omitted_accepted_chapters': accepted,
+            'full_item_count': full_items,
+            'sent_item_count': kept_items,
+            'groups': compact_groups,
+            'current_decision': copy.deepcopy(decision),
+        },
+    }
+
+
+def _review_materials(
+    pack: dict[str, Any], waiting_on: str,
+) -> dict[str, Any]:
+    if waiting_on == queue.WAITING_ON_STAGE4_STRUCTURE_REPLAN:
+        return _stage4_structure_replan_materials(pack)
+    return _visible_materials(pack)
+
+
+def _canonicalize_design_review_payload(value: Any) -> Any:
+    """只归一集合式顺序；重复项仍交给 typed schema 关闭式拒绝。"""
+    if not isinstance(value, dict):
+        return value
+    payload = copy.deepcopy(value)
+
+    def canonical_rows(rows: Any) -> Any:
+        if not isinstance(rows, list):
+            return rows
+        return sorted(rows, key=lambda row: json.dumps(
+            row, ensure_ascii=False, sort_keys=True,
+            separators=(',', ':'), allow_nan=False))
+
+    strategy = payload.get('strategy')
+    if isinstance(strategy, dict):
+        constraints = strategy.get('replan_constraints')
+        if isinstance(constraints, list):
+            for constraint in constraints:
+                if isinstance(constraint, dict) and isinstance(
+                        constraint.get('chapter_ordinals'), list):
+                    constraint['chapter_ordinals'] = sorted(
+                        constraint['chapter_ordinals'],
+                        key=lambda item: json.dumps(
+                            item, ensure_ascii=False, sort_keys=True,
+                            separators=(',', ':'), allow_nan=False))
+            strategy['replan_constraints'] = canonical_rows(constraints)
+    chapters = payload.get('chapters')
+    if isinstance(chapters, list):
+        for chapter in chapters:
+            if isinstance(chapter, dict) and isinstance(
+                    chapter.get('constraints'), list):
+                chapter['constraints'] = canonical_rows(chapter['constraints'])
+
+        def chapter_key(row: Any) -> tuple[int, Any]:
+            ordinal = row.get('output_ordinal') if isinstance(row, dict) else None
+            if isinstance(ordinal, int) and not isinstance(ordinal, bool):
+                return (0, ordinal)
+            return (1, json.dumps(
+                row, ensure_ascii=False, sort_keys=True,
+                separators=(',', ':'), allow_nan=False))
+
+        chapters.sort(key=chapter_key)
+    return payload
 
 
 def _global_review_template(raw: Any) -> dict[str, Any]:
@@ -837,7 +1038,8 @@ def build_task(
             f'reviewer request 必须是当前 turn 的全新落点：{request}')
     review_run_id = f'supervisor-{current.action.action_sha256[:20]}'
     pack = _workpack(
-        base_abs, sid, waiting_on, review_run_id=review_run_id)
+        base_abs, sid, waiting_on, review_run_id=review_run_id,
+        current=current)
     options = _submission_options(pack, current, waiting_on)
     if not options:
         raise ReviewerTaskError(f'{waiting_on} 没有 typed submission option')
@@ -848,7 +1050,7 @@ def build_task(
         'surface_seal': current.surface_seal,
         'waiting_on': waiting_on,
         'action_sha256': current.action.action_sha256,
-        'materials': _visible_materials(pack),
+        'materials': _review_materials(pack, waiting_on),
         'submission_options': options,
     }
     if waiting_on in queue.STAGE2_REVIEWER_WAITING_ON:
@@ -1299,7 +1501,11 @@ def load_action(
             'blueprint_seen': BlueprintSeenRequest,
         }
         try:
-            payload = models[surface].model_validate(body['payload']).model_dump(
+            source_payload = (
+                _canonicalize_design_review_payload(body['payload'])
+                if surface == 'design' else body['payload']
+            )
+            payload = models[surface].model_validate(source_payload).model_dump(
                 mode='json')
         except (KeyError, ValidationError) as exc:
             raise ReviewerTaskError(

@@ -121,8 +121,18 @@ describe('RunScreen 交付终验', () => {
           },
         },
         contract: null,
-        epochs: [],
-        active_epoch_id: null,
+        epochs: [{
+          epoch_id: 'epoch-1', ordinal: 1, reason: 'initial', argv: ['agent-dynamic'],
+          prompt_sha256: '1'.repeat(64), protocol_version: 'v1', cli_version: '1.0',
+          code_version: 'code-before-rollover', skill_sha256: '2'.repeat(64),
+          session_run_id: 'session-1', resume_provider_session_id: null,
+        }, {
+          epoch_id: 'epoch-2', ordinal: 2, reason: 'code_drift', argv: ['agent-dynamic'],
+          prompt_sha256: '3'.repeat(64), protocol_version: 'v1', cli_version: '1.0',
+          code_version: 'code-after-rollover', skill_sha256: '4'.repeat(64),
+          session_run_id: 'session-2', resume_provider_session_id: null,
+        }],
+        active_epoch_id: 'epoch-2',
         started: 1,
         ended: null,
         exit_code: null,
@@ -140,6 +150,10 @@ describe('RunScreen 交付终验', () => {
     expect(snapshot).toHaveTextContent('executor-model-v7')
     expect(snapshot).toHaveTextContent('node.dynamic-a')
     expect(snapshot).toHaveTextContent('effort=deep-dynamic')
+    expect(screen.getByTestId('agent-epoch')).toHaveTextContent(
+      '当前执行 epoch：#2 · code_drift · code-after-r',
+    )
+    expect(screen.getByTestId('agent-epoch')).toHaveTextContent('已换 epoch 1 次')
   })
 })
 
@@ -147,9 +161,12 @@ describe('RunScreen check composition', () => {
   it('默认折叠 operator 已确认无需重跑的前缀，并显示真实续跑处理者', async () => {
     const run = await mockApi.getRunProgress(SAMPLE_SID)
     const next = run.steps.find((step) => step.node === 'stage4.context')
+    const running = run.steps.find((step) => step.node === 'stage4.plan')
     if (!next) throw new Error('mock pipeline 缺 stage4.context')
+    if (!running) throw new Error('mock pipeline 缺 stage4.plan')
+    running.beacon = 'running'
     const skipped = run.steps
-      .filter((step) => step.seq < next.seq)
+      .filter((step) => step.seq < next.seq && step.node !== running.node)
       .map((step) => step.node)
     run.resume_frontier = {
       state: 'blocked',
@@ -172,9 +189,10 @@ describe('RunScreen check composition', () => {
     renderRoute(<RunScreen />, `/n/${SAMPLE_SID}/run`)
 
     const frontier = await screen.findByTestId('resume-frontier')
-    expect(frontier).toHaveTextContent(/续跑从 stage4 写作上下文组装\s*开始/)
+    expect(frontier).toHaveTextContent(/下一节点：stage4 写作上下文组装/)
+    expect(frontier).toHaveTextContent('当前执行：stage4 重构计划（stage4.plan）')
     expect(frontier).toHaveTextContent('下一处理者：Commander（形成新裁决）')
-    expect(screen.getByRole('button', { name: '跳到当前步' })).toBeEnabled()
+    expect(screen.getByRole('button', { name: '跳到下一节点' })).toBeEnabled()
     expect(screen.queryAllByTitle('stage0.remove')).toHaveLength(0)
 
     const toggle = screen.getByRole('button', { name: /当前快照已确认无需重跑/ })

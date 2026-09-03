@@ -609,6 +609,30 @@ def test_preview_can_show_unknown_code_but_start_refuses_before_spawn_or_audit(
     assert not agent_session_audit.audit_path(base).exists()
 
 
+def test_preview_can_show_dirty_code_but_paid_start_and_epoch_refuse_it(
+        base, corpus, monkeypatch):
+    """生产跑只接受冻结 commit；预览仍能如实展示 dirty digest。"""
+    from novel import prov
+
+    dirty = 'a' * 40 + '-dirty.' + 'b' * 16
+    monkeypatch.setattr(prov, 'code_version', lambda: dirty)
+    shown = agent.plan(
+        base, '42', authorized=True, egress_authorized=True,
+        profiles=_PROFILES)
+    assert shown.code_version == dirty
+
+    spawned = []
+    with pytest.raises(Exception, match='未提交改动.*专用 worktree'):
+        agent.start(
+            base, '42', authorized=True, egress_authorized=True,
+            profiles=_PROFILES,
+            spawn=lambda *_args: spawned.append(True))
+    with pytest.raises(Exception, match='未提交改动'):
+        agent._require_reproducible_code_version(dirty)
+    assert spawned == []
+    assert not agent.runs_path(base).exists()
+
+
 def test_enqueue_refuses_unknown_code_before_planning_or_spawning(
         base, corpus, monkeypatch):
     from novel import prov

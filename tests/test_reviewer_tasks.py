@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+from contextlib import nullcontext
 from types import SimpleNamespace
 
 import pytest
@@ -53,7 +54,7 @@ def test_dynamic_workpack_may_contain_tool_names_without_tripping_static_guard(
         lambda _base, _sid, _epoch_id: tmp_path)
     monkeypatch.setattr(
         reviewer_tasks, '_workpack',
-        lambda _base, _sid, _waiting_on, *, review_run_id: {
+        lambda _base, _sid, _waiting_on, *, review_run_id, current: {
             'claim': '角色把 finalizer、run_step 和 operator next 当作普通台词说出。',
         })
     monkeypatch.setattr(
@@ -121,9 +122,8 @@ def test_stage4_structure_replan_is_a_design_resolution_task() -> None:
         queue.WAITING_ON_STAGE4_STRUCTURE_REPLAN] == {'design'}
 
 
-def test_stage4_structure_replan_workpack_cross_reads_b_decision_and_a(
-        monkeypatch) -> None:
-    calls: list[list[str]] = []
+def test_stage4_structure_replan_workpack_uses_one_frozen_in_process_snapshot(
+        tmp_path, monkeypatch) -> None:
     current_b = {
         'review_token': 's4sr1_' + 'b' * 64,
         'chapters': [{
@@ -133,33 +133,89 @@ def test_stage4_structure_replan_workpack_cross_reads_b_decision_and_a(
         }],
     }
 
-    def command(argv: list[str]):
-        calls.append(argv)
-        joined = ' '.join(argv)
-        if 'workpack design' in joined:
-            return {'kind': 'design-workpack'}
-        if 'template design' in joined:
-            return {'kind': 'design-template'}
-        if 'workpack structure' in joined:
-            return {'kind': 'structure-workpack'}
-        if 'approval show' in joined:
-            return {'structure': {
-                'state': 'replan_requested',
-                'current_decision': current_b,
-                'history': [current_b],
-            }}
-        raise AssertionError(argv)
+    from novel.orchestrator import approvals, inspection, state
+    from novel.stages.stage4 import plan as stage4_plan
 
-    monkeypatch.setattr(reviewer_tasks, '_json_command', command)
+    seals: list[str] = []
+    monkeypatch.setattr(
+        reviewer_tasks.paths, 'resolve_novel_dir',
+        lambda _base, _sid: tmp_path / 'book')
+    monkeypatch.setattr(
+        inspection, 'read_surface_seal',
+        lambda *_args, **_kwargs: seals.append('read') or 'a' * 64)
+    monkeypatch.setattr(approvals, 'read_projection', lambda **_kwargs: nullcontext())
+    monkeypatch.setattr(
+        approvals, 'design_workpack',
+        lambda *_args, **_kwargs: SimpleNamespace(
+            model_dump=lambda **_dump: {'kind': 'design-workpack'}))
+    monkeypatch.setattr(
+        approvals, 'design_template',
+        lambda *_args, **_kwargs: SimpleNamespace(
+            model_dump=lambda **_dump: {'kind': 'design-template'}))
+    monkeypatch.setattr(state, 'readonly_ctx', lambda *_args: 'stage4-read-ctx')
+    monkeypatch.setattr(stage4_plan, 'run_check_only', lambda ctx: {'ctx': ctx})
+    monkeypatch.setattr(
+        approvals, 'structure_workpack',
+        lambda *_args, **_kwargs: SimpleNamespace(
+            model_dump=lambda **_dump: {'kind': 'structure-workpack'}))
+    monkeypatch.setattr(
+        approvals, 'get',
+        lambda *_args, **_kwargs: SimpleNamespace(structure=SimpleNamespace(
+            state='replan_requested',
+            current_decision=SimpleNamespace(
+                model_dump=lambda **_dump: current_b))))
+    monkeypatch.setattr(
+        reviewer_tasks, '_json_command',
+        lambda _argv: (_ for _ in ()).throw(
+            AssertionError('Stage4 reviewer 不得启动只读 CLI 子进程')))
+    current = SimpleNamespace(
+        sid='42', base=str(tmp_path), code_version='code-frozen',
+        surface_seal='a' * 64, overview=SimpleNamespace(sid='42'))
     pack = reviewer_tasks._workpack(
-        'base', '42', queue.WAITING_ON_STAGE4_STRUCTURE_REPLAN,
-        review_run_id='review-run')
+        str(tmp_path), '42', queue.WAITING_ON_STAGE4_STRUCTURE_REPLAN,
+        review_run_id='review-run', current=current)
 
     assert pack['design'] == {'kind': 'design-workpack'}
     assert pack['structure'] == {'kind': 'structure-workpack'}
     assert pack['structure_replan_decision'] == current_b
     assert '_design_template' in pack
-    assert sum('approval show' in ' '.join(argv) for argv in calls) == 1
+    assert seals == ['read', 'read']
+
+
+def test_structure_replan_materials_send_only_rejected_chapter_delta() -> None:
+    structure = {
+        'kind': 'structure', 'subject_sha256': 'a' * 64,
+        'chapter_ordinals': [1, 2, 3],
+        'groups': [{
+            'group': 'coverage', 'scanned': '3/3',
+            'items': [
+                {'code': 'c1', 'chapter_ordinal': 1},
+                {'code': 'c2', 'chapter_ordinal': 2},
+                {'code': 'global', 'chapter_ordinal': None},
+            ],
+        }],
+    }
+    decision = {
+        'chapters': [
+            {'output_ordinal': 1, 'decision': 'accept', 'reason': '可用'},
+            {'output_ordinal': 2, 'decision': 'request_replan', 'reason': '需返工'},
+            {'output_ordinal': 3, 'decision': 'accept', 'reason': '可用'},
+        ],
+    }
+
+    materials = reviewer_tasks._stage4_structure_replan_materials({
+        'design': {'kind': 'design'}, 'structure': structure,
+        'structure_replan_decision': decision,
+        '_design_template': {'not': 'visible'},
+    })
+
+    delta = materials['structure_replan']
+    assert delta['requested_replan_chapters'] == [2]
+    assert delta['omitted_accepted_chapters'] == [1, 3]
+    assert delta['full_workpack_sha256'] == reviewer_tasks._canonical_json_sha256(
+        structure)
+    assert [row['code'] for row in delta['groups'][0]['items']] == ['c2', 'global']
+    assert delta['current_decision'] == decision
 
 
 def test_stage4_resolution_loader_rejects_noop_accept_and_accepts_typed_replan(
@@ -208,6 +264,53 @@ def test_stage4_resolution_loader_rejects_noop_accept_and_accepts_typed_replan(
     action = reviewer_tasks.load_action(path, current)
     assert action.surface == 'design'
     assert action.payload['strategy']['decision'] == 'request_replan'
+
+
+def test_design_loader_canonicalizes_set_order_but_keeps_duplicates_invalid(
+        tmp_path) -> None:
+    current = _current(queue.WAITING_ON_STAGE4_DESIGN_REVIEW)
+    payload = {
+        'actor': 'agent:novel-pipeline-operator',
+        'reviewer_kind': 'delegated_operator',
+        'review_run_id': 'supervisor-ordering',
+        'general_reason': '已逐章审阅',
+        'review_token': 's4dr1_' + 'c' * 64,
+        'strategy': {
+            'decision': 'accept', 'reason': '策略可用',
+            'replan_constraints': [],
+        },
+        'chapters': [{
+            'output_ordinal': 2, 'decision': 'request_repair',
+            'reason': '锚点需修正',
+            'constraints': [
+                {'code': 'scene_goal', 'scene_refs': ['scene-2'],
+                 'opaque_aliases': ['F_2'], 'effect': None},
+                {'code': 'entry_anchor', 'scene_refs': [],
+                 'opaque_aliases': ['F_1'], 'effect': None},
+            ],
+        }, {
+            'output_ordinal': 1, 'decision': 'accept',
+            'reason': '当前章可用', 'constraints': [],
+        }],
+    }
+    request = reviewer_tasks._request_wrapper(
+        current, queue.WAITING_ON_STAGE4_DESIGN_REVIEW, {
+            'kind': 'approval', 'surface': 'design', 'payload': payload,
+        })
+    path = tmp_path / 'canonical-design.json'
+    path.write_text(json.dumps(request), encoding='utf-8')
+
+    action = reviewer_tasks.load_action(path, current)
+
+    assert [row['output_ordinal'] for row in action.payload['chapters']] == [1, 2]
+    assert [row['code'] for row in action.payload['chapters'][1]['constraints']] == [
+        'entry_anchor', 'scene_goal']
+
+    request['action']['payload']['chapters'].append(
+        dict(request['action']['payload']['chapters'][-1]))
+    path.write_text(json.dumps(request), encoding='utf-8')
+    with pytest.raises(reviewer_tasks.ReviewerTaskError, match='typed 契约'):
+        reviewer_tasks.load_action(path, current)
 
 
 def test_stage5_template_projects_only_current_targets_and_human_rulings() -> None:

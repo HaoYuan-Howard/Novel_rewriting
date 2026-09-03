@@ -2273,8 +2273,13 @@ def _request_design_strategy(
 def _request_design_chapters(
         ctx: RunContext, source: Any, prepared: DesignCandidateContext,
         chapters: tuple[DesignChapterContext, ...],
+        *, historical: Mapping[int, Any] | None = None,
 ) -> tuple[tuple[int, BlindChapterDesignResponse], ...]:
     from novel.llm import stage4_runs
+    historical_by = dict(historical or {})
+    requested = {chapter.chapter_ordinal for chapter in chapters}
+    if not set(historical_by).issubset(requested):
+        raise ProvenanceRefused('stage4.design historical checkpoint 章集合越界')
     restored_values: dict[int, BlindChapterDesignResponse] = {}
     missing: list[DesignChapterContext] = list(chapters)
     if _uses_agent_runs(ctx):
@@ -2287,22 +2292,38 @@ def _request_design_chapters(
             try:
                 restored = stage4_runs.restore_design_unit_checkpoint(
                     ctx, unit, validator=chapter.validator)
-                if restored is None:
-                    missing.append(chapter)
+                if restored is not None:
+                    response = BlindChapterDesignResponse.model_validate(restored.value)
+                    compiled = chapter.validator.compiled
+                    if (compiled is None or restored.revision_key != 'terminal'
+                            or restored.state_payload
+                            != _design_chapter_checkpoint_state(response, compiled)):
+                        raise ProvenanceRefused(
+                            f'{purpose} checkpoint 的业务状态不闭合')
+                    source.restore_checkpoint_acceptance(
+                        purpose, restored.acceptance,
+                        system=chapter.system, user=chapter.user,
+                        max_tokens=prompts.BLIND_CHAPTER_DESIGN_MAX_TOKENS,
+                        recovery_policy=stage4_runs.DESIGN_UNIT_RECOVERY_POLICY)
+                    restored_values[chapter.chapter_ordinal] = response
                     continue
-                response = BlindChapterDesignResponse.model_validate(restored.value)
-                compiled = chapter.validator.compiled
-                if (compiled is None or restored.revision_key != 'terminal'
-                        or restored.state_payload
-                        != _design_chapter_checkpoint_state(response, compiled)):
-                    raise ProvenanceRefused(
-                        f'{purpose} checkpoint 的业务状态不闭合')
-                source.restore_checkpoint_acceptance(
-                    purpose, restored.acceptance,
-                    system=chapter.system, user=chapter.user,
-                    max_tokens=prompts.BLIND_CHAPTER_DESIGN_MAX_TOKENS,
-                    recovery_policy=stage4_runs.DESIGN_UNIT_RECOVERY_POLICY)
-                restored_values[chapter.chapter_ordinal] = response
+                historical_run = historical_by.get(chapter.chapter_ordinal)
+                if historical_run is not None:
+                    response = BlindChapterDesignResponse.model_validate(
+                        historical_run.checkpoint.value)
+                    why = chapter.validator(response, None)
+                    compiled = chapter.validator.compiled
+                    if (why is not None or compiled is None
+                            or historical_run.checkpoint.revision_key != 'terminal'
+                            or historical_run.checkpoint.state_payload
+                            != _design_chapter_checkpoint_state(response, compiled)):
+                        raise ProvenanceRefused(
+                            f'{purpose} historical checkpoint 的业务状态不闭合')
+                    # 历史 provider session 永不注册进当前 pool，也不调用
+                    # restore_checkpoint_acceptance；它只作为 manifest-bound 响应值。
+                    restored_values[chapter.chapter_ordinal] = response
+                    continue
+                missing.append(chapter)
             except Exception as exc:
                 failures.append(exc)
         if failures:
@@ -3199,12 +3220,33 @@ def _materialize_design_repair(
     if {row.chapter_ordinal for row in repair_contexts} != targets:
         raise ProvenanceRefused('repair contexts 与 scope targets 漂移')
     units = tuple(_design_chapter_unit(chapter) for chapter in repair_contexts)
-    current_sources = {
-        unit.chapter: stage4_runs.current_design_unit_source(ctx, unit)
-        for unit in units
+    final_sources = tuple(sources)
+    source_by = {row.chapter: row for row in final_sources}
+    expected_chapters = {None, *range(1, len(contexts) + 1)}
+    if (len(source_by) != len(final_sources)
+            or set(source_by) != expected_chapters
+            or any(source_by[chapter].source_kind != 'repair'
+                   for chapter in targets)):
+        raise ProvenanceRefused('repair final sources 未精确覆盖 strategy + 1..N/targets')
+    validator_by = {
+        chapter.chapter_ordinal: chapter.validator for chapter in repair_contexts}
+
+    def state_payload_for(chapter: DesignChapterContext):
+        def build(response: BlindChapterDesignResponse) -> dict[str, Any]:
+            compiled_chapter = chapter.validator.compiled
+            if compiled_chapter is None:
+                why = chapter.validator(response, None)
+                compiled_chapter = chapter.validator.compiled
+                if why is not None or compiled_chapter is None:
+                    raise ProvenanceRefused(
+                        f'ch{chapter.chapter_ordinal} usage 重放未通过 validator')
+            return _design_chapter_checkpoint_state(response, compiled_chapter)
+        return build
+
+    state_by = {
+        chapter.chapter_ordinal: state_payload_for(chapter)
+        for chapter in repair_contexts
     }
-    final_sources = tuple(
-        current_sources.get(old.chapter, old) for old in sources)
     adopted_models = tuple(sorted({
         row.model for row in final_sources if row.model is not None}))
     lineage = [{
@@ -3222,7 +3264,9 @@ def _materialize_design_repair(
         model=source.model,
         adopted_models=adopted_models,
         settle=settle,
-        usage_override=stage4_runs.design_repair_usage(ctx, units),
+        usage_override=stage4_runs.design_repair_sources_usage(
+            ctx, units, final_sources,
+            validators=validator_by, state_payloads=state_by),
         alias_algorithm=BLIND_ALIAS_ALGORITHM,
         truth_sha256=str(prepared.mapping['truth_sha256']),
         architecture='book_strategy_targeted_repair_v1',
@@ -3275,50 +3319,91 @@ def _run_design_repair(
         parent, parent_run_id, repair_input_sha,
     ) = \
         _prepare_design_repair(ctx, scope)
+    from novel.llm import stage4_runs
+    target_units = tuple(_design_chapter_unit(row) for row in targets)
+    target_by = {row.chapter_ordinal: row for row in targets}
+
+    def state_payload_for(chapter: DesignChapterContext):
+        def build(response: BlindChapterDesignResponse) -> dict[str, Any]:
+            compiled = chapter.validator.compiled
+            if compiled is None:
+                why = chapter.validator(response, None)
+                compiled = chapter.validator.compiled
+                if why is not None or compiled is None:
+                    raise ProvenanceRefused(
+                        f'ch{chapter.chapter_ordinal} historical response 未通过 validator')
+            return _design_chapter_checkpoint_state(response, compiled)
+        return build
+
+    eligible = [
+        unit.chapter for unit in target_units
+        if unit.chapter is not None
+        and not stage4_runs.design_unit_checkpoint_exists(ctx, unit.chapter)
+    ]
+    historical = stage4_runs.restore_or_select_design_historical_adoption(
+        ctx, requests=target_units,
+        repair_input_sha256=repair_input_sha,
+        eligible_chapters=eligible,
+        validators={chapter: target_by[chapter].validator
+                    for chapter in target_by},
+        state_payloads={chapter: state_payload_for(target_by[chapter])
+                        for chapter in target_by},
+    )
+    historical_by = historical.by_chapter() if historical is not None else {}
     target_responses = _request_design_chapters(
-        ctx, source, prepared, targets)
+        ctx, source, prepared, targets, historical=historical_by)
     response_by = dict(parent_responses.chapters)
     response_by.update(dict(target_responses))
     responses = DesignCandidateResponses(
         strategy=parent_responses.strategy,
         chapters=tuple(sorted(response_by.items())),
     )
+    historical_sources = ({
+        chapter: stage4_runs.historical_design_unit_source(historical, chapter)
+        for chapter in historical_by
+    } if historical is not None else {})
+    current_sources = {
+        unit.chapter: stage4_runs.current_design_unit_source(ctx, unit)
+        for unit in target_units if unit.chapter not in historical_sources
+    }
+    replacement_sources = {**current_sources, **historical_sources}
+    final_sources = tuple(
+        replacement_sources.get(row.chapter, row) for row in inherited)
+    history_sha = (
+        historical.manifest_file_sha256 if historical is not None else None)
+    stage4_runs.require_design_historical_adoption_file(ctx, history_sha)
     provisional = _materialize_design_repair(
-        ctx, source, prepared, scope, responses, inherited, parent, targets,
+        ctx, source, prepared, scope, responses, final_sources, parent, targets,
         settle=False)
     target_adoptions: list[DesignAdoption] = []
-    from novel.llm import stage4_runs
-    for chapter in targets:
-        purpose = stage4_runs.design_unit_purpose(chapter.chapter_ordinal)
-        attempt_id = source.accepted_attempt(purpose)
+    for replacement in replacement_sources.values():
+        if replacement.origin != 'agent':
+            continue
+        purpose = replacement.purpose
+        attempt_id = replacement.attempt_id
         if not isinstance(attempt_id, str) or not attempt_id:
-            raise ProvenanceRefused(f'{purpose}: repair 候选缺 accepted attempt')
+            raise ProvenanceRefused(f'{purpose}: current repair 候选缺 accepted attempt')
         target_adoptions.append(DesignAdoption(
-            purpose=purpose, chapter=chapter.chapter_ordinal,
+            purpose=purpose, chapter=replacement.chapter,
             attempt_id=attempt_id))
     evaluation = DesignRepairEvaluation(
         responses=responses,
         candidate=provisional,
-        sources=inherited,
+        sources=final_sources,
         target_adoptions=tuple(target_adoptions),
         input_sha256=repair_input_sha,
         candidate_sha256=_canonical_sha256(
             provisional.model_dump(by_alias=True, mode='json')),
     )
-    from novel.llm import agent_runs, stage4_runs
-    target_units = tuple(_design_chapter_unit(row) for row in targets)
-    current_sources = {
-        unit.chapter: stage4_runs.current_design_unit_source(ctx, unit)
-        for unit in target_units
-    }
-    final_sources = tuple(current_sources.get(row.chapter, row) for row in inherited)
+    from novel.llm import agent_runs
     with stage4_runs.commit_ownership(ctx.novel_dir):
         _assert_design_current(ctx, prepared)
+        stage4_runs.require_design_historical_adoption_file(ctx, history_sha)
         stage4_runs.refuse_foreign_commit_reservations(ctx)
         journal = stage4_runs.design_repair_aggregate_state(ctx)
         if journal is None:
             artifact = _materialize_design_repair(
-                ctx, source, prepared, scope, responses, inherited, parent,
+                ctx, source, prepared, scope, responses, final_sources, parent,
                 targets,
                 settle=True)
             payload = artifact.model_dump(by_alias=True, mode='json')
@@ -3335,7 +3420,7 @@ def _run_design_repair(
                 parent_candidate_sha256=_canonical_sha256(
                     parent.model_dump(by_alias=True, mode='json')),
                 repair_decision_sha256=scope.decision_sha256,
-                target_chapters=tuple(sorted(current_sources)),
+                target_chapters=scope.target_chapters,
                 sources=final_sources,
                 primary_payload=payload,
                 finalization_payload=finalization,
@@ -3355,7 +3440,11 @@ def _run_design_repair(
             prepared.store.write(CANDIDATE_REL, artifact)
         landed = verify_design_delivery(ctx, prepared, artifact)
         for row in final_sources:
-            if row.source_kind == 'repair':
+            if (row.source_kind == 'repair' and row.origin == 'agent'
+                    and row.source_run_id == ctx.run_id):
+                if row.attempt_id is None:
+                    raise ProvenanceRefused(
+                        f'{row.purpose}: current repair source 缺 attempt_id')
                 _note_adoption_attempt(
                     ctx, purpose=row.purpose, attempt_id=row.attempt_id,
                     rel=CANDIDATE_REL, artifact=landed, chapter=row.chapter)
@@ -3599,7 +3688,11 @@ def _run_design_replan(
             prepared.store.write(CANDIDATE_REL, artifact)
         landed = verify_design_delivery(ctx, prepared, artifact)
         for row in final_sources:
-            if row.source_kind == 'repair':
+            if (row.source_kind == 'repair' and row.origin == 'agent'
+                    and row.source_run_id == ctx.run_id):
+                if row.attempt_id is None:
+                    raise ProvenanceRefused(
+                        f'{row.purpose}: current repair source 缺 attempt_id')
                 _note_adoption_attempt(
                     ctx, purpose=row.purpose, attempt_id=row.attempt_id,
                     rel=CANDIDATE_REL, artifact=landed, chapter=row.chapter)

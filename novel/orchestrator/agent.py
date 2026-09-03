@@ -1011,16 +1011,23 @@ def _require_start_authorization(*, authorized: bool,
 
 
 def _require_reproducible_code_version(code_version: str) -> None:
-    """付费启动前必须有可复验的代码身份；preview 可以照实展示 unknown。
+    """付费启动前必须有可复验且干净的代码身份；preview 仍可照实展示。
 
     ``unknown == unknown`` 只证明两次都没问出来，不证明整书跑没有
     跨版本。放它进付费路，结束终验也注定只能 unknown，是可预知的白烧。
+    dirty digest 虽然可复算，却会让运行中任何编辑触发 epoch rollover；新 epoch
+    无法保证所有付费单元都能跨 run 采用，因此生产跑只接受冻结 commit。
     """
     if (not isinstance(code_version, str) or not code_version.strip()
             or code_version == prov.CODE_UNKNOWN):
         raise UnsupportedRunMode(
             '当前代码指纹不可用；preview 仍可查看，但不能启动付费 '
             'Commander，请先恢复可复验的仓库代码身份')
+    if '-dirty.' in code_version:
+        raise UnsupportedRunMode(
+            '当前工作树有未提交改动；preview 仍可查看，但不能启动或换入新的付费 '
+            'epoch。请在干净的专用 worktree/冻结 commit 中跑书，避免代码漂移导致'
+            '重复模型调用')
 
 
 def enqueue(base: str | os.PathLike[str], sids: Sequence[str], *,

@@ -220,6 +220,8 @@ function EventRow({ e }: { e: RunEvent }) {
 function AgentRunBlock() {
   const runs = useAgentRuns()
   const latest = runs.data?.runs[0] ?? null
+  const activeEpoch = latest?.epochs.find((epoch) => epoch.epoch_id === latest.active_epoch_id) ?? null
+  const shownEpoch = activeEpoch ?? latest?.epochs.at(-1) ?? null
   const [logOpen, setLogOpen] = useState(false)
   const [confirmingStop, setConfirmingStop] = useState(false)
   const log = useAgentRunLog(logOpen ? latest : null)
@@ -263,6 +265,16 @@ function AgentRunBlock() {
               {latest.ended ? ' · 止于 ' + when(latest.ended) : ''}
               {latest.exit_code !== null ? ' · exit ' + latest.exit_code : ''}
             </Mono>
+            {shownEpoch ? (
+              <span
+                data-testid="agent-epoch"
+                className="rounded-tag border border-line bg-inset px-8 py-3 text-tag text-ink-3"
+              >
+                {activeEpoch ? '当前执行 epoch' : '最后 epoch'}：#{shownEpoch.ordinal} ·{' '}
+                {shownEpoch.reason} · {shownEpoch.code_version.slice(0, 12)}
+                {latest.epochs.length > 1 ? ` · 已换 epoch ${latest.epochs.length - 1} 次` : ''}
+              </span>
+            ) : null}
             <span className="ml-auto flex items-center gap-8">
               <LinkButton onClick={() => setLogOpen((v) => !v)}>
                 {logOpen ? '收起日志' : '日志尾部'}
@@ -372,18 +384,25 @@ const NEXT_HANDLER_LABEL: Record<RunNextHandler, string> = {
   unknown: '尚不可判',
 }
 
-function ResumeFrontier({ frontier }: { frontier: RunResumeFrontier }) {
+function ResumeFrontier({
+  frontier,
+  steps,
+}: {
+  frontier: RunResumeFrontier
+  steps: Array<{ node: string; label: string; beacon: RunBeacon }>
+}) {
+  const running = steps.filter((step) => step.beacon === 'running')
   const title =
     frontier.state === 'unknown'
-      ? '续跑点尚不可判'
+      ? '下一节点尚不可判'
       : frontier.state === 'pipeline_complete'
         ? '流水线节点已全部越过'
-        : `续跑从 ${frontier.label} 开始`
+        : `下一节点：${frontier.label}`
   return (
     <Panel>
       <PaneHeader
-        title="实际续跑点"
-        meta="来自后端 operator 的同一快照，不按信标历史猜测"
+        title="当前执行与下一节点"
+        meta="当前执行来自信标；下一节点与处理者来自后端 operator 快照"
       />
       <div data-testid="resume-frontier" className="flex flex-col gap-9 px-18 py-14">
         <div className="flex flex-wrap items-center gap-9">
@@ -393,6 +412,11 @@ function ResumeFrontier({ frontier }: { frontier: RunResumeFrontier }) {
           ) : null}
           <span className="rounded-tag border border-line bg-inset px-8 py-3 text-tag font-semibold text-ink-3">
             下一处理者：{NEXT_HANDLER_LABEL[frontier.next_handler]}
+          </span>
+          <span className="rounded-tag border border-line bg-card px-8 py-3 text-tag font-semibold text-ink-3">
+            {running.length
+              ? `当前执行：${running.map((step) => `${step.label}（${step.node}）`).join('、')}`
+              : '当前执行：没有节点信标'}
           </span>
           <span className="rounded-tag border border-line bg-card px-8 py-3 text-tag text-ink-4">
             当前快照已确认无需重跑 {frontier.verified_skipped_count} 项
@@ -475,7 +499,7 @@ export function RunScreen() {
       <QueryStates q={q} loadingLabel="读跑书进度">
         {(d) => (
           <>
-            <ResumeFrontier frontier={d.resume_frontier} />
+            <ResumeFrontier frontier={d.resume_frontier} steps={d.steps} />
 
             {/* NODES 清单：seq / 节点 / 付费标记 / 信标 / 最近退出码 / 耗时 */}
             <Panel>
@@ -485,10 +509,10 @@ export function RunScreen() {
                 right={
                   <LinkButton
                     disabled={!d.resume_frontier.node}
-                    title="滚到后端判定的真实续跑点"
+                    title="滚到后端判定的下一节点"
                     onClick={scrollToCurrent}
                   >
-                    跳到当前步
+                    跳到下一节点
                   </LinkButton>
                 }
               />

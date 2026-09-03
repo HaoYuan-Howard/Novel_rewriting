@@ -107,6 +107,14 @@ accepted attempt、ledger 与验证后 checkpoint。进程中断后只恢复匹�
 从 ledger 重建全部成本，包含先前无 checkpoint 的失败私有 session；因此部分恢复、完整恢复与
 aggregate prepared 尾窗恢复必须得到同一份 usage，不能把已付费历史显示成 0 或漏掉。
 
+普通 checkpoint 恢复仍严格限于同 run。唯一跨 run 的 A 相桥只开放给 typed targeted repair：新
+execution epoch 的 target run 在首个 wire 前，可采用唯一最大历史 run 中与 target 的 resolved profile、
+完整请求、输入、schema、token ceiling 和恢复协议逐字段相等，且 source checkpoint/session/ledger、
+当前动态 validator 与闭合业务状态全部通过的目标章响应。它不覆盖策略、首次整书或 strategy replan；
+并列来源不猜。选择写入 target `design/historical-checkpoint-adoption.json`，正式 lineage 使用
+`origin=historical_checkpoint` 同时绑定 source attempt 与 manifest SHA。source revision 始终只读，不复制
+到 target、不续旧 provider session；usage 按 source/target run 分段从 ledger 精确合并。
+
 unit checkpoint 不是正式 artifact。只有策略和全部章节齐全，代码才能把 local alias 映回正式 alias、
 注入章号/权重/`candidate_scene_id`、按章排序并组装完整 `BlindCandidate`；聚合物必须再过 strict schema、
 单章动态闸与整书全部 HARD。通过后才由 commit journal 原子写 `blind_candidate.json`；中断、缺章、

@@ -3336,41 +3336,44 @@ def _design_workpack_groups(
 
 def design_workpack(
     base: str | os.PathLike[str], sid: str,
+    *, overview: NovelOverview | None = None, code: str | None = None,
 ) -> ApprovalWorkpack:
-    """只读生成 A 审阅工作包；不填决定、不启动任何作业。"""
-    with _LOCK:
-        record = _read_current(base, sid)
-        novel_dir = paths.resolve_novel_dir(base, sid)
-        current = _current_design_subjects(novel_dir)
-        ordinals = [row.chapter.output_ordinal for row in current.chapters]
-        workpack = ApprovalWorkpack(
-            sid=sid,
-            kind='design',
-            candidate_sha256=current.candidate_sha256,
-            subject_sha256=current.aggregate_subject_sha256,
-            review_token=_design_review_token(current.aggregate_subject_sha256),
-            chapter_ordinals=ordinals,
-            groups=_design_workpack_groups(record, current, novel_dir),
-            disposition='review_required',
-        )
-        # 复用首读 subject；末尾第二读仍是唯一竞态守卫。若在这里再读一次，
-        # 会把「前后两次一致才返回」悄悄扩成无守卫的第三份投影。
-        view = _design_review_view(novel_dir, record, current=current)
-        if (
-            view.state in ('accepted', 'suspended')
-            and view.current_decision is not None
-        ):
-            workpack = workpack.model_copy(update={
-                'disposition': (
-                    'already_current' if view.state == 'accepted'
-                    else 'suspended'
-                ),
-                'current_decision_sha256': view.current_decision.decision_sha256,
-            })
-        if _current_design_subjects(novel_dir) != current:
-            raise ArtifactUnreadable(
-                'Stage4A 审阅主体在工作包构造期间变化；请刷新后重试')
-        return workpack
+    """只读生成 A 审阅工作包；可复用 operator 的冻结坐标。"""
+    _validate_read_projection(sid, overview=overview, code=code)
+    with _read_projection(overview=overview, code=code):
+        with _LOCK:
+            record = _read_current(base, sid)
+            novel_dir = paths.resolve_novel_dir(base, sid)
+            current = _current_design_subjects(novel_dir)
+            ordinals = [row.chapter.output_ordinal for row in current.chapters]
+            workpack = ApprovalWorkpack(
+                sid=sid,
+                kind='design',
+                candidate_sha256=current.candidate_sha256,
+                subject_sha256=current.aggregate_subject_sha256,
+                review_token=_design_review_token(current.aggregate_subject_sha256),
+                chapter_ordinals=ordinals,
+                groups=_design_workpack_groups(record, current, novel_dir),
+                disposition='review_required',
+            )
+            # 复用首读 subject；末尾第二读仍是唯一竞态守卫。若在这里再读一次，
+            # 会把「前后两次一致才返回」悄悄扩成无守卫的第三份投影。
+            view = _design_review_view(novel_dir, record, current=current)
+            if (
+                view.state in ('accepted', 'suspended')
+                and view.current_decision is not None
+            ):
+                workpack = workpack.model_copy(update={
+                    'disposition': (
+                        'already_current' if view.state == 'accepted'
+                        else 'suspended'
+                    ),
+                    'current_decision_sha256': view.current_decision.decision_sha256,
+                })
+            if _current_design_subjects(novel_dir) != current:
+                raise ArtifactUnreadable(
+                    'Stage4A 审阅主体在工作包构造期间变化；请刷新后重试')
+            return workpack
 
 
 def _report_item(
@@ -3745,9 +3748,11 @@ def _design_template_token(
 def design_template(
     base: str | os.PathLike[str], sid: str, *,
     actor: str, reviewer_kind: str, review_run_id: str, reason: str,
+    overview: NovelOverview | None = None, code: str | None = None,
 ) -> DesignReviewTemplate:
     """生成当前全书 A 审阅模板；仅复用逐项仍完全相同的历史 accept。"""
-    with _LOCK:
+    _validate_read_projection(sid, overview=overview, code=code)
+    with _read_projection(overview=overview, code=code), _LOCK:
         record = _read_current(base, sid)
         if not record.gate['s2']:
             raise ApprovalRequired('Stage4A design review requires current gate.s2')

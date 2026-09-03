@@ -543,6 +543,35 @@ def test_compiled_plan_exact_phase_hashes_guard_freshness_check_and_write_postco
     assert (book / plan.REL).read_bytes() == before_plan
 
 
+def test_compiled_plan_preserves_consumed_changed_when_candidate_projection_changed(
+        designed):
+    """A 业务投影与完整字节同时变化时仍走 producer redo，不误送人工。"""
+    book, blueprints_artifact, packed = designed
+    _design_ctx, _design_client, _design_transport, candidate, _truth, _mapping = packed
+    ctx = _ctx(book, 'stage4.plan')
+    client, _transport = _client(
+        ctx,
+        _bound_b_response(
+            candidate, blueprints_artifact.model_dump(by_alias=True, mode='json')),
+    )
+    assert plan.run_plan(ctx, client).passed
+
+    candidate_path = book / plan.CANDIDATE_REL
+    raw = json.loads(candidate_path.read_text(encoding='utf-8'))
+    raw['reconstruction_strategy'] += '（已由新一轮 A producer 更新）'
+    candidate_path.write_text(
+        json.dumps(raw, ensure_ascii=False, sort_keys=True), encoding='utf-8')
+
+    freshness = ArtifactStore(ctx).freshness(plan.REL)
+
+    assert (freshness.state, freshness.reason) == ('stale', 'consumed_changed')
+    edge = next(row for row in freshness.edges
+                if row.key == plan.CANDIDATE_REL)
+    assert edge.reason == 'consumed_changed'
+    assert edge.recorded_file != edge.now_file
+    assert edge.recorded_consumed != edge.now_consumed
+
+
 def test_false_infeasible_is_rejected_and_never_lands_a_formal_terminal(designed):
     book, _blueprints_artifact, packed = designed
     _design_ctx, _design_client, _design_transport, candidate, _truth, _mapping = packed

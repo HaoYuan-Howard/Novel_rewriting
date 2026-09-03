@@ -147,7 +147,7 @@ class _RequestDriver(_OneTurnDriver):
 
 def _ctx(
         book: Path, node: str, *, run_id: str | None = None,
-        code: str | None = None,
+        code: str | None = None, profile: AgentProfile | None = None,
 ) -> RunContext:
     base = book.parent
     ledger = (CostLedger(path=ledger_path(base)) if run_id is None else
@@ -159,7 +159,7 @@ def _ctx(
         code=code or prov.code_version(),
         cache=CachePolicy.default(),
         ledger=ledger,
-        executor_profile=_profile(),
+        executor_profile=profile or _profile(),
         run_id=run_id or '',
     )
 
@@ -456,6 +456,68 @@ def _scene_goal_constraint(candidate: Any) -> dict[str, Any]:
     }
 
 
+def _single_chapter_repair_scope(
+        book: Path, candidate: BlindCandidate,
+) -> DesignRepairScope:
+    return DesignRepairScope.model_validate({
+        'candidate_sha256': hashlib.sha256(
+            (book / STAGE4_BLIND_CANDIDATE).read_bytes()).hexdigest(),
+        'aggregate_subject_sha256': 'a' * 64,
+        'decision_sha256': 'b' * 64,
+        'repair_capability': {
+            'repairable': True, 'reason_code': 'ready',
+            'chapters': [{
+                'output_ordinal': 1, 'committed_rounds': 0,
+                'request_repair_available': True,
+            }],
+        },
+        'strategy_replan': False,
+        'target_chapters': [1],
+        'chapters': [{
+            'output_ordinal': 1,
+            'subject_sha256': 'c' * 64,
+            'constraints': [_scene_goal_constraint(candidate)],
+        }],
+    })
+
+
+def _leave_interrupted_design_repair_checkpoint(
+        book: Path, scope: DesignRepairScope,
+) -> tuple[RunContext, _RequestDriver]:
+    """造一份只有合法章 checkpoint、没有 aggregate 的旧 epoch。"""
+    source_ctx = _ctx(book, 'stage4.design')
+    source_drivers: list[_RequestDriver] = []
+
+    def source_factory(_purpose: str, chapter: int | None) -> _RequestDriver:
+        assert chapter == 1
+
+        def respond(request: AgentRequest) -> dict[str, Any]:
+            lines = request.prompt.splitlines()
+            marker = lines.index(plan.prompts.BLOCK_PREVIOUS_CHAPTER_RESPONSE)
+            return json.loads(lines[marker + 1])['response']
+
+        driver = _RequestDriver(
+            respond, session_id='provider-old-epoch-repair-ch1')
+        source_drivers.append(driver)
+        return driver
+
+    source_pool = Stage4DesignSessionPool(
+        source_ctx, driver_factory=source_factory, max_turns=2)
+    prepared, _responses, targets, _inherited, _parent, _parent_run, _input = \
+        plan._prepare_design_repair(source_ctx, scope)
+    landed_units = plan._request_design_chapters(
+        source_ctx, source_pool, prepared, targets)
+    assert [chapter for chapter, _response in landed_units] == [1]
+    source_pool.finish_all(
+        delivered=False, failure=RuntimeError('模拟 epoch rollover 前中断'))
+    source_pool.close()
+    assert source_drivers[0].calls == 1
+    assert not (paths.stage4_run_path(
+        book, source_ctx.run_id, 'stage4.design')
+        / stage4_runs.DESIGN_REPAIR_AGGREGATE_COMMIT_FILE).exists()
+    return source_ctx, source_drivers[0]
+
+
 def _candidate_at(book: Path, ctx: RunContext) -> Any:
     """读盘上当前正式候选；返修循环里每轮候选都会换。"""
     return ArtifactStore(ctx).read(BlindCandidate, STAGE4_BLIND_CANDIDATE)
@@ -702,6 +764,114 @@ def test_design_repair_identity_normalization_does_not_erase_lineage_drift(
     )
     assert capability.repairable is False
     assert capability.reason_code == 'checkpoint_lineage_unavailable'
+
+
+def test_targeted_repair_adopts_exact_checkpoint_across_code_epoch_without_wire(
+        tmp_path: Path, monkeypatch) -> None:
+    """换 epoch 后复用旧章响应，但不复制 checkpoint、不续旧 provider session。"""
+    book = _book(tmp_path)
+    blueprints = _seed_current_stage2(book)
+    _parent_ctx, parent = _land_design(
+        book, blueprints.model_dump(by_alias=True, mode='json'))
+    scope = _single_chapter_repair_scope(book, parent)
+    source_ctx, source_driver = _leave_interrupted_design_repair_checkpoint(
+        book, scope)
+    assert source_driver.calls == 1
+
+    monkeypatch.setattr(
+        prov, 'code_version', lambda: 'test-stage4-agent-boundary-next-commit')
+    target_ctx = _ctx(book, 'stage4.design')
+    target_factory_calls: list[tuple[str, int | None]] = []
+
+    def target_factory(purpose: str, chapter: int | None) -> _NoWireDriver:
+        target_factory_calls.append((purpose, chapter))
+        raise AssertionError('合法 historical checkpoint 不得新建 provider driver')
+
+    target_pool = Stage4DesignSessionPool(
+        target_ctx, driver_factory=target_factory, max_turns=2)
+    repaired = plan.run_design(
+        target_ctx, target_pool,
+        repair_decision_sha256=scope.decision_sha256,
+        repair_scope=scope,
+    )
+    target_pool.finish_all(delivered=True)
+    target_pool.close()
+
+    assert target_factory_calls == []
+    lineage = {row.chapter_ordinal: row
+               for row in repaired.provenance.unit_lineage or []}
+    assert lineage[1].origin == 'historical_checkpoint'
+    assert lineage[1].source_run_id == source_ctx.run_id
+    assert lineage[1].source_ref is not None
+    assert repaired.provenance.usage is not None
+    assert repaired.provenance.usage.calls_made == 1
+    manifest = (paths.stage4_run_path(
+        book, target_ctx.run_id, 'stage4.design')
+        / stage4_runs.DESIGN_HISTORICAL_ADOPTION_FILE)
+    assert manifest.is_file()
+    assert hashlib.sha256(manifest.read_bytes()).hexdigest() == lineage[1].source_ref
+    target_checkpoint_dir = paths.stage4_design_unit_checkpoint_dir(
+        book, target_ctx.run_id, 1)
+    assert not list(target_checkpoint_dir.glob('rev-*.json')), \
+        '历史 checkpoint 不得复制进 target run；仅允许本 run 的锁文件'
+    assert paths.stage4_design_unit_checkpoint_dir(
+        book, source_ctx.run_id, 1).joinpath('rev-0001.json').is_file()
+    _parent, inherited = stage4_runs.load_committed_design_sources(
+        target_ctx, parent_run_id=target_ctx.run_id,
+        parent_candidate_sha256=agent_runs.canonical_sha256(
+            repaired.model_dump(by_alias=True, mode='json')))
+    inherited_history = next(row for row in inherited if row.chapter == 1)
+    assert inherited_history.source_kind == 'inherited'
+    assert inherited_history.origin == 'historical_checkpoint'
+    assert stage4_runs._load_design_source(
+        target_ctx, stage4_runs._design_source_row(inherited_history),
+        default_run_id=inherited_history.source_run_id,
+        default_source_kind='inherited') == inherited_history
+
+
+def test_targeted_repair_refuses_historical_checkpoint_when_profile_changed(
+        tmp_path: Path, monkeypatch) -> None:
+    """prompt 相同也不够：resolved executor profile 漂移时必须走新 wire。"""
+    book = _book(tmp_path)
+    blueprints = _seed_current_stage2(book)
+    _parent_ctx, parent = _land_design(
+        book, blueprints.model_dump(by_alias=True, mode='json'))
+    scope = _single_chapter_repair_scope(book, parent)
+    source_ctx, _driver = _leave_interrupted_design_repair_checkpoint(book, scope)
+
+    # 新 epoch 的 live code guard 比对的是 prov.code_version() 现值，显式
+    # code= 标签只对 legacy LlmClient 生效；这里与前一条测试同样换 git 现值。
+    monkeypatch.setattr(
+        prov, 'code_version', lambda: 'next-code-with-new-profile')
+    target_profile = AgentProfile(
+        driver='codex', model='gpt-5.6-sol',
+        reasoning_effort='medium', execution_mode='standard')
+    target_ctx = _ctx(book, 'stage4.design', profile=target_profile)
+    prepared, _responses, targets, _inherited, _parent, _parent_run, repair_sha = \
+        plan._prepare_design_repair(target_ctx, scope)
+    target_by = {row.chapter_ordinal: row for row in targets}
+    units = tuple(plan._design_chapter_unit(row) for row in targets)
+
+    def state_payload(response: Any) -> dict[str, Any]:
+        chapter = target_by[1]
+        compiled = chapter.validator.compiled
+        if compiled is None:
+            why = chapter.validator(response, None)
+            compiled = chapter.validator.compiled
+            assert why is None and compiled is not None
+        return plan._design_chapter_checkpoint_state(response, compiled)
+
+    adopted = stage4_runs.restore_or_select_design_historical_adoption(
+        target_ctx, requests=units, repair_input_sha256=repair_sha,
+        eligible_chapters=[1], validators={1: target_by[1].validator},
+        state_payloads={1: state_payload})
+
+    assert adopted is None
+    assert not (paths.stage4_run_path(
+        book, target_ctx.run_id, 'stage4.design')
+        / stage4_runs.DESIGN_HISTORICAL_ADOPTION_FILE).exists()
+    assert paths.stage4_design_unit_checkpoint_dir(
+        book, source_ctx.run_id, 1).joinpath('rev-0001.json').is_file()
 
 
 def test_targeted_design_repair_opens_new_typed_epoch_after_two_committed_rounds(

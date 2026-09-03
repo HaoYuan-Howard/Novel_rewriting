@@ -37,6 +37,7 @@ from novel.agents.session_client import SAME_RUN_RESUMABLE_AGENT_FAILURES
 from novel.appendlog import process_append_lock
 from novel.errors import ArtifactUnreadable, ProvenanceRefused
 from novel.llm import agent_runs
+from novel.llm.ledger import combine_usage
 from novel.llm.transport import ChatResponse
 from novel.run_identity import check_run_id
 
@@ -56,6 +57,7 @@ DESIGN_MAX_CONCURRENCY = STAGE4_DESIGN_MAX_CONCURRENCY
 DESIGN_AGGREGATE_COMMIT_FILE = 'aggregate-committed.json'
 DESIGN_REPAIR_AGGREGATE_COMMIT_FILE = 'repair-aggregate-committed.json'
 DESIGN_HUMAN_EVOLUTION_COMMIT_FILE = 'human-evolution-committed.json'
+DESIGN_HISTORICAL_ADOPTION_FILE = 'historical-checkpoint-adoption.json'
 
 _DESIGN_AGGREGATE_VERSION = 1
 _DESIGN_AGGREGATE_KIND = 'stage4-design-aggregate/v1'
@@ -107,6 +109,21 @@ _DESIGN_HUMAN_EVOLUTION_FIELDS = {
     'primary_payload_fingerprint', 'primary_payload', 'sources',
     'touched_paths', 'baselines', 'landed_payload_sha256s',
     'post_file_sha256s', 'commit_sha256',
+}
+_DESIGN_HISTORICAL_ADOPTION_VERSION = 1
+_DESIGN_HISTORICAL_ADOPTION_KIND = 'stage4-design-historical-adoption/v1'
+_DESIGN_HISTORICAL_ADOPTION_FIELDS = {
+    'version', 'kind', 'state', 'target_run_id', 'sid', 'node', 'code',
+    'repair_input_sha256', 'request_set_sha256', 'source_run_id',
+    'source_chapters', 'sources', 'created_at', 'manifest_sha256',
+}
+_DESIGN_HISTORICAL_SOURCE_FIELDS = {
+    'chapter', 'source_code', 'source_run_identity_sha256',
+    'source_run_file_sha256', 'source_checkpoint_revision',
+    'source_checkpoint_sha256', 'source_checkpoint_file_sha256',
+    'source_attempt_id', 'source_request_fingerprint',
+    'source_response_sha256', 'source_model',
+    'target_run_identity_sha256', 'target_run_file_sha256',
 }
 _LEGACY_STANDARD_NULL_PROVENANCE_FIELDS = (
     'parent_candidate_sha256',
@@ -161,6 +178,18 @@ class DesignUnitSource:
     checkpoint_file_sha256: str | None = None
     model: str | None = None
     accepted_turn_index: int | None = None
+
+
+@dataclass(frozen=True)
+class DesignHistoricalAdoption:
+    """当前 targeted repair 采用的一组只读历史章 checkpoint。"""
+
+    manifest_file_sha256: str
+    source_run_id: str
+    restored: tuple[tuple[int, agent_runs.RestoredHistoricalRun[Any]], ...]
+
+    def by_chapter(self) -> dict[int, agent_runs.RestoredHistoricalRun[Any]]:
+        return dict(self.restored)
 
 
 @dataclass(frozen=True)
@@ -1000,6 +1029,375 @@ def restore_design_unit_checkpoint(
         validator=validator)
 
 
+def _normalized_design_repair_requests(
+        requests: Sequence[DesignUnitRequest],
+) -> tuple[DesignUnitRequest, ...]:
+    if not isinstance(requests, Sequence) or isinstance(requests, (str, bytes)):
+        raise ProvenanceRefused('Stage4A 历史采用请求必须是非空序列')
+    by_chapter: dict[int, DesignUnitRequest] = {}
+    for request in requests:
+        if not isinstance(request, DesignUnitRequest) or request.chapter is None:
+            raise ProvenanceRefused('Stage4A 历史采用只接受 targeted repair 章单元')
+        if request.chapter in by_chapter:
+            raise ProvenanceRefused(f'Stage4A 历史采用重复 ch{request.chapter}')
+        by_chapter[request.chapter] = request
+    if not by_chapter:
+        raise ProvenanceRefused('Stage4A 历史采用请求不能为空')
+    return tuple(by_chapter[chapter] for chapter in sorted(by_chapter))
+
+
+def _design_repair_request_row(request: DesignUnitRequest) -> dict[str, Any]:
+    return {
+        'chapter': request.chapter,
+        'input_sha256': request.input_sha256,
+        'system_sha256': agent_runs.canonical_sha256(
+            request.system.encode('utf-8')),
+        'user_sha256': agent_runs.canonical_sha256(
+            request.user.encode('utf-8')),
+        'response_model': request.response_model.__name__,
+        'response_schema_sha256': agent_runs.canonical_sha256(
+            agent_runs.agent_json_schema(request.response_model)),
+        'max_tokens': request.max_tokens,
+    }
+
+
+def _design_repair_request_set_sha256(
+        requests: Sequence[DesignUnitRequest],
+) -> str:
+    return agent_runs.canonical_sha256([
+        _design_repair_request_row(request)
+        for request in _normalized_design_repair_requests(requests)
+    ])
+
+
+def _design_historical_adoption_path(ctx: Any) -> Path:
+    return (paths.stage4_run_path(
+        ctx.novel_dir, ctx.run_id, 'stage4.design')
+        / DESIGN_HISTORICAL_ADOPTION_FILE)
+
+
+def _design_historical_hash(payload: Mapping[str, Any]) -> str:
+    return agent_runs.canonical_sha256({
+        key: value for key, value in payload.items()
+        if key not in ('created_at', 'manifest_sha256')
+    })
+
+
+def _source_has_design_checkpoint(
+        ctx: Any, source_run_id: str, chapter: int,
+) -> bool:
+    source = check_run_id(source_run_id)
+    for root in paths.stage_run_read_roots(ctx.novel_dir, 'stage4'):
+        checkpoint_dir = (
+            root / source / 'design' / 'units'
+            / paths.stage4_design_unit_dirname(chapter) / 'checkpoints')
+        if checkpoint_dir.is_dir() and any(
+                child.is_file() and child.suffix == '.json'
+                for child in checkpoint_dir.iterdir()):
+            return True
+    return False
+
+
+def design_unit_checkpoint_exists(
+        ctx: Any, chapter: int, *, run_id: str | None = None,
+) -> bool:
+    """只判断 revision 是否存在；真正采用仍走完整 restore 校验。"""
+    return _source_has_design_checkpoint(
+        ctx, check_run_id(run_id or ctx.run_id), chapter)
+
+
+def _historical_design_checkpoint_path(
+        ctx: Any, source_run_id: str, chapter: int, revision: int,
+) -> Path:
+    candidates = (
+        paths.stage4_design_unit_checkpoint_dir(
+            ctx.novel_dir, source_run_id, chapter),
+        paths.legacy_stage4_design_unit_checkpoint_dir(
+            ctx.novel_dir, source_run_id, chapter),
+    )
+    name = f'rev-{revision:04d}.json'
+    return next((root / name for root in candidates if (root / name).is_file()),
+                candidates[0] / name)
+
+
+def _historical_design_run_path(
+        ctx: Any, run_id: str, chapter: int,
+) -> Path:
+    candidates = (
+        paths.stage4_design_unit_run_path(ctx.novel_dir, run_id, chapter),
+        paths.legacy_stage4_design_unit_run_path(ctx.novel_dir, run_id, chapter),
+    )
+    return next((root / agent_runs.RUN_FILE for root in candidates
+                 if (root / agent_runs.RUN_FILE).is_file()),
+                candidates[0] / agent_runs.RUN_FILE)
+
+
+def _design_historical_source_row(
+        ctx: Any, chapter: int,
+        historical: agent_runs.RestoredHistoricalRun[Any],
+) -> dict[str, Any]:
+    acceptance = historical.checkpoint.acceptance
+    target_run = paths.stage4_design_unit_run_path(
+        ctx.novel_dir, ctx.run_id, chapter) / agent_runs.RUN_FILE
+    try:
+        target_bytes = target_run.read_bytes()
+        checkpoint_bytes = _historical_design_checkpoint_path(
+            ctx, historical.context.run_id, chapter,
+            historical.checkpoint.revision).read_bytes()
+    except OSError as exc:
+        raise ProvenanceRefused(
+            f'Stage4A historical adoption 来源/目标文件不可读：{exc}') from exc
+    target = _read_object(target_run, label='Stage4A target design unit run')
+    return {
+        'chapter': chapter,
+        'source_code': historical.context.code,
+        'source_run_identity_sha256': historical.run_record['identity_sha256'],
+        'source_run_file_sha256': historical.run_sha256,
+        'source_checkpoint_revision': historical.checkpoint.revision,
+        'source_checkpoint_sha256': historical.checkpoint.checkpoint_sha256,
+        'source_checkpoint_file_sha256':
+            agent_runs.canonical_sha256(checkpoint_bytes),
+        'source_attempt_id': acceptance['attempt_id'],
+        'source_request_fingerprint': acceptance['request_fingerprint'],
+        'source_response_sha256': acceptance['ledger_response_sha256'],
+        'source_model': acceptance['model'],
+        'target_run_identity_sha256': target['identity_sha256'],
+        'target_run_file_sha256': agent_runs.canonical_sha256(target_bytes),
+    }
+
+
+def _restore_design_historical_chapter(
+        ctx: Any, *, source_run_id: str, request: DesignUnitRequest,
+        validator: Callable[[BaseModel, ChatResponse], str | None] | None,
+        state_payload: Callable[[BaseModel], Mapping[str, Any]],
+) -> agent_runs.RestoredHistoricalRun[Any]:
+    target = ensure_design_unit_run(ctx, request)
+    historical = agent_runs.restore_historical_run(
+        ctx, design_unit_run_spec(request.chapter),
+        source_run_id=source_run_id,
+        input_sha256=request.input_sha256,
+        system=request.system, user=request.user,
+        response_model=request.response_model,
+        max_tokens=request.max_tokens,
+        validator=validator,
+    )
+    # 跨 code 只复用响应，不复用配置：target/source 的 resolved profile、schema、
+    # token ceiling、恢复策略和请求正文必须逐字段相等。
+    comparable = (
+        'sid', 'node', 'session_owner', 'chapter', 'purpose',
+        'input_sha256', 'request_policy', 'request_policy_sha256', 'request',
+    )
+    if ({key: historical.run_record.get(key) for key in comparable}
+            != {key: target.get(key) for key in comparable}):
+        raise ProvenanceRefused(
+            f'Stage4A ch{request.chapter} 历史 run 与 target profile/request 漂移')
+    checkpoint = historical.checkpoint
+    expected_state = dict(state_payload(checkpoint.value))
+    turn = checkpoint.acceptance.get('accepted_turn_index')
+    if (checkpoint.revision_key != 'terminal'
+            or checkpoint.state_payload != expected_state
+            or not isinstance(turn, int) or isinstance(turn, bool)
+            or turn < 1 or turn > 2):
+        raise ProvenanceRefused(
+            f'Stage4A ch{request.chapter} 历史 checkpoint 不是闭合 repair 章单元')
+    return historical
+
+
+def _read_design_historical_adoption(
+        ctx: Any, *, requests: Sequence[DesignUnitRequest],
+        repair_input_sha256: str, eligible_chapters: Iterable[int],
+        validators: Mapping[
+            int, Callable[[BaseModel, ChatResponse], str | None] | None],
+        state_payloads: Mapping[
+            int, Callable[[BaseModel], Mapping[str, Any]]],
+) -> DesignHistoricalAdoption | None:
+    target = _design_historical_adoption_path(ctx)
+    if not target.is_file():
+        return None
+    record = _read_object(target, label='Stage4A historical adoption')
+    normalized = _normalized_design_repair_requests(requests)
+    request_by = {request.chapter: request for request in normalized}
+    eligible = sorted({int(chapter) for chapter in eligible_chapters})
+    expected = {
+        'target_run_id': check_run_id(ctx.run_id), 'sid': ctx.sid,
+        'node': 'stage4.design', 'code': ctx.code,
+        'repair_input_sha256': repair_input_sha256,
+        'request_set_sha256': _design_repair_request_set_sha256(normalized),
+    }
+    if (set(record) != _DESIGN_HISTORICAL_ADOPTION_FIELDS
+            or record.get('version') != _DESIGN_HISTORICAL_ADOPTION_VERSION
+            or record.get('kind') != _DESIGN_HISTORICAL_ADOPTION_KIND
+            or record.get('state') != 'selected'
+            or record.get('manifest_sha256') != _design_historical_hash(record)):
+        raise ArtifactUnreadable(f'{target} 不是闭合的 Stage4A adoption manifest')
+    if ({key: record.get(key) for key in expected} != expected
+            or not isinstance(record.get('created_at'), str)
+            or not record['created_at']):
+        raise ProvenanceRefused(f'{target} 与当前 repair target/request 漂移')
+    source_run_id = record.get('source_run_id')
+    chapters = record.get('source_chapters')
+    rows = record.get('sources')
+    if (not isinstance(source_run_id, str)
+            or check_run_id(source_run_id) == check_run_id(ctx.run_id)
+            or not isinstance(chapters, list) or chapters != sorted(chapters)
+            or not chapters or len(chapters) != len(set(chapters))
+            or any(chapter not in request_by for chapter in chapters)
+            or not isinstance(rows, list) or len(rows) != len(chapters)):
+        raise ProvenanceRefused(f'{target} 的 source run/chapters 不闭合')
+    restored: list[tuple[int, agent_runs.RestoredHistoricalRun[Any]]] = []
+    for chapter, row in zip(chapters, rows, strict=True):
+        if (not isinstance(row, dict)
+                or set(row) != _DESIGN_HISTORICAL_SOURCE_FIELDS
+                or row.get('chapter') != chapter):
+            raise ArtifactUnreadable(f'{target} 的 source row 形状漂移')
+        historical = _restore_design_historical_chapter(
+            ctx, source_run_id=source_run_id, request=request_by[chapter],
+            validator=validators.get(chapter),
+            state_payload=state_payloads[chapter])
+        if row != _design_historical_source_row(ctx, chapter, historical):
+            raise ProvenanceRefused(
+                f'{target} 的 ch{chapter} source/target/ledger 漂移')
+        if chapter in eligible:
+            restored.append((chapter, historical))
+    return DesignHistoricalAdoption(
+        manifest_file_sha256=agent_runs.canonical_sha256(target.read_bytes()),
+        source_run_id=source_run_id,
+        restored=tuple(restored),
+    )
+
+
+def restore_or_select_design_historical_adoption(
+        ctx: Any, *, requests: Sequence[DesignUnitRequest],
+        repair_input_sha256: str, eligible_chapters: Iterable[int],
+        validators: Mapping[
+            int, Callable[[BaseModel, ChatResponse], str | None] | None],
+        state_payloads: Mapping[
+            int, Callable[[BaseModel], Mapping[str, Any]]],
+) -> DesignHistoricalAdoption | None:
+    """为 targeted repair 选择唯一最大合法旧 run；旧 provider 永不续接。"""
+    normalized = _normalized_design_repair_requests(requests)
+    if not agent_runs.is_sha256(repair_input_sha256):
+        raise ProvenanceRefused('Stage4A historical adoption 缺 repair input SHA-256')
+    request_by = {request.chapter: request for request in normalized}
+    eligible = sorted({int(chapter) for chapter in eligible_chapters})
+    if (any(chapter not in request_by for chapter in eligible)
+            or set(validators) != set(request_by)
+            or set(state_payloads) != set(request_by)):
+        raise ProvenanceRefused(
+            'Stage4A historical adoption 请求/validator 章集合不闭合')
+    existing = _read_design_historical_adoption(
+        ctx, requests=normalized, repair_input_sha256=repair_input_sha256,
+        eligible_chapters=eligible, validators=validators,
+        state_payloads=state_payloads)
+    if existing is not None:
+        return existing
+    if not eligible:
+        return None
+    candidates: list[
+        tuple[str, tuple[tuple[int, agent_runs.RestoredHistoricalRun[Any]], ...]]
+    ] = []
+    for source_run_id in _plan_source_run_ids(ctx):
+        source_chapters = [
+            chapter for chapter in eligible
+            if _source_has_design_checkpoint(ctx, source_run_id, chapter)]
+        if not source_chapters:
+            continue
+        restored: list[tuple[int, agent_runs.RestoredHistoricalRun[Any]]] = []
+        try:
+            for chapter in source_chapters:
+                restored.append((chapter, _restore_design_historical_chapter(
+                    ctx, source_run_id=source_run_id,
+                    request=request_by[chapter],
+                    validator=validators.get(chapter),
+                    state_payload=state_payloads[chapter])))
+        except (ArtifactUnreadable, ProvenanceRefused, ValueError):
+            continue
+        candidates.append((source_run_id, tuple(restored)))
+    if not candidates:
+        return None
+    best_size = max(len(rows) for _source, rows in candidates)
+    best = [(source, rows) for source, rows in candidates
+            if len(rows) == best_size]
+    if len(best) != 1:
+        ctx.observe(
+            'stage4_design_historical_adoption_ambiguous',
+            candidate_count=len(best), checkpoint_count=best_size)
+        return None
+    source_run_id, restored = best[0]
+    payload: dict[str, Any] = {
+        'version': _DESIGN_HISTORICAL_ADOPTION_VERSION,
+        'kind': _DESIGN_HISTORICAL_ADOPTION_KIND,
+        'state': 'selected', 'target_run_id': check_run_id(ctx.run_id),
+        'sid': ctx.sid, 'node': 'stage4.design', 'code': ctx.code,
+        'repair_input_sha256': repair_input_sha256,
+        'request_set_sha256': _design_repair_request_set_sha256(normalized),
+        'source_run_id': source_run_id,
+        'source_chapters': [chapter for chapter, _row in restored],
+        'sources': [_design_historical_source_row(ctx, chapter, historical)
+                    for chapter, historical in restored],
+        'created_at': _now(),
+    }
+    payload['manifest_sha256'] = _design_historical_hash(payload)
+    target = _design_historical_adoption_path(ctx)
+    with _DESIGN_AGGREGATE_LOCK, process_append_lock(target):
+        if target.is_file():
+            return _read_design_historical_adoption(
+                ctx, requests=normalized,
+                repair_input_sha256=repair_input_sha256,
+                eligible_chapters=eligible, validators=validators,
+                state_payloads=state_payloads)
+        _atomic_json(target, payload)
+    ctx.observe(
+        'stage4_design_historical_checkpoint_adopted',
+        source_run_id=source_run_id,
+        chapters=[chapter for chapter, _row in restored])
+    return DesignHistoricalAdoption(
+        manifest_file_sha256=agent_runs.canonical_sha256(target.read_bytes()),
+        source_run_id=source_run_id, restored=restored)
+
+
+def require_design_historical_adoption_file(
+        ctx: Any, expected_file_sha256: str | None,
+) -> None:
+    target = _design_historical_adoption_path(ctx)
+    actual = (agent_runs.canonical_sha256(target.read_bytes())
+              if target.is_file() else None)
+    if actual != expected_file_sha256:
+        raise ProvenanceRefused(
+            'Stage4A historical adoption manifest 在运行期间出现、消失或漂移')
+
+
+def historical_design_unit_source(
+        adoption: DesignHistoricalAdoption, chapter: int,
+) -> DesignUnitSource:
+    try:
+        historical = adoption.by_chapter()[chapter]
+    except KeyError:
+        raise ProvenanceRefused(
+            f'Stage4A historical adoption 未包含 ch{chapter}') from None
+    checkpoint = historical.checkpoint
+    acceptance = checkpoint.acceptance
+    payload = checkpoint.value.model_dump(by_alias=True, mode='json')
+    return DesignUnitSource(
+        chapter=chapter, source_run_id=historical.context.run_id,
+        purpose=design_unit_purpose(chapter), source_kind='repair',
+        response_payload=payload,
+        response_payload_sha256=agent_runs.canonical_sha256(payload),
+        origin='historical_checkpoint',
+        source_ref=adoption.manifest_file_sha256,
+        attempt_id=str(acceptance['attempt_id']),
+        run_sha256=historical.run_sha256,
+        checkpoint_revision=checkpoint.revision,
+        checkpoint_sha256=checkpoint.checkpoint_sha256,
+        checkpoint_file_sha256=agent_runs.canonical_sha256(
+            _historical_design_checkpoint_path(
+                historical.context, historical.context.run_id,
+                chapter, checkpoint.revision).read_bytes()),
+        model=str(acceptance['model']),
+        accepted_turn_index=int(acceptance['accepted_turn_index']),
+    )
+
+
 def design_aggregate_usage(
         ctx: Any, units: Sequence[DesignUnitRequest],
 ) -> Usage:
@@ -1102,6 +1500,95 @@ def design_repair_usage(
         required_identities=identities)
     if usage is None:
         raise ProvenanceRefused('design repair 已有 checkpoints 但 usage 为空')
+    return usage
+
+
+def design_repair_sources_usage(
+        ctx: Any, units: Sequence[DesignUnitRequest],
+        sources: Sequence[DesignUnitSource], *,
+        validators: Mapping[
+            int, Callable[[BaseModel, ChatResponse], str | None] | None],
+        state_payloads: Mapping[
+            int, Callable[[BaseModel], Mapping[str, Any]]],
+) -> Usage:
+    """聚合 current + historical repair checkpoints 的真实分 run 成本。"""
+    normalized = _normalized_design_repair_requests(units)
+    unit_by = {unit.chapter: unit for unit in normalized}
+    source_by = {
+        source.chapter: source for source in sources
+        if source.source_kind == 'repair'
+    }
+    if (set(source_by) != set(unit_by)
+            or set(validators) != set(unit_by)
+            or set(state_payloads) != set(unit_by)):
+        raise ProvenanceRefused(
+            'design repair usage 的 units/sources/validators 未精确覆盖 targets')
+    buckets: dict[str, dict[str, Any]] = {}
+    for chapter in sorted(unit_by):
+        unit = unit_by[chapter]
+        source = source_by[chapter]
+        if source.origin == 'agent':
+            if source.source_run_id != check_run_id(ctx.run_id):
+                raise ProvenanceRefused(
+                    f'ch{chapter} current repair source 不属于当前 run')
+            restored = restore_design_unit_checkpoint(
+                ctx, unit, validator=validators[chapter])
+            if restored is None:
+                raise ProvenanceRefused(f'ch{chapter} current repair checkpoint 缺失')
+            historical_context = ctx
+        elif source.origin == 'historical_checkpoint':
+            # 先复验 manifest owner，再按当前 validator/request 重放 source。
+            checked = _load_design_source(
+                ctx, _design_source_row(source),
+                default_run_id=source.source_run_id,
+                default_source_kind='repair')
+            if checked != source:
+                raise ProvenanceRefused(f'ch{chapter} historical source 投影漂移')
+            historical = _restore_design_historical_chapter(
+                ctx, source_run_id=source.source_run_id, request=unit,
+                validator=validators[chapter],
+                state_payload=state_payloads[chapter])
+            restored = historical.checkpoint
+            historical_context = historical.context
+        else:
+            raise ProvenanceRefused(
+                f'ch{chapter} repair usage 不接受 origin={source.origin!r}')
+        payload = restored.value.model_dump(by_alias=True, mode='json')
+        acceptance = restored.acceptance
+        if (source.attempt_id != acceptance.get('attempt_id')
+                or source.checkpoint_revision != restored.revision
+                or source.checkpoint_sha256 != restored.checkpoint_sha256
+                or source.response_payload_sha256
+                != agent_runs.canonical_sha256(payload)
+                or source.model != acceptance.get('model')):
+            raise ProvenanceRefused(
+                f'ch{chapter} repair source 与恢复 checkpoint/ledger 漂移')
+        links = acceptance.get('attempt_links')
+        turn = acceptance.get('accepted_turn_index')
+        if (not isinstance(links, list) or not links
+                or not isinstance(turn, int) or isinstance(turn, bool)
+                or turn != len(links) or turn > 2):
+            raise ProvenanceRefused(f'ch{chapter} repair content turn 必须在 1..2')
+        bucket = buckets.setdefault(source.source_run_id, {
+            'context': historical_context, 'purposes': [], 'identities': [],
+        })
+        if bucket['context'].ledger.path != historical_context.ledger.path:
+            raise ProvenanceRefused('同一 source run 意外指向不同成本账')
+        purpose = design_unit_purpose(chapter)
+        bucket['purposes'].append(purpose)
+        for link in links:
+            if not isinstance(link, Mapping):
+                raise ProvenanceRefused(f'{purpose}: repair attempt link 非 object')
+            bucket['identities'].append((purpose, dict(link)))
+    parts: list[Usage | None] = []
+    for run_id in sorted(buckets):
+        bucket = buckets[run_id]
+        parts.append(bucket['context'].ledger.usage_for_complete_purposes(
+            bucket['purposes'], sid=ctx.sid, node='stage4.design',
+            required_identities=bucket['identities']))
+    usage = combine_usage(*parts)
+    if usage is None:
+        raise ProvenanceRefused('design repair 历史/当前 source usage 有未知分段')
     return usage
 
 
@@ -1771,6 +2258,96 @@ def _validate_foreign_design_human_evolution_envelope(
     return record
 
 
+def _require_design_historical_source_owner(
+        ctx: Any, row: Mapping[str, Any],
+) -> None:
+    """由 manifest 把 foreign checkpoint 与当时 target profile/request 闭合。"""
+    source_ref = row.get('source_ref')
+    if not agent_runs.is_sha256(source_ref):
+        raise ProvenanceRefused('Stage4 historical source 缺 adoption manifest SHA')
+    matches: list[Path] = []
+    for candidate in _stage4_history_files(
+            ctx, f'*/design/{DESIGN_HISTORICAL_ADOPTION_FILE}'):
+        try:
+            if agent_runs.canonical_sha256(candidate.read_bytes()) == source_ref:
+                matches.append(candidate)
+        except OSError as exc:
+            raise ArtifactUnreadable(
+                f'Stage4 historical adoption manifest 不可读：{candidate}: {exc}') from exc
+    if len(matches) != 1:
+        raise ProvenanceRefused(
+            'Stage4 historical source 必须唯一指向一本书内的 adoption manifest')
+    target = matches[0]
+    manifest = _read_object(target, label='Stage4A historical adoption owner')
+    if (set(manifest) != _DESIGN_HISTORICAL_ADOPTION_FIELDS
+            or manifest.get('version') != _DESIGN_HISTORICAL_ADOPTION_VERSION
+            or manifest.get('kind') != _DESIGN_HISTORICAL_ADOPTION_KIND
+            or manifest.get('state') != 'selected'
+            or manifest.get('sid') != ctx.sid
+            or manifest.get('node') != 'stage4.design'
+            or manifest.get('manifest_sha256')
+            != _design_historical_hash(manifest)):
+        raise ArtifactUnreadable(f'{target} historical adoption owner 不闭合')
+    chapter = row.get('chapter')
+    source_run_id = row.get('source_run_id')
+    if (not isinstance(chapter, int) or isinstance(chapter, bool)
+            or source_run_id != manifest.get('source_run_id')
+            or chapter not in (manifest.get('source_chapters') or [])):
+        raise ProvenanceRefused(
+            'Stage4 historical source 不属于 manifest 的 source run/chapter')
+    sources = manifest.get('sources')
+    if not isinstance(sources, list):
+        raise ArtifactUnreadable(f'{target} historical adoption sources 非数组')
+    source = next((item for item in sources
+                   if isinstance(item, dict) and item.get('chapter') == chapter), None)
+    if source is None or set(source) != _DESIGN_HISTORICAL_SOURCE_FIELDS:
+        raise ProvenanceRefused('Stage4 historical source 缺 manifest source row')
+    expected_from_row = {
+        'source_run_file_sha256': row.get('run_sha256'),
+        'source_checkpoint_revision': row.get('checkpoint_revision'),
+        'source_checkpoint_sha256': row.get('checkpoint_sha256'),
+        'source_checkpoint_file_sha256': row.get('checkpoint_file_sha256'),
+        'source_attempt_id': row.get('attempt_id'),
+        'source_response_sha256': row.get('response_payload_sha256'),
+        'source_model': row.get('model'),
+    }
+    if {key: source.get(key) for key in expected_from_row} != expected_from_row:
+        raise ProvenanceRefused(
+            'Stage4 historical aggregate row 与 adoption source row 漂移')
+    target_run_id = check_run_id(str(manifest.get('target_run_id') or ''))
+    target_run_path = _historical_design_run_path(ctx, target_run_id, chapter)
+    source_run_path = _historical_design_run_path(
+        ctx, check_run_id(str(source_run_id)), chapter)
+    try:
+        target_bytes = target_run_path.read_bytes()
+        source_bytes = source_run_path.read_bytes()
+    except OSError as exc:
+        raise ProvenanceRefused(
+            f'Stage4 historical adoption target/source run 不可读：{exc}') from exc
+    if (source.get('target_run_file_sha256')
+            != agent_runs.canonical_sha256(target_bytes)
+            or source.get('source_run_file_sha256')
+            != agent_runs.canonical_sha256(source_bytes)):
+        raise ProvenanceRefused('Stage4 historical adoption target/source run 字节漂移')
+    target_run = _read_object(target_run_path, label='Stage4A adoption target run')
+    source_run = _read_object(source_run_path, label='Stage4A adoption source run')
+    if (target_run.get('identity_sha256')
+            != source.get('target_run_identity_sha256')
+            or source_run.get('identity_sha256')
+            != source.get('source_run_identity_sha256')
+            or target_run.get('code') != manifest.get('code')
+            or source_run.get('code') != source.get('source_code')):
+        raise ProvenanceRefused('Stage4 historical adoption run identity/code 漂移')
+    comparable = (
+        'sid', 'node', 'session_owner', 'chapter', 'purpose',
+        'input_sha256', 'request_policy', 'request_policy_sha256', 'request',
+    )
+    if ({key: target_run.get(key) for key in comparable}
+            != {key: source_run.get(key) for key in comparable}):
+        raise ProvenanceRefused(
+            'Stage4 historical adoption target/source profile/request 不等')
+
+
 def _load_design_source(
         ctx: Any, row: Mapping[str, Any], *, default_run_id: str,
         default_source_kind: str, _verify_inline_owner: bool = True,
@@ -1795,9 +2372,10 @@ def _load_design_source(
     if source_kind not in ('inherited', 'repair', 'human'):
         raise ArtifactUnreadable('Stage4 design source_kind 非法')
     origin = str(row.get('origin') or 'agent')
-    if origin not in ('agent', 'human', 'candidate_snapshot'):
+    if origin not in (
+            'agent', 'historical_checkpoint', 'human', 'candidate_snapshot'):
         raise ArtifactUnreadable('Stage4 design source origin 非法')
-    if origin != 'agent':
+    if origin in ('human', 'candidate_snapshot'):
         response_payload = row.get('response_payload')
         response_sha = row.get('response_payload_sha256')
         source_ref = row.get('source_ref')
@@ -1837,11 +2415,18 @@ def _load_design_source(
             origin=origin,
             source_ref=str(source_ref),
         )
-    if source_kind == 'human' or (
-        fields == _DESIGN_REPAIR_SOURCE_FIELDS
-        and (row.get('source_ref') is not None
-             or row.get('response_payload') is not None)
-    ):
+    if origin == 'historical_checkpoint':
+        if (fields != _DESIGN_REPAIR_SOURCE_FIELDS
+                or source_kind not in ('inherited', 'repair')
+                or not agent_runs.is_sha256(row.get('source_ref'))
+                or row.get('response_payload') is not None):
+            raise ProvenanceRefused(
+                'Stage4 historical checkpoint source 身份/manifest 不闭合')
+        _require_design_historical_source_owner(ctx, row)
+    elif source_kind == 'human' or (
+            fields == _DESIGN_REPAIR_SOURCE_FIELDS
+            and (row.get('source_ref') is not None
+                 or row.get('response_payload') is not None)):
         raise ProvenanceRefused(
             'Stage4 agent source 不得夹带 human/inline 身份')
     run_path = next((path / agent_runs.RUN_FILE for path in (
@@ -1925,8 +2510,9 @@ def _load_design_source(
         checkpoint_file_sha256=checkpoint_file_sha,
         response_payload=copy.deepcopy(response_payload),
         response_payload_sha256=str(response_sha),
-        origin='agent',
-        source_ref=None,
+        origin=origin,
+        source_ref=(str(row.get('source_ref'))
+                    if origin == 'historical_checkpoint' else None),
         model=model,
         accepted_turn_index=turn,
     )
@@ -2592,7 +3178,7 @@ def _design_source_row(source: DesignUnitSource) -> dict[str, Any]:
         'source_ref': source.source_ref,
         'response_payload': (
             copy.deepcopy(source.response_payload)
-            if source.origin != 'agent' else None
+            if source.origin in ('human', 'candidate_snapshot') else None
         ),
     }
 
@@ -2908,7 +3494,7 @@ def _validate_design_repair_aggregate_contents(
             or (strategy_replan and chapter is None)
             else 'inherited')
         if (source.source_kind != expected_kind
-                or (expected_kind == 'repair'
+                or (expected_kind == 'repair' and source.origin == 'agent'
                     and source.source_run_id != checked_run_id)):
             raise ProvenanceRefused(
                 f'{target} ch{chapter} source_kind/source_run 与 targets 漂移')
@@ -2930,7 +3516,7 @@ def _validate_design_repair_aggregate_contents(
         'attempt_id': source.attempt_id,
     } for source in sources if (
         record.get('version') != _DESIGN_REPAIR_AGGREGATE_VERSION
-        or source.origin == 'agent'
+        or source.origin in ('agent', 'historical_checkpoint')
     )]
     if record.get('attempts') != attempts:
         raise ArtifactUnreadable(f'{target} repair attempts/source lineage 不等')
@@ -3026,7 +3612,8 @@ def prepare_design_repair_aggregate_commit(
             or (strategy_replan and chapter is None)
             else 'inherited')
         if (source.source_kind != expected
-                or (expected == 'repair' and source.source_run_id != ctx.run_id)):
+                or (expected == 'repair' and source.origin == 'agent'
+                    and source.source_run_id != ctx.run_id)):
             raise ProvenanceRefused(
                 f'design repair ch{chapter} source_kind/source_run 不符')
     primary = copy.deepcopy(dict(primary_payload))
@@ -3036,7 +3623,8 @@ def prepare_design_repair_aggregate_commit(
         'source_run_id': source.source_run_id,
         'purpose': source.purpose,
         'attempt_id': source.attempt_id,
-    } for source in ordered if source.origin == 'agent']
+    } for source in ordered if source.origin in (
+        'agent', 'historical_checkpoint')]
     payload: dict[str, Any] = {
         'version': _DESIGN_REPAIR_AGGREGATE_VERSION,
         'kind': _DESIGN_REPAIR_AGGREGATE_KIND,
@@ -3126,7 +3714,10 @@ def mark_design_repair_aggregate_committed(
         post_rows = {STAGE4_BLIND_CANDIDATE: post}
         expected = {
             (row['purpose'], row['attempt_id'], row['chapter'])
-            for row in current['sources'] if row['source_kind'] == 'repair'
+            for row in current['sources']
+            if (row['source_kind'] == 'repair'
+                and row.get('origin', 'agent') == 'agent'
+                and row['source_run_id'] == ctx.run_id)
         }
         relevant = [row for row in _read_adoption_events(ctx)
                     if (row.get('kind') == 'artifact_adoption'
@@ -3140,7 +3731,8 @@ def mark_design_repair_aggregate_committed(
                   for row in relevant}
         if len(relevant) != len(expected) or actual != expected:
             raise ProvenanceRefused(
-                'repair aggregate 提交前必须恰有每个目标章一条 adoption')
+                'repair aggregate 提交前必须恰有每个当前 run 目标章一条 adoption；'
+                'historical checkpoint 由 adoption manifest 单独证明')
         if current['state'] == 'committed':
             if (current.get('landed_payload_sha256s') != landed
                     or current.get('post_file_sha256s') != post_rows):
@@ -3478,9 +4070,10 @@ def verify_committed_delivery(
 
 __all__ = [
     'DESIGN_AGGREGATE_COMMIT_FILE', 'DESIGN_REPAIR_AGGREGATE_COMMIT_FILE',
-    'DESIGN_HUMAN_EVOLUTION_COMMIT_FILE',
+    'DESIGN_HISTORICAL_ADOPTION_FILE', 'DESIGN_HUMAN_EVOLUTION_COMMIT_FILE',
     'DESIGN_MAX_CONCURRENCY', 'DESIGN_UNIT_RECOVERY_POLICY',
-    'DesignRepairCapability', 'DesignUnitRequest', 'DesignUnitSource',
+    'DesignHistoricalAdoption', 'DesignRepairCapability',
+    'DesignUnitRequest', 'DesignUnitSource',
     'PlanChapterRequest', 'PlanHistoricalAdoption',
     'PLAN_CHAPTER_REPLACEMENT_PROTOCOL', 'PLAN_DELIVERY_RECOVERY_FILE',
     'PLAN_HISTORICAL_ADOPTION_FILE',
@@ -3492,9 +4085,11 @@ __all__ = [
     'commit_ownership', 'committed', 'design_aggregate_committed',
     'design_aggregate_prepared', 'design_aggregate_state',
     'design_aggregate_target_state', 'design_unit_key',
-    'design_aggregate_usage', 'design_repair_usage', 'design_replan_usage',
+    'design_aggregate_usage', 'design_repair_usage',
+    'design_repair_sources_usage', 'design_replan_usage',
     'design_repair_aggregate_state', 'design_repair_aggregate_target_state',
-    'design_unit_purpose', 'design_unit_run_spec',
+    'design_unit_checkpoint_exists', 'design_unit_purpose',
+    'design_unit_run_spec', 'historical_design_unit_source',
     'candidate_snapshot_design_sources', 'current_design_unit_source',
     'load_committed_design_sources',
     'design_human_evolution_state', 'design_human_evolution_target_state',
@@ -3505,7 +4100,9 @@ __all__ = [
     'prepare_design_repair_aggregate_commit', 'prepared', 'recovery_policy',
     'refuse_foreign_commit_reservations', 'restore_checkpoint',
     'read_plan_delivery_recovery',
+    'require_design_historical_adoption_file',
     'require_plan_historical_adoption_file',
+    'restore_or_select_design_historical_adoption',
     'restore_or_select_plan_historical_adoption',
     'restore_commit_adoption', 'restore_design_aggregate_adoptions',
     'restore_design_aggregate_payloads',
