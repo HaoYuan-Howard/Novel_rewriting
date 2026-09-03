@@ -5,10 +5,12 @@ from __future__ import annotations
 import functools
 import json
 import os
+import shutil
 import subprocess
 import tempfile
 import warnings
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -21,8 +23,41 @@ from tests.corpus_manifest import verify as verify_corpus_manifest
 _ROOT = Path(__file__).resolve().parents[1]
 _DEFAULT_MANIFEST = _ROOT / 'docs' / 'corpus' / 'current_schema_manifest.json'
 _SEEN_SKIPS: list[dict[str, str]] = []
+_TOUCHED_TEST_PATHS: set[Path] = set()
 _REQUIRE = False
+_TEST_CODE_VERSION = 'test-code-version'
 _WINDOWS_MAX_PATH = 260
+# 含线程协调、跨进程写入或进程取消生命周期断言的模块。它们在 xdist 下共享一个
+# worker，避免原本用于发现竞态的短 timeout 被测试框架自己的并发制造成假红。
+# `tests/test_layering.py::test_concurrency_and_process_lifecycle_modules_are_registered_serial`
+# 反向扫描调用面，新增模块漏登记会直接失败。
+_SERIAL_TEST_MODULES = frozenset({
+    'tests/test_agent.py',
+    'tests/test_agent_drivers.py',
+    'tests/test_agent_supervisor.py',
+    'tests/test_api_agent.py',
+    'tests/test_appendlog.py',
+    'tests/test_commander_admission.py',
+    'tests/test_commander_drivers.py',
+    'tests/test_final_approval_workpacks.py',
+    'tests/test_final_review_tools.py',
+    'tests/test_human_actions.py',
+    'tests/test_llm.py',
+    'tests/test_orchestrator_jobs.py',
+    'tests/test_orchestrator_queue.py',
+    'tests/test_provider_probe.py',
+    'tests/test_stage2_generation.py',
+    'tests/test_stage2_recovery_runs.py',
+    'tests/test_stage4_design_session_pool.py',
+    'tests/test_stage4_plan_chapters.py',
+    'tests/test_stage5_closure.py',
+    'tests/test_stage5_generation.py',
+    'tests/test_stage6_prompt_experiments.py',
+    'tests/test_stage6_semantic_agent.py',
+    'tests/test_stage6_semantic_agent_boundary.py',
+    'tests/test_trash.py',
+    'tests/test_write_admission.py',
+})
 # pytest truncates a tmp_path node prefix to 30 characters and adds a numeric
 # suffix.  Stage0 then creates an Output/per-book directory before appending
 # its longest content-addressed archive filename.  Reserve a deliberately
@@ -78,6 +113,7 @@ def _windows_basetemp_problem(
     os_name: str = os.name,
     long_paths: bool | None = None,
     root: str | os.PathLike[str] | None = None,
+    xdist_suffix: str | None = None,
 ) -> str | None:
     """Return an actionable preflight error before a deep Windows path explodes.
 
@@ -105,7 +141,8 @@ def _windows_basetemp_problem(
         base = base.resolve(strict=False)
     elif not base.is_absolute():
         base = Path(os.path.normpath(Path(root) / base))
-    longest = base / _STAGE0_TMP_SUFFIX
+    effective = base / xdist_suffix if xdist_suffix else base
+    longest = effective / _STAGE0_TMP_SUFFIX
     length = len(str(longest))
     if length < _WINDOWS_MAX_PATH:
         return None
@@ -114,24 +151,42 @@ def _windows_basetemp_problem(
     #   `Novel_rewriting_stage01` worktree 恰好 260）⇒ 预检推荐了一个它自己会拒绝
     #   的值，照做的人原地打转。改成按剩余预算分诊：仓内短名还放得下就报它，
     #   放不下就明说仓内已无解、往仓外走。
-    budget = _WINDOWS_MAX_PATH - 1 - len(str(_STAGE0_TMP_SUFFIX))
     anchor = Path(os.path.normpath(Path(root) if root is not None else Path.cwd()))
-    spare = budget - len(str(anchor)) - 1
+    candidate = anchor / '.tr'
+    if xdist_suffix:
+        candidate /= xdist_suffix
+    candidate /= _STAGE0_TMP_SUFFIX
+    candidate_fits = len(str(candidate)) < _WINDOWS_MAX_PATH
     advice = (
-        '请改用仓库内短路径，例如 --basetemp=.test_runtime'
-        if spare >= len('.test_runtime') else
-        f'⚠ 本仓所在路径 {anchor} 太长，仓内放不下 .test_runtime'
-        f'（前缀预算只剩 {spare} 字符）——请用**仓外**短路径，'
+        '请改用仓库内固定短路径，例如 --basetemp=.tr'
+        if candidate_fits else
+        f'⚠ 本仓所在路径 {anchor} 太长，仓内放不下固定短根 .tr——请用**仓外**短路径，'
         f'例如 --basetemp={anchor.drive or "C:"}/_tr'
     )
+    suffix_note = f'（已计入 xdist 子目录 {xdist_suffix}）' if xdist_suffix else ''
     return (
         f'Windows --basetemp is too deep: {base}；Stage0 最长临时归档路径约 '
-        f'{length} 字符，达到/超过 MAX_PATH({_WINDOWS_MAX_PATH})。'
+        f'{length} 字符{suffix_note}，达到/超过 MAX_PATH({_WINDOWS_MAX_PATH})。'
         f'{advice}；'
         '或一次性解除这台机器的限制（管理员设 '
         'HKLM\\SYSTEM\\CurrentControlSet\\Control\\FileSystem\\LongPathsEnabled=1），'
         '解除后本预检自动不再拦'
     )
+
+
+def _xdist_worker_suffix(config: pytest.Config) -> str | None:
+    """返回 controller 必须提前为 worker 保留的最长目录名。"""
+    raw = getattr(getattr(config, 'option', None), 'numprocesses', None)
+    if raw in (None, 0, '0'):
+        return None
+    try:
+        highest = max(int(raw) - 1, 0)
+        digits = max(len(str(highest)), 3)
+    except (TypeError, ValueError):
+        # ``auto`` / ``logical`` 在 configure 时未必已解析成整数；三位 worker
+        # 编号远高于正常开发机规模，宁可在极深仓根上保守拒绝。
+        digits = 3
+    return 'popen-gw' + '9' * digits
 
 
 def _configured_pytest_temp_dirs(config: pytest.Config) -> tuple[Path, ...]:
@@ -160,6 +215,98 @@ def _configured_pytest_temp_dirs(config: pytest.Config) -> tuple[Path, ...]:
     return tuple(paths)
 
 
+def _is_within(path: Path, root: Path) -> bool:
+    """Return whether an already-normalised path is root itself or its child."""
+    try:
+        path.relative_to(root)
+    except ValueError:
+        return False
+    return True
+
+
+def _pytest_temp_dirs_to_restore(
+    config: pytest.Config,
+    touched: set[Path] | None = None,
+) -> tuple[Path, ...]:
+    """只返回**本次进程触碰过**的 basetemp 与 controller cache。
+
+    pytest 会在下一次真正取用 basetemp 时清空旧内容。若本次只做 collection、或在
+    fixture 建立前就失败，递归修整整个陈旧 basetemp 不但没有收益，还会把
+    一次秒级定向测试拖成分钟级。xdist worker 只修自己的 ``popen-gw*`` 子根；cache
+    由 controller 统一处理，避免多个进程同时递归同一路径。
+    """
+    configured = _configured_pytest_temp_dirs(config)
+    option = getattr(config, 'option', None)
+    has_basetemp = getattr(option, 'basetemp', None) is not None
+    basetemp = configured[0] if configured and has_basetemp else None
+    observed = _TOUCHED_TEST_PATHS if touched is None else touched
+
+    selected: list[Path] = []
+    if basetemp is not None:
+        for raw in observed:
+            path = Path(os.path.abspath(raw))
+            if _is_within(path, basetemp) and path not in selected:
+                selected.append(path)
+
+    if not hasattr(config, 'workerinput'):
+        for path in configured:
+            if path != basetemp and path not in selected:
+                selected.append(path)
+    return tuple(selected)
+
+
+@contextmanager
+def _redirect_stdlib_temp(root: Path) -> Iterator[Path]:
+    """把遗留 ``tempfile.mkdtemp()`` 收进可清理的 pytest 临时根。
+
+    这是现存调用点的迁移桥；新增测试应直接使用 ``tmp_path`` /
+    ``tmp_path_factory``。直接改 ``tempfile.tempdir`` 是标准库支持的进程级入口，因而
+    ``TemporaryDirectory``、``NamedTemporaryFile`` 等同样不会继续污染 ``%TEMP%``。
+    """
+    root.mkdir(parents=True, exist_ok=True)
+    previous = tempfile.tempdir
+    tempfile.tempdir = os.fspath(root)
+    try:
+        yield root
+    finally:
+        tempfile.tempdir = previous
+        try:
+            shutil.rmtree(root)
+        except FileNotFoundError:
+            pass
+        except OSError as exc:
+            warnings.warn(pytest.PytestWarning(
+                f'pytest 标准库临时根未能自动清理：{root}：{exc}'))
+
+
+@pytest.fixture(scope='session', autouse=True)
+def _managed_stdlib_temp(tmp_path_factory: pytest.TempPathFactory) -> Iterator[None]:
+    """让每个 pytest 进程只在自己本次的 basetemp 下创建标准库临时项。"""
+    basetemp = Path(os.path.abspath(tmp_path_factory.getbasetemp()))
+    _TOUCHED_TEST_PATHS.add(basetemp)
+    with _redirect_stdlib_temp(basetemp / '_stdlib_temp'):
+        yield
+
+
+def _uses_real_code_version(node: pytest.Item, *, require: bool) -> bool:
+    """真实 provenance、corpus 与显式 marker 不得使用测试代码身份。"""
+    return (
+        require
+        or node.get_closest_marker('corpus') is not None
+        or node.get_closest_marker('real_code_version') is not None
+    )
+
+
+@pytest.fixture(autouse=True)
+def _stable_code_version(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> None:
+    """普通测试使用确定代码身份，避免每次 provenance 构造都启动三次 Git。"""
+    if _uses_real_code_version(request.node, require=_REQUIRE):
+        return
+    from novel import prov
+
+    monkeypatch.setattr(prov, 'code_version', lambda: _TEST_CODE_VERSION)
+
+
 def _restore_windows_test_acls(
     paths: tuple[Path, ...],
     *,
@@ -171,8 +318,9 @@ def _restore_windows_test_acls(
 
     agent 文件沙箱会给新目录写入只对沙箱 SID 可用的显式 ACL。等进程退出后，普通用户
     已无权修它，只能 UAC ``takeown``；但创建目录的这个进程仍是 owner，可以在收尾时
-    开启父目录继承并把当前登录用户写回。只处理 pytest 已配置的两个路径，不扫描目录，
-    也不删除文件；异常退出仍须按 AGENTS.md 的一次性管理员恢复说明处理。
+    开启父目录继承并把当前登录用户写回。只处理本轮登记的 worker/controller 根与
+    controller cache，不扫描陈旧根，也不删除文件；异常退出仍须按 AGENTS.md 的
+    一次性管理员恢复说明处理。
     """
     if os_name != 'nt':
         return []
@@ -235,10 +383,19 @@ def _manifest_path() -> Path:
 def pytest_configure(config: pytest.Config) -> None:
     global _REQUIRE
     _SEEN_SKIPS.clear()
-    if problem := _windows_basetemp_problem(
-            getattr(config.option, 'basetemp', None)):
-        raise pytest.UsageError(problem)
+    _TOUCHED_TEST_PATHS.clear()
+    # xdist 会在 controller 放行之后给每个 worker 追加 ``popen-gwN``。只在
+    # controller 预检，并提前把最长后缀算进去；worker 再按派生路径检查会变成
+    # “主进程建议某个短根，worker 却因同一路径更深而拒绝”的自相矛盾。
+    if not hasattr(config, 'workerinput'):
+        if problem := _windows_basetemp_problem(
+                getattr(config.option, 'basetemp', None),
+                xdist_suffix=_xdist_worker_suffix(config)):
+            raise pytest.UsageError(problem)
     _REQUIRE = bool(config.getoption('--require-corpus'))
+    if _REQUIRE and getattr(config.option, 'numprocesses', None) not in (None, 0, '0'):
+        raise pytest.UsageError(
+            '--require-corpus must run serially；请移除 -n，或显式使用 -n 0')
     if not _REQUIRE:
         return
     # `pyproject.toml` deliberately keeps ordinary local runs cheap.  This
@@ -285,6 +442,43 @@ def pytest_collectreport(report: pytest.CollectReport) -> None:
     _remember_skip(report)
 
 
+def pytest_sessionstart(session: pytest.Session) -> None:
+    """登记 xdist controller 本轮必然创建/清空的 basetemp 根。"""
+    config = session.config
+    if hasattr(config, 'workerinput') or _xdist_worker_suffix(config) is None:
+        return
+    factory = getattr(config, '_tmp_path_factory', None)
+    if factory is not None:
+        _TOUCHED_TEST_PATHS.add(Path(os.path.abspath(factory.getbasetemp())))
+
+
+@pytest.hookimpl(tryfirst=True)
+def pytest_collection_modifyitems(
+    config: pytest.Config,
+    items: list[pytest.Item],
+) -> None:
+    """xdist 下按文件分组，并把并发/进程生命周期模块收进同一串行组。
+
+    ``load`` / ``loadgroup`` 默认会把同一文件拆给多个 worker，导致模块级扫描 fixture
+    重复执行；单纯 ``loadfile`` 又无法合并跨文件的 lifecycle 用例。这里给普通文件
+    一个稳定组名、给 ``serial`` 模块同一个组名，再由 ``--dist loadgroup`` 同时满足
+    两条边界。
+    """
+    if not config.pluginmanager.hasplugin('xdist'):
+        return
+    for item in items:
+        try:
+            rel = item.path.relative_to(_ROOT).as_posix()
+        except ValueError:
+            rel = str(item.path)
+        if (item.get_closest_marker('serial') is not None
+                or rel in _SERIAL_TEST_MODULES):
+            group = 'serial'
+        else:
+            group = f'file:{rel}'
+        item.add_marker(pytest.mark.xdist_group(name=group))
+
+
 def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
     actual = sorted(_SEEN_SKIPS, key=lambda item: item['nodeid'])
     record = session.config.getoption('--record-corpus-skips')
@@ -328,7 +522,7 @@ def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
 @pytest.hookimpl(trylast=True)
 def pytest_unconfigure(config: pytest.Config) -> None:
     """pytest 正常退出时，把沙箱创建者 ACL 还原为登录用户可维护的目录。"""
-    failed = _restore_windows_test_acls(_configured_pytest_temp_dirs(config))
+    failed = _restore_windows_test_acls(_pytest_temp_dirs_to_restore(config))
     if failed:
         warnings.warn(pytest.PytestWarning(
             'pytest 临时目录 ACL 未能自动恢复：'

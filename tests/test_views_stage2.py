@@ -6,7 +6,7 @@ test_views_stage2.py —— S-05「全局设定」那一屏的组装。
 【与 `test_schema_api.py` 的分界线】那一份测**载体**（后置条件、反例会红），
 合成数据不读盘；本份测**组装**：解引用对不对、异常面对不对，拿盘上真语料跑。
 
-⚠ 沙箱一律 `tempfile.mkdtemp()`（本机 `%TEMP%\\pytest-of-yh255` 的 ACL 坏了）。
+⚠ 遗留 `mkdtemp()` 由 conftest 收进受管根；新增用例使用 `tmp_path`。
 ⚠ **原语料一个字节都不许动**——它是只读证据。
 """
 from __future__ import annotations

@@ -1,10 +1,25 @@
 # 测试分层
 
-默认测试必须可复现，不读取本地小说产物：
+默认测试必须可复现，不读取本地小说产物。开发依赖包含 pytest-xdist；默认命令以 4 个 worker
+并行非 corpus 回归：
 
 ```powershell
 conda run -n novel_refactor python -m pytest
 ```
+
+`tests/conftest.py` 把普通测试按文件分到同一 worker，使模块 fixture、skill 校验快照和 AST 缓存只
+建立一次；登记在 `_SERIAL_TEST_MODULES` 的并发/进程生命周期模块进入同一个串行组。新增这类模块时
+必须同步登记，AST 守卫会反查遗漏，不能靠本机一次碰巧不抖来判断可并行。
+
+日常编辑先跑精确 node；单点用 `-n 0` 避免启动四个 worker。需要回放失败缓存时使用：
+
+```powershell
+conda run -n novel_refactor python -m pytest -n 0 -x tests/test_example.py::test_exact_node
+conda run -n novel_refactor python -m pytest -n 0 --lf --lfnf=none -x
+```
+
+这些命令只能报告“定向测试通过”。只有不附测试路径和额外 marker、完整退出 0 的默认命令，才可称
+“非 corpus 回归通过”。
 
 标记为 `corpus` 的测试是针对冻结生成产物或源语料的集成检查，默认 marker 表达式会跳过它们。
 最终硬验收必须同时提供隔离的当前 schema 输出盘和与它精确对应、已提交的无正文 manifest，
@@ -13,7 +28,7 @@ conda run -n novel_refactor python -m pytest
 ```powershell
 $env:NOVEL_OUTPUT = 'E:\path\to\isolated-current-schema-output'
 $env:NOVEL_CORPUS_MANIFEST = (Resolve-Path -LiteralPath 'docs\corpus\current_schema_manifest.json').Path
-conda run -n novel_refactor python -m pytest --require-corpus
+conda run -n novel_refactor python -m pytest -n 0 --require-corpus
 ```
 
 只跑 `-m corpus` 不是最终验收：它不验证冻结 manifest/ledger/精确 skip allowlist。当前
@@ -24,10 +39,14 @@ manifest 尚未生成时，只能报告"非 corpus 回归"，不能声称全量�
 小说。测试若直接写注册 JSON 产物，须先用 `contracts.schema.encode_artifact()` 包装逻辑
 payload。
 
+普通测试由 autouse fixture 注入确定性的 `code_version`，避免每次构造来源账都启动三次 Git；专门验证
+真实代码身份的模块声明 `pytest.mark.real_code_version`，corpus 验收也始终查询真实值。生产
+`novel.prov.code_version()` 不得加进程级缓存，否则长驻服务会把旧代码身份写进新产物。
+
 Windows 上的 `--basetemp` 有两条出路，选一条即可：
 
-- **缩短路径**：仓库默认 `.test_runtime` 就是推荐值。测试启动会按 Stage0 最长内容寻址归档
-  路径预检，超出 `MAX_PATH` 时给出 `pytest.UsageError`。
+- **缩短路径**：仓库默认 `.tr` 是固定短根，并为 xdist 的 `popen-gwN` 子目录预留预算。测试启动会按
+  Stage0 最长内容寻址归档路径预检，超出 `MAX_PATH` 时给出 `pytest.UsageError`。
 - **一次性解除限制**（推荐，管理员一次）：设
   `HKLM\SYSTEM\CurrentControlSet\Control\FileSystem\LongPathsEnabled=1`。本仓 conda 环境的
   `python.exe` 带 `longPathAware` manifest，两者齐备后普通路径不再受 260 限制，
@@ -37,3 +56,8 @@ Windows 上的 `--basetemp` 有两条出路，选一条即可：
 
 ⚠ 不要改用 `\\?\` 前缀绕过：前缀总能写成功，但前缀建出来的文件**用普通路径读不回来**
 （实测 `FileNotFoundError`），那是把明确报错换成「一部分代码看得见、一部分看不见」的静默不一致。
+
+会话 fixture 会把遗留的无 `dir=` 标准库临时调用统一重定向到本次 worker 的 basetemp 子根，并在退出
+时自动清理；新增测试直接使用 `tmp_path` / `tmp_path_factory`，不要继续新增 `tempfile.mkdtemp()`，也
+不要在 `%TEMP%` 或按时间戳另造根。正常退出只恢复本次 worker 实际触碰根与 controller cache 的 ACL，
+不会递归扫描未参与本轮的陈旧 basetemp。

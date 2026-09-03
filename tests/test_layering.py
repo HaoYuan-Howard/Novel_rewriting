@@ -19,6 +19,7 @@ test_layering.py —— 分层靠**测试**守，不靠约定。
 from __future__ import annotations
 
 import ast
+import functools
 import os
 import tomllib
 
@@ -27,17 +28,25 @@ import pytest
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
-def _py_files(rel: str) -> list[str]:
-    out = []
+@functools.lru_cache(maxsize=None)
+def _py_files(rel: str) -> tuple[str, ...]:
+    out: list[str] = []
     for dirpath, dirnames, filenames in os.walk(os.path.join(ROOT, rel)):
         dirnames[:] = [d for d in dirnames if d not in ('__pycache__', 'node_modules')]
         out += [os.path.join(dirpath, f) for f in filenames if f.endswith('.py')]
-    return sorted(out)
+    return tuple(sorted(out))
+
+
+@functools.lru_cache(maxsize=None)
+def _tree(path: str) -> ast.Module:
+    """同一仓库快照里的源码只读、只解析一次。"""
+    with open(path, encoding='utf-8') as source:
+        return ast.parse(source.read(), filename=path)
 
 
 def _imports(path: str) -> set[str]:
     """这个文件 import 了哪些**顶层**包。"""
-    tree = ast.parse(open(path, encoding='utf-8').read(), filename=path)
+    tree = _tree(path)
     mods: set[str] = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
@@ -49,7 +58,7 @@ def _imports(path: str) -> set[str]:
 
 def _import_paths(path: str) -> set[str]:
     """保留完整模块名，用于约束同一顶层包里的精确依赖边。"""
-    tree = ast.parse(open(path, encoding='utf-8').read(), filename=path)
+    tree = _tree(path)
     mods: set[str] = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
@@ -102,6 +111,43 @@ def test_the_scan_actually_finds_something():
         '一个 pydantic import 都没扫到——AST 解析多半失效了'
 
 
+_SERIAL_PRIMITIVES = {
+    'threading.Thread', 'threading.Barrier', 'threading.Event',
+    'ThreadPoolExecutor', 'multiprocessing.get_context', 'subprocess.Popen',
+}
+
+
+def _dotted_name(node: ast.expr) -> str | None:
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        prefix = _dotted_name(node.value)
+        return f'{prefix}.{node.attr}' if prefix else None
+    return None
+
+
+def test_concurrency_and_process_lifecycle_modules_are_registered_serial():
+    """时间敏感/跨进程模块不得被 xdist 分到多个并发 worker。"""
+    from tests import conftest as hooks
+
+    missing = []
+    scanned = 0
+    for path in _py_files('tests'):
+        tree = _tree(path)
+        primitives = {
+            name for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            if (name := _dotted_name(node.func)) in _SERIAL_PRIMITIVES
+        }
+        if not primitives:
+            continue
+        scanned += 1
+        if _rel(path) not in hooks._SERIAL_TEST_MODULES:
+            missing.append((_rel(path), sorted(primitives)))
+    assert scanned >= 20, f'只认出 {scanned} 个并发/进程测试模块——扫描面可能失效'
+    assert not missing, f'这些并发/进程生命周期模块未登记到 serial 调度组：{missing}'
+
+
 def test_every_runtime_package_is_in_the_distribution():
     """源码树可 import 不等于 wheel 里有；pythonpath 会把漏包静默遮住。"""
     with open(os.path.join(ROOT, 'pyproject.toml'), 'rb') as fh:
@@ -127,12 +173,12 @@ def test_there_is_exactly_one_finding_class():
     hits = []
     for rel in ('contracts', 'tests', 'tools'):
         for p in _py_files(rel):
-            tree = ast.parse(open(p, encoding='utf-8').read(), filename=p)
+            tree = _tree(p)
             hits += [f'{_rel(p)}:{n.lineno}' for n in ast.walk(tree)
                      if isinstance(n, ast.ClassDef) and n.name == 'Finding']
     if os.path.isdir(os.path.join(ROOT, 'novel')):
         for p in _py_files('novel'):
-            tree = ast.parse(open(p, encoding='utf-8').read(), filename=p)
+            tree = _tree(p)
             hits += [f'{_rel(p)}:{n.lineno}' for n in ast.walk(tree)
                      if isinstance(n, ast.ClassDef) and n.name == 'Finding']
     assert len(hits) == 1, f'`class Finding` 出现 {len(hits)} 次：{hits}'
@@ -140,8 +186,8 @@ def test_there_is_exactly_one_finding_class():
 
 # ───────────────────── 运行时的几条（`novel/` 落地后才真的生效） ─────────────────────
 
-def _runtime_files() -> list[str]:
-    files = _py_files('novel') if os.path.isdir(os.path.join(ROOT, 'novel')) else []
+def _runtime_files() -> tuple[str, ...]:
+    files = _py_files('novel') if os.path.isdir(os.path.join(ROOT, 'novel')) else ()
     if not files:
         pytest.skip('`novel/` 还没有任何模块——这几条现在**没在查**，不是「查过没事」')
     return files
@@ -228,7 +274,7 @@ def test_only_the_store_reads_json_directly():
         rel = _rel(p)
         if rel in _JSON_READ_ALLOWED or rel.startswith('novel/llm/'):
             continue
-        tree = ast.parse(open(p, encoding='utf-8').read(), filename=p)
+        tree = _tree(p)
         for n in ast.walk(tree):
             if (isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
                     and n.func.attr in ('load', 'loads')
@@ -363,7 +409,7 @@ def test_only_the_store_writes_to_disk():
         rel = _rel(p)
         if rel in _WRITE_ALLOWED:
             continue
-        tree = ast.parse(open(p, encoding='utf-8').read(), filename=p)
+        tree = _tree(p)
         for n in ast.walk(tree):
             if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute) \
                     and n.func.attr in ('write_bytes', 'write_text', 'mkdir', 'unlink'):
@@ -483,7 +529,7 @@ _STORE_WRITERS = {'write', 'write_text', 'write_invalid',
 
 
 def _writer_hits(path: str) -> list[str]:
-    tree = ast.parse(open(path, encoding='utf-8').read(), filename=path)
+    tree = _tree(path)
     return [f'{_rel(path)}:{n.lineno} .{n.func.attr}()' for n in ast.walk(tree)
             if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
             and n.func.attr in _STORE_WRITERS]
@@ -522,7 +568,7 @@ _SERVICE_MUTATORS = {
 
 
 def _service_mutator_hits(path: str) -> list[tuple[str, str]]:
-    tree = ast.parse(open(path, encoding='utf-8').read(), filename=path)
+    tree = _tree(path)
     module_aliases: dict[str, str] = {}
     direct_aliases: dict[str, tuple[str, str]] = {}
     for node in ast.walk(tree):
@@ -642,8 +688,7 @@ def test_the_api_layer_has_no_second_argv_builder():
     marks = ("'novel.cli'", '"novel.cli"', "'-X'", 'sys.executable')
     bad = []
     for p in _api_files():
-        src = open(p, encoding='utf-8').read()
-        tree = ast.parse(src, filename=p)
+        tree = _tree(p)
         code = {n.value for n in ast.walk(tree)
                 if isinstance(n, ast.Constant) and isinstance(n.value, str)
                 and id(n) not in _docstring_ids(tree)}
@@ -662,7 +707,7 @@ def test_the_api_package_init_imports_nothing():
     **而 `importorskip` 跳过去的东西看起来像绿的**。
     """
     path = os.path.join(ROOT, 'novel', 'api', '__init__.py')
-    tree = ast.parse(open(path, encoding='utf-8').read(), filename=path)
+    tree = _tree(path)
     bad = [n.lineno for n in ast.walk(tree)
            if isinstance(n, (ast.Import, ast.ImportFrom))
            and not (isinstance(n, ast.ImportFrom) and n.module == '__future__')]
@@ -691,7 +736,7 @@ def _full_imports(path: str) -> set[str]:
     `from novel.report import build` 与 `from novel.store import ArtifactStore`
     在它眼里长得一模一样。
     """
-    tree = ast.parse(open(path, encoding='utf-8').read(), filename=path)
+    tree = _tree(path)
     mods: set[str] = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
@@ -728,7 +773,7 @@ def test_completeness_never_peeks_at_the_job_records():
     ⇒ `state.py` 里出现 `_service` 三个字，这条纪律就已经开始漏了。
     """
     path = os.path.join(ROOT, 'novel', 'orchestrator', 'state.py')
-    tree = ast.parse(open(path, encoding='utf-8').read(), filename=path)
+    tree = _tree(path)
     #: ⚠ 扫**代码**不扫文档：这条纪律本身就要写在 docstring 里说清楚，
     #: 拿字面 `in src` 去查，第一个被判红的是解释这条纪律的那段话。
     #: （这段逻辑已提成 `_docstring_ids`，E 期那条禁 `0.0.0.0` 的守卫共用它。）
@@ -776,7 +821,7 @@ def test_the_runtime_never_uses_sys_exit():
         rel = _rel(p)
         if any(rel.startswith(k) for k in _SYS_EXIT_ALLOWED):
             continue
-        tree = ast.parse(open(p, encoding='utf-8').read(), filename=p)
+        tree = _tree(p)
         for n in ast.walk(tree):
             if (isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
                     and n.func.attr == 'exit'
@@ -819,7 +864,7 @@ def _stage_aliases(scope: ast.AST) -> dict[str, str]:
 
 def _cli_stage_references() -> list[tuple[str, str, int, str]]:
     """CLI 里所有 `<stage模块别名>.<名字>` 的引用，去重后按 (模块, 名字) 排序。"""
-    tree = ast.parse(open(_CLI_MAIN, encoding='utf-8').read(), filename=_CLI_MAIN)
+    tree = _tree(_CLI_MAIN)
     seen: set[tuple[str, str]] = set()
     out: list[tuple[str, str, int, str]] = []
     for fn in ast.walk(tree):
@@ -908,11 +953,12 @@ def _fixed_tuple_arity(ann: ast.expr | None) -> int | None:
     return len(elts)
 
 
-def _repo_py_files() -> list[str]:
+@functools.lru_cache(maxsize=1)
+def _repo_py_files() -> tuple[str, ...]:
     out: list[str] = []
     for rel in ('novel', 'contracts', 'tests', 'tools'):
         out += _py_files(rel)
-    return out
+    return tuple(out)
 
 
 def _arity_table(trees: dict[str, ast.Module]) -> dict[tuple[str, str], int]:
@@ -961,10 +1007,9 @@ def _unpack_sites(trees: dict[str, ast.Module], table: dict[tuple[str, str], int
     return sites
 
 
+@functools.lru_cache(maxsize=1)
 def _arity_scan():
-    trees: dict[str, ast.Module] = {}
-    for p in _repo_py_files():
-        trees[p] = ast.parse(open(p, encoding='utf-8').read(), filename=p)
+    trees = {p: _tree(p) for p in _repo_py_files()}
     table = _arity_table(trees)
     return table, _unpack_sites(trees, table)
 

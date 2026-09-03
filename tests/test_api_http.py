@@ -13,7 +13,7 @@ test_api_http.py —— 公共端点真的走一遍 HTTP。
 「**没在查**，不是查过没事」，与仓里其余 skip 同一句话——
 因为一条 skip 掉的断言在结果里长得跟绿的一模一样。
 
-⚠ 沙箱一律 `tempfile.mkdtemp()`（本机 `%TEMP%\\pytest-of-yh255` 的 ACL 坏了）。
+⚠ 遗留 `mkdtemp()` 由 conftest 收进受管根；新增用例使用 `tmp_path`。
 ⚠ **原语料一个字节都不许动**。
 """
 from __future__ import annotations

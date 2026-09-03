@@ -513,6 +513,11 @@ def test_require_corpus_overrides_default_marker_and_fails_closed(
 
     config = Config()
     monkeypatch.delenv('NOVEL_OUTPUT', raising=False)
+    config.option.numprocesses = 2
+    with pytest.raises(pytest.UsageError, match='must run serially'):
+        hooks.pytest_configure(config)
+
+    config.option.numprocesses = 0
     with pytest.raises(pytest.UsageError, match='requires NOVEL_OUTPUT'):
         hooks.pytest_configure(config)
 
@@ -571,7 +576,7 @@ def test_windows_basetemp_preflight_rejects_deep_paths_before_stage0_runs():
         'x' * first_refused, os_name='nt', long_paths=False, root=_FAKE_ROOT)
     assert problem is not None
     assert '约 260 字符' in problem
-    assert 'MAX_PATH(260)' in problem and '--basetemp=.test_runtime' in problem
+    assert 'MAX_PATH(260)' in problem and '--basetemp=.tr' in problem
     # 报错必须同时给出两条出路，否则人只会去缩路径，永远不知道限制可以一次性解除。
     assert 'LongPathsEnabled' in problem
 
@@ -589,6 +594,32 @@ def test_windows_basetemp_preflight_stands_down_once_the_limit_is_lifted():
             'x' * size, os_name='nt', long_paths=True, root=_FAKE_ROOT) is None
 
 
+def test_xdist_worker_suffix_is_reserved_before_workers_start():
+    """controller 必须把 ``popen-gwN`` 算进预算，不能放行后让 worker 才炸。"""
+    from tests import conftest as hooks
+
+    config = SimpleNamespace(option=SimpleNamespace(numprocesses=4))
+    suffix = hooks._xdist_worker_suffix(config)
+    assert suffix == 'popen-gw999'
+    boundary_root = next(
+        f'C:/{"r" * size}' for size in range(1, 240)
+        if hooks._windows_basetemp_problem(
+            '.test_runtime', os_name='nt', long_paths=False,
+            root=f'C:/{"r" * size}') is None
+        and hooks._windows_basetemp_problem(
+            '.test_runtime', os_name='nt', long_paths=False,
+            root=f'C:/{"r" * size}', xdist_suffix=suffix) is not None
+    )
+    problem = hooks._windows_basetemp_problem(
+        '.test_runtime', os_name='nt', long_paths=False,
+        root=boundary_root, xdist_suffix=suffix)
+    assert problem is not None and f'xdist 子目录 {suffix}' in problem
+    assert '--basetemp=.tr' in problem
+    assert hooks._windows_basetemp_problem(
+        '.tr', os_name='nt', long_paths=False,
+        root=boundary_root, xdist_suffix=suffix) is None
+
+
 def test_the_preflight_never_recommends_a_basetemp_it_would_itself_refuse():
     """⭐ 预检给的出路必须是**算过的**，不是写死的一句话。
 
@@ -600,15 +631,15 @@ def test_the_preflight_never_recommends_a_basetemp_it_would_itself_refuse():
 
     shallow = hooks._windows_basetemp_problem(
         'x' * 400, os_name='nt', long_paths=False, root=_FAKE_ROOT)
-    assert shallow is not None and '--basetemp=.test_runtime' in shallow
+    assert shallow is not None and '--basetemp=.tr' in shallow
     # 推荐的那个值，预检自己必须放行——否则这句建议是空头支票。
     assert hooks._windows_basetemp_problem(
-        '.test_runtime', os_name='nt', long_paths=False, root=_FAKE_ROOT) is None
+        '.tr', os_name='nt', long_paths=False, root=_FAKE_ROOT) is None
 
     deep = hooks._windows_basetemp_problem(
         '.test_runtime', os_name='nt', long_paths=False, root=_FAKE_DEEP_ROOT)
     assert deep is not None, '仓根长到这个程度，仓内任何 basetemp 都该被拦'
-    assert '--basetemp=.test_runtime' not in deep,         '仓内已放不下，还推荐仓内短名 = 推荐一个自己会拒绝的值'
+    assert '--basetemp=.tr' not in deep,         '仓内已放不下，还推荐仓内短名 = 推荐一个自己会拒绝的值'
     assert '仓外' in deep and '--basetemp=C:/_tr' in deep
 
 
@@ -627,8 +658,8 @@ def test_long_path_probe_measures_the_host_and_leaves_nothing_behind():
     assert set(Path(tempfile.gettempdir()).glob('lp-*')) == before
 
 
-def test_pytest_temp_paths_are_reused_and_windows_acl_is_restored(tmp_path):
-    """默认两目录只有一份；ACL 修复只点名配置路径，不扫描或删除别处。"""
+def test_pytest_temp_paths_restore_only_this_run_and_the_controller_cache(tmp_path):
+    """不扫描陈旧 basetemp；worker 只修自己的根，cache 只由 controller 修。"""
     from tests import conftest as hooks
 
     class Config:
@@ -643,8 +674,19 @@ def test_pytest_temp_paths_are_reused_and_windows_acl_is_restored(tmp_path):
     runtime, cache = hooks._configured_pytest_temp_dirs(Config())
     assert (runtime, cache) == (
         tmp_path / '.test_runtime', tmp_path / '.test_cache')
-    runtime.mkdir()
+    worker = runtime / 'popen-gw0'
+    worker.mkdir(parents=True)
     cache.mkdir()
+
+    selected = hooks._pytest_temp_dirs_to_restore(Config(), {worker})
+    assert selected == (worker, cache)
+    assert runtime not in selected, '不得递归扫描整个陈旧 .test_runtime'
+
+    worker_config = Config()
+    worker_config.workerinput = {'workerid': 'gw0'}
+    assert hooks._pytest_temp_dirs_to_restore(
+        worker_config, {worker}) == (worker,)
+    assert hooks._pytest_temp_dirs_to_restore(Config(), set()) == (cache,)
 
     calls = []
 
@@ -653,12 +695,12 @@ def test_pytest_temp_paths_are_reused_and_windows_acl_is_restored(tmp_path):
         return SimpleNamespace(returncode=0)
 
     assert hooks._restore_windows_test_acls(
-        (runtime, cache),
+        selected,
         os_name='nt',
         env={'USERDOMAIN': 'DOMAIN', 'USERNAME': 'reader'},
         runner=runner,
     ) == []
-    assert [call[0][1] for call in calls] == [str(runtime), str(cache)]
+    assert [call[0][1] for call in calls] == [str(worker), str(cache)]
     for argv, kwargs in calls:
         assert argv[0] == 'icacls.exe'
         assert argv[2:] == [
@@ -671,6 +713,37 @@ def test_pytest_temp_paths_are_reused_and_windows_acl_is_restored(tmp_path):
     assert hooks._restore_windows_test_acls(
         (runtime,), os_name='posix', runner=runner) == []
     assert calls == []
+
+
+def test_stdlib_temp_is_redirected_under_the_managed_root_and_removed(tmp_path):
+    """遗留 mkdtemp 不再污染系统 temp，连同管理根在退出时自动清理。"""
+    from tests import conftest as hooks
+
+    managed = tmp_path / 'managed-stdlib-temp'
+    previous = tempfile.tempdir
+    with hooks._redirect_stdlib_temp(managed):
+        created = Path(tempfile.mkdtemp())
+        assert created.parent == managed
+        assert tempfile.gettempdir() == str(managed)
+    assert tempfile.tempdir == previous
+    assert not managed.exists()
+
+
+def test_only_corpus_and_provenance_tests_use_the_live_code_version():
+    """普通测试身份是确定值，但真实来源账的边界不能被替身覆盖。"""
+    from tests import conftest as hooks
+
+    class Node:
+        def __init__(self, *markers):
+            self.markers = set(markers)
+
+        def get_closest_marker(self, name):
+            return object() if name in self.markers else None
+
+    assert not hooks._uses_real_code_version(Node(), require=False)
+    assert hooks._uses_real_code_version(Node('corpus'), require=False)
+    assert hooks._uses_real_code_version(Node('real_code_version'), require=False)
+    assert hooks._uses_real_code_version(Node(), require=True)
 
 
 def test_default_collection_keeps_schema_gates_and_carrier_regressions(
@@ -686,7 +759,7 @@ def test_default_collection_keeps_schema_gates_and_carrier_regressions(
     short_base = tmp_path_factory.mktemp('c')
     result = subprocess.run(
         [
-            sys.executable, '-m', 'pytest', '--collect-only', '-vv',
+            sys.executable, '-m', 'pytest', '-n', '0', '--collect-only', '-vv',
             '-m', 'not corpus', '--basetemp', str(short_base),
                 'tests/test_stage4.py',
             'tests/test_stage4_beats.py',

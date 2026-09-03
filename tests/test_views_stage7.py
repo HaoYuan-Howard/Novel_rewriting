@@ -7,7 +7,7 @@ test_views_stage7.py —— S-12「人名替换 + 成书」那一屏的组装。
 （`novel/stages/stage7/subs.py::apply_subs`）——view 里写第二个替换器，
 人看的对照与真替换必然分家，而那比没有对照更坏。
 
-⚠ 沙箱一律 `tempfile.mkdtemp()`；**原语料一个字节都不许动**。
+⚠ 遗留 `mkdtemp()` 由 conftest 收进受管根；新增用例使用 `tmp_path`。**原语料一个字节都不许动**。
 """
 from __future__ import annotations
 

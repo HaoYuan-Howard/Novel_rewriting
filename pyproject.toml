@@ -24,7 +24,7 @@ dependencies = ["pydantic>=2"]
 [project.optional-dependencies]
 llm = ["openai>=2", "tokenizers>=0.21,<1"]
 api = ["fastapi>=0.110", "uvicorn>=0.30"]
-dev = ["pytest>=8", "httpx>=0.27", "tokenizers>=0.21,<1"]
+dev = ["pytest>=8", "pytest-xdist>=3.8,<4", "httpx>=0.27", "tokenizers>=0.21,<1"]
 
 # 骨架 D 加的。**它解的是一个具体的问题，不是形式**：
 # `build_argv` 拼出来的那条命令是 `<python> -X utf8 -u -m novel.cli …`，
@@ -59,8 +59,11 @@ packages = ["contracts", "contracts.judges", "contracts.schema",
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
-addopts = '-q -m "not corpus" --basetemp=.test_runtime'
+addopts = '-q -n 4 --dist loadgroup -m "not corpus" --basetemp=.tr'
 cache_dir = ".test_cache"
 markers = [
     "corpus: optional integration checks against NOVEL_OUTPUT or local source corpora",
+    "real_code_version: exercise the live Git-derived provenance identity instead of the deterministic test identity",
+    "serial: run process/concurrency lifecycle tests in one xdist group",
+    "xdist_group(name): xdist scheduling group assigned by the repository hooks",
 ]

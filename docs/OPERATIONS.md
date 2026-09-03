@@ -73,17 +73,28 @@ python -X utf8 -u -m novel.cli reconcile --base <Output目录> --admission-repai
 
 ## pytest 与 corpus
 
-`pyproject.toml` 默认登记 `-m "not corpus"`，并固定复用仓根 `.test_runtime` / `.test_cache`。因此普通
-pytest 只能称“非 corpus 回归”。最终语料验收必须按 `tests/README.md` 同时提供 current-schema 输出盘、
-精确无正文 manifest，并使用 `--require-corpus`；缺书、缺产物、版本漂移、ledger 不闭合或新增 skip
-都会关闭式失败。
+`pyproject.toml` 默认登记 `-n 4 --dist loadgroup -m "not corpus"`，并固定复用仓根短路径 `.tr` /
+`.test_cache`。普通测试按文件成组，登记为 `serial` 的线程/跨进程/取消生命周期模块进入同一个 worker；
+模块级 fixture 与仓库扫描不会被拆散重跑。因此普通 pytest 只能称“非 corpus 回归”。最终语料验收必须
+按 `tests/README.md` 同时提供 current-schema 输出盘、精确无正文 manifest，并显式使用
+`-n 0 --require-corpus`；缺书、缺产物、版本漂移、ledger 不闭合或新增 skip 都会关闭式失败。
+
+日常单点反馈用 `pytest -n 0 -x <精确 node>`；失败回放用 `pytest -n 0 --lf --lfnf=none -x`。这两类
+命令没有覆盖完整收集面，只能报告定向测试；提交前仍须运行不带路径/额外 marker 的默认回归。
 
 agent 执行 pytest 时必须绕开文件系统沙箱。Windows 沙箱可能给新目录写入仅沙箱 SID 可用的 ACL：
 
-- 默认始终复用 `.test_runtime` / `.test_cache`，不按批次、测试名或时间戳另造目录。
+- 默认始终复用 `.tr` / `.test_cache`，不按批次、测试名或时间戳另造目录；`.tr` 为 xdist 的
+  `popen-gwN` 子目录预留了 Windows 路径预算。
 - 仓库路径预算不足时固定使用同一个仓外短根，例如 `--basetemp=E:\_tr`；pytest 下次启动会清空复用。
-- 正常退出由 `tests/conftest.py::pytest_unconfigure` 恢复普通用户 ACL。
+- 遗留的无 `dir=` 标准库临时调用会被会话 fixture 收进本次 basetemp 并自动清理；新增测试使用
+  `tmp_path` / `tmp_path_factory`，不得继续向系统 `%TEMP%` 写 `tempfile.mkdtemp()`。
+- 正常退出由 `tests/conftest.py::pytest_unconfigure` 只恢复本次 worker 实际触碰根和 controller cache
+  的普通用户 ACL，不递归扫描本轮未使用的陈旧 runtime。
 - 进程被强杀、钩子未运行时，以管理员权限一次性接管并删除那一个遗留目录；不要继续换新名字回避。
+
+普通测试使用确定性 `code_version`；`real_code_version` marker 与 corpus 验收读取真实 Git。不得把
+`novel.prov.code_version()` 加进程级缓存来换速度，长驻服务的代码身份语义必须保持实时。
 
 改 R/Q/B、schema、节点或 API 时的最小契约验证：
 

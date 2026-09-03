@@ -10,7 +10,7 @@ test_llm.py —— 同档重采 / Flash→Pro 兜底 · 缓存 · 响应契约 �
 每一种配置都能零成本跑一遍，而且能断言它**真的走过**哪一个模型
 （只看最终结果的话，「Flash 成功」与「Pro 兜底成功」长得一模一样）。
 
-⚠ 本机 `%TEMP%\\pytest-of-yh255` 的 ACL 坏了，`tmp_path` 一用就炸——一律 `tempfile.mkdtemp()`。
+⚠ 遗留 `mkdtemp()` 由 conftest 收进受管根；新增用例使用 `tmp_path`。
 """
 from __future__ import annotations
 

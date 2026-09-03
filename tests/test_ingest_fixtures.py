@@ -206,9 +206,8 @@ def test_the_two_ratio_thresholds_leave_a_real_window():
 def test_write_all_produces_one_file_per_case():
     """落盘那一步也要验——样本再对，写不出去也是零覆盖。
 
-    ⚠ 这里用 `tempfile.mkdtemp` 而不是 pytest 的 `tmp_path`：本机
-    `%TEMP%\\pytest-of-<user>` 目录的 ACL 坏了（`scandir` 直接 WinError 5），
-    `tmp_path` 一用就炸。那是环境问题不是代码问题，但没必要让这条测试绑在它上面。
+    ⚠ 这是迁移前遗留的 `tempfile.mkdtemp`；conftest 会把它重定向到本次受管根并
+    自动清理。新增测试直接使用 `tmp_path`，不再依赖系统 `%TEMP%`。
     """
     import shutil
     import tempfile

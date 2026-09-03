@@ -7,7 +7,7 @@ test_api_screens.py —— 第二阶段读屏路由的**行为**（BE-03 的四�
 【与其他 API 测试的分界】组装细节归 `test_views_stage2/6/7.py`；
 surface 精确清单归 `test_api_http.py`；本份只问状态码与错误体的 `kind`。
 
-⚠ 沙箱一律 `tempfile.mkdtemp()`；**原语料一个字节都不许动**。
+⚠ 遗留 `mkdtemp()` 由 conftest 收进受管根；新增用例使用 `tmp_path`。**原语料一个字节都不许动**。
 """
 from __future__ import annotations
 

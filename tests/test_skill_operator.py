@@ -75,6 +75,14 @@ def _validator():
     return module
 
 
+@pytest.fixture(scope='module')
+def validator_snapshot() -> tuple[tuple[str, ...], dict[str, int]]:
+    """同一次仓库快照只做一次完整 skill 对账，错误与扫描分母共享证据。"""
+    counters: dict[str, int] = {}
+    errors = tuple(_validator().validate(counters))
+    return errors, counters
+
+
 def _operator_script(name: str):
     path = SKILL_DIR / 'scripts' / f'{name}.py'
     spec = importlib.util.spec_from_file_location(f'novel_pipeline_{name}', path)
@@ -94,9 +102,9 @@ def test_the_validator_file_is_where_the_maintenance_protocol_says_it_is():
         'maintenance.md 的「校验」小节不再指向 validate_skill.py'
 
 
-def test_skill_validator_reports_no_drift():
+def test_skill_validator_reports_no_drift(validator_snapshot):
     """skill 文档与代码/自身约定的全部对账。"""
-    errors = _validator().validate({})
+    errors, _counters = validator_snapshot
     assert not errors, (
         '\nnovel-pipeline-operator skill 与代码/自身约定漂移 %d 处。\n'
         '这是 **skill 文档**的问题，不是被它引用的生产代码的问题——\n'
@@ -1260,10 +1268,9 @@ _FLOORS = {
 
 
 @pytest.mark.parametrize('key,floor', sorted(_FLOORS.items()))
-def test_the_validator_actually_scanned_something(key, floor):
+def test_the_validator_actually_scanned_something(key, floor, validator_snapshot):
     """守卫的守卫：绿灯必须带扫描分母（`docs/LESSONS.md` 第 3 条）。"""
-    counters: dict[str, int] = {}
-    _validator().validate(counters)
+    _errors, counters = validator_snapshot
     assert counters.get(key, 0) >= floor, (
         f'校验器只扫到 {key} = {counters.get(key)}（下界 {floor}）。'
         f'这不是「一致」，是这一面根本没查到东西——先查正则/glob 是不是失配了')

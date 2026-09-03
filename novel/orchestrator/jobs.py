@@ -40,7 +40,7 @@ from contracts.schema.orchestration import (
     AgentExecutorBackend, AgentProfile, ExecutorBackend,
     JobEvent, JobRecord, JobStart, ProgressEvent, Step,
 )
-from novel import run_identity
+from novel import prov, run_identity
 from novel.appendlog import append_line
 from novel.cli import exit_codes as X
 from novel.cli.exit_codes import CRASH
@@ -50,7 +50,6 @@ from novel.orchestrator.nodes import (
     shell_line,
 )
 from novel.paths import SERVICE_DIRNAME, service_dir
-from novel.prov import code_version
 
 JOBS_FILENAME = 'jobs.jsonl'
 LOGS_DIRNAME = 'logs'
@@ -660,7 +659,7 @@ def plan_start(node: str, sid: str | None, flags: Sequence[str] = (), *,
     # run_id：显式传入优先（恢复续跑带原 run），否则新造，绝不从 job_id 倒推。
     return JobStart(
         sid=sid, node=node, flags=list(flags), steps=plan,
-        python=sys.version, code=code_version(),
+        python=sys.version, code=prov.code_version(),
         paid=any(s.paid for s in plan),
         writes=any(bool(s.writes) for s in plan),
         executor_backend=executor_backend,

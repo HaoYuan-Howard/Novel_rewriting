@@ -16,6 +16,8 @@ from contracts.schema.stage7 import NameMapFreeProvenance, NameMapParams
 from novel import prov
 from novel.run import RunContext
 
+pytestmark = pytest.mark.real_code_version
+
 FP_V1 = prov.fingerprint('v1')
 FP_V2 = prov.fingerprint('v2')
 PROJ_A = prov.projection_fingerprint({'a': 1})

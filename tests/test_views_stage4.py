@@ -7,7 +7,7 @@ test_views_stage4.py —— S-07「计划 ↔ 写作上下文」那一屏的组�
 ②`writer_target` 与写手**同一把尺子**（`prompts.target_band`）；
 ③恒等基线**现算不落盘**（view 与 `run_identity` 都只做内存诊断）。
 
-⚠ 沙箱一律 `tempfile.mkdtemp()`；**原语料一个字节都不许动**。
+⚠ 遗留 `mkdtemp()` 由 conftest 收进受管根；新增用例使用 `tmp_path`。**原语料一个字节都不许动**。
 """
 from __future__ import annotations
 

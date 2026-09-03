@@ -6,7 +6,7 @@ test_views_stage6.py —— S-11「开篇文案」那一屏的组装。
 view 只做三件现算（`chars` / `index` / 候选级 `approved`），本份逐件验证 +
 异常面 + 纯读。判据行为归 `tests/test_stage6.py`，HTTP 行为归 `test_api_screens.py`。
 
-⚠ 沙箱一律 `tempfile.mkdtemp()`；**原语料一个字节都不许动**。
+⚠ 遗留 `mkdtemp()` 由 conftest 收进受管根；新增用例使用 `tmp_path`。**原语料一个字节都不许动**。
 """
 from __future__ import annotations
 

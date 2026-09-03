@@ -61,8 +61,17 @@ commit 与对用户的工程回复统一使用中文。
   `docs/OPERATIONS.md`；前端开发命令见 `web/DELIVERY.md`。
 - pytest 默认 `-m "not corpus"`，且当前 current-schema manifest 尚未完成。只有按 `tests/README.md` 使用
   `--require-corpus` 并闭合精确 manifest/ledger/skip 面，才可称“全量语料绿”；其余只能称非 corpus 回归。
-- agent 跑 pytest 必须绕开文件系统沙箱，复用 `pyproject.toml` 的 `.test_runtime` / `.test_cache`；路径过长时
-  固定复用 `E:\_tr`，不按测试或时间另造目录。异常强杀留下坏 ACL 时按 `docs/OPERATIONS.md` 一次性恢复。
+- 默认非 corpus 回归使用 pytest-xdist `-n 4 --dist loadgroup`；`tests/conftest.py` 保证普通测试按文件分组，
+  含线程、跨进程或取消生命周期断言的模块必须登记到 `_SERIAL_TEST_MODULES`。不得为追求速度拆散模块
+  fixture 或移除 serial 登记；corpus 硬验收必须显式 `-n 0 --require-corpus`。
+- 日常反馈跑精确文件/node，单点用 `-n 0 -x` 免去 worker 启动；`--lf --lfnf=none -x` 只回放已失败项。
+  这两类结果只能称“定向测试”，提交前仍跑不带路径/额外 marker 的默认非 corpus 回归。
+- agent 跑 pytest 必须绕开文件系统沙箱，复用 `.tr` / `.test_cache`；路径过长时固定复用 `E:\_tr`，
+  不按测试或时间另造目录。遗留 `tempfile.mkdtemp()` 由会话 fixture 收进本次 basetemp 并自动清理；新增测试
+  一律用 `tmp_path` / `tmp_path_factory`，不得回到 `%TEMP%`。ACL 只恢复本次触碰根；异常强杀按
+  `docs/OPERATIONS.md` 一次性恢复。
+- 普通测试由 autouse fixture 使用确定性 `code_version`；只有 `real_code_version` marker 与 corpus 测试查询
+  真实 Git。禁止为了测试速度缓存生产 `novel.prov.code_version()`，长驻进程必须每次看到当前代码身份。
 - 修改 R/Q/B、schema、节点或 API 时先跑 `docs/BACKEND_CONTRACT.md` §9.5 的五文件，再补受影响测试；
   不从汇总行缺失推断测试结果，必要时用 JUnit 或进度点核对。
 
@@ -78,5 +87,5 @@ commit 与对用户的工程回复统一使用中文。
   路由 → 服务 → 最终产物，并检查重启后的状态。
 - commit 使用中文 Conventional Commit；PR 说明契约影响、验证命令和 R/Q/B/TODO，UI 改动带截图；真实
   LLM/付费路径是否验证必须单列，不能混进“测试已过”。
-- 不提交 `.env`、`outputs/`、`Test_data/`、`.llm_cache/`、`.test_runtime/` 或正文语料。需要语料的工具必须
+- 不提交 `.env`、`outputs/`、`Test_data/`、`.llm_cache/`、`.tr/`、`.test_runtime/` 或正文语料。需要语料的工具必须
   显式读取 `NOVEL_DATA` / `NOVEL_CORPUS` / `NOVEL_OUTPUT`，取不到就明确写“没查”。

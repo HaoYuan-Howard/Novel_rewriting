@@ -8,7 +8,7 @@ test_views_stage5.py —— S-08「成稿 ↔ 材料」与 S-09「验收 / 修�
 ② 对齐块是**分区**不是摘录——两侧各自拼回去必须逐字等于原文/成稿；
 ③ S-09 不重复正文；阅读与改稿只取并行 S-08 的 current `segments`。
 
-⚠ 沙箱一律 `tempfile.mkdtemp()`；**原语料一个字节都不许动**。
+⚠ 遗留 `mkdtemp()` 由 conftest 收进受管根；新增用例使用 `tmp_path`。**原语料一个字节都不许动**。
 """
 from __future__ import annotations
 

@@ -1,6 +1,7 @@
 __pycache__/
 *.py[cod]
 .pytest_cache/
+.tr/
 .test_runtime/
 .test_cache/
 .test_runtime_*/

@@ -8,7 +8,7 @@ test_api_edits.py —— 人工写回三条路由的**行为**（真起 CLI 子�
 【钱】三条全是 0 成本节点（`--apply-edit` / approve 均在 FREE 面）——
 `no_api_key` 把钥匙拿走，任何一条走到真发请求的路都当场现形。
 
-⚠ 沙箱一律 `tempfile.mkdtemp()`；**原语料一个字节都不许动**。
+⚠ 遗留 `mkdtemp()` 由 conftest 收进受管根；新增用例使用 `tmp_path`。**原语料一个字节都不许动**。
 """
 from __future__ import annotations
 

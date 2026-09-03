@@ -159,7 +159,7 @@ def test_only_canonical_formal_chapters_are_counted_as_written():
     续跑会跳过一章**根本没写成的**稿子，而那一章的钱到时候还得花。
     文件名命中的正式稿仍须由 ``stage_state`` 逐份校验 schema/version/freshness；
     本用例故意写 ``{}``，只证明发现边界，不证明它完成。
-    ⚠ 本机 `%TEMP%\\pytest-of-yh255` 的 ACL 坏了，`tmp_path` 一用就炸 ⇒ `mkdtemp`。
+    ⚠ 遗留 `mkdtemp` 由 conftest 收进本次受管根；新增用例使用 `tmp_path`。
     """
     root = Path(tempfile.mkdtemp())
     try:

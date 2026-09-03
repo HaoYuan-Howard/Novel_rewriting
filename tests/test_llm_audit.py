@@ -8,7 +8,7 @@ test_llm_audit.py —— 采纳审计三事件：wire 行的联结键 · `gate_d
 「同 purpose 最后一条 ok 行」猜——并发、缓存重放、中断恢复下都不可靠。
 ⇒ 判定与采纳各自显式落账（`llm_audit.jsonl`），靠 `attempt_id` 反查。
 
-⚠ 本机 `%TEMP%\\pytest-of-yh255` 的 ACL 坏了，`tmp_path` 一用就炸——一律 `tempfile.mkdtemp()`。
+⚠ 遗留 `mkdtemp()` 由 conftest 收进受管根；新增用例使用 `tmp_path`。
 """
 from __future__ import annotations
 

@@ -118,7 +118,7 @@ def test_every_corpus_filename_round_trips():
 def _output_with(*dirnames: str) -> Path:
     """建一个临时 `<Output>/`，里面放几个书目录。
 
-    ⚠ 本机 `%TEMP%\\pytest-of-yh255` 的 ACL 坏了，`tmp_path` 一用就炸——一律 `tempfile.mkdtemp()`。
+    ⚠ 遗留 `mkdtemp()` 由 conftest 收进本次受管根；新增用例使用 `tmp_path`。
     """
     import tempfile
     base = Path(tempfile.mkdtemp()) / 'Output'
@@ -246,8 +246,7 @@ def test_archived_rounds_anchors_the_stem_exactly():
 
     合成一条历史会重号，而重号会静默覆盖一份花过钱的稿。
 
-    ⚠ 本机 `%TEMP%\\pytest-of-yh255` 的 ACL 坏了，pytest 的 `tmp_path` 一用就炸，
-    全仓一律 `tempfile.mkdtemp()`。
+    ⚠ 遗留 `mkdtemp()` 由 conftest 收进本次受管根；新增用例使用 `tmp_path`。
     """
     import tempfile
     d = Path(tempfile.mkdtemp())
