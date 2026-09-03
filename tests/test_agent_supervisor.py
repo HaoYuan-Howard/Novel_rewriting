@@ -128,6 +128,97 @@ def test_v2_supervisor_routes_ready_review_and_complete_without_commander_dispat
     assert [event.kind for event in events] == ['epoch_closed']
 
 
+def test_v2_operator_read_failure_after_code_drift_rolls_epoch():
+    """读 next 期间发生代码漂移时，旧 epoch 应换代而不是把 parent 打成 70。"""
+    events: list[AgentRunEvent] = []
+    closed: list[tuple[str, int, str]] = []
+    reads: list[str] = []
+    current_code = 'code-1'
+
+    def identity_current(epoch):
+        return epoch.code_version == current_code
+
+    def read_next(epoch):
+        nonlocal current_code
+        reads.append(epoch.epoch_id)
+        if epoch.ordinal == 1:
+            current_code = 'code-2'
+            raise ValueError(
+                'readonly snapshot memo code is code-1, not code-2')
+        return SimpleNamespace(
+            state='pipeline_complete', code_version='code-2')
+
+    def close(epoch, turn):
+        closed.append((epoch.epoch_id, turn.exit_code, turn.outcome.state))
+        return 'drained'
+
+    def finalize(_epoch, ticket):
+        ticket.commit()
+        return SupervisorActionResult(0, _outcome('ready'), False)
+
+    supervisor = RunSupervisor(
+        run_id='run-read-drift', append_event=events.append,
+        make_epoch=lambda reason, ordinal, resume: _epoch(
+            'epoch-after-read-drift', ordinal, reason, resume),
+        open_epoch=lambda _epoch: None,
+        close_epoch=close,
+        run_commander_turn=lambda *_args: pytest.fail('v2 不走 legacy Commander'),
+        epoch_identity_current=identity_current,
+        cancel_commander=lambda: True,
+        initial_epoch=_epoch('epoch-before-read-drift', 1, 'initial'),
+        read_operator_next=read_next,
+        run_ready_action=lambda *_args: pytest.fail('本例没有 ready node'),
+        run_reviewer=lambda *_args: pytest.fail('本例没有 reviewer node'),
+        finalize_run=finalize)
+
+    result = supervisor.run()
+
+    assert result.stopped is False
+    assert result.turn is not None and result.turn.exit_code == 0
+    assert reads == ['epoch-before-read-drift', 'epoch-after-read-drift']
+    assert closed == [
+        ('epoch-before-read-drift', 0, 'unknown'),
+        ('epoch-after-read-drift', 0, 'ready'),
+    ]
+    assert [event.kind for event in events] == [
+        'epoch_closed', 'epoch_opened', 'epoch_closed']
+    assert events[1].epoch is not None
+    assert events[1].epoch.reason == 'code_change'
+    assert events[1].epoch.resume_provider_session_id is None
+
+
+def test_v2_operator_read_failure_without_drift_remains_a_crash():
+    """身份仍 current 的读错是真故障，不能被宽泛伪装成一次正常换 epoch。"""
+    events: list[AgentRunEvent] = []
+    closed: list[tuple[str, int, str]] = []
+
+    def read_next(_epoch):
+        raise RuntimeError('stable operator bug')
+
+    supervisor = RunSupervisor(
+        run_id='run-stable-read-failure', append_event=events.append,
+        make_epoch=lambda *_args: pytest.fail('身份未漂移不得滚 epoch'),
+        open_epoch=lambda _epoch: None,
+        close_epoch=lambda epoch, turn: (
+            closed.append((
+                epoch.epoch_id, turn.exit_code, turn.outcome.state))
+            or 'unknown'),
+        run_commander_turn=lambda *_args: pytest.fail('v2 不走 legacy Commander'),
+        epoch_identity_current=lambda _epoch: True,
+        cancel_commander=lambda: True,
+        initial_epoch=_epoch('epoch-stable-read-failure', 1, 'initial'),
+        read_operator_next=read_next,
+        run_ready_action=lambda *_args: pytest.fail('不应执行 ready node'),
+        run_reviewer=lambda *_args: pytest.fail('不应启动 reviewer'),
+        finalize_run=lambda *_args: pytest.fail('不应 finalize'))
+
+    with pytest.raises(RuntimeError, match='stable operator bug'):
+        supervisor.run()
+
+    assert closed == [('epoch-stable-read-failure', 70, 'unknown')]
+    assert [event.kind for event in events] == ['epoch_closed']
+
+
 def test_stage2_review_can_continue_into_ready_blueprint_redo():
     """Global 上游更新后，Supervisor 应执行确定性 REDO，不再 exit 2 停在手工断点。"""
     events: list[AgentRunEvent] = []

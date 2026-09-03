@@ -2441,11 +2441,12 @@ def _blueprint_seen_proof(
 def _blueprint_seen_snapshot(
     novel_dir: Path,
 ) -> tuple[_ApprovalProof, dict[str, str]]:
-    """重建完整工作包，再读出可持久化 read proof 与明文身份。"""
+    """用当前只读投影重建完整工作包，再读出 proof 与明文身份。"""
     from novel.views.stage2 import blueprint_review_workpack
 
     sid, _title, _platform = paths.derive_source_meta(novel_dir.name)
-    workpack = blueprint_review_workpack(novel_dir.parent, sid)
+    workpack = blueprint_review_workpack(
+        novel_dir.parent, sid, code=_projection_code())
     return _blueprint_seen_proof(novel_dir, workpack)
 
 

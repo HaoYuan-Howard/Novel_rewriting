@@ -551,7 +551,30 @@ class RunSupervisor:
                             return SupervisorResult(turn=last, stopped=True)
 
                     if reviewer_continuation is None:
-                        current = self._read_next(epoch)
+                        try:
+                            current = self._read_next(epoch)
+                        except Exception:  # noqa: BLE001 —— 只在已证实身份漂移时换 epoch
+                            # code/skill 可能在上面的前置 CAS 与 operator 的末端
+                            # CAS 之间变化。此时 operator 内部关闭式拒绝并不是
+                            # parent run 崩溃；封存旧 epoch 后用新身份重读即可。
+                            # 身份仍 current 时原异常必须原样上抛，不能洗白真 bug。
+                            if self._identity_current(epoch):
+                                raise
+                            identity_turn = epoch_last or CommanderTurnResult(
+                                exit_code=0,
+                                provider_session_id=provider_session_id,
+                                continue_ready=True,
+                                outcome=AgentDeliveryOutcome(
+                                    state='unknown',
+                                    checked_at=int(time.time()),
+                                    reason=(
+                                        'operator next 读取期间 execution epoch '
+                                        '身份已变化')),
+                            )
+                            close_epoch(epoch, identity_turn)
+                            provider_session_id = None
+                            reason = 'code_change'
+                            break
                     else:
                         # 只跨 reviewer 的下一启动窗口保留一次。执行动作本身仍由
                         # callback 现场铸 live permit；这里保留的是 typed request 的

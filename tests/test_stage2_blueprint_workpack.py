@@ -257,6 +257,68 @@ def _install(monkeypatch, store: _Store, report: CheckReport):
     return calls
 
 
+def test_workpack_accepts_the_frozen_code_without_requerying_live_code(
+    monkeypatch,
+) -> None:
+    """operator 内部构包必须沿用 epoch code，不能再采一个实时代码时点。"""
+    main, blueprints, _texts = _book_subjects()
+    store = _Store(main, blueprints)
+    _install(monkeypatch, store, _report())
+    contexts: list[tuple[Path, str, str]] = []
+
+    monkeypatch.setattr(
+        view.prov, 'code_version',
+        lambda: pytest.fail('显式冻结 code 后不得再查询实时 code_version'))
+
+    def readonly(novel_dir: Path, node: str, code: str):
+        contexts.append((novel_dir, node, code))
+        return store.ctx
+
+    monkeypatch.setattr(view, 'readonly_ctx', readonly)
+
+    view.blueprint_review_workpack(
+        'ignored', store.ctx.sid, code='epoch-code')
+
+    assert contexts == [(
+        Path('平台_测试书_1234567890123456789'),
+        'stage2.blueprint',
+        'epoch-code',
+    )]
+
+
+def test_seen_snapshot_passes_the_operator_projection_code_to_the_workpack(
+    monkeypatch,
+) -> None:
+    """审批 currentness 重建 Blueprint 包时仍属于同一 operator 快照。"""
+    sid = '1234567890123456789'
+    novel_dir = Path(f'平台_测试书_{sid}')
+    observed: list[str | None] = []
+    workpack = object()
+    expected = (object(), {'review_token': 'token'})
+
+    def build(_base, _sid, *, code=None):
+        observed.append(code)
+        return workpack
+
+    monkeypatch.setattr(view, 'blueprint_review_workpack', build)
+    monkeypatch.setattr(
+        approvals.paths, 'derive_source_meta',
+        lambda _name: (sid, '测试书', '平台'))
+    monkeypatch.setattr(
+        approvals, '_blueprint_seen_proof',
+        lambda got_dir, got_workpack: (
+            expected
+            if got_dir == novel_dir and got_workpack is workpack
+            else pytest.fail('seen proof 没有消费本次冻结工作包')))
+
+    with approvals.read_projection(
+            overview=SimpleNamespace(sid=sid), code='epoch-code'):
+        actual = approvals._blueprint_seen_snapshot(novel_dir)
+
+    assert actual is expected
+    assert observed == ['epoch-code']
+
+
 def test_workpack_is_complete_exception_first_and_semantic_not_id_first(
     monkeypatch,
 ) -> None:

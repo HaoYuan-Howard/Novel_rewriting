@@ -556,16 +556,20 @@ def _blueprint_review_snapshot(
 
 
 def blueprint_review_workpack(
-    base: str | os.PathLike[str], sid: str,
+    base: str | os.PathLike[str], sid: str, *, code: str | None = None,
 ) -> BlueprintReviewWorkpack:
     """生成 book-level 只读 Blueprint 审阅包，并用首尾重读拒绝混合快照。
 
     本函数不产生 approval 记录、不改 gate，也不写任何 artifact。
     它只读 current MainText/ChapterBlueprints，并原样消费
     ``stage2.blueprint --check-only`` 的生产 CheckReport。
+
+    普通 API/CLI 调用省略 ``code`` 并现场取当前版本；已经建立只读快照的
+    operator 必须显式传入 epoch code，避免构包时再采一个实时代码时点。
     """
     novel_dir = paths.resolve_novel_dir(base, sid)
-    ctx = readonly_ctx(novel_dir, BP_NODE, prov.code_version())
+    snapshot_code = prov.code_version() if code is None else code
+    ctx = readonly_ctx(novel_dir, BP_NODE, snapshot_code)
     store = ArtifactStore(ctx)
     title = paths.title_of(novel_dir)
 
