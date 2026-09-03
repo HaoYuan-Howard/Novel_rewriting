@@ -1145,8 +1145,9 @@ def test_blueprint_resume_after_formal_write_is_idempotent_before_commit_sentine
         shutil.rmtree(root, ignore_errors=True)
 
 
+@pytest.mark.parametrize('stale_formal', [False, True])
 def test_blueprint_resume_after_prepare_before_formal_uses_sealed_candidate(
-        monkeypatch):
+        monkeypatch, stale_formal):
     """prepare→formal 崩溃不得丢掉已付费、已过联合 HARD 的候选。"""
     root = Path(tempfile.mkdtemp())
     book = root / '蓝图写前提交断点_126'
@@ -1158,6 +1159,29 @@ def test_blueprint_resume_after_prepare_before_formal_uses_sealed_candidate(
         global_client, _ = _client(
             global_ctx, lambda _req, _index: _ok(_response_global()))
         extract.run_global(global_ctx, global_client)
+
+        stale_formal_bytes = None
+        if stale_formal:
+            old_ctx = _ctx(book, 'stage2.blueprint')
+            old_client, _old_transport = _client(
+                old_ctx,
+                lambda req, _index: _respond_blueprints(
+                    req, _response_blueprints()),
+            )
+            extract.run_blueprint(old_ctx, old_client)
+            store = ArtifactStore(global_ctx)
+            grounding, _raw = store.read_own(
+                GlobalGrounding, extract.GLOBAL_REL)
+            changed = grounding.model_dump(by_alias=True, mode='json')
+            changed['entities']['characters']['char_001']['canonical'] = '管家'
+            extract._write_formal(
+                store,
+                extract.GLOBAL_REL,
+                GlobalGrounding.model_validate(changed),
+            )
+            assert ArtifactStore(_ctx(book, 'stage2.blueprint')).freshness(
+                extract.BLUEPRINT_REL).state == 'stale'
+            stale_formal_bytes = (book / extract.BLUEPRINT_REL).read_bytes()
 
         run_id = new_run_id()
         ledger_path = root / '_service' / 'ledger.jsonl'
@@ -1193,7 +1217,10 @@ def test_blueprint_resume_after_prepare_before_formal_uses_sealed_candidate(
         monkeypatch.setattr(extract, '_write_formal', real_write)
 
         from novel.llm import stage2_runs
-        assert not ArtifactStore(first).exists(extract.BLUEPRINT_REL)
+        if stale_formal:
+            assert (book / extract.BLUEPRINT_REL).read_bytes() == stale_formal_bytes
+        else:
+            assert not ArtifactStore(first).exists(extract.BLUEPRINT_REL)
         assert stage2_runs.commit_state(first)['state'] == 'prepared'
         sealed, finalization = stage2_runs.restore_commit_payloads(first)
         assert sealed['blueprints']

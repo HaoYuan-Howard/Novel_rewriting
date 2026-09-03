@@ -3838,8 +3838,12 @@ def _finish_full_commit_tail(
     live_artifact: ChapterBlueprints | None = None
     formal_matches = False
     if store.exists(BLUEPRINT_REL):
+        # full producer 的正式稿是待替换的 live baseline，不是本次候选的上游。
+        # 它本来就可能因为 MainText/称名投影变化而 stale；这里仍走 typed/root
+        # 校验，但不能用 require_current 把“重建 stale 产物”自身封死。journal 的
+        # candidate、live_before 与当前输入会在下方分别做精确复核。
         live_artifact, _raw = store.read_own(
-            ChapterBlueprints, BLUEPRINT_REL, require_current=True)
+            ChapterBlueprints, BLUEPRINT_REL)
         live_payload = live_artifact.model_dump(by_alias=True, mode='json')
         formal_matches = stage2_runs.verify_commit_artifact(journal, live_payload)
         if not formal_matches:
@@ -4887,12 +4891,16 @@ def finalize_blueprint_candidate(
     existing_matches = False
     invalid_present = store.exists(_INVALID)
     if store.exists(BLUEPRINT_REL):
+        # 这是 producer 要覆盖的旧输出，不是它要消费的上游。完整重跑正是
+        # stale/consumed_changed 的正式恢复路；要求旧输出 current 会让全部章节
+        # 已验并付费后才自相矛盾地拒绝写回。read_own 仍保留 schema、版本、
+        # 根身份与字节读取校验，后续 live_before/observed roots 防止并发覆盖。
         existing, _existing_raw = store.read_own(
-            ChapterBlueprints, BLUEPRINT_REL, require_current=True)
+            ChapterBlueprints, BLUEPRINT_REL)
         existing_matches = existing.model_dump(by_alias=True) == candidate
         # 比的是同一 typed payload。raw 还带 store 注入的 `_schema_version` 信封，
         # candidate 在写盘前没有那一列；拿两者直接哈希会让逐字段完全相同的正式稿
-        # 永远判成不同。`require_current=True` 已先严格核验信封与载体版本。
+        # 永远判成不同。read_own 已先严格核验信封与载体版本。
     if prior_commit is not None:
         if (prior_commit.get('artifact') != BLUEPRINT_REL
                 or prior_commit.get('artifact_fingerprint') != artifact_fp

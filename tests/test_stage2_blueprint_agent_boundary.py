@@ -167,6 +167,52 @@ def test_blueprint_candidate_finalizes_through_existing_commit_journal(tmp_path)
     assert extract.verify_blueprint_delivery(ctx, landed).passed
 
 
+def test_blueprint_full_rebuild_can_replace_stale_formal(tmp_path):
+    """上游称名投影变化后，完整 producer 必须能覆盖自己的 stale 旧稿。"""
+    book = tmp_path / '蓝图过期正式稿重建_505'
+    book.mkdir()
+    _land_global(book)
+
+    initial_ctx = _ctx(book, 'stage2.blueprint')
+    initial_client, _initial_transport = _blueprint_client(
+        initial_ctx, _response_blueprints())
+    initial_batch = extract.request_blueprints(initial_ctx, initial_client)
+    initial_evaluation = extract.evaluate_blueprint_candidate(
+        initial_ctx, initial_client, initial_batch)
+    extract.finalize_blueprint_candidate(
+        initial_ctx, initial_client, initial_batch, initial_evaluation)
+
+    global_ctx = _ctx(book, 'stage2.global')
+    store = ArtifactStore(global_ctx)
+    grounding, _raw = store.read_own(GlobalGrounding, extract.GLOBAL_REL)
+    changed = grounding.model_dump(by_alias=True, mode='json')
+    changed['entities']['characters']['char_001']['canonical'] = '管家'
+    extract._write_formal(
+        store,
+        extract.GLOBAL_REL,
+        GlobalGrounding.model_validate(changed),
+    )
+    assert ArtifactStore(_ctx(book, 'stage2.blueprint')).freshness(
+        extract.BLUEPRINT_REL).state == 'stale'
+
+    rerun_ctx = _ctx(book, 'stage2.blueprint')
+    rerun_client, rerun_transport = _blueprint_client(
+        rerun_ctx, _response_blueprints())
+    batch = extract.request_blueprints(rerun_ctx, rerun_client)
+    evaluation = extract.evaluate_blueprint_candidate(
+        rerun_ctx, rerun_client, batch)
+
+    report = extract.finalize_blueprint_candidate(
+        rerun_ctx, rerun_client, batch, evaluation)
+
+    assert report.passed
+    assert len(rerun_transport.calls) == len(main_text())
+    assert ArtifactStore(rerun_ctx).freshness(
+        extract.BLUEPRINT_REL).state == 'fresh'
+    assert list((book / 'stage2' / '_rounds').glob(
+        'chapter_blueprints.r*.json'))
+
+
 def test_blueprint_candidate_rejects_naming_projection_drift_after_wire(tmp_path):
     """P1 prompt 的响应不得在并发 Global 称名变成 P2 后按 P2 编译/记账。"""
     book = tmp_path / '蓝图请求后称名漂移_504'
