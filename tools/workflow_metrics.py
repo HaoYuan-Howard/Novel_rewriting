@@ -257,15 +257,22 @@ def _jsonl(path: Path) -> list[dict[str, Any]]:
 def _run_rows(
     rows: list[dict[str, Any]], sid: str, run_id: str | None,
 ) -> list[dict[str, Any]]:
-    """按书过滤；指定 run 时只认显式、精确相等的业务身份。
+    """按书过滤；指定 run 时只认显式、精确相等的 parent 身份。
 
     旧账缺 ``run_id`` 时只能参加未指定 run 的历史汇总。把它按 sid 猜进当前 run
-    会让一次旧失败永久污染以后每次验收，正好违背 run 身份存在的理由。
+    会让一次旧失败永久污染以后每次验收，正好违背 run 身份存在的理由。v2
+    executor 行以 epoch producer ``run_id`` 记账，并用显式 ``parent_run_id``
+    归回 AgentRun；直接 job 两格相同，历史行则回退到 ``run_id``。
     """
+    def parent_of(row: dict[str, Any]) -> Any:
+        if 'parent_run_id' not in row or row.get('parent_run_id') is None:
+            return row.get('run_id')
+        return row.get('parent_run_id')
+
     return [
         row for row in rows
         if row.get('sid') == sid
-        and (run_id is None or row.get('run_id') == run_id)
+        and (run_id is None or parent_of(row) == run_id)
     ]
 
 

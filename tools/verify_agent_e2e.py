@@ -222,6 +222,13 @@ def _same_attempt_identity(
         'run_id', 'sid', 'node', 'purpose', 'attempt_id', 'chapter'))
 
 
+def _parent_run_id(row: Mapping[str, Any]) -> Any:
+    """新账显式给 parent；直接 job 与历史账回退到自身 run。"""
+    if 'parent_run_id' not in row or row.get('parent_run_id') is None:
+        return row.get('run_id')
+    return row.get('parent_run_id')
+
+
 def _turn_matches_ledger(
     record: agent_session_audit.AgentSessionRecord,
     turn: agent_session_audit.AgentSessionEvent,
@@ -250,11 +257,29 @@ def linkage_check(
     ledger_rows: Sequence[Mapping[str, Any]],
     audit_rows: Sequence[Mapping[str, Any]],
     sessions: Sequence[agent_session_audit.AgentSessionRecord],
+    producer_run_ids: set[str] | None = None,
 ) -> dict[str, Any]:
     """ledger ↔ session turn ↔ adoption 的逐 attempt 关闭式对账。"""
+    run_ledger = [
+        row for row in ledger_rows
+        if _parent_run_id(row) == run_id and row.get('sid') == sid
+    ]
+    if producer_run_ids is None:
+        producer_run_ids = {
+            str(row.get('run_id')) for row in run_ledger
+            if (row.get('node') in AGENT_EXECUTOR_NODES
+                and isinstance(row.get('run_id'), str)
+                and row.get('run_id'))
+        }
+        producer_run_ids.add(run_id)
     relevant_sessions = [
         record for record in sessions
-        if record.start.parent_run_id == run_id
+        if (
+            (record.start.role == 'commander'
+             and record.start.parent_run_id == run_id)
+            or (record.start.role == 'executor'
+                and record.start.parent_run_id in producer_run_ids)
+        )
     ]
     commander = [
         record for record in relevant_sessions if record.start.role == 'commander'
@@ -272,14 +297,10 @@ def linkage_check(
             or record.end.delivery_state == 'unknown')
     ]
 
-    run_ledger = [
-        row for row in ledger_rows
-        if row.get('run_id') == run_id and row.get('sid') == sid
-    ]
     run_adoptions = [
         row for row in audit_rows
         if (row.get('kind') == 'artifact_adoption'
-            and row.get('run_id') == run_id
+            and _parent_run_id(row) == run_id
             and row.get('sid') == sid
             and row.get('node') in AGENT_EXECUTOR_NODES)
     ]
@@ -501,9 +522,14 @@ def collect(base: str | Path, sid: str, run_id: str) -> dict[str, Any]:
         agent_session_audit.read_events(base_path))
     ledger_rows = read_jsonl_rows(ledger_path(base_path))
     audit_rows = read_jsonl_rows(audit_path(base_path))
+    producer_run_ids = {run_id}
+    if outer is not None:
+        producer_run_ids.update(
+            epoch.session_run_id for epoch in outer.epochs)
     checks.append(linkage_check(
         run_id=run_id, sid=sid, ledger_rows=ledger_rows,
-        audit_rows=audit_rows, sessions=session_records))
+        audit_rows=audit_rows, sessions=session_records,
+        producer_run_ids=producer_run_ids))
 
     started_at = None if outer is None else outer.started
     telemetry = operator_telemetry.summarize(

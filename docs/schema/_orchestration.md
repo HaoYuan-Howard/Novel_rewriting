@@ -747,11 +747,14 @@ Output/_service/approvals/<sid>.json 人工闸门、已阅状态与 canonical �
 不进入正式 artifact provenance，也不参与 cache key。旧行没有该列时仍可读，但只能标为
 legacy / ungrouped；成本汇总不得用时间窗口把它猜进某个新 run。
 
-`tools/workflow_metrics.py --run-id <RUN_ID>` 对 ledger、`llm_audit.jsonl` 与
-`agent_progress.jsonl` 只接受显式且逐字相等的业务 `run_id`；同 sid 的旧 run、缺 `run_id` 的旧行与
-别的 run 全部排除，不能按时间窗口或当前 artifact 倒推归属。产物、人审与结构面仍是当前盘面快照，
-可在同一报告中展示，但它们不携 `run_id`，不得反向加入目标 run 的代码身份；报告顶层必须回显
-所选 `run_id`。不带 `--run-id` 才是跨历史汇总，两种口径不得混称一次 P3 run 的稳定性读数。
+ledger 与 `llm_audit.jsonl` 的 `run_id` 是 checkpoint/adoption 共用的 producer 身份；v2 AgentRun
+内它等于当前 epoch 的 `session_run_id`。当外层 AgentRun 与 producer 不同时，新行另带显式
+`parent_run_id`，直接 job 则省略这格并退回自身 `run_id`。`tools/workflow_metrics.py --run-id <RUN_ID>`
+按这条显式 parent 投影筛 ledger/audit，并按逐字相等的 `run_id` 筛 `agent_progress.jsonl`；同 sid 的
+旧 run、缺身份的旧行与别的 run 全部排除，不能按时间窗口或当前 artifact 倒推归属。产物、人审与
+结构面仍是当前盘面快照，可在同一报告中展示，但它们不携 `run_id`，不得反向加入目标 run 的代码
+身份；报告顶层必须回显所选 `run_id`。不带 `--run-id` 才是跨历史汇总，两种口径不得混称一次
+AgentRun 的稳定性读数。
 
 `human_actions.jsonl` 当前只写 `HumanEditAction` wire v1 的 `prepared → committed`
 两相行：`request_id` 绑 preview 意图，`action_id` 再绑预期结果 SHA；其余字段是
@@ -811,7 +814,7 @@ wire v2 在 v1 字段集之上只新增 ended 事件的提交诊断四元组，�
 | 轴 | 现役约束 |
 |---|---|
 | 事件 | `kind=started / turn / ended`。turn 必须有正整数 `turn_index`、`attempt_id` 与 `provider_session_id`；started / turn 绑定 prompt 与 schema hash；ended 显式封存两条终态轴 |
-| 身份 | `role=commander / executor`；commander 不带 node/chapter，executor 的 node 只接受 `AGENT_EXECUTOR_NODES`。新写入必须有 subject SHA-256 与已解析 `AgentProfile`，requested model/effort 必须与 profile 相等 |
+| 身份 | `role=commander / executor`；commander 不带 node/chapter，其 `parent_run_id` 指外层 AgentRun；executor 的 node 只接受 `AGENT_EXECUTOR_NODES`，其 `parent_run_id` 指 checkpoint/ledger 共用的 producer run。整书归因经 AgentRun started 事件登记的 epoch `session_run_id` 集合闭合，不按时间猜。新写入必须有 subject SHA-256 与已解析 `AgentProfile`，requested model/effort 必须与 profile 相等 |
 | 实际执行 | requested 与 actual model/effort 分格，CLI 与 protocol 版本分格；每个新事件带启动代码版本，ended 另带结束版本，代码漂移时不能声明 delivered。缺失事实留 `null` / `unknown`，不能把 requested 冒充 actual |
 | 成本 | `usage` 的 prompt、cache hit/miss、completion、reasoning、total token 均可为 `null`；`null` 是未观测，不是 0 |
 | 终态 | `process_state=ok / failed / stopped / unknown` 与 `delivery_state=delivered / blocked / failed / unknown` 正交；进程退出不推出产物已交付 |

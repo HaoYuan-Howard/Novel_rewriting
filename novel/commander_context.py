@@ -150,6 +150,13 @@ class CommanderContext:
     admission_id: str | None = None
 
     @property
+    def producer_run_id(self) -> str:
+        """当前 epoch 的 producer 身份；v1 兼容账仍退回 parent run。"""
+        if self.epoch is None:
+            return self.run_id
+        return run_identity.check_run_id(self.epoch.session_run_id)
+
+    @property
     def execution_id(self) -> str:
         """admission 的主体；v1 兼容账仍退回 parent run id。"""
         if self.admission_id is not None:

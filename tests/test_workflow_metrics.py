@@ -243,6 +243,21 @@ def test_real_wire_with_null_or_missing_usage_is_explicitly_unver(
     assert aggregate['cache_state_unknown'] == 1
 
 
+def test_run_rows_map_epoch_producer_identity_to_explicit_parent() -> None:
+    rows = [
+        {'sid': SID, 'run_id': 'epoch-current',
+         'parent_run_id': 'agent-parent', 'outcome': 'ok'},
+        {'sid': SID, 'run_id': 'epoch-other',
+         'parent_run_id': 'other-parent', 'outcome': 'error'},
+        {'sid': SID, 'run_id': 'agent-parent', 'outcome': 'ok'},
+    ]
+
+    selected = W._run_rows(rows, SID, 'agent-parent')
+
+    assert [row['run_id'] for row in selected] == [
+        'epoch-current', 'agent-parent']
+
+
 def test_stage2_narrow_repair_and_zero_wire_rewrite_are_visible(base: Path) -> None:
     audit = W.collect(base, SID)['audit']
     assert audit['candidate_patches_applied'] == 1

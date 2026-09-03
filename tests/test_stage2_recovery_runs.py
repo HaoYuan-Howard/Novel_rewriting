@@ -17,7 +17,7 @@ import pytest
 from pydantic import BaseModel, Field
 
 from contracts.schema.orchestration import AgentProfile
-from novel import agent_session_audit
+from novel import agent_session_audit, paths
 from novel.agents.base import render_structured_agent_stdin
 from novel.agents.session_client import agent_request_fingerprint
 from novel.errors import (
@@ -149,6 +149,8 @@ class _SyntheticChapterClient:
 def _ctx(
         tmp_path: Path, run_id: str, *, observer=None, repair: bool = False,
         executor_profile: AgentProfile | None = None,
+        code: str = 'test-stage2-runs',
+        parent_run_id: str | None = None,
 ) -> RunContext:
     book = tmp_path / '恢复测试_123'
     clean = book / 'stage0' / 'clean_text.txt'
@@ -158,11 +160,13 @@ def _ctx(
         novel_dir=book,
         node='stage2.blueprint',
         paid=True,
-        code='test-stage2-runs',
+        code=code,
         cache=CachePolicy.default(),
         ledger=CostLedger(
-            path=tmp_path / '_service' / 'ledger.jsonl', run_id=run_id),
+            path=tmp_path / '_service' / 'ledger.jsonl', run_id=run_id,
+            parent_run_id=parent_run_id or run_id),
         run_id=run_id,
+        parent_run_id=parent_run_id or run_id,
         executor_profile=executor_profile,
         repair_rejected_responses=repair,
         observer=observer or (lambda _payload: None),
@@ -343,6 +347,41 @@ def _ensure_run(
     return stage2_runs.ensure_run(
         ctx, architecture=architecture, topology=topology, requests=requests,
         request_policy=request_policy or _test_request_policy(), refresh=refresh)
+
+
+def test_code_changed_epoch_gets_new_stage2_run_without_weakening_drift_guard(
+        tmp_path: Path) -> None:
+    """同 parent 可滚新 producer；同 producer 仍不得把旧章接到新代码。"""
+    parent_run_id = 'agent-parent-stage2'
+    requests = [(1, 'SYSTEM', 'USER')]
+    first = _ctx(
+        tmp_path, 'epoch-producer-one', code='code-v1',
+        parent_run_id=parent_run_id)
+    second = _ctx(
+        tmp_path, 'epoch-producer-two', code='code-v2',
+        parent_run_id=parent_run_id)
+
+    first_run = _ensure_run(
+        first, architecture='extraction-ir-v3.1',
+        topology='scaffolded_single', requests=requests)
+    second_run = _ensure_run(
+        second, architecture='extraction-ir-v3.1',
+        topology='scaffolded_single', requests=requests)
+
+    assert first_run['run_id'] == first.run_id
+    assert second_run['run_id'] == second.run_id
+    assert (paths.stage2_blueprint_run_path(
+        first.novel_dir, first.run_id) / stage2_runs.RUN_FILE).is_file()
+    assert (paths.stage2_blueprint_run_path(
+        second.novel_dir, second.run_id) / stage2_runs.RUN_FILE).is_file()
+
+    drifted_same_producer = _ctx(
+        tmp_path, first.run_id, code='code-v2',
+        parent_run_id=parent_run_id)
+    with pytest.raises(ProvenanceRefused, match='绑定已漂移'):
+        _ensure_run(
+            drifted_same_producer, architecture='extraction-ir-v3.1',
+            topology='scaffolded_single', requests=requests)
 
 
 def _write_single_agent_checkpoint(tmp_path: Path) -> tuple[RunContext, Path]:

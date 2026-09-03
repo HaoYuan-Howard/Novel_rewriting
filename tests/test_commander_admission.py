@@ -227,6 +227,55 @@ def test_commander_context_direct_node_cli_without_claim_is_refused_before_run(
         cli._cmd_run(args)
 
 
+def test_v2_child_run_uses_epoch_producer_id_and_keeps_parent_link(
+        tmp_path, monkeypatch):
+    """真实 CLI 边界不能再让 NOVEL_RUN_ID 覆盖 epoch producer 身份。"""
+    cli = importlib.import_module('novel.cli.main')
+    base = str(tmp_path.resolve())
+    permit = _ready_permit(base)
+    parent = SimpleNamespace(
+        run_id='agent-parent-run',
+        producer_run_id='epoch-producer-run',
+        execution_id='epoch-admission-run',
+        start=SimpleNamespace(authorized=True, egress_authorized=True),
+    )
+    admission.open_gate(base, parent.execution_id, permit.sid)
+    claim = admission.claim(
+        base, parent.execution_id, permit.sid, node=permit.node,
+        claim_sha256=permit.permit_sha256, claim_id='epoch-producer-claim')
+    _install_child_envelope(monkeypatch, permit, claim, 0)
+    steps = nodes.build_steps(
+        permit.node, permit.sid, permit.flags, base=permit.base,
+        executor_backend=None, egress_authorized=None, placeholders=False)
+    monkeypatch.setattr(sys, 'orig_argv', list(steps[0].argv))
+    monkeypatch.setenv(
+        cli.commander_context.COMMANDER_RUN_ID_ENV, parent.run_id)
+    monkeypatch.setenv(
+        cli.commander_context.COMMANDER_CONTRACT_SHA256_ENV, 'a' * 64)
+    monkeypatch.setenv(cli.run_identity.RUN_ID_ENV, parent.run_id)
+    monkeypatch.setattr(
+        cli.commander_context, 'load_from_environment',
+        lambda *_args, **_kwargs: parent)
+    monkeypatch.setattr(cli, 'stage2_review_required', lambda *_args, **_kwargs: False)
+    captured: dict[str, object] = {}
+
+    def open_context(*_args, **kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace(
+            run_id=kwargs['run_id'], parent_run_id=kwargs['parent_run_id'])
+
+    monkeypatch.setattr(cli.RunContext, 'open', open_context)
+    monkeypatch.setattr(cli, '_dispatch', lambda *_args, **_kwargs: 0)
+    args = cli._parser().parse_args([
+        'run', permit.node, permit.sid, '--base', base,
+        *permit.flags,
+    ])
+
+    assert cli._cmd_run(args) == 0
+    assert captured['run_id'] == parent.producer_run_id
+    assert captured['parent_run_id'] == parent.run_id
+
+
 def test_one_claim_and_permit_cover_root_and_follow_without_planner_remint(
         tmp_path, monkeypatch):
     """child 只验冻结 envelope/claim/index/argv，不再重跑全链 planner。"""

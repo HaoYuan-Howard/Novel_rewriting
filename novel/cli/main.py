@@ -1650,13 +1650,25 @@ def _cmd_run(a: argparse.Namespace) -> int:
             f'这一次会花钱（{a.node} {" ".join(flags) or "默认路径"}）。'
             f'⚠ 加 `--yes` 确认。**不显示预估花费**（`Q-10`：猜一个数比不显示更坏）——'
             f'要先看会发出去什么，用 `--dry-run`（0 成本）')
+    producer_run_id = a.run_id
+    parent_run_id = None
+    if parent_context is not None:
+        expected_producer_run_id = parent_context.producer_run_id
+        if (a.run_id is not None
+                and run_identity.check_run_id(a.run_id)
+                != expected_producer_run_id):
+            raise TerminalState(
+                f'Commander epoch 要求 producer run_id='
+                f'{expected_producer_run_id!r}，不能由子命令改成 {a.run_id!r}')
+        producer_run_id = expected_producer_run_id
+        parent_run_id = parent_context.run_id
     # ⚠ `paid` 由 `is_paid` 算，**不由 `NODES[node].paid` 推**：
     # 真正的贵贱是 `(node, flags)` 二元组的函数，而它只有一处算（`R-11.7`）。
     if a.node == 'stage0.remove' and '--source' in N.flag_tokens(flags):
         # 这条路径在书目录建立前进入 producer，不经 `RunContext.open`。
         # 因此必须在这里先铸造这次跑的唯一身份，人手命令立即
         # 看得到，producer 里的 context / ledger 也复用同一个值。
-        run_id = run_identity.resolve_run_id(a.run_id)
+        run_id = run_identity.resolve_run_id(producer_run_id)
         print(f'  run_id : {run_id}', file=sys.stderr)
         return _run_stage0_source(
             a.base, a.sid, flags, run_id=run_id)
@@ -1676,11 +1688,15 @@ def _cmd_run(a: argparse.Namespace) -> int:
         executor_profile=(
             executor_backend.profile
             if isinstance(executor_backend, AgentExecutorBackend) else None),
-        run_id=a.run_id)
+        run_id=producer_run_id,
+        parent_run_id=parent_run_id)
     # stdout 有 JSON 模板等机读消费者；身份打 stderr，人在终端仍能第一时间看到。
     # 测试里的最小 fake context 可能不带新字段，生产 RunContext 则结构上必有。
     if run_id := getattr(ctx, 'run_id', None):
         print(f'  run_id : {run_id}', file=sys.stderr)
+    parent_id = getattr(ctx, 'parent_run_id', run_id)
+    if parent_id != run_id:
+        print(f'  parent_run_id : {parent_id}', file=sys.stderr)
     # Stage2 人工评测是**运行边界**，不是某个编排器的礼貌约定。任何调用方
     # （手敲 CLI、前端 jobs、headless agent）最终都要经过这里；0 成本复检/人工修复
     # 仍可在闸关闭时运行，否则人连开闸的恢复路都进不去。

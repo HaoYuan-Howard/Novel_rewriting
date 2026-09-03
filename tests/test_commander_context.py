@@ -63,6 +63,7 @@ def test_context_env_is_only_a_pointer_and_round_trips_the_started_snapshot(
         tmp_path, '42', env=env, records=[_record(start)])
 
     assert loaded is not None
+    assert loaded.producer_run_id == loaded.run_id == 'commander-1'
     assert env['KEEP'] == 'yes'
     assert loaded.start == start and loaded.profiles == _profiles()
     assert loaded.executor_profile('stage2.global').driver == 'codex'
@@ -109,6 +110,7 @@ def test_v2_parent_compatibility_snapshots_do_not_override_epoch_identity(
         tmp_path, '42', env=env, records=[record])
 
     assert loaded is not None and loaded.epoch == epoch
+    assert loaded.producer_run_id == epoch.session_run_id
     assert loaded.start.code_version == 'code-v1'
     assert loaded.start.skill_sha256 == '0' * 64
     assert loaded.contract_sha256 == parent_sha

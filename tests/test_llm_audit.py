@@ -27,7 +27,9 @@ from novel.llm.cache import (
     CachePolicy, ResponseCache, cache_key, request_fingerprint,
 )
 from novel.llm.client import JSON_OBJECT_MODE, LlmClient
-from novel.llm.ledger import AUDIT_REL, CostLedger, audit_path
+from novel.llm.ledger import (
+    AUDIT_REL, CostLedger, audit_path, prepared_recovery_audit_row,
+)
 from novel.llm.transport import ChatRequest, ChatResponse, FakeTransport
 from novel.errors import ProvenanceRefused
 from novel.paths import ANSWER_LOST_DIRNAME
@@ -114,6 +116,66 @@ def test_one_run_id_closes_child_env_wire_gate_and_adoption_accounts(monkeypatch
                 *(row['run_id'] for row in audit)]
     assert observed == [run_id] * len(observed)
     assert wire[0]['attempt_id'] == audit[0]['attempt_id'] == audit[1]['attempt_id']
+
+
+def test_epoch_run_rows_keep_logical_identity_and_explicit_parent_link():
+    """checkpoint 联结认 epoch run，AgentRun 汇总认显式 parent，不能二选一。"""
+    logical_run_id = 'epoch-producer-42'
+    parent_run_id = 'agent-parent-42'
+    ctx = RunContext.open(
+        _book(), '123', 'stage6.hook', paid=True,
+        run_id=logical_run_id, parent_run_id=parent_run_id)
+    client = _client(FakeTransport.always(OK_JSON), ctx)
+    client.ask_json('sys', 'usr', model_cls=Resp, purpose='p')
+    attempt_id = client.accepted_attempt('p')
+    ctx.ledger.note_adoption(
+        sid=ctx.sid, node=ctx.node, purpose='p', attempt_id=attempt_id,
+        artifact='stage6/hook.json', artifact_fingerprint='fp-epoch',
+        chapter=None)
+
+    assert ctx.run_id == ctx.ledger.run_id == logical_run_id
+    assert ctx.parent_run_id == ctx.ledger.parent_run_id == parent_run_id
+    assert ctx.ledger.path is not None
+    wire = _rows(ctx.ledger.path)
+    audit = _rows(ctx.ledger.path.with_name(AUDIT_REL[-1]))
+    assert wire and audit
+    assert all(row['run_id'] == logical_run_id for row in [*wire, *audit])
+    assert all(row['parent_run_id'] == parent_run_id for row in [*wire, *audit])
+
+
+def test_prepared_recovery_current_parent_is_strict_but_historical_lineage_reads(
+        tmp_path: Path):
+    path = tmp_path / 'ledger.jsonl'
+    ledger = CostLedger(
+        path=path, run_id='epoch-recovery-target',
+        parent_run_id='agent-recovery-parent')
+    values = {
+        'sid': '123', 'purpose': 'stage5.write:ch1', 'chapter': 1,
+        'source_run_id': 'source-run', 'source_code': 'source-code',
+        'source_run_identity_sha256': '1' * 64,
+        'source_run_file_sha256': '2' * 64,
+        'source_commit_sha256': '3' * 64,
+        'source_commit_file_sha256': '4' * 64,
+        'source_checkpoint_sha256': '5' * 64,
+        'source_checkpoint_file_sha256': '6' * 64,
+        'source_attempt_id': 'a' * 16,
+        'source_response_sha256': '7' * 64,
+        'source_adoption_id': '8' * 64,
+        'subject_sha256': '9' * 64,
+        'actor': 'agent:test', 'reason': '验证 parent 归因',
+        'artifact': 'stage5/ch01.json',
+        'artifact_fingerprint': 'b' * 10,
+    }
+    ledger.note_prepared_recovery_adoption(**values)
+    expected = prepared_recovery_audit_row(
+        target_run_id=ledger.run_id, **values)
+
+    ledger.require_prepared_recovery_adoption(expected_row=expected)
+    [actual] = _rows(path.with_name(AUDIT_REL[-1]))
+    assert actual['parent_run_id'] == ledger.parent_run_id
+
+    historical_reader = CostLedger(path=path, run_id='later-reader-run')
+    historical_reader.require_prepared_recovery_lineage(expected_row=expected)
 
 
 def test_legacy_ledger_without_run_id_is_claimed_without_backfill():

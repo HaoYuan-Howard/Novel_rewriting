@@ -95,11 +95,17 @@ def _claude_profile() -> AgentProfile:
 def _ctx(
         base: Path, *, run_id: str | None = None,
         code: str | None = None, profile: AgentProfile | None = None,
+        parent_run_id: str | None = None,
 ) -> RunContext:
     novel_dir = base / '通用Agent恢复核_4242'
     novel_dir.mkdir(exist_ok=True)
-    ledger = (CostLedger(path=ledger_path(base)) if run_id is None else
-              CostLedger(path=ledger_path(base), run_id=run_id))
+    ledger = (
+        CostLedger(path=ledger_path(base))
+        if run_id is None
+        else CostLedger(
+            path=ledger_path(base), run_id=run_id,
+            parent_run_id=parent_run_id or run_id)
+    )
     return RunContext(
         novel_dir=novel_dir,
         node='stage4.design',
@@ -109,6 +115,7 @@ def _ctx(
         ledger=ledger,
         executor_profile=profile or _profile(),
         run_id=run_id or '',
+        parent_run_id=parent_run_id or '',
     )
 
 
@@ -352,6 +359,28 @@ def test_run_refuses_profile_prompt_schema_and_code_drift(tmp_path: Path) -> Non
         profile=_profile(effort='max'))
     with pytest.raises(ProvenanceRefused, match='profile'):
         _ensure(changed_profile)
+
+
+def test_code_changed_epoch_gets_new_generic_run_without_weakening_guard(
+        tmp_path: Path) -> None:
+    parent_run_id = 'agent-parent-generic'
+    first = _ctx(
+        tmp_path, run_id='epoch-generic-one', code='code-v1',
+        parent_run_id=parent_run_id)
+    second = _ctx(
+        tmp_path, run_id='epoch-generic-two', code='code-v2',
+        parent_run_id=parent_run_id)
+
+    assert _ensure(first)['run_id'] == first.run_id
+    assert _ensure(second)['run_id'] == second.run_id
+    assert _spec().run_path(first).joinpath('run.json').is_file()
+    assert _spec().run_path(second).joinpath('run.json').is_file()
+
+    drifted_same_producer = _ctx(
+        tmp_path, run_id=first.run_id, code='code-v2',
+        parent_run_id=parent_run_id)
+    with pytest.raises(ProvenanceRefused, match='run/sid/node/code'):
+        _ensure(drifted_same_producer)
 
 
 def test_claude_run_identity_hashes_the_final_structured_stdin(tmp_path: Path) -> None:

@@ -469,6 +469,10 @@ class CostLedger:
     #: 在任何记账前再用 ``bind_run_id`` 核对，防止一本账被两次跑共用。
     run_id: str = field(default_factory=run_identity.resolve_run_id)
 
+    #: 外层 AgentRun 的稳定身份。直接 CLI/job 与 producer run 相同；v2
+    #: AgentRun 的节点账则用它把 epoch-scoped producer run 精确归回 parent。
+    parent_run_id: str = ''
+
     calls_made: int = 0                 # **真发出去**的调用数
     calls_cached: int = 0               # 命中缓存的次数（＝ 0 元）
     prompt_tokens: int = 0
@@ -537,6 +541,11 @@ class CostLedger:
     _lock: threading.RLock = field(default_factory=threading.RLock,
                                     repr=False, compare=False)
 
+    def __post_init__(self) -> None:
+        self.run_id = run_identity.check_run_id(self.run_id)
+        self.parent_run_id = run_identity.check_run_id(
+            self.parent_run_id or self.run_id)
+
     def bind_run_id(self, run_id: str) -> None:
         """把账本与 RunContext 的身份钉死；已绑到另一次跑则关闭式失败。"""
         value = run_identity.check_run_id(run_id)
@@ -545,6 +554,21 @@ class CostLedger:
                 raise ProvenanceRefused(
                     f'CostLedger run_id={self.run_id!r} 与 '
                     f'RunContext run_id={value!r} 不一致；拒绝串账')
+
+    def bind_parent_run_id(self, parent_run_id: str) -> None:
+        """把账本与外层 AgentRun 身份钉死；不允许跨 parent 串账。"""
+        value = run_identity.check_run_id(parent_run_id)
+        with self._lock:
+            if self.parent_run_id != value:
+                raise ProvenanceRefused(
+                    f'CostLedger parent_run_id={self.parent_run_id!r} 与 '
+                    f'RunContext parent_run_id={value!r} 不一致；拒绝串账')
+
+    def _identity_fields(self) -> dict[str, str]:
+        fields = {'run_id': self.run_id}
+        if self.parent_run_id != self.run_id:
+            fields['parent_run_id'] = self.parent_run_id
+        return fields
 
     def record(self, *, node: str, sid: str, model: str, code: str,
                cached: bool, cache_policy: str,
@@ -686,7 +710,7 @@ class CostLedger:
                 return
             row = {
                 'at': datetime.now(timezone.utc).isoformat(timespec='seconds'),
-                'run_id': self.run_id,
+                **self._identity_fields(),
                 'sid': sid, 'node': node, 'model': model, 'code': code,
                 'cached': cached, 'cache_policy': cache_policy,
                 'prompt_tokens': prompt_tokens,
@@ -1473,6 +1497,8 @@ class CostLedger:
         expected = dict(expected_row)
         if expected.get('target_run_id') != self.run_id:
             raise ProvenanceRefused('prepared recovery audit target run 与当前 ledger 漂移')
+        if self.parent_run_id != self.run_id:
+            expected['parent_run_id'] = self.parent_run_id
         self.require_prepared_recovery_lineage(expected_row=expected)
 
     def _prepared_recovery_audit_rows(self) -> list[dict[str, object]]:
@@ -1523,6 +1549,8 @@ class CostLedger:
         if not matches:
             return False
         expected = None if expected_row is None else dict(expected_row)
+        if expected is not None and self.parent_run_id != self.run_id:
+            expected['parent_run_id'] = self.parent_run_id
         semantic = (
             {key: value for key, value in matches[0].items() if key != 'at'}
             if len(matches) == 1 else None
@@ -1557,6 +1585,11 @@ class CostLedger:
             {key: value for key, value in matches[0].items() if key != 'at'}
             if len(matches) == 1 else None
         )
+        # 历史 lineage 的 journal 早于 parent 归因字段，且后继 run 无从凭时间
+        # 猜出当时 AgentRun。当前 target 的两个入口会在 expected 中显式钉 parent；
+        # 只有跨 run 只读复核才允许忽略这一项非业务归因字段。
+        if semantic is not None and 'parent_run_id' not in expected:
+            semantic.pop('parent_run_id', None)
         if len(matches) != 1 or semantic != expected:
             raise ProvenanceRefused(
                 f'prepared recovery committed 前需恰有一条整行一致 adoption audit，'
@@ -1569,7 +1602,7 @@ class CostLedger:
         identity = row.get(identity_key)
         if not isinstance(identity, str) or not identity:
             raise ProvenanceRefused(f'幂等审计事件缺稳定 {identity_key}')
-        stamped = {'run_id': self.run_id, **row}
+        stamped = {**self._identity_fields(), **row}
 
         def same_event(existing: dict) -> bool:
             return ({key: value for key, value in existing.items() if key != 'at'}
@@ -1613,7 +1646,7 @@ class CostLedger:
 
     def _append_audit(self, row: dict) -> None:
         with self._lock:
-            stamped = {'run_id': self.run_id, **row}
+            stamped = {**self._identity_fields(), **row}
             self.audit_events.append(stamped)
             if self.path is None:
                 return

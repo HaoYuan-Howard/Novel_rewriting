@@ -296,6 +296,47 @@ def test_ledger_uses_beacon_run_ids_and_leaves_legacy_ungrouped(monkeypatch, tmp
     assert collector._session_run_ids(events, 'book-1', 100) == {'run-current'}
 
 
+def test_ledger_maps_epoch_producer_rows_back_to_agent_parent(
+        monkeypatch, tmp_path):
+    rows = [
+        {
+            'sid': 'book-1', 'outcome': 'ok', 'node': 'stage2.blueprint',
+            'run_id': 'epoch-producer-current', 'parent_run_id': 'run-current',
+            'cached': False, 'prompt_tokens': 21, 'completion_tokens': 8,
+            'reasoning_tokens': 3, 'latency_ms': 100,
+        },
+        {
+            'sid': 'book-1', 'outcome': 'ok', 'node': 'stage2.blueprint',
+            'run_id': 'epoch-producer-old', 'parent_run_id': 'run-old',
+            'cached': False, 'prompt_tokens': 999, 'completion_tokens': 999,
+            'reasoning_tokens': 999, 'latency_ms': 999,
+        },
+    ]
+    monkeypatch.setattr(collector, '_jsonl', lambda _path: rows)
+    monkeypatch.setattr(
+        collector, 'ledger_path', lambda _base: tmp_path / 'ledger.jsonl')
+
+    selected = collector._ledger(
+        tmp_path, 'book-1', run_ids={'run-current'})
+
+    assert selected['total']['calls_paid'] == 1
+    assert selected['total']['prompt_tokens'] == 21
+    assert selected['by_run_node'] == [{
+        'run_id': 'epoch-producer-current',
+        'node': 'stage2.blueprint',
+        'calls_paid': 1,
+        'calls_cached': 0,
+        'wire_attempts': 1,
+        'wire_errors_billing_unknown': 0,
+        'wire_unknown_outcome': 0,
+        'wire_outcomes': {'ok': 1},
+        'prompt_tokens': 21,
+        'completion_tokens': 8,
+        'reasoning_tokens': 3,
+        'latency_ms': 100,
+    }]
+
+
 def test_review_evidence_sync_replaces_only_the_machine_blocks():
     facts = _facts()
     text = '\n'.join([

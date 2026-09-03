@@ -108,7 +108,7 @@ def _ledger(
         base: Path, sid: str, *, run_ids: set[str] | None = None,
         rows: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    """按 canonical run_id 精确选账，并如实分开 wire 结果与计费结论。
+    """按 AgentRun parent 精确选账，并如实分开 wire 结果与计费结论。
 
     ``outcome=error`` 仍是一条已经上线的 wire；供应商是否计费通常未知，不能
     丢掉，也不能塞进历史兼容字段 ``calls_paid`` 冒充确定实付。因此该字段继续
@@ -152,10 +152,17 @@ def _ledger(
         raw_run_id = row.get('run_id')
         row_run_id = (raw_run_id if isinstance(raw_run_id, str)
                       and raw_run_id.strip() else None)
+        raw_parent_run_id = row.get('parent_run_id')
+        if 'parent_run_id' not in row or raw_parent_run_id is None:
+            row_parent_run_id = row_run_id
+        elif isinstance(raw_parent_run_id, str) and raw_parent_run_id.strip():
+            row_parent_run_id = raw_parent_run_id
+        else:
+            row_parent_run_id = None
         if row_run_id is None:
             legacy_ungrouped_rows += 1
         if run_ids is not None:
-            if row_run_id is None or row_run_id not in run_ids:
+            if row_parent_run_id is None or row_parent_run_id not in run_ids:
                 continue
         node = group_of(row)
         run_label = row_run_id or 'legacy/ungrouped'
@@ -328,7 +335,7 @@ def _session_exits(events: list[Any], sid: str, started_at: int) -> list[dict[st
 
 
 def _session_run_ids(events: list[Any], sid: str, started_at: int) -> set[str]:
-    """会话时间只圈 beacon；成本归属随后只按其中的 canonical run_id。"""
+    """会话时间只圈 parent beacon；成本随后按显式 parent 身份归入。"""
     return {
         event.run_id for event in events
         if (event.sid == sid and event.ts >= started_at

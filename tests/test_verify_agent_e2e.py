@@ -26,10 +26,11 @@ _PROFILE = {
 def _session(
     *, session_id: str, role: str, attempt_id: str,
     node: str | None, actual_effort: str | None = 'max',
+    parent_run_id: str = _RUN_ID,
 ) -> audit.AgentSessionRecord:
     common = {
         'session_run_id': session_id,
-        'parent_run_id': _RUN_ID,
+        'parent_run_id': parent_run_id,
         'role': role,
         'node': node,
         'chapter': None,
@@ -63,7 +64,7 @@ def _session(
     )
 
 
-def _closed_chain():
+def _closed_chain(*, producer_run_id: str | None = None):
     commander_attempt = 'attempt-commander'
     sessions = [_session(
         session_id='session-commander', role='commander',
@@ -78,6 +79,7 @@ def _closed_chain():
         'actual_reasoning_effort': _PROFILE['reasoning_effort'],
     }]
     adoptions = []
+    executor_run_id = producer_run_id or _RUN_ID
     for index, node in enumerate(AGENT_EXECUTOR_NODES, start=1):
         attempt_id = f'attempt-{index}'
         # 一条 delivered turn 可合法保留 actual effort unknown；
@@ -86,20 +88,25 @@ def _closed_chain():
         sessions.append(_session(
             session_id=f'session-{index}', role='executor',
             attempt_id=attempt_id, node=node,
-            actual_effort=actual_effort))
-        ledger.append({
-            'run_id': _RUN_ID, 'sid': _SID, 'node': node,
+            actual_effort=actual_effort, parent_run_id=executor_run_id))
+        ledger_row = {
+            'run_id': executor_run_id, 'sid': _SID, 'node': node,
             'purpose': node, 'chapter': None, 'attempt_id': attempt_id,
             'outcome': 'ok', 'model': _PROFILE['model'],
             'reasoning_effort': _PROFILE['reasoning_effort'],
-        })
-        adoptions.append({
+        }
+        adoption = {
             'kind': 'artifact_adoption',
-            'run_id': _RUN_ID, 'sid': _SID, 'node': node,
+            'run_id': executor_run_id, 'sid': _SID, 'node': node,
             'purpose': node, 'chapter': None, 'attempt_id': attempt_id,
             'artifact': f'artifact-{index}',
             'artifact_fingerprint': _SHA,
-        })
+        }
+        if producer_run_id is not None:
+            ledger_row['parent_run_id'] = _RUN_ID
+            adoption['parent_run_id'] = _RUN_ID
+        ledger.append(ledger_row)
+        adoptions.append(adoption)
     return ledger, adoptions, sessions
 
 
@@ -111,6 +118,21 @@ def test_all_eight_agent_nodes_close_ledger_session_and_adoption_chain():
     assert result['state'] == 'pass'
     assert result['facts']['missing_adoption_nodes'] == []
     assert result['facts']['adoption_unlinked'] == 0
+
+
+def test_epoch_producer_rows_link_through_explicit_agent_parent():
+    producer_run_id = 'epoch-producer-1'
+    ledger, adoptions, sessions = _closed_chain(
+        producer_run_id=producer_run_id)
+
+    result = verifier.linkage_check(
+        run_id=_RUN_ID, sid=_SID,
+        ledger_rows=ledger, audit_rows=adoptions, sessions=sessions,
+        producer_run_ids={producer_run_id})
+
+    assert result['state'] == 'pass'
+    assert result['facts']['adoption_unlinked'] == 0
+    assert result['facts']['turn_mismatches'] == 0
 
 
 def test_missing_one_paid_node_adoption_is_not_a_complete_agent_only_book():

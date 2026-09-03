@@ -76,6 +76,10 @@ class RunContext:
     #: 自动得到非空身份，否则单测/独立 evaluator 会留下一类无法联结的新账。
     run_id: str = ''
 
+    #: 外层 AgentRun 的稳定身份。直接 CLI/job 与 ``run_id`` 相同；v2
+    #: AgentRun 内 ``run_id`` 随 execution epoch 滚动，本字段保持 parent 不变。
+    parent_run_id: str = ''
+
     #: 结构化响应被 parse/require/schema 等可修复闸拒绝时，是否先物化给外层受托
     #: agent，而不是立即烧掉下一采。显式 CLI flag 才能开启；普通 CLI/队列保持原行为。
     repair_rejected_responses: bool = False
@@ -139,7 +143,10 @@ class RunContext:
         # 手搭 context 常先构造 ``CostLedger()``；未显式给 run_id 时
         # 直接沿用那本账已有的身份，不在同一次跑里再生第二个。
         self.run_id = run_identity.check_run_id(self.run_id or self.ledger.run_id)
+        self.parent_run_id = run_identity.check_run_id(
+            self.parent_run_id or self.ledger.parent_run_id or self.run_id)
         self.ledger.bind_run_id(self.run_id)
+        self.ledger.bind_parent_run_id(self.parent_run_id)
         if self.node not in NODES:
             raise ValueError(
                 f'未知节点 {self.node!r}。取值面的唯一落点是 contracts.invariants.NODES：'
@@ -497,7 +504,8 @@ class RunContext:
              repair_rejected_responses: bool = False,
              executor_backend: ExecutorBackend | None = None,
              executor_profile: AgentProfile | None = None,
-             run_id: str | None = None) -> RunContext:
+             run_id: str | None = None,
+             parent_run_id: str | None = None) -> RunContext:
         """按 `<Output>` + 书 id 开一次跑。**找不到书目录 ⇒ 显式终态**（`UpstreamMissing`）。
 
         `write_ledger=False` 时账本只在内存里攒（`--dry-run` / 测试）——
@@ -509,14 +517,21 @@ class RunContext:
             if run_id is None and ledger is not None
             else run_identity.resolve_run_id(run_id)
         )
+        resolved_parent_run_id = (
+            run_identity.check_run_id(ledger.parent_run_id)
+            if parent_run_id is None and ledger is not None
+            else run_identity.check_run_id(parent_run_id or resolved_run_id)
+        )
         return cls(
             novel_dir=novel_dir, node=node, paid=paid,
             code=prov.code_version(),
             cache=cache or CachePolicy.default(),
             ledger=ledger or CostLedger(
                 path=ledger_path(base) if write_ledger else None,
-                run_id=resolved_run_id),
+                run_id=resolved_run_id,
+                parent_run_id=resolved_parent_run_id),
             run_id=resolved_run_id,
+            parent_run_id=resolved_parent_run_id,
             executor_backend=executor_backend,
             executor_profile=executor_profile,
             repair_rejected_responses=repair_rejected_responses,
