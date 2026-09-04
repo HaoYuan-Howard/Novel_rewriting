@@ -225,7 +225,7 @@ def _parser() -> argparse.ArgumentParser:
         help='查看/隔离旧 admission/epoch bug 造成的 Stage2 预审 0-wire 假预算行')
     admission_recovery.add_argument(
         '--stage2-review-reopen', action='store_true',
-        help='查看/归档一本书的 Stage2 Commander 席位账（含旧 v1 三席账）并开 v2 空账；'
+        help='查看/归档一本书的 Stage2 Commander 席位账（旧 v1 或已证明契约失效的终态 v2）并开 v2 空账；'
              '查看模式列出全部账，apply 须给 --actor/--reason/--subject-sha256')
     rc.add_argument(
         '--stage2-review-sid',

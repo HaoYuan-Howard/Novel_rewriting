@@ -197,16 +197,20 @@ apply 是 0 模型调用：它把旧假预留原行和 ledger/log/双账负证�
 私改席位上限绕过。
 
 席位契约升版前留下的旧**三席账**在四席契约下拒读：`reserve` 会以 `stopped/stage2_global_turn_budget`
-停止并指向归档入口。唯一合规续跑路是先在 Commander 子上下文之外查看，再带 actor/reason 按
-`original_sha256` CAS 整体归档进 `archived_ledgers`（旧 turns/reconciliations 逐字保留）并开一份空的新账：
+停止并指向归档入口。已经终态的现役账若其冻结 reviewer contract / output shape 被后来已提交的契约修复
+证明无法表达现役 typed request，也走同一条显式恢复；普通模型答错、网络失败、一般 typed 拒绝或单纯
+预算耗尽不得借此重置席位。唯一合规续跑路是先在 Commander 子上下文之外查看，再带 actor/reason 按
+`original_sha256` CAS 整体归档进 `archived_ledgers`（旧 turns/rejections/reconciliations 逐字保留）并为
+新的契约业务开一份空账：
 
 ```text
 <PY> -X utf8 -u -m novel.cli reconcile --base <BASE> --stage2-review-reopen --stage2-review-sid <SID>
 <PY> -X utf8 -u -m novel.cli reconcile --base <BASE> --stage2-review-reopen --stage2-review-sid <SID> --actor <ACTOR> --reason <REASON> --subject-sha256 <ORIGINAL_SHA256>
 ```
 
-归档要求所有席位已终态且它们的 parent AgentRun 已结束；仍在运行的席位不能被从下面抽走预算。
-同一入口也用于未来席位契约再升版，不得手改 JSON 冒充新账。
+归档要求所有席位已终态且它们的 parent AgentRun 已结束；apply 在同一账锁内复验查看所得
+`original_sha256`，仍在运行或查看后变化的席位不能被从下面抽走预算。同一入口也用于未来席位契约
+再升版，不得手改 JSON 冒充新账。
 
 网络或瞬态故障（connection / timeout / rate_limit / server_error / provider_transient）不需要人工恢复：
 RunSupervisor 在同一席位内自动续接——已取得 provider session 的失败尝试 resume 同一会话，没有首个协议

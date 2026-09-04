@@ -3,6 +3,7 @@
 """Stage2 Global Commander 的跨重启预算与单调进展账。"""
 from __future__ import annotations
 
+import hashlib
 import json
 
 import pytest
@@ -44,7 +45,8 @@ def _ledger(base) -> Stage2ReviewLedger:
     return Stage2ReviewLedger.model_validate_json(path.read_bytes())
 
 
-def _ended_parent_with_known_log(base) -> None:
+def _ended_parent_with_known_log(
+        base, *, run_id: str = NO_WIRE_PARENT) -> None:
     profile = AgentProfile(
         driver='codex', model='gpt-5.6-sol', reasoning_effort='high',
         execution_mode='standard')
@@ -58,13 +60,13 @@ def _ended_parent_with_known_log(base) -> None:
         sid='42', base=str(base), authorized=True,
         egress_authorized=True, profiles=profiles)
     agent.append(base, AgentRunEvent(
-        wire_version=2, run_id=NO_WIRE_PARENT, kind='started', ts=1,
+        wire_version=2, run_id=run_id, kind='started', ts=1,
         start=start, contract=contract))
     agent.append(base, AgentRunEvent(
-        wire_version=2, run_id=NO_WIRE_PARENT, kind='ended', ts=2,
+        wire_version=2, run_id=run_id, kind='ended', ts=2,
         exit_code=2, outcome=AgentDeliveryOutcome(
             state='stopped', reason='Stage2 预算被旧 bug 提前耗尽', checked_at=2)))
-    log = agent.run_log_path(base, NO_WIRE_PARENT)
+    log = agent.run_log_path(base, run_id)
     log.parent.mkdir(parents=True, exist_ok=True)
     log.write_text(
         'Traceback (most recent call last):\n'
@@ -143,6 +145,50 @@ def test_final_review_reopen_allows_blocker_growth_then_one_more_correction(
     assert _ledger(tmp_path).state == 'exhausted'
 
 
+def test_prereview_review_decision_and_reviewed_edit_only_route_to_final_when_safe(
+        tmp_path):
+    """真实主路：预审计席；修后证明落地且清零才进入只读终审。"""
+    prereview = _reserve(
+        tmp_path, 1, blocker_count=99, purpose='prereview')
+    stage2_review_ledger.finish(
+        tmp_path, '42', source_sha256=SOURCE, main_text_sha256=MAIN,
+        session_run_id=prereview.session_run_id, exit_code=0, now=11)
+
+    # 预审决定经 Blueprint 后绑定 live surface；这段 0 LLM 写回不另计席。
+    # 若仍有 FAIL/UNVER，下一次真实调用是第一席 correction。
+    review_decision = _reserve(
+        tmp_path, 2, blocker_count=99, purpose='correction')
+    stage2_review_ledger.finish(
+        tmp_path, '42', source_sha256=SOURCE, main_text_sha256=MAIN,
+        session_run_id=review_decision.session_run_id, exit_code=0, now=12)
+
+    # 第二席 correction 可原子携 GlobalEdit + post_edit_review；账本只记录
+    # 调用开始时的 80 个 blocker，落地后的新快照由下一次 reserve 传入。
+    reviewed_edit = _reserve(
+        tmp_path, 3, blocker_count=80, purpose='correction')
+    stage2_review_ledger.finish(
+        tmp_path, '42', source_sha256=SOURCE, main_text_sha256=MAIN,
+        session_run_id=reviewed_edit.session_run_id, exit_code=0, now=13)
+
+    # typed edit 若在写盘前被拒，blocker 仍未清零，第四席不能再修改；
+    # 这不是 final_review，不能靠改 purpose 绕过只读边界。
+    with pytest.raises(
+            stage2_review_ledger.Stage2ReviewBudgetRefused,
+            match='只保留给只读 final_review'):
+        _reserve(
+            tmp_path, 4, progress='4' * 64, blocker_count=80,
+            purpose='correction')
+
+    # 只有成功的 post_edit_review 已把 live blocking 面收至 0，才允许
+    # 同一个第四席作为独立、只读的 final_review。
+    final = _reserve(
+        tmp_path, 4, progress='4' * 64, blocker_count=0,
+        purpose='final_review')
+    assert final.ordinal == 4
+    assert [row.purpose for row in _ledger(tmp_path).turns] == [
+        'prereview', 'correction', 'correction', 'final_review']
+
+
 def test_attempts_share_one_seat_and_never_reserve_again(tmp_path):
     seat = _reserve(tmp_path, 1)
     kwargs = dict(
@@ -182,6 +228,133 @@ def test_attempts_share_one_seat_and_never_reserve_again(tmp_path):
             match='已终态'):
         stage2_review_ledger.record_attempt(
             tmp_path, '42', attempt_id='att-3', kind='launch', now=8, **kwargs)
+
+
+def test_finished_turn_rejections_are_atomic_idempotent_and_pending_only_last(
+        tmp_path):
+    seat = _reserve(tmp_path, 1)
+    rejection_kwargs = dict(
+        source_sha256=SOURCE, main_text_sha256=MAIN,
+        business_sha256=BUSINESS, workpack_sha256=WORKPACK,
+        session_run_id=seat.session_run_id,
+        kind='typed_loader', request_sha256='e' * 64,
+        reason='post_edit_review.decisions 缺必填 evidence')
+    with pytest.raises(
+            stage2_review_ledger.Stage2ReviewBudgetRefused,
+            match='只有成功结束'):
+        stage2_review_ledger.record_rejection(
+            tmp_path, '42', now=2, **rejection_kwargs)
+
+    stage2_review_ledger.finish(
+        tmp_path, '42', source_sha256=SOURCE, main_text_sha256=MAIN,
+        session_run_id=seat.session_run_id, exit_code=0, now=3)
+    first = stage2_review_ledger.record_rejection(
+        tmp_path, '42', now=4, **rejection_kwargs)
+    path = stage2_review_ledger.ledger_path(
+        tmp_path, '42', source_sha256=SOURCE, main_text_sha256=MAIN)
+    first_bytes = path.read_bytes()
+    same = stage2_review_ledger.record_rejection(
+        tmp_path, '42', now=99, **rejection_kwargs)
+    assert same == first
+    assert path.read_bytes() == first_bytes, '幂等重放不得刷新时间或重写账本'
+    pending = stage2_review_ledger.pending_rejection(
+        tmp_path, '42', source_sha256=SOURCE,
+        main_text_sha256=MAIN, business_sha256=BUSINESS,
+        workpack_sha256=WORKPACK)
+    assert pending is not None
+    assert pending.turn.session_run_id == seat.session_run_id
+    assert pending.rejection == first
+    assert stage2_review_ledger.pending_rejection(
+        tmp_path, '42', source_sha256=SOURCE,
+        main_text_sha256=MAIN, business_sha256='0' * 64,
+        workpack_sha256=WORKPACK) is None
+    assert stage2_review_ledger.pending_rejection(
+        tmp_path, '42', source_sha256=SOURCE,
+        main_text_sha256=MAIN, business_sha256=BUSINESS,
+        workpack_sha256='0' * 64) is None
+
+    with pytest.raises(
+            stage2_review_ledger.Stage2ReviewBudgetRefused,
+            match='已有不同 kind/reason'):
+        stage2_review_ledger.record_rejection(
+            tmp_path, '42', now=5,
+            **{**rejection_kwargs, 'reason': '另一条拒因'})
+    with pytest.raises(
+            stage2_review_ledger.Stage2ReviewBudgetRefused,
+            match='已有不同 kind/reason'):
+        stage2_review_ledger.record_rejection(
+            tmp_path, '42', now=5,
+            **{**rejection_kwargs, 'kind': 'canonical_action'})
+
+    def append(request_char: str):
+        return stage2_review_ledger.record_rejection(
+            tmp_path, '42', source_sha256=SOURCE, main_text_sha256=MAIN,
+            business_sha256=BUSINESS, workpack_sha256=WORKPACK,
+            session_run_id=seat.session_run_id, kind='canonical_action',
+            request_sha256=request_char * 64,
+            reason=f'canonical action 拒绝 {request_char}', now=6)
+
+    appended = [append(request_char) for request_char in ('f', 'a')]
+    assert {row.request_sha256 for row in appended} == {'f' * 64, 'a' * 64}
+    ledger = _ledger(tmp_path)
+    assert {
+        row.request_sha256 for row in ledger.turns[0].rejections
+    } == {'e' * 64, 'f' * 64, 'a' * 64}, '多次追加不得覆盖既有记录'
+
+    long_reason = 'typed loader error\n' * 1000
+    long_record = stage2_review_ledger.record_rejection(
+        tmp_path, '42', source_sha256=SOURCE, main_text_sha256=MAIN,
+        business_sha256=BUSINESS, workpack_sha256=WORKPACK,
+        session_run_id=seat.session_run_id, kind='typed_loader',
+        request_sha256='b' * 64, reason=long_reason, now=7)
+    assert len(long_record.reason) <= 8192
+    assert long_record.reason_sha256 == hashlib.sha256(
+        long_reason.encode('utf-8')).hexdigest()
+    assert long_record.reason.endswith(
+        f'完整拒因 SHA-256={long_record.reason_sha256}）')
+
+    shown = stage2_review_ledger.inspect_ledger(
+        tmp_path, '42', source_sha256=SOURCE, main_text_sha256=MAIN)
+    assert shown['turns'][0]['rejections'] == 4
+    assert shown['turns'][0]['latest_rejection'] == long_record.model_dump(
+        mode='json')
+
+    # 新席一经预留就消费了上一席的拒因；历史仍保留，但跨 parent 不再把它
+    # 误当成当前 pending correction。
+    _reserve(tmp_path, 2, blocker_count=1)
+    assert stage2_review_ledger.pending_rejection(
+        tmp_path, '42', source_sha256=SOURCE,
+        main_text_sha256=MAIN, business_sha256=BUSINESS,
+        workpack_sha256=WORKPACK) is None
+    assert len(_ledger(tmp_path).turns[0].rejections) == 4
+
+
+def test_rejection_refuses_unknown_session_or_failed_commander_turn(tmp_path):
+    seat = _reserve(tmp_path, 1)
+    stage2_review_ledger.finish(
+        tmp_path, '42', source_sha256=SOURCE, main_text_sha256=MAIN,
+        session_run_id=seat.session_run_id, exit_code=70, now=2)
+    common = dict(
+        source_sha256=SOURCE, main_text_sha256=MAIN,
+        business_sha256=BUSINESS, workpack_sha256=WORKPACK,
+        kind='typed_loader', request_sha256='e' * 64,
+        reason='typed loader 拒绝', now=3)
+    with pytest.raises(
+            stage2_review_ledger.Stage2ReviewBudgetRefused,
+            match='只有成功结束'):
+        stage2_review_ledger.record_rejection(
+            tmp_path, '42', session_run_id=seat.session_run_id, **common)
+    with pytest.raises(
+            stage2_review_ledger.Stage2ReviewBudgetRefused,
+            match='session 在 ledger 中不唯一'):
+        stage2_review_ledger.record_rejection(
+            tmp_path, '42', session_run_id='another-session', **common)
+    with pytest.raises(
+            stage2_review_ledger.Stage2ReviewBudgetRefused,
+            match='business/workpack identity 不符'):
+        stage2_review_ledger.record_rejection(
+            tmp_path, '42', session_run_id=seat.session_run_id,
+            **{**common, 'business_sha256': '0' * 64})
 
 
 def _write_v1_ledger(base, *, parent_run_id: str) -> None:
@@ -243,19 +416,129 @@ def test_v1_three_seat_ledger_is_refused_until_explicitly_archived(tmp_path):
             actor='恢复值守员', reason='重复归档')
 
 
+def test_terminal_v2_three_seat_ledger_archives_full_audit_history(tmp_path):
+    """真实缺陷恢复：三席已终态且 parent ended，旧账逐字进入 archive。"""
+    purposes = ('prereview', 'correction', 'correction')
+    blocker_counts = (99, 99, 80)
+    for ordinal, (purpose, blockers) in enumerate(
+            zip(purposes, blocker_counts, strict=True), start=1):
+        _ended_parent_with_known_log(
+            tmp_path, run_id=f'parent-{ordinal}')
+        turn = _reserve(
+            tmp_path, ordinal, blocker_count=blockers, purpose=purpose)
+        stage2_review_ledger.finish(
+            tmp_path, '42', source_sha256=SOURCE,
+            main_text_sha256=MAIN,
+            session_run_id=turn.session_run_id, exit_code=0,
+            now=10 + ordinal)
+
+    rejected = stage2_review_ledger.record_rejection(
+        tmp_path, '42', source_sha256=SOURCE, main_text_sha256=MAIN,
+        business_sha256=BUSINESS, workpack_sha256=WORKPACK,
+        session_run_id='stage2-session-3', kind='typed_loader',
+        request_sha256='e' * 64,
+        reason='post_edit_review.decisions 的 76 行缺必填 evidence', now=20)
+    before = _ledger(tmp_path)
+    before_turns = [row.model_dump(mode='json') for row in before.turns]
+    before_reconciliations = [
+        row.model_dump(mode='json') for row in before.reconciliations]
+    shown = stage2_review_ledger.list_ledgers(tmp_path, '42')[0]
+
+    archived = stage2_review_ledger.reopen_archive_by_sha(
+        tmp_path, '42', original_sha256=shown['original_sha256'],
+        actor='agent:workflow-recovery',
+        reason='旧工作包漏发 evidence 必填契约；修复后一次性归档续跑',
+        now=50)
+
+    assert archived.original_schema_version == 2
+    assert archived.original_max_calls == 4
+    assert archived.original_state == 'active'
+    assert archived.original_sha256 == shown['original_sha256']
+    assert [row.model_dump(mode='json') for row in archived.turns] == (
+        before_turns)
+    assert archived.turns[-1].rejections == [rejected]
+    assert [
+        row.model_dump(mode='json')
+        for row in archived.reconciliations
+    ] == before_reconciliations
+
+    fresh = _ledger(tmp_path)
+    assert fresh.state == 'active'
+    assert fresh.turns == []
+    assert fresh.reconciliations == []
+    assert len(fresh.archived_ledgers) == len(before.archived_ledgers) + 1
+    persisted = fresh.archived_ledgers[-1]
+    assert persisted == archived
+    assert [row.model_dump(mode='json') for row in persisted.turns] == (
+        before_turns)
+    assert [
+        row.model_dump(mode='json')
+        for row in persisted.reconciliations
+    ] == before_reconciliations
+
+
 def test_reopen_refuses_started_seats_or_live_parent_runs(tmp_path):
     seat = _reserve(tmp_path, 1)
+    started_sha = stage2_review_ledger.inspect_ledger(
+        tmp_path, '42', source_sha256=SOURCE,
+        main_text_sha256=MAIN)['original_sha256']
     with pytest.raises(TerminalState, match='仍有 started 席位'):
         stage2_review_ledger.reopen_archive(
             tmp_path, '42', source_sha256=SOURCE, main_text_sha256=MAIN,
+            original_sha256=started_sha,
             actor='恢复值守员', reason='试图归档运行中的席位')
     stage2_review_ledger.finish(
         tmp_path, '42', source_sha256=SOURCE, main_text_sha256=MAIN,
         session_run_id=seat.session_run_id, exit_code=70, now=2)
+    finished_sha = stage2_review_ledger.inspect_ledger(
+        tmp_path, '42', source_sha256=SOURCE,
+        main_text_sha256=MAIN)['original_sha256']
     with pytest.raises(TerminalState, match='不在 agent_runs 记录中'):
         stage2_review_ledger.reopen_archive(
             tmp_path, '42', source_sha256=SOURCE, main_text_sha256=MAIN,
+            original_sha256=finished_sha,
             actor='恢复值守员', reason='parent 未登记')
+
+
+def test_reopen_original_sha_is_rechecked_inside_transaction_lock(
+        tmp_path, monkeypatch):
+    """inspect 后新席落账时，旧 SHA 不能把变化后的账整体归档。"""
+    first = _reserve(tmp_path, 1)
+    stage2_review_ledger.finish(
+        tmp_path, '42', source_sha256=SOURCE, main_text_sha256=MAIN,
+        session_run_id=first.session_run_id, exit_code=0, now=2)
+    shown = stage2_review_ledger.list_ledgers(tmp_path, '42')[0]
+
+    with pytest.raises(TerminalState, match='命中 0 份'):
+        stage2_review_ledger.reopen_archive_by_sha(
+            tmp_path, '42', original_sha256='0' * 64,
+            actor='恢复值守员', reason='错误主体不得命中')
+
+    real_read = stage2_review_ledger.read_any_version
+    raced = False
+
+    def read_then_append_turn(path):
+        nonlocal raced
+        raw, archive = real_read(path)
+        if not raced:
+            raced = True
+            second = _reserve(tmp_path, 2, blocker_count=1)
+            stage2_review_ledger.finish(
+                tmp_path, '42', source_sha256=SOURCE,
+                main_text_sha256=MAIN,
+                session_run_id=second.session_run_id, exit_code=0, now=3)
+        return raw, archive
+
+    monkeypatch.setattr(
+        stage2_review_ledger, 'read_any_version', read_then_append_turn)
+    with pytest.raises(TerminalState, match='已在查看后变化'):
+        stage2_review_ledger.reopen_archive_by_sha(
+            tmp_path, '42', original_sha256=shown['original_sha256'],
+            actor='恢复值守员', reason='竞态下不得归档变化后的账')
+
+    current = _ledger(tmp_path)
+    assert [row.ordinal for row in current.turns] == [1, 2]
+    assert current.archived_ledgers == []
 
 
 def test_reopen_cli_is_read_only_then_typed_apply(tmp_path, capsys):

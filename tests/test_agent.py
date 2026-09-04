@@ -12,6 +12,7 @@ test_agent.py —— Commander 代跑的提示词/启动计划、事件流与互
 """
 from __future__ import annotations
 
+import copy
 import io
 import hashlib
 import json
@@ -1935,6 +1936,369 @@ def test_durable_stage2_correction_uses_only_the_remaining_commander_turn(
     assert done.exit_code == 2
     assert done.outcome is not None
     assert '持久预算已用尽' in done.outcome.reason
+    pending = stage2_review_ledger.pending_rejection(
+        base, '42', source_sha256=source_sha256,
+        main_text_sha256=main_text_sha256,
+        business_sha256='e' * 64, workpack_sha256=workpack_sha256)
+    assert pending is not None
+    assert pending.turn.ordinal == 3
+    assert pending.rejection.kind == 'canonical_action'
+    assert "role_repeats_name" in pending.rejection.reason
+
+
+def test_stage2_third_seat_typed_rejection_is_persisted_without_fourth_spawn(
+        base, corpus, monkeypatch):
+    """真实纵切：第三席 GlobalEdit loader 拒绝后，第四终审席不得被 correction 撞掉。"""
+    source_sha256 = '1' * 64
+    main_text_sha256 = '2' * 64
+    business_sha256 = '3' * 64
+    workpack_sha256 = '4' * 64
+    for ordinal, purpose, blockers in (
+            (1, 'prereview', 99), (2, 'correction', 80)):
+        session_run_id = f'prior-batch-session-{ordinal}'
+        stage2_review_ledger.reserve(
+            base, '42', source_sha256=source_sha256,
+            main_text_sha256=main_text_sha256,
+            business_sha256=business_sha256,
+            workpack_sha256=workpack_sha256,
+            progress_sha256=str(ordinal) * 64,
+            blocker_count=blockers, purpose=purpose,
+            parent_run_id=f'prior-batch-parent-{ordinal}',
+            epoch_id='prior-batch-epoch', session_run_id=session_run_id,
+            now=ordinal)
+        stage2_review_ledger.finish(
+            base, '42', source_sha256=source_sha256,
+            main_text_sha256=main_text_sha256,
+            session_run_id=session_run_id, exit_code=0, now=ordinal + 10)
+
+    current = SimpleNamespace(
+        state='blocked', code_version='test-code-version',
+        surface_seal='5' * 64, execution_token=None,
+        action=SimpleNamespace(
+            waiting_on=agent.queue.WAITING_ON_STAGE2_REVIEW,
+            action_sha256='6' * 64))
+    monkeypatch.setattr(
+        agent.operator, 'next_action_at_code',
+        lambda _base, _sid, *, code: current)
+    stopped = AgentDeliveryOutcome(
+        state='stopped', reason='Stage2 仍待审阅', checked_at=1)
+    monkeypatch.setattr(agent, '_assess_delivery', lambda *_args, **_kwargs: stopped)
+    task_box = {}
+
+    def build_task(_base, _sid, _current, request_path, *, epoch_id):
+        del epoch_id
+        exact_payload = GlobalEdit.model_validate({
+            'characters': [{
+                'char_id': 'char_001',
+                'name_distinctiveness': 'high',
+            }],
+            'post_edit_review': {
+                'actor': 'agent:novel-pipeline-operator',
+                'expected_source_sha256': source_sha256,
+                'expected_workpack_sha256': workpack_sha256,
+                'reviewed_chapter_ordinals': [1],
+                'default_state': 'PASS',
+                'reason': '已完整复核本轮修改及仍存活旧主体',
+                'quarantine_groups': [],
+                'review_scope': [{
+                    'item_id': 'item-1',
+                    'expected_subject_sha256': '9' * 64,
+                }],
+                'decisions': [],
+            },
+        }).model_dump(mode='json', by_alias=True, exclude_unset=True)
+        exact_request = {
+            'schema': agent.reviewer_tasks.REQUEST_SCHEMA,
+            'surface_seal': current.surface_seal,
+            'waiting_on': agent.queue.WAITING_ON_STAGE2_REVIEW,
+            'action': {
+                'kind': 'node', 'node': 'stage2.global',
+                'flags': ['--apply-edit', '@reviewer-input'],
+                'input_payload': exact_payload,
+            },
+        }
+        rejected_request = copy.deepcopy(exact_request)
+        rejected_request['action']['input_payload']['post_edit_review'][
+            'decisions'] = [{
+                'item_id': 'item-1',
+                'expected_subject_sha256': '9' * 64,
+                'state': 'PASS',
+                'reason': '已复核旧主体在本次修改后仍成立',
+                # 真实故障：76 行都漏了这个必填的 evidence: []。
+            }]
+        task = agent.reviewer_tasks.ReviewerTask(
+            waiting_on=agent.queue.WAITING_ON_STAGE2_REVIEW,
+            surface_seal=current.surface_seal,
+            business_sha256=business_sha256,
+            request_path=Path(request_path),
+            prompt='STAGE2 INCREMENTAL GLOBAL EDIT WORKPACK',
+            submission_options=({
+                'id': 'node:stage2.global.apply-edit',
+                'exact_request': exact_request,
+            },),
+            workpack_sha256=workpack_sha256,
+            source_sha256=source_sha256,
+            main_text_sha256=main_text_sha256,
+            progress_sha256='7' * 64,
+            blocker_count=76)
+        task_box['task'] = task
+        task_box['rejected_request'] = rejected_request
+        return task
+
+    monkeypatch.setattr(agent.reviewer_tasks, 'build_task', build_task)
+    rejection_location = 'post_edit_review.decisions.0.evidence:missing'
+    invocations = []
+
+    def default_spawn(_run_id, *, on_registered=None):
+        def spawn(invocation, env, log):
+            del env, log
+            invocations.append(invocation)
+            assert on_registered is not None
+            on_registered()
+            task = task_box['task']
+            task.request_path.parent.mkdir(parents=True, exist_ok=True)
+            task.request_path.write_text(
+                json.dumps(task_box['rejected_request'], ensure_ascii=False),
+                encoding='utf-8')
+            return CommanderProcessResult(
+                exit_code=0,
+                observation=CommanderObservation(
+                    provider_session_id=f'provider-third-{len(invocations)}',
+                    actual_model=invocation.profile.model,
+                    actual_effort=invocation.profile.reasoning_effort,
+                    usage=None))
+        return spawn
+
+    monkeypatch.setattr(agent, '_default_spawn', default_spawn)
+    rec = agent.start(
+        base, '42', authorized=True, egress_authorized=True,
+        profiles=_PROFILES, spawn=None)
+    assert agent.wait(rec.run_id, 10)
+
+    assert len(invocations) == 1, '第三席 loader 拒绝后不得再 Popen 第四席 correction'
+    pending = stage2_review_ledger.pending_rejection(
+        base, '42', source_sha256=source_sha256,
+        main_text_sha256=main_text_sha256,
+        business_sha256=business_sha256,
+        workpack_sha256=workpack_sha256)
+    assert pending is not None
+    assert pending.turn.ordinal == 3
+    assert pending.rejection.kind == 'typed_loader'
+    assert rejection_location in pending.rejection.reason
+    assert 'input_value' not in pending.rejection.reason
+    [done] = [row for row in agent.records(base) if row.run_id == rec.run_id]
+    assert done.exit_code == 2
+    assert done.outcome is not None
+    assert rejection_location in done.outcome.reason
+    assert '第 4 席只保留给只读 final_review' in done.outcome.reason
+
+
+def test_stage2_pending_rejection_resumes_in_new_parent_with_fresh_correction(
+        base, corpus, monkeypatch):
+    """重启纵切：matching business/workpack 先恢复拒因，不重做普通 review。"""
+    source_sha256 = '1' * 64
+    main_text_sha256 = '2' * 64
+    business_sha256 = '3' * 64
+    workpack_sha256 = '4' * 64
+    prior_session = 'prior-rejected-stage2-session'
+    stage2_review_ledger.reserve(
+        base, '42', source_sha256=source_sha256,
+        main_text_sha256=main_text_sha256,
+        business_sha256=business_sha256,
+        workpack_sha256=workpack_sha256,
+        progress_sha256='5' * 64, blocker_count=5, purpose='review',
+        parent_run_id='prior-rejected-parent', epoch_id='prior-epoch',
+        session_run_id=prior_session, now=1)
+    stage2_review_ledger.finish(
+        base, '42', source_sha256=source_sha256,
+        main_text_sha256=main_text_sha256,
+        session_run_id=prior_session, exit_code=0, now=2)
+    rejection = 'post_edit_review.decisions.0.evidence Field required'
+    rejected_request_sha256 = '6' * 64
+    stage2_review_ledger.record_rejection(
+        base, '42', source_sha256=source_sha256,
+        main_text_sha256=main_text_sha256,
+        business_sha256=business_sha256,
+        workpack_sha256=workpack_sha256,
+        session_run_id=prior_session, kind='typed_loader',
+        request_sha256=rejected_request_sha256, reason=rejection, now=3)
+
+    current = SimpleNamespace(
+        state='blocked', code_version='test-code-version',
+        surface_seal='7' * 64, execution_token=None,
+        action=SimpleNamespace(
+            waiting_on=agent.queue.WAITING_ON_STAGE2_REVIEW,
+            action_sha256='8' * 64))
+    next_calls = 0
+
+    def next_action(_base, _sid, *, code):
+        nonlocal next_calls
+        assert code == 'test-code-version'
+        next_calls += 1
+        return current
+
+    monkeypatch.setattr(agent.operator, 'next_action_at_code', next_action)
+    stopped = AgentDeliveryOutcome(
+        state='stopped', reason='Stage2 仍待审阅', checked_at=1)
+    ready = AgentDeliveryOutcome(
+        state='ready', reason='Stage2 correction 已落盘', checked_at=2)
+    monkeypatch.setattr(agent, '_assess_delivery', lambda *_args, **_kwargs: stopped)
+    task_box = {}
+
+    def build_task(_base, _sid, _current, request_path, *, epoch_id):
+        del epoch_id
+        task = agent.reviewer_tasks.ReviewerTask(
+            waiting_on=agent.queue.WAITING_ON_STAGE2_REVIEW,
+            surface_seal=current.surface_seal,
+            business_sha256=business_sha256,
+            request_path=Path(request_path),
+            prompt='STAGE2 SELF-CONTAINED CURRENT WORKPACK',
+            submission_options=({'id': 'node:stage2.global.apply-edit'},),
+            workpack_sha256=workpack_sha256,
+            source_sha256=source_sha256,
+            main_text_sha256=main_text_sha256,
+            progress_sha256='9' * 64,
+            blocker_count=4)
+        task_box['task'] = task
+        return task
+
+    monkeypatch.setattr(agent.reviewer_tasks, 'build_task', build_task)
+    action = agent.reviewer_tasks.ReviewerNodeAction(
+        kind='node', node='stage2.global',
+        flags=('--apply-edit', 'corrected-request'))
+    monkeypatch.setattr(
+        agent.reviewer_tasks, 'load_action',
+        lambda _path, _current, *, submission_options: action)
+    monkeypatch.setattr(
+        agent, '_execute_reviewer_node_action',
+        lambda *_args, **_kwargs: agent.SupervisorActionResult(
+            exit_code=0, outcome=ready, continue_ready=False))
+    invocations = []
+
+    def default_spawn(_run_id, *, on_registered=None):
+        def spawn(invocation, env, log):
+            del env, log
+            invocations.append(invocation)
+            assert on_registered is not None
+            on_registered()
+            task = task_box['task']
+            task.request_path.parent.mkdir(parents=True, exist_ok=True)
+            task.request_path.write_text(
+                json.dumps({'corrected': True}), encoding='utf-8')
+            return CommanderProcessResult(
+                exit_code=0,
+                observation=CommanderObservation(
+                    provider_session_id='provider-fresh-correction',
+                    actual_model=invocation.profile.model,
+                    actual_effort=invocation.profile.reasoning_effort,
+                    usage=None))
+        return spawn
+
+    monkeypatch.setattr(agent, '_default_spawn', default_spawn)
+    rec = agent.start(
+        base, '42', authorized=True, egress_authorized=True,
+        profiles=_PROFILES, spawn=None)
+    assert agent.wait(rec.run_id, 10)
+
+    assert next_calls == 1, '恢复与 canonical apply 都应沿用同一 frozen current task'
+    assert len(invocations) == 1
+    assert invocations[0].resume_provider_session_id is None
+    assert 'STAGE2 SELF-CONTAINED CURRENT WORKPACK' in invocations[0].stdin_text
+    assert rejection in invocations[0].stdin_text
+    assert rejected_request_sha256 in invocations[0].stdin_text
+    assert '"attempt":1' in invocations[0].stdin_text
+    shown = stage2_review_ledger.inspect_ledger(
+        base, '42', source_sha256=source_sha256,
+        main_text_sha256=main_text_sha256)
+    assert [row['purpose'] for row in shown['turns']] == [
+        'review', 'correction']
+    assert shown['turns'][0]['latest_rejection']['request_sha256'] == (
+        rejected_request_sha256)
+    assert shown['turns'][1]['latest_rejection'] is None
+    assert stage2_review_ledger.pending_rejection(
+        base, '42', source_sha256=source_sha256,
+        main_text_sha256=main_text_sha256,
+        business_sha256=business_sha256,
+        workpack_sha256=workpack_sha256) is None
+    [done] = [row for row in agent.records(base) if row.run_id == rec.run_id]
+    assert done.exit_code == 0
+
+
+def test_stage2_exhausted_pending_rejection_stops_new_parent_before_spawn(
+        base, corpus, monkeypatch):
+    """第三席拒因跨重启仍是主因；不能只显示预算错误或启动第四席。"""
+    source_sha256 = '1' * 64
+    main_text_sha256 = '2' * 64
+    business_sha256 = '3' * 64
+    workpack_sha256 = '4' * 64
+    last_session = ''
+    for ordinal, purpose, blockers in (
+            (1, 'prereview', 99),
+            (2, 'correction', 80),
+            (3, 'correction', 76)):
+        last_session = f'prior-exhausted-session-{ordinal}'
+        stage2_review_ledger.reserve(
+            base, '42', source_sha256=source_sha256,
+            main_text_sha256=main_text_sha256,
+            business_sha256=business_sha256,
+            workpack_sha256=workpack_sha256,
+            progress_sha256=str(ordinal) * 64,
+            blocker_count=blockers, purpose=purpose,
+            parent_run_id=f'prior-exhausted-parent-{ordinal}',
+            epoch_id='prior-epoch', session_run_id=last_session, now=ordinal)
+        stage2_review_ledger.finish(
+            base, '42', source_sha256=source_sha256,
+            main_text_sha256=main_text_sha256,
+            session_run_id=last_session, exit_code=0, now=ordinal + 10)
+    rejection = '76 个 post_edit_review.decisions 全部缺 evidence'
+    stage2_review_ledger.record_rejection(
+        base, '42', source_sha256=source_sha256,
+        main_text_sha256=main_text_sha256,
+        business_sha256=business_sha256,
+        workpack_sha256=workpack_sha256,
+        session_run_id=last_session, kind='typed_loader',
+        request_sha256='5' * 64, reason=rejection, now=20)
+
+    current = SimpleNamespace(
+        state='blocked', code_version='test-code-version',
+        surface_seal='6' * 64, execution_token=None,
+        action=SimpleNamespace(
+            waiting_on=agent.queue.WAITING_ON_STAGE2_REVIEW,
+            action_sha256='7' * 64))
+    monkeypatch.setattr(
+        agent.operator, 'next_action_at_code',
+        lambda _base, _sid, *, code: current)
+
+    def build_task(_base, _sid, _current, request_path, *, epoch_id):
+        del epoch_id
+        return agent.reviewer_tasks.ReviewerTask(
+            waiting_on=agent.queue.WAITING_ON_STAGE2_REVIEW,
+            surface_seal=current.surface_seal,
+            business_sha256=business_sha256,
+            request_path=Path(request_path), prompt='CURRENT WORKPACK',
+            submission_options=({'id': 'node:stage2.global.apply-edit'},),
+            workpack_sha256=workpack_sha256,
+            source_sha256=source_sha256,
+            main_text_sha256=main_text_sha256,
+            progress_sha256='8' * 64, blocker_count=76)
+
+    monkeypatch.setattr(agent.reviewer_tasks, 'build_task', build_task)
+    spawned = []
+    monkeypatch.setattr(
+        agent, '_default_spawn',
+        lambda *_args, **_kwargs: spawned.append('constructed'))
+    rec = agent.start(
+        base, '42', authorized=True, egress_authorized=True,
+        profiles=_PROFILES, spawn=None)
+    assert agent.wait(rec.run_id, 10)
+
+    assert spawned == []
+    [done] = [row for row in agent.records(base) if row.run_id == rec.run_id]
+    assert done.exit_code == 2
+    assert done.outcome is not None
+    assert rejection in done.outcome.reason
+    assert '不会启动一个注定被拒的 Commander' in done.outcome.reason
+    assert '第 4 席只保留给只读 final_review' in done.outcome.reason
 
 
 def test_ready_action_exact_resumes_same_commander_session(

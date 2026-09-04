@@ -9,6 +9,12 @@
 session，同席内的 resume/relaunch 只追加 ``attempts``，不占新席。相同 progress
 fingerprint 不允许靠重启重演；终审 reopen 之后允许未闭合数回升。
 
+Blueprint 期间的 ``prereview`` 就是第一席完整审阅，不能因稍后才绑定 live surface
+而返还预算。``post_edit_review`` 则随当席 ``correction`` 一起提交，不另占一席：
+只有该 typed edit 已成功落地、下一快照的 ``blocker_count`` 为 0，后续才是
+``final_review``；若请求在落盘前被拒，业务仍未修完，后续仍只能是 ``correction``，
+不得借第四席冒充终审继续修改。
+
 v1 三席账没有迁移机制：``_read`` 拒读，只能经 :func:`reopen_archive` 带
 actor/reason 整体归档后开新账。
 """
@@ -31,6 +37,7 @@ from contracts.invariants import (
 from contracts.schema.orchestration import (
     Stage2ReviewAttempt, Stage2ReviewLedger, Stage2ReviewLedgerArchive,
     Stage2ReviewLedgerReconciliation, Stage2ReviewLedgerTurn,
+    Stage2ReviewRejection,
 )
 from novel import paths, run_identity
 from novel.appendlog import path_transaction_lock
@@ -45,6 +52,7 @@ MAX_EDIT_SEAT = STAGE2_COMMANDER_MAX_EDIT_SEAT
 _ARCHIVABLE_SCHEMA_VERSIONS = (1, 2)
 _LEGACY_NO_WIRE_EXIT_CODE = 70
 _LEGACY_NO_WIRE_SIGNATURE = 'ValueError: admission id 必须属于当前 epoch'
+_MAX_REJECTION_REASON_CHARS = 8192
 
 
 class Stage2ReviewBudgetRefused(RuntimeError):
@@ -70,6 +78,14 @@ class Stage2NoWireReconcileSubject:
     parent_ended_at: int
     parent_exit_code: int
     already_reconciled: bool = False
+
+
+@dataclass(frozen=True)
+class Stage2PendingRejection:
+    """最后一席、且仍绑定当前 workpack 的待纠错拒因。"""
+
+    turn: Stage2ReviewLedgerTurn
+    rejection: Stage2ReviewRejection
 
 
 def ledger_path(
@@ -639,6 +655,109 @@ def _replace_turn(
     return updated.turns[index]
 
 
+def record_rejection(
+    base: str | os.PathLike[str], sid: str, *,
+    source_sha256: str,
+    main_text_sha256: str,
+    business_sha256: str,
+    workpack_sha256: str,
+    session_run_id: str,
+    kind: str,
+    request_sha256: str,
+    reason: str,
+    now: int | None = None,
+) -> Stage2ReviewRejection:
+    """追加本席回答被 typed/canonical 边界拒绝的事实。
+
+    Commander 进程本身必须已经成功结束；started/failed 席位不能把进程失败
+    伪装成业务请求拒绝。同一 request identity 的同 kind/reason 幂等返回原记录，
+    但不同 kind/reason 关闭式拒绝，不能覆盖已经持久化的根因。
+    """
+    path = ledger_path(
+        base, sid, source_sha256=source_sha256,
+        main_text_sha256=main_text_sha256)
+    full_reason = reason
+    if not full_reason.strip():
+        raise Stage2ReviewBudgetRefused('Stage2 typed/canonical 拒因不得为空')
+    reason_sha256 = hashlib.sha256(full_reason.encode('utf-8')).hexdigest()
+    suffix = f'\n…（完整拒因 SHA-256={reason_sha256}）'
+    readable_reason = full_reason
+    if len(readable_reason) > _MAX_REJECTION_REASON_CHARS:
+        readable_reason = (
+            readable_reason[:_MAX_REJECTION_REASON_CHARS - len(suffix)]
+            + suffix)
+    recorded = Stage2ReviewRejection(
+        kind=kind,  # type: ignore[arg-type]
+        request_sha256=request_sha256,
+        reason_sha256=reason_sha256,
+        reason=readable_reason,
+        recorded_at=int(time.time()) if now is None else now,
+    )
+    with path_transaction_lock(path):
+        ledger = _read(path)
+        if ledger is None:
+            raise Stage2ReviewBudgetRefused(
+                'Stage2 typed/canonical 拒因没有对应 ledger')
+        index, prior = _locate_turn(ledger, session_run_id)
+        if (prior.business_sha256 != business_sha256
+                or prior.workpack_sha256 != workpack_sha256):
+            raise Stage2ReviewBudgetRefused(
+                'Stage2 typed/canonical 拒因与席位 business/workpack identity 不符')
+        if prior.outcome != 'ok' or prior.exit_code != 0:
+            raise Stage2ReviewBudgetRefused(
+                '只有成功结束的 Stage2 Commander 席位才能登记 typed/canonical 拒因')
+        matches = [
+            row for row in prior.rejections
+            if row.request_sha256 == recorded.request_sha256]
+        if matches:
+            if len(matches) != 1:
+                raise Stage2ReviewBudgetRefused(
+                    '同一 Stage2 被拒请求在席位账中不唯一')
+            existing = matches[0]
+            if (existing.kind == recorded.kind
+                    and existing.reason_sha256 == recorded.reason_sha256
+                    and existing.reason == recorded.reason):
+                return existing
+            raise Stage2ReviewBudgetRefused(
+                'Stage2 被拒请求已有不同 kind/reason，拒绝覆盖原始根因')
+        updated = Stage2ReviewLedgerTurn.model_validate({
+            **prior.model_dump(mode='json'),
+            'rejections': [
+                *[row.model_dump(mode='json') for row in prior.rejections],
+                recorded.model_dump(mode='json'),
+            ],
+        })
+        stored = _replace_turn(path, ledger, index, updated)
+        return stored.rejections[-1]
+
+
+def pending_rejection(
+    base: str | os.PathLike[str], sid: str, *,
+    source_sha256: str,
+    main_text_sha256: str,
+    business_sha256: str,
+    workpack_sha256: str,
+) -> Stage2PendingRejection | None:
+    """返回最后一席尚未由后续席位消费的最新拒因；没有则为 ``None``。
+
+    拒因历史永不删除。新 correction 一经预留就成为新的最后一席，因此旧拒因
+    自动只保留为审计事实，不再被下一 parent 误认成仍待处理的 correction。
+    """
+    path = ledger_path(
+        base, sid, source_sha256=source_sha256,
+        main_text_sha256=main_text_sha256)
+    ledger = _read(path)
+    if ledger is None or ledger.state == 'complete' or not ledger.turns:
+        return None
+    latest = ledger.turns[-1]
+    if (latest.business_sha256 != business_sha256
+            or latest.workpack_sha256 != workpack_sha256
+            or not latest.rejections):
+        return None
+    return Stage2PendingRejection(
+        turn=latest, rejection=latest.rejections[-1])
+
+
 def record_attempt(
     base: str | os.PathLike[str], sid: str, *,
     source_sha256: str,
@@ -730,15 +849,17 @@ def reopen_archive(
     base: str | os.PathLike[str], sid: str, *,
     source_sha256: str,
     main_text_sha256: str,
+    original_sha256: str,
     actor: str,
     reason: str,
     now: int | None = None,
 ) -> Stage2ReviewLedgerArchive:
     """把当前席位账（含 v1 三席账）整体归档，开一份空 v2 账。
 
-    只在所有席位都已终态、且它们的 parent AgentRun 都已结束时允许；正在运行
-    的席位不能被人从下面抽走预算。归档记录逐字保留旧 turns/reconciliations，
-    新账仍按同一 Global/MainText identity 计数。
+    只在 ``original_sha256`` 仍逐字绑定当前账、所有席位都已终态、且它们的
+    parent AgentRun 都已结束时允许；正在运行的席位不能被人从下面抽走预算。
+    归档记录逐字保留旧 turns/reconciliations，新账仍按同一
+    Global/MainText identity 计数。
     """
     actor = actor.strip()
     reason = reason.strip()
@@ -752,6 +873,11 @@ def reopen_archive(
 
     with path_transaction_lock(path):
         raw, archive = read_any_version(path)
+        if archive.original_sha256 != original_sha256:
+            raise TerminalState(
+                'Stage2 review ledger 已在查看后变化；'
+                f'expected original_sha256={original_sha256}，'
+                f'current={archive.original_sha256}；请重新查看后再归档')
         if raw.get('sid') != sid or raw.get('source_sha256') != source_sha256 \
                 or raw.get('main_text_sha256') != main_text_sha256:
             raise TerminalState('Stage2 review ledger 主体 identity 与请求不符')
@@ -843,6 +969,7 @@ def reopen_archive_by_sha(
         base, sid,
         source_sha256=str(raw.get('source_sha256')),
         main_text_sha256=str(raw.get('main_text_sha256')),
+        original_sha256=original_sha256,
         actor=actor, reason=reason, now=now)
 
 
@@ -862,6 +989,10 @@ def _inspect_path(sid: str, path: Path) -> dict[str, Any]:
             'parent_run_id': row.parent_run_id,
             'session_run_id': row.session_run_id,
             'attempts': len(row.attempts),
+            'rejections': len(row.rejections),
+            'latest_rejection': (
+                row.rejections[-1].model_dump(mode='json')
+                if row.rejections else None),
         } for row in archive.turns],
         'reconciliations': len(archive.reconciliations),
         'archived_ledgers': (
@@ -901,9 +1032,11 @@ def mark_complete(
 
 __all__ = [
     'MAX_COMMANDER_CALLS', 'MAX_EDIT_SEAT', 'Stage2NoWireReconcileSubject',
+    'Stage2PendingRejection',
     'Stage2ReviewBudgetRefused', 'finish', 'finish_attempt',
     'inspect_ledger', 'inspect_no_wire_reconciliation',
-    'ledger_path', 'list_ledgers', 'mark_complete', 'progress_with_feedback',
-    'read_any_version', 'reconcile_no_wire_reservation', 'record_attempt',
+    'ledger_path', 'list_ledgers', 'mark_complete', 'pending_rejection',
+    'progress_with_feedback', 'read_any_version',
+    'reconcile_no_wire_reservation', 'record_attempt', 'record_rejection',
     'reopen_archive', 'reopen_archive_by_sha', 'reserve',
 ]

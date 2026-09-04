@@ -966,6 +966,16 @@ class Stage2ReviewAttempt(FrozenModel):
         return self
 
 
+class Stage2ReviewRejection(FrozenModel):
+    """Commander 已成功交付回答、但 typed/canonical 边界拒绝的事实。"""
+
+    kind: Literal['typed_loader', 'canonical_action']
+    request_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    reason_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    reason: str = Field(min_length=1, max_length=8192)
+    recorded_at: int = Field(ge=0)
+
+
 class Stage2ReviewLedgerTurn(FrozenModel):
     """一席已经预留的 Stage2 Commander 席位；started 也消耗席位。
 
@@ -989,6 +999,7 @@ class Stage2ReviewLedgerTurn(FrozenModel):
     exit_code: int | None = None
     outcome: Literal['started', 'ok', 'failed'] = 'started'
     attempts: list[Stage2ReviewAttempt] = Field(default_factory=list)
+    rejections: list[Stage2ReviewRejection] = Field(default_factory=list)
 
     @model_validator(mode='after')
     def _finish_fields_agree(self) -> Stage2ReviewLedgerTurn:
@@ -1009,6 +1020,11 @@ class Stage2ReviewLedgerTurn(FrozenModel):
             raise ValueError('同一席位内 attempt_id 不得重复')
         if self.attempts and self.attempts[0].kind != 'launch':
             raise ValueError('席位的首个 attempt 必须是 launch')
+        if self.rejections and (self.outcome != 'ok' or self.exit_code != 0):
+            raise ValueError('Stage2 typed/canonical 拒因只能绑定成功结束的 Commander 席位')
+        rejected_requests = [row.request_sha256 for row in self.rejections]
+        if len(rejected_requests) != len(set(rejected_requests)):
+            raise ValueError('同一席位的 Stage2 被拒请求 identity 不得重复')
         return self
 
 
