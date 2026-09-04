@@ -1111,6 +1111,7 @@ def test_stage0_workpack_zero_removal_uses_fixed_review_patterns_and_keeps_decis
 
     payload = workpack.build_workpack(tmp_path, '42')
 
+    assert payload['schema'] == 'novel-operator-stage0-review-workpack-v3'
     assert payload['route'] == 'zero_removal'
     assert payload['automated_decision'] is None
     assert payload['counts']['removed_segments'] == 0
@@ -1136,6 +1137,12 @@ def test_stage0_workpack_zero_removal_uses_fixed_review_patterns_and_keeps_decis
         'nonempty_line_count': 1,
         'nonempty_lines': [{'line': 1, 'text': '文案首句'}],
         'human_classification': None,
+        'expected_role': 'required_opening_copy',
+        'review_rule': (
+            '叙事性概述、提前呈现后文情节或对白、与正文形成重复钩子均是合法'
+            '开篇文案体裁；不得仅因不是第一章正文或与后文重复而剔除。只把'
+            '书名/作者署名、平台网址、站内导航、更新订阅/票赏推广、作者站务元话语等'
+            '不属于作品叙事文案的站务或元数据残留视为问题。'),
     }
     assert denominator['order_or_continuity_decision'] is None
     assert isinstance(payload['production_nonbody_markers'], list)
@@ -1147,10 +1154,68 @@ def test_stage0_workpack_zero_removal_uses_fixed_review_patterns_and_keeps_decis
     assert payload['retained_review_material']['code_points'] == len(text)
     assert payload['retained_review_material']['text_sha256'] == hashlib.sha256(
         text.encode('utf-8')).hexdigest()
+    assert '首章号前的叙事性文案按' in \
+        payload['retained_review_material']['meaning']
+    assert '不属于这组三类漏剔' in payload['retained_review_material']['meaning']
     assert '待确认' in payload['approval_reason_draft']
     assert '按原序=[1, 2]' in payload['approval_reason_draft']
     assert '首个章号前非空行=1' in payload['approval_reason_draft']
+    assert '预期角色=R-1.12 必填开篇文案' in payload['approval_reason_draft']
+    assert '叙事概述或与后文重复本身合法' in payload['approval_reason_draft']
     assert {'stage0_report', 'stage0_segments', 'run_check_only', 'readonly_ctx'} <= set(calls)
+
+
+def test_stage0_workpack_protects_repeated_narrative_hook_required_by_stage1(
+        monkeypatch, tmp_path):
+    """本次真书形状：章前概述复现后文对白，仍是 Stage1 必填 hook。"""
+    from novel.errors import HookCopyMissing
+    from novel.stages.stage1.partition import partition_text
+
+    workpack = _operator_script('stage0_review_workpack')
+    hook = '他解开黑袍，长老惊叹：「我们有救了。」\n\n'
+    chapters = (
+        '1\n弟子央求师尊再讲一次那个传说。\n'
+        '2\n他解开黑袍，长老惊叹：「我们有救了。」\n')
+    text = hook + chapters
+    _wire_stage0_workpack(
+        monkeypatch, tmp_path, workpack, text=text,
+        segments=[_stage0_segment(text, 0)])
+
+    payload = workpack.build_workpack(tmp_path, '42')
+    before = payload['structure_denominator']['before_first_chapter_marker']
+
+    assert before['expected_role'] == 'required_opening_copy'
+    assert before['nonempty_lines'] == [
+        {'line': 1, 'text': '他解开黑袍，长老惊叹：「我们有救了。」'}]
+    assert '与正文形成重复钩子均是合法' in before['review_rule']
+    assert partition_text(text).hook_copy.text == hook
+    with pytest.raises(HookCopyMissing):
+        partition_text(chapters)
+
+
+def test_stage0_workpack_mixed_hook_reports_station_text_without_deleting_prefix(
+        monkeypatch, tmp_path):
+    """文案夹站务行时只给人逐条定性，不把整个必填 hook 自动判成删除。"""
+    workpack = _operator_script('stage0_review_workpack')
+    hook = '她推开门，看见失踪多年的人。\n求订阅收藏。\n这一次，她决定追上去。\n'
+    text = hook + '1\n第一章正文。\n2\n第二章正文。\n'
+    _wire_stage0_workpack(
+        monkeypatch, tmp_path, workpack, text=text,
+        segments=[_stage0_segment(text, 0)])
+
+    payload = workpack.build_workpack(tmp_path, '42')
+    before = payload['structure_denominator']['before_first_chapter_marker']
+    subscribe = next(
+        row for row in payload['reverse_scan']['patterns']
+        if row['key'] == 'subscribe_prompt')
+
+    assert before['expected_role'] == 'required_opening_copy'
+    assert [row['text'] for row in before['nonempty_lines']] == [
+        '她推开门，看见失踪多年的人。', '求订阅收藏。', '这一次，她决定追上去。']
+    assert subscribe['hits'] == 1
+    assert payload['counts']['removed_segments'] == 0
+    assert payload['retained_review_material']['text'].startswith(hook)
+    assert payload['automated_decision'] is None
 
 
 def test_stage0_workpack_removed_route_exposes_every_span_and_scans_only_retained_text(
@@ -1240,13 +1305,17 @@ def test_stage0_workpack_reports_no_chapter_marker_without_treating_the_book_as_
         'nonempty_line_count': None,
         'nonempty_lines': [],
         'human_classification': None,
+        'expected_role': None,
+        'review_rule': (
+            '生产词法未识别到章号行，不能把整本书自动解释成开篇文案；'
+            '正式章结构仍交 Stage1 裁决。'),
     }
     assert '首章前文案区=不适用（生产词法未识别到章号行）' in \
         payload['approval_reason_draft']
     assert '文案区定性=待确认' not in payload['approval_reason_draft']
 
 
-def test_stage0_workpack_does_not_request_classification_for_empty_prefix(
+def test_stage0_workpack_reports_empty_prefix_as_missing_required_hook(
         monkeypatch, tmp_path):
     workpack = _operator_script('stage0_review_workpack')
     text = '1\n第一章。\n'
@@ -1261,9 +1330,16 @@ def test_stage0_workpack_does_not_request_classification_for_empty_prefix(
         'nonempty_line_count': 0,
         'nonempty_lines': [],
         'human_classification': None,
+        'expected_role': 'required_opening_copy',
+        'review_rule': (
+            '叙事性概述、提前呈现后文情节或对白、与正文形成重复钩子均是合法'
+            '开篇文案体裁；不得仅因不是第一章正文或与后文重复而剔除。只把'
+            '书名/作者署名、平台网址、站内导航、更新订阅/票赏推广、作者站务元话语等'
+            '不属于作品叙事文案的站务或元数据残留视为问题。'),
     }
-    assert '首个章号前非空行=0（无材料需文案区定性）' in \
+    assert '首个章号前非空行=0（缺少 R-1.12 必填开篇文案' in \
         payload['approval_reason_draft']
+    assert '不得把空分母当作可批准' in payload['approval_reason_draft']
     assert '文案区定性=待确认' not in payload['approval_reason_draft']
 
 

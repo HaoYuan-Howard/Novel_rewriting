@@ -49,5 +49,5 @@ def get_run_progress(sid: str = Depends(checked_sid),
         resume_frontier=resume_frontier,
         steps=beacon.fold(events),
         stage_done=stage_done,
-        events_tail=events[-beacon.TAIL:],
+        events_tail=[beacon.event_view(event) for event in events[-beacon.TAIL:]],
     )

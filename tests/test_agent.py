@@ -882,6 +882,35 @@ def test_exit_one_is_landed_red_not_agent_process_failure(base):
     assert rec.note and '已经落盘' in rec.note
 
 
+def test_exit_two_with_stopped_outcome_is_an_explicit_safe_stop(base):
+    """显式终态与崩溃必须分开；stopped 事实来自 ended 的服务端终验。"""
+    agent.append(base, AgentRunEvent(run_id='stopped', kind='started', ts=10,
+                                     start=_start()))
+    agent.append(base, AgentRunEvent(
+        run_id='stopped', kind='ended', ts=20, exit_code=2,
+        outcome=AgentDeliveryOutcome(
+            state='stopped', reason='等待上游形成新的业务面', checked_at=20)))
+
+    [rec] = agent.fold(agent.read_events(base))
+
+    assert rec.state == 'stopped' and rec.exit_code == 2
+    assert rec.outcome is not None and rec.outcome.state == 'stopped'
+    assert rec.allowed_controls == []
+
+
+def test_historical_exit_two_without_outcome_is_not_guessed_as_stopped(base):
+    """旧账没有终验事实；不能仅凭数字 2 倒推出 stopped。"""
+    agent.append(base, AgentRunEvent(run_id='legacy-two', kind='started', ts=10,
+                                     start=_start()))
+    agent.append(base, AgentRunEvent(
+        run_id='legacy-two', kind='ended', ts=20, exit_code=2))
+
+    [rec] = agent.fold(agent.read_events(base))
+
+    assert rec.state == 'failed'
+    assert rec.outcome is not None and rec.outcome.state == 'unknown'
+
+
 def test_fold_running_vs_unknown(base):
     """`R-11.11` 同构：不在活锁里的 started ⇒ unknown，不是「成功」。"""
     agent.append(base, AgentRunEvent(run_id='r1', kind='started', ts=10,
@@ -920,8 +949,8 @@ def test_restart_leaves_an_unended_v2_run_unknown_and_all_controls_closed(base):
             control(base, rec.run_id)
 
 
-def test_v2_ended_view_never_exposes_an_active_epoch(base):
-    """异常尾窗缺 epoch_closed 时，parent 终态也不能保留矛盾 active 指针。"""
+def test_exit_seventy_stays_failed_and_never_exposes_an_active_epoch(base):
+    """exit 70 是崩溃，不得借 stopped 新状态洗白；终态也不留 active 指针。"""
     start = _start()
     contract = RunContractV2(**start.model_dump(mode='json'))
     epoch = ExecutionEpoch(

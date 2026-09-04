@@ -69,6 +69,8 @@ def test_beacon_events_fold_into_steps(client):
     beacon.append(base, _ev(20, 'stage0.remove', 'end', exit_code=0))
     beacon.append(base, _ev(30, 'stage0.approve', 'start'))
     beacon.append(base, _ev(31, 'stage0.edit', 'end', exit_code=1))
+    beacon.append(base, _ev(32, 'stage1.partition', 'end', exit_code=2))
+    beacon.append(base, _ev(33, 'stage2.global', 'end', exit_code=70))
     beacon.append(base, _ev(30, 'stage1.partition', 'start', sid='other'))
     d = c.get('/api/novels/42/run').json()
     by_node = {s['node']: s for s in d['steps']}
@@ -78,8 +80,12 @@ def test_beacon_events_fold_into_steps(client):
     assert by_node['stage0.approve']['elapsed'] is not None
     assert by_node['stage0.edit']['beacon'] == 'landed_red'
     assert by_node['stage0.edit']['last_exit'] == 1
-    assert by_node['stage1.partition']['beacon'] == 'pending'   # 别书的打点不漏过来
-    assert len(d['events_tail']) == 4
+    assert by_node['stage1.partition']['beacon'] == 'stopped'
+    assert by_node['stage2.global']['beacon'] == 'failed'
+    assert len(d['events_tail']) == 6
+    by_event_node = {event['node']: event for event in d['events_tail']}
+    assert by_event_node['stage1.partition']['beacon'] == 'stopped'
+    assert by_event_node['stage2.global']['beacon'] == 'failed'
 
 
 def test_existing_book_dir_gives_real_stage_done(client):

@@ -97,6 +97,7 @@
   "paused",
   "ok",
   "landed_red",
+  "stopped",
   "failed",
   "unknown"
  ],
@@ -980,6 +981,7 @@
   "running",
   "ok",
   "landed_red",
+  "stopped",
   "failed"
  ],
  "agent_run_event_kinds": [

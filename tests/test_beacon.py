@@ -149,7 +149,7 @@ def test_a_bad_line_in_the_middle_is_not_silent(base):
         beacon.read_events(base)
 
 
-def test_fold_five_states():
+def test_fold_six_states():
     events = [
         _ev(10, 'stage0.remove', 'start'),
         _ev(20, 'stage0.remove', 'end', exit_code=0),
@@ -168,11 +168,21 @@ def test_fold_five_states():
     assert by_node['stage0.approve'].elapsed == 70
     assert by_node['stage0.edit'].beacon == 'landed_red'
     assert by_node['stage0.edit'].last_exit == 1
-    assert by_node['stage1.partition'].beacon == 'failed'
+    assert by_node['stage1.partition'].beacon == 'stopped'
     assert by_node['stage1.partition'].last_exit == 2
     assert by_node['stage4.plan'].beacon == 'pending'
     assert by_node['stage4.plan'].label == NODES['stage4.plan'].label
     assert all(s.beacon in BEACON_STATES for s in steps)
+
+
+def test_event_view_projects_exit_two_and_crash_without_browser_inference():
+    stopped = beacon.event_view(
+        _ev(10, 'stage0.approve', 'end', exit_code=2))
+    crashed = beacon.event_view(
+        _ev(20, 'stage0.approve', 'end', exit_code=70))
+
+    assert stopped.beacon == 'stopped'
+    assert crashed.beacon == 'failed'
 
 
 def test_fold_takes_the_latest_event_per_node():

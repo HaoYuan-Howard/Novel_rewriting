@@ -144,9 +144,12 @@ JOB_STATE: Final = ('running', 'ok', 'landed_red', 'failed', 'unknown')
 
 #: RunSupervisor 管理的整本书运行状态。它与单节点 ``JOB_STATE`` 正交：
 #: ``paused`` 是可恢复的稳定态，``pending`` 是已建契约但尚未打开 execution
-#: epoch；服务重启后无法证明进程/锁状态时仍必须投影成 ``unknown``。
+#: epoch；``stopped`` 是服务端同时拿到 exit 2 与显式 stopped 终验后的安全停点，
+#: 不与真正崩溃的 ``failed`` 混写。服务重启后无法证明进程/锁状态时仍必须
+#: 投影成 ``unknown``。
 AGENT_RUN_STATE: Final = (
-    'pending', 'running', 'paused', 'ok', 'landed_red', 'failed', 'unknown',
+    'pending', 'running', 'paused', 'ok', 'landed_red', 'stopped', 'failed',
+    'unknown',
 )
 
 #: 前端只呈现服务端明确开放的控制，不根据相似状态自行猜测。v1 running
@@ -2490,7 +2493,9 @@ PROGRESS_PHASES: Final = ('start', 'end')
 #: exit 0」，而 exit 0 ≠ 合格（`F-087`）——「这层过没过」的唯一判官仍是
 #: check 报告的 badge。`landed_red` 保留 exit 1 的「已落盘但判定不通过」，
 #: 不许与 exit 2 / 3 / 70 的「没跑成」压成 `failed`。
-BEACON_STATES: Final = ('pending', 'running', 'ok', 'landed_red', 'failed')
+BEACON_STATES: Final = (
+    'pending', 'running', 'ok', 'landed_red', 'stopped', 'failed',
+)
 
 #: Commander/operator 的本地阶段遥测。它与 ``PIPELINE_STEPS`` 正交：这里没有
 #: node id，人工审阅/终审同步也不因此冒充流水线节点或模型调用。

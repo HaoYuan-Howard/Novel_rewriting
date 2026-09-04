@@ -308,8 +308,10 @@ agent 代跑不是 `NODES` 中的流水线节点，不能塞进 `JobStart`；它
 原请求，避免等待期间配置漂移。
 
 生命周期事件闭集为 `started / epoch_opened / paused / resumed / epoch_closed / ended / reconciled`；
-agent state 闭集独立为 `pending / running / paused / ok / landed_red / failed / unknown`，不借用
-`JOB_STATE`。公开 pause/resume/stop 路由统一返回 202，只确认 Supervisor 已受理，不同步等待生命周期
+agent state 闭集独立为 `pending / running / paused / ok / landed_red / stopped / failed / unknown`，
+不借用 `JOB_STATE`。`stopped` 只由服务端在 ended 同时携带 `exit_code=2` 与
+`outcome.state=stopped` 时投影；exit 70、旧事件缺 outcome、或 exit 2 的终验不是 stopped 时仍为
+`failed`，浏览器不得从裸退出码补算。公开 pause/resume/stop 路由统一返回 202，只确认 Supervisor 已受理，不同步等待生命周期
 终态：pause 先关新 admission，后台等待当前 claim/beacon 闭合后才追加 paused，且不 cancel 正常付费
 节点；resume 在后台同身份续当前 epoch 和 provider session，代码/skill 漂移则同 parent run 开新 epoch、
 免费复检并新建 provider session；stop 在后台 cancel 全进程树并 drain，闭合后才永久 ended，且不可
@@ -377,7 +379,10 @@ lock 内截回 committed prefix、fsync，并分别追加 `authorized / applied`
 `wire_version / ts / quarantine_name`；不得解析、补全、补 LF 或猜测半条 JSON/end。
 
 `ended` 事件在 `exit_code` 外另带 `outcome`（旧事件缺失时折叠成 `unknown`）。
-`AgentRunRecord.state` 仍只按外层进程退出码折叠；`outcome.state` 的唯一取值面是
+`AgentRunRecord.state` 由外层 ended 事实与同一事件的服务端终验共同折叠：0 为 `ok`、1 为
+`landed_red`、仅 `2 + outcome.stopped` 为 `stopped`，其余非零为 `failed`。运行页信标的
+`RunStepView.beacon` 与 `events_tail[].beacon` 也由后端同一折叠口给出；exit 2 是 `stopped`，浏览器
+只呈现，不从 `exit_code` 重建状态。`outcome.state` 的唯一取值面是
 `AGENT_DELIVERY_OUTCOME`：`ready` / `ready_with_disclosures` / `stopped` / `failed` /
 `unknown`。终验从盘面重新核 Stage2 正式 Global + 称名投影 + Blueprint current、联合 HARD 通过、
 global review 的 generation-safe 面（blocking 逐项 PASS，或仅含已显式完整组隔离的

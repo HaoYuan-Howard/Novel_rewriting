@@ -50,6 +50,10 @@ def test_agent_run_delegation_is_explicit_without_weakening_stage0_review():
     assert 'AgentRun 委托不是自动批准' in stage0
     assert 'reason 必须写明剔除分母、边界及反向抽查证据' in stage0
     assert '生产词法识别的独占章号行集合' in stage0
+    assert '后续 Stage1 必须保留的开篇文案' in stage0
+    assert '与正文形成重复钩子，都是合法文案体裁' in stage0
+    assert '不能仅因它不是第一章正文首句或与后文重复就判为漏剔' in stage0
+    assert '开篇文案是 `R-1.12` 的必填下游材料，不是待删除前缀' in stage0
     assert '不在 Stage0 判断章号顺序或连续性' in stage0
 
 

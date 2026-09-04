@@ -86,7 +86,7 @@ def test_stage0_stopped_workpack_stops_before_options_or_reviewer(
 
 def test_json_command_preserves_explicit_stage0_stopped_stdout(monkeypatch) -> None:
     payload = {
-        'schema': 'novel-operator-stage0-review-workpack-v2',
+        'schema': 'novel-operator-stage0-review-workpack-v3',
         'state': 'stopped',
         'route': 'source_unavailable',
         'approval_reason_draft': '原文不可用，不得批准',
@@ -142,6 +142,10 @@ def test_stage0_offers_typed_stop_and_loader_never_turns_it_into_approval(
 
     assert [option['id'] for option in options] == [
         'node:stage0.approve', 'stop:stage0.approve']
+    assert '不得把 required_opening_copy' in \
+        options[1]['exact_request']['action']['reason']
+    assert '重复钩子作为删除理由' in \
+        options[1]['exact_request']['action']['reason']
     request = copy.deepcopy(options[1]['exact_request'])
     request['action']['reason'] = (
         '通读 retained 全文后发现第 9 章是无词法信号的番外，'
@@ -499,7 +503,7 @@ def test_non_stage2_business_identity_survives_code_and_surface_rollover(
         tmp_path, monkeypatch) -> None:
     """同一 Stage0 revision/全文主体换 epoch 不得重新购买首审。"""
     pack_box = {'value': {'stage0': {
-        'schema': 'novel-operator-stage0-review-workpack-v2',
+        'schema': 'novel-operator-stage0-review-workpack-v3',
         'state': 'review_required',
         'revision_id': '1' * 64,
         'retained_review_material': {'text_sha256': '2' * 64},

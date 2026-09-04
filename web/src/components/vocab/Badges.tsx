@@ -1,4 +1,14 @@
-import { BADGE, GATE, JOB, NOT_RUN, SEV, type Badge, type JobState } from '@/constants/vocabulary'
+import {
+  AGENT_STOPPED,
+  BADGE,
+  GATE,
+  JOB,
+  NOT_RUN,
+  SEV,
+  type Badge,
+  type JobState,
+  type JobStateToken,
+} from '@/constants/vocabulary'
 
 /**
  * badge 为 null 就是「没跑过」，**不会掉回 pass**。
@@ -41,8 +51,8 @@ export function CheckMark({ badge }: { badge: Badge | null }) {
   )
 }
 
-export function JobStateChip({ state }: { state: JobState }) {
-  const m = JOB[state]
+function StateTokenChip({ token }: { token: JobStateToken }) {
+  const m = token
   const dot: React.CSSProperties = {
     display: 'inline-block',
     flex: 'none',
@@ -64,6 +74,15 @@ export function JobStateChip({ state }: { state: JobState }) {
       {m.label}
     </span>
   )
+}
+
+export function JobStateChip({ state }: { state: JobState }) {
+  return <StateTokenChip token={JOB[state]} />
+}
+
+/** 整书 AgentRun 的显式终态；单节点 JobState 不扩域。 */
+export function AgentStoppedChip() {
+  return <StateTokenChip token={AGENT_STOPPED} />
 }
 
 /** 闸门上的「✓ 已看过 / · 还没看」 */

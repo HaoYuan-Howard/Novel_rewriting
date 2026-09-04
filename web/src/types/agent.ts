@@ -177,6 +177,7 @@ export type AgentRunState =
   | 'paused'
   | 'ok'
   | 'landed_red'
+  | 'stopped'
   | 'failed'
   | 'unknown'
 

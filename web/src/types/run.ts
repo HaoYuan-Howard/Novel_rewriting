@@ -9,7 +9,7 @@
  * 它是**观察轨迹不是判据结论** —— ok 只念作「跑完（exit 0）」，
  * 合不合格永远看各层屏的 badge，这一屏不做判定。
  */
-export type RunBeacon = 'pending' | 'running' | 'ok' | 'landed_red' | 'failed'
+export type RunBeacon = 'pending' | 'running' | 'ok' | 'landed_red' | 'stopped' | 'failed'
 export type RunResumeFrontierState = 'ready' | 'blocked' | 'pipeline_complete' | 'unknown'
 export type RunNextHandler = 'code' | 'commander' | 'executor' | 'human' | 'none' | 'unknown'
 export type RunResumeVerdict = 'run' | 'skip' | 'redo' | 'unknown' | 'legacy_incompatible'
@@ -35,10 +35,14 @@ export interface RunEvent {
   sid: string
   /** 新信标恒有；旧 agent_progress JSONL 行经后端读取时为 null。 */
   run_id: string | null
+  /** 同一 parent run 内的精确进程 attempt；旧行可空。 */
+  execution_id: string | null
   node: string
   phase: 'start' | 'end'
   exit_code: number | null
   note: string | null
+  /** 服务端从原始信标折叠的观察态；前端不得从 exit_code 另算。 */
+  beacon: RunBeacon
 }
 
 /** 后端 operator 在同一快照上给出的续跑点；前端不从信标或 paid 字段反推。 */

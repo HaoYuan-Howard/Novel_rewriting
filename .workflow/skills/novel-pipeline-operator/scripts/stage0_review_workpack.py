@@ -47,6 +47,7 @@ def _pattern(key: str, label: str, expression: str, *, ignore_case: bool = False
 #: 固定口径的审阅型模式唯一落点。生产删除规则仍只在
 #: ``novel.core.ingest::scan_text``；这里的每一处命中都必须由人读上下文。
 REVIEW_PATTERN_VERSION = 'stage0-review-v1'
+WORKPACK_SCHEMA = 'novel-operator-stage0-review-workpack-v3'
 REVIEW_PATTERNS: tuple[ReviewPattern, ...] = (
     _pattern('site_url', '网址/域名',
              r'https?://[^\s，。；！？]+|www\.[^\s，。；！？]+|'
@@ -186,6 +187,12 @@ def _production_markers(text: str) -> dict[str, object]:
             'nonempty_line_count': len(prefix_rows),
             'nonempty_lines': prefix_rows,
             'human_classification': None,
+            'expected_role': 'required_opening_copy',
+            'review_rule': (
+                '叙事性概述、提前呈现后文情节或对白、与正文形成重复钩子均是合法'
+                '开篇文案体裁；不得仅因不是第一章正文或与后文重复而剔除。只把'
+                '书名/作者署名、平台网址、站内导航、更新订阅/票赏推广、作者站务元话语等'
+                '不属于作品叙事文案的站务或元数据残留视为问题。'),
         }
     else:
         before_first = {
@@ -193,6 +200,10 @@ def _production_markers(text: str) -> dict[str, object]:
             'nonempty_line_count': None,
             'nonempty_lines': [],
             'human_classification': None,
+            'expected_role': None,
+            'review_rule': (
+                '生产词法未识别到章号行，不能把整本书自动解释成开篇文案；'
+                '正式章结构仍交 Stage1 裁决。'),
         }
     return {
         'production_nonbody_markers': [
@@ -254,7 +265,7 @@ def build_workpack(base: str | Path, sid: str, *, context_chars: int = 100,
     checks = _check_summary(check)
 
     common: dict[str, object] = {
-        'schema': 'novel-operator-stage0-review-workpack-v2',
+        'schema': WORKPACK_SCHEMA,
         'state': 'review_required',
         'base': str(base_path),
         'sid': sid,
@@ -352,7 +363,9 @@ def build_workpack(base: str | Path, sid: str, *, context_chars: int = 100,
             'text': clean,
             'meaning': (
                 '必须全文反向核对是否残留无结构信号的番外/后记/尾声；'
-                '零正则命中不等于可批准'),
+                '零正则命中不等于可批准；首章号前的叙事性文案按 '
+                'structure_denominator.before_first_chapter_marker.review_rule 审阅，'
+                '不属于这组三类漏剔'),
         },
         **production_markers,
         'production_candidates_not_selected': candidates,
@@ -377,9 +390,13 @@ def build_workpack(base: str | Path, sid: str, *, context_chars: int = 100,
     if before_first.get('state') == 'no_chapter_marker':
         prefix_note = '首章前文案区=不适用（生产词法未识别到章号行）；'
     elif prefix_count == 0:
-        prefix_note = '首个章号前非空行=0（无材料需文案区定性）；'
+        prefix_note = (
+            '首个章号前非空行=0（缺少 R-1.12 必填开篇文案，后续 Stage1 '
+            '将关闭式停止，不得把空分母当作可批准）；')
     else:
-        prefix_note = f'首个章号前非空行={prefix_count}，文案区定性=待确认；'
+        prefix_note = (
+            f'首个章号前非空行={prefix_count}，预期角色=R-1.12 必填开篇文案，'
+            '文案/元数据定性=待确认（叙事概述或与后文重复本身合法）；')
     structure_note = (
         f'生产词法识别 {len(chapter_numbers)} 个章号行，按原序={chapter_numbers}；'
         f'{prefix_note}'
@@ -425,7 +442,7 @@ def main(argv: list[str] | None = None) -> int:
         )
     except (NovelError, OSError, RuntimeError, ValueError) as exc:
         payload = {
-            'schema': 'novel-operator-stage0-review-workpack-v2',
+            'schema': WORKPACK_SCHEMA,
             'state': 'stopped',
             'error': f'{type(exc).__name__}: {exc}',
             'hint': getattr(exc, 'hint', None),

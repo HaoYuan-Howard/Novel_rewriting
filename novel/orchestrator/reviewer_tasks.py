@@ -1201,7 +1201,9 @@ def _submission_options(
         })
         stop_request = _request_wrapper(current, waiting_on, {
             'kind': 'stop',
-            'reason': '<明确指出不能批准的 retained/剔除段证据与后续 stage0.edit 修复坐标>',
+            'reason': (
+                '<明确指出不能批准的 retained/剔除段证据与后续 stage0.edit 修复坐标；'
+                '不得把 required_opening_copy 的叙事概述、后文预告或重复钩子作为删除理由>'),
         })
         return [
             _option(

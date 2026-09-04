@@ -518,6 +518,17 @@ class ProgressEvent(FrozenModel):
         return self
 
 
+class RunEventView(ProgressEvent):
+    """运行页时间线的一行；在原始信标外携服务端折叠的观察态。
+
+    ``ProgressEvent`` 是 append-only 原始证据，不能为界面回写派生字段；本 view
+    只用于 HTTP 响应。这样 exit 2 的 ``stopped`` 与真正失败仍由后端唯一判定，
+    浏览器不再从裸退出码另造第二套状态机。
+    """
+
+    beacon: BeaconState
+
+
 class OperatorPhaseEvent(FrozenModel):
     """Commander/operator 本地阶段的一行持久 wire（v1）。
 
@@ -700,7 +711,7 @@ class RunProgressView(StrictModel):
     #: （stage0.remove 打点先于书目录落地，进度屏那时也得开得开）。
     stage_done: dict[str, bool | None]
     #: 最近若干条信标事件（人读时间线，文件序——新的在后）。
-    events_tail: list[ProgressEvent]
+    events_tail: list[RunEventView]
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1374,7 +1385,7 @@ class AgentRunRecord(StrictModel):
     ended: int | None
     exit_code: int | None
 
-    #: `JobState` 那五态。**`unknown` 是真状态，不是缺省值**（`R-11.11` 同构）：
+    #: 整书外层进程状态。**`unknown` 是真状态，不是缺省值**（`R-11.11` 同构）：
     #: 服务重启后，子进程是死是活我们真的不知道。
     state: AgentRunState
 
@@ -1389,18 +1400,23 @@ class AgentRunRecord(StrictModel):
 
     @model_validator(mode='after')
     def _state_matches_the_events(self) -> AgentRunRecord:
-        """折叠规则只有一处算（同 `JobRecord` 那条）。"""
+        """折叠规则只认 ended 事实与服务端终验，不让前端补推。"""
         if self.exit_code is None:
-            if self.state in ('ok', 'landed_red', 'failed'):
+            if self.state in ('ok', 'landed_red', 'stopped', 'failed'):
                 raise ValueError(
                     f'state={self.state!r} 而没有 exit_code——'
                     f'「跑完了」这个结论只能从退出码来')
         else:
             want = ('ok' if self.exit_code == 0 else
-                    'landed_red' if self.exit_code == 1 else 'failed')
+                    'landed_red' if self.exit_code == 1 else
+                    'stopped' if self.exit_code == 2
+                    and self.outcome is not None
+                    and self.outcome.state == 'stopped' else 'failed')
             if self.state != want:
-                raise ValueError(f'exit_code={self.exit_code} 应折叠成 {want!r}，'
-                                 f'实得 {self.state!r}')
+                raise ValueError(
+                    f'exit_code={self.exit_code}, outcome='
+                    f'{self.outcome.state if self.outcome else None!r} '
+                    f'应折叠成 {want!r}，实得 {self.state!r}')
         if self.state == 'unknown' and not self.note:
             raise ValueError('state=unknown 必须说出原因（R-11.11）')
         if self.state == 'running' and self.contract is not None \

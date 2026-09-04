@@ -231,6 +231,12 @@ export const JOB: Record<JobState, JobStateToken> = {
   },
 }
 
+/** AgentRun / 进度信标的显式安全停点；不是 Job failed，也不开放 resume。 */
+export const AGENT_STOPPED: JobStateToken = {
+  ...JOB.landed_red,
+  label: 'stopped 安全停点',
+}
+
 export interface StageDef {
   n: string
   key: string

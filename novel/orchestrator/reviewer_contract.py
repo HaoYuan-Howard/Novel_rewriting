@@ -32,9 +32,9 @@ COMMON = '''裁决纪律：
 
 #: 契约 id → 裁决判据正文；与 delegated-review.md 锚块逐字一致。
 CONTRACT_TEXT: Mapping[str, str] = {
-    'stage0': '''1. 逐段判断被剔除内容是否确为广告、平台尾巴、元数据或非正文；任何情节、人物行动、对白、章节正文被剔除都先修复。
+    'stage0': '''1. 逐段判断被剔除内容是否确为平台广告、站点尾巴、元数据或非正文；任何情节、人物行动、对白、开篇文案或章节正文被剔除都先修复。作品自身的叙事性开篇文案不是平台广告。
 2. 核对总码点、保留码点、剔除段数与保留率；异常低的保留率必须解释，不能只看 HARD。
-3. 逐字通读工作包的完整 current clean_text，反查无词法信号的番外/后记/尾声；再检查正文开头、结尾和剔除边界，避免截断句子或把正文前言误删。
+3. 逐字通读工作包的完整 current clean_text，反查无词法信号的番外/后记/尾声；再检查开篇文案、第一章正文开头、全书结尾和剔除边界，避免截断句子或误删合法材料。
 4. 把 `s0_approval=pending` 的 HARD 识别为当前工作包正在处理的待批准项，而不是剔除质量失败；`s0_correctness=UNVER` 正是本轮须由 Reviewer 读材料后作出的人类语义裁决，不得把这两个待决状态当作拒绝审阅本身的理由；确认除此项外无 HARD，所有 warning 均已人工判断。
 5. 发现误删或漏剔时不得违心批准；选择 `stop:stage0.approve` typed option，reason 必须指出完整 retained/剔除段中的精确证据与后续 `stage0.edit` 修复坐标。该动作不写审批、不执行节点；修复后由新 surface 重新复审。
 6. 完成前述审阅且其余 HARD 为零时，才选择 `node:stage0.approve` submission option；AgentRun 委托不是自动批准，reason 必须写明剔除分母、边界及反向抽查证据。
@@ -43,8 +43,8 @@ CONTRACT_TEXT: Mapping[str, str] = {
    不再为每本书临时拼词表，也不把这些审阅模式搬进生产剔除规则；
 2. 每一个命中都要逐条读上下文再定性——现代题材里社交软件、人群、群聊这类词是正文自然用词，
    凭词表命中就判广告会把正文当垃圾删掉；
-3. 通读完整 retained clean_text，反向查找纯数字章号下的番外语义等零模式信号漏剔；再抽查首尾边界：首行是否为正文首句（而非标题/元数据残留），尾行是否为完结标记或正常收束，有无被截断的句子；
-4. 顺带核一次结构分母（总行数/非空行、生产词法识别的独占章号行集合、第一个章号之前是否为文案区）；这些读数只服务反向漏剔审阅，不在 Stage0 判断章号顺序或连续性。''',
+3. 通读完整 retained clean_text，反向查找纯数字章号下的番外语义等零模式信号漏剔；再抽查首尾边界：生产词法识别到首个章号时，号前非空片段应是后续 Stage1 必须保留的开篇文案。叙事性概述、提前呈现后文情节或对白、与正文形成重复钩子，都是合法文案体裁，不能仅因它不是第一章正文首句或与后文重复就判为漏剔；只把书名/作者署名、平台网址、站内导航、更新订阅/票赏推广、作者站务元话语等不属于作品叙事文案的站务或元数据残留视为问题。尾行应为完结标记或正常收束，且不得截断句子；
+4. 顺带核一次结构分母（总行数/非空行、生产词法识别的独占章号行集合、第一个章号之前是否形成非空开篇文案）；开篇文案是 `R-1.12` 的必填下游材料，不是待删除前缀。若已识别到首个章号但号前没有非空文案，应关闭式停止并说明 Stage1 将缺少必填 hook；这些读数只服务材料分区与反向漏剔审阅，不在 Stage0 判断章号顺序或连续性。''',
     'stage2': '''1. `PASS`：主体与原文逐项一致，且集合完整性已做正向与反向核对；scope 总理由与逐项例外理由都写明分母和核验位置。
 2. `FAIL`：存在可指向的冲突、错抽或漏抽；当前增量里的问题必须一次列全。事实确有错误时从 `stage2.global --emit-edit-template` 取得当前 typed GlobalEdit。字段 patch 只能修改模板已有行，行数、顺序、subject id 与字段集合全部绑定；集合完整性的新增、删除或拆分只填写模板给出的 `collection_edits[].operations`，不得改 `collection` 或 `expected_collection_sha256`。Stage2 每个 Global/MainText 主体最多四席 Commander：一席完整审阅、至多两席定向订正、一席只读独立终审；每席使用新的 logical/provider session，同席内因网络中断的 resume 不占新席。订正席的包只含仍未闭合或因依赖变化重开的 subject cards；终审席读全部 blocking 项（含已 PASS 的理由与证据）、整书正文与 Blueprint 工作包，只能 confirm 或以自己为 actor 把指定项 reopen 为 FAIL/UNVER，不得提交任何修改，也不得为通过而复述前席理由。`post_edit_review` 绑定修前 workpack、source 与完整旧未闭合 scope：本 edit 新打开的项才走默认自审，未修改且 hash 存活的旧 FAIL/UNVER 必须在 `decisions[]` 显式复判。不能重复提交同一 review，也不能用“已知问题”把 FAIL 当成披露放行。
 3. `UNVER`：证据不足以安全判断；绝不改写成 PASS。只有当前 submission option 明确给出 `quarantine_group`、且该 kind 的 `generation_impact=quarantine_or_fix` 时，才可在阅读完整组后填写隔离理由：状态仍为 UNVER，原始事实与审计保留，下游写作视图删除完整组。`generation_impact=must_fix` 只有在证据支持 PASS 或能指出真实事实错误并用 GlobalEdit 修正时才能收口；材料仍不足就保持 UNVER 并以 `stopped` 结束，不为追求全绿臆造编辑。`disclose` 项不阻断生成但继续披露。''',

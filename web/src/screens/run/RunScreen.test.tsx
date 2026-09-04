@@ -116,10 +116,24 @@ describe('RunScreen 交付终验', () => {
     )
   })
 
-  it('交付失败的判定依据可聚焦、可展开——不只挂在 title 上', async () => {
-    // ⭐ `reason` 曾经只有 `title`。`title` 只在鼠标悬停时出现：触摸与键盘用户
-    //    一个字都读不到，而它是「为什么没交付、下一步做什么」的**唯一**出口。
+  it('真实 exit2/stopped 默认展示停点理由并只导航回后端当前阶段', async () => {
     const run = await mockApi.getRunProgress(SAMPLE_SID)
+    const stage0Approve = run.steps.find((step) => step.node === 'stage0.approve')
+    if (!stage0Approve) throw new Error('mock pipeline 缺 stage0.approve')
+    run.resume_frontier = {
+      state: 'blocked',
+      node: stage0Approve.node,
+      seq: stage0Approve.seq,
+      label: stage0Approve.label,
+      resume_verdict: 'run',
+      why: 'Stage0 当前版本等待正式审阅决定',
+      waiting_on: 'stage0.approve',
+      paid: false,
+      writes: 'approval',
+      next_handler: 'commander',
+      verified_skipped_nodes: ['stage0.remove'],
+      verified_skipped_count: 1,
+    }
     vi.spyOn(api, 'getRunProgress').mockResolvedValue(run)
     vi.spyOn(api, 'getCheck').mockResolvedValue(null)
     vi.spyOn(api, 'getAgentRuns').mockResolvedValue({
@@ -139,12 +153,12 @@ describe('RunScreen 交付终验', () => {
         active_epoch_id: null,
         started: 1,
         ended: 2,
-        exit_code: 0,
-        state: 'ok',
+        exit_code: 2,
+        state: 'stopped',
         note: null,
         outcome: {
           state: 'stopped',
-          reason: 'Stage2 复核闸未打开：current=True，counts={"pending": 3}',
+          reason: 'Commander reviewer 明确拒绝批准 stage0.approve：需先形成新的业务面',
           checked_at: 3,
         },
         allowed_controls: [],
@@ -156,18 +170,66 @@ describe('RunScreen 交付终验', () => {
     const toggle = await screen.findByRole('button', {
       name: /查看交付终验依据/,
     })
-    expect(toggle).toHaveAttribute('aria-expanded', 'false')
-    expect(screen.queryByTestId('delivery-reason')).not.toBeInTheDocument()
-
-    fireEvent.click(toggle)
-
     expect(toggle).toHaveAttribute('aria-expanded', 'true')
     expect(await screen.findByTestId('delivery-reason')).toHaveTextContent(
-      'Stage2 复核闸未打开',
+      'Commander reviewer 明确拒绝批准 stage0.approve',
     )
+    expect(screen.getByText('stopped 安全停点')).toBeVisible()
+    expect(screen.queryByText('failed 失败')).not.toBeInTheDocument()
+    expect(screen.getByText(/exit 2/)).toBeVisible()
+    const back = screen.getByTestId('stopped-stage-link')
+    expect(back).toHaveTextContent(`返回当前阶段：${stage0Approve.label}`)
+    expect(back).toHaveAttribute('href', `/n/${SAMPLE_SID}/stage0`)
+    expect(screen.queryByRole('button', { name: '继续' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '暂停' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '熄火' })).not.toBeInTheDocument()
     expect(screen.getByTestId('agent-profiles-unknown')).toHaveTextContent(
       '历史未记录，不能按当前默认倒推',
     )
+
+    fireEvent.click(toggle)
+    expect(toggle).toHaveAttribute('aria-expanded', 'false')
+    expect(screen.queryByTestId('delivery-reason')).not.toBeInTheDocument()
+  })
+
+  it('exit70 仍显示 failed，不被安全停点状态洗白', async () => {
+    const run = await mockApi.getRunProgress(SAMPLE_SID)
+    vi.spyOn(api, 'getRunProgress').mockResolvedValue(run)
+    vi.spyOn(api, 'getCheck').mockResolvedValue(null)
+    vi.spyOn(api, 'getAgentRuns').mockResolvedValue({
+      runs: [{
+        run_id: 'run-crashed',
+        start: {
+          sid: SAMPLE_SID,
+          argv: ['claude', '-p', 'x'],
+          prompt: 'x',
+          authorized: true,
+          egress_authorized: true,
+          code_version: 'abc',
+          profiles: null,
+        },
+        contract: null,
+        epochs: [],
+        active_epoch_id: null,
+        started: 1,
+        ended: 2,
+        exit_code: 70,
+        state: 'failed',
+        note: null,
+        outcome: {
+          state: 'unknown',
+          reason: 'Commander 未形成可信成功终态，结论未知',
+          checked_at: 3,
+        },
+        allowed_controls: [],
+      }],
+    })
+
+    renderRoute(<RunScreen />, `/n/${SAMPLE_SID}/run`)
+
+    expect(await screen.findByText('failed 失败')).toBeVisible()
+    expect(screen.queryByText('stopped 安全停点')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('stopped-stage-link')).not.toBeInTheDocument()
   })
 
   it('展示每次运行已冻结的 commander/default/override 精确配置', async () => {
@@ -302,10 +364,12 @@ describe('RunScreen check composition', () => {
       ts: 1,
       sid: SAMPLE_SID,
       run_id: 'run-screen-test',
+      execution_id: 'execution-screen-test',
       node: run.steps[0].node,
       phase: 'end',
       exit_code: 1,
       note: null,
+      beacon: 'landed_red',
     }]
     vi.spyOn(api, 'getRunProgress').mockResolvedValue(run)
     vi.spyOn(api, 'getAgentRuns').mockResolvedValue({ runs: [] })
@@ -323,6 +387,31 @@ describe('RunScreen check composition', () => {
     expect(screen.getAllByText('exit 1').some(
       (row) => row.style.color === JOB.landed_red.color,
     )).toBe(true)
+  })
+
+  it('按服务端 beacon 把 exit2 时间线与节点显示为安全停点', async () => {
+    const run = await mockApi.getRunProgress(SAMPLE_SID)
+    run.steps[0] = { ...run.steps[0], beacon: 'stopped', last_exit: 2 }
+    run.events_tail = [{
+      ts: 1,
+      sid: SAMPLE_SID,
+      run_id: 'run-stopped-event',
+      execution_id: 'execution-stopped-event',
+      node: run.steps[0].node,
+      phase: 'end',
+      exit_code: 2,
+      note: '显式终态，未落盘',
+      beacon: 'stopped',
+    }]
+    vi.spyOn(api, 'getRunProgress').mockResolvedValue(run)
+    vi.spyOn(api, 'getAgentRuns').mockResolvedValue({ runs: [] })
+    vi.spyOn(api, 'getCheck').mockResolvedValue(null)
+
+    renderRoute(<RunScreen />, `/n/${SAMPLE_SID}/run`)
+
+    expect((await screen.findAllByText('stopped 安全停点')).length).toBeGreaterThan(0)
+    expect(screen.getByText('exit 2 · stopped 安全停点')).toBeVisible()
+    expect(screen.queryByText('failed 失败')).not.toBeInTheDocument()
   })
 
   it('explains amber with the exact server-provided unver reason', async () => {

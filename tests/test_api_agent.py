@@ -18,6 +18,9 @@ fastapi = pytest.importorskip(
     'fastapi', reason='没装 fastapi ⇒ 这一批**没在查**，不是「查过没事」')
 from fastapi.testclient import TestClient               # noqa: E402
 
+from contracts.schema.orchestration import (           # noqa: E402
+    AgentDeliveryOutcome, AgentRunEvent, AgentRunStart,
+)
 from novel.api.app import UI_HEADER, create_app         # noqa: E402
 from novel.agents.base import AgentUsage                # noqa: E402
 from novel.commanders import (                          # noqa: E402
@@ -219,6 +222,29 @@ def test_start_list_log_and_stop_gate(client, monkeypatch):
 
     # 已结束 ⇒ 没东西可熄 ⇒ 409（显式终态，不是 500）
     assert c.post(f'/api/agent/runs/{run_id}/stop', headers=UI).status_code == 409
+
+
+def test_run_list_exposes_exit_two_with_stopped_outcome_as_stopped(client):
+    """HTTP 消费真实 ended 组合，不让页面从 exit_code 自己猜状态。"""
+    c, base = client
+    agent.append(base, AgentRunEvent(
+        run_id='explicit-stop', kind='started', ts=10,
+        start=AgentRunStart(
+            sid='42', base=base, argv=['codex', 'exec'], prompt='test',
+            authorized=True, egress_authorized=True,
+            profiles=_PIPELINE_PROFILES)))
+    agent.append(base, AgentRunEvent(
+        run_id='explicit-stop', kind='ended', ts=20, exit_code=2,
+        outcome=AgentDeliveryOutcome(
+            state='stopped', reason='Stage0 reviewer 明确停在安全边界',
+            checked_at=20)))
+
+    [record] = c.get('/api/agent/runs?sid=42').json()['runs']
+
+    assert record['exit_code'] == 2
+    assert record['state'] == 'stopped'
+    assert record['outcome']['state'] == 'stopped'
+    assert record['allowed_controls'] == []
 
 
 def test_pause_resume_stop_are_async_202_and_stop_ends_in_background(

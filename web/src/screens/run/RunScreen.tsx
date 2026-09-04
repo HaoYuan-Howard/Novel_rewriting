@@ -5,6 +5,7 @@ import { api } from '@/api/endpoints'
 import { qk } from '@/api/queryKeys'
 import {
   CHAPTERED_SCREENS,
+  AGENT_STOPPED,
   FRESH,
   GATE,
   JOB,
@@ -40,7 +41,12 @@ import { Mono } from '@/components/ui/Mono'
 import { Panel, PaneHeader } from '@/components/ui/Panel'
 import { LinkButton } from '@/components/ui/ActionButton'
 import { AgentProfilesSnapshot } from '@/components/agent/AgentProfilesSnapshot'
-import { CheckBadge, GateChip, JobStateChip } from '@/components/vocab/Badges'
+import {
+  AgentStoppedChip,
+  CheckBadge,
+  GateChip,
+  JobStateChip,
+} from '@/components/vocab/Badges'
 import { cx } from '@/lib/cx'
 
 /**
@@ -56,6 +62,7 @@ const BEACON: Record<RunBeacon, { token: JobStateToken; label: string }> = {
   running: { token: JOB.running, label: JOB.running.label },
   ok: { token: JOB.ok, label: JOB.ok.label },
   landed_red: { token: JOB.landed_red, label: JOB.landed_red.label },
+  stopped: { token: AGENT_STOPPED, label: AGENT_STOPPED.label },
   failed: { token: JOB.failed, label: JOB.failed.label },
 }
 
@@ -148,10 +155,21 @@ const DELIVERY_LABEL = {
  * （后端那句话里带着 counts、缺的是哪一格、阻塞待办的样本）。
  * ⇒ 与 `UnverifiedHelp` 同一条呈现纪律：按钮可聚焦、`aria-expanded`、展开成正文。
  */
-function DeliveryChip({ outcome }: { outcome: NonNullable<import('@/types/agent').AgentRunRecord['outcome']> }) {
+interface StoppedStageTarget {
+  to: string
+  label: string
+}
+
+function DeliveryChip({
+  outcome,
+  stoppedStageTarget,
+}: {
+  outcome: NonNullable<import('@/types/agent').AgentRunRecord['outcome']>
+  stoppedStageTarget: StoppedStageTarget | null
+}) {
   const ok = outcome.state === 'ready' || outcome.state === 'ready_with_disclosures'
   const explanationId = useId()
-  const [open, setOpen] = useState(false)
+  const [open, setOpen] = useState(outcome.state === 'stopped')
   return (
     <span className="inline-flex flex-col items-start gap-4">
       <button
@@ -172,7 +190,16 @@ function DeliveryChip({ outcome }: { outcome: NonNullable<import('@/types/agent'
           data-testid="delivery-reason"
           className="block max-w-[420px] rounded-block border border-line-btn bg-card px-10 py-8 text-tag leading-relaxed whitespace-pre-line text-ink-2"
         >
-          {outcome.reason}
+          <span className="block">{outcome.reason}</span>
+          {outcome.state === 'stopped' && stoppedStageTarget ? (
+            <Link
+              data-testid="stopped-stage-link"
+              to={stoppedStageTarget.to}
+              className="mt-7 inline-block font-semibold text-accent hover:underline"
+            >
+              返回当前阶段：{stoppedStageTarget.label}
+            </Link>
+          ) : null}
         </span>
       ) : null}
     </span>
@@ -187,12 +214,9 @@ function secs(n: number): string {
 
 /** 信标事件一行：时间 / 节点 / 开始·结束 / 退出码 / 备注 */
 function EventRow({ e }: { e: RunEvent }) {
-  const exitToken =
-    e.phase !== 'end' || e.exit_code === null || e.exit_code === 0
-      ? null
-      : e.exit_code === 1
-        ? JOB.landed_red
-        : JOB.failed
+  const exitToken = e.phase === 'end' && e.exit_code !== null && e.beacon !== 'ok'
+    ? BEACON[e.beacon].token
+    : null
   return (
     <div className="flex items-baseline gap-10 border-b border-line-row px-18 py-8">
       <Mono className="flex-none text-mini text-ink-5">{when(e.ts)}</Mono>
@@ -206,6 +230,7 @@ function EventRow({ e }: { e: RunEvent }) {
           style={exitToken ? { color: exitToken.color } : undefined}
         >
           exit {e.exit_code}
+          {e.beacon === 'stopped' ? ' · ' + AGENT_STOPPED.label : ''}
         </Mono>
       ) : null}
       {e.note ? <span className="min-w-0 truncate text-tag text-ink-4">{e.note}</span> : null}
@@ -217,7 +242,11 @@ function EventRow({ e }: { e: RunEvent }) {
  * agent 代跑进程块：观察（最近一条的状态徽标 + 可展开日志尾部）+ 唯一一个动作（熄火，二次确认）。
  * 互斥不归前端管 —— 服务端 409（JobConflict）是裁决，这里只把记录画出来。
  */
-function AgentRunBlock() {
+function AgentRunBlock({
+  stoppedStageTarget,
+}: {
+  stoppedStageTarget: StoppedStageTarget | null
+}) {
   const [resumingRunId, setResumingRunId] = useState<string | null>(null)
   const runs = useAgentRuns(undefined, resumingRunId !== null)
   const latest = runs.data?.runs[0] ?? null
@@ -249,6 +278,7 @@ function AgentRunBlock() {
   }, [resumingRunId])
 
   const stateChip = (state: AgentRunState) => {
+    if (state === 'stopped') return <AgentStoppedChip />
     if (state !== 'pending' && state !== 'paused') return <JobStateChip state={state} />
     return (
       <span className="rounded-full border border-line px-9 py-3 text-tag text-ink-4">
@@ -271,7 +301,14 @@ function AgentRunBlock() {
       ) : (
         <div className="flex flex-col gap-10 px-18 py-14">
           <div className="flex flex-wrap items-center gap-10">
-            {latest.outcome ? <DeliveryChip outcome={latest.outcome} /> : null}
+            {latest.outcome ? (
+              <DeliveryChip
+                outcome={latest.outcome}
+                stoppedStageTarget={
+                  latest.state === 'stopped' ? stoppedStageTarget : null
+                }
+              />
+            ) : null}
             {stateChip(latest.state)}
             <AuthorizationChip value={latest.start.authorized} label="付费授权" />
             <AuthorizationChip
@@ -501,6 +538,13 @@ export function RunScreen() {
       ?.querySelector<HTMLElement>('[data-frontier]')
       ?.scrollIntoView?.({ block: 'center', behavior: 'smooth' })
 
+  const stoppedStageTarget = (() => {
+    const frontier = q.data?.resume_frontier
+    if (!frontier?.node || !frontier.label) return null
+    const to = nodePath(frontier.node)
+    return to ? { to, label: frontier.label } : null
+  })()
+
   const checks = useQueries({
     queries: CHECK_KINDS.map((kind) => ({
       queryKey: qk.check(sid, kind),
@@ -526,7 +570,7 @@ export function RunScreen() {
       </header>
 
       {/* agent 代跑进程：独立查询，进度取数炸了也不挡这块 */}
-      <AgentRunBlock />
+      <AgentRunBlock stoppedStageTarget={stoppedStageTarget} />
 
       <QueryStates q={q} loadingLabel="读跑书进度">
         {(d) => (

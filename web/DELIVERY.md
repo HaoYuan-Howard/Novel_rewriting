@@ -72,9 +72,11 @@ Commander；两项同时授予后才显示「授权并开始跑书」。确认�
 headless agent；长 prompt 只经 stdin 传入，不进 argv/env/log。产品写入边界仍只允许 skill 明列的
 typed 人工输入与唯一终审包，正式产物一律经 CLI）。进度在 `/n/:sid/run` 实时跟踪，
 那里有 agent 进程状态、日志尾部与「熄火」按钮（`POST /api/agent/runs/:id/stop`）。
-进程状态与交付终验是两条正交状态：exit 0 只显示“进程完成”；服务端另以启动/结束代码指纹、
+进程状态与交付终验是两条正交状态：服务端把 `exit 2 + stopped 终验` 明确投影为安全停点，
+不会与 exit 70 的进程失败混写；exit 0 只显示“进程完成”。服务端另以启动/结束代码指纹、
 Stage2 typed 闸、当前成书、终审包和 inbox 阻塞轴判 `ready` / `ready_with_disclosures` /
-`stopped` / `failed` / `unknown`，界面不得从退出码补推“可下载”。
+`stopped` / `failed` / `unknown`，界面不得从退出码补推进程态或“可下载”。安全停点的理由默认展开，
+只提供返回后端当前续跑阶段的导航，不提供 resume 或代替 Commander 的执行按钮。
 互斥两个方向都拦：agent 在跑时起任何 API 作业 409，反之亦然。
 
 **Agent capability / executor / Commander 边界**：后端提供动态 `GET /api/agent/capabilities`，发布
