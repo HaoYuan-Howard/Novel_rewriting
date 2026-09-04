@@ -23,6 +23,7 @@ import re
 from collections.abc import Iterable, Mapping, Sequence
 from typing import Any
 
+from contracts.invariants import WORKPACK_READING_KINDS
 from contracts.schema.api import (
     DesignChapterReading,
     DesignChapterSubject,
@@ -42,9 +43,9 @@ from novel.stages.stage4.measure import (
     computed_structure_change_kinds, structure_metrics_of,
 )
 
-DESIGN_READING_KIND = 'stage4_design_chapter_reading_v1'
-STRUCTURE_READING_KIND = 'stage4_structure_chapter_reading_v1'
-WORKPACK_READING_KIND = 'stage4_workpack_reading_v1'
+WORKPACK_READING_KIND = WORKPACK_READING_KINDS[0]
+DESIGN_READING_KIND = WORKPACK_READING_KINDS[1]
+STRUCTURE_READING_KIND = WORKPACK_READING_KINDS[2]
 
 _FACT_ID = re.compile(r'^f\d{2,}_\d{3,}$')
 _BEAT_ID = re.compile(r'^b\d{2}_\d{2}$')

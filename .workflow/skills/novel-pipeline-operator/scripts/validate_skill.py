@@ -474,7 +474,7 @@ def validate(counters: dict[str, int] | None = None,
                 "open_gap_entries", "stage0_workpack_contract",
                 "finalizer_contract", "operator_telemetry_contract",
                 "routing_axes", "discovery_shims", "operator_next_contract",
-                "operator_execution_permit_contract"):
+                "operator_execution_permit_contract", "reviewer_contract_blocks"):
         counters.setdefault(key, 0)
     errors: list[str] = []
     root = _repo_root()
@@ -527,6 +527,33 @@ def validate(counters: dict[str, int] | None = None,
             errors.append(
                 f"reference 未从 SKILL.md 直接链接：{reference.relative_to(SKILL_DIR)}"
             )
+
+    # reviewer 契约锚块：运行时权威在 novel/orchestrator/reviewer_contract.py，
+    # 这里不 import 仓库代码，只守锚块配对、非空与至少一块；逐字对账由
+    # tests/test_reviewer_contract.py 负责。
+    delegated = skill_texts.get(SKILL_DIR / "references" / "delegated-review.md", "")
+    anchor = re.compile(r"^<!-- reviewer-contract:([a-z0-9-]+):(begin|end) -->$", re.M)
+    open_key = None
+    open_pos = 0
+    for match in anchor.finditer(delegated):
+        key, kind = match.group(1), match.group(2)
+        if kind == "begin":
+            if open_key is not None:
+                errors.append(f"reviewer-contract 锚块嵌套：{open_key} 未关闭又打开 {key}")
+                break
+            open_key, open_pos = key, match.end()
+            continue
+        if open_key != key:
+            errors.append(f"reviewer-contract 锚块不配对：end {key}，当前打开 {open_key}")
+            break
+        if not delegated[open_pos:match.start()].strip():
+            errors.append(f"reviewer-contract 锚块 {key} 为空")
+        counters["reviewer_contract_blocks"] += 1
+        open_key = None
+    if open_key is not None:
+        errors.append(f"reviewer-contract 锚块 {open_key} 没有 end")
+    if counters["reviewer_contract_blocks"] == 0:
+        errors.append("delegated-review.md 没有任何 reviewer-contract 锚块")
 
     # 宿主与 executor 是正交两轴。过去 runtime-profiles.md 同时装宿主等待、
     # DeepSeek doctor 与 agent session 恢复；执行者即使只想读 headless，也会被迫把
@@ -586,6 +613,10 @@ def validate(counters: dict[str, int] | None = None,
             errors.append(f"{host} 发现入口 name 与 canonical skill 不一致")
         if canonical_pointer not in shim_body:
             errors.append(f"{host} 发现入口没有指向 neutral canonical SKILL.md")
+        if "<immutable-workpack>" not in shim_body:
+            errors.append(
+                f"{host} 发现入口缺少受托 Commander/Reviewer 轮次的排除句；"
+                "headless reviewer 不得被引导去读整份 skill")
         for duplicated in ("## 执行主循环", "scripts/run_step.py", "## 完成定义"):
             if duplicated in shim_body:
                 errors.append(

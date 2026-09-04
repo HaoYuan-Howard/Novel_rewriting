@@ -79,6 +79,11 @@ _WITHHELD: dict[str, str] = {
         '下发的原料（dict of dict，也不是发布器认的形状）；前端不据此拼请求'),
     'DESIGN_STRATEGY_REPLAN_CONSTRAINT_INSTRUCTIONS': '同 DESIGN_REPAIR_CODE_INSTRUCTIONS',
     'DESIGN_STRATEGY_REPLAN_CONSTRAINT_EXAMPLES': '同 DESIGN_REPAIR_CONSTRAINT_EXAMPLES',
+    'WORKPACK_READING_KINDS': (
+        'Stage4 工作包 v2 reading 的 schema discriminator；工作包已携具体 kind，'
+        '前端按响应分支渲染，另发枚举只会制造第二个消费面'),
+    'WORKPACK_CLOSED_REF_KINDS': (
+        'B concern closed_ref 的解析分类随 reading 逐条下发；不是前端选项'),
     'AGENT_EXECUTOR_NODES': (
         'agent 执行节点属于 driver/model/effort/mode 组合能力面，'
         '唯一公开口是动态 `GET /api/agent/capabilities`；'

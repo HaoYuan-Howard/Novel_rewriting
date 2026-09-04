@@ -328,6 +328,7 @@ def test_prompt_is_reviewer_only_and_contains_no_control_plane_instructions(base
     assert '不得修改正式产物、服务账或 Markdown' in text
     assert 'expected-code-version' in text
     assert '证据不足时保留 UNVER' in text
+    assert 'reviewer 契约' in text and '不读取该 skill' in text
     assert 'run_step' not in text
     assert 'operator next' not in text
     assert 'finalizer' not in text

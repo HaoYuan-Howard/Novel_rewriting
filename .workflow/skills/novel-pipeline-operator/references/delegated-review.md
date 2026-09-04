@@ -73,17 +73,20 @@
 必须回完整 source 与 clean_text 做全文差异审阅，不能套用下面的零剔除快捷口径。
 批准理由字段只是带“待确认”的草稿，完成下列阅读后才能删去待确认措辞并提交：
 
+<!-- reviewer-contract:stage0:begin -->
 1. 逐段判断被剔除内容是否确为广告、平台尾巴、元数据或非正文；任何情节、人物行动、对白、章节正文被剔除都先修复。
 2. 核对总码点、保留码点、剔除段数与保留率；异常低的保留率必须解释，不能只看 HARD。
 3. 检查正文开头、结尾和剔除边界，避免截断句子或把正文前言误删。
 4. 确认除待批准项外无 HARD，所有 warning 均已人工判断。
 5. 需要修改时只走 `stage0.edit` 的正式编辑入口，复检后再批准。
+<!-- reviewer-contract:stage0:end -->
 
 记录每个被删段的语义类别；零剔除也要记录分母和边界抽查结果。
 
 **零剔除时这份职责不是消失，是掉转方向。** 分母为零 ⇒ 没有"被误删的段"可判 ⇒
 唯一还能出错的方向是**漏剔**，所以改做反向抽查，并把它当作本次代批的实际证据：
 
+<!-- reviewer-contract:stage0:begin -->
 1. 只读工作包按登记版本扫描平台尾巴/广告模式，并记录**扫了多少类、各命中几处**；
    不再为每本书临时拼词表，也不把这些审阅模式搬进生产剔除规则；
 2. 每一个命中都要逐条读上下文再定性——现代题材里社交软件、人群、群聊这类词是正文自然用词，
@@ -91,6 +94,7 @@
 3. 抽查首尾边界：首行是否为正文首句（而非标题/元数据残留），尾行是否为完结标记或正常收束，
    有无被截断的句子；
 4. 顺带核一次结构分母（总行数/非空行、独占数字行的章号集合、第一个章号之前是否为文案区）。
+<!-- reviewer-contract:stage0:end -->
 
 零命中要写成"扫了 N 个模式、0 命中"，不能写成"没问题"——前者有分母，后者没有。
 
@@ -113,9 +117,11 @@ workpack；确认完整面成立后，才把 scope 改为 `PASS`，
 展开回逐项持久记录；需要例外的 item id、subject hash 与 evidence 从当前 workpack 复制。
 要逐项裁 disclosure 时改用 `--review-scope all` 的完整骨架。裁决口径不变：
 
+<!-- reviewer-contract:stage2:begin -->
 1. `PASS`：主体与原文逐项一致，且集合完整性已做正向与反向核对；scope 总理由与逐项例外理由都写明分母和核验位置。
 2. `FAIL`：存在可指向的冲突、错抽或漏抽；首轮必须把全部问题一次列全。第二轮从 `stage2.global --emit-edit-template` 取得当前 typed GlobalEdit，在同一 Commander resume 上下文里一次提交合并修复与 `post_edit_review` 自审。patch 数组只能修改模板已有行，行数、顺序、subject id 与字段集合全部绑定；新增/拆分 subject 只走生产模板明确提供的完整 `*_replace`。producer 只把自审展开到本 edit 新打开的 blocking 项，未变化的旧 FAIL 仍红；第二轮不闭合也不启动第三轮。不能重复提交同一 review，也不能用“已知问题”把 FAIL 当成披露放行。
 3. `UNVER`：证据不足以安全判断；绝不改写成 PASS。若当前 submission option 明确给出 `quarantine_group`，可在阅读完整组后填写隔离理由：状态仍为 UNVER，原始事实与审计保留，下游写作视图删除完整组；否则先用 GlobalEdit 修复。只有 GlobalEdit 无法表达、且该组不能安全隔离时才以 `stopped` 结束。
+<!-- reviewer-contract:stage2:end -->
 
 ### blocking 与 disclosure 是两轴，不是两档优先级
 
@@ -239,6 +245,7 @@ B infeasible 终态，模板与 view 会同时发布其 concerns 和代码 proof
 非目标章业务字节必须恒等，provenance 记 `origin=human` 且不伪造 prompt/model/usage。逐项阅读工作包
 coverage 行 `reading` 中的安全盲真相、候选场景与服务端现场复算的结构对证后再编辑：
 
+<!-- reviewer-contract:stage4-design:begin -->
 1. 策略只决定 `accept / request_replan`。只有策略本身无法指导全书结构重构时才拒绝；单章问题不得
    借策略决定放大成整书重跑。
 2. 每章决定 `accept / request_repair`。拒绝理由必须指出该章可核证的问题；约束只选服务端枚举的
@@ -257,6 +264,7 @@ coverage 行 `reading` 中的安全盲真相、候选场景与服务端现场复
    preview/确认，但不得自行改 node、flags 或 token。typed approval 决定一经 loader 通过就按内容寻址
    持久化到 `_service/edits/<sid>/`；代码/skill 漂移、崩溃或重启后，同一 blocker 先零模型重放该
    决定，不重复唤起 Commander。
+<!-- reviewer-contract:stage4-design:end -->
 
 exact legacy-frozen 主体是唯一例外：真实全章 accept 仍必须提交 raw typed 决定，但公开 Design workpack 与
 `design_review` 随后投影为 `suspended`。这等同 `already_current` 地跳过重复 Commander 审阅，却绝不
@@ -275,6 +283,7 @@ edit token 伪造问题，frozen 路也始终不得生成 `s4rr1` 或 paid spawn
 舞台、材料摘录、本章结构读数与解开的 `binding_concerns`）与逐章 `structure_decision` 逐章裁决；
 不再读取 `plan_chapters.json`、蓝图或正文原始字节：
 
+<!-- reviewer-contract:stage4-structure:begin -->
 1. `retain` 章的声明变化必须为空；人工理由要能指出强线性、因果锁定、证据受限或本章本就没有可靠
    重组空间中的具体一种，不能只写“保留更稳”。
 2. `reconstruct` 章先核对声明的变化种类，再读代码复算的分区、披露顺序、非连续重组和首尾锚点。
@@ -286,6 +295,7 @@ edit token 伪造问题，frozen 路也始终不得生成 `s4rr1` 或 paid spawn
    开尾目标或 retain/reconstruct 决定；该不变量若被破坏，应由正式计划闸关闭式拒绝，不靠人工宽免。
 5. 逐条阅读 `binding_concerns`。它们是非阻断语义担忧，不是自动失败或正式 infeasible proof；接受章的
    理由应说明 concern 为何不破坏本章结构，无法确认时保留 `request_replan`，不得把 concern 隐藏掉。
+<!-- reviewer-contract:stage4-structure:end -->
 
 提交时必须使用服务端当前完整 subject SHA-256、actor、总理由，以及恰好覆盖全部计划章的逐章
 `accept / request_replan` 与理由。任一章需要重规划时，仍原子提交整本决定并保持 s4 关闭；审批本身
@@ -317,9 +327,11 @@ B 仍需新的独立付费授权与最终结构裁决。
 
 ## Stage5 写作授权
 
+<!-- reviewer-contract:stage5-writing:begin -->
 Stage5 写作授权与两次 Stage4 审阅都是独立的人类决定。只有当前最终 typed 结构决定覆盖全书且全部
 `accept`、并已单独生成 current/fresh WriterContext，才能生成写作授权模板；Commander 不得从 s4
 绿灯、付费总授权或正文外发授权推导这枚决定。
+<!-- reviewer-contract:stage5-writing:end -->
 
 ```text
 novel.cli approval template writing <SID> --base <BASE> --actor <ACTOR> --reason <理由>
@@ -327,10 +339,12 @@ novel.cli approval apply writing <SID> --base <BASE> --input <决定文件或 ->
 novel.cli approval show <SID> --base <BASE>
 ```
 
+<!-- reviewer-contract:stage5-writing:begin -->
 模板携带当前 Stage1 / Stage4 计划 / WriterContext 与 measurement contract 所绑定的完整 subject SHA-256。
 `apply writing` 只接受 typed JSON 的 actor、reason 与完整 current subject；旧 UI 的空 body 兼容入口
 不是 Commander 入口。结构、计划或测量主体漂移后旧授权必须显示为 non-current，不能靠历史
 `writing=true` 继续写作。
+<!-- reviewer-contract:stage5-writing:end -->
 
 ## Stage5 闭合回执
 
@@ -345,12 +359,14 @@ novel.cli approval apply stage5 <SID> --base <BASE> --input <决定文件或 ->
 novel.cli approval show <SID> --base <BASE>
 ```
 
+<!-- reviewer-contract:stage5-closure:begin -->
 `closure.workpack` 精确绑定 fresh Review、全部 canonical 章、当前规则指纹、must-appear finding、
 fact/unver 分组与未销账 trim。状态为 `review_required` 或 `blocked` 时先按 `next_step` 收口，不能填写
 模板硬过。`ready` 模板仍是关闭式起点：逐条核对 must-appear，只有正文证据确实存在时选
 `confirmed_present`；需要人工接受例外时选 `accepted_exception` 并写出可复核理由。fact/unver 整组
 确认必须按完整 items/digest 审阅，不能用“看过”代替。每项都要把 `placeholder=true` 改为 false、
 清空 `template_token`，并填写真实 actor/reason；workpack、Review、章稿或规则任一漂移都会拒绝旧模板。
+<!-- reviewer-contract:stage5-closure:end -->
 
 成功提交只写审批账，不启动作业。重新 `approval show` 确认 `closure.state=closed` 且 `gate.s5=true`
 后才能进入 Stage6/7；旧通用 s5、Stage5 writing 授权、Review exit 0 或 Commander 身份都不能代签。
@@ -367,6 +383,7 @@ ranking 与 opaque `review_token` 放在一个关闭式阅读面。若 `disposit
 按候选级而不是总报告级裁决。把 mechanical 与 semantic 中相同 label、相同完整
 SHA-256 主体的结论对齐后，依次筛选：
 
+<!-- reviewer-contract:stage6:begin -->
 1. 排除所选候选自身的任何机械 HARD。**这是服务端唯一会替你否决候选的一道闸。**
 2. 合并决议在**类型上恒是** `UNVER`：服务端不替人否决任何候选，矛盾线索只呈现不阻断。
    ⇒ 收口一律是逐项人工核验后记 `human_verification`（带 actor、reason 与完整
@@ -388,6 +405,7 @@ SHA-256 主体的结论对齐后，依次筛选：
    记录命中数/分母与无据意象条数，优先选择无据意象为零、事实密度最高者；检索结果与分母写进终审包。
 5. 仍并列时，比较它与 blueprint 开篇冲突、原作文案体裁和正文首章气质的一致性，并写出审美理由。
 6. 对所有落选候选记录淘汰原因；总报告中的落选残红可保留，但不能混写成所选候选残红。
+<!-- reviewer-contract:stage6:end -->
 
 三条候选都不合格时：
 
@@ -396,9 +414,11 @@ SHA-256 主体的结论对齐后，依次筛选：
 - 通过 `stage6.hook --apply-edit <绝对路径>` 落新一轮；
 - 重新运行机械 check 与 `stage6.semantic`，再选择该候选。
 
+<!-- reviewer-contract:stage6:begin -->
 同一文本出现相互矛盾的语义判断时，先核对完整 SHA-256、轮次、evaluator 指纹和输入
 freshness。确为同输入非确定性时采信更严格的一轮，不用后一次翻绿覆盖前一轮风险；
 把冲突本身写入终审包。
+<!-- reviewer-contract:stage6:end -->
 
 `stage6.approve --pick N --actor <ACTOR> --reason <text> --review-token <opaque>`
 前后同时核对：
@@ -421,6 +441,7 @@ review subject/contract，跳过重复 approve；代码或机械规则变化先�
 
 在运行 `stage7.approve` 前：
 
+<!-- reviewer-contract:stage7:begin -->
 1. 要求本层 HARD 全部清零，并逐角色核对旧 canonical、aliases、是否改名、新 canonical、理由和替换次数。
 2. 审阅 `rn_kept_contains_mapped`。保留串内嵌已改旧名时，展开该角色的映射，不能让 kept 保护旧名进入成书。
 3. 保留数字、排行、辈分、关系和官职语义标记；`rn_semantic_marker_changed` 命中时换用含相同标记的新名。
@@ -450,6 +471,7 @@ review subject/contract，跳过重复 approve；代码或机械规则变化先�
    只写书目录内 `stage7/name_map_edit.json`。提交前先跑
    `stage7.rename --validate-edit <绝对路径>`；它与 apply 共用完整构建/判定链但不归档、不覆盖、
    不退休成书。预检达到预期后再经 `stage7.rename --apply-edit <绝对路径>` 正式落盘。
+<!-- reviewer-contract:stage7:end -->
 
 任何映射编辑后都重新运行
 `approval workpack stage7` 并重读新包，再运行

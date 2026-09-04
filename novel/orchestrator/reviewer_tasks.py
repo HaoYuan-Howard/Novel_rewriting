@@ -55,7 +55,7 @@ from contracts.schema.evaluation import GlobalReviewDecisionSet
 from contracts.schema.orchestration import ReviewerActionRecord
 from contracts.schema.stage2 import GlobalEdit
 from novel import paths
-from novel.orchestrator import queue
+from novel.orchestrator import queue, reviewer_contract
 from novel.quality.global_review import QUARANTINABLE_REVIEW_GROUP_PREFIXES
 
 
@@ -1229,7 +1229,14 @@ Stage4 A/B 工作包的逐章裁决材料在 materials 的 coverage 行 reading 
     forbidden = ('run_step', 'operator next', 'finalizer')
     if any(token in instructions for token in forbidden):
         raise AssertionError('reviewer 静态指令意外包含调度/收尾指令')
+    # 本 blocker 的裁决判据随包下发；Commander 不再为此去读整份 operator skill。
+    contract = reviewer_contract.for_blocker(waiting_on)
+    if any(token in contract for token in forbidden):
+        raise AssertionError('reviewer 契约摘录意外包含调度/收尾指令')
     prompt = f"""{instructions}
+<reviewer-contract>
+{contract}
+</reviewer-contract>
 <immutable-workpack>
 {json.dumps(envelope, ensure_ascii=False, sort_keys=True, separators=(',', ':'))}
 </immutable-workpack>

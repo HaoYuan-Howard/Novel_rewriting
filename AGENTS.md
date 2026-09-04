@@ -33,7 +33,9 @@ commit 与对用户的工程回复统一使用中文。
 
 跑书、断点续跑、`state` / `inbox`、流水线恢复和 agent 代批只遵循
 `.workflow/skills/novel-pipeline-operator/SKILL.md` 及其按需 references，不读工程经验全集，也不手拼
-生产命令。只有故障转为代码诊断或修复时，才切回工程修改流程。
+生产命令。只有故障转为代码诊断或修复时，才切回工程修改流程。受托 Commander/Reviewer 轮次
+（提示内含 `<immutable-workpack>`）例外：只读随提示下发的裁决契约与材料，不加载 skill、不读工程
+文档、不读盘上产物。
 
 ## 不可破坏的系统不变量
 

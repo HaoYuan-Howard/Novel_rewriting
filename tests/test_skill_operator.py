@@ -123,6 +123,7 @@ def test_host_discovery_entries_are_identical_thin_pointers_to_neutral_canonical
         shim = payloads[-1].decode('utf-8')
         assert 'name: novel-pipeline-operator' in shim
         assert '../../../.workflow/skills/novel-pipeline-operator/SKILL.md' in shim
+        assert '<immutable-workpack>' in shim, '受托 reviewer 轮次必须被明确排除在 skill 加载之外'
         for duplicated in ('## 执行主循环', 'scripts/run_step.py', '## 完成定义'):
             assert duplicated not in shim, f'{entry} 复制了 canonical 内容：{duplicated}'
         for copied_dir in ('references', 'scripts', 'assets'):
@@ -1264,6 +1265,7 @@ _FLOORS = {
     'discovery_shims': 2,
     'operator_next_contract': 1,
     'operator_execution_permit_contract': 1,
+    'reviewer_contract_blocks': 11,   # delegated-review.md 的 reviewer 契约锚块
 }
 
 

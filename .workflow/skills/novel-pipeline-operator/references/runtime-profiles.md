@@ -67,6 +67,9 @@ RunSupervisor 暂停接纳新节点，在同一 parent run 内关闭旧 executio
   API/UI 做 0 成本 preview，**不会产生一个 headless 进程**。因此新启动 prompt 中两项都应为 granted；
   若缺句、为 false，或与 started 事件不一致，按 contract 损坏安全停止，不能把另一项推成真。
 - 启动后先运行 `state <sid>` 与 `inbox <sid>`，从盘上续跑。
+- 受托 reviewer 轮次的提示自带本 blocker 的裁决契约摘录（与
+  [代批与终审契约](delegated-review.md) 的 `reviewer-contract` 锚块逐字一致）；Commander 在这些
+  轮次不加载本 skill，只审随包材料。
 - Commander 已通过 typed loader 的 approval 决定由 RunSupervisor 按内容寻址落
   `_service/edits/<sid>/`；代码/skill 漂移、崩溃或重启后同一 blocker 先零模型重放，不重复唤起
   Commander。重放被拒只放开 blocker 重新完整审阅，不会把纠错提示发给没读过 workpack 的会话。

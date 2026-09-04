@@ -483,6 +483,14 @@ APPROVAL_WORKPACK_GROUPS: Final = (
 )
 #: 工作包只有 A / B 两个审阅面；它们都是只读视图，不是作业入口。
 APPROVAL_WORKPACK_KINDS: Final = ('design', 'structure')
+#: 工作包 v2 reading 的三种 typed 判别值：顶层、A 面章、B 面章。它们是 schema
+#: discriminator，不是前端选项，也不进 subject/token/proof。
+WORKPACK_READING_KINDS: Final = (
+    'stage4_workpack_reading_v1', 'stage4_design_chapter_reading_v1',
+    'stage4_structure_chapter_reading_v1',
+)
+#: B concern 的 closed_ref 解析结果分类；unknown 表示当前蓝图找不到该引用。
+WORKPACK_CLOSED_REF_KINDS: Final = ('fact', 'beat', 'hinge', 'unknown')
 #: 审批工作包相对当前 typed 决定的处置态。``already_current`` 只表示
 #: **同一份工作包摘要**已有当前有效批准；``suspended`` 表示 raw
 #: 人工决定仍精确绑定当前审阅主体，但前置验证权威不足，因而不产生

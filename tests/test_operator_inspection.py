@@ -161,6 +161,7 @@ def test_structure_workpack_reuses_the_snapshot_stage4_report_and_code(
         chapter_subject_sha256={1: 'b' * 64},
         plan=SimpleNamespace(output_chapters=[]),
         concerns=[],
+        blueprints=SimpleNamespace(blueprints=[]),
     )
     reports: list[object] = []
 

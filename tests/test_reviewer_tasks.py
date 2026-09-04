@@ -75,6 +75,14 @@ def test_dynamic_workpack_may_contain_tool_names_without_tripping_static_guard(
     assert task is not None
     assert 'finalizer、run_step 和 operator next' in task.prompt
     assert task.request_path == (tmp_path / 'review.json').resolve()
+    # 本 blocker 的裁决契约随包下发，且在 workpack 之前；Commander 不必再读 skill。
+    from novel.orchestrator import reviewer_contract
+    contract = task.prompt.split('<reviewer-contract>\n', 1)[1].split(
+        '\n</reviewer-contract>', 1)[0]
+    assert contract == reviewer_contract.for_blocker(
+        queue.WAITING_ON_STAGE4_DESIGN_REVIEW)
+    assert task.prompt.index('<reviewer-contract>') < task.prompt.index(
+        '<immutable-workpack>')
     envelope = task.prompt.split('<immutable-workpack>\n', 1)[1].split(
         '\n</immutable-workpack>', 1)[0]
     payload = json.loads(envelope)

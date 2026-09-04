@@ -34,6 +34,7 @@ from typing import Annotated, Any, Literal, TypeAlias
 from pydantic import Field, field_validator, model_validator
 
 from contracts.invariants import (
+    WORKPACK_CLOSED_REF_KINDS, WORKPACK_READING_KINDS,
     ADDRESS_CONTEXT,
     AGENT_EXECUTOR_NODES,
     AgentAvailability,
@@ -1961,7 +1962,7 @@ class WorkpackSceneReading(FrozenModel):
 
 class WorkpackClosedRefReading(FrozenModel):
     ref: str = Field(min_length=1)
-    kind: Literal['fact', 'beat', 'hinge', 'unknown']
+    kind: Literal[WORKPACK_CLOSED_REF_KINDS]
     text: str | None = None
 
 
@@ -1983,8 +1984,7 @@ class WorkpackCausalEdgeReading(FrozenModel):
 class StructureChapterReading(FrozenModel):
     """Stage4B 一章的裁决材料：由 plan + 当前蓝图确定性渲染（`R-5.25`）。"""
 
-    kind: Literal['stage4_structure_chapter_reading_v1'] = (
-        'stage4_structure_chapter_reading_v1')
+    kind: Literal[WORKPACK_READING_KINDS[2]] = WORKPACK_READING_KINDS[2]
     chapter_function: str = Field(min_length=1)
     chapter_rewrite_brief: str = Field(min_length=1)
     structure_decision: dict[str, Any]
@@ -2002,8 +2002,7 @@ class StructureChapterReading(FrozenModel):
 class DesignChapterReading(FrozenModel):
     """Stage4A 一章的裁决材料：全部 ref 恒为 opaque alias，claim 表每章只出现一次。"""
 
-    kind: Literal['stage4_design_chapter_reading_v1'] = (
-        'stage4_design_chapter_reading_v1')
+    kind: Literal[WORKPACK_READING_KINDS[1]] = WORKPACK_READING_KINDS[1]
     chapter_function: str = Field(min_length=1)
     weight: str = Field(min_length=1)
     chapter_rewrite_brief: str = Field(min_length=1)
@@ -2026,7 +2025,7 @@ WorkpackChapterReading = Annotated[
 class WorkpackReading(FrozenModel):
     """工作包顶层只出现一次的字段说明与整书材料。"""
 
-    kind: Literal['stage4_workpack_reading_v1'] = 'stage4_workpack_reading_v1'
+    kind: Literal[WORKPACK_READING_KINDS[0]] = WORKPACK_READING_KINDS[0]
     legend: dict[str, str]
     reconstruction_strategy: str | None = None
     chapter_weights: list[dict[str, Any]] | None = None

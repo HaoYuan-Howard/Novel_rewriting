@@ -264,8 +264,9 @@ immutable workpack 与唯一 typed request 落点。先逐项审阅，再做一�
 - 默认 Executor：{_backend_label(executor)}
 - Executor 节点覆盖：{overrides}
 
-审阅规范以 `{canonical_skill}` 及当前 workpack 明示的 review contract 为准；若两者与当前
-typed schema 冲突，关闭式拒绝并让本轮结束，不自行发明兼容写法。"""
+本 run 冻结的 operator skill 为 `{canonical_skill}`（整树指纹已入 epoch 审计）。受托 reviewer 轮次
+只以随轮提示下发的 reviewer 契约与 workpack 明示的 review contract 为准，不读取该 skill；
+若两者与当前 typed schema 冲突，关闭式拒绝并让本轮结束，不自行发明兼容写法。"""
 
 
 def _freeze_profiles(profiles: PipelineAgentProfiles | None,
