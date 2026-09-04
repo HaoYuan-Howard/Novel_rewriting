@@ -10,6 +10,7 @@ from typing import Any
 from contracts.artifacts import STAGE1_MAIN_TEXT
 from contracts.invariants import (
     GLOBAL_REVIEW_EFFECTS, GLOBAL_REVIEW_KINDS, review_effect_of,
+    review_generation_impact_of,
 )
 from contracts.schema.evaluation import (
     GlobalReview, GlobalReviewDecisionSet, GlobalReviewGenerationDisposition,
@@ -66,8 +67,19 @@ def blocking_scope_sha256(review: GlobalReview) -> str:
     })
 
 
-def _item(kind: str, path: str, value: Any) -> GlobalReviewItem:
-    digest = subject_sha256(value)
+def _item(
+    kind: str, path: str, value: Any, *, dependency: Any | None = None,
+) -> GlobalReviewItem:
+    """铸一条 review identity；可选 dependency 表达会改变本判断前提的邻接事实。
+
+    ``subject_path`` 仍只指向真正被裁决的字段，workpack 也仍展示该字段；dependency
+    只参加 hash。这样一条 secret 的 reveal 改动会精确重开同 secret 卡片，却不会
+    把全书每个已经成功的主体重新发送给 Commander。
+    """
+    digest = subject_sha256(
+        value if dependency is None else {
+            'subject': value, 'dependency': dependency,
+        })
     return GlobalReviewItem(
         item_id=f'{kind}:{path}:{digest[:12]}', kind=kind, subject_path=path,
         subject_sha256=digest, state='pending', evidence=[])
@@ -88,9 +100,13 @@ def _fact_item(
     path: str,
     claim: Any,
     evidence: Any,
+    *,
+    dependency: Any | None = None,
 ) -> GlobalReviewItem:
     """把一条可复核自由事实同时绑定到 claim 与原文 evidence。"""
-    return _item(kind, path, {'claim': claim, 'evidence': evidence})
+    return _item(
+        kind, path, {'claim': claim, 'evidence': evidence},
+        dependency=dependency)
 
 
 def _whole_book_item(
@@ -166,11 +182,15 @@ def enumerate_required(
     # 改写事实则必须重新通读来源确认没有漏项。
     projected_characters = projected_entities.get('characters') or {}
     projected_relations = projected_entities.get('relations') or []
+    character_members = sorted(str(key) for key in projected_characters)
+    relation_members = sorted(
+        str(row.get('relation_id')) for row in projected_relations
+        if isinstance(row, dict))
     rows.append(_whole_book_item(
-        'character_set_complete', 'entities.characters', projected_characters,
+        'character_set_complete', 'entities.characters', character_members,
         main_text_input))
     rows.append(_whole_book_item(
-        'relation_set_complete', 'entities.relations', projected_relations,
+        'relation_set_complete', 'entities.relations', relation_members,
         main_text_input))
     for cid, character in sorted((entities.get('characters') or {}).items()):
         rows.append(_item(
@@ -196,12 +216,23 @@ def enumerate_required(
     # 【世内生效时点】而不是【读者知情时点】，秘密类关系上两者系统性错位。
     # 下发侧那道补救闸门靠「`fact` 是否同时含两端人名」的启发式命中，
     # 判不准的那部分只能在这里由人兜住。
+    projected_secret_by_id = {
+        str(row.get('secret_id')): row
+        for row in ((projected.get('canon') or {}).get('secrets') or [])
+        if isinstance(row, dict)
+    }
     for index, relation in enumerate(entities.get('relations') or []):
         rid = relation.get('relation_id') or str(index)
         path = f'entities.relations.{rid}'
         claim = projected_relations[index] if index < len(projected_relations) else relation
+        visibility = claim.get('visibility') if isinstance(claim, dict) else None
+        linked_secret = (
+            projected_secret_by_id.get(str(visibility.get('secret_id')))
+            if isinstance(visibility, dict)
+            and visibility.get('kind') == 'via_secret' else None)
         rows.append(_fact_item(
-            'relation', path, claim, evidence_for(path)))
+            'relation', path, claim, evidence_for(path),
+            dependency=linked_secret))
 
     canon = global_grounding.get('canon') or {}
     projected_canon = projected.get('canon') or {}
@@ -223,38 +254,51 @@ def enumerate_required(
     # 逐条核已抽出的内容，不能证明集合没有整项漏抽；即使列表为空，也必须由人明确判断
     # 原文中确实没有被漏掉的规则或秘密。
     rows.append(_whole_book_item(
-        'world_rule_set_complete', 'canon.world_rules', projected_world_rules,
-        main_text_input))
+        'world_rule_set_complete', 'canon.world_rules', sorted(
+            str(row.get('rule_id')) for row in projected_world_rules
+            if isinstance(row, dict)), main_text_input))
     rows.append(_whole_book_item(
-        'secret_set_complete', 'canon.secrets', projected_secrets,
-        main_text_input))
+        'secret_set_complete', 'canon.secrets', sorted(
+            str(row.get('secret_id')) for row in projected_secrets
+            if isinstance(row, dict)), main_text_input))
     for ri, rule in enumerate(world_rules):
         rid = rule.get('rule_id') or str(ri)
-        rows.append(_item('world_rule_kind', f'canon.world_rules.{rid}.kind', rule.get('kind')))
+        rule_dependency = (
+            projected_world_rules[ri]
+            if ri < len(projected_world_rules) else rule)
+        rows.append(_item(
+            'world_rule_kind', f'canon.world_rules.{rid}.kind',
+            rule.get('kind'), dependency=rule_dependency))
         for vi, version in enumerate(rule.get('versions') or []):
             path = f'canon.world_rules.{rid}.versions.{vi}'
             projected_version = projected_world_rules[ri]['versions'][vi]
             rows.append(_fact_item(
-                'world_rule_version', path, projected_version, evidence_for(path)))
+                'world_rule_version', path, projected_version, evidence_for(path),
+                dependency=rule_dependency))
     for si, secret in enumerate(secrets):
         sid = secret.get('secret_id') or str(si)
+        secret_dependency = (
+            projected_secrets[si] if si < len(projected_secrets) else secret)
         fact_path = f'canon.secrets.{sid}.fact'
         rows.append(_fact_item(
-            'secret', fact_path, secret.get('fact'), evidence_for(fact_path)))
+            'secret', fact_path, secret.get('fact'), evidence_for(fact_path),
+            dependency=secret_dependency))
         for ei, event in enumerate(secret.get('knowledge_events') or []):
             path = f'canon.secrets.{sid}.knowledge_events.{ei}'
             projected_event = projected_secrets[si]['knowledge_events'][ei]
             rows.append(_fact_item(
-                'knowledge_event', path, projected_event, evidence_for(path)))
+                'knowledge_event', path, projected_event, evidence_for(path),
+                dependency=secret_dependency))
         # 埋点是 `_relation_gates` 的隐瞒窗口与 secret 闸门第②臂**两道闸门的前件**。
         # v2 的判别联合逼模型在 cold / foreshadowed 之间显式选一边，但**归一裁空
         # 降级成 cold** 的那一条与真·冷揭示仍然同形（只有
         # `_provenance.setup_chapters_pruned` 分得开）⇒ 判据看不出来，人必须看。
         rows.append(_item(
-            'secret_setup', f'canon.secrets.{sid}.setup', secret.get('setup')))
+            'secret_setup', f'canon.secrets.{sid}.setup', secret.get('setup'),
+            dependency=secret_dependency))
         rows.append(_item(
             'reveal', f'canon.secrets.{sid}.first_reveal_chapter',
-            secret.get('first_reveal_chapter')))
+            secret.get('first_reveal_chapter'), dependency=secret_dependency))
 
     # 解读层分组两项。`conflict_stages` 的**覆盖性**已由 `R-2.14` 机械查（逐章显式
     # 枚举、恰好覆盖全书一次），这里人工只判「这个划分本身合不合理、阶段名能不能定位」。
@@ -265,12 +309,23 @@ def enumerate_required(
     rows.append(_whole_book_item(
         'conflict_partition', 'arc.conflict_stages',
         arc.get('conflict_stages') or [], main_text_input))
+    referenced_relations = sorted({
+        str(track.get('subject'))
+        for track in (projected_arc.get('arc_tracks') or [])
+        if isinstance(track, dict)
+        and str(track.get('subject') or '').startswith('rel_')
+    })
+    relation_dependency = [
+        row for row in projected_relations
+        if isinstance(row, dict) and row.get('relation_id') in referenced_relations
+    ]
     rows.append(_whole_book_item('arc_analysis', 'arc', {
         'claim': {
             key: value for key, value in projected_arc.items()
             if key != 'conflict_stages'
         },
         'evidence': evidence_for('arc', grouped=True),
+        'referenced_relations': relation_dependency,
     }, main_text_input))
     return rows
 
@@ -396,6 +451,8 @@ def quarantined_group(item: GlobalReviewItem) -> str | None:
     if item.state != 'UNVER' or disposition is None:
         return None
     if disposition.action != 'quarantine_group':  # pragma: no cover —— Literal
+        return None
+    if review_generation_impact_of(item.kind) != 'quarantine_or_fix':
         return None
     group = review_group_key(item.subject_path)
     if not group.startswith(QUARANTINABLE_REVIEW_GROUP_PREFIXES):

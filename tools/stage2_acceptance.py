@@ -183,7 +183,7 @@ def _run_observation(report: dict[str, Any]) -> dict[str, Any]:
             unknowns.append(f'{label}_identity_unknown')
     calls = commander.get('calls')
     if isinstance(calls, int) and not isinstance(calls, bool):
-        if not 1 <= calls <= 2:
+        if not 1 <= calls <= 3:
             failures.append('stage2_commander_call_budget')
     else:
         unknowns.append('stage2_commander_calls_unknown')

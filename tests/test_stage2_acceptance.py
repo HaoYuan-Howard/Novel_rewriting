@@ -142,3 +142,22 @@ def test_stale_workflow_report_schema_cannot_enter_the_five_run_claim() -> None:
 
     assert result['stability']['state'] == 'fail'
     assert result['claim_ready'] is False
+
+
+def test_three_commander_calls_are_in_budget_but_four_are_not() -> None:
+    reports = [_report(index) for index in range(5)]
+    reports[0]['stage2']['commander']['calls'] = 3
+
+    accepted = A.evaluate(
+        reports, manual_quality=_manual(reports),
+        baseline_seconds=3_044, minimum_speedup_percent=20)
+
+    assert accepted['run_set_state'] == 'pass'
+    reports[0]['stage2']['commander']['calls'] = 4
+    refused = A.evaluate(
+        reports, manual_quality=_manual(reports),
+        baseline_seconds=3_044, minimum_speedup_percent=20)
+    assert refused['run_set_state'] == 'pass'
+    assert refused['stability']['state'] == 'fail'
+    assert 'stage2_commander_call_budget' in (
+        refused['stability']['observations'][0]['failures'])

@@ -146,25 +146,31 @@ v4 在不改变这两轴的前提下补齐 whole-book 证据：
 `legend` 是上述两轴闭集的唯一解释。正式 evidence 在场时不再复制一份 `exact_literal_hits`；正式槽
 存在但 `source=None`、缺失或坐标无效时固定为 `unresolved_formal_evidence`，不得回退到 claim 字面
 命中。只要存在 `reading_scope=whole_book`，顶层 `main_text_chapters[]` 就按章完整携带 MainText，
-每章正文恰好一份；只有 SHA 与局部 snippet 的 v3 不能作为完整阅读证据。每行 `effect` 与
-`group_key` 都由生产 `review_effect_of` / `review_group_key` 派生；含 blocking
+每章正文恰好一份；只有 SHA 与局部 snippet 的 v3 不能作为完整阅读证据。每行 `generation_impact`
+由登记表 `review_generation_impact_of` 唯一派生，取 `must_fix｜quarantine_or_fix｜disclose`；`effect`
+再由它投影为 blocking/disclosure，`group_key` 由 `review_group_key` 派生。含 blocking
 项的组优先，同优先级按 `GlobalReview.items` 中该组第一次出现的顺序，组内保持原序。
 
 默认 blocking 包中的每条 `role` 另带同人物 `fate_companion`：只复制 fate 的 item/subject/hash、
 当前状态、delivery effect 与正式/未决 evidence，`read_only=true`，不复制 claim-literal 或另造正文
 材料，也不新增、删除或代替 decision item；无唯一同人物 fate 时生成即关闭。legend、两轴、派生
-分组、完整 MainText 与 companion 全部纳入 workpack SHA。Commander prompt 可把重复 reason
-内容寻址为一份 catalog，但不改变公开包或 SHA。应用口只现算 v4；旧 v2/v3 SHA 必须在正式
+分组、完整 MainText 与 companion 全部纳入 workpack SHA。应用口只现算 v4；旧 v2/v3 SHA 必须在正式
 `global_grounding.json`、`global_review.json` 与 `_rounds/` 的首个写动作前拒绝，人工重新生成并实际复核 v4、绑定新 SHA 后
 才可提交。workpack 版本是阅读凭证版本，不改变 `GlobalReviewDecisionSet` v2 或正式 artifact 版本。
 
-Stage2 global 的 Commander 闭环固定为最多两次真实模型调用：“首轮完整审阅 → 第二轮合并 typed
-GlobalEdit 与 `post_edit_review` 自审 → 收口”。FAIL 与人物、setting、arc、集合完整性等不可隔离
-UNVER 必须在首轮一次列全。旧 v3 包因没有完整整书证据而留下的 UNVER，在 v4 证据下允许直接
-重新裁决；确认主体事实有错时，第二轮才执行 `stage2.global --emit-edit-template` 取得当前 v3 骨架，再通过
-`--apply-edit` 修改真实事实并提交绑定首轮 source/正文章全集的修后证明。producer 只把证明展开到本次
-edit 新打开的 blocking pending 项，未变化的旧红项不能被默认 PASS 洗绿；原样/no-op 模板、未闭合
-blocking 与漂移证明都在 Global/review 原子写盘前拒绝，且不启动第三轮。只有 `secret:<id>`、
+Commander 的传输面从上述 immutable v4 包确定性投影为 `stage2-global-review-delta-v1`：只携
+pending/FAIL/未隔离 UNVER 的 subject cards；PASS 与已隔离项只留数量和 identity digest。主体、证据与
+重复理由分别进入内容寻址 catalog，`claim_evidence_index` 把 item/path/hash 与引用闭合。只有本轮仍含
+whole-book 卡时才携一次完整 MainText；成功且依赖未失效的卡不再重复发送。该投影不改变正式
+workpack、binding 或 workpack SHA。
+
+Stage2 global 的 Commander 闭环固定为最多三次真实模型调用：“首轮审阅 → 至多两轮增量 typed
+修订/复核 → 收口”，加上此前一次 Executor 产出即四轮阶段预算。每轮使用新的 logical/provider
+session，连续性只来自持久 ledger、workpack identity、catalog 与存活决定。确认主体事实有错时取得
+当前 v3 骨架，通过 `--apply-edit` 同时提交真实修改和 `post_edit_review`；证明的 `review_scope`
+绑定修前未闭合项，`decisions` 显式复判 edit 后仍保持同一 hash 的旧红项，而新打开项才使用默认
+PASS/登记隔离。原样/no-op、未闭合 blocking、身份漂移、无进展 fingerprint 或预算耗尽均在当前动作
+写盘或下一次 wire 前关闭。只有 `secret:<id>`、
 `relation:<id>`、`world_rule:<id>` 三类完整组可以选择 quarantine。隔离只生成下游内存视图：原始
 `global_grounding.json`、`global_review.json`
 及其 UNVER 审计不改写；下游 provenance 同时记录 grounding 与 review，并从写作视图删除完整组，

@@ -57,7 +57,6 @@ from contracts.schema.stage2 import GlobalEdit
 from novel import paths
 from novel.errors import PathRefused
 from novel.orchestrator import queue, reviewer_contract, service_lifecycle
-from novel.quality.global_review import QUARANTINABLE_REVIEW_GROUP_PREFIXES
 
 
 REQUEST_SCHEMA = 'novel-reviewer-action-v1'
@@ -81,6 +80,11 @@ class ReviewerTask:
     request_path: Path
     prompt: str
     submission_options: tuple[dict[str, Any], ...]
+    workpack_sha256: str | None = None
+    source_sha256: str | None = None
+    main_text_sha256: str | None = None
+    progress_sha256: str | None = None
+    blocker_count: int | None = None
 
 
 @dataclass(frozen=True)
@@ -92,6 +96,10 @@ class Stage2PrereviewTask:
     request_path: Path
     prompt: str
     input_template: dict[str, Any]
+    source_sha256: str | None = None
+    main_text_sha256: str | None = None
+    progress_sha256: str | None = None
+    blocker_count: int | None = None
 
 
 @dataclass(frozen=True)
@@ -314,7 +322,7 @@ def _workpack(
         pack: dict[str, Any] = {'global': global_pack}
         if correction is not None:
             if (correction.get('kind')
-                    != 'stage2-global-edit-correction-workpack-v1'
+                    != 'stage2-global-edit-correction-workpack-v2'
                     or not isinstance(correction.get('failed_edit'), dict)
                     or not isinstance(correction.get('hard_hits'), list)
                     or not correction['hard_hits']):
@@ -331,7 +339,7 @@ def _workpack(
         has_undecided_unver = any(
             isinstance(row, dict)
             and row.get('current_state') == 'UNVER'
-            and row.get('generation_disposition') is None
+            and not _stage2_row_is_quarantined(row)
             for row in global_pack['items'])
         if has_pending:
             pack['global_template'] = _json_command([
@@ -344,8 +352,8 @@ def _workpack(
         elif has_undecided_unver:
             # UNVER 只证明当前决定不足以放行，不证明 Global 主体必错。旧路由把
             # “材料不足”强制送进 GlobalEdit，未改变的主体随后必然被 HARD 闸拒绝。
-            # 第二轮同时给“按 v4 完整正文重新裁决”与“确有内容错则修订”两条
-            # typed 路；Commander 必须二选一，仍不会取得第三次调用。
+            # 增量轮同时给“按完整正文重新裁决”与“确有内容错则修订”两条
+            # typed 路；Commander 必须二选一，持久账统一守三次总预算。
             pack['global_edit_template'] = _json_command([
                 *cli, 'run', 'stage2.global', sid, '--base', base,
                 '--emit-edit-template'])
@@ -606,12 +614,23 @@ def _stage4_structure_replan_materials(
     }
 
 
-def _compact_stage2_materials(pack: dict[str, Any]) -> dict[str, Any]:
-    """给 Commander 的 Stage2 阅读面去重审计理由，正文与证据一字不裁。
+def _stage2_row_is_quarantined(row: Mapping[str, Any]) -> bool:
+    """只把生成影响闭集允许的显式整组隔离视作已闭合。"""
+    disposition = row.get('generation_disposition')
+    return (
+        row.get('current_state') == 'UNVER'
+        and isinstance(disposition, Mapping)
+        and disposition.get('action') == 'quarantine_group'
+        and row.get('generation_impact') == 'quarantine_or_fix'
+    )
 
-    一次 scope 决定会把同一句理由展开到上百个持久 item。它属于审计值，逐行
-    重复不增加证据，却可能让恢复 prompt 比正文还大。这里只在模型 wire 上改成
-    引用表；公开 workpack、正式 review 与 workpack SHA 均保持原字节。
+
+def _compact_stage2_materials(pack: dict[str, Any]) -> dict[str, Any]:
+    """把完整 workpack 投影成只含未闭合项的 subject-card delta。
+
+    正式 review、公开 workpack 与 ``workpack_sha256`` 一字不改；这里只压缩
+    Commander wire。已经 PASS 或已隔离的项只留下 identity digest/count，不再重发。
+    subject、证据、审计理由分别内容寻址，同一张主体卡只引用一次大对象。
     """
     visible = copy.deepcopy(_visible_materials(pack))
     # 这两份只是铸 submission_options 的骨架，exact_request 已是
@@ -621,11 +640,36 @@ def _compact_stage2_materials(pack: dict[str, Any]) -> dict[str, Any]:
     global_pack = visible.get('global')
     if not isinstance(global_pack, dict):
         return visible
-    items = global_pack.get('items')
+    items = global_pack.pop('items', None)
     if not isinstance(items, list):
         return visible
-    catalog: dict[str, str] = {}
+    reason_catalog: dict[str, str] = {}
     by_reason: dict[str, str] = {}
+    subject_catalog: dict[str, Any] = {}
+    evidence_catalog: dict[str, Any] = {}
+    cards: dict[str, list[dict[str, Any]]] = {}
+    claim_evidence_index: list[dict[str, Any]] = []
+
+    def actionable(row: dict[str, Any]) -> bool:
+        state = row.get('current_state')
+        return (
+            state in {'pending', 'FAIL'}
+            or (state == 'UNVER' and not _stage2_row_is_quarantined(row))
+        )
+
+    selected = [
+        copy.deepcopy(row) for row in items
+        if isinstance(row, dict) and actionable(row)
+    ]
+    retained = [
+        {
+            'item_id': row.get('item_id'),
+            'subject_sha256': row.get('subject_sha256'),
+            'state': row.get('current_state'),
+            'generation_disposition': row.get('generation_disposition'),
+        }
+        for row in items if isinstance(row, dict) and not actionable(row)
+    ]
 
     def intern(owner: dict[str, Any]) -> None:
         reason = owner.pop('current_reason', None)
@@ -639,17 +683,81 @@ def _compact_stage2_materials(pack: dict[str, Any]) -> dict[str, Any]:
         if ref is None:
             ref = f'r{len(by_reason) + 1:03d}'
             by_reason[reason] = ref
-            catalog[ref] = reason
+            reason_catalog[ref] = reason
         owner['current_reason_ref'] = ref
 
-    for row in items:
-        if not isinstance(row, dict):
-            continue
+    def intern_material(value: Any, catalog: dict[str, Any], prefix: str) -> str:
+        digest = _canonical_json_sha256(value)
+        ref = f'{prefix}{digest[:16]}'
+        existing = catalog.get(ref)
+        if existing is not None and existing != value:
+            raise ReviewerTaskError(f'Stage2 delta catalog 短 hash 冲突：{ref}')
+        catalog[ref] = value
+        return ref
+
+    def compact_row(row: dict[str, Any]) -> dict[str, Any]:
         intern(row)
+        subject = row.pop('subject', None)
+        subject_ref = intern_material(subject, subject_catalog, 's')
+        evidence = {
+            'registered_evidence': row.pop('registered_evidence', []),
+            'formal_evidence': row.pop('formal_evidence', []),
+            'unresolved_formal_evidence': row.pop(
+                'unresolved_formal_evidence', []),
+            'exact_literal_hits': row.pop('exact_literal_hits', []),
+        }
+        evidence_ref = intern_material(evidence, evidence_catalog, 'e')
+        row['subject_ref'] = subject_ref
+        row['evidence_ref'] = evidence_ref
         companion = row.get('fate_companion')
         if isinstance(companion, dict):
             intern(companion)
-    global_pack['current_reason_catalog'] = catalog
+            companion_subject = companion.pop('subject', None)
+            companion['subject_ref'] = intern_material(
+                companion_subject, subject_catalog, 's')
+            companion_evidence = {
+                'formal_evidence': companion.pop('formal_evidence', []),
+                'unresolved_formal_evidence': companion.pop(
+                    'unresolved_formal_evidence', []),
+            }
+            companion['evidence_ref'] = intern_material(
+                companion_evidence, evidence_catalog, 'e')
+        claim_evidence_index.append({
+            'item_id': row.get('item_id'),
+            'subject_path': row.get('subject_path'),
+            'subject_sha256': row.get('subject_sha256'),
+            'subject_ref': subject_ref,
+            'evidence_ref': evidence_ref,
+            'evidence_mode': row.get('evidence_mode'),
+            'generation_impact': row.get('generation_impact'),
+        })
+        return row
+
+    for row in selected:
+        key = str(row.get('group_key') or '')
+        if not key:
+            raise ReviewerTaskError('Stage2 delta row 缺 group_key')
+        cards.setdefault(key, []).append(compact_row(row))
+
+    full_kind = global_pack.get('kind')
+    global_pack['kind'] = 'stage2-global-review-delta-v1'
+    global_pack['full_workpack_kind'] = full_kind
+    global_pack['subject_cards'] = [
+        {'group_key': key, 'items': rows} for key, rows in cards.items()
+    ]
+    global_pack['subject_catalog'] = subject_catalog
+    global_pack['evidence_catalog'] = evidence_catalog
+    global_pack['claim_evidence_index'] = claim_evidence_index
+    global_pack['current_reason_catalog'] = reason_catalog
+    global_pack['delta'] = {
+        'full_item_count': len(items),
+        'sent_item_count': len(selected),
+        'omitted_resolved_count': len(retained),
+        'omitted_resolved_sha256': _canonical_json_sha256(retained),
+    }
+    if not any(row.get('reading_scope') == 'whole_book' for row in selected):
+        # 局部增量已有精确 formal evidence；不把完整正文作为固定税重复发送。
+        global_pack['main_text_chapters'] = []
     return visible
 
 
@@ -734,8 +842,8 @@ def _global_edit_template(raw: Any) -> dict[str, Any]:
 def _reviewed_global_edit_template(raw: Any, global_pack: dict[str, Any]) -> dict[str, Any]:
     """把返工轮的完整阅读身份并入同一份 GlobalEdit typed 动作。
 
-    第二轮 Commander 既修改又自检；producer 只会把这份证明展开到该 edit
-    **新打开**的 blocking 项，旧 FAIL 不变就仍会关闭式拒绝。
+    Commander 增量轮既修改又自检；producer 会把默认证明展开到该 edit
+    **新打开**的 blocking 项，并只接受对 review_scope 内存活旧项的显式决定。
     """
     edit = _global_edit_template(raw)
     binding = global_pack.get('binding')
@@ -743,16 +851,34 @@ def _reviewed_global_edit_template(raw: Any, global_pack: dict[str, Any]) -> dic
         raise ReviewerTaskError('Stage2 GlobalEdit 返工缺完整 workpack binding')
     chapters = binding.get('reviewed_chapter_ordinals')
     source_sha256 = binding.get('expected_source_sha256')
+    workpack_sha256 = global_pack.get('workpack_sha256')
+    rows = global_pack.get('items')
     if (not isinstance(chapters, list)
-            or not isinstance(source_sha256, str)):
+            or not isinstance(source_sha256, str)
+            or not isinstance(workpack_sha256, str)
+            or not isinstance(rows, list)):
         raise ReviewerTaskError('Stage2 GlobalEdit 返工 binding 形状漂移')
+    review_scope = [{
+        'item_id': row['item_id'],
+        'expected_subject_sha256': row['subject_sha256'],
+    } for row in rows if isinstance(row, dict)
+        and row.get('effect') == 'blocking'
+        and row.get('current_state') != 'PASS'
+        and not _stage2_row_is_quarantined(row)]
+    if not review_scope:
+        raise ReviewerTaskError('Stage2 GlobalEdit 返工没有未闭合 review_scope')
     edit['post_edit_review'] = {
         'actor': _ACTOR,
         'expected_source_sha256': source_sha256,
+        'expected_workpack_sha256': workpack_sha256,
         'reviewed_chapter_ordinals': chapters,
         'default_state': 'PASS',
         'reason': _REASON,
         'quarantine_groups': [],
+        'review_scope': review_scope,
+        # 只列 edit 后仍保持同一 hash、需要复判的旧项；被修改的项由 producer
+        # 作为新 pending 用上面的 default/quarantine 证明收口。
+        'decisions': [],
     }
     try:
         return GlobalEdit.model_validate(edit).model_dump(
@@ -788,7 +914,7 @@ def _submission_options(
     current: OperatorNext,
     waiting_on: str,
 ) -> list[dict[str, Any]]:
-    """把当前 blocker 收成一份（Stage2 为两步）可达 typed 请求。"""
+    """把当前 blocker 收成一份（Stage2 为预算内增量轮）可达 typed 请求。"""
     bind = ['schema', 'surface_seal', 'waiting_on', 'action.kind']
     if waiting_on == 'stage0.approve':
         flags = list(pack['stage0'].get('approval_flags') or [])
@@ -818,12 +944,11 @@ def _submission_options(
         undecided_unver = [
             row for row in rows
             if row.get('current_state') == 'UNVER'
-            and row.get('generation_disposition') is None
+            and not _stage2_row_is_quarantined(row)
         ]
         safe_unver = [
             row for row in undecided_unver
-            if str(row.get('group_key') or '').startswith(
-                QUARANTINABLE_REVIEW_GROUP_PREFIXES)
+            if row.get('generation_impact') == 'quarantine_or_fix'
         ]
         unsafe_unver = [row for row in undecided_unver if row not in safe_unver]
 
@@ -844,9 +969,11 @@ def _submission_options(
                 'node:stage2.global.apply-edit', edit_request,
                 editable_fields=[
                     'action.input_payload 的现有 typed patch 值',
+                    'action.input_payload.collection_edits[].operations'
+                    '（add/delete/split；collection 与 expected SHA 不可改）',
                     '模板已提供的 action.input_payload.*_replace 列表成员'
                     '（可增删，但必须保持 GlobalEdit schema）',
-                    'action.input_payload.post_edit_review.reason/quarantine_groups',
+                    'action.input_payload.post_edit_review.reason/quarantine_groups/decisions',
                 ],
                 binding_fields=bind + [
                     'action.node', 'action.flags',
@@ -854,9 +981,9 @@ def _submission_options(
                 ],
                 allowed_values={
                     'purpose': (
-                        '这是 Stage2 最后一轮模型返工：一次修完模板点名项并复核完整结果；'
-                        'post_edit_review 只会展开到本 edit 新打开的 blocking 项。原样模板、'
-                        '未改变的旧 FAIL 与不可安全隔离的 UNVER 都会在写盘前被拒绝，不会再开第三轮。'),
+                        '只修当前增量并复核修改结果；新打开项走默认证明，仍保持同一 hash 的'
+                        '旧 FAIL/UNVER 必须列入 post_edit_review.decisions。原样模板或未闭合项'
+                        '会在写盘前被拒绝；总预算最多 3 次 Commander 调用。'),
                 },
             )]
 
@@ -911,8 +1038,9 @@ def _submission_options(
                     'node:stage2.global.apply-edit-unver', edit_request,
                     editable_fields=[
                         'action.input_payload 的现有 typed patch 值',
+                        'action.input_payload.collection_edits[].operations',
                         '模板已提供的 action.input_payload.*_replace 列表成员',
-                        'action.input_payload.post_edit_review.reason/quarantine_groups',
+                        'action.input_payload.post_edit_review.reason/quarantine_groups/decisions',
                     ],
                     binding_fields=bind + [
                         'action.node', 'action.flags',
@@ -921,7 +1049,7 @@ def _submission_options(
                     allowed_values={
                         'purpose': (
                             '只有确认 Global 主体本身有错时选择；同一轮完成修订与'
-                            '修后复核，未改变的旧 UNVER 不会被洗绿。'),
+                            '修后复核；未修改但已重新核实的旧项须显式 decisions。'),
                     },
                 ),
             ]
@@ -1054,8 +1182,9 @@ def _submission_options(
                     'node:stage2.global.apply-edit-unver', edit_request,
                     editable_fields=[
                         'action.input_payload 的现有 typed patch 值',
+                        'action.input_payload.collection_edits[].operations',
                         '模板已提供的 action.input_payload.*_replace 列表成员',
-                        'action.input_payload.post_edit_review.reason/quarantine_groups',
+                        'action.input_payload.post_edit_review.reason/quarantine_groups/decisions',
                     ],
                     binding_fields=bind + [
                         'action.node', 'action.flags',
@@ -1289,6 +1418,55 @@ def _stage2_business_sha256(
         separators=(',', ':')).encode('utf-8')).hexdigest()
 
 
+def _stage2_progress_identity(
+    pack: Mapping[str, Any], waiting_on: str,
+) -> dict[str, Any]:
+    """提取持久预算与单调进展共同使用的无正文 identity。"""
+    global_pack = pack.get('global')
+    binding = global_pack.get('binding') if isinstance(global_pack, Mapping) else None
+    rows = global_pack.get('items') if isinstance(global_pack, Mapping) else None
+    if not isinstance(binding, Mapping) or not isinstance(rows, list):
+        raise ReviewerTaskError('Stage2 progress identity 缺 binding/items')
+    source = binding.get('expected_source_sha256')
+    main_text = binding.get('main_text_subject_sha256')
+    workpack = global_pack.get('workpack_sha256')
+    if not all(isinstance(value, str) for value in (source, main_text, workpack)):
+        raise ReviewerTaskError('Stage2 progress identity 的 SHA 形状漂移')
+    unresolved = [{
+        'item_id': row.get('item_id'),
+        'subject_sha256': row.get('subject_sha256'),
+        'state': row.get('current_state'),
+        'generation_disposition': row.get('generation_disposition'),
+    } for row in rows if isinstance(row, Mapping) and (
+        row.get('current_state') in {'pending', 'FAIL'}
+        or (row.get('current_state') == 'UNVER'
+            and not _stage2_row_is_quarantined(row))
+    )]
+    progress: dict[str, Any] = {
+        'waiting_on': waiting_on,
+        'source_sha256': source,
+        'main_text_sha256': main_text,
+        'unresolved': unresolved,
+    }
+    correction = pack.get('edit_correction')
+    if isinstance(correction, Mapping):
+        progress['correction'] = {
+            'failed_edit_sha256': correction.get('failed_edit_sha256'),
+            'invalid_sha256': correction.get('invalid_sha256'),
+            'hard_hits': correction.get('hard_hits'),
+        }
+    blueprint = pack.get('blueprint')
+    if isinstance(blueprint, Mapping):
+        progress['blueprint_review_token'] = blueprint.get('review_token')
+    return {
+        'source_sha256': source,
+        'main_text_sha256': main_text,
+        'workpack_sha256': workpack,
+        'progress_sha256': _canonical_json_sha256(progress),
+        'blocker_count': len(unresolved),
+    }
+
+
 def build_task(
     base: str | os.PathLike[str],
     sid: str,
@@ -1329,8 +1507,10 @@ def build_task(
         'materials': _review_materials(pack, waiting_on),
         'submission_options': options,
     }
+    stage2_identity: dict[str, Any] | None = None
     if waiting_on in queue.STAGE2_REVIEWER_WAITING_ON:
         business_sha256 = _stage2_business_sha256(pack, waiting_on)
+        stage2_identity = _stage2_progress_identity(pack, waiting_on)
     elif waiting_on in {
         queue.WAITING_ON_STAGE4_BINDING_RESOLUTION,
         queue.WAITING_ON_STAGE4_STRUCTURE_REPLAN,
@@ -1351,10 +1531,10 @@ def build_task(
             business, ensure_ascii=False, sort_keys=True,
             separators=(',', ':')).encode('utf-8')).hexdigest()
     correction_instruction = (
-        '\n当前 blocker 是进程中断后的 Stage2 最终纠正：第一次 Commander 修改已经'
-        '执行并被 materials.edit_correction.hard_outcomes 精确拒绝。你现在占用第二次、'
-        '也是最后一次真实 Commander 调用；只修 submission_options 中那份失败 edit，'
-        '不要从头生成，不会再有第三次纠正。\n'
+        '\n当前 blocker 是进程中断后的 Stage2 增量纠正：上一份 Commander 修改已经'
+        '执行并被 materials.edit_correction.hard_outcomes 精确拒绝。只修'
+        ' submission_options 中那份失败 edit，不要从头生成；持久 ledger 会保证'
+        '总计最多三次 Commander 真调用且无进展 fingerprint 不会重演。\n'
         if waiting_on == queue.WAITING_ON_STAGE2_EDIT_CORRECTION else '')
     stage4_resolution_instruction = (
         '\n当前不是再次审阅同一份 Stage4B。请把 materials 中已经落盘的 B '
@@ -1382,24 +1562,24 @@ Supervisor 绑定，必须逐字保留。allowed_values 是可提交闭集；工
 scene/alias/token 必须原样使用。exact_request 里任何完整尖括号值都是不可提交
 sentinel，必须在阅读后改成具体 typed 值。
 
-一次只提交一个动作。Stage2 global 最多两次 Commander 调用：pending 是首轮完整审阅；
+一次只提交一个动作。Stage2 global 最多三次 Commander 调用：pending 是首轮完整审阅；
 这轮可在 Blueprint 计算期间只读完成，但只有 Blueprint 结束后通过业务与
-workpack 双重绑定才能进入 live surface。FAIL 的第二轮是最后一轮 GlobalEdit；
-旧包证据不完整造成的 UNVER，第二轮可按 v4 完整正文重新裁决，只有确认
-Global 主体本身有错时才选 GlobalEdit。无论选哪条都不会启动第三轮。
-返工必须一次修完模板点名项，并再次跨项核对本 edit 会打开的完整主体；
-post_edit_review 是你对这份精确修改结果的显式自检，不会替未改变的旧 FAIL 洗绿。
+workpack 双重绑定才能进入 live surface。后续轮只发送仍未闭合或被依赖变化重开的
+subject cards；已成功项只留摘要，不会重复发送。只有确认 Global 主体本身有错时
+才选 GlobalEdit。返工应只改当前增量，并再次跨项核对本 edit 会打开的主体；
+post_edit_review 对新项用 default/quarantine，对未变化旧项必须用 hash-bound
+decisions 显式复判，不能把未读旧 FAIL 洗绿。
 证据仍不足的 UNVER 不得改名为 PASS：只有可整组删除的
 secret/relation/world_rule 才能写进 post_edit_review.quarantine_groups，
 写作侧会删除完整事实组并在终审保留披露。
 global 写作面已安全、只缺完整 Stage2 阅读/闸门 proof 恢复时才选
 approval:blueprint_seen；Supervisor 会用你实际读过的 Blueprint token 确定性收口
 其余早期 proof，你不得自行运行审批命令。
-Supervisor 在两轮之间精确 resume 同一 Commander provider session；不要重新定位
-已经读过的材料。
+每轮使用新的紧凑 Commander logical/provider session；连续性只来自本包内的 typed
+ledger identity、subject/evidence catalog 和 surviving decisions，不依赖隐藏聊天历史。
 
-materials 已包含裁决所需的全部材料；Stage2 v4 whole-book 包在
-main_text_chapters 中每章只放一次完整正文，current_reason_ref 只是指向同包理由表的去重引用。
+materials 已包含裁决所需的全部材料；Stage2 delta 包只在仍有 whole-book 项时
+携一次完整正文，current_reason_ref / subject_ref / evidence_ref 分别指向同包去重表。
 不需要也不得读取 operator skill、仓库源码、测试
 或盘上产物来补充材料；不得运行任何 shell/PowerShell/Python 命令读取材料或产物，唯一
 允许的文件操作是写出上述请求文件。材料确实不足以裁决某一项时，保持模板的关闭式默认值
@@ -1430,7 +1610,22 @@ Stage4 A/B 工作包的逐章裁决材料在 materials 的 coverage 行 reading 
         waiting_on=waiting_on, surface_seal=current.surface_seal,
         business_sha256=business_sha256,
         request_path=request, prompt=prompt,
-        submission_options=tuple(options))
+        submission_options=tuple(options),
+        workpack_sha256=(
+            str(stage2_identity['workpack_sha256'])
+            if stage2_identity is not None else None),
+        source_sha256=(
+            str(stage2_identity['source_sha256'])
+            if stage2_identity is not None else None),
+        main_text_sha256=(
+            str(stage2_identity['main_text_sha256'])
+            if stage2_identity is not None else None),
+        progress_sha256=(
+            str(stage2_identity['progress_sha256'])
+            if stage2_identity is not None else None),
+        blocker_count=(
+            int(stage2_identity['blocker_count'])
+            if stage2_identity is not None else None))
 
 
 def build_stage2_prereview_task(
@@ -1482,6 +1677,7 @@ def build_stage2_prereview_task(
     input_template = GlobalReviewDecisionSet.model_validate(
         template).model_dump(mode='json')
     business_sha256 = _stage2_business_sha256(pack, waiting_on)
+    stage2_identity = _stage2_progress_identity(pack, waiting_on)
     exact_output = {
         'schema': STAGE2_PREREVIEW_SCHEMA,
         'business_sha256': business_sha256,
@@ -1525,6 +1721,10 @@ loader，再决定是否执行，故你不得自行提交或调用审批命令�
         request_path=request,
         prompt=prompt,
         input_template=input_template,
+        source_sha256=str(stage2_identity['source_sha256']),
+        main_text_sha256=str(stage2_identity['main_text_sha256']),
+        progress_sha256=str(stage2_identity['progress_sha256']),
+        blocker_count=int(stage2_identity['blocker_count']),
     )
 
 
@@ -1660,6 +1860,28 @@ def _validate_global_edit_binding(
             if frozenset(submitted_row) != frozenset(expected_row):
                 raise ReviewerTaskError(
                     f'Stage2 GlobalEdit.{field}[{index}] 字段集合必须逐字保留模板')
+    if 'collection_edits' in expected:
+        expected_rows = expected['collection_edits']
+        submitted_rows = submitted['collection_edits']
+        if not isinstance(expected_rows, list) or not isinstance(submitted_rows, list):
+            raise ReviewerTaskError('Stage2 GlobalEdit.collection_edits 必须是数组')
+        expected_bindings = [
+            (row.get('collection'), row.get('expected_collection_sha256'))
+            for row in expected_rows if isinstance(row, dict)
+        ]
+        submitted_bindings = [
+            (row.get('collection'), row.get('expected_collection_sha256'))
+            for row in submitted_rows if isinstance(row, dict)
+        ]
+        if (len(expected_bindings) != len(expected_rows)
+                or len(submitted_bindings) != len(submitted_rows)
+                or submitted_bindings != expected_bindings):
+            raise ReviewerTaskError(
+                'Stage2 collection edit 的集合顺序与 expected SHA 必须逐字保留模板')
+        for row in submitted_rows:
+            if frozenset(row) != frozenset({
+                    'collection', 'expected_collection_sha256', 'operations'}):
+                raise ReviewerTaskError('Stage2 collection edit 字段集合必须闭合')
     if 'setting' in expected:
         expected_setting = expected['setting']
         submitted_setting = submitted['setting']
@@ -1678,11 +1900,29 @@ def _validate_global_edit_binding(
         if frozenset(submitted_review) != frozenset(expected_review):
             raise ReviewerTaskError(
                 'Stage2 GlobalEdit.post_edit_review 字段集合必须逐字保留模板')
-        editable = frozenset({'reason', 'quarantine_groups'})
+        editable = frozenset({'reason', 'quarantine_groups', 'decisions'})
         for key, value in expected_review.items():
             if key not in editable and submitted_review.get(key) != value:
                 raise ReviewerTaskError(
                     f'Stage2 GlobalEdit.post_edit_review.{key} 必须逐字保留模板')
+        decisions = submitted_review.get('decisions')
+        scope = submitted_review.get('review_scope')
+        if not isinstance(decisions, list) or not isinstance(scope, list):
+            raise ReviewerTaskError('post_edit_review decisions/review_scope 必须是数组')
+        allowed = {
+            (row.get('item_id'), row.get('expected_subject_sha256'))
+            for row in scope if isinstance(row, dict)
+        }
+        if len(allowed) != len(scope):
+            raise ReviewerTaskError('post_edit_review.review_scope 形状漂移')
+        outside = [
+            row.get('item_id') for row in decisions
+            if not isinstance(row, dict) or (
+                row.get('item_id'), row.get('expected_subject_sha256')) not in allowed
+        ]
+        if outside:
+            raise ReviewerTaskError(
+                f'post_edit_review.decisions 越出模板 review_scope：{outside}')
 
 
 def _validate_global_review_binding(
@@ -1825,17 +2065,28 @@ def bind_stage2_prereview(
 
 
 def correction_prompt(task: ReviewerTask, reason: str, *, attempt: int) -> str:
-    """同一 provider session 的紧凑纠错提示；不重复发送整份 workpack。"""
-    return f"""上一轮 typed request 已在正式产物写入前被确定性边界拒绝，没有修改正式产物。
+    """Stage2 给 fresh session 自足包；其余 reviewer 在原 session 收紧凑反馈。"""
+    if task.waiting_on not in queue.STAGE2_REVIEWER_WAITING_ON:
+        return f"""上一轮 typed request 已在正式产物写入前被确定性边界拒绝，没有修改正式产物。
 继续使用本会话已经读过的同一 immutable workpack，不要重新定位、不要重读仓库，
 也不要启动任何节点或 Executor。只纠正被拒绝的 typed 动作，并覆盖原请求文件：
 {task.request_path}
 
 拒绝原因：{reason}
 这是第 {attempt} 次纠正。仍须从原 workpack 的 submission_options 选择恰好一项，
-逐字保留 binding_fields，只修改 editable_fields。Stage2 patch 不能新增、删除或改名
-模板已有 subject；若需要新增事实，先完成当前 patch，之后在集合完整性复审中判 FAIL，
-等待新模板显式给出完整 *_replace。只写上述 JSON 文件，完成后退出。
+逐字保留 binding_fields，只修改 editable_fields。只写上述 JSON 文件，完成后退出。
+"""
+    return f"""{task.prompt}
+
+<deterministic-rejection>
+上一份 typed request 已在正式产物写入前被确定性边界拒绝，没有修改正式产物。
+拒绝原因：{reason}
+这是第 {attempt} 次纠正。只处理本包仍未闭合的 subject cards，并覆盖请求文件：
+{task.request_path}
+collection_edits 只可填写 operations；collection/expected SHA 不可改。已有字段 patch
+仍须保留模板 subject binding。post_edit_review.decisions 只列 edit 后仍保持原 hash、
+且已在 review_scope 中的旧项。不得启动节点或 Executor；只写 JSON，完成后退出。
+</deterministic-rejection>
 """
 
 

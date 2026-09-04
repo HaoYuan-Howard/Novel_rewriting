@@ -43,6 +43,7 @@ from contracts.invariants import (
 from contracts.schema.agent_wire import keyed_rows_to_mapping
 from contracts.schema.base import Fp10, StrictModel
 from contracts.schema.common import LlmProvenance, Sha256
+from contracts.schema.evaluation import GlobalReviewDecision
 
 #: 「谁在这么叫」。取值是**某个 `char_id`**，或 `ADDRESS_BY` 里那两个字面之一。
 #: ⚠ `ADDRESS_BY` 记的是**三类**（`char_id` 是类名不是值），所以这里必须写成模式，
@@ -1081,12 +1082,20 @@ class GlobalEditQuarantineGroup(StrictModel):
         return self
 
 
+class GlobalEditReviewTarget(StrictModel):
+    """修前 workpack 中允许复判的一条旧 blocking identity。"""
+
+    item_id: str = Field(min_length=1)
+    expected_subject_sha256: Sha256
+
+
 class GlobalEditReviewAttestation(StrictModel):
-    """第二轮 Commander 对自己提交的精确 GlobalEdit 所作的闭合证明。
+    """Commander 增量轮对自己提交的精确 GlobalEdit 所作的闭合证明。
 
     producer 在 mutation lock 内先把 edit 应用到内存候选，再将本证明展开到
-    **该候选新产生的 pending blocking 项**。旧 FAIL 若没有被真正改变仍保持
-    FAIL，整份 edit 会在写盘前被拒；因此这不是把任意旧红项批量改绿。
+    **该候选新产生的 pending blocking 项**；仍保持同一 subject hash 的旧项
+    只能由 ``review_scope + decisions`` 逐项复判。因此这不是把任意旧红项
+    批量改绿。
     """
 
     actor: str = Field(min_length=1)
@@ -1095,6 +1104,12 @@ class GlobalEditReviewAttestation(StrictModel):
     default_state: Literal['PASS']
     reason: str = Field(min_length=1)
     quarantine_groups: list[GlobalEditQuarantineGroup] = Field(default_factory=list)
+    # v3 的兼容加法：公开人工 edit 可继续省略；Supervisor 生成的 reviewed edit
+    # 必须三者同时在场。它们让一次动作既能修字段，又能对仍存活的旧 FAIL/UNVER
+    # 作 hash-bound 复判，不再只能证明“本 edit 新打开的 pending”。
+    expected_workpack_sha256: Sha256 | None = None
+    review_scope: list[GlobalEditReviewTarget] = Field(default_factory=list)
+    decisions: list[GlobalReviewDecision] = Field(default_factory=list)
 
     @model_validator(mode='after')
     def _complete_and_unique(self) -> GlobalEditReviewAttestation:
@@ -1107,6 +1122,118 @@ class GlobalEditReviewAttestation(StrictModel):
         groups = [row.group_key for row in self.quarantine_groups]
         if len(groups) != len(set(groups)):
             raise ValueError('post-edit quarantine group 不得重复')
+        scope = [
+            (row.item_id, row.expected_subject_sha256)
+            for row in self.review_scope
+        ]
+        if len(scope) != len(set(scope)):
+            raise ValueError('post-edit review_scope 不得重复')
+        decision_ids = [row.item_id for row in self.decisions]
+        if len(decision_ids) != len(set(decision_ids)):
+            raise ValueError('post-edit decisions 不得重复')
+        scoped = set(scope)
+        outside = [
+            row.item_id for row in self.decisions
+            if (row.item_id, row.expected_subject_sha256) not in scoped
+        ]
+        if outside:
+            raise ValueError(f'post-edit decisions 越出 review_scope：{outside}')
+        extended = (
+            self.expected_workpack_sha256 is not None
+            or bool(self.review_scope) or bool(self.decisions))
+        if extended and (
+                self.expected_workpack_sha256 is None or not self.review_scope):
+            raise ValueError(
+                'reviewed GlobalEdit 的 workpack SHA 与 review_scope 必须同时在场')
+        return self
+
+
+class CharacterCollectionItem(CharacterResponse):
+    """collection patch wire 上把人物映射键提升为显式稳定 id。"""
+
+    char_id: str = Field(min_length=1)
+
+
+GlobalCollectionItem = (
+    CharacterCollectionItem | RelationResponse | SecretResponse | WorldRuleResponse
+)
+
+
+class GlobalCollectionAdd(StrictModel):
+    op: Literal['add']
+    item: GlobalCollectionItem
+
+
+class GlobalCollectionDelete(StrictModel):
+    op: Literal['delete']
+    subject_id: str = Field(min_length=1)
+
+
+class GlobalCollectionSplit(StrictModel):
+    op: Literal['split']
+    subject_id: str = Field(min_length=1)
+    items: list[GlobalCollectionItem] = Field(min_length=2)
+
+
+GlobalCollectionOperation = Annotated[
+    GlobalCollectionAdd | GlobalCollectionDelete | GlobalCollectionSplit,
+    Field(discriminator='op'),
+]
+
+
+class GlobalCollectionEdit(StrictModel):
+    """集合完整性修订 DSL；只传 delta，不复制整组既有成员。"""
+
+    collection: Literal[
+        'characters', 'relations', 'secrets', 'world_rules']
+    expected_collection_sha256: Sha256
+    # 空数组只供 producer 生成 schema-valid no-op 模板；apply 仍会拒绝无业务变化。
+    operations: list[GlobalCollectionOperation] = Field(default_factory=list)
+
+    @model_validator(mode='after')
+    def _operations_match_collection(self) -> GlobalCollectionEdit:
+        expected_type = {
+            'characters': CharacterCollectionItem,
+            'relations': RelationResponse,
+            'secrets': SecretResponse,
+            'world_rules': WorldRuleResponse,
+        }[self.collection]
+
+        def item_id(item: GlobalCollectionItem) -> str:
+            if isinstance(item, CharacterCollectionItem):
+                return item.char_id
+            if isinstance(item, RelationResponse):
+                return item.relation_id
+            if isinstance(item, SecretResponse):
+                return item.secret_id
+            return item.rule_id
+
+        touched: list[str] = []
+        outputs: list[str] = []
+        for operation in self.operations:
+            if isinstance(operation, GlobalCollectionAdd):
+                if not isinstance(operation.item, expected_type):
+                    raise ValueError(
+                        f'{self.collection} add 携带了错误成员类型')
+                outputs.append(item_id(operation.item))
+            elif isinstance(operation, GlobalCollectionDelete):
+                touched.append(operation.subject_id)
+            else:
+                touched.append(operation.subject_id)
+                for item in operation.items:
+                    if not isinstance(item, expected_type):
+                        raise ValueError(
+                            f'{self.collection} split 携带了错误成员类型')
+                    output = item_id(item)
+                    if output == operation.subject_id:
+                        raise ValueError('split 输出不得复用被拆分 subject id')
+                    outputs.append(output)
+        if len(touched) != len(set(touched)):
+            raise ValueError('一个集合 subject 不能被 delete/split 多次')
+        if len(outputs) != len(set(outputs)):
+            raise ValueError('集合 add/split 输出 id 不得重复')
+        if set(touched) & set(outputs):
+            raise ValueError('集合操作的输入 id 与输出 id 不得重叠')
         return self
 
 
@@ -1130,6 +1257,7 @@ class GlobalEdit(StrictModel):
     arc_tracks_replace: list[ArcTrackResponse] | None = Field(default=None, min_length=1)
     arc_replace: ArcResponse | None = None
     addresses_replace: list[CharacterAddressReplacement] = Field(default_factory=list)
+    collection_edits: list[GlobalCollectionEdit] = Field(default_factory=list)
     post_edit_review: GlobalEditReviewAttestation | None = None
 
     @model_validator(mode='after')
@@ -1143,7 +1271,7 @@ class GlobalEdit(StrictModel):
             or self.conflict_stages_replace is not None
             or self.arc_tracks_replace is not None
             or self.arc_replace is not None
-            or self.addresses_replace
+            or self.addresses_replace or self.collection_edits
         ):
             raise ValueError('global edit must contain at least one typed patch')
         for label, patch, replacement in (
@@ -1177,6 +1305,22 @@ class GlobalEdit(StrictModel):
             raise ValueError('duplicate complete address replacements are order-dependent')
         if set(replacement_characters) & {row.char_id for row in self.addresses}:
             raise ValueError('character address cannot be patched and replaced together')
+        collections = [row.collection for row in self.collection_edits]
+        if len(collections) != len(set(collections)):
+            raise ValueError('每个集合最多一条 collection edit')
+        replacement_by_collection = {
+            'characters': self.characters_replace,
+            'relations': self.relations_replace,
+            'secrets': self.secrets_replace,
+            'world_rules': self.world_rules_replace,
+        }
+        conflict = [
+            name for name in collections
+            if replacement_by_collection[name] is not None
+        ]
+        if conflict:
+            raise ValueError(
+                f'集合不能同时走 delta edit 与完整 replacement：{conflict}')
         for label, rows, key in (
             ('secret', self.secrets_replace, 'secret_id'),
             ('world rule', self.world_rules_replace, 'rule_id'),

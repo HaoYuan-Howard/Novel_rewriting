@@ -44,8 +44,8 @@ CONTRACT_TEXT: Mapping[str, str] = {
    有无被截断的句子；
 4. 顺带核一次结构分母（总行数/非空行、独占数字行的章号集合、第一个章号之前是否为文案区）。''',
     'stage2': '''1. `PASS`：主体与原文逐项一致，且集合完整性已做正向与反向核对；scope 总理由与逐项例外理由都写明分母和核验位置。
-2. `FAIL`：存在可指向的冲突、错抽或漏抽；首轮必须把全部问题一次列全。第二轮从 `stage2.global --emit-edit-template` 取得当前 typed GlobalEdit，在同一 Commander resume 上下文里一次提交合并修复与 `post_edit_review` 自审。patch 数组只能修改模板已有行，行数、顺序、subject id 与字段集合全部绑定；新增/拆分 subject 只走生产模板明确提供的完整 `*_replace`。producer 只把自审展开到本 edit 新打开的 blocking 项，未变化的旧 FAIL 仍红；第二轮不闭合也不启动第三轮。不能重复提交同一 review，也不能用“已知问题”把 FAIL 当成披露放行。
-3. `UNVER`：证据不足以安全判断；绝不改写成 PASS。若当前 submission option 明确给出 `quarantine_group`，可在阅读完整组后填写隔离理由：状态仍为 UNVER，原始事实与审计保留，下游写作视图删除完整组；否则先用 GlobalEdit 修复。只有 GlobalEdit 无法表达、且该组不能安全隔离时才以 `stopped` 结束。''',
+2. `FAIL`：存在可指向的冲突、错抽或漏抽；当前增量里的问题必须一次列全。事实确有错误时从 `stage2.global --emit-edit-template` 取得当前 typed GlobalEdit。字段 patch 只能修改模板已有行，行数、顺序、subject id 与字段集合全部绑定；集合完整性的新增、删除或拆分只填写模板给出的 `collection_edits[].operations`，不得改 `collection` 或 `expected_collection_sha256`。Stage2 全程最多三次 Commander 真调用，每次使用新的 logical/provider session；后续包只含仍未闭合或因依赖变化重开的 subject cards。`post_edit_review` 绑定修前 workpack、source 与完整旧未闭合 scope：本 edit 新打开的项才走默认自审，未修改且 hash 存活的旧 FAIL/UNVER 必须在 `decisions[]` 显式复判。不能重复提交同一 review，也不能用“已知问题”把 FAIL 当成披露放行。
+3. `UNVER`：证据不足以安全判断；绝不改写成 PASS。只有当前 submission option 明确给出 `quarantine_group`、且该 kind 的 `generation_impact=quarantine_or_fix` 时，才可在阅读完整组后填写隔离理由：状态仍为 UNVER，原始事实与审计保留，下游写作视图删除完整组。`generation_impact=must_fix` 只有在证据支持 PASS 或能指出真实事实错误并用 GlobalEdit 修正时才能收口；材料仍不足就保持 UNVER 并以 `stopped` 结束，不为追求全绿臆造编辑。`disclose` 项不阻断生成但继续披露。''',
     'stage4-design': '''1. 策略只决定 `accept / request_replan`。只有策略本身无法指导全书结构重构时才拒绝；单章问题不得
    借策略决定放大成整书重跑。
 2. 每章决定 `accept / request_repair`。拒绝理由必须指出该章可核证的问题；约束只选服务端枚举的

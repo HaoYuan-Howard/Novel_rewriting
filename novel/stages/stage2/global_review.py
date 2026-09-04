@@ -14,7 +14,7 @@ from contracts.artifacts import (
     STAGE2_CHAPTER_BLUEPRINTS, STAGE2_GLOBAL_GROUNDING, STAGE2_GLOBAL_REVIEW,
     STAGE2_GLOBAL_REVIEW_DECISIONS,
 )
-from contracts.invariants import review_effect_of
+from contracts.invariants import review_effect_of, review_generation_impact_of
 from contracts.schema.evaluation import (
     EvidenceRef, GlobalReview, GlobalReviewBlockingScopeDecision,
     GlobalReviewDecision, GlobalReviewDecisionSet, GlobalReviewItem,
@@ -277,6 +277,11 @@ _WORKPACK_LEGEND: Final = {
             '没有正式 evidence 槽；展示 claim 的正文精确字面命中，仅供定位。'),
         'none': '没有可展示的正式证据或 claim 字面命中；不得据此自动 PASS。',
     },
+    'generation_impact': {
+        'must_fix': '不能安全从写作视图删除；FAIL/UNVER 必须修正或显式人工裁决。',
+        'quarantine_or_fix': 'UNVER 可整组隔离，FAIL 仍须修正；不会改名为 PASS。',
+        'disclose': '不进入写作事实面，不拦下游，但保留审计与最终披露。',
+    },
     'fate_companion': (
         'blocking role 行附带同人物 fate 的只读主体、状态与正式证据，'
         '只供成对阅读，不增加或代替任何 decision item。'),
@@ -357,6 +362,7 @@ def _attach_blocking_role_fate_companions(
                 None if fate.generation_disposition is None
                 else fate.generation_disposition.model_dump(mode='json')),
             'effect': review_effect_of(fate.kind),
+            'generation_impact': review_generation_impact_of(fate.kind),
             'subject': subject,
             'formal_evidence': formal,
             'unresolved_formal_evidence': unresolved,
@@ -468,6 +474,7 @@ def review_workpack(
             'reading_scope': reading_scope,
             'evidence_mode': evidence_mode,
             'effect': effect,
+            'generation_impact': review_generation_impact_of(item.kind),
             'group_key': review_group_key(item.subject_path),
             'subject': subject, 'registered_evidence': [
                 evidence.model_dump(mode='json') for evidence in item.evidence],

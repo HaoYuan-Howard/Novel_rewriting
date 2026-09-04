@@ -24,7 +24,9 @@ import pytest
 from pydantic import ValidationError
 
 from contracts.invariants import (
-    GLOBAL_REVIEW_DISCLOSURE_KINDS, GLOBAL_REVIEW_KINDS, review_effect_of,
+    GLOBAL_REVIEW_DISCLOSURE_KINDS, GLOBAL_REVIEW_GENERATION_IMPACT_BY_KIND,
+    GLOBAL_REVIEW_GENERATION_IMPACTS, GLOBAL_REVIEW_KINDS, review_effect_of,
+    review_generation_impact_of,
 )
 from contracts.artifacts import (
     STAGE2_GLOBAL_GROUNDING, STAGE2_GLOBAL_REVIEW,
@@ -84,6 +86,17 @@ def test_every_kind_is_classified_and_an_unknown_one_is_refused():
         review_effect_of('a_brand_new_high_impact_kind')
 
 
+def test_every_kind_has_an_explicit_generation_impact_and_no_default_route():
+    assert set(GLOBAL_REVIEW_GENERATION_IMPACT_BY_KIND) == set(GLOBAL_REVIEW_KINDS)
+    assert set(GLOBAL_REVIEW_GENERATION_IMPACT_BY_KIND.values()) <= set(
+        GLOBAL_REVIEW_GENERATION_IMPACTS)
+    assert review_generation_impact_of('role') == 'must_fix'
+    assert review_generation_impact_of('secret') == 'quarantine_or_fix'
+    assert review_generation_impact_of('fate') == 'disclose'
+    with pytest.raises(ValueError, match='未登记'):
+        review_generation_impact_of('new_semantic_guess')
+
+
 def test_only_the_three_calibrated_kinds_are_disclosure():
     """名单是冻结决策，不是「看起来差不多」。改它要连同理由一起改。"""
     assert sorted(GLOBAL_REVIEW_DISCLOSURE_KINDS) == [
@@ -120,6 +133,24 @@ def test_a_card_collects_every_item_of_the_same_subject():
     # 集合完整性各自成卡，不并进任何主体。
     assert keys['entities.characters'] == 'set:characters'
     assert keys['arc.conflict_stages'] == 'arc'
+
+
+def test_dependency_hash_reopens_only_the_changed_subject_card():
+    grounding = _global()
+    approved = _decide_all(build_review(grounding), set(GLOBAL_REVIEW_KINDS))
+    changed = copy.deepcopy(grounding)
+    changed['canon']['secrets'][0]['fact'] = '修正后的真相'
+
+    refreshed = build_review(changed, approved)
+    secret_rows = [
+        item for item in refreshed.items
+        if review_group_key(item.subject_path) == 'secret:secret_01'
+    ]
+    assert secret_rows and all(item.state == 'pending' for item in secret_rows)
+    assert next(item for item in refreshed.items
+                if item.kind == 'secret_set_complete').state == 'PASS'
+    assert next(item for item in refreshed.items
+                if item.kind == 'role').state == 'PASS'
 
 
 # ── ② 闸 ────────────────────────────────────────────────────────────────────
@@ -683,6 +714,8 @@ def test_the_api_row_carries_the_server_derived_effect_and_group_key():
 
     published = payload()
     assert 'global_review_disclosure_kinds' not in published
+    assert 'global_review_generation_impacts' not in published
+    assert 'global_review_generation_impact_by_kind' not in published
     assert 'global_review_kinds' in published
 
 

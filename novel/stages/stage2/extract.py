@@ -36,6 +36,8 @@ from contracts.schema.evaluation import (
 from contracts.schema.stage1 import MainText
 from contracts.schema.stage2 import (
     BlueprintCharacterProjection, BlueprintProvenance, BlueprintScopeViolation,
+    CharacterCollectionItem, GlobalCollectionAdd, GlobalCollectionDelete,
+    GlobalCollectionSplit,
     ChapterBlueprints,
     GlobalCandidateAgentTurnResponse, GlobalCandidateFullTurn,
     GlobalEdit,
@@ -58,6 +60,7 @@ from novel.observability import ChapterProgressTracker
 from novel.quality.global_review import (
     build_review, decide as decide_global_review, generation_safety,
     quarantined_group, require_current as require_current_review, review_group_key,
+    subject_sha256,
 )
 from novel.report import build
 from novel.report.findings import Outcome
@@ -5287,17 +5290,24 @@ def global_edit_template(ctx: RunContext) -> GlobalEdit:
     secrets = {row['secret_id']: row for row in canon['secrets']}
     edit: dict[str, Any] = {}
 
+    collection_edits: list[dict[str, Any]] = []
+
+    def collection_delta(name: str, value: Any) -> None:
+        collection_edits.append({
+            'collection': name,
+            'expected_collection_sha256': subject_sha256(value),
+            'operations': [],
+        })
+
     if 'set:characters' in grouped:
-        edit['characters_replace'] = _manualize_evidence(
-            characters, chapters, subject='entities.characters')
+        collection_delta('characters', characters)
 
     relation_groups = {
         group for group in grouped if group.startswith('relation:')
     }
     if 'set:relations' in grouped:
-        edit['relations_replace'] = _manualize_evidence(
-            entities['relations'], chapters, subject='entities.relations')
-    elif relation_groups:
+        collection_delta('relations', entities['relations'])
+    if relation_groups:
         edit['relations'] = [
             _manualize_evidence(
                 relations[group.split(':', 1)[1]], chapters, subject=group)
@@ -5306,9 +5316,8 @@ def global_edit_template(ctx: RunContext) -> GlobalEdit:
 
     rule_groups = {group for group in grouped if group.startswith('world_rule:')}
     if 'set:world_rules' in grouped:
-        edit['world_rules_replace'] = _manualize_evidence(
-            canon['world_rules'], chapters, subject='canon.world_rules')
-    elif rule_groups:
+        collection_delta('world_rules', canon['world_rules'])
+    if rule_groups:
         edit['world_rules'] = [
             _manualize_evidence(
                 rules[group.split(':', 1)[1]], chapters, subject=group)
@@ -5317,9 +5326,8 @@ def global_edit_template(ctx: RunContext) -> GlobalEdit:
 
     secret_groups = {group for group in grouped if group.startswith('secret:')}
     if 'set:secrets' in grouped:
-        edit['secrets_replace'] = _manualize_evidence(
-            canon['secrets'], chapters, subject='canon.secrets')
-    elif secret_groups:
+        collection_delta('secrets', canon['secrets'])
+    if secret_groups:
         edit['secrets'] = [
             _manualize_evidence(
                 secrets[group.split(':', 1)[1]], chapters, subject=group)
@@ -5330,9 +5338,6 @@ def global_edit_template(ctx: RunContext) -> GlobalEdit:
     address_patches: list[dict[str, Any]] = []
     for group, items in sorted(grouped.items()):
         if not group.startswith('character:'):
-            continue
-        if 'set:characters' in grouped:
-            # 完整 replacement 已包含这些格；再同时给 patch 会制造顺序语义。
             continue
         char_id = group.split(':', 1)[1]
         character = characters[char_id]
@@ -5366,6 +5371,8 @@ def global_edit_template(ctx: RunContext) -> GlobalEdit:
         edit['characters'] = character_patches
     if address_patches:
         edit['addresses'] = address_patches
+    if collection_edits:
+        edit['collection_edits'] = collection_edits
 
     setting_items = grouped.get('setting', [])
     if setting_items:
@@ -5415,7 +5422,7 @@ def global_edit_correction_workpack(ctx: RunContext) -> dict[str, Any]:
     这不是重新生成编辑模板。它只接受当前 live INVALID 仍逐字绑定书内
     ``global_edit.json``、该 edit 带 ``post_edit_review``，且 INVALID 自创建后没有
     被人直接改过的盘面。这样服务/Agent 在第一次动作落下 INVALID 后崩溃，也能把
-    **同一份失败动作**交给 Commander 做最后一次纠正，而不是重读整套材料后从头改。
+    **同一份失败动作**交给 Commander 做预算内增量纠正，而不是重读整套材料后从头改。
     """
     store = ArtifactStore(ctx)
     if not store.exists(GLOBAL_EDIT) or not store.exists(_GLOBAL_INVALID):
@@ -5424,7 +5431,7 @@ def global_edit_correction_workpack(ctx: RunContext) -> dict[str, Any]:
     attestation = edit.post_edit_review
     if attestation is None:
         raise TerminalState(
-            '当前 global_edit.json 没有 post_edit_review；不是 Commander 第二轮中断态')
+            '当前 global_edit.json 没有 post_edit_review；不是 Commander reviewed edit 中断态')
     invalid, invalid_sha256 = store.read_own_with_sha256(
         GlobalGrounding, _GLOBAL_INVALID, require_current=True)
     audit = store.revalidation_audit(
@@ -5461,9 +5468,10 @@ def global_edit_correction_workpack(ctx: RunContext) -> dict[str, Any]:
     edit_payload = edit.model_dump(
         mode='json', by_alias=True, exclude_unset=True)
     return {
-        'kind': 'stage2-global-edit-correction-workpack-v1',
+        'kind': 'stage2-global-edit-correction-workpack-v2',
         'read_only': True,
-        'final_commander_turn': True,
+        'commander_budget_max': 3,
+        'incremental_correction': True,
         'failed_edit_sha256': edit_sha256,
         'invalid_sha256': invalid_sha256,
         'expected_source_sha256': attestation.expected_source_sha256,
@@ -5522,6 +5530,106 @@ def _apply_secret_patches(data: dict[str, Any], edit: GlobalEdit,
     entities = candidate.get('entities') or {}
     canon = candidate.get('canon') or {}
     arc = candidate.get('arc') or {}
+    changed: list[str] = []
+
+    def collection_value(name: str) -> Any:
+        if name == 'characters':
+            return entities.get('characters') or {}
+        if name == 'relations':
+            return entities.get('relations') or []
+        if name == 'secrets':
+            return canon.get('secrets') or []
+        return canon.get('world_rules') or []
+
+    def member_id(name: str, value: dict[str, Any]) -> str:
+        key = {
+            'characters': 'char_id',
+            'relations': 'relation_id',
+            'secrets': 'secret_id',
+            'world_rules': 'rule_id',
+        }[name]
+        identity = value.get(key)
+        if not isinstance(identity, str) or not identity:
+            raise TerminalState(f'{name} collection operation 缺 {key}')
+        return identity
+
+    def dumped_member(name: str, item: Any) -> tuple[str, dict[str, Any]]:
+        payload = item.model_dump(mode='json', by_alias=True)
+        if name == 'characters':
+            if not isinstance(item, CharacterCollectionItem):
+                raise TerminalState('characters collection operation 成员类型错误')
+            identity = str(payload.pop('char_id'))
+        else:
+            identity = member_id(name, payload)
+        return identity, payload
+
+    for collection_edit in edit.collection_edits:
+        name = collection_edit.collection
+        current_value = collection_value(name)
+        if collection_edit.expected_collection_sha256 != subject_sha256(current_value):
+            raise TerminalState(
+                f'{name} 集合已变化；collection edit 的 expected_collection_sha256 过期')
+        if name == 'characters':
+            ordered = [
+                {'char_id': identity, **copy.deepcopy(value)}
+                for identity, value in current_value.items()
+            ]
+        else:
+            ordered = copy.deepcopy(current_value)
+        for operation in collection_edit.operations:
+            positions = {
+                member_id(name, row): index for index, row in enumerate(ordered)
+            }
+            if isinstance(operation, GlobalCollectionAdd):
+                identity, payload = dumped_member(name, operation.item)
+                if identity in positions:
+                    raise TerminalState(
+                        f'{name} add 的 id 已存在：{identity}')
+                ordered.append({'char_id': identity, **payload}
+                               if name == 'characters' else payload)
+                changed.append(f'{name}.add.{identity}')
+            elif isinstance(operation, GlobalCollectionDelete):
+                identity = operation.subject_id
+                if identity not in positions:
+                    raise TerminalState(
+                        f'{name} delete 的 id 不存在：{identity}')
+                ordered.pop(positions[identity])
+                changed.append(f'{name}.delete.{identity}')
+            elif isinstance(operation, GlobalCollectionSplit):
+                identity = operation.subject_id
+                if identity not in positions:
+                    raise TerminalState(
+                        f'{name} split 的 id 不存在：{identity}')
+                replacements: list[dict[str, Any]] = []
+                replacement_ids: list[str] = []
+                for item in operation.items:
+                    replacement_id, payload = dumped_member(name, item)
+                    if replacement_id in positions:
+                        raise TerminalState(
+                            f'{name} split 输出 id 已存在：{replacement_id}')
+                    replacement_ids.append(replacement_id)
+                    replacements.append(
+                        {'char_id': replacement_id, **payload}
+                        if name == 'characters' else payload)
+                ordered[positions[identity]:positions[identity] + 1] = replacements
+                changed.append(
+                    f'{name}.split.{identity}->{",".join(replacement_ids)}')
+            else:  # pragma: no cover —— schema discriminator 已闭合
+                raise AssertionError(f'未知 collection operation：{operation!r}')
+        if name == 'characters':
+            entities['characters'] = {
+                str(row['char_id']): {
+                    key: value for key, value in row.items() if key != 'char_id'
+                }
+                for row in ordered
+            }
+        elif name == 'relations':
+            entities['relations'] = ordered
+        elif name == 'secrets':
+            canon['secrets'] = ordered
+        else:
+            canon['world_rules'] = ordered
+
     characters = entities.get('characters') or {}
     if edit.characters_replace is not None:
         characters = {
@@ -5577,7 +5685,6 @@ def _apply_secret_patches(data: dict[str, Any], edit: GlobalEdit,
             return [dump(item) for item in value]
         return copy.deepcopy(value)
 
-    changed: list[str] = []
     if edit.characters_replace is not None:
         changed.append('entities.characters')
     if edit.arc_replace is not None:
@@ -5738,11 +5845,14 @@ def _review_after_global_edit(
     previous: GlobalReview,
     edit: GlobalEdit,
     chapter_ordinals: list[int],
+    *,
+    expected_workpack_sha256: str | None = None,
 ) -> GlobalReview | None:
-    """把第二轮 Commander 的自检只展开到精确 edit 新打开的 blocking 项。
+    """原子合并本轮 edit、新打开项自检与仍存活旧项的 hash-bound 复判。
 
-    未改变的旧 FAIL/UNVER 不会变成 pending，因而绝不会被本证明顺手洗绿；
-    最后的 generation safety 复验会在写盘前拒绝这种假修复。
+    旧 v3 attestation 仍按“只证明新 pending”读取。Supervisor 新模板额外绑定
+    完整 workpack 与修前 unresolved identity；只有精确存活的旧项可由 decisions
+    复判。改过的主体会换 hash，必须走新 pending 自检，不能套用旧决定。
     """
     attestation = edit.post_edit_review
     if attestation is None:
@@ -5754,6 +5864,26 @@ def _review_after_global_edit(
         raise TerminalState(
             'post_edit_review 没有覆盖当前完整正文章集合；'
             f'expected={chapter_ordinals} got={attestation.reviewed_chapter_ordinals}')
+
+    extended = attestation.expected_workpack_sha256 is not None
+    if extended:
+        if expected_workpack_sha256 != attestation.expected_workpack_sha256:
+            raise TerminalState(
+                'post_edit_review 绑定的完整 workpack 已变化；拒绝应用旧阅读结论')
+        expected_scope = [
+            (item.item_id, item.subject_sha256)
+            for item in previous.items
+            if review_effect_of(item.kind) == 'blocking'
+            and item.state != 'PASS'
+            and quarantined_group(item) is None
+        ]
+        supplied_scope = [
+            (row.item_id, row.expected_subject_sha256)
+            for row in attestation.review_scope
+        ]
+        if supplied_scope != expected_scope:
+            raise TerminalState(
+                'post_edit_review.review_scope 未精确覆盖修前全部未闭合 blocking 项')
 
     payload = artifact.model_dump(mode='json', by_alias=True)
     updated = build_review(payload, previous)
@@ -5777,6 +5907,27 @@ def _review_after_global_edit(
         raise TerminalState(
             'post_edit_review 请求隔离的组不属于本次 edit 新打开的 blocking 面：'
             f'{unknown_groups}')
+
+    if extended:
+        identities = {
+            (item.item_id, item.subject_sha256): item for item in updated.items
+        }
+        for decision in attestation.decisions:
+            identity = (decision.item_id, decision.expected_subject_sha256)
+            if identity not in identities:
+                raise TerminalState(
+                    'post_edit_review 决定指向已被本 edit 改写或删除的旧主体：'
+                    f'{decision.item_id}')
+            updated = decide_global_review(
+                updated,
+                item_id=decision.item_id,
+                expected_subject_sha256=decision.expected_subject_sha256,
+                state=decision.state,
+                actor=attestation.actor,
+                reason=decision.reason,
+                evidence=[row.model_dump(mode='json') for row in decision.evidence],
+                generation_disposition=decision.generation_disposition,
+            )
 
     for item in pending:
         group = review_group_key(item.subject_path)
@@ -5802,8 +5953,7 @@ def _review_after_global_edit(
     safety = generation_safety(payload, updated)
     if not safety.safe:
         raise TerminalState(
-            '第二轮 reviewed GlobalEdit 没有消解全部 blocking 项；'
-            '拒绝落盘，也不再启动第三轮 Commander。'
+            'reviewed GlobalEdit 没有消解全部 blocking 项；拒绝落盘。'
             f'remaining={list(safety.blocking_item_ids)}')
     return updated
 
@@ -5872,6 +6022,14 @@ def run_apply_edit(ctx: RunContext, edit_path: str = '') -> tuple[GlobalGroundin
                 store, replaced_edit_rel=GLOBAL_EDIT)
         previous_business = copy.deepcopy(raw)
         previous_business.pop('_provenance', None)
+        reviewed_workpack_sha256: str | None = None
+        if (submitted_edit.post_edit_review is not None
+                and submitted_edit.post_edit_review.expected_workpack_sha256
+                is not None):
+            from novel.stages.stage2 import global_review as global_review_ops
+            reviewed_workpack_sha256 = str(global_review_ops.review_workpack(
+                ctx, scope='blocking',
+                replaced_input_keys=(GLOBAL_EDIT,))['workpack_sha256'])
         data = copy.deepcopy(raw)
         data.pop('_provenance', None)
         changed = _apply_secret_patches(data, submitted_edit, ordinals)
@@ -5924,7 +6082,8 @@ def run_apply_edit(ctx: RunContext, edit_path: str = '') -> tuple[GlobalGroundin
                 invalid_path=path)
 
         reviewed = _review_after_global_edit(
-            artifact, previous_review, submitted_edit, chapter_ordinals)
+            artifact, previous_review, submitted_edit, chapter_ordinals,
+            expected_workpack_sha256=reviewed_workpack_sha256)
         _write_formal(
             store, GLOBAL_REL, artifact, review_override=reviewed)
         _note_evidence_locator_corrections(

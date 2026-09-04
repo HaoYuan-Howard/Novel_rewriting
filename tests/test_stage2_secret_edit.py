@@ -139,8 +139,11 @@ def test_character_set_fail_emits_a_complete_typed_recovery_instead_of_crashing(
 
         template = extract.global_edit_template(ctx)
 
-        assert template.characters_replace is not None
-        assert sorted(template.characters_replace) == ['char_001', 'char_002']
+        [collection_edit] = template.collection_edits
+        assert collection_edit.collection == 'characters'
+        assert collection_edit.operations == []
+        assert len(collection_edit.expected_collection_sha256) == 64
+        assert template.characters_replace is None
         assert template.characters == []
     finally:
         shutil.rmtree(root, ignore_errors=True)
@@ -243,7 +246,8 @@ def test_reviewed_correction_reapplies_to_formal_after_first_edit_left_invalid()
         assert (book / extract._GLOBAL_INVALID).is_file()
         workpack = extract.global_edit_correction_workpack(
             _ctx(book, 'stage2.global', paid=False))
-        assert workpack['final_commander_turn'] is True
+        assert workpack['commander_budget_max'] == 3
+        assert workpack['incremental_correction'] is True
         assert workpack['hard_hits'] == ['role_repeats_name']
         assert workpack['hard_outcomes'][0]['findings'][0]['evidence'] == [
             "char_001:'李宝珠'"]

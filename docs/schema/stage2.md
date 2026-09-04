@@ -18,7 +18,7 @@ GlobalGrounding 由 producer 重建；ChapterBlueprints v6 不迁移、不自动
 Stage4A v1 truth/mapping、原始来源边及白名单下游正式制品逐字闭合时，冻结 reader 才供状态、审批、
 交付披露与零 wire 完整章 edit 使用；普通 producer、付费 repair/replan 与 Stage4B 不得消费该内存形状，
 也不得回写 v6。新的 clean base 只由 `stage2.blueprint` 生成 v7。GlobalEdit v1/v2 由人按 v3
-重写，本批之前已经合法的 v3 无须补 `conflict_stages_replace` 仍可原样读取。
+重写，本批之前已经合法的 v3 无须补 `collection_edits`、扩展 review scope 等可缺字段，仍可原样读取。
 
 ## 一、`global_grounding.json`
 
@@ -367,7 +367,8 @@ hinge 那一侧的 LCS 兜底本来就是禁的 ⇒ 那笔账**结构性恒空**
 
 全局 typed 事实抽错、漏抽或 evidence 回取失败时的**契约内 0 LLM 修正入口**。它覆盖
 人物 role/fate/枚举、relation、setting、secret、world rule、冲突阶段、arc track 与 address；
-逐格 patch 用稳定 ID/下标改已有记录，完整 replace 则表达新增、删除或复合事实拆分。
+逐格 patch 用稳定 ID/下标改已有记录，集合成员变化优先使用 hash-bound
+`collection_edits` 增量 DSL，完整 replace 仍保留为整组人工恢复面。
 所有会改自由 claim 的入口必须同交新 locator，不能让旧 evidence 继续给新 claim 背书。
 
 | 键 | 类型 | 语义 |
@@ -387,24 +388,28 @@ hinge 那一侧的 LCS 兜底本来就是禁的 ⇒ 那笔账**结构性恒空**
 | `arc_tracks_replace` | `ArcTrackResponse[] \| null` | 完整替换 arc tracks；至少一项，trajectory 交 locator |
 | `arc_replace` | `ArcResponse \| null` | 完整替换 conflict stages、climax、ending 与 arc tracks；用于整组 `arc_analysis` 恢复 |
 | `addresses_replace` | `CharacterAddressReplacement[]` | 每项按 `char_id` 完整替换其 `address`；列表至少一条，可改 `surface/by/context/from_chapter` |
-| `post_edit_review` | `GlobalEditReviewAttestation \| null` | 第二次 Commander 调用对本次精确 edit 的自审绑定：首轮 source、正文章全集、默认 PASS、理由及可选安全隔离组；单独出现不算编辑 |
+| `collection_edits` | `GlobalCollectionEdit[]` | 对 characters/relations/secrets/world_rules 各集合按当前集合 SHA 乐观锁提交 `add/delete/split`；只携增量成员，不重复整组已确认主体 |
+| `post_edit_review` | `GlobalEditReviewAttestation \| null` | Commander 增量轮对本次精确 edit 的自审绑定：修前 source/workpack、正文章全集、未闭合 `review_scope`、逐项 `decisions`、默认 PASS、理由及可选安全隔离组；单独出现不算编辑 |
 
 集合 replacement 的 `null` 表示「没动」，允许为空的集合用显式 `[]` 表示「经复核删除全集」；
 两者不能合成默认空列表。`characters_replace`、`conflict_stages_replace`、
 `arc_tracks_replace`、`arc_replace` 与 `addresses_replace[].address` 不允许空，因为正式人物集合、
 `Arc.conflict_stages` / `Arc.arc_tracks` / `Character.address` 至少一项。相同集合不能同时
-patch+replace；`characters_replace` 不能与人物/address patch 或 address replacement 混用，
+delta+replace；既有成员的逐格 patch 可与同集合 delta 共存，但 delta 的输入/输出 ID 必须闭合且唯一。
+`characters_replace` 不能与人物/address patch 或 address replacement 混用，
 `arc_replace` 不能与任一 arc 局部 patch/replacement 混用。
 
 所有载体/目标/外键/章号/窗口拒收都发生在调用者对象修改、正式写盘、`.INVALID` 与
-`_rounds/` 归档**之前**：实现先在深拷贝候选上应用全部 patch/replace，再对**应用后的完整图**
+`_rounds/` 归档**之前**：实现先在深拷贝候选上应用全部 delta/patch/replace，再对**应用后的完整图**
 校验外键、章号、窗口与证据；这些校验任一失败时调用者对象保持不变。随后才把候选交给同一
 归一、正式载体与判据闸门；这一段只操作本轮局部对象，即使最终载体或 HARD 拒收也不会提前写盘。
 
 | 拒收 | 落点 | 理由 |
 |---|---|---|
 | 未知字段 / 空编辑 / 重复 ID 或 subject | 载体（`GlobalEdit`） | 顺序不能决定哪份人工决定生效 |
-| 同一 secret/world-rule/relation/arc-track 集合既逐项 patch 又完整 replace | 载体（`GlobalEdit`） | 两个写口争同一 subject，结果依赖应用顺序 |
+| 同一集合既走 `collection_edits` 又完整 replace | 载体（`GlobalEdit`） | 两个成员写口争同一集合，结果依赖应用顺序 |
+| 同一 secret/world-rule/relation/arc-track 集合既逐项 patch 又完整 replace | 载体（`GlobalEdit`） | 两个字段写口争同一 subject，结果依赖应用顺序 |
+| collection SHA 漂移、delete/split 目标不存在、add/split 输出 ID 冲突或成员类型不符 | `TerminalState` / 载体 | 增量操作必须绑定精确旧集合并形成唯一闭合新集合 |
 | 完整人物/arc replacement 与同组任一局部写口混用 | 载体（`GlobalEdit`） | 完整替换会改变成员或下标身份，必须二选一 |
 | 同一人物的 address 既按下标 patch 又完整 replace | 载体（`GlobalEdit`） | replacement 会改变下标含义，必须二选一 |
 | 逐项 patch 的目标不存在；replacement 的人物目标不存在 | `TerminalState` | 错的是决策集，不该给它建 `.INVALID` |
@@ -426,19 +431,25 @@ edit、在内存应用并归一；no-op 在 canonical 写入前拒绝。确有�
 输入；同步执行返回后可精确删除一次性 UUID 文件。
 
 成功落盘会从新 `GlobalGrounding` 重新枚举 `global_review` 必审 surface。人工决定只在
-`item_id + kind + subject_path + subject_sha256` 四者均未变时继承；拆分 secret、新增规则或重建
-address 后的新 subject 一律回到 `pending`，旧复合事实的 PASS 不能跟随到新时间线。
+`item_id + kind + subject_path + subject_sha256` 四者均未变时继承；subject hash 绑定登记依赖闭包，
+因此 secret/rule/relation 的关联字段变化只重开该主体卡及其依赖项，集合完整性只在成员 ID 集变化时
+重开，互不相关且已成功的卡不再发给 Commander。
 
-Agent 的 Stage2 global 语义闭环最多使用两次真实 Commander 调用。首轮完整审阅并落 hash-bound
-PASS/FAIL/UNVER；第二轮是唯一返工，必须在同一 provider session 中一次提交完整 typed edit 和
-`post_edit_review`。producer 先在内存应用、归一和重枚举，只把证明展开到**本次 edit 新打开的
-blocking pending 项**；未变化的旧 FAIL/UNVER 继续保持原状态，不能被默认 PASS 洗绿。证明绑定的
-source 或正文章全集漂移、存在未消解 blocking、或者隔离组不属于本次新打开且登记可隔离的
-secret/relation/world-rule 时，整份 Global/review 在写盘前原子拒绝，并明确不启动第三轮 Commander。
-没有 `post_edit_review` 的公开人工 GlobalEdit 仍按旧语义重枚举 pending，不代替人工复核。
+Agent 的 Stage2 global 闭环是“一次 Executor 产出 + 最多三次 Commander 真调用”，与四轮阶段预算
+对齐。首个 Commander 轮审阅当前未闭合面；后两轮只在仍有进展时接收增量 subject cards，并可在一份
+动作里同时提交 typed edit 与 `post_edit_review`。每轮使用新的 logical/provider session；连续性来自
+持久 typed ledger、workpack identity、去重 catalog 与存活决定，不依赖隐藏聊天历史。调用在启动前即以
+`started` 消耗预算，进程重启不会补发；同一 progress fingerprint、未闭合数倒退增加或三次耗尽均
+关闭式停止。
 
-`global_edit.json` 当前为 schema v3。`characters_replace`、`arc_replace`、
-`post_edit_review` 与 `conflict_stages_replace` 都是可缺的兼容加法，旧 v3 决策集仍能原样读取，
+producer 先在内存应用、归一和重枚举：本 edit 新打开的 blocking pending 项由默认 PASS/登记隔离
+证明收口；仍保持原 hash 的旧 FAIL/UNVER 只能由 `review_scope + decisions` 显式复判，不能被默认值
+洗绿。source/workpack/正文章全集漂移、任一未消解 blocking、或非白名单隔离都会在 Global/review
+原子写盘前拒绝。没有 `post_edit_review` 的公开人工 GlobalEdit 仍按旧语义重枚举 pending，不代替
+人工复核。
+
+`global_edit.json` 当前为 schema v3。`collection_edits`、`characters_replace`、`arc_replace`、
+扩展后的 `post_edit_review` 与 `conflict_stages_replace` 都是可缺的兼容加法，旧 v3 决策集仍能原样读取，
 因此没有为它升版。它与 GlobalGrounding v4 一样只保留
 `first_reveal_chapter` 和无标签弧线；本仓没有迁移器，只有旧 v1/v2
 决策集必须由人核对后按 v3 重写。

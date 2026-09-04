@@ -436,19 +436,19 @@ def test_review_approval_recomputes_complete_current_subject_and_required_surfac
     forged = review.model_copy(update={'items': review.items[1:]})
     assert review_status(grounding, forged)[1:] == (False, False)
 
-    # `address[].surface` 没有独立复核项（有的是同一条 address 的 `context`），
-    # 但人物集合完整性项必须覆盖这种变化，不能只靠整份 source hash 把它变成一条
-    # 无法从 workpack 里找到的隐形 pending。
+    # `address[].surface` 没有独立语义复核项（有的是 address 的 `context`）。集合完整性
+    # 只绑定成员 ID；若把任意子字段变化都并进集合 hash，改一个已成功主体会重开整张
+    # 全书阅读卡，Commander 的增量审阅就会退化为全量重审。
     edited = _global()
     edited['entities']['characters']['char_001']['address'][0]['surface'] = '甲郎'
     assert review_status(edited, review)[1:] == (False, False)
 
-    # Refreshing from that edit only reopens the changed collection item；其余精确身份继承。
+    # 重建 current surface 后，所有真实语义主体 identity 都没变，故已有决定完整继承；
+    # source_sha256 的变化仍保证旧 review 本身不能被直接冒充 current。
     refreshed = build_review(edited, review)
     reopened = [item for item in refreshed.items if item.state == 'pending']
-    assert [(item.kind, item.subject_path) for item in reopened] == [
-        ('character_set_complete', 'entities.characters')]
-    assert review_status(edited, refreshed)[1:] == (True, False)
+    assert reopened == []
+    assert review_status(edited, refreshed)[1:] == (True, True)
 
 
 def test_global_review_rejects_stale_and_unaudited_decisions():

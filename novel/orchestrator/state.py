@@ -670,13 +670,13 @@ def stage2_invalid_projection_ready(ov: NovelOverview) -> bool:
 def stage2_reviewed_edit_correction_needed(
     base: str | os.PathLike[str], sid: str, ov: NovelOverview,
 ) -> bool:
-    """是否有一份尚未完成第二轮纠正的 reviewed GlobalEdit。
+    """是否有一份尚未完成预算内增量纠正的 reviewed GlobalEdit。
 
     普通 Global ``.INVALID`` 仍按既有契约让 Blueprint 先推进、到 Stage4 汇合；
     这里只识别一个更窄的崩溃恢复态：当前 INVALID 精确绑定书内
-    ``global_edit.json``，该 edit 带第二轮自检证明，而且 live INVALID 自创建后
+    ``global_edit.json``，该 edit 带修后自检证明，而且 live INVALID 自创建后
     没有人直接改过。它说明 Commander 的第一次修改已执行但被 HARD 拒绝，下一步
-    应是同一逻辑任务的**最后一次纠正**，不能被 Blueprint REDO 抢走。
+    应是同一逻辑任务的**预算内增量纠正**，不能被 Blueprint REDO 抢走。
 
     完成度仍不读 ``_service``，也不从作业日志猜状态；全部证据都在书内 typed
     产物、INVALID provenance/freshness 与不可变 revalidation baseline 中。

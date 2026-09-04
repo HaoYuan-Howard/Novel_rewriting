@@ -131,6 +131,12 @@ _WITHHELD: dict[str, str] = {
         '而那条判定已经随行下发在 `GlobalReviewRow.effect` 上了（`R-11.4`）。'
         '两处并存的下场是：某天新增一类高影响事实，界面仍按旧表画成「只披露」，'
         '而没有任何东西会出声'),
+    'GLOBAL_REVIEW_GENERATION_IMPACTS': (
+        '生成影响是后端复核路由的关闭式取值域，不是前端选项；每条工作包/视图行已经'
+        '携服务端派生的 `generation_impact`，另发枚举会诱导浏览器自行重判'),
+    'GLOBAL_REVIEW_GENERATION_IMPACT_BY_KIND': (
+        '它是 kind → 生成处置的权威分类表；只由后端生成工作包、隔离视图与闸门消费。'
+        '随 `/api/enums` 发布会复制判官，并与逐行 `generation_impact` 形成可漂移双落点'),
     'LEGACY_STAGE5_MODES': '只用来识别并拒绝旧 deep/shallow 盘面，不是现役选项',
     # ── 分章（stage0 / stage1）的判据阈值与剥壳正则 ──
     'NONBODY_LEAD_STRIP': '正则。发过去等于请前端自己剥壳，而剥出来的 core 是所有长度阈值的输入',

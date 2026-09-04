@@ -3,8 +3,9 @@
 """整书 AgentRun 的纯生命周期监督器。
 
 Supervisor 不理解小说节点，也不直接调用任何模型 SDK。真正的一轮 Commander
-由调用方注入；本类只决定何时保持同一 provider session 精确续会、何时因身份
-漂移滚动 execution epoch，以及 pause / resume / stop 应落在哪个安全边界。
+由调用方注入；本类只决定普通 turn 何时保持同一 provider session 精确续会、何时因身份
+漂移滚动 execution epoch，以及 pause / resume / stop 应落在哪个安全边界。Stage2
+reviewer 的 fresh-session 策略由注入回调自行实现。
 
 pause 不是“杀进程后猜它停了”：请求只关闭当前 Commander turn 的 admission，
 阻止它再 claim 新节点；已经取得 claim 的节点自然完成、release 并 drain，最后才写
@@ -35,7 +36,7 @@ class CommanderTurnResult:
     outcome: AgentDeliveryOutcome
     # canonical reviewer 动作若在正式写入前被拒，下一启动窗口必须先完成
     # 同一 immutable workpack 的紧凑纠错；不能先重取全局 next，让失败尝试
-    # 留下的 INVALID/stale surface 抢走原 reviewer 会话。
+    # 留下的 INVALID/stale surface 抢走原 reviewer 绑定。
     continue_reviewer: bool = False
 
 
@@ -56,7 +57,7 @@ class SupervisorActionResult:
     continue_ready: bool = True
     failure_detail: str | None = None
     # ready action 可在自己的启动窗内并行完成一轮只读 Commander 预审；
-    # 该 provider 身份必须回到 Supervisor，后续 live reviewer 才能精确续会。
+    # 普通 reviewer 可回传 provider 身份续会；Stage2 fresh-session reviewer 不回传。
     provider_session_id: str | None = None
     # 只有 action 已经自行落下可验证的同 run 恢复凭据时才出现。Supervisor
     # 据此保持当前 epoch/书锁并开放 resume；普通 exit 2 仍永久结束本次 parent。

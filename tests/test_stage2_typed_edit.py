@@ -10,6 +10,7 @@ from contracts.invariants import review_effect_of
 from contracts.schema import ArtifactVersionError, decode_artifact, encode_artifact
 from contracts.schema.stage2 import ConflictStage, GlobalEdit, Relation
 from novel.errors import TerminalState
+from novel.quality.global_review import subject_sha256
 from novel.stages.stage2.extract import (
     _apply_secret_patches, _review_after_global_edit,
 )
@@ -252,6 +253,120 @@ def test_complete_character_replacement_can_add_a_missing_person_and_relation():
     assert changed == ['entities.characters', 'entities.relations']
 
 
+def test_collection_delta_adds_a_character_and_relation_without_copying_existing_rows():
+    data = _grounding()
+    edit = GlobalEdit.model_validate({
+        'collection_edits': [{
+            'collection': 'characters',
+            'expected_collection_sha256': subject_sha256(
+                data['entities']['characters']),
+            'operations': [{
+                'op': 'add',
+                'item': {
+                    'char_id': 'char_002', 'canonical': '周衡',
+                    'address': [{
+                        'surface': '周衡', 'by': 'public',
+                        'context': 'reference', 'from_chapter': 2,
+                    }],
+                    'name_distinctiveness': 'high',
+                    'role': '协助核账的人', 'role_evidence': _locator(2),
+                    'fate': None, 'fate_evidence': None,
+                },
+            }],
+        }, {
+            'collection': 'relations',
+            'expected_collection_sha256': subject_sha256(
+                data['entities']['relations']),
+            'operations': [{
+                'op': 'add',
+                'item': {
+                    'relation_id': 'rel_01', 'subject_id': 'char_001',
+                    'object_id': 'char_002', 'predicate': '共同核账',
+                    'predicate_evidence': _locator(2),
+                    'visibility': {'kind': 'public', 'from_chapter': 2},
+                    'valid_from_chapter': 2, 'valid_through_chapter': None,
+                },
+            }],
+        }],
+    })
+
+    changed = _apply_secret_patches(data, edit, {1, 2})
+
+    assert sorted(data['entities']['characters']) == ['char_001', 'char_002']
+    assert [row['relation_id'] for row in data['entities']['relations']] == ['rel_01']
+    assert changed == ['characters.add.char_002', 'relations.add.rel_01']
+
+
+def test_collection_delta_split_is_ordered_and_stale_hash_does_not_mutate():
+    data = _grounding()
+    original = copy.deepcopy(data)
+    replacement = lambda secret_id, fact: {  # noqa: E731 - 测试内紧凑工厂
+        'secret_id': secret_id, 'fact': fact,
+        'fact_evidence': _locator(),
+        'knowledge_events': _knowledge(response=True),
+        'setup': {'kind': 'cold'}, 'first_reveal_chapter': 2,
+    }
+    stale = GlobalEdit.model_validate({
+        'collection_edits': [{
+            'collection': 'secrets',
+            'expected_collection_sha256': '0' * 64,
+            'operations': [{
+                'op': 'split', 'subject_id': 'secret_01',
+                'items': [
+                    replacement('secret_02', '账本被替换'),
+                    replacement('secret_03', '替换者另有其人'),
+                ],
+            }],
+        }],
+    })
+    with pytest.raises(TerminalState, match='expected_collection_sha256 过期'):
+        _apply_secret_patches(data, stale, {1, 2})
+    assert data == original
+
+    current = GlobalEdit.model_validate({
+        'collection_edits': [{
+            'collection': 'secrets',
+            'expected_collection_sha256': subject_sha256(
+                data['canon']['secrets']),
+            'operations': [{
+                'op': 'split', 'subject_id': 'secret_01',
+                'items': [
+                    replacement('secret_02', '账本被替换'),
+                    replacement('secret_03', '替换者另有其人'),
+                ],
+            }],
+        }],
+    })
+    changed = _apply_secret_patches(data, current, {1, 2})
+    assert [row['secret_id'] for row in data['canon']['secrets']] == [
+        'secret_02', 'secret_03']
+    assert changed == ['secrets.split.secret_01->secret_02,secret_03']
+
+
+def test_collection_delete_refuses_a_dangling_relation_and_keeps_input_unchanged():
+    data = _grounding()
+    data['entities']['relations'] = [{
+        'relation_id': 'rel_01', 'subject_id': 'char_001',
+        'object_id': 'char_001', 'predicate': '隐瞒账本',
+        'predicate_evidence': _formal_evidence(),
+        'visibility': {'kind': 'via_secret', 'secret_id': 'secret_01'},
+        'valid_from_chapter': 1, 'valid_through_chapter': None,
+    }]
+    original = copy.deepcopy(data)
+    edit = GlobalEdit.model_validate({
+        'collection_edits': [{
+            'collection': 'secrets',
+            'expected_collection_sha256': subject_sha256(
+                data['canon']['secrets']),
+            'operations': [{'op': 'delete', 'subject_id': 'secret_01'}],
+        }],
+    })
+
+    with pytest.raises(TerminalState, match='无效引用'):
+        _apply_secret_patches(data, edit, {1, 2})
+    assert data == original
+
+
 def test_complete_arc_replacement_covers_climax_ending_and_tracks():
     data = _grounding()
     edit = GlobalEdit.model_validate({'arc_replace': {
@@ -344,7 +459,7 @@ def test_reviewed_edit_refuses_to_wash_an_unchanged_fail_green():
     })
     artifact = SimpleNamespace(model_dump=lambda **_kwargs: copy.deepcopy(before))
 
-    with pytest.raises(TerminalState, match='不再启动第三轮'):
+    with pytest.raises(TerminalState, match='没有消解全部 blocking 项'):
         _review_after_global_edit(artifact, previous, edit, [1, 2])
 
 
@@ -377,8 +492,68 @@ def test_reviewed_edit_refuses_to_wash_an_unchanged_pending_item_green():
     })
     artifact = SimpleNamespace(model_dump=lambda **_kwargs: copy.deepcopy(after))
 
-    with pytest.raises(TerminalState, match='不再启动第三轮'):
+    with pytest.raises(TerminalState, match='没有消解全部 blocking 项'):
         _review_after_global_edit(artifact, previous, edit, [1, 2])
+
+
+def test_reviewed_edit_can_atomically_fix_a_changed_item_and_redecide_a_survivor():
+    before = _grounding()
+    previous = approved_global_review(before)
+    role = next(item for item in previous.items if item.kind == 'role')
+    rule = next(item for item in previous.items if item.kind == 'world_rule_version')
+    failed_ids = {role.item_id, rule.item_id}
+    previous = previous.model_copy(update={'items': [
+        item.model_copy(update={
+            'state': 'FAIL', 'actor': 'reviewer',
+            'decided_at': '2026-09-02T00:00:00+00:00',
+            'reason': '需要复核',
+        }) if item.item_id in failed_ids else item
+        for item in previous.items
+    ]})
+    review_scope = [{
+        'item_id': item.item_id,
+        'expected_subject_sha256': item.subject_sha256,
+    } for item in previous.items
+        if review_effect_of(item.kind) == 'blocking'
+        and item.state != 'PASS']
+    after = copy.deepcopy(before)
+    after['canon']['world_rules'][0]['versions'][0]['desc'] = '修正后的完整规则'
+    workpack_sha256 = 'f' * 64
+    edit = GlobalEdit.model_validate({
+        'world_rules': [{
+            'rule_id': 'wr_01',
+            'versions': [{
+                'effective_from_chapter': 1,
+                'desc': '修正后的完整规则',
+                'desc_evidence': _locator(),
+            }],
+        }],
+        'post_edit_review': {
+            'actor': 'agent:novel-pipeline-operator',
+            'expected_source_sha256': previous.source_sha256,
+            'expected_workpack_sha256': workpack_sha256,
+            'review_scope': review_scope,
+            'reviewed_chapter_ordinals': [1, 2],
+            'default_state': 'PASS',
+            'reason': '已复核本次修订新打开的主体',
+            'quarantine_groups': [],
+            'decisions': [{
+                'item_id': role.item_id,
+                'expected_subject_sha256': role.subject_sha256,
+                'state': 'PASS', 'reason': '与原文重新核对后确认原值正确',
+                'evidence': [],
+            }],
+        },
+    })
+    artifact = SimpleNamespace(model_dump=lambda **_kwargs: copy.deepcopy(after))
+
+    reviewed = _review_after_global_edit(
+        artifact, previous, edit, [1, 2],
+        expected_workpack_sha256=workpack_sha256)
+
+    assert reviewed is not None
+    assert all(item.state == 'PASS' for item in reviewed.items
+               if review_effect_of(item.kind) == 'blocking')
 
 
 def test_conflict_stages_are_replaced_as_one_nonempty_partition():

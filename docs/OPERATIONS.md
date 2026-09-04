@@ -104,7 +104,7 @@ conda run -n novel_refactor python -X utf8 tools/stage2_acceptance.py `
 ```
 
 工具同时关闭式核对：五个不同 clean run、当前 schema 与目标 run adoption、无 `.INVALID`、生产
-HARD/skip、Global generation-safe、冷缓存、首次落盘率不低于 95%、Stage2 Commander 不超过两轮、
+HARD/skip、Global generation-safe、冷缓存、首次落盘率不低于 95%、Stage2 Commander 不超过三轮、
 预审与 Blueprint 确有重叠，以及五次实际模型/effort 一致。人工记录缺一轮、每轮少于 5 章，或任一
 读数未知时结论保持 `unver`；在汇总 `claim_ready=true` 前不得宣称质量未退化、显著提速或已稳定达到
 30 分钟。

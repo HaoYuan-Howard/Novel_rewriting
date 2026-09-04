@@ -80,7 +80,7 @@ from novel.model_slots import (
 )
 from novel.orchestrator import (
     admission, commander_completion, execution_permit, jobs, operator, queue,
-    reviewer_tasks, service_lifecycle, uploads,
+    reviewer_tasks, service_lifecycle, stage2_review_ledger, uploads,
 )
 from novel.orchestrator.agent_supervisor import (
     CommanderTurnResult, LaunchTicket, RunSupervisor, SupervisorActionResult,
@@ -119,7 +119,7 @@ MAX_CONCURRENT = 3
 _EXECUTION_CLOSE_TIMEOUT_SECONDS = 300.0
 _EXECUTION_CLOSE_POLL_SECONDS = 0.25
 _MAX_REVIEWER_CORRECTIONS = 2
-_MAX_STAGE2_COMMANDER_TURNS = 2
+_MAX_STAGE2_COMMANDER_TURNS = stage2_review_ledger.MAX_COMMANDER_CALLS
 _ACTION_FAILURE_TAIL_BYTES = 16 * 1024
 _ACTION_FAILURE_DETAIL_CHARS = 4096
 
@@ -965,6 +965,10 @@ def _find_replayable_reviewer_action(
             payload=payload)
         action = reviewer_tasks.load_action(
             replay_path, current, submission_options=task.submission_options)
+        # Stage2 fresh-session 纠错不依赖旧 provider 上下文；若重放动作随后被
+        # canonical 边界拒绝，新会话仍需要上一份精确请求字节来铸 progress SHA。
+        task.request_path.parent.mkdir(parents=True, exist_ok=True)
+        task.request_path.write_bytes(payload)
     except reviewer_tasks.ReviewerTaskError as exc:
         warnings.warn(
             f'盘上 reviewer 决定记录 {path.name} 未通过当前 loader，已删除：{exc}',
@@ -1309,7 +1313,9 @@ def _append_safe_traceback(base: str, run_id: str, *, prompt: str) -> None:
     for secret in (prompt, repr(prompt), json.dumps(prompt, ensure_ascii=False)):
         rendered = rendered.replace(secret, '<commander-prompt-redacted>')
     try:
-        with open(run_log_path(base, run_id), 'ab') as fh:
+        path = run_log_path(base, run_id)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, 'ab') as fh:
             fh.write(rendered.encode('utf-8', errors='replace'))
     except OSError:
         # 日志目录不可写时，事件账/成本账仍要尽力闭合；
@@ -1713,9 +1719,77 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
     reviewer_correction_attempts = 0
     stage2_commander_turns = 0
     stage2_prereview: _Stage2PrereviewState | None = None
+    stage2_fallback_progress: set[str] = set()
     reviewed_blockers: set[tuple[str, str]] = set()
     completed_reviewer_business_actions: set[tuple[str, str]] = set()
     rejected_reviewer_business_actions: set[tuple[str, str]] = set()
+
+    def _reserve_stage2_commander(
+            task: reviewer_tasks.ReviewerTask | reviewer_tasks.Stage2PrereviewTask,
+            *, epoch: ExecutionEpoch, purpose: str,
+            progress_sha256: str | None = None,
+    ) -> tuple[str, bool]:
+        """预留一格调用并返回 ``(fresh logical session id, durable)``。"""
+        nonlocal stage2_commander_turns
+        session_id = jobs.new_job_id()
+        progress = progress_sha256 or task.progress_sha256
+        metadata = (
+            task.source_sha256, task.main_text_sha256,
+            task.workpack_sha256, progress, task.blocker_count)
+        if (all(isinstance(value, str) for value in metadata[:4])
+                and isinstance(task.blocker_count, int)):
+            reserved = stage2_review_ledger.reserve(
+                base, sid,
+                source_sha256=str(task.source_sha256),
+                main_text_sha256=str(task.main_text_sha256),
+                business_sha256=task.business_sha256,
+                workpack_sha256=str(task.workpack_sha256),
+                progress_sha256=str(progress),
+                blocker_count=task.blocker_count,
+                purpose=purpose,
+                parent_run_id=run_id,
+                epoch_id=epoch.epoch_id,
+                session_run_id=session_id,
+            )
+            stage2_commander_turns = reserved.ordinal
+            return session_id, True
+        # legacy/test injection 没有新版 identity 时仍守同一硬预算；生产 build_task
+        # 永远走上面的持久分支，不能靠缺字段绕过跨重启账。
+        if stage2_commander_turns >= _MAX_STAGE2_COMMANDER_TURNS:
+            raise stage2_review_ledger.Stage2ReviewBudgetRefused(
+                f'Stage2 Global 已用满 {_MAX_STAGE2_COMMANDER_TURNS} 次 Commander 调用')
+        fallback_progress = progress or f'legacy:{stage2_commander_turns + 1}'
+        if fallback_progress in stage2_fallback_progress:
+            raise stage2_review_ledger.Stage2ReviewBudgetRefused(
+                'Stage2 Global progress fingerprint 没有变化')
+        stage2_fallback_progress.add(fallback_progress)
+        stage2_commander_turns += 1
+        return session_id, False
+
+    def _finish_stage2_commander(
+            task: reviewer_tasks.ReviewerTask | reviewer_tasks.Stage2PrereviewTask,
+            *, session_id: str, durable: bool, exit_code: int,
+    ) -> None:
+        if not durable:
+            return
+        assert task.source_sha256 is not None
+        assert task.main_text_sha256 is not None
+        stage2_review_ledger.finish(
+            base, sid,
+            source_sha256=task.source_sha256,
+            main_text_sha256=task.main_text_sha256,
+            session_run_id=session_id,
+            exit_code=exit_code)
+
+    def _complete_stage2_review_ledger(
+            task: reviewer_tasks.ReviewerTask) -> None:
+        """Stage2 动作以 exit 0 闭合写作面后封账；旧注入 task 没 identity 时跳过。"""
+        if task.source_sha256 is None or task.main_text_sha256 is None:
+            return
+        stage2_review_ledger.mark_complete(
+            base, sid,
+            source_sha256=task.source_sha256,
+            main_text_sha256=task.main_text_sha256)
 
     def _resume_prompt(epoch: ExecutionEpoch) -> str:
         return (
@@ -1796,6 +1870,7 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
         nonlocal reviewer_correction_task, reviewer_correction_binding
         nonlocal reviewer_correction_reason, reviewer_correction_request_sha256
         nonlocal reviewer_correction_attempts, stage2_commander_turns
+        nonlocal stage2_fallback_progress
         nonlocal stage2_prereview
         current_code = prov.code_version()
         _require_reproducible_code_version(current_code)
@@ -1852,6 +1927,7 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
             reviewer_correction_request_sha256 = None
             reviewer_correction_attempts = 0
             stage2_commander_turns = 0
+            stage2_fallback_progress.clear()
             stage2_prereview = None
             reviewed_blockers.clear()
             completed_reviewer_business_actions.clear()
@@ -2093,6 +2169,7 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
             epoch: ExecutionEpoch,
             provider_session_id: str | None,
             *, reviewer_prompt: str | None = None,
+            fresh_session_run_id: str | None = None,
             launch_ticket: LaunchTicket | None = None,
             read_only: bool = False,
             environment_overrides: dict[str, str] | None = None,
@@ -2105,14 +2182,53 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
         nonlocal latest_commander_error_kind
         nonlocal active_admission_id
 
+        fresh_reviewer_session = fresh_session_run_id is not None
+        if fresh_reviewer_session and reviewer_prompt is None:
+            raise RuntimeError('只有 reviewer turn 可以声明 fresh logical session')
+        audit_epoch = (
+            epoch.model_copy(update={'session_run_id': fresh_session_run_id})
+            if fresh_session_run_id is not None else epoch)
+        effective_provider_session_id = (
+            None if fresh_reviewer_session else provider_session_id)
+        fresh_prompt_sha256 = (
+            _sha256_bytes(reviewer_prompt.encode('utf-8'))
+            if fresh_reviewer_session and reviewer_prompt is not None else None)
+        fresh_session_started = False
+
+        def start_fresh_reviewer_session() -> None:
+            nonlocal fresh_session_started
+            if not fresh_reviewer_session or fresh_session_started:
+                return
+            assert fresh_prompt_sha256 is not None
+            agent_session_audit.append_event(
+                base,
+                agent_session_audit.AgentSessionEvent(
+                    session_run_id=audit_epoch.session_run_id,
+                    parent_run_id=run_id,
+                    role='commander', node=None, chapter=None,
+                    subject_sha256=fresh_prompt_sha256,
+                    profile=plan.profiles.commander,
+                    requested_model=plan.profiles.commander.model,
+                    requested_effort=plan.profiles.commander.reasoning_effort,
+                    cli_version=current_session_invocation.cli_version,
+                    protocol_version=current_session_invocation.protocol,
+                    start_code_version=audit_epoch.code_version,
+                    skill_sha256=audit_epoch.skill_sha256,
+                    prompt_sha256=fresh_prompt_sha256,
+                    schema_sha256=schema_sha256,
+                    kind='started', ts=int(time.time()),
+                ),
+            )
+            fresh_session_started = True
+
         if reviewer_prompt is not None:
             turn_invocation = _review_invocation(
-                epoch, reviewer_prompt, provider_session_id)
-        elif provider_session_id is None:
+                epoch, reviewer_prompt, effective_provider_session_id)
+        elif effective_provider_session_id is None:
             turn_invocation = epoch_invocations[epoch.epoch_id]
         else:
             turn_invocation = _resume_invocation(
-                epoch, provider_session_id)
+                epoch, effective_provider_session_id)
         # 预审只有 scratch request 写权，不领取任何 producer admission。仍下发一枚
         # 不存在的 context id：若 Commander 违约尝试跑节点，生产入口会关闭式拒绝。
         admission_id = (
@@ -2146,11 +2262,14 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                 if spawn is None:
                     def reviewer_started() -> None:
                         if reviewer_prompt is not None:
-                            _open_epoch(
-                                epoch,
-                                actual_prompt_sha256=_sha256_bytes(
-                                    turn_invocation.stdin_text.encode('utf-8')),
-                            )
+                            if fresh_reviewer_session:
+                                start_fresh_reviewer_session()
+                            else:
+                                _open_epoch(
+                                    epoch,
+                                    actual_prompt_sha256=_sha256_bytes(
+                                        turn_invocation.stdin_text.encode('utf-8')),
+                                )
                         if on_registered is not None:
                             on_registered()
                         if launch_ticket is not None:
@@ -2163,6 +2282,8 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                             if (launch_ticket is not None
                                 or reviewer_prompt is not None) else None))
                 else:
+                    if fresh_reviewer_session:
+                        start_fresh_reviewer_session()
                     if on_registered is not None:
                         on_registered()
                     if launch_ticket is not None:
@@ -2268,7 +2389,7 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
             try:
                 append_commander_call(
                     base, run_id=run_id,
-                    session_run_id=epoch.session_run_id,
+                    session_run_id=audit_epoch.session_run_id,
                     sid=sid, attempt_id=attempt_id,
                     request_model=plan.profiles.commander.model,
                     requested_effort=(
@@ -2294,20 +2415,27 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
         provider_reuse_owner: str | None = None
         this_turn_recorded = False
         if observation.provider_session_id is not None:
-            turn_index += 1
+            if fresh_reviewer_session:
+                audit_turn_index = 1
+            else:
+                turn_index += 1
+                audit_turn_index = turn_index
             try:
                 provider_reuse_owner = (
                     agent_session_audit.append_commander_turn(
                         base,
                         agent_session_audit.AgentSessionEvent(
-                            session_run_id=epoch.session_run_id,
+                            session_run_id=audit_epoch.session_run_id,
                             parent_run_id=run_id,
                             role='commander', node=None, chapter=None,
-                            subject_sha256=current_session_prompt_sha256,
+                            subject_sha256=(
+                                fresh_prompt_sha256
+                                if fresh_prompt_sha256 is not None
+                                else current_session_prompt_sha256),
                             profile=plan.profiles.commander,
                             provider_session_id=(
                                 observation.provider_session_id),
-                            turn_index=turn_index,
+                            turn_index=audit_turn_index,
                             attempt_id=attempt_id,
                             requested_model=(
                                 plan.profiles.commander.model),
@@ -2329,8 +2457,9 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                     )
                 )
                 this_turn_recorded = provider_reuse_owner is None
-                provider_turn_recorded = (
-                    provider_turn_recorded or this_turn_recorded)
+                if not fresh_reviewer_session:
+                    provider_turn_recorded = (
+                        provider_turn_recorded or this_turn_recorded)
             except Exception:  # noqa: BLE001
                 integrity_error_kind = 'commander_session_audit'
                 error_kind = integrity_error_kind
@@ -2356,6 +2485,50 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                     '盘面终验已经执行，但 Commander 身份/审计链不闭合：'
                     f'{integrity_error_kind}；拒绝把运行判为可交付'))
 
+        if fresh_session_started:
+            try:
+                assert fresh_prompt_sha256 is not None
+                agent_session_audit.append_event(
+                    base,
+                    agent_session_audit.AgentSessionEvent(
+                        session_run_id=audit_epoch.session_run_id,
+                        parent_run_id=run_id,
+                        role='commander', node=None, chapter=None,
+                        subject_sha256=fresh_prompt_sha256,
+                        profile=plan.profiles.commander,
+                        provider_session_id=(
+                            observation.provider_session_id
+                            if this_turn_recorded else None),
+                        requested_model=plan.profiles.commander.model,
+                        actual_model=observation.actual_model,
+                        requested_effort=plan.profiles.commander.reasoning_effort,
+                        actual_effort=observation.actual_effort,
+                        cli_version=turn_invocation.cli_version,
+                        protocol_version=turn_invocation.protocol,
+                        start_code_version=audit_epoch.code_version,
+                        end_code_version=(
+                            prov.code_version()
+                            if _epoch_identity_current(epoch)
+                            else prov.CODE_UNKNOWN),
+                        skill_sha256=audit_epoch.skill_sha256,
+                        prompt_sha256=fresh_prompt_sha256,
+                        schema_sha256=schema_sha256,
+                        process_state=('ok' if rc == 0 else 'failed'),
+                        delivery_state=_session_delivery(outcome),
+                        error_kind=error_kind,
+                        kind='ended', ts=int(time.time()),
+                    ),
+                )
+            except Exception:  # noqa: BLE001 —— 不能把审计失败洗成可交付
+                integrity_error_kind = 'commander_session_audit'
+                error_kind = integrity_error_kind
+                continue_ready = False
+                outcome = AgentDeliveryOutcome(
+                    state='unknown', checked_at=int(time.time()),
+                    reason='Stage2 reviewer 新 logical session 未能闭合审计')
+                _append_safe_traceback(
+                    base, run_id, prompt=turn_invocation.stdin_text)
+
         latest_observation = observation
         latest_outcome = outcome
         latest_rc = rc
@@ -2367,7 +2540,7 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
             exit_code=rc,
             provider_session_id=(
                 observation.provider_session_id
-                if this_turn_recorded else None),
+                if this_turn_recorded and not fresh_reviewer_session else None),
             continue_ready=continue_ready,
             outcome=outcome)
 
@@ -2451,7 +2624,7 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
             and existing.task.workpack_sha256 == prereview_task.workpack_sha256)
         # 一次失败/坏 typed 输出已经是真实调用；没有可复用结果时也只让 Blueprint
         # 继续，live blocker 最多再领取剩余一轮，绝不偷偷重做预审。
-        if same_existing or stage2_commander_turns:
+        if same_existing:
             executed = _run_token(
                 epoch, permit, launch_ticket,
                 stem='ready-stage2.blueprint')
@@ -2472,18 +2645,31 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
         registered = threading.Event()
         finished = threading.Event()
         holder: dict[str, object] = {}
-        stage2_commander_turns += 1
+        try:
+            review_session_id, durable_reservation = _reserve_stage2_commander(
+                prereview_task, epoch=epoch, purpose='prereview')
+        except stage2_review_ledger.Stage2ReviewBudgetRefused as exc:
+            stage2_prereview = _Stage2PrereviewState(
+                task=prereview_task, provider_session_id=None,
+                input_payload=None,
+                error=f'{type(exc).__name__}: {exc}')
+            return _run_token(
+                epoch, permit, launch_ticket,
+                stem='ready-stage2.blueprint')
 
         def prereview_worker() -> None:
+            review_exit_code = CRASH
             try:
                 turn = _run_commander_turn(
-                    epoch, provider_session_id,
+                    epoch, None,
                     reviewer_prompt=prereview_task.prompt,
+                    fresh_session_run_id=review_session_id,
                     read_only=True,
                     environment_overrides=slot_env,
                     on_registered=registered.set,
                     activity='stage2.global.prereview')
                 holder['turn'] = turn
+                review_exit_code = turn.exit_code
                 if turn.exit_code == 0:
                     holder['input_payload'] = (
                         reviewer_tasks.load_stage2_prereview(prereview_task))
@@ -2493,7 +2679,15 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
             except BaseException as exc:  # noqa: BLE001 —— Blueprint 仍须独立收尾
                 holder['error'] = exc
             finally:
-                finished.set()
+                try:
+                    _finish_stage2_commander(
+                        prereview_task, session_id=review_session_id,
+                        durable=durable_reservation,
+                        exit_code=review_exit_code)
+                except BaseException as exc:  # noqa: BLE001 —— 坏账必须显式留下
+                    holder['error'] = exc
+                finally:
+                    finished.set()
 
         thread = threading.Thread(
             target=prereview_worker,
@@ -2518,11 +2712,7 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
             thread.join()
 
         turn = holder.get('turn')
-        observed_provider = (
-            turn.provider_session_id
-            if isinstance(turn, CommanderTurnResult)
-            and turn.provider_session_id is not None
-            else provider_session_id)
+        observed_provider = None
         payload = holder.get('input_payload')
         error = holder.get('error')
         stage2_prereview = _Stage2PrereviewState(
@@ -2598,32 +2788,47 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
         binding = (current.surface_seal, waiting_on)
 
         def run_reviewer_turn(
-                prompt: str, *, activity: str | None = None,
+                task: reviewer_tasks.ReviewerTask,
+                prompt: str, *, purpose: str = 'review',
+                progress_sha256: str | None = None,
+                activity: str | None = None,
                 ) -> CommanderTurnResult:
             """Stage2 的模型调用预算是产品边界；确定性动作不占轮次。"""
-            nonlocal stage2_commander_turns
             nonlocal latest_outcome, latest_rc, latest_error_kind
             if waiting_on in queue.STAGE2_REVIEWER_WAITING_ON:
-                if (waiting_on == queue.WAITING_ON_STAGE2_EDIT_CORRECTION
-                        and stage2_commander_turns == 0):
-                    # 盘上 durable correction 证明第一次 Commander 修改已经执行到
-                    # HARD 闸；新进程只能领取剩下的最后一格，不能重置为两轮。
-                    stage2_commander_turns = 1
-                if stage2_commander_turns >= _MAX_STAGE2_COMMANDER_TURNS:
+                try:
+                    review_session_id, durable_reservation = (
+                        _reserve_stage2_commander(
+                            task, epoch=epoch, purpose=purpose,
+                            progress_sha256=progress_sha256))
+                except stage2_review_ledger.Stage2ReviewBudgetRefused as exc:
                     latest_rc = 2
                     latest_error_kind = 'stage2_global_turn_budget'
                     latest_outcome = AgentDeliveryOutcome(
                         state='stopped', checked_at=int(time.time()),
                         reason=(
-                            'Stage2 global 已用完 2 次 Commander 调用；'
-                            '拒绝启动第三轮。第二轮返工没有闭合时请人工检查 typed 输入，'
-                            '而不是继续消耗模型'))
+                            'Stage2 global 拒绝继续调用 Commander：'
+                            f'{exc}。最多允许 {_MAX_STAGE2_COMMANDER_TURNS} 次，'
+                            '且每次必须减少未闭合项或改变精确拒因'))
                     return CommanderTurnResult(
                         exit_code=2,
-                        provider_session_id=provider_session_id,
+                        provider_session_id=None,
                         continue_ready=False,
                         outcome=latest_outcome)
-                stage2_commander_turns += 1
+                turn: CommanderTurnResult | None = None
+                try:
+                    turn = _run_commander_turn(
+                        epoch, None,
+                        reviewer_prompt=prompt,
+                        fresh_session_run_id=review_session_id,
+                        launch_ticket=launch_ticket,
+                        activity=activity)
+                    return turn
+                finally:
+                    _finish_stage2_commander(
+                        task, session_id=review_session_id,
+                        durable=durable_reservation,
+                        exit_code=(turn.exit_code if turn is not None else CRASH))
             return _run_commander_turn(
                 epoch, provider_session_id,
                 reviewer_prompt=prompt, launch_ticket=launch_ticket,
@@ -2643,10 +2848,18 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
             if reason is None or previous_request_sha256 is None:
                 raise RuntimeError('pending reviewer correction 缺拒绝事实')
             attempt = reviewer_correction_attempts + 1
+            correction_progress = (
+                stage2_review_ledger.progress_with_feedback(
+                    task.progress_sha256,
+                    reason=reason, request_sha256=previous_request_sha256)
+                if (waiting_on in queue.STAGE2_REVIEWER_WAITING_ON
+                    and task.progress_sha256 is not None) else None)
             turn = run_reviewer_turn(
+                task,
                 reviewer_tasks.correction_prompt(task, reason, attempt=attempt),
+                purpose='correction', progress_sha256=correction_progress,
                 activity=_reviewer_activity(task))
-            if turn.exit_code != 0 or turn.provider_session_id is None:
+            if turn.exit_code != 0:
                 return turn
             request_sha256 = _reviewer_request_sha256(task.request_path)
             if request_sha256 == previous_request_sha256:
@@ -2769,19 +2982,36 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
             if landed(result.exit_code):
                 completed_reviewer_business_actions.add(business_action)
             elif result.exit_code == 2 and replayed:
-                # 重放的决定被 approve 侧拒绝：不能把纠错提示发给一个没读过本
-                # workpack 的 provider session；放开 blocker，让下一启动窗口重新
-                # 完整审阅。等价动作仍由业务摘要阻断。
+                # Stage2 的纠错包自足且每轮本来就开新会话，所以重放决定被拒后可
+                # 直接进入增量纠错；其他 reviewer 仍没有可续的 provider 上下文。
                 rejected_reviewer_business_actions.add(business_action)
+                if waiting_on in queue.STAGE2_REVIEWER_WAITING_ON:
+                    rejection = result.failure_detail or (
+                        f'canonical {action.kind} action 返回 exit 2，正式产物未落盘')
+                    reviewer_correction_task = source_task
+                    reviewer_correction_binding = binding
+                    reviewer_correction_reason = (
+                        f'{rejection}；请按原 workpack 只修正上一份 typed 动作')
+                    reviewer_correction_request_sha256 = _reviewer_request_sha256(
+                        source_task.request_path)
+                    reviewer_correction_attempts = 0
+                    return CommanderTurnResult(
+                        exit_code=result.exit_code,
+                        provider_session_id=None,
+                        continue_ready=True, outcome=result.outcome,
+                        continue_reviewer=True)
                 reviewed_blockers.discard(binding)
                 return CommanderTurnResult(
                     exit_code=result.exit_code,
                     provider_session_id=provider_session_id,
                     continue_ready=True, outcome=result.outcome)
-            elif result.exit_code == 2 and provider_session_id is not None:
+            elif (result.exit_code == 2
+                  and (waiting_on in queue.STAGE2_REVIEWER_WAITING_ON
+                       or provider_session_id is not None)):
                 # Reviewer 的 typed 动作由 Commander 负责修正。显式终态证明没有
-                # landed；只要 blocker/surface 未变，就把拒绝事实送回同一 provider
-                # session，而不是结束整书 parent。等价动作由上面的业务摘要关闭式拦住。
+                # landed；只要 blocker/surface 未变，就把拒绝事实连同紧凑 workpack
+                # 送进新的 Stage2 logical/provider session，而不是结束整书 parent。
+                # 等价动作由上面的业务摘要关闭式拦住。
                 rejected_reviewer_business_actions.add(business_action)
                 rejection = result.failure_detail or (
                     f'canonical {action.kind} action 返回 exit 2，正式产物未落盘')
@@ -2789,12 +3019,13 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                         and stage2_commander_turns
                         >= _MAX_STAGE2_COMMANDER_TURNS):
                     latest_rc = 2
-                    latest_error_kind = 'stage2_global_second_action_rejected'
+                    latest_error_kind = 'stage2_global_action_rejected'
                     latest_outcome = AgentDeliveryOutcome(
                         state='stopped', checked_at=int(time.time()),
                         reason=(
-                            'Stage2 global 第二次 Commander 返工仍被确定性边界拒绝；'
-                            f'拒绝启动第三轮。{rejection}'))
+                            f'Stage2 global 第 {stage2_commander_turns} 次 Commander '
+                            '动作仍被确定性边界拒绝，持久预算已用尽。'
+                            f'{rejection}'))
                     return CommanderTurnResult(
                         exit_code=2,
                         provider_session_id=provider_session_id,
@@ -2811,6 +3042,9 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                     provider_session_id=provider_session_id,
                     continue_ready=True, outcome=result.outcome,
                     continue_reviewer=True)
+            if (result.exit_code == 0
+                    and waiting_on in queue.STAGE2_REVIEWER_WAITING_ON):
+                _complete_stage2_review_ledger(source_task)
             return CommanderTurnResult(
                 exit_code=result.exit_code,
                 provider_session_id=provider_session_id,
@@ -2851,41 +3085,14 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                     break
             same_workpack = (
                 option_workpack_sha == prereview.task.workpack_sha256)
-            if (provider_session_id is not None
-                    and prereview.provider_session_id is not None
-                    and provider_session_id != prereview.provider_session_id):
-                latest_rc = 2
-                latest_error_kind = 'stage2_prereview_provider_drift'
-                latest_outcome = AgentDeliveryOutcome(
-                    state='stopped', checked_at=int(time.time()),
-                    reason=(
-                        'Stage2 Global 预审与 live reviewer 的 provider session '
-                        '不一致；拒绝串会话绑定'))
-                return CommanderTurnResult(
-                    exit_code=2,
-                    provider_session_id=provider_session_id,
-                    continue_ready=False, outcome=latest_outcome)
-            if prereview.provider_session_id is not None:
-                provider_session_id = prereview.provider_session_id
             if (same_business and same_workpack
                     and prereview.input_payload is not None):
-                if provider_session_id is None:
-                    latest_rc = 2
-                    latest_error_kind = 'stage2_prereview_provider_unavailable'
-                    latest_outcome = AgentDeliveryOutcome(
-                        state='stopped', checked_at=int(time.time()),
-                        reason=(
-                            'Stage2 Global 预审已完成，但供应商未返回可精确'
-                            ' resume 的 session id；拒绝在新会话继续第二轮'))
-                    return CommanderTurnResult(
-                        exit_code=2, provider_session_id=None,
-                        continue_ready=False, outcome=latest_outcome)
                 try:
                     prefetched_action = reviewer_tasks.bind_stage2_prereview(
                         task, current, prereview.input_payload)
                 except reviewer_tasks.ReviewerTaskError as exc:
-                    # 预审已是第一次真实调用；绑定器拒绝时只能把
-                    # 精确拒绝事实交回同一会话作最后一次纠正。
+                    # 预审已是真实调用；绑定器拒绝时把精确拒绝事实与紧凑包
+                    # 交给新的 logical session，不依赖供应商隐藏上下文。
                     if not task.request_path.is_file():
                         latest_rc = 2
                         latest_error_kind = 'stage2_prereview_binding'
@@ -2896,7 +3103,7 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                                 f'且没有形成可纠正的 typed 请求：{exc}'))
                         return CommanderTurnResult(
                             exit_code=2,
-                            provider_session_id=provider_session_id,
+                            provider_session_id=None,
                             continue_ready=False, outcome=latest_outcome)
                     reviewer_correction_task = task
                     reviewer_correction_binding = binding
@@ -2906,7 +3113,7 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                     reviewer_correction_attempts = 0
                     return CommanderTurnResult(
                         exit_code=2,
-                        provider_session_id=provider_session_id,
+                        provider_session_id=None,
                         continue_ready=True, outcome=latest_outcome,
                         continue_reviewer=True)
                 reviewed_blockers.add(binding)
@@ -2920,20 +3127,19 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                 pending_reviewer_replayed = False
                 return CommanderTurnResult(
                     exit_code=0,
-                    provider_session_id=provider_session_id,
+                    provider_session_id=None,
                     continue_ready=True, outcome=latest_outcome)
-            if provider_session_id is None:
-                latest_rc = 2
-                latest_error_kind = 'stage2_prereview_unusable'
-                latest_outcome = AgentDeliveryOutcome(
-                    state='stopped', checked_at=int(time.time()),
-                    reason=(
-                        'Stage2 Global 预审不可复用且没有可精确 resume 的 '
-                        'provider session；拒绝重新开会话冒充第二轮。'
-                        f'{prereview.error or "业务或 workpack 绑定已变化"}'))
+            if same_business and same_workpack and prereview.error is not None:
+                reviewer_correction_task = task
+                reviewer_correction_binding = binding
+                reviewer_correction_reason = prereview.error
+                reviewer_correction_request_sha256 = (
+                    _reviewer_request_sha256(task.request_path))
+                reviewer_correction_attempts = 0
                 return CommanderTurnResult(
                     exit_code=2, provider_session_id=None,
-                    continue_ready=False, outcome=latest_outcome)
+                    continue_ready=True, outcome=latest_outcome,
+                    continue_reviewer=True)
         replay = _find_replayable_reviewer_action(
             base, sid, epoch=epoch, current=current, task=task)
         if replay is not None:
@@ -2954,7 +3160,7 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                 continue_ready=True, outcome=latest_outcome)
         reviewed_blockers.add(binding)
         turn = run_reviewer_turn(
-            task.prompt, activity=_reviewer_activity(task))
+            task, task.prompt, activity=_reviewer_activity(task))
         if turn.exit_code != 0:
             return turn
         try:
@@ -2962,7 +3168,8 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                 request_path, current,
                 submission_options=task.submission_options)
         except reviewer_tasks.ReviewerTaskError as exc:
-            if turn.provider_session_id is None:
+            if (turn.provider_session_id is None
+                    and waiting_on not in queue.STAGE2_REVIEWER_WAITING_ON):
                 latest_rc = 2
                 latest_error_kind = 'commander_reviewer_request'
                 latest_outcome = AgentDeliveryOutcome(

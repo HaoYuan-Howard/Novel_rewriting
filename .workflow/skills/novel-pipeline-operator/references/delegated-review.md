@@ -119,8 +119,8 @@ workpack；确认完整面成立后，才把 scope 改为 `PASS`，
 
 <!-- reviewer-contract:stage2:begin -->
 1. `PASS`：主体与原文逐项一致，且集合完整性已做正向与反向核对；scope 总理由与逐项例外理由都写明分母和核验位置。
-2. `FAIL`：存在可指向的冲突、错抽或漏抽；首轮必须把全部问题一次列全。第二轮从 `stage2.global --emit-edit-template` 取得当前 typed GlobalEdit，在同一 Commander resume 上下文里一次提交合并修复与 `post_edit_review` 自审。patch 数组只能修改模板已有行，行数、顺序、subject id 与字段集合全部绑定；新增/拆分 subject 只走生产模板明确提供的完整 `*_replace`。producer 只把自审展开到本 edit 新打开的 blocking 项，未变化的旧 FAIL 仍红；第二轮不闭合也不启动第三轮。不能重复提交同一 review，也不能用“已知问题”把 FAIL 当成披露放行。
-3. `UNVER`：证据不足以安全判断；绝不改写成 PASS。若当前 submission option 明确给出 `quarantine_group`，可在阅读完整组后填写隔离理由：状态仍为 UNVER，原始事实与审计保留，下游写作视图删除完整组；否则先用 GlobalEdit 修复。只有 GlobalEdit 无法表达、且该组不能安全隔离时才以 `stopped` 结束。
+2. `FAIL`：存在可指向的冲突、错抽或漏抽；当前增量里的问题必须一次列全。事实确有错误时从 `stage2.global --emit-edit-template` 取得当前 typed GlobalEdit。字段 patch 只能修改模板已有行，行数、顺序、subject id 与字段集合全部绑定；集合完整性的新增、删除或拆分只填写模板给出的 `collection_edits[].operations`，不得改 `collection` 或 `expected_collection_sha256`。Stage2 全程最多三次 Commander 真调用，每次使用新的 logical/provider session；后续包只含仍未闭合或因依赖变化重开的 subject cards。`post_edit_review` 绑定修前 workpack、source 与完整旧未闭合 scope：本 edit 新打开的项才走默认自审，未修改且 hash 存活的旧 FAIL/UNVER 必须在 `decisions[]` 显式复判。不能重复提交同一 review，也不能用“已知问题”把 FAIL 当成披露放行。
+3. `UNVER`：证据不足以安全判断；绝不改写成 PASS。只有当前 submission option 明确给出 `quarantine_group`、且该 kind 的 `generation_impact=quarantine_or_fix` 时，才可在阅读完整组后填写隔离理由：状态仍为 UNVER，原始事实与审计保留，下游写作视图删除完整组。`generation_impact=must_fix` 只有在证据支持 PASS 或能指出真实事实错误并用 GlobalEdit 修正时才能收口；材料仍不足就保持 UNVER 并以 `stopped` 结束，不为追求全绿臆造编辑。`disclose` 项不阻断生成但继续披露。
 <!-- reviewer-contract:stage2:end -->
 
 ### blocking 与 disclosure 是两轴，不是两档优先级
@@ -144,16 +144,16 @@ workpack；确认完整面成立后，才把 scope 改为 `PASS`，
 只改未消费字段则以 freshness 结论复用。review 早于 blueprint 完成也可以保存，但 Stage2 状态仍关闭，
 不得把“已有人审”冒充整层已收口。
 
-Stage2 global 最多两次真实 Commander 调用：首轮完整审阅；第二轮在同一 provider session 中把
-GlobalEdit 与修后自审合为一份 typed 动作。两次之间的 review/edit 执行都是 0-wire，不新建 Executor
-模型会话也不占模型轮次。业务主体未变化却重复等价 typed 动作时由 Supervisor 关闭式停止，不能靠
-review surface 自变循环。typed request 被 loader 拒绝，或 canonical reviewer action 以 exit 2 在写盘前
-终止时，可以把精确拒绝原因紧凑送回同一 provider session，但这次纠错仍计入两次上限；已用完预算就
-保留拒绝事实并停止，不重发整份 workpack、不新开会话、不启动第三次。若 action 已产生绑定当前
-`global_edit.json` 的 `.INVALID`，该失败不是瞬时日志：队列必须在 Blueprint redo 之前暴露
-`recovery:stage2-global-reviewed-edit`，最终 correction workpack 只带正式 review 与失败 edit/INVALID
-的精确 HARD；同进程沿用 provider session，服务/代码身份变化后的安全恢复虽新开 session，仍把首轮计入
-预算，只剩一次调用。pause/resume 保留上下文与计数，进程重启也不得重置预算。
+Stage2 global 的总预算是 **1 次 Executor 产出 + 最多 3 次 Commander 真调用**。第一次 Commander
+完整审阅；后两次只看仍未闭合、因依赖变化重开的 subject cards 或精确拒因。每次 Commander 都开新的
+logical/provider session，自足增量包携带 subject/evidence catalog、claim→evidence 索引、typed binding 与
+surviving decisions，不依赖供应商隐藏上下文。review/edit 执行都是 0-wire，不新建 Executor 会话也不占
+模型轮次。业务主体未变化却重复等价 typed 动作、相同 progress fingerprint 或 blocker 数反增时由
+Supervisor 关闭式停止。typed request 被 loader 拒绝，或 canonical action 以 exit 2 在写盘前终止时，
+下一格收到紧凑 workpack 与精确拒因；达到三次就保留拒绝事实并停止。若 action 已产生绑定当前
+`global_edit.json` 的 `.INVALID`，队列必须在 Blueprint redo 之前暴露
+`recovery:stage2-global-reviewed-edit`；current correction workpack 只带正式 review、失败 edit/INVALID 的精确
+HARD 与三次预算声明。调用槽在模型启动前以 `started` 持久化，pause/resume、服务或代码重启都不得重置。
 随后运行 Stage2 唯一显式复检
 `stage2.blueprint --check-only`：只有 global 与 blueprint 均 current、联合 HARD 通过、评测面 current
 且 blocking 面 generation-safe，才可运行 Stage4A 或任何后续付费/组装/下载路径。CLI、API、队列、

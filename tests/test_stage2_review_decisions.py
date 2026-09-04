@@ -485,7 +485,7 @@ def test_workpack_prefers_formal_evidence_and_never_fabricates_for_source_none(
     assert set(companion) == {
         'read_only', 'kind', 'item_id', 'subject_path', 'subject_sha256',
         'current_state', 'current_reason', 'generation_disposition',
-        'effect', 'subject', 'formal_evidence',
+        'effect', 'generation_impact', 'subject', 'formal_evidence',
         'unresolved_formal_evidence',
     }
     assert companion['read_only'] is True
@@ -497,6 +497,7 @@ def test_workpack_prefers_formal_evidence_and_never_fabricates_for_source_none(
     assert companion['current_reason'] is None
     assert companion['generation_disposition'] is None
     assert companion['effect'] == 'disclosure'
+    assert companion['generation_impact'] == 'disclose'
     assert companion['subject'] == '后来成为客栈东家'
     assert companion['unresolved_formal_evidence'] == []
     assert len(companion['formal_evidence']) == 1

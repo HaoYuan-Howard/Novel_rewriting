@@ -120,8 +120,9 @@ class GlobalReviewItem(StrictModel):
     #: 付费执行都压在它上面。与 `novel/quality/global_review.py::enumerate_required`
     #: 必须同时改：那边枚举得出、这边收不下，是落盘时才炸的一对。
     #: ⚠ 取值面已收到 `contracts/invariants.py::GLOBAL_REVIEW_KINDS`——那里同时
-    #: 住着 `review_effect_of`（blocking / disclosure），两者必须同进同出：
-    #: 一个 kind 存在却没有交付效果，等于一条谁也说不清该不该拦的复核项。
+    #: 住着 `review_generation_impact_of`（must_fix / quarantine_or_fix / disclose）
+    #: 与由它派生的 `review_effect_of`；三者必须同进同出。一个 kind 存在却没有
+    #: 生成影响，等于一条谁也说不清该修、该隔离还是只披露的复核项。
     #: `known_by` 只为读取存量 global_review v1 保留；当前 grounding 的
     #: knowledge_events 有时间与逐事件证据，生产面改用 `knowledge_event`。
     #: 2026-08-23 补齐 `role` / `fate` / `relation` / `setting_fact` /

@@ -169,14 +169,14 @@ Commander 共约 22 分钟、38 次工具往返、7.3M 输入 token（reasoning 
 
 ### TODO-47 · 《夫君不行_但我有孕啦》Stage2 三十分钟目标：五次真机验收
 
-Stage2 Global Reviewer workpack v4、Blueprint `extraction-ir-v3.2` 紧凑 wire、共享并发槽与
+Stage2 Global Reviewer 增量 subject-card wire、Blueprint `extraction-ir-v3.2` 紧凑 wire、共享并发槽与
 `tools/workflow_metrics.py` / `tools/stage2_acceptance.py` 已完成工程落地；当前没有新增真实模型调用，
 因此速度、随机响应稳定性与语义质量仍是 `unver`。本条只追踪下一批真实跑数，不追加模型 A/B：用户
 在设置界面于首轮前更换一次默认 Agent profile，随后五轮固定实际 Blueprint/Commander 模型、effort、
 `NOVEL_CONCURRENCY`、代码身份和 v3.2 契约，每轮使用独立 clean base 与冷缓存。
 
 **验收**：五个不同 parent run 都须 current/run-bound 正式落盘、无 `.INVALID`、生产 check 无 HARD hit
-或 HARD skip、Global generation-safe、Stage2 Commander 至多两次且预审与 Blueprint 确有墙钟重叠；
+或 HARD skip、Global generation-safe、Stage2 Commander 至多三次且预审与 Blueprint 确有墙钟重叠；
 累计首次落盘率 ≥95%。每轮固定抽查至少 5 章，按源章核事实召回、因果方向、人物/世界状态和 evidence
 所属拍，任一失败即不宣称质量未受影响。历史 Stage2 基线 3044 秒，预注册“显著提速”为五轮 P50
 改善 ≥20%；三十分钟目标按五轮 max ≤1800 秒验收，不用一次最快值或 P50 代替。精确取证与汇总命令见

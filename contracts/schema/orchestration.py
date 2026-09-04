@@ -900,6 +900,63 @@ class BeaconTailRepairRecord(AppendTailRepairRecord):
 REVIEWER_ACTION_RECORD_KIND = 'novel-reviewer-action-record-v1'
 
 
+class Stage2ReviewLedgerTurn(FrozenModel):
+    """一次已经预留的 Stage2 Commander 真调用；started 也消耗预算。"""
+
+    ordinal: int = Field(ge=1, le=3)
+    purpose: Literal['prereview', 'review', 'correction']
+    parent_run_id: str = Field(min_length=1)
+    epoch_id: str = Field(min_length=1)
+    session_run_id: str = Field(min_length=1)
+    business_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    workpack_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    progress_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    blocker_count: int = Field(ge=0)
+    started_at: int = Field(ge=0)
+    finished_at: int | None = Field(default=None, ge=0)
+    exit_code: int | None = None
+    outcome: Literal['started', 'ok', 'failed'] = 'started'
+
+    @model_validator(mode='after')
+    def _finish_fields_agree(self) -> Stage2ReviewLedgerTurn:
+        if self.outcome == 'started':
+            if self.finished_at is not None or self.exit_code is not None:
+                raise ValueError('started review turn 不得携带 finished/exit')
+        elif self.finished_at is None or self.exit_code is None:
+            raise ValueError('已结束 review turn 必须携带 finished_at/exit_code')
+        return self
+
+
+class Stage2ReviewLedger(FrozenModel):
+    """按 Global + MainText identity 持久化的 Commander 预算与进展账。"""
+
+    schema_version: Literal[1] = 1
+    kind: Literal['stage2-global-review-ledger'] = 'stage2-global-review-ledger'
+    sid: str = Field(min_length=1)
+    source_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    main_text_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    max_calls: Literal[3] = 3
+    state: Literal['active', 'exhausted', 'complete'] = 'active'
+    turns: list[Stage2ReviewLedgerTurn] = Field(default_factory=list)
+
+    @model_validator(mode='after')
+    def _turns_are_monotonic(self) -> Stage2ReviewLedger:
+        if [row.ordinal for row in self.turns] != list(
+                range(1, len(self.turns) + 1)):
+            raise ValueError('Stage2 review ledger ordinal 必须从 1 连续递增')
+        if len(self.turns) > self.max_calls:
+            raise ValueError('Stage2 review ledger 超出 max_calls')
+        sessions = [row.session_run_id for row in self.turns]
+        if len(sessions) != len(set(sessions)):
+            raise ValueError('每次 Stage2 Commander 调用必须使用新的 logical session')
+        progress = [row.progress_sha256 for row in self.turns]
+        if len(progress) != len(set(progress)):
+            raise ValueError('Stage2 review ledger 不得重复无进展 fingerprint')
+        if self.state == 'exhausted' and len(self.turns) != self.max_calls:
+            raise ValueError('未用满预算不得标 exhausted')
+        return self
+
+
 class ReviewerActionRecord(FrozenModel):
     """Commander 已通过 typed loader 的一份 approval 决定，按内容寻址落盘供重放。
 

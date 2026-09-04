@@ -1171,7 +1171,41 @@ GLOBAL_REVIEW_KINDS: Final = (
     'conflict_partition', 'arc_analysis',
 )
 
-#: 只披露、不阻断的那三类。**它是白名单，其余一律 blocking**（见下面的函数）。
+#: 每类复核项对生成消费面的精确影响。这里不是优先级标签，而是恢复路由：
+#:
+#: · ``must_fix``：不能从下游视图安全删除，FAIL/UNVER 必须修正或人工裁决；
+#: · ``quarantine_or_fix``：整组可确定性删除，UNVER 可显式隔离，FAIL 仍须修正；
+#: · ``disclose``：不进入写作事实面，只保留审计与最终披露。
+#:
+#: ⚠ 必须逐项列全，不能靠“其余默认 HARD”推断。这样新增 kind 时会在 import 阶段
+#: 失败，迫使调用方同时回答它会怎样影响生成，而不是先放进 blocking 再由路径前缀
+#: 猜能否隔离。
+GLOBAL_REVIEW_GENERATION_IMPACTS: Final = (
+    'must_fix', 'quarantine_or_fix', 'disclose',
+)
+GLOBAL_REVIEW_GENERATION_IMPACT_BY_KIND: Final = {
+    'world_rule_version': 'quarantine_or_fix',
+    'secret': 'quarantine_or_fix',
+    'reveal': 'quarantine_or_fix',
+    'known_by': 'quarantine_or_fix',
+    'knowledge_event': 'quarantine_or_fix',
+    'name_distinctiveness': 'disclose',
+    'address_context': 'disclose',
+    'world_rule_kind': 'quarantine_or_fix',
+    'character_set_complete': 'must_fix',
+    'relation_set_complete': 'must_fix',
+    'world_rule_set_complete': 'must_fix',
+    'secret_set_complete': 'must_fix',
+    'role': 'must_fix',
+    'fate': 'disclose',
+    'relation': 'quarantine_or_fix',
+    'setting_fact': 'must_fix',
+    'secret_setup': 'quarantine_or_fix',
+    'conflict_partition': 'must_fix',
+    'arc_analysis': 'must_fix',
+}
+
+#: 只披露、不阻断的那三类。保留这个派生常量供 API/文档兼容消费；权威分类是上表。
 #:
 #: · `name_distinctiveness`：名字够不够独特是改名质量问题，`novel/core/naming.py`
 #:   与 Stage7 的人名表审批 + 恒等检查已经在守，而它判错不会造出假剧情。
@@ -1180,8 +1214,9 @@ GLOBAL_REVIEW_KINDS: Final = (
 #:
 #: ⚠ 这三条的 P1→P2 窗口风险由「继续披露」承接：它们不得从审计面消失，
 #: inbox 与终审包必须逐条列出，否则「不阻断」就变成了「没人看」。
-GLOBAL_REVIEW_DISCLOSURE_KINDS: Final = (
-    'name_distinctiveness', 'address_context', 'fate',
+GLOBAL_REVIEW_DISCLOSURE_KINDS: Final = tuple(
+    kind for kind in GLOBAL_REVIEW_KINDS
+    if GLOBAL_REVIEW_GENERATION_IMPACT_BY_KIND[kind] == 'disclose'
 )
 
 #: 复核项对**交付**的效果。两个取值与 `InboxDeliveryEffect` 同名同义，不另造第三套词。
@@ -1199,16 +1234,28 @@ def review_effect_of(kind: str) -> str:
     ⚠ legacy `known_by`（只为读存量 v1 review 保留）保守按 `blocking` 读：
     读不准的历史项宁可挡住，也不替它开门。
     """
+    impact = review_generation_impact_of(kind)
+    return 'disclosure' if impact == 'disclose' else 'blocking'
+
+
+def review_generation_impact_of(kind: str) -> str:
+    """返回复核项对生成面的闭集影响；未知 kind 没有默认放行方向。"""
     if kind not in GLOBAL_REVIEW_KINDS:
         raise ValueError(
             f'未登记的 stage2 复核项 kind：{kind!r}。'
-            f'加一类必须同时在 GLOBAL_REVIEW_KINDS 与（若只披露）'
-            f'GLOBAL_REVIEW_DISCLOSURE_KINDS 里登记，没有默认值')
-    return 'disclosure' if kind in GLOBAL_REVIEW_DISCLOSURE_KINDS else 'blocking'
+            '加一类必须同时在 GLOBAL_REVIEW_KINDS 与 '
+            'GLOBAL_REVIEW_GENERATION_IMPACT_BY_KIND 里登记，没有默认值')
+    try:
+        return GLOBAL_REVIEW_GENERATION_IMPACT_BY_KIND[kind]
+    except KeyError as exc:  # pragma: no cover —— 下面的 import-time assert 已先守
+        raise ValueError(f'复核项 {kind!r} 缺 generation impact') from exc
 
 
 assert set(GLOBAL_REVIEW_DISCLOSURE_KINDS) <= set(GLOBAL_REVIEW_KINDS)
 assert len(set(GLOBAL_REVIEW_KINDS)) == len(GLOBAL_REVIEW_KINDS)
+assert set(GLOBAL_REVIEW_GENERATION_IMPACT_BY_KIND) == set(GLOBAL_REVIEW_KINDS)
+assert set(GLOBAL_REVIEW_GENERATION_IMPACT_BY_KIND.values()) <= set(
+    GLOBAL_REVIEW_GENERATION_IMPACTS)
 
 #: TODO-25 的唯一机器契约。它描述的是显示投影，不是访问控制：服务端响应仍含完整数据。
 #: 后端发布器、前端 adapter、Screen 与 mock 都消费这一个结构；隐藏路径和承诺不再散落成文案。

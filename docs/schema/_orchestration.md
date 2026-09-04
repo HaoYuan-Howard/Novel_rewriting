@@ -111,7 +111,7 @@ model/node 能力关闭式校验：DeepSeek V4 Flash 不承接契约钉死 Pro �
 
 两种 backend 共用一条身份链：`preview/start` → `Step/JobStart` → `argv` → `CLI` → `RunContext` →
 按 `kind` 选择的 executor。Agent registry 在 argv builder 边界物化 `execution_mode`；Legacy registry
-同样校验 provider/model/effort/thinking/node。Stage2 global 复用一条 logical session；blueprint 按
+同样校验 provider/model/effort/thinking/node。Stage2 global Executor 复用一条 logical session；blueprint 按
 phase/purpose/chapter 隔离；Stage5 按章隔离；Stage6 semantic 管理 A/B 两条独立 session；其余 Phase5
 节点均按 node 隔离。agent 只交 fixed typed 候选，代码掌握 schema / HARD、结构化反馈、正式归一、
 checkpoint、提交 journal/readback/adoption 与终验。显式 Agent backend 不得落回 Legacy；显式 Legacy
@@ -384,22 +384,26 @@ global review 的 generation-safe 面（blocking 逐项 PASS，或仅含已显�
 secret/relation/world-rule UNVER；后者仍是 disclosure-ready 而不是 PASS）、当前可下载成书、终审包、阻塞待办与
 启动/结束代码指纹；不解析 agent 自述。两轴不许互推，尤其 `state=ok` 不推出可交付。
 一次 Commander reviewer turn `exit_code=0` 但 fresh outcome=`stopped` 时，RunSupervisor 再读一次
-`operator next`：ready 交确定性 execution-token 主路；只有下一个状态仍是登记的 reviewer blocker 才在
-同 epoch 精确续用同一 provider session。Stage2 global 的产品预算是**最多两次真实 Commander 调用**：
-首轮完整审阅可以在 Blueprint 逐章生成期间以只读预审提前发生：它读取 v4 完整 Global/MainText
-workpack，只把 typed 输出留在 service scratch；Blueprint 落盘后须以业务 SHA、workpack SHA 与
-同 epoch provider session 三重同一性重绑 live surface，失败保持 stopped/unknown，不能跨会话冒充
-第二轮。预审 Commander 与 Blueprint executor 共同竞争 `min(4, NOVEL_CONCURRENCY)` 个 OS 文件锁槽，
-Reviewer 完成后槽位自动归还；配置 1 时串行，故优化不增加任一时刻并发。第二轮提交合并 GlobalEdit
-并在同一 typed 输入中自审精确结果；中间 0-wire review/edit
-动作不计模型轮次，也不创建 Executor 会话。第二轮结束后无论 typed 请求或 blocking 是否仍未闭合，
-Supervisor 都停止并给出稳定 `stage2_global_turn_budget`/具体拒绝事实，绝不启动第三轮 Commander。
-付费 Executor 自己的候选/修复仍在节点 logical session 内 resume checkpoint。
-`submission_options` 同时是可执行 binding：Stage2 patch 的行数、顺序、subject id 与字段集合都必须
-逐字保留；新增/拆分只能等集合完整性被判 FAIL 后使用生产模板明确给出的完整 `*_replace`。typed loader
-拒绝或 reviewer canonical action 以 exit 2 在写盘前终止时，Supervisor 不结束 parent，而以同一
-provider session、同一 request 落点发送不重复 workpack 的紧凑纠错提示；相同请求字节立即停。该机制
-对 Stage2 同样占用上述两次真实调用预算，不能借“纠错”名义追加第三次；其他 reviewer blocker 最多接受
+`operator next`：ready 交确定性 execution-token 主路；只有下一个状态仍是登记的 reviewer blocker 才
+继续审阅。普通 blocker 可精确续同一 provider session；Stage2 global 是显式例外，固定为“一次
+Executor + 最多三次 Commander”，且每次 Commander 都开新的 logical/provider session。首轮可在
+Blueprint 逐章生成期间只读预审：它读取 v4 完整 Global/MainText workpack，把 typed 输出留在 service
+scratch；Blueprint 落盘后只核业务 SHA 与 workpack SHA 后重绑 live surface，不把 provider session
+身份当成连续性前件。预审 Commander 与 Blueprint executor 共同竞争 `min(4, NOVEL_CONCURRENCY)` 个
+OS 文件锁槽；配置 1 时串行，不增加任一时刻并发。
+
+Stage2 后两轮只接收 pending/FAIL/未隔离 UNVER 的 delta subject cards；已成功项只留 identity 摘要。
+主体、证据与理由用内容寻址 catalog 去重，只有仍需 whole-book 判断时才再次携完整 MainText。每次真调用
+在启动前先写持久 typed ledger 的 `started`，进程/宿主重启不返还预算；同一 progress fingerprint、
+未闭合数增加或三次耗尽都在下一次 wire 前拒绝。中间 0-wire review/edit 动作不计模型轮次，也不创建
+Executor 会话；付费 Executor 自己的候选/修复仍在节点 logical session 内 resume checkpoint。
+
+`submission_options` 同时是可执行 binding：Stage2 既有字段 patch 的行数、顺序、subject id 与字段集合
+逐字保留；集合新增/删除/拆分走模板给出的 hash-bound `collection_edits.operations`，不复制整组成功主体。
+返工可在同一 typed 输入合并 GlobalEdit 与 `post_edit_review`；后者只准对模板 `review_scope` 中仍保持同一
+hash 的旧项提交 `decisions`，新打开项才使用默认证明。typed loader 拒绝或 canonical action exit 2 时，
+Supervisor 不结束 parent，而把完整紧凑包与确定性拒因交给下一条 fresh session；相同请求字节立即停。
+该机制同样占用三次总预算，不能借“纠错”名义扩轮；其他 reviewer blocker 最多接受
 两次不同纠正。重复业务主体上的等价已执行/已拒动作也由 progress fingerprint 拒绝，不能靠 review
 surface 自变制造循环。预算、授权、pause/stop、current blocker 与 admission 仍关闭式生效。已经 `pipeline_complete` 而
 delivery 终验未闭合时只运行确定性 finalizer/verify，不追加无关模型 turn；next 自身不可读则降 unknown。
@@ -765,6 +769,7 @@ Output/_service/*.jsonl.lock      上面九类 JSONL 各自的追加锁载体（
 Output/_service/uploads/…         浏览器上传的原始小说字节
 Output/_service/edits/<sid>/…     交给 CLI 的一次性 typed 编辑稿、人工决定或批处理 manifest
 Output/_service/edits/<sid>/reviewer-action-<sha>.json 已通过 typed loader 的 Commander approval 决定：内容寻址、可零模型重放（R-11.25）
+Output/_service/runs/<sid>/stage2/global_review_ledgers/<sha>.json Stage2 Global/MainText 审阅的三次 Commander 预算、fresh session 与单调进展账；不含正文
 Output/_service/approvals/<sid>.json 人工闸门、已阅状态与 canonical 写作授权（原子替换）
 ```
 

@@ -48,6 +48,7 @@ from novel.cli.main import main as cli_main
 from novel.errors import TerminalState
 from novel.orchestrator import (
     admission, agent, beacon, execution_permit, jobs, nodes,
+    stage2_review_ledger,
 )
 from novel.orchestrator.jobs import JobConflict
 
@@ -943,7 +944,7 @@ def test_non_stage2_invalid_reviewer_request_and_exit2_resume_same_commander_ses
 
 def test_stage2_exit2_corrects_before_invalid_surface_can_replace_reviewer(
         base, corpus, monkeypatch):
-    """真实故障回归：HARD 留 INVALID 后仍先 exact-resume 最后一轮纠错。"""
+    """HARD 留 INVALID 后先用自足增量包开新会话纠错，不让 surface 抢走。"""
     review_current = SimpleNamespace(
         state='blocked', code_version='test-code-version',
         surface_seal='c' * 64, execution_token=None,
@@ -1041,7 +1042,7 @@ def test_stage2_exit2_corrects_before_invalid_surface_can_replace_reviewer(
             return CommanderProcessResult(
                 exit_code=0,
                 observation=CommanderObservation(
-                    provider_session_id='provider-stage2-correction',
+                    provider_session_id=f'provider-stage2-{len(invocations)}',
                     actual_model=invocation.profile.model,
                     actual_effort=invocation.profile.reasoning_effort,
                     usage=None))
@@ -1053,19 +1054,19 @@ def test_stage2_exit2_corrects_before_invalid_surface_can_replace_reviewer(
         profiles=_PROFILES, spawn=None)
     assert agent.wait(rec.run_id, 10)
 
-    assert next_calls == 2, 'exit 2 后不应先让 changed surface 抢走 reviewer'
+    assert next_calls == 2, 'exit 2 后应沿用 frozen binding，不读取第三次 changed surface'
     assert loaded == executed == len(invocations) == 2
     assert [row.resume_provider_session_id for row in invocations] == [
-        None, 'provider-stage2-correction']
+        None, None]
     assert 'role_repeats_name' in invocations[1].stdin_text
-    assert 'STAGE2 IMMUTABLE REVIEW WORKPACK' not in invocations[1].stdin_text
+    assert 'STAGE2 IMMUTABLE REVIEW WORKPACK' in invocations[1].stdin_text
     [done] = [row for row in agent.records(base) if row.run_id == rec.run_id]
     assert done.exit_code == 0
 
 
-def test_stage2_global_never_starts_a_third_commander_turn(
+def test_stage2_global_stops_after_three_fresh_commander_turns(
         base, corpus, monkeypatch):
-    """即使两次 typed 输出都坏，硬预算也按真实模型调用计数并停止。"""
+    """即使 typed 输出持续坏，也只允许三次新的真实模型调用。"""
     current = SimpleNamespace(
         state='blocked', code_version='test-code-version',
         surface_seal='c' * 64, execution_token=None,
@@ -1122,7 +1123,7 @@ def test_stage2_global_never_starts_a_third_commander_turn(
             return CommanderProcessResult(
                 exit_code=0,
                 observation=CommanderObservation(
-                    provider_session_id='provider-stage2-two-turns',
+                    provider_session_id=f'provider-stage2-{len(invocations)}',
                     actual_model=invocation.profile.model,
                     actual_effort=invocation.profile.reasoning_effort,
                     usage=None))
@@ -1134,22 +1135,41 @@ def test_stage2_global_never_starts_a_third_commander_turn(
         profiles=_PROFILES, spawn=None)
     assert agent.wait(rec.run_id, 10)
 
-    assert loaded == 2
-    assert len(invocations) == 2
+    assert loaded == 3
+    assert len(invocations) == 3
     assert [row.resume_provider_session_id for row in invocations] == [
-        None, 'provider-stage2-two-turns']
+        None, None, None]
     [done] = [row for row in agent.records(base) if row.run_id == rec.run_id]
     assert done.exit_code == 2
     assert done.outcome is not None
-    assert '拒绝启动第三轮' in done.outcome.reason
-    [session] = agent_session_audit.fold(
-        agent_session_audit.read_events(base))
-    assert [turn.turn_index for turn in session.turns] == [1, 2]
+    assert '连续纠正后仍未闭合' in done.outcome.reason
+    sessions = agent_session_audit.fold(agent_session_audit.read_events(base))
+    assert len(sessions) == 3
+    assert all([turn.turn_index for turn in session.turns] == [1]
+               for session in sessions)
 
 
-def test_durable_stage2_correction_has_only_the_final_commander_turn(
+def test_durable_stage2_correction_uses_only_the_remaining_commander_turn(
         base, corpus, monkeypatch):
-    """重启从 reviewed-edit INVALID 恢复时，不能重新发放两轮预算。"""
+    """重启从 reviewed-edit INVALID 恢复时，持久账只发放第三格。"""
+    source_sha256 = 'a' * 64
+    main_text_sha256 = 'b' * 64
+    workpack_sha256 = 'c' * 64
+    for ordinal in (1, 2):
+        session_run_id = f'prior-stage2-session-{ordinal}'
+        stage2_review_ledger.reserve(
+            base, '42', source_sha256=source_sha256,
+            main_text_sha256=main_text_sha256,
+            business_sha256='e' * 64,
+            workpack_sha256=workpack_sha256,
+            progress_sha256=str(ordinal) * 64,
+            blocker_count=1, purpose='review',
+            parent_run_id=f'prior-run-{ordinal}', epoch_id='prior-epoch',
+            session_run_id=session_run_id, now=ordinal)
+        stage2_review_ledger.finish(
+            base, '42', source_sha256=source_sha256,
+            main_text_sha256=main_text_sha256,
+            session_run_id=session_run_id, exit_code=0, now=ordinal + 10)
     current = SimpleNamespace(
         state='blocked', code_version='test-code-version',
         surface_seal='c' * 64, execution_token=None,
@@ -1175,6 +1195,11 @@ def test_durable_stage2_correction_has_only_the_final_commander_turn(
             request_path=Path(request_path),
             prompt='STAGE2 FINAL DURABLE CORRECTION',
             submission_options=(),
+            workpack_sha256=workpack_sha256,
+            source_sha256=source_sha256,
+            main_text_sha256=main_text_sha256,
+            progress_sha256='3' * 64,
+            blocker_count=1,
         )
         task_box['task'] = task
         return task
@@ -1229,7 +1254,7 @@ def test_durable_stage2_correction_has_only_the_final_commander_turn(
     [done] = [row for row in agent.records(base) if row.run_id == rec.run_id]
     assert done.exit_code == 2
     assert done.outcome is not None
-    assert '拒绝启动第三轮' in done.outcome.reason
+    assert '持久预算已用尽' in done.outcome.reason
 
 
 def test_ready_action_exact_resumes_same_commander_session(
@@ -2966,4 +2991,3 @@ def test_rejected_replay_reopens_full_review_instead_of_correction(
     assert invocations[0].resume_provider_session_id is None
     assert not path.exists()
     assert _reviewer_action_files(base) == []
-

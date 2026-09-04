@@ -562,6 +562,18 @@ def test_stage2_prereview_is_read_only_compact_and_rebinds_live_surface(
             'subject_sha256': str(index) * 64,
             'current_state': 'pending',
             'current_reason': reason,
+            'subject_path': f'arc.item_{index}',
+            'group_key': 'arc',
+            'reading_scope': 'whole_book',
+            'evidence_mode': 'formal_evidence',
+            'effect': 'blocking',
+            'generation_impact': 'must_fix',
+            'generation_disposition': None,
+            'subject': {'claim': f'主体 {index}'},
+            'registered_evidence': [],
+            'formal_evidence': [{'chapter_ordinal': index}],
+            'unresolved_formal_evidence': [],
+            'exact_literal_hits': [],
         } for index in (1, 2)],
         'binding': {
             'expected_source_sha256': '8' * 64,
@@ -599,6 +611,9 @@ def test_stage2_prereview_is_read_only_compact_and_rebinds_live_surface(
     assert prereview.prompt.count(reason) == 1, '相同持久理由必须以 catalog 去重'
     assert 'global_template' not in prereview.prompt
     assert prereview.prompt.count('第一章正文') == 1
+    assert 'stage2-global-review-delta-v1' in prereview.prompt
+    assert 'subject_cards' in prereview.prompt
+    assert 'claim_evidence_index' in prereview.prompt
     payload = copy.deepcopy(prereview.input_template)
     payload['blocking_scope']['state'] = 'PASS'
     payload['blocking_scope']['reason'] = '已逐章逐项阅读完整正文并复核'
@@ -672,10 +687,38 @@ def _global_edit_envelope() -> dict:
 
 
 def _stage2_failed_global(items: list[dict]) -> dict:
+    normalized = []
+    for index, source in enumerate(items, start=1):
+        row = copy.deepcopy(source)
+        group_key = str(row.get('group_key') or f'arc:{index}')
+        row.setdefault('item_id', f'item-{index}')
+        row.setdefault('subject_sha256', f'{index:x}' * 64)
+        row.setdefault('subject_path', group_key.replace(':', '.'))
+        row.setdefault('effect', 'blocking')
+        row.setdefault(
+            'generation_impact',
+            'quarantine_or_fix' if group_key.startswith(
+                ('secret:', 'relation:', 'world_rule:')) else 'must_fix')
+        row.setdefault('generation_disposition', None)
+        row.setdefault('registered_evidence', [])
+        row.setdefault('formal_evidence', [])
+        row.setdefault('unresolved_formal_evidence', [])
+        row.setdefault('exact_literal_hits', [])
+        row.setdefault('reading_scope', 'localized')
+        row.setdefault('evidence_mode', 'none')
+        row.setdefault('subject', {'claim': row['item_id']})
+        normalized.append(row)
     return {
-        'items': items,
+        'kind': 'stage2-global-review-workpack-v4',
+        'workpack_sha256': '7' * 64,
+        'main_text_subject_sha256': '9' * 64,
+        'main_text_chapters': [],
+        'items': normalized,
         'binding': {
             'expected_source_sha256': '8' * 64,
+            'expected_blocking_scope_sha256': '6' * 64,
+            'main_text_subject_sha256': '9' * 64,
+            'expected_item_count': len(normalized),
             'reviewed_chapter_ordinals': [1],
         },
     }
@@ -685,9 +728,10 @@ def test_stage2_durable_correction_uses_failed_edit_without_loading_blueprint(
         monkeypatch) -> None:
     calls: list[list[str]] = []
     correction = {
-        'kind': 'stage2-global-edit-correction-workpack-v1',
+        'kind': 'stage2-global-edit-correction-workpack-v2',
         'read_only': True,
-        'final_commander_turn': True,
+        'commander_budget_max': 3,
+        'incremental_correction': True,
         'failed_edit_sha256': '1' * 64,
         'invalid_sha256': '2' * 64,
         'hard_hits': ['role_repeats_name'],
@@ -777,7 +821,7 @@ def test_stage2_global_edit_cannot_invent_a_patch_subject(tmp_path) -> None:
             path, current, submission_options=options)
 
 
-def test_reviewer_correction_prompt_reuses_context_without_resending_workpack(
+def test_reviewer_correction_prompt_is_self_contained_for_a_fresh_session(
         tmp_path) -> None:
     task = reviewer_tasks.ReviewerTask(
         waiting_on=queue.WAITING_ON_STAGE2_REVIEW,
@@ -792,9 +836,9 @@ def test_reviewer_correction_prompt_reuses_context_without_resending_workpack(
         task, 'secrets patch 多出了 secret_08', attempt=1)
 
     assert str(task.request_path) in prompt
-    assert '不要重新定位、不要重读仓库' in prompt
+    assert '只处理本包仍未闭合的 subject cards' in prompt
     assert 'secrets patch 多出了 secret_08' in prompt
-    assert 'very large immutable workpack' not in prompt
+    assert 'very large immutable workpack' in prompt
 
 
 def test_stage2_after_edit_reviews_only_changed_pending_items() -> None:
