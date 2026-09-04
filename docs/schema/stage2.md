@@ -435,12 +435,12 @@ edit、在内存应用并归一；no-op 在 canonical 写入前拒绝。确有�
 因此 secret/rule/relation 的关联字段变化只重开该主体卡及其依赖项，集合完整性只在成员 ID 集变化时
 重开，互不相关且已成功的卡不再发给 Commander。
 
-Agent 的 Stage2 global 闭环是“一次 Executor 产出 + 最多三次 Commander 真调用”，与四轮阶段预算
-对齐。首个 Commander 轮审阅当前未闭合面；后两轮只在仍有进展时接收增量 subject cards，并可在一份
-动作里同时提交 typed edit 与 `post_edit_review`。每轮使用新的 logical/provider session；连续性来自
-持久 typed ledger、workpack identity、去重 catalog 与存活决定，不依赖隐藏聊天历史。调用在启动前即以
-`started` 消耗预算，进程重启不会补发；同一 progress fingerprint、未闭合数倒退增加或三次耗尽均
-关闭式停止。
+Agent 的 Stage2 global 闭环是“一次 Executor 产出 + 最多四席 Commander”。第一席审阅当前未闭合面；
+第二、三席只在仍有进展时接收增量 subject cards，并可在一份动作里同时提交 typed edit 与
+`post_edit_review`；第四席独立读取完整 blocking 面、整书正文与 Blueprint 工作包，只能确认收口或把
+指定项 reopen 为 FAIL/UNVER，不能再编辑。每席使用新的 logical/provider session；连续性来自持久 typed
+ledger、workpack identity、去重 catalog 与存活决定，不依赖隐藏聊天历史。调用在启动前即以 `started`
+消耗席位，进程重启不会补发；同一 progress fingerprint、非法 blocker 回升或席位耗尽均关闭式停止。
 
 producer 先在内存应用、归一和重枚举：本 edit 新打开的 blocking pending 项由默认 PASS/登记隔离
 证明收口；仍保持原 hash 的旧 FAIL/UNVER 只能由 `review_scope + decisions` 显式复判，不能被默认值

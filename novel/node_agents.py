@@ -8,9 +8,6 @@
 from __future__ import annotations
 
 import copy
-import hashlib
-import json
-import threading
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -23,7 +20,6 @@ from contracts.invariants import (
     STAGE2_BLUEPRINT_MAX_CONCURRENCY,
     STAGE4_DESIGN_MAX_CONCURRENCY, STAGE4_PLAN_MAX_CONCURRENCY,
 )
-from contracts.schema.orchestration import AgentProfile
 from contracts.schema.report import CheckReport
 from contracts.schema.stage2 import (
     ChapterBlueprints, GlobalCandidateAgentTurnResponse,
@@ -36,14 +32,12 @@ from contracts.schema.stage5 import ChapterResponse
 from contracts.schema.stage6 import Hook, HookSemanticReview
 from contracts.schema.stage7 import NameMap
 from novel import agent_session_audit, paths, prov
-from novel.agent_model_identity import (
-    resolve_ledger_model_identity, validate_checkpoint_model_identity,
-)
-from novel.agents import AgentDriver, AgentProbe
+from novel.agents import AgentDriver
 from novel.agents.factory import create_driver
 from novel.agents.session_client import (
-    SESSION_PROTOCOL_VERSION, AgentDeliveryUnavailable, SessionAgentClient,
+    AgentDeliveryUnavailable, SessionAgentClient,
 )
+from novel.agents.unit_session_pool import UnitSessionPool
 from novel.config import MAX_CONCURRENCY
 from novel.errors import GateBlocked, ProvenanceRefused
 from novel.llm import stage4_runs, stage5_runs
@@ -518,72 +512,52 @@ class BlueprintSessionPool:
         max_turns: int = 4,
         concurrency: int = STAGE2_BLUEPRINT_MAX_CONCURRENCY,
     ) -> None:
-        if ctx.node != 'stage2.blueprint':
-            raise ValueError(
-                f'BlueprintSessionPool 只接受 stage2.blueprint，实得 {ctx.node!r}')
-        if ctx.executor_profile is None:
-            raise ValueError('stage2.blueprint executor 缺 resolved profile')
-        if (not isinstance(max_turns, int) or isinstance(max_turns, bool)
-                or max_turns < 1):
-            raise ValueError('BlueprintSessionPool.max_turns 必须 >= 1')
-        if (not isinstance(concurrency, int) or isinstance(concurrency, bool)
-                or concurrency < 1):
-            raise ValueError('BlueprintSessionPool.concurrency 必须 >= 1')
-        self.ctx = ctx
-        self.profile: AgentProfile = ctx.executor_profile
-        self.model = self.profile.model
-        self.max_turns = max_turns
-        self.concurrency = min(STAGE2_BLUEPRINT_MAX_CONCURRENCY, concurrency)
+        self._sessions = UnitSessionPool[tuple[str, str, int]](
+            ctx,
+            node='stage2.blueprint',
+            pool_name='BlueprintSessionPool',
+            max_turns=max_turns,
+            concurrency=concurrency,
+            concurrency_cap=STAGE2_BLUEPRINT_MAX_CONCURRENCY,
+        )
+        self.ctx = self._sessions.ctx
+        self.profile = self._sessions.profile
+        self.model = self._sessions.model
+        self.max_turns = self._sessions.max_turns
+        self.concurrency = self._sessions.concurrency
         self._contract = active_contract()
         self._driver_factory = driver_factory or (
             lambda _phase, _purpose, _chapter: create_driver(
                 self.profile, role='executor'))
-        self._clients: dict[
-            tuple[str, str, int], SessionAgentClient,
-        ] = {}
+        self._clients = self._sessions.clients
         self._purpose_keys: dict[str, tuple[str, str, int]] = {}
         self._subjects: dict[str, tuple[str, str]] = {}
         self._restored: set[str] = set()
         self._restored_records: dict[str, dict[str, Any]] = {}
-        self._probe: AgentProbe | None = None
-        self._driver_owners: dict[int, tuple[str, str, int]] = {}
-        self._provider_session_owners: dict[
-            tuple[str, str], tuple[tuple[str, str, int], str],
-        ] = {}
-        self._failed_session_keys: set[tuple[str, str, int]] = set()
-        self._closed = False
-        self._lock = threading.RLock()
+        self._failed_session_keys = self._sessions.isolation_failed_keys
+        self._lock = self._sessions.lock
 
     @property
     def turns_used(self) -> int:
         with self._lock:
-            total = 0
+            restored: dict[tuple[str, str, int], Mapping[str, Any]] = {}
             for purpose, key in self._purpose_keys.items():
-                client = self._clients.get(key)
-                if client is not None:
-                    total += client.turns_used
-                    continue
                 record = self._restored_records.get(purpose)
-                turn = None if record is None else record.get(
-                    'accepted_turn_index')
-                if isinstance(turn, int) and not isinstance(turn, bool):
-                    total += turn
-            return total
+                if record is not None:
+                    restored[key] = record
+        return self._sessions.turns_used(restored)
 
     @property
     def driver_failed(self) -> bool:
-        with self._lock:
-            return any(client.driver_failed for client in self._clients.values())
+        return self._sessions.driver_failed
 
     @property
     def isolation_failed(self) -> bool:
-        with self._lock:
-            return bool(self._failed_session_keys)
+        return self._sessions.isolation_failed
 
     @property
     def session_count(self) -> int:
-        with self._lock:
-            return len(self._clients)
+        return self._sessions.session_count
 
     def _phase_of(self, purpose: str) -> str:
         if ':boundaries:' in purpose:
@@ -597,55 +571,17 @@ class BlueprintSessionPool:
             probe_driver: bool = True,
     ) -> SessionAgentClient:
         key = (phase, purpose, chapter)
-        driver = self._driver_factory(phase, purpose, chapter)
-        driver_id = id(driver)
-        prior_owner = self._driver_owners.get(driver_id)
-        if prior_owner is not None and prior_owner != key:
-            self._failed_session_keys.update((prior_owner, key))
-            raise ProvenanceRefused(
+        return self._sessions.new_client(
+            key,
+            driver_factory=lambda: self._driver_factory(
+                phase, purpose, chapter),
+            chapter=chapter,
+            label=purpose,
+            probe_driver=probe_driver,
+            driver_reuse_message=lambda prior, current: (
                 f'{purpose}: driver factory 把同一对象同时给了 '
-                f'{prior_owner} 与 {key}；已在首个 model start 前拒绝')
-        self._driver_owners[driver_id] = key
-        try:
-            if not probe_driver:
-                if (driver.driver != self.profile.driver
-                        or (self._probe is not None
-                            and (driver.driver != self._probe.driver
-                                 or driver.provider != self._probe.provider))):
-                    self._failed_session_keys.add(key)
-                    raise ProvenanceRefused(
-                        f'{purpose}: checkpoint 恢复用 driver 与 profile/pool 漂移')
-            elif self._probe is None:
-                probe = driver.probe()
-                if (driver.driver != self.profile.driver
-                        or probe.driver != self.profile.driver
-                        or probe.provider != driver.provider
-                        or not probe.available):
-                    self._failed_session_keys.add(key)
-                    raise ProvenanceRefused(
-                        f'{purpose}: driver/probe/profile 身份不一致：'
-                        f'profile={self.profile.driver!r}, '
-                        f'driver={driver.driver!r}, '
-                        f'probe={probe.driver!r}/{probe.provider!r}')
-                self._probe = probe
-            elif (driver.driver != self._probe.driver
-                  or driver.provider != self._probe.provider):
-                self._failed_session_keys.add(key)
-                raise ProvenanceRefused(
-                    f'{purpose}: driver factory 在同一 pool 内漂移了厂商身份')
-            return SessionAgentClient(
-                self.ctx,
-                self.profile,
-                driver,
-                chapter=chapter,
-                parent_run_id=self.ctx.run_id,
-                max_semantic_turns=self.max_turns,
-                preflight_probe=self._probe,
-            )
-        except Exception:
-            self._driver_owners.pop(driver_id, None)
-            driver.close()
-            raise
+                f'{prior} 与 {current}；已在首个 model start 前拒绝'),
+        )
 
     def _client_for(
             self, phase: str, purpose: str, chapter: int,
@@ -720,22 +656,15 @@ class BlueprintSessionPool:
             provider_session_id: object,
     ) -> None:
         """provider session 也必须与 phase/purpose/chapter 一对一。"""
-        if not isinstance(provider_session_id, str) or not provider_session_id:
-            return
-        if not isinstance(logical_session_id, str) or not logical_session_id:
-            raise ProvenanceRefused(
-                f'{key[1]}: provider session 缺 logical session owner')
-        session_key = (self.profile.driver, provider_session_id)
-        owner = (key, logical_session_id)
-        with self._lock:
-            prior_owner = self._provider_session_owners.get(session_key)
-            if prior_owner is not None and prior_owner != owner:
-                self._failed_session_keys.update((prior_owner[0], key))
-                raise ProvenanceRefused(
-                    f'{key[1]}: provider session {provider_session_id!r} '
-                    f'已属于 {prior_owner[0]}/logical={prior_owner[1]!r}；'
-                    '拒绝跨章/跨相位共享或 crash 恢复偷接旧 session')
-            self._provider_session_owners[session_key] = owner
+        self._sessions.register_provider_owner(
+            key,
+            logical_session_id=logical_session_id,
+            provider_session_id=provider_session_id,
+            provider_reuse_message=lambda prior, _owner, provider_id: (
+                f'{key[1]}: provider session {provider_id!r} '
+                f'已属于 {prior[0]}/logical={prior[1]!r}；'
+                '拒绝跨章/跨相位共享或 crash 恢复偷接旧 session'),
+        )
 
     @staticmethod
     def _scope_validator(
@@ -759,18 +688,15 @@ class BlueprintSessionPool:
         return validate
 
     def ask_json(self, system: str, user: str, **kwargs: Any) -> Any:
-        model_cls = kwargs.pop('model_cls', None)
-        if (not isinstance(model_cls, type)
-                or not issubclass(model_cls, BaseModel)):
-            raise ProvenanceRefused(
-                'stage2.blueprint 请求缺显式 Pydantic model_cls')
+        model_cls, purpose = self._sessions.validate_json_request(
+            kwargs,
+            model_error='stage2.blueprint 请求缺显式 Pydantic model_cls',
+            purpose_error='stage2.blueprint 请求缺 purpose',
+        )
         progress = kwargs.pop('progress', None)
         if not isinstance(progress, RequestProgress):
             raise ProvenanceRefused(
                 'stage2.blueprint 每次请求必须带可验证的 chapter progress')
-        purpose = str(kwargs.get('purpose') or '')
-        if not purpose:
-            raise ProvenanceRefused('stage2.blueprint 请求缺 purpose')
         prefer_content = kwargs.pop(
             'prefer_content_over_reasoning_salvage', False)
         recovery_policy = kwargs.pop('recovery_policy', None)
@@ -794,13 +720,18 @@ class BlueprintSessionPool:
                     f'{purpose}: 同一章节 session 的原始 system/user 漂移')
             self._subjects[purpose] = (system, user)
         key = (phase, purpose, progress.chapter)
-        try:
-            return client.ask_json(
-                system, user, model_cls=model_cls, **kwargs)
-        finally:
-            self._register_provider_owner(
-                key, client.session_run_id,
-                client.observed_provider_session_id)
+        return self._sessions.ask_json(
+            key,
+            client,
+            system,
+            user,
+            model_cls=model_cls,
+            kwargs=kwargs,
+            provider_reuse_message=lambda prior, _owner, provider_id: (
+                f'{purpose}: provider session {provider_id!r} '
+                f'已属于 {prior[0]}/logical={prior[1]!r}；'
+                '拒绝跨章/跨相位共享或 crash 恢复偷接旧 session'),
+        )
 
     def json_request_policy(
             self, phases: Any, *, recovery_policy: str,
@@ -840,17 +771,17 @@ class BlueprintSessionPool:
                 or recovery_policy != 'stage2-blueprint-v1'):
             raise ProvenanceRefused(
                 f'{purpose}: checkpoint restore 缺当前 subject/ceiling/protocol')
-        binding = record.get('accepted_request')
-        if (not isinstance(binding, Mapping)
-                or binding.get('requested_output_token_ceiling') != max_tokens
-                or record.get('profile') != self.profile.model_dump(mode='json')):
-            raise ProvenanceRefused(
-                f'{purpose}: checkpoint acceptance 与当前 profile/ceiling 不一致')
+        self._sessions.validate_checkpoint_acceptance(
+            chapter=chapter,
+            purpose=purpose,
+            record=record,
+            system=system,
+            user=user,
+            max_tokens=max_tokens,
+            recovery_policy=recovery_policy,
+        )
         key = (phase, purpose, chapter)
         logical_id = record.get('session_run_id')
-        if not isinstance(logical_id, str) or not logical_id:
-            raise ProvenanceRefused(
-                f'{purpose}: checkpoint 缺 logical session owner')
         with self._lock:
             existing_key = self._purpose_keys.get(purpose)
             if existing_key is not None and existing_key != key:
@@ -942,8 +873,7 @@ class BlueprintSessionPool:
                 recovery_policy='stage2-blueprint-v1',
             )
         except Exception:
-            with self._lock:
-                self._clients.pop(key, None)
+            self._sessions.detach_client(key)
             client.close()
             raise
         return client, record
@@ -973,13 +903,11 @@ class BlueprintSessionPool:
                 queued = client.queue_restored_code_validation_feedback(
                     feedback, purpose=spec.purpose)
             except Exception:
-                with self._lock:
-                    self._clients.pop(key, None)
+                self._sessions.detach_client(key)
                 client.close()
                 raise
             if not queued:
-                with self._lock:
-                    self._clients.pop(key, None)
+                self._sessions.detach_client(key)
                 client.close()
                 return None
             subject_user = spec.user
@@ -992,22 +920,25 @@ class BlueprintSessionPool:
                 return None
             subject_user = subject[1]
 
-        try:
-            response = client.ask_json(
-                spec.system,
-                subject_user,
-                model_cls=spec.model_cls,
-                purpose=spec.purpose,
-                max_tokens=spec.max_tokens,
-                validator=self._scope_validator(
+        response = self._sessions.ask_json(
+            key,
+            client,
+            spec.system,
+            subject_user,
+            model_cls=spec.model_cls,
+            kwargs={
+                'purpose': spec.purpose,
+                'max_tokens': spec.max_tokens,
+                'validator': self._scope_validator(
                     spec.chapter, spec.progress.index, spec.validator),
-                progress=spec.progress,
-                recovery_policy='stage2-blueprint-v1',
-            )
-        finally:
-            self._register_provider_owner(
-                key, client.session_run_id,
-                client.observed_provider_session_id)
+                'progress': spec.progress,
+                'recovery_policy': 'stage2-blueprint-v1',
+            },
+            provider_reuse_message=lambda prior, _owner, provider_id: (
+                f'{spec.purpose}: provider session {provider_id!r} '
+                f'已属于 {prior[0]}/logical={prior[1]!r}；'
+                '拒绝跨章/跨相位共享或 crash 恢复偷接旧 session'),
+        )
         with self._lock:
             # 只在新 session 真正接纳了修订结果后退休旧 adoption。
             # 若 schema/driver 失败，旧候选仍能被终态化为 INVALID。
@@ -1026,67 +957,57 @@ class BlueprintSessionPool:
             error_kind: str | None,
     ) -> None:
         with self._lock:
-            clients = tuple(self._clients.items())
             isolation_failed = set(self._failed_session_keys)
-            restored = tuple(
-                (purpose, dict(record))
-                for purpose, record in self._restored_records.items()
-            )
-        for key, client in clients:
+            keys = list(self._clients)
+            restored: dict[
+                tuple[str, str, int], Mapping[str, Any],
+            ] = {}
+            initial_errors: list[BaseException] = []
+            for purpose, record in self._restored_records.items():
+                key = self._purpose_keys.get(purpose)
+                if key is None:
+                    initial_errors.append(ProvenanceRefused(
+                        f'{purpose}: restored session 缺 phase/purpose/chapter owner'))
+                    continue
+                restored[key] = dict(record)
+                if key not in keys:
+                    keys.append(key)
+
+        def state_for(
+            key: tuple[str, str, int],
+            client: SessionAgentClient | None,
+            _record: Mapping[str, Any] | None,
+        ) -> tuple[str, str, str | None]:
             if process_state == 'failed':
-                failed_here = client.driver_failed or key in isolation_failed
-                client.finish(
-                    process_state=('failed' if failed_here else 'ok'),
-                    delivery_state=delivery_state,
-                    error_kind=(
-                        'session_isolation' if client.provider_session_reused
-                        else 'agent_driver' if client.driver_failed
-                        else 'session_isolation' if key in isolation_failed
-                        else 'peer_session_failed'),
+                failed_here = (
+                    key in isolation_failed
+                    or (client is not None and client.driver_failed)
                 )
-            else:
-                client.finish(
-                    process_state=process_state,
-                    delivery_state=delivery_state,
-                    error_kind=error_kind,
+                return (
+                    'failed' if failed_here else 'ok',
+                    delivery_state,
+                    ('session_isolation'
+                     if client is not None and client.provider_session_reused
+                     else 'agent_driver'
+                     if client is not None and client.driver_failed
+                     else 'session_isolation' if key in isolation_failed
+                     else 'peer_session_failed'),
                 )
+            return process_state, delivery_state, error_kind
+
         # checkpoint 的旧 logical session 没有本进程 client。producer 终验后用
         # durable acceptance 指回；dirty 旧会话若已由 queue 收尾，公共桥只复核
         # 身份并保留原历史，不拿本次观察改写它。
-        for purpose, record in restored:
-            with self._lock:
-                key = self._purpose_keys.get(purpose)
-            if key is None:
-                raise ProvenanceRefused(
-                    f'{purpose}: restored session 缺 phase/purpose/chapter owner')
-            if process_state == 'failed':
-                failed_here = key in isolation_failed
-                states = (
-                    'failed' if failed_here else 'ok',
-                    delivery_state,
-                    ('session_isolation' if failed_here
-                     else 'peer_session_failed'),
-                )
-            else:
-                states = (process_state, delivery_state, error_kind)
-            agent_session_audit.finish_restored_session(
-                self.ctx.novel_dir.parent,
-                record,
-                process_state=states[0],
-                delivery_state=states[1],
-                error_kind=states[2],
-                end_code_version=prov.code_version(),
-                only_if_open=True,
-            )
+        self._sessions.finish_all(
+            keys,
+            restored_records=restored,
+            state_for=state_for,
+            label='stage2.blueprint 逐章 ended 审计写入失败',
+            initial_errors=initial_errors,
+        )
 
     def close(self) -> None:
-        with self._lock:
-            if self._closed:
-                return
-            clients = tuple(self._clients.values())
-            self._closed = True
-        for client in clients:
-            client.close()
+        self._sessions.close(label='stage2.blueprint 逐章')
 
 
 class Stage2BlueprintAgent(NodeExecutorAgent[ChapterBlueprints]):
@@ -1368,41 +1289,33 @@ class Stage4DesignSessionPool:
         max_turns: int = 4,
         concurrency: int = STAGE4_DESIGN_MAX_CONCURRENCY,
     ) -> None:
-        if ctx.node != 'stage4.design':
-            raise ValueError(
-                f'Stage4DesignSessionPool 只接受 stage4.design，实得 {ctx.node!r}')
-        if ctx.executor_profile is None:
-            raise ValueError('stage4.design executor 缺 resolved profile')
-        if (not isinstance(max_turns, int) or isinstance(max_turns, bool)
-                or max_turns < 1):
-            raise ValueError('Stage4DesignSessionPool.max_turns 必须 >= 1')
-        if (not isinstance(concurrency, int) or isinstance(concurrency, bool)
-                or concurrency < 1):
-            raise ValueError('Stage4DesignSessionPool.concurrency 必须 >= 1')
-        self.ctx = ctx
-        self.profile: AgentProfile = ctx.executor_profile
-        self.model = self.profile.model
-        self.max_turns = max_turns
-        self.concurrency = min(STAGE4_DESIGN_MAX_CONCURRENCY, concurrency)
+        self._sessions = UnitSessionPool[str](
+            ctx,
+            node='stage4.design',
+            pool_name='Stage4DesignSessionPool',
+            max_turns=max_turns,
+            concurrency=concurrency,
+            concurrency_cap=STAGE4_DESIGN_MAX_CONCURRENCY,
+        )
+        self.ctx = self._sessions.ctx
+        self.profile = self._sessions.profile
+        self.model = self._sessions.model
+        self.max_turns = self._sessions.max_turns
+        self.concurrency = self._sessions.concurrency
         self._driver_factory = driver_factory or (
             lambda _purpose, _chapter: create_driver(
                 self.profile, role='executor'))
-        self._clients: dict[str, SessionAgentClient] = {}
+        self._clients = self._sessions.clients
         self._restored: dict[str, dict[str, Any]] = {}
         self._subjects: dict[str, tuple[str, str]] = {}
         self._known_units: dict[str, int | None] = {}
         self._prepared_units: set[str] = set()
         self._wired_purposes: set[str] = set()
         self._progress: dict[str, RequestProgress] = {}
-        self._probe: AgentProbe | None = None
-        self._driver_owners: dict[int, str] = {}
-        self._provider_session_owners: dict[
-            tuple[str, str], tuple[str, str],
-        ] = {}
-        self._isolation_failed_units: set[str] = set()
-        self._driver_setup_failed_units: set[str] = set()
-        self._closed = False
-        self._lock = threading.RLock()
+        self._isolation_failed_units = self._sessions.isolation_failed_keys
+        self._driver_setup_failed_units = (
+            self._sessions.driver_setup_failed_keys)
+        self._lock = self._sessions.lock
 
     @staticmethod
     def _unit(purpose: str, chapter: object) -> tuple[str, int | None]:
@@ -1427,92 +1340,35 @@ class Stage4DesignSessionPool:
     @property
     def turns_used(self) -> int:
         with self._lock:
-            live = sum(client.turns_used for client in self._clients.values())
-            restored = sum(
-                int(record['accepted_turn_index'])
-                for purpose, record in self._restored.items()
-                if purpose not in self._clients
-                and isinstance(record.get('accepted_turn_index'), int)
-                and not isinstance(record.get('accepted_turn_index'), bool)
-            )
-        return live + restored
+            restored = dict(self._restored)
+        return self._sessions.turns_used(restored)
 
     @property
     def driver_failed(self) -> bool:
         with self._lock:
             return (bool(self._driver_setup_failed_units)
-                    or any(client.driver_failed
-                           for client in self._clients.values()))
+                    or self._sessions.driver_failed)
 
     @property
     def isolation_failed(self) -> bool:
-        with self._lock:
-            return bool(self._isolation_failed_units)
+        return self._sessions.isolation_failed
 
     @property
     def session_count(self) -> int:
-        with self._lock:
-            return len(self._clients)
+        return self._sessions.session_count
 
     def _new_client(
         self, purpose: str, chapter: int | None,
     ) -> SessionAgentClient:
-        try:
-            driver = self._driver_factory(purpose, chapter)
-        except BaseException:
-            self._driver_setup_failed_units.add(purpose)
-            raise
-        driver_id = id(driver)
-        prior_owner = self._driver_owners.get(driver_id)
-        if prior_owner is not None and prior_owner != purpose:
-            # 这是已有 unit 正在持有的同一对象，不能在这里 close 它。
-            self._isolation_failed_units.update((prior_owner, purpose))
-            raise ProvenanceRefused(
+        return self._sessions.new_client(
+            purpose,
+            driver_factory=lambda: self._driver_factory(purpose, chapter),
+            chapter=chapter,
+            label=purpose,
+            driver_reuse_message=lambda prior, current: (
                 'stage4.design driver factory 把同一对象同时给了 '
-                f'{prior_owner}/{purpose}；已在首个 model start 前拒绝')
-        self._driver_owners[driver_id] = purpose
-        try:
-            if self._probe is None:
-                probe = driver.probe()
-                if not probe.available:
-                    self._driver_setup_failed_units.add(purpose)
-                    raise ProvenanceRefused(
-                        f'{purpose}: executor driver 本地探针不可用：'
-                        f'{probe.detail or "unknown"}')
-                if (driver.driver != self.profile.driver
-                        or probe.driver != self.profile.driver
-                        or probe.provider != driver.provider):
-                    self._isolation_failed_units.add(purpose)
-                    raise ProvenanceRefused(
-                        f'{purpose}: driver/probe/profile 身份不闭合：'
-                        f'profile={self.profile.driver!r}, '
-                        f'driver={driver.driver!r}, '
-                        f'probe={probe.driver!r}/{probe.provider!r}')
-                self._probe = probe
-            elif (driver.driver != self._probe.driver
-                  or driver.provider != self._probe.provider):
-                self._isolation_failed_units.add(purpose)
-                raise ProvenanceRefused(
-                    f'{purpose}: driver factory 在同一 Stage4A pool 内漂移厂商身份')
-            return SessionAgentClient(
-                self.ctx,
-                self.profile,
-                driver,
-                chapter=chapter,
-                parent_run_id=self.ctx.run_id,
-                max_semantic_turns=self.max_turns,
-                preflight_probe=self._probe,
-            )
-        except BaseException:
-            if purpose not in self._isolation_failed_units:
-                self._driver_setup_failed_units.add(purpose)
-            if self._driver_owners.get(driver_id) == purpose:
-                self._driver_owners.pop(driver_id, None)
-            try:
-                driver.close()
-            except Exception:
-                pass
-            raise
+                f'{prior}/{current}；已在首个 model start 前拒绝'),
+        )
 
     def _rebuild_progress(self) -> None:
         chapters = sorted(
@@ -1554,7 +1410,7 @@ class Stage4DesignSessionPool:
         primary: BaseException | None = None
         cleanup_errors: list[BaseException] = []
         with self._lock:
-            if self._closed:
+            if self._sessions.closed:
                 raise ProvenanceRefused('stage4.design pool 已关闭')
             new_chapters = {
                 chapter for purpose, chapter in normalized
@@ -1587,11 +1443,10 @@ class Stage4DesignSessionPool:
                 # 只撤销本批刚造出的 client；上一批已 accepted 的 strategy
                 # 仍由 finish_all 以真实失败原因收口。
                 for purpose in reversed(created):
-                    client = self._clients.pop(purpose, None)
+                    client = self._sessions.detach_client(purpose)
                     self._prepared_units.discard(purpose)
                     if client is None:
                         continue
-                    self._driver_owners.pop(id(client.driver), None)
                     try:
                         client.close()
                     except BaseException as cleanup:
@@ -1616,30 +1471,12 @@ class Stage4DesignSessionPool:
                 raise ProvenanceRefused(f'{purpose}: 缺预建的私有 client')
             return client, self._known_units[purpose]
 
-    def _register_provider_owner(
-        self, purpose: str, client: SessionAgentClient,
-    ) -> None:
-        provider_session_id = client.observed_provider_session_id
-        if not isinstance(provider_session_id, str) or not provider_session_id:
-            return
-        key = (self.profile.driver, provider_session_id)
-        owner = (purpose, client.session_run_id)
-        with self._lock:
-            prior = self._provider_session_owners.get(key)
-            if prior is not None and prior != owner:
-                self._isolation_failed_units.update((prior[0], purpose))
-                raise ProvenanceRefused(
-                    f'stage4.design provider session {provider_session_id!r} '
-                    f'被 {prior[0]}/{purpose} 共享；拒绝伪造 unit 隔离')
-            self._provider_session_owners[key] = owner
-
     def ask_json(self, system: str, user: str, **kwargs: Any) -> Any:
-        model_cls = kwargs.pop('model_cls', None)
-        if (not isinstance(model_cls, type)
-                or not issubclass(model_cls, BaseModel)):
-            raise ProvenanceRefused(
-                'stage4.design 请求缺显式 Pydantic model_cls')
-        purpose = str(kwargs.get('purpose') or '')
+        model_cls, purpose = self._sessions.validate_json_request(
+            kwargs,
+            model_error='stage4.design 请求缺显式 Pydantic model_cls',
+            purpose_error='stage4.design 请求缺 purpose',
+        )
         if kwargs.get('recovery_policy') != \
                 stage4_runs.DESIGN_UNIT_RECOVERY_POLICY:
             raise ProvenanceRefused(
@@ -1670,34 +1507,18 @@ class Stage4DesignSessionPool:
                 kwargs['progress'] = expected_progress
             self._wired_purposes.add(purpose)
 
-        primary: BaseException | None = None
-        result: Any = None
-        try:
-            result = client.ask_json(
-                system, user, model_cls=model_cls, **kwargs)
-        except BaseException as exc:
-            primary = exc
-        isolation: BaseException | None = None
-        try:
-            self._register_provider_owner(purpose, client)
-        except BaseException as exc:
-            isolation = exc
-        if primary is not None and isolation is not None:
-            raise BaseExceptionGroup(
-                f'{purpose}: wire 与 provider 隔离检查同时失败',
-                [primary, isolation])
-        if isolation is not None:
-            raise isolation
-        if primary is not None:
-            raise primary
-        return result
-
-    @staticmethod
-    def _identity_sha256(value: Mapping[str, Any]) -> str:
-        return hashlib.sha256(json.dumps(
-            dict(value), ensure_ascii=False, sort_keys=True,
-            separators=(',', ':'), allow_nan=False,
-        ).encode('utf-8')).hexdigest()
+        return self._sessions.ask_json(
+            purpose,
+            client,
+            system,
+            user,
+            model_cls=model_cls,
+            kwargs=kwargs,
+            provider_reuse_message=lambda prior, _owner, provider_id: (
+                f'stage4.design provider session {provider_id!r} '
+                f'被 {prior[0]}/{purpose} 共享；拒绝伪造 unit 隔离'),
+            group_wire_and_isolation_failures=True,
+        )
 
     def accepted_checkpoint(self, purpose: str) -> dict[str, Any]:
         with self._lock:
@@ -1729,89 +1550,26 @@ class Stage4DesignSessionPool:
         if recovery_policy != stage4_runs.DESIGN_UNIT_RECOVERY_POLICY:
             raise ProvenanceRefused(
                 f'{purpose}: checkpoint recovery policy 漂移')
-        profile = record.get('profile')
         binding = record.get('accepted_request')
-        if (record.get('acceptance_protocol') != SESSION_PROTOCOL_VERSION
-                or profile != self.profile.model_dump(mode='json')
-                or not isinstance(binding, dict)):
+        if not isinstance(binding, Mapping):
             raise ProvenanceRefused(
-                f'{purpose}: checkpoint protocol/profile/request 漂移')
+                f'{purpose}: checkpoint 缺 accepted_request')
         chapter = binding.get('chapter')
         purpose, chapter = self._unit(purpose, chapter)
-        schema_sha = binding.get('schema_sha256')
-        if (not isinstance(schema_sha, str) or len(schema_sha) != 64
-                or any(char not in '0123456789abcdef' for char in schema_sha)):
-            raise ProvenanceRefused(
-                f'{purpose}: checkpoint 缺合法 response schema SHA-256')
-        expected = {
-            'node': self.ctx.node,
-            'chapter': chapter,
-            'purpose': purpose,
-            'system_sha256': hashlib.sha256(system.encode('utf-8')).hexdigest(),
-            'user_sha256': hashlib.sha256(user.encode('utf-8')).hexdigest(),
-            'schema_sha256': schema_sha,
-            'requested_model': self.profile.model,
-            'requested_effort': self.profile.reasoning_effort,
-            'requested_output_token_ceiling': max_tokens,
-            'protocol_version': SESSION_PROTOCOL_VERSION,
-        }
-        if binding != expected:
-            raise ProvenanceRefused(
-                f'{purpose}: checkpoint accepted_request 与当前 unit 请求漂移')
-        if record.get('subject_sha256') != self._identity_sha256(expected):
-            raise ProvenanceRefused(
-                f'{purpose}: checkpoint logical subject SHA-256 不闭合')
+        self._sessions.validate_checkpoint_acceptance(
+            chapter=chapter,
+            purpose=purpose,
+            record=record,
+            system=system,
+            user=user,
+            max_tokens=max_tokens,
+            recovery_policy=recovery_policy,
+        )
         provider_session_id = record.get('provider_session_id')
         logical_session_id = record.get('session_run_id')
-        if (not isinstance(provider_session_id, str) or not provider_session_id
-                or not isinstance(logical_session_id, str)
-                or not logical_session_id):
-            raise ProvenanceRefused(
-                f'{purpose}: checkpoint 缺 provider/logical session 身份')
-        turn_index = record.get('accepted_turn_index')
-        links = record.get('attempt_links')
-        if (not isinstance(turn_index, int) or isinstance(turn_index, bool)
-                or turn_index < 1 or turn_index > self.max_turns
-                or not isinstance(links, list) or len(links) != turn_index):
-            raise ProvenanceRefused(
-                f'{purpose}: checkpoint turn/attempt links 与当前预算不闭合')
-        linked: dict[str, dict[str, Any]] = {}
-        for link in links:
-            if not isinstance(link, dict):
-                raise ProvenanceRefused(
-                    f'{purpose}: checkpoint attempt link 不是对象')
-            attempt = link.get('attempt_id')
-            if not isinstance(attempt, str) or not attempt or attempt in linked:
-                raise ProvenanceRefused(
-                    f'{purpose}: checkpoint attempt links 不唯一')
-            identity = self.ctx.ledger.request_identity_for_attempt(attempt)
-            if dict(link) != identity:
-                raise ProvenanceRefused(
-                    f'{purpose}: checkpoint attempt={attempt} 与成本账漂移')
-            resolve_ledger_model_identity(self.profile, identity.get('model'))
-            linked[attempt] = identity
-        attempt_id = record.get('attempt_id')
-        identity = linked.get(str(attempt_id))
-        if identity is not None:
-            validate_checkpoint_model_identity(
-                self.profile,
-                checkpoint_model=record.get('model'),
-                actual_model=identity.get('model'),
-                actual_is_ledger=True,
-            )
-        if (identity is None
-                or record.get('request_fingerprint')
-                != identity.get('request_fingerprint')
-                or record.get('ledger_response_sha256')
-                != identity.get('response_sha256')):
-            raise ProvenanceRefused(
-                f'{purpose}: checkpoint accepted attempt 与成本账/profile 漂移')
-
-        key = (self.profile.driver, provider_session_id)
-        owner = (purpose, logical_session_id)
         normalized = copy.deepcopy(dict(record))
         with self._lock:
-            if self._closed:
+            if self._sessions.closed:
                 raise ProvenanceRefused('stage4.design pool 已关闭')
             if purpose in self._clients:
                 raise ProvenanceRefused(
@@ -1820,31 +1578,25 @@ class Stage4DesignSessionPool:
             if previous is not None and previous != normalized:
                 raise ProvenanceRefused(
                     f'{purpose}: 被恢复为两份不同 acceptance')
-            prior = self._provider_session_owners.get(key)
-            if prior is not None and prior != owner:
-                self._isolation_failed_units.update((prior[0], purpose))
-                # 两条历史 acceptance 都是真实发生过的付费事实。即便共享
-                # provider id 使本次恢复关闭式失败，也要保留第二条记录，
-                # 让 finish_all 能把两条开放 logical session 都准确收成
-                # session_isolation，而不是只审计先到的一条。
-                self._known_units[purpose] = chapter
-                self._prepared_units.add(purpose)
-                self._restored[purpose] = normalized
-                self._subjects[purpose] = (system, user)
-                self._rebuild_progress()
-                raise ProvenanceRefused(
-                    f'stage4.design provider session {provider_session_id!r} '
-                    f'被 {prior[0]}/{purpose} 的 checkpoint 共享')
             existing_chapter = self._known_units.get(purpose, chapter)
             if purpose in self._known_units and existing_chapter != chapter:
                 raise ProvenanceRefused(
                     f'{purpose}: checkpoint chapter 与既有 unit 漂移')
-            self._provider_session_owners[key] = owner
             self._known_units[purpose] = chapter
             self._prepared_units.add(purpose)
             self._restored[purpose] = normalized
             self._subjects[purpose] = (system, user)
             self._rebuild_progress()
+        # 两条历史 acceptance 都是真实发生过的付费事实。即便共享 provider
+        # id 使恢复关闭式失败，也先保留第二条记录，供 finish_all 补齐 ended。
+        self._sessions.register_provider_owner(
+            purpose,
+            logical_session_id=logical_session_id,
+            provider_session_id=provider_session_id,
+            provider_reuse_message=lambda prior, _owner, provider_id: (
+                f'stage4.design provider session {provider_id!r} '
+                f'被 {prior[0]}/{purpose} 的 checkpoint 共享'),
+        )
 
     def accepted_attempt(self, purpose: str) -> str | None:
         with self._lock:
@@ -1907,70 +1659,44 @@ class Stage4DesignSessionPool:
         if delivered and set(purpose for purpose, _chapter in units) != accepted:
             errors.append(ProvenanceRefused(
                 'stage4.design 正式交付时 N+1 unit acceptance 未闭合'))
-        for purpose, _chapter in units:
-            client = clients.get(purpose)
-            record = restored.get(purpose)
-            try:
-                if delivered and purpose in accepted:
-                    state = ('ok', 'delivered', None)
-                elif (purpose in isolation_failed
-                      or (client is not None
-                          and client.provider_session_reused)):
-                    state = ('failed', 'unknown', 'session_isolation')
-                elif client is not None and client.driver_failed:
-                    state = ('failed', 'unknown', 'agent_driver')
-                elif purpose in driver_setup_failed:
-                    state = ('failed', 'unknown', 'agent_driver')
-                elif purpose in accepted:
-                    # 兄弟 unit/聚合任一失败时，已经付费并通过本 unit 闸的
-                    # 候选仍是可恢复进度，不得写成 failed 或 delivered。
-                    state = ('ok', 'blocked', 'peer_result_missing')
-                elif self._failure_contains(failure, LlmFailed):
-                    state = ('ok', 'failed', 'response_validation')
-                elif self._failure_contains(failure, GateBlocked):
-                    state = ('ok', 'blocked', 'artifact_validation')
-                elif self._failure_contains(failure, ProvenanceRefused):
-                    state = ('ok', 'unknown', 'artifact_verification')
-                else:
-                    state = ('ok', 'unknown', 'node_executor')
-                process_state, delivery_state, error_kind = state
-                if client is not None:
-                    client.finish(
-                        process_state=process_state,
-                        delivery_state=delivery_state,
-                        error_kind=error_kind,
-                    )
-                elif record is not None:
-                    agent_session_audit.finish_restored_session(
-                        self.ctx.novel_dir.parent,
-                        record,
-                        process_state=process_state,
-                        delivery_state=delivery_state,
-                        error_kind=error_kind,
-                        end_code_version=prov.code_version(),
-                        only_if_open=True,
-                    )
-            except BaseException as exc:
-                errors.append(exc)
-        if errors:
-            raise BaseExceptionGroup(
-                'stage4.design 逐 unit ended 审计写入失败', errors)
+
+        def state_for(
+            purpose: str,
+            client: SessionAgentClient | None,
+            _record: Mapping[str, Any] | None,
+        ) -> tuple[str, str, str | None]:
+            if delivered and purpose in accepted:
+                return 'ok', 'delivered', None
+            if (purpose in isolation_failed
+                    or (client is not None
+                        and client.provider_session_reused)):
+                return 'failed', 'unknown', 'session_isolation'
+            if client is not None and client.driver_failed:
+                return 'failed', 'unknown', 'agent_driver'
+            if purpose in driver_setup_failed:
+                return 'failed', 'unknown', 'agent_driver'
+            if purpose in accepted:
+                # 兄弟 unit/聚合任一失败时，已经付费并通过本 unit 闸的
+                # 候选仍是可恢复进度，不得写成 failed 或 delivered。
+                return 'ok', 'blocked', 'peer_result_missing'
+            if self._failure_contains(failure, LlmFailed):
+                return 'ok', 'failed', 'response_validation'
+            if self._failure_contains(failure, GateBlocked):
+                return 'ok', 'blocked', 'artifact_validation'
+            if self._failure_contains(failure, ProvenanceRefused):
+                return 'ok', 'unknown', 'artifact_verification'
+            return 'ok', 'unknown', 'node_executor'
+
+        self._sessions.finish_all(
+            [purpose for purpose, _chapter in units],
+            restored_records=restored,
+            state_for=state_for,
+            label='stage4.design 逐 unit ended 审计写入失败',
+            initial_errors=errors,
+        )
 
     def close(self) -> None:
-        with self._lock:
-            if self._closed:
-                return
-            clients = tuple(self._clients.values())
-            self._closed = True
-        errors: list[BaseException] = []
-        for client in clients:
-            try:
-                client.close()
-            except BaseException as exc:
-                errors.append(exc)
-        if errors:
-            raise BaseExceptionGroup(
-                'stage4.design 逐 unit driver/cwd 关闭失败', errors)
+        self._sessions.close(label='stage4.design 逐 unit')
 
 
 class Stage4DesignAgent(NodeExecutorAgent[BlindCandidate]):
@@ -2137,70 +1863,43 @@ class Stage4PlanSessionPool:
         max_turns: int = 4,
         concurrency: int = STAGE4_PLAN_MAX_CONCURRENCY,
     ) -> None:
-        if ctx.node != 'stage4.plan':
-            raise ValueError(
-                f'Stage4PlanSessionPool 只接受 stage4.plan，实得 {ctx.node!r}')
-        if ctx.executor_profile is None:
-            raise ValueError('stage4.plan executor 缺 resolved profile')
-        if (not isinstance(max_turns, int) or isinstance(max_turns, bool)
-                or not 1 <= max_turns <= 4):
-            raise ValueError('Stage4PlanSessionPool.max_turns 必须在 1..4')
-        if (not isinstance(concurrency, int) or isinstance(concurrency, bool)
-                or concurrency < 1):
-            raise ValueError('Stage4PlanSessionPool.concurrency 必须 >= 1')
-        self.ctx = ctx
-        self.profile: AgentProfile = ctx.executor_profile
-        self.model = self.profile.model
-        self.max_turns = max_turns
-        self.concurrency = min(STAGE4_PLAN_MAX_CONCURRENCY, concurrency)
+        self._sessions = UnitSessionPool[int](
+            ctx,
+            node='stage4.plan',
+            pool_name='Stage4PlanSessionPool',
+            max_turns=max_turns,
+            concurrency=concurrency,
+            concurrency_cap=STAGE4_PLAN_MAX_CONCURRENCY,
+            max_turns_cap=4,
+        )
+        self.ctx = self._sessions.ctx
+        self.profile = self._sessions.profile
+        self.model = self._sessions.model
+        self.max_turns = self._sessions.max_turns
+        self.concurrency = self._sessions.concurrency
         self._driver_factory = driver_factory or (
             lambda _purpose, _chapter: create_driver(
                 self.profile, role='executor'))
-        self._clients: dict[int, SessionAgentClient] = {}
-        # factory 返回的是 provider session 的所有者，不是可跨章复用的无状态
-        # transport。用对象身份守住最早的共享破口；provider_session_id 的跨对象
-        # 碰撞仍由 agent_session_audit 在首轮真实响应处关闭式拒绝。
-        self._driver_owners: dict[int, int] = {}
-        self._probe: AgentProbe | None = None
+        self._clients = self._sessions.clients
+        self._failed_chapters = self._sessions.isolation_failed_keys
         self._progress: dict[int, RequestProgress] = {}
-        self._closed = False
-        self._lock = threading.RLock()
+        self._lock = self._sessions.lock
 
     def _client(self, chapter: int) -> SessionAgentClient:
         with self._lock:
             client = self._clients.get(chapter)
             if client is not None:
                 return client
-            driver = self._driver_factory(
-                stage4_runs.plan_chapter_purpose(chapter), chapter)
-            owner = self._driver_owners.get(id(driver))
-            if owner is not None and owner != chapter:
-                raise ProvenanceRefused(
+            client = self._sessions.new_client(
+                chapter,
+                driver_factory=lambda: self._driver_factory(
+                    stage4_runs.plan_chapter_purpose(chapter), chapter),
+                chapter=chapter,
+                label=stage4_runs.plan_chapter_purpose(chapter),
+                driver_reuse_message=lambda prior, current: (
                     'stage4.plan 章级池不接受跨章共享同一 driver/session：'
-                    f'ch{owner} 与 ch{chapter}')
-            self._driver_owners[id(driver)] = chapter
-            if self._probe is None:
-                probe = driver.probe()
-                if not probe.available:
-                    raise ProvenanceRefused(
-                        f'{stage4_runs.plan_chapter_purpose(chapter)}: '
-                        'executor driver 本地探针不可用：'
-                        f'{probe.detail or "unknown"}')
-                if (driver.driver != self.profile.driver
-                        or probe.driver != self.profile.driver
-                        or probe.provider != driver.provider):
-                    raise ProvenanceRefused(
-                        'stage4.plan 章 session driver/probe/profile 身份不闭合')
-                self._probe = probe
-            elif (driver.driver != self._probe.driver
-                  or driver.provider != self._probe.provider):
-                raise ProvenanceRefused(
-                    'stage4.plan 章 session 在同一 pool 内漂移厂商身份')
-            client = SessionAgentClient(
-                self.ctx, self.profile, driver, chapter=chapter,
-                parent_run_id=self.ctx.run_id,
-                max_semantic_turns=self.max_turns,
-                preflight_probe=self._probe)
+                    f'ch{prior} 与 ch{current}'),
+            )
             self._clients[chapter] = client
             return client
 
@@ -2221,8 +1920,30 @@ class Stage4PlanSessionPool:
             chapter: RequestProgress(chapter=chapter, index=index, total=total)
             for index, chapter in enumerate(normalized, 1)
         }
-        for chapter in normalized:
-            self._client(chapter)
+        created: list[int] = []
+        try:
+            for chapter in normalized:
+                with self._lock:
+                    existed = chapter in self._clients
+                self._client(chapter)
+                if not existed:
+                    created.append(chapter)
+        except BaseException as primary:
+            cleanup_errors: list[BaseException] = []
+            for chapter in reversed(created):
+                client = self._sessions.detach_client(chapter)
+                if client is None:
+                    continue
+                try:
+                    client.close()
+                except BaseException as cleanup:
+                    cleanup_errors.append(cleanup)
+            if cleanup_errors:
+                raise BaseExceptionGroup(
+                    'stage4.plan 预建 session 与回收同时失败',
+                    [primary, *cleanup_errors],
+                )
+            raise
 
     def restore_chapter(
             self, chapter: int, request: Any, *,
@@ -2242,6 +1963,15 @@ class Stage4PlanSessionPool:
             recovery_policy=stage4_runs.plan_chapter_run_spec(
                 chapter).recovery_policy,
         )
+        self._sessions.register_provider_owner(
+            chapter,
+            logical_session_id=restored.acceptance.get('session_run_id'),
+            provider_session_id=restored.acceptance.get('provider_session_id'),
+            provider_reuse_message=lambda prior, _owner, provider_id: (
+                f'stage4.plan provider session {provider_id!r} 已属于 '
+                f'ch{prior[0]}/logical={prior[1]!r}；拒绝跨章或 crash '
+                '恢复偷接旧 session'),
+        )
         return restored
 
     def ask_chapter(
@@ -2256,16 +1986,36 @@ class Stage4PlanSessionPool:
                 f'{stage4_runs.plan_chapter_purpose(chapter)}: '
                 '章 session 必须先经 prepare_chapters 建立批次进度')
         client = self._client(chapter)
-        return client.ask_json(
-            request.system, request.user,
-            model_cls=ChapterBindingResponse,
-            purpose=stage4_runs.plan_chapter_purpose(chapter),
-            max_tokens=request.max_tokens,
-            validator=validator,
-            retain_validator_rejection=True,
-            progress=progress,
-            recovery_policy=stage4_runs.plan_chapter_run_spec(
+        kwargs: dict[str, Any] = {
+            'model_cls': ChapterBindingResponse,
+            'purpose': stage4_runs.plan_chapter_purpose(chapter),
+            'max_tokens': request.max_tokens,
+            'validator': validator,
+            'retain_validator_rejection': True,
+            'progress': progress,
+            'recovery_policy': stage4_runs.plan_chapter_run_spec(
                 chapter).recovery_policy,
+        }
+        model_cls, purpose = self._sessions.validate_json_request(
+            kwargs,
+            model_error=(
+                'stage4.plan 请求的 model_cls 必须精确为 '
+                'ChapterBindingResponse'),
+            purpose_error='stage4.plan 请求缺逐章 purpose',
+            expected_model_cls=ChapterBindingResponse,
+            exact_model_cls=True,
+        )
+        return self._sessions.ask_json(
+            chapter,
+            client,
+            request.system,
+            request.user,
+            model_cls=model_cls,
+            kwargs=kwargs,
+            provider_reuse_message=lambda prior, _owner, provider_id: (
+                f'stage4.plan provider session {provider_id!r} 已属于 '
+                f'ch{prior[0]}/logical={prior[1]!r}；拒绝 ch{chapter} '
+                '跨章共享或 crash 恢复偷接旧 session'),
         )
 
     def write_chapter_checkpoint(
@@ -2319,14 +2069,11 @@ class Stage4PlanSessionPool:
 
     @property
     def turns_used(self) -> int:
-        with self._lock:
-            return sum(client.turns_used for client in self._clients.values())
+        return self._sessions.turns_used()
 
     @property
     def driver_failed(self) -> bool:
-        with self._lock:
-            return any(client.driver_failed
-                       for client in self._clients.values())
+        return self._sessions.driver_failed
 
     def finish(self, *, process_state: str, delivery_state: str,
                error_kind: str | None = None) -> None:
@@ -2338,18 +2085,31 @@ class Stage4PlanSessionPool:
     def finish_all(self, *, process_state: str, delivery_state: str,
                    error_kind: str | None = None) -> None:
         with self._lock:
-            clients = list(self._clients.values())
-        for client in clients:
-            client.finish(process_state=process_state,
-                          delivery_state=delivery_state,
-                          error_kind=error_kind)
+            chapters = list(self._clients)
+            isolation_failed = set(self._failed_chapters)
+
+        def state_for(
+            chapter: int,
+            client: SessionAgentClient | None,
+            _record: Mapping[str, Any] | None,
+        ) -> tuple[str, str, str | None]:
+            if (chapter in isolation_failed
+                    or (client is not None
+                        and client.provider_session_reused)):
+                return 'failed', 'unknown', 'session_isolation'
+            if client is not None and client.driver_failed:
+                return 'failed', 'unknown', 'agent_driver'
+            return process_state, delivery_state, error_kind
+
+        self._sessions.finish_all(
+            chapters,
+            restored_records={},
+            state_for=state_for,
+            label='stage4.plan 逐章 ended 审计写入失败',
+        )
 
     def close(self) -> None:
-        with self._lock:
-            clients = list(self._clients.values())
-            self._closed = True
-        for client in clients:
-            client.close()
+        self._sessions.close(label='stage4.plan 逐章')
 
 
 
@@ -2378,40 +2138,31 @@ class Stage5SessionPool:
         max_turns: int = 4,
         concurrency: int = MAX_CONCURRENCY,
     ) -> None:
-        if ctx.node != 'stage5.write':
-            raise ValueError(
-                f'Stage5SessionPool 只接受 stage5.write，实得 {ctx.node!r}')
-        if ctx.executor_profile is None:
-            raise ValueError('stage5.write executor 缺 resolved profile')
-        if (not isinstance(max_turns, int) or isinstance(max_turns, bool)
-                or max_turns < 1):
-            raise ValueError('Stage5SessionPool.max_turns 必须 >= 1')
-        if (not isinstance(concurrency, int) or isinstance(concurrency, bool)
-                or concurrency < 1):
-            raise ValueError('Stage5SessionPool.concurrency 必须 >= 1')
-        self.ctx = ctx
-        self.profile: AgentProfile = ctx.executor_profile
-        self.model = self.profile.model
-        self.max_turns = max_turns
-        self.concurrency = min(MAX_CONCURRENCY, concurrency)
+        self._sessions = UnitSessionPool[int](
+            ctx,
+            node='stage5.write',
+            pool_name='Stage5SessionPool',
+            max_turns=max_turns,
+            concurrency=concurrency,
+            concurrency_cap=MAX_CONCURRENCY,
+        )
+        self.ctx = self._sessions.ctx
+        self.profile = self._sessions.profile
+        self.model = self._sessions.model
+        self.max_turns = self._sessions.max_turns
+        self.concurrency = self._sessions.concurrency
         self._driver_factory = driver_factory or (
             lambda _chapter: create_driver(self.profile, role='executor'))
-        self._clients: dict[int, SessionAgentClient] = {}
+        self._clients = self._sessions.clients
         self._subjects: dict[int, tuple[str, str, int]] = {}
         self._restored: dict[int, dict[str, Any]] = {}
         self._prepared_chapters: tuple[int, ...] | None = None
         self._checkpoint_chapters: set[int] = set()
-        self._probe: AgentProbe | None = None
-        self._driver_owners: dict[int, int] = {}
-        # value 同时带 chapter 与 logical session；同章 crash 恢复也不能偷偷
-        # 重新接回旧 provider id。
-        self._provider_session_owners: dict[
-            tuple[str, str], tuple[int, str],
-        ] = {}
-        self._failed_chapters: set[int] = set()
+        self._failed_chapters = self._sessions.isolation_failed_keys
+        self._driver_setup_failed_chapters = (
+            self._sessions.driver_setup_failed_keys)
         self._terminal: dict[int, tuple[str, str, str | None]] = {}
-        self._closed = False
-        self._lock = threading.RLock()
+        self._lock = self._sessions.lock
 
     @staticmethod
     def _chapter(chapter: object) -> int:
@@ -2441,84 +2192,35 @@ class Stage5SessionPool:
     def turns_used(self) -> int:
         """返回本 run 各章 logical request 的累计 turns；恢复轮次不重置。"""
         with self._lock:
-            chapters = set(self._restored) | set(self._clients)
-            total = 0
-            for chapter in chapters:
-                client = self._clients.get(chapter)
-                if client is not None:
-                    total += client.turns_used
-                    continue
-                turn = self._restored[chapter].get('accepted_turn_index')
-                if isinstance(turn, int) and not isinstance(turn, bool):
-                    total += turn
-            return total
+            restored = dict(self._restored)
+        return self._sessions.turns_used(restored)
 
     @property
     def driver_failed(self) -> bool:
-        with self._lock:
-            return any(client.driver_failed for client in self._clients.values())
+        return self._sessions.driver_failed
 
     @property
     def isolation_failed(self) -> bool:
-        with self._lock:
-            return bool(self._failed_chapters)
+        return self._sessions.isolation_failed
 
     @property
     def session_count(self) -> int:
-        with self._lock:
-            return len(self._clients)
+        return self._sessions.session_count
 
     def _new_client(
         self, chapter: int, *, probe_driver: bool = True,
     ) -> SessionAgentClient:
         """构造一章独占的 client；调用方必须持 ``_lock``。"""
-        driver = self._driver_factory(chapter)
-        driver_id = id(driver)
-        prior = self._driver_owners.get(driver_id)
-        if prior is not None and prior != chapter:
-            self._failed_chapters.update((prior, chapter))
-            raise ProvenanceRefused(
-                f'stage5.write driver factory 把同一对象同时给了第 '
-                f'{prior}/{chapter} 章；拒绝跨章伪隔离')
-        self._driver_owners[driver_id] = chapter
-        try:
-            if not probe_driver:
-                if driver.driver != self.profile.driver:
-                    self._failed_chapters.add(chapter)
-                    raise ProvenanceRefused(
-                        f'Stage5 第 {chapter} 章恢复用 driver 与 profile 漂移')
-            elif self._probe is None:
-                probe = driver.probe()
-                if (driver.driver != self.profile.driver
-                        or probe.driver != self.profile.driver
-                        or probe.provider != driver.provider
-                        or not probe.available):
-                    self._failed_chapters.add(chapter)
-                    raise ProvenanceRefused(
-                        f'Stage5 第 {chapter} 章 driver/probe/profile 身份或'
-                        f'可用性不闭合：profile={self.profile.driver!r}, '
-                        f'driver={driver.driver!r}, '
-                        f'probe={probe.driver!r}/{probe.provider!r}/'
-                        f'{probe.available!r}')
-                self._probe = probe
-            elif (driver.driver != self._probe.driver
-                  or driver.provider != self._probe.provider):
-                self._failed_chapters.add(chapter)
-                raise ProvenanceRefused(
-                    f'Stage5 第 {chapter} 章 driver factory 在同批内漂移厂商身份')
-            return SessionAgentClient(
-                self.ctx,
-                self.profile,
-                driver,
-                chapter=chapter,
-                parent_run_id=self.ctx.run_id,
-                max_semantic_turns=self.max_turns,
-                preflight_probe=self._probe,
-            )
-        except Exception:
-            self._driver_owners.pop(driver_id, None)
-            driver.close()
-            raise
+        return self._sessions.new_client(
+            chapter,
+            driver_factory=lambda: self._driver_factory(chapter),
+            chapter=chapter,
+            label=f'Stage5 第 {chapter} 章',
+            probe_driver=probe_driver,
+            driver_reuse_message=lambda prior, current: (
+                'stage5.write driver factory 把同一对象同时给了第 '
+                f'{prior}/{current} 章；拒绝跨章伪隔离'),
+        )
 
     @staticmethod
     def _checkpoint_may_exist(ctx: RunContext, chapter: int) -> bool:
@@ -2534,7 +2236,7 @@ class Stage5SessionPool:
             raise ProvenanceRefused(
                 f'stage5.write 本批章号重复：{normalized!r}')
         with self._lock:
-            if self._closed:
+            if self._sessions.closed:
                 raise ProvenanceRefused('stage5.write session pool 已关闭')
             if self._prepared_chapters is not None:
                 if self._prepared_chapters != normalized:
@@ -2549,8 +2251,11 @@ class Stage5SessionPool:
                         continue
                     self._clients[chapter] = self._new_client(chapter)
             except Exception:
-                clients = tuple(self._clients.values())
-                self._clients.clear()
+                clients: list[SessionAgentClient] = []
+                for chapter in tuple(self._clients):
+                    client = self._sessions.detach_client(chapter)
+                    if client is not None:
+                        clients.append(client)
                 self._prepared_chapters = None
                 self._checkpoint_chapters.clear()
                 for client in clients:
@@ -2592,26 +2297,25 @@ class Stage5SessionPool:
         logical_session_id: str,
         provider_session_id: object,
     ) -> None:
-        if not isinstance(provider_session_id, str) or not provider_session_id:
-            return
-        key = (self.profile.driver, provider_session_id)
-        owner = (chapter, logical_session_id)
-        with self._lock:
-            prior = self._provider_session_owners.get(key)
-            if prior is not None and prior != owner:
-                self._failed_chapters.update((prior[0], chapter))
-                raise ProvenanceRefused(
-                    f'Stage5 provider session {provider_session_id!r} 同时属于 '
-                    f'第 {prior[0]}/{chapter} 章或两个 logical sessions；'
-                    '拒绝跨章共享/恢复时偷接旧 session')
-            self._provider_session_owners[key] = owner
+        self._sessions.register_provider_owner(
+            chapter,
+            logical_session_id=logical_session_id,
+            provider_session_id=provider_session_id,
+            provider_reuse_message=lambda prior, _owner, provider_id: (
+                f'Stage5 provider session {provider_id!r} 同时属于 '
+                f'第 {prior[0]}/{chapter} 章或两个 logical sessions；'
+                '拒绝跨章共享/恢复时偷接旧 session'),
+        )
 
     def ask_json(self, system: str, user: str, **kwargs: Any) -> Any:
-        model_cls = kwargs.pop('model_cls', None)
-        if model_cls is not ChapterResponse:
-            raise ProvenanceRefused(
-                'stage5.write 请求的 model_cls 必须精确为 ChapterResponse')
-        purpose = str(kwargs.get('purpose') or '')
+        model_cls, purpose = self._sessions.validate_json_request(
+            kwargs,
+            model_error=(
+                'stage5.write 请求的 model_cls 必须精确为 ChapterResponse'),
+            purpose_error='stage5.write 请求缺逐章 purpose',
+            expected_model_cls=ChapterResponse,
+            exact_model_cls=True,
+        )
         chapter = self._chapter_of_purpose(purpose)
         progress = kwargs.get('progress')
         if not isinstance(progress, RequestProgress) or progress.chapter != chapter:
@@ -2629,18 +2333,18 @@ class Stage5SessionPool:
                 raise ProvenanceRefused(
                     f'{purpose}: 同一章 session 的原始 system/user 漂移')
             self._subjects[chapter] = current
-        try:
-            result = client.ask_json(
-                system, user, model_cls=model_cls, **kwargs)
-        except Exception:
-            if client.driver_failed:
-                with self._lock:
-                    self._failed_chapters.add(chapter)
-            raise
-        finally:
-            self._register_provider_owner(
-                chapter, client.session_run_id,
-                client.observed_provider_session_id)
+        result = self._sessions.ask_json(
+            chapter,
+            client,
+            system,
+            user,
+            model_cls=model_cls,
+            kwargs=kwargs,
+            provider_reuse_message=lambda prior, _owner, provider_id: (
+                f'Stage5 provider session {provider_id!r} 同时属于 '
+                f'第 {prior[0]}/{chapter} 章或两个 logical sessions；'
+                '拒绝跨章共享/恢复时偷接旧 session'),
+        )
         with self._lock:
             # 新响应已经铸成当前 client acceptance；只有此时才能退休旧索引。
             self._restored.pop(chapter, None)
@@ -2678,26 +2382,17 @@ class Stage5SessionPool:
                 or recovery_policy != stage5_runs.RECOVERY_POLICY):
             raise ProvenanceRefused(
                 f'{purpose}: checkpoint 恢复缺当前 subject/ceiling/policy')
-        binding = record.get('accepted_request')
-        if (record.get('acceptance_protocol') != SESSION_PROTOCOL_VERSION
-                or record.get('profile') != self.profile.model_dump(mode='json')
-                or not isinstance(binding, Mapping)
-                or binding.get('node') != self.ctx.node
-                or binding.get('chapter') != chapter
-                or binding.get('purpose') != purpose
-                or binding.get('requested_output_token_ceiling') != max_tokens
-                or binding.get('protocol_version') != SESSION_PROTOCOL_VERSION):
-            raise ProvenanceRefused(
-                f'{purpose}: checkpoint 路由/profile/request binding 漂移')
+        self._sessions.validate_checkpoint_acceptance(
+            chapter=chapter,
+            purpose=purpose,
+            record=record,
+            system=system,
+            user=user,
+            max_tokens=max_tokens,
+            recovery_policy=recovery_policy,
+        )
         provider_id = record.get('provider_session_id')
         logical_id = record.get('session_run_id')
-        turn = record.get('accepted_turn_index')
-        if (not isinstance(provider_id, str) or not provider_id
-                or not isinstance(logical_id, str) or not logical_id
-                or not isinstance(turn, int) or isinstance(turn, bool)
-                or turn < 1 or turn > self.max_turns):
-            raise ProvenanceRefused(
-                f'{purpose}: checkpoint 缺 provider/logical session 或累计轮次身份')
         normalized = copy.deepcopy(dict(record))
         with self._lock:
             self._require_prepared_chapter(chapter)
@@ -2806,13 +2501,13 @@ class Stage5SessionPool:
                 queued = client.queue_restored_code_validation_feedback(
                     rows, purpose=purpose)
             except Exception:
-                self._clients.pop(chapter, None)
+                self._sessions.detach_client(chapter)
                 try:
                     client.close()
                 finally:
                     raise
             if not queued:
-                self._clients.pop(chapter, None)
+                self._sessions.detach_client(chapter)
                 client.close()
             return queued
 
@@ -2834,6 +2529,8 @@ class Stage5SessionPool:
         if outcome not in self._OUTCOMES:
             raise ValueError(f'Stage5 session outcome 未登记：{outcome!r}')
         client = self._clients.get(chapter)
+        if chapter in self._driver_setup_failed_chapters:
+            return 'failed', 'unknown', 'agent_driver'
         if chapter in self._failed_chapters:
             if client is not None and client.provider_session_reused:
                 return 'failed', 'unknown', 'session_isolation'
@@ -2876,35 +2573,24 @@ class Stage5SessionPool:
                         f'Stage5 第 {ordinal} 章 session 已以 {prior} 终态，'
                         f'不能改写为 {states}')
                 return
-            client = self._clients.get(ordinal)
             restored = self._restored.get(ordinal)
-            if restored is not None:
-                # clean checkpoint 的正式/INVALID/拒稿 delivery 已在 producer 中
-                # 完成；这里才用当前代码版本闭合旧 session。dirty checkpoint 已
-                # 由公共 queue 收口，``only_if_open`` 会复核 acceptance 后保留历史。
-                agent_session_audit.finish_restored_session(
-                    self.ctx.novel_dir.parent,
-                    restored,
-                    process_state=states[0],
-                    delivery_state=states[1],
-                    error_kind=states[2],
-                    delivery_attempts=delivery_attempts,
-                    same_run_recovered=same_run_recovered,
-                    first_failure_phase=first_failure_phase,
-                    first_failure_detail=first_failure_detail,
-                    end_code_version=prov.code_version(),
-                    only_if_open=True,
-                )
-            if client is not None:
-                client.finish(
-                    process_state=states[0],
-                    delivery_state=states[1],
-                    error_kind=states[2],
-                    delivery_attempts=delivery_attempts,
-                    same_run_recovered=same_run_recovered,
-                    first_failure_phase=first_failure_phase,
-                    first_failure_detail=first_failure_detail,
-                )
+            # clean checkpoint 的正式/INVALID/拒稿 delivery 已在 producer 中
+            # 完成；这里才用当前代码版本闭合旧 session。dirty checkpoint 已
+            # 由公共 queue 收口，``only_if_open`` 会复核 acceptance 后保留历史。
+            restored_records = (
+                {ordinal: restored} if restored is not None else {})
+            self._sessions.finish_all(
+                [ordinal],
+                restored_records=restored_records,
+                state_for=lambda _key, _client, _record: states,
+                finish_kwargs_for=lambda _key: {
+                    'delivery_attempts': delivery_attempts,
+                    'same_run_recovered': same_run_recovered,
+                    'first_failure_phase': first_failure_phase,
+                    'first_failure_detail': first_failure_detail,
+                },
+                label=f'Stage5 第 {ordinal} 章 ended 审计写入失败',
+            )
             self._terminal[ordinal] = states
 
     def finish_all(self, *, failure: BaseException | None) -> None:
@@ -2930,20 +2616,7 @@ class Stage5SessionPool:
                 'stage5.write 逐章 ended 审计收口失败', errors)
 
     def close(self) -> None:
-        with self._lock:
-            if self._closed:
-                return
-            clients = tuple(self._clients.values())
-            self._closed = True
-        errors: list[BaseException] = []
-        for client in clients:
-            try:
-                client.close()
-            except BaseException as exc:
-                errors.append(exc)
-        if errors:
-            raise BaseExceptionGroup(
-                'stage5.write 逐章 driver/cwd 关闭失败', errors)
+        self._sessions.close(label='stage5.write 逐章')
 
 
 class Stage5WriteAgent(NodeExecutorAgent[CheckReport]):
@@ -3098,27 +2771,26 @@ class SemanticSessionPool:
         driver_factory: SemanticDriverFactory | None = None,
         max_turns: int = 4,
     ) -> None:
-        if ctx.node != 'stage6.semantic':
-            raise ValueError(
-                f'SemanticSessionPool 只接受 stage6.semantic，实得 {ctx.node!r}')
-        if ctx.executor_profile is None:
-            raise ValueError('stage6.semantic executor 缺 resolved profile')
-        self.ctx = ctx
-        self.profile: AgentProfile = ctx.executor_profile
-        self.model = self.profile.model
-        self.max_turns = max_turns
+        self._sessions = UnitSessionPool[str](
+            ctx,
+            node='stage6.semantic',
+            pool_name='SemanticSessionPool',
+            max_turns=max_turns,
+            concurrency=len(self._ROLES),
+            concurrency_cap=len(self._ROLES),
+        )
+        self.ctx = self._sessions.ctx
+        self.profile = self._sessions.profile
+        self.model = self._sessions.model
+        self.max_turns = self._sessions.max_turns
         self._driver_factory = driver_factory or (
             lambda _role: create_driver(self.profile, role='executor'))
-        self._clients: dict[str, SessionAgentClient] = {}
+        self._clients = self._sessions.clients
         self._restored: dict[str, dict[str, Any]] = {}
         self._subjects: dict[str, tuple[str, str]] = {}
-        self._probe: AgentProbe | None = None
-        self._driver_owners: dict[int, str] = {}
-        self._provider_session_owners: dict[tuple[str, str], str] = {}
-        self._failed_roles: set[str] = set()
+        self._failed_roles = self._sessions.isolation_failed_keys
         self._prepared = False
-        self._closed = False
-        self._lock = threading.RLock()
+        self._lock = self._sessions.lock
 
     @staticmethod
     def _role_of_purpose(purpose: str) -> str:
@@ -3141,64 +2813,30 @@ class SemanticSessionPool:
 
     @property
     def turns_used(self) -> int:
-        with self._lock:
-            return sum(client.turns_used for client in self._clients.values())
+        return self._sessions.turns_used()
 
     @property
     def driver_failed(self) -> bool:
-        with self._lock:
-            return any(client.driver_failed for client in self._clients.values())
+        return self._sessions.driver_failed
 
     @property
     def isolation_failed(self) -> bool:
-        with self._lock:
-            return bool(self._failed_roles)
+        return self._sessions.isolation_failed
 
     @property
     def session_count(self) -> int:
-        with self._lock:
-            return len(self._clients)
+        return self._sessions.session_count
 
     def _new_client(self, role: str) -> SessionAgentClient:
-        driver = self._driver_factory(role)
-        driver_id = id(driver)
-        prior = self._driver_owners.get(driver_id)
-        if prior is not None and prior != role:
-            self._failed_roles.update((prior, role))
-            raise ProvenanceRefused(
-                f'stage6.semantic driver factory 把同一对象同时给了 '
-                f'judge {prior}/{role}；已在首个 model start 前拒绝')
-        self._driver_owners[driver_id] = role
-        try:
-            if self._probe is None:
-                probe = driver.probe()
-                if (driver.driver != self.profile.driver
-                        or probe.driver != self.profile.driver
-                        or probe.provider != driver.provider
-                        or not probe.available):
-                    raise ProvenanceRefused(
-                        f'judge {role}: driver/probe/profile 身份或可用性不闭合：'
-                        f'profile={self.profile.driver!r}, '
-                        f'driver={driver.driver!r}, '
-                        f'probe={probe.driver!r}/{probe.provider!r}/'
-                        f'{probe.available!r}')
-                self._probe = probe
-            elif (driver.driver != self._probe.driver
-                  or driver.provider != self._probe.provider):
-                raise ProvenanceRefused(
-                    f'judge {role}: driver factory 在同一双盲池内漂移了厂商身份')
-            return SessionAgentClient(
-                self.ctx,
-                self.profile,
-                driver,
-                parent_run_id=self.ctx.run_id,
-                max_semantic_turns=self.max_turns,
-                preflight_probe=self._probe,
-            )
-        except Exception:
-            self._driver_owners.pop(driver_id, None)
-            driver.close()
-            raise
+        return self._sessions.new_client(
+            role,
+            driver_factory=lambda: self._driver_factory(role),
+            chapter=None,
+            label=f'judge {role}',
+            driver_reuse_message=lambda prior, current: (
+                'stage6.semantic driver factory 把同一对象同时给了 '
+                f'judge {prior}/{current}；已在首个 model start 前拒绝'),
+        )
 
     def prepare_initial_sessions(self) -> None:
         """只为缺 checkpoint 的判官预建 client；完整恢复不碰 factory/probe。"""
@@ -3214,8 +2852,11 @@ class SemanticSessionPool:
                     self._clients[role] = self._new_client(role)
             except Exception:
                 # 预创建阶段尚未有 model start；仍要关掉已经创建的第一名判官。
-                clients = tuple(self._clients.values())
-                self._clients.clear()
+                clients: list[SessionAgentClient] = []
+                for role in tuple(self._clients):
+                    client = self._sessions.detach_client(role)
+                    if client is not None:
+                        clients.append(client)
                 for client in clients:
                     try:
                         client.close()
@@ -3237,27 +2878,25 @@ class SemanticSessionPool:
             return client
 
     def _register_provider_owner(
-        self, role: str, provider_session_id: object,
+        self, role: str, logical_session_id: str,
+        provider_session_id: object,
     ) -> None:
-        if not isinstance(provider_session_id, str) or not provider_session_id:
-            return
-        key = (self.profile.driver, provider_session_id)
-        with self._lock:
-            prior = self._provider_session_owners.get(key)
-            if prior is not None and prior != role:
-                self._failed_roles.update((prior, role))
-                raise ProvenanceRefused(
-                    f'stage6.semantic provider session {provider_session_id!r} '
-                    f'被 judge {prior}/{role} 共享；拒绝双盲伪隔离')
-            self._provider_session_owners[key] = role
+        self._sessions.register_provider_owner(
+            role,
+            logical_session_id=logical_session_id,
+            provider_session_id=provider_session_id,
+            provider_reuse_message=lambda prior, _owner, provider_id: (
+                f'stage6.semantic provider session {provider_id!r} 被 judge '
+                f'{prior[0]}/{role} 或两个 logical sessions 共享；'
+                '拒绝双盲伪隔离'),
+        )
 
     def ask_json(self, system: str, user: str, **kwargs: Any) -> Any:
-        model_cls = kwargs.pop('model_cls', None)
-        if (not isinstance(model_cls, type)
-                or not issubclass(model_cls, BaseModel)):
-            raise ProvenanceRefused(
-                'stage6.semantic 请求缺显式 Pydantic model_cls')
-        purpose = str(kwargs.get('purpose') or '')
+        model_cls, purpose = self._sessions.validate_json_request(
+            kwargs,
+            model_error='stage6.semantic 请求缺显式 Pydantic model_cls',
+            purpose_error='stage6.semantic 请求缺 purpose',
+        )
         role = self._role_of_purpose(purpose)
         recovery_policy = kwargs.get('recovery_policy')
         if recovery_policy != 'stage6-semantic-v1':
@@ -3271,17 +2910,18 @@ class SemanticSessionPool:
                 raise ProvenanceRefused(
                     f'{purpose}: 同一判官 session 的原始 system/user 漂移')
             self._subjects[role] = (system, user)
-        try:
-            return client.ask_json(
-                system, user, model_cls=model_cls, **kwargs)
-        except Exception:
-            if client.driver_failed:
-                with self._lock:
-                    self._failed_roles.add(role)
-            raise
-        finally:
-            self._register_provider_owner(
-                role, client.observed_provider_session_id)
+        return self._sessions.ask_json(
+            role,
+            client,
+            system,
+            user,
+            model_cls=model_cls,
+            kwargs=kwargs,
+            provider_reuse_message=lambda prior, _owner, provider_id: (
+                f'stage6.semantic provider session {provider_id!r} 被 judge '
+                f'{prior[0]}/{role} 或两个 logical sessions 共享；'
+                '拒绝双盲伪隔离'),
+        )
 
     def accepted_checkpoint(self, purpose: str) -> dict[str, Any]:
         role = self._role_of_purpose(purpose)
@@ -3311,71 +2951,17 @@ class SemanticSessionPool:
         if recovery_policy != 'stage6-semantic-v1':
             raise ProvenanceRefused(
                 f'{purpose}: checkpoint recovery policy 漂移')
-        profile = record.get('profile')
-        binding = record.get('accepted_request')
-        if (record.get('acceptance_protocol') != SESSION_PROTOCOL_VERSION
-                or profile != self.profile.model_dump(mode='json')
-                or not isinstance(binding, dict)):
-            raise ProvenanceRefused(
-                f'{purpose}: checkpoint profile/request binding 漂移')
-        schema_sha = binding.get('schema_sha256')
-        if (not isinstance(schema_sha, str) or len(schema_sha) != 64
-                or any(ch not in '0123456789abcdef' for ch in schema_sha)):
-            raise ProvenanceRefused(
-                f'{purpose}: checkpoint 缺合法 response schema SHA-256')
-        expected = {
-            'node': self.ctx.node,
-            'chapter': None,
-            'purpose': purpose,
-            'system_sha256': hashlib.sha256(system.encode('utf-8')).hexdigest(),
-            'user_sha256': hashlib.sha256(user.encode('utf-8')).hexdigest(),
-            'schema_sha256': schema_sha,
-            'requested_model': self.profile.model,
-            'requested_effort': self.profile.reasoning_effort,
-            'requested_output_token_ceiling': max_tokens,
-            'protocol_version': SESSION_PROTOCOL_VERSION,
-        }
-        # 完整 prompt/schema/subject/ledger 联结已由 stage6_runs.restore_checkpoint
-        # 在调用本桥之前重验；这里再守 pool 能独立知道的 exact request 面。
-        if binding != expected:
-            raise ProvenanceRefused(
-                f'{purpose}: checkpoint accepted_request 与当前判官请求漂移')
-        subject_sha256 = hashlib.sha256(json.dumps(
-            expected, ensure_ascii=False, sort_keys=True,
-            separators=(',', ':'), allow_nan=False,
-        ).encode('utf-8')).hexdigest()
-        if record.get('subject_sha256') != subject_sha256:
-            raise ProvenanceRefused(
-                f'{purpose}: checkpoint logical subject SHA-256 不闭合')
-        if (not isinstance(record.get('provider_session_id'), str)
-                or not record.get('provider_session_id')
-                or not isinstance(record.get('session_run_id'), str)
-                or not record.get('session_run_id')):
-            raise ProvenanceRefused(
-                f'{purpose}: checkpoint 缺 provider/logical session 身份')
-        prior_turns = record.get('accepted_turn_index')
-        prior_links = record.get('attempt_links')
-        if (not isinstance(prior_turns, int) or isinstance(prior_turns, bool)
-                or prior_turns < 1 or prior_turns > self.max_turns
-                or not isinstance(prior_links, list)
-                or len(prior_links) != prior_turns):
-            raise ProvenanceRefused(
-                f'{purpose}: checkpoint turn/attempt links 与当前预算不闭合')
-        attempt_id = str(record.get('attempt_id') or '')
-        identity = self.ctx.ledger.request_identity_for_attempt(attempt_id)
-        validate_checkpoint_model_identity(
-            self.profile,
-            checkpoint_model=record.get('model'),
-            actual_model=identity.get('model'),
-            actual_is_ledger=True,
+        self._sessions.validate_checkpoint_acceptance(
+            chapter=None,
+            purpose=purpose,
+            record=record,
+            system=system,
+            user=user,
+            max_tokens=max_tokens,
+            recovery_policy=recovery_policy,
         )
-        if (record.get('request_fingerprint') != identity.get('request_fingerprint')
-                or record.get('ledger_response_sha256')
-                != identity.get('response_sha256')):
-            raise ProvenanceRefused(
-                f'{purpose}: checkpoint accepted attempt 与成本账漂移')
         provider_session_id = record.get('provider_session_id')
-        self._register_provider_owner(role, provider_session_id)
+        logical_session_id = record.get('session_run_id')
         with self._lock:
             if role in self._clients:
                 raise ProvenanceRefused(
@@ -3387,6 +2973,10 @@ class SemanticSessionPool:
                     f'{purpose}: 同一 role 被恢复为两份不同 acceptance')
             self._restored[role] = normalized
             self._subjects[role] = (system, user)
+        # 先保留经公共守卫复核的历史事实；若 provider id 冲突，finish_all 仍能
+        # 给两条 logical session 写出明确的 session_isolation 终态。
+        self._register_provider_owner(
+            role, logical_session_id, provider_session_id)
 
     def accepted_attempt(self, purpose: str) -> str | None:
         role = self._role_of_purpose(purpose)
@@ -3412,7 +3002,7 @@ class SemanticSessionPool:
 
     def _finish_rows(
         self, *, delivered: bool, failure: BaseException | None,
-    ) -> tuple[Exception, ...]:
+    ) -> tuple[BaseException, ...]:
         with self._lock:
             clients = dict(self._clients)
             restored = copy.deepcopy(self._restored)
@@ -3421,86 +3011,58 @@ class SemanticSessionPool:
                 role for role, client in clients.items()
                 if client.accepted_attempt(self._purpose(role)) is not None
             } | set(restored)
-        errors: list[Exception] = []
-        for role in self._ROLES:
-            client = clients.get(role)
-            acceptance = restored.get(role)
-            try:
-                if delivered:
-                    state = ('ok', 'delivered', None)
-                elif (role in failed_roles
-                      or (client is not None and client.driver_failed)):
-                    state = (
-                        'failed', 'unknown',
-                        ('session_isolation' if role in failed_roles
-                         and (client is None
-                              or not client.driver_failed
-                              or client.provider_session_reused)
-                         else 'agent_driver'),
-                    )
-                elif len(accepted_roles) == 1 and role in accepted_roles:
-                    state = ('ok', 'blocked', 'peer_result_missing')
-                elif role not in accepted_roles:
-                    state = (
-                        'ok',
-                        ('failed' if isinstance(failure, LlmFailed)
-                         else 'unknown'),
-                        ('response_validation' if isinstance(failure, LlmFailed)
-                         else 'node_executor'),
-                    )
-                else:
-                    state = (
-                        'ok', 'unknown',
-                        ('artifact_verification'
-                         if isinstance(failure, ProvenanceRefused)
-                         else 'node_executor'),
-                    )
-                process_state, delivery_state, error_kind = state
-                if client is not None:
-                    client.finish(
-                        process_state=process_state,
-                        delivery_state=delivery_state,
-                        error_kind=error_kind,
-                    )
-                elif acceptance is not None:
-                    # 旧 run 可能已在单边失败时收成 blocked；公共桥先完整
-                    # 复验 acceptance/turn，再只为仍开放的 crash 尾窗补 ended。
-                    agent_session_audit.finish_restored_session(
-                        self.ctx.novel_dir.parent,
-                        acceptance,
-                        process_state=process_state,
-                        delivery_state=delivery_state,
-                        error_kind=error_kind,
-                        end_code_version=prov.code_version(),
-                        only_if_open=True,
-                    )
-            except Exception as exc:
-                errors.append(exc)
-        return tuple(errors)
+        def state_for(
+            role: str,
+            client: SessionAgentClient | None,
+            _record: Mapping[str, Any] | None,
+        ) -> tuple[str, str, str | None]:
+            if delivered:
+                return 'ok', 'delivered', None
+            if (role in failed_roles
+                    or (client is not None and client.driver_failed)):
+                return (
+                    'failed', 'unknown',
+                    ('session_isolation' if role in failed_roles
+                     and (client is None
+                          or not client.driver_failed
+                          or client.provider_session_reused)
+                     else 'agent_driver'),
+                )
+            if len(accepted_roles) == 1 and role in accepted_roles:
+                return 'ok', 'blocked', 'peer_result_missing'
+            if role not in accepted_roles:
+                return (
+                    'ok',
+                    ('failed' if isinstance(failure, LlmFailed)
+                     else 'unknown'),
+                    ('response_validation' if isinstance(failure, LlmFailed)
+                     else 'node_executor'),
+                )
+            return (
+                'ok', 'unknown',
+                ('artifact_verification'
+                 if isinstance(failure, ProvenanceRefused)
+                 else 'node_executor'),
+            )
+
+        # 旧 run 可能已在单边失败时收成 blocked；公共桥先完整复验
+        # acceptance/turn，再只为仍开放的 crash 尾窗补 ended。
+        return self._sessions.finish_rows(
+            self._ROLES,
+            restored_records=restored,
+            state_for=state_for,
+        )
 
     def finish_all(
         self, *, delivered: bool, failure: BaseException | None = None,
     ) -> None:
         errors = self._finish_rows(delivered=delivered, failure=failure)
         if errors:
-            raise ExceptionGroup(
+            raise BaseExceptionGroup(
                 'stage6.semantic 逐判官 ended 审计写入失败', list(errors))
 
     def close(self) -> None:
-        with self._lock:
-            if self._closed:
-                return
-            clients = tuple(self._clients.values())
-            self._closed = True
-        errors: list[Exception] = []
-        for client in clients:
-            try:
-                client.close()
-            except Exception as exc:
-                errors.append(exc)
-        if errors:
-            raise ExceptionGroup(
-                'stage6.semantic 逐判官 driver/cwd 关闭失败', errors)
+        self._sessions.close(label='stage6.semantic 逐判官')
 
 
 class Stage6SemanticAgent(NodeExecutorAgent[HookSemanticReview]):

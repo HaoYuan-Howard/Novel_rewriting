@@ -15,7 +15,7 @@ from typing import Any
 import pytest
 
 from contracts.schema.stage4 import ChapterBindingResponse
-from novel import prov, run_identity
+from novel import agent_session_audit, prov, run_identity
 from novel.errors import ProvenanceRefused
 from novel.llm import stage4_runs
 from novel.node_agents import Stage4PlanSessionPool
@@ -35,11 +35,20 @@ class _ChapterDriver:
     driver = 'codex'
     provider = 'openai'
 
-    def __init__(self, chapter: int, payloads: list[dict[str, Any]]) -> None:
+    def __init__(
+        self,
+        chapter: int,
+        payloads: list[dict[str, Any]],
+        *,
+        session_id: str | None = None,
+        close_failure: bool = False,
+    ) -> None:
         self.chapter = chapter
         self.payloads = list(payloads)
-        self.session_id = f'provider-plan-ch{chapter:04d}'
+        self.session_id = session_id or f'provider-plan-ch{chapter:04d}'
+        self.close_failure = close_failure
         self.calls = 0
+        self.close_calls = 0
         self.requests: list[Any] = []
 
     def probe(self):
@@ -73,7 +82,9 @@ class _ChapterDriver:
         return False
 
     def close(self) -> None:
-        return None
+        self.close_calls += 1
+        if self.close_failure:
+            raise RuntimeError(f'close ch{self.chapter} failed')
 
 
 def _chapter_request(chapter: int) -> stage4_runs.PlanChapterRequest:
@@ -172,6 +183,77 @@ def test_chapter_feedback_routes_to_its_own_session(tmp_path) -> None:
     assert client._pending_feedback is not None
     assert 'code_validation_failed' in client._pending_feedback
     pool.finish_all(process_state='ok', delivery_state='delivered')
+    pool.close()
+
+
+def test_provider_session_owner_binds_chapter_and_logical_session(tmp_path) -> None:
+    from novel.run import RunContext
+    from novel.llm.cache import CachePolicy
+    from novel.llm.ledger import CostLedger, ledger_path
+
+    book = tmp_path / 'book'
+    book.mkdir()
+    run_id = run_identity.new_run_id()
+    ctx = RunContext(
+        novel_dir=book, node='stage4.plan', paid=True,
+        code=prov.code_version(), cache=CachePolicy.default(),
+        ledger=CostLedger(path=ledger_path(tmp_path), run_id=run_id),
+        executor_profile=_profile(), run_id=run_id)
+    drivers = {
+        chapter: _ChapterDriver(
+            chapter,
+            [_resolution_payload(str(chapter) * 16)],
+            session_id='provider-plan-shared',
+        )
+        for chapter in (1, 2)
+    }
+    pool = _pool(ctx, drivers)
+    pool.prepare_chapters([1, 2])
+    for chapter in (1, 2):
+        stage4_runs.ensure_plan_chapter_run(ctx, _chapter_request(chapter))
+
+    pool.ask_chapter(1, _chapter_request(1))
+    with pytest.raises(ProvenanceRefused, match='provider session') as caught:
+        pool.ask_chapter(2, _chapter_request(2))
+
+    pool.finish_all(
+        process_state='ok', delivery_state='unknown',
+        error_kind='artifact_verification')
+    pool.close()
+    ended = [
+        event for event in agent_session_audit.read_events(tmp_path)
+        if event.kind == 'ended'
+    ]
+    assert len(ended) == 2
+    assert all(
+        (event.process_state, event.delivery_state, event.error_kind)
+        == ('failed', 'unknown', 'session_isolation')
+        for event in ended
+    )
+    assert '跨章' in str(caught.value)
+
+
+def test_close_visits_every_plan_client_before_raising(tmp_path) -> None:
+    from novel.run import RunContext
+    from novel.llm.cache import CachePolicy
+    from novel.llm.ledger import CostLedger
+
+    book = tmp_path / 'book'
+    book.mkdir()
+    ctx = RunContext(
+        novel_dir=book, node='stage4.plan', paid=True,
+        code=prov.code_version(), cache=CachePolicy.default(),
+        ledger=CostLedger(path=None), executor_profile=_profile())
+    drivers = {
+        1: _ChapterDriver(1, [], close_failure=True),
+        2: _ChapterDriver(2, []),
+    }
+    pool = _pool(ctx, drivers)
+    pool.prepare_chapters([1, 2])
+
+    with pytest.raises(ExceptionGroup, match='关闭'):
+        pool.close()
+    assert drivers[1].close_calls == drivers[2].close_calls == 1
     pool.close()
 
 

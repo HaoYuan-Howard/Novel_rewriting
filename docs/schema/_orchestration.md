@@ -386,16 +386,17 @@ secret/relation/world-rule UNVER；后者仍是 disclosure-ready 而不是 PASS�
 一次 Commander reviewer turn `exit_code=0` 但 fresh outcome=`stopped` 时，RunSupervisor 再读一次
 `operator next`：ready 交确定性 execution-token 主路；只有下一个状态仍是登记的 reviewer blocker 才
 继续审阅。普通 blocker 可精确续同一 provider session；Stage2 global 是显式例外，固定为“一次
-Executor + 最多三次 Commander”，且每次 Commander 都开新的 logical/provider session。首轮可在
+Executor + 最多四席 Commander”，且每席都开新的 logical/provider session。第一席可在
 Blueprint 逐章生成期间只读预审：它读取 v4 完整 Global/MainText workpack，把 typed 输出留在 service
 scratch；Blueprint 落盘后只核业务 SHA 与 workpack SHA 后重绑 live surface，不把 provider session
 身份当成连续性前件。预审 Commander 与 Blueprint executor 共同竞争 `min(4, NOVEL_CONCURRENCY)` 个
 OS 文件锁槽；配置 1 时串行，不增加任一时刻并发。
 
-Stage2 后两轮只接收 pending/FAIL/未隔离 UNVER 的 delta subject cards；已成功项只留 identity 摘要。
+Stage2 第二、三席只接收 pending/FAIL/未隔离 UNVER 的 delta subject cards；已成功项只留 identity 摘要。
 主体、证据与理由用内容寻址 catalog 去重，只有仍需 whole-book 判断时才再次携完整 MainText。每次真调用
 在启动前先写持久 typed ledger 的 `started`，进程/宿主重启不返还预算；同一 progress fingerprint、
-未闭合数增加或三次耗尽都在下一次 wire 前拒绝。中间 0-wire review/edit 动作不计模型轮次，也不创建
+未闭合数非法增加或前三席订正额度耗尽都在下一次 wire 前拒绝；blocking 面安全后只能进入第四席只读
+终审，由它确认收口或 reopen 指定 FAIL/UNVER。中间 0-wire review/edit 动作不计模型席位，也不创建
 Executor 会话；付费 Executor 自己的候选/修复仍在节点 logical session 内 resume checkpoint。
 
 `submission_options` 同时是可执行 binding：Stage2 既有字段 patch 的行数、顺序、subject id 与字段集合
@@ -403,7 +404,7 @@ Executor 会话；付费 Executor 自己的候选/修复仍在节点 logical ses
 返工可在同一 typed 输入合并 GlobalEdit 与 `post_edit_review`；后者只准对模板 `review_scope` 中仍保持同一
 hash 的旧项提交 `decisions`，新打开项才使用默认证明。typed loader 拒绝或 canonical action exit 2 时，
 Supervisor 不结束 parent，而把完整紧凑包与确定性拒因交给下一条 fresh session；相同请求字节立即停。
-该机制同样占用三次总预算，不能借“纠错”名义扩轮；其他 reviewer blocker 最多接受
+该机制占用前三席中的审阅/订正额度，不能借“纠错”名义侵占第四席或扩出第五席；其他 reviewer blocker 最多接受
 两次不同纠正。重复业务主体上的等价已执行/已拒动作也由 progress fingerprint 拒绝，不能靠 review
 surface 自变制造循环。预算、授权、pause/stop、current blocker 与 admission 仍关闭式生效。已经 `pipeline_complete` 而
 delivery 终验未闭合时只运行确定性 finalizer/verify，不追加无关模型 turn；next 自身不可读则降 unknown。

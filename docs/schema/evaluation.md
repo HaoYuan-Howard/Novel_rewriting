@@ -164,9 +164,10 @@ pending/FAIL/未隔离 UNVER 的 subject cards；PASS 与已隔离项只留数�
 whole-book 卡时才携一次完整 MainText；成功且依赖未失效的卡不再重复发送。该投影不改变正式
 workpack、binding 或 workpack SHA。
 
-Stage2 global 的 Commander 闭环固定为最多三次真实模型调用：“首轮审阅 → 至多两轮增量 typed
-修订/复核 → 收口”，加上此前一次 Executor 产出即四轮阶段预算。每轮使用新的 logical/provider
-session，连续性只来自持久 ledger、workpack identity、catalog 与存活决定。确认主体事实有错时取得
+Stage2 global 的 Commander 闭环固定为最多四席真实模型调用：“一席审阅 → 至多两席增量 typed
+修订/复核 → 一席只读独立终审”。每席使用新的 logical/provider session，连续性只来自持久 ledger、
+workpack identity、catalog 与存活决定；第四席只可确认收口或 reopen 指定 FAIL/UNVER，不能修改
+Global。确认主体事实有错时取得
 当前 v3 骨架，通过 `--apply-edit` 同时提交真实修改和 `post_edit_review`；证明的 `review_scope`
 绑定修前未闭合项，`decisions` 显式复判 edit 后仍保持同一 hash 的旧红项，而新打开项才使用默认
 PASS/登记隔离。原样/no-op、未闭合 blocking、身份漂移、无进展 fingerprint 或预算耗尽均在当前动作

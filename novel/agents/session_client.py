@@ -18,6 +18,7 @@ import tempfile
 import time
 import uuid
 from collections.abc import Iterable, Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, TypeVar
 
@@ -97,6 +98,16 @@ _RECOVERY_POLICY_NODE = {
     'stage6-semantic-v1': 'stage6.semantic',
     'stage7-rename-v1': 'stage7.rename',
 }
+
+
+@dataclass(frozen=True)
+class ValidatedCheckpointAcceptance:
+    """经公共恢复守卫复核、可安全写入 client/pool adoption 索引的材料。"""
+
+    attempt_id: str
+    prior_turns: int
+    attempt_links: tuple[dict[str, object], ...]
+    checkpoint: dict[str, Any]
 
 
 def _sha256_bytes(payload: bytes) -> str:
@@ -367,6 +378,160 @@ def agent_json_schema(model_cls: type) -> dict:
     assert isinstance(schema, dict)
     validate_agent_output_schema(schema)
     return schema
+
+
+_CHECKPOINT_ACCEPTANCE_FIELDS = frozenset({
+    'acceptance_protocol', 'attempt_id', 'request_fingerprint', 'model',
+    'ledger_response_sha256', 'accepted_channel', 'accepted_text',
+    'normalized_text', 'attempt_links', 'profile', 'subject_sha256',
+    'session_run_id', 'provider_session_id', 'accepted_turn_index',
+    'accepted_prompt_sha256', 'accepted_schema_sha256', 'accepted_request',
+    'request_mode', 'recovery_from_attempts', 'salvaged',
+})
+
+
+def validate_checkpoint_acceptance(
+    ctx: RunContext,
+    profile: AgentProfile,
+    *,
+    chapter: int | None,
+    max_semantic_turns: int,
+    purpose: str,
+    record: Mapping[str, Any],
+    system: str,
+    user: str,
+    max_tokens: int,
+    recovery_policy: str,
+) -> ValidatedCheckpointAcceptance:
+    """在不构造 driver/client 的前提下复核一份 checkpoint acceptance。
+
+    这是 live ``SessionAgentClient`` 与零 wire unit pool 恢复共同依赖的唯一
+    request/profile/ledger/session 守卫。调用方只在成功返回后登记自己的业务键与
+    adoption 索引，不能再复制一份字段较少的“近似校验”。
+    """
+    if recovery_policy not in _RECOVERY_SESSION_ISOLATION:
+        raise ProvenanceRefused(
+            f'{purpose}: checkpoint 使用未登记恢复策略 {recovery_policy!r}')
+    if ctx.node != _RECOVERY_POLICY_NODE[recovery_policy]:
+        raise ProvenanceRefused(
+            f'{purpose}: recovery_policy={recovery_policy!r} 只属于 '
+            f'{_RECOVERY_POLICY_NODE[recovery_policy]}，不能用于 {ctx.node}')
+    if record.get('acceptance_protocol') != SESSION_PROTOCOL_VERSION:
+        raise ProvenanceRefused(
+            f'{purpose}: checkpoint 不是当前 {SESSION_PROTOCOL_VERSION} agent acceptance')
+    if record.get('profile') != profile.model_dump(mode='json'):
+        raise ProvenanceRefused(
+            f'{purpose}: checkpoint resolved profile 与当前 executor 配置漂移')
+    binding = record.get('accepted_request')
+    if not isinstance(binding, dict):
+        raise ProvenanceRefused(f'{purpose}: agent checkpoint 缺 accepted_request')
+    schema_sha = binding.get('schema_sha256')
+    if (not isinstance(schema_sha, str) or len(schema_sha) != 64
+            or any(ch not in '0123456789abcdef' for ch in schema_sha)):
+        raise ProvenanceRefused(
+            f'{purpose}: agent checkpoint 缺合法 response schema SHA-256')
+    expected_binding = {
+        'node': ctx.node,
+        'chapter': chapter,
+        'purpose': purpose,
+        'system_sha256': _sha256_bytes(system.encode('utf-8')),
+        'user_sha256': _sha256_bytes(user.encode('utf-8')),
+        'schema_sha256': schema_sha,
+        'requested_model': profile.model,
+        'requested_effort': profile.reasoning_effort,
+        'requested_output_token_ceiling': max_tokens,
+        'protocol_version': SESSION_PROTOCOL_VERSION,
+    }
+    if binding != expected_binding:
+        raise ProvenanceRefused(
+            f'{purpose}: checkpoint accepted_request 与当前 prompt/profile/ceiling 漂移')
+    subject_sha = _canonical_sha256(expected_binding)
+    if record.get('subject_sha256') != subject_sha:
+        raise ProvenanceRefused(
+            f'{purpose}: checkpoint logical subject SHA-256 不闭合')
+    attempt_id = str(record.get('attempt_id') or '')
+    accepted = ctx.ledger.request_identity_for_attempt(attempt_id)
+    try:
+        events = session_audit.read_events(ctx.novel_dir.parent)
+        restored_session = validate_agent_session_request_binding(
+            events,
+            record,
+            purpose=purpose,
+            profile=profile.model_dump(mode='json'),
+            original_prompt_sha256=_sha256_bytes(
+                render_structured_agent_stdin_bytes(
+                    system, user, driver=profile.driver)),
+            original_schema_sha256=str(schema_sha),
+        )
+    except (OSError, UnicodeError, ValueError) as exc:
+        raise ProvenanceRefused(
+            f'{purpose}: checkpoint session 模型/请求证据不可验证：{exc}') from exc
+    accepted_turns = [
+        turn for turn in restored_session.turns
+        if turn.attempt_id == attempt_id
+    ]
+    if len(accepted_turns) != 1:
+        raise ProvenanceRefused(
+            f'{purpose}: checkpoint accepted attempt 缺唯一 session turn')
+    validate_checkpoint_model_identity(
+        profile,
+        checkpoint_model=record.get('model'),
+        actual_model=accepted.get('model'),
+        cli_version=accepted_turns[0].cli_version,
+        actual_is_ledger=True,
+        require_driver_version=True,
+    )
+    if (record.get('request_fingerprint')
+            != accepted.get('request_fingerprint')
+            or record.get('ledger_response_sha256')
+            != accepted.get('response_sha256')):
+        raise ProvenanceRefused(
+            f'{purpose}: agent checkpoint accepted attempt 与成本账不闭合')
+    if (not isinstance(record.get('provider_session_id'), str)
+            or not record.get('provider_session_id')
+            or not isinstance(record.get('session_run_id'), str)
+            or not record.get('session_run_id')):
+        raise ProvenanceRefused(
+            f'{purpose}: agent checkpoint 缺 provider/logical session 身份')
+    prior_turns = record.get('accepted_turn_index')
+    prior_links = record.get('attempt_links')
+    if (not isinstance(prior_turns, int) or isinstance(prior_turns, bool)
+            or prior_turns < 1 or prior_turns > max_semantic_turns
+            or not isinstance(prior_links, list)
+            or prior_turns != len(prior_links)):
+        raise ProvenanceRefused(
+            f'{purpose}: checkpoint accepted_turn_index={prior_turns!r} '
+            f'与 attempt_links/当前 max_semantic_turns='
+            f'{max_semantic_turns} 不闭合')
+    restored_links: list[dict[str, object]] = []
+    restored_attempts: set[str] = set()
+    for link in prior_links:
+        if not isinstance(link, Mapping):
+            raise ProvenanceRefused(
+                f'{purpose}: checkpoint attempt_links 含非对象身份')
+        restored_link = dict(link)
+        restored_attempt = restored_link.get('attempt_id')
+        if (not isinstance(restored_attempt, str) or not restored_attempt
+                or restored_attempt in restored_attempts
+                or restored_link
+                != ctx.ledger.request_identity_for_attempt(restored_attempt)):
+            raise ProvenanceRefused(
+                f'{purpose}: checkpoint attempt_links 与成本账不闭合')
+        restored_attempts.add(restored_attempt)
+        resolve_ledger_model_identity(profile, restored_link.get('model'))
+        restored_links.append(restored_link)
+    if attempt_id not in restored_attempts:
+        raise ProvenanceRefused(
+            f'{purpose}: checkpoint attempt_links 漏 accepted attempt')
+    return ValidatedCheckpointAcceptance(
+        attempt_id=attempt_id,
+        prior_turns=prior_turns,
+        attempt_links=tuple(restored_links),
+        checkpoint={
+            key: value for key, value in record.items()
+            if key in _CHECKPOINT_ACCEPTANCE_FIELDS
+        },
+    )
 
 
 def _attempt_id() -> str:
@@ -1305,144 +1470,32 @@ class SessionAgentClient:
         if system is None or user is None or max_tokens is None:
             raise ProvenanceRefused(
                 f'{purpose}: agent checkpoint 恢复缺 system/user/requested ceiling')
-        if recovery_policy not in _RECOVERY_SESSION_ISOLATION:
+        if recovery_policy is None:
             raise ProvenanceRefused(
-                f'{purpose}: checkpoint 使用未登记恢复策略 {recovery_policy!r}')
-        if self.ctx.node != _RECOVERY_POLICY_NODE[recovery_policy]:
-            raise ProvenanceRefused(
-                f'{purpose}: recovery_policy={recovery_policy!r} 只属于 '
-                f'{_RECOVERY_POLICY_NODE[recovery_policy]}，不能用于 {self.ctx.node}')
-        if record.get('acceptance_protocol') != SESSION_PROTOCOL_VERSION:
-            raise ProvenanceRefused(
-                f'{purpose}: checkpoint 不是当前 {SESSION_PROTOCOL_VERSION} agent acceptance')
-        if record.get('profile') != self.profile.model_dump(mode='json'):
-            raise ProvenanceRefused(
-                f'{purpose}: checkpoint resolved profile 与当前 executor 配置漂移')
-        binding = record.get('accepted_request')
-        if not isinstance(binding, dict):
-            raise ProvenanceRefused(f'{purpose}: agent checkpoint 缺 accepted_request')
-        schema_sha = binding.get('schema_sha256')
-        if (not isinstance(schema_sha, str) or len(schema_sha) != 64
-                or any(ch not in '0123456789abcdef' for ch in schema_sha)):
-            raise ProvenanceRefused(
-                f'{purpose}: agent checkpoint 缺合法 response schema SHA-256')
-        expected_binding = {
-            'node': self.ctx.node,
-            'chapter': self.chapter,
-            'purpose': purpose,
-            'system_sha256': _sha256_bytes(system.encode('utf-8')),
-            'user_sha256': _sha256_bytes(user.encode('utf-8')),
-            'schema_sha256': schema_sha,
-            'requested_model': self.profile.model,
-            'requested_effort': self.profile.reasoning_effort,
-            'requested_output_token_ceiling': max_tokens,
-            'protocol_version': SESSION_PROTOCOL_VERSION,
-        }
-        if binding != expected_binding:
-            raise ProvenanceRefused(
-                f'{purpose}: checkpoint accepted_request 与当前 prompt/profile/ceiling 漂移')
-        subject_sha = _canonical_sha256(expected_binding)
-        if record.get('subject_sha256') != subject_sha:
-            raise ProvenanceRefused(
-                f'{purpose}: checkpoint logical subject SHA-256 不闭合')
-        attempt_id = str(record.get('attempt_id') or '')
-        accepted = self.ctx.ledger.request_identity_for_attempt(attempt_id)
-        try:
-            events = session_audit.read_events(self.ctx.novel_dir.parent)
-            restored_session = validate_agent_session_request_binding(
-                events, record,
-                purpose=purpose,
-                profile=self.profile.model_dump(mode='json'),
-                original_prompt_sha256=_sha256_bytes(
-                    render_structured_agent_stdin_bytes(
-                        system, user, driver=self.profile.driver)),
-                original_schema_sha256=str(schema_sha),
-            )
-        except (OSError, UnicodeError, ValueError) as exc:
-            raise ProvenanceRefused(
-                f'{purpose}: checkpoint session 模型/请求证据不可验证：{exc}') from exc
-        accepted_turns = [
-            turn for turn in restored_session.turns
-            if turn.attempt_id == attempt_id
-        ]
-        if len(accepted_turns) != 1:
-            raise ProvenanceRefused(
-                f'{purpose}: checkpoint accepted attempt 缺唯一 session turn')
-        validate_checkpoint_model_identity(
+                f'{purpose}: agent checkpoint 恢复缺 recovery_policy')
+        validated = validate_checkpoint_acceptance(
+            self.ctx,
             self.profile,
-            checkpoint_model=record.get('model'),
-            actual_model=accepted.get('model'),
-            cli_version=accepted_turns[0].cli_version,
-            actual_is_ledger=True,
-            require_driver_version=True,
+            chapter=self.chapter,
+            max_semantic_turns=self.max_semantic_turns,
+            purpose=purpose,
+            record=record,
+            system=system,
+            user=user,
+            max_tokens=max_tokens,
+            recovery_policy=recovery_policy,
         )
-        if (record.get('request_fingerprint')
-                != accepted.get('request_fingerprint')
-                or record.get('ledger_response_sha256')
-                != accepted.get('response_sha256')):
-            raise ProvenanceRefused(
-                f'{purpose}: agent checkpoint accepted attempt 与成本账不闭合')
-        if (not isinstance(record.get('provider_session_id'), str)
-                or not record.get('provider_session_id')
-                or not isinstance(record.get('session_run_id'), str)
-                or not record.get('session_run_id')):
-            raise ProvenanceRefused(
-                f'{purpose}: agent checkpoint 缺 provider/logical session 身份')
-        prior_turns = record.get('accepted_turn_index')
-        prior_links = record.get('attempt_links')
-        if (not isinstance(prior_turns, int) or isinstance(prior_turns, bool)
-                or prior_turns < 1
-                or prior_turns > self.max_semantic_turns
-                or not isinstance(prior_links, list)
-                or prior_turns != len(prior_links)):
-            raise ProvenanceRefused(
-                f'{purpose}: checkpoint accepted_turn_index={prior_turns!r} '
-                f'与 attempt_links/当前 '
-                f'max_semantic_turns={self.max_semantic_turns} 不闭合')
-        restored_links: list[dict[str, object]] = []
-        restored_attempts: set[str] = set()
-        for link in prior_links:
-            if not isinstance(link, Mapping):
-                raise ProvenanceRefused(
-                    f'{purpose}: checkpoint attempt_links 含非对象身份')
-            restored_link = dict(link)
-            restored_attempt = restored_link.get('attempt_id')
-            if (not isinstance(restored_attempt, str) or not restored_attempt
-                    or restored_attempt in restored_attempts
-                    or restored_link
-                    != self.ctx.ledger.request_identity_for_attempt(
-                        restored_attempt)):
-                raise ProvenanceRefused(
-                    f'{purpose}: checkpoint attempt_links 与成本账不闭合')
-            restored_attempts.add(restored_attempt)
-            resolve_ledger_model_identity(
-                self.profile, restored_link.get('model'))
-            restored_links.append(restored_link)
-        if attempt_id not in restored_attempts:
-            raise ProvenanceRefused(
-                f'{purpose}: checkpoint attempt_links 漏 accepted attempt')
         previous_links = self._restored_attempt_links.get(purpose)
-        frozen_links = tuple(restored_links)
+        frozen_links = validated.attempt_links
         if previous_links is not None and previous_links != frozen_links:
             raise ProvenanceRefused(
                 f'{purpose}: 同一恢复 client 收到两份不同 checkpoint links')
         self._restored_attempt_links[purpose] = frozen_links
-        self._accepted[purpose] = attempt_id
+        self._accepted[purpose] = validated.attempt_id
         # 恢复的是已经实际花掉的 provider turns。即使此后因联合业务校验失败而
         # 新开 provider session，本 logical request 的总轮次预算也不能重新补满。
-        self._turn_index = max(self._turn_index, prior_turns)
-        self._accepted_checkpoint[purpose] = {
-            key: value for key, value in record.items()
-            if key in {
-                'acceptance_protocol', 'attempt_id', 'request_fingerprint',
-                'model', 'ledger_response_sha256', 'accepted_channel',
-                'accepted_text', 'normalized_text', 'attempt_links', 'profile',
-                'subject_sha256', 'session_run_id', 'provider_session_id',
-                'accepted_turn_index', 'accepted_prompt_sha256',
-                'accepted_schema_sha256', 'accepted_request', 'request_mode',
-                'recovery_from_attempts', 'salvaged',
-            }
-        }
+        self._turn_index = max(self._turn_index, validated.prior_turns)
+        self._accepted_checkpoint[purpose] = validated.checkpoint
 
     def ask_json(
         self,
@@ -1715,6 +1768,8 @@ __all__ = [
     'SAME_RUN_RESUMABLE_AGENT_FAILURES',
     'SESSION_PROTOCOL_VERSION',
     'SessionAgentClient',
+    'ValidatedCheckpointAcceptance',
     'agent_request_fingerprint',
     'validate_agent_session_request_binding',
+    'validate_checkpoint_acceptance',
 ]
