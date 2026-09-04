@@ -350,6 +350,10 @@ _WRITE_ALLOWED = {
         '显式 preview/apply：允许回收已 ended 日志、已闭合 telemetry、完整 v3 trash，'
         '以及 delivery+commit+当前正式字节可逐项对证的 checkpoint 正文。回执、manifest、'
         'ledger、admission/beacon/agent/job/session 小账永久保留；四项 TTL 默认关闭'),
+    'novel/orchestrator/reviewer_seat_ledger.py': (
+        '非 Stage2 reviewer blocker 的席位账，只原子写 '
+        '`_service/runs/<sid>/reviewer_seats/<blocker>/`；有效面只有 blocker/business SHA、'
+        '轮次 purpose、session 身份、退出状态与同轮 attempts，不含正文，也不是正式 artifact。'),
     'novel/orchestrator/stage2_review_ledger.py': (
         'Stage2 Global Commander 的跨进程调用预算与单调进展账，只原子写 '
         '`_service/runs/<sid>/stage2/global_review_ledgers/`；有效面只有主体/workpack/progress '

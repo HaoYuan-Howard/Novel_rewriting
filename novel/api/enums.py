@@ -79,6 +79,7 @@ _WITHHELD: dict[str, str] = {
     'COMMANDER_IDLE_TIMEOUT_SECONDS': '同上',
     'COMMANDER_MAX_ATTEMPTS_PER_SEAT': '同上：同席重试上限由 Supervisor 执行，前端只看结果',
     'COMMANDER_RETRY_BACKOFF_SECONDS': '同上',
+    'COMMANDER_REVIEWER_MAX_CORRECTIONS': '同上：纠错席位上限由持久席位账执行',
     'REVIEWER_APPROVAL_SURFACES': (
         'Commander reviewer typed request 的 approval 面闭集，只由 RunSupervisor 与'
         ' loader 消费；页面各审批面已有自己的 typed 表单，另发只会制造第二个消费面'),

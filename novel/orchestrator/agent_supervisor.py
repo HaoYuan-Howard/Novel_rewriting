@@ -38,6 +38,12 @@ class CommanderTurnResult:
     # 同一 immutable workpack 的紧凑纠错；不能先重取全局 next，让失败尝试
     # 留下的 INVALID/stale surface 抢走原 reviewer 绑定。
     continue_reviewer: bool = False
+    # fresh reviewer 席位的事实：provider 身份与本席已记 turn 数只供同一
+    # binding 内的纠错续用，不进入 epoch 的 provider session 传递；
+    # ``seat_started`` 表示本席 logical session 已落 started，收席时须补 ended。
+    seat_provider_session_id: str | None = None
+    seat_turns_recorded: int = 0
+    seat_started: bool = False
 
 
 @dataclass(frozen=True)

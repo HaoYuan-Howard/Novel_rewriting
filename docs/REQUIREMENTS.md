@@ -202,6 +202,9 @@ Stage2 Global Reviewer 增量 subject-card wire、Blueprint `extraction-ir-v3.2`
   席位账该席 `attempts[]` 出现 `launch(error) → resume(ok)`、`agent_sessions.jsonl` 同一 `session_run_id`
   下 `attempt` 事件席内序号 1/2 且 `turn_index` 1/2、成本账两行 `attempt_id` 不同、
   `_service/runs/<sid>/sessions/<session_run_id>.json` 指针在断网前已写出，且席位账席数不增加。
+- **Stage4 独立复审（批 3）**：一次真实 Stage4A `request_repair` 返修后，验收 `agent_sessions.jsonl` 里复审是新的
+  `session_run_id`/provider session（不是请求返修那一席的续会），且 `_service/runs/<sid>/reviewer_seats/` 下两个
+  business 各一账。
 - 结果回写 `docs/DECISIONS.md` 后删除本条。
 
 ## 条目生命周期

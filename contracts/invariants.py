@@ -2546,3 +2546,7 @@ COMMANDER_IDLE_TIMEOUT_SECONDS: Final = 1800.0
 COMMANDER_MAX_ATTEMPTS_PER_SEAT: Final = 3
 #: 同席重试前的退避秒数，按尝试序号取值，越界取最后一档。
 COMMANDER_RETRY_BACKOFF_SECONDS: Final = (30.0, 120.0)
+#: 非 Stage2 reviewer blocker 在同一业务主体上最多接受的 typed 纠错次数；按
+#: ``(sid, blocker, business_sha256)`` 持久记账（`novel/orchestrator/reviewer_seat_ledger.py`），
+#: 重启不返还。每个 binding 一席 fresh logical/provider session，纠错在席内续用。
+COMMANDER_REVIEWER_MAX_CORRECTIONS: Final = 2

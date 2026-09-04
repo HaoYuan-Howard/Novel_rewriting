@@ -770,6 +770,7 @@ Output/_service/uploads/…         浏览器上传的原始小说字节
 Output/_service/edits/<sid>/…     交给 CLI 的一次性 typed 编辑稿、人工决定或批处理 manifest
 Output/_service/edits/<sid>/reviewer-action-<sha>.json 已通过 typed loader 的 Commander approval 决定：内容寻址、可零模型重放（R-11.25）
 Output/_service/runs/<sid>/stage2/global_review_ledgers/<sha>.json Stage2 Global/MainText 审阅的四席 Commander 账（v2：席 1～3 审阅/订正、席 4 只读终审；每席下记 launch/resume attempts）、fresh session 与单调进展账；旧 pre-spawn 假预留只经 hash-bound reconcile 移入带 actor/reason/负证据 hash 的 reconciliations；旧 v1 三席账拒读，只能经 `reconcile --stage2-review-reopen` 带 actor/reason 整体移入 `archived_ledgers` 后开空账；不含正文
+Output/_service/runs/<sid>/reviewer_seats/<blocker>/<business_sha256>.json 非 Stage2 reviewer blocker 的席位账（`ReviewerSeatLedger`）：同一业务主体上首轮 review + 至多 `COMMANDER_REVIEWER_MAX_CORRECTIONS` 轮 correction，同席共用一个 logical/provider session，每轮下记 attempts；重启不返还，surface 变化即新账新席
 Output/_service/runs/<sid>/sessions/<session_run_id>.json Commander 一席的在线 provider session 指针（`CommanderSessionPointer`）：首个协议事件到达即写，同席 resume 原地覆盖；hash-bound 到本次 prompt/schema/profile，只是运维事实，不是审计账也不是预算（R-11.26）
 Output/_service/approvals/<sid>.json 人工闸门、已阅状态与 canonical 写作授权（原子替换）
 ```

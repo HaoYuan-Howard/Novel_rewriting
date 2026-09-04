@@ -40,7 +40,8 @@ from typing import BinaryIO, Iterator, NamedTuple
 from contracts.artifacts import STAGE2_GLOBAL_EDIT, STAGE2_GLOBAL_REVIEW_DECISIONS
 from contracts.invariants import (
     AGENT_EXECUTOR_NODES, COMMANDER_MAX_ATTEMPTS_PER_SEAT,
-    COMMANDER_RETRY_BACKOFF_SECONDS, STAGE2_BLUEPRINT_MAX_CONCURRENCY,
+    COMMANDER_RETRY_BACKOFF_SECONDS, COMMANDER_REVIEWER_MAX_CORRECTIONS,
+    STAGE2_BLUEPRINT_MAX_CONCURRENCY,
 )
 from contracts.schema import decode_artifact
 from contracts.schema.api import ExecutionPermit, OperatorNext
@@ -82,8 +83,8 @@ from novel.model_slots import (
 )
 from novel.orchestrator import (
     admission, commander_completion, execution_permit, jobs, operator, queue,
-    review_seats, reviewer_tasks, service_lifecycle, stage2_review_ledger,
-    uploads,
+    review_seats, reviewer_seat_ledger, reviewer_tasks, service_lifecycle,
+    stage2_review_ledger, uploads,
 )
 from novel.orchestrator.agent_supervisor import (
     CommanderTurnResult, LaunchTicket, RunSupervisor, SupervisorActionResult,
@@ -121,7 +122,7 @@ MAX_CONCURRENT = 3
 # unknown，不把“后来终于结束”改写成“生命周期始终可证”。
 _EXECUTION_CLOSE_TIMEOUT_SECONDS = 300.0
 _EXECUTION_CLOSE_POLL_SECONDS = 0.25
-_MAX_REVIEWER_CORRECTIONS = 2
+_MAX_REVIEWER_CORRECTIONS = COMMANDER_REVIEWER_MAX_CORRECTIONS
 _MAX_STAGE2_COMMANDER_TURNS = stage2_review_ledger.MAX_COMMANDER_CALLS
 _MAX_STAGE2_EDIT_SEAT = stage2_review_ledger.MAX_EDIT_SEAT
 _ACTION_FAILURE_TAIL_BYTES = 16 * 1024
@@ -880,6 +881,23 @@ def _reviewer_approval_argv(
             'approval', 'apply', action.surface, sid, '--base', base,
             '--input', str(payload_path)]
     return [sys.executable, '-B', '-m', 'novel.cli', *tail]
+
+
+@dataclass
+class _ReviewerSeat:
+    """非 Stage2 reviewer blocker 的一席：同一 binding 内首审与纠错共用的 logical session。"""
+
+    session_run_id: str
+    prompt_sha256: str
+    waiting_on: str
+    business_sha256: str
+    provider_session_id: str | None = None
+    turns_recorded: int = 0
+    started: bool = False
+    last_observation: CommanderObservation | None = None
+    last_rc: int = CRASH
+    last_outcome: AgentDeliveryOutcome | None = None
+    last_error_kind: str | None = None
 
 
 @dataclass(frozen=True)
@@ -2217,6 +2235,10 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
             on_attempt_finished: Callable[
                 [str, int, str | None, str | None, bool], None] | None = None,
             max_attempts: int = COMMANDER_MAX_ATTEMPTS_PER_SEAT,
+            seat_provider_session_id: str | None = None,
+            seat_turns_recorded: int = 0,
+            seat_subject_sha256: str | None = None,
+            close_seat: bool = True,
             ) -> CommanderTurnResult:
         nonlocal turn_index, latest_observation, latest_outcome
         nonlocal latest_rc, latest_error_kind, provider_turn_recorded
@@ -2230,16 +2252,25 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
         audit_epoch = (
             epoch.model_copy(update={'session_run_id': fresh_session_run_id})
             if fresh_session_run_id is not None else epoch)
+        # 席位续接：同一 fresh logical session 内的纠错轮续用本席 provider
+        # session，不再落第二条 started；turn 序号从本席已记轮数继续。
+        seat_continuation = (
+            fresh_reviewer_session and seat_provider_session_id is not None)
         effective_provider_session_id = (
-            None if fresh_reviewer_session else provider_session_id)
+            seat_provider_session_id if fresh_reviewer_session
+            else provider_session_id)
+        # logical session 的 subject 是本席首轮 prompt；纠错续接轮 prompt 不同，
+        # 但 session 静态身份不能漂移，因此 subject 取席位记住的首轮 SHA。
         fresh_prompt_sha256 = (
-            _sha256_bytes(reviewer_prompt.encode('utf-8'))
+            (seat_subject_sha256 if seat_continuation and seat_subject_sha256
+             else _sha256_bytes(reviewer_prompt.encode('utf-8')))
             if fresh_reviewer_session and reviewer_prompt is not None else None)
         fresh_session_started = False
 
         def start_fresh_reviewer_session() -> None:
             nonlocal fresh_session_started
-            if not fresh_reviewer_session or fresh_session_started:
+            if (not fresh_reviewer_session or fresh_session_started
+                    or seat_continuation):
                 return
             assert fresh_prompt_sha256 is not None
             agent_session_audit.append_event(
@@ -2293,7 +2324,7 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
         # （首发 + 因网络/瞬态故障的 resume/relaunch），它们共享同一 logical
         # session、同一席位与同一 admission；只有最后一次的事实进入 turn 结论。
         attempt_no = 0
-        fresh_turn_counter = 0
+        fresh_turn_counter = seat_turns_recorded if seat_continuation else 0
         resume_session: str | None = None
         attempt_invocation = turn_invocation
         current_attempt = {'id': attempt_id, 'kind': 'launch'}
@@ -2773,7 +2804,7 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                     '盘面终验已经执行，但 Commander 身份/审计链不闭合：'
                     f'{integrity_error_kind}；拒绝把运行判为可交付'))
 
-        if fresh_session_started:
+        if fresh_session_started and close_seat:
             try:
                 assert fresh_prompt_sha256 is not None
                 agent_session_audit.append_event(
@@ -2830,7 +2861,71 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                 observation.provider_session_id
                 if this_turn_recorded and not fresh_reviewer_session else None),
             continue_ready=continue_ready,
-            outcome=outcome)
+            outcome=outcome,
+            seat_provider_session_id=(
+                observation.provider_session_id
+                if fresh_reviewer_session and this_turn_recorded
+                else seat_provider_session_id),
+            seat_turns_recorded=fresh_turn_counter,
+            seat_started=fresh_session_started or seat_continuation)
+
+    def _end_reviewer_seat(
+            seat: _ReviewerSeat, *, error_kind: str | None) -> None:
+        """给一席 fresh reviewer session 幂等补 ended；未落 started 的席位没有事实可闭。"""
+        if not seat.started:
+            return
+        seat.started = False
+        observation = seat.last_observation or CommanderObservation(
+            provider_session_id=None, actual_model=None,
+            actual_effort=None, usage=None)
+        outcome = seat.last_outcome or AgentDeliveryOutcome(
+            state='unknown', checked_at=int(time.time()),
+            reason='reviewer 席位在形成可审计结果前关闭')
+        try:
+            agent_session_audit.append_event(
+                base,
+                agent_session_audit.AgentSessionEvent(
+                    session_run_id=seat.session_run_id,
+                    parent_run_id=run_id,
+                    role='commander', node=None, chapter=None,
+                    subject_sha256=seat.prompt_sha256,
+                    profile=plan.profiles.commander,
+                    provider_session_id=seat.provider_session_id,
+                    requested_model=plan.profiles.commander.model,
+                    actual_model=observation.actual_model,
+                    requested_effort=plan.profiles.commander.reasoning_effort,
+                    actual_effort=observation.actual_effort,
+                    cli_version=current_session_invocation.cli_version,
+                    protocol_version=current_session_invocation.protocol,
+                    start_code_version=current_session_code_version,
+                    end_code_version=(
+                        prov.code_version()
+                        if prov.code_version() == current_session_code_version
+                        else prov.CODE_UNKNOWN),
+                    skill_sha256=current_session_skill_sha256,
+                    prompt_sha256=seat.prompt_sha256,
+                    schema_sha256=schema_sha256,
+                    process_state=('ok' if seat.last_rc == 0 else 'failed'),
+                    delivery_state=_session_delivery(outcome),
+                    error_kind=error_kind or seat.last_error_kind,
+                    kind='ended', ts=int(time.time()),
+                ),
+            )
+        except Exception:  # noqa: BLE001 —— 审计失败留痕，不杀 run
+            _append_safe_traceback(base, run_id, prompt=plan.prompt)
+
+    def _close_reviewer_seat(
+            binding: tuple[str, str] | None, *,
+            error_kind: str | None = None) -> None:
+        if binding is None:
+            return
+        seat = open_reviewer_seats.pop(binding, None)
+        if seat is not None:
+            _end_reviewer_seat(seat, error_kind=error_kind)
+
+    def _close_open_reviewer_seats(*, error_kind: str | None) -> None:
+        for binding in list(open_reviewer_seats):
+            _close_reviewer_seat(binding, error_kind=error_kind)
 
     def _action_outcome(
             epoch: ExecutionEpoch, rc: int, timed_out: bool,
@@ -3063,6 +3158,8 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                 epoch, permit, launch_ticket,
                 stem=f'reviewer-{action.node}'))
 
+    open_reviewer_seats: dict[tuple[str, str], _ReviewerSeat] = {}
+
     def _run_reviewer(
             epoch: ExecutionEpoch, current: OperatorNext,
             provider_session_id: str | None,
@@ -3177,13 +3274,107 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                             durable=durable_reservation,
                             exit_code=(
                                 turn.exit_code if turn is not None else CRASH))
-            return _run_commander_turn(
-                epoch, provider_session_id,
-                reviewer_prompt=prompt, launch_ticket=launch_ticket,
-                activity=activity)
+            # 非 Stage2 blocker：每个 binding 一席 fresh logical/provider session；
+            # 同一 binding 内的纠错续用该席，纠错次数按 (sid, blocker, business)
+            # 持久记账。surface 变化（如返修落盘）即新 binding、新席。
+            seat = open_reviewer_seats.get(binding)
+            if seat is None:
+                seat = _ReviewerSeat(
+                    session_run_id=jobs.new_job_id(),
+                    prompt_sha256=_sha256_bytes(prompt.encode('utf-8')),
+                    waiting_on=waiting_on,
+                    business_sha256=task.business_sha256)
+                open_reviewer_seats[binding] = seat
+            seat_turn_id = jobs.new_job_id()
+            seat_reserved = False
+            seat_reservation_error: BaseException | None = None
+            seat_identity = dict(
+                waiting_on=seat.waiting_on,
+                business_sha256=seat.business_sha256)
+
+            def reserve_seat_turn() -> None:
+                nonlocal seat_reserved, seat_reservation_error
+                try:
+                    reviewer_seat_ledger.reserve(
+                        base, sid, purpose=purpose,
+                        session_run_id=seat.session_run_id,
+                        turn_id=seat_turn_id, parent_run_id=run_id,
+                        epoch_id=epoch.epoch_id, **seat_identity)
+                except BaseException as exc:  # noqa: BLE001 —— 转成 typed stop
+                    seat_reservation_error = exc
+                    raise
+                seat_reserved = True
+
+            def seat_attempt_started(
+                    attempt_id: str, kind: str, resume_id: str | None) -> None:
+                if seat_reserved:
+                    reviewer_seat_ledger.record_attempt(
+                        base, sid, turn_id=seat_turn_id, attempt_id=attempt_id,
+                        kind=kind, provider_session_id=resume_id,
+                        **seat_identity)
+
+            def seat_attempt_finished(
+                    attempt_id: str, exit_code: int, failure_kind: str | None,
+                    provider_id: str | None, wire_evidence: bool) -> None:
+                if seat_reserved:
+                    reviewer_seat_ledger.finish_attempt(
+                        base, sid, turn_id=seat_turn_id, attempt_id=attempt_id,
+                        exit_code=exit_code, error_kind=failure_kind,
+                        provider_session_id=provider_id,
+                        wire_evidence=wire_evidence, **seat_identity)
+
+            seat_turn: CommanderTurnResult | None = None
+            try:
+                seat_turn = _run_commander_turn(
+                    epoch, None,
+                    reviewer_prompt=prompt,
+                    fresh_session_run_id=seat.session_run_id,
+                    seat_provider_session_id=seat.provider_session_id,
+                    seat_turns_recorded=seat.turns_recorded,
+                    seat_subject_sha256=seat.prompt_sha256,
+                    close_seat=False,
+                    launch_ticket=launch_ticket,
+                    after_spawn_before_wire=reserve_seat_turn,
+                    activity=activity,
+                    on_attempt_started=seat_attempt_started,
+                    on_attempt_finished=seat_attempt_finished)
+                seat.started = seat.started or seat_turn.seat_started
+                if seat_turn.seat_provider_session_id is not None:
+                    seat.provider_session_id = seat_turn.seat_provider_session_id
+                seat.turns_recorded = seat_turn.seat_turns_recorded
+                seat.last_observation = latest_observation
+                seat.last_rc = latest_commander_rc
+                seat.last_outcome = latest_commander_outcome
+                seat.last_error_kind = latest_commander_error_kind
+                if isinstance(
+                        seat_reservation_error,
+                        reviewer_seat_ledger.ReviewerSeatRefused):
+                    _close_reviewer_seat(binding, error_kind='reviewer_seat_budget')
+                    latest_rc = 2
+                    latest_error_kind = 'reviewer_seat_budget'
+                    latest_outcome = AgentDeliveryOutcome(
+                        state='stopped', checked_at=int(time.time()),
+                        reason=(
+                            f'{waiting_on} 拒绝继续调用 Commander：'
+                            f'{seat_reservation_error}'))
+                    return CommanderTurnResult(
+                        exit_code=2, provider_session_id=None,
+                        continue_ready=False, outcome=latest_outcome)
+                return seat_turn
+            finally:
+                if seat_reserved:
+                    reviewer_seat_ledger.finish(
+                        base, sid, turn_id=seat_turn_id,
+                        exit_code=(
+                            seat_turn.exit_code if seat_turn is not None
+                            else CRASH),
+                        **seat_identity)
 
         if reviewer_correction_task is not None:
             if reviewer_correction_binding != binding:
+                _close_reviewer_seat(
+                    reviewer_correction_binding,
+                    error_kind='commander_reviewer_binding_changed')
                 reviewer_correction_task = None
                 reviewer_correction_binding = None
                 reviewer_correction_reason = None
@@ -3216,6 +3407,8 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                 reviewer_correction_reason = None
                 reviewer_correction_request_sha256 = None
                 reviewer_correction_attempts = 0
+                _close_reviewer_seat(
+                    binding, error_kind='commander_reviewer_no_progress')
                 latest_rc = 2
                 latest_error_kind = 'commander_reviewer_no_progress'
                 latest_outcome = AgentDeliveryOutcome(
@@ -3238,6 +3431,8 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                     reviewer_correction_reason = None
                     reviewer_correction_request_sha256 = None
                     reviewer_correction_attempts = 0
+                    _close_reviewer_seat(
+                        binding, error_kind='commander_reviewer_request')
                     latest_rc = 2
                     latest_error_kind = 'commander_reviewer_request'
                     latest_outcome = AgentDeliveryOutcome(
@@ -3279,6 +3474,9 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
 
         if pending_reviewer_action is not None:
             if pending_reviewer_binding != binding:
+                _close_reviewer_seat(
+                    pending_reviewer_binding,
+                    error_kind='commander_reviewer_binding_changed')
                 pending_reviewer_action = None
                 pending_reviewer_binding = None
                 pending_reviewer_business_sha256 = None
@@ -3329,6 +3527,7 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                 _discard_reviewer_action_record(base, record_path)
             if landed(result.exit_code):
                 completed_reviewer_business_actions.add(business_action)
+                _close_reviewer_seat(binding)
             elif result.exit_code == 2 and replayed:
                 # Stage2 的纠错包自足且每轮本来就开新会话，所以重放决定被拒后可
                 # 直接进入增量纠错；其他 reviewer 仍没有可续的 provider 上下文。
@@ -3355,7 +3554,9 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                     continue_ready=True, outcome=result.outcome)
             elif (result.exit_code == 2
                   and (waiting_on in queue.STAGE2_REVIEWER_WAITING_ON
-                       or provider_session_id is not None)):
+                       or open_reviewer_seats.get(binding) is not None
+                       and open_reviewer_seats[binding].provider_session_id
+                       is not None)):
                 # Reviewer 的 typed 动作由 Commander 负责修正。显式终态证明没有
                 # landed；只要 blocker/surface 未变，就把拒绝事实连同紧凑 workpack
                 # 送进新的 Stage2 logical/provider session，而不是结束整书 parent。
@@ -3525,8 +3726,12 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                 request_path, current,
                 submission_options=task.submission_options)
         except reviewer_tasks.ReviewerTaskError as exc:
-            if (turn.provider_session_id is None
-                    and waiting_on not in queue.STAGE2_REVIEWER_WAITING_ON):
+            seat_open = open_reviewer_seats.get(binding)
+            if (waiting_on not in queue.STAGE2_REVIEWER_WAITING_ON
+                    and (seat_open is None
+                         or seat_open.provider_session_id is None)):
+                _close_reviewer_seat(
+                    binding, error_kind='commander_reviewer_request')
                 latest_rc = 2
                 latest_error_kind = 'commander_reviewer_request'
                 latest_outcome = AgentDeliveryOutcome(
@@ -3648,6 +3853,11 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                     latest_outcome = AgentDeliveryOutcome(
                         state='unknown', checked_at=int(time.time()),
                         reason='最后 execution epoch 结束后代码指纹又发生漂移')
+                try:
+                    _close_open_reviewer_seats(
+                        error_kind=latest_commander_error_kind)
+                except Exception:  # noqa: BLE001
+                    _append_safe_traceback(base, run_id, prompt=plan.prompt)
                 try:
                     # code/skill rollover 已在 epoch_close 把旧 logical session
                     # 封存；这里只闭合最后仍活动的那一个，不能写第二条 ended。

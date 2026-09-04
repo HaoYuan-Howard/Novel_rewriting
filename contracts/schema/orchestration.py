@@ -41,7 +41,8 @@ from contracts.invariants import (
     RUN_NEXT_HANDLERS,
     RUN_RESUME_FRONTIER_STATES, STAGES,
     EXECUTION_EPOCH_DRAIN_STATES, EXECUTION_EPOCH_REASONS,
-    COMMANDER_ATTEMPT_KINDS, STAGE2_COMMANDER_MAX_EDIT_SEAT,
+    COMMANDER_ATTEMPT_KINDS, COMMANDER_REVIEWER_MAX_CORRECTIONS,
+    STAGE2_COMMANDER_MAX_EDIT_SEAT,
     STAGE2_COMMANDER_MAX_SEATS, STAGE2_COMMANDER_SEAT_PURPOSES,
 )
 from contracts.schema.base import FrozenModel, StrictModel
@@ -1028,6 +1029,67 @@ class Stage2ReviewLedgerReconciliation(FrozenModel):
         if (turn.purpose != 'prereview' or turn.outcome != 'failed'
                 or turn.exit_code != 70):
             raise ValueError('只允许隔离 exit 70 的失败 Stage2 prereview 假预留')
+        return self
+
+
+class ReviewerSeatTurn(FrozenModel):
+    """非 Stage2 reviewer 席位内的一轮 Commander turn（首次审阅或纠错）。"""
+
+    turn_id: str = Field(min_length=1)
+    ordinal: int = Field(ge=1)
+    purpose: Literal['review', 'correction']
+    session_run_id: str = Field(min_length=1)
+    parent_run_id: str = Field(min_length=1)
+    epoch_id: str = Field(min_length=1)
+    started_at: int = Field(ge=0)
+    finished_at: int | None = Field(default=None, ge=0)
+    exit_code: int | None = None
+    outcome: Literal['started', 'ok', 'failed'] = 'started'
+    attempts: list[Stage2ReviewAttempt] = Field(default_factory=list)
+
+    @model_validator(mode='after')
+    def _finish_fields_agree(self) -> ReviewerSeatTurn:
+        if self.outcome == 'started':
+            if self.finished_at is not None or self.exit_code is not None:
+                raise ValueError('started reviewer seat turn 不得携带 finished/exit')
+        elif self.finished_at is None or self.exit_code is None:
+            raise ValueError('已结束 reviewer seat turn 必须携带 finished_at/exit_code')
+        ids = [row.attempt_id for row in self.attempts]
+        if len(ids) != len(set(ids)):
+            raise ValueError('同一轮内 attempt_id 不得重复')
+        return self
+
+
+class ReviewerSeatLedger(FrozenModel):
+    """按 ``(sid, blocker, business_sha256)`` 持久化的非 Stage2 reviewer 席位账。
+
+    同一业务主体上：首轮必须是 ``review``，其后最多 ``max_corrections`` 轮
+    ``correction``；所有轮共用同一席（同一 logical/provider session），账跨
+    重启持久、纠错不返还。业务主体（surface）变化即新账新席。
+    """
+
+    schema_version: Literal[1] = 1
+    kind: Literal['novel-reviewer-seat-ledger'] = 'novel-reviewer-seat-ledger'
+    sid: str = Field(min_length=1)
+    waiting_on: str = Field(min_length=1)
+    business_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    max_corrections: int = Field(
+        default=COMMANDER_REVIEWER_MAX_CORRECTIONS, ge=0)
+    turns: list[ReviewerSeatTurn] = Field(default_factory=list)
+
+    @model_validator(mode='after')
+    def _turns_are_consistent(self) -> ReviewerSeatLedger:
+        if [row.ordinal for row in self.turns] != list(
+                range(1, len(self.turns) + 1)):
+            raise ValueError('reviewer seat ledger ordinal 必须从 1 连续递增')
+        ids = [row.turn_id for row in self.turns]
+        if len(ids) != len(set(ids)):
+            raise ValueError('reviewer seat ledger turn_id 不得重复')
+        if self.turns and self.turns[0].purpose != 'review':
+            raise ValueError('reviewer seat ledger 首轮必须是 review')
+        corrections = sum(1 for row in self.turns if row.purpose == 'correction')
+        if corrections > self.max_corrections:
+            raise ValueError('reviewer seat ledger 纠错轮数超出 max_corrections')
         return self
 
 

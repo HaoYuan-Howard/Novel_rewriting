@@ -1118,6 +1118,209 @@ def test_non_stage2_invalid_reviewer_request_and_exit2_resume_same_commander_ses
     [session] = agent_session_audit.fold(
         agent_session_audit.read_events(base))
     assert [turn.turn_index for turn in session.turns] == [1, 2, 3]
+    assert session.end is not None, '席位在动作落盘后闭合'
+    assert session.end.process_state == 'ok'
+    # 同一 binding 是一席 fresh logical session；纠错按 (sid, blocker, business) 持久记账。
+    [ledger] = agent.reviewer_seat_ledger.list_ledgers(base, '42')
+    assert ledger['waiting_on'] == 'stage6.approve'
+    assert [row['purpose'] for row in ledger['turns']] == [
+        'review', 'correction', 'correction']
+    assert {row['session_run_id'] for row in ledger['turns']} == {
+        session.session_run_id}
+    assert all(row['outcome'] == 'ok' for row in ledger['turns'])
+
+
+def _stage4_review_harness(monkeypatch, seals):
+    """operator next 依次给出不同 surface 的 Stage4A 审阅 blocker。"""
+    states = iter(seals)
+    box = {'current': None}
+
+    def next_action(_base, _sid, *, code):
+        del code
+        try:
+            seal = next(states)
+        except StopIteration:
+            # 两次审阅之后停在一个未登记 blocker：关闭式结束，不触发真实 finalizer。
+            return SimpleNamespace(
+                state='blocked', code_version='test-code-version',
+                surface_seal='f' * 64, execution_token=None,
+                action=SimpleNamespace(
+                    waiting_on='manual-unregistered-blocker',
+                    action_sha256='9' * 64))
+        box['current'] = SimpleNamespace(
+            state='blocked', code_version='test-code-version',
+            surface_seal=seal, execution_token=None,
+            action=SimpleNamespace(
+                waiting_on=agent.queue.WAITING_ON_STAGE4_DESIGN_REVIEW,
+                action_sha256=seal[:8] + 'd' * 56,
+            ),
+        )
+        return box['current']
+
+    monkeypatch.setattr(agent.operator, 'next_action_at_code', next_action)
+    outcome = AgentDeliveryOutcome(
+        state='stopped', reason='Stage4A 待审', checked_at=1)
+    monkeypatch.setattr(agent, '_assess_delivery', lambda *_args, **_kwargs: outcome)
+    task_box = {}
+
+    def build_task(_base, _sid, current, request_path, *, epoch_id):
+        del epoch_id
+        if current.action.waiting_on != agent.queue.WAITING_ON_STAGE4_DESIGN_REVIEW:
+            return None  # 与生产 build_task 一致：表外 blocker 没有 reviewer task
+        task = agent.reviewer_tasks.ReviewerTask(
+            waiting_on=agent.queue.WAITING_ON_STAGE4_DESIGN_REVIEW,
+            surface_seal=current.surface_seal,
+            business_sha256=current.surface_seal,
+            request_path=Path(request_path),
+            prompt=f'STAGE4 DESIGN WORKPACK {current.surface_seal[:4]}',
+            submission_options=(),
+        )
+        task_box['task'] = task
+        return task
+
+    monkeypatch.setattr(agent.reviewer_tasks, 'build_task', build_task)
+    monkeypatch.setattr(
+        agent.reviewer_tasks, 'load_action',
+        lambda _path, _current, *, submission_options:
+        agent.reviewer_tasks.ReviewerNodeAction(
+            kind='node', node='stage4.design',
+            flags=('--review-token', 's4dr_' + 'a' * 64)))
+    monkeypatch.setattr(
+        agent, '_execute_reviewer_node_action',
+        lambda _base, _sid, _action, _run_token: agent.SupervisorActionResult(
+            exit_code=0, outcome=outcome, continue_ready=True))
+    return task_box
+
+
+def test_stage4_re_review_after_surface_change_opens_a_new_seat(
+        base, corpus, monkeypatch):
+    """返修落盘后 surface 变化 ⇒ 新 binding、新 fresh session；不续用旧席。"""
+    # 真实 operator next 在 typed 决定落盘前保持同一 surface：审阅轮与随后的
+    # 执行轮各读一次同一 seal；返修落盘后才换成新 seal。
+    task_box = _stage4_review_harness(
+        monkeypatch, ['1' * 64, '1' * 64, '2' * 64, '2' * 64])
+    invocations = []
+
+    def default_spawn(_run_id, *, on_registered=None):
+        def spawn(invocation, env, log):
+            del env, log
+            invocations.append(invocation)
+            assert on_registered is not None
+            on_registered()
+            task = task_box['task']
+            task.request_path.parent.mkdir(parents=True, exist_ok=True)
+            task.request_path.write_text(
+                json.dumps({'turn': len(invocations)}), encoding='utf-8')
+            return CommanderProcessResult(
+                exit_code=0,
+                observation=CommanderObservation(
+                    provider_session_id=f'provider-seat-{len(invocations)}',
+                    actual_model=invocation.profile.model,
+                    actual_effort=invocation.profile.reasoning_effort,
+                    usage=None))
+        return spawn
+
+    monkeypatch.setattr(agent, '_default_spawn', default_spawn)
+    rec = agent.start(
+        base, '42', authorized=True, egress_authorized=True,
+        profiles=_PROFILES, spawn=None)
+    assert agent.wait(rec.run_id, 10)
+
+    assert len(invocations) == 2
+    assert [row.resume_provider_session_id for row in invocations] == [None, None]
+    assert invocations[0].stdin_text != invocations[1].stdin_text
+    [done] = [row for row in agent.records(base) if row.run_id == rec.run_id]
+    assert done.exit_code == 2 and '没有登记' in (done.outcome.reason if done.outcome else '')
+    sessions = agent_session_audit.fold(agent_session_audit.read_events(base))
+    assert len(sessions) == 2, '两个 surface 各一席，不是同一 provider session 续会'
+    assert all(session.end is not None for session in sessions)
+    assert sorted(
+        session.provider_session_ids[0] for session in sessions) == [
+        'provider-seat-1', 'provider-seat-2']
+    ledgers = agent.reviewer_seat_ledger.list_ledgers(base, '42')
+    assert sorted(row['business_sha256'] for row in ledgers) == ['1' * 64, '2' * 64]
+    assert all(row['turns'][0]['purpose'] == 'review' for row in ledgers)
+
+
+def test_reviewer_seat_ledger_persists_the_correction_cap_across_runs(
+        base, corpus, monkeypatch):
+    """上一个 run 已用尽纠错席位：新 run 的首次纠错在模型字节出去前被拒。"""
+    current = SimpleNamespace(
+        state='blocked', code_version='test-code-version',
+        surface_seal='c' * 64, execution_token=None,
+        action=SimpleNamespace(
+            waiting_on='stage6.approve', action_sha256='d' * 64))
+    monkeypatch.setattr(
+        agent.operator, 'next_action_at_code',
+        lambda _base, _sid, *, code: current)
+    outcome = AgentDeliveryOutcome(
+        state='stopped', reason='Stage6 待审', checked_at=1)
+    monkeypatch.setattr(agent, '_assess_delivery', lambda *_args, **_kwargs: outcome)
+    task_box = {}
+
+    def build_task(_base, _sid, _current, request_path, *, epoch_id):
+        del epoch_id
+        task = agent.reviewer_tasks.ReviewerTask(
+            waiting_on='stage6.approve', surface_seal=current.surface_seal,
+            business_sha256='e' * 64, request_path=Path(request_path),
+            prompt='STAGE6 WORKPACK', submission_options=())
+        task_box['task'] = task
+        return task
+
+    monkeypatch.setattr(agent.reviewer_tasks, 'build_task', build_task)
+    monkeypatch.setattr(
+        agent.reviewer_tasks, 'load_action',
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            agent.reviewer_tasks.ReviewerTaskError('typed 请求仍不合法')))
+    # 上一个 run 留下的账：首审 + 两次纠错都已用完。
+    for index, purpose in enumerate(('review', 'correction', 'correction')):
+        agent.reviewer_seat_ledger.reserve(
+            base, '42', waiting_on='stage6.approve', business_sha256='e' * 64,
+            purpose=purpose, session_run_id='previous-run-seat',
+            turn_id=f'previous-{index}', parent_run_id='previous-parent',
+            epoch_id='previous-epoch', now=index)
+        agent.reviewer_seat_ledger.finish(
+            base, '42', waiting_on='stage6.approve', business_sha256='e' * 64,
+            turn_id=f'previous-{index}', exit_code=2, now=index + 1)
+    invocations = []
+
+    def default_spawn(_run_id, *, on_registered=None):
+        def spawn(invocation, env, log):
+            del env, log
+            invocations.append(invocation)
+            assert on_registered is not None
+            on_registered()
+            task = task_box['task']
+            task.request_path.parent.mkdir(parents=True, exist_ok=True)
+            task.request_path.write_text(
+                json.dumps({'turn': len(invocations)}), encoding='utf-8')
+            return CommanderProcessResult(
+                exit_code=0,
+                observation=CommanderObservation(
+                    provider_session_id='provider-cap',
+                    actual_model=invocation.profile.model,
+                    actual_effort=invocation.profile.reasoning_effort,
+                    usage=None))
+        return spawn
+
+    monkeypatch.setattr(agent, '_default_spawn', default_spawn)
+    rec = agent.start(
+        base, '42', authorized=True, egress_authorized=True,
+        profiles=_PROFILES, spawn=None)
+    assert agent.wait(rec.run_id, 10)
+
+    # 首审可以开新席（review 不受纠错上限约束），随后第一次纠错被持久账拒绝。
+    assert len(invocations) == 2, (
+        '第二次 Popen 在 stdin 发出前被账本拒绝并终止，仍算一次 0-wire 启动')
+    [done] = [row for row in agent.records(base) if row.run_id == rec.run_id]
+    assert done.exit_code == 2
+    assert done.outcome is not None
+    assert '纠错席位已用尽' in done.outcome.reason
+    [ledger] = agent.reviewer_seat_ledger.list_ledgers(base, '42')
+    assert [row['purpose'] for row in ledger['turns']] == [
+        'review', 'correction', 'correction', 'review']
+    sessions = agent_session_audit.fold(agent_session_audit.read_events(base))
+    assert len(sessions) == 1 and sessions[0].end is not None
 
 
 def test_stage2_exit2_corrects_before_invalid_surface_can_replace_reviewer(

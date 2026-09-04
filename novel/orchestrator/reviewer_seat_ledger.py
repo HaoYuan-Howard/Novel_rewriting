@@ -1,0 +1,321 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""非 Stage2 reviewer blocker 的跨进程席位账。
+
+Stage2 的席位账按 Global/MainText 主体记四席；其它 reviewer blocker（Stage0/4/5/6/7
+审批与 Stage4 A/B 裁决）此前只有一个进程内的纠错计数：重启、pause/resume 或换
+epoch 都会把它清零。这里把同一 ``(sid, blocker, business_sha256)`` 上的每一轮
+Commander turn（首次完整审阅 + 纠错）与同轮内的进程 attempts 持久记账：
+
+- 一份账对应一个 reviewer **席位**：同一 binding 内的首次审阅与纠错共用同一
+  logical/provider session（纠错是紧凑提示，依赖该席已读过的工作包）；
+- 纠错次数上限 ``COMMANDER_REVIEWER_MAX_CORRECTIONS`` 跨重启持久，不返还；
+- 账在 Popen 后、stdin 发出前写 ``started``，与 Stage2 席位账同一纪律。
+
+surface（如返修落盘后的新候选）变化会改变 business_sha256 → 新账、新席，因此
+“请求返修的那个会话自己复审”在账本层不可表达。
+"""
+from __future__ import annotations
+
+import hashlib
+import os
+import tempfile
+import time
+from pathlib import Path
+from typing import Any
+
+from pydantic import TypeAdapter
+
+from contracts.invariants import COMMANDER_REVIEWER_MAX_CORRECTIONS
+from contracts.schema.orchestration import (
+    ReviewerSeatLedger, ReviewerSeatTurn, Stage2ReviewAttempt,
+)
+from novel import paths, run_identity
+from novel.appendlog import path_transaction_lock
+from novel.errors import PathRefused
+
+
+MAX_CORRECTIONS = COMMANDER_REVIEWER_MAX_CORRECTIONS
+_RAW_LEDGER = TypeAdapter(dict[str, Any])
+
+
+class ReviewerSeatRefused(RuntimeError):
+    """纠错席位耗尽、账不闭合或身份冲突。"""
+
+
+def _blocker_segment(waiting_on: str) -> str:
+    text = str(waiting_on).strip()
+    if not text or len(text) > 96 or any(
+            ch in text for ch in '/\\') or text in ('.', '..'):
+        raise PathRefused(f'reviewer blocker 不是合法目录段：{waiting_on!r}')
+    return text.replace(':', '__')
+
+
+def ledger_path(
+    base: str | os.PathLike[str], sid: str, *,
+    waiting_on: str, business_sha256: str,
+) -> Path:
+    checked_sid = paths.check_sid(sid)
+    if (len(business_sha256) != 64
+            or any(ch not in '0123456789abcdef' for ch in business_sha256)):
+        raise ValueError('business_sha256 不是 64 位小写 SHA-256')
+    target = (
+        paths.service_runs_dir(base) / checked_sid / 'reviewer_seats'
+        / _blocker_segment(waiting_on) / f'{business_sha256}.json')
+    service_root = paths.service_dir(base).absolute()
+    if service_root.is_symlink():
+        raise PathRefused('_service 根不能是符号链接')
+    resolved = target.absolute().resolve()
+    try:
+        resolved.relative_to(service_root.resolve())
+    except ValueError as exc:
+        raise PathRefused('reviewer seat ledger 越出 _service') from exc
+    return resolved
+
+
+def _atomic_write(path: Path, ledger: ReviewerSeatLedger) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    data = (ledger.model_dump_json(indent=2) + '\n').encode('utf-8')
+    fd, temporary = tempfile.mkstemp(prefix=f'.{path.name}.', dir=path.parent)
+    try:
+        with os.fdopen(fd, 'wb') as handle:
+            handle.write(data)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+    except BaseException:
+        try:
+            os.unlink(temporary)
+        except OSError:
+            pass
+        raise
+
+
+def _read(path: Path) -> ReviewerSeatLedger | None:
+    if not path.exists():
+        return None
+    if path.is_symlink() or not path.is_file():
+        raise ReviewerSeatRefused(f'reviewer seat ledger 不是普通文件：{path}')
+    try:
+        raw = _RAW_LEDGER.validate_json(path.read_bytes())
+        return ReviewerSeatLedger.model_validate(raw)
+    except Exception as exc:  # noqa: BLE001 —— 坏账不能静默重置席位
+        raise ReviewerSeatRefused(
+            f'reviewer seat ledger 无法按当前 typed 契约读取：{path}') from exc
+
+
+def _locate(
+    ledger: ReviewerSeatLedger, turn_id: str,
+) -> tuple[int, ReviewerSeatTurn]:
+    matches = [
+        (index, row) for index, row in enumerate(ledger.turns)
+        if row.turn_id == turn_id]
+    if len(matches) != 1:
+        raise ReviewerSeatRefused('reviewer seat turn 在账中不唯一')
+    return matches[0]
+
+
+def _replace(
+    path: Path, ledger: ReviewerSeatLedger, index: int, turn: ReviewerSeatTurn,
+) -> ReviewerSeatTurn:
+    turns = [row.model_dump(mode='json') for row in ledger.turns]
+    turns[index] = turn.model_dump(mode='json')
+    updated = ReviewerSeatLedger.model_validate({
+        **ledger.model_dump(mode='json'), 'turns': turns})
+    _atomic_write(path, updated)
+    return updated.turns[index]
+
+
+def corrections_used(ledger: ReviewerSeatLedger | None) -> int:
+    if ledger is None:
+        return 0
+    return sum(1 for row in ledger.turns if row.purpose == 'correction')
+
+
+def reserve(
+    base: str | os.PathLike[str], sid: str, *,
+    waiting_on: str,
+    business_sha256: str,
+    purpose: str,
+    session_run_id: str,
+    turn_id: str,
+    parent_run_id: str,
+    epoch_id: str,
+    now: int | None = None,
+) -> ReviewerSeatTurn:
+    """原子预留一轮 reviewer turn；纠错超过上限或账不闭合时关闭式拒绝。"""
+    path = ledger_path(
+        base, sid, waiting_on=waiting_on, business_sha256=business_sha256)
+    checked_session = run_identity.check_run_id(session_run_id)
+    with path_transaction_lock(path):
+        ledger = _read(path) or ReviewerSeatLedger(
+            sid=sid, waiting_on=waiting_on, business_sha256=business_sha256)
+        if (ledger.sid != sid or ledger.waiting_on != waiting_on
+                or ledger.business_sha256 != business_sha256):
+            raise ReviewerSeatRefused('reviewer seat ledger 身份冲突')
+        if any(row.turn_id == turn_id for row in ledger.turns):
+            raise ReviewerSeatRefused('reviewer seat turn_id 重复')
+        if purpose == 'correction':
+            used = corrections_used(ledger)
+            if used >= ledger.max_corrections:
+                raise ReviewerSeatRefused(
+                    f'{waiting_on} 在同一业务主体上的纠错席位已用尽'
+                    f'（{used}/{ledger.max_corrections}），重启不返还')
+            if not ledger.turns:
+                raise ReviewerSeatRefused('没有首次审阅席位就不能预留纠错')
+        elif purpose != 'review':
+            raise ReviewerSeatRefused(f'未登记的 reviewer seat purpose：{purpose!r}')
+        turn = ReviewerSeatTurn(
+            turn_id=turn_id,
+            ordinal=len(ledger.turns) + 1,
+            purpose=purpose,  # type: ignore[arg-type]
+            session_run_id=checked_session,
+            parent_run_id=run_identity.check_run_id(parent_run_id),
+            epoch_id=epoch_id,
+            started_at=int(time.time()) if now is None else now,
+        )
+        updated = ReviewerSeatLedger.model_validate({
+            **ledger.model_dump(mode='json'),
+            'turns': [
+                *[row.model_dump(mode='json') for row in ledger.turns],
+                turn.model_dump(mode='json')],
+        })
+        _atomic_write(path, updated)
+        return turn
+
+
+def finish(
+    base: str | os.PathLike[str], sid: str, *,
+    waiting_on: str, business_sha256: str, turn_id: str, exit_code: int,
+    now: int | None = None,
+) -> ReviewerSeatTurn:
+    """给已预留 turn 落终态；幂等同值，冲突关闭式拒绝。"""
+    path = ledger_path(
+        base, sid, waiting_on=waiting_on, business_sha256=business_sha256)
+    with path_transaction_lock(path):
+        ledger = _read(path)
+        if ledger is None:
+            raise ReviewerSeatRefused('reviewer seat turn 没有对应 ledger')
+        index, prior = _locate(ledger, turn_id)
+        outcome = 'ok' if exit_code == 0 else 'failed'
+        if prior.outcome != 'started':
+            if prior.exit_code == exit_code and prior.outcome == outcome:
+                return prior
+            raise ReviewerSeatRefused('reviewer seat turn 已有冲突终态')
+        finished = ReviewerSeatTurn.model_validate({
+            **prior.model_dump(mode='json'),
+            'finished_at': int(time.time()) if now is None else now,
+            'exit_code': exit_code, 'outcome': outcome,
+        })
+        return _replace(path, ledger, index, finished)
+
+
+def record_attempt(
+    base: str | os.PathLike[str], sid: str, *,
+    waiting_on: str, business_sha256: str, turn_id: str,
+    attempt_id: str, kind: str, provider_session_id: str | None = None,
+    now: int | None = None,
+) -> ReviewerSeatTurn:
+    path = ledger_path(
+        base, sid, waiting_on=waiting_on, business_sha256=business_sha256)
+    with path_transaction_lock(path):
+        ledger = _read(path)
+        if ledger is None:
+            raise ReviewerSeatRefused('reviewer seat attempt 没有对应 ledger')
+        index, prior = _locate(ledger, turn_id)
+        if prior.outcome != 'started':
+            raise ReviewerSeatRefused('reviewer seat turn 已终态，不能再登记 attempt')
+        if any(row.attempt_id == attempt_id for row in prior.attempts):
+            raise ReviewerSeatRefused('reviewer seat attempt_id 重复')
+        attempt = Stage2ReviewAttempt(
+            attempt_id=attempt_id, kind=kind,  # type: ignore[arg-type]
+            started_at=int(time.time()) if now is None else now,
+            provider_session_id=provider_session_id)
+        updated = ReviewerSeatTurn.model_validate({
+            **prior.model_dump(mode='json'),
+            'attempts': [
+                *[row.model_dump(mode='json') for row in prior.attempts],
+                attempt.model_dump(mode='json')],
+        })
+        return _replace(path, ledger, index, updated)
+
+
+def finish_attempt(
+    base: str | os.PathLike[str], sid: str, *,
+    waiting_on: str, business_sha256: str, turn_id: str,
+    attempt_id: str, exit_code: int, error_kind: str | None,
+    provider_session_id: str | None, wire_evidence: bool,
+    now: int | None = None,
+) -> ReviewerSeatTurn:
+    path = ledger_path(
+        base, sid, waiting_on=waiting_on, business_sha256=business_sha256)
+    with path_transaction_lock(path):
+        ledger = _read(path)
+        if ledger is None:
+            raise ReviewerSeatRefused('reviewer seat attempt 没有对应 ledger')
+        index, prior = _locate(ledger, turn_id)
+        rows = [row.model_dump(mode='json') for row in prior.attempts]
+        hits = [i for i, row in enumerate(rows) if row['attempt_id'] == attempt_id]
+        if len(hits) != 1:
+            raise ReviewerSeatRefused('reviewer seat attempt 在轮内不唯一')
+        current = rows[hits[0]]
+        if current.get('exit_code') is not None:
+            if (current.get('exit_code') == exit_code
+                    and current.get('error_kind') == error_kind):
+                return prior
+            raise ReviewerSeatRefused('reviewer seat attempt 已有冲突终态')
+        rows[hits[0]] = {
+            **current,
+            'finished_at': int(time.time()) if now is None else now,
+            'exit_code': exit_code, 'error_kind': error_kind,
+            'provider_session_id': (
+                provider_session_id or current.get('provider_session_id')),
+            'wire_evidence': bool(current.get('wire_evidence')) or wire_evidence,
+        }
+        updated = ReviewerSeatTurn.model_validate({
+            **prior.model_dump(mode='json'), 'attempts': rows})
+        return _replace(path, ledger, index, updated)
+
+
+def read(
+    base: str | os.PathLike[str], sid: str, *,
+    waiting_on: str, business_sha256: str,
+) -> ReviewerSeatLedger | None:
+    return _read(ledger_path(
+        base, sid, waiting_on=waiting_on, business_sha256=business_sha256))
+
+
+def list_ledgers(base: str | os.PathLike[str], sid: str) -> list[dict[str, Any]]:
+    """只读列出一本书全部 reviewer 席位账的无正文摘要。"""
+    root = paths.service_runs_dir(base) / paths.check_sid(sid) / 'reviewer_seats'
+    if not root.is_dir():
+        return []
+    shown: list[dict[str, Any]] = []
+    for candidate in sorted(root.glob('*/*.json')):
+        if not candidate.is_file() or candidate.is_symlink():
+            continue
+        ledger = _read(candidate)
+        if ledger is None:
+            continue
+        shown.append({
+            'ledger_path': str(candidate),
+            'waiting_on': ledger.waiting_on,
+            'business_sha256': ledger.business_sha256,
+            'max_corrections': ledger.max_corrections,
+            'corrections_used': corrections_used(ledger),
+            'turns': [{
+                'ordinal': row.ordinal, 'purpose': row.purpose,
+                'outcome': row.outcome, 'exit_code': row.exit_code,
+                'session_run_id': row.session_run_id,
+                'attempts': len(row.attempts),
+            } for row in ledger.turns],
+            'sha256': hashlib.sha256(candidate.read_bytes()).hexdigest(),
+        })
+    return shown
+
+
+__all__ = [
+    'MAX_CORRECTIONS', 'ReviewerSeatRefused', 'corrections_used',
+    'finish', 'finish_attempt', 'ledger_path', 'list_ledgers', 'read',
+    'record_attempt', 'reserve',
+]
