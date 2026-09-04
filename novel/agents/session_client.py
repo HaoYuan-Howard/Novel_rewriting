@@ -30,6 +30,7 @@ from novel.agents import (
     AgentBusyError, AgentCommandError, AgentConfigurationError, AgentDriver,
     AgentError, AgentProbe, AgentRequest, AgentTurn, AgentUsage,
     agent_delivery_protocol,
+    validate_agent_output_schema,
 )
 from novel.config import DEFAULT_BACKOFF_BASE, DEFAULT_MAX_RETRIES
 from novel.errors import ProvenanceRefused
@@ -274,25 +275,66 @@ def agent_json_schema(model_cls: type) -> dict:
     `unknown keyword: "discriminator"` ⇒ CLI exit=1，**一次模型都没调就整节点终态**。
     这是 2026-08-28 第一次用 main 的 agent 路真跑整书时当场撞到的第一堵墙。
 
-    ⚠ **剥掉它不放宽任何约束**：`discriminator` 只是给校验器的分支提示，
-    `oneOf`/`anyOf` 的分支本身一格没动，形状约束完全等价；而真正的判定权从来不在
+    ⚠ **剥掉它不放宽任何约束**：`discriminator` 只是给校验器的分支提示；
+    Pydantic 同时发出的 `oneOf` 归一成公共子集支持的 `anyOf`，联合分支本身一格没动；
+    单值 `const` 等价改写为单元素 `enum`。`default` 只是注解，wire 必须把对应
+    nullable/空集合键显式交回，所以删除注解并把每层 `properties` 全量写进
+    `required`。真正的判定权从来不在
     provider 侧——响应回来仍要过 `novel/llm/client.py::judge_payload` 的四道闸，
     其中 schema 那一道用的是 pydantic 模型本身，不是这份下发的 schema。
     ⇒ 这里改的是「怎么把契约讲给 CLI 听」，不是「契约是什么」。
 
+    动态键 object 不能靠删关键字修成合法 schema：调用点必须先把 provider wire 设计成
+    显式键值行数组，再由 Pydantic 确定性还原为内部映射。归一完成后还要经过公共严格
+    子集预检；因此未来新增不兼容响应会在任何 Claude/Codex 子进程前显式失败。
+
     ⚠ 归一在**构造口**而不是某个 driver 里：identity、`schema_sha256` 与真正发出去的
     字节必须是同一份。放进 driver 会让账上记的 schema 与 wire 上的那份分家。
     """
-    def strip(node: object) -> object:
+    def normalize(node: object, *, names: bool = False) -> object:
         if isinstance(node, dict):
-            return {key: strip(value) for key, value in node.items()
-                    if key != 'discriminator'}
+            if names:
+                return {
+                    key: normalize(value)
+                    for key, value in node.items()
+                }
+            if 'oneOf' in node and 'anyOf' in node:
+                raise AgentConfigurationError(
+                    'agent response schema 同层同时出现 oneOf/anyOf，无法等价归一')
+            if 'const' in node and 'enum' in node:
+                raise AgentConfigurationError(
+                    'agent response schema 同层同时出现 const/enum，无法等价归一')
+            out: dict[str, object] = {}
+            for key, value in node.items():
+                if key in ('default', 'discriminator'):
+                    continue
+                if key == 'const':
+                    # OpenAI 的公开严格子集登记 enum，不登记 const；单值枚举与
+                    # Pydantic Literal 发出的 const 约束等价，Claude AJV 也接受。
+                    out['enum'] = [normalize(value)]
+                else:
+                    normalized_key = 'anyOf' if key == 'oneOf' else key
+                    out[normalized_key] = normalize(
+                        value,
+                        names=key in ('$defs', 'properties'),
+                    )
+            properties = out.get('properties')
+            type_value = out.get('type')
+            if (isinstance(properties, dict)
+                    and (type_value == 'object'
+                         or (isinstance(type_value, list)
+                             and 'object' in type_value))):
+                # OpenAI strict 要求所有键显式返回；nullable 用 anyOf/null 表达，
+                # 空列表也必须返回 []，不能靠省键触发 Pydantic default。
+                out['required'] = list(properties)
+            return out
         if isinstance(node, list):
-            return [strip(item) for item in node]
+            return [normalize(item) for item in node]
         return node
 
-    schema = strip(model_cls.model_json_schema(by_alias=True))
+    schema = normalize(model_cls.model_json_schema(by_alias=True))
     assert isinstance(schema, dict)
+    validate_agent_output_schema(schema)
     return schema
 
 

@@ -959,6 +959,16 @@ candidate re-entry。dynamic-validator 拒稿 custody 按当轮 `expected_turn_k
 同书所有权内走 `prepared → Global/review/projection/INVALID touched paths → typed readback + freshness
 → adoption → committed`；foreign prepared 先拒，新 run 不得覆盖 kill 窗口。
 
+所有 executor 共用 `agent_json_schema` 生成的 provider wire，不按 Claude/Codex 分叉 schema。该 wire
+限制为两端都能严格校验的子集：根是 object，每层 object 关闭动态属性且全部字段必填；Pydantic 的
+`discriminator/default` 注解被移除，`oneOf` 等价归一为 `anyOf`，单值 `const` 等价归一为单元素
+`enum`。业务上必须保留的动态键映射不伪装成
+开放 object：Stage2 的人物表/role-fate 表与 Stage7 的 surname map 在线上改为显式 key/value 行数组，
+验收时拒绝重复键并确定性还原成原有 dict。这个适配只存在于 agent wire；正式 artifact、内部 typed
+对象与新 checkpoint 的 response payload 都不改形，恢复后仍重跑当前 schema/HARD。旧 checkpoint
+字节不迁移；其旧 schema SHA 与当前 wire 不同，因此 live restore 关闭式失败、由新 run 重建。
+归一后的 canonical schema 同时用于 identity、checkpoint 与具体 CLI，且在拉起任一 driver 前通过公共预检。
+
 除上述 Global 固定联合信封的窄补丁外，其余 agent schema 固定为 `BlindPlanResponse`、
 `EvidenceBindingResponse`、`ChapterResponse`、`HookResponse` 或 `NameMapResponse`；一次 feedback 后仍交
 完整 replacement，不能换成局部补丁 schema。代码先物化候选，

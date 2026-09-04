@@ -120,8 +120,14 @@ def _bad_global() -> dict:
 
 
 def _full(candidate: dict) -> str:
+    wire = copy.deepcopy(candidate)
+    characters = wire['entities']['characters']
+    wire['entities']['characters'] = [
+        {'char_id': char_id, **character}
+        for char_id, character in characters.items()
+    ]
     return json.dumps({
-        'payload': {'kind': 'full_candidate', 'candidate': candidate},
+        'payload': {'kind': 'full_candidate', 'candidate': wire},
     }, ensure_ascii=False)
 
 

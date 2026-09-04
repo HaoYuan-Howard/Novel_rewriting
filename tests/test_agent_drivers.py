@@ -37,6 +37,14 @@ from novel.agents import (
 from novel.agents.base import resolve_cli_entry
 
 
+_STRICT_OUTPUT_SCHEMA: dict[str, object] = {
+    'type': 'object',
+    'properties': {'status': {'enum': ['done']}},
+    'required': ['status'],
+    'additionalProperties': False,
+}
+
+
 def _profile(driver: str, *, model: str | None = None,
              effort: str = 'high', mode: str | None = None) -> AgentProfile:
     defaults = {
@@ -134,6 +142,50 @@ def _codex_jsonl(*, session_id: str = 'codex-session-1',
     ))
 
 
+@pytest.mark.parametrize(
+    ('schema', 'message'),
+    [
+        (
+            {
+                'type': 'object',
+                'properties': {
+                    'characters': {
+                        'type': 'object',
+                        'additionalProperties': {'type': 'string'},
+                    },
+                },
+                'required': ['characters'],
+                'additionalProperties': False,
+            },
+            '显式键字段的行数组',
+        ),
+        (
+            {
+                'type': 'object',
+                'properties': {'status': {'type': 'string'}},
+                'required': [],
+                'additionalProperties': False,
+            },
+            'required',
+        ),
+        (
+            {
+                'type': 'object',
+                'properties': {'status': {'type': 'string', 'default': 'ok'}},
+                'required': ['status'],
+                'additionalProperties': False,
+            },
+            '公共严格',
+        ),
+    ],
+)
+def test_provider_neutral_request_rejects_nonportable_schema_before_any_driver(
+        tmp_path, schema, message):
+    """同一 AgentRequest 闸同时保护 Claude 与 Codex，不留厂商特判旁路。"""
+    with pytest.raises(AgentConfigurationError, match=message):
+        _request(tmp_path, prompt='不得拉起 CLI', output_schema=schema)
+
+
 def test_agent_driver_is_an_abstract_lifecycle_contract():
     assert AgentDriver.__abstractmethods__ == {
         'probe', 'start', 'resume', 'cancel', 'close'}
@@ -175,6 +227,7 @@ def test_claude_start_uses_json_stdin_and_explicit_model_effort(tmp_path):
             'type': 'object',
             'properties': {'status': {'type': 'string'}},
             'required': ['status'],
+            'additionalProperties': False,
         },
         delivery_protocol=CLAUDE_STRUCTURED_DELIVERY_V1)
     turn = driver.start(_profile('claude-code'), request)
@@ -236,13 +289,13 @@ def test_claude_resume_uses_the_exact_session_id_same_cwd_and_rejects_a_fork(
     driver.start(
         _profile('claude-code'),
         _request(
-            isolated, prompt='建立会话', output_schema={'type': 'object'},
+            isolated, prompt='建立会话', output_schema=_STRICT_OUTPUT_SCHEMA,
             delivery_protocol=CLAUDE_STRUCTURED_DELIVERY_V1))
     turn = driver.resume(
         _profile('claude-code'), 'kept-session',
         _request(
             isolated, prompt='这是代码校验反馈',
-            output_schema={'type': 'object'},
+            output_schema=_STRICT_OUTPUT_SCHEMA,
             delivery_protocol=CLAUDE_STRUCTURED_DELIVERY_V1))
     assert turn.session_id == 'kept-session'
     assert turn.turn_count == 3, 'turn_count 只表示本次 invocation 的 provider 读数'
@@ -391,7 +444,7 @@ def test_claude_schema_requires_structured_output_but_schema_less_can_use_result
             _profile('claude-code'),
             _request(
                 tmp_path, prompt='结构化请求',
-                output_schema={'type': 'object'},
+                output_schema=_STRICT_OUTPUT_SCHEMA,
                 delivery_protocol=CLAUDE_STRUCTURED_DELIVERY_V1))
 
     schema_less = ClaudeCodeDriver(
@@ -416,7 +469,7 @@ def test_claude_schema_refuses_a_request_without_the_v1_delivery_footer(tmp_path
             _profile('claude-code'),
             _request(
                 tmp_path, prompt='不能缺 footer',
-                output_schema={'type': 'object'}))
+                output_schema=_STRICT_OUTPUT_SCHEMA))
     assert called is False
 
 
@@ -424,7 +477,7 @@ def test_codex_start_uses_jsonl_output_schema_and_explicit_profile(tmp_path):
     seen: dict[str, object] = {}
     schema = {
         'type': 'object',
-        'properties': {'status': {'const': 'done'}},
+        'properties': {'status': {'enum': ['done']}},
         'required': ['status'],
         'additionalProperties': False,
     }
@@ -489,12 +542,12 @@ def test_codex_resume_uses_exec_resume_same_id_schema_and_cwd(tmp_path):
     driver = CodexDriver(executable='codex.exe', runner=runner)
     driver.start(
         _profile('codex', effort='max'),
-        _request(isolated, prompt='建立会话', output_schema={'type': 'object'}))
+        _request(isolated, prompt='建立会话', output_schema=_STRICT_OUTPUT_SCHEMA))
     turn = driver.resume(
         _profile('codex', effort='max'), 'thread-42',
         _request(
             isolated, prompt='机械校验仍有两项失败',
-            output_schema={'type': 'object'}))
+            output_schema=_STRICT_OUTPUT_SCHEMA))
 
     argv = seen[1]
     schema_path = argv[argv.index('--output-schema') + 1]
@@ -579,6 +632,38 @@ def test_codex_startup_error_without_thread_keeps_failure_usage(tmp_path):
     assert caught.value.usage.prompt_cache_hit_tokens == 4
     assert caught.value.usage.total_tokens == 11
     assert 'private' not in str(caught.value) and '私密内容' not in str(caught.value)
+
+
+def test_codex_nested_invalid_json_schema_is_actionable_and_not_retried(tmp_path):
+    """真实 CLI 会把 provider 400 再编码进 error.message，仍要识别状态与根因。"""
+    provider_error = {
+        'status': 400,
+        'error': {
+            'type': 'invalid_request_error',
+            'code': 'invalid_json_schema',
+            'message': (
+                "Invalid schema for response_format 'codex_output_schema': "
+                "'required' must include every key in properties"),
+            'param': 'text.format.schema',
+        },
+    }
+    stdout = json.dumps({
+        'type': 'error',
+        'message': json.dumps(provider_error),
+    })
+    driver = CodexDriver(
+        executable='codex.exe',
+        runner=lambda argv, **_kwargs: _completed(
+            argv, stdout, returncode=1),
+    )
+
+    with pytest.raises(AgentCommandError) as caught:
+        driver.start(_profile('codex'), _request(tmp_path, prompt='开始'))
+
+    assert caught.value.error_kind == 'agent_schema'
+    assert caught.value.status == 400
+    assert caught.value.retryable is False
+    assert 'required' not in str(caught.value)
 
 
 def test_codex_nonzero_exit_uses_private_stderr_only_for_retry_classification(
@@ -705,7 +790,14 @@ def test_claude_large_inline_schema_is_refused_before_windows_createprocess(
     driver = ClaudeCodeDriver(executable='claude.exe', runner=runner)
     request = _request(
         tmp_path, prompt='开始',
-        output_schema={'type': 'string', 'description': '甲' * 33_000},
+        output_schema={
+            'type': 'object',
+            'properties': {
+                'status': {'type': 'string', 'description': '甲' * 33_000},
+            },
+            'required': ['status'],
+            'additionalProperties': False,
+        },
         delivery_protocol=CLAUDE_STRUCTURED_DELIVERY_V1,
     )
 

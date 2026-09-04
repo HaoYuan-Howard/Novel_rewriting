@@ -94,6 +94,13 @@ Stage4 下发只认这格；旧的人名/埋点启发式只作 INFO 对账。
 normalize、全部 HARD、GlobalReview、provenance、正式 readback 与 adoption。候选 ID 只是一轮
 请求内的 wire 引用，不进入 GlobalGrounding v4、GlobalEdit v3 或正式 provenance。
 
+同一 provider wire 上，`entities.characters` 不是以未知 `char_id` 为 object 键，而是
+`[{char_id, canonical, ...}]` 行数组；`--purge-role` 的 `characters` 同样是
+`[{char_id, role, fate}]`。这是 Claude/Codex 公共严格 JSON Schema 对动态键的传输适配：代码在 typed
+验收时拒绝重复 `char_id`，再还原成内部既有的 `{char_id: value}`。因此 GlobalGrounding 正式产物、
+新候选 checkpoint 的内部 payload 均不升版、不改形，只有真实下发/返回的 agent wire 使用数组。
+旧 checkpoint 保留原字节，但因绑定旧 provider schema SHA 而不跨版本恢复；新 run 重新请求。
+
 这套结构只消灭章号/locator 的模型转抄错位，不判断所选段落是否真的支持主张；后者仍由
 GlobalReview 的语义复核承担。2026-08-31 产品所有者在首个实验 wire 前取消 candidate/locator A/B
 与盲审，并把 candidate 收成 sole active；实验状态是 `CANCELLED_BEFORE_WIRE`，真实 provider

@@ -59,7 +59,7 @@ def test_global_prompt_requests_typed_visibility_and_candidate_ids_only():
 
     candidate_ref_keys = {'evidence_candidate_id'}
     seven_families = [
-        hint['entities']['characters']['char_001']['role_evidence'],
+        hint['entities']['characters'][0]['role_evidence'],
         relations[0]['predicate_evidence'],
         hint['canon']['setting']['era_evidence'],
         hint['canon']['world_rules'][0]['versions'][0]['desc_evidence'],
@@ -71,7 +71,8 @@ def test_global_prompt_requests_typed_visibility_and_candidate_ids_only():
 
 
 def test_role_split_stays_a_claim_only_judge_without_source_access():
-    assert set(prompts.ROLE_SPLIT_HINT['characters']['char_001']) == {'role', 'fate'}
+    assert set(prompts.ROLE_SPLIT_HINT['characters'][0]) == {
+        'char_id', 'role', 'fate'}
     assert 'locator' not in prompts.ROLE_SPLIT_SYS
 
 
@@ -114,7 +115,7 @@ def test_response_hints_derive_enums_from_the_contract_layer():
     assert beat['time_layer'] == '|'.join(RESPONSE_TIME_LAYERS)
     assert beat['hinges'][0]['kind'] == '|'.join(HINGE_KINDS)
     character = prompts.GLOBAL_CANDIDATE_HINT[
-        'entities']['characters']['char_001']
+        'entities']['characters'][0]
     assert character['name_distinctiveness'] == '|'.join(NAME_DISTINCTIVENESS)
     assert character['address'][0]['context'] == '|'.join(ADDRESS_CONTEXT)
     assert character['address'][0]['by'] == 'char_002|' + '|'.join(

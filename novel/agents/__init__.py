@@ -23,6 +23,7 @@ from novel.agents.base import (
     render_agent_stdin_bytes,
     render_structured_agent_stdin,
     render_structured_agent_stdin_bytes,
+    validate_agent_output_schema,
 )
 from novel.agents.claude_code import ClaudeCodeDriver
 from novel.agents.codex import CodexDriver
@@ -47,4 +48,5 @@ __all__ = [
     'render_agent_stdin_bytes',
     'render_structured_agent_stdin',
     'render_structured_agent_stdin_bytes',
+    'validate_agent_output_schema',
 ]

@@ -110,7 +110,7 @@ _GLOBAL_TPL = """\
 三者互相印证、一次产出以保持 char_id 等引用跨部分一致。只提炼原作已写事实，不设计新剧情。
 
 ────────── ① entities（实体与有向关系） ──────────
-characters：char_id 用 char_001…顺序编号，主角优先 char_001。
+characters：用数组逐行返回；每行显式填写 char_id，按 char_001…顺序编号，主角优先 char_001。
 每个角色给：canonical(这个人的唯一显示名)、address[](谁在什么时候怎么称呼他)、
 name_distinctiveness ∈ $NAME_DISTINCT、role(静态身份)+role_evidence、
 fate(经历与结局|null)+fate_evidence（fate 为 null 时 evidence 也必须为 null）。
@@ -328,7 +328,8 @@ $ROLE_FATE
 
 【只搬不改】两栏合起来必须覆盖原来两栏的全部信息，一个事实都不许丢。
 搬过去的文字并进目标栏（合成通顺的一段），**不增删事实、不润色、不概括**。
-【char_id 原样返回】给你的每个 char_id 都要出现在结果里，一个不少、一个不多。
+【char_id 原样返回】characters 用数组逐行返回，每行显式填写 char_id；给你的每个
+char_id 都要出现一次，一个不少、一个不多、不得重复。
 只输出 JSON，不要额外解释。"""
 
 # ---------------------------------------------------------------------------
@@ -368,7 +369,8 @@ _EVIDENCE_CANDIDATE_HINT: dict[str, Any] = {
 
 GLOBAL_CANDIDATE_HINT: dict[str, Any] = {
     'entities': {
-        'characters': {'char_001': {
+        'characters': [{
+            'char_id': 'char_001',
             'canonical': 'str',
             'address': [{'surface': 'str',
                          'by': 'char_002|' + '|'.join(b for b in ADDRESS_BY if b != 'char_id'),
@@ -377,7 +379,7 @@ GLOBAL_CANDIDATE_HINT: dict[str, Any] = {
             'name_distinctiveness': '|'.join(NAME_DISTINCTIVENESS),
             'role': 'str', 'role_evidence': _EVIDENCE_CANDIDATE_HINT,
             'fate': 'str|null',
-            'fate_evidence': _EVIDENCE_CANDIDATE_HINT}},
+            'fate_evidence': _EVIDENCE_CANDIDATE_HINT}],
         'relations': [
             {'relation_id': 'rel_01', 'subject_id': 'char_001', 'predicate': 'str',
              'predicate_evidence': _EVIDENCE_CANDIDATE_HINT, 'object_id': 'char_002',
@@ -435,8 +437,9 @@ HINGE_PHRASE_HINT: dict[str, Any] = {'phrase': '原样照抄的那几个字'}
 
 #: `--purge-role` 那条臂的结构提示（原型 `n2_global.py:454`）。
 #: ⚠ 它**只回这两栏 + char_id**：那条臂的契约是「只搬不改、char_id 原样返回」。
-ROLE_SPLIT_HINT: dict[str, Any] = {'characters': {'char_001': {'role': 'str',
-                                                               'fate': 'str|null'}}}
+ROLE_SPLIT_HINT: dict[str, Any] = {
+    'characters': [{'char_id': 'char_001', 'role': 'str', 'fate': 'str|null'}],
+}
 
 
 # ── Stage2 原子事实响应面 ────────────────────────────────────────────────────

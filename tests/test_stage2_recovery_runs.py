@@ -16,11 +16,12 @@ from types import SimpleNamespace
 import pytest
 from pydantic import BaseModel, Field
 
+from contracts.schema.base import StrictModel
 from contracts.schema.orchestration import AgentProfile
 from novel import agent_session_audit, paths
 from novel.agents.base import render_structured_agent_stdin
 from novel.agents.session_client import (
-    AgentDeliveryUnavailable, agent_request_fingerprint,
+    AgentDeliveryUnavailable, agent_json_schema, agent_request_fingerprint,
 )
 from novel.errors import (
     ArtifactUnreadable, ProvenanceRefused, ResponseRepairBatchRequired,
@@ -40,6 +41,16 @@ from novel.stages.stage2 import extract
 
 class _ChapterRows(BaseModel):
     blueprints: list[dict] = Field(min_length=1)
+
+
+class _AgentChapterRow(StrictModel):
+    chapter_ordinal: int
+
+
+class _AgentChapterRows(StrictModel):
+    """agent checkpoint 测试使用的 provider-valid 最小响应模型。"""
+
+    blueprints: list[_AgentChapterRow] = Field(min_length=1)
 
 
 class _CoercingBlueprint(BaseModel):
@@ -244,9 +255,9 @@ def _agent_request_policy(
         'recovery_policy': 'stage2-blueprint-v1',
         'phases': [{
             'phase': 'blueprint',
-            'response_model': _ChapterRows.__name__,
+            'response_model': _AgentChapterRows.__name__,
             'response_schema_sha256': _canonical_sha(
-                _ChapterRows.model_json_schema(by_alias=True)),
+                agent_json_schema(_AgentChapterRows)),
             'requested_output_token_ceiling': max_tokens,
             'prefer_content_over_reasoning_salvage': False,
         }],
@@ -260,7 +271,7 @@ def _agent_checkpoint_acceptance(
     """登记若干 agent turns，并返回最后一轮的 SessionClient 同形 acceptance。"""
     assert ctx.executor_profile is not None and texts
     profile = ctx.executor_profile.model_dump(mode='json')
-    schema_sha = _canonical_sha(_ChapterRows.model_json_schema(by_alias=True))
+    schema_sha = _canonical_sha(agent_json_schema(_AgentChapterRows))
     binding = {
         'node': ctx.node,
         'chapter': 1,
@@ -428,7 +439,7 @@ def _write_single_agent_checkpoint(tmp_path: Path) -> tuple[RunContext, Path]:
         texts=[('1' * 16, text)], max_tokens=2048)
     checkpoint = stage2_runs.write_checkpoint(
         ctx, phase='blueprint', chapter=1, purpose=purpose,
-        architecture='extraction-ir-v3.1', response_model=_ChapterRows,
+        architecture='extraction-ir-v3.1', response_model=_AgentChapterRows,
         system='SYSTEM', user='USER',
         response_payload={'blueprints': [{'chapter_ordinal': 1}]},
         acceptance=acceptance, scope_violation=None)
@@ -439,7 +450,7 @@ def _historical_agent_candidates(ctx: RunContext):
     return stage2_runs.verified_blueprint_recovery_checkpoints(
         ctx,
         architecture='extraction-ir-v3.1',
-        response_model=_ChapterRows,
+        response_model=_AgentChapterRows,
         system='SYSTEM',
         artifact_code='test-stage2-runs',
         accepted_models=[_AGENT_PROFILE.model],
@@ -535,7 +546,7 @@ def test_agent_checkpoint_restores_full_session_and_ledger_with_zero_wire(
                ('2' * 16, accepted_text)], max_tokens=2048)
     checkpoint = stage2_runs.write_checkpoint(
         first, phase='blueprint', chapter=1, purpose=purpose,
-        architecture='extraction-ir-v3.1', response_model=_ChapterRows,
+        architecture='extraction-ir-v3.1', response_model=_AgentChapterRows,
         system='SYSTEM', user='USER',
         response_payload={'blueprints': [{'chapter_ordinal': 1}]},
         acceptance=acceptance, scope_violation=None)
@@ -555,7 +566,7 @@ def test_agent_checkpoint_restores_full_session_and_ledger_with_zero_wire(
         request_policy=policy)
     restored = stage2_runs.restore_checkpoint(
         resumed, phase='blueprint', chapter=1, purpose=purpose,
-        architecture='extraction-ir-v3.1', response_model=_ChapterRows,
+        architecture='extraction-ir-v3.1', response_model=_AgentChapterRows,
         system='SYSTEM', user='USER')
 
     assert restored == stored
@@ -600,7 +611,7 @@ def test_live_agent_checkpoint_restore_still_refuses_current_profile_drift(
         stage2_runs.restore_checkpoint(
             drifted, phase='blueprint', chapter=1,
             purpose='stage2.blueprint:ch1',
-            architecture='extraction-ir-v3.1', response_model=_ChapterRows,
+            architecture='extraction-ir-v3.1', response_model=_AgentChapterRows,
             system='SYSTEM', user='USER')
 
 
@@ -647,7 +658,7 @@ def test_claude_checkpoint_audit_hashes_the_final_structured_stdin(tmp_path):
 
     checkpoint = stage2_runs.write_checkpoint(
         ctx, phase='blueprint', chapter=1, purpose=purpose,
-        architecture='extraction-ir-v3.1', response_model=_ChapterRows,
+        architecture='extraction-ir-v3.1', response_model=_AgentChapterRows,
         system='SYSTEM', user='USER',
         response_payload={'blueprints': [{'chapter_ordinal': 1}]},
         acceptance=acceptance, scope_violation=None)
@@ -695,7 +706,7 @@ def test_agent_checkpoint_write_rejects_each_unclosed_identity(tmp_path, case):
     with pytest.raises(ProvenanceRefused):
         stage2_runs.write_checkpoint(
             ctx, phase='blueprint', chapter=1, purpose=purpose,
-            architecture='extraction-ir-v3.1', response_model=_ChapterRows,
+            architecture='extraction-ir-v3.1', response_model=_AgentChapterRows,
             system='SYSTEM', user='USER',
             response_payload={'blueprints': [{'chapter_ordinal': 1}]},
             acceptance=acceptance, scope_violation=None)
@@ -718,7 +729,7 @@ def test_agent_checkpoint_restore_rechecks_session_and_never_overwrites_first(
         texts=[('4' * 16, text)], max_tokens=2048)
     checkpoint = stage2_runs.write_checkpoint(
         ctx, phase='blueprint', chapter=1, purpose=purpose,
-        architecture='extraction-ir-v3.1', response_model=_ChapterRows,
+        architecture='extraction-ir-v3.1', response_model=_AgentChapterRows,
         system='SYSTEM', user='USER',
         response_payload={'blueprints': [{'chapter_ordinal': 1}]},
         acceptance=first_acceptance, scope_violation=None)
@@ -730,7 +741,7 @@ def test_agent_checkpoint_restore_rechecks_session_and_never_overwrites_first(
     with pytest.raises(ProvenanceRefused, match='拒绝覆盖'):
         stage2_runs.write_checkpoint(
             ctx, phase='blueprint', chapter=1, purpose=purpose,
-            architecture='extraction-ir-v3.1', response_model=_ChapterRows,
+            architecture='extraction-ir-v3.1', response_model=_AgentChapterRows,
             system='SYSTEM', user='USER',
             response_payload={'blueprints': [{'chapter_ordinal': 1}]},
             acceptance=replacement, scope_violation=None)
@@ -747,7 +758,7 @@ def test_agent_checkpoint_restore_rechecks_session_and_never_overwrites_first(
     with pytest.raises(ProvenanceRefused, match='session'):
         stage2_runs.restore_checkpoint(
             resumed, phase='blueprint', chapter=1, purpose=purpose,
-            architecture='extraction-ir-v3.1', response_model=_ChapterRows,
+            architecture='extraction-ir-v3.1', response_model=_AgentChapterRows,
             system='SYSTEM', user='USER')
 
 
@@ -773,7 +784,7 @@ def test_agent_checkpoint_restore_refuses_legacy_prior_ledger_actual_model_drift
                (accepted_attempt, text)], max_tokens=2048)
     checkpoint = stage2_runs.write_checkpoint(
         ctx, phase='blueprint', chapter=1, purpose=purpose,
-        architecture='extraction-ir-v3.1', response_model=_ChapterRows,
+        architecture='extraction-ir-v3.1', response_model=_AgentChapterRows,
         system='SYSTEM', user='USER',
         response_payload={'blueprints': [{'chapter_ordinal': 1}]},
         acceptance=acceptance, scope_violation=None)
@@ -828,7 +839,7 @@ def test_agent_checkpoint_restore_refuses_legacy_prior_ledger_actual_model_drift
     with pytest.raises(ProvenanceRefused, match='resolved profile'):
         stage2_runs.restore_checkpoint(
             resumed, phase='blueprint', chapter=1, purpose=purpose,
-            architecture='extraction-ir-v3.1', response_model=_ChapterRows,
+            architecture='extraction-ir-v3.1', response_model=_AgentChapterRows,
             system='SYSTEM', user='USER')
 
 
@@ -855,7 +866,7 @@ def test_agent_checkpoint_restore_refuses_legacy_audit_actual_profile_drift(
         texts=[(attempt_id, text)], max_tokens=2048)
     stage2_runs.write_checkpoint(
         ctx, phase='blueprint', chapter=1, purpose=purpose,
-        architecture='extraction-ir-v3.1', response_model=_ChapterRows,
+        architecture='extraction-ir-v3.1', response_model=_AgentChapterRows,
         system='SYSTEM', user='USER',
         response_payload={'blueprints': [{'chapter_ordinal': 1}]},
         acceptance=acceptance, scope_violation=None)
@@ -884,7 +895,7 @@ def test_agent_checkpoint_restore_refuses_legacy_audit_actual_profile_drift(
     with pytest.raises(ProvenanceRefused, match=message):
         stage2_runs.restore_checkpoint(
             resumed, phase='blueprint', chapter=1, purpose=purpose,
-            architecture='extraction-ir-v3.1', response_model=_ChapterRows,
+            architecture='extraction-ir-v3.1', response_model=_AgentChapterRows,
             system='SYSTEM', user='USER')
 
 

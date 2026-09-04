@@ -12,6 +12,12 @@ Stage 7 负责人物真名替换与最终成书。模型只产改名决定；映
 
 正式 JSON 使用当前严格 schema，不读取旧字段、旧规则行或混合契约标记。
 
+`stage7.rename` 的 agent wire 为兼容 Claude/Codex 公共严格 JSON Schema，把动态姓氏表表达为
+`surname_map: [{old_surname, new_surname}]`；代码拒绝重复 `old_surname` 后还原为下表所列的
+`dict[str,str]`。该数组只属于 provider 传输，`name_map.json`、轮次归档、人工编辑与新 checkpoint
+payload 继续使用正式 dict 形状，NameMap 不升版；旧 checkpoint 不改字节，但旧 schema SHA 不再
+满足 current restore，必须由新 run 重建。
+
 ## 一、`name_map.json`
 
 顶层字段全部必填；可空字段也必须保留键。

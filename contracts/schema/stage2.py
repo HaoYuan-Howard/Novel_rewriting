@@ -29,7 +29,7 @@ from __future__ import annotations
 
 from typing import Annotated, Literal
 
-from pydantic import Field, StringConstraints, model_validator
+from pydantic import Field, StringConstraints, field_validator, model_validator
 
 from contracts.invariants import (
     ADDRESS_BY, ADDRESS_CONTEXT, BLUEPRINT_ARCHITECTURES,
@@ -40,6 +40,7 @@ from contracts.invariants import (
     NARRATIVE_RELATION_ENFORCEMENTS, NARRATIVE_RELATION_KINDS,
     TIME_LAYERS, WORLD_RULE_KINDS,
 )
+from contracts.schema.agent_wire import keyed_rows_to_mapping
 from contracts.schema.base import Fp10, StrictModel
 from contracts.schema.common import LlmProvenance, Sha256
 
@@ -674,6 +675,12 @@ class CharacterCandidateResponse(StrictModel):
         return self
 
 
+class CharacterCandidateWireRow(CharacterCandidateResponse):
+    """provider wire 的一行人物；动态 ``char_id`` 必须是显式字段。"""
+
+    char_id: str = Field(pattern=r'^char_\d{3}$')
+
+
 class RelationCandidateResponse(StrictModel):
     relation_id: str = Field(pattern=r'^rel_\d{2}$')
     subject_id: str = Field(min_length=1)
@@ -775,8 +782,22 @@ class ArcCandidateResponse(StrictModel):
 
 
 class EntitiesCandidateResponse(StrictModel):
+    # 内部与正式候选继续使用 ``{char_id: character}``；agent schema 只发布
+    # ``[{char_id, ...character}]``，避开严格结构化输出不支持动态 object 键的边界。
     characters: dict[str, CharacterCandidateResponse]
     relations: list[RelationCandidateResponse]
+
+    @field_validator(
+        'characters', mode='before',
+        json_schema_input_type=list[CharacterCandidateWireRow],
+    )
+    @classmethod
+    def _characters_from_wire_rows(cls, value: object) -> object:
+        return keyed_rows_to_mapping(
+            value,
+            row_model=CharacterCandidateWireRow,
+            key_field='char_id',
+        )
 
     @model_validator(mode='after')
     def _relation_ids_are_unique(self) -> EntitiesCandidateResponse:
@@ -853,10 +874,28 @@ class RoleFateResponse(StrictModel):
     fate: str | None
 
 
+class RoleFateWireRow(RoleFateResponse):
+    """purge-role provider wire 的一行；内部仍按 ``char_id`` 查表。"""
+
+    char_id: str = Field(pattern=r'^char_\d{3}$')
+
+
 class RoleSplitResponse(StrictModel):
-    """purge-role 只允许交回 role/fate；char_id 是映射键。"""
+    """purge-role 只允许交回 role/fate；wire 上 char_id 是显式行字段。"""
 
     characters: dict[str, RoleFateResponse]
+
+    @field_validator(
+        'characters', mode='before',
+        json_schema_input_type=list[RoleFateWireRow],
+    )
+    @classmethod
+    def _characters_from_wire_rows(cls, value: object) -> object:
+        return keyed_rows_to_mapping(
+            value,
+            row_model=RoleFateWireRow,
+            key_field='char_id',
+        )
 
 
 class SecretPatch(StrictModel):

@@ -32,8 +32,9 @@ RENAME_SYS = """\
    · **不是人的实体**（如 系统、空间、金手指）——换掉它会破坏世界观设定。
    ⚠ 注意反面：带姓的称呼**是真名**，必须改（如 李嬷嬷、王婆、老王、许总——「李」「王」「许」
    都是原作的姓）。别因为它看起来像通用称谓就放过。
-2. 【姓氏要单独交代一遍】凡是你决定改名、而原名**带姓**的角色，都要在 surname_map 里
-   给出「原姓 → 新姓」，并且新名必须真的以那个新姓开头。**单独一个人也要写**。
+2. 【姓氏要单独交代一遍】凡是你决定改名、而原名**带姓**的角色，都要在 surname_map
+   数组里逐行给出 `{old_surname, new_surname}`，并且新名必须真的以那个新姓开头。
+   **单独一个人也要写**，同一个 old_surname 不得重复。
    · 下面的【姓氏族群】是按原作算好的**同姓多人**分组：这些原姓一个都不能漏，
      **一组只挑一个新姓**，组内所有成员共用它。不要自己重新划分族群，
      也不要让同族的人姓不同的姓。
@@ -60,7 +61,7 @@ RENAME_SYS = """\
      角色可设 renamed=true；new_canonical 仍填胖婶，只改王婶那条 alias。不要把描述词改造成姓。
 
 输出 JSON：
-- surname_map: {"原姓": "新姓"}，覆盖**每一个改名且原名带姓的角色**的姓
+- surname_map: [{"old_surname":"原姓","new_surname":"新姓"}]，覆盖**每一个改名且原名带姓的角色**的姓
   （下面【姓氏族群】列出的原姓一个都不能漏，单人角色的姓也要写）；
 - characters: [{char_id, renamed, new_canonical, not_renamed_reason, aliases:[{old,new}], reason}]
   · char_id 必须沿用给定的编号，一个不漏、不多不少；
@@ -71,7 +72,7 @@ RENAME_SYS = """\
 
 #: 响应形状提示。**它不是 prompt 文本**，是给 `ask_json` 的 JSON 形状。
 RENAME_HINT = {
-    'surname_map': {'原姓': '新姓'},
+    'surname_map': [{'old_surname': '原姓', 'new_surname': '新姓'}],
     'characters': [{'char_id': 'char_001', 'renamed': True, 'new_canonical': 'str',
                     'not_renamed_reason': 'str（renamed=false 时必填）',
                     'aliases': [{'old': 'str', 'new': 'str'}], 'reason': 'str'}],

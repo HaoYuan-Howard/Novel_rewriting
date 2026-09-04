@@ -124,6 +124,81 @@ class AgentConfigurationError(AgentError):
     """请求配置在发起子进程前就不成立。"""
 
 
+#: Claude 的 AJV strict 与 OpenAI Structured Outputs 都能接收的公共子集。
+#: ``agent_json_schema`` 会把 Pydantic 的等价注解先归一到这个集合；任何仍在
+#: 集合外的关键字都必须在发起 CLI 前关闭式拒绝，不能让某个 driver 私下删改。
+_PORTABLE_AGENT_SCHEMA_KEYWORDS = frozenset({
+    '$defs', '$ref',
+    'additionalProperties', 'anyOf', 'description', 'enum',
+    'exclusiveMaximum', 'exclusiveMinimum', 'format', 'items', 'maxItems',
+    'maxLength', 'maximum', 'minItems', 'minLength', 'minimum', 'multipleOf',
+    'pattern', 'properties', 'required', 'title', 'type',
+})
+_SCHEMA_NAME_CONTAINERS = frozenset({'$defs', 'properties'})
+
+
+def validate_agent_output_schema(schema: Mapping[str, Any]) -> None:
+    """验证所有 driver 共用的严格结构化输出 schema；失败发生在 CLI 之前。
+
+    公共边界选择已接入 provider 的交集：根必须是 object；每一层 object 都要
+    ``additionalProperties=false``，并显式要求全部 properties。动态键映射必须由
+    业务模型先改成键值行数组，不能在这里猜键字段后静默改变响应语义。
+    """
+    if schema.get('type') != 'object' or 'anyOf' in schema:
+        raise AgentConfigurationError(
+            'agent output_schema 根必须是 object，且根层不得使用 anyOf')
+
+    def visit(node: object, path: str, *, names: bool = False) -> None:
+        if isinstance(node, Mapping):
+            if not names:
+                for key in node:
+                    if not isinstance(key, str):
+                        raise AgentConfigurationError(
+                            f'agent output_schema {path} 含非字符串关键字')
+                    if key not in _PORTABLE_AGENT_SCHEMA_KEYWORDS:
+                        raise AgentConfigurationError(
+                            f'agent output_schema {path}.{key} 不属于 '
+                            'Claude/Codex 公共严格 JSON Schema 子集')
+
+                type_value = node.get('type')
+                is_object = (
+                    type_value == 'object'
+                    or (isinstance(type_value, list)
+                        and 'object' in type_value)
+                )
+                if is_object:
+                    properties = node.get('properties')
+                    if not isinstance(properties, Mapping):
+                        raise AgentConfigurationError(
+                            f'agent output_schema {path} 是动态或未声明键的 object；'
+                            '请改用带显式键字段的行数组')
+                    if node.get('additionalProperties') is not False:
+                        raise AgentConfigurationError(
+                            f'agent output_schema {path}.additionalProperties '
+                            '必须显式为 false')
+                    required = node.get('required')
+                    if (not isinstance(required, list)
+                            or any(not isinstance(item, str)
+                                   for item in required)
+                            or len(required) != len(set(required))
+                            or set(required) != set(properties)):
+                        raise AgentConfigurationError(
+                            f'agent output_schema {path}.required 必须无重复且逐项覆盖 '
+                            'properties 的全部键')
+
+            for key, value in node.items():
+                visit(
+                    value,
+                    f'{path}.{key}',
+                    names=(not names and key in _SCHEMA_NAME_CONTAINERS),
+                )
+        elif isinstance(node, list):
+            for index, item in enumerate(node):
+                visit(item, f'{path}[{index}]')
+
+    visit(schema, '$')
+
+
 class AgentBusyError(AgentError):
     """同一驱动实例已有一轮未结束；调用方必须为并行节点各建实例。"""
 
@@ -191,6 +266,8 @@ class AgentRequest:
         if self.output_schema is not None and not isinstance(
                 self.output_schema, Mapping):
             raise AgentConfigurationError('output_schema 必须是 JSON object')
+        if self.output_schema is not None:
+            validate_agent_output_schema(self.output_schema)
         if self.delivery_protocol not in (
                 PLAIN_DELIVERY, CLAUDE_STRUCTURED_DELIVERY_V1):
             raise AgentConfigurationError(
@@ -240,7 +317,11 @@ def classify_agent_command_failure(
     """
     text = str(detail or '').casefold()
     if status is None:
-        match = re.search(r'(?:api error|status|http)\s*[:=]?\s*(\d{3})\b', text)
+        match = re.search(
+            r'(?:api error|apierrorstatus|status(?:_code)?|http(?:/status)?)'
+            r'["\']?\s*[:=]?\s*["\']?(\d{3})\b',
+            text,
+        )
         if match is not None:
             status = int(match.group(1))
 
@@ -256,6 +337,14 @@ def classify_agent_command_failure(
         any(value is not None for value in usage_values)
         and all(value in (None, 0) for value in usage_values)
     )
+
+    # CLI 可能把 provider 的 400 error object 再编码进 message 字符串；它不是
+    # 普通命令失败，更不能热重试。即便公共 preflight 漏了未来 schema 形状，
+    # 外层也应得到可行动的稳定分类，而不是 event='error'/status=None。
+    if ('invalid_json_schema' in text
+            or 'invalid schema for response_format' in text
+            or ('text.format.schema' in text and status == 400)):
+        return 'agent_schema', status, False
 
     # 账号窗口耗尽要等外部状态变化；秒级热重试只会制造四次相同失败。
     if any(marker in text for marker in (

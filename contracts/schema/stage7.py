@@ -37,9 +37,10 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import Field, model_validator
+from pydantic import Field, field_validator, model_validator
 
 from contracts.invariants import RESIDUAL_CONFIDENCE
+from contracts.schema.agent_wire import keyed_rows_to_mapping
 from contracts.schema.base import Fp10, Sha1, StrictModel
 from contracts.schema.common import (
     Finding, FreeProvenance, HashBoundHumanApproval, LlmProvenance, Sha256,
@@ -481,6 +482,13 @@ class NameDecisionResponse(StrictModel):
     reason: str
 
 
+class SurnameMapWireRow(StrictModel):
+    """provider wire 的一条姓氏映射；正式产物仍保存 ``{旧姓: 新姓}``。"""
+
+    old_surname: str = Field(min_length=1)
+    new_surname: str = Field(min_length=1)
+
+
 class NameMapResponse(StrictModel):
     """**模型写的那两个键**，`ask_json(model_cls=...)` 收的就是它。
 
@@ -501,7 +509,8 @@ class NameMapResponse(StrictModel):
     **一条违约数据的静默通行证。** 派生之后这件事**结构上不可能再发生**。
     """
 
-    #: `{原姓: 新姓}`——本书**全部改名角色**的姓；口径与去向见 `NameMap.surname_map`。
+    #: 内部仍为 `{原姓: 新姓}`；provider schema 发布
+    #: `[{old_surname, new_surname}]`，口径与去向见 `NameMap.surname_map`。
     #: 【姓氏族群】先排除完整纯称谓/位号，再按有据姓氏聚类；表中原姓是其中
     #: **一个都不能漏**的子集（同族必须共姓）。
     #: ⚠ **必需键**——见上面那张表。空表是合法的（这本书没有一个改名角色带姓），
@@ -510,6 +519,19 @@ class NameMapResponse(StrictModel):
 
     #: 长度必须与 registry 一一对应，多一个少一个都是 `rn_llm_shape`。
     characters: list[NameDecisionResponse] = Field(min_length=1)
+
+    @field_validator(
+        'surname_map', mode='before',
+        json_schema_input_type=list[SurnameMapWireRow],
+    )
+    @classmethod
+    def _surname_map_from_wire_rows(cls, value: object) -> object:
+        return keyed_rows_to_mapping(
+            value,
+            row_model=SurnameMapWireRow,
+            key_field='old_surname',
+            value_field='new_surname',
+        )
 
 
 # ─────────────────────────────────────────────────────────────────────────────

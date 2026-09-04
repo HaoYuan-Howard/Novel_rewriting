@@ -109,7 +109,7 @@ def _ctx(base: Path, *, run_id: str | None = None) -> RunContext:
 
 def _response(reason: str) -> str:
     return json.dumps({
-        'surname_map': {'旧': '新'},
+        'surname_map': [{'old_surname': '旧', 'new_surname': '新'}],
         'characters': [{
             'char_id': 'char_001',
             'new_canonical': '新名',
