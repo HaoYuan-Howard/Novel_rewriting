@@ -148,6 +148,25 @@ epoch 交付；服务崩溃、坏尾、迟到 child 与并发 resume 必须继�
 - 现有两本多代码身份 run 只作问题回归，不作 clean 性能基线。累计至少 5 次 clean run 后，才把
   ≤20 章 P50 120 分钟、P95 180 分钟升级为发布硬门。
 
+### TODO-46 · headless Commander 审阅轮次的往返成本与决定持久化：真机验收
+
+2026-09-03 实测 SID `2062246499690591305` run `1788450838-4558c248`：Stage4B 结构裁决与 Stage4A 解析两轮
+Commander 共约 22 分钟、38 次工具往返、7.3M 输入 token（reasoning 合计仅 26k），第二轮成果因主仓被改脏
+（`code_version_drift`）随 scratch 一起丢失。六批整改已合入 main（`00e2427` `8733880` `7fc796c` `5360793`
+`ec201d2` `8c7e3c8`），工程/合成面与前端全绿；本条只追踪尚未取得的真机证据与待裁决项。
+
+- **验收 run**：干净工作树 + 跑书专用 worktree，对同一 SID 从 `approval:stage4-structure-review` 起跑一次
+  headless。目标：每轮 Commander 工具往返 ≤ 3、run 日志无任何读盘/翻仓命令、ledger `role:commander` 行
+  `latency_ms` 可读且明显低于 11m47s / 10m27s；重放路径至少验一次"typed 决定落盘后代码漂移 → 新 epoch
+  零模型 apply"（`R-11.25`）。
+- **B 面体积**：v2 结构工作包实测 147→263 KB（+79%，coverage 21→207 KB）；design 247→276 KB。增量是过去
+  靠 11 次读盘取的逐场/事实/读数材料。若真机 token 账仍偏高，再评估 stages 去重、concern reason 去重或
+  entry/exit 状态改 delta；不得为省字节删掉裁决必需的材料。
+- **待裁决**：B 裁决与 A 解析是否合并成一轮（用户 2026-09-04 裁定暂不合并，保持 `R-5.20` 两票）；Codex 是否以
+  `project_doc_max_bytes=0` 彻底不加载根 AGENTS.md（键名未在本机 Codex 0.148 核实，现靠 shim 与
+  AGENTS.md 的排除句）。
+- 付费验收结果回写 `docs/DECISIONS.md` 后删除本条。
+
 ## 条目生命周期
 
 1. 开工前补足可复现输入、预期最终状态、成本与受影响守卫。
