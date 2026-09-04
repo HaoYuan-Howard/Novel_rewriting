@@ -74,9 +74,15 @@ OPTIONAL_HUMAN_NODES: frozenset[str] = frozenset({'stage0.edit'})
 WAITING_ON_INBOX = 'inbox:invalid'
 WAITING_ON_STAGE2_REVIEW = 'approval:stage2-global-review'
 WAITING_ON_STAGE2_EDIT_CORRECTION = 'recovery:stage2-global-reviewed-edit'
+#: Global 复核已 generation-safe、但 ``gate.s2`` 尚未由独立只读终审打开。
+#: 它是 Stage2 第四席的唯一入口：终审者读全部 blocking 项、整书正文与 Blueprint
+#: 工作包后只能 confirm（Supervisor 以 ``approval close-stage2`` 收口）或
+#: reopen（以自己为 actor 把指定项改回 FAIL/UNVER）。
+WAITING_ON_STAGE2_FINAL_REVIEW = 'approval:stage2-global-final-review'
 STAGE2_REVIEWER_WAITING_ON = frozenset({
     WAITING_ON_STAGE2_REVIEW,
     WAITING_ON_STAGE2_EDIT_CORRECTION,
+    WAITING_ON_STAGE2_FINAL_REVIEW,
 })
 WAITING_ON_STAGE4_DESIGN_REVIEW = 'approval:stage4-design-review'
 WAITING_ON_FROZEN_V6_DESIGN_AUTHORITY = \
@@ -325,8 +331,11 @@ def plan_book_from_overview(
                 # 恢复路由交回 Stage2 reviewer。否则队列会前移到 Stage4A，
                 # 而 design workpack/template 又按生产闸正确拒绝缺失 gate.s2，
                 # 形成一个无法由 Commander 自己越过的确定性死锁。
+                # ⚠ 这里不是普通 review blocker：review 已 generation-safe，
+                # 缺的是独立只读终审对 Global + Blueprint 的 hash-bound 阅读
+                # 事实。seen/gate proof 过期同样意味着主体变过，必须重读。
                 if approval_doc is not None and not approval_doc.gate['s2']:
-                    why_blocked = WAITING_ON_STAGE2_REVIEW
+                    why_blocked = WAITING_ON_STAGE2_FINAL_REVIEW
 
         if why_blocked is None:
             ghosts = _upstream_invalid(ov, spec.stage)
@@ -587,6 +596,7 @@ def plan_book_from_overview(
             WAITING_ON_INBOX,
             WAITING_ON_STAGE2_REVIEW,
             WAITING_ON_STAGE2_EDIT_CORRECTION,
+            WAITING_ON_STAGE2_FINAL_REVIEW,
             WAITING_ON_STAGE4_DESIGN_REVIEW,
             WAITING_ON_STAGE4_BINDING_RESOLUTION,
             WAITING_ON_STAGE4_STRUCTURE_REPLAN,
@@ -659,6 +669,13 @@ def _blocked_why(
             'Stage5 当前 typed closure 尚未 closed：缺回执、Review/章稿漂移或工作包仍有'
             '阻断项都会停在这里。先经 `approval template stage5` 与审批提交收口；'
             '需要改稿/重判时只走登记的 0 成本恢复入口，再重算 Review；'
+            f'{verdict_why}')
+    if waiting_on == WAITING_ON_STAGE2_FINAL_REVIEW:
+        return (
+            'Stage2 Global 复核已 generation-safe，但 current seen/gate.s2 proof 尚未'
+            '由独立只读终审建立或已随主体变化过期：需要一次不带修改权的终审读完'
+            '全部 blocking 项、整书正文与 Blueprint 工作包后 confirm，或以终审者为 '
+            'actor reopen 指定项；Stage4A/B 与后续付费调用都不会越过这道门；'
             f'{verdict_why}')
     if waiting_on == WAITING_ON_STAGE2_REVIEW:
         return (

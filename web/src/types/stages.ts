@@ -402,6 +402,16 @@ export interface BlueprintSeenRequest {
   review_token: string
 }
 
+/**
+ * seen.global 的 hash-bound 阅读身份：`review_token` 由服务端从当前 Global 主体、
+ * review 字节、正文主体与 blocking scope 现算；`actor` 是读完并确认的人/席位。
+ * 页面不再“打开即已读”，只把服务端下发的 token 原样交回。
+ */
+export interface Stage2GlobalSeenRequest {
+  review_token: string
+  actor: string
+}
+
 /* ------------------------------------------------- stage2 · 全局设定 */
 
 export interface GlobalSourceSpan {
@@ -585,6 +595,8 @@ export interface GlobalReviewResponse {
   generation_safe: boolean
   /** Complete fact groups omitted from generation; their raw UNVER rows remain below. */
   quarantined_groups: string[]
+  /** seen.global 的阅读凭证；主体不 current 时为 null，此时不得提供确认动作。 */
+  review_token: string | null
   /** `{effect: {state: n}}`; both key levels always present, zeros included. */
   effect_counts: Record<GlobalReviewEffect, Record<GlobalReviewState, number>>
   items: GlobalReviewItem[]

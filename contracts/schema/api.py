@@ -3203,6 +3203,10 @@ class GlobalReviewView(StrictModel):
     approved: bool
     generation_safe: bool
     quarantined_groups: list[str] = Field(default_factory=list)
+    #: ``seen.global`` 的 opaque 阅读凭证；只有 review 与 grounding/MainText 都
+    #: current 时才现算，否则为 ``None``——界面不得在 ``None`` 时提供确认动作。
+    review_token: str | None = Field(
+        default=None, pattern=r'^s2gr1_[0-9a-f]{64}$')
 
     #: ``{effect: {四态: n}}``。两层键都**恒全出**（0 也出）：
     #: 「没有这个键」与「值是 0」不许混（同 `InboxView.counts`）。
@@ -3760,6 +3764,58 @@ class BlueprintSeenRequest(StrictModel):
     """
 
     review_token: str = Field(pattern=r'^bpr3_[0-9a-f]{64}$')
+
+
+class Stage2GlobalSeenRequest(StrictModel):
+    """把 ``seen.global`` 精确绑定到审阅者实际读过的 Global 审阅面。
+
+    ``review_token`` 由服务端从当前 Global 主体、review 字节、MainText 主体与
+    blocking scope 现算（`novel/stages/stage2/global_review.py::review_token`）；
+    review 的任何一格状态/理由变化都会换 token，旧阅读事实不能配新主体提交。
+    ``actor`` 记录是谁读完并确认的：headless 路由下它是终审席位的 logical
+    session，永远不会是提交过 GlobalEdit 的那一个会话。
+    """
+
+    review_token: str = Field(pattern=r'^s2gr1_[0-9a-f]{64}$')
+    actor: str = Field(min_length=1, max_length=256)
+
+    @field_validator('actor')
+    @classmethod
+    def _actor_not_blank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError('seen.global 的 actor 不得只含空白')
+        return value
+
+
+class Stage2FinalReviewRequest(StrictModel):
+    """Stage2 第四席只读终审的 ``confirm`` 回执。
+
+    它同时携带 Global 与 Blueprint 两枚 opaque token：终审者必须读完全部
+    blocking 项（含已 PASS 的理由与证据）、整书正文与 Blueprint 工作包，才由
+    Supervisor 以 ``approval close-stage2`` 一次确定性收口
+    ``s0 → s1 → seen.read → seen.global → s2``。终审发现问题时不用本形状：
+    改提交 ``stage2.global --review-decisions`` 的 reopen 决定（只允许 FAIL/UNVER）。
+    """
+
+    actor: str = Field(min_length=1, max_length=256)
+    reason: str = Field(min_length=1, max_length=4096)
+    global_review_token: str = Field(pattern=r'^s2gr1_[0-9a-f]{64}$')
+    blueprint_review_token: str = Field(pattern=r'^bpr3_[0-9a-f]{64}$')
+
+    @model_validator(mode='after')
+    def _no_blank_audit_fields(self) -> Stage2FinalReviewRequest:
+        if not self.actor.strip() or not self.reason.strip():
+            raise ValueError('终审回执的 actor/reason 不得只含空白')
+        return self
+
+    @property
+    def blueprint_subject(self) -> BlueprintSeenRequest:
+        return BlueprintSeenRequest(review_token=self.blueprint_review_token)
+
+    @property
+    def global_subject(self) -> Stage2GlobalSeenRequest:
+        return Stage2GlobalSeenRequest(
+            review_token=self.global_review_token, actor=self.actor)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

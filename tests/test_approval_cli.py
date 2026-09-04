@@ -7,6 +7,9 @@ import pytest
 
 from contracts.invariants import APPROVAL_GATES, APPROVAL_SEEN
 from contracts.schema.api import (
+    Stage2FinalReviewRequest, Stage2GlobalSeenRequest,
+)
+from contracts.schema.api import (
     ApprovalDoc,
     BlueprintSeenRequest,
     StructureApprovalRequest,
@@ -77,10 +80,42 @@ def test_headless_seen_and_early_gates_reuse_approval_services(
     ]
 
 
+def _final_request() -> Stage2FinalReviewRequest:
+    return Stage2FinalReviewRequest(
+        actor='agent:final-seat', reason='独立通读全部 blocking 项与 Blueprint',
+        global_review_token='s2gr1_' + 'c' * 64,
+        blueprint_review_token='bpr3_' + 'b' * 64)
+
+
+def test_headless_global_seen_requires_and_parses_a_typed_subject(
+        monkeypatch, capsys, tmp_path):
+    calls = []
+    subject = Stage2GlobalSeenRequest(
+        review_token='s2gr1_' + 'c' * 64, actor='人工审阅者')
+    source = tmp_path / 'global-seen.json'
+    source.write_text(subject.model_dump_json(indent=2), encoding='utf-8')
+    monkeypatch.setattr(
+        approvals, 'mark_seen',
+        lambda base, sid, key, *, blueprint_subject=None, global_subject=None:
+        calls.append((key, blueprint_subject, global_subject)) or _doc())
+
+    assert cli.main([
+        'approval', 'seen', 'global', SID, '--base', str(tmp_path),
+        '--input', str(source),
+    ]) == X.OK
+    capsys.readouterr()
+    assert calls == [('global', None, subject)]
+
+    rc = cli.main(['approval', 'seen', 'global', SID, '--base', str(tmp_path)])
+    assert rc == X.TERMINAL_STATE
+    assert '必须给 --input' in capsys.readouterr().err
+    assert len(calls) == 1
+
+
 def test_headless_stage2_closure_parses_one_typed_input(
         monkeypatch, capsys, tmp_path):
-    request = BlueprintSeenRequest(review_token='bpr3_' + 'b' * 64)
-    source = tmp_path / 'blueprint-seen.json'
+    request = _final_request()
+    source = tmp_path / 'stage2-final-review.json'
     source.write_text(request.model_dump_json(indent=2), encoding='utf-8')
     calls = []
     monkeypatch.setattr(
@@ -99,7 +134,7 @@ def test_headless_stage2_closure_parses_one_typed_input(
 
 
 def test_stage2_closure_reuses_the_five_existing_services_in_order(monkeypatch):
-    request = BlueprintSeenRequest(review_token='bpr3_' + 'b' * 64)
+    request = _final_request()
     calls = []
     final = _doc()
 
@@ -107,8 +142,8 @@ def test_stage2_closure_reuses_the_five_existing_services_in_order(monkeypatch):
         calls.append(('gate', base, sid, key))
         return final
 
-    def seen(base, sid, key, *, blueprint_subject=None):
-        calls.append(('seen', base, sid, key, blueprint_subject))
+    def seen(base, sid, key, *, blueprint_subject=None, global_subject=None):
+        calls.append(('seen', base, sid, key, blueprint_subject, global_subject))
         return final
 
     monkeypatch.setattr(approvals, 'approve_gate', gate)
@@ -120,8 +155,11 @@ def test_stage2_closure_reuses_the_five_existing_services_in_order(monkeypatch):
     assert calls == [
         ('gate', 'base', SID, 's0'),
         ('gate', 'base', SID, 's1'),
-        ('seen', 'base', SID, 'read', request),
-        ('seen', 'base', SID, 'global', None),
+        ('seen', 'base', SID, 'read',
+         BlueprintSeenRequest(review_token='bpr3_' + 'b' * 64), None),
+        ('seen', 'base', SID, 'global', None,
+         Stage2GlobalSeenRequest(
+             review_token='s2gr1_' + 'c' * 64, actor='agent:final-seat')),
         ('gate', 'base', SID, 's2'),
     ]
 

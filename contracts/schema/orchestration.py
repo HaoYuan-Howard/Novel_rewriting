@@ -41,6 +41,8 @@ from contracts.invariants import (
     RUN_NEXT_HANDLERS,
     RUN_RESUME_FRONTIER_STATES, STAGES,
     EXECUTION_EPOCH_DRAIN_STATES, EXECUTION_EPOCH_REASONS,
+    COMMANDER_ATTEMPT_KINDS, STAGE2_COMMANDER_MAX_EDIT_SEAT,
+    STAGE2_COMMANDER_MAX_SEATS, STAGE2_COMMANDER_SEAT_PURPOSES,
 )
 from contracts.schema.base import FrozenModel, StrictModel
 
@@ -900,11 +902,44 @@ class BeaconTailRepairRecord(AppendTailRepairRecord):
 REVIEWER_ACTION_RECORD_KIND = 'novel-reviewer-action-record-v1'
 
 
-class Stage2ReviewLedgerTurn(FrozenModel):
-    """一次已经预留的 Stage2 Commander 真调用；started 也消耗预算。"""
+class Stage2ReviewAttempt(FrozenModel):
+    """同一席位内的一次真实 CLI 进程尝试。
 
-    ordinal: int = Field(ge=1, le=3)
-    purpose: Literal['prereview', 'review', 'correction']
+    ``launch`` 是新进程首发；``resume`` 用供应商 exact session id 续接同一
+    provider 会话。两者都记在同一行席位下，不新开席位、不重复预留预算。
+    ``wire_evidence`` 只在收到供应商首个协议事件（session/thread id）或 usage
+    后才为真：没有它的失败是 0-wire 本地失败，恢复层可据此判断是否只需 relaunch。
+    """
+
+    attempt_id: str = Field(min_length=1)
+    kind: Literal[COMMANDER_ATTEMPT_KINDS]
+    started_at: int = Field(ge=0)
+    finished_at: int | None = Field(default=None, ge=0)
+    exit_code: int | None = None
+    error_kind: str | None = None
+    provider_session_id: str | None = None
+    wire_evidence: bool = False
+
+    @model_validator(mode='after')
+    def _finish_fields_agree(self) -> Stage2ReviewAttempt:
+        if (self.finished_at is None) != (self.exit_code is None):
+            raise ValueError('attempt 的 finished_at 与 exit_code 必须同进同出')
+        if self.kind == 'resume' and not self.provider_session_id:
+            raise ValueError('resume attempt 必须携带被续接的 provider session id')
+        return self
+
+
+class Stage2ReviewLedgerTurn(FrozenModel):
+    """一席已经预留的 Stage2 Commander 席位；started 也消耗席位。
+
+    ``purpose`` 是席位语义而不是标签：``final_review`` 只能是只读终审，
+    ``review`` / ``correction`` / ``prereview`` 只能落在前
+    ``STAGE2_COMMANDER_MAX_EDIT_SEAT`` 席。``attempts`` 记录同席内的真实进程
+    尝试（首发与 resume），它们共享同一 logical session 与同一格预算。
+    """
+
+    ordinal: int = Field(ge=1, le=STAGE2_COMMANDER_MAX_SEATS)
+    purpose: Literal[STAGE2_COMMANDER_SEAT_PURPOSES]
     parent_run_id: str = Field(min_length=1)
     epoch_id: str = Field(min_length=1)
     session_run_id: str = Field(min_length=1)
@@ -916,6 +951,7 @@ class Stage2ReviewLedgerTurn(FrozenModel):
     finished_at: int | None = Field(default=None, ge=0)
     exit_code: int | None = None
     outcome: Literal['started', 'ok', 'failed'] = 'started'
+    attempts: list[Stage2ReviewAttempt] = Field(default_factory=list)
 
     @model_validator(mode='after')
     def _finish_fields_agree(self) -> Stage2ReviewLedgerTurn:
@@ -924,6 +960,18 @@ class Stage2ReviewLedgerTurn(FrozenModel):
                 raise ValueError('started review turn 不得携带 finished/exit')
         elif self.finished_at is None or self.exit_code is None:
             raise ValueError('已结束 review turn 必须携带 finished_at/exit_code')
+        if (self.purpose != 'final_review'
+                and self.ordinal > STAGE2_COMMANDER_MAX_EDIT_SEAT):
+            raise ValueError(
+                f'第 {self.ordinal} 席只保留给 final_review，'
+                f'不能承担 {self.purpose}')
+        if self.purpose == 'final_review' and self.blocker_count != 0:
+            raise ValueError('final_review 席位只能在未闭合项为 0 时预留')
+        ids = [row.attempt_id for row in self.attempts]
+        if len(ids) != len(set(ids)):
+            raise ValueError('同一席位内 attempt_id 不得重复')
+        if self.attempts and self.attempts[0].kind != 'launch':
+            raise ValueError('席位的首个 attempt 必须是 launch')
         return self
 
 
@@ -958,18 +1006,48 @@ class Stage2ReviewLedgerReconciliation(FrozenModel):
         return self
 
 
-class Stage2ReviewLedger(FrozenModel):
-    """按 Global + MainText identity 持久化的 Commander 预算与进展账。"""
+class Stage2ReviewLedgerArchive(FrozenModel):
+    """一份经人工 typed 决定整体归档的旧席位账（含 v1 三席账）。
 
-    schema_version: Literal[1] = 1
+    归档不是删除：旧 turns / reconciliations 逐字保留在这里，新账从空席位重新
+    计数。只有 parent AgentRun 已终止、席位账无 ``started`` 行时才允许归档；
+    它是两本被旧三席契约卡死的书唯一合规的续跑路，也是未来席位契约再升版时
+    的固定入口。
+    """
+
+    kind: Literal['stage2-review-ledger-archive-v1'] = (
+        'stage2-review-ledger-archive-v1')
+    actor: str = Field(min_length=1, max_length=256)
+    reason: str = Field(min_length=1, max_length=2048)
+    archived_at: int = Field(ge=0)
+    original_schema_version: int = Field(ge=1)
+    original_max_calls: int = Field(ge=1)
+    original_state: Literal['active', 'exhausted', 'complete']
+    original_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    turns: list[Stage2ReviewLedgerTurn] = Field(default_factory=list)
+    reconciliations: list[Stage2ReviewLedgerReconciliation] = Field(
+        default_factory=list)
+
+
+class Stage2ReviewLedger(FrozenModel):
+    """按 Global + MainText identity 持久化的 Commander 席位与进展账（v2）。
+
+    v1 是三席平权账；v2 把席位分成 review/correction 与只读 ``final_review``，
+    第四席只能是终审，并在每席下记录同 session 的进程 attempts。本仓没有
+    通用迁移机制：v1 账只能经带 actor/reason 的显式归档进入 ``archived_ledgers``。
+    """
+
+    schema_version: Literal[2] = 2
     kind: Literal['stage2-global-review-ledger'] = 'stage2-global-review-ledger'
     sid: str = Field(min_length=1)
     source_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
     main_text_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
-    max_calls: Literal[3] = 3
+    max_calls: Literal[STAGE2_COMMANDER_MAX_SEATS] = STAGE2_COMMANDER_MAX_SEATS
     state: Literal['active', 'exhausted', 'complete'] = 'active'
     turns: list[Stage2ReviewLedgerTurn] = Field(default_factory=list)
     reconciliations: list[Stage2ReviewLedgerReconciliation] = Field(
+        default_factory=list)
+    archived_ledgers: list[Stage2ReviewLedgerArchive] = Field(
         default_factory=list)
 
     @model_validator(mode='after')
@@ -981,7 +1059,7 @@ class Stage2ReviewLedger(FrozenModel):
             raise ValueError('Stage2 review ledger 超出 max_calls')
         sessions = [row.session_run_id for row in self.turns]
         if len(sessions) != len(set(sessions)):
-            raise ValueError('每次 Stage2 Commander 调用必须使用新的 logical session')
+            raise ValueError('每席 Stage2 Commander 必须使用新的 logical session')
         progress = [row.progress_sha256 for row in self.turns]
         if len(progress) != len(set(progress)):
             raise ValueError('Stage2 review ledger 不得重复无进展 fingerprint')
@@ -992,9 +1070,9 @@ class Stage2ReviewLedger(FrozenModel):
         if set(sessions) & set(reconciled_sessions):
             raise ValueError('有效 turn 与已隔离 turn 的 session 不得重叠')
         if self.state == 'exhausted' and len(self.turns) != self.max_calls:
-            raise ValueError('未用满预算不得标 exhausted')
+            raise ValueError('未用满席位不得标 exhausted')
         if self.state == 'active' and len(self.turns) >= self.max_calls:
-            raise ValueError('已用满预算必须标 exhausted 或 complete')
+            raise ValueError('已用满席位必须标 exhausted 或 complete')
         return self
 
 

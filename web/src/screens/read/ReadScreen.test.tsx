@@ -4,7 +4,7 @@ import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import type { ReactNode } from 'react'
 import { describe, expect, it, vi } from 'vitest'
 import { api } from '@/api/endpoints'
-import { mockApi } from '@/api/mock'
+import { MOCK_GLOBAL_SEEN_TOKEN, mockApi } from '@/api/mock'
 import type { ApprovalDoc } from '@/types/approvals'
 import type { BlueprintReviewWorkpack, ReadingResponse } from '@/types/stages'
 import { ReadScreen } from './ReadScreen'
@@ -381,14 +381,15 @@ describe('ReadScreen 整本 Blueprint 审阅确认', () => {
 })
 
 describe('mock Blueprint 审阅审批契约', () => {
-  it('read 只接受当前工作包的 opaque token，global 只接受空 request', async () => {
+  it('read 只接受当前工作包的 opaque token，global 只接受当前 review token 与非空确认人', async () => {
     await mockApi.resetBook(SID)
     const pack = workpack()
     const request = {
       review_token: pack.review_token,
     }
 
-    await expect(mockApi.markSeen(SID, 'read')).rejects.toThrow(/当前 Blueprint 工作包/)
+    await expect(mockApi.markSeen(SID, 'read', { review_token: 'bpr3_' + '0'.repeat(64) }))
+      .rejects.toThrow(/当前 Blueprint 工作包/)
     await Promise.all(Object.keys(request).map(async (field) => {
       await expect(mockApi.markSeen(SID, 'read', {
         ...request,
@@ -399,9 +400,17 @@ describe('mock Blueprint 审阅审批契约', () => {
     const read = await mockApi.markSeen(SID, 'read', request)
     expect(read.seen).toEqual({ read: true, global: false })
     await expect(mockApi.markSeen(SID, 'global', request)).rejects.toThrow(
-      /seen\.global 不接受 Blueprint 工作包身份/,
+      /seen\.global 必须携带当前 review 的 review_token/,
     )
-    const global = await mockApi.markSeen(SID, 'global')
+    await expect(mockApi.markSeen(SID, 'global', {
+      review_token: MOCK_GLOBAL_SEEN_TOKEN, actor: '   ',
+    })).rejects.toThrow(/非空确认人/)
+    await expect(mockApi.markSeen(SID, 'global', {
+      review_token: 's2gr1_' + '0'.repeat(64), actor: '人工审阅者',
+    })).rejects.toThrow(/当前 review 的 review_token/)
+    const global = await mockApi.markSeen(SID, 'global', {
+      review_token: MOCK_GLOBAL_SEEN_TOKEN, actor: '人工审阅者',
+    })
     expect(global.seen).toEqual({ read: true, global: true })
     const filled = await mockApi.backfillApprovals(SID)
     expect(filled.approvals.gate).toMatchObject({ s2: true, s4: false })

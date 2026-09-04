@@ -369,6 +369,51 @@ def _attach_blocking_role_fate_companions(
         }
 
 
+GLOBAL_REVIEW_TOKEN_PREFIX: Final = 's2gr1_'
+
+
+def review_identity(
+    grounding_payload: dict[str, object], review: GlobalReview,
+    main_text_subject_sha256: str,
+) -> dict[str, str]:
+    """``seen.global`` 与终审席位共用的无正文阅读身份。
+
+    四枚 SHA 都由盘上当前主体确定性重算：Global 主体、review 完整字节（状态、
+    理由、actor 都在内）、MainText 主体与 blocking scope。任何一格变化都换
+    token，所以旧阅读事实不可能配新主体提交；同时它不含 workpack 的逐项命中
+    材料，审批投影在每次 GET 时重算也不必重建整份 workpack。
+    """
+    subject = subject_sha256(grounding_payload)
+    review_sha256 = subject_sha256(review.model_dump(mode='json'))
+    identity = {
+        'source_sha256': review.source_sha256,
+        'current_subject_sha256': subject,
+        'review_sha256': review_sha256,
+        'main_text_subject_sha256': main_text_subject_sha256,
+        'blocking_scope_sha256': blocking_scope_sha256(review),
+    }
+    token = GLOBAL_REVIEW_TOKEN_PREFIX + hashlib.sha256(json.dumps(
+        {'kind': 'stage2-global-review-seen-v1', **identity},
+        ensure_ascii=False, sort_keys=True, separators=(',', ':'),
+    ).encode('utf-8')).hexdigest()
+    return {**identity, 'review_token': token}
+
+
+def review_token(ctx: RunContext) -> str:
+    """现算当前 Global 审阅面的 opaque token；主体不 current 时按现役异常拒绝。"""
+    store = ArtifactStore(ctx)
+    grounding = store.read_own(
+        GlobalGrounding, STAGE2_GLOBAL_GROUNDING, require_current=True)[0]
+    review = store.read_own(GlobalReview, REL, require_current=True)[0]
+    main = store.read_own(MainText, STAGE1_MAIN_TEXT, require_current=True)[0]
+    grounding_payload = grounding.model_dump(mode='json', by_alias=True)
+    require_current(grounding_payload, review)
+    return review_identity(
+        grounding_payload, review,
+        subject_sha256(main.model_dump(mode='json', by_alias=True)),
+    )['review_token']
+
+
 def review_workpack(
     ctx: RunContext, *, scope: str = DEFAULT_REVIEW_SCOPE,
     replaced_input_keys: tuple[str, ...] = (),
@@ -496,6 +541,10 @@ def review_workpack(
         'read_only': True,
         'auto_decisions': False,
         'legend': copy.deepcopy(_WORKPACK_LEGEND),
+        # ``seen.global`` / 终审席位提交时回填的 opaque 阅读凭证；它绑定 review
+        # 完整字节而不是本包的逐项命中材料，因而与 ``workpack_sha256`` 是两枚。
+        'review_token': review_identity(
+            payload, review, main_text_subject_sha256)['review_token'],
         # 绑定完整 typed MainText 主体，不只绑定章号或最多 24 个展示命中；
         # 未展示上下文之外改一个字，也必须让旧 workpack/scope 失效。
         'main_text_subject_sha256': main_text_subject_sha256,

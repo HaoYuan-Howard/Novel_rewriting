@@ -4,7 +4,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, Query
 
 from contracts.schema.api import (
-    ApprovalBackfillResult, ApprovalDoc, ApprovalWorkpack, BlueprintSeenRequest,
+    ApprovalBackfillResult, ApprovalDoc, ApprovalWorkpack, BlueprintSeenRequest, Stage2GlobalSeenRequest,
     DesignReviewerKind,
     DesignReviewRequest, DesignReviewTemplate, GateKey, SeenKey,
     Stage5ClosureRequest, Stage5ClosureTemplate,
@@ -189,22 +189,35 @@ def backfill_approvals(
 @router.post('/seen/{key}', response_model=ApprovalDoc)
 def mark_seen(
     key: SeenKey,
-    request: BlueprintSeenRequest | None = None,
+    request: BlueprintSeenRequest | Stage2GlobalSeenRequest | None = None,
     sid: str = Depends(checked_sid),
     base: str = Depends(get_base),
 ) -> ApprovalDoc:
-    if key == 'read' and request is None:
-        raise ApprovalRequired(
-            'seen.read 必须携带实际读过的 Blueprint 工作包身份；请刷新阅读页后重试')
-    if key == 'global' and request is not None:
-        raise ApprovalRequired('seen.global 不接受 Blueprint 工作包身份')
-    details: dict[str, object] = {'key': key}
-    if request is not None:
-        details['review_token'] = request.review_token
+    """两个 Stage2 视图都只接受 hash-bound 阅读身份；没有“打开即已读”。"""
+    blueprint_subject: BlueprintSeenRequest | None = None
+    global_subject: Stage2GlobalSeenRequest | None = None
+    if key == 'read':
+        if not isinstance(request, BlueprintSeenRequest):
+            raise ApprovalRequired(
+                'seen.read 必须携带实际读过的 Blueprint 工作包身份；请刷新阅读页后重试')
+        blueprint_subject = request
+        details: dict[str, object] = {
+            'key': key, 'review_token': request.review_token}
+    else:
+        if not isinstance(request, Stage2GlobalSeenRequest):
+            raise ApprovalRequired(
+                'seen.global 必须携带实际读过的 Global 审阅面身份（review_token + actor）；'
+                '请读完当前 review 后再确认')
+        global_subject = request
+        details = {
+            'key': key, 'review_token': request.review_token,
+            'actor': request.actor,
+        }
     with operation_scope(
             base, sid, operation='approval-seen', details=details):
         return approvals.mark_seen(
-            base, sid, key, blueprint_subject=request)
+            base, sid, key, blueprint_subject=blueprint_subject,
+            global_subject=global_subject)
 
 
 @router.post('/writing', response_model=ApprovalDoc)

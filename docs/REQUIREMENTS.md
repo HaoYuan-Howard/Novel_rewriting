@@ -176,11 +176,30 @@ Stage2 Global Reviewer 增量 subject-card wire、Blueprint `extraction-ir-v3.2`
 `NOVEL_CONCURRENCY`、代码身份和 v3.2 契约，每轮使用独立 clean base 与冷缓存。
 
 **验收**：五个不同 parent run 都须 current/run-bound 正式落盘、无 `.INVALID`、生产 check 无 HARD hit
-或 HARD skip、Global generation-safe、Stage2 Commander 至多三次且预审与 Blueprint 确有墙钟重叠；
+或 HARD skip、Global generation-safe、Stage2 Commander 至多四席（含一席只读终审）且预审与 Blueprint 确有墙钟重叠；
 累计首次落盘率 ≥95%。每轮固定抽查至少 5 章，按源章核事实召回、因果方向、人物/世界状态和 evidence
 所属拍，任一失败即不宣称质量未受影响。历史 Stage2 基线 3044 秒，预注册“显著提速”为五轮 P50
 改善 ≥20%；三十分钟目标按五轮 max ≤1800 秒验收，不用一次最快值或 P50 代替。精确取证与汇总命令见
 `docs/OPERATIONS.md::Stage2 五次冷缓存性能与质量验收`。结果回写 `docs/DECISIONS.md` 后删除本条。
+
+### TODO-48 · Stage2 四席 Commander 契约与 seen.global typed 阅读事实：真机验收
+
+2026-09-04 落地（0 成本工程改动，无付费实证）：`Stage2ReviewLedger` v2 四席（席 1 审阅 / 席 2～3 订正 /
+席 4 只读终审）、`approval:stage2-global-final-review` blocker、`Stage2FinalReviewRequest` confirm 与
+`stage2.global --review-decisions` reopen、`seen.global` 改为 `Stage2GlobalSeenRequest` hash-bound 阅读事实
+（HTTP/CLI/界面同一形状）、`reconcile --stage2-review-reopen` 归档旧 v1 三席账。工程/合成面全绿，
+以下只追踪真机证据：
+
+- **两本卡死书续跑**：对 SID `2062949822106228156` 与 `2062246499690591305` 先 `reconcile --stage2-review-reopen`
+  归档旧三席账，再从 `approval:stage2-global-review` 起跑一次干净 worktree headless；验收席位序列
+  `review → (correction)* → final_review` 落账（`_service/runs/<sid>/stage2/global_review_ledgers/*.json`）、
+  `_service/approvals/<sid>.json` 的 `seen_proofs.global` 携 `s2gr1_` token、`seen_subjects.global.actor` 为终审
+  席 logical session、`gate.s2=true`，且终审席成本账 activity 为 `stage2.global.final-review`。
+- **终审 reopen 路**：至少一次真实终审提交 FAIL/UNVER reopen，随后订正席与第二次终审在同一账内完成；
+  reopen 引起的 blocker 回升不被账本拒绝。
+- **人工路径**：界面填写确认人提交 seen.global，改判任一 review 项后旧确认自动过期并要求重读。
+- 结果回写 `docs/DECISIONS.md` 后删除本条；批 2（公共可恢复调用层：首事件/空闲超时、网络分类、
+  同席 resume 不扣席）的真机验收另立条目。
 
 ## 条目生命周期
 

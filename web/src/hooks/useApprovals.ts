@@ -4,12 +4,11 @@ import { qk } from '@/api/queryKeys'
 import type {
   ApprovalDoc,
   GateKey,
-  SeenKey,
   Stage5ClosureRequest,
   StructureApprovalRequest,
   WritingApprovalRequest,
 } from '@/types/approvals'
-import type { BlueprintSeenRequest } from '@/types/stages'
+import type { BlueprintSeenRequest, Stage2GlobalSeenRequest } from '@/types/stages'
 import { useSid } from './useRouteParams'
 
 /**
@@ -66,8 +65,8 @@ export function useApprovals(sidOverride?: string) {
       void qc.invalidateQueries({ queryKey: qk.stage7(sid) })
     },
   })
-  const markSeen = useMutation({
-    mutationFn: (key: SeenKey) => api.markSeen(sid, key),
+  const markGlobalSeen = useMutation({
+    mutationFn: (request: Stage2GlobalSeenRequest) => api.markSeen(sid, 'global', request),
     onSuccess: put,
   })
   const markBlueprintSeen = useMutation({
@@ -90,7 +89,7 @@ export function useApprovals(sidOverride?: string) {
     approveStructure,
     approveStage5Closure,
     backfill,
-    markSeen,
+    markGlobalSeen,
     markBlueprintSeen,
     startWriting,
   }

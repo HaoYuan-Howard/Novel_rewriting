@@ -119,7 +119,7 @@ workpack；确认完整面成立后，才把 scope 改为 `PASS`，
 
 <!-- reviewer-contract:stage2:begin -->
 1. `PASS`：主体与原文逐项一致，且集合完整性已做正向与反向核对；scope 总理由与逐项例外理由都写明分母和核验位置。
-2. `FAIL`：存在可指向的冲突、错抽或漏抽；当前增量里的问题必须一次列全。事实确有错误时从 `stage2.global --emit-edit-template` 取得当前 typed GlobalEdit。字段 patch 只能修改模板已有行，行数、顺序、subject id 与字段集合全部绑定；集合完整性的新增、删除或拆分只填写模板给出的 `collection_edits[].operations`，不得改 `collection` 或 `expected_collection_sha256`。Stage2 全程最多三次 Commander 真调用，每次使用新的 logical/provider session；后续包只含仍未闭合或因依赖变化重开的 subject cards。`post_edit_review` 绑定修前 workpack、source 与完整旧未闭合 scope：本 edit 新打开的项才走默认自审，未修改且 hash 存活的旧 FAIL/UNVER 必须在 `decisions[]` 显式复判。不能重复提交同一 review，也不能用“已知问题”把 FAIL 当成披露放行。
+2. `FAIL`：存在可指向的冲突、错抽或漏抽；当前增量里的问题必须一次列全。事实确有错误时从 `stage2.global --emit-edit-template` 取得当前 typed GlobalEdit。字段 patch 只能修改模板已有行，行数、顺序、subject id 与字段集合全部绑定；集合完整性的新增、删除或拆分只填写模板给出的 `collection_edits[].operations`，不得改 `collection` 或 `expected_collection_sha256`。Stage2 每个 Global/MainText 主体最多四席 Commander：一席完整审阅、至多两席定向订正、一席只读独立终审；每席使用新的 logical/provider session，同席内因网络中断的 resume 不占新席。订正席的包只含仍未闭合或因依赖变化重开的 subject cards；终审席读全部 blocking 项（含已 PASS 的理由与证据）、整书正文与 Blueprint 工作包，只能 confirm 或以自己为 actor 把指定项 reopen 为 FAIL/UNVER，不得提交任何修改，也不得为通过而复述前席理由。`post_edit_review` 绑定修前 workpack、source 与完整旧未闭合 scope：本 edit 新打开的项才走默认自审，未修改且 hash 存活的旧 FAIL/UNVER 必须在 `decisions[]` 显式复判。不能重复提交同一 review，也不能用“已知问题”把 FAIL 当成披露放行。
 3. `UNVER`：证据不足以安全判断；绝不改写成 PASS。只有当前 submission option 明确给出 `quarantine_group`、且该 kind 的 `generation_impact=quarantine_or_fix` 时，才可在阅读完整组后填写隔离理由：状态仍为 UNVER，原始事实与审计保留，下游写作视图删除完整组。`generation_impact=must_fix` 只有在证据支持 PASS 或能指出真实事实错误并用 GlobalEdit 修正时才能收口；材料仍不足就保持 UNVER 并以 `stopped` 结束，不为追求全绿臆造编辑。`disclose` 项不阻断生成但继续披露。
 <!-- reviewer-contract:stage2:end -->
 
@@ -144,16 +144,19 @@ workpack；确认完整面成立后，才把 scope 改为 `PASS`，
 只改未消费字段则以 freshness 结论复用。review 早于 blueprint 完成也可以保存，但 Stage2 状态仍关闭，
 不得把“已有人审”冒充整层已收口。
 
-Stage2 global 的总预算是 **1 次 Executor 产出 + 最多 3 次 Commander 真调用**。第一次 Commander
-完整审阅；后两次只看仍未闭合、因依赖变化重开的 subject cards 或精确拒因。每次 Commander 都开新的
-logical/provider session，自足增量包携带 subject/evidence catalog、claim→evidence 索引、typed binding 与
-surviving decisions，不依赖供应商隐藏上下文。review/edit 执行都是 0-wire，不新建 Executor 会话也不占
+Stage2 global 的总预算是 **1 次 Executor 产出 + 每个 Global/MainText 主体最多四席 Commander**：
+席 1 完整审阅；席 2～3 只看仍未闭合、因依赖变化重开的 subject cards 或精确拒因；席 4 是只读独立终审
+（`approval:stage2-global-final-review`），它收到不压缩的全量 blocking 行（含已 PASS 的理由与证据）、整书
+正文与 Blueprint 工作包，只能提交 `Stage2FinalReviewRequest` confirm，或以自己为 actor 用
+`--review-decisions` 把指定项 reopen 为 FAIL/UNVER；订正席不得占第四席，终审席不得编辑 Global。每席都开
+新的 logical/provider session，同席内因网络中断的 resume 不占新席；自足增量包携带 subject/evidence
+catalog、claim→evidence 索引、typed binding 与 surviving decisions，不依赖供应商隐藏上下文。review/edit 执行都是 0-wire，不新建 Executor 会话也不占
 模型轮次。业务主体未变化却重复等价 typed 动作、相同 progress fingerprint 或 blocker 数反增时由
 Supervisor 关闭式停止。typed request 被 loader 拒绝，或 canonical action 以 exit 2 在写盘前终止时，
-下一格收到紧凑 workpack 与精确拒因；达到三次就保留拒绝事实并停止。若 action 已产生绑定当前
+下一席收到紧凑 workpack 与精确拒因；订正席用尽就保留拒绝事实并停止。若 action 已产生绑定当前
 `global_edit.json` 的 `.INVALID`，队列必须在 Blueprint redo 之前暴露
 `recovery:stage2-global-reviewed-edit`；current correction workpack 只带正式 review、失败 edit/INVALID 的精确
-HARD 与三次预算声明。调用槽在模型启动前以 `started` 持久化，pause/resume、服务或代码重启都不得重置。
+HARD 与席位声明。席位在模型启动前以 `started` 持久化，pause/resume、服务或代码重启都不得重置。
 随后运行 Stage2 唯一显式复检
 `stage2.blueprint --check-only`：只有 global 与 blueprint 均 current、联合 HARD 通过、评测面 current
 且 blocking 面 generation-safe，才可运行 Stage4A 或任何后续付费/组装/下载路径。CLI、API、队列、
@@ -190,20 +193,24 @@ Stage5 或更晚 blocker 下开放。token 内部绑定人实际看见的内容�
 novel.cli approval gate s0 <SID> --base <BASE>
 novel.cli approval gate s1 <SID> --base <BASE>
 novel.cli approval seen read <SID> --base <BASE> --input <BLUEPRINT_SEEN.json>
-novel.cli approval seen global <SID> --base <BASE>
+novel.cli approval seen global <SID> --base <BASE> --input <GLOBAL_SEEN.json>
 novel.cli approval gate s2 <SID> --base <BASE>
 ```
 
-`seen` 会绑定当前 Stage2 视图，`gate` 会绑定当前产物 proof 并逐级检查前置。
+`<GLOBAL_SEEN.json>` 是 `Stage2GlobalSeenRequest`：`review_token` 逐字来自
+`stage2.global --emit-review-workpack` 顶层的 `review_token`（`s2gr1_` 前缀，绑定 Global 主体、review
+完整字节、正文主体与 blocking scope），`actor` 是读完并确认的人/席位；review 任一项改判后旧 token
+失效，必须重读。`seen` 会绑定当前 Stage2 视图，`gate` 会绑定当前产物 proof 并逐级检查前置。
 `approval backfill` 不会制造 `seen.read/global` 或 `gate.s2`，不能拿它代替这段阅读事实。
 通用 `approval gate` 只公开 `s0/s1/s2`；s4 必须走下面带完整 subject 与逐章决定的
 typed structure apply，不能匿名盖章。
 
-在 AgentRun 的标准 reviewer 路径中，Commander 仍只提交同一份
-`BlueprintSeenRequest`；RunSupervisor 用一枚 launch ticket 启动唯一的：
+在 AgentRun 的标准 reviewer 路径中，只有第四席只读终审提交一份
+`Stage2FinalReviewRequest`（actor/reason + Global `s2gr1_` token + Blueprint `bpr3_` token）；
+RunSupervisor 用一枚 launch ticket 启动唯一的：
 
 ```text
-novel.cli approval close-stage2 <SID> --base <BASE> --input <BLUEPRINT_SEEN.json>
+novel.cli approval close-stage2 <SID> --base <BASE> --input <STAGE2_FINAL_REVIEW.json>
 ```
 
 该 façade 在同一个可取消进程内严格复用上面的五步服务顺序。它不省略任何校验，

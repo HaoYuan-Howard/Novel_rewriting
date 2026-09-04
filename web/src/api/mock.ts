@@ -54,6 +54,7 @@ import type {
   CheckReport,
   BlueprintReviewWorkpack,
   BlueprintSeenRequest,
+  Stage2GlobalSeenRequest,
   DraftEditPreview,
   DraftEditPreviewRequest,
   DraftEditRequest,
@@ -834,6 +835,7 @@ function freshGlobalReview(): GlobalReviewResponse {
     approved: true,
     generation_safe: true,
     quarantined_groups: [],
+    review_token: MOCK_GLOBAL_SEEN_TOKEN,
     effect_counts: {
       blocking: { pending: 0, PASS: 4, FAIL: 0, UNVER: 0 },
       disclosure: { pending: 1, PASS: 0, FAIL: 0, UNVER: 0 },
@@ -1538,9 +1540,23 @@ function expectedBlueprintSeenRequest(sid: string): BlueprintSeenRequest {
   }
 }
 
+/** mock review 的 seen.global 凭证；测试用它模拟“读完当前 review 后确认”。 */
+export const MOCK_GLOBAL_SEEN_TOKEN = 's2gr1_' + '5'.repeat(64)
+
+function isCurrentGlobalSeenRequest(
+  sid: string,
+  request: BlueprintSeenRequest | Stage2GlobalSeenRequest | undefined,
+): request is Stage2GlobalSeenRequest {
+  if (!request || !('actor' in request)) return false
+  const keys = Object.keys(request).sort()
+  if (keys.join(',') !== 'actor,review_token') return false
+  if (!request.actor.trim()) return false
+  return request.review_token === loadGlobalReview(sid).review_token
+}
+
 function isCurrentBlueprintSeenRequest(
   sid: string,
-  request: BlueprintSeenRequest | undefined,
+  request: BlueprintSeenRequest | Stage2GlobalSeenRequest | undefined,
 ): request is BlueprintSeenRequest {
   if (!request) return false
   const keys = Object.keys(request)
@@ -2410,7 +2426,7 @@ export const mockApi: Api = {
     return later({ approvals, backfilled })
   },
 
-  markSeen: (sid, key: SeenKey, request?: BlueprintSeenRequest) => {
+  markSeen: (sid, key: SeenKey, request: BlueprintSeenRequest | Stage2GlobalSeenRequest) => {
     const path = '/novels/' + sid + '/approvals/seen/' + key
     if (key === 'read' && !isCurrentBlueprintSeenRequest(sid, request)) {
       return fail(new ApiError('server', path, {
@@ -2419,10 +2435,10 @@ export const mockApi: Api = {
         backendKind: 'ApprovalRequired',
       }))
     }
-    if (key === 'global' && request !== undefined) {
+    if (key === 'global' && !isCurrentGlobalSeenRequest(sid, request)) {
       return fail(new ApiError('server', path, {
         status: 409,
-        message: 'seen.global 不接受 Blueprint 工作包身份',
+        message: 'seen.global 必须携带当前 review 的 review_token 与非空确认人；主体变化后请重新通读',
         backendKind: 'ApprovalRequired',
       }))
     }

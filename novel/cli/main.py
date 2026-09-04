@@ -223,6 +223,10 @@ def _parser() -> argparse.ArgumentParser:
     admission_recovery.add_argument(
         '--stage2-review-no-wire-session-run-id', type=_run_id_arg,
         help='查看/隔离旧 admission/epoch bug 造成的 Stage2 预审 0-wire 假预算行')
+    admission_recovery.add_argument(
+        '--stage2-review-reopen', action='store_true',
+        help='查看/归档一本书的 Stage2 Commander 席位账（含旧 v1 三席账）并开 v2 空账；'
+             '查看模式列出全部账，apply 须给 --actor/--reason/--subject-sha256')
     rc.add_argument(
         '--stage2-review-sid',
         help='Stage2 review no-wire 恢复必填：目标书 sid')
@@ -270,8 +274,8 @@ def _parser() -> argparse.ArgumentParser:
     approval_seen.add_argument('--base', required=True)
     approval_seen.add_argument(
         '--input',
-        help='seen.read 必填：BlueprintSeenRequest JSON；传 - 时从 stdin 读取。'
-             'seen.global 不接受此参数')
+        help='必填：seen.read 给 BlueprintSeenRequest JSON，seen.global 给 '
+             'Stage2GlobalSeenRequest JSON（review_token + actor）；传 - 时从 stdin 读取')
 
     approval_gate = approval_sub.add_parser(
         'gate', help='批准当前 s0/s1/s2；s4 只接受 typed structure apply，'
@@ -282,12 +286,13 @@ def _parser() -> argparse.ArgumentParser:
 
     approval_close_stage2 = approval_sub.add_parser(
         'close-stage2',
-        help='用已读 Blueprint opaque token 顺序恢复 s0/s1/seen.read/global/s2')
+        help='用独立终审回执（Global + Blueprint 两枚 opaque token）顺序恢复 '
+             's0/s1/seen.read/seen.global/s2')
     approval_close_stage2.add_argument('sid')
     approval_close_stage2.add_argument('--base', required=True)
     approval_close_stage2.add_argument(
         '--input', required=True,
-        help='BlueprintSeenRequest JSON；传 - 时从 stdin 读取')
+        help='Stage2FinalReviewRequest JSON；传 - 时从 stdin 读取')
 
     approval_workpack = approval_sub.add_parser(
         'workpack', help='只读输出当前 Stage4/6/7 审批工作包')
@@ -1954,6 +1959,38 @@ def _cmd_jobs(a: argparse.Namespace) -> int:
 
 def _cmd_reconcile(a: argparse.Namespace) -> int:
     """编排控制面的 0 成本 typed 恢复；无子选项仍执行 R-11.11。"""
+    if a.stage2_review_reopen:
+        if a.stage2_review_sid is None:
+            raise TerminalState(
+                '--stage2-review-reopen 必须同时给 --stage2-review-sid')
+        from novel.orchestrator import stage2_review_ledger
+
+        shown = stage2_review_ledger.list_ledgers(a.base, a.stage2_review_sid)
+        supplied = (a.actor, a.reason, a.subject_sha256)
+        if not any(value is not None for value in supplied):
+            print(json.dumps({
+                'sid': a.stage2_review_sid,
+                'ledgers': shown,
+                'apply_requires': [
+                    '--actor', '--reason',
+                    '--subject-sha256 <目标账的 original_sha256>'],
+            }, ensure_ascii=False, indent=2))
+            return X.OK
+        if a.force:
+            raise TerminalState(
+                '--force 不适用于 Stage2 席位账归档；只能按 original_sha256 CAS 归档')
+        if any(value is None for value in supplied):
+            raise TerminalState(
+                'Stage2 席位账归档 apply 必须同时给 --actor / --reason / --subject-sha256')
+        archived = stage2_review_ledger.reopen_archive_by_sha(
+            a.base, a.stage2_review_sid,
+            original_sha256=a.subject_sha256,
+            actor=a.actor, reason=a.reason)
+        print(
+            '✓ Stage2 席位账已整体归档并开 v2 空账；'
+            f'archived_turns={len(archived.turns)}，'
+            f'original_schema_version={archived.original_schema_version}')
+        return X.OK
     if a.stage2_review_no_wire_session_run_id is not None:
         if a.stage2_review_sid is None:
             raise TerminalState(
@@ -2247,7 +2284,8 @@ def _cmd_approval(a: argparse.Namespace) -> int:
 def _cmd_approval_admitted(a: argparse.Namespace) -> int:
     """可审计审批 CLI：template/show 只读，apply 只落审批账且绝不拉作业。"""
     from contracts.schema.api import (
-        BlueprintSeenRequest, DesignReviewRequest, Stage5ClosureRequest, StructureApprovalRequest,
+        BlueprintSeenRequest, DesignReviewRequest, Stage2FinalReviewRequest,
+        Stage2GlobalSeenRequest, Stage5ClosureRequest, StructureApprovalRequest,
         WritingApprovalRequest,
     )
     from novel.orchestrator import approvals
@@ -2257,11 +2295,11 @@ def _cmd_approval_admitted(a: argparse.Namespace) -> int:
     elif a.approval_action == 'backfill':
         result = approvals.backfill_from_disk(a.base, a.sid)
     elif a.approval_action == 'seen':
+        if not a.input:
+            raise TerminalState(
+                f'approval seen {a.view} 必须给 --input：read 用 BlueprintSeenRequest，'
+                'global 用 Stage2GlobalSeenRequest；先读完当前工作包/review')
         if a.view == 'read':
-            if not a.input:
-                raise TerminalState(
-                    'approval seen read 必须给 --input <BlueprintSeenRequest.json>；'
-                    '先输出并审阅 current Blueprint 工作包')
             try:
                 subject = BlueprintSeenRequest.model_validate_json(
                     _approval_input(a.input))
@@ -2271,9 +2309,14 @@ def _cmd_approval_admitted(a: argparse.Namespace) -> int:
             result = approvals.mark_seen(
                 a.base, a.sid, a.view, blueprint_subject=subject)
         else:
-            if a.input:
-                raise TerminalState('approval seen global 不接受 Blueprint --input')
-            result = approvals.mark_seen(a.base, a.sid, a.view)
+            try:
+                global_subject = Stage2GlobalSeenRequest.model_validate_json(
+                    _approval_input(a.input))
+            except ValidationError as exc:
+                raise TerminalState(
+                    f'Global seen JSON 不符合 typed 契约：{exc}') from exc
+            result = approvals.mark_seen(
+                a.base, a.sid, a.view, global_subject=global_subject)
     elif a.approval_action == 'gate':
         if a.gate == 's4':  # argparse 已关闭；保留服务调用前的纵深防线。
             raise ApprovalRequired(
@@ -2281,12 +2324,12 @@ def _cmd_approval_admitted(a: argparse.Namespace) -> int:
         result = approvals.approve_gate(a.base, a.sid, a.gate)
     elif a.approval_action == 'close-stage2':
         try:
-            subject = BlueprintSeenRequest.model_validate_json(
+            final_request = Stage2FinalReviewRequest.model_validate_json(
                 _approval_input(a.input))
         except ValidationError as exc:
             raise TerminalState(
-                f'Stage2 收口 JSON 不符合 BlueprintSeenRequest 契约：{exc}') from exc
-        result = approvals.close_stage2_review(a.base, a.sid, subject)
+                f'Stage2 收口 JSON 不符合 Stage2FinalReviewRequest 契约：{exc}') from exc
+        result = approvals.close_stage2_review(a.base, a.sid, final_request)
     elif a.approval_action == 'workpack':
         if a.surface == 'design':
             result = approvals.design_workpack(a.base, a.sid)

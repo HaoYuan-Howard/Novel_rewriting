@@ -116,12 +116,14 @@ admission、execution permit、节点调度、epoch、自动遥测与最终报�
   `generation_impact=quarantine_or_fix` 的完整 secret/relation/world-rule 组可显式 quarantine；
   `must_fix` 只有证据支持 PASS 或能指出真实错误时才用 0-wire GlobalEdit，材料仍不足就保持 UNVER
   并停止，不臆造编辑。GlobalEdit 字段 patch 只能改模板已有 subject；集合完整性的新增/删除/拆分
-  必须填写 hash-bound `collection_edits[].operations`。Stage2 总预算是 1 次 Executor + 最多 3 次
-  Commander 真调用；每次 Commander 都开新 logical/provider session，后续仅发送未闭合或依赖重开的
-  subject cards、精确拒因与 surviving decisions。0-wire typed 动作不计轮次。若 reviewed edit 被
+  必须填写 hash-bound `collection_edits[].operations`。Stage2 每个 Global/MainText 主体的预算是 1 次 Executor + 四席
+  Commander（一席完整审阅、至多两席订正、一席只读独立终审）；每席都开新 logical/provider session，
+  同席内因网络中断的 resume 不占新席；订正席仅发送未闭合或依赖重开的 subject cards、精确拒因与
+  surviving decisions，终审席读全量 blocking 行、整书正文与 Blueprint 工作包，只能 confirm 或 reopen。
+  0-wire typed 动作不计席位。若 reviewed edit 被
   canonical HARD 拦成当前 `.INVALID`，必须先走持久 `recovery:stage2-global-reviewed-edit`；预算槽在
-  模型启动前落 `started`，不得先切 stale Blueprint，也不得因 pause/resume 或重启重置。第三次仍未
-  闭合时停止并保留具体恢复事实。
+  模型启动前落 `started`，不得先切 stale Blueprint，也不得因 pause/resume 或重启重置。订正席用尽仍未
+  闭合时停止并保留具体恢复事实；blocking 面安全后只有第四席终审能收口 `gate.s2`。
   判据表的 `sev` 是唯一权威，见[修复状态机](references/recovery.md)。
 
 ## 完成定义

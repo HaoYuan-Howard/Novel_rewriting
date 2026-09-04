@@ -44,6 +44,7 @@ from contracts.schema.api import (
     ApprovalWorkpack,
     BlueprintReviewWorkpack,
     BlueprintSeenRequest,
+    Stage2FinalReviewRequest, Stage2GlobalSeenRequest,
     DesignBindingInfeasibility,
     DesignAcceptedChapterConstraint,
     DesignBlindChapterTruth,
@@ -462,6 +463,10 @@ class _ApprovalRecordV7(_ApprovalRecordV6Legacy):
     """盘上审批记录 v7；``gate.s5`` 只能由当前 typed closure 回执打开。"""
 
     v: Literal[7] = 7
+    #: 每个 seen 视图最近一次确认的明文主体（token / actor）；proof 仍是判当前
+    #: 的唯一依据，这里只留审计：谁在哪份 review 上签的字。旧 v7 字节缺此格时
+    #: 按空读取，不伪造历史 actor。
+    seen_subjects: dict[str, dict[str, str]] = Field(default_factory=dict)
     # v7 旧字节仍按完整决定读取；新决定使用 slim_v1，不再复制整份 subject。
     design_history: list[_StoredDesignHistory] = Field(default_factory=list)
     design_decision: _StoredDesignHistory | None = None
@@ -899,7 +904,9 @@ _GATE_REQUIREMENTS = {
 
 _SEEN_ARTIFACTS = {
     'read': (STAGE2_CHAPTER_BLUEPRINTS,),
-    'global': (STAGE2_GLOBAL_GROUNDING,),
+    # ``seen.global`` 绑定 Global 主体**与 review 完整字节**：review 任何一格
+    # 状态/理由变化都让旧阅读事实过期，独立终审必须重读。
+    'global': (STAGE2_GLOBAL_GROUNDING, STAGE2_GLOBAL_REVIEW),
 }
 
 
@@ -2459,11 +2466,27 @@ def _blueprint_seen_snapshot(
     return _blueprint_seen_proof(novel_dir, workpack)
 
 
+def _stage2_global_review_token(novel_dir: Path) -> str:
+    """现算 ``seen.global`` 的 opaque 阅读凭证；主体不 current 时按现役异常拒绝。"""
+    from novel.stages.stage2.global_review import review_token
+
+    ctx = state.readonly_ctx(novel_dir, 'stage2.global', _projection_code())
+    return review_token(ctx)
+
+
+def _global_seen_proof(novel_dir: Path) -> tuple[_ApprovalProof, str]:
+    """``seen.global`` 的耐久 proof 与明文 token；两者都只从盘上当前主体重算。"""
+    token = _stage2_global_review_token(novel_dir)
+    proof = _make_proof(
+        novel_dir, _SEEN_ARTIFACTS['global'],
+        {'kind': 'seen', 'key': 'global', 'review_token': token})
+    return proof, token
+
+
 def _proof_for_seen(novel_dir: Path, key: str) -> _ApprovalProof:
     if key == 'read':
         return _blueprint_seen_snapshot(novel_dir)[0]
-    return _make_proof(
-        novel_dir, _SEEN_ARTIFACTS[key], {'kind': 'seen', 'key': key})
+    return _global_seen_proof(novel_dir)[0]
 
 
 def _frozen_v6_seen_read_is_current(
@@ -5198,15 +5221,29 @@ def backfill_from_disk(
 def mark_seen(
     base: str | os.PathLike[str], sid: str, key: str,
     *, blueprint_subject: BlueprintSeenRequest | None = None,
+    global_subject: Stage2GlobalSeenRequest | None = None,
 ) -> ApprovalDoc:
+    """写一条 hash-bound 的 Stage2 阅读事实；两个视图都不再有无主体分支。
+
+    ``seen.read`` 绑定 Blueprint 工作包 token；``seen.global`` 绑定 Global 审阅
+    面 token（Global 主体 + review 完整字节 + MainText 主体 + blocking scope）
+    并记录 actor。headless 路由下两枚 token 都来自第四席只读终审的回执，
+    交互界面则由人读完当前 review 后显式提交，不再“打开页面即已读”。
+    """
     if key not in _SEEN_ARTIFACTS:
         raise ApprovalRequired(f'unknown stage2 view: {key}')
     if key == 'read' and blueprint_subject is None:
         raise ApprovalRequired(
             'seen.read 必须携带实际读过的 Blueprint 工作包身份；'
             '请先取得完整工作包再确认')
+    if key == 'global' and global_subject is None:
+        raise ApprovalRequired(
+            'seen.global 必须携带实际读过的 Global 审阅面身份（review_token + actor）；'
+            '请先读完当前 review 再确认')
     if blueprint_subject is not None and key != 'read':
         raise ApprovalRequired('Blueprint 工作包身份只能用于 seen.read')
+    if global_subject is not None and key != 'global':
+        raise ApprovalRequired('Global 审阅面身份只能用于 seen.global')
     with approval_file_lock(base, sid):
         raw, record = _read_state(base, sid)
         novel_dir = paths.resolve_novel_dir(base, sid)
@@ -5237,31 +5274,50 @@ def mark_seen(
                     'Blueprint 审阅主体在确认提交期间发生变化；'
                     '本次 seen.read 不落盘，请刷新工作包后重新确认')
         else:
-            proof = _proof_for_seen(novel_dir, key)
+            assert global_subject is not None
+            proof, token = _global_seen_proof(novel_dir)
+            if token != global_subject.review_token:
+                raise ApprovalRequired(
+                    'Global 审阅面已变化（review/主体/正文任一格不同）；'
+                    '本次 seen.global 不落盘，请重新读取当前 review 后再确认')
+            after_proof, after_token = _global_seen_proof(novel_dir)
+            if after_proof != proof or after_token != token:
+                raise ApprovalRequired(
+                    'Global 审阅面在确认提交期间发生变化；'
+                    '本次 seen.global 不落盘，请重新读取后再确认')
         seen = dict(raw.seen)
         proofs = dict(raw.seen_proofs)
+        subjects = dict(raw.seen_subjects)
         seen[key] = True
         proofs[key] = proof
+        if global_subject is not None:
+            subjects[key] = {
+                'actor': global_subject.actor,
+                'review_token': global_subject.review_token,
+            }
+        elif blueprint_subject is not None:
+            subjects[key] = {'review_token': blueprint_subject.review_token}
         return _write(base, raw.model_copy(update={
-            'seen': seen, 'seen_proofs': proofs,
+            'seen': seen, 'seen_proofs': proofs, 'seen_subjects': subjects,
         }))
 
 
 def close_stage2_review(
     base: str | os.PathLike[str], sid: str,
-    blueprint_subject: BlueprintSeenRequest,
+    request: Stage2FinalReviewRequest,
 ) -> ApprovalDoc:
-    """按公开审批服务的固定顺序收口一次 headless Stage2 阅读事实。
+    """按公开审批服务的固定顺序收口一次 headless Stage2 独立终审。
 
-    Commander 只提交它实际读过的 Blueprint opaque token；本函数不生成 review
-    决定，也不碰小说 artifact。五步各自仍执行原有 currentness、typed review 与
-    TOCTOU 校验。若中途失败，已经落下的 raw proof 也是可审计、可幂等恢复的事实，
-    最后的 ``s2`` 不会在前置项失效时被误开。
+    第四席只读终审提交它实际读过的两枚 opaque token（Global 审阅面 + Blueprint
+    工作包）与 actor/reason；本函数不生成 review 决定，也不碰小说 artifact。
+    五步各自仍执行原有 currentness、typed review 与 TOCTOU 校验。若中途失败，
+    已经落下的 raw proof 也是可审计、可幂等恢复的事实，最后的 ``s2`` 不会在
+    前置项失效时被误开。
     """
     approve_gate(base, sid, 's0')
     approve_gate(base, sid, 's1')
-    mark_seen(base, sid, 'read', blueprint_subject=blueprint_subject)
-    mark_seen(base, sid, 'global')
+    mark_seen(base, sid, 'read', blueprint_subject=request.blueprint_subject)
+    mark_seen(base, sid, 'global', global_subject=request.global_subject)
     return approve_gate(base, sid, 's2')
 
 

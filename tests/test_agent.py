@@ -484,7 +484,7 @@ def test_same_epoch_reviewer_approval_inputs_keep_each_typed_payload(base):
     assert json.loads(second_path.read_text('utf-8')) == second.payload
 
 
-def test_blueprint_seen_uses_one_admitted_stage2_closure_process(base):
+def test_stage2_final_review_confirm_uses_one_admitted_stage2_closure_process(base):
     """一枚 launch ticket 只启动一个 façade 进程，不在 callback 内串起五棵子进程。"""
     epoch = ExecutionEpoch(
         epoch_id='stage2-close-epoch', ordinal=1, reason='initial',
@@ -493,8 +493,13 @@ def test_blueprint_seen_uses_one_admitted_stage2_closure_process(base):
         code_version='test-code-version', skill_sha256='8' * 64,
         session_run_id='stage2-close-session')
     action = agent.reviewer_tasks.ReviewerApprovalAction(
-        kind='approval', surface='blueprint_seen',
-        payload={'review_token': 'bpr3_' + '9' * 64})
+        kind='approval', surface='stage2_final_review',
+        payload={
+            'actor': 'agent:final-seat',
+            'reason': '独立通读全部 blocking 项、整书正文与 Blueprint',
+            'global_review_token': 's2gr1_' + '8' * 64,
+            'blueprint_review_token': 'bpr3_' + '9' * 64,
+        })
 
     argv = agent._reviewer_approval_argv(base, '42', epoch, action)
     input_path = Path(argv[argv.index('--input') + 1])

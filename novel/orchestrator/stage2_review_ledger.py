@@ -1,11 +1,16 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Stage2 Global Commander 的跨进程预算与单调进展账。
+"""Stage2 Global Commander 的跨进程席位与单调进展账（v2）。
 
 这份账只落无正文 identity：Global/MainText/workpack SHA、未闭合项数量与调用结果。
-模型进程一旦获得调用槽就先写 ``started``，所以宿主崩溃也不会重新发放同一格预算。
-每个 Global + MainText 主体最多三次 Commander 真调用，且每次必须是新的 logical
-session；相同 progress fingerprint 不允许靠重启重演。
+模型进程一旦获得席位就先写 ``started``，所以宿主崩溃也不会重新发放同一席。
+每个 Global + MainText 主体最多 ``STAGE2_COMMANDER_MAX_SEATS`` 席：前三席承担
+完整审阅与定向订正，第四席只保留给只读 ``final_review``；每席必须是新的 logical
+session，同席内的 resume/relaunch 只追加 ``attempts``，不占新席。相同 progress
+fingerprint 不允许靠重启重演；终审 reopen 之后允许未闭合数回升。
+
+v1 三席账没有迁移机制：``_read`` 拒读，只能经 :func:`reopen_archive` 带
+actor/reason 整体归档后开新账。
 """
 from __future__ import annotations
 
@@ -16,10 +21,16 @@ import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
+from pydantic import TypeAdapter
+
+from contracts.invariants import (
+    STAGE2_COMMANDER_MAX_EDIT_SEAT, STAGE2_COMMANDER_MAX_SEATS,
+)
 from contracts.schema.orchestration import (
-    Stage2ReviewLedger, Stage2ReviewLedgerReconciliation,
-    Stage2ReviewLedgerTurn,
+    Stage2ReviewAttempt, Stage2ReviewLedger, Stage2ReviewLedgerArchive,
+    Stage2ReviewLedgerReconciliation, Stage2ReviewLedgerTurn,
 )
 from novel import paths, run_identity
 from novel.appendlog import path_transaction_lock
@@ -27,7 +38,11 @@ from novel.errors import PathRefused, TerminalState
 from novel.llm import ledger as cost_ledger
 
 
-MAX_COMMANDER_CALLS = 3
+MAX_COMMANDER_CALLS = STAGE2_COMMANDER_MAX_SEATS
+#: 席位账不是 artifact，不走 store；用 typed adapter 读原始 object 供版本分流。
+_RAW_LEDGER = TypeAdapter(dict[str, Any])
+MAX_EDIT_SEAT = STAGE2_COMMANDER_MAX_EDIT_SEAT
+_ARCHIVABLE_SCHEMA_VERSIONS = (1, 2)
 _LEGACY_NO_WIRE_EXIT_CODE = 70
 _LEGACY_NO_WIRE_SIGNATURE = 'ValueError: admission id 必须属于当前 epoch'
 
@@ -111,17 +126,72 @@ def _atomic_write(path: Path, ledger: Stage2ReviewLedger) -> None:
         raise
 
 
-def _read(path: Path) -> Stage2ReviewLedger | None:
+def _raw_ledger(path: Path) -> dict[str, Any] | None:
     if not path.exists():
         return None
     if path.is_symlink() or not path.is_file():
         raise Stage2ReviewBudgetRefused(
             f'Stage2 review ledger 不是普通文件：{path}')
     try:
-        return Stage2ReviewLedger.model_validate_json(path.read_bytes())
+        raw = _RAW_LEDGER.validate_json(path.read_bytes())
+    except Exception as exc:  # noqa: BLE001 —— 坏账不能静默重置预算
+        raise Stage2ReviewBudgetRefused(
+            f'Stage2 review ledger 不是合法 JSON object：{path}') from exc
+    return raw
+
+
+def _read(path: Path) -> Stage2ReviewLedger | None:
+    """只接受当前 v2 账；v1 三席账关闭式拒绝并指向唯一的归档入口。"""
+    raw = _raw_ledger(path)
+    if raw is None:
+        return None
+    version = raw.get('schema_version')
+    if version != 2:
+        raise Stage2ReviewBudgetRefused(
+            f'Stage2 review ledger 是 schema_version={version!r} 的旧席位账：{path}；'
+            '本仓没有迁移机制，只能经 `reconcile --stage2-review-reopen` '
+            '带 actor/reason 整体归档后开 v2 新账')
+    try:
+        return Stage2ReviewLedger.model_validate(raw)
     except Exception as exc:  # noqa: BLE001 —— 坏账不能静默重置预算
         raise Stage2ReviewBudgetRefused(
             f'Stage2 review ledger 无法按当前 typed 契约读取：{path}') from exc
+
+
+def read_any_version(path: Path) -> tuple[dict[str, Any], Stage2ReviewLedgerArchive]:
+    """只供归档：把 v1/v2 账读成一份 typed archive 记录，不产生可预留的新账。
+
+    v1 turn 行的 ordinal/purpose 都落在 v2 的取值面内，可以逐字复读；
+    ``max_calls`` / ``state`` 只作为原始事实保留在 archive 元数据里。
+    """
+    raw = _raw_ledger(path)
+    if raw is None:
+        raise TerminalState(f'Stage2 review ledger 不在盘上：{path}')
+    version = raw.get('schema_version')
+    if version not in _ARCHIVABLE_SCHEMA_VERSIONS:
+        raise TerminalState(
+            f'Stage2 review ledger schema_version={version!r} 不在可归档面内')
+    try:
+        turns = [
+            Stage2ReviewLedgerTurn.model_validate(row)
+            for row in raw.get('turns', [])]
+        reconciliations = [
+            Stage2ReviewLedgerReconciliation.model_validate(row)
+            for row in raw.get('reconciliations', [])]
+        max_calls = int(raw['max_calls'])
+        state = str(raw['state'])
+    except Exception as exc:  # noqa: BLE001
+        raise TerminalState(
+            f'Stage2 review ledger 无法按可归档形状读取：{path}') from exc
+    archive = Stage2ReviewLedgerArchive(
+        actor='pending', reason='pending', archived_at=0,
+        original_schema_version=int(version),
+        original_max_calls=max_calls,
+        original_state=state,  # type: ignore[arg-type]
+        original_sha256=hashlib.sha256(path.read_bytes()).hexdigest(),
+        turns=turns, reconciliations=reconciliations,
+    )
+    return raw, archive
 
 
 def _ledger_with_session(
@@ -454,11 +524,25 @@ def reserve(
                 '同一 Stage2 Global/MainText 审阅账已标 complete，拒绝重新调用')
         if len(ledger.turns) >= ledger.max_calls:
             raise Stage2ReviewBudgetRefused(
-                f'Stage2 Global 已用满 {ledger.max_calls} 次 Commander 调用')
+                f'Stage2 Global 已用满 {ledger.max_calls} 席 Commander')
+        next_ordinal = len(ledger.turns) + 1
+        if purpose != 'final_review' and next_ordinal > MAX_EDIT_SEAT:
+            raise Stage2ReviewBudgetRefused(
+                f'Stage2 Global 前 {MAX_EDIT_SEAT} 席已用完；第 {next_ordinal} 席'
+                f'只保留给只读 final_review，不能再承担 {purpose}')
+        if purpose == 'final_review' and blocker_count != 0:
+            raise Stage2ReviewBudgetRefused(
+                'Stage2 Global 仍有未闭合 blocking 项，不能预留只读终审席')
         if any(row.progress_sha256 == progress_sha256 for row in ledger.turns):
             raise Stage2ReviewBudgetRefused(
                 'Stage2 Global 未闭合项与拒因 fingerprint 没有变化，拒绝重复调用')
-        if ledger.turns and blocker_count > ledger.turns[-1].blocker_count:
+        previous = ledger.turns[-1] if ledger.turns else None
+        # 终审 reopen 把 PASS 项重新打成 FAIL/UNVER 是独立复审的合法产出，
+        # 不是模型在未知扩张上空转；只有普通 review/correction 之间才禁止反增。
+        if (previous is not None
+                and previous.purpose != 'final_review'
+                and purpose != 'final_review'
+                and blocker_count > previous.blocker_count):
             raise Stage2ReviewBudgetRefused(
                 'Stage2 Global 未闭合项数量倒退增加，拒绝在未知扩张上继续消耗模型')
         turn = Stage2ReviewLedgerTurn(
@@ -530,6 +614,273 @@ def finish(
         return turns[index]
 
 
+def _locate_turn(
+    ledger: Stage2ReviewLedger, session_run_id: str,
+) -> tuple[int, Stage2ReviewLedgerTurn]:
+    matches = [
+        (index, row) for index, row in enumerate(ledger.turns)
+        if row.session_run_id == session_run_id
+    ]
+    if len(matches) != 1:
+        raise Stage2ReviewBudgetRefused('Stage2 review session 在 ledger 中不唯一')
+    return matches[0]
+
+
+def _replace_turn(
+    path: Path, ledger: Stage2ReviewLedger, index: int,
+    turn: Stage2ReviewLedgerTurn,
+) -> Stage2ReviewLedgerTurn:
+    turns = [row.model_dump(mode='json') for row in ledger.turns]
+    turns[index] = turn.model_dump(mode='json')
+    updated = Stage2ReviewLedger.model_validate({
+        **ledger.model_dump(mode='json'), 'turns': turns,
+    })
+    _atomic_write(path, updated)
+    return updated.turns[index]
+
+
+def record_attempt(
+    base: str | os.PathLike[str], sid: str, *,
+    source_sha256: str,
+    main_text_sha256: str,
+    session_run_id: str,
+    attempt_id: str,
+    kind: str,
+    provider_session_id: str | None = None,
+    now: int | None = None,
+) -> Stage2ReviewLedgerTurn:
+    """在已预留席位下登记一次进程尝试（首发或 resume）；不占新席。"""
+    path = ledger_path(
+        base, sid, source_sha256=source_sha256,
+        main_text_sha256=main_text_sha256)
+    with path_transaction_lock(path):
+        ledger = _read(path)
+        if ledger is None:
+            raise Stage2ReviewBudgetRefused('Stage2 review attempt 没有对应 ledger')
+        index, prior = _locate_turn(ledger, session_run_id)
+        if prior.outcome != 'started':
+            raise Stage2ReviewBudgetRefused(
+                'Stage2 review 席位已终态，不能再登记新的进程尝试')
+        if any(row.attempt_id == attempt_id for row in prior.attempts):
+            raise Stage2ReviewBudgetRefused('Stage2 review attempt_id 重复')
+        attempt = Stage2ReviewAttempt(
+            attempt_id=attempt_id, kind=kind,  # type: ignore[arg-type]
+            started_at=int(time.time()) if now is None else now,
+            provider_session_id=provider_session_id)
+        updated = Stage2ReviewLedgerTurn.model_validate({
+            **prior.model_dump(mode='json'),
+            'attempts': [
+                *[row.model_dump(mode='json') for row in prior.attempts],
+                attempt.model_dump(mode='json'),
+            ],
+        })
+        return _replace_turn(path, ledger, index, updated)
+
+
+def finish_attempt(
+    base: str | os.PathLike[str], sid: str, *,
+    source_sha256: str,
+    main_text_sha256: str,
+    session_run_id: str,
+    attempt_id: str,
+    exit_code: int,
+    error_kind: str | None,
+    provider_session_id: str | None,
+    wire_evidence: bool,
+    now: int | None = None,
+) -> Stage2ReviewLedgerTurn:
+    """给一次进程尝试落终态；幂等同值，冲突关闭式拒绝。"""
+    path = ledger_path(
+        base, sid, source_sha256=source_sha256,
+        main_text_sha256=main_text_sha256)
+    with path_transaction_lock(path):
+        ledger = _read(path)
+        if ledger is None:
+            raise Stage2ReviewBudgetRefused('Stage2 review attempt 没有对应 ledger')
+        index, prior = _locate_turn(ledger, session_run_id)
+        rows = [row.model_dump(mode='json') for row in prior.attempts]
+        hits = [i for i, row in enumerate(rows) if row['attempt_id'] == attempt_id]
+        if len(hits) != 1:
+            raise Stage2ReviewBudgetRefused('Stage2 review attempt 在席位内不唯一')
+        current = rows[hits[0]]
+        finished = {
+            **current,
+            'finished_at': int(time.time()) if now is None else now,
+            'exit_code': exit_code,
+            'error_kind': error_kind,
+            'provider_session_id': (
+                provider_session_id or current.get('provider_session_id')),
+            'wire_evidence': bool(current.get('wire_evidence')) or wire_evidence,
+        }
+        if current.get('exit_code') is not None:
+            same = all(
+                current.get(key) == finished[key]
+                for key in ('exit_code', 'error_kind', 'wire_evidence'))
+            if same:
+                return prior
+            raise Stage2ReviewBudgetRefused('Stage2 review attempt 已有冲突终态')
+        rows[hits[0]] = finished
+        updated = Stage2ReviewLedgerTurn.model_validate({
+            **prior.model_dump(mode='json'), 'attempts': rows,
+        })
+        return _replace_turn(path, ledger, index, updated)
+
+
+def reopen_archive(
+    base: str | os.PathLike[str], sid: str, *,
+    source_sha256: str,
+    main_text_sha256: str,
+    actor: str,
+    reason: str,
+    now: int | None = None,
+) -> Stage2ReviewLedgerArchive:
+    """把当前席位账（含 v1 三席账）整体归档，开一份空 v2 账。
+
+    只在所有席位都已终态、且它们的 parent AgentRun 都已结束时允许；正在运行
+    的席位不能被人从下面抽走预算。归档记录逐字保留旧 turns/reconciliations，
+    新账仍按同一 Global/MainText identity 计数。
+    """
+    actor = actor.strip()
+    reason = reason.strip()
+    if not actor or not reason:
+        raise TerminalState('Stage2 review reopen 的 actor/reason 不得为空')
+    path = ledger_path(
+        base, sid, source_sha256=source_sha256,
+        main_text_sha256=main_text_sha256)
+    # 延迟导入避免 agent -> stage2_review_ledger 的模块初始化环。
+    from novel.orchestrator import agent as agent_runner
+
+    with path_transaction_lock(path):
+        raw, archive = read_any_version(path)
+        if raw.get('sid') != sid or raw.get('source_sha256') != source_sha256 \
+                or raw.get('main_text_sha256') != main_text_sha256:
+            raise TerminalState('Stage2 review ledger 主体 identity 与请求不符')
+        if any(row.outcome == 'started' for row in archive.turns):
+            raise TerminalState(
+                'Stage2 review ledger 仍有 started 席位；先让其 parent AgentRun '
+                '终止并按 no-wire reconcile 或 finish 收口，再归档')
+        records = {row.run_id: row for row in agent_runner.records(base)}
+        for turn in archive.turns:
+            parent = records.get(turn.parent_run_id)
+            if parent is None:
+                raise TerminalState(
+                    f'席位 {turn.ordinal} 的 parent AgentRun {turn.parent_run_id} '
+                    '不在 agent_runs 记录中，拒绝归档')
+            if parent.ended is None or parent.state in (
+                    'pending', 'running', 'paused', 'unknown'):
+                raise TerminalState(
+                    f'席位 {turn.ordinal} 的 parent AgentRun {turn.parent_run_id} '
+                    f'仍是 {parent.state}，拒绝归档')
+        stamped = archive.model_copy(update={
+            'actor': actor, 'reason': reason,
+            'archived_at': int(time.time()) if now is None else now,
+        })
+        stamped = Stage2ReviewLedgerArchive.model_validate(
+            stamped.model_dump(mode='json'))
+        prior_archives = []
+        if raw.get('schema_version') == 2:
+            prior_archives = list(raw.get('archived_ledgers', []))
+        fresh = Stage2ReviewLedger.model_validate({
+            'sid': sid,
+            'source_sha256': source_sha256,
+            'main_text_sha256': main_text_sha256,
+            'turns': [],
+            'reconciliations': [],
+            'archived_ledgers': [
+                *prior_archives, stamped.model_dump(mode='json')],
+        })
+        _atomic_write(path, fresh)
+        return stamped
+
+
+def _ledger_root(base: str | os.PathLike[str], sid: str) -> Path:
+    checked_sid = paths.check_sid(sid)
+    root = (
+        paths.service_runs_dir(base) / checked_sid / 'stage2'
+        / 'global_review_ledgers')
+    service_root = paths.service_dir(base).absolute()
+    if service_root.is_symlink():
+        raise PathRefused('_service 根不能是符号链接')
+    try:
+        root.absolute().resolve().relative_to(service_root.resolve())
+    except ValueError as exc:
+        raise PathRefused('Stage2 review ledger 目录越出 _service') from exc
+    return root
+
+
+def list_ledgers(base: str | os.PathLike[str], sid: str) -> list[dict[str, Any]]:
+    """只读列出一本书全部席位账（任意可归档版本）的无正文摘要。"""
+    root = _ledger_root(base, sid)
+    if not root.is_dir():
+        return []
+    return [
+        _inspect_path(sid, candidate)
+        for candidate in sorted(root.glob('*.json'))
+        if candidate.is_file() and not candidate.is_symlink()
+    ]
+
+
+def reopen_archive_by_sha(
+    base: str | os.PathLike[str], sid: str, *,
+    original_sha256: str, actor: str, reason: str,
+    now: int | None = None,
+) -> Stage2ReviewLedgerArchive:
+    """按查看模式给出的 ``original_sha256`` 精确定位并归档一份席位账。"""
+    root = _ledger_root(base, sid)
+    matches = []
+    if root.is_dir():
+        for candidate in sorted(root.glob('*.json')):
+            if not candidate.is_file() or candidate.is_symlink():
+                continue
+            if hashlib.sha256(candidate.read_bytes()).hexdigest() == original_sha256:
+                matches.append(candidate)
+    if len(matches) != 1:
+        raise TerminalState(
+            f'original_sha256={original_sha256} 在 sid={sid} 的席位账中命中 '
+            f'{len(matches)} 份；请重新查看后再归档')
+    raw, _archive = read_any_version(matches[0])
+    return reopen_archive(
+        base, sid,
+        source_sha256=str(raw.get('source_sha256')),
+        main_text_sha256=str(raw.get('main_text_sha256')),
+        actor=actor, reason=reason, now=now)
+
+
+def _inspect_path(sid: str, path: Path) -> dict[str, Any]:
+    raw, archive = read_any_version(path)
+    return {
+        'sid': sid,
+        'ledger_path': str(path),
+        'source_sha256': raw.get('source_sha256'),
+        'main_text_sha256': raw.get('main_text_sha256'),
+        'schema_version': raw.get('schema_version'),
+        'max_calls': archive.original_max_calls,
+        'state': archive.original_state,
+        'turns': [{
+            'ordinal': row.ordinal, 'purpose': row.purpose,
+            'outcome': row.outcome, 'exit_code': row.exit_code,
+            'parent_run_id': row.parent_run_id,
+            'session_run_id': row.session_run_id,
+            'attempts': len(row.attempts),
+        } for row in archive.turns],
+        'reconciliations': len(archive.reconciliations),
+        'archived_ledgers': (
+            len(raw.get('archived_ledgers', []))
+            if raw.get('schema_version') == 2 else 0),
+        'original_sha256': archive.original_sha256,
+    }
+
+
+def inspect_ledger(
+    base: str | os.PathLike[str], sid: str, *,
+    source_sha256: str, main_text_sha256: str,
+) -> dict[str, Any]:
+    """只读展示一份席位账（任意可归档版本）的无正文摘要。"""
+    return _inspect_path(sid, ledger_path(
+        base, sid, source_sha256=source_sha256,
+        main_text_sha256=main_text_sha256))
+
+
 def mark_complete(
     base: str | os.PathLike[str], sid: str, *,
     source_sha256: str, main_text_sha256: str,
@@ -549,8 +900,10 @@ def mark_complete(
 
 
 __all__ = [
-    'MAX_COMMANDER_CALLS', 'Stage2NoWireReconcileSubject',
-    'Stage2ReviewBudgetRefused', 'finish', 'inspect_no_wire_reconciliation',
-    'ledger_path', 'mark_complete', 'progress_with_feedback',
-    'reconcile_no_wire_reservation', 'reserve',
+    'MAX_COMMANDER_CALLS', 'MAX_EDIT_SEAT', 'Stage2NoWireReconcileSubject',
+    'Stage2ReviewBudgetRefused', 'finish', 'finish_attempt',
+    'inspect_ledger', 'inspect_no_wire_reconciliation',
+    'ledger_path', 'list_ledgers', 'mark_complete', 'progress_with_feedback',
+    'read_any_version', 'reconcile_no_wire_reservation', 'record_attempt',
+    'reopen_archive', 'reopen_archive_by_sha', 'reserve',
 ]

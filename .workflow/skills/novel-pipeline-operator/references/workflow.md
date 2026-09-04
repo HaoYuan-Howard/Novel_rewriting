@@ -243,8 +243,10 @@ hash（不得靠重发模板刷新阅读凭证），同时阅读原文、填写 
 提交后以 `stage2.blueprint --check-only` 做全局 + 逐章唯一联合复检；只有 current 正式 global、
 current/fresh 投影与 blueprint、联合 HARD 无命中且 review current/**blocking 面 generation-safe**，才能
 preview Stage4A；disclosure 未决项继续披露但不阻断。review 若发现 FAIL 或未隔离 UNVER，后续最多
-两次 Commander 增量轮只接收仍未闭合或依赖变化重开的 subject cards；PASS/已隔离项只留摘要，不再
-重发。每轮使用 fresh logical/provider session，并从生产模板取得 hash-bound typed 骨架；集合成员新增、
+两席 Commander 订正轮只接收仍未闭合或依赖变化重开的 subject cards；PASS/已隔离项只留摘要，不再
+重发。blocking 面安全后，第四席只读终审读全量 blocking 行、整书正文与 Blueprint 工作包，confirm 才
+经 `approval close-stage2` 收口 `seen.read`/`seen.global`/`s2`，reopen 则以终审者为 actor 把指定项改回
+FAIL/UNVER 并回到订正席（若仍有席位）。每轮使用 fresh logical/provider session，并从生产模板取得 hash-bound typed 骨架；集合成员新增、
 删除、拆分只填 `collection_edits.operations`，经 `--apply-edit` 同时提交事实修改与
 `post_edit_review` 自审。producer 对本 edit 新打开项使用默认证明，仍保持同一 hash 的旧 FAIL/UNVER
 必须列入 `review_scope` 内的 `decisions`；可删的 secret/relation/world_rule 完整组可显式
@@ -253,7 +255,7 @@ preview Stage4A；disclosure 未决项继续披露但不阻断。review 若发�
 若这份 reviewed edit 通过 schema 却被 canonical HARD 拦成当前 `.INVALID`，队列先暴露
 `recovery:stage2-global-reviewed-edit`：最终 correction workpack 绑定失败 edit/INVALID 原始字节，只反馈
 具体 HARD，不重新载入 Blueprint 或整份无关材料；下一轮另开 fresh Commander session，持久 ledger
-在调用前记 `started`，重启不返还总计三次预算。修正通过后才重新计算 Blueprint freshness。
+在调用前记 `started`，重启不返还席位。修正通过后才重新计算 Blueprint freshness。
 共享人物称名 inventory 改变时 blueprint 会 stale，必须重建，未消费字段变化则按 freshness 结果复用。
 提前完成的 review 可以保存，但缺 blueprint 时 Stage2 仍未收口。机械测量不是独立节点：Stage5/6
 会从各自已读的 Stage1 文本即时计算，operator
@@ -395,7 +397,7 @@ CLI `state` 会显示共享的 deterministic freshness badge；这个 badge 才�
 
 正式 headless run 的 `pause` 只停止接纳新节点并等待当前 claim/beacon 安全闭合，不取消正在正常执行的
 付费节点；普通 reviewer 在同一 epoch resume 精确续用 Commander provider session。Stage2 global
-固定为首轮审阅、至多两轮增量编辑/复核，最多三次真实 Commander 调用且每轮开 fresh session；
+固定为一席审阅、至多两席订正、一席只读终审，每个主体最多四席真实 Commander 且每席开 fresh session；
 0-wire typed 动作不占轮次。Executor 的候选→反馈
 修复继续复用各节点 logical/provider session 与 checkpoint；Stage2 人工 GlobalEdit
 是 0-wire 确定性动作，不另起一个模型 Executor。代码或 skill 身份变化时，

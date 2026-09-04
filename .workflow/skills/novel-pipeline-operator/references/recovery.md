@@ -191,10 +191,22 @@ append-only 坏尾或仍活着的 parent 都不能返还；`--force` 也不能�
 ```
 
 apply 是 0 模型调用：它把旧假预留原行和 ledger/log/双账负证据 hash 保存在
-`Stage2ReviewLedger.reconciliations`，只从**有效三次真实 Commander 预算**中排除这一格，不重置整账，
+`Stage2ReviewLedger.reconciliations`，只从**有效四席 Commander 预算**中排除这一席，不重置整账，
 也不启动剩余付费调用。随后重新读取 `operator next`；若仍是 `approval:stage2-global-review`，须在修复代码
 已经提交、工作树 clean 后另行恢复 AgentRun。不得删除/改写 ledger JSON，亦不得靠换 run、换 epoch 或把
-三次上限改成四次绕过。
+私改席位上限绕过。
+
+席位契约升版前留下的旧**三席账**在四席契约下拒读：`reserve` 会以 `stopped/stage2_global_turn_budget`
+停止并指向归档入口。唯一合规续跑路是先在 Commander 子上下文之外查看，再带 actor/reason 按
+`original_sha256` CAS 整体归档进 `archived_ledgers`（旧 turns/reconciliations 逐字保留）并开一份空的新账：
+
+```text
+<PY> -X utf8 -u -m novel.cli reconcile --base <BASE> --stage2-review-reopen --stage2-review-sid <SID>
+<PY> -X utf8 -u -m novel.cli reconcile --base <BASE> --stage2-review-reopen --stage2-review-sid <SID> --actor <ACTOR> --reason <REASON> --subject-sha256 <ORIGINAL_SHA256>
+```
+
+归档要求所有席位已终态且它们的 parent AgentRun 已结束；仍在运行的席位不能被从下面抽走预算。
+同一入口也用于未来席位契约再升版，不得手改 JSON 冒充新账。
 
 `--apply-edit` 的路径解析**逐层不同，不要当成通则**（见 [经验库](field-notes.md) FN-016）：
 `stage2.blueprint` / `stage4.design` / `stage4.plan` / `stage6.hook` / `stage7.rename` 按**书目录**解析相对路径，

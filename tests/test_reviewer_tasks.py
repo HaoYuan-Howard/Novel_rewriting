@@ -513,17 +513,13 @@ def test_stage2_options_bind_real_workpack_sha_and_blueprint_token(
     scope = options[0]['exact_request']['action']['input_payload']['blocking_scope']
     assert scope['expected_workpack_sha256'] == '7' * 64
 
-    # 一次只提交一个动作；Global 审阅收口后才暴露 Blueprint seen，避免
-    # Commander 在同一 turn 跳过尚未执行的 review。
-    seen_options = reviewer_tasks._submission_options({
-        'global': {'items': [{'current_state': 'PASS'}]},
-        'blueprint': {'review_token': 'bpr3_' + 'a' * 64},
-    }, current, queue.WAITING_ON_STAGE2_REVIEW)
-    assert [row['id'] for row in seen_options] == ['approval:blueprint_seen']
-    seen = seen_options[0]
-    assert seen['editable_fields'] == []
-    assert seen['exact_request']['action']['payload'] == {
-        'review_token': 'bpr3_' + 'a' * 64}
+    # blocking 面已 generation-safe 时，普通 review 席没有任何可提交项：
+    # 收口只属于第四席只读终审，不能在同一席里顺手 seen Blueprint。
+    with pytest.raises(reviewer_tasks.ReviewerTaskError, match='独立只读终审'):
+        reviewer_tasks._submission_options({
+            'global': {'items': [{'current_state': 'PASS'}]},
+            'blueprint': {'review_token': 'bpr3_' + 'a' * 64},
+        }, current, queue.WAITING_ON_STAGE2_REVIEW)
 
     # Commander 只编辑逻辑 payload；可信 loader 必须在交给 CLI 前恢复同一份
     # v2 信封，否则下一步 ``store.read_external`` 会因缺版本标记再次停机。
@@ -540,6 +536,125 @@ def test_stage2_options_bind_real_workpack_sha_and_blueprint_token(
     logical = decode_artifact(
         STAGE2_GLOBAL_REVIEW_DECISIONS, action.input_payload).payload
     GlobalReviewDecisionSet.model_validate(logical)
+
+
+def _final_review_pack() -> dict:
+    return {
+        'global': {
+            'workpack_sha256': '7' * 64,
+            'review_token': 's2gr1_' + 'e' * 64,
+            'items': [
+                {'item_id': 'role:entities.characters.0.role:aaaa',
+                 'subject_sha256': '1' * 64, 'current_state': 'PASS',
+                 'current_reason': '已核', 'generation_impact': 'must_fix'},
+                {'item_id': 'secret:canon.secrets.secret_01.fact:bbbb',
+                 'subject_sha256': '2' * 64, 'current_state': 'UNVER',
+                 'current_reason': '整组隔离',
+                 'generation_impact': 'quarantine_or_fix',
+                 'generation_disposition': {
+                     'action': 'quarantine_group', 'reason': '原文无答案'}},
+            ],
+        },
+        'blueprint': {'review_token': 'bpr3_' + 'a' * 64},
+    }
+
+
+def test_stage2_final_review_offers_confirm_or_reopen_and_binds_both_tokens(
+        tmp_path) -> None:
+    current = _current(queue.WAITING_ON_STAGE2_FINAL_REVIEW)
+    options = reviewer_tasks._submission_options(
+        _final_review_pack(), current, queue.WAITING_ON_STAGE2_FINAL_REVIEW)
+    assert [row['id'] for row in options] == [
+        'approval:stage2_final_review', 'node:stage2.global.final-reopen']
+
+    confirm = options[0]['exact_request']
+    assert confirm['action']['surface'] == 'stage2_final_review'
+    assert confirm['action']['payload']['global_review_token'] == 's2gr1_' + 'e' * 64
+    assert confirm['action']['payload']['blueprint_review_token'] == 'bpr3_' + 'a' * 64
+    path = tmp_path / 'final.json'
+    path.write_text(json.dumps(confirm), encoding='utf-8')
+    with pytest.raises(reviewer_tasks.ReviewerTaskError, match='sentinel'):
+        reviewer_tasks.load_action(path, current, submission_options=options)
+    confirm['action']['payload']['reason'] = '独立通读 2 项 blocking 与 22 章正文，无可指向问题'
+    path.write_text(json.dumps(confirm), encoding='utf-8')
+    action = reviewer_tasks.load_action(path, current, submission_options=options)
+    assert isinstance(action, reviewer_tasks.ReviewerApprovalAction)
+    assert action.surface == 'stage2_final_review'
+    assert reviewer_tasks.approval_review_token(options) is None, (
+        '终审 confirm 携两枚 token，重放判据必须由 load_action 逐枚复核')
+
+    reopen = copy.deepcopy(options[1]['exact_request'])
+    reopen['action']['input_payload']['decisions'] = [{
+        'item_id': 'role:entities.characters.0.role:aaaa',
+        'expected_subject_sha256': '1' * 64,
+        'state': 'PASS', 'reason': '想洗绿', 'evidence': [],
+    }]
+    path.write_text(json.dumps(reopen), encoding='utf-8')
+    with pytest.raises(reviewer_tasks.ReviewerTaskError, match='只能是'):
+        reviewer_tasks.load_action(path, current, submission_options=options)
+    reopen['action']['input_payload']['decisions'][0].update({
+        'state': 'FAIL', 'reason': '第 3 章原文与 role 冲突'})
+    reopen['action']['input_payload']['decisions'].append({
+        'item_id': 'ghost:item', 'expected_subject_sha256': '9' * 64,
+        'state': 'FAIL', 'reason': '不存在的主体', 'evidence': [],
+    })
+    path.write_text(json.dumps(reopen), encoding='utf-8')
+    with pytest.raises(reviewer_tasks.ReviewerTaskError, match='不在当前 blocking 面'):
+        reviewer_tasks.load_action(path, current, submission_options=options)
+    reopen['action']['input_payload']['decisions'].pop()
+    path.write_text(json.dumps(reopen), encoding='utf-8')
+    action = reviewer_tasks.load_action(path, current, submission_options=options)
+    assert isinstance(action, reviewer_tasks.ReviewerNodeAction)
+    assert action.flags == ('--review-decisions', '@reviewer-input')
+    logical = decode_artifact(
+        STAGE2_GLOBAL_REVIEW_DECISIONS, action.input_payload).payload
+    decided = GlobalReviewDecisionSet.model_validate(logical)
+    assert [row.state for row in decided.decisions] == ['FAIL']
+
+
+def test_stage2_final_review_refuses_unresolved_items_and_keeps_full_materials(
+        tmp_path) -> None:
+    pack = _final_review_pack()
+    pack['global']['items'][0]['current_state'] = 'FAIL'
+    with pytest.raises(reviewer_tasks.ReviewerTaskError, match='未闭合'):
+        reviewer_tasks._submission_options(
+            pack, _current(queue.WAITING_ON_STAGE2_FINAL_REVIEW),
+            queue.WAITING_ON_STAGE2_FINAL_REVIEW)
+
+    full = _final_review_pack()
+    full['global']['main_text_chapters'] = [
+        {'chapter_ordinal': 1, 'text': '第一章正文'}]
+    materials = reviewer_tasks._review_materials(
+        full, queue.WAITING_ON_STAGE2_FINAL_REVIEW)
+    assert materials['global']['reading_mode'] == 'final_independent_review'
+    assert len(materials['global']['items']) == 2, '终审不过滤已 PASS 项'
+    assert materials['global']['main_text_chapters'][0]['text'] == '第一章正文'
+    compact = reviewer_tasks._review_materials(
+        full, queue.WAITING_ON_STAGE2_REVIEW)
+    assert compact['global']['delta']['sent_item_count'] == 0, (
+        '同一份包在普通 review 席下仍按 delta 压缩')
+
+    identity = reviewer_tasks._stage2_progress_identity({
+        'global': {
+            **full['global'],
+            'binding': {
+                'expected_source_sha256': '8' * 64,
+                'main_text_subject_sha256': '9' * 64,
+            },
+        },
+    }, queue.WAITING_ON_STAGE2_FINAL_REVIEW)
+    assert identity['blocker_count'] == 0
+    other = reviewer_tasks._stage2_progress_identity({
+        'global': {
+            **full['global'], 'review_token': 's2gr1_' + 'f' * 64,
+            'binding': {
+                'expected_source_sha256': '8' * 64,
+                'main_text_subject_sha256': '9' * 64,
+            },
+        },
+    }, queue.WAITING_ON_STAGE2_FINAL_REVIEW)
+    assert identity['progress_sha256'] != other['progress_sha256'], (
+        'review 字节变化必须改变终审 progress，否则第二次终审会被账本拒绝')
 
 
 def test_stage2_prereview_is_read_only_compact_and_rebinds_live_surface(

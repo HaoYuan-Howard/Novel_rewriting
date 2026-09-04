@@ -128,7 +128,7 @@ def test_old_v5_record_without_typed_writing_fields_remains_migratable():
         mode='json', exclude={
             'writing_history', 'writing_decision',
             'design_history', 'design_decision',
-            'closure_history', 'closure_decision',
+            'closure_history', 'closure_decision', 'seen_subjects',
         })
     old_payload['v'] = 5
 

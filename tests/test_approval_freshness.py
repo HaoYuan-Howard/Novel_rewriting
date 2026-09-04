@@ -183,7 +183,8 @@ def test_explicit_v6_backfill_preserves_typed_histories_but_clears_stage5_author
     assert before.structure_decision is not None
     assert before.writing_decision is not None
     payload = before.model_dump(
-        mode='json', exclude={'closure_history', 'closure_decision'})
+        mode='json',
+        exclude={'closure_history', 'closure_decision', 'seen_subjects'})
     payload['v'] = 6
     legacy = approvals._ApprovalRecordV6Legacy.model_validate(payload)
     path = approvals._path(base, SID)

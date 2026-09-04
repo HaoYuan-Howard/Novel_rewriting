@@ -81,7 +81,8 @@ from novel.model_slots import (
 )
 from novel.orchestrator import (
     admission, commander_completion, execution_permit, jobs, operator, queue,
-    reviewer_tasks, service_lifecycle, stage2_review_ledger, uploads,
+    review_seats, reviewer_tasks, service_lifecycle, stage2_review_ledger,
+    uploads,
 )
 from novel.orchestrator.agent_supervisor import (
     CommanderTurnResult, LaunchTicket, RunSupervisor, SupervisorActionResult,
@@ -121,6 +122,7 @@ _EXECUTION_CLOSE_TIMEOUT_SECONDS = 300.0
 _EXECUTION_CLOSE_POLL_SECONDS = 0.25
 _MAX_REVIEWER_CORRECTIONS = 2
 _MAX_STAGE2_COMMANDER_TURNS = stage2_review_ledger.MAX_COMMANDER_CALLS
+_MAX_STAGE2_EDIT_SEAT = stage2_review_ledger.MAX_EDIT_SEAT
 _ACTION_FAILURE_TAIL_BYTES = 16 * 1024
 _ACTION_FAILURE_DETAIL_CHARS = 4096
 
@@ -839,7 +841,7 @@ def _reviewer_approval_argv(
     payload_path = _write_identity_bound_scratch(
         scratch, stem=f'reviewer-{action.surface}', kind='input',
         identity_sha256=hashlib.sha256(payload).hexdigest(), payload=payload)
-    if action.surface == 'blueprint_seen':
+    if action.surface == 'stage2_final_review':
         tail = [
             'approval', 'close-stage2', sid, '--base', base,
             '--input', str(payload_path)]
@@ -874,9 +876,9 @@ def _reviewer_activity(task: reviewer_tasks.ReviewerTask) -> str:
         str(option.get('id')) for option in task.submission_options
         if isinstance(option, dict)
     }
+    if task.waiting_on == queue.WAITING_ON_STAGE2_FINAL_REVIEW:
+        return 'stage2.global.final-review'
     if task.waiting_on in queue.STAGE2_REVIEWER_WAITING_ON:
-        if 'approval:blueprint_seen' in option_ids:
-            return 'stage2.blueprint.review'
         if any('apply-edit' in option_id for option_id in option_ids):
             return 'stage2.global.review-or-edit'
         return 'stage2.global.review'
@@ -1757,7 +1759,12 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
         # 永远走上面的持久分支，不能靠缺字段绕过跨重启账。
         if stage2_commander_turns >= _MAX_STAGE2_COMMANDER_TURNS:
             raise stage2_review_ledger.Stage2ReviewBudgetRefused(
-                f'Stage2 Global 已用满 {_MAX_STAGE2_COMMANDER_TURNS} 次 Commander 调用')
+                f'Stage2 Global 已用满 {_MAX_STAGE2_COMMANDER_TURNS} 席 Commander')
+        if (purpose != 'final_review'
+                and stage2_commander_turns >= _MAX_STAGE2_EDIT_SEAT):
+            raise stage2_review_ledger.Stage2ReviewBudgetRefused(
+                f'Stage2 Global 前 {_MAX_STAGE2_EDIT_SEAT} 席已用完；'
+                f'第 {stage2_commander_turns + 1} 席只保留给只读 final_review')
         fallback_progress = progress or f'legacy:{stage2_commander_turns + 1}'
         if fallback_progress in stage2_fallback_progress:
             raise stage2_review_ledger.Stage2ReviewBudgetRefused(
@@ -2849,8 +2856,10 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                         state='stopped', checked_at=int(time.time()),
                         reason=(
                             'Stage2 global 拒绝继续调用 Commander：'
-                            f'{exc}。最多允许 {_MAX_STAGE2_COMMANDER_TURNS} 次，'
-                            '且每次必须减少未闭合项或改变精确拒因'))
+                            f'{exc}。每个主体最多 {_MAX_STAGE2_COMMANDER_TURNS} 席'
+                            f'（前 {_MAX_STAGE2_EDIT_SEAT} 席审阅/订正，第 '
+                            f'{_MAX_STAGE2_COMMANDER_TURNS} 席只读终审），'
+                            '且每席必须减少未闭合项或改变精确拒因'))
                     return CommanderTurnResult(
                         exit_code=2,
                         provider_session_id=None,
@@ -3051,7 +3060,7 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                     f'canonical {action.kind} action 返回 exit 2，正式产物未落盘')
                 if (waiting_on in queue.STAGE2_REVIEWER_WAITING_ON
                         and stage2_commander_turns
-                        >= _MAX_STAGE2_COMMANDER_TURNS):
+                        >= _MAX_STAGE2_EDIT_SEAT):
                     latest_rc = 2
                     latest_error_kind = 'stage2_global_action_rejected'
                     latest_outcome = AgentDeliveryOutcome(
@@ -3077,7 +3086,10 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                     continue_ready=True, outcome=result.outcome,
                     continue_reviewer=True)
             if (result.exit_code == 0
-                    and waiting_on in queue.STAGE2_REVIEWER_WAITING_ON):
+                    and waiting_on == queue.WAITING_ON_STAGE2_FINAL_REVIEW
+                    and isinstance(action, reviewer_tasks.ReviewerApprovalAction)):
+                # 只有第四席只读终审的 confirm 真正收口 s2 后才封账；review-decisions
+                # / apply-edit 以 exit 0 结束只说明 blocking 面安全，终审席仍待发放。
                 _complete_stage2_review_ledger(source_task)
             return CommanderTurnResult(
                 exit_code=result.exit_code,
@@ -3193,8 +3205,14 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                 exit_code=0, provider_session_id=provider_session_id,
                 continue_ready=True, outcome=latest_outcome)
         reviewed_blockers.add(binding)
+        seat_purpose = 'review'
+        if waiting_on in queue.STAGE2_REVIEWER_WAITING_ON:
+            seat_purpose = review_seats.seat_for(
+                waiting_on,
+                review_seats.option_ids(task.submission_options)).purpose
         turn = run_reviewer_turn(
-            task, task.prompt, activity=_reviewer_activity(task))
+            task, task.prompt, purpose=seat_purpose,
+            activity=_reviewer_activity(task))
         if turn.exit_code != 0:
             return turn
         try:

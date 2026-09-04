@@ -1,11 +1,11 @@
 import { api } from '@/api/endpoints'
 import { ApiError } from '@/api/errors'
-import { fireEvent, screen } from '@testing-library/react'
+import { fireEvent, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup } from '@testing-library/react'
 import { renderRoute } from '@/test/render'
 import type { ApprovalDoc } from '@/types/approvals'
-import type { GlobalFactEvidence, Stage2Global } from '@/types/stages'
+import type { GlobalFactEvidence, GlobalReviewResponse, Stage2Global } from '@/types/stages'
 import { GlobalScreen } from './GlobalScreen'
 
 const disclosure = {
@@ -329,5 +329,96 @@ describe('GlobalScreen disclosure', () => {
     fireEvent.click(screen.getByRole('button', { name: /隐藏核心剧透字段（非完整遮蔽）/ }))
     fireEvent.click(await screen.findByRole('button', { name: /^秘密/ }))
     expect(await screen.findByText('在场众人（群体 · 第 2 章起）')).toBeVisible()
+  })
+})
+
+function safeReview(token: string | null): GlobalReviewResponse {
+  return {
+    source_sha256: 'd'.repeat(64),
+    current_subject_sha256: 'd'.repeat(64),
+    current: true,
+    approved: true,
+    generation_safe: true,
+    quarantined_groups: [],
+    review_token: token,
+    effect_counts: {
+      blocking: { pending: 0, PASS: 1, FAIL: 0, UNVER: 0 },
+      disclosure: { pending: 0, PASS: 0, FAIL: 0, UNVER: 0 },
+    },
+    items: [],
+  }
+}
+
+function unseenApprovals(): ApprovalDoc {
+  return {
+    v: 6,
+    sid: 'book-1',
+    gate: { s0: true, s1: true, s2: false, s4: false, s5: false, s6: false, s7: false },
+    seen: { read: false, global: false },
+    writing: false,
+    design_review: {
+      state: 'unavailable', candidate_sha256: null, aggregate_subject_sha256: null,
+      current_decision: null, history: [], binding_infeasibility: null,
+      preflight: null, repair_capability: null,
+    },
+    structure: {
+      state: 'unavailable', current_subject_sha256: null,
+      current_decision: null, history: [], binding_concerns: [],
+    },
+    writing_approval: {
+      available: false, current_subject_sha256: null, current_decision: null, history: [],
+    },
+    closure: {
+      state: 'missing', workpack: null, next_step: null, current_decision: null, history: [],
+    },
+    spawns: {},
+  }
+}
+
+describe('GlobalScreen seen.global 显式确认', () => {
+  it('打开页面不再自动标记已读；填确认人后才用服务端 token 提交', async () => {
+    vi.spyOn(api, 'getApprovals').mockResolvedValue(unseenApprovals())
+    vi.spyOn(api, 'getGlobal').mockResolvedValue(globalView())
+    vi.spyOn(api, 'getGlobalReview').mockResolvedValue(safeReview('s2gr1_' + '5'.repeat(64)))
+    vi.spyOn(api, 'getEnums').mockRejectedValue(new Error('enums 不参与本测试'))
+    const markSeen = vi.spyOn(api, 'markSeen').mockResolvedValue({
+      ...unseenApprovals(), seen: { read: false, global: true },
+    })
+
+    renderRoute(<GlobalScreen />, '/n/book-1/global')
+
+    const group = await screen.findByRole('group', { name: '全局复核通读确认' })
+    expect(group).toHaveTextContent('通读当前全局复核后再确认')
+    const button = await screen.findByRole('button', { name: '确认已通读当前全局复核' })
+    await waitFor(() => expect(button).toBeDisabled())
+    expect(markSeen).not.toHaveBeenCalled()
+
+    fireEvent.change(screen.getByLabelText('确认人'), { target: { value: '人工审阅者' } })
+    await waitFor(() => expect(button).toBeEnabled())
+    fireEvent.click(button)
+
+    await waitFor(() => expect(markSeen).toHaveBeenCalledWith('book-1', 'global', {
+      review_token: 's2gr1_' + '5'.repeat(64),
+      actor: '人工审阅者',
+    }))
+    expect(await screen.findByText('已记录：当前全局复核已通读确认')).toBeVisible()
+  })
+
+  it('review 不 current 或阻断面未安全时不提供确认动作', async () => {
+    vi.spyOn(api, 'getApprovals').mockResolvedValue(unseenApprovals())
+    vi.spyOn(api, 'getGlobal').mockResolvedValue(globalView())
+    vi.spyOn(api, 'getGlobalReview').mockResolvedValue({
+      ...safeReview(null), generation_safe: false,
+    })
+    vi.spyOn(api, 'getEnums').mockRejectedValue(new Error('enums 不参与本测试'))
+    const markSeen = vi.spyOn(api, 'markSeen')
+
+    renderRoute(<GlobalScreen />, '/n/book-1/global')
+
+    const group = await screen.findByRole('group', { name: '全局复核通读确认' })
+    expect(group).toHaveTextContent('暂不能确认')
+    fireEvent.change(screen.getByLabelText('确认人'), { target: { value: '人工审阅者' } })
+    expect(screen.getByRole('button', { name: '确认已通读当前全局复核' })).toBeDisabled()
+    expect(markSeen).not.toHaveBeenCalled()
   })
 })

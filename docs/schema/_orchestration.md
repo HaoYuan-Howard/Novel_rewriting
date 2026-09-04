@@ -769,7 +769,7 @@ Output/_service/*.jsonl.lock      上面九类 JSONL 各自的追加锁载体（
 Output/_service/uploads/…         浏览器上传的原始小说字节
 Output/_service/edits/<sid>/…     交给 CLI 的一次性 typed 编辑稿、人工决定或批处理 manifest
 Output/_service/edits/<sid>/reviewer-action-<sha>.json 已通过 typed loader 的 Commander approval 决定：内容寻址、可零模型重放（R-11.25）
-Output/_service/runs/<sid>/stage2/global_review_ledgers/<sha>.json Stage2 Global/MainText 审阅的三次真实 Commander 预算、fresh session 与单调进展账；旧 pre-spawn 假预留只经 hash-bound reconcile 移入带 actor/reason/负证据 hash 的 reconciliations；不含正文
+Output/_service/runs/<sid>/stage2/global_review_ledgers/<sha>.json Stage2 Global/MainText 审阅的四席 Commander 账（v2：席 1～3 审阅/订正、席 4 只读终审；每席下记 launch/resume attempts）、fresh session 与单调进展账；旧 pre-spawn 假预留只经 hash-bound reconcile 移入带 actor/reason/负证据 hash 的 reconciliations；旧 v1 三席账拒读，只能经 `reconcile --stage2-review-reopen` 带 actor/reason 整体移入 `archived_ledgers` 后开空账；不含正文
 Output/_service/approvals/<sid>.json 人工闸门、已阅状态与 canonical 写作授权（原子替换）
 ```
 

@@ -357,10 +357,11 @@ def test_operator_projection_routes_expired_s2_proof_back_before_stage4_review(
 
     assert todo == []
     assert [item.node for item in blocked] == ['stage4.design', 'stage4.plan']
+    # review 已 generation-safe：缺的不是再一轮 review，而是独立只读终审。
     assert all(
-        item.waiting_on == Q.WAITING_ON_STAGE2_REVIEW for item in blocked)
+        item.waiting_on == Q.WAITING_ON_STAGE2_FINAL_REVIEW for item in blocked)
     assert all(item.steps == [] for item in blocked)
-    assert 'seen/gate.s2 proof' in blocked[0].why
+    assert '独立只读终审' in blocked[0].why
 
 
 @pytest.mark.parametrize('invalid', [False, True])

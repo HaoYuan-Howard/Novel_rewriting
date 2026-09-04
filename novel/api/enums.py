@@ -68,6 +68,13 @@ _CONSUMED: dict[str, str] = {
 #: ⚠ 这张表**必须逐个列名**，不许写成「所有标量一律不发」那种规则：
 #: 那样新加一个标量会被**静默**挡住，而静默正是本模块要防的方向。
 _WITHHELD: dict[str, str] = {
+    'STAGE2_COMMANDER_SEAT_PURPOSES': (
+        'Stage2 Commander 席位语义只由 RunSupervisor 与持久席位账消费；页面只呈现'
+        '后端已判定的 blocker/状态，另发枚举会让前端自算“还剩几席”'),
+    'STAGE2_COMMANDER_MAX_SEATS': '同上：席位上限是账本规则，不是前端可算的读数',
+    'STAGE2_COMMANDER_MAX_EDIT_SEAT': '同上',
+    'COMMANDER_ATTEMPT_KINDS': (
+        '同席内 launch/resume 只写进席位账与 session 审计；不是 HTTP/UI 取值面'),
     'REVIEWER_APPROVAL_SURFACES': (
         'Commander reviewer typed request 的 approval 面闭集，只由 RunSupervisor 与'
         ' loader 消费；页面各审批面已有自己的 typed 表单，另发只会制造第二个消费面'),

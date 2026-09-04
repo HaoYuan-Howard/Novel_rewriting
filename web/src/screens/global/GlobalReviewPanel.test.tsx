@@ -16,6 +16,7 @@ const review: GlobalReviewResponse = {
   approved: false,
   generation_safe: false,
   quarantined_groups: [],
+  review_token: null,
   effect_counts: {
     blocking: { pending: 1, PASS: 0, FAIL: 1, UNVER: 1 },
     disclosure: { pending: 1, PASS: 0, FAIL: 0, UNVER: 0 },

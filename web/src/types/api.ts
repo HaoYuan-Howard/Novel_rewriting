@@ -59,6 +59,7 @@ import type {
   CheckReport,
   BlueprintReviewWorkpack,
   BlueprintSeenRequest,
+  Stage2GlobalSeenRequest,
   DraftEditPreview,
   DraftEditPreviewRequest,
   DraftEditRequest,
@@ -186,7 +187,12 @@ export interface Api {
   /** Stage4 的专用全书 typed 裁决；只写审批记录，不启动重规划作业。 */
   approveStructure(sid: string, request: StructureApprovalRequest): Promise<ApprovalDoc>
   backfillApprovals(sid: string): Promise<ApprovalBackfillResult>
-  markSeen(sid: string, key: SeenKey, request?: BlueprintSeenRequest): Promise<ApprovalDoc>
+  /** 两个 Stage2 视图都只接受服务端下发的 hash-bound 阅读身份；没有无主体分支。 */
+  markSeen(
+    sid: string,
+    key: SeenKey,
+    request: BlueprintSeenRequest | Stage2GlobalSeenRequest,
+  ): Promise<ApprovalDoc>
   startWriting(sid: string, request: WritingApprovalRequest): Promise<ApprovalDoc>
   resetBook(sid: string): Promise<ApprovalDoc>
 

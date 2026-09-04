@@ -888,7 +888,7 @@ def test_explicit_v5_to_v6_migration_never_fabricates_design_history(
     payload = approvals._fresh_record(SID).model_dump(
         mode='json',
         exclude={'design_history', 'design_decision',
-                 'closure_history', 'closure_decision'})
+                 'closure_history', 'closure_decision', 'seen_subjects'})
     payload['v'] = 5
     legacy = approvals._ApprovalRecordV5Legacy.model_validate(payload)
     book = tmp_path / f'legacy_{SID}'

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { api } from '@/api/endpoints'
@@ -17,8 +17,75 @@ import { LinkButton } from '@/components/ui/ActionButton'
 import { Mono } from '@/components/ui/Mono'
 import { Panel } from '@/components/ui/Panel'
 import { cx } from '@/lib/cx'
-import type { GlobalFactEvidence } from '@/types/stages'
+import type { GlobalFactEvidence, GlobalReviewResponse } from '@/types/stages'
 import { GlobalReviewPanel } from './GlobalReviewPanel'
+import type { ApprovalDoc } from '@/types/approvals'
+import type { UseMutationResult } from '@tanstack/react-query'
+import type { Stage2GlobalSeenRequest } from '@/types/stages'
+
+/**
+ * seen.global 的显式确认：页面不再“打开即已读”。只有服务端说 review current、
+ * 阻断面 generation-safe 且给了 review_token，才允许填确认人后提交；
+ * 服务端会重算 token，主体变过就拒绝，不在这里自判。
+ */
+function GlobalSeenConfirm({
+  review,
+  seen,
+  mutation,
+}: {
+  review: GlobalReviewResponse | null
+  seen: boolean
+  mutation: UseMutationResult<ApprovalDoc, Error, Stage2GlobalSeenRequest>
+}) {
+  const [actor, setActor] = useState('')
+  const token = review?.review_token ?? null
+  const ready = !!review && review.current && review.generation_safe && token !== null
+  return (
+    <div role="group" aria-label="全局复核通读确认">
+    <Panel className="flex flex-wrap items-center justify-between gap-14 px-18 py-14">
+      <div className="flex max-w-[760px] flex-col gap-4">
+        <span className="text-body-lg font-semibold text-ink-2">
+          {seen ? '已记录：当前全局复核已通读确认' : '通读当前全局复核后再确认'}
+        </span>
+        <span className="text-body text-ink-4">
+          确认绑定当前 review 的完整字节；复核任一项改判后需要重新通读确认。
+          {ready || seen ? '' : ' 阻断面尚未全部 PASS/隔离，或主体已变化，暂不能确认。'}
+        </span>
+        {mutation.isError ? (
+          <span className="text-body text-warn-ink" role="alert">
+            {mutation.error.message}
+          </span>
+        ) : null}
+      </div>
+      {seen ? null : (
+        <div className="flex items-center gap-8">
+          <input
+            aria-label="确认人"
+            value={actor}
+            onChange={(event) => setActor(event.target.value)}
+            placeholder="确认人"
+            className="rounded-btn border border-line-btn bg-card px-10 py-6 text-body"
+          />
+          <button
+            type="button"
+            disabled={!ready || !actor.trim() || mutation.isPending}
+            onClick={() => {
+              if (token === null) return
+              mutation.mutate({ review_token: token, actor: actor.trim() })
+            }}
+            className={cx(
+              'rounded-btn border px-12 py-6 text-body',
+              ready && actor.trim() ? 'cursor-pointer border-ink bg-ink text-card' : 'border-line-btn bg-card text-ink-4',
+            )}
+          >
+            确认已通读当前全局复核
+          </button>
+        </div>
+      )}
+    </Panel>
+    </div>
+  )
+}
 
 type Tab = 'chars' | 'rels' | 'rules' | 'secrets' | 'arc'
 
@@ -52,7 +119,7 @@ function EvidenceLine({ evidence }: { evidence: GlobalFactEvidence | null }) {
 export function GlobalScreen() {
   const sid = useSid()
   const nav = useNavigate()
-  const { doc, markSeen } = useApprovals()
+  const { doc, markGlobalSeen } = useApprovals()
   const { defaultOrdinal } = useSampleCoverage()
   const [spoilers, setSpoilers] = useState(false)
   const [tab, setTab] = useState<Tab>('chars')
@@ -70,10 +137,11 @@ export function GlobalScreen() {
     (action) => action.kind === 'stage2.blueprint',
   )
 
-  useEffect(() => {
-    if (doc && !doc.seen.global && !markSeen.isPending) markSeen.mutate('global')
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [doc?.seen.global])
+  const reviewQuery = useQuery({
+    queryKey: qk.globalReview(sid),
+    queryFn: () => api.getGlobalReview(sid),
+    retry: false,
+  })
 
   return (
     <ScreenFrame screen="global" onJumpChapter={(n) => nav('/n/' + sid + '/read/' + n)}>
@@ -131,6 +199,13 @@ export function GlobalScreen() {
           </div>
         ) : null}
         <GlobalReviewPanel sid={sid} />
+        {doc ? (
+          <GlobalSeenConfirm
+            review={reviewQuery.data ?? null}
+            seen={doc.seen.global}
+            mutation={markGlobalSeen}
+          />
+        ) : null}
         <QueryStates q={q} loadingLabel="读全局设定" missing={{ title: '全局设定 · stage2' }}>
         {(d) => {
           const tabs: { key: Tab; label: string; n: number }[] = [

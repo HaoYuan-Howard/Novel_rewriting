@@ -455,7 +455,7 @@ DESIGN_REVIEWER_KINDS: Final = ('human', 'delegated_operator')
 #: Commander/Reviewer 可提交的 approval 面闭集。reviewer typed request 的
 #: ``action.surface``、可重放决定记录与 blocker→surface 注册表共用这一张表。
 REVIEWER_APPROVAL_SURFACES: Final = (
-    'design', 'structure', 'writing', 'stage5', 'blueprint_seen',
+    'design', 'structure', 'writing', 'stage5', 'stage2_final_review',
 )
 #: 2026-09-01 升 v3：策略与章 subject 改绑稳定 strategy epoch /
 #: chapter strategy；逐章 repair 显式区分本轮与累计 typed 约束，并把
@@ -2517,3 +2517,21 @@ COMMANDER_ADMISSION_EVENT_KINDS: Final = (
 #: 独立目录留下 immutable 两相记录，先授权、后确认截断已经 fsync。虽沿用最早
 #: admission 纵切留下的名字，beacon 也共用这一个闭集，不能另长第三种恢复相位。
 COMMANDER_ADMISSION_TAIL_REPAIR_KINDS: Final = ('authorized', 'applied')
+
+#: Stage2 Global 一个 Global/MainText 主体上的 Commander **席位**闭集。席位不是
+#: “调用次数”的同义词：同一席位内因网络/瞬态故障发生的 resume 仍属于原席位
+#: （见 `COMMANDER_ATTEMPT_KINDS`），只有新的 logical session 才占下一席。
+#: ``prereview`` / ``review`` 是首次完整审阅（前者在 Blueprint 期间只读完成），
+#: ``correction`` 是定向订正（GlobalEdit 或 review-decisions），``final_review``
+#: 是只读独立终审：它读全部 blocking 项（含已 PASS 的理由与证据）、整书正文与
+#: Blueprint 工作包，只能 confirm 或 reopen，不得提交任何修改。
+STAGE2_COMMANDER_SEAT_PURPOSES: Final = (
+    'prereview', 'review', 'correction', 'final_review')
+#: 每个主体最多四席：1 次完整审阅 + 最多 2 次订正 + 1 次终审。
+STAGE2_COMMANDER_MAX_SEATS: Final = 4
+#: 前三席才能承担 review/correction；第四席只保留给 ``final_review``，
+#: 于是“最后一个会话既修改又自证通过”在账本层就不可能成立。
+STAGE2_COMMANDER_MAX_EDIT_SEAT: Final = 3
+#: 同一席位内的真实 CLI 进程尝试种类：``launch`` 是新进程首发，``resume`` 是
+#: 用供应商 exact session id 续接同一 provider 会话。两者都不新开席位。
+COMMANDER_ATTEMPT_KINDS: Final = ('launch', 'resume')
