@@ -446,6 +446,11 @@ STRUCTURE_APPROVAL_STATES: Final = (
 DESIGN_STRATEGY_DECISIONS: Final = ('accept', 'request_replan')
 DESIGN_CHAPTER_DECISIONS: Final = ('accept', 'request_repair')
 DESIGN_REVIEWER_KINDS: Final = ('human', 'delegated_operator')
+#: Commander/Reviewer 可提交的 approval 面闭集。reviewer typed request 的
+#: ``action.surface``、可重放决定记录与 blocker→surface 注册表共用这一张表。
+REVIEWER_APPROVAL_SURFACES: Final = (
+    'design', 'structure', 'writing', 'stage5', 'blueprint_seen',
+)
 #: 2026-09-01 升 v3：策略与章 subject 改绑稳定 strategy epoch /
 #: chapter strategy；逐章 repair 显式区分本轮与累计 typed 约束，并把
 #: agent repair 与零模型完整章替换分成两个 capability。v1/v2 只作历史证据

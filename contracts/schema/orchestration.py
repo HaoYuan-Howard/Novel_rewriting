@@ -37,7 +37,8 @@ from contracts.invariants import (
     OPERATOR_DURATION_SOURCES, OPERATOR_PHASE_EVENT_KINDS, OPERATOR_PHASES,
     OPERATOR_TELEMETRY_SOURCES, OPERATOR_TERMINAL_STATES,
     OVERVIEW_VERDICT, PROGRESS_PHASES, RESUME_VERDICTS,
-    RETIRED_NODES, RETIRED_STAGES, RUN_NEXT_HANDLERS,
+    RETIRED_NODES, RETIRED_STAGES, REVIEWER_APPROVAL_SURFACES,
+    RUN_NEXT_HANDLERS,
     RUN_RESUME_FRONTIER_STATES, STAGES,
     EXECUTION_EPOCH_DRAIN_STATES, EXECUTION_EPOCH_REASONS,
 )
@@ -894,6 +895,35 @@ class BeaconTailRepairRecord(AppendTailRepairRecord):
     """进度 beacon 账坏尾的两相恢复记录（v1）。"""
 
     kind: BeaconTailRepairKind
+
+
+REVIEWER_ACTION_RECORD_KIND = 'novel-reviewer-action-record-v1'
+
+
+class ReviewerActionRecord(FrozenModel):
+    """Commander 已通过 typed loader 的一份 approval 决定，按内容寻址落盘供重放。
+
+    它不是审批账，也不是执行授权：审批仍只由 ``novel.cli approval apply`` 子进程
+    在 admission 内写入。这里只保证一次已经完成的模型审阅，在 epoch 因代码/skill
+    漂移关闭、进程崩溃或服务重启后，能在同一 blocker 上零模型成本重放，而不是再
+    买一轮 Commander。适用性由 ``waiting_on`` 加两条判据之一决定：``surface_seal``
+    逐字相同（当次快路），或 ``review_token`` 与当前 workpack 相同（与 approve 侧
+    同一判据，可跨代码版本）。node 型动作不进这里：Stage2 的 durable 路由已由书内
+    typed 产物承担（R-11.22）。
+    """
+
+    kind: Literal['novel-reviewer-action-record-v1'] = (
+        REVIEWER_ACTION_RECORD_KIND)
+    sid: str = Field(min_length=1)
+    run_id: str = Field(min_length=1)
+    epoch_id: str = Field(min_length=1)
+    waiting_on: str = Field(min_length=1)
+    surface_seal: str = Field(min_length=1)
+    business_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    surface: Literal[REVIEWER_APPROVAL_SURFACES]
+    payload: dict[str, Any]
+    review_token: str | None = None
+    recorded_at: int = Field(ge=0)
 
 
 class AgentDeliveryOutcome(FrozenModel):

@@ -15,10 +15,14 @@ import hashlib
 import json
 import os
 import uuid
+import warnings
 from pathlib import Path
+
+from pydantic import ValidationError
 
 from contracts.schema.stage0 import Stage0CandidatePlan, Stage0EditPlan
 from contracts.schema.evaluation import GlobalReviewDecisionSet
+from contracts.schema.orchestration import ReviewerActionRecord
 from contracts.schema import encode_artifact
 from contracts.artifacts import (
     STAGE2_BLUEPRINT_RELATION_EDIT,
@@ -339,6 +343,85 @@ def save_stage5_trim_batch(
     except OSError as exc:
         raise ArtifactUnreadable(f'写不了批量销账 manifest：{exc!r}') from exc
     return target
+
+
+def save_reviewer_action(
+    base: str | os.PathLike[str], sid: str, record: ReviewerActionRecord,
+) -> Path:
+    """按内容身份持久化一份已通过 typed loader 的 Commander approval 决定。
+
+    与 ``save_candidate_plan`` 同款：同字节幂等复用，不同字节拒绝覆盖。它是
+    一次已完成模型审阅的可重放半边，必须活过 epoch 关闭与 scratch 清理，只在
+    canonical ``approval apply`` landed 或被关闭式拒绝后由调用方删除。
+    """
+    try:
+        paths.check_sid(sid)
+    except PathRefused as exc:
+        raise SourcePathRejected(f'reviewer 决定记录的书 id 不合法：{exc}') from exc
+    if record.sid != sid:
+        raise SourcePathRejected(
+            f'reviewer 决定记录属于 sid={record.sid!r}，不能落到 sid={sid!r}')
+    raw = (record.model_dump_json() + '\n').encode('utf-8')
+    digest = hashlib.sha256(raw).hexdigest()
+    root = service_dir(base) / EDITS_DIRNAME / sid
+    root.mkdir(parents=True, exist_ok=True)
+    target = root / f'reviewer-action-{digest}.json'
+    if target.is_file():
+        try:
+            existing = target.read_bytes()
+        except OSError as exc:
+            raise ArtifactUnreadable(f'读不了已有 reviewer 决定记录：{exc!r}') from exc
+        if existing != raw:
+            raise SourceConflict(
+                f'reviewer 决定记录内容地址 {target} 已存在不同字节；拒绝覆盖')
+        return target.resolve()
+    tmp = target.with_name(f'.{target.name}.{uuid.uuid4().hex}.tmp')
+    try:
+        tmp.write_bytes(raw)
+        os.replace(tmp, target)
+    except OSError as exc:
+        raise ArtifactUnreadable(f'保存 reviewer 决定记录失败：{exc!r}') from exc
+    finally:
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
+    return target.resolve()
+
+
+def load_reviewer_actions(
+    base: str | os.PathLike[str], sid: str,
+) -> list[tuple[Path, ReviewerActionRecord]]:
+    """只读列出同 SID 的可重放 Commander 决定，按文件名稳定排序。
+
+    坏文件、符号链接与 sid 不符的记录一律跳过并告警，不猜内容；这里不删任何
+    东西——失效与否只有拿着当前 workpack 的调用方能判。
+    """
+    try:
+        paths.check_sid(sid)
+    except PathRefused as exc:
+        raise SourcePathRejected(f'reviewer 决定记录的书 id 不合法：{exc}') from exc
+    root = service_dir(base) / EDITS_DIRNAME / sid
+    if not root.is_dir():
+        return []
+    out: list[tuple[Path, ReviewerActionRecord]] = []
+    for path in sorted(root.glob('reviewer-action-*.json')):
+        if path.is_symlink() or not path.is_file():
+            continue
+        try:
+            record = ReviewerActionRecord.model_validate_json(path.read_bytes())
+        except (OSError, ValueError, ValidationError) as exc:
+            warnings.warn(
+                f'跳过无法解析的 reviewer 决定记录 {path.name}：{type(exc).__name__}',
+                RuntimeWarning, stacklevel=2)
+            continue
+        if record.sid != sid:
+            warnings.warn(
+                f'跳过 sid 不符的 reviewer 决定记录 {path.name}',
+                RuntimeWarning, stacklevel=2)
+            continue
+        out.append((path.resolve(), record))
+    return out
 
 
 def discard_edit_plan(base: str | os.PathLike[str], plan_path: str | os.PathLike[str]) -> None:

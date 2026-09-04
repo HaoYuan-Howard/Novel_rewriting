@@ -89,6 +89,52 @@ def test_dynamic_workpack_may_contain_tool_names_without_tripping_static_guard(
     assert '允许的文件操作是写出上述请求文件' in task.prompt
 
 
+def test_approval_review_token_and_replay_document_bind_the_current_blocker():
+    """重放只认 approve 侧同一枚 token；wrapper 按当前快照重铸，payload 逐字来自记录。"""
+    from contracts.invariants import REVIEWER_APPROVAL_SURFACES
+    from contracts.schema.orchestration import ReviewerActionRecord
+
+    assert set().union(*reviewer_tasks._APPROVAL_FOR_BLOCKER.values()) <= set(
+        REVIEWER_APPROVAL_SURFACES)
+    current = _current(queue.WAITING_ON_STAGE4_DESIGN_REVIEW)
+    waiting_on = current.action.waiting_on
+    token = 's4dr1_' + 'a' * 64
+
+    def option(action):
+        return {
+            'id': 'x',
+            'exact_request': reviewer_tasks._request_wrapper(
+                current, waiting_on, action),
+            'editable_fields': [], 'binding_fields': [], 'allowed_values': {},
+        }
+
+    approval = option({'kind': 'approval', 'surface': 'design',
+                       'payload': {'review_token': token}})
+    other = option({'kind': 'approval', 'surface': 'design',
+                    'payload': {'review_token': 's4dr1_' + 'b' * 64}})
+    node = option({'kind': 'node', 'node': 'stage6.approve', 'flags': []})
+    assert reviewer_tasks.approval_review_token((approval,)) == token
+    assert reviewer_tasks.approval_review_token((node,)) is None
+    assert reviewer_tasks.approval_review_token((approval, other)) is None
+    assert reviewer_tasks.approval_review_token(()) is None
+
+    record = ReviewerActionRecord(
+        sid='42', run_id='1700000000-abcdef12', epoch_id='old-epoch',
+        waiting_on=waiting_on, surface_seal='0' * 64,
+        business_sha256='e' * 64, surface='design',
+        payload={'review_token': token, 'decision': 'accept'},
+        review_token=token, recorded_at=7)
+    document = reviewer_tasks.replay_request_document(record, current)
+    assert document == reviewer_tasks._request_wrapper(current, waiting_on, {
+        'kind': 'approval', 'surface': 'design',
+        'payload': {'review_token': token, 'decision': 'accept'}})
+    assert document['surface_seal'] == current.surface_seal != record.surface_seal
+    foreign = record.model_copy(update={
+        'waiting_on': queue.WAITING_ON_STAGE4_STRUCTURE_REVIEW})
+    with pytest.raises(reviewer_tasks.ReviewerTaskError):
+        reviewer_tasks.replay_request_document(foreign, current)
+
+
 def test_design_template_projects_to_compact_single_token_request() -> None:
     """生产 GET template 的 subject/多 SHA 不得被 Commander 搬回 POST。"""
     template = SimpleNamespace(

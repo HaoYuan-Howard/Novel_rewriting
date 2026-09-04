@@ -67,6 +67,9 @@ RunSupervisor 暂停接纳新节点，在同一 parent run 内关闭旧 executio
   API/UI 做 0 成本 preview，**不会产生一个 headless 进程**。因此新启动 prompt 中两项都应为 granted；
   若缺句、为 false，或与 started 事件不一致，按 contract 损坏安全停止，不能把另一项推成真。
 - 启动后先运行 `state <sid>` 与 `inbox <sid>`，从盘上续跑。
+- Commander 已通过 typed loader 的 approval 决定由 RunSupervisor 按内容寻址落
+  `_service/edits/<sid>/`；代码/skill 漂移、崩溃或重启后同一 blocker 先零模型重放，不重复唤起
+  Commander。重放被拒只放开 blocker 重新完整审阅，不会把纠错提示发给没读过 workpack 的会话。
 - 标准 `approval` 由本 skill 代批，并只走
   `novel.cli approval show/backfill/seen/gate/template/apply` 的 typed façade；
   不直接 import 审批服务或临时拼 HTTP。`redo/unknown` 在可验证恢复路径具备时自行处置，否则安全停止。

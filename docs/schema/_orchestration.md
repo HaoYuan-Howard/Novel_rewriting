@@ -750,6 +750,7 @@ Output/_service/ledger.jsonl      跨书逐请求成本事实
 Output/_service/*.jsonl.lock      上面九类 JSONL 各自的追加锁载体（见下）
 Output/_service/uploads/…         浏览器上传的原始小说字节
 Output/_service/edits/<sid>/…     交给 CLI 的一次性 typed 编辑稿、人工决定或批处理 manifest
+Output/_service/edits/<sid>/reviewer-action-<sha>.json 已通过 typed loader 的 Commander approval 决定：内容寻址、可零模型重放（R-11.25）
 Output/_service/approvals/<sid>.json 人工闸门、已阅状态与 canonical 写作授权（原子替换）
 ```
 

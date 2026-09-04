@@ -377,7 +377,9 @@ _WRITE_ALLOWED = {
     'novel/orchestrator/uploads.py': (
         '浏览器原始上传与一次性 stage0 编辑计划，均只写 Output/_service/。'
         '前者要长期保留供 S-00 按 original_path 审校；后者只把人的选择交给 CLI '
-        '子进程，作业结束即删。两者都不进 ARTIFACTS / 来源账，不是小说产物'),
+        '子进程，作业结束即删；Commander approval 决定的内容寻址重放记录同样只落 '
+        'Output/_service/edits，landed 或被拒即删。两者都不进 ARTIFACTS / 来源账，'
+        '不是小说产物'),
     'novel/orchestrator/approvals.py': (
         '人工闸门与深度选章只写 Output/_service/approvals/。它们控制作业是否可启动，'
         '不是小说产物，不进 ARTIFACTS / provenance；原子替换防止并发读到半份状态'),

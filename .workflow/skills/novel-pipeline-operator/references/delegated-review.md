@@ -253,7 +253,9 @@ B infeasible 终态，模板与 view 会同时发布其 concerns 和代码 proof
    effective strategy/input digest 未变的 accepted 章保留 checkpoint，不得重发 wire。模型修订仍需
    重新 preview/付费确认，修订 A 后还要再提交一份当前完整 A 审阅。headless AgentRun 在 typed
    决定落盘后由 RunSupervisor 精确执行该 action，不再调用 Commander；交互式操作者仍显式
-   preview/确认，但不得自行改 node、flags 或 token。
+   preview/确认，但不得自行改 node、flags 或 token。typed approval 决定一经 loader 通过就按内容寻址
+   持久化到 `_service/edits/<sid>/`；代码/skill 漂移、崩溃或重启后，同一 blocker 先零模型重放该
+   决定，不重复唤起 Commander。
 
 exact legacy-frozen 主体是唯一例外：真实全章 accept 仍必须提交 raw typed 决定，但公开 Design workpack 与
 `design_review` 随后投影为 `suspended`。这等同 `already_current` 地跳过重复 Commander 审阅，却绝不

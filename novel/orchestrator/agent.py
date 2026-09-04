@@ -47,7 +47,7 @@ from contracts.schema.orchestration import (
     AgentDeliveryOutcome, AgentPending, AgentQueueView, AgentRejected, AgentRunEvent,
     AgentExecutorBackend, AgentProfile, AgentRunRecord, AgentRunStart,
     ExecutionEpoch, ExecutorBackend,
-    PipelineAgentProfiles, RunContractV2,
+    PipelineAgentProfiles, ReviewerActionRecord, RunContractV2,
 )
 from novel import agent_session_audit, paths, prov, run_identity, skill_contract
 from novel.agent_capabilities import (
@@ -832,6 +832,106 @@ def _reviewer_approval_argv(
     return [sys.executable, '-B', '-m', 'novel.cli', *tail]
 
 
+@dataclass(frozen=True)
+class _ReplayableReviewerAction:
+    """盘上一份仍适用于当前 blocker、且已重新通过 loader 的 approval 决定。"""
+
+    path: Path
+    action: reviewer_tasks.ReviewerAction
+
+
+def _record_reviewer_action(
+        base: str, sid: str, *, run_id: str, epoch: ExecutionEpoch,
+        task: reviewer_tasks.ReviewerTask,
+        action: reviewer_tasks.ReviewerAction) -> Path | None:
+    """typed loader 一通过就按内容寻址持久化 approval 决定（R-11.25）。
+
+    写盘点必须在本 reviewer turn 内、早于 Supervisor 的任何身份闸：那些闸后面
+    就是 epoch 关闭与 scratch 清理。持久化失败只告警，不能吞掉刚完成的审阅。
+    node 型动作不进这里，它们的 durable 路由由书内 typed 产物承担。
+    """
+    if not isinstance(action, reviewer_tasks.ReviewerApprovalAction):
+        return None
+    token = action.payload.get('review_token')
+    try:
+        record = ReviewerActionRecord(
+            sid=sid, run_id=run_id, epoch_id=epoch.epoch_id,
+            waiting_on=task.waiting_on, surface_seal=task.surface_seal,
+            business_sha256=task.business_sha256,
+            surface=action.surface, payload=dict(action.payload),
+            review_token=(
+                token if isinstance(token, str) and token.strip() else None),
+            recorded_at=int(time.time()))
+        return uploads.save_reviewer_action(base, sid, record)
+    except (NovelError, ValueError) as exc:
+        warnings.warn(
+            f'Commander typed 决定已通过 loader，但持久化重放记录失败：{exc}',
+            RuntimeWarning, stacklevel=2)
+        return None
+
+
+def _discard_reviewer_action_record(base: str, path: Path) -> None:
+    try:
+        uploads.discard_edit_plan(base, path)
+    except NovelError as exc:
+        warnings.warn(
+            f'reviewer 决定记录清理失败：{exc}', RuntimeWarning, stacklevel=2)
+
+
+def _find_replayable_reviewer_action(
+        base: str, sid: str, *, epoch: ExecutionEpoch,
+        current: OperatorNext,
+        task: reviewer_tasks.ReviewerTask,
+        ) -> _ReplayableReviewerAction | None:
+    """唤起模型前先查盘上是否已有适用于当前 blocker 的 typed 决定。
+
+    只认同 ``waiting_on`` 且 surface seal 逐字相同或 review_token 与当前 workpack
+    相同的记录——后者正是 approve 侧的适用性判据，能跨代码版本；同 blocker 的
+    其余记录已永久失效，当场删除。命中的记录仍要重走 ``load_action``：schema、
+    sentinel、all-accept 等确定性判据以今天的代码为准。
+    """
+    waiting_on = task.waiting_on
+    current_token = reviewer_tasks.approval_review_token(
+        task.submission_options)
+    candidates: list[tuple[int, Path, ReviewerActionRecord]] = []
+    for path, record in uploads.load_reviewer_actions(base, sid):
+        if record.waiting_on != waiting_on:
+            continue
+        seal_match = record.surface_seal == current.surface_seal
+        token_match = (
+            record.review_token is not None and current_token is not None
+            and record.review_token == current_token)
+        if seal_match or token_match:
+            candidates.append((record.recorded_at, path, record))
+        else:
+            _discard_reviewer_action_record(base, path)
+    if not candidates:
+        return None
+    candidates.sort(key=lambda item: (item[0], item[1].name))
+    _recorded_at, path, record = candidates[-1]
+    for _stale_at, stale_path, _stale in candidates[:-1]:
+        _discard_reviewer_action_record(base, stale_path)
+    scratch = service_lifecycle.open_scratch_session(
+        base, sid, epoch.epoch_id)
+    try:
+        document = reviewer_tasks.replay_request_document(record, current)
+        payload = (json.dumps(
+            document, ensure_ascii=False, sort_keys=True) + '\n').encode('utf-8')
+        replay_path = _write_identity_bound_scratch(
+            scratch, stem='reviewer-replay', kind='request',
+            identity_sha256=hashlib.sha256(payload).hexdigest(),
+            payload=payload)
+        action = reviewer_tasks.load_action(
+            replay_path, current, submission_options=task.submission_options)
+    except reviewer_tasks.ReviewerTaskError as exc:
+        warnings.warn(
+            f'盘上 reviewer 决定记录 {path.name} 未通过当前 loader，已删除：{exc}',
+            RuntimeWarning, stacklevel=2)
+        _discard_reviewer_action_record(base, path)
+        return None
+    return _ReplayableReviewerAction(path=path, action=action)
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # 三、并发闸与排队
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1561,6 +1661,9 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
     pending_reviewer_binding: tuple[str, str] | None = None
     pending_reviewer_business_sha256: str | None = None
     pending_reviewer_source_task: reviewer_tasks.ReviewerTask | None = None
+    # 已通过 loader 的 approval 决定在盘上的记录；重放来的动作被拒时不得走纠错。
+    pending_reviewer_record_path: Path | None = None
+    pending_reviewer_replayed = False
     reviewer_correction_task: reviewer_tasks.ReviewerTask | None = None
     reviewer_correction_binding: tuple[str, str] | None = None
     reviewer_correction_reason: str | None = None
@@ -1638,6 +1741,7 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
         nonlocal session_started, session_ended
         nonlocal pending_reviewer_action, pending_reviewer_binding
         nonlocal pending_reviewer_business_sha256, pending_reviewer_source_task
+        nonlocal pending_reviewer_record_path, pending_reviewer_replayed
         nonlocal reviewer_correction_task, reviewer_correction_binding
         nonlocal reviewer_correction_reason, reviewer_correction_request_sha256
         nonlocal reviewer_correction_attempts, stage2_commander_turns
@@ -1688,6 +1792,8 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
             pending_reviewer_binding = None
             pending_reviewer_business_sha256 = None
             pending_reviewer_source_task = None
+            pending_reviewer_record_path = None
+            pending_reviewer_replayed = False
             reviewer_correction_task = None
             reviewer_correction_binding = None
             reviewer_correction_reason = None
@@ -2279,6 +2385,7 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
             launch_ticket: LaunchTicket) -> CommanderTurnResult | None:
         nonlocal pending_reviewer_action, pending_reviewer_binding
         nonlocal pending_reviewer_business_sha256, pending_reviewer_source_task
+        nonlocal pending_reviewer_record_path, pending_reviewer_replayed
         nonlocal reviewer_correction_task, reviewer_correction_binding
         nonlocal reviewer_correction_reason, reviewer_correction_request_sha256
         nonlocal reviewer_correction_attempts, stage2_commander_turns
@@ -2393,6 +2500,10 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
             pending_reviewer_binding = binding
             pending_reviewer_business_sha256 = task.business_sha256
             pending_reviewer_source_task = task
+            pending_reviewer_record_path = _record_reviewer_action(
+                base, sid, run_id=run_id, epoch=epoch, task=task,
+                action=corrected_action)
+            pending_reviewer_replayed = False
             return CommanderTurnResult(
                 exit_code=turn.exit_code,
                 provider_session_id=turn.provider_session_id,
@@ -2405,6 +2516,8 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                 pending_reviewer_binding = None
                 pending_reviewer_business_sha256 = None
                 pending_reviewer_source_task = None
+                pending_reviewer_record_path = None
+                pending_reviewer_replayed = False
                 return None
             action = pending_reviewer_action
             business_sha256 = pending_reviewer_business_sha256
@@ -2413,6 +2526,10 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
             pending_reviewer_binding = None
             pending_reviewer_business_sha256 = None
             pending_reviewer_source_task = None
+            record_path = pending_reviewer_record_path
+            replayed = pending_reviewer_replayed
+            pending_reviewer_record_path = None
+            pending_reviewer_replayed = False
             if business_sha256 is None or source_task is None:
                 raise RuntimeError('pending reviewer action 缺业务主体或 workpack')
             action_sha256 = reviewer_tasks.action_business_sha256(action)
@@ -2438,8 +2555,23 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
             else:
                 result = _run_approval_action(
                     epoch, action, launch_ticket)
+            if record_path is not None and (
+                    landed(result.exit_code) or result.exit_code == 2):
+                # 已落盘或被关闭式拒绝的决定都不再适用；只有结论未知（70）时
+                # 保留记录，留给下一次同 blocker 的启动窗口重放。
+                _discard_reviewer_action_record(base, record_path)
             if landed(result.exit_code):
                 completed_reviewer_business_actions.add(business_action)
+            elif result.exit_code == 2 and replayed:
+                # 重放的决定被 approve 侧拒绝：不能把纠错提示发给一个没读过本
+                # workpack 的 provider session；放开 blocker，让下一启动窗口重新
+                # 完整审阅。等价动作仍由业务摘要阻断。
+                rejected_reviewer_business_actions.add(business_action)
+                reviewed_blockers.discard(binding)
+                return CommanderTurnResult(
+                    exit_code=result.exit_code,
+                    provider_session_id=provider_session_id,
+                    continue_ready=True, outcome=result.outcome)
             elif result.exit_code == 2 and provider_session_id is not None:
                 # Reviewer 的 typed 动作由 Commander 负责修正。显式终态证明没有
                 # landed；只要 blocker/surface 未变，就把拒绝事实送回同一 provider
@@ -2489,6 +2621,24 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
             base, sid, current, request_path, epoch_id=epoch.epoch_id)
         if task is None:
             return None
+        replay = _find_replayable_reviewer_action(
+            base, sid, epoch=epoch, current=current, task=task)
+        if replay is not None:
+            log = run_log_path(base, run_id)
+            log.parent.mkdir(parents=True, exist_ok=True)
+            with open(log, 'ab') as fh:
+                fh.write(
+                    f'$ [reviewer-replay] {replay.path}\n'.encode('utf-8'))
+            reviewed_blockers.add(binding)
+            pending_reviewer_action = replay.action
+            pending_reviewer_binding = binding
+            pending_reviewer_business_sha256 = task.business_sha256
+            pending_reviewer_source_task = task
+            pending_reviewer_record_path = replay.path
+            pending_reviewer_replayed = True
+            return CommanderTurnResult(
+                exit_code=0, provider_session_id=provider_session_id,
+                continue_ready=True, outcome=latest_outcome)
         reviewed_blockers.add(binding)
         turn = run_reviewer_turn(task.prompt)
         if turn.exit_code != 0:
@@ -2522,6 +2672,10 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
         pending_reviewer_binding = binding
         pending_reviewer_business_sha256 = task.business_sha256
         pending_reviewer_source_task = task
+        pending_reviewer_record_path = _record_reviewer_action(
+            base, sid, run_id=run_id, epoch=epoch, task=task,
+            action=pending_reviewer_action)
+        pending_reviewer_replayed = False
         return CommanderTurnResult(
             exit_code=turn.exit_code,
             provider_session_id=turn.provider_session_id,

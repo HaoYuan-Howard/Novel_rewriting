@@ -36,7 +36,8 @@ from contracts.schema.stage2 import GlobalEdit
 from contracts.schema.orchestration import (
     AgentDeliveryOutcome, AgentProfile, AgentRunEvent, AgentRunStart,
     ExecutionEpoch, LegacyExecutorBackend, LegacyLlmProfile,
-    PipelineAgentProfiles, ProgressEvent, RunContractV2, Step,
+    PipelineAgentProfiles, ProgressEvent, ReviewerActionRecord, RunContractV2,
+    Step,
 )
 from novel import agent_session_audit, commander_context, paths, skill_contract
 from novel.agents.base import AgentUsage
@@ -2688,3 +2689,246 @@ def test_an_unknown_code_fingerprint_is_never_read_as_the_same_code(base, monkey
     got = delivery.assess(base, '77', start_code_version=prov.CODE_UNKNOWN)
     assert got.state == 'unknown', got
     assert '代码指纹不可用' in got.reason
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# typed approval 决定持久化与零模型重放（R-11.25）
+# ─────────────────────────────────────────────────────────────────────────────
+
+_REPLAY_TOKEN = 's4dr1_' + '1' * 64
+
+
+def _design_review_blocker():
+    return SimpleNamespace(
+        state='blocked', code_version='test-code-version',
+        surface_seal='c' * 64, execution_token=None,
+        action=SimpleNamespace(
+            waiting_on=agent.queue.WAITING_ON_STAGE4_DESIGN_REVIEW,
+            action_sha256='d' * 64))
+
+
+def _design_review_task(current, request_path):
+    option = {
+        'id': 'approval:design',
+        'exact_request': agent.reviewer_tasks._request_wrapper(
+            current, current.action.waiting_on, {
+                'kind': 'approval', 'surface': 'design',
+                'payload': {'review_token': _REPLAY_TOKEN, 'decision': '<待填>'}}),
+        'editable_fields': [], 'binding_fields': [], 'allowed_values': {},
+    }
+    return agent.reviewer_tasks.ReviewerTask(
+        waiting_on=current.action.waiting_on, surface_seal=current.surface_seal,
+        business_sha256='e' * 64, request_path=Path(request_path),
+        prompt='DESIGN REVIEW IMMUTABLE WORKPACK', submission_options=(option,))
+
+
+def _install_design_review_harness(
+        monkeypatch, *, apply_exit_codes, decisions):
+    """把 Stage4A 审阅 blocker 固定住：假 workpack、按文件解析的假 loader、假 apply 子进程。"""
+    current = _design_review_blocker()
+    monkeypatch.setattr(
+        agent.operator, 'next_action_at_code',
+        lambda _base, _sid, *, code: current)
+    stopped = AgentDeliveryOutcome(
+        state='stopped', reason='Stage4A 审阅停点', checked_at=1)
+    monkeypatch.setattr(agent, '_assess_delivery', lambda *_args, **_kwargs: stopped)
+    task_box = {}
+
+    def build_task(_base, _sid, got, request_path, *, epoch_id):
+        del epoch_id
+        task = _design_review_task(got, request_path)
+        task_box['task'] = task
+        return task
+
+    monkeypatch.setattr(agent.reviewer_tasks, 'build_task', build_task)
+
+    def load_action(path, _current, *, submission_options):
+        del submission_options
+        doc = json.loads(Path(path).read_text('utf-8'))
+        return agent.reviewer_tasks.ReviewerApprovalAction(
+            kind='approval', surface=doc['action']['surface'],
+            payload=doc['action']['payload'])
+
+    monkeypatch.setattr(agent.reviewer_tasks, 'load_action', load_action)
+    applied = []
+
+    def approval_argv(_base, _sid, _epoch, action):
+        applied.append(dict(action.payload))
+        code = apply_exit_codes.pop(0)
+        return [agent.sys.executable, '-c', f'raise SystemExit({code})']
+
+    monkeypatch.setattr(agent, '_reviewer_approval_argv', approval_argv)
+    invocations = []
+
+    def default_spawn(_run_id, *, on_registered=None):
+        def spawn(invocation, env, log):
+            del env, log
+            invocations.append(invocation)
+            assert on_registered is not None
+            on_registered()
+            task = task_box['task']
+            task.request_path.parent.mkdir(parents=True, exist_ok=True)
+            task.request_path.write_text(json.dumps(
+                agent.reviewer_tasks._request_wrapper(
+                    current, current.action.waiting_on, {
+                        'kind': 'approval', 'surface': 'design',
+                        'payload': {
+                            'review_token': _REPLAY_TOKEN,
+                            'decision': decisions.pop(0)}})),
+                encoding='utf-8')
+            return CommanderProcessResult(
+                exit_code=0,
+                observation=CommanderObservation(
+                    provider_session_id='provider-design-review',
+                    actual_model=invocation.profile.model,
+                    actual_effort=invocation.profile.reasoning_effort,
+                    usage=None))
+        return spawn
+
+    monkeypatch.setattr(agent, '_default_spawn', default_spawn)
+    return current, invocations, applied
+
+
+def _reviewer_action_files(base):
+    return sorted((Path(base) / '_service' / 'edits' / '42').glob(
+        'reviewer-action-*.json'))
+
+
+def test_reviewer_approval_decision_is_recorded_then_discarded_after_landing(
+        base, corpus, monkeypatch):
+    """loader 一过就落盘，canonical apply landed 后删除；本轮只唤一次 Commander。"""
+    _current, invocations, applied = _install_design_review_harness(
+        monkeypatch, apply_exit_codes=[0], decisions=['accept-all'])
+    saved = []
+    original_save = agent.uploads.save_reviewer_action
+
+    def spy(base_, sid, record):
+        path = original_save(base_, sid, record)
+        saved.append((path, record, path.read_bytes()))
+        return path
+
+    monkeypatch.setattr(agent.uploads, 'save_reviewer_action', spy)
+    rec = agent.start(
+        base, '42', authorized=True, egress_authorized=True,
+        profiles=_PROFILES, spawn=None)
+    assert agent.wait(rec.run_id, 10)
+
+    assert len(invocations) == 1
+    assert applied == [{'review_token': _REPLAY_TOKEN, 'decision': 'accept-all'}]
+    [(path, record, raw)] = saved
+    assert path.parent == (Path(base) / '_service' / 'edits' / '42').resolve()
+    assert path.name.startswith('reviewer-action-') and path.suffix == '.json'
+    assert record.waiting_on == agent.queue.WAITING_ON_STAGE4_DESIGN_REVIEW
+    assert record.surface_seal == 'c' * 64
+    assert record.review_token == _REPLAY_TOKEN
+    assert record.surface == 'design'
+    assert record.payload['decision'] == 'accept-all'
+    assert record.run_id == rec.run_id
+    assert ReviewerActionRecord.model_validate_json(raw) == record
+    assert not path.exists(), 'landed 后记录必须删除'
+    assert _reviewer_action_files(base) == []
+
+
+def test_recorded_reviewer_decision_replays_without_a_commander_turn(
+        base, corpus, monkeypatch):
+    """同 blocker、同 surface seal 的盘上决定直接交 canonical apply，不唤模型。"""
+    current, invocations, applied = _install_design_review_harness(
+        monkeypatch, apply_exit_codes=[0], decisions=[])
+    path = agent.uploads.save_reviewer_action(base, '42', ReviewerActionRecord(
+        sid='42', run_id='1700000000-abcdef12', epoch_id='old-epoch',
+        waiting_on=current.action.waiting_on, surface_seal=current.surface_seal,
+        business_sha256='e' * 64, surface='design',
+        payload={'review_token': _REPLAY_TOKEN, 'decision': 'replayed'},
+        review_token=_REPLAY_TOKEN, recorded_at=1))
+
+    rec = agent.start(
+        base, '42', authorized=True, egress_authorized=True,
+        profiles=_PROFILES, spawn=None)
+    assert agent.wait(rec.run_id, 10)
+
+    assert invocations == []
+    assert applied == [{'review_token': _REPLAY_TOKEN, 'decision': 'replayed'}]
+    assert not path.exists()
+    assert '[reviewer-replay]' in agent.run_log_path(
+        base, rec.run_id).read_text('utf-8')
+    ledger = Path(base) / '_service' / 'ledger.jsonl'
+    commander_rows = [
+        json.loads(line) for line in (
+            ledger.read_text('utf-8').splitlines() if ledger.exists() else [])
+        if json.loads(line).get('role') == 'commander']
+    assert commander_rows == [], '重放不得伪造一次 Commander 调用'
+
+
+def test_recorded_reviewer_decision_replays_across_code_change_by_review_token(
+        base, corpus, monkeypatch):
+    """surface seal 随代码变了，但 review_token 相同 ⇒ 仍重放（与 approve 侧同一判据）。"""
+    current, invocations, applied = _install_design_review_harness(
+        monkeypatch, apply_exit_codes=[0], decisions=[])
+    path = agent.uploads.save_reviewer_action(base, '42', ReviewerActionRecord(
+        sid='42', run_id='1700000000-abcdef12', epoch_id='old-epoch',
+        waiting_on=current.action.waiting_on, surface_seal='0' * 64,
+        business_sha256='f' * 64, surface='design',
+        payload={'review_token': _REPLAY_TOKEN, 'decision': 'replayed-by-token'},
+        review_token=_REPLAY_TOKEN, recorded_at=1))
+
+    rec = agent.start(
+        base, '42', authorized=True, egress_authorized=True,
+        profiles=_PROFILES, spawn=None)
+    assert agent.wait(rec.run_id, 10)
+
+    assert invocations == []
+    assert applied == [
+        {'review_token': _REPLAY_TOKEN, 'decision': 'replayed-by-token'}]
+    assert not path.exists()
+
+
+def test_stale_reviewer_decision_is_discarded_and_commander_reviews(
+        base, corpus, monkeypatch):
+    """seal 与 token 都不匹配的记录当场删除，不得替当前 blocker 代签。"""
+    current, invocations, applied = _install_design_review_harness(
+        monkeypatch, apply_exit_codes=[0], decisions=['fresh'])
+    stale = agent.uploads.save_reviewer_action(base, '42', ReviewerActionRecord(
+        sid='42', run_id='1700000000-abcdef12', epoch_id='old-epoch',
+        waiting_on=current.action.waiting_on, surface_seal='0' * 64,
+        business_sha256='f' * 64, surface='design',
+        payload={'review_token': 's4dr1_' + '2' * 64, 'decision': 'stale'},
+        review_token='s4dr1_' + '2' * 64, recorded_at=1))
+
+    rec = agent.start(
+        base, '42', authorized=True, egress_authorized=True,
+        profiles=_PROFILES, spawn=None)
+    assert agent.wait(rec.run_id, 10)
+
+    assert len(invocations) == 1
+    assert applied == [{'review_token': _REPLAY_TOKEN, 'decision': 'fresh'}]
+    assert not stale.exists()
+    assert _reviewer_action_files(base) == []
+
+
+def test_rejected_replay_reopens_full_review_instead_of_correction(
+        base, corpus, monkeypatch):
+    """重放被 approve 侧拒绝：删记录、放开 blocker，下一窗口是完整审阅而非纠错提示。"""
+    current, invocations, applied = _install_design_review_harness(
+        monkeypatch, apply_exit_codes=[2, 0], decisions=['fresh-decision'])
+    path = agent.uploads.save_reviewer_action(base, '42', ReviewerActionRecord(
+        sid='42', run_id='1700000000-abcdef12', epoch_id='old-epoch',
+        waiting_on=current.action.waiting_on, surface_seal=current.surface_seal,
+        business_sha256='e' * 64, surface='design',
+        payload={'review_token': _REPLAY_TOKEN, 'decision': 'replayed'},
+        review_token=_REPLAY_TOKEN, recorded_at=1))
+
+    rec = agent.start(
+        base, '42', authorized=True, egress_authorized=True,
+        profiles=_PROFILES, spawn=None)
+    assert agent.wait(rec.run_id, 10)
+
+    assert applied == [
+        {'review_token': _REPLAY_TOKEN, 'decision': 'replayed'},
+        {'review_token': _REPLAY_TOKEN, 'decision': 'fresh-decision'},
+    ]
+    assert len(invocations) == 1
+    assert invocations[0].stdin_text == 'DESIGN REVIEW IMMUTABLE WORKPACK'
+    assert invocations[0].resume_provider_session_id is None
+    assert not path.exists()
+    assert _reviewer_action_files(base) == []
+

@@ -15,7 +15,7 @@ import json
 import os
 import subprocess
 import sys
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
@@ -29,6 +29,7 @@ from contracts.invariants import (
     DESIGN_REPAIR_CONSTRAINT_ARITY,
     DESIGN_STRATEGY_DECISIONS,
     DESIGN_STRATEGY_REPLAN_CONSTRAINTS,
+    REVIEWER_APPROVAL_SURFACES,
     STAGE5_CLOSURE_GROUPS,
     STAGE5_MUST_APPEAR_RULINGS,
     STRUCTURE_APPROVAL_DECISIONS,
@@ -45,6 +46,7 @@ from contracts.schema.api import (
     WritingApprovalRequest,
 )
 from contracts.schema.evaluation import GlobalReviewDecisionSet
+from contracts.schema.orchestration import ReviewerActionRecord
 from contracts.schema.stage2 import GlobalEdit
 from novel import paths
 from novel.orchestrator import queue
@@ -84,7 +86,7 @@ class ReviewerNodeAction:
 @dataclass(frozen=True)
 class ReviewerApprovalAction:
     kind: Literal['approval']
-    surface: Literal['design', 'structure', 'writing', 'stage5', 'blueprint_seen']
+    surface: Literal[REVIEWER_APPROVAL_SURFACES]
     payload: dict[str, Any]
 
 
@@ -378,6 +380,50 @@ def _request_wrapper(
         'waiting_on': waiting_on,
         'action': action,
     }
+
+
+def approval_review_token(
+    submission_options: Sequence[Mapping[str, Any]],
+) -> str | None:
+    """当前 blocker 唯一 approval 选项绑定的 opaque review_token。
+
+    这是 approve 侧判定人工决定是否仍适用的同一枚 token；没有 approval 选项、
+    或多个选项给出不同 token 时返回 ``None``，调用方不得猜。
+    """
+    tokens: set[str] = set()
+    for option in submission_options:
+        request = (
+            option.get('exact_request') if isinstance(option, Mapping) else None)
+        action = request.get('action') if isinstance(request, Mapping) else None
+        if not isinstance(action, Mapping) or action.get('kind') != 'approval':
+            continue
+        payload = action.get('payload')
+        token = payload.get('review_token') if isinstance(payload, Mapping) else None
+        if isinstance(token, str) and token.strip():
+            tokens.add(token)
+    if len(tokens) != 1:
+        return None
+    return tokens.pop()
+
+
+def replay_request_document(
+    record: ReviewerActionRecord, current: OperatorNext,
+) -> dict[str, Any]:
+    """把一份持久化的 approval 决定重新物化成当前 blocker 的 typed request。
+
+    wrapper 的 surface_seal / waiting_on 是运输绑定，按当前快照重铸；业务 payload
+    逐字来自记录。产出仍必须经 :func:`load_action`：schema、sentinel、all-accept
+    等确定性判据以今天的代码为准，记录本身不是免检凭证。
+    """
+    if current.state != 'blocked' or current.action is None:
+        raise ReviewerTaskError('reviewer 决定只能重放到当前 blocked next')
+    waiting_on = current.action.waiting_on
+    if waiting_on is None or record.waiting_on != waiting_on:
+        raise ReviewerTaskError('reviewer 决定记录与当前 blocker 不一致')
+    return _request_wrapper(current, waiting_on, {
+        'kind': 'approval', 'surface': record.surface,
+        'payload': copy.deepcopy(record.payload),
+    })
 
 
 def _option(
@@ -1535,6 +1581,7 @@ def load_action(
 
 
 __all__ = [
+    'approval_review_token', 'replay_request_document',
     'ReviewerAction', 'ReviewerApprovalAction', 'ReviewerNodeAction',
     'ReviewerTask', 'ReviewerTaskError', 'action_business_sha256',
     'build_task', 'correction_prompt', 'is_registered', 'load_action',
