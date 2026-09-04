@@ -344,8 +344,10 @@ class LlmProvenance(Provenance):
     """付费节点的来源账。`prompts` 与 `model` 都是必填。
 
     ``model`` 是这次运行配置的主模型，维持既有实验/存量产物的比较轴；
-    ``adopted_models`` 才是最终进入这份产物的响应实际来自哪些模型。后者在模型兜底
-    落地前的旧产物可缺，现役 producer 必须填写，不能拿主模型猜。
+    ``adopted_models`` 才是最终进入这份产物的响应实际来自哪些模型。现役 producer
+    必须从 accepted checkpoint/session/ledger 的关闭式证据填写：actual 回显精确匹配，
+    或 registry 登记的单模型无 fallback driver 证据；不能只拿主模型猜。该字段只在
+    模型兜底落地前的旧产物可缺。
     """
 
     #: 插值**之后**的 system prompt 指纹。

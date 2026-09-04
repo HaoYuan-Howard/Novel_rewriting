@@ -22,6 +22,7 @@ errors.py —— 异常 → HTTP 状态码的**唯一落点**。纯函数，**�
 from __future__ import annotations
 
 from novel.errors import (
+    AgentModelIdentityRefused,
     AgentProfileSettingsConflict,
     ApprovalFrozen,
     AccountingKeyUnregistered,
@@ -124,6 +125,9 @@ STATUS: dict[type[NovelError], int] = {
     #: ⚠ 500 的响应体里**只出类名与一句人话，不出栈**——那份正文是不外流的版权内容，
     #: 而栈里可能带着它。栈留在服务端日志里（`R-11.1` 第四条理由）。
     ProvenanceRefused: 500,
+    #: accepted model 的独立 actual/session/ledger/driver 证据自相矛盾，
+    #: 与一般来源账冲突同属代码或持久化契约错误，不是可重试的用户输入。
+    AgentModelIdentityRefused: 500,
     AccountingKeyUnregistered: 500,
     ByteFormRefused: 500,
     ValueDomainRefused: 500,

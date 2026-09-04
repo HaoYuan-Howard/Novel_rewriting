@@ -864,6 +864,16 @@ Stage5/6 从各自已经读取的 Stage1 文本即时计算确定性机械读数
 | R-11.24 | 运行页必须把三种事实分开呈现：节点 beacon 给“当前正在执行什么”，operator 同快照给“下一节点/下一处理者”，AgentRun lifecycle 给“当前或最后 execution epoch、rollover 原因与累计换 epoch 次数”。空 beacon 不得把下一节点伪装成正在执行，epoch rollover 也不得藏在日志里；三者都只呈现后端事实，不由前端推断新鲜度或调度 | `结构`（`web/src/screens/run/RunScreen.tsx::ResumeFrontier` / `::AgentRunBlock`）+ 前端回归 |
 | R-11.25 | **Commander 已通过 typed loader 的 approval 决定必须先于任何身份闸持久化，且可零模型成本重放。** RunSupervisor 在 reviewer turn 内、`load_action` 通过后立即把决定按内容寻址落 `_service/edits/<sid>/reviewer-action-<sha256>.json`（记 sid/run/epoch/waiting_on/surface_seal/business_sha256/surface/payload/review_token）；下一次同 blocker 的 reviewer 启动窗口先 0 模型构造当前 workpack，再扫盘：同 `waiting_on` 且 `surface_seal` 逐字相同或 `review_token` 与当前 workpack 相同（与 approve 侧同一判据，可跨代码版本）的记录经同一 `load_action` 复验后直接交 canonical `approval apply`，不唤起 Commander；同 blocker 的其余记录当场删除。apply landed 或 exit 2 后删除记录，exit 70 保留；重放被拒不得把纠错提示发给未读过 workpack 的 provider session，只放开 blocker 让下一窗口重新完整审阅，等价动作仍由业务摘要阻断。node 型（Stage2）动作不进此记录：其 durable 路由由书内 typed 产物承担（R-11.22）。记录不是审批账也不是执行授权，不进 surface seal（R-14.7），重放落账沿用原轮次的 actor/review_run_id | `结构`（`novel/orchestrator/agent.py::_record_reviewer_action` / `::_find_replayable_reviewer_action` / `::_run_reviewer` + `novel/orchestrator/uploads.py::save_reviewer_action` / `::load_reviewer_actions` + `novel/orchestrator/reviewer_tasks.py::replay_request_document` + `contracts/schema/orchestration.py::ReviewerActionRecord`）；落盘时点、seal/token 两条匹配、失配删除、landed/exit 2 删、重放被拒不发纠错回归查 |
 
+> **`R-11.18` 的 executor accepted-model 证据是关闭的两路判定，不等同于强求每种 CLI
+> 回显同一字段。** CLI/provider 回显非空 actual model 时，必须与 resolved profile 精确相等；
+> 没有回显时，只有 capability registry 明确登记为 `driver-enforced`、受测的 start/resume argv
+> 均显式钉死唯一 requested model 且没有 fallback、并且该 turn 留有 CLI 版本，才可把 requested
+> model 作为 checkpoint / provenance 的 adopted identity。后一条路仍把 session `actual_model`
+> 保持 `null`、ledger `model` 保持 `unknown`，不得倒填；任何非空冲突回显照旧拒绝，未登记 driver
+> 或缺 CLI 版本也关闭式拒绝。运行、checkpoint 恢复、历史采用、聚合与 commit 必须共用
+> `novel/agent_model_identity.py`，不得按 provider 或模型名前缀另造例外。`node-executor/v1` 的
+> 字段形状不变；既有 provider-reported checkpoint 逐字沿用。
+>
 > **`R-11.19` 的两级运行联结：**成本 ledger 与 LLM adoption audit 在 producer
 > `run_id` 之外显式携外层 AgentRun `parent_run_id`；`agent_sessions.jsonl` 的 executor
 > `parent_run_id` 则仍指向 producer run。整书 E2E 只经 started 事件登记的 epoch

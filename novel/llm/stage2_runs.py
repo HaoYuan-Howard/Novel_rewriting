@@ -30,9 +30,12 @@ from pydantic import BaseModel, ValidationError
 from contracts.schema.orchestration import AgentProfile
 from novel import agent_session_audit, paths
 from novel.agent_capabilities import validate_profile
+from novel.agent_model_identity import (
+    resolve_ledger_model_identity, validate_checkpoint_model_identity,
+)
 from novel.agents.base import render_structured_agent_stdin_bytes
 from novel.agents.session_client import (
-    SAME_RUN_RESUMABLE_AGENT_FAILURES, agent_json_schema,
+    SESSION_PROTOCOL_VERSION, SAME_RUN_RESUMABLE_AGENT_FAILURES, agent_json_schema,
     validate_agent_session_request_binding,
 )
 from novel.config import ENV_KEYS
@@ -55,7 +58,7 @@ _OWNERSHIP_REGISTRY_LOCK = threading.Lock()
 _OWNERSHIP_THREAD_LOCKS: dict[str, threading.RLock] = {}
 OWNERSHIP_LOCK_TARGET = '.repair-ownership'
 BLUEPRINT_CONTRACT_ENV = ENV_KEYS['stage2_blueprint_contract']
-AGENT_PROTOCOL_VERSION = 'node-executor/v1'
+AGENT_PROTOCOL_VERSION = SESSION_PROTOCOL_VERSION
 
 _AGENT_POLICY_FIELDS = {
     'protocol_version', 'profile', 'session_isolation',
@@ -417,9 +420,13 @@ def _validate_agent_session_turn(
     if actual_start != expected_start:
         raise ProvenanceRefused(
             f'{purpose}: agent started 事件与当前 logical subject 漂移')
-    if turn.actual_model != profile.get('model'):
-        raise ProvenanceRefused(
-            f'{purpose}: session turn actual model 与 resolved profile 漂移')
+    model_identity = validate_checkpoint_model_identity(
+        profile,
+        checkpoint_model=acceptance.get('model'),
+        actual_model=turn.actual_model,
+        cli_version=turn.cli_version,
+        require_driver_version=True,
+    )
     expected = {
         'wire_version': agent_session_audit.SESSION_AUDIT_WIRE_VERSION,
         'session_run_id': acceptance.get('session_run_id'),
@@ -433,9 +440,9 @@ def _validate_agent_session_turn(
         'turn_index': acceptance.get('accepted_turn_index'),
         'attempt_id': attempt_id,
         'requested_model': profile.get('model'),
-        # actual model 直接绑 resolved profile，不借 acceptance.model
-        # 间接推导；这样旧 checkpoint 即使内部自洽也不能换模型。
-        'actual_model': profile.get('model'),
+        # actual 与 adopted identity 分开：公开协议不回显时必须保持 null，
+        # 采用依据由上面的统一 driver capability 判据重算。
+        'actual_model': model_identity.actual_model,
         'requested_effort': profile.get('reasoning_effort'),
         'protocol_version': AGENT_PROTOCOL_VERSION,
         'start_code_version': ctx.code,
@@ -1102,8 +1109,7 @@ def _validated_agent_acceptance(
                 f'{purpose}: agent attempt_links 含不完整或不合法身份：{link!r}')
         aid = str(link['attempt_id'])
         fingerprint = str(link['request_fingerprint'])
-        if (link.get('model') != profile['model']
-                or link.get('request_model') != profile['model']
+        if (link.get('request_model') != profile['model']
                 or link.get('reasoning_effort') != profile['reasoning_effort']
                 or link.get('thinking') is not None
                 or link.get('json_mode') is not True
@@ -1112,6 +1118,7 @@ def _validated_agent_acceptance(
                 f'{purpose}: agent attempt={aid} 的实际/请求 model 或 effort '
                 '与 resolved profile 漂移，或伪造了 legacy '
                 'thinking/provider max_tokens')
+        resolve_ledger_model_identity(profile, link.get('model'))
         normalized_links.append(dict(link))
         attempt_ids.append(aid)
         fingerprints.append(fingerprint)
@@ -1144,8 +1151,13 @@ def _validated_agent_acceptance(
                 f'{purpose}: agent attempt={aid} 请求配置/响应 SHA 与 ledger 不闭合')
     accepted_link = next(
         row for row in normalized_links if row['attempt_id'] == attempt_id)
+    validate_checkpoint_model_identity(
+        profile,
+        checkpoint_model=model,
+        actual_model=accepted_link.get('model'),
+        actual_is_ledger=True,
+    )
     if (accepted_link.get('request_fingerprint') != request_fingerprint
-            or accepted_link.get('model') != model
             or accepted_link.get('response_sha256') != ledger_response_sha256):
         raise ProvenanceRefused(
             f'{purpose}: accepted agent attempt/model/response 与 ledger 不闭合')
@@ -1586,6 +1598,13 @@ def _validate_historical_agent_session(
     if len(accepted) != 1:
         raise ProvenanceRefused(f'{purpose}: accepted attempt 没有唯一 session turn')
     turn = accepted[0]
+    model_identity = validate_checkpoint_model_identity(
+        profile,
+        checkpoint_model=acceptance.get('model'),
+        actual_model=turn.actual_model,
+        cli_version=turn.cli_version,
+        require_driver_version=True,
+    )
     start_profile = (
         None if start.profile is None else start.profile.model_dump(mode='json'))
     turn_profile = (
@@ -1638,7 +1657,7 @@ def _validate_historical_agent_session(
             'provider_session_id': acceptance.get('provider_session_id'),
             'turn_index': acceptance.get('accepted_turn_index'),
             'requested_model': profile['model'],
-            'actual_model': profile['model'],
+            'actual_model': model_identity.actual_model,
             'requested_effort': profile['reasoning_effort'],
             'protocol_version': AGENT_PROTOCOL_VERSION,
             'start_code_version': artifact_code,
@@ -1661,14 +1680,14 @@ def _validate_recovery_request_binding(
         profile = _materialized_profile_dict(
             policy.get('profile'), label='历史 Stage2 agent request policy')
         for link in links:
-            if (link.get('model') != profile['model']
-                    or link.get('request_model') != profile['model']
+            if (link.get('request_model') != profile['model']
                     or link.get('reasoning_effort') != profile['reasoning_effort']
                     or link.get('thinking') is not None
                     or link.get('json_mode') is not True
                     or link.get('max_tokens') is not None):
                 raise ProvenanceRefused(
                     f'{purpose}: 历史 agent attempt link 与 run profile 漂移')
+            resolve_ledger_model_identity(profile, link.get('model'))
         _validate_historical_agent_session(
             ctx,
             record=record,
@@ -1959,8 +1978,18 @@ def _verified_recovery_checkpoint(
         raise ProvenanceRefused(f'{target} 的 contributing attempts 重复或缺 accepted attempt')
     accepted_link = next(
         link for link in normalized_links if link['attempt_id'] == attempt_id)
+    if policy.get('protocol_version') == AGENT_PROTOCOL_VERSION:
+        validate_checkpoint_model_identity(
+            _materialized_profile_dict(
+                policy.get('profile'),
+                label='历史 Stage2 agent request policy'),
+            checkpoint_model=model,
+            actual_model=accepted_link.get('model'),
+            actual_is_ledger=True,
+        )
+    elif accepted_link.get('model') != model:
+        raise ProvenanceRefused(f'{target} 的 accepted model 与封存 identity 不闭合')
     if (accepted_link.get('request_fingerprint') != fingerprint
-            or accepted_link.get('model') != model
             or accepted_link.get('response_sha256') != ledger_response_sha):
         raise ProvenanceRefused(f'{target} 的 accepted attempt 与封存 identity 不闭合')
     _validate_recovery_request_binding(

@@ -68,7 +68,9 @@ def _start(*, session_run_id: str = 'session-1', ts: int = 10,
 def _turn(*, session_run_id: str = 'session-1', turn_index: int = 1,
           ts: int = 20, prompt_sha256: str = _SHA_C,
           schema_sha256: str = _SHA_D,
-          attempt_id: str | None = None) -> A.AgentSessionEvent:
+          attempt_id: str | None = None,
+          actual_model: str | None = 'gpt-5.6-sol-2026-08-20',
+          actual_effort: str | None = 'high') -> A.AgentSessionEvent:
     return A.AgentSessionEvent(
         session_run_id=session_run_id,
         parent_run_id='commander-1',
@@ -88,9 +90,9 @@ def _turn(*, session_run_id: str = 'session-1', turn_index: int = 1,
         turn_index=turn_index,
         attempt_id=attempt_id or f'attempt-{turn_index}',
         requested_model='gpt-5.6-sol',
-        actual_model='gpt-5.6-sol-2026-08-20',
+        actual_model=actual_model,
         requested_effort='max',
-        actual_effort='high',
+        actual_effort=actual_effort,
         cli_version='codex-cli/1.2.3',
         protocol_version='agent-session/v1',
         start_code_version='code-start',
@@ -146,7 +148,8 @@ def _end(*, session_run_id: str = 'session-1', ts: int = 30,
 
 def _acceptance(*, attempt_id: str = 'attempt-1', turn_index: int = 1,
                 prompt_sha256: str = _SHA_C,
-                schema_sha256: str = _SHA_D) -> dict[str, object]:
+                schema_sha256: str = _SHA_D,
+                model: str = 'gpt-5.6-sol-2026-08-20') -> dict[str, object]:
     return {
         'session_run_id': 'session-1',
         'attempt_id': attempt_id,
@@ -159,7 +162,7 @@ def _acceptance(*, attempt_id: str = 'attempt-1', turn_index: int = 1,
             'reasoning_effort': 'max',
             'execution_mode': 'standard',
         },
-        'model': 'gpt-5.6-sol-2026-08-20',
+        'model': model,
         'accepted_prompt_sha256': prompt_sha256,
         'accepted_schema_sha256': schema_sha256,
     }
@@ -469,11 +472,12 @@ def test_current_wire_cannot_use_legacy_missing_field_rules():
 
 def test_finish_restored_session_is_idempotent_and_rejects_conflicting_end(tmp_path):
     A.append_event(tmp_path, _start())
-    A.append_event(tmp_path, _turn())
+    A.append_event(tmp_path, _turn(
+        actual_model='gpt-5.6-sol', actual_effort='max'))
 
     assert A.finish_restored_session(
         tmp_path,
-        _acceptance(),
+        _acceptance(model='gpt-5.6-sol'),
         process_state='ok',
         delivery_state='blocked',
         error_kind='artifact_validation',
@@ -481,7 +485,7 @@ def test_finish_restored_session_is_idempotent_and_rejects_conflicting_end(tmp_p
     ) is True
     assert A.finish_restored_session(
         tmp_path,
-        _acceptance(),
+        _acceptance(model='gpt-5.6-sol'),
         process_state='ok',
         delivery_state='blocked',
         error_kind='artifact_validation',
@@ -491,18 +495,18 @@ def test_finish_restored_session_is_idempotent_and_rejects_conflicting_end(tmp_p
     events = A.read_events(tmp_path)
     assert [event.kind for event in events] == ['started', 'turn', 'ended']
     assert events[-1].provider_session_id == 'provider-thread-99/abc'
-    assert events[-1].actual_model == 'gpt-5.6-sol-2026-08-20'
+    assert events[-1].actual_model == 'gpt-5.6-sol'
     with pytest.raises(ValueError, match='冲突 ended'):
         A.finish_restored_session(
             tmp_path,
-            _acceptance(),
+            _acceptance(model='gpt-5.6-sol'),
             process_state='ok',
             delivery_state='delivered',
             end_code_version='code-start',
         )
     assert A.finish_restored_session(
         tmp_path,
-        _acceptance(),
+        _acceptance(model='gpt-5.6-sol'),
         process_state='ok',
         delivery_state='delivered',
         end_code_version='code-start',
@@ -514,9 +518,10 @@ def test_finish_restored_session_is_idempotent_and_rejects_conflicting_end(tmp_p
 
 def test_finish_restored_session_requires_acceptance_to_match_real_turn(tmp_path):
     A.append_event(tmp_path, _start())
-    A.append_event(tmp_path, _turn())
+    A.append_event(tmp_path, _turn(
+        actual_model='gpt-5.6-sol', actual_effort='max'))
 
-    bad = _acceptance()
+    bad = _acceptance(model='gpt-5.6-sol')
     bad['provider_session_id'] = 'made-up-provider-session'
     with pytest.raises(ValueError, match='turn/provider session'):
         A.finish_restored_session(

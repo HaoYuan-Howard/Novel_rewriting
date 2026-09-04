@@ -121,7 +121,7 @@ class _Driver(AgentDriver):
             session_id=self.session_id,
             content=json.dumps(
                 {'blueprints': [response]}, ensure_ascii=False),
-            model='gpt-5.6-sol', actual_reasoning_effort='high',
+            model=None, actual_reasoning_effort='high',
             usage=AgentUsage(
                 prompt_tokens=100, completion_tokens=20, reasoning_tokens=10,
                 total_tokens=120),

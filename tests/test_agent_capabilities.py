@@ -10,7 +10,8 @@ import pytest
 from pydantic import ValidationError
 
 from contracts.invariants import (
-    AGENT_EXECUTOR_NODES, NODES, AgentAvailability, AgentDriver, AgentRole,
+    AGENT_EXECUTOR_NODES, NODES, AgentAvailability, AgentDriver,
+    AgentModelEvidence, AgentRole,
 )
 from contracts.schema.orchestration import (
     AgentExecutorBackend, AgentProfile, LegacyExecutorBackend, LegacyLlmProfile,
@@ -52,6 +53,12 @@ def test_registry_publishes_exact_ids_labels_and_model_specific_options():
     }
     assert capabilities.provider_for_driver('claude-code') == 'anthropic'
     assert capabilities.provider_for_driver('codex') == 'openai'
+    assert set(get_args(AgentModelEvidence)) == {
+        'provider-reported', 'driver-enforced',
+    }
+    assert capabilities.unreported_model_evidence_for_driver('codex') \
+        == 'driver-enforced'
+    assert capabilities.unreported_model_evidence_for_driver('claude-code') is None
     assert all(set(driver.roles) == set(get_args(AgentRole))
                for driver in drivers.values())
     assert set(get_args(AgentAvailability)) == {

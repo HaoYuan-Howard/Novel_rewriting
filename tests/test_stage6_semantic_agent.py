@@ -120,7 +120,7 @@ class _Driver(AgentDriver):
         return AgentTurn(
             session_id=self.session_id,
             content=self.responses.pop(0),
-            model='gpt-5.6-sol', actual_reasoning_effort='high',
+            model=None, actual_reasoning_effort=None,
             usage=AgentUsage(prompt_tokens=20, completion_tokens=3),
             turn_count=1,
         )

@@ -46,7 +46,10 @@ Stage5/6/7 都调用 `novel.prov.rules_fingerprint(stage)`；指纹覆盖 `Rule`
 存量产物保持同一轴；`adopted_models` 回答「真正进入这份产物的响应由谁生成」。
 Flash 内容采样或可重试传输耗尽后可能由 Pro 兜底；若只记 `model=flash`，Pro 结果就会
 被静默标成 Flash。逐章/多候选聚合产物还可能同时采纳两种模型，所以后一格必须是集合，
-不能用单值覆盖。现役 producer 从 accepted attempt → ledger 行精确反查，拿不到即拒绝落盘；
+不能用单值覆盖。现役 producer 从 accepted attempt → checkpoint/session/ledger 的独立证据闭环反查，
+拿不到即拒绝落盘；provider/CLI 回显 actual 时必须与请求精确相等，公开结果协议未回显时也只能走
+capability registry 明确登记、带 CLI 版本的 `driver-enforced` 单模型无 fallback 证据。后一种情况的
+session/ledger 继续保留 `null` / `unknown`，不能拿 adopted identity 倒填 actual；
 模型兜底落地前的旧产物缺该字段时，才按当时不存在混合模型链的版本边界沿用 `model`。
 
 0 成本节点的两格都必须是**键不在**，不是 `null`。

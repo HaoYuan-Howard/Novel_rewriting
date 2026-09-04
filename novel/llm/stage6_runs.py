@@ -31,6 +31,9 @@ from pydantic import BaseModel, ValidationError
 from contracts.schema.orchestration import AgentProfile
 from novel import agent_session_audit, paths, prov
 from novel.agent_capabilities import validate_profile
+from novel.agent_model_identity import (
+    resolve_ledger_model_identity, validate_checkpoint_model_identity,
+)
 from novel.agents.base import render_structured_agent_stdin_bytes
 from novel.agents.session_client import (
     SESSION_PROTOCOL_VERSION, SessionAgentClient,
@@ -630,6 +633,13 @@ def _validate_session_turn(
     }
     if actual_start != expected_start:
         raise ProvenanceRefused(f'{purpose}: started 事件与当前 subject 漂移')
+    model_identity = validate_checkpoint_model_identity(
+        profile,
+        checkpoint_model=acceptance.get('model'),
+        actual_model=turn.actual_model,
+        cli_version=turn.cli_version,
+        require_driver_version=True,
+    )
     expected_turn = {
         'wire_version': agent_session_audit.SESSION_AUDIT_WIRE_VERSION,
         'session_run_id': acceptance.get('session_run_id'),
@@ -641,7 +651,7 @@ def _validate_session_turn(
         'turn_index': acceptance.get('accepted_turn_index'),
         'attempt_id': attempt_id,
         'requested_model': profile.get('model'),
-        'actual_model': acceptance.get('model'),
+        'actual_model': model_identity.actual_model,
         'requested_effort': profile.get('reasoning_effort'),
         'protocol_version': SESSION_PROTOCOL_VERSION,
         'start_code_version': ctx.code,
@@ -784,6 +794,7 @@ def _validate_acceptance(
                 or link.get('max_tokens') is not None):
             raise ProvenanceRefused(
                 f'{purpose}: attempt={aid} 混入 legacy thinking/provider max_tokens')
+        resolve_ledger_model_identity(profile, link.get('model'))
         normalized_links.append(dict(link))
         attempt_ids.append(aid)
         fingerprints.append(fingerprint)
@@ -809,8 +820,13 @@ def _validate_acceptance(
             raise ProvenanceRefused(f'{purpose}: attempt={aid} 与成本账不闭合')
     accepted_link = next(
         row for row in normalized_links if row['attempt_id'] == attempt_id)
+    validate_checkpoint_model_identity(
+        profile,
+        checkpoint_model=model,
+        actual_model=accepted_link.get('model'),
+        actual_is_ledger=True,
+    )
     if (accepted_link.get('request_fingerprint') != request_fingerprint
-            or accepted_link.get('model') != model
             or accepted_link.get('response_sha256') != response_sha):
         raise ProvenanceRefused(f'{purpose}: accepted attempt 与成本账响应不闭合')
     return {
@@ -918,15 +934,22 @@ def _validate_checkpoint_record(
                 or not _is_attempt_id(link.get('attempt_id'))
                 or not _is_sha256(link.get('request_fingerprint'))):
             raise ArtifactUnreadable(f'{path} 的 attempt_links 身份不完整')
+        resolve_ledger_model_identity(profile, link.get('model'))
         identities.append(dict(link))
     accepted = [row for row in identities if row['attempt_id'] == attempt_id]
     expected_recovery = sorted(
         str(row['attempt_id']) for row in identities
         if row['attempt_id'] != attempt_id)
+    if len(accepted) == 1:
+        validate_checkpoint_model_identity(
+            profile,
+            checkpoint_model=record.get('model'),
+            actual_model=accepted[0].get('model'),
+            actual_is_ledger=True,
+        )
     if (len(accepted) != 1
             or accepted[0].get('request_fingerprint')
             != record.get('request_fingerprint')
-            or accepted[0].get('model') != record.get('model')
             or accepted[0].get('response_sha256')
             != record.get('ledger_response_sha256')
             or recovery != expected_recovery
@@ -1150,11 +1173,16 @@ def _validate_commit_state(ctx: Any, target: Path) -> dict[str, Any]:
             ctx.novel_dir, ctx.run_id, str(role))
         checkpoint = _validate_checkpoint_record(
             ctx, checkpoint_path, _read_json(checkpoint_path), run_sha=run_sha)
+        validate_checkpoint_model_identity(
+            checkpoint.get('profile'),
+            checkpoint_model=checkpoint.get('model'),
+            actual_model=identity.get('model'),
+            actual_is_ledger=True,
+        )
         if (checkpoint.get('attempt_id') != attempt_id
                 or checkpoint.get('purpose') != row.get('purpose')
                 or checkpoint.get('request_fingerprint')
                 != identity.get('request_fingerprint')
-                or checkpoint.get('model') != identity.get('model')
                 or checkpoint.get('ledger_response_sha256')
                 != identity.get('response_sha256')):
             raise ProvenanceRefused(
@@ -1319,6 +1347,18 @@ def prepare_commit(
         identity = ctx.ledger.request_identity_for_attempt(attempt_id)
         if set(identity) != _LEDGER_IDENTITY_FIELDS:
             raise ProvenanceRefused(f'{purpose}: ledger 请求身份字段漂移')
+        validate_checkpoint_model_identity(
+            checkpoint.get('profile'),
+            checkpoint_model=checkpoint.get('model'),
+            actual_model=identity.get('model'),
+            actual_is_ledger=True,
+        )
+        if (checkpoint.get('request_fingerprint')
+                != identity.get('request_fingerprint')
+                or checkpoint.get('ledger_response_sha256')
+                != identity.get('response_sha256')):
+            raise ProvenanceRefused(
+                f'{purpose}: checkpoint 与当前 ledger 响应身份不闭合')
         rows.append({
             'role': role, 'purpose': purpose, 'attempt_id': attempt_id,
             'request_identity': identity,

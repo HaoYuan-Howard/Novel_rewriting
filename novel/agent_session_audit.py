@@ -39,6 +39,9 @@ from contracts.invariants import (
 )
 from contracts.schema.orchestration import AgentProfile
 from novel import run_identity
+from novel.agent_model_identity import (
+    AgentModelIdentityRefused, validate_checkpoint_model_identity,
+)
 from novel.appendlog import (
     append_line_under_process_lock, process_append_lock,
 )
@@ -798,7 +801,8 @@ def finish_restored_session(
     checkpoint 恢复刻意不会伪造一条仍可 resume 的 provider session，因此调用方
     往往没有旧 ``SessionAgentClient`` 对象可调 ``finish``。但正式提交或终态拒稿
     已完成后，那条旧会话仍必须闭合。这里用 acceptance 只定位并复核盘上真实 turn；
-    不从 checkpoint 倒推模型、effort、prompt 或 provider session。
+    不从 checkpoint 倒推 actual、effort、prompt 或 provider session；模型采用
+    身份按与首跑相同的 driver capability 证据重算。
 
     返回 ``True`` 表示本次追加了 ended，``False`` 表示盘上已有终态。
     ``error_kind`` 是那次先落盘时的原因快照，不因后续恢复观察而改写。默认要求
@@ -856,8 +860,18 @@ def finish_restored_session(
         if (profile is None
                 or acceptance.get('profile') != profile.model_dump(mode='json')):
             raise ValueError('恢复会话 acceptance profile 与 session audit 不闭合')
-        if acceptance.get('model') != accepted_turn.actual_model:
-            raise ValueError('恢复会话 acceptance actual model 与 session audit 不闭合')
+        try:
+            validate_checkpoint_model_identity(
+                profile,
+                checkpoint_model=acceptance.get('model'),
+                actual_model=accepted_turn.actual_model,
+                cli_version=accepted_turn.cli_version,
+                require_driver_version=True,
+            )
+        except AgentModelIdentityRefused as exc:
+            raise ValueError(
+                '恢复会话 acceptance adopted model 与 session audit '
+                f'证据不闭合：{exc}') from exc
         if (acceptance.get('accepted_prompt_sha256')
                 != accepted_turn.prompt_sha256
                 or acceptance.get('accepted_schema_sha256')

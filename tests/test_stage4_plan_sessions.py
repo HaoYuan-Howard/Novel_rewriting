@@ -56,7 +56,7 @@ class _ChapterDriver:
             content=json.dumps(
                 self.payloads[min(self.calls, len(self.payloads)) - 1],
                 ensure_ascii=False, sort_keys=True, separators=(',', ':')),
-            model='gpt-5.6-sol', actual_reasoning_effort='high',
+            model=None, actual_reasoning_effort=None,
             usage=AgentUsage(prompt_tokens=10, completion_tokens=5),
             turn_count=1)
 

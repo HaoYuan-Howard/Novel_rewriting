@@ -56,7 +56,9 @@ class _Driver(AgentDriver):
         return AgentTurn(
             session_id='provider-stage4-design',
             content=content,
-            model='gpt-5.6-sol',
+            # 对齐 Codex 0.148.0 公开 JSONL：requested 已在 argv/profile，
+            # actual 并不回显；恢复与 commit 必须仍保留 ledger unknown。
+            model=None,
             actual_reasoning_effort='high',
             usage=AgentUsage(prompt_tokens=7, completion_tokens=2),
             # executor-isolated 每次 CLI 调用只允许返回一个 turn。

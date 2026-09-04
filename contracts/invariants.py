@@ -227,6 +227,12 @@ AgentRole = Literal['commander', 'executor']
 AgentAvailability = Literal['ready', 'missing', 'unknown', 'unauthenticated']
 AgentProfileSettingsState = Literal['unset', 'configured', 'unreadable']
 
+#: accepted checkpoint 采用模型身份的两种证据来源。``provider-reported``
+#: 表示 CLI/provider 明确回显且与请求精确相等；``driver-enforced`` 表示该
+#: driver 的受测 argv 把唯一模型显式钉死、禁止 fallback，但公开结果协议没有
+#: actual model 字段。后者绝不允许把 ledger/session 的 unknown 改写成已知。
+AgentModelEvidence = Literal['provider-reported', 'driver-enforced']
+
 #: executor 是本地 agent CLI 还是直接 LLM API。这里只冻结稳定 provider id；
 #: provider → model / effort / thinking 的组合能力仍由动态 capability registry 发布，
 #: 不能把四张平面枚举交给浏览器任意做笛卡尔积。新增 GLM 等 legacy provider 时，

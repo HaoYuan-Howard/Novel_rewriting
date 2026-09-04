@@ -205,8 +205,11 @@ def test_ingest_conflicts_and_unprocessable_content_have_different_codes():
 
 def test_structural_refusals_are_5xx_because_they_are_our_bug():
     """`RefusedByStructure` 那一族是**代码自相矛盾**，不是数据问题 ⇒ 5xx。"""
-    for exc in (E.ProvenanceRefused('x'), E.AccountingKeyUnregistered('x'),
-                E.ByteFormRefused('x'), E.ValueDomainRefused('x')):
+    for exc in (
+            E.ProvenanceRefused('x'),
+            E.AgentModelIdentityRefused('x', loc='model', kind='test'),
+            E.AccountingKeyUnregistered('x'),
+            E.ByteFormRefused('x'), E.ValueDomainRefused('x')):
         assert H.status_of(exc) == 500, type(exc).__name__
 
 

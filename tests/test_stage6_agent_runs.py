@@ -48,7 +48,7 @@ class _Driver(AgentDriver):
     def _turn(self) -> AgentTurn:
         return AgentTurn(
             session_id=self.session_id, content=self.content,
-            model='gpt-5.6-sol', actual_reasoning_effort='high',
+            model=None, actual_reasoning_effort='high',
             usage=AgentUsage(
                 prompt_tokens=10,
                 prompt_cache_hit_tokens=self.cache_hit_tokens,

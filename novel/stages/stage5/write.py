@@ -959,7 +959,7 @@ def _accepted_model(source: _ChapterResponseSource, purpose: str) -> str:
             value = models[0]
     if not isinstance(value, str) or not value:
         raise ProvenanceRefused(
-            f'{purpose}: candidate 已通过 wire/schema，但缺唯一 actual model')
+            f'{purpose}: candidate 已通过 wire/schema，但缺唯一 adopted model')
     return value
 
 
@@ -1301,7 +1301,7 @@ def _assert_chapter_evaluation_identity(
             f'Stage5 第 {prepared.ordinal} 章评估后 requested model 漂移')
     if _accepted_model(source, evaluation.accepted_purpose) != evaluation.adopted_model:
         raise ProvenanceRefused(
-            f'Stage5 第 {prepared.ordinal} 章评估后 actual model 漂移')
+            f'Stage5 第 {prepared.ordinal} 章评估后 adopted model 漂移')
     if _accepted_attempt(source, evaluation.accepted_purpose) != evaluation.source_attempt_id:
         raise ProvenanceRefused(
             f'Stage5 第 {prepared.ordinal} 章评估后 accepted attempt 漂移')

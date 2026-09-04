@@ -19,8 +19,8 @@ from dataclasses import dataclass
 from typing import Callable
 
 from contracts.invariants import (
-    AGENT_EXECUTOR_NODES,
-    AgentAvailability, AgentDriver, AgentReasoningEffort, AgentRole,
+    AGENT_EXECUTOR_NODES, AgentAvailability, AgentDriver,
+    AgentModelEvidence, AgentReasoningEffort, AgentRole,
 )
 from contracts.schema.api import (
     AgentCapabilitiesResponse, AgentDriverCapability, AgentModelCapability,
@@ -59,6 +59,9 @@ class _DriverSpec:
     executable: str
     roles: tuple[AgentRole, ...]
     models: tuple[_ModelSpec, ...]
+    # 只有公开结果协议确实不提供 actual model、且本驱动用受测的单模型
+    # 无 fallback argv 强制请求时才登记。None 表示缺 actual 必须关闭式拒绝。
+    unreported_model_evidence: AgentModelEvidence | None = None
 
 
 @dataclass(frozen=True)
@@ -104,6 +107,10 @@ _DRIVERS: tuple[_DriverSpec, ...] = (
                 reasoning_efforts=('none', 'low', 'medium', 'high', 'xhigh', 'max'),
             ),
         ),
+        # Codex ``exec --json`` 当前只回 thread/turn/usage，不回实际模型；
+        # ``CodexDriver._argv`` 同时显式传唯一 ``--model``、strict config，且
+        # 没有 model chain/fallback。actual 仍在 session/ledger 中保持 unknown。
+        unreported_model_evidence='driver-enforced',
     ),
 )
 
@@ -120,6 +127,19 @@ def provider_for_driver(driver: AgentDriver) -> str:
     if spec is None:  # Pydantic 正常入口已会挡住；保留给内部关闭式调用。
         raise AgentProfileRefused(f'未知 agent driver {driver!r}')
     return spec.provider
+
+
+def unreported_model_evidence_for_driver(
+        driver: AgentDriver) -> AgentModelEvidence | None:
+    """返回 driver 在 actual model 未回显时登记的关闭式证据策略。
+
+    这是运行、恢复与提交验证共用的唯一判定口；调用方不得按模型名前缀或
+    provider 猜测。未登记 driver 或未登记策略都不能接受 unknown actual。
+    """
+    spec = _DRIVER_BY_ID.get(driver)
+    if spec is None:
+        raise AgentProfileRefused(f'未知 agent driver {driver!r}')
+    return spec.unreported_model_evidence
 
 
 def _first_line(stdout: str | None, stderr: str | None) -> str | None:

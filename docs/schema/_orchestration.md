@@ -844,7 +844,7 @@ wire v2 在 v1 字段集之上只新增 ended 事件的提交诊断四元组，�
 |---|---|
 | 事件 | `kind=started / turn / ended`。turn 必须有正整数 `turn_index`、`attempt_id` 与 `provider_session_id`；started / turn 绑定 prompt 与 schema hash；ended 显式封存两条终态轴 |
 | 身份 | `role=commander / executor`；commander 不带 node/chapter，其 `parent_run_id` 指外层 AgentRun；executor 的 node 只接受 `AGENT_EXECUTOR_NODES`，其 `parent_run_id` 指 checkpoint/ledger 共用的 producer run。整书归因经 AgentRun started 事件登记的 epoch `session_run_id` 集合闭合，不按时间猜。新写入必须有 subject SHA-256 与已解析 `AgentProfile`，requested model/effort 必须与 profile 相等 |
-| 实际执行 | requested 与 actual model/effort 分格，CLI 与 protocol 版本分格；每个新事件带启动代码版本，ended 另带结束版本，代码漂移时不能声明 delivered。缺失事实留 `null` / `unknown`，不能把 requested 冒充 actual |
+| 实际执行 | requested 与 actual model/effort 分格，CLI 与 protocol 版本分格；每个新事件带启动代码版本，ended 另带结束版本，代码漂移时不能声明 delivered。缺失事实留 `null` / `unknown`，不能把 requested 冒充 actual。checkpoint 的 adopted model 是另一格：actual 非空时须精确相等；actual 缺失时只接受 capability registry 登记的 `driver-enforced` 单模型无 fallback argv，并要求 turn 留有 CLI 版本 |
 | 成本 | `usage` 的 prompt、cache hit/miss、completion、reasoning、total token 均可为 `null`；`null` 是未观测，不是 0 |
 | 终态 | `process_state=ok / failed / stopped / unknown` 与 `delivery_state=delivered / blocked / failed / unknown` 正交；进程退出不推出产物已交付 |
 | 提交诊断 | ended 四元组只描述正式提交史：`delivery_attempts` ≥ 1 为发生过提交尝试；`same_run_recovered=true` 必须 `delivery_attempts≥2`；`first_failure_phase` 属于 `STAGE5_COMMIT_PHASES`；`first_failure_detail` 经生产侧截断脱敏（≤512、无控制字符）。四者皆可 `null`（未记录/未尝试），不得由其他状态倒推 |
@@ -863,7 +863,7 @@ wire v2 在 v1 字段集之上只新增 ended 事件的提交诊断四元组，�
 没有 discriminator 的旧 run/checkpoint 继续走 legacy v1 验证，不按新协议补字段。
 
 一份 agent checkpoint 只在当前 schema、dynamic validator 与逐章 scope 已通过后写入，保存
-`acceptance_protocol=node-executor/v1` 以及 accepted attempt/fingerprint/actual model、accepted stdout、
+`acceptance_protocol=node-executor/v1` 以及 accepted attempt/fingerprint/evidence-backed adopted model、accepted stdout、
 normalized text、resolved profile、logical subject、session/provider session/turn、prompt/schema SHA、
 exact accepted request、全部 attempt links、recovery attempts 与 `salvaged=false`。同份记录另封存当前
 parsed payload 与 typed payload 及各自 SHA。accepted request 精确绑定 node/chapter/purpose、system/user/
@@ -873,6 +873,10 @@ legacy thinking 或 provider max tokens。
 写入与恢复都必须把 accepted attempt 唯一联到 `_service/agent_sessions.jsonl` 的 current wire
 `started + turn`，逐项核 parent run、node/chapter、profile、subject、provider session、turn index、
 prompt/schema 与 requested/actual model/effort，再与 ledger 的 attempt/fingerprint/response SHA 闭合。
+模型证据统一由 `novel/agent_model_identity.py` 重算：回显 actual 必须精确等于 profile；未回显只允许
+registry 登记的 `driver-enforced`，且该 session turn 必须有 CLI 版本。后一种 checkpoint 的 `model`
+记录 adopted identity，但 session actual 仍为 `null`、ledger model 仍为 `unknown`；恢复、历史采用、
+聚合和 commit 均不得把它们倒填为已回显。未登记 driver、缺 CLI 版本或任何非空冲突一律拒绝。
 恢复会认领 prior attempts，但不 probe/start、不新增 wire，也不把旧 provider session 伪造成可 resume
 的 live client；联合 HARD 后确需修订时另开新 session。checkpoint 首次写入不可覆盖，最终整书 compile、
 联合 HARD、正式 artifact/`.INVALID`、commit journal 与 readback 终验仍只由 producer 代码决定。

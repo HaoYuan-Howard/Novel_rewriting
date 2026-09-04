@@ -81,7 +81,11 @@ def _usage_row(raw: Any) -> AgentUsage:
     cache_hit = integer(raw.get('cached_input_tokens'))
     completion = integer(raw.get('output_tokens'))
     detail = raw.get('output_tokens_details')
-    reasoning = integer(raw.get('reasoning_tokens'))
+    # Codex CLI 0.148.0 的公开 ``turn.completed.usage`` 把这格命名为
+    # ``reasoning_output_tokens``；保留旧/嵌套名字只为兼容已见协议版本。
+    reasoning = integer(raw.get('reasoning_output_tokens'))
+    if reasoning is None:
+        reasoning = integer(raw.get('reasoning_tokens'))
     if reasoning is None and isinstance(detail, Mapping):
         reasoning = integer(detail.get('reasoning_tokens'))
         if reasoning is None:

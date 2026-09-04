@@ -420,7 +420,7 @@ def test_chapter_progress_and_agent_checkpoint_are_exact(tmp_path):
     }
 
 
-def test_missing_actual_model_is_not_backfilled_from_requested_profile(tmp_path):
+def test_codex_missing_actual_model_uses_driver_evidence_without_backfill(tmp_path):
     class MissingModelDriver(_FakeDriver):
         def _turn(self) -> AgentTurn:
             return AgentTurn(
@@ -433,19 +433,95 @@ def test_missing_actual_model_is_not_backfilled_from_requested_profile(tmp_path)
     driver = MissingModelDriver(['{"value":1}'])
     client = SessionAgentClient(ctx, _profile(), driver)
 
-    with pytest.raises(LlmFailed, match='resolved profile'):
-        client.ask_json('SYS', 'subject', model_cls=_Answer,
-                        purpose='stage2.global')
-    client.finish(process_state='failed', delivery_state='failed',
-                  error_kind='missing_actual_model')
+    result = client.ask_json(
+        'SYS', 'subject', model_cls=_Answer, purpose='stage2.global')
+    checkpoint = client.accepted_checkpoint('stage2.global')
+    client.finish(process_state='ok', delivery_state='delivered')
     client.close()
 
+    assert result.value == 1
     [row] = _rows(ledger_path(tmp_path))
     assert row['request_model'] == 'gpt-5.6-sol'
     assert row['model'] == 'unknown'
-    assert client.accepted_attempt('stage2.global') is None
+    assert checkpoint['model'] == 'gpt-5.6-sol'
+    assert client.accepted_model('stage2.global') == 'gpt-5.6-sol'
     sessions = agent_session_audit.fold(agent_session_audit.read_events(tmp_path))
     assert sessions[0].turns[0].actual_model is None
+
+    restarted = SessionAgentClient(
+        ctx, _profile(), MissingModelDriver([]))
+    restarted.restore_checkpoint_acceptance(
+        'stage2.global', checkpoint,
+        system='SYS', user='subject', max_tokens=64_000,
+        recovery_policy='stage2-global-v1')
+    assert restarted.accepted_model('stage2.global') == 'gpt-5.6-sol'
+    restarted.close()
+
+
+def test_unregistered_missing_actual_model_is_not_backfilled(tmp_path):
+    class MissingClaudeModelDriver(_ClaudeDriver):
+        def _turn(self) -> AgentTurn:
+            return AgentTurn(
+                session_id='provider-session-unknown-claude-model',
+                content=self.responses.pop(0), model=None,
+                actual_reasoning_effort=None, usage=AgentUsage(total_tokens=13),
+                turn_count=1)
+
+    profile = _claude_profile()
+    ctx = _ctx(tmp_path, profile=profile)
+    client = SessionAgentClient(
+        ctx, profile, MissingClaudeModelDriver(['{"value":1}']))
+
+    with pytest.raises(LlmFailed, match='resolved profile'):
+        client.ask_json(
+            'SYS', 'subject', model_cls=_Answer, purpose='stage2.global')
+    client.finish(
+        process_state='failed', delivery_state='failed',
+        error_kind='missing_actual_model')
+    client.close()
+
+    [row] = _rows(ledger_path(tmp_path))
+    assert row['request_model'] == 'claude-opus-5'
+    assert row['model'] == 'unknown'
+    assert client.accepted_attempt('stage2.global') is None
+    [session] = agent_session_audit.fold(
+        agent_session_audit.read_events(tmp_path))
+    assert session.turns[0].actual_model is None
+
+
+def test_driver_enforced_model_requires_cli_version_evidence(tmp_path):
+    class MissingModelDriver(_FakeDriver):
+        def probe(self) -> AgentProbe:
+            return AgentProbe(
+                driver=self.driver, provider=self.provider,
+                executable='fake-codex', available=True, version=None)
+
+        def _turn(self) -> AgentTurn:
+            return AgentTurn(
+                session_id='provider-session-unversioned-codex',
+                content=self.responses.pop(0), model=None,
+                actual_reasoning_effort=None, usage=AgentUsage(total_tokens=13),
+                turn_count=1)
+
+    ctx = _ctx(tmp_path)
+    client = SessionAgentClient(
+        ctx, _profile(), MissingModelDriver(['{"value":1}']))
+
+    with pytest.raises(LlmFailed, match='cli_version'):
+        client.ask_json(
+            'SYS', 'subject', model_cls=_Answer, purpose='stage2.global')
+    client.finish(
+        process_state='failed', delivery_state='failed',
+        error_kind='missing_cli_version')
+    client.close()
+
+    [row] = _rows(ledger_path(tmp_path))
+    assert row['request_model'] == 'gpt-5.6-sol' and row['model'] == 'unknown'
+    assert client.accepted_attempt('stage2.global') is None
+    [session] = agent_session_audit.fold(
+        agent_session_audit.read_events(tmp_path))
+    assert session.turns[0].actual_model is None
+    assert session.turns[0].cli_version is None
 
 
 def test_configuration_failure_before_spawn_does_not_increment_calls(tmp_path):
@@ -669,7 +745,7 @@ def test_phase5_recovery_policies_freeze_their_session_isolation(
         ('turn_count', 0),
     ],
 )
-def test_provider_metadata_must_match_profile_and_one_cli_turn(
+def test_provider_metadata_must_match_profile_and_invocation_contract(
         tmp_path, field, value):
     class MismatchDriver(_FakeDriver):
         def _turn(self) -> AgentTurn:
@@ -688,7 +764,7 @@ def test_provider_metadata_must_match_profile_and_one_cli_turn(
     client = SessionAgentClient(
         ctx, _profile(), MismatchDriver(['{"value":1}']))
 
-    with pytest.raises(LlmFailed, match='resolved profile/单调用单 turn'):
+    with pytest.raises(LlmFailed, match='resolved profile/单次调用元数据'):
         client.ask_json('SYS', 'subject', model_cls=_Answer,
                         purpose='stage2.global')
     assert client.accepted_attempt('stage2.global') is None
@@ -926,7 +1002,7 @@ def test_a_non_positive_turn_count_is_still_refused(tmp_path):
     ctx = _ctx(tmp_path)
     client = SessionAgentClient(ctx, _profile(), _ZeroTurnDriver(['{"value":1}']))
 
-    with pytest.raises(LlmFailed, match='单调用单 turn'):
+    with pytest.raises(LlmFailed, match='单次调用元数据'):
         client.ask_json('SYS', 'subject', model_cls=_Answer,
                         purpose='stage2.global')
     client.finish(process_state='failed', delivery_state='failed',

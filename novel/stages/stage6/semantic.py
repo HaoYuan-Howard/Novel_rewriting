@@ -971,7 +971,8 @@ def _adopted_models(
     models = tuple(sorted(set(source.accepted_models(*purposes))))
     if not models or any(not isinstance(model, str) or not model for model in models):
         raise ProvenanceRefused(
-            'stage6.semantic 双盲候选缺实际 accepted model，不能按 requested model 猜')
+            'stage6.semantic 双盲候选缺 evidence-backed adopted model，'
+            '不能仅凭 requested model 采用')
     return models
 
 

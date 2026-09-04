@@ -1855,7 +1855,7 @@ def _accepted_identity(
     models = tuple(sorted(set(source.accepted_models(ctx.node))))
     if not models or any(not isinstance(model, str) or not model for model in models):
         raise ProvenanceRefused(
-            f'{ctx.node}: 候选缺 actual accepted model，不能拿 requested 冒充')
+            f'{ctx.node}: 候选缺有证据的 adopted model，不能仅凭 requested 采用')
     return attempt_id, models
 
 
@@ -2492,7 +2492,7 @@ def _design_accepted_identity(
     models = tuple(sorted(set(source.accepted_models(*purposes))))
     if not models or any(not isinstance(model, str) or not model for model in models):
         raise ProvenanceRefused(
-            'stage4.design 候选缺 N+1 units 的 actual accepted model')
+            'stage4.design 候选缺 N+1 units 的 evidence-backed adopted model')
     return tuple(rows), models
 
 
@@ -5164,7 +5164,7 @@ class _PlanChapterAggregateSource:
     """把章级 session 池投影成 finalize 账机需要的聚合 source 视图。
 
     commit anchor 取最高 ``(revision, chapter_ordinal)`` 的最终采纳 unit；
-    ``accepted_models`` 则取**全部**采纳 unit 的实际模型并集。机械章没有
+    ``accepted_models`` 则取**全部**采纳 unit 的证据化 adopted model 并集。机械章没有
     attempt/model（0 wire），只进 unit lineage。
     """
 
@@ -5191,7 +5191,8 @@ class _PlanChapterAggregateSource:
 
     def accepted_models(self, purpose: str) -> tuple[str, ...]:
         if not self._anchor_models:
-            raise ProvenanceRefused('stage4.plan 章级聚合缺 actual accepted model')
+            raise ProvenanceRefused(
+                'stage4.plan 章级聚合缺 evidence-backed adopted model')
         return self._anchor_models
 
     def require_history_current(self) -> None:

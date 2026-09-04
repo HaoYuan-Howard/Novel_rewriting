@@ -26,10 +26,14 @@ from pydantic import BaseModel, ValidationError
 from contracts.schema.orchestration import AgentProfile
 from novel import agent_session_audit as session_audit, prov
 from novel.agent_capabilities import validate_profile
+from novel.agent_model_identity import (
+    AgentModelIdentityRefused, resolve_agent_model_identity,
+    resolve_ledger_model_identity, validate_checkpoint_model_identity,
+)
 from novel.agents import (
     AgentBusyError, AgentCommandError, AgentConfigurationError, AgentDriver,
     AgentError, AgentProbe, AgentRequest, AgentTurn, AgentUsage,
-    agent_delivery_protocol,
+    agent_delivery_protocol, render_structured_agent_stdin_bytes,
     validate_agent_output_schema,
 )
 from novel.config import DEFAULT_BACKOFF_BASE, DEFAULT_MAX_RETRIES
@@ -211,6 +215,32 @@ def validate_agent_session_request_binding(
             or not set(current_ids).issubset(set(link_ids))):
         raise ProvenanceRefused(
             f'{purpose}: turn/recovery/attempt_links 与 current session 不闭合')
+    linked_turns = [
+        event for event in events
+        if event.kind == 'turn' and event.attempt_id in set(link_ids)
+    ]
+    linked_turn_ids = [event.attempt_id for event in linked_turns]
+    if (len(linked_turns) != len(link_ids)
+            or set(linked_turn_ids) != set(link_ids)):
+        raise ProvenanceRefused(
+            f'{purpose}: attempt_links 没有逐项联到唯一 session turn')
+    for linked_turn in linked_turns:
+        if linked_turn.requested_model != profile.get('model'):
+            raise ProvenanceRefused(
+                f'{purpose}: session turn requested model 与 resolved profile 漂移')
+        try:
+            identity = resolve_agent_model_identity(
+                profile, linked_turn.actual_model,
+                cli_version=linked_turn.cli_version,
+                require_driver_version=True,
+            )
+        except AgentModelIdentityRefused as exc:
+            raise ProvenanceRefused(
+                f'{purpose}: session turn 模型证据不成立：{exc}') from exc
+        if linked_turn.attempt_id == accepted_attempt \
+                and acceptance.get('model') != identity.model:
+            raise ProvenanceRefused(
+                f'{purpose}: checkpoint adopted model 与 accepted session turn 不闭合')
     prior_ids = set(link_ids) - set(current_ids)
     if len(prior_ids) != first_index - 1:
         raise ProvenanceRefused(
@@ -519,10 +549,11 @@ class SessionAgentClient:
         return self._accepted.get(purpose)
 
     def accepted_model(self, purpose: str) -> str | None:
-        attempt_id = self._accepted.get(purpose)
-        if attempt_id is None:
+        if self._accepted.get(purpose) is None:
             return None
-        return self.ctx.ledger.model_for_attempt(attempt_id)
+        checkpoint = self._accepted_checkpoint.get(purpose)
+        model = None if checkpoint is None else checkpoint.get('model')
+        return model if isinstance(model, str) and model else None
 
     def accepted_models(self, *purposes: str) -> tuple[str, ...]:
         selected: Sequence[str] = purposes or tuple(self._accepted)
@@ -1108,15 +1139,23 @@ class SessionAgentClient:
                 f'{self.ctx.node}: provider session {turn.session_id!r} 已属于 '
                 f'logical session {conflict_owner!r}；拒绝恢复时偷接旧 session')
         metadata_failure: tuple[str, str] | None = None
-        if turn.model != self.profile.model:
-            # 命令显式带 requested model 仍不等于 provider 确实用了它。缺失与换模
-            # 都不能进入正式 provenance；精确相等是可恢复 checkpoint 的前提。
-            metadata_failure = ('actual_model', 'provider_metadata_mismatch')
-        elif (turn.actual_reasoning_effort is not None
+        try:
+            # actual 回显存在时仍必须精确相等；不存在时只允许 capability registry
+            # 明确登记的单模型、无 fallback driver。requested 永不倒填 actual。
+            resolve_agent_model_identity(
+                self.profile, turn.model,
+                cli_version=self._cli_version,
+                require_driver_version=True,
+            )
+        except AgentModelIdentityRefused as exc:
+            metadata_failure = (exc.loc, exc.kind)
+        if (metadata_failure is None
+                and turn.actual_reasoning_effort is not None
               and turn.actual_reasoning_effort != self.profile.reasoning_effort):
             metadata_failure = (
                 'actual_reasoning_effort', 'provider_metadata_mismatch')
-        elif turn.turn_count is not None and turn.turn_count < 1:
+        elif metadata_failure is None \
+                and turn.turn_count is not None and turn.turn_count < 1:
             # AgentTurn 表示**这一次 CLI 调用**的结果，不是 provider session 累计轮数。
             # 累计值会让一次 ledger attempt 与多轮模型调用静默合并，成本账无法闭合。
             # ⚠⚠ **这里曾经写的是 `!= 1`，而那个值在本仓的协议下永远不可能出现。**
@@ -1144,7 +1183,7 @@ class SessionAgentClient:
                 }], request_mode='agent_session_resume', chapter=self.chapter,
             )
             raise LlmFailed(
-                f'{self.ctx.node}: provider 回显与 resolved profile/单调用单 turn '
+                f'{self.ctx.node}: provider 回显与 resolved profile/单次调用元数据 '
                 f'契约不一致（{metadata_failure[0]}）；拒绝铸 accepted checkpoint')
         return turn, attempt_id
 
@@ -1154,9 +1193,11 @@ class SessionAgentClient:
     ) -> None:
         """冻结 agent stdout、session 与 ledger 的完整 checkpoint 联结。"""
         accepted = self.ctx.ledger.request_identity_for_attempt(attempt_id)
-        if accepted.get('model') in (None, '', 'unknown'):
-            raise ProvenanceRefused(
-                f'{purpose}: accepted attempt 缺实际响应模型，不能铸 checkpoint')
+        resolved_model = resolve_ledger_model_identity(
+            self.profile, accepted.get('model'),
+            cli_version=self._cli_version,
+            require_driver_version=True,
+        )
         current_attempts = [
             item_attempt for item_purpose, item_attempt
             in self._logical_session_attempts
@@ -1190,7 +1231,9 @@ class SessionAgentClient:
             'acceptance_protocol': SESSION_PROTOCOL_VERSION,
             'attempt_id': attempt_id,
             'request_fingerprint': accepted['request_fingerprint'],
-            'model': accepted['model'],
+            # checkpoint.model 是 evidence-backed adopted identity；独立的
+            # ledger/session actual 仍保持 provider 回显值或 unknown/null。
+            'model': resolved_model.model,
             'ledger_response_sha256': accepted['response_sha256'],
             'accepted_channel': 'content',
             'accepted_text': turn.content,
@@ -1300,17 +1343,41 @@ class SessionAgentClient:
                 f'{purpose}: checkpoint logical subject SHA-256 不闭合')
         attempt_id = str(record.get('attempt_id') or '')
         accepted = self.ctx.ledger.request_identity_for_attempt(attempt_id)
+        try:
+            events = session_audit.read_events(self.ctx.novel_dir.parent)
+            restored_session = validate_agent_session_request_binding(
+                events, record,
+                purpose=purpose,
+                profile=self.profile.model_dump(mode='json'),
+                original_prompt_sha256=_sha256_bytes(
+                    render_structured_agent_stdin_bytes(
+                        system, user, driver=self.profile.driver)),
+                original_schema_sha256=str(schema_sha),
+            )
+        except (OSError, UnicodeError, ValueError) as exc:
+            raise ProvenanceRefused(
+                f'{purpose}: checkpoint session 模型/请求证据不可验证：{exc}') from exc
+        accepted_turns = [
+            turn for turn in restored_session.turns
+            if turn.attempt_id == attempt_id
+        ]
+        if len(accepted_turns) != 1:
+            raise ProvenanceRefused(
+                f'{purpose}: checkpoint accepted attempt 缺唯一 session turn')
+        validate_checkpoint_model_identity(
+            self.profile,
+            checkpoint_model=record.get('model'),
+            actual_model=accepted.get('model'),
+            cli_version=accepted_turns[0].cli_version,
+            actual_is_ledger=True,
+            require_driver_version=True,
+        )
         if (record.get('request_fingerprint')
                 != accepted.get('request_fingerprint')
-                or record.get('model') != accepted.get('model')
                 or record.get('ledger_response_sha256')
                 != accepted.get('response_sha256')):
             raise ProvenanceRefused(
                 f'{purpose}: agent checkpoint accepted attempt 与成本账不闭合')
-        if accepted.get('model') != self.profile.model:
-            raise ProvenanceRefused(
-                f'{purpose}: checkpoint 实际响应模型与 resolved profile 漂移，'
-                '不能恢复 adoption')
         if (not isinstance(record.get('provider_session_id'), str)
                 or not record.get('provider_session_id')
                 or not isinstance(record.get('session_run_id'), str)
@@ -1344,6 +1411,8 @@ class SessionAgentClient:
                 raise ProvenanceRefused(
                     f'{purpose}: checkpoint attempt_links 与成本账不闭合')
             restored_attempts.add(restored_attempt)
+            resolve_ledger_model_identity(
+                self.profile, restored_link.get('model'))
             restored_links.append(restored_link)
         if attempt_id not in restored_attempts:
             raise ProvenanceRefused(

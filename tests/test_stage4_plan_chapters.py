@@ -183,7 +183,7 @@ def test_mixed_book_wires_only_the_ambiguous_chapter(
                         }],
                     },
                     ensure_ascii=False, sort_keys=True, separators=(',', ':')),
-                model='gpt-5.6-sol', actual_reasoning_effort='high',
+                model=None, actual_reasoning_effort=None,
                 usage=AgentUsage(prompt_tokens=10, completion_tokens=5),
                 turn_count=1)
 
@@ -422,7 +422,7 @@ class _ConcernDriver(AgentDriver):
             content=json.dumps(
                 self._payload, ensure_ascii=False, sort_keys=True,
                 separators=(',', ':')),
-            model='gpt-5.6-sol', actual_reasoning_effort='high',
+            model=None, actual_reasoning_effort=None,
             usage=AgentUsage(prompt_tokens=10, completion_tokens=5),
             turn_count=1)
 
@@ -686,7 +686,7 @@ def test_ambiguous_chapters_really_run_concurrently_and_aggregate_in_order(
                         'ambiguity_id': rows[0]['ambiguity_id'],
                         'stage_ref': rows[0]['candidates'][0],
                     }], 'binding_concerns': []}, ensure_ascii=False),
-                model='gpt-5.6-sol', actual_reasoning_effort='high',
+                model=None, actual_reasoning_effort=None,
                 usage=AgentUsage(prompt_tokens=10, completion_tokens=5),
                 turn_count=1)
 
@@ -772,7 +772,7 @@ class _DeliveryRecoveryDriver(AgentDriver):
             session_id=self.session_id,
             content=json.dumps(payload,
                 ensure_ascii=False, sort_keys=True, separators=(',', ':')),
-            model='gpt-5.6-sol', actual_reasoning_effort='high',
+            model=None, actual_reasoning_effort=None,
             usage=AgentUsage(prompt_tokens=10, completion_tokens=5),
             turn_count=1)
 
@@ -1073,7 +1073,7 @@ def test_dynamic_validator_tail_window_submit_and_same_run_zero_wire_resume(
                         'ambiguity_id': f'{1:016x}',
                         'stage_ref': 'b99_99',
                     }], 'binding_concerns': []}),
-                model='gpt-5.6-sol', actual_reasoning_effort='high',
+                model=None, actual_reasoning_effort=None,
                 usage=AgentUsage(prompt_tokens=10, completion_tokens=5),
                 turn_count=1)
 
@@ -1106,7 +1106,7 @@ def test_dynamic_validator_tail_window_submit_and_same_run_zero_wire_resume(
                         'ambiguity_id': f'{1:016x}',
                         'stage_ref': correct[1],
                     }], 'binding_concerns': []}),
-                model='gpt-5.6-sol', actual_reasoning_effort='high',
+                model=None, actual_reasoning_effort=None,
                 usage=AgentUsage(prompt_tokens=10, completion_tokens=5),
                 turn_count=1)
 
@@ -1293,7 +1293,7 @@ def test_b_owner_reasks_only_target_chapter_and_rewrites_anchor_checkpoint(
                         'ambiguity_id': row['ambiguity_id'],
                         'stage_ref': row['candidates'][0],
                     }], 'binding_concerns': []}),
-                model='gpt-5.6-sol', actual_reasoning_effort='high',
+                model=None, actual_reasoning_effort=None,
                 usage=AgentUsage(prompt_tokens=10, completion_tokens=5),
                 turn_count=1)
 

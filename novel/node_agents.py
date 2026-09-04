@@ -36,6 +36,9 @@ from contracts.schema.stage5 import ChapterResponse
 from contracts.schema.stage6 import Hook, HookSemanticReview
 from contracts.schema.stage7 import NameMap
 from novel import agent_session_audit, paths, prov
+from novel.agent_model_identity import (
+    resolve_ledger_model_identity, validate_checkpoint_model_identity,
+)
 from novel.agents import AgentDriver, AgentProbe
 from novel.agents.factory import create_driver
 from novel.agents.session_client import (
@@ -1785,17 +1788,22 @@ class Stage4DesignSessionPool:
             if dict(link) != identity:
                 raise ProvenanceRefused(
                     f'{purpose}: checkpoint attempt={attempt} 与成本账漂移')
+            resolve_ledger_model_identity(self.profile, identity.get('model'))
             linked[attempt] = identity
         attempt_id = record.get('attempt_id')
         identity = linked.get(str(attempt_id))
+        if identity is not None:
+            validate_checkpoint_model_identity(
+                self.profile,
+                checkpoint_model=record.get('model'),
+                actual_model=identity.get('model'),
+                actual_is_ledger=True,
+            )
         if (identity is None
                 or record.get('request_fingerprint')
                 != identity.get('request_fingerprint')
-                or record.get('model') != identity.get('model')
                 or record.get('ledger_response_sha256')
-                != identity.get('response_sha256')
-                or identity.get('model') != self.profile.model
-                or identity.get('model') in (None, '', 'unknown')):
+                != identity.get('response_sha256')):
             raise ProvenanceRefused(
                 f'{purpose}: checkpoint accepted attempt 与成本账/profile 漂移')
 
@@ -1861,7 +1869,7 @@ class Stage4DesignSessionPool:
             attempt_id = self.accepted_attempt(purpose)
             if attempt_id is None:
                 continue
-            model = self.ctx.ledger.model_for_attempt(attempt_id)
+            model = self.accepted_checkpoint(purpose).get('model')
             if isinstance(model, str) and model:
                 models.add(model)
         return tuple(sorted(models))
@@ -3355,15 +3363,17 @@ class SemanticSessionPool:
                 f'{purpose}: checkpoint turn/attempt links 与当前预算不闭合')
         attempt_id = str(record.get('attempt_id') or '')
         identity = self.ctx.ledger.request_identity_for_attempt(attempt_id)
+        validate_checkpoint_model_identity(
+            self.profile,
+            checkpoint_model=record.get('model'),
+            actual_model=identity.get('model'),
+            actual_is_ledger=True,
+        )
         if (record.get('request_fingerprint') != identity.get('request_fingerprint')
-                or record.get('model') != identity.get('model')
                 or record.get('ledger_response_sha256')
                 != identity.get('response_sha256')):
             raise ProvenanceRefused(
                 f'{purpose}: checkpoint accepted attempt 与成本账漂移')
-        if identity.get('model') in (None, '', 'unknown'):
-            raise ProvenanceRefused(
-                f'{purpose}: checkpoint 缺实际 accepted model')
         provider_session_id = record.get('provider_session_id')
         self._register_provider_owner(role, provider_session_id)
         with self._lock:
@@ -3395,7 +3405,7 @@ class SemanticSessionPool:
             attempt_id = self.accepted_attempt(purpose)
             if attempt_id is None:
                 continue
-            model = self.ctx.ledger.model_for_attempt(attempt_id)
+            model = self.accepted_checkpoint(purpose).get('model')
             if isinstance(model, str) and model:
                 models.add(model)
         return tuple(sorted(models))

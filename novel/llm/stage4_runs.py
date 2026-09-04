@@ -33,6 +33,7 @@ from contracts.invariants import STAGE4_DESIGN_MAX_CONCURRENCY
 from contracts.schema import Usage
 from contracts.schema.stage4 import BlindCandidate
 from novel import paths, prov
+from novel.agent_model_identity import validate_checkpoint_model_identity
 from novel.agents.session_client import SAME_RUN_RESUMABLE_AGENT_FAILURES
 from novel.appendlog import process_append_lock
 from novel.errors import ArtifactUnreadable, ProvenanceRefused
@@ -2040,6 +2041,14 @@ def _validate_design_adoption_source(
     checkpoint = _read_object(
         checkpoint_path, label='Stage4 design unit checkpoint')
     identity = row.get('request_identity')
+    if not isinstance(identity, Mapping):
+        raise ArtifactUnreadable(f'{target} adoption 缺 request_identity')
+    model_identity = validate_checkpoint_model_identity(
+        checkpoint.get('profile'),
+        checkpoint_model=checkpoint.get('model'),
+        actual_model=identity.get('model'),
+        actual_is_ledger=True,
+    )
     expected_checkpoint = {
         'run_id': check_run_id(ctx.run_id), 'sid': ctx.sid,
         'node': 'stage4.design', 'code': ctx.code,
@@ -2049,7 +2058,7 @@ def _validate_design_adoption_source(
         'checkpoint_sha256': row.get('checkpoint_sha256'),
         'attempt_id': row.get('attempt_id'),
         'request_fingerprint': identity.get('request_fingerprint'),
-        'model': identity.get('model'),
+        'model': model_identity.model,
         'ledger_response_sha256': identity.get('response_sha256'),
         'provider_session_id': row.get('provider_session_id'),
     }
@@ -3027,11 +3036,16 @@ def _design_adoption_row(
             'accepted checkpoint')
     attempt_id = str(restored.acceptance['attempt_id'])
     identity = ctx.ledger.request_identity_for_attempt(attempt_id)
+    validate_checkpoint_model_identity(
+        restored.acceptance.get('profile'),
+        checkpoint_model=restored.acceptance.get('model'),
+        actual_model=identity.get('model'),
+        actual_is_ledger=True,
+    )
     if (set(identity) != _LEDGER_IDENTITY_FIELDS
             or identity.get('attempt_id') != attempt_id
             or identity.get('request_fingerprint')
             != restored.acceptance.get('request_fingerprint')
-            or identity.get('model') != restored.acceptance.get('model')
             or identity.get('response_sha256')
             != restored.acceptance.get('ledger_response_sha256')):
         raise ProvenanceRefused(

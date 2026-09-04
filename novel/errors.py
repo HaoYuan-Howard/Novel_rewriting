@@ -403,6 +403,15 @@ class ProvenanceRefused(RefusedByStructure):
     """
 
 
+class AgentModelIdentityRefused(ProvenanceRefused):
+    """Agent accepted model 的 actual / driver 证据不足或互相冲突。"""
+
+    def __init__(self, message: str, *, loc: str, kind: str) -> None:
+        super().__init__(message)
+        self.loc = loc
+        self.kind = kind
+
+
 class AccountingKeyUnregistered(RefusedByStructure):
     """产地记了一笔账，而 `novel/report/accounting.py::ACCOUNTING` 里没有这个键。
 

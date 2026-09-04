@@ -32,6 +32,9 @@ from pydantic import BaseModel, ValidationError
 from contracts.schema.orchestration import AgentProfile
 from novel import agent_session_audit, prov
 from novel.agent_capabilities import validate_profile
+from novel.agent_model_identity import (
+    resolve_ledger_model_identity, validate_checkpoint_model_identity,
+)
 from novel.agents.base import render_structured_agent_stdin_bytes
 from novel.agents.session_client import (
     SESSION_PROTOCOL_VERSION, agent_json_schema,
@@ -687,6 +690,13 @@ def _validate_session_turn(
     }
     if actual_start != expected_start:
         raise ProvenanceRefused(f'{spec.label}: started 事件与 subject 漂移')
+    model_identity = validate_checkpoint_model_identity(
+        profile,
+        checkpoint_model=acceptance.get('model'),
+        actual_model=turn.actual_model,
+        cli_version=turn.cli_version,
+        require_driver_version=True,
+    )
     expected_turn = {
         'wire_version': agent_session_audit.SESSION_AUDIT_WIRE_VERSION,
         'session_run_id': acceptance.get('session_run_id'),
@@ -698,7 +708,7 @@ def _validate_session_turn(
         'turn_index': acceptance.get('accepted_turn_index'),
         'attempt_id': attempt_id,
         'requested_model': profile.get('model'),
-        'actual_model': acceptance.get('model'),
+        'actual_model': model_identity.actual_model,
         'requested_effort': profile.get('reasoning_effort'),
         'protocol_version': SESSION_PROTOCOL_VERSION,
         'start_code_version': ctx.code,
@@ -721,8 +731,6 @@ def _validate_session_turn(
     }
     if actual_turn != expected_turn:
         raise ProvenanceRefused(f'{spec.label}: checkpoint 与唯一 session turn 漂移')
-    if turn.actual_model != profile.get('model'):
-        raise ProvenanceRefused(f'{spec.label}: actual model 与 resolved profile 漂移')
     if (turn.actual_effort is not None
             and turn.actual_effort != profile.get('reasoning_effort')):
         raise ProvenanceRefused(f'{spec.label}: actual effort 与 resolved profile 漂移')
@@ -850,6 +858,7 @@ def _validate_acceptance(
                 or link.get('max_tokens') is not None):
             raise ProvenanceRefused(
                 f'{spec.label}: attempt={aid} 混入 legacy 请求字段')
+        resolve_ledger_model_identity(profile, link.get('model'))
         identities.append(dict(link))
         attempt_ids.append(aid)
         fingerprints.append(fingerprint)
@@ -879,8 +888,13 @@ def _validate_acceptance(
             raise ProvenanceRefused(f'{spec.label}: attempt={aid} 与 ledger 漂移')
     accepted_link = next(
         row for row in identities if row['attempt_id'] == attempt_id)
+    validate_checkpoint_model_identity(
+        profile,
+        checkpoint_model=model,
+        actual_model=accepted_link.get('model'),
+        actual_is_ledger=True,
+    )
     if (accepted_link.get('request_fingerprint') != request_fingerprint
-            or accepted_link.get('model') != model
             or accepted_link.get('response_sha256') != response_sha):
         raise ProvenanceRefused(f'{spec.label}: accepted attempt 与 ledger 响应漂移')
     return {
@@ -988,6 +1002,7 @@ def _validate_checkpoint_envelope(
                     or not is_sha256(link.get('request_fingerprint'))):
                 raise ArtifactUnreadable(
                     f'{path} checkpoint attempt_links 身份不完整')
+            resolve_ledger_model_identity(profile, link.get('model'))
             identities.append(dict(link))
     attempt_ids = [str(link['attempt_id']) for link in identities]
     normalized_links = sorted(
@@ -998,6 +1013,16 @@ def _validate_checkpoint_envelope(
         str(link['attempt_id']) for link in normalized_links
         if link['attempt_id'] != attempt_id
     ]
+    accepted_identities = [
+        link for link in normalized_links if link['attempt_id'] == attempt_id
+    ]
+    if len(accepted_identities) == 1:
+        validate_checkpoint_model_identity(
+            profile,
+            checkpoint_model=record.get('model'),
+            actual_model=accepted_identities[0].get('model'),
+            actual_is_ledger=True,
+        )
     if (record.get('acceptance_protocol') != SESSION_PROTOCOL_VERSION
             or record.get('accepted_channel') != 'content'
             or record.get('salvaged') is not False
@@ -1435,10 +1460,15 @@ def _validate_commit_state(
     if latest is None:
         raise ProvenanceRefused(f'{target} 所指 agent run 缺 checkpoint revision')
     _checkpoint_path, checkpoint = latest
+    validate_checkpoint_model_identity(
+        checkpoint.get('profile'),
+        checkpoint_model=checkpoint.get('model'),
+        actual_model=identity.get('model'),
+        actual_is_ledger=True,
+    )
     if (checkpoint.get('attempt_id') != record.get('attempt_id')
             or checkpoint.get('request_fingerprint')
             != identity.get('request_fingerprint')
-            or checkpoint.get('model') != identity.get('model')
             or checkpoint.get('ledger_response_sha256')
             != identity.get('response_sha256')):
         raise ProvenanceRefused(f'{target} adoption 与 checkpoint 漂移')
@@ -1546,8 +1576,13 @@ def prepare_commit(
     identity = ctx.ledger.request_identity_for_attempt(attempt_id)
     if set(identity) != _LEDGER_IDENTITY_FIELDS:
         raise ProvenanceRefused(f'{run_spec.label}: ledger identity 字段漂移')
+    validate_checkpoint_model_identity(
+        checkpoint.get('profile'),
+        checkpoint_model=checkpoint.get('model'),
+        actual_model=identity.get('model'),
+        actual_is_ledger=True,
+    )
     if (identity.get('request_fingerprint') != checkpoint.get('request_fingerprint')
-            or identity.get('model') != checkpoint.get('model')
             or identity.get('response_sha256')
             != checkpoint.get('ledger_response_sha256')):
         raise ProvenanceRefused(

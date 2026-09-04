@@ -115,10 +115,10 @@ def _claude_wrapper(*, session_id: str = 'claude-session-1',
 
 def _codex_jsonl(*, session_id: str = 'codex-session-1',
                  content: str = '{"status":"done"}') -> str:
+    """Codex CLI 0.148.0 的真实公开事件形状：不含 model/effort 回显。"""
     return '\n'.join(json.dumps(event, ensure_ascii=False) for event in (
         {
             'type': 'thread.started', 'thread_id': session_id,
-            'model': 'gpt-5.6-sol', 'reasoning_effort': 'high',
         },
         {'type': 'turn.started'},
         {
@@ -136,7 +136,7 @@ def _codex_jsonl(*, session_id: str = 'codex-session-1',
                 'input_tokens': 30,
                 'cached_input_tokens': 11,
                 'output_tokens': 8,
-                'output_tokens_details': {'reasoning_tokens': 3},
+                'reasoning_output_tokens': 3,
             },
         },
     ))
@@ -515,8 +515,8 @@ def test_codex_start_uses_jsonl_output_schema_and_explicit_profile(tmp_path):
 
     assert turn.session_id == 'codex-session-1'
     assert turn.content == '{"status":"done"}'
-    assert turn.model == 'gpt-5.6-sol'
-    assert turn.actual_reasoning_effort == 'high'
+    assert turn.model is None
+    assert turn.actual_reasoning_effort is None
     assert turn.turn_count == 1
     assert turn.usage.prompt_tokens == 30
     assert turn.usage.prompt_cache_hit_tokens == 11
