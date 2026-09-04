@@ -236,8 +236,8 @@ B infeasible 终态，模板与 view 会同时发布其 concerns 和代码 proof
 下打开新 repair epoch，或用 hash-bound 的
 `stage4.design --apply-edit <stage4/blind_chapter_edit.json>` 提交一份完整 `BlindChapterResponse`。
 后者先 preview 再 apply，两次走同一 compiler、schema、dynamic validator 与全书 HARD；只替换目标章，
-非目标章业务字节必须恒等，provenance 记 `origin=human` 且不伪造 prompt/model/usage。逐项阅读模板中的
-安全盲真相、候选场景与服务端现场复算的结构对证后再编辑：
+非目标章业务字节必须恒等，provenance 记 `origin=human` 且不伪造 prompt/model/usage。逐项阅读工作包
+coverage 行 `reading` 中的安全盲真相、候选场景与服务端现场复算的结构对证后再编辑：
 
 1. 策略只决定 `accept / request_replan`。只有策略本身无法指导全书结构重构时才拒绝；单章问题不得
    借策略决定放大成整书重跑。
@@ -271,8 +271,9 @@ edit token 伪造问题，frozen 路也始终不得生成 `s4rr1` 或 paid spawn
 ### B 后最终计划裁决
 
 本闸判断的是已绑定计划结构，不是文字质量，也不是第二次规划。先运行并完整读取
-`novel.cli approval workpack structure <SID> --base <BASE>`，再把其中绑定的当前结构 subject、计划完整
-字节、B 的 `binding_concerns`、逐章 `structure_decision` 与最新结构报告对齐后逐章裁决：
+`novel.cli approval workpack structure <SID> --base <BASE>`，再按其 coverage 行的 `reading`（逐场 claim、
+舞台、材料摘录、本章结构读数与解开的 `binding_concerns`）与逐章 `structure_decision` 逐章裁决；
+不再读取 `plan_chapters.json`、蓝图或正文原始字节：
 
 1. `retain` 章的声明变化必须为空；人工理由要能指出强线性、因果锁定、证据受限或本章本就没有可靠
    重组空间中的具体一种，不能只写“保留更稳”。

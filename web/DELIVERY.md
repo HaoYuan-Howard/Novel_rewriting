@@ -196,7 +196,7 @@ export const api: Api = USE_MOCK ? mockApi : realApi
 | Agent 跑书用户常用 profiles | 当前 output base 的 `_service/agent_profile_settings.json`；页面只持读取 revision 与未保存草稿，POST 以 CAS 提交 |
 | **`gate` / `seen` / `design_review` / `structure` / `writing` / `writing_approval` / `closure`** | 一份公开 v6 `ApprovalDoc`，也走 Query（`['approvals', sid]`）；`design_review` 保存绑定当前 Stage4A 主体的策略级与逐章 typed 裁决，只授权 B；`structure` 保存绑定完整 Stage4 plan + binding concerns 主体的最终逐章裁决；`writing_approval` 是当前 Stage4 主体的 typed 写作授权；`closure` 是绑定 current canonical 全章 + fresh Review + finding/trim 集的 Stage5 Commander 回执，只有 current `closed` 才打开 s5 |
 | Stage2 Blueprint 审阅工作包 | 独立 Query（`['stage2', sid, 'blueprint-review-workpack']`），读取 `/stage2/blueprint-review-workpack`；服务端绑定 current Blueprint/MainText/完整 check/code/rules，异常章优先且全章保留。工作包到达后正文分区与骨架只从该包渲染，确认提交同一包的完整 binding，页面不从另一份 ReadingResponse 或 rows 重拼主体/判定，不写新 approval 或 artifact |
-| Stage4 A/B 审阅工作包 | 两条独立 Query（`['approvals', sid, 'design|structure', 'workpack']`）；分别读取 `/approvals/design/workpack` 与 `/approvals/structure/workpack`，绑定当前 A 候选或 B 结构主体，不从 `ApprovalDoc`、页面 rows 或历史决定重拼 |
+| Stage4 A/B 审阅工作包 | 两条独立 Query（`['approvals', sid, 'design|structure', 'workpack']`）；分别读取 `/approvals/design/workpack` 与 `/approvals/structure/workpack`，绑定当前 A 候选或 B 结构主体，不从 `ApprovalDoc`、页面 rows 或历史决定重拼；v2 每个 coverage 行携 `reading`（服务端渲染的逐章裁决材料），页面只作折叠呈现、不自算 |
 | `job` / `jobLog` | Query + `refetchInterval`（由服务端下发的 `running` 决定） |
 | 确认框里的 argv | Query（`api.previewJob`） |
 | `sid` / 章号 / 当前屏 | React Router 路径 |

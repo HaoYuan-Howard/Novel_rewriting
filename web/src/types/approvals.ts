@@ -709,6 +709,122 @@ export interface ApprovalWorkpackItem {
   changed: boolean
   historical_accept_reusable: boolean
   source_decision_sha256?: string | null
+  /** Stage4A 完整章 edit 的单一 TOCTOU 票；只在当前 repair 决定行出现。 */
+  review_token?: string | null
+  /** v2：coverage 行的逐章裁决材料，服务端确定性渲染；页面只折叠呈现，不自算。 */
+  reading?: WorkpackChapterReading | null
+}
+
+/** 本章 facts 表的一行：claim 只在这里出现一次，其余处只引用 ref。 */
+export interface WorkpackFactReading {
+  ref: string
+  claim: string
+  kind: string | null
+  obligation: string | null
+}
+
+export interface WorkpackStageReading {
+  ref: string
+  found: boolean
+  time_layer: string | null
+  place: string | null
+  present: string[]
+}
+
+export interface WorkpackMaterialReading {
+  group: string
+  count: number
+  chars: number
+  excerpt: string
+}
+
+export interface WorkpackGoalReading {
+  intent: string
+  refs: string[]
+}
+
+export interface WorkpackSceneReading {
+  scene_ref: string
+  weight: string | null
+  budget_chars: number | null
+  purpose: string
+  role: string
+  delivery: string
+  transition: string
+  land: string[]
+  context: string[]
+  turn: string | null
+  entry_state: string[]
+  exit_state: string[]
+  stages: WorkpackStageReading[]
+  materials: WorkpackMaterialReading[]
+  missing_material_refs: string[]
+}
+
+export interface WorkpackClosedRefReading {
+  ref: string
+  kind: 'fact' | 'beat' | 'hinge' | 'unknown'
+  text: string | null
+}
+
+export interface WorkpackConcernReading {
+  constraint_code: string
+  chapter_ordinal: number | null
+  scenes: string[]
+  reason: string
+  closed_refs: WorkpackClosedRefReading[]
+}
+
+export interface WorkpackCausalEdgeReading {
+  before_alias: string
+  after_alias: string
+}
+
+export interface StructureChapterReading {
+  kind: 'stage4_structure_chapter_reading_v1'
+  chapter_function: string
+  chapter_rewrite_brief: string
+  structure_decision: Record<string, unknown>
+  facts: WorkpackFactReading[]
+  goals: Record<string, WorkpackGoalReading>
+  scenes: WorkpackSceneReading[]
+  structure_metrics: Record<string, unknown>
+  binding_concerns: WorkpackConcernReading[]
+  signature_conflict_codes: string[]
+}
+
+export interface DesignBlindFactReading {
+  fact_alias: string
+  claim: string
+  kind: string
+  obligation: string
+  participant_aliases: string[]
+}
+
+export interface DesignChapterReading {
+  kind: 'stage4_design_chapter_reading_v1'
+  chapter_function: string
+  weight: string
+  chapter_rewrite_brief: string
+  structure_decision: Record<string, unknown>
+  facts: DesignBlindFactReading[]
+  goals: Record<string, WorkpackGoalReading>
+  causal_edges: WorkpackCausalEdgeReading[]
+  narrative_relations: Array<Record<string, unknown>>
+  entry_state: string[]
+  ending_state: string[]
+  scenes: WorkpackSceneReading[]
+}
+
+export type WorkpackChapterReading = DesignChapterReading | StructureChapterReading
+
+/** 工作包顶层只出现一次的字段说明与整书材料。 */
+export interface WorkpackReading {
+  kind: 'stage4_workpack_reading_v1'
+  legend: Record<string, string>
+  reconstruction_strategy: string | null
+  chapter_weights: Array<Record<string, unknown>> | null
+  global_binding_concerns: WorkpackConcernReading[]
 }
 
 export interface ApprovalWorkpackGroup {
@@ -717,9 +833,9 @@ export interface ApprovalWorkpackGroup {
   items: ApprovalWorkpackItem[]
 }
 
-/** Stage4 A/B 共用的只读、hash-bound 审阅工作包 façade v1。 */
+/** Stage4 A/B 共用的只读、hash-bound 审阅工作包 façade v2（coverage 行携 reading）。 */
 export interface ApprovalWorkpack {
-  v: 1
+  v: 2
   sid: string
   kind: 'design' | 'structure'
   candidate_sha256?: string | null
@@ -729,4 +845,5 @@ export interface ApprovalWorkpack {
   groups: ApprovalWorkpackGroup[]
   disposition: 'review_required' | 'already_current' | 'suspended'
   current_decision_sha256: string | null
+  reading?: WorkpackReading | null
 }

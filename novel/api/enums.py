@@ -68,6 +68,17 @@ _CONSUMED: dict[str, str] = {
 #: ⚠ 这张表**必须逐个列名**，不许写成「所有标量一律不发」那种规则：
 #: 那样新加一个标量会被**静默**挡住，而静默正是本模块要防的方向。
 _WITHHELD: dict[str, str] = {
+    'REVIEWER_APPROVAL_SURFACES': (
+        'Commander reviewer typed request 的 approval 面闭集，只由 RunSupervisor 与'
+        ' loader 消费；页面各审批面已有自己的 typed 表单，另发只会制造第二个消费面'),
+    'DESIGN_REPAIR_CODE_INSTRUCTIONS': (
+        '修复码语义随 reviewer 工作包 submission_options 与 Executor repair prompt 下发；'
+        '页面 typed 表单只提交 code，不据文案自判修复语义'),
+    'DESIGN_REPAIR_CONSTRAINT_EXAMPLES': (
+        '示例形状是服务端在 build 时经 DesignRepairConstraint 校验后随 reviewer 工作包'
+        '下发的原料（dict of dict，也不是发布器认的形状）；前端不据此拼请求'),
+    'DESIGN_STRATEGY_REPLAN_CONSTRAINT_INSTRUCTIONS': '同 DESIGN_REPAIR_CODE_INSTRUCTIONS',
+    'DESIGN_STRATEGY_REPLAN_CONSTRAINT_EXAMPLES': '同 DESIGN_REPAIR_CONSTRAINT_EXAMPLES',
     'AGENT_EXECUTOR_NODES': (
         'agent 执行节点属于 driver/model/effort/mode 组合能力面，'
         '唯一公开口是动态 `GET /api/agent/capabilities`；'

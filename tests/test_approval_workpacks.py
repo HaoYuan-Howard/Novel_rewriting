@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -17,9 +18,10 @@ from contracts.invariants import (
 from contracts.rules import REGISTRY
 from contracts.schema.api import (
     ApprovalDoc, ApprovalWorkpack, DesignReviewView, StructureApprovalDecision,
-    StructureApprovalView, WorkpackGroup, WorkpackItem,
+    StructureApprovalView, StructureChapterReading, WorkpackGroup, WorkpackItem,
+    WorkpackSceneReading,
 )
-from contracts.schema.stage4 import BindingConcern
+from contracts.schema.stage4 import BindingConcern, PlanChapter
 from novel import paths, prov
 from novel.cli import main as cli
 from novel.orchestrator import approvals
@@ -207,6 +209,25 @@ def test_real_design_and_structure_workpacks_are_read_only_and_zero_spawn(
         == list(APPROVAL_WORKPACK_GROUPS)
     assert {row.chapter_ordinal for row in structure.groups[-1].items} \
         == set(structure.chapter_ordinals)
+    # v2：逐章裁决材料随包下发，metric 行不再整书 JSON 抄两份。
+    assert design.v == 2 and structure.v == 2
+    assert design.reading is not None and structure.reading is not None
+    for row in design.groups[-1].items:
+        assert row.reading is not None
+        assert row.reading.kind == 'stage4_design_chapter_reading_v1'
+        assert row.reading.scenes and row.reading.facts
+    for row in structure.groups[-1].items:
+        assert row.reading is not None
+        assert row.reading.kind == 'stage4_structure_chapter_reading_v1'
+        assert row.reading.scenes[0].land, '逐场 land 事实必须给出 id'
+        assert row.reading.facts, '本章 facts 表必须把引用到的 id 解成 claim'
+        assert {fact.ref for fact in row.reading.facts} >= set(
+            row.reading.scenes[0].land)
+        assert 'alignment' in row.reading.structure_metrics
+    assert all(
+        item.refs == [] or len(item.detail) <= 300
+        for item in structure.groups[3].items
+    ), 'metric_only 只保留摘要或短读数'
     assert all(
         not item.allowed_actions
         for group in structure.groups
@@ -307,10 +328,24 @@ def test_design_builder_marks_only_exact_history_and_sorts_changed_first(
     semantic = workpack.groups[1].items
     assert len(semantic) == 2
     focus = json.loads(semantic[0].detail)
-    assert focus['facts'][0]['claim'] == '她发现门已经打开。'
-    assert 'narrative_relations' in focus
-    assert focus['fact_scene_positions'][focus['facts'][0]['fact_alias']] \
-        == ['c01s01']
+    assert 'facts' not in focus and 'fact_scene_positions' not in focus
+    assert focus['reading'] == 'design_chapter_coverage:ch1'
+    reading = coverage[0].reading
+    assert reading is not None
+    assert reading.kind == 'stage4_design_chapter_reading_v1'
+    assert reading.facts[0].claim == '她发现门已经打开。'
+    assert reading.scenes[0].scene_ref == 'c01s01'
+    assert reading.scenes[0].land[0] == reading.facts[0].fact_alias
+    assert reading.scenes[0].turn == reading.facts[0].fact_alias
+    assert reading.goals['chapter'].refs[0] == reading.facts[0].fact_alias
+    assert workpack.v == 2 and workpack.reading is not None
+    assert workpack.reading.reconstruction_strategy \
+        == subjects.strategy.reconstruction_strategy
+    assert 'refs' in workpack.reading.legend
+    rendered = json.dumps(workpack.model_dump(mode='json'), ensure_ascii=False)
+    assert not re.search(
+        r'\bf\d{2,}_\d{3,}\b|\bb\d{2}_\d{2}\b|\bh\d{2,}_\d{3,}\b|char_\d',
+        rendered), 'A 面 reading 不得泄露 formal id'
 
 
 def test_structure_groups_focus_unknown_disclosures_and_exact_history(
@@ -334,19 +369,51 @@ def test_structure_groups_focus_unknown_disclosures_and_exact_history(
             rule='causal_disclosure', sev='info', status='hit',
             findings=[finding('ch1:披露逆因果', ordinal=1)],
             why=None, item='披露顺序'),
+        SimpleNamespace(
+            rule='anchor_migration', sev='metric', status='ok',
+            findings=[finding(
+                '[' + ','.join(['{"anchors":"整书逐章读数"}'] * 24) + ']')],
+            why=None, item='锚点迁移'),
     ])
+    from contracts.invariants import (
+        DELIVERY_MODES, FACT_ATOM_KINDS, GOAL_INTENTS, STRUCTURAL_ROLES,
+        TEMPORAL_LINKS, TIME_LAYERS,
+    )
 
-    def chapter(ordinal: int):
-        payload = lambda value: SimpleNamespace(
-            model_dump=lambda **_kw: value)
-        return SimpleNamespace(
-            output_ordinal=ordinal,
-            structure_decision=payload({'mode': 'retain'}),
-            chapter_goal=payload({'intent': 'G_ADVANCE'}),
-            open_hook_goal=payload({'intent': 'G_OPEN'}),
-            end_hook_goal=payload({'intent': 'G_CLOSE'}),
-            scenes=[SimpleNamespace(slot='s01', budget_chars=800)],
-        )
+    def blueprint(ordinal: int) -> dict:
+        return {
+            'chapter_ordinal': ordinal, 'chapter_function': '建立冲突',
+            'fact_atoms': [{
+                'fact_id': 'f01_001', 'claim': '她发现门已经打开。',
+                'kind': FACT_ATOM_KINDS[0], 'obligation': 'land',
+                'source_beat_ref': 'b01_01', 'source': None,
+                'participant_char_ids': ['char_001']}],
+            'beats': [{
+                'beat_id': 'b01_01', 'span': None, 'time_layer': TIME_LAYERS[0],
+                'place': '门口', 'present_char_ids': ['char_001'], 'hinges': []}],
+            'causal_edges': [], 'narrative_relations': [],
+            'entry_state_refs': [], 'ending_state_refs': [], 'narration': [],
+        }
+
+    def chapter(ordinal: int) -> PlanChapter:
+        goal = {'intent': GOAL_INTENTS[0],
+                'fact_refs': [{'kind': 'fact_atom', 'ref': 'f01_001'}]}
+        return PlanChapter.model_validate({
+            'output_ordinal': ordinal, 'from_source_ordinals': [ordinal],
+            'chapter_goal': goal, 'open_hook_goal': goal, 'end_hook_goal': goal,
+            'structure_decision': {
+                'mode': 'retain', 'reason': '保持直接推进',
+                'declared_change_kinds': []},
+            'chapter_rewrite_brief': '按事实义务直接推进',
+            'scenes': [{
+                'slot': 's01', 'budget_chars': 800, 'purpose': '落下事实',
+                'role': STRUCTURAL_ROLES[0], 'delivery': DELIVERY_MODES[0],
+                'transition': TEMPORAL_LINKS[0],
+                'land_fact_refs': ['f01_001'], 'context_fact_refs': [],
+                'material_refs': [], 'turn_fact_ref': 'f01_001',
+                'entry_state_refs': [], 'exit_state_refs': [],
+                'stage_refs': ['b01_01']}],
+        })
 
     signature = WorkpackItem(
         code='stage_signature_conflict:abc', rule='stage_signature_conflict',
@@ -386,8 +453,9 @@ def test_structure_groups_focus_unknown_disclosures_and_exact_history(
         concerns=[BindingConcern(
             constraint_code='stage_conflict', chapter_ordinal=1,
             scenes=['c01s01'], reason='绑定仍有语义担忧',
-            closed_refs=['f_01'])],
-        report=report)
+            closed_refs=['f01_001', 'b01_01', 'h99_999'])],
+        report=report,
+        blueprint_by_ordinal={1: blueprint(1), 2: blueprint(2)})
     by_group = {group.group: group for group in groups}
     assert 'state_unknown_findings' in by_group['semantic_attention'].items[0].detail
     assert any(item.code.startswith('stage_signature_conflict')
@@ -409,6 +477,61 @@ def test_structure_groups_focus_unknown_disclosures_and_exact_history(
         if rule.requirement.startswith('R-6.')
     }
     assert all(not row.allowed_actions for row in deferred)
+    # v2：整书 JSON 的 metric 行只留摘要，短读数原样保留；逐章材料在 coverage reading。
+    metric_rows = {item.rule: item for item in by_group['metric_only'].items}
+    assert metric_rows['anchor_migration'].refs == []
+    assert 'coverage[].reading.structure_metrics' in metric_rows['anchor_migration'].detail
+    assert metric_rows['semantic_closure_reading'].refs != []
+    first = next(row for row in coverage if row.chapter_ordinal == 1)
+    reading = first.reading
+    assert reading is not None
+    assert reading.kind == 'stage4_structure_chapter_reading_v1'
+    assert reading.chapter_function == '建立冲突'
+    assert reading.scenes[0].scene_ref == 's01'
+    assert reading.scenes[0].land == ['f01_001']
+    assert reading.scenes[0].turn == 'f01_001'
+    assert reading.scenes[0].stages[0].place == '门口'
+    assert [fact.ref for fact in reading.facts] == ['f01_001']
+    assert reading.facts[0].claim == '她发现门已经打开。'
+    assert reading.facts[0].obligation == 'land'
+    assert reading.goals['chapter'].refs == ['f01_001']
+    assert 'adjacency' not in reading.structure_metrics
+    assert reading.structure_metrics['alignment']['mode'] == 'retain'
+    assert [ref.kind for ref in reading.binding_concerns[0].closed_refs] \
+        == ['fact', 'beat', 'unknown']
+    assert reading.binding_concerns[0].closed_refs[0].text == '她发现门已经打开。'
+    assert reading.signature_conflict_codes == ['stage_signature_conflict:abc']
+    second = next(row for row in coverage if row.chapter_ordinal == 2)
+    assert second.reading is not None and second.reading.binding_concerns == []
+
+
+def test_reading_only_lives_on_coverage_rows_and_matches_kind() -> None:
+    """reading 是 coverage 行的裁决材料；放错行、放错面都关闭式拒绝。"""
+    scene = WorkpackSceneReading(
+        scene_ref='s01', purpose='落下事实', role='setup',
+        delivery='scene', transition='start')
+    structure_reading = StructureChapterReading(
+        chapter_function='建立冲突', chapter_rewrite_brief='直接推进',
+        structure_decision={'mode': 'retain'}, goals={}, scenes=[scene],
+        structure_metrics={'state': 'unver'})
+    with pytest.raises(ValidationError):
+        WorkpackItem(
+            code='design_semantic_focus:ch1', detail='x', effect='attention',
+            reading=structure_reading)
+    design = _sample_workpack(kind='design')
+    coverage = design.groups[-1].items[0].model_copy(
+        update={'reading': structure_reading})
+    groups = _groups([coverage])
+    with pytest.raises(ValidationError):
+        design.model_copy(update={'groups': groups}).model_validate(
+            design.model_copy(update={'groups': groups}).model_dump(mode='json'))
+    structure_groups = _groups([
+        _coverage_item(1, kind='structure', changed=True).model_copy(
+            update={'reading': structure_reading})])
+    structure = _sample_workpack(kind='structure').model_copy(
+        update={'groups': structure_groups})
+    assert ApprovalWorkpack.model_validate(
+        structure.model_dump(mode='json')).groups[-1].items[0].reading is not None
 
 
 def test_stage_signature_conflict_discloses_every_candidate_without_threshold() -> None:

@@ -80,6 +80,7 @@ from contracts.schema.api import (
     StructureApprovalView,
     WorkpackGroup,
     WorkpackItem,
+    WorkpackReading,
     WritingApprovalDecision,
     WritingApprovalRequest,
     WritingApprovalView,
@@ -950,8 +951,11 @@ class _StructureWorkpackSnapshot(StrictModel):
     chapter_subject_sha256: dict[int, str]
     plan: PlanChapters
     concerns: list[BindingConcern]
+    #: v2 逐章 reading 的 claim/舞台/材料来源；与 plan/binding 同一次快照读出。
+    blueprints: ChapterBlueprints
     plan_payload_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
     binding_payload_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    blueprint_payload_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
 
 
 def _formal_design_chapter(
@@ -1812,6 +1816,9 @@ def _structure_workpack_snapshot(
     _require_fresh_json(store, STAGE4_EVIDENCE_BINDING)
     binding, binding_raw = store.read_own(
         EvidenceBinding, STAGE4_EVIDENCE_BINDING)
+    _require_fresh_json(store, STAGE2_CHAPTER_BLUEPRINTS)
+    blueprints, blueprints_raw = store.read_own(
+        ChapterBlueprints, STAGE2_CHAPTER_BLUEPRINTS)
     concerns = _binding_concerns(binding)
     try:
         from novel.stages.stage4.measure import structure_review_subject_sha256
@@ -1829,8 +1836,10 @@ def _structure_workpack_snapshot(
         chapter_subject_sha256=_structure_chapter_subject_sha256(plan, concerns),
         plan=plan,
         concerns=concerns,
+        blueprints=blueprints,
         plan_payload_sha256=_decision_sha256(plan_raw),
         binding_payload_sha256=_decision_sha256(binding_raw),
+        blueprint_payload_sha256=_decision_sha256(blueprints_raw),
     )
 
 
@@ -2944,6 +2953,11 @@ def _frozen_v6_design_suggestion(
     return None
 
 
+#: metric 行的 finding 超过这个长度就只保留摘要：整书逐章 JSON 已按章并入
+#: coverage[].reading.structure_metrics，再在 detail 与 refs 各抄一份只多花 token。
+_METRIC_INLINE_CHARS = 300
+
+
 def _compact(value: Any) -> str:
     """工作包的机器可比细节；不用自由文字二次解释判定。"""
     return json.dumps(
@@ -3191,18 +3205,8 @@ def _design_workpack_groups(
         chapter = subject.chapter
         truth = subject.blind_truth
         ordinal = chapter.output_ordinal
-        fact_scene_positions = {
-            fact.fact_alias: [
-                scene.candidate_scene_id for scene in chapter.scenes
-                if fact.fact_alias in (
-                    set(scene.land_fact_aliases)
-                    | set(scene.context_fact_aliases)
-                    | set(scene.entry_state_aliases)
-                    | set(scene.exit_state_aliases)
-                )
-            ]
-            for fact in truth.facts
-        }
+        # 完整材料（facts 表、goal/边/关系/状态的 claim、逐场 alias）只在
+        # coverage 行的 reading 出现一次；这里只留定位摘要，不再重复整章 JSON。
         attention.append(WorkpackItem(
             code=f'design_semantic_focus:ch{ordinal}',
             rule=None,
@@ -3217,23 +3221,11 @@ def _design_workpack_groups(
             detail=_compact({
                 'entry_state_aliases': truth.entry_state_aliases,
                 'ending_state_aliases': truth.ending_state_aliases,
-                'causal_edges': [
-                    edge.model_dump(mode='json') for edge in truth.causal_edges
-                ],
-                'narrative_relations': [
-                    relation.model_dump(mode='json')
-                    for relation in truth.narrative_relations
-                ],
-                'facts': [fact.model_dump(mode='json') for fact in truth.facts],
-                'fact_scene_positions': fact_scene_positions,
-                'open_hook_goal': chapter.open_hook_goal.model_dump(mode='json'),
-                'end_hook_goal': chapter.end_hook_goal.model_dump(mode='json'),
-                'temporal_transitions': [{
-                    'scene_ref': scene.candidate_scene_id,
-                    'transition': scene.transition,
-                    'entry_state_aliases': scene.entry_state_aliases,
-                    'exit_state_aliases': scene.exit_state_aliases,
-                } for scene in chapter.scenes],
+                'fact_count': len(truth.facts),
+                'causal_edge_count': len(truth.causal_edges),
+                'narrative_relation_count': len(truth.narrative_relations),
+                'scene_count': len(chapter.scenes),
+                'reading': f'design_chapter_coverage:ch{ordinal}',
             }),
             effect='attention',
             allowed_actions=[],
@@ -3258,6 +3250,7 @@ def _design_workpack_groups(
         )
         for row in current.repair_capability.chapters
     }
+    from novel.stages.stage4.reading import design_chapter_reading
     coverage: list[WorkpackItem] = []
     for subject in current.chapters:
         ordinal = subject.chapter.output_ordinal
@@ -3293,6 +3286,7 @@ def _design_workpack_groups(
             historical_accept_reusable=reusable,
             source_decision_sha256=(
                 source[0].decision_sha256 if source is not None else None),
+            reading=design_chapter_reading(subject),
         ))
     coverage.sort(key=lambda item: (not item.changed, item.chapter_ordinal or 0))
 
@@ -3334,6 +3328,18 @@ def _design_workpack_groups(
     ]
 
 
+def _design_workpack_reading(current: _DesignSubjects) -> WorkpackReading:
+    """顶层一次：字段说明 + 本次整书策略主体（章权重属于策略，不属于章稿）。"""
+    from novel.stages.stage4.reading import workpack_legend
+    return WorkpackReading(
+        legend=workpack_legend('design'),
+        reconstruction_strategy=current.strategy.reconstruction_strategy,
+        chapter_weights=[
+            row.model_dump(mode='json') for row in current.strategy.chapter_weights
+        ],
+    )
+
+
 def design_workpack(
     base: str | os.PathLike[str], sid: str,
     *, overview: NovelOverview | None = None, code: str | None = None,
@@ -3355,6 +3361,7 @@ def design_workpack(
                 chapter_ordinals=ordinals,
                 groups=_design_workpack_groups(record, current, novel_dir),
                 disposition='review_required',
+                reading=_design_workpack_reading(current),
             )
             # 复用首读 subject；末尾第二读仍是唯一竞态守卫。若在这里再读一次，
             # 会把「前后两次一致才返回」悄悄扩成无守卫的第三份投影。
@@ -3495,7 +3502,10 @@ def _structure_workpack_groups(
     record: _ApprovalRecordV7, novel_dir: Path, *, subject_sha256: str,
     chapter_subject_sha256: dict[int, str],
     plan: PlanChapters, concerns: list[BindingConcern], report: Any,
+    blueprint_by_ordinal: Mapping[int, Mapping[str, Any]],
 ) -> list[WorkpackGroup]:
+    from novel.stages.stage4.reading import structure_chapter_reading
+
     by_rule = {line.rule: line for line in report.rules}
     deferred_ids = {rule.rule for rule in _phase_deferred_rule_rows()}
     blocking: list[WorkpackItem] = []
@@ -3514,10 +3524,21 @@ def _structure_workpack_groups(
             continue
         if line.sev == 'metric':
             if line.findings:
-                metrics.extend(
-                    _report_item(line, effect='read_only', index=index)
-                    for index in range(1, len(line.findings) + 1)
-                )
+                for index in range(1, len(line.findings) + 1):
+                    finding_row = line.findings[index - 1]
+                    if len(str(finding_row.detail)) <= _METRIC_INLINE_CHARS:
+                        metrics.append(
+                            _report_item(line, effect='read_only', index=index))
+                        continue
+                    # 整书逐章 JSON 不再在 detail 与 refs 各抄一份：完整读数已按章
+                    # 并入 coverage[].reading.structure_metrics（`R-5.25`）。
+                    metrics.append(_report_item(
+                        line, effect='read_only', index=index,
+                        detail=(
+                            f'{line.rule}：整书逐章读数共 '
+                            f'{len(str(finding_row.detail))} 字，已按章并入 '
+                            'coverage[].reading.structure_metrics；本行只作摘要'),
+                        refs=[]))
             else:
                 metrics.append(_report_item(line, effect='read_only'))
             continue
@@ -3579,6 +3600,14 @@ def _structure_workpack_groups(
     for chapter in plan.output_chapters:
         ordinal = chapter.output_ordinal
         source_sha = accepted_sources.get(ordinal)
+        reading = structure_chapter_reading(
+            chapter,
+            blueprint=blueprint_by_ordinal.get(ordinal) or {},
+            concerns=concerns,
+            signature_conflict_codes=[
+                item.code for item in signature_items
+                if item.chapter_ordinal == ordinal
+            ])
         coverage.append(WorkpackItem(
             code=f'structure_chapter_coverage:ch{ordinal}',
             rule=None,
@@ -3599,6 +3628,7 @@ def _structure_workpack_groups(
             changed=source_sha is None,
             historical_accept_reusable=source_sha is not None,
             source_decision_sha256=source_sha,
+            reading=reading,
         ))
     coverage.sort(key=lambda item: (not item.changed, item.chapter_ordinal or 0))
 
@@ -3681,6 +3711,13 @@ def structure_workpack(
             if after != snapshot:
                 raise ArtifactUnreadable(
                     'Stage4B 审阅主体在工作包复检期间变化；请刷新后重试')
+            from novel.stages.stage4.reading import (
+                concern_reading, workpack_legend,
+            )
+            blueprint_by_ordinal = {
+                row.chapter_ordinal: row.model_dump(mode='json', by_alias=True)
+                for row in snapshot.blueprints.blueprints
+            }
             workpack = ApprovalWorkpack(
                 sid=sid,
                 kind='structure',
@@ -3695,6 +3732,15 @@ def structure_workpack(
                     plan=snapshot.plan,
                     concerns=snapshot.concerns,
                     report=report,
+                    blueprint_by_ordinal=blueprint_by_ordinal,
+                ),
+                reading=WorkpackReading(
+                    legend=workpack_legend('structure'),
+                    global_binding_concerns=[
+                        concern_reading(concern, blueprints=blueprint_by_ordinal)
+                        for concern in snapshot.concerns
+                        if concern.chapter_ordinal is None
+                    ],
                 ),
             )
             if view.state == 'accepted' and view.current_decision is not None:

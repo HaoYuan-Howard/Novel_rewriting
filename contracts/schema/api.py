@@ -1902,6 +1902,138 @@ class StructureApprovalView(FrozenModel):
         return self
 
 
+class WorkpackFactReading(FrozenModel):
+    """本章 facts 表的一行：claim 只在这里出现一次，其余处只引用 ref。"""
+
+    ref: str = Field(min_length=1)
+    claim: str = Field(min_length=1)
+    kind: str | None = None
+    obligation: str | None = None
+
+
+class WorkpackStageReading(FrozenModel):
+    """蓝图 beat 的舞台三样；找不到该 beat 时 found=false，不猜。"""
+
+    ref: str = Field(min_length=1)
+    found: bool = True
+    time_layer: str | None = None
+    place: str | None = None
+    present: list[str] = Field(default_factory=list)
+
+
+class WorkpackMaterialReading(FrozenModel):
+    """本场引用 hinge 材料的一组计数与首句摘录；不是逐字全文。"""
+
+    group: str = Field(min_length=1)
+    count: int = Field(ge=1)
+    chars: int = Field(ge=0)
+    excerpt: str = Field(min_length=1)
+
+
+class WorkpackGoalReading(FrozenModel):
+    """goal 的 intent 与它引用的事实 id/alias；claim 查本章 facts 表。"""
+
+    intent: str = Field(min_length=1)
+    refs: list[str] = Field(default_factory=list)
+
+
+class WorkpackSceneReading(FrozenModel):
+    """一场的裁决材料；A 面 scene_ref 是 candidate_scene_id，B 面是计划 slot。"""
+
+    scene_ref: str = Field(min_length=1)
+    weight: str | None = None
+    budget_chars: int | None = Field(default=None, gt=0)
+    purpose: str = Field(min_length=1)
+    role: str = Field(min_length=1)
+    delivery: str = Field(min_length=1)
+    transition: str = Field(min_length=1)
+    #: 以下五格只引用 id/alias：entry/exit 是编译期累加的有效状态，同一 claim 会在
+    #: 相邻场重复十几次，内联 claim 实测让 B 面工作包翻倍。
+    land: list[str] = Field(default_factory=list)
+    context: list[str] = Field(default_factory=list)
+    turn: str | None = None
+    entry_state: list[str] = Field(default_factory=list)
+    exit_state: list[str] = Field(default_factory=list)
+    stages: list[WorkpackStageReading] = Field(default_factory=list)
+    materials: list[WorkpackMaterialReading] = Field(default_factory=list)
+    missing_material_refs: list[str] = Field(default_factory=list)
+
+
+class WorkpackClosedRefReading(FrozenModel):
+    ref: str = Field(min_length=1)
+    kind: Literal['fact', 'beat', 'hinge', 'unknown']
+    text: str | None = None
+
+
+class WorkpackConcernReading(FrozenModel):
+    """B concern 的 closed_refs 解成人话后的投影；unknown 表示蓝图找不到该引用。"""
+
+    constraint_code: str = Field(min_length=1)
+    chapter_ordinal: int | None = Field(default=None, ge=1)
+    scenes: list[str] = Field(default_factory=list)
+    reason: str = Field(min_length=1)
+    closed_refs: list[WorkpackClosedRefReading] = Field(default_factory=list)
+
+
+class WorkpackCausalEdgeReading(FrozenModel):
+    before_alias: str = Field(min_length=1)
+    after_alias: str = Field(min_length=1)
+
+
+class StructureChapterReading(FrozenModel):
+    """Stage4B 一章的裁决材料：由 plan + 当前蓝图确定性渲染（`R-5.25`）。"""
+
+    kind: Literal['stage4_structure_chapter_reading_v1'] = (
+        'stage4_structure_chapter_reading_v1')
+    chapter_function: str = Field(min_length=1)
+    chapter_rewrite_brief: str = Field(min_length=1)
+    structure_decision: dict[str, Any]
+    #: 本章计划引用到的全部 fact id → claim/kind/obligation，每个只出现一次。
+    facts: list[WorkpackFactReading] = Field(default_factory=list)
+    goals: dict[str, WorkpackGoalReading]
+    scenes: list[WorkpackSceneReading] = Field(min_length=1)
+    #: 与 stage4.plan 复检同一函数现场复算的本章读数，外加 alignment；
+    #: 只含 JSON 标量/列表/字典。
+    structure_metrics: dict[str, Any]
+    binding_concerns: list[WorkpackConcernReading] = Field(default_factory=list)
+    signature_conflict_codes: list[str] = Field(default_factory=list)
+
+
+class DesignChapterReading(FrozenModel):
+    """Stage4A 一章的裁决材料：全部 ref 恒为 opaque alias，claim 表每章只出现一次。"""
+
+    kind: Literal['stage4_design_chapter_reading_v1'] = (
+        'stage4_design_chapter_reading_v1')
+    chapter_function: str = Field(min_length=1)
+    weight: str = Field(min_length=1)
+    chapter_rewrite_brief: str = Field(min_length=1)
+    structure_decision: dict[str, Any]
+    facts: list[DesignBlindFact] = Field(min_length=1)
+    goals: dict[str, WorkpackGoalReading]
+    causal_edges: list[WorkpackCausalEdgeReading] = Field(default_factory=list)
+    narrative_relations: list[dict[str, Any]] = Field(default_factory=list)
+    entry_state: list[str] = Field(default_factory=list)
+    ending_state: list[str] = Field(default_factory=list)
+    scenes: list[WorkpackSceneReading] = Field(min_length=1)
+
+
+WorkpackChapterReading = Annotated[
+    DesignChapterReading | StructureChapterReading,
+    Field(discriminator='kind'),
+]
+
+
+class WorkpackReading(FrozenModel):
+    """工作包顶层只出现一次的字段说明与整书材料。"""
+
+    kind: Literal['stage4_workpack_reading_v1'] = 'stage4_workpack_reading_v1'
+    legend: dict[str, str]
+    reconstruction_strategy: str | None = None
+    chapter_weights: list[dict[str, Any]] | None = None
+    global_binding_concerns: list[WorkpackConcernReading] = Field(
+        default_factory=list)
+
+
 class WorkpackItem(FrozenModel):
     """工作包的一条异常/披露/读数行；只呈现服务端判定，无自算字段。"""
 
@@ -1927,9 +2059,13 @@ class WorkpackItem(FrozenModel):
     #: Commander/skill/UI 手工搬运。
     review_token: str | None = Field(
         default=None, pattern=r'^s4er1_[0-9a-f]{64}$')
+    #: v2：coverage 行携带服务端确定性渲染的本章裁决材料；不进 subject/token/proof。
+    reading: WorkpackChapterReading | None = None
 
     @model_validator(mode='after')
     def _actions_and_history_are_closed(self) -> WorkpackItem:
+        if self.reading is not None and self.effect != 'coverage':
+            raise ValueError('reading 只属于 coverage 行')
         if (self.sev is None) != (self.status is None):
             raise ValueError('workpack sev/status 必须同进同出')
         order = {value: index for index, value in enumerate(APPROVAL_WORKPACK_ACTIONS)}
@@ -1979,12 +2115,14 @@ class WorkpackGroup(FrozenModel):
 
 
 class ApprovalWorkpack(FrozenModel):
-    """exception-first Commander 工作包 v1 的公共外壳（批次 5）。
+    """exception-first Commander 工作包 v2 的公共外壳（批次 5；v2 加 reading）。
 
-    只读 façade：绑定当前审阅 subject，不预填任何决定、不启动作业。
+    只读 façade：绑定当前审阅 subject，不预填任何决定、不启动作业。v2 在 coverage 行
+    携带逐章 ``reading``、顶层携带一次 ``legend``；它们是阅读凭证版本的变化，不改
+    subject/token/proof，也不是 artifact 升版。
     """
 
-    v: Literal[1] = 1
+    v: Literal[2] = 2
     sid: str = Field(min_length=1)
     kind: ApprovalWorkpackKind
     candidate_sha256: str | None = Field(
@@ -1996,6 +2134,7 @@ class ApprovalWorkpack(FrozenModel):
     disposition: ApprovalWorkpackDisposition = 'review_required'
     current_decision_sha256: str | None = Field(
         default=None, pattern=r'^[0-9a-f]{64}$')
+    reading: WorkpackReading | None = None
 
     @model_validator(mode='after')
     def _shape_is_closed_and_covers_every_chapter(self) -> ApprovalWorkpack:
@@ -2043,6 +2182,15 @@ class ApprovalWorkpack(FrozenModel):
             for group in self.groups for item in group.items
         ):
             raise ValueError('accept 只能出现在全章 coverage，不能被异常行预填')
+        expected_reading = (
+            DesignChapterReading if self.kind == 'design'
+            else StructureChapterReading)
+        if any(
+            item.reading is not None
+            and not isinstance(item.reading, expected_reading)
+            for group in self.groups for item in group.items
+        ):
+            raise ValueError('coverage reading 的类型必须与 workpack kind 一致')
         chapter_set = set(self.chapter_ordinals)
         if any(
             item.chapter_ordinal is not None

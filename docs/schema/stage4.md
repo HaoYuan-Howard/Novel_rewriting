@@ -323,6 +323,11 @@ Stage5 prompt 不接收 fact/beat/hinge/secret/rule id、alias、A 策略、结�
 
 ## 六、结构度量与人工门
 
+Stage4 A/B 审阅工作包 v2 的逐章 `reading`（`novel/stages/stage4/reading.py`）复用
+`structure_metrics_of` 与当前 Stage2 蓝图的 claim/beat/hinge 投影，把同一份读数按章渲染成人话挂在
+coverage 行；它不是第二个判官，也不进 subject/token/proof。`metric_only` 组只保留一行摘要，完整逐章
+读数以 reading 承载。
+
 `partition_change`、`disclosure_order`、`noncontiguous_regroup`、`anchor_migration`、
 `structure_eligibility`、`structure_alignment` 与 `semantic_closure_reading` 都是现场读数，不设自动美学
 阈值。`causal_closure` 直接依据 Stage2 因果边检查事实是否落入实际场景——`land` 与 `context` 两种引用

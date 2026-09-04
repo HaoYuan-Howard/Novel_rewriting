@@ -129,12 +129,12 @@ Prompt 选型完成后，`prompt_variants`、`prompt_defaults` 与 `--prompt-var
 | `GET /api/novels/:sid/approvals` | `ApprovalDoc` | 新 |
 | `GET /api/novels/:sid/approvals/stage5/template` | `Stage5ClosureTemplate` | 只读、0 成本；按当前整书主体生成带 placeholder/token 的关闭式模板，不代签 |
 | `POST /api/novels/:sid/approvals/stage5` | `ApprovalDoc`（请求体 `Stage5ClosureRequest`：actor/reason + opaque `review_token` + typed must-appear/group rulings） | 服务端重建当前完整 closure workpack 后原子保存回执；成功才打开 `gate.s5`，不启动作业 |
-| `GET /api/novels/:sid/approvals/design/workpack` | `ApprovalWorkpack` v1（绑定 current A candidate + 完整 design subject；异常优先，只读、0 LLM） | 新；Commander/前端审阅入口，不预填决定 |
+| `GET /api/novels/:sid/approvals/design/workpack` | `ApprovalWorkpack` v2（绑定 current A candidate + 完整 design subject；异常优先，只读、0 LLM） | 新；Commander/前端审阅入口，不预填决定 |
 | `GET /api/novels/:sid/approvals/design/template?actor=&reviewer_kind=&review_run_id=&reason=` | `DesignReviewTemplate` | 四项 query 均必填；按当前 A 生成关闭式全书模板，可逐章复用仍完全绑定的历史 accept，但不代签；fresh B infeasible 时发布当前证明并禁止复用旧 accept |
 | `POST /api/novels/:sid/approvals/design` | `ApprovalDoc`（请求体 `DesignReviewRequest`：actor/reviewer/run/reason + opaque `review_token` + 策略/逐章 typed rulings） | 服务端重建当前 Design workpack 与内部全部 SHA 后原子保存；不启动修订、B 或任何作业 |
 | `POST /api/novels/:sid/approvals/gate/:key` | `ApprovalDoc` | 新 |
 | `POST /api/novels/:sid/approvals/seen/:key` | `ApprovalDoc` | `key=read` 必须带 `BlueprintSeenRequest.review_token`；服务端重建同一完整工作包并复验，漂移零写入。raw 阅读事实只绑 review subject/contract，代码/规则漂移时 effective proof 暂不可用，复检通过且审阅身份未变则自动恢复；`key=global` 保持空 body |
-| `GET /api/novels/:sid/approvals/structure/workpack` | `ApprovalWorkpack` v1（绑定 current structure subject；异常优先，只读、0 LLM） | 新；完整披露 B concern / INFO / metric / UNVER，不自动裁决 |
+| `GET /api/novels/:sid/approvals/structure/workpack` | `ApprovalWorkpack` v2（绑定 current structure subject；异常优先，只读、0 LLM） | 新；完整披露 B concern / INFO / metric / UNVER，不自动裁决 |
 | `GET /api/novels/:sid/approvals/stage6/workpack` | `Stage6ApprovalWorkpack` v3（绑定 current review identity、opaque validation seal 与 A/B 完整证据；只读、0 LLM；不输出 code/rules 原料） | 定稿前唯一 `s6r3_` opaque-token 阅读面，不自动 pick；旧 v2 包只读 |
 | `GET /api/novels/:sid/approvals/stage7/workpack` | `Stage7ApprovalWorkpack` v3（绑定 current review identity、opaque validation seal 与完整替换证据；只读、0 LLM；不输出 code/rules 原料） | 定稿前唯一 `s7r3_` opaque-token 阅读面，不自动批准；旧 v2 包只读 |
 | `POST /api/novels/:sid/approvals/structure` | `ApprovalDoc`（请求体 `StructureApprovalRequest`：actor/reason + opaque `review_token` + 恰好覆盖全书的逐章 `accept / request_replan`） | 服务端在同书锁内重建 current structure subject；typed 裁决不启动作业 |
@@ -169,9 +169,9 @@ Prompt 选型完成后，`prompt_variants`、`prompt_defaults` 与 `--prompt-var
 | `POST /api/novels/:sid/stage6/approve` | `JobRecord`（请求体 `HookApproveRequest`：pick/actor/reason + opaque `review_token`） | 新 |
 | `POST /api/novels/:sid/stage7/approve` | `JobRecord`（请求体 `NameMapApproveRequest`：actor/reason + opaque `review_token`） | 新 |
 
-> #### `ApprovalWorkpack` v1 是只读阅读面，不是决定模板
+> #### `ApprovalWorkpack` v2 是只读阅读面，不是决定模板
 >
-> 两个端点共用现役 v1 外壳：`v=1`、`sid`、`kind=design｜structure`、当前完整
+> 两个端点共用现役 v2 外壳：`v=2`、`sid`、`kind=design｜structure`、当前完整
 > `subject_sha256`、封装该 subject 的 `review_token`、设计面必有而结构面必须没有的 `candidate_sha256`、完整有序
 > `chapter_ordinals[]`、`disposition`、可选 `current_decision_sha256`，以及固定六组 `groups[]`。六组顺序恒为
 > `blocking / semantic_attention / disclosure / metric_only / phase_deferred / coverage`；
@@ -179,7 +179,7 @@ Prompt 选型完成后，`prompt_variants`、`prompt_defaults` 与 `--prompt-var
 >
 > `WorkpackItem` 只投影服务端已算事实：`code`、`rule`、`sev`、`status`、
 > `chapter_ordinal`、`scene_refs`、`refs`、`repair_owner`、`detail`、`effect`、
-> `allowed_actions`、`changed`、`historical_accept_reusable`、`source_decision_sha256`。
+> `allowed_actions`、`changed`、`historical_accept_reusable`、`source_decision_sha256`、`review_token`、`reading`。
 > `allowed_actions` 是关闭集 `accept / request_repair / request_replan`，
 > 不是 argv；INFO、metric、UNVER、skipped 和非 blocking/coverage effect 恒为空。coverage 恰覆盖
 > `chapter_ordinals`，changed 章在前、段内按章号升序；changed 与 exact historical accept reuse
@@ -192,6 +192,17 @@ Prompt 选型完成后，`prompt_variants`、`prompt_defaults` 与 `--prompt-var
 > subject/contract 未变时可恢复 `already_current` 并携 `current_decision_sha256`。Design/Structure POST 只回交本 workpack
 > 的 opaque `review_token` 与 typed rulings；Stage4A 完整章 edit 使用独立 `s4er1_…` token。三者都由
 > 服务端现场重建内部 subject/contract/validation 身份，不共享也不要求调用方搬运多枚 SHA。
+>
+> v2 在外壳增加顶层 `reading`（`kind=stage4_workpack_reading_v1`：`legend`、design 面的
+> `reconstruction_strategy / chapter_weights`、structure 面的 `global_binding_concerns`），并让每个
+> coverage 行携带 `reading`（design 面 `stage4_design_chapter_reading_v1`：章功能/权重/重写要点/
+> `structure_decision`、盲真相 `facts` 表、goal/因果边/关系/入口收束状态与逐场的 alias；structure 面
+> `stage4_structure_chapter_reading_v1`：本章 `facts` 表（id→claim/kind/obligation）、逐场 slot/purpose/
+> role/delivery/transition/budget 与 land/context/turn/entry/exit 的 id、舞台 time_layer/place/present、
+> 材料四组计数与摘录、本章 `structure_metrics`
+> 与 `alignment`、解开 closed_refs 的 `binding_concerns`、`signature_conflict_codes`）。`reading` 只能出现在
+> coverage 行且类型随 `kind`，它不进 subject/token/proof；`metric_only` 只保留一行摘要（`refs=[]`），
+> 完整读数以逐章 reading 承载。渲染落点 `novel/stages/stage4/reading.py`。
 
 > #### Stage6/7 定稿 workpack 把“看到的证据”与 approve 乐观锁绑在一起
 >

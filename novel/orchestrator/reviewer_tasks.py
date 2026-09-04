@@ -1219,6 +1219,8 @@ materials 已包含裁决所需的全部材料。不需要也不得读取 operat
 或盘上产物来补充材料；不得运行任何 shell/PowerShell/Python 命令读取材料或产物，唯一
 允许的文件操作是写出上述请求文件。材料确实不足以裁决某一项时，保持模板的关闭式默认值
 （request_replan / request_repair / UNVER）并在对应 reason 写明缺的是什么；不得猜 accept。
+Stage4 A/B 工作包的逐章裁决材料在 materials 的 coverage 行 reading 里，顶层 reading.legend
+是唯一字段说明；metric_only 组只是摘要，完整读数以逐章 reading 为准。
 {correction_instruction}
 {stage4_resolution_instruction}
 """

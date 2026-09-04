@@ -555,7 +555,7 @@ function mockApprovalWorkpack(
     items: [],
   })
   return {
-    v: 1,
+    v: 2,
     sid,
     kind,
     candidate_sha256: kind === 'design' ? MOCK_DESIGN_CANDIDATE : null,
