@@ -55,6 +55,9 @@ class SupervisorActionResult:
     outcome: AgentDeliveryOutcome
     continue_ready: bool = True
     failure_detail: str | None = None
+    # ready action 可在自己的启动窗内并行完成一轮只读 Commander 预审；
+    # 该 provider 身份必须回到 Supervisor，后续 live reviewer 才能精确续会。
+    provider_session_id: str | None = None
     # 只有 action 已经自行落下可验证的同 run 恢复凭据时才出现。Supervisor
     # 据此保持当前 epoch/书锁并开放 resume；普通 exit 2 仍永久结束本次 parent。
     pause_note: str | None = None
@@ -108,7 +111,8 @@ CancelCommander = Callable[[], bool]
 SetCommanderQuiesced = Callable[[bool], bool]
 ReadOperatorNext = Callable[[ExecutionEpoch], OperatorNext]
 RunReadyAction = Callable[
-    [ExecutionEpoch, OperatorNext, LaunchTicket], SupervisorActionResult,
+    [ExecutionEpoch, OperatorNext, str | None, LaunchTicket],
+    SupervisorActionResult,
 ]
 RunBlockedAction = Callable[
     [ExecutionEpoch, OperatorNext, LaunchTicket], SupervisorActionResult,
@@ -472,7 +476,8 @@ class RunSupervisor:
         def action_turn(result: SupervisorActionResult) -> CommanderTurnResult:
             return CommanderTurnResult(
                 exit_code=result.exit_code,
-                provider_session_id=provider_session_id,
+                provider_session_id=(
+                    result.provider_session_id or provider_session_id),
                 continue_ready=result.continue_ready,
                 outcome=result.outcome)
 
@@ -625,7 +630,7 @@ class RunSupervisor:
                                 'ready operator next 没有同快照 execution token')
                         executed = self._launch(
                             lambda ticket: self._run_ready(
-                                epoch, current, ticket))
+                                epoch, current, provider_session_id, ticket))
                         assert isinstance(executed, SupervisorActionResult)
                         turn = action_turn(executed)
                         last = epoch_last = active_epoch_last = turn
@@ -663,16 +668,17 @@ class RunSupervisor:
                                 return SupervisorResult(turn=stopped, stopped=False)
                             turn = reviewed
                             last = epoch_last = active_epoch_last = turn
-                            if turn.provider_session_id is not None:
-                                if (provider_session_id is not None
-                                        and turn.provider_session_id
-                                        != provider_session_id):
-                                    close_epoch(epoch, turn)
-                                    raise RuntimeError(
-                                        'Commander exact resume 返回不同 provider session id')
-                                provider_session_id = turn.provider_session_id
                             if turn.continue_reviewer:
                                 reviewer_continuation = current
+
+                    if turn.provider_session_id is not None:
+                        if (provider_session_id is not None
+                                and turn.provider_session_id
+                                != provider_session_id):
+                            close_epoch(epoch, turn)
+                            raise RuntimeError(
+                                'Commander exact resume 返回不同 provider session id')
+                        provider_session_id = turn.provider_session_id
 
                     with self._condition:
                         pause_requested = self._pause_requested

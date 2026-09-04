@@ -30,9 +30,9 @@ from tools import smoke_stage2_ir1 as S
 _ENV_KEY = 'NOVEL_STAGE2_BLUEPRINT_CONTRACT'
 
 
-def test_the_smoke_tool_accepts_current_v31_contract():
+def test_the_smoke_tool_accepts_every_current_contract():
     assert S.SMOKE_CONTRACTS == (
-        'extraction-ir-v2', 'extraction-ir-v3.1')
+        'extraction-ir-v2', 'extraction-ir-v3.1', 'extraction-ir-v3.2')
 
 
 def _target_of(user: str) -> int:

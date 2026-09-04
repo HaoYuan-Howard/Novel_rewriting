@@ -29,13 +29,14 @@ from pydantic import BaseModel
 from contracts.invariants import BLUEPRINT_ARCHITECTURES
 from contracts.schema.stage2 import (
     ChapterBoundariesResponse, ChapterBlueprintsResponseV2Refs,
-    ChapterBlueprintsResponseV31,
+    ChapterBlueprintsResponseV31, ChapterBlueprintsResponseV32,
 )
 from novel.llm.prompts import with_json_shape
 from novel.stages.stage2 import prompts
 from novel.stages.stage2.compile_v2 import (
     canonical_ir_projection_refs, canonical_ir_projection_v31,
-    compile_v2_refs, compile_v31_refs,
+    canonical_ir_projection_v32, compile_v2_refs, compile_v31_refs,
+    compile_v32_refs,
 )
 
 
@@ -73,6 +74,8 @@ class ContractSpec:
     boundary_response_model: type[BaseModel] | None = None
     #: v3.1 的进一步收窄面；调用方按能力分派，不按架构名字猜。
     uses_hinge_candidates: bool = False
+    #: v3.2 让事实证据选择当前章段落候选，正文只渲染一次。
+    uses_fact_evidence_candidates: bool = False
 
     #: 客户端保留的通用“优先再争取一次正常 content”能力。Stage2 两套契约都不启用：
     #: reasoning 中的 JSON 已通过与 content 完全相同的本地契约，继续重采只会增加
@@ -117,6 +120,22 @@ CONTRACTS: dict[str, ContractSpec] = {
         supports_field_patch=True,
         topology='scaffolded_single',
         uses_hinge_candidates=True,
+    ),
+    # v3.2 不改变正式 Blueprint：只把会在编译前丢弃的 micro-event cue
+    # 收成止段数组，并把 fact evidence 转抄收成章内段落候选引用。
+    'extraction-ir-v3.2': ContractSpec(
+        architecture='extraction-ir-v3.2',
+        system=with_json_shape(prompts.BLUEPRINT_SYS_V32,
+                               prompts.BLUEPRINT_HINT_V32),
+        sys_name='BLUEPRINT_SYS_V32',
+        response_model=ChapterBlueprintsResponseV32,
+        schema_mode='prompt_plus_local_validation',
+        compile_fn=compile_v32_refs,
+        projection_fn=canonical_ir_projection_v32,
+        supports_field_patch=True,
+        topology='scaffolded_single',
+        uses_hinge_candidates=True,
+        uses_fact_evidence_candidates=True,
     ),
 }
 

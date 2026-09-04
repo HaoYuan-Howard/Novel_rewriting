@@ -40,6 +40,13 @@ from tests.test_stage2_generation import _ctx
 from tests.test_stage2_secret_edit import _sandbox, _seed
 
 
+@pytest.fixture(autouse=True)
+def _pin_retained_ir31_for_downstream_fixture(monkeypatch):
+    """本文件验证下游 gate；底座显式使用仍受支持的 v3.1 合成 wire。"""
+    monkeypatch.setenv(
+        'NOVEL_STAGE2_BLUEPRINT_CONTRACT', 'extraction-ir-v3.1')
+
+
 def _current_items(book):
     raw = json.loads((book / 'stage2/global_review.json').read_text(encoding='utf-8'))
     return raw['payload']['items'] if 'payload' in raw else raw['items']

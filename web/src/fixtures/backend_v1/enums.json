@@ -527,7 +527,8 @@
  },
  "blueprint_architectures": [
   "extraction-ir-v2",
-  "extraction-ir-v3.1"
+  "extraction-ir-v3.1",
+  "extraction-ir-v3.2"
  ],
  "blueprint_review_subject_kinds": [
   "formal",

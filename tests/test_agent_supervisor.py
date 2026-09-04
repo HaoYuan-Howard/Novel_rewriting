@@ -87,17 +87,21 @@ def test_v2_supervisor_routes_ready_review_and_complete_without_commander_dispat
             state=state, code_version='code-1', surface_seal='c' * 64,
             action=action, execution_token=token)
 
-    def ready(_epoch, snapshot, ticket):
+    def ready(_epoch, snapshot, resume, ticket):
+        assert resume is None
         calls.append(f'ready:{snapshot.execution_token.node}')
         ticket.commit()
         states.pop(0)
-        return SupervisorActionResult(0, _outcome(), True)
+        return SupervisorActionResult(
+            0, _outcome(), True,
+            provider_session_id='provider-from-ready')
 
     def reviewer(_epoch, snapshot, resume, ticket):
         calls.append(f'reviewer:{snapshot.action.waiting_on}:{resume}')
         ticket.commit()
         states.pop(0)
-        return CommanderTurnResult(0, 'provider-1', True, _outcome())
+        return CommanderTurnResult(
+            0, 'provider-from-ready', True, _outcome())
 
     def finalize(_epoch, ticket):
         calls.append('finalize')
@@ -123,7 +127,8 @@ def test_v2_supervisor_routes_ready_review_and_complete_without_commander_dispat
 
     assert result.stopped is False
     assert calls == [
-        'ready:stage0.remove', 'reviewer:stage0.approve:None', 'finalize']
+        'ready:stage0.remove',
+        'reviewer:stage0.approve:provider-from-ready', 'finalize']
     assert states == []
     assert [event.kind for event in events] == ['epoch_closed']
 
@@ -304,7 +309,7 @@ def test_stage2_review_can_continue_into_ready_blueprint_redo():
         return CommanderTurnResult(
             0, 'provider-stage2-review', True, _outcome())
 
-    def ready(_epoch, current, ticket):
+    def ready(_epoch, current, _provider_session_id, ticket):
         assert current.action.resume_verdict == 'redo'
         calls.append(f'redo:{current.execution_token.node}')
         ticket.commit()
@@ -358,7 +363,7 @@ def test_recoverable_action_failure_pauses_and_resumes_the_same_epoch():
             state='pipeline_complete', code_version='code-1',
             surface_seal='5' * 64, action=None, execution_token=None)
 
-    def ready(current_epoch, _current, ticket):
+    def ready(current_epoch, _current, _provider_session_id, ticket):
         nonlocal state
         assert current_epoch is epoch
         ticket.commit()
@@ -548,7 +553,7 @@ def test_launch_ticket_never_accepts_control_before_process_is_registered(contro
         action=SimpleNamespace(waiting_on=None, action_sha256='e' * 64),
         execution_token=SimpleNamespace(node='stage0.remove'))
 
-    def ready(_epoch, _current, ticket):
+    def ready(_epoch, _current, _provider_session_id, ticket):
         entered.set()
         assert allow_commit.wait(5)
         process_registered.set()
@@ -767,7 +772,7 @@ def test_concurrent_resume_is_accepted_exactly_once():
         action=SimpleNamespace(waiting_on=None, action_sha256='a' * 64),
         execution_token=SimpleNamespace(node='stage0.remove'))
 
-    def ready(_epoch, _current, ticket):
+    def ready(_epoch, _current, _provider_session_id, ticket):
         ticket.commit()
         return SupervisorActionResult(0, _outcome(), False)
 

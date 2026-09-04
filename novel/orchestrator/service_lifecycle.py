@@ -296,6 +296,27 @@ def _atomic_json(path: Path, payload: Mapping[str, object]) -> None:
         raise
 
 
+def write_scratch_json_once(
+    root: str | Path, path: str | Path, payload: Mapping[str, object],
+) -> None:
+    """在一个已存在的 scratch 根内排他落一份 JSON，不覆盖既有请求。"""
+    declared_root = Path(root).absolute()
+    declared = Path(path).absolute()
+    if (declared_root.is_symlink() or not declared_root.is_dir()
+            or declared.parent != declared_root):
+        raise PathRefused('一次性 scratch JSON 必须直属已存在的普通 scratch 根')
+    resolved_root = declared_root.resolve()
+    if declared.parent.resolve() != resolved_root:
+        raise PathRefused('一次性 scratch JSON 的父目录解析后越界')
+    data = json.dumps(
+        payload, ensure_ascii=False, sort_keys=True,
+        separators=(',', ':'), allow_nan=False).encode('utf-8') + b'\n'
+    with open(declared, 'xb') as handle:
+        handle.write(data)
+        handle.flush()
+        os.fsync(handle.fileno())
+
+
 def _exact_service_target(base: str | Path, rel: str) -> Path:
     declared_root = paths.service_dir(base).absolute()
     if declared_root.is_symlink():

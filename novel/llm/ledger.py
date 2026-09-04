@@ -211,7 +211,8 @@ def append_commander_call(
         usage: Mapping[str, int | None] | None = None,
         outcome: str, exit_code: int,
         error_kind: str | None = None,
-        latency_ms: int | None = None) -> None:
+        latency_ms: int | None = None,
+        activity: str | None = None) -> None:
     """追加一次整书 Commander 调用的成本事实。
 
     Commander 不是 ``NODES`` 的成员，故意以 ``role='commander'``、``node=null``
@@ -245,7 +246,8 @@ def append_commander_call(
     for name, value in (
             ('actual_model', actual_model), ('actual_effort', actual_effort),
             ('provider_session_id', provider_session_id),
-            ('cli_version', cli_version), ('error_kind', error_kind)):
+            ('cli_version', cli_version), ('error_kind', error_kind),
+            ('activity', activity)):
         if value is not None and (
                 not isinstance(value, str) or not value.strip()
                 or any(ord(char) < 32 for char in value)):
@@ -294,6 +296,9 @@ def append_commander_call(
         'cache_policy': 'commander-agent-session',
         **usage_values,
         'purpose': 'commander',
+        # 可选的人读活动标签只为墙钟分段；成本身份仍是 role=commander，
+        # 不能伪装成 NODES 中的一只生产 node。
+        'activity': activity,
         'outcome': outcome,
         'error': error_kind,
         'status': None,

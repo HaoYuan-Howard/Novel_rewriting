@@ -492,12 +492,31 @@ narrator_char_id/focalizer_char_id，只能引用本章可选人物或 null。
 $ATOMIC
 只输出 JSON，不要解释。"""
 
+_ATOMIC_DETAIL_V32 = """\
+你只抽取 user 指定的一章。先在内部逐段召回推进，只把细分后的止段依次写入
+micro_event_ends；再将相邻推进归入 beats。两组止段都严格递增并到章尾，beats 的
+边界必须来自 micro_event_ends。每拍填写 time_layer、place、present_char_ids、
+fact_atoms 与 hinges。
+
+当前章每段行首是 `<段号|证据候选ID>`，标记不属于原文。fact_atoms 的证据只交
+evidence_candidate_id；代码会回取该段完整原文与坐标。hinges 仍优先从 user 的候选表
+复制 `{kind,candidate_id}`，没有合适候选时才写 `{kind,phrase}`。narration 使用
+narrator_char_id/focalizer_char_id，只能引用本章可选人物或 null。
+
+$ATOMIC
+只输出 JSON，不要解释。"""
+
 _atomic = _ATOMIC_FACT_RULE.replace('$FACT_KINDS', '|'.join(FACT_ATOM_KINDS)) \
     .replace('$FACT_OBLIGATIONS', '|'.join(FACT_ATOM_OBLIGATIONS))
 BLUEPRINT_SYS_V2_REFS = RULES_V2 + fill(
     _ATOMIC_DETAIL_V2.replace('$ATOMIC', _atomic))
 BLUEPRINT_SYS_V31 = RULES_V2 + fill(
     _ATOMIC_DETAIL_V31.replace('$ATOMIC', _atomic))
+_atomic_v32 = _atomic.replace(
+    '- `evidence_phrase`：该拍区间内能直接支持 claim 的原文原样短语，必须唯一命中；',
+    '- `evidence_candidate_id`：只复制当前章该事实证据段行首的候选 ID；不得自造；')
+BLUEPRINT_SYS_V32 = RULES_V2 + fill(
+    _ATOMIC_DETAIL_V32.replace('$ATOMIC', _atomic_v32))
 _ATOM_HINT = {
     'atom_key': 'a01', 'claim': '一个最小事实命题',
     'kind': '|'.join(FACT_ATOM_KINDS),
@@ -547,3 +566,32 @@ BLUEPRINT_HINT_V31 = {
                        'pronoun_surfaces': ['我']}],
     }],
 }
+BLUEPRINT_HINT_V32 = {
+    'blueprints': [{
+        'chapter_ordinal': 1,
+        'chapter_function': '本章建立或改变了什么局面',
+        'micro_event_ends': [1, 3, 5],
+        'beats': [{
+            **BLUEPRINT_HINT_V2_REFS['blueprints'][0]['beats'][0],
+            'fact_atoms': [{
+                **_ATOM_HINT,
+                'evidence_candidate_id': 'e001',
+            }],
+            'hinges': [{'kind': '|'.join(HINGE_KINDS),
+                        'candidate_id': 'h001'}],
+        }],
+        'causal_edges': [{'before': 'a01', 'after': 'a02'}],
+        'narrative_relations': [{
+            'kind': 'response_to', 'enforcement': 'review',
+            'stimulus_fact_ref': 'a01', 'response_fact_ref': 'a02',
+        }],
+        'entry_state_refs': [], 'ending_state_refs': ['a02'],
+        'narration': [{'grammatical_person': NARRATIVE_PERSON[0],
+                       'narrator_char_id': 'char_001|null',
+                       'focalizer_char_id': 'char_001|null',
+                       'pronoun_surfaces': ['我']}],
+    }],
+}
+# v3.2 的 fact atom 不允许同时携带旧自由短语；结构提示必须与 StrictModel 同构。
+del BLUEPRINT_HINT_V32['blueprints'][0]['beats'][0]['fact_atoms'][0][
+    'evidence_phrase']

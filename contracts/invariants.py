@@ -894,10 +894,15 @@ def hinge_heading(kind: str) -> str:
 #:   `extraction-ir-v3.1`。`bounded-fidelity-v3`、v1、v2.1、v3 从公开取值面撤下；
 #:   Literal 收窄会拒读带退役 architecture 的存量字节，因此 chapter blueprints
 #:   schema v2 → v3，全部存量由 `stage2.blueprint` 付费整跑重建，不做迁移。
-#: · 2026-08-24 再收窄：`extraction-ir-v1.1` 退役，现役只留 v2 / v3.1。
+#: · 2026-08-24 再收窄：`extraction-ir-v1.1` 退役，当时只留 v2 / v3.1。
 #:   `BlueprintContext.architecture` 从三值收成两值，因此 chapter blueprints
 #:   schema v3 → v4；存量 v3 由 `stage2.blueprint` 付费整跑重建，不迁移。
-BLUEPRINT_ARCHITECTURES: Final = ('extraction-ir-v2', 'extraction-ir-v3.1')
+#: · 2026-09-04 增加 v3.2：正式 ChapterBlueprints 字段语义不变，只压缩模型响应
+#:   wire——召回 cue 改为止段数组，事实 evidence 改选当前章段落候选；代码在任何
+#:   checkpoint/业务写盘前核成员与所属拍，再回取既有 SourceSpan。它是兼容扩张，
+#:   旧 v2/v3.1 正式字节仍成立，不升 artifact 版本。
+BLUEPRINT_ARCHITECTURES: Final = (
+    'extraction-ir-v2', 'extraction-ir-v3.1', 'extraction-ir-v3.2')
 
 #: 当前默认架构。`BLUEPRINT_ARCHITECTURES` 是取值面，这一格是默认值——
 #: 翻默认只动这一格（`novel/config.py::DEFAULT_STAGE2_BLUEPRINT_CONTRACT` 从它派生），
@@ -932,10 +937,10 @@ BLUEPRINT_ARCHITECTURES: Final = ('extraction-ir-v2', 'extraction-ir-v3.1')
 #: 均第一（26.0/30、25.0/30），最终正式产物 2/2；v2 为 20.0/30、24.4/30，正式产物
 #: 1/2。v3.1 以每章一相替代 v2 两相，两书累计 wire 61 vs 97、付费命令墙钟 958s vs
 #: 1,073s，但 prompt+completion 高 11.0%。
-#: ⚠ 这次没有完成预登记的第三本外部 holdout；第二书 v3.1 与 v2 还共同出现 ch6 实体
-#: 串线，机械 HARD 没抓到。因此这是带明确风险账的产品默认选择，不冒充全语料质量门通过。
-#: v2 继续留在取值面供显式回退；v1.1 已于 2026-08-24 退役。
-BLUEPRINT_ARCHITECTURE: Final = 'extraction-ir-v3.1'
+#: v3.2 的默认切换只基于“响应中删去编译前即丢弃的重复字段、引用改由代码回取”
+#: 这一结构等价性，不冒充真实模型的质量或速度实证。下一次 clean run 仍须核首次
+#: 落盘、生产 HARD、人工事实抽查与 P50/P95；v2/v3.1 保留为显式回退。
+BLUEPRINT_ARCHITECTURE: Final = 'extraction-ir-v3.2'
 assert BLUEPRINT_ARCHITECTURE in BLUEPRINT_ARCHITECTURES
 
 #: ``stage2.global`` 唯一现役模型证据 wire 身份。模型只交段落候选 ID，代码再铸成

@@ -14,6 +14,8 @@ CLI 跑了多少次、结构上动了什么」——**全部是读数，一条�
     | 产物体积与重复率 | 书内 `stage*/` 顶层 JSON + `contracts/schema/__init__.py::artifact_key` 路由 |
     | token / 缓存 | `<base>/_service/ledger.jsonl`（`novel/llm/ledger.py::ledger_path`） |
     | CLI 次数 / 退出码 / 时长 | `<base>/_service/agent_progress.jsonl`（`novel/orchestrator/beacon.py::read_events`） |
+    | Stage2 章耗时 / Commander 分段 | 同 run 的 ledger `latency_ms` + 上述 CLI 信标；不拿 token 猜时间 |
+    | Stage2 机械质量 | 生产 `stage2.blueprint --check-only` 的同一 `run_check_only` 读路径 |
     | 闸决定 / 修复 / 重采 / 采纳 | `<base>/_service/llm_audit.jsonl`（`novel/llm/ledger.py::audit_path`） |
     | 人审项 | `stage2/global_review.json` + `global_review_decisions*.json` + Stage4 逐章结构决定 |
     | 结构读数 | 生产落点 `novel/stages/stage4/measure.py::structure_metrics_of` |
@@ -37,27 +39,39 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import sys
 from collections import Counter
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 sys.stdout.reconfigure(encoding='utf-8')
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from contracts.artifacts import ARTIFACT_PATHS, BOOK_SCOPED_PATHS  # noqa: E402
-from contracts.invariants import STAGES, review_effect_of          # noqa: E402
+from contracts.artifacts import (                                      # noqa: E402
+    ARTIFACT_PATHS, BOOK_SCOPED_PATHS, STAGE2_CHAPTER_BLUEPRINTS,
+    STAGE2_GLOBAL_GROUNDING, STAGE2_GLOBAL_REVIEW,
+)
+from contracts.invariants import (                                # noqa: E402
+    BLUEPRINT_ARCHITECTURE, STAGES, review_effect_of,
+)
 from contracts.schema import ARTIFACT_SPECS, artifact_key          # noqa: E402
-from novel import paths, run_identity                             # noqa: E402
+from contracts.schema.evaluation import GlobalReview               # noqa: E402
+from contracts.schema.stage2 import GlobalGrounding                # noqa: E402
+from novel import paths, prov, run_identity                        # noqa: E402
 from novel.llm.ledger import audit_path, ledger_path              # noqa: E402
 from novel.orchestrator.beacon import read_events                 # noqa: E402
-from novel.quality.global_review import review_group_key          # noqa: E402
+from novel.quality.global_review import (                          # noqa: E402
+    generation_safety, review_group_key,
+)
 from novel.stages.stage4.measure import structure_metrics_of      # noqa: E402
 
 #: 长串阈值。短串大多是 id 与 ref（`f01_02` / `b03_01`），它们重复本来就是设计目标；
 #: 「重复业务语义」说的是被内联复制的自然语言。两档一起报，不合成一个数。
 LONG_STRING_MIN_CHARS = 16
+WORKFLOW_REPORT_SCHEMA = 'novel-workflow-metrics-v1'
 
 #: 一次跑的观察分组：CLI 次数按节点收敛，节点名来自信标本身，不在这里手抄一张表。
 _CODE_DIRTY = '-dirty'
@@ -709,6 +723,414 @@ def cli_metrics(
     }
 
 
+# ── Stage2 下一次真跑验收读数 ───────────────────────────────────────────────
+
+_STAGE2_NODES = frozenset({'stage2.global', 'stage2.blueprint'})
+
+
+def _nearest_rank(values: list[float], percentile: float) -> float | None:
+    """小样本也使用可解释的 nearest-rank；空集合保持 unknown。"""
+    if not values:
+        return None
+    ordered = sorted(values)
+    index = max(0, math.ceil(percentile * len(ordered)) - 1)
+    return round(ordered[index], 3)
+
+
+def _iso_epoch(value: object) -> float | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return None
+    return parsed.timestamp()
+
+
+def _stage2_cli_intervals(
+    base: Path, sid: str, run_id: str | None,
+) -> tuple[list[tuple[str, float, float]], list[str]]:
+    """只按 exact execution id 配 Stage2 信标，不为验收猜旧历史。"""
+    if run_id is None:
+        return [], ['run_id_missing']
+    events = [
+        event for event in read_events(base)
+        if event.sid == sid and event.run_id == run_id
+        and event.node in _STAGE2_NODES
+    ]
+    pending: dict[str, Any] = {}
+    closed: set[str] = set()
+    intervals: list[tuple[str, float, float]] = []
+    errors: list[str] = []
+    for event in events:
+        execution_id = event.execution_id
+        if execution_id is None:
+            errors.append('execution_id_missing')
+            continue
+        if event.phase == 'start':
+            if execution_id in pending or execution_id in closed:
+                errors.append('duplicate_start')
+                continue
+            pending[execution_id] = event
+            continue
+        started = pending.pop(execution_id, None)
+        if started is None:
+            errors.append('orphan_end')
+            continue
+        if started.node != event.node:
+            errors.append('node_drift')
+            continue
+        closed.add(execution_id)
+        intervals.append((event.node, float(started.ts), float(event.ts)))
+    if pending:
+        errors.append('unclosed_start')
+    for required in sorted(_STAGE2_NODES):
+        if not any(node == required for node, _start, _end in intervals):
+            errors.append(f'{required}_interval_missing')
+    return intervals, sorted(Counter(errors).elements())
+
+
+def _stage2_commander_intervals(
+    rows: list[dict[str, Any]],
+) -> tuple[list[tuple[str, float, float]], list[str]]:
+    intervals: list[tuple[str, float, float]] = []
+    errors: list[str] = []
+    for row in rows:
+        if row.get('role') != 'commander':
+            continue
+        activity = row.get('activity')
+        if not isinstance(activity, str) or not activity.startswith('stage2.'):
+            continue
+        end = _iso_epoch(row.get('at'))
+        latency = row.get('latency_ms')
+        if (end is None or isinstance(latency, bool)
+                or not isinstance(latency, int) or latency < 0):
+            errors.append('commander_interval_unver')
+            continue
+        intervals.append((activity, end - latency / 1000.0, end))
+    return intervals, errors
+
+
+def _overlap_seconds(
+    left: list[tuple[str, float, float]],
+    right: list[tuple[str, float, float]],
+) -> float:
+    return round(sum(
+        max(0.0, min(l_end, r_end) - max(l_start, r_start))
+        for _l_name, l_start, l_end in left
+        for _r_name, r_start, r_end in right
+    ), 3)
+
+
+def _known_string_counter(
+    rows: list[dict[str, Any]], field: str,
+) -> tuple[dict[str, int], int]:
+    """枚举值与缺失行分开；绝不把 ``None`` 字符串化成一个真 profile。"""
+    values: list[str] = []
+    unknown = 0
+    for row in rows:
+        value = row.get(field)
+        if not isinstance(value, str) or not value.strip():
+            unknown += 1
+            continue
+        values.append(value)
+    return dict(sorted(Counter(values).items())), unknown
+
+
+def _current_artifact(
+    novel_dir: Path, rel: str,
+) -> tuple[dict[str, Any] | None, bool, bool]:
+    """返回 payload/current-schema/INVALID-present，三格不互相冒充。"""
+    payload = _read_json_or_none(novel_dir / rel)
+    key = artifact_key(rel)
+    spec = ARTIFACT_SPECS.get(key) if key else None
+    current = (
+        isinstance(payload, dict) and spec is not None
+        and payload.get('_schema_version') == spec.current_version)
+    invalid = (novel_dir / paths.invalid_of(rel)).is_file()
+    return payload if isinstance(payload, dict) else None, current, invalid
+
+
+def _artifact_run_binding(
+    payload: dict[str, Any] | None,
+    *, rel: str, node: str, chapters: list[int | None],
+    audit_rows: list[dict[str, Any]], run_id: str | None,
+) -> dict[str, Any]:
+    """当前 formal 必须被目标 run 的 adoption 逐单元指回，不能只看“文件在”。"""
+    if payload is None or run_id is None:
+        return {'state': 'unver', 'adopted_units': 0, 'expected_units': len(chapters)}
+    fingerprint = prov.projection_fingerprint(payload)
+    matches = [
+        row for row in audit_rows
+        if row.get('kind') == 'artifact_adoption'
+        and row.get('node') == node and row.get('artifact') == rel
+        and row.get('artifact_fingerprint') == fingerprint
+    ]
+    adopted = [row.get('chapter') for row in matches]
+    expected = list(chapters)
+    exact = Counter(adopted) == Counter(expected)
+    return {
+        'state': 'ok' if exact else 'fail',
+        'adopted_units': len(adopted),
+        'expected_units': len(expected),
+    }
+
+
+def _stage2_mechanical_check(
+    novel_dir: Path, *, code: str | None,
+) -> dict[str, Any]:
+    """调用生产 check 的同一读路径；异常只报 kind，绝不回显可能含书名的消息。"""
+    if code is None:
+        return {'state': 'unver', 'why': 'code_identity_unavailable'}
+    try:
+        from novel.orchestrator.state import readonly_ctx
+        from novel.stages.stage2.extract import run_check_only
+
+        report = run_check_only(
+            readonly_ctx(novel_dir, 'stage2.blueprint', code))
+    except Exception as exc:  # noqa: BLE001 —— 缺产物/旧 schema 都是可报告 unknown
+        return {
+            'state': 'unver',
+            'why': 'check_unavailable',
+            'error_kind': type(exc).__name__,
+        }
+    hard_hits = sum(
+        row.sev == 'hard' and row.status == 'hit' for row in report.rules)
+    hard_skipped = sum(
+        row.sev == 'hard' and row.status == 'skipped' for row in report.rules)
+    return {
+        'state': 'ok' if not hard_hits and not hard_skipped else 'fail',
+        'badge': report.badge,
+        'passed': report.passed,
+        'counts': report.counts.model_dump(mode='json'),
+        'hard_hits': hard_hits,
+        'hard_skipped': hard_skipped,
+    }
+
+
+def stage2_metrics(
+    base: Path, novel_dir: Path, sid: str, *, run_id: str | None,
+    identity: dict[str, Any], audit: dict[str, Any],
+) -> dict[str, Any]:
+    """下一次真实 Stage2 的稳定性、质量与墙钟证据；只读且不下结论越权。"""
+    ledger_rows = _run_rows(_jsonl(ledger_path(base)), sid, run_id)
+    audit_rows = _run_rows(_jsonl(audit_path(base)), sid, run_id)
+    blueprint, blueprint_current, blueprint_invalid = _current_artifact(
+        novel_dir, STAGE2_CHAPTER_BLUEPRINTS)
+    global_payload, global_current, global_invalid = _current_artifact(
+        novel_dir, STAGE2_GLOBAL_GROUNDING)
+    review_payload, review_current_schema, review_invalid = _current_artifact(
+        novel_dir, STAGE2_GLOBAL_REVIEW)
+
+    raw_blueprints = blueprint.get('blueprints') if blueprint is not None else None
+    chapter_ordinals = sorted(
+        int(row.get('chapter_ordinal'))
+        for row in raw_blueprints
+        if isinstance(row, dict) and type(row.get('chapter_ordinal')) is int
+    ) if isinstance(raw_blueprints, list) else []
+    architecture = (
+        ((blueprint.get('_provenance') or {}).get('context') or {}).get('architecture')
+        if blueprint is not None else None)
+
+    blueprint_rows = [
+        row for row in ledger_rows if row.get('node') == 'stage2.blueprint']
+    blueprint_wire = [row for row in blueprint_rows if row.get('cached') is False]
+    per_chapter_ms: dict[int, int] = {}
+    latency_unver = 0
+    for row in blueprint_wire:
+        chapter = row.get('chapter')
+        latency = row.get('latency_ms')
+        if (type(chapter) is not int or chapter < 1
+                or isinstance(latency, bool) or not isinstance(latency, int)
+                or latency < 0):
+            latency_unver += 1
+            continue
+        per_chapter_ms[chapter] = per_chapter_ms.get(chapter, 0) + latency
+    chapter_seconds = [value / 1000.0 for value in per_chapter_ms.values()]
+    landing = audit.get('first_call_landing', {}).get(
+        'stage2.blueprint', {
+            'units': 0, 'first_call': 0, 'retried': 0,
+            'zero_wire_landed': 0, 'never_landed': 0, 'unknown': 0,
+        })
+
+    stage2_rows = [
+        row for row in ledger_rows
+        if row.get('node') in _STAGE2_NODES
+        or (isinstance(row.get('activity'), str)
+            and row['activity'].startswith('stage2.'))
+    ]
+    stage2_cache = [row for row in stage2_rows if row.get('cached') is True]
+    cache_unknown = [
+        row for row in stage2_rows
+        if row.get('cached') is not True and row.get('cached') is not False]
+    cold_cache_state = (
+        'unver' if not stage2_rows or cache_unknown
+        else 'ok' if not stage2_cache else 'fail')
+
+    cli_intervals, cli_errors = _stage2_cli_intervals(base, sid, run_id)
+    commander_intervals, commander_interval_errors = _stage2_commander_intervals(
+        ledger_rows)
+    all_intervals = [*cli_intervals, *commander_intervals]
+    wall_complete = (
+        bool(all_intervals) and not cli_errors and not commander_interval_errors
+        and bool(commander_intervals))
+    wall_seconds = (
+        round(max(end for _name, _start, end in all_intervals)
+              - min(start for _name, start, _end in all_intervals), 3)
+        if wall_complete else None)
+    prereview_intervals = [
+        row for row in commander_intervals
+        if row[0] == 'stage2.global.prereview']
+    blueprint_cli_intervals = [
+        row for row in cli_intervals if row[0] == 'stage2.blueprint']
+    overlap = _overlap_seconds(prereview_intervals, blueprint_cli_intervals)
+    overlap_state = (
+        'unver' if cli_errors or commander_interval_errors
+        or not prereview_intervals or not blueprint_cli_intervals
+        else 'ok' if overlap > 0 else 'missed')
+
+    commander_rows = [
+        row for row in ledger_rows
+        if row.get('role') == 'commander'
+        and isinstance(row.get('activity'), str)
+        and row['activity'].startswith('stage2.')
+    ]
+    activity_counts = Counter(str(row['activity']) for row in commander_rows)
+    activity_ms: Counter[str] = Counter()
+    activity_latency_unver = 0
+    for row in commander_rows:
+        latency = row.get('latency_ms')
+        if isinstance(latency, bool) or not isinstance(latency, int) or latency < 0:
+            activity_latency_unver += 1
+        else:
+            activity_ms[str(row['activity'])] += latency
+
+    blueprint_models, blueprint_model_unknown = _known_string_counter(
+        blueprint_wire, 'model')
+    blueprint_efforts, blueprint_effort_unknown = _known_string_counter(
+        blueprint_wire, 'reasoning_effort')
+    commander_models, commander_model_unknown = _known_string_counter(
+        commander_rows, 'request_model')
+    commander_efforts, commander_effort_unknown = _known_string_counter(
+        commander_rows, 'reasoning_effort')
+    commander_actual_models, commander_actual_model_unknown = (
+        _known_string_counter(commander_rows, 'actual_model'))
+    commander_actual_efforts, commander_actual_effort_unknown = (
+        _known_string_counter(commander_rows, 'actual_effort'))
+
+    global_review_safety: dict[str, Any]
+    try:
+        grounding = GlobalGrounding.model_validate(global_payload)
+        review = GlobalReview.model_validate(review_payload)
+        safety = generation_safety(
+            grounding.model_dump(by_alias=True, mode='json'), review)
+        global_review_safety = {
+            'state': 'ok' if safety.safe else 'fail',
+            'current': safety.current,
+            'generation_safe': safety.safe,
+            'all_pass': safety.all_pass,
+            'blocking_items': len(safety.blocking_item_ids),
+            'quarantined_groups': len(safety.quarantined_groups),
+        }
+    except Exception:  # noqa: BLE001 —— 不回显可能携业务主体的校验消息
+        global_review_safety = {
+            'state': 'unver', 'current': False,
+            'generation_safe': False, 'all_pass': False,
+        }
+
+    codes = identity.get('code_identities') or []
+    check_code = codes[0] if len(codes) == 1 else None
+    return {
+        'scope': 'target_run' if run_id is not None else 'sid_all_history',
+        'expected_architecture': BLUEPRINT_ARCHITECTURE,
+        'architecture': architecture,
+        'cold_cache': {
+            'state': cold_cache_state,
+            'hits': len(stage2_cache),
+            'unknown_rows': len(cache_unknown),
+        },
+        'global_artifact': {
+            'formal_present': global_payload is not None,
+            'current_schema': global_current,
+            'invalid_present': global_invalid,
+            'run_binding': _artifact_run_binding(
+                global_payload, rel=STAGE2_GLOBAL_GROUNDING,
+                node='stage2.global', chapters=[None],
+                audit_rows=audit_rows, run_id=run_id),
+        },
+        'blueprint_artifact': {
+            'formal_present': blueprint is not None,
+            'current_schema': blueprint_current,
+            'invalid_present': blueprint_invalid,
+            'chapters': len(chapter_ordinals),
+            'run_binding': _artifact_run_binding(
+                blueprint, rel=STAGE2_CHAPTER_BLUEPRINTS,
+                node='stage2.blueprint', chapters=chapter_ordinals,
+                audit_rows=audit_rows, run_id=run_id),
+        },
+        'global_review': {
+            'current_schema': review_current_schema,
+            'invalid_present': review_invalid,
+            **global_review_safety,
+        },
+        'mechanical_check': _stage2_mechanical_check(
+            novel_dir, code=check_code),
+        'blueprint_wire': {
+            'calls': len(blueprint_wire),
+            'ok': sum(row.get('outcome') == 'ok' for row in blueprint_wire),
+            'errors': sum(row.get('outcome') == 'error' for row in blueprint_wire),
+            'outcome_unknown': sum(
+                row.get('outcome') not in ('ok', 'error') for row in blueprint_wire),
+            'latency_state': (
+                'ok' if blueprint_wire and not latency_unver
+                and set(per_chapter_ms) == set(chapter_ordinals) else 'unver'),
+            'latency_unver_rows': latency_unver,
+            'models': blueprint_models,
+            'model_unknown_rows': blueprint_model_unknown,
+            'reasoning_efforts': blueprint_efforts,
+            'reasoning_effort_unknown_rows': blueprint_effort_unknown,
+            'chapter_latency_seconds': {
+                'chapters': len(per_chapter_ms),
+                'p50': _nearest_rank(chapter_seconds, 0.50),
+                'p95': _nearest_rank(chapter_seconds, 0.95),
+                'max': round(max(chapter_seconds), 3) if chapter_seconds else None,
+            },
+            'first_call_landing': landing,
+        },
+        'commander': {
+            'calls': len(commander_rows),
+            'ok': sum(row.get('outcome') == 'ok' for row in commander_rows),
+            'errors': sum(row.get('outcome') == 'error' for row in commander_rows),
+            'activities': dict(sorted(activity_counts.items())),
+            'request_models': commander_models,
+            'request_model_unknown_rows': commander_model_unknown,
+            'requested_efforts': commander_efforts,
+            'reasoning_effort_unknown_rows': commander_effort_unknown,
+            'actual_models': commander_actual_models,
+            'actual_model_unknown_rows': commander_actual_model_unknown,
+            'actual_efforts': commander_actual_efforts,
+            'actual_effort_unknown_rows': commander_actual_effort_unknown,
+            'activity_seconds': {
+                key: round(value / 1000.0, 3)
+                for key, value in sorted(activity_ms.items())
+            },
+            'latency_unver_rows': activity_latency_unver,
+        },
+        'overlap': {
+            'state': overlap_state,
+            'prereview_blueprint_seconds': overlap,
+        },
+        'wall_clock': {
+            'state': 'ok' if wall_complete else 'unver',
+            'seconds': wall_seconds,
+            'cli_interval_errors': cli_errors,
+            'commander_interval_errors': commander_interval_errors,
+        },
+    }
+
+
 # ── 人审面 ───────────────────────────────────────────────────────────────────
 
 def _read_json_or_none(path: Path) -> Any:
@@ -870,15 +1292,21 @@ def collect(
     checked_run_id = (
         run_identity.check_run_id(run_id) if run_id is not None else None)
     novel_dir = paths.resolve_novel_dir(base_path, sid)
+    identity = identity_metrics(
+        base_path, novel_dir, sid, run_id=checked_run_id)
+    audit = audit_metrics(base_path, sid, run_id=checked_run_id)
     report = {
+        'schema': WORKFLOW_REPORT_SCHEMA,
         'sid': sid,
         'run_id': checked_run_id,
-        'identity': identity_metrics(
-            base_path, novel_dir, sid, run_id=checked_run_id),
+        'identity': identity,
         'artifacts': artifact_metrics(novel_dir),
         'ledger': ledger_metrics(base_path, sid, run_id=checked_run_id),
-        'audit': audit_metrics(base_path, sid, run_id=checked_run_id),
+        'audit': audit,
         'cli': cli_metrics(base_path, sid, run_id=checked_run_id),
+        'stage2': stage2_metrics(
+            base_path, novel_dir, sid, run_id=checked_run_id,
+            identity=identity, audit=audit),
         'human': human_metrics(novel_dir),
         'structure': structure_readings(novel_dir),
     }
@@ -976,6 +1404,40 @@ def render(report: dict[str, Any]) -> str:
         f'（{cli["elapsed_verdict"]}）',
         f'- 未配对 start：{cli["unmatched_starts"]} · '
         f'未配对 end：{cli["unmatched_ends"]}',
+        '',
+    ]
+
+    stage2 = report['stage2']
+    bp = stage2['blueprint_wire']
+    bp_latency = bp['chapter_latency_seconds']
+    out += [
+        '## Stage2 下一次真跑验收面', '',
+        f'- 契约：实际 `{stage2["architecture"]}` / '
+        f'预期 `{stage2["expected_architecture"]}`；冷缓存 '
+        f'**{stage2["cold_cache"]["state"]}** '
+        f'（命中 {stage2["cold_cache"]["hits"]}）',
+        f'- Global formal/run 绑定：'
+        f'{stage2["global_artifact"]["formal_present"]} / '
+        f'{stage2["global_artifact"]["run_binding"]["state"]}；'
+        f'Blueprint {stage2["blueprint_artifact"]["chapters"]} 章，'
+        f'formal/run 绑定：{stage2["blueprint_artifact"]["formal_present"]} / '
+        f'{stage2["blueprint_artifact"]["run_binding"]["state"]}',
+        f'- Blueprint wire {bp["calls"]}（ok {bp["ok"]} / '
+        f'error {bp["errors"]} / unknown {bp["outcome_unknown"]}）；'
+        f'逐章 latency {bp["latency_state"]}，P50 {bp_latency["p50"]}s / '
+        f'P95 {bp_latency["p95"]}s / max {bp_latency["max"]}s',
+        f'- Commander {stage2["commander"]["calls"]} 次：'
+        f'{stage2["commander"]["activities"]}；预审与 Blueprint 重叠 '
+        f'**{stage2["overlap"]["state"]}** '
+        f'{stage2["overlap"]["prereview_blueprint_seconds"]}s',
+        f'- Stage2 首 start→最后 terminal：'
+        f'**{stage2["wall_clock"]["state"]}** '
+        f'{stage2["wall_clock"]["seconds"]}s',
+        f'- 生产机械 check：{stage2["mechanical_check"]["state"]}；'
+        f'Global review generation-safe：'
+        f'{stage2["global_review"]["generation_safe"]}',
+        '- 本节只提供单次证据；“稳定、质量未受影响、显著提速”须交给 '
+        '`tools/stage2_acceptance.py` 汇总至少 5 次冷缓存 clean run 与人工抽查。',
         '',
     ]
 

@@ -3,6 +3,7 @@
 """RunSupervisor reviewer 闭集任务的零模型边界测试。"""
 from __future__ import annotations
 
+import copy
 import json
 from contextlib import nullcontext
 from types import SimpleNamespace
@@ -541,6 +542,126 @@ def test_stage2_options_bind_real_workpack_sha_and_blueprint_token(
     GlobalReviewDecisionSet.model_validate(logical)
 
 
+def test_stage2_prereview_is_read_only_compact_and_rebinds_live_surface(
+        tmp_path, monkeypatch) -> None:
+    """预审只冻结业务与 workpack；Blueprint 后由 live surface 重铸 wrapper。"""
+    monkeypatch.setattr(
+        reviewer_tasks.paths, 'scratch_session_dir',
+        lambda _base, _sid, _epoch_id: tmp_path)
+    reason = '两行共用的已审理由'
+    workpack_sha = '7' * 64
+    global_pack = {
+        'kind': 'stage2-global-review-workpack-v4',
+        'workpack_sha256': workpack_sha,
+        'main_text_chapters': [
+            {'chapter_ordinal': 1, 'text': '第一章正文'},
+            {'chapter_ordinal': 2, 'text': '第二章正文'},
+        ],
+        'items': [{
+            'item_id': f'item-{index}',
+            'subject_sha256': str(index) * 64,
+            'current_state': 'pending',
+            'current_reason': reason,
+        } for index in (1, 2)],
+        'binding': {
+            'expected_source_sha256': '8' * 64,
+            'main_text_subject_sha256': '9' * 64,
+            'reviewed_chapter_ordinals': [1, 2],
+        },
+    }
+    logical_template = {
+        'actor': '(template)', 'decisions': [],
+        'blocking_scope': {
+            'expected_source_sha256': '8' * 64,
+            'expected_blocking_scope_sha256': '6' * 64,
+            'expected_workpack_sha256': '0' * 64,
+            'expected_item_count': 2,
+            'reviewed_chapter_ordinals': [1, 2],
+            'state': 'UNVER', 'reason': '待审阅', 'evidence': [],
+        },
+    }
+    packed = {
+        'global': global_pack,
+        'global_template': encode_artifact(
+            STAGE2_GLOBAL_REVIEW_DECISIONS, logical_template),
+    }
+    monkeypatch.setattr(
+        reviewer_tasks, '_workpack',
+        lambda *_args, **_kwargs: copy.deepcopy(packed))
+    ready = SimpleNamespace(
+        state='ready', surface_seal='a' * 64, action=None,
+        execution_token=SimpleNamespace(node='stage2.blueprint'))
+
+    prereview = reviewer_tasks.build_stage2_prereview_task(
+        tmp_path, '42', ready, tmp_path / 'prereview.json', epoch_id='epoch-1')
+
+    assert prereview is not None
+    assert prereview.prompt.count(reason) == 1, '相同持久理由必须以 catalog 去重'
+    assert 'global_template' not in prereview.prompt
+    assert prereview.prompt.count('第一章正文') == 1
+    payload = copy.deepcopy(prereview.input_template)
+    payload['blocking_scope']['state'] = 'PASS'
+    payload['blocking_scope']['reason'] = '已逐章逐项阅读完整正文并复核'
+    prereview.request_path.write_text(json.dumps({
+        'schema': reviewer_tasks.STAGE2_PREREVIEW_SCHEMA,
+        'business_sha256': prereview.business_sha256,
+        'workpack_sha256': prereview.workpack_sha256,
+        'input_payload': payload,
+    }, ensure_ascii=False), encoding='utf-8')
+    loaded = reviewer_tasks.load_stage2_prereview(prereview)
+    assert loaded['blocking_scope']['state'] == 'PASS'
+
+    blocked = _current(queue.WAITING_ON_STAGE2_REVIEW)
+    options = reviewer_tasks._submission_options(
+        packed, blocked, queue.WAITING_ON_STAGE2_REVIEW)
+    live = reviewer_tasks.ReviewerTask(
+        waiting_on=queue.WAITING_ON_STAGE2_REVIEW,
+        surface_seal=blocked.surface_seal,
+        business_sha256=prereview.business_sha256,
+        request_path=tmp_path / 'live.json', prompt='unused',
+        submission_options=tuple(options))
+    action = reviewer_tasks.bind_stage2_prereview(live, blocked, loaded)
+
+    assert action.node == 'stage2.global'
+    assert action.flags == ('--review-decisions', '@reviewer-input')
+    assert action.input_payload is not None
+    formal = decode_artifact(
+        STAGE2_GLOBAL_REVIEW_DECISIONS, action.input_payload).payload
+    assert formal['blocking_scope']['state'] == 'PASS'
+    wrapper = json.loads(live.request_path.read_text(encoding='utf-8'))
+    assert wrapper['surface_seal'] == blocked.surface_seal
+
+
+def test_stage2_prereview_rejects_identity_drift_before_live_binding(
+        tmp_path) -> None:
+    template = GlobalReviewDecisionSet.model_validate({
+        'actor': 'agent:novel-pipeline-operator', 'decisions': [],
+        'blocking_scope': {
+            'expected_source_sha256': '1' * 64,
+            'expected_blocking_scope_sha256': '2' * 64,
+            'expected_workpack_sha256': '3' * 64,
+            'expected_item_count': 1, 'reviewed_chapter_ordinals': [1],
+            'state': 'UNVER', 'reason': reviewer_tasks._REASON,
+            'evidence': [],
+        },
+    }).model_dump(mode='json')
+    task = reviewer_tasks.Stage2PrereviewTask(
+        business_sha256='4' * 64, workpack_sha256='3' * 64,
+        request_path=tmp_path / 'prereview.json', prompt='unused',
+        input_template=template)
+    submitted = copy.deepcopy(template)
+    submitted['blocking_scope']['reason'] = '已审阅'
+    task.request_path.write_text(json.dumps({
+        'schema': reviewer_tasks.STAGE2_PREREVIEW_SCHEMA,
+        'business_sha256': '5' * 64,
+        'workpack_sha256': task.workpack_sha256,
+        'input_payload': submitted,
+    }), encoding='utf-8')
+
+    with pytest.raises(reviewer_tasks.ReviewerTaskError, match='身份不一致'):
+        reviewer_tasks.load_stage2_prereview(task)
+
+
 def _global_edit_envelope() -> dict:
     return encode_artifact(STAGE2_GLOBAL_EDIT, {
         'characters': [{
@@ -702,7 +823,7 @@ def test_stage2_after_edit_reviews_only_changed_pending_items() -> None:
     assert [row['item_id'] for row in payload['decisions']] == ['changed-item']
 
 
-def test_stage2_safe_unver_offers_explicit_quarantine_or_real_edit() -> None:
+def test_stage2_safe_unver_offers_quarantine_redecision_or_real_edit() -> None:
     current = _current(queue.WAITING_ON_STAGE2_REVIEW)
     options = reviewer_tasks._submission_options({
         'global': _stage2_failed_global([{
@@ -719,11 +840,34 @@ def test_stage2_safe_unver_offers_explicit_quarantine_or_real_edit() -> None:
 
     assert [row['id'] for row in options] == [
         'node:stage2.global.quarantine-unver',
+        'node:stage2.global.resolve-quarantinable-unver',
         'node:stage2.global.apply-edit-unver',
     ]
     decision = options[0]['exact_request']['action']['input_payload']['decisions'][0]
     assert decision['state'] == 'UNVER'
     assert decision['generation_disposition']['action'] == 'quarantine_group'
+
+
+def test_stage2_unsafe_unver_can_be_redecided_without_forcing_a_noop_edit() -> None:
+    current = _current(queue.WAITING_ON_STAGE2_REVIEW)
+    options = reviewer_tasks._submission_options({
+        'global': _stage2_failed_global([{
+            'item_id': 'character-set-complete',
+            'subject_sha256': '4' * 64,
+            'current_state': 'UNVER',
+            'current_reason': '旧 workpack 没有提供完整正文',
+            'registered_evidence': [],
+            'group_key': 'set:characters',
+        }]),
+        'global_edit_template': _global_edit_envelope(),
+    }, current, queue.WAITING_ON_STAGE2_REVIEW)
+
+    assert [row['id'] for row in options] == [
+        'node:stage2.global.resolve-unver',
+        'node:stage2.global.apply-edit-unver',
+    ]
+    assert options[0]['exact_request']['action']['flags'] == [
+        '--review-decisions', '@reviewer-input']
 
 
 def test_reviewer_business_action_ignores_only_the_self_mutating_workpack_hash() -> None:

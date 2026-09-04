@@ -5,8 +5,8 @@ test_stage2_contract_dispatch.py —— Stage2 多响应契约注册表与接线
 
 三件事：
 ① 注册表与取值面/配置口互相咬合（分家当场红）；
-② v2 / v3.1 两份现役契约都能从配置入口到达真实请求路径；
-③ 两套 prompt/hint 形状、调用拓扑与原子事实编译落盘闭环。
+② v2 / v3.1 / v3.2 三份现役契约都能从配置入口到达真实请求路径；
+③ 三套 prompt/hint 形状、调用拓扑与原子事实编译落盘闭环。
 """
 from __future__ import annotations
 
@@ -28,6 +28,7 @@ from novel.stages.stage2 import extract, prompts
 from novel.stages.stage2.character_refs import blueprint_character_prompt_inventory
 from novel.stages.stage2.compile_v2 import (
     canonical_ir_projection_refs, canonical_ir_projection_v31,
+    canonical_ir_projection_v32,
 )
 from novel.stages.stage2.contract import CONTRACTS, active_contract, contract_for
 from novel.stages.stage2.paragraphs import paragraph_spans
@@ -56,10 +57,10 @@ def test_all_stage2_contracts_adopt_valid_reasoning_salvage_immediately():
                for spec in CONTRACTS.values())
 
 
-def test_the_default_is_ir31_and_only_two_contracts_are_selectable():
-    assert active_contract(env={}).architecture == 'extraction-ir-v3.1'
+def test_the_default_is_ir32_and_only_registered_contracts_are_selectable():
+    assert active_contract(env={}).architecture == 'extraction-ir-v3.2'
     assert tuple(BLUEPRINT_ARCHITECTURES) == (
-        'extraction-ir-v2', 'extraction-ir-v3.1')
+        'extraction-ir-v2', 'extraction-ir-v3.1', 'extraction-ir-v3.2')
     for architecture in BLUEPRINT_ARCHITECTURES:
         assert active_contract(env={_ENV_KEY: architecture}).architecture == architecture
 
@@ -168,6 +169,27 @@ def test_the_v31_scaffolded_contract_has_closed_references():
     assert '$' not in prompts.BLUEPRINT_SYS_V31
 
 
+def test_the_v32_wire_removes_cues_and_fact_evidence_transcription():
+    v32 = CONTRACTS['extraction-ir-v3.2']
+    assert v32.topology == 'scaffolded_single'
+    assert v32.boundary_system is None
+    assert v32.uses_hinge_candidates
+    assert v32.uses_fact_evidence_candidates
+    blueprint = prompts.BLUEPRINT_HINT_V32['blueprints'][0]
+    assert set(blueprint) == {
+        'chapter_ordinal', 'chapter_function', 'micro_event_ends', 'beats',
+        'causal_edges', 'narrative_relations', 'entry_state_refs',
+        'ending_state_refs', 'narration'}
+    assert 'micro_events' not in blueprint
+    atom = blueprint['beats'][0]['fact_atoms'][0]
+    assert set(atom) == {
+        'atom_key', 'claim', 'kind', 'obligation',
+        'evidence_candidate_id', 'participant_char_ids'}
+    assert 'evidence_phrase' not in atom
+    assert '只把细分后的止段依次写入' in prompts.BLUEPRINT_SYS_V32
+    assert '$' not in prompts.BLUEPRINT_SYS_V32
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # 四、保留契约零成本全链
 # ─────────────────────────────────────────────────────────────────────────────
@@ -191,6 +213,27 @@ def _scaffolded_responses() -> dict[int, dict]:
             blueprint, texts[blueprint['chapter_ordinal']])
         for blueprint in copy.deepcopy(blueprints())['blueprints']
     }
+
+
+def _compact_v32_responses() -> dict[int, dict]:
+    # 通用底座的 fact source 故意铺满整拍，而 v3.2 producer 的正式
+    # source 是单段候选。因此这里从已有拍边界铸一份合法首次 wire，
+    # 不拿旧架构的宽 source 伪装成 v3.2 反投影。
+    out: dict[int, dict] = {}
+    for blueprint in copy.deepcopy(blueprints())['blueprints']:
+        row = canonical_ir_projection_v31(
+            blueprint,
+            next(section['text'] for section in main_text()
+                 if section['chapter_ordinal'] == blueprint['chapter_ordinal']))
+        row['micro_event_ends'] = [
+            int(beat['end_para']) for beat in row['beats']]
+        row.pop('micro_events', None)
+        for beat in row['beats']:
+            for atom in beat['fact_atoms']:
+                atom.pop('evidence_phrase', None)
+                atom['evidence_candidate_id'] = f"e{int(beat['end_para']):03d}"
+        out[blueprint['chapter_ordinal']] = row
+    return out
 
 
 def test_the_ir2_chain_freezes_boundaries_and_lands_closed_character_refs(
@@ -258,9 +301,12 @@ def test_the_ir2_chain_freezes_boundaries_and_lands_closed_character_refs(
                    for beat in blueprint.beats)
 
 
+@pytest.mark.parametrize(('architecture', 'system_name'), [
+    ('extraction-ir-v3.1', 'BLUEPRINT_SYS_V31'),
+    ('extraction-ir-v3.2', 'BLUEPRINT_SYS_V32'),
+])
 def test_scaffolded_single_chains_use_one_high_shape_per_chapter_and_land(
-        monkeypatch):
-    architecture, system_name = 'extraction-ir-v3.1', 'BLUEPRINT_SYS_V31'
+        monkeypatch, architecture, system_name):
     monkeypatch.setenv(_ENV_KEY, architecture)
     book = Path(tempfile.mkdtemp()) / f'{architecture}_126'
     book.mkdir(parents=True)
@@ -271,7 +317,10 @@ def test_scaffolded_single_chains_use_one_high_shape_per_chapter_and_land(
         global_ctx, lambda _req, _index: _ok(_response_global()))
     extract.run_global(global_ctx, global_client)
 
-    by_ordinal = _scaffolded_responses()
+    by_ordinal = (
+        _compact_v32_responses()
+        if architecture == 'extraction-ir-v3.2' else
+        _scaffolded_responses())
     ordinals = sorted(by_ordinal)
 
     def respond(req, _index):
@@ -279,6 +328,11 @@ def test_scaffolded_single_chains_use_one_high_shape_per_chapter_and_land(
         assert '本章可选人物引用（代码派生、关闭式）' in req.user
         assert '已冻结的事件边界（代码校验）' not in req.user
         assert '本章 hinge 原文候选（代码派生、按需选择）' in req.user
+        if architecture == 'extraction-ir-v3.2':
+            assert '事实证据候选说明' in req.user
+            assert re.search(r'<1\|e001>', req.user)
+        else:
+            assert '事实证据候选说明' not in req.user
         return _ok({'blueprints': [by_ordinal[int(found[-1])]]})
 
     ctx = _ctx(book, 'stage2.blueprint')
@@ -296,6 +350,16 @@ def test_scaffolded_single_chains_use_one_high_shape_per_chapter_and_land(
     assert set(stored.provenance.prompts) == {system_name}
     assert all('summary' not in blueprint.model_dump()
                for blueprint in stored.blueprints)
+    if architecture == 'extraction-ir-v3.2':
+        texts = {section['chapter_ordinal']: section['text']
+                 for section in main_text()}
+        for blueprint in stored.blueprints:
+            projected = canonical_ir_projection_v32(
+                blueprint.model_dump(mode='json'),
+                texts[blueprint.chapter_ordinal])
+            assert all(
+                atom['evidence_candidate_id'].startswith('e')
+                for beat in projected['beats'] for atom in beat['fact_atoms'])
 
 
 def test_ir31_adopts_valid_reasoning_only_blueprint_in_one_wire(monkeypatch):

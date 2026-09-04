@@ -94,6 +94,7 @@ from novel.llm import response_repair
 from novel.llm.json_text import normalize_json_text as _strip_fences
 from novel.llm.prompts import required_top_level
 from novel.llm.transport import ChatRequest, ChatResponse, Transport, TransportError
+from novel.model_slots import model_slot_from_environment
 from novel.observability import (
     AttemptHeartbeat, DEFAULT_HEARTBEAT_SECONDS, RequestProgress,
 )
@@ -2560,7 +2561,10 @@ class LlmClient:
                 heartbeat.start()
                 started = self._clock()
                 try:
-                    resp = self.transport.send(req)
+                    # AgentRun 的 Stage2 预审重叠会显式下发跨进程总槽；
+                    # standalone/其余节点没有该环境时此上下文是 no-op。
+                    with model_slot_from_environment():
+                        resp = self.transport.send(req)
                 except TransportError as e:
                     last = e
                     latency_ms = max(0, round((self._clock() - started) * 1000))

@@ -281,6 +281,9 @@ _WORKPACK_LEGEND: Final = {
         'blocking role 行附带同人物 fate 的只读主体、状态与正式证据，'
         '只供成对阅读，不增加或代替任何 decision item。'),
     'decision': 'workpack 只提供只读材料；PASS/FAIL/UNVER 必须由人显式提交。',
+    'whole_book_text': (
+        '只要本包含 reading_scope=whole_book，main_text_chapters 就逐章给出完整正文；'
+        '每章只出现一次，行级证据仍只负责定位，不能代替通读。'),
 }
 
 
@@ -477,8 +480,10 @@ def review_workpack(
             rows, review=review, claim_payload=claim_payload,
             evidence_slots=evidence_slots, chapters=chapters)
     rows = _ordered_workpack_rows(rows)
+    needs_whole_book = any(
+        row.get('reading_scope') == 'whole_book' for row in rows)
     payload: dict[str, object] = {
-        'kind': 'stage2-global-review-workpack-v3',
+        'kind': 'stage2-global-review-workpack-v4',
         'sid': ctx.sid,
         'scope': scope,
         'read_only': True,
@@ -487,6 +492,14 @@ def review_workpack(
         # 绑定完整 typed MainText 主体，不只绑定章号或最多 24 个展示命中；
         # 未展示上下文之外改一个字，也必须让旧 workpack/scope 失效。
         'main_text_subject_sha256': main_text_subject_sha256,
+        # v3 曾把六类行标成 whole_book，却只交 hash 与局部命中；Commander
+        # 正确地把这种材料不足判成 UNVER，随后误入 GlobalEdit，形成“模型成功、
+        # 交付失败”。v4 对 whole-book 包把 current MainText 只放一遍；行仍引用
+        # 同一主体/证据，不复制正文，workpack SHA 也会绑定实际读到的全部字节。
+        'main_text_chapters': ([{
+            'chapter_ordinal': int(chapter.chapter_ordinal),
+            'text': chapter.text,
+        } for chapter in main.root] if needs_whole_book else []),
         'binding': ({
             'expected_source_sha256': review.source_sha256,
             'expected_blocking_scope_sha256': blocking_scope_sha256(review),

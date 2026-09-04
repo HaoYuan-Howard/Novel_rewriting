@@ -42,6 +42,7 @@ from novel.llm.client import LlmFailed
 from novel.llm.json_text import normalize_json_text
 from novel.llm.prompts import required_top_level
 from novel.llm.transport import ChatResponse
+from novel.model_slots import model_slot_from_environment
 from novel.observability import AttemptHeartbeat, RequestProgress
 from novel.run import RunContext
 
@@ -999,11 +1000,14 @@ class SessionAgentClient:
                 max_attempts=max_delivery_attempts, progress=progress)
             heartbeat.start()
             try:
-                if self.provider_session_id is None:
-                    turn = self.driver.start(self.profile, request)
-                else:
-                    turn = self.driver.resume(
-                        self.profile, self.provider_session_id, request)
+                # 仅当 Supervisor 为 Stage2 重叠窗口下发跨进程槽契约时生效；
+                # 其余节点仍保持原有并发。一次 start/resume 整体只占一槽。
+                with model_slot_from_environment():
+                    if self.provider_session_id is None:
+                        turn = self.driver.start(self.profile, request)
+                    else:
+                        turn = self.driver.resume(
+                            self.profile, self.provider_session_id, request)
             except (AgentConfigurationError, AgentBusyError) as exc:
                 self._driver_failed = True
                 heartbeat.finish(outcome='failed', error_kind='agent_not_started')

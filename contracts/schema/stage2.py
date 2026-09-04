@@ -1468,6 +1468,17 @@ class FactAtomResponse(StrictModel):
     participant_char_ids: list[str]
 
 
+class FactAtomCandidateResponse(StrictModel):
+    """v3.2 的紧凑事实 wire；证据原文与坐标只由章内候选表回取。"""
+
+    atom_key: str = Field(pattern=ATOM_KEY_PATTERN)
+    claim: str = Field(min_length=1)
+    kind: Literal[FACT_ATOM_KINDS]
+    obligation: Literal[FACT_ATOM_OBLIGATIONS]
+    evidence_candidate_id: str = Field(pattern=r'^e\d{3}$')
+    participant_char_ids: list[str]
+
+
 class CausalEdgeResponse(StrictModel):
     before: str = Field(pattern=ATOM_KEY_PATTERN)
     after: str = Field(pattern=ATOM_KEY_PATTERN)
@@ -1645,6 +1656,33 @@ class ScaffoldedBlueprintResponseV31(StrictModel):
 
 class ChapterBlueprintsResponseV31(StrictModel):
     blueprints: list[ScaffoldedBlueprintResponseV31] = Field(min_length=1)
+
+
+# v3.2 保留 v3.1 的单调用召回语义，但不再让 provider 输出编译前即丢弃的
+# cue，也不逐事实转抄证据短语。两者都改成代码可关闭式回取的短引用。
+class BeatResponseV32Refs(StrictModel):
+    end_para: int = Field(ge=1)
+    time_layer: Literal[tuple(RESPONSE_TIME_LAYERS)]
+    place: str | None
+    present_char_ids: list[str]
+    fact_atoms: list[FactAtomCandidateResponse] = Field(min_length=1)
+    hinges: list[HingeResponseV31]
+
+
+class CompactBlueprintResponseV32(StrictModel):
+    chapter_ordinal: int = Field(ge=1)
+    chapter_function: str = Field(min_length=1)
+    micro_event_ends: list[int] = Field(min_length=1)
+    beats: list[BeatResponseV32Refs] = Field(min_length=1)
+    causal_edges: list[CausalEdgeResponse]
+    narrative_relations: list[NarrativeRelationResponse]
+    entry_state_refs: list[str]
+    ending_state_refs: list[str]
+    narration: list[NarrationResponseRefs] = Field(min_length=1)
+
+
+class ChapterBlueprintsResponseV32(StrictModel):
+    blueprints: list[CompactBlueprintResponseV32] = Field(min_length=1)
 
 
 class HingeSelectResponse(StrictModel):

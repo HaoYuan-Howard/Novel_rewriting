@@ -526,6 +526,115 @@ def test_output_never_carries_the_book_identity(base: Path) -> None:
     assert '正文' not in blob
 
 
+def test_stage2_run_metrics_bind_formal_artifacts_and_measure_real_overlap(
+        base: Path) -> None:
+    """章耗时认 ledger，节点墙钟认 beacon，预审重叠只取两者区间交集。"""
+    run_id = 'stage2-acceptance-run'
+    book = base / f'{TITLE}_{SID}'
+    blueprint_path = book / 'stage2/chapter_blueprints.json'
+    blueprint = json.loads(blueprint_path.read_text(encoding='utf-8'))
+    blueprint['_provenance']['context'] = {
+        'architecture': 'extraction-ir-v3.2'}
+    _write(blueprint_path, blueprint)
+    grounding_path = book / 'stage2/global_grounding.json'
+    grounding = json.loads(grounding_path.read_text(encoding='utf-8'))
+
+    rows = [
+        {
+            'at': '1970-01-01T00:01:55+00:00', 'sid': SID,
+            'run_id': run_id, 'node': 'stage2.global', 'code': CODE_CLEAN,
+            'cached': False, 'outcome': 'ok', 'prompt_tokens': 10,
+            'completion_tokens': 5, 'reasoning_tokens': 2,
+            'model': 'executor-m', 'reasoning_effort': 'high',
+            'latency_ms': 10_000, 'chapter': None,
+        },
+        {
+            'at': '1970-01-01T00:03:40+00:00', 'sid': SID,
+            'run_id': run_id, 'node': 'stage2.blueprint', 'code': CODE_CLEAN,
+            'cached': False, 'outcome': 'ok', 'prompt_tokens': 10,
+            'completion_tokens': 5, 'reasoning_tokens': 2,
+            'model': 'executor-m', 'reasoning_effort': 'high',
+            'latency_ms': 100_000, 'chapter': 1,
+        },
+        {
+            'at': '1970-01-01T00:05:20+00:00', 'sid': SID,
+            'run_id': run_id, 'node': 'stage2.blueprint', 'code': CODE_CLEAN,
+            'cached': False, 'outcome': 'ok', 'prompt_tokens': 10,
+            'completion_tokens': 5, 'reasoning_tokens': 2,
+            'model': 'executor-m', 'reasoning_effort': 'high',
+            'latency_ms': 200_000, 'chapter': 2,
+        },
+        {
+            'at': '1970-01-01T00:04:10+00:00', 'sid': SID,
+            'run_id': run_id, 'role': 'commander', 'node': None,
+            'code': CODE_CLEAN, 'cached': False, 'outcome': 'ok',
+            'prompt_tokens': 10, 'completion_tokens': 5, 'reasoning_tokens': 2,
+            'model': 'commander-m', 'request_model': 'commander-m',
+            'reasoning_effort': 'high', 'latency_ms': 100_000,
+            'activity': 'stage2.global.prereview',
+        },
+        {
+            'at': '1970-01-01T00:05:30+00:00', 'sid': SID,
+            'run_id': run_id, 'role': 'commander', 'node': None,
+            'code': CODE_CLEAN, 'cached': False, 'outcome': 'ok',
+            'prompt_tokens': 10, 'completion_tokens': 5, 'reasoning_tokens': 2,
+            'model': 'commander-m', 'request_model': 'commander-m',
+            'reasoning_effort': 'high', 'latency_ms': 10_000,
+            'activity': 'stage2.blueprint.review',
+        },
+    ]
+    (base / '_service/ledger.jsonl').write_text(
+        '\n'.join(json.dumps(row) for row in rows) + '\n', encoding='utf-8')
+
+    blueprint_fp = W.prov.projection_fingerprint(blueprint)
+    grounding_fp = W.prov.projection_fingerprint(grounding)
+    adoptions = [
+        {'sid': SID, 'run_id': run_id, 'kind': 'artifact_adoption',
+         'node': 'stage2.global', 'artifact': 'stage2/global_grounding.json',
+         'artifact_fingerprint': grounding_fp, 'chapter': None,
+         'attempt_id': 'global'},
+        *[
+            {'sid': SID, 'run_id': run_id, 'kind': 'artifact_adoption',
+             'node': 'stage2.blueprint',
+             'artifact': 'stage2/chapter_blueprints.json',
+             'artifact_fingerprint': blueprint_fp, 'chapter': chapter,
+             'attempt_id': f'chapter-{chapter}'}
+            for chapter in (1, 2)
+        ],
+    ]
+    (base / '_service/llm_audit.jsonl').write_text(
+        '\n'.join(json.dumps(row) for row in adoptions) + '\n', encoding='utf-8')
+    progress = [
+        {'ts': 100, 'sid': SID, 'run_id': run_id, 'execution_id': 'global',
+         'node': 'stage2.global', 'phase': 'start', 'exit_code': None, 'note': None},
+        {'ts': 120, 'sid': SID, 'run_id': run_id, 'execution_id': 'global',
+         'node': 'stage2.global', 'phase': 'end', 'exit_code': 0, 'note': None},
+        {'ts': 120, 'sid': SID, 'run_id': run_id, 'execution_id': 'blueprint',
+         'node': 'stage2.blueprint', 'phase': 'start', 'exit_code': None, 'note': None},
+        {'ts': 320, 'sid': SID, 'run_id': run_id, 'execution_id': 'blueprint',
+         'node': 'stage2.blueprint', 'phase': 'end', 'exit_code': 0, 'note': None},
+    ]
+    (base / '_service/agent_progress.jsonl').write_text(
+        '\n'.join(json.dumps(row) for row in progress) + '\n', encoding='utf-8')
+
+    collected = W.collect(base, SID, run_id=run_id)
+    assert collected['schema'] == W.WORKFLOW_REPORT_SCHEMA
+    stage2 = collected['stage2']
+
+    assert stage2['architecture'] == 'extraction-ir-v3.2'
+    assert stage2['cold_cache'] == {
+        'state': 'ok', 'hits': 0, 'unknown_rows': 0}
+    assert stage2['global_artifact']['run_binding']['state'] == 'ok'
+    assert stage2['blueprint_artifact']['run_binding']['state'] == 'ok'
+    assert stage2['blueprint_wire']['chapter_latency_seconds'] == {
+        'chapters': 2, 'p50': 100.0, 'p95': 200.0, 'max': 200.0}
+    assert stage2['commander']['calls'] == 2
+    assert stage2['overlap'] == {
+        'state': 'ok', 'prereview_blueprint_seconds': 100.0}
+    assert stage2['wall_clock']['state'] == 'ok'
+    assert stage2['wall_clock']['seconds'] == 230.0
+
+
 def test_a_leaking_filename_fails_closed_instead_of_being_printed(base: Path) -> None:
     """人可以随手把书名写进决策集文件名——那一刻必须炸，而不是「大概不会吧」。"""
     book = base / f'{TITLE}_{SID}'

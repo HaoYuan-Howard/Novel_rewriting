@@ -188,13 +188,18 @@ def test_stage2_review_workpack_is_read_only_and_never_auto_decides(reviewed_box
 
     assert rc == X.OK
     workpack = json.loads(capsys.readouterr().out)
-    assert workpack['kind'] == 'stage2-global-review-workpack-v3'
+    assert workpack['kind'] == 'stage2-global-review-workpack-v4'
     assert len(workpack['workpack_sha256']) == 64
     assert workpack['binding']['expected_item_count'] == len(workpack['items'])
     assert workpack['read_only'] is True and workpack['auto_decisions'] is False
     assert workpack['items']
     assert sorted(workpack['legend']) == [
-        'decision', 'evidence_mode', 'fate_companion', 'reading_scope']
+        'decision', 'evidence_mode', 'fate_companion', 'reading_scope',
+        'whole_book_text']
+    main = reviewed_box.read('stage1/main_text.json')
+    assert workpack['main_text_chapters'] == [{
+        'chapter_ordinal': row['chapter_ordinal'], 'text': row['text'],
+    } for row in main]
     assert all('current_state' in row and 'review_note' not in row
                and row['reading_scope'] in {'whole_book', 'localized'}
                and row['evidence_mode'] in {

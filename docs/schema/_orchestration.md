@@ -323,7 +323,9 @@ Supervisor 复活；其已验章只能由后续新 run 的 producer 按下述只
 Commander 的 stdout/stderr 只形成供应商 observation，不作为业务完成事实。`role=commander,node=null`
 的 session/ledger 以 attempt id 联结；actual model/effort/provider session id 缺失保持 unknown，不拿请求值
 倒填。ledger 行的 `latency_ms` 记该轮 Commander 子进程墙钟（含其内部全部模型往返与工具调用，不含之后的
-execution drain），进程未启动为 `null`。身份漂移、provider session 跨 logical session 复用或账/审计失败会把 delivery 降为 unknown，
+execution drain），进程未启动为 `null`；可选 `activity` 只把同一 `role=commander` 事实标成
+`stage2.global.prereview` / `stage2.global.review-or-edit` / `stage2.blueprint.review` 等墙钟分段，
+不创建假 node、也不改变成本归属。身份漂移、provider session 跨 logical session 复用或账/审计失败会把 delivery 降为 unknown，
 但 outer state 仍尽力落账。child executor 通过 parent contract SHA 与 current epoch identity 复验相同
 base/sid/profiles/授权/code/skill/provider context；无法复验时不得启动付费节点。
 
@@ -384,7 +386,12 @@ secret/relation/world-rule UNVER；后者仍是 disclosure-ready 而不是 PASS�
 一次 Commander reviewer turn `exit_code=0` 但 fresh outcome=`stopped` 时，RunSupervisor 再读一次
 `operator next`：ready 交确定性 execution-token 主路；只有下一个状态仍是登记的 reviewer blocker 才在
 同 epoch 精确续用同一 provider session。Stage2 global 的产品预算是**最多两次真实 Commander 调用**：
-首轮完整审阅，第二轮提交合并 GlobalEdit 并在同一 typed 输入中自审精确结果；中间 0-wire review/edit
+首轮完整审阅可以在 Blueprint 逐章生成期间以只读预审提前发生：它读取 v4 完整 Global/MainText
+workpack，只把 typed 输出留在 service scratch；Blueprint 落盘后须以业务 SHA、workpack SHA 与
+同 epoch provider session 三重同一性重绑 live surface，失败保持 stopped/unknown，不能跨会话冒充
+第二轮。预审 Commander 与 Blueprint executor 共同竞争 `min(4, NOVEL_CONCURRENCY)` 个 OS 文件锁槽，
+Reviewer 完成后槽位自动归还；配置 1 时串行，故优化不增加任一时刻并发。第二轮提交合并 GlobalEdit
+并在同一 typed 输入中自审精确结果；中间 0-wire review/edit
 动作不计模型轮次，也不创建 Executor 会话。第二轮结束后无论 typed 请求或 blocking 是否仍未闭合，
 Supervisor 都停止并给出稳定 `stage2_global_turn_budget`/具体拒绝事实，绝不启动第三轮 Commander。
 付费 Executor 自己的候选/修复仍在节点 logical session 内 resume checkpoint。
@@ -396,6 +403,13 @@ provider session、同一 request 落点发送不重复 workpack 的紧凑纠错
 两次不同纠正。重复业务主体上的等价已执行/已拒动作也由 progress fingerprint 拒绝，不能靠 review
 surface 自变制造循环。预算、授权、pause/stop、current blocker 与 admission 仍关闭式生效。已经 `pipeline_complete` 而
 delivery 终验未闭合时只运行确定性 finalizer/verify，不追加无关模型 turn；next 自身不可读则降 unknown。
+
+Stage2 下一次真跑验收不从日志文案猜：`tools/workflow_metrics.py --run-id` 以
+`novel-workflow-metrics-v1` 报告把 Blueprint 每章
+`latency_ms`、Commander `activity`、exact execution beacon、formal adoption、生产 check 与 Global
+generation-safe 分格输出；`tools/stage2_acceptance.py` 只汇总至少五次不同 run_id 的冷缓存 clean
+报告。每轮人工抽查少于 5 个章序或缺记录时质量固定为 `unver`；30 分钟以每次 Stage2 首 start 到最后 terminal 的 max 判，
+“显著提速”只有调用方在跑前显式给出历史 baseline 与最小改善百分比才可判。
 
 ---
 

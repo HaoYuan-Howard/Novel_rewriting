@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-compile_v2.py —— `extraction-ir-v2` / `extraction-ir-v3.1` 的确定性编译器。
+compile_v2.py —— `extraction-ir-v2` / `extraction-ir-v3.1` / v3.2 的确定性编译器。
 
 【它与 `normalize.py` 的关系】同一个职责（模型响应 → 正式产物形状）在两种响应契约上的
 两份实现，**出入口逐键同构**（产物形 blueprints + 定位失败账），
@@ -9,7 +9,10 @@ compile_v2.py —— `extraction-ir-v2` / `extraction-ir-v3.1` 的确定性编�
 **并存**，caller 按契约 dispatch（`novel/stages/stage2/contract.py`），
 合并成一个带分支的函数会让「改 ir1 顺手动了 v3」这类事故没有结构性防线。
 
-【ir1 相对 v3 的四族差别】（响应模型：`contracts/schema/stage2.py` 二·b 节）
+【v2/v3.1/v3.2 的差别】（响应模型：`contracts/schema/stage2.py` 二·b～二·e）
+v3.2 沿用 v3.1 的正式语义，但事实 evidence 只返回段落候选 ID，召回脚手架只
+返回止段；本文件在进入 v3.1 编译主干前把两者确定性展开为既有 SourceSpan/拍边界。
+v2 相对旧 v3 正式产物的四族差别如下：
   ① beat 只交 `end_para`：第 n 拍 = 段 [上一拍止段+1 .. end_para]，首拍起 1，
      末拍必须到达本章最后一段 ⇒ 重叠/倒序/漏头尾**结构上不可产生**；
      「中段空隙」语义退役，过渡段前向吸收进下一拍（尺寸影响由重放测试量化）。
@@ -43,6 +46,9 @@ from novel.stages.stage2.paragraphs import (
     ParagraphIndexError, paragraph_range_of, paragraph_spans, span_of,
 )
 from novel.stages.stage2.references import hinge_candidates_by_chapter
+from novel.stages.stage2.blueprint_evidence_candidates import (
+    BlueprintEvidenceCandidateTable, tables_by_chapter,
+)
 
 
 def _narrative_relation_sort_key(row: dict[str, Any]) -> tuple[str, ...]:
@@ -298,9 +304,30 @@ def _compile_semantic_contract(
             if atom_key in key_map:
                 raise ValueError(f'ch{ordinal} fact atom 临时引用重复：{atom_key!r}')
             key_map[atom_key] = fact_id
-            phrase = str(atom.get('evidence_phrase') or '')
-            resolved_ref, source, recovery, cause = locate_fact_atom_source(
-                text, phrase, beat_id, list(blueprint.get('beats') or []))
+            candidate_source = atom.pop('_evidence_source', None)
+            if isinstance(candidate_source, dict):
+                source = copy.deepcopy(candidate_source)
+                start = source.get('start')
+                end = source.get('end')
+                owners: list[str] = []
+                for owner in (blueprint.get('beats') or []):
+                    span = owner.get('span')
+                    if (not isinstance(span, dict)
+                            or type(start) is not int or type(end) is not int
+                            or type(span.get('start')) is not int
+                            or type(span.get('end')) is not int):
+                        continue
+                    if span['start'] <= start and end <= span['end']:
+                        owners.append(str(owner.get('beat_id') or ''))
+                if len(owners) == 1:
+                    resolved_ref, recovery, cause = owners[0], 'exact', ''
+                else:
+                    resolved_ref, source, recovery, cause = (
+                        None, None, None, '证据候选不属于唯一事件拍')
+            else:
+                phrase = str(atom.get('evidence_phrase') or '')
+                resolved_ref, source, recovery, cause = locate_fact_atom_source(
+                    text, phrase, beat_id, list(blueprint.get('beats') or []))
             if resolved_ref is None or source is None or recovery is None:
                 resolved_ref = beat_id
                 fact_failures.append((fact_id, beat_id, cause))
@@ -596,6 +623,7 @@ def _without_scaffold(data: dict[str, Any]) -> dict[str, Any]:
     work = copy.deepcopy(data)
     for blueprint in (work.get('blueprints') or []):
         blueprint.pop('micro_events', None)
+        blueprint.pop('micro_event_ends', None)
     return work
 
 
@@ -675,3 +703,60 @@ def canonical_ir_projection_v31(
 ) -> dict[str, Any]:
     """正式蓝图 → v3.1 修复基线；持久 source 以 phrase 兜底形状回放。"""
     return canonical_ir_projection_v3(blueprint, chapter_text)
+
+
+def compile_v32_refs(
+    data: dict[str, Any],
+    main_text: list[dict[str, Any]],
+    characters: dict[str, dict[str, Any]] | None = None,
+    *,
+    character_inventory: BlueprintCharacterPromptInventory | None = None,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """v3.2 紧凑响应 → 既有蓝图；candidate id 在落 checkpoint 前后均关闭式回取。"""
+    work = copy.deepcopy(data)
+    evidence_tables = tables_by_chapter(main_text)
+    for blueprint in (work.get('blueprints') or []):
+        ordinal = int(blueprint.get('chapter_ordinal') or 0)
+        table = evidence_tables.get(ordinal)
+        if table is None:
+            raise ValueError(f'ch{ordinal} 没有 blueprint 证据候选表')
+        for beat in (blueprint.get('beats') or []):
+            for atom in (beat.get('fact_atoms') or []):
+                candidate_id = atom.pop('evidence_candidate_id', None)
+                candidate = table.lookup(str(candidate_id))
+                atom['_evidence_source'] = candidate.source_span()
+    # hinge 与关闭人物沿用 v3.1 的同一实现；它会先丢 compact scaffold，
+    # 再由 compile_v2_refs 把事实候选 SourceSpan 编译成正式 FactAtom。
+    return compile_v31_refs(
+        work, main_text, characters,
+        character_inventory=character_inventory,
+    )
+
+
+def canonical_ir_projection_v32(
+    blueprint: dict[str, Any], chapter_text: str,
+) -> dict[str, Any]:
+    """正式蓝图 → v3.2 修复基线；证据 span 反投影到所在章内段落候选。"""
+    out = canonical_ir_projection_refs(blueprint, chapter_text)
+    out['micro_event_ends'] = [
+        int(beat['end_para']) for beat in out.get('beats') or []
+        if type(beat.get('end_para')) is int
+    ]
+    table = BlueprintEvidenceCandidateTable.build(chapter_text)
+    source_by_key = {
+        f'a{index:02d}': atom.get('source')
+        for index, atom in enumerate(blueprint.get('fact_atoms') or [], start=1)
+    }
+    for beat in (out.get('beats') or []):
+        for atom in (beat.get('fact_atoms') or []):
+            source = source_by_key.get(str(atom.get('atom_key') or ''))
+            candidate = table.candidate_for_span(
+                source.get('start') if isinstance(source, dict) else None,
+                source.get('end') if isinstance(source, dict) else None,
+            )
+            if candidate is None:
+                raise ValueError(
+                    '正式 v3.2 fact source 不能反投影到唯一章内段落候选')
+            atom.pop('evidence_phrase', None)
+            atom['evidence_candidate_id'] = candidate.candidate_id
+    return out

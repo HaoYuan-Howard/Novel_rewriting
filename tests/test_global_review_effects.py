@@ -32,6 +32,7 @@ from contracts.artifacts import (
 from contracts.schema.evaluation import (
     GlobalReview, GlobalReviewDecision, GlobalReviewGenerationDisposition,
 )
+from contracts.schema.stage1 import MainText
 from contracts.schema.stage2 import GlobalGrounding
 from novel.errors import HumanEditProtected
 from novel.quality.global_review import (
@@ -589,7 +590,7 @@ def test_the_workpack_follows_the_same_scope_rule():
     assert len(default['main_text_subject_sha256']) == 64
 
 
-def test_workpack_v3_preserves_the_item_set_and_has_stable_group_order_and_sha():
+def test_workpack_v4_preserves_items_and_includes_whole_book_text_once():
     book = _book_with_review()
     ctx = _ctx(book, 'stage2.global', paid=False)
     review = ArtifactStore(ctx).read(GlobalReview, global_review.REL)
@@ -598,7 +599,14 @@ def test_workpack_v3_preserves_the_item_set_and_has_stable_group_order_and_sha()
     second = global_review.review_workpack(ctx, scope='all')
     assert first == second
     assert first['workpack_sha256'] == second['workpack_sha256']
-    assert first['kind'] == 'stage2-global-review-workpack-v3'
+    assert first['kind'] == 'stage2-global-review-workpack-v4'
+    main = ArtifactStore(ctx).read(MainText, 'stage1/main_text.json')
+    assert first['main_text_chapters'] == [
+        {'chapter_ordinal': chapter.chapter_ordinal, 'text': chapter.text}
+        for chapter in main.root
+    ]
+    assert len({row['chapter_ordinal']
+                for row in first['main_text_chapters']}) == len(main.root)
     first['legend']['decision'] = '调用方本地改写不应污染下一次生成'
     assert global_review.review_workpack(ctx, scope='all') == second
 

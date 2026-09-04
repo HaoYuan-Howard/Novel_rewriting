@@ -139,24 +139,29 @@ python -m novel.cli run stage2.global <sid> `
   `expected_workpack_sha256` 都是不可提交的占位值；后者只能从实际读过的 workpack 顶层手工复制，
   只改状态、重新生成模板代替阅读或换用旧 workpack 都会关闭式拒绝。
 
-当前只读包为 `stage2-global-review-workpack-v3`。v3 把旧 `review_note` 混写的语义拆成两根正交轴：
+当前只读包为 `stage2-global-review-workpack-v4`。v3 把旧 `review_note` 混写的语义拆成两根正交轴，
+v4 在不改变这两轴的前提下补齐 whole-book 证据：
 `reading_scope=whole_book｜localized` 表示是否必须通读全书，`evidence_mode=`
 `unresolved_formal_evidence｜formal_evidence｜claim_literal｜none` 表示当前展示材料的来源；顶层
 `legend` 是上述两轴闭集的唯一解释。正式 evidence 在场时不再复制一份 `exact_literal_hits`；正式槽
 存在但 `source=None`、缺失或坐标无效时固定为 `unresolved_formal_evidence`，不得回退到 claim 字面
-命中。每行 `effect` 与 `group_key` 都由生产 `review_effect_of` / `review_group_key` 派生；含 blocking
+命中。只要存在 `reading_scope=whole_book`，顶层 `main_text_chapters[]` 就按章完整携带 MainText，
+每章正文恰好一份；只有 SHA 与局部 snippet 的 v3 不能作为完整阅读证据。每行 `effect` 与
+`group_key` 都由生产 `review_effect_of` / `review_group_key` 派生；含 blocking
 项的组优先，同优先级按 `GlobalReview.items` 中该组第一次出现的顺序，组内保持原序。
 
 默认 blocking 包中的每条 `role` 另带同人物 `fate_companion`：只复制 fate 的 item/subject/hash、
 当前状态、delivery effect 与正式/未决 evidence，`read_only=true`，不复制 claim-literal 或另造正文
 材料，也不新增、删除或代替 decision item；无唯一同人物 fate 时生成即关闭。legend、两轴、派生
-分组与 companion 全部纳入 workpack SHA。应用口只现算 v3；旧 v2 SHA 必须在正式
-`global_grounding.json`、`global_review.json` 与 `_rounds/` 的首个写动作前拒绝，人工重新生成并实际复核 v3、绑定新 SHA 后
+分组、完整 MainText 与 companion 全部纳入 workpack SHA。Commander prompt 可把重复 reason
+内容寻址为一份 catalog，但不改变公开包或 SHA。应用口只现算 v4；旧 v2/v3 SHA 必须在正式
+`global_grounding.json`、`global_review.json` 与 `_rounds/` 的首个写动作前拒绝，人工重新生成并实际复核 v4、绑定新 SHA 后
 才可提交。workpack 版本是阅读凭证版本，不改变 `GlobalReviewDecisionSet` v2 或正式 artifact 版本。
 
 Stage2 global 的 Commander 闭环固定为最多两次真实模型调用：“首轮完整审阅 → 第二轮合并 typed
 GlobalEdit 与 `post_edit_review` 自审 → 收口”。FAIL 与人物、setting、arc、集合完整性等不可隔离
-UNVER 必须在首轮一次列全；第二轮执行 `stage2.global --emit-edit-template` 取得当前 v3 骨架，再通过
+UNVER 必须在首轮一次列全。旧 v3 包因没有完整整书证据而留下的 UNVER，在 v4 证据下允许直接
+重新裁决；确认主体事实有错时，第二轮才执行 `stage2.global --emit-edit-template` 取得当前 v3 骨架，再通过
 `--apply-edit` 修改真实事实并提交绑定首轮 source/正文章全集的修后证明。producer 只把证明展开到本次
 edit 新打开的 blocking pending 项，未变化的旧红项不能被默认 PASS 洗绿；原样/no-op 模板、未闭合
 blocking 与漂移证明都在 Global/review 原子写盘前拒绝，且不启动第三轮。只有 `secret:<id>`、

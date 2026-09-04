@@ -66,7 +66,7 @@ from novel.stages.stage2.contract import active_contract, contract_for  # noqa: 
 #: 发出去的是新 prompt、校验与编译却还是旧 spec，**而这不会报错**
 #: （`contract.py` 模块头警告的正是这个形态）。
 SMOKE_CONTRACTS = (
-    'extraction-ir-v2', 'extraction-ir-v3.1',
+    'extraction-ir-v2', 'extraction-ir-v3.1', 'extraction-ir-v3.2',
 )
 NODE = 'stage2.blueprint'
 

@@ -56,7 +56,7 @@ from novel.store import ArtifactStore
 from tests.test_stage2 import blueprints, global_grounding, main_text
 
 
-#: 通用生成闭环固定在默认 `extraction-ir-v3.1`；v2 两相拓扑的断言
+#: 通用生成闭环固定在 v3.1 回归臂；v2 两相拓扑的断言
 #: 集中在 `test_stage2_contract_dispatch.py`。
 @pytest.fixture(autouse=True)
 def _pin_ir31_arm(monkeypatch):

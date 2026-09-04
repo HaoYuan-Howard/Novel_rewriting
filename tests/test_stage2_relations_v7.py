@@ -44,6 +44,13 @@ from tests.test_stage2_secret_edit import _ctx, _seed
 from tests.test_stage4_blind import ROOT, _blueprints as blind_blueprints
 
 
+@pytest.fixture(autouse=True)
+def _pin_retained_ir31_for_relation_fixture(monkeypatch):
+    """关系测试复用 v3.1 合成响应；v3.2 producer 另由契约分发测试覆盖。"""
+    monkeypatch.setenv(
+        'NOVEL_STAGE2_BLUEPRINT_CONTRACT', 'extraction-ir-v3.1')
+
+
 def _chapter(ordinal: int = 1) -> dict:
     return copy.deepcopy(blueprint_payload()['blueprints'][ordinal - 1])
 

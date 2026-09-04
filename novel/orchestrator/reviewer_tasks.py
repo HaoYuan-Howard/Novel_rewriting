@@ -55,11 +55,13 @@ from contracts.schema.evaluation import GlobalReviewDecisionSet
 from contracts.schema.orchestration import ReviewerActionRecord
 from contracts.schema.stage2 import GlobalEdit
 from novel import paths
-from novel.orchestrator import queue, reviewer_contract
+from novel.errors import PathRefused
+from novel.orchestrator import queue, reviewer_contract, service_lifecycle
 from novel.quality.global_review import QUARANTINABLE_REVIEW_GROUP_PREFIXES
 
 
 REQUEST_SCHEMA = 'novel-reviewer-action-v1'
+STAGE2_PREREVIEW_SCHEMA = 'novel-stage2-global-prereview-v1'
 _ACTOR = 'agent:novel-pipeline-operator'
 # 这是 prompt 内的不可提交 sentinel。简单审批（尤其 writing）没有业务
 # decision 枚举可替它关闭式兜底，因此 loader 也必须拒绝原样复制。
@@ -79,6 +81,17 @@ class ReviewerTask:
     request_path: Path
     prompt: str
     submission_options: tuple[dict[str, Any], ...]
+
+
+@dataclass(frozen=True)
+class Stage2PrereviewTask:
+    """Blueprint 运行期间只读完成的 Global 审阅；不携 live surface 写权。"""
+
+    business_sha256: str
+    workpack_sha256: str
+    request_path: Path
+    prompt: str
+    input_template: dict[str, Any]
 
 
 @dataclass(frozen=True)
@@ -324,7 +337,15 @@ def _workpack(
             pack['global_template'] = _json_command([
                 *cli, 'run', 'stage2.global', sid, '--base', base,
                 '--emit-review-template', '--review-scope', 'blocking'])
-        elif has_failed or has_undecided_unver:
+        elif has_failed:
+            pack['global_edit_template'] = _json_command([
+                *cli, 'run', 'stage2.global', sid, '--base', base,
+                '--emit-edit-template'])
+        elif has_undecided_unver:
+            # UNVER 只证明当前决定不足以放行，不证明 Global 主体必错。旧路由把
+            # “材料不足”强制送进 GlobalEdit，未改变的主体随后必然被 HARD 闸拒绝。
+            # 第二轮同时给“按 v4 完整正文重新裁决”与“确有内容错则修订”两条
+            # typed 路；Commander 必须二选一，仍不会取得第三次调用。
             pack['global_edit_template'] = _json_command([
                 *cli, 'run', 'stage2.global', sid, '--base', base,
                 '--emit-edit-template'])
@@ -585,11 +606,60 @@ def _stage4_structure_replan_materials(
     }
 
 
+def _compact_stage2_materials(pack: dict[str, Any]) -> dict[str, Any]:
+    """给 Commander 的 Stage2 阅读面去重审计理由，正文与证据一字不裁。
+
+    一次 scope 决定会把同一句理由展开到上百个持久 item。它属于审计值，逐行
+    重复不增加证据，却可能让恢复 prompt 比正文还大。这里只在模型 wire 上改成
+    引用表；公开 workpack、正式 review 与 workpack SHA 均保持原字节。
+    """
+    visible = copy.deepcopy(_visible_materials(pack))
+    # 这两份只是铸 submission_options 的骨架，exact_request 已是
+    # 唯一可执行形状；再放进 materials 只会让 Commander 重读一份。
+    visible.pop('global_template', None)
+    visible.pop('global_edit_template', None)
+    global_pack = visible.get('global')
+    if not isinstance(global_pack, dict):
+        return visible
+    items = global_pack.get('items')
+    if not isinstance(items, list):
+        return visible
+    catalog: dict[str, str] = {}
+    by_reason: dict[str, str] = {}
+
+    def intern(owner: dict[str, Any]) -> None:
+        reason = owner.pop('current_reason', None)
+        if reason is None:
+            owner['current_reason_ref'] = None
+            return
+        if not isinstance(reason, str):
+            owner['current_reason_ref'] = None
+            return
+        ref = by_reason.get(reason)
+        if ref is None:
+            ref = f'r{len(by_reason) + 1:03d}'
+            by_reason[reason] = ref
+            catalog[ref] = reason
+        owner['current_reason_ref'] = ref
+
+    for row in items:
+        if not isinstance(row, dict):
+            continue
+        intern(row)
+        companion = row.get('fate_companion')
+        if isinstance(companion, dict):
+            intern(companion)
+    global_pack['current_reason_catalog'] = catalog
+    return visible
+
+
 def _review_materials(
     pack: dict[str, Any], waiting_on: str,
 ) -> dict[str, Any]:
     if waiting_on == queue.WAITING_ON_STAGE4_STRUCTURE_REPLAN:
         return _stage4_structure_replan_materials(pack)
+    if waiting_on in queue.STAGE2_REVIEWER_WAITING_ON:
+        return _compact_stage2_materials(pack)
     return _visible_materials(pack)
 
 
@@ -760,7 +830,7 @@ def _submission_options(
         edit_template = pack.get(
             '_global_edit_template', pack.get('global_edit_template'))
 
-        if failed or unsafe_unver:
+        if failed:
             if edit_template is None:
                 raise ReviewerTaskError('Stage2 GlobalEdit 返工缺 typed template')
             edit_payload = _reviewed_global_edit_template(
@@ -789,6 +859,72 @@ def _submission_options(
                         '未改变的旧 FAIL 与不可安全隔离的 UNVER 都会在写盘前被拒绝，不会再开第三轮。'),
                 },
             )]
+
+        if unsafe_unver:
+            # “当前决定无法证实”与“Global 主体错误”是两种状态。v4 已提供
+            # 完整 MainText；先允许逐项收成 PASS/FAIL/仍 UNVER。原样 UNVER
+            # 继续关闸，只有显式 FAIL 才会在下一步取得 GlobalEdit 模板。
+            review_payload = GlobalReviewDecisionSet.model_validate({
+                'actor': _ACTOR,
+                'decisions': [{
+                    'item_id': row['item_id'],
+                    'expected_subject_sha256': row['subject_sha256'],
+                    'state': 'UNVER',
+                    'reason': _REASON,
+                    'evidence': row.get('registered_evidence') or [],
+                } for row in unsafe_unver],
+                'blocking_scope': None,
+            }).model_dump(mode='json')
+            request = _request_wrapper(current, waiting_on, {
+                'kind': 'node', 'node': 'stage2.global',
+                'flags': ['--review-decisions', '@reviewer-input'],
+                'input_payload': review_payload,
+            })
+            review_option = _option(
+                'node:stage2.global.resolve-unver', request,
+                editable_fields=[
+                    'action.input_payload.decisions[].state/reason/evidence',
+                ],
+                binding_fields=bind + [
+                    'action.node', 'action.flags', 'action.input_payload.actor',
+                    'item_id/expected_subject_sha256',
+                ],
+                allowed_values={
+                    'decisions[].state': ['PASS', 'FAIL', 'UNVER'],
+                    'purpose': (
+                        '完整正文复核后明确裁决；FAIL 才进入 typed edit，'
+                        '仍无法判断则保持 UNVER 并关闭 Stage2。'),
+                },
+            )
+            if edit_template is None:
+                raise ReviewerTaskError('Stage2 UNVER 处置缺 typed GlobalEdit template')
+            edit_payload = _reviewed_global_edit_template(
+                edit_template, pack['global'])
+            edit_request = _request_wrapper(current, waiting_on, {
+                'kind': 'node', 'node': 'stage2.global',
+                'flags': ['--apply-edit', '@reviewer-input'],
+                'input_payload': edit_payload,
+            })
+            return [
+                review_option,
+                _option(
+                    'node:stage2.global.apply-edit-unver', edit_request,
+                    editable_fields=[
+                        'action.input_payload 的现有 typed patch 值',
+                        '模板已提供的 action.input_payload.*_replace 列表成员',
+                        'action.input_payload.post_edit_review.reason/quarantine_groups',
+                    ],
+                    binding_fields=bind + [
+                        'action.node', 'action.flags',
+                        'patch 数组的行数、顺序、subject id 与字段集合',
+                    ],
+                    allowed_values={
+                        'purpose': (
+                            '只有确认 Global 主体本身有错时选择；同一轮完成修订与'
+                            '修后复核，未改变的旧 UNVER 不会被洗绿。'),
+                    },
+                ),
+            ]
 
         if pending:
             if len(pending) == len(rows):
@@ -860,6 +996,22 @@ def _submission_options(
                 'flags': ['--review-decisions', '@reviewer-input'],
                 'input_payload': quarantine_payload,
             })
+            review_payload = GlobalReviewDecisionSet.model_validate({
+                'actor': _ACTOR,
+                'decisions': [{
+                    'item_id': row['item_id'],
+                    'expected_subject_sha256': row['subject_sha256'],
+                    'state': 'UNVER',
+                    'reason': _REASON,
+                    'evidence': row.get('registered_evidence') or [],
+                } for row in safe_unver],
+                'blocking_scope': None,
+            }).model_dump(mode='json')
+            review_request = _request_wrapper(current, waiting_on, {
+                'kind': 'node', 'node': 'stage2.global',
+                'flags': ['--review-decisions', '@reviewer-input'],
+                'input_payload': review_payload,
+            })
             if edit_template is None:
                 raise ReviewerTaskError('Stage2 UNVER 处置缺 typed GlobalEdit template')
             edit_payload = _reviewed_global_edit_template(
@@ -886,6 +1038,19 @@ def _submission_options(
                     },
                 ),
                 _option(
+                    'node:stage2.global.resolve-quarantinable-unver', review_request,
+                    editable_fields=[
+                        'action.input_payload.decisions[].state/reason/evidence',
+                    ],
+                    binding_fields=bind + [
+                        'action.node', 'action.flags', 'action.input_payload.actor',
+                        'item_id/expected_subject_sha256',
+                    ],
+                    allowed_values={
+                        'decisions[].state': ['PASS', 'FAIL', 'UNVER'],
+                    },
+                ),
+                _option(
                     'node:stage2.global.apply-edit-unver', edit_request,
                     editable_fields=[
                         'action.input_payload 的现有 typed patch 值',
@@ -896,6 +1061,9 @@ def _submission_options(
                         'action.node', 'action.flags',
                         'patch 数组的行数、顺序、subject id 与字段集合',
                     ],
+                    allowed_values={
+                        'purpose': '确认事实组内容有错时修订；不用于掩盖材料不足。',
+                    },
                 ),
             ]
 
@@ -1096,6 +1264,31 @@ def _submission_options(
     raise ReviewerTaskError(f'未登记 reviewer blocker：{waiting_on}')
 
 
+def _stage2_business_sha256(
+    pack: Mapping[str, Any], waiting_on: str,
+) -> str:
+    global_pack = pack.get('global')
+    binding = global_pack.get('binding') if isinstance(global_pack, Mapping) else None
+    if not isinstance(binding, Mapping):
+        raise ReviewerTaskError('Stage2 global workpack 缺业务 binding')
+    business: dict[str, Any] = {
+        'waiting_on': waiting_on,
+        'expected_source_sha256': binding.get('expected_source_sha256'),
+        'main_text_subject_sha256': binding.get('main_text_subject_sha256'),
+    }
+    if waiting_on == queue.WAITING_ON_STAGE2_EDIT_CORRECTION:
+        correction = pack.get('edit_correction')
+        if not isinstance(correction, Mapping):
+            raise ReviewerTaskError('Stage2 correction workpack 缺业务 binding')
+        business.update({
+            'failed_edit_sha256': correction.get('failed_edit_sha256'),
+            'invalid_sha256': correction.get('invalid_sha256'),
+        })
+    return hashlib.sha256(json.dumps(
+        business, ensure_ascii=False, sort_keys=True,
+        separators=(',', ':')).encode('utf-8')).hexdigest()
+
+
 def build_task(
     base: str | os.PathLike[str],
     sid: str,
@@ -1137,22 +1330,7 @@ def build_task(
         'submission_options': options,
     }
     if waiting_on in queue.STAGE2_REVIEWER_WAITING_ON:
-        binding = pack['global'].get('binding')
-        if not isinstance(binding, dict):
-            raise ReviewerTaskError('Stage2 global workpack 缺业务 binding')
-        business = {
-            'waiting_on': waiting_on,
-            'expected_source_sha256': binding.get('expected_source_sha256'),
-            'main_text_subject_sha256': binding.get('main_text_subject_sha256'),
-        }
-        if waiting_on == queue.WAITING_ON_STAGE2_EDIT_CORRECTION:
-            correction = pack.get('edit_correction')
-            if not isinstance(correction, dict):
-                raise ReviewerTaskError('Stage2 correction workpack 缺业务 binding')
-            business.update({
-                'failed_edit_sha256': correction.get('failed_edit_sha256'),
-                'invalid_sha256': correction.get('invalid_sha256'),
-            })
+        business_sha256 = _stage2_business_sha256(pack, waiting_on)
     elif waiting_on in {
         queue.WAITING_ON_STAGE4_BINDING_RESOLUTION,
         queue.WAITING_ON_STAGE4_STRUCTURE_REPLAN,
@@ -1168,9 +1346,10 @@ def build_task(
             'waiting_on': waiting_on,
             'action_sha256': current.action.action_sha256,
         }
-    business_sha256 = hashlib.sha256(json.dumps(
-        business, ensure_ascii=False, sort_keys=True,
-        separators=(',', ':')).encode('utf-8')).hexdigest()
+    if waiting_on not in queue.STAGE2_REVIEWER_WAITING_ON:
+        business_sha256 = hashlib.sha256(json.dumps(
+            business, ensure_ascii=False, sort_keys=True,
+            separators=(',', ':')).encode('utf-8')).hexdigest()
     correction_instruction = (
         '\n当前 blocker 是进程中断后的 Stage2 最终纠正：第一次 Commander 修改已经'
         '执行并被 materials.edit_correction.hard_outcomes 精确拒绝。你现在占用第二次、'
@@ -1204,18 +1383,24 @@ scene/alias/token 必须原样使用。exact_request 里任何完整尖括号值
 sentinel，必须在阅读后改成具体 typed 值。
 
 一次只提交一个动作。Stage2 global 最多两次 Commander 调用：pending 是首轮完整审阅；
-FAIL/不可隔离 UNVER 是第二轮、也是最后一轮返工。返工必须一次修完模板点名项，
-并再次跨项核对本 edit 会打开的完整主体；post_edit_review 是你对这份精确修改结果的
-显式自检，不会替未改变的旧 FAIL 洗绿，也不会再启动第三轮。证据仍不足的 UNVER
-不得改名为 PASS：只有可整组删除的 secret/relation/world_rule 才能写进
-post_edit_review.quarantine_groups，写作侧会删除完整事实组并在终审保留披露。
+这轮可在 Blueprint 计算期间只读完成，但只有 Blueprint 结束后通过业务与
+workpack 双重绑定才能进入 live surface。FAIL 的第二轮是最后一轮 GlobalEdit；
+旧包证据不完整造成的 UNVER，第二轮可按 v4 完整正文重新裁决，只有确认
+Global 主体本身有错时才选 GlobalEdit。无论选哪条都不会启动第三轮。
+返工必须一次修完模板点名项，并再次跨项核对本 edit 会打开的完整主体；
+post_edit_review 是你对这份精确修改结果的显式自检，不会替未改变的旧 FAIL 洗绿。
+证据仍不足的 UNVER 不得改名为 PASS：只有可整组删除的
+secret/relation/world_rule 才能写进 post_edit_review.quarantine_groups，
+写作侧会删除完整事实组并在终审保留披露。
 global 写作面已安全、只缺完整 Stage2 阅读/闸门 proof 恢复时才选
 approval:blueprint_seen；Supervisor 会用你实际读过的 Blueprint token 确定性收口
 其余早期 proof，你不得自行运行审批命令。
 Supervisor 在两轮之间精确 resume 同一 Commander provider session；不要重新定位
 已经读过的材料。
 
-materials 已包含裁决所需的全部材料。不需要也不得读取 operator skill、仓库源码、测试
+materials 已包含裁决所需的全部材料；Stage2 v4 whole-book 包在
+main_text_chapters 中每章只放一次完整正文，current_reason_ref 只是指向同包理由表的去重引用。
+不需要也不得读取 operator skill、仓库源码、测试
 或盘上产物来补充材料；不得运行任何 shell/PowerShell/Python 命令读取材料或产物，唯一
 允许的文件操作是写出上述请求文件。材料确实不足以裁决某一项时，保持模板的关闭式默认值
 （request_replan / request_repair / UNVER）并在对应 reason 写明缺的是什么；不得猜 accept。
@@ -1246,6 +1431,101 @@ Stage4 A/B 工作包的逐章裁决材料在 materials 的 coverage 行 reading 
         business_sha256=business_sha256,
         request_path=request, prompt=prompt,
         submission_options=tuple(options))
+
+
+def build_stage2_prereview_task(
+    base: str | os.PathLike[str],
+    sid: str,
+    current: OperatorNext,
+    request_path: str | os.PathLike[str],
+    *,
+    epoch_id: str,
+) -> Stage2PrereviewTask | None:
+    """为即将运行的 Blueprint 冻结一份无写权 Global 预审任务。
+
+    只有完整 blocking 面仍为 ``pending`` 才值得预取；FAIL/UNVER/部分决定属于
+    恢复语义，必须等 live blocker 现场构造对应 option，不能被这条快路改向。
+    """
+    token = current.execution_token
+    if (current.state != 'ready' or token is None
+            or token.node != 'stage2.blueprint'):
+        return None
+    base_abs = os.path.abspath(os.fspath(base))
+    request = Path(request_path).resolve()
+    request_root = paths.scratch_session_dir(base_abs, sid, epoch_id).resolve()
+    if not request.is_relative_to(request_root):
+        raise ReviewerTaskError(
+            f'Stage2 预审 request 只能落在当前服务 scratch：{request_root}')
+    if request.exists() or request.is_symlink():
+        raise ReviewerTaskError(f'Stage2 预审 request 必须是全新落点：{request}')
+
+    waiting_on = queue.WAITING_ON_STAGE2_REVIEW
+    review_run_id = f'supervisor-prereview-{current.surface_seal[:20]}'
+    pack = _workpack(
+        base_abs, sid, waiting_on, review_run_id=review_run_id, current=None)
+    rows = pack.get('global', {}).get('items')
+    if (not isinstance(rows, list) or not rows
+            or any(not isinstance(row, dict) for row in rows)):
+        raise ReviewerTaskError('Stage2 预审 workpack 缺完整 items')
+    if any(row.get('current_state') != 'pending' for row in rows):
+        return None
+    template = _global_review_template(pack.get('global_template'))
+    template['actor'] = _ACTOR
+    scope = template.get('blocking_scope')
+    if not isinstance(scope, dict):
+        raise ReviewerTaskError('Stage2 预审 blocking 模板缺 scope binding')
+    workpack_sha = pack['global'].get('workpack_sha256')
+    if not isinstance(workpack_sha, str):
+        raise ReviewerTaskError('Stage2 预审 workpack 缺 workpack_sha256')
+    scope['expected_workpack_sha256'] = workpack_sha
+    scope['reason'] = _REASON
+    input_template = GlobalReviewDecisionSet.model_validate(
+        template).model_dump(mode='json')
+    business_sha256 = _stage2_business_sha256(pack, waiting_on)
+    exact_output = {
+        'schema': STAGE2_PREREVIEW_SCHEMA,
+        'business_sha256': business_sha256,
+        'workpack_sha256': workpack_sha,
+        'input_payload': input_template,
+    }
+    envelope = {
+        'schema': 'novel-stage2-global-prereview-workpack-v1',
+        'base': base_abs,
+        'sid': sid,
+        # 只作审计坐标，不进入最终请求；Blueprint 完成后它必然变化。
+        'observed_surface_seal': current.surface_seal,
+        'business_sha256': business_sha256,
+        'materials': _compact_stage2_materials(pack),
+        'exact_output': exact_output,
+    }
+    contract = reviewer_contract.for_blocker(waiting_on)
+    prompt = f"""你是本轮唯一 Commander/Reviewer。Blueprint 将在另一个进程计算；
+你只读下面这份不可变 Stage2 Global 工作包并逐项、跨项复核，不运行任何节点，
+不读取仓库或盘上补充材料，不修改正式产物。工作包已经包含所需完整正文。
+
+最终只把一份 UTF-8 JSON 写到：
+{request}
+完整复制 exact_output，只修改 input_payload 中允许的人审值：
+blocking_scope.state/reason/evidence 与 decisions[].state/reason/evidence。
+所有 expected_*、actor、business_sha256、workpack_sha256 与字段集合必须逐字保留；
+尖括号 sentinel 必须替换。证据不足保持 UNVER，不得猜 PASS。此文件只是无写权
+预审结果；Supervisor 会在 Blueprint 结束后重新绑定 live surface、重跑同一 typed
+loader，再决定是否执行，故你不得自行提交或调用审批命令。
+
+<reviewer-contract>
+{contract}
+</reviewer-contract>
+<immutable-workpack>
+{json.dumps(envelope, ensure_ascii=False, sort_keys=True, separators=(',', ':'))}
+</immutable-workpack>
+"""
+    return Stage2PrereviewTask(
+        business_sha256=business_sha256,
+        workpack_sha256=workpack_sha,
+        request_path=request,
+        prompt=prompt,
+        input_template=input_template,
+    )
 
 
 def action_business_sha256(action: ReviewerAction) -> str:
@@ -1465,6 +1745,85 @@ def _validate_global_review_binding(
             raise ReviewerTaskError(f'Stage2 blocking_scope.{key} 必须逐字保留模板')
 
 
+def load_stage2_prereview(task: Stage2PrereviewTask) -> dict[str, Any]:
+    """读取无 live 写权的预审输出，并只返回已绑定的业务 payload。"""
+    path = task.request_path
+    if path.is_symlink() or not path.is_file():
+        raise ReviewerTaskError('Stage2 预审输出必须是当前 scratch 内的普通文件')
+    try:
+        raw = _JSON_OBJECT.validate_json(path.read_bytes())
+    except (OSError, ValidationError) as exc:
+        raise ReviewerTaskError(
+            f'Stage2 预审输出无法读取：{type(exc).__name__}') from exc
+    placeholders = _placeholder_paths(raw)
+    if placeholders:
+        raise ReviewerTaskError(
+            'Stage2 预审输出仍有未填写 skeleton sentinel：'
+            f'{placeholders[:8]}')
+    doc = _strict_object(
+        raw,
+        keys=frozenset({
+            'schema', 'business_sha256', 'workpack_sha256', 'input_payload',
+        }),
+        label='Stage2 预审输出')
+    if doc['schema'] != STAGE2_PREREVIEW_SCHEMA:
+        raise ReviewerTaskError(
+            f'Stage2 预审 schema 必须是 {STAGE2_PREREVIEW_SCHEMA}')
+    if (doc['business_sha256'] != task.business_sha256
+            or doc['workpack_sha256'] != task.workpack_sha256):
+        raise ReviewerTaskError('Stage2 预审输出与冻结业务/workpack 身份不一致')
+    payload = doc['input_payload']
+    if not isinstance(payload, dict):
+        raise ReviewerTaskError('Stage2 预审 input_payload 必须是 object')
+    try:
+        logical = GlobalReviewDecisionSet.model_validate(payload).model_dump(
+            mode='json')
+    except ValidationError as exc:
+        raise ReviewerTaskError('Stage2 预审决定不符合 typed 契约') from exc
+    _validate_global_review_binding(payload, task.input_template)
+    return logical
+
+
+def bind_stage2_prereview(
+    task: ReviewerTask,
+    current: OperatorNext,
+    input_payload: Mapping[str, Any],
+) -> ReviewerNodeAction:
+    """把只读预审决定重新绑定到 Blueprint 完成后的 live surface。"""
+    if task.waiting_on != queue.WAITING_ON_STAGE2_REVIEW:
+        raise ReviewerTaskError('Stage2 预审只能绑定 global review blocker')
+    matches = []
+    for option in task.submission_options:
+        exact = option.get('exact_request')
+        action = exact.get('action') if isinstance(exact, dict) else None
+        if (isinstance(action, dict)
+                and action.get('kind') == 'node'
+                and action.get('node') == 'stage2.global'
+                and action.get('flags') == [
+                    '--review-decisions', '@reviewer-input']
+                and isinstance(
+                    (action.get('input_payload') or {}).get('blocking_scope'),
+                    dict)):
+            matches.append(exact)
+    if len(matches) != 1:
+        raise ReviewerTaskError(
+            '当前 live workpack 未唯一提供 Stage2 blocking scope review 动作')
+    document = copy.deepcopy(matches[0])
+    document['action']['input_payload'] = copy.deepcopy(dict(input_payload))
+    try:
+        service_lifecycle.write_scratch_json_once(
+            task.request_path.parent, task.request_path, document)
+    except (OSError, PathRefused, TypeError, ValueError) as exc:
+        raise ReviewerTaskError(
+            f'Stage2 live 预审请求无法原子落 scratch：{type(exc).__name__}') from exc
+    action = load_action(
+        task.request_path, current,
+        submission_options=task.submission_options)
+    if not isinstance(action, ReviewerNodeAction):
+        raise ReviewerTaskError('Stage2 预审重绑定没有形成 node action')
+    return action
+
+
 def correction_prompt(task: ReviewerTask, reason: str, *, attempt: int) -> str:
     """同一 provider session 的紧凑纠错提示；不重复发送整份 workpack。"""
     return f"""上一轮 typed request 已在正式产物写入前被确定性边界拒绝，没有修改正式产物。
@@ -1629,6 +1988,8 @@ def load_action(
 __all__ = [
     'approval_review_token', 'replay_request_document',
     'ReviewerAction', 'ReviewerApprovalAction', 'ReviewerNodeAction',
-    'ReviewerTask', 'ReviewerTaskError', 'action_business_sha256',
+    'ReviewerTask', 'ReviewerTaskError', 'Stage2PrereviewTask',
+    'action_business_sha256', 'bind_stage2_prereview', 'build_stage2_prereview_task',
     'build_task', 'correction_prompt', 'is_registered', 'load_action',
+    'load_stage2_prereview',
 ]

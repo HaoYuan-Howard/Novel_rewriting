@@ -340,6 +340,10 @@ _WRITE_ALLOWED = {
         'commit journal；旧书内 `_stage*_runs` 只读接入；'
         '这些 sidecar 不是正式 artifact，候选仍须回到对应 stage producer 的 schema/HARD/'
         'ArtifactStore/readback/adoption 终验后才能 delivered'),
+    'novel/model_slots.py': (
+        'Stage2 只读 Reviewer 与 Blueprint 子进程共享的 OS 锁槽。模块只在 Supervisor '
+        '传入的受管 scratch 子目录创建固定数量、内容恒为 0 的锁文件，并以 r+b 取得'
+        '内核文件锁；锁不是产物或状态账，进程崩溃由内核释放，正式产物仍只经 store'),
     'novel/orchestrator/service_lifecycle.py': (
         '受管 scratch 生命周期只写 `_service/scratch/<sid>/<session>/`；创建与显式 finish '
         '均绑定精确 session，TTL sweep 先排除活跃 owner 再有界扫描。其余维护只经'

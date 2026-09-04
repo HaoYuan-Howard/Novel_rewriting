@@ -10,6 +10,7 @@ import pytest
 
 from contracts.schema.orchestration import ProgressEvent
 from novel import paths
+from novel.errors import PathRefused
 from novel.orchestrator import admission, beacon, service_lifecycle
 
 
@@ -41,6 +42,24 @@ def test_scratch_session_finishes_only_the_exact_session(tmp_path):
     assert second.is_dir()
     assert service_lifecycle.finish_scratch_session(
         tmp_path, '42', 'session-a') is False
+
+
+def test_scratch_json_once_is_confined_and_never_overwrites(tmp_path):
+    root = tmp_path / 'scratch'
+    root.mkdir()
+    target = root / 'request.json'
+
+    service_lifecycle.write_scratch_json_once(
+        root, target, {'schema': 'test', 'value': 1})
+
+    assert json.loads(target.read_text(encoding='utf-8')) == {
+        'schema': 'test', 'value': 1}
+    with pytest.raises(FileExistsError):
+        service_lifecycle.write_scratch_json_once(
+            root, target, {'schema': 'test', 'value': 2})
+    with pytest.raises(PathRefused):
+        service_lifecycle.write_scratch_json_once(
+            root, tmp_path / 'outside.json', {'schema': 'test'})
 
 
 def test_scratch_ttl_is_explicit_shallow_and_bounded(tmp_path):

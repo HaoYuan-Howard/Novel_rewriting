@@ -351,8 +351,10 @@ hinge 那一侧的 LCS 兜底本来就是禁的 ⇒ 那笔账**结构性恒空**
 `BlueprintContext` 固定边界为：
 
 - `architecture` 取值登记在 `contracts/invariants.py::BLUEPRINT_ARCHITECTURES`：
-  `extraction-ir-v2`、`extraction-ir-v3.1`；当前默认由同文件
-  `BLUEPRINT_ARCHITECTURE` 唯一指定为 v3.1；
+  `extraction-ir-v2`、`extraction-ir-v3.1`、`extraction-ir-v3.2`；当前默认由同文件
+  `BLUEPRINT_ARCHITECTURE` 唯一指定为 v3.2；v3.2 的模型响应只交 micro-event
+  止段与 fact 段落候选 ID，代码在 checkpoint/业务写盘前将其展开为 v3.1 同形的
+  拍边界与正式 `SourceSpan`，并验证候选属于 fact 所在 beat；
   定向修复按基线产物的架构选契约，不把存量产物伪装成当前默认；
 - 必填 `stable_prefix`、`past_neighbor_chars_max`、`continuity_chars_max`、
   `past_names_chars_max`。
@@ -463,16 +465,18 @@ Stage2 GlobalEdit/Review 决策还接受 `_service/edits/<same sid>` 的一次�
   默认全部 `UNVER`，原样应用也不会打开事实闸。每次 formal 或
   schema-valid `.INVALID` 写回都同步确定性物化称名投影；旧盘面首次进入
   Blueprint 时也会用同一纯函数补齐。
-- `stage2.blueprint`：逐章生成；默认 `extraction-ir-v3.1` 每章发一次请求，把召回脚手架和
-  最终细节合在同一响应中；`micro_events` 只交短 `cue`、编译前丢弃，narration 选择本章可见
-  `char_id`，hinge 优先选择确定性原文候选 id，候选覆盖不到仍交唯一 phrase。显式 v2 回退臂
+- `stage2.blueprint`：逐章生成；默认 `extraction-ir-v3.2` 每章发一次请求，把召回脚手架和
+  最终细节合在同一响应中；`micro_event_ends` 只交严格递增且到章尾的段号，fact evidence
+  只交本章关闭式段落候选 id，正文每段只渲染一次，compiler 确定性回取正式 `SourceSpan`；
+  narration 选择本章可见 `char_id`，hinge 优先选择确定性原文候选 id，候选覆盖不到仍交唯一
+  phrase。显式 v3.1 回退臂保留带短 `cue` 的 `micro_events`，同样每章一请求；显式 v2 回退臂
   每章发两相请求：第一相同时列 `micro_events`（完整回忆层）与 `beats`（因果拍压缩层），
   两列止段严格递增且落到章尾，beat 止段必须取自 micro-event 止段；第二相只能在代码冻结的
   beat 边界上填 time layer、地点、hinge、叙述信息与可见 `char_id`。`--chapters` 定向付费
   重生成；`--renormalize` 重算当前 schema 的原文定位，不会在无显示名时猜测人物 ID；
   `--check-only` 联合读取两份业务产物复检。Blueprint 的 prompt、dynamic
   validator、compile 与 provenance 只读 MainText + 称名投影，不伪造一条 canonical
-  global 输入边。两种现役契约的拓扑显式登记在 `ContractSpec.topology`，预览、整跑与定向修复共用
+  global 输入边。三种现役契约的拓扑显式登记在 `ContractSpec.topology`，预览、整跑与定向修复共用
   该分派，不从可空 system 字段猜。`--emit-review-workpack` 零调用输出绑定当前 Blueprint、
   MainText、`stage2-blueprint-review-v4` 与完整 `narrative_relations`，并把免费机械复检另记为
   validation seal；对外只交 opaque review token。异常章先排，但不省略正常章、关系或语义消费字段，

@@ -71,6 +71,9 @@ from novel.stages.stage2.global_contract import GlobalEvidenceContractSpec
 from novel.stages.stage2.global_evidence_candidates import (
     GlobalEvidenceCandidateTable, compile_candidate_evidence,
 )
+from novel.stages.stage2.blueprint_evidence_candidates import (
+    BlueprintEvidenceCandidateTable, tables_by_chapter,
+)
 from novel.stages.stage2 import global_role_fate_patch
 from novel.stages.stage2.normalize import (
     EvidenceLocatorCorrection,
@@ -862,10 +865,14 @@ def build_prompts(
         raise RuntimeError(f'{spec.architecture} 的调用拓扑没有登记 system')
     visible: dict[int, dict[str, list[str]]] = {}
     candidates: dict[int, list[dict[str, Any]]] = {}
+    fact_candidates: dict[int, BlueprintEvidenceCandidateTable] = {}
     if spec.topology == 'scaffolded_single':
         visible = character_inventory['visible_character_refs']
     if spec.topology == 'scaffolded_single' and spec.uses_hinge_candidates:
         candidates = hinge_candidates_by_chapter(mt)
+    if (spec.topology == 'scaffolded_single'
+            and spec.uses_fact_evidence_candidates):
+        fact_candidates = tables_by_chapter(mt)
     return [
         (o, system, build_blueprint_user(
             ctx.title,
@@ -877,6 +884,10 @@ def build_prompts(
             hinge_candidates=(candidates.get(o, [])
                               if spec.topology == 'scaffolded_single'
                               and spec.uses_hinge_candidates else None),
+            fact_evidence_candidates=(fact_candidates.get(o)
+                                      if spec.topology == 'scaffolded_single'
+                                      and spec.uses_fact_evidence_candidates
+                                      else None),
         ))
         for o in targets
     ]
@@ -1137,6 +1148,8 @@ def build_blueprint_user(title: str, main_text: list[dict[str, Any]],
                          repair_baseline: dict[str, Any] | None = None,
                          character_refs: dict[str, list[str]] | None = None,
                          hinge_candidates: list[dict[str, Any]] | None = None,
+                         fact_evidence_candidates:
+                         BlueprintEvidenceCandidateTable | None = None,
                          frozen_boundaries: list[int] | None = None,
                          boundary_events: list[str] | None = None) -> str:
     """逐章那一相的 user。
@@ -1171,7 +1184,8 @@ def build_blueprint_user(title: str, main_text: list[dict[str, Any]],
         if neighbor else '── 相邻原文窗口 ──\n无（当前为第一章）',
         _past_names_block(past_names),
         f'── 当前章全文（不可裁剪，逐段编号）──\n【第{ordinal}章】\n'
-        + render_numbered(current),
+        + (fact_evidence_candidates.render()
+           if fact_evidence_candidates is not None else render_numbered(current)),
         '── 本次任务范围 ──\n只产出以下章的 blueprint'
         '（按此顺序，范围外的章一律不要产出）：\n' + scope,
     ]
@@ -1179,6 +1193,11 @@ def build_blueprint_user(title: str, main_text: list[dict[str, Any]],
         parts.append(_character_refs_block(character_refs))
     if hinge_candidates is not None:
         parts.append(_hinge_candidates_block(hinge_candidates))
+    if fact_evidence_candidates is not None:
+        parts.append(
+            '── 事实证据候选说明 ──\n'
+            '当前章行首 `<段号|eNNN>` 的 eNNN 是该整段的关闭式证据候选。'
+            'fact_atoms[].evidence_candidate_id 只能复制这些 ID；代码回取原文与坐标。')
     if frozen_boundaries is not None:
         parts.append(_frozen_boundaries_block(
             frozen_boundaries, boundary_events))
@@ -3538,7 +3557,12 @@ def _boundary_validator(ordinal: int, paragraph_count: int) \
         if len(matches) != 1:
             return f'ch{ordinal} 必须恰好返回一份，实际 {len(matches)} 份'
         blueprint = matches[0]
-        micro_ends = [int(beat.end_para) for beat in blueprint.micro_events]
+        compact = getattr(blueprint, 'micro_event_ends', None)
+        micro_ends = (
+            [int(value) for value in compact]
+            if compact is not None else
+            [int(beat.end_para) for beat in blueprint.micro_events]
+        )
         beat_ends = [int(beat.end_para) for beat in blueprint.beats]
         for label, ends in (('micro_events', micro_ends), ('beats', beat_ends)):
             if any(left >= right for left, right in zip(ends, ends[1:])):
@@ -3672,6 +3696,7 @@ def _scaffolded_validator(
     allowed: set[str],
     *,
     candidate_rows: list[dict[str, Any]] | None = None,
+    fact_candidate_table: BlueprintEvidenceCandidateTable | None = None,
     narration_refs: bool = False,
 ) -> Callable[[Any, Any], str | None]:
     """单调用脚手架的动态闸：边界召回、关闭人物与候选所属拍一次验完。"""
@@ -3697,6 +3722,22 @@ def _scaffolded_validator(
         fact_error = _fact_contract_error(ordinal, blueprint, allowed)
         if fact_error is not None:
             return fact_error
+        if fact_candidate_table is not None:
+            cursor = 1
+            for beat in blueprint.beats:
+                for atom in beat.fact_atoms:
+                    candidate_id = getattr(atom, 'evidence_candidate_id', None)
+                    try:
+                        candidate = fact_candidate_table.lookup(str(candidate_id))
+                    except ValueError:
+                        return (f'ch{ordinal} fact atom 含清单外 '
+                                f'evidence_candidate_id：{candidate_id}')
+                    if not cursor <= candidate.para <= int(beat.end_para):
+                        return (
+                            f'ch{ordinal} fact 证据候选 {candidate_id} 位于第 '
+                            f'{candidate.para} 段，不在所属拍 '
+                            f'{cursor}..{int(beat.end_para)}')
+                cursor = int(beat.end_para) + 1
         if narration_refs:
             invalid_narration = sorted({
                 str(cid)
@@ -4171,12 +4212,15 @@ def _run_blueprint_repair(
     boundary_requests: list[tuple[int | None, str, str]] = []
     visible: dict[int, dict[str, list[str]]] = {}
     candidate_rows: dict[int, list[dict[str, Any]]] = {}
+    fact_candidate_tables: dict[int, BlueprintEvidenceCandidateTable] = {}
     character_inventory = blueprint_inventory_from_projection(
         character_projection)
     visible = character_inventory['visible_character_refs']
     past_names = character_inventory['past_attested_surfaces']
     if spec.uses_hinge_candidates:
         candidate_rows = hinge_candidates_by_chapter(main_text)
+    if spec.uses_fact_evidence_candidates:
+        fact_candidate_tables = tables_by_chapter(main_text)
     for ordinal in chapters:
         backfill = ordinal in missing_baselines
         findings = ([{
@@ -4273,6 +4317,9 @@ def _run_blueprint_repair(
             character_refs=visible.get(ordinal, {}),
             hinge_candidates=(candidate_rows.get(ordinal, [])
                               if spec.uses_hinge_candidates else None),
+            fact_evidence_candidates=(fact_candidate_tables.get(ordinal)
+                                      if spec.uses_fact_evidence_candidates
+                                      else None),
             frozen_boundaries=(frozen[ordinal]
                                if spec.topology == 'boundary_then_detail' else None),
             boundary_events=(boundary_events.get(ordinal)
@@ -4296,6 +4343,7 @@ def _run_blueprint_repair(
             paragraph_count[ordinal],
             set(visible.get(ordinal, {})),
             candidate_rows=candidate_rows.get(ordinal, []),
+            fact_candidate_table=fact_candidate_tables.get(ordinal),
             narration_refs=True,
         )
     # 没有边界重切请求时，detail 是本轮第一个真实请求面；它必须先铸 run
@@ -4531,6 +4579,9 @@ def request_blueprints(ctx: RunContext, client: _BlueprintRequestSource, *,
             visible = character_inventory['visible_character_refs']
             candidate_rows = (hinge_candidates_by_chapter(main_text)
                               if spec.uses_hinge_candidates else {})
+            fact_candidate_tables = (
+                tables_by_chapter(main_text)
+                if spec.uses_fact_evidence_candidates else {})
             paragraph_count = {
                 int(section.get('chapter_ordinal') or 0):
                 len(paragraph_spans(str(section.get('text') or '')))
@@ -4541,6 +4592,7 @@ def request_blueprints(ctx: RunContext, client: _BlueprintRequestSource, *,
                 paragraph_count[ordinal],
                 set(visible.get(ordinal, {})),
                 candidate_rows=candidate_rows.get(ordinal, []),
+                fact_candidate_table=fact_candidate_tables.get(ordinal),
                 narration_refs=True,
             )
         raw, violations, errors = _run_chapter_requests(

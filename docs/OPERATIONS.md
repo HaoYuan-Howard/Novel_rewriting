@@ -57,6 +57,58 @@ conda run -n novel_refactor python -X utf8 tools/verify_agent_e2e.py `
   --base <Output目录> --sid <sid> --run-id <Commander-run-id>
 ```
 
+### Stage2 五次冷缓存性能与质量验收
+
+这不是模型 A/B。操作者可以在第一次跑数前从设置界面更换一次默认 Agent profile；同一批五次
+clean run 之间不得再改 Blueprint/Commander 的实际模型、effort 或 `NOVEL_CONCURRENCY`。每次使用
+独立 clean base 与空缓存，并继续按 operator skill 或界面启动真实流水线，不在这里复制生产跑书 argv。
+本次《夫君不行_但我有孕啦》的历史 Stage2 墙钟基线是 3044 秒；“显著提速”在跑前登记为五次
+新 run 的 P50 至少改善 20%，而 30 分钟目标要求五次里的 **max** 都不超过 1800 秒。
+
+每次跑完立即把只读报告写到对应 base 之外；`--run-id` 使用顶层 parent/Commander run id：
+
+```powershell
+conda run -n novel_refactor python -X utf8 tools/workflow_metrics.py `
+  --base <本次clean-Output目录> --sid 2062949822106228156 `
+  --run-id <parent-run-id> --json <仓外报告目录\stage2-run-N.json>
+```
+
+每个 run 至少固定抽查 5 个章序（建议同一组首章、前中段、中段、后中段、末章），逐项对照源章核
+事实召回、因果方向、人物/世界状态与 evidence 是否落在所属 beat；不能只看“读起来合理”。人工记录
+不放正文，只保存章序、结论、操作者和可审计理由：
+
+```json
+{
+  "schema": "novel-stage2-manual-quality-v1",
+  "runs": [
+    {
+      "run_id": "<parent-run-id>",
+      "decision": "pass",
+      "sampled_chapters": [1, 6, 11, 17, 22],
+      "reviewer": "<操作者>",
+      "reason": "逐章核过事实、因果、状态与证据所属拍；无漏项或错锚"
+    }
+  ]
+}
+```
+
+五份报告与五条人工记录齐备后统一收口；`--report` 精确重复五次：
+
+```powershell
+conda run -n novel_refactor python -X utf8 tools/stage2_acceptance.py `
+  --report <stage2-run-1.json> --report <stage2-run-2.json> `
+  --report <stage2-run-3.json> --report <stage2-run-4.json> `
+  --report <stage2-run-5.json> --manual-quality <manual-quality.json> `
+  --target-seconds 1800 --baseline-seconds 3044 `
+  --minimum-speedup-percent 20 --json <仓外报告目录\stage2-acceptance.json>
+```
+
+工具同时关闭式核对：五个不同 clean run、当前 schema 与目标 run adoption、无 `.INVALID`、生产
+HARD/skip、Global generation-safe、冷缓存、首次落盘率不低于 95%、Stage2 Commander 不超过两轮、
+预审与 Blueprint 确有重叠，以及五次实际模型/effort 一致。人工记录缺一轮、每轮少于 5 章，或任一
+读数未知时结论保持 `unver`；在汇总 `claim_ready=true` 前不得宣称质量未退化、显著提速或已稳定达到
+30 分钟。
+
 顶层 Commander 结束不等于子执行已经闭合。正常主路由 RunSupervisor、admission claim、beacon、ledger
 和 finalizer 自动收口；故障恢复、prepared bridge、坏尾与 owner lease 的精确步骤只读 skill 的
 `references/recovery.md`，不要用手工删锁文件代替 reconcile。
