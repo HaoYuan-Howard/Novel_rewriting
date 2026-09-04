@@ -118,6 +118,48 @@ def test_v2_parent_compatibility_snapshots_do_not_override_epoch_identity(
         run_id=record.run_id, base=tmp_path, contract=contract) == parent_sha
 
 
+def test_stage2_prereview_context_is_epoch_bound_but_uses_no_live_admission(
+        tmp_path, monkeypatch):
+    """只读预审哨兵可过上下文双向校验，近似前缀仍必须关闭式拒绝。"""
+    start = _start(tmp_path)
+    contract = RunContractV2(**start.model_dump(mode='json'))
+    epoch = ExecutionEpoch(
+        epoch_id='epoch-prereview', ordinal=1, reason='initial',
+        argv=['commander', '-'], prompt_sha256='1' * 64,
+        protocol_version='commander-v2', cli_version='cli-v2',
+        code_version='code-v1', skill_sha256=skill_contract.package_sha256(),
+        session_run_id='session-prereview')
+    record = AgentRunRecord(
+        run_id='commander-prereview', start=start, contract=contract,
+        epochs=[epoch], active_epoch_id=epoch.epoch_id,
+        started=1, ended=None, exit_code=None, state='running',
+        allowed_controls=['pause', 'stop'])
+    prereview_id = commander_context.stage2_prereview_admission_id(
+        epoch.epoch_id)
+    env = commander_context.env_with_context(
+        run_id=record.run_id, base=tmp_path, start=start,
+        contract=contract, epoch=epoch, admission_id=prereview_id, env={})
+    monkeypatch.setattr(commander_context.prov, 'code_version', lambda: 'code-v1')
+
+    loaded = commander_context.load_from_environment(
+        tmp_path, '42', env=env, records=[record])
+
+    assert loaded is not None
+    assert loaded.admission_id == loaded.execution_id == prereview_id
+    assert prereview_id == 'epoch-prereview-stage2-prereview'
+
+    lookalike = prereview_id + '-extra'
+    with pytest.raises(ValueError, match='属于当前 epoch'):
+        commander_context.env_with_context(
+            run_id=record.run_id, base=tmp_path, start=start,
+            contract=contract, epoch=epoch, admission_id=lookalike, env={})
+    tampered = dict(env)
+    tampered[commander_context.COMMANDER_ADMISSION_ID_ENV] = lookalike
+    with pytest.raises(TerminalState, match='不属于当前 epoch'):
+        commander_context.load_from_environment(
+            tmp_path, '42', env=tampered, records=[record])
+
+
 @pytest.mark.parametrize('drift,match', [
     ('code', '代码指纹'),
     ('skill', 'operator skill'),

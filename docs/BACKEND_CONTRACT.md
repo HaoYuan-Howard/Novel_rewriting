@@ -874,6 +874,18 @@ Stage5/6 从各自已经读取的 Stage1 文本即时计算确定性机械读数
 > 失败日志必须保留头尾两段，不能只留尾部而裁掉根因；这些改动都不放宽 typed loader、写盘闸或
 > 三次硬上限。
 >
+> **上述“调用前记 `started`”的唯一生命周期缝是 Commander 子进程 `Popen` 成功后、
+> stdin/prompt 发送前。** prompt/context/epoch/env 的本地预检失败以及 Popen 本身失败都是
+> 0-wire，不得进入 Stage2 有效预算或 `role=commander` 成本账；一旦该回调成功并持久化预算，
+> 后续宿主崩溃、审计失败或结论未知仍保守消耗本格。旧版若在这道缝之前因只读预审 admission
+> 哨兵不属于 epoch 而误写了一格，只能由 Commander 子上下文之外的操作员走
+> `reconcile --stage2-review-no-wire-session-run-id ... --stage2-review-sid ...`：系统必须同时证明
+> parent AgentRun 已终止、目标恰为即时 exit 70 的 prereview、日志含精确旧失败签名、
+> `agent_sessions.jsonl` 与成本 `ledger.jsonl` 的完整 committed 字节都没有该 session，并以
+> current ledger/log/双账 hash 铸 subject。apply 必须带 actor/reason/subject SHA 且禁止 force；
+> 原始 turn 移入 `Stage2ReviewLedger.reconciliations` 后才从有效三次预算面排除，不能自动返还、
+> 直接删行或把一般失败洗成 0-wire。
+>
 > **`R-11.18` 的 executor accepted-model 证据是关闭的两路判定，不等同于强求每种 CLI
 > 回显同一字段。** CLI/provider 回显非空 actual model 时，必须与 resolved profile 精确相等；
 > 没有回显时，只有 capability registry 明确登记为 `driver-enforced`、受测的 start/resume argv

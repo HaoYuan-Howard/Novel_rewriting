@@ -63,6 +63,7 @@ from novel.commander_context import (
     COMMANDER_ADMISSION_ID_ENV, COMMANDER_CONTRACT_SHA256_ENV,
     COMMANDER_EPOCH_ID_ENV,
     COMMANDER_EPOCH_SHA256_ENV, COMMANDER_RUN_ID_ENV, env_with_context,
+    stage2_prereview_admission_id,
 )
 from novel.commanders import (
     CommanderConfigurationError, CommanderDriver, CommanderInvocation,
@@ -1726,12 +1727,11 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
 
     def _reserve_stage2_commander(
             task: reviewer_tasks.ReviewerTask | reviewer_tasks.Stage2PrereviewTask,
-            *, epoch: ExecutionEpoch, purpose: str,
+            *, epoch: ExecutionEpoch, purpose: str, session_id: str,
             progress_sha256: str | None = None,
-    ) -> tuple[str, bool]:
-        """预留一格调用并返回 ``(fresh logical session id, durable)``。"""
+    ) -> bool:
+        """在唯一调用缝预留一格预算；返回是否写入了持久账。"""
         nonlocal stage2_commander_turns
-        session_id = jobs.new_job_id()
         progress = progress_sha256 or task.progress_sha256
         metadata = (
             task.source_sha256, task.main_text_sha256,
@@ -1752,7 +1752,7 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                 session_run_id=session_id,
             )
             stage2_commander_turns = reserved.ordinal
-            return session_id, True
+            return True
         # legacy/test injection 没有新版 identity 时仍守同一硬预算；生产 build_task
         # 永远走上面的持久分支，不能靠缺字段绕过跨重启账。
         if stage2_commander_turns >= _MAX_STAGE2_COMMANDER_TURNS:
@@ -1764,7 +1764,7 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                 'Stage2 Global progress fingerprint 没有变化')
         stage2_fallback_progress.add(fallback_progress)
         stage2_commander_turns += 1
-        return session_id, False
+        return False
 
     def _finish_stage2_commander(
             task: reviewer_tasks.ReviewerTask | reviewer_tasks.Stage2PrereviewTask,
@@ -2173,6 +2173,7 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
             launch_ticket: LaunchTicket | None = None,
             read_only: bool = False,
             environment_overrides: dict[str, str] | None = None,
+            after_spawn_before_wire: Callable[[], None] | None = None,
             on_registered: Callable[[], None] | None = None,
             activity: str | None = None,
             ) -> CommanderTurnResult:
@@ -2232,7 +2233,7 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
         # 预审只有 scratch request 写权，不领取任何 producer admission。仍下发一枚
         # 不存在的 context id：若 Commander 违约尝试跑节点，生产入口会关闭式拒绝。
         admission_id = (
-            f'{epoch.epoch_id}-stage2-prereview'
+            stage2_prereview_admission_id(epoch.epoch_id)
             if read_only else _open_action_admission(epoch))
         attempt_id = jobs.new_job_id()
         rc = CRASH
@@ -2258,9 +2259,15 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                     admission_id=admission_id, env=os.environ)
                 if environment_overrides:
                     child_env.update(environment_overrides)
-                invoked = True
                 if spawn is None:
                     def reviewer_started() -> None:
+                        nonlocal invoked
+                        # 默认 runner 只在 Popen 成功后、stdin/prompt 发出前触发。
+                        # Stage2 预算因此既不会被 env/Popen 的 0-wire 失败吞掉，
+                        # 又会在任何模型字节出进程前先持久化 started。
+                        if after_spawn_before_wire is not None:
+                            after_spawn_before_wire()
+                        invoked = True
                         if reviewer_prompt is not None:
                             if fresh_reviewer_session:
                                 start_fresh_reviewer_session()
@@ -2275,13 +2282,16 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                         if launch_ticket is not None:
                             launch_ticket.commit()
 
+                    # 所有生产 Commander 都走同一 Popen 后回调；否则 executable
+                    # 不存在也会被成本账误记为一次真实调用。
                     commander_spawn = _default_spawn(
-                        run_id,
-                        on_registered=(
-                            reviewer_started
-                            if (launch_ticket is not None
-                                or reviewer_prompt is not None) else None))
+                        run_id, on_registered=reviewer_started)
                 else:
+                    # custom spawn 是测试/legacy 注入缝；调用方把它视为已经完成
+                    # Popen 登记、尚未发送 stdin 的同一生命周期点。
+                    if after_spawn_before_wire is not None:
+                        after_spawn_before_wire()
+                    invoked = True
                     if fresh_reviewer_session:
                         start_fresh_reviewer_session()
                     if on_registered is not None:
@@ -2645,17 +2655,18 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
         registered = threading.Event()
         finished = threading.Event()
         holder: dict[str, object] = {}
-        try:
-            review_session_id, durable_reservation = _reserve_stage2_commander(
-                prereview_task, epoch=epoch, purpose='prereview')
-        except stage2_review_ledger.Stage2ReviewBudgetRefused as exc:
-            stage2_prereview = _Stage2PrereviewState(
-                task=prereview_task, provider_session_id=None,
-                input_payload=None,
-                error=f'{type(exc).__name__}: {exc}')
-            return _run_token(
-                epoch, permit, launch_ticket,
-                stem='ready-stage2.blueprint')
+        review_session_id = jobs.new_job_id()
+
+        def reserve_prereview_call() -> None:
+            try:
+                durable = _reserve_stage2_commander(
+                    prereview_task, epoch=epoch, purpose='prereview',
+                    session_id=review_session_id)
+            except BaseException as exc:  # noqa: BLE001 —— 传回 worker 收口
+                holder['error'] = exc
+                raise
+            holder['reservation_made'] = True
+            holder['durable_reservation'] = durable
 
         def prereview_worker() -> None:
             review_exit_code = CRASH
@@ -2666,6 +2677,7 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                     fresh_session_run_id=review_session_id,
                     read_only=True,
                     environment_overrides=slot_env,
+                    after_spawn_before_wire=reserve_prereview_call,
                     on_registered=registered.set,
                     activity='stage2.global.prereview')
                 holder['turn'] = turn
@@ -2674,16 +2686,19 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                     holder['input_payload'] = (
                         reviewer_tasks.load_stage2_prereview(prereview_task))
                 else:
-                    holder['error'] = RuntimeError(
-                        f'Stage2 Global 预审 Commander exit {turn.exit_code}')
+                    holder.setdefault(
+                        'error', RuntimeError(
+                            'Stage2 Global 预审 Commander '
+                            f'exit {turn.exit_code}'))
             except BaseException as exc:  # noqa: BLE001 —— Blueprint 仍须独立收尾
                 holder['error'] = exc
             finally:
                 try:
-                    _finish_stage2_commander(
-                        prereview_task, session_id=review_session_id,
-                        durable=durable_reservation,
-                        exit_code=review_exit_code)
+                    if holder.get('reservation_made') is True:
+                        _finish_stage2_commander(
+                            prereview_task, session_id=review_session_id,
+                            durable=(holder.get('durable_reservation') is True),
+                            exit_code=review_exit_code)
                 except BaseException as exc:  # noqa: BLE001 —— 坏账必须显式留下
                     holder['error'] = exc
                 finally:
@@ -2796,12 +2811,38 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
             """Stage2 的模型调用预算是产品边界；确定性动作不占轮次。"""
             nonlocal latest_outcome, latest_rc, latest_error_kind
             if waiting_on in queue.STAGE2_REVIEWER_WAITING_ON:
-                try:
-                    review_session_id, durable_reservation = (
-                        _reserve_stage2_commander(
+                review_session_id = jobs.new_job_id()
+                reservation_made = False
+                durable_reservation = False
+                reservation_error: BaseException | None = None
+
+                def reserve_reviewer_call() -> None:
+                    nonlocal reservation_made, durable_reservation
+                    nonlocal reservation_error
+                    try:
+                        durable_reservation = _reserve_stage2_commander(
                             task, epoch=epoch, purpose=purpose,
-                            progress_sha256=progress_sha256))
-                except stage2_review_ledger.Stage2ReviewBudgetRefused as exc:
+                            session_id=review_session_id,
+                            progress_sha256=progress_sha256)
+                    except BaseException as exc:  # noqa: BLE001 —— 转成 typed stop
+                        reservation_error = exc
+                        raise
+                    reservation_made = True
+
+                turn: CommanderTurnResult | None = None
+                try:
+                    turn = _run_commander_turn(
+                        epoch, None,
+                        reviewer_prompt=prompt,
+                        fresh_session_run_id=review_session_id,
+                        launch_ticket=launch_ticket,
+                        after_spawn_before_wire=reserve_reviewer_call,
+                        activity=activity)
+                    if not isinstance(
+                            reservation_error,
+                            stage2_review_ledger.Stage2ReviewBudgetRefused):
+                        return turn
+                    exc = reservation_error
                     latest_rc = 2
                     latest_error_kind = 'stage2_global_turn_budget'
                     latest_outcome = AgentDeliveryOutcome(
@@ -2815,20 +2856,13 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                         provider_session_id=None,
                         continue_ready=False,
                         outcome=latest_outcome)
-                turn: CommanderTurnResult | None = None
-                try:
-                    turn = _run_commander_turn(
-                        epoch, None,
-                        reviewer_prompt=prompt,
-                        fresh_session_run_id=review_session_id,
-                        launch_ticket=launch_ticket,
-                        activity=activity)
-                    return turn
                 finally:
-                    _finish_stage2_commander(
-                        task, session_id=review_session_id,
-                        durable=durable_reservation,
-                        exit_code=(turn.exit_code if turn is not None else CRASH))
+                    if reservation_made:
+                        _finish_stage2_commander(
+                            task, session_id=review_session_id,
+                            durable=durable_reservation,
+                            exit_code=(
+                                turn.exit_code if turn is not None else CRASH))
             return _run_commander_turn(
                 epoch, provider_session_id,
                 reviewer_prompt=prompt, launch_ticket=launch_ticket,

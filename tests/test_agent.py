@@ -532,6 +532,179 @@ def test_stage2_reviewer_global_edit_uses_the_same_typed_service_transport(
     assert not path.exists(), '完整同步执行结束后只清理本次 UUID service edit'
 
 
+@pytest.mark.parametrize(
+    ('review_exit_code', 'review_outcome', 'failure_point'),
+    [
+        (0, 'ok', None),
+        (70, 'failed', None),
+        (70, None, 'context'),
+        (70, None, 'popen'),
+    ],
+)
+def test_stage2_prereview_uses_unopened_epoch_context_and_blueprint_closes_alone(
+        base, corpus, monkeypatch, review_exit_code, review_outcome,
+        failure_point):
+    """预审无节点写权；env/Popen 的 0-wire 失败都不扣预算。"""
+    ready = SimpleNamespace(
+        code_version='test-code-version', state='ready', action=None,
+        execution_token=SimpleNamespace(node='stage2.blueprint'))
+    stopped = SimpleNamespace(
+        code_version='test-code-version', state='blocked',
+        surface_seal='1' * 64, execution_token=None,
+        action=SimpleNamespace(
+            waiting_on='test:stop-after-blueprint', action_sha256='2' * 64))
+    operator_reads = 0
+
+    def next_action(_base, _sid, *, code):
+        nonlocal operator_reads
+        assert code == 'test-code-version'
+        operator_reads += 1
+        return ready if operator_reads == 1 else stopped
+
+    monkeypatch.setattr(agent.operator, 'next_action_at_code', next_action)
+    monkeypatch.setattr(
+        agent, '_assess_delivery',
+        lambda *_args, **_kwargs: AgentDeliveryOutcome(
+            state='stopped', checked_at=1, reason='测试停点'))
+    monkeypatch.setattr(
+        agent.reviewer_tasks, 'build_task',
+        lambda *_args, **_kwargs: None)
+
+    source_sha256 = '3' * 64
+    main_text_sha256 = '4' * 64
+    task_box = {}
+
+    def build_prereview(
+            _base, _sid, _current, request_path, *, epoch_id):
+        task = agent.reviewer_tasks.Stage2PrereviewTask(
+            business_sha256='5' * 64,
+            workpack_sha256='6' * 64,
+            request_path=Path(request_path),
+            prompt='STAGE2 GLOBAL PREREVIEW',
+            input_template={},
+            source_sha256=source_sha256,
+            main_text_sha256=main_text_sha256,
+            progress_sha256='7' * 64,
+            blocker_count=1)
+        task_box['task'] = task
+        task_box['epoch_id'] = epoch_id
+        return task
+
+    monkeypatch.setattr(
+        agent.reviewer_tasks, 'build_stage2_prereview_task', build_prereview)
+    monkeypatch.setattr(
+        agent.reviewer_tasks, 'load_stage2_prereview',
+        lambda task: {'business_sha256': task.business_sha256})
+    commander_calls = []
+    monkeypatch.setattr(
+        agent, 'append_commander_call',
+        lambda *_args, **kwargs: commander_calls.append(kwargs))
+
+    runner_stems = []
+
+    def run_step_argv(_base, _sid, _epoch, permit, *, stem):
+        assert permit.node == 'stage2.blueprint'
+        runner_stems.append(stem)
+        return [agent.sys.executable, '-c', 'raise SystemExit(0)']
+
+    monkeypatch.setattr(agent, '_run_step_argv', run_step_argv)
+
+    contexts = []
+    raw_admission_ids = []
+    claim_refusals = []
+    unexpected_claims = []
+
+    def spawn_prereview(invocation, env, log):
+        log.write(b'fake prereview\n')
+        raw_admission_ids.append(
+            env.get(commander_context.COMMANDER_ADMISSION_ID_ENV))
+        loaded = commander_context.load_from_environment(
+            base, '42', env=env)
+        assert loaded is not None
+        contexts.append(loaded)
+        try:
+            claim = admission.claim(
+                base, loaded.execution_id, '42', node='stage2.blueprint',
+                claim_sha256='8' * 64, claim_id='forbidden-prereview-claim')
+        except TerminalState as exc:
+            claim_refusals.append(str(exc))
+        else:
+            unexpected_claims.append(claim)
+            admission.release(base, claim)
+        return CommanderProcessResult(
+            exit_code=review_exit_code,
+            observation=CommanderObservation(
+                provider_session_id='provider-stage2-prereview',
+                actual_model=invocation.profile.model,
+                actual_effort=invocation.profile.reasoning_effort,
+                usage=None))
+
+    def default_spawn(_run_id, *, on_registered=None):
+        assert on_registered is not None
+
+        def spawn(invocation, env, log):
+            # 生产 driver 在 Popen 成功后、写 stdin 前触发；测试在相同缝打开
+            # Blueprint gate，才能证明只读预审身份不能借用节点写权。
+            if failure_point == 'popen':
+                raise OSError('synthetic popen failure')
+            on_registered()
+            return spawn_prereview(invocation, env, log)
+
+        return spawn
+
+    monkeypatch.setattr(agent, '_default_spawn', default_spawn)
+    if failure_point == 'context':
+        real_env_with_context = agent.env_with_context
+
+        def fail_prereview_context(*args, **kwargs):
+            admission_id = kwargs.get('admission_id')
+            if (isinstance(admission_id, str)
+                    and admission_id.endswith('-stage2-prereview')):
+                raise ValueError('synthetic prereview context failure')
+            return real_env_with_context(*args, **kwargs)
+
+        monkeypatch.setattr(agent, 'env_with_context', fail_prereview_context)
+
+    rec = agent.start(
+        base, '42', authorized=True, egress_authorized=True,
+        profiles=_PROFILES)
+    assert agent.wait(rec.run_id, 10)
+
+    assert runner_stems == ['ready-stage2.blueprint']
+    prereview_id = commander_context.stage2_prereview_admission_id(
+        task_box['epoch_id'])
+    if failure_point in ('context', 'popen'):
+        assert contexts == []
+        assert raw_admission_ids == []
+        assert claim_refusals == []
+    else:
+        assert len(contexts) == 1
+        assert raw_admission_ids == [prereview_id]
+        assert contexts[0].admission_id == prereview_id
+        assert claim_refusals and '不存在' in claim_refusals[0]
+    assert unexpected_claims == []
+    assert admission.snapshot(base, prereview_id).opened is False
+
+    ledger_path = stage2_review_ledger.ledger_path(
+        base, '42', source_sha256=source_sha256,
+        main_text_sha256=main_text_sha256)
+    log_text = agent.run_log_path(base, rec.run_id).read_text('utf-8')
+    if failure_point in ('context', 'popen'):
+        assert not ledger_path.exists()
+        expected_failure = (
+            'synthetic prereview context failure'
+            if failure_point == 'context' else 'synthetic popen failure')
+        assert expected_failure in log_text
+        assert commander_calls == []
+    else:
+        ledger = json.loads(ledger_path.read_text('utf-8'))
+        assert ledger['turns'][0]['purpose'] == 'prereview'
+        assert ledger['turns'][0]['outcome'] == review_outcome
+        assert ledger['turns'][0]['exit_code'] == review_exit_code
+        assert len(commander_calls) == 1
+        assert 'admission id 必须属于当前 epoch' not in log_text
+
+
 def test_prompt_forbids_direct_edits_of_formal_artifacts(base, book):
     """Edit(base/**) 是权限上界，不是允许直接覆盖正式产物的产品语义。"""
     text = agent.build_prompt(

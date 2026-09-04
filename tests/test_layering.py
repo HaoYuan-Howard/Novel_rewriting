@@ -352,9 +352,11 @@ _WRITE_ALLOWED = {
         'ledger、admission/beacon/agent/job/session 小账永久保留；四项 TTL 默认关闭'),
     'novel/orchestrator/stage2_review_ledger.py': (
         'Stage2 Global Commander 的跨进程调用预算与单调进展账，只原子写 '
-        '`_service/runs/<sid>/stage2/global_review_ledgers/`；内容只有主体/workpack/progress '
-        'SHA、未闭合项数量、session 身份与退出状态，不含正文，也不是正式 artifact。'
-        '预留必须先于 provider 调用落盘，故不能经 ArtifactStore；候选订正仍回 producer 的'
+        '`_service/runs/<sid>/stage2/global_review_ledgers/`；有效面只有主体/workpack/progress '
+        'SHA、未闭合项数量、session 身份与退出状态；旧 0-wire 假预留的人工隔离面另存 '
+        'actor/reason 及 ledger/log/双 wire 账 hash，仍不含正文，也不是正式 artifact。'
+        '预留必须在 Popen 成功后、stdin 前落盘，故不能经 ArtifactStore；存量隔离只走 '
+        'hash-bound typed reconcile；候选订正仍回 producer 的'
         '完整 schema/HARD/写盘口后才可能成为正式产物'),
     'novel/orchestrator/agent_settings.py': (
         '用户常用 Agent profiles 只原子写 `_service/agent_profile_settings.json`；'

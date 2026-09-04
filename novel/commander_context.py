@@ -36,6 +36,25 @@ COMMANDER_EPOCH_SHA256_ENV = 'NOVEL_COMMANDER_EPOCH_SHA256'
 COMMANDER_ADMISSION_ID_ENV = 'NOVEL_COMMANDER_ADMISSION_ID'
 CONTRACT_PROTOCOL = 'novel-commander-context/v1'
 CONTRACT_V2_PROTOCOL = 'novel-commander-context/v2'
+_STAGE2_PREREVIEW_ADMISSION_SUFFIX = '-stage2-prereview'
+
+
+def stage2_prereview_admission_id(epoch_id: str) -> str:
+    """返回只读 Stage2 预审使用的 epoch-scoped、未开放 gate 身份。"""
+    checked_epoch = run_identity.check_run_id(epoch_id)
+    return run_identity.check_run_id(
+        checked_epoch + _STAGE2_PREREVIEW_ADMISSION_SUFFIX)
+
+
+def _admission_id_belongs_to_epoch(
+        admission_id: str, epoch_id: str,
+) -> bool:
+    """统一校验 action admission 与只读预审哨兵的 epoch 归属。"""
+    return (
+        admission_id == epoch_id
+        or admission_id.startswith(epoch_id + '-t')
+        or admission_id == epoch_id + _STAGE2_PREREVIEW_ADMISSION_SUFFIX
+    )
 
 
 def _base_abs(base: str | os.PathLike[str]) -> str:
@@ -131,8 +150,8 @@ def env_with_context(
         run_id=checked, epoch=epoch)
     if admission_id is not None:
         checked_admission = run_identity.check_run_id(admission_id)
-        if (checked_admission != epoch.epoch_id
-                and not checked_admission.startswith(epoch.epoch_id + '-t')):
+        if not _admission_id_belongs_to_epoch(
+                checked_admission, epoch.epoch_id):
             raise ValueError('admission id 必须属于当前 epoch')
         child[COMMANDER_ADMISSION_ID_ENV] = checked_admission
     return child
@@ -267,8 +286,8 @@ def _load_from_environment(
         epoch = matches[0]
         if admission_id_raw is not None:
             admission_id_raw = run_identity.check_run_id(admission_id_raw)
-            if (admission_id_raw != epoch.epoch_id
-                    and not admission_id_raw.startswith(epoch.epoch_id + '-t')):
+            if not _admission_id_belongs_to_epoch(
+                    admission_id_raw, epoch.epoch_id):
                 raise TerminalState('Commander admission id 不属于当前 epoch')
         expected_sha = contract_v2_sha256(
             run_id=run_id, base=base_abs, contract=record.contract)
@@ -384,5 +403,5 @@ __all__ = [
     'contract_payload', 'contract_sha256', 'contract_v2_payload',
     'contract_v2_sha256', 'epoch_sha256', 'env_with_context', 'load_from_environment',
     'load_for_execution_close_from_environment',
-    'require_execution_authorized',
+    'require_execution_authorized', 'stage2_prereview_admission_id',
 ]

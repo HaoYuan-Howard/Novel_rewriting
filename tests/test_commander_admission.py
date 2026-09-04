@@ -833,6 +833,13 @@ def test_reconcile_cli_has_read_only_template_then_typed_apply(
         '--actor', 'agent', '--reason', '不应在子上下文 repair',
         '--subject-sha256', 'a' * 64,
     ],
+    [
+        'reconcile', '--base', 'unused',
+        '--stage2-review-no-wire-session-run-id', 'stage2-no-wire-session',
+        '--stage2-review-sid', '42',
+        '--actor', 'agent', '--reason', '不应在子上下文恢复预算',
+        '--subject-sha256', 'a' * 64,
+    ],
 ])
 def test_commander_dispatcher_refuses_control_plane_mutations_before_handler(
         monkeypatch, argv):
@@ -854,6 +861,11 @@ def test_commander_dispatcher_refuses_control_plane_mutations_before_handler(
         '--admission-parent-run-id', 'parent-control',
     ],
     ['reconcile', '--base', 'unused', '--admission-repair-tail'],
+    [
+        'reconcile', '--base', 'unused',
+        '--stage2-review-no-wire-session-run-id', 'stage2-no-wire-session',
+        '--stage2-review-sid', '42',
+    ],
 ])
 def test_commander_dispatcher_keeps_control_plane_inspection_read_only(
         monkeypatch, argv):

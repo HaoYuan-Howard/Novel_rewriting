@@ -15,7 +15,7 @@ main.py —— `python -X utf8 -u -m novel.cli <子命令> …`
     queue-cancel <qid> <index>      取消队列里的某一项
     queue-resume <qid>              续跑冻结的队列；含付费项时要重新 `--yes`
     jobs                            作业记录（新的在前）
-    reconcile                       启动时把「运行中」一律改判「不知道」
+    reconcile                       jobs/编排账/Stage2 假预算的 0 成本 typed 恢复
     doctor --llm-transport          0 成本探测 DeepSeek DNS/TCP/TLS/HTTP；不发正文/密钥
     response-repair <sid>           0 成本：提交/放弃一份隔离的结构化响应修复稿
     approval <show|backfill|seen|gate|close-stage2|template|apply>  0 成本审批 façade
@@ -208,7 +208,7 @@ def _parser() -> argparse.ArgumentParser:
     j = sub.add_parser('jobs', help='作业记录（新的在前）')
     j.add_argument('--base', required=True)
 
-    rc = sub.add_parser('reconcile', help='启动时把「运行中」一律改判「不知道」')
+    rc = sub.add_parser('reconcile', help='jobs 与编排账的 0 成本 typed 恢复')
     rc.add_argument('--base', required=True)
     admission_recovery = rc.add_mutually_exclusive_group()
     admission_recovery.add_argument(
@@ -220,6 +220,12 @@ def _parser() -> argparse.ArgumentParser:
     admission_recovery.add_argument(
         '--beacon-repair-tail', action='store_true',
         help='查看/恢复 agent_progress.jsonl 的 non-LF 坏尾（0 成本、hash-bound）')
+    admission_recovery.add_argument(
+        '--stage2-review-no-wire-session-run-id', type=_run_id_arg,
+        help='查看/隔离旧 admission/epoch bug 造成的 Stage2 预审 0-wire 假预算行')
+    rc.add_argument(
+        '--stage2-review-sid',
+        help='Stage2 review no-wire 恢复必填：目标书 sid')
     rc.add_argument('--actor', help='admission apply 必填：执行恢复的人/agent')
     rc.add_argument('--reason', help='admission apply 必填：为何确认可收口')
     rc.add_argument(
@@ -1947,7 +1953,57 @@ def _cmd_jobs(a: argparse.Namespace) -> int:
 
 
 def _cmd_reconcile(a: argparse.Namespace) -> int:
-    """`R-11.11`：**服务重启后原本「运行中」的一律改判「不知道」**，不是「成功」。"""
+    """编排控制面的 0 成本 typed 恢复；无子选项仍执行 R-11.11。"""
+    if a.stage2_review_no_wire_session_run_id is not None:
+        if a.stage2_review_sid is None:
+            raise TerminalState(
+                '--stage2-review-no-wire-session-run-id 必须同时给 '
+                '--stage2-review-sid')
+        from novel.orchestrator import stage2_review_ledger
+
+        current = stage2_review_ledger.inspect_no_wire_reconciliation(
+            a.base, a.stage2_review_sid,
+            session_run_id=a.stage2_review_no_wire_session_run_id)
+        supplied = (a.actor, a.reason, a.subject_sha256)
+        if not any(value is not None for value in supplied) and not a.force:
+            print(json.dumps({
+                'sid': current.sid,
+                'session_run_id': current.session_run_id,
+                'parent_run_id': current.parent_run_id,
+                'original_ordinal': current.original_ordinal,
+                'active_calls': current.active_calls,
+                'remaining_calls_after_apply': current.remaining_calls,
+                'already_reconciled': current.already_reconciled,
+                'original_ledger_sha256': current.original_ledger_sha256,
+                'run_log_sha256': current.run_log_sha256,
+                'agent_sessions_sha256': current.agent_sessions_sha256,
+                'cost_ledger_sha256': current.cost_ledger_sha256,
+                'subject_sha256': current.subject_sha256,
+                'apply_requires': ['--actor', '--reason', '--subject-sha256'],
+            }, ensure_ascii=False, indent=2))
+            return X.OK
+        if a.force:
+            raise TerminalState(
+                '--force 不适用于 Stage2 no-wire budget reconcile；'
+                '只能隔离完整负证据证明的已知旧假预留')
+        if any(value is None for value in supplied):
+            raise TerminalState(
+                'Stage2 no-wire reconcile apply 必须同时给 '
+                '--actor / --reason / --subject-sha256')
+        done = stage2_review_ledger.reconcile_no_wire_reservation(
+            a.base, a.stage2_review_sid,
+            session_run_id=a.stage2_review_no_wire_session_run_id,
+            actor=a.actor, reason=a.reason,
+            subject_sha256=a.subject_sha256)
+        print(
+            '✓ Stage2 0-wire 假预留已从有效预算面隔离；'
+            f'session={done.removed_turn.session_run_id}，'
+            '原始行与负证据 hash 已保留在 reconciliation 记录中')
+        return X.OK
+    if a.stage2_review_sid is not None:
+        raise TerminalState(
+            '--stage2-review-sid 只能与 '
+            '--stage2-review-no-wire-session-run-id 成组使用')
     if a.beacon_repair_tail:
         subject = beacon.tail_repair_subject(a.base)
         supplied = (a.actor, a.reason, a.subject_sha256)
@@ -2053,7 +2109,8 @@ def _cmd_reconcile(a: argparse.Namespace) -> int:
         raise TerminalState(
             '--actor/--reason/--subject-sha256/--force 只与 '
             '--admission-parent-run-id / --admission-repair-tail / '
-            '--beacon-repair-tail 之一成组使用')
+            '--beacon-repair-tail / '
+            '--stage2-review-no-wire-session-run-id 之一成组使用')
     from novel.orchestrator import jobs as J
     changed = J.reconcile(a.base)
     print(f'改判了 {len(changed)} 个作业为「不知道」'
@@ -2434,7 +2491,8 @@ def _commander_control_mutation(a: argparse.Namespace) -> bool:
     admission_inspect = bool(
         a.admission_parent_run_id is not None
         or a.admission_repair_tail
-        or a.beacon_repair_tail)
+        or a.beacon_repair_tail
+        or a.stage2_review_no_wire_session_run_id is not None)
     supplied = any((a.actor, a.reason, a.subject_sha256, a.force))
     # admission/tail 无 typed apply 参数时只是只读主体模板；普通 jobs reconcile
     # 即使没有附加参数也会追加事件，所以仍是 mutation。

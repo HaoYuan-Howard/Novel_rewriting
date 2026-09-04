@@ -177,6 +177,25 @@ execution 或 admission 已完成。Beacon 修复后由真实写手重放缺失�
 `--admission-parent-run-id <RUN_ID>` 的 current subject 并走 typed reconcile。任一主体漂移都重新 inspect，
 不得沿用旧 SHA。
 
+### Stage2 只读预审的 0-wire 假预算
+
+只处理这一种已知旧事故：Stage2 prereview ledger 行为 `failed/exit 70`，parent AgentRun 已终止，
+日志精确含 `ValueError: admission id 必须属于当前 epoch`，且完整 committed 的
+`agent_sessions.jsonl` 与成本 `ledger.jsonl` 都没有该 `session_run_id`。一般 crash、已有任一会话/成本行、
+append-only 坏尾或仍活着的 parent 都不能返还；`--force` 也不能越过。先在 **Commander 子上下文之外**
+只读取得主体，再用同一主体提交：
+
+```text
+<PY> -X utf8 -u -m novel.cli reconcile --base <BASE> --stage2-review-no-wire-session-run-id <SESSION_RUN_ID> --stage2-review-sid <SID>
+<PY> -X utf8 -u -m novel.cli reconcile --base <BASE> --stage2-review-no-wire-session-run-id <SESSION_RUN_ID> --stage2-review-sid <SID> --actor <ACTOR> --reason <REASON> --subject-sha256 <SUBJECT_SHA256>
+```
+
+apply 是 0 模型调用：它把旧假预留原行和 ledger/log/双账负证据 hash 保存在
+`Stage2ReviewLedger.reconciliations`，只从**有效三次真实 Commander 预算**中排除这一格，不重置整账，
+也不启动剩余付费调用。随后重新读取 `operator next`；若仍是 `approval:stage2-global-review`，须在修复代码
+已经提交、工作树 clean 后另行恢复 AgentRun。不得删除/改写 ledger JSON，亦不得靠换 run、换 epoch 或把
+三次上限改成四次绕过。
+
 `--apply-edit` 的路径解析**逐层不同，不要当成通则**（见 [经验库](field-notes.md) FN-016）：
 `stage2.blueprint` / `stage4.design` / `stage4.plan` / `stage6.hook` / `stage7.rename` 按**书目录**解析相对路径，
 也接受书目录内的绝对路径，目录外路径和 `..` 穿越关闭式拒绝；`stage5.write` 与 `stage0.edit`

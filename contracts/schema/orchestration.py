@@ -927,6 +927,37 @@ class Stage2ReviewLedgerTurn(FrozenModel):
         return self
 
 
+class Stage2ReviewLedgerReconciliation(FrozenModel):
+    """一次经人工 CAS 确认的 0-wire 假预留隔离记录。
+
+    ``removed_turn`` 保留被移出有效预算面的原始行；这样恢复不会把历史异常
+    擦掉，也不会靠直接删 JSON 冒充它从未发生。当前只接受已知的旧版只读预审
+    admission/epoch 校验事故，其他失败仍按“started 也消耗预算”关闭式处理。
+    """
+
+    kind: Literal['stage2-review-no-wire-reconciliation-v1'] = (
+        'stage2-review-no-wire-reconciliation-v1')
+    removed_turn: Stage2ReviewLedgerTurn
+    actor: str = Field(min_length=1, max_length=256)
+    reason: str = Field(min_length=1, max_length=2048)
+    subject_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    original_ledger_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    run_log_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    agent_sessions_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    cost_ledger_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    parent_ended_at: int = Field(ge=0)
+    parent_exit_code: int
+    reconciled_at: int = Field(ge=0)
+
+    @model_validator(mode='after')
+    def _only_the_known_no_wire_failure(self) -> Stage2ReviewLedgerReconciliation:
+        turn = self.removed_turn
+        if (turn.purpose != 'prereview' or turn.outcome != 'failed'
+                or turn.exit_code != 70):
+            raise ValueError('只允许隔离 exit 70 的失败 Stage2 prereview 假预留')
+        return self
+
+
 class Stage2ReviewLedger(FrozenModel):
     """按 Global + MainText identity 持久化的 Commander 预算与进展账。"""
 
@@ -938,6 +969,8 @@ class Stage2ReviewLedger(FrozenModel):
     max_calls: Literal[3] = 3
     state: Literal['active', 'exhausted', 'complete'] = 'active'
     turns: list[Stage2ReviewLedgerTurn] = Field(default_factory=list)
+    reconciliations: list[Stage2ReviewLedgerReconciliation] = Field(
+        default_factory=list)
 
     @model_validator(mode='after')
     def _turns_are_monotonic(self) -> Stage2ReviewLedger:
@@ -952,8 +985,16 @@ class Stage2ReviewLedger(FrozenModel):
         progress = [row.progress_sha256 for row in self.turns]
         if len(progress) != len(set(progress)):
             raise ValueError('Stage2 review ledger 不得重复无进展 fingerprint')
+        reconciled_sessions = [
+            row.removed_turn.session_run_id for row in self.reconciliations]
+        if len(reconciled_sessions) != len(set(reconciled_sessions)):
+            raise ValueError('Stage2 review ledger 不得重复隔离同一 session')
+        if set(sessions) & set(reconciled_sessions):
+            raise ValueError('有效 turn 与已隔离 turn 的 session 不得重叠')
         if self.state == 'exhausted' and len(self.turns) != self.max_calls:
             raise ValueError('未用满预算不得标 exhausted')
+        if self.state == 'active' and len(self.turns) >= self.max_calls:
+            raise ValueError('已用满预算必须标 exhausted 或 complete')
         return self
 
 
