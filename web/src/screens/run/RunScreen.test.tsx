@@ -2,12 +2,22 @@ import { api } from '@/api/endpoints'
 import { mockApi, SAMPLE_SID } from '@/api/mock'
 import { qk } from '@/api/queryKeys'
 import { JOB } from '@/constants/vocabulary'
-import type { CheckReport } from '@/types/stages'
+import { CHECK_KINDS, type CheckReport } from '@/types/stages'
 import { act, fireEvent, screen, waitFor } from '@testing-library/react'
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { renderRoute } from '@/test/render'
 import { READY_PROFILES } from '@/test/agent'
 import { RunScreen } from './RunScreen'
+
+beforeEach(() => {
+  vi.spyOn(api, 'getNovel').mockImplementation(async (sid) => {
+    const novel = await mockApi.getNovel(sid)
+    return {
+      ...novel,
+      stage_reviewable: Object.fromEntries(CHECK_KINDS.map((kind) => [kind, true])),
+    }
+  })
+})
 
 describe('RunScreen 交付终验', () => {
   it('只按服务端 allowed_controls 展示并调用 resume', async () => {
@@ -158,6 +168,27 @@ describe('RunScreen 交付终验', () => {
 })
 
 describe('RunScreen check composition', () => {
+  it('只请求后端标记为已有可审产物的阶段', async () => {
+    const run = await mockApi.getRunProgress(SAMPLE_SID)
+    const novel = await mockApi.getNovel(SAMPLE_SID)
+    vi.mocked(api.getNovel).mockResolvedValue({
+      ...novel,
+      stage_reviewable: Object.fromEntries(
+        CHECK_KINDS.map((kind) => [kind, kind === 'stage0']),
+      ),
+    })
+    vi.spyOn(api, 'getRunProgress').mockResolvedValue(run)
+    vi.spyOn(api, 'getAgentRuns').mockResolvedValue({ runs: [] })
+    const getCheck = vi.spyOn(api, 'getCheck').mockResolvedValue(null)
+
+    renderRoute(<RunScreen />, `/n/${SAMPLE_SID}/run`)
+
+    await waitFor(() => expect(getCheck).toHaveBeenCalledTimes(1))
+    expect(getCheck).toHaveBeenCalledWith(SAMPLE_SID, 'stage0')
+    expect(getCheck).not.toHaveBeenCalledWith(SAMPLE_SID, 'stage5')
+    expect(screen.getAllByText('· 尚不可检查')).toHaveLength(6)
+  })
+
   it('默认折叠 operator 已确认无需重跑的前缀，并显示真实续跑处理者', async () => {
     const run = await mockApi.getRunProgress(SAMPLE_SID)
     const next = run.steps.find((step) => step.node === 'stage4.context')

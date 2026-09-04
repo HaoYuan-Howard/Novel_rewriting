@@ -1,6 +1,6 @@
 import { useId, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { keepPreviousData, useQueries } from '@tanstack/react-query'
+import { keepPreviousData, useQueries, useQuery } from '@tanstack/react-query'
 import { api } from '@/api/endpoints'
 import { qk } from '@/api/queryKeys'
 import {
@@ -451,6 +451,11 @@ function ResumeFrontier({
 export function RunScreen() {
   const sid = useSid()
   const q = useRunProgress()
+  const overview = useQuery({
+    queryKey: qk.novel(sid),
+    queryFn: () => api.getNovel(sid),
+    retry: false,
+  })
   const { defaultOrdinal } = useSampleCoverage()
   const stepsRef = useRef<HTMLDivElement>(null)
   const [priorStepsOpen, setPriorStepsOpen] = useState(false)
@@ -476,6 +481,9 @@ export function RunScreen() {
     queries: CHECK_KINDS.map((kind) => ({
       queryKey: qk.check(sid, kind),
       queryFn: () => api.getCheck(sid, kind),
+      // reviewable 是后端给出的“已有可审产物”事实。未到这一层时不提前打
+      // /check，更不能靠 404/500 猜阶段进度；stale/INVALID 仍会是 true。
+      enabled: overview.data?.stage_reviewable[kind] === true,
       retry: false,
       // 轮询 refetch 期间沿用上一份数据——不闪成「校验未知」（U-00：未知 ≠ 没问题）
       placeholderData: keepPreviousData,
@@ -597,11 +605,14 @@ export function RunScreen() {
               <div className="flex flex-wrap gap-8 px-18 py-14">
                 {STAGES.map((stage, index) => {
                   const done = d.stage_done[stage.key]
+                  const reviewable = overview.data?.stage_reviewable[stage.key]
                   const checkQuery = checks[index]
                   // placeholderData 保住了 refetch 期间的上一份——这里只看「有没有数据」，
                   // 不再看 isFetching，否则每次轮询都会闪回「校验未知」
                   const report = (
-                    checkQuery && !checkQuery.isError ? checkQuery.data ?? null : null
+                    reviewable === true && checkQuery && !checkQuery.isError
+                      ? checkQuery.data ?? null
+                      : null
                   ) as CheckReport | null
                   const hard = report?.rules.filter(
                     (row) => row.sev === 'hard' && row.status === 'hit',
@@ -640,6 +651,8 @@ export function RunScreen() {
                               hard {hard} · info {info} · unver {unver}
                             </Mono>
                           </>
+                        ) : reviewable === false ? (
+                          <span className="text-tag text-ink-4">· 尚不可检查</span>
                         ) : (
                           <span className="text-tag text-ink-4">? 校验未知</span>
                         )}

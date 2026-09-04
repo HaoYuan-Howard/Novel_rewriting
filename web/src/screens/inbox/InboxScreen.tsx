@@ -75,11 +75,17 @@ export function InboxScreen() {
   const { defaultOrdinal } = useSampleCoverage()
 
   const q = useQuery({ queryKey: qk.inbox(sid), queryFn: () => api.getInbox(sid), retry: false })
+  const overview = useQuery({
+    queryKey: qk.novel(sid),
+    queryFn: () => api.getNovel(sid),
+    retry: false,
+  })
 
   const checks = useQueries({
     queries: LAYERS.map((l) => ({
       queryKey: qk.check(sid, l.kind),
       queryFn: () => api.getCheck(sid, l.kind),
+      enabled: overview.data?.stage_reviewable[l.kind] === true,
       retry: false,
     })),
   })
@@ -101,8 +107,11 @@ export function InboxScreen() {
         <div className="grid gap-1 bg-line-2" style={{ gridTemplateColumns: 'repeat(7,1fr)' }}>
           {LAYERS.map((l, i) => {
             const r = checks[i]
-            const rep = (r?.data ?? null) as CheckReport | null
-            const noSample = !!r?.isError && isNoSample(r.error)
+            const reviewable = overview.data?.stage_reviewable[l.kind]
+            const rep = (
+              reviewable === true && !r?.isError ? r?.data ?? null : null
+            ) as CheckReport | null
+            const noSample = reviewable === true && !!r?.isError && isNoSample(r.error)
             return (
               <button
                 key={l.kind}
@@ -124,16 +133,22 @@ export function InboxScreen() {
                 </div>
                 <CheckBadge badge={rep ? rep.badge : null} />
                 <Mono className="text-micro text-ink-5">
-                  {r?.isPending
-                    ? '读取中…'
-                    : rep
-                      ? 'hard ' +
-                        rep.rules.filter((x) => x.sev === 'hard' && x.status === 'hit').length +
-                        ' · 查不了 ' +
-                        (rep.counts.unver + rep.counts.skipped)
-                      : noSample
-                        ? '没抓样本'
-                        : '还没跑'}
+                  {reviewable === undefined
+                    ? overview.isPending ? '读取阶段状态…' : '阶段状态未知'
+                    : reviewable === false
+                      ? '尚不可检查'
+                      : r?.isPending
+                        ? '读取中…'
+                        : rep
+                          ? 'hard ' +
+                            rep.rules.filter(
+                              (x) => x.sev === 'hard' && x.status === 'hit',
+                            ).length +
+                            ' · 查不了 ' +
+                            (rep.counts.unver + rep.counts.skipped)
+                          : noSample
+                            ? '没抓样本'
+                            : '还没跑'}
                 </Mono>
                 <span className="text-micro text-ink-4">→ {l.where}</span>
               </button>

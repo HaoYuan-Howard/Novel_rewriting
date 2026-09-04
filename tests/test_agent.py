@@ -1323,6 +1323,58 @@ def test_reviewer_seat_ledger_persists_the_correction_cap_across_runs(
     assert len(sessions) == 1 and sessions[0].end is not None
 
 
+def test_initial_reviewer_prewire_refusal_does_not_write_an_orphan_attempt(
+        base, corpus, monkeypatch):
+    """首席位在 stdin 前被账本拒绝：没有 logical session，也不能凭空落 attempt。"""
+    current = SimpleNamespace(
+        state='blocked', code_version='test-code-version',
+        surface_seal='c' * 64, execution_token=None,
+        action=SimpleNamespace(
+            waiting_on='stage0.approve', action_sha256='d' * 64))
+    monkeypatch.setattr(
+        agent.operator, 'next_action_at_code',
+        lambda _base, _sid, *, code: current)
+    monkeypatch.setattr(
+        agent, '_assess_delivery',
+        lambda *_args, **_kwargs: AgentDeliveryOutcome(
+            state='stopped', reason='Stage0 待审', checked_at=1))
+    monkeypatch.setattr(
+        agent.reviewer_tasks, 'build_task',
+        lambda _base, _sid, _current, request_path, *, epoch_id:
+        agent.reviewer_tasks.ReviewerTask(
+            waiting_on='stage0.approve', surface_seal=current.surface_seal,
+            business_sha256='e' * 64, request_path=Path(request_path),
+            prompt='STAGE0 WORKPACK', submission_options=()))
+    monkeypatch.setattr(
+        agent.reviewer_seat_ledger, 'reserve',
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            agent.reviewer_seat_ledger.ReviewerSeatRefused(
+                '首席位账不兼容，必须先 reconcile')))
+    invocations = []
+
+    def default_spawn(_run_id, *, on_registered=None):
+        def spawn(invocation, env, log):
+            del env, log
+            invocations.append(invocation)
+            assert on_registered is not None
+            on_registered()
+            raise AssertionError('预接线拒绝后不得进入 Commander wire')
+        return spawn
+
+    monkeypatch.setattr(agent, '_default_spawn', default_spawn)
+    rec = agent.start(
+        base, '42', authorized=True, egress_authorized=True,
+        profiles=_PROFILES, spawn=None)
+    assert agent.wait(rec.run_id, 10)
+
+    assert len(invocations) == 1
+    assert agent_session_audit.read_events(base) == []
+    assert agent_session_audit.fold(agent_session_audit.read_events(base)) == []
+    [done] = [row for row in agent.records(base) if row.run_id == rec.run_id]
+    assert done.exit_code == 2
+    assert done.outcome is not None and 'reconcile' in done.outcome.reason
+
+
 def test_stage2_exit2_corrects_before_invalid_surface_can_replace_reviewer(
         base, corpus, monkeypatch):
     """HARD 留 INVALID 后先用自足增量包开新会话纠错，不让 surface 抢走。"""
@@ -3649,4 +3701,3 @@ def test_session_pointer_is_written_from_the_first_protocol_event(
     assert {row.parent_run_id for row in loaded} == {rec.run_id}
     assert {pointer.stem for pointer in pointers} == {
         session.session_run_id for session in sessions}
-

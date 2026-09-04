@@ -684,6 +684,36 @@ def _assert_static_fields_do_not_change(
                 f'{original!r} -> {current!r}')
 
 
+def _is_abandoned_prewire_attempt(event: AgentSessionEvent) -> bool:
+    """识别旧 writer 在 logical session 成立前误写的 0-wire attempt。
+
+    旧 ``_run_commander_turn`` 在 Popen 后、席位/预算预留前就把 ``invoked`` 置真；
+    预留关闭式失败时因此只落一条 ``attempt``，没有 ``started``。这条原始事件仍留在
+    append-only 文件中，但它没有 provider id、actual 或 usage，不代表一次 agent
+    logical session。兼容只收这一个已知且可证 0-wire 的窄形状；任何 executor、后续
+    attempt、带供应商事实或其他错误类型的孤儿事件仍关闭式拒绝。
+    """
+    return (
+        event.wire_version == SESSION_AUDIT_WIRE_VERSION
+        and event.kind == 'attempt'
+        and event.role == 'commander'
+        and event.node is None
+        and event.chapter is None
+        and event.delivery_attempts == 1
+        and event.provider_session_id is None
+        and event.actual_model is None
+        and event.actual_effort is None
+        and event.cli_version is None
+        and event.usage is None
+        and event.process_state is None
+        and event.delivery_state is None
+        and event.error_kind == 'commander_process_exit'
+        and event.same_run_recovered is None
+        and event.first_failure_phase is None
+        and event.first_failure_detail is None
+    )
+
+
 def fold(events: Iterable[AgentSessionEvent]) -> list[AgentSessionRecord]:
     """按文件序折叠 ``started → turn* → ended?``；最新 session 排在前面。"""
     order: list[str] = []
@@ -691,8 +721,25 @@ def fold(events: Iterable[AgentSessionEvent]) -> list[AgentSessionRecord]:
     attempt_owners: dict[str, str] = {}
     attempt_event_owners: dict[str, str] = {}
     provider_session_owners: dict[tuple[str, str], str] = {}
+    abandoned_prewire_sessions: set[str] = set()
     for event in events:
         session_run_id = event.session_run_id
+        if session_run_id in abandoned_prewire_sessions:
+            raise ValueError(
+                f'{session_run_id} 的 0-wire 孤儿 attempt 后又出现 {event.kind}')
+        if (session_run_id not in slots
+                and _is_abandoned_prewire_attempt(event)):
+            # 原行不可删也不可改；它只是不进入 logical-session 投影。attempt_id 仍在
+            # 全账占位，防止后续真实 session 复用同一交付身份而制造歧义。
+            assert event.attempt_id is not None
+            owner = attempt_event_owners.get(event.attempt_id)
+            if owner is not None:
+                raise ValueError(
+                    f'attempt 事件 attempt_id={event.attempt_id!r} 重复；'
+                    f'首次属于 {owner}')
+            attempt_event_owners[event.attempt_id] = session_run_id
+            abandoned_prewire_sessions.add(session_run_id)
+            continue
         slot = slots.setdefault(session_run_id, {
             'start': None, 'turns': [], 'attempts': [], 'end': None,
             'last_ts': None, 'last_turn_index': None,

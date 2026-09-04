@@ -33,6 +33,19 @@ def test_every_registered_blocker_gets_its_own_contract_without_control_plane_to
         reviewer_contract.for_blocker('approval:not-registered')
 
 
+def test_agent_run_delegation_is_explicit_without_weakening_stage0_review():
+    common = reviewer_contract.COMMON
+    assert '中间 typed 裁决已委托给本轮 Reviewer' in common
+    assert '再次要求用户确认' in common
+    assert '不替代证据、不降低判据、不扩大闭集' in common
+
+    stage0 = reviewer_contract.CONTRACT_TEXT['stage0']
+    assert '`s0_approval=pending` 的 HARD' in stage0
+    assert '而不是剔除质量失败' in stage0
+    assert 'AgentRun 委托不是自动批准' in stage0
+    assert 'reason 必须写明剔除分母、边界及反向抽查证据' in stage0
+
+
 def test_anchor_parser_fails_closed_on_broken_blocks():
     with pytest.raises(ValueError):
         reviewer_contract.parse_anchored_blocks(

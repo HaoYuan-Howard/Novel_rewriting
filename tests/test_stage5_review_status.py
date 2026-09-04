@@ -18,7 +18,10 @@ from contracts.schema.stage5 import (
 )
 from contracts.schema.report import finding
 from novel import prov
-from novel.errors import BlockingFindingsUnresolved, GateBlocked, TerminalState
+from novel.errors import (
+    ArtifactUnreadable, BlockingFindingsUnresolved, GateBlocked, TerminalState,
+    UpstreamMissing, UpstreamStale, UpstreamUnproven,
+)
 from novel.prov import FreshnessReport
 from novel.run import RunContext
 from novel.stages.stage5 import measure as M, review, write
@@ -276,6 +279,26 @@ def test_fresh_review_guard_does_not_leak_probe_reads_into_downstream_sources(
     assert review.require_fresh_review(ctx, object()) is expected
     assert ctx.edges == {'stage1/hook_copy.json': kept}
     assert ctx.judged == {}
+
+
+@pytest.mark.parametrize(('state', 'error_type'), [
+    ('missing', UpstreamMissing),
+    ('stale', UpstreamStale),
+    ('unknown', UpstreamUnproven),
+    ('legacy_incompatible', ArtifactUnreadable),
+])
+def test_fresh_review_guard_uses_a_concrete_terminal_for_every_unfresh_state(
+        status_rig, monkeypatch, state, error_type):
+    """HTTP/CLI 消费方按状态拿到 typed 终态，不能抛未映射的抽象 TerminalState。"""
+    monkeypatch.setattr(
+        review, 'review_status',
+        lambda *_args, **_kwargs: review.ReviewStatus(state, ('测试原因',)))
+
+    with pytest.raises(error_type) as caught:
+        review.require_fresh_review(status_rig.ctx, status_rig.store)
+
+    assert caught.value.hint
+    assert f'当前状态是 {state}' in str(caught.value)
 
 
 def test_accepted_review_is_stricter_than_fresh_and_rejects_current_hard(

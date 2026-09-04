@@ -569,6 +569,19 @@ def _attempt(*, session_run_id: str = 'session-1', ordinal: int = 1,
     )
 
 
+def _abandoned_commander_attempt() -> A.AgentSessionEvent:
+    """旧 Supervisor 在席位预留失败后误写的、可证 0-wire 的孤立事件。"""
+    payload = _attempt(
+        session_run_id='aborted-session', ordinal=1, ts=5,
+        attempt_id='aborted-prewire-attempt',
+        error_kind='commander_process_exit').to_dict()
+    payload.update({
+        'role': 'commander', 'node': None, 'chapter': None,
+        'cli_version': None,
+    })
+    return A.AgentSessionEvent.from_dict(payload)
+
+
 def test_attempt_events_fold_under_the_same_logical_session(tmp_path):
     """同席 launch/resume 是交付层事实：不占 turn 序号，也不新开 logical session。"""
     A.append_event(tmp_path, _start())
@@ -614,3 +627,28 @@ def test_attempt_events_are_closed_form():
     with pytest.raises(ValueError, match='在 started 前出现 attempt'):
         A.fold([_attempt(ordinal=1, ts=15)])
 
+
+def test_fold_ignores_only_the_known_abandoned_prewire_attempt_shape(tmp_path):
+    """旧 0-wire 孤儿保留原行但不再毒死此后所有书；带供应商事实仍硬拒。"""
+    orphan = _abandoned_commander_attempt()
+    A.append_event(tmp_path, orphan)
+    A.append_event(tmp_path, _start())
+
+    # provider turn 的原子认领入口内部会先 fold 全账；这正是线上后来每个 Stage0
+    # 都被另一书旧孤儿绊倒的真实消费点。
+    assert A.append_provider_turn(tmp_path, _turn()) is None
+    [record] = A.fold(A.read_events(tmp_path))
+    assert record.session_run_id == 'session-1'
+    assert [event.kind for event in A.read_events(tmp_path)] == [
+        'attempt', 'started', 'turn']
+
+    claimed = A.AgentSessionEvent.from_dict({
+        **orphan.to_dict(), 'provider_session_id': 'provider-must-not-disappear',
+    })
+    with pytest.raises(ValueError, match='在 started 前出现 attempt'):
+        A.fold([claimed])
+
+    with pytest.raises(ValueError, match='0-wire 孤儿 attempt 后又出现 started'):
+        A.fold([orphan, A.AgentSessionEvent.from_dict({
+            **_start().to_dict(), 'session_run_id': orphan.session_run_id,
+        })])

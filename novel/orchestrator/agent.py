@@ -2358,9 +2358,11 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
             # attempt 也会再次触发，但席位预留、session started、launch ticket
             # 只属于第一次。Stage2 预算因此既不会被 env/Popen 的 0-wire 失败吞掉，
             # 又会在任何模型字节出进程前先持久化 started。
-            invoked = True
             if not registered:
-                registered = True
+                # 预算/席位预留可能关闭式拒绝。那时虽然 OS 进程已经创建，stdin 仍是
+                # 0-wire，logical session 也尚未成立；不能先把它标成 invoked，否则
+                # finally 会在没有 started 的 session_run_id 下追加孤立 attempt，继而
+                # 让全 base 的 append-only 审计账都无法折叠。
                 if after_spawn_before_wire is not None:
                     after_spawn_before_wire()
                 if reviewer_prompt is not None:
@@ -2372,6 +2374,11 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                             actual_prompt_sha256=_sha256_bytes(
                                 turn_invocation.stdin_text.encode('utf-8')),
                         )
+                # 到这里 logical session 已有 started（或是既有席位的续轮），后续
+                # on_registered / launch ticket 即使异常，也必须按一次可审计 attempt
+                # 收口。因此 invoked/registered 在它们之前、却在预留与 started 之后置位。
+                invoked = True
+                registered = True
                 if on_registered is not None:
                     on_registered()
                 if launch_ticket is not None:

@@ -96,6 +96,12 @@ def test_dynamic_workpack_may_contain_tool_names_without_tripping_static_guard(
     # Reviewer 只审随包下发的材料，不再被引导去读 skill / 仓库 / 盘上产物。
     assert '不得读取 operator skill、仓库源码、测试' in task.prompt
     assert '允许的文件操作是写出上述请求文件' in task.prompt
+    # AgentRun 的完整委托必须抵达真实 prompt；同时明确它不是自动批准或执行权。
+    assert '中间 typed 裁决已委托给你' in task.prompt
+    assert '再次等待用户确认' in task.prompt
+    assert '这项委托不替代审阅' in task.prompt
+    assert '不降低判据、不扩大 allowed_values' in task.prompt
+    assert '也不授权你直接执行动作' in task.prompt
 
 
 def test_approval_review_token_and_replay_document_bind_the_current_blocker():

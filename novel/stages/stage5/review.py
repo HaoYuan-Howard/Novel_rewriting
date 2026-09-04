@@ -47,7 +47,7 @@ from novel.core.measure import body_style_metrics, measure_body
 from novel.core.naming import project_character_names
 from novel.errors import (
     ArtifactUnreadable, BlockingFindingsUnresolved, GateBlocked, TerminalState,
-    UpstreamMissing,
+    UpstreamMissing, UpstreamStale, UpstreamUnproven,
 )
 from novel.llm import stage5_runs
 from novel.report.builder import build
@@ -334,9 +334,27 @@ def require_fresh_review(ctx: RunContext, store: ArtifactStore | None = None) ->
     if status.fresh:
         return status
     reason = '；'.join(status.reasons[:6]) or status.state
-    raise TerminalState(
+    message = (
         f'Stage5 Review 当前状态是 {status.state}：{reason}。'
-        '旧结论不得驱动豁免、付费返工或审批；请先零成本运行 `stage5.review` 重算当前报告')
+        '旧结论不得驱动豁免、付费返工或审批')
+    if status.state == 'missing':
+        raise UpstreamMissing(
+            message,
+            hint=('先完成 Stage5 正式章稿；已有章稿后运行 `stage5.review` '
+                  '零成本生成当前报告'))
+    if status.state == 'stale':
+        raise UpstreamStale(
+            message,
+            hint='运行 `stage5.review`，零成本重算当前报告')
+    if status.state == 'unknown':
+        raise UpstreamUnproven(
+            message,
+            hint='从 Stage5 producer 重建无法证明 current 的产物，再运行 `stage5.review`')
+    if status.state == 'legacy_incompatible':
+        raise ArtifactUnreadable(
+            message,
+            hint='旧 base 只读保留；在 canonical base 从 Stage5 producer 重建')
+    raise AssertionError(f'未登记的 Stage5 Review 状态：{status.state!r}')
 
 
 def require_accepted_review(ctx: RunContext, store: ArtifactStore | None = None) -> ReviewStatus:

@@ -1762,6 +1762,12 @@ def build_task(
 不得启动任何小说节点，不得启动 Executor，不得维护 Markdown 报告，不得调用遥测，
 不得修改正式产物或审批账。
 
+用户已显式启动本次 AgentRun，当前 `waiting_on` 对应的中间 typed 裁决已委托给你。
+你必须按工作包证据亲自决定并填写一个 submission option；不得因动作名含 approve、产物把决定
+记为 human，或当前报告仅因待批准项呈 HARD 而再次等待用户确认。这项委托不替代审阅、
+不降低判据、不扩大 allowed_values，也不授权你直接执行动作；Supervisor 只会在验证你写出的
+请求后走确定性入口。
+
 若证据不足，保留 UNVER 或拒绝；不得猜 PASS。最终只把一份 UTF-8 JSON 写到：
 {request}
 不得写别的请求文件。审阅完成后，从 submission_options 选择恰好一项，

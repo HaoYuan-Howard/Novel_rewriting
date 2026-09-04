@@ -247,6 +247,18 @@ def test_every_stage_answers_a_real_state(corpus_client, box):
     assert len(STAGES) == 7
 
 
+def test_stage5_check_before_any_stage5_review_is_a_typed_404(client, base):
+    """早期书不该查 Stage5；即使手工请求，也只能答“没跑”，不能炸成 ASGI 500。"""
+    _empty_book(base)
+
+    response = client.get('/api/novels/422/check/stage5')
+
+    assert response.status_code == 404, response.text
+    body = response.json()
+    assert body['kind'] == 'UpstreamMissing'
+    assert body['hint'] and 'stage5.review' in body['hint']
+
+
 def test_an_unknown_kind_is_400_and_lists_the_current_stages(client):
     """`:kind` 不在现役阶段里 ⇒ **400 并列出取值面**。400 与 404 是两件事。"""
     r = client.get('/api/novels/42/check/stage9')

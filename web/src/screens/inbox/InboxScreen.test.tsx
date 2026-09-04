@@ -1,11 +1,43 @@
 import { api } from '@/api/endpoints'
 import { mockApi, SAMPLE_SID } from '@/api/mock'
 import { renderRoute } from '@/test/render'
-import { screen } from '@testing-library/react'
-import { describe, expect, it, vi } from 'vitest'
+import { CHECK_KINDS } from '@/types/stages'
+import { screen, waitFor } from '@testing-library/react'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { InboxScreen } from './InboxScreen'
 
+beforeEach(() => {
+  vi.spyOn(api, 'getNovel').mockImplementation(async (sid) => {
+    const novel = await mockApi.getNovel(sid)
+    return {
+      ...novel,
+      stage_reviewable: Object.fromEntries(CHECK_KINDS.map((kind) => [kind, true])),
+    }
+  })
+})
+
 describe('InboxScreen verification copy', () => {
+  it('不为尚无可审产物的后续阶段发起校验请求', async () => {
+    const inbox = await mockApi.getInbox(SAMPLE_SID)
+    const novel = await mockApi.getNovel(SAMPLE_SID)
+    vi.mocked(api.getNovel).mockResolvedValue({
+      ...novel,
+      stage_reviewable: Object.fromEntries(
+        CHECK_KINDS.map((kind) => [kind, kind === 'stage0']),
+      ),
+    })
+    vi.spyOn(api, 'getInbox').mockResolvedValue(inbox)
+    vi.spyOn(api, 'getSampleCoverage').mockResolvedValue(null)
+    const getCheck = vi.spyOn(api, 'getCheck').mockResolvedValue(null)
+
+    renderRoute(<InboxScreen />, `/n/${SAMPLE_SID}/inbox`)
+
+    await waitFor(() => expect(getCheck).toHaveBeenCalledTimes(1))
+    expect(getCheck).toHaveBeenCalledWith(SAMPLE_SID, 'stage0')
+    expect(getCheck).not.toHaveBeenCalledWith(SAMPLE_SID, 'stage5')
+    expect(screen.getAllByText('尚不可检查')).toHaveLength(6)
+  })
+
   it('routes verification work across Stage2, Stage5, and Stage6', async () => {
     const base = await mockApi.getInbox(SAMPLE_SID)
     vi.spyOn(api, 'getInbox').mockResolvedValue({
