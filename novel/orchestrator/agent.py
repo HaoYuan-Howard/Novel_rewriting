@@ -1711,13 +1711,21 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
     def _review_invocation(
             epoch: ExecutionEpoch, prompt: str,
             provider_session_id: str | None) -> CommanderInvocation:
-        """为一份 frozen reviewer task 构造新 turn 或 exact resume。"""
+        """为一份 frozen reviewer task 构造新 turn 或 exact resume。
+
+        reviewer 轮次唯一合法的写盘是本 epoch scratch session 里的那一份 typed
+        request，所以 driver 的可写面（Codex ``--add-dir``、Claude ``Edit`` 白名单）
+        只开到该目录，不再把整个 base 交给模型；launcher/preview 的 argv 仍以 base
+        展示，那是 parent contract 的审计面。沙箱不限制读，读面靠随包材料收口。
+        """
         driver: CommanderDriver | None = None
+        scratch = service_lifecycle.open_scratch_session(
+            base, sid, epoch.epoch_id)
         try:
             driver = create_commander_driver(plan.profiles.commander)
             reviewed = driver.build_invocation(
                 plan.profiles.commander, prompt,
-                repo=REPO_ROOT, base=base,
+                repo=REPO_ROOT, base=str(scratch),
                 cli_version=epoch.cli_version,
                 resume_provider_session_id=provider_session_id)
             _validate_invocation(

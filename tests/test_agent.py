@@ -2830,6 +2830,40 @@ def test_reviewer_approval_decision_is_recorded_then_discarded_after_landing(
     assert _reviewer_action_files(base) == []
 
 
+def test_reviewer_turn_write_surface_is_the_epoch_scratch_session(
+        base, corpus, monkeypatch):
+    """reviewer 轮次只把本 epoch scratch session 交给 driver 作可写面，不再开整个 base。"""
+    bases: list[tuple[str, bool]] = []
+
+    class RecordingDriver(_PlanningDriver):
+        def build_invocation(self, profile, prompt, *, repo, base, **kwargs):
+            # 目录只在本 epoch 存活，run 结束即被 finish_scratch_session 收掉；
+            # 所以"构造 invocation 时它确实在盘上"只能在这里当场记录。
+            bases.append((str(base), Path(base).is_dir()))
+            return super().build_invocation(
+                profile, prompt, repo=repo, base=base, **kwargs)
+
+    monkeypatch.setattr(
+        agent, 'create_commander_driver',
+        lambda profile, **_kwargs: RecordingDriver(profile))
+    _current, invocations, applied = _install_design_review_harness(
+        monkeypatch, apply_exit_codes=[0], decisions=['accept-all'])
+    rec = agent.start(
+        base, '42', authorized=True, egress_authorized=True,
+        profiles=_PROFILES, spawn=None)
+    assert agent.wait(rec.run_id, 10)
+
+    assert len(invocations) == 1
+    assert applied == [{'review_token': _REPLAY_TOKEN, 'decision': 'accept-all'}]
+    # launcher/preview 的 plan 仍以 base 为审计面；真正发给模型的 reviewer 轮次
+    # 只开本 epoch 的 scratch session。
+    assert Path(bases[0][0]).resolve() == Path(base).resolve()
+    reviewer_base, existed = Path(bases[-1][0]).resolve(), bases[-1][1]
+    assert reviewer_base != Path(base).resolve()
+    assert reviewer_base.parent == (paths.scratch_dir(base) / '42').resolve()
+    assert existed, 'driver 构造 invocation 时 scratch session 必须已在盘上'
+
+
 def test_recorded_reviewer_decision_replays_without_a_commander_turn(
         base, corpus, monkeypatch):
     """同 blocker、同 surface seal 的盘上决定直接交 canonical apply，不唤模型。"""
