@@ -56,7 +56,7 @@ SESSION_AUDIT_FILENAME = 'agent_sessions.jsonl'
 SESSION_AUDIT_WIRE_VERSION = 2
 _LEGACY_WIRE_VERSIONS = (0, 1)
 UNKNOWN = 'unknown'
-EVENT_KINDS = ('started', 'turn', 'ended')
+EVENT_KINDS = ('started', 'turn', 'attempt', 'ended')
 AGENT_SESSION_ROLES = ('commander', 'executor')
 
 #: ``first_failure_detail`` 的统一截断/脱敏出口长度；事件侧校验同用这个数，
@@ -350,6 +350,19 @@ class AgentSessionEvent:
                 raise ValueError('turn 不能冒充 ended 写最终状态')
             if self.end_code_version is not None:
                 raise ValueError('turn 不能提前写 end_code_version')
+        elif self.kind == 'attempt':
+            # 同一 logical session 内的一次真实进程尝试（首发或 resume）：它记录
+            # 交付层事实（退出/分类/席内序号），不是可采纳的 provider turn。
+            if self.attempt_id is None and not _allow_legacy_missing:
+                raise ValueError('attempt 必须带 attempt_id 以联结成本账')
+            if self.delivery_attempts is None and not _allow_legacy_missing:
+                raise ValueError('attempt 必须带席内序号 delivery_attempts')
+            if self.turn_index is not None:
+                raise ValueError('attempt 不带 turn_index；可采纳轮次由 turn 事件记录')
+            if self.process_state is not None or self.delivery_state is not None:
+                raise ValueError('attempt 不能冒充 ended 写最终状态')
+            if self.end_code_version is not None:
+                raise ValueError('attempt 不能提前写 end_code_version')
         else:
             if self.turn_index is not None or self.attempt_id is not None:
                 raise ValueError('ended 不带 turn_index/attempt_id；turn 数由事件流折叠')
@@ -391,9 +404,12 @@ class AgentSessionEvent:
             raise ValueError('新写入事件必须带 protocol_version')
         if self.start_code_version is None:
             raise ValueError('新写入事件必须带 start_code_version')
-        if self.kind in ('started', 'turn') and (
+        if self.kind in ('started', 'turn', 'attempt') and (
                 self.prompt_sha256 is None or self.schema_sha256 is None):
-            raise ValueError('started/turn 必须带 prompt_sha256 与 schema_sha256')
+            raise ValueError('started/turn/attempt 必须带 prompt_sha256 与 schema_sha256')
+        if self.kind == 'attempt' and (
+                self.attempt_id is None or self.delivery_attempts is None):
+            raise ValueError('新写入的 attempt 必须带 attempt_id 与 delivery_attempts')
         if self.kind == 'turn' and (
                 self.turn_index is None or self.attempt_id is None
                 or self.provider_session_id is None):
@@ -511,6 +527,8 @@ class AgentSessionRecord:
     turns: tuple[AgentSessionEvent, ...]
     end: AgentSessionEvent | None
     provider_session_ids: tuple[str, ...]
+    #: 同一 logical session 内的真实进程尝试（首发 + 同席 resume/relaunch）。
+    attempts: tuple[AgentSessionEvent, ...] = ()
 
     @property
     def process_state(self) -> str | None:
@@ -671,12 +689,14 @@ def fold(events: Iterable[AgentSessionEvent]) -> list[AgentSessionRecord]:
     order: list[str] = []
     slots: dict[str, dict[str, Any]] = {}
     attempt_owners: dict[str, str] = {}
+    attempt_event_owners: dict[str, str] = {}
     provider_session_owners: dict[tuple[str, str], str] = {}
     for event in events:
         session_run_id = event.session_run_id
         slot = slots.setdefault(session_run_id, {
-            'start': None, 'turns': [], 'end': None, 'last_ts': None,
-            'last_turn_index': None, 'provider_session_ids': [],
+            'start': None, 'turns': [], 'attempts': [], 'end': None,
+            'last_ts': None, 'last_turn_index': None,
+            'provider_session_ids': [],
             'actual_model': None, 'actual_effort': None,
         })
         if session_run_id not in order:
@@ -698,7 +718,11 @@ def fold(events: Iterable[AgentSessionEvent]) -> list[AgentSessionRecord]:
             raise ValueError(f'{session_run_id} 的 ts 按文件序倒退')
         slot['last_ts'] = event.ts
 
-        provider_session_id = event.provider_session_id
+        # attempt 事件只记录交付层事实：它携带的 provider id 只是观察，不认领
+        # ownership（失败/被占用的 session 也会出现在 attempt 里），ownership
+        # 只由 turn 事件在锁内认领。
+        provider_session_id = (
+            None if event.kind == 'attempt' else event.provider_session_id)
         reuse_evidence = (
             event.kind == 'turn'
             and event.error_kind == PROVIDER_SESSION_REUSED
@@ -762,6 +786,17 @@ def fold(events: Iterable[AgentSessionEvent]) -> list[AgentSessionRecord]:
                         f'{previous} -> {event.turn_index}')
                 slot['last_turn_index'] = event.turn_index
             slot['turns'].append(event)
+        elif event.kind == 'attempt':
+            # 席内序号（delivery_attempts）按每一轮 turn 从 1 重新计数：同一
+            # logical session 可以跨多轮精确续会，序号只在一轮之内单调。
+            if event.attempt_id is not None:
+                owner = attempt_event_owners.get(event.attempt_id)
+                if owner is not None:
+                    raise ValueError(
+                        f'attempt 事件 attempt_id={event.attempt_id!r} 重复；'
+                        f'首次属于 {owner}')
+                attempt_event_owners[event.attempt_id] = session_run_id
+            slot['attempts'].append(event)
         elif event.kind == 'ended':
             slot['end'] = event
 
@@ -778,6 +813,7 @@ def fold(events: Iterable[AgentSessionEvent]) -> list[AgentSessionRecord]:
             turns=tuple(slot['turns']),
             end=slot['end'],
             provider_session_ids=tuple(slot['provider_session_ids']),
+            attempts=tuple(slot['attempts']),
         ))
     return records
 

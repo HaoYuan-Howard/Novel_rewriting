@@ -396,7 +396,9 @@ CLI `state` 会显示共享的 deterministic freshness badge；这个 badge 才�
 去绕过刷新。改变其他参数同样意味着新调用语义，必须重新 preview 和记账。
 
 正式 headless run 的 `pause` 只停止接纳新节点并等待当前 claim/beacon 安全闭合，不取消正在正常执行的
-付费节点；普通 reviewer 在同一 epoch resume 精确续用 Commander provider session。Stage2 global
+付费节点；普通 reviewer 在同一 epoch resume 精确续用 Commander provider session。Commander 子进程的
+网络/瞬态失败由 Supervisor 在同一席位内自动 resume/relaunch（有次数上限与退避），不新开 logical
+session、不扣新席；不可重试的失败（认证、额度、权限、协议错、模型漂移）才停止。Stage2 global
 固定为一席审阅、至多两席订正、一席只读终审，每个主体最多四席真实 Commander 且每席开 fresh session；
 0-wire typed 动作不占轮次。Executor 的候选→反馈
 修复继续复用各节点 logical/provider session 与 checkpoint；Stage2 人工 GlobalEdit

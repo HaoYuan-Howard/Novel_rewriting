@@ -322,6 +322,96 @@ def test_nonzero_exit_without_a_session_keeps_observation_unknown(tmp_path):
     assert result.observation.actual_model is None
     assert result.observation.actual_effort is None
     assert result.observation.usage is None
+    # 0-wire 本地失败：没有任何协议事件，分类为普通命令失败、不可热重试。
+    assert result.failure_kind == 'agent_command'
+    assert result.retryable is False
+    assert result.wire_evidence is False
+
+
+def test_nonzero_exit_after_wire_is_classified_for_same_seat_resume(tmp_path):
+    """收到 thread.started 后被 connection reset 打断：可重试且有 wire 证据。"""
+    repo = tmp_path / 'repo'
+    base = tmp_path / 'base'
+    repo.mkdir()
+    base.mkdir()
+
+    def runner(argv, **kwargs):
+        del kwargs
+        return _completed(
+            argv, '{"type":"thread.started","thread_id":"codex-thread-9"}\n',
+            'stream connection failed: connection reset by peer\n',
+            returncode=1)
+
+    driver = CodexCommanderDriver(executable='codex.exe', runner=runner)
+    invocation = driver.build_invocation(
+        _profile('codex'), '任务', repo=repo, base=base)
+    result = driver.run(invocation, log=io.BytesIO(), run_id='reset-mid-turn')
+    assert result.exit_code == 1
+    assert result.observation.provider_session_id == 'codex-thread-9'
+    assert result.failure_kind == 'connection'
+    assert result.retryable is True
+    assert result.wire_evidence is True
+    with pytest.raises(CommanderProtocolError, match='exit 0 不能携带 failure_kind'):
+        commander_base.CommanderProcessResult(
+            exit_code=0, observation=result.observation, failure_kind='connection')
+
+
+class _TimeoutRunner:
+    """注入 runner：模拟公共 runner 的空闲超时，携带已收到的部分事件。"""
+
+    def __init__(self, events):
+        self._events = events
+
+    def run(self, invocation, *, timeout, run_id, log):
+        del invocation, timeout, run_id, log
+        raise commander_base.CommanderTimeoutError(
+            'commander CLI idle 超过 1 秒，已终止本轮进程树',
+            timeout_kind='idle',
+            partial_stdout='\n'.join(json.dumps(e) for e in self._events) + '\n',
+            partial_stderr='', events=self._events)
+
+    def cancel(self, run_id=None):
+        del run_id
+        return False
+
+    def close(self):
+        return None
+
+
+@pytest.mark.parametrize(
+    ('driver_cls', 'driver_name', 'events', 'session_id'),
+    [
+        (CodexCommanderDriver, 'codex',
+         [{'type': 'thread.started', 'thread_id': 'codex-thread-t'}],
+         'codex-thread-t'),
+        (ClaudeCodeCommanderDriver, 'claude-code',
+         [{'type': 'system', 'subtype': 'init', 'session_id': 'claude-session-t'}],
+         'claude-session-t'),
+        (CodexCommanderDriver, 'codex', [], None),
+    ],
+)
+def test_timeout_surfaces_partial_observation_for_resume(
+        tmp_path, driver_cls, driver_name, events, session_id):
+    repo = tmp_path / 'repo'
+    base = tmp_path / 'base'
+    repo.mkdir()
+    base.mkdir()
+    driver = driver_cls(
+        executable=('claude.exe' if driver_name == 'claude-code' else 'codex.exe'),
+        runner=_TimeoutRunner(events))
+    invocation = driver.build_invocation(
+        _profile(driver_name), '任务', repo=repo, base=base)
+    with pytest.raises(commander_base.CommanderTimeoutError) as info:
+        driver.run(invocation, log=io.BytesIO(), run_id='idle-timeout')
+    exc = info.value
+    assert exc.timeout_kind == 'idle'
+    assert exc.failure_kind == 'timeout' and exc.retryable is True
+    assert exc.wire_evidence is bool(events)
+    assert exc.partial_observation is not None
+    assert exc.partial_observation.provider_session_id == session_id
+    for event in events:
+        assert driver.session_id_of_event(event) == session_id
+    assert driver.session_id_of_event({'type': 'turn.started'}) is None
 
 
 class _OwnedRunner:

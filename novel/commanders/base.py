@@ -26,12 +26,19 @@ from types import MappingProxyType
 from typing import Any, BinaryIO, Protocol
 
 from contracts.schema.orchestration import AgentProfile
+from contracts.invariants import (
+    COMMANDER_FIRST_EVENT_TIMEOUT_SECONDS, COMMANDER_IDLE_TIMEOUT_SECONDS,
+)
 from novel.agents.base import (
     AgentUsage,
-    _signal_process_tree,
-    decode_wire_json,
+    classify_agent_command_failure,
     integer,
     resolve_cli_entry,
+)
+from novel.agents.jsonl_runner import (
+    JsonlProcessRunner, ProcessTimeout, RunnerBusyError,
+    RunnerCancelledBeforeStart, RunnerClosedError, RunnerError,
+    decode_wire_json,
 )
 
 
@@ -138,15 +145,26 @@ class CommanderObservation:
 
 @dataclass(frozen=True)
 class CommanderProcessResult:
-    """外层进程事实；它不声称工作流产物已经可交付。"""
+    """外层进程事实；它不声称工作流产物已经可交付。
+
+    ``failure_kind`` / ``status`` / ``retryable`` 只在非 0 退出时由驱动按 stderr
+    与 usage 归一（与 executor 侧同一分类器）；``wire_evidence`` 表示协议流里
+    出现过供应商 session/usage——没有它的失败是 0-wire 本地失败。
+    """
 
     exit_code: int
     observation: CommanderObservation
+    failure_kind: str | None = None
+    status: int | None = None
+    retryable: bool = False
+    wire_evidence: bool = False
 
     def __post_init__(self) -> None:
         if isinstance(self.exit_code, bool) or not isinstance(
                 self.exit_code, int):
             raise CommanderProtocolError('commander exit_code 必须是整数')
+        if self.exit_code == 0 and self.failure_kind is not None:
+            raise CommanderProtocolError('exit 0 不能携带 failure_kind')
 
 
 class CommanderRunner(Protocol):
@@ -234,29 +252,52 @@ class _CallableRunner:
         self._closed = True
 
 
-class _SubprocessCommanderRunner:
-    """默认 runner：一实例只持有一棵可按 run_id 熄火的进程树。
+class CommanderTimeoutError(CommanderCommandError):
+    """三档超时之一；携带已解析的部分事件供驱动判断能否同席 resume。"""
 
-    三条 pipe 各有独立泵线程，避免“大 prompt 填满 stdin，而 CLI 同时把 stdout
-    或 stderr 填满”形成互等。协议 stdout 另存原始字节，日志则带流标签；解析
-    永远不消费被标签污染的日志副本。
+    def __init__(
+        self, message: str, *, timeout_kind: str,
+        partial_stdout: str, partial_stderr: str,
+        events: Sequence[Mapping[str, Any]],
+    ) -> None:
+        super().__init__(message, returncode=None)
+        self.timeout_kind = timeout_kind
+        self.partial_stdout = partial_stdout
+        self.partial_stderr = partial_stderr
+        self.events = tuple(events)
+        # 由 ``CliCommanderDriver.run`` 在解码部分事件后补齐。
+        self.partial_observation: CommanderObservation | None = None
+        self.failure_kind = 'timeout'
+        self.retryable = True
+        self.wire_evidence = bool(self.events)
+
+
+class _SubprocessCommanderRunner:
+    """默认可取消 runner；进程组、三线程泵、实时日志与取消全部来自公共 runner。
+
+    Commander 协议是流式 JSONL：这里开启逐行解析与首事件/空闲超时，并把每个
+    协议事件即时交给 ``on_event``（供应商 session id 由此在线落盘）。
     """
 
-    _CHUNK_SIZE = 64 * 1024
-
-    def __init__(self) -> None:
-        self._state_lock = threading.Lock()
-        self._log_lock = threading.Lock()
-        self._active: tuple[subprocess.Popen[bytes], str | None] | None = None
-        self._cancel_before_start: set[str | None] = set()
-        self._launch_callback: Callable[[], None] | None = None
-        self._closed = False
+    def __init__(
+        self, *, first_event_timeout: float | None = None,
+        idle_timeout: float | None = None,
+    ) -> None:
+        self._runner = JsonlProcessRunner(
+            first_event_timeout=first_event_timeout,
+            idle_timeout=idle_timeout)
+        self._on_event: Callable[[Mapping[str, Any]], None] | None = None
 
     def set_launch_callback(self, callback: Callable[[], None]) -> None:
-        with self._state_lock:
-            if self._active is not None or self._launch_callback is not None:
-                raise CommanderBusyError('Commander launch callback 已占用')
-            self._launch_callback = callback
+        try:
+            self._runner.set_launch_callback(callback)
+        except RunnerBusyError as exc:
+            raise CommanderBusyError('Commander launch callback 已占用') from exc
+
+    def set_event_callback(
+        self, callback: Callable[[Mapping[str, Any]], None] | None,
+    ) -> None:
+        self._on_event = callback
 
     def run(
         self,
@@ -266,158 +307,41 @@ class _SubprocessCommanderRunner:
         run_id: str | None,
         log: BinaryIO,
     ) -> subprocess.CompletedProcess[str]:
-        with self._state_lock:
-            if self._closed:
-                raise CommanderConfigurationError('commander runner 已关闭')
-            if self._active is not None:
-                raise CommanderBusyError(
-                    '同一 CommanderDriver 实例不能并发启动两棵进程树')
-            if run_id in self._cancel_before_start:
-                self._cancel_before_start.discard(run_id)
-                raise CommanderCommandError(
-                    'commander CLI 在 Popen 前已收到 stop，拒绝启动进程树',
-                    returncode=130)
-            options: dict[str, Any] = {}
-            if os.name == 'nt':
-                options['creationflags'] = (
-                    subprocess.CREATE_NO_WINDOW
-                    | subprocess.CREATE_NEW_PROCESS_GROUP)
-            else:
-                options['start_new_session'] = True
-            env = os.environ.copy()
-            env.update(invocation.env_overrides)
-            process = subprocess.Popen(
-                list(invocation.argv), stdin=subprocess.PIPE,
-                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                cwd=invocation.cwd, env=env, shell=False, **options)
-            self._active = (process, run_id)
-            callback, self._launch_callback = self._launch_callback, None
-
-        if callback is not None:
-            try:
-                callback()
-            except BaseException:
-                _signal_process_tree(process, force=True)
-                with self._state_lock:
-                    if self._active is not None and self._active[0] is process:
-                        self._active = None
-                raise
-
-        stdout = bytearray()
-        stderr = bytearray()
-        pump_errors: list[BaseException] = []
-
-        def pump_stdin() -> None:
-            assert process.stdin is not None
-            try:
-                process.stdin.write(invocation.stdin_text.encode('utf-8'))
-                process.stdin.flush()
-            except BrokenPipeError:
-                # CLI 在读完/拒绝配置后可先退出；退出码与协议会给出真正结论。
-                pass
-            except BaseException as exc:  # noqa: BLE001 —— 回传 owner 线程
-                pump_errors.append(exc)
-            finally:
-                try:
-                    process.stdin.close()
-                except OSError:
-                    pass
-
-        def pump_output(
-            stream: io.BufferedReader,
-            target: bytearray,
-            label: str,
-        ) -> None:
-            try:
-                while True:
-                    block = stream.read(self._CHUNK_SIZE)
-                    if not block:
-                        return
-                    target.extend(block)
-                    with self._log_lock:
-                        _tagged_log(log, label, block)
-            except BaseException as exc:  # noqa: BLE001 —— 回传 owner 线程
-                pump_errors.append(exc)
-
-        assert process.stdout is not None and process.stderr is not None
-        threads = (
-            threading.Thread(target=pump_stdin, name='commander-stdin'),
-            threading.Thread(
-                target=pump_output,
-                args=(process.stdout, stdout, 'stdout protocol'),
-                name='commander-stdout'),
-            threading.Thread(
-                target=pump_output,
-                args=(process.stderr, stderr, 'stderr'),
-                name='commander-stderr'),
-        )
-        for thread in threads:
-            thread.start()
+        env = os.environ.copy()
+        env.update(invocation.env_overrides)
         try:
-            try:
-                process.wait(timeout=timeout)
-            except subprocess.TimeoutExpired as exc:
-                _signal_process_tree(process, force=False)
-                try:
-                    process.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    _signal_process_tree(process, force=True)
-                    process.wait()
-                raise CommanderCommandError(
-                    f'commander CLI 超过 {timeout:g} 秒，已终止本轮进程树') from exc
-            for thread in threads:
-                thread.join()
-            if pump_errors:
-                raise CommanderCommandError(
-                    'commander stdio 泵失败：'
-                    f'{type(pump_errors[0]).__name__}') from pump_errors[0]
-            return subprocess.CompletedProcess(
-                list(invocation.argv), int(process.returncode),
-                bytes(stdout).decode('utf-8', errors='replace'),
-                bytes(stderr).decode('utf-8', errors='replace'))
-        except BaseException:
-            if self._owns(process) and process.poll() is None:
-                _signal_process_tree(process, force=True)
-            for stream in (process.stdin, process.stdout, process.stderr):
-                if stream is not None:
-                    try:
-                        stream.close()
-                    except OSError:
-                        pass
-            for thread in threads:
-                thread.join(timeout=5)
-            raise
-        finally:
-            with self._state_lock:
-                if self._active is not None and self._active[0] is process:
-                    self._active = None
+            streamed = self._runner.run(
+                list(invocation.argv),
+                stdin_bytes=invocation.stdin_text.encode('utf-8'),
+                cwd=invocation.cwd, env=env, timeout=timeout, owner=run_id,
+                log=log, on_event=self._on_event, parse_events=True)
+        except RunnerClosedError as exc:
+            raise CommanderConfigurationError('commander runner 已关闭') from exc
+        except RunnerBusyError as exc:
+            raise CommanderBusyError(
+                '同一 CommanderDriver 实例不能并发启动两棵进程树') from exc
+        except RunnerCancelledBeforeStart as exc:
+            raise CommanderCommandError(
+                'commander CLI 在 Popen 前已收到 stop，拒绝启动进程树',
+                returncode=130) from exc
+        except ProcessTimeout as exc:
+            raise CommanderTimeoutError(
+                f'commander CLI {exc.kind} 超过 {exc.limit:g} 秒，已终止本轮进程树',
+                timeout_kind=exc.kind, partial_stdout=exc.stdout,
+                partial_stderr=exc.stderr, events=exc.events) from exc
+        except RunnerError as exc:
+            raise CommanderCommandError(
+                f'commander stdio 泵失败：{type(exc.__cause__ or exc).__name__}'
+            ) from exc
+        return subprocess.CompletedProcess(
+            list(invocation.argv), streamed.returncode,
+            streamed.stdout, streamed.stderr)
 
     def cancel(self, run_id: str | None = None) -> bool:
-        with self._state_lock:
-            active = self._active
-            if active is None:
-                # driver owner 先于 Popen 登记，stop 可能恰落在这条窄缝。
-                # 记住精确 run_id，让随后的 run 在同一 state lock 内关闭式拒绝；
-                # 否则 cancel 返回时看不见进程，下一行却能把它启动出来。
-                self._cancel_before_start.add(run_id)
-                return True
-            process, active_run_id = active
-            if run_id is not None and run_id != active_run_id:
-                return False
-        return _signal_process_tree(process, force=True)
+        return self._runner.cancel(run_id)
 
     def close(self) -> None:
-        with self._state_lock:
-            self._closed = True
-            self._cancel_before_start.clear()
-            self._launch_callback = None
-            active = self._active
-        if active is not None:
-            _signal_process_tree(active[0], force=True)
-
-    def _owns(self, process: subprocess.Popen[bytes]) -> bool:
-        with self._state_lock:
-            return self._active is not None and self._active[0] is process
+        self._runner.close()
 
 
 def jsonl_events(stdout: str, *, provider: str,
@@ -507,6 +431,8 @@ class CliCommanderDriver(CommanderDriver):
         executable: str | None = None,
         timeout: float = 86_400,
         runner: CommanderRunner | RunnerCallable | None = None,
+        first_event_timeout: float | None = COMMANDER_FIRST_EVENT_TIMEOUT_SECONDS,
+        idle_timeout: float | None = COMMANDER_IDLE_TIMEOUT_SECONDS,
     ) -> None:
         if timeout <= 0:
             raise CommanderConfigurationError('timeout 必须大于 0')
@@ -516,11 +442,27 @@ class CliCommanderDriver(CommanderDriver):
             raise CommanderConfigurationError(str(exc)) from exc
         self.timeout = float(timeout)
         if runner is None:
-            self._runner: CommanderRunner = _SubprocessCommanderRunner()
+            self._runner: CommanderRunner = _SubprocessCommanderRunner(
+                first_event_timeout=first_event_timeout,
+                idle_timeout=idle_timeout)
         elif callable(runner) and not hasattr(runner, 'run'):
             self._runner = _CallableRunner(runner)
         else:
             self._runner = runner  # type: ignore[assignment]
+
+    def set_event_callback(
+        self, callback: Callable[[Mapping[str, Any]], None] | None,
+    ) -> None:
+        """把协议事件即时交给 Supervisor（在线保存 provider session）；fake runner 忽略。"""
+        setter = getattr(self._runner, 'set_event_callback', None)
+        if setter is not None:
+            setter(callback)
+
+    @staticmethod
+    def session_id_of_event(event: Mapping[str, Any]) -> str | None:
+        """从单个协议事件识别供应商 session id；各驱动按自己的协议覆盖。"""
+        del event
+        return None
 
     def _resolved_profile(self, profile: AgentProfile) -> AgentProfile:
         from novel.agent_capabilities import (
@@ -551,6 +493,16 @@ class CliCommanderDriver(CommanderDriver):
         return str(repo_path), str(base_path)
 
     @abstractmethod
+    def _decode_events(
+        self,
+        events: Sequence[Mapping[str, Any]],
+        *,
+        profile: AgentProfile,
+        exit_code: int,
+        expected_provider_session_id: str | None,
+    ) -> CommanderObservation:
+        """把已解析的协议事件归一；不读取 stderr 猜身份。"""
+
     def _decode(
         self,
         stdout: str,
@@ -559,7 +511,13 @@ class CliCommanderDriver(CommanderDriver):
         exit_code: int,
         expected_provider_session_id: str | None,
     ) -> CommanderObservation:
-        """把供应商协议归一；不读取 stderr 猜身份。"""
+        events = jsonl_events(
+            stdout, provider=self.provider_label, allow_empty=exit_code != 0)
+        return self._decode_events(
+            events, profile=profile, exit_code=exit_code,
+            expected_provider_session_id=expected_provider_session_id)
+
+    provider_label: str = 'commander'
 
     def run(
         self,
@@ -579,6 +537,20 @@ class CliCommanderDriver(CommanderDriver):
         try:
             completed = self._runner.run(
                 invocation, timeout=self.timeout, run_id=run_id, log=log)
+        except CommanderTimeoutError as exc:
+            # 超时不是协议失败：把已收到的事件归一成部分观测（session id、
+            # usage），调用方据此决定同席 resume 还是 relaunch。
+            try:
+                exc.partial_observation = self._decode_events(
+                    exc.events, profile=profile, exit_code=-1,
+                    expected_provider_session_id=(
+                        invocation.resume_provider_session_id))
+            except CommanderError:
+                exc.partial_observation = None
+            exc.wire_evidence = bool(exc.events) or (
+                exc.partial_observation is not None
+                and exc.partial_observation.provider_session_id is not None)
+            raise
         except CommanderError:
             raise
         except subprocess.TimeoutExpired as exc:
@@ -592,8 +564,19 @@ class CliCommanderDriver(CommanderDriver):
             _text(completed.stdout), profile=profile, exit_code=exit_code,
             expected_provider_session_id=(
                 invocation.resume_provider_session_id))
+        wire_evidence = (
+            observation.provider_session_id is not None
+            or observation.usage is not None)
+        if exit_code == 0:
+            return CommanderProcessResult(
+                exit_code=exit_code, observation=observation,
+                wire_evidence=wire_evidence)
+        kind, status, retryable = classify_agent_command_failure(
+            _text(completed.stderr), usage=observation.usage)
         return CommanderProcessResult(
-            exit_code=exit_code, observation=observation)
+            exit_code=exit_code, observation=observation,
+            failure_kind=kind, status=status, retryable=retryable,
+            wire_evidence=wire_evidence)
 
     def cancel(self, run_id: str | None = None) -> bool:
         return self._runner.cancel(run_id)
@@ -614,6 +597,7 @@ __all__ = [
     'CliCommanderDriver',
     'CommanderBusyError',
     'CommanderCommandError',
+    'CommanderTimeoutError',
     'CommanderConfigurationError',
     'CommanderDriver',
     'CommanderError',

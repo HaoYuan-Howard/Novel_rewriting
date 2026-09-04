@@ -75,6 +75,10 @@ _WITHHELD: dict[str, str] = {
     'STAGE2_COMMANDER_MAX_EDIT_SEAT': '同上',
     'COMMANDER_ATTEMPT_KINDS': (
         '同席内 launch/resume 只写进席位账与 session 审计；不是 HTTP/UI 取值面'),
+    'COMMANDER_FIRST_EVENT_TIMEOUT_SECONDS': '调用层超时是驱动配置，不是前端读数',
+    'COMMANDER_IDLE_TIMEOUT_SECONDS': '同上',
+    'COMMANDER_MAX_ATTEMPTS_PER_SEAT': '同上：同席重试上限由 Supervisor 执行，前端只看结果',
+    'COMMANDER_RETRY_BACKOFF_SECONDS': '同上',
     'REVIEWER_APPROVAL_SURFACES': (
         'Commander reviewer typed request 的 approval 面闭集，只由 RunSupervisor 与'
         ' loader 消费；页面各审批面已有自己的 typed 表单，另发只会制造第二个消费面'),

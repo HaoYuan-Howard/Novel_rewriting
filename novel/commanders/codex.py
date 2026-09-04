@@ -194,17 +194,24 @@ class CodexCommanderDriver(CliCommanderDriver):
             resume_provider_session_id=resume_provider_session_id,
         )
 
-    def _decode(
+    provider_label = 'Codex --json'
+
+    @staticmethod
+    def session_id_of_event(event: Mapping[str, Any]) -> str | None:
+        if event.get('type') != 'thread.started':
+            return None
+        value = event.get('thread_id')
+        return value if isinstance(value, str) and value.strip() else None
+
+    def _decode_events(
         self,
-        stdout: str,
+        events: Sequence[Mapping[str, Any]],
         *,
         profile: AgentProfile,
         exit_code: int,
         expected_provider_session_id: str | None,
     ) -> CommanderObservation:
         del profile
-        events = jsonl_events(
-            stdout, provider='Codex --json', allow_empty=exit_code != 0)
         if not events:
             return CommanderObservation(
                 provider_session_id=None,

@@ -533,3 +533,84 @@ def test_finish_restored_session_requires_acceptance_to_match_real_turn(tmp_path
             end_code_version='code-start',
         )
     assert [event.kind for event in A.read_events(tmp_path)] == ['started', 'turn']
+
+
+def _attempt(*, session_run_id: str = 'session-1', ordinal: int = 1,
+             ts: int = 15, attempt_id: str | None = None,
+             provider_session_id: str | None = None,
+             error_kind: str | None = 'connection') -> A.AgentSessionEvent:
+    return A.AgentSessionEvent(
+        session_run_id=session_run_id,
+        parent_run_id='commander-1',
+        role='executor',
+        node='stage5.write',
+        chapter=7,
+        subject_sha256=_SHA_A,
+        profile={
+            'driver': 'codex',
+            'model': 'gpt-5.6-sol',
+            'reasoning_effort': 'max',
+            'execution_mode': 'standard',
+        },
+        kind='attempt',
+        ts=ts,
+        provider_session_id=provider_session_id,
+        attempt_id=attempt_id or f'attempt-{ordinal}',
+        delivery_attempts=ordinal,
+        requested_model='gpt-5.6-sol',
+        requested_effort='max',
+        cli_version='codex-cli/1.2.3',
+        protocol_version='agent-session/v1',
+        start_code_version='code-start',
+        skill_sha256=_SHA_B,
+        prompt_sha256=_SHA_C,
+        schema_sha256=_SHA_D,
+        error_kind=error_kind,
+    )
+
+
+def test_attempt_events_fold_under_the_same_logical_session(tmp_path):
+    """同席 launch/resume 是交付层事实：不占 turn 序号，也不新开 logical session。"""
+    A.append_event(tmp_path, _start())
+    A.append_event(tmp_path, _attempt(ordinal=1, ts=15, error_kind='connection'))
+    A.append_event(tmp_path, _attempt(
+        ordinal=2, ts=18, attempt_id='attempt-resume-1',
+        provider_session_id='provider-thread-99/abc', error_kind=None))
+    A.append_event(tmp_path, _turn(turn_index=1, ts=20))
+    A.append_event(tmp_path, _end(ts=30))
+
+    [record] = A.fold(A.read_events(tmp_path))
+    assert [row.delivery_attempts for row in record.attempts] == [1, 2]
+    assert [row.error_kind for row in record.attempts] == ['connection', None]
+    assert [row.turn_index for row in record.turns] == [1]
+    assert record.provider_session_ids == ('provider-thread-99/abc',)
+
+
+def test_attempt_events_are_closed_form():
+    with pytest.raises(ValueError, match='attempt 必须带席内序号'):
+        A.AgentSessionEvent(**{
+            **_attempt().to_dict(), 'delivery_attempts': None})
+    with pytest.raises(ValueError, match='attempt 不带 turn_index'):
+        A.AgentSessionEvent(**{**_attempt().to_dict(), 'turn_index': 1})
+    with pytest.raises(ValueError, match='attempt 不能冒充 ended'):
+        A.AgentSessionEvent(**{**_attempt().to_dict(), 'process_state': 'ok'})
+    with pytest.raises(ValueError, match='attempt_id=.*重复'):
+        A.fold([_start(), _attempt(ordinal=1, ts=15),
+                _attempt(ordinal=2, ts=16, attempt_id='attempt-1')])
+    # 席内序号按每轮 turn 重新计数：同一 logical session 跨轮续会时 1 可再次出现。
+    [record] = A.fold([
+        _start(), _attempt(ordinal=1, ts=15),
+        _attempt(ordinal=1, ts=16, attempt_id='attempt-next-turn')])
+    assert [row.delivery_attempts for row in record.attempts] == [1, 1]
+    # attempt 携带的 provider id 只是观察，不认领 ownership：被别的 session
+    # 占用的 id 出现在 attempt 里不会让整份账不可折叠。
+    other = _start(session_run_id='session-2', ts=5)
+    other_turn = _turn(session_run_id='session-2', ts=6)
+    records = A.fold([
+        other, other_turn, _start(ts=10),
+        _attempt(ordinal=1, ts=15, provider_session_id='provider-thread-99/abc')])
+    assert [row.session_run_id for row in records] == ['session-1', 'session-2']
+    assert records[0].provider_session_ids == ()
+    with pytest.raises(ValueError, match='在 started 前出现 attempt'):
+        A.fold([_attempt(ordinal=1, ts=15)])
+

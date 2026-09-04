@@ -18,7 +18,6 @@ from novel.commanders.base import (
     CommanderInvocation,
     CommanderObservation,
     CommanderProtocolError,
-    jsonl_events,
     optional_usage,
 )
 
@@ -227,17 +226,22 @@ class ClaudeCodeCommanderDriver(CliCommanderDriver):
             resume_provider_session_id=resume_provider_session_id,
         )
 
-    def _decode(
+    provider_label = 'Claude stream-json'
+
+    @staticmethod
+    def session_id_of_event(event: Mapping[str, Any]) -> str | None:
+        value = event.get('session_id')
+        return value if isinstance(value, str) and value.strip() else None
+
+    def _decode_events(
         self,
-        stdout: str,
+        events: Sequence[Mapping[str, Any]],
         *,
         profile: AgentProfile,
         exit_code: int,
         expected_provider_session_id: str | None,
     ) -> CommanderObservation:
         del profile
-        events = jsonl_events(
-            stdout, provider='Claude stream-json', allow_empty=exit_code != 0)
         if not events:
             return CommanderObservation(
                 provider_session_id=None,

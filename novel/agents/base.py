@@ -31,6 +31,11 @@ from pathlib import Path
 from typing import Any, Literal, Protocol
 
 from contracts.schema.orchestration import AgentProfile
+from novel.agents.jsonl_runner import (
+    JsonlProcessRunner, ProcessTimeout, RunnerBusyError,
+    RunnerCancelledBeforeStart, RunnerClosedError, decode_wire_json,
+    signal_process_tree,
+)
 
 
 PLAIN_DELIVERY = 'plain'
@@ -519,140 +524,48 @@ class _CallableRunner:
 
 
 class _SubprocessRunner:
-    """默认可取消 runner；一个实例任何时刻最多拥有一棵进程树。"""
+    """默认可取消 runner；进程组、泵线程与取消全部来自公共 ``JsonlProcessRunner``。
+
+    executor 协议不做流式解析（Claude ``--output-format json`` 只在结束时给一份
+    结果），也不开首事件/空闲超时；这里只保留总超时并把公共异常映射回本层的
+    typed 错误，``Runner`` Protocol 与测试 fake 形状不变。
+    """
 
     def __init__(self) -> None:
-        self._lock = threading.Lock()
-        self._active: tuple[subprocess.Popen[bytes], str | None] | None = None
-        self._closed = False
+        self._runner = JsonlProcessRunner()
 
     def run(self, argv: Sequence[str], *, input: bytes | None,
             cwd: str | None, timeout: float,
             session_id: str | None) -> subprocess.CompletedProcess[str]:
-        with self._lock:
-            if self._closed:
-                raise AgentConfigurationError('runner 已关闭')
-            if self._active is not None:
-                raise AgentBusyError('同一 AgentDriver 实例不能并发执行两轮')
-            process_options: dict[str, Any] = {}
-            if os.name == 'nt':
-                # agent 会继续拉工具/novel.cli 孙进程；独立进程组是按 PID 用
-                # ``taskkill /T`` 收整棵树的前提，不能退回只杀 CLI 根进程。
-                process_options['creationflags'] = (
-                    subprocess.CREATE_NO_WINDOW
-                    | subprocess.CREATE_NEW_PROCESS_GROUP)
-            else:
-                # 新 session 同时建立 pgid=pid；取消时只向这一组发信号，不碰本服务
-                # 或并行节点所在的进程组。
-                process_options['start_new_session'] = True
-            process = subprocess.Popen(
-                list(argv), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE, cwd=cwd, text=False,
-                shell=False, **process_options)
-            self._active = (process, session_id)
         try:
-            stdout, stderr = process.communicate(input=input, timeout=timeout)
-        except subprocess.TimeoutExpired:
-            _signal_process_tree(process, force=False)
-            try:
-                stdout, stderr = process.communicate(timeout=5)
-            except subprocess.TimeoutExpired:
-                _signal_process_tree(process, force=True)
-                stdout, stderr = process.communicate()
-            raise
-        except BaseException:
-            # KeyboardInterrupt / runner 线程取消也不能把一只失去所有权的 CLI 留在后台。
-            if self._owns(process):
-                _signal_process_tree(process, force=False)
-                try:
-                    process.communicate(timeout=5)
-                except subprocess.TimeoutExpired:
-                    _signal_process_tree(process, force=True)
-                    process.communicate()
-            raise
-        finally:
-            with self._lock:
-                if self._active is not None and self._active[0] is process:
-                    self._active = None
+            streamed = self._runner.run(
+                list(argv), stdin_bytes=input, cwd=cwd, env=None,
+                timeout=timeout, owner=session_id, log=None,
+                parse_events=False)
+        except RunnerClosedError as exc:
+            raise AgentConfigurationError('runner 已关闭') from exc
+        except RunnerBusyError as exc:
+            raise AgentBusyError('同一 AgentDriver 实例不能并发执行两轮') from exc
+        except RunnerCancelledBeforeStart as exc:
+            raise AgentCommandError(
+                'agent CLI 在 Popen 前已收到 cancel，拒绝启动进程树',
+                returncode=130) from exc
+        except ProcessTimeout as exc:
+            raise subprocess.TimeoutExpired(
+                list(argv), timeout, output=exc.stdout, stderr=exc.stderr,
+            ) from exc
         return subprocess.CompletedProcess(
-            list(argv), int(process.returncode),
-            stdout.decode('utf-8', errors='replace'),
-            stderr.decode('utf-8', errors='replace'))
+            list(argv), streamed.returncode, streamed.stdout, streamed.stderr)
 
     def cancel(self, session_id: str | None = None) -> bool:
-        with self._lock:
-            active = self._active
-            if active is None:
-                return False
-            process, active_session = active
-            if session_id is not None and active_session != session_id:
-                return False
-        # 显式取消与 Windows 既有 ``taskkill /T /F`` 同义：不等待某个工具忽略
-        # SIGTERM 后拖到整轮 timeout。目标来自本实例持有的 Popen，绝不按进程名扫描。
-        return _signal_process_tree(process, force=True)
+        return self._runner.cancel(session_id)
 
     def close(self) -> None:
-        with self._lock:
-            self._closed = True
-            active = self._active
-            if active is None:
-                return
-            process = active[0]
-        _signal_process_tree(process, force=True)
-
-    def _owns(self, process: subprocess.Popen[Any]) -> bool:
-        """确认异常处理仍只操作本轮 Popen；避免结束/新一轮交界处误杀。"""
-        with self._lock:
-            return self._active is not None and self._active[0] is process
+        self._runner.close()
 
 
-def _windows_taskkill_path() -> str:
-    """使用系统目录中的 taskkill，避免工作目录里的同名程序劫持取消路径。"""
-    system_root = os.environ.get('SystemRoot', r'C:\Windows')
-    return str(Path(system_root) / 'System32' / 'taskkill.exe')
-
-
-def _signal_process_tree(process: subprocess.Popen[Any], *, force: bool) -> bool:
-    """只终止 ``process`` 建立的进程组/树；进程不存在时返回 False。
-
-    Windows 没有可移植的 ``killpg``，沿用本仓已经实跑验证的 ``taskkill /T``；
-    POSIX 则依赖 ``start_new_session=True`` 建立的 pgid。任何 fallback 也只触碰
-    手里这一只 Popen 根进程，不扫描名字或系统进程表。
-    """
-    if os.name == 'nt':
-        if process.poll() is not None:
-            return False
-        try:
-            killed = subprocess.run(
-                [_windows_taskkill_path(), '/PID', str(process.pid), '/T', '/F'],
-                stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT, check=False,
-                creationflags=subprocess.CREATE_NO_WINDOW)
-        except OSError:
-            killed = None
-        if killed is not None and killed.returncode == 0:
-            return True
-        if process.poll() is not None:
-            return False
-        # taskkill 被策略阻断时仍不能放任付费根进程；这条 fallback 不声称孙进程
-        # 已停，上层 communicate/timeout 会继续以未完成而失败。
-        process.kill() if force else process.terminate()
-        return True
-
-    signum = signal.SIGKILL if force else signal.SIGTERM
-    try:
-        # ``start_new_session`` 保证 pgid 就是 leader pid；leader 已退出但仍有孙进程
-        # 持有管道时，按已知 pgid 发信号仍能把余下成员收掉。
-        os.killpg(process.pid, signum)
-        return True
-    except ProcessLookupError:
-        return False
-    except OSError:
-        # 极端平台若不支持 process group，最多退回当前 Popen，仍不扩大杀伤面。
-        if process.poll() is not None:
-            return False
-        process.kill() if force else process.terminate()
-        return True
+# 兼容既有调用者：进程树终止与 wire JSON 解码的唯一实现已迁到公共 runner。
+_signal_process_tree = signal_process_tree
 
 
 # npm 生成的 Windows shim 常见形状：``"%dp0%\path\tool.exe" %*``；
@@ -703,15 +616,6 @@ def compact_schema(schema: Mapping[str, Any] | None) -> str | None:
     except (TypeError, ValueError) as exc:
         raise AgentConfigurationError(
             f'output_schema 不是合法 JSON：{type(exc).__name__}') from exc
-
-
-def decode_wire_json(text: str) -> Any:
-    """解析 CLI wire JSON，与 ``ArtifactStore`` 的盘上产物读取明确分界。
-
-    分层守卫把 ``json.load(s)`` 保留给 store；这里处理的是子进程 stdout，不是上游
-    artifact，因此用 decoder 的协议入口，避免两种证据源在代码形状上被混为一谈。
-    """
-    return json.JSONDecoder().decode(text)
 
 
 def integer(value: Any) -> int | None:

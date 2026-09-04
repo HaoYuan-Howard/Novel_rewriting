@@ -208,6 +208,13 @@ apply 是 0 模型调用：它把旧假预留原行和 ledger/log/双账负证�
 归档要求所有席位已终态且它们的 parent AgentRun 已结束；仍在运行的席位不能被从下面抽走预算。
 同一入口也用于未来席位契约再升版，不得手改 JSON 冒充新账。
 
+网络或瞬态故障（connection / timeout / rate_limit / server_error / provider_transient）不需要人工恢复：
+RunSupervisor 在同一席位内自动续接——已取得 provider session 的失败尝试 resume 同一会话，没有首个协议
+事件的 0-wire 启动失败 relaunch，每席有次数上限与退避。读 `_service/runs/<SID>/sessions/<session_run_id>.json`
+可知这一席当前对应哪个 provider session；席位账该席的 `attempts[]` 与 `agent_sessions.jsonl` 的 `attempt`
+事件记录每一次尝试的退出码与分类。只有 authentication / usage_limit / permission / 协议错 / model drift
+才停止并需要人处理；这些不是重跑能解决的。
+
 `--apply-edit` 的路径解析**逐层不同，不要当成通则**（见 [经验库](field-notes.md) FN-016）：
 `stage2.blueprint` / `stage4.design` / `stage4.plan` / `stage6.hook` / `stage7.rename` 按**书目录**解析相对路径，
 也接受书目录内的绝对路径，目录外路径和 `..` 穿越关闭式拒绝；`stage5.write` 与 `stage0.edit`

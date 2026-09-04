@@ -3169,3 +3169,281 @@ def test_rejected_replay_reopens_full_review_instead_of_correction(
     assert invocations[0].resume_provider_session_id is None
     assert not path.exists()
     assert _reviewer_action_files(base) == []
+
+
+# ── 同席 attempt：网络/瞬态失败不新开 logical session、不扣新席 ─────────
+
+def _seat_harness(monkeypatch):
+    current = SimpleNamespace(
+        state='blocked', code_version='test-code-version',
+        surface_seal='c' * 64, execution_token=None,
+        action=SimpleNamespace(
+            waiting_on=agent.queue.WAITING_ON_STAGE2_REVIEW,
+            action_sha256='d' * 64,
+        ),
+    )
+    monkeypatch.setattr(
+        agent.operator, 'next_action_at_code',
+        lambda _base, _sid, *, code: current)
+    outcome = AgentDeliveryOutcome(
+        state='stopped', reason='Stage2 仍待审阅', checked_at=1)
+    monkeypatch.setattr(agent, '_assess_delivery', lambda *_args, **_kwargs: outcome)
+    task_box = {}
+
+    def build_task(_base, _sid, _current, request_path, *, epoch_id):
+        del epoch_id
+        task = agent.reviewer_tasks.ReviewerTask(
+            waiting_on=agent.queue.WAITING_ON_STAGE2_REVIEW,
+            surface_seal=current.surface_seal,
+            business_sha256='e' * 64,
+            request_path=Path(request_path),
+            prompt='STAGE2 FULL REVIEW',
+            submission_options=({'id': 'node:stage2.global.review'},),
+            workpack_sha256='f' * 64,
+            source_sha256='1' * 64,
+            main_text_sha256='2' * 64,
+            progress_sha256='3' * 64,
+            blocker_count=2,
+        )
+        task_box['task'] = task
+        return task
+
+    monkeypatch.setattr(agent.reviewer_tasks, 'build_task', build_task)
+
+    def load_action(_path, _current, *, submission_options):
+        del submission_options
+        raise agent.reviewer_tasks.ReviewerTaskError('typed 请求仍不合法')
+
+    monkeypatch.setattr(agent.reviewer_tasks, 'load_action', load_action)
+    sleeps: list[float] = []
+    monkeypatch.setattr(agent, '_retry_sleep', sleeps.append)
+    return current, task_box, sleeps
+
+
+def _seat_ledger(base):
+    [shown] = agent.stage2_review_ledger.list_ledgers(base, '42')
+    return shown
+
+
+def _spawn_sequence(task_box, invocations, outcomes):
+    """按序返回预设结果；成功时写出 typed 请求文件。"""
+
+    def default_spawn(_run_id, *, on_registered=None):
+        def spawn(invocation, env, log):
+            del env, log
+            invocations.append(invocation)
+            assert on_registered is not None
+            on_registered()
+            spec = outcomes[len(invocations) - 1]
+            if isinstance(spec, BaseException):
+                raise spec
+            if spec.exit_code == 0:
+                task = task_box['task']
+                task.request_path.parent.mkdir(parents=True, exist_ok=True)
+                task.request_path.write_text(
+                    json.dumps({'commander_turn': len(invocations)}),
+                    encoding='utf-8')
+            return spec
+        return spawn
+
+    return default_spawn
+
+
+def _seat_result(exit_code, *, provider, failure_kind=None, retryable=False,
+                 wire_evidence=None):
+    return CommanderProcessResult(
+        exit_code=exit_code,
+        observation=CommanderObservation(
+            provider_session_id=provider,
+            actual_model=_PROFILES.commander.model,
+            actual_effort=_PROFILES.commander.reasoning_effort,
+            usage=None),
+        failure_kind=failure_kind, retryable=retryable,
+        wire_evidence=(provider is not None) if wire_evidence is None else wire_evidence)
+
+
+def test_transient_failure_resumes_the_same_seat_without_a_new_session(
+        base, corpus, monkeypatch):
+    """connection reset 后同席 resume：同一 logical session、同一席位、两次 attempt。"""
+    current, task_box, sleeps = _seat_harness(monkeypatch)
+    invocations = []
+    monkeypatch.setattr(agent, '_default_spawn', _spawn_sequence(task_box, invocations, [
+        _seat_result(1, provider='provider-seat-1',
+                     failure_kind='connection', retryable=True),
+        _seat_result(0, provider='provider-seat-1'),
+        _seat_result(0, provider='provider-seat-2'),
+        _seat_result(0, provider='provider-seat-3'),
+    ]))
+    rec = agent.start(
+        base, '42', authorized=True, egress_authorized=True,
+        profiles=_PROFILES, spawn=None)
+    assert agent.wait(rec.run_id, 10)
+
+    assert len(invocations) == 4
+    assert [row.resume_provider_session_id for row in invocations] == [
+        None, 'provider-seat-1', None, None]
+    assert invocations[1].stdin_text.startswith('上一进程因网络或瞬态故障中断')
+    assert sleeps == [agent.COMMANDER_RETRY_BACKOFF_SECONDS[0]]
+
+    sessions = agent_session_audit.fold(agent_session_audit.read_events(base))
+    assert len(sessions) == 3, '同席 resume 不新开 logical session'
+    first = sessions[-1]
+    assert [turn.turn_index for turn in first.turns] == [1, 2]
+    assert [turn.error_kind for turn in first.turns] == ['connection', None]
+    assert first.provider_session_ids == ('provider-seat-1',)
+    assert [row.delivery_attempts for row in first.attempts] == [1, 2]
+    assert [row.error_kind for row in first.attempts] == ['connection', None]
+
+    shown = _seat_ledger(base)
+    assert [row['purpose'] for row in shown['turns']] == [
+        'review', 'correction', 'correction']
+    assert [row['attempts'] for row in shown['turns']] == [2, 1, 1]
+    assert shown['turns'][0]['outcome'] == 'ok'
+    ledger = agent.stage2_review_ledger.Stage2ReviewLedger.model_validate_json(
+        Path(shown['ledger_path']).read_bytes())
+    attempts = ledger.turns[0].attempts
+    assert [row.kind for row in attempts] == ['launch', 'resume']
+    assert attempts[0].error_kind == 'connection' and attempts[0].wire_evidence
+    assert attempts[1].provider_session_id == 'provider-seat-1'
+    assert attempts[1].exit_code == 0
+
+    log = agent.run_log_path(base, rec.run_id).read_text('utf-8')
+    assert '[commander-retry] attempt=1 failure=connection' in log
+    rows = [
+        json.loads(line) for line in
+        (Path(base) / '_service' / 'ledger.jsonl').read_text('utf-8').splitlines()
+        if line.strip()]
+    commander_rows = [row for row in rows if row.get('role') == 'commander']
+    assert [row['outcome'] for row in commander_rows] == ['error', 'ok', 'ok', 'ok']
+
+
+def test_zero_wire_launch_failure_relaunches_and_timeout_uses_partial_session(
+        base, corpus, monkeypatch):
+    """没有首事件的启动失败重新 launch；空闲超时携带的部分 session 走 resume。"""
+    from novel.commanders.base import CommanderTimeoutError
+
+    current, task_box, sleeps = _seat_harness(monkeypatch)
+    invocations = []
+    idle = CommanderTimeoutError(
+        'idle', timeout_kind='idle', partial_stdout='', partial_stderr='',
+        events=[{'type': 'thread.started', 'thread_id': 'provider-idle'}])
+    idle.partial_observation = CommanderObservation(
+        provider_session_id='provider-idle', actual_model=None,
+        actual_effort=None, usage=None)
+    monkeypatch.setattr(agent, '_default_spawn', _spawn_sequence(task_box, invocations, [
+        _seat_result(1, provider=None, failure_kind='connection', retryable=True),
+        idle,
+        _seat_result(0, provider='provider-idle'),
+        _seat_result(0, provider='provider-seat-2'),
+        _seat_result(0, provider='provider-seat-3'),
+    ]))
+    rec = agent.start(
+        base, '42', authorized=True, egress_authorized=True,
+        profiles=_PROFILES, spawn=None)
+    assert agent.wait(rec.run_id, 10)
+
+    assert [row.resume_provider_session_id for row in invocations] == [
+        None, None, 'provider-idle', None, None]
+    assert sleeps == list(agent.COMMANDER_RETRY_BACKOFF_SECONDS[:2])
+    shown = _seat_ledger(base)
+    assert [row['attempts'] for row in shown['turns']] == [3, 1, 1]
+    ledger = agent.stage2_review_ledger.Stage2ReviewLedger.model_validate_json(
+        Path(shown['ledger_path']).read_bytes())
+    attempts = ledger.turns[0].attempts
+    assert [row.kind for row in attempts] == ['launch', 'launch', 'resume']
+    assert [row.wire_evidence for row in attempts] == [False, True, True]
+    assert attempts[1].error_kind == 'timeout'
+    sessions = agent_session_audit.fold(agent_session_audit.read_events(base))
+    first = sessions[-1]
+    assert [row.delivery_attempts for row in first.attempts] == [1, 2, 3]
+    assert [turn.turn_index for turn in first.turns] == [1, 2], (
+        '0-wire 尝试没有 provider turn；超时与成功各记一条')
+
+
+def test_non_retryable_failure_and_attempt_cap_do_not_loop(
+        base, corpus, monkeypatch):
+    current, task_box, sleeps = _seat_harness(monkeypatch)
+    invocations = []
+    monkeypatch.setattr(agent, '_default_spawn', _spawn_sequence(task_box, invocations, [
+        _seat_result(1, provider='provider-auth',
+                     failure_kind='authentication', retryable=False),
+    ]))
+    rec = agent.start(
+        base, '42', authorized=True, egress_authorized=True,
+        profiles=_PROFILES, spawn=None)
+    assert agent.wait(rec.run_id, 10)
+    assert len(invocations) == 1 and sleeps == []
+    [done] = [row for row in agent.records(base) if row.run_id == rec.run_id]
+    assert done.exit_code == 1
+    shown = _seat_ledger(base)
+    assert [row['attempts'] for row in shown['turns']] == [1]
+
+
+def test_attempt_cap_stops_after_max_attempts(base, corpus, monkeypatch):
+    current, task_box, sleeps = _seat_harness(monkeypatch)
+    invocations = []
+    monkeypatch.setattr(agent, '_default_spawn', _spawn_sequence(task_box, invocations, [
+        _seat_result(1, provider='p', failure_kind='connection', retryable=True),
+        _seat_result(1, provider='p', failure_kind='connection', retryable=True),
+        _seat_result(1, provider='p', failure_kind='connection', retryable=True),
+        _seat_result(0, provider='p'),
+    ]))
+    rec = agent.start(
+        base, '42', authorized=True, egress_authorized=True,
+        profiles=_PROFILES, spawn=None)
+    assert agent.wait(rec.run_id, 10)
+    assert len(invocations) == agent.COMMANDER_MAX_ATTEMPTS_PER_SEAT, (
+        '同席尝试到上限后以最后一次失败终态，不无限重试')
+    assert len(sleeps) == agent.COMMANDER_MAX_ATTEMPTS_PER_SEAT - 1
+    [done] = [row for row in agent.records(base) if row.run_id == rec.run_id]
+    assert done.exit_code == 1
+    shown = _seat_ledger(base)
+    assert [row['attempts'] for row in shown['turns']] == [
+        agent.COMMANDER_MAX_ATTEMPTS_PER_SEAT]
+    assert shown['turns'][0]['outcome'] == 'failed'
+
+
+def test_session_pointer_is_written_from_the_first_protocol_event(
+        base, corpus, monkeypatch):
+    current, task_box, sleeps = _seat_harness(monkeypatch)
+    invocations = []
+
+    def default_spawn(run_id, *, on_registered=None):
+        def spawn(invocation, env, log):
+            del log
+            invocations.append(invocation)
+            assert on_registered is not None
+            on_registered()
+            sink = agent._COMMANDER_EVENT_SINKS[env['NOVEL_COMMANDER_RUN_ID']]
+            provider = f'provider-pointer-{len(invocations)}'
+            sink({'type': 'thread.started', 'thread_id': provider}, provider)
+            sink({'type': 'turn.started'}, None)
+            task = task_box['task']
+            task.request_path.parent.mkdir(parents=True, exist_ok=True)
+            # 每轮请求字节不同：相同字节会被“无效纠错循环”守卫提前停止。
+            task.request_path.write_text(
+                json.dumps({'commander_turn': len(invocations)}), encoding='utf-8')
+            return _seat_result(0, provider=provider)
+        return spawn
+
+    monkeypatch.setattr(agent, '_default_spawn', default_spawn)
+    rec = agent.start(
+        base, '42', authorized=True, egress_authorized=True,
+        profiles=_PROFILES, spawn=None)
+    assert agent.wait(rec.run_id, 10)
+
+    sessions = agent_session_audit.fold(agent_session_audit.read_events(base))
+    pointer_dir = Path(base) / '_service' / 'runs' / '42' / 'sessions'
+    pointers = sorted(pointer_dir.glob('*.json'))
+    assert len(pointers) == len(sessions)
+    from contracts.schema.orchestration import CommanderSessionPointer
+    loaded = [
+        CommanderSessionPointer.model_validate_json(pointer.read_bytes())
+        for pointer in pointers]
+    assert sorted(row.provider_session_id for row in loaded) == [
+        'provider-pointer-1', 'provider-pointer-2', 'provider-pointer-3']
+    assert {row.attempt_kind for row in loaded} == {'launch'}
+    assert {row.parent_run_id for row in loaded} == {rec.run_id}
+    assert {pointer.stem for pointer in pointers} == {
+        session.session_run_id for session in sessions}
+

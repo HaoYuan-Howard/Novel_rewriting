@@ -2535,3 +2535,14 @@ STAGE2_COMMANDER_MAX_EDIT_SEAT: Final = 3
 #: 同一席位内的真实 CLI 进程尝试种类：``launch`` 是新进程首发，``resume`` 是
 #: 用供应商 exact session id 续接同一 provider 会话。两者都不新开席位。
 COMMANDER_ATTEMPT_KINDS: Final = ('launch', 'resume')
+#: Commander 子进程的首事件超时：Popen 后这么久仍没有任何协议事件（Claude
+#: ``system/init``、Codex ``thread.started``）就判 0-wire 启动失败，可同席 relaunch。
+COMMANDER_FIRST_EVENT_TIMEOUT_SECONDS: Final = 600.0
+#: 空闲超时：stdout/stderr 连续这么久没有任何字节。Commander 一轮内部有工具调用
+#: 与模型往返，正常不会长时间静默；静默通常是 CLI 内部无限重连（实测 08-28
+#: websocket 连不上后每 60 秒重试）。超时后已捕获 provider session 的席位可 resume。
+COMMANDER_IDLE_TIMEOUT_SECONDS: Final = 1800.0
+#: 同一席位内最多几次真实进程尝试（含首发）；超过即席位以最后一次失败终态。
+COMMANDER_MAX_ATTEMPTS_PER_SEAT: Final = 3
+#: 同席重试前的退避秒数，按尝试序号取值，越界取最后一档。
+COMMANDER_RETRY_BACKOFF_SECONDS: Final = (30.0, 120.0)

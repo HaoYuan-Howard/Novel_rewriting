@@ -198,8 +198,11 @@ Stage2 Global Reviewer 增量 subject-card wire、Blueprint `extraction-ir-v3.2`
 - **终审 reopen 路**：至少一次真实终审提交 FAIL/UNVER reopen，随后订正席与第二次终审在同一账内完成；
   reopen 引起的 blocker 回升不被账本拒绝。
 - **人工路径**：界面填写确认人提交 seen.global，改判任一 review 项后旧确认自动过期并要求重读。
-- 结果回写 `docs/DECISIONS.md` 后删除本条；批 2（公共可恢复调用层：首事件/空闲超时、网络分类、
-  同席 resume 不扣席）的真机验收另立条目。
+- **同席 resume（批 2）**：至少一次真实 Commander 轮在取得首个协议事件后被人为断网/杀 CLI，验收
+  席位账该席 `attempts[]` 出现 `launch(error) → resume(ok)`、`agent_sessions.jsonl` 同一 `session_run_id`
+  下 `attempt` 事件席内序号 1/2 且 `turn_index` 1/2、成本账两行 `attempt_id` 不同、
+  `_service/runs/<sid>/sessions/<session_run_id>.json` 指针在断网前已写出，且席位账席数不增加。
+- 结果回写 `docs/DECISIONS.md` 后删除本条。
 
 ## 条目生命周期
 

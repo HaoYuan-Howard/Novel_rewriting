@@ -663,6 +663,19 @@ def scratch_session_dir(
             / _service_segment(session_id, label='scratch session id'))
 
 
+def commander_session_pointer_path(
+        base: str | os.PathLike[str], sid: str, session_run_id: str,
+) -> Path:
+    """`<base>/_service/runs/<sid>/sessions/<session_run_id>.json`；不摸盘。
+
+    Commander 首个协议事件到达时写入的 provider session 指针；一席一份，
+    同席 resume 原地覆盖。它不是产物，不进来源账。
+    """
+    return (service_runs_dir(base) / check_sid(sid) / 'sessions'
+            / (_service_segment(session_run_id, label='commander session id')
+               + '.json'))
+
+
 def service_book_runs_dir(novel_dir: str | os.PathLike[str]) -> Path:
     """`<base>/_service/runs/<sid>/`；从权威书目录反解 sid。
 

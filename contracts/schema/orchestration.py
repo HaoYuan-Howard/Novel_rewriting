@@ -902,6 +902,31 @@ class BeaconTailRepairRecord(AppendTailRepairRecord):
 REVIEWER_ACTION_RECORD_KIND = 'novel-reviewer-action-record-v1'
 
 
+class CommanderSessionPointer(FrozenModel):
+    """Commander 子进程首个协议事件到达时在线落盘的 provider session 指针。
+
+    它不是审计账也不是预算：审计仍在 ``agent_sessions.jsonl``，席位仍在
+    Stage2 席位账。它只回答“这一席当前 attempt 对应供应商哪一个 session”，
+    并 hash-bound 到本次 prompt/schema/profile；宿主崩溃后运维可据此判断
+    该 session 能否续接，而不必等进程退出才知道 id。
+    """
+
+    kind: Literal['novel-commander-session-pointer-v1'] = (
+        'novel-commander-session-pointer-v1')
+    sid: str = Field(min_length=1)
+    parent_run_id: str = Field(min_length=1)
+    epoch_id: str = Field(min_length=1)
+    session_run_id: str = Field(min_length=1)
+    attempt_id: str = Field(min_length=1)
+    attempt_kind: Literal[COMMANDER_ATTEMPT_KINDS]
+    provider_session_id: str = Field(min_length=1)
+    driver: str = Field(min_length=1)
+    model: str = Field(min_length=1)
+    prompt_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    schema_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    observed_at: int = Field(ge=0)
+
+
 class Stage2ReviewAttempt(FrozenModel):
     """同一席位内的一次真实 CLI 进程尝试。
 

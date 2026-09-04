@@ -39,7 +39,8 @@ from typing import BinaryIO, Iterator, NamedTuple
 
 from contracts.artifacts import STAGE2_GLOBAL_EDIT, STAGE2_GLOBAL_REVIEW_DECISIONS
 from contracts.invariants import (
-    AGENT_EXECUTOR_NODES, STAGE2_BLUEPRINT_MAX_CONCURRENCY,
+    AGENT_EXECUTOR_NODES, COMMANDER_MAX_ATTEMPTS_PER_SEAT,
+    COMMANDER_RETRY_BACKOFF_SECONDS, STAGE2_BLUEPRINT_MAX_CONCURRENCY,
 )
 from contracts.schema import decode_artifact
 from contracts.schema.api import ExecutionPermit, OperatorNext
@@ -48,7 +49,7 @@ from contracts.schema.stage2 import GlobalEdit
 from contracts.schema.orchestration import (
     AgentDeliveryOutcome, AgentPending, AgentQueueView, AgentRejected, AgentRunEvent,
     AgentExecutorBackend, AgentProfile, AgentRunRecord, AgentRunStart,
-    ExecutionEpoch, ExecutorBackend,
+    CommanderSessionPointer, ExecutionEpoch, ExecutorBackend,
     PipelineAgentProfiles, ReviewerActionRecord, RunContractV2,
 )
 from novel import agent_session_audit, paths, prov, run_identity, skill_contract
@@ -130,6 +131,28 @@ _THREADS_LOCK = threading.Lock()
 _THREADS: dict[str, threading.Thread] = {}
 _COMMANDERS_LOCK = threading.Lock()
 _COMMANDERS: dict[str, CommanderDriver] = {}
+#: 每个 run 当前 Commander turn 的协议事件汇：driver 首个事件里的 provider
+#: session id 经它在线落盘（``CommanderSessionPointer``）。
+_COMMANDER_EVENT_SINKS: dict[str, Callable[[object, str | None], None]] = {}
+#: 同席重试前的退避；测试替换为零等待。
+_retry_sleep: Callable[[float], None] = time.sleep
+#: 同席 resume 的续接提示：上一进程已因网络/瞬态故障终止，续接同一 provider
+#: 会话完成同一 immutable workpack；不重发工作包，不允许换请求文件路径。
+_REVIEWER_RESUME_PROMPT = (
+    '上一进程因网络或瞬态故障中断，本轮是同一席位的续接。请继续同一 immutable '
+    'workpack 与同一 typed 请求文件路径完成审阅并写出请求；不要重读盘上产物，'
+    '不要更改请求文件路径，也不要重复已经写出的请求。'
+)
+
+
+def _write_session_pointer(
+        base: str, sid: str, pointer: CommanderSessionPointer) -> None:
+    path = paths.commander_session_pointer_path(base, sid, pointer.session_run_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = (pointer.model_dump_json(indent=2) + '\n').encode('utf-8')
+    temporary = path.with_suffix(f'.{os.getpid()}.{threading.get_ident()}.tmp')
+    temporary.write_bytes(payload)
+    os.replace(temporary, path)
 _ACTIONS_LOCK = threading.Lock()
 _ACTIONS: dict[str, subprocess.Popen[bytes]] = {}
 _SUPERVISORS_LOCK = threading.Lock()
@@ -622,6 +645,13 @@ def _default_spawn(
         driver = create_commander_driver(runtime_invocation.profile)
         with _COMMANDERS_LOCK:
             _COMMANDERS[run_id] = driver
+            event_sink = _COMMANDER_EVENT_SINKS.get(run_id)
+        if event_sink is not None:
+            event_setter = getattr(driver, 'set_event_callback', None)
+            identify = getattr(driver, 'session_id_of_event', None)
+            if event_setter is not None:
+                event_setter(lambda event: event_sink(
+                    event, None if identify is None else identify(event)))
         if on_registered is not None:
             setter = getattr(driver, 'set_launch_callback', None)
             if setter is None:
@@ -2183,6 +2213,10 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
             after_spawn_before_wire: Callable[[], None] | None = None,
             on_registered: Callable[[], None] | None = None,
             activity: str | None = None,
+            on_attempt_started: Callable[[str, str, str | None], None] | None = None,
+            on_attempt_finished: Callable[
+                [str, int, str | None, str | None, bool], None] | None = None,
+            max_attempts: int = COMMANDER_MAX_ATTEMPTS_PER_SEAT,
             ) -> CommanderTurnResult:
         nonlocal turn_index, latest_observation, latest_outcome
         nonlocal latest_rc, latest_error_kind, provider_turn_recorded
@@ -2252,80 +2286,314 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
         lifecycle_error_kind: str | None = None
         completion_error_kind: str | None = None
         invoked = False
+        registered = False
         turn_latency_ms: int | None = None
         drain = _ExecutionDrainResult(timed_out=False)
+        # 同席 attempt 循环：一次 Commander turn 可以由多次真实进程尝试组成
+        # （首发 + 因网络/瞬态故障的 resume/relaunch），它们共享同一 logical
+        # session、同一席位与同一 admission；只有最后一次的事实进入 turn 结论。
+        attempt_no = 0
+        fresh_turn_counter = 0
+        resume_session: str | None = None
+        attempt_invocation = turn_invocation
+        current_attempt = {'id': attempt_id, 'kind': 'launch'}
+        pointer_written: set[str] = set()
+
+        def session_pointer_sink(event: object, session_id: str | None) -> None:
+            del event
+            if session_id is None or session_id in pointer_written:
+                return
+            pointer_written.add(session_id)
+            try:
+                _write_session_pointer(base, sid, CommanderSessionPointer(
+                    sid=sid, parent_run_id=run_id, epoch_id=epoch.epoch_id,
+                    session_run_id=audit_epoch.session_run_id,
+                    attempt_id=current_attempt['id'],
+                    attempt_kind=current_attempt['kind'],
+                    provider_session_id=session_id,
+                    driver=plan.profiles.commander.driver,
+                    model=plan.profiles.commander.model,
+                    prompt_sha256=_sha256_bytes(
+                        attempt_invocation.stdin_text.encode('utf-8')),
+                    schema_sha256=schema_sha256,
+                    observed_at=int(time.time())))
+            except Exception:  # noqa: BLE001 —— 指针只是运维事实，不能杀进程
+                _append_safe_traceback(
+                    base, run_id, prompt=turn_invocation.stdin_text)
+
+        def popen_registered() -> None:
+            nonlocal invoked, registered
+            # 默认 runner 只在 Popen 成功后、stdin/prompt 发出前触发；同席后续
+            # attempt 也会再次触发，但席位预留、session started、launch ticket
+            # 只属于第一次。Stage2 预算因此既不会被 env/Popen 的 0-wire 失败吞掉，
+            # 又会在任何模型字节出进程前先持久化 started。
+            invoked = True
+            if not registered:
+                registered = True
+                if after_spawn_before_wire is not None:
+                    after_spawn_before_wire()
+                if reviewer_prompt is not None:
+                    if fresh_reviewer_session:
+                        start_fresh_reviewer_session()
+                    else:
+                        _open_epoch(
+                            epoch,
+                            actual_prompt_sha256=_sha256_bytes(
+                                turn_invocation.stdin_text.encode('utf-8')),
+                        )
+                if on_registered is not None:
+                    on_registered()
+                if launch_ticket is not None:
+                    launch_ticket.commit()
+            if on_attempt_started is not None:
+                try:
+                    on_attempt_started(
+                        current_attempt['id'], current_attempt['kind'],
+                        resume_session)
+                except Exception:  # noqa: BLE001 —— attempt 登记失败不杀进程
+                    _append_safe_traceback(
+                        base, run_id, prompt=turn_invocation.stdin_text)
+
+        def append_attempt_audit(
+                attempt_rc: int, failure: str | None,
+                attempt_observation: CommanderObservation) -> None:
+            try:
+                agent_session_audit.append_event(
+                    base,
+                    agent_session_audit.AgentSessionEvent(
+                        session_run_id=audit_epoch.session_run_id,
+                        parent_run_id=run_id,
+                        role='commander', node=None, chapter=None,
+                        subject_sha256=(
+                            fresh_prompt_sha256
+                            if fresh_prompt_sha256 is not None
+                            else current_session_prompt_sha256),
+                        profile=plan.profiles.commander,
+                        provider_session_id=(
+                            attempt_observation.provider_session_id),
+                        attempt_id=current_attempt['id'],
+                        delivery_attempts=attempt_no,
+                        requested_model=plan.profiles.commander.model,
+                        actual_model=attempt_observation.actual_model,
+                        requested_effort=(
+                            plan.profiles.commander.reasoning_effort),
+                        actual_effort=attempt_observation.actual_effort,
+                        cli_version=attempt_invocation.cli_version,
+                        protocol_version=attempt_invocation.protocol,
+                        start_code_version=epoch.code_version,
+                        skill_sha256=epoch.skill_sha256,
+                        prompt_sha256=_sha256_bytes(
+                            attempt_invocation.stdin_text.encode('utf-8')),
+                        schema_sha256=schema_sha256,
+                        usage=_session_usage(attempt_observation),
+                        error_kind=(
+                            None if attempt_rc == 0
+                            else (failure or 'commander_process_exit')),
+                        kind='attempt', ts=int(time.time()),
+                    ),
+                )
+            except Exception:  # noqa: BLE001 —— 审计失败不能杀 turn
+                _append_safe_traceback(
+                    base, run_id, prompt=turn_invocation.stdin_text)
+
         try:
             log = run_log_path(base, run_id)
             log.parent.mkdir(parents=True, exist_ok=True)
             with open(log, 'ab') as fh:
-                fh.write(('$ ' + shell_line(turn_invocation.argv) + '\n').encode('utf-8'))
-                fh.flush()
                 child_env = env_with_context(
                     run_id=run_id, base=base, start=start_payload,
                     contract=contract_payload, epoch=epoch,
                     admission_id=admission_id, env=os.environ)
                 if environment_overrides:
                     child_env.update(environment_overrides)
-                if spawn is None:
-                    def reviewer_started() -> None:
-                        nonlocal invoked
-                        # 默认 runner 只在 Popen 成功后、stdin/prompt 发出前触发。
-                        # Stage2 预算因此既不会被 env/Popen 的 0-wire 失败吞掉，
-                        # 又会在任何模型字节出进程前先持久化 started。
-                        if after_spawn_before_wire is not None:
-                            after_spawn_before_wire()
-                        invoked = True
-                        if reviewer_prompt is not None:
-                            if fresh_reviewer_session:
-                                start_fresh_reviewer_session()
-                            else:
-                                _open_epoch(
-                                    epoch,
-                                    actual_prompt_sha256=_sha256_bytes(
-                                        turn_invocation.stdin_text.encode('utf-8')),
-                                )
-                        if on_registered is not None:
-                            on_registered()
-                        if launch_ticket is not None:
-                            launch_ticket.commit()
-
-                    # 所有生产 Commander 都走同一 Popen 后回调；否则 executable
-                    # 不存在也会被成本账误记为一次真实调用。
-                    commander_spawn = _default_spawn(
-                        run_id, on_registered=reviewer_started)
-                else:
-                    # custom spawn 是测试/legacy 注入缝；调用方把它视为已经完成
-                    # Popen 登记、尚未发送 stdin 的同一生命周期点。
-                    if after_spawn_before_wire is not None:
-                        after_spawn_before_wire()
-                    invoked = True
-                    if fresh_reviewer_session:
-                        start_fresh_reviewer_session()
-                    if on_registered is not None:
-                        on_registered()
-                    if launch_ticket is not None:
-                        # custom spawn 是测试/legacy 注入缝；生产 v2 只走上面的
-                        # driver owner 登记后 commit 路。
-                        launch_ticket.commit()
-                    commander_spawn = spawn
-                # 只量 Commander 子进程本身：模型往返与它内部的工具调用都在
-                # 这段墙钟里；之后的 execution drain 属于 Supervisor，不混进来。
-                spawn_started = time.monotonic()
-                try:
-                    result = commander_spawn(turn_invocation, child_env, fh)
-                finally:
-                    turn_latency_ms = int(
-                        (time.monotonic() - spawn_started) * 1000)
-                if not isinstance(result, CommanderProcessResult):
-                    raise TypeError(
-                        'Commander spawn 必须返回 CommanderProcessResult，'
-                        '不能只给退出码丢掉供应商观测')
-                if not isinstance(result.observation, CommanderObservation):
-                    raise TypeError(
-                        'CommanderProcessResult.observation 必须是 '
-                        'CommanderObservation，不能传自由 dict')
-                rc = result.exit_code
-                observation = result.observation
+                with _COMMANDERS_LOCK:
+                    _COMMANDER_EVENT_SINKS[run_id] = session_pointer_sink
+                while True:
+                    attempt_no += 1
+                    if attempt_no > 1:
+                        attempt_id = jobs.new_job_id()
+                        # 上一棵进程树已结束；换 driver 前先释放它的 owner。
+                        _close_commander_owner(run_id)
+                        if resume_session is None:
+                            attempt_invocation = turn_invocation
+                        elif reviewer_prompt is not None:
+                            attempt_invocation = _review_invocation(
+                                epoch, _REVIEWER_RESUME_PROMPT, resume_session)
+                        else:
+                            attempt_invocation = _resume_invocation(
+                                epoch, resume_session)
+                    current_attempt['id'] = attempt_id
+                    current_attempt['kind'] = (
+                        'launch' if resume_session is None else 'resume')
+                    fh.write(('$ ' + shell_line(attempt_invocation.argv) + '\n')
+                             .encode('utf-8'))
+                    fh.flush()
+                    if spawn is None:
+                        # 所有生产 Commander 都走同一 Popen 后回调；否则 executable
+                        # 不存在也会被成本账误记为一次真实调用。
+                        commander_spawn = _default_spawn(
+                            run_id, on_registered=popen_registered)
+                    else:
+                        # custom spawn 是测试/legacy 注入缝；调用方把它视为已经完成
+                        # Popen 登记、尚未发送 stdin 的同一生命周期点。
+                        popen_registered()
+                        commander_spawn = spawn
+                    # 只量 Commander 子进程本身：模型往返与它内部的工具调用都在
+                    # 这段墙钟里；之后的 execution drain 属于 Supervisor，不混进来。
+                    spawn_started = time.monotonic()
+                    attempt_rc = CRASH
+                    attempt_observation = CommanderObservation(
+                        provider_session_id=None, actual_model=None,
+                        actual_effort=None, usage=None)
+                    attempt_failure: str | None = None
+                    attempt_retryable = False
+                    attempt_wire = False
+                    attempt_crashed = False
+                    try:
+                        result = commander_spawn(attempt_invocation, child_env, fh)
+                        if not isinstance(result, CommanderProcessResult):
+                            raise TypeError(
+                                'Commander spawn 必须返回 CommanderProcessResult，'
+                                '不能只给退出码丢掉供应商观测')
+                        if not isinstance(result.observation, CommanderObservation):
+                            raise TypeError(
+                                'CommanderProcessResult.observation 必须是 '
+                                'CommanderObservation，不能传自由 dict')
+                        attempt_rc = result.exit_code
+                        attempt_observation = result.observation
+                        attempt_failure = result.failure_kind
+                        attempt_retryable = bool(result.retryable)
+                        attempt_wire = bool(result.wire_evidence)
+                    except BaseException as exc:  # noqa: BLE001 —— 崩了也要闭合本 attempt
+                        attempt_crashed = True
+                        known_rc = getattr(exc, 'returncode', None)
+                        if isinstance(known_rc, int) and not isinstance(known_rc, bool):
+                            attempt_rc = known_rc
+                        partial = getattr(exc, 'partial_observation', None)
+                        if isinstance(partial, CommanderObservation):
+                            attempt_observation = partial
+                        failure = getattr(exc, 'failure_kind', None)
+                        attempt_failure = failure if isinstance(failure, str) else None
+                        attempt_retryable = bool(getattr(exc, 'retryable', False))
+                        attempt_wire = bool(getattr(exc, 'wire_evidence', False))
+                        _append_safe_traceback(
+                            base, run_id, prompt=turn_invocation.stdin_text)
+                    finally:
+                        turn_latency_ms = int(
+                            (time.monotonic() - spawn_started) * 1000)
+                    if on_attempt_finished is not None:
+                        try:
+                            on_attempt_finished(
+                                current_attempt['id'], attempt_rc, attempt_failure,
+                                attempt_observation.provider_session_id,
+                                attempt_wire)
+                        except Exception:  # noqa: BLE001
+                            _append_safe_traceback(
+                                base, run_id, prompt=turn_invocation.stdin_text)
+                    if invoked:
+                        append_attempt_audit(
+                            attempt_rc, attempt_failure, attempt_observation)
+                    retry = (
+                        invoked and attempt_rc != 0 and attempt_retryable
+                        and attempt_no < max_attempts)
+                    if not retry:
+                        rc = attempt_rc
+                        observation = attempt_observation
+                        if attempt_crashed:
+                            runtime_error_kind = 'commander_runtime'
+                        break
+                    # 中间失败尝试也是一次真实付费/审计事实：成本账逐次落行；
+                    # 已取得 provider session 的失败尝试再记一条带 error_kind 的
+                    # provider turn，供 fold 把同席续接联结到同一 logical session。
+                    intermediate_kind = attempt_failure or 'commander_process_exit'
+                    try:
+                        append_commander_call(
+                            base, run_id=run_id,
+                            session_run_id=audit_epoch.session_run_id,
+                            sid=sid, attempt_id=current_attempt['id'],
+                            request_model=plan.profiles.commander.model,
+                            requested_effort=(
+                                plan.profiles.commander.reasoning_effort),
+                            code=epoch.code_version,
+                            protocol_version=attempt_invocation.protocol,
+                            actual_model=attempt_observation.actual_model,
+                            actual_effort=attempt_observation.actual_effort,
+                            provider_session_id=(
+                                attempt_observation.provider_session_id),
+                            cli_version=attempt_invocation.cli_version,
+                            usage=_usage_dict(attempt_observation),
+                            outcome='error', exit_code=attempt_rc,
+                            error_kind=intermediate_kind,
+                            latency_ms=turn_latency_ms,
+                            activity=activity)
+                    except Exception:  # noqa: BLE001
+                        _append_safe_traceback(
+                            base, run_id, prompt=turn_invocation.stdin_text)
+                    reuse_owner: str | None = None
+                    if attempt_observation.provider_session_id is not None:
+                        if fresh_reviewer_session:
+                            fresh_turn_counter += 1
+                            intermediate_index = fresh_turn_counter
+                        else:
+                            turn_index += 1
+                            intermediate_index = turn_index
+                        try:
+                            reuse_owner = agent_session_audit.append_commander_turn(
+                                base,
+                                agent_session_audit.AgentSessionEvent(
+                                    session_run_id=audit_epoch.session_run_id,
+                                    parent_run_id=run_id,
+                                    role='commander', node=None, chapter=None,
+                                    subject_sha256=(
+                                        fresh_prompt_sha256
+                                        if fresh_prompt_sha256 is not None
+                                        else current_session_prompt_sha256),
+                                    profile=plan.profiles.commander,
+                                    provider_session_id=(
+                                        attempt_observation.provider_session_id),
+                                    turn_index=intermediate_index,
+                                    attempt_id=current_attempt['id'],
+                                    requested_model=plan.profiles.commander.model,
+                                    actual_model=attempt_observation.actual_model,
+                                    requested_effort=(
+                                        plan.profiles.commander.reasoning_effort),
+                                    actual_effort=attempt_observation.actual_effort,
+                                    cli_version=attempt_invocation.cli_version,
+                                    protocol_version=attempt_invocation.protocol,
+                                    start_code_version=epoch.code_version,
+                                    skill_sha256=epoch.skill_sha256,
+                                    prompt_sha256=_sha256_bytes(
+                                        attempt_invocation.stdin_text.encode('utf-8')),
+                                    schema_sha256=schema_sha256,
+                                    usage=_session_usage(attempt_observation),
+                                    error_kind=intermediate_kind,
+                                    kind='turn', ts=int(time.time()),
+                                ),
+                            )
+                            if not fresh_reviewer_session and reuse_owner is None:
+                                provider_turn_recorded = True
+                        except Exception:  # noqa: BLE001
+                            _append_safe_traceback(
+                                base, run_id, prompt=turn_invocation.stdin_text)
+                    if reuse_owner is not None:
+                        # provider session 属于别的 logical session：不能拿它续接。
+                        rc = attempt_rc
+                        observation = attempt_observation
+                        integrity_error_kind = (
+                            agent_session_audit.PROVIDER_SESSION_REUSED)
+                        break
+                    resume_session = (
+                        attempt_observation.provider_session_id
+                        if attempt_wire else None)
+                    backoff = COMMANDER_RETRY_BACKOFF_SECONDS[
+                        min(attempt_no - 1, len(COMMANDER_RETRY_BACKOFF_SECONDS) - 1)]
+                    fh.write((
+                        f'$ [commander-retry] attempt={attempt_no} '
+                        f'failure={intermediate_kind} '
+                        f'resume={resume_session!r} backoff={backoff:g}s\n'
+                    ).encode('utf-8'))
+                    fh.flush()
+                    _retry_sleep(backoff)
         except BaseException as exc:  # noqa: BLE001 —— 崩了也要闭合本 turn
             known_rc = getattr(exc, 'returncode', None)
             if isinstance(known_rc, int) and not isinstance(known_rc, bool):
@@ -2333,6 +2601,8 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
             runtime_error_kind = 'commander_runtime'
             _append_safe_traceback(base, run_id, prompt=turn_invocation.stdin_text)
         finally:
+            with _COMMANDERS_LOCK:
+                _COMMANDER_EVENT_SINKS.pop(run_id, None)
             if not read_only:
                 drain = _wait_for_execution_closure(
                     base, admission_id, beacon_run_id=run_id)
@@ -2412,12 +2682,12 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                     requested_effort=(
                         plan.profiles.commander.reasoning_effort),
                     code=epoch.code_version,
-                    protocol_version=turn_invocation.protocol,
+                    protocol_version=attempt_invocation.protocol,
                     actual_model=observation.actual_model,
                     actual_effort=observation.actual_effort,
                     provider_session_id=(
                         observation.provider_session_id),
-                    cli_version=turn_invocation.cli_version,
+                    cli_version=attempt_invocation.cli_version,
                     usage=_usage_dict(observation),
                     outcome=('ok' if rc == 0 else 'error'),
                     exit_code=rc, error_kind=error_kind,
@@ -2433,7 +2703,8 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
         this_turn_recorded = False
         if observation.provider_session_id is not None:
             if fresh_reviewer_session:
-                audit_turn_index = 1
+                fresh_turn_counter += 1
+                audit_turn_index = fresh_turn_counter
             else:
                 turn_index += 1
                 audit_turn_index = turn_index
@@ -2460,12 +2731,12 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                             requested_effort=(
                                 plan.profiles.commander.reasoning_effort),
                             actual_effort=observation.actual_effort,
-                            cli_version=turn_invocation.cli_version,
-                            protocol_version=turn_invocation.protocol,
+                            cli_version=attempt_invocation.cli_version,
+                            protocol_version=attempt_invocation.protocol,
                             start_code_version=epoch.code_version,
                             skill_sha256=epoch.skill_sha256,
                             prompt_sha256=_sha256_bytes(
-                                turn_invocation.stdin_text.encode('utf-8')),
+                                attempt_invocation.stdin_text.encode('utf-8')),
                             schema_sha256=schema_sha256,
                             usage=_session_usage(observation),
                             error_kind=error_kind,
@@ -2836,6 +3107,38 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                         raise
                     reservation_made = True
 
+                def attempt_started(
+                        attempt_id: str, kind: str,
+                        resume_id: str | None) -> None:
+                    if not durable_reservation:
+                        return
+                    assert task.source_sha256 and task.main_text_sha256
+                    stage2_review_ledger.record_attempt(
+                        base, sid,
+                        source_sha256=task.source_sha256,
+                        main_text_sha256=task.main_text_sha256,
+                        session_run_id=review_session_id,
+                        attempt_id=attempt_id, kind=kind,
+                        provider_session_id=resume_id)
+
+                def attempt_finished(
+                        attempt_id: str, exit_code: int,
+                        failure_kind: str | None,
+                        provider_session_id: str | None,
+                        wire_evidence: bool) -> None:
+                    if not durable_reservation:
+                        return
+                    assert task.source_sha256 and task.main_text_sha256
+                    stage2_review_ledger.finish_attempt(
+                        base, sid,
+                        source_sha256=task.source_sha256,
+                        main_text_sha256=task.main_text_sha256,
+                        session_run_id=review_session_id,
+                        attempt_id=attempt_id, exit_code=exit_code,
+                        error_kind=failure_kind,
+                        provider_session_id=provider_session_id,
+                        wire_evidence=wire_evidence)
+
                 turn: CommanderTurnResult | None = None
                 try:
                     turn = _run_commander_turn(
@@ -2844,7 +3147,9 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                         fresh_session_run_id=review_session_id,
                         launch_ticket=launch_ticket,
                         after_spawn_before_wire=reserve_reviewer_call,
-                        activity=activity)
+                        activity=activity,
+                        on_attempt_started=attempt_started,
+                        on_attempt_finished=attempt_finished)
                     if not isinstance(
                             reservation_error,
                             stage2_review_ledger.Stage2ReviewBudgetRefused):
