@@ -163,14 +163,56 @@ def _check_summary(report) -> dict[str, object]:
 
 
 def _production_markers(text: str) -> dict[str, object]:
-    """只转呈生产已识别的非正文/结束标记；章序诊断属于 Stage1。"""
+    """转呈生产词法的描述性分母；不在 Stage0 判定章序或连续性。"""
     scan = scan_text(text)
+    marker_rows = [
+        {
+            'chapter_no': item.chapter_no,
+            'line': text.count('\n', 0, item.line_start) + 1,
+            'source_line': text[item.line_start:item.content_start].rstrip('\r\n'),
+        }
+        for item in scan.chapters
+    ]
+    if scan.chapters:
+        first = scan.chapters[0]
+        prefix = text[:first.line_start]
+        prefix_rows = [
+            {'line': line_no, 'text': line}
+            for line_no, line in enumerate(prefix.splitlines(), start=1)
+            if line.strip()
+        ]
+        before_first: dict[str, object] = {
+            'state': 'available',
+            'nonempty_line_count': len(prefix_rows),
+            'nonempty_lines': prefix_rows,
+            'human_classification': None,
+        }
+    else:
+        before_first = {
+            'state': 'no_chapter_marker',
+            'nonempty_line_count': None,
+            'nonempty_lines': [],
+            'human_classification': None,
+        }
     return {
         'production_nonbody_markers': [
             {'kind': item.kind, 'title': item.title, 'line': text.count('\n', 0, item.line_start) + 1}
             for item in scan.nonbody
         ],
         'production_end_marker_present': scan.end_marker is not None,
+        'structure_denominator': {
+            'source': 'novel.core.ingest.scan_text',
+            'scope': 'stage0_reverse_review_only',
+            'meaning': (
+                '只供核对漏剔与首章前文案区；章号顺序、连续性与章节正文解析仍由 Stage1 裁决'),
+            'chapter_marker_count': len(marker_rows),
+            'chapter_numbers_in_source_order': [
+                item['chapter_no'] for item in marker_rows
+            ],
+            'chapter_markers': marker_rows,
+            'before_first_chapter_marker': before_first,
+            'order_or_continuity_decision': None,
+        },
     }
 
 
@@ -212,7 +254,7 @@ def build_workpack(base: str | Path, sid: str, *, context_chars: int = 100,
     checks = _check_summary(check)
 
     common: dict[str, object] = {
-        'schema': 'novel-operator-stage0-review-workpack-v1',
+        'schema': 'novel-operator-stage0-review-workpack-v2',
         'state': 'review_required',
         'base': str(base_path),
         'sid': sid,
@@ -227,7 +269,9 @@ def build_workpack(base: str | Path, sid: str, *, context_chars: int = 100,
         ],
         'checks': checks,
         'automated_decision': None,
-        'decision_note': '本工作包只缩小阅读面；不得据它自动审批或自动剔除',
+        'decision_note': (
+            '本工作包携带完整当前 clean_text 与全部剔除段，仍只供人工裁决；'
+            '不得据结构或正则零命中自动审批'),
     }
     if not partitions.available:
         common.update({
@@ -297,6 +341,19 @@ def build_workpack(base: str | Path, sid: str, *, context_chars: int = 100,
             'first_nonempty_lines': _boundary_lines(clean, first=True),
             'last_nonempty_lines': _boundary_lines(clean, first=False),
         },
+        # 纯数字章标题与正常章节在结构上完全同型；章内语义若实际是
+        # 番外，任何词表/章号分母都不会出声。因此 Stage0 人审必须收到完整
+        # retained 文本；摘要、首尾和命中上下文只是导航，不是阅读替代品。
+        'retained_review_material': {
+            'scope': 'complete_current_clean_text',
+            'text_sha256': hashlib.sha256(clean.encode('utf-8')).hexdigest(),
+            'code_points': body_chars,
+            'total_lines': total_lines,
+            'text': clean,
+            'meaning': (
+                '必须全文反向核对是否残留无结构信号的番外/后记/尾声；'
+                '零正则命中不等于可批准'),
+        },
         **production_markers,
         'production_candidates_not_selected': candidates,
         'removed': removed,
@@ -309,12 +366,30 @@ def build_workpack(base: str | Path, sid: str, *, context_chars: int = 100,
 
     pattern_count = reverse_scan['patterns_scanned']
     hit_count = reverse_scan['total_hits']
+    structure = production_markers['structure_denominator']
+    if not isinstance(structure, dict):  # pragma: no cover —— 本地 producer 恒为 dict
+        raise RuntimeError('Stage0 结构分母形状漂移')
+    chapter_numbers = structure['chapter_numbers_in_source_order']
+    before_first = structure['before_first_chapter_marker']
+    if not isinstance(chapter_numbers, list) or not isinstance(before_first, dict):
+        raise RuntimeError('Stage0 章号/首章前分母形状漂移')
+    prefix_count = before_first['nonempty_line_count']
+    if before_first.get('state') == 'no_chapter_marker':
+        prefix_note = '首章前文案区=不适用（生产词法未识别到章号行）；'
+    elif prefix_count == 0:
+        prefix_note = '首个章号前非空行=0（无材料需文案区定性）；'
+    else:
+        prefix_note = f'首个章号前非空行={prefix_count}，文案区定性=待确认；'
+    structure_note = (
+        f'生产词法识别 {len(chapter_numbers)} 个章号行，按原序={chapter_numbers}；'
+        f'{prefix_note}'
+    )
     if route == 'zero_removal':
         draft = (
             f'Stage0 零剔除反向复核草稿（提交前补齐人工结论）：固定审阅模式 '
             f'{REVIEW_PATTERN_VERSION} 扫描 {pattern_count} 类、共 {hit_count} 处命中，'
             f'逐条定性=待确认；clean_text 共 {body_chars} 码点、{total_lines} 行、'
-            f'{nonempty_lines} 非空行；首尾边界=待确认。'
+            f'{nonempty_lines} 非空行；{structure_note}首尾边界=待确认。'
         )
     else:
         truncated = sum(bool(item['text_truncated']) for item in removed)
@@ -323,7 +398,7 @@ def build_workpack(base: str | Path, sid: str, *, context_chars: int = 100,
             f'{removed_chars} 码点，逐段语义类别与边界=待确认；其中 {truncated} 段预览被截断，'
             f'截断项须回审校视图读全文；保留 {body_chars}/{view.total_code_points} 码点；'
             f'固定审阅模式 {REVIEW_PATTERN_VERSION} 扫描 {pattern_count} 类、'
-            f'共 {hit_count} 处残留候选，逐条定性=待确认；首尾=待确认。'
+            f'共 {hit_count} 处残留候选，逐条定性=待确认；{structure_note}首尾=待确认。'
         )
     common['approval_reason_draft'] = draft
     return common
@@ -350,7 +425,7 @@ def main(argv: list[str] | None = None) -> int:
         )
     except (NovelError, OSError, RuntimeError, ValueError) as exc:
         payload = {
-            'schema': 'novel-operator-stage0-review-workpack-v1',
+            'schema': 'novel-operator-stage0-review-workpack-v2',
             'state': 'stopped',
             'error': f'{type(exc).__name__}: {exc}',
             'hint': getattr(exc, 'hint', None),

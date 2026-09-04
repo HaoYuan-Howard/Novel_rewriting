@@ -20,7 +20,7 @@ beforeEach(() => {
 })
 
 describe('RunScreen 交付终验', () => {
-  it('只按服务端 allowed_controls 展示并调用 resume', async () => {
+  it('按服务端 allowed_controls 恢复，202 仍返回 paused 时持续轮询到 running', async () => {
     const run = await mockApi.getRunProgress(SAMPLE_SID)
     const active = await mockApi.startAgentRun({
       sid: SAMPLE_SID,
@@ -34,14 +34,24 @@ describe('RunScreen 交付终验', () => {
       note: '当前 claim 已安全闭合',
       allowed_controls: ['resume', 'stop'] as const,
     }
+    const resumed = {
+      ...paused,
+      state: 'running' as const,
+      note: '同一 parent run 已恢复',
+      allowed_controls: ['pause', 'stop'] as const,
+    }
     vi.spyOn(api, 'getRunProgress').mockResolvedValue(run)
     vi.spyOn(api, 'getCheck').mockResolvedValue(null)
-    vi.spyOn(api, 'getAgentRuns').mockResolvedValue({
-      runs: [{ ...paused, allowed_controls: [...paused.allowed_controls] }],
+    let reads = 0
+    const getRuns = vi.spyOn(api, 'getAgentRuns').mockImplementation(async () => {
+      reads += 1
+      const record = reads < 3 ? paused : resumed
+      return { runs: [{ ...record, allowed_controls: [...record.allowed_controls] }] }
     })
+    // resume 是异步 202：HTTP 返回时 worker 可能还没落 resumed 事件。
     const resume = vi.spyOn(api, 'resumeAgentRun').mockResolvedValue({
-      ...active,
-      run_id: paused.run_id,
+      ...paused,
+      allowed_controls: [...paused.allowed_controls],
     })
 
     renderRoute(<RunScreen />, `/n/${SAMPLE_SID}/run`)
@@ -53,6 +63,57 @@ describe('RunScreen 交付终验', () => {
     )
     fireEvent.click(button)
     await waitFor(() => expect(resume).toHaveBeenCalledWith(paused.run_id))
+    await waitFor(() => expect(getRuns).toHaveBeenCalledTimes(2))
+
+    const transitioning = screen.getByRole('button', { name: '恢复中…' })
+    expect(transitioning).toBeDisabled()
+    await waitFor(() => expect(getRuns).toHaveBeenCalledTimes(3), { timeout: 4000 })
+    expect(await screen.findByRole('button', { name: '暂停' })).toBeEnabled()
+    expect(screen.queryByRole('button', { name: '恢复中…' })).not.toBeInTheDocument()
+  })
+
+  it('恢复响应丢失时仍轮询服务端，直到真实 running 状态收敛', async () => {
+    const run = await mockApi.getRunProgress(SAMPLE_SID)
+    const active = await mockApi.startAgentRun({
+      sid: SAMPLE_SID,
+      authorized: true,
+      egress_authorized: true,
+      profiles: READY_PROFILES,
+    })
+    const paused = {
+      ...active,
+      state: 'paused' as const,
+      note: '当前 claim 已安全闭合',
+      allowed_controls: ['resume', 'stop'] as const,
+    }
+    const resumed = {
+      ...paused,
+      state: 'running' as const,
+      note: '服务端其实已经恢复',
+      allowed_controls: ['pause', 'stop'] as const,
+    }
+    vi.spyOn(api, 'getRunProgress').mockResolvedValue(run)
+    vi.spyOn(api, 'getCheck').mockResolvedValue(null)
+    let reads = 0
+    const getRuns = vi.spyOn(api, 'getAgentRuns').mockImplementation(async () => {
+      reads += 1
+      const record = reads < 3 ? paused : resumed
+      return { runs: [{ ...record, allowed_controls: [...record.allowed_controls] }] }
+    })
+    const resume = vi.spyOn(api, 'resumeAgentRun').mockRejectedValue(
+      new Error('202 响应在网络途中丢失'),
+    )
+
+    renderRoute(<RunScreen />, `/n/${SAMPLE_SID}/run`)
+    fireEvent.click(await screen.findByRole('button', { name: '继续' }))
+
+    await waitFor(() => expect(resume).toHaveBeenCalledWith(paused.run_id))
+    expect(screen.getByRole('button', { name: '恢复中…' })).toBeDisabled()
+    await waitFor(() => expect(getRuns).toHaveBeenCalledTimes(3), { timeout: 4000 })
+    expect(await screen.findByRole('button', { name: '暂停' })).toBeEnabled()
+    expect(screen.getByTestId('agent-run-note')).toHaveTextContent(
+      '服务端其实已经恢复',
+    )
   })
 
   it('交付失败的判定依据可聚焦、可展开——不只挂在 title 上', async () => {

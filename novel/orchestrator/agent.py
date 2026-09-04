@@ -324,7 +324,8 @@ def _copy_profiles(profiles: PipelineAgentProfiles) -> PipelineAgentProfiles:
 
 def _validate_invocation(
         invocation: CommanderInvocation, *, prompt: str,
-        profile: AgentProfile) -> None:
+        profile: AgentProfile,
+        expected_cwd: str | os.PathLike[str] = REPO_ROOT) -> None:
     """planner 与启动边界共用的 stdin-only 后置条件。"""
     if invocation.profile != profile:
         raise UnsupportedRunMode(
@@ -336,8 +337,9 @@ def _validate_invocation(
     if any(prompt in value for value in invocation.env_overrides.values()):
         raise UnsupportedRunMode('Commander prompt 只允许走 stdin，不得进入 env')
     if (os.path.normcase(os.path.abspath(invocation.cwd))
-            != os.path.normcase(os.path.abspath(REPO_ROOT))):
-        raise UnsupportedRunMode('Commander cwd 必须冻结在仓根')
+            != os.path.normcase(os.path.abspath(expected_cwd))):
+        raise UnsupportedRunMode(
+            f'Commander cwd 必须冻结在 {os.path.abspath(expected_cwd)}')
 
 
 @dataclass(frozen=True)
@@ -642,6 +644,7 @@ def _default_spawn(
             cli_version=invocation.cli_version,
             resume_provider_session_id=(
                 invocation.resume_provider_session_id),
+            structured_response=invocation.structured_response,
         )
         driver = create_commander_driver(runtime_invocation.profile)
         with _COMMANDERS_LOCK:
@@ -916,6 +919,7 @@ class _Stage2PrereviewState:
     provider_session_id: str | None
     input_payload: dict[str, object] | None
     error: str | None
+    response_sha256: str | None = None
 
 
 def _reviewer_activity(task: reviewer_tasks.ReviewerTask) -> str:
@@ -939,28 +943,47 @@ def _record_reviewer_action(
         action: reviewer_tasks.ReviewerAction) -> Path | None:
     """typed loader 一通过就按内容寻址持久化 approval 决定（R-11.25）。
 
-    写盘点必须在本 reviewer turn 内、早于 Supervisor 的任何身份闸：那些闸后面
-    就是 epoch 关闭与 scratch 清理。持久化失败只告警，不能吞掉刚完成的审阅。
-    node 型动作不进这里，它们的 durable 路由由书内 typed 产物承担。
+    写盘点必须在本 reviewer turn 内、早于 canonical scratch 晋升及任何身份闸：
+    那些步骤后面就是 epoch 关闭与 scratch 清理。approval 的持久化失败必须向上
+    传播为未知终态，不能继续消费一份重启后无法零成本重放的付费决定。
+    只有 ``stage2.global`` node 不进这里，因为它有书内 typed durable
+    产物；Stage0/6/7 的 approve 虽编码为 node，却没有那条恢复路，必须记录。
     """
-    if not isinstance(action, reviewer_tasks.ReviewerApprovalAction):
+    if (isinstance(action, reviewer_tasks.ReviewerStopAction)
+            or isinstance(action, reviewer_tasks.ReviewerNodeAction)
+            and action.node == 'stage2.global'):
         return None
-    token = action.payload.get('review_token')
-    try:
+    common = {
+        'sid': sid, 'run_id': run_id, 'epoch_id': epoch.epoch_id,
+        'waiting_on': task.waiting_on, 'surface_seal': task.surface_seal,
+        'business_sha256': task.business_sha256,
+        'recorded_at': int(time.time()),
+    }
+    if isinstance(action, reviewer_tasks.ReviewerApprovalAction):
+        token = action.payload.get('review_token')
         record = ReviewerActionRecord(
-            sid=sid, run_id=run_id, epoch_id=epoch.epoch_id,
-            waiting_on=task.waiting_on, surface_seal=task.surface_seal,
-            business_sha256=task.business_sha256,
+            **common,
             surface=action.surface, payload=dict(action.payload),
             review_token=(
-                token if isinstance(token, str) and token.strip() else None),
-            recorded_at=int(time.time()))
-        return uploads.save_reviewer_action(base, sid, record)
-    except (NovelError, ValueError) as exc:
-        warnings.warn(
-            f'Commander typed 决定已通过 loader，但持久化重放记录失败：{exc}',
-            RuntimeWarning, stacklevel=2)
-        return None
+                token if isinstance(token, str) and token.strip() else None))
+    elif isinstance(action, reviewer_tasks.ReviewerNodeAction):
+        token = None
+        try:
+            token_index = action.flags.index('--review-token') + 1
+            token = action.flags[token_index]
+        except (ValueError, IndexError):
+            pass
+        record = ReviewerActionRecord(
+            **common,
+            node=action.node, flags=tuple(action.flags),
+            input_payload=(
+                dict(action.input_payload)
+                if action.input_payload is not None else None),
+            review_token=(
+                token if isinstance(token, str) and token.strip() else None))
+    else:  # pragma: no cover —— ReviewerAction union 的未来扩展须显式接线
+        raise TypeError(f'未接线的 reviewer action：{type(action).__name__}')
+    return uploads.save_reviewer_action(base, sid, record)
 
 
 def _discard_reviewer_action_record(base: str, path: Path) -> None:
@@ -978,10 +1001,12 @@ def _find_replayable_reviewer_action(
         ) -> _ReplayableReviewerAction | None:
     """唤起模型前先查盘上是否已有适用于当前 blocker 的 typed 决定。
 
-    只认同 ``waiting_on`` 且 surface seal 逐字相同或 review_token 与当前 workpack
-    相同的记录——后者正是 approve 侧的适用性判据，能跨代码版本；同 blocker 的
-    其余记录已永久失效，当场删除。命中的记录仍要重走 ``load_action``：schema、
-    sentinel、all-accept 等确定性判据以今天的代码为准。
+    只认同 ``waiting_on`` 且 surface seal、opaque review_token 或稳定
+    business identity 至少一项相同的记录。Stage0 没有 review_token，
+    其 revision/完整保留文本/removed identity/contract 已全部进入
+    ``business_sha256``，因此代码 epoch 改变后仍能零成本重放。
+    命中的记录仍要重走 ``load_action``：schema、sentinel、all-accept
+    等确定性判据以今天的代码为准。
     """
     waiting_on = task.waiting_on
     current_token = reviewer_tasks.approval_review_token(
@@ -994,7 +1019,8 @@ def _find_replayable_reviewer_action(
         token_match = (
             record.review_token is not None and current_token is not None
             and record.review_token == current_token)
-        if seal_match or token_match:
+        business_match = record.business_sha256 == task.business_sha256
+        if seal_match or token_match or business_match:
             candidates.append((record.recorded_at, path, record))
         else:
             _discard_reviewer_action_record(base, path)
@@ -1290,15 +1316,23 @@ def enqueue(base: str | os.PathLike[str], sids: Sequence[str], *,
 
 def queue_view(base: str | os.PathLike[str], *,
                registry: JobRegistry = REGISTRY) -> AgentQueueView:
-    """当前这个 base 上：谁在跑、谁在排队、闸开多大。"""
+    """当前这个 base 上：谁在跑、谁在排队、闸开多大。
+
+    drain 的线性化区间是“从 pending pop → ``_start_planned`` 登记
+    running”。读快照若不取同一把锁，前端会在这条缝里同时
+    看到 running/pending 为空，误以为任务消失。
+    """
     base_abs = os.path.abspath(os.fspath(base))
-    running = [r for r in records(base, registry=registry) if r.state == 'running']
-    with _PENDING_LOCK:
-        pending = [AgentPending(
-                       sid=p.plan.sid, position=i + 1,
-                       profiles=_copy_profiles(p.plan.profiles))
-                   for i, p in enumerate(
-                       [q for q in _PENDING if q.plan.base == base_abs])]
+    with _DRAIN_LOCK:
+        running = [
+            r for r in records(base, registry=registry)
+            if r.state == 'running']
+        with _PENDING_LOCK:
+            pending = [AgentPending(
+                           sid=p.plan.sid, position=i + 1,
+                           profiles=_copy_profiles(p.plan.profiles))
+                       for i, p in enumerate(
+                           [q for q in _PENDING if q.plan.base == base_abs])]
     return AgentQueueView(running=running, pending=pending,
                           max_concurrent=MAX_CONCURRENT)
 
@@ -1312,7 +1346,175 @@ def _reviewer_request_sha256(path: Path) -> str:
     try:
         return _sha256_bytes(path.read_bytes())
     except OSError as exc:
-        return f'unreadable:{type(exc).__name__}'
+        return _sha256_bytes(
+            f'unreadable:{type(exc).__name__}'.encode('ascii'))
+
+
+def _reviewer_response_document(
+        response: str) -> tuple[dict[str, object], str]:
+    """严格解码 provider 最终回答；Markdown/围栏/顶层数组都拒绝。"""
+    try:
+        value = json.loads(response)
+    except (ValueError, TypeError) as exc:
+        # Python 3.11+ 会把超出 int digit limit 的 JSON 数字抛成普通
+        # ValueError；它仍是 provider 输出不合法，必须进入有界 correction，
+        # 不能越过 ReviewerTaskError 变成无界 runtime crash。
+        raise reviewer_tasks.ReviewerTaskError(
+            'Commander 最终回答不是合法的裸 JSON object') from exc
+    if not isinstance(value, dict):
+        raise reviewer_tasks.ReviewerTaskError(
+            'Commander 最终回答顶层必须是 JSON object')
+    try:
+        encoded = json.dumps(
+            value, ensure_ascii=False, sort_keys=True,
+            separators=(',', ':'), allow_nan=False).encode('utf-8') + b'\n'
+    except (TypeError, ValueError) as exc:
+        raise reviewer_tasks.ReviewerTaskError(
+            'Commander 最终 JSON 含不可物化值') from exc
+    return value, _sha256_bytes(encoded)
+
+
+def _reviewer_response_sha256(response: str) -> str:
+    """无效 JSON 也要有稳定指纹，防止同一拒因只改空白重放。"""
+    try:
+        _document, digest = _reviewer_response_document(response)
+        return digest
+    except reviewer_tasks.ReviewerTaskError:
+        return _sha256_bytes(response.strip().encode('utf-8', errors='replace'))
+
+
+def _reviewer_turn_response_sha256(
+        turn: CommanderTurnResult, request_path: Path) -> str:
+    if turn.final_response is not None:
+        return _reviewer_response_sha256(turn.final_response)
+    # 只给历史/测试注入缝保留文件交付；生产 driver 的
+    # structured_response 成功却缺最终文本会在协议层已经拒绝。
+    return _reviewer_request_sha256(request_path)
+
+
+def _reviewer_candidate_path(request_path: Path) -> Path:
+    return request_path.parent / (
+        f'.{request_path.name}.{jobs.new_job_id()}.candidate')
+
+
+def _preserve_validated_reviewer_residue(
+        base: str, sid: str, candidate: Path, digest: str) -> Path:
+    """把尚未 durable 的 typed-valid 回答移出 epoch scratch，避免收尾误删。"""
+    root = (
+        paths.service_runs_dir(base) / paths.check_sid(sid)
+        / 'reviewer_residue').absolute()
+    service_root = paths.service_dir(base).absolute()
+    if service_root.is_symlink():
+        raise reviewer_tasks.ReviewerTaskError('_service 根不得是符号链接')
+    root.mkdir(parents=True, exist_ok=True)
+    probe = root
+    while probe != service_root:
+        if probe.is_symlink():
+            raise reviewer_tasks.ReviewerTaskError(
+                f'reviewer residue 路径含符号链接：{probe}')
+        probe = probe.parent
+    try:
+        root.resolve().relative_to(service_root.resolve())
+    except ValueError as exc:
+        raise reviewer_tasks.ReviewerTaskError(
+            'reviewer residue 越出 _service') from exc
+    target = root / f'reviewer-response-{digest}.json'
+    if target.is_symlink():
+        raise reviewer_tasks.ReviewerTaskError(
+            'reviewer residue 目标不得是符号链接')
+    if target.exists():
+        if not target.is_file() or target.read_bytes() != candidate.read_bytes():
+            raise reviewer_tasks.ReviewerTaskError(
+                'reviewer residue 内容地址已存在不同字节')
+        candidate.unlink()
+        return target.resolve()
+    os.replace(candidate, target)
+    return target.resolve()
+
+
+def _promote_reviewer_candidate(candidate: Path, request_path: Path) -> None:
+    """严格 loader 成功后才替换 canonical request；绝不跟随 symlink。"""
+    if request_path.is_symlink():
+        raise reviewer_tasks.ReviewerTaskError(
+            'reviewer canonical request 不得是符号链接')
+    if request_path.exists() and not request_path.is_file():
+        raise reviewer_tasks.ReviewerTaskError(
+            'reviewer canonical request 若已存在必须是普通文件')
+    os.replace(candidate, request_path)
+
+
+def _materialize_reviewer_response(
+        task: reviewer_tasks.ReviewerTask, current: OperatorNext,
+        response: str, *,
+        persist_validated: Callable[
+            [reviewer_tasks.ReviewerAction], Path | None] | None = None,
+        preserve_validated: Callable[[Path, str], Path] | None = None,
+        ) -> tuple[reviewer_tasks.ReviewerAction, str, Path | None]:
+    """复用现役 loader；approval 先 durable，再原子晋升 canonical scratch。"""
+    document, digest = _reviewer_response_document(response)
+    candidate = _reviewer_candidate_path(task.request_path)
+    validated = False
+    promoted = False
+    try:
+        service_lifecycle.write_scratch_json_once(
+            task.request_path.parent, candidate, document)
+        action = reviewer_tasks.load_action(
+            candidate, current,
+            submission_options=task.submission_options)
+        validated = True
+        record_path = (
+            persist_validated(action)
+            if persist_validated is not None else None)
+        _promote_reviewer_candidate(candidate, task.request_path)
+        promoted = True
+        return action, digest, record_path
+    except BaseException as exc:
+        if validated and not promoted and preserve_validated is not None:
+            try:
+                preserved = preserve_validated(candidate, digest)
+                if hasattr(exc, 'add_note'):
+                    exc.add_note(
+                        f'typed-valid reviewer 回答已隔离保留：{preserved}')
+            except BaseException as preserve_error:  # noqa: BLE001
+                if hasattr(exc, 'add_note'):
+                    exc.add_note(
+                        'typed-valid reviewer 回答隔离失败：'
+                        f'{type(preserve_error).__name__}: {preserve_error}')
+        raise
+    finally:
+        # loader 拒绝的 untrusted 文本没有恢复价值；一旦 typed 验证已通过，
+        # durable save 或 canonical promotion 的失败都必须保留唯一候选，供
+        # 运维发现/恢复，不能在 finally 里把付费决定抹掉。
+        if not validated or promoted:
+            try:
+                candidate.unlink(missing_ok=True)
+            except OSError:
+                pass
+
+
+def _materialize_stage2_prereview_response(
+        task: reviewer_tasks.Stage2PrereviewTask,
+        response: str) -> tuple[dict[str, object], str]:
+    """预审也只由 Supervisor 物化，并使用同一现役 typed loader。"""
+    document, digest = _reviewer_response_document(response)
+    candidate = _reviewer_candidate_path(task.request_path)
+    validated = False
+    promoted = False
+    try:
+        service_lifecycle.write_scratch_json_once(
+            task.request_path.parent, candidate, document)
+        payload = reviewer_tasks.load_stage2_prereview(
+            replace(task, request_path=candidate))
+        validated = True
+        _promote_reviewer_candidate(candidate, task.request_path)
+        promoted = True
+        return payload, digest
+    finally:
+        if not validated or promoted:
+            try:
+                candidate.unlink(missing_ok=True)
+            except OSError:
+                pass
 
 
 def _skill_sha256() -> str:
@@ -1884,10 +2086,9 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
             provider_session_id: str | None) -> CommanderInvocation:
         """为一份 frozen reviewer task 构造新 turn 或 exact resume。
 
-        reviewer 轮次唯一合法的写盘是本 epoch scratch session 里的那一份 typed
-        request，所以 driver 的可写面（Codex ``--add-dir``、Claude ``Edit`` 白名单）
-        只开到该目录，不再把整个 base 交给模型；launcher/preview 的 argv 仍以 base
-        展示，那是 parent contract 的审计面。沙箱不限制读，读面靠随包材料收口。
+        reviewer 只从 provider 最终回答交付裸 JSON，不取得 scratch
+        写权。合法请求由 Supervisor 严格验证后原子物化；
+        launcher/preview 的普通 invocation 仍是 parent contract 审计面。
         """
         driver: CommanderDriver | None = None
         scratch = service_lifecycle.open_scratch_session(
@@ -1898,9 +2099,11 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                 plan.profiles.commander, prompt,
                 repo=REPO_ROOT, base=str(scratch),
                 cli_version=epoch.cli_version,
-                resume_provider_session_id=provider_session_id)
+                resume_provider_session_id=provider_session_id,
+                structured_response=True)
             _validate_invocation(
-                reviewed, prompt=prompt, profile=plan.profiles.commander)
+                reviewed, prompt=prompt, profile=plan.profiles.commander,
+                expected_cwd=scratch)
             if reviewed.resume_provider_session_id != provider_session_id:
                 raise UnsupportedRunMode(
                     'Commander reviewer invocation 没有精确冻结 provider session id')
@@ -2302,8 +2505,9 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
         else:
             turn_invocation = _resume_invocation(
                 epoch, effective_provider_session_id)
-        # 预审只有 scratch request 写权，不领取任何 producer admission。仍下发一枚
-        # 不存在的 context id：若 Commander 违约尝试跑节点，生产入口会关闭式拒绝。
+        # 预审 Commander 只读并只能返回最终文本，不领取任何
+        # producer admission。仍下发一枚不存在的 context id：即使
+        # 供应商边界意外放开工具，节点入口也会关闭式拒绝。
         admission_id = (
             stage2_prereview_admission_id(epoch.epoch_id)
             if read_only else _open_action_admission(epoch))
@@ -2312,7 +2516,9 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
         observation = CommanderObservation(
             provider_session_id=None, actual_model=None,
             actual_effort=None, usage=None)
+        final_response: str | None = None
         runtime_error_kind: str | None = None
+        process_error_kind: str | None = None
         integrity_error_kind: str | None = None
         lifecycle_error_kind: str | None = None
         completion_error_kind: str | None = None
@@ -2331,6 +2537,7 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
         pointer_written: set[str] = set()
 
         def session_pointer_sink(event: object, session_id: str | None) -> None:
+            nonlocal integrity_error_kind
             del event
             if session_id is None or session_id in pointer_written:
                 return
@@ -2348,12 +2555,24 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                         attempt_invocation.stdin_text.encode('utf-8')),
                     schema_sha256=schema_sha256,
                     observed_at=int(time.time())))
-            except Exception:  # noqa: BLE001 —— 指针只是运维事实，不能杀进程
+            except Exception:  # noqa: BLE001 —— 已发生 wire 后关闭式拒绝交付
+                integrity_error_kind = 'commander_session_pointer'
                 _append_safe_traceback(
                     base, run_id, prompt=turn_invocation.stdin_text)
 
         def popen_registered() -> None:
-            nonlocal invoked, registered
+            nonlocal invoked, registered, integrity_error_kind
+            # reviewer workpack 在 operator next/build_task 时绑定了本
+            # execution epoch。从构包末端到真实 Popen 仍有窗口；
+            # 必须在任何 seat/budget reserve、logical-session started、
+            # attempt/ticket 和 stdin 之前再做一次 code+skill CAS。Popen
+            # 已创建不等于已 wire，callback 抛出后公共 runner 会在
+            # 发送 prompt 前终止进程树。
+            if (reviewer_prompt is not None
+                    and not _epoch_identity_current(epoch)):
+                raise CommanderConfigurationError(
+                    'reviewer 发送前 execution epoch code/skill 已漂移；'
+                    '本次保持 0-seat/0-wire 并由 Supervisor 重开 epoch')
             # 默认 runner 只在 Popen 成功后、stdin/prompt 发出前触发；同席后续
             # attempt 也会再次触发，但席位预留、session started、launch ticket
             # 只属于第一次。Stage2 预算因此既不会被 env/Popen 的 0-wire 失败吞掉，
@@ -2384,17 +2603,20 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                 if launch_ticket is not None:
                     launch_ticket.commit()
             if on_attempt_started is not None:
+                # attempt/seat 账属于模型 wire 的前置凭证；失败必须让 launch
+                # callback 原样抛出，公共 runner 会在 stdin 前终止进程树。
                 try:
                     on_attempt_started(
                         current_attempt['id'], current_attempt['kind'],
                         resume_session)
-                except Exception:  # noqa: BLE001 —— attempt 登记失败不杀进程
-                    _append_safe_traceback(
-                        base, run_id, prompt=turn_invocation.stdin_text)
+                except BaseException:  # noqa: BLE001 —— 必须标成完整性故障
+                    integrity_error_kind = 'commander_attempt_ledger'
+                    raise
 
         def append_attempt_audit(
                 attempt_rc: int, failure: str | None,
                 attempt_observation: CommanderObservation) -> None:
+            nonlocal integrity_error_kind
             try:
                 agent_session_audit.append_event(
                     base,
@@ -2430,7 +2652,8 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                         kind='attempt', ts=int(time.time()),
                     ),
                 )
-            except Exception:  # noqa: BLE001 —— 审计失败不能杀 turn
+            except Exception:  # noqa: BLE001 —— 已发生 wire，禁止消费回答
+                integrity_error_kind = 'commander_attempt_audit'
                 _append_safe_traceback(
                     base, run_id, prompt=turn_invocation.stdin_text)
 
@@ -2466,16 +2689,27 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                     fh.write(('$ ' + shell_line(attempt_invocation.argv) + '\n')
                              .encode('utf-8'))
                     fh.flush()
+                    # R-11.23 的第一道身份 CAS 在创建 CLI 进程前；
+                    # build_task 末端到这里若已漂移，连 Popen 都不做。
+                    # ``popen_registered`` 顶部仍保留第二道 CAS，封住
+                    # 本检查与 Popen/stdin 之间的 TOCTOU 窗口。
+                    if (reviewer_prompt is not None
+                            and not _epoch_identity_current(epoch)):
+                        rc = CRASH
+                        runtime_error_kind = 'commander_epoch_identity'
+                        process_error_kind = 'commander_epoch_identity'
+                        break
                     if spawn is None:
                         # 所有生产 Commander 都走同一 Popen 后回调；否则 executable
                         # 不存在也会被成本账误记为一次真实调用。
                         commander_spawn = _default_spawn(
                             run_id, on_registered=popen_registered)
+                        register_custom_spawn = False
                     else:
                         # custom spawn 是测试/legacy 注入缝；调用方把它视为已经完成
                         # Popen 登记、尚未发送 stdin 的同一生命周期点。
-                        popen_registered()
                         commander_spawn = spawn
+                        register_custom_spawn = True
                     # 只量 Commander 子进程本身：模型往返与它内部的工具调用都在
                     # 这段墙钟里；之后的 execution drain 属于 Supervisor，不混进来。
                     spawn_started = time.monotonic()
@@ -2483,11 +2717,17 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                     attempt_observation = CommanderObservation(
                         provider_session_id=None, actual_model=None,
                         actual_effort=None, usage=None)
+                    attempt_final_response: str | None = None
                     attempt_failure: str | None = None
                     attempt_retryable = False
                     attempt_wire = False
                     attempt_crashed = False
                     try:
+                        # 注入 spawn 没有真实 runner 的 Popen 回调；仍把登记放进
+                        # 本 attempt 的 try/finally，使账本前置凭证失败也能形成
+                        # 明确的失败 attempt，而不是跳过全部收口。
+                        if register_custom_spawn:
+                            popen_registered()
                         result = commander_spawn(attempt_invocation, child_env, fh)
                         if not isinstance(result, CommanderProcessResult):
                             raise TypeError(
@@ -2502,6 +2742,7 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                         attempt_failure = result.failure_kind
                         attempt_retryable = bool(result.retryable)
                         attempt_wire = bool(result.wire_evidence)
+                        attempt_final_response = result.final_response
                     except BaseException as exc:  # noqa: BLE001 —— 崩了也要闭合本 attempt
                         attempt_crashed = True
                         known_rc = getattr(exc, 'returncode', None)
@@ -2526,6 +2767,9 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                                 attempt_observation.provider_session_id,
                                 attempt_wire)
                         except Exception:  # noqa: BLE001
+                            integrity_error_kind = 'commander_attempt_ledger'
+                            attempt_retryable = False
+                            attempt_final_response = None
                             _append_safe_traceback(
                                 base, run_id, prompt=turn_invocation.stdin_text)
                     if invoked:
@@ -2533,12 +2777,21 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                             attempt_rc, attempt_failure, attempt_observation)
                     retry = (
                         invoked and attempt_rc != 0 and attempt_retryable
-                        and attempt_no < max_attempts)
+                        and attempt_no < max_attempts
+                        and integrity_error_kind is None)
                     if not retry:
                         rc = attempt_rc
                         observation = attempt_observation
+                        final_response = (
+                            attempt_final_response
+                            if attempt_rc == 0
+                            and integrity_error_kind is None else None)
+                        process_error_kind = attempt_failure
                         if attempt_crashed:
-                            runtime_error_kind = 'commander_runtime'
+                            runtime_error_kind = (
+                                'commander_protocol'
+                                if attempt_failure == 'protocol'
+                                else 'commander_runtime')
                         break
                     # 中间失败尝试也是一次真实付费/审计事实：成本账逐次落行；
                     # 已取得 provider session 的失败尝试再记一条带 error_kind 的
@@ -2565,8 +2818,14 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                             latency_ms=turn_latency_ms,
                             activity=activity)
                     except Exception:  # noqa: BLE001
+                        integrity_error_kind = 'commander_ledger'
                         _append_safe_traceback(
                             base, run_id, prompt=turn_invocation.stdin_text)
+                    if integrity_error_kind is not None:
+                        rc = attempt_rc
+                        observation = attempt_observation
+                        process_error_kind = intermediate_kind
+                        break
                     reuse_owner: str | None = None
                     if attempt_observation.provider_session_id is not None:
                         if fresh_reviewer_session:
@@ -2611,8 +2870,14 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                             if not fresh_reviewer_session and reuse_owner is None:
                                 provider_turn_recorded = True
                         except Exception:  # noqa: BLE001
+                            integrity_error_kind = 'commander_session_audit'
                             _append_safe_traceback(
                                 base, run_id, prompt=turn_invocation.stdin_text)
+                    if integrity_error_kind is not None:
+                        rc = attempt_rc
+                        observation = attempt_observation
+                        process_error_kind = intermediate_kind
+                        break
                     if reuse_owner is not None:
                         # provider session 属于别的 logical session：不能拿它续接。
                         rc = attempt_rc
@@ -2655,13 +2920,19 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                 _append_safe_traceback(
                     base, run_id, prompt=turn_invocation.stdin_text)
 
-        if read_only:
+        if runtime_error_kind is not None or rc != 0:
+            failure = runtime_error_kind or process_error_kind \
+                or 'commander_process_exit'
             outcome = AgentDeliveryOutcome(
                 state='unknown', checked_at=int(time.time()),
                 reason=(
-                    'Stage2 Global 只读预审已结束；等待 Blueprint 与 live surface'
-                    if runtime_error_kind is None and rc == 0 else
-                    'Stage2 Global 只读预审失败；未产生可绑定的业务结论'))
+                    'Commander 未形成可信成功终态：'
+                    f'{failure}（exit={rc}）。当前盘面仅作快照，'
+                    '不得用下游缺产物覆盖这个直接故障'))
+        elif read_only:
+            outcome = AgentDeliveryOutcome(
+                state='unknown', checked_at=int(time.time()),
+                reason='Stage2 Global 只读预审已结束；等待 Blueprint 与 live surface')
         elif drain.timed_out:
             lifecycle_error_kind = 'commander_execution_barrier'
             outcome = AgentDeliveryOutcome(
@@ -2684,6 +2955,7 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
 
         continue_ready = False
         if (not read_only
+                and rc == 0
                 and lifecycle_error_kind is None
                 and integrity_error_kind is None
                 and runtime_error_kind is None):
@@ -2708,6 +2980,7 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
         error_kind = (
             lifecycle_error_kind or integrity_error_kind
             or completion_error_kind or runtime_error_kind
+            or process_error_kind
             or (None if rc == 0 else 'commander_process_exit'))
 
         if invoked:
@@ -2811,6 +3084,11 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                     '盘面终验已经执行，但 Commander 身份/审计链不闭合：'
                     f'{integrity_error_kind}；拒绝把运行判为可交付'))
 
+        if integrity_error_kind is not None:
+            # 成功文本只有在 attempt/cost/session/pointer 全链闭合时才可交给
+            # typed loader；否则即使 provider exit 0 也只是不可采纳的半边事实。
+            final_response = None
+
         if fresh_session_started and close_seat:
             try:
                 assert fresh_prompt_sha256 is not None
@@ -2855,15 +3133,33 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                 _append_safe_traceback(
                     base, run_id, prompt=turn_invocation.stdin_text)
 
+        # 对普通 Commander，完整性故障保留真实进程 rc，并由
+        # outcome=unknown 关闭交付。对 structured reviewer，调用者还有
+        # 一条“exit 0 但从 legacy scratch 取文件”的测试兼容路；若
+        # 审计链断裂仍返回 0，就可能绕过 final_response 禁用。
+        # 因此 reviewer 完整性故障必须投影为 CRASH，禁止 loader/执行。
+        reported_rc = (
+            CRASH
+            if reviewer_prompt is not None and integrity_error_kind is not None
+            else rc)
+        if reported_rc != rc:
+            final_response = None
+            outcome = AgentDeliveryOutcome(
+                state='unknown', checked_at=int(time.time()),
+                reason=(
+                    'Reviewer Commander 进程虽已返回，但身份/席位/'
+                    f'审计链不闭合：{integrity_error_kind}；'
+                    '已禁止消费其 structured 回答'))
+
         latest_observation = observation
         latest_outcome = outcome
-        latest_rc = rc
+        latest_rc = reported_rc
         latest_error_kind = error_kind
         latest_commander_outcome = outcome
         latest_commander_rc = rc
         latest_commander_error_kind = error_kind
         return CommanderTurnResult(
-            exit_code=rc,
+            exit_code=reported_rc,
             provider_session_id=(
                 observation.provider_session_id
                 if this_turn_recorded and not fresh_reviewer_session else None),
@@ -2874,7 +3170,8 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                 if fresh_reviewer_session and this_turn_recorded
                 else seat_provider_session_id),
             seat_turns_recorded=fresh_turn_counter,
-            seat_started=fresh_session_started or seat_continuation)
+            seat_started=fresh_session_started or seat_continuation,
+            final_response=final_response)
 
     def _end_reviewer_seat(
             seat: _ReviewerSeat, *, error_kind: str | None) -> None:
@@ -2949,9 +3246,24 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
             return SupervisorActionResult(
                 exit_code=rc, outcome=latest_outcome, continue_ready=False,
                 failure_detail=failure_detail)
-        latest_outcome = _assess_delivery(
-            base, sid, code_version=epoch.code_version)
-        latest_error_kind = None if rc in (0, 1, 2) else f'{label}_process_exit'
+        if landed(rc):
+            latest_outcome = _assess_delivery(
+                base, sid, code_version=epoch.code_version)
+            latest_error_kind = None
+        elif rc == 2:
+            latest_error_kind = f'{label}_explicit_stop'
+            latest_outcome = AgentDeliveryOutcome(
+                state='stopped', checked_at=int(time.time()),
+                reason=(
+                    f'{label} 返回显式终态 exit 2，正式产物未落盘'
+                    + (f'；{failure_detail}' if failure_detail else '')))
+        else:
+            latest_error_kind = f'{label}_process_exit'
+            latest_outcome = AgentDeliveryOutcome(
+                state='unknown', checked_at=int(time.time()),
+                reason=(
+                    f'{label} 子进程 exit {rc}，执行结论未知'
+                    + (f'；{failure_detail}' if failure_detail else '')))
         return SupervisorActionResult(
             exit_code=rc, outcome=latest_outcome,
             # 只有 0/1 能证明本次正式动作已经落盘，才允许重新规划下一步。
@@ -3063,8 +3375,17 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                 holder['turn'] = turn
                 review_exit_code = turn.exit_code
                 if turn.exit_code == 0:
-                    holder['input_payload'] = (
-                        reviewer_tasks.load_stage2_prereview(prereview_task))
+                    if turn.final_response is not None:
+                        holder['response_sha256'] = _reviewer_response_sha256(
+                            turn.final_response)
+                        holder['input_payload'], _response_sha256 = (
+                            _materialize_stage2_prereview_response(
+                                prereview_task, turn.final_response))
+                    else:
+                        # 历史/测试 spawn 仍可物化旧文件；生产
+                        # structured driver 成功却缺回答会在协议层拒绝。
+                        holder['input_payload'] = (
+                            reviewer_tasks.load_stage2_prereview(prereview_task))
                 else:
                     holder.setdefault(
                         'error', RuntimeError(
@@ -3117,6 +3438,9 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
             error=(
                 f'{type(error).__name__}: {error}' if isinstance(error, BaseException)
                 else None),
+            response_sha256=(
+                str(holder['response_sha256'])
+                if isinstance(holder.get('response_sha256'), str) else None),
         )
         if action_error is not None:
             raise action_error
@@ -3183,6 +3507,38 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
         waiting_on = current.action.waiting_on
         assert waiting_on is not None
         binding = (current.surface_seal, waiting_on)
+
+        def persist_pending_correction(
+                task: reviewer_tasks.ReviewerTask, *,
+                reason: str, request_sha256: str) -> None:
+            """非 Stage2 席位把拒因落账后才允许进入内存 correction。"""
+            if waiting_on in queue.STAGE2_REVIEWER_WAITING_ON:
+                return
+            seat = open_reviewer_seats.get(binding)
+            if seat is None or seat.provider_session_id is None:
+                raise reviewer_seat_ledger.ReviewerSeatRefused(
+                    'typed 拒因无法绑定到已证明的 reviewer provider session')
+            reviewer_seat_ledger.mark_pending_correction(
+                base, sid, waiting_on=task.waiting_on,
+                business_sha256=task.business_sha256,
+                session_run_id=seat.session_run_id,
+                provider_session_id=seat.provider_session_id,
+                request_sha256=request_sha256, reason=reason)
+
+        def clear_pending_correction(
+                task: reviewer_tasks.ReviewerTask, *,
+                expected_request_sha256: str | None = None) -> None:
+            if waiting_on in queue.STAGE2_REVIEWER_WAITING_ON:
+                return
+            ledger = reviewer_seat_ledger.read(
+                base, sid, waiting_on=task.waiting_on,
+                business_sha256=task.business_sha256)
+            if ledger is None or ledger.pending_correction is None:
+                return
+            reviewer_seat_ledger.clear_pending_correction(
+                base, sid, waiting_on=task.waiting_on,
+                business_sha256=task.business_sha256,
+                expected_request_sha256=expected_request_sha256)
 
         def run_reviewer_turn(
                 task: reviewer_tasks.ReviewerTask,
@@ -3407,7 +3763,8 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                 activity=_reviewer_activity(task))
             if turn.exit_code != 0:
                 return turn
-            request_sha256 = _reviewer_request_sha256(task.request_path)
+            request_sha256 = _reviewer_turn_response_sha256(
+                turn, task.request_path)
             if request_sha256 == previous_request_sha256:
                 reviewer_correction_task = None
                 reviewer_correction_binding = None
@@ -3428,10 +3785,29 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                     provider_session_id=turn.provider_session_id,
                     continue_ready=False, outcome=latest_outcome)
             try:
-                corrected_action = reviewer_tasks.load_action(
-                    task.request_path, current,
-                    submission_options=task.submission_options)
+                validated_record_path: Path | None = None
+                if turn.final_response is not None:
+                    (corrected_action, request_sha256,
+                     validated_record_path) = (
+                        _materialize_reviewer_response(
+                            task, current, turn.final_response,
+                            persist_validated=lambda action: (
+                                _record_reviewer_action(
+                                    base, sid, run_id=run_id, epoch=epoch,
+                                    task=task, action=action)),
+                            preserve_validated=lambda candidate, digest: (
+                                _preserve_validated_reviewer_residue(
+                                    base, sid, candidate, digest))))
+                else:
+                    corrected_action = reviewer_tasks.load_action(
+                        task.request_path, current,
+                        submission_options=task.submission_options)
+                    validated_record_path = _record_reviewer_action(
+                        base, sid, run_id=run_id, epoch=epoch, task=task,
+                        action=corrected_action)
             except reviewer_tasks.ReviewerTaskError as exc:
+                persist_pending_correction(
+                    task, reason=str(exc), request_sha256=request_sha256)
                 if attempt >= _MAX_REVIEWER_CORRECTIONS:
                     reviewer_correction_task = None
                     reviewer_correction_binding = None
@@ -3460,6 +3836,8 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                     continue_ready=True, outcome=turn.outcome,
                     continue_reviewer=True)
 
+            clear_pending_correction(
+                task, expected_request_sha256=previous_request_sha256)
             reviewer_correction_task = None
             reviewer_correction_binding = None
             reviewer_correction_reason = None
@@ -3469,9 +3847,7 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
             pending_reviewer_binding = binding
             pending_reviewer_business_sha256 = task.business_sha256
             pending_reviewer_source_task = task
-            pending_reviewer_record_path = _record_reviewer_action(
-                base, sid, run_id=run_id, epoch=epoch, task=task,
-                action=corrected_action)
+            pending_reviewer_record_path = validated_record_path
             pending_reviewer_replayed = False
             return CommanderTurnResult(
                 exit_code=turn.exit_code,
@@ -3521,19 +3897,129 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                     provider_session_id=provider_session_id,
                     continue_ready=False,
                     outcome=latest_outcome)
+            if isinstance(action, reviewer_tasks.ReviewerStopAction):
+                # Stage0 reviewer 的 typed non-approval 是明确终态，不是
+                # approval，也不是待 Executor 执行的 node。它不产生任何
+                # canonical 子进程/正式写盘，只把模型给出的证据性拒绝理由
+                # 原样投影为本次 AgentRun stop。
+                completed_reviewer_business_actions.add(business_action)
+                clear_pending_correction(source_task)
+                _close_reviewer_seat(binding)
+                latest_rc = 2
+                latest_error_kind = 'commander_reviewer_stopped'
+                latest_outcome = AgentDeliveryOutcome(
+                    state='stopped', checked_at=int(time.time()),
+                    reason=(
+                        f'Commander reviewer 明确拒绝批准 {waiting_on}：'
+                        f'{action.reason}'))
+                return CommanderTurnResult(
+                    exit_code=2,
+                    provider_session_id=provider_session_id,
+                    continue_ready=False, outcome=latest_outcome)
             if isinstance(action, reviewer_tasks.ReviewerNodeAction):
-                result = _run_node_review_action(
-                    epoch, action, launch_ticket)
-            else:
+                try:
+                    result = _run_node_review_action(
+                        epoch, action, launch_ticket)
+                except Exception:  # noqa: BLE001 —— 先区分 surface 竞态
+                    if waiting_on in queue.STAGE2_REVIEWER_WAITING_ON:
+                        raise
+                    try:
+                        live = _read_operator_next(epoch)
+                    except Exception:
+                        raise
+                    live_waiting_on = (
+                        live.action.waiting_on
+                        if live.state == 'blocked' and live.action is not None
+                        else None)
+                    live_binding = (
+                        (live.surface_seal, live_waiting_on)
+                        if live_waiting_on is not None else None)
+                    if live_binding == binding:
+                        raise
+                    # permit 尚未铸成，canonical 子进程也尚未启动。
+                    # durable record 保留：新 surface 若仍属同 business，
+                    # 下一窗口会重走当前 loader 后零模型重放；若
+                    # business 已变，_find_replayable 会把旧记录汰汰。
+                    _close_reviewer_seat(
+                        binding,
+                        error_kind='commander_reviewer_binding_changed')
+                    latest_rc = 2
+                    latest_error_kind = 'commander_reviewer_binding_changed'
+                    latest_outcome = AgentDeliveryOutcome(
+                        state='stopped', checked_at=int(time.time()),
+                        reason=(
+                            'reviewer typed 动作在铸 permit 前发现 live '
+                            'surface 已变；已关闭旧席并返回 planner '
+                            '以 durable 决定零模型重放'))
+                    return CommanderTurnResult(
+                        exit_code=2,
+                        provider_session_id=provider_session_id,
+                        continue_ready=True, outcome=latest_outcome)
+            elif isinstance(action, reviewer_tasks.ReviewerApprovalAction):
                 result = _run_approval_action(
                     epoch, action, launch_ticket)
-            if record_path is not None and (
-                    landed(result.exit_code) or result.exit_code == 2):
-                # 已落盘或被关闭式拒绝的决定都不再适用；只有结论未知（70）时
-                # 保留记录，留给下一次同 blocker 的启动窗口重放。
+            else:  # pragma: no cover —— ReviewerAction union 的未来扩展须显式接线
+                raise TypeError(f'未接线的 reviewer action：{type(action).__name__}')
+            if record_path is not None and landed(result.exit_code):
+                # 已落盘的决定不再适用。exit 2 需先重读 live
+                # binding 才能判断是真正拒绝还是 surface 竞态，
+                # 不能在这里提前删掉；结论未知则一律保留。
+                _discard_reviewer_action_record(base, record_path)
+            if (result.exit_code == 2
+                    and waiting_on not in queue.STAGE2_REVIEWER_WAITING_ON):
+                # canonical 动作执行期间，人工 edit/adopt 可能已经
+                # 改变 surface。此时旧 action 的 exit 2 只能证明它没有
+                # landed，不能再把旧 workpack/revision 登记成同席纠错；
+                # 否则 correction 又被要求逐字保留已过期 binding，必然
+                # 浪费下一轮付费席位。
+                try:
+                    live = _read_operator_next(epoch)
+                except Exception as exc:  # noqa: BLE001 —— 证明不了就不纠错
+                    _close_reviewer_seat(
+                        binding,
+                        error_kind='commander_reviewer_surface_recheck')
+                    latest_rc = CRASH
+                    latest_error_kind = 'commander_reviewer_surface_recheck'
+                    latest_outcome = AgentDeliveryOutcome(
+                        state='unknown', checked_at=int(time.time()),
+                        reason=(
+                            'canonical reviewer 动作被拒绝后无法重读 '
+                            f'live surface：{type(exc).__name__}: {exc}；'
+                            '已禁止沿用旧 workpack 纠错'))
+                    return CommanderTurnResult(
+                        exit_code=CRASH,
+                        provider_session_id=provider_session_id,
+                        continue_ready=False, outcome=latest_outcome)
+                live_waiting_on = (
+                    live.action.waiting_on
+                    if live.state == 'blocked' and live.action is not None
+                    else None)
+                live_binding = (
+                    (live.surface_seal, live_waiting_on)
+                    if live_waiting_on is not None else None)
+                if live_binding != binding:
+                    _close_reviewer_seat(
+                        binding,
+                        error_kind='commander_reviewer_binding_changed')
+                    # 返回 planner 重读新 next；不设 continue_reviewer，
+                    # 不落 pending correction，也不复用旧 provider 席。
+                    return CommanderTurnResult(
+                        exit_code=result.exit_code,
+                        provider_session_id=provider_session_id,
+                        continue_ready=True, outcome=result.outcome)
+                # 只有 live transport binding 仍稳定，才能把 exit 2
+                # 解释为这份 durable 决定在当前 surface 上真正
+                # 被 canonical 拒绝并消费。binding 变化分支已在上方
+                # 返回，记录必须留给新窗口按 business identity 复验。
+                if record_path is not None:
+                    _discard_reviewer_action_record(base, record_path)
+            elif result.exit_code == 2 and record_path is not None:
+                # Stage2 的决定有独立书内 durable/correction 路，
+                # 不套用普通 reviewer 的 transport-binding 重放。
                 _discard_reviewer_action_record(base, record_path)
             if landed(result.exit_code):
                 completed_reviewer_business_actions.add(business_action)
+                clear_pending_correction(source_task)
                 _close_reviewer_seat(binding)
             elif result.exit_code == 2 and replayed:
                 # Stage2 的纠错包自足且每轮本来就开新会话，所以重放决定被拒后可
@@ -3554,11 +4040,26 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                         provider_session_id=None,
                         continue_ready=True, outcome=result.outcome,
                         continue_reviewer=True)
-                reviewed_blockers.discard(binding)
+                # 普通 blocker 的 durable record 已证明该 business 发生过
+                # 一次付费首审。重放又被 canonical 拒绝时，不能删掉
+                # record 后就把它包装成第二次 review；即使旧版尚未
+                # 落 ReviewerSeatLedger，durable 决定本身也是席位已用的
+                # 证据。Stage2 有独立书内 durable/correction 路，已在上分支。
+                rejection = result.failure_detail or (
+                    f'canonical {action.kind} action 返回 exit 2，正式产物未落盘')
+                latest_rc = 2
+                latest_error_kind = 'commander_reviewer_replay_rejected'
+                latest_outcome = AgentDeliveryOutcome(
+                    state='stopped', checked_at=int(time.time()),
+                    reason=(
+                        '持久 reviewer 决定经零模型重放后仍被确定性'
+                        f'边界拒绝：{rejection}。同一业务主体的首审席位'
+                        '在重启/epoch 切换后不返还；请用人工 typed 入口'
+                        '闭合，或先形成真实新业务 surface。'))
                 return CommanderTurnResult(
-                    exit_code=result.exit_code,
+                    exit_code=2,
                     provider_session_id=provider_session_id,
-                    continue_ready=True, outcome=result.outcome)
+                    continue_ready=False, outcome=latest_outcome)
             elif (result.exit_code == 2
                   and (waiting_on in queue.STAGE2_REVIEWER_WAITING_ON
                        or open_reviewer_seats.get(binding) is not None
@@ -3588,10 +4089,15 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                         continue_ready=False, outcome=latest_outcome)
                 reviewer_correction_task = source_task
                 reviewer_correction_binding = binding
-                reviewer_correction_reason = (
+                correction_reason = (
                     f'{rejection}；请按原 workpack 只修正上一份 typed 动作')
-                reviewer_correction_request_sha256 = _reviewer_request_sha256(
+                correction_request_sha256 = _reviewer_request_sha256(
                     source_task.request_path)
+                persist_pending_correction(
+                    source_task, reason=correction_reason,
+                    request_sha256=correction_request_sha256)
+                reviewer_correction_reason = correction_reason
+                reviewer_correction_request_sha256 = correction_request_sha256
                 reviewer_correction_attempts = 0
                 return CommanderTurnResult(
                     exit_code=result.exit_code,
@@ -3616,8 +4122,24 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
             base, sid, epoch.epoch_id)
         request_path = scratch / (
             f'reviewer-request-{current.action.action_sha256[:16]}.json')
-        task = reviewer_tasks.build_task(
-            base, sid, current, request_path, epoch_id=epoch.epoch_id)
+        try:
+            task = reviewer_tasks.build_task(
+                base, sid, current, request_path, epoch_id=epoch.epoch_id)
+        except reviewer_tasks.ReviewerTaskStopped as exc:
+            # workpack producer 已给出结构化 stopped（例如源文不可得/人工
+            # partition 尚无证明）；这发生在 submission options、席位预留和
+            # CLI invocation 之前，绝不能再花一轮 Reviewer 来猜。
+            reviewed_blockers.add(binding)
+            latest_rc = 2
+            latest_error_kind = 'reviewer_workpack_stopped'
+            latest_outcome = AgentDeliveryOutcome(
+                state='stopped', checked_at=int(time.time()),
+                reason=(
+                    f'{exc.waiting_on} 的只读 reviewer workpack 已明确停止：'
+                    f'{exc.reason}'))
+            return CommanderTurnResult(
+                exit_code=2, provider_session_id=None,
+                continue_ready=False, outcome=latest_outcome)
         if task is None:
             return None
         if (waiting_on == queue.WAITING_ON_STAGE2_REVIEW
@@ -3693,7 +4215,8 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                 reviewer_correction_binding = binding
                 reviewer_correction_reason = prereview.error
                 reviewer_correction_request_sha256 = (
-                    _reviewer_request_sha256(task.request_path))
+                    prereview.response_sha256
+                    or _reviewer_request_sha256(task.request_path))
                 reviewer_correction_attempts = 0
                 return CommanderTurnResult(
                     exit_code=2, provider_session_id=None,
@@ -3717,6 +4240,49 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
             return CommanderTurnResult(
                 exit_code=0, provider_session_id=provider_session_id,
                 continue_ready=True, outcome=latest_outcome)
+        if waiting_on not in queue.STAGE2_REVIEWER_WAITING_ON:
+            try:
+                prior_seat = reviewer_seat_ledger.read(
+                    base, sid, waiting_on=task.waiting_on,
+                    business_sha256=task.business_sha256)
+            except reviewer_seat_ledger.ReviewerSeatRefused as exc:
+                reviewed_blockers.add(binding)
+                latest_rc = CRASH
+                latest_error_kind = 'reviewer_seat_ledger'
+                latest_outcome = AgentDeliveryOutcome(
+                    state='failed', checked_at=int(time.time()),
+                    reason=(
+                        '既有 reviewer 席位账无法证明，已在任何新模型 wire 前'
+                        f'关闭：{exc}'))
+                return CommanderTurnResult(
+                    exit_code=CRASH, provider_session_id=None,
+                    continue_ready=False, outcome=latest_outcome)
+            if prior_seat is not None and prior_seat.turns:
+                reviewed_blockers.add(binding)
+                pending = prior_seat.pending_correction
+                if pending is not None:
+                    reason = (
+                        '已恢复上一次付费 reviewer 席位留下的待纠错事实；'
+                        '当前 parent 不得把同一业务主体重新包装成第二次首审。'
+                        f'原拒因：{pending.reason}；'
+                        f'请求 identity={pending.request_sha256}。'
+                        '请用人工 typed 入口闭合该 blocker，或让业务 surface 发生'
+                        '真实变化后再启动。')
+                    error_kind = 'reviewer_correction_pending'
+                else:
+                    reason = (
+                        '同一业务主体的 reviewer 首审已经发生，但盘上没有可重放'
+                        ' approval 决定或完整 pending-correction 身份；重启/换 epoch '
+                        '不返还首审席位，已在模型 wire 前关闭。请用人工 typed 入口'
+                        '闭合 blocker，或先形成新的业务 surface。')
+                    error_kind = 'reviewer_seat_already_used'
+                latest_rc = 2
+                latest_error_kind = error_kind
+                latest_outcome = AgentDeliveryOutcome(
+                    state='stopped', checked_at=int(time.time()), reason=reason)
+                return CommanderTurnResult(
+                    exit_code=2, provider_session_id=None,
+                    continue_ready=False, outcome=latest_outcome)
         reviewed_blockers.add(binding)
         seat_purpose = 'review'
         if waiting_on in queue.STAGE2_REVIEWER_WAITING_ON:
@@ -3729,9 +4295,26 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
         if turn.exit_code != 0:
             return turn
         try:
-            pending_reviewer_action = reviewer_tasks.load_action(
-                request_path, current,
-                submission_options=task.submission_options)
+            validated_record_path: Path | None = None
+            if turn.final_response is not None:
+                (pending_reviewer_action, _response_sha256,
+                 validated_record_path) = (
+                    _materialize_reviewer_response(
+                        task, current, turn.final_response,
+                        persist_validated=lambda action: (
+                            _record_reviewer_action(
+                                base, sid, run_id=run_id, epoch=epoch,
+                                task=task, action=action)),
+                        preserve_validated=lambda candidate, digest: (
+                            _preserve_validated_reviewer_residue(
+                                base, sid, candidate, digest))))
+            else:
+                pending_reviewer_action = reviewer_tasks.load_action(
+                    request_path, current,
+                    submission_options=task.submission_options)
+                validated_record_path = _record_reviewer_action(
+                    base, sid, run_id=run_id, epoch=epoch, task=task,
+                    action=pending_reviewer_action)
         except reviewer_tasks.ReviewerTaskError as exc:
             seat_open = open_reviewer_seats.get(binding)
             if (waiting_on not in queue.STAGE2_REVIEWER_WAITING_ON
@@ -3748,11 +4331,15 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                     exit_code=2,
                     provider_session_id=None,
                     continue_ready=False, outcome=latest_outcome)
+            failed_request_sha256 = _reviewer_turn_response_sha256(
+                turn, task.request_path)
+            persist_pending_correction(
+                task, reason=str(exc),
+                request_sha256=failed_request_sha256)
             reviewer_correction_task = task
             reviewer_correction_binding = binding
             reviewer_correction_reason = str(exc)
-            reviewer_correction_request_sha256 = _reviewer_request_sha256(
-                task.request_path)
+            reviewer_correction_request_sha256 = failed_request_sha256
             reviewer_correction_attempts = 0
             return CommanderTurnResult(
                 exit_code=turn.exit_code,
@@ -3762,9 +4349,7 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
         pending_reviewer_binding = binding
         pending_reviewer_business_sha256 = task.business_sha256
         pending_reviewer_source_task = task
-        pending_reviewer_record_path = _record_reviewer_action(
-            base, sid, run_id=run_id, epoch=epoch, task=task,
-            action=pending_reviewer_action)
+        pending_reviewer_record_path = validated_record_path
         pending_reviewer_replayed = False
         return CommanderTurnResult(
             exit_code=turn.exit_code,

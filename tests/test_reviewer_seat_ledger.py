@@ -25,13 +25,29 @@ def test_review_then_corrections_are_capped_and_persist(tmp_path):
     assert first.ordinal == 1 and first.outcome == 'started'
     L.finish(tmp_path, '42', waiting_on=BLOCKER, business_sha256=BUSINESS,
              turn_id='t1', exit_code=0, now=2)
+    L.mark_pending_correction(
+        tmp_path, '42', waiting_on=BLOCKER, business_sha256=BUSINESS,
+        session_run_id='seat-1', provider_session_id='provider-seat-1',
+        request_sha256='1' * 64, reason='首审 typed 请求不合法', now=3)
     for index in range(COMMANDER_REVIEWER_MAX_CORRECTIONS):
-        _reserve(tmp_path, purpose='correction', turn_id=f'c{index}')
+        turn_id = f'c{index}'
+        _reserve(tmp_path, purpose='correction', turn_id=turn_id)
+        L.finish(
+            tmp_path, '42', waiting_on=BLOCKER,
+            business_sha256=BUSINESS, turn_id=turn_id,
+            exit_code=0, now=4 + index * 2)
+        L.mark_pending_correction(
+            tmp_path, '42', waiting_on=BLOCKER,
+            business_sha256=BUSINESS, session_run_id='seat-1',
+            provider_session_id='provider-seat-1',
+            request_sha256=f'{index + 2:x}' * 64,
+            reason=f'第 {index + 1} 次纠错仍不合法', now=5 + index * 2)
     with pytest.raises(L.ReviewerSeatRefused, match='纠错席位已用尽'):
         _reserve(tmp_path, purpose='correction', turn_id='c-extra')
     shown = L.list_ledgers(tmp_path, '42')
     assert len(shown) == 1
     assert shown[0]['corrections_used'] == COMMANDER_REVIEWER_MAX_CORRECTIONS
+    assert shown[0]['pending_correction'] is True
     assert [row['purpose'] for row in shown[0]['turns']] == [
         'review', *['correction'] * COMMANDER_REVIEWER_MAX_CORRECTIONS]
     assert L.ledger_path(
@@ -47,6 +63,41 @@ def test_correction_needs_a_prior_review_and_turn_ids_are_unique(tmp_path):
         _reserve(tmp_path, purpose='review', turn_id='t1')
     with pytest.raises(L.ReviewerSeatRefused, match='未登记'):
         _reserve(tmp_path, purpose='final_review', turn_id='t2')
+
+
+def test_second_review_and_correction_without_durable_rejection_are_refused(
+        tmp_path):
+    _reserve(tmp_path, purpose='review', turn_id='t1')
+    L.finish(tmp_path, '42', waiting_on=BLOCKER, business_sha256=BUSINESS,
+             turn_id='t1', exit_code=0, now=2)
+    with pytest.raises(L.ReviewerSeatRefused, match='首次审阅已经发生'):
+        _reserve(tmp_path, purpose='review', turn_id='t2')
+    with pytest.raises(L.ReviewerSeatRefused, match='持久化的 typed 拒因'):
+        _reserve(tmp_path, purpose='correction', turn_id='c1')
+
+
+def test_pending_correction_is_identity_bound_and_cleared_by_cas(tmp_path):
+    _reserve(tmp_path, purpose='review', turn_id='t1')
+    L.finish(tmp_path, '42', waiting_on=BLOCKER, business_sha256=BUSINESS,
+             turn_id='t1', exit_code=0, now=2)
+    pending = L.mark_pending_correction(
+        tmp_path, '42', waiting_on=BLOCKER, business_sha256=BUSINESS,
+        session_run_id='seat-1', provider_session_id='provider-seat-1',
+        request_sha256='a' * 64, reason='确定性 loader 拒绝', now=3)
+    assert pending.source_turn_id == 't1'
+    assert L.read(
+        tmp_path, '42', waiting_on=BLOCKER,
+        business_sha256=BUSINESS).pending_correction == pending
+    with pytest.raises(L.ReviewerSeatRefused, match='identity 已漂移'):
+        L.clear_pending_correction(
+            tmp_path, '42', waiting_on=BLOCKER,
+            business_sha256=BUSINESS,
+            expected_request_sha256='b' * 64)
+    cleared = L.clear_pending_correction(
+        tmp_path, '42', waiting_on=BLOCKER,
+        business_sha256=BUSINESS,
+        expected_request_sha256='a' * 64)
+    assert cleared.pending_correction is None
 
 
 def test_attempts_live_under_the_turn_and_finish_is_idempotent(tmp_path):

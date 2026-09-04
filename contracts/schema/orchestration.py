@@ -1060,6 +1060,17 @@ class ReviewerSeatTurn(FrozenModel):
         return self
 
 
+class ReviewerSeatPendingCorrection(FrozenModel):
+    """一席已付费审阅留下、但尚未闭合的 typed 纠错事实。"""
+
+    source_turn_id: str = Field(min_length=1)
+    session_run_id: str = Field(min_length=1)
+    provider_session_id: str = Field(min_length=1)
+    request_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    reason: str = Field(min_length=1, max_length=2048)
+    recorded_at: int = Field(ge=0)
+
+
 class ReviewerSeatLedger(FrozenModel):
     """按 ``(sid, blocker, business_sha256)`` 持久化的非 Stage2 reviewer 席位账。
 
@@ -1076,6 +1087,7 @@ class ReviewerSeatLedger(FrozenModel):
     max_corrections: int = Field(
         default=COMMANDER_REVIEWER_MAX_CORRECTIONS, ge=0)
     turns: list[ReviewerSeatTurn] = Field(default_factory=list)
+    pending_correction: ReviewerSeatPendingCorrection | None = None
 
     @model_validator(mode='after')
     def _turns_are_consistent(self) -> ReviewerSeatLedger:
@@ -1085,11 +1097,27 @@ class ReviewerSeatLedger(FrozenModel):
         ids = [row.turn_id for row in self.turns]
         if len(ids) != len(set(ids)):
             raise ValueError('reviewer seat ledger turn_id 不得重复')
-        if self.turns and self.turns[0].purpose != 'review':
-            raise ValueError('reviewer seat ledger 首轮必须是 review')
+        reviews = [row for row in self.turns if row.purpose == 'review']
+        if self.turns and (
+                self.turns[0].purpose != 'review' or len(reviews) != 1
+                or any(row.purpose != 'correction'
+                       for row in self.turns[1:])):
+            raise ValueError('reviewer seat ledger 只能有一轮首审，其后只能纠错')
+        sessions = {row.session_run_id for row in self.turns}
+        if len(sessions) > 1:
+            raise ValueError('同一 reviewer 席位的所有轮必须共用 logical session')
         corrections = sum(1 for row in self.turns if row.purpose == 'correction')
         if corrections > self.max_corrections:
             raise ValueError('reviewer seat ledger 纠错轮数超出 max_corrections')
+        pending = self.pending_correction
+        if pending is not None:
+            matches = [
+                row for row in self.turns
+                if row.turn_id == pending.source_turn_id]
+            if len(matches) != 1 or matches[0].outcome != 'ok':
+                raise ValueError('pending correction 必须绑定唯一的成功 reviewer turn')
+            if matches[0].session_run_id != pending.session_run_id:
+                raise ValueError('pending correction 与 reviewer 席位 session 不一致')
         return self
 
 
@@ -1164,15 +1192,16 @@ class Stage2ReviewLedger(FrozenModel):
 
 
 class ReviewerActionRecord(FrozenModel):
-    """Commander 已通过 typed loader 的一份 approval 决定，按内容寻址落盘供重放。
+    """Commander 已通过 typed loader 的可重放决定，按内容寻址落盘。
 
     它不是审批账，也不是执行授权：审批仍只由 ``novel.cli approval apply`` 子进程
     在 admission 内写入。这里只保证一次已经完成的模型审阅，在 epoch 因代码/skill
     漂移关闭、进程崩溃或服务重启后，能在同一 blocker 上零模型成本重放，而不是再
     买一轮 Commander。适用性由 ``waiting_on`` 加两条判据之一决定：``surface_seal``
     逐字相同（当次快路），或 ``review_token`` 与当前 workpack 相同（与 approve 侧
-    同一判据，可跨代码版本）。node 型动作不进这里：Stage2 的 durable 路由已由书内
-    typed 产物承担（R-11.22）。
+    同一判据，可跨代码版本）。Stage0/6/7 的 approve 虽编码为
+    node 动作，但没有书内 durable 产物，因此也记在这里；只有
+    ``stage2.global`` node 由书内 typed 产物承担恢复路（R-11.22）。
     """
 
     kind: Literal['novel-reviewer-action-record-v1'] = (
@@ -1183,10 +1212,34 @@ class ReviewerActionRecord(FrozenModel):
     waiting_on: str = Field(min_length=1)
     surface_seal: str = Field(min_length=1)
     business_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
-    surface: Literal[REVIEWER_APPROVAL_SURFACES]
-    payload: dict[str, Any]
+    # 历史 approval façade 直接保存 surface/payload；Stage0/6/7 的
+    # approve 在 reviewer contract 中编码为 node action，却同样没有书内
+    # durable 产物，所以以 node/flags/input_payload 保存。只有 Stage2 node
+    # 依赖书内 typed artifact，不进入此记录。
+    surface: Literal[REVIEWER_APPROVAL_SURFACES] | None = None
+    payload: dict[str, Any] | None = None
+    node: str | None = Field(default=None, min_length=1)
+    flags: tuple[str, ...] | None = None
+    input_payload: dict[str, Any] | None = None
     review_token: str | None = None
     recorded_at: int = Field(ge=0)
+
+    @model_validator(mode='after')
+    def _one_replayable_action_shape(self) -> ReviewerActionRecord:
+        approval = self.surface is not None
+        node = self.node is not None
+        if approval == node:
+            raise ValueError('reviewer action record 必须恰含 approval 或 node 形状')
+        if approval:
+            if (self.payload is None or self.flags is not None
+                    or self.input_payload is not None):
+                raise ValueError('approval reviewer record 字段组合不成立')
+        else:
+            if self.payload is not None or self.flags is None:
+                raise ValueError('node reviewer record 字段组合不成立')
+            if any(not isinstance(flag, str) or not flag for flag in self.flags):
+                raise ValueError('node reviewer record flags 必须是非空字符串')
+        return self
 
 
 class AgentDeliveryOutcome(FrozenModel):

@@ -3,6 +3,7 @@
 """Claude Code ``stream-json`` Commander driver。"""
 from __future__ import annotations
 
+import json
 import os
 import re
 import sys
@@ -172,12 +173,14 @@ class ClaudeCodeCommanderDriver(CliCommanderDriver):
         env_overrides: Mapping[str, str] | None = None,
         cli_version: str | None = None,
         resume_provider_session_id: str | None = None,
+        structured_response: bool = False,
     ) -> CommanderInvocation:
         resolved = self._resolved_profile(profile)
         if not isinstance(prompt, str) or not prompt.strip():
             raise CommanderConfigurationError('commander prompt 不得为空')
         repo_abs, base_abs = self._paths(repo, base)
-        tools = tuple(allowed_tools) or _default_allowed_tools(base_abs)
+        tools = (() if structured_response else
+                 (tuple(allowed_tools) or _default_allowed_tools(base_abs)))
         if any(not isinstance(item, str) or not item.strip() for item in tools):
             raise CommanderConfigurationError(
                 'Claude --allowedTools 每一项都必须是非空字符串')
@@ -193,15 +196,23 @@ class ClaudeCodeCommanderDriver(CliCommanderDriver):
             '--no-chrome',
             '--mcp-config', _EMPTY_MCP_CONFIG,
             '--strict-mcp-config',
-            '--add-dir', base_abs,
         ]
+        if structured_response:
+            # 省略 --allowedTools 不是禁用 built-ins；Claude 只有
+            # ``--tools ''`` 才是空工具集。headless reviewer 也不取得
+            # permission prompt 通道，保证“只回答最终 JSON”是 argv 事实。
+            argv.extend(('--tools', '', '--permission-prompts', 'none'))
+        else:
+            argv.extend(('--add-dir', base_abs))
         if resume_provider_session_id is not None:
             if not resume_provider_session_id.strip():
                 raise CommanderConfigurationError(
                     'Claude resume provider session id 不得为空')
             argv.extend(('--resume', resume_provider_session_id))
         # 必须留在末尾：Claude 将其后各项都解释为白名单，不再追加 prompt。
-        argv.extend(('--allowedTools', *tools))
+        # structured reviewer 的材料已全部内联，不下发任何工具白名单。
+        if tools:
+            argv.extend(('--allowedTools', *tools))
         if '--fallback-model' in argv:
             raise AssertionError('Commander 禁止隐式 fallback model')
         frozen_env = dict(env_overrides or {})
@@ -218,12 +229,13 @@ class ClaudeCodeCommanderDriver(CliCommanderDriver):
         return CommanderInvocation(
             argv=tuple(argv),
             stdin_text=prompt,
-            cwd=repo_abs,
+            cwd=(base_abs if structured_response else repo_abs),
             env_overrides=frozen_env,
             profile=resolved,
             protocol=self.protocol,
             cli_version=cli_version,
             resume_provider_session_id=resume_provider_session_id,
+            structured_response=structured_response,
         )
 
     provider_label = 'Claude stream-json'
@@ -232,6 +244,24 @@ class ClaudeCodeCommanderDriver(CliCommanderDriver):
     def session_id_of_event(event: Mapping[str, Any]) -> str | None:
         value = event.get('session_id')
         return value if isinstance(value, str) and value.strip() else None
+
+    def _final_response(
+        self, events: Sequence[Mapping[str, Any]],
+    ) -> str | None:
+        for event in reversed(events):
+            if (event.get('type') != 'result'
+                    or event.get('subtype') != 'success'
+                    or event.get('is_error') is not False):
+                continue
+            for key in ('structured_output', 'result'):
+                value = event.get(key)
+                if isinstance(value, str) and value.strip():
+                    return value
+                if isinstance(value, Mapping):
+                    return json.dumps(
+                        value, ensure_ascii=False, sort_keys=True,
+                        separators=(',', ':'), allow_nan=False)
+        return None
 
     def _decode_events(
         self,
@@ -251,11 +281,20 @@ class ClaudeCodeCommanderDriver(CliCommanderDriver):
             )
         terminal = [event for event in events if event.get('type') == 'result']
         session_id = _session_id(events)
+        usage = _usage(terminal[-1]) if terminal else None
+        observation = CommanderObservation(
+            provider_session_id=session_id,
+            actual_model=_last_metadata(events, 'model'),
+            actual_effort=_last_metadata(
+                events, 'reasoning_effort', 'effort'),
+            usage=usage,
+        )
         if (expected_provider_session_id is not None
                 and session_id is not None
                 and session_id != expected_provider_session_id):
             raise CommanderProtocolError(
-                'Claude Commander resume 返回了不同 session_id；拒绝串错会话')
+                'Claude Commander resume 返回了不同 session_id；拒绝串错会话',
+                partial_observation=observation)
         failed_event = next(
             (event for event in events
              if event.get('type') == 'result'
@@ -266,21 +305,17 @@ class ClaudeCodeCommanderDriver(CliCommanderDriver):
         if exit_code == 0:
             if not terminal:
                 raise CommanderProtocolError(
-                    'Claude 成功退出但 stream-json 没有 result 终态')
+                    'Claude 成功退出但 stream-json 没有 result 终态',
+                    partial_observation=observation)
             if session_id is None:
                 raise CommanderProtocolError(
-                    'Claude 成功事件流没有 provider session_id')
+                    'Claude 成功事件流没有 provider session_id',
+                    partial_observation=observation)
             if failed_event is not None:
                 raise CommanderProtocolError(
-                    'Claude exit 0 却返回失败 result，拒绝把矛盾状态折成成功')
-        usage = _usage(terminal[-1]) if terminal else None
-        return CommanderObservation(
-            provider_session_id=session_id,
-            actual_model=_last_metadata(events, 'model'),
-            actual_effort=_last_metadata(
-                events, 'reasoning_effort', 'effort'),
-            usage=usage,
-        )
+                    'Claude exit 0 却返回失败 result，拒绝把矛盾状态折成成功',
+                    partial_observation=observation)
+        return observation
 
 
 __all__ = ['ClaudeCodeCommanderDriver']

@@ -44,6 +44,9 @@ class CommanderTurnResult:
     seat_provider_session_id: str | None = None
     seat_turns_recorded: int = 0
     seat_started: bool = False
+    # 只有最后一次成功 provider attempt 可交付该文本；Supervisor
+    # 必须先走 reviewer typed loader，不得把它直接当成动作。
+    final_response: str | None = None
 
 
 @dataclass(frozen=True)

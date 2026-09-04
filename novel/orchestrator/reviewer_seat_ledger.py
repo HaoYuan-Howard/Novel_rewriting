@@ -28,7 +28,8 @@ from pydantic import TypeAdapter
 
 from contracts.invariants import COMMANDER_REVIEWER_MAX_CORRECTIONS
 from contracts.schema.orchestration import (
-    ReviewerSeatLedger, ReviewerSeatTurn, Stage2ReviewAttempt,
+    ReviewerSeatLedger, ReviewerSeatPendingCorrection, ReviewerSeatTurn,
+    Stage2ReviewAttempt,
 )
 from novel import paths, run_identity
 from novel.appendlog import path_transaction_lock
@@ -132,6 +133,67 @@ def corrections_used(ledger: ReviewerSeatLedger | None) -> int:
     return sum(1 for row in ledger.turns if row.purpose == 'correction')
 
 
+def mark_pending_correction(
+    base: str | os.PathLike[str], sid: str, *,
+    waiting_on: str, business_sha256: str,
+    session_run_id: str, provider_session_id: str,
+    request_sha256: str, reason: str, now: int | None = None,
+) -> ReviewerSeatPendingCorrection:
+    """把 loader/canonical 的精确拒因绑到刚完成的本席 turn。"""
+    path = ledger_path(
+        base, sid, waiting_on=waiting_on, business_sha256=business_sha256)
+    with path_transaction_lock(path):
+        ledger = _read(path)
+        if ledger is None or not ledger.turns:
+            raise ReviewerSeatRefused('pending correction 没有对应 reviewer 席位')
+        source = ledger.turns[-1]
+        if source.outcome != 'ok':
+            raise ReviewerSeatRefused(
+                '只有成功交付 provider 回答的 reviewer turn 才能登记纠错')
+        checked_session = run_identity.check_run_id(session_run_id)
+        if source.session_run_id != checked_session:
+            raise ReviewerSeatRefused('pending correction 的 logical session 漂移')
+        pending = ReviewerSeatPendingCorrection(
+            source_turn_id=source.turn_id,
+            session_run_id=checked_session,
+            provider_session_id=provider_session_id,
+            request_sha256=request_sha256,
+            reason=reason,
+            recorded_at=int(time.time()) if now is None else now,
+        )
+        updated = ReviewerSeatLedger.model_validate({
+            **ledger.model_dump(mode='json'),
+            'pending_correction': pending.model_dump(mode='json'),
+        })
+        _atomic_write(path, updated)
+        assert updated.pending_correction is not None
+        return updated.pending_correction
+
+
+def clear_pending_correction(
+    base: str | os.PathLike[str], sid: str, *,
+    waiting_on: str, business_sha256: str,
+    expected_request_sha256: str | None = None,
+) -> ReviewerSeatLedger:
+    """typed 动作已验证/重放后 CAS 清掉旧拒因；无 marker 时幂等。"""
+    path = ledger_path(
+        base, sid, waiting_on=waiting_on, business_sha256=business_sha256)
+    with path_transaction_lock(path):
+        ledger = _read(path)
+        if ledger is None:
+            raise ReviewerSeatRefused('pending correction 没有对应 reviewer 席位')
+        pending = ledger.pending_correction
+        if pending is None:
+            return ledger
+        if (expected_request_sha256 is not None
+                and pending.request_sha256 != expected_request_sha256):
+            raise ReviewerSeatRefused('pending correction identity 已漂移，拒绝清除')
+        updated = ReviewerSeatLedger.model_validate({
+            **ledger.model_dump(mode='json'), 'pending_correction': None})
+        _atomic_write(path, updated)
+        return updated
+
+
 def reserve(
     base: str | os.PathLike[str], sid: str, *,
     waiting_on: str,
@@ -155,6 +217,11 @@ def reserve(
             raise ReviewerSeatRefused('reviewer seat ledger 身份冲突')
         if any(row.turn_id == turn_id for row in ledger.turns):
             raise ReviewerSeatRefused('reviewer seat turn_id 重复')
+        if purpose not in ('review', 'correction'):
+            raise ReviewerSeatRefused(
+                f'未登记的 reviewer seat purpose：{purpose!r}')
+        if any(row.outcome == 'started' for row in ledger.turns):
+            raise ReviewerSeatRefused('reviewer seat 尚有未闭合 turn，拒绝再开一轮')
         if purpose == 'correction':
             used = corrections_used(ledger)
             if used >= ledger.max_corrections:
@@ -163,8 +230,18 @@ def reserve(
                     f'（{used}/{ledger.max_corrections}），重启不返还')
             if not ledger.turns:
                 raise ReviewerSeatRefused('没有首次审阅席位就不能预留纠错')
-        elif purpose != 'review':
-            raise ReviewerSeatRefused(f'未登记的 reviewer seat purpose：{purpose!r}')
+            pending = ledger.pending_correction
+            if pending is None:
+                raise ReviewerSeatRefused(
+                    '没有持久化的 typed 拒因就不能预留纠错')
+            if pending.session_run_id != checked_session:
+                raise ReviewerSeatRefused(
+                    '纠错必须续用首次审阅席位的 logical session')
+        elif purpose == 'review':
+            if ledger.turns:
+                raise ReviewerSeatRefused(
+                    f'{waiting_on} 在同一业务主体上的首次审阅已经发生；'
+                    '重启或换 epoch 不返还 review 席位')
         turn = ReviewerSeatTurn(
             turn_id=turn_id,
             ordinal=len(ledger.turns) + 1,
@@ -303,6 +380,7 @@ def list_ledgers(base: str | os.PathLike[str], sid: str) -> list[dict[str, Any]]
             'business_sha256': ledger.business_sha256,
             'max_corrections': ledger.max_corrections,
             'corrections_used': corrections_used(ledger),
+            'pending_correction': ledger.pending_correction is not None,
             'turns': [{
                 'ordinal': row.ordinal, 'purpose': row.purpose,
                 'outcome': row.outcome, 'exit_code': row.exit_code,
@@ -316,6 +394,7 @@ def list_ledgers(base: str | os.PathLike[str], sid: str) -> list[dict[str, Any]]
 
 __all__ = [
     'MAX_CORRECTIONS', 'ReviewerSeatRefused', 'corrections_used',
-    'finish', 'finish_attempt', 'ledger_path', 'list_ledgers', 'read',
-    'record_attempt', 'reserve',
+    'clear_pending_correction', 'finish', 'finish_attempt', 'ledger_path',
+    'list_ledgers', 'mark_pending_correction', 'read', 'record_attempt',
+    'reserve',
 ]

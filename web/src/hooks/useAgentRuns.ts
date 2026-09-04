@@ -46,8 +46,17 @@ export function useSaveAgentProfileSettings() {
   })
 }
 
-/** agent 代跑记录（新的在前）。有在跑的 2.5s 一轮，都停着不轮询 —— 与 useJobs 同款纪律。 */
-export function useAgentRuns(sidOverride?: string) {
+/**
+ * agent 代跑记录（新的在前）。有在跑的 2.5s 一轮，稳定停点不轮询。
+ *
+ * `observeControlTransition` 用于 202 异步控制的快速交接窗：resume 响应可能仍是
+ * paused，不能让那一次竞态读把轮询永久关掉。即使页面在交接中刷新而丢失本地
+ * 标记，paused 也保留低频复核，最终仍会收敛到后端真实状态。
+ */
+export function useAgentRuns(
+  sidOverride?: string,
+  observeControlTransition = false,
+) {
   const routeSid = useSid()
   const sid = sidOverride ?? routeSid
 
@@ -55,10 +64,14 @@ export function useAgentRuns(sidOverride?: string) {
     queryKey: qk.agentRuns(sid),
     queryFn: () => api.getAgentRuns(sid),
     enabled: !!sid,
-    refetchInterval: (q) =>
-      q.state.data?.runs.some((run) => run.state === 'pending' || run.state === 'running')
-        ? 2500
-        : false,
+    refetchInterval: (q) => {
+      const runs = q.state.data?.runs ?? []
+      const active = runs.some(
+        (run) => run.state === 'pending' || run.state === 'running',
+      )
+      if (active || observeControlTransition) return 2500
+      return runs.some((run) => run.state === 'paused') ? 5000 : false
+    },
   })
 }
 
@@ -78,8 +91,9 @@ export function useStartAgentRun(sidOverride?: string) {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: (req: AgentRunRequest) => api.startAgentRun(req),
-    onSuccess: () => {
+    onSettled: () => {
       void qc.invalidateQueries({ queryKey: qk.agentRuns(sid) })
+      void qc.invalidateQueries({ queryKey: qk.agentQueue() })
     },
   })
 }
@@ -91,8 +105,9 @@ export function useStopAgentRun(sidOverride?: string) {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: (runId: string) => api.stopAgentRun(runId),
-    onSuccess: () => {
+    onSettled: () => {
       void qc.invalidateQueries({ queryKey: qk.agentRuns(sid) })
+      void qc.invalidateQueries({ queryKey: qk.agentQueue() })
     },
   })
 }
@@ -104,8 +119,9 @@ export function usePauseAgentRun(sidOverride?: string) {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: (runId: string) => api.pauseAgentRun(runId),
-    onSuccess: () => {
+    onSettled: () => {
       void qc.invalidateQueries({ queryKey: qk.agentRuns(sid) })
+      void qc.invalidateQueries({ queryKey: qk.agentQueue() })
     },
   })
 }
@@ -117,8 +133,9 @@ export function useResumeAgentRun(sidOverride?: string) {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: (runId: string) => api.resumeAgentRun(runId),
-    onSuccess: () => {
+    onSettled: () => {
       void qc.invalidateQueries({ queryKey: qk.agentRuns(sid) })
+      void qc.invalidateQueries({ queryKey: qk.agentQueue() })
     },
   })
 }
@@ -127,8 +144,8 @@ export function useResumeAgentRun(sidOverride?: string) {
  * 并发全景：谁在跑、谁在排、闸开多大。
  *
  * ⚠ 有东西在跑或在排就 2.5s 一轮，都空着就不轮询 —— 与 useJobs / useAgentRuns 同款纪律。
- * ⚠ 队列排空的那一刻仍要再取一次：`_drain` 是在结束的那个 agent 线程里把下一本带起来的，
- *   界面不轮询就看不到接力，人会以为队列卡住了。
+ * ⚠ 后端 `queue_view` 与 drain 共用线性化锁：GET 不会在 pending 已 pop、
+ *   running 尚未登记的中间缝返回假空。前端只按服务端快照决定轮询。
  */
 export function useAgentQueue() {
   return useQuery({
@@ -147,7 +164,7 @@ export function useStartAgentBatch() {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: (req: AgentBatchRequest) => api.startAgentBatch(req),
-    onSuccess: () => {
+    onSettled: () => {
       void qc.invalidateQueries({ queryKey: qk.agentQueue() })
     },
   })

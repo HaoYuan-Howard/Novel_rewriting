@@ -3,9 +3,11 @@
 """
 base.py —— 长驻整书 Commander 的供应商中立进程边界。
 
-Commander 与逐节点 executor 是两种不同生命周期：前者在仓根读取 skill、调用
-``novel.cli`` 并持续维护终审包，后者在空目录中只交付一个候选。因此这里不复用
-``AgentRequest``，也不把 commander 权限偷偷塞进 executor driver。
+Commander 与逐节点 executor 是两种不同生命周期：前者只读不可变
+review workpack 并交付一份 typed 判断，后者在隔离目录中交付候选。
+节点调度、permit 与正式写入属于确定性 Supervisor，不属于 Commander。
+因此这里不复用 ``AgentRequest``，也不把 commander 权限偷偷塞进
+executor driver。
 
 提示词永远走 stdin。尤其在 Windows 上，多行正文进 argv 不只会撞 32767 字符上限，
 还可能被 ``cmd /c`` 截在第一行后仍然 exit 0。默认 runner 直接 ``Popen(list)``，
@@ -57,6 +59,22 @@ class CommanderBusyError(CommanderError):
 class CommanderProtocolError(CommanderError):
     """CLI 已返回，但 stdout 不满足声明的机读协议。"""
 
+    def __init__(
+        self, message: str, *,
+        partial_observation: CommanderObservation | None = None,
+    ) -> None:
+        super().__init__(message)
+        # 协议矛盾可能发生在 thread/usage 已经到达之后。它们仍是
+        # 已发生的 provider 事实，不能因为最终业务结论不可信就从成本/
+        # session 审计中消失。
+        self.partial_observation = partial_observation
+        self.failure_kind = 'protocol'
+        self.retryable = False
+        self.wire_evidence = (
+            partial_observation is not None
+            and (partial_observation.provider_session_id is not None
+                 or partial_observation.usage is not None))
+
 
 class CommanderCommandError(CommanderError):
     """CLI 无法启动或超时；不把完整 prompt 放进异常文本。"""
@@ -86,13 +104,25 @@ class CommanderInvocation:
     #: ``None`` 表示创建新会话；非空时 driver 必须使用供应商的 exact resume
     #: 参数，并校验 wire 返回的 id 逐字相同。
     resume_provider_session_id: str | None = None
+    #: reviewer 不再让模型写 scratch；成功时必须从供应商最终回答
+    #: 交付一份裸 JSON，由 Supervisor 严格验证后原子物化。
+    structured_response: bool = False
 
     def __post_init__(self) -> None:
         argv = tuple(self.argv)
-        if not argv or any(not isinstance(item, str) or not item
-                           for item in argv):
+        if not argv or any(not isinstance(item, str) for item in argv):
             raise CommanderConfigurationError(
-                'CommanderInvocation.argv 必须是非空字符串 tuple')
+                'CommanderInvocation.argv 必须是字符串 tuple')
+        empty_items = [index for index, item in enumerate(argv) if not item]
+        if any(
+                self.structured_response is not True
+                or index == 0 or argv[index - 1] != '--tools'
+                for index in empty_items):
+            # Claude Code 的唯一结构性“禁用全部 built-ins”语法就是
+            # ``--tools ''``；除此以外空 argv token 仍关闭式拒绝。
+            raise CommanderConfigurationError(
+                'CommanderInvocation.argv 仅允许 structured reviewer 的 '
+                '--tools 后出现一个空字符串')
         if not isinstance(self.stdin_text, str) or not self.stdin_text.strip():
             raise CommanderConfigurationError('commander prompt 不得为空')
         if not isinstance(self.cwd, str) or not self.cwd.strip():
@@ -109,6 +139,9 @@ class CommanderInvocation:
                 or not self.resume_provider_session_id.strip()):
             raise CommanderConfigurationError(
                 'resume_provider_session_id 若出现就必须是非空字符串')
+        if not isinstance(self.structured_response, bool):
+            raise CommanderConfigurationError(
+                'structured_response 必须是 bool')
         try:
             snapshot = dict(self.env_overrides)
         except (TypeError, ValueError) as exc:
@@ -141,8 +174,6 @@ class CommanderObservation:
                     not isinstance(value, str) or not value.strip()):
                 raise CommanderProtocolError(
                     f'{field_name} 若出现就必须是非空字符串')
-
-
 @dataclass(frozen=True)
 class CommanderProcessResult:
     """外层进程事实；它不声称工作流产物已经可交付。
@@ -158,6 +189,9 @@ class CommanderProcessResult:
     status: int | None = None
     retryable: bool = False
     wire_evidence: bool = False
+    #: reviewer 成功 turn 的 provider 最终文本。它不进入身份/计量
+    #: observation，也不进入 ledger；Supervisor 会严格验证后才物化。
+    final_response: str | None = None
 
     def __post_init__(self) -> None:
         if isinstance(self.exit_code, bool) or not isinstance(
@@ -165,6 +199,14 @@ class CommanderProcessResult:
             raise CommanderProtocolError('commander exit_code 必须是整数')
         if self.exit_code == 0 and self.failure_kind is not None:
             raise CommanderProtocolError('exit 0 不能携带 failure_kind')
+        if self.final_response is not None and (
+                not isinstance(self.final_response, str)
+                or not self.final_response.strip()):
+            raise CommanderProtocolError(
+                'final_response 若出现就必须是非空字符串')
+        if self.exit_code != 0 and self.final_response is not None:
+            raise CommanderProtocolError(
+                '非 0 commander 进程不得交付 final_response')
 
 
 class CommanderRunner(Protocol):
@@ -400,6 +442,7 @@ class CommanderDriver(ABC):
         env_overrides: Mapping[str, str] | None = None,
         cli_version: str | None = None,
         resume_provider_session_id: str | None = None,
+        structured_response: bool = False,
     ) -> CommanderInvocation:
         """冻结展示与真跑共用的唯一 invocation。"""
 
@@ -503,6 +546,21 @@ class CliCommanderDriver(CommanderDriver):
     ) -> CommanderObservation:
         """把已解析的协议事件归一；不读取 stderr 猜身份。"""
 
+    def _final_response(
+        self, events: Sequence[Mapping[str, Any]],
+    ) -> str | None:
+        """从成功协议流取 provider 最终文本；子类只读已知信封。"""
+        del events
+        return None
+
+    def _validate_structured_events(
+        self,
+        events: Sequence[Mapping[str, Any]],
+        observation: CommanderObservation,
+    ) -> None:
+        """验证只读 reviewer 的协议能力边界；driver 可按事件协议收紧。"""
+        del events, observation
+
     def _decode(
         self,
         stdout: str,
@@ -510,12 +568,26 @@ class CliCommanderDriver(CommanderDriver):
         profile: AgentProfile,
         exit_code: int,
         expected_provider_session_id: str | None,
-    ) -> CommanderObservation:
+        structured_response: bool,
+    ) -> tuple[CommanderObservation, str | None]:
         events = jsonl_events(
             stdout, provider=self.provider_label, allow_empty=exit_code != 0)
-        return self._decode_events(
+        observation = self._decode_events(
             events, profile=profile, exit_code=exit_code,
             expected_provider_session_id=expected_provider_session_id)
+        if structured_response and exit_code == 0:
+            self._validate_structured_events(events, observation)
+        # 非 0 轮次里即使曾出现 agent message 也只是半截草稿，
+        # 不得交付或覆盖真实进程失败分类。
+        response = (
+            self._final_response(events)
+            if structured_response and exit_code == 0 else None)
+        if (structured_response and exit_code == 0
+                and (response is None or not response.strip())):
+            raise CommanderProtocolError(
+                f'{self.provider_label} 成功事件流没有最终结构化回答',
+                partial_observation=observation)
+        return observation, response
 
     provider_label: str = 'commander'
 
@@ -545,6 +617,12 @@ class CliCommanderDriver(CommanderDriver):
                     exc.events, profile=profile, exit_code=-1,
                     expected_provider_session_id=(
                         invocation.resume_provider_session_id))
+            except CommanderProtocolError:
+                # timeout 只描述进程树为何被终止，不能覆盖 wire 已经证明的
+                # 会话矛盾。尤其 exact resume 返回另一个 provider session
+                # 时，若吞成可重试 timeout，Supervisor 会把它误当成同席可续
+                # 或无 session relaunch，反而扩大串会话风险。
+                raise
             except CommanderError:
                 exc.partial_observation = None
             exc.wire_evidence = bool(exc.events) or (
@@ -560,17 +638,19 @@ class CliCommanderDriver(CommanderDriver):
             raise CommanderCommandError(
                 f'commander CLI 无法启动：{type(exc).__name__}') from exc
         exit_code = int(completed.returncode)
-        observation = self._decode(
+        observation, final_response = self._decode(
             _text(completed.stdout), profile=profile, exit_code=exit_code,
             expected_provider_session_id=(
-                invocation.resume_provider_session_id))
+                invocation.resume_provider_session_id),
+            structured_response=invocation.structured_response)
         wire_evidence = (
             observation.provider_session_id is not None
             or observation.usage is not None)
         if exit_code == 0:
             return CommanderProcessResult(
                 exit_code=exit_code, observation=observation,
-                wire_evidence=wire_evidence)
+                wire_evidence=wire_evidence,
+                final_response=final_response)
         kind, status, retryable = classify_agent_command_failure(
             _text(completed.stderr), usage=observation.usage)
         return CommanderProcessResult(

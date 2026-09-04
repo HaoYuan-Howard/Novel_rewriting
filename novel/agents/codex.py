@@ -335,9 +335,21 @@ class CodexDriver(CliAgentDriver):
             if completed.returncode != 0:
                 self._raise_for_exit(completed)
             raise
-        failed_event = next(
-            (event for event in events
-             if event.get('type') in ('turn.failed', 'error')), None)
+        last_completed = max(
+            (index for index, event in enumerate(events)
+             if event.get('type') == 'turn.completed'),
+            default=-1)
+        failed_turn = next(
+            (event for event in events if event.get('type') == 'turn.failed'),
+            None)
+        terminal_error = next(
+            (event for index, event in enumerate(events)
+             if event.get('type') == 'error' and index > last_completed),
+            None)
+        # Codex 会把 websocket/TLS 瞬断作为顶层 ``error:
+        # Reconnecting...`` 发出，重连成功后再发 turn.completed。
+        # 这种已被后续成功终态覆盖的过程事件不是轮次失败。
+        failed_event = failed_turn or terminal_error
         failed = completed.returncode != 0 or failed_event is not None
         # 启动前的 auth/config error 可以合法地没有 thread.started；先识别
         # 失败，才不会把一次命令失败误分成 wire 协议损坏。成功仍必须有 id。

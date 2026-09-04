@@ -528,6 +528,28 @@ def test_codex_start_uses_jsonl_output_schema_and_explicit_profile(tmp_path):
     assert '正文不该进摘要' not in summary and '{"status":"done"}' not in summary
 
 
+def test_codex_reconnecting_error_before_completed_is_a_recovered_event(
+        tmp_path):
+    """真实 CLI 会先报 Reconnecting，再以 turn.completed 收回同一轮。"""
+    lines = _codex_jsonl(
+        session_id='recovered-thread', content='{"status":"done"}').splitlines()
+    lines.insert(2, json.dumps({
+        'type': 'error',
+        'message': 'Reconnecting... 2/5 (tls handshake eof)',
+    }))
+    driver = CodexDriver(
+        executable='codex.exe',
+        runner=lambda argv, **_kwargs: _completed(argv, '\n'.join(lines)))
+
+    turn = driver.start(
+        _profile('codex'), _request(tmp_path, prompt='继续完成节点'))
+
+    assert turn.session_id == 'recovered-thread'
+    assert turn.content == '{"status":"done"}'
+    assert turn.turn_count == 1
+    assert turn.usage.total_tokens == 38
+
+
 def test_codex_resume_uses_exec_resume_same_id_schema_and_cwd(tmp_path):
     seen: list[list[str]] = []
     seen_cwds: list[str] = []

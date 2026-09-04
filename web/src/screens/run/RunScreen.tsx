@@ -1,4 +1,4 @@
-import { useId, useRef, useState } from 'react'
+import { useEffect, useId, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { keepPreviousData, useQueries, useQuery } from '@tanstack/react-query'
 import { api } from '@/api/endpoints'
@@ -218,7 +218,8 @@ function EventRow({ e }: { e: RunEvent }) {
  * 互斥不归前端管 —— 服务端 409（JobConflict）是裁决，这里只把记录画出来。
  */
 function AgentRunBlock() {
-  const runs = useAgentRuns()
+  const [resumingRunId, setResumingRunId] = useState<string | null>(null)
+  const runs = useAgentRuns(undefined, resumingRunId !== null)
   const latest = runs.data?.runs[0] ?? null
   const activeEpoch = latest?.epochs.find((epoch) => epoch.epoch_id === latest.active_epoch_id) ?? null
   const shownEpoch = activeEpoch ?? latest?.epochs.at(-1) ?? null
@@ -228,6 +229,24 @@ function AgentRunBlock() {
   const pause = usePauseAgentRun()
   const resume = useResumeAgentRun()
   const stop = useStopAgentRun()
+
+  useEffect(() => {
+    if (resumingRunId === null) return
+    if (latest?.run_id === resumingRunId && latest.state === 'paused') return
+    setResumingRunId(null)
+  }, [latest?.run_id, latest?.state, resumingRunId])
+
+  useEffect(() => {
+    if (resumingRunId === null) return
+    // 202 的响应可能丢在网络途中：这段窗口继续按服务端快照收敛，不能因
+    // mutation onError 立刻停轮询。若服务端确实没有受理，15 秒后恢复重试入口。
+    const timer = window.setTimeout(() => {
+      setResumingRunId((current) => (
+        current === resumingRunId ? null : current
+      ))
+    }, 15_000)
+    return () => window.clearTimeout(timer)
+  }, [resumingRunId])
 
   const stateChip = (state: AgentRunState) => {
     if (state !== 'pending' && state !== 'paused') return <JobStateChip state={state} />
@@ -295,14 +314,19 @@ function AgentRunBlock() {
               {latest.allowed_controls.includes('resume') && !confirmingStop ? (
                 <button
                   type="button"
-                  disabled={resume.isPending}
-                  onClick={() => resume.mutate(latest.run_id)}
+                  disabled={resume.isPending || resumingRunId === latest.run_id}
+                  onClick={() => {
+                    setResumingRunId(latest.run_id)
+                    resume.mutate(latest.run_id)
+                  }}
                   className={cx(
                     'rounded-btn border-none bg-ink px-12 py-6 text-body font-semibold text-card',
-                    resume.isPending ? 'cursor-not-allowed opacity-40' : 'cursor-pointer',
+                    resume.isPending || resumingRunId === latest.run_id
+                      ? 'cursor-not-allowed opacity-40'
+                      : 'cursor-pointer',
                   )}
                 >
-                  继续
+                  {resumingRunId === latest.run_id ? '恢复中…' : '继续'}
                 </button>
               ) : null}
               {latest.allowed_controls.includes('stop') && !confirmingStop ? (

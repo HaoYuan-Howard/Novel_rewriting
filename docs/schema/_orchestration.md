@@ -387,8 +387,8 @@ secret/relation/world-rule UNVER；后者仍是 disclosure-ready 而不是 PASS�
 `operator next`：ready 交确定性 execution-token 主路；只有下一个状态仍是登记的 reviewer blocker 才
 继续审阅。普通 blocker 可精确续同一 provider session；Stage2 global 是显式例外，固定为“一次
 Executor + 最多四席 Commander”，且每席都开新的 logical/provider session。第一席可在
-Blueprint 逐章生成期间只读预审：它读取 v4 完整 Global/MainText workpack，把 typed 输出留在 service
-scratch；Blueprint 落盘后只核业务 SHA 与 workpack SHA 后重绑 live surface，不把 provider session
+Blueprint 逐章生成期间只读预审：它读取 v4 完整 Global/MainText workpack，只在 provider
+最终回答中交付裸 typed JSON；Supervisor 复用现役 loader 严格验证后才原子物化到 service scratch。Blueprint 落盘后只核业务 SHA 与 workpack SHA 后重绑 live surface，不把 provider session
 身份当成连续性前件。预审 Commander 与 Blueprint executor 共同竞争 `min(4, NOVEL_CONCURRENCY)` 个
 OS 文件锁槽；配置 1 时串行，不增加任一时刻并发。
 
@@ -769,9 +769,9 @@ Output/_service/ledger.jsonl      跨书逐请求成本事实
 Output/_service/*.jsonl.lock      上面九类 JSONL 各自的追加锁载体（见下）
 Output/_service/uploads/…         浏览器上传的原始小说字节
 Output/_service/edits/<sid>/…     交给 CLI 的一次性 typed 编辑稿、人工决定或批处理 manifest
-Output/_service/edits/<sid>/reviewer-action-<sha>.json 已通过 typed loader 的 Commander approval 决定：内容寻址、可零模型重放（R-11.25）
+Output/_service/edits/<sid>/reviewer-action-<sha>.json 已通过 typed loader 的 Commander 可执行决定：approval 或 Stage0/6/7 node 二选一内容寻址、可零模型重放（R-11.25）
 Output/_service/runs/<sid>/stage2/global_review_ledgers/<sha>.json Stage2 Global/MainText 审阅的四席 Commander 账（v2：席 1～3 审阅/订正、席 4 只读终审；每席下记 launch/resume attempts）、fresh session 与单调进展账；旧 pre-spawn 假预留只经 hash-bound reconcile 移入带 actor/reason/负证据 hash 的 reconciliations；旧 v1 三席账拒读，只能经 `reconcile --stage2-review-reopen` 带 actor/reason 整体移入 `archived_ledgers` 后开空账；不含正文
-Output/_service/runs/<sid>/reviewer_seats/<blocker>/<business_sha256>.json 非 Stage2 reviewer blocker 的席位账（`ReviewerSeatLedger`）：同一业务主体上首轮 review + 至多 `COMMANDER_REVIEWER_MAX_CORRECTIONS` 轮 correction，同席共用一个 logical/provider session，每轮下记 attempts；重启不返还，surface 变化即新账新席
+Output/_service/runs/<sid>/reviewer_seats/<blocker>/<business_sha256>.json 非 Stage2 reviewer blocker 的席位账（`ReviewerSeatLedger`）：同一稳定业务主体上只准一轮 review + 至多 `COMMANDER_REVIEWER_MAX_CORRECTIONS` 轮 correction，持久保存 pending 拒因/请求 identity/provider session 与每轮 attempts；重启或纯 code/surface 运输漂移不返还/不新开首审，真实 token/Stage0 revision/全文主体变化才开新账
 Output/_service/runs/<sid>/sessions/<session_run_id>.json Commander 一席的在线 provider session 指针（`CommanderSessionPointer`）：首个协议事件到达即写，同席 resume 原地覆盖；hash-bound 到本次 prompt/schema/profile，只是运维事实，不是审计账也不是预算（R-11.26）
 Output/_service/approvals/<sid>.json 人工闸门、已阅状态与 canonical 写作授权（原子替换）
 ```

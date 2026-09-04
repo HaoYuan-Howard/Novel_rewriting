@@ -21,6 +21,7 @@ test_skill_operator.py —— 把 `novel-pipeline-operator` skill 的漂移守�
 """
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import json
 import re
@@ -1122,12 +1123,33 @@ def test_stage0_workpack_zero_removal_uses_fixed_review_patterns_and_keeps_decis
         if item['key'] == 'platform_name')
     assert platform['hits'] == 1
     assert platform['contexts'][0]['matched'] == '红袖添香'
-    assert 'chapters' not in payload, '章号与连续性属于 Stage1，不得扩大 Stage0 阅读面'
+    assert 'chapters' not in payload, '不得在 Stage0 另造章节裁决结果'
+    denominator = payload['structure_denominator']
+    assert denominator['source'] == 'novel.core.ingest.scan_text'
+    assert denominator['chapter_numbers_in_source_order'] == [1, 2]
+    assert denominator['chapter_markers'] == [
+        {'chapter_no': 1, 'line': 3, 'source_line': '1'},
+        {'chapter_no': 2, 'line': 5, 'source_line': '2'},
+    ]
+    assert denominator['before_first_chapter_marker'] == {
+        'state': 'available',
+        'nonempty_line_count': 1,
+        'nonempty_lines': [{'line': 1, 'text': '文案首句'}],
+        'human_classification': None,
+    }
+    assert denominator['order_or_continuity_decision'] is None
     assert isinstance(payload['production_nonbody_markers'], list)
     assert isinstance(payload['production_end_marker_present'], bool)
     assert payload['boundaries']['first_nonempty_lines'][0] == '文案首句'
     assert payload['boundaries']['last_nonempty_lines'][-1] == '完整收束句。'
+    assert payload['retained_review_material']['scope'] == 'complete_current_clean_text'
+    assert payload['retained_review_material']['text'] == text
+    assert payload['retained_review_material']['code_points'] == len(text)
+    assert payload['retained_review_material']['text_sha256'] == hashlib.sha256(
+        text.encode('utf-8')).hexdigest()
     assert '待确认' in payload['approval_reason_draft']
+    assert '按原序=[1, 2]' in payload['approval_reason_draft']
+    assert '首个章号前非空行=1' in payload['approval_reason_draft']
     assert {'stage0_report', 'stage0_segments', 'run_check_only', 'readonly_ctx'} <= set(calls)
 
 
@@ -1172,9 +1194,77 @@ def test_stage0_workpack_leaves_out_of_order_chapter_markers_to_stage1(
     payload = workpack.build_workpack(tmp_path, '42')
 
     assert 'chapters' not in payload
+    assert payload['structure_denominator']['chapter_numbers_in_source_order'] == [1, 3, 2]
+    assert payload['structure_denominator']['order_or_continuity_decision'] is None
     assert '章序' not in payload['approval_reason_draft']
     assert payload['boundaries']['first_nonempty_lines'][0] == '1'
     assert payload['boundaries']['last_nonempty_lines'][-1] == '第二章。'
+
+
+def test_stage0_workpack_carries_numeric_chapter_body_that_regex_cannot_classify(
+        monkeypatch, tmp_path):
+    """纯数字章号下的番外语义没有结构或词表信号；只有全文可供人读。"""
+    workpack = _operator_script('stage0_review_workpack')
+    text = (
+        '1\n她们在大雨里等到了彼此。\n'
+        '2\n多年后，另一个人讲起两人离开主线后的生活。\n')
+    _wire_stage0_workpack(
+        monkeypatch, tmp_path, workpack, text=text,
+        segments=[_stage0_segment(text, 0)])
+
+    payload = workpack.build_workpack(tmp_path, '42')
+
+    assert payload['reverse_scan']['total_hits'] == 0
+    assert payload['production_candidates_not_selected'] == []
+    assert payload['retained_review_material']['text'] == text
+    assert '另一个人讲起两人离开主线后的生活' in \
+        payload['retained_review_material']['text']
+    assert payload['automated_decision'] is None
+
+
+def test_stage0_workpack_reports_no_chapter_marker_without_treating_the_book_as_preface(
+        monkeypatch, tmp_path):
+    workpack = _operator_script('stage0_review_workpack')
+    text = '正文第一句。\n\n正文收束句。\n'
+    _wire_stage0_workpack(
+        monkeypatch, tmp_path, workpack, text=text,
+        segments=[_stage0_segment(text, 0)])
+
+    payload = workpack.build_workpack(tmp_path, '42')
+
+    denominator = payload['structure_denominator']
+    assert denominator['chapter_marker_count'] == 0
+    assert denominator['chapter_numbers_in_source_order'] == []
+    assert denominator['before_first_chapter_marker'] == {
+        'state': 'no_chapter_marker',
+        'nonempty_line_count': None,
+        'nonempty_lines': [],
+        'human_classification': None,
+    }
+    assert '首章前文案区=不适用（生产词法未识别到章号行）' in \
+        payload['approval_reason_draft']
+    assert '文案区定性=待确认' not in payload['approval_reason_draft']
+
+
+def test_stage0_workpack_does_not_request_classification_for_empty_prefix(
+        monkeypatch, tmp_path):
+    workpack = _operator_script('stage0_review_workpack')
+    text = '1\n第一章。\n'
+    _wire_stage0_workpack(
+        monkeypatch, tmp_path, workpack, text=text,
+        segments=[_stage0_segment(text, 0)])
+
+    payload = workpack.build_workpack(tmp_path, '42')
+
+    assert payload['structure_denominator']['before_first_chapter_marker'] == {
+        'state': 'available',
+        'nonempty_line_count': 0,
+        'nonempty_lines': [],
+        'human_classification': None,
+    }
+    assert '首个章号前非空行=0（无材料需文案区定性）' in \
+        payload['approval_reason_draft']
+    assert '文案区定性=待确认' not in payload['approval_reason_draft']
 
 
 def test_stage0_workpack_source_unavailable_stops_instead_of_faking_an_empty_review(

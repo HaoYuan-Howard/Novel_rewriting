@@ -93,6 +93,48 @@ def _codex_stream() -> str:
     return ''.join(json.dumps(event) + '\n' for event in events)
 
 
+def _codex_structured_stream(
+        response: str = '{"schema":"review-v1"}', *,
+        transient_error: bool = False,
+        terminal_error: bool = False,
+        tool_item_type: str | None = None) -> str:
+    events: list[dict[str, object]] = [
+        {
+            'type': 'thread.started', 'thread_id': 'codex-thread-structured',
+            'model': 'gpt-5.6-sol', 'reasoning_effort': 'max',
+        },
+        {'type': 'turn.started'},
+    ]
+    if transient_error:
+        events.append({
+            'type': 'error',
+            'message': 'Reconnecting... 2/5 (tls handshake eof)',
+        })
+    if tool_item_type is not None:
+        events.append({
+            'type': 'item.completed',
+            'item': {'type': tool_item_type, 'command': 'Get-Content secret'},
+        })
+    events.extend((
+        {
+            'type': 'item.completed',
+            'item': {'type': 'agent_message', 'text': response},
+        },
+        {
+            'type': 'turn.completed',
+            'usage': {
+                'input_tokens': 43_944,
+                'cached_input_tokens': 32_640,
+                'output_tokens': 1_549,
+                'reasoning_output_tokens': 849,
+            },
+        },
+    ))
+    if terminal_error:
+        events.append({'type': 'error', 'message': 'terminal failure'})
+    return ''.join(json.dumps(event) + '\n' for event in events)
+
+
 def test_claude_invocation_is_exact_and_prompt_only_uses_stdin(tmp_path):
     repo = tmp_path / 'repo'
     base = tmp_path / 'outputs'
@@ -202,6 +244,57 @@ def test_codex_invocation_freezes_auto_review_and_executor_egress(tmp_path):
     assert invocation.cli_version == '0.148.test'
 
 
+def test_codex_reviewer_invocation_is_read_only_and_has_no_egress(tmp_path):
+    repo = tmp_path / 'repo'
+    scratch = tmp_path / 'scratch'
+    repo.mkdir()
+    scratch.mkdir()
+    driver = CodexCommanderDriver(
+        executable='codex.exe', runner=lambda *a, **k: None)
+
+    invocation = driver.build_invocation(
+        _profile('codex'), 'review JSON', repo=repo, base=scratch,
+        structured_response=True, cli_version='0.148.test')
+
+    assert invocation.argv == (
+        driver.executable, 'exec', '--json',
+        '--model', 'gpt-5.6-sol',
+        '--config', 'model_reasoning_effort="max"',
+        '--config', 'approval_policy="never"',
+        '--config', 'sandbox_mode="read-only"',
+        '--ignore-user-config', '--ignore-rules', '--strict-config',
+        '--skip-git-repo-check', '--cd', str(scratch.resolve()), '-')
+    assert invocation.cwd == str(scratch.resolve())
+    assert invocation.structured_response is True
+    assert '--approve-for-me' not in invocation.argv
+    assert '--add-dir' not in invocation.argv
+    assert 'sandbox_workspace_write.network_access=true' not in invocation.argv
+    assert '--dangerously-bypass-approvals-and-sandbox' not in invocation.argv
+
+
+def test_claude_reviewer_invocation_disables_all_builtin_tools(tmp_path):
+    repo = tmp_path / 'repo'
+    scratch = tmp_path / 'scratch'
+    repo.mkdir()
+    scratch.mkdir()
+    driver = ClaudeCodeCommanderDriver(
+        executable='claude.exe', runner=lambda *a, **k: None)
+
+    invocation = driver.build_invocation(
+        _profile('claude-code'), 'review JSON', repo=repo, base=scratch,
+        structured_response=True)
+
+    assert invocation.cwd == str(scratch.resolve())
+    assert invocation.structured_response is True
+    assert ('--tools', '') == invocation.argv[
+        invocation.argv.index('--tools'):invocation.argv.index('--tools') + 2]
+    assert ('--permission-prompts', 'none') == invocation.argv[
+        invocation.argv.index('--permission-prompts'):
+        invocation.argv.index('--permission-prompts') + 2]
+    assert '--add-dir' not in invocation.argv
+    assert '--allowedTools' not in invocation.argv
+
+
 def test_invocation_copies_environment_overrides_into_an_immutable_snapshot(tmp_path):
     repo = tmp_path / 'repo'
     base = tmp_path / 'base'
@@ -274,6 +367,146 @@ def test_run_decodes_provider_observation_and_keeps_logs_split(
     rendered_log = log.getvalue()
     assert b'[stdout protocol]\n' in rendered_log
     assert b'[stderr]\n' in rendered_log
+
+
+def test_codex_reconnecting_error_before_completed_keeps_final_response(tmp_path):
+    repo = tmp_path / 'repo'
+    scratch = tmp_path / 'scratch'
+    repo.mkdir()
+    scratch.mkdir()
+    response = '{"schema":"novel-reviewer-action-v1","action":{}}'
+    driver = CodexCommanderDriver(
+        executable='codex.exe',
+        runner=lambda argv, **_kwargs: _completed(
+            argv, _codex_structured_stream(
+                response, transient_error=True)))
+    invocation = driver.build_invocation(
+        _profile('codex'), 'review', repo=repo, base=scratch,
+        structured_response=True)
+
+    result = driver.run(invocation, log=io.BytesIO(), run_id='reconnected')
+
+    assert result.exit_code == 0
+    assert result.final_response == response
+    assert result.observation.provider_session_id == 'codex-thread-structured'
+    assert result.observation.usage is not None
+    assert result.observation.usage.prompt_tokens == 43_944
+    assert result.observation.usage.completion_tokens == 1_549
+    assert result.observation.usage.reasoning_tokens == 849
+    assert result.wire_evidence is True
+
+
+@pytest.mark.parametrize('item_type', [
+    'command_execution', 'file_change', 'mcp_tool_call', 'web_search',
+    'future_unknown_item',
+])
+def test_codex_structured_reviewer_rejects_every_tool_or_unknown_item(
+        tmp_path, item_type):
+    """Codex 无空工具 argv；协议亲见任何 tool item 时 typed 回答不得交付。"""
+    repo = tmp_path / 'repo'
+    scratch = tmp_path / 'scratch'
+    repo.mkdir()
+    scratch.mkdir()
+    driver = CodexCommanderDriver(
+        executable='codex.exe',
+        runner=lambda argv, **_kwargs: _completed(
+            argv, _codex_structured_stream(tool_item_type=item_type)))
+    invocation = driver.build_invocation(
+        _profile('codex'), 'review', repo=repo, base=scratch,
+        structured_response=True)
+
+    with pytest.raises(CommanderProtocolError, match=item_type) as caught:
+        driver.run(invocation, log=io.BytesIO(), run_id='tool-refused')
+
+    assert caught.value.partial_observation is not None
+    assert caught.value.partial_observation.provider_session_id == (
+        'codex-thread-structured')
+
+
+def test_codex_terminal_error_after_completed_keeps_partial_observation(tmp_path):
+    repo = tmp_path / 'repo'
+    scratch = tmp_path / 'scratch'
+    repo.mkdir()
+    scratch.mkdir()
+    driver = CodexCommanderDriver(
+        executable='codex.exe',
+        runner=lambda argv, **_kwargs: _completed(
+            argv, _codex_structured_stream(terminal_error=True)))
+    invocation = driver.build_invocation(
+        _profile('codex'), 'review', repo=repo, base=scratch,
+        structured_response=True)
+
+    with pytest.raises(CommanderProtocolError, match='最后终态') as info:
+        driver.run(invocation, log=io.BytesIO(), run_id='terminal-error')
+
+    exc = info.value
+    assert exc.partial_observation is not None
+    assert exc.partial_observation.provider_session_id == 'codex-thread-structured'
+    assert exc.partial_observation.usage is not None
+    assert exc.partial_observation.usage.prompt_tokens == 43_944
+    assert exc.wire_evidence is True
+
+
+def test_structured_success_without_final_message_is_protocol_error(tmp_path):
+    repo = tmp_path / 'repo'
+    scratch = tmp_path / 'scratch'
+    repo.mkdir()
+    scratch.mkdir()
+    driver = CodexCommanderDriver(
+        executable='codex.exe',
+        runner=lambda argv, **_kwargs: _completed(argv, _codex_stream()))
+    invocation = driver.build_invocation(
+        _profile('codex'), 'review', repo=repo, base=scratch,
+        structured_response=True)
+
+    with pytest.raises(CommanderProtocolError, match='没有最终结构化回答') as info:
+        driver.run(invocation, log=io.BytesIO(), run_id='missing-response')
+    assert info.value.partial_observation is not None
+    assert info.value.partial_observation.provider_session_id == 'codex-thread-1'
+
+
+def test_nonzero_structured_turn_never_delivers_partial_agent_message(tmp_path):
+    repo = tmp_path / 'repo'
+    scratch = tmp_path / 'scratch'
+    repo.mkdir()
+    scratch.mkdir()
+    driver = CodexCommanderDriver(
+        executable='codex.exe',
+        runner=lambda argv, **_kwargs: _completed(
+            argv, _codex_structured_stream('{"must":"not-deliver"}'),
+            'connection reset by peer', returncode=1))
+    invocation = driver.build_invocation(
+        _profile('codex'), 'review', repo=repo, base=scratch,
+        structured_response=True)
+
+    result = driver.run(invocation, log=io.BytesIO(), run_id='failed-response')
+    assert result.exit_code == 1
+    assert result.final_response is None
+    assert result.failure_kind == 'connection'
+
+    with pytest.raises(CommanderProtocolError, match='非 0 commander'):
+        commander_base.CommanderProcessResult(
+            exit_code=1, observation=result.observation,
+            final_response='{"invalid":"delivery"}')
+
+
+def test_claude_structured_result_delivers_final_response(tmp_path):
+    repo = tmp_path / 'repo'
+    scratch = tmp_path / 'scratch'
+    repo.mkdir()
+    scratch.mkdir()
+    events = [json.loads(line) for line in _claude_stream().splitlines()]
+    events[-1]['result'] = '{"schema":"novel-reviewer-action-v1"}'
+    stdout = ''.join(json.dumps(event) + '\n' for event in events)
+    driver = ClaudeCodeCommanderDriver(
+        executable='claude.exe',
+        runner=lambda argv, **_kwargs: _completed(argv, stdout))
+    invocation = driver.build_invocation(
+        _profile('claude-code'), 'review', repo=repo, base=scratch,
+        structured_response=True)
+
+    result = driver.run(invocation, log=io.BytesIO(), run_id='claude-review')
+    assert result.final_response == '{"schema":"novel-reviewer-action-v1"}'
 
 
 @pytest.mark.parametrize(
@@ -412,6 +645,44 @@ def test_timeout_surfaces_partial_observation_for_resume(
     for event in events:
         assert driver.session_id_of_event(event) == session_id
     assert driver.session_id_of_event({'type': 'turn.started'}) is None
+
+
+@pytest.mark.parametrize(
+    ('driver_cls', 'driver_name', 'events', 'actual_session_id'),
+    [
+        (CodexCommanderDriver, 'codex',
+         [{'type': 'thread.started', 'thread_id': 'forked-codex-thread'}],
+         'forked-codex-thread'),
+        (ClaudeCodeCommanderDriver, 'claude-code',
+         [{'type': 'system', 'subtype': 'init',
+           'session_id': 'forked-claude-session'}],
+         'forked-claude-session'),
+    ],
+)
+def test_timeout_resume_session_mismatch_remains_nonretryable_protocol_error(
+        tmp_path, driver_cls, driver_name, events, actual_session_id):
+    """进程超时不能洗掉 wire 已证明的 exact-resume 串会话。"""
+    repo = tmp_path / 'repo'
+    base = tmp_path / 'base'
+    repo.mkdir()
+    base.mkdir()
+    driver = driver_cls(
+        executable=('claude.exe' if driver_name == 'claude-code'
+                    else 'codex.exe'),
+        runner=_TimeoutRunner(events))
+    invocation = driver.build_invocation(
+        _profile(driver_name), '任务', repo=repo, base=base,
+        resume_provider_session_id='expected-session')
+
+    with pytest.raises(CommanderProtocolError, match='拒绝串错会话') as info:
+        driver.run(invocation, log=io.BytesIO(), run_id='mismatched-timeout')
+
+    exc = info.value
+    assert exc.failure_kind == 'protocol'
+    assert exc.retryable is False
+    assert exc.wire_evidence is True
+    assert exc.partial_observation is not None
+    assert exc.partial_observation.provider_session_id == actual_session_id
 
 
 class _OwnedRunner:
