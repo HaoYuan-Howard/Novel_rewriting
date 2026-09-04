@@ -190,3 +190,33 @@ def test_retired_repair_code_still_decodes_but_is_not_active() -> None:
     constraint = DesignRepairConstraint.model_validate({
         'code': 'structure_delta', 'scene_refs': [], 'opaque_aliases': []})
     assert constraint.code == 'structure_delta'
+
+
+def test_repair_code_semantics_and_examples_cover_exactly_the_active_codes() -> None:
+    """语义与示例的唯一来源在 invariants：键集与 active code 逐一对齐，示例可过现役 model。"""
+    from contracts.invariants import (
+        DESIGN_REPAIR_CODE_INSTRUCTIONS, DESIGN_REPAIR_CODES,
+        DESIGN_REPAIR_CONSTRAINT_EXAMPLES,
+        DESIGN_STRATEGY_REPLAN_CONSTRAINT_EXAMPLES,
+        DESIGN_STRATEGY_REPLAN_CONSTRAINT_INSTRUCTIONS,
+        DESIGN_STRATEGY_REPLAN_CONSTRAINTS,
+    )
+    from contracts.schema.api import (
+        DesignRepairConstraint, DesignStrategyReplanRuling,
+    )
+
+    assert tuple(DESIGN_REPAIR_CODE_INSTRUCTIONS) == DESIGN_REPAIR_CODES
+    assert tuple(DESIGN_REPAIR_CONSTRAINT_EXAMPLES) == DESIGN_REPAIR_CODES
+    assert 'structure_delta' not in DESIGN_REPAIR_CODE_INSTRUCTIONS
+    for code in DESIGN_REPAIR_CODES:
+        assert DESIGN_REPAIR_CODE_INSTRUCTIONS[code].strip()
+        parsed = DesignRepairConstraint.model_validate(
+            DESIGN_REPAIR_CONSTRAINT_EXAMPLES[code])
+        assert parsed.code == code
+    assert tuple(DESIGN_STRATEGY_REPLAN_CONSTRAINT_INSTRUCTIONS) == (
+        DESIGN_STRATEGY_REPLAN_CONSTRAINTS)
+    assert tuple(DESIGN_STRATEGY_REPLAN_CONSTRAINT_EXAMPLES) == (
+        DESIGN_STRATEGY_REPLAN_CONSTRAINTS)
+    for kind in DESIGN_STRATEGY_REPLAN_CONSTRAINTS:
+        assert DesignStrategyReplanRuling.model_validate(
+            DESIGN_STRATEGY_REPLAN_CONSTRAINT_EXAMPLES[kind]).kind == kind

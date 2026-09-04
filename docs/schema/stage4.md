@@ -135,6 +135,23 @@ id 与来源位置不公开；opaque alias 只在本章 subject 内闭合。
 约束仍用 `scene_refs/opaque_aliases`，新增 `narrative_relation` 必须携与 Stage2 同构、
 `enforcement=hard` 的 typed effect，端点不得再复制进无类型数组。各 code 的最小引用数只定义在
 `DESIGN_REPAIR_CONSTRAINT_ARITY`；reason 只作审计，不发给模型。
+
+各 repair code 的一句话语义只登记在 `contracts/invariants.py::DESIGN_REPAIR_CODE_INSTRUCTIONS`：
+Executor 的 repair prompt 与 Commander 工作包 `submission_options.allowed_values` 的
+`semantics / shapes` 共用同一句话，以及同一份经 `DesignRepairConstraint` 现场校验的最小示例
+（`DESIGN_REPAIR_CONSTRAINT_EXAMPLES`）；策略驳回的两种 kind 同理
+（`DESIGN_STRATEGY_REPLAN_CONSTRAINT_INSTRUCTIONS` / `_EXAMPLES`）。不外发 JSON Schema `$defs`。
+
+| code | 最少 scene_refs / opaque_aliases | 语义 |
+|---|---|---|
+| `entry_anchor` | 0 / 1 | 以给定 opaque_aliases 作为章首入口锚，按列表顺序优先 |
+| `ending_anchor` | 0 / 1 | 以给定 opaque_aliases 作为章尾收束锚，按列表顺序优先 |
+| `fact_grouping` | 0 / 2 | 重新组合给定 opaque_aliases 的落地场景，不新增或删除事实 |
+| `disclosure_order` | 0 / 2 | 按 opaque_aliases 列表的目标顺序重排披露 |
+| `noncontiguous_regroup` | 0 / 2 | 将给定 opaque_aliases 做非相邻重组，并保持因果/状态边界 |
+| `scene_goal` | 1 / 1 | 只调整 scene_refs 指向场景的目标，必须覆盖给定 opaque_aliases |
+| `binding_constraint_unsat` | 1 / 0 | 调整 scene_refs 指向场景的结构，使其可在后续关闭式证据绑定中实现 |
+| `narrative_relation` | 0 / 0 | 必须满足 typed HARD relation effect，不得用自由文本改写其端点或语义 |
 全局 basis 或策略变化使全章旧决定过期；单章业务变化只使该章过期。同一策略下、subject 完全相同的
 历史 accept 可由模板带 `source_decision_sha256` 复用，但仍须对当前整书重新提交一次，不静默代签。
 

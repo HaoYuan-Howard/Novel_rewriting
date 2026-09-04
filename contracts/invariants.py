@@ -542,6 +542,69 @@ DESIGN_REPAIR_CONSTRAINT_ARITY: Final = {
     # typed effect 承担精确端点；不再往两个无类型数组里重复搬运。
     'narrative_relation': (0, 0),
 }
+#: 每个 active repair code 的一句话语义。Executor 的 repair prompt 与 Commander
+#: 工作包 ``submission_options.allowed_values`` 共用这一份；退役码不登记。
+#: 没有这张表时 reviewer 只能去翻源码/测试猜字段含义，那正是它每轮多花的往返。
+DESIGN_REPAIR_CODE_INSTRUCTIONS: Final[Mapping[str, str]] = {
+    'entry_anchor': '以给定 opaque_aliases 作为章首入口锚，按列表顺序优先。',
+    'ending_anchor': '以给定 opaque_aliases 作为章尾收束锚，按列表顺序优先。',
+    'fact_grouping': '重新组合给定 opaque_aliases 的落地场景，不新增或删除事实。',
+    'disclosure_order': '按 opaque_aliases 列表的目标顺序重排披露。',
+    'noncontiguous_regroup': '将给定 opaque_aliases 做非相邻重组，并保持因果/状态边界。',
+    'scene_goal': '只调整 scene_refs 指向场景的目标，必须覆盖给定 opaque_aliases。',
+    'binding_constraint_unsat': (
+        '调整 scene_refs 指向场景的结构，使其可在后续关闭式证据绑定中实现。'),
+    'narrative_relation': (
+        '必须满足 typed HARD relation effect，不得用自由文本改写其端点或语义。'),
+}
+#: 每个 active repair code 一份**最小合法**示例（纯 dict；本模块不得 import pydantic）。
+#: 发给 reviewer 前必须经 ``DesignRepairConstraint`` 现场校验，示例与 schema 漂移
+#: 即在 build 时失败，不把过期形状发给模型。scene_ref 占位要换成本章 workpack 的
+#: scene id；alias 只示范 ``a_<16~64 hex>`` 格式，必须换成工作包里的真 alias。
+DESIGN_REPAIR_CONSTRAINT_EXAMPLES: Final[Mapping[str, Mapping[str, object]]] = {
+    'entry_anchor': {
+        'code': 'entry_anchor', 'scene_refs': [],
+        'opaque_aliases': ['a_00000000000000a1']},
+    'ending_anchor': {
+        'code': 'ending_anchor', 'scene_refs': [],
+        'opaque_aliases': ['a_00000000000000a1']},
+    'fact_grouping': {
+        'code': 'fact_grouping', 'scene_refs': [],
+        'opaque_aliases': ['a_00000000000000a1', 'a_00000000000000a2']},
+    'disclosure_order': {
+        'code': 'disclosure_order', 'scene_refs': [],
+        'opaque_aliases': ['a_00000000000000a1', 'a_00000000000000a2']},
+    'noncontiguous_regroup': {
+        'code': 'noncontiguous_regroup', 'scene_refs': [],
+        'opaque_aliases': ['a_00000000000000a1', 'a_00000000000000a2']},
+    'scene_goal': {
+        'code': 'scene_goal', 'scene_refs': ['<本章 workpack scene_ref>'],
+        'opaque_aliases': ['a_00000000000000a1']},
+    'binding_constraint_unsat': {
+        'code': 'binding_constraint_unsat',
+        'scene_refs': ['<本章 workpack scene_ref>'], 'opaque_aliases': []},
+    'narrative_relation': {
+        'code': 'narrative_relation', 'scene_refs': [], 'opaque_aliases': [],
+        'effect': {
+            'kind': 'story_before', 'enforcement': 'hard',
+            'before_alias': 'a_00000000000000a1',
+            'after_alias': 'a_00000000000000a2'}},
+}
+#: 策略驳回两种 typed 约束的语义与最小合法示例；与
+#: ``DesignStrategyReplanRuling._scope_matches_kind`` 的判据逐字对应。
+DESIGN_STRATEGY_REPLAN_CONSTRAINT_INSTRUCTIONS: Final[Mapping[str, str]] = {
+    'replace_reconstruction_strategy': (
+        '整书重构策略本身不成立，须换一份新策略；chapter_ordinals 必须为空。'),
+    'change_chapter_weights': (
+        '只修订指定章的权重；chapter_ordinals 必须升序、不重复地列出受影响章。'),
+}
+DESIGN_STRATEGY_REPLAN_CONSTRAINT_EXAMPLES: Final[
+        Mapping[str, Mapping[str, object]]] = {
+    'replace_reconstruction_strategy': {
+        'kind': 'replace_reconstruction_strategy', 'chapter_ordinals': []},
+    'change_chapter_weights': {
+        'kind': 'change_chapter_weights', 'chapter_ordinals': [1]},
+}
 #: Stage4B 模型可以报告的语义担忧。它们只作非阻断证据，不得被解释成
 #: 编译器不可满足证明；schema、prompt 与 HTTP 枚举共用这一份取值面。
 BINDING_CONCERN_CODES: Final = (

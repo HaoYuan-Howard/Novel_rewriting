@@ -244,7 +244,8 @@ B infeasible 终态，模板与 view 会同时发布其 concerns 和代码 proof
 2. 每章决定 `accept / request_repair`。拒绝理由必须指出该章可核证的问题；约束只选服务端枚举的
    repair code，并填写属于本章 subject 的 `scene_refs / opaque_aliases` 或与 Stage2 同构的 typed
    关系。每轮 repair 都携带当前问题与全部尚未关闭的历史约束；已关闭约束显式保留状态，不得静默
-   遗忘。不得凭空补证据，不得把自然语言 reason 当自由 prompt。
+   遗忘。不得凭空补证据，不得把自然语言 reason 当自由 prompt。约束语义与合法示例形状以工作包
+   `submission_options.allowed_values` 的 `semantics / shapes` 为准，不必再读源码或测试。
 3. 已接受且 subject 未变的历史章可由模板携带 `source_decision_sha256` 复用，但仍须核对并对当前
    整书主体原子提交；策略、truth/root/alias/review contract 变化使全章复用失效，单章变化只失效该章。
 4. 提交后只认 `design_review.state`。`repair_requested` 时执行服务端 action 中的

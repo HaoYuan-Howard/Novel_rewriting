@@ -25,9 +25,13 @@ from pydantic import TypeAdapter, ValidationError
 from contracts.artifacts import STAGE2_GLOBAL_EDIT, STAGE2_GLOBAL_REVIEW_DECISIONS
 from contracts.invariants import (
     DESIGN_CHAPTER_DECISIONS,
+    DESIGN_REPAIR_CODE_INSTRUCTIONS,
     DESIGN_REPAIR_CODES,
     DESIGN_REPAIR_CONSTRAINT_ARITY,
+    DESIGN_REPAIR_CONSTRAINT_EXAMPLES,
     DESIGN_STRATEGY_DECISIONS,
+    DESIGN_STRATEGY_REPLAN_CONSTRAINT_EXAMPLES,
+    DESIGN_STRATEGY_REPLAN_CONSTRAINT_INSTRUCTIONS,
     DESIGN_STRATEGY_REPLAN_CONSTRAINTS,
     REVIEWER_APPROVAL_SURFACES,
     STAGE5_CLOSURE_GROUPS,
@@ -37,8 +41,10 @@ from contracts.invariants import (
 from contracts.schema import ArtifactVersionError, decode_artifact, encode_artifact
 from contracts.schema.api import (
     BlueprintSeenRequest,
+    DesignRepairConstraint,
     DesignReviewRequest,
     DesignReviewTemplate,
+    DesignStrategyReplanRuling,
     OperatorNext,
     Stage5ClosureRequest,
     Stage5ClosureTemplate,
@@ -685,6 +691,28 @@ def _reviewed_global_edit_template(raw: Any, global_pack: dict[str, Any]) -> dic
         raise ReviewerTaskError('Stage2 reviewed GlobalEdit 骨架不符合 typed 契约') from exc
 
 
+def _constraint_shapes() -> dict[str, dict[str, Any]]:
+    """每个 active repair code 一份经现役 typed model 校验的最小合法示例。
+
+    示例从 ``contracts/invariants.py`` 的纯 dict 铸出，再经 ``DesignRepairConstraint``
+    现场校验：schema 与示例一旦漂移，build 直接失败，而不是把一份过期形状发给
+    模型。它是可执行 binding 的一部分——loader 用的就是同一个 model。
+    """
+    return {
+        code: DesignRepairConstraint.model_validate(
+            DESIGN_REPAIR_CONSTRAINT_EXAMPLES[code]).model_dump(mode='json')
+        for code in DESIGN_REPAIR_CODES
+    }
+
+
+def _replan_constraint_shapes() -> dict[str, dict[str, Any]]:
+    return {
+        kind: DesignStrategyReplanRuling.model_validate(
+            DESIGN_STRATEGY_REPLAN_CONSTRAINT_EXAMPLES[kind]).model_dump(mode='json')
+        for kind in DESIGN_STRATEGY_REPLAN_CONSTRAINTS
+    }
+
+
 def _submission_options(
     pack: dict[str, Any],
     current: OperatorNext,
@@ -938,6 +966,15 @@ def _submission_options(
                     DESIGN_STRATEGY_REPLAN_CONSTRAINTS),
                 'chapters[].decision': list(DESIGN_CHAPTER_DECISIONS),
                 'chapters[].constraints[].code': list(DESIGN_REPAIR_CODES),
+                # 语义与示例随包下发，reviewer 不必翻源码/测试猜字段；示例只在
+                # 这里，不进 exact_request，占位 alias 仍须换成工作包里的真 alias。
+                'chapters[].constraints[].semantics': dict(
+                    DESIGN_REPAIR_CODE_INSTRUCTIONS),
+                'chapters[].constraints[].shapes': _constraint_shapes(),
+                'strategy.replan_constraints[].semantics': dict(
+                    DESIGN_STRATEGY_REPLAN_CONSTRAINT_INSTRUCTIONS),
+                'strategy.replan_constraints[].shapes': (
+                    _replan_constraint_shapes()),
                 'chapters[].constraints[].minimum_refs': {
                     code: {
                         'scene_refs': DESIGN_REPAIR_CONSTRAINT_ARITY[code][0],

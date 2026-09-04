@@ -135,6 +135,47 @@ def test_approval_review_token_and_replay_document_bind_the_current_blocker():
         reviewer_tasks.replay_request_document(foreign, current)
 
 
+def test_design_option_publishes_constraint_semantics_and_validated_shapes(
+        monkeypatch):
+    """修复码语义与合法示例随包下发，示例经现役 typed model 校验；仍不外发 $defs。"""
+    from contracts.invariants import (
+        DESIGN_REPAIR_CODES, DESIGN_STRATEGY_REPLAN_CONSTRAINTS,
+    )
+    from contracts.schema.api import (
+        DesignRepairConstraint, DesignStrategyReplanRuling,
+    )
+
+    current = _current(queue.WAITING_ON_STAGE4_DESIGN_REVIEW)
+    monkeypatch.setattr(
+        reviewer_tasks, 'DesignReviewTemplate',
+        SimpleNamespace(model_validate=lambda raw: raw))
+    monkeypatch.setattr(
+        reviewer_tasks, '_compact_design_payload',
+        lambda _source: {
+            'review_token': 's4dr1_' + 'a' * 64, 'strategy': {}, 'chapters': []})
+    [option] = reviewer_tasks._submission_options(
+        {'_design_template': {}}, current, queue.WAITING_ON_STAGE4_DESIGN_REVIEW)
+    values = option['allowed_values']
+
+    assert set(values['chapters[].constraints[].semantics']) == set(DESIGN_REPAIR_CODES)
+    shapes = values['chapters[].constraints[].shapes']
+    assert set(shapes) == set(DESIGN_REPAIR_CODES)
+    for code, shape in shapes.items():
+        assert DesignRepairConstraint.model_validate(shape).code == code
+    assert shapes['narrative_relation']['effect']['enforcement'] == 'hard'
+    assert set(values['strategy.replan_constraints[].semantics']) == set(
+        DESIGN_STRATEGY_REPLAN_CONSTRAINTS)
+    replans = values['strategy.replan_constraints[].shapes']
+    assert set(replans) == set(DESIGN_STRATEGY_REPLAN_CONSTRAINTS)
+    for kind, shape in replans.items():
+        assert DesignStrategyReplanRuling.model_validate(shape).kind == kind
+    rendered = json.dumps(option, ensure_ascii=False)
+    assert '$defs' not in rendered and 'payload_json_schema' not in rendered
+    # 示例只住在 allowed_values；exact_request 里没有示例占位 alias。
+    assert 'a_00000000000000a1' not in json.dumps(
+        option['exact_request'], ensure_ascii=False)
+
+
 def test_design_template_projects_to_compact_single_token_request() -> None:
     """生产 GET template 的 subject/多 SHA 不得被 Commander 搬回 POST。"""
     template = SimpleNamespace(

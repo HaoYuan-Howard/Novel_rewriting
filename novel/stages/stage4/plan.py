@@ -35,7 +35,8 @@ from contracts.artifacts import (
 from typing import Any, NoReturn
 
 from contracts.invariants import (
-    BLIND_ALIAS_ALGORITHM, DESIGN_REVIEW_CONTRACT, FAILURE_STOP_OWNERS,
+    BLIND_ALIAS_ALGORITHM, DESIGN_REPAIR_CODE_INSTRUCTIONS,
+    DESIGN_REVIEW_CONTRACT, FAILURE_STOP_OWNERS,
 )
 from contracts.schema import artifact_spec
 from contracts.schema.api import (
@@ -2861,18 +2862,10 @@ def run_adopt_rejected(
         return landed
 
 
-_REPAIR_INSTRUCTION_TEMPLATES = {
-    # `structure_delta` 已退役（批次 2）：泛化重排指令退出 active 修复码，
-    # 新决定只接受带 scene/alias 的具体修复码；历史决定仍可解码。
-    'entry_anchor': '以给定 opaque_aliases 作为章首入口锚，按列表顺序优先。',
-    'ending_anchor': '以给定 opaque_aliases 作为章尾收束锚，按列表顺序优先。',
-    'fact_grouping': '重新组合给定 opaque_aliases 的落地场景，不新增或删除事实。',
-    'disclosure_order': '按 opaque_aliases 列表的目标顺序重排披露。',
-    'noncontiguous_regroup': '将给定 opaque_aliases 做非相邻重组，并保持因果/状态边界。',
-    'scene_goal': '只调整 scene_refs 指向场景的目标，必须覆盖给定 opaque_aliases。',
-    'binding_constraint_unsat': '调整 scene_refs 指向场景的结构，使其可在后续关闭式证据绑定中实现。',
-    'narrative_relation': '必须满足 typed HARD relation effect，不得用自由文本改写其端点或语义。',
-}
+# 修复码语义的唯一来源是 contracts/invariants.py::DESIGN_REPAIR_CODE_INSTRUCTIONS；
+# 本 repair prompt 与 Commander 工作包 submission_options 共用同一句话。
+# `structure_delta` 已退役（批次 2）：泛化重排指令退出 active 修复码，
+# 新决定只接受带 scene/alias 的具体修复码；历史决定仍可解码。
 
 
 def _repair_instruction_rows(
@@ -2925,7 +2918,7 @@ def _repair_instruction_rows(
             'opaque_aliases': [
                 global_to_local[alias] for alias in constraint.opaque_aliases],
             'effect': effect,
-            'instruction': _REPAIR_INSTRUCTION_TEMPLATES[constraint.code],
+            'instruction': DESIGN_REPAIR_CODE_INSTRUCTIONS[constraint.code],
         })
     return rows
 
