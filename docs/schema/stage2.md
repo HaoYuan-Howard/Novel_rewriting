@@ -1,6 +1,8 @@
 # Stage 2 当前契约
 
-Stage 2 产出四份严格 JSON，另收三份人产的 typed 请求/决策集：
+Stage 2 产出四份严格 JSON，另收三份人产的 typed 请求/决策集；三份内部
+恢复 artifact 只在 `--apply-edit` / Global `--revalidate` 动作尚未闭合或已有分类
+terminal 等待人工后继时存活，不计作阶段输出：
 
 | 路径 | 模型 | 生产节点 | 内容 |
 |---|---|---|---|
@@ -11,6 +13,9 @@ Stage 2 产出四份严格 JSON，另收三份人产的 typed 请求/决策集�
 | `stage2/global_review_decisions.json` | `GlobalReviewDecisionSet` v2 | 人工输入 | actor、逐项 subject hash 决定，或绑定完整 blocking scope/正文章全集的默认决定 + 逐项例外；UNVER 可显式请求完整组隔离，也可经同形 API 提交 |
 | `stage2/global_edit.json` | `GlobalEdit` v3 | 人工输入 | Stage2 typed 订正决策集（`stage2.global --emit-edit-template` 生成当前骨架，`--apply-edit` 消费） |
 | `stage2/blueprint_relation_edit.json` | `BlueprintRelationEdit` v1 | 人工输入 | hash-bound 的指定章完整叙事关系集合；`stage2.blueprint --apply-edit` 吃它，不是 producer 产物 |
+| `stage2/global_edit_input_commit.json` | `GlobalEditInputCommit` v1 | `stage2.global` 内部 WAL | 在改 canonical edit/failure 前冻结 sparse target、运输身份及 edit/failure/formal-journal baseline |
+| `stage2/global_edit_failure.json` | `GlobalEditFailure` v1 | `stage2.global` 内部恢复事实 | reviewed 动作精确区分 `canonical_pending / hard_gate / candidate_validation / post_edit_review` 并绑定 failed edit、修前 formal、source/workpack；普通 edit 以 `ordinary_hard_gate / ordinary_candidate_validation` 留下不伪造 reviewed 身份的 terminal |
+| `stage2/global_edit_commit.json` | `GlobalEditCommit` v1 | `stage2.global` 内部 WAL | 在改 Global/review/projection/INVALID/failure 前冻结 baseline、完整 typed target 与正式渲染 SHA；`action_kind` 区分 `apply_edit / revalidate`，后者从 target audit 冻结原 actor/reason，generic INVALID 可用 `null` 精确表达没有 action-owned canonical edit identity/既有 formal |
 
 四份正式产物与三份人工输入都使用当前 Pydantic `StrictModel`，未知字段拒收。运行时不升级旧形状，也不为
 缺失字段补默认值；需要进入普通 producer 的输入必须先按本文件的当前 schema 重新生成。旧
@@ -398,27 +403,46 @@ hinge 那一侧的 LCS 兜底本来就是禁的 ⇒ 那笔账**结构性恒空**
 WorldRuleResponse`。Reviewer submission option 只对模板实际开放的 collection 下发这份
 collection→member 映射，以及继承现役 operation model、专门化当前成员 model 后由 Pydantic
 现场生成的局部 JSON Schema；最终仍由同一个 `GlobalEdit` loader 与 producer 复验，不形成兼容别名
-或第二套写入语义。
+或第二套写入语义。父 model 还会跨同一 collection 的全部 operations 强制四条 ID
+不变量：`split` 输出不复用被拆主体；每个输入主体最多被 `delete/split` 触及一次；
+所有 `add/split` 输出 ID 唯一；全部输入 ID 与输出 ID 不相交。这四条不能从单个 operation
+的 JSON Schema 推出，因此 submission option 的 `allowed_values` 与 Reviewer prompt 也必须明示，
+非 compact 响应若违反则由 typed loader 返回不含主体值的严格白名单 reason code。
 
-### Headless Reviewer compact wire 与完整 canonical request
+### Headless Reviewer compact wire 与稀疏 canonical edit
 
 `submission_options[].exact_request` 仍保存 `novel-reviewer-action-v1` 的完整 canonical request；公开
 typed action、CLI producer 与书内 `global_edit.json` 的形状均未改变。只有 headless AgentRun 当前
 immutable task 的唯一 submission option 恰为 `stage2.global --apply-edit` 时，Commander response 才使用运输协议
 `novel-stage2-reviewer-delta-v1`：顶层只回传该 schema、唯一 `option_id`、
 `expected_exact_request_sha256` 与 `payload.edit`。动态 provider schema 从本次 exact request 铸造，
-只开放模板已有的顶层 edit 字段和稳定主体；patch/collection 的 `[]` 表示保留可信模板，
-setting/replacement 的 `null` 同样表示保留而非清空。patch 行若出现，必须提交该模板行已开放的全部
+只开放模板已有的顶层 edit 字段和稳定主体；patch/collection 的 `[]` 表示本次**不提交**
+该写口，setting/replacement 的 `null` 也只是运输层“不提交”，不是把完整模板的 no-op
+值带入业务 edit，也不是生产 replacement 里的“经复核清空”。patch 行若出现，必须提交该模板行已开放的全部
 字段；collection 行只交 `collection + operations`；`post_edit_review.decisions` 只交 item id、状态、理由、
 证据和 disposition。
 
-Supervisor 深拷贝同一 immutable exact request 后才应用这些 delta。完整 wrapper/action/flags、未变 patch
-行、actor、source/workpack/正文章集合、默认复核、review scope、每个 collection 的
-`expected_collection_sha256` 与每行 decision 的 `expected_subject_sha256` 均由模板可信注入，既不要求
-模型转抄，也不从自然语言猜值。组装器只证明 delta 没越出模板并可还原为现役 `GlobalEdit` 载体；组装后
-仍必须调用 `reviewer_tasks.load_action` 复验完整 submission binding，正式 producer 仍独占
+Supervisor 只从同一 immutable exact request 为**已提交**行注入不可编辑 binding，并构造一份稀疏
+canonical `GlobalEdit`；不再深拷贝全量 no-op 骨架。wrapper/action/flags、actor、source/workpack/
+正文章集合、默认复核、review scope、已提交 collection 的 `expected_collection_sha256` 与
+每行 decision 的 `expected_subject_sha256` 仍由模板可信注入，既不要求模型转抄，也不从自然语言猜值。
+组装后的输入顶层字段只能是 exact template 的子集，patch 与 collection 身份则必须是各自
+模板的无重复有序子序列，已提交行的字段集合必须逐字一致；完整旧 request 仍是该绑定的特例。
+reviewed template 含 `post_edit_review` 时稀疏 edit 也绝不能省略它。组装器只证明 delta 没越出模板并可还原为
+现役 `GlobalEdit` 载体；组装后仍必须调用 `reviewer_tasks.load_action` 复验 submission binding，正式 producer 仍独占
 apply → normalize → HARD → reenumerate/completeness 与最终原子写盘。尤其 surviving 旧项的判定不复制到
 组装器。
+
+correction 的 exact template 是上一轮被 canonical 边界分类拒绝的 **failed sparse edit**，
+不是一份新的空模板：未提交目标默认保留，patch 按稳定 identity 覆盖，collection 行按
+collection identity 完整替换 operations。撤销只接受 exact template 动态铸造的 opaque
+`drop_targets` 闭集；未知、重复及 update+drop 同目标均拒绝。顶层 `collection_edits: []`
+表示本轮不更新 collection；显式提交的 collection 行必须至少含一个 operation，不能再用
+`operations: []` 作为第二种隐式删除语义。显式 drop 后若不剩业务 delta，同样按 no-op 拒绝。
+sidecar 引入前的旧 wire 曾把 full template 行误写成显式 patch；legacy correction workpack
+因此在不改 raw edit/failure SHA 的前提下，对每个既有业务原子重走 exact formal 上的
+apply + normalize，只发布能证明形成净变化的 sparse 基线。空 collection scaffold 与写回
+formal 原值的行会被剔除；不能脱离其他原子独立验证的行保守保留，不能由压缩器猜测撤销。
 
 同一 task 若还开放 `--review-decisions`、隔离或其他合法 submission option，则继续使用完整
 `novel-reviewer-action-v1` provider response；transport 优化不得让任一可执行选项失去可达性。
@@ -446,7 +470,7 @@ delta+replace；既有成员的逐格 patch 可与同集合 delta 共存，但 d
 | 未知字段 / 空编辑 / 重复 ID 或 subject | 载体（`GlobalEdit`） | 顺序不能决定哪份人工决定生效 |
 | 同一集合既走 `collection_edits` 又完整 replace | 载体（`GlobalEdit`） | 两个成员写口争同一集合，结果依赖应用顺序 |
 | 同一 secret/world-rule/relation/arc-track 集合既逐项 patch 又完整 replace | 载体（`GlobalEdit`） | 两个字段写口争同一 subject，结果依赖应用顺序 |
-| collection SHA 漂移、delete/split 目标不存在、add/split 输出 ID 冲突或成员类型不符 | `TerminalState` / 载体 | 增量操作必须绑定精确旧集合并形成唯一闭合新集合 |
+| collection SHA 漂移、delete/split 目标不存在、split 复用输入 ID、输入/输出 ID 重复或相交、成员类型不符 | `TerminalState` / 载体 | 增量操作必须绑定精确旧集合并形成唯一闭合新集合 |
 | 完整人物/arc replacement 与同组任一局部写口混用 | 载体（`GlobalEdit`） | 完整替换会改变成员或下标身份，必须二选一 |
 | 同一人物的 address 既按下标 patch 又完整 replace | 载体（`GlobalEdit`） | replacement 会改变下标含义，必须二选一 |
 | 逐项 patch 的目标不存在；replacement 的人物目标不存在 | `TerminalState` | 错的是决策集，不该给它建 `.INVALID` |
@@ -466,6 +490,35 @@ HTTP/Commander 的一次性输入落在 `_service/edits/<sid>/global-edit-<uuid>
 edit、在内存应用并归一；no-op 在 canonical 写入前拒绝。确有变化时才以保留字段出现性的
 `exclude_unset` 形状原子写入书内 `stage2/global_edit.json`，后续 provenance 只绑定这份长期可复算
 输入；同步执行返回后可精确删除一次性 UUID 文件。
+
+canonical 化与正式 bundle 分两级 WAL。`GlobalEditInputCommit` 必须先于
+`global_edit.json` / pending failure 的首个 mutation 落稳；即使首次 edit 的 canonical
+路径尚不存在，operator 也只发布 exact
+`stage2.global --apply-edit stage2/global_edit.json`，permit 不把这个尚待生成的 target
+误作外部输入，而由 active surface seal + typed WAL 绑定。canonical 后 reviewed 动作用
+exact `canonical_pending` 承接，确定失败改写为分类 sidecar；成功与普通人工 edit 都先写
+`GlobalEditCommit(state=prepared)` 再逐件收敛 Global/review/projection、退休 INVALID/failure，
+readback 后才标 committed 并退休 input WAL。每个 live path 只接受 journal 冻结的 baseline
+或 target；第三态关闭式拒绝。若旧 committed journal 与新 input WAL 并存，以 WAL 记录的
+baseline SHA 判定它是上一动作，不能把旧 exit0 吞成新动作完成。
+
+HARD、候选 schema 失败与 reviewed post-review 失败都会先留下 typed
+`GlobalEditFailure`，再退休匹配 input WAL；硬杀在两者之间时，operator 仍先发布 canonical
+apply-edit 补尾，producer 只复验并关闭 WAL，不在 INVALID 上重施同一 patch。普通 terminal
+不会进入 Commander correction；它只暴露新 typed edit，或在 live INVALID 经不可变基线证明
+被人修改后暴露显式 `--revalidate`。reviewed 原始 INVALID 仍按当前同一 restore + normalize +
+HARD 尺子分流：仍有 HARD 才进入 correction，确定无 HARD 才以固定 system 身份零 wire 提升，
+人工改过则同样停在人类 successor 面，避免 formal sparse edit 覆盖人工候选。
+
+任何成功的 Global revalidate（普通、reviewed、legacy 或首次生成/purge/renormalize 留下的
+generic INVALID）都先写 `GlobalEditCommit(action_kind=revalidate,state=prepared)`，冻结 exact
+INVALID/failure、MainText、正式三伴产物 baseline/target 以及本次真实 revalidation audit；generic
+盘面没有可归属于本动作的 canonical GlobalEdit identity 或既有 formal 时分别以 `failed_edit_sha256=null`、
+`formal_sha256=null` 显式绑定，不伪造输入身份。恢复动作逐字复用 journal 中的 actor/reason，
+不能把人工提升改写成 system 审计。提交逐件收敛 Global/review/projection 并把 INVALID/failure
+收敛到 absent，完整 readback 后才 committed。planner 的优先级依次为 input WAL /
+`canonical_pending`、prepared formal journal、分类 terminal/correction，不能从 partial 正式面
+或旧 committed 记录猜动作已经完成。
 
 成功落盘会从新 `GlobalGrounding` 重新枚举 `global_review` 必审 surface。人工决定只在
 `item_id + kind + subject_path + subject_sha256` 四者均未变时继承；subject hash 绑定登记依赖闭包，

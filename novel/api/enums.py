@@ -68,6 +68,11 @@ _CONSUMED: dict[str, str] = {
 #: ⚠ 这张表**必须逐个列名**，不许写成「所有标量一律不发」那种规则：
 #: 那样新加一个标量会被**静默**挡住，而静默正是本模块要防的方向。
 _WITHHELD: dict[str, str] = {
+    'STAGE2_LEGACY_REVALIDATE_ACTOR': (
+        'legacy reviewed INVALID 自动提升的后端审计凭据；只由状态机生成并由'
+        '确定性 Executor 原样重放，前端不得选择或改写 actor'),
+    'STAGE2_LEGACY_REVALIDATE_REASON': (
+        '同上：它是固定 provenance reason，不是 UI 文案或可选恢复策略'),
     'STAGE2_COMMANDER_SEAT_PURPOSES': (
         'Stage2 Commander 席位语义只由 RunSupervisor 与持久席位账消费；页面只呈现'
         '后端已判定的 blocker/状态，另发枚举会让前端自算“还剩几席”'),

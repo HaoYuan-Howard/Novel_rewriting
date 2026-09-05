@@ -2537,6 +2537,13 @@ STAGE2_COMMANDER_MAX_SEATS: Final = 4
 #: 前三席才能承担 review/correction；第四席只保留给 ``final_review``，
 #: 于是“最后一个会话既修改又自证通过”在账本层就不可能成立。
 STAGE2_COMMANDER_MAX_EDIT_SEAT: Final = 3
+#: 存量 reviewed edit 的 INVALID 若按当前代码已无任何 HARD，只能由 Supervisor
+#: 用这组固定审计身份走 0-wire ``--revalidate``。固定值既避免伪装成人类决定，
+#: 也让 execution permit 能在首副作用前逐字关闭其它 actor/reason。
+STAGE2_LEGACY_REVALIDATE_ACTOR: Final = (
+    'system:stage2-legacy-invalid-recovery')
+STAGE2_LEGACY_REVALIDATE_REASON: Final = (
+    'legacy reviewed-edit INVALID passes current canonical HARD rules')
 #: 同一席位内的真实 CLI 进程尝试种类：``launch`` 是新进程首发，``resume`` 是
 #: 用供应商 exact session id 续接同一 provider 会话。两者都不新开席位。
 COMMANDER_ATTEMPT_KINDS: Final = ('launch', 'resume')

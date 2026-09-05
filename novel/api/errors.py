@@ -143,11 +143,10 @@ STATUS: dict[type[NovelError], int] = {
 
 #: **越不过 HTTP 边界的那些异常**，逐条写出为什么。它们不在 `STATUS` 里不是漏登记。
 #:
-#: ⚠⚠ 理由只有一条，而且是结构性的：`R-11.3` 规定**一切花钱的操作走子进程**。
-#: LLM 那一族只在真要发请求的那一刻抛，而那一刻发生在**子进程里**——
-#: 父进程看到的是一个退出码，不是一个异常对象。
-#: 于是给它们配一个状态码，等于**声称一件不会发生的事**，
-#: 而下一个人会以为「服务端处理过 LLM 失败」。
+#: ⚠⚠ 每条理由都必须是结构性的。LLM 那一族由 `R-11.3` 的付费子进程边界
+#: 隔开；少数 producer 私有控制流异常则在同一个 CLI 子进程内先转成 typed
+#: failure/退出码。两者的 HTTP 父进程看到的都只是作业退出码，而不是异常对象。
+#: 给它们配状态码等于声称服务进程会直接处理一件结构上到不了它的失败。
 #:
 #: ⚠⚠ **键是类名字符串，不是类对象**，而这不是图省事：
 #: 写成类对象就得 `from novel.llm... import ...`，于是**服务层在结构上够得到
@@ -160,6 +159,10 @@ STATUS: dict[type[NovelError], int] = {
 #: ⚠ 那条边界哪天松了（比如有人把付费路直接接进 HTTP 层），这张表要跟着改——
 #: 而上面那条测试会逼他先来读这段话。
 UNREACHABLE_OVER_HTTP: dict[str, str] = {
+    '_PostEditReviewRejected': (
+        'Stage2 reviewed-edit 修后复核的 producer 私有控制流；只在 canonical '
+        'CLI 子进程内抛出，并由 run_apply_edit 先落 typed GlobalEditFailure 后'
+        '映射为终态退出码，HTTP 父进程拿不到异常对象'),
     'ContextBudgetRefused': '供应商上下文预算预检在缓存/网络之前拒绝请求。它只由付费节点的'
                             'LLM 子进程抛出，父进程只看到终态退出码',
     'ResponseRepairRequired': '结构化响应在下一采之前暂停，等待受托 agent 修复或放弃。'

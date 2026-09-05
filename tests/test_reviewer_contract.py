@@ -64,6 +64,12 @@ def test_stage2_contract_closes_collection_operations_and_surviving_review():
     assert '`split` 只含 `op + subject_id + items`' in stage2
     assert '没有 `value` 字段' in stage2
     assert '按当前 collection 下发的成员 model 与局部 Pydantic schema' in stage2
+    assert '模板已有行的无重复有序子序列' in stage2
+    assert '`split` 输出不得复用该 `subject_id`' in stage2
+    assert '`delete/split` 触及的输入 ID 不得重复' in stage2
+    assert '`add/split` 产生的输出 ID 不得重复' in stage2
+    assert '全部输入 ID 与输出 ID 必须不相交' in stage2
+    assert '空数组与 setting/replacement 的 `null` 都表示本次不提交' in stage2
     assert '相同 `item_id + subject_sha256` 存活' in stage2
     assert '不能因逻辑上已随 edit 修好就省略' in stage2
     assert '`relation_set_complete` 的主体 hash 不变，仍须显式决定' in stage2

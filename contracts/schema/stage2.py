@@ -43,7 +43,7 @@ from contracts.invariants import (
 from contracts.schema.agent_wire import keyed_rows_to_mapping
 from contracts.schema.base import Fp10, StrictModel
 from contracts.schema.common import LlmProvenance, Sha256
-from contracts.schema.evaluation import GlobalReviewDecision
+from contracts.schema.evaluation import GlobalReview, GlobalReviewDecision
 
 #: 「谁在这么叫」。取值是**某个 `char_id`**，或 `ADDRESS_BY` 里那两个字面之一。
 #: ⚠ `ADDRESS_BY` 记的是**三类**（`char_id` 是类名不是值），所以这里必须写成模式，
@@ -1417,6 +1417,210 @@ class SameSceneRelation(StrictModel):
     def _pair_is_canonical(self) -> SameSceneRelation:
         if self.left_fact_ref >= self.right_fact_ref:
             raise ValueError('same_scene 端点必须按 fact_ref 严格升序规范化')
+        return self
+
+
+class GlobalEditFailure(StrictModel):
+    """canonical GlobalEdit 尚未提交 formal bundle 的持久失败/恢复事实。
+
+    reviewed 失败另绑 source/workpack，普通 edit terminal 明确禁止伪造这两格。
+    ``post_edit_review`` 与候选载体失败都没有 live ``.INVALID``；把两者伪装成
+    HARD 会让状态机误读失败性质。反向约束也钉死：真正 HARD 必须绑定那份 exact
+    INVALID 及非空规则集，其他失败则二者都不得出现。
+    """
+
+    failure_kind: Literal[
+        'canonical_pending', 'hard_gate', 'candidate_validation',
+        'post_edit_review', 'ordinary_hard_gate',
+        'ordinary_candidate_validation']
+    failed_edit_sha256: Sha256
+    formal_sha256: Sha256
+    expected_source_sha256: Sha256 | None = None
+    global_review_workpack_sha256: Sha256 | None = None
+    candidate_business_sha256: Sha256 | None = None
+    invalid_sha256: Sha256 | None = None
+    hard_hits: list[str] = Field(default_factory=list)
+    reason_code: str = Field(min_length=1, max_length=80,
+                             pattern=r'^[a-z0-9_]+$')
+    reason_summary: str = Field(min_length=1, max_length=512)
+    code_version: str = Field(min_length=1)
+
+    @model_validator(mode='after')
+    def _failure_shape_matches_kind(self) -> GlobalEditFailure:
+        if self.failure_kind in {'hard_gate', 'ordinary_hard_gate'}:
+            if self.invalid_sha256 is None or not self.hard_hits:
+                raise ValueError(
+                    'HARD failure 必须绑定 exact INVALID 与非空 hard_hits')
+        elif self.invalid_sha256 is not None or self.hard_hits:
+            raise ValueError(
+                '非 HARD reviewed-edit failure 不得伪造 INVALID/hard_hits')
+        reviewed = self.failure_kind in {
+            'canonical_pending', 'hard_gate', 'candidate_validation',
+            'post_edit_review',
+        }
+        if reviewed:
+            if (self.expected_source_sha256 is None
+                    or self.global_review_workpack_sha256 is None):
+                raise ValueError(
+                    'reviewed-edit failure 必须绑定 source/workpack')
+        elif (self.expected_source_sha256 is not None
+              or self.global_review_workpack_sha256 is not None):
+            raise ValueError(
+                '普通 GlobalEdit failure 不得伪造 reviewed source/workpack')
+        if self.failure_kind == 'canonical_pending':
+            if self.candidate_business_sha256 is not None:
+                raise ValueError(
+                    'canonical_pending 尚无已验证候选，不得声称 candidate identity')
+        elif self.candidate_business_sha256 is None:
+            raise ValueError(
+                'reviewed-edit 终态失败必须绑定候选业务 identity')
+        if len(self.hard_hits) != len(set(self.hard_hits)):
+            raise ValueError('reviewed-edit failure 的 hard_hits 不得重复')
+        if not self.reason_summary.strip() or not self.code_version.strip():
+            raise ValueError(
+                'reviewed-edit failure reason_summary/code_version 不得为空白')
+        return self
+
+
+class GlobalEditInputCommit(StrictModel):
+    """canonical edit 与 pending/superseded failure 的 action-target WAL。"""
+
+    submitted_transport_identity: str = Field(min_length=1, max_length=300)
+    reviewed_edit: bool
+    formal_sha256: Sha256
+    expected_source_sha256: Sha256 | None = None
+    global_review_workpack_sha256: Sha256 | None = None
+    baseline_edit_sha256: Sha256 | None
+    baseline_failure_sha256: Sha256 | None
+    baseline_formal_commit_sha256: Sha256 | None
+    # GlobalEdit 的 model_fields_set 本身就是业务语义；嵌套 BaseModel 做普通
+    # model_dump 会把未提交字段展开成显式 null，所以这里保存 sparse JSON object，
+    # validator 仍用唯一 GlobalEdit 模型逐字段收口。
+    target_edit: dict[str, object]
+    target_edit_sha256: Sha256
+    target_failure: GlobalEditFailure | None = None
+    target_failure_sha256: Sha256 | None = None
+    code_version: str = Field(min_length=1)
+
+    @model_validator(mode='after')
+    def _canonical_target_is_complete(self) -> GlobalEditInputCommit:
+        target_edit = GlobalEdit.model_validate(self.target_edit)
+        if self.reviewed_edit:
+            if (self.expected_source_sha256 is None
+                    or self.global_review_workpack_sha256 is None
+                    or self.target_failure is None
+                    or self.target_failure_sha256 is None):
+                raise ValueError(
+                    'reviewed canonical WAL 必须携 source/workpack/pending failure')
+            if target_edit.post_edit_review is None:
+                raise ValueError('reviewed canonical WAL 的 target edit 缺 attestation')
+            if self.target_failure.failure_kind != 'canonical_pending':
+                raise ValueError('canonical WAL target failure 必须是 canonical_pending')
+        elif any(value is not None for value in (
+                self.expected_source_sha256,
+                self.global_review_workpack_sha256,
+                self.target_failure,
+                self.target_failure_sha256,
+        )) or target_edit.post_edit_review is not None:
+            raise ValueError(
+                '普通 GlobalEdit canonical WAL 不得伪造 reviewed failure 身份')
+        if not self.code_version.strip():
+            raise ValueError('canonical WAL code_version 不得为空白')
+        return self
+
+
+class GlobalEditCommitBaseline(StrictModel):
+    """prepared 前冻结的 live 五件套；``None`` 精确表达当时缺失。"""
+
+    global_sha256: Sha256 | None
+    review_sha256: Sha256 | None
+    projection_sha256: Sha256 | None
+    invalid_sha256: Sha256 | None
+    failure_sha256: Sha256 | None
+
+
+class GlobalEditCommitTarget(StrictModel):
+    """可逐字重放的正式目标；payload 与正式渲染 SHA 必须双向互验。"""
+
+    global_grounding: GlobalGrounding
+    global_review: GlobalReview
+    blueprint_character_projection: BlueprintCharacterProjection
+    global_sha256: Sha256
+    review_sha256: Sha256
+    projection_sha256: Sha256
+
+
+class GlobalEditCommit(StrictModel):
+    """Stage2 Global 的 prepared/committed 可恢复正式 bundle 提交记录。
+
+    reviewed 与普通人工 edit 共用同一三伴产物提交面；区别只在前者额外绑定
+    attestation/workpack 与 pending failure。它不是 Commander failure，也不进入
+    节点 ``produces``。prepared 在任何 live companion mutation 前落稳；恢复只
+    接受每个路径仍为 baseline 或已为 target。首次生成、purge 或 renormalize 留下
+    的 generic INVALID 可没有归属于本动作的 GlobalEdit 身份，也可能没有既有正式
+    Global；这两格只由 ``action_kind=revalidate`` 的 ``None`` 显式表达。
+    """
+
+    state: Literal['prepared', 'committed']
+    action_kind: Literal['apply_edit', 'revalidate'] = 'apply_edit'
+    reviewed_edit: bool = True
+    submitted_transport_identity: str = Field(min_length=1, max_length=300)
+    # generic Global INVALID（首次生成/purge/renormalize HARD）没有归属于本动作的
+    # GlobalEdit identity，也可能还没有正式 Global；``None`` 只在 revalidate 表示
+    # 没有可绑定身份。apply-edit 与 reviewed/ordinary terminal revalidate 仍绑 SHA。
+    failed_edit_sha256: Sha256 | None
+    formal_sha256: Sha256 | None
+    expected_source_sha256: Sha256 | None = None
+    global_review_workpack_sha256: Sha256 | None = None
+    main_text_sha256: Sha256
+    baseline: GlobalEditCommitBaseline
+    target: GlobalEditCommitTarget
+    code_version: str = Field(min_length=1)
+
+    @model_validator(mode='after')
+    def _identity_matches_baseline(self) -> GlobalEditCommit:
+        if (self.reviewed_edit
+                and self.formal_sha256 != self.baseline.global_sha256):
+            raise ValueError('commit formal_sha256 必须等于 baseline Global SHA')
+        if self.action_kind == 'revalidate':
+            if self.baseline.invalid_sha256 is None:
+                raise ValueError(
+                    'revalidate commit 必须绑定 live INVALID baseline')
+            if self.formal_sha256 != self.baseline.global_sha256:
+                raise ValueError(
+                    'revalidate commit formal_sha256 必须等于 baseline Global SHA')
+            if self.reviewed_edit:
+                if (self.failed_edit_sha256 is None
+                        or self.expected_source_sha256 is None
+                        or self.global_review_workpack_sha256 is None):
+                    raise ValueError(
+                        'reviewed revalidate commit 必须绑定 edit/source/workpack')
+            elif (self.expected_source_sha256 is not None
+                  or self.global_review_workpack_sha256 is not None):
+                raise ValueError(
+                    'non-reviewed revalidate commit 不得伪造 reviewed source/workpack')
+            if (not self.reviewed_edit
+                    and self.baseline.failure_sha256 is not None
+                    and self.failed_edit_sha256 is None):
+                raise ValueError(
+                    'ordinary terminal revalidate 必须同时绑定 edit 与 failure')
+        elif self.reviewed_edit:
+            if (self.failed_edit_sha256 is None
+                    or self.formal_sha256 is None
+                    or self.expected_source_sha256 is None
+                    or self.global_review_workpack_sha256 is None
+                    or self.baseline.failure_sha256 is None):
+                raise ValueError(
+                    'reviewed commit 必须绑定 source/workpack/pending failure')
+        elif (self.failed_edit_sha256 is None
+              or self.formal_sha256 is None
+              or self.expected_source_sha256 is not None
+              or self.global_review_workpack_sha256 is not None
+              or self.baseline.failure_sha256 is not None):
+            raise ValueError(
+                '普通 GlobalEdit commit 不得伪造 reviewed failure 身份')
+        if not self.code_version.strip():
+            raise ValueError('commit code_version 不得为空白')
         return self
 
 

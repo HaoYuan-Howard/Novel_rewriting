@@ -6,8 +6,8 @@
 ``reviewer_tasks.load_action`` 仍拥有最终 binding 与业务判定。本模块只缩短
 Commander 必须返回的运输形状：
 
-* wrapper、不可编辑字段、patch 未变行、collection SHA、review scope 与 subject
-  SHA 都从 immutable ``submission_options[].exact_request`` 确定性注入；
+* wrapper、collection SHA、review scope 与 subject SHA 等 immutable binding 都从
+  ``submission_options[].exact_request`` 确定性注入；
 * Commander 只返回当前模板已经开放的 patch 行、collection operations、replacement
   与修后复核判断；
 * 最终仍组装成完整 ``novel-reviewer-action-v1`` document，再交现役 loader 复验。
@@ -15,8 +15,11 @@ Commander 必须返回的运输形状：
 不能用一份静态“所有字段都 Optional”的 Pydantic model：公共 agent JSON Schema 会
 依 OpenAI strict 规则把所有 properties 列为 required，显式 ``null`` 随后既可能被
 误当成清空，也会破坏生产 Patch 的 ``model_fields_set`` 语义。因此 schema 必须从
-当前可信模板动态铸造。patch 行缺席表示保留；一旦出现，则该模板行已经开放的字段
-全部显式交回。这样既保持 portable structured output，又不会让 Supervisor 猜业务值。
+当前可信模板动态铸造。初始轮中 patch 行缺席表示本次不提交，可信模板只关闭可编辑
+范围，不能被组装器复制成业务 patch；correction 的模板却是上一轮真实 failed sparse
+edit，缺席必须表示保留，并只能通过 exact-request 动态铸出的 ``drop_targets`` 显式
+撤销。这样既保持 portable structured output，又不会让 Supervisor 猜业务值或静默丢
+掉前一席已经正确的修订。
 """
 from __future__ import annotations
 
@@ -61,9 +64,33 @@ from contracts.schema.stage2 import (
     WorldRuleResponse,
 )
 from novel.agents.session_client import agent_json_schema
+from novel.orchestrator import queue
 
 
 WIRE_SCHEMA = 'novel-stage2-reviewer-delta-v1'
+
+
+# 这些文本逐字来自 ``GlobalCollectionEdit._operations_match_collection`` 的静态
+# model-validator 分支。这里只在完全相等时投影成无输入的稳定 reason code；未知
+# ``msg`` 仍只输出 Pydantic error type，绝不把可能含模型值的消息带进拒因/账本。
+_SAFE_VALIDATION_REASONS: dict[str, tuple[str, str]] = {
+    'Value error, split 输出不得复用被拆分 subject id': (
+        'collection_split_reuses_subject_id',
+        'split items 的稳定 id 不得复用被拆分的 subject_id',
+    ),
+    'Value error, 一个集合 subject 不能被 delete/split 多次': (
+        'collection_subject_touched_more_than_once',
+        '同一集合 subject 不得被 delete/split 多次',
+    ),
+    'Value error, 集合 add/split 输出 id 不得重复': (
+        'collection_output_id_duplicated',
+        'collection add/split 的输出 id 不得重复',
+    ),
+    'Value error, 集合操作的输入 id 与输出 id 不得重叠': (
+        'collection_input_output_id_overlap',
+        'collection operation 的输入 id 与输出 id 不得重叠',
+    ),
+}
 
 
 class Stage2ReviewerWireError(RuntimeError):
@@ -76,10 +103,23 @@ class _ReviewerTaskLike(Protocol):
 
 @dataclass(frozen=True)
 class Stage2ReviewerWireBinding:
-    """需要随 prompt 明示、也由动态 schema 固定的两枚响应身份。"""
+    """需要随 prompt 明示、也由动态 schema 固定的响应身份。"""
 
     option_id: str
     expected_exact_request_sha256: str
+    # correction 的 failed edit 是必须默认保留的可信业务基线。只有这里按
+    # exact request 动态铸出的 opaque target 才能被显式撤销；初始轮恒为空。
+    allowed_drop_targets: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class _DropTarget:
+    """correction 中一个可撤销的 failed-edit 业务目标。"""
+
+    kind: Literal['patch', 'field', 'collection']
+    field: str
+    identity: tuple[Any, ...] = ()
+    description: str = ''
 
 
 class Stage2PrereviewResponse(StrictModel):
@@ -211,12 +251,83 @@ def _apply_edit_option(
     return option_id, exact
 
 
+def _is_correction_task(
+    task: _ReviewerTaskLike, exact: Mapping[str, Any],
+) -> bool:
+    """只让冻结的 correction blocker 取得 merge/drop 语义。"""
+    exact_waiting_on = exact.get('waiting_on')
+    task_waiting_on = getattr(task, 'waiting_on', exact_waiting_on)
+    if ((exact_waiting_on == queue.WAITING_ON_STAGE2_EDIT_CORRECTION)
+            != (task_waiting_on == queue.WAITING_ON_STAGE2_EDIT_CORRECTION)):
+        raise Stage2ReviewerWireError(
+            'Stage2 compact reviewer task/exact_request 的 correction 身份不一致')
+    return exact_waiting_on == queue.WAITING_ON_STAGE2_EDIT_CORRECTION
+
+
+def _drop_target_map(edit: Mapping[str, Any]) -> dict[str, _DropTarget]:
+    """由 failed sparse edit 生成不需解析模型文本的撤销闭集。"""
+    targets: dict[str, _DropTarget] = {}
+
+    def register(target: _DropTarget) -> None:
+        token = f'drop_{len(targets) + 1:04d}'
+        targets[token] = target
+
+    for field, value in edit.items():
+        if field in _PATCH_MODELS:
+            _model, identities = _PATCH_MODELS[field]
+            if not isinstance(value, list):
+                raise Stage2ReviewerWireError(
+                    f'可信模板 GlobalEdit.{field} 必须是数组')
+            for row in value:
+                if not isinstance(row, Mapping):
+                    raise Stage2ReviewerWireError(
+                        f'可信模板 GlobalEdit.{field} 行不是 object')
+                identity = _identity(row, identities)
+                label = ','.join(
+                    f'{key}={json.dumps(item, ensure_ascii=False)}'
+                    for key, item in zip(identities, identity, strict=True)
+                )
+                register(_DropTarget(
+                    kind='patch', field=field, identity=identity,
+                    description=f'{field}[{label}]',
+                ))
+        elif field == 'setting' or field in _REPLACEMENT_WIRE_TYPES:
+            if value is not None:
+                register(_DropTarget(
+                    kind='field', field=field, description=field))
+        elif field == 'collection_edits':
+            if not isinstance(value, list):
+                raise Stage2ReviewerWireError(
+                    '可信模板 GlobalEdit.collection_edits 必须是数组')
+            for row in value:
+                collection = row.get('collection') if isinstance(row, Mapping) else None
+                if not isinstance(collection, str):
+                    raise Stage2ReviewerWireError(
+                        '可信 collection template 缺 collection 身份')
+                register(_DropTarget(
+                    kind='collection', field=field, identity=(collection,),
+                    description=f'collection_edits[collection={collection}]',
+                ))
+        elif field == 'post_edit_review':
+            continue
+        else:
+            raise Stage2ReviewerWireError(
+                f'compact reviewer wire 未登记 GlobalEdit 顶层字段：{field}')
+    return targets
+
+
 def wire_binding(task: _ReviewerTaskLike) -> Stage2ReviewerWireBinding:
     """返回 compact response 必须逐字回传的 option 与 exact-request 指纹。"""
     option_id, exact = _apply_edit_option(task)
+    edit = exact['action'].get('input_payload')
+    if not isinstance(edit, Mapping):
+        raise Stage2ReviewerWireError('apply-edit exact request 缺 GlobalEdit payload')
+    drop_targets = (
+        tuple(_drop_target_map(edit)) if _is_correction_task(task, exact) else ())
     return Stage2ReviewerWireBinding(
         option_id=option_id,
         expected_exact_request_sha256=_canonical_sha256(exact),
+        allowed_drop_targets=drop_targets,
     )
 
 
@@ -311,7 +422,9 @@ def _setting_wire_type(value: Any, digest: str) -> Any:
     return model | None
 
 
-def _collection_list_wire_type(value: Any) -> Any:
+def _collection_list_wire_type(
+    value: Any, *, require_nonempty_operations: bool = False,
+) -> Any:
     if not isinstance(value, list) or any(not isinstance(row, dict) for row in value):
         raise Stage2ReviewerWireError(
             '可信模板 GlobalEdit.collection_edits 必须是 object 数组')
@@ -329,7 +442,18 @@ def _collection_list_wire_type(value: Any) -> Any:
         if collection in seen:
             raise Stage2ReviewerWireError('可信模板重复开放同一 collection')
         seen.add(collection)
-        models.append(_COLLECTION_WIRE_MODELS[collection])
+        model = _COLLECTION_WIRE_MODELS[collection]
+        if require_nonempty_operations:
+            operations = model.model_fields['operations']
+            model = create_model(
+                f'{model.__name__}Correction',
+                __base__=model,
+                operations=(
+                    operations.rebuild_annotation(),
+                    Field(..., min_length=1),
+                ),
+            )
+        models.append(model)
     return _union(models)
 
 
@@ -385,6 +509,7 @@ def response_model(task: _ReviewerTaskLike) -> type[StrictModel]:
     except ValidationError as exc:
         raise Stage2ReviewerWireError('apply-edit exact request 不是现役 GlobalEdit') from exc
 
+    correction = _is_correction_task(task, exact)
     edit_fields: dict[str, tuple[Any, Any]] = {}
     for key, value in edit.items():
         if key in _PATCH_MODELS:
@@ -397,7 +522,8 @@ def response_model(task: _ReviewerTaskLike) -> type[StrictModel]:
         elif key in _REPLACEMENT_WIRE_TYPES:
             annotation = _REPLACEMENT_WIRE_TYPES[key]
         elif key == 'collection_edits':
-            annotation = _collection_list_wire_type(value)
+            annotation = _collection_list_wire_type(
+                value, require_nonempty_operations=correction)
         elif key == 'post_edit_review':
             annotation = _post_review_wire_type(value, digest)
         else:
@@ -412,10 +538,18 @@ def response_model(task: _ReviewerTaskLike) -> type[StrictModel]:
         __base__=StrictModel,
         **edit_fields,
     )
+    payload_fields: dict[str, tuple[Any, Any]] = {'edit': (edit_model, ...)}
+    if correction:
+        drop_targets = tuple(_drop_target_map(edit))
+        if not drop_targets:  # GlobalEdit 自身要求至少有一个业务 patch。
+            raise Stage2ReviewerWireError(
+                'Stage2 correction failed edit 没有可撤销业务目标')
+        payload_fields['drop_targets'] = (
+            list[_literal(drop_targets)], ...)
     payload_model = create_model(
         f'Stage2ReviewerDeltaPayload_{digest}',
         __base__=StrictModel,
-        edit=(edit_model, ...),
+        **payload_fields,
     )
     return create_model(
         f'Stage2ReviewerDeltaEnvelope_{digest}',
@@ -460,6 +594,8 @@ def prompt_addendum(task: object) -> str:
     option_id, exact = _apply_edit_option(task)  # type: ignore[arg-type]
     exact_sha = _canonical_sha256(exact)
     edit = exact['action']['input_payload']
+    correction = _is_correction_task(task, exact)  # type: ignore[arg-type]
+    drop_targets = _drop_target_map(edit) if correction else {}
     compact_edit: dict[str, Any] = {}
     for key in edit:
         if key in _PATCH_MODELS or key == 'collection_edits':
@@ -479,9 +615,37 @@ def prompt_addendum(task: object) -> str:
         'schema': WIRE_SCHEMA,
         'option_id': option_id,
         'expected_exact_request_sha256': exact_sha,
-        'payload': {'edit': compact_edit},
+        'payload': {
+            'edit': compact_edit,
+            **({'drop_targets': []} if correction else {}),
+        },
     }
     rendered = json.dumps(example, ensure_ascii=False, separators=(',', ':'))
+    if correction:
+        target_legend = json.dumps({
+            token: target.description for token, target in drop_targets.items()
+        }, ensure_ascii=False, separators=(',', ':'))
+        delta_semantics = f"""
+本轮是 correction：exact_request.input_payload 是上一轮在 canonical 边界被分类拒绝的
+**failed sparse edit**（可能是 HARD、候选载体或 post-review 失败），也是本轮默认保留的
+可信业务基线。``[]``/``null`` 表示不改上一轮该面，绝不
+表示删除。显式 patch 行按稳定 identity 替换上一轮同一行；显式 collection 行完整替换
+该 collection 的 operations，且显式提交的行必须含至少一个 operation；顶层
+``collection_edits:[]`` 只表示本轮不更新任何 collection。需要撤掉 failed edit 中
+某个 patch 行、setting、replacement 或整条 collection edit 时，
+把下面闭集里的 opaque token 放进 ``payload.drop_targets``；不得重复，也不得同时更新和
+drop 同一目标。未列入 drop_targets 且未显式更新的上一轮改动必须保留。只有 post-review
+需要补全时可以原样保留 failed business delta、只重做 post-review；若撤销后不再剩任何
+业务 patch，则会被拒绝为 no-op。相同回答的无进展重演由持久 ledger 另行拦截。
+
+本轮可撤销目标（token -> failed edit 目标）：{target_legend}
+""".strip()
+    else:
+        delta_semantics = """
+本轮不是 correction：patch/collection 数组 ``[]`` 表示本次不提交该面；setting/
+replacement 的 ``null`` 表示本次不提交该面，绝不表示清空。只有显式交回的行才会成为
+业务 patch。
+""".strip()
     return f"""
 
 【Stage2 apply-edit 的唯一 compact 输出例外】
@@ -491,16 +655,17 @@ chapter/default/review_scope，也不要在 decisions 行回抄 expected_subject
 只会从当前 immutable exact_request 可信注入这些字段，并在组装后继续走现役 loader。
 
 最终只输出 ``{WIRE_SCHEMA}`` 裸 JSON object。``payload.edit`` 的每个顶层键都必须按
-CLI 原生 schema 出现：patch/collection 数组 ``[]`` 表示保留模板；setting/replacement
-的 ``null`` 表示保留模板，绝不表示清空。patch 行缺席表示保留；行一旦出现，必须交回
-该模板主体已经开放的完整字段集，不能新增主体或字段。collection 行只交 collection +
+CLI 原生 schema 出现。{delta_semantics}
+
+patch 行一旦出现，必须交回该模板主体已经开放的完整字段集，不能新增主体或字段。
+collection 行只交 collection +
 operations；add 用 ``{{"op":"add","item":...}}``，不得使用 ``value``。修后复核只交
 reason/quarantine_groups/decisions；每条 decision 交 item_id/state/reason/evidence/
 generation_disposition（无 disposition 时显式 null），Supervisor 按 item_id 注入 subject
 hash。仍以同一 hash 存活的旧 FAIL/UNVER（包括集合完整性项）必须逐项列入 decisions；
 不能让 ``decisions:[]`` 示例替代真实闭合结果。
 
-最小 envelope（空数组/null 只演示保留语义，须按实际审阅填入改动和 decisions）：
+最小 envelope（空数组/null 的精确语义见上文，须按实际审阅填入改动和 decisions）：
 {rendered}
 """.strip()
 
@@ -555,7 +720,12 @@ def _validation_locations(
                        for ch in error_type)):
             error_type = 'error_sha256_' + hashlib.sha256(
                 error_type.encode('utf-8')).hexdigest()[:16]
-        locations.append(f'{location}:{error_type}')
+        safe_reason = _SAFE_VALIDATION_REASONS.get(str(row.get('msg', '')))
+        if safe_reason is None:
+            locations.append(f'{location}:{error_type}')
+        else:
+            reason_code, message = safe_reason
+            locations.append(f'{location}:{reason_code}({message})')
     suffix = '…' if len(errors) > 8 else ''
     return '、'.join(locations) + suffix
 
@@ -595,7 +765,7 @@ def _overlay_patch_rows(
     if len(by_identity) != len(baseline):
         raise Stage2ReviewerWireError(f'可信模板 GlobalEdit.{field} 身份不唯一')
     seen: set[tuple[Any, ...]] = set()
-    changed = False
+    selected: list[dict[str, Any]] = []
     for row in submitted:
         if not isinstance(row, dict):  # Pydantic 已查；保留防御式边界。
             raise Stage2ReviewerWireError(f'GlobalEdit.{field} patch 行不是 object')
@@ -612,10 +782,10 @@ def _overlay_patch_rows(
         if row == target:
             raise Stage2ReviewerWireError(
                 f'GlobalEdit.{field} compact patch 没有形成实际变更')
-        target.clear()
-        target.update(copy.deepcopy(row))
-        changed = True
-    return baseline, changed
+        # 可信模板只负责关闭 identity / 开放键集。未出现的模板行绝不能
+        # 渗入生产 GlobalEdit，否则 Patch.model_fields_set 会把它们全部当修改。
+        selected.append(copy.deepcopy(row))
+    return selected, bool(selected)
 
 
 def _wire_characters_replace(value: Any) -> dict[str, Any] | None:
@@ -648,7 +818,7 @@ def _overlay_collection_rows(
     if len(by_collection) != len(baseline):
         raise Stage2ReviewerWireError('可信 collection template 身份不唯一')
     seen: set[str] = set()
-    changed = False
+    selected: list[dict[str, Any]] = []
     for row in submitted:
         if not isinstance(row, dict):
             raise Stage2ReviewerWireError('collection compact row 不是 object')
@@ -663,10 +833,15 @@ def _overlay_collection_rows(
         if operations == target.get('operations'):
             raise Stage2ReviewerWireError(
                 f'collection {collection} operations 没有形成实际变更')
-        # expected_collection_sha256 只能来自可信模板，wire 没有这一格。
-        target['operations'] = copy.deepcopy(operations)
-        changed = True
-    return baseline, changed
+        # expected_collection_sha256 只能来自可信模板，wire 没有这一格；
+        # 未显式提交的其他 collection 行不进业务 edit。
+        selected.append({
+            'collection': collection,
+            'expected_collection_sha256': copy.deepcopy(
+                target.get('expected_collection_sha256')),
+            'operations': copy.deepcopy(operations),
+        })
+    return selected, bool(selected)
 
 
 def _overlay_post_review(
@@ -712,15 +887,217 @@ def _overlay_post_review(
             },
         })
 
-    replacement = {
+    # 修后复核不是业务 patch，但它的阅读身份必须从 immutable exact request
+    # 完整注入；provider 只能填写下面三格。
+    replacement = copy.deepcopy(baseline)
+    editable = {
         'reason': copy.deepcopy(submitted.get('reason')),
         'quarantine_groups': copy.deepcopy(submitted.get('quarantine_groups')),
         'decisions': decisions,
     }
-    changed = any(baseline.get(key) != value for key, value in replacement.items())
-    for key, value in replacement.items():
-        baseline[key] = value
-    return baseline, changed
+    changed = any(baseline.get(key) != value for key, value in editable.items())
+    replacement.update(editable)
+    return replacement, changed
+
+
+def _correction_baseline(template_edit: Mapping[str, Any]) -> dict[str, Any]:
+    """把 failed edit 还原为只含真实业务 delta 的 merge 基线。"""
+    baseline: dict[str, Any] = {}
+    for key, value in template_edit.items():
+        if key in _PATCH_MODELS or key == 'collection_edits':
+            if value:
+                baseline[key] = copy.deepcopy(value)
+        elif key == 'setting' or key in _REPLACEMENT_WIRE_TYPES:
+            if value is not None:
+                baseline[key] = copy.deepcopy(value)
+        elif key == 'post_edit_review':
+            continue
+        else:
+            raise Stage2ReviewerWireError(
+                f'compact reviewer wire 未登记 GlobalEdit 顶层字段：{key}')
+    return baseline
+
+
+def _target_key(target: _DropTarget) -> tuple[str, str, tuple[Any, ...]]:
+    return target.kind, target.field, target.identity
+
+
+def _has_business_delta(edit: Mapping[str, Any]) -> bool:
+    """按生产动作语义判断，而不是把空 collection scaffold 当改动。"""
+    for key, value in edit.items():
+        if key in _PATCH_MODELS:
+            if isinstance(value, list) and value:
+                return True
+        elif key == 'collection_edits':
+            if (isinstance(value, list)
+                    and any(isinstance(row, Mapping) and row.get('operations')
+                            for row in value)):
+                return True
+        elif key == 'setting' or key in _REPLACEMENT_WIRE_TYPES:
+            if value is not None:
+                return True
+    return False
+
+
+def _assemble_correction_edit(
+    *, template_edit: dict[str, Any], delta: dict[str, Any],
+    submitted_drop_targets: Any,
+) -> dict[str, Any]:
+    """以 failed sparse edit 为基线合并一轮显式 correction。"""
+    if not isinstance(submitted_drop_targets, list):
+        raise Stage2ReviewerWireError(
+            'Stage2 correction compact wire 缺 drop_targets 数组')
+    if len(submitted_drop_targets) != len(set(submitted_drop_targets)):
+        raise Stage2ReviewerWireError(
+            'Stage2 correction drop_targets 不得重复')
+
+    allowed_targets = _drop_target_map(template_edit)
+    reverse_targets = {
+        _target_key(target): token for token, target in allowed_targets.items()
+    }
+    selected_targets: set[tuple[str, str, tuple[Any, ...]]] = set()
+    merged = _correction_baseline(template_edit)
+
+    for key, value in delta.items():
+        if key not in template_edit:
+            raise Stage2ReviewerWireError(f'compact edit 越出模板顶层字段：{key}')
+        if key in _PATCH_MODELS:
+            _model, identities = _PATCH_MODELS[key]
+            selected, local_changed = _overlay_patch_rows(
+                field=key, baseline=template_edit[key], submitted=value,
+                identities=identities)
+            if local_changed:
+                current = merged.get(key)
+                if not isinstance(current, list):  # failed edit 是可信 GlobalEdit。
+                    raise Stage2ReviewerWireError(
+                        f'可信 correction 基线缺 GlobalEdit.{key}')
+                positions = {
+                    _identity(row, identities): index
+                    for index, row in enumerate(current)
+                    if isinstance(row, Mapping)
+                }
+                for row in selected:
+                    identity = _identity(row, identities)
+                    target = ('patch', key, identity)
+                    if target not in reverse_targets:
+                        raise Stage2ReviewerWireError(
+                            f'GlobalEdit.{key} correction 行越出 failed edit')
+                    current[positions[identity]] = copy.deepcopy(row)
+                    selected_targets.add(target)
+        elif key == 'setting':
+            if value is None:
+                local_changed = False
+            else:
+                if value == template_edit[key]:
+                    raise Stage2ReviewerWireError('GlobalEdit.setting 没有形成实际变更')
+                if ('field', key, ()) not in reverse_targets:
+                    raise Stage2ReviewerWireError(
+                        'GlobalEdit.setting correction 越出 failed edit')
+                merged[key] = copy.deepcopy(value)
+                selected_targets.add(('field', key, ()))
+                local_changed = True
+        elif key in _REPLACEMENT_WIRE_TYPES:
+            if value is None:
+                local_changed = False
+            else:
+                replacement = (
+                    _wire_characters_replace(value)
+                    if key == 'characters_replace' else copy.deepcopy(value))
+                if replacement == template_edit[key]:
+                    raise Stage2ReviewerWireError(
+                        f'GlobalEdit.{key} 没有形成实际变更')
+                if ('field', key, ()) not in reverse_targets:
+                    raise Stage2ReviewerWireError(
+                        f'GlobalEdit.{key} correction 越出 failed edit')
+                merged[key] = replacement
+                selected_targets.add(('field', key, ()))
+                local_changed = True
+        elif key == 'collection_edits':
+            if any(
+                    isinstance(row, Mapping)
+                    and row.get('operations') == []
+                    for row in value):
+                raise Stage2ReviewerWireError(
+                    'Stage2 correction collection 行的 operations 不得为空；'
+                    '撤销整行只能使用 drop_targets')
+            selected, local_changed = _overlay_collection_rows(
+                template_edit[key], value)
+            if local_changed:
+                current = merged.get(key)
+                if not isinstance(current, list):
+                    raise Stage2ReviewerWireError(
+                        '可信 correction 基线缺 GlobalEdit.collection_edits')
+                by_collection = {
+                    row.get('collection'): index
+                    for index, row in enumerate(current)
+                    if isinstance(row, Mapping)
+                }
+                for row in selected:
+                    collection = row['collection']
+                    target = ('collection', key, (collection,))
+                    if target not in reverse_targets:
+                        raise Stage2ReviewerWireError(
+                            'collection correction 行越出 failed edit')
+                    index = by_collection[collection]
+                    current[index] = copy.deepcopy(row)
+                    selected_targets.add(target)
+                if not current:
+                    merged.pop(key, None)
+        elif key == 'post_edit_review':
+            merged[key], _review_changed = _overlay_post_review(
+                template_edit[key], value)
+        else:  # response_model 已关闭；保留防御式边界。
+            raise Stage2ReviewerWireError(f'compact edit 含未登记字段：{key}')
+
+    for token in submitted_drop_targets:
+        target = allowed_targets.get(token)
+        if target is None:  # native schema 已查；保留防御式边界。
+            raise Stage2ReviewerWireError(
+                'Stage2 correction drop target 越出 failed edit 闭集')
+        key = _target_key(target)
+        if key in selected_targets:
+            raise Stage2ReviewerWireError(
+                'Stage2 correction 不得同时更新和 drop 同一目标')
+        if target.kind == 'patch':
+            _model, identities = _PATCH_MODELS[target.field]
+            rows = merged.get(target.field)
+            if not isinstance(rows, list):
+                raise Stage2ReviewerWireError('correction drop patch 目标已不存在')
+            remaining = [
+                row for row in rows
+                if not (isinstance(row, Mapping)
+                        and _identity(row, identities) == target.identity)
+            ]
+            if len(remaining) == len(rows):
+                raise Stage2ReviewerWireError('correction drop patch 目标已不存在')
+            if remaining:
+                merged[target.field] = remaining
+            else:
+                merged.pop(target.field, None)
+        elif target.kind == 'field':
+            if target.field not in merged:
+                raise Stage2ReviewerWireError('correction drop field 目标已不存在')
+            merged.pop(target.field)
+        else:
+            rows = merged.get('collection_edits')
+            if not isinstance(rows, list):
+                raise Stage2ReviewerWireError('correction drop collection 目标已不存在')
+            remaining = [
+                row for row in rows
+                if not (isinstance(row, Mapping)
+                        and (row.get('collection'),) == target.identity)
+            ]
+            if len(remaining) == len(rows):
+                raise Stage2ReviewerWireError(
+                    'correction drop collection 目标已不存在')
+            if remaining:
+                merged['collection_edits'] = remaining
+            else:
+                merged.pop('collection_edits', None)
+    if not _has_business_delta(merged):
+        raise Stage2ReviewerWireError(
+            'Stage2 correction 撤销后没有任何业务 patch，结果是 no-op')
+    return merged
 
 
 def assemble(
@@ -745,60 +1122,81 @@ def assemble(
 
     assembled = copy.deepcopy(exact)
     action = assembled.get('action')
-    edit = action.get('input_payload') if isinstance(action, dict) else None
+    template_edit = action.get('input_payload') if isinstance(action, dict) else None
     payload = compact.get('payload')
     delta = payload.get('edit') if isinstance(payload, dict) else None
-    if not isinstance(edit, dict) or not isinstance(delta, dict):
+    if not isinstance(template_edit, dict) or not isinstance(delta, dict):
         raise Stage2ReviewerWireError('Stage2 compact reviewer edit payload 形状漂移')
 
-    changed = False
-    for key, value in delta.items():
-        if key not in edit:
-            raise Stage2ReviewerWireError(f'compact edit 越出模板顶层字段：{key}')
-        if key in _PATCH_MODELS:
-            _model, identities = _PATCH_MODELS[key]
-            edit[key], local_changed = _overlay_patch_rows(
-                field=key, baseline=edit[key], submitted=value,
-                identities=identities)
-        elif key == 'setting':
-            if value is None:
+    if _is_correction_task(task, exact):
+        sparse_edit = _assemble_correction_edit(
+            template_edit=template_edit,
+            delta=delta,
+            submitted_drop_targets=(
+                payload.get('drop_targets') if isinstance(payload, dict) else None),
+        )
+    else:
+        sparse_edit = {}
+        business_changed = False
+        for key, value in delta.items():
+            if key not in template_edit:
+                raise Stage2ReviewerWireError(f'compact edit 越出模板顶层字段：{key}')
+            if key in _PATCH_MODELS:
+                _model, identities = _PATCH_MODELS[key]
+                selected, local_changed = _overlay_patch_rows(
+                    field=key, baseline=template_edit[key], submitted=value,
+                    identities=identities)
+                if local_changed:
+                    sparse_edit[key] = selected
+            elif key == 'setting':
+                if value is None:
+                    local_changed = False
+                else:
+                    if value == template_edit[key]:
+                        raise Stage2ReviewerWireError(
+                            'GlobalEdit.setting 没有形成实际变更')
+                    sparse_edit[key] = copy.deepcopy(value)
+                    local_changed = True
+            elif key in _REPLACEMENT_WIRE_TYPES:
+                if value is None:
+                    # 初始轮中 null 是“本次不提交”，绝不猜成“清空”。
+                    local_changed = False
+                else:
+                    replacement = (
+                        _wire_characters_replace(value)
+                        if key == 'characters_replace' else copy.deepcopy(value))
+                    if replacement == template_edit[key]:
+                        raise Stage2ReviewerWireError(
+                            f'GlobalEdit.{key} 没有形成实际变更')
+                    sparse_edit[key] = replacement
+                    local_changed = True
+            elif key == 'collection_edits':
+                selected, local_changed = _overlay_collection_rows(
+                    template_edit[key], value)
+                if local_changed:
+                    sparse_edit[key] = selected
+            elif key == 'post_edit_review':
+                # post-review 的变化只是证明/binding，不能把一份无业务 patch 的
+                # 回答包装成可执行 GlobalEdit。
+                sparse_edit[key], _review_changed = _overlay_post_review(
+                    template_edit[key], value)
                 local_changed = False
-            else:
-                if value == edit[key]:
-                    raise Stage2ReviewerWireError('GlobalEdit.setting 没有形成实际变更')
-                edit[key] = copy.deepcopy(value)
-                local_changed = True
-        elif key in _REPLACEMENT_WIRE_TYPES:
-            if value is None:
-                # portable schema 中 null 是“不覆写可信模板”，绝不猜成“清空”。
-                local_changed = False
-            else:
-                replacement = (
-                    _wire_characters_replace(value)
-                    if key == 'characters_replace' else copy.deepcopy(value))
-                if replacement == edit[key]:
-                    raise Stage2ReviewerWireError(
-                        f'GlobalEdit.{key} 没有形成实际变更')
-                edit[key] = replacement
-                local_changed = True
-        elif key == 'collection_edits':
-            edit[key], local_changed = _overlay_collection_rows(edit[key], value)
-        elif key == 'post_edit_review':
-            edit[key], local_changed = _overlay_post_review(edit[key], value)
-        else:  # response_model 已关闭；保留防御式边界。
-            raise Stage2ReviewerWireError(f'compact edit 含未登记字段：{key}')
-        changed = changed or local_changed
+            else:  # response_model 已关闭；保留防御式边界。
+                raise Stage2ReviewerWireError(f'compact edit 含未登记字段：{key}')
+            business_changed = business_changed or local_changed
 
-    if not changed or _canonical_sha256(assembled) == expected_sha:
-        raise Stage2ReviewerWireError('Stage2 compact reviewer 响应是 no-op')
+        if not business_changed:
+            raise Stage2ReviewerWireError('Stage2 compact reviewer 响应是 no-op')
     try:
         # 这里只复验完整载体形状；现役 load_action 仍会再查 immutable binding、
         # placeholder 与业务拒因，producer 仍负责修后 completeness。
-        GlobalEdit.model_validate(edit)
+        GlobalEdit.model_validate(sparse_edit)
     except ValidationError as exc:
         raise Stage2ReviewerWireError(
             '可信组装后的 Stage2 GlobalEdit 不符合现役 typed 契约：'
             f'{_validation_locations(exc, model=GlobalEdit)}') from exc
+    assert isinstance(action, dict)  # 上方 template_edit 已关闭形状。
+    action['input_payload'] = sparse_edit
     return assembled
 
 

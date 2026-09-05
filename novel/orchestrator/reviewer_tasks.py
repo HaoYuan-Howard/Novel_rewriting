@@ -397,11 +397,46 @@ def _workpack(
         }
         pack: dict[str, Any] = {'global': global_pack}
         if correction is not None:
+            failure_kind = correction.get('failure_kind')
+            recovery_fact_kind = correction.get('recovery_fact_kind')
+            hard_hits = correction.get('hard_hits')
+            invalid_sha256 = correction.get('invalid_sha256')
+            failure_sha256 = correction.get('failure_sha256')
+            global_binding = global_pack.get('binding')
+
+            def sha256(value: object) -> bool:
+                return (
+                    isinstance(value, str) and len(value) == 64
+                    and all(char in '0123456789abcdef' for char in value))
             if (correction.get('kind')
                     != 'stage2-global-edit-correction-workpack-v2'
                     or not isinstance(correction.get('failed_edit'), dict)
-                    or not isinstance(correction.get('hard_hits'), list)
-                    or not correction['hard_hits']):
+                    or failure_kind not in {
+                        'canonical_pending', 'hard_gate',
+                        'candidate_validation', 'post_edit_review'}
+                    or recovery_fact_kind not in {
+                        'registered_sidecar', 'legacy_invalid'}
+                    or not isinstance(hard_hits, list)
+                    or not sha256(correction.get('failed_edit_sha256'))
+                    or not sha256(correction.get('formal_sha256'))
+                    or not sha256(
+                        correction.get('failure_business_sha256'))
+                    or not sha256(
+                        correction.get('global_review_workpack_sha256'))
+                    or correction.get('global_review_workpack_sha256')
+                        != global_pack.get('workpack_sha256')
+                    or not isinstance(global_binding, Mapping)
+                    or correction.get('expected_source_sha256')
+                        != (global_binding.get('expected_source_sha256')
+                            if isinstance(global_binding, Mapping) else None)
+                    or (recovery_fact_kind == 'registered_sidecar'
+                        and not sha256(failure_sha256))
+                    or (recovery_fact_kind == 'legacy_invalid'
+                        and failure_sha256 is not None)
+                    or (failure_kind == 'hard_gate'
+                        and (not hard_hits or not sha256(invalid_sha256)))
+                    or (failure_kind != 'hard_gate'
+                        and (hard_hits or invalid_sha256 is not None))):
                 raise ReviewerTaskError('Stage2 reviewed edit correction workpack 形状漂移')
             pack['_global_edit_template'] = correction['failed_edit']
             pack['edit_correction'] = {
@@ -682,14 +717,29 @@ def _typed_validation_reason(prefix: str, exc: ValidationError) -> str:
 
     ``ValidationError.__str__`` 会把模型提交的原始 ``input_value`` 带进文本；
     Stage2 席位账明确不保存正文/模型 payload，纠错 prompt 也不能把那段不可信值
-    原样提升成外层指令。这里只保留字段路径与 Pydantic 错误类型。路径中的 list
+    原样提升成外层指令。这里只保留字段路径、Pydantic 错误类型，以及
+    严格白名单内不含输入值的静态生产拒因码。路径中的 list
     index 是结构事实；字符串位置只有确实出现在现役 typed model JSON Schema 的
     property 名才可明文保留，任意输入派生的 dict key 都只留内容摘要，避免看似
     普通的 ASCII extra key 泄漏内容或借机注入。完整安全明细过长时再带摘要，
     既能指出 76 个 ``evidence:missing``，又不会让畸形响应无限撑大服务状态。
     """
     errors = exc.errors(
-        include_url=False, include_context=False, include_input=False)
+        include_url=False, include_context=True, include_input=False)
+
+    # 只把生产 GlobalCollectionEdit 中完全静态、无主体值的四条
+    # model-validator 拒因提升为可操作 reason code。其他 ValueError 常会
+    # 插入模型填写的 ID/正文，不得回显或用模糊包含匹配放行。
+    trusted_value_error_codes = {
+        'split 输出不得复用被拆分 subject id':
+            'collection_split_output_reuses_subject',
+        '一个集合 subject 不能被 delete/split 多次':
+            'collection_touched_input_duplicate',
+        '集合 add/split 输出 id 不得重复':
+            'collection_output_duplicate',
+        '集合操作的输入 id 与输出 id 不得重叠':
+            'collection_input_output_overlap',
+    }
 
     def safe_part(value: object) -> str:
         if isinstance(value, int):
@@ -714,7 +764,11 @@ def _typed_validation_reason(prefix: str, exc: ValidationError) -> str:
         loc = error.get('loc', ())
         location = '.'.join(safe_part(part) for part in loc) or 'root'
         error_type = safe_error_type(error.get('type', 'validation_error'))
-        rows.append(f'{location}:{error_type}')
+        context = error.get('ctx')
+        raw_error = context.get('error') if isinstance(context, dict) else None
+        reason_code = trusted_value_error_codes.get(str(raw_error))
+        suffix = f':{reason_code}' if reason_code is not None else ''
+        rows.append(f'{location}:{error_type}{suffix}')
     detail = ';'.join(rows)
     detail_sha256 = hashlib.sha256(detail.encode('utf-8')).hexdigest()
     limit = 7000
@@ -1314,6 +1368,17 @@ def _collection_edit_allowed_values(edit: Mapping[str, Any]) -> dict[str, Any]:
         },
         'collection_edits[].operations[].split.items.min_length': 2,
         'collection_edits[].operations[].forbidden_fields': ['value'],
+        'collection_edits[].operations[].cross_operation_id_invariants': {
+            'split_output_excludes_subject': (
+                'split 的任一输出 ID 不得复用该 split.subject_id'),
+            'touched_input_ids_unique': (
+                '同一集合内被 delete/split 触及的输入 ID 不得重复'),
+            'output_ids_unique': (
+                '同一集合内所有 add.item 与 split.items 的输出 ID 不得重复'),
+            'input_output_ids_disjoint': (
+                '同一集合内所有 delete/split 输入 ID 与 add/split 输出 ID '
+                '必须完全不相交'),
+        },
         'collection_edits[].member_model_by_collection': {
             name: _COLLECTION_MEMBER_MODELS[name].__name__
             for name in collections
@@ -1478,7 +1543,8 @@ def _submission_options(
                 ],
                 binding_fields=bind + [
                     'action.node', 'action.flags',
-                    'patch 数组的行数、顺序、subject id 与字段集合；不得在 patch 中新增 subject',
+                    'patch 数组只可提交模板行的无重复有序子序列；'
+                    '已提交行的 subject id 与字段集合必须逐字保留',
                 ],
                 allowed_values={
                     'purpose': (
@@ -1546,7 +1612,8 @@ def _submission_options(
                     ],
                     binding_fields=bind + [
                         'action.node', 'action.flags',
-                        'patch 数组的行数、顺序、subject id 与字段集合',
+                        'patch 数组只可提交模板行的无重复有序子序列；'
+                        '已提交行的 subject id 与字段集合必须逐字保留',
                     ],
                     allowed_values={
                         'purpose': (
@@ -1691,7 +1758,8 @@ def _submission_options(
                     ],
                     binding_fields=bind + [
                         'action.node', 'action.flags',
-                        'patch 数组的行数、顺序、subject id 与字段集合',
+                        'patch 数组只可提交模板行的无重复有序子序列；'
+                        '已提交行的 subject id 与字段集合必须逐字保留',
                     ],
                     allowed_values={
                         'purpose': '确认事实组内容有错时修订；不用于掩盖材料不足。',
@@ -1914,9 +1982,25 @@ def _stage2_business_sha256(
         correction = pack.get('edit_correction')
         if not isinstance(correction, Mapping):
             raise ReviewerTaskError('Stage2 correction workpack 缺业务 binding')
+        required = (
+            'recovery_fact_kind', 'failure_kind', 'failed_edit_sha256',
+            'formal_sha256', 'global_review_workpack_sha256',
+            'failure_business_sha256',
+        )
+        if not all(isinstance(correction.get(key), str) for key in required):
+            raise ReviewerTaskError('Stage2 correction workpack 的业务 SHA/类型不完整')
+        if (correction.get('recovery_fact_kind') == 'registered_sidecar'
+                and not isinstance(correction.get('failure_sha256'), str)):
+            raise ReviewerTaskError('Stage2 correction workpack 缺 failure sidecar SHA')
         business.update({
+            'recovery_fact_kind': correction.get('recovery_fact_kind'),
+            'failure_kind': correction.get('failure_kind'),
+            'failure_business_sha256': correction.get(
+                'failure_business_sha256'),
             'failed_edit_sha256': correction.get('failed_edit_sha256'),
-            'invalid_sha256': correction.get('invalid_sha256'),
+            'formal_sha256': correction.get('formal_sha256'),
+            'global_review_workpack_sha256': correction.get(
+                'global_review_workpack_sha256'),
         })
     return hashlib.sha256(json.dumps(
         business, ensure_ascii=False, sort_keys=True,
@@ -1961,17 +2045,36 @@ def _stage2_progress_identity(
     correction = pack.get('edit_correction')
     if isinstance(correction, Mapping):
         progress['correction'] = {
+            'recovery_fact_kind': correction.get('recovery_fact_kind'),
+            'failure_kind': correction.get('failure_kind'),
+            'failure_business_sha256': correction.get(
+                'failure_business_sha256'),
             'failed_edit_sha256': correction.get('failed_edit_sha256'),
-            'invalid_sha256': correction.get('invalid_sha256'),
+            'formal_sha256': correction.get('formal_sha256'),
+            'global_review_workpack_sha256': correction.get(
+                'global_review_workpack_sha256'),
             'hard_hits': correction.get('hard_hits'),
         }
     blueprint = pack.get('blueprint')
     if isinstance(blueprint, Mapping):
         progress['blueprint_review_token'] = blueprint.get('review_token')
+    workpack_identity = workpack
+    if isinstance(correction, Mapping):
+        # 席位账的 workpack 身份不能只认修前 GlobalReview：同一 review 面上连续
+        # 两次失败 edit/sidecar 是两个业务动作，必须由 composite identity 区分。
+        workpack_identity = _canonical_json_sha256({
+            'global_review_workpack_sha256': workpack,
+            'recovery_fact_kind': correction.get('recovery_fact_kind'),
+            'failure_kind': correction.get('failure_kind'),
+            'failure_business_sha256': correction.get(
+                'failure_business_sha256'),
+            'failed_edit_sha256': correction.get('failed_edit_sha256'),
+            'formal_sha256': correction.get('formal_sha256'),
+        })
     return {
         'source_sha256': source,
         'main_text_sha256': main_text,
-        'workpack_sha256': workpack,
+        'workpack_sha256': workpack_identity,
         'progress_sha256': _canonical_json_sha256(progress),
         'blocker_count': len(unresolved),
     }
@@ -2119,7 +2222,8 @@ def build_task(
             separators=(',', ':')).encode('utf-8')).hexdigest()
     correction_instruction = (
         '\n当前 blocker 是进程中断后的 Stage2 增量纠正：上一份 Commander 修改已经'
-        '执行并被 materials.edit_correction.hard_outcomes 精确拒绝。只修'
+        '执行并在 canonical 边界被分类拒绝；failure_kind/failure_code 说明是 HARD、'
+        '候选载体还是 post-review 失败，只有 HARD 才有 hard_outcomes。只修'
         ' submission_options 中那份失败 edit，不要从头生成；持久 ledger 会保证'
         '订正席最多两席且无进展 fingerprint 不会重演。\n'
         if waiting_on == queue.WAITING_ON_STAGE2_EDIT_CORRECTION else '')
@@ -2178,7 +2282,12 @@ relation_set_complete 的 hash 不变，它仍必须出现在 decisions。
 collection_edits[].operations 不是通用 value patch：add 只允许 op + item，delete
 只允许 op + subject_id，split 只允许 op + subject_id + items 且 items 至少两项；
 绝无 value 字段。item/items 必须使用 allowed_values 按 collection 指定的成员 model，
-并通过同包下发的局部 Pydantic schema。
+并通过同包下发的局部 Pydantic schema。同一 collection 的全部 operations
+还必须同时满足四条跨操作 ID 不变量：split 输出不复用该 subject_id；
+delete/split 触及的输入 ID 不重复；add/split 产生的输出 ID 不重复；
+全部输入 ID 与输出 ID 完全不相交。compact 里 patch/collection 的 [] 与
+setting/replacement 的 null 表示本次不提交该写口，不代表把模板的 no-op 行抄入
+canonical edit；一旦提交 patch/collection 行，只能是模板无重复有序子序列。
 post_edit_review.decisions 的每一行都必须显式包含 item_id、expected_subject_sha256、
 state、reason、evidence 五个字段；即使没有可登记证据，也必须写 evidence: []，不能
 省略。generation_disposition 可省略，且只属于需要登记隔离动作的 UNVER。
@@ -2650,64 +2759,128 @@ def _row_identity(row: dict[str, Any], fields: tuple[str, ...]) -> tuple[Any, ..
 def _validate_global_edit_binding(
     submitted: dict[str, Any], expected: dict[str, Any],
 ) -> None:
-    """patch 只能改可信模板已有值；新增/删减必须走模板显式给出的完整 replacement。"""
-    if frozenset(submitted) != frozenset(expected):
+    """sparse edit 只能选择可信模板已开放的字段与主体。
+
+    Headless compact wire 的空数组/null 表示本次没有提交该写口；
+    可信组装器因此交给这里的是稀疏 canonical ``GlobalEdit``，不是把
+    exact request 里的 no-op 骨架全部抄回来。已提交 patch/collection 行仍必须
+    是模板的无重复有序子序列；旧的完整 request 依然是该规则的特例。
+    """
+    submitted_fields = frozenset(submitted)
+    expected_fields = frozenset(expected)
+    unexpected = submitted_fields - expected_fields
+    if unexpected:
         raise ReviewerTaskError(
-            'Stage2 GlobalEdit 顶层字段必须逐字保留当前模板；'
-            f'expected={sorted(expected)} got={sorted(submitted)}')
+            'Stage2 GlobalEdit 顶层字段越出当前可信模板；'
+            f'unexpected={sorted(unexpected)}')
+    if 'post_edit_review' in expected_fields \
+            and 'post_edit_review' not in submitted_fields:
+        raise ReviewerTaskError(
+            'Stage2 GlobalEdit.post_edit_review 是当前 reviewed edit 的必需绑定')
+
+    def sparse_positions(
+        *, label: str, expected_ids: list[tuple[Any, ...]],
+        submitted_ids: list[tuple[Any, ...]],
+    ) -> list[int]:
+        if len(expected_ids) != len(set(expected_ids)):
+            raise ReviewerTaskError(f'{label} 可信模板主体身份重复')
+        if len(submitted_ids) != len(set(submitted_ids)):
+            raise ReviewerTaskError(f'{label} 提交主体身份重复')
+        expected_index = {
+            identity: index for index, identity in enumerate(expected_ids)
+        }
+        unknown = [
+            identity for identity in submitted_ids if identity not in expected_index
+        ]
+        if unknown:
+            raise ReviewerTaskError(
+                f'{label} patch subject 越出可信模板；'
+                '新增 subject 只能走模板明确开放的 collection edit '
+                '或完整 *_replace')
+        positions = [expected_index[identity] for identity in submitted_ids]
+        if positions != sorted(positions):
+            raise ReviewerTaskError(f'{label} 必须保留可信模板顺序')
+        return positions
+
     for field, identity_fields in _GLOBAL_EDIT_PATCH_IDENTITIES.items():
-        if field not in expected:
+        if field not in submitted_fields:
             continue
         expected_rows = expected[field]
         submitted_rows = submitted[field]
         if not isinstance(expected_rows, list) or not isinstance(submitted_rows, list):
             raise ReviewerTaskError(f'Stage2 GlobalEdit.{field} 必须是数组')
+        if (any(not isinstance(row, dict) for row in expected_rows)
+                or any(not isinstance(row, dict) for row in submitted_rows)):
+            raise ReviewerTaskError(f'Stage2 GlobalEdit.{field} 必须是 object 数组')
         expected_ids = [_row_identity(row, identity_fields) for row in expected_rows]
         submitted_ids = [_row_identity(row, identity_fields) for row in submitted_rows]
-        if submitted_ids != expected_ids:
-            raise ReviewerTaskError(
-                f'Stage2 GlobalEdit.{field} patch subject 必须逐字保留模板顺序；'
-                f'expected={expected_ids} got={submitted_ids}。'
-                '新增 subject 只能等待模板明确提供完整 *_replace')
-        for index, (submitted_row, expected_row) in enumerate(
-                zip(submitted_rows, expected_rows, strict=True)):
+        positions = sparse_positions(
+            label=f'Stage2 GlobalEdit.{field}',
+            expected_ids=expected_ids,
+            submitted_ids=submitted_ids,
+        )
+        for index, (submitted_row, expected_index) in enumerate(
+                zip(submitted_rows, positions, strict=True)):
+            expected_row = expected_rows[expected_index]
             if frozenset(submitted_row) != frozenset(expected_row):
                 raise ReviewerTaskError(
                     f'Stage2 GlobalEdit.{field}[{index}] 字段集合必须逐字保留模板')
-    if 'collection_edits' in expected:
+    if 'collection_edits' in submitted_fields:
         expected_rows = expected['collection_edits']
         submitted_rows = submitted['collection_edits']
         if not isinstance(expected_rows, list) or not isinstance(submitted_rows, list):
             raise ReviewerTaskError('Stage2 GlobalEdit.collection_edits 必须是数组')
+        if (any(not isinstance(row, dict) for row in expected_rows)
+                or any(not isinstance(row, dict) for row in submitted_rows)):
+            raise ReviewerTaskError(
+                'Stage2 GlobalEdit.collection_edits 必须是 object 数组')
         expected_bindings = [
             (row.get('collection'), row.get('expected_collection_sha256'))
-            for row in expected_rows if isinstance(row, dict)
+            for row in expected_rows
         ]
         submitted_bindings = [
             (row.get('collection'), row.get('expected_collection_sha256'))
-            for row in submitted_rows if isinstance(row, dict)
+            for row in submitted_rows
         ]
-        if (len(expected_bindings) != len(expected_rows)
-                or len(submitted_bindings) != len(submitted_rows)
-                or submitted_bindings != expected_bindings):
-            raise ReviewerTaskError(
-                'Stage2 collection edit 的集合顺序与 expected SHA 必须逐字保留模板')
-        for row in submitted_rows:
+        positions = sparse_positions(
+            label='Stage2 collection edit',
+            expected_ids=expected_bindings,
+            submitted_ids=submitted_bindings,
+        )
+        expected_names = [binding[0] for binding in expected_bindings]
+        submitted_names = [binding[0] for binding in submitted_bindings]
+        if (len(expected_names) != len(set(expected_names))
+                or len(submitted_names) != len(set(submitted_names))):
+            raise ReviewerTaskError('Stage2 collection edit 的 collection 不得重复')
+        for index, (row, expected_index) in enumerate(
+                zip(submitted_rows, positions, strict=True)):
             if frozenset(row) != frozenset({
                     'collection', 'expected_collection_sha256', 'operations'}):
                 raise ReviewerTaskError('Stage2 collection edit 字段集合必须闭合')
-    if 'setting' in expected:
+            if frozenset(row) != frozenset(expected_rows[expected_index]):
+                raise ReviewerTaskError(
+                    f'Stage2 collection edit[{index}] 字段集合必须逐字保留模板')
+    if 'setting' in submitted_fields:
         expected_setting = expected['setting']
         submitted_setting = submitted['setting']
-        if not isinstance(expected_setting, dict) or not isinstance(
-                submitted_setting, dict):
-            raise ReviewerTaskError('Stage2 GlobalEdit.setting 必须是 object')
-        if frozenset(submitted_setting) != frozenset(expected_setting):
-            raise ReviewerTaskError(
-                'Stage2 GlobalEdit.setting 字段集合必须逐字保留模板')
-    if 'post_edit_review' in expected:
+        if expected_setting is None:
+            if submitted_setting is not None:
+                raise ReviewerTaskError('Stage2 GlobalEdit.setting 越出空模板')
+        else:
+            if not isinstance(expected_setting, dict) or not isinstance(
+                    submitted_setting, dict):
+                raise ReviewerTaskError('Stage2 GlobalEdit.setting 必须是 object')
+            if frozenset(submitted_setting) != frozenset(expected_setting):
+                raise ReviewerTaskError(
+                    'Stage2 GlobalEdit.setting 字段集合必须逐字保留模板')
+    if 'post_edit_review' in expected_fields:
         expected_review = expected['post_edit_review']
         submitted_review = submitted['post_edit_review']
+        if expected_review is None:
+            if submitted_review is not None:
+                raise ReviewerTaskError(
+                    'Stage2 GlobalEdit.post_edit_review 越出空模板')
+            return
         if not isinstance(expected_review, dict) or not isinstance(
                 submitted_review, dict):
             raise ReviewerTaskError('Stage2 GlobalEdit.post_edit_review 必须是 object')
@@ -2915,7 +3088,11 @@ object，不用 Markdown/代码围栏，不写文件、不调用工具；Supervi
 collection_edits 只可填写 operations；collection/expected SHA 不可改。operation 绝非
 通用 value patch：add={{op,item}}、delete={{op,subject_id}}、
 split={{op,subject_id,items}} 且 items 至少两项，不得出现 value；item/items 使用原包
-按 collection 下发的成员 model 与局部 Pydantic schema。已有字段 patch 仍须保留模板
+按 collection 下发的成员 model 与局部 Pydantic schema。同一 collection 内，
+split 输出不得复用该 subject_id；delete/split 输入 ID 不得重复；
+add/split 输出 ID 不得重复；全部输入 ID 与输出 ID 不得相交。compact
+的 []/null 是“本次不提交”，不得把未提交的 no-op 模板行带入 canonical edit。
+已有字段 patch 仍须保留模板
 subject binding。post_edit_review.decisions 只列 edit 后仍保持原 hash、且已在
 review_scope 中的旧项；是否存活只看 item_id + subject_sha256，不看编辑在逻辑上是否
 顺带修好它；只改 relation 字段而未改 relation ID 集时，同 hash 的

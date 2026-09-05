@@ -1024,6 +1024,11 @@ def mark_complete(
         ledger = _read(path)
         if ledger is None or ledger.state == 'complete':
             return
+        if (not ledger.turns or any(
+                turn.outcome != 'ok' or turn.exit_code != 0
+                for turn in ledger.turns)):
+            raise Stage2ReviewBudgetRefused(
+                'Stage2 review ledger 尚有 started/failed 席位，不能标 complete')
         updated = Stage2ReviewLedger.model_validate({
             **ledger.model_dump(mode='json'), 'state': 'complete',
         })

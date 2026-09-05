@@ -642,3 +642,84 @@ def test_stage2_global_edit_uses_the_same_sid_scoped_service_root(
     with pytest.raises(UnsupportedRunMode, match='当前书'):
         P.permit_from_next(
             current, 'stage2.global', ['--apply-edit', str(sibling)])
+
+
+def test_stage2_edit_commit_permit_recovers_before_canonical_input_exists(
+        monkeypatch, tmp_path):
+    """WAL 是该窗的输入事实；尚未生成的 canonical 是 target，不是前置。"""
+    _stable(monkeypatch)
+    current = _next(
+        tmp_path, state='blocked', node='stage2.global',
+        flags=['--apply-edit', 'stage2/global_edit.json'],
+        waiting_on=Q.WAITING_ON_STAGE2_EDIT_COMMIT)
+
+    got = P.permit_from_next(
+        current, 'stage2.global',
+        ['--apply-edit', 'stage2/global_edit.json'])
+
+    assert got.external_inputs == []
+    P.revalidate_active_execution_surface(
+        got, base=tmp_path, sid=SID, node='stage2.global',
+        flags=['--apply-edit', 'stage2/global_edit.json'])
+
+
+@pytest.mark.parametrize('flags', [
+    ['--renormalize'],
+    ['--review-decisions', 'stage2/global_review_decisions.json'],
+    ['--apply-edit', 'stage2/other_global_edit.json'],
+    ['--apply-edit', '_service/edits/book-1/global-edit.json'],
+])
+def test_stage2_edit_commit_permit_only_accepts_exact_canonical_apply(
+        flags, monkeypatch, tmp_path):
+    _stable(monkeypatch)
+    current = _next(
+        tmp_path, state='blocked', node='stage2.global',
+        flags=['--apply-edit', 'stage2/global_edit.json'],
+        waiting_on=Q.WAITING_ON_STAGE2_EDIT_COMMIT)
+
+    with pytest.raises(UnsupportedRunMode, match='exact canonical|不能处理'):
+        P.permit_from_next(current, 'stage2.global', flags)
+
+
+def test_stage2_revalidate_commit_permit_replays_operator_exact_human_audit(
+        monkeypatch, tmp_path):
+    _stable(monkeypatch)
+    exact = [
+        '--revalidate', '--actor', 'human:reviewer',
+        '--reason', '人工修正 INVALID 后继续提交',
+    ]
+    current = _next(
+        tmp_path, state='blocked', node='stage2.global', flags=exact,
+        waiting_on=Q.WAITING_ON_STAGE2_EDIT_REVALIDATE)
+
+    got = P.permit_from_next(current, 'stage2.global', exact)
+    assert got.flags == exact and got.external_inputs == []
+    with pytest.raises(UnsupportedRunMode, match='exact actor/reason'):
+        P.permit_from_next(current, 'stage2.global', [
+            '--revalidate', '--actor', 'system:other', '--reason', 'other',
+        ])
+    with pytest.raises(UnsupportedRunMode, match='不能处理'):
+        P.permit_from_next(current, 'stage2.global', ['--renormalize'])
+
+
+def test_stage2_ordinary_terminal_permit_allows_human_successors_only(
+        monkeypatch, tmp_path):
+    _stable(monkeypatch)
+    novel_dir = tmp_path / f'平台_测试书_{SID}'
+    edit = novel_dir / 'stage2' / 'next-global-edit.json'
+    edit.parent.mkdir(parents=True)
+    edit.write_bytes(b'{"_schema_version":3}\n')
+    current = _next(
+        tmp_path, state='blocked', node='stage2.global', flags=[],
+        waiting_on=Q.WAITING_ON_STAGE2_EDIT_TERMINAL)
+
+    applied = P.permit_from_next(
+        current, 'stage2.global', ['--apply-edit', 'stage2/next-global-edit.json'])
+    assert applied.external_inputs[0].sha256 == hashlib.sha256(
+        edit.read_bytes()).hexdigest()
+    revalidated = P.permit_from_next(current, 'stage2.global', [
+        '--revalidate', '--actor', 'human:reviewer', '--reason', '已修 INVALID',
+    ])
+    assert revalidated.external_inputs == []
+    with pytest.raises(UnsupportedRunMode, match='不能处理'):
+        P.permit_from_next(current, 'stage2.global', ['--renormalize'])

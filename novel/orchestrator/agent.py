@@ -37,21 +37,27 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import BinaryIO, Iterator, NamedTuple
 
-from contracts.artifacts import STAGE2_GLOBAL_EDIT, STAGE2_GLOBAL_REVIEW_DECISIONS
+from contracts.artifacts import (
+    STAGE2_GLOBAL_EDIT, STAGE2_GLOBAL_EDIT_COMMIT,
+    STAGE2_GLOBAL_EDIT_FAILURE, STAGE2_GLOBAL_REVIEW_DECISIONS,
+)
 from contracts.invariants import (
     AGENT_EXECUTOR_NODES, COMMANDER_MAX_ATTEMPTS_PER_SEAT,
     COMMANDER_RETRY_BACKOFF_SECONDS, COMMANDER_REVIEWER_MAX_CORRECTIONS,
     STAGE2_BLUEPRINT_MAX_CONCURRENCY,
 )
 from contracts.schema import decode_artifact
-from contracts.schema.api import ExecutionPermit, OperatorNext
+from contracts.schema.api import (
+    ExecutionPermit, OperatorNext, Stage2FinalReviewRequest,
+)
 from contracts.schema.evaluation import GlobalReviewDecisionSet
-from contracts.schema.stage2 import GlobalEdit
+from contracts.schema.stage2 import GlobalEdit, GlobalEditCommit, GlobalEditFailure
 from contracts.schema.orchestration import (
     AgentDeliveryOutcome, AgentPending, AgentQueueView, AgentRejected, AgentRunEvent,
     AgentExecutorBackend, AgentProfile, AgentRunRecord, AgentRunStart,
     CommanderSessionPointer, ExecutionEpoch, ExecutorBackend,
     PipelineAgentProfiles, ReviewerActionRecord, RunContractV2,
+    Stage2PrereviewRecord,
 )
 from novel import agent_session_audit, paths, prov, run_identity, skill_contract
 from novel.agent_capabilities import (
@@ -77,20 +83,23 @@ from novel.errors import (
     ApprovalRequired, NovelError, TerminalState, UnsupportedRunMode,
     UpstreamMissing,
 )
-from novel.llm.ledger import append_commander_call
+from novel.llm.ledger import (
+    append_commander_call, ledger_path as cost_ledger_path, read_jsonl_rows,
+)
 from novel.model_slots import (
     model_slot_from_environment, prepare_model_slot_gate,
 )
 from novel.orchestrator import (
     admission, commander_completion, execution_permit, jobs, operator, queue,
     review_seats, reviewer_seat_ledger, reviewer_tasks, service_lifecycle,
-    stage2_review_ledger, stage2_reviewer_wire, uploads,
+    stage2_review_ledger, stage2_reviewer_wire, state, uploads,
 )
 from novel.orchestrator.agent_supervisor import (
     CommanderTurnResult, LaunchTicket, RunSupervisor, SupervisorActionResult,
 )
 from novel.orchestrator.jobs import JobConflict, JobRegistry, service_dir
 from novel.orchestrator.nodes import shell_line
+from novel.store import ArtifactStore
 
 RUNS_FILENAME = 'agent_runs.jsonl'
 LOG_PREFIX = 'agent-'
@@ -922,16 +931,23 @@ class _ReplayableReviewerAction:
 
     path: Path
     action: reviewer_tasks.ReviewerAction
+    record: ReviewerActionRecord
+
+
+@dataclass(frozen=True)
+class _ReplayableStage2Prereview:
+    """盘上一份仍与当前 Global 业务面完全同一的未绑定预审决定。"""
+
+    path: Path
+    record: Stage2PrereviewRecord
 
 
 @dataclass(frozen=True)
 class _Stage2PrereviewState:
-    """同一 execution epoch 内可在 live blocker 重新绑定的只读 Global 决定。"""
+    """同一 parent 内一次失败预审的纠错坐标；成功决定只认 durable record。"""
 
     task: reviewer_tasks.Stage2PrereviewTask
     session_run_id: str
-    provider_session_id: str | None
-    input_payload: dict[str, object] | None
     error: str | None
     response_sha256: str | None = None
 
@@ -954,18 +970,19 @@ def _reviewer_activity(task: reviewer_tasks.ReviewerTask) -> str:
 def _record_reviewer_action(
         base: str, sid: str, *, run_id: str, epoch: ExecutionEpoch,
         task: reviewer_tasks.ReviewerTask,
-        action: reviewer_tasks.ReviewerAction) -> Path | None:
-    """typed loader 一通过就按内容寻址持久化 approval 决定（R-11.25）。
+        action: reviewer_tasks.ReviewerAction,
+        reviewer_session_run_id: str | None = None,
+        provider_response_sha256: str | None = None,
+        reviewer_progress_sha256: str | None = None) -> Path | None:
+    """typed loader 一通过就按内容寻址持久化可执行决定（R-11.25）。
 
     写盘点必须在本 reviewer turn 内、早于 canonical scratch 晋升及任何身份闸：
     那些步骤后面就是 epoch 关闭与 scratch 清理。approval 的持久化失败必须向上
     传播为未知终态，不能继续消费一份重启后无法零成本重放的付费决定。
-    只有 ``stage2.global`` node 不进这里，因为它有书内 typed durable
-    产物；Stage0/6/7 的 approve 虽编码为 node，却没有那条恢复路，必须记录。
+    Stage2 的书内 typed 产物只在 canonical action landed 后出现；在此之前也
+    必须保存 full action，并额外绑定产出席位与 provider 原始回答 digest。
     """
-    if (isinstance(action, reviewer_tasks.ReviewerStopAction)
-            or isinstance(action, reviewer_tasks.ReviewerNodeAction)
-            and action.node == 'stage2.global'):
+    if isinstance(action, reviewer_tasks.ReviewerStopAction):
         return None
     common = {
         'sid': sid, 'run_id': run_id, 'epoch_id': epoch.epoch_id,
@@ -973,13 +990,35 @@ def _record_reviewer_action(
         'business_sha256': task.business_sha256,
         'recorded_at': int(time.time()),
     }
+    stage2_fields: dict[str, object] = {}
+    if task.waiting_on in queue.STAGE2_REVIEWER_WAITING_ON:
+        effective_progress = reviewer_progress_sha256 or task.progress_sha256
+        metadata = (
+            task.workpack_sha256, task.source_sha256, task.main_text_sha256,
+            effective_progress, task.blocker_count,
+            reviewer_session_run_id, provider_response_sha256,
+        )
+        if not all(value is not None for value in metadata):
+            raise RuntimeError(
+                'Stage2 typed-valid 决定缺 workpack/source/main/progress/'
+                'blocker/席位/provider 回答身份')
+        stage2_fields = {
+            'workpack_sha256': task.workpack_sha256,
+            'source_sha256': task.source_sha256,
+            'main_text_sha256': task.main_text_sha256,
+            'progress_sha256': effective_progress,
+            'blocker_count': task.blocker_count,
+            'reviewer_session_run_id': reviewer_session_run_id,
+            'provider_response_sha256': provider_response_sha256,
+        }
     if isinstance(action, reviewer_tasks.ReviewerApprovalAction):
         token = action.payload.get('review_token')
         record = ReviewerActionRecord(
             **common,
             surface=action.surface, payload=dict(action.payload),
             review_token=(
-                token if isinstance(token, str) and token.strip() else None))
+                token if isinstance(token, str) and token.strip() else None),
+            **stage2_fields)
     elif isinstance(action, reviewer_tasks.ReviewerNodeAction):
         token = None
         try:
@@ -994,7 +1033,8 @@ def _record_reviewer_action(
                 dict(action.input_payload)
                 if action.input_payload is not None else None),
             review_token=(
-                token if isinstance(token, str) and token.strip() else None))
+                token if isinstance(token, str) and token.strip() else None),
+            **stage2_fields)
     else:  # pragma: no cover —— ReviewerAction union 的未来扩展须显式接线
         raise TypeError(f'未接线的 reviewer action：{type(action).__name__}')
     return uploads.save_reviewer_action(base, sid, record)
@@ -1008,6 +1048,564 @@ def _discard_reviewer_action_record(base: str, path: Path) -> None:
             f'reviewer 决定记录清理失败：{exc}', RuntimeWarning, stacklevel=2)
 
 
+def _stage2_prereview_identity(
+        task: reviewer_tasks.ReviewerTask
+        | reviewer_tasks.Stage2PrereviewTask,
+        ) -> tuple[str, str, str, str, str, int] | None:
+    """返回可跨 parent 证明同一预审主体的完整稳定身份。"""
+    values = (
+        task.business_sha256, task.workpack_sha256,
+        task.source_sha256, task.main_text_sha256,
+        task.progress_sha256,
+    )
+    if (not all(isinstance(value, str) for value in values)
+            or not isinstance(task.blocker_count, int)):
+        return None
+    return (
+        str(task.business_sha256), str(task.workpack_sha256),
+        str(task.source_sha256), str(task.main_text_sha256),
+        str(task.progress_sha256), task.blocker_count,
+    )
+
+
+def _record_stage2_prereview(
+        base: str, sid: str, *, run_id: str, epoch: ExecutionEpoch,
+        task: reviewer_tasks.Stage2PrereviewTask,
+        input_payload: dict[str, object], reviewer_session_run_id: str,
+        provider_response_sha256: str) -> Path:
+    """typed prereview loader 一通过就保存未绑定决定，而不是伪造 live action。"""
+    identity = _stage2_prereview_identity(task)
+    if identity is None:
+        raise RuntimeError('Stage2 typed-valid 预审缺完整 durable 恢复身份')
+    (business_sha256, workpack_sha256, source_sha256,
+     main_text_sha256, progress_sha256, blocker_count) = identity
+    return uploads.save_stage2_prereview(base, sid, Stage2PrereviewRecord(
+        sid=sid, run_id=run_id, epoch_id=epoch.epoch_id,
+        business_sha256=business_sha256,
+        workpack_sha256=workpack_sha256,
+        source_sha256=source_sha256,
+        main_text_sha256=main_text_sha256,
+        progress_sha256=progress_sha256,
+        blocker_count=blocker_count,
+        reviewer_session_run_id=reviewer_session_run_id,
+        provider_response_sha256=provider_response_sha256,
+        input_payload=dict(input_payload), recorded_at=int(time.time())))
+
+
+def _find_replayable_stage2_prereview(
+        base: str, sid: str, *,
+        task: reviewer_tasks.ReviewerTask
+        | reviewer_tasks.Stage2PrereviewTask,
+        ) -> _ReplayableStage2Prereview | None:
+    """查找完全同一业务面的未绑定预审；失配清理，多份命中关闭式拒绝。"""
+    records = uploads.load_stage2_prereviews(base, sid)
+    if not records:
+        return None
+    identity = _stage2_prereview_identity(task)
+    if identity is None:
+        raise reviewer_tasks.ReviewerTaskError(
+            '当前 Stage2 workpack 缺完整身份，不能判定持久预审是否适用')
+    matches: list[tuple[Path, Stage2PrereviewRecord]] = []
+    for path, record in records:
+        record_identity = (
+            record.business_sha256, record.workpack_sha256,
+            record.source_sha256, record.main_text_sha256,
+            record.progress_sha256, record.blocker_count,
+        )
+        if record_identity == identity:
+            matches.append((path, record))
+        else:
+            _discard_reviewer_action_record(base, path)
+    if len(matches) > 1:
+        raise reviewer_tasks.ReviewerTaskError(
+            '同一 Stage2 业务/workpack 身份存在多份未绑定预审记录；'
+            '无法唯一证明应消费哪一席')
+    if not matches:
+        return None
+    path, record = matches[0]
+    # record 不能替席位账自证主体：先核原 turn 的全量身份。provider exit 0
+    # + typed loader 后才会有本记录，所以新 parent 可幂等补完崩溃窗里的
+    # ledger.finish；补完返回值仍必须是 ok/0，才允许进入 live bind。
+    try:
+        ledger_path = stage2_review_ledger.ledger_path(
+            base, sid, source_sha256=record.source_sha256,
+            main_text_sha256=record.main_text_sha256)
+        _raw, archive = stage2_review_ledger.read_any_version(ledger_path)
+        turns = [
+            turn for turn in archive.turns
+            if turn.session_run_id == record.reviewer_session_run_id]
+        if len(turns) != 1:
+            raise reviewer_tasks.ReviewerTaskError(
+                'Stage2 持久预审找不到唯一的原席位账')
+        turn = turns[0]
+        if (
+            turn.purpose != 'prereview'
+            or turn.business_sha256 != record.business_sha256
+            or turn.workpack_sha256 != record.workpack_sha256
+            or turn.progress_sha256 != record.progress_sha256
+            or turn.blocker_count != record.blocker_count
+        ):
+            raise reviewer_tasks.ReviewerTaskError(
+                'Stage2 持久预审与原席位账的完整 identity 不一致')
+        if turn.outcome == 'started':
+            # 崩溃若恰落在 record save → ledger.finish 之间，只能由三份已经
+            # 提交的独立事实共同证明 provider 成功；缺任一份都保持 started。
+            if record.run_id in REGISTRY.live():
+                raise reviewer_tasks.ReviewerTaskError(
+                    'Stage2 预审原 parent 仍在活动，不能从旁补完其席位账')
+            if not turn.attempts:
+                raise reviewer_tasks.ReviewerTaskError(
+                    'Stage2 预审 started 席缺进程 attempt 证据')
+            last_attempt = turn.attempts[-1]
+            if (
+                last_attempt.finished_at is None
+                or last_attempt.exit_code != 0
+                or last_attempt.error_kind is not None
+                or not last_attempt.wire_evidence
+            ):
+                raise reviewer_tasks.ReviewerTaskError(
+                    'Stage2 预审 started 席没有 wire+exit0 attempt 证据')
+            sessions = [
+                session for session in agent_session_audit.fold(
+                    agent_session_audit.read_events(base))
+                if session.session_run_id == record.reviewer_session_run_id]
+            if len(sessions) != 1:
+                raise reviewer_tasks.ReviewerTaskError(
+                    'Stage2 预审 started 席没有唯一 logical session 审计')
+            session = sessions[0]
+            audit_attempts = [
+                attempt for attempt in session.attempts
+                if attempt.attempt_id == last_attempt.attempt_id]
+            if (
+                session.start.parent_run_id != record.run_id
+                or session.start.role != 'commander'
+                or session.start.node is not None
+                or session.end is None
+                or session.process_state != 'ok'
+                or session.error_kind is not None
+                or len(audit_attempts) != 1
+                or audit_attempts[0].error_kind is not None
+            ):
+                raise reviewer_tasks.ReviewerTaskError(
+                    'Stage2 预审 started 席的 session 审计未证明 process ok')
+            cost_rows = [
+                row for row in read_jsonl_rows(cost_ledger_path(base))
+                if row.get('run_id') == record.run_id
+                and row.get('session_run_id') == record.reviewer_session_run_id
+                and row.get('sid') == sid
+                and row.get('role') == 'commander'
+                and row.get('attempt_id') == last_attempt.attempt_id
+                and row.get('activity') == 'stage2.global.prereview'
+            ]
+            if (
+                len(cost_rows) != 1
+                or cost_rows[0].get('outcome') != 'ok'
+                or cost_rows[0].get('exit_code') != 0
+                or cost_rows[0].get('error_kind') is not None
+            ):
+                raise reviewer_tasks.ReviewerTaskError(
+                    'Stage2 预审 started 席的成本账未证明同 attempt exit 0')
+            turn = stage2_review_ledger.finish(
+                base, sid, source_sha256=record.source_sha256,
+                main_text_sha256=record.main_text_sha256,
+                session_run_id=record.reviewer_session_run_id, exit_code=0)
+        if turn.outcome != 'ok' or turn.exit_code != 0:
+            raise reviewer_tasks.ReviewerTaskError(
+                'Stage2 持久预审的原席位没有成功闭账')
+    except reviewer_tasks.ReviewerTaskError:
+        raise
+    except (
+        NovelError, OSError, ValueError,
+        stage2_review_ledger.Stage2ReviewBudgetRefused,
+    ) as exc:
+        raise reviewer_tasks.ReviewerTaskError(
+            'Stage2 持久预审的原席位账无法确定性补完：'
+            f'{type(exc).__name__}: {exc}') from exc
+    return _ReplayableStage2Prereview(path=path, record=record)
+
+
+def _validate_stage2_action_record_ledger(
+        base: str, sid: str, *, record: ReviewerActionRecord,
+        task: reviewer_tasks.ReviewerTask) -> bool:
+    """执行 durable Stage2 action 前，复核并在强证据下补完原席位。
+
+    live reviewer 的 typed loader 与 action record 保存发生在
+    ``Stage2ReviewLedger.finish`` 之前。宿主若恰好死在两次原子写之间，记录会
+    指向一席仍为 ``started`` 的 turn；只有 attempt、logical-session audit 与成本账
+    同时证明同一进程已经 wire+exit0，且原 parent 已不活动，才允许幂等补 finish。
+    这份 record 自身不是席位成功证明，更不是 execution permit。
+    """
+    identity = _stage2_prereview_identity(task)
+    if identity is None:
+        raise reviewer_tasks.ReviewerTaskError(
+            '当前 Stage2 workpack 缺完整身份，不能复核 durable action 原席位')
+    (business_sha256, workpack_sha256, source_sha256,
+     main_text_sha256, _base_progress_sha256, blocker_count) = identity
+    if (record.business_sha256 != business_sha256
+            or record.workpack_sha256 != workpack_sha256
+            or (record.source_sha256 is not None
+                and record.source_sha256 != source_sha256)
+            or (record.main_text_sha256 is not None
+                and record.main_text_sha256 != main_text_sha256)
+            or (record.blocker_count is not None
+                and record.blocker_count != blocker_count)
+            or record.reviewer_session_run_id is None):
+        raise reviewer_tasks.ReviewerTaskError(
+            'Stage2 durable action 与当前 business/workpack/source/main/blocker '
+            '身份不一致')
+    try:
+        ledger_path = stage2_review_ledger.ledger_path(
+            base, sid, source_sha256=source_sha256,
+            main_text_sha256=main_text_sha256)
+        _raw, archive = stage2_review_ledger.read_any_version(ledger_path)
+        turns = [
+            turn for turn in archive.turns
+            if turn.session_run_id == record.reviewer_session_run_id]
+        if len(turns) != 1:
+            raise reviewer_tasks.ReviewerTaskError(
+                'Stage2 durable action 找不到唯一的原席位账')
+        turn = turns[0]
+        if (
+            turn.business_sha256 != business_sha256
+            or turn.workpack_sha256 != workpack_sha256
+            or (record.progress_sha256 is not None
+                and turn.progress_sha256 != record.progress_sha256)
+            or turn.blocker_count != blocker_count
+        ):
+            raise reviewer_tasks.ReviewerTaskError(
+                'Stage2 durable action 与原席位账的完整 identity 不一致')
+        allowed_purposes = {
+            queue.WAITING_ON_STAGE2_REVIEW: {'prereview', 'review', 'correction'},
+            queue.WAITING_ON_STAGE2_EDIT_CORRECTION: {'correction'},
+            queue.WAITING_ON_STAGE2_FINAL_REVIEW: {'final_review'},
+        }.get(task.waiting_on, set())
+        if turn.purpose not in allowed_purposes:
+            raise reviewer_tasks.ReviewerTaskError(
+                'Stage2 durable action 的原席位 purpose 与 live blocker 不一致')
+        if turn.rejections:
+            # 拒因只可能在该席已 ok 后出现，且是 canonical/typed 边界已经消费
+            # 回答的更晚事实。崩在“拒因落账 → action record 删除”之间时，
+            # record 绝不能盖过拒因再次执行；调用方可安全删除它并继续走
+            # pending-rejection/correction 路。
+            return False
+        if turn.outcome == 'started':
+            if record.run_id in REGISTRY.live():
+                raise reviewer_tasks.ReviewerTaskError(
+                    'Stage2 durable action 原 parent 仍在活动，不能从旁补完其席位账')
+            if not turn.attempts:
+                raise reviewer_tasks.ReviewerTaskError(
+                    'Stage2 durable action started 席缺进程 attempt 证据')
+            last_attempt = turn.attempts[-1]
+            if (
+                last_attempt.finished_at is None
+                or last_attempt.exit_code != 0
+                or last_attempt.error_kind is not None
+                or not last_attempt.wire_evidence
+            ):
+                raise reviewer_tasks.ReviewerTaskError(
+                    'Stage2 durable action started 席没有 wire+exit0 attempt 证据')
+            sessions = [
+                session for session in agent_session_audit.fold(
+                    agent_session_audit.read_events(base))
+                if session.session_run_id == record.reviewer_session_run_id]
+            if len(sessions) != 1:
+                raise reviewer_tasks.ReviewerTaskError(
+                    'Stage2 durable action started 席没有唯一 logical session 审计')
+            session = sessions[0]
+            audit_attempts = [
+                attempt for attempt in session.attempts
+                if attempt.attempt_id == last_attempt.attempt_id]
+            if (
+                session.start.parent_run_id != record.run_id
+                or session.start.role != 'commander'
+                or session.start.node is not None
+                or session.end is None
+                or session.process_state != 'ok'
+                or session.error_kind is not None
+                or len(audit_attempts) != 1
+                or audit_attempts[0].error_kind is not None
+            ):
+                raise reviewer_tasks.ReviewerTaskError(
+                    'Stage2 durable action started 席的 session 审计未证明 process ok')
+            activity = (
+                'stage2.global.prereview'
+                if turn.purpose == 'prereview' else _reviewer_activity(task))
+            cost_rows = [
+                row for row in read_jsonl_rows(cost_ledger_path(base))
+                if row.get('run_id') == record.run_id
+                and row.get('session_run_id') == record.reviewer_session_run_id
+                and row.get('sid') == sid
+                and row.get('role') == 'commander'
+                and row.get('attempt_id') == last_attempt.attempt_id
+                and row.get('activity') == activity
+            ]
+            if (
+                len(cost_rows) != 1
+                or cost_rows[0].get('outcome') != 'ok'
+                or cost_rows[0].get('exit_code') != 0
+                or cost_rows[0].get('error_kind') is not None
+            ):
+                raise reviewer_tasks.ReviewerTaskError(
+                    'Stage2 durable action started 席的成本账未证明同 attempt exit 0')
+            turn = stage2_review_ledger.finish(
+                base, sid, source_sha256=source_sha256,
+                main_text_sha256=main_text_sha256,
+                session_run_id=record.reviewer_session_run_id, exit_code=0)
+        if turn.outcome != 'ok' or turn.exit_code != 0:
+            raise reviewer_tasks.ReviewerTaskError(
+                'Stage2 durable action 的原席位没有成功闭账')
+    except reviewer_tasks.ReviewerTaskError:
+        raise
+    except (
+        NovelError, OSError, ValueError,
+        stage2_review_ledger.Stage2ReviewBudgetRefused,
+    ) as exc:
+        raise reviewer_tasks.ReviewerTaskError(
+            'Stage2 durable action 的原席位账无法确定性补完：'
+            f'{type(exc).__name__}: {exc}') from exc
+    return True
+
+
+def _stage2_task_from_action_record(
+        path: Path, record: ReviewerActionRecord,
+        ) -> reviewer_tasks.ReviewerTask:
+    """只为 durable 补账重建原席位 identity，不冒充当前 live workpack。"""
+    metadata = (
+        record.workpack_sha256, record.source_sha256,
+        record.main_text_sha256, record.progress_sha256,
+        record.blocker_count, record.reviewer_session_run_id,
+        record.provider_response_sha256,
+    )
+    if not all(value is not None for value in metadata):
+        raise reviewer_tasks.ReviewerTaskError(
+            f'Stage2 durable action {path.name} 缺完整席位身份')
+    assert record.workpack_sha256 is not None
+    assert record.source_sha256 is not None
+    assert record.main_text_sha256 is not None
+    assert record.progress_sha256 is not None
+    assert record.blocker_count is not None
+    return reviewer_tasks.ReviewerTask(
+        waiting_on=record.waiting_on,
+        surface_seal=record.surface_seal,
+        business_sha256=record.business_sha256,
+        request_path=path,
+        prompt='durable Stage2 action ledger reconciliation',
+        submission_options=(),
+        workpack_sha256=record.workpack_sha256,
+        source_sha256=record.source_sha256,
+        main_text_sha256=record.main_text_sha256,
+        progress_sha256=record.progress_sha256,
+        blocker_count=record.blocker_count,
+    )
+
+
+def _stage2_apply_edit_record_sha256(
+        store: ArtifactStore, record: ReviewerActionRecord,
+        ) -> str | None:
+    """复算一份 durable action 真正会写到 canonical edit 的完整文件 SHA。"""
+    if (
+        record.node != 'stage2.global'
+        or record.input_payload is None
+        or record.flags is None
+        or tuple(record.flags[:1]) != ('--apply-edit',)
+        or len(record.flags) != 2
+    ):
+        return None
+    try:
+        decoded = decode_artifact(STAGE2_GLOBAL_EDIT, record.input_payload)
+        edit = GlobalEdit.model_validate(decoded.payload)
+        return store.prospective_sparse_sha256(STAGE2_GLOBAL_EDIT, edit)
+    except Exception as exc:  # noqa: BLE001 —— 坏 durable 记录不能被静默当作不匹配
+        raise reviewer_tasks.ReviewerTaskError(
+            f'Stage2 durable apply-edit {record.run_id} 的 payload 无法复算') from exc
+
+
+def _reconcile_stage2_apply_edit_actions(
+        base: str, sid: str, *, code: str | None = None) -> None:
+    """在 planner 前闭合 canonical action 与 producer 事实的双写窗。
+
+    ReviewerActionRecord 先于 canonical 子进程存在。进程可能已经留下两类更晚事实，
+    却在 Agent 收到退出码前硬终止：终态 failure sidecar 证明这份回答已被拒绝；
+    committed formal journal 证明它已经落地。两者都必须先绑回原席位/退休 record，
+    才能让新 planner 发 correction 或继续下游。prepared/canonical_pending 仍是进行中
+    的同一动作，只能交 deterministic Executor 补尾，不能提前记成拒绝。
+    """
+    action_records = [
+        (path, record)
+        for path, record in uploads.load_reviewer_actions(base, sid)
+        if record.node == 'stage2.global'
+        and record.flags is not None
+        and '--apply-edit' in record.flags
+    ]
+    if not action_records:
+        return
+
+    novel_dir = paths.resolve_novel_dir(base, sid)
+    store = ArtifactStore(state.readonly_ctx(
+        novel_dir, 'stage2.global', code or prov.code_version()))
+    target_sha256: str | None = None
+    failure: GlobalEditFailure | None = None
+    committed: GlobalEditCommit | None = None
+
+    if store.exists(STAGE2_GLOBAL_EDIT_FAILURE):
+        failure = store.read_own(
+            GlobalEditFailure, STAGE2_GLOBAL_EDIT_FAILURE)[0]
+        if failure.failure_kind != 'canonical_pending':
+            # 新人工 edit 可以在旧 sidecar 归档前成为 current；只有 exact
+            # canonical input 仍等于 failed edit 时，sidecar 才能消费旧回答。
+            if (store.full_sha256_or_none(STAGE2_GLOBAL_EDIT)
+                    == failure.failed_edit_sha256):
+                target_sha256 = failure.failed_edit_sha256
+            else:
+                failure = None
+    if store.exists(STAGE2_GLOBAL_EDIT_COMMIT):
+        journal = store.read_own(
+            GlobalEditCommit, STAGE2_GLOBAL_EDIT_COMMIT)[0]
+        if journal.state == 'committed':
+            if target_sha256 is not None:
+                raise reviewer_tasks.ReviewerTaskError(
+                    '同一 Stage2 edit 同时声称 terminal failure 与 committed')
+            committed = journal
+            target_sha256 = journal.failed_edit_sha256
+    if target_sha256 is None:
+        return
+
+    matches = [
+        (path, record)
+        for path, record in action_records
+        if _stage2_apply_edit_record_sha256(store, record) == target_sha256
+    ]
+    if len(matches) > 1:
+        raise reviewer_tasks.ReviewerTaskError(
+            '同一 canonical Stage2 edit 命中多份 durable action；无法唯一补账')
+    if not matches:
+        return
+
+    path, record = matches[0]
+    task = _stage2_task_from_action_record(path, record)
+    if failure is not None:
+        if (
+            record.source_sha256 != failure.expected_source_sha256
+            or record.workpack_sha256
+            != failure.global_review_workpack_sha256
+        ):
+            raise reviewer_tasks.ReviewerTaskError(
+                'Stage2 terminal failure 与 durable action 的 source/workpack 漂移')
+        if not _validate_stage2_action_record_ledger(
+                base, sid, record=record, task=task):
+            # 拒因已经 durable，只差 record 退休；绝不能再执行旧 action。
+            _discard_reviewer_action_record(base, path)
+            return
+        assert record.reviewer_session_run_id is not None
+        assert record.provider_response_sha256 is not None
+        assert record.source_sha256 is not None
+        assert record.main_text_sha256 is not None
+        assert record.workpack_sha256 is not None
+        stage2_review_ledger.record_rejection(
+            base, sid,
+            source_sha256=record.source_sha256,
+            main_text_sha256=record.main_text_sha256,
+            business_sha256=record.business_sha256,
+            workpack_sha256=record.workpack_sha256,
+            session_run_id=record.reviewer_session_run_id,
+            kind='canonical_action',
+            request_sha256=record.provider_response_sha256,
+            reason=(
+                f'{failure.reason_code}: {failure.reason_summary}'))
+        _discard_reviewer_action_record(base, path)
+        return
+
+    assert committed is not None
+    if (
+        record.source_sha256 != committed.expected_source_sha256
+        or record.workpack_sha256
+        != committed.global_review_workpack_sha256
+    ):
+        raise reviewer_tasks.ReviewerTaskError(
+            'Stage2 committed journal 与 durable action 的 source/workpack 漂移')
+    if not _validate_stage2_action_record_ledger(
+            base, sid, record=record, task=task):
+        raise reviewer_tasks.ReviewerTaskError(
+            'Stage2 action 已有 durable rejection，却又出现 committed formal journal')
+    _discard_reviewer_action_record(base, path)
+
+
+def _reconcile_landed_stage2_final_actions(base: str, sid: str) -> None:
+    """在 planner 读取前补完 final approval 已落地后的 ledger/record 双写窗。
+
+    ``approval close-stage2`` 是 canonical 正式写；它成功后 operator 已可能越过
+    final-review blocker，因此不能指望下一 parent 再构造旧 ReviewerTask 来清理。
+    这里不重放 approval，只以当前 effective s2/seen、盘上明文 token 与原席位账
+    证明同一回答已经落地：先幂等 ``mark_complete``，再退休 action record。
+    """
+    final_records = [
+        (path, record)
+        for path, record in uploads.load_reviewer_actions(base, sid)
+        if record.surface == 'stage2_final_review'
+    ]
+    if not final_records:
+        return
+
+    # 局部导入避免 approvals 的大依赖树进入 agent 模块初始化环。
+    from novel.orchestrator import approvals
+
+    approval = approvals.get(base, sid, include_spawns=False)
+    if not approval.gate.get('s2'):
+        # canonical 尚未落地：保留 record 给正常 final-review blocker 零模型重放。
+        return
+    if not all(approval.seen.values()):
+        raise reviewer_tasks.ReviewerTaskError(
+            'current s2 approval 与 seen.read/seen.global 投影不闭合')
+    try:
+        head = json.loads(approvals.approval_head_bytes(base, sid))
+        seen_subjects = head['seen_subjects']
+        current_global_token = seen_subjects['global']['review_token']
+        current_blueprint_token = seen_subjects['read']['review_token']
+    except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise reviewer_tasks.ReviewerTaskError(
+            'current s2 approval 缺可与 durable final action 对证的 seen token') from exc
+
+    matching: list[tuple[Path, ReviewerActionRecord]] = []
+    stale: list[Path] = []
+    for path, record in final_records:
+        try:
+            request = Stage2FinalReviewRequest.model_validate(record.payload)
+        except Exception as exc:  # noqa: BLE001 —— 坏 durable 记录不得静默略过
+            raise reviewer_tasks.ReviewerTaskError(
+                f'Stage2 final action record {path.name} 的 payload 不合法') from exc
+        if (
+            request.global_review_token == current_global_token
+            and request.blueprint_review_token == current_blueprint_token
+        ):
+            matching.append((path, record))
+        else:
+            stale.append(path)
+    if len(matching) > 1:
+        raise reviewer_tasks.ReviewerTaskError(
+            'current s2 approval 命中多份 durable final action，无法唯一补账')
+    if not matching:
+        # 当前 approval 已由另一份精确主体事实闭合；旧 token 的 action 不再可执行。
+        for path in stale:
+            _discard_reviewer_action_record(base, path)
+        return
+
+    path, record = matching[0]
+    task = _stage2_task_from_action_record(path, record)
+    if not _validate_stage2_action_record_ledger(
+            base, sid, record=record, task=task):
+        raise reviewer_tasks.ReviewerTaskError(
+            'current s2 approval 对应的原 final-review 席已记录拒因，不能自动补账')
+    assert record.source_sha256 is not None
+    assert record.main_text_sha256 is not None
+    stage2_review_ledger.mark_complete(
+        base, sid,
+        source_sha256=record.source_sha256,
+        main_text_sha256=record.main_text_sha256)
+    _discard_reviewer_action_record(base, path)
+    for stale_path in stale:
+        _discard_reviewer_action_record(base, stale_path)
+
+
 def _find_replayable_reviewer_action(
         base: str, sid: str, *, epoch: ExecutionEpoch,
         current: OperatorNext,
@@ -1015,10 +1613,12 @@ def _find_replayable_reviewer_action(
         ) -> _ReplayableReviewerAction | None:
     """唤起模型前先查盘上是否已有适用于当前 blocker 的 typed 决定。
 
-    只认同 ``waiting_on`` 且 surface seal、opaque review_token 或稳定
+    普通决定只认同 ``waiting_on`` 且 surface seal、opaque review_token 或稳定
     business identity 至少一项相同的记录。Stage0 没有 review_token，
     其 revision/完整保留文本/removed identity/contract 已全部进入
     ``business_sha256``，因此代码 epoch 改变后仍能零成本重放。
+    Stage2 必须同时命中稳定 business 与 workpack；surface seal 可因纯代码
+    epoch 变化，但 full action 仍须重走今天的 loader 与当前 permit。
     命中的记录仍要重走 ``load_action``：schema、sentinel、all-accept
     等确定性判据以今天的代码为准。
     """
@@ -1034,7 +1634,16 @@ def _find_replayable_reviewer_action(
             record.review_token is not None and current_token is not None
             and record.review_token == current_token)
         business_match = record.business_sha256 == task.business_sha256
-        if seal_match or token_match or business_match:
+        if record.workpack_sha256 is not None:
+            matches = (
+                business_match
+                and task.workpack_sha256 is not None
+                and record.workpack_sha256 == task.workpack_sha256
+                and record.reviewer_session_run_id is not None
+                and record.provider_response_sha256 is not None)
+        else:
+            matches = seal_match or token_match or business_match
+        if matches:
             candidates.append((record.recorded_at, path, record))
         else:
             _discard_reviewer_action_record(base, path)
@@ -1044,10 +1653,47 @@ def _find_replayable_reviewer_action(
     _recorded_at, path, record = candidates[-1]
     for _stale_at, stale_path, _stale in candidates[:-1]:
         _discard_reviewer_action_record(base, stale_path)
+    if record.workpack_sha256 is not None:
+        # 先证明 paid turn 已成功闭账；不能让一份 action record 自证席位成功，
+        # 更不能在 started/审计不完整时把它交给 canonical Executor。
+        if not _validate_stage2_action_record_ledger(
+                base, sid, record=record, task=task):
+            _discard_reviewer_action_record(base, path)
+            return None
     scratch = service_lifecycle.open_scratch_session(
         base, sid, epoch.epoch_id)
     try:
         document = reviewer_tasks.replay_request_document(record, current)
+        if record.node == 'stage2.global' and record.input_payload is not None:
+            # durable record 保存的是能直接交给 canonical CLI 的 full
+            # action，因此 input_payload 已带 artifact envelope；Reviewer loader
+            # 的输入面则是去掉可信版本信封的业务 payload，并由
+            # loader 自己重建 envelope。重放必须先做这一次逆投影，
+            # 不能把已编码 artifact 直接冒充 provider request。
+            flags = set(record.flags or ())
+            try:
+                if ('--apply-edit' in flags
+                        and '--review-decisions' not in flags):
+                    decoded = decode_artifact(
+                        STAGE2_GLOBAL_EDIT, record.input_payload)
+                elif ('--review-decisions' in flags
+                      and '--apply-edit' not in flags):
+                    decoded = decode_artifact(
+                        STAGE2_GLOBAL_REVIEW_DECISIONS, record.input_payload)
+                else:
+                    raise reviewer_tasks.ReviewerTaskError(
+                        'Stage2 durable action 操作形状不唯一')
+            except reviewer_tasks.ReviewerTaskError:
+                raise
+            except Exception as exc:  # noqa: BLE001 —— 坏记录关闭式汰汰
+                raise reviewer_tasks.ReviewerTaskError(
+                    'Stage2 durable action 的 typed payload 无法重建：'
+                    f'{type(exc).__name__}') from exc
+            action_document = document.get('action')
+            if not isinstance(action_document, dict):  # pragma: no cover
+                raise reviewer_tasks.ReviewerTaskError(
+                    'Stage2 durable action 重放 wrapper 缺 action')
+            action_document['input_payload'] = decoded.payload
         payload = (json.dumps(
             document, ensure_ascii=False, sort_keys=True) + '\n').encode('utf-8')
         replay_path = _write_identity_bound_scratch(
@@ -1066,7 +1712,8 @@ def _find_replayable_reviewer_action(
             RuntimeWarning, stacklevel=2)
         _discard_reviewer_action_record(base, path)
         return None
-    return _ReplayableReviewerAction(path=path, action=action)
+    return _ReplayableReviewerAction(
+        path=path, action=action, record=record)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1461,7 +2108,7 @@ def _materialize_reviewer_response(
         task: reviewer_tasks.ReviewerTask, current: OperatorNext,
         response: str, *,
         persist_validated: Callable[
-            [reviewer_tasks.ReviewerAction], Path | None] | None = None,
+            [reviewer_tasks.ReviewerAction, str], Path | None] | None = None,
         preserve_validated: Callable[[Path, str], Path] | None = None,
         ) -> tuple[reviewer_tasks.ReviewerAction, str, Path | None]:
     """复用现役 loader；approval 先 durable，再原子晋升 canonical scratch。"""
@@ -1491,7 +2138,7 @@ def _materialize_reviewer_response(
             submission_options=task.submission_options)
         validated = True
         record_path = (
-            persist_validated(action)
+            persist_validated(action, response_digest)
             if persist_validated is not None else None)
         _promote_reviewer_candidate(candidate, task.request_path)
         promoted = True
@@ -1522,21 +2169,41 @@ def _materialize_reviewer_response(
 
 def _materialize_stage2_prereview_response(
         task: reviewer_tasks.Stage2PrereviewTask,
-        response: str) -> tuple[dict[str, object], str]:
-    """预审也只由 Supervisor 物化，并使用同一现役 typed loader。"""
+        response: str, *,
+        persist_validated: Callable[[dict[str, object], str], Path] | None = None,
+        preserve_validated: Callable[[Path, str], Path] | None = None,
+        ) -> tuple[dict[str, object], str, Path | None]:
+    """预审由 Supervisor typed-load，并在 scratch 晋升前先 durable。"""
     document, digest = _reviewer_response_document(response)
     candidate = _reviewer_candidate_path(task.request_path)
     validated = False
     promoted = False
+    record_path: Path | None = None
     try:
         service_lifecycle.write_scratch_json_once(
             task.request_path.parent, candidate, document)
         payload = reviewer_tasks.load_stage2_prereview(
             replace(task, request_path=candidate))
         validated = True
+        record_path = (
+            persist_validated(payload, digest)
+            if persist_validated is not None else None)
         _promote_reviewer_candidate(candidate, task.request_path)
         promoted = True
-        return payload, digest
+        return payload, digest, record_path
+    except BaseException as exc:
+        if (validated and record_path is None and not promoted
+                and preserve_validated is not None):
+            try:
+                preserved = preserve_validated(candidate, digest)
+                if hasattr(exc, 'add_note'):
+                    exc.add_note(f'typed-valid Stage2 预审已隔离保留：{preserved}')
+            except BaseException as preserve_error:  # noqa: BLE001
+                if hasattr(exc, 'add_note'):
+                    exc.add_note(
+                        'typed-valid Stage2 预审隔离失败：'
+                        f'{type(preserve_error).__name__}: {preserve_error}')
+        raise
     finally:
         if not validated or promoted:
             try:
@@ -3410,6 +4077,16 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
     def _read_operator_next(epoch: ExecutionEpoch) -> OperatorNext:
         # Supervisor 已在本调用前后各核一次 epoch identity；这里复用同一 code，
         # 避免每个节点再为整棵 dirty worktree 启三次 git 子进程。
+        # reviewed apply-edit 可能已经由 canonical producer 写出 terminal
+        # failure/committed journal，却在子进程退出事实返回 Agent 前硬杀。先用
+        # durable action + producer 事实补拒因或退休记录；prepared 仍留给下面的
+        # deterministic recovery，不在这里把进行中的同一动作误记成失败。
+        _reconcile_stage2_apply_edit_actions(
+            base, sid, code=epoch.code_version)
+        # final-review canonical approval 可能已让 planner 越过旧 blocker，但宿主
+        # 尚未来得及封 Stage2 席位账。先用 durable action + current approval/seen
+        # 补完服务账并退休记录；不重复执行 approval，也不伪造一个 blocker。
+        _reconcile_landed_stage2_final_actions(base, sid)
         return operator.next_action_at_code(
             base, sid, code=epoch.code_version)
 
@@ -3438,23 +4115,33 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                 epoch, permit, launch_ticket,
                 stem='ready-stage2.blueprint')
 
+        durable_prereview = _find_replayable_stage2_prereview(
+            base, sid, task=prereview_task)
+        if durable_prereview is not None:
+            log = run_log_path(base, run_id)
+            log.parent.mkdir(parents=True, exist_ok=True)
+            with open(log, 'ab') as fh:
+                fh.write(
+                    f'$ [stage2-prereview-replay] '
+                    f'{durable_prereview.path}\n'.encode('utf-8'))
+            # 未绑定记录没有 provider session，也不把旧 surface 当执行授权；
+            # 这里只跳过第二次预审，Blueprint 仍持当前 permit 正常执行。
+            stage2_prereview = None
+            return _run_token(
+                epoch, permit, launch_ticket,
+                stem='ready-stage2.blueprint')
+
         existing = stage2_prereview
         same_existing = (
             existing is not None
-            and existing.task.business_sha256 == prereview_task.business_sha256
-            and existing.task.workpack_sha256 == prereview_task.workpack_sha256)
+            and _stage2_prereview_identity(existing.task)
+            == _stage2_prereview_identity(prereview_task))
         # 一次失败/坏 typed 输出已经是真实调用；没有可复用结果时也只让 Blueprint
         # 继续，live blocker 最多再领取剩余一轮，绝不偷偷重做预审。
         if same_existing:
-            executed = _run_token(
+            return _run_token(
                 epoch, permit, launch_ticket,
                 stem='ready-stage2.blueprint')
-            return replace(
-                executed,
-                provider_session_id=(
-                    existing.provider_session_id
-                    if same_existing and existing is not None
-                    else provider_session_id))
 
         # 这一格必须与 Blueprint pool 实际能取到的配置上限相同：
         # 配置为 1 时宁可不重叠，也不能因多一个 Reviewer 把并发抬到 2。
@@ -3479,6 +4166,40 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
             holder['reservation_made'] = True
             holder['durable_reservation'] = durable
 
+        def prereview_attempt_started(
+                attempt_id: str, kind: str,
+                resume_id: str | None) -> None:
+            if holder.get('durable_reservation') is not True:
+                return
+            assert prereview_task.source_sha256 is not None
+            assert prereview_task.main_text_sha256 is not None
+            stage2_review_ledger.record_attempt(
+                base, sid,
+                source_sha256=prereview_task.source_sha256,
+                main_text_sha256=prereview_task.main_text_sha256,
+                session_run_id=review_session_id,
+                attempt_id=attempt_id, kind=kind,
+                provider_session_id=resume_id)
+
+        def prereview_attempt_finished(
+                attempt_id: str, exit_code: int,
+                failure_kind: str | None,
+                provider_session_id: str | None,
+                wire_evidence: bool) -> None:
+            if holder.get('durable_reservation') is not True:
+                return
+            assert prereview_task.source_sha256 is not None
+            assert prereview_task.main_text_sha256 is not None
+            stage2_review_ledger.finish_attempt(
+                base, sid,
+                source_sha256=prereview_task.source_sha256,
+                main_text_sha256=prereview_task.main_text_sha256,
+                session_run_id=review_session_id,
+                attempt_id=attempt_id, exit_code=exit_code,
+                error_kind=failure_kind,
+                provider_session_id=provider_session_id,
+                wire_evidence=wire_evidence)
+
         def prereview_worker() -> None:
             review_exit_code = CRASH
             try:
@@ -3493,21 +4214,51 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                     environment_overrides=slot_env,
                     after_spawn_before_wire=reserve_prereview_call,
                     on_registered=registered.set,
-                    activity='stage2.global.prereview')
+                    activity='stage2.global.prereview',
+                    on_attempt_started=prereview_attempt_started,
+                    on_attempt_finished=prereview_attempt_finished)
                 holder['turn'] = turn
                 review_exit_code = turn.exit_code
                 if turn.exit_code == 0:
                     if turn.final_response is not None:
                         holder['response_sha256'] = _reviewer_response_sha256(
                             turn.final_response)
-                        holder['input_payload'], _response_sha256 = (
+                        def persist_prereview(
+                                input_payload: dict[str, object],
+                                response_sha256: str) -> Path:
+                            holder['typed_validated'] = True
+                            path = _record_stage2_prereview(
+                                base, sid, run_id=run_id, epoch=epoch,
+                                task=prereview_task,
+                                input_payload=input_payload,
+                                reviewer_session_run_id=review_session_id,
+                                provider_response_sha256=response_sha256)
+                            holder['record_path'] = path
+                            return path
+
+                        (_input_payload, _response_sha256,
+                         _record_path) = (
                             _materialize_stage2_prereview_response(
-                                prereview_task, turn.final_response))
+                                prereview_task, turn.final_response,
+                                persist_validated=persist_prereview,
+                                preserve_validated=lambda candidate, digest: (
+                                    _preserve_validated_reviewer_residue(
+                                        base, sid, candidate, digest))))
                     else:
                         # 历史/测试 spawn 仍可物化旧文件；生产
                         # structured driver 成功却缺回答会在协议层拒绝。
-                        holder['input_payload'] = (
-                            reviewer_tasks.load_stage2_prereview(prereview_task))
+                        input_payload = reviewer_tasks.load_stage2_prereview(
+                            prereview_task)
+                        response_sha256 = _reviewer_request_sha256(
+                            prereview_task.request_path)
+                        holder['response_sha256'] = response_sha256
+                        holder['typed_validated'] = True
+                        holder['record_path'] = _record_stage2_prereview(
+                            base, sid, run_id=run_id, epoch=epoch,
+                            task=prereview_task,
+                            input_payload=input_payload,
+                            reviewer_session_run_id=review_session_id,
+                            provider_response_sha256=response_sha256)
                 else:
                     holder.setdefault(
                         'error', RuntimeError(
@@ -3516,7 +4267,8 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
             except BaseException as exc:  # noqa: BLE001 —— Blueprint 仍须独立收尾
                 holder['error'] = exc
                 if (review_exit_code == 0
-                        and isinstance(exc, reviewer_tasks.ReviewerTaskError)):
+                        and isinstance(exc, reviewer_tasks.ReviewerTaskError)
+                        and not isinstance(holder.get('record_path'), Path)):
                     holder['rejection_reason'] = str(exc)
                     holder['rejection_request_sha256'] = (
                         str(holder['response_sha256'])
@@ -3544,6 +4296,7 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                                 reason=str(holder['rejection_reason']))
                 except BaseException as exc:  # noqa: BLE001 —— 坏账必须显式留下
                     holder['error'] = exc
+                    holder['ledger_error'] = exc
                 finally:
                     finished.set()
 
@@ -3569,15 +4322,10 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
         finally:
             thread.join()
 
-        turn = holder.get('turn')
-        observed_provider = None
-        payload = holder.get('input_payload')
         error = holder.get('error')
         stage2_prereview = _Stage2PrereviewState(
             task=prereview_task,
             session_run_id=review_session_id,
-            provider_session_id=observed_provider,
-            input_payload=(payload if isinstance(payload, dict) else None),
             error=(
                 f'{type(error).__name__}: {error}' if isinstance(error, BaseException)
                 else None),
@@ -3588,6 +4336,42 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
         if action_error is not None:
             raise action_error
         assert executed is not None
+        ledger_error = holder.get('ledger_error')
+        if isinstance(ledger_error, BaseException):
+            # provider 回答即使已经 durable，席位 finish/rejection 审计失败也
+            # 不能消费；记录继续留盘，下一 parent 先修复账面再恢复。
+            detail = f'{type(ledger_error).__name__}: {ledger_error}'
+            latest_outcome = AgentDeliveryOutcome(
+                state='unknown', checked_at=int(time.time()),
+                reason=(
+                    'Blueprint 动作已结束，但 Stage2 预审席位审计没有完整闭合：'
+                    f'{detail}'))
+            latest_rc = CRASH
+            latest_error_kind = 'stage2_prereview_integrity'
+            return SupervisorActionResult(
+                exit_code=CRASH, outcome=latest_outcome,
+                continue_ready=False, failure_detail=detail,
+                provider_session_id=None)
+        if (holder.get('typed_validated') is True
+                and not isinstance(holder.get('record_path'), Path)):
+            # Blueprint 可能已经 landed，但一份已付费、typed-valid 的预审没有
+            # 形成跨 stop/restart 的恢复凭据；不能把并发支线故障藏在 Blueprint
+            # exit 0 后继续，也不能下一 parent 再买同一席。
+            detail = (
+                f'{type(error).__name__}: {error}'
+                if isinstance(error, BaseException)
+                else 'Stage2 typed-valid 预审 durable save 未形成记录')
+            latest_outcome = AgentDeliveryOutcome(
+                state='unknown', checked_at=int(time.time()),
+                reason=(
+                    'Blueprint 动作已结束，但 Stage2 typed-valid 预审没有形成'
+                    f'可重启恢复记录：{detail}'))
+            latest_rc = CRASH
+            latest_error_kind = 'stage2_prereview_durable'
+            return SupervisorActionResult(
+                exit_code=CRASH, outcome=latest_outcome,
+                continue_ready=False, failure_detail=detail,
+                provider_session_id=None)
         # 两条并发支线都收尾后，parent 的节点事实必须仍由 Blueprint action 决定；
         # Commander 自己的 outcome 只留在 commander audit/session 中。
         latest_outcome = executed.outcome
@@ -3595,7 +4379,9 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
         latest_error_kind = (
             None if executed.exit_code in (0, 1, 2)
             else 'ready-stage2.blueprint_process_exit')
-        return replace(executed, provider_session_id=observed_provider)
+        # 预审席位只靠 ledger/workpack 连续，不把它的 provider session 注入
+        # parent；Supervisor 因而不会用该 session 续会。
+        return replace(executed, provider_session_id=None)
 
     def _run_blocked_action(
             epoch: ExecutionEpoch, current: OperatorNext,
@@ -3607,9 +4393,27 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
             raise RuntimeError('Supervisor 交入了未登记的 deterministic blocker')
         permit = execution_permit.permit_from_next(
             current, action.node, action.flags)
-        return _run_token(
+        recovered = _run_token(
             epoch, permit, launch_ticket,
             stem=f'recovery-{permit.node}')
+        if (
+            action.waiting_on == queue.WAITING_ON_STAGE2_EDIT_COMMIT
+            and recovered.exit_code == 2
+        ):
+            # reviewed-edit WAL 补尾可以以 terminal sidecar 明确结束：
+            # 这不是再停一次等人点“继续”，而是同一 canonical
+            # action 已经得到拒因。planner 前 reconcile 会先把它绑回
+            # 原 Stage2 席位并退休 action record；只有现役状态已精确
+            # 转到 correction 才继续循环。仍是 commit blocker 或任何其他
+            # 状态时保持 exit2 停点，避免确定性死循环。
+            live = _read_operator_next(epoch)
+            live_waiting_on = (
+                live.action.waiting_on
+                if live.state == 'blocked' and live.action is not None
+                else None)
+            if live_waiting_on == queue.WAITING_ON_STAGE2_EDIT_CORRECTION:
+                return replace(recovered, continue_ready=True)
+        return recovered
 
     def _run_approval_action(
             epoch: ExecutionEpoch,
@@ -3686,11 +4490,62 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                 business_sha256=task.business_sha256,
                 expected_request_sha256=expected_request_sha256)
 
+        def prepare_stage2_action_before_finish(
+                task: reviewer_tasks.ReviewerTask, current: OperatorNext,
+                turn: CommanderTurnResult, session_run_id: str,
+                holder: dict[str, object], *,
+                effective_progress_sha256: str | None = None) -> None:
+            """在 Stage2 席位闭账前完成 loader、action 持久化与 scratch 晋升。
+
+            回调把错误留给闭账后的调用者处理：typed-invalid 必须先把一次成功的
+            provider 交付记成 ``ok``，随后才能把 loader 拒因绑定回该席；反之，
+            typed-valid 的 full action 已在 finish 失败前落稳，绝不会只存在栈上。
+            """
+            try:
+                if turn.final_response is not None:
+                    action, response_sha256, record_path = (
+                        _materialize_reviewer_response(
+                            task, current, turn.final_response,
+                            persist_validated=lambda action, response_sha256: (
+                                _record_reviewer_action(
+                                    base, sid, run_id=run_id, epoch=epoch,
+                                    task=task, action=action,
+                                    reviewer_session_run_id=session_run_id,
+                                    provider_response_sha256=response_sha256,
+                                    reviewer_progress_sha256=(
+                                        effective_progress_sha256))),
+                            preserve_validated=lambda candidate, digest: (
+                                _preserve_validated_reviewer_residue(
+                                    base, sid, candidate, digest))))
+                else:
+                    action = reviewer_tasks.load_action(
+                        task.request_path, current,
+                        submission_options=task.submission_options)
+                    response_sha256 = _reviewer_request_sha256(task.request_path)
+                    record_path = _record_reviewer_action(
+                        base, sid, run_id=run_id, epoch=epoch, task=task,
+                        action=action,
+                        reviewer_session_run_id=session_run_id,
+                        provider_response_sha256=response_sha256,
+                        reviewer_progress_sha256=effective_progress_sha256)
+                if record_path is None:
+                    raise RuntimeError(
+                        'Stage2 typed-valid node 决定没有形成 durable action record')
+                holder.update({
+                    'action': action,
+                    'response_sha256': response_sha256,
+                    'record_path': record_path,
+                })
+            except BaseException as exc:  # noqa: BLE001 —— finish 后按类型收口
+                holder['error'] = exc
+
         def run_reviewer_turn(
                 task: reviewer_tasks.ReviewerTask,
                 prompt: str, *, purpose: str = 'review',
                 progress_sha256: str | None = None,
                 activity: str | None = None,
+                before_stage2_finish: Callable[
+                    [CommanderTurnResult, str], None] | None = None,
                 ) -> CommanderTurnResult:
             """Stage2 的模型调用预算是产品边界；确定性动作不占轮次。"""
             nonlocal latest_outcome, latest_rc, latest_error_kind
@@ -3761,6 +4616,13 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                         activity=activity,
                         on_attempt_started=attempt_started,
                         on_attempt_finished=attempt_finished)
+                    if (durable_reservation and turn.exit_code == 0
+                            and before_stage2_finish is not None):
+                        # Stage2 的 typed-valid 回答必须先变成 durable full action，
+                        # 再把席位从 started 补成 ok。这样宿主死在两次原子写之间时，
+                        # 新 parent 仍能凭 action+attempt/session/cost 四证补完并重放；
+                        # 不能出现“账已 ok、回答只在调用栈里”的不可恢复空窗。
+                        before_stage2_finish(turn, review_session_id)
                     if not isinstance(
                             reservation_error,
                             stage2_review_ledger.Stage2ReviewBudgetRefused):
@@ -3920,6 +4782,7 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                     reason=reason, request_sha256=previous_request_sha256)
                 if (waiting_on in queue.STAGE2_REVIEWER_WAITING_ON
                     and task.progress_sha256 is not None) else None)
+            prepared_stage2: dict[str, object] = {}
             turn = run_reviewer_turn(
                 task,
                 reviewer_tasks.correction_prompt(
@@ -3927,7 +4790,12 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                     request_sha256=previous_request_sha256,
                     attempt=attempt),
                 purpose='correction', progress_sha256=correction_progress,
-                activity=_reviewer_activity(task))
+                activity=_reviewer_activity(task),
+                before_stage2_finish=(
+                    lambda got, session_id: prepare_stage2_action_before_finish(
+                        task, current, got, session_id, prepared_stage2,
+                        effective_progress_sha256=correction_progress)
+                    if waiting_on in queue.STAGE2_REVIEWER_WAITING_ON else None))
             if turn.exit_code != 0:
                 return turn
             request_sha256 = _reviewer_turn_response_sha256(
@@ -3943,6 +4811,13 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                         kind='typed_loader',
                         request_sha256=request_sha256,
                         reason=no_progress_reason)
+                    durable_no_progress = prepared_stage2.get('record_path')
+                    if isinstance(durable_no_progress, Path):
+                        # callback 已在 ledger.finish 前保存了 full action。只有
+                        # no-progress 拒因成功绑定本席后才消费这份可执行记录；若
+                        # 拒因写盘失败，上面的异常会保留 record 并以 unknown 收口。
+                        _discard_reviewer_action_record(
+                            base, durable_no_progress)
                 reviewer_correction_task = None
                 reviewer_correction_binding = None
                 reviewer_correction_reason = None
@@ -3961,15 +4836,43 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                     continue_ready=False, outcome=latest_outcome)
             try:
                 validated_record_path: Path | None = None
-                if turn.final_response is not None:
+                if waiting_on in queue.STAGE2_REVIEWER_WAITING_ON:
+                    prepared_error = prepared_stage2.get('error')
+                    if isinstance(prepared_error, BaseException):
+                        raise prepared_error
+                    candidate_action = prepared_stage2.get('action')
+                    candidate_digest = prepared_stage2.get('response_sha256')
+                    candidate_record = prepared_stage2.get('record_path')
+                    if (not isinstance(candidate_action, (
+                            reviewer_tasks.ReviewerNodeAction,
+                            reviewer_tasks.ReviewerApprovalAction,
+                            reviewer_tasks.ReviewerStopAction))
+                            or not isinstance(candidate_digest, str)
+                            or not isinstance(candidate_record, Path)):
+                        raise RuntimeError(
+                            'Stage2 correction finish 前没有完整 durable action')
+                    corrected_action = candidate_action
+                    request_sha256 = candidate_digest
+                    validated_record_path = candidate_record
+                elif turn.final_response is not None:
                     (corrected_action, request_sha256,
                      validated_record_path) = (
                         _materialize_reviewer_response(
                             task, current, turn.final_response,
-                            persist_validated=lambda action: (
+                            persist_validated=lambda action, response_sha256: (
                                 _record_reviewer_action(
                                     base, sid, run_id=run_id, epoch=epoch,
-                                    task=task, action=action)),
+                                    task=task, action=action,
+                                    reviewer_session_run_id=(
+                                        stage2_turn_session_run_id
+                                        if waiting_on
+                                        in queue.STAGE2_REVIEWER_WAITING_ON
+                                        else None),
+                                    provider_response_sha256=(
+                                        response_sha256
+                                        if waiting_on
+                                        in queue.STAGE2_REVIEWER_WAITING_ON
+                                        else None))),
                             preserve_validated=lambda candidate, digest: (
                                 _preserve_validated_reviewer_residue(
                                     base, sid, candidate, digest))))
@@ -3979,7 +4882,15 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                         submission_options=task.submission_options)
                     validated_record_path = _record_reviewer_action(
                         base, sid, run_id=run_id, epoch=epoch, task=task,
-                        action=corrected_action)
+                        action=corrected_action,
+                        reviewer_session_run_id=(
+                            stage2_turn_session_run_id
+                            if waiting_on in queue.STAGE2_REVIEWER_WAITING_ON
+                            else None),
+                        provider_response_sha256=(
+                            request_sha256
+                            if waiting_on in queue.STAGE2_REVIEWER_WAITING_ON
+                            else None))
             except reviewer_tasks.ReviewerTaskError as exc:
                 if waiting_on in queue.STAGE2_REVIEWER_WAITING_ON:
                     _record_stage2_rejection(
@@ -4087,14 +4998,34 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
             business_action = (business_sha256, action_sha256)
             if (business_action in completed_reviewer_business_actions
                     or business_action in rejected_reviewer_business_actions):
+                no_progress_reason = (
+                    'Commander 在同一 Stage2 业务主体上重复提交了已经执行或拒绝的'
+                    '等价 typed 动作；仅 review surface/workpack 变化不构成修复进展，'
+                    '已阻止无效循环')
+                if waiting_on in queue.STAGE2_REVIEWER_WAITING_ON:
+                    if source_stage2_session_run_id is None:
+                        raise RuntimeError(
+                            'Stage2 等价 typed 动作缺产出席位，不能安全消费 durable '
+                            'action record')
+                    _record_stage2_rejection(
+                        source_task,
+                        session_run_id=source_stage2_session_run_id,
+                        kind='typed_loader',
+                        request_sha256=(
+                            source_response_sha256
+                            or _reviewer_request_sha256(
+                                source_task.request_path)),
+                        reason=no_progress_reason)
+                # full action 已在 Stage2 席位 finish 前落盘。必须先让拒因
+                # durable，再退休它；若拒因持久化失败，上面的异常会保留记录，
+                # 下一 parent 关闭式恢复，绝不能把同一决定重新执行。
+                if record_path is not None:
+                    _discard_reviewer_action_record(base, record_path)
                 latest_rc = 2
                 latest_error_kind = 'commander_reviewer_no_progress'
                 latest_outcome = AgentDeliveryOutcome(
                     state='stopped', checked_at=int(time.time()),
-                    reason=(
-                        'Commander 在同一 Stage2 业务主体上重复提交了已经执行或拒绝的'
-                        '等价 typed 动作；'
-                        '仅 review surface/workpack 变化不构成修复进展，已阻止无效循环'))
+                    reason=no_progress_reason)
                 return CommanderTurnResult(
                     exit_code=2,
                     provider_session_id=provider_session_id,
@@ -4163,6 +5094,76 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                     epoch, action, launch_ticket)
             else:  # pragma: no cover —— ReviewerAction union 的未来扩展须显式接线
                 raise TypeError(f'未接线的 reviewer action：{type(action).__name__}')
+            stage2_apply_edit_exit2 = (
+                result.exit_code == 2
+                and waiting_on in queue.STAGE2_REVIEWER_WAITING_ON
+                and isinstance(action, reviewer_tasks.ReviewerNodeAction)
+                and '--apply-edit' in action.flags
+            )
+            if stage2_apply_edit_exit2:
+                # exit 2 本身分不出“已经形成 terminal failure”与“canonical/
+                # formal WAL 已接管、只差 0-wire 补尾”。必须先重读唯一 planner：
+                # prepared 优先交 Executor，不能提前给原回答记 rejection；terminal
+                # sidecar 则由 planner 前 reconcile 精确绑回原席并消费 action record。
+                live = _read_operator_next(epoch)
+                live_waiting_on = (
+                    live.action.waiting_on
+                    if live.state == 'blocked' and live.action is not None
+                    else None)
+                if live_waiting_on == queue.WAITING_ON_STAGE2_EDIT_COMMIT:
+                    latest_rc = 2
+                    latest_error_kind = 'stage2_global_action_commit_pending'
+                    latest_outcome = AgentDeliveryOutcome(
+                        state='stopped', checked_at=int(time.time()),
+                        reason=(
+                            'Stage2 apply-edit 已由 canonical prepared journal '
+                            '接管；返回 planner 以 exact action 交 Executor 零模型补尾'))
+                    return CommanderTurnResult(
+                        exit_code=2, provider_session_id=None,
+                        continue_ready=True, outcome=latest_outcome)
+                if live_waiting_on == queue.WAITING_ON_STAGE2_EDIT_CORRECTION:
+                    # 正常新 producer 由 _reconcile_stage2_apply_edit_actions 使用
+                    # terminal sidecar 落拒因。旧盘/测试若没有可读 record，仍以当前
+                    # 子进程的明确 exit2 摘要补同一事实，绝不无因开启 correction。
+                    pending_rejection = _pending_stage2_rejection(source_task)
+                    stage2_rejection = result.failure_detail or (
+                        'canonical Stage2 apply-edit 返回 exit 2，正式产物未落盘')
+                    if pending_rejection is None:
+                        _record_stage2_rejection(
+                            source_task,
+                            session_run_id=source_stage2_session_run_id,
+                            kind='canonical_action',
+                            request_sha256=(
+                                source_response_sha256
+                                or _reviewer_request_sha256(
+                                    source_task.request_path)),
+                            reason=stage2_rejection)
+                        if record_path is not None:
+                            _discard_reviewer_action_record(base, record_path)
+                    rejected_reviewer_business_actions.add(business_action)
+                    if stage2_commander_turns >= _MAX_STAGE2_EDIT_SEAT:
+                        latest_rc = 2
+                        latest_error_kind = 'stage2_global_action_rejected'
+                        latest_outcome = AgentDeliveryOutcome(
+                            state='stopped', checked_at=int(time.time()),
+                            reason=(
+                                f'Stage2 global 第 {stage2_commander_turns} 次 '
+                                'Commander apply-edit 被确定性边界拒绝，持久预算'
+                                '已用尽。'
+                                f'{pending_rejection.reason if pending_rejection else stage2_rejection}'))
+                        return CommanderTurnResult(
+                            exit_code=2, provider_session_id=None,
+                            continue_ready=False, outcome=latest_outcome)
+                    latest_rc = 2
+                    latest_error_kind = 'stage2_global_action_replan'
+                    latest_outcome = AgentDeliveryOutcome(
+                        state='stopped', checked_at=int(time.time()),
+                        reason=(
+                            'Stage2 apply-edit 拒因已持久绑定原席位；返回 planner '
+                            '重读 live reviewed-edit correction 业务面'))
+                    return CommanderTurnResult(
+                        exit_code=2, provider_session_id=None,
+                        continue_ready=True, outcome=latest_outcome)
             if (result.exit_code == 2
                     and waiting_on in queue.STAGE2_REVIEWER_WAITING_ON
                     and (source_stage2_session_run_id is not None
@@ -4180,10 +5181,18 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                         source_response_sha256
                         or _reviewer_request_sha256(source_task.request_path)),
                     reason=stage2_rejection)
-            if record_path is not None and landed(result.exit_code):
+            final_stage2_approval_landed = (
+                result.exit_code == 0
+                and waiting_on == queue.WAITING_ON_STAGE2_FINAL_REVIEW
+                and isinstance(action, reviewer_tasks.ReviewerApprovalAction)
+            )
+            if (record_path is not None and landed(result.exit_code)
+                    and not final_stage2_approval_landed):
                 # 已落盘的决定不再适用。exit 2 需先重读 live
                 # binding 才能判断是真正拒绝还是 surface 竞态，
                 # 不能在这里提前删掉；结论未知则一律保留。
+                # final approval exit0 还要先封 Stage2 review ledger；它在下方
+                # 单独按 landed → mark_complete → retire 顺序处理。
                 _discard_reviewer_action_record(base, record_path)
             if (result.exit_code == 2
                     and waiting_on not in queue.STAGE2_REVIEWER_WAITING_ON):
@@ -4326,12 +5335,15 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                     provider_session_id=provider_session_id,
                     continue_ready=True, outcome=result.outcome,
                     continue_reviewer=True)
-            if (result.exit_code == 0
-                    and waiting_on == queue.WAITING_ON_STAGE2_FINAL_REVIEW
-                    and isinstance(action, reviewer_tasks.ReviewerApprovalAction)):
+            if final_stage2_approval_landed:
                 # 只有第四席只读终审的 confirm 真正收口 s2 后才封账；review-decisions
                 # / apply-edit 以 exit 0 结束只说明 blocking 面安全，终审席仍待发放。
+                # record 必须跨过 mark_complete 失败窗：下个 parent 即使 planner
+                # 已越过旧 blocker，也能凭 current approval/seen 幂等补账；封账成功
+                # 后才退休 record，删除失败则由同一恢复口下次清理。
                 _complete_stage2_review_ledger(source_task)
+                if record_path is not None:
+                    _discard_reviewer_action_record(base, record_path)
             return CommanderTurnResult(
                 exit_code=result.exit_code,
                 provider_session_id=provider_session_id,
@@ -4409,117 +5421,165 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                     exit_code=2, provider_session_id=None,
                     continue_ready=True, outcome=latest_outcome,
                     continue_reviewer=True)
-        if (waiting_on == queue.WAITING_ON_STAGE2_REVIEW
-                and stage2_prereview is not None):
-            prereview = stage2_prereview
-            stage2_prereview = None
-            same_business = (
-                prereview.task.business_sha256 == task.business_sha256)
-            option_workpack_sha = None
-            for option in task.submission_options:
-                exact = option.get('exact_request')
-                action = exact.get('action') if isinstance(exact, dict) else None
-                payload = (
-                    action.get('input_payload')
-                    if isinstance(action, dict) else None)
-                scope = (
-                    payload.get('blocking_scope')
-                    if isinstance(payload, dict) else None)
-                candidate = (
-                    scope.get('expected_workpack_sha256')
-                    if isinstance(scope, dict) else None)
-                if isinstance(candidate, str):
-                    option_workpack_sha = candidate
-                    break
-            same_workpack = (
-                option_workpack_sha == prereview.task.workpack_sha256)
-            if (same_business and same_workpack
-                    and prereview.input_payload is not None):
+        if waiting_on == queue.WAITING_ON_STAGE2_REVIEW:
+            # full action record 是 prereview 成功 live bind 后的更晚状态。若宿主
+            # 崩在“保存 action → 删除 prereview”之间，优先重放 full action，并
+            # 幂等清掉被它取代的未绑定记录，不能再组装第二份 action。
+            action_replay = _find_replayable_reviewer_action(
+                base, sid, epoch=epoch, current=current, task=task)
+            if action_replay is not None:
+                for obsolete_path, _obsolete in uploads.load_stage2_prereviews(
+                        base, sid):
+                    uploads.discard_edit_plan(base, obsolete_path)
+                log = run_log_path(base, run_id)
+                log.parent.mkdir(parents=True, exist_ok=True)
+                with open(log, 'ab') as fh:
+                    fh.write(
+                        f'$ [reviewer-replay] '
+                        f'{action_replay.path}\n'.encode('utf-8'))
+                reviewed_blockers.add(binding)
+                pending_reviewer_action = action_replay.action
+                pending_reviewer_binding = binding
+                pending_reviewer_business_sha256 = task.business_sha256
+                pending_reviewer_source_task = task
+                pending_reviewer_response_sha256 = (
+                    action_replay.record.provider_response_sha256)
+                pending_reviewer_stage2_session_run_id = (
+                    action_replay.record.reviewer_session_run_id)
+                pending_reviewer_record_path = action_replay.path
+                pending_reviewer_replayed = True
+                stage2_prereview = None
+                return CommanderTurnResult(
+                    exit_code=0, provider_session_id=None,
+                    continue_ready=True, outcome=latest_outcome)
+            try:
+                durable_prereview = _find_replayable_stage2_prereview(
+                    base, sid, task=task)
+            except (NovelError, reviewer_tasks.ReviewerTaskError) as exc:
+                reviewed_blockers.add(binding)
+                latest_rc = CRASH
+                latest_error_kind = 'stage2_prereview_recovery'
+                latest_outcome = AgentDeliveryOutcome(
+                    state='unknown', checked_at=int(time.time()),
+                    reason=(
+                        'Stage2 持久预审无法唯一、完整地恢复；已在任何新 '
+                        f'Commander wire 前关闭：{exc}'))
+                return CommanderTurnResult(
+                    exit_code=CRASH, provider_session_id=None,
+                    continue_ready=False, outcome=latest_outcome)
+            if durable_prereview is not None:
+                stage2_prereview = None
+                record = durable_prereview.record
                 try:
                     prefetched_action = reviewer_tasks.bind_stage2_prereview(
-                        task, current, prereview.input_payload)
+                        task, current, record.input_payload)
                 except reviewer_tasks.ReviewerTaskError as exc:
-                    # 预审已是真实调用；绑定器拒绝时把精确拒绝事实与紧凑包
-                    # 交给新的 logical session，不依赖供应商隐藏上下文。
-                    prereview_request_sha256 = (
-                        prereview.response_sha256
-                        or _reviewer_request_sha256(task.request_path))
+                    # live loader 的显式拒绝先绑定回产出这份回答的原席；只有
+                    # rejection durable 后才消费未绑定记录、进入 fresh correction。
                     _record_stage2_rejection(
-                        prereview.task,
-                        session_run_id=prereview.session_run_id,
+                        task,
+                        session_run_id=record.reviewer_session_run_id,
                         kind='typed_loader',
-                        request_sha256=prereview_request_sha256,
+                        request_sha256=record.provider_response_sha256,
                         reason=str(exc))
+                    uploads.discard_edit_plan(base, durable_prereview.path)
+                    pending = _pending_stage2_rejection(task)
+                    if pending is not None:
+                        stage2_commander_turns = max(
+                            stage2_commander_turns, pending.turn.ordinal)
+                    latest_rc = 2
+                    latest_error_kind = 'stage2_prereview_binding'
+                    latest_outcome = AgentDeliveryOutcome(
+                        state='stopped', checked_at=int(time.time()),
+                        reason=f'Stage2 Global 持久预审未通过 live 重绑定：{exc}')
                     if stage2_commander_turns >= _MAX_STAGE2_EDIT_SEAT:
                         reviewed_blockers.add(binding)
-                        latest_rc = 2
-                        latest_error_kind = 'stage2_prereview_binding'
                         latest_outcome = AgentDeliveryOutcome(
                             state='stopped', checked_at=int(time.time()),
                             reason=(
-                                'Stage2 Global 预审无法绑定 live workpack，且前 '
+                                'Stage2 Global 持久预审无法绑定 live workpack，且前 '
                                 f'{_MAX_STAGE2_EDIT_SEAT} 席审阅/订正预算已用尽；'
                                 f'第 {_MAX_STAGE2_COMMANDER_TURNS} 席只保留给'
                                 f'只读 final_review。原 typed loader 拒因：{exc}'))
                         return CommanderTurnResult(
-                            exit_code=2,
-                            provider_session_id=None,
+                            exit_code=2, provider_session_id=None,
                             continue_ready=False, outcome=latest_outcome)
                     if not task.request_path.is_file():
-                        latest_rc = 2
-                        latest_error_kind = 'stage2_prereview_binding'
+                        reviewed_blockers.add(binding)
                         latest_outcome = AgentDeliveryOutcome(
                             state='stopped', checked_at=int(time.time()),
                             reason=(
-                                'Stage2 Global 预审无法绑定 live workpack，'
+                                'Stage2 Global 持久预审无法绑定 live workpack，'
                                 f'且没有形成可纠正的 typed 请求：{exc}'))
                         return CommanderTurnResult(
-                            exit_code=2,
-                            provider_session_id=None,
+                            exit_code=2, provider_session_id=None,
                             continue_ready=False, outcome=latest_outcome)
                     reviewer_correction_task = task
                     reviewer_correction_binding = binding
                     reviewer_correction_reason = str(exc)
                     reviewer_correction_request_sha256 = (
-                        prereview_request_sha256)
+                        record.provider_response_sha256)
                     reviewer_correction_attempts = 0
                     return CommanderTurnResult(
-                        exit_code=2,
-                        provider_session_id=None,
+                        exit_code=2, provider_session_id=None,
                         continue_ready=True, outcome=latest_outcome,
                         continue_reviewer=True)
+
+                # 这一步才从“无写权预审”变成可执行 full action。必须先保存后者，
+                # 再删前者；任一步异常都以 unknown 退出且保留至少一份恢复凭据。
+                action_record_path = _record_reviewer_action(
+                    base, sid, run_id=run_id, epoch=epoch, task=task,
+                    action=prefetched_action,
+                    reviewer_session_run_id=record.reviewer_session_run_id,
+                    provider_response_sha256=record.provider_response_sha256)
+                if action_record_path is None:  # pragma: no cover —— node 恒有记录
+                    raise RuntimeError('Stage2 预审重绑定没有形成 durable action record')
+                uploads.discard_edit_plan(base, durable_prereview.path)
+                log = run_log_path(base, run_id)
+                log.parent.mkdir(parents=True, exist_ok=True)
+                with open(log, 'ab') as fh:
+                    fh.write(
+                        f'$ [stage2-prereview-replay] '
+                        f'{durable_prereview.path}\n'.encode('utf-8'))
                 reviewed_blockers.add(binding)
                 pending_reviewer_action = prefetched_action
                 pending_reviewer_binding = binding
                 pending_reviewer_business_sha256 = task.business_sha256
                 pending_reviewer_source_task = task
                 pending_reviewer_response_sha256 = (
-                    prereview.response_sha256
-                    or _reviewer_request_sha256(task.request_path))
+                    record.provider_response_sha256)
                 pending_reviewer_stage2_session_run_id = (
-                    prereview.session_run_id)
-                pending_reviewer_record_path = _record_reviewer_action(
-                    base, sid, run_id=run_id, epoch=epoch, task=task,
-                    action=prefetched_action)
-                pending_reviewer_replayed = False
+                    record.reviewer_session_run_id)
+                pending_reviewer_record_path = action_record_path
+                pending_reviewer_replayed = True
                 return CommanderTurnResult(
-                    exit_code=0,
-                    provider_session_id=None,
+                    exit_code=0, provider_session_id=None,
                     continue_ready=True, outcome=latest_outcome)
-            if same_business and same_workpack and prereview.error is not None:
-                reviewer_correction_task = task
-                reviewer_correction_binding = binding
-                reviewer_correction_reason = prereview.error
-                reviewer_correction_request_sha256 = (
-                    prereview.response_sha256
-                    or _reviewer_request_sha256(task.request_path))
-                reviewer_correction_attempts = 0
-                return CommanderTurnResult(
-                    exit_code=2, provider_session_id=None,
-                    continue_ready=True, outcome=latest_outcome,
-                    continue_reviewer=True)
-        replay = _find_replayable_reviewer_action(
-            base, sid, epoch=epoch, current=current, task=task)
+
+            # typed-invalid/Commander failure 没有 durable payload；同 parent 只保留
+            # 纠错坐标。完整身份一旦漂移就丢弃，不得把旧错误嫁接到新 workpack。
+            if stage2_prereview is not None:
+                prereview = stage2_prereview
+                stage2_prereview = None
+                if (_stage2_prereview_identity(prereview.task)
+                        == _stage2_prereview_identity(task)
+                        and prereview.error is not None):
+                    reviewer_correction_task = task
+                    reviewer_correction_binding = binding
+                    reviewer_correction_reason = prereview.error
+                    reviewer_correction_request_sha256 = (
+                        prereview.response_sha256
+                        or _reviewer_request_sha256(task.request_path))
+                    reviewer_correction_attempts = 0
+                    return CommanderTurnResult(
+                        exit_code=2, provider_session_id=None,
+                        continue_ready=True, outcome=latest_outcome,
+                        continue_reviewer=True)
+        replay = (
+            None
+            if waiting_on == queue.WAITING_ON_STAGE2_REVIEW
+            else _find_replayable_reviewer_action(
+                base, sid, epoch=epoch, current=current, task=task))
         if replay is not None:
             log = run_log_path(base, run_id)
             log.parent.mkdir(parents=True, exist_ok=True)
@@ -4531,11 +5591,13 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
             pending_reviewer_binding = binding
             pending_reviewer_business_sha256 = task.business_sha256
             pending_reviewer_source_task = task
-            pending_reviewer_response_sha256 = None
-            # Stage2 现役动作不写通用 ReviewerActionRecord；保守兼容的旧
-            # replay 若存在，也没有可证明的原席 session，canonical 拒绝时
-            # 不得凭当前 parent 伪造绑定。
-            pending_reviewer_stage2_session_run_id = None
+            pending_reviewer_response_sha256 = (
+                replay.record.provider_response_sha256)
+            # Stage2 durable record 把 full action 与原始 compact 回答、
+            # 产出席位分开保存；重放后 canonical exit 2 必须精确
+            # 回写原席，不得用 assembled request digest 污染拒因。
+            pending_reviewer_stage2_session_run_id = (
+                replay.record.reviewer_session_run_id)
             pending_reviewer_record_path = replay.path
             pending_reviewer_replayed = True
             return CommanderTurnResult(
@@ -4590,22 +5652,55 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
             seat_purpose = review_seats.seat_for(
                 waiting_on,
                 review_seats.option_ids(task.submission_options)).purpose
+        prepared_stage2: dict[str, object] = {}
         turn = run_reviewer_turn(
             task, task.prompt, purpose=seat_purpose,
-            activity=_reviewer_activity(task))
+            activity=_reviewer_activity(task),
+            before_stage2_finish=(
+                lambda got, session_id: prepare_stage2_action_before_finish(
+                    task, current, got, session_id, prepared_stage2)
+                if waiting_on in queue.STAGE2_REVIEWER_WAITING_ON else None))
         if turn.exit_code != 0:
             return turn
         try:
             validated_record_path: Path | None = None
-            if turn.final_response is not None:
+            if waiting_on in queue.STAGE2_REVIEWER_WAITING_ON:
+                prepared_error = prepared_stage2.get('error')
+                if isinstance(prepared_error, BaseException):
+                    raise prepared_error
+                candidate_action = prepared_stage2.get('action')
+                candidate_digest = prepared_stage2.get('response_sha256')
+                candidate_record = prepared_stage2.get('record_path')
+                if (not isinstance(candidate_action, (
+                        reviewer_tasks.ReviewerNodeAction,
+                        reviewer_tasks.ReviewerApprovalAction,
+                        reviewer_tasks.ReviewerStopAction))
+                        or not isinstance(candidate_digest, str)
+                        or not isinstance(candidate_record, Path)):
+                    raise RuntimeError(
+                        'Stage2 reviewer finish 前没有完整 durable action')
+                pending_reviewer_action = candidate_action
+                response_sha256 = candidate_digest
+                validated_record_path = candidate_record
+            elif turn.final_response is not None:
                 (pending_reviewer_action, response_sha256,
                  validated_record_path) = (
                     _materialize_reviewer_response(
                         task, current, turn.final_response,
-                        persist_validated=lambda action: (
+                        persist_validated=lambda action, response_sha256: (
                             _record_reviewer_action(
                                 base, sid, run_id=run_id, epoch=epoch,
-                                task=task, action=action)),
+                                task=task, action=action,
+                                reviewer_session_run_id=(
+                                    stage2_turn_session_run_id
+                                    if waiting_on
+                                    in queue.STAGE2_REVIEWER_WAITING_ON
+                                    else None),
+                                provider_response_sha256=(
+                                    response_sha256
+                                    if waiting_on
+                                    in queue.STAGE2_REVIEWER_WAITING_ON
+                                    else None))),
                         preserve_validated=lambda candidate, digest: (
                             _preserve_validated_reviewer_residue(
                                 base, sid, candidate, digest))))
@@ -4613,10 +5708,18 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                 pending_reviewer_action = reviewer_tasks.load_action(
                     request_path, current,
                     submission_options=task.submission_options)
+                response_sha256 = _reviewer_request_sha256(request_path)
                 validated_record_path = _record_reviewer_action(
                     base, sid, run_id=run_id, epoch=epoch, task=task,
-                    action=pending_reviewer_action)
-                response_sha256 = _reviewer_request_sha256(request_path)
+                    action=pending_reviewer_action,
+                    reviewer_session_run_id=(
+                        stage2_turn_session_run_id
+                        if waiting_on in queue.STAGE2_REVIEWER_WAITING_ON
+                        else None),
+                    provider_response_sha256=(
+                        response_sha256
+                        if waiting_on in queue.STAGE2_REVIEWER_WAITING_ON
+                        else None))
         except reviewer_tasks.ReviewerTaskError as exc:
             seat_open = open_reviewer_seats.get(binding)
             if (waiting_on not in queue.STAGE2_REVIEWER_WAITING_ON

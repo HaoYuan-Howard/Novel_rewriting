@@ -10,8 +10,9 @@ from __future__ import annotations
 
 from contracts.artifacts import (
     STAGE1_MAIN_TEXT, STAGE2_BLUEPRINT_CHARACTER_PROJECTION,
-    STAGE2_CHAPTER_BLUEPRINTS, STAGE2_GLOBAL_EDIT, STAGE2_GLOBAL_GROUNDING,
-    STAGE2_GLOBAL_REVIEW,
+    STAGE2_CHAPTER_BLUEPRINTS, STAGE2_GLOBAL_EDIT, STAGE2_GLOBAL_EDIT_COMMIT,
+    STAGE2_GLOBAL_EDIT_FAILURE, STAGE2_GLOBAL_EDIT_INPUT_COMMIT,
+    STAGE2_GLOBAL_GROUNDING, STAGE2_GLOBAL_REVIEW,
 )
 
 import copy
@@ -25,7 +26,10 @@ from typing import Any, Callable, Protocol
 
 from pydantic import BaseModel, ValidationError
 
-from contracts.invariants import BLUEPRINT_ARCHITECTURE, review_effect_of
+from contracts.invariants import (
+    BLUEPRINT_ARCHITECTURE, STAGE2_LEGACY_REVALIDATE_ACTOR,
+    STAGE2_LEGACY_REVALIDATE_REASON, review_effect_of,
+)
 from contracts.rules import REGISTRY
 from contracts.schema import ArtifactVersionError, encode_artifact
 from contracts.schema.base import StrictModel
@@ -40,7 +44,7 @@ from contracts.schema.stage2 import (
     GlobalCollectionSplit,
     ChapterBlueprints,
     GlobalCandidateAgentTurnResponse, GlobalCandidateFullTurn,
-    GlobalEdit,
+    GlobalEdit, GlobalEditCommit, GlobalEditFailure, GlobalEditInputCommit,
     GlobalGrounding, GlobalGroundingCandidateResponse,
     GlobalProvenance, GlobalRoleFatePatchTurn,
     RoleSplitResponse,
@@ -97,6 +101,13 @@ MAIN_TEXT = STAGE1_MAIN_TEXT
 
 #: `--apply-edit` 的缺省决策集路径。形状是契约（`ARTIFACTS` 里登记着 `GlobalEdit`）。
 GLOBAL_EDIT = STAGE2_GLOBAL_EDIT
+#: canonical reviewed edit 已落、但 formal Global/review 尚未提交的 typed 恢复事实。
+#: 它不是 HARD 候选，故绝不派生/复用 ``GLOBAL_REL.INVALID``。
+GLOBAL_EDIT_FAILURE = STAGE2_GLOBAL_EDIT_FAILURE
+#: canonical sparse edit + pending/superseded failure 的 action-target WAL。
+GLOBAL_EDIT_INPUT_COMMIT = STAGE2_GLOBAL_EDIT_INPUT_COMMIT
+#: GlobalEdit formal bundle 的 write-ahead journal；不属于 Commander failure。
+GLOBAL_EDIT_COMMIT = STAGE2_GLOBAL_EDIT_COMMIT
 
 #: 被闸门拦下的那一份。**从 `REL` 派生，不手写第二个字符串。**
 _INVALID = paths.invalid_of(BLUEPRINT_REL)
@@ -712,6 +723,54 @@ def _checkpoint_fact_atom_phrases(
     return recovered
 
 
+@dataclass(frozen=True)
+class _GlobalRevalidationEvaluation:
+    """Global INVALID 按 revalidate 的唯一恢复/归一/判定尺子得到的纯结果。"""
+
+    main_text: list[dict[str, Any]]
+    rebuilt: GlobalGrounding
+    accounting: Any
+    outcomes: tuple[Outcome, ...]
+    hard_hits: tuple[str, ...]
+
+
+def _prepare_global_revalidation_evaluation(
+    ctx: RunContext, store: ArtifactStore, *, actor: str, reason: str,
+) -> _GlobalRevalidationEvaluation:
+    """纯计算 ``run_revalidate`` 候选；probe 与执行不得各造一把 HARD 尺子。"""
+    main_text = _read_main_text(store)
+    if main_text is None:
+        raise UpstreamMissing(f'{MAIN_TEXT} 不在盘上——无法按当前正文重判问题稿')
+    if not store.exists(_GLOBAL_INVALID):
+        raise UpstreamMissing(
+            f'{_GLOBAL_INVALID} 不在盘上——没有被拦下的全局问题稿要提升')
+    baseline = store.revalidation_baseline(
+        GLOBAL_REL, GlobalGrounding, actor=actor, reason=reason)
+    artifact, raw = store.read_own(GlobalGrounding, _GLOBAL_INVALID)
+    data = copy.deepcopy(raw)
+    data.pop('_provenance', None)
+    restore_failed_global_evidence_locators(
+        data, baseline.provenance.evidence_locator_failures)
+    data, accounting = normalize_global(data, main_text)
+    rebuilt = GlobalGrounding.model_validate({
+        **data,
+        '_provenance': GlobalProvenance.model_validate({
+            **artifact.provenance.model_dump(), **accounting,
+        }),
+    })
+    candidate = rebuilt.model_dump(by_alias=True)
+    outcomes = tuple(_judge_candidate(candidate, None, main_text))
+    hard_hits = tuple(_hard_hits(
+        list(outcomes), ignore={'upstream_missing'}))
+    return _GlobalRevalidationEvaluation(
+        main_text=main_text,
+        rebuilt=rebuilt,
+        accounting=accounting,
+        outcomes=outcomes,
+        hard_hits=hard_hits,
+    )
+
+
 def run_revalidate(
     ctx: RunContext, *, actor: str, reason: str,
 ) -> tuple[bool, CheckReport]:
@@ -733,39 +792,88 @@ def run_revalidate(
         # agent prepared 尾窗共用同书所有权，否则一次零成本提升就会让原 run
         # 永久落入 third-party drift，既补不了尾也开不了新 producer。
         with stage2_global_runs.mutation_ownership(ctx):
-            if not store.exists(_GLOBAL_INVALID):
-                raise UpstreamMissing(
-                    f'{_GLOBAL_INVALID} 不在盘上——没有被拦下的全局问题稿要提升')
-            baseline = store.revalidation_baseline(
-                GLOBAL_REL, GlobalGrounding, actor=actor, reason=reason)
-            artifact, raw = store.read_own(GlobalGrounding, _GLOBAL_INVALID)
-            data = copy.deepcopy(raw)
-            data.pop('_provenance', None)
-            restore_failed_global_evidence_locators(
-                data, baseline.provenance.evidence_locator_failures)
-            data, accounting = normalize_global(data, main_text)
-            rebuilt = GlobalGrounding.model_validate({
-                **data,
-                '_provenance': GlobalProvenance.model_validate({
-                    **artifact.provenance.model_dump(), **accounting,
-                }),
-            })
-            candidate = rebuilt.model_dump(by_alias=True)
-            outcomes = _judge_candidate(candidate, None, main_text)
-            if _hard_hits(outcomes, ignore={'upstream_missing'}):
+            resumed = _resume_global_revalidation_commit(
+                ctx, store, actor=actor, reason=reason)
+            if resumed is not None:
+                return resumed
+            evaluated = _prepare_global_revalidation_evaluation(
+                ctx, store, actor=actor, reason=reason)
+            rebuilt = evaluated.rebuilt
+            accounting = evaluated.accounting
+            outcomes = list(evaluated.outcomes)
+            identity = _global_revalidation_commit_identity(ctx, store)
+            if evaluated.hard_hits:
+                if identity is not None:
+                    invalid, invalid_sha256 = store.read_own_with_sha256(
+                        GlobalGrounding, _GLOBAL_INVALID, require_current=True)
+                    candidate = invalid.model_dump(mode='json', by_alias=True)
+                    candidate.pop('_provenance', None)
+                    _write_global_edit_failure(
+                        store,
+                        failure_kind=(
+                            'hard_gate' if identity.reviewed_edit
+                            else 'ordinary_hard_gate'),
+                        failed_edit_sha256=identity.edit_sha256,
+                        formal_sha256=identity.formal_sha256,
+                        expected_source_sha256=identity.expected_source_sha256,
+                        global_review_workpack_sha256=(
+                            identity.global_review_workpack_sha256),
+                        candidate_business_sha256=_canonical_sha256(candidate),
+                        invalid_sha256=invalid_sha256,
+                        hard_hits=list(evaluated.hard_hits),
+                        reason_code='revalidation_hard_gate',
+                        reason_summary=(
+                            'Global INVALID 按当前 revalidate 尺子仍被 HARD 拦截；rules='
+                            + ','.join(evaluated.hard_hits))[:512],
+                    )
                 both = _Both(store)
                 return False, _report(
                     ctx, store, both, outcomes,
                     judged_rel=_GLOBAL_INVALID, invalid_rel=_GLOBAL_INVALID)
-            with store.history_transaction(
-                    GLOBAL_REL, GLOBAL_REVIEW_REL, BLUEPRINT_CHARACTER_REL):
-                store.promote_invalid(
-                    GLOBAL_REL, GlobalGrounding, actor=actor, reason=reason,
-                    artifact_override=rebuilt)
-                promoted = store.read(GlobalGrounding, GLOBAL_REL)
-                _refresh_global_review(store, promoted)
-                _write_blueprint_character_projection(
-                    store, promoted, main_text=main_text)
+            automatic = (
+                actor == STAGE2_LEGACY_REVALIDATE_ACTOR
+                and reason == STAGE2_LEGACY_REVALIDATE_REASON
+            )
+            if automatic and (identity is None or not identity.reviewed_edit):
+                raise ProvenanceRefused(
+                    'Supervisor legacy revalidate 只接管 exact reviewed INVALID')
+            if automatic:
+                recovery = _reviewed_invalid_recovery(ctx, store)
+                if recovery is None or recovery.hard_hits:
+                    raise ProvenanceRefused(
+                        'Supervisor legacy revalidate 只接管 exact reviewed INVALID '
+                        '且必须按同一 revalidate 尺子无 HARD')
+            promoted = store.prepared_invalid_promotion(
+                GLOBAL_REL, GlobalGrounding, actor=actor, reason=reason,
+                artifact_override=rebuilt)
+            previous_review = (
+                store.read_own(GlobalReview, GLOBAL_REVIEW_REL)[0]
+                if store.exists(GLOBAL_REVIEW_REL) else None
+            )
+            target_review = build_review(
+                promoted.model_dump(by_alias=True), previous_review)
+            journal = _prepare_reviewed_edit_commit(
+                store,
+                artifact=promoted,
+                review=target_review,
+                main_text=evaluated.main_text,
+                canonical_edit_sha256=(
+                    None if identity is None else identity.edit_sha256),
+                formal_sha256=(
+                    store.full_sha256_or_none(GLOBAL_REL)
+                    if identity is None else identity.formal_sha256),
+                expected_source_sha256=(
+                    None if identity is None
+                    else identity.expected_source_sha256),
+                global_review_workpack_sha256=(
+                    None if identity is None
+                    else identity.global_review_workpack_sha256),
+                submitted_transport_identity='book:' + _GLOBAL_INVALID,
+                action_kind='revalidate',
+                revalidation_failure_sha256=(
+                    None if identity is None else identity.failure_sha256),
+            )
+            _reconcile_reviewed_edit_commit(store, journal)
             _note_evidence_locator_corrections(
                 ctx, store, accounting.evidence_locator_corrections,
                 rel=GLOBAL_REL)
@@ -2550,8 +2658,18 @@ def _write_formal(
     *, review_override: GlobalReview | None = None,
 ) -> None:
     """Commit a new round; global grounding and its review are indivisible."""
+    if rel == GLOBAL_REL and store.exists(GLOBAL_EDIT_INPUT_COMMIT):
+        raise ProvenanceRefused(
+            'GlobalEdit canonical WAL 尚未收敛；其他 Global 写口不得覆盖')
+    if rel == GLOBAL_REL and store.exists(GLOBAL_EDIT_COMMIT):
+        pending_commit = store.read_own(
+            GlobalEditCommit, GLOBAL_EDIT_COMMIT)[0]
+        if pending_commit.state == 'prepared':
+            raise ProvenanceRefused(
+                'reviewed-edit prepared commit 尚未收敛；其他 Global 写口不得覆盖')
     companions = (
-        (rel, GLOBAL_REVIEW_REL, BLUEPRINT_CHARACTER_REL)
+        (rel, GLOBAL_REVIEW_REL, BLUEPRINT_CHARACTER_REL,
+         GLOBAL_EDIT_FAILURE, GLOBAL_EDIT_COMMIT)
         if rel == GLOBAL_REL else (rel,)
     )
     with store.history_transaction(*companions):
@@ -2564,6 +2682,13 @@ def _write_formal(
                     artifact.model_dump(by_alias=True), review_override)
                 store.write_round(GLOBAL_REVIEW_REL, review_override)
             _write_blueprint_character_projection(store, artifact)
+            # reviewed edit 的 failure/pending sidecar 只描述“formal bundle 尚未
+            # 提交”。Global + review + projection 全部落稳后才在同一回滚域退休；
+            # 任一伴产物写失败都会连 sidecar 一起恢复到调用前。
+            if store.exists(GLOBAL_EDIT_FAILURE):
+                store.archive_round(GLOBAL_EDIT_FAILURE)
+            if store.exists(GLOBAL_EDIT_COMMIT):
+                store.archive_round(GLOBAL_EDIT_COMMIT)
 
 
 def _retire_invalid_for_matching_formal(
@@ -2583,11 +2708,28 @@ def _retire_invalid_for_matching_formal(
 
 
 def _write_invalid(
-    store: ArtifactStore, rel: str, artifact: Any
+    store: ArtifactStore, rel: str, artifact: Any, *,
+    owned_global_edit_sha256: str | None = None,
 ) -> str:
     """Store a failed round; the store atomically preserves its predecessor."""
     if rel != GLOBAL_REL:
         return str(store.write_invalid(rel, artifact, gates_skipped=[]))
+    if store.exists(GLOBAL_EDIT_INPUT_COMMIT):
+        input_journal = store.read_own(
+            GlobalEditInputCommit, GLOBAL_EDIT_INPUT_COMMIT)[0]
+        if (owned_global_edit_sha256 is None
+                or input_journal.target_edit_sha256
+                != owned_global_edit_sha256
+                or store.full_sha256_or_none(GLOBAL_EDIT)
+                != owned_global_edit_sha256):
+            raise ProvenanceRefused(
+                'GlobalEdit canonical WAL 尚未收敛；其他 Global INVALID 写口不得覆盖')
+    if store.exists(GLOBAL_EDIT_COMMIT):
+        pending_commit = store.read_own(
+            GlobalEditCommit, GLOBAL_EDIT_COMMIT)[0]
+        if pending_commit.state == 'prepared':
+            raise ProvenanceRefused(
+                'reviewed-edit prepared commit 尚未收敛；其他 Global INVALID 写口不得覆盖')
     sections = _read_main_text(store)
     if sections is None:
         raise UpstreamMissing(
@@ -2601,15 +2743,22 @@ def _write_invalid(
         # 问题稿本身必须稳定落盘，但称名闭集尚不可信时不发布一份必然
         # ``unknown`` 的正式伴生产物。freshness 会直接从 latest INVALID
         # 报 ``global_naming_blocked``，修好后再由 0-LLM 路径物化投影。
-        return str(store.write_invalid(rel, artifact, gates_skipped=[]))
+        with store.history_transaction(_GLOBAL_INVALID, GLOBAL_EDIT_COMMIT):
+            path = store.write_invalid(rel, artifact, gates_skipped=[])
+            if store.exists(GLOBAL_EDIT_COMMIT):
+                store.archive_round(GLOBAL_EDIT_COMMIT)
+        return str(path)
 
     # schema-valid Global 被非称名 HARD 拦在 INVALID 时，已经足够确定
     # Blueprint 真正消费的称名闭集。两者必须同进同退，否则崩在中间会让
     # 旧投影为新名册继续背书。
-    with store.history_transaction(_GLOBAL_INVALID, BLUEPRINT_CHARACTER_REL):
+    with store.history_transaction(
+            _GLOBAL_INVALID, BLUEPRINT_CHARACTER_REL, GLOBAL_EDIT_COMMIT):
         path = store.write_invalid(rel, artifact, gates_skipped=[])
         _write_blueprint_character_projection(
             store, artifact, main_text=sections)
+        if store.exists(GLOBAL_EDIT_COMMIT):
+            store.archive_round(GLOBAL_EDIT_COMMIT)
     return str(path)
 
 
@@ -5416,65 +5565,507 @@ def global_edit_template_json(ctx: RunContext) -> str:
         ensure_ascii=False, indent=2, sort_keys=True)
 
 
-def global_edit_correction_workpack(ctx: RunContext) -> dict[str, Any]:
-    """只读恢复一份被 HARD 拒绝的 reviewed GlobalEdit 及精确失败事实。
+def _build_global_edit_failure(
+    store: ArtifactStore,
+    *,
+    failure_kind: str,
+    failed_edit_sha256: str,
+    formal_sha256: str,
+    expected_source_sha256: str | None,
+    global_review_workpack_sha256: str | None,
+    reason_code: str,
+    reason_summary: str,
+    candidate_business_sha256: str | None = None,
+    invalid_sha256: str | None = None,
+    hard_hits: list[str] | None = None,
+) -> GlobalEditFailure:
+    """构造 reviewed-edit 恢复事实；内容摘要不得携正文/Pydantic input。"""
+    return GlobalEditFailure.model_validate({
+        'failure_kind': failure_kind,
+        'failed_edit_sha256': failed_edit_sha256,
+        'formal_sha256': formal_sha256,
+        'expected_source_sha256': expected_source_sha256,
+        'global_review_workpack_sha256': global_review_workpack_sha256,
+        'candidate_business_sha256': candidate_business_sha256,
+        'invalid_sha256': invalid_sha256,
+        'hard_hits': list(hard_hits or ()),
+        'reason_code': reason_code,
+        'reason_summary': reason_summary[:512],
+        'code_version': store.ctx.code,
+    })
 
-    这不是重新生成编辑模板。它只接受当前 live INVALID 仍逐字绑定书内
-    ``global_edit.json``、该 edit 带 ``post_edit_review``，且 INVALID 自创建后没有
-    被人直接改过的盘面。这样服务/Agent 在第一次动作落下 INVALID 后崩溃，也能把
-    **同一份失败动作**交给 Commander 做预算内增量纠正，而不是重读整套材料后从头改。
+
+def _write_global_edit_failure(
+    store: ArtifactStore,
+    **kwargs: Any,
+) -> GlobalEditFailure:
+    """原子替换 reviewed-edit 恢复事实。"""
+    failure = _build_global_edit_failure(store, **kwargs)
+    store.write_round(GLOBAL_EDIT_FAILURE, failure)
+    return failure
+
+
+def _global_edit_failure_business_sha256(
+    failure: GlobalEditFailure,
+) -> str:
+    """失败的稳定业务身份；raw sidecar SHA 只承担盘面 CAS。
+
+    ``code_version``、自由摘要及 INVALID 的 provenance/raw SHA 都是审计或
+    运输字节，重写它们不得凭空返还一个 Commander 席位。
     """
-    store = ArtifactStore(ctx)
-    if not store.exists(GLOBAL_EDIT) or not store.exists(_GLOBAL_INVALID):
-        raise TerminalState('当前没有 reviewed GlobalEdit 的中断纠正材料')
+    return _canonical_sha256({
+        'failure_kind': failure.failure_kind,
+        'failed_edit_sha256': failure.failed_edit_sha256,
+        'formal_sha256': failure.formal_sha256,
+        'expected_source_sha256': failure.expected_source_sha256,
+        'global_review_workpack_sha256': (
+            failure.global_review_workpack_sha256),
+        'candidate_business_sha256': failure.candidate_business_sha256,
+        'reason_code': failure.reason_code,
+        'hard_hits': sorted(failure.hard_hits),
+    })
+
+
+def _validated_failure_inputs(
+    ctx: RunContext,
+    store: ArtifactStore,
+    failure: GlobalEditFailure,
+) -> tuple[GlobalEdit, str, str, GlobalReview, dict[str, Any]]:
+    """复验 sidecar 对 exact edit/formal/review-workpack 的四重 CAS。"""
+    if not store.exists(GLOBAL_EDIT):
+        raise TerminalState('reviewed-edit failure 绑定的 global_edit.json 已缺失')
     edit, edit_sha256 = store.read_own_with_sha256(GlobalEdit, GLOBAL_EDIT)
+    if edit_sha256 != failure.failed_edit_sha256:
+        raise TerminalState(
+            'reviewed-edit failure 与当前 global_edit.json 不匹配；拒绝猜测纠正基线')
     attestation = edit.post_edit_review
     if attestation is None:
         raise TerminalState(
-            '当前 global_edit.json 没有 post_edit_review；不是 Commander reviewed edit 中断态')
-    invalid, invalid_sha256 = store.read_own_with_sha256(
-        GlobalGrounding, _GLOBAL_INVALID, require_current=True)
-    audit = store.revalidation_audit(
-        GLOBAL_REL, GlobalGrounding,
-        actor='system:stage2-correction-workpack',
-        reason='只读恢复 reviewed GlobalEdit 的确定性 HARD 拒绝事实',
-    )
-    if audit.edited_by_human:
+            'reviewed-edit failure 绑定的 global_edit.json 已不含 post_edit_review')
+    if attestation.expected_source_sha256 != failure.expected_source_sha256:
         raise TerminalState(
-            'live Global INVALID 已被人直接修改；不得用旧 GlobalEdit 覆盖人工候选，'
-            '请先走 --revalidate 或显式提交新的 typed edit')
+            'reviewed-edit failure 与 edit 的 formal source 身份不匹配')
+    if (attestation.expected_workpack_sha256
+            != failure.global_review_workpack_sha256):
+        raise TerminalState(
+            'reviewed-edit failure 与 edit 的 blocking workpack 身份不匹配')
 
+    _formal, formal_sha256 = store.read_own_with_sha256(
+        GlobalGrounding, GLOBAL_REL, require_current=True,
+        replaced_input_keys=(GLOBAL_EDIT,))
+    if formal_sha256 != failure.formal_sha256:
+        raise TerminalState(
+            'reviewed-edit failure 绑定的 formal Global 已变化；'
+            '拒绝把旧失败动作重放到新底座')
+    review = store.read_own(
+        GlobalReview, GLOBAL_REVIEW_REL, require_current=True)[0]
+    if review.source_sha256 != failure.expected_source_sha256:
+        raise TerminalState(
+            'reviewed-edit failure 绑定的正式 review source 已变化')
+
+    from novel.stages.stage2 import global_review as global_review_ops
+    review_workpack = global_review_ops.review_workpack(
+        ctx, scope='blocking', replaced_input_keys=(GLOBAL_EDIT,))
+    if (review_workpack.get('workpack_sha256')
+            != failure.global_review_workpack_sha256):
+        raise TerminalState(
+            'reviewed-edit failure 绑定的完整 blocking workpack 已变化')
+    return edit, edit_sha256, formal_sha256, review, review_workpack
+
+
+def _validated_ordinary_failure_inputs(
+    store: ArtifactStore, failure: GlobalEditFailure, *,
+    allow_human_invalid: bool = False,
+) -> tuple[GlobalEdit, str]:
+    """复验普通人工 edit 的 terminal sidecar 与仍在盘上的 exact 结果。"""
+    if failure.failure_kind not in {
+            'ordinary_hard_gate', 'ordinary_candidate_validation'}:
+        raise TerminalState('当前 failure 不是普通 GlobalEdit terminal 事实')
+    edit, edit_sha256 = store.read_own_with_sha256(GlobalEdit, GLOBAL_EDIT)
+    if edit_sha256 != failure.failed_edit_sha256 or edit.post_edit_review is not None:
+        raise TerminalState(
+            '普通 GlobalEdit failure 与当前 canonical edit 不匹配')
+    if failure.failure_kind == 'ordinary_hard_gate':
+        invalid, invalid_sha256 = store.read_own_with_sha256(
+            GlobalGrounding, _GLOBAL_INVALID, require_current=True)
+        candidate = invalid.model_dump(mode='json', by_alias=True)
+        candidate.pop('_provenance', None)
+        if (invalid_sha256 != failure.invalid_sha256
+                or _canonical_sha256(candidate)
+                != failure.candidate_business_sha256):
+            audit = store.revalidation_audit(
+                GLOBAL_REL, GlobalGrounding,
+                actor='system:stage2-terminal-probe',
+                reason='只读识别普通 GlobalEdit INVALID 是否由人编辑',
+            )
+            if not (allow_human_invalid and audit.edited_by_human):
+                raise TerminalState(
+                    '普通 GlobalEdit HARD failure 与 live INVALID 漂移')
+    return edit, edit_sha256
+
+
+@dataclass(frozen=True)
+class _GlobalRevalidationCommitIdentity:
+    """Global INVALID 提升时可由 formal journal 接管的 canonical edit 身份。"""
+
+    edit: GlobalEdit
+    edit_sha256: str
+    reviewed_edit: bool
+    formal_sha256: str
+    expected_source_sha256: str | None
+    global_review_workpack_sha256: str | None
+    failure: GlobalEditFailure | None
+    failure_sha256: str | None
+
+
+def _global_revalidation_commit_identity(
+    ctx: RunContext, store: ArtifactStore,
+) -> _GlobalRevalidationCommitIdentity | None:
+    """绑定 edit/formal/workpack；允许 live INVALID 被人编辑后形成新候选。"""
+    if not store.exists(GLOBAL_EDIT):
+        if store.exists(GLOBAL_EDIT_FAILURE):
+            raise TerminalState('GlobalEdit failure 在场但 canonical edit 已缺失')
+        return None
+    edit, edit_sha256 = store.read_own_with_sha256(GlobalEdit, GLOBAL_EDIT)
+    failure: GlobalEditFailure | None = None
+    failure_sha256: str | None = None
+    if store.exists(GLOBAL_EDIT_FAILURE):
+        failure, failure_sha256 = store.read_own_with_sha256(
+            GlobalEditFailure, GLOBAL_EDIT_FAILURE)
+        if failure.failure_kind == 'hard_gate':
+            checked, checked_sha, formal_sha256, _review, workpack = (
+                _validated_failure_inputs(ctx, store, failure))
+            if checked != edit or checked_sha != edit_sha256:
+                raise TerminalState('reviewed revalidate failure/edit 身份漂移')
+            return _GlobalRevalidationCommitIdentity(
+                edit=edit,
+                edit_sha256=edit_sha256,
+                reviewed_edit=True,
+                formal_sha256=formal_sha256,
+                expected_source_sha256=failure.expected_source_sha256,
+                global_review_workpack_sha256=workpack['workpack_sha256'],
+                failure=failure,
+                failure_sha256=failure_sha256,
+            )
+        if failure.failure_kind == 'ordinary_hard_gate':
+            if (failure.failed_edit_sha256 != edit_sha256
+                    or edit.post_edit_review is not None):
+                raise TerminalState('ordinary revalidate failure/edit 身份漂移')
+            return _GlobalRevalidationCommitIdentity(
+                edit=edit,
+                edit_sha256=edit_sha256,
+                reviewed_edit=False,
+                formal_sha256=failure.formal_sha256,
+                expected_source_sha256=None,
+                global_review_workpack_sha256=None,
+                failure=failure,
+                failure_sha256=failure_sha256,
+            )
+        raise TerminalState(
+            f'{failure.failure_kind} failure 没有 live INVALID revalidate 语义')
+
+    attestation = edit.post_edit_review
+    if attestation is None:
+        return None
+    _formal, formal_sha256 = store.read_own_with_sha256(
+        GlobalGrounding, GLOBAL_REL, require_current=True,
+        replaced_input_keys=(GLOBAL_EDIT,))
     review = store.read_own(
         GlobalReview, GLOBAL_REVIEW_REL, require_current=True)[0]
     if review.source_sha256 != attestation.expected_source_sha256:
         raise TerminalState(
-            'reviewed GlobalEdit 绑定的正式 review source 已变化；拒绝恢复旧纠正任务')
+            'legacy reviewed GlobalEdit 的正式 review source 已变化')
     from novel.stages.stage2 import global_review as global_review_ops
-    review_workpack = global_review_ops.review_workpack(
+    workpack = global_review_ops.review_workpack(
         ctx, scope='blocking', replaced_input_keys=(GLOBAL_EDIT,))
-    main_text = _read_main_text(store)
-    if main_text is None:
-        raise UpstreamMissing(f'{MAIN_TEXT} 不在盘上——无法重算 reviewed edit 的 HARD')
+    if attestation.expected_workpack_sha256 != workpack.get('workpack_sha256'):
+        raise TerminalState(
+            'legacy reviewed GlobalEdit 没有精确绑定当前 blocking workpack')
+    return _GlobalRevalidationCommitIdentity(
+        edit=edit,
+        edit_sha256=edit_sha256,
+        reviewed_edit=True,
+        formal_sha256=formal_sha256,
+        expected_source_sha256=attestation.expected_source_sha256,
+        global_review_workpack_sha256=workpack['workpack_sha256'],
+        failure=None,
+        failure_sha256=None,
+    )
+
+
+@dataclass(frozen=True)
+class _ReviewedInvalidRecovery:
+    """reviewed edit 的 live INVALID 与其不可变业务坐标。"""
+
+    edit: GlobalEdit
+    edit_sha256: str
+    formal_sha256: str
+    review_workpack: dict[str, Any]
+    failure: GlobalEditFailure | None
+    failure_sha256: str | None
+    invalid: GlobalGrounding
+    invalid_sha256: str
+    candidate_business_sha256: str
+    hard_hits: tuple[str, ...]
+    outcomes: tuple[Outcome, ...]
+
+
+def _reviewed_invalid_recovery(
+    ctx: RunContext, store: ArtifactStore,
+) -> _ReviewedInvalidRecovery | None:
+    """读取 legacy/registered reviewed HARD；人工改过的 INVALID 不自动接管。"""
+    if not store.exists(_GLOBAL_INVALID):
+        return None
+    identity = _global_revalidation_commit_identity(ctx, store)
+    if identity is None or not identity.reviewed_edit:
+        return None
+    edit = identity.edit
+    edit_sha256 = identity.edit_sha256
+    formal_sha256 = identity.formal_sha256
+    review_workpack = {
+        'workpack_sha256': identity.global_review_workpack_sha256}
+    failure = identity.failure
+    failure_sha256 = identity.failure_sha256
+
+    invalid, invalid_sha256 = store.read_own_with_sha256(
+        GlobalGrounding, _GLOBAL_INVALID, require_current=True)
+    audit = store.revalidation_audit(
+        GLOBAL_REL, GlobalGrounding,
+        actor=STAGE2_LEGACY_REVALIDATE_ACTOR,
+        reason=STAGE2_LEGACY_REVALIDATE_REASON,
+    )
+    if audit.edited_by_human:
+        return None
+    if failure is not None and invalid_sha256 != failure.invalid_sha256:
+        # 只改格式/provenance 并不产生可接管的人工业务候选；exact sidecar
+        # CAS 已漂移时必须关闭，不能把 raw-only 改动洗成同一 Commander 失败。
+        raise TerminalState(
+            'reviewed-edit failure 绑定的 Global INVALID 已变化')
     candidate = invalid.model_dump(mode='json', by_alias=True)
     candidate.pop('_provenance', None)
-    outcomes = _judge_candidate(candidate, None, main_text)
-    hard_hits = _hard_hits(outcomes, ignore={'upstream_missing'})
-    if not hard_hits:
+    candidate_business_sha256 = _canonical_sha256(candidate)
+    if (failure is not None
+            and candidate_business_sha256
+            != failure.candidate_business_sha256):
         raise TerminalState(
-            'reviewed GlobalEdit 对应 INVALID 按当前代码已无 HARD；'
-            '请走 --revalidate，不得再消耗 Commander 纠错轮')
-    hard_set = set(hard_hits)
-    hard_outcomes = [outcome for outcome in outcomes if outcome.rule in hard_set]
-    edit_payload = edit.model_dump(
+            'reviewed-edit failure 绑定的 INVALID 业务候选已变化')
+    evaluated = _prepare_global_revalidation_evaluation(
+        ctx, store,
+        actor=STAGE2_LEGACY_REVALIDATE_ACTOR,
+        reason=STAGE2_LEGACY_REVALIDATE_REASON,
+    )
+    outcomes = evaluated.outcomes
+    hard_hits = evaluated.hard_hits
+    return _ReviewedInvalidRecovery(
+        edit=edit,
+        edit_sha256=edit_sha256,
+        formal_sha256=formal_sha256,
+        review_workpack=review_workpack,
+        failure=failure,
+        failure_sha256=failure_sha256,
+        invalid=invalid,
+        invalid_sha256=invalid_sha256,
+        candidate_business_sha256=candidate_business_sha256,
+        hard_hits=hard_hits,
+        outcomes=outcomes,
+    )
+
+
+def reviewed_invalid_auto_revalidation_needed(ctx: RunContext) -> bool:
+    """精确 reviewed INVALID 在当前 canonical HARD 下已转绿且未被人工改写吗。"""
+    recovery = _reviewed_invalid_recovery(ctx, ArtifactStore(ctx))
+    return recovery is not None and not recovery.hard_hits
+
+
+def _compact_legacy_failed_edit_delta(
+    *, edit: GlobalEdit, formal: GlobalGrounding,
+    main_text: list[dict[str, Any]],
+) -> GlobalEdit:
+    """清除旧 full-template assembler 留下的确定性净 no-op 行。
+
+    sidecar 引入前的 Commander wire 曾把模板中的每一行都当成本轮显式 patch，
+    因而 legacy ``global_edit.json`` 可能混有几十行“写回原值”。纠错若直接 fixed
+    merge 这些行，会把历史 wire 污染误当成模型意图。这里不改 raw edit 或其 SHA；
+    只在 workpack 中发布一份相对 exact formal、经当前同一 apply + normalize 尺子
+    证明有净业务变化的 sparse 基线。单原子无法独立应用时保守保留，绝不猜测删除。
+    """
+    raw_formal = formal.model_dump(mode='json', by_alias=True)
+    raw_formal.pop('_provenance', None)
+    baseline, _baseline_accounting = normalize_global(
+        copy.deepcopy(raw_formal), copy.deepcopy(main_text))
+    ordinals = {
+        int(section.get('chapter_ordinal') or 0) for section in main_text
+    }
+    sparse = edit.model_dump(
         mode='json', by_alias=True, exclude_unset=True)
-    return {
+    attestation = sparse.pop('post_edit_review', None)
+    compact: dict[str, Any] = {}
+
+    def atom_changes(payload: dict[str, Any]) -> bool:
+        try:
+            atom = GlobalEdit.model_validate(payload)
+            candidate = copy.deepcopy(raw_formal)
+            _apply_secret_patches(candidate, atom, ordinals)
+            normalized, _accounting = normalize_global(
+                candidate, copy.deepcopy(main_text))
+        except (TerminalState, ValidationError):
+            # 例如“先 add 成员、再 patch 新成员”的跨原子依赖不能拆开证明；
+            # 这种行保守留在基线，不能因最小化失败而静默撤销业务动作。
+            return True
+        return normalized != baseline
+
+    list_fields = {
+        'secrets', 'world_rules', 'characters', 'relations', 'arc_tracks',
+        'addresses', 'addresses_replace',
+    }
+    for key, value in sparse.items():
+        if key == 'collection_edits':
+            retained = [
+                copy.deepcopy(row) for row in value
+                if row.get('operations') and atom_changes({key: [row]})
+            ]
+            if retained:
+                compact[key] = retained
+        elif key in list_fields:
+            retained = [
+                copy.deepcopy(row) for row in value
+                if atom_changes({key: [row]})
+            ]
+            if retained:
+                compact[key] = retained
+        elif atom_changes({key: value}):
+            compact[key] = copy.deepcopy(value)
+    if attestation is not None:
+        compact['post_edit_review'] = attestation
+    try:
+        return GlobalEdit.model_validate(compact)
+    except ValidationError as exc:
+        raise TerminalState(
+            'legacy reviewed edit 相对 formal 没有可纠正的净业务 delta；'
+            '不能把 full-template no-op 当成新 Commander 意图') from exc
+
+
+def global_edit_correction_workpack(ctx: RunContext) -> dict[str, Any]:
+    """只读恢复一份 canonical reviewed GlobalEdit 及其 typed 失败事实。
+
+    新盘面以 ``global_edit_failure.json`` 为权威：它把 edit、修前 formal 与完整
+    blocking workpack 三者精确绑定；只有 ``hard_gate`` 还额外绑定 live INVALID。
+    旧盘面没有 sidecar 时保留原来的 exact INVALID 恢复，避免升级代码后丢掉已发生
+    的 Commander 动作。两路都只交回同一份 failed sparse edit，不生成新模板。
+    """
+    store = ArtifactStore(ctx)
+    if not store.exists(GLOBAL_EDIT):
+        raise TerminalState('当前没有 reviewed GlobalEdit 的中断纠正材料')
+    failure: GlobalEditFailure | None = None
+    failure_sha256: str | None = None
+    invalid_sha256: str | None = None
+    recovery_fact_kind = 'legacy_invalid'
+    legacy_formal: GlobalGrounding | None = None
+    if store.exists(GLOBAL_EDIT_FAILURE):
+        failure, failure_sha256 = store.read_own_with_sha256(
+            GlobalEditFailure, GLOBAL_EDIT_FAILURE)
+        edit, edit_sha256, formal_sha256, _review, review_workpack = (
+            _validated_failure_inputs(ctx, store, failure))
+        attestation = edit.post_edit_review
+        assert attestation is not None  # 上方 typed CAS 已守
+        failure_kind = failure.failure_kind
+        invalid_sha256 = failure.invalid_sha256
+        recovery_fact_kind = 'registered_sidecar'
+    else:
+        # 兼容 sidecar 引入前已落稳的 HARD + INVALID。这里仍完整复验 edit、
+        # formal/review/workpack/INVALID，不把“缺新 artifact”解释成动作没发生。
+        if not store.exists(_GLOBAL_INVALID):
+            raise TerminalState('当前没有 reviewed GlobalEdit 的中断纠正材料')
+        edit, edit_sha256 = store.read_own_with_sha256(GlobalEdit, GLOBAL_EDIT)
+        attestation = edit.post_edit_review
+        if attestation is None:
+            raise TerminalState(
+                '当前 global_edit.json 没有 post_edit_review；'
+                '不是 Commander reviewed edit 中断态')
+        legacy_formal, formal_sha256 = store.read_own_with_sha256(
+            GlobalGrounding, GLOBAL_REL, require_current=True,
+            replaced_input_keys=(GLOBAL_EDIT,))
+        review = store.read_own(
+            GlobalReview, GLOBAL_REVIEW_REL, require_current=True)[0]
+        if review.source_sha256 != attestation.expected_source_sha256:
+            raise TerminalState(
+                'reviewed GlobalEdit 绑定的正式 review source 已变化；'
+                '拒绝恢复旧纠正任务')
+        from novel.stages.stage2 import global_review as global_review_ops
+        review_workpack = global_review_ops.review_workpack(
+            ctx, scope='blocking', replaced_input_keys=(GLOBAL_EDIT,))
+        if (attestation.expected_workpack_sha256
+                != review_workpack.get('workpack_sha256')):
+            raise TerminalState(
+                'legacy reviewed GlobalEdit 没有精确绑定当前 blocking workpack；'
+                '拒绝升级成 Commander correction')
+        failure_kind = 'hard_gate'
+
+    hard_hits: list[str] = []
+    hard_outcomes: list[Outcome] = []
+    candidate_business_sha256 = (
+        failure.candidate_business_sha256 if failure is not None else None)
+    if failure_kind == 'hard_gate':
+        recovery = _reviewed_invalid_recovery(ctx, store)
+        if recovery is None:
+            raise TerminalState(
+                'live Global INVALID 已被人直接修改；不得用旧 GlobalEdit 覆盖人工候选，'
+                '请先走 --revalidate 或显式提交新的 typed edit')
+        if (recovery.edit_sha256 != edit_sha256
+                or recovery.formal_sha256 != formal_sha256):
+            raise TerminalState(
+                'reviewed INVALID 恢复坐标与 correction workpack 漂移')
+        invalid_sha256 = recovery.invalid_sha256
+        candidate_business_sha256 = recovery.candidate_business_sha256
+        hard_hits = list(recovery.hard_hits)
+        if not hard_hits:
+            raise TerminalState(
+                'reviewed GlobalEdit 对应 INVALID 按当前代码已无 HARD；'
+                '请走 --revalidate，不得再消耗 Commander 纠错轮')
+        hard_set = set(hard_hits)
+        hard_outcomes = [
+            outcome for outcome in recovery.outcomes if outcome.rule in hard_set]
+
+    if failure is not None:
+        failure_business_sha256 = _global_edit_failure_business_sha256(failure)
+    else:
+        # 旧盘面没有 registered sidecar；只把 INVALID 的业务主体写入稳定身份，
+        # 不把会随 provenance code_version 变化的 raw 文件 SHA 带进席位账。
+        failure_business_sha256 = _canonical_sha256({
+            'failure_kind': failure_kind,
+            'failed_edit_sha256': edit_sha256,
+            'formal_sha256': formal_sha256,
+            'expected_source_sha256': attestation.expected_source_sha256,
+            'global_review_workpack_sha256': review_workpack['workpack_sha256'],
+            'candidate_business_sha256': candidate_business_sha256,
+            'reason_code': 'legacy_canonical_hard_gate',
+            'hard_hits': sorted(hard_hits),
+        })
+
+    workpack_edit = edit
+    if recovery_fact_kind == 'legacy_invalid':
+        main_text = _read_main_text(store)
+        if main_text is None or legacy_formal is None:
+            raise UpstreamMissing(
+                'legacy reviewed edit correction 缺 exact formal/MainText 基线')
+        workpack_edit = _compact_legacy_failed_edit_delta(
+            edit=edit, formal=legacy_formal, main_text=main_text)
+    edit_payload = workpack_edit.model_dump(
+        mode='json', by_alias=True, exclude_unset=True)
+    result: dict[str, Any] = {
         'kind': 'stage2-global-edit-correction-workpack-v2',
         'read_only': True,
         'commander_budget_max': 3,
         'incremental_correction': True,
+        'recovery_fact_kind': recovery_fact_kind,
+        'failure_kind': failure_kind,
+        'failure_sha256': failure_sha256,
+        'failure_business_sha256': failure_business_sha256,
         'failed_edit_sha256': edit_sha256,
+        'formal_sha256': formal_sha256,
         'invalid_sha256': invalid_sha256,
         'expected_source_sha256': attestation.expected_source_sha256,
+        'global_review_workpack_sha256': review_workpack['workpack_sha256'],
         'global_review_workpack': review_workpack,
         'failed_edit': encode_artifact(GLOBAL_EDIT, edit_payload),
         'hard_hits': hard_hits,
@@ -5486,6 +6077,14 @@ def global_edit_correction_workpack(ctx: RunContext) -> dict[str, Any]:
             ],
         } for outcome in hard_outcomes],
     }
+    if failure is not None:
+        result.update({
+            'failure_code': failure.reason_code,
+            'failure_summary': failure.reason_summary,
+            'failure_code_version': failure.code_version,
+            'recorded_hard_hits': list(failure.hard_hits),
+        })
+    return result
 
 
 def global_edit_correction_workpack_json(ctx: RunContext) -> str:
@@ -5494,10 +6093,8 @@ def global_edit_correction_workpack_json(ctx: RunContext) -> str:
         ensure_ascii=False, indent=2, sort_keys=True)
 
 
-def _read_global_edit_input(
-    ctx: RunContext, store: ArtifactStore, edit_path: str,
-) -> tuple[GlobalEdit, Path]:
-    """同一 schema 接受书内文件与当前 SID 的 service edit。"""
+def _global_edit_input_path(ctx: RunContext, edit_path: str) -> Path:
+    """解析并约束 edit 运输路径；文件可暂缺，供 durable replay 对账。"""
     supplied = Path(edit_path) if edit_path else Path(GLOBAL_EDIT)
     if supplied.is_absolute():
         candidate = supplied.resolve()
@@ -5509,10 +6106,672 @@ def _read_global_edit_input(
     else:
         rel = paths.edit_rel(ctx.novel_dir, str(supplied), GLOBAL_EDIT)
         candidate = (Path(ctx.novel_dir) / rel).resolve()
+    return candidate
+
+
+def _global_edit_transport_identity(ctx: RunContext, candidate: Path) -> str:
+    """把绝对运输路径收成 book/service 内稳定且不泄漏宿主根的身份。"""
+    target = candidate.resolve()
+    book = Path(ctx.novel_dir).resolve()
+    service = (paths.service_dir(book.parent) / 'edits' / ctx.sid).resolve()
+    if target.is_relative_to(book):
+        return 'book:' + target.relative_to(book).as_posix()
+    if target.is_relative_to(service):
+        return 'service:' + target.relative_to(service).as_posix()
+    raise PathRefused(f'GlobalEdit 运输路径不属于当前书/SID：{target}')
+
+
+def _read_global_edit_input(
+    ctx: RunContext, store: ArtifactStore, edit_path: str,
+) -> tuple[GlobalEdit, Path]:
+    """同一 schema 接受书内文件与当前 SID 的 service edit。"""
+    candidate = _global_edit_input_path(ctx, edit_path)
     if not candidate.is_file():
         raise TerminalState(
             f'{candidate} 不在盘上。`--apply-edit` 需要当前版本 GlobalEdit')
     return store.read_external(GlobalEdit, GLOBAL_EDIT, candidate), candidate
+
+
+def _prepare_global_edit_input_commit(
+    store: ArtifactStore, *, submitted_edit: GlobalEdit,
+    submitted_transport_identity: str, formal_sha256: str,
+    expected_source_sha256: str | None,
+    global_review_workpack_sha256: str | None,
+) -> GlobalEditInputCommit:
+    """在改 canonical edit/failure 前落下两目标 WAL。"""
+    if store.exists(GLOBAL_EDIT_INPUT_COMMIT):
+        raise ProvenanceRefused('上一份 GlobalEdit input commit 尚未补完')
+    if store.exists(GLOBAL_EDIT_COMMIT):
+        prior_formal = store.read_own(
+            GlobalEditCommit, GLOBAL_EDIT_COMMIT)[0]
+        if prior_formal.state == 'prepared':
+            raise ProvenanceRefused(
+                'formal prepared commit 尚未补完；不能准备新 canonical edit')
+
+    reviewed = submitted_edit.post_edit_review is not None
+    target_edit_sha256 = store.prospective_sparse_sha256(
+        GLOBAL_EDIT, submitted_edit)
+    target_failure: GlobalEditFailure | None = None
+    target_failure_sha256: str | None = None
+    if reviewed:
+        if expected_source_sha256 is None or global_review_workpack_sha256 is None:
+            raise ProvenanceRefused(
+                'reviewed canonical WAL 缺 source/workpack 身份')
+        target_failure = _build_global_edit_failure(
+            store,
+            failure_kind='canonical_pending',
+            failed_edit_sha256=target_edit_sha256,
+            formal_sha256=formal_sha256,
+            expected_source_sha256=expected_source_sha256,
+            global_review_workpack_sha256=global_review_workpack_sha256,
+            reason_code='canonical_input_persisted',
+            reason_summary=(
+                'canonical reviewed GlobalEdit 已持久化，formal bundle 尚未提交'),
+        )
+        target_failure_sha256 = store.prospective_sha256(
+            GLOBAL_EDIT_FAILURE, target_failure)
+
+    journal = GlobalEditInputCommit.model_validate({
+        'submitted_transport_identity': submitted_transport_identity,
+        'reviewed_edit': reviewed,
+        'formal_sha256': formal_sha256,
+        'expected_source_sha256': expected_source_sha256,
+        'global_review_workpack_sha256': global_review_workpack_sha256,
+        'baseline_edit_sha256': store.full_sha256_or_none(GLOBAL_EDIT),
+        'baseline_failure_sha256': store.full_sha256_or_none(
+            GLOBAL_EDIT_FAILURE),
+        'baseline_formal_commit_sha256': store.full_sha256_or_none(
+            GLOBAL_EDIT_COMMIT),
+        'target_edit': submitted_edit.model_dump(
+            mode='json', by_alias=True, exclude_unset=True),
+        'target_edit_sha256': target_edit_sha256,
+        'target_failure': target_failure,
+        'target_failure_sha256': target_failure_sha256,
+        'code_version': store.ctx.code,
+    })
+    # journal 路径此刻必须缺失；正式 write 是同目录 os.replace，返回前没有
+    # GLOBAL_EDIT/failure mutation，进程硬杀只会得到“无 journal”或完整 journal。
+    store.write(GLOBAL_EDIT_INPUT_COMMIT, journal)
+    return journal
+
+
+def _global_edit_input_target(journal: GlobalEditInputCommit) -> GlobalEdit:
+    """把落盘 WAL 的 sparse object 统一解回生产 GlobalEdit。"""
+    return GlobalEdit.model_validate(journal.target_edit)
+
+
+def _validate_global_edit_input_commit(
+    store: ArtifactStore, journal: GlobalEditInputCommit,
+) -> None:
+    target_edit = _global_edit_input_target(journal)
+    if (store.prospective_sparse_sha256(
+            GLOBAL_EDIT, target_edit)
+            != journal.target_edit_sha256):
+        raise ProvenanceRefused(
+            'GlobalEdit input WAL 的 target edit payload/SHA 不互验')
+    failure = journal.target_failure
+    if failure is None:
+        if journal.target_failure_sha256 is not None:
+            raise ProvenanceRefused(
+                '普通 GlobalEdit WAL 声称不存在 failure 却带 target SHA')
+        return
+    if (store.prospective_sha256(GLOBAL_EDIT_FAILURE, failure)
+            != journal.target_failure_sha256
+            or failure.failed_edit_sha256 != journal.target_edit_sha256
+            or failure.formal_sha256 != journal.formal_sha256
+            or failure.expected_source_sha256 != journal.expected_source_sha256
+            or failure.global_review_workpack_sha256
+            != journal.global_review_workpack_sha256):
+        raise ProvenanceRefused(
+            'GlobalEdit input WAL 的 pending failure 与 edit/formal/workpack 漂移')
+
+
+def _reconcile_global_edit_input_commit(
+    store: ArtifactStore, journal: GlobalEditInputCommit,
+) -> tuple[GlobalEdit, str]:
+    """canonical edit/failure/旧 formal commit 按 baseline/target 三面收敛。
+
+    journal 此处故意不退休：reviewed 由 classified sidecar 或 formal commit 接管，
+    普通 edit 由 formal commit 接管。否则 target-only 硬杀会留下看似 current 的旧
+    formal，planner 既找不到动作，也可能静默继续下游。
+    """
+    _validate_global_edit_input_commit(store, journal)
+    edit_state = _reviewed_edit_commit_target_state(
+        store, GLOBAL_EDIT,
+        baseline_sha256=journal.baseline_edit_sha256,
+        target_sha256=journal.target_edit_sha256)
+    failure_state = _reviewed_edit_commit_target_state(
+        store, GLOBAL_EDIT_FAILURE,
+        baseline_sha256=journal.baseline_failure_sha256,
+        target_sha256=journal.target_failure_sha256)
+    formal_commit_state = _reviewed_edit_commit_target_state(
+        store, GLOBAL_EDIT_COMMIT,
+        baseline_sha256=journal.baseline_formal_commit_sha256,
+        target_sha256=None)
+
+    if edit_state == 'baseline':
+        store.write_sparse_input(
+            GLOBAL_EDIT, _global_edit_input_target(journal))
+    if failure_state == 'baseline':
+        if journal.target_failure is None:
+            if store.exists(GLOBAL_EDIT_FAILURE):
+                store.archive_round(GLOBAL_EDIT_FAILURE)
+        else:
+            store.write_round(GLOBAL_EDIT_FAILURE, journal.target_failure)
+    if formal_commit_state == 'baseline' and store.exists(GLOBAL_EDIT_COMMIT):
+        current_formal = store.read_own(
+            GlobalEditCommit, GLOBAL_EDIT_COMMIT)[0]
+        if current_formal.state != 'committed':
+            raise ProvenanceRefused(
+                'canonical WAL 只能 supersede 已完成的 formal commit')
+        store.archive_round(GLOBAL_EDIT_COMMIT)
+
+    if (store.full_sha256_or_none(GLOBAL_EDIT)
+            != journal.target_edit_sha256
+            or store.full_sha256_or_none(GLOBAL_EDIT_FAILURE)
+            != journal.target_failure_sha256
+            or store.exists(GLOBAL_EDIT_COMMIT)):
+        raise ProvenanceRefused('GlobalEdit input WAL target readback 未闭合')
+    current = store.read_own(
+        GlobalEditInputCommit, GLOBAL_EDIT_INPUT_COMMIT)[0]
+    if current != journal:
+        raise ProvenanceRefused('GlobalEdit input WAL 在 handoff 前已漂移')
+    canonical, canonical_sha256 = store.read_with_sha256(
+        GlobalEdit, GLOBAL_EDIT)
+    return canonical, canonical_sha256
+
+
+def _resume_global_edit_input_commit(
+    ctx: RunContext, store: ArtifactStore, *, requested_path: Path,
+) -> tuple[GlobalEdit, str] | None:
+    if not store.exists(GLOBAL_EDIT_INPUT_COMMIT):
+        return None
+    journal = store.read_own(
+        GlobalEditInputCommit, GLOBAL_EDIT_INPUT_COMMIT)[0]
+    requested_identity = _global_edit_transport_identity(ctx, requested_path)
+    canonical_identity = 'book:' + GLOBAL_EDIT
+    if requested_path.is_file() and requested_identity != canonical_identity:
+        requested = store.read_external(
+            GlobalEdit, GLOBAL_EDIT, requested_path)
+        if requested != _global_edit_input_target(journal):
+            raise ProvenanceRefused(
+                'GlobalEdit input WAL 的 service 重放 payload 不等于 target edit')
+    elif (not requested_path.is_file()
+          and requested_identity not in {
+              journal.submitted_transport_identity, canonical_identity}):
+        raise TerminalState(f'{requested_path} 不在盘上')
+    current_failure_sha256 = store.full_sha256_or_none(GLOBAL_EDIT_FAILURE)
+    if (not journal.reviewed_edit
+            and current_failure_sha256 not in {
+                journal.baseline_failure_sha256,
+                journal.target_failure_sha256,
+            }):
+        # 普通 edit 的 terminal sidecar 已落、input WAL 尚未来得及退休。不能在
+        # live INVALID 上重施同一 patch（会变成 no-op），而应先复验 exact terminal
+        # 事实、关闭 WAL，再原样返回这次动作的 landed/exit2 语义。
+        failure = store.read_own(
+            GlobalEditFailure, GLOBAL_EDIT_FAILURE)[0]
+        if (failure.failed_edit_sha256 != journal.target_edit_sha256
+                or failure.formal_sha256 != journal.formal_sha256):
+            raise ProvenanceRefused(
+                '普通 GlobalEdit input WAL 遇到不属于本动作的 terminal failure')
+        _validated_ordinary_failure_inputs(store, failure)
+        store.archive_round(GLOBAL_EDIT_INPUT_COMMIT)
+        if failure.failure_kind == 'ordinary_hard_gate':
+            raise GateBlocked(
+                '普通 GlobalEdit 的 HARD terminal 已落稳；input WAL 已幂等关闭，'
+                '请提交新的 typed edit 或人工修改 INVALID 后 revalidate',
+                invalid_path=str(store.path(_GLOBAL_INVALID)))
+        raise TerminalState(
+            '普通 GlobalEdit 候选不符合当前 GlobalGrounding schema；'
+            'terminal failure 已落稳，请提交新的 typed edit')
+    if (journal.reviewed_edit
+            and current_failure_sha256 not in {
+                journal.baseline_failure_sha256,
+                journal.target_failure_sha256,
+            }):
+        # classified sidecar 已落、WAL 尚未来得及退休的硬杀盘面。它必须仍是
+        # 同一 edit/formal/source/workpack 的确定失败；完整复验后退休旧 WAL，
+        # 本次 deterministic replay 再走一遍纯计算并返回原失败 exit 语义。
+        failure = store.read_own(
+            GlobalEditFailure, GLOBAL_EDIT_FAILURE)[0]
+        if (failure.failure_kind == 'canonical_pending'
+                or failure.failed_edit_sha256 != journal.target_edit_sha256
+                or failure.formal_sha256 != journal.formal_sha256
+                or failure.expected_source_sha256
+                != journal.expected_source_sha256
+                or failure.global_review_workpack_sha256
+                != journal.global_review_workpack_sha256):
+            raise ProvenanceRefused(
+                'GlobalEdit input WAL 遇到不属于本动作的 failure 第三态')
+        _validated_failure_inputs(ctx, store, failure)
+        store.archive_round(GLOBAL_EDIT_INPUT_COMMIT)
+        return store.read_with_sha256(GlobalEdit, GLOBAL_EDIT)
+    return _reconcile_global_edit_input_commit(store, journal)
+
+
+def _retire_global_edit_input_commit_after_failure(
+    store: ArtifactStore, *, canonical_edit_sha256: str,
+) -> None:
+    """classified sidecar 已落稳后退休同动作 input WAL。"""
+    if not store.exists(GLOBAL_EDIT_INPUT_COMMIT):
+        return
+    journal = store.read_own(
+        GlobalEditInputCommit, GLOBAL_EDIT_INPUT_COMMIT)[0]
+    failure = store.read_own(
+        GlobalEditFailure, GLOBAL_EDIT_FAILURE)[0]
+    if (not journal.reviewed_edit
+            or journal.target_edit_sha256 != canonical_edit_sha256
+            or failure.failure_kind == 'canonical_pending'
+            or failure.failed_edit_sha256 != canonical_edit_sha256
+            or failure.formal_sha256 != journal.formal_sha256
+            or failure.expected_source_sha256 != journal.expected_source_sha256
+            or failure.global_review_workpack_sha256
+            != journal.global_review_workpack_sha256):
+        raise ProvenanceRefused(
+            'classified failure 不能接管不匹配的 GlobalEdit input WAL')
+    store.archive_round(GLOBAL_EDIT_INPUT_COMMIT)
+
+
+def _retire_nonreviewed_global_edit_input_commit(
+    store: ArtifactStore, *, canonical_edit_sha256: str,
+) -> None:
+    """普通 edit 已得到显式 terminal/landed 结论后关闭 action WAL。"""
+    if not store.exists(GLOBAL_EDIT_INPUT_COMMIT):
+        return
+    journal = store.read_own(
+        GlobalEditInputCommit, GLOBAL_EDIT_INPUT_COMMIT)[0]
+    if (journal.reviewed_edit
+            or journal.target_edit_sha256 != canonical_edit_sha256
+            or store.full_sha256_or_none(GLOBAL_EDIT) != canonical_edit_sha256):
+        raise ProvenanceRefused(
+            '普通 GlobalEdit 结论不能退休不匹配的 input WAL')
+    failure = store.read_own(
+        GlobalEditFailure, GLOBAL_EDIT_FAILURE)[0]
+    _validated_ordinary_failure_inputs(store, failure)
+    if (failure.failed_edit_sha256 != canonical_edit_sha256
+            or failure.formal_sha256 != journal.formal_sha256):
+        raise ProvenanceRefused(
+            '普通 GlobalEdit terminal sidecar 不能接管不匹配的 input WAL')
+    store.archive_round(GLOBAL_EDIT_INPUT_COMMIT)
+
+
+def _reviewed_edit_commit_target_state(
+    store: ArtifactStore, rel: str, *,
+    baseline_sha256: str | None,
+    target_sha256: str | None,
+) -> str:
+    """每个 live path 只接受 prepared 时的 baseline 或 journal target。"""
+    current = store.full_sha256_or_none(rel)
+    if current == target_sha256:
+        return 'target'
+    if current == baseline_sha256:
+        return 'baseline'
+    raise ProvenanceRefused(
+        f'reviewed-edit prepared commit 的 {rel} 已处于第三方状态：'
+        f'current={current} baseline={baseline_sha256} target={target_sha256}')
+
+
+def _validate_reviewed_edit_commit(
+    store: ArtifactStore, journal: GlobalEditCommit,
+) -> tuple[GlobalEdit | None, list[dict[str, Any]]]:
+    """验证 journal 身份、staging payload 与正式 renderer 的逐字承诺。"""
+    edit: GlobalEdit | None = None
+    if journal.failed_edit_sha256 is not None:
+        edit, edit_sha256 = store.read_own_with_sha256(GlobalEdit, GLOBAL_EDIT)
+        if edit_sha256 != journal.failed_edit_sha256:
+            raise ProvenanceRefused(
+                'GlobalEdit commit journal 与 canonical global_edit.json 漂移')
+        attestation = edit.post_edit_review
+        if journal.reviewed_edit:
+            if attestation is None:
+                raise ProvenanceRefused(
+                    'reviewed-edit commit journal 绑定的 canonical edit 已无 '
+                    'attestation')
+            if (attestation.expected_source_sha256
+                    != journal.expected_source_sha256
+                    or (attestation.expected_workpack_sha256 is not None
+                        and attestation.expected_workpack_sha256
+                        != journal.global_review_workpack_sha256)):
+                raise ProvenanceRefused(
+                    'reviewed-edit commit journal 与 edit 的 source/workpack '
+                    '身份漂移')
+        elif attestation is not None:
+            raise ProvenanceRefused(
+                '普通 GlobalEdit commit journal 绑定的 canonical edit 意外带 '
+                'attestation')
+    elif journal.reviewed_edit or journal.action_kind != 'revalidate':
+        raise ProvenanceRefused(
+            '只有 generic Global INVALID revalidate commit 可以没有 edit 身份')
+    if (journal.action_kind == 'revalidate'
+            and store.exists(GLOBAL_EDIT_INPUT_COMMIT)):
+        raise ProvenanceRefused(
+            'GlobalEdit input WAL 尚未交接；拒绝并发准备/恢复 revalidate bundle')
+    if store.full_sha256_or_none(MAIN_TEXT) != journal.main_text_sha256:
+        raise ProvenanceRefused(
+            'reviewed-edit commit prepared 后 MainText 已变化；拒绝重放旧投影')
+    main_text = _read_main_text(store)
+    if main_text is None:  # pragma: no cover —— 上方 raw SHA 已要求存在
+        raise UpstreamMissing(f'{MAIN_TEXT} 不在盘上')
+    if journal.action_kind == 'revalidate':
+        audit = journal.target.global_grounding.provenance.revalidation_audit
+        if audit is None:
+            raise ProvenanceRefused(
+                'revalidate commit 的 target 未携 typed revalidation audit')
+
+    target = journal.target
+    expected_hashes = {
+        GLOBAL_REL: store.prospective_sha256(
+            GLOBAL_REL, target.global_grounding),
+        GLOBAL_REVIEW_REL: store.prospective_sha256(
+            GLOBAL_REVIEW_REL, target.global_review),
+        BLUEPRINT_CHARACTER_REL: store.prospective_sha256(
+            BLUEPRINT_CHARACTER_REL,
+            target.blueprint_character_projection),
+    }
+    recorded_hashes = {
+        GLOBAL_REL: target.global_sha256,
+        GLOBAL_REVIEW_REL: target.review_sha256,
+        BLUEPRINT_CHARACTER_REL: target.projection_sha256,
+    }
+    if expected_hashes != recorded_hashes:
+        raise ProvenanceRefused(
+            'reviewed-edit commit staging payload 与 prospective SHA 不互验')
+    target_global = target.global_grounding.model_dump(
+        mode='json', by_alias=True)
+    require_current_review(target_global, target.global_review)
+    expected_projection = materialize_blueprint_character_projection(
+        target_global['entities']['characters'], copy.deepcopy(main_text))
+    if expected_projection != target.blueprint_character_projection:
+        raise ProvenanceRefused(
+            'reviewed-edit commit staging projection 不等于 target Global/MainText')
+    return edit, main_text
+
+
+def _reviewed_edit_commit_readback(
+    store: ArtifactStore, journal: GlobalEditCommit,
+) -> GlobalGrounding:
+    """全部路径与 target 精确闭合后才允许把 prepared 标成 committed。"""
+    target = journal.target
+    expected = {
+        GLOBAL_REL: target.global_sha256,
+        GLOBAL_REVIEW_REL: target.review_sha256,
+        BLUEPRINT_CHARACTER_REL: target.projection_sha256,
+    }
+    got = {rel: store.full_sha256_or_none(rel) for rel in expected}
+    if got != expected:
+        raise ProvenanceRefused(
+            f'reviewed-edit commit readback 未命中完整 target：{got}')
+    if store.exists(_GLOBAL_INVALID) or store.exists(GLOBAL_EDIT_FAILURE):
+        raise ProvenanceRefused(
+            'reviewed-edit commit target readback 后仍有 live INVALID/failure sidecar')
+    landed = store.read_own(
+        GlobalGrounding, GLOBAL_REL, require_current=True)[0]
+    review = store.read_own(
+        GlobalReview, GLOBAL_REVIEW_REL, require_current=True)[0]
+    projection = store.read_own(
+        BlueprintCharacterProjection, BLUEPRINT_CHARACTER_REL,
+        require_current=True)[0]
+    require_current_review(
+        landed.model_dump(mode='json', by_alias=True), review)
+    if projection != target.blueprint_character_projection:
+        raise ProvenanceRefused(
+            'reviewed-edit commit projection readback 语义漂移')
+    return landed
+
+
+def _reconcile_reviewed_edit_commit(
+    store: ArtifactStore, journal: GlobalEditCommit,
+) -> GlobalGrounding:
+    """按 prepared baseline/target 二态逐件收敛；支持硬杀后的任意写点。"""
+    _validate_reviewed_edit_commit(store, journal)
+    target = journal.target
+    baseline = journal.baseline
+    states = {
+        GLOBAL_REL: _reviewed_edit_commit_target_state(
+            store, GLOBAL_REL, baseline_sha256=baseline.global_sha256,
+            target_sha256=target.global_sha256),
+        GLOBAL_REVIEW_REL: _reviewed_edit_commit_target_state(
+            store, GLOBAL_REVIEW_REL, baseline_sha256=baseline.review_sha256,
+            target_sha256=target.review_sha256),
+        BLUEPRINT_CHARACTER_REL: _reviewed_edit_commit_target_state(
+            store, BLUEPRINT_CHARACTER_REL,
+            baseline_sha256=baseline.projection_sha256,
+            target_sha256=target.projection_sha256),
+        _GLOBAL_INVALID: _reviewed_edit_commit_target_state(
+            store, _GLOBAL_INVALID, baseline_sha256=baseline.invalid_sha256,
+            target_sha256=None),
+        GLOBAL_EDIT_FAILURE: _reviewed_edit_commit_target_state(
+            store, GLOBAL_EDIT_FAILURE,
+            baseline_sha256=baseline.failure_sha256,
+            target_sha256=None),
+    }
+
+    if states[GLOBAL_REL] == 'baseline':
+        store.write_round(GLOBAL_REL, target.global_grounding)
+    if states[GLOBAL_REVIEW_REL] == 'baseline':
+        store.write_round(GLOBAL_REVIEW_REL, target.global_review)
+    if states[BLUEPRINT_CHARACTER_REL] == 'baseline':
+        store.write_round(
+            BLUEPRINT_CHARACTER_REL,
+            target.blueprint_character_projection)
+    if store.exists(_GLOBAL_INVALID):
+        if store.full_sha256_or_none(_GLOBAL_INVALID) != baseline.invalid_sha256:
+            raise ProvenanceRefused(
+                'reviewed-edit commit 退休 INVALID 前其 exact SHA 已漂移')
+        _retire_invalid_for_matching_formal(
+            store, GLOBAL_REL, target.global_grounding)
+    if store.exists(GLOBAL_EDIT_FAILURE):
+        if (store.full_sha256_or_none(GLOBAL_EDIT_FAILURE)
+                != baseline.failure_sha256):
+            raise ProvenanceRefused(
+                'reviewed-edit commit 退休 failure sidecar 前其 exact SHA 已漂移')
+        store.archive_round(GLOBAL_EDIT_FAILURE)
+
+    landed = _reviewed_edit_commit_readback(store, journal)
+    current = store.read_own(GlobalEditCommit, GLOBAL_EDIT_COMMIT)[0]
+    if current != journal:
+        raise ProvenanceRefused(
+            'reviewed-edit commit mark committed 前 journal 已漂移')
+    if journal.state == 'prepared':
+        store.write_round(
+            GLOBAL_EDIT_COMMIT,
+            journal.model_copy(update={'state': 'committed'}))
+    if (journal.action_kind == 'apply_edit'
+            and store.exists(GLOBAL_EDIT_INPUT_COMMIT)):
+        input_journal = store.read_own(
+            GlobalEditInputCommit, GLOBAL_EDIT_INPUT_COMMIT)[0]
+        if (input_journal.target_edit_sha256 != journal.failed_edit_sha256
+                or input_journal.reviewed_edit != journal.reviewed_edit
+                or input_journal.formal_sha256 != journal.formal_sha256):
+            raise ProvenanceRefused(
+                'formal commit 不能退休不匹配的 GlobalEdit input WAL')
+        store.archive_round(GLOBAL_EDIT_INPUT_COMMIT)
+    return landed
+
+
+def _resume_reviewed_edit_commit(
+    ctx: RunContext, store: ArtifactStore, *, requested_path: Path,
+) -> tuple[GlobalGrounding, CheckReport] | None:
+    """在读取 partial formal/review 之前消费 prepared，或证明 committed 重放。"""
+    if not store.exists(GLOBAL_EDIT_COMMIT):
+        return None
+    journal = store.read_own(GlobalEditCommit, GLOBAL_EDIT_COMMIT)[0]
+    if journal.action_kind != 'apply_edit':
+        if journal.state == 'prepared':
+            raise ProvenanceRefused(
+                'legacy revalidate prepared commit 尚未补完；拒绝以 apply-edit 接管')
+        return None
+    if store.exists(GLOBAL_EDIT_INPUT_COMMIT):
+        input_journal = store.read_own(
+            GlobalEditInputCommit, GLOBAL_EDIT_INPUT_COMMIT)[0]
+        formal_journal_sha256 = store.full_sha256_or_none(GLOBAL_EDIT_COMMIT)
+        if (formal_journal_sha256
+                == input_journal.baseline_formal_commit_sha256):
+            # 新 action 的 WAL 以这份 committed journal 为 baseline；先让
+            # input reconcile canonicalize 新 edit 并退休旧 journal，不能把 J0/E0
+            # 误当成当前 action 成功而形成永久循环。
+            return None
+        if (journal.failed_edit_sha256 != input_journal.target_edit_sha256
+                or journal.reviewed_edit != input_journal.reviewed_edit
+                or journal.formal_sha256 != input_journal.formal_sha256):
+            raise ProvenanceRefused(
+                'GlobalEdit formal journal 既不是 input WAL baseline，'
+                '也不是匹配的 prepared successor')
+    requested_identity = _global_edit_transport_identity(ctx, requested_path)
+    canonical_identity = 'book:' + GLOBAL_EDIT
+    same_transport = requested_identity in {
+        journal.submitted_transport_identity, canonical_identity}
+    canonical_sha256 = store.full_sha256_or_none(GLOBAL_EDIT)
+    if (journal.state == 'committed'
+            and canonical_sha256 != journal.failed_edit_sha256):
+        # 新 action 已经 canonical 化、prepared journal 尚未替换成功时，旧
+        # committed 记录只说明上一轮完成；不得拿它验证/吞掉这一轮。
+        return None
+    if requested_path.is_file():
+        requested = store.read_external(
+            GlobalEdit, GLOBAL_EDIT, requested_path)
+        canonical = store.read_own(GlobalEdit, GLOBAL_EDIT)[0]
+        if requested != canonical:
+            if journal.state == 'prepared':
+                raise ProvenanceRefused(
+                    'prepared commit 的重放输入不等于 canonical edit')
+            return None
+        # uploads 每次会生成新 UUID；只要新 service 载体 typed 语义逐字段等于
+        # journal 绑定的 exact canonical edit，就仍是同一动作，不要求随机路径相同。
+        same_transport = True
+    elif requested_identity != journal.submitted_transport_identity:
+        # 只有 journal 记住的精确一次性运输路径允许在清理后缺失；book canonical
+        # 路径若缺则下方 typed CAS 必然关闭。
+        raise TerminalState(f'{requested_path} 不在盘上')
+
+    if journal.state == 'prepared' and not same_transport:
+        raise ProvenanceRefused(
+            '另一个 reviewed-edit prepared commit 尚未补完；拒绝接管新 edit')
+    if not same_transport:
+        return None
+
+    landed = _reconcile_reviewed_edit_commit(store, journal)
+    both = _Both(store)
+    return landed, _report(
+        ctx, store, both, both.judge(),
+        judged_rel=GLOBAL_REL, invalid_rel=_GLOBAL_INVALID)
+
+
+def _resume_global_revalidation_commit(
+    ctx: RunContext, store: ArtifactStore, *, actor: str, reason: str,
+) -> tuple[bool, CheckReport] | None:
+    """消费 legacy revalidate 的 prepared/committed formal bundle。"""
+    if not store.exists(GLOBAL_EDIT_COMMIT):
+        return None
+    journal = store.read_own(GlobalEditCommit, GLOBAL_EDIT_COMMIT)[0]
+    if journal.action_kind != 'revalidate':
+        if journal.state == 'prepared':
+            raise ProvenanceRefused(
+                'apply-edit prepared commit 尚未补完；拒绝以 revalidate 接管')
+        return None
+    audit = journal.target.global_grounding.provenance.revalidation_audit
+    if audit is None or audit.actor != actor or audit.reason != reason:
+        raise ProvenanceRefused(
+            'revalidate prepared commit 只能由原 actor/reason 精确补尾')
+    landed = _reconcile_reviewed_edit_commit(store, journal)
+    both = _Both(store)
+    return True, _report(
+        ctx, store, both, both.judge(),
+        judged_rel=GLOBAL_REL, invalid_rel=_GLOBAL_INVALID)
+
+
+def _prepare_reviewed_edit_commit(
+    store: ArtifactStore, *, artifact: GlobalGrounding,
+    review: GlobalReview, main_text: list[dict[str, Any]],
+    canonical_edit_sha256: str | None, formal_sha256: str | None,
+    expected_source_sha256: str | None,
+    global_review_workpack_sha256: str | None,
+    submitted_transport_identity: str,
+    action_kind: str = 'apply_edit',
+    revalidation_failure_sha256: str | None = None,
+) -> GlobalEditCommit:
+    """在首个 live companion mutation 前冻结完整、可逐字重放的目标。"""
+    reviewed_edit = expected_source_sha256 is not None
+    failure_sha256: str | None = None
+    if action_kind == 'revalidate':
+        if store.exists(GLOBAL_EDIT_INPUT_COMMIT):
+            raise ProvenanceRefused(
+                'GlobalEdit input WAL 尚未交接；拒绝并发准备 revalidate bundle')
+        if reviewed_edit and global_review_workpack_sha256 is None:
+            raise ProvenanceRefused(
+                'reviewed revalidate commit 缺 workpack 身份')
+        if (not reviewed_edit
+                and global_review_workpack_sha256 is not None):
+            raise ProvenanceRefused(
+                'ordinary revalidate commit 不得伪造 reviewed workpack 身份')
+        if not store.exists(_GLOBAL_INVALID):
+            raise ProvenanceRefused(
+                'legacy revalidate commit 准备前 live INVALID 已缺失')
+        failure_sha256 = store.full_sha256_or_none(GLOBAL_EDIT_FAILURE)
+        if failure_sha256 != revalidation_failure_sha256:
+            raise ProvenanceRefused(
+                'legacy revalidate commit 的 failure baseline 已漂移')
+        if (not reviewed_edit and failure_sha256 is not None
+                and canonical_edit_sha256 is None):
+            raise ProvenanceRefused(
+                'ordinary terminal revalidate commit 必须绑定 canonical edit')
+    elif reviewed_edit:
+        if global_review_workpack_sha256 is None:
+            raise ProvenanceRefused('reviewed-edit commit 缺 workpack 身份')
+        failure, failure_sha256 = store.read_own_with_sha256(
+            GlobalEditFailure, GLOBAL_EDIT_FAILURE)
+        if (failure.failure_kind != 'canonical_pending'
+                or failure.failed_edit_sha256 != canonical_edit_sha256
+                or failure.formal_sha256 != formal_sha256
+                or failure.expected_source_sha256 != expected_source_sha256
+                or failure.global_review_workpack_sha256
+                != global_review_workpack_sha256):
+            raise ProvenanceRefused(
+                'reviewed-edit commit 只能从 exact canonical_pending sidecar 准备')
+    elif (global_review_workpack_sha256 is not None
+          or store.exists(GLOBAL_EDIT_FAILURE)):
+        raise ProvenanceRefused(
+            '普通 GlobalEdit commit 不得接管 reviewed failure sidecar')
+    projection = materialize_blueprint_character_projection(
+        artifact.model_dump(mode='json', by_alias=True)['entities']['characters'],
+        copy.deepcopy(main_text))
+    target = {
+        'global_grounding': artifact,
+        'global_review': review,
+        'blueprint_character_projection': projection,
+        'global_sha256': store.prospective_sha256(GLOBAL_REL, artifact),
+        'review_sha256': store.prospective_sha256(GLOBAL_REVIEW_REL, review),
+        'projection_sha256': store.prospective_sha256(
+            BLUEPRINT_CHARACTER_REL, projection),
+    }
+    main_text_sha256 = store.full_sha256_or_none(MAIN_TEXT)
+    if main_text_sha256 is None:  # pragma: no cover —— caller 已读到 MainText
+        raise UpstreamMissing(f'{MAIN_TEXT} 不在盘上')
+    journal = GlobalEditCommit.model_validate({
+        'state': 'prepared',
+        'action_kind': action_kind,
+        'reviewed_edit': reviewed_edit,
+        'submitted_transport_identity': submitted_transport_identity,
+        'failed_edit_sha256': canonical_edit_sha256,
+        'formal_sha256': formal_sha256,
+        'expected_source_sha256': expected_source_sha256,
+        'global_review_workpack_sha256': global_review_workpack_sha256,
+        'main_text_sha256': main_text_sha256,
+        'baseline': {
+            'global_sha256': store.full_sha256_or_none(GLOBAL_REL),
+            'review_sha256': store.full_sha256_or_none(GLOBAL_REVIEW_REL),
+            'projection_sha256': store.full_sha256_or_none(
+                BLUEPRINT_CHARACTER_REL),
+            'invalid_sha256': store.full_sha256_or_none(_GLOBAL_INVALID),
+            'failure_sha256': failure_sha256,
+        },
+        'target': target,
+        'code_version': store.ctx.code,
+    })
+    # 唯一 write-ahead 点：它返回前，Global/review/projection/INVALID 一个字节都没动。
+    store.write_round(GLOBAL_EDIT_COMMIT, journal)
+    return journal
 
 
 def _apply_secret_patches(data: dict[str, Any], edit: GlobalEdit,
@@ -5840,6 +7099,15 @@ def _apply_secret_patches(data: dict[str, Any], edit: GlobalEdit,
     return changed
 
 
+class _PostEditReviewRejected(TerminalState):
+    """带稳定 code 的修后复核终态；sidecar 不保存正文/Pydantic input。"""
+
+    def __init__(self, code: str, message: str, *, safe_summary: str | None = None) -> None:
+        super().__init__(message)
+        self.failure_code = code
+        self.safe_summary = (safe_summary or message)[:512]
+
+
 def _review_after_global_edit(
     artifact: GlobalGrounding,
     previous: GlobalReview,
@@ -5858,17 +7126,21 @@ def _review_after_global_edit(
     if attestation is None:
         return None
     if previous.source_sha256 != attestation.expected_source_sha256:
-        raise TerminalState(
+        raise _PostEditReviewRejected(
+            'source_changed',
             'post_edit_review 绑定的 Stage2 source 已变化；拒绝把旧返工证明应用到新主体')
     if chapter_ordinals != attestation.reviewed_chapter_ordinals:
-        raise TerminalState(
+        raise _PostEditReviewRejected(
+            'chapter_scope_changed',
             'post_edit_review 没有覆盖当前完整正文章集合；'
-            f'expected={chapter_ordinals} got={attestation.reviewed_chapter_ordinals}')
+            f'expected={chapter_ordinals} got={attestation.reviewed_chapter_ordinals}',
+            safe_summary='post_edit_review 未绑定当前完整正文章集合')
 
     extended = attestation.expected_workpack_sha256 is not None
     if extended:
         if expected_workpack_sha256 != attestation.expected_workpack_sha256:
-            raise TerminalState(
+            raise _PostEditReviewRejected(
+                'workpack_changed',
                 'post_edit_review 绑定的完整 workpack 已变化；拒绝应用旧阅读结论')
         expected_scope = [
             (item.item_id, item.subject_sha256)
@@ -5882,7 +7154,8 @@ def _review_after_global_edit(
             for row in attestation.review_scope
         ]
         if supplied_scope != expected_scope:
-            raise TerminalState(
+            raise _PostEditReviewRejected(
+                'review_scope_mismatch',
                 'post_edit_review.review_scope 未精确覆盖修前全部未闭合 blocking 项')
 
     payload = artifact.model_dump(mode='json', by_alias=True)
@@ -5904,9 +7177,11 @@ def _review_after_global_edit(
     pending_groups = {review_group_key(item.subject_path) for item in pending}
     unknown_groups = sorted(set(quarantine) - pending_groups)
     if unknown_groups:
-        raise TerminalState(
+        raise _PostEditReviewRejected(
+            'unknown_quarantine_group',
             'post_edit_review 请求隔离的组不属于本次 edit 新打开的 blocking 面：'
-            f'{unknown_groups}')
+            f'{unknown_groups}',
+            safe_summary='post_edit_review 含不属于本次新打开 blocking 面的隔离组')
 
     if extended:
         identities = {
@@ -5915,9 +7190,11 @@ def _review_after_global_edit(
         for decision in attestation.decisions:
             identity = (decision.item_id, decision.expected_subject_sha256)
             if identity not in identities:
-                raise TerminalState(
+                raise _PostEditReviewRejected(
+                    'stale_decision_target',
                     'post_edit_review 决定指向已被本 edit 改写或删除的旧主体：'
-                    f'{decision.item_id}')
+                    f'{decision.item_id}',
+                    safe_summary='post_edit_review 决定指向已改写或删除的旧主体')
             updated = decide_global_review(
                 updated,
                 item_id=decision.item_id,
@@ -5952,9 +7229,13 @@ def _review_after_global_edit(
 
     safety = generation_safety(payload, updated)
     if not safety.safe:
-        raise TerminalState(
+        raise _PostEditReviewRejected(
+            'blocking_remaining',
             'reviewed GlobalEdit 没有消解全部 blocking 项；拒绝落盘。'
-            f'remaining={list(safety.blocking_item_ids)}')
+            f'remaining={list(safety.blocking_item_ids)}',
+            safe_summary=(
+                'reviewed GlobalEdit 仍有未消解 blocking 项；'
+                f'count={len(safety.blocking_item_ids)}'))
     return updated
 
 
@@ -5991,8 +7272,28 @@ def run_apply_edit(ctx: RunContext, edit_path: str = '') -> tuple[GlobalGroundin
             f'{ctx.node} 没有 Stage2 全局人工订正入口——`--apply-edit` 挂在 `stage2.global` 上'
             f'（逐章蓝图的人工路是 `--chapters` 定向重生成）')
 
-    submitted_edit, supplied_path = _read_global_edit_input(
-        ctx, store, edit_path)
+    from novel.llm import stage2_global_runs
+
+    requested_path = _global_edit_input_path(ctx, edit_path)
+    # prepared recovery 必须先于 formal/review 的任何联合读取；partial bundle 正是
+    # 这条路要修的盘面，若先走常规 apply 会把可恢复中断误判成 stale/no-op。
+    resumed_input: tuple[GlobalEdit, str] | None = None
+    with stage2_global_runs.mutation_ownership(ctx):
+        # formal journal 是 input WAL 的后继 handoff；两者都在的硬杀盘面必须
+        # 先消费后继，否则 input WAL 会把合法 prepared journal 看成第三态。
+        resumed = _resume_reviewed_edit_commit(
+            ctx, store, requested_path=requested_path)
+        if resumed is not None:
+            return resumed
+        resumed_input = _resume_global_edit_input_commit(
+            ctx, store, requested_path=requested_path)
+
+    if resumed_input is None:
+        submitted_edit, supplied_path = _read_global_edit_input(
+            ctx, store, edit_path)
+    else:
+        submitted_edit, _resumed_sha256 = resumed_input
+        supplied_path = requested_path
 
     main_text = _read_main_text(store)
     if main_text is None:
@@ -6002,30 +7303,39 @@ def run_apply_edit(ctx: RunContext, edit_path: str = '') -> tuple[GlobalGroundin
     ]
     ordinals = set(chapter_ordinals)
 
-    from novel.llm import stage2_global_runs
-
     with stage2_global_runs.mutation_ownership(ctx):
+        if store.exists(GLOBAL_EDIT_COMMIT):
+            live_commit = store.read_own(
+                GlobalEditCommit, GLOBAL_EDIT_COMMIT)[0]
+            if live_commit.state == 'prepared':
+                raise ProvenanceRefused(
+                    'reviewed-edit prepared commit 尚未补完；拒绝进入新的 apply-edit')
         previous_review = store.read_own(
             GlobalReview, GLOBAL_REVIEW_REL, require_current=True)[0]
+        reviewed_formal_sha256: str | None = None
         if submitted_edit.post_edit_review is not None:
             # Commander 的纠正轮可能是在上一份 reviewed edit 被 HARD 闸门
             # 拒绝、并留下 live INVALID 后到达。证明绑定的是修前正式 Global
             # 与它的 current review；纠正稿必须重新应用到该正式底座，不能在
             # INVALID 上叠加第一份 patch。执行许可仍由 live surface 现场铸造。
-            previous, raw = store.read_own(
+            previous, reviewed_formal_sha256 = store.read_own_with_sha256(
                 GlobalGrounding, GLOBAL_REL, require_current=True,
                 replaced_input_keys=(GLOBAL_EDIT,))
+            # 正式 Global 经 store 渲染时是完整形态；从 typed model 回取业务 payload
+            # 可与同一次 read 得到的 raw SHA 共同关闭 TOCTOU。
+            raw = previous.model_dump(mode='json', by_alias=True)
             require_current_review(
                 previous.model_dump(mode='json', by_alias=True), previous_review)
         else:
-            previous, raw, _source_rel = _global_source(
+            previous, raw, source_rel = _global_source(
                 store, replaced_edit_rel=GLOBAL_EDIT)
+            reviewed_formal_sha256 = store.full_sha256_or_none(source_rel)
+            if reviewed_formal_sha256 is None:  # pragma: no cover —— source 已读
+                raise UpstreamMissing(f'{source_rel} 不在盘上')
         previous_business = copy.deepcopy(raw)
         previous_business.pop('_provenance', None)
         reviewed_workpack_sha256: str | None = None
-        if (submitted_edit.post_edit_review is not None
-                and submitted_edit.post_edit_review.expected_workpack_sha256
-                is not None):
+        if submitted_edit.post_edit_review is not None:
             from novel.stages.stage2 import global_review as global_review_ops
             reviewed_workpack_sha256 = str(global_review_ops.review_workpack(
                 ctx, scope='blocking',
@@ -6043,9 +7353,26 @@ def run_apply_edit(ctx: RunContext, edit_path: str = '') -> tuple[GlobalGroundin
         # typed payload 写进书内唯一输入落点；新 Global 的 provenance 因而永远
         # 绑定可长期复算的 ``stage2/global_edit.json``，不会指向稍后删除的 UUID。
         canonical_path = store.path(GLOBAL_EDIT).resolve()
-        if supplied_path != canonical_path:
-            store.write_sparse_input(GLOBAL_EDIT, submitted_edit)
-        canonical_edit = store.read(GlobalEdit, GLOBAL_EDIT)
+        reviewed_edit = submitted_edit.post_edit_review is not None
+        assert reviewed_formal_sha256 is not None
+        if resumed_input is None:
+            input_journal = _prepare_global_edit_input_commit(
+                store,
+                submitted_edit=submitted_edit,
+                submitted_transport_identity=_global_edit_transport_identity(
+                    ctx, supplied_path),
+                formal_sha256=reviewed_formal_sha256,
+                expected_source_sha256=(
+                    submitted_edit.post_edit_review.expected_source_sha256
+                    if reviewed_edit else None),
+                global_review_workpack_sha256=(
+                    reviewed_workpack_sha256 if reviewed_edit else None),
+            )
+            canonical_edit, canonical_edit_sha256 = (
+                _reconcile_global_edit_input_commit(store, input_journal))
+        else:
+            canonical_edit, canonical_edit_sha256 = store.read_with_sha256(
+                GlobalEdit, GLOBAL_EDIT)
         if canonical_edit != submitted_edit:  # pragma: no cover —— store round-trip 已守
             raise ProvenanceRefused('Stage2 canonical GlobalEdit 写回后字节语义漂移')
 
@@ -6060,15 +7387,110 @@ def run_apply_edit(ctx: RunContext, edit_path: str = '') -> tuple[GlobalGroundin
             artifact = GlobalGrounding.model_validate({
                 **data, '_provenance': provenance})
         except ValidationError as exc:
-            raise TerminalState(
-                '人工 GlobalEdit 应用后的完整候选不符合当前 '
-                f'GlobalGrounding v4：{exc}') from exc
+            failure = TerminalState(
+                '人工 GlobalEdit 应用后的完整候选不符合当前 GlobalGrounding v4；'
+                '字段位置可从异常链诊断，恢复事实不会持久化 input_value/正文')
+            if reviewed_edit:
+                locations = sorted({
+                    '.'.join(str(part) for part in error.get('loc', ()))
+                    for error in exc.errors(include_input=False)
+                })
+                _write_global_edit_failure(
+                    store,
+                    failure_kind='candidate_validation',
+                    failed_edit_sha256=canonical_edit_sha256,
+                    formal_sha256=reviewed_formal_sha256,
+                    expected_source_sha256=(
+                        submitted_edit.post_edit_review.expected_source_sha256),
+                    global_review_workpack_sha256=reviewed_workpack_sha256,
+                    candidate_business_sha256=_canonical_sha256(data),
+                    reason_code='candidate_schema_invalid',
+                    reason_summary=(
+                        'GlobalEdit 候选不符合 GlobalGrounding v4；fields='
+                        + ','.join(locations[:12]))[:512],
+                )
+                _retire_global_edit_input_commit_after_failure(
+                    store, canonical_edit_sha256=canonical_edit_sha256)
+            else:
+                _write_global_edit_failure(
+                    store,
+                    failure_kind='ordinary_candidate_validation',
+                    failed_edit_sha256=canonical_edit_sha256,
+                    formal_sha256=reviewed_formal_sha256,
+                    expected_source_sha256=None,
+                    global_review_workpack_sha256=None,
+                    candidate_business_sha256=_canonical_sha256(data),
+                    reason_code='candidate_schema_invalid',
+                    reason_summary=(
+                        '普通 GlobalEdit 候选不符合 GlobalGrounding v4'),
+                )
+                _retire_nonreviewed_global_edit_input_commit(
+                    store, canonical_edit_sha256=canonical_edit_sha256)
+            raise failure from exc
 
         candidate = artifact.model_dump(by_alias=True)
         outcomes = _judge_candidate(candidate, None, main_text)
         hits = _hard_hits(outcomes, ignore={'upstream_missing'})
         if hits:
-            path = _write_invalid(store, GLOBAL_REL, artifact)
+            failure_rels = (
+                _GLOBAL_INVALID, BLUEPRINT_CHARACTER_REL, GLOBAL_EDIT_FAILURE)
+            with store.history_transaction(*failure_rels):
+                path = _write_invalid(
+                    store, GLOBAL_REL, artifact,
+                    owned_global_edit_sha256=canonical_edit_sha256)
+                if reviewed_edit:
+                    invalid_sha256 = store.full_sha256_or_none(_GLOBAL_INVALID)
+                    if invalid_sha256 is None:  # pragma: no cover —— 写口后置条件
+                        raise ProvenanceRefused(
+                            'reviewed GlobalEdit HARD 已返回路径却没有 live INVALID')
+                    _write_global_edit_failure(
+                        store,
+                        failure_kind='hard_gate',
+                        failed_edit_sha256=canonical_edit_sha256,
+                        formal_sha256=reviewed_formal_sha256,
+                        expected_source_sha256=(
+                            submitted_edit.post_edit_review.expected_source_sha256),
+                        global_review_workpack_sha256=reviewed_workpack_sha256,
+                        candidate_business_sha256=_canonical_sha256({
+                            key: value for key, value in candidate.items()
+                            if key != '_provenance'
+                        }),
+                        invalid_sha256=invalid_sha256,
+                        hard_hits=hits,
+                        reason_code='canonical_hard_gate',
+                        reason_summary=(
+                            'reviewed GlobalEdit 被 canonical HARD 拦截；rules='
+                            + ','.join(hits))[:512],
+                    )
+                else:
+                    invalid_sha256 = store.full_sha256_or_none(_GLOBAL_INVALID)
+                    if invalid_sha256 is None:  # pragma: no cover —— 写口后置条件
+                        raise ProvenanceRefused(
+                            '普通 GlobalEdit HARD 已返回路径却没有 live INVALID')
+                    _write_global_edit_failure(
+                        store,
+                        failure_kind='ordinary_hard_gate',
+                        failed_edit_sha256=canonical_edit_sha256,
+                        formal_sha256=reviewed_formal_sha256,
+                        expected_source_sha256=None,
+                        global_review_workpack_sha256=None,
+                        candidate_business_sha256=_canonical_sha256({
+                            key: value for key, value in candidate.items()
+                            if key != '_provenance'
+                        }),
+                        invalid_sha256=invalid_sha256,
+                        hard_hits=hits,
+                        reason_code='canonical_hard_gate',
+                        reason_summary=(
+                            '普通 GlobalEdit 被 canonical HARD 拦截；rules='
+                            + ','.join(hits))[:512],
+                    )
+            if reviewed_edit:
+                _retire_global_edit_input_commit_after_failure(
+                    store, canonical_edit_sha256=canonical_edit_sha256)
+            else:
+                _retire_nonreviewed_global_edit_input_commit(
+                    store, canonical_edit_sha256=canonical_edit_sha256)
             _note_evidence_locator_corrections(
                 ctx, store, accounting.evidence_locator_corrections,
                 rel=_GLOBAL_INVALID)
@@ -6081,11 +7503,58 @@ def run_apply_edit(ctx: RunContext, edit_path: str = '') -> tuple[GlobalGroundin
                 f'（0 LLM、同轮重判并留不可变审计）',
                 invalid_path=path)
 
-        reviewed = _review_after_global_edit(
-            artifact, previous_review, submitted_edit, chapter_ordinals,
-            expected_workpack_sha256=reviewed_workpack_sha256)
-        _write_formal(
-            store, GLOBAL_REL, artifact, review_override=reviewed)
+        try:
+            reviewed = _review_after_global_edit(
+                artifact, previous_review, submitted_edit, chapter_ordinals,
+                expected_workpack_sha256=reviewed_workpack_sha256)
+        except TerminalState as exc:
+            if reviewed_edit:
+                if isinstance(exc, _PostEditReviewRejected):
+                    reason_code = exc.failure_code
+                    reason_summary = exc.safe_summary
+                else:  # helper 的显式终态也不能把 canonical edit 丢掉。
+                    reason_code = 'post_edit_review_rejected'
+                    reason_summary = (
+                        'post_edit_review 在 formal bundle 提交前被关闭式拒绝')
+                _write_global_edit_failure(
+                    store,
+                    failure_kind='post_edit_review',
+                    failed_edit_sha256=canonical_edit_sha256,
+                    formal_sha256=reviewed_formal_sha256,
+                    expected_source_sha256=(
+                        submitted_edit.post_edit_review.expected_source_sha256),
+                    global_review_workpack_sha256=reviewed_workpack_sha256,
+                    candidate_business_sha256=_canonical_sha256({
+                        key: value for key, value in candidate.items()
+                        if key != '_provenance'
+                    }),
+                    reason_code=reason_code,
+                    reason_summary=reason_summary,
+                )
+                _retire_global_edit_input_commit_after_failure(
+                    store, canonical_edit_sha256=canonical_edit_sha256)
+            raise
+        assert reviewed_formal_sha256 is not None
+        attestation = submitted_edit.post_edit_review
+        target_review = (
+            reviewed if reviewed is not None
+            else build_review(candidate, previous_review)
+        )
+        journal = _prepare_reviewed_edit_commit(
+            store,
+            artifact=artifact,
+            review=target_review,
+            main_text=main_text,
+            canonical_edit_sha256=canonical_edit_sha256,
+            formal_sha256=reviewed_formal_sha256,
+            expected_source_sha256=(
+                None if attestation is None
+                else attestation.expected_source_sha256),
+            global_review_workpack_sha256=reviewed_workpack_sha256,
+            submitted_transport_identity=_global_edit_transport_identity(
+                ctx, supplied_path),
+        )
+        artifact = _reconcile_reviewed_edit_commit(store, journal)
         _note_evidence_locator_corrections(
             ctx, store, accounting.evidence_locator_corrections,
             rel=GLOBAL_REL)

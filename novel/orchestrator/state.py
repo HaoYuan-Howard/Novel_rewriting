@@ -23,7 +23,8 @@ from __future__ import annotations
 from contracts.artifacts import (
     ARTIFACT_PATHS, BOOK_SCOPED_PATHS, STAGE1_MAIN_TEXT,
     STAGE2_BLUEPRINT_CHARACTER_PROJECTION, STAGE2_CHAPTER_BLUEPRINTS,
-    STAGE2_GLOBAL_EDIT, STAGE2_GLOBAL_GROUNDING,
+    STAGE2_GLOBAL_EDIT, STAGE2_GLOBAL_EDIT_COMMIT, STAGE2_GLOBAL_EDIT_FAILURE,
+    STAGE2_GLOBAL_EDIT_INPUT_COMMIT, STAGE2_GLOBAL_GROUNDING,
     STAGE4_BLIND_CANDIDATE, STAGE4_EVIDENCE_BINDING,
     STAGE4_PLAN_CHAPTERS, STAGE4_WRITER_CONTEXT,
     STAGE5_CHAPTER, artifact_rel,
@@ -39,7 +40,10 @@ from contracts.schema import ARTIFACTS, artifact_key, artifact_spec
 from contracts.schema.orchestration import (
     ArtifactState, NovelOverview, OverviewSummary, StageState,
 )
-from contracts.schema.stage2 import GlobalEdit, GlobalGrounding
+from contracts.schema.stage2 import (
+    GlobalEdit, GlobalEditCommit, GlobalEditFailure, GlobalEditInputCommit,
+    GlobalGrounding,
+)
 from novel import paths, prov
 from novel.errors import ArtifactUnreadable, TerminalState, UpstreamMissing, UpstreamStale
 from novel.llm.cache import CachePolicy
@@ -672,15 +676,65 @@ def stage2_reviewed_edit_correction_needed(
 ) -> bool:
     """是否有一份尚未完成预算内增量纠正的 reviewed GlobalEdit。
 
-    普通 Global ``.INVALID`` 仍按既有契约让 Blueprint 先推进、到 Stage4 汇合；
-    这里只识别一个更窄的崩溃恢复态：当前 INVALID 精确绑定书内
-    ``global_edit.json``，该 edit 带修后自检证明，而且 live INVALID 自创建后
-    没有人直接改过。它说明 Commander 的第一次修改已执行但被 HARD 拒绝，下一步
-    应是同一逻辑任务的**预算内增量纠正**，不能被 Blueprint REDO 抢走。
+    现役 producer 在 reviewed edit canonical 化后立即写
+    ``global_edit_failure.json``：它既覆盖 HARD，也覆盖没有 INVALID 的候选载体/
+    post-edit review 失败与 canonical→终态崩溃窗。三种确定失败进入纠正任务；
+    ``canonical_pending`` 仍归 Supervisor 重放同一 durable action，绝不消耗新的
+    Commander 席位。sidecar 内容损坏则只读 planner 显式失败，不能静默退回普通
+    review 而把已发生的业务 delta 丢掉。
+
+    sidecar 引入前的普通 Global ``.INVALID`` 仍走下方兼容探测：只有投影 current、
+    edit 带修后自检且 INVALID 未被人直接编辑时才视为旧 reviewed-edit 恢复态。
 
     完成度仍不读 ``_service``，也不从作业日志猜状态；全部证据都在书内 typed
     产物、INVALID provenance/freshness 与不可变 revalidation baseline 中。
     """
+    novel_dir = paths.find_novel_dir(base, sid)
+    if novel_dir is None:
+        # ``plan_book_from_overview`` 也供冻结/合成 overview 的只读消费者使用；
+        # 书目录不存在时，盘上不可能同时存在 reviewed-edit 恢复事实。
+        return False
+    store = ArtifactStore(readonly_ctx(
+        novel_dir, 'stage2.global', prov.code_version()))
+    if store.exists(STAGE2_GLOBAL_EDIT_FAILURE):
+        # ``canonical_pending`` 只证明 producer 已接管 durable action，尚没有
+        # Commander 可纠正的确定失败；Supervisor 应重放同一 action，不能耗一席
+        # correction。其余三类才进入 correction workpack。坏 sidecar 让只读
+        # planner 显式失败，而不是把已发生的 edit 当作不存在。
+        failure = store.read_own(
+            GlobalEditFailure, STAGE2_GLOBAL_EDIT_FAILURE)[0]
+        if failure.failure_kind in {
+                'ordinary_hard_gate', 'ordinary_candidate_validation'}:
+            return False
+        if failure.failure_kind == 'canonical_pending':
+            return False
+        if (failure.failure_kind == 'hard_gate'
+                and stage2_global_edit_terminal_failure_needed(
+                    base, sid, code=store.ctx.code)):
+            # 人已经直接修改 live INVALID；下一步只能显式 revalidate 或提交新
+            # typed edit，不能让 Commander 基于旧 formal sparse delta 覆盖人工稿。
+            return False
+        if (failure.failure_kind == 'hard_gate'
+                and stage2_reviewed_edit_revalidation_needed(
+                    base, sid, code=store.ctx.code)):
+            return False
+        if not store.exists(STAGE2_GLOBAL_EDIT):
+            raise ArtifactUnreadable(
+                'classified reviewed-edit failure 已失去 canonical edit')
+        current_edit, current_edit_sha256 = store.read_own_with_sha256(
+            GlobalEdit, STAGE2_GLOBAL_EDIT)
+        if current_edit_sha256 == failure.failed_edit_sha256:
+            if current_edit.post_edit_review is None:
+                raise ArtifactUnreadable(
+                    'classified reviewed-edit failure 的 exact edit 缺 attestation')
+            return True
+        if current_edit.post_edit_review is None:
+            # 显式新人工 edit 已 canonical；若硬杀发生在 sidecar 归档前，旧
+            # failure 只是可审计历史，不得抢回 Commander planner。
+            return False
+        raise ArtifactUnreadable(
+            'classified reviewed-edit failure 与当前 reviewed edit SHA 不匹配')
+
     if not stage2_invalid_projection_ready(ov):
         return False
     stage = next(
@@ -698,9 +752,6 @@ def stage2_reviewed_edit_correction_needed(
     if grounding is None or grounding.invalid_freshness != 'fresh':
         return False
 
-    novel_dir = paths.resolve_novel_dir(base, sid)
-    store = ArtifactStore(readonly_ctx(
-        novel_dir, 'stage2.global', prov.code_version()))
     if not store.exists(STAGE2_GLOBAL_EDIT):
         return False
     try:
@@ -714,7 +765,125 @@ def stage2_reviewed_edit_correction_needed(
         )
     except TerminalState:
         return False
-    return not audit.edited_by_human
+    if audit.edited_by_human:
+        return False
+    return not stage2_reviewed_edit_revalidation_needed(
+        base, sid, code=store.ctx.code)
+
+
+def stage2_reviewed_edit_revalidation_needed(
+    base: str | os.PathLike[str], sid: str, *, code: str | None = None,
+) -> bool:
+    """reviewed INVALID 是否按真实 revalidate 尺子已无 HARD、可 0-wire 提升。"""
+    novel_dir = paths.find_novel_dir(base, sid)
+    if novel_dir is None:
+        return False
+    ctx = readonly_ctx(
+        novel_dir, 'stage2.global', code or prov.code_version())
+    from novel.stages.stage2 import extract as stage2_extract
+    return stage2_extract.reviewed_invalid_auto_revalidation_needed(ctx)
+
+
+def stage2_global_edit_terminal_failure_needed(
+    base: str | os.PathLike[str], sid: str, *, code: str | None = None,
+) -> bool:
+    """GlobalEdit 是否已有只能由人给出后继动作的 durable terminal。"""
+    novel_dir = paths.find_novel_dir(base, sid)
+    if novel_dir is None:
+        return False
+    ctx = readonly_ctx(
+        novel_dir, 'stage2.global', code or prov.code_version())
+    store = ArtifactStore(ctx)
+    if not store.exists(STAGE2_GLOBAL_EDIT_FAILURE):
+        return False
+    failure = store.read_own(
+        GlobalEditFailure, STAGE2_GLOBAL_EDIT_FAILURE)[0]
+    from novel.stages.stage2 import extract as stage2_extract
+    if failure.failure_kind in {
+            'ordinary_hard_gate', 'ordinary_candidate_validation'}:
+        stage2_extract._validated_ordinary_failure_inputs(  # noqa: SLF001
+            store, failure, allow_human_invalid=True)
+        return True
+    if failure.failure_kind != 'hard_gate':
+        return False
+    # reviewed HARD 的原始 INVALID 仍归 correction/自动 revalidate；只有不可变
+    # baseline 证明业务内容已被人改过，才切到人工 successor 面。
+    stage2_extract._validated_failure_inputs(  # noqa: SLF001
+        ctx, store, failure)
+    audit = store.revalidation_audit(
+        STAGE2_GLOBAL_GROUNDING, GlobalGrounding,
+        actor='system:stage2-terminal-probe',
+        reason='只读识别 reviewed GlobalEdit INVALID 是否由人编辑',
+    )
+    return audit.edited_by_human
+
+
+def stage2_reviewed_edit_commit_recovery_flags(
+    base: str | os.PathLike[str], sid: str, *, code: str | None = None,
+) -> tuple[str, ...] | None:
+    """返回 durable Stage2 Global 动作唯一允许的 exact 0-wire argv。
+
+    revalidate journal 冻结的是发起本次提升的真实 ``actor/reason``；人工动作
+    硬杀后的恢复必须逐字复用它们，不能被 planner 改写成 system 身份。只有尚未
+    prepare journal 的 legacy 自动提升才由调用方使用固定 system 凭据。
+    """
+    novel_dir = paths.find_novel_dir(base, sid)
+    if novel_dir is None:
+        return None
+    ctx = readonly_ctx(
+        novel_dir, 'stage2.global', code or prov.code_version())
+    store = ArtifactStore(ctx)
+    if store.exists(STAGE2_GLOBAL_EDIT_INPUT_COMMIT):
+        # 完整 typed read 本身就是 planner 对 canonical WAL 的关闭式校验。
+        store.read_own(
+            GlobalEditInputCommit, STAGE2_GLOBAL_EDIT_INPUT_COMMIT)
+        return ('--apply-edit', STAGE2_GLOBAL_EDIT)
+    if store.exists(STAGE2_GLOBAL_EDIT_FAILURE):
+        failure = store.read_own(
+            GlobalEditFailure, STAGE2_GLOBAL_EDIT_FAILURE)[0]
+        if failure.failure_kind == 'canonical_pending':
+            # input WAL 退休到 formal/terminal handoff 之间，pending sidecar 就是
+            # 同一 durable action 的 0-wire 恢复事实。不能只看 kind：逐字复验
+            # canonical edit、修前 formal、attestation source 与完整 workpack，
+            # 任一漂移都关闭式抛错，绝不新发 Commander 席位。
+            from novel.stages.stage2 import extract as stage2_extract
+            stage2_extract._validated_failure_inputs(  # noqa: SLF001
+                ctx, store, failure)
+            return ('--apply-edit', STAGE2_GLOBAL_EDIT)
+    if not store.exists(STAGE2_GLOBAL_EDIT_COMMIT):
+        return None
+    # 坏 journal 让 planner 关闭式失败；不能把 partial bundle 当普通 stale/
+    # UNKNOWN 再交给 Commander 或付费 Global。
+    journal = store.read_own(
+        GlobalEditCommit, STAGE2_GLOBAL_EDIT_COMMIT)[0]
+    if journal.state != 'prepared':
+        return None
+    if journal.action_kind == 'apply_edit':
+        return ('--apply-edit', STAGE2_GLOBAL_EDIT)
+    audit = journal.target.global_grounding.provenance.revalidation_audit
+    if audit is None:
+        raise ArtifactUnreadable(
+            'prepared revalidate journal 的 target 缺 typed revalidation audit')
+    return ('--revalidate', '--actor', audit.actor, '--reason', audit.reason)
+
+
+def stage2_reviewed_edit_commit_recovery_action(
+    base: str | os.PathLike[str], sid: str, *, code: str | None = None,
+) -> str | None:
+    """返回 durable 动作的 verb；exact argv 由 recovery_flags 单源给出。"""
+    flags = stage2_reviewed_edit_commit_recovery_flags(
+        base, sid, code=code)
+    if flags is None:
+        return None
+    return 'revalidate' if flags[0] == '--revalidate' else 'apply_edit'
+
+
+def stage2_reviewed_edit_commit_recovery_needed(
+    base: str | os.PathLike[str], sid: str, *, code: str | None = None,
+) -> bool:
+    """是否存在只能由 0-wire deterministic action 补尾的动作事实。"""
+    return stage2_reviewed_edit_commit_recovery_action(
+        base, sid, code=code) is not None
 
 
 def stage2_projection_source_unproven(ov: NovelOverview) -> str | None:

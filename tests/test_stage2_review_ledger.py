@@ -582,7 +582,10 @@ def test_repeated_progress_and_blocker_growth_are_refused(tmp_path):
 
 
 def test_complete_ledger_cannot_be_reopened(tmp_path):
-    _reserve(tmp_path, 1)
+    first = _reserve(tmp_path, 1)
+    stage2_review_ledger.finish(
+        tmp_path, '42', source_sha256=SOURCE, main_text_sha256=MAIN,
+        session_run_id=first.session_run_id, exit_code=0, now=2)
     stage2_review_ledger.mark_complete(
         tmp_path, '42', source_sha256=SOURCE, main_text_sha256=MAIN)
 

@@ -24,6 +24,17 @@ ARTIFACT_PATHS: Final[dict[str, str]] = {
     'stage2.global_review': 'stage2/global_review.json',
     'stage2.global_review_decisions': 'stage2/global_review_decisions.json',
     'stage2.global_edit': 'stage2/global_edit.json',
+    # reviewed edit 已经落为 canonical input、但 formal Global/review 尚未提交时的
+    # 瞬态恢复事实。它不是节点完成产物，也不是被 HARD 拦下的候选；因此不进入
+    # ``NodeSpec.produces``，只供 state/reviewer 关闭式恢复同一个 typed 动作。
+    'stage2.global_edit_failure': 'stage2/global_edit_failure.json',
+    # canonical GlobalEdit + pending/superseded failure 的 write-ahead journal；
+    # 覆盖两个 live 文件之间无法靠 Python rollback 修复的进程硬杀窗口。
+    'stage2.global_edit_input_commit': 'stage2/global_edit_input_commit.json',
+    # Stage2 Global 正式三件套的 book-local write-ahead journal。reviewed 时它与
+    # failure sidecar 分责；generic INVALID 提升即使没有 action-owned GlobalEdit
+    # identity / formal baseline 也由同一记录按 baseline/target 两态补尾。
+    'stage2.global_edit_commit': 'stage2/global_edit_commit.json',
     'stage2.blueprint_character_projection': 'stage2/blueprint_character_projection.json',
     'stage2.chapter_blueprints': 'stage2/chapter_blueprints.json',
     'stage2.blueprint_relation_edit': 'stage2/blueprint_relation_edit.json',
@@ -99,6 +110,10 @@ STAGE2_GLOBAL_GROUNDING = artifact_rel('stage2.global_grounding')
 STAGE2_GLOBAL_REVIEW = artifact_rel('stage2.global_review')
 STAGE2_GLOBAL_REVIEW_DECISIONS = artifact_rel('stage2.global_review_decisions')
 STAGE2_GLOBAL_EDIT = artifact_rel('stage2.global_edit')
+STAGE2_GLOBAL_EDIT_FAILURE = artifact_rel('stage2.global_edit_failure')
+STAGE2_GLOBAL_EDIT_INPUT_COMMIT = artifact_rel(
+    'stage2.global_edit_input_commit')
+STAGE2_GLOBAL_EDIT_COMMIT = artifact_rel('stage2.global_edit_commit')
 STAGE2_BLUEPRINT_CHARACTER_PROJECTION = artifact_rel(
     'stage2.blueprint_character_projection')
 STAGE2_CHAPTER_BLUEPRINTS = artifact_rel('stage2.chapter_blueprints')

@@ -875,6 +875,16 @@ class ArtifactStore:
         self._verify_round_trip(rel, type(artifact), data)
         return hashlib.sha256(data).hexdigest()
 
+    def prospective_sparse_sha256(self, rel: str, artifact: BaseModel) -> str:
+        """计算 registered sparse input 经唯一写盘口得到的完整文件 SHA。"""
+        rel = paths.check_rel_deep(rel)
+        if provenance_field(type(artifact)) is not None:
+            raise ProvenanceRefused(
+                f'{rel} 带 provenance；不能按 sparse input 预演')
+        data = self._render(rel, artifact, exclude_unset=True)
+        self._verify_round_trip(rel, type(artifact), data)
+        return hashlib.sha256(data).hexdigest()
+
     def write(self, rel: str, artifact: BaseModel) -> Path:
         """落一份正式产物。**先校验后落盘**——校验在 `artifact` 被构造的那一刻就发生过了。
 
@@ -1159,6 +1169,48 @@ class ArtifactStore:
             rel, model, actor=actor, reason=reason)
         return baseline
 
+    def prepared_invalid_promotion(self, rel: str, model: type[M], *,
+                                   actor: str, reason: str,
+                                   artifact_override: M | None = None) -> M:
+        """只读构造 ``promote_invalid`` 将落下的 exact typed 正式目标。
+
+        多产物 producer 先把这份目标及其 prospective SHA 写进 prepared journal，
+        再逐件收敛 live companion；不能为了取得 promoted provenance 先碰正式文件。
+        """
+        official_rel = paths.check_rel_deep(rel)
+        live_artifact, _baseline_artifact, src, audit = self._revalidation_material(
+            official_rel, model, actor=actor, reason=reason)
+        artifact = artifact_override if artifact_override is not None else live_artifact
+        if not isinstance(artifact, model):
+            raise ProvenanceRefused(
+                f'{official_rel} 的 artifact_override 必须是 {model.__name__}，'
+                f'实得 {type(artifact).__name__}；一个字节都没动')
+        promoted_source = src.promoted(code=self.ctx.code, audit=audit)
+        derived_fields = _REVALIDATION_DERIVED_PROVENANCE_FIELDS.get(
+            official_rel, frozenset())
+        if derived_fields:
+            override_source = self._provenance_of(artifact)
+            if override_source is None:
+                raise ProvenanceRefused(
+                    f'{official_rel} 的确定性提升候选缺 provenance')
+            missing = sorted(
+                field for field in derived_fields
+                if field not in type(override_source).model_fields
+                or field not in type(promoted_source).model_fields)
+            if missing:
+                raise ProvenanceRefused(
+                    f'{official_rel} 提升派生账字段与当前 schema 漂移：{missing}')
+            promoted_source = promoted_source.model_copy(update={
+                field: copy.deepcopy(getattr(override_source, field))
+                for field in derived_fields
+            })
+        data = self._render(
+            official_rel, artifact, prov_override=promoted_source)
+        self._verify_round_trip(official_rel, model, data)
+        prepared, _payload = self._validate_payload(
+            model, official_rel, self._loads(official_rel, data))
+        return prepared
+
     def promote_invalid(self, rel: str, model: type[M], *,
                         actor: str, reason: str,
                         artifact_override: M | None = None) -> Path:
@@ -1208,13 +1260,9 @@ class ArtifactStore:
             and formal_version < spec.current_version
         )
 
-        live_artifact, _baseline_artifact, src, audit = self._revalidation_material(
-            official_rel, model, actor=actor, reason=reason)
-        artifact = artifact_override if artifact_override is not None else live_artifact
-        if not isinstance(artifact, model):
-            raise ProvenanceRefused(
-                f'{official_rel} 的 artifact_override 必须是 {model.__name__}，'
-                f'实得 {type(artifact).__name__}；一个字节都没动')
+        artifact = self.prepared_invalid_promotion(
+            official_rel, model, actor=actor, reason=reason,
+            artifact_override=artifact_override)
 
         # 【四步的顺序是挑过的】① 把两个**大概率的失败**挡在「一个字节都没动」之前
         # （轮次号撞了 · 载体层往返不过）② 上一轮正式稿进归档 ③ 落正式稿
@@ -1231,29 +1279,7 @@ class ArtifactStore:
         if _path_exists(dest):
             raise PathRefused(
                 f'归档位 {dest} 已被占用，**一个字节都没动**。轮次号多半算错了')
-        promoted_source = src.promoted(code=self.ctx.code, audit=audit)
-        derived_fields = _REVALIDATION_DERIVED_PROVENANCE_FIELDS.get(
-            official_rel, frozenset())
-        if derived_fields:
-            override_source = self._provenance_of(artifact)
-            if override_source is None:
-                raise ProvenanceRefused(
-                    f'{official_rel} 的确定性提升候选缺 provenance')
-            missing = sorted(
-                field for field in derived_fields
-                if field not in type(override_source).model_fields
-                or field not in type(promoted_source).model_fields)
-            if missing:
-                raise ProvenanceRefused(
-                    f'{official_rel} 提升派生账字段与当前 schema 漂移：{missing}')
-            promoted_source = promoted_source.model_copy(update={
-                field: copy.deepcopy(getattr(override_source, field))
-                for field in derived_fields
-            })
-        data = self._render(
-            official_rel, artifact,
-            prov_override=promoted_source,
-        )
+        data = self._render(official_rel, artifact)
         self._verify_round_trip(official_rel, model, data)
 
         p = self.path(official_rel)

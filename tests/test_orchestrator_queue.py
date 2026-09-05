@@ -567,7 +567,7 @@ def test_reviewed_global_edit_invalid_recovers_final_correction_before_blueprint
         item.waiting_on == Q.WAITING_ON_STAGE2_EDIT_CORRECTION
         for item in blocked)
     assert blocked[0].steps == []
-    assert '第二次、也是最后一次 Commander' in blocked[0].why
+    assert '按剩余持久预算发放同一逻辑任务' in blocked[0].why
 
 
 @pytest.mark.parametrize(

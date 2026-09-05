@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import copy
+import json
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -8,13 +10,22 @@ from pydantic import ValidationError
 
 from contracts.invariants import review_effect_of
 from contracts.schema import ArtifactVersionError, decode_artifact, encode_artifact
-from contracts.schema.stage2 import ConflictStage, GlobalEdit, Relation
-from novel.errors import TerminalState
+from contracts.schema.evaluation import GlobalReview
+from contracts.schema.stage2 import (
+    ConflictStage, GlobalEdit, GlobalGrounding, Relation,
+)
+from novel.errors import GateBlocked, TerminalState
+from novel.orchestrator import queue, reviewer_tasks
+from novel.orchestrator import stage2_reviewer_wire as reviewer_wire
 from novel.quality.global_review import subject_sha256
+from novel.stages.stage2 import extract
 from novel.stages.stage2.extract import (
     _apply_secret_patches, _review_after_global_edit,
 )
+from novel.store import ArtifactStore
 from tests.factories import approved_global_review
+from tests.test_stage2_generation import _ctx
+from tests.test_stage2_secret_edit import _seed, _write_edit
 
 
 def _locator(chapter: int = 1, text: str = '证据原文') -> dict:
@@ -341,6 +352,436 @@ def test_collection_delta_split_is_ordered_and_stale_hash_does_not_mutate():
     assert [row['secret_id'] for row in data['canon']['secrets']] == [
         'secret_02', 'secret_03']
     assert changed == ['secrets.split.secret_01->secret_02,secret_03']
+
+
+def _response_locator(evidence: dict) -> dict:
+    source = evidence['source']
+    return {
+        'chapter_ordinal': evidence['chapter_ordinal'],
+        'locator': source['text'],
+    }
+
+
+def _seed_multi_collection_book(book: Path):
+    """经正式 producer 铸出多行底座，避免手写一份伪 provenance Global。"""
+    _seed(book)
+    ctx = _ctx(book, 'stage2.global', paid=False)
+    store = ArtifactStore(ctx)
+    current = store.read(GlobalGrounding, extract.GLOBAL_REL)
+    payload = current.model_dump(mode='json', by_alias=True)
+    _write_edit(book, {
+        'collection_edits': [{
+            'collection': 'relations',
+            'expected_collection_sha256': subject_sha256(
+                payload['entities']['relations']),
+            'operations': [{
+                'op': 'add',
+                'item': {
+                    'relation_id': 'rel_02',
+                    'subject_id': 'char_001',
+                    'object_id': 'char_002',
+                    'predicate': '向母亲询问信件',
+                    'predicate_evidence': _locator(
+                        2, '其实母亲早就知道那封信的事。'),
+                    'visibility': {'kind': 'public', 'from_chapter': 2},
+                    'valid_from_chapter': 2,
+                    'valid_through_chapter': None,
+                },
+            }, {
+                'op': 'add',
+                'item': {
+                    'relation_id': 'rel_03',
+                    'subject_id': 'char_001',
+                    'object_id': 'char_002',
+                    'predicate': '请母亲一起核对账册',
+                    'predicate_evidence': _locator(
+                        3, '母亲进来给她添了一盏茶。'),
+                    'visibility': {'kind': 'public', 'from_chapter': 3},
+                    'valid_from_chapter': 3,
+                    'valid_through_chapter': None,
+                },
+            }],
+        }, {
+            'collection': 'secrets',
+            'expected_collection_sha256': subject_sha256(
+                payload['canon']['secrets']),
+            'operations': [{
+                'op': 'add',
+                'item': {
+                    'secret_id': 'secret_02',
+                    'fact': '母亲早就知道父亲回城',
+                    'fact_evidence': _locator(
+                        2, '其实母亲早就知道那封信的事。'),
+                    'knowledge_events': [{
+                        'subject': {
+                            'kind': 'character', 'char_id': 'char_002'},
+                        'known_from_chapter': 2,
+                        'evidence': _locator(
+                            2, '其实母亲早就知道那封信的事。'),
+                    }],
+                    'setup': {'kind': 'cold'},
+                    'first_reveal_chapter': 2,
+                },
+            }],
+        }, {
+            'collection': 'world_rules',
+            'expected_collection_sha256': subject_sha256(
+                payload['canon']['world_rules']),
+            'operations': [{
+                'op': 'add',
+                'item': {
+                    'rule_id': 'wr_02',
+                    'kind': 'institution',
+                    'versions': [{
+                        'effective_from_chapter': 3,
+                        'desc': '管家负责向主家回报米价变动',
+                        'desc_evidence': _locator(
+                            3, '管家在门外回话说米价又涨了。'),
+                    }],
+                },
+            }],
+        }],
+    })
+    # GlobalEdit 是本轮新输入；RunContext 必须在它落盘后重铸，和真实 CLI 进程一致。
+    seeded, report = extract.run_apply_edit(
+        _ctx(book, 'stage2.global', paid=False))
+    assert report.passed
+    ctx = _ctx(book, 'stage2.global', paid=False)
+    store = ArtifactStore(ctx)
+    store.write(extract.GLOBAL_REVIEW_REL, approved_global_review(seeded))
+    return store, seeded
+
+
+def _sparse_reviewer_task(current: dict) -> SimpleNamespace:
+    """大模板模拟真实 emit-edit-template；全部证据仍取自正式 Global。"""
+    relations = [{
+        'relation_id': row['relation_id'],
+        'predicate': row['predicate'],
+        'predicate_evidence': _response_locator(row['predicate_evidence']),
+    } for row in current['entities']['relations']]
+    secrets = [{
+        'secret_id': row['secret_id'],
+        'fact': row['fact'],
+        'fact_evidence': _response_locator(row['fact_evidence']),
+    } for row in current['canon']['secrets']]
+    world_rules = [{
+        'rule_id': row['rule_id'],
+        'versions': [{
+            'effective_from_chapter': version['effective_from_chapter'],
+            'desc': version['desc'],
+            'desc_evidence': _response_locator(version['desc_evidence']),
+        } for version in row['versions']],
+    } for row in current['canon']['world_rules']]
+    edit = {
+        'relations': relations,
+        'secrets': secrets,
+        'world_rules': world_rules,
+        'collection_edits': [{
+            'collection': 'world_rules',
+            'expected_collection_sha256': subject_sha256(
+                current['canon']['world_rules']),
+            'operations': [],
+        }],
+    }
+    GlobalEdit.model_validate(edit)
+    exact = {
+        'schema': 'novel-reviewer-action-v1',
+        'surface_seal': 'a' * 64,
+        'waiting_on': queue.WAITING_ON_STAGE2_REVIEW,
+        'action': {
+            'kind': 'node',
+            'node': 'stage2.global',
+            'flags': ['--apply-edit', '@reviewer-input'],
+            'input_payload': edit,
+        },
+    }
+    return SimpleNamespace(
+        waiting_on=queue.WAITING_ON_STAGE2_REVIEW,
+        submission_options=({
+            'id': 'node:stage2.global.apply-edit',
+            'exact_request': exact,
+            'editable_fields': [],
+            'binding_fields': [],
+            'allowed_values': {},
+        },),
+    )
+
+
+def _compact_sparse_response(
+    task: SimpleNamespace, *, bad_new_locator: bool = False,
+) -> dict:
+    binding = reviewer_wire.wire_binding(task)
+    new_locator = (
+        '这段不存在于任何正文章节，不能回取为 SourceSpan'
+        if bad_new_locator else '管家在门外回话说米价又涨了。'
+    )
+    return {
+        'schema': reviewer_wire.WIRE_SCHEMA,
+        'option_id': binding.option_id,
+        'expected_exact_request_sha256': binding.expected_exact_request_sha256,
+        'payload': {'edit': {
+            'relations': [{
+                'relation_id': 'rel_03',
+                'predicate': '母女共同核对账册',
+                'predicate_evidence': _locator(
+                    3, '母亲进来给她添了一盏茶。'),
+            }],
+            'secrets': [],
+            'world_rules': [],
+            'collection_edits': [{
+                'collection': 'world_rules',
+                'operations': [{
+                    'op': 'add',
+                    'item': {
+                        'rule_id': 'wr_03',
+                        'kind': 'institution',
+                        'versions': [{
+                            'effective_from_chapter': 3,
+                            'desc': '管家需向主家回报米价变动',
+                            'desc_evidence': _locator(3, new_locator),
+                        }],
+                    },
+                }],
+            }],
+        }},
+    }
+
+
+def _through_reviewer_loader(
+    tmp_path: Path, task: SimpleNamespace, response: dict,
+) -> GlobalEdit:
+    """compact assembler 后仍过现役 immutable loader，最后才交 CLI producer。"""
+    assembled = reviewer_wire.assemble(task, response)
+    request_path = tmp_path / 'reviewer-request.json'
+    request_path.write_text(
+        json.dumps(assembled, ensure_ascii=False), encoding='utf-8')
+    current = SimpleNamespace(
+        state='blocked', surface_seal='a' * 64,
+        action=SimpleNamespace(
+            waiting_on=task.submission_options[0]['exact_request']['waiting_on']),
+    )
+    loaded = reviewer_tasks.load_action(
+        request_path, current,
+        submission_options=task.submission_options)
+    assert isinstance(loaded, reviewer_tasks.ReviewerNodeAction)
+    assert loaded.input_payload is not None
+    decoded = decode_artifact(extract.GLOBAL_EDIT, loaded.input_payload)
+    return GlobalEdit.model_validate(decoded.payload)
+
+
+def test_sparse_reviewer_edit_reaches_canonical_producer_without_noop_rows(
+    tmp_path, monkeypatch,
+):
+    """模板有多行不等于提交多行；changed/provenance/review 都只看真实 delta。"""
+    book = tmp_path / '稀疏订正成功_901'
+    book.mkdir()
+    store, before = _seed_multi_collection_book(book)
+    before_raw = before.model_dump(mode='json', by_alias=True)
+    task = _sparse_reviewer_task(before_raw)
+
+    edit = _through_reviewer_loader(
+        tmp_path, task, _compact_sparse_response(task))
+    assert [row.relation_id for row in edit.relations] == ['rel_03']
+    assert edit.secrets == [] and edit.world_rules == []
+    assert [row.collection for row in edit.collection_edits] == ['world_rules']
+    _write_edit(book, edit.model_dump(
+        mode='json', by_alias=True, exclude_unset=True))
+
+    review_before = store.read(GlobalReview, extract.GLOBAL_REVIEW_REL)
+    stable_prefixes = (
+        'entities.relations.rel_01', 'entities.relations.rel_02',
+        'canon.secrets.secret_01', 'canon.secrets.secret_02',
+        'canon.world_rules.wr_01', 'canon.world_rules.wr_02',
+    )
+
+    def stable_decisions(review: GlobalReview) -> dict[str, tuple]:
+        return {
+            item.subject_path: (
+                item.item_id, item.subject_sha256, item.state,
+                item.actor, item.reason,
+            )
+            for item in review.items
+            if item.subject_path.startswith(stable_prefixes)
+        }
+
+    expected_stable_decisions = stable_decisions(review_before)
+    expected_relations = {
+        row['relation_id']: copy.deepcopy(row)
+        for row in before_raw['entities']['relations']
+        if row['relation_id'] in {'rel_01', 'rel_02'}
+    }
+    expected_secrets = copy.deepcopy(before_raw['canon']['secrets'])
+    expected_rules = copy.deepcopy(before_raw['canon']['world_rules'])
+
+    applied_changes: list[list[str]] = []
+    real_apply = extract._apply_secret_patches
+
+    def capture_changes(data, submitted, ordinals):
+        changed = real_apply(data, submitted, ordinals)
+        applied_changes.append(changed)
+        return changed
+
+    monkeypatch.setattr(extract, '_apply_secret_patches', capture_changes)
+    artifact, report = extract.run_apply_edit(
+        _ctx(book, 'stage2.global', paid=False))
+
+    assert report.passed
+    assert len(applied_changes) == 1
+    assert set(applied_changes[0]) == {
+        'world_rules.add.wr_03',
+        'rel_03.predicate',
+        'rel_03.predicate_evidence',
+    }
+    landed = artifact.model_dump(mode='json', by_alias=True)
+    assert {
+        row['relation_id']: row for row in landed['entities']['relations']
+        if row['relation_id'] in expected_relations
+    } == expected_relations
+    assert landed['canon']['secrets'] == expected_secrets
+    assert landed['canon']['world_rules'][:2] == expected_rules
+    assert [row['rule_id'] for row in landed['canon']['world_rules']] == [
+        'wr_01', 'wr_02', 'wr_03']
+    assert artifact.provenance.evidence_locator_failures == []
+    assert artifact.provenance.partial_rewrite == '--apply-edit'
+
+    canonical_edit = store.read(GlobalEdit, extract.GLOBAL_EDIT)
+    assert [row.relation_id for row in canonical_edit.relations] == ['rel_03']
+    assert canonical_edit.secrets == [] and canonical_edit.world_rules == []
+    assert [row.collection for row in canonical_edit.collection_edits] == [
+        'world_rules']
+    review_after = store.read(GlobalReview, extract.GLOBAL_REVIEW_REL)
+    assert stable_decisions(review_after) == expected_stable_decisions
+
+
+def test_sparse_bad_added_locator_is_hard_rejected_without_rewriting_baseline(
+    tmp_path,
+):
+    """新增项的坏 locator 仍由 canonical HARD 拒绝，正式稿与旧 review 原字节保留。"""
+    book = tmp_path / '稀疏订正坏证据_902'
+    book.mkdir()
+    store, before = _seed_multi_collection_book(book)
+    before_raw = before.model_dump(mode='json', by_alias=True)
+    task = _sparse_reviewer_task(before_raw)
+    edit = _through_reviewer_loader(
+        tmp_path, task,
+        _compact_sparse_response(task, bad_new_locator=True))
+    _write_edit(book, edit.model_dump(
+        mode='json', by_alias=True, exclude_unset=True))
+    formal_path = book / extract.GLOBAL_REL
+    review_path = book / extract.GLOBAL_REVIEW_REL
+    formal_before = formal_path.read_bytes()
+    review_before = review_path.read_bytes()
+
+    with pytest.raises(GateBlocked, match='global_evidence_unlocated') as caught:
+        extract.run_apply_edit(_ctx(book, 'stage2.global', paid=False))
+
+    reason = str(caught.value)
+    assert 'world_rules.add.wr_03' in reason
+    assert 'rel_03.predicate' in reason
+    for untouched in ('rel_01', 'rel_02', 'secret_01', 'secret_02', 'wr_01', 'wr_02'):
+        assert untouched not in reason
+    assert formal_path.read_bytes() == formal_before
+    assert review_path.read_bytes() == review_before
+
+    invalid = store.read(GlobalGrounding, extract._GLOBAL_INVALID).model_dump(
+        mode='json', by_alias=True)
+    failures = invalid['_provenance']['evidence_locator_failures']
+    assert len(failures) == 1
+    assert failures[0][0].startswith('canon.world_rules.wr_03.')
+    assert {
+        row['relation_id']: row
+        for row in invalid['entities']['relations']
+        if row['relation_id'] in {'rel_01', 'rel_02'}
+    } == {
+        row['relation_id']: row
+        for row in before_raw['entities']['relations']
+        if row['relation_id'] in {'rel_01', 'rel_02'}
+    }
+    assert invalid['canon']['secrets'] == before_raw['canon']['secrets']
+    assert invalid['canon']['world_rules'][:2] == before_raw['canon']['world_rules']
+    assert [row['rule_id'] for row in invalid['canon']['world_rules']] == [
+        'wr_01', 'wr_02', 'wr_03']
+
+
+def test_correction_wire_keeps_unmentioned_failed_patch_through_real_producer(
+    tmp_path,
+):
+    """纠错回答只修 B 时，failed sparse edit 中已经正确的 A 仍必须真实落地。"""
+    book = tmp_path / '纠错合并保留前序修订_903'
+    book.mkdir()
+    store, before = _seed_multi_collection_book(book)
+    before_raw = before.model_dump(mode='json', by_alias=True)
+    failed_edit = {
+        'relations': [{
+            'relation_id': 'rel_02',
+            'predicate': 'A：共同查验来信',
+            'predicate_evidence': _locator(
+                2, '其实母亲早就知道那封信的事。'),
+        }, {
+            'relation_id': 'rel_03',
+            'predicate': 'B：上一轮仍错误',
+            'predicate_evidence': _locator(
+                3, '这段不存在，上一轮会被 deterministic HARD 拒绝'),
+        }],
+    }
+    GlobalEdit.model_validate(failed_edit)
+    exact = {
+        'schema': 'novel-reviewer-action-v1',
+        'surface_seal': 'a' * 64,
+        'waiting_on': queue.WAITING_ON_STAGE2_EDIT_CORRECTION,
+        'action': {
+            'kind': 'node',
+            'node': 'stage2.global',
+            'flags': ['--apply-edit', '@reviewer-input'],
+            'input_payload': failed_edit,
+        },
+    }
+    task = SimpleNamespace(
+        waiting_on=queue.WAITING_ON_STAGE2_EDIT_CORRECTION,
+        submission_options=({
+            'id': 'node:stage2.global.apply-edit',
+            'exact_request': exact,
+            'editable_fields': [],
+            'binding_fields': [],
+            'allowed_values': {},
+        },),
+    )
+    binding = reviewer_wire.wire_binding(task)
+    response = {
+        'schema': reviewer_wire.WIRE_SCHEMA,
+        'option_id': binding.option_id,
+        'expected_exact_request_sha256': binding.expected_exact_request_sha256,
+        'payload': {
+            'edit': {'relations': [{
+                'relation_id': 'rel_03',
+                'predicate': 'B：母女共同核对账册',
+                'predicate_evidence': _locator(
+                    3, '母亲进来给她添了一盏茶。'),
+            }]},
+            'drop_targets': [],
+        },
+    }
+
+    edit = _through_reviewer_loader(tmp_path, task, response)
+    assert [row.relation_id for row in edit.relations] == ['rel_02', 'rel_03']
+    assert edit.relations[0].predicate == 'A：共同查验来信'
+    _write_edit(book, edit.model_dump(
+        mode='json', by_alias=True, exclude_unset=True))
+
+    artifact, report = extract.run_apply_edit(
+        _ctx(book, 'stage2.global', paid=False))
+
+    assert report.passed
+    landed = {
+        row.relation_id: row for row in artifact.entities.relations
+    }
+    assert landed['rel_02'].predicate == 'A：共同查验来信'
+    assert landed['rel_03'].predicate == 'B：母女共同核对账册'
+    assert store.read(GlobalGrounding, extract.GLOBAL_REL).model_dump(
+        mode='json', by_alias=True)['entities']['relations'][1][
+            'predicate'] == 'A：共同查验来信'
+    assert before_raw['entities']['relations'][1]['predicate'] != (
+        'A：共同查验来信')
 
 
 def test_collection_delete_refuses_a_dangling_relation_and_keeps_input_unchanged():

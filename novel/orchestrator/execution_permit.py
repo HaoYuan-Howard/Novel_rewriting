@@ -21,6 +21,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Final, Literal
 
+from contracts.artifacts import STAGE2_GLOBAL_EDIT
 from contracts.invariants import NODES
 from contracts.schema.api import (
     ExecutionPermit, ExecutionPermitInput, OperatorNext, OperatorNextDecision,
@@ -59,6 +60,9 @@ _INBOX = queue.WAITING_ON_INBOX
 _RESUME = queue.WAITING_ON_RESUME_DECISION
 _STAGE2_REVIEW = queue.WAITING_ON_STAGE2_REVIEW
 _STAGE2_EDIT_CORRECTION = queue.WAITING_ON_STAGE2_EDIT_CORRECTION
+_STAGE2_EDIT_COMMIT = queue.WAITING_ON_STAGE2_EDIT_COMMIT
+_STAGE2_EDIT_REVALIDATE = queue.WAITING_ON_STAGE2_EDIT_REVALIDATE
+_STAGE2_EDIT_TERMINAL = queue.WAITING_ON_STAGE2_EDIT_TERMINAL
 _STAGE2_FINAL_REVIEW = queue.WAITING_ON_STAGE2_FINAL_REVIEW
 _STAGE4_DESIGN = queue.WAITING_ON_STAGE4_DESIGN_REVIEW
 _STAGE4_BINDING = queue.WAITING_ON_STAGE4_BINDING_RESOLUTION
@@ -108,8 +112,13 @@ RECOVERY_RUN_POLICIES: Final[tuple[RecoveryRunPolicy, ...]] = (
 
     RecoveryRunPolicy('stage2.global', _t('--renormalize'), _W2),
     RecoveryRunPolicy(
-        'stage2.global', _t('--revalidate', '--actor', '--reason'), _W2),
-    RecoveryRunPolicy('stage2.global', _t('--apply-edit'), _W2),
+        'stage2.global', _t('--revalidate', '--actor', '--reason'),
+        _W2 | frozenset({
+            _STAGE2_EDIT_REVALIDATE, _STAGE2_EDIT_TERMINAL})),
+    RecoveryRunPolicy(
+        'stage2.global', _t('--apply-edit'),
+        _W2 | frozenset({
+            _STAGE2_EDIT_COMMIT, _STAGE2_EDIT_TERMINAL})),
     RecoveryRunPolicy('stage2.global', _t('--review-decisions'), _W2),
     RecoveryRunPolicy('stage2.global', _t('--emit-edit-template'), _W2),
     RecoveryRunPolicy(
@@ -304,9 +313,30 @@ def _is_within(path: Path, root: Path) -> bool:
     return True
 
 
+def _is_stage2_edit_commit_replay(
+    *, waiting_on: str | None, node: str, flags: tuple[str, ...],
+) -> bool:
+    """唯一不把 canonical edit 当外部字节输入的 WAL 恢复动作。
+
+    首次 service edit 可能在 input WAL 已落稳、book canonical 尚未生成时硬杀。
+    此时 action/surface seal 已绑定 typed WAL，而 ``global_edit.json`` 正是恢复动作
+    要补出的 target，不能反过来要求它在签 permit 前存在。predicate 同时用于签发
+    与 claim 后复验，避免两侧对同一输入面的理解漂移。
+    """
+    return (
+        waiting_on == _STAGE2_EDIT_COMMIT
+        and node == 'stage2.global'
+        and flags == ('--apply-edit', STAGE2_GLOBAL_EDIT)
+    )
+
+
 def _external_inputs(
     current: OperatorNextDecision, node: str, flags: tuple[str, ...],
 ) -> list[ExecutionPermitInput]:
+    waiting_on = None if current.action is None else current.action.waiting_on
+    if _is_stage2_edit_commit_replay(
+            waiting_on=waiting_on, node=node, flags=flags):
+        return []
     out: list[ExecutionPermitInput] = []
     for flag in flag_tokens(flags):
         if (node, flag) not in EXTERNAL_INPUT_POLICIES:
@@ -347,6 +377,18 @@ def _require_recovery_policy(
     if waiting_on not in row.waiting_on:
         raise UnsupportedRunMode(
             f'{node} {list(tokens)} 不能处理当前 blocker {waiting_on!r}')
+    if (waiting_on == _STAGE2_EDIT_COMMIT
+            and (node != 'stage2.global'
+                 or flags != ('--apply-edit', STAGE2_GLOBAL_EDIT))):
+        raise UnsupportedRunMode(
+            'reviewed-edit prepared commit 只允许 exact canonical '
+            f'`stage2.global --apply-edit {STAGE2_GLOBAL_EDIT}`')
+    if (waiting_on == _STAGE2_EDIT_REVALIDATE
+            and (node != 'stage2.global'
+                 or flags != tuple(current.action.flags))):
+        raise UnsupportedRunMode(
+            'Stage2 revalidate 补尾只允许逐字重放 operator 冻结的 '
+            'exact actor/reason')
 
     # 恢复不能越过 blocker 去动更晚层。两个显式例外都是产品链上的真实恢复：
     # Stage0 批准前先编辑；Stage5 Review currentness 由后一个 review 节点重算。
@@ -568,11 +610,17 @@ def load_execution_permit_file(path: str | os.PathLike[str]) -> ExecutionPermit:
 
 def _current_external_inputs(permit: ExecutionPermit) -> list[ExecutionPermitInput]:
     """按登记表重读 exact flags 指向的当前原始字节。"""
+    exact_flags = tuple(permit.flags)
+    if _is_stage2_edit_commit_replay(
+            waiting_on=permit.waiting_on,
+            node=permit.node,
+            flags=exact_flags):
+        return []
     out: list[ExecutionPermitInput] = []
-    for flag in flag_tokens(tuple(permit.flags)):
+    for flag in flag_tokens(exact_flags):
         if (permit.node, flag) not in EXTERNAL_INPUT_POLICIES:
             continue
-        raw = flag_value(tuple(permit.flags), flag)
+        raw = flag_value(exact_flags, flag)
         if raw is None:
             raise TerminalState(f'{permit.node} {flag} 缺外部输入路径')
         target = _resolve_external_path_at(

@@ -805,12 +805,75 @@ Output/_service/ledger.jsonl      跨书逐请求成本事实
 Output/_service/*.jsonl.lock      上面九类 JSONL 各自的追加锁载体（见下）
 Output/_service/uploads/…         浏览器上传的原始小说字节
 Output/_service/edits/<sid>/…     交给 CLI 的一次性 typed 编辑稿、人工决定或批处理 manifest
-Output/_service/edits/<sid>/reviewer-action-<sha>.json 已通过 typed loader 的 Commander 可执行决定：approval 或 Stage0/6/7 node 二选一内容寻址、可零模型重放（R-11.25）
+Output/_service/edits/<sid>/stage2-prereview-<sha>.json Blueprint 尚未完成、无 live surface 时已经通过 typed loader 的 Stage2 预审回答；它只保存重新绑定所需身份，不是假 action
+Output/_service/edits/<sid>/reviewer-action-<sha>.json 已通过 typed loader 的 Commander 可执行决定：approval 或 Stage0/2/6/7 node 二选一内容寻址、可零模型重放（R-11.25）；Stage2 在 full action 上额外绑定 workpack/source/main/effective progress/blocker、原 logical session 与 provider 原始回答 SHA，pause/stop/进程重启后仍重走当前 loader + permit，不用 assembled request SHA 冒充 no-progress/拒因身份
 Output/_service/runs/<sid>/stage2/global_review_ledgers/<sha>.json Stage2 Global/MainText 审阅的四席 Commander 账（v2：席 1～3 审阅/订正、席 4 只读终审；每席下记 launch/resume attempts，以及 process 成功后被 typed loader/canonical 边界拒绝的 request SHA、拒因摘要与拒因 SHA）、fresh session 与单调进展账；待纠错拒因只在 current business/workpack 与最后一席匹配时恢复，后续席一经预留即把旧拒因留作审计历史；旧 pre-spawn 假预留只经 hash-bound reconcile 移入带 actor/reason/负证据 hash 的 reconciliations；旧 v1 三席账或冻结 reviewer contract/output shape 已由后续提交证明失效的终态 v2 账，只能经 `reconcile --stage2-review-reopen` 带 actor/reason 和锁内复验的 original SHA 整体移入 `archived_ledgers` 后开空账，普通答错、运输失败或单纯预算耗尽不得重置；不含正文
 Output/_service/runs/<sid>/reviewer_seats/<blocker>/<business_sha256>.json 非 Stage2 reviewer blocker 的席位账（`ReviewerSeatLedger`）：同一稳定业务主体上只准一轮 review + 至多 `COMMANDER_REVIEWER_MAX_CORRECTIONS` 轮 correction，持久保存 pending 拒因/请求 identity/provider session 与每轮 attempts；重启或纯 code/surface 运输漂移不返还/不新开首审，真实 token/Stage0 revision/全文主体变化才开新账
 Output/_service/runs/<sid>/sessions/<session_run_id>.json Commander 一席的在线 provider session 指针（`CommanderSessionPointer`）：首个协议事件到达即写，同席 resume 原地覆盖；hash-bound 到本次 prompt/schema/profile，只是运维事实，不是审计账也不是预算（R-11.26）
 Output/_service/approvals/<sid>.json 人工闸门、已阅状态与 canonical 写作授权（原子替换）
 ```
+
+`Stage2PrereviewRecord` 是独立的未绑定记录，不复用 `ReviewerActionRecord`。它在预审
+provider 回答通过现役 typed loader 后立即落盘，早于 Blueprint worker 返回；字段为
+`kind / sid / run_id / epoch_id / business_sha256 / workpack_sha256 / source_sha256 /
+main_text_sha256 / progress_sha256 / blocker_count / reviewer_session_run_id /
+provider_response_sha256 / input_payload / recorded_at`。其中 `input_payload` 是通过预审 loader
+的业务 payload，`provider_response_sha256` 只绑定 provider 原始结构化回答；记录不携
+`waiting_on / surface_seal / execution permit / provider_session_id`，因为此时这些 live 写权尚不存在，
+也不得据此续会。恢复必须完整命中 business、workpack、source、main、progress、blocker 六元身份，
+并验证同一 logical session 的席位账 `purpose=prereview`。若席位仍为 `started`，只有原 parent 已不活动，
+且 attempt wire+exit0、logical-session audit process-ok 与成本账三面逐字联结时，才可幂等补
+`finish(ok, 0)`；证据缺一即关闭式 unknown，不能重新买席。
+
+Blueprint 完成并出现 live blocker 后，Supervisor 先重新运行当前
+`bind_stage2_prereview → load_action`，把完整 live action 保存为 `ReviewerActionRecord`，成功后才删除
+prereview record。两份文件同时存在的崩溃窗以后态 action 为准；绑定拒绝则先把拒因绑定原
+session/provider-answer SHA 落入席位账，成功后才删除 prereview 并进入 correction。任何审计、保存或
+删除失败均保留已有 durable 记录并以 exit 70 收口，不能把已付费回答降成“可再买一席”。
+
+`ReviewerActionRecord` 不是执行授权，也不替代 Supervisor 的 live permit。通用字段为
+`kind / sid / run_id / epoch_id / waiting_on / surface_seal / business_sha256 / recorded_at`；
+approval 形状携带 `surface / payload / review_token`，node 形状携带
+`node / flags / input_payload / review_token`。Stage2 `node=stage2.global` 与
+`surface=stage2_final_review` 的新记录还必须成组携带：
+
+| 字段 | 类型 | 新 Stage2 action/approval | 含义 |
+|---|---|---|---|
+| `workpack_sha256` | 64 位小写十六进制 SHA-256 | **是** | 与当前 stable business 同时命中才允许重放；surface seal 可随纯代码 epoch 变化 |
+| `source_sha256 / main_text_sha256` | 各 64 位小写十六进制 SHA-256 | **是** | 绑定该席实际审阅的 Global/MainText 主体，防止同 workpack 名义下串书或串代 |
+| `progress_sha256` | 64 位小写十六进制 SHA-256 | **是** | 席位 reserve 实际使用的 effective progress；correction 已把确定性拒因并入，不能退回 task 的 base progress 校账 |
+| `blocker_count` | 非负整数 | **是** | 与原席位和 live blocker 同时核对；final-review 为 0 |
+| `reviewer_session_run_id` | 非空字符串 | **是** | 产出 typed-valid 回答的 Stage2 logical Commander 席位；重放动作 exit 2 时拒因仍回写该原席 |
+| `provider_response_sha256` | 64 位小写十六进制 SHA-256 | **是** | provider 原始 compact JSON 的规范字节身份；不是 trusted assembler 展开的 full request SHA |
+
+旧 v1 Stage2 action 的 `workpack_sha256 / reviewer_session_run_id /
+provider_response_sha256` 三元组继续可读；只要三元组出现就必须齐全，新增四格也只能全有或全无。
+新 writer 一律写满七格；缺扩展组的历史记录仍须以能证明的字段关闭式复验，不能反推不存在的值。
+live/correction/final-review action 都必须**先保存 record，再 finish 席位账**；若崩在两个原子文件之间，
+恢复仅可在原 parent 不活动且 attempt、session audit、成本账三证一致时幂等补 finish，之后才重走 loader
+与当前 permit。原 turn 已有 typed/canonical rejection 时，拒因是更晚事实，残留 action 必须删除且绝不
+重放；Stage2 ledger 也禁止把空 turns 或任一非 `ok/exit0` turn 标成 `complete`。
+
+canonical 返回 landed exit（0/1）后删除记录；exit 2 先按 Stage2 现役拒因/席位策略落账再删除，并让
+planner 重读 live correction blocker/workpack；拒因写失败或 exit 70 结论未知时保留记录并停止执行，
+绝不把未知洗成未落盘。no-progress 同样先落拒因再删 prepared record，不能留下以后可执行的旧回答。
+
+reviewed `stage2.global --apply-edit` 在 canonical 子进程内还有更晚的 producer
+事实。Supervisor 每次读 planner 前都先用 `ReviewerActionRecord` 对账：精确命中
+terminal `global_edit_failure.json` 时，把 canonical 拒因绑回原 logical session/provider
+回答 SHA，成功后才退休 record；命中 `global_edit_commit.json: committed` 时只退休
+已落地 record。若 input journal、`canonical_pending` 或 apply-edit formal journal 仍为
+prepared，必须优先交给 `recovery:stage2-global-reviewed-edit-commit` 的确定性 Executor，且只允许
+exact `stage2.global --apply-edit stage2/global_edit.json`；首次 canonical 文件尚未出现、只有 input
+WAL 时，permit 也不伪造一份 external-input 字节身份，由 producer 从 WAL target 物化并收敛。
+若 formal journal 的 `action_kind=revalidate`，则唯一恢复动作改为逐字复用 target audit 冻结的
+`--revalidate --actor ... --reason ...`；generic INVALID 没有 canonical edit/formal 也不改变这条
+身份。所有补尾均为零 Commander wire。
+
+Stage2 final-review approval 的 canonical 写入成功后，顺序固定为“验证 approval/seen
+已落地 → `mark_complete` 席位账 → 退休 action record”。因此崩溃时即使 planner
+已越过 final-review blocker，新 parent 仍能用保留的 record 幂等补 complete；complete
+已落而 record 尚在时只清理记录，不重复 approval。
 
 它们**不是产物**：不进来源账、不进 `_provenance`、`ARTIFACTS` 里没有它们；
 `tests/test_layering.py` 的写口与路由所有权白名单为每一类带着明确理由。

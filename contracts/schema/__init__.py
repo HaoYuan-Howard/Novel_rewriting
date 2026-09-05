@@ -36,7 +36,9 @@ from pydantic import BaseModel
 from contracts.artifacts import (
     STAGE0_REVISIONS, STAGE1_HOOK_COPY, STAGE1_MAIN_TEXT,
     STAGE2_BLUEPRINT_CHARACTER_PROJECTION, STAGE2_BLUEPRINT_RELATION_EDIT,
-    STAGE2_CHAPTER_BLUEPRINTS, STAGE2_GLOBAL_EDIT,
+    STAGE2_CHAPTER_BLUEPRINTS, STAGE2_GLOBAL_EDIT, STAGE2_GLOBAL_EDIT_COMMIT,
+    STAGE2_GLOBAL_EDIT_INPUT_COMMIT,
+    STAGE2_GLOBAL_EDIT_FAILURE,
     STAGE2_GLOBAL_GROUNDING, STAGE2_GLOBAL_REVIEW, STAGE2_GLOBAL_REVIEW_DECISIONS,
     STAGE4_BLIND_CANDIDATE, STAGE4_BLIND_CHAPTER_EDIT, STAGE4_EVIDENCE_BINDING,
     STAGE4_PLAN_CHAPTERS, STAGE4_PLAN_EDIT, STAGE4_WRITER_CONTEXT,
@@ -147,7 +149,10 @@ from contracts.schema.stage2 import (
     ArcResponse, CausalEdge, FactAtom, FactEvidence, GlobalEdit,
     CharacterCollectionItem, GlobalCollectionAdd, GlobalCollectionDelete,
     GlobalCollectionEdit, GlobalCollectionSplit,
-    GlobalEditQuarantineGroup, GlobalEditReviewAttestation, GlobalEditReviewTarget,
+    GlobalEditCommit, GlobalEditCommitBaseline, GlobalEditCommitTarget,
+    GlobalEditInputCommit,
+    GlobalEditFailure, GlobalEditQuarantineGroup, GlobalEditReviewAttestation,
+    GlobalEditReviewTarget,
     GlobalGrounding, GlobalCharacterPatch,
     GroupRef, Hinge, KnowledgeEvent, KnowledgeEventResponse,
     Narration, Relation, RelationPatch, RelationVisibility,
@@ -259,6 +264,15 @@ ARTIFACT_SPECS: dict[str, ArtifactSpec] = {
     # 2026-08-29 新增可缺的 ``conflict_stages_replace`` 是兼容加法：旧 v3
     # 决策集仍能逐字解码，故不构成形状破坏、不升版。
     STAGE2_GLOBAL_EDIT: ArtifactSpec(GlobalEdit, 3),
+    # v1：canonical reviewed edit 被拒后由 ``stage2.global --apply-edit`` 免费
+    # 重建；它是 transient correction fact，不进入 NodeSpec.produces。
+    STAGE2_GLOBAL_EDIT_FAILURE: ArtifactSpec(GlobalEditFailure),
+    # v1：canonical sparse input + pending/superseded failure 的 transient WAL。
+    STAGE2_GLOBAL_EDIT_INPUT_COMMIT: ArtifactSpec(GlobalEditInputCommit),
+    # v1：Stage2 Global 正式三件套的 transient prepared/committed journal；
+    # reviewed 额外绑定 failure/workpack，generic INVALID 提升可显式表达没有
+    # action-owned edit identity / formal baseline；不进入 NodeSpec.produces。
+    STAGE2_GLOBAL_EDIT_COMMIT: ArtifactSpec(GlobalEditCommit),
     # v1：由当前 schema-valid global（正式或 INVALID）+ main_text 免费物化；
     # 无存量兼容负担，缺/坏时由 `stage2.global --renormalize` 0-LLM 重建。
     STAGE2_BLUEPRINT_CHARACTER_PROJECTION: ArtifactSpec(
@@ -462,7 +476,10 @@ __all__ = [
     'Setting', 'WorldRule', 'WorldRuleVersion', 'Secret',
     'EvidenceLocator', 'FactEvidence', 'CharacterRef', 'GroupRef', 'KnowledgeEvent',
     'KnowledgeEventResponse', 'RelationVisibility',
-    'GlobalEdit', 'GlobalEditQuarantineGroup', 'GlobalEditReviewAttestation',
+    'GlobalEdit', 'GlobalEditCommit', 'GlobalEditCommitBaseline',
+    'GlobalEditCommitTarget', 'GlobalEditFailure', 'GlobalEditInputCommit',
+    'GlobalEditQuarantineGroup',
+    'GlobalEditReviewAttestation',
     'GlobalEditReviewTarget', 'GlobalCollectionEdit', 'GlobalCollectionAdd',
     'GlobalCollectionDelete', 'GlobalCollectionSplit', 'CharacterCollectionItem',
     'SecretPatch', 'WorldRulePatch', 'RelationPatch', 'SettingPatch',

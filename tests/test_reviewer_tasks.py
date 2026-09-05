@@ -1376,8 +1376,15 @@ def test_stage2_durable_correction_uses_failed_edit_without_loading_blueprint(
         'read_only': True,
         'commander_budget_max': 3,
         'incremental_correction': True,
+        'recovery_fact_kind': 'registered_sidecar',
+        'failure_kind': 'hard_gate',
+        'failure_sha256': '3' * 64,
+        'failure_business_sha256': '5' * 64,
         'failed_edit_sha256': '1' * 64,
+        'formal_sha256': '4' * 64,
         'invalid_sha256': '2' * 64,
+        'expected_source_sha256': '8' * 64,
+        'global_review_workpack_sha256': '7' * 64,
         'hard_hits': ['role_repeats_name'],
         'hard_outcomes': [{'rule': 'role_repeats_name', 'findings': [{
             'detail': 'char_001 的 role 与 canonical 完全同字',
@@ -1408,6 +1415,62 @@ def test_stage2_durable_correction_uses_failed_edit_without_loading_blueprint(
     assert option['id'] == 'node:stage2.global.apply-edit'
     assert option['exact_request']['action']['input_payload']['characters'][0][
         'char_id'] == 'char_001'
+
+
+def test_stage2_post_review_correction_accepts_empty_hard_and_binds_failure_identity(
+        monkeypatch) -> None:
+    """attestation 失败不是 HARD；席位业务/workpack 仍须绑定 exact sidecar。"""
+    correction = {
+        'kind': 'stage2-global-edit-correction-workpack-v2',
+        'read_only': True,
+        'commander_budget_max': 3,
+        'incremental_correction': True,
+        'recovery_fact_kind': 'registered_sidecar',
+        'failure_kind': 'post_edit_review',
+        'failure_sha256': '3' * 64,
+        'failure_business_sha256': '5' * 64,
+        'failed_edit_sha256': '1' * 64,
+        'formal_sha256': '4' * 64,
+        'invalid_sha256': None,
+        'expected_source_sha256': '8' * 64,
+        'global_review_workpack_sha256': '7' * 64,
+        'hard_hits': [],
+        'hard_outcomes': [],
+        'failure_code': 'blocking_remaining',
+        'failure_summary': 'reviewed GlobalEdit 仍有未消解 blocking 项；count=1',
+        'failed_edit': _global_edit_envelope(),
+        'global_review_workpack': _stage2_failed_global([{
+            'current_state': 'FAIL', 'group_key': 'character:char_001'}]),
+    }
+    monkeypatch.setattr(reviewer_tasks, '_json_command', lambda _argv: correction)
+
+    pack = reviewer_tasks._workpack(
+        'base', '42', queue.WAITING_ON_STAGE2_EDIT_CORRECTION,
+        review_run_id='review-run')
+    assert pack['edit_correction']['failure_kind'] == 'post_edit_review'
+    assert pack['edit_correction']['hard_hits'] == []
+    assert pack['edit_correction']['invalid_sha256'] is None
+
+    business = reviewer_tasks._stage2_business_sha256(
+        pack, queue.WAITING_ON_STAGE2_EDIT_CORRECTION)
+    identity = reviewer_tasks._stage2_progress_identity(
+        pack, queue.WAITING_ON_STAGE2_EDIT_CORRECTION)
+    assert identity['workpack_sha256'] != '7' * 64
+
+    exact_rewrite = copy.deepcopy(pack)
+    exact_rewrite['edit_correction']['failure_sha256'] = '6' * 64
+    assert reviewer_tasks._stage2_business_sha256(
+        exact_rewrite, queue.WAITING_ON_STAGE2_EDIT_CORRECTION) == business
+    assert reviewer_tasks._stage2_progress_identity(
+        exact_rewrite, queue.WAITING_ON_STAGE2_EDIT_CORRECTION) == identity
+
+    business_change = copy.deepcopy(pack)
+    business_change['edit_correction']['failure_business_sha256'] = '6' * 64
+    assert reviewer_tasks._stage2_business_sha256(
+        business_change, queue.WAITING_ON_STAGE2_EDIT_CORRECTION) != business
+    assert reviewer_tasks._stage2_progress_identity(
+        business_change, queue.WAITING_ON_STAGE2_EDIT_CORRECTION)[
+            'workpack_sha256'] != identity['workpack_sha256']
 
 
 def test_stage2_fail_routes_only_to_typed_global_edit_and_loader_restores_v3(
@@ -1537,6 +1600,18 @@ def test_all_stage2_apply_edit_options_publish_collection_operation_schema(
         'collection_edits[].operations[].split.items.min_length'] == 2
     assert allowed[
         'collection_edits[].operations[].forbidden_fields'] == ['value']
+    assert allowed[
+        'collection_edits[].operations[].cross_operation_id_invariants'] == {
+            'split_output_excludes_subject': (
+                'split 的任一输出 ID 不得复用该 split.subject_id'),
+            'touched_input_ids_unique': (
+                '同一集合内被 delete/split 触及的输入 ID 不得重复'),
+            'output_ids_unique': (
+                '同一集合内所有 add.item 与 split.items 的输出 ID 不得重复'),
+            'input_output_ids_disjoint': (
+                '同一集合内所有 delete/split 输入 ID 与 add/split 输出 ID '
+                '必须完全不相交'),
+        }
     assert allowed['collection_edits[].member_model_by_collection'] == {
         'relations': 'RelationResponse'}
     schema = allowed[
@@ -1634,6 +1709,59 @@ def test_stage2_collection_add_value_is_rejected_by_real_load_action(
     assert 'extra_forbidden' in str(caught.value)
 
 
+@pytest.mark.parametrize(('operations', 'reason_code'), [
+    ([{
+        'op': 'split',
+        'subject_id': 'rel_08',
+        'items': [_relation_item('rel_08'), _relation_item('rel_09')],
+    }], 'collection_split_output_reuses_subject'),
+    ([
+        {'op': 'delete', 'subject_id': 'rel_08'},
+        {
+            'op': 'split', 'subject_id': 'rel_08',
+            'items': [_relation_item('rel_09'), _relation_item('rel_10')],
+        },
+    ], 'collection_touched_input_duplicate'),
+    ([
+        {'op': 'add', 'item': _relation_item('rel_09')},
+        {
+            'op': 'split', 'subject_id': 'rel_08',
+            'items': [_relation_item('rel_09'), _relation_item('rel_10')],
+        },
+    ], 'collection_output_duplicate'),
+    ([
+        {'op': 'delete', 'subject_id': 'rel_09'},
+        {'op': 'add', 'item': _relation_item('rel_09')},
+    ], 'collection_input_output_overlap'),
+])
+def test_stage2_collection_cross_operation_rejection_has_safe_reason_code(
+        tmp_path, operations, reason_code) -> None:
+    """四条生产 model-validator 拒因必须可操作，且不回显 payload。"""
+    current = _current(queue.WAITING_ON_STAGE2_REVIEW)
+    options = reviewer_tasks._submission_options({
+        'global': _stage2_failed_global([{
+            'current_state': 'FAIL',
+            'group_key': 'relation:rel_01',
+        }]),
+        'global_edit_template': _relation_collection_edit_envelope(),
+    }, current, queue.WAITING_ON_STAGE2_REVIEW)
+    request = copy.deepcopy(options[0]['exact_request'])
+    request['action']['input_payload']['collection_edits'][0][
+        'operations'] = operations
+    request['action']['input_payload']['post_edit_review']['reason'] = (
+        '已审阅精确集合修改')
+    path = tmp_path / f'{reason_code}.json'
+    path.write_text(json.dumps(request, ensure_ascii=False), encoding='utf-8')
+
+    with pytest.raises(reviewer_tasks.ReviewerTaskError) as caught:
+        reviewer_tasks.load_action(path, current, submission_options=options)
+    detail = str(caught.value)
+    assert reason_code in detail
+    assert 'rel_08' not in detail
+    assert 'rel_09' not in detail
+    assert 'input_value' not in detail
+
+
 def test_stage2_same_hash_completeness_is_explicitly_not_logically_fixed() -> None:
     """只改成员字段不改 ID 集时，集合完整性仍是 surviving 旧决定。"""
     current = _current(queue.WAITING_ON_STAGE2_REVIEW)
@@ -1714,6 +1842,142 @@ def test_stage2_global_edit_cannot_invent_a_patch_subject(tmp_path) -> None:
             path, current, submission_options=options)
 
 
+def _sparse_global_edit_options() -> tuple[
+        reviewer_tasks.OperatorNext, list[dict]]:
+    current = _current(queue.WAITING_ON_STAGE2_REVIEW)
+    template = encode_artifact(STAGE2_GLOBAL_EDIT, {
+        'relations': [
+            {'relation_id': 'rel_01', 'valid_from_chapter': 2},
+            {'relation_id': 'rel_02', 'valid_through_chapter': 5},
+            {'relation_id': 'rel_03', 'valid_from_chapter': 3},
+        ],
+        'setting': {
+            '时代背景': '模板时代',
+            'era_evidence': {
+                'chapter_ordinal': 1, 'locator': '模板时代证据'},
+        },
+        'collection_edits': [
+            {
+                'collection': 'relations',
+                'expected_collection_sha256': 'a' * 64,
+                'operations': [],
+            },
+            {
+                'collection': 'secrets',
+                'expected_collection_sha256': 'b' * 64,
+                'operations': [],
+            },
+        ],
+    })
+    options = reviewer_tasks._submission_options({
+        'global': _stage2_failed_global([{
+            'current_state': 'FAIL', 'group_key': 'relation:rel_01'}]),
+        'global_edit_template': template,
+    }, current, queue.WAITING_ON_STAGE2_REVIEW)
+    return current, options
+
+
+def _reviewed_sparse_request(options: list[dict]) -> dict:
+    request = copy.deepcopy(options[0]['exact_request'])
+    expected = request['action']['input_payload']
+    post_review = copy.deepcopy(expected['post_edit_review'])
+    post_review['reason'] = '已复核稀疏订正与全部未闭合项'
+    post_review['decisions'] = [{
+        'item_id': 'item-1',
+        'expected_subject_sha256': '1' * 64,
+        'state': 'PASS',
+        'reason': '本项在订正后已按原文复判',
+        'evidence': [],
+    }]
+    request['action']['input_payload'] = {
+        # 只选第 1/3 行：这是可信模板的有序子序列，
+        # 第 2 行与 setting 的 no-op 骨架都不应进 canonical edit。
+        'relations': [
+            {'relation_id': 'rel_01', 'valid_from_chapter': 4},
+            {'relation_id': 'rel_03', 'valid_from_chapter': 6},
+        ],
+        'collection_edits': [{
+            'collection': 'relations',
+            'expected_collection_sha256': 'a' * 64,
+            'operations': [{
+                'op': 'add', 'item': _relation_item('rel_08'),
+            }],
+        }],
+        'post_edit_review': post_review,
+    }
+    return request
+
+
+def test_stage2_global_edit_binding_accepts_ordered_sparse_canonical_subset(
+        tmp_path) -> None:
+    """真实 compact 组装结果只带提交行，loader 不得补回 no-op 骨架。"""
+    current, options = _sparse_global_edit_options()
+    request = _reviewed_sparse_request(options)
+    path = tmp_path / 'sparse-stage2-edit.json'
+    path.write_text(json.dumps(request, ensure_ascii=False), encoding='utf-8')
+
+    action = reviewer_tasks.load_action(
+        path, current, submission_options=options)
+    assert action.input_payload is not None
+    payload = decode_artifact(STAGE2_GLOBAL_EDIT, action.input_payload).payload
+    assert [row['relation_id'] for row in payload['relations']] == [
+        'rel_01', 'rel_03']
+    assert [row['collection'] for row in payload['collection_edits']] == [
+        'relations']
+    assert 'setting' not in payload
+
+
+def test_stage2_sparse_global_edit_still_requires_review_binding(
+        tmp_path) -> None:
+    current, options = _sparse_global_edit_options()
+    request = _reviewed_sparse_request(options)
+    del request['action']['input_payload']['post_edit_review']
+    path = tmp_path / 'sparse-without-review.json'
+    path.write_text(json.dumps(request, ensure_ascii=False), encoding='utf-8')
+
+    with pytest.raises(
+            reviewer_tasks.ReviewerTaskError,
+            match='post_edit_review.*必需绑定'):
+        reviewer_tasks.load_action(path, current, submission_options=options)
+
+
+@pytest.mark.parametrize(('mutation', 'message'), [
+    ('patch-order', '必须保留可信模板顺序'),
+    ('patch-fields', '字段集合必须逐字保留模板'),
+    ('collection-order', '必须保留可信模板顺序'),
+])
+def test_stage2_sparse_global_edit_rejects_reordered_or_widened_rows(
+        tmp_path, mutation, message) -> None:
+    current, options = _sparse_global_edit_options()
+    request = copy.deepcopy(options[0]['exact_request'])
+    payload = request['action']['input_payload']
+    payload['post_edit_review']['reason'] = '已复核本轮订正'
+    if mutation == 'patch-order':
+        payload['relations'] = list(reversed(payload['relations']))
+    elif mutation == 'patch-fields':
+        payload['relations'][0]['valid_through_chapter'] = 8
+    else:
+        payload['collection_edits'] = list(reversed(payload['collection_edits']))
+    path = tmp_path / f'{mutation}.json'
+    path.write_text(json.dumps(request, ensure_ascii=False), encoding='utf-8')
+
+    with pytest.raises(reviewer_tasks.ReviewerTaskError, match=message):
+        reviewer_tasks.load_action(path, current, submission_options=options)
+
+
+def test_stage2_sparse_binding_rejects_duplicate_patch_identity_directly() -> None:
+    """schema 也会拒绝重复；binding 自身仍不得依赖前置偶然挡住。"""
+    current, options = _sparse_global_edit_options()
+    expected = options[0]['exact_request']['action']['input_payload']
+    submitted = _reviewed_sparse_request(options)['action']['input_payload']
+    submitted['relations'].append(copy.deepcopy(submitted['relations'][0]))
+
+    with pytest.raises(
+            reviewer_tasks.ReviewerTaskError,
+            match='提交主体身份重复'):
+        reviewer_tasks._validate_global_edit_binding(submitted, expected)
+
+
 def test_reviewer_correction_prompt_is_self_contained_for_a_fresh_session(
         tmp_path) -> None:
     task = reviewer_tasks.ReviewerTask(
@@ -1742,6 +2006,9 @@ def test_reviewer_correction_prompt_is_self_contained_for_a_fresh_session(
     assert '最终 agent_message 只输出一份' in prompt
     assert '不写文件、不调用工具' in prompt
     assert '没有可登记证据时 evidence 也必须写成 []' in prompt
+    assert 'split 输出不得复用该 subject_id' in prompt
+    assert '输入 ID 与输出 ID 不得相交' in prompt
+    assert '[]/null 是“本次不提交”' in prompt
 
 
 def test_stage2_after_edit_reviews_only_changed_pending_items() -> None:

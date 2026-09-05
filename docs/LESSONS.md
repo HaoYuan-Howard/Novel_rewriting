@@ -190,14 +190,23 @@ submission option 下发，最终仍由同一 schema/loader 复验；否则模�
 
 判别联合还要把**当前分支的局部 schema**下发：若父 model 才知道 collection→member 类型，直接给模型
 一个大联合，它很容易臆造惯用的 `value` 字段。应从现役 Pydantic operation/member model 现场专门化，
-明示每个 op 的闭合键集，不加宽 loader 兼容错误形状。修后证明的完整性同样按主体身份而不是人的逻辑
+明示每个 op 的闭合键集，不加宽 loader 兼容错误形状。单行 schema 看不见的父 model 跨操作不变量
+也必须明示下发：例如 split 输出不复用输入主体，输入/输出各自唯一且不相交。对这类
+静态生产拒因可用严格白名单 reason code 指导纠错，不得回显可能含正文/ID 的任意 validator 消息。
+修后证明的完整性同样按主体身份而不是人的逻辑
 推断：只改成员字段而未改 ID 集时，集合完整性 hash 可能不变；凡仍以同一 identity 存活的旧 FAIL/UNVER
 都须显式复判，最后仍由内存 apply→normalize→reenumerate 后的生产安全闸判存活，外层不复制判据。
 
 当完整 typed request 大部分是 immutable binding 时，不应让模型为改几格而重抄整份长 JSON。provider
-wire 可以只承载最小 delta，但 Supervisor 必须从同一 exact request 可信组装完整 canonical request，再走
-既有 loader 与 producer；不可编辑字段、乐观锁 SHA 和主体 SHA 一律注入，不靠模型复述。transport
+wire 可以只承载最小 delta，但 Supervisor 必须从同一 exact request 可信组装完整 wrapper 与
+**稀疏** canonical 业务 edit，再走既有 loader 与 producer。compact 的空数组/null 是“本次不提交”，
+不得把 exact request 里的 no-op 骨架带进业务 edit；已提交行必须是模板的无重复有序子序列。
+不可编辑字段、已提交行的乐观锁 SHA 和主体 SHA 一律注入，不靠模型复述。transport
 原始 digest 用来识别模型是否重复回答，assembled content digest 用来寻址真正保存的候选，两者用途不同。
+
+付费 Reviewer 回答一旦通过 typed loader，就必须在 canonical scratch 晋升之前按内容寻址持久化；
+Stage2 node 也不例外。pause/stop/重启后可按同一 business + workpack binding 零模型重放，只有
+canonical action 真正 landed 后才由书内 typed 产物接管恢复；不能在两者之间的崩溃窗丢掉已付费决定。
 
 原生 structured-output schema 也是 session 身份，不只是 CLI 参数：先冻结 canonical bytes/SHA，exact
 resume 必须复用，并把同一 SHA 贯穿 started/attempt/turn/ended 与在线指针。只能接收 schema 文件路径的

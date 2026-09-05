@@ -22,7 +22,9 @@ queue.py —— 批量队列（`R-13`）。**一次排入多本书，人只在�
 """
 from __future__ import annotations
 
-from contracts.artifacts import STAGE0_REVISIONS, STAGE6_HOOK, STAGE7_NAME_MAP
+from contracts.artifacts import (
+    STAGE0_REVISIONS, STAGE2_GLOBAL_EDIT, STAGE6_HOOK, STAGE7_NAME_MAP,
+)
 
 import json
 import os
@@ -35,6 +37,7 @@ from pathlib import Path
 
 from contracts.invariants import (
     LEGACY_STAGE5_MODES, NODES, RETIRED_NODES, RETIRED_STAGES, STAGES,
+    STAGE2_LEGACY_REVALIDATE_ACTOR, STAGE2_LEGACY_REVALIDATE_REASON,
     stage2_review_required,
 )
 from contracts.schema.api import ApprovalDoc
@@ -74,6 +77,10 @@ OPTIONAL_HUMAN_NODES: frozenset[str] = frozenset({'stage0.edit'})
 WAITING_ON_INBOX = 'inbox:invalid'
 WAITING_ON_STAGE2_REVIEW = 'approval:stage2-global-review'
 WAITING_ON_STAGE2_EDIT_CORRECTION = 'recovery:stage2-global-reviewed-edit'
+WAITING_ON_STAGE2_EDIT_COMMIT = 'recovery:stage2-global-reviewed-edit-commit'
+WAITING_ON_STAGE2_EDIT_REVALIDATE = (
+    'recovery:stage2-global-reviewed-edit-revalidate')
+WAITING_ON_STAGE2_EDIT_TERMINAL = 'human:stage2-global-edit-terminal'
 #: Global 复核已 generation-safe、但 ``gate.s2`` 尚未由独立只读终审打开。
 #: 它是 Stage2 第四席的唯一入口：终审者读全部 blocking 项、整书正文与 Blueprint
 #: 工作包后只能 confirm（Supervisor 以 ``approval close-stage2`` 收口）或
@@ -107,6 +114,8 @@ WAITING_ON_REPLAN = 'queue:plan-changed'
 #: Supervisor 必须现场铸 recovery permit，再把 exact node/flags 交给 Executor。
 #: 独立成闭集，避免任何普通人工 blocker 因“碰巧带 steps”被自动执行。
 DETERMINISTIC_RECOVERY_WAITING_ON: frozenset[str] = frozenset({
+    WAITING_ON_STAGE2_EDIT_COMMIT,
+    WAITING_ON_STAGE2_EDIT_REVALIDATE,
     WAITING_ON_STAGE4_DESIGN_ACTION,
 })
 
@@ -262,11 +271,38 @@ def plan_book_from_overview(
     # 验收”。这格只记本次 plan 已经真正排入的 runnable writer；
     # blocked writer 仍由 ``stuck`` 传递，不伪装成会在本次改变主体。
     stage5_write_will_run = False
-    naming_projection_blocked = st.stage2_global_projection_blocked(ov)
-    reviewed_edit_correction = st.stage2_reviewed_edit_correction_needed(
-        base, sid, ov)
+    planned_nodes = nodes_up_to(until_stage)
+    planning_stage2_global = 'stage2.global' in planned_nodes
+    naming_projection_blocked = (
+        planning_stage2_global and st.stage2_global_projection_blocked(ov)
+    )
+    reviewed_edit_commit_flags = (
+        st.stage2_reviewed_edit_commit_recovery_flags(base, sid)
+        if planning_stage2_global else None
+    )
+    reviewed_edit_commit_action = (
+        'revalidate'
+        if reviewed_edit_commit_flags
+        and reviewed_edit_commit_flags[0] == '--revalidate'
+        else 'apply_edit' if reviewed_edit_commit_flags else None
+    )
+    reviewed_edit_commit = reviewed_edit_commit_action == 'apply_edit'
+    reviewed_edit_revalidate = bool(
+        planning_stage2_global
+        and (reviewed_edit_commit_action == 'revalidate'
+             or st.stage2_reviewed_edit_revalidation_needed(base, sid))
+    )
+    ordinary_edit_terminal = bool(
+        planning_stage2_global
+        and st.stage2_global_edit_terminal_failure_needed(base, sid)
+    )
+    reviewed_edit_correction = bool(
+        planning_stage2_global
+        and not reviewed_edit_revalidate
+        and st.stage2_reviewed_edit_correction_needed(base, sid, ov)
+    )
 
-    for node in nodes_up_to(until_stage):
+    for node in planned_nodes:
         spec = NODES[node]
         stage4_design_action_flags: tuple[str, ...] | None = None
         projection_recovery = (
@@ -295,9 +331,21 @@ def plan_book_from_overview(
                 continue                             # 人已经完成这道闸
             why_blocked = node                       # 在等这一步的那个人
         if (why_blocked is None and node == 'stage2.global'
+                and reviewed_edit_commit):
+            # prepared journal 优先于 canonical_pending/failure 与 partial
+            # Global/review/projection 的表象；只让 Executor 重放 book canonical
+            # edit，绝不新发 Commander 席位。
+            why_blocked = WAITING_ON_STAGE2_EDIT_COMMIT
+        if (why_blocked is None and node == 'stage2.global'
+                and reviewed_edit_revalidate):
+            why_blocked = WAITING_ON_STAGE2_EDIT_REVALIDATE
+        if (why_blocked is None and node == 'stage2.global'
+                and ordinary_edit_terminal):
+            why_blocked = WAITING_ON_STAGE2_EDIT_TERMINAL
+        if (why_blocked is None and node == 'stage2.global'
                 and reviewed_edit_correction):
-            # reviewed GlobalEdit 已经执行到 HARD 闸、但 Commander 的最后一次纠正
-            # 尚未落地。必须先恢复这一个逻辑动作；若让最新 INVALID 投影把 planner
+            # reviewed GlobalEdit 已在 canonical typed 边界形成分类失败、但仍有
+            # 持久纠正预算。必须先恢复这一个逻辑动作；若让最新失败投影把 planner
             # 推到 Blueprint REDO，既丢原 reviewer 上下文，也会把一次纠正扩成新任务。
             why_blocked = WAITING_ON_STAGE2_EDIT_CORRECTION
         if (why_blocked is None
@@ -540,7 +588,17 @@ def plan_book_from_overview(
         # 称名投影是 Global 的确定性伴生产物。缺/坏/stale 时只冻结免费物化
         # 命令，绝不能因 ``produces`` 少一份而把默认付费 Global argv 排进队列。
         flags: list[str] = (
-            list(stage4_design_action_flags)
+            list(reviewed_edit_commit_flags or ())
+            if node == 'stage2.global' and reviewed_edit_commit
+            else list(
+                reviewed_edit_commit_flags
+                or (
+                    '--revalidate',
+                    '--actor', STAGE2_LEGACY_REVALIDATE_ACTOR,
+                    '--reason', STAGE2_LEGACY_REVALIDATE_REASON,
+                ))
+            if node == 'stage2.global' and reviewed_edit_revalidate
+            else list(stage4_design_action_flags)
             if stage4_design_action_flags is not None
             else list(deterministic_redo_flags)
             if deterministic_redo_flags is not None
@@ -596,6 +654,7 @@ def plan_book_from_overview(
             WAITING_ON_INBOX,
             WAITING_ON_STAGE2_REVIEW,
             WAITING_ON_STAGE2_EDIT_CORRECTION,
+            WAITING_ON_STAGE2_EDIT_TERMINAL,
             WAITING_ON_STAGE2_FINAL_REVIEW,
             WAITING_ON_STAGE4_DESIGN_REVIEW,
             WAITING_ON_STAGE4_BINDING_RESOLUTION,
@@ -612,6 +671,15 @@ def plan_book_from_overview(
                 and node != 'stage4.design'):
             # 只有当前 A 恢复动作本身携带 exact argv；同一 blocker 向下游传播时
             # 仍不得提前冻结 B/写作等命令或把它们计入本轮付费面。
+            steps = []
+        if (why_blocked == WAITING_ON_STAGE2_EDIT_COMMIT
+                and node != 'stage2.global'):
+            # 只有当前 prepared commit 本身携 canonical 0-wire argv；向下游传播
+            # blocker 时绝不冻结任何后续付费命令。
+            steps = []
+        if (why_blocked == WAITING_ON_STAGE2_EDIT_REVALIDATE
+                and node != 'stage2.global'):
+            # revalidate 只属于当前 Stage2 Global；下游不得继承其 argv。
             steps = []
 
         if verdict == st.RESUME_LEGACY or why_blocked == WAITING_ON_RESUME_DECISION:
@@ -725,10 +793,28 @@ def _blocked_why(
             f'{verdict_why}')
     if waiting_on == WAITING_ON_STAGE2_EDIT_CORRECTION:
         return (
-            '上一份带 post_edit_review 的 Stage2 GlobalEdit 已执行，但被确定性 HARD '
-            '闸拒绝；盘上的 edit、INVALID 与不可变基线仍精确闭合。当前只允许恢复为'
-            '同一逻辑任务的第二次、也是最后一次 Commander 纠正，不重跑 Blueprint，'
-            '也不重新发放两轮模型预算；'
+            '上一份带 post_edit_review 的 Stage2 GlobalEdit 已在 canonical typed '
+            '边界形成分类失败；盘上的 edit、failure 与不可变基线仍精确闭合。'
+            '当前只按剩余持久预算发放同一逻辑任务的 fresh Commander 纠正，'
+            '不重跑 Blueprint，也不重置既有模型预算；'
+            f'{verdict_why}')
+    if waiting_on == WAITING_ON_STAGE2_EDIT_COMMIT:
+        return (
+            'Stage2 reviewed edit 已在任何 live mutation 前留下 hash-bound prepared '
+            'journal；当前只能由 Executor 以 canonical global_edit.json 零 wire 补齐 '
+            'Global/review/projection、退休失败 sidecar 并 readback，不能发 Commander '
+            f'或重采付费 Global；{verdict_why}')
+    if waiting_on == WAITING_ON_STAGE2_EDIT_REVALIDATE:
+        return (
+            'Stage2 reviewed INVALID 已按与 producer 相同的 restore/normalize/HARD '
+            '尺子确认无阻断；当前只允许 Executor 用固定 system actor/reason 做 '
+            '0-wire revalidate，并由 prepared journal 补齐正式 bundle；'
+            f'{verdict_why}')
+    if waiting_on == WAITING_ON_STAGE2_EDIT_TERMINAL:
+        return (
+            'Stage2 GlobalEdit 已留下需人工后继的 exact terminal failure；当前 edit '
+            '不能重放，'
+            '需提交新的 typed edit，或人工修改 live INVALID 后显式 revalidate；'
             f'{verdict_why}')
     if waiting_on == WAITING_ON_FROZEN_V6_DESIGN_AUTHORITY:
         return (
@@ -1746,6 +1832,8 @@ def resume_incomplete(base: str | os.PathLike[str], *,
 __all__ = [
     'HUMAN_NODES', 'OPTIONAL_HUMAN_NODES', 'WAITING_ON_INBOX',
     'WAITING_ON_STAGE2_REVIEW', 'WAITING_ON_STAGE2_EDIT_CORRECTION',
+    'WAITING_ON_STAGE2_EDIT_COMMIT',
+    'WAITING_ON_STAGE2_EDIT_REVALIDATE', 'WAITING_ON_STAGE2_EDIT_TERMINAL',
     'STAGE2_REVIEWER_WAITING_ON',
     'WAITING_ON_STAGE4_DESIGN_REVIEW',
     'WAITING_ON_STAGE4_BINDING_RESOLUTION',

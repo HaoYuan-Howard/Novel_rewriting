@@ -18,7 +18,9 @@ def _sha(index: int) -> str:
     return f'{index:064x}'
 
 
-def _task(*, scope_count: int = 3) -> SimpleNamespace:
+def _task(
+    *, scope_count: int = 3, correction: bool = False,
+) -> SimpleNamespace:
     scope = [
         {
             'item_id': f'item:{index:03d}',
@@ -53,10 +55,13 @@ def _task(*, scope_count: int = 3) -> SimpleNamespace:
         },
     }
     GlobalEdit.model_validate(edit)
+    waiting_on = (
+        queue.WAITING_ON_STAGE2_EDIT_CORRECTION
+        if correction else queue.WAITING_ON_STAGE2_REVIEW)
     exact = {
         'schema': 'novel-reviewer-action-v1',
         'surface_seal': _sha(5),
-        'waiting_on': 'stage2.edit_correction',
+        'waiting_on': waiting_on,
         'action': {
             'kind': 'node',
             'node': 'stage2.global',
@@ -72,7 +77,7 @@ def _task(*, scope_count: int = 3) -> SimpleNamespace:
         'allowed_values': {},
     }
     return SimpleNamespace(
-        waiting_on='stage2.edit_correction',
+        waiting_on=waiting_on,
         submission_options=(option,),
     )
 
@@ -89,49 +94,83 @@ def _decision(index: int) -> dict[str, Any]:
     }
 
 
+def _relation_item(relation_id: str) -> dict[str, Any]:
+    return {
+        'relation_id': relation_id,
+        'subject_id': 'char_001',
+        'object_id': 'char_002',
+        'predicate': '彼此信任',
+        'predicate_evidence': {
+            'chapter_ordinal': 1,
+            'locator': '两人约定共同查清真相',
+        },
+        'visibility': {'kind': 'public', 'from_chapter': 1},
+        'valid_from_chapter': 1,
+        'valid_through_chapter': None,
+    }
+
+
+def _world_rule_item(rule_id: str, desc: str) -> dict[str, Any]:
+    return {
+        'rule_id': rule_id,
+        'kind': 'institution',
+        'versions': [{
+            'effective_from_chapter': 1,
+            'desc': desc,
+            'desc_evidence': {
+                'chapter_ordinal': 1,
+                'locator': f'{desc}的正文证据',
+            },
+        }],
+    }
+
+
 def _response(task: SimpleNamespace, *, scope_count: int = 3) -> dict[str, Any]:
     binding = wire.wire_binding(task)
+    payload: dict[str, Any] = {
+        'edit': {
+            'relations': [{
+                'relation_id': 'rel_01',
+                'predicate': '新关系',
+                'predicate_evidence': {
+                    'chapter_ordinal': 2,
+                    'locator': '新关系证据',
+                },
+            }],
+            'collection_edits': [{
+                'collection': 'world_rules',
+                'operations': [{
+                    'op': 'add',
+                    'item': {
+                        'rule_id': 'wr_09',
+                        'kind': 'ability_system',
+                        'versions': [{
+                            'effective_from_chapter': 1,
+                            'desc': '新增规则',
+                            'desc_evidence': {
+                                'chapter_ordinal': 1,
+                                'locator': '新增规则证据',
+                            },
+                        }],
+                    },
+                }],
+            }],
+            'post_edit_review': {
+                'reason': '已复读完整正文并复核本次增量',
+                'quarantine_groups': [],
+                'decisions': [
+                    _decision(index) for index in range(scope_count)
+                ],
+            },
+        },
+    }
+    if binding.allowed_drop_targets:
+        payload['drop_targets'] = []
     return {
         'schema': wire.WIRE_SCHEMA,
         'option_id': binding.option_id,
         'expected_exact_request_sha256': binding.expected_exact_request_sha256,
-        'payload': {
-            'edit': {
-                'relations': [{
-                    'relation_id': 'rel_01',
-                    'predicate': '新关系',
-                    'predicate_evidence': {
-                        'chapter_ordinal': 2,
-                        'locator': '新关系证据',
-                    },
-                }],
-                'collection_edits': [{
-                    'collection': 'world_rules',
-                    'operations': [{
-                        'op': 'add',
-                        'item': {
-                            'rule_id': 'wr_09',
-                            'kind': 'ability_system',
-                            'versions': [{
-                                'effective_from_chapter': 1,
-                                'desc': '新增规则',
-                                'desc_evidence': {
-                                    'chapter_ordinal': 1,
-                                    'locator': '新增规则证据',
-                                },
-                            }],
-                        },
-                    }],
-                }],
-                'post_edit_review': {
-                    'reason': '已复读完整正文并复核本次增量',
-                    'quarantine_groups': [],
-                    'decisions': [
-                        _decision(index) for index in range(scope_count)
-                    ],
-                },
-            },
-        },
+        'payload': payload,
     }
 
 
@@ -213,6 +252,306 @@ def test_compact_response_roundtrip_injects_all_trusted_bindings() -> None:
         'post_edit_review']['decisions'][0]
 
 
+def test_assembler_emits_only_explicit_business_delta() -> None:
+    """大模板只负责关范围，不能把未提交的旧 patch/replacement 带进 producer。"""
+    task = _task(scope_count=1)
+    edit = task.submission_options[0]['exact_request']['action']['input_payload']
+    edit['relations'] = [
+        {
+            'relation_id': f'rel_{index:02d}',
+            'predicate': f'旧关系 {index}',
+            'predicate_evidence': {
+                'chapter_ordinal': 1,
+                'locator': f'旧关系证据 {index}',
+            },
+        }
+        for index in range(1, 4)
+    ]
+    edit['secrets'] = [{
+        'secret_id': 'secret_01',
+        'fact': '未提交的旧秘密',
+        'fact_evidence': {'chapter_ordinal': 1, 'locator': '旧秘密证据'},
+    }]
+    edit['world_rules'] = [{
+        'rule_id': 'wr_01',
+        'versions': [{
+            'effective_from_chapter': 1,
+            'desc': '未提交的旧规则',
+            'desc_evidence': {'chapter_ordinal': 1, 'locator': '旧规则证据'},
+        }],
+    }]
+    edit['setting'] = {
+        '时代背景': '未提交的旧时代',
+        'era_evidence': {'chapter_ordinal': 1, 'locator': '旧时代证据'},
+    }
+    edit['conflict_stages_replace'] = [{
+        'stage': '未提交的旧冲突阶段',
+        'chapters': [1, 2],
+    }]
+    edit['collection_edits'] = [{
+        'collection': 'relations',
+        'expected_collection_sha256': _sha(2),
+        'operations': [],
+    }]
+    GlobalEdit.model_validate(edit)
+    template_before = copy.deepcopy(edit)
+
+    response = _response(task, scope_count=1)
+    response_edit = response['payload']['edit']
+    response_edit.update({
+        'relations': [{
+            'relation_id': 'rel_03',
+            'predicate': '修正后的唯一显式关系',
+            'predicate_evidence': {
+                'chapter_ordinal': 2,
+                'locator': '唯一新关系证据',
+            },
+        }],
+        'secrets': [],
+        'world_rules': [],
+        'setting': None,
+        'conflict_stages_replace': None,
+        'collection_edits': [{
+            'collection': 'relations',
+            'operations': [
+                {'op': 'add', 'item': _relation_item(f'rel_{index:02d}')}
+                for index in range(4, 7)
+            ],
+        }],
+    })
+
+    assembled = wire.assemble(task, response)
+    sparse = assembled['action']['input_payload']
+
+    assert set(sparse) == {'relations', 'collection_edits', 'post_edit_review'}
+    assert [row['relation_id'] for row in sparse['relations']] == ['rel_03']
+    assert [
+        operation['item']['relation_id']
+        for operation in sparse['collection_edits'][0]['operations']
+    ] == ['rel_04', 'rel_05', 'rel_06']
+    assert sparse['collection_edits'][0]['expected_collection_sha256'] == _sha(2)
+    review = sparse['post_edit_review']
+    assert review['actor'] == 'agent:novel-pipeline-operator'
+    assert review['expected_workpack_sha256'] == _sha(4)
+    assert review['review_scope'] == template_before['post_edit_review'][
+        'review_scope']
+    GlobalEdit.model_validate(sparse)
+    assert edit == template_before, '可信模板不得被 overlay 原地污染'
+
+
+def test_correction_merges_failed_sparse_edit_and_replaces_collection_operations(
+) -> None:
+    """只修 B 不能丢 A；重列 collection operations 可显式撤掉坏 split。"""
+    task = _task(scope_count=1, correction=True)
+    edit = task.submission_options[0]['exact_request']['action']['input_payload']
+    edit['relations'] = [{
+        'relation_id': 'rel_01',
+        'predicate': '上一轮已经修好的 A',
+        'predicate_evidence': {
+            'chapter_ordinal': 1, 'locator': 'A 的正文证据'},
+    }, {
+        'relation_id': 'rel_02',
+        'predicate': '上一轮仍有问题的 B',
+        'predicate_evidence': {
+            'chapter_ordinal': 1, 'locator': 'B 的坏证据'},
+    }]
+    add_x = {'op': 'add', 'item': _world_rule_item('wr_09', '保留新增规则 X')}
+    edit['collection_edits'] = [{
+        'collection': 'world_rules',
+        'expected_collection_sha256': _sha(2),
+        'operations': [add_x, {
+            'op': 'split',
+            'subject_id': 'wr_02',
+            'items': [
+                _world_rule_item('wr_10', '拆分规则一'),
+                _world_rule_item('wr_11', '拆分规则二'),
+            ],
+        }],
+    }]
+    GlobalEdit.model_validate(edit)
+    failed_before = copy.deepcopy(edit)
+
+    response = _response(task, scope_count=1)
+    response['payload']['edit']['relations'] = [{
+        'relation_id': 'rel_02',
+        'predicate': '纠正后的 B',
+        'predicate_evidence': {
+            'chapter_ordinal': 2, 'locator': 'B 的正确正文证据'},
+    }]
+    response['payload']['edit']['collection_edits'] = [{
+        'collection': 'world_rules',
+        'operations': [copy.deepcopy(add_x)],
+    }]
+
+    assembled = wire.assemble(task, response)
+    merged = assembled['action']['input_payload']
+
+    assert [row['relation_id'] for row in merged['relations']] == [
+        'rel_01', 'rel_02']
+    assert merged['relations'][0] == failed_before['relations'][0]
+    assert merged['relations'][1]['predicate'] == '纠正后的 B'
+    assert merged['collection_edits'][0]['operations'] == [add_x]
+    assert edit == failed_before, 'failed edit 基线不得被 correction 原地污染'
+    GlobalEdit.model_validate(merged)
+
+
+def test_correction_collection_empty_operations_is_not_an_implicit_drop() -> None:
+    """整条 collection edit 只能用 opaque drop token 撤销。"""
+    task = _task(scope_count=1, correction=True)
+    response = _response(task, scope_count=1)
+    response['payload']['edit']['collection_edits'] = [{
+        'collection': 'world_rules',
+        'operations': [],
+    }]
+
+    schema = wire.response_schema(task)
+    serialized = json.dumps(schema, ensure_ascii=False)
+    assert 'minItems' in serialized
+    with pytest.raises(wire.Stage2ReviewerWireError, match='operations'):
+        wire.assemble(task, response)
+
+
+def test_correction_drop_targets_are_closed_explicit_and_conflict_free() -> None:
+    task = _task(scope_count=1, correction=True)
+    edit = task.submission_options[0]['exact_request']['action']['input_payload']
+    edit['setting'] = {
+        '时代背景': '上一轮误改的时代',
+        'era_evidence': {'chapter_ordinal': 1, 'locator': '时代证据'},
+    }
+    edit['conflict_stages_replace'] = [{
+        'stage': '上一轮误替换的冲突阶段', 'chapters': [1, 2],
+    }]
+    GlobalEdit.model_validate(edit)
+    target_map = wire._drop_target_map(edit)
+    setting_target = next(
+        token for token, target in target_map.items()
+        if target.description == 'setting')
+    replacement_target = next(
+        token for token, target in target_map.items()
+        if target.description == 'conflict_stages_replace')
+
+    response = _response(task, scope_count=1)
+    response['payload']['edit']['setting'] = None
+    response['payload']['edit']['conflict_stages_replace'] = None
+    response['payload']['drop_targets'] = [setting_target, replacement_target]
+    merged = wire.assemble(task, response)['action']['input_payload']
+
+    assert 'setting' not in merged
+    assert 'conflict_stages_replace' not in merged
+    assert merged['relations'][0]['predicate'] == '新关系'
+
+    relation_target = next(
+        token for token, target in target_map.items()
+        if target.description.startswith('relations['))
+    conflicting = copy.deepcopy(response)
+    conflicting['payload']['drop_targets'] = [relation_target]
+    with pytest.raises(wire.Stage2ReviewerWireError, match='同时更新和 drop'):
+        wire.assemble(task, conflicting)
+
+    duplicate = copy.deepcopy(response)
+    duplicate['payload']['drop_targets'] = [setting_target, setting_target]
+    with pytest.raises(wire.Stage2ReviewerWireError, match='不得重复'):
+        wire.assemble(task, duplicate)
+
+    unknown = copy.deepcopy(response)
+    unknown['payload']['drop_targets'] = ['drop_9999']
+    with pytest.raises(wire.Stage2ReviewerWireError, match='动态 schema'):
+        wire.assemble(task, unknown)
+
+
+def test_correction_can_only_refresh_review_but_cannot_drop_everything() -> None:
+    task = _task(scope_count=1, correction=True)
+    response = _response(task, scope_count=1)
+    response['payload']['edit']['relations'] = []
+    response['payload']['edit']['collection_edits'] = []
+    merged = wire.assemble(task, response)['action']['input_payload']
+
+    assert merged['relations'] == task.submission_options[0][
+        'exact_request']['action']['input_payload']['relations']
+    assert merged['post_edit_review']['decisions'][0]['item_id'] == 'item:000'
+
+    response['payload']['drop_targets'] = list(
+        wire.wire_binding(task).allowed_drop_targets)
+    with pytest.raises(wire.Stage2ReviewerWireError, match='没有任何业务 patch'):
+        wire.assemble(task, response)
+
+
+def test_consecutive_correction_templates_keep_prior_merged_changes() -> None:
+    """若 canonical 再拒绝，下一份 failed edit 仍是上一轮完整合并结果。"""
+    first = _task(scope_count=1, correction=True)
+    first_edit = first.submission_options[0][
+        'exact_request']['action']['input_payload']
+    first_edit['relations'].append({
+        'relation_id': 'rel_02',
+        'predicate': 'B 的失败版本',
+        'predicate_evidence': {
+            'chapter_ordinal': 1, 'locator': 'B 的失败证据'},
+    })
+    GlobalEdit.model_validate(first_edit)
+    response = _response(first, scope_count=1)
+    response['payload']['edit']['relations'] = [{
+        'relation_id': 'rel_02',
+        'predicate': 'B 的第一轮纠正',
+        'predicate_evidence': {
+            'chapter_ordinal': 2, 'locator': 'B 的第一轮正确证据'},
+    }]
+    merged_once = wire.assemble(first, response)['action']['input_payload']
+
+    second = copy.deepcopy(first)
+    second.submission_options[0]['exact_request']['action'][
+        'input_payload'] = copy.deepcopy(merged_once)
+    second_response = _response(second, scope_count=1)
+    second_response['payload']['edit']['relations'] = [{
+        'relation_id': 'rel_01',
+        'predicate': 'A 的第二轮纠正',
+        'predicate_evidence': {
+            'chapter_ordinal': 2, 'locator': 'A 的第二轮正确证据'},
+    }]
+    second_response['payload']['edit']['collection_edits'] = []
+    merged_twice = wire.assemble(second, second_response)[
+        'action']['input_payload']
+
+    assert [row['predicate'] for row in merged_twice['relations']] == [
+        'A 的第二轮纠正', 'B 的第一轮纠正']
+
+
+def test_initial_wire_rejects_correction_only_drop_targets() -> None:
+    task = _task(scope_count=1)
+    response = _response(task, scope_count=1)
+    response['payload']['drop_targets'] = []
+
+    with pytest.raises(wire.Stage2ReviewerWireError, match='动态 schema'):
+        wire.assemble(task, response)
+
+
+def test_collection_split_reusing_subject_has_safe_actionable_reason() -> None:
+    task = _task(scope_count=1)
+    edit = task.submission_options[0]['exact_request']['action']['input_payload']
+    edit['collection_edits'] = [{
+        'collection': 'relations',
+        'expected_collection_sha256': _sha(2),
+        'operations': [],
+    }]
+    GlobalEdit.model_validate(edit)
+    response = _response(task, scope_count=1)
+    response['payload']['edit']['collection_edits'] = [{
+        'collection': 'relations',
+        'operations': [{
+            'op': 'split',
+            'subject_id': 'rel_08',
+            'items': [_relation_item('rel_08'), _relation_item('rel_09')],
+        }],
+    }]
+
+    with pytest.raises(wire.Stage2ReviewerWireError) as caught:
+        wire.assemble(task, response)
+
+    reason = str(caught.value)
+    assert 'collection_split_reuses_subject_id' in reason
+    assert 'split items 的稳定 id 不得复用被拆分的 subject_id' in reason
+    assert 'rel_08' not in reason
+
+
 def test_response_schema_is_portable_and_task_specific() -> None:
     task = _task()
     schema = wire.response_schema(task)
@@ -224,6 +563,23 @@ def test_response_schema_is_portable_and_task_specific() -> None:
     assert 'item:000' in encoded
     assert 'expected_collection_sha256' not in encoded
     assert '"value"' not in encoded
+    assert 'drop_targets' not in encoded
+
+
+def test_correction_schema_and_prompt_bind_closed_drop_targets() -> None:
+    task = _task(scope_count=1, correction=True)
+    binding = wire.wire_binding(task)
+    schema_text = json.dumps(wire.response_schema(task), ensure_ascii=False)
+    prompt = wire.prompt_addendum(task)
+
+    assert binding.allowed_drop_targets
+    assert 'drop_targets' in schema_text
+    assert set(binding.allowed_drop_targets).issubset(set(
+        token for token in binding.allowed_drop_targets if token in schema_text))
+    assert 'failed sparse' in prompt
+    assert '未列入 drop_targets 且未显式更新的上一轮改动必须保留' in prompt
+    assert '相同回答的无进展重演由持久 ledger 另行拦截' in prompt
+    assert all(token in prompt for token in binding.allowed_drop_targets)
 
 
 def test_same_shape_patch_rows_share_schema_and_fit_windows_argv() -> None:

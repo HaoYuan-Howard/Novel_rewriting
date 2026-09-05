@@ -1215,7 +1215,39 @@ class Stage2ReviewLedger(FrozenModel):
             raise ValueError('未用满席位不得标 exhausted')
         if self.state == 'active' and len(self.turns) >= self.max_calls:
             raise ValueError('已用满席位必须标 exhausted 或 complete')
+        if (self.state == 'complete'
+                and (not self.turns or any(
+                    row.outcome != 'ok' or row.exit_code != 0
+                    for row in self.turns))):
+            raise ValueError(
+                'Stage2 review ledger 只有全部席位 ok/exit0 才能标 complete')
         return self
+
+
+class Stage2PrereviewRecord(FrozenModel):
+    """已通过预审 typed loader、尚未绑定 live surface 的 Stage2 决定。
+
+    这不是 ``ReviewerActionRecord``：Blueprint 尚未完成时没有 live submission
+    option、execution permit 或 canonical action。记录只保存重新绑定所需的完整
+    业务身份、原 logical session 与 provider 原始回答摘要；provider session 不属于
+    恢复身份，也绝不据此续会。
+    """
+
+    kind: Literal['novel-stage2-prereview-record-v1'] = (
+        'novel-stage2-prereview-record-v1')
+    sid: str = Field(min_length=1)
+    run_id: str = Field(min_length=1)
+    epoch_id: str = Field(min_length=1)
+    business_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    workpack_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    source_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    main_text_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    progress_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    blocker_count: int = Field(ge=1)
+    reviewer_session_run_id: str = Field(min_length=1)
+    provider_response_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    input_payload: dict[str, Any]
+    recorded_at: int = Field(ge=0)
 
 
 class ReviewerActionRecord(FrozenModel):
@@ -1224,11 +1256,13 @@ class ReviewerActionRecord(FrozenModel):
     它不是审批账，也不是执行授权：审批仍只由 ``novel.cli approval apply`` 子进程
     在 admission 内写入。这里只保证一次已经完成的模型审阅，在 epoch 因代码/skill
     漂移关闭、进程崩溃或服务重启后，能在同一 blocker 上零模型成本重放，而不是再
-    买一轮 Commander。适用性由 ``waiting_on`` 加两条判据之一决定：``surface_seal``
-    逐字相同（当次快路），或 ``review_token`` 与当前 workpack 相同（与 approve 侧
-    同一判据，可跨代码版本）。Stage0/6/7 的 approve 虽编码为
-    node 动作，但没有书内 durable 产物，因此也记在这里；只有
-    ``stage2.global`` node 由书内 typed 产物承担恢复路（R-11.22）。
+    买一轮 Commander。普通决定的适用性由 ``waiting_on`` 加三条判据之一决定：
+    ``surface_seal``、``review_token`` 或稳定 business identity 相同；Stage2 则必须
+    ``waiting_on + business_sha256 + workpack_sha256`` 同时命中。Stage0/6/7 的
+    approve 与 Stage2 Global
+    reviewed edit/review-decisions 虽编码为 node 动作，也都先记在这里；
+    Stage2 的书内 typed 产物只有 canonical action landed 后才存在，不能覆盖
+    typed-valid 回答到 action 启动之间的暂停、终止或进程丢失窗口。
     """
 
     kind: Literal['novel-reviewer-action-record-v1'] = (
@@ -1240,15 +1274,30 @@ class ReviewerActionRecord(FrozenModel):
     surface_seal: str = Field(min_length=1)
     business_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
     # 历史 approval façade 直接保存 surface/payload；Stage0/6/7 的
-    # approve 在 reviewer contract 中编码为 node action，却同样没有书内
-    # durable 产物，所以以 node/flags/input_payload 保存。只有 Stage2 node
-    # 依赖书内 typed artifact，不进入此记录。
+    # approve 在 reviewer contract 中编码为 node action，所以统一以
+    # node/flags/input_payload 保存。Stage2 另带产出席位、workpack 与 provider
+    # 原始回答 digest：full action 可以安全重放，但 compact wire 的 no-progress /
+    # canonical 拒因仍必须绑定 provider 原始回答，不能改绑 assembled digest。
     surface: Literal[REVIEWER_APPROVAL_SURFACES] | None = None
     payload: dict[str, Any] | None = None
     node: str | None = Field(default=None, min_length=1)
     flags: tuple[str, ...] | None = None
     input_payload: dict[str, Any] | None = None
     review_token: str | None = None
+    workpack_sha256: str | None = Field(
+        default=None, pattern=r'^[0-9a-f]{64}$')
+    source_sha256: str | None = Field(
+        default=None, pattern=r'^[0-9a-f]{64}$')
+    main_text_sha256: str | None = Field(
+        default=None, pattern=r'^[0-9a-f]{64}$')
+    # correction 预留会把确定性拒因并入 progress；它不一定等于当前 task 的
+    # base progress。记录必须保存实际 reserve 使用的 effective progress。
+    progress_sha256: str | None = Field(
+        default=None, pattern=r'^[0-9a-f]{64}$')
+    blocker_count: int | None = Field(default=None, ge=0)
+    reviewer_session_run_id: str | None = Field(default=None, min_length=1)
+    provider_response_sha256: str | None = Field(
+        default=None, pattern=r'^[0-9a-f]{64}$')
     recorded_at: int = Field(ge=0)
 
     @model_validator(mode='after')
@@ -1266,6 +1315,34 @@ class ReviewerActionRecord(FrozenModel):
                 raise ValueError('node reviewer record 字段组合不成立')
             if any(not isinstance(flag, str) or not flag for flag in self.flags):
                 raise ValueError('node reviewer record flags 必须是非空字符串')
+        stage2_legacy_identity = (
+            self.workpack_sha256,
+            self.reviewer_session_run_id,
+            self.provider_response_sha256,
+        )
+        stage2_extended_identity = (
+            self.source_sha256,
+            self.main_text_sha256,
+            self.progress_sha256,
+            self.blocker_count,
+        )
+        if any(value is not None for value in stage2_legacy_identity):
+            if not all(value is not None for value in stage2_legacy_identity):
+                raise ValueError('Stage2 reviewer record 恢复身份必须成组出现')
+            # v1 早期记录只有 legacy 三元组；新增 effective progress 后仍须可读，
+            # 但新 writer 一律写完整扩展组。扩展字段不允许半组出现。
+            if (any(value is not None for value in stage2_extended_identity)
+                    and not all(
+                        value is not None for value in stage2_extended_identity)):
+                raise ValueError('Stage2 reviewer record 扩展恢复身份必须成组出现')
+            is_stage2_node = node and self.node == 'stage2.global'
+            is_stage2_final = approval and self.surface == 'stage2_final_review'
+            if not (is_stage2_node or is_stage2_final):
+                raise ValueError(
+                    'Stage2 reviewer record 恢复身份只属于 stage2.global node '
+                    '或 stage2_final_review approval')
+        elif any(value is not None for value in stage2_extended_identity):
+            raise ValueError('Stage2 reviewer record 扩展身份不能脱离原三元组')
         return self
 
 

@@ -42,17 +42,21 @@ def _all_subclasses(cls) -> set[type]:
 _ABSTRACT = {E.TerminalState, E.IngestTerminal, E.RefusedByStructure}
 
 
-def _load_the_llm_family() -> None:
-    """把 LLM 那一族**加载进来**——`__subclasses__()` 只看已经 import 的类。
+def _load_unreachable_families() -> None:
+    """把 HTTP-unreachable 族**加载进来**——`__subclasses__()` 只看已 import 类。
 
-    ⚠ 服务层自己**一次都不 import 它们**（那正是
-    `test_the_service_never_imports_the_llm_layer_at_all` 在钉的），所以这里要显式拉一把。
-    ⚠ 用 `import_module` 而不是两行 `import novel.llm.x`：后者绑定的都是名字 `novel`，
-    静态检查会把第二行报成「导入但未使用」——而我们要的恰恰是它的**副作用**
-    （那三个类被定义出来）。**把意图写清楚，比压一条警告好。**
+    ⚠ 服务层自己**一次都不 import LLM 族**（那正是
+    `test_the_service_never_imports_the_llm_layer_at_all` 在钉的）；producer 私有类又只会
+    因其他测试的 import 顺序偶然出现。这里显式加载两族，才能让本文件独跑与全量同义。
+    ⚠ 用 `import_module` 而不是普通 import：我们要的恰恰是类定义进入子类树的副作用，
+    不是在测试里调用那些模块。**把意图写清楚，比压一条警告好。**
     """
     import importlib
-    for m in ('novel.llm.client', 'novel.llm.transport'):
+    for m in (
+        'novel.llm.client',
+        'novel.llm.transport',
+        'novel.stages.stage2.extract',
+    ):
         importlib.import_module(m)
 
 
@@ -67,7 +71,7 @@ def test_every_error_class_lands_in_exactly_one_table():
     `R-11.3` 规定一切花钱的操作走子进程 ⇒ 那一族只在子进程里抛，
     父进程看到的是一个退出码。给它们配一个状态码等于**声称一件不会发生的事**。
     """
-    _load_the_llm_family()
+    _load_unreachable_families()
     concrete = _all_subclasses(E.NovelError) - _ABSTRACT
     homeless = sorted(c.__name__ for c in concrete
                       if c not in H.STATUS and c.__name__ not in H.UNREACHABLE_OVER_HTTP)
@@ -100,7 +104,7 @@ def test_the_unreachable_table_names_real_classes():
     而拼错的那个类会被 `test_every_error_class_lands_in_exactly_one_table` 报成「无家可归」
     ——**两个方向各有一条**，才算真的补上了。
     """
-    _load_the_llm_family()
+    _load_unreachable_families()
     known = {c.__name__ for c in _all_subclasses(E.NovelError)}
     ghosts = sorted(set(H.UNREACHABLE_OVER_HTTP) - known)
     assert not ghosts, (

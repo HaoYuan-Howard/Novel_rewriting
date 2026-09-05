@@ -33,11 +33,20 @@ from pydantic import ValidationError
 from contracts.schema import decode_artifact, encode_artifact
 from contracts.schema.evaluation import GlobalReview
 from contracts.schema.stage1 import MainText
-from contracts.schema.stage2 import ChapterBlueprints, GlobalEdit, GlobalGrounding
-from novel.errors import GateBlocked, ProvenanceRefused, TerminalState, UpstreamStale
-from novel.orchestrator import state as orchestrator_state, uploads
+from contracts.schema.stage2 import (
+    ChapterBlueprints, GlobalEdit, GlobalEditCommit, GlobalEditFailure,
+    GlobalGrounding,
+)
+from novel.errors import (
+    GateBlocked, ProvenanceRefused, TerminalState, UnsupportedRunMode,
+    UpstreamStale,
+)
+from novel.orchestrator import (
+    execution_permit, operator, queue, state as orchestrator_state, uploads,
+)
 from novel.orchestrator.state import readonly_ctx
 from novel.quality.global_review import decide
+from novel.stages.stage2 import global_review as global_review_ops
 from novel.stages.stage2 import extract
 from novel.store import ArtifactStore
 from tests.factories import approved_global_review
@@ -222,6 +231,8 @@ def test_reviewed_correction_reapplies_to_formal_after_first_edit_left_invalid()
             reason='人物身份需要返工',
             now='2026-09-02T00:00:00+00:00')
         store.write(extract.GLOBAL_REVIEW_REL, review)
+        review_workpack = global_review_ops.review_workpack(
+            ctx, scope='blocking', replaced_input_keys=(extract.GLOBAL_EDIT,))
         attestation = {
             'actor': 'agent:novel-pipeline-operator',
             'expected_source_sha256': review.source_sha256,
@@ -229,13 +240,35 @@ def test_reviewed_correction_reapplies_to_formal_after_first_edit_left_invalid()
             'default_state': 'PASS',
             'reason': '已复核纠正后的完整 blocking 主体',
             'quarantine_groups': [],
+            'expected_workpack_sha256': review_workpack['workpack_sha256'],
+            'review_scope': [{
+                'item_id': target.item_id,
+                'expected_subject_sha256': target.subject_sha256,
+            }],
+            'decisions': [],
         }
 
         _write_edit(book, {
-            'characters': [{
-                'char_id': 'char_001',
-                'role': '李宝珠',
-                'role_evidence': _role_locator(),
+            'characters': [
+                {
+                    'char_id': 'char_001',
+                    'role': '李宝珠',
+                    'role_evidence': _role_locator(),
+                },
+                {
+                    # 模拟旧 full-template assembler：显式写回 formal 原值。
+                    'char_id': 'char_002',
+                    'name_distinctiveness': grounding.entities.characters[
+                        'char_002'].name_distinctiveness,
+                },
+            ],
+            'collection_edits': [{
+                # 旧 wire 还会把 template scaffold 的空 operations 当提交行。
+                'collection': 'relations',
+                'expected_collection_sha256': extract.subject_sha256(
+                    grounding.model_dump(mode='json', by_alias=True)[
+                        'entities']['relations']),
+                'operations': [],
             }],
             'post_edit_review': attestation,
         })
@@ -248,6 +281,9 @@ def test_reviewed_correction_reapplies_to_formal_after_first_edit_left_invalid()
             _ctx(book, 'stage2.global', paid=False))
         assert workpack['commander_budget_max'] == 3
         assert workpack['incremental_correction'] is True
+        assert workpack['recovery_fact_kind'] == 'registered_sidecar'
+        assert workpack['failure_kind'] == 'hard_gate'
+        assert isinstance(workpack['failure_sha256'], str)
         assert workpack['hard_hits'] == ['role_repeats_name']
         assert workpack['hard_outcomes'][0]['findings'][0]['evidence'] == [
             "char_001:'李宝珠'"]
@@ -259,6 +295,42 @@ def test_reviewed_correction_reapplies_to_formal_after_first_edit_left_invalid()
         ov = orchestrator_state.overview(root, '002e')
         assert orchestrator_state.stage2_reviewed_edit_correction_needed(
             root, '002e', ov)
+
+        # reviewed INVALID 若已被人直接修改，不能让 Commander 的 formal sparse
+        # correction 覆盖这份人工候选；planner 应改暴露 manual successor。
+        invalid_path = book / extract._GLOBAL_INVALID
+        invalid_before = invalid_path.read_bytes()
+        human = json.loads(invalid_before)
+        human['entities']['characters']['char_001']['role'] = '人工候选身份'
+        invalid_path.write_text(
+            json.dumps(human, ensure_ascii=False, indent=2) + '\n',
+            encoding='utf-8', newline='\n')
+        human_ov = orchestrator_state.overview(root, '002e')
+        assert not orchestrator_state.stage2_reviewed_edit_correction_needed(
+            root, '002e', human_ov)
+        human_next = operator.next_action(root, book.name)
+        assert human_next.action is not None
+        assert human_next.action.waiting_on == queue.WAITING_ON_STAGE2_EDIT_TERMINAL
+        invalid_path.write_bytes(invalid_before)
+
+        # sidecar 引入前已落稳的 exact edit + INVALID 仍能恢复；不能因为升级
+        # current schema 就把旧 Commander 动作解释成“没发生”。
+        (book / extract.GLOBAL_EDIT_FAILURE).unlink()
+        legacy_workpack = extract.global_edit_correction_workpack(
+            _ctx(book, 'stage2.global', paid=False))
+        assert legacy_workpack['recovery_fact_kind'] == 'legacy_invalid'
+        assert legacy_workpack['failure_sha256'] is None
+        assert legacy_workpack['hard_hits'] == ['role_repeats_name']
+        legacy_failed = decode_artifact(
+            extract.GLOBAL_EDIT, legacy_workpack['failed_edit']).payload
+        assert [row['char_id'] for row in legacy_failed['characters']] == [
+            'char_001']
+        assert 'collection_edits' not in legacy_failed
+        assert legacy_workpack['failed_edit_sha256'] == (
+            ArtifactStore(ctx).full_sha256_or_none(extract.GLOBAL_EDIT))
+        legacy_overview = orchestrator_state.overview(root, '002e')
+        assert orchestrator_state.stage2_reviewed_edit_correction_needed(
+            root, '002e', legacy_overview)
 
         _write_edit(book, {
             'characters': [{
@@ -288,10 +360,126 @@ def test_reviewed_correction_reapplies_to_formal_after_first_edit_left_invalid()
         shutil.rmtree(root, ignore_errors=True)
 
 
+def test_post_review_failure_builds_correction_and_only_new_decision_can_land(
+        tmp_path):
+    """漏掉 surviving FAIL 不伪装 HARD；补 decision 时保留原业务 delta。"""
+    root, book = _tmp_book(tmp_path, '修后复核纠正_002f')
+    try:
+        _seed(book)
+        ctx = _ctx(book, 'stage2.global', paid=False)
+        store = ArtifactStore(ctx)
+        grounding = store.read(GlobalGrounding, extract.GLOBAL_REL)
+        review = approved_global_review(grounding)
+        target = next(
+            item for item in review.items
+            if item.kind == 'role'
+            and item.subject_path == 'entities.characters.char_001.role')
+        review = decide(
+            review,
+            item_id=target.item_id,
+            expected_subject_sha256=target.subject_sha256,
+            state='FAIL', actor='test-reviewer',
+            reason='这条未改主体必须在修后复核中重新裁决',
+            now='2026-09-05T00:00:00+00:00')
+        store.write(extract.GLOBAL_REVIEW_REL, review)
+        review_workpack = global_review_ops.review_workpack(
+            ctx, scope='blocking', replaced_input_keys=(extract.GLOBAL_EDIT,))
+        attestation = {
+            'actor': 'agent:novel-pipeline-operator',
+            'expected_source_sha256': review.source_sha256,
+            'reviewed_chapter_ordinals': [1, 2, 3],
+            'default_state': 'PASS',
+            'reason': '已复核本次 secret 改动打开的全部 blocking 主体',
+            'quarantine_groups': [],
+            'expected_workpack_sha256': review_workpack['workpack_sha256'],
+            'review_scope': [{
+                'item_id': target.item_id,
+                'expected_subject_sha256': target.subject_sha256,
+            }],
+            'decisions': [],
+        }
+        business = {
+            'secrets': [{
+                'secret_id': 'secret_01', 'first_reveal_chapter': 3,
+            }],
+        }
+        _write_edit(book, {**business, 'post_edit_review': attestation})
+
+        with pytest.raises(TerminalState, match='blocking'):
+            _apply(book)
+
+        assert not (book / extract._GLOBAL_INVALID).exists()
+        pack = extract.global_edit_correction_workpack(
+            _ctx(book, 'stage2.global', paid=False))
+        assert pack['failure_kind'] == 'post_edit_review'
+        assert pack['hard_hits'] == []
+        assert pack['invalid_sha256'] is None
+        assert pack['failure_code'] == 'blocking_remaining'
+        failed = GlobalEdit.model_validate(
+            decode_artifact(extract.GLOBAL_EDIT, pack['failed_edit']).payload)
+        assert failed.secrets[0].first_reveal_chapter == 3
+        ov = orchestrator_state.overview(root, '002f')
+        assert orchestrator_state.stage2_reviewed_edit_correction_needed(
+            root, '002f', ov)
+
+        terminal_failure = store.read_own(
+            GlobalEditFailure, extract.GLOBAL_EDIT_FAILURE)[0]
+        pending = extract._build_global_edit_failure(
+            store,
+            failure_kind='canonical_pending',
+            failed_edit_sha256=terminal_failure.failed_edit_sha256,
+            formal_sha256=terminal_failure.formal_sha256,
+            expected_source_sha256=terminal_failure.expected_source_sha256,
+            global_review_workpack_sha256=(
+                terminal_failure.global_review_workpack_sha256),
+            reason_code='canonical_input_persisted',
+            reason_summary='canonical edit 已落稳，等待 deterministic replay',
+        )
+        store.write_round(extract.GLOBAL_EDIT_FAILURE, pending)
+        assert orchestrator_state.stage2_reviewed_edit_commit_recovery_needed(
+            root, '002f', code=ctx.code)
+        pending_ov = orchestrator_state.overview(root, '002f')
+        assert not orchestrator_state.stage2_reviewed_edit_correction_needed(
+            root, '002f', pending_ov)
+        store.write_round(extract.GLOBAL_EDIT_FAILURE, terminal_failure)
+
+        fixed_attestation = copy.deepcopy(attestation)
+        fixed_attestation['decisions'] = [{
+            'item_id': target.item_id,
+            'expected_subject_sha256': target.subject_sha256,
+            'state': 'PASS',
+            'reason': '已重新核对该未变化主体，正文证据支持当前描述',
+            'evidence': [],
+            'generation_disposition': None,
+        }]
+        _write_edit(book, {
+            **business,
+            'post_edit_review': fixed_attestation,
+        })
+        landed, report = _apply(book)
+
+        assert report.passed
+        assert landed.canon.secrets[0].first_reveal_chapter == 3
+        closed = store.read(GlobalReview, extract.GLOBAL_REVIEW_REL)
+        assert next(item for item in closed.items
+                    if item.item_id == target.item_id).state == 'PASS'
+        assert not (book / extract.GLOBAL_EDIT_FAILURE).exists()
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
 def _sandbox(name: str) -> tuple[Path, Path]:
     root = Path(tempfile.mkdtemp())
     book = root / name
     book.mkdir()
+    return root, book
+
+
+def _tmp_book(tmp_path: Path, name: str) -> tuple[Path, Path]:
+    """新增恢复测试统一留在 pytest 管理的短根下。"""
+    root = tmp_path / 'output'
+    book = root / name
+    book.mkdir(parents=True)
     return root, book
 
 
@@ -328,6 +516,274 @@ def test_service_global_edit_is_staged_canonically_and_survives_transport_cleanu
         shutil.rmtree(root)
 
 
+def test_ordinary_hard_human_revalidate_prepared_replays_exact_audit_identity(
+        monkeypatch, tmp_path):
+    """普通 edit 的人工 INVALID 修订也由 WAL 补尾，且不伪造 reviewed 身份。"""
+    root, book = _tmp_book(tmp_path, '普通人工提升_326')
+    _seed(book)
+    ctx = _ctx(book, 'stage2.global', paid=False)
+    store = ArtifactStore(ctx)
+    _write_edit(book, {
+        'characters': [{
+            'char_id': 'char_001',
+            'role': '李宝珠',
+            'role_evidence': _role_locator(),
+        }],
+    })
+    original_retire = extract._retire_nonreviewed_global_edit_input_commit
+    monkeypatch.setattr(
+        extract, '_retire_nonreviewed_global_edit_input_commit',
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            KeyboardInterrupt('模拟 HARD terminal 后、WAL 退休前硬杀')))
+    with pytest.raises(KeyboardInterrupt, match='WAL 退休前'):
+        _apply(book)
+    assert (book / extract.GLOBAL_EDIT_INPUT_COMMIT).is_file()
+    monkeypatch.setattr(
+        extract, '_retire_nonreviewed_global_edit_input_commit', original_retire)
+    interrupted = operator.next_action(root, '326')
+    assert interrupted.action is not None
+    assert interrupted.action.waiting_on == queue.WAITING_ON_STAGE2_EDIT_COMMIT
+    execution_permit.permit_from_next(
+        interrupted, 'stage2.global', interrupted.action.flags)
+    with pytest.raises(GateBlocked, match='HARD terminal'):
+        _apply(book)
+    assert not (book / extract.GLOBAL_EDIT_INPUT_COMMIT).exists()
+    terminal = store.read_own(
+        GlobalEditFailure, extract.GLOBAL_EDIT_FAILURE)[0]
+    assert terminal.failure_kind == 'ordinary_hard_gate'
+    assert orchestrator_state.stage2_global_edit_terminal_failure_needed(
+        root, '326', code=ctx.code)
+
+    invalid_path = book / extract._GLOBAL_INVALID
+    raw = json.loads(invalid_path.read_text(encoding='utf-8'))
+    raw['entities']['characters']['char_001']['role'] = '沈家账房，负责核对往来账目'
+    invalid_path.write_text(
+        json.dumps(raw, ensure_ascii=False, indent=2) + '\n',
+        encoding='utf-8', newline='\n')
+    assert store.revalidation_audit(
+        extract.GLOBAL_REL, GlobalGrounding,
+        actor='human:reviewer', reason='修正人物身份').edited_by_human
+    assert orchestrator_state.stage2_global_edit_terminal_failure_needed(
+        root, '326', code=ctx.code)
+
+    original = extract._reconcile_reviewed_edit_commit
+    monkeypatch.setattr(
+        extract, '_reconcile_reviewed_edit_commit',
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            KeyboardInterrupt('模拟 revalidate prepared 后硬杀')))
+    with pytest.raises(KeyboardInterrupt, match='prepared 后'):
+        extract.run_revalidate(
+            ctx, actor='human:reviewer', reason='修正人物身份')
+
+    journal = store.read_own(
+        GlobalEditCommit, extract.GLOBAL_EDIT_COMMIT)[0]
+    assert journal.state == 'prepared'
+    assert journal.action_kind == 'revalidate'
+    assert journal.reviewed_edit is False
+    assert journal.expected_source_sha256 is None
+    assert journal.global_review_workpack_sha256 is None
+    assert journal.baseline.failure_sha256 is not None
+
+    current = operator.next_action(root, '326')
+    assert current.state == 'blocked' and current.action is not None
+    assert current.action.waiting_on == queue.WAITING_ON_STAGE2_EDIT_REVALIDATE
+    assert current.action.flags == [
+        '--revalidate', '--actor', 'human:reviewer',
+        '--reason', '修正人物身份',
+    ]
+    permit = execution_permit.permit_from_next(
+        current, 'stage2.global', current.action.flags)
+    assert permit.flags == current.action.flags
+    with pytest.raises(UnsupportedRunMode, match='exact actor/reason'):
+        execution_permit.permit_from_next(
+            current, 'stage2.global', [
+                '--revalidate', '--actor', 'system:wrong',
+                '--reason', 'wrong',
+            ])
+
+    monkeypatch.setattr(
+        extract, '_reconcile_reviewed_edit_commit', original)
+    promoted, report = extract.run_revalidate(
+        ctx, actor='human:reviewer', reason='修正人物身份')
+    assert promoted and report.passed
+    assert not invalid_path.exists()
+    assert not (book / extract.GLOBAL_EDIT_FAILURE).exists()
+    committed = store.read_own(
+        GlobalEditCommit, extract.GLOBAL_EDIT_COMMIT)[0]
+    assert committed.state == 'committed'
+    assert committed.target.global_grounding.provenance.revalidation_audit.actor == (
+        'human:reviewer')
+
+
+@pytest.mark.parametrize('completed_companions', [0, 1, 2, 3])
+def test_generic_global_revalidate_prepared_recovers_every_hard_kill_write_point(
+        completed_companions, monkeypatch, tmp_path):
+    """无 GlobalEdit/formal 身份的首次 Global INVALID 也由同一 WAL 补尾。"""
+    sid = f'3268{completed_companions}'
+    root, book = _tmp_book(tmp_path, f'首次全局提升_{sid}')
+    ctx = _ctx(book, 'stage2.global')
+    store = ArtifactStore(ctx)
+    store.write(extract.MAIN_TEXT, MainText.model_validate(main_text()))
+    response = _response_global()
+    original_name = response['entities']['characters']['char_002']['canonical']
+    response['entities']['characters']['char_002']['canonical'] = (
+        response['entities']['characters']['char_001']['canonical'])
+    client, _transport = _client(ctx, lambda _req, _index: _ok(response))
+    with pytest.raises(GateBlocked, match='canonical_unique'):
+        extract.run_global(ctx, client)
+
+    invalid_path = book / extract._GLOBAL_INVALID
+    raw = json.loads(invalid_path.read_text(encoding='utf-8'))
+    raw['entities']['characters']['char_002']['canonical'] = original_name
+    invalid_path.write_text(
+        json.dumps(raw, ensure_ascii=False, indent=2) + '\n',
+        encoding='utf-8', newline='\n')
+    assert not (book / extract.GLOBAL_REL).exists()
+    assert not (book / extract.GLOBAL_EDIT).exists()
+    assert not (book / extract.GLOBAL_EDIT_FAILURE).exists()
+
+    original_reconcile = extract._reconcile_reviewed_edit_commit
+    monkeypatch.setattr(
+        extract, '_reconcile_reviewed_edit_commit',
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            KeyboardInterrupt('模拟 generic revalidate prepared 后硬杀')))
+    with pytest.raises(KeyboardInterrupt, match='prepared 后'):
+        extract.run_revalidate(
+            _ctx(book, 'stage2.global', paid=False),
+            actor='human:reviewer', reason='修正首次抽取的重复姓名')
+
+    journal = store.read_own(
+        GlobalEditCommit, extract.GLOBAL_EDIT_COMMIT)[0]
+    assert journal.state == 'prepared'
+    assert journal.action_kind == 'revalidate'
+    assert journal.reviewed_edit is False
+    assert journal.failed_edit_sha256 is None
+    assert journal.formal_sha256 is None
+    assert journal.baseline.global_sha256 is None
+    assert journal.baseline.failure_sha256 is None
+
+    monkeypatch.setattr(
+        extract, '_reconcile_reviewed_edit_commit', original_reconcile)
+    targets = [
+        (extract.GLOBAL_REL, journal.target.global_grounding),
+        (extract.GLOBAL_REVIEW_REL, journal.target.global_review),
+        (BLUEPRINT_EDGE, journal.target.blueprint_character_projection),
+    ]
+    for rel, payload in targets[:completed_companions]:
+        store.write_round(rel, payload)
+
+    current = operator.next_action(root, sid)
+    assert current.state == 'blocked' and current.action is not None
+    assert current.action.waiting_on == queue.WAITING_ON_STAGE2_EDIT_REVALIDATE
+    assert current.action.flags == [
+        '--revalidate', '--actor', 'human:reviewer',
+        '--reason', '修正首次抽取的重复姓名',
+    ]
+    permit = execution_permit.permit_from_next(
+        current, 'stage2.global', current.action.flags)
+    assert permit.flags == current.action.flags
+
+    promoted, report = extract.run_revalidate(
+        _ctx(book, 'stage2.global', paid=False),
+        actor='human:reviewer', reason='修正首次抽取的重复姓名')
+    assert promoted and report.passed
+    assert not invalid_path.exists()
+    assert not (book / extract.GLOBAL_EDIT_FAILURE).exists()
+    committed = store.read_own(
+        GlobalEditCommit, extract.GLOBAL_EDIT_COMMIT)[0]
+    assert committed.state == 'committed'
+
+
+def test_ordinary_candidate_terminal_closes_input_wal_after_hard_kill(
+        monkeypatch, tmp_path):
+    """候选 schema 终态先落 sidecar；重启只关 WAL，不在新底座重施 edit。"""
+    root, book = _tmp_book(tmp_path, '普通候选终态_327')
+    _seed(book)
+    ctx = _ctx(book, 'stage2.global', paid=False)
+    _write_edit(book, {
+        'secrets': [{
+            'secret_id': 'secret_01', 'first_reveal_chapter': 3,
+        }],
+    })
+    original_validate = GlobalGrounding.model_validate
+
+    def reject_only_applied_candidate(cls, value, *args, **kwargs):
+        provenance = value.get('_provenance') if isinstance(value, dict) else None
+        inputs = getattr(provenance, 'inputs', {})
+        if extract.GLOBAL_EDIT in inputs:
+            broken = copy.deepcopy(value)
+            broken.pop('entities', None)
+            return original_validate(broken, *args, **kwargs)
+        return original_validate(value, *args, **kwargs)
+
+    original_retire = extract._retire_nonreviewed_global_edit_input_commit
+    monkeypatch.setattr(
+        GlobalGrounding, 'model_validate', classmethod(reject_only_applied_candidate))
+    monkeypatch.setattr(
+        extract, '_retire_nonreviewed_global_edit_input_commit',
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            KeyboardInterrupt('模拟 candidate terminal 后、WAL 退休前硬杀')))
+    with pytest.raises(KeyboardInterrupt, match='WAL 退休前'):
+        _apply(book)
+
+    store = ArtifactStore(ctx)
+    failure = store.read_own(
+        GlobalEditFailure, extract.GLOBAL_EDIT_FAILURE)[0]
+    assert failure.failure_kind == 'ordinary_candidate_validation'
+    assert (book / extract.GLOBAL_EDIT_INPUT_COMMIT).is_file()
+    current = operator.next_action(root, '327')
+    assert current.action is not None
+    assert current.action.waiting_on == queue.WAITING_ON_STAGE2_EDIT_COMMIT
+
+    monkeypatch.setattr(GlobalGrounding, 'model_validate', original_validate)
+    monkeypatch.setattr(
+        extract, '_retire_nonreviewed_global_edit_input_commit', original_retire)
+    with pytest.raises(TerminalState, match='候选不符合'):
+        _apply(book)
+    assert not (book / extract.GLOBAL_EDIT_INPUT_COMMIT).exists()
+    terminal = operator.next_action(root, '327')
+    assert terminal.action is not None
+    assert terminal.action.waiting_on == queue.WAITING_ON_STAGE2_EDIT_TERMINAL
+    assert terminal.action.flags == []
+
+
+def test_new_ordinary_edit_explicitly_supersedes_old_terminal_failure(tmp_path):
+    """旧 failure 不得抢 planner；新运输 edit canonical 化时明确归档它。"""
+    root, book = _tmp_book(tmp_path, '普通新修订_328')
+    _seed(book)
+    ctx = _ctx(book, 'stage2.global', paid=False)
+    _write_edit(book, {
+        'characters': [{
+            'char_id': 'char_001', 'role': '李宝珠',
+            'role_evidence': _role_locator(),
+        }],
+    })
+    with pytest.raises(GateBlocked):
+        _apply(book)
+    assert (book / extract.GLOBAL_EDIT_FAILURE).is_file()
+
+    replacement = GlobalEdit.model_validate({
+        'characters': [{
+            'char_id': 'char_001',
+            'role': '沈家账房，负责核对往来账目',
+            'role_evidence': _role_locator(),
+        }],
+    })
+    service_path = uploads.save_global_edit(root, '328', replacement)
+    terminal = operator.next_action(root, '328')
+    assert terminal.action is not None
+    assert terminal.action.waiting_on == queue.WAITING_ON_STAGE2_EDIT_TERMINAL
+    execution_permit.permit_from_next(
+        terminal, 'stage2.global', ['--apply-edit', str(service_path)])
+
+    landed, report = extract.run_apply_edit(ctx, str(service_path))
+    assert report.passed
+    assert landed.entities.characters['char_001'].role.startswith('沈家账房')
+    assert not (book / extract.GLOBAL_EDIT_FAILURE).exists()
+    assert not orchestrator_state.stage2_global_edit_terminal_failure_needed(
+        root, '328', code=ctx.code)
+
+
 def test_a_noop_service_global_edit_is_rejected_before_canonical_staging():
     root, book = _sandbox('空修订_322')
     try:
@@ -344,6 +800,184 @@ def test_a_noop_service_global_edit_is_rejected_before_canonical_staging():
             extract.run_apply_edit(
                 _ctx(book, 'stage2.global', paid=False), str(service_path))
         assert not (book / extract.GLOBAL_EDIT).exists()
+    finally:
+        shutil.rmtree(root)
+
+
+def test_wal_only_first_service_edit_is_reachable_via_canonical_recovery(
+        monkeypatch, tmp_path):
+    """WAL 已落、canonical 尚缺时，operator/permit/producer 仍能闭合。"""
+    root, book = _tmp_book(tmp_path, '首次WAL恢复_323')
+    try:
+        _seed(book)
+        edit = GlobalEdit.model_validate({
+            'secrets': [{
+                'secret_id': 'secret_01',
+                'first_reveal_chapter': 3,
+            }],
+        })
+        service_path = uploads.save_global_edit(root, '323', edit)
+        original = extract._reconcile_global_edit_input_commit
+
+        def hard_kill_before_canonical(_store, _journal):
+            raise KeyboardInterrupt('模拟 WAL 首写后硬杀')
+
+        monkeypatch.setattr(
+            extract, '_reconcile_global_edit_input_commit',
+            hard_kill_before_canonical)
+        with pytest.raises(KeyboardInterrupt, match='WAL 首写后'):
+            extract.run_apply_edit(
+                _ctx(book, 'stage2.global', paid=False), str(service_path))
+        assert (book / extract.GLOBAL_EDIT_INPUT_COMMIT).is_file()
+        assert not (book / extract.GLOBAL_EDIT).exists()
+
+        monkeypatch.setattr(
+            extract, '_reconcile_global_edit_input_commit', original)
+        current = operator.next_action(root, '323')
+        assert current.state == 'blocked'
+        assert current.action is not None
+        assert current.action.waiting_on == queue.WAITING_ON_STAGE2_EDIT_COMMIT
+        assert current.action.flags == ['--apply-edit', extract.GLOBAL_EDIT]
+        permit = execution_permit.permit_from_next(
+            current, 'stage2.global', tuple(current.action.flags))
+        assert permit.external_inputs == []
+
+        artifact, report = _apply(book)
+        assert report.passed
+        assert artifact.canon.secrets[0].first_reveal_chapter == 3
+        assert not (book / extract.GLOBAL_EDIT_INPUT_COMMIT).exists()
+    finally:
+        shutil.rmtree(root)
+
+
+def test_new_wal_is_not_swallowed_by_previous_committed_formal_journal(
+        monkeypatch, tmp_path):
+    """J0/E0 是新 WAL 的 baseline，不得被误认成 WAL1 已成功。"""
+    root, book = _tmp_book(tmp_path, '旧提交新WAL_324')
+    try:
+        _seed(book)
+        _write_edit(book, {'secrets': [{
+            'secret_id': 'secret_01', 'first_reveal_chapter': 3,
+        }]})
+        first, _report = _apply(book)
+        assert first.canon.secrets[0].first_reveal_chapter == 3
+        old_canonical = (book / extract.GLOBAL_EDIT).read_bytes()
+        old_commit = (book / extract.GLOBAL_EDIT_COMMIT).read_bytes()
+
+        edit = GlobalEdit.model_validate({
+            'secrets': [{
+                'secret_id': 'secret_01', 'first_reveal_chapter': 2,
+            }],
+        })
+        service_path = uploads.save_global_edit(root, '324', edit)
+        original = extract._reconcile_global_edit_input_commit
+        monkeypatch.setattr(
+            extract, '_reconcile_global_edit_input_commit',
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                KeyboardInterrupt('模拟 WAL1 后硬杀')))
+        with pytest.raises(KeyboardInterrupt, match='WAL1'):
+            extract.run_apply_edit(
+                _ctx(book, 'stage2.global', paid=False), str(service_path))
+        assert (book / extract.GLOBAL_EDIT).read_bytes() == old_canonical
+        assert (book / extract.GLOBAL_EDIT_COMMIT).read_bytes() == old_commit
+
+        monkeypatch.setattr(
+            extract, '_reconcile_global_edit_input_commit', original)
+        landed, report = _apply(book)
+        assert report.passed
+        assert landed.canon.secrets[0].first_reveal_chapter == 2
+        assert (book / extract.GLOBAL_EDIT).read_bytes() != old_canonical
+        assert not (book / extract.GLOBAL_EDIT_INPUT_COMMIT).exists()
+    finally:
+        shutil.rmtree(root)
+
+
+@pytest.mark.parametrize('completed_companions', [0, 1, 2, 3])
+def test_reviewed_prepared_bundle_recovers_every_hard_kill_write_point(
+        completed_companions, monkeypatch, tmp_path):
+    """prepared 后 0/1/2/3 个正式 companion 已写都走同一 operator 恢复。"""
+    sid = f'325{completed_companions}'
+    root, book = _tmp_book(tmp_path, f'reviewed提交断点_{sid}')
+    try:
+        _seed(book)
+        ctx = _ctx(book, 'stage2.global', paid=False)
+        store = ArtifactStore(ctx)
+        grounding = store.read(GlobalGrounding, extract.GLOBAL_REL)
+        review = approved_global_review(grounding)
+        target_item = next(
+            item for item in review.items
+            if item.kind == 'role'
+            and item.subject_path == 'entities.characters.char_001.role')
+        review = decide(
+            review,
+            item_id=target_item.item_id,
+            expected_subject_sha256=target_item.subject_sha256,
+            state='FAIL', actor='test-reviewer',
+            reason='人物身份需要精确修订',
+            now='2026-09-05T00:00:00+00:00')
+        store.write(extract.GLOBAL_REVIEW_REL, review)
+        workpack = global_review_ops.review_workpack(
+            ctx, scope='blocking', replaced_input_keys=(extract.GLOBAL_EDIT,))
+        _write_edit(book, {
+            'characters': [{
+                'char_id': 'char_001',
+                'role': '沈家账房，负责核对往来账目',
+                'role_evidence': _role_locator(),
+            }],
+            'post_edit_review': {
+                'actor': 'agent:novel-pipeline-operator',
+                'expected_source_sha256': review.source_sha256,
+                'reviewed_chapter_ordinals': [1, 2, 3],
+                'default_state': 'PASS',
+                'reason': '已复核精确修改后的完整 blocking 主体',
+                'quarantine_groups': [],
+                'expected_workpack_sha256': workpack['workpack_sha256'],
+                'review_scope': [{
+                    'item_id': target_item.item_id,
+                    'expected_subject_sha256': target_item.subject_sha256,
+                }],
+                'decisions': [],
+            },
+        })
+        original = extract._reconcile_reviewed_edit_commit
+        monkeypatch.setattr(
+            extract, '_reconcile_reviewed_edit_commit',
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                KeyboardInterrupt('模拟 prepared 后硬杀')))
+        with pytest.raises(KeyboardInterrupt, match='prepared 后'):
+            _apply(book)
+        journal = ArtifactStore(ctx).read_own(
+            GlobalEditCommit, extract.GLOBAL_EDIT_COMMIT)[0]
+        assert journal.state == 'prepared'
+        assert (book / extract.GLOBAL_EDIT_INPUT_COMMIT).is_file()
+
+        monkeypatch.setattr(
+            extract, '_reconcile_reviewed_edit_commit', original)
+        replay_store = ArtifactStore(_ctx(book, 'stage2.global', paid=False))
+        targets = [
+            (extract.GLOBAL_REL, journal.target.global_grounding),
+            (extract.GLOBAL_REVIEW_REL, journal.target.global_review),
+            (BLUEPRINT_EDGE, journal.target.blueprint_character_projection),
+        ]
+        for rel, payload in targets[:completed_companions]:
+            replay_store.write_round(rel, payload)
+
+        current = operator.next_action(root, sid)
+        assert current.state == 'blocked'
+        assert current.action is not None
+        assert current.action.waiting_on == queue.WAITING_ON_STAGE2_EDIT_COMMIT
+        permit = execution_permit.permit_from_next(
+            current, 'stage2.global', tuple(current.action.flags))
+        assert permit.flags == ['--apply-edit', extract.GLOBAL_EDIT]
+
+        landed, report = _apply(book)
+        assert report.passed
+        assert landed.entities.characters['char_001'].role.startswith('沈家账房')
+        assert not (book / extract.GLOBAL_EDIT_INPUT_COMMIT).exists()
+        assert not (book / extract.GLOBAL_EDIT_FAILURE).exists()
+        committed = ArtifactStore(ctx).read_own(
+            GlobalEditCommit, extract.GLOBAL_EDIT_COMMIT)[0]
+        assert committed.state == 'committed'
     finally:
         shutil.rmtree(root)
 
@@ -920,14 +1554,18 @@ def test_the_previous_round_is_archived_before_the_human_round_lands():
              'knowledge_events': [_knowledge_character('char_002', 2)]}]})
         _apply(book)
         archived = sorted(p.name for p in (book / 'stage2' / '_rounds').iterdir())
-        assert archived == ['global_grounding.r1.json', 'global_review.r1.json']
+        assert {
+            'global_grounding.r1.json', 'global_review.r1.json',
+            'global_edit_input_commit.r1.json',
+        }.issubset(archived)
         assert (book / 'stage2' / '_rounds' / 'global_grounding.r1.json').read_bytes() == before
     finally:
         shutil.rmtree(root, ignore_errors=True)
 
 
-def test_global_and_review_roll_back_as_one_history_byte_set(monkeypatch):
-    """The companion review cannot leave a successfully replaced global behind."""
+def test_global_and_review_partial_write_is_resumed_from_prepared_bundle(
+        monkeypatch):
+    """普通异常也保留 WAL：partial formal 只能按冻结 target 继续收敛。"""
     root, book = _sandbox('组合事务_005b')
     try:
         _seed(book)
@@ -938,11 +1576,8 @@ def test_global_and_review_roll_back_as_one_history_byte_set(monkeypatch):
                 _knowledge_group('知情的沈家长辈', 2),
             ],
         }]})
-        stage = book / 'stage2'
-        before = {
-            path.relative_to(stage).as_posix(): path.read_bytes()
-            for path in stage.rglob('*') if path.is_file()
-        }
+        formal_before = (book / extract.GLOBAL_REL).read_bytes()
+        review_before = (book / extract.GLOBAL_REVIEW_REL).read_bytes()
         original_write = ArtifactStore.write
 
         def fail_review(self, rel, artifact):
@@ -954,13 +1589,24 @@ def test_global_and_review_roll_back_as_one_history_byte_set(monkeypatch):
         with pytest.raises(OSError, match='review 刷新失败'):
             _apply(book)
 
-        after = {
-            path.relative_to(stage).as_posix(): path.read_bytes()
-            for path in stage.rglob('*') if path.is_file()
-        }
-        assert after == before, (
-            'global 已换新而 review 失败时，formal/INVALID/review/'
-            '_rounds/_revalidation 必须整组回到事务前')
+        assert (book / extract.GLOBAL_REL).read_bytes() != formal_before
+        assert (book / extract.GLOBAL_REVIEW_REL).read_bytes() == review_before
+        assert (book / extract.GLOBAL_EDIT_INPUT_COMMIT).is_file()
+        prepared_raw = json.loads(
+            (book / extract.GLOBAL_EDIT_COMMIT).read_bytes())
+        assert decode_artifact(
+            extract.GLOBAL_EDIT_COMMIT, prepared_raw).payload['state'] == 'prepared'
+
+        monkeypatch.setattr(ArtifactStore, 'write', original_write)
+        artifact, report = _apply(book)
+
+        assert report.passed
+        assert artifact.canon.secrets[0].knowledge_events[1].subject.kind == 'group'
+        assert not (book / extract.GLOBAL_EDIT_INPUT_COMMIT).exists()
+        committed_raw = json.loads(
+            (book / extract.GLOBAL_EDIT_COMMIT).read_bytes())
+        assert decode_artifact(
+            extract.GLOBAL_EDIT_COMMIT, committed_raw).payload['state'] == 'committed'
     finally:
         shutil.rmtree(root, ignore_errors=True)
 

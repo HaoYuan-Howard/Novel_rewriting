@@ -86,6 +86,8 @@ def test_prompt_experiment_controls_are_not_published(paid_payload):
 def test_operator_telemetry_and_judge_internals_are_not_frontend_choices(
         paid_payload):
     assert not {
+        'stage2_legacy_revalidate_actor',
+        'stage2_legacy_revalidate_reason',
         'stage6_judge_roles',
         'operator_phases',
         'operator_phase_event_kinds',
