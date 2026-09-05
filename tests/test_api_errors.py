@@ -55,6 +55,7 @@ def _load_unreachable_families() -> None:
     for m in (
         'novel.llm.client',
         'novel.llm.transport',
+        'novel.orchestrator.agent',
         'novel.stages.stage2.extract',
     ):
         importlib.import_module(m)

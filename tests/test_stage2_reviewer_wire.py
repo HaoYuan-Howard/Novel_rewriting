@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import json
+import subprocess
 from types import SimpleNamespace
 from typing import Any
 
@@ -9,7 +10,9 @@ import pytest
 
 from contracts.artifacts import STAGE2_GLOBAL_EDIT
 from contracts.schema import encode_artifact
+from contracts.schema.orchestration import AgentProfile
 from contracts.schema.stage2 import GlobalEdit
+from novel.commanders import ClaudeCodeCommanderDriver
 from novel.orchestrator import agent, queue, reviewer_tasks
 from novel.orchestrator import stage2_reviewer_wire as wire
 
@@ -137,9 +140,8 @@ def _response(task: SimpleNamespace, *, scope_count: int = 3) -> dict[str, Any]:
                     'locator': '新关系证据',
                 },
             }],
-            'collection_edits': [{
-                'collection': 'world_rules',
-                'operations': [{
+            'collection_edits': {
+                'world_rules': [{
                     'op': 'add',
                     'item': {
                         'rule_id': 'wr_09',
@@ -154,7 +156,7 @@ def _response(task: SimpleNamespace, *, scope_count: int = 3) -> dict[str, Any]:
                         }],
                     },
                 }],
-            }],
+            },
             'post_edit_review': {
                 'reason': '已复读完整正文并复核本次增量',
                 'quarantine_groups': [],
@@ -311,13 +313,12 @@ def test_assembler_emits_only_explicit_business_delta() -> None:
         'world_rules': [],
         'setting': None,
         'conflict_stages_replace': None,
-        'collection_edits': [{
-            'collection': 'relations',
-            'operations': [
+        'collection_edits': {
+            'relations': [
                 {'op': 'add', 'item': _relation_item(f'rel_{index:02d}')}
                 for index in range(4, 7)
             ],
-        }],
+        },
     })
 
     assembled = wire.assemble(task, response)
@@ -378,10 +379,9 @@ def test_correction_merges_failed_sparse_edit_and_replaces_collection_operations
         'predicate_evidence': {
             'chapter_ordinal': 2, 'locator': 'B 的正确正文证据'},
     }]
-    response['payload']['edit']['collection_edits'] = [{
-        'collection': 'world_rules',
-        'operations': [copy.deepcopy(add_x)],
-    }]
+    response['payload']['edit']['collection_edits'] = {
+        'world_rules': [copy.deepcopy(add_x)],
+    }
 
     assembled = wire.assemble(task, response)
     merged = assembled['action']['input_payload']
@@ -395,20 +395,20 @@ def test_correction_merges_failed_sparse_edit_and_replaces_collection_operations
     GlobalEdit.model_validate(merged)
 
 
-def test_correction_collection_empty_operations_is_not_an_implicit_drop() -> None:
-    """整条 collection edit 只能用 opaque drop token 撤销。"""
+def test_correction_collection_empty_operations_preserves_failed_edit() -> None:
+    """固定键的空 operations 只表示不更新；撤销仍只能走 opaque token。"""
     task = _task(scope_count=1, correction=True)
     response = _response(task, scope_count=1)
-    response['payload']['edit']['collection_edits'] = [{
-        'collection': 'world_rules',
-        'operations': [],
-    }]
+    response['payload']['edit']['collection_edits'] = {'world_rules': []}
 
     schema = wire.response_schema(task)
-    serialized = json.dumps(schema, ensure_ascii=False)
-    assert 'minItems' in serialized
-    with pytest.raises(wire.Stage2ReviewerWireError, match='operations'):
-        wire.assemble(task, response)
+    collection_schema = next(
+        value for value in schema['$defs'].values()
+        if value.get('title', '').startswith('Stage2CollectionEditsDelta_'))
+    assert 'minItems' not in collection_schema['properties']['world_rules']
+    merged = wire.assemble(task, response)['action']['input_payload']
+    assert merged['collection_edits'] == task.submission_options[0][
+        'exact_request']['action']['input_payload']['collection_edits']
 
 
 def test_correction_drop_targets_are_closed_explicit_and_conflict_free() -> None:
@@ -429,15 +429,21 @@ def test_correction_drop_targets_are_closed_explicit_and_conflict_free() -> None
     replacement_target = next(
         token for token, target in target_map.items()
         if target.description == 'conflict_stages_replace')
+    collection_target = next(
+        token for token, target in target_map.items()
+        if target.description == 'collection_edits[collection=world_rules]')
 
     response = _response(task, scope_count=1)
     response['payload']['edit']['setting'] = None
     response['payload']['edit']['conflict_stages_replace'] = None
-    response['payload']['drop_targets'] = [setting_target, replacement_target]
+    response['payload']['edit']['collection_edits'] = {'world_rules': []}
+    response['payload']['drop_targets'] = [
+        setting_target, replacement_target, collection_target]
     merged = wire.assemble(task, response)['action']['input_payload']
 
     assert 'setting' not in merged
     assert 'conflict_stages_replace' not in merged
+    assert 'collection_edits' not in merged
     assert merged['relations'][0]['predicate'] == '新关系'
 
     relation_target = next(
@@ -463,7 +469,7 @@ def test_correction_can_only_refresh_review_but_cannot_drop_everything() -> None
     task = _task(scope_count=1, correction=True)
     response = _response(task, scope_count=1)
     response['payload']['edit']['relations'] = []
-    response['payload']['edit']['collection_edits'] = []
+    response['payload']['edit']['collection_edits'] = {'world_rules': []}
     merged = wire.assemble(task, response)['action']['input_payload']
 
     assert merged['relations'] == task.submission_options[0][
@@ -507,7 +513,7 @@ def test_consecutive_correction_templates_keep_prior_merged_changes() -> None:
         'predicate_evidence': {
             'chapter_ordinal': 2, 'locator': 'A 的第二轮正确证据'},
     }]
-    second_response['payload']['edit']['collection_edits'] = []
+    second_response['payload']['edit']['collection_edits'] = {'world_rules': []}
     merged_twice = wire.assemble(second, second_response)[
         'action']['input_payload']
 
@@ -534,14 +540,13 @@ def test_collection_split_reusing_subject_has_safe_actionable_reason() -> None:
     }]
     GlobalEdit.model_validate(edit)
     response = _response(task, scope_count=1)
-    response['payload']['edit']['collection_edits'] = [{
-        'collection': 'relations',
-        'operations': [{
+    response['payload']['edit']['collection_edits'] = {
+        'relations': [{
             'op': 'split',
             'subject_id': 'rel_08',
             'items': [_relation_item('rel_08'), _relation_item('rel_09')],
         }],
-    }]
+    }
 
     with pytest.raises(wire.Stage2ReviewerWireError) as caught:
         wire.assemble(task, response)
@@ -552,11 +557,41 @@ def test_collection_split_reusing_subject_has_safe_actionable_reason() -> None:
     assert 'rel_08' not in reason
 
 
+def test_direct_character_patch_and_collection_delete_has_safe_reason() -> None:
+    task = _task(scope_count=1)
+    edit = task.submission_options[0]['exact_request']['action']['input_payload']
+    edit['characters'] = [{
+        'char_id': 'char_009', 'name_distinctiveness': 'common',
+    }]
+    edit['collection_edits'] = [{
+        'collection': 'characters',
+        'expected_collection_sha256': _sha(2),
+        'operations': [],
+    }]
+    GlobalEdit.model_validate(edit)
+    response = _response(task, scope_count=1)
+    response['payload']['edit']['characters'] = [{
+        'char_id': 'char_009', 'name_distinctiveness': 'high',
+    }]
+    response['payload']['edit']['collection_edits'] = {
+        'characters': [{'op': 'delete', 'subject_id': 'char_009'}],
+    }
+
+    with pytest.raises(wire.Stage2ReviewerWireError) as caught:
+        wire.assemble(task, response)
+
+    reason = str(caught.value)
+    assert 'direct_patch_subject_removed_by_collection_edit' in reason
+    assert '直接字段 patch 主体不得同时被同集合 delete/split' in reason
+    assert 'char_009' not in reason
+
+
 def test_response_schema_is_portable_and_task_specific() -> None:
     task = _task()
     schema = wire.response_schema(task)
     encoded = json.dumps(schema, ensure_ascii=False)
 
+    assert wire.WIRE_SCHEMA == 'novel-stage2-reviewer-delta-v2'
     assert schema['type'] == 'object'
     assert schema['additionalProperties'] is False
     assert wire.WIRE_SCHEMA in encoded
@@ -564,6 +599,77 @@ def test_response_schema_is_portable_and_task_specific() -> None:
     assert 'expected_collection_sha256' not in encoded
     assert '"value"' not in encoded
     assert 'drop_targets' not in encoded
+
+    collection_schema = next(
+        value for value in schema['$defs'].values()
+        if value.get('title', '').startswith('Stage2CollectionEditsDelta_'))
+    assert collection_schema['type'] == 'object'
+    assert collection_schema['required'] == ['world_rules']
+    assert set(collection_schema['properties']) == {'world_rules'}
+    assert collection_schema['additionalProperties'] is False
+
+    decision_schema = next(
+        value for value in schema['$defs'].values()
+        if value.get('title', '').startswith('Stage2PostEditDecision_'))
+    allowed = reviewer_tasks._post_edit_review_allowed_values()
+    assert decision_schema['required'] == allowed[
+        'post_edit_review.decision_contract.compact_v2_required_fields']
+    assert 'expected_subject_sha256' not in decision_schema['properties']
+    assert allowed[
+        'post_edit_review.decision_contract.compact_v2_trusted_injected_fields'] == [
+            'expected_subject_sha256']
+
+
+def test_collection_wire_v1_list_and_unknown_fixed_key_are_rejected() -> None:
+    task = _task(scope_count=1)
+    response = _response(task, scope_count=1)
+    operations = copy.deepcopy(
+        response['payload']['edit']['collection_edits']['world_rules'])
+
+    legacy = copy.deepcopy(response)
+    legacy['payload']['edit']['collection_edits'] = [{
+        'collection': 'world_rules', 'operations': operations,
+    }]
+    with pytest.raises(wire.Stage2ReviewerWireError, match='动态 schema'):
+        wire.assemble(task, legacy)
+
+    unknown = copy.deepcopy(response)
+    unknown['payload']['edit']['collection_edits']['relations'] = []
+    with pytest.raises(wire.Stage2ReviewerWireError, match='动态 schema'):
+        wire.assemble(task, unknown)
+
+
+def test_collection_object_reconstructs_canonical_rows_in_template_order() -> None:
+    task = _task(scope_count=1)
+    edit = task.submission_options[0]['exact_request']['action']['input_payload']
+    edit['collection_edits'] = [{
+        'collection': 'relations',
+        'expected_collection_sha256': _sha(21),
+        'operations': [],
+    }, {
+        'collection': 'world_rules',
+        'expected_collection_sha256': _sha(22),
+        'operations': [],
+    }]
+    GlobalEdit.model_validate(edit)
+    response = _response(task, scope_count=1)
+    # 故意按模板逆序构造 provider object；canonical 顺序不得依赖该插入顺序。
+    response['payload']['edit']['collection_edits'] = {
+        'world_rules': [{
+            'op': 'add', 'item': _world_rule_item('wr_09', '新增规则'),
+        }],
+        'relations': [{
+            'op': 'add', 'item': _relation_item('rel_09'),
+        }],
+    }
+
+    rows = wire.assemble(task, response)['action']['input_payload'][
+        'collection_edits']
+    assert [row['collection'] for row in rows] == ['relations', 'world_rules']
+    assert [row['expected_collection_sha256'] for row in rows] == [
+        _sha(21), _sha(22)]
+    assert all(set(row) == {
+        'collection', 'expected_collection_sha256', 'operations'} for row in rows)
 
 
 def test_correction_schema_and_prompt_bind_closed_drop_targets() -> None:
@@ -605,6 +711,45 @@ def test_same_shape_patch_rows_share_schema_and_fit_windows_argv() -> None:
     assert len(encoded.encode('utf-16-le')) // 2 < 32_767
     assert len(schema.get('$defs', {})) < 24, (
         '同开放字段集合不得按每个主体重复铸一份 $defs')
+
+
+def test_large_fixed_collection_schema_fits_real_claude_windows_argv(
+    tmp_path,
+) -> None:
+    task = _task(scope_count=300)
+    edit = task.submission_options[0]['exact_request']['action']['input_payload']
+    edit['relations'] = [
+        {
+            'relation_id': f'rel_{index:02d}',
+            'predicate': f'关系{index}',
+            'predicate_evidence': {
+                'chapter_ordinal': 1, 'locator': f'证据{index}'},
+        }
+        for index in range(60)
+    ]
+    edit['collection_edits'] = [
+        {
+            'collection': collection,
+            'expected_collection_sha256': _sha(index + 100),
+            'operations': [],
+        }
+        for index, collection in enumerate(
+            ('characters', 'relations', 'secrets', 'world_rules'))
+    ]
+    GlobalEdit.model_validate(edit)
+    driver = ClaudeCodeCommanderDriver(
+        executable='claude.exe', runner=lambda *_args, **_kwargs: None)
+    invocation = driver.build_invocation(
+        AgentProfile(
+            driver='claude-code', model='claude-opus-5',
+            reasoning_effort='high', execution_mode='standard'),
+        'review', repo=tmp_path, base=tmp_path,
+        structured_response=True, output_schema=wire.response_schema(task),
+    )
+
+    units = len(subprocess.list2cmdline(
+        list(invocation.argv)).encode('utf-16-le')) // 2
+    assert units < 32_767
 
 
 def test_composite_identity_cross_product_is_closed_by_trusted_assembler() -> None:
@@ -667,7 +812,7 @@ def test_stale_task_rejects_previous_response() -> None:
 def test_collection_add_rejects_historical_value_shape() -> None:
     task = _task()
     response = _response(task)
-    operation = response['payload']['edit']['collection_edits'][0]['operations'][0]
+    operation = response['payload']['edit']['collection_edits']['world_rules'][0]
     operation['value'] = operation.pop('item')
 
     with pytest.raises(wire.Stage2ReviewerWireError, match='动态 schema'):
@@ -724,7 +869,7 @@ def test_unchanged_patch_and_whole_response_noop_are_rejected() -> None:
         'expected_exact_request_sha256': binding.expected_exact_request_sha256,
         'payload': {'edit': {
             'relations': [],
-            'collection_edits': [],
+            'collection_edits': {'world_rules': []},
             'post_edit_review': {
                 'reason': baseline['post_edit_review']['reason'],
                 'quarantine_groups': [],

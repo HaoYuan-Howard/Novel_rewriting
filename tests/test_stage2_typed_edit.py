@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import json
+import re
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -164,8 +165,9 @@ def test_global_edit_rejects_empty_duplicate_and_stale_targets_before_mutation()
     before = repr(data)
     edit = GlobalEdit.model_validate({'addresses': [{
         'char_id': 'char_001', 'address_index': 9, 'context': 'reference'}]})
-    with pytest.raises(TerminalState, match='address'):
+    with pytest.raises(extract.GlobalEditCandidateRejected) as caught:
         _apply_secret_patches(data, edit, {1, 2})
+    assert 'missing_patch_index:1' in caught.value.safe_summary
     assert repr(data) == before
 
 
@@ -176,8 +178,9 @@ def test_world_rule_patch_rejects_an_out_of_book_effective_chapter():
         'versions': [{'effective_from_chapter': 99, 'desc': '越界规则',
                       'desc_evidence': _locator(1)}],
     }]})
-    with pytest.raises(TerminalState, match='章号'):
+    with pytest.raises(extract.GlobalEditCandidateRejected) as caught:
         _apply_secret_patches(data, edit, {1, 2})
+    assert 'invalid_chapter_reference:1' in caught.value.safe_summary
 
 
 def test_complete_replacements_can_split_secrets_replace_rules_and_rebuild_addresses():
@@ -306,6 +309,165 @@ def test_collection_delta_adds_a_character_and_relation_without_copying_existing
     assert sorted(data['entities']['characters']) == ['char_001', 'char_002']
     assert [row['relation_id'] for row in data['entities']['relations']] == ['rel_01']
     assert changed == ['characters.add.char_002', 'relations.add.rel_01']
+
+
+def test_collection_delete_or_split_cannot_share_a_direct_patch_subject():
+    data = _grounding()
+    data['entities']['relations'] = [{
+        'relation_id': 'rel_01', 'subject_id': 'char_001',
+        'object_id': 'char_001', 'predicate': '共同核账',
+        'predicate_evidence': _formal_evidence(),
+        'visibility': {'kind': 'public', 'from_chapter': 1},
+        'valid_from_chapter': 1, 'valid_through_chapter': None,
+    }]
+    cases = (
+        ('characters', {'characters': [{
+            'char_id': 'char_001', 'name_distinctiveness': 'medium'}]}),
+        ('characters', {'addresses': [{
+            'char_id': 'char_001', 'address_index': 0,
+            'context': 'reference'}]}),
+        ('characters', {'addresses_replace': [{
+            'char_id': 'char_001', 'address': [{
+                'surface': '沈青', 'by': 'public', 'context': 'reference',
+                'from_chapter': 1,
+            }],
+        }]}),
+        ('relations', {'relations': [{
+            'relation_id': 'rel_01', 'predicate': '重新共同核账',
+            'predicate_evidence': _locator(),
+        }]}),
+        ('secrets', {'secrets': [{
+            'secret_id': 'secret_01', 'fact': '修正后的事实',
+            'fact_evidence': _locator(),
+        }]}),
+        ('world_rules', {'world_rules': [{
+            'rule_id': 'wr_01', 'kind': 'institution',
+        }]}),
+    )
+
+    for collection, direct_patch in cases:
+        current = {
+            'characters': data['entities']['characters'],
+            'relations': data['entities']['relations'],
+            'secrets': data['canon']['secrets'],
+            'world_rules': data['canon']['world_rules'],
+        }[collection]
+        identity = {
+            'characters': 'char_001',
+            'relations': 'rel_01',
+            'secrets': 'secret_01',
+            'world_rules': 'wr_01',
+        }[collection]
+        payload = {
+            **direct_patch,
+            'collection_edits': [{
+                'collection': collection,
+                'expected_collection_sha256': subject_sha256(current),
+                'operations': [{'op': 'delete', 'subject_id': identity}],
+            }],
+        }
+        with pytest.raises(
+                ValidationError,
+                match='直接字段 patch 主体不得同时被同集合 delete/split'):
+            GlobalEdit.model_validate(payload)
+
+
+def test_collection_add_then_direct_patch_of_the_new_character_is_valid():
+    data = _grounding()
+    edit = GlobalEdit.model_validate({
+        'collection_edits': [{
+            'collection': 'characters',
+            'expected_collection_sha256': subject_sha256(
+                data['entities']['characters']),
+            'operations': [{'op': 'add', 'item': {
+                'char_id': 'char_002', 'canonical': '周衡',
+                'address': [{
+                    'surface': '周衡', 'by': 'public',
+                    'context': 'reference', 'from_chapter': 2,
+                }],
+                'name_distinctiveness': 'high',
+                'role': '协助核账的人', 'role_evidence': _locator(2),
+                'fate': None, 'fate_evidence': None,
+            }}],
+        }],
+        'characters': [{
+            'char_id': 'char_002', 'name_distinctiveness': 'medium'}],
+    })
+
+    changed = _apply_secret_patches(data, edit, {1, 2})
+
+    assert data['entities']['characters']['char_002'][
+        'name_distinctiveness'] == 'medium'
+    assert changed == [
+        'characters.add.char_002', 'char_002.name_distinctiveness']
+
+
+def test_candidate_error_aggregates_collection_conflict_and_dangling_endpoints():
+    data = _grounding()
+    original = copy.deepcopy(data)
+    base = GlobalEdit.model_validate({
+        'collection_edits': [{
+            'collection': 'characters',
+            'expected_collection_sha256': subject_sha256(
+                data['entities']['characters']),
+            'operations': [{'op': 'delete', 'subject_id': 'char_001'}],
+        }, {
+            'collection': 'relations',
+            'expected_collection_sha256': subject_sha256(
+                data['entities']['relations']),
+            'operations': [{
+                'op': 'add', 'item': {
+                    'relation_id': 'rel_21', 'subject_id': 'char_001',
+                    'object_id': 'char_015', 'predicate': '共同核账',
+                    'predicate_evidence': _locator(),
+                    'visibility': {'kind': 'public', 'from_chapter': 1},
+                    'valid_from_chapter': 1, 'valid_through_chapter': None,
+                },
+            }, {
+                'op': 'add', 'item': {
+                    'relation_id': 'rel_22', 'subject_id': 'char_015',
+                    'object_id': 'char_001', 'predicate': '互相核账',
+                    'predicate_evidence': _locator(),
+                    'visibility': {'kind': 'public', 'from_chapter': 1},
+                    'valid_from_chapter': 1, 'valid_through_chapter': None,
+                },
+            }],
+        }],
+    })
+    # 当前 schema 已在 wire loader 拦下这一冲突；model_copy 只模拟存量 durable
+    # v1 action，证明 producer preflight 仍会关闭式聚合而不是 first-error masking。
+    direct_patch = GlobalEdit.model_validate({'characters': [{
+        'char_id': 'char_001', 'name_distinctiveness': 'medium'}],
+    }).characters
+    legacy = base.model_copy(update={'characters': direct_patch})
+
+    with pytest.raises(extract.GlobalEditCandidateRejected) as caught:
+        _apply_secret_patches(data, legacy, {1, 2})
+
+    reason = str(caught.value)
+    assert 'direct_collection_subject_conflict:1' in reason
+    assert 'dangling_relation_endpoint:4' in reason
+    assert re.search(r'diagnostic_sha256=[0-9a-f]{64}', reason)
+    assert 'char_001' not in reason
+    assert 'char_015' not in reason
+    assert 'rel_21' not in reason
+    assert 'rel_22' not in reason
+    diagnostics = caught.value.diagnostics
+    assert any(
+        row.get('category') == 'direct_collection_subject_conflict'
+        and row.get('subject_id') == 'char_001'
+        for row in diagnostics)
+    assert any(
+        row.get('category') == 'dangling_relation_endpoint'
+        and row.get('relation_id') == 'rel_21'
+        and row.get('target_id') == 'char_015'
+        for row in diagnostics)
+    assert any(
+        row.get('category') == 'dangling_relation_endpoint'
+        and row.get('relation_id') == 'rel_22'
+        and row.get('target_id') == 'char_015'
+        for row in diagnostics)
+    assert data == original
 
 
 def test_collection_delta_split_is_ordered_and_stale_hash_does_not_mutate():
@@ -528,9 +690,7 @@ def _compact_sparse_response(
             }],
             'secrets': [],
             'world_rules': [],
-            'collection_edits': [{
-                'collection': 'world_rules',
-                'operations': [{
+            'collection_edits': {'world_rules': [{
                     'op': 'add',
                     'item': {
                         'rule_id': 'wr_03',
@@ -541,8 +701,7 @@ def _compact_sparse_response(
                             'desc_evidence': _locator(3, new_locator),
                         }],
                     },
-                }],
-            }],
+                }]},
         }},
     }
 
@@ -803,9 +962,267 @@ def test_collection_delete_refuses_a_dangling_relation_and_keeps_input_unchanged
         }],
     })
 
-    with pytest.raises(TerminalState, match='无效引用'):
+    with pytest.raises(extract.GlobalEditCandidateRejected) as caught:
         _apply_secret_patches(data, edit, {1, 2})
+    assert 'dangling_secret_reference:1' in caught.value.safe_summary
     assert data == original
+
+
+def test_global_edit_preflight_rejects_dangling_endpoint_without_writing(tmp_path):
+    book = tmp_path / '候选预检不写盘_904'
+    book.mkdir()
+    _seed(book)
+    ctx = _ctx(book, 'stage2.global', paid=False)
+    current = ArtifactStore(ctx).read(
+        GlobalGrounding, extract.GLOBAL_REL).model_dump(
+            mode='json', by_alias=True)
+    before = {
+        path.relative_to(book).as_posix(): path.read_bytes()
+        for path in book.rglob('*') if path.is_file()
+    }
+    edit = GlobalEdit.model_validate({
+        'collection_edits': [{
+            'collection': 'relations',
+            'expected_collection_sha256': subject_sha256(
+                current['entities']['relations']),
+            'operations': [{'op': 'add', 'item': {
+                'relation_id': 'rel_99', 'subject_id': 'char_001',
+                'object_id': 'char_999', 'predicate': '共同核账',
+                'predicate_evidence': _locator(),
+                'visibility': {'kind': 'public', 'from_chapter': 1},
+                'valid_from_chapter': 1, 'valid_through_chapter': None,
+            }}],
+        }],
+    })
+
+    with pytest.raises(extract.GlobalEditCandidateRejected) as caught:
+        extract.preflight_global_edit(
+            ctx, edit)
+
+    reason = caught.value.safe_summary
+    assert 'dangling_relation_endpoint:1' in reason
+    assert re.search(r'diagnostic_sha256=[0-9a-f]{64}', reason)
+    assert 'rel_99' not in reason
+    assert 'char_999' not in reason
+    after = {
+        path.relative_to(book).as_posix(): path.read_bytes()
+        for path in book.rglob('*') if path.is_file()
+    }
+    assert after == before
+    for rel in (
+        extract.GLOBAL_EDIT, extract.GLOBAL_EDIT_INPUT_COMMIT,
+        extract.GLOBAL_EDIT_COMMIT, extract.GLOBAL_EDIT_FAILURE,
+    ):
+        assert not (book / rel).exists()
+
+
+def _book_file_snapshot(book: Path) -> dict[str, bytes]:
+    return {
+        path.relative_to(book).as_posix(): path.read_bytes()
+        for path in book.rglob('*') if path.is_file()
+    }
+
+
+@pytest.mark.parametrize('route', ['preflight', 'run_apply_edit'])
+@pytest.mark.parametrize(
+    ('case', 'missing_subject'),
+    [('direct_missing', 'rel_99'), ('delete_referenced', 'rel_01')],
+)
+def test_arc_track_subject_must_exist_after_the_complete_edit_without_writing(
+        tmp_path, route, case, missing_subject):
+    """预检与正式 apply 共用修后 registry，拒绝结果不得留下 canonical/WAL。"""
+    book = tmp_path / f'弧线主体悬空_{route}_{case}_906'
+    book.mkdir()
+    _seed(book)
+    ctx = _ctx(book, 'stage2.global', paid=False)
+    current = ArtifactStore(ctx).read(
+        GlobalGrounding, extract.GLOBAL_REL).model_dump(
+            mode='json', by_alias=True)
+    payload: dict = {
+        'arc_tracks': [{'track_index': 0, 'subject': missing_subject}],
+    }
+    if case == 'delete_referenced':
+        payload['collection_edits'] = [{
+            'collection': 'relations',
+            'expected_collection_sha256': subject_sha256(
+                current['entities']['relations']),
+            'operations': [{'op': 'delete', 'subject_id': 'rel_01'}],
+        }]
+    edit = GlobalEdit.model_validate(payload)
+    if route == 'run_apply_edit':
+        _write_edit(book, edit.model_dump(
+            mode='json', by_alias=True, exclude_unset=True))
+        # GlobalEdit 是本轮输入；和真实 CLI 一样，在输入落盘后重铸 context。
+        ctx = _ctx(book, 'stage2.global', paid=False)
+    before = _book_file_snapshot(book)
+
+    with pytest.raises(extract.GlobalEditCandidateRejected) as caught:
+        if route == 'preflight':
+            extract.preflight_global_edit(ctx, edit)
+        else:
+            extract.run_apply_edit(ctx)
+
+    reason = caught.value.safe_summary
+    assert 'dangling_arc_track_subject:1' in reason
+    assert re.search(r'diagnostic_sha256=[0-9a-f]{64}', reason)
+    assert missing_subject not in reason
+    assert any(
+        row.get('category') == 'dangling_arc_track_subject'
+        and row.get('target_id') == missing_subject
+        for row in caught.value.diagnostics
+    )
+    assert _book_file_snapshot(book) == before
+    for rel in (
+        extract.GLOBAL_EDIT_INPUT_COMMIT,
+        extract.GLOBAL_EDIT_COMMIT,
+        extract.GLOBAL_EDIT_FAILURE,
+    ):
+        assert not (book / rel).exists()
+
+
+@pytest.mark.parametrize(
+    'subject_kind',
+    ['reader', 'existing_character', 'existing_relation',
+     'new_character', 'new_relation'],
+)
+def test_global_edit_preflight_accepts_resolvable_arc_track_subjects(
+        tmp_path, subject_kind):
+    book = tmp_path / f'弧线主体合法_{subject_kind}_907'
+    book.mkdir()
+    _seed(book)
+    ctx = _ctx(book, 'stage2.global', paid=False)
+    current = ArtifactStore(ctx).read(
+        GlobalGrounding, extract.GLOBAL_REL).model_dump(
+            mode='json', by_alias=True)
+    collection_edits: list[dict] = []
+    if subject_kind == 'reader':
+        subject = 'reader'
+    elif subject_kind == 'existing_character':
+        subject = 'char_002'
+    elif subject_kind == 'existing_relation':
+        subject = 'rel_01'
+    elif subject_kind == 'new_character':
+        subject = 'char_999'
+        collection_edits.append({
+            'collection': 'characters',
+            'expected_collection_sha256': subject_sha256(
+                current['entities']['characters']),
+            'operations': [{'op': 'add', 'item': {
+                'char_id': subject,
+                'canonical': '周衡',
+                'address': [{
+                    'surface': '周衡', 'by': 'public',
+                    'context': 'reference', 'from_chapter': 3,
+                }],
+                'name_distinctiveness': 'high',
+                'role': '协助核账的人',
+                'role_evidence': _locator(
+                    3, '李宝珠把账册摊在桌上一页页翻。'),
+                'fate': None,
+                'fate_evidence': None,
+            }}],
+        })
+    else:
+        subject = 'rel_99'
+        collection_edits.append({
+            'collection': 'relations',
+            'expected_collection_sha256': subject_sha256(
+                current['entities']['relations']),
+            'operations': [{'op': 'add', 'item': {
+                'relation_id': subject,
+                'subject_id': 'char_001',
+                'object_id': 'char_002',
+                'predicate': '共同核账',
+                'predicate_evidence': _locator(
+                    2, '其实母亲早就知道那封信的事。'),
+                'visibility': {'kind': 'public', 'from_chapter': 2},
+                'valid_from_chapter': 2,
+                'valid_through_chapter': None,
+            }}],
+        })
+    edit = GlobalEdit.model_validate({
+        'arc_tracks': [{'track_index': 0, 'subject': subject}],
+        'collection_edits': collection_edits,
+    })
+    before = _book_file_snapshot(book)
+
+    extract.preflight_global_edit(ctx, edit)
+
+    assert _book_file_snapshot(book) == before
+
+
+def test_candidate_shape_rejection_hashes_dynamic_validation_location(
+        tmp_path, monkeypatch):
+    """Pydantic 动态 loc/extra key 只进完整诊断 SHA，不进入外部拒因。"""
+    book = tmp_path / '候选形状脱敏_905'
+    book.mkdir()
+    _seed(book)
+    ctx = _ctx(book, 'stage2.global', paid=False)
+    store = ArtifactStore(ctx)
+    previous = store.read(GlobalGrounding, extract.GLOBAL_REL)
+    raw = previous.model_dump(mode='json', by_alias=True)
+    main_text = extract._read_main_text(store)
+    assert main_text is not None
+    edit = GlobalEdit.model_validate({'characters': [{
+        'char_id': 'char_001', 'name_distinctiveness': 'medium',
+    }]})
+
+    attack_key = 'PAYLOAD_DO_NOT_ECHO_char_001'
+    malicious = previous.model_dump(mode='json', by_alias=True)
+    malicious['entities']['characters']['char_001'][attack_key] = '正文也不可回显'
+    with pytest.raises(ValidationError) as generated:
+        GlobalGrounding.model_validate(malicious)
+    shape_error = generated.value
+
+    def reject_shape(_cls, _value):
+        raise shape_error
+
+    monkeypatch.setattr(
+        extract.GlobalGrounding, 'model_validate', classmethod(reject_shape))
+    with pytest.raises(extract.GlobalEditCandidateRejected) as caught:
+        extract._build_global_edit_candidate(previous, raw, edit, main_text)
+
+    summary = caught.value.safe_summary
+    assert 'candidate_shape:1' in summary
+    assert re.search(r'diagnostic_sha256=[0-9a-f]{64}', summary)
+    assert attack_key not in summary
+    assert 'char_001' not in summary
+    assert '正文也不可回显' not in summary
+    assert any(
+        attack_key in row.get('loc', ()) for row in caught.value.diagnostics)
+
+
+def test_candidate_normalization_terminal_is_business_but_io_is_unknown(
+        tmp_path, monkeypatch):
+    book = tmp_path / '候选归一分类_906'
+    book.mkdir()
+    _seed(book)
+    ctx = _ctx(book, 'stage2.global', paid=False)
+    store = ArtifactStore(ctx)
+    previous = store.read(GlobalGrounding, extract.GLOBAL_REL)
+    raw = previous.model_dump(mode='json', by_alias=True)
+    main_text = extract._read_main_text(store)
+    assert main_text is not None
+    edit = GlobalEdit.model_validate({'characters': [{
+        'char_id': 'char_001', 'name_distinctiveness': 'medium',
+    }]})
+
+    marker = 'MODEL_PAYLOAD_char_999'
+    monkeypatch.setattr(
+        extract, 'normalize_global',
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            TerminalState(marker)))
+    with pytest.raises(extract.GlobalEditCandidateRejected) as caught:
+        extract._build_global_edit_candidate(previous, raw, edit, main_text)
+    assert 'candidate_normalization:1' in caught.value.safe_summary
+    assert marker not in caught.value.safe_summary
+
+    monkeypatch.setattr(
+        extract, 'normalize_global',
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            OSError('synthetic storage failure')))
+    with pytest.raises(OSError, match='storage failure'):
+        extract._build_global_edit_candidate(previous, raw, edit, main_text)
 
 
 def test_complete_arc_replacement_covers_climax_ending_and_tracks():
@@ -1201,46 +1618,48 @@ def test_partial_patches_preserve_their_complete_collection_invariants(payload, 
         GlobalEdit.model_validate(payload)
 
 
-@pytest.mark.parametrize('payload,match', [
+@pytest.mark.parametrize('payload,category', [
     ({'secrets_replace': [{
         'secret_id': 'secret_02', 'fact': '事实',
         'fact_evidence': _locator(),
         'knowledge_events': _knowledge(char_id='char_999'),
         'setup': {'kind': 'cold'},
         'first_reveal_chapter': 1,
-    }]}, 'char_id'),
+    }]}, 'dangling_character_reference'),
     ({'addresses_replace': [{
         'char_id': 'char_001', 'address': [{
             'surface': '掌柜', 'by': 'char_999', 'context': 'address',
             'from_chapter': 1,
         }],
-    }]}, r'address\.0\.by'),
+    }]}, 'dangling_character_reference'),
     ({'addresses_replace': [{
         'char_id': 'char_999', 'address': [{
             'surface': '掌柜', 'by': 'public', 'context': 'address',
             'from_chapter': 1,
         }],
-    }]}, 'character'),
+    }]}, 'missing_patch_subject'),
     ({'world_rules_replace': [{
         'rule_id': 'wr_02', 'kind': 'institution',
         'versions': [{'effective_from_chapter': 9, 'desc': '越界制度',
                       'desc_evidence': _locator()}],
-    }]}, '章号'),
+    }]}, 'invalid_chapter_reference'),
     ({'addresses_replace': [{
         'char_id': 'char_001', 'address': [{
             'surface': '掌柜', 'by': 'public', 'context': 'address',
             'from_chapter': 9,
         }],
-    }]}, '章号'),
+    }]}, 'invalid_chapter_reference'),
 ])
-def test_complete_replacement_validates_every_reference_before_mutating(payload, match):
+def test_complete_replacement_validates_every_reference_before_mutating(
+        payload, category):
     data = _grounding()
     before = repr(data)
     edit = GlobalEdit.model_validate(payload)
 
-    with pytest.raises(TerminalState, match=match):
+    with pytest.raises(extract.GlobalEditCandidateRejected) as caught:
         _apply_secret_patches(data, edit, {1, 2})
 
+    assert f'{category}:1' in caught.value.safe_summary
     assert repr(data) == before
 
 
@@ -1261,9 +1680,10 @@ def test_relation_window_is_rejected_before_mutating_the_caller():
         'relations': [{'relation_id': 'rel_01', 'valid_from_chapter': 2}],
     })
 
-    with pytest.raises(TerminalState, match=r'rel_01\.window=2>1'):
+    with pytest.raises(extract.GlobalEditCandidateRejected) as caught:
         _apply_secret_patches(data, edit, {1, 2})
 
+    assert 'invalid_relation_window:1' in caught.value.safe_summary
     assert repr(data) == before
 
 
@@ -1274,9 +1694,10 @@ def test_fate_evidence_only_cannot_attach_to_an_empty_fate_or_mutate_the_caller(
         'char_id': 'char_001', 'fate_evidence': _locator(),
     }]})
 
-    with pytest.raises(TerminalState, match='fate/fate_evidence pairing'):
+    with pytest.raises(extract.GlobalEditCandidateRejected) as caught:
         _apply_secret_patches(data, edit, {1, 2})
 
+    assert 'invalid_fate_evidence_pair:1' in caught.value.safe_summary
     assert repr(data) == before
 
 

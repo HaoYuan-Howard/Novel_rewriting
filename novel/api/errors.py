@@ -159,6 +159,12 @@ STATUS: dict[type[NovelError], int] = {
 #: ⚠ 那条边界哪天松了（比如有人把付费路直接接进 HTTP 层），这张表要跟着改——
 #: 而上面那条测试会逼他先来读这段话。
 UNREACHABLE_OVER_HTTP: dict[str, str] = {
+    'GlobalEditCandidateRejected': (
+        'Stage2 GlobalEdit 的纯内存候选边界；canonical CLI 会把它映射为终态退出码，'
+        'Agent Supervisor 预检也会先转成私有控制流并在席位账内闭合，HTTP 路由不会接到异常对象'),
+    '_Stage2ReviewerPreflightRejected': (
+        'Agent Supervisor 已持久化 Reviewer action 后的内部预检控制流；只在同一 AgentRun '
+        '内转成 Stage2 canonical_action 拒因或 unknown，不会穿过 HTTP 边界'),
     '_PostEditReviewRejected': (
         'Stage2 reviewed-edit 修后复核的 producer 私有控制流；只在 canonical '
         'CLI 子进程内抛出，并由 run_apply_edit 先落 typed GlobalEditFailure 后'

@@ -1321,6 +1321,30 @@ class GlobalEdit(StrictModel):
         if conflict:
             raise ValueError(
                 f'集合不能同时走 delta edit 与完整 replacement：{conflict}')
+        direct_patch_targets = {
+            'characters': {
+                *(row.char_id for row in self.characters),
+                *(row.char_id for row in self.addresses),
+                *(row.char_id for row in self.addresses_replace),
+            },
+            'relations': {row.relation_id for row in self.relations},
+            'secrets': {row.secret_id for row in self.secrets},
+            'world_rules': {row.rule_id for row in self.world_rules},
+        }
+        removed_or_split_targets: dict[str, set[str]] = {
+            name: set() for name in direct_patch_targets
+        }
+        for collection_edit in self.collection_edits:
+            for operation in collection_edit.operations:
+                if isinstance(operation, (
+                        GlobalCollectionDelete, GlobalCollectionSplit)):
+                    removed_or_split_targets[collection_edit.collection].add(
+                        operation.subject_id)
+        if any(
+                direct_patch_targets[name] & removed_or_split_targets[name]
+                for name in direct_patch_targets):
+            raise ValueError(
+                '直接字段 patch 主体不得同时被同集合 delete/split')
         for label, rows, key in (
             ('secret', self.secrets_replace, 'secret_id'),
             ('world rule', self.world_rules_replace, 'rule_id'),

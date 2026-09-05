@@ -193,6 +193,16 @@ submission option 下发，最终仍由同一 schema/loader 复验；否则模�
 明示每个 op 的闭合键集，不加宽 loader 兼容错误形状。单行 schema 看不见的父 model 跨操作不变量
 也必须明示下发：例如 split 输出不复用输入主体，输入/输出各自唯一且不相交。对这类
 静态生产拒因可用严格白名单 reason code 指导纠错，不得回显可能含正文/ID 的任意 validator 消息。
+同一语义身份最多一次若是生成协议的不变量，应优先把身份提升为 object key，而不是要求模型在
+list 里自行维持唯一，再靠交付后的 validator 拒绝；后者虽然保护正式数据，却已经消耗不可返还的
+模型席位。Stage2 compact collection 因此使用由 immutable template 动态铸造的固定键 object，
+canonical artifact 仍可在可信组装后保持原 list 形状。文本 JSON 入口还要拒绝重复 object key，
+不能让解析器的 last-wins 悄悄改变模型实际交付。
+
+schema 只能关掉结构岔路，不能代替依赖正式基线的候选验证。付费 typed 回答先 durable 并闭合原席，
+再在 canonical 子进程前复用 producer 的同一纯候选构造器检查 post-edit registry、外键与章号；业务
+拒绝可安全记回原 response digest，读盘/身份/审计异常则保留 durable 动作并停为 unknown。这样既不
+复制业务 linter，也不会在预检崩溃窗丢掉已经付费取得的回答。
 修后证明的完整性同样按主体身份而不是人的逻辑
 推断：只改成员字段而未改 ID 集时，集合完整性 hash 可能不变；凡仍以同一 identity 存活的旧 FAIL/UNVER
 都须显式复判，最后仍由内存 apply→normalize→reenumerate 后的生产安全闸判存活，外层不复制判据。

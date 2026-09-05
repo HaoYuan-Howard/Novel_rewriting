@@ -83,7 +83,7 @@ from novel.stages.stage2.blueprint_evidence_candidates import (
 )
 from novel.stages.stage2 import global_role_fate_patch
 from novel.stages.stage2.normalize import (
-    EvidenceLocatorCorrection,
+    EvidenceLocatorCorrection, GlobalNormalizationAccounting,
     normalize_blueprints, normalize_global,
     restore_failed_global_evidence_locators,
 )
@@ -6774,8 +6774,52 @@ def _prepare_reviewed_edit_commit(
     return journal
 
 
+class GlobalEditCandidateRejected(TerminalState):
+    """纯内存 GlobalEdit 候选被业务边界拒绝，且对外原因不含 payload。
+
+    ``diagnostics`` 只留在当前异常对象内供本地调试；跨进程日志、席位账与
+    correction prompt 只能消费 ``safe_summary``。摘要只发布代码定义的类别、
+    数量与完整诊断的 canonical SHA，绝不回显模型提供的 ID、正文、extra key
+    或 Pydantic ``loc``。
+    """
+
+    def __init__(self, diagnostics: list[dict[str, Any]]) -> None:
+        if not diagnostics:
+            raise ValueError('GlobalEdit candidate rejection 缺诊断')
+        frozen = sorted(
+            (copy.deepcopy(row) for row in diagnostics),
+            key=lambda row: json.dumps(
+                row, ensure_ascii=False, sort_keys=True,
+                separators=(',', ':'), allow_nan=False),
+        )
+        counts: dict[str, int] = {}
+        for row in frozen:
+            category = row.get('category')
+            if not isinstance(category, str) or not category:
+                raise ValueError('GlobalEdit candidate rejection 缺稳定 category')
+            counts[category] = counts.get(category, 0) + 1
+        self.diagnostics = tuple(frozen)
+        self.diagnostic_sha256 = _canonical_sha256(frozen)
+        categories = ','.join(
+            f'{category}:{counts[category]}' for category in sorted(counts))
+        self.safe_summary = (
+            'Stage2 GlobalEdit 候选被 producer 业务边界拒绝；'
+            f'categories={categories}；'
+            f'diagnostic_sha256={self.diagnostic_sha256}')
+        super().__init__(self.safe_summary)
+
+
+@dataclass(frozen=True)
+class _GlobalEditCandidate:
+    """同供 preflight 与 canonical producer 消费的无写盘候选。"""
+
+    data: dict[str, Any]
+    accounting: GlobalNormalizationAccounting
+    changed: list[str]
+
+
 def _apply_secret_patches(data: dict[str, Any], edit: GlobalEdit,
-                          ordinals: set[int]) -> list[str]:
+                           ordinals: set[int]) -> list[str]:
     """把 typed 人工决定应用到内存候选，并在任何写盘前关闭式校验引用/章号。
 
     历史函数名为兼容测试与仓外调用保留；当前编辑面已覆盖全部会被 2b/2c HARD
@@ -6790,6 +6834,10 @@ def _apply_secret_patches(data: dict[str, Any], edit: GlobalEdit,
     canon = candidate.get('canon') or {}
     arc = candidate.get('arc') or {}
     changed: list[str] = []
+    removed_or_split: dict[str, set[str]] = {
+        name: set() for name in (
+            'characters', 'relations', 'secrets', 'world_rules')
+    }
 
     def collection_value(name: str) -> Any:
         if name == 'characters':
@@ -6853,6 +6901,7 @@ def _apply_secret_patches(data: dict[str, Any], edit: GlobalEdit,
                     raise TerminalState(
                         f'{name} delete 的 id 不存在：{identity}')
                 ordered.pop(positions[identity])
+                removed_or_split[name].add(identity)
                 changed.append(f'{name}.delete.{identity}')
             elif isinstance(operation, GlobalCollectionSplit):
                 identity = operation.subject_id
@@ -6871,6 +6920,7 @@ def _apply_secret_patches(data: dict[str, Any], edit: GlobalEdit,
                         {'char_id': replacement_id, **payload}
                         if name == 'characters' else payload)
                 ordered[positions[identity]:positions[identity] + 1] = replacements
+                removed_or_split[name].add(identity)
                 changed.append(
                     f'{name}.split.{identity}->{",".join(replacement_ids)}')
             else:  # pragma: no cover —— schema discriminator 已闭合
@@ -6907,35 +6957,72 @@ def _apply_secret_patches(data: dict[str, Any], edit: GlobalEdit,
                       for row in (entities.get('relations') or [])}
     tracks = arc.get('arc_tracks') or []
 
+    direct_targets = {
+        'secret': {patch.secret_id for patch in edit.secrets},
+        'world rule': {patch.rule_id for patch in edit.world_rules},
+        'relation': {patch.relation_id for patch in edit.relations},
+        'character': {
+            patch.char_id for patch in [
+                *edit.characters, *edit.addresses, *edit.addresses_replace]
+        },
+    }
+    collection_names = {
+        'secret': 'secrets',
+        'world rule': 'world_rules',
+        'relation': 'relations',
+        'character': 'characters',
+    }
+    conflicts = {
+        kind: sorted(targets & removed_or_split[collection_names[kind]])
+        for kind, targets in direct_targets.items()
+    }
+    conflicts = {kind: values for kind, values in conflicts.items() if values}
     unknown = {
         'secret': sorted(p.secret_id for p in edit.secrets
-                         if p.secret_id not in secret_by_id),
+                         if p.secret_id not in secret_by_id
+                         and p.secret_id not in conflicts.get('secret', ())),
         'world rule': sorted(p.rule_id for p in edit.world_rules
-                             if p.rule_id not in rule_by_id),
+                             if p.rule_id not in rule_by_id
+                             and p.rule_id not in conflicts.get('world rule', ())),
         'relation': sorted(p.relation_id for p in edit.relations
-                           if p.relation_id not in relation_by_id),
+                           if p.relation_id not in relation_by_id
+                           and p.relation_id not in conflicts.get('relation', ())),
         'character': sorted(p.char_id for p in [
             *edit.characters, *edit.addresses, *edit.addresses_replace]
-                            if p.char_id not in characters),
+                            if p.char_id not in characters
+                            and p.char_id not in conflicts.get('character', ())),
     }
     unknown = {kind: values for kind, values in unknown.items() if values}
-    if unknown:
-        existing = {
-            'secret': sorted(secret_by_id),
-            'world rule': sorted(rule_by_id),
-            'relation': sorted(relation_by_id),
-            'character': sorted(characters),
-        }
-        raise TerminalState(
-            f'编辑文件指向盘上不存在的 subject：{unknown}；盘上现有：{existing}')
+    candidate_diagnostics: list[dict[str, Any]] = []
+    for kind, values in sorted(conflicts.items()):
+        collection = collection_names[kind]
+        candidate_diagnostics.extend({
+            'category': 'direct_collection_subject_conflict',
+            'collection': collection,
+            'subject_id': identity,
+        } for identity in values)
+    for kind, values in sorted(unknown.items()):
+        candidate_diagnostics.extend({
+            'category': 'missing_patch_subject',
+            'subject_kind': kind,
+            'subject_id': identity,
+        } for identity in values)
     bad_track = sorted(p.track_index for p in edit.arc_tracks
                        if p.track_index >= len(tracks))
     bad_address = sorted((p.char_id, p.address_index) for p in edit.addresses
-                         if p.address_index >= len(
+                         if p.char_id in characters and p.address_index >= len(
                              (characters.get(p.char_id) or {}).get('address') or []))
-    if bad_track or bad_address:
-        raise TerminalState(
-            f'编辑文件指向不存在的下标：arc_tracks={bad_track}, address={bad_address}')
+    candidate_diagnostics.extend({
+        'category': 'missing_patch_index',
+        'subject_kind': 'arc_track',
+        'index': index,
+    } for index in bad_track)
+    candidate_diagnostics.extend({
+        'category': 'missing_patch_index',
+        'subject_kind': 'address',
+        'subject_id': char_id,
+        'index': index,
+    } for char_id, index in bad_address)
 
     def dump(value: Any) -> Any:
         if isinstance(value, StrictModel):
@@ -6960,6 +7047,8 @@ def _apply_secret_patches(data: dict[str, Any], edit: GlobalEdit,
         changed.append('canon.secrets')
     else:
         for patch in edit.secrets:
+            if patch.secret_id not in secret_by_id:
+                continue
             apply_fields(secret_by_id[patch.secret_id], patch, patch.secret_id,
                          skip={'secret_id'})
 
@@ -6969,6 +7058,8 @@ def _apply_secret_patches(data: dict[str, Any], edit: GlobalEdit,
         changed.append('canon.world_rules')
     else:
         for patch in edit.world_rules:
+            if patch.rule_id not in rule_by_id:
+                continue
             apply_fields(rule_by_id[patch.rule_id], patch, patch.rule_id,
                          skip={'rule_id'})
 
@@ -6978,10 +7069,14 @@ def _apply_secret_patches(data: dict[str, Any], edit: GlobalEdit,
         changed.append('entities.relations')
     else:
         for patch in edit.relations:
+            if patch.relation_id not in relation_by_id:
+                continue
             apply_fields(relation_by_id[patch.relation_id], patch, patch.relation_id,
                          skip={'relation_id'})
 
     for patch in edit.characters:
+        if patch.char_id not in characters:
+            continue
         target = characters[patch.char_id]
         apply_fields(target, patch, patch.char_id, skip={'char_id'})
         if 'fate' in patch.model_fields_set and patch.fate is None:
@@ -7017,46 +7112,88 @@ def _apply_secret_patches(data: dict[str, Any], edit: GlobalEdit,
         changed.append('arc.arc_tracks')
     else:
         for patch in edit.arc_tracks:
+            if patch.track_index >= len(tracks):
+                continue
             apply_fields(tracks[patch.track_index], patch,
                          f'arc.arc_tracks.{patch.track_index}', skip={'track_index'})
     for replacement in edit.addresses_replace:
+        if replacement.char_id not in characters:
+            continue
         characters[replacement.char_id]['address'] = [
             row.model_dump(by_alias=True) for row in replacement.address]
         changed.append(f'{replacement.char_id}.address')
     for patch in edit.addresses:
+        if (patch.char_id not in characters
+                or patch.address_index >= len(
+                    characters[patch.char_id].get('address') or [])):
+            continue
         characters[patch.char_id]['address'][patch.address_index]['context'] = patch.context
         changed.append(f'{patch.char_id}.address.{patch.address_index}.context')
 
     # 校验**应用后的完整候选**，这样“删了 secret 却留下 via_secret 引用”也会在写盘前出声。
-    bad_refs: list[str] = []
-    bad_chapters: list[str] = []
+    bad_refs: list[dict[str, Any]] = []
+    bad_chapters: list[dict[str, Any]] = []
 
     def chapter(path: str, value: Any) -> None:
         if type(value) is not int or value not in ordinals:
-            bad_chapters.append(f'{path}={value!r}')
+            bad_chapters.append({
+                'category': 'invalid_chapter_reference',
+                'path': path,
+                'value': repr(value),
+            })
 
     resulting_secrets = canon.get('secrets') or []
     secret_ids = {row.get('secret_id') for row in resulting_secrets
                   if isinstance(row, dict)}
+    resulting_relation_ids = {
+        row['relation_id']
+        for row in (entities.get('relations') or [])
+        if (isinstance(row, dict)
+            and isinstance(row.get('relation_id'), str))
+    }
+    arc_track_subjects = {
+        'reader', *characters.keys(), *resulting_relation_ids,
+    }
+    for index, track in enumerate(arc.get('arc_tracks') or []):
+        subject = track.get('subject') if isinstance(track, dict) else None
+        if subject not in arc_track_subjects:
+            bad_refs.append({
+                'category': 'dangling_arc_track_subject',
+                'track_index': index,
+                'target_id': subject,
+            })
     for relation in (entities.get('relations') or []):
         rid = relation.get('relation_id')
         for key in ('subject_id', 'object_id'):
             if relation.get(key) not in characters:
-                bad_refs.append(f'{rid}.{key}={relation.get(key)!r}')
+                bad_refs.append({
+                    'category': 'dangling_relation_endpoint',
+                    'relation_id': rid,
+                    'endpoint': key,
+                    'target_id': relation.get(key),
+                })
         start = relation.get('valid_from_chapter')
         chapter(f'{rid}.valid_from_chapter', start)
         through = relation.get('valid_through_chapter')
         if through is not None:
             chapter(f'{rid}.valid_through_chapter', through)
         if type(start) is int and type(through) is int and through < start:
-            bad_refs.append(f'{rid}.window={start}>{through}')
+            bad_refs.append({
+                'category': 'invalid_relation_window',
+                'relation_id': rid,
+                'valid_from_chapter': start,
+                'valid_through_chapter': through,
+            })
         visibility = relation.get('visibility') or {}
         if visibility.get('kind') == 'public':
             chapter(f'{rid}.visibility.from_chapter', visibility.get('from_chapter'))
         elif visibility.get('kind') == 'via_secret':
             if visibility.get('secret_id') not in secret_ids:
-                bad_refs.append(
-                    f'{rid}.visibility.secret_id={visibility.get("secret_id")!r}')
+                bad_refs.append({
+                    'category': 'dangling_secret_reference',
+                    'relation_id': rid,
+                    'target_id': visibility.get('secret_id'),
+                })
 
     for secret in resulting_secrets:
         sid = secret.get('secret_id')
@@ -7070,8 +7207,12 @@ def _apply_secret_patches(data: dict[str, Any], edit: GlobalEdit,
             subject = event.get('subject') or {}
             if (subject.get('kind') == 'character'
                     and subject.get('char_id') not in characters):
-                bad_refs.append(
-                    f'{sid}.knowledge_events.char_id={subject.get("char_id")!r}')
+                bad_refs.append({
+                    'category': 'dangling_character_reference',
+                    'owner_kind': 'secret_knowledge_event',
+                    'owner_id': sid,
+                    'target_id': subject.get('char_id'),
+                })
     for rule in (canon.get('world_rules') or []):
         for version in (rule.get('versions') or []):
             chapter(f'{rule.get("rule_id")}.versions.effective_from_chapter',
@@ -7079,24 +7220,132 @@ def _apply_secret_patches(data: dict[str, Any], edit: GlobalEdit,
     for cid, character in characters.items():
         if ((character.get('fate') is None)
                 != (character.get('fate_evidence') is None)):
-            bad_refs.append(f'{cid}.fate/fate_evidence pairing')
+            bad_refs.append({
+                'category': 'invalid_fate_evidence_pair',
+                'character_id': cid,
+            })
         for index, address in enumerate(character.get('address') or []):
             chapter(f'{cid}.address.{index}.from_chapter', address.get('from_chapter'))
             by = address.get('by')
             if (isinstance(by, str) and re.fullmatch(r'char_\d+', by)
                     and by not in characters):
-                bad_refs.append(f'{cid}.address.{index}.by={by!r}')
+                bad_refs.append({
+                    'category': 'dangling_character_reference',
+                    'owner_kind': 'character_address',
+                    'owner_id': cid,
+                    'index': index,
+                    'target_id': by,
+                })
     for path, owner, field in iter_global_evidence_slots(candidate):
         evidence = owner.get(field) or {}
         chapter(f'{path}.{field}.chapter_ordinal', evidence.get('chapter_ordinal'))
 
-    if bad_refs or bad_chapters:
-        raise TerminalState(
-            f'编辑后的候选含无效引用/章号：refs={sorted(bad_refs)}, '
-            f'chapters={sorted(bad_chapters)}；盘上章集合={sorted(ordinals)}')
+    diagnostics = [
+        *candidate_diagnostics, *bad_refs, *bad_chapters,
+    ]
+    if diagnostics:
+        raise GlobalEditCandidateRejected(diagnostics)
     data.clear()
     data.update(candidate)
     return changed
+
+
+def _build_global_edit_candidate(
+    previous: GlobalGrounding,
+    raw: dict[str, Any],
+    edit: GlobalEdit,
+    main_text: list[dict[str, Any]],
+) -> _GlobalEditCandidate:
+    """构造并验证完整业务候选；纯内存且是 apply/preflight 的唯一判据。"""
+    previous_business = copy.deepcopy(raw)
+    previous_business.pop('_provenance', None)
+    data = copy.deepcopy(previous_business)
+    ordinals = {
+        int(section.get('chapter_ordinal') or 0) for section in main_text
+    }
+    try:
+        changed = _apply_secret_patches(data, edit, ordinals)
+    except GlobalEditCandidateRejected:
+        raise
+    except TerminalState as exc:
+        raise GlobalEditCandidateRejected([{
+            'category': 'candidate_application',
+            'error_type': type(exc).__name__,
+            'detail': str(exc),
+        }]) from exc
+    try:
+        data, accounting = normalize_global(data, main_text)
+    except TerminalState as exc:
+        # normalize 是纯内存 producer 判据。它明确给出的 TerminalState 属于
+        # 候选业务拒绝；OSError/结构性异常等其他失败仍原样上抛为 unknown。
+        raise GlobalEditCandidateRejected([{
+            'category': 'candidate_normalization',
+            'error_type': type(exc).__name__,
+            'detail': str(exc),
+        }]) from exc
+    if data == previous_business:
+        raise GlobalEditCandidateRejected([{
+            'category': 'candidate_noop',
+            'detail': (
+                'GlobalEdit 应用并归一后没有改变任何业务字节；拒绝把原样模板'
+                '写成一轮“已修复”并重新触发 reviewer'),
+        }])
+
+    # 这里只借前稿 provenance 验证完整业务形状，不声称新动作已经 canonical；
+    # 真正 inputs/by 仍只由 run_apply_edit 在 WAL 之后重写。
+    provisional_provenance = previous.provenance.model_dump(
+        mode='json', by_alias=True)
+    provisional_provenance.update(accounting)
+    provisional_provenance['gates_skipped'] = None
+    try:
+        GlobalGrounding.model_validate({
+            **data, '_provenance': provisional_provenance})
+    except ValidationError as exc:
+        # loc/msg 可能含模型提供的动态 dict key 或正文，只进入异常内部诊断
+        # 的 canonical SHA；safe_summary 不直接发布其中任何一个字节。
+        diagnostics = [{
+            'category': 'candidate_shape',
+            'type': str(error.get('type') or 'unknown'),
+            'loc': [str(part) for part in error.get('loc', ())],
+            'message': str(error.get('msg') or ''),
+        } for error in exc.errors(
+            include_url=False, include_context=False, include_input=False)]
+        raise GlobalEditCandidateRejected(diagnostics or [{
+            'category': 'candidate_shape',
+            'type': 'unknown',
+            'loc': [],
+            'message': type(exc).__name__,
+        }]) from exc
+    return _GlobalEditCandidate(
+        data=data, accounting=accounting, changed=changed)
+
+
+def preflight_global_edit(ctx: RunContext, edit: GlobalEdit) -> None:
+    """在任何 canonical/正式写盘前，以 producer 唯一候选构建器只读预检。"""
+    if ctx.node != 'stage2.global':
+        raise TerminalState(f'{ctx.node} 不能预检 Stage2 GlobalEdit')
+    store = ArtifactStore(ctx)
+    main_text = _read_main_text(store)
+    if main_text is None:
+        raise UpstreamMissing(f'{MAIN_TEXT} 不在盘上——无法预检 GlobalEdit')
+    if store.exists(GLOBAL_EDIT_COMMIT):
+        live_commit = store.read_own(
+            GlobalEditCommit, GLOBAL_EDIT_COMMIT)[0]
+        if live_commit.state == 'prepared':
+            raise ProvenanceRefused(
+                'reviewed-edit prepared commit 尚未补完；拒绝预检新的 apply-edit')
+    previous_review = store.read_own(
+        GlobalReview, GLOBAL_REVIEW_REL, require_current=True)[0]
+    if edit.post_edit_review is not None:
+        previous = store.read_own(
+            GlobalGrounding, GLOBAL_REL, require_current=True,
+            replaced_input_keys=(GLOBAL_EDIT,))[0]
+        raw = previous.model_dump(mode='json', by_alias=True)
+        require_current_review(raw, previous_review)
+    else:
+        previous, raw, _source_rel = _global_source(
+            store, replaced_edit_rel=GLOBAL_EDIT)
+    _build_global_edit_candidate(previous, raw, edit, main_text)
 
 
 class _PostEditReviewRejected(TerminalState):
@@ -7301,8 +7550,6 @@ def run_apply_edit(ctx: RunContext, edit_path: str = '') -> tuple[GlobalGroundin
     chapter_ordinals = [
         int(section.get('chapter_ordinal') or 0) for section in main_text
     ]
-    ordinals = set(chapter_ordinals)
-
     with stage2_global_runs.mutation_ownership(ctx):
         if store.exists(GLOBAL_EDIT_COMMIT):
             live_commit = store.read_own(
@@ -7332,22 +7579,17 @@ def run_apply_edit(ctx: RunContext, edit_path: str = '') -> tuple[GlobalGroundin
             reviewed_formal_sha256 = store.full_sha256_or_none(source_rel)
             if reviewed_formal_sha256 is None:  # pragma: no cover —— source 已读
                 raise UpstreamMissing(f'{source_rel} 不在盘上')
-        previous_business = copy.deepcopy(raw)
-        previous_business.pop('_provenance', None)
         reviewed_workpack_sha256: str | None = None
         if submitted_edit.post_edit_review is not None:
             from novel.stages.stage2 import global_review as global_review_ops
             reviewed_workpack_sha256 = str(global_review_ops.review_workpack(
                 ctx, scope='blocking',
                 replaced_input_keys=(GLOBAL_EDIT,))['workpack_sha256'])
-        data = copy.deepcopy(raw)
-        data.pop('_provenance', None)
-        changed = _apply_secret_patches(data, submitted_edit, ordinals)
-        data, accounting = normalize_global(data, main_text)
-        if data == previous_business:
-            raise TerminalState(
-                'GlobalEdit 应用并归一后没有改变任何业务字节；拒绝把原样模板'
-                '写成一轮“已修复”并重新触发 reviewer')
+        prepared_candidate = _build_global_edit_candidate(
+            previous, raw, submitted_edit, main_text)
+        data = prepared_candidate.data
+        accounting = prepared_candidate.accounting
+        changed = prepared_candidate.changed
 
         # service edit 只是一次性运输载体。CLI 在确认它确有业务变化后，才把同一
         # typed payload 写进书内唯一输入落点；新 Global 的 provenance 因而永远

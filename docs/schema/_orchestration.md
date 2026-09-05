@@ -426,15 +426,26 @@ Executor 会话；付费 Executor 自己的候选/修复仍在节点 logical ses
 collection→member model 映射与局部 Pydantic operation schema，最终仍由现役 GlobalEdit 复验。
 `submission_options[].exact_request` 仍是本地 canonical action 的完整模板；只有 headless Stage2 task
 唯一开放的 submission option 恰为 `--apply-edit` 时，provider 回答才换成
-`novel-stage2-reviewer-delta-v1` compact wire。若任务同时开放 review-decisions、隔离或其他合法选项，
+`novel-stage2-reviewer-delta-v2` compact wire。若任务同时开放 review-decisions、隔离或其他合法选项，
 仍使用完整 action response，不能让 transport 优化吞掉分支。compact 只交被开放的
 patch 行、collection operations、replacement 与 `post_edit_review` 判断，并以 option id 与
-exact-request SHA 绑定当前模板。Supervisor 从这份 immutable exact request 注入 wrapper/action/flags、
-所有未变行、actor/source/workpack/chapter/default/review_scope、collection SHA 与 decision subject SHA，
-再组装完整 request 交 `reviewer_tasks.load_action`；assembler 不判断哪些旧 review item 在修后仍存活，
+exact-request SHA 绑定当前模板。compact v2 的 `collection_edits` 是只含本模板开放集合的固定键
+object：所有键 required、额外键关闭、每键值直接是专型 operation 数组；空数组表示本轮不提交，
+订正时保留 failed baseline，撤销只走 opaque `drop_targets`。旧 v1 row list 不兼容。Supervisor 从
+这份 immutable exact request 注入 wrapper/action/flags、actor/source/workpack/chapter/default/
+review_scope、collection identity/SHA 与 decision subject SHA，只为模型显式提交的业务行组装完整
+request 交 `reviewer_tasks.load_action`，不得把未变 no-op 行带回 sparse edit；assembler 不判断哪些旧 review item 在修后仍存活，
 该结论仍只来自 producer 的 apply/normalize/HARD/reenumerate 链。compact 原始 JSON 的规范 digest 只用于
 拒因、重复请求和 no-progress；物化后的 full candidate/residue 使用其自身内容 digest，不能拿前者命名
 后者。
+旧 compact v1 当时只是 provider 瞬时运输而非 artifact；历史 ledger 的 digest/rejection 不迁移，已经持久化为完整
+canonical ReviewerActionRecord 的动作仍按原记录重放。文本 JSON 解码递归拒绝重复 object key。
+结构上可判断的 direct patch 与同集合 delete/split 同主体冲突由 canonical `GlobalEdit` loader
+统一拒绝。依赖正式 Global/MainText 的 post-edit registry 与外键判据不在 orchestration 重写：
+Stage2 回答先按 R-11.25 保存 full ReviewerActionRecord 并闭合原席，再调用 producer 与正式执行共用的
+纯候选预检；业务拒绝以原 provider-response digest 记回该席并删除 action，不启动 canonical Executor，
+且持久拒因只含稳定类别、计数与完整诊断 SHA，不回显模型可控值；预检读盘、身份或审计异常则以
+unknown 停止并保留 action 供零模型重放。
 返工可在同一 typed 输入合并 GlobalEdit 与 `post_edit_review`；后者只准对模板 `review_scope` 中仍保持同一
 `item_id + subject_sha256` 的旧项提交 `decisions`，且这类 surviving 旧 FAIL/UNVER 必须全部显式复判；
 不能因 edit 逻辑上似乎修好就漏掉 hash 未变的集合完整性（例如只改 relation 成员字段而 ID 集未变时的

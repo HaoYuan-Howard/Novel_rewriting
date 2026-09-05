@@ -67,7 +67,7 @@ from novel.agents.session_client import agent_json_schema
 from novel.orchestrator import queue
 
 
-WIRE_SCHEMA = 'novel-stage2-reviewer-delta-v1'
+WIRE_SCHEMA = 'novel-stage2-reviewer-delta-v2'
 
 
 # 这些文本逐字来自 ``GlobalCollectionEdit._operations_match_collection`` 的静态
@@ -89,6 +89,10 @@ _SAFE_VALIDATION_REASONS: dict[str, tuple[str, str]] = {
     'Value error, 集合操作的输入 id 与输出 id 不得重叠': (
         'collection_input_output_id_overlap',
         'collection operation 的输入 id 与输出 id 不得重叠',
+    ),
+    'Value error, 直接字段 patch 主体不得同时被同集合 delete/split': (
+        'direct_patch_subject_removed_by_collection_edit',
+        '直接字段 patch 主体不得同时被同集合 delete/split',
     ),
 }
 
@@ -186,31 +190,11 @@ _SecretOperation = _collection_operation_type('Secret', SecretResponse)
 _WorldRuleOperation = _collection_operation_type('WorldRule', WorldRuleResponse)
 
 
-class _CharacterCollectionDelta(StrictModel):
-    collection: Literal['characters']
-    operations: list[_CharacterOperation]
-
-
-class _RelationCollectionDelta(StrictModel):
-    collection: Literal['relations']
-    operations: list[_RelationOperation]
-
-
-class _SecretCollectionDelta(StrictModel):
-    collection: Literal['secrets']
-    operations: list[_SecretOperation]
-
-
-class _WorldRuleCollectionDelta(StrictModel):
-    collection: Literal['world_rules']
-    operations: list[_WorldRuleOperation]
-
-
-_COLLECTION_WIRE_MODELS: dict[str, type[StrictModel]] = {
-    'characters': _CharacterCollectionDelta,
-    'relations': _RelationCollectionDelta,
-    'secrets': _SecretCollectionDelta,
-    'world_rules': _WorldRuleCollectionDelta,
+_COLLECTION_OPERATION_TYPES: dict[str, Any] = {
+    'characters': _CharacterOperation,
+    'relations': _RelationOperation,
+    'secrets': _SecretOperation,
+    'world_rules': _WorldRuleOperation,
 }
 
 
@@ -422,18 +406,22 @@ def _setting_wire_type(value: Any, digest: str) -> Any:
     return model | None
 
 
-def _collection_list_wire_type(
-    value: Any, *, require_nonempty_operations: bool = False,
-) -> Any:
+def _collection_object_wire_type(value: Any, digest: str) -> type[StrictModel]:
+    """把 canonical collection 行铸成按集合固定键的关闭 object。
+
+    provider 只填写每个集合的 operations 数组；collection identity 与 SHA 均由
+    immutable template 注入。固定键让同一 collection 在 native schema 中不可重复，
+    也比 ``[{collection, operations}]`` 少一层重复身份与 union 包装。
+    """
     if not isinstance(value, list) or any(not isinstance(row, dict) for row in value):
         raise Stage2ReviewerWireError(
             '可信模板 GlobalEdit.collection_edits 必须是 object 数组')
-    models: list[type[StrictModel]] = []
+    fields: dict[str, tuple[Any, Any]] = {}
     seen: set[str] = set()
     for row in value:
         collection = row.get('collection')
         expected_sha = row.get('expected_collection_sha256')
-        if (collection not in _COLLECTION_WIRE_MODELS
+        if (collection not in _COLLECTION_OPERATION_TYPES
                 or not isinstance(expected_sha, str)
                 or set(row) != {
                     'collection', 'expected_collection_sha256', 'operations'}):
@@ -442,19 +430,12 @@ def _collection_list_wire_type(
         if collection in seen:
             raise Stage2ReviewerWireError('可信模板重复开放同一 collection')
         seen.add(collection)
-        model = _COLLECTION_WIRE_MODELS[collection]
-        if require_nonempty_operations:
-            operations = model.model_fields['operations']
-            model = create_model(
-                f'{model.__name__}Correction',
-                __base__=model,
-                operations=(
-                    operations.rebuild_annotation(),
-                    Field(..., min_length=1),
-                ),
-            )
-        models.append(model)
-    return _union(models)
+        fields[collection] = (list[_COLLECTION_OPERATION_TYPES[collection]], ...)
+    return create_model(
+        f'Stage2CollectionEditsDelta_{digest}',
+        __base__=StrictModel,
+        **fields,
+    )
 
 
 def _post_review_wire_type(value: Any, digest: str) -> type[StrictModel]:
@@ -522,8 +503,7 @@ def response_model(task: _ReviewerTaskLike) -> type[StrictModel]:
         elif key in _REPLACEMENT_WIRE_TYPES:
             annotation = _REPLACEMENT_WIRE_TYPES[key]
         elif key == 'collection_edits':
-            annotation = _collection_list_wire_type(
-                value, require_nonempty_operations=correction)
+            annotation = _collection_object_wire_type(value, digest)
         elif key == 'post_edit_review':
             annotation = _post_review_wire_type(value, digest)
         else:
@@ -598,8 +578,17 @@ def prompt_addendum(task: object) -> str:
     drop_targets = _drop_target_map(edit) if correction else {}
     compact_edit: dict[str, Any] = {}
     for key in edit:
-        if key in _PATCH_MODELS or key == 'collection_edits':
+        if key in _PATCH_MODELS:
             compact_edit[key] = []
+        elif key == 'collection_edits':
+            if not isinstance(edit[key], list):
+                raise Stage2ReviewerWireError(
+                    '可信模板 GlobalEdit.collection_edits 必须是 object 数组')
+            compact_edit[key] = {
+                row['collection']: []
+                for row in edit[key]
+                if isinstance(row, dict) and isinstance(row.get('collection'), str)
+            }
         elif key == 'setting' or key in _REPLACEMENT_WIRE_TYPES:
             compact_edit[key] = None
         elif key == 'post_edit_review':
@@ -628,10 +617,10 @@ def prompt_addendum(task: object) -> str:
         delta_semantics = f"""
 本轮是 correction：exact_request.input_payload 是上一轮在 canonical 边界被分类拒绝的
 **failed sparse edit**（可能是 HARD、候选载体或 post-review 失败），也是本轮默认保留的
-可信业务基线。``[]``/``null`` 表示不改上一轮该面，绝不
-表示删除。显式 patch 行按稳定 identity 替换上一轮同一行；显式 collection 行完整替换
-该 collection 的 operations，且显式提交的行必须含至少一个 operation；顶层
-``collection_edits:[]`` 只表示本轮不更新任何 collection。需要撤掉 failed edit 中
+可信业务基线。patch 的 ``[]``、setting/replacement 的 ``null``，以及
+``collection_edits`` 每个固定集合键的 ``[]`` 都表示不改上一轮该面，绝不表示删除。
+显式 patch 行按稳定 identity 替换上一轮同一行；collection 固定键的非空数组完整替换
+该 collection 的 operations。需要撤掉 failed edit 中
 某个 patch 行、setting、replacement 或整条 collection edit 时，
 把下面闭集里的 opaque token 放进 ``payload.drop_targets``；不得重复，也不得同时更新和
 drop 同一目标。未列入 drop_targets 且未显式更新的上一轮改动必须保留。只有 post-review
@@ -658,8 +647,8 @@ chapter/default/review_scope，也不要在 decisions 行回抄 expected_subject
 CLI 原生 schema 出现。{delta_semantics}
 
 patch 行一旦出现，必须交回该模板主体已经开放的完整字段集，不能新增主体或字段。
-collection 行只交 collection +
-operations；add 用 ``{{"op":"add","item":...}}``，不得使用 ``value``。修后复核只交
+``collection_edits`` 是按模板开放集合固定键的 object，每个键的值只交 operations
+数组；add 用 ``{{"op":"add","item":...}}``，不得使用 ``value``。修后复核只交
 reason/quarantine_groups/decisions；每条 decision 交 item_id/state/reason/evidence/
 generation_disposition（无 disposition 时显式 null），Supervisor 按 item_id 注入 subject
 hash。仍以同一 hash 存活的旧 FAIL/UNVER（包括集合完整性项）必须逐项列入 decisions；
@@ -806,30 +795,34 @@ def _wire_characters_replace(value: Any) -> dict[str, Any] | None:
     return output
 
 
-def _overlay_collection_rows(
+def _overlay_collection_object(
     baseline: Any, submitted: Any,
 ) -> tuple[list[dict[str, Any]], bool]:
-    if not isinstance(baseline, list) or not isinstance(submitted, list):
-        raise Stage2ReviewerWireError('GlobalEdit.collection_edits compact wire 不是数组')
-    by_collection = {
-        row.get('collection'): row
-        for row in baseline if isinstance(row, dict)
-    }
-    if len(by_collection) != len(baseline):
-        raise Stage2ReviewerWireError('可信 collection template 身份不唯一')
+    if not isinstance(baseline, list) or not isinstance(submitted, dict):
+        raise Stage2ReviewerWireError(
+            'GlobalEdit.collection_edits compact wire 不是固定键 object')
+    template_rows: list[tuple[str, dict[str, Any]]] = []
     seen: set[str] = set()
-    selected: list[dict[str, Any]] = []
-    for row in submitted:
-        if not isinstance(row, dict):
-            raise Stage2ReviewerWireError('collection compact row 不是 object')
-        collection = row.get('collection')
+    for row in baseline:
+        collection = row.get('collection') if isinstance(row, dict) else None
         if not isinstance(collection, str) or collection in seen:
-            raise Stage2ReviewerWireError('collection compact row 身份缺失或重复')
+            raise Stage2ReviewerWireError('可信 collection template 身份不唯一')
         seen.add(collection)
-        target = by_collection.get(collection)
-        if target is None:
-            raise Stage2ReviewerWireError('collection compact row 越出模板集合')
-        operations = row.get('operations')
+        template_rows.append((collection, row))
+    if set(submitted) != seen:
+        raise Stage2ReviewerWireError(
+            'collection compact object 的固定键与模板不一致')
+    if len(template_rows) != len(baseline):
+        raise Stage2ReviewerWireError('可信 collection template 身份不唯一')
+    selected: list[dict[str, Any]] = []
+    # canonical 输出顺序只认 immutable template；provider object 的插入顺序不是契约。
+    for collection, target in template_rows:
+        operations = submitted[collection]
+        if not isinstance(operations, list):
+            raise Stage2ReviewerWireError(
+                f'collection {collection} compact operations 不是数组')
+        if not operations:
+            continue
         if operations == target.get('operations'):
             raise Stage2ReviewerWireError(
                 f'collection {collection} operations 没有形成实际变更')
@@ -1013,14 +1006,7 @@ def _assemble_correction_edit(
                 selected_targets.add(('field', key, ()))
                 local_changed = True
         elif key == 'collection_edits':
-            if any(
-                    isinstance(row, Mapping)
-                    and row.get('operations') == []
-                    for row in value):
-                raise Stage2ReviewerWireError(
-                    'Stage2 correction collection 行的 operations 不得为空；'
-                    '撤销整行只能使用 drop_targets')
-            selected, local_changed = _overlay_collection_rows(
+            selected, local_changed = _overlay_collection_object(
                 template_edit[key], value)
             if local_changed:
                 current = merged.get(key)
@@ -1171,7 +1157,7 @@ def assemble(
                     sparse_edit[key] = replacement
                     local_changed = True
             elif key == 'collection_edits':
-                selected, local_changed = _overlay_collection_rows(
+                selected, local_changed = _overlay_collection_object(
                     template_edit[key], value)
                 if local_changed:
                     sparse_edit[key] = selected

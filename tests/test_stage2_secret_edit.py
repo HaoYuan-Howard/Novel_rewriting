@@ -796,9 +796,10 @@ def test_a_noop_service_global_edit_is_rejected_before_canonical_staging():
         })
         service_path = uploads.save_global_edit(root, '322', edit)
 
-        with pytest.raises(TerminalState, match='没有改变任何业务字节'):
+        with pytest.raises(extract.GlobalEditCandidateRejected) as caught:
             extract.run_apply_edit(
                 _ctx(book, 'stage2.global', paid=False), str(service_path))
+        assert 'candidate_noop:1' in caught.value.safe_summary
         assert not (book / extract.GLOBAL_EDIT).exists()
     finally:
         shutil.rmtree(root)
@@ -1461,8 +1462,10 @@ def test_bad_conflict_partition_replacement_changes_no_artifact_bytes(
             for path in book.rglob('*') if path.is_file()
         }
 
-        with pytest.raises(TerminalState, match=detail):
+        with pytest.raises(extract.GlobalEditCandidateRejected) as caught:
             _apply(book)
+        assert 'candidate_application:1' in caught.value.safe_summary
+        assert detail not in caught.value.safe_summary
 
         bytes_after = {
             path.relative_to(book): path.read_bytes()
@@ -1663,8 +1666,9 @@ def test_an_out_of_range_chapter_is_refused_before_anything_is_written(payload, 
         _seed(book)
         before = (book / extract.GLOBAL_REL).read_bytes()
         _write_edit(book, payload)
-        with pytest.raises(TerminalState, match='无效引用/章号'):
+        with pytest.raises(extract.GlobalEditCandidateRejected) as caught:
             _apply(book)
+        assert 'invalid_chapter_reference:1' in caught.value.safe_summary
         assert (book / extract.GLOBAL_REL).read_bytes() == before, f'{why}：正式底座被动过了'
         assert not (book / extract._GLOBAL_INVALID).exists(), \
             f'{why}：决策集自己错了，不该给它建一份 `.INVALID` 归档'
@@ -1673,16 +1677,18 @@ def test_an_out_of_range_chapter_is_refused_before_anything_is_written(payload, 
         shutil.rmtree(root, ignore_errors=True)
 
 
-def test_an_unknown_secret_id_is_refused_with_the_current_set_spelled_out():
-    """指向盘上没有的 secret ⇒ 显式终态，并把现有集合写出来（人才知道该改什么）。"""
+def test_an_unknown_secret_id_is_refused_without_echoing_model_payload():
+    """指向盘上没有的 secret ⇒ 显式终态，但持久拒因不得回显模型 ID。"""
     root, book = _sandbox('未知secret_007')
     try:
         _seed(book)
         _write_edit(book, {'secrets': [{
             'secret_id': 'secret_09', 'fact': '凭空一条',
             'fact_evidence': _fact_locator()}]})
-        with pytest.raises(TerminalState, match='secret_01'):
+        with pytest.raises(extract.GlobalEditCandidateRejected) as caught:
             _apply(book)
+        assert 'missing_patch_subject:1' in caught.value.safe_summary
+        assert 'secret_09' not in caught.value.safe_summary
         assert not (book / extract._GLOBAL_INVALID).exists()
     finally:
         shutil.rmtree(root, ignore_errors=True)
@@ -1702,8 +1708,10 @@ def test_a_dangling_known_by_reference_is_rejected_before_any_artifact_write():
         _write_edit(book, {'secrets': [
             {'secret_id': 'secret_01',
              'knowledge_events': [_knowledge_character('char_777', 1)]}]})
-        with pytest.raises(TerminalState, match='char_777'):
+        with pytest.raises(extract.GlobalEditCandidateRejected) as caught:
             _apply(book)
+        assert 'dangling_character_reference:1' in caught.value.safe_summary
+        assert 'char_777' not in caught.value.safe_summary
         assert (book / extract.GLOBAL_REL).read_bytes() == before
         assert not (book / extract._GLOBAL_INVALID).exists()
         assert not (book / 'stage2' / '_rounds').exists()

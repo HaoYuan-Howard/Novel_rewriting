@@ -69,10 +69,20 @@ def test_stage2_contract_closes_collection_operations_and_surviving_review():
     assert '`delete/split` 触及的输入 ID 不得重复' in stage2
     assert '`add/split` 产生的输出 ID 不得重复' in stage2
     assert '全部输入 ID 与输出 ID 必须不相交' in stage2
-    assert '空数组与 setting/replacement 的 `null` 都表示本次不提交' in stage2
+    assert '直接字段 patch 的主体必须仍存在' in stage2
+    assert '外键必须在修后主体集合中存在' in stage2
+    assert '`novel-stage2-reviewer-delta-v2`' in stage2
+    assert '按模板开放集合固定键的 object' in stage2
+    assert '不得输出旧 row-list transport' in stage2
+    assert '其他 patch 数组的空数组与 setting/replacement 的 `null`' in stage2
+    assert '订正时空 collection 键保留 failed baseline' in stage2
     assert '相同 `item_id + subject_sha256` 存活' in stage2
     assert '不能因逻辑上已随 edit 修好就省略' in stage2
     assert '`relation_set_complete` 的主体 hash 不变，仍须显式决定' in stage2
+    assert 'canonical full-action 每行必须显式提交' in stage2
+    assert 'compact transport 每行则提交' in stage2
+    assert '`expected_subject_sha256` 由 Supervisor 可信注入' in stage2
+    assert '无 disposition 时也必须显式提交 `null`' in stage2
 
 
 def test_anchor_parser_fails_closed_on_broken_blocks():

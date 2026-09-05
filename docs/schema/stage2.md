@@ -403,42 +403,64 @@ hinge 那一侧的 LCS 兜底本来就是禁的 ⇒ 那笔账**结构性恒空**
 WorldRuleResponse`。Reviewer submission option 只对模板实际开放的 collection 下发这份
 collection→member 映射，以及继承现役 operation model、专门化当前成员 model 后由 Pydantic
 现场生成的局部 JSON Schema；最终仍由同一个 `GlobalEdit` loader 与 producer 复验，不形成兼容别名
-或第二套写入语义。父 model 还会跨同一 collection 的全部 operations 强制四条 ID
+或第二套写入语义。形状中立的 `collection_operation_contract` 同时声明 canonical
+`action.input_payload.collection_edits[].operations[]` 与 compact v2
+`payload.edit.collection_edits.<collection>[]` 两条路径，避免多选 full-action 与唯一 compact task
+收到互相矛盾的填法。父 model 还会跨同一 collection 的全部 operations 强制四条 ID
 不变量：`split` 输出不复用被拆主体；每个输入主体最多被 `delete/split` 触及一次；
 所有 `add/split` 输出 ID 唯一；全部输入 ID 与输出 ID 不相交。这四条不能从单个 operation
 的 JSON Schema 推出，因此 submission option 的 `allowed_values` 与 Reviewer prompt 也必须明示，
 非 compact 响应若违反则由 typed loader 返回不含主体值的严格白名单 reason code。
+跨写口还必须保证 direct patch 主体不被同一 collection edit 的 delete/split 移除；collection
+应用后的 relation endpoint、secret knowledge subject 与 address 等外键必须落在修后主体 registry。
+前者由 `GlobalEdit` 静态 validator 关闭，后者依赖正式基线并由下述 producer 共用预检关闭。
 
 ### Headless Reviewer compact wire 与稀疏 canonical edit
 
 `submission_options[].exact_request` 仍保存 `novel-reviewer-action-v1` 的完整 canonical request；公开
 typed action、CLI producer 与书内 `global_edit.json` 的形状均未改变。只有 headless AgentRun 当前
 immutable task 的唯一 submission option 恰为 `stage2.global --apply-edit` 时，Commander response 才使用运输协议
-`novel-stage2-reviewer-delta-v1`：顶层只回传该 schema、唯一 `option_id`、
+`novel-stage2-reviewer-delta-v2`：顶层只回传该 schema、唯一 `option_id`、
 `expected_exact_request_sha256` 与 `payload.edit`。动态 provider schema 从本次 exact request 铸造，
-只开放模板已有的顶层 edit 字段和稳定主体；patch/collection 的 `[]` 表示本次**不提交**
+只开放模板已有的顶层 edit 字段和稳定主体。canonical `collection_edits` 仍是
+`GlobalCollectionEdit[]`；compact v2 则把它表示为只含本模板开放集合的固定键 object，
+每个键的值直接是该集合专型 operation 数组，所有键 required、额外键关闭，因此一个集合在
+provider typed 值中天然至多出现一次。旧 v1 row list 不兼容且关闭式拒绝。patch 数组与
+collection 固定键的 `[]` 表示本次**不提交**
 该写口，setting/replacement 的 `null` 也只是运输层“不提交”，不是把完整模板的 no-op
 值带入业务 edit，也不是生产 replacement 里的“经复核清空”。patch 行若出现，必须提交该模板行已开放的全部
-字段；collection 行只交 `collection + operations`；`post_edit_review.decisions` 只交 item id、状态、理由、
-证据和 disposition。
+字段；collection 键只交 operations，collection identity 与 SHA 不由模型转抄；compact v2 的
+`post_edit_review.decisions` 每行只交 item id、状态、理由、证据与 disposition，后者无值时也显式为
+`null`，subject SHA 由 Supervisor 注入。canonical full-action 则仍提交含 subject SHA 的五个业务字段。
+Codex 等文本 JSON 入口递归拒绝重复 object key，不采用 last-wins。
+旧 compact v1 当时只是 provider 的瞬时运输，不是登记 artifact：历史 ledger 仅保存 digest/rejection，无需迁移；
+已经 durable 的 ReviewerActionRecord 保存的是完整 canonical action，仍按原协议零 wire 重放。
 
 Supervisor 只从同一 immutable exact request 为**已提交**行注入不可编辑 binding，并构造一份稀疏
 canonical `GlobalEdit`；不再深拷贝全量 no-op 骨架。wrapper/action/flags、actor、source/workpack/
 正文章集合、默认复核、review scope、已提交 collection 的 `expected_collection_sha256` 与
 每行 decision 的 `expected_subject_sha256` 仍由模板可信注入，既不要求模型转抄，也不从自然语言猜值。
-组装后的输入顶层字段只能是 exact template 的子集，patch 与 collection 身份则必须是各自
-模板的无重复有序子序列，已提交行的字段集合必须逐字一致；完整旧 request 仍是该绑定的特例。
+组装后的输入顶层字段只能是 exact template 的子集，patch 必须是模板的无重复有序子序列；
+collection 固定键则按可信模板顺序还原为 canonical list，已提交字段集合必须逐字一致；完整旧 request
+仍是该绑定的特例。
 reviewed template 含 `post_edit_review` 时稀疏 edit 也绝不能省略它。组装器只证明 delta 没越出模板并可还原为
 现役 `GlobalEdit` 载体；组装后仍必须调用 `reviewer_tasks.load_action` 复验 submission binding，正式 producer 仍独占
 apply → normalize → HARD → reenumerate/completeness 与最终原子写盘。尤其 surviving 旧项的判定不复制到
-组装器。
+组装器。所有 collection operations 应用后，直接字段 patch 的主体必须仍存在；relation endpoint、
+secret knowledge subject 与 address 等外键必须在修后 registry 中解析，引用新主体时必须由同一 edit
+实际 add/split。结构上可静态判断的 patch+delete/split 冲突由 `GlobalEdit` loader 关闭；依赖正式
+Global/MainText 的候选判据由 producer 的同一纯预检在 durable 回答之后、canonical 子进程之前复用，
+预检业务拒绝写回原席 provider-response digest，不启动 Executor，预检完整性/审计异常则保留 durable
+动作并以 unknown 停止。持久拒因只含稳定类别、计数与完整诊断 SHA，不回显模型可控的主体值、
+Pydantic input 或任意 extra key。
 
 correction 的 exact template 是上一轮被 canonical 边界分类拒绝的 **failed sparse edit**，
 不是一份新的空模板：未提交目标默认保留，patch 按稳定 identity 覆盖，collection 行按
-collection identity 完整替换 operations。撤销只接受 exact template 动态铸造的 opaque
-`drop_targets` 闭集；未知、重复及 update+drop 同目标均拒绝。顶层 `collection_edits: []`
-表示本轮不更新 collection；显式提交的 collection 行必须至少含一个 operation，不能再用
-`operations: []` 作为第二种隐式删除语义。显式 drop 后若不剩业务 delta，同样按 no-op 拒绝。
+collection identity 完整替换 operations。compact v2 中每个模板开放 collection 都是 required
+固定键：该键 `[]` 表示不更新并保留 failed baseline，非空数组表示完整替换该集合 operations。
+撤销只接受 exact template 动态铸造的 opaque `drop_targets` 闭集；未知、重复及 update+drop
+同目标均拒绝，不再存在 v1 顶层 row list 或 `operations: []` 的第二种隐式删除语义。显式 drop 后
+若不剩业务 delta，同样按 no-op 拒绝。
 sidecar 引入前的旧 wire 曾把 full template 行误写成显式 patch；legacy correction workpack
 因此在不改 raw edit/failure SHA 的前提下，对每个既有业务原子重走 exact formal 上的
 apply + normalize，只发布能证明形成净变化的 sparse 基线。空 collection scaffold 与写回

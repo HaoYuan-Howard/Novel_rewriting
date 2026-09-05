@@ -1492,8 +1492,17 @@ def test_stage2_fail_routes_only_to_typed_global_edit_and_loader_restores_v3(
     assert post_review['reviewed_chapter_ordinals'] == [1]
     assert post_review['default_state'] == 'PASS'
     allowed = options[0]['allowed_values']
-    assert allowed['post_edit_review.decisions[].required_fields'] == [
+    assert allowed[
+        'post_edit_review.decision_contract.canonical_required_fields'] == [
         'item_id', 'expected_subject_sha256', 'state', 'reason', 'evidence']
+    assert allowed[
+        'post_edit_review.decision_contract.compact_v2_required_fields'] == [
+            'item_id', 'state', 'reason', 'evidence', 'generation_disposition']
+    assert allowed[
+        'post_edit_review.decision_contract.compact_v2_trusted_injected_fields'] == [
+            'expected_subject_sha256']
+    assert 'compact v2 必需' in allowed[
+        'post_edit_review.decisions[].generation_disposition']
     assert allowed['post_edit_review.decisions[].state'] == [
         'PASS', 'FAIL', 'UNVER']
     assert allowed[
@@ -1588,20 +1597,24 @@ def test_all_stage2_apply_edit_options_publish_collection_operation_schema(
         if option['id'].startswith('node:stage2.global.apply-edit')
     ]
     allowed = edit_option['allowed_values']
-    assert allowed['collection_edits[].operations[].op'] == [
+    assert allowed['collection_operation_contract.canonical_path'] == (
+        'action.input_payload.collection_edits[].operations[]')
+    assert allowed['collection_operation_contract.compact_v2_path'] == (
+        'payload.edit.collection_edits.<collection>[]')
+    assert allowed['collection_operation_contract.op'] == [
         'add', 'delete', 'split']
     assert allowed[
-        'collection_edits[].operations[].required_fields_by_op'] == {
+        'collection_operation_contract.required_fields_by_op'] == {
             'add': ['op', 'item'],
             'delete': ['op', 'subject_id'],
             'split': ['op', 'subject_id', 'items'],
         }
     assert allowed[
-        'collection_edits[].operations[].split.items.min_length'] == 2
+        'collection_operation_contract.split.items.min_length'] == 2
     assert allowed[
-        'collection_edits[].operations[].forbidden_fields'] == ['value']
+        'collection_operation_contract.forbidden_fields'] == ['value']
     assert allowed[
-        'collection_edits[].operations[].cross_operation_id_invariants'] == {
+        'collection_operation_contract.cross_operation_id_invariants'] == {
             'split_output_excludes_subject': (
                 'split 的任一输出 ID 不得复用该 split.subject_id'),
             'touched_input_ids_unique': (
@@ -1611,11 +1624,18 @@ def test_all_stage2_apply_edit_options_publish_collection_operation_schema(
             'input_output_ids_disjoint': (
                 '同一集合内所有 delete/split 输入 ID 与 add/split 输出 ID '
                 '必须完全不相交'),
+            'direct_patch_subject_survives': (
+                '同一 GlobalEdit 的直接字段 patch 主体在 collection operations '
+                '应用后必须仍存在；不得一边 patch 同一主体、一边 delete/split 它'),
+            'post_edit_references_resolve': (
+                'relation endpoint、secret knowledge subject、address 等外键必须在'
+                '整份 edit 应用后的主体集合中存在；引用新主体时必须在同一 edit '
+                '的 collection add/split 中实际提交该主体'),
         }
-    assert allowed['collection_edits[].member_model_by_collection'] == {
+    assert allowed['collection_operation_contract.member_model_by_collection'] == {
         'relations': 'RelationResponse'}
     schema = allowed[
-        'collection_edits[].operations[].pydantic_schema_by_collection'][
+        'collection_operation_contract.pydantic_schema_by_collection'][
             'relations']
     assert schema['discriminator']['propertyName'] == 'op'
     assert set(schema['discriminator']['mapping']) == {'add', 'delete', 'split'}
@@ -1736,7 +1756,7 @@ def test_stage2_collection_add_value_is_rejected_by_real_load_action(
 ])
 def test_stage2_collection_cross_operation_rejection_has_safe_reason_code(
         tmp_path, operations, reason_code) -> None:
-    """四条生产 model-validator 拒因必须可操作，且不回显 payload。"""
+    """生产 model-validator 拒因必须可操作，且不回显 payload。"""
     current = _current(queue.WAITING_ON_STAGE2_REVIEW)
     options = reviewer_tasks._submission_options({
         'global': _stage2_failed_global([{
@@ -1759,6 +1779,44 @@ def test_stage2_collection_cross_operation_rejection_has_safe_reason_code(
     assert reason_code in detail
     assert 'rel_08' not in detail
     assert 'rel_09' not in detail
+    assert 'input_value' not in detail
+
+
+def test_stage2_direct_patch_and_collection_delete_has_safe_reason_code(
+        tmp_path) -> None:
+    """跨写口冲突由同一个 GlobalEdit loader 关闭，拒因不泄露 subject id。"""
+    current = _current(queue.WAITING_ON_STAGE2_REVIEW)
+    template = encode_artifact(STAGE2_GLOBAL_EDIT, {
+        'relations': [{
+            'relation_id': 'rel_08',
+            'valid_from_chapter': 1,
+        }],
+        'collection_edits': [{
+            'collection': 'relations',
+            'expected_collection_sha256': 'a' * 64,
+            'operations': [],
+        }],
+    })
+    options = reviewer_tasks._submission_options({
+        'global': _stage2_failed_global([{
+            'current_state': 'FAIL',
+            'group_key': 'relation:rel_08',
+        }]),
+        'global_edit_template': template,
+    }, current, queue.WAITING_ON_STAGE2_REVIEW)
+    request = copy.deepcopy(options[0]['exact_request'])
+    request['action']['input_payload']['collection_edits'][0][
+        'operations'] = [{'op': 'delete', 'subject_id': 'rel_08'}]
+    request['action']['input_payload']['post_edit_review']['reason'] = (
+        '已审阅精确集合修改')
+    path = tmp_path / 'direct-patch-delete.json'
+    path.write_text(json.dumps(request, ensure_ascii=False), encoding='utf-8')
+
+    with pytest.raises(reviewer_tasks.ReviewerTaskError) as caught:
+        reviewer_tasks.load_action(path, current, submission_options=options)
+    detail = str(caught.value)
+    assert 'direct_patch_subject_removed_by_collection_edit' in detail
+    assert 'rel_08' not in detail
     assert 'input_value' not in detail
 
 
@@ -2008,7 +2066,12 @@ def test_reviewer_correction_prompt_is_self_contained_for_a_fresh_session(
     assert '没有可登记证据时 evidence 也必须写成 []' in prompt
     assert 'split 输出不得复用该 subject_id' in prompt
     assert '输入 ID 与输出 ID 不得相交' in prompt
-    assert '[]/null 是“本次不提交”' in prompt
+    assert 'payload.edit.collection_edits.<collection>[]' in prompt
+    assert '直接 patch 主体必须仍存在' in prompt
+    assert '修后外键必须解析到实际存在的主体' in prompt
+    assert 'collection 固定键 []' in prompt
+    assert '订正时保留 failed baseline' in prompt
+    assert '撤销只用开放的 drop_targets' in prompt
 
 
 def test_stage2_after_edit_reviews_only_changed_pending_items() -> None:
@@ -2061,8 +2124,12 @@ def test_stage2_safe_unver_offers_quarantine_redecision_or_real_edit() -> None:
     assert decision['state'] == 'UNVER'
     assert decision['generation_disposition']['action'] == 'quarantine_group'
     edit_allowed = options[-1]['allowed_values']
-    assert edit_allowed['post_edit_review.decisions[].required_fields'] == [
+    assert edit_allowed[
+        'post_edit_review.decision_contract.canonical_required_fields'] == [
         'item_id', 'expected_subject_sha256', 'state', 'reason', 'evidence']
+    assert edit_allowed[
+        'post_edit_review.decision_contract.compact_v2_required_fields'] == [
+            'item_id', 'state', 'reason', 'evidence', 'generation_disposition']
     assert edit_allowed['post_edit_review.decisions[].state'] == [
         'PASS', 'FAIL', 'UNVER']
 
@@ -2088,8 +2155,12 @@ def test_stage2_unsafe_unver_can_be_redecided_without_forcing_a_noop_edit() -> N
     assert options[0]['exact_request']['action']['flags'] == [
         '--review-decisions', '@reviewer-input']
     edit_allowed = options[-1]['allowed_values']
-    assert edit_allowed['post_edit_review.decisions[].required_fields'] == [
+    assert edit_allowed[
+        'post_edit_review.decision_contract.canonical_required_fields'] == [
         'item_id', 'expected_subject_sha256', 'state', 'reason', 'evidence']
+    assert edit_allowed[
+        'post_edit_review.decision_contract.compact_v2_required_fields'] == [
+            'item_id', 'state', 'reason', 'evidence', 'generation_disposition']
     assert edit_allowed['post_edit_review.decisions[].state'] == [
         'PASS', 'FAIL', 'UNVER']
 
