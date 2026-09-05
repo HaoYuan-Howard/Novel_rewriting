@@ -391,6 +391,43 @@ hinge 那一侧的 LCS 兜底本来就是禁的 ⇒ 那笔账**结构性恒空**
 | `collection_edits` | `GlobalCollectionEdit[]` | 对 characters/relations/secrets/world_rules 各集合按当前集合 SHA 乐观锁提交 `add/delete/split`；只携增量成员，不重复整组已确认主体 |
 | `post_edit_review` | `GlobalEditReviewAttestation \| null` | Commander 增量轮对本次精确 edit 的自审绑定：修前 source/workpack、正文章全集、未闭合 `review_scope`、逐项 `decisions`、默认 PASS、理由及可选安全隔离组；单独出现不算编辑 |
 
+`collection_edits[].operations` 是以 `op` 判别的关闭联合，不是通用 key/value patch：
+`add` 恰含 `op + item`，`delete` 恰含 `op + subject_id`，`split` 恰含
+`op + subject_id + items` 且 `items` 至少两项，三者都没有 `value` 字段。`item/items`
+按 collection 分别使用 `CharacterCollectionItem / RelationResponse / SecretResponse /
+WorldRuleResponse`。Reviewer submission option 只对模板实际开放的 collection 下发这份
+collection→member 映射，以及继承现役 operation model、专门化当前成员 model 后由 Pydantic
+现场生成的局部 JSON Schema；最终仍由同一个 `GlobalEdit` loader 与 producer 复验，不形成兼容别名
+或第二套写入语义。
+
+### Headless Reviewer compact wire 与完整 canonical request
+
+`submission_options[].exact_request` 仍保存 `novel-reviewer-action-v1` 的完整 canonical request；公开
+typed action、CLI producer 与书内 `global_edit.json` 的形状均未改变。只有 headless AgentRun 当前
+immutable task 的唯一 submission option 恰为 `stage2.global --apply-edit` 时，Commander response 才使用运输协议
+`novel-stage2-reviewer-delta-v1`：顶层只回传该 schema、唯一 `option_id`、
+`expected_exact_request_sha256` 与 `payload.edit`。动态 provider schema 从本次 exact request 铸造，
+只开放模板已有的顶层 edit 字段和稳定主体；patch/collection 的 `[]` 表示保留可信模板，
+setting/replacement 的 `null` 同样表示保留而非清空。patch 行若出现，必须提交该模板行已开放的全部
+字段；collection 行只交 `collection + operations`；`post_edit_review.decisions` 只交 item id、状态、理由、
+证据和 disposition。
+
+Supervisor 深拷贝同一 immutable exact request 后才应用这些 delta。完整 wrapper/action/flags、未变 patch
+行、actor、source/workpack/正文章集合、默认复核、review scope、每个 collection 的
+`expected_collection_sha256` 与每行 decision 的 `expected_subject_sha256` 均由模板可信注入，既不要求
+模型转抄，也不从自然语言猜值。组装器只证明 delta 没越出模板并可还原为现役 `GlobalEdit` 载体；组装后
+仍必须调用 `reviewer_tasks.load_action` 复验完整 submission binding，正式 producer 仍独占
+apply → normalize → HARD → reenumerate/completeness 与最终原子写盘。尤其 surviving 旧项的判定不复制到
+组装器。
+
+同一 task 若还开放 `--review-decisions`、隔离或其他合法 submission option，则继续使用完整
+`novel-reviewer-action-v1` provider response；transport 优化不得让任一可执行选项失去可达性。
+
+身份也分两层：provider compact JSON 规范化后的 digest 进入本席拒因、等价请求与 no-progress 判定；
+Supervisor 实际物化的 assembled full candidate，以及晋升失败时保存的 typed-valid residue，必须另按
+自身完整字节计算 content digest。前者不能当后者的内容地址，否则同一 delta 在不同可信模板下会错误
+共用 residue 名称。
+
 集合 replacement 的 `null` 表示「没动」，允许为空的集合用显式 `[]` 表示「经复核删除全集」；
 两者不能合成默认空列表。`characters_replace`、`conflict_stages_replace`、
 `arc_tracks_replace`、`arc_replace` 与 `addresses_replace[].address` 不允许空，因为正式人物集合、
@@ -443,10 +480,14 @@ ledger、workpack identity、去重 catalog 与存活决定，不依赖隐藏聊
 消耗席位，进程重启不会补发；同一 progress fingerprint、非法 blocker 回升或席位耗尽均关闭式停止。
 
 producer 先在内存应用、归一和重枚举：本 edit 新打开的 blocking pending 项由默认 PASS/登记隔离
-证明收口；仍保持原 hash 的旧 FAIL/UNVER 只能由 `review_scope + decisions` 显式复判，不能被默认值
-洗绿。source/workpack/正文章全集漂移、任一未消解 blocking、或非白名单隔离都会在 Global/review
-原子写盘前拒绝。没有 `post_edit_review` 的公开人工 GlobalEdit 仍按旧语义重枚举 pending，不代替
-人工复核。
+证明收口；`review_scope` 中仍以相同 `item_id + subject_sha256` 存活的旧 FAIL/UNVER 必须**全部**由
+`decisions` 显式复判，不能被默认值洗绿，也不能因为人认为它在逻辑上已随 edit 修好就省略。典型反例：
+只修改既有 relation 的 `valid_from_chapter` 等成员字段而未改变 relation ID 集，
+`relation_set_complete` 的主体 hash 仍不变，因而仍是 surviving 旧 FAIL/UNVER，必须显式决定；漏交时
+最终 `generation_safety` 会以 remaining item 关闭式拒绝整次原子写盘。是否存活只有内存应用、归一、
+重枚举后才知道，Reviewer loader 不复制这道判据。source/workpack/正文章全集漂移、任一未消解
+blocking、或非白名单隔离都会在 Global/review 原子写盘前拒绝。没有 `post_edit_review` 的公开人工
+GlobalEdit 仍按旧语义重枚举 pending，不代替人工复核。
 
 `global_edit.json` 当前为 schema v3。`collection_edits`、`characters_replace`、`arc_replace`、
 扩展后的 `post_edit_review` 与 `conflict_stages_replace` 都是可缺的兼容加法，旧 v3 决策集仍能原样读取，

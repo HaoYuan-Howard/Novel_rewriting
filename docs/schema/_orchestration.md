@@ -331,6 +331,21 @@ execution drain），进程未启动为 `null`；可选 `activity` 只把同一 
 但 outer state 仍尽力落账。child executor 通过 parent contract SHA 与 current epoch identity 复验相同
 base/sid/profiles/授权/code/skill/provider context；无法复验时不得启动付费节点。
 
+Reviewer 某轮若携 provider-native output schema，`CommanderInvocation` 会先用 Executor 共用的严格
+公共子集校验，冻结为排序键、无空白的 canonical JSON 字节与 SHA-256；调用方之后修改原 mapping 不会
+改变真实 wire。带 schema 的 exact resume 必须显式回带上一轮 SHA 且与本轮规范字节完全一致。该真实
+schema SHA 进入本 logical session 的 `started / attempt / turn / ended` 四类
+`agent_sessions.jsonl` 事件和在线 `CommanderSessionPointer`；只有 schema-less 请求才继续用
+provider observation protocol hash，不能在同一席位混用两种身份。
+
+两家 CLI 只在运输方式上不同。Codex invocation 的 `--output-schema` 路径按 schema SHA 固定在本 epoch
+scratch 直属目录，但文件在 build/preview 时不存在：driver 只于实际 runner 生命周期以独占普通文件创建、
+逐字回读，结束后清理。硬杀留下的孤儿只在非 symlink、普通文件且内容与本轮冻结字节完全相同时回收；
+异字节或异常类型在 runner 前拒绝。清理失败不得覆盖已经观测到的 provider result，残留由下一次同字节
+调用安全回收。该临时文件不是 artifact、checkpoint、cache 或 provenance。Claude 不造文件，直接把同一
+canonical 字节内联进 `--json-schema`；因为这会占用 Windows 命令行长度，完整 argv 必须在任何
+runner/wire 前按 UTF-16 上限预检，超限以零 wire 配置失败返回。
+
 #### 2.4a `commander_admissions.jsonl` —— 顶层退出与子执行之间的持久准入账
 
 只扫 `agent_progress.jsonl` 抓不到“已经决定启动、尚未来得及写 start beacon”的窗口；顶层 Commander
@@ -406,8 +421,24 @@ Executor 会话；付费 Executor 自己的候选/修复仍在节点 logical ses
 
 `submission_options` 同时是可执行 binding：Stage2 既有字段 patch 的行数、顺序、subject id 与字段集合
 逐字保留；集合新增/删除/拆分走模板给出的 hash-bound `collection_edits.operations`，不复制整组成功主体。
+三种 operation 是关闭式形状：`add={op,item}`、`delete={op,subject_id}`、
+`split={op,subject_id,items>=2}`，没有 `value` 字段；submission option 按模板实际 collection 下发
+collection→member model 映射与局部 Pydantic operation schema，最终仍由现役 GlobalEdit 复验。
+`submission_options[].exact_request` 仍是本地 canonical action 的完整模板；只有 headless Stage2 task
+唯一开放的 submission option 恰为 `--apply-edit` 时，provider 回答才换成
+`novel-stage2-reviewer-delta-v1` compact wire。若任务同时开放 review-decisions、隔离或其他合法选项，
+仍使用完整 action response，不能让 transport 优化吞掉分支。compact 只交被开放的
+patch 行、collection operations、replacement 与 `post_edit_review` 判断，并以 option id 与
+exact-request SHA 绑定当前模板。Supervisor 从这份 immutable exact request 注入 wrapper/action/flags、
+所有未变行、actor/source/workpack/chapter/default/review_scope、collection SHA 与 decision subject SHA，
+再组装完整 request 交 `reviewer_tasks.load_action`；assembler 不判断哪些旧 review item 在修后仍存活，
+该结论仍只来自 producer 的 apply/normalize/HARD/reenumerate 链。compact 原始 JSON 的规范 digest 只用于
+拒因、重复请求和 no-progress；物化后的 full candidate/residue 使用其自身内容 digest，不能拿前者命名
+后者。
 返工可在同一 typed 输入合并 GlobalEdit 与 `post_edit_review`；后者只准对模板 `review_scope` 中仍保持同一
-hash 的旧项提交 `decisions`，新打开项才使用默认证明。typed loader 拒绝或 canonical action exit 2 时，
+`item_id + subject_sha256` 的旧项提交 `decisions`，且这类 surviving 旧 FAIL/UNVER 必须全部显式复判；
+不能因 edit 逻辑上似乎修好就漏掉 hash 未变的集合完整性（例如只改 relation 成员字段而 ID 集未变时的
+`relation_set_complete`）。新打开项才使用默认证明。typed loader 拒绝或 canonical action exit 2 时，
 Supervisor 不结束 parent，而把完整紧凑包与确定性拒因交给下一条 fresh session；相同请求字节立即停。
 该机制占用前三席中的审阅/订正额度，不能借“纠错”名义侵占第四席或扩出第五席；其他 reviewer blocker 最多接受
 两次不同纠正。重复业务主体上的等价已执行/已拒动作也由 progress fingerprint 拒绝，不能靠 review

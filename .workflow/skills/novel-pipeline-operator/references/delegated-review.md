@@ -128,9 +128,27 @@ workpack；确认完整面成立后，才把 scope 改为 `PASS`，
 
 <!-- reviewer-contract:stage2:begin -->
 1. `PASS`：主体与原文逐项一致，且集合完整性已做正向与反向核对；scope 总理由与逐项例外理由都写明分母和核验位置。
-2. `FAIL`：存在可指向的冲突、错抽或漏抽；当前增量里的问题必须一次列全。事实确有错误时从 `stage2.global --emit-edit-template` 取得当前 typed GlobalEdit。字段 patch 只能修改模板已有行，行数、顺序、subject id 与字段集合全部绑定；集合完整性的新增、删除或拆分只填写模板给出的 `collection_edits[].operations`，不得改 `collection` 或 `expected_collection_sha256`。Stage2 每个 Global/MainText 主体最多四席 Commander：一席完整审阅、至多两席定向订正、一席只读独立终审；每席使用新的 logical/provider session，同席内因网络中断的 resume 不占新席。订正席的包只含仍未闭合或因依赖变化重开的 subject cards；终审席读全部 blocking 项（含已 PASS 的理由与证据）、整书正文与 Blueprint 工作包，只能 confirm 或以自己为 actor 把指定项 reopen 为 FAIL/UNVER，不得提交任何修改，也不得为通过而复述前席理由。`post_edit_review` 绑定修前 workpack、source 与完整旧未闭合 scope：本 edit 新打开的项才走默认自审，未修改且 hash 存活的旧 FAIL/UNVER 必须在 `decisions[]` 显式复判；每行必须显式提交 `item_id / expected_subject_sha256 / state / reason / evidence`，没有可登记证据时 `evidence` 也必须写成空数组，不能省略。不能重复提交同一 review，也不能用“已知问题”把 FAIL 当成披露放行。
+2. `FAIL`：存在可指向的冲突、错抽或漏抽；当前增量里的问题必须一次列全。事实确有错误时从 `stage2.global --emit-edit-template` 取得当前 typed GlobalEdit。字段 patch 只能修改模板已有行，行数、顺序、subject id 与字段集合全部绑定；集合完整性的新增、删除或拆分只填写模板给出的 `collection_edits[].operations`，不得改 `collection` 或 `expected_collection_sha256`。operation 是关闭式判别联合：`add` 只含 `op + item`，`delete` 只含 `op + subject_id`，`split` 只含 `op + subject_id + items` 且 `items` 至少两项；没有 `value` 字段，`item/items` 必须使用 submission option 按当前 collection 下发的成员 model 与局部 Pydantic schema。Stage2 每个 Global/MainText 主体最多四席 Commander：一席完整审阅、至多两席定向订正、一席只读独立终审；每席使用新的 logical/provider session，同席内因网络中断的 resume 不占新席。订正席的包只含仍未闭合或因依赖变化重开的 subject cards；终审席读全部 blocking 项（含已 PASS 的理由与证据）、整书正文与 Blueprint 工作包，只能 confirm 或以自己为 actor 把指定项 reopen 为 FAIL/UNVER，不得提交任何修改，也不得为通过而复述前席理由。`post_edit_review` 绑定修前 workpack、source 与完整旧未闭合 scope：本 edit 新打开的项才走默认自审，review_scope 中 edit 后以相同 `item_id + subject_sha256` 存活的旧 FAIL/UNVER 必须全部在 `decisions[]` 显式复判，不能因逻辑上已随 edit 修好就省略。例：只改既有 relation 的字段而不改变 relation ID 集时，`relation_set_complete` 的主体 hash 不变，仍须显式决定。每行必须显式提交 `item_id / expected_subject_sha256 / state / reason / evidence`，没有可登记证据时 `evidence` 也必须写成空数组，不能省略。不能重复提交同一 review，也不能用“已知问题”把 FAIL 当成披露放行。
 3. `UNVER`：证据不足以安全判断；绝不改写成 PASS。只有当前 submission option 明确给出 `quarantine_group`、且该 kind 的 `generation_impact=quarantine_or_fix` 时，才可在阅读完整组后填写隔离理由：状态仍为 UNVER，原始事实与审计保留，下游写作视图删除完整组。`generation_impact=must_fix` 只有在证据支持 PASS 或能指出真实事实错误并用 GlobalEdit 修正时才能收口；材料仍不足就保持 UNVER 并以 `stopped` 结束，不为追求全绿臆造编辑。`disclose` 项不阻断生成但继续披露。
 <!-- reviewer-contract:stage2:end -->
+
+Headless AgentRun 只有在当前 immutable task **唯一开放的 submission option 恰为** Stage2
+`--apply-edit` 时，才使用一层只服务 provider 运输的 compact wire；若同一任务还开放
+`--review-decisions`、隔离或其他合法选项，仍使用完整 `novel-reviewer-action-v1`，不能为了缩短编辑
+回答让其余分支从 schema 中消失。compact 不改变上面这份裁决口径，也不把 canonical typed action
+缩成新产物。submission option 里的
+`exact_request` 仍是完整、唯一的可信模板；Commander 只返回
+`novel-stage2-reviewer-delta-v1`，填写模板开放的 patch 行、collection operations、replacement 与修后
+判断，并回带 option id + exact-request SHA。patch/collection 的 `[]`、setting/replacement 的 `null`
+都表示保留模板；一旦提交 patch 行，仍须交齐该行实际开放的字段。wrapper、flags、未变行、actor、
+source/workpack/chapter/default/review_scope、collection SHA 与 decision subject SHA 由 Supervisor 从同一
+immutable exact request 注入，Reviewer 不重抄，Supervisor 也不猜。
+
+组装后的完整 request 仍经现役 `reviewer_tasks.load_action`，然后才进 producer 的
+apply→normalize→HARD→reenumerate/completeness；组装器绝不替代本地判据或确定哪些 review item 在修后
+存活。provider compact 回答的 digest 只用于拒因、重复请求与 no-progress；若保存 assembled full
+candidate/residue，内容地址按它自己的完整字节另算，不能拿 compact digest 代替。交互式 CLI 人工入口
+仍提交现役完整 typed request，不手工仿造这层私有 transport。
 
 ### blocking 与 disclosure 是两轴，不是两档优先级
 

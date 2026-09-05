@@ -9,6 +9,7 @@ Commander driver 的零成本协议测试。
 """
 from __future__ import annotations
 
+import hashlib
 import io
 import json
 import subprocess
@@ -20,6 +21,7 @@ from pathlib import Path
 import pytest
 
 from contracts.schema.orchestration import AgentProfile
+from novel.agents import base as agent_base
 from novel.commanders import (
     ClaudeCodeCommanderDriver,
     CodexCommanderDriver,
@@ -29,6 +31,7 @@ from novel.commanders import (
     create_commander_driver,
 )
 from novel.commanders import base as commander_base
+from novel.commanders import claude_code as claude_commander
 from novel.commanders.claude_code import _posix_anchor
 
 
@@ -44,6 +47,16 @@ def _profile(driver: str) -> AgentProfile:
 
 def _completed(argv, stdout: str, stderr: str = '', returncode: int = 0):
     return subprocess.CompletedProcess(argv, returncode, stdout, stderr)
+
+
+_OUTPUT_SCHEMA = {
+    'type': 'object',
+    'properties': {
+        'schema': {'type': 'string', 'enum': ['review-v1']},
+    },
+    'required': ['schema'],
+    'additionalProperties': False,
+}
 
 
 def _claude_stream() -> str:
@@ -507,6 +520,279 @@ def test_claude_structured_result_delivers_final_response(tmp_path):
 
     result = driver.run(invocation, log=io.BytesIO(), run_id='claude-review')
     assert result.final_response == '{"schema":"novel-reviewer-action-v1"}'
+
+
+def test_output_schema_is_frozen_as_canonical_bytes_and_hash(tmp_path):
+    repo = tmp_path / 'repo'
+    scratch = tmp_path / 'scratch'
+    repo.mkdir()
+    scratch.mkdir()
+    mutable = json.loads(json.dumps(_OUTPUT_SCHEMA))
+    invocation = ClaudeCodeCommanderDriver(
+        executable='claude.exe', runner=lambda *_a, **_k: None,
+    ).build_invocation(
+        _profile('claude-code'), 'review', repo=repo, base=scratch,
+        structured_response=True, output_schema=mutable)
+    expected = json.dumps(
+        _OUTPUT_SCHEMA, ensure_ascii=False, sort_keys=True,
+        separators=(',', ':')).encode('utf-8')
+
+    mutable['properties']['schema']['enum'].append('drift')
+
+    assert invocation.output_schema_bytes == expected
+    assert invocation.output_schema_sha256 == hashlib.sha256(expected).hexdigest()
+    assert invocation.output_schema['properties']['schema']['enum'] == ['review-v1']
+
+
+@pytest.mark.parametrize(
+    ('driver_cls', 'driver_name', 'resume_id'),
+    [
+        (CodexCommanderDriver, 'codex', None),
+        (CodexCommanderDriver, 'codex', 'codex-thread-structured'),
+    ],
+)
+def test_codex_schema_file_covers_start_and_resume_runner_lifecycle(
+        tmp_path, driver_cls, driver_name, resume_id):
+    repo = tmp_path / 'repo'
+    scratch = tmp_path / 'scratch'
+    repo.mkdir()
+    scratch.mkdir()
+    seen: dict[str, object] = {}
+
+    def runner(argv, **_kwargs):
+        index = argv.index('--output-schema')
+        path = Path(argv[index + 1])
+        seen['path'] = path
+        seen['payload'] = path.read_bytes()
+        seen['exists_during_run'] = path.is_file()
+        return _completed(argv, _codex_structured_stream())
+
+    driver = driver_cls(executable='codex.exe', runner=runner)
+    first = driver.build_invocation(
+        _profile(driver_name), 'first', repo=repo, base=scratch,
+        structured_response=True, output_schema=_OUTPUT_SCHEMA)
+    invocation = driver.build_invocation(
+        _profile(driver_name), 'review', repo=repo, base=scratch,
+        structured_response=True, output_schema=_OUTPUT_SCHEMA,
+        resume_provider_session_id=resume_id,
+        expected_output_schema_sha256=(
+            first.output_schema_sha256 if resume_id is not None else None))
+
+    schema_index = invocation.argv.index('--output-schema')
+    if resume_id is not None:
+        assert schema_index < invocation.argv.index('resume')
+        assert invocation.argv[invocation.argv.index('resume') + 1] == resume_id
+    result = driver.run(invocation, log=io.BytesIO(), run_id='schema-wire')
+
+    assert result.final_response == '{"schema":"review-v1"}'
+    assert seen['exists_during_run'] is True
+    assert seen['payload'] == invocation.output_schema_bytes
+    assert isinstance(seen['path'], Path)
+    assert seen['path'].parent == scratch.resolve()
+    assert not seen['path'].exists()
+
+
+def test_codex_schema_file_is_cleaned_when_runner_fails(tmp_path):
+    repo = tmp_path / 'repo'
+    scratch = tmp_path / 'scratch'
+    repo.mkdir()
+    scratch.mkdir()
+    seen: dict[str, Path] = {}
+
+    def runner(argv, **_kwargs):
+        path = Path(argv[argv.index('--output-schema') + 1])
+        seen['path'] = path
+        assert path.is_file()
+        raise OSError('sentinel launch failure')
+
+    driver = CodexCommanderDriver(executable='codex.exe', runner=runner)
+    invocation = driver.build_invocation(
+        _profile('codex'), 'review', repo=repo, base=scratch,
+        structured_response=True, output_schema=_OUTPUT_SCHEMA)
+
+    with pytest.raises(commander_base.CommanderCommandError):
+        driver.run(invocation, log=io.BytesIO(), run_id='schema-failure')
+    assert not seen['path'].exists()
+
+
+def test_codex_schema_file_recovers_only_matching_regular_orphan(tmp_path):
+    repo = tmp_path / 'repo'
+    scratch = tmp_path / 'scratch'
+    repo.mkdir()
+    scratch.mkdir()
+    launched = False
+
+    def runner(argv, **_kwargs):
+        nonlocal launched
+        launched = True
+        path = Path(argv[argv.index('--output-schema') + 1])
+        assert path.read_bytes() == invocation.output_schema_bytes
+        return _completed(argv, _codex_structured_stream())
+
+    driver = CodexCommanderDriver(executable='codex.exe', runner=runner)
+    invocation = driver.build_invocation(
+        _profile('codex'), 'review', repo=repo, base=scratch,
+        structured_response=True, output_schema=_OUTPUT_SCHEMA)
+    schema_path = Path(
+        invocation.argv[invocation.argv.index('--output-schema') + 1])
+    schema_path.write_bytes(invocation.output_schema_bytes)
+
+    result = driver.run(invocation, log=io.BytesIO(), run_id='schema-orphan')
+
+    assert launched is True
+    assert result.final_response == '{"schema":"review-v1"}'
+    assert not schema_path.exists()
+
+    schema_path.write_text('{"different":true}', encoding='utf-8')
+    launched = False
+    with pytest.raises(CommanderConfigurationError, match='残留字节'):
+        driver.run(invocation, log=io.BytesIO(), run_id='schema-conflict')
+    assert launched is False
+
+
+def test_codex_schema_cleanup_failure_does_not_erase_provider_result(
+        tmp_path):
+    repo = tmp_path / 'repo'
+    scratch = tmp_path / 'scratch'
+    repo.mkdir()
+    scratch.mkdir()
+
+    def runner(argv, **_kwargs):
+        path = Path(argv[argv.index('--output-schema') + 1])
+        assert path.is_file()
+        path.unlink()
+        path.mkdir()
+        return _completed(argv, _codex_structured_stream())
+
+    driver = CodexCommanderDriver(executable='codex.exe', runner=runner)
+    invocation = driver.build_invocation(
+        _profile('codex'), 'review', repo=repo, base=scratch,
+        structured_response=True, output_schema=_OUTPUT_SCHEMA)
+
+    with pytest.warns(RuntimeWarning, match='等待下次安全回收'):
+        result = driver.run(
+            invocation, log=io.BytesIO(), run_id='schema-cleanup-failure')
+
+    assert result.final_response == '{"schema":"review-v1"}'
+
+
+@pytest.mark.parametrize('resume_id', [None, 'claude-session-1'])
+def test_claude_schema_argv_and_structured_output_cover_start_and_resume(
+        tmp_path, resume_id):
+    repo = tmp_path / 'repo'
+    scratch = tmp_path / 'scratch'
+    repo.mkdir()
+    scratch.mkdir()
+    events = [json.loads(line) for line in _claude_stream().splitlines()]
+    events[-1]['structured_output'] = {'schema': 'review-v1'}
+    events[-1]['result'] = '{"wrong":"fallback"}'
+    stdout = ''.join(json.dumps(event) + '\n' for event in events)
+    seen: dict[str, object] = {}
+
+    def runner(argv, **_kwargs):
+        seen['argv'] = argv
+        return _completed(argv, stdout)
+
+    driver = ClaudeCodeCommanderDriver(executable='claude.exe', runner=runner)
+    first = driver.build_invocation(
+        _profile('claude-code'), 'first', repo=repo, base=scratch,
+        structured_response=True, output_schema=_OUTPUT_SCHEMA)
+    invocation = driver.build_invocation(
+        _profile('claude-code'), 'review', repo=repo, base=scratch,
+        structured_response=True, output_schema=_OUTPUT_SCHEMA,
+        resume_provider_session_id=resume_id,
+        expected_output_schema_sha256=(
+            first.output_schema_sha256 if resume_id is not None else None))
+
+    schema_index = invocation.argv.index('--json-schema')
+    assert invocation.argv[schema_index + 1] == (
+        invocation.output_schema_bytes.decode('utf-8'))
+    if resume_id is not None:
+        assert invocation.argv[invocation.argv.index('--resume') + 1] == resume_id
+    result = driver.run(invocation, log=io.BytesIO(), run_id='claude-schema')
+
+    assert seen['argv'] == list(invocation.argv)
+    assert result.final_response == '{"schema":"review-v1"}'
+
+
+@pytest.mark.parametrize(
+    ('driver_cls', 'driver_name'),
+    [
+        (ClaudeCodeCommanderDriver, 'claude-code'),
+        (CodexCommanderDriver, 'codex'),
+    ],
+)
+def test_invalid_or_drifting_schema_fails_before_runner(
+        tmp_path, driver_cls, driver_name):
+    repo = tmp_path / 'repo'
+    scratch = tmp_path / 'scratch'
+    repo.mkdir()
+    scratch.mkdir()
+    launched = False
+
+    def runner(*_args, **_kwargs):
+        nonlocal launched
+        launched = True
+        raise AssertionError('非法 schema 不应到达 runner')
+
+    driver = driver_cls(
+        executable=('claude.exe' if driver_name == 'claude-code' else 'codex.exe'),
+        runner=runner)
+    invalid = {
+        'type': 'object', 'properties': {}, 'required': [],
+        'additionalProperties': True,
+    }
+    with pytest.raises(CommanderConfigurationError, match='additionalProperties'):
+        driver.build_invocation(
+            _profile(driver_name), 'review', repo=repo, base=scratch,
+            structured_response=True, output_schema=invalid)
+
+    first = driver.build_invocation(
+        _profile(driver_name), 'first', repo=repo, base=scratch,
+        structured_response=True, output_schema=_OUTPUT_SCHEMA)
+    drifted = json.loads(json.dumps(_OUTPUT_SCHEMA))
+    drifted['properties']['schema']['enum'] = ['review-v2']
+    with pytest.raises(CommanderConfigurationError, match='schema 已漂移'):
+        driver.build_invocation(
+            _profile(driver_name), 'resume', repo=repo, base=scratch,
+            structured_response=True, output_schema=drifted,
+            resume_provider_session_id='same-seat',
+            expected_output_schema_sha256=first.output_schema_sha256)
+    with pytest.raises(CommanderConfigurationError, match='必须提供上一轮'):
+        driver.build_invocation(
+            _profile(driver_name), 'resume', repo=repo, base=scratch,
+            structured_response=True, output_schema=_OUTPUT_SCHEMA,
+            resume_provider_session_id='same-seat')
+    assert launched is False
+
+
+def test_claude_oversized_inline_schema_is_zero_wire_on_windows(
+        tmp_path, monkeypatch):
+    repo = tmp_path / 'repo'
+    scratch = tmp_path / 'scratch'
+    repo.mkdir()
+    scratch.mkdir()
+    launched = False
+
+    def runner(*_args, **_kwargs):
+        nonlocal launched
+        launched = True
+        raise AssertionError('超长 argv 不应到达 runner')
+
+    monkeypatch.setattr(
+        claude_commander, 'ensure_command_line_fits',
+        lambda argv: agent_base.ensure_command_line_fits(
+            argv, platform_name='nt'))
+    schema = json.loads(json.dumps(_OUTPUT_SCHEMA))
+    schema['description'] = '甲' * 40_000
+    driver = ClaudeCodeCommanderDriver(
+        executable='claude.exe', runner=runner)
+
+    with pytest.raises(CommanderConfigurationError, match='32767'):
+        driver.build_invocation(
+            _profile('claude-code'), 'review', repo=repo, base=scratch,
+            structured_response=True, output_schema=schema)
+    assert launched is False
 
 
 @pytest.mark.parametrize(

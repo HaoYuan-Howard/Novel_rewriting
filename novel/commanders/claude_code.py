@@ -12,13 +12,19 @@ from pathlib import Path
 from typing import Any
 
 from contracts.schema.orchestration import AgentProfile
-from novel.agents.base import AgentUsage, integer
+from novel.agents.base import (
+    AgentConfigurationError,
+    AgentUsage,
+    ensure_command_line_fits,
+    integer,
+)
 from novel.commanders.base import (
     CliCommanderDriver,
     CommanderConfigurationError,
     CommanderInvocation,
     CommanderObservation,
     CommanderProtocolError,
+    _prepare_output_schema,
     optional_usage,
 )
 
@@ -174,11 +180,15 @@ class ClaudeCodeCommanderDriver(CliCommanderDriver):
         cli_version: str | None = None,
         resume_provider_session_id: str | None = None,
         structured_response: bool = False,
+        output_schema: Mapping[str, Any] | None = None,
+        expected_output_schema_sha256: str | None = None,
     ) -> CommanderInvocation:
         resolved = self._resolved_profile(profile)
         if not isinstance(prompt, str) or not prompt.strip():
             raise CommanderConfigurationError('commander prompt 不得为空')
         repo_abs, base_abs = self._paths(repo, base)
+        schema_snapshot, schema_bytes, _schema_sha256 = _prepare_output_schema(
+            output_schema)
         tools = (() if structured_response else
                  (tuple(allowed_tools) or _default_allowed_tools(base_abs)))
         if any(not isinstance(item, str) or not item.strip() for item in tools):
@@ -204,6 +214,8 @@ class ClaudeCodeCommanderDriver(CliCommanderDriver):
             argv.extend(('--tools', '', '--permission-prompts', 'none'))
         else:
             argv.extend(('--add-dir', base_abs))
+        if schema_bytes is not None:
+            argv.extend(('--json-schema', schema_bytes.decode('utf-8')))
         if resume_provider_session_id is not None:
             if not resume_provider_session_id.strip():
                 raise CommanderConfigurationError(
@@ -215,6 +227,12 @@ class ClaudeCodeCommanderDriver(CliCommanderDriver):
             argv.extend(('--allowedTools', *tools))
         if '--fallback-model' in argv:
             raise AssertionError('Commander 禁止隐式 fallback model')
+        try:
+            # Claude 只提供内联 schema；沿用 executor 与 Popen(list) 同口径的
+            # UTF-16 预算，保证超限在任何模型 wire 之前明确失败。
+            ensure_command_line_fits(argv)
+        except AgentConfigurationError as exc:
+            raise CommanderConfigurationError(str(exc)) from exc
         frozen_env = dict(env_overrides or {})
         conflicts = {
             key: frozen_env[key]
@@ -236,6 +254,8 @@ class ClaudeCodeCommanderDriver(CliCommanderDriver):
             cli_version=cli_version,
             resume_provider_session_id=resume_provider_session_id,
             structured_response=structured_response,
+            output_schema=schema_snapshot,
+            expected_output_schema_sha256=expected_output_schema_sha256,
         )
 
     provider_label = 'Claude stream-json'

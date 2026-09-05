@@ -6,7 +6,9 @@ from __future__ import annotations
 import json
 import os
 from collections.abc import Mapping, Sequence
-from typing import Any
+from contextlib import contextmanager
+from pathlib import Path
+from typing import Any, BinaryIO, Iterator
 
 from contracts.schema.orchestration import AgentProfile
 from novel.agents.base import AgentUsage, integer
@@ -15,10 +17,15 @@ from novel.commanders.base import (
     CommanderConfigurationError,
     CommanderInvocation,
     CommanderObservation,
+    CommanderProcessResult,
     CommanderProtocolError,
+    _prepare_output_schema,
     jsonl_events,
     optional_usage,
     sum_optional,
+)
+from novel.commanders.output_schema_file import (
+    materialized_codex_output_schema,
 )
 
 
@@ -156,6 +163,8 @@ class CodexCommanderDriver(CliCommanderDriver):
         cli_version: str | None = None,
         resume_provider_session_id: str | None = None,
         structured_response: bool = False,
+        output_schema: Mapping[str, Any] | None = None,
+        expected_output_schema_sha256: str | None = None,
     ) -> CommanderInvocation:
         if allowed_tools:
             raise CommanderConfigurationError(
@@ -166,6 +175,8 @@ class CodexCommanderDriver(CliCommanderDriver):
             raise CommanderConfigurationError('commander prompt 不得为空')
         repo_abs, base_abs = self._paths(repo, base)
         command_cwd = base_abs if structured_response else repo_abs
+        schema_snapshot, schema_bytes, schema_sha256 = _prepare_output_schema(
+            output_schema)
         argv = [
             self.executable,
             'exec',
@@ -213,6 +224,12 @@ class CodexCommanderDriver(CliCommanderDriver):
         argv.extend(('--cd', command_cwd))
         if not structured_response:
             argv.extend(('--add-dir', base_abs))
+        if schema_sha256 is not None:
+            # 固定 hash 文件名使 preview/start/resume 的 invocation 身份稳定；
+            # 真文件只在 ``run`` 包围期独占创建，不成为 durable artifact。
+            schema_path = Path(command_cwd) / (
+                f'.commander-output-schema-{schema_sha256}.json')
+            argv.extend(('--output-schema', str(schema_path)))
         if resume_provider_session_id is not None:
             argv.extend(('resume', resume_provider_session_id))
         # 官方 ``PROMPT=-``：多行任务只从 stdin 进入，绝不受 argv 长度影响。
@@ -227,7 +244,31 @@ class CodexCommanderDriver(CliCommanderDriver):
             cli_version=cli_version,
             resume_provider_session_id=resume_provider_session_id,
             structured_response=structured_response,
+            output_schema=schema_snapshot,
+            expected_output_schema_sha256=expected_output_schema_sha256,
         )
+
+    @contextmanager
+    def _materialized_output_schema(
+        self, invocation: CommanderInvocation,
+    ) -> Iterator[None]:
+        """把冻结 schema 限定在实际 runner 生命周期，且只允许 scratch 直属文件。"""
+        with materialized_codex_output_schema(
+                argv=invocation.argv,
+                cwd=invocation.cwd,
+                payload=invocation.output_schema_bytes,
+                digest=invocation.output_schema_sha256):
+            yield
+
+    def run(
+        self,
+        invocation: CommanderInvocation,
+        *,
+        log: BinaryIO,
+        run_id: str | None = None,
+    ) -> CommanderProcessResult:
+        with self._materialized_output_schema(invocation):
+            return super().run(invocation, log=log, run_id=run_id)
 
     provider_label = 'Codex --json'
 

@@ -7,6 +7,7 @@ import copy
 import hashlib
 import json
 from contextlib import nullcontext
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -1302,6 +1303,33 @@ def _global_edit_envelope() -> dict:
     })
 
 
+def _relation_collection_edit_envelope() -> dict:
+    """只开放 relation collection delta 的 schema-valid no-op 生产骨架。"""
+    return encode_artifact(STAGE2_GLOBAL_EDIT, {
+        'collection_edits': [{
+            'collection': 'relations',
+            'expected_collection_sha256': 'a' * 64,
+            'operations': [],
+        }],
+    })
+
+
+def _relation_item(relation_id: str) -> dict:
+    return {
+        'relation_id': relation_id,
+        'subject_id': 'char_001',
+        'object_id': 'char_002',
+        'predicate': '彼此信任',
+        'predicate_evidence': {
+            'chapter_ordinal': 1,
+            'locator': '两人约定共同查清真相',
+        },
+        'visibility': {'kind': 'public', 'from_chapter': 1},
+        'valid_from_chapter': 1,
+        'valid_through_chapter': None,
+    }
+
+
 def _stage2_failed_global(items: list[dict]) -> dict:
     normalized = []
     for index, source in enumerate(items, start=1):
@@ -1462,6 +1490,203 @@ def test_stage2_fail_routes_only_to_typed_global_edit_and_loader_restores_v3(
     assert injected_key not in str(injected_error.value)
     assert ascii_extra_key not in str(injected_error.value)
     assert 'extra_forbidden' in str(injected_error.value)
+
+
+@pytest.mark.parametrize('case', ['failed', 'unsafe_unver', 'safe_unver'])
+def test_all_stage2_apply_edit_options_publish_collection_operation_schema(
+        case) -> None:
+    """三条 edit 路由必须共用同一份局部、关闭式 operation 脚手架。"""
+    if case == 'failed':
+        item = {
+            'current_state': 'FAIL',
+            'group_key': 'relation:rel_01',
+        }
+    elif case == 'unsafe_unver':
+        item = {
+            'current_state': 'UNVER',
+            'group_key': 'set:characters',
+            'generation_impact': 'must_fix',
+        }
+    else:
+        item = {
+            'current_state': 'UNVER',
+            'group_key': 'relation:rel_01',
+            'generation_impact': 'quarantine_or_fix',
+        }
+    edit = _relation_collection_edit_envelope()
+    options = reviewer_tasks._submission_options({
+        'global': _stage2_failed_global([item]),
+        'global_edit_template': edit,
+    }, _current(queue.WAITING_ON_STAGE2_REVIEW),
+        queue.WAITING_ON_STAGE2_REVIEW)
+
+    [edit_option] = [
+        option for option in options
+        if option['id'].startswith('node:stage2.global.apply-edit')
+    ]
+    allowed = edit_option['allowed_values']
+    assert allowed['collection_edits[].operations[].op'] == [
+        'add', 'delete', 'split']
+    assert allowed[
+        'collection_edits[].operations[].required_fields_by_op'] == {
+            'add': ['op', 'item'],
+            'delete': ['op', 'subject_id'],
+            'split': ['op', 'subject_id', 'items'],
+        }
+    assert allowed[
+        'collection_edits[].operations[].split.items.min_length'] == 2
+    assert allowed[
+        'collection_edits[].operations[].forbidden_fields'] == ['value']
+    assert allowed['collection_edits[].member_model_by_collection'] == {
+        'relations': 'RelationResponse'}
+    schema = allowed[
+        'collection_edits[].operations[].pydantic_schema_by_collection'][
+            'relations']
+    assert schema['discriminator']['propertyName'] == 'op'
+    assert set(schema['discriminator']['mapping']) == {'add', 'delete', 'split'}
+    assert 'value' not in json.dumps(schema, ensure_ascii=False)
+    definitions = schema['$defs']
+    for op, required in {
+        'add': {'op', 'item'},
+        'delete': {'op', 'subject_id'},
+        'split': {'op', 'subject_id', 'items'},
+    }.items():
+        ref = schema['discriminator']['mapping'][op]
+        operation_schema = definitions[ref.rsplit('/', 1)[-1]]
+        assert set(operation_schema['required']) == required
+        assert operation_schema['additionalProperties'] is False
+    split_ref = schema['discriminator']['mapping']['split']
+    assert definitions[split_ref.rsplit('/', 1)[-1]][
+        'properties']['items']['minItems'] == 2
+
+
+@pytest.mark.parametrize('operation', [
+    {'op': 'add', 'item': _relation_item('rel_08')},
+    {'op': 'delete', 'subject_id': 'rel_08'},
+    {
+        'op': 'split',
+        'subject_id': 'rel_08',
+        'items': [
+            _relation_item('rel_09'),
+            _relation_item('rel_10'),
+        ],
+    },
+])
+def test_stage2_collection_operation_scaffold_reaches_real_load_action(
+        tmp_path, operation) -> None:
+    current = _current(queue.WAITING_ON_STAGE2_REVIEW)
+    edit = _relation_collection_edit_envelope()
+    options = reviewer_tasks._submission_options({
+        'global': _stage2_failed_global([{
+            'current_state': 'FAIL',
+            'group_key': 'character:char_001',
+        }]),
+        'global_edit_template': edit,
+    }, current, queue.WAITING_ON_STAGE2_REVIEW)
+    request = copy.deepcopy(options[0]['exact_request'])
+    payload = request['action']['input_payload']
+    payload['collection_edits'][0]['operations'] = [operation]
+    payload['post_edit_review']['reason'] = '已逐项核对本次集合变更与完整未闭合范围'
+    payload['post_edit_review']['decisions'] = [{
+        'item_id': 'item-1',
+        'expected_subject_sha256': '1' * 64,
+        'state': 'PASS',
+        'reason': '该人物主体未被本次 relation 集合变更改写，复判仍与原文一致',
+        'evidence': [],
+    }]
+    path = tmp_path / f"collection-{operation['op']}.json"
+    path.write_text(json.dumps(request, ensure_ascii=False), encoding='utf-8')
+
+    action = reviewer_tasks.load_action(
+        path, current, submission_options=options)
+    assert isinstance(action, reviewer_tasks.ReviewerNodeAction)
+    decoded = decode_artifact(STAGE2_GLOBAL_EDIT, action.input_payload)
+    parsed = GlobalEdit.model_validate(decoded.payload)
+    assert parsed.collection_edits[0].operations[0].op == operation['op']
+
+
+def test_stage2_collection_add_value_is_rejected_by_real_load_action(
+        tmp_path) -> None:
+    """真机拒因：add 没有 value 兼容别名，只接受 item。"""
+    current = _current(queue.WAITING_ON_STAGE2_REVIEW)
+    edit = _relation_collection_edit_envelope()
+    options = reviewer_tasks._submission_options({
+        'global': _stage2_failed_global([{
+            'current_state': 'FAIL',
+            'group_key': 'character:char_001',
+        }]),
+        'global_edit_template': edit,
+    }, current, queue.WAITING_ON_STAGE2_REVIEW)
+    request = copy.deepcopy(options[0]['exact_request'])
+    payload = request['action']['input_payload']
+    payload['collection_edits'][0]['operations'] = [{
+        'op': 'add', 'value': _relation_item('rel_08'),
+    }]
+    payload['post_edit_review']['reason'] = '已核对本次变更与完整未闭合范围'
+    path = tmp_path / 'collection-add-value.json'
+    path.write_text(json.dumps(request, ensure_ascii=False), encoding='utf-8')
+
+    with pytest.raises(
+            reviewer_tasks.ReviewerTaskError,
+            match='apply-edit 不符合 GlobalEdit typed 契约') as caught:
+        reviewer_tasks.load_action(path, current, submission_options=options)
+    assert '.item:missing' in str(caught.value)
+    assert 'extra_forbidden' in str(caught.value)
+
+
+def test_stage2_same_hash_completeness_is_explicitly_not_logically_fixed() -> None:
+    """只改成员字段不改 ID 集时，集合完整性仍是 surviving 旧决定。"""
+    current = _current(queue.WAITING_ON_STAGE2_REVIEW)
+    options = reviewer_tasks._submission_options({
+        'global': _stage2_failed_global([{
+            'item_id': 'relation-detail',
+            'subject_sha256': '1' * 64,
+            'kind': 'relation',
+            'subject_path': 'entities.relations.0',
+            'current_state': 'FAIL',
+            'group_key': 'relation:rel_01',
+        }, {
+            'item_id': 'relation-completeness',
+            'subject_sha256': '2' * 64,
+            'kind': 'relation_set_complete',
+            'subject_path': 'entities.relations',
+            'current_state': 'FAIL',
+            'group_key': 'set:relations',
+        }]),
+        'global_edit_template': encode_artifact(STAGE2_GLOBAL_EDIT, {
+            'relations': [{
+                'relation_id': 'rel_01',
+                'valid_from_chapter': 2,
+            }],
+        }),
+    }, current, queue.WAITING_ON_STAGE2_REVIEW)
+
+    rule = options[0]['allowed_values'][
+        'post_edit_review.review_scope[].surviving_decision_rule']
+    assert 'item_id + subject_sha256' in rule
+    assert 'relation ID 集' in rule
+    assert 'relation_set_complete' in rule
+    assert '仍必须显式复判' in rule
+    counterexample = options[0]['allowed_values'][
+        'post_edit_review.review_scope[].same_hash_completeness_counterexample']
+    assert counterexample == {
+        'edit': '只修改既有 relation 的字段',
+        'relation_id_set_changed': False,
+        'surviving_item_kind': 'relation_set_complete',
+        'required_action': '把原 item_id + subject_sha256 显式列入 decisions',
+    }
+    task = reviewer_tasks.ReviewerTask(
+        waiting_on=queue.WAITING_ON_STAGE2_REVIEW,
+        surface_seal='a' * 64,
+        business_sha256='b' * 64,
+        request_path=Path('unused.json'),
+        prompt='immutable workpack',
+        submission_options=tuple(options),
+    )
+    correction = reviewer_tasks.correction_prompt(
+        task, '上轮漏了 surviving completeness',
+        request_sha256='c' * 64, attempt=1)
+    assert 'relation_set_complete 仍必须显式复判' in correction
 
 
 def test_stage2_global_edit_cannot_invent_a_patch_subject(tmp_path) -> None:

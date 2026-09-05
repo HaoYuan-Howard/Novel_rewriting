@@ -187,3 +187,19 @@ typed 动作要绑定修前主体、修后自审与完整 producer 校验；任�
 动态新增的 typed 数组行不能只给字段名或自然语言提示：完整必填键集、空值的显式写法与允许值必须随
 submission option 下发，最终仍由同一 schema/loader 复验；否则模型可能完成整轮语义工作，却因漏一个
 `evidence: []` 之类的结构字段浪费不可返还的真实席位。
+
+判别联合还要把**当前分支的局部 schema**下发：若父 model 才知道 collection→member 类型，直接给模型
+一个大联合，它很容易臆造惯用的 `value` 字段。应从现役 Pydantic operation/member model 现场专门化，
+明示每个 op 的闭合键集，不加宽 loader 兼容错误形状。修后证明的完整性同样按主体身份而不是人的逻辑
+推断：只改成员字段而未改 ID 集时，集合完整性 hash 可能不变；凡仍以同一 identity 存活的旧 FAIL/UNVER
+都须显式复判，最后仍由内存 apply→normalize→reenumerate 后的生产安全闸判存活，外层不复制判据。
+
+当完整 typed request 大部分是 immutable binding 时，不应让模型为改几格而重抄整份长 JSON。provider
+wire 可以只承载最小 delta，但 Supervisor 必须从同一 exact request 可信组装完整 canonical request，再走
+既有 loader 与 producer；不可编辑字段、乐观锁 SHA 和主体 SHA 一律注入，不靠模型复述。transport
+原始 digest 用来识别模型是否重复回答，assembled content digest 用来寻址真正保存的候选，两者用途不同。
+
+原生 structured-output schema 也是 session 身份，不只是 CLI 参数：先冻结 canonical bytes/SHA，exact
+resume 必须复用，并把同一 SHA 贯穿 started/attempt/turn/ended 与在线指针。只能接收 schema 文件路径的
+driver 把文件限制在 runner 生命周期，残留只按同字节普通文件回收；只能内联 schema 的 driver 则必须在
+wire 前预检 Windows argv。临时运输文件不能因为落在 scratch 就冒充 artifact 或 checkpoint。

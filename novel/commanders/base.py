@@ -16,13 +16,16 @@ stdout 给协议解析，不能用「进程退出了」代替「协议可审计�
 """
 from __future__ import annotations
 
+import hashlib
 import io
+import json
 import os
+import re
 import subprocess
 import threading
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any, BinaryIO, Protocol
@@ -32,10 +35,13 @@ from contracts.invariants import (
     COMMANDER_FIRST_EVENT_TIMEOUT_SECONDS, COMMANDER_IDLE_TIMEOUT_SECONDS,
 )
 from novel.agents.base import (
+    AgentConfigurationError,
     AgentUsage,
     classify_agent_command_failure,
+    compact_schema,
     integer,
     resolve_cli_entry,
+    validate_agent_output_schema,
 )
 from novel.agents.jsonl_runner import (
     JsonlProcessRunner, ProcessTimeout, RunnerBusyError,
@@ -84,6 +90,37 @@ class CommanderCommandError(CommanderError):
         self.returncode = returncode
 
 
+def _reject_json_constant(value: str) -> None:
+    """标准 JSON 没有 NaN/Infinity；不能把 Python 扩展值送给不同 provider。"""
+    raise ValueError(f'非法 JSON 常量 {value}')
+
+
+def _prepare_output_schema(
+    schema: Mapping[str, Any] | None,
+) -> tuple[dict[str, Any] | None, bytes | None, str | None]:
+    """复用 executor 的 portable 子集，并冻结 Commander 的规范字节身份。"""
+    if schema is None:
+        return None, None, None
+    if not isinstance(schema, Mapping):
+        raise CommanderConfigurationError('output_schema 必须是 JSON object')
+    try:
+        validate_agent_output_schema(schema)
+        encoded = compact_schema(schema)
+        assert encoded is not None
+        # ``json.dumps`` 默认容许 NaN/Infinity；两家 CLI 并不共享这个 Python
+        # 扩展，故在任何 runner/Popen 前重新按标准 JSON 关闭式解析。
+        snapshot = json.loads(encoded, parse_constant=_reject_json_constant)
+        if not isinstance(snapshot, dict):
+            raise ValueError('schema 顶层不是 object')
+        canonical = json.dumps(
+            snapshot, ensure_ascii=False, sort_keys=True,
+            separators=(',', ':'), allow_nan=False)
+    except (AgentConfigurationError, TypeError, ValueError) as exc:
+        raise CommanderConfigurationError(str(exc)) from exc
+    payload = canonical.encode('utf-8')
+    return snapshot, payload, hashlib.sha256(payload).hexdigest()
+
+
 @dataclass(frozen=True)
 class CommanderInvocation:
     """一次 commander 启动的完整、不可变快照。
@@ -107,6 +144,14 @@ class CommanderInvocation:
     #: reviewer 不再让模型写 scratch；成功时必须从供应商最终回答
     #: 交付一份裸 JSON，由 Supervisor 严格验证后原子物化。
     structured_response: bool = False
+    #: 两家 provider 共用、已归一为严格公共子集的 response schema。调用方
+    #: 传入的可变对象只用于构造；真正进入 wire/身份的是下方规范字节与 hash。
+    output_schema: Mapping[str, Any] | None = None
+    #: exact resume 必须回带上一轮冻结的 schema hash；缺失或漂移都在 runner 前
+    #: 关闭，不能只靠同一个 provider session id 猜它仍是同一响应契约。
+    expected_output_schema_sha256: str | None = None
+    output_schema_bytes: bytes | None = field(init=False, repr=False)
+    output_schema_sha256: str | None = field(init=False)
 
     def __post_init__(self) -> None:
         argv = tuple(self.argv)
@@ -142,6 +187,30 @@ class CommanderInvocation:
         if not isinstance(self.structured_response, bool):
             raise CommanderConfigurationError(
                 'structured_response 必须是 bool')
+        schema, schema_bytes, schema_sha256 = _prepare_output_schema(
+            self.output_schema)
+        if schema is not None and not self.structured_response:
+            raise CommanderConfigurationError(
+                'output_schema 只允许用于 structured_response invocation')
+        expected_schema_sha256 = self.expected_output_schema_sha256
+        if expected_schema_sha256 is not None and (
+                not isinstance(expected_schema_sha256, str)
+                or re.fullmatch(r'[0-9a-f]{64}', expected_schema_sha256) is None):
+            raise CommanderConfigurationError(
+                'expected_output_schema_sha256 必须是小写 SHA-256')
+        if expected_schema_sha256 is not None and (
+                self.resume_provider_session_id is None or schema_sha256 is None):
+            raise CommanderConfigurationError(
+                'expected_output_schema_sha256 只允许绑定带 schema 的 exact resume')
+        if (self.resume_provider_session_id is not None
+                and schema_sha256 is not None
+                and expected_schema_sha256 is None):
+            raise CommanderConfigurationError(
+                '带 output_schema 的 exact resume 必须提供上一轮 schema SHA-256')
+        if (expected_schema_sha256 is not None
+                and expected_schema_sha256 != schema_sha256):
+            raise CommanderConfigurationError(
+                'Commander exact resume 的 output_schema 已漂移')
         try:
             snapshot = dict(self.env_overrides)
         except (TypeError, ValueError) as exc:
@@ -155,6 +224,11 @@ class CommanderInvocation:
         object.__setattr__(self, 'argv', argv)
         object.__setattr__(
             self, 'env_overrides', MappingProxyType(snapshot))
+        object.__setattr__(
+            self, 'output_schema',
+            None if schema is None else MappingProxyType(schema))
+        object.__setattr__(self, 'output_schema_bytes', schema_bytes)
+        object.__setattr__(self, 'output_schema_sha256', schema_sha256)
 
 
 @dataclass(frozen=True)
@@ -443,6 +517,8 @@ class CommanderDriver(ABC):
         cli_version: str | None = None,
         resume_provider_session_id: str | None = None,
         structured_response: bool = False,
+        output_schema: Mapping[str, Any] | None = None,
+        expected_output_schema_sha256: str | None = None,
     ) -> CommanderInvocation:
         """冻结展示与真跑共用的唯一 invocation。"""
 

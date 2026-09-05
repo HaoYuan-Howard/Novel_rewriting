@@ -57,6 +57,18 @@ def test_agent_run_delegation_is_explicit_without_weakening_stage0_review():
     assert '不在 Stage0 判断章号顺序或连续性' in stage0
 
 
+def test_stage2_contract_closes_collection_operations_and_surviving_review():
+    stage2 = reviewer_contract.CONTRACT_TEXT['stage2']
+    assert '`add` 只含 `op + item`' in stage2
+    assert '`delete` 只含 `op + subject_id`' in stage2
+    assert '`split` 只含 `op + subject_id + items`' in stage2
+    assert '没有 `value` 字段' in stage2
+    assert '按当前 collection 下发的成员 model 与局部 Pydantic schema' in stage2
+    assert '相同 `item_id + subject_sha256` 存活' in stage2
+    assert '不能因逻辑上已随 edit 修好就省略' in stage2
+    assert '`relation_set_complete` 的主体 hash 不变，仍须显式决定' in stage2
+
+
 def test_anchor_parser_fails_closed_on_broken_blocks():
     with pytest.raises(ValueError):
         reviewer_contract.parse_anchored_blocks(

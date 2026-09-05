@@ -84,7 +84,7 @@ from novel.model_slots import (
 from novel.orchestrator import (
     admission, commander_completion, execution_permit, jobs, operator, queue,
     review_seats, reviewer_seat_ledger, reviewer_tasks, service_lifecycle,
-    stage2_review_ledger, uploads,
+    stage2_review_ledger, stage2_reviewer_wire, uploads,
 )
 from novel.orchestrator.agent_supervisor import (
     CommanderTurnResult, LaunchTicket, RunSupervisor, SupervisorActionResult,
@@ -637,6 +637,13 @@ def _default_spawn(
             if key not in env:
                 continue
             runtime_env[key] = env[key]
+        # ``CommanderInvocation.output_schema`` 顶层虽已冻结，内部 JSON 容器仍是
+        # Python 可变对象。运行时重建只能从构造期规范字节恢复，不能重新信任
+        # 调用方曾传入的 mapping；否则 argv 仍带 --output-schema、driver 却看不见
+        # 同一份 schema，或审计身份与真正 wire 分叉。
+        runtime_output_schema = (
+            None if invocation.output_schema_bytes is None
+            else json.loads(invocation.output_schema_bytes))
         runtime_invocation = CommanderInvocation(
             argv=invocation.argv,
             stdin_text=invocation.stdin_text,
@@ -648,6 +655,9 @@ def _default_spawn(
             resume_provider_session_id=(
                 invocation.resume_provider_session_id),
             structured_response=invocation.structured_response,
+            output_schema=runtime_output_schema,
+            expected_output_schema_sha256=(
+                invocation.expected_output_schema_sha256),
         )
         driver = create_commander_driver(runtime_invocation.profile)
         with _COMMANDERS_LOCK:
@@ -1455,7 +1465,21 @@ def _materialize_reviewer_response(
         preserve_validated: Callable[[Path, str], Path] | None = None,
         ) -> tuple[reviewer_tasks.ReviewerAction, str, Path | None]:
     """复用现役 loader；approval 先 durable，再原子晋升 canonical scratch。"""
-    document, digest = _reviewer_response_document(response)
+    document, response_digest = _reviewer_response_document(response)
+    candidate_digest = response_digest
+    if stage2_reviewer_wire.uses_compact_wire(task):
+        try:
+            document = stage2_reviewer_wire.assemble(task, document)
+        except stage2_reviewer_wire.Stage2ReviewerWireError as exc:
+            # compact wire 只是运输层；所有拒绝仍进入现役 ReviewerTaskError
+            # 的有界纠错/持久拒因路径，不能越级变成 Supervisor runtime crash。
+            raise reviewer_tasks.ReviewerTaskError(str(exc)) from exc
+        # provider compact 回答的 digest 负责拒因/no-progress 身份；residue 名称
+        # 则必须继续是它实际保存的 assembled full request 的内容地址。
+        candidate_digest = _sha256_bytes(json.dumps(
+            document, ensure_ascii=False, sort_keys=True,
+            separators=(',', ':'), allow_nan=False,
+        ).encode('utf-8') + b'\n')
     candidate = _reviewer_candidate_path(task.request_path)
     validated = False
     promoted = False
@@ -1471,11 +1495,11 @@ def _materialize_reviewer_response(
             if persist_validated is not None else None)
         _promote_reviewer_candidate(candidate, task.request_path)
         promoted = True
-        return action, digest, record_path
+        return action, response_digest, record_path
     except BaseException as exc:
         if validated and not promoted and preserve_validated is not None:
             try:
-                preserved = preserve_validated(candidate, digest)
+                preserved = preserve_validated(candidate, candidate_digest)
                 if hasattr(exc, 'add_note'):
                     exc.add_note(
                         f'typed-valid reviewer 回答已隔离保留：{preserved}')
@@ -1966,6 +1990,9 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
     pending_reviewer_binding: tuple[str, str] | None = None
     pending_reviewer_business_sha256: str | None = None
     pending_reviewer_source_task: reviewer_tasks.ReviewerTask | None = None
+    # Stage2 compact wire 的 provider 原回答 identity；canonical scratch 保存的是
+    # trusted assembler 展开的完整请求，两者不能混作纠错/no-progress 指纹。
+    pending_reviewer_response_sha256: str | None = None
     # Stage2 typed-valid 动作会在下一次 deterministic callback 才执行；必须把
     # 产出它的 logical session 一起跨过这条边界，canonical exit 2 才能精确
     # 回写原席位。这里不是 provider session，也绝不用于 resume。
@@ -2146,7 +2173,10 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
 
     def _review_invocation(
             epoch: ExecutionEpoch, prompt: str,
-            provider_session_id: str | None) -> CommanderInvocation:
+            provider_session_id: str | None, *,
+            output_schema: dict[str, object] | None = None,
+            expected_output_schema_sha256: str | None = None,
+            ) -> CommanderInvocation:
         """为一份 frozen reviewer task 构造新 turn 或 exact resume。
 
         reviewer 只从 provider 最终回答交付裸 JSON，不取得 scratch
@@ -2163,13 +2193,25 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                 repo=REPO_ROOT, base=str(scratch),
                 cli_version=epoch.cli_version,
                 resume_provider_session_id=provider_session_id,
-                structured_response=True)
+                structured_response=True,
+                output_schema=output_schema,
+                expected_output_schema_sha256=(
+                    expected_output_schema_sha256))
             _validate_invocation(
                 reviewed, prompt=prompt, profile=plan.profiles.commander,
                 expected_cwd=scratch)
             if reviewed.resume_provider_session_id != provider_session_id:
                 raise UnsupportedRunMode(
                     'Commander reviewer invocation 没有精确冻结 provider session id')
+            if ((reviewed.output_schema_sha256 is None)
+                    != (output_schema is None)):
+                raise UnsupportedRunMode(
+                    'Commander reviewer driver 没有精确冻结请求的 output schema')
+            if (expected_output_schema_sha256 is not None
+                    and reviewed.output_schema_sha256
+                    != expected_output_schema_sha256):
+                raise UnsupportedRunMode(
+                    'Commander reviewer exact resume 的 output schema 身份漂移')
             return reviewed
         finally:
             if driver is not None:
@@ -2188,6 +2230,7 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
         nonlocal pending_reviewer_action, pending_reviewer_binding
         nonlocal pending_reviewer_business_sha256, pending_reviewer_source_task
         nonlocal pending_reviewer_stage2_session_run_id
+        nonlocal pending_reviewer_response_sha256
         nonlocal pending_reviewer_record_path, pending_reviewer_replayed
         nonlocal reviewer_correction_task, reviewer_correction_binding
         nonlocal reviewer_correction_reason, reviewer_correction_request_sha256
@@ -2242,6 +2285,7 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
             pending_reviewer_business_sha256 = None
             pending_reviewer_source_task = None
             pending_reviewer_stage2_session_run_id = None
+            pending_reviewer_response_sha256 = None
             pending_reviewer_record_path = None
             pending_reviewer_replayed = False
             reviewer_correction_task = None
@@ -2492,6 +2536,7 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
             epoch: ExecutionEpoch,
             provider_session_id: str | None,
             *, reviewer_prompt: str | None = None,
+            reviewer_output_schema: dict[str, object] | None = None,
             fresh_session_run_id: str | None = None,
             launch_ticket: LaunchTicket | None = None,
             read_only: bool = False,
@@ -2556,7 +2601,7 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                     start_code_version=audit_epoch.code_version,
                     skill_sha256=audit_epoch.skill_sha256,
                     prompt_sha256=fresh_prompt_sha256,
-                    schema_sha256=schema_sha256,
+                    schema_sha256=turn_schema_sha256,
                     kind='started', ts=int(time.time()),
                 ),
             )
@@ -2564,12 +2609,18 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
 
         if reviewer_prompt is not None:
             turn_invocation = _review_invocation(
-                epoch, reviewer_prompt, effective_provider_session_id)
+                epoch, reviewer_prompt, effective_provider_session_id,
+                output_schema=reviewer_output_schema)
         elif effective_provider_session_id is None:
             turn_invocation = epoch_invocations[epoch.epoch_id]
         else:
             turn_invocation = _resume_invocation(
                 epoch, effective_provider_session_id)
+        # 普通 Commander 沿用 observation protocol 身份；structured reviewer
+        # 一旦启用原生 schema，则 session pointer / attempt / turn / ended 必须
+        # 全部记录真正送进 CLI 的动态 schema，而不是旧的协议常量 hash。
+        turn_schema_sha256 = (
+            turn_invocation.output_schema_sha256 or schema_sha256)
         # 预审 Commander 只读并只能返回最终文本，不领取任何
         # producer admission。仍下发一枚不存在的 context id：即使
         # 供应商边界意外放开工具，节点入口也会关闭式拒绝。
@@ -2618,7 +2669,7 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                     model=plan.profiles.commander.model,
                     prompt_sha256=_sha256_bytes(
                         attempt_invocation.stdin_text.encode('utf-8')),
-                    schema_sha256=schema_sha256,
+                    schema_sha256=turn_schema_sha256,
                     observed_at=int(time.time())))
             except Exception:  # noqa: BLE001 —— 已发生 wire 后关闭式拒绝交付
                 integrity_error_kind = 'commander_session_pointer'
@@ -2709,7 +2760,7 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                         skill_sha256=epoch.skill_sha256,
                         prompt_sha256=_sha256_bytes(
                             attempt_invocation.stdin_text.encode('utf-8')),
-                        schema_sha256=schema_sha256,
+                        schema_sha256=turn_schema_sha256,
                         usage=_session_usage(attempt_observation),
                         error_kind=(
                             None if attempt_rc == 0
@@ -2744,7 +2795,10 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                             attempt_invocation = turn_invocation
                         elif reviewer_prompt is not None:
                             attempt_invocation = _review_invocation(
-                                epoch, _REVIEWER_RESUME_PROMPT, resume_session)
+                                epoch, _REVIEWER_RESUME_PROMPT, resume_session,
+                                output_schema=reviewer_output_schema,
+                                expected_output_schema_sha256=(
+                                    turn_invocation.output_schema_sha256))
                         else:
                             attempt_invocation = _resume_invocation(
                                 epoch, resume_session)
@@ -2926,7 +2980,7 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                                     skill_sha256=epoch.skill_sha256,
                                     prompt_sha256=_sha256_bytes(
                                         attempt_invocation.stdin_text.encode('utf-8')),
-                                    schema_sha256=schema_sha256,
+                                    schema_sha256=turn_schema_sha256,
                                     usage=_session_usage(attempt_observation),
                                     error_kind=intermediate_kind,
                                     kind='turn', ts=int(time.time()),
@@ -3113,7 +3167,7 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                             skill_sha256=epoch.skill_sha256,
                             prompt_sha256=_sha256_bytes(
                                 attempt_invocation.stdin_text.encode('utf-8')),
-                            schema_sha256=schema_sha256,
+                            schema_sha256=turn_schema_sha256,
                             usage=_session_usage(observation),
                             error_kind=error_kind,
                             kind='turn', ts=int(time.time()),
@@ -3181,7 +3235,7 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                             else prov.CODE_UNKNOWN),
                         skill_sha256=audit_epoch.skill_sha256,
                         prompt_sha256=fresh_prompt_sha256,
-                        schema_sha256=schema_sha256,
+                        schema_sha256=turn_schema_sha256,
                         process_state=('ok' if rc == 0 else 'failed'),
                         delivery_state=_session_delivery(outcome),
                         error_kind=error_kind,
@@ -3428,9 +3482,12 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
         def prereview_worker() -> None:
             review_exit_code = CRASH
             try:
+                prereview_output_schema = (
+                    stage2_reviewer_wire.output_schema_for(prereview_task))
                 turn = _run_commander_turn(
                     epoch, None,
                     reviewer_prompt=prereview_task.prompt,
+                    reviewer_output_schema=prereview_output_schema,
                     fresh_session_run_id=review_session_id,
                     read_only=True,
                     environment_overrides=slot_env,
@@ -3584,6 +3641,7 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
         nonlocal pending_reviewer_action, pending_reviewer_binding
         nonlocal pending_reviewer_business_sha256, pending_reviewer_source_task
         nonlocal pending_reviewer_stage2_session_run_id
+        nonlocal pending_reviewer_response_sha256
         nonlocal pending_reviewer_record_path, pending_reviewer_replayed
         nonlocal reviewer_correction_task, reviewer_correction_binding
         nonlocal reviewer_correction_reason, reviewer_correction_request_sha256
@@ -3637,6 +3695,8 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
             """Stage2 的模型调用预算是产品边界；确定性动作不占轮次。"""
             nonlocal latest_outcome, latest_rc, latest_error_kind
             nonlocal stage2_turn_session_run_id
+            reviewer_prompt = stage2_reviewer_wire.prompt_for(task, prompt)
+            reviewer_output_schema = stage2_reviewer_wire.output_schema_for(task)
             if waiting_on in queue.STAGE2_REVIEWER_WAITING_ON:
                 review_session_id = jobs.new_job_id()
                 stage2_turn_session_run_id = review_session_id
@@ -3693,7 +3753,8 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                 try:
                     turn = _run_commander_turn(
                         epoch, None,
-                        reviewer_prompt=prompt,
+                        reviewer_prompt=reviewer_prompt,
+                        reviewer_output_schema=reviewer_output_schema,
                         fresh_session_run_id=review_session_id,
                         launch_ticket=launch_ticket,
                         after_spawn_before_wire=reserve_reviewer_call,
@@ -3746,7 +3807,7 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
             if seat is None:
                 seat = _ReviewerSeat(
                     session_run_id=jobs.new_job_id(),
-                    prompt_sha256=_sha256_bytes(prompt.encode('utf-8')),
+                    prompt_sha256=_sha256_bytes(reviewer_prompt.encode('utf-8')),
                     waiting_on=waiting_on,
                     business_sha256=task.business_sha256)
                 open_reviewer_seats[binding] = seat
@@ -3792,7 +3853,8 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
             try:
                 seat_turn = _run_commander_turn(
                     epoch, None,
-                    reviewer_prompt=prompt,
+                    reviewer_prompt=reviewer_prompt,
+                    reviewer_output_schema=reviewer_output_schema,
                     fresh_session_run_id=seat.session_run_id,
                     seat_provider_session_id=seat.provider_session_id,
                     seat_turns_recorded=seat.turns_recorded,
@@ -3977,6 +4039,7 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
             pending_reviewer_binding = binding
             pending_reviewer_business_sha256 = task.business_sha256
             pending_reviewer_source_task = task
+            pending_reviewer_response_sha256 = request_sha256
             pending_reviewer_stage2_session_run_id = (
                 stage2_turn_session_run_id
                 if waiting_on in queue.STAGE2_REVIEWER_WAITING_ON else None)
@@ -3997,6 +4060,7 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                 pending_reviewer_binding = None
                 pending_reviewer_business_sha256 = None
                 pending_reviewer_source_task = None
+                pending_reviewer_response_sha256 = None
                 pending_reviewer_stage2_session_run_id = None
                 pending_reviewer_record_path = None
                 pending_reviewer_replayed = False
@@ -4004,12 +4068,14 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
             action = pending_reviewer_action
             business_sha256 = pending_reviewer_business_sha256
             source_task = pending_reviewer_source_task
+            source_response_sha256 = pending_reviewer_response_sha256
             source_stage2_session_run_id = (
                 pending_reviewer_stage2_session_run_id)
             pending_reviewer_action = None
             pending_reviewer_binding = None
             pending_reviewer_business_sha256 = None
             pending_reviewer_source_task = None
+            pending_reviewer_response_sha256 = None
             pending_reviewer_stage2_session_run_id = None
             record_path = pending_reviewer_record_path
             replayed = pending_reviewer_replayed
@@ -4110,8 +4176,9 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                     source_task,
                     session_run_id=source_stage2_session_run_id,
                     kind='canonical_action',
-                    request_sha256=_reviewer_request_sha256(
-                        source_task.request_path),
+                    request_sha256=(
+                        source_response_sha256
+                        or _reviewer_request_sha256(source_task.request_path)),
                     reason=stage2_rejection)
             if record_path is not None and landed(result.exit_code):
                 # 已落盘的决定不再适用。exit 2 需先重读 live
@@ -4185,8 +4252,9 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                     reviewer_correction_binding = binding
                     reviewer_correction_reason = (
                         f'{rejection}；请按原 workpack 只修正上一份 typed 动作')
-                    reviewer_correction_request_sha256 = _reviewer_request_sha256(
-                        source_task.request_path)
+                    reviewer_correction_request_sha256 = (
+                        source_response_sha256
+                        or _reviewer_request_sha256(source_task.request_path))
                     reviewer_correction_attempts = 0
                     return CommanderTurnResult(
                         exit_code=result.exit_code,
@@ -4244,8 +4312,9 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                 reviewer_correction_binding = binding
                 correction_reason = (
                     f'{rejection}；请按原 workpack 只修正上一份 typed 动作')
-                correction_request_sha256 = _reviewer_request_sha256(
-                    source_task.request_path)
+                correction_request_sha256 = (
+                    source_response_sha256
+                    or _reviewer_request_sha256(source_task.request_path))
                 persist_pending_correction(
                     source_task, reason=correction_reason,
                     request_sha256=correction_request_sha256)
@@ -4424,6 +4493,9 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                 pending_reviewer_binding = binding
                 pending_reviewer_business_sha256 = task.business_sha256
                 pending_reviewer_source_task = task
+                pending_reviewer_response_sha256 = (
+                    prereview.response_sha256
+                    or _reviewer_request_sha256(task.request_path))
                 pending_reviewer_stage2_session_run_id = (
                     prereview.session_run_id)
                 pending_reviewer_record_path = _record_reviewer_action(
@@ -4459,6 +4531,7 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
             pending_reviewer_binding = binding
             pending_reviewer_business_sha256 = task.business_sha256
             pending_reviewer_source_task = task
+            pending_reviewer_response_sha256 = None
             # Stage2 现役动作不写通用 ReviewerActionRecord；保守兼容的旧
             # replay 若存在，也没有可证明的原席 session，canonical 拒绝时
             # 不得凭当前 parent 伪造绑定。
@@ -4525,7 +4598,7 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
         try:
             validated_record_path: Path | None = None
             if turn.final_response is not None:
-                (pending_reviewer_action, _response_sha256,
+                (pending_reviewer_action, response_sha256,
                  validated_record_path) = (
                     _materialize_reviewer_response(
                         task, current, turn.final_response,
@@ -4543,6 +4616,7 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                 validated_record_path = _record_reviewer_action(
                     base, sid, run_id=run_id, epoch=epoch, task=task,
                     action=pending_reviewer_action)
+                response_sha256 = _reviewer_request_sha256(request_path)
         except reviewer_tasks.ReviewerTaskError as exc:
             seat_open = open_reviewer_seats.get(binding)
             if (waiting_on not in queue.STAGE2_REVIEWER_WAITING_ON
@@ -4600,6 +4674,7 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
         pending_reviewer_binding = binding
         pending_reviewer_business_sha256 = task.business_sha256
         pending_reviewer_source_task = task
+        pending_reviewer_response_sha256 = response_sha256
         pending_reviewer_stage2_session_run_id = (
             stage2_turn_session_run_id
             if waiting_on in queue.STAGE2_REVIEWER_WAITING_ON else None)

@@ -196,6 +196,10 @@ def _runtime_files() -> tuple[str, ...]:
 #: 允许裸读 JSON 的白名单。每一条都要写得出理由。
 _JSON_READ_ALLOWED = {
     'novel/store.py': '它就是那条唯一的读路，记账在这里发生',
+    'novel/commanders/base.py': (
+        'Commander output schema 的 JSON 解码只规范化调用方已在内存中的传输契约；'
+        '它不读取盘上小说产物、不会形成 provenance 输入，真正 schema 仍由现役 '
+        'Pydantic/portable validator 复验'),
     'novel/orchestrator/jobs.py': (
         '作业记录**不是产物**：不进来源账、不进 `_provenance`、`ARTIFACTS` 里没有它。'
         '它是 append-only 的事件流（`_service/jobs.jsonl`），'
@@ -344,6 +348,11 @@ _WRITE_ALLOWED = {
         'Stage2 只读 Reviewer 与 Blueprint 子进程共享的 OS 锁槽。模块只在 Supervisor '
         '传入的受管 scratch 子目录创建固定数量、内容恒为 0 的锁文件，并以 r+b 取得'
         '内核文件锁；锁不是产物或状态账，进程崩溃由内核释放，正式产物仍只经 store'),
+    'novel/commanders/output_schema_file.py': (
+        'Codex CLI 只接受文件形态的原生 output schema；本模块只在受管 epoch '
+        'scratch 中为一次 runner 独占物化冻结 schema，并校验路径、hash、普通文件、'
+        '原子创建与崩溃孤儿后清理。它不是小说产物/缓存/审计账，独立成模块避免给 '
+        '整个 provider driver 开裸 IO 豁免'),
     'novel/orchestrator/service_lifecycle.py': (
         '受管 scratch 生命周期只写 `_service/scratch/<sid>/<session>/`；创建与显式 finish '
         '均绑定精确 session，TTL sweep 先排除活跃 owner 再有界扫描。其余维护只经'

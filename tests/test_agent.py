@@ -43,8 +43,8 @@ from contracts.schema.orchestration import (
 from novel import agent_session_audit, commander_context, paths, skill_contract
 from novel.agents.base import AgentUsage
 from novel.commanders import (
-    CommanderInvocation, CommanderObservation, CommanderProcessResult,
-    CommanderProtocolError,
+    CodexCommanderDriver, CommanderInvocation, CommanderObservation,
+    CommanderProcessResult, CommanderProtocolError,
 )
 from novel.cli.main import main as cli_main
 from novel.errors import TerminalState
@@ -75,6 +75,9 @@ class _PlanningDriver:
     def build_invocation(self, profile, prompt, *, repo, base, **_kwargs):
         resume_id = _kwargs.get('resume_provider_session_id')
         structured_response = bool(_kwargs.get('structured_response', False))
+        output_schema = _kwargs.get('output_schema')
+        expected_schema_sha256 = _kwargs.get(
+            'expected_output_schema_sha256')
         argv = [profile.driver, 'headless', '--model', profile.model]
         if resume_id is not None:
             argv.extend(('--resume', resume_id))
@@ -84,7 +87,9 @@ class _PlanningDriver:
             cwd=str(base if structured_response else repo), env_overrides={},
             profile=profile, protocol=f'{profile.driver}-test-v1',
             resume_provider_session_id=resume_id,
-            structured_response=structured_response)
+            structured_response=structured_response,
+            output_schema=output_schema,
+            expected_output_schema_sha256=expected_schema_sha256)
 
     def close(self):
         return None
@@ -2755,6 +2760,76 @@ def test_default_spawn_cannot_undo_driver_lifecycle_environment(monkeypatch):
         agent._close_commander_owner('outer-1')
 
 
+def test_default_spawn_rebuilds_codex_schema_from_frozen_bytes_for_runner_lifecycle(
+        base, monkeypatch):
+    """Supervisor 重建不得重新信任 invocation 内仍可变的嵌套 schema。"""
+    scratch = Path(base) / 'schema-scratch'
+    scratch.mkdir()
+    mutable_schema = {
+        'type': 'object',
+        'properties': {
+            'schema': {'type': 'string', 'enum': ['review-v1']},
+        },
+        'required': ['schema'],
+        'additionalProperties': False,
+    }
+    builder = CodexCommanderDriver(
+        executable='codex.exe', runner=lambda *_args, **_kwargs: None)
+    try:
+        invocation = builder.build_invocation(
+            _CODEX, '返回结构化审阅结果', repo=agent.REPO_ROOT, base=scratch,
+            structured_response=True, output_schema=mutable_schema)
+    finally:
+        builder.close()
+    frozen_bytes = invocation.output_schema_bytes
+    assert frozen_bytes is not None
+
+    # 顶层虽是 MappingProxyType，嵌套容器仍可被调用方持有后篡改。真实 spawn
+    # 必须只从构造期规范字节重建，而不是把这份 poisoned snapshot 送进 driver。
+    invocation.output_schema['properties']['schema']['enum'].append('poisoned')
+    mutable_schema['properties']['schema']['enum'].append('source-drift')
+    seen: dict[str, object] = {}
+
+    def runner(argv, **_kwargs):
+        schema_path = Path(argv[argv.index('--output-schema') + 1])
+        seen['path'] = schema_path
+        seen['exists_during_runner'] = schema_path.is_file()
+        seen['bytes'] = schema_path.read_bytes()
+        events = (
+            {'type': 'thread.started', 'thread_id': 'codex-schema-spawn'},
+            {'type': 'turn.started'},
+            {
+                'type': 'item.completed',
+                'item': {
+                    'type': 'agent_message',
+                    'text': '{"schema":"review-v1"}',
+                },
+            },
+            {'type': 'turn.completed', 'usage': {}},
+        )
+        return SimpleNamespace(
+            returncode=0,
+            stdout=''.join(json.dumps(row) + '\n' for row in events),
+            stderr='')
+
+    monkeypatch.setattr(
+        agent, 'create_commander_driver',
+        lambda profile, **_kwargs: CodexCommanderDriver(
+            executable='codex.exe', runner=runner))
+    try:
+        result = agent._default_spawn('schema-owner')(
+            invocation, {}, io.BytesIO())
+    finally:
+        agent._close_commander_owner('schema-owner')
+
+    assert result.exit_code == 0
+    assert result.final_response == '{"schema":"review-v1"}'
+    assert seen['exists_during_runner'] is True
+    assert seen['bytes'] == frozen_bytes
+    assert b'poisoned' not in frozen_bytes and b'source-drift' not in frozen_bytes
+    assert isinstance(seen['path'], Path) and not seen['path'].exists()
+
+
 def test_commander_session_and_ledger_are_linked_without_fake_node(base, corpus):
     rec = agent.start(
         base, '42', authorized=True, egress_authorized=True,
@@ -3963,6 +4038,82 @@ def _reviewer_action_files(base):
         'reviewer-action-*.json'))
 
 
+def _stage2_compact_apply_edit_fixture(current, request_path):
+    """铸一份最小但完整的真实 reviewed GlobalEdit + compact 回答。"""
+    source_sha256 = '1' * 64
+    workpack_sha256 = '2' * 64
+    exact_payload = GlobalEdit.model_validate({
+        'characters': [{
+            'char_id': 'char_001',
+            'name_distinctiveness': 'high',
+        }],
+        'post_edit_review': {
+            'actor': 'agent:novel-pipeline-operator',
+            'expected_source_sha256': source_sha256,
+            'expected_workpack_sha256': workpack_sha256,
+            'reviewed_chapter_ordinals': [1],
+            'default_state': 'PASS',
+            'reason': '已完整复核可信模板与当前正文',
+            'quarantine_groups': [],
+            'review_scope': [{
+                'item_id': 'character:char_001',
+                'expected_subject_sha256': '9' * 64,
+            }],
+            'decisions': [],
+        },
+    }).model_dump(mode='json', by_alias=True, exclude_unset=True)
+    exact_request = {
+        'schema': agent.reviewer_tasks.REQUEST_SCHEMA,
+        'surface_seal': current.surface_seal,
+        'waiting_on': current.action.waiting_on,
+        'action': {
+            'kind': 'node',
+            'node': 'stage2.global',
+            'flags': ['--apply-edit', '@reviewer-input'],
+            'input_payload': exact_payload,
+        },
+    }
+    task = agent.reviewer_tasks.ReviewerTask(
+        waiting_on=current.action.waiting_on,
+        surface_seal=current.surface_seal,
+        business_sha256='3' * 64,
+        request_path=Path(request_path),
+        prompt='STAGE2 COMPACT IMMUTABLE WORKPACK',
+        submission_options=({
+            'id': 'node:stage2.global.apply-edit',
+            'exact_request': exact_request,
+            'editable_fields': [],
+            'binding_fields': [],
+            'allowed_values': {},
+        },),
+        workpack_sha256=workpack_sha256,
+        source_sha256=source_sha256,
+        main_text_sha256='4' * 64,
+        progress_sha256='5' * 64,
+        blocker_count=1,
+    )
+    binding = agent.stage2_reviewer_wire.wire_binding(task)
+    response = {
+        'schema': agent.stage2_reviewer_wire.WIRE_SCHEMA,
+        'option_id': binding.option_id,
+        'expected_exact_request_sha256': binding.expected_exact_request_sha256,
+        'payload': {
+            'edit': {
+                'characters': [{
+                    'char_id': 'char_001',
+                    'name_distinctiveness': 'medium',
+                }],
+                'post_edit_review': {
+                    'reason': '已复读正文并复核本次人物辨识度增量',
+                    'quarantine_groups': [],
+                    'decisions': [],
+                },
+            },
+        },
+    }
+    return task, response
+
+
 def test_reviewer_approval_decision_is_recorded_then_discarded_after_landing(
         base, corpus, monkeypatch):
     """loader 一过就落盘，canonical apply landed 后删除；本轮只唤一次 Commander。"""
@@ -4416,6 +4567,64 @@ def test_reviewer_durable_record_precedes_canonical_promotion_failure(
     ).glob('reviewer-response-*.json'))) == 1
 
 
+def test_stage2_compact_materialization_uses_real_loader_and_separates_digests(
+        base, monkeypatch):
+    """raw 回答用于纠错身份，residue 始终按实际 assembled 字节寻址。"""
+    current = SimpleNamespace(
+        state='blocked', surface_seal='6' * 64,
+        action=SimpleNamespace(
+            waiting_on=agent.queue.WAITING_ON_STAGE2_EDIT_CORRECTION))
+    first_root = Path(base) / '_service' / 'scratch' / '42' / 'compact-ok'
+    first_root.mkdir(parents=True)
+    first_task, response = _stage2_compact_apply_edit_fixture(
+        current, first_root / 'reviewer-request.json')
+    assembled = agent.stage2_reviewer_wire.assemble(first_task, response)
+    assembled_bytes = json.dumps(
+        assembled, ensure_ascii=False, sort_keys=True,
+        separators=(',', ':'), allow_nan=False).encode('utf-8') + b'\n'
+    raw_bytes = json.dumps(
+        response, ensure_ascii=False, sort_keys=True,
+        separators=(',', ':'), allow_nan=False).encode('utf-8') + b'\n'
+    assembled_digest = hashlib.sha256(assembled_bytes).hexdigest()
+    raw_digest = hashlib.sha256(raw_bytes).hexdigest()
+    assert assembled_digest != raw_digest
+
+    action, returned_digest, record_path = agent._materialize_reviewer_response(
+        first_task, current, json.dumps(response, ensure_ascii=False))
+
+    assert returned_digest == raw_digest
+    assert record_path is None
+    assert action.node == 'stage2.global'
+    decoded = decode_artifact(STAGE2_GLOBAL_EDIT, action.input_payload)
+    assert decoded.payload['characters'][0]['name_distinctiveness'] == 'medium'
+    assert first_task.request_path.read_bytes() == assembled_bytes
+
+    failed_root = Path(base) / '_service' / 'scratch' / '42' / 'compact-failed'
+    failed_root.mkdir(parents=True)
+    failed_task, failed_response = _stage2_compact_apply_edit_fixture(
+        current, failed_root / 'reviewer-request.json')
+
+    def fail_promotion(_candidate, _request_path):
+        raise OSError('synthetic compact promotion failure')
+
+    monkeypatch.setattr(agent, '_promote_reviewer_candidate', fail_promotion)
+    with pytest.raises(OSError, match='compact promotion failure'):
+        agent._materialize_reviewer_response(
+            failed_task, current,
+            json.dumps(failed_response, ensure_ascii=False),
+            preserve_validated=lambda candidate, digest:
+            agent._preserve_validated_reviewer_residue(
+                base, '42', candidate, digest))
+
+    residue = (
+        Path(base) / '_service' / 'runs' / '42' / 'reviewer_residue'
+        / f'reviewer-response-{assembled_digest}.json')
+    assert residue.read_bytes() == assembled_bytes
+    assert not failed_task.request_path.exists()
+    assert not (
+        residue.parent / f'reviewer-response-{raw_digest}.json').exists()
+
+
 def test_reviewer_turn_write_surface_is_the_epoch_scratch_session(
         base, corpus, monkeypatch):
     """reviewer 轮次只把本 epoch scratch session 交给 driver 作可写面，不再开整个 base。"""
@@ -4699,6 +4908,185 @@ def test_transient_failure_resumes_the_same_seat_without_a_new_session(
         if line.strip()]
     commander_rows = [row for row in rows if row.get('role') == 'commander']
     assert [row['outcome'] for row in commander_rows] == ['error', 'ok', 'ok', 'ok']
+
+
+def test_stage2_compact_schema_identity_is_stable_across_transient_resume(
+        base, corpus, monkeypatch):
+    """真实 AgentRun 首发与同席 resume 共用同一动态 schema 审计身份。"""
+    current = SimpleNamespace(
+        state='blocked', code_version='test-code-version',
+        surface_seal='6' * 64, execution_token=None,
+        action=SimpleNamespace(
+            waiting_on=agent.queue.WAITING_ON_STAGE2_EDIT_CORRECTION,
+            action_sha256='7' * 64))
+    monkeypatch.setattr(
+        agent.operator, 'next_action_at_code',
+        lambda _base, _sid, *, code: current)
+    stopped = AgentDeliveryOutcome(
+        state='stopped', reason='测试已完成 Stage2 compact 动作', checked_at=1)
+    monkeypatch.setattr(agent, '_assess_delivery', lambda *_args, **_kwargs: stopped)
+    task_box: dict[str, object] = {}
+
+    def build_task(_base, _sid, _current, request_path, *, epoch_id):
+        del epoch_id
+        task, response = _stage2_compact_apply_edit_fixture(
+            current, request_path)
+        task_box['task'] = task
+        task_box['response'] = response
+        return task
+
+    monkeypatch.setattr(agent.reviewer_tasks, 'build_task', build_task)
+    applied = []
+
+    def execute(_base, _sid, action, _run_token):
+        payload = decode_artifact(STAGE2_GLOBAL_EDIT, action.input_payload).payload
+        applied.append(payload['characters'][0]['name_distinctiveness'])
+        return agent.SupervisorActionResult(
+            exit_code=0, outcome=stopped, continue_ready=False)
+
+    monkeypatch.setattr(agent, '_execute_reviewer_node_action', execute)
+    sleeps: list[float] = []
+    monkeypatch.setattr(agent, '_retry_sleep', sleeps.append)
+    invocations: list[CommanderInvocation] = []
+
+    def default_spawn(_run_id, *, on_registered=None):
+        def spawn(invocation, env, log):
+            del env, log
+            invocations.append(invocation)
+            assert on_registered is not None
+            on_registered()
+            if len(invocations) == 1:
+                return CommanderProcessResult(
+                    exit_code=1,
+                    observation=CommanderObservation(
+                        provider_session_id='provider-stage2-schema',
+                        actual_model=invocation.profile.model,
+                        actual_effort=invocation.profile.reasoning_effort,
+                        usage=None),
+                    failure_kind='connection', retryable=True,
+                    wire_evidence=True)
+            return CommanderProcessResult(
+                exit_code=0,
+                observation=CommanderObservation(
+                    provider_session_id='provider-stage2-schema',
+                    actual_model=invocation.profile.model,
+                    actual_effort=invocation.profile.reasoning_effort,
+                    usage=None),
+                wire_evidence=True,
+                final_response=json.dumps(
+                    task_box['response'], ensure_ascii=False))
+        return spawn
+
+    monkeypatch.setattr(agent, '_default_spawn', default_spawn)
+    rec = agent.start(
+        base, '42', authorized=True, egress_authorized=True,
+        profiles=_PROFILES, spawn=None)
+    assert agent.wait(rec.run_id, 10)
+
+    assert applied == ['medium']
+    assert len(invocations) == 2
+    schema_sha256 = invocations[0].output_schema_sha256
+    assert schema_sha256 is not None
+    assert invocations[0].expected_output_schema_sha256 is None
+    assert invocations[1].resume_provider_session_id == 'provider-stage2-schema'
+    assert invocations[1].output_schema_bytes == invocations[0].output_schema_bytes
+    assert invocations[1].output_schema_sha256 == schema_sha256
+    assert invocations[1].expected_output_schema_sha256 == schema_sha256
+    assert sleeps == [agent.COMMANDER_RETRY_BACKOFF_SECONDS[0]]
+
+    [ledger] = agent.stage2_review_ledger.list_ledgers(base, '42')
+    session_run_id = ledger['turns'][0]['session_run_id']
+    session_events = [
+        row for row in agent_session_audit.read_events(base)
+        if row.session_run_id == session_run_id
+    ]
+    for kind, count in (
+            ('started', 1), ('attempt', 2), ('turn', 2), ('ended', 1)):
+        rows = [row for row in session_events if row.kind == kind]
+        assert len(rows) == count
+        assert {row.schema_sha256 for row in rows} == {schema_sha256}
+
+    attempts = [row for row in session_events if row.kind == 'attempt']
+    assert [row.error_kind for row in attempts] == ['connection', None]
+    [done] = [row for row in agent.records(base) if row.run_id == rec.run_id]
+    assert done.exit_code == 0
+
+
+def test_stage2_canonical_rejection_keeps_compact_digest_for_no_progress(
+        base, corpus, monkeypatch):
+    """canonical full request 被拒后，同一 compact 回答不能因 digest 混域白耗席位。"""
+    current = SimpleNamespace(
+        state='blocked', code_version='test-code-version',
+        surface_seal='6' * 64, execution_token=None,
+        action=SimpleNamespace(
+            waiting_on=agent.queue.WAITING_ON_STAGE2_EDIT_CORRECTION,
+            action_sha256='7' * 64))
+    monkeypatch.setattr(
+        agent.operator, 'next_action_at_code',
+        lambda _base, _sid, *, code: current)
+    stopped = AgentDeliveryOutcome(
+        state='stopped', reason='canonical compact rejection', checked_at=1)
+    monkeypatch.setattr(agent, '_assess_delivery', lambda *_args, **_kwargs: stopped)
+    task_box: dict[str, object] = {}
+
+    def build_task(_base, _sid, _current, request_path, *, epoch_id):
+        del epoch_id
+        task, response = _stage2_compact_apply_edit_fixture(
+            current, request_path)
+        task_box['task'] = task
+        task_box['response'] = response
+        return task
+
+    monkeypatch.setattr(agent.reviewer_tasks, 'build_task', build_task)
+    executed = 0
+
+    def reject_action(_base, _sid, _action, _run_token):
+        nonlocal executed
+        executed += 1
+        return agent.SupervisorActionResult(
+            exit_code=2, outcome=stopped, continue_ready=False,
+            failure_detail='surviving relation_set_complete 未显式复判')
+
+    monkeypatch.setattr(agent, '_execute_reviewer_node_action', reject_action)
+    invocations = []
+
+    def default_spawn(_run_id, *, on_registered=None):
+        def spawn(invocation, env, log):
+            del env, log
+            invocations.append(invocation)
+            assert on_registered is not None
+            on_registered()
+            return CommanderProcessResult(
+                exit_code=0,
+                observation=CommanderObservation(
+                    provider_session_id=f'provider-compact-{len(invocations)}',
+                    actual_model=invocation.profile.model,
+                    actual_effort=invocation.profile.reasoning_effort,
+                    usage=None),
+                wire_evidence=True,
+                final_response=json.dumps(
+                    task_box['response'], ensure_ascii=False))
+        return spawn
+
+    monkeypatch.setattr(agent, '_default_spawn', default_spawn)
+    rec = agent.start(
+        base, '42', authorized=True, egress_authorized=True,
+        profiles=_PROFILES, spawn=None)
+    assert agent.wait(rec.run_id, 10)
+
+    raw_digest = hashlib.sha256(json.dumps(
+        task_box['response'], ensure_ascii=False, sort_keys=True,
+        separators=(',', ':'), allow_nan=False,
+    ).encode('utf-8') + b'\n').hexdigest()
+    assert executed == 1
+    assert len(invocations) == 2, '第二席原样 compact 应在动作前识别为无进展'
+    [shown] = agent.stage2_review_ledger.list_ledgers(base, '42')
+    ledger = agent.stage2_review_ledger.Stage2ReviewLedger.model_validate_json(
+        Path(shown['ledger_path']).read_bytes())
+    assert ledger.turns[0].rejections[0].request_sha256 == raw_digest
+    [done] = [row for row in agent.records(base) if row.run_id == rec.run_id]
+    assert done.exit_code == 2
+    assert done.outcome is not None and '没有改变请求字节' in done.outcome.reason
 
 
 def test_zero_wire_launch_failure_relaunches_and_timeout_uses_partial_session(
