@@ -492,8 +492,13 @@ def test_collection_delta_split_is_ordered_and_stale_hash_does_not_mutate():
             }],
         }],
     })
-    with pytest.raises(TerminalState, match='expected_collection_sha256 过期'):
+    with pytest.raises(extract.GlobalEditCandidateRejected) as caught:
         _apply_secret_patches(data, stale, {1, 2})
+    assert 'collection_expected_sha_stale:1' in caught.value.safe_summary
+    assert (
+        'collection=secrets,category=collection_expected_sha_stale,count=1'
+        in caught.value.safe_summary)
+    assert '0' * 64 not in caught.value.safe_summary
     assert data == original
 
     current = GlobalEdit.model_validate({
@@ -664,7 +669,14 @@ def _sparse_reviewer_task(current: dict) -> SimpleNamespace:
             'exact_request': exact,
             'editable_fields': [],
             'binding_fields': [],
-            'allowed_values': {},
+            'allowed_values': {
+                'collection_operation_contract.'
+                'existing_subject_ids_by_collection': {
+                    'world_rules': sorted(
+                        row['rule_id']
+                        for row in current['canon']['world_rules']),
+                },
+            },
         },),
     )
 
@@ -1014,6 +1026,97 @@ def test_global_edit_preflight_rejects_dangling_endpoint_without_writing(tmp_pat
         extract.GLOBAL_EDIT_COMMIT, extract.GLOBAL_EDIT_FAILURE,
     ):
         assert not (book / rel).exists()
+
+
+def test_preflight_aggregates_unknown_collection_deletes_into_safe_correction_reason(
+        tmp_path):
+    """真机曾交回 988 个未知 delete；下一席必须知道修哪一组、哪类错、多少项。"""
+    book = tmp_path / '候选预检集合拒因_908'
+    book.mkdir()
+    _seed(book)
+    ctx = _ctx(book, 'stage2.global', paid=False)
+    current = ArtifactStore(ctx).read(
+        GlobalGrounding, extract.GLOBAL_REL).model_dump(
+            mode='json', by_alias=True)
+    sentinel_prefix = 'MODEL_SENTINEL_DELETE_'
+    edit = GlobalEdit.model_validate({
+        'collection_edits': [{
+            'collection': 'relations',
+            'expected_collection_sha256': subject_sha256(
+                current['entities']['relations']),
+            'operations': [
+                {
+                    'op': 'delete',
+                    'subject_id': f'{sentinel_prefix}{index:04d}',
+                }
+                for index in range(988)
+            ],
+        }],
+    })
+    before = _book_file_snapshot(book)
+
+    with pytest.raises(extract.GlobalEditCandidateRejected) as caught:
+        extract.preflight_global_edit(ctx, edit)
+
+    summary = caught.value.safe_summary
+    assert 'categories=collection_delete_subject_missing:988' in summary
+    assert (
+        'collection_breakdown=collection=relations,'
+        'category=collection_delete_subject_missing,count=988'
+    ) in summary
+    assert re.search(r'diagnostic_sha256=[0-9a-f]{64}', summary)
+    assert sentinel_prefix not in summary
+    assert len(caught.value.diagnostics) == 988
+    assert _book_file_snapshot(book) == before
+
+    # producer safe_summary 是下一 fresh correction session 唯一收到的失败事实；
+    # roundtrip 必须保留机器可操作三元组，同时仍不泄露任一模型 ID。
+    task = SimpleNamespace(
+        waiting_on=queue.WAITING_ON_STAGE2_EDIT_CORRECTION,
+        prompt='冻结的 Stage2 correction workpack',
+    )
+    prompt = reviewer_tasks.correction_prompt(
+        task, summary, request_sha256='a' * 64, attempt=1)
+    assert summary in prompt
+    assert 'collection/category/count' in prompt
+    assert sentinel_prefix not in prompt
+
+
+def test_candidate_preflight_reports_every_bad_collection_before_applying_any() -> None:
+    """同一回答的多组坏 operation 必须一次反馈，不能逐席暴露。"""
+    data = _grounding()
+    before = copy.deepcopy(data)
+    edit = GlobalEdit.model_validate({
+        'collection_edits': [
+            {
+                'collection': collection,
+                'expected_collection_sha256': subject_sha256(current),
+                'operations': [{
+                    'op': 'delete',
+                    'subject_id': f'MODEL_UNKNOWN_{collection}',
+                }],
+            }
+            for collection, current in (
+                ('relations', data['entities']['relations']),
+                ('secrets', data['canon']['secrets']),
+                ('world_rules', data['canon']['world_rules']),
+            )
+        ],
+    })
+
+    with pytest.raises(extract.GlobalEditCandidateRejected) as caught:
+        _apply_secret_patches(data, edit, {1, 2})
+
+    summary = caught.value.safe_summary
+    assert 'categories=collection_delete_subject_missing:3' in summary
+    for collection in ('relations', 'secrets', 'world_rules'):
+        assert (
+            f'collection={collection},'
+            'category=collection_delete_subject_missing,count=1'
+        ) in summary
+        assert f'MODEL_UNKNOWN_{collection}' not in summary
+    assert len(caught.value.diagnostics) == 3
+    assert data == before
 
 
 def _book_file_snapshot(book: Path) -> dict[str, bytes]:

@@ -425,7 +425,11 @@ immutable task 的唯一 submission option 恰为 `stage2.global --apply-edit` �
 只开放模板已有的顶层 edit 字段和稳定主体。canonical `collection_edits` 仍是
 `GlobalCollectionEdit[]`；compact v2 则把它表示为只含本模板开放集合的固定键 object，
 每个键的值直接是该集合专型 operation 数组，所有键 required、额外键关闭，因此一个集合在
-provider typed 值中天然至多出现一次。旧 v1 row list 不兼容且关闭式拒绝。patch 数组与
+provider typed 值中天然至多出现一次。各 collection 的动态 schema 还从同一冻结 workpack 的
+current collection 读取稳定 ID enum：`delete/split.subject_id` 只接受该 enum，合法 `add.item` 的
+新稳定 ID 不受限制；现存 direct patch 主体不会为规避冲突而从 enum 中剔除，若同交
+delete/split，仍由 `GlobalEdit` 跨写口规则关闭式拒绝。current collection 为空时只开放 add。
+旧 v1 row list 不兼容且关闭式拒绝。patch 数组与
 collection 固定键的 `[]` 表示本次**不提交**
 该写口，setting/replacement 的 `null` 也只是运输层“不提交”，不是把完整模板的 no-op
 值带入业务 edit，也不是生产 replacement 里的“经复核清空”。patch 行若出现，必须提交该模板行已开放的全部
@@ -449,13 +453,19 @@ apply → normalize → HARD → reenumerate/completeness 与最终原子写盘�
 组装器。所有 collection operations 应用后，直接字段 patch 的主体必须仍存在；relation endpoint、
 secret knowledge subject 与 address 等外键必须在修后 registry 中解析，引用新主体时必须由同一 edit
 实际 add/split。结构上可静态判断的 patch+delete/split 冲突由 `GlobalEdit` loader 关闭；依赖正式
-Global/MainText 的候选判据由 producer 的同一纯预检在 durable 回答之后、canonical 子进程之前复用，
+Global/MainText 的候选判据由 producer 的同一纯预检在 durable 回答之后、canonical 子进程之前复用。
+producer 必须先在修前 current collection 上预扫同一回答的全部 `collection_edits`，一次聚合所有
+stale/invalid operation diagnostics，再应用任何 operation；不能按集合逐个失败而消耗有限订正席。
 预检业务拒绝写回原席 provider-response digest，不启动 Executor，预检完整性/审计异常则保留 durable
-动作并以 unknown 停止。持久拒因只含稳定类别、计数与完整诊断 SHA，不回显模型可控的主体值、
-Pydantic input 或任意 extra key。
+动作并以 unknown 停止。持久安全拒因只暴露代码定义的可信 `collection/category/count` 与完整
+`diagnostic_sha256`，不回显模型可控的主体 ID、正文、任意 `loc/repr/detail`、Pydantic input 或 extra key。
 
-correction 的 exact template 是上一轮被 canonical 边界分类拒绝的 **failed sparse edit**，
-不是一份新的空模板：未提交目标默认保留，patch 按稳定 identity 覆盖，collection 行按
+只有 task 与 exact request 的 `waiting_on` 都是
+`WAITING_ON_STAGE2_EDIT_CORRECTION`（`recovery:stage2-global-reviewed-edit`），且 exact request
+携带 durable failed sparse edit 时，compact transport 才启用 failed-edit merge/drop；ledger turn 的
+`purpose=correction` 本身只说明席位用途，不能凭空制造业务基线。其他 task 的空数组/null 始终仍是
+“本次不提交”。满足上述条件时，correction exact template 是上一轮被 canonical 边界分类拒绝的
+**failed sparse edit**，不是一份新的空模板：未提交目标默认保留，patch 按稳定 identity 覆盖，collection 行按
 collection identity 完整替换 operations。compact v2 中每个模板开放 collection 都是 required
 固定键：该键 `[]` 表示不更新并保留 failed baseline，非空数组表示完整替换该集合 operations。
 撤销只接受 exact template 动态铸造的 opaque `drop_targets` 闭集；未知、重复及 update+drop
@@ -546,6 +556,13 @@ INVALID/failure、MainText、正式三伴产物 baseline/target 以及本次真�
 `item_id + kind + subject_path + subject_sha256` 四者均未变时继承；subject hash 绑定登记依赖闭包，
 因此 secret/rule/relation 的关联字段变化只重开该主体卡及其依赖项，集合完整性只在成员 ID 集变化时
 重开，互不相关且已成功的卡不再发给 Commander。
+
+ready Blueprint 的只读预审不是对所有可并行状态开放。Supervisor 先在同一冻结 snapshot 上复用
+`stage2_invalid_projection_ready`：若最新 Global 只以非称名 HARD 的 `.INVALID` 加 current/fresh
+projection 供 Blueprint 消费，就在读取 formal Global workpack 或旧/stale Blueprint 之前跳过预审，
+直接执行该 snapshot 已铸造的 ready Blueprint token。其余分支也只有在冻结 global review items 非空且
+全部为 `pending` 时才构造预审；任一已决、FAIL 或 UNVER 都返回 live reviewer 路由，且不得把等待重建的
+旧 Blueprint 当作预审材料。
 
 Agent 的 Stage2 global 闭环是“一次 Executor 产出 + 最多四席 Commander”。第一席审阅当前未闭合面；
 第二、三席只在仍有进展时接收增量 subject cards，并可在一份动作里同时提交 typed edit 与

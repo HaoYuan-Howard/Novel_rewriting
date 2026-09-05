@@ -13,7 +13,8 @@ from types import SimpleNamespace
 import pytest
 
 from contracts.artifacts import (
-    STAGE2_GLOBAL_EDIT, STAGE2_GLOBAL_REVIEW_DECISIONS,
+    STAGE2_BLUEPRINT_CHARACTER_PROJECTION, STAGE2_GLOBAL_EDIT,
+    STAGE2_GLOBAL_GROUNDING, STAGE2_GLOBAL_REVIEW_DECISIONS,
 )
 from contracts.schema import decode_artifact, encode_artifact
 from contracts.schema.api import Stage5ClosureRequest, Stage5ClosureTemplate
@@ -1209,22 +1210,34 @@ def test_stage2_prereview_is_read_only_compact_and_rebinds_live_surface(
             'state': 'UNVER', 'reason': '待审阅', 'evidence': [],
         },
     }
+    encoded_template = encode_artifact(
+        STAGE2_GLOBAL_REVIEW_DECISIONS, logical_template)
     packed = {
         'global': global_pack,
-        'global_template': encode_artifact(
-            STAGE2_GLOBAL_REVIEW_DECISIONS, logical_template),
+        'global_template': encoded_template,
     }
-    monkeypatch.setattr(
-        reviewer_tasks, '_workpack',
-        lambda *_args, **_kwargs: copy.deepcopy(packed))
+    commands = []
+
+    def json_command(argv, **_kwargs):
+        commands.append(tuple(argv))
+        if '--emit-review-workpack' in argv:
+            return copy.deepcopy(global_pack)
+        if '--emit-review-template' in argv:
+            return copy.deepcopy(encoded_template)
+        raise AssertionError(f'预审不得读取其他工作包：{argv}')
+
+    monkeypatch.setattr(reviewer_tasks, '_json_command', json_command)
     ready = SimpleNamespace(
         state='ready', surface_seal='a' * 64, action=None,
+        overview=SimpleNamespace(stages=[]),
         execution_token=SimpleNamespace(node='stage2.blueprint'))
 
     prereview = reviewer_tasks.build_stage2_prereview_task(
         tmp_path, '42', ready, tmp_path / 'prereview.json', epoch_id='epoch-1')
 
     assert prereview is not None
+    assert len(commands) == 2
+    assert all('stage2.blueprint' not in command for command in commands)
     assert prereview.prompt.count(reason) == 1, '相同持久理由必须以 catalog 去重'
     assert 'global_template' not in prereview.prompt
     assert prereview.prompt.count('第一章正文') == 1
@@ -1262,6 +1275,108 @@ def test_stage2_prereview_is_read_only_compact_and_rebinds_live_surface(
     assert formal['blocking_scope']['state'] == 'PASS'
     wrapper = json.loads(live.request_path.read_text(encoding='utf-8'))
     assert wrapper['surface_seal'] == blocked.surface_seal
+
+
+@pytest.mark.parametrize('states', [
+    ('PASS',),
+    ('pending', 'PASS'),
+    ('FAIL',),
+    ('UNVER',),
+])
+def test_stage2_prereview_skips_nonpending_global_before_stale_blueprint_read(
+        tmp_path, monkeypatch, states) -> None:
+    """Global 已被评审时直接跑 Blueprint，不读它的 stale 旧产物。"""
+    monkeypatch.setattr(
+        reviewer_tasks.paths, 'scratch_session_dir',
+        lambda _base, _sid, _epoch_id: tmp_path)
+    commands = []
+
+    def json_command(argv, **_kwargs):
+        commands.append(tuple(argv))
+        if 'stage2.blueprint' in argv:
+            raise reviewer_tasks.ReviewerTaskError('stale Blueprint 不可读')
+        if '--emit-review-workpack' in argv:
+            return {
+                'kind': 'stage2-global-review-workpack-v4',
+                'items': [
+                    {
+                        'item_id': f'item-{index}',
+                        'current_state': state,
+                    }
+                    for index, state in enumerate(states, start=1)
+                ],
+            }
+        raise AssertionError(f'非 pending Global 不得继续构包：{argv}')
+
+    monkeypatch.setattr(reviewer_tasks, '_json_command', json_command)
+    ready = SimpleNamespace(
+        state='ready', surface_seal='a' * 64, action=None,
+        overview=SimpleNamespace(stages=[]),
+        execution_token=SimpleNamespace(node='stage2.blueprint'))
+
+    task = reviewer_tasks.build_stage2_prereview_task(
+        tmp_path, '42', ready, tmp_path / 'prereview.json', epoch_id='epoch-1')
+
+    assert task is None
+    assert len(commands) == 1
+    assert 'stage2.global' in commands[0]
+    assert '--emit-review-workpack' in commands[0]
+
+
+@pytest.mark.parametrize('formal_exists', [False, True])
+def test_stage2_prereview_skips_registered_invalid_projection_before_formal_read(
+        tmp_path, monkeypatch, formal_exists) -> None:
+    """Blueprint 消费 INVALID 投影时，不缺读或误审旧 formal。"""
+    monkeypatch.setattr(
+        reviewer_tasks.paths, 'scratch_session_dir',
+        lambda _base, _sid, _epoch_id: tmp_path)
+    overview = SimpleNamespace(stages=[SimpleNamespace(
+        stage='stage2',
+        artifacts=[
+            SimpleNamespace(
+                rel=STAGE2_GLOBAL_GROUNDING, exists=formal_exists,
+                readable=formal_exists, freshness=('fresh' if formal_exists else 'missing'),
+                invalid=True),
+            SimpleNamespace(
+                rel=STAGE2_BLUEPRINT_CHARACTER_PROJECTION,
+                exists=True, readable=True, freshness='fresh', invalid=False),
+        ],
+    )])
+    ready = SimpleNamespace(
+        state='ready', surface_seal='a' * 64, action=None,
+        overview=overview,
+        execution_token=SimpleNamespace(node='stage2.blueprint'))
+    monkeypatch.setattr(
+        reviewer_tasks, '_json_command',
+        lambda *_args, **_kwargs: pytest.fail(
+            'INVALID projection ready 不得读取 formal Global workpack'))
+
+    task = reviewer_tasks.build_stage2_prereview_task(
+        tmp_path, '42', ready, tmp_path / 'prereview.json', epoch_id='epoch-1')
+
+    assert task is None
+
+
+def test_stage2_prereview_empty_blocking_workpack_closes_explicitly(
+        tmp_path, monkeypatch) -> None:
+    """空 blocking 面不是“全 pending”；不得静默铸空预审。"""
+    monkeypatch.setattr(
+        reviewer_tasks.paths, 'scratch_session_dir',
+        lambda _base, _sid, _epoch_id: tmp_path)
+    monkeypatch.setattr(
+        reviewer_tasks, '_json_command',
+        lambda argv, **_kwargs: ({
+            'kind': 'stage2-global-review-workpack-v4', 'items': [],
+        } if '--emit-review-workpack' in argv else pytest.fail(
+            f'空 blocking 面不得继续构包：{argv}')))
+    ready = SimpleNamespace(
+        state='ready', surface_seal='a' * 64, action=None,
+        overview=SimpleNamespace(stages=[]),
+        execution_token=SimpleNamespace(node='stage2.blueprint'))
+
+    with pytest.raises(reviewer_tasks.ReviewerTaskError, match='缺完整 items'):
+        reviewer_tasks.build_stage2_prereview_task(
+            tmp_path, '42', ready, tmp_path / 'prereview.json', epoch_id='epoch-1')
 
 
 def test_stage2_prereview_rejects_identity_drift_before_live_binding(
@@ -1330,7 +1445,11 @@ def _relation_item(relation_id: str) -> dict:
     }
 
 
-def _stage2_failed_global(items: list[dict]) -> dict:
+def _stage2_failed_global(
+    items: list[dict],
+    *,
+    current_collections: dict[str, object] | None = None,
+) -> dict:
     normalized = []
     for index, source in enumerate(items, start=1):
         row = copy.deepcopy(source)
@@ -1352,6 +1471,38 @@ def _stage2_failed_global(items: list[dict]) -> dict:
         row.setdefault('evidence_mode', 'none')
         row.setdefault('subject', {'claim': row['item_id']})
         normalized.append(row)
+    bindings = {
+        'characters': (
+            'character_set_complete', 'entities.characters'),
+        'relations': (
+            'relation_set_complete', 'entities.relations'),
+        'secrets': (
+            'secret_set_complete', 'canon.secrets'),
+        'world_rules': (
+            'world_rule_set_complete', 'canon.world_rules'),
+    }
+    for offset, (collection, subject) in enumerate(
+            (current_collections or {}).items(), start=len(normalized) + 1):
+        kind, path = bindings[collection]
+        normalized.append({
+            'item_id': f'current-set-{collection}',
+            'kind': kind,
+            'subject_sha256': f'{offset:x}'[-1] * 64,
+            'subject_path': path,
+            'effect': 'blocking',
+            'generation_impact': 'must_fix',
+            'generation_disposition': None,
+            'current_state': 'PASS',
+            'current_reason': '测试冻结 current collection',
+            'group_key': f'set:{collection}',
+            'registered_evidence': [],
+            'formal_evidence': [],
+            'unresolved_formal_evidence': [],
+            'exact_literal_hits': [],
+            'reading_scope': 'whole_book',
+            'evidence_mode': 'none',
+            'subject': copy.deepcopy(subject),
+        })
     return {
         'kind': 'stage2-global-review-workpack-v4',
         'workpack_sha256': '7' * 64,
@@ -1403,7 +1554,7 @@ def test_stage2_durable_correction_uses_failed_edit_without_loading_blueprint(
     monkeypatch.setattr(reviewer_tasks, '_json_command', command)
     pack = reviewer_tasks._workpack(
         'base', '42', queue.WAITING_ON_STAGE2_EDIT_CORRECTION,
-        review_run_id='review-run')
+        review_run_id='review-run', include_converged_blueprint=False)
 
     assert len(calls) == 1
     assert 'blueprint' not in pack
@@ -1587,7 +1738,11 @@ def test_all_stage2_apply_edit_options_publish_collection_operation_schema(
         }
     edit = _relation_collection_edit_envelope()
     options = reviewer_tasks._submission_options({
-        'global': _stage2_failed_global([item]),
+        'global': _stage2_failed_global(
+            [item], current_collections={
+                'relations': [
+                    _relation_item('rel_08'), _relation_item('rel_11')],
+            }),
         'global_edit_template': edit,
     }, _current(queue.WAITING_ON_STAGE2_REVIEW),
         queue.WAITING_ON_STAGE2_REVIEW)
@@ -1613,6 +1768,11 @@ def test_all_stage2_apply_edit_options_publish_collection_operation_schema(
         'collection_operation_contract.split.items.min_length'] == 2
     assert allowed[
         'collection_operation_contract.forbidden_fields'] == ['value']
+    assert allowed[
+        'collection_operation_contract.existing_subject_ids_by_collection'] == {
+            'relations': ['rel_08', 'rel_11']}
+    assert '不约束 add.item' in allowed[
+        'collection_operation_contract.delete_split_subject_rule']
     assert allowed[
         'collection_operation_contract.cross_operation_id_invariants'] == {
             'split_output_excludes_subject': (
@@ -1650,6 +1810,9 @@ def test_all_stage2_apply_edit_options_publish_collection_operation_schema(
         operation_schema = definitions[ref.rsplit('/', 1)[-1]]
         assert set(operation_schema['required']) == required
         assert operation_schema['additionalProperties'] is False
+        if op in {'delete', 'split'}:
+            assert operation_schema['properties']['subject_id']['enum'] == [
+                'rel_08', 'rel_11']
     split_ref = schema['discriminator']['mapping']['split']
     assert definitions[split_ref.rsplit('/', 1)[-1]][
         'properties']['items']['minItems'] == 2
@@ -1675,7 +1838,9 @@ def test_stage2_collection_operation_scaffold_reaches_real_load_action(
         'global': _stage2_failed_global([{
             'current_state': 'FAIL',
             'group_key': 'character:char_001',
-        }]),
+        }], current_collections={
+            'relations': [_relation_item('rel_08')],
+        }),
         'global_edit_template': edit,
     }, current, queue.WAITING_ON_STAGE2_REVIEW)
     request = copy.deepcopy(options[0]['exact_request'])
@@ -1709,7 +1874,9 @@ def test_stage2_collection_add_value_is_rejected_by_real_load_action(
         'global': _stage2_failed_global([{
             'current_state': 'FAIL',
             'group_key': 'character:char_001',
-        }]),
+        }], current_collections={
+            'relations': [_relation_item('rel_08')],
+        }),
         'global_edit_template': edit,
     }, current, queue.WAITING_ON_STAGE2_REVIEW)
     request = copy.deepcopy(options[0]['exact_request'])
@@ -1762,7 +1929,9 @@ def test_stage2_collection_cross_operation_rejection_has_safe_reason_code(
         'global': _stage2_failed_global([{
             'current_state': 'FAIL',
             'group_key': 'relation:rel_01',
-        }]),
+        }], current_collections={
+            'relations': [_relation_item('rel_08')],
+        }),
         'global_edit_template': _relation_collection_edit_envelope(),
     }, current, queue.WAITING_ON_STAGE2_REVIEW)
     request = copy.deepcopy(options[0]['exact_request'])
@@ -1801,7 +1970,9 @@ def test_stage2_direct_patch_and_collection_delete_has_safe_reason_code(
         'global': _stage2_failed_global([{
             'current_state': 'FAIL',
             'group_key': 'relation:rel_08',
-        }]),
+        }], current_collections={
+            'relations': [_relation_item('rel_08')],
+        }),
         'global_edit_template': template,
     }, current, queue.WAITING_ON_STAGE2_REVIEW)
     request = copy.deepcopy(options[0]['exact_request'])
@@ -1929,7 +2100,11 @@ def _sparse_global_edit_options() -> tuple[
     })
     options = reviewer_tasks._submission_options({
         'global': _stage2_failed_global([{
-            'current_state': 'FAIL', 'group_key': 'relation:rel_01'}]),
+            'current_state': 'FAIL', 'group_key': 'relation:rel_01'}],
+            current_collections={
+                'relations': [_relation_item('rel_01')],
+                'secrets': [],
+            }),
         'global_edit_template': template,
     }, current, queue.WAITING_ON_STAGE2_REVIEW)
     return current, options
@@ -2070,8 +2245,102 @@ def test_reviewer_correction_prompt_is_self_contained_for_a_fresh_session(
     assert '直接 patch 主体必须仍存在' in prompt
     assert '修后外键必须解析到实际存在的主体' in prompt
     assert 'collection 固定键 []' in prompt
-    assert '订正时保留 failed baseline' in prompt
+    assert '没有 durable failed baseline' in prompt
+    assert '也不开放 drop_targets' in prompt
+    assert '都只表示本次不提交' in prompt
+    assert '保留 failed baseline' not in prompt
+    assert '替换或 drop 那一 collection' not in prompt
+
+
+def test_failed_edit_correction_prompt_alone_enables_merge_and_drop(
+        tmp_path) -> None:
+    """只有 durable EDIT_CORRECTION 才能把空值解释成保留失败基线。"""
+    task = reviewer_tasks.ReviewerTask(
+        waiting_on=queue.WAITING_ON_STAGE2_EDIT_CORRECTION,
+        surface_seal='a' * 64,
+        business_sha256='b' * 64,
+        request_path=tmp_path / 'request.json',
+        prompt='durable failed-edit workpack',
+        submission_options=(),
+    )
+
+    prompt = reviewer_tasks.correction_prompt(
+        task,
+        'categories=collection_delete_subject_missing:3；'
+        'collection_breakdown=collection=relations,'
+        'category=collection_delete_subject_missing,count=3',
+        request_sha256='c' * 64,
+        attempt=1,
+    )
+
+    assert '替换或 drop 那一 collection' in prompt
+    assert '保留 failed baseline' in prompt
     assert '撤销只用开放的 drop_targets' in prompt
+    assert '没有 durable failed baseline' not in prompt
+
+
+@pytest.mark.parametrize(('waiting_on', 'expected', 'forbidden'), [
+    (
+        queue.WAITING_ON_STAGE2_REVIEW,
+        '当前 task 没有 durable failed-edit baseline',
+        '因此保留 failed baseline',
+    ),
+    (
+        queue.WAITING_ON_STAGE2_EDIT_CORRECTION,
+        '因此保留 failed baseline',
+        '当前 task 没有 durable failed-edit baseline',
+    ),
+])
+def test_stage2_main_prompt_distinguishes_sparse_retry_from_failed_edit_merge(
+        tmp_path, monkeypatch, waiting_on, expected, forbidden) -> None:
+    """主 prompt 与 compact addendum 对空值/merge 的解释必须一致。"""
+    monkeypatch.setattr(
+        reviewer_tasks.paths, 'scratch_session_dir',
+        lambda _base, _sid, _epoch_id: tmp_path)
+    monkeypatch.setattr(
+        reviewer_tasks, '_workpack',
+        lambda *_args, **_kwargs: {'global': {'items': []}})
+    current = _current(waiting_on)
+    option = {
+        'id': 'node:stage2.global.test',
+        'exact_request': reviewer_tasks._request_wrapper(current, waiting_on, {
+            'kind': 'node', 'node': 'stage2.global', 'flags': [],
+        }),
+        'editable_fields': [],
+        'binding_fields': [],
+        'allowed_values': {},
+    }
+    monkeypatch.setattr(
+        reviewer_tasks, '_submission_options',
+        lambda *_args, **_kwargs: [option])
+    monkeypatch.setattr(
+        reviewer_tasks, '_review_materials',
+        lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(
+        reviewer_tasks, '_stage2_business_sha256',
+        lambda *_args, **_kwargs: '1' * 64)
+    monkeypatch.setattr(
+        reviewer_tasks, '_stage2_progress_identity',
+        lambda *_args, **_kwargs: {
+            'workpack_sha256': '2' * 64,
+            'source_sha256': '3' * 64,
+            'main_text_sha256': '4' * 64,
+            'progress_sha256': '5' * 64,
+            'blocker_count': 1,
+        })
+    from novel.orchestrator import inspection
+    monkeypatch.setattr(
+        inspection, 'read_surface_seal',
+        lambda *_args, **_kwargs: current.surface_seal)
+
+    task = reviewer_tasks.build_task(
+        tmp_path, '42', current, tmp_path / 'request.json',
+        epoch_id='epoch-1')
+
+    assert task is not None
+    instructions = task.prompt.split('<reviewer-contract>', 1)[0]
+    assert expected in instructions
+    assert forbidden not in instructions
 
 
 def test_stage2_after_edit_reviews_only_changed_pending_items() -> None:

@@ -222,3 +222,17 @@ canonical action 真正 landed 后才由书内 typed 产物接管恢复；不能
 resume 必须复用，并把同一 SHA 贯穿 started/attempt/turn/ended 与在线指针。只能接收 schema 文件路径的
 driver 把文件限制在 runner 生命周期，残留只按同字节普通文件回收；只能内联 schema 的 driver 则必须在
 wire 前预检 Windows argv。临时运输文件不能因为落在 scratch 就冒充 artifact 或 checkpoint。
+
+并行预取必须先在同一冻结 snapshot 上证明自己读的是将来会被消费的业务分支，再去构造昂贵工作包。
+“下一个节点已 ready”并不自动等于“预审也有资格”：只有冻结审阅项非空且全 pending 才能预审；若
+planner 已登记另一条可直接消费的 INVALID 投影路径，就应在读取 formal 或旧下游产物前跳过预审，
+直接执行已铸 token。否则并行优化会把不存在的 formal 变成假红，或花一席审错历史分支。
+
+动态枚举要按 operation 的语义方向收窄，不能把一个闭集套在所有字段上：delete/split 的输入主体只可
+来自冻结 current collection，add 的新主体则必须保持开放；direct patch 主体也不能为了躲避跨写口冲突
+而从输入 enum 中删掉，冲突仍交 canonical validator 拒绝。同一回答涉及多 collection 时，producer 应先
+在修前全集上聚合所有 operation diagnostics，再应用任一 operation，避免有限订正预算被逐组首错耗尽。
+业务拒因跨进程传播时只发布代码定义的可信
+collection/category/count 与完整诊断摘要 SHA，不回显任意 ID、正文、loc 或 repr。最后，ledger 的
+`purpose` 只是“这次调用为何发生”的审计标签，不是业务基线；merge/drop 必须同时由 planner 的 current
+waiting_on 与 durable failed edit 证明，不能看到 `purpose=correction` 就把初始 sparse 空值改读成“保留旧失败”。

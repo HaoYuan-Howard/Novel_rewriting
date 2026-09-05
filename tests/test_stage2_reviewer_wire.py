@@ -77,10 +77,20 @@ def _task(
         'exact_request': exact,
         'editable_fields': [],
         'binding_fields': [],
-        'allowed_values': {},
+        # 真实 task 由 reviewer_tasks 从同一冻结 current collection 生成这张表。
+        # 测试 helper 覆盖会动态切换的四个 collection，wire 只消费模板实际开放键。
+        'allowed_values': {
+            'collection_operation_contract.existing_subject_ids_by_collection': {
+                'characters': ['char_001', 'char_009'],
+                'relations': ['rel_01', 'rel_08', 'rel_09'],
+                'secrets': ['secret_01', 'secret_02'],
+                'world_rules': ['wr_01', 'wr_02'],
+            },
+        },
     }
     return SimpleNamespace(
         waiting_on=waiting_on,
+        prompt='初始 Stage2 reviewer prompt',
         submission_options=(option,),
     )
 
@@ -530,6 +540,27 @@ def test_initial_wire_rejects_correction_only_drop_targets() -> None:
         wire.assemble(task, response)
 
 
+def test_intra_task_correction_purpose_does_not_invent_failed_merge_baseline() -> None:
+    """席位 purpose=correction 不等于 planner 已给出 durable failed edit。"""
+    task = _task(scope_count=1, correction=False)
+    reason = (
+        'Stage2 GlobalEdit 候选被 producer 业务边界拒绝；'
+        'categories=collection_delete_subject_missing:988；'
+        f'diagnostic_sha256={"a" * 64}；'
+        'collection_breakdown=collection=world_rules,'
+        'category=collection_delete_subject_missing,count=988')
+    correction = reviewer_tasks.correction_prompt(
+        task, reason, request_sha256='b' * 64, attempt=1)
+    prompt = wire.prompt_for(task, correction)
+
+    assert wire.wire_binding(task).allowed_drop_targets == ()
+    assert '本轮不是 correction' in prompt
+    assert 'drop_targets' not in json.dumps(
+        wire.response_schema(task), ensure_ascii=False)
+    assert reason in prompt
+    assert 'collection/category/count' in prompt
+
+
 def test_collection_split_reusing_subject_has_safe_actionable_reason() -> None:
     task = _task(scope_count=1)
     edit = task.submission_options[0]['exact_request']['action']['input_payload']
@@ -618,6 +649,45 @@ def test_response_schema_is_portable_and_task_specific() -> None:
     assert allowed[
         'post_edit_review.decision_contract.compact_v2_trusted_injected_fields'] == [
             'expected_subject_sha256']
+
+
+def test_native_schema_rejects_unknown_collection_subject_but_keeps_add_open() -> None:
+    """delete/split 只认 current enum；合法 add 不得被该 enum 顺带封死。"""
+    task = _task(scope_count=1)
+    sentinel = 'SENTINEL_UNKNOWN_RULE_DO_NOT_ECHO'
+
+    for operation in (
+        {'op': 'delete', 'subject_id': sentinel},
+        {
+            'op': 'split', 'subject_id': sentinel,
+            'items': [
+                _world_rule_item('wr_98', '拆分规则甲'),
+                _world_rule_item('wr_99', '拆分规则乙'),
+            ],
+        },
+    ):
+        unknown = _response(task, scope_count=1)
+        unknown['payload']['edit']['collection_edits']['world_rules'] = [
+            operation]
+        with pytest.raises(
+                wire.Stage2ReviewerWireError, match='动态 schema') as caught:
+            wire.assemble(task, unknown)
+        assert sentinel not in str(caught.value)
+
+    existing = _response(task, scope_count=1)
+    existing['payload']['edit']['collection_edits']['world_rules'] = [{
+        'op': 'delete', 'subject_id': 'wr_02',
+    }]
+    assembled_existing = wire.assemble(task, existing)
+    assert assembled_existing['action']['input_payload']['collection_edits'][0][
+        'operations'][0]['subject_id'] == 'wr_02'
+
+    added = _response(task, scope_count=1)
+    added['payload']['edit']['collection_edits']['world_rules'][0][
+        'item']['rule_id'] = 'wr_99'
+    assembled_add = wire.assemble(task, added)
+    assert assembled_add['action']['input_payload']['collection_edits'][0][
+        'operations'][0]['item']['rule_id'] == 'wr_99'
 
 
 def test_collection_wire_v1_list_and_unknown_fixed_key_are_rejected() -> None:

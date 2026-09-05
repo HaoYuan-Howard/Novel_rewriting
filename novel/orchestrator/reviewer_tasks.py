@@ -90,6 +90,23 @@ _COLLECTION_MEMBER_MODELS = {
     'world_rules': WorldRuleResponse,
 }
 
+# collection edit 的 ``expected_collection_sha256`` 绑定完整（含 evidence）集合，
+# reviewer workpack 展示的 ``subject`` 则是去 evidence 的阅读投影，二者字节不能
+# 直接比较。不过两份材料由 ``_workpack`` 在同一最终 surface-seal CAS 内产生；
+# 这里再要求 collection 完整性行的 kind/path/shape 精确匹配，就能从冻结的当前
+# collection 提取稳定 ID，供 delete/split 的 provider schema 枚举。add 的新 ID
+# 刻意不走这个枚举，仍由成员 model 与 producer 的完整候选校验负责。
+_COLLECTION_REVIEW_BINDINGS: dict[str, tuple[str, str, str]] = {
+    'characters': (
+        'character_set_complete', 'entities.characters', 'char_id'),
+    'relations': (
+        'relation_set_complete', 'entities.relations', 'relation_id'),
+    'secrets': (
+        'secret_set_complete', 'canon.secrets', 'secret_id'),
+    'world_rules': (
+        'world_rule_set_complete', 'canon.world_rules', 'rule_id'),
+}
+
 
 class ReviewerTaskError(RuntimeError):
     """工作包或 reviewer typed request 无法关闭式证明。"""
@@ -346,6 +363,7 @@ def _workpack(
     *,
     review_run_id: str,
     current: OperatorNext | None = None,
+    include_converged_blueprint: bool = True,
 ) -> dict[str, Any]:
     py = sys.executable
     root = Path(__file__).resolve().parents[2]
@@ -443,6 +461,16 @@ def _workpack(
                 key: value for key, value in correction.items()
                 if key not in {'failed_edit', 'global_review_workpack'}
             }
+            return pack
+
+        if (not include_converged_blueprint
+                and (not global_pack['items'] or any(
+                    not isinstance(row, dict)
+                    or row.get('current_state') != 'pending'
+                    for row in global_pack['items']))):
+            # ready Blueprint 只在全 pending 时预取 Global 审阅。其他
+            # 状态属于 live reviewer 路由；此时 Blueprint 很可能正是
+            # 等待本次 producer 重建的 stale 旧产物，不得提前读它。
             return pack
 
         has_pending = 'pending' in states
@@ -1310,15 +1338,27 @@ def _reviewed_global_edit_template(raw: Any, global_pack: dict[str, Any]) -> dic
         raise ReviewerTaskError('Stage2 reviewed GlobalEdit 骨架不符合 typed 契约') from exc
 
 
-@lru_cache(maxsize=len(_COLLECTION_MEMBER_MODELS))
-def _collection_operation_schema(collection: str) -> dict[str, Any]:
+def _literal(values: tuple[str, ...]) -> Any:
+    """运行时构造关闭式 ``Literal``；调用方保证至少一项。"""
+    if not values:
+        raise ReviewerTaskError('不能为零个 collection subject 构造 Literal')
+    return Literal.__getitem__(values)
+
+
+@lru_cache(maxsize=64)
+def _collection_operation_schema(
+    collection: str,
+    existing_subject_ids: tuple[str, ...],
+) -> dict[str, Any]:
     """返回一份只含当前 collection 成员类型的 Pydantic operation schema。
 
     生产 ``GlobalCollectionOperation`` 的 ``item`` 是四类成员联合，真正的
     collection→member 约束由 ``GlobalCollectionEdit`` 的 model validator 收口。
     Reviewer 却需要在输出前看见局部闭集。这里继承生产 add/delete/split models，
-    只把 add.item 与 split.items 专门化为当前生产成员 model；operation 键集、
-    ``extra=forbid`` 与 split 的最小长度仍来自/对齐现役 Pydantic 契约。
+    把 add.item / split.items 专门化为当前生产成员 model，并把 delete/split 的
+    ``subject_id`` 收成冻结当前 collection 的稳定 ID enum；operation 键集、
+    ``extra=forbid`` 与 split 的最小长度仍来自/对齐现役 Pydantic 契约。当前集合
+    为空时只有 add 分支可达，不能用一个伪 sentinel 冒充可删除主体。
     """
     member_model = _COLLECTION_MEMBER_MODELS.get(collection)
     if member_model is None:
@@ -1330,21 +1370,80 @@ def _collection_operation_schema(collection: str) -> dict[str, Any]:
         item=(member_model, copy.deepcopy(
             GlobalCollectionAdd.model_fields['item'])),
     )
+    if not existing_subject_ids:
+        return TypeAdapter(add_model).json_schema()
+    subject_id_type = _literal(existing_subject_ids)
+    delete_model = create_model(
+        f'Reviewer{member_model.__name__}Delete',
+        __base__=GlobalCollectionDelete,
+        subject_id=(subject_id_type, copy.deepcopy(
+            GlobalCollectionDelete.model_fields['subject_id'])),
+    )
     split_model = create_model(
         f'Reviewer{member_model.__name__}Split',
         __base__=GlobalCollectionSplit,
+        subject_id=(subject_id_type, copy.deepcopy(
+            GlobalCollectionSplit.model_fields['subject_id'])),
         items=(list[member_model], copy.deepcopy(
             GlobalCollectionSplit.model_fields['items'])),
     )
     operation_type = Annotated[
-        add_model | GlobalCollectionDelete | split_model,
+        add_model | delete_model | split_model,
         Field(discriminator='op'),
     ]
     return TypeAdapter(operation_type).json_schema()
 
 
-def _collection_edit_allowed_values(edit: Mapping[str, Any]) -> dict[str, Any]:
-    """把模板实际开放的 collection 局部 operation 闭集交给 Commander。"""
+def _current_collection_subject_ids(
+    global_pack: Mapping[str, Any], collection: str,
+) -> tuple[str, ...]:
+    """从冻结 review workpack 的 current collection 取稳定成员 ID。"""
+    try:
+        expected_kind, expected_path, id_field = _COLLECTION_REVIEW_BINDINGS[
+            collection]
+    except KeyError as exc:  # pragma: no cover —— caller 已查 collection 闭集
+        raise ReviewerTaskError(
+            f'Stage2 collection edit 含未知 collection：{collection!r}') from exc
+    rows = global_pack.get('items')
+    if not isinstance(rows, list):
+        raise ReviewerTaskError('Stage2 global workpack.items 形状漂移')
+    matches = [
+        row for row in rows
+        if isinstance(row, Mapping)
+        and row.get('kind') == expected_kind
+        and row.get('subject_path') == expected_path
+        and row.get('group_key') == f'set:{collection}'
+    ]
+    if len(matches) != 1:
+        raise ReviewerTaskError(
+            f'Stage2 {collection} collection 缺唯一完整性阅读主体')
+    subject = matches[0].get('subject')
+    if collection == 'characters':
+        if (not isinstance(subject, Mapping)
+                or any(not isinstance(key, str) or not key
+                       for key in subject)):
+            raise ReviewerTaskError(
+                'Stage2 characters current collection 形状漂移')
+        identities = list(subject)
+    else:
+        if (not isinstance(subject, list)
+                or any(not isinstance(row, Mapping) for row in subject)):
+            raise ReviewerTaskError(
+                f'Stage2 {collection} current collection 形状漂移')
+        identities = [row.get(id_field) for row in subject]
+        if any(not isinstance(value, str) or not value for value in identities):
+            raise ReviewerTaskError(
+                f'Stage2 {collection} current collection 缺稳定成员 ID')
+    if len(identities) != len(set(identities)):
+        raise ReviewerTaskError(
+            f'Stage2 {collection} current collection 成员 ID 重复')
+    return tuple(sorted(identities))
+
+
+def _collection_edit_allowed_values(
+    edit: Mapping[str, Any], global_pack: Mapping[str, Any],
+) -> dict[str, Any]:
+    """把模板开放 collection 与 current subject enum 交给 Commander。"""
     raw_rows = edit.get('collection_edits') or []
     if not isinstance(raw_rows, list):
         raise ReviewerTaskError('Stage2 GlobalEdit.collection_edits 必须是数组')
@@ -1361,6 +1460,10 @@ def _collection_edit_allowed_values(edit: Mapping[str, Any]) -> dict[str, Any]:
         raise ReviewerTaskError('Stage2 collection edit template 重复开放同一集合')
     if not collections:
         return {}
+    existing_subject_ids = {
+        name: _current_collection_subject_ids(global_pack, name)
+        for name in collections
+    }
     return {
         'collection_operation_contract.canonical_path': (
             'action.input_payload.collection_edits[].operations[]'),
@@ -1374,6 +1477,13 @@ def _collection_edit_allowed_values(edit: Mapping[str, Any]) -> dict[str, Any]:
         },
         'collection_operation_contract.split.items.min_length': 2,
         'collection_operation_contract.forbidden_fields': ['value'],
+        'collection_operation_contract.existing_subject_ids_by_collection': {
+            name: list(existing_subject_ids[name]) for name in collections
+        },
+        'collection_operation_contract.delete_split_subject_rule': (
+            'delete/split.subject_id 必须来自本包冻结的 current collection enum；'
+            '该 enum 不约束 add.item 的新稳定 ID。直接 patch 同一主体再 delete/split '
+            '仍由 GlobalEdit 跨写口静态规则拒绝，因此不会从 current enum 中删掉 patch 主体。'),
         'collection_operation_contract.cross_operation_id_invariants': {
             'split_output_excludes_subject': (
                 'split 的任一输出 ID 不得复用该 split.subject_id'),
@@ -1397,7 +1507,8 @@ def _collection_edit_allowed_values(edit: Mapping[str, Any]) -> dict[str, Any]:
             for name in collections
         },
         'collection_operation_contract.pydantic_schema_by_collection': {
-            name: copy.deepcopy(_collection_operation_schema(name))
+            name: copy.deepcopy(_collection_operation_schema(
+                name, existing_subject_ids[name]))
             for name in collections
         },
     }
@@ -1453,10 +1564,12 @@ def _post_edit_review_allowed_values() -> dict[str, Any]:
     }
 
 
-def _global_edit_allowed_values(edit: Mapping[str, Any]) -> dict[str, Any]:
+def _global_edit_allowed_values(
+    edit: Mapping[str, Any], global_pack: Mapping[str, Any],
+) -> dict[str, Any]:
     """一处组装 reviewed GlobalEdit 的结构闭集，供三类 option 共用。"""
     return {
-        **_collection_edit_allowed_values(edit),
+        **_collection_edit_allowed_values(edit, global_pack),
         **_post_edit_review_allowed_values(),
     }
 
@@ -1576,7 +1689,7 @@ def _submission_options(
                         '只修当前增量并复核修改结果；新打开项走默认证明，仍保持同一 hash 的'
                         '旧 FAIL/UNVER 必须列入 post_edit_review.decisions。原样模板或未闭合项'
                         '会在写盘前被拒绝；订正席最多两席，第四席只读终审。'),
-                    **_global_edit_allowed_values(edit_payload),
+                    **_global_edit_allowed_values(edit_payload, pack['global']),
                 },
             )]
 
@@ -1646,7 +1759,8 @@ def _submission_options(
                         'purpose': (
                             '只有确认 Global 主体本身有错时选择；同一轮完成修订与'
                             '修后复核；未修改但已重新核实的旧项须显式 decisions。'),
-                        **_global_edit_allowed_values(edit_payload),
+                        **_global_edit_allowed_values(
+                            edit_payload, pack['global']),
                     },
                 ),
             ]
@@ -1792,7 +1906,8 @@ def _submission_options(
                     ],
                     allowed_values={
                         'purpose': '确认事实组内容有错时修订；不用于掩盖材料不足。',
-                        **_global_edit_allowed_values(edit_payload),
+                        **_global_edit_allowed_values(
+                            edit_payload, pack['global']),
                     },
                 ),
             ]
@@ -2256,6 +2371,15 @@ def build_task(
         ' submission_options 中那份失败 edit，不要从头生成；持久 ledger 会保证'
         '订正席最多两席且无进展 fingerprint 不会重演。\n'
         if waiting_on == queue.WAITING_ON_STAGE2_EDIT_CORRECTION else '')
+    compact_empty_semantics = (
+        '当前 task 与 exact request 已由 durable failed edit 证明是真实增量纠正：'
+        'compact 固定 collection 键与 patch 数组的 []、setting/replacement 的 null '
+        '都表示“不提交覆盖”，因此保留 failed baseline；撤销只能使用本包开放的 '
+        'drop_targets。'
+        if waiting_on == queue.WAITING_ON_STAGE2_EDIT_CORRECTION else
+        '当前 task 没有 durable failed-edit baseline：compact 固定 collection 键与 '
+        'patch 数组的 []、setting/replacement 的 null 都只表示本次不提交该写口，'
+        '也不开放 drop_targets。')
     final_review_instruction = (
         '\n当前 blocker 是 Stage2 的第四席只读独立终审。你不是前几席的延续：'
         'materials.global.items 是完整 blocking 面（含已 PASS 项的 current_reason 与证据），'
@@ -2311,7 +2435,10 @@ relation_set_complete 的 hash 不变，它仍必须出现在 decisions。
 `exact_request` 的 canonical collection_edits[].operations 不是通用 value patch：add 只允许 op + item，delete
 只允许 op + subject_id，split 只允许 op + subject_id + items 且 items 至少两项；
 绝无 value 字段。item/items 必须使用 allowed_values 按 collection 指定的成员 model，
-并通过同包下发的局部 Pydantic schema。同一 collection 的全部 operations
+并通过同包下发的局部 Pydantic schema。delete/split.subject_id 只能从
+existing_subject_ids_by_collection 对应 current collection enum 选择；这个 enum 不限制
+合法 add 的新稳定 ID，也不排除同时出现在 patch 模板中的现存主体——后者若真与
+delete/split 同交，仍由 GlobalEdit 跨写口静态规则拒绝。同一 collection 的全部 operations
 还必须同时满足四条跨操作 ID 不变量：split 输出不复用该 subject_id；
 delete/split 触及的输入 ID 不重复；add/split 产生的输出 ID 不重复；
 全部输入 ID 与输出 ID 完全不相交。所有 collection operation 应用后，直接字段
@@ -2320,8 +2447,7 @@ endpoint、secret knowledge subject 与 address 等外键也必须在修后主�
 引用新主体时须在同一 edit 的 collection add/split 中实际提交它。仅当 native schema
 明示 ``novel-stage2-reviewer-delta-v2`` 时，compact 运输层把 ``collection_edits``
 表示为按本次模板开放集合固定键的 object，每个集合
-天然至多一次；各键的 ``[]`` 与 patch 数组的 []、
-setting/replacement 的 null 表示本次不提交该写口，不代表把模板的 no-op 行抄入
+天然至多一次；{compact_empty_semantics} 任何空值都不代表把模板的 no-op 行抄入
     canonical edit；一旦提交 canonical patch 行，只能是模板无重复有序子序列；compact
     collection 只使用本次原生 schema 明示的固定键 operations。
     canonical full-action 的 post_edit_review.decisions 每行必须显式包含 item_id、
@@ -2410,6 +2536,14 @@ def build_stage2_prereview_task(
     if (current.state != 'ready' or token is None
             or token.node != 'stage2.blueprint'):
         return None
+    # R-2.16 允许最新 Global 只以「非称名 HARD 的 INVALID + current/fresh
+    # projection」供 Blueprint 消费。此时 formal 可能不存在，也可能仍是一份
+    # 全 pending 的旧主体；预审若去读 formal workpack，前者会假红，后者会花钱
+    # 审错分支。资格必须先复用 operator 同一冻结 overview 的生产判据，命中这条
+    # 登记路径就只执行已有 Blueprint token，不广泛吞掉其他 workpack 异常。
+    from novel.orchestrator import state as orchestrator_state
+    if orchestrator_state.stage2_invalid_projection_ready(current.overview):
+        return None
     base_abs = os.path.abspath(os.fspath(base))
     request = Path(request_path).resolve()
     request_root = paths.scratch_session_dir(base_abs, sid, epoch_id).resolve()
@@ -2422,7 +2556,8 @@ def build_stage2_prereview_task(
     waiting_on = queue.WAITING_ON_STAGE2_REVIEW
     review_run_id = f'supervisor-prereview-{current.surface_seal[:20]}'
     pack = _workpack(
-        base_abs, sid, waiting_on, review_run_id=review_run_id, current=None)
+        base_abs, sid, waiting_on, review_run_id=review_run_id, current=None,
+        include_converged_blueprint=False)
     rows = pack.get('global', {}).get('items')
     if (not isinstance(rows, list) or not rows
             or any(not isinstance(row, dict) for row in rows)):
@@ -3116,6 +3251,19 @@ def correction_prompt(
 逐字保留 binding_fields，只修改 editable_fields。最终 agent_message 只输出一份裸 JSON
 object，不用 Markdown/代码围栏，不写文件、不调用工具；Supervisor 验证后原子落 scratch。
 """
+    failed_edit_correction = (
+        task.waiting_on == queue.WAITING_ON_STAGE2_EDIT_CORRECTION)
+    collection_retry = (
+        '若确定性拒因给出 collection/category/count，须替换或 drop 那一 '
+        'collection 的失败 operations，不能靠空数组把坏基线原样保留。\n'
+        'compact 的 collection 固定键 []、其他 patch 的 [] 与 '
+        'setting/replacement 的 null 都表示不提交覆盖并保留 failed baseline；'
+        '撤销只用开放的 drop_targets。'
+        if failed_edit_correction else
+        '若确定性拒因给出 collection/category/count，须删去或纠正对应 '
+        'collection 的失败 operations。本 task 没有 durable failed baseline，'
+        '也不开放 drop_targets；compact 的 collection 固定键 []、其他 patch 的 '
+        '[] 与 setting/replacement 的 null 都只表示本次不提交。')
     return f"""{task.prompt}
 
 <deterministic-rejection>
@@ -3128,13 +3276,13 @@ canonical exact_request 的 collection_edits 只可填写 operations；collectio
 payload.edit.collection_edits.<collection>[] 填 operations。operation 绝非
 通用 value patch：add={{op,item}}、delete={{op,subject_id}}、
 split={{op,subject_id,items}} 且 items 至少两项，不得出现 value；item/items 使用原包
-按 collection 下发的成员 model 与局部 Pydantic schema。同一 collection 内，
+按 collection 下发的成员 model 与局部 Pydantic schema；delete/split.subject_id 只从
+existing_subject_ids_by_collection 的 current enum 选择，add 新 ID 不受该 enum 限制。
+{collection_retry} 同一 collection 内，
 split 输出不得复用该 subject_id；delete/split 输入 ID 不得重复；
 add/split 输出 ID 不得重复；全部输入 ID 与输出 ID 不得相交。所有 collection
 operations 应用后，直接 patch 主体必须仍存在，修后外键必须解析到实际存在的主体。
-compact 的 collection 固定键 []、其他 patch 的 [] 与 setting/replacement 的 null 是
-“本次不提交”，订正时保留 failed baseline；撤销只用开放的 drop_targets，不得把未提交的
-no-op 模板行带入 canonical edit。
+不得把未提交的 no-op 模板行带入 canonical edit。
 已有字段 patch 仍须保留模板
 subject binding。post_edit_review.decisions 只列 edit 后仍保持原 hash、且已在
 review_scope 中的旧项；是否存活只看 item_id + subject_sha256，不看编辑在逻辑上是否

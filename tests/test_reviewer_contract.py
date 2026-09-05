@@ -64,6 +64,9 @@ def test_stage2_contract_closes_collection_operations_and_surviving_review():
     assert '`split` 只含 `op + subject_id + items`' in stage2
     assert '没有 `value` 字段' in stage2
     assert '按当前 collection 下发的成员 model 与局部 Pydantic schema' in stage2
+    assert '`existing_subject_ids_by_collection` 对应冻结 current collection enum' in stage2
+    assert '合法 `add.item` 的新 ID 不受该 enum 限制' in stage2
+    assert '直接 patch 的现存主体也不从 enum 中剔除' in stage2
     assert '模板已有行的无重复有序子序列' in stage2
     assert '`split` 输出不得复用该 `subject_id`' in stage2
     assert '`delete/split` 触及的输入 ID 不得重复' in stage2
@@ -75,7 +78,16 @@ def test_stage2_contract_closes_collection_operations_and_surviving_review():
     assert '按模板开放集合固定键的 object' in stage2
     assert '不得输出旧 row-list transport' in stage2
     assert '其他 patch 数组的空数组与 setting/replacement 的 `null`' in stage2
-    assert '订正时空 collection 键保留 failed baseline' in stage2
+    assert 'task 与 exact_request 的 `waiting_on` 同为' in stage2
+    assert '`WAITING_ON_STAGE2_EDIT_CORRECTION` 且携 durable failed edit' in stage2
+    assert '此时空 collection 键保留 failed baseline' in stage2
+    assert 'ledger `purpose=correction` 本身不能启用该语义' in stage2
+    assert '全部 collection 一次聚合诊断，再应用任何 operation' in stage2
+    assert '安全拒因只暴露可信 `collection/category/count` 与 `diagnostic_sha256`' in stage2
+    assert '普通 sparse retry 应删去或纠正对应失败 operations' in stage2
+    assert '也可用空数组取消本次 collection 提交' in stage2
+    assert '只有上述 durable edit correction 才替换或 drop failed operations' in stage2
+    assert '且空数组保留 failed baseline' in stage2
     assert '相同 `item_id + subject_sha256` 存活' in stage2
     assert '不能因逻辑上已随 edit 修好就省略' in stage2
     assert '`relation_set_complete` 的主体 hash 不变，仍须显式决定' in stage2

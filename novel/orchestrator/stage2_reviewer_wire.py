@@ -163,39 +163,56 @@ _REPLACEMENT_WIRE_TYPES: dict[str, Any] = {
 }
 
 
-def _collection_operation_type(label: str, member_model: type[StrictModel]) -> Any:
-    """从现役 operation model 专型化成员，不在 wire 层复制键集/约束。"""
+_COLLECTION_MEMBER_MODELS: dict[str, tuple[str, type[StrictModel]]] = {
+    'characters': ('Character', CharacterCollectionItem),
+    'relations': ('Relation', RelationResponse),
+    'secrets': ('Secret', SecretResponse),
+    'world_rules': ('WorldRule', WorldRuleResponse),
+}
+
+
+def _collection_operation_type(
+    collection: str,
+    existing_subject_ids: tuple[str, ...],
+    digest: str,
+) -> Any:
+    """从现役 model 专型化成员，并冻结 delete/split 的 current ID enum。
+
+    add 的输出 ID 不能被现存主体枚举限制；它继续接受完整成员 model。当前集合
+    为空时只保留 add 分支，不铸造一个可被模型提交的伪 sentinel。
+    """
+    try:
+        label, member_model = _COLLECTION_MEMBER_MODELS[collection]
+    except KeyError as exc:
+        raise Stage2ReviewerWireError(
+            f'可信模板含未知 collection：{collection!r}') from exc
     add_model = create_model(
-        f'Stage2Reviewer{label}Add',
+        f'Stage2Reviewer{label}Add_{digest}',
         __base__=GlobalCollectionAdd,
         item=(member_model, copy.deepcopy(
             GlobalCollectionAdd.model_fields['item'])),
     )
+    if not existing_subject_ids:
+        return add_model
+    subject_id_type = _literal(existing_subject_ids)
+    delete_model = create_model(
+        f'Stage2Reviewer{label}Delete_{digest}',
+        __base__=GlobalCollectionDelete,
+        subject_id=(subject_id_type, copy.deepcopy(
+            GlobalCollectionDelete.model_fields['subject_id'])),
+    )
     split_model = create_model(
-        f'Stage2Reviewer{label}Split',
+        f'Stage2Reviewer{label}Split_{digest}',
         __base__=GlobalCollectionSplit,
+        subject_id=(subject_id_type, copy.deepcopy(
+            GlobalCollectionSplit.model_fields['subject_id'])),
         items=(list[member_model], copy.deepcopy(
             GlobalCollectionSplit.model_fields['items'])),
     )
     return Annotated[
-        add_model | GlobalCollectionDelete | split_model,
+        add_model | delete_model | split_model,
         Field(discriminator='op'),
     ]
-
-
-_CharacterOperation = _collection_operation_type(
-    'Character', CharacterCollectionItem)
-_RelationOperation = _collection_operation_type('Relation', RelationResponse)
-_SecretOperation = _collection_operation_type('Secret', SecretResponse)
-_WorldRuleOperation = _collection_operation_type('WorldRule', WorldRuleResponse)
-
-
-_COLLECTION_OPERATION_TYPES: dict[str, Any] = {
-    'characters': _CharacterOperation,
-    'relations': _RelationOperation,
-    'secrets': _SecretOperation,
-    'world_rules': _WorldRuleOperation,
-}
 
 
 def _canonical_sha256(value: object) -> str:
@@ -238,7 +255,14 @@ def _apply_edit_option(
 def _is_correction_task(
     task: _ReviewerTaskLike, exact: Mapping[str, Any],
 ) -> bool:
-    """只让冻结的 correction blocker 取得 merge/drop 语义。"""
+    """只让冻结的 correction blocker 取得 merge/drop 语义。
+
+    ``purpose='correction'`` 也可能只是同一初始 sparse task 的 typed-loader
+    返答；那时没有一份已被 producer 拒绝的 durable business baseline，空数组
+    仍必须表示“不提交”。只有 planner 已物化
+    ``WAITING_ON_STAGE2_EDIT_CORRECTION``、且 exact request 携失败 edit 时，才允许
+    merge/drop。wire 不能拿席位 purpose 猜这层业务语义。
+    """
     exact_waiting_on = exact.get('waiting_on')
     task_waiting_on = getattr(task, 'waiting_on', exact_waiting_on)
     if ((exact_waiting_on == queue.WAITING_ON_STAGE2_EDIT_CORRECTION)
@@ -406,7 +430,39 @@ def _setting_wire_type(value: Any, digest: str) -> Any:
     return model | None
 
 
-def _collection_object_wire_type(value: Any, digest: str) -> type[StrictModel]:
+def _collection_subject_enums(
+    task: _ReviewerTaskLike,
+    collections: Sequence[str],
+) -> dict[str, tuple[str, ...]]:
+    """读取 Supervisor 随 option 冻结的 current collection ID 闭集。"""
+    option = task.submission_options[0]
+    allowed = option.get('allowed_values') if isinstance(option, Mapping) else None
+    raw = (
+        allowed.get(
+            'collection_operation_contract.existing_subject_ids_by_collection')
+        if isinstance(allowed, Mapping) else None)
+    if not isinstance(raw, Mapping):
+        raise Stage2ReviewerWireError(
+            'Stage2 compact collection 缺 current subject enum binding')
+    output: dict[str, tuple[str, ...]] = {}
+    for collection in collections:
+        values = raw.get(collection)
+        if (not isinstance(values, Sequence)
+                or isinstance(values, (str, bytes, bytearray))
+                or any(not isinstance(value, str) or not value for value in values)):
+            raise Stage2ReviewerWireError(
+                f'Stage2 {collection} current subject enum 形状漂移')
+        frozen = tuple(values)
+        if frozen != tuple(sorted(set(frozen))):
+            raise Stage2ReviewerWireError(
+                f'Stage2 {collection} current subject enum 必须去重升序')
+        output[collection] = frozen
+    return output
+
+
+def _collection_object_wire_type(
+    task: _ReviewerTaskLike, value: Any, digest: str,
+) -> type[StrictModel]:
     """把 canonical collection 行铸成按集合固定键的关闭 object。
 
     provider 只填写每个集合的 operations 数组；collection identity 与 SHA 均由
@@ -418,10 +474,11 @@ def _collection_object_wire_type(value: Any, digest: str) -> type[StrictModel]:
             '可信模板 GlobalEdit.collection_edits 必须是 object 数组')
     fields: dict[str, tuple[Any, Any]] = {}
     seen: set[str] = set()
+    collections: list[str] = []
     for row in value:
         collection = row.get('collection')
         expected_sha = row.get('expected_collection_sha256')
-        if (collection not in _COLLECTION_OPERATION_TYPES
+        if (collection not in _COLLECTION_MEMBER_MODELS
                 or not isinstance(expected_sha, str)
                 or set(row) != {
                     'collection', 'expected_collection_sha256', 'operations'}):
@@ -430,7 +487,12 @@ def _collection_object_wire_type(value: Any, digest: str) -> type[StrictModel]:
         if collection in seen:
             raise Stage2ReviewerWireError('可信模板重复开放同一 collection')
         seen.add(collection)
-        fields[collection] = (list[_COLLECTION_OPERATION_TYPES[collection]], ...)
+        collections.append(collection)
+    subject_enums = _collection_subject_enums(task, collections)
+    for collection in collections:
+        operation_type = _collection_operation_type(
+            collection, subject_enums[collection], digest)
+        fields[collection] = (list[operation_type], ...)
     return create_model(
         f'Stage2CollectionEditsDelta_{digest}',
         __base__=StrictModel,
@@ -503,7 +565,7 @@ def response_model(task: _ReviewerTaskLike) -> type[StrictModel]:
         elif key in _REPLACEMENT_WIRE_TYPES:
             annotation = _REPLACEMENT_WIRE_TYPES[key]
         elif key == 'collection_edits':
-            annotation = _collection_object_wire_type(value, digest)
+            annotation = _collection_object_wire_type(task, value, digest)
         elif key == 'post_edit_review':
             annotation = _post_review_wire_type(value, digest)
         else:
@@ -648,7 +710,9 @@ CLI 原生 schema 出现。{delta_semantics}
 
 patch 行一旦出现，必须交回该模板主体已经开放的完整字段集，不能新增主体或字段。
 ``collection_edits`` 是按模板开放集合固定键的 object，每个键的值只交 operations
-数组；add 用 ``{{"op":"add","item":...}}``，不得使用 ``value``。修后复核只交
+数组；delete/split.subject_id 只能使用原生 schema 从 current collection 冻结的 enum，
+该 enum 不限制 add.item 的新稳定 ID；同时 patch 后再 delete/split 同一主体仍会被
+GlobalEdit 静态规则拒绝。add 用 ``{{"op":"add","item":...}}``，不得使用 ``value``。修后复核只交
 reason/quarantine_groups/decisions；每条 decision 交 item_id/state/reason/evidence/
 generation_disposition（无 disposition 时显式 null），Supervisor 按 item_id 注入 subject
 hash。仍以同一 hash 存活的旧 FAIL/UNVER（包括集合完整性项）必须逐项列入 decisions；

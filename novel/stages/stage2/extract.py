@@ -6774,13 +6774,40 @@ def _prepare_reviewed_edit_commit(
     return journal
 
 
+_SAFE_GLOBAL_EDIT_REJECTION_CATEGORIES = frozenset({
+    'candidate_application',
+    'candidate_noop',
+    'candidate_normalization',
+    'candidate_shape',
+    'collection_add_subject_exists',
+    'collection_delete_subject_missing',
+    'collection_expected_sha_stale',
+    'collection_split_output_subject_exists',
+    'collection_split_subject_missing',
+    'dangling_arc_track_subject',
+    'dangling_character_reference',
+    'dangling_relation_endpoint',
+    'dangling_secret_reference',
+    'direct_collection_subject_conflict',
+    'invalid_chapter_reference',
+    'invalid_fate_evidence_pair',
+    'invalid_relation_window',
+    'missing_patch_index',
+    'missing_patch_subject',
+})
+_SAFE_GLOBAL_EDIT_COLLECTIONS = frozenset({
+    'characters', 'relations', 'secrets', 'world_rules',
+})
+
+
 class GlobalEditCandidateRejected(TerminalState):
     """纯内存 GlobalEdit 候选被业务边界拒绝，且对外原因不含 payload。
 
     ``diagnostics`` 只留在当前异常对象内供本地调试；跨进程日志、席位账与
     correction prompt 只能消费 ``safe_summary``。摘要只发布代码定义的类别、
-    数量与完整诊断的 canonical SHA，绝不回显模型提供的 ID、正文、extra key
-    或 Pydantic ``loc``。
+    数量、可信 collection 名与完整诊断的 canonical SHA，绝不回显模型提供的
+    ID、正文、extra key 或 Pydantic ``loc``。collection 维度不能只压成一个
+    ``candidate_application:1``：否则下一席不知道该替换哪组 operations。
     """
 
     def __init__(self, diagnostics: list[dict[str, Any]]) -> None:
@@ -6793,19 +6820,35 @@ class GlobalEditCandidateRejected(TerminalState):
                 separators=(',', ':'), allow_nan=False),
         )
         counts: dict[str, int] = {}
+        collection_counts: dict[tuple[str, str], int] = {}
         for row in frozen:
             category = row.get('category')
-            if not isinstance(category, str) or not category:
+            if category not in _SAFE_GLOBAL_EDIT_REJECTION_CATEGORIES:
                 raise ValueError('GlobalEdit candidate rejection 缺稳定 category')
+            assert isinstance(category, str)
             counts[category] = counts.get(category, 0) + 1
+            collection = row.get('collection')
+            if collection is not None:
+                if collection not in _SAFE_GLOBAL_EDIT_COLLECTIONS:
+                    raise ValueError(
+                        'GlobalEdit candidate rejection 含非可信 collection')
+                assert isinstance(collection, str)
+                key = (collection, category)
+                collection_counts[key] = collection_counts.get(key, 0) + 1
         self.diagnostics = tuple(frozen)
         self.diagnostic_sha256 = _canonical_sha256(frozen)
         categories = ','.join(
             f'{category}:{counts[category]}' for category in sorted(counts))
+        collection_breakdown = '|'.join(
+            f'collection={collection},category={category},count={count}'
+            for (collection, category), count in sorted(collection_counts.items())
+        )
         self.safe_summary = (
             'Stage2 GlobalEdit 候选被 producer 业务边界拒绝；'
             f'categories={categories}；'
-            f'diagnostic_sha256={self.diagnostic_sha256}')
+            f'diagnostic_sha256={self.diagnostic_sha256}'
+            + (f'；collection_breakdown={collection_breakdown}'
+               if collection_breakdown else ''))
         super().__init__(self.safe_summary)
 
 
@@ -6870,12 +6913,24 @@ def _apply_secret_patches(data: dict[str, Any], edit: GlobalEdit,
             identity = member_id(name, payload)
         return identity, payload
 
+    # 先在修前 current collection 上一次性预扫**全部**集合，再开始应用任一
+    # operation。否则一个回答若同时把 relations / world_rules / secrets 都写坏，
+    # 第一席只会得到首个集合的拒因，有限 correction 席可能被逐组耗尽。这里冻结
+    # 各集合的 ordered 副本供后续应用复用；任何诊断都在 candidate 变化前汇总。
+    collection_rows: dict[str, list[dict[str, Any]]] = {}
+    operation_diagnostics: list[dict[str, Any]] = []
     for collection_edit in edit.collection_edits:
         name = collection_edit.collection
         current_value = collection_value(name)
-        if collection_edit.expected_collection_sha256 != subject_sha256(current_value):
-            raise TerminalState(
-                f'{name} 集合已变化；collection edit 的 expected_collection_sha256 过期')
+        actual_collection_sha256 = subject_sha256(current_value)
+        if collection_edit.expected_collection_sha256 != actual_collection_sha256:
+            operation_diagnostics.append({
+                'category': 'collection_expected_sha_stale',
+                'collection': name,
+                'expected_collection_sha256': (
+                    collection_edit.expected_collection_sha256),
+                'actual_collection_sha256': actual_collection_sha256,
+            })
         if name == 'characters':
             ordered = [
                 {'char_id': identity, **copy.deepcopy(value)}
@@ -6883,6 +6938,58 @@ def _apply_secret_patches(data: dict[str, Any], edit: GlobalEdit,
             ]
         else:
             ordered = copy.deepcopy(current_value)
+        collection_rows[name] = ordered
+
+        # delete/split 的 subject 必须来自**修前 current collection**。先完整
+        # 扫描全部集合再应用，才能把真实的 988 个坏 delete 聚合成
+        # collection/category/count，而不是在第一项抛一条
+        # ``candidate_application:1``。诊断可保留 ID 供本地 hash；对外摘要只投影
+        # 可信 collection 与代码 category。native compact schema 也用同一 current
+        # ID 闭集提前拒绝，但 canonical full action 仍必须经过这道 producer 权威。
+        existing_ids = {member_id(name, row) for row in ordered}
+        for operation_index, operation in enumerate(collection_edit.operations):
+            if isinstance(operation, GlobalCollectionAdd):
+                identity, _payload = dumped_member(name, operation.item)
+                if identity in existing_ids:
+                    operation_diagnostics.append({
+                        'category': 'collection_add_subject_exists',
+                        'collection': name,
+                        'operation_index': operation_index,
+                        'subject_id': identity,
+                    })
+            elif isinstance(operation, GlobalCollectionDelete):
+                if operation.subject_id not in existing_ids:
+                    operation_diagnostics.append({
+                        'category': 'collection_delete_subject_missing',
+                        'collection': name,
+                        'operation_index': operation_index,
+                        'subject_id': operation.subject_id,
+                    })
+            elif isinstance(operation, GlobalCollectionSplit):
+                if operation.subject_id not in existing_ids:
+                    operation_diagnostics.append({
+                        'category': 'collection_split_subject_missing',
+                        'collection': name,
+                        'operation_index': operation_index,
+                        'subject_id': operation.subject_id,
+                    })
+                for item_index, item in enumerate(operation.items):
+                    replacement_id, _payload = dumped_member(name, item)
+                    if replacement_id in existing_ids:
+                        operation_diagnostics.append({
+                            'category': 'collection_split_output_subject_exists',
+                            'collection': name,
+                            'operation_index': operation_index,
+                            'item_index': item_index,
+                            'subject_id': replacement_id,
+                        })
+
+    if operation_diagnostics:
+        raise GlobalEditCandidateRejected(operation_diagnostics)
+
+    for collection_edit in edit.collection_edits:
+        name = collection_edit.collection
+        ordered = collection_rows[name]
         for operation in collection_edit.operations:
             positions = {
                 member_id(name, row): index for index, row in enumerate(ordered)

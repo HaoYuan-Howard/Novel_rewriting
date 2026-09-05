@@ -28,7 +28,8 @@ from unittest.mock import patch
 import pytest
 
 from contracts.artifacts import (
-    STAGE2_GLOBAL_EDIT, STAGE2_GLOBAL_REVIEW_DECISIONS,
+    STAGE2_BLUEPRINT_CHARACTER_PROJECTION, STAGE2_GLOBAL_EDIT,
+    STAGE2_GLOBAL_GROUNDING, STAGE2_GLOBAL_REVIEW_DECISIONS,
 )
 from contracts.invariants import AGENT_EXECUTOR_NODES
 from contracts.schema import decode_artifact, encode_artifact
@@ -740,6 +741,119 @@ def test_stage2_prereview_uses_unopened_epoch_context_and_blueprint_closes_alone
             assert prereview_documents == [{}]
             assert not task_box['task'].request_path.exists(), (
                 'typed loader 已消费回答；epoch 关闭后不保留 scratch')
+
+
+@pytest.mark.parametrize('prereview_case', [
+    'nonpending',
+    'invalid_without_formal',
+    'invalid_with_old_formal',
+])
+def test_stage2_prereview_skip_executes_blueprint_without_commander(
+        base, corpus, monkeypatch, prereview_case) -> None:
+    """已评审 Global 或 INVALID 投影都只消费 ready Blueprint token。"""
+    if prereview_case == 'nonpending':
+        overview = SimpleNamespace(stages=[])
+    else:
+        formal_exists = prereview_case == 'invalid_with_old_formal'
+        overview = SimpleNamespace(stages=[SimpleNamespace(
+            stage='stage2',
+            artifacts=[
+                SimpleNamespace(
+                    rel=STAGE2_GLOBAL_GROUNDING,
+                    exists=formal_exists,
+                    readable=formal_exists,
+                    freshness=('fresh' if formal_exists else 'missing'),
+                    invalid=True,
+                ),
+                SimpleNamespace(
+                    rel=STAGE2_BLUEPRINT_CHARACTER_PROJECTION,
+                    exists=True,
+                    readable=True,
+                    freshness='fresh',
+                    invalid=False,
+                ),
+            ],
+        )])
+    ready = SimpleNamespace(
+        code_version='test-code-version', state='ready', action=None,
+        surface_seal='1' * 64,
+        overview=overview,
+        execution_token=SimpleNamespace(node='stage2.blueprint'))
+    stopped = SimpleNamespace(
+        code_version='test-code-version', state='blocked',
+        surface_seal='2' * 64, execution_token=None,
+        action=SimpleNamespace(
+            waiting_on='test:stop-after-blueprint', action_sha256='3' * 64))
+    operator_reads = 0
+
+    def next_action(_base, _sid, *, code):
+        nonlocal operator_reads
+        assert code == 'test-code-version'
+        operator_reads += 1
+        return ready if operator_reads == 1 else stopped
+
+    monkeypatch.setattr(agent.operator, 'next_action_at_code', next_action)
+    monkeypatch.setattr(
+        agent, '_assess_delivery',
+        lambda *_args, **_kwargs: AgentDeliveryOutcome(
+            state='stopped', checked_at=1, reason='测试停点'))
+    monkeypatch.setattr(
+        agent.reviewer_tasks, 'build_task',
+        lambda *_args, **_kwargs: None)
+
+    workpack_calls = []
+
+    def json_command(argv, **_kwargs):
+        workpack_calls.append(tuple(argv))
+        if prereview_case != 'nonpending':
+            raise AssertionError(
+                f'INVALID projection ready 不得读取 formal workpack：{argv}')
+        if 'stage2.blueprint' in argv:
+            raise agent.reviewer_tasks.ReviewerTaskError(
+                'stale Blueprint 不可读')
+        if '--emit-review-workpack' in argv:
+            return {
+                'kind': 'stage2-global-review-workpack-v4',
+                'items': [{
+                    'item_id': 'item-1',
+                    'current_state': 'PASS',
+                }],
+            }
+        raise AssertionError(f'非 pending Global 不得继续构包：{argv}')
+
+    monkeypatch.setattr(agent.reviewer_tasks, '_json_command', json_command)
+    runner_stems = []
+
+    def run_step_argv(_base, _sid, _epoch, permit, *, stem):
+        assert permit.node == 'stage2.blueprint'
+        runner_stems.append(stem)
+        return [agent.sys.executable, '-c', 'raise SystemExit(0)']
+
+    monkeypatch.setattr(agent, '_run_step_argv', run_step_argv)
+    monkeypatch.setattr(
+        agent, '_default_spawn',
+        lambda *_args, **_kwargs: pytest.fail(
+            '非 pending Global 不得启动预审 Commander'))
+    commander_calls = []
+    monkeypatch.setattr(
+        agent, 'append_commander_call',
+        lambda *_args, **kwargs: commander_calls.append(kwargs))
+
+    rec = agent.start(
+        base, '42', authorized=True, egress_authorized=True,
+        profiles=_PROFILES)
+    assert agent.wait(rec.run_id, 10)
+
+    assert runner_stems == ['ready-stage2.blueprint']
+    if prereview_case == 'nonpending':
+        assert len(workpack_calls) == 1
+        assert 'stage2.global' in workpack_calls[0]
+        assert '--emit-review-workpack' in workpack_calls[0]
+    else:
+        assert workpack_calls == []
+    assert commander_calls == []
+    [done] = [row for row in agent.records(base) if row.run_id == rec.run_id]
+    assert done.exit_code == 2
 
 
 def _install_stage2_prereview_replay_harness(
